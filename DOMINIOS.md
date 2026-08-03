@@ -1,39 +1,51 @@
-# Dominios por empresa (sin revolver datos)
+# Dominios por empresa
 
-Cada dominio apunta a la **misma** app Node, pero el middleware fija la empresa según el host.
+Cada dominio apunta a la misma app Node. El middleware fija la empresa según el host.
+Ejemplo: `tarimacenter.com/dashboard-rrhh` → solo Tarimas.
 
-## Ejemplos de URL
+## Asignación
 
-| Dominio | Empresa | RRHH | Operaciones |
-|---------|---------|------|-------------|
-| `logiserviciosmonaco.com` | KT / Mónaco | `/dashboard-rrhh` | `/dashboard-operaciones` |
-| `tarimascenter.com` | Tarimas | `/dashboard-rrhh` | (si aplica) |
+| Dominio | Empresa (slug) | Estado |
+|---------|----------------|--------|
+| `logiserviciosmonaco.com` | KT / Mónaco (`kt-monaco`) | Confirmado (web ya existe; ideal `app.` para el sistema) |
+| `monacoexpres.com` | KT / Mónaco (`kt-monaco`) | En lista Hostinger → mapeado a KT |
+| `tarimacenter.com` | Tarimas (`tarimas`) | Confirmado |
+| `recicladoraecoplanet.com` | Ecoplanet (`ecoplanet`) | Confirmado |
+| `ecoplanetreciclaje.com` | Ecoplanet (`ecoplanet`) | Confirmado (si también lo usan) |
+| `fuginsa.com` | ¿Francisco? | **Pendiente** — no mapeado aún |
+| `ecowastegt.com` | ¿? | Pendiente |
+| `multinegocios12.com` | ¿? | Pendiente |
+| `innovacionesplasticas.com` | ¿? | Pendiente |
+| Frescofresh | — | Sin dominio en la lista aún |
 
-El usuario ve solo esa empresa. No pasa por selector multiempresa.
+## URLs del sistema (por dominio de empresa)
 
-## Configuración en Hostinger
+Tras login:
 
-1. En hPanel, asigna cada dominio al **mismo** sitio Node de la plataforma (o aliases).
-2. Variable de entorno (recomendado):
+- RRHH → `https://DOMINIO/dashboard-rrhh`
+- Operaciones → `https://DOMINIO/dashboard-operaciones`
+- Personal → `/personal`
+- Vacaciones → `/vacaciones`
+- Marcajes → `/marcajes`
+- TMS (KT) → `/tms`
+
+## Hostinger
+
+1. Dominio con **Configuración pendiente** → Configurar → apuntar al sitio Node de la plataforma  
+   (o crear `app.tudominio.com` si la raíz ya tiene página web).
+2. Variable de entorno (opcional, sobrescribe el mapa del código):
 
 ```
-EMPRESA_DOMINIOS={"logiserviciosmonaco.com":"kt-monaco","www.logiserviciosmonaco.com":"kt-monaco","tarimascenter.com":"tarimas","www.tarimascenter.com":"tarimas"}
+EMPRESA_DOMINIOS={"logiserviciosmonaco.com":"kt-monaco","www.logiserviciosmonaco.com":"kt-monaco","app.logiserviciosmonaco.com":"kt-monaco","monacoexpres.com":"kt-monaco","tarimacenter.com":"tarimas","www.tarimacenter.com":"tarimas","recicladoraecoplanet.com":"ecoplanet","ecoplanetreciclaje.com":"ecoplanet"}
 ```
 
-3. Reinicia el sitio Node.
+3. Redesplegar / reiniciar.
 
-Si ya hay web pública en `logiserviciosmonaco.com`, opciones:
+## Cuando confirmen Francisco
 
-- **A)** `app.logiserviciosmonaco.com` → plataforma (recomendado; no pisa la web actual)
-- **B)** Rutas del sistema en el mismo dominio (`/dashboard-rrhh`, `/login`) y la web en `/` con cuidado de no chocar
+Avisar el dominio (¿`fuginsa.com`?) y se agrega:
 
-## Mapa por defecto en código
-
-Ver `src/lib/dominios.ts`. Ajústalo o sobrescribe con `EMPRESA_DOMINIOS`.
-
-## Flujo
-
-1. Entran a `https://logiserviciosmonaco.com/login`
-2. RRHH → `https://logiserviciosmonaco.com/dashboard-rrhh`
-3. Operaciones → `https://logiserviciosmonaco.com/dashboard-operaciones`
-4. Personal: `/personal` · Vacaciones: `/vacaciones` · TMS: `/tms`
+```json
+"fuginsa.com": "francisco",
+"www.fuginsa.com": "francisco"
+```

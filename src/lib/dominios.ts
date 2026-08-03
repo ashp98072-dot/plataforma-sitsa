@@ -1,22 +1,41 @@
 /**
  * Mapa dominio → slug de empresa.
- * Configurable por env EMPRESA_DOMINIOS (JSON) sin tocar código.
  *
- * Ejemplo:
- * EMPRESA_DOMINIOS={"logiserviciosmonaco.com":"kt-monaco","www.logiserviciosmonaco.com":"kt-monaco","tarimascenter.com":"tarimas"}
+ * Sobrescribe o completa con env EMPRESA_DOMINIOS (JSON), ej:
+ * EMPRESA_DOMINIOS={"logiserviciosmonaco.com":"kt-monaco","tarimacenter.com":"tarimas"}
+ *
+ * Asignación actual (parcial — ajustar cuando confirmen Francisco / otros):
+ * - KT / Mónaco: logiserviciosmonaco.com, monacoexpres.com
+ * - Tarimas: tarimacenter.com
+ * - Ecoplanet: recicladoraecoplanet.com, ecoplanetreciclaje.com
+ * - Francisco: pendiente (candidato: fuginsa.com)
+ * - Sin asignar aún: ecowastegt.com, multinegocios12.com, innovacionesplasticas.com
  */
 export const DOMINIOS_DEFAULT: Record<string, string> = {
+  // KT / Logiservicios Mónaco
   "logiserviciosmonaco.com": "kt-monaco",
   "www.logiserviciosmonaco.com": "kt-monaco",
-  // Ajusta cuando tengas los dominios reales:
-  "tarimascenter.com": "tarimas",
-  "www.tarimascenter.com": "tarimas",
-  "francisco.com": "francisco",
-  "www.francisco.com": "francisco",
-  "frescofreesh.com": "frescofresh",
-  "www.frescofreesh.com": "frescofresh",
-  "ecoplanet.com": "ecoplanet",
-  "www.ecoplanet.com": "ecoplanet",
+  "app.logiserviciosmonaco.com": "kt-monaco",
+  "monacoexpres.com": "kt-monaco",
+  "www.monacoexpres.com": "kt-monaco",
+  "app.monacoexpres.com": "kt-monaco",
+
+  // Tarimas Center
+  "tarimacenter.com": "tarimas",
+  "www.tarimacenter.com": "tarimas",
+  "app.tarimacenter.com": "tarimas",
+
+  // Ecoplanet / reciclaje
+  "recicladoraecoplanet.com": "ecoplanet",
+  "www.recicladoraecoplanet.com": "ecoplanet",
+  "app.recicladoraecoplanet.com": "ecoplanet",
+  "ecoplanetreciclaje.com": "ecoplanet",
+  "www.ecoplanetreciclaje.com": "ecoplanet",
+  "app.ecoplanetreciclaje.com": "ecoplanet",
+
+  // Francisco — descomentar cuando confirmen dominio
+  // "fuginsa.com": "francisco",
+  // "www.fuginsa.com": "francisco",
 };
 
 export function mapaDominios(): Record<string, string> {
