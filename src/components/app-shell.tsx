@@ -24,17 +24,29 @@ export function AppShell({
   const pathname = usePathname();
   const router = useRouter();
   const base = `/e/${slug}`;
+  const esRrhh = rol === "RRHH" || rol === "Admin";
 
-  const links: { href: string; label: string; key: string }[] = [
-    { href: `${base}/dashboard`, label: "Dashboard", key: "gerencia" },
-    ...modulos
-      .filter((m) => m !== "gerencia")
-      .map((m) => ({
-        href: `${base}/${m}`,
-        label: MODULO_LABEL[m] ?? m,
-        key: m,
-      })),
-  ];
+  type NavLink = { href: string; label: string; key: string };
+
+  const links: NavLink[] = [{ href: `${base}/dashboard`, label: "Dashboard", key: "gerencia" }];
+
+  if (modulos.includes("rrhh")) {
+    links.push(
+      { href: `${base}/rrhh/empleados`, label: "Personal", key: "rrhh-emp" },
+      { href: `${base}/rrhh/marcajes`, label: "Marcajes", key: "rrhh-mar" },
+      { href: `${base}/rrhh/vacaciones`, label: "Vacaciones", key: "rrhh-vac" },
+      { href: `${base}/rrhh`, label: "RRHH (menú)", key: "rrhh-hub" },
+    );
+  }
+
+  for (const m of modulos) {
+    if (m === "gerencia" || m === "rrhh") continue;
+    links.push({
+      href: `${base}/${m}`,
+      label: MODULO_LABEL[m] ?? m,
+      key: m,
+    });
+  }
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -57,7 +69,8 @@ export function AppShell({
         </div>
         <nav className="flex gap-1 overflow-x-auto px-2 pb-3 md:flex-col md:overflow-visible">
           {links.map((l) => {
-            const active = pathname === l.href || pathname.startsWith(l.href + "/");
+            const active =
+              pathname === l.href || pathname.startsWith(l.href + "/");
             return (
               <Link
                 key={l.key}
@@ -75,6 +88,14 @@ export function AppShell({
           })}
         </nav>
         <div className="space-y-2 border-t border-[var(--border)] p-3">
+          {esRrhh ? (
+            <Link
+              href="/rrhh"
+              className="block rounded-lg bg-[#0d9488] px-3 py-2 text-center text-sm text-white"
+            >
+              RRHH · Todas las empresas
+            </Link>
+          ) : null}
           <Link
             href="/select-empresa"
             className="block rounded-lg bg-[#1e293b] px-3 py-2 text-center text-sm"

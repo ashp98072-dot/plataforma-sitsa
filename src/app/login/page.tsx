@@ -22,6 +22,10 @@ export default function LoginPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Error");
+      if (data.redirect) {
+        router.push(data.redirect);
+        return;
+      }
       if (data.empresas?.length === 1) {
         const sel = await fetch("/api/auth/select-empresa", {
           method: "POST",
@@ -34,7 +38,7 @@ export default function LoginPage() {
           return;
         }
       }
-      router.push(data.redirect || "/select-empresa");
+      router.push("/select-empresa");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error");
     } finally {

@@ -45,6 +45,7 @@ export async function middleware(request: NextRequest) {
   if (valid && pathname === "/") {
     return NextResponse.redirect(new URL("/select-empresa", request.url));
   }
+  // /rrhh es ruta autenticada (panel central)
   return NextResponse.next();
 }
 

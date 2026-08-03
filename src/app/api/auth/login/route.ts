@@ -56,9 +56,16 @@ export async function POST(request: Request) {
         nombre: user.nombre,
       },
       empresas,
-      redirect: unica
-        ? `/e/${unica.slug}/dashboard`
-        : "/select-empresa",
+      redirect:
+        user.rol === "RRHH" || user.rol === "Admin"
+          ? "/rrhh"
+          : unica
+            ? user.rol === "Contabilidad"
+              ? `/e/${unica.slug}/contabilidad`
+              : user.rol === "CoordinadorPredios"
+                ? `/e/${unica.slug}/flota`
+                : `/e/${unica.slug}/dashboard`
+            : "/select-empresa",
     });
   } catch (err) {
     console.error("login", err);
