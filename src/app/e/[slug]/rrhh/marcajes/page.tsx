@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { useParams } from "next/navigation";
 import Link from "next/link";
+import { useEmpresaActiva } from "@/lib/use-empresa-activa";
 
 type Emp = { id: number; codigo: string; nombre: string };
 type Marcaje = {
@@ -16,7 +16,7 @@ type Marcaje = {
 };
 
 export default function MarcajesPage() {
-  const slug = String(useParams().slug);
+  const { slug, nombre: empresaNombre } = useEmpresaActiva();
   const [empleados, setEmpleados] = useState<Emp[]>([]);
   const [marcajes, setMarcajes] = useState<Marcaje[]>([]);
   const [empleadoId, setEmpleadoId] = useState(0);
@@ -63,9 +63,11 @@ export default function MarcajesPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">Marcajes / Asistencias</h1>
+        <h1 className="text-2xl font-semibold">
+          Marcajes · {empresaNombre}
+        </h1>
         <p className="text-sm text-[var(--muted)]">
-          Sesiones de trabajo por empresa.{" "}
+          Control de asistencias de esta empresa.{" "}
           <Link href={`/e/${slug}/rrhh`} className="text-[var(--accent)] underline">
             Volver a empleados
           </Link>

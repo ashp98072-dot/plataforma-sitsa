@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { useParams } from "next/navigation";
 import Link from "next/link";
+import { useEmpresaActiva } from "@/lib/use-empresa-activa";
 
 type Emp = {
   id: number;
@@ -14,8 +14,7 @@ type Emp = {
 };
 
 export default function RrhhPage() {
-  const params = useParams();
-  const slug = String(params.slug);
+  const { slug, nombre: empresaNombre } = useEmpresaActiva();
   const [empleados, setEmpleados] = useState<Emp[]>([]);
   const [codigo, setCodigo] = useState("");
   const [nombre, setNombre] = useState("");
@@ -67,20 +66,30 @@ export default function RrhhPage() {
     { href: `/e/${slug}/rrhh/inventario`, label: "Inventario EPP / útiles" },
   ];
 
+  const esKt = slug === "kt-monaco";
+
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">RRHH / Asistencias</h1>
+        <h1 className="text-2xl font-semibold">
+          Control de asistencias · {empresaNombre}
+        </h1>
         <p className="text-sm text-[var(--muted)]">
-          Módulo tenant con <code>empresa_id</code>. App satélite Hostinger:{" "}
-          <Link
-            className="text-[var(--accent)] underline"
-            href="https://saddlebrown-wren-814760.hostingersite.com"
-            target="_blank"
-          >
-            control de asistencias
-          </Link>
+          Personal y marcajes solo de esta empresa. Los datos no se mezclan con
+          otras del grupo.
         </p>
+        {esKt ? (
+          <p className="mt-2 text-xs text-[var(--muted)]">
+            App anterior KuiqTrans (referencia):{" "}
+            <Link
+              className="text-[var(--accent)] underline"
+              href="https://saddlebrown-wren-814760.hostingersite.com"
+              target="_blank"
+            >
+              abrir satélite Hostinger
+            </Link>
+          </p>
+        ) : null}
       </div>
 
       <div className="flex flex-wrap gap-2">

@@ -64,7 +64,7 @@ export function puedeEditarModulo(rol: RolGlobal, modulo: Modulo): boolean {
 }
 
 export const MODULO_LABEL: Record<Modulo, string> = {
-  rrhh: "RRHH / Asistencias",
+  rrhh: "Control de asistencias",
   tms: "TMS / Logística",
   flota: "Flota / Predios",
   contabilidad: "Contabilidad",
