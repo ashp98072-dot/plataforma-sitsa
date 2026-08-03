@@ -62,8 +62,52 @@ export async function POST(request: Request) {
     });
   } catch (err) {
     console.error("login", err);
+    const raw = err instanceof Error ? err.message : String(err);
+    const code =
+      typeof err === "object" && err && "code" in err
+        ? String((err as { code?: string }).code ?? "")
+        : "";
+
+    if (raw.includes("DB_USER") || raw.includes("DB_NAME")) {
+      return NextResponse.json(
+        {
+          error:
+            "Faltan variables DB_*. Revisa Variables de entorno o .builds/config/.env",
+        },
+        { status: 500 },
+      );
+    }
+    if (code === "ER_ACCESS_DENIED_ERROR" || raw.includes("Access denied")) {
+      return NextResponse.json(
+        {
+          error:
+            "MySQL rechazó usuario/contraseña. Cambia la contraseña del usuario MySQL en hPanel y pon la misma en DB_PASSWORD.",
+        },
+        { status: 500 },
+      );
+    }
+    if (
+      code === "ECONNREFUSED" ||
+      code === "ENOTFOUND" ||
+      raw.includes("ECONNREFUSED")
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "No se pudo alcanzar MySQL. Usa DB_HOST=127.0.0.1 y reinicia el sitio.",
+        },
+        { status: 500 },
+      );
+    }
+    if (raw.includes("Unknown database") || code === "ER_BAD_DB_ERROR") {
+      return NextResponse.json(
+        { error: "DB_NAME incorrecto. Debe ser u611730801_Plataforma." },
+        { status: 500 },
+      );
+    }
+
     return NextResponse.json(
-      { error: "No se pudo iniciar sesión. Revisa MySQL / .env.local" },
+      { error: "No se pudo iniciar sesión. Revisa MySQL / variables de entorno." },
       { status: 500 },
     );
   }
