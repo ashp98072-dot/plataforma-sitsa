@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { verificarCredenciales } from "@/lib/auth";
+import { homePorRol, slugPorHost } from "@/lib/dominios";
 import { empresasParaUsuario } from "@/lib/empresas";
 import { createSessionToken, setSessionCookie } from "@/lib/session";
 
@@ -35,18 +36,46 @@ export async function POST(request: Request) {
       accesoTodas: user.accesoTodas,
     });
 
+    const host = request.headers.get("host");
+    const slugDominio = slugPorHost(host);
+    const empresaDominio = slugDominio
+      ? empresas.find((e) => e.slug === slugDominio) ?? null
+      : null;
+
+    // En dominio de empresa: fijar esa empresa (si el usuario tiene acceso)
     const unica = empresas.length === 1 ? empresas[0] : null;
+    const activa = empresaDominio ?? unica;
+
+    if (slugDominio && !empresaDominio) {
+      return NextResponse.json(
+        {
+          error:
+            "No tienes acceso a esta empresa en este dominio. Contacta al administrador.",
+        },
+        { status: 403 },
+      );
+    }
+
     const token = await createSessionToken({
       id: user.id,
       username: user.username,
       rol: user.rol,
       nombre: user.nombre ?? undefined,
       accesoTodas: user.accesoTodas,
-      empresaId: unica?.id ?? null,
-      empresaSlug: unica?.slug ?? null,
-      empresaNombre: unica?.nombre ?? null,
+      empresaId: activa?.id ?? null,
+      empresaSlug: activa?.slug ?? null,
+      empresaNombre: activa?.nombre ?? null,
     });
     await setSessionCookie(token);
+
+    let redirect = "/select-empresa";
+    if (slugDominio && activa) {
+      redirect = homePorRol(user.rol, activa.slug, true);
+    } else if (user.rol === "RRHH" || user.rol === "Admin") {
+      redirect = "/rrhh";
+    } else if (activa) {
+      redirect = homePorRol(user.rol, activa.slug, false);
+    }
 
     return NextResponse.json({
       user: {
@@ -56,16 +85,7 @@ export async function POST(request: Request) {
         nombre: user.nombre,
       },
       empresas,
-      redirect:
-        user.rol === "RRHH" || user.rol === "Admin"
-          ? "/rrhh"
-          : unica
-            ? user.rol === "Contabilidad"
-              ? `/e/${unica.slug}/contabilidad`
-              : user.rol === "CoordinadorPredios"
-                ? `/e/${unica.slug}/flota`
-                : `/e/${unica.slug}/dashboard`
-            : "/select-empresa",
+      redirect,
     });
   } catch (err) {
     console.error("login", err);

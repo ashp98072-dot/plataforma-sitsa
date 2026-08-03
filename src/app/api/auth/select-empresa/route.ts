@@ -50,14 +50,14 @@ export async function POST(request: Request) {
     const d = parsed.data.destinoRrhh;
     redirect =
       d === "hub"
-        ? `/e/${empresa.slug}/rrhh`
+        ? `/e/${empresa.slug}/dashboard-rrhh`
         : `/e/${empresa.slug}/rrhh/${d}`;
-  } else if (rol === "RRHH") {
-    redirect = `/e/${empresa.slug}/rrhh/empleados`;
+  } else if (rol === "RRHH" || rol === "Admin") {
+    redirect = `/e/${empresa.slug}/dashboard-rrhh`;
+  } else if (rol === "Operaciones" || rol === "CoordinadorPredios") {
+    redirect = `/e/${empresa.slug}/dashboard-operaciones`;
   } else if (rol === "Contabilidad") {
     redirect = `/e/${empresa.slug}/contabilidad`;
-  } else if (rol === "CoordinadorPredios") {
-    redirect = `/e/${empresa.slug}/flota`;
   }
 
   return NextResponse.json({

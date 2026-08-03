@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { mapaDominios } from "@/lib/dominios";
 import { MODULO_LABEL, type Modulo } from "@/lib/roles";
 
 type Props = {
@@ -25,17 +27,57 @@ export function AppShell({
   const router = useRouter();
   const base = `/e/${slug}`;
   const esRrhh = rol === "RRHH" || rol === "Admin";
+  const [dominioEmpresa, setDominioEmpresa] = useState(false);
+
+  useEffect(() => {
+    const host = window.location.hostname.toLowerCase();
+    setDominioEmpresa(Boolean(mapaDominios()[host]));
+  }, []);
 
   type NavLink = { href: string; label: string; key: string };
 
-  const links: NavLink[] = [{ href: `${base}/dashboard`, label: "Dashboard", key: "gerencia" }];
+  const homeRrhh = dominioEmpresa ? "/dashboard-rrhh" : `${base}/dashboard-rrhh`;
+  const homeOps = dominioEmpresa
+    ? "/dashboard-operaciones"
+    : `${base}/dashboard-operaciones`;
+
+  const links: NavLink[] = [];
+
+  if (rol === "RRHH" || rol === "Admin") {
+    links.push({ href: homeRrhh, label: "Dashboard RRHH", key: "dash-rrhh" });
+  }
+  if (
+    rol === "Operaciones" ||
+    rol === "CoordinadorPredios" ||
+    rol === "Admin"
+  ) {
+    links.push({
+      href: homeOps,
+      label: "Dashboard Operaciones",
+      key: "dash-ops",
+    });
+  }
+  if (!links.length) {
+    links.push({ href: `${base}/dashboard`, label: "Dashboard", key: "gerencia" });
+  }
 
   if (modulos.includes("rrhh")) {
     links.push(
-      { href: `${base}/rrhh/empleados`, label: "Personal", key: "rrhh-emp" },
-      { href: `${base}/rrhh/marcajes`, label: "Marcajes", key: "rrhh-mar" },
-      { href: `${base}/rrhh/vacaciones`, label: "Vacaciones", key: "rrhh-vac" },
-      { href: `${base}/rrhh`, label: "RRHH (menú)", key: "rrhh-hub" },
+      {
+        href: dominioEmpresa ? "/personal" : `${base}/rrhh/empleados`,
+        label: "Personal",
+        key: "rrhh-emp",
+      },
+      {
+        href: dominioEmpresa ? "/marcajes" : `${base}/rrhh/marcajes`,
+        label: "Marcajes",
+        key: "rrhh-mar",
+      },
+      {
+        href: dominioEmpresa ? "/vacaciones" : `${base}/rrhh/vacaciones`,
+        label: "Vacaciones",
+        key: "rrhh-vac",
+      },
     );
   }
 
@@ -88,7 +130,7 @@ export function AppShell({
           })}
         </nav>
         <div className="space-y-2 border-t border-[var(--border)] p-3">
-          {esRrhh ? (
+          {esRrhh && !dominioEmpresa ? (
             <Link
               href="/rrhh"
               className="block rounded-lg bg-[#0d9488] px-3 py-2 text-center text-sm text-white"
@@ -96,12 +138,14 @@ export function AppShell({
               RRHH · Todas las empresas
             </Link>
           ) : null}
-          <Link
-            href="/select-empresa"
-            className="block rounded-lg bg-[#1e293b] px-3 py-2 text-center text-sm"
-          >
-            Cambiar empresa
-          </Link>
+          {!dominioEmpresa ? (
+            <Link
+              href="/select-empresa"
+              className="block rounded-lg bg-[#1e293b] px-3 py-2 text-center text-sm"
+            >
+              Cambiar empresa
+            </Link>
+          ) : null}
           <button
             type="button"
             onClick={() => void logout()}
