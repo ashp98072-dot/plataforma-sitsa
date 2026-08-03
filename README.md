@@ -1,36 +1,63 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Plataforma Corporativa Multiempresa (SITSA)
 
-## Getting Started
+Next.js + MySQL. Login → selector de empresa → módulos por tenant (`/e/[slug]/...`).
 
-First, run the development server:
+## Empresas
+
+| Código | Slug | Módulos |
+|--------|------|---------|
+| KT | `kt-monaco` | RRHH, TMS, Flota, Contabilidad, CMS |
+| FRANCISCO | `francisco` | RRHH, Contabilidad, Reciclaje, CMS |
+| TARIMAS | `tarimas` | RRHH, Contabilidad, Tarimas, CMS |
+| FRESCOFRESH | `frescofresh` | RRHH, Contabilidad, CMS |
+| ECOPLANET | `ecoplanet` | RRHH, Contabilidad, Reciclaje, CMS |
+
+## Roles
+
+| Rol | Empresas | Módulos |
+|-----|----------|---------|
+| Admin | Todas | Todos |
+| RRHH | Todas | RRHH, Usuarios |
+| Contabilidad | Todas | Contabilidad |
+| Operaciones | Asignadas | TMS, Flota, Reciclaje, Tarimas |
+| CoordinadorPredios | Asignadas | Flota (+ lectura TMS) |
+| Visualizador | Asignadas | Solo lectura |
+
+## Arranque
 
 ```bash
+cp .env.example .env.local
+# edita DB_* y AUTH_SECRET
+
+npm run db:init
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+http://localhost:3000
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Usuarios seed
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- `admin` / `admin123`
+- `rrhh` / `rrhh123`
+- `contabilidad` / `conta123`
+- `operaciones` / `ops123` (solo KT)
+- `predios` / `predios123` (solo KT)
 
-## Learn More
+## Módulos entregados
 
-To learn more about Next.js, take a look at the following resources:
+0. Núcleo multiempresa + usuarios/empresas + auditoría  
+1. RRHH: empleados, marcajes, vacaciones, incidencias, reportes Excel, inventario EPP  
+2. TMS: catálogos, planes de viaje, cambios mismo día, evidencias foto+geo  
+3. Flota/predios: vehículos, lecturas km, servicios, taller, alertas y costos  
+4. Contabilidad: cuentas, asientos, CxC/CxP (esqueleto migración SKAS)  
+5. Reciclaje, Tarimas, CMS + sitio público `/site/[slug]`  
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Relación con apps actuales
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- `web/` (asistencias Hostinger): satélite / referencia; lógica se absorbe bajo `empresa_id`  
+- `control_flota`: base funcional integrada en módulo Flota  
+- SKAS Java: referencia UX; no se modifica  
 
-## Deploy on Vercel
+## Hosting
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Preferir VPS/cloud para producción. Hostinger Ilimitado sirve para prototipo.
