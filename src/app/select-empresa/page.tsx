@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 
 type Empresa = {
   id: number;
@@ -30,13 +29,6 @@ export default function SelectEmpresaPage() {
       }
       setUser(data.user);
       setEmpresas(data.empresas ?? []);
-      if (data.user.rol === "RRHH" || data.user.rol === "Admin") {
-        // RRHH/Admin: panel central de personal
-        if (data.user.rol === "RRHH") {
-          router.replace("/rrhh");
-          return;
-        }
-      }
       if (data.empresas?.length === 1) {
         const sel = await fetch("/api/auth/select-empresa", {
           method: "POST",
@@ -69,6 +61,13 @@ export default function SelectEmpresaPage() {
     router.push("/login");
   }
 
+  const hint =
+    user?.rol === "RRHH"
+      ? "Elige la empresa para abrir su panel de Recursos Humanos (personal, vacaciones, marcajes)."
+      : user?.rol === "Contabilidad"
+        ? "Elige la empresa para abrir Contabilidad."
+        : "Elige la empresa con la que vas a trabajar.";
+
   return (
     <main className="mx-auto max-w-4xl px-4 py-12">
       <div className="mb-8 flex items-start justify-between gap-4">
@@ -77,18 +76,7 @@ export default function SelectEmpresaPage() {
           <p className="mt-1 text-[var(--muted)]">
             {user ? `${user.username} · ${user.rol}` : "Cargando…"}
           </p>
-          <p className="mt-2 text-sm text-[var(--muted)]">
-            RRHH: el control de personal y vacaciones se gestiona por empresa
-            desde el panel central.
-          </p>
-          {user?.rol === "RRHH" || user?.rol === "Admin" ? (
-            <Link
-              href="/rrhh"
-              className="mt-3 inline-block text-sm text-[var(--accent-2)] underline"
-            >
-              Ir al panel RRHH (todas las empresas) →
-            </Link>
-          ) : null}
+          <p className="mt-2 text-sm text-[var(--muted)]">{hint}</p>
         </div>
         <button
           type="button"
@@ -114,9 +102,7 @@ export default function SelectEmpresaPage() {
             </p>
             <h2 className="mt-1 text-xl font-medium">{e.nombre}</h2>
             <p className="mt-2 text-xs text-[var(--muted)]">
-              {user?.rol === "RRHH"
-                ? "Entra a Personal de esta empresa"
-                : `Módulos: ${(e.modulos || []).join(", ") || "—"}`}
+              Módulos: {(e.modulos || []).join(", ") || "—"}
             </p>
           </button>
         ))}

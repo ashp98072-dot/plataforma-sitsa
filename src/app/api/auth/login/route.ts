@@ -71,9 +71,8 @@ export async function POST(request: Request) {
     let redirect = "/select-empresa";
     if (slugDominio && activa) {
       redirect = homePorRol(user.rol, activa.slug, true);
-    } else if (user.rol === "RRHH" || user.rol === "Admin") {
-      redirect = "/rrhh";
-    } else if (activa) {
+    } else if (activa && user.rol !== "RRHH" && user.rol !== "Admin" && user.rol !== "Contabilidad") {
+      // Roles con una empresa fija pueden ir directo; multi-empresa → selector
       redirect = homePorRol(user.rol, activa.slug, false);
     }
 

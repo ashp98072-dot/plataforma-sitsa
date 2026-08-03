@@ -20,14 +20,15 @@ export default function TmsPage() {
   const slug = String(useParams().slug);
   const [planes, setPlanes] = useState<Plan[]>([]);
   const [selected, setSelected] = useState<number | null>(null);
+  type EmpOps = { id: number; codigo: string; nombre: string; categoriaOps: string };
   const [form, setForm] = useState({
     codigo: "",
     fechaPlan: new Date().toISOString().slice(0, 10),
     horaCarga: "08:00",
     clienteNombre: "",
     placa: "",
-    pilotoNombre: "",
-    auxiliarNombre: "",
+    pilotoEmpleadoId: 0,
+    auxiliarEmpleadoId: 0,
     tipoTraslado: "",
     lugarCarga: "",
     lugarDescarga: "",
@@ -40,6 +41,8 @@ export default function TmsPage() {
   });
   const [msg, setMsg] = useState("");
   const [catalogoMsg, setCatalogoMsg] = useState("");
+  const [pilotos, setPilotos] = useState<EmpOps[]>([]);
+  const [auxiliares, setAuxiliares] = useState<EmpOps[]>([]);
   const [counts, setCounts] = useState({
     clientes: 0,
     lugares: 0,
@@ -48,12 +51,16 @@ export default function TmsPage() {
   });
 
   const cargar = useCallback(async () => {
-    const [res, cat] = await Promise.all([
+    const [res, cat, pil, aux] = await Promise.all([
       fetch(`/api/empresas/${slug}/tms/planes`),
       fetch(`/api/empresas/${slug}/tms/catalogos`),
+      fetch(`/api/empresas/${slug}/rrhh/personal-ops?tipo=Piloto`),
+      fetch(`/api/empresas/${slug}/rrhh/personal-ops?tipo=Auxiliar`),
     ]);
     const data = await res.json();
     const c = await cat.json();
+    const p = await pil.json();
+    const a = await aux.json();
     if (res.ok) setPlanes(data.planes ?? []);
     if (cat.ok) {
       setCounts({
@@ -63,6 +70,8 @@ export default function TmsPage() {
         personal: (c.personal ?? []).length,
       });
     }
+    if (pil.ok) setPilotos(p.personal ?? []);
+    if (aux.ok) setAuxiliares(a.personal ?? []);
   }, [slug]);
 
   useEffect(() => {
@@ -74,7 +83,11 @@ export default function TmsPage() {
     const res = await fetch(`/api/empresas/${slug}/tms/planes`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form),
+      body: JSON.stringify({
+        ...form,
+        pilotoEmpleadoId: form.pilotoEmpleadoId || undefined,
+        auxiliarEmpleadoId: form.auxiliarEmpleadoId || undefined,
+      }),
     });
     const data = await res.json();
     setMsg(data.mensaje || data.error);
@@ -142,8 +155,8 @@ export default function TmsPage() {
       <div>
         <h1 className="text-2xl font-semibold">TMS / Logística</h1>
         <p className="text-sm text-[var(--muted)]">
-          Planes de viaje, cambios de piloto/auxiliar el mismo día, evidencias
-          con foto + geo.
+          Planes de viaje. Pilotos y auxiliares salen del personal RRHH
+          (categoría operativa). Evidencias con foto + geo.
         </p>
       </div>
 
@@ -151,7 +164,9 @@ export default function TmsPage() {
         <p>Clientes: {counts.clientes}</p>
         <p>Lugares: {counts.lugares}</p>
         <p>Unidades: {counts.unidades}</p>
-        <p>Personal: {counts.personal}</p>
+        <p>
+          RRHH ops: {pilotos.length} pilotos / {auxiliares.length} aux
+        </p>
         <button
           type="button"
           className="rounded bg-[#334155] px-2 py-1 text-xs sm:col-span-4"
@@ -185,8 +200,34 @@ export default function TmsPage() {
         <input className={input} placeholder="Hora carga" value={form.horaCarga} onChange={(e) => setForm({ ...form, horaCarga: e.target.value })} />
         <input className={input} placeholder="Cliente" value={form.clienteNombre} onChange={(e) => setForm({ ...form, clienteNombre: e.target.value })} />
         <input className={input} placeholder="Placa unidad" value={form.placa} onChange={(e) => setForm({ ...form, placa: e.target.value })} />
-        <input className={input} placeholder="Piloto" value={form.pilotoNombre} onChange={(e) => setForm({ ...form, pilotoNombre: e.target.value })} />
-        <input className={input} placeholder="Auxiliar" value={form.auxiliarNombre} onChange={(e) => setForm({ ...form, auxiliarNombre: e.target.value })} />
+        <select
+          className={input}
+          value={form.pilotoEmpleadoId}
+          onChange={(e) =>
+            setForm({ ...form, pilotoEmpleadoId: Number(e.target.value) || 0 })
+          }
+        >
+          <option value={0}>Piloto (RRHH)…</option>
+          {pilotos.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.nombre} ({p.codigo})
+            </option>
+          ))}
+        </select>
+        <select
+          className={input}
+          value={form.auxiliarEmpleadoId}
+          onChange={(e) =>
+            setForm({ ...form, auxiliarEmpleadoId: Number(e.target.value) || 0 })
+          }
+        >
+          <option value={0}>Auxiliar (RRHH)…</option>
+          {auxiliares.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.nombre} ({p.codigo})
+            </option>
+          ))}
+        </select>
         <input className={input} placeholder="Lugar carga" value={form.lugarCarga} onChange={(e) => setForm({ ...form, lugarCarga: e.target.value })} />
         <input className={input} placeholder="Lugar descarga" value={form.lugarDescarga} onChange={(e) => setForm({ ...form, lugarDescarga: e.target.value })} />
         <input className={input} placeholder="Tipo traslado" value={form.tipoTraslado} onChange={(e) => setForm({ ...form, tipoTraslado: e.target.value })} />

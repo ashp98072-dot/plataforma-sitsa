@@ -48,8 +48,8 @@ export default function RrhhHubPage() {
         <p className="text-sm text-[var(--muted)]">
           Primero registra empleados en Personal; luego usa marcajes y vacaciones
           sobre esa misma base.{" "}
-          <Link href="/rrhh" className="text-[var(--accent)] underline">
-            Ver todas las empresas →
+          <Link href="/select-empresa" className="text-[var(--accent)] underline">
+            Cambiar empresa →
           </Link>
         </p>
       </div>

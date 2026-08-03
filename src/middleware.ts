@@ -50,6 +50,9 @@ function rewriteEmpresaPath(pathname: string, slug: string): string | null {
   if (pathname === "/marcajes" || pathname === "/asistencias") {
     return `/e/${slug}/rrhh/marcajes`;
   }
+  if (pathname === "/planillas") return `/e/${slug}/rrhh/planillas`;
+  if (pathname === "/descuentos") return `/e/${slug}/rrhh/descuentos`;
+  if (pathname === "/prestaciones") return `/e/${slug}/rrhh/prestaciones`;
   if (pathname === "/contabilidad") return `/e/${slug}/contabilidad`;
   if (pathname === "/tms" || pathname === "/transporte") {
     return `/e/${slug}/tms`;
@@ -116,18 +119,7 @@ export async function middleware(request: NextRequest) {
   }
 
   // --- Dominio plataforma (Hostinger genérico / multiempresa) ---
-  if (valid && pathname === "/login") {
-    const rol = session!.rol ?? "";
-    if (rol === "RRHH" || rol === "Admin") {
-      return NextResponse.redirect(new URL("/rrhh", request.url));
-    }
-    return NextResponse.redirect(new URL("/select-empresa", request.url));
-  }
-  if (valid && pathname === "/") {
-    const rol = session!.rol ?? "";
-    if (rol === "RRHH" || rol === "Admin") {
-      return NextResponse.redirect(new URL("/rrhh", request.url));
-    }
+  if (valid && (pathname === "/login" || pathname === "/")) {
     return NextResponse.redirect(new URL("/select-empresa", request.url));
   }
 

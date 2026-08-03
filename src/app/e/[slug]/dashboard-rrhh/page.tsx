@@ -32,8 +32,23 @@ export default async function DashboardRrhhPage({ params }: Props) {
       desc: "Permisos, faltas y suspensiones.",
     },
     {
+      href: `/e/${slug}/rrhh/planillas`,
+      title: "Planillas",
+      desc: "Periodos de nómina (borrador).",
+    },
+    {
+      href: `/e/${slug}/rrhh/descuentos`,
+      title: "Descuentos",
+      desc: "Descuentos por empleado.",
+    },
+    {
+      href: `/e/${slug}/rrhh/prestaciones`,
+      title: "Prestaciones",
+      desc: "Bonos y prestaciones.",
+    },
+    {
       href: `/e/${slug}/rrhh/reportes`,
-      title: "Reportes / planillas base",
+      title: "Reportes / Excel",
       desc: "Consultas y Excel de asistencia.",
     },
     {
@@ -67,9 +82,6 @@ export default async function DashboardRrhhPage({ params }: Props) {
           </Link>
         ))}
       </div>
-      <p className="text-xs text-[var(--muted)]">
-        Próximamente en este mismo panel: planillas, descuentos y prestaciones.
-      </p>
     </div>
   );
 }

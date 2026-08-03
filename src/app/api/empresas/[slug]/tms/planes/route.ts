@@ -38,9 +38,39 @@ const schema = z.object({
   placa: z.string().optional(),
   pilotoNombre: z.string().optional(),
   auxiliarNombre: z.string().optional(),
+  pilotoEmpleadoId: z.number().int().positive().optional(),
+  auxiliarEmpleadoId: z.number().int().positive().optional(),
   lugarCarga: z.string().optional(),
   lugarDescarga: z.string().optional(),
 });
+
+async function personalDesdeEmpleado(
+  empresaId: number,
+  empleadoId: number | undefined,
+  tipo: "Piloto" | "Auxiliar",
+): Promise<number | null> {
+  if (!empleadoId) return null;
+  const emp = await query<RowDataPacket[]>(
+    `SELECT id, codigo, nombre FROM empleados
+     WHERE id = ? AND empresa_id = ? AND estado = 'Activo' LIMIT 1`,
+    [empleadoId, empresaId],
+  );
+  if (!emp[0]) return null;
+  const codigo = String(emp[0].codigo);
+  const nombre = String(emp[0].nombre);
+  const existing = await query<RowDataPacket[]>(
+    `SELECT id FROM tms_personal
+     WHERE empresa_id = ? AND codigo = ? AND tipo = ? LIMIT 1`,
+    [empresaId, codigo, tipo],
+  );
+  if (existing[0]) return Number(existing[0].id);
+  const r = await execute(
+    `INSERT INTO tms_personal (empresa_id, codigo, nombre, tipo, estado)
+     VALUES (?, ?, ?, ?, 'Activo')`,
+    [empresaId, codigo, nombre, tipo],
+  );
+  return Number(r.insertId);
+}
 
 async function upsertLugar(
   empresaId: number,
@@ -100,14 +130,24 @@ export async function POST(req: Request, ctx: Ctx) {
     );
     unidadId = Number(r.insertId);
   }
-  if (d.pilotoNombre?.trim()) {
+  pilotoId = await personalDesdeEmpleado(
+    empresaId,
+    d.pilotoEmpleadoId,
+    "Piloto",
+  );
+  auxiliarId = await personalDesdeEmpleado(
+    empresaId,
+    d.auxiliarEmpleadoId,
+    "Auxiliar",
+  );
+  if (!pilotoId && d.pilotoNombre?.trim()) {
     const r = await execute(
       "INSERT INTO tms_personal (empresa_id, nombre, tipo) VALUES (?, ?, 'Piloto')",
       [empresaId, d.pilotoNombre.trim()],
     );
     pilotoId = Number(r.insertId);
   }
-  if (d.auxiliarNombre?.trim()) {
+  if (!auxiliarId && d.auxiliarNombre?.trim()) {
     const r = await execute(
       "INSERT INTO tms_personal (empresa_id, nombre, tipo) VALUES (?, ?, 'Auxiliar')",
       [empresaId, d.auxiliarNombre.trim()],

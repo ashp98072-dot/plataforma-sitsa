@@ -26,7 +26,6 @@ export function AppShell({
   const pathname = usePathname();
   const router = useRouter();
   const base = `/e/${slug}`;
-  const esRrhh = rol === "RRHH" || rol === "Admin";
   const [dominioEmpresa, setDominioEmpresa] = useState(false);
 
   useEffect(() => {
@@ -130,14 +129,6 @@ export function AppShell({
           })}
         </nav>
         <div className="space-y-2 border-t border-[var(--border)] p-3">
-          {esRrhh && !dominioEmpresa ? (
-            <Link
-              href="/rrhh"
-              className="block rounded-lg bg-[#0d9488] px-3 py-2 text-center text-sm text-white"
-            >
-              RRHH · Todas las empresas
-            </Link>
-          ) : null}
           {!dominioEmpresa ? (
             <Link
               href="/select-empresa"

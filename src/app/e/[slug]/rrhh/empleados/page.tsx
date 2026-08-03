@@ -9,6 +9,7 @@ type Emp = {
   codigo: string;
   nombre: string;
   puesto: string;
+  categoriaOps: string;
   tipoHorario: string;
   estado: string;
 };
@@ -19,6 +20,7 @@ export default function EmpleadosPage() {
   const [codigo, setCodigo] = useState("");
   const [nombre, setNombre] = useState("");
   const [puesto, setPuesto] = useState("");
+  const [categoriaOps, setCategoriaOps] = useState("");
   const [tipoHorario, setTipoHorario] = useState<"Fijo" | "Variable">("Fijo");
   const [mensaje, setMensaje] = useState("");
   const [error, setError] = useState("");
@@ -41,7 +43,7 @@ export default function EmpleadosPage() {
     const res = await fetch(`/api/empresas/${slug}/empleados`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ codigo, nombre, puesto, tipoHorario }),
+      body: JSON.stringify({ codigo, nombre, puesto, categoriaOps, tipoHorario }),
     });
     const data = await res.json();
     if (!res.ok) {
@@ -52,6 +54,7 @@ export default function EmpleadosPage() {
     setCodigo("");
     setNombre("");
     setPuesto("");
+    setCategoriaOps("");
     await cargar();
   }
 
@@ -67,8 +70,8 @@ export default function EmpleadosPage() {
         <p className="text-sm text-[var(--muted)]">
           Alta y control de empleados de esta empresa. Los marcajes y vacaciones
           usan esta misma lista.{" "}
-          <Link href="/rrhh" className="text-[var(--accent)] underline">
-            Panel RRHH (todas las empresas)
+          <Link href="/select-empresa" className="text-[var(--accent)] underline">
+            Cambiar empresa
           </Link>
         </p>
       </div>
@@ -107,6 +110,21 @@ export default function EmpleadosPage() {
             <input className={input} value={puesto} onChange={(e) => setPuesto(e.target.value)} />
           </label>
           <label className="mt-2 block text-sm text-[var(--muted)]">
+            Categoría operativa (para TMS)
+            <select
+              className={input}
+              value={categoriaOps}
+              onChange={(e) => setCategoriaOps(e.target.value)}
+            >
+              <option value="">—</option>
+              <option value="Piloto">Piloto</option>
+              <option value="Auxiliar">Auxiliar</option>
+              <option value="Bodega">Bodega</option>
+              <option value="Administrativo">Administrativo</option>
+              <option value="Otro">Otro</option>
+            </select>
+          </label>
+          <label className="mt-2 block text-sm text-[var(--muted)]">
             Horario
             <select
               className={input}
@@ -133,6 +151,7 @@ export default function EmpleadosPage() {
                   <th className="py-1 pr-3">Código</th>
                   <th className="py-1 pr-3">Nombre</th>
                   <th className="py-1 pr-3">Puesto</th>
+                  <th className="py-1 pr-3">Cat. ops</th>
                   <th className="py-1 pr-3">Horario</th>
                   <th className="py-1">Estado</th>
                 </tr>
@@ -143,6 +162,7 @@ export default function EmpleadosPage() {
                     <td className="py-2 pr-3">{e.codigo}</td>
                     <td className="py-2 pr-3">{e.nombre}</td>
                     <td className="py-2 pr-3">{e.puesto || "—"}</td>
+                    <td className="py-2 pr-3">{e.categoriaOps || "—"}</td>
                     <td className="py-2 pr-3">{e.tipoHorario}</td>
                     <td className="py-2">{e.estado}</td>
                   </tr>
