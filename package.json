@@ -6,8 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "start:hostinger": "node scripts/start-hostinger.mjs",
     "lint": "eslint",
-    "db:init": "node scripts/init-db.mjs"
+    "db:init": "node scripts/init-db.mjs",
+    "pack:hostinger": "node scripts/pack-hostinger.mjs"
   },
   "engines": {
     "node": ">=20"

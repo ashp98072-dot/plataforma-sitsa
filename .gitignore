@@ -37,6 +37,9 @@ yarn-error.log*
 # uploads locales
 /uploads
 
+# Hostinger pack
+/dist-hostinger
+
 # vercel
 .vercel
 

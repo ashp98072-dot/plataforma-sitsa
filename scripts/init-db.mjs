@@ -64,15 +64,29 @@ async function main() {
     process.exit(1);
   }
 
+  let host = String(DB_HOST).trim();
+  if (host === "localhost") host = "127.0.0.1";
+
   const conn = await mysql.createConnection({
-    host: DB_HOST,
+    host,
     port: Number(DB_PORT),
     user: DB_USER,
     password: DB_PASSWORD,
     multipleStatements: true,
   });
 
-  await conn.query(`CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+  // En Hostinger el usuario no puede CREATE DATABASE: créala en hPanel e importa schema.
+  try {
+    await conn.query(
+      `CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`,
+    );
+  } catch (err) {
+    console.warn(
+      "CREATE DATABASE no permitido (normal en Hostinger). Usando DB existente:",
+      DB_NAME,
+    );
+    console.warn(String(err?.message ?? err));
+  }
   await conn.changeUser({ database: DB_NAME });
 
   const schema = readFileSync(join(root, "sql", "schema.sql"), "utf8");

@@ -3,6 +3,7 @@ import mysql, {
   type ResultSetHeader,
   type RowDataPacket,
 } from "mysql2/promise";
+import { loadRuntimeEnv } from "./load-env";
 
 let pool: Pool | null = null;
 
@@ -11,11 +12,13 @@ export type SqlParams = SqlValue[];
 
 export function getPool(): Pool {
   if (pool) return pool;
+  loadRuntimeEnv();
   const user = process.env.DB_USER;
   const database = process.env.DB_NAME;
   if (!user || !database) {
     throw new Error("Faltan DB_USER / DB_NAME en variables de entorno.");
   }
+  // Hostinger: localhost/@'%' falla; forzar IPv4
   let host = (process.env.DB_HOST ?? "127.0.0.1").trim();
   if (host === "localhost") host = "127.0.0.1";
   pool = mysql.createPool({
