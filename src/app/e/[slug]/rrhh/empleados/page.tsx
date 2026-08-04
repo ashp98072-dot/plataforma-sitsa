@@ -12,6 +12,7 @@ type Emp = {
   categoriaOps: string;
   tipoHorario: string;
   fechaAlta: string;
+  fechaInicioLaboral: string | null;
   horaEntradaTeorica: string;
   horaSalidaTeorica: string;
   estado: string;
@@ -24,6 +25,7 @@ const emptyForm = {
   categoriaOps: "",
   tipoHorario: "Fijo" as "Fijo" | "Variable",
   fechaAlta: new Date().toISOString().slice(0, 10),
+  fechaInicioLaboral: "",
   horaEntradaTeorica: "08:00",
   horaSalidaTeorica: "17:00",
   estado: "Activo" as "Activo" | "Baja",
@@ -59,6 +61,7 @@ export default function EmpleadosPage() {
       categoriaOps: e.categoriaOps,
       tipoHorario: e.tipoHorario === "Variable" ? "Variable" : "Fijo",
       fechaAlta: e.fechaAlta || new Date().toISOString().slice(0, 10),
+      fechaInicioLaboral: e.fechaInicioLaboral || "",
       horaEntradaTeorica: (e.horaEntradaTeorica || "08:00:00").slice(0, 5),
       horaSalidaTeorica: (e.horaSalidaTeorica || "17:00:00").slice(0, 5),
       estado: e.estado === "Baja" ? "Baja" : "Activo",
@@ -75,7 +78,10 @@ export default function EmpleadosPage() {
     const res = await fetch(url, {
       method: editId ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form),
+      body: JSON.stringify({
+        ...form,
+        fechaInicioLaboral: form.fechaInicioLaboral || null,
+      }),
     });
     const data = await res.json();
     if (!res.ok) {
@@ -106,7 +112,9 @@ export default function EmpleadosPage() {
       <div>
         <h1 className="text-2xl font-semibold">Personal / Empleados</h1>
         <p className="text-sm text-[var(--muted)]">
-          Alta, edición y baja. Base para marcajes y vacaciones.{" "}
+          Alta, edición y baja. Las vacaciones se calculan con la{" "}
+          <strong className="font-medium text-white">fecha de contratación</strong>
+          , no con la de entrada laboral.{" "}
           <Link
             href={`/e/${slug}/dashboard-rrhh`}
             className="text-[var(--accent)] underline"
@@ -165,7 +173,24 @@ export default function EmpleadosPage() {
           </select>
         </label>
         <label className="text-sm text-[var(--muted)]">
-          Fecha alta
+          Fecha entrada laboral
+          <span className="mt-0.5 block text-[10px] opacity-80">
+            Cuando empieza a trabajar (opcional)
+          </span>
+          <input
+            type="date"
+            className={input}
+            value={form.fechaInicioLaboral}
+            onChange={(e) =>
+              setForm({ ...form, fechaInicioLaboral: e.target.value })
+            }
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Fecha contratación / alta
+          <span className="mt-0.5 block text-[10px] text-emerald-400/80">
+            Contrato — base para vacaciones
+          </span>
           <input
             type="date"
             className={input}
@@ -270,7 +295,8 @@ export default function EmpleadosPage() {
               <th className="px-3 py-2">Nombre</th>
               <th className="px-3 py-2">Puesto</th>
               <th className="px-3 py-2">Cat.</th>
-              <th className="px-3 py-2">Alta</th>
+              <th className="px-3 py-2">Entrada lab.</th>
+              <th className="px-3 py-2">Contratación</th>
               <th className="px-3 py-2">Horario</th>
               <th className="px-3 py-2">Estado</th>
               <th className="px-3 py-2" />
@@ -283,6 +309,7 @@ export default function EmpleadosPage() {
                 <td className="px-3 py-2">{e.nombre}</td>
                 <td className="px-3 py-2">{e.puesto || "—"}</td>
                 <td className="px-3 py-2">{e.categoriaOps || "—"}</td>
+                <td className="px-3 py-2">{e.fechaInicioLaboral || "—"}</td>
                 <td className="px-3 py-2">{e.fechaAlta || "—"}</td>
                 <td className="px-3 py-2">
                   {e.tipoHorario} {e.horaEntradaTeorica?.slice(0, 5)}

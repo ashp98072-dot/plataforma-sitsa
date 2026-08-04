@@ -204,7 +204,11 @@ export default function VacacionesPage() {
 
       {usaSaldo && saldo != null ? (
         <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 text-sm">
-          <p>
+          <p className="text-xs text-[var(--muted)]">
+            El saldo se calcula desde la fecha de contratación / alta del
+            empleado (no desde la entrada laboral).
+          </p>
+          <p className="mt-1">
             Saldo disponible:{" "}
             <span className="font-semibold text-emerald-300">{saldo}</span>{" "}
             día(s)
