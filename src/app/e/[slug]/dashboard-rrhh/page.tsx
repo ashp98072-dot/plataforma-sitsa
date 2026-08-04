@@ -1,45 +1,72 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { obtenerEmpresaPorSlug } from "@/lib/empresas";
-import { getSession } from "@/lib/session";
+import { useParams } from "next/navigation";
 
-type Props = { params: Promise<{ slug: string }> };
+type Stats = {
+  totalEmpleados: number;
+  presentesHoy: number;
+  ausentesHoy: number;
+  enVacaciones: number;
+};
 
-export default async function DashboardRrhhPage({ params }: Props) {
-  const { slug } = await params;
-  const session = await getSession();
-  const empresa = await obtenerEmpresaPorSlug(slug);
-  if (!session || !empresa) return null;
+export default function DashboardRrhhPage() {
+  const slug = String(useParams().slug);
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [empresa, setEmpresa] = useState("");
+
+  useEffect(() => {
+    void (async () => {
+      const res = await fetch(`/api/empresas/${slug}/rrhh/dashboard`);
+      const data = await res.json();
+      if (res.ok) {
+        setStats(data.stats);
+        setEmpresa(data.empresa ?? "");
+      }
+    })();
+  }, [slug]);
 
   const cards = [
     {
       href: `/e/${slug}/rrhh/empleados`,
-      title: "Personal / Empleados",
-      desc: "Altas, edición, baja, horarios y categoría ops.",
+      title: "Empleados",
+      desc: "Alta, edición, baja y horarios.",
     },
     {
       href: `/e/${slug}/rrhh/marcajes`,
-      title: "Marcajes / asistencias",
-      desc: "Kiosko por código, manual RRHH y puntualidad.",
+      title: "Registrar Marcaje",
+      desc: "Kiosko por código y marcaje manual.",
+    },
+    {
+      href: `/e/${slug}/rrhh/reportes`,
+      title: "Historial / Reportes",
+      desc: "Calendario, faltas, Excel.",
     },
     {
       href: `/e/${slug}/rrhh/vacaciones`,
       title: "Vacaciones",
-      desc: "Saldo por antigüedad y consumo FIFO.",
+      desc: "Saldo FIFO y días hábiles.",
+    },
+    {
+      href: `/e/${slug}/rrhh/en-ruta`,
+      title: "En Ruta",
+      desc: "Personal Variable en viaje.",
     },
     {
       href: `/e/${slug}/rrhh/incidencias`,
       title: "Incidencias",
-      desc: "Permisos, faltas y suspensiones.",
+      desc: "Permisos y resumen operativo.",
     },
     {
       href: `/e/${slug}/rrhh/configuracion`,
       title: "Configuración",
-      desc: "Tolerancia, horas default y feriados.",
+      desc: "Tolerancia y feriados.",
     },
     {
       href: `/e/${slug}/rrhh/planillas`,
       title: "Planillas",
-      desc: "Periodos de nómina (borrador).",
+      desc: "Periodos de nómina.",
     },
     {
       href: `/e/${slug}/rrhh/descuentos`,
@@ -51,30 +78,41 @@ export default async function DashboardRrhhPage({ params }: Props) {
       title: "Prestaciones",
       desc: "Bonos y prestaciones.",
     },
-    {
-      href: `/e/${slug}/rrhh/reportes`,
-      title: "Reportes / Excel",
-      desc: "Consultas y Excel de asistencia.",
-    },
-    {
-      href: `/e/${slug}/rrhh/inventario`,
-      title: "EPP / útiles",
-      desc: "Inventario de RRHH.",
-    },
   ];
 
   return (
     <div className="space-y-6">
       <div>
         <p className="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">
-          Dashboard RRHH
+          Control de Asistencias · RRHH
         </p>
-        <h1 className="mt-1 text-2xl font-semibold">{empresa.nombre}</h1>
+        <h1 className="mt-1 text-2xl font-semibold">
+          {empresa || "Dashboard RRHH"}
+        </h1>
         <p className="mt-1 text-sm text-[var(--muted)]">
-          Personal, vacaciones y asistencia de esta empresa. Usuario:{" "}
-          {session.username}
+          Mismos módulos del sistema de escritorio / web KuiqTrans, por empresa.
         </p>
       </div>
+
+      {stats ? (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {[
+            { label: "Empleados activos", value: stats.totalEmpleados },
+            { label: "Presentes (abiertos)", value: stats.presentesHoy },
+            { label: "Sin marcar hoy", value: stats.ausentesHoy },
+            { label: "En vacaciones", value: stats.enVacaciones },
+          ].map((s) => (
+            <div
+              key={s.label}
+              className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4"
+            >
+              <p className="text-xs text-[var(--muted)]">{s.label}</p>
+              <p className="mt-1 text-2xl font-semibold">{s.value}</p>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {cards.map((c) => (
           <Link

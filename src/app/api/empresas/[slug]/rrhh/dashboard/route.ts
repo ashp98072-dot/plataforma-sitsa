@@ -1,0 +1,13 @@
+import { NextResponse } from "next/server";
+import { requireTenantModulo } from "@/lib/tenant";
+import { obtenerEstadisticasDashboard } from "@/lib/rrhh/dashboard";
+
+type Ctx = { params: Promise<{ slug: string }> };
+
+export async function GET(_req: Request, ctx: Ctx) {
+  const { slug } = await ctx.params;
+  const guard = await requireTenantModulo(slug, "rrhh");
+  if (guard.error) return guard.error;
+  const stats = await obtenerEstadisticasDashboard(guard.empresa.id);
+  return NextResponse.json({ stats, empresa: guard.empresa.nombre });
+}

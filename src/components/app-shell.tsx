@@ -61,21 +61,44 @@ export function AppShell({
   }
 
   if (modulos.includes("rrhh")) {
+    // Misma estructura que Control de Asistencias (web/escritorio)
     links.push(
       {
         href: dominioEmpresa ? "/personal" : `${base}/rrhh/empleados`,
-        label: "Personal",
+        label: "Empleados",
         key: "rrhh-emp",
       },
       {
         href: dominioEmpresa ? "/marcajes" : `${base}/rrhh/marcajes`,
-        label: "Marcajes",
+        label: "Registrar Marcaje",
         key: "rrhh-mar",
+      },
+      {
+        href: dominioEmpresa ? "/reportes" : `${base}/rrhh/reportes`,
+        label: "Reportes",
+        key: "rrhh-rep",
       },
       {
         href: dominioEmpresa ? "/vacaciones" : `${base}/rrhh/vacaciones`,
         label: "Vacaciones",
         key: "rrhh-vac",
+      },
+      {
+        href: dominioEmpresa ? "/en-ruta" : `${base}/rrhh/en-ruta`,
+        label: "En Ruta",
+        key: "rrhh-ruta",
+      },
+      {
+        href: dominioEmpresa ? "/incidencias" : `${base}/rrhh/incidencias`,
+        label: "Incidencias",
+        key: "rrhh-inc",
+      },
+      {
+        href: dominioEmpresa
+          ? "/configuracion-rrhh"
+          : `${base}/rrhh/configuracion`,
+        label: "Configuración",
+        key: "rrhh-cfg",
       },
     );
   }

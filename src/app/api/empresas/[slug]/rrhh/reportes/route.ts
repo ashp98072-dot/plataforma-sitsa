@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
-import type { RowDataPacket } from "mysql2";
 import ExcelJS from "exceljs";
-import { query } from "@/lib/db";
 import { requireTenantModulo } from "@/lib/tenant";
+import { obtenerRangoPeriodo } from "@/lib/rrhh/periodos";
+import {
+  obtenerReporteAsistencias,
+  obtenerResumenIncidenciasDetallado,
+} from "@/lib/rrhh/reportes";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -12,39 +15,100 @@ export async function GET(req: Request, ctx: Ctx) {
   if (guard.error) return guard.error;
 
   const url = new URL(req.url);
-  const desde =
-    url.searchParams.get("desde") ?? new Date().toISOString().slice(0, 10);
-  const hasta = url.searchParams.get("hasta") ?? desde;
+  const periodo = url.searchParams.get("periodo") ?? "";
+  let desde = url.searchParams.get("desde") ?? "";
+  let hasta = url.searchParams.get("hasta") ?? "";
+  if (periodo && periodo !== "Rango personalizado") {
+    const rango = await obtenerRangoPeriodo(guard.empresa.id, periodo);
+    if (rango) {
+      desde = rango.desde;
+      hasta = rango.hasta;
+    }
+  }
+  if (!desde || !hasta) {
+    const hoy = new Date().toISOString().slice(0, 10);
+    desde = desde || hoy;
+    hasta = hasta || hoy;
+  }
+
+  const tipo = url.searchParams.get("tipo") ?? "Todos";
+  const horario = url.searchParams.get("horario") ?? "Todos";
+  const modo = url.searchParams.get("modo") ?? "asistencias";
   const formato = url.searchParams.get("formato") ?? "json";
 
-  const rows = await query<RowDataPacket[]>(
-    `SELECT e.codigo, e.nombre, s.fecha_jornada, s.entrada_at, s.salida_at, s.estado
-     FROM sesiones_trabajo s
-     INNER JOIN empleados e ON e.id = s.id_empleado
-     WHERE s.empresa_id = ? AND s.fecha_jornada BETWEEN ? AND ?
-     ORDER BY s.fecha_jornada, e.nombre`,
-    [guard.empresa.id, desde, hasta],
+  if (modo === "incidencias") {
+    const resumen = await obtenerResumenIncidenciasDetallado(
+      guard.empresa.id,
+      desde,
+      hasta,
+    );
+    if (formato === "xlsx") {
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet("Incidencias");
+      ws.addRow([
+        "Código",
+        "Empleado",
+        "Retrasos",
+        "Salidas tempranas",
+        "Faltas",
+        "Días asistidos",
+      ]);
+      for (const r of resumen) {
+        ws.addRow([
+          r.codigo,
+          r.empleado,
+          r.totalRetrasos,
+          r.totalSalidasTempranas,
+          r.totalFaltas,
+          r.totalDiasAsistidos,
+        ]);
+      }
+      const buf = Buffer.from(await wb.xlsx.writeBuffer());
+      return new NextResponse(buf, {
+        headers: {
+          "Content-Type":
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          "Content-Disposition": `attachment; filename="incidencias-${slug}-${desde}-${hasta}.xlsx"`,
+        },
+      });
+    }
+    return NextResponse.json({ desde, hasta, resumen });
+  }
+
+  const filas = await obtenerReporteAsistencias(
+    guard.empresa.id,
+    desde,
+    hasta,
+    { tipo, horario },
   );
 
   if (formato === "xlsx") {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("Asistencias");
     ws.addRow([
+      "Fecha",
       "Código",
       "Empleado",
-      "Fecha",
       "Entrada",
       "Salida",
-      "Estado",
+      "Estado entrada",
+      "Estado salida",
+      "Motivo",
+      "Horario",
+      "Comentarios",
     ]);
-    for (const r of rows) {
+    for (const r of filas) {
       ws.addRow([
+        r.fecha,
         r.codigo,
         r.nombre,
-        String(r.fecha_jornada).slice(0, 10),
-        r.entrada_at ? String(r.entrada_at) : "",
-        r.salida_at ? String(r.salida_at) : "",
-        r.estado ?? "",
+        r.horaEntrada ?? "",
+        r.horaSalida ?? "",
+        r.estadoEntrada,
+        r.estadoSalida,
+        r.motivo,
+        r.tipoHorario,
+        r.comentarios,
       ]);
     }
     const buf = Buffer.from(await wb.xlsx.writeBuffer());
@@ -61,6 +125,6 @@ export async function GET(req: Request, ctx: Ctx) {
     desde,
     hasta,
     empresa: guard.empresa.nombre,
-    filas: rows,
+    filas,
   });
 }
