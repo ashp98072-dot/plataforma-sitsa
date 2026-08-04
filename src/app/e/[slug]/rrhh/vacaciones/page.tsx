@@ -14,11 +14,21 @@ type Periodo = {
   diasDisponibles: number;
 };
 
+const TIPOS = [
+  "Vacaciones",
+  "A cuenta de Vacaciones",
+  "Permiso con goce",
+  "Permiso sin goce",
+  "IGSS",
+  "Médico",
+] as const;
+
 export default function VacacionesPage() {
   const slug = String(useParams().slug);
   const [empleados, setEmpleados] = useState<Emp[]>([]);
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
   const [empleadoId, setEmpleadoId] = useState(0);
+  const [tipo, setTipo] = useState<(typeof TIPOS)[number]>("Vacaciones");
   const [saldo, setSaldo] = useState<number | null>(null);
   const [periodos, setPeriodos] = useState<Periodo[]>([]);
   const [aviso, setAviso] = useState("");
@@ -28,6 +38,7 @@ export default function VacacionesPage() {
   const [fechaFin, setFechaFin] = useState(
     new Date().toISOString().slice(0, 10),
   );
+  const [dias, setDias] = useState("1");
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
 
@@ -52,14 +63,37 @@ export default function VacacionesPage() {
     void cargar();
   }, [cargar]);
 
+  useEffect(() => {
+    if (!fechaInicio || !fechaFin) return;
+    const t = setTimeout(async () => {
+      const res = await fetch(
+        `/api/empresas/${slug}/rrhh/vacaciones/dias-habiles?inicio=${fechaInicio}&fin=${fechaFin}`,
+      );
+      const data = await res.json();
+      if (res.ok && typeof data.dias === "number") setDias(String(data.dias));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [slug, fechaInicio, fechaFin]);
+
   async function onSubmit(ev: FormEvent) {
     ev.preventDefault();
     setError("");
     setMsg("");
+    const diasNum = Number(dias);
+    if (!Number.isFinite(diasNum) || diasNum <= 0) {
+      setError("Días hábiles inválidos.");
+      return;
+    }
     const res = await fetch(`/api/empresas/${slug}/rrhh/vacaciones`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ empleadoId, fechaInicio, fechaFin }),
+      body: JSON.stringify({
+        empleadoId,
+        fechaInicio,
+        fechaFin,
+        diasHabiles: diasNum,
+        tipo,
+      }),
     });
     const data = await res.json();
     if (!res.ok) {
@@ -67,68 +101,108 @@ export default function VacacionesPage() {
       return;
     }
     setMsg(
-      `${data.mensaje} · ${data.diasHabiles} día(s) hábiles` +
+      `${data.mensaje} · ${data.diasHabiles} día(s)` +
         (data.desglose?.length
-          ? ` · FIFO: ${data.desglose.map((d: { diasTomados: number; periodoInicio: string }) => `${d.diasTomados}d desde ${d.periodoInicio}`).join(", ")}`
+          ? ` · FIFO: ${data.desglose.map((d: { diasTomados: number; periodoInicio: string }) => `${d.diasTomados}d ${d.periodoInicio}`).join(", ")}`
           : ""),
     );
     await cargar();
   }
 
+  const usaSaldo =
+    tipo === "Vacaciones" || tipo === "A cuenta de Vacaciones";
   const input =
     "rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1 text-sm";
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Vacaciones</h1>
-        <p className="text-sm text-[var(--muted)]">
-          Saldo por antigüedad (15 días/periodo) y consumo FIFO. Domingos y
-          feriados no cuentan.{" "}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold">Vacaciones / En Ruta</h1>
+          <p className="text-sm text-[var(--muted)]">
+            Misma lógica que Control de Asistencias: 15 días/periodo, FIFO,
+            domingos y feriados no cuentan.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <span className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm text-white">
+            Vacaciones
+          </span>
           <Link
-            href={`/e/${slug}/rrhh/configuracion`}
-            className="text-[var(--accent)] underline"
+            href={`/e/${slug}/rrhh/en-ruta`}
+            className="rounded bg-[#334155] px-3 py-1.5 text-sm"
           >
-            Config / feriados
+            En Ruta →
           </Link>
-        </p>
+        </div>
       </div>
 
       {aviso ? <p className="text-sm text-amber-300">{aviso}</p> : null}
 
       <form
         onSubmit={onSubmit}
-        className="flex flex-wrap gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4"
+        className="grid gap-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 sm:grid-cols-2 lg:grid-cols-3"
       >
-        <select
-          className={input}
-          value={empleadoId}
-          onChange={(e) => setEmpleadoId(Number(e.target.value))}
-        >
-          {empleados.map((e) => (
-            <option key={e.id} value={e.id}>
-              {e.codigo} — {e.nombre}
-            </option>
-          ))}
-        </select>
-        <input
-          type="date"
-          className={input}
-          value={fechaInicio}
-          onChange={(e) => setFechaInicio(e.target.value)}
-        />
-        <input
-          type="date"
-          className={input}
-          value={fechaFin}
-          onChange={(e) => setFechaFin(e.target.value)}
-        />
-        <button className="rounded bg-[var(--accent)] px-3 py-1 text-sm text-white">
-          Registrar (descuenta saldo)
-        </button>
+        <label className="text-sm text-[var(--muted)]">
+          Empleado
+          <select
+            className={`${input} mt-1 w-full`}
+            value={empleadoId}
+            onChange={(e) => setEmpleadoId(Number(e.target.value))}
+          >
+            {empleados.map((e) => (
+              <option key={e.id} value={e.id}>
+                {e.codigo} — {e.nombre}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Tipo
+          <select
+            className={`${input} mt-1 w-full`}
+            value={tipo}
+            onChange={(e) => setTipo(e.target.value as (typeof TIPOS)[number])}
+          >
+            {TIPOS.map((t) => (
+              <option key={t}>{t}</option>
+            ))}
+          </select>
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Días hábiles
+          <input
+            className={`${input} mt-1 w-full`}
+            value={dias}
+            onChange={(e) => setDias(e.target.value)}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Desde
+          <input
+            type="date"
+            className={`${input} mt-1 w-full`}
+            value={fechaInicio}
+            onChange={(e) => setFechaInicio(e.target.value)}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Hasta
+          <input
+            type="date"
+            className={`${input} mt-1 w-full`}
+            value={fechaFin}
+            onChange={(e) => setFechaFin(e.target.value)}
+          />
+        </label>
+        <div className="flex items-end">
+          <button className="rounded bg-[var(--accent)] px-4 py-2 text-sm text-white">
+            {usaSaldo ? "Registrar (descuenta saldo)" : "Registrar permiso"}
+          </button>
+        </div>
       </form>
 
-      {saldo != null ? (
+      {usaSaldo && saldo != null ? (
         <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 text-sm">
           <p>
             Saldo disponible:{" "}
@@ -138,8 +212,8 @@ export default function VacacionesPage() {
           <ul className="mt-2 space-y-1 text-[var(--muted)]">
             {periodos.map((p) => (
               <li key={p.id}>
-                Año laboral {p.anioLaboral}: {p.diasDisponibles}/{p.diasOtorgados}{" "}
-                · {p.periodoInicio} → {p.periodoFin}
+                Año laboral {p.anioLaboral}: {p.diasDisponibles}/
+                {p.diasOtorgados} · {p.periodoInicio} → {p.periodoFin}
               </li>
             ))}
           </ul>

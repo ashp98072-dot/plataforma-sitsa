@@ -80,13 +80,8 @@ export function AppShell({
       },
       {
         href: dominioEmpresa ? "/vacaciones" : `${base}/rrhh/vacaciones`,
-        label: "Vacaciones",
+        label: "Vacaciones / En Ruta",
         key: "rrhh-vac",
-      },
-      {
-        href: dominioEmpresa ? "/en-ruta" : `${base}/rrhh/en-ruta`,
-        label: "En Ruta",
-        key: "rrhh-ruta",
       },
       {
         href: dominioEmpresa ? "/incidencias" : `${base}/rrhh/incidencias`,

@@ -445,3 +445,41 @@ export async function listarVacaciones(
     [empresaId],
   );
 }
+
+/** Permisos / incidencias que NO descuentan saldo de vacaciones. */
+export async function registrarIncidenciaSinSaldo(input: {
+  empresaId: number;
+  idEmpleado: number;
+  tipo: string;
+  fechaInicio: string;
+  fechaFin: string;
+  dias: number;
+}): Promise<{ ok: boolean; mensaje: string; incidenciaId: number | null }> {
+  try {
+    const pool = getPool();
+    const [r] = await pool.execute<ResultSetHeader>(
+      `INSERT INTO incidencias
+        (empresa_id, id_empleado, tipo, fecha_inicio, fecha_fin, dias_habiles)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        input.empresaId,
+        input.idEmpleado,
+        input.tipo,
+        input.fechaInicio,
+        input.fechaFin,
+        input.dias,
+      ],
+    );
+    return {
+      ok: true,
+      mensaje: `${input.tipo} registrado.`,
+      incidenciaId: Number(r.insertId),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      mensaje: err instanceof Error ? err.message : "Error al registrar",
+      incidenciaId: null,
+    };
+  }
+}

@@ -41,6 +41,34 @@ async function tieneJornadaCompletaHoy(
   return rows.length > 0;
 }
 
+export type InfoCodigoMarcaje = {
+  encontrado: boolean;
+  nombre?: string;
+  tipoHorario?: string;
+  esVariable?: boolean;
+  estado?: string;
+};
+
+export async function infoCodigoParaMarcaje(
+  empresaId: number,
+  codigo: string,
+): Promise<InfoCodigoMarcaje> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT nombre, tipo_horario, estado FROM empleados
+     WHERE empresa_id = ? AND codigo = ? LIMIT 1`,
+    [empresaId, codigo.trim()],
+  );
+  if (!rows[0]) return { encontrado: false };
+  const tipo = String(rows[0].tipo_horario ?? "Fijo");
+  return {
+    encontrado: true,
+    nombre: String(rows[0].nombre),
+    tipoHorario: tipo,
+    esVariable: tipo === "Variable" || tipo.includes("Variable"),
+    estado: String(rows[0].estado ?? "Activo"),
+  };
+}
+
 export type MarcajeHoy = {
   id: number;
   nombre: string;

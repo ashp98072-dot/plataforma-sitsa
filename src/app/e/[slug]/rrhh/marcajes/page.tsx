@@ -1,10 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 
-type Emp = { id: number; codigo: string; nombre: string; tipoHorario: string };
 type Marcaje = {
   id: number;
   nombre: string;
@@ -16,182 +21,278 @@ type Marcaje = {
   viajeLargo: boolean;
 };
 
-export default function MarcajesPage() {
+function formatReloj(d: Date): string {
+  const hh = d.getHours().toString().padStart(2, "0");
+  const mm = d.getMinutes().toString().padStart(2, "0");
+  const ss = d.getSeconds().toString().padStart(2, "0");
+  const dia = d.getDate().toString().padStart(2, "0");
+  const mes = (d.getMonth() + 1).toString().padStart(2, "0");
+  const anio = d.getFullYear();
+  return `${hh}:${mm}:${ss} — ${dia}/${mes}/${anio}`;
+}
+
+export default function MarcajesKioskoPage() {
   const slug = String(useParams().slug);
-  const [empleados, setEmpleados] = useState<Emp[]>([]);
-  const [marcajes, setMarcajes] = useState<Marcaje[]>([]);
+  const [reloj, setReloj] = useState(() => formatReloj(new Date()));
   const [codigo, setCodigo] = useState("");
+  const [esVariable, setEsVariable] = useState(false);
   const [viajeLargo, setViajeLargo] = useState(false);
-  const [empleadoId, setEmpleadoId] = useState(0);
-  const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10));
-  const [msg, setMsg] = useState("");
+  const [marcajes, setMarcajes] = useState<Marcaje[]>([]);
+  const [horaEntrada, setHoraEntrada] = useState("08:00:00");
+  const [horaSalida, setHoraSalida] = useState("17:00:00");
+  const [tolerancia, setTolerancia] = useState(10);
+  const [empresaNombre, setEmpresaNombre] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [enviando, setEnviando] = useState(false);
+  const [mensaje, setMensaje] = useState("");
   const [error, setError] = useState("");
+  const [tipoOk, setTipoOk] = useState<"Entrada" | "Salida" | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const hoy = new Date().toISOString().slice(0, 10);
+
+  useEffect(() => {
+    const id = setInterval(() => setReloj(formatReloj(new Date())), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   const cargar = useCallback(async () => {
-    const [e, m] = await Promise.all([
-      fetch(`/api/empresas/${slug}/empleados`).then((r) => r.json()),
-      fetch(
-        `/api/empresas/${slug}/rrhh/marcajes?desde=${fecha}&hasta=${fecha}`,
-      ).then((r) => r.json()),
-    ]);
-    setEmpleados(e.empleados ?? []);
-    setMarcajes(m.marcajes ?? []);
-    if (!empleadoId && e.empleados?.[0]) setEmpleadoId(e.empleados[0].id);
-  }, [slug, fecha, empleadoId]);
+    setLoading(true);
+    try {
+      const [m, cfg, dash] = await Promise.all([
+        fetch(
+          `/api/empresas/${slug}/rrhh/marcajes?desde=${hoy}&hasta=${hoy}`,
+        ).then((r) => r.json()),
+        fetch(`/api/empresas/${slug}/rrhh/configuracion`).then((r) => r.json()),
+        fetch(`/api/empresas/${slug}/rrhh/dashboard`).then((r) => r.json()),
+      ]);
+      setMarcajes(m.marcajes ?? []);
+      if (cfg.parametros) {
+        setHoraEntrada(cfg.parametros.hora_entrada_default ?? "08:00:00");
+        setHoraSalida(cfg.parametros.hora_salida_default ?? "17:00:00");
+        setTolerancia(Number(cfg.parametros.minutos_tolerancia ?? 10));
+      }
+      if (dash.empresa) setEmpresaNombre(dash.empresa);
+    } finally {
+      setLoading(false);
+    }
+  }, [slug, hoy]);
 
   useEffect(() => {
     void cargar();
   }, [cargar]);
 
-  async function kiosko(ev: FormEvent) {
-    ev.preventDefault();
-    setError("");
-    setMsg("");
-    const res = await fetch(`/api/empresas/${slug}/rrhh/marcajes`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ modo: "kiosko", codigo, viajeLargo }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setError(data.error ?? "Error");
+  useEffect(() => {
+    if (!codigo.trim()) {
+      setEsVariable(false);
+      setViajeLargo(false);
       return;
     }
-    setMsg(data.mensaje);
-    setCodigo("");
-    await cargar();
-  }
+    const t = setTimeout(async () => {
+      const res = await fetch(
+        `/api/empresas/${slug}/rrhh/marcajes/empleado?codigo=${encodeURIComponent(codigo)}`,
+      );
+      const data = await res.json();
+      if (res.ok && data.info?.esVariable) setEsVariable(true);
+      else {
+        setEsVariable(false);
+        setViajeLargo(false);
+      }
+    }, 200);
+    return () => clearTimeout(t);
+  }, [codigo, slug]);
 
-  async function manual(tipo: "entrada" | "salida") {
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (enviando) return;
     setError("");
-    setMsg("");
-    const res = await fetch(`/api/empresas/${slug}/rrhh/marcajes`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ empleadoId, fechaJornada: fecha, tipo }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setError(data.error ?? "Error");
-      return;
+    setMensaje("");
+    setTipoOk(null);
+    setEnviando(true);
+    try {
+      const res = await fetch(`/api/empresas/${slug}/rrhh/marcajes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ modo: "kiosko", codigo, viajeLargo }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "No se pudo registrar");
+        return;
+      }
+      setMensaje(data.mensaje);
+      setTipoOk(data.tipo ?? null);
+      setCodigo("");
+      setEsVariable(false);
+      setViajeLargo(false);
+      await cargar();
+      inputRef.current?.focus();
+    } catch {
+      setError("Error de red. Intenta de nuevo.");
+    } finally {
+      setEnviando(false);
     }
-    setMsg(data.mensaje);
-    await cargar();
   }
-
-  const input =
-    "rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1 text-sm";
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Marcajes / Asistencias</h1>
-        <p className="text-sm text-[var(--muted)]">
-          Kiosko por código (entrada/salida automática) y marcaje manual RRHH.{" "}
-          <Link
-            href={`/e/${slug}/dashboard-rrhh`}
-            className="text-[var(--accent)] underline"
-          >
-            Dashboard
-          </Link>
-        </p>
+    <div className="mx-auto max-w-4xl">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold">
+            Registro de Marcajes
+            {empresaNombre ? ` – ${empresaNombre}` : ""}
+          </h1>
+          <p className="text-sm text-[var(--muted)]">
+            Entrada / salida automática por código (misma lógica que Control de
+            Asistencias).
+          </p>
+          <p className="mt-1 text-sm text-[var(--muted)]">
+            Horario referencia: {horaEntrada} — {horaSalida} | Tolerancia:{" "}
+            {tolerancia} min
+          </p>
+        </div>
+        <Link
+          href={`/e/${slug}/rrhh/marcajes/manual`}
+          className="rounded-lg bg-[#1e293b] px-3 py-2 text-xs text-[var(--muted)] hover:text-white"
+        >
+          Corrección manual RRHH →
+        </Link>
       </div>
 
-      <form
-        onSubmit={kiosko}
-        className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 space-y-3"
-      >
-        <h2 className="font-medium">Kiosko</h2>
-        <div className="flex flex-wrap gap-2 items-center">
-          <input
-            className={`${input} min-w-[12rem]`}
-            placeholder="Código empleado"
-            value={codigo}
-            onChange={(e) => setCodigo(e.target.value)}
-            autoFocus
-          />
-          <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
+      <div className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6 md:p-10">
+        <div className="mx-auto max-w-md rounded-xl bg-[#0b1217] px-6 py-4 text-center">
+          <p className="font-mono text-2xl font-semibold tracking-wide text-[#2F8FD1] md:text-3xl">
+            {reloj}
+          </p>
+        </div>
+
+        <form onSubmit={onSubmit} className="mx-auto mt-8 max-w-md">
+          <label className="block text-center text-sm font-semibold">
+            Ingrese su Código o DPI
             <input
-              type="checkbox"
-              checked={viajeLargo}
-              onChange={(e) => setViajeLargo(e.target.checked)}
+              ref={inputRef}
+              className="mt-3 w-full rounded-lg border-2 border-[var(--accent)] bg-[#0b1217] px-4 py-3 text-center text-lg outline-none focus:ring-2 focus:ring-[#2F8FD1]"
+              value={codigo}
+              onChange={(e) => setCodigo(e.target.value)}
+              placeholder="Ej: EMP001"
+              autoFocus
+              disabled={enviando}
+              autoComplete="off"
             />
-            Viaje largo (horario Variable)
           </label>
-          <button className="rounded bg-[var(--accent)] px-4 py-2 text-sm text-white">
-            Marcar
-          </button>
-        </div>
-      </form>
 
-      <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 space-y-3">
-        <h2 className="font-medium">Manual RRHH</h2>
-        <div className="flex flex-wrap gap-2">
-          <select
-            className={input}
-            value={empleadoId}
-            onChange={(e) => setEmpleadoId(Number(e.target.value))}
-          >
-            {empleados.map((e) => (
-              <option key={e.id} value={e.id}>
-                {e.codigo} — {e.nombre}
-              </option>
-            ))}
-          </select>
-          <input
-            type="date"
-            className={input}
-            value={fecha}
-            onChange={(e) => setFecha(e.target.value)}
-          />
+          {esVariable ? (
+            <label className="mt-4 flex items-center justify-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={viajeLargo}
+                onChange={(e) => setViajeLargo(e.target.checked)}
+                disabled={enviando}
+              />
+              Inicia viaje largo
+            </label>
+          ) : null}
+
           <button
-            type="button"
-            className="rounded bg-[#0d9488] px-3 py-1 text-sm text-white"
-            onClick={() => void manual("entrada")}
+            type="submit"
+            disabled={enviando || !codigo.trim()}
+            className="mt-6 w-full rounded-lg bg-[var(--accent)] px-4 py-3 text-sm font-semibold text-white transition hover:brightness-110 disabled:opacity-50"
           >
-            Entrada
+            {enviando ? "Registrando…" : "Registrar Marcaje"}
           </button>
-          <button
-            type="button"
-            className="rounded bg-[#334155] px-3 py-1 text-sm"
-            onClick={() => void manual("salida")}
+        </form>
+
+        {error ? (
+          <p className="mx-auto mt-4 max-w-md text-center text-sm text-[#f0a0a0]">
+            {error}
+          </p>
+        ) : null}
+        {mensaje ? (
+          <p
+            className={[
+              "mx-auto mt-4 max-w-md rounded-lg px-4 py-3 text-center text-sm",
+              tipoOk === "Entrada"
+                ? "bg-emerald-950/40 text-[#8fd4a0]"
+                : "bg-rose-950/40 text-[#f0b0b0]",
+            ].join(" ")}
           >
-            Salida
-          </button>
+            {mensaje}
+          </p>
+        ) : null}
+
+        <div className="mt-10">
+          <h2 className="mb-3 text-sm font-semibold">Últimos marcajes de hoy</h2>
+          <div className="overflow-x-auto rounded-lg border border-[var(--border)]">
+            <table className="min-w-full text-left text-sm">
+              <thead className="bg-[#1F6AA5] text-white">
+                <tr>
+                  <th className="px-3 py-2">Empleado</th>
+                  <th className="px-3 py-2">Entrada</th>
+                  <th className="px-3 py-2">Salida</th>
+                  <th className="px-3 py-2">Incid.</th>
+                  <th className="px-3 py-2">Estado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-6 text-[var(--muted)]">
+                      Cargando…
+                    </td>
+                  </tr>
+                ) : marcajes.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-6 text-[var(--muted)]">
+                      No se han registrado marcajes el día de hoy.
+                    </td>
+                  </tr>
+                ) : (
+                  marcajes.map((m, idx) => (
+                    <tr
+                      key={`${m.id}-${idx}`}
+                      className={[
+                        "border-t border-[var(--border)]",
+                        idx % 2 === 0 ? "bg-[#152028]" : "bg-[#121a20]",
+                      ].join(" ")}
+                    >
+                      <td className="px-3 py-2">
+                        {m.nombre}
+                        {m.viajeLargo ? (
+                          <span className="ml-2 text-[10px] uppercase text-[#e0c36a]">
+                            viaje
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="px-3 py-2">{m.entrada}</td>
+                      <td className="px-3 py-2">{m.salida}</td>
+                      <td
+                        className={[
+                          "px-3 py-2",
+                          m.incidencia === "Retraso"
+                            ? "text-[#E67E22]"
+                            : m.incidencia === "A tiempo"
+                              ? "text-[#2ECC71]"
+                              : "text-[var(--muted)]",
+                        ].join(" ")}
+                      >
+                        {m.incidencia}
+                      </td>
+                      <td
+                        className={[
+                          "px-3 py-2",
+                          m.estado === "ABIERTA" || m.estado === "En curso"
+                            ? "text-[#5DADE2]"
+                            : "text-[var(--muted)]",
+                        ].join(" ")}
+                      >
+                        {m.estado}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
-
-      {error ? <p className="text-sm text-red-300">{error}</p> : null}
-      {msg ? <p className="text-sm text-emerald-300">{msg}</p> : null}
-
-      <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-[#0d1522] text-[var(--muted)]">
-            <tr>
-              <th className="px-3 py-2">Código</th>
-              <th className="px-3 py-2">Nombre</th>
-              <th className="px-3 py-2">Entrada</th>
-              <th className="px-3 py-2">Salida</th>
-              <th className="px-3 py-2">Estado</th>
-              <th className="px-3 py-2">Puntualidad</th>
-            </tr>
-          </thead>
-          <tbody>
-            {marcajes.map((m) => (
-              <tr key={m.id} className="border-t border-[var(--border)]">
-                <td className="px-3 py-2">{m.codigo}</td>
-                <td className="px-3 py-2">{m.nombre}</td>
-                <td className="px-3 py-2">{m.entrada}</td>
-                <td className="px-3 py-2">{m.salida}</td>
-                <td className="px-3 py-2">
-                  {m.estado}
-                  {m.viajeLargo ? " · viaje" : ""}
-                </td>
-                <td className="px-3 py-2">{m.incidencia}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
       </div>
     </div>
   );

@@ -6,10 +6,16 @@ import {
   contarDiasHabiles,
   listarVacaciones,
   obtenerPeriodosDisponibles,
+  registrarIncidenciaSinSaldo,
   registrarVacacionesFifo,
 } from "@/lib/rrhh/vacaciones";
 
 type Ctx = { params: Promise<{ slug: string }> };
+
+const TIPOS_CON_SALDO = new Set([
+  "Vacaciones",
+  "A cuenta de Vacaciones",
+]);
 
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
@@ -49,6 +55,7 @@ const schema = z.object({
   fechaInicio: z.string().min(8),
   fechaFin: z.string().min(8),
   diasHabiles: z.number().positive().optional(),
+  tipo: z.string().default("Vacaciones"),
 });
 
 export async function POST(req: Request, ctx: Ctx) {
@@ -63,26 +70,41 @@ export async function POST(req: Request, ctx: Ctx) {
   const d = parsed.data;
   const dias =
     d.diasHabiles ??
-    (await contarDiasHabiles(
-      guard.empresa.id,
-      d.fechaInicio,
-      d.fechaFin,
-    ));
+    (await contarDiasHabiles(guard.empresa.id, d.fechaInicio, d.fechaFin));
 
-  const r = await registrarVacacionesFifo({
+  if (TIPOS_CON_SALDO.has(d.tipo)) {
+    const r = await registrarVacacionesFifo({
+      empresaId: guard.empresa.id,
+      idEmpleado: d.empleadoId,
+      fechaInicio: d.fechaInicio,
+      fechaFin: d.fechaFin,
+      diasATomar: dias,
+      tipo: d.tipo,
+    });
+    if (!r.ok) {
+      return NextResponse.json({ error: r.mensaje }, { status: 400 });
+    }
+    return NextResponse.json({
+      mensaje: r.mensaje,
+      desglose: r.desglose,
+      incidenciaId: r.incidenciaId,
+      diasHabiles: dias,
+    });
+  }
+
+  const r = await registrarIncidenciaSinSaldo({
     empresaId: guard.empresa.id,
     idEmpleado: d.empleadoId,
+    tipo: d.tipo,
     fechaInicio: d.fechaInicio,
     fechaFin: d.fechaFin,
-    diasATomar: dias,
+    dias,
   });
-
   if (!r.ok) {
     return NextResponse.json({ error: r.mensaje }, { status: 400 });
   }
   return NextResponse.json({
     mensaje: r.mensaje,
-    desglose: r.desglose,
     incidenciaId: r.incidenciaId,
     diasHabiles: dias,
   });
