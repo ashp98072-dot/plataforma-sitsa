@@ -1,5 +1,7 @@
--- RRHH core (desde web/asistencias) — ejecutar en phpMyAdmin sobre la DB de la plataforma.
+-- RRHH core — seguro para re-ejecutar (phpMyAdmin).
+-- Si algo ya existe, se omite sin romper el resto.
 SET NAMES utf8mb4;
+SET @db := DATABASE();
 
 -- Config por empresa
 CREATE TABLE IF NOT EXISTS configuracion (
@@ -20,7 +22,6 @@ CREATE TABLE IF NOT EXISTS feriados (
   CONSTRAINT fk_fer_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Saldos vacaciones FIFO
 CREATE TABLE IF NOT EXISTS saldos_vacaciones (
   id INT AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,
@@ -59,17 +60,47 @@ CREATE TABLE IF NOT EXISTS marcajes_en_ruta (
   CONSTRAINT fk_ruta_emp FOREIGN KEY (id_empleado) REFERENCES empleados(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Incidencias: subtipo
-ALTER TABLE incidencias
-  ADD COLUMN subtipo VARCHAR(80) NULL AFTER tipo;
+-- incidencias.subtipo (solo si falta)
+SET @col := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'incidencias' AND COLUMN_NAME = 'subtipo'
+);
+SET @sql := IF(@col = 0,
+  'ALTER TABLE incidencias ADD COLUMN subtipo VARCHAR(80) NULL AFTER tipo',
+  'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
--- Sesiones: viaje largo + estados web + permitir sesión abierta multi-día
-ALTER TABLE sesiones_trabajo
-  ADD COLUMN viaje_largo TINYINT(1) NOT NULL DEFAULT 0 AFTER estado;
+-- sesiones_trabajo.viaje_largo (solo si falta)
+SET @col := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'sesiones_trabajo' AND COLUMN_NAME = 'viaje_largo'
+);
+SET @sql := IF(@col = 0,
+  'ALTER TABLE sesiones_trabajo ADD COLUMN viaje_largo TINYINT(1) NOT NULL DEFAULT 0 AFTER estado',
+  'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
-ALTER TABLE sesiones_trabajo DROP INDEX uq_sesion;
-ALTER TABLE sesiones_trabajo
-  ADD INDEX idx_sesion_emp_fecha (empresa_id, id_empleado, fecha_jornada);
+-- Índice no-único ANTES de quitar uq_sesion (las FK lo necesitan)
+SET @idx := (
+  SELECT COUNT(*) FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'sesiones_trabajo'
+    AND INDEX_NAME = 'idx_sesion_emp_fecha'
+);
+SET @sql := IF(@idx = 0,
+  'ALTER TABLE sesiones_trabajo ADD INDEX idx_sesion_emp_fecha (empresa_id, id_empleado, fecha_jornada)',
+  'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+-- Quitar UNIQUE viejo solo si existe (ya hay otro índice para las FK)
+SET @idx := (
+  SELECT COUNT(*) FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'sesiones_trabajo'
+    AND INDEX_NAME = 'uq_sesion'
+);
+SET @sql := IF(@idx > 0,
+  'ALTER TABLE sesiones_trabajo DROP INDEX uq_sesion',
+  'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 UPDATE sesiones_trabajo SET estado = 'ABIERTA' WHERE estado IN ('En curso', 'en curso');
 UPDATE sesiones_trabajo SET estado = 'CERRADA' WHERE estado IN ('Cerrada', 'cerrada');

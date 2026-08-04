@@ -1,11 +1,17 @@
--- Ejecutar en phpMyAdmin sobre la base de la plataforma (si ya existe el schema).
+-- RRHH ops — seguro para re-ejecutar.
 SET NAMES utf8mb4;
+SET @db := DATABASE();
 
--- Categoría operativa en empleados (Piloto, Auxiliar, etc.)
-ALTER TABLE empleados
-  ADD COLUMN categoria_ops VARCHAR(40) NULL AFTER puesto;
+-- categoria_ops solo si falta
+SET @col := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'empleados' AND COLUMN_NAME = 'categoria_ops'
+);
+SET @sql := IF(@col = 0,
+  'ALTER TABLE empleados ADD COLUMN categoria_ops VARCHAR(40) NULL AFTER puesto',
+  'SELECT ''categoria_ops ya existe'' AS info');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
--- Nómina / RRHH (esqueleto)
 CREATE TABLE IF NOT EXISTS rrhh_descuentos (
   id INT AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,
