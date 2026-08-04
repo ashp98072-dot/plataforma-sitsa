@@ -53,6 +53,9 @@ function rewriteEmpresaPath(pathname: string, slug: string): string | null {
   if (pathname === "/planillas") return `/e/${slug}/rrhh/planillas`;
   if (pathname === "/descuentos") return `/e/${slug}/rrhh/descuentos`;
   if (pathname === "/prestaciones") return `/e/${slug}/rrhh/prestaciones`;
+  if (pathname === "/configuracion-rrhh" || pathname === "/config-rrhh") {
+    return `/e/${slug}/rrhh/configuracion`;
+  }
   if (pathname === "/contabilidad") return `/e/${slug}/contabilidad`;
   if (pathname === "/tms" || pathname === "/transporte") {
     return `/e/${slug}/tms`;

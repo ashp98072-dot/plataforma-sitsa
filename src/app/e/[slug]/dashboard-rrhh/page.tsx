@@ -13,23 +13,28 @@ export default async function DashboardRrhhPage({ params }: Props) {
   const cards = [
     {
       href: `/e/${slug}/rrhh/empleados`,
-      title: "Control de empleados",
-      desc: "Altas, puestos y estado del personal.",
-    },
-    {
-      href: `/e/${slug}/rrhh/vacaciones`,
-      title: "Vacaciones",
-      desc: "Control de vacaciones y días hábiles.",
+      title: "Personal / Empleados",
+      desc: "Altas, edición, baja, horarios y categoría ops.",
     },
     {
       href: `/e/${slug}/rrhh/marcajes`,
       title: "Marcajes / asistencias",
-      desc: "Entradas y salidas del personal.",
+      desc: "Kiosko por código, manual RRHH y puntualidad.",
+    },
+    {
+      href: `/e/${slug}/rrhh/vacaciones`,
+      title: "Vacaciones",
+      desc: "Saldo por antigüedad y consumo FIFO.",
     },
     {
       href: `/e/${slug}/rrhh/incidencias`,
       title: "Incidencias",
       desc: "Permisos, faltas y suspensiones.",
+    },
+    {
+      href: `/e/${slug}/rrhh/configuracion`,
+      title: "Configuración",
+      desc: "Tolerancia, horas default y feriados.",
     },
     {
       href: `/e/${slug}/rrhh/planillas`,

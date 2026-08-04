@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useParams } from "next/navigation";
 import Link from "next/link";
-import { useEmpresaActiva } from "@/lib/use-empresa-activa";
 
 type Emp = {
   id: number;
@@ -11,39 +11,71 @@ type Emp = {
   puesto: string;
   categoriaOps: string;
   tipoHorario: string;
+  fechaAlta: string;
+  horaEntradaTeorica: string;
+  horaSalidaTeorica: string;
   estado: string;
 };
 
+const emptyForm = {
+  codigo: "",
+  nombre: "",
+  puesto: "",
+  categoriaOps: "",
+  tipoHorario: "Fijo" as "Fijo" | "Variable",
+  fechaAlta: new Date().toISOString().slice(0, 10),
+  horaEntradaTeorica: "08:00",
+  horaSalidaTeorica: "17:00",
+  estado: "Activo" as "Activo" | "Baja",
+};
+
 export default function EmpleadosPage() {
-  const { slug, nombre: empresaNombre } = useEmpresaActiva();
+  const slug = String(useParams().slug);
   const [empleados, setEmpleados] = useState<Emp[]>([]);
-  const [codigo, setCodigo] = useState("");
-  const [nombre, setNombre] = useState("");
-  const [puesto, setPuesto] = useState("");
-  const [categoriaOps, setCategoriaOps] = useState("");
-  const [tipoHorario, setTipoHorario] = useState<"Fijo" | "Variable">("Fijo");
-  const [mensaje, setMensaje] = useState("");
+  const [q, setQ] = useState("");
+  const [form, setForm] = useState(emptyForm);
+  const [editId, setEditId] = useState<number | null>(null);
   const [error, setError] = useState("");
+  const [mensaje, setMensaje] = useState("");
 
   const cargar = useCallback(async () => {
-    const res = await fetch(`/api/empresas/${slug}/empleados`);
+    const res = await fetch(
+      `/api/empresas/${slug}/empleados?q=${encodeURIComponent(q)}`,
+    );
     const data = await res.json();
     if (res.ok) setEmpleados(data.empleados ?? []);
-    else setError(data.error ?? "Error");
-  }, [slug]);
+  }, [slug, q]);
 
   useEffect(() => {
     void cargar();
   }, [cargar]);
 
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
+  function empezarEdicion(e: Emp) {
+    setEditId(e.id);
+    setForm({
+      codigo: e.codigo,
+      nombre: e.nombre,
+      puesto: e.puesto,
+      categoriaOps: e.categoriaOps,
+      tipoHorario: e.tipoHorario === "Variable" ? "Variable" : "Fijo",
+      fechaAlta: e.fechaAlta || new Date().toISOString().slice(0, 10),
+      horaEntradaTeorica: (e.horaEntradaTeorica || "08:00:00").slice(0, 5),
+      horaSalidaTeorica: (e.horaSalidaTeorica || "17:00:00").slice(0, 5),
+      estado: e.estado === "Baja" ? "Baja" : "Activo",
+    });
+  }
+
+  async function onSubmit(ev: FormEvent) {
+    ev.preventDefault();
     setError("");
     setMensaje("");
-    const res = await fetch(`/api/empresas/${slug}/empleados`, {
-      method: "POST",
+    const url = editId
+      ? `/api/empresas/${slug}/empleados/${editId}`
+      : `/api/empresas/${slug}/empleados`;
+    const res = await fetch(url, {
+      method: editId ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ codigo, nombre, puesto, categoriaOps, tipoHorario }),
+      body: JSON.stringify(form),
     });
     const data = await res.json();
     if (!res.ok) {
@@ -51,126 +83,231 @@ export default function EmpleadosPage() {
       return;
     }
     setMensaje(data.mensaje);
-    setCodigo("");
-    setNombre("");
-    setPuesto("");
-    setCategoriaOps("");
+    setForm(emptyForm);
+    setEditId(null);
+    await cargar();
+  }
+
+  async function borrar(id: number) {
+    if (!confirm("¿Eliminar empleado y su historial?")) return;
+    const res = await fetch(`/api/empresas/${slug}/empleados/${id}`, {
+      method: "DELETE",
+    });
+    const data = await res.json();
+    setMensaje(data.mensaje || data.error);
     await cargar();
   }
 
   const input =
-    "mt-1 w-full rounded-md border border-[var(--border)] bg-[#0b1217] px-3 py-2 text-sm";
+    "mt-1 w-full rounded-lg border border-[var(--border)] bg-[#0b1217] px-3 py-2 text-sm";
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">
-          Personal · {empresaNombre}
-        </h1>
+        <h1 className="text-2xl font-semibold">Personal / Empleados</h1>
         <p className="text-sm text-[var(--muted)]">
-          Alta y control de empleados de esta empresa. Los marcajes y vacaciones
-          usan esta misma lista.{" "}
-          <Link href="/select-empresa" className="text-[var(--accent)] underline">
-            Cambiar empresa
+          Alta, edición y baja. Base para marcajes y vacaciones.{" "}
+          <Link
+            href={`/e/${slug}/dashboard-rrhh`}
+            className="text-[var(--accent)] underline"
+          >
+            Dashboard RRHH
           </Link>
         </p>
       </div>
 
-      <div className="flex flex-wrap gap-2 text-sm">
-        <Link
-          href={`/e/${slug}/rrhh/marcajes`}
-          className="rounded-lg border border-[var(--border)] px-3 py-2 hover:border-[var(--accent)]"
-        >
-          Ir a marcajes →
-        </Link>
-        <Link
-          href={`/e/${slug}/rrhh/vacaciones`}
-          className="rounded-lg border border-[var(--border)] px-3 py-2 hover:border-[var(--accent)]"
-        >
-          Ir a vacaciones →
-        </Link>
+      <form
+        onSubmit={onSubmit}
+        className="grid gap-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 sm:grid-cols-2 lg:grid-cols-3"
+      >
+        <p className="sm:col-span-2 lg:col-span-3 text-sm font-medium">
+          {editId ? `Editando #${editId}` : "Nuevo empleado"}
+        </p>
+        <label className="text-sm text-[var(--muted)]">
+          Código
+          <input
+            className={input}
+            value={form.codigo}
+            onChange={(e) => setForm({ ...form, codigo: e.target.value })}
+            required
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Nombre
+          <input
+            className={input}
+            value={form.nombre}
+            onChange={(e) => setForm({ ...form, nombre: e.target.value })}
+            required
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Puesto
+          <input
+            className={input}
+            value={form.puesto}
+            onChange={(e) => setForm({ ...form, puesto: e.target.value })}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Categoría ops
+          <select
+            className={input}
+            value={form.categoriaOps}
+            onChange={(e) => setForm({ ...form, categoriaOps: e.target.value })}
+          >
+            <option value="">—</option>
+            <option value="Piloto">Piloto</option>
+            <option value="Auxiliar">Auxiliar</option>
+            <option value="Bodega">Bodega</option>
+            <option value="Administrativo">Administrativo</option>
+            <option value="Otro">Otro</option>
+          </select>
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Fecha alta
+          <input
+            type="date"
+            className={input}
+            value={form.fechaAlta}
+            onChange={(e) => setForm({ ...form, fechaAlta: e.target.value })}
+            required
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Horario
+          <select
+            className={input}
+            value={form.tipoHorario}
+            onChange={(e) =>
+              setForm({
+                ...form,
+                tipoHorario: e.target.value as "Fijo" | "Variable",
+              })
+            }
+          >
+            <option value="Fijo">Fijo</option>
+            <option value="Variable">Variable</option>
+          </select>
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Entrada teórica
+          <input
+            type="time"
+            className={input}
+            value={form.horaEntradaTeorica}
+            onChange={(e) =>
+              setForm({ ...form, horaEntradaTeorica: e.target.value })
+            }
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Salida teórica
+          <input
+            type="time"
+            className={input}
+            value={form.horaSalidaTeorica}
+            onChange={(e) =>
+              setForm({ ...form, horaSalidaTeorica: e.target.value })
+            }
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Estado
+          <select
+            className={input}
+            value={form.estado}
+            onChange={(e) =>
+              setForm({
+                ...form,
+                estado: e.target.value as "Activo" | "Baja",
+              })
+            }
+          >
+            <option value="Activo">Activo</option>
+            <option value="Baja">Baja</option>
+          </select>
+        </label>
+        <div className="flex flex-wrap items-end gap-2 sm:col-span-2 lg:col-span-3">
+          <button
+            type="submit"
+            className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm text-white"
+          >
+            {editId ? "Guardar cambios" : "Crear"}
+          </button>
+          {editId ? (
+            <button
+              type="button"
+              className="rounded-lg bg-[#334155] px-4 py-2 text-sm"
+              onClick={() => {
+                setEditId(null);
+                setForm(emptyForm);
+              }}
+            >
+              Cancelar
+            </button>
+          ) : null}
+        </div>
+      </form>
+
+      {error ? <p className="text-sm text-red-300">{error}</p> : null}
+      {mensaje ? <p className="text-sm text-emerald-300">{mensaje}</p> : null}
+
+      <div className="flex gap-2">
+        <input
+          className="flex-1 rounded-lg border border-[var(--border)] bg-[#0b1217] px-3 py-2 text-sm"
+          placeholder="Buscar por nombre o código…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <form
-          onSubmit={onSubmit}
-          className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4"
-        >
-          <h2 className="font-medium">Alta de empleado</h2>
-          <label className="mt-3 block text-sm text-[var(--muted)]">
-            Código
-            <input className={input} value={codigo} onChange={(e) => setCodigo(e.target.value)} required />
-          </label>
-          <label className="mt-2 block text-sm text-[var(--muted)]">
-            Nombre
-            <input className={input} value={nombre} onChange={(e) => setNombre(e.target.value)} required />
-          </label>
-          <label className="mt-2 block text-sm text-[var(--muted)]">
-            Puesto
-            <input className={input} value={puesto} onChange={(e) => setPuesto(e.target.value)} />
-          </label>
-          <label className="mt-2 block text-sm text-[var(--muted)]">
-            Categoría operativa (para TMS)
-            <select
-              className={input}
-              value={categoriaOps}
-              onChange={(e) => setCategoriaOps(e.target.value)}
-            >
-              <option value="">—</option>
-              <option value="Piloto">Piloto</option>
-              <option value="Auxiliar">Auxiliar</option>
-              <option value="Bodega">Bodega</option>
-              <option value="Administrativo">Administrativo</option>
-              <option value="Otro">Otro</option>
-            </select>
-          </label>
-          <label className="mt-2 block text-sm text-[var(--muted)]">
-            Horario
-            <select
-              className={input}
-              value={tipoHorario}
-              onChange={(e) => setTipoHorario(e.target.value as "Fijo" | "Variable")}
-            >
-              <option value="Fijo">Fijo</option>
-              <option value="Variable">Variable</option>
-            </select>
-          </label>
-          {error ? <p className="mt-2 text-sm text-red-300">{error}</p> : null}
-          {mensaje ? <p className="mt-2 text-sm text-emerald-300">{mensaje}</p> : null}
-          <button type="submit" className="mt-4 rounded-md bg-[var(--accent)] px-4 py-2 text-sm text-white">
-            Guardar
-          </button>
-        </form>
-
-        <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-          <h2 className="font-medium">Empleados ({empleados.length})</h2>
-          <div className="mt-3 overflow-x-auto">
-            <table className="min-w-full text-left text-sm">
-              <thead className="text-[var(--muted)]">
-                <tr>
-                  <th className="py-1 pr-3">Código</th>
-                  <th className="py-1 pr-3">Nombre</th>
-                  <th className="py-1 pr-3">Puesto</th>
-                  <th className="py-1 pr-3">Cat. ops</th>
-                  <th className="py-1 pr-3">Horario</th>
-                  <th className="py-1">Estado</th>
-                </tr>
-              </thead>
-              <tbody>
-                {empleados.map((e) => (
-                  <tr key={e.id} className="border-t border-[var(--border)]">
-                    <td className="py-2 pr-3">{e.codigo}</td>
-                    <td className="py-2 pr-3">{e.nombre}</td>
-                    <td className="py-2 pr-3">{e.puesto || "—"}</td>
-                    <td className="py-2 pr-3">{e.categoriaOps || "—"}</td>
-                    <td className="py-2 pr-3">{e.tipoHorario}</td>
-                    <td className="py-2">{e.estado}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+      <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+        <table className="w-full text-left text-sm">
+          <thead className="bg-[#0d1522] text-[var(--muted)]">
+            <tr>
+              <th className="px-3 py-2">Código</th>
+              <th className="px-3 py-2">Nombre</th>
+              <th className="px-3 py-2">Puesto</th>
+              <th className="px-3 py-2">Cat.</th>
+              <th className="px-3 py-2">Alta</th>
+              <th className="px-3 py-2">Horario</th>
+              <th className="px-3 py-2">Estado</th>
+              <th className="px-3 py-2" />
+            </tr>
+          </thead>
+          <tbody>
+            {empleados.map((e) => (
+              <tr key={e.id} className="border-t border-[var(--border)]">
+                <td className="px-3 py-2">{e.codigo}</td>
+                <td className="px-3 py-2">{e.nombre}</td>
+                <td className="px-3 py-2">{e.puesto || "—"}</td>
+                <td className="px-3 py-2">{e.categoriaOps || "—"}</td>
+                <td className="px-3 py-2">{e.fechaAlta || "—"}</td>
+                <td className="px-3 py-2">
+                  {e.tipoHorario} {e.horaEntradaTeorica?.slice(0, 5)}
+                </td>
+                <td className="px-3 py-2">{e.estado}</td>
+                <td className="px-3 py-2 space-x-2 whitespace-nowrap">
+                  <button
+                    type="button"
+                    className="text-[var(--accent-2)] underline"
+                    onClick={() => empezarEdicion(e)}
+                  >
+                    Editar
+                  </button>
+                  <button
+                    type="button"
+                    className="text-red-300 underline"
+                    onClick={() => void borrar(e.id)}
+                  >
+                    Eliminar
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );
