@@ -368,8 +368,8 @@ export async function POST(req: Request, ctx: Ctx) {
 
     await execute(
       `INSERT INTO flota_lecturas
-        (empresa_id, vehiculo_id, km, fecha_lectura, nota, conductor, registrado_por)
-       VALUES (?, ?, ?, CURDATE(), ?, ?, ?)`,
+        (empresa_id, vehiculo_id, km, fecha_lectura, nota, conductor, registrado_por, viaje_id, capturado_en)
+       VALUES (?, ?, ?, CURDATE(), ?, ?, ?, ?, ?)`,
       [
         guard.empresa.id,
         Number(veh.id),
@@ -377,17 +377,20 @@ export async function POST(req: Request, ctx: Ctx) {
         d.destino ? `Salida viaje → ${d.destino}` : "Salida viaje",
         nombre,
         guard.session.username,
+        Number(r.insertId),
+        ahora,
       ],
     ).catch(async () => {
       await execute(
         `INSERT INTO flota_lecturas
-          (empresa_id, vehiculo_id, km, fecha_lectura, nota, registrado_por)
-         VALUES (?, ?, ?, CURDATE(), ?, ?)`,
+          (empresa_id, vehiculo_id, km, fecha_lectura, nota, conductor, registrado_por)
+         VALUES (?, ?, ?, CURDATE(), ?, ?, ?)`,
         [
           guard.empresa.id,
           Number(veh.id),
           d.kmSalida,
-          "Salida viaje",
+          d.destino ? `Salida viaje → ${d.destino}` : "Salida viaje",
+          nombre,
           guard.session.username,
         ],
       );
@@ -482,24 +485,27 @@ export async function POST(req: Request, ctx: Ctx) {
 
     await execute(
       `INSERT INTO flota_lecturas
-        (empresa_id, vehiculo_id, km, fecha_lectura, nota, conductor, registrado_por)
-       VALUES (?, ?, ?, CURDATE(), 'Llegada viaje', ?, ?)`,
+        (empresa_id, vehiculo_id, km, fecha_lectura, nota, conductor, registrado_por, viaje_id, capturado_en)
+       VALUES (?, ?, ?, CURDATE(), 'Llegada viaje', ?, ?, ?, ?)`,
       [
         guard.empresa.id,
         Number(viaje[0].vehiculo_id),
         d.kmLlegada,
         d.pilotoNombre?.trim() || String(viaje[0].piloto_nombre),
         guard.session.username,
+        d.viajeId,
+        ahora,
       ],
     ).catch(async () => {
       await execute(
         `INSERT INTO flota_lecturas
-          (empresa_id, vehiculo_id, km, fecha_lectura, nota, registrado_por)
-         VALUES (?, ?, ?, CURDATE(), 'Llegada viaje', ?)`,
+          (empresa_id, vehiculo_id, km, fecha_lectura, nota, conductor, registrado_por)
+         VALUES (?, ?, ?, CURDATE(), 'Llegada viaje', ?, ?)`,
         [
           guard.empresa.id,
           Number(viaje[0].vehiculo_id),
           d.kmLlegada,
+          d.pilotoNombre?.trim() || String(viaje[0].piloto_nombre),
           guard.session.username,
         ],
       );

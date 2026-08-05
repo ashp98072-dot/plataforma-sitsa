@@ -124,6 +124,26 @@ export async function asegurarSchemaFlota(): Promise<void> {
     "conductor VARCHAR(120) NULL",
   );
   await ensureColumn(
+    "flota_lecturas",
+    "viaje_id",
+    "viaje_id INT NULL",
+  );
+  await ensureColumn(
+    "flota_lecturas",
+    "latitud",
+    "latitud DOUBLE NULL",
+  );
+  await ensureColumn(
+    "flota_lecturas",
+    "longitud",
+    "longitud DOUBLE NULL",
+  );
+  await ensureColumn(
+    "flota_lecturas",
+    "capturado_en",
+    "capturado_en DATETIME NULL",
+  );
+  await ensureColumn(
     "flota_servicios",
     "tipo_trabajo",
     "tipo_trabajo VARCHAR(120) NULL",
@@ -267,6 +287,26 @@ export async function asegurarSchemaFlota(): Promise<void> {
       creado_at DATETIME NOT NULL,
       INDEX idx_fve_viaje (viaje_id),
       INDEX idx_fve_emp (empresa_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await execute(`
+    CREATE TABLE IF NOT EXISTS flota_lectura_evidencias (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      empresa_id INT NOT NULL,
+      lectura_id INT NOT NULL,
+      tipo VARCHAR(40) NOT NULL DEFAULT 'tablero',
+      ruta_relativa VARCHAR(400) NOT NULL,
+      nombre_original VARCHAR(255) NOT NULL,
+      mime VARCHAR(80) NULL,
+      tamano INT NOT NULL DEFAULT 0,
+      latitud DOUBLE NULL,
+      longitud DOUBLE NULL,
+      capturado_en DATETIME NULL,
+      subido_por VARCHAR(100) NULL,
+      creado_at DATETIME NOT NULL,
+      INDEX idx_fle_lec (lectura_id),
+      INDEX idx_fle_emp (empresa_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 

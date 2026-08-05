@@ -5,6 +5,7 @@ import { execute, query } from "@/lib/db";
 import { requireTenantFlotaAny } from "@/lib/tenant";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
 import { normalizarNombrePiloto } from "@/lib/flota/pilotos";
+import { ahoraLocal } from "@/lib/rrhh/dates";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -12,7 +13,7 @@ export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenantFlotaAny(
     slug,
-    ["flota_lecturas", "flota_piloto"],
+    ["flota_lecturas", "flota_piloto", "flota_reportes"],
     "ver",
   );
   if (guard.error) return guard.error;
@@ -26,16 +27,28 @@ export async function GET(req: Request, ctx: Ctx) {
   const vehiculoId = Number(new URL(req.url).searchParams.get("vehiculoId") ?? 0);
   const rows = await query<RowDataPacket[]>(
     `SELECT l.id, l.vehiculo_id, l.km, l.fecha_lectura, l.nota, l.conductor,
-            l.registrado_por, v.placa
+            l.registrado_por, l.viaje_id, l.latitud, l.longitud, l.capturado_en,
+            v.placa,
+            j.destino AS viaje_destino, j.estado AS viaje_estado,
+            j.hora_salida AS viaje_hora_salida, j.hora_llegada AS viaje_hora_llegada,
+            j.plan_id,
+            p.codigo AS plan_codigo,
+            (SELECT COUNT(*) FROM flota_lectura_evidencias e
+             WHERE e.lectura_id = l.id AND e.empresa_id = l.empresa_id) AS evidencias_propias,
+            (SELECT COUNT(*) FROM flota_viaje_evidencias ve
+             WHERE ve.viaje_id = l.viaje_id AND ve.empresa_id = l.empresa_id) AS evidencias_viaje
      FROM flota_lecturas l
      INNER JOIN flota_vehiculos v ON v.id = l.vehiculo_id
+     LEFT JOIN flota_viajes j ON j.id = l.viaje_id
+     LEFT JOIN tms_planes_viaje p ON p.id = j.plan_id
      WHERE l.empresa_id = ? ${vehiculoId ? "AND l.vehiculo_id = ?" : ""}
      ORDER BY l.fecha_lectura DESC, l.id DESC
      LIMIT 200`,
     vehiculoId ? [guard.empresa.id, vehiculoId] : [guard.empresa.id],
   ).catch(async () =>
     query<RowDataPacket[]>(
-      `SELECT l.id, l.vehiculo_id, l.km, l.fecha_lectura, l.nota, l.registrado_por, v.placa
+      `SELECT l.id, l.vehiculo_id, l.km, l.fecha_lectura, l.nota, l.conductor,
+              l.registrado_por, v.placa, 0 AS evidencias_propias, 0 AS evidencias_viaje
        FROM flota_lecturas l
        INNER JOIN flota_vehiculos v ON v.id = l.vehiculo_id
        WHERE l.empresa_id = ? ${vehiculoId ? "AND l.vehiculo_id = ?" : ""}
@@ -44,7 +57,19 @@ export async function GET(req: Request, ctx: Ctx) {
       vehiculoId ? [guard.empresa.id, vehiculoId] : [guard.empresa.id],
     ),
   );
-  return NextResponse.json({ lecturas: rows });
+
+  return NextResponse.json({
+    lecturas: rows.map((r) => {
+      const propias = Number(r.evidencias_propias ?? 0);
+      const deViaje = Number(r.evidencias_viaje ?? 0);
+      return {
+        ...r,
+        evidencias: propias + deViaje,
+        evidencias_propias: propias,
+        evidencias_viaje: deViaje,
+      };
+    }),
+  });
 }
 
 const schema = z.object({
@@ -53,6 +78,8 @@ const schema = z.object({
   fechaLectura: z.string().min(8),
   nota: z.string().optional(),
   conductor: z.string().optional(),
+  latitud: z.number().optional().nullable(),
+  longitud: z.number().optional().nullable(),
 });
 
 export async function POST(req: Request, ctx: Ctx) {
@@ -90,7 +117,6 @@ export async function POST(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: "Vehículo inactivo." }, { status: 400 });
   }
 
-  // No lectura / no "salida" si está en taller
   if (
     Number(veh[0].en_taller) === 1 ||
     String(veh[0].estado ?? "")
@@ -105,7 +131,16 @@ export async function POST(req: Request, ctx: Ctx) {
     );
   }
 
-  // Unidad ya en ruta
+  const kmActual = Number(veh[0].km_actual ?? 0);
+  if (d.km < kmActual) {
+    return NextResponse.json(
+      {
+        error: `Km (${d.km.toLocaleString("es-GT")}) no puede ser menor al km actual de ${veh[0].placa} (${kmActual.toLocaleString("es-GT")}). Debe ser mayor o igual.`,
+      },
+      { status: 400 },
+    );
+  }
+
   const abiertoVeh = await query<RowDataPacket[]>(
     `SELECT id, piloto_nombre FROM flota_viajes
      WHERE empresa_id = ? AND vehiculo_id = ? AND estado = 'abierto' LIMIT 1`,
@@ -120,7 +155,6 @@ export async function POST(req: Request, ctx: Ctx) {
     );
   }
 
-  // Mismo piloto (sin importar mayúsculas) no puede tener otro viaje abierto
   if (conductor.length >= 2) {
     const norm = normalizarNombrePiloto(conductor);
     const abiertos = await query<RowDataPacket[]>(
@@ -155,8 +189,28 @@ export async function POST(req: Request, ctx: Ctx) {
     }
   }
 
+  const ahora = ahoraLocal();
   let result;
   try {
+    result = await execute(
+      `INSERT INTO flota_lecturas
+        (empresa_id, vehiculo_id, km, fecha_lectura, nota, conductor, registrado_por,
+         latitud, longitud, capturado_en)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        guard.empresa.id,
+        d.vehiculoId,
+        d.km,
+        d.fechaLectura,
+        nota,
+        conductor || null,
+        guard.session.username,
+        d.latitud ?? null,
+        d.longitud ?? null,
+        ahora,
+      ],
+    );
+  } catch {
     result = await execute(
       `INSERT INTO flota_lecturas
         (empresa_id, vehiculo_id, km, fecha_lectura, nota, conductor, registrado_por)
@@ -171,28 +225,12 @@ export async function POST(req: Request, ctx: Ctx) {
         guard.session.username,
       ],
     );
-  } catch {
-    result = await execute(
-      `INSERT INTO flota_lecturas
-        (empresa_id, vehiculo_id, km, fecha_lectura, nota, registrado_por)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [
-        guard.empresa.id,
-        d.vehiculoId,
-        d.km,
-        d.fechaLectura,
-        nota,
-        guard.session.username,
-      ],
-    );
   }
 
-  if (d.km >= Number(veh[0].km_actual ?? 0)) {
-    await execute(
-      "UPDATE flota_vehiculos SET km_actual = ? WHERE id = ? AND empresa_id = ?",
-      [d.km, d.vehiculoId, guard.empresa.id],
-    );
-  }
+  await execute(
+    "UPDATE flota_vehiculos SET km_actual = GREATEST(COALESCE(km_actual,0), ?) WHERE id = ? AND empresa_id = ?",
+    [d.km, d.vehiculoId, guard.empresa.id],
+  );
 
   return NextResponse.json({
     id: result.insertId,

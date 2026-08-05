@@ -79,6 +79,19 @@ type Lectura = {
   fecha_lectura: string;
   nota: string | null;
   conductor?: string | null;
+  registrado_por?: string | null;
+  viaje_id?: number | null;
+  latitud?: number | null;
+  longitud?: number | null;
+  capturado_en?: string | null;
+  evidencias?: number;
+  evidencias_propias?: number;
+  evidencias_viaje?: number;
+  viaje_destino?: string | null;
+  viaje_estado?: string | null;
+  viaje_hora_salida?: string | null;
+  viaje_hora_llegada?: string | null;
+  plan_codigo?: string | null;
 };
 
 type Servicio = {
@@ -127,6 +140,7 @@ type EvidenciaViaje = {
   longitud: number | null;
   capturadoEn?: string | null;
   url: string;
+  origen?: "lectura" | "viaje";
 };
 
 function fmtFechaHora(v: string | null | undefined): string {
@@ -144,6 +158,10 @@ function labelTipoEvidencia(tipo: string): string {
       return "Tablero llegada";
     case "llegada":
       return "Evidencia llegada";
+    case "tablero":
+      return "Tablero km";
+    case "evidencia":
+      return "Evidencia";
     default:
       return tipo;
   }
@@ -218,6 +236,14 @@ function FlotaInner() {
   >({});
   const [viajeExpandido, setViajeExpandido] = useState<number | null>(null);
   const [fotoVista, setFotoVista] = useState<EvidenciaViaje | null>(null);
+  const [fotoTableroLectura, setFotoTableroLectura] = useState<File | null>(
+    null,
+  );
+  const [fotosExtraLectura, setFotosExtraLectura] = useState<File[]>([]);
+  const [lecturaExpandida, setLecturaExpandida] = useState<number | null>(null);
+  const [lecturaEvidencias, setLecturaEvidencias] = useState<
+    Record<number, EvidenciaViaje[]>
+  >({});
   const [q, setQ] = useState("");
   const [filtroTaller, setFiltroTaller] = useState<"todos" | "taller" | "ruta">(
     "todos",
@@ -619,8 +645,31 @@ function FlotaInner() {
     await cargar();
   }
 
+  async function verEvidenciasLectura(lecturaIdSel: number) {
+    if (lecturaExpandida === lecturaIdSel) {
+      setLecturaExpandida(null);
+      return;
+    }
+    setLecturaExpandida(lecturaIdSel);
+    if (lecturaEvidencias[lecturaIdSel]) return;
+    setErr("");
+    const res = await fetch(
+      `/api/empresas/${slug}/flota/lecturas/${lecturaIdSel}/evidencias`,
+    );
+    const data = await res.json();
+    if (!res.ok) {
+      setErr(data.error ?? "No se pudieron cargar evidencias");
+      return;
+    }
+    setLecturaEvidencias((prev) => ({
+      ...prev,
+      [lecturaIdSel]: (data.evidencias ?? []) as EvidenciaViaje[],
+    }));
+  }
+
   async function registrarLectura() {
     setErr("");
+    setMsg("");
     const veh = vehiculos.find((v) => v.id === vehiculoId);
     if (veh?.en_taller) {
       setErr(
@@ -630,6 +679,17 @@ function FlotaInner() {
     }
     if (abiertos.some((a) => a.vehiculo_id === vehiculoId)) {
       setErr("Esa unidad ya tiene un viaje abierto. Cierra la llegada primero.");
+      return;
+    }
+    const kmActual = Number(veh?.km_actual ?? 0);
+    if (kmLectura < kmActual) {
+      setErr(
+        `Km (${kmLectura.toLocaleString("es-GT")}) no puede ser menor al km actual (${kmActual.toLocaleString("es-GT")}). Debe ser mayor o igual.`,
+      );
+      return;
+    }
+    if (!fotoTableroLectura) {
+      setErr("Toma o adjunta la foto del tablero (km) para la lectura.");
       return;
     }
     const nombre = conductor.trim();
@@ -654,6 +714,8 @@ function FlotaInner() {
         return;
       }
     }
+
+    const geo = await obtenerGps();
     const res = await fetch(`/api/empresas/${slug}/flota/lecturas`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -663,15 +725,84 @@ function FlotaInner() {
         fechaLectura: new Date().toISOString().slice(0, 10),
         conductor: nombre || undefined,
         nota: nombre || undefined,
+        latitud: geo?.lat ?? null,
+        longitud: geo?.lng ?? null,
       }),
     });
     const data = await res.json();
-    if (!res.ok) setErr(data.error ?? "Error");
-    else {
-      setMsg(data.mensaje);
-      setKmLectura(0);
-      await cargar();
+    if (!res.ok) {
+      setErr(data.error ?? "Error");
+      return;
     }
+
+    const lecId = Number(data.id);
+    setSubiendoFotos(true);
+    try {
+      const tablero = await marcarVarias(
+        [fotoTableroLectura],
+        `LECTURA · Tablero km ${kmLectura}${veh ? ` · ${veh.placa}` : ""}`,
+        geo,
+      );
+      const form = new FormData();
+      form.set("tipo", "tablero");
+      if (geo) {
+        form.set("latitud", String(geo.lat));
+        form.set("longitud", String(geo.lng));
+      }
+      form.set(
+        "capturadoEn",
+        new Date().toISOString().slice(0, 19).replace("T", " "),
+      );
+      for (const f of tablero) form.append("files", f);
+      const up = await fetch(
+        `/api/empresas/${slug}/flota/lecturas/${lecId}/evidencias`,
+        { method: "POST", body: form },
+      );
+      if (!up.ok) {
+        const ud = await up.json();
+        throw new Error(ud.error ?? "Error al subir foto del tablero");
+      }
+      if (fotosExtraLectura.length) {
+        const extras = await marcarVarias(
+          fotosExtraLectura,
+          `LECTURA · Evidencia${veh ? ` · ${veh.placa}` : ""}`,
+          geo,
+        );
+        const form2 = new FormData();
+        form2.set("tipo", "evidencia");
+        if (geo) {
+          form2.set("latitud", String(geo.lat));
+          form2.set("longitud", String(geo.lng));
+        }
+        form2.set(
+          "capturadoEn",
+          new Date().toISOString().slice(0, 19).replace("T", " "),
+        );
+        for (const f of extras) form2.append("files", f);
+        await fetch(
+          `/api/empresas/${slug}/flota/lecturas/${lecId}/evidencias`,
+          { method: "POST", body: form2 },
+        );
+      }
+      setMsg(
+        `${data.mensaje} Fotos guardadas${
+          geo ? " con ubicación." : " (sin GPS)."
+        }`,
+      );
+    } catch (e) {
+      setErr(
+        `Lectura registrada, pero falló subir fotos: ${
+          e instanceof Error ? e.message : "error"
+        }`,
+      );
+    } finally {
+      setSubiendoFotos(false);
+    }
+
+    setKmLectura(0);
+    setFotoTableroLectura(null);
+    setFotosExtraLectura([]);
+    await cargar();
   }
 
   function agregarRepuesto() {
@@ -1644,10 +1775,11 @@ function FlotaInner() {
         <div className="space-y-4">
           {SearchBar}
           {can("flota_lecturas", "crear") ? (
-            <div className="space-y-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+            <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
               <p className="text-xs text-[var(--muted)]">
                 No se permite unidad en taller ni el mismo piloto con viaje
-                abierto (Walter = walter).
+                abierto. El km debe ser ≥ al actual. Foto del tablero
+                obligatoria (marca fecha/hora/ubicación).
               </p>
               <div className="flex flex-wrap gap-2">
                 <select
@@ -1663,7 +1795,8 @@ function FlotaInner() {
                         value={v.id}
                         disabled={Boolean(v.en_taller) || ruta}
                       >
-                        {v.placa}
+                        {v.placa} · km{" "}
+                        {Number(v.km_actual ?? 0).toLocaleString("es-GT")}
                         {v.en_taller ? " · EN TALLER" : ""}
                         {ruta ? " · EN RUTA" : ""}
                       </option>
@@ -1676,6 +1809,9 @@ function FlotaInner() {
                   placeholder="Km"
                   value={kmLectura || ""}
                   onChange={(e) => setKmLectura(Number(e.target.value))}
+                  min={Number(
+                    vehiculos.find((v) => v.id === vehiculoId)?.km_actual ?? 0,
+                  )}
                 />
                 <input
                   className={input}
@@ -1683,43 +1819,179 @@ function FlotaInner() {
                   value={conductor}
                   onChange={(e) => setConductor(e.target.value)}
                 />
-                <button
-                  type="button"
-                  onClick={() => void registrarLectura()}
-                  className="rounded bg-[var(--accent-2)] px-3 py-1.5 text-sm"
-                >
-                  Guardar lectura
-                </button>
               </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <label className="text-xs text-[var(--muted)]">
+                  Foto del tablero (km) *
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    className={`${input} mt-1 w-full`}
+                    onChange={(e) =>
+                      setFotoTableroLectura(e.target.files?.[0] ?? null)
+                    }
+                  />
+                </label>
+                <label className="text-xs text-[var(--muted)]">
+                  Evidencias adicionales (opcional)
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    multiple
+                    className={`${input} mt-1 w-full`}
+                    onChange={(e) =>
+                      setFotosExtraLectura(
+                        e.target.files ? Array.from(e.target.files) : [],
+                      )
+                    }
+                  />
+                </label>
+              </div>
+              <button
+                type="button"
+                disabled={subiendoFotos}
+                onClick={() => void registrarLectura()}
+                className="rounded bg-[var(--accent-2)] px-3 py-1.5 text-sm disabled:opacity-40"
+              >
+                {subiendoFotos ? "Guardando fotos…" : "Guardar lectura"}
+              </button>
             </div>
           ) : null}
-          <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
-            <table className="min-w-full text-left text-sm">
-              <thead className="bg-[#334155] text-white">
-                <tr>
-                  <th className="px-3 py-2">Fecha</th>
-                  <th className="px-3 py-2">Placa</th>
-                  <th className="px-3 py-2">Km</th>
-                  <th className="px-3 py-2">Nota / conductor</th>
-                </tr>
-              </thead>
-              <tbody>
-                {lecturasFiltradas.map((l) => (
-                  <tr key={l.id} className="border-t border-[var(--border)]">
-                    <td className="px-3 py-2">
+
+          <div className="space-y-3">
+            {lecturasFiltradas.map((l) => {
+              const abierto = lecturaExpandida === l.id;
+              const evs = lecturaEvidencias[l.id] ?? [];
+              return (
+                <div
+                  key={l.id}
+                  className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-3 text-sm"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="font-mono text-base font-semibold text-sky-300">
+                        {l.placa}
+                        <span className="ml-2 text-sm font-normal text-[var(--fg)]">
+                          {Number(l.km).toLocaleString("es-GT")} km
+                        </span>
+                      </p>
+                      <p className="text-xs text-[var(--muted)]">
+                        {l.conductor || l.nota || "Sin conductor"}
+                        {l.registrado_por ? ` · por ${l.registrado_por}` : ""}
+                      </p>
+                    </div>
+                    <span className="text-xs text-[var(--muted)]">
                       {String(l.fecha_lectura).slice(0, 10)}
-                    </td>
-                    <td className="px-3 py-2 font-mono">{l.placa}</td>
-                    <td className="px-3 py-2">
-                      {Number(l.km).toLocaleString("es-GT")}
-                    </td>
-                    <td className="px-3 py-2">
-                      {l.conductor || l.nota || "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                      {l.capturado_en
+                        ? ` · ${fmtFechaHora(String(l.capturado_en))}`
+                        : ""}
+                    </span>
+                  </div>
+
+                  <div className="mt-2 grid gap-1 text-xs text-[var(--muted)] sm:grid-cols-2 lg:grid-cols-3">
+                    {l.nota ? (
+                      <p className="sm:col-span-2">
+                        Nota:{" "}
+                        <span className="text-[var(--fg)]">{l.nota}</span>
+                      </p>
+                    ) : null}
+                    {l.viaje_id ? (
+                      <p>
+                        Viaje #{l.viaje_id}
+                        {l.viaje_estado ? ` · ${l.viaje_estado}` : ""}
+                        {l.viaje_destino ? ` · ${l.viaje_destino}` : ""}
+                      </p>
+                    ) : (
+                      <p>Lectura manual (sin viaje)</p>
+                    )}
+                    {l.plan_codigo ? (
+                      <p>
+                        Plan TMS:{" "}
+                        <span className="text-sky-300">{l.plan_codigo}</span>
+                      </p>
+                    ) : null}
+                    {l.viaje_hora_salida ? (
+                      <p>Salida: {fmtFechaHora(l.viaje_hora_salida)}</p>
+                    ) : null}
+                    {l.viaje_hora_llegada ? (
+                      <p>Llegada: {fmtFechaHora(l.viaje_hora_llegada)}</p>
+                    ) : null}
+                    {l.latitud != null && l.longitud != null ? (
+                      <p>
+                        GPS: {Number(l.latitud).toFixed(5)},{" "}
+                        {Number(l.longitud).toFixed(5)}
+                      </p>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      className="rounded bg-[#334155] px-2.5 py-1 text-xs text-white"
+                      onClick={() => void verEvidenciasLectura(l.id)}
+                    >
+                      {abierto ? "Ocultar" : "Ver"} evidencias (
+                      {l.evidencias ?? 0})
+                    </button>
+                  </div>
+
+                  {abierto ? (
+                    <div className="mt-3 border-t border-[var(--border)] pt-3">
+                      {!evs.length ? (
+                        <p className="text-xs text-[var(--muted)]">
+                          {(l.evidencias ?? 0) > 0
+                            ? "Cargando evidencias…"
+                            : "Sin evidencias fotográficas en esta lectura."}
+                        </p>
+                      ) : (
+                        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                          {evs.map((ev) => (
+                            <button
+                              key={`${ev.origen ?? "lec"}-${ev.id}`}
+                              type="button"
+                              className="overflow-hidden rounded border border-[var(--border)] text-left hover:border-sky-600"
+                              onClick={() => setFotoVista(ev)}
+                            >
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={ev.url}
+                                alt={ev.nombre}
+                                className="h-28 w-full object-cover bg-[#0b1217]"
+                              />
+                              <div className="space-y-0.5 p-1.5 text-[10px] text-[var(--muted)]">
+                                <p className="font-medium text-sky-300">
+                                  {labelTipoEvidencia(ev.tipo)}
+                                </p>
+                                <p>
+                                  {fmtFechaHora(
+                                    ev.capturadoEn
+                                      ? String(ev.capturadoEn)
+                                      : null,
+                                  )}
+                                </p>
+                                {ev.latitud != null && ev.longitud != null ? (
+                                  <p>
+                                    GPS: {ev.latitud.toFixed(5)},{" "}
+                                    {ev.longitud.toFixed(5)}
+                                  </p>
+                                ) : (
+                                  <p>GPS: no disponible</p>
+                                )}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+            {!lecturasFiltradas.length ? (
+              <p className="text-sm text-[var(--muted)]">Sin lecturas.</p>
+            ) : null}
           </div>
         </div>
       ) : null}
