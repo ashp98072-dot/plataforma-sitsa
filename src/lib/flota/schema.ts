@@ -249,6 +249,27 @@ export async function asegurarSchemaFlota(): Promise<void> {
     "plan_id INT NULL",
   );
 
+  // Evidencias de salida/llegada (tablero km, fotos con GPS)
+  await execute(`
+    CREATE TABLE IF NOT EXISTS flota_viaje_evidencias (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      empresa_id INT NOT NULL,
+      viaje_id INT NOT NULL,
+      tipo VARCHAR(40) NOT NULL,
+      ruta_relativa VARCHAR(400) NOT NULL,
+      nombre_original VARCHAR(255) NOT NULL,
+      mime VARCHAR(80) NULL,
+      tamano INT NOT NULL DEFAULT 0,
+      latitud DOUBLE NULL,
+      longitud DOUBLE NULL,
+      capturado_en DATETIME NULL,
+      subido_por VARCHAR(100) NULL,
+      creado_at DATETIME NOT NULL,
+      INDEX idx_fve_viaje (viaje_id),
+      INDEX idx_fve_emp (empresa_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
   // Varios auxiliares por plan TMS
   await execute(`
     CREATE TABLE IF NOT EXISTS tms_plan_auxiliares (

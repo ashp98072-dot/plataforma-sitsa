@@ -18,6 +18,11 @@ import {
   estiloAlertaKm,
   kmPendienteServicio,
 } from "@/lib/flota/import-excel";
+import {
+  marcarVarias,
+  obtenerGps,
+  type GeoCoords,
+} from "@/lib/flota/photo-meta";
 
 type Vehiculo = {
   id: number;
@@ -54,9 +59,16 @@ type EmpresaOpt = { id: number; codigo: string; nombre: string; slug: string };
 type PlanSalida = {
   id: number;
   codigo: string;
+  fecha_plan?: string;
+  hora_carga?: string | null;
+  tipo_traslado?: string | null;
+  notas?: string | null;
   placa: string | null;
   piloto: string | null;
   cliente: string | null;
+  lugar_carga?: string | null;
+  lugar_descarga?: string | null;
+  estado?: string;
   auxiliares: string[];
 };
 
@@ -98,6 +110,7 @@ type Viaje = {
   hora_salida: string;
   observaciones?: string | null;
   es_externo?: number;
+  plan_id?: number | null;
 };
 
 type PermisoExterno = {
@@ -205,6 +218,13 @@ function FlotaInner() {
   const [esExterno, setEsExterno] = useState(false);
   const [motivoExterno, setMotivoExterno] = useState("");
   const [verifPiloto, setVerifPiloto] = useState<VerifPiloto | null>(null);
+  const [fotoTableroSalida, setFotoTableroSalida] = useState<File | null>(null);
+  const [fotosEvidenciaSalida, setFotosEvidenciaSalida] = useState<File[]>([]);
+  const [fotoTableroLlegada, setFotoTableroLlegada] = useState<File | null>(
+    null,
+  );
+  const [fotosLlegada, setFotosLlegada] = useState<File[]>([]);
+  const [subiendoFotos, setSubiendoFotos] = useState(false);
   const [permisosExt, setPermisosExt] = useState<PermisoExterno[]>([]);
   const [archivosServicio, setArchivosServicio] = useState<FileList | null>(
     null,
@@ -496,8 +516,17 @@ function FlotaInner() {
     if (!res.ok) return;
     const list = (data.planes ?? []) as PlanSalida[];
     setPlanesSalida(list);
-    if (data.sugerido?.id) setPlanIdSalida(Number(data.sugerido.id));
-    else if (list.length === 1) setPlanIdSalida(list[0].id);
+    const sug =
+      (data.sugerido as PlanSalida | null) ??
+      (list.length === 1 ? list[0] : null);
+    if (sug?.id) {
+      setPlanIdSalida(Number(sug.id));
+      if (sug.cliente) setDestino(sug.cliente);
+      if (sug.placa && !placaSalida.trim()) setPlacaSalida(sug.placa);
+      if (sug.piloto && !pilotoNombre.trim()) setPilotoNombre(sug.piloto);
+    } else if (!list.length) {
+      setPlanIdSalida(0);
+    }
   }
 
   async function confirmarTaller() {
@@ -729,6 +758,29 @@ function FlotaInner() {
     }
   }
 
+  async function subirEvidenciasViaje(
+    viajeCreadoId: number,
+    tipo: "tablero_salida" | "salida" | "tablero_llegada" | "llegada",
+    files: File[],
+    geo: GeoCoords,
+  ) {
+    if (!files.length) return;
+    const form = new FormData();
+    form.set("tipo", tipo);
+    if (geo) {
+      form.set("latitud", String(geo.lat));
+      form.set("longitud", String(geo.lng));
+    }
+    form.set("capturadoEn", new Date().toISOString().slice(0, 19).replace("T", " "));
+    for (const f of files) form.append("files", f);
+    const res = await fetch(
+      `/api/empresas/${slug}/flota/viajes/${viajeCreadoId}/evidencias`,
+      { method: "POST", body: form },
+    );
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error ?? "Error al subir fotos");
+  }
+
   async function salidaViaje() {
     setErr("");
     setMsg("");
@@ -750,6 +802,15 @@ function FlotaInner() {
       setErr("Hay varios planes TMS. Selecciona el plan correcto.");
       return;
     }
+    if (!fotoTableroSalida) {
+      setErr("Toma o adjunta la foto del tablero (km) para registrar la salida.");
+      return;
+    }
+    if (!kmLectura) {
+      setErr("Indica el km de salida (debe coincidir con el tablero).");
+      return;
+    }
+
     const res = await fetch(`/api/empresas/${slug}/flota/viajes`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -780,19 +841,56 @@ function FlotaInner() {
       await cargar();
       return;
     }
-    if (!res.ok) setErr(data.mensaje ?? data.error ?? "Error");
-    else {
-      setMsg(data.mensaje);
-      setKmLectura(0);
-      setDestino("");
-      setMotivoExterno("");
-      setEsExterno(false);
-      setVerifPiloto(null);
-      setPlanesSalida([]);
-      setPlanIdSalida(0);
-      setModoPiloto("llegada");
-      await cargar();
+    if (!res.ok) {
+      setErr(data.mensaje ?? data.error ?? "Error");
+      return;
     }
+
+    const nuevoId = Number(data.id);
+    setSubiendoFotos(true);
+    try {
+      const geo = await obtenerGps();
+      const tablero = await marcarVarias(
+        [fotoTableroSalida],
+        `SALIDA · Tablero km ${kmLectura}${placa ? ` · ${placa}` : ""}`,
+        geo,
+      );
+      await subirEvidenciasViaje(nuevoId, "tablero_salida", tablero, geo);
+      if (fotosEvidenciaSalida.length) {
+        const ev = await marcarVarias(
+          fotosEvidenciaSalida,
+          `SALIDA · Evidencia${placa ? ` · ${placa}` : ""}`,
+          geo,
+        );
+        await subirEvidenciasViaje(nuevoId, "salida", ev, geo);
+      }
+      setMsg(
+        `${data.mensaje} Fotos de salida guardadas${
+          geo ? " con ubicación." : " (sin GPS)."
+        }`,
+      );
+    } catch (e) {
+      setErr(
+        `Salida registrada, pero falló subir fotos: ${
+          e instanceof Error ? e.message : "error"
+        }`,
+      );
+    } finally {
+      setSubiendoFotos(false);
+    }
+
+    setKmLectura(0);
+    setDestino("");
+    setMotivoExterno("");
+    setEsExterno(false);
+    setVerifPiloto(null);
+    setPlanesSalida([]);
+    setPlanIdSalida(0);
+    setFotoTableroSalida(null);
+    setFotosEvidenciaSalida([]);
+    setViajeId(nuevoId);
+    setModoPiloto("llegada");
+    await cargar();
   }
 
   async function resolverPermiso(
@@ -865,24 +963,73 @@ function FlotaInner() {
 
   async function llegadaViaje() {
     setErr("");
-    const res = await fetch(`/api/empresas/${slug}/flota/viajes`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        accion: "llegada",
-        viajeId,
-        kmLlegada,
-        pilotoNombre: pilotoNombre || undefined,
-        observaciones: obsViaje || undefined,
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok) setErr(data.error ?? "Error");
-    else {
-      setMsg(data.mensaje);
+    setMsg("");
+    if (!viajeId) {
+      setErr("Selecciona el viaje abierto.");
+      return;
+    }
+    if (!kmLlegada) {
+      setErr("Indica el km de llegada.");
+      return;
+    }
+    if (!fotosLlegada.length) {
+      setErr(
+        "Adjunta al menos una foto de llegada (se marcará fecha, hora y ubicación).",
+      );
+      return;
+    }
+
+    setSubiendoFotos(true);
+    try {
+      const geo = await obtenerGps();
+      const viajeSel = abiertos.find((v) => v.id === viajeId);
+      const placa = viajeSel?.placa ?? "";
+      const llegadaMarked = await marcarVarias(
+        fotosLlegada,
+        `LLEGADA${placa ? ` · ${placa}` : ""} · km ${kmLlegada}`,
+        geo,
+      );
+      await subirEvidenciasViaje(viajeId, "llegada", llegadaMarked, geo);
+      if (fotoTableroLlegada) {
+        const tablero = await marcarVarias(
+          [fotoTableroLlegada],
+          `LLEGADA · Tablero km ${kmLlegada}${placa ? ` · ${placa}` : ""}`,
+          geo,
+        );
+        await subirEvidenciasViaje(viajeId, "tablero_llegada", tablero, geo);
+      }
+
+      const res = await fetch(`/api/empresas/${slug}/flota/viajes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accion: "llegada",
+          viajeId,
+          kmLlegada,
+          pilotoNombre: pilotoNombre || undefined,
+          observaciones: obsViaje || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setErr(data.error ?? "Error al cerrar llegada");
+        return;
+      }
+      setMsg(
+        `${data.mensaje} Fotos de llegada guardadas${
+          geo ? " con ubicación." : " (sin GPS — activa ubicación del celular)."
+        }`,
+      );
       setKmLlegada(0);
       setObsViaje("");
+      setFotosLlegada([]);
+      setFotoTableroLlegada(null);
+      setViajeId(0);
       await cargar();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Error al guardar llegada");
+    } finally {
+      setSubiendoFotos(false);
     }
   }
 
@@ -2109,9 +2256,9 @@ function FlotaInner() {
                 </div>
 
                 {planesSalida.length ? (
-                  <div className="rounded-lg border border-sky-800/50 bg-sky-950/30 p-3">
+                  <div className="rounded-lg border border-sky-800/50 bg-sky-950/30 p-3 space-y-2">
                     <label className="block text-xs text-sky-200">
-                      Plan TMS detectado
+                      Plan TMS detectado (Operaciones)
                       <select
                         className={`${input} mt-1 w-full`}
                         value={planIdSalida}
@@ -2119,11 +2266,10 @@ function FlotaInner() {
                           const id = Number(e.target.value);
                           setPlanIdSalida(id);
                           const p = planesSalida.find((x) => x.id === id);
-                          if (p?.cliente && !destino.trim()) {
-                            setDestino(p.cliente);
-                          }
-                          if (p?.placa && !placaSalida.trim()) {
-                            setPlacaSalida(p.placa);
+                          if (p?.cliente) setDestino(p.cliente);
+                          if (p?.placa) setPlacaSalida(p.placa);
+                          if (p?.piloto && !pilotoNombre.trim()) {
+                            setPilotoNombre(p.piloto);
                           }
                         }}
                       >
@@ -2147,20 +2293,85 @@ function FlotaInner() {
                           const p = planesSalida.find(
                             (x) => x.id === planIdSalida,
                           );
-                          return p?.auxiliares?.length ? (
-                            <p className="mt-1 text-[11px] text-[var(--muted)]">
-                              Auxiliares: {p.auxiliares.join(", ")}
-                            </p>
-                          ) : null;
+                          if (!p) return null;
+                          return (
+                            <div className="rounded border border-sky-900/60 bg-[#0b1217]/60 p-2 text-[11px] text-[var(--muted)] space-y-0.5">
+                              <p className="font-medium text-sky-200">
+                                Detalle de ruta · {p.codigo}
+                                {p.estado ? ` (${p.estado})` : ""}
+                              </p>
+                              {p.cliente ? <p>Cliente: {p.cliente}</p> : null}
+                              {p.piloto ? <p>Piloto: {p.piloto}</p> : null}
+                              {p.placa ? <p>Unidad: {p.placa}</p> : null}
+                              {p.hora_carga ? (
+                                <p>Hora carga: {p.hora_carga}</p>
+                              ) : null}
+                              {p.lugar_carga ? (
+                                <p>Lugar carga: {p.lugar_carga}</p>
+                              ) : null}
+                              {p.lugar_descarga ? (
+                                <p>Lugar descarga: {p.lugar_descarga}</p>
+                              ) : null}
+                              {p.tipo_traslado ? (
+                                <p>Tipo: {p.tipo_traslado}</p>
+                              ) : null}
+                              {p.auxiliares?.length ? (
+                                <p>Auxiliares: {p.auxiliares.join(", ")}</p>
+                              ) : null}
+                              {p.notas ? <p>Notas: {p.notas}</p> : null}
+                            </div>
+                          );
                         })()
                       : null}
                   </div>
                 ) : (
                   <p className="text-[11px] text-[var(--muted)]">
                     Si Operaciones tiene un plan hoy con este piloto/placa, se
-                    detectará al salir del campo.
+                    detectará al salir del campo (ej. Walter + C-087BTR).
                   </p>
                 )}
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="text-xs text-[var(--muted)]">
+                    Foto del tablero (km) *
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      className={`${input} mt-1 w-full`}
+                      onChange={(e) =>
+                        setFotoTableroSalida(e.target.files?.[0] ?? null)
+                      }
+                    />
+                    <span className="mt-0.5 block text-[11px]">
+                      Obligatoria. Se marca fecha/hora/ubicación en la foto.
+                      {fotoTableroSalida
+                        ? ` · ${fotoTableroSalida.name}`
+                        : ""}
+                    </span>
+                  </label>
+                  <label className="text-xs text-[var(--muted)]">
+                    Evidencias de salida (opcional)
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      multiple
+                      className={`${input} mt-1 w-full`}
+                      onChange={(e) =>
+                        setFotosEvidenciaSalida(
+                          e.target.files ? Array.from(e.target.files) : [],
+                        )
+                      }
+                    />
+                    <span className="mt-0.5 block text-[11px]">
+                      Unidad, carga, documentos, etc.
+                      {fotosEvidenciaSalida.length
+                        ? ` · ${fotosEvidenciaSalida.length} archivo(s)`
+                        : ""}
+                    </span>
+                  </label>
+                </div>
 
                 {verifPiloto ? (
                   <p
@@ -2205,10 +2416,11 @@ function FlotaInner() {
                 <div className="flex items-end">
                   <button
                     type="button"
-                    className="rounded bg-[var(--accent)] px-4 py-2 text-sm text-white"
+                    className="rounded bg-[var(--accent)] px-4 py-2 text-sm text-white disabled:opacity-40"
+                    disabled={subiendoFotos}
                     onClick={() => void salidaViaje()}
                   >
-                    Guardar salida
+                    {subiendoFotos ? "Guardando fotos…" : "Guardar salida"}
                   </button>
                 </div>
 
@@ -2297,14 +2509,53 @@ function FlotaInner() {
                       onChange={(e) => setObsViaje(e.target.value)}
                     />
                   </label>
+                  <label className="text-xs text-[var(--muted)] sm:col-span-2">
+                    Fotos de llegada * (fecha, hora y ubicación en la imagen)
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      multiple
+                      className={`${input} mt-1 w-full`}
+                      onChange={(e) =>
+                        setFotosLlegada(
+                          e.target.files ? Array.from(e.target.files) : [],
+                        )
+                      }
+                    />
+                    <span className="mt-0.5 block text-[11px]">
+                      Activa la ubicación del celular para marcar GPS.
+                      {fotosLlegada.length
+                        ? ` · ${fotosLlegada.length} foto(s)`
+                        : ""}
+                    </span>
+                  </label>
+                  <label className="text-xs text-[var(--muted)] sm:col-span-2">
+                    Foto tablero km llegada (opcional)
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      className={`${input} mt-1 w-full`}
+                      onChange={(e) =>
+                        setFotoTableroLlegada(e.target.files?.[0] ?? null)
+                      }
+                    />
+                  </label>
                   <div className="flex items-end">
                     <button
                       type="button"
                       className="rounded bg-[#1F6AA5] px-4 py-2 text-sm text-white disabled:opacity-40"
-                      disabled={!abiertosFiltrados.length || !viajeId}
+                      disabled={
+                        !abiertosFiltrados.length ||
+                        !viajeId ||
+                        subiendoFotos
+                      }
                       onClick={() => void llegadaViaje()}
                     >
-                      Guardar llegada
+                      {subiendoFotos
+                        ? "Guardando fotos…"
+                        : "Guardar llegada"}
                     </button>
                   </div>
                 </div>

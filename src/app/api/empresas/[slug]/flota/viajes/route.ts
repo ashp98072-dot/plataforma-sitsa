@@ -12,6 +12,7 @@ import {
 } from "@/lib/flota/pilotos";
 import {
   buscarPlanesParaSalida,
+  marcarPlanDescargado,
   marcarPlanEnRuta,
 } from "@/lib/tms/planes-salida";
 
@@ -31,7 +32,7 @@ export async function GET(_req: Request, ctx: Ctx) {
   const viajes = await query<RowDataPacket[]>(
     `SELECT v.id, v.vehiculo_id, v.piloto_nombre, v.km_salida, v.km_llegada,
             v.hora_salida, v.hora_llegada, v.destino, v.observaciones, v.estado,
-            v.es_externo, v.empleado_id, ve.placa
+            v.es_externo, v.empleado_id, v.plan_id, ve.placa
      FROM flota_viajes v
      INNER JOIN flota_vehiculos ve ON ve.id = v.vehiculo_id
      WHERE v.empresa_id = ?
@@ -486,9 +487,18 @@ export async function POST(req: Request, ctx: Ctx) {
       [d.kmLlegada, Number(viaje[0].vehiculo_id), guard.empresa.id],
     );
 
+    const planId =
+      viaje[0].plan_id != null ? Number(viaje[0].plan_id) : null;
+    if (planId) {
+      await marcarPlanDescargado(guard.empresa.id, planId);
+    }
+
     const recorridos = d.kmLlegada - Number(viaje[0].km_salida);
     return NextResponse.json({
-      mensaje: `Llegada de ${viaje[0].placa}: ${recorridos.toLocaleString("es-GT")} km.`,
+      mensaje: `Llegada de ${viaje[0].placa}: ${recorridos.toLocaleString("es-GT")} km.${
+        planId ? " Plan TMS → Descargado." : ""
+      }`,
+      planId,
     });
   }
 
