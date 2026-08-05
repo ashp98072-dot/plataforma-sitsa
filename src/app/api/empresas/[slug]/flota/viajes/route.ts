@@ -15,7 +15,10 @@ import {
   marcarPlanDescargado,
   marcarPlanEnRuta,
 } from "@/lib/tms/planes-salida";
-import { paradasPendientesEvidencia } from "@/lib/tms/paradas";
+import {
+  listarParadasDelPlan,
+  paradasPendientesEvidencia,
+} from "@/lib/tms/paradas";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -74,7 +77,8 @@ const salidaSchema = z.object({
 const llegadaSchema = z.object({
   accion: z.literal("llegada"),
   viajeId: z.number().int().positive(),
-  kmLlegada: z.number().int().nonnegative(),
+  /** Opcional en rutas con paradas: el km solo se registra al salir. */
+  kmLlegada: z.number().int().nonnegative().optional().nullable(),
   pilotoNombre: z.string().optional(),
   observaciones: z.string().optional(),
 });
@@ -447,29 +451,48 @@ export async function POST(req: Request, ctx: Ctx) {
         { status: 404 },
       );
     }
-    if (d.kmLlegada < Number(viaje[0].km_salida)) {
-      return NextResponse.json(
-        { error: "Km de llegada no puede ser menor que la salida." },
-        { status: 400 },
-      );
-    }
-
-    const vehKm = await query<RowDataPacket[]>(
-      `SELECT km_actual FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1`,
-      [Number(viaje[0].vehiculo_id), guard.empresa.id],
-    );
-    const kmActualVeh = Number(vehKm[0]?.km_actual ?? viaje[0].km_salida ?? 0);
-    if (d.kmLlegada < kmActualVeh) {
-      return NextResponse.json(
-        {
-          error: `Km de llegada (${d.kmLlegada.toLocaleString("es-GT")}) no puede ser menor al km actual de la unidad (${kmActualVeh.toLocaleString("es-GT")}). Debe ser mayor o igual.`,
-        },
-        { status: 400 },
-      );
-    }
 
     const planIdPre =
       viaje[0].plan_id != null ? Number(viaje[0].plan_id) : null;
+    const paradasRuta = planIdPre
+      ? await listarParadasDelPlan(planIdPre)
+      : [];
+    /** Ruta con destinos planificados: km solo al inicio; en paradas solo evidencia. */
+    const esRutaConParadas = paradasRuta.length > 0;
+    const kmSalida = Number(viaje[0].km_salida);
+    const kmFinal =
+      d.kmLlegada != null && Number.isFinite(d.kmLlegada)
+        ? Number(d.kmLlegada)
+        : null;
+
+    if (!esRutaConParadas) {
+      if (kmFinal == null) {
+        return NextResponse.json(
+          { error: "Indica el km de llegada." },
+          { status: 400 },
+        );
+      }
+      if (kmFinal < kmSalida) {
+        return NextResponse.json(
+          { error: "Km de llegada no puede ser menor que la salida." },
+          { status: 400 },
+        );
+      }
+      const vehKm = await query<RowDataPacket[]>(
+        `SELECT km_actual FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1`,
+        [Number(viaje[0].vehiculo_id), guard.empresa.id],
+      );
+      const kmActualVeh = Number(vehKm[0]?.km_actual ?? kmSalida);
+      if (kmFinal < kmActualVeh) {
+        return NextResponse.json(
+          {
+            error: `Km de llegada (${kmFinal.toLocaleString("es-GT")}) no puede ser menor al km actual de la unidad (${kmActualVeh.toLocaleString("es-GT")}). Debe ser mayor o igual.`,
+          },
+          { status: 400 },
+        );
+      }
+    }
+
     if (planIdPre) {
       const pendientes = await paradasPendientesEvidencia(planIdPre);
       if (pendientes.length) {
@@ -478,7 +501,7 @@ export async function POST(req: Request, ctx: Ctx) {
           .join("; ");
         return NextResponse.json(
           {
-            error: `Faltan evidencias de producto en ${pendientes.length} parada(s): ${nombres}. Sube las fotos antes de cerrar la llegada.`,
+            error: `Faltan evidencias de producto en ${pendientes.length} parada(s) de la ruta: ${nombres}. Sube las fotos en cada destino antes de cerrar.`,
             code: "PARADAS_SIN_EVIDENCIA",
             pendientes,
           },
@@ -487,6 +510,9 @@ export async function POST(req: Request, ctx: Ctx) {
       }
     }
 
+    // En rutas con paradas no se exige km final; se deja null o el opcional
+    const kmLlegadaDb = esRutaConParadas ? kmFinal : kmFinal;
+
     await execute(
       `UPDATE flota_viajes SET
         km_llegada = ?, hora_llegada = ?, estado = 'cerrado',
@@ -494,59 +520,86 @@ export async function POST(req: Request, ctx: Ctx) {
         piloto_nombre = COALESCE(?, piloto_nombre)
        WHERE id = ? AND empresa_id = ?`,
       [
-        d.kmLlegada,
+        kmLlegadaDb,
         ahora,
-        d.observaciones ?? null,
+        d.observaciones ??
+          (esRutaConParadas
+            ? `Cierre ruta ${paradasRuta.length} parada(s); km solo al inicio (${kmSalida}).`
+            : null),
         d.pilotoNombre?.trim() || null,
         d.viajeId,
         guard.empresa.id,
       ],
     );
 
-    await execute(
-      `INSERT INTO flota_lecturas
-        (empresa_id, vehiculo_id, km, fecha_lectura, nota, conductor, registrado_por, viaje_id, capturado_en)
-       VALUES (?, ?, ?, CURDATE(), 'Llegada viaje', ?, ?, ?, ?)`,
-      [
-        guard.empresa.id,
-        Number(viaje[0].vehiculo_id),
-        d.kmLlegada,
-        d.pilotoNombre?.trim() || String(viaje[0].piloto_nombre),
-        guard.session.username,
-        d.viajeId,
-        ahora,
-      ],
-    ).catch(async () => {
+    // Lectura de km solo si hubo km de llegada; en rutas multi-parada el km quedó al salir
+    if (kmLlegadaDb != null) {
       await execute(
         `INSERT INTO flota_lecturas
-          (empresa_id, vehiculo_id, km, fecha_lectura, nota, conductor, registrado_por)
-         VALUES (?, ?, ?, CURDATE(), 'Llegada viaje', ?, ?)`,
+          (empresa_id, vehiculo_id, km, fecha_lectura, nota, conductor, registrado_por, viaje_id, capturado_en)
+         VALUES (?, ?, ?, CURDATE(), 'Llegada viaje', ?, ?, ?, ?)`,
         [
           guard.empresa.id,
           Number(viaje[0].vehiculo_id),
-          d.kmLlegada,
+          kmLlegadaDb,
           d.pilotoNombre?.trim() || String(viaje[0].piloto_nombre),
           guard.session.username,
+          d.viajeId,
+          ahora,
         ],
-      );
-    });
+      ).catch(async () => {
+        await execute(
+          `INSERT INTO flota_lecturas
+            (empresa_id, vehiculo_id, km, fecha_lectura, nota, conductor, registrado_por)
+           VALUES (?, ?, ?, CURDATE(), 'Llegada viaje', ?, ?)`,
+          [
+            guard.empresa.id,
+            Number(viaje[0].vehiculo_id),
+            kmLlegadaDb,
+            d.pilotoNombre?.trim() || String(viaje[0].piloto_nombre),
+            guard.session.username,
+          ],
+        );
+      });
 
-    await execute(
-      `UPDATE flota_vehiculos SET km_actual = GREATEST(COALESCE(km_actual,0), ?)
-       WHERE id = ? AND empresa_id = ?`,
-      [d.kmLlegada, Number(viaje[0].vehiculo_id), guard.empresa.id],
-    );
+      await execute(
+        `UPDATE flota_vehiculos SET km_actual = GREATEST(COALESCE(km_actual,0), ?)
+         WHERE id = ? AND empresa_id = ?`,
+        [kmLlegadaDb, Number(viaje[0].vehiculo_id), guard.empresa.id],
+      );
+    } else {
+      await execute(
+        `INSERT INTO flota_lecturas
+          (empresa_id, vehiculo_id, km, fecha_lectura, nota, conductor, registrado_por, viaje_id, capturado_en)
+         VALUES (?, ?, ?, CURDATE(), ?, ?, ?, ?, ?)`,
+        [
+          guard.empresa.id,
+          Number(viaje[0].vehiculo_id),
+          kmSalida,
+          `Cierre ruta (${paradasRuta.length} paradas) — sin km final`,
+          d.pilotoNombre?.trim() || String(viaje[0].piloto_nombre),
+          guard.session.username,
+          d.viajeId,
+          ahora,
+        ],
+      ).catch(() => undefined);
+    }
 
     if (planIdPre) {
       await marcarPlanDescargado(guard.empresa.id, planIdPre);
     }
 
-    const recorridos = d.kmLlegada - Number(viaje[0].km_salida);
+    const msgKm =
+      kmLlegadaDb != null
+        ? `${(kmLlegadaDb - kmSalida).toLocaleString("es-GT")} km recorridos.`
+        : `Ruta con ${paradasRuta.length} parada(s); km registrado al salir (${kmSalida.toLocaleString("es-GT")}).`;
     return NextResponse.json({
-      mensaje: `Llegada de ${viaje[0].placa}: ${recorridos.toLocaleString("es-GT")} km.${
+      mensaje: `Llegada de ${viaje[0].placa}: ${msgKm}${
         planIdPre ? " Plan TMS → Descargado." : ""
       }`,
       planId: planIdPre,
+      esRutaConParadas,
+      paradas: paradasRuta.length,
     });
   }
 

@@ -1305,48 +1305,57 @@ function FlotaInner() {
       setErr("Selecciona el viaje abierto.");
       return;
     }
-    if (!kmLlegada && kmLlegada !== 0) {
-      setErr("Indica el km de llegada.");
-      return;
-    }
-    const viajeSelPre = abiertos.find((v) => v.id === viajeId);
-    if (viajeSelPre && kmLlegada < Number(viajeSelPre.km_salida)) {
-      setErr(
-        `Km de llegada no puede ser menor al km de salida (${Number(viajeSelPre.km_salida).toLocaleString("es-GT")}).`,
-      );
-      return;
-    }
-    const vehLleg = viajeSelPre
-      ? vehiculos.find((v) => v.id === viajeSelPre.vehiculo_id)
-      : null;
-    const kmActLleg = Number(vehLleg?.km_actual ?? viajeSelPre?.km_salida ?? 0);
-    if (kmLlegada < kmActLleg) {
-      setErr(
-        `Km de llegada (${kmLlegada.toLocaleString("es-GT")}) no puede ser menor al km actual (${kmActLleg.toLocaleString("es-GT")}). Debe ser mayor o igual.`,
-      );
-      return;
-    }
-    if (!fotosLlegada.length) {
-      setErr(
-        "Adjunta al menos una foto de llegada (se marcará fecha, hora y ubicación).",
-      );
-      return;
-    }
-    // Re-fetch paradas for accuracy before closing
+
     const parRes = await fetch(
       `/api/empresas/${slug}/flota/viajes/${viajeId}/paradas`,
     );
     const parData = await parRes.json();
-    const pendientesAhora = (
-      (parData.paradas ?? []) as PlanParadaUi[]
-    ).filter((p) => p.requiere_evidencia && p.evidencias < 1);
+    const paradasAhora = (parData.paradas ?? []) as PlanParadaUi[];
+    setParadasViaje(paradasAhora);
+    setPlanIdViaje(parData.planId ?? null);
+    const esRutaConParadas = paradasAhora.length > 0;
+
+    if (!esRutaConParadas) {
+      if (!kmLlegada && kmLlegada !== 0) {
+        setErr("Indica el km de llegada.");
+        return;
+      }
+      const viajeSelPre = abiertos.find((v) => v.id === viajeId);
+      if (viajeSelPre && kmLlegada < Number(viajeSelPre.km_salida)) {
+        setErr(
+          `Km de llegada no puede ser menor al km de salida (${Number(viajeSelPre.km_salida).toLocaleString("es-GT")}).`,
+        );
+        return;
+      }
+      const vehLleg = viajeSelPre
+        ? vehiculos.find((v) => v.id === viajeSelPre.vehiculo_id)
+        : null;
+      const kmActLleg = Number(
+        vehLleg?.km_actual ?? viajeSelPre?.km_salida ?? 0,
+      );
+      if (kmLlegada < kmActLleg) {
+        setErr(
+          `Km de llegada (${kmLlegada.toLocaleString("es-GT")}) no puede ser menor al km actual (${kmActLleg.toLocaleString("es-GT")}). Debe ser mayor o igual.`,
+        );
+        return;
+      }
+      if (!fotosLlegada.length) {
+        setErr(
+          "Adjunta al menos una foto de llegada (se marcará fecha, hora y ubicación).",
+        );
+        return;
+      }
+    }
+
+    const pendientesAhora = paradasAhora.filter(
+      (p) => p.requiere_evidencia && p.evidencias < 1,
+    );
     if (pendientesAhora.length) {
       setErr(
-        `Faltan evidencias de producto en ${pendientesAhora.length} parada(s): ${pendientesAhora
+        `Ruta detectada con ${paradasAhora.length} destino(s). Faltan evidencias en: ${pendientesAhora
           .map((p) => `${p.orden}. ${p.lugar_nombre}`)
           .join("; ")}.`,
       );
-      setParadasViaje(parData.paradas ?? []);
       return;
     }
 
@@ -1355,13 +1364,18 @@ function FlotaInner() {
       const geo = await obtenerGps();
       const viajeSel = abiertos.find((v) => v.id === viajeId);
       const placa = viajeSel?.placa ?? "";
-      const llegadaMarked = await marcarVarias(
-        fotosLlegada,
-        `LLEGADA${placa ? ` · ${placa}` : ""} · km ${kmLlegada}`,
-        geo,
-      );
-      await subirEvidenciasViaje(viajeId, "llegada", llegadaMarked, geo);
-      if (fotoTableroLlegada) {
+
+      if (fotosLlegada.length) {
+        const llegadaMarked = await marcarVarias(
+          fotosLlegada,
+          `LLEGADA${placa ? ` · ${placa}` : ""}${
+            esRutaConParadas ? "" : ` · km ${kmLlegada}`
+          }`,
+          geo,
+        );
+        await subirEvidenciasViaje(viajeId, "llegada", llegadaMarked, geo);
+      }
+      if (fotoTableroLlegada && !esRutaConParadas) {
         const tablero = await marcarVarias(
           [fotoTableroLlegada],
           `LLEGADA · Tablero km ${kmLlegada}${placa ? ` · ${placa}` : ""}`,
@@ -1376,7 +1390,9 @@ function FlotaInner() {
         body: JSON.stringify({
           accion: "llegada",
           viajeId,
-          kmLlegada,
+          kmLlegada: esRutaConParadas
+            ? undefined
+            : kmLlegada || undefined,
           pilotoNombre: pilotoNombre || undefined,
           observaciones: obsViaje || undefined,
         }),
@@ -1386,15 +1402,13 @@ function FlotaInner() {
         setErr(data.error ?? "Error al cerrar llegada");
         return;
       }
-      setMsg(
-        `${data.mensaje} Fotos de llegada guardadas${
-          geo ? " con ubicación." : " (sin GPS — activa ubicación del celular)."
-        }`,
-      );
+      setMsg(data.mensaje);
       setKmLlegada(0);
       setObsViaje("");
       setFotosLlegada([]);
       setFotoTableroLlegada(null);
+      setParadasViaje([]);
+      setPlanIdViaje(null);
       setViajeId(0);
       await cargar();
     } catch (e) {
@@ -3087,15 +3101,18 @@ function FlotaInner() {
                               {p.notas ? <p>Notas: {p.notas}</p> : null}
                               {p.paradas?.length ? (
                                 <div className="mt-1 border-t border-sky-900/50 pt-1">
-                                  <p className="font-medium text-sky-200">
-                                    Paradas ({p.paradas.length}) — evidencia de
-                                    producto en cada una
+                                  <p className="font-medium text-amber-200">
+                                    Ruta detectada: {p.paradas.length} destino(s)
+                                  </p>
+                                  <p className="text-[10px] text-[var(--muted)]">
+                                    Km solo al salir. En cada destino solo
+                                    evidencia de producto (sin kilometraje).
                                   </p>
                                   {p.paradas.map((pp) => (
                                     <p key={pp.id}>
                                       {pp.orden}. {pp.lugar_nombre} ({pp.tipo})
                                       {pp.requiere_evidencia
-                                        ? " · req. evidencia"
+                                        ? " · evidencia obligatoria"
                                         : ""}
                                     </p>
                                   ))}
@@ -3211,10 +3228,26 @@ function FlotaInner() {
                   <ul className="space-y-1 text-xs text-[var(--muted)]">
                     {abiertos.map((v) => (
                       <li key={v.id}>
-                        <span className="font-mono text-sky-300">{v.placa}</span>{" "}
-                        · {v.piloto_nombre} · km {v.km_salida}
-                        {v.destino ? ` · ${v.destino}` : ""}
-                        {v.es_externo ? " · externo" : ""}
+                        <button
+                          type="button"
+                          className="text-left hover:text-sky-300"
+                          onClick={() => {
+                            setViajeId(v.id);
+                            setModoPiloto("llegada");
+                          }}
+                        >
+                          <span className="font-mono text-sky-300">
+                            {v.placa}
+                          </span>{" "}
+                          · {v.piloto_nombre} · km salida{" "}
+                          {Number(v.km_salida).toLocaleString("es-GT")}
+                          {v.destino ? ` · ${v.destino}` : ""}
+                          {v.plan_id ? " · con ruta/paradas" : ""}
+                          {v.es_externo ? " · externo" : ""}
+                          <span className="ml-1 text-[10px] text-sky-400">
+                            → evidencias / cerrar
+                          </span>
+                        </button>
                       </li>
                     ))}
                     {!abiertos.length ? <li>Ningún viaje abierto.</li> : null}
@@ -3274,15 +3307,27 @@ function FlotaInner() {
                       </span>
                     )}
                   </label>
-                  <label className="text-xs text-[var(--muted)]">
-                    Km llegada
-                    <input
-                      type="number"
-                      className={`${input} mt-1 w-full`}
-                      value={kmLlegada || ""}
-                      onChange={(e) => setKmLlegada(Number(e.target.value))}
-                    />
-                  </label>
+                  {paradasViaje.length === 0 ? (
+                    <label className="text-xs text-[var(--muted)]">
+                      Km llegada
+                      <input
+                        type="number"
+                        className={`${input} mt-1 w-full`}
+                        value={kmLlegada || ""}
+                        onChange={(e) => setKmLlegada(Number(e.target.value))}
+                      />
+                    </label>
+                  ) : (
+                    <p className="text-[11px] text-amber-200 sm:col-span-1">
+                      Km solo al inicio de la ruta (
+                      {abiertos.find((v) => v.id === viajeId)?.km_salida != null
+                        ? Number(
+                            abiertos.find((v) => v.id === viajeId)!.km_salida,
+                          ).toLocaleString("es-GT")
+                        : "—"}
+                      ). No se pide km en los destinos ni al cerrar.
+                    </p>
+                  )}
                   <label className="text-xs text-[var(--muted)] sm:col-span-2">
                     Observaciones
                     <input
@@ -3292,14 +3337,15 @@ function FlotaInner() {
                     />
                   </label>
 
-                  {planIdViaje && paradasViaje.length ? (
-                    <div className="sm:col-span-2 space-y-2 rounded-lg border border-amber-800/40 bg-amber-950/20 p-3">
+                  {paradasViaje.length ? (
+                    <div className="sm:col-span-2 lg:col-span-3 space-y-2 rounded-lg border border-amber-800/40 bg-amber-950/20 p-3">
                       <p className="text-xs font-medium text-amber-100">
-                        Evidencias de producto por parada (obligatorio)
+                        Ruta detectada: {paradasViaje.length} destino(s) —
+                        evidencia de producto en cada uno
                       </p>
                       <p className="text-[11px] text-[var(--muted)]">
-                        Debes subir foto en cada lugar antes de cerrar la
-                        llegada.
+                        En cada lugar solo adjunta foto del producto (con
+                        fecha/hora/GPS). Sin kilometraje en destinos.
                       </p>
                       {paradasViaje.map((pp) => {
                         const ok =
@@ -3330,7 +3376,7 @@ function FlotaInner() {
                               {ok ? "OK" : "Falta foto"}
                             </span>
                             <label className="cursor-pointer rounded bg-[#334155] px-2 py-1 text-[11px] text-white">
-                              Subir foto
+                              Subir evidencia
                               <input
                                 type="file"
                                 accept="image/*"
@@ -3355,44 +3401,63 @@ function FlotaInner() {
                         className="text-[11px] text-sky-300 underline"
                         onClick={() => void cargarParadasViaje(viajeId)}
                       >
-                        Actualizar estado paradas
+                        Actualizar estado de la ruta
                       </button>
                     </div>
+                  ) : planIdViaje === null && viajeId ? (
+                    <p className="sm:col-span-2 text-[11px] text-[var(--muted)]">
+                      Este viaje no tiene plan/ruta con paradas. Se pide km y
+                      foto de llegada.
+                    </p>
                   ) : null}
 
-                  <label className="text-xs text-[var(--muted)] sm:col-span-2">
-                    Fotos de llegada * (fecha, hora y ubicación en la imagen)
-                    <input
-                      type="file"
-                      accept="image/*"
-                      capture="environment"
-                      multiple
-                      className={`${input} mt-1 w-full`}
-                      onChange={(e) =>
-                        setFotosLlegada(
-                          e.target.files ? Array.from(e.target.files) : [],
-                        )
-                      }
-                    />
-                    <span className="mt-0.5 block text-[11px]">
-                      Activa la ubicación del celular para marcar GPS.
-                      {fotosLlegada.length
-                        ? ` · ${fotosLlegada.length} foto(s)`
-                        : ""}
-                    </span>
-                  </label>
-                  <label className="text-xs text-[var(--muted)] sm:col-span-2">
-                    Foto tablero km llegada (opcional)
-                    <input
-                      type="file"
-                      accept="image/*"
-                      capture="environment"
-                      className={`${input} mt-1 w-full`}
-                      onChange={(e) =>
-                        setFotoTableroLlegada(e.target.files?.[0] ?? null)
-                      }
-                    />
-                  </label>
+                  {paradasViaje.length === 0 ? (
+                    <>
+                      <label className="text-xs text-[var(--muted)] sm:col-span-2">
+                        Fotos de llegada * (fecha, hora y ubicación)
+                        <input
+                          type="file"
+                          accept="image/*"
+                          capture="environment"
+                          multiple
+                          className={`${input} mt-1 w-full`}
+                          onChange={(e) =>
+                            setFotosLlegada(
+                              e.target.files ? Array.from(e.target.files) : [],
+                            )
+                          }
+                        />
+                      </label>
+                      <label className="text-xs text-[var(--muted)] sm:col-span-2">
+                        Foto tablero km llegada (opcional)
+                        <input
+                          type="file"
+                          accept="image/*"
+                          capture="environment"
+                          className={`${input} mt-1 w-full`}
+                          onChange={(e) =>
+                            setFotoTableroLlegada(e.target.files?.[0] ?? null)
+                          }
+                        />
+                      </label>
+                    </>
+                  ) : (
+                    <label className="text-xs text-[var(--muted)] sm:col-span-2">
+                      Foto extra de cierre (opcional)
+                      <input
+                        type="file"
+                        accept="image/*"
+                        capture="environment"
+                        multiple
+                        className={`${input} mt-1 w-full`}
+                        onChange={(e) =>
+                          setFotosLlegada(
+                            e.target.files ? Array.from(e.target.files) : [],
+                          )
+                        }
+                      />
+                    </label>
+                  )}
                   <div className="flex items-end">
                     <button
                       type="button"
@@ -3405,8 +3470,10 @@ function FlotaInner() {
                       onClick={() => void llegadaViaje()}
                     >
                       {subiendoFotos
-                        ? "Guardando fotos…"
-                        : "Guardar llegada"}
+                        ? "Guardando…"
+                        : paradasViaje.length
+                          ? "Cerrar ruta"
+                          : "Guardar llegada"}
                     </button>
                   </div>
                 </div>
