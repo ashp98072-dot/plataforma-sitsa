@@ -32,6 +32,11 @@ export default function LimpiarModuloPage() {
     [empresas, empresaId],
   );
 
+  const otrasEmpresas = useMemo(
+    () => empresas.filter((e) => e.id !== empresaId).map((e) => e.codigo),
+    [empresas, empresaId],
+  );
+
   const cargarEmpresas = useCallback(async () => {
     const me = await fetch("/api/auth/me").then((r) => r.json());
     if (me.user?.rol !== "Admin") {
@@ -96,7 +101,10 @@ export default function LimpiarModuloPage() {
         setError(data.error ?? "Error al limpiar");
         return;
       }
-      setMsg(data.mensaje ?? "Limpieza completada.");
+      setMsg(
+        data.mensaje ??
+          `Listo: solo se limpió ${modulo.toUpperCase()} de ${empresaSel?.codigo ?? "la empresa"}.`,
+      );
       setConfirmacion("");
       setConteos(data.restantes ?? {});
     } catch {
@@ -115,10 +123,10 @@ export default function LimpiarModuloPage() {
   return (
     <div className="mx-auto max-w-2xl space-y-5">
       <div>
-        <h1 className="text-2xl font-semibold">Limpiar datos por módulo</h1>
+        <h1 className="text-2xl font-semibold">Limpiar por empresa y módulo</h1>
         <p className="mt-1 text-sm text-[var(--muted)]">
-          Vacía solo el módulo elegido de una empresa. Los demás módulos no se
-          tocan. Irreversible.
+          Primero elige la empresa (ej. Ecoplanet / recicladora). Luego el
+          módulo (ej. solo RRHH). Las demás empresas no se tocan.
         </p>
         <Link
           href={`/e/${slug}/usuarios`}
@@ -128,40 +136,95 @@ export default function LimpiarModuloPage() {
         </Link>
       </div>
 
-      <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-        <label className="block text-sm text-[var(--muted)]">
-          Empresa
-          <select
-            className="mt-1 w-full rounded border border-[var(--border)] bg-[#0b1217] px-2 py-2 text-sm"
-            value={empresaId || ""}
-            onChange={(e) => setEmpresaId(Number(e.target.value))}
-          >
-            {empresas.map((e) => (
-              <option key={e.id} value={e.id}>
-                {e.codigo} — {e.nombre}
-              </option>
-            ))}
-          </select>
-        </label>
+      <div className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+        <div>
+          <p className="text-sm font-medium">1. Empresa a limpiar</p>
+          <p className="mb-2 text-xs text-[var(--muted)]">
+            Solo se borrarán datos de la empresa marcada. Ejemplo: RRHH de
+            Ecoplanet no afecta KT ni las demás.
+          </p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {empresas.map((e) => {
+              const activa = empresaId === e.id;
+              return (
+                <button
+                  key={e.id}
+                  type="button"
+                  onClick={() => setEmpresaId(e.id)}
+                  className={[
+                    "rounded-lg border px-3 py-2.5 text-left transition",
+                    activa
+                      ? "border-sky-500 bg-sky-950/40 ring-1 ring-sky-500/60"
+                      : "border-[var(--border)] bg-[#0b1217] hover:border-slate-500",
+                  ].join(" ")}
+                >
+                  <span className="block text-sm font-semibold tracking-wide">
+                    {e.codigo}
+                  </span>
+                  <span className="block text-xs text-[var(--muted)]">
+                    {e.nombre}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
 
-        <label className="block text-sm text-[var(--muted)]">
-          Módulo a vaciar
-          <select
-            className="mt-1 w-full rounded border border-[var(--border)] bg-[#0b1217] px-2 py-2 text-sm"
-            value={modulo}
-            onChange={(e) => setModulo(e.target.value as ModuloLimpieza)}
-          >
-            {MODULOS_LIMPIEZA.map((m) => (
-              <option key={m} value={m}>
-                {MODULO_LIMPIEZA_LABEL[m]}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div>
+          <p className="text-sm font-medium">2. Módulo (solo de esa empresa)</p>
+          <p className="mb-2 text-xs text-[var(--muted)]">
+            {MODULO_LIMPIEZA_NOTA[modulo]}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {MODULOS_LIMPIEZA.map((m) => {
+              const activa = modulo === m;
+              return (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setModulo(m)}
+                  className={[
+                    "rounded-lg border px-3 py-1.5 text-xs font-medium transition",
+                    activa
+                      ? "border-amber-500 bg-amber-950/40 text-amber-100"
+                      : "border-[var(--border)] bg-[#0b1217] text-[var(--muted)] hover:text-white",
+                  ].join(" ")}
+                >
+                  {m === "rrhh"
+                    ? "RRHH"
+                    : m === "flota"
+                      ? "Flota"
+                      : m === "operaciones"
+                        ? "Operaciones"
+                        : m === "contabilidad"
+                          ? "Contabilidad"
+                          : m === "cms"
+                            ? "CMS"
+                            : m === "reciclaje"
+                              ? "Reciclaje"
+                              : "Tarimas"}
+                </button>
+              );
+            })}
+          </div>
+          <p className="mt-2 text-xs text-[var(--muted)]">
+            {MODULO_LIMPIEZA_LABEL[modulo]}
+          </p>
+        </div>
 
-        <p className="rounded-lg border border-sky-800/40 bg-sky-950/25 px-3 py-2 text-xs text-sky-100">
-          {MODULO_LIMPIEZA_NOTA[modulo]}
-        </p>
+        {empresaSel ? (
+          <div className="rounded-lg border border-emerald-800/40 bg-emerald-950/20 px-3 py-2 text-xs text-emerald-100">
+            <p className="font-medium">
+              Alcance: solo {modulo.toUpperCase()} de {empresaSel.codigo} (
+              {empresaSel.nombre})
+            </p>
+            {otrasEmpresas.length ? (
+              <p className="mt-1 text-emerald-200/80">
+                No se borrará nada de: {otrasEmpresas.join(", ")}.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="rounded-lg border border-[var(--border)] bg-[#0b1217] p-3 text-sm">
           <p className="mb-2 text-xs text-[var(--muted)]">
@@ -183,9 +246,15 @@ export default function LimpiarModuloPage() {
         </div>
 
         <label className="block text-sm text-[var(--muted)]">
-          Para confirmar, escribe exactamente:
+          3. Confirmar — escribe exactamente:
           <span className="mt-1 block font-mono text-amber-200">
             {confirmacionEsperada || "…"}
+          </span>
+          <span className="mt-1 block text-[11px]">
+            Ejemplo: si eliges Ecoplanet + RRHH →{" "}
+            <span className="font-mono text-amber-100/90">
+              ECOPLANET LIMPIAR RRHH
+            </span>
           </span>
           <input
             className="mt-2 w-full rounded border border-[var(--border)] bg-[#0b1217] px-2 py-2 font-mono text-sm"
@@ -200,6 +269,7 @@ export default function LimpiarModuloPage() {
           type="button"
           disabled={
             ejecutando ||
+            !empresaSel ||
             !confirmacion.trim() ||
             confirmacion.trim().toUpperCase() !==
               confirmacionEsperada.toUpperCase()
@@ -207,7 +277,11 @@ export default function LimpiarModuloPage() {
           onClick={() => void ejecutar()}
           className="w-full rounded-lg bg-rose-700 px-4 py-2.5 text-sm font-medium text-white hover:bg-rose-600 disabled:opacity-40"
         >
-          {ejecutando ? "Limpiando…" : "Vaciar este módulo"}
+          {ejecutando
+            ? "Limpiando…"
+            : empresaSel
+              ? `Vaciar ${modulo.toUpperCase()} solo de ${empresaSel.codigo}`
+              : "Elige una empresa"}
         </button>
       </div>
 
