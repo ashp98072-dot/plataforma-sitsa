@@ -66,6 +66,38 @@ export async function GET(req: Request, ctx: Ctx) {
     return km - ultimo >= intervalo;
   });
 
+  const viajesRows = await query<RowDataPacket[]>(
+    `SELECT v.id, v.vehiculo_id, v.piloto_nombre, v.km_salida, v.km_llegada,
+            v.hora_salida, v.hora_llegada, v.destino, v.observaciones, v.estado,
+            v.es_externo, v.plan_id, ve.placa,
+            p.codigo AS plan_codigo, p.estado AS plan_estado,
+            c.nombre AS plan_cliente,
+            (SELECT COUNT(*) FROM flota_viaje_evidencias ev
+             WHERE ev.viaje_id = v.id AND ev.empresa_id = v.empresa_id) AS evidencias
+     FROM flota_viajes v
+     INNER JOIN flota_vehiculos ve ON ve.id = v.vehiculo_id
+     LEFT JOIN tms_planes_viaje p ON p.id = v.plan_id
+     LEFT JOIN tms_clientes c ON c.id = p.cliente_id
+     WHERE v.empresa_id = ?
+       AND DATE(v.hora_salida) BETWEEN ? AND ?
+     ORDER BY v.hora_salida DESC
+     LIMIT 200`,
+    [guard.empresa.id, fechaDesde, fechaHasta],
+  ).catch(async () =>
+    query<RowDataPacket[]>(
+      `SELECT v.id, v.vehiculo_id, v.piloto_nombre, v.km_salida, v.km_llegada,
+              v.hora_salida, v.hora_llegada, v.destino, v.observaciones, v.estado,
+              ve.placa, 0 AS evidencias
+       FROM flota_viajes v
+       INNER JOIN flota_vehiculos ve ON ve.id = v.vehiculo_id
+       WHERE v.empresa_id = ?
+         AND DATE(v.hora_salida) BETWEEN ? AND ?
+       ORDER BY v.hora_salida DESC
+       LIMIT 200`,
+      [guard.empresa.id, fechaDesde, fechaHasta],
+    ),
+  );
+
   return NextResponse.json({
     resumen: {
       totalVehiculos: vehiculos.length,
@@ -89,5 +121,28 @@ export async function GET(req: Request, ctx: Ctx) {
       total: Number(totalRow[0]?.total ?? 0),
       n: Number(totalRow[0]?.n ?? 0),
     },
+    viajes: viajesRows.map((r) => ({
+      id: Number(r.id),
+      vehiculo_id: Number(r.vehiculo_id),
+      placa: String(r.placa),
+      piloto_nombre: String(r.piloto_nombre ?? ""),
+      km_salida: Number(r.km_salida ?? 0),
+      km_llegada: r.km_llegada != null ? Number(r.km_llegada) : null,
+      hora_salida: r.hora_salida,
+      hora_llegada: r.hora_llegada ?? null,
+      destino: r.destino ? String(r.destino) : null,
+      observaciones: r.observaciones ? String(r.observaciones) : null,
+      estado: String(r.estado ?? ""),
+      es_externo: Number(r.es_externo ?? 0),
+      plan_id: r.plan_id != null ? Number(r.plan_id) : null,
+      plan_codigo: r.plan_codigo ? String(r.plan_codigo) : null,
+      plan_estado: r.plan_estado ? String(r.plan_estado) : null,
+      plan_cliente: r.plan_cliente ? String(r.plan_cliente) : null,
+      evidencias: Number(r.evidencias ?? 0),
+      km_recorridos:
+        r.km_llegada != null
+          ? Number(r.km_llegada) - Number(r.km_salida ?? 0)
+          : null,
+    })),
   });
 }

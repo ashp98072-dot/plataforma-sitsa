@@ -2,7 +2,7 @@ import { readFileSync } from "fs";
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
-import { requireTenantFlota } from "@/lib/tenant";
+import { requireTenantFlota, requireTenantFlotaAny } from "@/lib/tenant";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
 import {
   guardarEvidenciaViaje,
@@ -22,7 +22,11 @@ const TIPOS: TipoEvidenciaViaje[] = [
 
 export async function GET(req: Request, ctx: Ctx) {
   const { slug, id: raw } = await ctx.params;
-  const guard = await requireTenantFlota(slug, "flota_piloto", "ver");
+  const guard = await requireTenantFlotaAny(
+    slug,
+    ["flota_piloto", "flota_reportes"],
+    "ver",
+  );
   if (guard.error) return guard.error;
 
   try {

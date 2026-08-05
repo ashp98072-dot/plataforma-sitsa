@@ -95,31 +95,62 @@ export async function GET(req: Request, ctx: Ctx) {
       "Piloto",
       "Km salida",
       "Km llegada",
+      "Km recorridos",
       "Destino",
+      "Observaciones",
       "Estado",
+      "Plan TMS",
+      "Estado plan",
+      "Evidencias",
+      "Externo",
     ];
     const data = await query<RowDataPacket[]>(
       `SELECT v.hora_salida, v.hora_llegada, ve.placa, v.piloto_nombre,
-              v.km_salida, v.km_llegada, v.destino, v.estado
+              v.km_salida, v.km_llegada, v.destino, v.observaciones, v.estado,
+              v.es_externo, p.codigo AS plan_codigo, p.estado AS plan_estado,
+              (SELECT COUNT(*) FROM flota_viaje_evidencias ev
+               WHERE ev.viaje_id = v.id AND ev.empresa_id = v.empresa_id) AS evidencias
        FROM flota_viajes v
        INNER JOIN flota_vehiculos ve ON ve.id = v.vehiculo_id
+       LEFT JOIN tms_planes_viaje p ON p.id = v.plan_id
        WHERE v.empresa_id = ?
        ORDER BY v.hora_salida DESC
        LIMIT 2000`,
       [guard.empresa.id],
+    ).catch(async () =>
+      query<RowDataPacket[]>(
+        `SELECT v.hora_salida, v.hora_llegada, ve.placa, v.piloto_nombre,
+                v.km_salida, v.km_llegada, v.destino, v.estado
+         FROM flota_viajes v
+         INNER JOIN flota_vehiculos ve ON ve.id = v.vehiculo_id
+         WHERE v.empresa_id = ?
+         ORDER BY v.hora_salida DESC
+         LIMIT 2000`,
+        [guard.empresa.id],
+      ),
     );
     rows = data
       .filter((r) => !q || String(r.placa).toLowerCase().includes(q))
-      .map((r) => [
-        String(r.hora_salida ?? "").replace("T", " ").slice(0, 19),
-        String(r.hora_llegada ?? "").replace("T", " ").slice(0, 19),
-        String(r.placa),
-        String(r.piloto_nombre ?? ""),
-        String(r.km_salida ?? ""),
-        String(r.km_llegada ?? ""),
-        String(r.destino ?? ""),
-        String(r.estado ?? ""),
-      ]);
+      .map((r) => {
+        const kmS = Number(r.km_salida ?? 0);
+        const kmL = r.km_llegada != null ? Number(r.km_llegada) : null;
+        return [
+          String(r.hora_salida ?? "").replace("T", " ").slice(0, 19),
+          String(r.hora_llegada ?? "").replace("T", " ").slice(0, 19),
+          String(r.placa),
+          String(r.piloto_nombre ?? ""),
+          String(kmS),
+          kmL != null ? String(kmL) : "",
+          kmL != null ? String(kmL - kmS) : "",
+          String(r.destino ?? ""),
+          String(r.observaciones ?? ""),
+          String(r.estado ?? ""),
+          String(r.plan_codigo ?? ""),
+          String(r.plan_estado ?? ""),
+          String(r.evidencias ?? 0),
+          Number(r.es_externo) ? "Sí" : "No",
+        ];
+      });
   } else {
     title = "Inventario de flota";
     filename = "flota-inventario";

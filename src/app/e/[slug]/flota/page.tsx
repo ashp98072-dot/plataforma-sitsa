@@ -108,10 +108,46 @@ type Viaje = {
   destino: string | null;
   estado: string;
   hora_salida: string;
+  hora_llegada?: string | null;
   observaciones?: string | null;
   es_externo?: number;
   plan_id?: number | null;
+  plan_codigo?: string | null;
+  plan_estado?: string | null;
+  plan_cliente?: string | null;
+  evidencias?: number;
+  km_recorridos?: number | null;
 };
+
+type EvidenciaViaje = {
+  id: number;
+  tipo: string;
+  nombre: string;
+  latitud: number | null;
+  longitud: number | null;
+  capturadoEn?: string | null;
+  url: string;
+};
+
+function fmtFechaHora(v: string | null | undefined): string {
+  if (!v) return "—";
+  return String(v).replace("T", " ").slice(0, 19);
+}
+
+function labelTipoEvidencia(tipo: string): string {
+  switch (tipo) {
+    case "tablero_salida":
+      return "Tablero salida";
+    case "salida":
+      return "Evidencia salida";
+    case "tablero_llegada":
+      return "Tablero llegada";
+    case "llegada":
+      return "Evidencia llegada";
+    default:
+      return tipo;
+  }
+}
 
 type PermisoExterno = {
   id: number;
@@ -175,7 +211,13 @@ function FlotaInner() {
   const [lecturas, setLecturas] = useState<Lectura[]>([]);
   const [servicios, setServicios] = useState<Servicio[]>([]);
   const [viajes, setViajes] = useState<Viaje[]>([]);
+  const [viajesReporte, setViajesReporte] = useState<Viaje[]>([]);
   const [abiertos, setAbiertos] = useState<Viaje[]>([]);
+  const [viajeEvidencias, setViajeEvidencias] = useState<
+    Record<number, EvidenciaViaje[]>
+  >({});
+  const [viajeExpandido, setViajeExpandido] = useState<number | null>(null);
+  const [fotoVista, setFotoVista] = useState<EvidenciaViaje | null>(null);
   const [q, setQ] = useState("");
   const [filtroTaller, setFiltroTaller] = useState<"todos" | "taller" | "ruta">(
     "todos",
@@ -329,6 +371,17 @@ function FlotaInner() {
     [viajes, matchQ],
   );
 
+  const viajesReporteFiltrados = useMemo(
+    () =>
+      viajesReporte.filter((v) =>
+        matchQ(
+          v.placa,
+          `${v.piloto_nombre} ${v.destino ?? ""} ${v.plan_codigo ?? ""}`,
+        ),
+      ),
+    [viajesReporte, matchQ],
+  );
+
   const abiertosFiltrados = useMemo(() => {
     const s = qLlegada.trim().toLowerCase();
     if (!s) return abiertos;
@@ -386,6 +439,7 @@ function FlotaInner() {
       setTotalPeriodo(
         reporte.totalPeriodo ?? { total: 0, n: 0 },
       );
+      setViajesReporte((reporte.viajes ?? []) as Viaje[]);
     }
     if (lec.ok) {
       const data = await lec.json();
@@ -921,6 +975,28 @@ function FlotaInner() {
       setMsg(data.mensaje);
       await cargar();
     }
+  }
+
+  async function verEvidenciasViaje(viajeIdSel: number) {
+    if (viajeExpandido === viajeIdSel) {
+      setViajeExpandido(null);
+      return;
+    }
+    setViajeExpandido(viajeIdSel);
+    if (viajeEvidencias[viajeIdSel]) return;
+    setErr("");
+    const res = await fetch(
+      `/api/empresas/${slug}/flota/viajes/${viajeIdSel}/evidencias`,
+    );
+    const data = await res.json();
+    if (!res.ok) {
+      setErr(data.error ?? "No se pudieron cargar evidencias");
+      return;
+    }
+    setViajeEvidencias((prev) => ({
+      ...prev,
+      [viajeIdSel]: (data.evidencias ?? []) as EvidenciaViaje[],
+    }));
   }
 
   async function verAdjuntos(servicioId: number, placa?: string) {
@@ -2166,17 +2242,220 @@ function FlotaInner() {
             })()}
           </div>
 
-          <div className="rounded-xl border border-[var(--border)] p-4 text-sm">
-            <h2 className="mb-2 font-medium">Viajes (filtro placa)</h2>
-            <ul className="space-y-1 text-[var(--muted)]">
-              {viajesFiltrados.slice(0, 20).map((v) => (
-                <li key={v.id}>
-                  {v.placa} · {v.piloto_nombre} · {v.estado}
-                  {v.destino ? ` · ${v.destino}` : ""}
-                </li>
-              ))}
-              {!viajesFiltrados.length ? <li>Sin viajes.</li> : null}
-            </ul>
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 text-sm">
+            <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+              <div>
+                <h2 className="font-medium">Viajes del período</h2>
+                <p className="text-xs text-[var(--muted)]">
+                  {repDesde} → {repHasta}
+                  {q.trim() ? ` · filtro: ${q.trim()}` : ""} ·{" "}
+                  {viajesReporteFiltrados.length} viaje(s)
+                </p>
+              </div>
+            </div>
+            <div className="space-y-3">
+              {viajesReporteFiltrados.slice(0, 50).map((v) => {
+                const kmRec =
+                  v.km_recorridos != null
+                    ? v.km_recorridos
+                    : v.km_llegada != null
+                      ? v.km_llegada - v.km_salida
+                      : null;
+                const abierto = viajeExpandido === v.id;
+                const evs = viajeEvidencias[v.id] ?? [];
+                return (
+                  <div
+                    key={v.id}
+                    className="rounded-lg border border-[var(--border)] bg-[#0b1217]/50 p-3"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <p className="font-mono text-base font-semibold text-sky-300">
+                          {v.placa}
+                          <span className="ml-2 text-sm font-normal text-[var(--fg)]">
+                            {v.piloto_nombre}
+                          </span>
+                        </p>
+                        <p className="text-xs text-[var(--muted)]">
+                          {v.destino || "Sin destino"}
+                          {v.es_externo ? " · externo" : ""}
+                        </p>
+                      </div>
+                      <span
+                        className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
+                          v.estado === "abierto"
+                            ? "bg-amber-900/50 text-amber-200"
+                            : "bg-emerald-900/40 text-emerald-200"
+                        }`}
+                      >
+                        {v.estado}
+                      </span>
+                    </div>
+
+                    <div className="mt-2 grid gap-1 text-xs text-[var(--muted)] sm:grid-cols-2 lg:grid-cols-3">
+                      <p>
+                        Salida:{" "}
+                        <span className="text-[var(--fg)]">
+                          {fmtFechaHora(v.hora_salida)}
+                        </span>
+                      </p>
+                      <p>
+                        Llegada:{" "}
+                        <span className="text-[var(--fg)]">
+                          {fmtFechaHora(v.hora_llegada)}
+                        </span>
+                      </p>
+                      <p>
+                        Km:{" "}
+                        <span className="text-[var(--fg)]">
+                          {v.km_salida.toLocaleString("es-GT")}
+                          {v.km_llegada != null
+                            ? ` → ${v.km_llegada.toLocaleString("es-GT")}`
+                            : ""}
+                          {kmRec != null
+                            ? ` (${kmRec.toLocaleString("es-GT")} km)`
+                            : ""}
+                        </span>
+                      </p>
+                      {v.plan_codigo ? (
+                        <p>
+                          Plan TMS:{" "}
+                          <span className="text-sky-300">{v.plan_codigo}</span>
+                          {v.plan_estado ? ` · ${v.plan_estado}` : ""}
+                        </p>
+                      ) : (
+                        <p>Plan TMS: —</p>
+                      )}
+                      {v.plan_cliente ? (
+                        <p>
+                          Cliente plan:{" "}
+                          <span className="text-[var(--fg)]">
+                            {v.plan_cliente}
+                          </span>
+                        </p>
+                      ) : null}
+                      {v.observaciones ? (
+                        <p className="sm:col-span-2">
+                          Obs:{" "}
+                          <span className="text-[var(--fg)]">
+                            {v.observaciones}
+                          </span>
+                        </p>
+                      ) : null}
+                    </div>
+
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className="rounded bg-[#334155] px-2.5 py-1 text-xs text-white"
+                        onClick={() => void verEvidenciasViaje(v.id)}
+                      >
+                        {abierto ? "Ocultar" : "Ver"} evidencias (
+                        {v.evidencias ?? 0})
+                      </button>
+                    </div>
+
+                    {abierto ? (
+                      <div className="mt-3 border-t border-[var(--border)] pt-3">
+                        {!evs.length ? (
+                          <p className="text-xs text-[var(--muted)]">
+                            {(v.evidencias ?? 0) > 0
+                              ? "Cargando evidencias…"
+                              : "Sin evidencias fotográficas en este viaje."}
+                          </p>
+                        ) : (
+                          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                            {evs.map((ev) => (
+                              <button
+                                key={ev.id}
+                                type="button"
+                                className="overflow-hidden rounded border border-[var(--border)] text-left hover:border-sky-600"
+                                onClick={() => setFotoVista(ev)}
+                              >
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                  src={ev.url}
+                                  alt={ev.nombre}
+                                  className="h-28 w-full object-cover bg-[#0b1217]"
+                                />
+                                <div className="space-y-0.5 p-1.5 text-[10px] text-[var(--muted)]">
+                                  <p className="font-medium text-sky-300">
+                                    {labelTipoEvidencia(ev.tipo)}
+                                  </p>
+                                  <p>
+                                    {fmtFechaHora(
+                                      ev.capturadoEn
+                                        ? String(ev.capturadoEn)
+                                        : null,
+                                    )}
+                                  </p>
+                                  {ev.latitud != null &&
+                                  ev.longitud != null ? (
+                                    <p>
+                                      GPS: {ev.latitud.toFixed(5)},{" "}
+                                      {ev.longitud.toFixed(5)}
+                                    </p>
+                                  ) : (
+                                    <p>GPS: no disponible</p>
+                                  )}
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+              {!viajesReporteFiltrados.length ? (
+                <p className="text-[var(--muted)]">
+                  Sin viajes en el rango de fechas
+                  {q.trim() ? " / filtro placa" : ""}.
+                </p>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {fotoVista ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+          onClick={() => setFotoVista(null)}
+        >
+          <div
+            className="max-h-[90vh] max-w-3xl overflow-auto rounded-xl border border-[var(--border)] bg-[var(--card)] p-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-2 flex items-start justify-between gap-2">
+              <div className="text-xs text-[var(--muted)]">
+                <p className="font-medium text-sky-300">
+                  {labelTipoEvidencia(fotoVista.tipo)}
+                </p>
+                <p>{fotoVista.nombre}</p>
+                <p>{fmtFechaHora(fotoVista.capturadoEn ? String(fotoVista.capturadoEn) : null)}</p>
+                {fotoVista.latitud != null && fotoVista.longitud != null ? (
+                  <p>
+                    GPS: {fotoVista.latitud.toFixed(5)},{" "}
+                    {fotoVista.longitud.toFixed(5)}
+                  </p>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                className="rounded bg-[#334155] px-2 py-1 text-xs text-white"
+                onClick={() => setFotoVista(null)}
+              >
+                Cerrar
+              </button>
+            </div>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={fotoVista.url}
+              alt={fotoVista.nombre}
+              className="max-h-[75vh] w-full object-contain"
+            />
           </div>
         </div>
       ) : null}
