@@ -188,6 +188,11 @@ function FlotaInner() {
     null,
   );
   const [sacarDeServicio, setSacarDeServicio] = useState(true);
+  const [panelAdjuntos, setPanelAdjuntos] = useState<{
+    servicioId: number;
+    placa?: string;
+    items: { id: number; nombre: string; url: string; tamano: number }[];
+  } | null>(null);
   const [resumen, setResumen] = useState<{
     totalVehiculos: number;
     enTaller: number;
@@ -632,7 +637,8 @@ function FlotaInner() {
     }
   }
 
-  async function verAdjuntos(servicioId: number) {
+  async function verAdjuntos(servicioId: number, placa?: string) {
+    setErr("");
     const res = await fetch(
       `/api/empresas/${slug}/flota/servicios/${servicioId}/adjuntos`,
     );
@@ -644,24 +650,40 @@ function FlotaInner() {
     const list = (data.adjuntos ?? []) as {
       id: number;
       nombre: string;
+      url: string;
+      tamano: number;
     }[];
     if (!list.length) {
       setMsg("Sin facturas / archivos en este servicio.");
       return;
     }
-    for (const a of list) {
-      const dl = await fetch(
-        `/api/empresas/${slug}/flota/servicios/${servicioId}/adjuntos`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ adjuntoId: a.id }),
-        },
-      );
-      if (!dl.ok) continue;
-      const blob = await dl.blob();
-      const url = URL.createObjectURL(blob);
-      window.open(url, "_blank");
+    setPanelAdjuntos({ servicioId, placa, items: list });
+  }
+
+  async function abrirAdjunto(url: string, nombre: string) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) {
+        setErr(`No se pudo abrir ${nombre}`);
+        return;
+      }
+      const blob = await res.blob();
+      const obj = URL.createObjectURL(blob);
+      const w = window.open(obj, "_blank");
+      if (!w) {
+        // Si el popup está bloqueado, forzar descarga/navegación
+        const a = document.createElement("a");
+        a.href = obj;
+        a.target = "_blank";
+        a.rel = "noopener";
+        a.download = nombre;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }
+      setTimeout(() => URL.revokeObjectURL(obj), 60_000);
+    } catch {
+      setErr(`Error al abrir ${nombre}`);
     }
   }
 
@@ -802,6 +824,64 @@ function FlotaInner() {
 
       {err ? <p className="text-sm text-red-300">{err}</p> : null}
       {msg ? <p className="text-sm text-emerald-300">{msg}</p> : null}
+
+      {panelAdjuntos ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setPanelAdjuntos(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-start justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-medium">
+                  Facturas / archivos
+                  {panelAdjuntos.placa ? ` · ${panelAdjuntos.placa}` : ""}
+                </h3>
+                <p className="text-xs text-[var(--muted)]">
+                  {panelAdjuntos.items.length} archivo(s). Ábrelos uno por uno.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="rounded bg-[#334155] px-2 py-1 text-xs text-white"
+                onClick={() => setPanelAdjuntos(null)}
+              >
+                Cerrar
+              </button>
+            </div>
+            <ul className="max-h-72 space-y-2 overflow-y-auto">
+              {panelAdjuntos.items.map((a, i) => (
+                <li
+                  key={a.id}
+                  className="flex items-center justify-between gap-2 rounded border border-[var(--border)] px-3 py-2 text-sm"
+                >
+                  <span className="min-w-0 truncate">
+                    <span className="text-[var(--muted)]">{i + 1}. </span>
+                    {a.nombre}
+                    {a.tamano ? (
+                      <span className="ml-1 text-[11px] text-[var(--muted)]">
+                        ({Math.round(a.tamano / 1024)} KB)
+                      </span>
+                    ) : null}
+                  </span>
+                  <button
+                    type="button"
+                    className="shrink-0 rounded bg-[#1F6AA5] px-2 py-1 text-xs text-white"
+                    onClick={() => void abrirAdjunto(a.url, a.nombre)}
+                  >
+                    Abrir
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      ) : null}
 
       {/* Modal taller */}
       {tallerId != null ? (
@@ -1426,7 +1506,7 @@ function FlotaInner() {
                         <button
                           type="button"
                           className="text-sky-300 underline"
-                          onClick={() => void verAdjuntos(s.id)}
+                          onClick={() => void verAdjuntos(s.id, s.placa)}
                         >
                           Ver ({s.adjuntos})
                         </button>
