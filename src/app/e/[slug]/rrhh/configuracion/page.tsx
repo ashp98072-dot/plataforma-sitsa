@@ -187,39 +187,59 @@ export default function ConfigRrhhPage() {
               />
             </label>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-col gap-2">
             <button
               type="button"
-              className="rounded bg-[#334155] px-3 py-1.5 text-xs text-white"
+              className="rounded bg-[#0ea5e9] px-3 py-2 text-sm font-medium text-white"
               onClick={() => {
-                setGpsMsg("");
+                setGpsMsg("Detectando ubicación…");
                 if (!navigator.geolocation) {
                   setGpsMsg("Este navegador no soporta GPS.");
                   return;
                 }
                 navigator.geolocation.getCurrentPosition(
                   (pos) => {
+                    let lng = pos.coords.longitude;
+                    // Guatemala / Centroamérica: longitud es negativa (oeste)
+                    if (lng > 0 && lng < 100) lng = -lng;
                     setParams((p) => ({
                       ...p,
-                      geocerca_lat: String(pos.coords.latitude),
-                      geocerca_lng: String(pos.coords.longitude),
+                      geocerca_lat: pos.coords.latitude.toFixed(6),
+                      geocerca_lng: lng.toFixed(6),
+                      geocerca_activa: "1",
                     }));
                     setGpsMsg(
-                      "Ubicación del dispositivo cargada. Guarda parámetros.",
+                      `Detectado: ${pos.coords.latitude.toFixed(5)}, ${lng.toFixed(5)}. Pulsa «Guardar parámetros».`,
                     );
                   },
-                  () =>
+                  (err) =>
                     setGpsMsg(
-                      "No se pudo leer GPS. Revisa permisos del navegador.",
+                      err.code === 1
+                        ? "Permiso de ubicación denegado. En el candado del navegador → Ubicación → Permitir."
+                        : "No se pudo leer GPS. Intenta en HTTPS o acerca el dispositivo a una ventana.",
                     ),
-                  { enableHighAccuracy: true, timeout: 12000 },
+                  { enableHighAccuracy: true, timeout: 15000 },
                 );
               }}
             >
-              Usar mi ubicación actual como predio
+              Detectar ubicación actual del predio
             </button>
             {gpsMsg ? (
               <span className="text-xs text-sky-200">{gpsMsg}</span>
+            ) : (
+              <span className="text-[11px] text-[var(--muted)]">
+                Tip: estate en el predio, pulsa detectar y luego Guardar. En
+                Guatemala la longitud debe ir con signo negativo (ej. -90.50).
+              </span>
+            )}
+            {params.geocerca_lng &&
+            Number(params.geocerca_lng) > 0 &&
+            Number(params.geocerca_lng) < 100 ? (
+              <p className="text-xs text-amber-300">
+                La longitud {params.geocerca_lng} parece positiva. En Guatemala
+                suele ser negativa (ej. -{params.geocerca_lng}). Corrígela o
+                vuelve a detectar.
+              </p>
             ) : null}
           </div>
         </div>

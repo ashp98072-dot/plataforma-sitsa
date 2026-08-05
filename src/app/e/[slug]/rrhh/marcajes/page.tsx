@@ -43,14 +43,41 @@ export default function MarcajesKioskoPage() {
   const [tolerancia, setTolerancia] = useState(10);
   const [geocercaActiva, setGeocercaActiva] = useState(false);
   const [geocercaRadio, setGeocercaRadio] = useState(150);
+  const [geocercaLat, setGeocercaLat] = useState<number | null>(null);
+  const [geocercaLng, setGeocercaLng] = useState<number | null>(null);
   const [empresaNombre, setEmpresaNombre] = useState("");
   const [loading, setLoading] = useState(false);
   const [enviando, setEnviando] = useState(false);
+  const [detectandoGps, setDetectandoGps] = useState(false);
+  const [gpsActual, setGpsActual] = useState<{
+    lat: number;
+    lng: number;
+    metros: number | null;
+  } | null>(null);
+  const [gpsInfo, setGpsInfo] = useState("");
   const [mensaje, setMensaje] = useState("");
   const [error, setError] = useState("");
   const [tipoOk, setTipoOk] = useState<"Entrada" | "Salida" | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const hoy = new Date().toISOString().slice(0, 10);
+
+  function metrosEntre(
+    lat1: number,
+    lng1: number,
+    lat2: number,
+    lng2: number,
+  ): number {
+    const R = 6371000;
+    const toRad = (d: number) => (d * Math.PI) / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLng = toRad(lng2 - lng1);
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(lat1)) *
+        Math.cos(toRad(lat2)) *
+        Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+  }
 
   function obtenerGps(): Promise<{ lat: number; lng: number } | null> {
     if (typeof navigator === "undefined" || !navigator.geolocation) {
@@ -64,9 +91,42 @@ export default function MarcajesKioskoPage() {
             lng: pos.coords.longitude,
           }),
         () => resolve(null),
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 30_000 },
+        { enableHighAccuracy: true, timeout: 12000, maximumAge: 15_000 },
       );
     });
+  }
+
+  async function detectarUbicacion() {
+    setDetectandoGps(true);
+    setGpsInfo("");
+    setError("");
+    const gps = await obtenerGps();
+    setDetectandoGps(false);
+    if (!gps) {
+      setGpsActual(null);
+      setGpsInfo(
+        "No se pudo detectar GPS. Permite la ubicación en el navegador (candado → Ubicación → Permitir) y vuelve a intentar.",
+      );
+      return;
+    }
+    let metros: number | null = null;
+    if (geocercaLat != null && geocercaLng != null) {
+      metros = Math.round(
+        metrosEntre(geocercaLat, geocercaLng, gps.lat, gps.lng),
+      );
+    }
+    setGpsActual({ lat: gps.lat, lng: gps.lng, metros });
+    if (metros != null && geocercaActiva) {
+      setGpsInfo(
+        metros <= geocercaRadio
+          ? `Ubicación OK: estás a ~${metros} m del predio (límite ${geocercaRadio} m).`
+          : `Fuera de zona: ~${metros} m del predio (límite ${geocercaRadio} m). Acércate para marcar.`,
+      );
+    } else {
+      setGpsInfo(
+        `Ubicación detectada: ${gps.lat.toFixed(5)}, ${gps.lng.toFixed(5)}`,
+      );
+    }
   }
 
   useEffect(() => {
@@ -91,6 +151,10 @@ export default function MarcajesKioskoPage() {
         setTolerancia(Number(cfg.parametros.minutos_tolerancia ?? 10));
         setGeocercaActiva(String(cfg.parametros.geocerca_activa ?? "0") === "1");
         setGeocercaRadio(Number(cfg.parametros.geocerca_radio_m ?? 150) || 150);
+        const lat = Number.parseFloat(cfg.parametros.geocerca_lat ?? "");
+        const lng = Number.parseFloat(cfg.parametros.geocerca_lng ?? "");
+        setGeocercaLat(Number.isFinite(lat) ? lat : null);
+        setGeocercaLng(Number.isFinite(lng) ? lng : null);
       }
       if (dash.empresa) setEmpresaNombre(dash.empresa);
     } finally {
@@ -130,24 +194,20 @@ export default function MarcajesKioskoPage() {
     setTipoOk(null);
     setEnviando(true);
     try {
-      let latitud: number | null = null;
-      let longitud: number | null = null;
-      if (geocercaActiva) {
-        const gps = await obtenerGps();
-        if (!gps) {
-          setError(
-            "Activa la ubicación (GPS) del navegador. Esta empresa solo permite marcar cerca del predio.",
-          );
-          return;
-        }
-        latitud = gps.lat;
-        longitud = gps.lng;
-      } else {
+      let latitud: number | null = gpsActual?.lat ?? null;
+      let longitud: number | null = gpsActual?.lng ?? null;
+      if (latitud == null || longitud == null) {
         const gps = await obtenerGps();
         if (gps) {
           latitud = gps.lat;
           longitud = gps.lng;
         }
+      }
+      if (geocercaActiva && (latitud == null || longitud == null)) {
+        setError(
+          "Activa la ubicación (GPS). Usa «Detectar mi ubicación» o permite el permiso del navegador.",
+        );
+        return;
       }
 
       const res = await fetch(`/api/empresas/${slug}/rrhh/marcajes`, {
@@ -222,6 +282,46 @@ export default function MarcajesKioskoPage() {
         </div>
 
         <form onSubmit={onSubmit} className="mx-auto mt-8 max-w-md">
+          <div className="mb-5 rounded-lg border border-sky-800/40 bg-sky-950/25 p-3 text-left">
+            <p className="text-xs font-medium text-sky-100">
+              Ubicación del dispositivo
+            </p>
+            <p className="mt-0.5 text-[11px] text-[var(--muted)]">
+              {geocercaActiva
+                ? "La geocerca está activa: detecta tu ubicación antes de marcar."
+                : "Opcional: puedes detectar GPS aunque la geocerca esté apagada."}
+            </p>
+            <button
+              type="button"
+              disabled={detectandoGps || enviando}
+              onClick={() => void detectarUbicacion()}
+              className="mt-2 w-full rounded bg-[#0ea5e9] px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+            >
+              {detectandoGps ? "Detectando…" : "Detectar mi ubicación"}
+            </button>
+            {gpsActual ? (
+              <p className="mt-2 font-mono text-[11px] text-sky-200">
+                GPS: {gpsActual.lat.toFixed(5)}, {gpsActual.lng.toFixed(5)}
+                {gpsActual.metros != null
+                  ? ` · ~${gpsActual.metros} m del predio`
+                  : ""}
+              </p>
+            ) : null}
+            {gpsInfo ? (
+              <p
+                className={`mt-1 text-xs ${
+                  gpsActual?.metros != null &&
+                  geocercaActiva &&
+                  gpsActual.metros > geocercaRadio
+                    ? "text-rose-300"
+                    : "text-emerald-300"
+                }`}
+              >
+                {gpsInfo}
+              </p>
+            ) : null}
+          </div>
+
           <label className="block text-center text-sm font-semibold">
             Ingrese su Código o DPI
             <input
