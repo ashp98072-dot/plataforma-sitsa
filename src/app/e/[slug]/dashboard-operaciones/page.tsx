@@ -14,17 +14,12 @@ export default async function DashboardOperacionesPage({ params }: Props) {
     {
       href: `/e/${slug}/tms`,
       title: "TMS / Planes de viaje",
-      desc: "Rutas, programación, evidencias.",
+      desc: "Rutas, programación, evidencias. Ahí eliges pilotos y auxiliares de la planilla.",
     },
     {
       href: `/e/${slug}/flota`,
       title: "Flota / Predios",
       desc: "Vehículos, km, talleres y servicios.",
-    },
-    {
-      href: `/e/${slug}/rrhh/empleados`,
-      title: "Pilotos / personal (desde RRHH)",
-      desc: "Consulta el personal en planilla registrado por RRHH.",
     },
   ];
 
@@ -36,8 +31,8 @@ export default async function DashboardOperacionesPage({ params }: Props) {
         </p>
         <h1 className="mt-1 text-2xl font-semibold">{empresa.nombre}</h1>
         <p className="mt-1 text-sm text-[var(--muted)]">
-          Transporte y flota. Los pilotos salen de la base de empleados de RRHH
-          de esta empresa.
+          Transporte y flota. El alta de personal es solo RRHH; Operaciones
+          selecciona pilotos al crear planes en TMS.
         </p>
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
