@@ -5,7 +5,10 @@ import {
   obtenerEmpresaPorSlug,
 } from "@/lib/empresas";
 import { permisosEfectivos } from "@/lib/permisos";
-import type { PermisoModulo } from "@/lib/permisos-shared";
+import {
+  modulosPlataformaDesdePermisos,
+  type PermisoModulo,
+} from "@/lib/permisos-shared";
 import { modulosPorRol, type Modulo, type RolGlobal } from "@/lib/roles";
 import { getSession } from "@/lib/session";
 
@@ -36,14 +39,6 @@ export default async function EmpresaLayout({ children, params }: Props) {
     empresa.modulos.length ? empresa.modulos : rolMods
   ) as Modulo[];
 
-  // Usuarios solo Admin
-  const finalMods: Modulo[] =
-    session.rol === "Admin"
-      ? ([...new Set([...empresaMods, "usuarios", "gerencia", "cms"])] as Modulo[])
-      : rolMods.filter(
-          (m) => empresaMods.includes(m) || m === "gerencia",
-        );
-
   let permisos: PermisoModulo[] = [];
   try {
     permisos = await permisosEfectivos(
@@ -53,6 +48,22 @@ export default async function EmpresaLayout({ children, params }: Props) {
   } catch {
     permisos = [];
   }
+
+  // Rol + permisos cruzados (ej. Operaciones con Planillas / Contabilidad).
+  const extraMods = modulosPlataformaDesdePermisos(permisos);
+  const finalMods: Modulo[] =
+    session.rol === "Admin"
+      ? ([...new Set([...empresaMods, "usuarios", "gerencia", "cms"])] as Modulo[])
+      : ([
+          ...new Set([
+            ...rolMods.filter(
+              (m) => empresaMods.includes(m) || m === "gerencia",
+            ),
+            ...extraMods.filter(
+              (m) => empresaMods.includes(m) || m === "gerencia",
+            ),
+          ]),
+        ] as Modulo[]);
 
   return (
     <AppShell

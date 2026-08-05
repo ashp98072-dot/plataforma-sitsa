@@ -2,13 +2,17 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
-import { requireTenantModulo } from "@/lib/tenant";
+import { requireTenantFlota, requireTenantFlotaAny } from "@/lib/tenant";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
 export async function GET(_req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "flota");
+  const guard = await requireTenantFlotaAny(
+    slug,
+    ["flota_vehiculos", "flota_lecturas", "flota_servicios", "flota_piloto", "flota_reportes"],
+    "ver",
+  );
   if (guard.error) return guard.error;
 
   const rows = await query<RowDataPacket[]>(
@@ -30,7 +34,7 @@ const schema = z.object({
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "flota", true);
+  const guard = await requireTenantFlota(slug, "flota_vehiculos", "crear");
   if (guard.error) return guard.error;
 
   const parsed = schema.safeParse(await req.json());
@@ -63,7 +67,7 @@ const patchSchema = z.object({
 
 export async function PATCH(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "flota", true);
+  const guard = await requireTenantFlota(slug, "flota_vehiculos", "editar");
   if (guard.error) return guard.error;
 
   const parsed = patchSchema.safeParse(await req.json());

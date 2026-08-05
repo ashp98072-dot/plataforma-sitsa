@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireTenantRrhh } from "@/lib/tenant";
-import { hoyLocal } from "@/lib/rrhh/dates";
+import { hoyLocal, normalizarHora } from "@/lib/rrhh/dates";
 import {
   listarMarcajesRango,
   registrarMarcajeKiosko,
@@ -30,10 +30,14 @@ const kioskoSchema = z.object({
 });
 
 const manualSchema = z.object({
-  empleadoId: z.number().int().positive(),
+  empleadoId: z.number().int().positive().optional(),
+  codigo: z.string().optional(),
   fechaJornada: z.string().min(8),
-  tipo: z.enum(["entrada", "salida"]),
+  hora: z.string().min(4),
+  correccion: z.enum(["entrada", "salida"]).nullable().optional(),
   comentarios: z.string().optional(),
+  /** compat: botones Entrada/Salida antiguos */
+  tipo: z.enum(["entrada", "salida"]).optional(),
 });
 
 export async function POST(req: Request, ctx: Ctx) {
@@ -63,11 +67,47 @@ export async function POST(req: Request, ctx: Ctx) {
 
   const parsed = manualSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
+    return NextResponse.json(
+      { error: "Completa empleado, fecha y hora." },
+      { status: 400 },
+    );
   }
-  const r = await registrarMarcajeManual(guard.empresa.id, parsed.data);
+  const d = parsed.data;
+  if (!d.empleadoId && !d.codigo) {
+    return NextResponse.json({ error: "Indica empleado." }, { status: 400 });
+  }
+  if (!normalizarHora(d.hora)) {
+    return NextResponse.json(
+      { error: "Hora inválida. Use HH:MM o HH:MM:SS." },
+      { status: 400 },
+    );
+  }
+
+  const r = await registrarMarcajeManual(guard.empresa.id, {
+    empleadoId: d.empleadoId,
+    codigo: d.codigo,
+    fechaJornada: d.fechaJornada,
+    hora: d.hora,
+    correccion: d.correccion ?? d.tipo ?? null,
+    comentarios: d.comentarios,
+  });
+
   if (!r.ok) {
-    return NextResponse.json({ error: r.mensaje }, { status: 400 });
+    const status = r.code === "NEEDS_CORRECTION" ? 409 : 400;
+    return NextResponse.json(
+      {
+        error: r.mensaje,
+        code: r.code,
+        entradaActual: r.entradaActual,
+        salidaActual: r.salidaActual,
+      },
+      { status },
+    );
   }
-  return NextResponse.json({ id: r.id, mensaje: r.mensaje });
+  return NextResponse.json({
+    id: r.id,
+    mensaje: r.mensaje,
+    tipoMarcaje: r.tipoMarcaje,
+    nombre: r.nombre,
+  });
 }

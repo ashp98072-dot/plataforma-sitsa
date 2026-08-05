@@ -17,9 +17,13 @@ import {
   type SessionPayload,
 } from "./session";
 import {
+  esFlotaSubmodulo,
+  esRrhhSubmodulo,
+  modulosPlataformaDesdePermisos,
   permisosEfectivos,
   tienePermiso,
   type AccionPermiso,
+  type FlotaSubmodulo,
   type RrhhSubmodulo,
 } from "./permisos";
 
@@ -77,23 +81,102 @@ export async function requireTenantModulo(
   if (tenant.error) return tenant;
 
   const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
   const rolMods = modulosPorRol(session.rol);
   const empresaMods = empresa.modulos.length ? empresa.modulos : rolMods;
-  const allowed =
-    session.rol === "Admin" ||
-    (rolMods.includes(modulo) &&
-      (empresaMods.includes(modulo) ||
-        modulo === "usuarios" ||
-        modulo === "gerencia"));
+  const empresaOk =
+    empresaMods.includes(modulo) ||
+    modulo === "usuarios" ||
+    modulo === "gerencia";
 
-  if (!allowed) {
+  const perms = await permisosEfectivos(
+    session.id,
+    session.rol as RolGlobal,
+  );
+  const porRol = rolMods.includes(modulo);
+  const porPermiso =
+    tienePermiso(perms, modulo, editar ? "editar" : "ver") ||
+    (modulo === "rrhh" &&
+      perms.some(
+        (p) =>
+          esRrhhSubmodulo(p.modulo) &&
+          tienePermiso(perms, p.modulo, editar ? "editar" : "ver"),
+      )) ||
+    (modulo !== "rrhh" &&
+      modulosPlataformaDesdePermisos(perms).includes(modulo));
+
+  if (!empresaOk || (!porRol && !porPermiso)) {
     return {
       error: NextResponse.json({ error: "Sin permiso de módulo." }, { status: 403 }),
     };
   }
-  if (editar && !puedeEditarModulo(session.rol, modulo)) {
+
+  if (editar) {
+    const puedeEditar =
+      puedeEditarModulo(session.rol, modulo) ||
+      tienePermiso(perms, modulo, "editar") ||
+      tienePermiso(perms, modulo, "crear") ||
+      (modulo === "rrhh" &&
+        perms.some(
+          (p) =>
+            esRrhhSubmodulo(p.modulo) &&
+            (tienePermiso(perms, p.modulo, "editar") ||
+              tienePermiso(perms, p.modulo, "crear")),
+        )) ||
+      (modulo === "flota" &&
+        perms.some(
+          (p) =>
+            (esFlotaSubmodulo(p.modulo) || p.modulo === "flota") &&
+            (tienePermiso(perms, p.modulo, "editar") ||
+              tienePermiso(perms, p.modulo, "crear")),
+        ));
+    if (!puedeEditar) {
+      return {
+        error: NextResponse.json({ error: "Solo lectura." }, { status: 403 }),
+      };
+    }
+  }
+  return { session, empresa };
+}
+
+/**
+ * Acceso Flota / Predios por submódulo (vehículos, servicios, lecturas…).
+ * Compatible con permiso legado "flota".
+ */
+export async function requireTenantFlota(
+  slug: string,
+  submodulo: FlotaSubmodulo,
+  accion: AccionPermiso = "ver",
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length
+    ? empresa.modulos
+    : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("flota")) {
     return {
-      error: NextResponse.json({ error: "Solo lectura." }, { status: 403 }),
+      error: NextResponse.json(
+        { error: "Esta empresa no tiene el módulo Flota / Predios." },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const perms = await permisosEfectivos(
+    session.id,
+    session.rol as RolGlobal,
+  );
+  if (!tienePermiso(perms, submodulo, accion)) {
+    return {
+      error: NextResponse.json(
+        { error: `Sin permiso para ${accion} en Predios (${submodulo}).` },
+        { status: 403 },
+      ),
     };
   }
   return { session, empresa };
@@ -101,21 +184,35 @@ export async function requireTenantModulo(
 
 /**
  * Acceso RRHH por submódulo + acción (ver/crear/editar/eliminar).
- * Admin siempre pasa. Si hay filas en usuario_modulo se usan; si no, defaults del rol.
+ * Admin siempre pasa. Permite acceso cruzado (ej. Operaciones → Planillas)
+ * si el usuario tiene el permiso aunque su rol no incluya RRHH completo.
  */
 export async function requireTenantRrhh(
   slug: string,
   submodulo: RrhhSubmodulo,
   accion: AccionPermiso = "ver",
 ): Promise<Ok | Fail> {
-  const base = await requireTenantModulo(slug, "rrhh", accion !== "ver");
-  if (base.error) return base;
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
 
-  if (base.session.rol === "Admin") return base;
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length
+    ? empresa.modulos
+    : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("rrhh")) {
+    return {
+      error: NextResponse.json(
+        { error: "Esta empresa no tiene el módulo RRHH." },
+        { status: 403 },
+      ),
+    };
+  }
 
   const perms = await permisosEfectivos(
-    base.session.id,
-    base.session.rol as RolGlobal,
+    session.id,
+    session.rol as RolGlobal,
   );
   if (!tienePermiso(perms, submodulo, accion)) {
     return {
@@ -125,7 +222,26 @@ export async function requireTenantRrhh(
       ),
     };
   }
-  return base;
+  return { session, empresa };
+}
+
+/** Acepta cualquiera de varios submódulos de Predios. */
+export async function requireTenantFlotaAny(
+  slug: string,
+  submodulos: FlotaSubmodulo[],
+  accion: AccionPermiso = "ver",
+): Promise<Ok | Fail> {
+  let last: Ok | Fail | null = null;
+  for (const sub of submodulos) {
+    const g = await requireTenantFlota(slug, sub, accion);
+    if (!g.error) return g;
+    last = g;
+  }
+  return (
+    last ?? {
+      error: NextResponse.json({ error: "Sin permiso." }, { status: 403 }),
+    }
+  );
 }
 
 /** Acepta cualquiera de varios submódulos (ej. evidencias: vacaciones o incidencias). */

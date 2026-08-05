@@ -2,7 +2,9 @@ import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
 import type { RolGlobal } from "@/lib/roles";
 import {
-  RRHH_SUBMODULOS,
+  catalogoPermisosRol,
+  esFlotaSubmodulo,
+  esPlataformaPermisible,
   permisoVacio,
   permisosDefaultPorRol,
   type PermisoModulo,
@@ -57,8 +59,32 @@ export async function permisosEfectivos(
   if (rol === "Admin") return permisosDefaultPorRol("Admin");
   const stored = await listarPermisosUsuario(usuarioId);
   if (stored.length === 0) return permisosDefaultPorRol(rol);
+
+  const defaults = permisosDefaultPorRol(rol);
+  const defMap = new Map(defaults.map((p) => [p.modulo, p]));
+  const catalogo = catalogoPermisosRol(rol);
   const byMod = new Map(stored.map((p) => [p.modulo, p]));
-  return RRHH_SUBMODULOS.map((m) => byMod.get(m) ?? permisoVacio(m));
+  const tienePlataformaGuardada = stored.some(
+    (p) =>
+      esPlataformaPermisible(p.modulo) ||
+      esFlotaSubmodulo(p.modulo) ||
+      p.modulo === "flota",
+  );
+  // Filas antiguas fuera del catálogo actual.
+  const extras = stored.filter((p) => !catalogo.includes(p.modulo));
+
+  return [
+    ...catalogo.map((m) => {
+      if (byMod.has(m)) return byMod.get(m)!;
+      // Compat: usuarios Operaciones/Contabilidad guardados solo con RRHH
+      // conservan los módulos propios del rol por defecto.
+      if (esPlataformaPermisible(m) && !tienePlataformaGuardada) {
+        return defMap.get(m) ?? permisoVacio(m);
+      }
+      return permisoVacio(m);
+    }),
+    ...extras,
+  ];
 }
 
 export async function guardarPermisosUsuario(
@@ -70,9 +96,7 @@ export async function guardarPermisosUsuario(
     [usuarioId],
   );
   for (const p of permisos) {
-    if (!p.puedeVer && !p.puedeCrear && !p.puedeEditar && !p.puedeEliminar) {
-      continue;
-    }
+    // Guardamos también filas en cero para respetar desmarques explícitos.
     try {
       await execute(
         `INSERT INTO usuario_modulo
@@ -88,6 +112,9 @@ export async function guardarPermisosUsuario(
         ],
       );
     } catch {
+      if (!p.puedeVer && !p.puedeCrear && !p.puedeEditar && !p.puedeEliminar) {
+        continue;
+      }
       await execute(
         `INSERT INTO usuario_modulo
           (usuario_id, empresa_id, modulo, puede_ver, puede_editar)

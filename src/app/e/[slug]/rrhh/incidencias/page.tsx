@@ -213,7 +213,7 @@ export default function IncidenciasPage() {
       <div>
         <h1 className="text-2xl font-semibold">Resumen de Incidencias</h1>
         <p className="text-sm text-[var(--muted)]">
-          Retrasos, salidas tempranas y faltas. Usa{" "}
+          Retrasos y salidas tempranas con hora; faltas día a día. Usa{" "}
           <strong>Ampliar</strong> para ver el detalle completo y{" "}
           <strong>📎 Foto</strong> para adjuntar pruebas.{" "}
           <Link

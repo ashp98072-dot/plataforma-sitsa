@@ -1,11 +1,23 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
-  RRHH_SUBMODULOS,
-  RRHH_SUBMODULO_LABEL,
+  GRUPOS_PERMISOS,
+  catalogoPermisosRol,
+  grupoPrincipalDelRol,
+  labelPermiso,
+  labelRol,
+  mergePermisosConCatalogo,
   permisosDefaultPorRol,
+  type GrupoPermisosId,
   type PermisoModulo,
 } from "@/lib/permisos-shared";
 import type { RolGlobal } from "@/lib/roles";
@@ -32,21 +44,136 @@ const ROLES = [
   "Visualizador",
 ] as const;
 
+const FLAGS = [
+  ["puedeVer", "Ver"],
+  ["puedeCrear", "Crear"],
+  ["puedeEditar", "Editar"],
+  ["puedeEliminar", "Eliminar"],
+] as const;
+
 function clonePermisos(rol: string): PermisoModulo[] {
   return permisosDefaultPorRol(rol as RolGlobal).map((p) => ({ ...p }));
 }
 
-function mergePermisos(base: PermisoModulo[]): PermisoModulo[] {
-  const map = new Map(base.map((p) => [p.modulo, p]));
-  return RRHH_SUBMODULOS.map(
-    (m) =>
-      map.get(m) ?? {
-        modulo: m,
-        puedeVer: false,
-        puedeCrear: false,
-        puedeEditar: false,
-        puedeEliminar: false,
-      },
+function IconChevron({ open }: { open: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      className={[
+        "h-3.5 w-3.5 shrink-0 transition-transform",
+        open ? "rotate-90" : "",
+      ].join(" ")}
+      fill="currentColor"
+      aria-hidden
+    >
+      <path d="M7 5l6 5-6 5V5z" />
+    </svg>
+  );
+}
+
+function iconGrupo(id: GrupoPermisosId): ReactNode {
+  const cls = "h-4 w-4";
+  switch (id) {
+    case "rrhh":
+      return (
+        <svg viewBox="0 0 24 24" className={cls} fill="none" stroke="currentColor" strokeWidth="1.8">
+          <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+          <circle cx="9" cy="7" r="3" />
+          <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a3 3 0 0 1 0 5.74" />
+        </svg>
+      );
+    case "operaciones":
+      return (
+        <svg viewBox="0 0 24 24" className={cls} fill="none" stroke="currentColor" strokeWidth="1.8">
+          <path d="M3 7h13l5 5v5H3V7z" />
+          <circle cx="7.5" cy="17.5" r="1.5" />
+          <circle cx="17.5" cy="17.5" r="1.5" />
+        </svg>
+      );
+    case "flota":
+      return (
+        <svg viewBox="0 0 24 24" className={cls} fill="none" stroke="currentColor" strokeWidth="1.8">
+          <rect x="3" y="10" width="18" height="8" rx="1.5" />
+          <path d="M5 10V7h8l4 3" />
+          <circle cx="7.5" cy="18" r="1.5" />
+          <circle cx="16.5" cy="18" r="1.5" />
+        </svg>
+      );
+    case "contabilidad":
+      return (
+        <svg viewBox="0 0 24 24" className={cls} fill="none" stroke="currentColor" strokeWidth="1.8">
+          <rect x="4" y="3" width="16" height="18" rx="2" />
+          <path d="M8 8h8M8 12h8M8 16h5" />
+        </svg>
+      );
+    default:
+      return (
+        <svg viewBox="0 0 24 24" className={cls} fill="none" stroke="currentColor" strokeWidth="1.8">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
+        </svg>
+      );
+  }
+}
+
+function PermisosTable({
+  modulos,
+  permisos,
+  onChange,
+}: {
+  modulos: string[];
+  permisos: PermisoModulo[];
+  onChange: (
+    modulo: string,
+    flag: keyof Omit<PermisoModulo, "modulo">,
+    value: boolean,
+  ) => void;
+}) {
+  const byMod = useMemo(
+    () => new Map(permisos.map((p) => [p.modulo, p])),
+    [permisos],
+  );
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-left text-xs">
+        <thead className="bg-[#0b1217] text-[var(--muted)]">
+          <tr>
+            <th className="px-2 py-2">Módulo</th>
+            {FLAGS.map(([, label]) => (
+              <th key={label} className="px-2 py-2">
+                {label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {modulos.map((m) => {
+            const p = byMod.get(m) ?? {
+              modulo: m,
+              puedeVer: false,
+              puedeCrear: false,
+              puedeEditar: false,
+              puedeEliminar: false,
+            };
+            return (
+              <tr key={m} className="border-t border-[var(--border)]">
+                <td className="px-2 py-1.5">{labelPermiso(m)}</td>
+                {FLAGS.map(([flag]) => (
+                  <td key={flag} className="px-2 py-1.5">
+                    <input
+                      type="checkbox"
+                      checked={p[flag]}
+                      onChange={(e) => onChange(m, flag, e.target.checked)}
+                    />
+                  </td>
+                ))}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -67,8 +194,24 @@ export default function UsuariosPage() {
   const [permisos, setPermisos] = useState<PermisoModulo[]>(() =>
     clonePermisos("RRHH"),
   );
+  const [abiertos, setAbiertos] = useState<Record<string, boolean>>({
+    rrhh: true,
+  });
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
+
+  const catalogoRol = useMemo(
+    () => (rol === "Admin" ? [] : catalogoPermisosRol(rol as RolGlobal)),
+    [rol],
+  );
+
+  const gruposVisibles = useMemo(() => {
+    const set = new Set(catalogoRol);
+    return GRUPOS_PERMISOS.map((g) => ({
+      ...g,
+      modulos: g.modulos.filter((m) => set.has(m)),
+    })).filter((g) => g.modulos.length > 0);
+  }, [catalogoRol]);
 
   const cargar = useCallback(async () => {
     const me = await fetch("/api/auth/me").then((r) => r.json());
@@ -88,6 +231,12 @@ export default function UsuariosPage() {
     void cargar();
   }, [cargar]);
 
+  function abrirGrupoPrincipal(r: string) {
+    if (r === "Admin") return;
+    const principal = grupoPrincipalDelRol(r as RolGlobal);
+    setAbiertos({ [principal]: true });
+  }
+
   function resetForm() {
     setEditId(null);
     setUsername("");
@@ -98,6 +247,7 @@ export default function UsuariosPage() {
     setActivo(true);
     setEmpresaIds([]);
     setPermisos(clonePermisos("RRHH"));
+    setAbiertos({ rrhh: true });
   }
 
   function empezarEdicion(u: Usuario) {
@@ -109,7 +259,13 @@ export default function UsuariosPage() {
     setAccesoTodas(u.accesoTodas);
     setActivo(u.activo);
     setEmpresaIds([...u.empresas]);
-    setPermisos(mergePermisos(u.permisos ?? clonePermisos(u.rol)));
+    setPermisos(
+      mergePermisosConCatalogo(
+        u.rol as RolGlobal,
+        u.permisos?.length ? u.permisos : clonePermisos(u.rol),
+      ),
+    );
+    abrirGrupoPrincipal(u.rol);
     setMsg("");
     setError("");
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -126,9 +282,44 @@ export default function UsuariosPage() {
     flag: keyof Omit<PermisoModulo, "modulo">,
     value: boolean,
   ) {
-    setPermisos((prev) =>
-      prev.map((p) => (p.modulo === modulo ? { ...p, [flag]: value } : p)),
-    );
+    setPermisos((prev) => {
+      const exists = prev.some((p) => p.modulo === modulo);
+      if (!exists) {
+        return [
+          ...prev,
+          {
+            modulo,
+            puedeVer: flag === "puedeVer" ? value : false,
+            puedeCrear: flag === "puedeCrear" ? value : false,
+            puedeEditar: flag === "puedeEditar" ? value : false,
+            puedeEliminar: flag === "puedeEliminar" ? value : false,
+          },
+        ];
+      }
+      return prev.map((p) =>
+        p.modulo === modulo ? { ...p, [flag]: value } : p,
+      );
+    });
+  }
+
+  function marcarGrupo(
+    modulos: string[],
+    value: boolean,
+    soloVer = false,
+  ) {
+    setPermisos((prev) => {
+      const map = new Map(prev.map((p) => [p.modulo, { ...p }]));
+      for (const m of modulos) {
+        map.set(m, {
+          modulo: m,
+          puedeVer: value,
+          puedeCrear: soloVer ? false : value,
+          puedeEditar: soloVer ? false : value,
+          puedeEliminar: soloVer ? false : value,
+        });
+      }
+      return [...map.values()];
+    });
   }
 
   async function onSubmit(e: FormEvent) {
@@ -147,7 +338,10 @@ export default function UsuariosPage() {
         rol === "Admin",
       activo,
       empresaIds,
-      permisos: rol === "Admin" ? undefined : permisos,
+      permisos:
+        rol === "Admin"
+          ? undefined
+          : mergePermisosConCatalogo(rol as RolGlobal, permisos),
     };
 
     const res = await fetch("/api/usuarios", {
@@ -185,8 +379,8 @@ export default function UsuariosPage() {
       <div>
         <h1 className="text-2xl font-semibold">Usuarios y permisos</h1>
         <p className="text-sm text-[var(--muted)]">
-          Solo Admin. Asigna empresas y marca qué puede hacer cada usuario por
-          módulo (Ver / Crear / Editar / Eliminar). Contexto: {slug}
+          Abre cada área (RRHH, Operaciones, Flota, Contabilidad) para marcar
+          qué puede Ver / Crear / Editar / Eliminar. Contexto: {slug}
         </p>
       </div>
 
@@ -240,7 +434,7 @@ export default function UsuariosPage() {
             />
           </label>
           <label className="text-sm text-[var(--muted)]">
-            Rol
+            Rol / perfil
             <select
               className={`${input} mt-1`}
               value={rol}
@@ -248,13 +442,16 @@ export default function UsuariosPage() {
                 const r = e.target.value;
                 setRol(r);
                 setPermisos(clonePermisos(r));
+                abrirGrupoPrincipal(r);
                 if (r === "RRHH" || r === "Contabilidad" || r === "Admin") {
                   setAccesoTodas(true);
                 }
               }}
             >
               {ROLES.map((r) => (
-                <option key={r}>{r}</option>
+                <option key={r} value={r}>
+                  {labelRol(r)}
+                </option>
               ))}
             </select>
           </label>
@@ -301,56 +498,84 @@ export default function UsuariosPage() {
         </div>
 
         {rol !== "Admin" ? (
-          <div>
-            <p className="mb-2 text-sm font-medium">
-              Permisos RRHH por módulo
+          <div className="space-y-2">
+            <p className="text-sm font-medium">
+              Permisos por área — perfil {labelRol(rol)}
             </p>
-            <p className="mb-2 text-xs text-[var(--muted)]">
-              Ejemplo: RRHH puede tener “Ver empleados” y “Crear empleado”, pero
-              sin “Eliminar”.
+            <p className="text-xs text-[var(--muted)]">
+              Pulsa cada bloque para desglosar sus módulos. Puedes dar acceso
+              cruzado (ej. Operaciones → Planillas) abriendo RRHH aunque el
+              perfil sea otro.
             </p>
-            <div className="overflow-x-auto rounded-lg border border-[var(--border)]">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-[#0d1522] text-[var(--muted)]">
-                  <tr>
-                    <th className="px-2 py-2">Módulo</th>
-                    <th className="px-2 py-2">Ver</th>
-                    <th className="px-2 py-2">Crear</th>
-                    <th className="px-2 py-2">Editar</th>
-                    <th className="px-2 py-2">Eliminar</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {permisos.map((p) => (
-                    <tr key={p.modulo} className="border-t border-[var(--border)]">
-                      <td className="px-2 py-1.5">
-                        {RRHH_SUBMODULO_LABEL[
-                          p.modulo as keyof typeof RRHH_SUBMODULO_LABEL
-                        ] ?? p.modulo}
-                      </td>
-                      {(
-                        [
-                          ["puedeVer", "Ver"],
-                          ["puedeCrear", "Crear"],
-                          ["puedeEditar", "Editar"],
-                          ["puedeEliminar", "Eliminar"],
-                        ] as const
-                      ).map(([flag]) => (
-                        <td key={flag} className="px-2 py-1.5">
-                          <input
-                            type="checkbox"
-                            checked={p[flag]}
-                            onChange={(e) =>
-                              setPermisoFlag(p.modulo, flag, e.target.checked)
-                            }
-                          />
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+
+            {gruposVisibles.map((g) => {
+              const open = Boolean(abiertos[g.id]);
+              const activos = g.modulos.filter((m) => {
+                const p = permisos.find((x) => x.modulo === m);
+                return p && (p.puedeVer || p.puedeCrear || p.puedeEditar || p.puedeEliminar);
+              }).length;
+              return (
+                <div
+                  key={g.id}
+                  className="overflow-hidden rounded-xl border border-[var(--border)]"
+                >
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setAbiertos((prev) => ({
+                        ...prev,
+                        [g.id]: !prev[g.id],
+                      }))
+                    }
+                    className="flex w-full items-center gap-2 bg-[#0d1522] px-3 py-2.5 text-left text-sm"
+                  >
+                    <IconChevron open={open} />
+                    <span className="text-[var(--accent-2)]">
+                      {iconGrupo(g.id)}
+                    </span>
+                    <span className="flex-1 font-medium">{g.titulo}</span>
+                    <span className="text-[10px] text-[var(--muted)]">
+                      {activos}/{g.modulos.length} activos
+                    </span>
+                  </button>
+                  {open ? (
+                    <div className="space-y-2 p-3">
+                      <p className="text-xs text-[var(--muted)]">
+                        {g.descripcion}
+                      </p>
+                      <div className="flex flex-wrap gap-2 text-xs">
+                        <button
+                          type="button"
+                          className="rounded bg-[#1F6AA5] px-2 py-1 text-white"
+                          onClick={() => marcarGrupo(g.modulos, true)}
+                        >
+                          Marcar todo
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded bg-[#37474F] px-2 py-1 text-white"
+                          onClick={() => marcarGrupo(g.modulos, true, true)}
+                        >
+                          Solo Ver
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded bg-[#5C2525] px-2 py-1 text-white"
+                          onClick={() => marcarGrupo(g.modulos, false)}
+                        >
+                          Quitar
+                        </button>
+                      </div>
+                      <PermisosTable
+                        modulos={g.modulos}
+                        permisos={permisos}
+                        onChange={setPermisoFlag}
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
           </div>
         ) : (
           <p className="text-sm text-[var(--muted)]">
@@ -383,7 +608,7 @@ export default function UsuariosPage() {
               <tr key={u.id} className="border-t border-[var(--border)]">
                 <td className="px-3 py-2">{u.username}</td>
                 <td className="px-3 py-2">{u.nombre || "—"}</td>
-                <td className="px-3 py-2">{u.rol}</td>
+                <td className="px-3 py-2">{labelRol(u.rol)}</td>
                 <td className="px-3 py-2">{u.accesoTodas ? "Sí" : "No"}</td>
                 <td className="px-3 py-2">{u.activo ? "Sí" : "No"}</td>
                 <td className="px-3 py-2">

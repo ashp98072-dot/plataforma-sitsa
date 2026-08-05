@@ -10,6 +10,7 @@ import {
   formatearTimestampVisible,
   fmtTs,
   hoyLocal,
+  normalizarHora,
 } from "./dates";
 
 async function tieneSesionAbierta(
@@ -253,54 +254,133 @@ export async function registrarMarcajeKiosko(
 export async function registrarMarcajeManual(
   empresaId: number,
   input: {
-    empleadoId: number;
+    empleadoId?: number;
+    codigo?: string;
     fechaJornada: string;
-    tipo: "entrada" | "salida";
+    hora: string;
+    correccion?: "entrada" | "salida" | null;
     comentarios?: string;
   },
-): Promise<{ ok: boolean; mensaje: string; id?: number }> {
-  const emp = await query<RowDataPacket[]>(
-    "SELECT id FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1",
-    [input.empleadoId, empresaId],
-  );
-  if (!emp[0]) return { ok: false, mensaje: "Empleado no encontrado." };
+): Promise<{
+  ok: boolean;
+  mensaje: string;
+  id?: number;
+  code?: string;
+  tipoMarcaje?: string;
+  nombre?: string;
+  entradaActual?: string;
+  salidaActual?: string;
+}> {
+  const horaNorm = normalizarHora(input.hora);
+  if (!horaNorm) {
+    return { ok: false, mensaje: "Hora inválida. Use HH:MM o HH:MM:SS." };
+  }
+  const ts = `${input.fechaJornada} ${horaNorm}`;
 
-  const ts = ahoraLocal();
+  let empRows: RowDataPacket[];
+  if (input.empleadoId) {
+    empRows = await query<RowDataPacket[]>(
+      `SELECT id, nombre, estado FROM empleados
+       WHERE id = ? AND empresa_id = ? LIMIT 1`,
+      [input.empleadoId, empresaId],
+    );
+  } else if (input.codigo?.trim()) {
+    empRows = await query<RowDataPacket[]>(
+      `SELECT id, nombre, estado FROM empleados
+       WHERE empresa_id = ? AND codigo = ? LIMIT 1`,
+      [empresaId, input.codigo.trim()],
+    );
+  } else {
+    return { ok: false, mensaje: "Indica empleado o código." };
+  }
+
+  if (!empRows[0]) {
+    return { ok: false, mensaje: "Empleado no encontrado.", code: "NOT_FOUND" };
+  }
+  const idEmpleado = Number(empRows[0].id);
+  const nombre = String(empRows[0].nombre);
+  if (String(empRows[0].estado) === "Baja") {
+    return {
+      ok: false,
+      mensaje: `No se puede registrar. ${nombre} está de Baja.`,
+      code: "BAJA",
+    };
+  }
+
   const existing = await query<RowDataPacket[]>(
-    `SELECT id, entrada_at, salida_at FROM sesiones_trabajo
+    `SELECT id, entrada_at, salida_at, estado FROM sesiones_trabajo
      WHERE empresa_id = ? AND id_empleado = ? AND fecha_jornada = ?
      ORDER BY id DESC LIMIT 1`,
-    [empresaId, input.empleadoId, input.fechaJornada],
+    [empresaId, idEmpleado, input.fechaJornada],
   );
 
   if (!existing[0]) {
-    if (input.tipo === "salida") {
-      return { ok: false, mensaje: "No hay entrada para esa fecha." };
-    }
     const r = await execute(
       `INSERT INTO sesiones_trabajo
         (empresa_id, id_empleado, fecha_jornada, entrada_at, estado, comentarios_rrhh)
        VALUES (?, ?, ?, ?, 'ABIERTA', ?)`,
       [
         empresaId,
-        input.empleadoId,
+        idEmpleado,
         input.fechaJornada,
         ts,
         input.comentarios ?? null,
       ],
     );
-    return { ok: true, mensaje: "Entrada registrada.", id: r.insertId };
+    return {
+      ok: true,
+      mensaje: `Entrada de ${nombre} a las ${horaNorm.slice(0, 5)}.`,
+      id: r.insertId,
+      tipoMarcaje: "Entrada",
+      nombre,
+    };
   }
 
-  if (input.tipo === "entrada") {
+  const estado = String(existing[0].estado || "");
+  const abierta = /abierta|en curso/i.test(estado) && !existing[0].salida_at;
+
+  if (abierta && !input.correccion) {
     await execute(
       `UPDATE sesiones_trabajo
-       SET entrada_at = ?, estado = 'ABIERTA',
+       SET salida_at = ?, estado = 'CERRADA',
            comentarios_rrhh = COALESCE(?, comentarios_rrhh)
        WHERE id = ? AND empresa_id = ?`,
       [ts, input.comentarios ?? null, existing[0].id, empresaId],
     );
-    return { ok: true, mensaje: "Entrada actualizada.", id: Number(existing[0].id) };
+    return {
+      ok: true,
+      mensaje: `Salida de ${nombre} a las ${horaNorm.slice(0, 5)}.`,
+      id: Number(existing[0].id),
+      tipoMarcaje: "Salida",
+      nombre,
+    };
+  }
+
+  if (!input.correccion) {
+    return {
+      ok: false,
+      code: "NEEDS_CORRECTION",
+      mensaje: `${nombre} ya tiene registro completo ese día. Indique si corrige Entrada o Salida.`,
+      entradaActual: formatearTimestampVisible(fmtTs(existing[0].entrada_at)),
+      salidaActual: formatearTimestampVisible(fmtTs(existing[0].salida_at)),
+    };
+  }
+
+  if (input.correccion === "entrada") {
+    await execute(
+      `UPDATE sesiones_trabajo
+       SET entrada_at = ?,
+           comentarios_rrhh = COALESCE(?, comentarios_rrhh)
+       WHERE id = ? AND empresa_id = ?`,
+      [ts, input.comentarios ?? null, existing[0].id, empresaId],
+    );
+    return {
+      ok: true,
+      mensaje: `Entrada corregida de ${nombre} a las ${horaNorm.slice(0, 5)}.`,
+      id: Number(existing[0].id),
+      tipoMarcaje: "Entrada (corregida)",
+      nombre,
+    };
   }
 
   await execute(
@@ -310,5 +390,11 @@ export async function registrarMarcajeManual(
      WHERE id = ? AND empresa_id = ?`,
     [ts, input.comentarios ?? null, existing[0].id, empresaId],
   );
-  return { ok: true, mensaje: "Salida registrada.", id: Number(existing[0].id) };
+  return {
+    ok: true,
+    mensaje: `Salida corregida de ${nombre} a las ${horaNorm.slice(0, 5)}.`,
+    id: Number(existing[0].id),
+    tipoMarcaje: "Salida (corregida)",
+    nombre,
+  };
 }

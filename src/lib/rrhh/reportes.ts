@@ -32,6 +32,13 @@ function fmtTs(value: string | Date | null | undefined): string | null {
   return String(value).replace("T", " ").slice(0, 19);
 }
 
+/** HH:MM desde timestamp local. */
+function horaCortaDeTs(value: string | null | undefined): string {
+  if (!value) return "";
+  const parte = value.includes(" ") ? value.split(" ")[1] : value;
+  return (parte || "").slice(0, 5);
+}
+
 function parseHora(hora: string | null | undefined): { h: number; m: number; s: number } | null {
   if (!hora) return null;
   const parte = (hora.includes(" ") ? hora.split(" ").pop() : hora)?.trim() ?? "";
@@ -440,9 +447,17 @@ export async function obtenerResumenIncidenciasDetallado(
         if (estEntrada !== "Falta") diasAsistidos += 1;
         if (estSalida === "Salida Temprana") salidasTempranas += 1;
 
+        const horaEnt = horaCortaDeTs(entradaAt);
+        const horaSal = horaCortaDeTs(salidaAt);
         const tipos: string[] = [];
-        if (estEntrada === "Retraso") tipos.push("Retraso");
-        if (estSalida === "Salida Temprana") tipos.push("Salida Temprana");
+        if (estEntrada === "Retraso") {
+          tipos.push(horaEnt ? `Retraso (${horaEnt})` : "Retraso");
+        }
+        if (estSalida === "Salida Temprana") {
+          tipos.push(
+            horaSal ? `Salida Temprana (${horaSal})` : "Salida Temprana",
+          );
+        }
         if (tipos.length) {
           detalle.push({
             fecha,

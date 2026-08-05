@@ -2,13 +2,13 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
-import { requireTenantModulo } from "@/lib/tenant";
+import { requireTenantFlota } from "@/lib/tenant";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "flota");
+  const guard = await requireTenantFlota(slug, "flota_servicios", "ver");
   if (guard.error) return guard.error;
 
   const vehiculoId = Number(new URL(req.url).searchParams.get("vehiculoId") ?? 0);
@@ -35,7 +35,7 @@ const schema = z.object({
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "flota", true);
+  const guard = await requireTenantFlota(slug, "flota_servicios", "crear");
   if (guard.error) return guard.error;
 
   const parsed = schema.safeParse(await req.json());

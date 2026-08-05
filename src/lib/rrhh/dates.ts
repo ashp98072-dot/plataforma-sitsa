@@ -64,6 +64,22 @@ export function ahoraLocal(): string {
   return `${y}-${m}-${day} ${hh}:${mm}:${ss}`;
 }
 
+export function horaAhora(): string {
+  const d = new Date();
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  return `${hh}:${mm}:${ss}`;
+}
+
+/** Extrae HH:MM de un timestamp. */
+export function horaCorta(value: string | Date | null | undefined): string {
+  const ts = fmtTs(value);
+  if (!ts) return "";
+  const parte = ts.includes(" ") ? ts.split(" ")[1] : ts;
+  return (parte || "").slice(0, 5);
+}
+
 export function fmtTs(value: string | Date | null | undefined): string | null {
   if (value == null) return null;
   if (value instanceof Date) {

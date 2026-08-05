@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
-import { requireTenantModulo } from "@/lib/tenant";
+import { requireTenantFlota } from "@/lib/tenant";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
 export async function GET(_req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "flota");
+  const guard = await requireTenantFlota(slug, "flota_reportes", "ver");
   if (guard.error) return guard.error;
 
   const vehiculos = await query<RowDataPacket[]>(
