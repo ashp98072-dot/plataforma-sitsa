@@ -1,5 +1,6 @@
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
+import { sincronizarKmVehiculosDesdeHistorial } from "@/lib/flota/km-vehiculo";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
 
 /** Vehículos propios + compartidos con esta empresa. */
@@ -7,6 +8,8 @@ export async function listarVehiculosAccesibles(
   empresaId: number,
 ): Promise<RowDataPacket[]> {
   await asegurarSchemaFlota().catch(() => undefined);
+  // Corrige km_actual si un viaje cerrado no lo actualizó (ej. unidad compartida)
+  await sincronizarKmVehiculosDesdeHistorial(empresaId).catch(() => undefined);
   try {
     return await query<RowDataPacket[]>(
       `SELECT v.*, e.codigo AS empresa_duena_codigo, e.nombre AS empresa_duena_nombre,

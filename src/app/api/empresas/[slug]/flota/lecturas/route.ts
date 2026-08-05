@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
 import { requireTenantFlotaAny } from "@/lib/tenant";
+import { actualizarKmActualVehiculo } from "@/lib/flota/km-vehiculo";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
 import { normalizarNombrePiloto } from "@/lib/flota/pilotos";
 import { ahoraLocal } from "@/lib/rrhh/dates";
@@ -227,10 +228,7 @@ export async function POST(req: Request, ctx: Ctx) {
     );
   }
 
-  await execute(
-    "UPDATE flota_vehiculos SET km_actual = GREATEST(COALESCE(km_actual,0), ?) WHERE id = ? AND empresa_id = ?",
-    [d.km, d.vehiculoId, guard.empresa.id],
-  );
+  await actualizarKmActualVehiculo(d.vehiculoId, d.km);
 
   return NextResponse.json({
     id: result.insertId,

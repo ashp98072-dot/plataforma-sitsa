@@ -5,6 +5,7 @@ import { execute, query } from "@/lib/db";
 import { registrarAuditoria } from "@/lib/auditoria";
 import { requireTenantFlota } from "@/lib/tenant";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
+import { actualizarKmActualVehiculo } from "@/lib/flota/km-vehiculo";
 import { ahoraLocal } from "@/lib/rrhh/dates";
 import {
   buscarEmpleadoPorNombre,
@@ -412,11 +413,7 @@ export async function POST(req: Request, ctx: Ctx) {
       );
     });
 
-    await execute(
-      `UPDATE flota_vehiculos SET km_actual = GREATEST(COALESCE(km_actual,0), ?)
-       WHERE id = ?`,
-      [d.kmSalida, Number(veh.id)],
-    );
+    await actualizarKmActualVehiculo(Number(veh.id), d.kmSalida);
 
     const extra = empleado
       ? ` RRHH: ${empleado.codigo}.`
@@ -583,10 +580,10 @@ export async function POST(req: Request, ctx: Ctx) {
       );
     });
 
-    await execute(
-      `UPDATE flota_vehiculos SET km_actual = GREATEST(COALESCE(km_actual,0), ?)
-       WHERE id = ? AND empresa_id = ?`,
-      [kmLlegadaDb, Number(viaje[0].vehiculo_id), guard.empresa.id],
+    // Por id (no por empresa_id): unidades compartidas entre KT/Mónaco
+    await actualizarKmActualVehiculo(
+      Number(viaje[0].vehiculo_id),
+      kmLlegadaDb,
     );
 
     if (planIdPre) {
