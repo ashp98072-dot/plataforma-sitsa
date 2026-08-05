@@ -4,6 +4,7 @@ export const ROLES = [
   "Contabilidad",
   "Operaciones",
   "CoordinadorPredios",
+  "Piloto",
   "Visualizador",
 ] as const;
 
@@ -39,6 +40,8 @@ export function modulosPorRol(rol: RolGlobal): Modulo[] {
       return ["tms", "flota", "reciclaje", "tarimas", "gerencia"];
     case "CoordinadorPredios":
       return ["flota", "tms"];
+    case "Piloto":
+      return ["flota"];
     case "Visualizador":
       return ["gerencia", "rrhh", "tms", "flota", "contabilidad", "reciclaje", "tarimas"];
     default:
@@ -60,6 +63,7 @@ export function puedeEditarModulo(rol: RolGlobal, modulo: Modulo): boolean {
     );
   }
   if (rol === "CoordinadorPredios") return modulo === "flota";
+  if (rol === "Piloto") return false;
   return false;
 }
 

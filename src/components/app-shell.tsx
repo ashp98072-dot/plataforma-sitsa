@@ -181,7 +181,11 @@ export function AppShell({
     }
 
     const opsLinks: NavLink[] = [];
-    if (rol === "Operaciones" || rol === "CoordinadorPredios" || isAdmin) {
+    if (
+      rol === "Operaciones" ||
+      rol === "CoordinadorPredios" ||
+      isAdmin
+    ) {
       opsLinks.push({
         href: homeOps,
         label: "Dashboard Operaciones",
@@ -215,24 +219,33 @@ export function AppShell({
 
     const flotaLinks: NavLink[] = [];
     if (modulos.includes("flota")) {
-      flotaLinks.push({
-        href: `${base}/flota`,
-        label: "Panel Flota",
-        key: "flota-home",
-      });
-      for (const item of FLOTA_NAV) {
-        if (
-          !isAdmin &&
-          permisos.length > 0 &&
-          !tienePermiso(permisos, item.sub, "ver")
-        ) {
-          continue;
-        }
+      // Piloto: ir directo a registrar viaje
+      if (rol === "Piloto") {
         flotaLinks.push({
-          href: `${base}/flota?tab=${item.path}`,
-          label: item.label,
-          key: `flota-${item.sub}`,
+          href: `${base}/flota?tab=piloto`,
+          label: "Registrar viaje",
+          key: "flota-piloto",
         });
+      } else {
+        flotaLinks.push({
+          href: `${base}/flota`,
+          label: "Dashboard flota",
+          key: "flota-home",
+        });
+        for (const item of FLOTA_NAV) {
+          if (
+            !isAdmin &&
+            permisos.length > 0 &&
+            !tienePermiso(permisos, item.sub, "ver")
+          ) {
+            continue;
+          }
+          flotaLinks.push({
+            href: `${base}/flota?tab=${item.path}`,
+            label: item.label,
+            key: `flota-${item.sub}`,
+          });
+        }
       }
     }
     if (flotaLinks.length) {

@@ -130,6 +130,7 @@ export function labelPermiso(modulo: string): string {
 /** Etiqueta amigable del rol en formularios. */
 export function labelRol(rol: string): string {
   if (rol === "CoordinadorPredios") return "Predios";
+  if (rol === "Piloto") return "Piloto";
   return rol;
 }
 
@@ -194,6 +195,7 @@ export function grupoPrincipalDelRol(rol: RolGlobal): GrupoPermisosId {
     case "Operaciones":
       return "operaciones";
     case "CoordinadorPredios":
+    case "Piloto":
       return "flota";
     default:
       return "rrhh";
@@ -214,6 +216,8 @@ export function modulosPropiosDelRol(rol: RolGlobal): string[] {
       return ["tms", ...FLOTA_SUBMODULOS, "reciclaje", "tarimas"];
     case "CoordinadorPredios":
       return [...FLOTA_SUBMODULOS, "tms"];
+    case "Piloto":
+      return ["flota_piloto", "flota_lecturas"];
     case "Visualizador":
       return [
         ...RRHH_SUBMODULOS,
@@ -269,6 +273,15 @@ export function permisosDefaultPorRol(rol: RolGlobal): PermisoModulo[] {
     return [
       ...propios.map((m) =>
         esFlotaSubmodulo(m) ? permisoFull(m) : permisoSoloVer(m),
+      ),
+      ...cruzados.map((m) => permisoVacio(m)),
+    ];
+  }
+
+  if (rol === "Piloto") {
+    return [
+      ...propios.map((m) =>
+        m === "flota_piloto" ? permisoFull(m) : permisoSoloVer(m),
       ),
       ...cruzados.map((m) => permisoVacio(m)),
     ];

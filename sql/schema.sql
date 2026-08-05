@@ -352,13 +352,26 @@ CREATE TABLE IF NOT EXISTS flota_vehiculos (
   placa VARCHAR(40) NOT NULL,
   marca VARCHAR(80) NULL,
   modelo VARCHAR(80) NULL,
+  descripcion VARCHAR(200) NULL,
+  color VARCHAR(80) NULL,
+  tipo_combustible VARCHAR(40) NULL DEFAULT 'diesel',
+  chasis VARCHAR(80) NULL,
+  capacidad VARCHAR(80) NULL,
+  credito VARCHAR(80) NULL,
+  empresa_activo VARCHAR(120) NULL,
+  nit VARCHAR(40) NULL,
+  condicion_propiedad VARCHAR(120) NULL,
+  seguros VARCHAR(120) NULL,
   km_actual INT NULL,
   km_intervalo_servicio INT NOT NULL DEFAULT 10000,
   km_ultimo_servicio INT NULL,
   fecha_ultimo_servicio DATE NULL,
   en_taller TINYINT(1) NOT NULL DEFAULT 0,
   fecha_entrada_taller DATE NULL,
+  motivo_taller VARCHAR(300) NULL,
   estado VARCHAR(40) NOT NULL DEFAULT 'Activo',
+  activo TINYINT(1) NOT NULL DEFAULT 1,
+  notas TEXT NULL,
   UNIQUE KEY uq_flota_placa (empresa_id, placa),
   CONSTRAINT fk_flota_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -370,6 +383,7 @@ CREATE TABLE IF NOT EXISTS flota_lecturas (
   km INT NOT NULL,
   fecha_lectura DATE NOT NULL,
   nota VARCHAR(300) NULL,
+  conductor VARCHAR(120) NULL,
   registrado_por VARCHAR(100) NULL,
   CONSTRAINT fk_flotal_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
   CONSTRAINT fk_flotal_veh FOREIGN KEY (vehiculo_id) REFERENCES flota_vehiculos(id) ON DELETE CASCADE
@@ -380,12 +394,34 @@ CREATE TABLE IF NOT EXISTS flota_servicios (
   empresa_id INT NOT NULL,
   vehiculo_id INT NOT NULL,
   tipo VARCHAR(80) NOT NULL,
+  tipo_trabajo VARCHAR(120) NULL,
   km_servicio INT NULL,
   fecha_servicio DATE NOT NULL,
   costo DECIMAL(12,2) NOT NULL DEFAULT 0,
   descripcion TEXT NULL,
+  dias_en_taller INT NULL,
+  motivo_taller VARCHAR(300) NULL,
   CONSTRAINT fk_flotas_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
   CONSTRAINT fk_flotas_veh FOREIGN KEY (vehiculo_id) REFERENCES flota_vehiculos(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS flota_viajes (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  vehiculo_id INT NOT NULL,
+  piloto_nombre VARCHAR(120) NOT NULL,
+  piloto_usuario_id INT NULL,
+  km_salida INT NOT NULL,
+  km_llegada INT NULL,
+  hora_salida DATETIME NOT NULL,
+  hora_llegada DATETIME NULL,
+  destino VARCHAR(200) NULL,
+  observaciones TEXT NULL,
+  estado VARCHAR(20) NOT NULL DEFAULT 'abierto',
+  INDEX idx_fv_emp (empresa_id),
+  INDEX idx_fv_estado (empresa_id, estado),
+  CONSTRAINT fk_fv_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
+  CONSTRAINT fk_fv_veh FOREIGN KEY (vehiculo_id) REFERENCES flota_vehiculos(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Contabilidad (esqueleto)
