@@ -56,6 +56,7 @@ type Lectura = {
 
 type Servicio = {
   id: number;
+  vehiculo_id?: number;
   placa: string;
   tipo: string;
   km_servicio: number | null;
@@ -172,6 +173,7 @@ function FlotaInner() {
   const [fechaSalidaTaller, setFechaSalidaTaller] = useState(() =>
     new Date().toISOString().slice(0, 10),
   );
+  const [editServicioId, setEditServicioId] = useState<number | null>(null);
   const [pilotoNombre, setPilotoNombre] = useState("");
   const [placaSalida, setPlacaSalida] = useState("");
   const [destino, setDestino] = useState("");
@@ -495,9 +497,63 @@ function FlotaInner() {
     setRepuestoInput("");
   }
 
+  function limpiarFormServicio() {
+    setEditServicioId(null);
+    setRepuestos([]);
+    setRepuestoInput("");
+    setObsServicio("");
+    setCosto(0);
+    setKmLectura(0);
+    setFechaEntradaTaller("");
+    setFechaSalidaTaller(new Date().toISOString().slice(0, 10));
+    setArchivosServicio(null);
+    setTipoServicio("servicio_mayor");
+    setSacarDeServicio(true);
+  }
+
+  function editarServicio(s: Servicio) {
+    setErr("");
+    setMsg("");
+    setEditServicioId(s.id);
+    const vehId =
+      s.vehiculo_id ||
+      vehiculos.find((v) => v.placa === s.placa)?.id ||
+      vehiculoId;
+    setVehiculoId(Number(vehId));
+    setTipoServicio(
+      s.tipo === "reparacion" ? "reparacion" : "servicio_mayor",
+    );
+    setKmLectura(Number(s.km_servicio ?? 0));
+    setCosto(Number(s.costo ?? 0));
+    setRepuestos(
+      s.repuestos?.length
+        ? [...s.repuestos]
+        : s.descripcion
+          ? s.descripcion.split("|").map((x) => x.trim()).filter(Boolean)
+          : [],
+    );
+    setRepuestoInput("");
+    setObsServicio(s.observaciones ?? "");
+    setFechaEntradaTaller(
+      s.fecha_entrada_taller
+        ? String(s.fecha_entrada_taller).slice(0, 10)
+        : "",
+    );
+    setFechaSalidaTaller(
+      s.fecha_salida_taller
+        ? String(s.fecha_salida_taller).slice(0, 10)
+        : String(s.fecha_servicio).slice(0, 10),
+    );
+    setSacarDeServicio(Boolean(s.fecha_salida_taller || s.fecha_servicio));
+    setArchivosServicio(null);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   async function registrarServicio() {
     setErr("");
-    const enRuta = abiertos.some((v) => v.vehiculo_id === vehiculoId);
+    const enRuta =
+      !editServicioId &&
+      abiertos.some((v) => v.vehiculo_id === vehiculoId);
     if (enRuta) {
       setErr(
         "Esa unidad está en ruta. Cierra la llegada antes de registrar servicio.",
@@ -516,10 +572,14 @@ function FlotaInner() {
     const lista = [...repuestos];
     if (repuestoInput.trim()) lista.push(repuestoInput.trim());
     const fd = new FormData();
+    if (editServicioId) fd.append("id", String(editServicioId));
     fd.append("vehiculoId", String(vehiculoId));
     fd.append("tipo", tipoServicio);
     if (kmLectura) fd.append("kmServicio", String(kmLectura));
-    fd.append("fechaServicio", new Date().toISOString().slice(0, 10));
+    fd.append(
+      "fechaServicio",
+      fechaSalidaTaller || new Date().toISOString().slice(0, 10),
+    );
     fd.append("costo", String(costo || 0));
     fd.append("repuestos", JSON.stringify(lista));
     if (obsServicio.trim()) fd.append("observaciones", obsServicio.trim());
@@ -532,19 +592,14 @@ function FlotaInner() {
       );
     }
     const res = await fetch(`/api/empresas/${slug}/flota/servicios`, {
-      method: "POST",
+      method: editServicioId ? "PATCH" : "POST",
       body: fd,
     });
     const data = await res.json();
     if (!res.ok) setErr(data.error ?? "Error");
     else {
       setMsg(data.mensaje);
-      setRepuestos([]);
-      setRepuestoInput("");
-      setObsServicio("");
-      setCosto(0);
-      setFechaSalidaTaller(new Date().toISOString().slice(0, 10));
-      setArchivosServicio(null);
+      limpiarFormServicio();
       await cargar();
     }
   }
@@ -1253,11 +1308,22 @@ function FlotaInner() {
           {SearchBar}
           {can("flota_servicios", "crear") ? (
             <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-              <p className="text-xs text-[var(--muted)]">
-                No se puede registrar servicio si la unidad está en ruta. Escribe
-                cada repuesto y pulsa Enter para agregarlo. Adjunta facturas PDF
-                o imagen.
-              </p>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-[var(--muted)]">
+                  {editServicioId
+                    ? `Editando servicio #${editServicioId}. Puedes corregir datos y agregar más facturas.`
+                    : "No se puede registrar servicio si la unidad está en ruta. Escribe cada repuesto y pulsa Enter. Adjunta facturas PDF o imagen."}
+                </p>
+                {editServicioId ? (
+                  <button
+                    type="button"
+                    className="rounded bg-[#334155] px-2 py-1 text-xs text-white"
+                    onClick={() => limpiarFormServicio()}
+                  >
+                    Cancelar edición
+                  </button>
+                ) : null}
+              </div>
               <div className="flex flex-wrap gap-2">
                 <select
                   className={input}
@@ -1449,7 +1515,7 @@ function FlotaInner() {
                   onClick={() => void registrarServicio()}
                   className="rounded bg-[#1F6AA5] px-3 py-1.5 text-sm text-white"
                 >
-                  Registrar servicio
+                  {editServicioId ? "Guardar cambios" : "Registrar servicio"}
                 </button>
               </div>
             </div>
@@ -1484,11 +1550,18 @@ function FlotaInner() {
                   <th className="px-3 py-2">Repuestos</th>
                   <th className="px-3 py-2">Obs.</th>
                   <th className="px-3 py-2">Facturas</th>
+                  <th className="px-3 py-2">Acciones</th>
                 </tr>
               </thead>
               <tbody>
                 {serviciosFiltrados.map((s) => (
-                  <tr key={s.id} className="border-t border-[var(--border)]">
+                  <tr
+                    key={s.id}
+                    className={[
+                      "border-t border-[var(--border)]",
+                      editServicioId === s.id ? "bg-sky-950/40" : "",
+                    ].join(" ")}
+                  >
                     <td className="px-3 py-2">
                       {s.fecha_entrada_taller
                         ? String(s.fecha_entrada_taller).slice(0, 10)
@@ -1532,6 +1605,20 @@ function FlotaInner() {
                           onClick={() => void verAdjuntos(s.id, s.placa)}
                         >
                           Ver ({s.adjuntos})
+                        </button>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td className="px-3 py-2">
+                      {can("flota_servicios", "editar") ||
+                      can("flota_servicios", "crear") ? (
+                        <button
+                          type="button"
+                          className="rounded bg-[#37474F] px-2 py-1 text-xs text-white"
+                          onClick={() => editarServicio(s)}
+                        >
+                          Editar
                         </button>
                       ) : (
                         "—"
