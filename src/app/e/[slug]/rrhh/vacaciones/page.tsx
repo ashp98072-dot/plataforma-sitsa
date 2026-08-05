@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { EvidenciasModal } from "@/components/rrhh/evidencias-modal";
 
 type Emp = { id: number; codigo: string; nombre: string };
 type Periodo = {
@@ -23,6 +24,14 @@ const TIPOS = [
   "Médico",
 ] as const;
 
+function fmtUi(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const p = String(iso).slice(0, 10);
+  const [y, m, d] = p.split("-");
+  if (!y || !m || !d || y.length !== 4) return p;
+  return `${d}/${m}/${y}`;
+}
+
 export default function VacacionesPage() {
   const slug = String(useParams().slug);
   const [empleados, setEmpleados] = useState<Emp[]>([]);
@@ -41,6 +50,10 @@ export default function VacacionesPage() {
   const [dias, setDias] = useState("1");
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
+  const [evModal, setEvModal] = useState<{
+    id: number;
+    titulo: string;
+  } | null>(null);
 
   const cargar = useCallback(async () => {
     const e = await fetch(`/api/empresas/${slug}/empleados`).then((r) =>
@@ -103,7 +116,7 @@ export default function VacacionesPage() {
     setMsg(
       `${data.mensaje} · ${data.diasHabiles} día(s)` +
         (data.desglose?.length
-          ? ` · FIFO: ${data.desglose.map((d: { diasTomados: number; periodoInicio: string }) => `${d.diasTomados}d ${d.periodoInicio}`).join(", ")}`
+          ? ` · FIFO: ${data.desglose.map((d: { diasTomados: number; periodoInicio: string }) => `${d.diasTomados}d ${fmtUi(d.periodoInicio)}`).join(", ")}`
           : ""),
     );
     await cargar();
@@ -120,8 +133,8 @@ export default function VacacionesPage() {
         <div>
           <h1 className="text-2xl font-semibold">Vacaciones / En Ruta</h1>
           <p className="text-sm text-[var(--muted)]">
-            Misma lógica que Control de Asistencias: 15 días/periodo, FIFO,
-            domingos y feriados no cuentan.
+            15 días/periodo, FIFO. Doble clic en el historial para adjuntar
+            boletas (PDF/fotos).
           </p>
         </div>
         <div className="flex gap-2">
@@ -217,7 +230,8 @@ export default function VacacionesPage() {
             {periodos.map((p) => (
               <li key={p.id}>
                 Año laboral {p.anioLaboral}: {p.diasDisponibles}/
-                {p.diasOtorgados} · {p.periodoInicio} → {p.periodoFin}
+                {p.diasOtorgados} · {fmtUi(p.periodoInicio)} →{" "}
+                {fmtUi(p.periodoFin)}
               </li>
             ))}
           </ul>
@@ -227,18 +241,67 @@ export default function VacacionesPage() {
       {error ? <p className="text-sm text-red-300">{error}</p> : null}
       {msg ? <p className="text-sm text-emerald-300">{msg}</p> : null}
 
-      <ul className="space-y-1 text-sm">
-        {rows.map((r) => (
-          <li
-            key={String(r.id)}
-            className="rounded border border-[var(--border)] px-3 py-2"
-          >
-            {String(r.emp_codigo)} — {String(r.fecha_inicio).slice(0, 10)} →{" "}
-            {String(r.fecha_fin).slice(0, 10)} ({String(r.dias_habiles)} d) ·{" "}
-            {String(r.estado)}
-          </li>
-        ))}
-      </ul>
+      <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+        <table className="w-full text-left text-sm">
+          <thead className="bg-[#0d1522] text-[var(--muted)]">
+            <tr>
+              <th className="px-3 py-2">Empleado</th>
+              <th className="px-3 py-2">Tipo</th>
+              <th className="px-3 py-2">Desde</th>
+              <th className="px-3 py-2">Hasta</th>
+              <th className="px-3 py-2">Días</th>
+              <th className="px-3 py-2">Evid.</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr
+                key={String(r.id)}
+                className="cursor-pointer border-t border-[var(--border)] hover:bg-white/5"
+                title="Doble clic: evidencias / boletas"
+                onDoubleClick={() =>
+                  setEvModal({
+                    id: Number(r.id),
+                    titulo: `${String(r.emp_codigo)} — ${String(r.tipo)} · ${fmtUi(String(r.fecha_inicio))} → ${fmtUi(String(r.fecha_fin))}`,
+                  })
+                }
+              >
+                <td className="px-3 py-2">
+                  {String(r.emp_codigo)} — {String(r.emp_nombre ?? "")}
+                </td>
+                <td className="px-3 py-2">{String(r.tipo)}</td>
+                <td className="px-3 py-2">{fmtUi(String(r.fecha_inicio))}</td>
+                <td className="px-3 py-2">{fmtUi(String(r.fecha_fin))}</td>
+                <td className="px-3 py-2">{String(r.dias_habiles)}</td>
+                <td className="px-3 py-2">
+                  <button
+                    type="button"
+                    className="text-[var(--accent-2)] underline"
+                    onClick={() =>
+                      setEvModal({
+                        id: Number(r.id),
+                        titulo: `${String(r.emp_codigo)} — ${String(r.tipo)}`,
+                      })
+                    }
+                  >
+                    📎 {Number(r.evidencias ?? 0)}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {evModal ? (
+        <EvidenciasModal
+          slug={slug}
+          incidenciaId={evModal.id}
+          titulo={evModal.titulo}
+          onClose={() => setEvModal(null)}
+          onChanged={() => void cargar()}
+        />
+      ) : null}
     </div>
   );
 }

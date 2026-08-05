@@ -14,6 +14,7 @@ export type Empleado = {
   horaEntradaTeorica: string;
   horaSalidaTeorica: string;
   estado: string;
+  docsCount?: number;
 };
 
 type EmpleadoRow = RowDataPacket & {
@@ -68,7 +69,20 @@ export async function listarEmpleados(
          WHERE empresa_id = ? ORDER BY nombre`,
         [empresaId],
       );
-  return rows.map(mapEmpleado);
+  const empleados = rows.map(mapEmpleado);
+  try {
+    const { contarDocumentosPorEmpleado } = await import("./documentos");
+    const counts = await contarDocumentosPorEmpleado(
+      empresaId,
+      empleados.map((e) => e.id),
+    );
+    for (const e of empleados) {
+      e.docsCount = counts.get(e.id) ?? 0;
+    }
+  } catch {
+    for (const e of empleados) e.docsCount = 0;
+  }
+  return empleados;
 }
 
 export async function obtenerEmpleado(

@@ -7,6 +7,8 @@ import {
 } from "date-fns";
 import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { getPool, query } from "@/lib/db";
+import { toIsoDate } from "./dates";
+import { contarEvidenciasPorIncidencia } from "./evidencias";
 
 const DIAS_POR_PERIODO = 15;
 const MAX_PERIODOS_VIGENTES = 2;
@@ -258,8 +260,8 @@ export async function obtenerPeriodosDisponibles(
   return rows.map((r) => ({
     id: Number(r.id),
     anioLaboral: Number(r.anio_laboral),
-    periodoInicio: String(r.periodo_inicio).slice(0, 10),
-    periodoFin: String(r.periodo_fin).slice(0, 10),
+    periodoInicio: toIsoDate(r.periodo_inicio) ?? "",
+    periodoFin: toIsoDate(r.periodo_fin) ?? "",
     diasOtorgados: Number(r.dias_otorgados),
     diasDisponibles: Number(r.dias_disponibles),
   }));
@@ -435,15 +437,27 @@ export async function registrarVacacionesFifo(input: {
 export async function listarVacaciones(
   empresaId: number,
 ): Promise<RowDataPacket[]> {
-  return query<RowDataPacket[]>(
-    `SELECT v.*, e.codigo AS emp_codigo, e.nombre AS emp_nombre
-     FROM vacaciones v
-     INNER JOIN empleados e ON e.id = v.id_empleado
-     WHERE v.empresa_id = ?
-     ORDER BY v.fecha_inicio DESC
+  // Historial desde incidencias (como Control de Asistencias) para poder
+  // adjuntar evidencias por incidencia_id.
+  const rows = await query<RowDataPacket[]>(
+    `SELECT i.id, i.id_empleado, i.tipo, i.fecha_inicio, i.fecha_fin,
+            i.dias_habiles, e.codigo AS emp_codigo, e.nombre AS emp_nombre,
+            'Aprobado' AS estado
+     FROM incidencias i
+     INNER JOIN empleados e ON e.id = i.id_empleado AND e.empresa_id = i.empresa_id
+     WHERE i.empresa_id = ?
+     ORDER BY i.fecha_inicio DESC
      LIMIT 300`,
     [empresaId],
   );
+  const counts = await contarEvidenciasPorIncidencia(
+    empresaId,
+    rows.map((r) => Number(r.id)),
+  );
+  return rows.map((r) => ({
+    ...r,
+    evidencias: counts.get(Number(r.id)) ?? 0,
+  }));
 }
 
 /** Permisos / incidencias que NO descuentan saldo de vacaciones. */

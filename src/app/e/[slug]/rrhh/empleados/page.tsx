@@ -9,6 +9,7 @@ import {
 } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { DocumentosModal } from "@/components/rrhh/documentos-modal";
 
 type Emp = {
   id: number;
@@ -22,6 +23,7 @@ type Emp = {
   horaEntradaTeorica: string;
   horaSalidaTeorica: string;
   estado: string;
+  docsCount?: number;
 };
 
 const emptyForm = {
@@ -46,6 +48,7 @@ export default function EmpleadosPage() {
   const [error, setError] = useState("");
   const [mensaje, setMensaje] = useState("");
   const [importando, setImportando] = useState(false);
+  const [docsEmp, setDocsEmp] = useState<Emp | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const cargar = useCallback(async () => {
@@ -269,16 +272,28 @@ export default function EmpleadosPage() {
             {editId ? "Guardar cambios" : "Crear"}
           </button>
           {editId ? (
-            <button
-              type="button"
-              className="rounded-lg bg-[#334155] px-4 py-2 text-sm"
-              onClick={() => {
-                setEditId(null);
-                setForm(emptyForm);
-              }}
-            >
-              Cancelar
-            </button>
+            <>
+              <button
+                type="button"
+                className="rounded-lg bg-[#1F6AA5] px-4 py-2 text-sm text-white"
+                onClick={() => {
+                  const emp = empleados.find((x) => x.id === editId);
+                  if (emp) setDocsEmp(emp);
+                }}
+              >
+                Ver expediente
+              </button>
+              <button
+                type="button"
+                className="rounded-lg bg-[#334155] px-4 py-2 text-sm"
+                onClick={() => {
+                  setEditId(null);
+                  setForm(emptyForm);
+                }}
+              >
+                Cancelar
+              </button>
+            </>
           ) : null}
         </div>
       </form>
@@ -372,12 +387,18 @@ export default function EmpleadosPage() {
               <th className="px-3 py-2">Contratación</th>
               <th className="px-3 py-2">Horario</th>
               <th className="px-3 py-2">Estado</th>
+              <th className="px-3 py-2">Docs</th>
               <th className="px-3 py-2" />
             </tr>
           </thead>
           <tbody>
             {empleados.map((e) => (
-              <tr key={e.id} className="border-t border-[var(--border)]">
+              <tr
+                key={e.id}
+                className="cursor-pointer border-t border-[var(--border)] hover:bg-white/5"
+                title="Doble clic: expediente (PDF/fotos)"
+                onDoubleClick={() => setDocsEmp(e)}
+              >
                 <td className="px-3 py-2">{e.codigo}</td>
                 <td className="px-3 py-2">{e.nombre}</td>
                 <td className="px-3 py-2">{e.puesto || "—"}</td>
@@ -388,6 +409,18 @@ export default function EmpleadosPage() {
                   {e.tipoHorario} {e.horaEntradaTeorica?.slice(0, 5)}
                 </td>
                 <td className="px-3 py-2">{e.estado}</td>
+                <td className="px-3 py-2">
+                  <button
+                    type="button"
+                    className="text-[var(--accent-2)] underline"
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      setDocsEmp(e);
+                    }}
+                  >
+                    📁 {e.docsCount ?? 0}
+                  </button>
+                </td>
                 <td className="px-3 py-2 space-x-2 whitespace-nowrap">
                   <button
                     type="button"
@@ -409,6 +442,16 @@ export default function EmpleadosPage() {
           </tbody>
         </table>
       </div>
+
+      {docsEmp ? (
+        <DocumentosModal
+          slug={slug}
+          empleadoId={docsEmp.id}
+          empleadoNombre={`${docsEmp.codigo} — ${docsEmp.nombre}`}
+          onClose={() => setDocsEmp(null)}
+          onChanged={() => void cargar()}
+        />
+      ) : null}
     </div>
   );
 }
