@@ -369,16 +369,124 @@ export async function PATCH(req: Request, ctx: Ctx) {
 
 export async function DELETE(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantFlota(slug, "flota_vehiculos", "eliminar");
-  if (guard.error) return guard.error;
-
-  const id = Number(new URL(req.url).searchParams.get("id") ?? 0);
+  const url = new URL(req.url);
+  const modo = (url.searchParams.get("modo") ?? "eliminar").toLowerCase();
+  const id = Number(url.searchParams.get("id") ?? 0);
   if (!id) {
     return NextResponse.json({ error: "ID requerido." }, { status: 400 });
   }
-  await execute(
-    "DELETE FROM flota_vehiculos WHERE id = ? AND empresa_id = ?",
+
+  // Dar de baja = soft delete (activo=0); eliminar = borrado físico
+  if (modo === "baja") {
+    const guard = await requireTenantFlota(slug, "flota_vehiculos", "editar");
+    if (guard.error) return guard.error;
+
+    const cur = await query<RowDataPacket[]>(
+      "SELECT id, placa, activo FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1",
+      [id, guard.empresa.id],
+    );
+    if (!cur[0]) {
+      return NextResponse.json({ error: "Vehículo no encontrado." }, { status: 404 });
+    }
+
+    const abierto = await query<RowDataPacket[]>(
+      `SELECT id FROM flota_viajes
+       WHERE empresa_id = ? AND vehiculo_id = ? AND estado = 'abierto' LIMIT 1`,
+      [guard.empresa.id, id],
+    );
+    if (abierto[0]) {
+      return NextResponse.json(
+        {
+          error:
+            "Tiene un viaje abierto. Cierra la llegada antes de darlo de baja.",
+        },
+        { status: 409 },
+      );
+    }
+
+    await execute(
+      `UPDATE flota_vehiculos
+       SET activo = 0, estado = 'Inactivo', en_taller = 0, motivo_taller = NULL
+       WHERE id = ? AND empresa_id = ?`,
+      [id, guard.empresa.id],
+    );
+    return NextResponse.json({
+      mensaje: `Vehículo ${cur[0].placa} dado de baja (inactivo).`,
+    });
+  }
+
+  const guard = await requireTenantFlota(slug, "flota_vehiculos", "eliminar");
+  if (guard.error) return guard.error;
+
+  const cur = await query<RowDataPacket[]>(
+    "SELECT id, placa FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1",
     [id, guard.empresa.id],
   );
-  return NextResponse.json({ mensaje: "Vehículo eliminado." });
+  if (!cur[0]) {
+    return NextResponse.json({ error: "Vehículo no encontrado." }, { status: 404 });
+  }
+
+  const abierto = await query<RowDataPacket[]>(
+    `SELECT id FROM flota_viajes
+     WHERE empresa_id = ? AND vehiculo_id = ? AND estado = 'abierto' LIMIT 1`,
+    [guard.empresa.id, id],
+  );
+  if (abierto[0]) {
+    return NextResponse.json(
+      {
+        error:
+          "Tiene un viaje abierto. Cierra la llegada o dale de baja en lugar de eliminar.",
+      },
+      { status: 409 },
+    );
+  }
+
+  const eid = guard.empresa.id;
+  const safe = async (sql: string, params: (string | number)[]) => {
+    try {
+      await execute(sql, params);
+    } catch {
+      /* tabla/columna opcional */
+    }
+  };
+
+  await safe(
+    `DELETE e FROM flota_viaje_evidencias e
+     INNER JOIN flota_viajes v ON v.id = e.viaje_id
+     WHERE v.vehiculo_id = ? AND v.empresa_id = ?`,
+    [id, eid],
+  );
+  await safe(
+    `DELETE e FROM flota_lectura_evidencias e
+     INNER JOIN flota_lecturas l ON l.id = e.lectura_id
+     WHERE l.vehiculo_id = ? AND l.empresa_id = ?`,
+    [id, eid],
+  );
+  await safe(
+    `DELETE a FROM flota_servicio_adjuntos a
+     INNER JOIN flota_servicios s ON s.id = a.servicio_id
+     WHERE s.vehiculo_id = ? AND s.empresa_id = ?`,
+    [id, eid],
+  );
+  await safe(
+    "DELETE FROM flota_viajes WHERE vehiculo_id = ? AND empresa_id = ?",
+    [id, eid],
+  );
+  await safe(
+    "DELETE FROM flota_lecturas WHERE vehiculo_id = ? AND empresa_id = ?",
+    [id, eid],
+  );
+  await safe(
+    "DELETE FROM flota_servicios WHERE vehiculo_id = ? AND empresa_id = ?",
+    [id, eid],
+  );
+  await safe("DELETE FROM flota_vehiculo_acceso WHERE vehiculo_id = ?", [id]);
+
+  await execute(
+    "DELETE FROM flota_vehiculos WHERE id = ? AND empresa_id = ?",
+    [id, eid],
+  );
+  return NextResponse.json({
+    mensaje: `Vehículo ${cur[0].placa} eliminado definitivamente.`,
+  });
 }

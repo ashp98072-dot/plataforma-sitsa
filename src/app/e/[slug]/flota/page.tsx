@@ -830,14 +830,60 @@ function FlotaInner() {
   async function cambiarActivoVehiculo(id: number, activo: boolean) {
     setErr("");
     setMsg("");
+    if (!activo) {
+      const ok = window.confirm(
+        "¿Dar de baja este vehículo? Quedará inactivo (no se borra el historial).",
+      );
+      if (!ok) return;
+      const res = await fetch(
+        `/api/empresas/${slug}/flota/vehiculos?id=${id}&modo=baja`,
+        { method: "DELETE" },
+      );
+      const data = await res.json();
+      if (!res.ok) setErr(data.error ?? "No se pudo dar de baja");
+      else setMsg(data.mensaje ?? "Vehículo dado de baja.");
+      await cargar();
+      return;
+    }
     const res = await fetch(`/api/empresas/${slug}/flota/vehiculos`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, activo }),
+      body: JSON.stringify({ id, activo: true }),
     });
     const data = await res.json();
-    if (!res.ok) setErr(data.error ?? "No se pudo cambiar el estado");
-    else setMsg(data.mensaje ?? (activo ? "Vehículo activado." : "Vehículo desactivado."));
+    if (!res.ok) setErr(data.error ?? "No se pudo activar");
+    else setMsg(data.mensaje ?? "Vehículo activado.");
+    await cargar();
+  }
+
+  async function eliminarVehiculo(v: Vehiculo) {
+    if (v.esDueno === false) {
+      setErr("Solo la empresa dueña puede eliminar este vehículo.");
+      return;
+    }
+    const ok = window.confirm(
+      `¿ELIMINAR definitivamente ${v.placa}?\n\nSe borrarán también sus viajes, lecturas y servicios.\nSi solo quieres sacarlo de uso, cancela y usa «Dar de baja».`,
+    );
+    if (!ok) return;
+    const ok2 = window.confirm(
+      `Confirma otra vez: eliminar ${v.placa} de forma permanente.`,
+    );
+    if (!ok2) return;
+    setErr("");
+    setMsg("");
+    const res = await fetch(
+      `/api/empresas/${slug}/flota/vehiculos?id=${v.id}&modo=eliminar`,
+      { method: "DELETE" },
+    );
+    const data = await res.json();
+    if (!res.ok) setErr(data.error ?? "No se pudo eliminar");
+    else {
+      setMsg(data.mensaje ?? "Vehículo eliminado.");
+      if (editId === v.id) {
+        setEditId(null);
+        setForm(emptyForm);
+      }
+    }
     await cargar();
   }
 
@@ -2164,9 +2210,42 @@ function FlotaInner() {
                   </div>
                 </div>
               ) : null}
-              <button className="rounded bg-[var(--accent)] px-4 py-2 text-sm text-white">
-                {editId ? "Guardar cambios" : "Registrar vehículo"}
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button className="rounded bg-[var(--accent)] px-4 py-2 text-sm text-white">
+                  {editId ? "Guardar cambios" : "Registrar vehículo"}
+                </button>
+                {editId ? (
+                  <>
+                    <button
+                      type="button"
+                      className="rounded bg-violet-800 px-3 py-2 text-sm text-violet-100"
+                      onClick={() => {
+                        const v = vehiculos.find((x) => x.id === editId);
+                        if (v) {
+                          void cambiarActivoVehiculo(
+                            v.id,
+                            !esVehiculoActivo(v),
+                          );
+                        }
+                      }}
+                    >
+                      {form.activo ? "Dar de baja" : "Reactivar"}
+                    </button>
+                    {can("flota_vehiculos", "eliminar") ? (
+                      <button
+                        type="button"
+                        className="rounded bg-rose-800 px-3 py-2 text-sm text-rose-100"
+                        onClick={() => {
+                          const v = vehiculos.find((x) => x.id === editId);
+                          if (v) void eliminarVehiculo(v);
+                        }}
+                      >
+                        Eliminar
+                      </button>
+                    ) : null}
+                  </>
+                ) : null}
+              </div>
             </form>
           ) : null}
 
@@ -2257,20 +2336,31 @@ function FlotaInner() {
                             Editar
                           </button>
                           {v.esDueno !== false ? (
-                            <button
-                              type="button"
-                              className="text-violet-300 underline"
-                              onClick={() =>
-                                void cambiarActivoVehiculo(
-                                  v.id,
-                                  !esVehiculoActivo(v),
-                                )
-                              }
-                            >
-                              {esVehiculoActivo(v)
-                                ? "Desactivar"
-                                : "Activar"}
-                            </button>
+                            <>
+                              <button
+                                type="button"
+                                className="text-violet-300 underline"
+                                onClick={() =>
+                                  void cambiarActivoVehiculo(
+                                    v.id,
+                                    !esVehiculoActivo(v),
+                                  )
+                                }
+                              >
+                                {esVehiculoActivo(v)
+                                  ? "Dar de baja"
+                                  : "Reactivar"}
+                              </button>
+                              {can("flota_vehiculos", "eliminar") ? (
+                                <button
+                                  type="button"
+                                  className="text-rose-300 underline"
+                                  onClick={() => void eliminarVehiculo(v)}
+                                >
+                                  Eliminar
+                                </button>
+                              ) : null}
+                            </>
                           ) : null}
                           {v.en_taller ? (
                             <button
