@@ -41,10 +41,10 @@ WHERE i.empresa_id = @empresa_id;
 
 DELETE FROM evidencias_incidencias WHERE empresa_id = @empresa_id;
 
--- Evidencias de vacaciones (si existe la tabla)
-DELETE ev FROM vacacion_evidencias ev
-INNER JOIN vacaciones v ON v.id = ev.vacacion_id
-WHERE v.empresa_id = @empresa_id;
+-- Evidencias de vacaciones (solo si existe esa tabla; si falla, comenta estas 3 líneas)
+-- DELETE ev FROM vacacion_evidencias ev
+-- INNER JOIN vacaciones v ON v.id = ev.vacacion_id
+-- WHERE v.empresa_id = @empresa_id;
 
 DELETE FROM documentos_empleados WHERE empresa_id = @empresa_id;
 
