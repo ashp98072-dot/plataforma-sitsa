@@ -2,13 +2,13 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
-import { requireTenantModulo } from "@/lib/tenant";
+import { requireTenantRrhh } from "@/lib/tenant";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
 export async function GET(_req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "rrhh");
+  const guard = await requireTenantRrhh(slug, "inventario", "ver");
   if (guard.error) return guard.error;
   const rows = await query<RowDataPacket[]>(
     `SELECT id, codigo, nombre, categoria, stock, unidad, estado
@@ -28,7 +28,7 @@ const schema = z.object({
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "rrhh", true);
+  const guard = await requireTenantRrhh(slug, "inventario", "crear");
   if (guard.error) return guard.error;
   const parsed = schema.safeParse(await req.json());
   if (!parsed.success) {

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireTenantModulo } from "@/lib/tenant";
+import { requireTenantRrhh } from "@/lib/tenant";
 import {
   FechaInvalidaError,
   formatearFecha,
@@ -16,7 +16,7 @@ type Ctx = { params: Promise<{ slug: string }> };
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "rrhh", true);
+  const guard = await requireTenantRrhh(slug, "empleados", "crear");
   if (guard.error) return guard.error;
 
   try {

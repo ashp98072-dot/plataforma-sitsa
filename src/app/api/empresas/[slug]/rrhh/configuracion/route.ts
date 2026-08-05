@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireTenantModulo } from "@/lib/tenant";
+import { requireTenantRrhh } from "@/lib/tenant";
 import {
   crearFeriado,
   guardarParametros,
@@ -13,7 +13,7 @@ type Ctx = { params: Promise<{ slug: string }> };
 
 export async function GET(_req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "rrhh");
+  const guard = await requireTenantRrhh(slug, "configuracion", "ver");
   if (guard.error) return guard.error;
   const [parametros, feriados] = await Promise.all([
     obtenerParametros(guard.empresa.id),
@@ -33,7 +33,7 @@ const schema = z.object({
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "rrhh", true);
+  const guard = await requireTenantRrhh(slug, "configuracion", "editar");
   if (guard.error) return guard.error;
 
   const parsed = schema.safeParse(await req.json());

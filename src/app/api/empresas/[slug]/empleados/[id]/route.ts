@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireTenantModulo } from "@/lib/tenant";
+import { requireTenantRrhh } from "@/lib/tenant";
 import {
   actualizarEmpleado,
   codigoDuplicado,
@@ -13,7 +13,7 @@ type Ctx = { params: Promise<{ slug: string; id: string }> };
 
 export async function GET(_req: Request, ctx: Ctx) {
   const { slug, id } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "rrhh");
+  const guard = await requireTenantRrhh(slug, "empleados", "ver");
   if (guard.error) return guard.error;
   const emp = await obtenerEmpleado(guard.empresa.id, Number(id));
   if (!emp) {
@@ -37,7 +37,7 @@ const bodySchema = z.object({
 
 export async function PUT(req: Request, ctx: Ctx) {
   const { slug, id } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "rrhh", true);
+  const guard = await requireTenantRrhh(slug, "empleados", "editar");
   if (guard.error) return guard.error;
   const empId = Number(id);
   const parsed = bodySchema.safeParse(await req.json());
@@ -73,7 +73,7 @@ export async function PUT(req: Request, ctx: Ctx) {
 
 export async function DELETE(_req: Request, ctx: Ctx) {
   const { slug, id } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "rrhh", true);
+  const guard = await requireTenantRrhh(slug, "empleados", "eliminar");
   if (guard.error) return guard.error;
   const result = await eliminarEmpleado(guard.empresa.id, Number(id));
   if (!result.ok) {

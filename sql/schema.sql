@@ -41,7 +41,10 @@ CREATE TABLE IF NOT EXISTS usuario_modulo (
   empresa_id INT NULL,
   modulo VARCHAR(40) NOT NULL,
   puede_ver TINYINT(1) NOT NULL DEFAULT 1,
+  puede_crear TINYINT(1) NOT NULL DEFAULT 0,
   puede_editar TINYINT(1) NOT NULL DEFAULT 0,
+  puede_eliminar TINYINT(1) NOT NULL DEFAULT 0,
+  INDEX idx_um_usuario_modulo (usuario_id, modulo),
   CONSTRAINT fk_um_usuario FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE,
   CONSTRAINT fk_um_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

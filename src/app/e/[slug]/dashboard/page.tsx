@@ -11,9 +11,15 @@ export default async function DashboardPage({ params }: Props) {
   const empresa = await obtenerEmpresaPorSlug(slug);
   if (!session || !empresa) return null;
 
-  const mods = modulosPorRol(session.rol).filter((m) =>
-    (empresa.modulos as string[]).includes(m) || m === "usuarios" || m === "gerencia",
-  ) as Modulo[];
+  const mods = modulosPorRol(session.rol).filter((m) => {
+    if (m === "usuarios") return session.rol === "Admin";
+    return (
+      (empresa.modulos as string[]).includes(m) || m === "gerencia"
+    );
+  }) as Modulo[];
+  if (session.rol === "Admin" && !mods.includes("usuarios")) {
+    mods.push("usuarios");
+  }
 
   return (
     <div>

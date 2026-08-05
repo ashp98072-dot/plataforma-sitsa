@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
-import { requireTenantModulo } from "@/lib/tenant";
+import { requireTenantRrhh } from "@/lib/tenant";
 import { listarEvidencias, registrarEvidencia } from "@/lib/rrhh/evidencias";
 import { guardarUpload } from "@/lib/uploads";
 
@@ -20,7 +20,7 @@ async function incidenciaDeEmpresa(
 
 export async function GET(_req: Request, ctx: Ctx) {
   const { slug, id: raw } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "rrhh");
+  const guard = await requireTenantRrhh(slug, "vacaciones", "ver");
   if (guard.error) return guard.error;
 
   const id = Number(raw);
@@ -45,7 +45,7 @@ export async function GET(_req: Request, ctx: Ctx) {
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug, id: raw } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "rrhh", true);
+  const guard = await requireTenantRrhh(slug, "vacaciones", "crear");
   if (guard.error) return guard.error;
 
   const id = Number(raw);

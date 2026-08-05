@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireTenantModulo } from "@/lib/tenant";
+import { requireTenantRrhh } from "@/lib/tenant";
 import {
   codigoDuplicado,
   crearEmpleado,
@@ -12,7 +12,7 @@ type Ctx = { params: Promise<{ slug: string }> };
 
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "rrhh");
+  const guard = await requireTenantRrhh(slug, "empleados", "ver");
   if (guard.error) return guard.error;
   const q = new URL(req.url).searchParams.get("q") ?? "";
   const empleados = await listarEmpleados(guard.empresa.id, q);
@@ -34,7 +34,7 @@ const bodySchema = z.object({
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "rrhh", true);
+  const guard = await requireTenantRrhh(slug, "empleados", "crear");
   if (guard.error) return guard.error;
 
   const parsed = bodySchema.safeParse(await req.json());

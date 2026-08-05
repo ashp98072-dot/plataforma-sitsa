@@ -4,7 +4,9 @@ import {
   empresasParaUsuario,
   obtenerEmpresaPorSlug,
 } from "@/lib/empresas";
-import { modulosPorRol, type Modulo } from "@/lib/roles";
+import { permisosEfectivos } from "@/lib/permisos";
+import type { PermisoModulo } from "@/lib/permisos-shared";
+import { modulosPorRol, type Modulo, type RolGlobal } from "@/lib/roles";
 import { getSession } from "@/lib/session";
 
 type Props = {
@@ -34,15 +36,23 @@ export default async function EmpresaLayout({ children, params }: Props) {
     empresa.modulos.length ? empresa.modulos : rolMods
   ) as Modulo[];
 
+  // Usuarios solo Admin
   const finalMods: Modulo[] =
     session.rol === "Admin"
       ? ([...new Set([...empresaMods, "usuarios", "gerencia", "cms"])] as Modulo[])
       : rolMods.filter(
-          (m) =>
-            empresaMods.includes(m) ||
-            m === "usuarios" ||
-            m === "gerencia",
+          (m) => empresaMods.includes(m) || m === "gerencia",
         );
+
+  let permisos: PermisoModulo[] = [];
+  try {
+    permisos = await permisosEfectivos(
+      session.id,
+      session.rol as RolGlobal,
+    );
+  } catch {
+    permisos = [];
+  }
 
   return (
     <AppShell
@@ -51,6 +61,7 @@ export default async function EmpresaLayout({ children, params }: Props) {
       username={session.username}
       rol={session.rol}
       modulos={finalMods}
+      permisos={permisos}
     >
       <div className="pb-10">{children}</div>
     </AppShell>

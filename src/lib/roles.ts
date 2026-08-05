@@ -32,7 +32,7 @@ export function modulosPorRol(rol: RolGlobal): Modulo[] {
     case "Admin":
       return [...MODULOS];
     case "RRHH":
-      return ["rrhh", "gerencia", "usuarios"];
+      return ["rrhh", "gerencia"];
     case "Contabilidad":
       return ["contabilidad", "gerencia"];
     case "Operaciones":
@@ -49,7 +49,7 @@ export function modulosPorRol(rol: RolGlobal): Modulo[] {
 export function puedeEditarModulo(rol: RolGlobal, modulo: Modulo): boolean {
   if (rol === "Visualizador") return false;
   if (rol === "Admin") return true;
-  if (rol === "RRHH") return modulo === "rrhh" || modulo === "usuarios";
+  if (rol === "RRHH") return modulo === "rrhh";
   if (rol === "Contabilidad") return modulo === "contabilidad";
   if (rol === "Operaciones") {
     return (

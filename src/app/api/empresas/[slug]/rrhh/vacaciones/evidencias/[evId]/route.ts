@@ -1,7 +1,7 @@
 import { createReadStream, existsSync, statSync } from "fs";
 import { NextResponse } from "next/server";
 import { Readable } from "stream";
-import { requireTenantModulo } from "@/lib/tenant";
+import { requireTenantRrhh } from "@/lib/tenant";
 import { eliminarEvidencia, obtenerEvidencia } from "@/lib/rrhh/evidencias";
 import { absPathFromRelative, contentTypeFor } from "@/lib/uploads";
 
@@ -9,7 +9,7 @@ type Ctx = { params: Promise<{ slug: string; evId: string }> };
 
 export async function GET(_req: Request, ctx: Ctx) {
   const { slug, evId: raw } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "rrhh");
+  const guard = await requireTenantRrhh(slug, "vacaciones", "ver");
   if (guard.error) return guard.error;
 
   const evId = Number(raw);
@@ -47,7 +47,7 @@ export async function GET(_req: Request, ctx: Ctx) {
 
 export async function DELETE(_req: Request, ctx: Ctx) {
   const { slug, evId: raw } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "rrhh", true);
+  const guard = await requireTenantRrhh(slug, "vacaciones", "editar");
   if (guard.error) return guard.error;
 
   const evId = Number(raw);

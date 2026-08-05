@@ -4,6 +4,11 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { mapaDominios } from "@/lib/dominios";
+import {
+  RRHH_NAV,
+  tienePermiso,
+  type PermisoModulo,
+} from "@/lib/permisos-shared";
 import { MODULO_LABEL, type Modulo } from "@/lib/roles";
 
 type Props = {
@@ -12,6 +17,7 @@ type Props = {
   username: string;
   rol: string;
   modulos: Modulo[];
+  permisos?: PermisoModulo[];
   children: React.ReactNode;
 };
 
@@ -21,6 +27,7 @@ export function AppShell({
   username,
   rol,
   modulos,
+  permisos = [],
   children,
 }: Props) {
   const pathname = usePathname();
@@ -41,14 +48,15 @@ export function AppShell({
     : `${base}/dashboard-operaciones`;
 
   const links: NavLink[] = [];
+  const isAdmin = rol === "Admin";
 
-  if (rol === "RRHH" || rol === "Admin") {
+  if (rol === "RRHH" || isAdmin) {
     links.push({ href: homeRrhh, label: "Dashboard RRHH", key: "dash-rrhh" });
   }
   if (
     rol === "Operaciones" ||
     rol === "CoordinadorPredios" ||
-    rol === "Admin"
+    isAdmin
   ) {
     links.push({
       href: homeOps,
@@ -61,45 +69,28 @@ export function AppShell({
   }
 
   if (modulos.includes("rrhh")) {
-    // Misma estructura que Control de Asistencias (web/escritorio)
-    links.push(
-      {
-        href: dominioEmpresa ? "/personal" : `${base}/rrhh/empleados`,
-        label: "Empleados",
-        key: "rrhh-emp",
-      },
-      {
-        href: dominioEmpresa ? "/marcajes" : `${base}/rrhh/marcajes`,
-        label: "Registrar Marcaje",
-        key: "rrhh-mar",
-      },
-      {
-        href: dominioEmpresa ? "/reportes" : `${base}/rrhh/reportes`,
-        label: "Reportes",
-        key: "rrhh-rep",
-      },
-      {
-        href: dominioEmpresa ? "/vacaciones" : `${base}/rrhh/vacaciones`,
-        label: "Vacaciones / En Ruta",
-        key: "rrhh-vac",
-      },
-      {
-        href: dominioEmpresa ? "/incidencias" : `${base}/rrhh/incidencias`,
-        label: "Incidencias",
-        key: "rrhh-inc",
-      },
-      {
+    for (const item of RRHH_NAV) {
+      if (
+        !isAdmin &&
+        permisos.length > 0 &&
+        !tienePermiso(permisos, item.sub, "ver")
+      ) {
+        continue;
+      }
+      links.push({
         href: dominioEmpresa
-          ? "/configuracion-rrhh"
-          : `${base}/rrhh/configuracion`,
-        label: "Configuración",
-        key: "rrhh-cfg",
-      },
-    );
+          ? `/${item.path === "empleados" ? "personal" : item.path === "configuracion" ? "configuracion-rrhh" : item.path}`
+          : `${base}/rrhh/${item.path}`,
+        label: item.label,
+        key: `rrhh-${item.sub}`,
+      });
+    }
   }
 
   for (const m of modulos) {
     if (m === "gerencia" || m === "rrhh") continue;
+    // Usuarios solo Admin (ya filtrado en layout, doble check)
+    if (m === "usuarios" && !isAdmin) continue;
     links.push({
       href: `${base}/${m}`,
       label: MODULO_LABEL[m] ?? m,

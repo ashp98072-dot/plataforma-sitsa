@@ -7,15 +7,39 @@ import {
 } from "@/lib/auth";
 import { requireSession } from "@/lib/api-guard";
 import { ROLES } from "@/lib/roles";
+import { RRHH_SUBMODULOS } from "@/lib/permisos";
+
+function requireAdmin() {
+  return requireSession().then((guard) => {
+    if (guard.error) return guard;
+    if (guard.user.rol !== "Admin") {
+      return {
+        error: NextResponse.json(
+          { error: "Solo el administrador puede gestionar usuarios." },
+          { status: 403 },
+        ),
+      };
+    }
+    return guard;
+  });
+}
+
+const permisoSchema = z.object({
+  modulo: z.string(),
+  puedeVer: z.boolean(),
+  puedeCrear: z.boolean(),
+  puedeEditar: z.boolean(),
+  puedeEliminar: z.boolean(),
+});
 
 export async function GET() {
-  const guard = await requireSession();
+  const guard = await requireAdmin();
   if (guard.error) return guard.error;
-  if (guard.user.rol !== "Admin" && guard.user.rol !== "RRHH") {
-    return NextResponse.json({ error: "Sin permiso." }, { status: 403 });
-  }
   const usuarios = await listarUsuarios();
-  return NextResponse.json({ usuarios });
+  return NextResponse.json({
+    usuarios,
+    submodulos: RRHH_SUBMODULOS,
+  });
 }
 
 const createSchema = z.object({
@@ -26,14 +50,12 @@ const createSchema = z.object({
   rol: z.enum(ROLES),
   accesoTodas: z.boolean().default(false),
   empresaIds: z.array(z.number()).default([]),
+  permisos: z.array(permisoSchema).optional(),
 });
 
 export async function POST(request: Request) {
-  const guard = await requireSession();
+  const guard = await requireAdmin();
   if (guard.error) return guard.error;
-  if (guard.user.rol !== "Admin" && guard.user.rol !== "RRHH") {
-    return NextResponse.json({ error: "Sin permiso." }, { status: 403 });
-  }
   const parsed = createSchema.safeParse(await request.json());
   if (!parsed.success) {
     return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
@@ -59,14 +81,12 @@ const updateSchema = z.object({
   activo: z.boolean(),
   empresaIds: z.array(z.number()),
   password: z.string().optional(),
+  permisos: z.array(permisoSchema).optional(),
 });
 
 export async function PUT(request: Request) {
-  const guard = await requireSession();
+  const guard = await requireAdmin();
   if (guard.error) return guard.error;
-  if (guard.user.rol !== "Admin" && guard.user.rol !== "RRHH") {
-    return NextResponse.json({ error: "Sin permiso." }, { status: 403 });
-  }
   const parsed = updateSchema.safeParse(await request.json());
   if (!parsed.success) {
     return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });

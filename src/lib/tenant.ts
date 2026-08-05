@@ -8,6 +8,7 @@ import {
   puedeEditarModulo,
   modulosPorRol,
   type Modulo,
+  type RolGlobal,
 } from "./roles";
 import {
   createSessionToken,
@@ -15,6 +16,12 @@ import {
   setSessionCookie,
   type SessionPayload,
 } from "./session";
+import {
+  permisosEfectivos,
+  tienePermiso,
+  type AccionPermiso,
+  type RrhhSubmodulo,
+} from "./permisos";
 
 type Ok = { session: SessionPayload; empresa: Empresa; error?: undefined };
 type Fail = { session?: undefined; empresa?: undefined; error: NextResponse };
@@ -45,7 +52,6 @@ export async function requireTenant(slug: string): Promise<Ok | Fail> {
     };
   }
 
-  // Sincroniza cookie de empresa activa (válido en Route Handlers)
   if (session.empresaId !== empresa.id) {
     const token = await createSessionToken({
       ...session,
@@ -91,4 +97,33 @@ export async function requireTenantModulo(
     };
   }
   return { session, empresa };
+}
+
+/**
+ * Acceso RRHH por submódulo + acción (ver/crear/editar/eliminar).
+ * Admin siempre pasa. Si hay filas en usuario_modulo se usan; si no, defaults del rol.
+ */
+export async function requireTenantRrhh(
+  slug: string,
+  submodulo: RrhhSubmodulo,
+  accion: AccionPermiso = "ver",
+): Promise<Ok | Fail> {
+  const base = await requireTenantModulo(slug, "rrhh", accion !== "ver");
+  if (base.error) return base;
+
+  if (base.session.rol === "Admin") return base;
+
+  const perms = await permisosEfectivos(
+    base.session.id,
+    base.session.rol as RolGlobal,
+  );
+  if (!tienePermiso(perms, submodulo, accion)) {
+    return {
+      error: NextResponse.json(
+        { error: `Sin permiso para ${accion} en ${submodulo}.` },
+        { status: 403 },
+      ),
+    };
+  }
+  return base;
 }

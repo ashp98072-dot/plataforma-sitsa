@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { requireSession } from "@/lib/api-guard";
 import { empresasParaUsuario } from "@/lib/empresas";
+import { permisosEfectivos } from "@/lib/permisos";
+import type { RolGlobal } from "@/lib/roles";
 
 export async function GET() {
   const guard = await requireSession();
@@ -10,5 +12,9 @@ export async function GET() {
     rol: guard.user.rol,
     accesoTodas: Boolean(guard.user.accesoTodas),
   });
-  return NextResponse.json({ user: guard.user, empresas });
+  const permisos = await permisosEfectivos(
+    guard.user.id,
+    guard.user.rol as RolGlobal,
+  );
+  return NextResponse.json({ user: guard.user, empresas, permisos });
 }

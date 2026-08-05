@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireTenantModulo } from "@/lib/tenant";
+import { requireTenantRrhh } from "@/lib/tenant";
 import {
   calcularSaldoTotalDisponible,
   contarDiasHabiles,
@@ -19,7 +19,7 @@ const TIPOS_CON_SALDO = new Set([
 
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "rrhh");
+  const guard = await requireTenantRrhh(slug, "vacaciones", "ver");
   if (guard.error) return guard.error;
 
   const url = new URL(req.url);
@@ -60,7 +60,7 @@ const schema = z.object({
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "rrhh", true);
+  const guard = await requireTenantRrhh(slug, "vacaciones", "crear");
   if (guard.error) return guard.error;
 
   const parsed = schema.safeParse(await req.json());

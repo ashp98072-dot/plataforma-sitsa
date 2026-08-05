@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireTenantModulo } from "@/lib/tenant";
+import { requireTenantRrhh } from "@/lib/tenant";
 import {
   listarDocumentos,
   registrarDocumento,
@@ -12,7 +12,7 @@ type Ctx = { params: Promise<{ slug: string; id: string }> };
 
 export async function GET(_req: Request, ctx: Ctx) {
   const { slug, id: idRaw } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "rrhh");
+  const guard = await requireTenantRrhh(slug, "empleados", "ver");
   if (guard.error) return guard.error;
 
   const id = Number(idRaw);
@@ -38,7 +38,7 @@ export async function GET(_req: Request, ctx: Ctx) {
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug, id: idRaw } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "rrhh", true);
+  const guard = await requireTenantRrhh(slug, "empleados", "crear");
   if (guard.error) return guard.error;
 
   const id = Number(idRaw);

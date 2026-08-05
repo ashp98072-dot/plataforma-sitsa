@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireTenantModulo } from "@/lib/tenant";
+import { requireTenantRrhh } from "@/lib/tenant";
 import { hoyLocal } from "@/lib/rrhh/dates";
 import {
   listarMarcajesRango,
@@ -12,7 +12,7 @@ type Ctx = { params: Promise<{ slug: string }> };
 
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "rrhh");
+  const guard = await requireTenantRrhh(slug, "marcajes", "ver");
   if (guard.error) return guard.error;
 
   const url = new URL(req.url);
@@ -38,7 +38,7 @@ const manualSchema = z.object({
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "rrhh", true);
+  const guard = await requireTenantRrhh(slug, "marcajes", "crear");
   if (guard.error) return guard.error;
 
   const body = await req.json();

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireTenantModulo } from "@/lib/tenant";
+import { requireTenantRrhh } from "@/lib/tenant";
 import { hoyLocal } from "@/lib/rrhh/dates";
 import {
   eliminarEnRuta,
@@ -13,7 +13,7 @@ type Ctx = { params: Promise<{ slug: string }> };
 
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "rrhh");
+  const guard = await requireTenantRrhh(slug, "en_ruta", "ver");
   if (guard.error) return guard.error;
 
   const url = new URL(req.url);
@@ -36,7 +36,7 @@ const schema = z.object({
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "rrhh", true);
+  const guard = await requireTenantRrhh(slug, "en_ruta", "crear");
   if (guard.error) return guard.error;
   const parsed = schema.safeParse(await req.json());
   if (!parsed.success) {
@@ -57,7 +57,7 @@ export async function POST(req: Request, ctx: Ctx) {
 
 export async function DELETE(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "rrhh", true);
+  const guard = await requireTenantRrhh(slug, "en_ruta", "eliminar");
   if (guard.error) return guard.error;
   const id = Number(new URL(req.url).searchParams.get("id") ?? "0");
   if (!id) {

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireTenantModulo } from "@/lib/tenant";
+import { requireTenantRrhh } from "@/lib/tenant";
 import { listarEmpleados } from "@/lib/rrhh/empleados";
 import {
   exportarEmpleadosExcel,
@@ -11,7 +11,7 @@ type Ctx = { params: Promise<{ slug: string }> };
 
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "rrhh");
+  const guard = await requireTenantRrhh(slug, "empleados", "ver");
   if (guard.error) return guard.error;
 
   const format = new URL(req.url).searchParams.get("format") ?? "xlsx";
