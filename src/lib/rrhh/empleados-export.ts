@@ -1,7 +1,7 @@
 import ExcelJS from "exceljs";
-import PDFDocument from "pdfkit";
 import type { Empleado } from "./empleados";
 import { formatearFechaVisible } from "./dates";
+import { tablaAPdf } from "@/lib/rrhh/export-files";
 
 const HEADERS = [
   "codigo",
@@ -79,50 +79,29 @@ export async function exportarEmpleadosPdf(
   empleados: Empleado[],
   empresaNombre: string,
 ): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ margin: 40, size: "LETTER" });
-    const chunks: Buffer[] = [];
-    doc.on("data", (c) => chunks.push(c as Buffer));
-    doc.on("end", () => resolve(Buffer.concat(chunks)));
-    doc.on("error", reject);
-
-    doc
-      .fontSize(14)
-      .text(`SITSA — Empleados · ${empresaNombre}`, { align: "left" });
-    doc.moveDown(0.4);
-    doc.fontSize(9).fillColor("#444").text(`Total: ${empleados.length}`);
-    doc.moveDown();
-
-    const colX = [40, 110, 250, 340, 400, 460];
-    let y = doc.y;
-    doc.fillColor("#000").fontSize(8).font("Helvetica-Bold");
-    doc.text("Código", colX[0], y);
-    doc.text("Nombre", colX[1], y);
-    doc.text("Puesto", colX[2], y);
-    doc.text("Horario", colX[3], y);
-    doc.text("Estado", colX[4], y);
-    doc.text("Contrato", colX[5], y);
-    y += 14;
-    doc.moveTo(40, y).lineTo(570, y).stroke();
-    y += 6;
-
-    doc.font("Helvetica").fontSize(8);
-    for (const e of empleados) {
-      if (y > 740) {
-        doc.addPage();
-        y = 40;
-      }
-      doc.text(e.codigo, colX[0], y, { width: 65, ellipsis: true });
-      doc.text(e.nombre, colX[1], y, { width: 130, ellipsis: true });
-      doc.text(e.puesto || "—", colX[2], y, { width: 80, ellipsis: true });
-      doc.text(e.tipoHorario, colX[3], y, { width: 55 });
-      doc.text(e.estado, colX[4], y, { width: 50 });
-      doc.text(formatearFechaVisible(e.fechaAlta) || "—", colX[5], y, {
-        width: 70,
-      });
-      y += 12;
-    }
-    doc.end();
+  return tablaAPdf({
+    title: `SITSA — Empleados`,
+    subtitle: `${empresaNombre} · ${empleados.length} registro(s)`,
+    headers: [
+      "Código",
+      "Nombre",
+      "Puesto",
+      "Horario",
+      "Estado",
+      "Contrato",
+      "Entrada lab.",
+    ],
+    rows: empleados.map((e) => [
+      e.codigo,
+      e.nombre,
+      e.puesto || "—",
+      e.tipoHorario,
+      e.estado,
+      formatearFechaVisible(e.fechaAlta) || "—",
+      formatearFechaVisible(e.fechaInicioLaboral) || "—",
+    ]),
+    modo: "tabla",
+    layout: "landscape",
   });
 }
 

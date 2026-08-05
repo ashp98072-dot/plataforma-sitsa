@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
 import { requireTenantFlotaAny } from "@/lib/tenant";
-import { tablaAExcel, tablaAPdf } from "@/lib/rrhh/export-files";
+import { celdaPdf, tablaAExcel, tablaAPdf } from "@/lib/rrhh/export-files";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
 import { kmPendienteServicio } from "@/lib/flota/import-excel";
 
@@ -135,13 +135,13 @@ export async function GET(req: Request, ctx: Ctx) {
         const kmS = Number(r.km_salida ?? 0);
         const kmL = r.km_llegada != null ? Number(r.km_llegada) : null;
         return [
-          String(r.hora_salida ?? "").replace("T", " ").slice(0, 19),
-          String(r.hora_llegada ?? "").replace("T", " ").slice(0, 19),
+          celdaPdf(r.hora_salida),
+          celdaPdf(r.hora_llegada),
           String(r.placa),
           String(r.piloto_nombre ?? ""),
-          String(kmS),
-          kmL != null ? String(kmL) : "",
-          kmL != null ? String(kmL - kmS) : "",
+          kmS.toLocaleString("es-GT"),
+          kmL != null ? kmL.toLocaleString("es-GT") : "",
+          kmL != null ? (kmL - kmS).toLocaleString("es-GT") : "",
           String(r.destino ?? ""),
           String(r.observaciones ?? ""),
           String(r.estado ?? ""),
@@ -255,7 +255,9 @@ export async function GET(req: Request, ctx: Ctx) {
       subtitle,
       headers,
       rows,
-      layout: headers.length > 6 ? "landscape" : "auto",
+      // Viajes / inventario: fichas legibles. Servicios (pocas cols): tabla.
+      modo: headers.length > 7 ? "fichas" : "auto",
+      layout: "auto",
     });
     return new NextResponse(new Uint8Array(buf), {
       headers: {
