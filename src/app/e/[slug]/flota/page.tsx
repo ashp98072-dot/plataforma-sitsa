@@ -62,6 +62,7 @@ type Servicio = {
   fecha_servicio: string;
   costo: number;
   descripcion?: string | null;
+  adjuntos?: number;
 };
 
 type Viaje = {
@@ -75,6 +76,23 @@ type Viaje = {
   estado: string;
   hora_salida: string;
   observaciones?: string | null;
+  es_externo?: number;
+};
+
+type PermisoExterno = {
+  id: number;
+  piloto_nombre: string;
+  motivo: string;
+  estado: string;
+  solicitado_por: string;
+  aprobado_por?: string | null;
+  creado_at: string;
+};
+
+type VerifPiloto = {
+  encontrado: boolean;
+  mensaje: string;
+  empleado?: { id: number; codigo: string; nombre: string };
 };
 
 type Tab =
@@ -144,11 +162,20 @@ function FlotaInner() {
   const [costo, setCosto] = useState(0);
   const [descServicio, setDescServicio] = useState("");
   const [pilotoNombre, setPilotoNombre] = useState("");
+  const [placaSalida, setPlacaSalida] = useState("");
   const [destino, setDestino] = useState("");
   const [obsViaje, setObsViaje] = useState("");
   const [viajeId, setViajeId] = useState(0);
   const [kmLlegada, setKmLlegada] = useState(0);
   const [modoPiloto, setModoPiloto] = useState<"salida" | "llegada">("salida");
+  const [esExterno, setEsExterno] = useState(false);
+  const [motivoExterno, setMotivoExterno] = useState("");
+  const [verifPiloto, setVerifPiloto] = useState<VerifPiloto | null>(null);
+  const [permisosExt, setPermisosExt] = useState<PermisoExterno[]>([]);
+  const [archivosServicio, setArchivosServicio] = useState<FileList | null>(
+    null,
+  );
+  const [sacarDeServicio, setSacarDeServicio] = useState(true);
   const [resumen, setResumen] = useState<{
     totalVehiculos: number;
     enTaller: number;
@@ -231,16 +258,25 @@ function FlotaInner() {
 
   const cargar = useCallback(async () => {
     const me = await fetch("/api/auth/me").then((r) => r.json());
-    setRol(me.user?.rol ?? "");
+    const rolMe = String(me.user?.rol ?? "");
+    setRol(rolMe);
     setPermisos(me.permisos ?? []);
-    if (me.user?.nombre) setPilotoNombre(String(me.user.nombre));
+    // Cuenta kiosko "piloto": no precargar el nombre genérico
+    if (
+      me.user?.nombre &&
+      rolMe !== "Piloto" &&
+      String(me.user.username ?? "").toLowerCase() !== "piloto"
+    ) {
+      setPilotoNombre(String(me.user.nombre));
+    }
 
-    const [res, rep, lec, svc, via] = await Promise.all([
+    const [res, rep, lec, svc, via, perm] = await Promise.all([
       fetch(`/api/empresas/${slug}/flota/vehiculos`),
       fetch(`/api/empresas/${slug}/flota/reportes`),
       fetch(`/api/empresas/${slug}/flota/lecturas`),
       fetch(`/api/empresas/${slug}/flota/servicios`),
       fetch(`/api/empresas/${slug}/flota/viajes`),
+      fetch(`/api/empresas/${slug}/flota/permisos-externos`),
     ]);
     if (res.ok) {
       const data = await res.json();
@@ -266,6 +302,10 @@ function FlotaInner() {
       setViajes(data.viajes ?? []);
       setAbiertos(data.abiertos ?? []);
       if (data.abiertos?.[0]) setViajeId(Number(data.abiertos[0].id));
+    }
+    if (perm.ok) {
+      const data = await perm.json();
+      setPermisosExt(data.permisos ?? []);
     }
   }, [slug, vehiculoId]);
 
@@ -414,17 +454,108 @@ function FlotaInner() {
 
   async function registrarServicio() {
     setErr("");
+    const fd = new FormData();
+    fd.append("vehiculoId", String(vehiculoId));
+    fd.append("tipo", tipoServicio);
+    if (kmLectura) fd.append("kmServicio", String(kmLectura));
+    fd.append("fechaServicio", new Date().toISOString().slice(0, 10));
+    fd.append("costo", String(costo || 0));
+    if (descServicio) fd.append("descripcion", descServicio);
+    if (sacarDeServicio) fd.append("sacarDeServicio", "1");
+    if (archivosServicio) {
+      Array.from(archivosServicio).forEach((f, i) =>
+        fd.append(`file${i}`, f),
+      );
+    }
     const res = await fetch(`/api/empresas/${slug}/flota/servicios`, {
+      method: "POST",
+      body: fd,
+    });
+    const data = await res.json();
+    if (!res.ok) setErr(data.error ?? "Error");
+    else {
+      setMsg(data.mensaje);
+      setDescServicio("");
+      setCosto(0);
+      setArchivosServicio(null);
+      await cargar();
+    }
+  }
+
+  async function verificarPiloto() {
+    setErr("");
+    setVerifPiloto(null);
+    if (pilotoNombre.trim().length < 2) {
+      setErr("Escribe el nombre del piloto.");
+      return;
+    }
+    const res = await fetch(
+      `/api/empresas/${slug}/flota/verificar-piloto?nombre=${encodeURIComponent(pilotoNombre.trim())}`,
+    );
+    const data = await res.json();
+    setVerifPiloto(data);
+    if (data.encontrado) {
+      setEsExterno(false);
+      setPilotoNombre(data.empleado?.nombre ?? pilotoNombre);
+    } else {
+      setEsExterno(true);
+    }
+  }
+
+  async function salidaViaje() {
+    setErr("");
+    setMsg("");
+    const res = await fetch(`/api/empresas/${slug}/flota/viajes`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        vehiculoId,
-        tipo: tipoServicio,
-        kmServicio: kmLectura || undefined,
-        fechaServicio: new Date().toISOString().slice(0, 10),
-        costo,
-        descripcion: descServicio || undefined,
+        accion: "salida",
+        placa: placaSalida.trim() || undefined,
+        vehiculoId: placaSalida.trim() ? undefined : vehiculoId || undefined,
+        pilotoNombre,
+        kmSalida: kmLectura,
+        destino: destino || undefined,
+        esExterno: esExterno || undefined,
+        motivoExterno: esExterno ? motivoExterno || undefined : undefined,
       }),
+    });
+    const data = await res.json();
+    if (data.code === "NO_EN_RRHH") {
+      setEsExterno(true);
+      setErr(data.mensaje ?? data.error);
+      return;
+    }
+    if (
+      data.code === "SOLICITUD_ENVIADA" ||
+      data.code === "PERMISO_PENDIENTE"
+    ) {
+      setMsg(data.mensaje ?? data.error);
+      setEsExterno(true);
+      await cargar();
+      return;
+    }
+    if (!res.ok) setErr(data.mensaje ?? data.error ?? "Error");
+    else {
+      setMsg(data.mensaje);
+      setKmLectura(0);
+      setDestino("");
+      setMotivoExterno("");
+      setEsExterno(false);
+      setVerifPiloto(null);
+      setModoPiloto("llegada");
+      await cargar();
+    }
+  }
+
+  async function resolverPermiso(
+    id: number,
+    estado: "aprobado" | "rechazado",
+  ) {
+    setErr("");
+    const res = await fetch(`/api/empresas/${slug}/flota/permisos-externos`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, estado }),
     });
     const data = await res.json();
     if (!res.ok) setErr(data.error ?? "Error");
@@ -434,27 +565,36 @@ function FlotaInner() {
     }
   }
 
-  async function salidaViaje() {
-    setErr("");
-    const res = await fetch(`/api/empresas/${slug}/flota/viajes`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        accion: "salida",
-        vehiculoId,
-        pilotoNombre,
-        kmSalida: kmLectura,
-        destino: destino || undefined,
-      }),
-    });
+  async function verAdjuntos(servicioId: number) {
+    const res = await fetch(
+      `/api/empresas/${slug}/flota/servicios/${servicioId}/adjuntos`,
+    );
     const data = await res.json();
-    if (!res.ok) setErr(data.error ?? "Error");
-    else {
-      setMsg(data.mensaje);
-      setKmLectura(0);
-      setDestino("");
-      setModoPiloto("llegada");
-      await cargar();
+    if (!res.ok) {
+      setErr(data.error ?? "No se pudieron cargar adjuntos");
+      return;
+    }
+    const list = (data.adjuntos ?? []) as {
+      id: number;
+      nombre: string;
+    }[];
+    if (!list.length) {
+      setMsg("Sin facturas / archivos en este servicio.");
+      return;
+    }
+    for (const a of list) {
+      const dl = await fetch(
+        `/api/empresas/${slug}/flota/servicios/${servicioId}/adjuntos`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ adjuntoId: a.id }),
+        },
+      );
+      if (!dl.ok) continue;
+      const blob = await dl.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
     }
   }
 
@@ -956,57 +1096,84 @@ function FlotaInner() {
         <div className="space-y-4">
           {SearchBar}
           {can("flota_servicios", "crear") ? (
-            <div className="flex flex-wrap gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-              <select
-                className={input}
-                value={vehiculoId}
-                onChange={(e) => setVehiculoId(Number(e.target.value))}
-              >
-                {activos.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.placa}
-                    {v.filtro_servicio_mayor
-                      ? ` · may:${v.filtro_servicio_mayor}`
-                      : ""}
-                  </option>
-                ))}
-              </select>
-              <select
-                className={input}
-                value={tipoServicio}
-                onChange={(e) => setTipoServicio(e.target.value)}
-              >
-                <option value="mantenimiento">Mantenimiento (mayor)</option>
-                <option value="servicio_menor">Servicio menor</option>
-                <option value="reparacion">Reparación</option>
-              </select>
-              <input
-                type="number"
-                className={`${input} w-28`}
-                placeholder="Km"
-                value={kmLectura || ""}
-                onChange={(e) => setKmLectura(Number(e.target.value))}
-              />
-              <input
-                type="number"
-                className={`${input} w-28`}
-                placeholder="Costo"
-                value={costo || ""}
-                onChange={(e) => setCosto(Number(e.target.value))}
-              />
-              <input
-                className={`${input} min-w-[160px]`}
-                placeholder="Detalle / filtros usados"
-                value={descServicio}
-                onChange={(e) => setDescServicio(e.target.value)}
-              />
-              <button
-                type="button"
-                onClick={() => void registrarServicio()}
-                className="rounded bg-[#1F6AA5] px-3 py-1.5 text-sm text-white"
-              >
-                Registrar servicio
-              </button>
+            <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+              <p className="text-xs text-[var(--muted)]">
+                Al sacar la unidad del servicio / taller puedes adjuntar facturas
+                (PDF o imagen).
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <select
+                  className={input}
+                  value={vehiculoId}
+                  onChange={(e) => setVehiculoId(Number(e.target.value))}
+                >
+                  {activos.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.placa}
+                      {v.en_taller ? " · EN TALLER" : ""}
+                      {v.filtro_servicio_mayor
+                        ? ` · may:${v.filtro_servicio_mayor}`
+                        : ""}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className={input}
+                  value={tipoServicio}
+                  onChange={(e) => setTipoServicio(e.target.value)}
+                >
+                  <option value="mantenimiento">Mantenimiento (mayor)</option>
+                  <option value="servicio_menor">Servicio menor</option>
+                  <option value="reparacion">Reparación</option>
+                </select>
+                <input
+                  type="number"
+                  className={`${input} w-28`}
+                  placeholder="Km"
+                  value={kmLectura || ""}
+                  onChange={(e) => setKmLectura(Number(e.target.value))}
+                />
+                <input
+                  type="number"
+                  className={`${input} w-28`}
+                  placeholder="Costo"
+                  value={costo || ""}
+                  onChange={(e) => setCosto(Number(e.target.value))}
+                />
+                <input
+                  className={`${input} min-w-[160px]`}
+                  placeholder="Detalle / filtros usados"
+                  value={descServicio}
+                  onChange={(e) => setDescServicio(e.target.value)}
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="flex items-center gap-2 text-xs text-[var(--muted)]">
+                  <input
+                    type="checkbox"
+                    checked={sacarDeServicio}
+                    onChange={(e) => setSacarDeServicio(e.target.checked)}
+                  />
+                  Sacar de taller / volver a servicio
+                </label>
+                <label className="text-xs text-[var(--muted)]">
+                  Facturas PDF / imágenes
+                  <input
+                    type="file"
+                    accept="image/*,.pdf,application/pdf"
+                    multiple
+                    className="mt-1 block text-xs"
+                    onChange={(e) => setArchivosServicio(e.target.files)}
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => void registrarServicio()}
+                  className="rounded bg-[#1F6AA5] px-3 py-1.5 text-sm text-white"
+                >
+                  Registrar servicio
+                </button>
+              </div>
             </div>
           ) : null}
           <div className="flex gap-2">
@@ -1034,6 +1201,7 @@ function FlotaInner() {
                   <th className="px-3 py-2">Tipo</th>
                   <th className="px-3 py-2">Km</th>
                   <th className="px-3 py-2">Costo</th>
+                  <th className="px-3 py-2">Facturas</th>
                 </tr>
               </thead>
               <tbody>
@@ -1049,6 +1217,19 @@ function FlotaInner() {
                     </td>
                     <td className="px-3 py-2">
                       Q{Number(s.costo).toFixed(2)}
+                    </td>
+                    <td className="px-3 py-2">
+                      {(s.adjuntos ?? 0) > 0 ? (
+                        <button
+                          type="button"
+                          className="text-sky-300 underline"
+                          onClick={() => void verAdjuntos(s.id)}
+                        >
+                          Ver ({s.adjuntos})
+                        </button>
+                      ) : (
+                        "—"
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -1180,50 +1361,111 @@ function FlotaInner() {
             </div>
 
             {modoPiloto === "salida" ? (
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                <label className="text-xs text-[var(--muted)]">
-                  Nombre piloto
-                  <input
-                    className={`${input} mt-1 w-full`}
-                    value={pilotoNombre}
-                    onChange={(e) => setPilotoNombre(e.target.value)}
-                  />
-                </label>
-                <label className="text-xs text-[var(--muted)]">
-                  Vehículo (busca arriba)
-                  <select
-                    className={`${input} mt-1 w-full`}
-                    value={vehiculoId}
-                    onChange={(e) => setVehiculoId(Number(e.target.value))}
+              <div className="space-y-3">
+                <p className="text-xs text-[var(--muted)]">
+                  Cuenta compartida de pilotos: escribe tu nombre completo y la
+                  placa. No se permite otro viaje abierto con el mismo nombre ni
+                  la misma unidad.
+                </p>
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  <label className="text-xs text-[var(--muted)] sm:col-span-2">
+                    Nombre piloto (como en RRHH)
+                    <div className="mt-1 flex gap-2">
+                      <input
+                        className={`${input} w-full`}
+                        value={pilotoNombre}
+                        onChange={(e) => {
+                          setPilotoNombre(e.target.value);
+                          setVerifPiloto(null);
+                        }}
+                        placeholder="Ej. Walter López"
+                      />
+                      <button
+                        type="button"
+                        className="shrink-0 rounded bg-[#334155] px-3 py-1.5 text-xs text-white"
+                        onClick={() => void verificarPiloto()}
+                      >
+                        Verificar RRHH
+                      </button>
+                    </div>
+                  </label>
+                  <label className="text-xs text-[var(--muted)]">
+                    Placa de la unidad
+                    <input
+                      className={`${input} mt-1 w-full font-mono uppercase`}
+                      value={placaSalida}
+                      onChange={(e) => setPlacaSalida(e.target.value)}
+                      placeholder="Ej. C-015BNG"
+                      list="placas-flota"
+                    />
+                    <datalist id="placas-flota">
+                      {activos
+                        .filter((v) => !v.en_taller)
+                        .map((v) => (
+                          <option key={v.id} value={v.placa} />
+                        ))}
+                    </datalist>
+                  </label>
+                  <label className="text-xs text-[var(--muted)]">
+                    Km salida
+                    <input
+                      type="number"
+                      className={`${input} mt-1 w-full`}
+                      value={kmLectura || ""}
+                      onChange={(e) => setKmLectura(Number(e.target.value))}
+                    />
+                  </label>
+                  <label className="text-xs text-[var(--muted)] sm:col-span-2">
+                    Destino
+                    <input
+                      className={`${input} mt-1 w-full`}
+                      value={destino}
+                      onChange={(e) => setDestino(e.target.value)}
+                      placeholder="Ej. Predio norte / Cliente X"
+                    />
+                  </label>
+                </div>
+
+                {verifPiloto ? (
+                  <p
+                    className={`text-xs ${
+                      verifPiloto.encontrado
+                        ? "text-emerald-400"
+                        : "text-amber-300"
+                    }`}
                   >
-                    {activos
-                      .filter((v) => !v.en_taller)
-                      .map((v) => (
-                        <option key={v.id} value={v.id}>
-                          {v.placa} ·{" "}
-                          {Number(v.km_actual ?? 0).toLocaleString("es-GT")} km
-                        </option>
-                      ))}
-                  </select>
-                </label>
-                <label className="text-xs text-[var(--muted)]">
-                  Km salida
-                  <input
-                    type="number"
-                    className={`${input} mt-1 w-full`}
-                    value={kmLectura || ""}
-                    onChange={(e) => setKmLectura(Number(e.target.value))}
-                  />
-                </label>
-                <label className="text-xs text-[var(--muted)] sm:col-span-2">
-                  Destino
-                  <input
-                    className={`${input} mt-1 w-full`}
-                    value={destino}
-                    onChange={(e) => setDestino(e.target.value)}
-                    placeholder="Ej. Predio norte / Cliente X"
-                  />
-                </label>
+                    {verifPiloto.mensaje}
+                  </p>
+                ) : null}
+
+                {esExterno || (verifPiloto && !verifPiloto.encontrado) ? (
+                  <div className="space-y-2 rounded-lg border border-amber-700/50 bg-amber-950/30 p-3">
+                    <label className="flex items-center gap-2 text-xs">
+                      <input
+                        type="checkbox"
+                        checked={esExterno}
+                        onChange={(e) => setEsExterno(e.target.checked)}
+                      />
+                      Conductor externo / en prueba (no está en RRHH)
+                    </label>
+                    {esExterno ? (
+                      <>
+                        <textarea
+                          className={`${input} w-full`}
+                          rows={2}
+                          placeholder="Motivo para Operaciones: por qué manejará alguien externo…"
+                          value={motivoExterno}
+                          onChange={(e) => setMotivoExterno(e.target.value)}
+                        />
+                        <p className="text-[11px] text-[var(--muted)]">
+                          Al guardar se envía la solicitud a Operaciones. Solo
+                          podrás registrar la salida cuando aprueben.
+                        </p>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
+
                 <div className="flex items-end">
                   <button
                     type="button"
@@ -1232,6 +1474,21 @@ function FlotaInner() {
                   >
                     Guardar salida
                   </button>
+                </div>
+
+                <div>
+                  <h3 className="mb-1 text-sm font-medium">Viajes abiertos</h3>
+                  <ul className="space-y-1 text-xs text-[var(--muted)]">
+                    {abiertos.map((v) => (
+                      <li key={v.id}>
+                        <span className="font-mono text-sky-300">{v.placa}</span>{" "}
+                        · {v.piloto_nombre} · km {v.km_salida}
+                        {v.destino ? ` · ${v.destino}` : ""}
+                        {v.es_externo ? " · externo" : ""}
+                      </li>
+                    ))}
+                    {!abiertos.length ? <li>Ningún viaje abierto.</li> : null}
+                  </ul>
                 </div>
               </div>
             ) : (
@@ -1315,6 +1572,65 @@ function FlotaInner() {
                 {!viajesFiltrados.length ? <li>Sin viajes.</li> : null}
               </ul>
             </div>
+
+            {permisosExt.length ? (
+              <div className="rounded-lg border border-[var(--border)] p-3">
+                <h3 className="mb-2 text-sm font-medium">
+                  Permisos conductores externos
+                </h3>
+                <ul className="space-y-2 text-xs">
+                  {permisosExt.slice(0, 15).map((p) => (
+                    <li
+                      key={p.id}
+                      className="flex flex-wrap items-start justify-between gap-2 border-t border-[var(--border)] pt-2 first:border-0 first:pt-0"
+                    >
+                      <div>
+                        <span className="font-medium">{p.piloto_nombre}</span>{" "}
+                        <span
+                          className={
+                            p.estado === "aprobado"
+                              ? "text-emerald-400"
+                              : p.estado === "rechazado"
+                                ? "text-red-400"
+                                : "text-amber-300"
+                          }
+                        >
+                          ({p.estado})
+                        </span>
+                        <p className="text-[var(--muted)]">{p.motivo}</p>
+                        <p className="text-[10px] text-[var(--muted)]">
+                          Solicitó: {p.solicitado_por}
+                          {p.aprobado_por ? ` · Resolvió: ${p.aprobado_por}` : ""}
+                        </p>
+                      </div>
+                      {p.estado === "pendiente" &&
+                      (rol === "Admin" ||
+                        rol === "Operaciones" ||
+                        rol === "CoordinadorPredios") ? (
+                        <div className="flex gap-1">
+                          <button
+                            type="button"
+                            className="rounded bg-[#1B5E20] px-2 py-1 text-white"
+                            onClick={() => void resolverPermiso(p.id, "aprobado")}
+                          >
+                            Aprobar
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded bg-[#B71C1C] px-2 py-1 text-white"
+                            onClick={() =>
+                              void resolverPermiso(p.id, "rechazado")
+                            }
+                          >
+                            Rechazar
+                          </button>
+                        </div>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}

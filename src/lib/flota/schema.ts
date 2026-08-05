@@ -158,4 +158,58 @@ export async function asegurarSchemaFlota(): Promise<void> {
       INDEX idx_fv_estado (empresa_id, estado)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
+
+  await ensureColumn(
+    "flota_viajes",
+    "es_externo",
+    "es_externo TINYINT(1) NOT NULL DEFAULT 0",
+  );
+  await ensureColumn(
+    "flota_viajes",
+    "empleado_id",
+    "empleado_id INT NULL",
+  );
+  await ensureColumn(
+    "flota_viajes",
+    "permiso_externo_id",
+    "permiso_externo_id INT NULL",
+  );
+  await ensureColumn(
+    "flota_viajes",
+    "piloto_nombre_norm",
+    "piloto_nombre_norm VARCHAR(120) NULL",
+  );
+
+  await execute(`
+    CREATE TABLE IF NOT EXISTS flota_permisos_externos (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      empresa_id INT NOT NULL,
+      piloto_nombre VARCHAR(120) NOT NULL,
+      piloto_nombre_norm VARCHAR(120) NOT NULL,
+      motivo TEXT NOT NULL,
+      estado VARCHAR(20) NOT NULL DEFAULT 'pendiente',
+      solicitado_por VARCHAR(100) NULL,
+      aprobado_por VARCHAR(100) NULL,
+      creado_at DATETIME NOT NULL,
+      resuelto_at DATETIME NULL,
+      INDEX idx_fpe_emp (empresa_id),
+      INDEX idx_fpe_estado (empresa_id, estado)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await execute(`
+    CREATE TABLE IF NOT EXISTS flota_servicio_adjuntos (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      empresa_id INT NOT NULL,
+      servicio_id INT NOT NULL,
+      ruta_relativa VARCHAR(400) NOT NULL,
+      nombre_original VARCHAR(255) NOT NULL,
+      mime VARCHAR(80) NULL,
+      tamano INT NOT NULL DEFAULT 0,
+      subido_por VARCHAR(100) NULL,
+      creado_at DATETIME NOT NULL,
+      INDEX idx_fsa_svc (servicio_id),
+      INDEX idx_fsa_emp (empresa_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
 }
