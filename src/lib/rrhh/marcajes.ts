@@ -12,6 +12,7 @@ import {
   hoyLocal,
   normalizarHora,
 } from "./dates";
+import { validarGeocercaKiosko } from "./geocerca";
 
 async function tieneSesionAbierta(
   empresaId: number,
@@ -142,7 +143,12 @@ export type ResultadoMarcajeKiosko =
 
 export async function registrarMarcajeKiosko(
   empresaId: number,
-  input: { codigo: string; viajeLargo?: boolean },
+  input: {
+    codigo: string;
+    viajeLargo?: boolean;
+    latitud?: number | null;
+    longitud?: number | null;
+  },
 ): Promise<ResultadoMarcajeKiosko> {
   const codigo = input.codigo.trim();
   if (!codigo) {
@@ -181,6 +187,14 @@ export async function registrarMarcajeKiosko(
       code: "BAJA",
       error: `El empleado ${nombre} está de Baja.`,
     };
+  }
+
+  const geo = await validarGeocercaKiosko(empresaId, idEmpleado, {
+    lat: input.latitud,
+    lng: input.longitud,
+  });
+  if (!geo.ok) {
+    return { ok: false, code: geo.code, error: geo.error };
   }
 
   if (await tieneSesionAbierta(empresaId, idEmpleado)) {

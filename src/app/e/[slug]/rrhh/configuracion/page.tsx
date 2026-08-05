@@ -11,6 +11,10 @@ export default function ConfigRrhhPage() {
     hora_salida_default: "17:00:00",
     minutos_tolerancia: "10",
     ciclo_quincenal: "15",
+    geocerca_activa: "0",
+    geocerca_lat: "",
+    geocerca_lng: "",
+    geocerca_radio_m: "150",
   });
   const [feriados, setFeriados] = useState<
     { id: number; descripcion: string; fecha: string; activo: boolean }[]
@@ -18,6 +22,7 @@ export default function ConfigRrhhPage() {
   const [desc, setDesc] = useState("");
   const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10));
   const [msg, setMsg] = useState("");
+  const [gpsMsg, setGpsMsg] = useState("");
 
   const cargar = useCallback(async () => {
     const res = await fetch(`/api/empresas/${slug}/rrhh/configuracion`);
@@ -120,6 +125,105 @@ export default function ConfigRrhhPage() {
             }
           />
         </label>
+
+        <div className="sm:col-span-2 mt-2 rounded-lg border border-sky-800/40 bg-sky-950/20 p-3 space-y-3">
+          <div>
+            <p className="text-sm font-medium text-sky-100">
+              Geocerca de marcaje (ubicación)
+            </p>
+            <p className="text-[11px] text-[var(--muted)]">
+              Si está activa, el kiosko solo deja marcar dentro del radio del
+              predio (GPS del celular/navegador). La corrección manual de RRHH
+              no se bloquea. Empleados «en ruta» pueden marcar fuera.
+            </p>
+          </div>
+          <label className="flex items-center gap-2 text-sm text-[var(--fg)]">
+            <input
+              type="checkbox"
+              checked={params.geocerca_activa === "1"}
+              onChange={(e) =>
+                setParams({
+                  ...params,
+                  geocerca_activa: e.target.checked ? "1" : "0",
+                })
+              }
+            />
+            Activar geocerca en kiosko
+          </label>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <label className="text-sm text-[var(--muted)]">
+              Latitud predio
+              <input
+                className={input}
+                placeholder="14.6349"
+                value={params.geocerca_lat}
+                onChange={(e) =>
+                  setParams({ ...params, geocerca_lat: e.target.value })
+                }
+              />
+            </label>
+            <label className="text-sm text-[var(--muted)]">
+              Longitud predio
+              <input
+                className={input}
+                placeholder="-90.5069"
+                value={params.geocerca_lng}
+                onChange={(e) =>
+                  setParams({ ...params, geocerca_lng: e.target.value })
+                }
+              />
+            </label>
+            <label className="text-sm text-[var(--muted)]">
+              Radio (metros)
+              <input
+                className={input}
+                type="number"
+                min={30}
+                max={5000}
+                value={params.geocerca_radio_m}
+                onChange={(e) =>
+                  setParams({ ...params, geocerca_radio_m: e.target.value })
+                }
+              />
+            </label>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className="rounded bg-[#334155] px-3 py-1.5 text-xs text-white"
+              onClick={() => {
+                setGpsMsg("");
+                if (!navigator.geolocation) {
+                  setGpsMsg("Este navegador no soporta GPS.");
+                  return;
+                }
+                navigator.geolocation.getCurrentPosition(
+                  (pos) => {
+                    setParams((p) => ({
+                      ...p,
+                      geocerca_lat: String(pos.coords.latitude),
+                      geocerca_lng: String(pos.coords.longitude),
+                    }));
+                    setGpsMsg(
+                      "Ubicación del dispositivo cargada. Guarda parámetros.",
+                    );
+                  },
+                  () =>
+                    setGpsMsg(
+                      "No se pudo leer GPS. Revisa permisos del navegador.",
+                    ),
+                  { enableHighAccuracy: true, timeout: 12000 },
+                );
+              }}
+            >
+              Usar mi ubicación actual como predio
+            </button>
+            {gpsMsg ? (
+              <span className="text-xs text-sky-200">{gpsMsg}</span>
+            ) : null}
+          </div>
+        </div>
+
         <button className="rounded bg-[var(--accent)] px-3 py-2 text-sm text-white sm:col-span-2">
           Guardar parámetros
         </button>

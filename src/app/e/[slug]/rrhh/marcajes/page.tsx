@@ -41,6 +41,8 @@ export default function MarcajesKioskoPage() {
   const [horaEntrada, setHoraEntrada] = useState("08:00:00");
   const [horaSalida, setHoraSalida] = useState("17:00:00");
   const [tolerancia, setTolerancia] = useState(10);
+  const [geocercaActiva, setGeocercaActiva] = useState(false);
+  const [geocercaRadio, setGeocercaRadio] = useState(150);
   const [empresaNombre, setEmpresaNombre] = useState("");
   const [loading, setLoading] = useState(false);
   const [enviando, setEnviando] = useState(false);
@@ -49,6 +51,23 @@ export default function MarcajesKioskoPage() {
   const [tipoOk, setTipoOk] = useState<"Entrada" | "Salida" | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const hoy = new Date().toISOString().slice(0, 10);
+
+  function obtenerGps(): Promise<{ lat: number; lng: number } | null> {
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      return Promise.resolve(null);
+    }
+    return new Promise((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) =>
+          resolve({
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+          }),
+        () => resolve(null),
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 30_000 },
+      );
+    });
+  }
 
   useEffect(() => {
     const id = setInterval(() => setReloj(formatReloj(new Date())), 1000);
@@ -70,6 +89,8 @@ export default function MarcajesKioskoPage() {
         setHoraEntrada(cfg.parametros.hora_entrada_default ?? "08:00:00");
         setHoraSalida(cfg.parametros.hora_salida_default ?? "17:00:00");
         setTolerancia(Number(cfg.parametros.minutos_tolerancia ?? 10));
+        setGeocercaActiva(String(cfg.parametros.geocerca_activa ?? "0") === "1");
+        setGeocercaRadio(Number(cfg.parametros.geocerca_radio_m ?? 150) || 150);
       }
       if (dash.empresa) setEmpresaNombre(dash.empresa);
     } finally {
@@ -109,10 +130,36 @@ export default function MarcajesKioskoPage() {
     setTipoOk(null);
     setEnviando(true);
     try {
+      let latitud: number | null = null;
+      let longitud: number | null = null;
+      if (geocercaActiva) {
+        const gps = await obtenerGps();
+        if (!gps) {
+          setError(
+            "Activa la ubicación (GPS) del navegador. Esta empresa solo permite marcar cerca del predio.",
+          );
+          return;
+        }
+        latitud = gps.lat;
+        longitud = gps.lng;
+      } else {
+        const gps = await obtenerGps();
+        if (gps) {
+          latitud = gps.lat;
+          longitud = gps.lng;
+        }
+      }
+
       const res = await fetch(`/api/empresas/${slug}/rrhh/marcajes`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ modo: "kiosko", codigo, viajeLargo }),
+        body: JSON.stringify({
+          modo: "kiosko",
+          codigo,
+          viajeLargo,
+          latitud,
+          longitud,
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -148,7 +195,16 @@ export default function MarcajesKioskoPage() {
           <p className="mt-1 text-sm text-[var(--muted)]">
             Horario referencia: {horaEntrada} — {horaSalida} | Tolerancia:{" "}
             {tolerancia} min
+            {geocercaActiva
+              ? ` | Geocerca activa (±${geocercaRadio} m del predio)`
+              : ""}
           </p>
+          {geocercaActiva ? (
+            <p className="mt-1 text-xs text-amber-200">
+              Solo se permite marcar dentro del radio configurado. El navegador
+              pedirá permiso de ubicación.
+            </p>
+          ) : null}
         </div>
         <Link
           href={`/e/${slug}/rrhh/marcajes/manual`}

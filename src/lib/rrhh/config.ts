@@ -7,6 +7,11 @@ export const PARAMETROS_DEFAULT: Record<string, string> = {
   hora_salida_default: "17:00:00",
   minutos_tolerancia: "10",
   ciclo_quincenal: "15",
+  /** 1 = el kiosko solo permite marcar cerca del predio */
+  geocerca_activa: "0",
+  geocerca_lat: "",
+  geocerca_lng: "",
+  geocerca_radio_m: "150",
 };
 
 export async function obtenerParametros(
@@ -62,6 +67,36 @@ export function validarParametros(
   if (!Number.isFinite(ciclo) || ciclo < 1 || ciclo > 28) {
     return { ok: false, error: "Ciclo quincenal: día de corte entre 1 y 28." };
   }
+
+  const geoActiva = String(parametros.geocerca_activa ?? "0") === "1" ? "1" : "0";
+  const radio = Number.parseInt(parametros.geocerca_radio_m ?? "150", 10);
+  if (!Number.isFinite(radio) || radio < 30 || radio > 5000) {
+    return {
+      ok: false,
+      error: "Radio de geocerca: entre 30 y 5000 metros.",
+    };
+  }
+  let latStr = String(parametros.geocerca_lat ?? "").trim();
+  let lngStr = String(parametros.geocerca_lng ?? "").trim();
+  if (geoActiva === "1") {
+    const lat = Number.parseFloat(latStr);
+    const lng = Number.parseFloat(lngStr);
+    if (!Number.isFinite(lat) || lat < -90 || lat > 90) {
+      return {
+        ok: false,
+        error: "Geocerca activa: indica latitud válida del predio (−90 a 90).",
+      };
+    }
+    if (!Number.isFinite(lng) || lng < -180 || lng > 180) {
+      return {
+        ok: false,
+        error: "Geocerca activa: indica longitud válida del predio (−180 a 180).",
+      };
+    }
+    latStr = String(lat);
+    lngStr = String(lng);
+  }
+
   return {
     ok: true,
     datos: {
@@ -69,6 +104,10 @@ export function validarParametros(
       hora_salida_default: horaSalida,
       minutos_tolerancia: String(tolerancia),
       ciclo_quincenal: String(ciclo),
+      geocerca_activa: geoActiva,
+      geocerca_lat: latStr,
+      geocerca_lng: lngStr,
+      geocerca_radio_m: String(radio),
     },
   };
 }

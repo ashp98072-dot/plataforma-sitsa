@@ -27,6 +27,8 @@ const kioskoSchema = z.object({
   modo: z.literal("kiosko"),
   codigo: z.string().min(1),
   viajeLargo: z.boolean().optional(),
+  latitud: z.number().min(-90).max(90).optional().nullable(),
+  longitud: z.number().min(-180).max(180).optional().nullable(),
 });
 
 const manualSchema = z.object({
@@ -55,6 +57,8 @@ export async function POST(req: Request, ctx: Ctx) {
     const r = await registrarMarcajeKiosko(guard.empresa.id, {
       codigo: parsed.data.codigo,
       viajeLargo: parsed.data.viajeLargo,
+      latitud: parsed.data.latitud,
+      longitud: parsed.data.longitud,
     });
     if (!r.ok) {
       return NextResponse.json({ error: r.error, code: r.code }, { status: 400 });
