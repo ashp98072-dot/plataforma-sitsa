@@ -467,6 +467,39 @@ function FlotaInner() {
 
   async function registrarLectura() {
     setErr("");
+    const veh = vehiculos.find((v) => v.id === vehiculoId);
+    if (veh?.en_taller) {
+      setErr(
+        `${veh.placa} está en taller. No se puede registrar lectura ni enviarlo a ruta.`,
+      );
+      return;
+    }
+    if (abiertos.some((a) => a.vehiculo_id === vehiculoId)) {
+      setErr("Esa unidad ya tiene un viaje abierto. Cierra la llegada primero.");
+      return;
+    }
+    const nombre = conductor.trim();
+    if (nombre.length >= 2) {
+      const norm = nombre
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/\s+/g, " ")
+        .toLowerCase();
+      const mismo = abiertos.find(
+        (a) =>
+          a.piloto_nombre
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .replace(/\s+/g, " ")
+            .toLowerCase() === norm,
+      );
+      if (mismo) {
+        setErr(
+          `El piloto "${nombre}" ya tiene viaje abierto en ${mismo.placa}.`,
+        );
+        return;
+      }
+    }
     const res = await fetch(`/api/empresas/${slug}/flota/lecturas`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -474,7 +507,8 @@ function FlotaInner() {
         vehiculoId,
         km: kmLectura,
         fechaLectura: new Date().toISOString().slice(0, 10),
-        nota: conductor || undefined,
+        conductor: nombre || undefined,
+        nota: nombre || undefined,
       }),
     });
     const data = await res.json();
@@ -1240,38 +1274,53 @@ function FlotaInner() {
         <div className="space-y-4">
           {SearchBar}
           {can("flota_lecturas", "crear") ? (
-            <div className="flex flex-wrap gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-              <select
-                className={input}
-                value={vehiculoId}
-                onChange={(e) => setVehiculoId(Number(e.target.value))}
-              >
-                {activos.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.placa}
-                  </option>
-                ))}
-              </select>
-              <input
-                type="number"
-                className={`${input} w-32`}
-                placeholder="Km"
-                value={kmLectura || ""}
-                onChange={(e) => setKmLectura(Number(e.target.value))}
-              />
-              <input
-                className={input}
-                placeholder="Conductor"
-                value={conductor}
-                onChange={(e) => setConductor(e.target.value)}
-              />
-              <button
-                type="button"
-                onClick={() => void registrarLectura()}
-                className="rounded bg-[var(--accent-2)] px-3 py-1.5 text-sm"
-              >
-                Guardar lectura
-              </button>
+            <div className="space-y-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+              <p className="text-xs text-[var(--muted)]">
+                No se permite unidad en taller ni el mismo piloto con viaje
+                abierto (Walter = walter).
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <select
+                  className={input}
+                  value={vehiculoId}
+                  onChange={(e) => setVehiculoId(Number(e.target.value))}
+                >
+                  {activos.map((v) => {
+                    const ruta = abiertos.some((a) => a.vehiculo_id === v.id);
+                    return (
+                      <option
+                        key={v.id}
+                        value={v.id}
+                        disabled={Boolean(v.en_taller) || ruta}
+                      >
+                        {v.placa}
+                        {v.en_taller ? " · EN TALLER" : ""}
+                        {ruta ? " · EN RUTA" : ""}
+                      </option>
+                    );
+                  })}
+                </select>
+                <input
+                  type="number"
+                  className={`${input} w-32`}
+                  placeholder="Km"
+                  value={kmLectura || ""}
+                  onChange={(e) => setKmLectura(Number(e.target.value))}
+                />
+                <input
+                  className={input}
+                  placeholder="Conductor / piloto"
+                  value={conductor}
+                  onChange={(e) => setConductor(e.target.value)}
+                />
+                <button
+                  type="button"
+                  onClick={() => void registrarLectura()}
+                  className="rounded bg-[var(--accent-2)] px-3 py-1.5 text-sm"
+                >
+                  Guardar lectura
+                </button>
+              </div>
             </div>
           ) : null}
           <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
@@ -1294,7 +1343,9 @@ function FlotaInner() {
                     <td className="px-3 py-2">
                       {Number(l.km).toLocaleString("es-GT")}
                     </td>
-                    <td className="px-3 py-2">{l.nota ?? "—"}</td>
+                    <td className="px-3 py-2">
+                      {l.conductor || l.nota || "—"}
+                    </td>
                   </tr>
                 ))}
               </tbody>
