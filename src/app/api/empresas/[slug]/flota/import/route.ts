@@ -61,10 +61,11 @@ export async function POST(req: Request, ctx: Ctx) {
         [guard.empresa.id, f.placa],
       );
       if (existente[0]) {
+        // Marca y modelo van en columnas separadas (Excel: Marca | Modelo/año)
         await execute(
           `UPDATE flota_vehiculos SET
-            marca = COALESCE(?, marca),
-            modelo = COALESCE(?, modelo),
+            marca = ?,
+            modelo = ?,
             descripcion = COALESCE(?, descripcion),
             color = COALESCE(?, color),
             credito = COALESCE(?, credito),

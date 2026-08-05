@@ -2035,7 +2035,13 @@ function FlotaInner() {
                         {v.placa}
                       </p>
                       <p className="text-sm font-semibold">
-                        {v.marca} {v.modelo}
+                        {v.marca || "—"}
+                        {v.modelo ? (
+                          <span className="font-normal text-[var(--muted)]">
+                            {" "}
+                            · {v.modelo}
+                          </span>
+                        ) : null}
                       </p>
                     </div>
                     <div className="flex flex-col items-end gap-1">
@@ -2102,7 +2108,7 @@ function FlotaInner() {
                   [
                     ["placa", "Placa"],
                     ["marca", "Marca"],
-                    ["modelo", "Modelo / año"],
+                    ["modelo", "Modelo (año)"],
                     ["descripcion", "Descripción"],
                     ["color", "Color"],
                     ["filtroMayor", "Filtro servicio mayor"],
@@ -2257,6 +2263,7 @@ function FlotaInner() {
                   <th className="px-3 py-2">Estado</th>
                   <th className="px-3 py-2">Descripción</th>
                   <th className="px-3 py-2">Marca</th>
+                  <th className="px-3 py-2">Modelo</th>
                   <th className="px-3 py-2">Km</th>
                   <th className="px-3 py-2">Filtros</th>
                   <th className="px-3 py-2">Rin</th>
@@ -2296,9 +2303,8 @@ function FlotaInner() {
                       </span>
                     </td>
                     <td className="px-3 py-2">{v.descripcion ?? "—"}</td>
-                    <td className="px-3 py-2">
-                      {v.marca} {v.modelo}
-                    </td>
+                    <td className="px-3 py-2">{v.marca || "—"}</td>
+                    <td className="px-3 py-2">{v.modelo || "—"}</td>
                     <td className="px-3 py-2">
                       {Number(v.km_actual ?? 0).toLocaleString("es-GT")}
                     </td>
