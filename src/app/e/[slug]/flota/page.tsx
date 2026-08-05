@@ -63,6 +63,9 @@ type Servicio = {
   costo: number;
   descripcion?: string | null;
   observaciones?: string | null;
+  fecha_entrada_taller?: string | null;
+  fecha_salida_taller?: string | null;
+  dias_en_taller?: number | null;
   repuestos?: string[];
   adjuntos?: number;
 };
@@ -165,6 +168,10 @@ function FlotaInner() {
   const [repuestos, setRepuestos] = useState<string[]>([]);
   const [repuestoInput, setRepuestoInput] = useState("");
   const [obsServicio, setObsServicio] = useState("");
+  const [fechaEntradaTaller, setFechaEntradaTaller] = useState("");
+  const [fechaSalidaTaller, setFechaSalidaTaller] = useState(() =>
+    new Date().toISOString().slice(0, 10),
+  );
   const [pilotoNombre, setPilotoNombre] = useState("");
   const [placaSalida, setPlacaSalida] = useState("");
   const [destino, setDestino] = useState("");
@@ -502,6 +509,8 @@ function FlotaInner() {
     fd.append("costo", String(costo || 0));
     fd.append("repuestos", JSON.stringify(lista));
     if (obsServicio.trim()) fd.append("observaciones", obsServicio.trim());
+    if (fechaEntradaTaller) fd.append("fechaEntradaTaller", fechaEntradaTaller);
+    if (fechaSalidaTaller) fd.append("fechaSalidaTaller", fechaSalidaTaller);
     if (sacarDeServicio) fd.append("sacarDeServicio", "1");
     if (archivosServicio) {
       Array.from(archivosServicio).forEach((f, i) =>
@@ -520,6 +529,7 @@ function FlotaInner() {
       setRepuestoInput("");
       setObsServicio("");
       setCosto(0);
+      setFechaSalidaTaller(new Date().toISOString().slice(0, 10));
       setArchivosServicio(null);
       await cargar();
     }
@@ -1163,7 +1173,16 @@ function FlotaInner() {
                 <select
                   className={input}
                   value={vehiculoId}
-                  onChange={(e) => setVehiculoId(Number(e.target.value))}
+                  onChange={(e) => {
+                    const id = Number(e.target.value);
+                    setVehiculoId(id);
+                    const v = activos.find((x) => x.id === id);
+                    if (v?.fecha_entrada_taller) {
+                      setFechaEntradaTaller(
+                        String(v.fecha_entrada_taller).slice(0, 10),
+                      );
+                    }
+                  }}
                 >
                   {activos.map((v) => {
                     const ruta = abiertos.some((a) => a.vehiculo_id === v.id);
@@ -1202,6 +1221,47 @@ function FlotaInner() {
                   value={costo || ""}
                   onChange={(e) => setCosto(Number(e.target.value))}
                 />
+              </div>
+
+              <div className="flex flex-wrap gap-3">
+                <label className="text-xs text-[var(--muted)]">
+                  Fecha entra al taller
+                  <input
+                    type="date"
+                    className={`${input} mt-1 block`}
+                    value={fechaEntradaTaller}
+                    onChange={(e) => setFechaEntradaTaller(e.target.value)}
+                  />
+                </label>
+                <label className="text-xs text-[var(--muted)]">
+                  Fecha sale del taller
+                  <input
+                    type="date"
+                    className={`${input} mt-1 block`}
+                    value={fechaSalidaTaller}
+                    onChange={(e) => setFechaSalidaTaller(e.target.value)}
+                    disabled={!sacarDeServicio}
+                  />
+                </label>
+                {fechaEntradaTaller && fechaSalidaTaller && sacarDeServicio ? (
+                  <p className="self-end pb-1 text-xs text-[var(--muted)]">
+                    Días en taller:{" "}
+                    <strong className="text-[var(--fg)]">
+                      {Math.max(
+                        0,
+                        Math.round(
+                          (new Date(
+                            fechaSalidaTaller + "T12:00:00",
+                          ).getTime() -
+                            new Date(
+                              fechaEntradaTaller + "T12:00:00",
+                            ).getTime()) /
+                            86400000,
+                        ),
+                      )}
+                    </strong>
+                  </p>
+                ) : null}
               </div>
 
               <div>
@@ -1317,7 +1377,9 @@ function FlotaInner() {
             <table className="min-w-full text-left text-sm">
               <thead className="bg-[#334155] text-white">
                 <tr>
-                  <th className="px-3 py-2">Fecha</th>
+                  <th className="px-3 py-2">Entra taller</th>
+                  <th className="px-3 py-2">Sale taller</th>
+                  <th className="px-3 py-2">Días</th>
                   <th className="px-3 py-2">Placa</th>
                   <th className="px-3 py-2">Tipo</th>
                   <th className="px-3 py-2">Km</th>
@@ -1331,7 +1393,17 @@ function FlotaInner() {
                 {serviciosFiltrados.map((s) => (
                   <tr key={s.id} className="border-t border-[var(--border)]">
                     <td className="px-3 py-2">
-                      {String(s.fecha_servicio).slice(0, 10)}
+                      {s.fecha_entrada_taller
+                        ? String(s.fecha_entrada_taller).slice(0, 10)
+                        : "—"}
+                    </td>
+                    <td className="px-3 py-2">
+                      {s.fecha_salida_taller
+                        ? String(s.fecha_salida_taller).slice(0, 10)
+                        : String(s.fecha_servicio).slice(0, 10)}
+                    </td>
+                    <td className="px-3 py-2">
+                      {s.dias_en_taller != null ? s.dias_en_taller : "—"}
                     </td>
                     <td className="px-3 py-2 font-mono">{s.placa}</td>
                     <td className="px-3 py-2">{s.tipo}</td>

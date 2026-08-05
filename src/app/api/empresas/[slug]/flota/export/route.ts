@@ -36,25 +36,54 @@ export async function GET(req: Request, ctx: Ctx) {
   if (tipo === "servicios") {
     title = "Servicios de flota";
     filename = "flota-servicios";
-    headers = ["Fecha", "Placa", "Tipo", "Km", "Costo", "Descripción"];
+    headers = [
+      "Entra taller",
+      "Sale taller",
+      "Días",
+      "Placa",
+      "Tipo",
+      "Km",
+      "Costo",
+      "Repuestos",
+      "Observaciones",
+    ];
     const data = await query<RowDataPacket[]>(
-      `SELECT s.fecha_servicio, v.placa, s.tipo, s.km_servicio, s.costo, s.descripcion
+      `SELECT s.fecha_servicio, s.fecha_entrada_taller, s.fecha_salida_taller,
+              s.dias_en_taller, v.placa, s.tipo, s.km_servicio, s.costo,
+              s.descripcion, s.repuestos, s.observaciones
        FROM flota_servicios s
        INNER JOIN flota_vehiculos v ON v.id = s.vehiculo_id
        WHERE s.empresa_id = ?
        ORDER BY s.fecha_servicio DESC
        LIMIT 2000`,
       [guard.empresa.id],
+    ).catch(async () =>
+      query<RowDataPacket[]>(
+        `SELECT s.fecha_servicio, v.placa, s.tipo, s.km_servicio, s.costo, s.descripcion
+         FROM flota_servicios s
+         INNER JOIN flota_vehiculos v ON v.id = s.vehiculo_id
+         WHERE s.empresa_id = ?
+         ORDER BY s.fecha_servicio DESC
+         LIMIT 2000`,
+        [guard.empresa.id],
+      ),
     );
     rows = data
       .filter((r) => !q || String(r.placa).toLowerCase().includes(q))
       .map((r) => [
-        String(r.fecha_servicio).slice(0, 10),
+        r.fecha_entrada_taller
+          ? String(r.fecha_entrada_taller).slice(0, 10)
+          : "",
+        r.fecha_salida_taller
+          ? String(r.fecha_salida_taller).slice(0, 10)
+          : String(r.fecha_servicio).slice(0, 10),
+        r.dias_en_taller != null ? String(r.dias_en_taller) : "",
         String(r.placa),
         String(r.tipo ?? ""),
         String(r.km_servicio ?? ""),
         Number(r.costo ?? 0).toFixed(2),
-        String(r.descripcion ?? ""),
+        String(r.descripcion ?? r.repuestos ?? ""),
+        String(r.observaciones ?? ""),
       ]);
   } else if (tipo === "viajes") {
     title = "Viajes de flota";

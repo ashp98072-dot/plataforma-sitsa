@@ -45,7 +45,8 @@ export async function GET(req: Request, ctx: Ctx) {
   const vehiculoId = Number(url.searchParams.get("vehiculoId") ?? 0);
   const rows = await query<RowDataPacket[]>(
     `SELECT s.id, s.vehiculo_id, s.tipo, s.km_servicio, s.fecha_servicio, s.costo,
-            s.descripcion, s.repuestos, s.observaciones, v.placa
+            s.descripcion, s.repuestos, s.observaciones,
+            s.fecha_entrada_taller, s.fecha_salida_taller, s.dias_en_taller, v.placa
      FROM flota_servicios s
      INNER JOIN flota_vehiculos v ON v.id = s.vehiculo_id
      WHERE s.empresa_id = ? ${vehiculoId ? "AND s.vehiculo_id = ?" : ""}
@@ -99,8 +100,19 @@ const schema = z.object({
   descripcion: z.string().optional(),
   repuestos: z.array(z.string()).optional(),
   observaciones: z.string().optional(),
+  fechaEntradaTaller: z.string().optional(),
+  fechaSalidaTaller: z.string().optional(),
   sacarDeServicio: z.boolean().optional(),
 });
+
+function diasEntre(a: string | null, b: string | null): number | null {
+  if (!a || !b) return null;
+  const d1 = new Date(a.slice(0, 10) + "T12:00:00");
+  const d2 = new Date(b.slice(0, 10) + "T12:00:00");
+  if (Number.isNaN(d1.getTime()) || Number.isNaN(d2.getTime())) return null;
+  const ms = d2.getTime() - d1.getTime();
+  return Math.max(0, Math.round(ms / 86400000));
+}
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
@@ -126,7 +138,9 @@ export async function POST(req: Request, ctx: Ctx) {
         ? Number(form.get("kmServicio"))
         : undefined,
       fechaServicio: String(
-        form.get("fechaServicio") ?? new Date().toISOString().slice(0, 10),
+        form.get("fechaServicio") ??
+          form.get("fechaSalidaTaller") ??
+          new Date().toISOString().slice(0, 10),
       ),
       costo: Number(form.get("costo") ?? 0),
       descripcion: form.get("descripcion")
@@ -135,6 +149,12 @@ export async function POST(req: Request, ctx: Ctx) {
       repuestos: parseRepuestos(form.get("repuestos")),
       observaciones: form.get("observaciones")
         ? String(form.get("observaciones"))
+        : undefined,
+      fechaEntradaTaller: form.get("fechaEntradaTaller")
+        ? String(form.get("fechaEntradaTaller"))
+        : undefined,
+      fechaSalidaTaller: form.get("fechaSalidaTaller")
+        ? String(form.get("fechaSalidaTaller"))
         : undefined,
       sacarDeServicio: form.get("sacarDeServicio") === "1",
     });
@@ -152,7 +172,8 @@ export async function POST(req: Request, ctx: Ctx) {
   }
 
   const veh = await query<RowDataPacket[]>(
-    "SELECT id, placa, en_taller FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1",
+    `SELECT id, placa, en_taller, fecha_entrada_taller
+     FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1`,
     [d.vehiculoId, guard.empresa.id],
   );
   if (!veh[0]) {
@@ -179,24 +200,46 @@ export async function POST(req: Request, ctx: Ctx) {
   ).filter(Boolean);
   const desc = reps.length ? reps.join(" | ") : (d.descripcion?.trim() || null);
   const obs = d.observaciones?.trim() || null;
+  const hoy = new Date().toISOString().slice(0, 10);
+  const fechaEntrada =
+    (d.fechaEntradaTaller?.slice(0, 10) ||
+      (veh[0].fecha_entrada_taller
+        ? String(veh[0].fecha_entrada_taller).slice(0, 10)
+        : null) ||
+      null) as string | null;
+  const fechaSalida = d.sacarDeServicio
+    ? (d.fechaSalidaTaller?.slice(0, 10) || d.fechaServicio.slice(0, 10) || hoy)
+    : (d.fechaSalidaTaller?.slice(0, 10) || null);
+  if (fechaEntrada && fechaSalida && fechaSalida < fechaEntrada) {
+    return NextResponse.json(
+      { error: "La fecha de salida no puede ser anterior a la de entrada al taller." },
+      { status: 400 },
+    );
+  }
+  const dias = diasEntre(fechaEntrada, fechaSalida);
+  const fechaServicio = fechaSalida || d.fechaServicio.slice(0, 10) || hoy;
 
   let result;
   try {
     result = await execute(
       `INSERT INTO flota_servicios
         (empresa_id, vehiculo_id, tipo, km_servicio, fecha_servicio, costo,
-         descripcion, repuestos, observaciones)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         descripcion, repuestos, observaciones,
+         fecha_entrada_taller, fecha_salida_taller, dias_en_taller)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         guard.empresa.id,
         d.vehiculoId,
         d.tipo,
         d.kmServicio ?? null,
-        d.fechaServicio,
+        fechaServicio,
         d.costo,
         desc,
         reps.length ? JSON.stringify(reps) : null,
         obs,
+        fechaEntrada,
+        fechaSalida,
+        dias,
       ],
     );
   } catch {
@@ -209,9 +252,11 @@ export async function POST(req: Request, ctx: Ctx) {
         d.vehiculoId,
         d.tipo,
         d.kmServicio ?? null,
-        d.fechaServicio,
+        fechaServicio,
         d.costo,
-        [desc, obs].filter(Boolean).join(" · ") || null,
+        [desc, obs, fechaEntrada ? `Ent:${fechaEntrada}` : null, fechaSalida ? `Sal:${fechaSalida}` : null]
+          .filter(Boolean)
+          .join(" · ") || null,
       ],
     );
   }
@@ -227,7 +272,7 @@ export async function POST(req: Request, ctx: Ctx) {
         motivo_taller = NULL,
         estado = 'Activo'
        WHERE id = ? AND empresa_id = ?`,
-      [d.kmServicio ?? null, d.fechaServicio, d.vehiculoId, guard.empresa.id],
+      [d.kmServicio ?? null, fechaServicio, d.vehiculoId, guard.empresa.id],
     ).catch(async () => {
       await execute(
         `UPDATE flota_vehiculos SET
@@ -236,17 +281,22 @@ export async function POST(req: Request, ctx: Ctx) {
           en_taller = 0,
           fecha_entrada_taller = NULL
          WHERE id = ? AND empresa_id = ?`,
-        [d.kmServicio ?? null, d.fechaServicio, d.vehiculoId, guard.empresa.id],
+        [d.kmServicio ?? null, fechaServicio, d.vehiculoId, guard.empresa.id],
       );
     });
-  } else if (d.kmServicio != null) {
-    await execute(
-      `UPDATE flota_vehiculos SET
-        km_ultimo_servicio = COALESCE(?, km_ultimo_servicio),
-        fecha_ultimo_servicio = ?
-       WHERE id = ? AND empresa_id = ?`,
-      [d.kmServicio, d.fechaServicio, d.vehiculoId, guard.empresa.id],
-    );
+  } else {
+    // Queda en taller: guardar / actualizar fecha de entrada
+    if (fechaEntrada) {
+      await execute(
+        `UPDATE flota_vehiculos SET
+          en_taller = 1,
+          fecha_entrada_taller = COALESCE(fecha_entrada_taller, ?),
+          estado = 'En taller',
+          km_ultimo_servicio = COALESCE(?, km_ultimo_servicio)
+         WHERE id = ? AND empresa_id = ?`,
+        [fechaEntrada, d.kmServicio ?? null, d.vehiculoId, guard.empresa.id],
+      ).catch(() => undefined);
+    }
   }
 
   const subidos: string[] = [];
