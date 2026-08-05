@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS usuarios (
   nombre VARCHAR(200) NULL,
   email VARCHAR(200) NULL,
   rol_global VARCHAR(40) NOT NULL DEFAULT 'Operaciones',
-  -- Admin | RRHH | Contabilidad | Operaciones | CoordinadorPredios | Visualizador
+  -- Admin | RRHH | Marcaje | Contabilidad | Operaciones | CoordinadorPredios | Piloto | Visualizador
   activo TINYINT(1) NOT NULL DEFAULT 1,
   acceso_todas_empresas TINYINT(1) NOT NULL DEFAULT 0,
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP

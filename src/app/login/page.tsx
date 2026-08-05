@@ -93,10 +93,6 @@ export default function LoginPage() {
         >
           {loading ? "Ingresando…" : "Ingresar"}
         </button>
-
-        <p className="mt-4 text-xs text-[var(--muted)]">
-          admin / admin123 · rrhh / rrhh123 · contabilidad / conta123
-        </p>
       </form>
     </main>
   );

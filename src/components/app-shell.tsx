@@ -302,6 +302,11 @@ export function AppShell({
         icon: <IconAdmin />,
         links: [
           { href: `${base}/usuarios`, label: "Usuarios", key: "usuarios" },
+          {
+            href: `${base}/admin/limpiar`,
+            label: "Limpiar módulo",
+            key: "limpiar",
+          },
           { href: `${base}/dashboard`, label: "Gerencia", key: "gerencia" },
         ],
       });

@@ -46,6 +46,7 @@ export default function MarcajesKioskoPage() {
   const [geocercaLat, setGeocercaLat] = useState<number | null>(null);
   const [geocercaLng, setGeocercaLng] = useState<number | null>(null);
   const [empresaNombre, setEmpresaNombre] = useState("");
+  const [rolUsuario, setRolUsuario] = useState("");
   const [loading, setLoading] = useState(false);
   const [enviando, setEnviando] = useState(false);
   const [detectandoGps, setDetectandoGps] = useState(false);
@@ -137,26 +138,30 @@ export default function MarcajesKioskoPage() {
   const cargar = useCallback(async () => {
     setLoading(true);
     try {
-      const [m, cfg, dash] = await Promise.all([
+      const [m, me] = await Promise.all([
         fetch(
           `/api/empresas/${slug}/rrhh/marcajes?desde=${hoy}&hasta=${hoy}`,
         ).then((r) => r.json()),
-        fetch(`/api/empresas/${slug}/rrhh/configuracion`).then((r) => r.json()),
-        fetch(`/api/empresas/${slug}/rrhh/dashboard`).then((r) => r.json()),
+        fetch("/api/auth/me").then((r) => r.json()),
       ]);
       setMarcajes(m.marcajes ?? []);
-      if (cfg.parametros) {
-        setHoraEntrada(cfg.parametros.hora_entrada_default ?? "08:00:00");
-        setHoraSalida(cfg.parametros.hora_salida_default ?? "17:00:00");
-        setTolerancia(Number(cfg.parametros.minutos_tolerancia ?? 10));
-        setGeocercaActiva(String(cfg.parametros.geocerca_activa ?? "0") === "1");
-        setGeocercaRadio(Number(cfg.parametros.geocerca_radio_m ?? 150) || 150);
-        const lat = Number.parseFloat(cfg.parametros.geocerca_lat ?? "");
-        const lng = Number.parseFloat(cfg.parametros.geocerca_lng ?? "");
-        setGeocercaLat(Number.isFinite(lat) ? lat : null);
-        setGeocercaLng(Number.isFinite(lng) ? lng : null);
+      if (m.empresa?.nombre) setEmpresaNombre(String(m.empresa.nombre));
+      if (m.horario) {
+        setHoraEntrada(m.horario.horaEntrada ?? "08:00:00");
+        setHoraSalida(m.horario.horaSalida ?? "17:00:00");
+        setTolerancia(Number(m.horario.tolerancia ?? 10) || 10);
       }
-      if (dash.empresa) setEmpresaNombre(dash.empresa);
+      if (m.geocerca) {
+        setGeocercaActiva(Boolean(m.geocerca.activa));
+        setGeocercaRadio(Number(m.geocerca.radioM ?? 150) || 150);
+        setGeocercaLat(
+          typeof m.geocerca.lat === "number" ? m.geocerca.lat : null,
+        );
+        setGeocercaLng(
+          typeof m.geocerca.lng === "number" ? m.geocerca.lng : null,
+        );
+      }
+      if (me.user?.rol) setRolUsuario(String(me.user.rol));
     } finally {
       setLoading(false);
     }
@@ -266,12 +271,14 @@ export default function MarcajesKioskoPage() {
             </p>
           ) : null}
         </div>
-        <Link
-          href={`/e/${slug}/rrhh/marcajes/manual`}
-          className="rounded-lg bg-[#1e293b] px-3 py-2 text-xs text-[var(--muted)] hover:text-white"
-        >
-          Corrección manual RRHH →
-        </Link>
+        {rolUsuario && rolUsuario !== "Marcaje" ? (
+          <Link
+            href={`/e/${slug}/rrhh/marcajes/manual`}
+            className="rounded-lg bg-[#1e293b] px-3 py-2 text-xs text-[var(--muted)] hover:text-white"
+          >
+            Corrección manual RRHH →
+          </Link>
+        ) : null}
       </div>
 
       <div className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6 md:p-10">

@@ -53,12 +53,31 @@ const createSchema = z.object({
   permisos: z.array(permisoSchema).optional(),
 });
 
+function validarAlcanceMarcaje(data: {
+  rol: string;
+  accesoTodas: boolean;
+  empresaIds: number[];
+}): string | null {
+  if (data.rol !== "Marcaje") return null;
+  if (data.accesoTodas) {
+    return "El usuario Marcaje no puede tener acceso a todas las empresas. Elige una sola (el lugar del kiosco).";
+  }
+  if (data.empresaIds.length !== 1) {
+    return "El usuario Marcaje debe estar ligado a exactamente una empresa (lugar). Ahí usará la geocerca de RRHH.";
+  }
+  return null;
+}
+
 export async function POST(request: Request) {
   const guard = await requireAdmin();
   if (guard.error) return guard.error;
   const parsed = createSchema.safeParse(await request.json());
   if (!parsed.success) {
     return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
+  }
+  const alcance = validarAlcanceMarcaje(parsed.data);
+  if (alcance) {
+    return NextResponse.json({ error: alcance }, { status: 400 });
   }
   try {
     const id = await crearUsuario(parsed.data);
@@ -90,6 +109,10 @@ export async function PUT(request: Request) {
   const parsed = updateSchema.safeParse(await request.json());
   if (!parsed.success) {
     return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
+  }
+  const alcance = validarAlcanceMarcaje(parsed.data);
+  if (alcance) {
+    return NextResponse.json({ error: alcance }, { status: 400 });
   }
   const { id, ...rest } = parsed.data;
   await actualizarUsuario(id, rest);

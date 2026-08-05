@@ -38,6 +38,7 @@ type Usuario = {
 const ROLES = [
   "Admin",
   "RRHH",
+  "Marcaje",
   "Contabilidad",
   "Operaciones",
   "CoordinadorPredios",
@@ -273,6 +274,10 @@ export default function UsuariosPage() {
   }
 
   function toggleEmpresa(id: number) {
+    if (rol === "Marcaje") {
+      setEmpresaIds((prev) => (prev.includes(id) ? [] : [id]));
+      return;
+    }
     setEmpresaIds((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
     );
@@ -328,9 +333,17 @@ export default function UsuariosPage() {
     setError("");
     setMsg("");
     // Solo Admin puede ir sin empresas concretas si marca "todas".
-    // RRHH / Contabilidad / Predios / etc. respetan el checkbox y la lista.
+    // Marcaje: una sola empresa (lugar del kiosco) — usa geocerca RRHH de ese lugar.
+    if (rol === "Marcaje") {
+      if (empresaIds.length !== 1) {
+        setError(
+          "Usuario Marcaje: elige exactamente una empresa (lugar). Usará la geocerca configurada por RRHH ahí.",
+        );
+        return;
+      }
+    }
     const todas =
-      rol === "Admin" ? true : Boolean(accesoTodas);
+      rol === "Admin" ? true : rol === "Marcaje" ? false : Boolean(accesoTodas);
     if (!todas && empresaIds.length === 0) {
       setError("Selecciona al menos una empresa, o marca acceso a todas.");
       return;
@@ -387,6 +400,12 @@ export default function UsuariosPage() {
           Abre cada área (RRHH, Operaciones, Flota, Contabilidad) para marcar
           qué puede Ver / Crear / Editar / Eliminar. Contexto: {slug}
         </p>
+        <a
+          href={`/e/${slug}/admin/limpiar`}
+          className="mt-2 inline-block text-xs text-amber-200 underline"
+        >
+          Limpiar datos por módulo (RRHH / Flota / Operaciones…) →
+        </a>
       </div>
 
       <form
@@ -448,8 +467,14 @@ export default function UsuariosPage() {
                 setRol(r);
                 setPermisos(clonePermisos(r));
                 abrirGrupoPrincipal(r);
-                // Solo Admin implica acceso a todas; el resto elige empresas
+                // Solo Admin implica acceso a todas; Marcaje = un solo lugar
                 if (r === "Admin") setAccesoTodas(true);
+                if (r === "Marcaje") {
+                  setAccesoTodas(false);
+                  setEmpresaIds((prev) =>
+                    prev.length === 1 ? prev : prev.slice(0, 1),
+                  );
+                }
               }}
             >
               {ROLES.map((r) => (
@@ -461,17 +486,30 @@ export default function UsuariosPage() {
           </label>
         </div>
 
+        {rol === "Marcaje" ? (
+          <p className="rounded-lg border border-sky-800/40 bg-sky-950/30 px-3 py-2 text-xs text-sky-100">
+            Kiosco de marcaje: solo registra entrada/salida en la empresa
+            (lugar) que elijas. Usa latitud, longitud y radio que RRHH configure
+            en Configuración de esa empresa.
+          </p>
+        ) : null}
+
         <label className="flex items-center gap-2 text-sm">
           <input
             type="checkbox"
             checked={rol === "Admin" ? true : accesoTodas}
-            disabled={rol === "Admin"}
+            disabled={rol === "Admin" || rol === "Marcaje"}
             onChange={(e) => setAccesoTodas(e.target.checked)}
           />
           Acceso a todas las empresas
           {rol === "Admin" ? (
             <span className="text-xs text-[var(--muted)]">
               (Admin siempre tiene acceso a todas)
+            </span>
+          ) : null}
+          {rol === "Marcaje" ? (
+            <span className="text-xs text-[var(--muted)]">
+              (Marcaje: una sola empresa / lugar)
             </span>
           ) : null}
         </label>
@@ -488,7 +526,9 @@ export default function UsuariosPage() {
         ) : null}
 
         <div>
-          <p className="mb-1 text-sm text-[var(--muted)]">Empresas</p>
+          <p className="mb-1 text-sm text-[var(--muted)]">
+            {rol === "Marcaje" ? "Lugar (empresa del kiosco)" : "Empresas"}
+          </p>
           <div className="flex flex-wrap gap-2">
             {empresas.map((e) => (
               <label
@@ -496,9 +536,14 @@ export default function UsuariosPage() {
                 className="flex items-center gap-1 rounded border border-[var(--border)] px-2 py-1 text-sm"
               >
                 <input
-                  type="checkbox"
-                  checked={empresaIds.includes(e.id) || accesoTodas}
-                  disabled={accesoTodas}
+                  type={rol === "Marcaje" ? "radio" : "checkbox"}
+                  name={rol === "Marcaje" ? "lugar-marcaje" : undefined}
+                  checked={
+                    rol === "Marcaje"
+                      ? empresaIds.includes(e.id)
+                      : empresaIds.includes(e.id) || accesoTodas
+                  }
+                  disabled={accesoTodas && rol !== "Marcaje"}
                   onChange={() => toggleEmpresa(e.id)}
                 />
                 {e.codigo}

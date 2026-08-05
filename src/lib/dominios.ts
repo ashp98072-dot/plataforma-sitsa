@@ -70,6 +70,12 @@ export function homePorRol(
   dominioEmpresa: boolean,
 ): string {
   const base = dominioEmpresa ? "" : `/e/${slug}`;
+  if (rol === "Marcaje") {
+    return dominioEmpresa ? `/marcajes` : `${base}/rrhh/marcajes`;
+  }
+  if (rol === "Piloto") {
+    return dominioEmpresa ? `/flota` : `${base}/flota`;
+  }
   if (rol === "RRHH" || rol === "Admin") return `${base}/dashboard-rrhh`;
   if (rol === "Operaciones" || rol === "CoordinadorPredios") {
     return `${base}/dashboard-operaciones`;

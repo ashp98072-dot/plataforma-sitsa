@@ -105,6 +105,17 @@ export function permisoSoloVer(modulo: string): PermisoModulo {
   };
 }
 
+/** Ver + crear (sin editar/eliminar). Ideal para kiosco de marcaje. */
+export function permisoVerCrear(modulo: string): PermisoModulo {
+  return {
+    modulo,
+    puedeVer: true,
+    puedeCrear: true,
+    puedeEditar: false,
+    puedeEliminar: false,
+  };
+}
+
 export function esRrhhSubmodulo(m: string): m is RrhhSubmodulo {
   return (RRHH_SUBMODULOS as readonly string[]).includes(m);
 }
@@ -131,6 +142,7 @@ export function labelPermiso(modulo: string): string {
 export function labelRol(rol: string): string {
   if (rol === "CoordinadorPredios") return "Predios";
   if (rol === "Piloto") return "Piloto";
+  if (rol === "Marcaje") return "Marcaje (kiosco)";
   return rol;
 }
 
@@ -189,6 +201,7 @@ export const GRUPOS_PERMISOS: {
 export function grupoPrincipalDelRol(rol: RolGlobal): GrupoPermisosId {
   switch (rol) {
     case "RRHH":
+    case "Marcaje":
       return "rrhh";
     case "Contabilidad":
       return "contabilidad";
@@ -209,6 +222,8 @@ export function modulosPropiosDelRol(rol: RolGlobal): string[] {
       return catalogoGlobalPermisos();
     case "RRHH":
       return [...RRHH_SUBMODULOS];
+    case "Marcaje":
+      return ["marcajes"];
     case "Contabilidad":
       return ["contabilidad"];
     case "Operaciones":
@@ -237,7 +252,7 @@ export function modulosPropiosDelRol(rol: RolGlobal): string[] {
  * Ej.: Operaciones → Planillas; Contabilidad → Vehículos / Predios…
  */
 export function modulosOtrasAreasDelRol(rol: RolGlobal): string[] {
-  if (rol === "Admin") return [];
+  if (rol === "Admin" || rol === "Marcaje") return [];
   const propios = new Set(modulosPropiosDelRol(rol));
   return catalogoGlobalPermisos().filter((m) => !propios.has(m));
 }
@@ -285,6 +300,10 @@ export function permisosDefaultPorRol(rol: RolGlobal): PermisoModulo[] {
       ),
       ...cruzados.map((m) => permisoVacio(m)),
     ];
+  }
+
+  if (rol === "Marcaje") {
+    return propios.map((m) => permisoVerCrear(m));
   }
 
   return catalogoPermisosRol(rol).map((m) => permisoVacio(m));

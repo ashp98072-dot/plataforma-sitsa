@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { horaAhora } from "@/lib/rrhh/dates";
 
@@ -10,6 +10,7 @@ type Emp = { id: number; codigo: string; nombre: string };
 /** Corrección RRHH como Control de Asistencias: fecha + hora + guardar. */
 export default function MarcajeManualPage() {
   const slug = String(useParams().slug);
+  const router = useRouter();
   const [empleados, setEmpleados] = useState<Emp[]>([]);
   const [buscar, setBuscar] = useState("");
   const [empleadoId, setEmpleadoId] = useState(0);
@@ -26,13 +27,20 @@ export default function MarcajeManualPage() {
   const [fechaFiltro, setFechaFiltro] = useState(
     new Date().toISOString().slice(0, 10),
   );
+  const [allowed, setAllowed] = useState(false);
 
   const cargar = useCallback(async () => {
+    const me = await fetch("/api/auth/me").then((r) => r.json());
+    if (me.user?.rol === "Marcaje") {
+      router.replace(`/e/${slug}/rrhh/marcajes`);
+      return;
+    }
+    setAllowed(true);
     const e = await fetch(`/api/empresas/${slug}/empleados`).then((r) =>
       r.json(),
     );
     setEmpleados(e.empleados ?? []);
-  }, [slug]);
+  }, [slug, router]);
 
   const cargarRegistros = useCallback(async () => {
     const res = await fetch(
@@ -109,6 +117,12 @@ export default function MarcajeManualPage() {
 
   const input =
     "mt-1 w-full rounded border border-[var(--border)] bg-[#0b1217] px-2 py-2 text-sm";
+
+  if (!allowed) {
+    return (
+      <p className="text-sm text-[var(--muted)]">Cargando…</p>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
