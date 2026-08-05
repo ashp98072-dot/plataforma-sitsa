@@ -106,6 +106,8 @@ Cambia las contraseñas después del primer acceso.
 | Login falla | Importaste `seed-usuarios.sql` |
 | Sesión no persiste | `AUTH_SECRET` fijo (≥16 chars) |
 | 503 | Build OK, Node 20+, restart |
+| Página sin estilos / CSS 404 en consola | El HTML apunta a un CSS de un build viejo. **Redeploy completo** (Build + Start), luego en el navegador **Ctrl+F5** o ventana privada. No mezcles ZIP viejo con build nuevo. |
+| Sigue sin CSS | En hPanel verifica Output = `.next` y Start = `npm run start:hostinger`. Reinicia el sitio Node. |
 
 ---
 

@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
-import ExcelJS from "exceljs";
 import { requireTenantModulo } from "@/lib/tenant";
 import { obtenerRangoPeriodo } from "@/lib/rrhh/periodos";
 import {
   obtenerReporteAsistencias,
   obtenerResumenIncidenciasDetallado,
 } from "@/lib/rrhh/reportes";
+import { tablaAExcel, tablaAPdf } from "@/lib/rrhh/export-files";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -35,6 +35,7 @@ export async function GET(req: Request, ctx: Ctx) {
   const horario = url.searchParams.get("horario") ?? "Todos";
   const modo = url.searchParams.get("modo") ?? "asistencias";
   const formato = url.searchParams.get("formato") ?? "json";
+  const tituloBase = `${guard.empresa.nombre} · ${desde} → ${hasta}`;
 
   if (modo === "incidencias") {
     const resumen = await obtenerResumenIncidenciasDetallado(
@@ -42,33 +43,48 @@ export async function GET(req: Request, ctx: Ctx) {
       desde,
       hasta,
     );
+    const headers = [
+      "Código",
+      "Empleado",
+      "Retrasos",
+      "Salidas tempranas",
+      "Faltas",
+      "Días asistidos",
+    ];
+    const rows = resumen.map((r) => [
+      r.codigo,
+      r.empleado,
+      String(r.totalRetrasos),
+      String(r.totalSalidasTempranas),
+      String(r.totalFaltas),
+      String(r.totalDiasAsistidos),
+    ]);
+
     if (formato === "xlsx") {
-      const wb = new ExcelJS.Workbook();
-      const ws = wb.addWorksheet("Incidencias");
-      ws.addRow([
-        "Código",
-        "Empleado",
-        "Retrasos",
-        "Salidas tempranas",
-        "Faltas",
-        "Días asistidos",
-      ]);
-      for (const r of resumen) {
-        ws.addRow([
-          r.codigo,
-          r.empleado,
-          r.totalRetrasos,
-          r.totalSalidasTempranas,
-          r.totalFaltas,
-          r.totalDiasAsistidos,
-        ]);
-      }
-      const buf = Buffer.from(await wb.xlsx.writeBuffer());
-      return new NextResponse(buf, {
+      const buf = await tablaAExcel({
+        sheetName: "Incidencias",
+        headers,
+        rows,
+      });
+      return new NextResponse(new Uint8Array(buf), {
         headers: {
           "Content-Type":
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
           "Content-Disposition": `attachment; filename="incidencias-${slug}-${desde}-${hasta}.xlsx"`,
+        },
+      });
+    }
+    if (formato === "pdf") {
+      const buf = await tablaAPdf({
+        title: "Resumen de incidencias",
+        subtitle: tituloBase,
+        headers,
+        rows,
+      });
+      return new NextResponse(new Uint8Array(buf), {
+        headers: {
+          "Content-Type": "application/pdf",
+          "Content-Disposition": `attachment; filename="incidencias-${slug}-${desde}-${hasta}.pdf"`,
         },
       });
     }
@@ -82,41 +98,57 @@ export async function GET(req: Request, ctx: Ctx) {
     { tipo, horario },
   );
 
+  const headers = [
+    "Fecha",
+    "Código",
+    "Empleado",
+    "Entrada",
+    "Salida",
+    "Estado entrada",
+    "Estado salida",
+    "Motivo",
+    "Horario",
+    "Comentarios",
+  ];
+  const rows = filas.map((r) => [
+    r.fecha,
+    r.codigo,
+    r.nombre,
+    r.horaEntrada ?? "",
+    r.horaSalida ?? "",
+    r.estadoEntrada,
+    r.estadoSalida,
+    r.motivo,
+    r.tipoHorario,
+    r.comentarios,
+  ]);
+
   if (formato === "xlsx") {
-    const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet("Asistencias");
-    ws.addRow([
-      "Fecha",
-      "Código",
-      "Empleado",
-      "Entrada",
-      "Salida",
-      "Estado entrada",
-      "Estado salida",
-      "Motivo",
-      "Horario",
-      "Comentarios",
-    ]);
-    for (const r of filas) {
-      ws.addRow([
-        r.fecha,
-        r.codigo,
-        r.nombre,
-        r.horaEntrada ?? "",
-        r.horaSalida ?? "",
-        r.estadoEntrada,
-        r.estadoSalida,
-        r.motivo,
-        r.tipoHorario,
-        r.comentarios,
-      ]);
-    }
-    const buf = Buffer.from(await wb.xlsx.writeBuffer());
-    return new NextResponse(buf, {
+    const buf = await tablaAExcel({
+      sheetName: "Asistencias",
+      headers,
+      rows,
+    });
+    return new NextResponse(new Uint8Array(buf), {
       headers: {
         "Content-Type":
           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": `attachment; filename="asistencias-${slug}-${desde}-${hasta}.xlsx"`,
+      },
+    });
+  }
+
+  if (formato === "pdf") {
+    const buf = await tablaAPdf({
+      title: "Reporte de asistencias",
+      subtitle: tituloBase,
+      headers,
+      rows,
+    });
+    return new NextResponse(new Uint8Array(buf), {
+      headers: {
+        "Content-Type": "application/pdf",
+        "Content-Disposition": `attachment; filename="asistencias-${slug}-${desde}-${hasta}.pdf"`,
       },
     });
   }

@@ -1,3 +1,50 @@
+export class FechaInvalidaError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FechaInvalidaError";
+  }
+}
+
+/** Acepta DD/MM/AAAA o YYYY-MM-DD → ISO YYYY-MM-DD */
+export function formatearFecha(entrada: string): string {
+  if (!entrada || !entrada.trim()) {
+    throw new FechaInvalidaError("La fecha no puede estar vacía.");
+  }
+  const texto = entrada.trim().replace(/[-.\s]/g, "/");
+  const partes = texto.split("/").filter(Boolean);
+  if (partes.length !== 3) {
+    throw new FechaInvalidaError(`Fecha inválida: ${entrada}`);
+  }
+  let anio: string;
+  let mes: string;
+  let dia: string;
+  if (partes[0].length === 4) [anio, mes, dia] = partes;
+  else [dia, mes, anio] = partes;
+  if (anio.length === 2) anio = (Number(anio) <= 79 ? "20" : "19") + anio;
+  const diaI = Number(dia);
+  const mesI = Number(mes);
+  const anioI = Number(anio);
+  const fecha = new Date(anioI, mesI - 1, diaI);
+  if (
+    fecha.getFullYear() !== anioI ||
+    fecha.getMonth() !== mesI - 1 ||
+    fecha.getDate() !== diaI
+  ) {
+    throw new FechaInvalidaError(`Fecha inválida: ${entrada}`);
+  }
+  return `${String(anioI).padStart(4, "0")}-${String(mesI).padStart(2, "0")}-${String(diaI).padStart(2, "0")}`;
+}
+
+export function formatearFechaVisible(
+  fechaIso: string | null | undefined,
+): string {
+  if (!fechaIso) return "";
+  const parte = String(fechaIso).slice(0, 10);
+  const [anio, mes, dia] = parte.split("-");
+  if (!anio || !mes || !dia) return String(fechaIso);
+  return `${dia}/${mes}/${anio}`;
+}
+
 export function hoyLocal(): string {
   const d = new Date();
   const y = d.getFullYear();

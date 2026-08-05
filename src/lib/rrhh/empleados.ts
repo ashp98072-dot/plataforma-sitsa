@@ -83,6 +83,18 @@ export async function obtenerEmpleado(
   return rows[0] ? mapEmpleado(rows[0]) : null;
 }
 
+export async function obtenerEmpleadoPorCodigo(
+  empresaId: number,
+  codigo: string,
+): Promise<Empleado | null> {
+  const rows = await query<EmpleadoRow[]>(
+    `SELECT ${SELECT_COLS} FROM empleados
+     WHERE empresa_id = ? AND codigo = ? LIMIT 1`,
+    [empresaId, codigo.trim()],
+  );
+  return rows[0] ? mapEmpleado(rows[0]) : null;
+}
+
 export async function codigoDuplicado(
   empresaId: number,
   codigo: string,

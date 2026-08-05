@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 
@@ -39,6 +45,8 @@ export default function EmpleadosPage() {
   const [editId, setEditId] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [mensaje, setMensaje] = useState("");
+  const [importando, setImportando] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const cargar = useCallback(async () => {
     const res = await fetch(
@@ -278,13 +286,78 @@ export default function EmpleadosPage() {
       {error ? <p className="text-sm text-red-300">{error}</p> : null}
       {mensaje ? <p className="text-sm text-emerald-300">{mensaje}</p> : null}
 
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <input
-          className="flex-1 rounded-lg border border-[var(--border)] bg-[#0b1217] px-3 py-2 text-sm"
+          className="min-w-[12rem] flex-1 rounded-lg border border-[var(--border)] bg-[#0b1217] px-3 py-2 text-sm"
           placeholder="Buscar por nombre o código…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
+        <a
+          href={`/api/empresas/${slug}/empleados/export?format=plantilla`}
+          className="rounded-lg bg-[#334155] px-3 py-2 text-sm"
+        >
+          Plantilla Excel
+        </a>
+        <button
+          type="button"
+          className="rounded-lg bg-[#0d9488] px-3 py-2 text-sm text-white disabled:opacity-50"
+          disabled={importando}
+          onClick={() => fileRef.current?.click()}
+        >
+          {importando ? "Importando…" : "Importar Excel"}
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".xlsx"
+          className="hidden"
+          onChange={async (e) => {
+            const file = e.target.files?.[0];
+            e.target.value = "";
+            if (!file) return;
+            setImportando(true);
+            setError("");
+            setMensaje("");
+            try {
+              const fd = new FormData();
+              fd.set("file", file);
+              const res = await fetch(
+                `/api/empresas/${slug}/empleados/import`,
+                { method: "POST", body: fd },
+              );
+              const data = await res.json();
+              if (!res.ok) {
+                setError(data.error ?? "Error al importar");
+                return;
+              }
+              setMensaje(
+                data.mensaje +
+                  (data.errores?.length
+                    ? ` · ${data.errores.length} fila(s) con error`
+                    : ""),
+              );
+              if (data.errores?.length) {
+                console.warn("Errores import:", data.errores);
+              }
+              await cargar();
+            } finally {
+              setImportando(false);
+            }
+          }}
+        />
+        <a
+          href={`/api/empresas/${slug}/empleados/export?format=xlsx`}
+          className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white"
+        >
+          Excel
+        </a>
+        <a
+          href={`/api/empresas/${slug}/empleados/export?format=pdf`}
+          className="rounded-lg bg-[#1e293b] px-3 py-2 text-sm"
+        >
+          PDF
+        </a>
       </div>
 
       <div className="overflow-x-auto rounded-xl border border-[var(--border)]">

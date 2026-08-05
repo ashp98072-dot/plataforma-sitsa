@@ -218,6 +218,18 @@ export default function IncidenciasPage() {
             >
               Excel
             </button>
+            <button
+              type="button"
+              className="rounded bg-[#1e293b] px-3 py-1 text-sm"
+              onClick={() =>
+                window.open(
+                  `/api/empresas/${slug}/rrhh/reportes?modo=incidencias&periodo=${encodeURIComponent(periodo)}&formato=pdf`,
+                  "_blank",
+                )
+              }
+            >
+              PDF
+            </button>
           </div>
           <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
             <table className="w-full text-left text-sm">

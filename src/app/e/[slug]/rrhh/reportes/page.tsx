@@ -61,14 +61,14 @@ export default function ReportesPage() {
     void cargar();
   }, [cargar]);
 
-  function excel() {
+  function descargar(formato: "xlsx" | "pdf") {
     const qs = new URLSearchParams({
       periodo,
       desde,
       hasta,
       tipo,
       horario,
-      formato: "xlsx",
+      formato,
     });
     window.open(`/api/empresas/${slug}/rrhh/reportes?${qs}`, "_blank");
   }
@@ -153,9 +153,16 @@ export default function ReportesPage() {
         <button
           type="button"
           className="rounded bg-[#0d9488] px-3 py-1 text-sm text-white"
-          onClick={excel}
+          onClick={() => descargar("xlsx")}
         >
           Excel
+        </button>
+        <button
+          type="button"
+          className="rounded bg-[#1e293b] px-3 py-1 text-sm"
+          onClick={() => descargar("pdf")}
+        >
+          PDF
         </button>
       </div>
 
