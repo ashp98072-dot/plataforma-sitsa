@@ -220,7 +220,21 @@ function FlotaInner() {
     enTaller: number;
     alertasServicio: number;
   } | null>(null);
-  const [costos, setCostos] = useState<Record<string, unknown>[]>([]);
+  const [costos, setCostos] = useState<
+    { mes: string; total: number; n: number }[]
+  >([]);
+  const [costosUnidad, setCostosUnidad] = useState<
+    { placa: string; total: number; n: number }[]
+  >([]);
+  const [totalPeriodo, setTotalPeriodo] = useState({ total: 0, n: 0 });
+  const [repDesde, setRepDesde] = useState(() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() - 5);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+  });
+  const [repHasta, setRepHasta] = useState(() =>
+    new Date().toISOString().slice(0, 10),
+  );
 
   const isAdmin = rol === "Admin";
   const can = useCallback(
@@ -324,9 +338,13 @@ function FlotaInner() {
       setPilotoNombre(String(me.user.nombre));
     }
 
+    const paramsRep = new URLSearchParams({
+      desde: repDesde,
+      hasta: repHasta,
+    });
     const [res, rep, lec, svc, via, perm] = await Promise.all([
       fetch(`/api/empresas/${slug}/flota/vehiculos`),
-      fetch(`/api/empresas/${slug}/flota/reportes`),
+      fetch(`/api/empresas/${slug}/flota/reportes?${paramsRep}`),
       fetch(`/api/empresas/${slug}/flota/lecturas`),
       fetch(`/api/empresas/${slug}/flota/servicios`),
       fetch(`/api/empresas/${slug}/flota/viajes`),
@@ -344,6 +362,10 @@ function FlotaInner() {
       const reporte = await rep.json();
       setResumen(reporte.resumen ?? null);
       setCostos(reporte.costosPorMes ?? []);
+      setCostosUnidad(reporte.costosPorUnidad ?? []);
+      setTotalPeriodo(
+        reporte.totalPeriodo ?? { total: 0, n: 0 },
+      );
     }
     if (lec.ok) {
       const data = await lec.json();
@@ -363,7 +385,7 @@ function FlotaInner() {
       const data = await perm.json();
       setPermisosExt(data.permisos ?? []);
     }
-  }, [slug, vehiculoId]);
+  }, [slug, vehiculoId, repDesde, repHasta]);
 
   useEffect(() => {
     void cargar();
@@ -1782,6 +1804,43 @@ function FlotaInner() {
       {tab === "reportes" && can("flota_reportes") ? (
         <div className="space-y-4">
           {SearchBar}
+          <div className="flex flex-wrap items-end gap-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+            <label className="text-xs text-[var(--muted)]">
+              Desde
+              <input
+                type="date"
+                className={`${input} mt-1 block`}
+                value={repDesde}
+                onChange={(e) => setRepDesde(e.target.value)}
+              />
+            </label>
+            <label className="text-xs text-[var(--muted)]">
+              Hasta
+              <input
+                type="date"
+                className={`${input} mt-1 block`}
+                value={repHasta}
+                onChange={(e) => setRepHasta(e.target.value)}
+              />
+            </label>
+            <button
+              type="button"
+              className="rounded bg-[var(--accent)] px-3 py-2 text-sm text-white"
+              onClick={() => void cargar()}
+            >
+              Actualizar gráficas
+            </button>
+            <p className="text-sm text-[var(--muted)]">
+              Total período:{" "}
+              <strong className="text-[var(--fg)]">
+                Q{totalPeriodo.total.toLocaleString("es-GT", {
+                  minimumFractionDigits: 2,
+                })}
+              </strong>{" "}
+              ({totalPeriodo.n} servicios)
+            </p>
+          </div>
+
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
@@ -1826,6 +1885,7 @@ function FlotaInner() {
               PDF viajes
             </button>
           </div>
+
           {resumen ? (
             <div className="grid gap-3 sm:grid-cols-3">
               <div className="rounded-xl border border-[var(--border)] p-4 text-sm">
@@ -1839,21 +1899,97 @@ function FlotaInner() {
               </div>
             </div>
           ) : null}
-          <div className="rounded-xl border border-[var(--border)] p-4 text-sm">
-            <h2 className="font-medium">Costos por mes</h2>
-            <ul className="mt-2 space-y-1 text-[var(--muted)]">
-              {costos.length ? (
-                costos.map((c) => (
-                  <li key={String(c.mes)}>
-                    {String(c.mes)} · Q{Number(c.total).toFixed(2)} (
-                    {String(c.n)} svc)
-                  </li>
-                ))
-              ) : (
-                <li>Sin costos.</li>
-              )}
-            </ul>
+
+          {/* Gráfica costos totales por mes */}
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+            <h2 className="font-medium">
+              Costos totales por mes (todas las unidades)
+            </h2>
+            <p className="text-xs text-[var(--muted)]">
+              {repDesde} → {repHasta}
+            </p>
+            {costos.length ? (
+              <div className="mt-4 flex h-52 items-end gap-2 overflow-x-auto pb-6">
+                {(() => {
+                  const max = Math.max(...costos.map((c) => c.total), 1);
+                  return costos.map((c) => (
+                    <div
+                      key={c.mes}
+                      className="flex min-w-[52px] flex-1 flex-col items-center justify-end"
+                      title={`Q${c.total.toFixed(2)} · ${c.n} svc`}
+                    >
+                      <span className="mb-1 text-[10px] text-sky-300">
+                        Q{c.total >= 1000
+                          ? `${(c.total / 1000).toFixed(1)}k`
+                          : c.total.toFixed(0)}
+                      </span>
+                      <div
+                        className="w-full max-w-[48px] rounded-t bg-[#1F6AA5]"
+                        style={{
+                          height: `${Math.max(8, (c.total / max) * 160)}px`,
+                        }}
+                      />
+                      <span className="mt-1 text-[10px] text-[var(--muted)]">
+                        {c.mes.slice(2)}
+                      </span>
+                    </div>
+                  ));
+                })()}
+              </div>
+            ) : (
+              <p className="mt-3 text-sm text-[var(--muted)]">
+                Sin costos en el rango de fechas.
+              </p>
+            )}
           </div>
+
+          {/* Gráfica costos por unidad */}
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+            <h2 className="font-medium">Costos por unidad</h2>
+            <p className="text-xs text-[var(--muted)]">
+              Top unidades con servicio en el período
+              {q.trim() ? ` · filtro placa: ${q.trim()}` : ""}
+            </p>
+            {(() => {
+              const lista = costosUnidad.filter((c) =>
+                matchQ(c.placa),
+              );
+              if (!lista.length) {
+                return (
+                  <p className="mt-3 text-sm text-[var(--muted)]">
+                    Sin costos por unidad en el rango.
+                  </p>
+                );
+              }
+              const max = Math.max(...lista.map((c) => c.total), 1);
+              return (
+                <ul className="mt-4 space-y-2">
+                  {lista.slice(0, 20).map((c) => (
+                    <li key={c.placa} className="text-sm">
+                      <div className="mb-0.5 flex justify-between gap-2 text-xs">
+                        <span className="font-mono text-sky-300">{c.placa}</span>
+                        <span className="text-[var(--muted)]">
+                          Q{c.total.toLocaleString("es-GT", {
+                            minimumFractionDigits: 2,
+                          })}{" "}
+                          · {c.n} svc
+                        </span>
+                      </div>
+                      <div className="h-3 overflow-hidden rounded bg-[#0b1217]">
+                        <div
+                          className="h-full rounded bg-emerald-600"
+                          style={{
+                            width: `${Math.max(4, (c.total / max) * 100)}%`,
+                          }}
+                        />
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              );
+            })()}
+          </div>
+
           <div className="rounded-xl border border-[var(--border)] p-4 text-sm">
             <h2 className="mb-2 font-medium">Viajes (filtro placa)</h2>
             <ul className="space-y-1 text-[var(--muted)]">
