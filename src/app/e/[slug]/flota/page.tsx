@@ -37,6 +37,31 @@ type Vehiculo = {
   activo?: number;
   empresa_activo?: string | null;
   notas?: string | null;
+  filtro_servicio_mayor?: string | null;
+  filtro_servicio_menor?: string | null;
+  rin_llanta?: string | null;
+  medida_llanta?: string | null;
+  tipo_aceite?: string | null;
+  tipo_combustible?: string | null;
+};
+
+type Lectura = {
+  id: number;
+  placa: string;
+  km: number;
+  fecha_lectura: string;
+  nota: string | null;
+  conductor?: string | null;
+};
+
+type Servicio = {
+  id: number;
+  placa: string;
+  tipo: string;
+  km_servicio: number | null;
+  fecha_servicio: string;
+  costo: number;
+  descripcion?: string | null;
 };
 
 type Viaje = {
@@ -49,6 +74,7 @@ type Viaje = {
   destino: string | null;
   estado: string;
   hora_salida: string;
+  observaciones?: string | null;
 };
 
 type Tab =
@@ -59,17 +85,33 @@ type Tab =
   | "reportes"
   | "piloto";
 
+const emptyForm = {
+  placa: "",
+  marca: "",
+  modelo: "",
+  descripcion: "",
+  kmActual: 0,
+  intervalo: 10000,
+  filtroMayor: "",
+  filtroMenor: "",
+  rin: "",
+  medidaLlanta: "",
+  tipoAceite: "",
+  color: "",
+  notas: "",
+};
+
 export default function FlotaPage() {
   return (
     <Suspense
       fallback={<p className="text-sm text-[var(--muted)]">Cargando flota…</p>}
     >
-      <FlotaPageInner />
+      <FlotaInner />
     </Suspense>
   );
 }
 
-function FlotaPageInner() {
+function FlotaInner() {
   const slug = String(useParams().slug);
   const router = useRouter();
   const search = useSearchParams();
@@ -78,27 +120,32 @@ function FlotaPageInner() {
   const [permisos, setPermisos] = useState<PermisoModulo[]>([]);
   const [rol, setRol] = useState("");
   const [vehiculos, setVehiculos] = useState<Vehiculo[]>([]);
+  const [lecturas, setLecturas] = useState<Lectura[]>([]);
+  const [servicios, setServicios] = useState<Servicio[]>([]);
   const [viajes, setViajes] = useState<Viaje[]>([]);
   const [abiertos, setAbiertos] = useState<Viaje[]>([]);
-  const [busqueda, setBusqueda] = useState("");
+  const [q, setQ] = useState("");
+  const [filtroTaller, setFiltroTaller] = useState<"todos" | "taller" | "ruta">(
+    "todos",
+  );
   const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
   const [importando, setImportando] = useState(false);
 
-  // forms
-  const [placa, setPlaca] = useState("");
-  const [marca, setMarca] = useState("");
-  const [modelo, setModelo] = useState("");
-  const [descripcion, setDescripcion] = useState("");
-  const [kmActual, setKmActual] = useState(0);
-  const [intervalo, setIntervalo] = useState(10000);
+  const [form, setForm] = useState(emptyForm);
+  const [editId, setEditId] = useState<number | null>(null);
+  const [tallerId, setTallerId] = useState<number | null>(null);
+  const [motivoTaller, setMotivoTaller] = useState("");
+
   const [vehiculoId, setVehiculoId] = useState(0);
   const [kmLectura, setKmLectura] = useState(0);
   const [conductor, setConductor] = useState("");
   const [tipoServicio, setTipoServicio] = useState("mantenimiento");
   const [costo, setCosto] = useState(0);
-  const [motivoTaller, setMotivoTaller] = useState("");
+  const [descServicio, setDescServicio] = useState("");
   const [pilotoNombre, setPilotoNombre] = useState("");
   const [destino, setDestino] = useState("");
+  const [obsViaje, setObsViaje] = useState("");
   const [viajeId, setViajeId] = useState(0);
   const [kmLlegada, setKmLlegada] = useState(0);
   const [modoPiloto, setModoPiloto] = useState<"salida" | "llegada">("salida");
@@ -129,8 +176,58 @@ function FlotaPageInner() {
   }, [tabParam, can, rol]);
 
   const setTab = (t: Tab) => {
+    setMsg("");
+    setErr("");
     router.replace(`/e/${slug}/flota${t === "dashboard" ? "" : `?tab=${t}`}`);
   };
+
+  const matchQ = useCallback(
+    (placa: string, extra = "") => {
+      const s = q.trim().toLowerCase();
+      if (!s) return true;
+      return (
+        placa.toLowerCase().includes(s) ||
+        extra.toLowerCase().includes(s)
+      );
+    },
+    [q],
+  );
+
+  const vehiculosFiltrados = useMemo(() => {
+    return vehiculos.filter((v) => {
+      if (v.activo === 0 && filtroTaller !== "todos") return false;
+      if (filtroTaller === "taller" && !v.en_taller) return false;
+      if (filtroTaller === "ruta" && v.en_taller) return false;
+      return matchQ(
+        v.placa,
+        `${v.marca ?? ""} ${v.modelo ?? ""} ${v.descripcion ?? ""} ${v.empresa_activo ?? ""}`,
+      );
+    });
+  }, [vehiculos, filtroTaller, matchQ]);
+
+  const activos = useMemo(
+    () =>
+      vehiculos.filter(
+        (v) => v.activo !== 0 && matchQ(v.placa, `${v.marca} ${v.modelo}`),
+      ),
+    [vehiculos, matchQ],
+  );
+
+  const lecturasFiltradas = useMemo(
+    () => lecturas.filter((l) => matchQ(l.placa, l.nota ?? "")),
+    [lecturas, matchQ],
+  );
+  const serviciosFiltrados = useMemo(
+    () => servicios.filter((s) => matchQ(s.placa, s.tipo)),
+    [servicios, matchQ],
+  );
+  const viajesFiltrados = useMemo(
+    () =>
+      viajes.filter((v) =>
+        matchQ(v.placa, `${v.piloto_nombre} ${v.destino ?? ""}`),
+      ),
+    [viajes, matchQ],
+  );
 
   const cargar = useCallback(async () => {
     const me = await fetch("/api/auth/me").then((r) => r.json());
@@ -138,21 +235,31 @@ function FlotaPageInner() {
     setPermisos(me.permisos ?? []);
     if (me.user?.nombre) setPilotoNombre(String(me.user.nombre));
 
-    const [res, rep, via] = await Promise.all([
+    const [res, rep, lec, svc, via] = await Promise.all([
       fetch(`/api/empresas/${slug}/flota/vehiculos`),
       fetch(`/api/empresas/${slug}/flota/reportes`),
+      fetch(`/api/empresas/${slug}/flota/lecturas`),
+      fetch(`/api/empresas/${slug}/flota/servicios`),
       fetch(`/api/empresas/${slug}/flota/viajes`),
     ]);
     if (res.ok) {
       const data = await res.json();
       const list = (data.vehiculos ?? []) as Vehiculo[];
       setVehiculos(list);
-      if (list[0]) setVehiculoId(Number(list[0].id));
+      if (list[0] && !vehiculoId) setVehiculoId(Number(list[0].id));
     }
     if (rep.ok) {
       const reporte = await rep.json();
       setResumen(reporte.resumen ?? null);
       setCostos(reporte.costosPorMes ?? []);
+    }
+    if (lec.ok) {
+      const data = await lec.json();
+      setLecturas(data.lecturas ?? []);
+    }
+    if (svc.ok) {
+      const data = await svc.json();
+      setServicios(data.servicios ?? []);
     }
     if (via.ok) {
       const data = await via.json();
@@ -160,32 +267,25 @@ function FlotaPageInner() {
       setAbiertos(data.abiertos ?? []);
       if (data.abiertos?.[0]) setViajeId(Number(data.abiertos[0].id));
     }
-  }, [slug]);
+  }, [slug, vehiculoId]);
 
   useEffect(() => {
     void cargar();
-  }, [cargar]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug]);
 
-  const activos = useMemo(
-    () => vehiculos.filter((v) => v.activo !== 0),
-    [vehiculos],
-  );
-
-  const filtradosDash = useMemo(() => {
-    const q = busqueda.trim().toLowerCase();
-    if (!q) return activos;
-    return activos.filter(
-      (v) =>
-        v.placa.toLowerCase().includes(q) ||
-        (v.marca ?? "").toLowerCase().includes(q) ||
-        (v.modelo ?? "").toLowerCase().includes(q) ||
-        (v.descripcion ?? "").toLowerCase().includes(q),
+  function exportar(tipo: "flota" | "servicios" | "viajes", formato: "xlsx" | "pdf") {
+    const params = new URLSearchParams({ tipo, formato });
+    if (q.trim()) params.set("q", q.trim());
+    window.open(
+      `/api/empresas/${slug}/flota/export?${params.toString()}`,
+      "_blank",
     );
-  }, [activos, busqueda]);
+  }
 
   async function onImport(file: File) {
     setImportando(true);
-    setMsg("");
+    setErr("");
     const fd = new FormData();
     fd.append("file", file);
     const res = await fetch(`/api/empresas/${slug}/flota/import`, {
@@ -193,38 +293,106 @@ function FlotaPageInner() {
       body: fd,
     });
     const data = await res.json();
-    setMsg(data.mensaje || data.error);
-    if (data.errores?.length) {
-      setMsg((m) => `${m} · ${data.errores.length} errores`);
-    }
+    if (!res.ok) setErr(data.error ?? "Error al importar");
+    else setMsg(data.mensaje);
     setImportando(false);
     if (res.ok) await cargar();
   }
 
+  function empezarEdicion(v: Vehiculo) {
+    setEditId(v.id);
+    setForm({
+      placa: v.placa,
+      marca: v.marca ?? "",
+      modelo: v.modelo ?? "",
+      descripcion: v.descripcion ?? "",
+      kmActual: Number(v.km_actual ?? 0),
+      intervalo: Number(v.km_intervalo_servicio ?? 10000),
+      filtroMayor: v.filtro_servicio_mayor ?? "",
+      filtroMenor: v.filtro_servicio_menor ?? "",
+      rin: v.rin_llanta ?? "",
+      medidaLlanta: v.medida_llanta ?? "",
+      tipoAceite: v.tipo_aceite ?? "",
+      color: v.color ?? "",
+      notas: v.notas ?? "",
+    });
+    setTab("vehiculos");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   async function onSubmitVehiculo(e: FormEvent) {
     e.preventDefault();
+    setErr("");
+    setMsg("");
+    const payload = {
+      placa: form.placa,
+      marca: form.marca,
+      modelo: form.modelo,
+      descripcion: form.descripcion,
+      color: form.color,
+      kmActual: form.kmActual,
+      kmIntervaloServicio: form.intervalo,
+      filtroServicioMayor: form.filtroMayor,
+      filtroServicioMenor: form.filtroMenor,
+      rinLlanta: form.rin,
+      medidaLlanta: form.medidaLlanta,
+      tipoAceite: form.tipoAceite,
+      notas: form.notas,
+    };
     const res = await fetch(`/api/empresas/${slug}/flota/vehiculos`, {
-      method: "POST",
+      method: editId ? "PATCH" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(editId ? { id: editId, ...payload } : payload),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setErr(data.error ?? "Error");
+      return;
+    }
+    setMsg(data.mensaje);
+    setForm(emptyForm);
+    setEditId(null);
+    await cargar();
+  }
+
+  async function confirmarTaller() {
+    if (tallerId == null) return;
+    setErr("");
+    const res = await fetch(`/api/empresas/${slug}/flota/vehiculos`, {
+      method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        placa,
-        marca,
-        modelo,
-        descripcion,
-        kmActual,
-        kmIntervaloServicio: intervalo,
+        id: tallerId,
+        enTaller: true,
+        motivoTaller,
       }),
     });
     const data = await res.json();
-    setMsg(data.mensaje || data.error);
-    if (res.ok) {
-      setPlaca("");
-      setDescripcion("");
-      await cargar();
+    if (!res.ok) {
+      setErr(data.error ?? "No se pudo enviar a taller");
+      return;
     }
+    setMsg(data.mensaje);
+    setTallerId(null);
+    setMotivoTaller("");
+    await cargar();
+  }
+
+  async function salirTaller(id: number) {
+    setErr("");
+    const res = await fetch(`/api/empresas/${slug}/flota/vehiculos`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, enTaller: false }),
+    });
+    const data = await res.json();
+    if (!res.ok) setErr(data.error ?? "Error");
+    else setMsg(data.mensaje);
+    await cargar();
   }
 
   async function registrarLectura() {
+    setErr("");
     const res = await fetch(`/api/empresas/${slug}/flota/lecturas`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -232,18 +400,20 @@ function FlotaPageInner() {
         vehiculoId,
         km: kmLectura,
         fechaLectura: new Date().toISOString().slice(0, 10),
-        nota: conductor ? `Conductor: ${conductor}` : undefined,
+        nota: conductor || undefined,
       }),
     });
     const data = await res.json();
-    setMsg(data.mensaje || data.error);
-    if (res.ok) {
+    if (!res.ok) setErr(data.error ?? "Error");
+    else {
+      setMsg(data.mensaje);
       setKmLectura(0);
       await cargar();
     }
   }
 
   async function registrarServicio() {
+    setErr("");
     const res = await fetch(`/api/empresas/${slug}/flota/servicios`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -253,37 +423,19 @@ function FlotaPageInner() {
         kmServicio: kmLectura || undefined,
         fechaServicio: new Date().toISOString().slice(0, 10),
         costo,
+        descripcion: descServicio || undefined,
       }),
     });
     const data = await res.json();
-    setMsg(data.mensaje || data.error);
-    if (res.ok) await cargar();
-  }
-
-  async function toggleTaller(v: Vehiculo) {
-    const enTaller = Boolean(v.en_taller);
-    if (!enTaller && !motivoTaller.trim()) {
-      setMsg("Indica el motivo para enviar a taller.");
-      return;
-    }
-    const res = await fetch(`/api/empresas/${slug}/flota/vehiculos`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        id: v.id,
-        enTaller: !enTaller,
-        motivoTaller: enTaller ? undefined : motivoTaller,
-      }),
-    });
-    const data = await res.json();
-    setMsg(data.mensaje || data.error);
-    if (res.ok) {
-      setMotivoTaller("");
+    if (!res.ok) setErr(data.error ?? "Error");
+    else {
+      setMsg(data.mensaje);
       await cargar();
     }
   }
 
   async function salidaViaje() {
+    setErr("");
     const res = await fetch(`/api/empresas/${slug}/flota/viajes`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -296,15 +448,18 @@ function FlotaPageInner() {
       }),
     });
     const data = await res.json();
-    setMsg(data.mensaje || data.error);
-    if (res.ok) {
+    if (!res.ok) setErr(data.error ?? "Error");
+    else {
+      setMsg(data.mensaje);
       setKmLectura(0);
       setDestino("");
+      setModoPiloto("llegada");
       await cargar();
     }
   }
 
   async function llegadaViaje() {
+    setErr("");
     const res = await fetch(`/api/empresas/${slug}/flota/viajes`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -313,12 +468,15 @@ function FlotaPageInner() {
         viajeId,
         kmLlegada,
         pilotoNombre: pilotoNombre || undefined,
+        observaciones: obsViaje || undefined,
       }),
     });
     const data = await res.json();
-    setMsg(data.mensaje || data.error);
-    if (res.ok) {
+    if (!res.ok) setErr(data.error ?? "Error");
+    else {
+      setMsg(data.mensaje);
       setKmLlegada(0);
+      setObsViaje("");
       await cargar();
     }
   }
@@ -338,31 +496,81 @@ function FlotaPageInner() {
           })),
         ];
 
+  const SearchBar = (
+    <div className="flex flex-wrap items-end gap-2">
+      <label className="text-xs text-[var(--muted)]">
+        Buscar por placa / marca
+        <input
+          className={`${input} mt-1 block min-w-[220px]`}
+          placeholder="Ej. C-034BXR"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+      </label>
+      {tab === "vehiculos" || tab === "dashboard" ? (
+        <label className="text-xs text-[var(--muted)]">
+          Filtrar
+          <select
+            className={`${input} mt-1 block`}
+            value={filtroTaller}
+            onChange={(e) =>
+              setFiltroTaller(e.target.value as typeof filtroTaller)
+            }
+          >
+            <option value="todos">Todos</option>
+            <option value="ruta">En ruta</option>
+            <option value="taller">En taller</option>
+          </select>
+        </label>
+      ) : null}
+    </div>
+  );
+
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold">Control de Flota / Predios</h1>
           <p className="text-sm text-[var(--muted)]">
-            Dashboard, vehículos, servicios, lecturas y viajes de piloto.
+            Búsqueda por placa, taller, edición, filtros/rin y exportación.
           </p>
         </div>
-        {can("flota_vehiculos", "crear") && rol !== "Piloto" ? (
-          <label className="cursor-pointer rounded bg-[#0d9488] px-3 py-2 text-sm text-white">
-            {importando ? "Importando…" : "Importar Excel flota"}
-            <input
-              type="file"
-              accept=".xlsx"
-              className="hidden"
-              disabled={importando}
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) void onImport(f);
-                e.target.value = "";
-              }}
-            />
-          </label>
-        ) : null}
+        <div className="flex flex-wrap gap-2">
+          {can("flota_vehiculos", "crear") && rol !== "Piloto" ? (
+            <label className="cursor-pointer rounded bg-[#0d9488] px-3 py-2 text-sm text-white">
+              {importando ? "Importando…" : "Importar Excel"}
+              <input
+                type="file"
+                accept=".xlsx"
+                className="hidden"
+                disabled={importando}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void onImport(f);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+          ) : null}
+          {can("flota_reportes") || can("flota_vehiculos") ? (
+            <>
+              <button
+                type="button"
+                className="rounded bg-[#1B5E20] px-3 py-2 text-sm text-white"
+                onClick={() => exportar("flota", "xlsx")}
+              >
+                Excel flota
+              </button>
+              <button
+                type="button"
+                className="rounded bg-[#37474F] px-3 py-2 text-sm text-white"
+                onClick={() => exportar("flota", "pdf")}
+              >
+                PDF flota
+              </button>
+            </>
+          ) : null}
+        </div>
       </div>
 
       <nav className="flex flex-wrap gap-1 border-b border-[var(--border)] pb-2">
@@ -385,44 +593,66 @@ function FlotaPageInner() {
           ))}
       </nav>
 
+      {err ? <p className="text-sm text-red-300">{err}</p> : null}
       {msg ? <p className="text-sm text-emerald-300">{msg}</p> : null}
+
+      {/* Modal taller */}
+      {tallerId != null ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+            <h3 className="font-medium">Enviar a taller</h3>
+            <p className="text-xs text-[var(--muted)]">
+              Placa:{" "}
+              {vehiculos.find((v) => v.id === tallerId)?.placa ?? tallerId}
+            </p>
+            <textarea
+              className={`${input} w-full`}
+              rows={3}
+              placeholder="Motivo (obligatorio)"
+              value={motivoTaller}
+              onChange={(e) => setMotivoTaller(e.target.value)}
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded bg-[#334155] px-3 py-1.5 text-sm"
+                onClick={() => {
+                  setTallerId(null);
+                  setMotivoTaller("");
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="rounded bg-amber-700 px-3 py-1.5 text-sm text-white"
+                onClick={() => void confirmarTaller()}
+              >
+                Confirmar envío
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {tab === "dashboard" ? (
         <div className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <input
-              className={`${input} max-w-xs w-full`}
-              placeholder="Buscar por placa, marca o modelo…"
-              value={busqueda}
-              onChange={(e) => setBusqueda(e.target.value)}
-            />
-            {can("flota_lecturas", "crear") ? (
-              <button
-                type="button"
-                className="rounded bg-[var(--accent)] px-3 py-2 text-sm text-white"
-                onClick={() => setTab("lecturas")}
-              >
-                + Registrar lectura
-              </button>
-            ) : null}
-          </div>
-
+          {SearchBar}
           {resumen ? (
             <div className="grid gap-3 sm:grid-cols-3">
-              <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 text-sm">
+              <div className="rounded-xl border border-[var(--border)] p-4 text-sm">
                 Vehículos: <strong>{resumen.totalVehiculos}</strong>
               </div>
-              <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 text-sm">
+              <div className="rounded-xl border border-[var(--border)] p-4 text-sm">
                 En taller: <strong>{resumen.enTaller}</strong>
               </div>
-              <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 text-sm">
-                Alertas servicio: <strong>{resumen.alertasServicio}</strong>
+              <div className="rounded-xl border border-[var(--border)] p-4 text-sm">
+                Alertas: <strong>{resumen.alertasServicio}</strong>
               </div>
             </div>
           ) : null}
-
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {filtradosDash.map((v) => {
+            {vehiculosFiltrados.map((v) => {
               const pendiente = kmPendienteServicio(
                 v.km_actual,
                 v.km_ultimo_servicio,
@@ -435,7 +665,7 @@ function FlotaPageInner() {
                   key={v.id}
                   className="space-y-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-3"
                 >
-                  <div className="flex items-start justify-between gap-2 border-b border-[var(--border)] pb-2">
+                  <div className="flex justify-between gap-2 border-b border-[var(--border)] pb-2">
                     <div>
                       <p className="font-mono text-sm font-bold text-sky-400">
                         {v.placa}
@@ -443,137 +673,127 @@ function FlotaPageInner() {
                       <p className="text-sm font-semibold">
                         {v.marca} {v.modelo}
                       </p>
-                      {v.descripcion ? (
-                        <p className="text-xs text-[var(--muted)]">
-                          {v.descripcion}
-                        </p>
-                      ) : null}
                     </div>
-                    {enTaller ? (
-                      <span className="rounded border border-amber-700 bg-amber-900/40 px-2 py-0.5 text-[11px] font-semibold text-amber-200">
-                        En Taller
-                      </span>
-                    ) : (
-                      <span
-                        className={`rounded px-2 py-0.5 text-[11px] font-semibold ${alerta.badge}`}
-                      >
-                        {alerta.texto}
-                      </span>
-                    )}
+                    <span
+                      className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
+                        enTaller
+                          ? "border border-amber-700 bg-amber-900/40 text-amber-200"
+                          : alerta.badge
+                      }`}
+                    >
+                      {enTaller ? "En Taller" : alerta.texto}
+                    </span>
                   </div>
-                  <dl className="grid grid-cols-1 gap-1 text-xs text-[var(--muted)]">
-                    <div>
-                      Kilometraje actual:{" "}
-                      <strong className="text-white">
-                        {Number(v.km_actual ?? 0).toLocaleString("es-GT")}
-                      </strong>
-                    </div>
-                    <div>
-                      Frecuencia servicio:{" "}
-                      <strong className="text-white">
-                        {Number(v.km_intervalo_servicio).toLocaleString("es-GT")}{" "}
-                        km
-                      </strong>
-                    </div>
-                    <div>
-                      Último servicio:{" "}
-                      <strong className="text-white">
-                        {v.fecha_ultimo_servicio
-                          ? String(v.fecha_ultimo_servicio).slice(0, 10)
-                          : "—"}{" "}
-                        ·{" "}
-                        {Number(v.km_ultimo_servicio ?? 0).toLocaleString(
-                          "es-GT",
-                        )}{" "}
-                        km
-                      </strong>
-                    </div>
-                  </dl>
-                  <div
-                    className={[
-                      "rounded px-2 py-1 text-center text-xs font-semibold",
-                      enTaller
-                        ? "bg-amber-900/40 text-amber-200"
-                        : "bg-sky-950 text-sky-200",
-                    ].join(" ")}
-                  >
-                    {enTaller
-                      ? `Taller activo · Ingresó ${String(v.fecha_entrada_taller ?? "—").slice(0, 10)}`
-                      : alerta.footer}
-                  </div>
+                  <p className="text-xs text-[var(--muted)]">
+                    Km {Number(v.km_actual ?? 0).toLocaleString("es-GT")} · Rin{" "}
+                    {v.rin_llanta || "—"} · Filtro may.{" "}
+                    {v.filtro_servicio_mayor || "—"}
+                  </p>
                 </div>
               );
             })}
           </div>
-          {!filtradosDash.length ? (
-            <p className="text-sm text-[var(--muted)]">
-              Sin vehículos. Usa <strong>Importar Excel flota</strong> con el
-              archivo de José Gómez / SITSA.
-            </p>
-          ) : null}
         </div>
       ) : null}
 
       {tab === "vehiculos" && can("flota_vehiculos") ? (
         <div className="space-y-4">
-          {can("flota_vehiculos", "crear") ? (
+          {SearchBar}
+          {(can("flota_vehiculos", "crear") || editId) &&
+          (can("flota_vehiculos", "editar") || !editId) ? (
             <form
               onSubmit={onSubmitVehiculo}
-              className="flex flex-wrap gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4"
+              className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4"
             >
-              <input
-                className={input}
-                placeholder="Placa"
-                value={placa}
-                onChange={(e) => setPlaca(e.target.value)}
-                required
-              />
-              <input
-                className={input}
-                placeholder="Marca"
-                value={marca}
-                onChange={(e) => setMarca(e.target.value)}
-              />
-              <input
-                className={input}
-                placeholder="Modelo / año"
-                value={modelo}
-                onChange={(e) => setModelo(e.target.value)}
-              />
-              <input
-                className={`${input} min-w-[180px]`}
-                placeholder="Descripción"
-                value={descripcion}
-                onChange={(e) => setDescripcion(e.target.value)}
-              />
-              <input
-                type="number"
-                className={`${input} w-28`}
-                placeholder="Km"
-                value={kmActual}
-                onChange={(e) => setKmActual(Number(e.target.value))}
-              />
-              <input
-                type="number"
-                className={`${input} w-32`}
-                placeholder="Intervalo svc"
-                value={intervalo}
-                onChange={(e) => setIntervalo(Number(e.target.value))}
-              />
-              <button className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm text-white">
-                Registrar vehículo
+              <div className="flex items-center justify-between">
+                <h2 className="font-medium">
+                  {editId ? `Editar vehículo` : "Registrar vehículo"}
+                </h2>
+                {editId ? (
+                  <button
+                    type="button"
+                    className="text-xs underline"
+                    onClick={() => {
+                      setEditId(null);
+                      setForm(emptyForm);
+                    }}
+                  >
+                    Cancelar edición
+                  </button>
+                ) : null}
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                {(
+                  [
+                    ["placa", "Placa"],
+                    ["marca", "Marca"],
+                    ["modelo", "Modelo / año"],
+                    ["descripcion", "Descripción"],
+                    ["color", "Color"],
+                    ["filtroMayor", "Filtro servicio mayor"],
+                    ["filtroMenor", "Filtro servicio menor"],
+                    ["rin", "Rin de llanta"],
+                    ["medidaLlanta", "Medida de llanta"],
+                    ["tipoAceite", "Tipo de aceite"],
+                  ] as const
+                ).map(([key, label]) => (
+                  <label key={key} className="text-xs text-[var(--muted)]">
+                    {label}
+                    <input
+                      className={`${input} mt-1 w-full`}
+                      value={form[key]}
+                      onChange={(e) =>
+                        setForm((f) => ({ ...f, [key]: e.target.value }))
+                      }
+                      required={key === "placa"}
+                    />
+                  </label>
+                ))}
+                <label className="text-xs text-[var(--muted)]">
+                  Km actual
+                  <input
+                    type="number"
+                    className={`${input} mt-1 w-full`}
+                    value={form.kmActual}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        kmActual: Number(e.target.value),
+                      }))
+                    }
+                  />
+                </label>
+                <label className="text-xs text-[var(--muted)]">
+                  Intervalo servicio (km)
+                  <input
+                    type="number"
+                    className={`${input} mt-1 w-full`}
+                    value={form.intervalo}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        intervalo: Number(e.target.value),
+                      }))
+                    }
+                  />
+                </label>
+              </div>
+              <label className="block text-xs text-[var(--muted)]">
+                Notas
+                <textarea
+                  className={`${input} mt-1 w-full`}
+                  rows={2}
+                  value={form.notas}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, notas: e.target.value }))
+                  }
+                />
+              </label>
+              <button className="rounded bg-[var(--accent)] px-4 py-2 text-sm text-white">
+                {editId ? "Guardar cambios" : "Registrar vehículo"}
               </button>
             </form>
           ) : null}
-
-          <div className="flex flex-wrap gap-2">
-            <input
-              className={`${input} min-w-[220px]`}
-              placeholder="Motivo taller (al enviar)"
-              value={motivoTaller}
-              onChange={(e) => setMotivoTaller(e.target.value)}
-            />
-          </div>
 
           <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
             <table className="min-w-full text-left text-sm">
@@ -583,18 +803,17 @@ function FlotaPageInner() {
                   <th className="px-3 py-2">Descripción</th>
                   <th className="px-3 py-2">Marca</th>
                   <th className="px-3 py-2">Km</th>
-                  <th className="px-3 py-2">Empresa</th>
+                  <th className="px-3 py-2">Filtros</th>
+                  <th className="px-3 py-2">Rin</th>
                   <th className="px-3 py-2">Taller</th>
                   <th className="px-3 py-2" />
                 </tr>
               </thead>
               <tbody>
-                {vehiculos.map((v) => (
+                {vehiculosFiltrados.map((v) => (
                   <tr key={v.id} className="border-t border-[var(--border)]">
                     <td className="px-3 py-2 font-mono">{v.placa}</td>
-                    <td className="px-3 py-2">
-                      {v.descripcion ?? "—"}
-                    </td>
+                    <td className="px-3 py-2">{v.descripcion ?? "—"}</td>
                     <td className="px-3 py-2">
                       {v.marca} {v.modelo}
                     </td>
@@ -602,20 +821,60 @@ function FlotaPageInner() {
                       {Number(v.km_actual ?? 0).toLocaleString("es-GT")}
                     </td>
                     <td className="px-3 py-2 text-xs">
-                      {v.empresa_activo ?? "—"}
+                      May: {v.filtro_servicio_mayor || "—"}
+                      <br />
+                      Men: {v.filtro_servicio_menor || "—"}
+                    </td>
+                    <td className="px-3 py-2 text-xs">
+                      {v.rin_llanta || "—"}
+                      {v.medida_llanta ? ` · ${v.medida_llanta}` : ""}
                     </td>
                     <td className="px-3 py-2">
-                      {v.en_taller ? "Sí" : "No"}
+                      {v.en_taller ? (
+                        <span className="text-amber-300">
+                          Sí
+                          {v.motivo_taller ? (
+                            <span className="block text-[10px] text-[var(--muted)]">
+                              {v.motivo_taller}
+                            </span>
+                          ) : null}
+                        </span>
+                      ) : (
+                        "No"
+                      )}
                     </td>
-                    <td className="px-3 py-2">
+                    <td className="space-x-2 px-3 py-2 text-xs">
                       {can("flota_vehiculos", "editar") ? (
-                        <button
-                          type="button"
-                          className="text-xs text-[var(--accent-2)] underline"
-                          onClick={() => void toggleTaller(v)}
-                        >
-                          {v.en_taller ? "Salir taller" : "Entrar taller"}
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            className="text-sky-300 underline"
+                            onClick={() => empezarEdicion(v)}
+                          >
+                            Editar
+                          </button>
+                          {v.en_taller ? (
+                            <button
+                              type="button"
+                              className="text-emerald-300 underline"
+                              onClick={() => void salirTaller(v.id)}
+                            >
+                              Salir taller
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className="text-amber-300 underline"
+                              onClick={() => {
+                                setTallerId(v.id);
+                                setMotivoTaller("");
+                                setErr("");
+                              }}
+                            >
+                              Enviar taller
+                            </button>
+                          )}
+                        </>
                       ) : null}
                     </td>
                   </tr>
@@ -628,6 +887,7 @@ function FlotaPageInner() {
 
       {tab === "lecturas" && can("flota_lecturas") ? (
         <div className="space-y-4">
+          {SearchBar}
           {can("flota_lecturas", "crear") ? (
             <div className="flex flex-wrap gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
               <select
@@ -663,62 +923,188 @@ function FlotaPageInner() {
               </button>
             </div>
           ) : null}
-          <p className="text-xs text-[var(--muted)]">
-            Historial completo se carga al registrar; usa Reportes / Dashboard
-            para estado.
-          </p>
+          <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+            <table className="min-w-full text-left text-sm">
+              <thead className="bg-[#334155] text-white">
+                <tr>
+                  <th className="px-3 py-2">Fecha</th>
+                  <th className="px-3 py-2">Placa</th>
+                  <th className="px-3 py-2">Km</th>
+                  <th className="px-3 py-2">Nota / conductor</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lecturasFiltradas.map((l) => (
+                  <tr key={l.id} className="border-t border-[var(--border)]">
+                    <td className="px-3 py-2">
+                      {String(l.fecha_lectura).slice(0, 10)}
+                    </td>
+                    <td className="px-3 py-2 font-mono">{l.placa}</td>
+                    <td className="px-3 py-2">
+                      {Number(l.km).toLocaleString("es-GT")}
+                    </td>
+                    <td className="px-3 py-2">{l.nota ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       ) : null}
 
       {tab === "servicios" && can("flota_servicios") ? (
-        <div className="flex flex-wrap gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-          <select
-            className={input}
-            value={vehiculoId}
-            onChange={(e) => setVehiculoId(Number(e.target.value))}
-          >
-            {activos.map((v) => (
-              <option key={v.id} value={v.id}>
-                {v.placa}
-              </option>
-            ))}
-          </select>
-          <select
-            className={input}
-            value={tipoServicio}
-            onChange={(e) => setTipoServicio(e.target.value)}
-          >
-            <option value="mantenimiento">Mantenimiento</option>
-            <option value="reparacion">Reparación</option>
-          </select>
-          <input
-            type="number"
-            className={`${input} w-28`}
-            placeholder="Km"
-            value={kmLectura || ""}
-            onChange={(e) => setKmLectura(Number(e.target.value))}
-          />
-          <input
-            type="number"
-            className={`${input} w-28`}
-            placeholder="Costo"
-            value={costo || ""}
-            onChange={(e) => setCosto(Number(e.target.value))}
-          />
+        <div className="space-y-4">
+          {SearchBar}
           {can("flota_servicios", "crear") ? (
+            <div className="flex flex-wrap gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+              <select
+                className={input}
+                value={vehiculoId}
+                onChange={(e) => setVehiculoId(Number(e.target.value))}
+              >
+                {activos.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.placa}
+                    {v.filtro_servicio_mayor
+                      ? ` · may:${v.filtro_servicio_mayor}`
+                      : ""}
+                  </option>
+                ))}
+              </select>
+              <select
+                className={input}
+                value={tipoServicio}
+                onChange={(e) => setTipoServicio(e.target.value)}
+              >
+                <option value="mantenimiento">Mantenimiento (mayor)</option>
+                <option value="servicio_menor">Servicio menor</option>
+                <option value="reparacion">Reparación</option>
+              </select>
+              <input
+                type="number"
+                className={`${input} w-28`}
+                placeholder="Km"
+                value={kmLectura || ""}
+                onChange={(e) => setKmLectura(Number(e.target.value))}
+              />
+              <input
+                type="number"
+                className={`${input} w-28`}
+                placeholder="Costo"
+                value={costo || ""}
+                onChange={(e) => setCosto(Number(e.target.value))}
+              />
+              <input
+                className={`${input} min-w-[160px]`}
+                placeholder="Detalle / filtros usados"
+                value={descServicio}
+                onChange={(e) => setDescServicio(e.target.value)}
+              />
+              <button
+                type="button"
+                onClick={() => void registrarServicio()}
+                className="rounded bg-[#1F6AA5] px-3 py-1.5 text-sm text-white"
+              >
+                Registrar servicio
+              </button>
+            </div>
+          ) : null}
+          <div className="flex gap-2">
             <button
               type="button"
-              onClick={() => void registrarServicio()}
-              className="rounded bg-[#1F6AA5] px-3 py-1.5 text-sm text-white"
+              className="rounded bg-[#1B5E20] px-3 py-1.5 text-xs text-white"
+              onClick={() => exportar("servicios", "xlsx")}
             >
-              Registrar servicio
+              Excel servicios
             </button>
-          ) : null}
+            <button
+              type="button"
+              className="rounded bg-[#37474F] px-3 py-1.5 text-xs text-white"
+              onClick={() => exportar("servicios", "pdf")}
+            >
+              PDF servicios
+            </button>
+          </div>
+          <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+            <table className="min-w-full text-left text-sm">
+              <thead className="bg-[#334155] text-white">
+                <tr>
+                  <th className="px-3 py-2">Fecha</th>
+                  <th className="px-3 py-2">Placa</th>
+                  <th className="px-3 py-2">Tipo</th>
+                  <th className="px-3 py-2">Km</th>
+                  <th className="px-3 py-2">Costo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {serviciosFiltrados.map((s) => (
+                  <tr key={s.id} className="border-t border-[var(--border)]">
+                    <td className="px-3 py-2">
+                      {String(s.fecha_servicio).slice(0, 10)}
+                    </td>
+                    <td className="px-3 py-2 font-mono">{s.placa}</td>
+                    <td className="px-3 py-2">{s.tipo}</td>
+                    <td className="px-3 py-2">
+                      {s.km_servicio?.toLocaleString("es-GT") ?? "—"}
+                    </td>
+                    <td className="px-3 py-2">
+                      Q{Number(s.costo).toFixed(2)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       ) : null}
 
       {tab === "reportes" && can("flota_reportes") ? (
         <div className="space-y-4">
+          {SearchBar}
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="rounded bg-[#1B5E20] px-3 py-2 text-sm text-white"
+              onClick={() => exportar("flota", "xlsx")}
+            >
+              Excel inventario
+            </button>
+            <button
+              type="button"
+              className="rounded bg-[#37474F] px-3 py-2 text-sm text-white"
+              onClick={() => exportar("flota", "pdf")}
+            >
+              PDF inventario
+            </button>
+            <button
+              type="button"
+              className="rounded bg-[#1B5E20] px-3 py-2 text-sm text-white"
+              onClick={() => exportar("servicios", "xlsx")}
+            >
+              Excel servicios
+            </button>
+            <button
+              type="button"
+              className="rounded bg-[#37474F] px-3 py-2 text-sm text-white"
+              onClick={() => exportar("servicios", "pdf")}
+            >
+              PDF servicios
+            </button>
+            <button
+              type="button"
+              className="rounded bg-[#1B5E20] px-3 py-2 text-sm text-white"
+              onClick={() => exportar("viajes", "xlsx")}
+            >
+              Excel viajes
+            </button>
+            <button
+              type="button"
+              className="rounded bg-[#37474F] px-3 py-2 text-sm text-white"
+              onClick={() => exportar("viajes", "pdf")}
+            >
+              PDF viajes
+            </button>
+          </div>
           {resumen ? (
             <div className="grid gap-3 sm:grid-cols-3">
               <div className="rounded-xl border border-[var(--border)] p-4 text-sm">
@@ -748,139 +1134,187 @@ function FlotaPageInner() {
             </ul>
           </div>
           <div className="rounded-xl border border-[var(--border)] p-4 text-sm">
-            <h2 className="mb-2 font-medium">Últimos viajes</h2>
+            <h2 className="mb-2 font-medium">Viajes (filtro placa)</h2>
             <ul className="space-y-1 text-[var(--muted)]">
-              {viajes.slice(0, 15).map((v) => (
+              {viajesFiltrados.slice(0, 20).map((v) => (
                 <li key={v.id}>
                   {v.placa} · {v.piloto_nombre} · {v.estado}
-                  {v.destino ? ` · ${v.destino}` : ""} · km {v.km_salida}
-                  {v.km_llegada != null ? `→${v.km_llegada}` : ""}
+                  {v.destino ? ` · ${v.destino}` : ""}
                 </li>
               ))}
-              {!viajes.length ? <li>Sin viajes.</li> : null}
+              {!viajesFiltrados.length ? <li>Sin viajes.</li> : null}
             </ul>
           </div>
         </div>
       ) : null}
 
       {tab === "piloto" && can("flota_piloto") ? (
-        <div className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-          <div className="flex gap-2">
-            <button
-              type="button"
-              className={[
-                "rounded px-3 py-1.5 text-sm",
-                modoPiloto === "salida"
-                  ? "bg-[var(--accent)] text-white"
-                  : "bg-[#334155]",
-              ].join(" ")}
-              onClick={() => setModoPiloto("salida")}
-            >
-              Registrar salida
-            </button>
-            <button
-              type="button"
-              className={[
-                "rounded px-3 py-1.5 text-sm",
-                modoPiloto === "llegada"
-                  ? "bg-[var(--accent)] text-white"
-                  : "bg-[#334155]",
-              ].join(" ")}
-              onClick={() => setModoPiloto("llegada")}
-            >
-              Registrar llegada
-            </button>
-          </div>
-
-          {modoPiloto === "salida" ? (
-            <div className="flex flex-wrap gap-2">
-              <input
-                className={input}
-                placeholder="Nombre piloto"
-                value={pilotoNombre}
-                onChange={(e) => setPilotoNombre(e.target.value)}
-                required
-              />
-              <select
-                className={input}
-                value={vehiculoId}
-                onChange={(e) => setVehiculoId(Number(e.target.value))}
-              >
-                {activos
-                  .filter((v) => !v.en_taller)
-                  .map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.placa} · {Number(v.km_actual ?? 0).toLocaleString("es-GT")} km
-                    </option>
-                  ))}
-              </select>
-              <input
-                type="number"
-                className={`${input} w-32`}
-                placeholder="Km salida"
-                value={kmLectura || ""}
-                onChange={(e) => setKmLectura(Number(e.target.value))}
-              />
-              <input
-                className={input}
-                placeholder="Destino"
-                value={destino}
-                onChange={(e) => setDestino(e.target.value)}
-              />
+        <div className="space-y-4">
+          {SearchBar}
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 space-y-4">
+            <div className="flex gap-2">
               <button
                 type="button"
-                className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm text-white"
-                onClick={() => void salidaViaje()}
+                className={[
+                  "rounded px-3 py-1.5 text-sm",
+                  modoPiloto === "salida"
+                    ? "bg-[var(--accent)] text-white"
+                    : "bg-[#334155]",
+                ].join(" ")}
+                onClick={() => setModoPiloto("salida")}
               >
-                Guardar salida
+                Registrar salida
               </button>
-            </div>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              <select
-                className={input}
-                value={viajeId}
-                onChange={(e) => setViajeId(Number(e.target.value))}
-              >
-                {abiertos.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.placa} · {v.piloto_nombre} · salida {v.km_salida}
-                    {v.destino ? ` → ${v.destino}` : ""}
-                  </option>
-                ))}
-              </select>
-              <input
-                type="number"
-                className={`${input} w-32`}
-                placeholder="Km llegada"
-                value={kmLlegada || ""}
-                onChange={(e) => setKmLlegada(Number(e.target.value))}
-              />
               <button
                 type="button"
-                className="rounded bg-[#1F6AA5] px-3 py-1.5 text-sm text-white"
-                onClick={() => void llegadaViaje()}
-                disabled={!abiertos.length}
+                className={[
+                  "rounded px-3 py-1.5 text-sm",
+                  modoPiloto === "llegada"
+                    ? "bg-[var(--accent)] text-white"
+                    : "bg-[#334155]",
+                ].join(" ")}
+                onClick={() => setModoPiloto("llegada")}
               >
-                Guardar llegada
+                Registrar llegada
               </button>
             </div>
-          )}
 
-          <div>
-            <h3 className="mb-1 text-sm font-medium">Viajes abiertos</h3>
-            <ul className="space-y-1 text-xs text-[var(--muted)]">
-              {abiertos.length ? (
-                abiertos.map((v) => (
+            {modoPiloto === "salida" ? (
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                <label className="text-xs text-[var(--muted)]">
+                  Nombre piloto
+                  <input
+                    className={`${input} mt-1 w-full`}
+                    value={pilotoNombre}
+                    onChange={(e) => setPilotoNombre(e.target.value)}
+                  />
+                </label>
+                <label className="text-xs text-[var(--muted)]">
+                  Vehículo (busca arriba)
+                  <select
+                    className={`${input} mt-1 w-full`}
+                    value={vehiculoId}
+                    onChange={(e) => setVehiculoId(Number(e.target.value))}
+                  >
+                    {activos
+                      .filter((v) => !v.en_taller)
+                      .map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.placa} ·{" "}
+                          {Number(v.km_actual ?? 0).toLocaleString("es-GT")} km
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <label className="text-xs text-[var(--muted)]">
+                  Km salida
+                  <input
+                    type="number"
+                    className={`${input} mt-1 w-full`}
+                    value={kmLectura || ""}
+                    onChange={(e) => setKmLectura(Number(e.target.value))}
+                  />
+                </label>
+                <label className="text-xs text-[var(--muted)] sm:col-span-2">
+                  Destino
+                  <input
+                    className={`${input} mt-1 w-full`}
+                    value={destino}
+                    onChange={(e) => setDestino(e.target.value)}
+                    placeholder="Ej. Predio norte / Cliente X"
+                  />
+                </label>
+                <div className="flex items-end">
+                  <button
+                    type="button"
+                    className="rounded bg-[var(--accent)] px-4 py-2 text-sm text-white"
+                    onClick={() => void salidaViaje()}
+                  >
+                    Guardar salida
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                <label className="text-xs text-[var(--muted)] sm:col-span-2">
+                  Viaje abierto
+                  <select
+                    className={`${input} mt-1 w-full`}
+                    value={viajeId}
+                    onChange={(e) => setViajeId(Number(e.target.value))}
+                  >
+                    {abiertos
+                      .filter((v) => matchQ(v.placa, v.piloto_nombre))
+                      .map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.placa} · {v.piloto_nombre} · km {v.km_salida}
+                          {v.destino ? ` → ${v.destino}` : ""}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <label className="text-xs text-[var(--muted)]">
+                  Km llegada
+                  <input
+                    type="number"
+                    className={`${input} mt-1 w-full`}
+                    value={kmLlegada || ""}
+                    onChange={(e) => setKmLlegada(Number(e.target.value))}
+                  />
+                </label>
+                <label className="text-xs text-[var(--muted)] sm:col-span-2">
+                  Observaciones
+                  <input
+                    className={`${input} mt-1 w-full`}
+                    value={obsViaje}
+                    onChange={(e) => setObsViaje(e.target.value)}
+                  />
+                </label>
+                <div className="flex items-end">
+                  <button
+                    type="button"
+                    className="rounded bg-[#1F6AA5] px-4 py-2 text-sm text-white disabled:opacity-40"
+                    disabled={!abiertos.length}
+                    onClick={() => void llegadaViaje()}
+                  >
+                    Guardar llegada
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-sm font-medium">Viajes recientes</h3>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    className="rounded bg-[#1B5E20] px-2 py-1 text-xs text-white"
+                    onClick={() => exportar("viajes", "xlsx")}
+                  >
+                    Excel
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded bg-[#37474F] px-2 py-1 text-xs text-white"
+                    onClick={() => exportar("viajes", "pdf")}
+                  >
+                    PDF
+                  </button>
+                </div>
+              </div>
+              <ul className="space-y-1 text-xs text-[var(--muted)]">
+                {viajesFiltrados.slice(0, 12).map((v) => (
                   <li key={v.id}>
-                    {v.placa} · {v.piloto_nombre} · km {v.km_salida}
-                    {v.destino ? ` · ${v.destino}` : ""}
+                    <span className="font-mono text-sky-300">{v.placa}</span> ·{" "}
+                    {v.piloto_nombre} · {v.estado}
+                    {v.destino ? ` · ${v.destino}` : ""} · {v.km_salida}
+                    {v.km_llegada != null ? `→${v.km_llegada}` : ""}
                   </li>
-                ))
-              ) : (
-                <li>Ninguno abierto.</li>
-              )}
-            </ul>
+                ))}
+                {!viajesFiltrados.length ? <li>Sin viajes.</li> : null}
+              </ul>
+            </div>
           </div>
         </div>
       ) : null}

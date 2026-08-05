@@ -94,6 +94,31 @@ export async function asegurarSchemaFlota(): Promise<void> {
     "notas TEXT NULL",
   );
   await ensureColumn(
+    "flota_vehiculos",
+    "filtro_servicio_mayor",
+    "filtro_servicio_mayor VARCHAR(120) NULL",
+  );
+  await ensureColumn(
+    "flota_vehiculos",
+    "filtro_servicio_menor",
+    "filtro_servicio_menor VARCHAR(120) NULL",
+  );
+  await ensureColumn(
+    "flota_vehiculos",
+    "rin_llanta",
+    "rin_llanta VARCHAR(80) NULL",
+  );
+  await ensureColumn(
+    "flota_vehiculos",
+    "medida_llanta",
+    "medida_llanta VARCHAR(80) NULL",
+  );
+  await ensureColumn(
+    "flota_vehiculos",
+    "tipo_aceite",
+    "tipo_aceite VARCHAR(80) NULL",
+  );
+  await ensureColumn(
     "flota_lecturas",
     "conductor",
     "conductor VARCHAR(120) NULL",
