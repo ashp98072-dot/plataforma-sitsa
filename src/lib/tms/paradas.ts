@@ -27,13 +27,27 @@ export async function listarParadasDelPlan(
   const rows = await query<RowDataPacket[]>(
     `SELECT pp.id, pp.plan_id, pp.orden, pp.lugar_id, pp.lugar_nombre, pp.tipo,
             pp.requiere_evidencia,
-            (SELECT COUNT(*) FROM tms_evidencias ev
-             WHERE ev.parada_id = pp.id) AS evidencias
+            (
+              (SELECT COUNT(*) FROM tms_evidencias ev WHERE ev.parada_id = pp.id)
+              +
+              (SELECT COUNT(*) FROM flota_viaje_evidencias fe WHERE fe.parada_id = pp.id)
+            ) AS evidencias
      FROM tms_plan_paradas pp
      WHERE pp.plan_id = ?
      ORDER BY pp.orden ASC, pp.id ASC`,
     [planId],
-  ).catch(() => [] as RowDataPacket[]);
+  ).catch(async () =>
+    query<RowDataPacket[]>(
+      `SELECT pp.id, pp.plan_id, pp.orden, pp.lugar_id, pp.lugar_nombre, pp.tipo,
+              pp.requiere_evidencia,
+              (SELECT COUNT(*) FROM tms_evidencias ev
+               WHERE ev.parada_id = pp.id) AS evidencias
+       FROM tms_plan_paradas pp
+       WHERE pp.plan_id = ?
+       ORDER BY pp.orden ASC, pp.id ASC`,
+      [planId],
+    ).catch(() => [] as RowDataPacket[]),
+  );
 
   return rows.map((r) => ({
     id: Number(r.id),

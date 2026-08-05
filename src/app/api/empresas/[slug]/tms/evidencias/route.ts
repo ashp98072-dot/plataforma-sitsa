@@ -150,19 +150,37 @@ export async function POST(req: Request, ctx: Ctx) {
     ? String(form.get("capturadoEn"))
     : ahoraLocal();
 
-  const files: File[] = [];
+  const files: {
+    name: string;
+    size: number;
+    type?: string;
+    arrayBuffer: () => Promise<ArrayBuffer>;
+  }[] = [];
   for (const [key, val] of form.entries()) {
+    if (key !== "file" && key !== "files") continue;
     if (
-      val instanceof File &&
-      val.size > 0 &&
-      (key === "file" || key === "files")
+      val &&
+      typeof val === "object" &&
+      "arrayBuffer" in val &&
+      typeof (val as Blob).arrayBuffer === "function" &&
+      typeof (val as Blob).size === "number" &&
+      (val as Blob).size > 0
     ) {
-      files.push(val);
+      const blob = val as Blob & { name?: string };
+      files.push({
+        name: blob.name || `foto_${Date.now()}.jpg`,
+        size: blob.size,
+        type: blob.type,
+        arrayBuffer: () => blob.arrayBuffer(),
+      });
     }
   }
   if (!planId || !files.length) {
     return NextResponse.json(
-      { error: "planId y archivo son requeridos." },
+      {
+        error:
+          "planId y archivo son requeridos. Si ya elegiste foto, prueba JPG/PNG.",
+      },
       { status: 400 },
     );
   }

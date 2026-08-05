@@ -140,14 +140,35 @@ export async function POST(req: Request, ctx: Ctx) {
     ? Number(form.get("paradaId"))
     : null;
 
-  const files: File[] = [];
+  const files: { name: string; size: number; type?: string; arrayBuffer: () => Promise<ArrayBuffer> }[] = [];
   for (const [key, val] of form.entries()) {
-    if (val instanceof File && val.size > 0 && (key === "file" || key === "files")) {
-      files.push(val);
+    if (key !== "file" && key !== "files") continue;
+    // En Node/Next, a veces no es instanceof File sino Blob
+    if (
+      val &&
+      typeof val === "object" &&
+      "arrayBuffer" in val &&
+      typeof (val as Blob).arrayBuffer === "function" &&
+      typeof (val as Blob).size === "number" &&
+      (val as Blob).size > 0
+    ) {
+      const blob = val as Blob & { name?: string };
+      files.push({
+        name: blob.name || `foto_${Date.now()}.jpg`,
+        size: blob.size,
+        type: blob.type,
+        arrayBuffer: () => blob.arrayBuffer(),
+      });
     }
   }
   if (!files.length) {
-    return NextResponse.json({ error: "Adjunta al menos una foto." }, { status: 400 });
+    return NextResponse.json(
+      {
+        error:
+          "No se recibió la foto. Prueba otra vez (JPG/PNG) o usa la cámara del celular.",
+      },
+      { status: 400 },
+    );
   }
 
   const planId = viaje[0].plan_id ? Number(viaje[0].plan_id) : null;

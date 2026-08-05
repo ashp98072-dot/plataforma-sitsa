@@ -24,6 +24,15 @@ import {
   type GeoCoords,
 } from "@/lib/flota/photo-meta";
 
+function normPiloto(nombre: string): string {
+  return nombre
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
 type Vehiculo = {
   id: number;
   placa: string;
@@ -261,6 +270,10 @@ function FlotaInner() {
   >({});
   const [paradasViaje, setParadasViaje] = useState<PlanParadaUi[]>([]);
   const [planIdViaje, setPlanIdViaje] = useState<number | null>(null);
+  /** Cuenta compartida "piloto": quién está operando ahora */
+  const [pilotoSesion, setPilotoSesion] = useState("");
+  const [pilotoSesionConfirmado, setPilotoSesionConfirmado] = useState(false);
+  const [pilotoSesionDraft, setPilotoSesionDraft] = useState("");
   const [q, setQ] = useState("");
   const [filtroTaller, setFiltroTaller] = useState<"todos" | "taller" | "ruta">(
     "todos",
@@ -425,10 +438,17 @@ function FlotaInner() {
     [viajesReporte, matchQ],
   );
 
+  const abiertosDelPiloto = useMemo(() => {
+    if (!pilotoSesionConfirmado || !pilotoSesion.trim()) return abiertos;
+    const n = normPiloto(pilotoSesion);
+    return abiertos.filter((v) => normPiloto(v.piloto_nombre) === n);
+  }, [abiertos, pilotoSesion, pilotoSesionConfirmado]);
+
   const abiertosFiltrados = useMemo(() => {
+    const base = pilotoSesionConfirmado ? abiertosDelPiloto : abiertos;
     const s = qLlegada.trim().toLowerCase();
-    if (!s) return abiertos;
-    const filtrados = abiertos.filter((v) => {
+    if (!s) return base;
+    const filtrados = base.filter((v) => {
       const placa = v.placa.toLowerCase().replace(/[\s-]/g, "");
       const qPlaca = s.replace(/[\s-]/g, "");
       const piloto = v.piloto_nombre.toLowerCase();
@@ -440,9 +460,8 @@ function FlotaInner() {
         (Number(v.es_externo) === 1 && "externo".includes(s))
       );
     });
-    // Si la búsqueda no coincide (ej. quedó el nombre del admin), mostrar todos
-    return filtrados.length ? filtrados : abiertos;
-  }, [abiertos, qLlegada]);
+    return filtrados.length ? filtrados : base;
+  }, [abiertos, abiertosDelPiloto, qLlegada, pilotoSesionConfirmado]);
 
   const cargar = useCallback(async () => {
     const me = await fetch("/api/auth/me").then((r) => r.json());
@@ -512,11 +531,59 @@ function FlotaInner() {
   }, [slug]);
 
   useEffect(() => {
+    try {
+      const key = `flota_piloto_sesion_${slug}`;
+      const saved = sessionStorage.getItem(key);
+      if (saved && saved.trim().length >= 2) {
+        setPilotoSesion(saved.trim());
+        setPilotoSesionDraft(saved.trim());
+        setPilotoSesionConfirmado(true);
+        setPilotoNombre(saved.trim());
+      }
+    } catch {
+      /* ok */
+    }
+  }, [slug]);
+
+  useEffect(() => {
     if (modoPiloto === "llegada" && viajeId) {
       void cargarParadasViaje(viajeId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modoPiloto, viajeId, slug]);
+
+  function confirmarPilotoSesion() {
+    const n = pilotoSesionDraft.trim();
+    if (n.length < 2) {
+      setErr("Escribe tu nombre completo para identificar tu sesión.");
+      return;
+    }
+    setPilotoSesion(n);
+    setPilotoNombre(n);
+    setPilotoSesionConfirmado(true);
+    setErr("");
+    setMsg(`Sesión de piloto: ${n}. Solo verás tus viajes.`);
+    try {
+      sessionStorage.setItem(`flota_piloto_sesion_${slug}`, n);
+    } catch {
+      /* ok */
+    }
+    const mios = abiertos.filter(
+      (v) => normPiloto(v.piloto_nombre) === normPiloto(n),
+    );
+    if (mios[0]) setViajeId(mios[0].id);
+    else setViajeId(0);
+  }
+
+  function cambiarPilotoSesion() {
+    setPilotoSesionConfirmado(false);
+    setPilotoSesionDraft(pilotoSesion);
+    try {
+      sessionStorage.removeItem(`flota_piloto_sesion_${slug}`);
+    } catch {
+      /* ok */
+    }
+  }
 
   function exportar(tipo: "flota" | "servicios" | "viajes", formato: "xlsx" | "pdf") {
     const params = new URLSearchParams({ tipo, formato });
@@ -691,17 +758,27 @@ function FlotaInner() {
   }
 
   async function subirEvidenciaParada(paradaId: number, files: FileList | null) {
-    if (!viajeId || !files?.length) return;
+    if (!viajeId || !files?.length) {
+      setErr("Selecciona una foto para esta parada.");
+      return;
+    }
     setErr("");
+    setMsg("");
     setSubiendoFotos(true);
     try {
       const geo = await obtenerGps();
       const parada = paradasViaje.find((p) => p.id === paradaId);
-      const marked = await marcarVarias(
-        Array.from(files),
+      const originales = Array.from(files).filter((f) => f && f.size > 0);
+      if (!originales.length) {
+        throw new Error("La foto está vacía. Toma otra con la cámara.");
+      }
+      let marked = await marcarVarias(
+        originales,
         `PRODUCTO · ${parada?.orden ?? ""}. ${parada?.lugar_nombre ?? "Parada"}`,
         geo,
       );
+      if (!marked.length) marked = originales;
+
       const form = new FormData();
       form.set("tipo", "producto");
       form.set("paradaId", String(paradaId));
@@ -713,14 +790,45 @@ function FlotaInner() {
         "capturadoEn",
         new Date().toISOString().slice(0, 19).replace("T", " "),
       );
-      for (const f of marked) form.append("files", f);
+      for (const f of marked) {
+        form.append("files", f, f.name || `parada_${paradaId}.jpg`);
+      }
       const res = await fetch(
         `/api/empresas/${slug}/flota/viajes/${viajeId}/evidencias`,
         { method: "POST", body: form },
       );
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Error al subir evidencia");
-      setMsg(data.mensaje ?? "Evidencia de parada guardada.");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        // Fallback: subir directo al plan TMS
+        if (planIdViaje) {
+          const form2 = new FormData();
+          form2.set("planId", String(planIdViaje));
+          form2.set("paradaId", String(paradaId));
+          form2.set("tipo", "Producto");
+          if (geo) {
+            form2.set("latitud", String(geo.lat));
+            form2.set("longitud", String(geo.lng));
+          }
+          for (const f of marked) {
+            form2.append("files", f, f.name || `parada_${paradaId}.jpg`);
+          }
+          const res2 = await fetch(`/api/empresas/${slug}/tms/evidencias`, {
+            method: "POST",
+            body: form2,
+          });
+          const data2 = await res2.json().catch(() => ({}));
+          if (!res2.ok) {
+            throw new Error(
+              data.error || data2.error || "No se pudo subir la foto",
+            );
+          }
+          setMsg("Evidencia guardada en el plan.");
+        } else {
+          throw new Error(data.error ?? "No se pudo subir la foto");
+        }
+      } else {
+        setMsg(data.mensaje ?? "Evidencia de parada guardada.");
+      }
       await cargarParadasViaje(viajeId);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Error al subir evidencia");
@@ -1053,6 +1161,20 @@ function FlotaInner() {
   async function salidaViaje() {
     setErr("");
     setMsg("");
+    if (rol === "Piloto" && !pilotoSesionConfirmado) {
+      setErr("Primero indica quién está operando (tu nombre).");
+      return;
+    }
+    if (pilotoSesionConfirmado && pilotoSesion.trim()) {
+      setPilotoNombre(pilotoSesion.trim());
+    }
+    const nombreSalida = (
+      pilotoSesionConfirmado ? pilotoSesion : pilotoNombre
+    ).trim();
+    if (nombreSalida.length < 2) {
+      setErr("Escribe el nombre del piloto.");
+      return;
+    }
     const placa = placaSalida.trim().toUpperCase();
     if (placa) {
       const veh = vehiculos.find(
@@ -1099,7 +1221,7 @@ function FlotaInner() {
         accion: "salida",
         placa: placaSalida.trim() || undefined,
         vehiculoId: placaSalida.trim() ? undefined : vehiculoId || undefined,
-        pilotoNombre,
+        pilotoNombre: nombreSalida,
         kmSalida: kmLectura,
         destino: destino || undefined,
         esExterno: esExterno || undefined,
@@ -2909,7 +3031,88 @@ function FlotaInner() {
       {tab === "piloto" && can("flota_piloto") ? (
         <div className="space-y-4">
           {SearchBar}
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 space-y-4">
+
+          {rol === "Piloto" && !pilotoSesionConfirmado ? (
+            <div className="space-y-3 rounded-xl border border-sky-700 bg-sky-950/30 p-4">
+              <h2 className="font-medium text-sky-100">
+                ¿Quién está operando?
+              </h2>
+              <p className="text-xs text-[var(--muted)]">
+                Cuenta compartida de pilotos. Escribe tu nombre (RRHH o
+                externo autorizado). Solo verás y cerrarás tus propios viajes.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <input
+                  className={`${input} min-w-[220px] flex-1`}
+                  placeholder="Tu nombre completo"
+                  value={pilotoSesionDraft}
+                  onChange={(e) => setPilotoSesionDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      confirmarPilotoSesion();
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  className="rounded bg-[var(--accent)] px-4 py-2 text-sm text-white"
+                  onClick={() => confirmarPilotoSesion()}
+                >
+                  Continuar
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {pilotoSesionConfirmado ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-800/50 bg-emerald-950/20 px-3 py-2 text-sm">
+              <p>
+                Operando como:{" "}
+                <strong className="text-emerald-200">{pilotoSesion}</strong>
+                {abiertosDelPiloto.length
+                  ? ` · ${abiertosDelPiloto.length} viaje(s) tuyo(s) abierto(s)`
+                  : " · sin viajes abiertos tuyos"}
+              </p>
+              <button
+                type="button"
+                className="text-xs text-sky-300 underline"
+                onClick={() => cambiarPilotoSesion()}
+              >
+                Cambiar piloto
+              </button>
+            </div>
+          ) : rol !== "Piloto" ? (
+            <div className="space-y-2 rounded-lg border border-[var(--border)] bg-[var(--card)] p-3 text-sm">
+              <p className="text-xs text-[var(--muted)]">
+                Identifica al piloto (recomendado en tablet compartida):
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <input
+                  className={`${input} min-w-[200px] flex-1`}
+                  placeholder="Nombre del piloto de este turno"
+                  value={pilotoSesionDraft}
+                  onChange={(e) => setPilotoSesionDraft(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="rounded bg-[#334155] px-3 py-1.5 text-xs text-white"
+                  onClick={() => confirmarPilotoSesion()}
+                >
+                  Usar este nombre
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          <div
+            className={[
+              "rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 space-y-4",
+              rol === "Piloto" && !pilotoSesionConfirmado
+                ? "pointer-events-none opacity-40"
+                : "",
+            ].join(" ")}
+          >
             <div className="flex gap-2">
               <button
                 type="button"
@@ -3314,9 +3517,15 @@ function FlotaInner() {
                   </div>
                 </label>
 
-                {abiertos.length ? (
+                {(pilotoSesionConfirmado
+                  ? abiertosDelPiloto
+                  : abiertos
+                ).length ? (
                   <ul className="space-y-1 rounded-lg border border-[var(--border)] p-2 text-xs">
-                    {abiertos.map((v) => (
+                    {(pilotoSesionConfirmado
+                      ? abiertosDelPiloto
+                      : abiertos
+                    ).map((v) => (
                       <li key={v.id}>
                         <button
                           type="button"
@@ -3345,8 +3554,9 @@ function FlotaInner() {
                   </ul>
                 ) : (
                   <p className="text-xs text-amber-300">
-                    No hay viajes abiertos. Registra primero la salida (con el
-                    nombre del piloto externo autorizado).
+                    {pilotoSesionConfirmado
+                      ? `No hay viajes abiertos de ${pilotoSesion}.`
+                      : "No hay viajes abiertos. Registra primero la salida."}
                   </p>
                 )}
 
@@ -3371,13 +3581,11 @@ function FlotaInner() {
                       ))}
                     </select>
                     <span className="mt-1 block text-[11px] text-[var(--muted)]">
-                      {abiertos.length
-                        ? `${abiertos.length} viaje(s) abierto(s)`
+                      {abiertosFiltrados.length
+                        ? `${abiertosFiltrados.length} viaje(s) visible(s)`
                         : "Ningún viaje abierto"}
-                      {qLlegada.trim() &&
-                      abiertosFiltrados.length === abiertos.length &&
-                      abiertos.length > 0
-                        ? " · búsqueda sin coincidencia exacta; se muestran todos"
+                      {pilotoSesionConfirmado
+                        ? ` de ${pilotoSesion}`
                         : ""}
                     </span>
                   </label>
