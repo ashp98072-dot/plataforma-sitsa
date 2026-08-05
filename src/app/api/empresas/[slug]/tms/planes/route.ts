@@ -89,6 +89,7 @@ const schema = z.object({
   placa: z.string().optional(),
   pilotoNombre: z.string().optional(),
   auxiliarNombre: z.string().optional(),
+  auxiliarNombres: z.array(z.string().min(2)).max(8).optional(),
   pilotoEmpleadoId: z.number().int().positive().optional(),
   auxiliarEmpleadoId: z.number().int().positive().optional(),
   auxiliarEmpleadoIds: z.array(z.number().int().positive()).max(8).optional(),
@@ -230,10 +231,27 @@ export async function POST(req: Request, ctx: Ctx) {
     const pid = await personalDesdeEmpleado(empresaId, eid, "Auxiliar");
     if (pid) auxPersonalIds.push(pid);
   }
-  if (!auxPersonalIds.length && d.auxiliarNombre?.trim()) {
+  const nombresAux = [
+    ...(d.auxiliarNombres ?? []),
+    ...(d.auxiliarNombre?.trim() ? [d.auxiliarNombre.trim()] : []),
+  ];
+  for (const nom of nombresAux) {
+    if (auxPersonalIds.length >= 8) break;
+    const nombre = nom.trim();
+    if (nombre.length < 2) continue;
+    const existing = await query<RowDataPacket[]>(
+      `SELECT id FROM tms_personal
+       WHERE empresa_id = ? AND tipo = 'Auxiliar' AND LOWER(TRIM(nombre)) = LOWER(?)
+       LIMIT 1`,
+      [empresaId, nombre],
+    );
+    if (existing[0]) {
+      auxPersonalIds.push(Number(existing[0].id));
+      continue;
+    }
     const r = await execute(
       "INSERT INTO tms_personal (empresa_id, nombre, tipo) VALUES (?, ?, 'Auxiliar')",
-      [empresaId, d.auxiliarNombre.trim()],
+      [empresaId, nombre],
     );
     auxPersonalIds.push(Number(r.insertId));
   }

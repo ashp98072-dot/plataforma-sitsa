@@ -30,11 +30,14 @@ export default function TmsPage() {
     clienteNombre: "",
     placa: "",
     pilotoEmpleadoId: 0,
+    pilotoNombre: "",
     auxiliarEmpleadoIds: [] as number[],
+    auxiliarNombres: [] as string[],
     tipoTraslado: "",
     lugarCarga: "",
     lugarDescarga: "",
   });
+  const [auxInput, setAuxInput] = useState("");
   const [edit, setEdit] = useState({
     pilotoNombre: "",
     auxiliarNombre: "",
@@ -83,6 +86,10 @@ export default function TmsPage() {
     void cargar();
   }, [cargar]);
 
+  function totalAux() {
+    return form.auxiliarEmpleadoIds.length + form.auxiliarNombres.length;
+  }
+
   function toggleAux(id: number) {
     setForm((f) => {
       const has = f.auxiliarEmpleadoIds.includes(id);
@@ -92,21 +99,46 @@ export default function TmsPage() {
           auxiliarEmpleadoIds: f.auxiliarEmpleadoIds.filter((x) => x !== id),
         };
       }
-      if (f.auxiliarEmpleadoIds.length >= 8) return f;
+      if (f.auxiliarEmpleadoIds.length + f.auxiliarNombres.length >= 8) return f;
       return { ...f, auxiliarEmpleadoIds: [...f.auxiliarEmpleadoIds, id] };
     });
   }
 
+  function agregarAuxNombre() {
+    const t = auxInput.trim();
+    if (t.length < 2) return;
+    setForm((f) => {
+      if (f.auxiliarEmpleadoIds.length + f.auxiliarNombres.length >= 8) return f;
+      if (
+        f.auxiliarNombres.some(
+          (n) => n.toLowerCase() === t.toLowerCase(),
+        )
+      ) {
+        return f;
+      }
+      return { ...f, auxiliarNombres: [...f.auxiliarNombres, t] };
+    });
+    setAuxInput("");
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    if (!form.pilotoEmpleadoId && !form.pilotoNombre.trim()) {
+      setMsg("Indica el piloto (elige de RRHH o escríbelo).");
+      return;
+    }
     const res = await fetch(`/api/empresas/${slug}/tms/planes`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         ...form,
         pilotoEmpleadoId: form.pilotoEmpleadoId || undefined,
+        pilotoNombre: form.pilotoNombre.trim() || undefined,
         auxiliarEmpleadoIds: form.auxiliarEmpleadoIds.length
           ? form.auxiliarEmpleadoIds
+          : undefined,
+        auxiliarNombres: form.auxiliarNombres.length
+          ? form.auxiliarNombres
           : undefined,
       }),
     });
@@ -116,10 +148,14 @@ export default function TmsPage() {
       setForm((f) => ({
         ...f,
         codigo: "",
+        pilotoEmpleadoId: 0,
+        pilotoNombre: "",
         auxiliarEmpleadoIds: [],
+        auxiliarNombres: [],
         placa: "",
         clienteNombre: "",
       }));
+      setAuxInput("");
       await cargar();
     }
   }
@@ -266,26 +302,91 @@ export default function TmsPage() {
             ))}
           </datalist>
         </label>
-        <select
-          className={input}
-          value={form.pilotoEmpleadoId}
-          onChange={(e) =>
-            setForm({ ...form, pilotoEmpleadoId: Number(e.target.value) || 0 })
-          }
-        >
-          <option value={0}>Piloto (RRHH)…</option>
-          {pilotos.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.nombre} ({p.codigo})
-            </option>
-          ))}
-        </select>
+        <label className="text-xs text-[var(--muted)]">
+          Piloto (escribe o elige de RRHH)
+          <input
+            className={`${input} mt-1 w-full`}
+            placeholder="Ej. Walter Villagrán"
+            value={
+              form.pilotoEmpleadoId
+                ? pilotos.find((p) => p.id === form.pilotoEmpleadoId)?.nombre ??
+                  form.pilotoNombre
+                : form.pilotoNombre
+            }
+            list="pilotos-rrhh-tms"
+            onChange={(e) => {
+              const val = e.target.value;
+              const match = pilotos.find(
+                (p) => p.nombre.toLowerCase() === val.trim().toLowerCase(),
+              );
+              setForm({
+                ...form,
+                pilotoNombre: val,
+                pilotoEmpleadoId: match ? match.id : 0,
+              });
+            }}
+          />
+          <datalist id="pilotos-rrhh-tms">
+            {pilotos.map((p) => (
+              <option key={p.id} value={p.nombre}>
+                {p.codigo}
+              </option>
+            ))}
+          </datalist>
+        </label>
 
-        <div className="md:col-span-3 rounded border border-[var(--border)] p-3">
-          <p className="mb-2 text-xs text-[var(--muted)]">
-            Auxiliares RRHH (máx. 8) — {form.auxiliarEmpleadoIds.length}/8
+        <div className="md:col-span-3 space-y-2 rounded border border-[var(--border)] p-3">
+          <p className="text-xs text-[var(--muted)]">
+            Auxiliares (máx. 8) — {totalAux()}/8. Marca de RRHH o escribe y
+            pulsa Enter.
           </p>
-          <div className="flex max-h-36 flex-wrap gap-2 overflow-y-auto">
+          <div className="flex gap-2">
+            <input
+              className={`${input} flex-1`}
+              placeholder="Escribir auxiliar y Enter"
+              value={auxInput}
+              onChange={(e) => setAuxInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  agregarAuxNombre();
+                }
+              }}
+              disabled={totalAux() >= 8}
+            />
+            <button
+              type="button"
+              className="rounded bg-[#334155] px-3 py-1 text-xs text-white"
+              onClick={() => agregarAuxNombre()}
+            >
+              Agregar
+            </button>
+          </div>
+          {form.auxiliarNombres.length ? (
+            <ul className="flex flex-wrap gap-2">
+              {form.auxiliarNombres.map((n) => (
+                <li
+                  key={n}
+                  className="flex items-center gap-1 rounded border border-sky-700 bg-sky-950/30 px-2 py-1 text-xs"
+                >
+                  {n}
+                  <button
+                    type="button"
+                    className="text-red-300"
+                    onClick={() =>
+                      setForm((f) => ({
+                        ...f,
+                        auxiliarNombres: f.auxiliarNombres.filter((x) => x !== n),
+                      }))
+                    }
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          <div className="flex max-h-28 flex-wrap gap-2 overflow-y-auto">
             {auxiliares.map((p) => {
               const on = form.auxiliarEmpleadoIds.includes(p.id);
               return (
@@ -301,19 +402,13 @@ export default function TmsPage() {
                   <input
                     type="checkbox"
                     checked={on}
-                    disabled={!on && form.auxiliarEmpleadoIds.length >= 8}
+                    disabled={!on && totalAux() >= 8}
                     onChange={() => toggleAux(p.id)}
                   />
                   {p.nombre}
                 </label>
               );
             })}
-            {!auxiliares.length ? (
-              <span className="text-xs text-[var(--muted)]">
-                Sin auxiliares en RRHH ops. Márcalos en Empleados (categoría
-                Auxiliar).
-              </span>
-            ) : null}
           </div>
         </div>
 
