@@ -234,6 +234,7 @@ const emptyForm = {
   tipoAceite: "",
   color: "",
   notas: "",
+  activo: true,
 };
 
 export default function FlotaPage() {
@@ -280,6 +281,9 @@ function FlotaInner() {
   const [pilotoSesionConfirmado, setPilotoSesionConfirmado] = useState(false);
   const [pilotoSesionDraft, setPilotoSesionDraft] = useState("");
   const [q, setQ] = useState("");
+  const [filtroEstado, setFiltroEstado] = useState<
+    "todos" | "activos" | "inactivos"
+  >("todos");
   const [filtroTaller, setFiltroTaller] = useState<"todos" | "taller" | "ruta">(
     "todos",
   );
@@ -396,9 +400,15 @@ function FlotaInner() {
     [q],
   );
 
+  function esVehiculoActivo(v: Vehiculo): boolean {
+    return Number(v.activo ?? 1) !== 0;
+  }
+
   const vehiculosFiltrados = useMemo(() => {
     return vehiculos.filter((v) => {
-      if (v.activo === 0 && filtroTaller !== "todos") return false;
+      const activo = esVehiculoActivo(v);
+      if (filtroEstado === "activos" && !activo) return false;
+      if (filtroEstado === "inactivos" && activo) return false;
       if (filtroTaller === "taller" && !v.en_taller) return false;
       if (filtroTaller === "ruta" && v.en_taller) return false;
       return matchQ(
@@ -406,12 +416,13 @@ function FlotaInner() {
         `${v.marca ?? ""} ${v.modelo ?? ""} ${v.descripcion ?? ""} ${v.empresa_activo ?? ""}`,
       );
     });
-  }, [vehiculos, filtroTaller, matchQ]);
+  }, [vehiculos, filtroEstado, filtroTaller, matchQ]);
 
   const activos = useMemo(
     () =>
       vehiculos.filter(
-        (v) => v.activo !== 0 && matchQ(v.placa, `${v.marca} ${v.modelo}`),
+        (v) =>
+          esVehiculoActivo(v) && matchQ(v.placa, `${v.marca} ${v.modelo}`),
       ),
     [vehiculos, matchQ],
   );
@@ -707,6 +718,7 @@ function FlotaInner() {
       tipoAceite: v.tipo_aceite ?? "",
       color: v.color ?? "",
       notas: v.notas ?? "",
+      activo: esVehiculoActivo(v),
     });
     setTab("vehiculos");
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -730,6 +742,7 @@ function FlotaInner() {
       medidaLlanta: form.medidaLlanta,
       tipoAceite: form.tipoAceite,
       notas: form.notas,
+      activo: form.activo,
       accesoEmpresaIds: editId ? accesoEmpresaIds : undefined,
     };
     const res = await fetch(`/api/empresas/${slug}/flota/vehiculos`, {
@@ -811,6 +824,20 @@ function FlotaInner() {
     const data = await res.json();
     if (!res.ok) setErr(data.error ?? "Error");
     else setMsg(data.mensaje);
+    await cargar();
+  }
+
+  async function cambiarActivoVehiculo(id: number, activo: boolean) {
+    setErr("");
+    setMsg("");
+    const res = await fetch(`/api/empresas/${slug}/flota/vehiculos`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, activo }),
+    });
+    const data = await res.json();
+    if (!res.ok) setErr(data.error ?? "No se pudo cambiar el estado");
+    else setMsg(data.mensaje ?? (activo ? "Vehículo activado." : "Vehículo desactivado."));
     await cargar();
   }
 
@@ -1721,20 +1748,36 @@ function FlotaInner() {
         />
       </label>
       {tab === "vehiculos" || tab === "dashboard" ? (
-        <label className="text-xs text-[var(--muted)]">
-          Filtrar
-          <select
-            className={`${input} mt-1 block`}
-            value={filtroTaller}
-            onChange={(e) =>
-              setFiltroTaller(e.target.value as typeof filtroTaller)
-            }
-          >
-            <option value="todos">Todos</option>
-            <option value="ruta">En ruta</option>
-            <option value="taller">En taller</option>
-          </select>
-        </label>
+        <>
+          <label className="text-xs text-[var(--muted)]">
+            Estado
+            <select
+              className={`${input} mt-1 block`}
+              value={filtroEstado}
+              onChange={(e) =>
+                setFiltroEstado(e.target.value as typeof filtroEstado)
+              }
+            >
+              <option value="todos">Todos (activos e inactivos)</option>
+              <option value="activos">Solo activos</option>
+              <option value="inactivos">Solo inactivos</option>
+            </select>
+          </label>
+          <label className="text-xs text-[var(--muted)]">
+            Taller
+            <select
+              className={`${input} mt-1 block`}
+              value={filtroTaller}
+              onChange={(e) =>
+                setFiltroTaller(e.target.value as typeof filtroTaller)
+              }
+            >
+              <option value="todos">Todos</option>
+              <option value="ruta">En ruta</option>
+              <option value="taller">En taller</option>
+            </select>
+          </label>
+        </>
       ) : null}
     </div>
   );
@@ -1931,10 +1974,14 @@ function FlotaInner() {
               );
               const alerta = estiloAlertaKm(pendiente);
               const enTaller = Boolean(v.en_taller);
+              const activo = esVehiculoActivo(v);
               return (
                 <div
                   key={v.id}
-                  className="space-y-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-3"
+                  className={[
+                    "space-y-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-3",
+                    activo ? "" : "opacity-70",
+                  ].join(" ")}
                 >
                   <div className="flex justify-between gap-2 border-b border-[var(--border)] pb-2">
                     <div>
@@ -1945,15 +1992,26 @@ function FlotaInner() {
                         {v.marca} {v.modelo}
                       </p>
                     </div>
-                    <span
-                      className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
-                        enTaller
-                          ? "border border-amber-700 bg-amber-900/40 text-amber-200"
-                          : alerta.badge
-                      }`}
-                    >
-                      {enTaller ? "En Taller" : alerta.texto}
-                    </span>
+                    <div className="flex flex-col items-end gap-1">
+                      <span
+                        className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
+                          activo
+                            ? "border border-emerald-700 bg-emerald-900/40 text-emerald-200"
+                            : "border border-slate-600 bg-slate-800 text-slate-300"
+                        }`}
+                      >
+                        {activo ? "Activo" : "Inactivo"}
+                      </span>
+                      <span
+                        className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
+                          enTaller
+                            ? "border border-amber-700 bg-amber-900/40 text-amber-200"
+                            : alerta.badge
+                        }`}
+                      >
+                        {enTaller ? "En Taller" : alerta.texto}
+                      </span>
+                    </div>
                   </div>
                   <p className="text-xs text-[var(--muted)]">
                     Km {Number(v.km_actual ?? 0).toLocaleString("es-GT")} · Rin{" "}
@@ -2048,6 +2106,22 @@ function FlotaInner() {
                     }
                   />
                 </label>
+                <label className="text-xs text-[var(--muted)]">
+                  Estado
+                  <select
+                    className={`${input} mt-1 w-full`}
+                    value={form.activo ? "1" : "0"}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        activo: e.target.value === "1",
+                      }))
+                    }
+                  >
+                    <option value="1">Activo</option>
+                    <option value="0">Inactivo</option>
+                  </select>
+                </label>
               </div>
               <label className="block text-xs text-[var(--muted)]">
                 Notas
@@ -2101,6 +2175,7 @@ function FlotaInner() {
               <thead className="bg-[#0d9488] text-white">
                 <tr>
                   <th className="px-3 py-2">Placa</th>
+                  <th className="px-3 py-2">Estado</th>
                   <th className="px-3 py-2">Descripción</th>
                   <th className="px-3 py-2">Marca</th>
                   <th className="px-3 py-2">Km</th>
@@ -2112,7 +2187,13 @@ function FlotaInner() {
               </thead>
               <tbody>
                 {vehiculosFiltrados.map((v) => (
-                  <tr key={v.id} className="border-t border-[var(--border)]">
+                  <tr
+                    key={v.id}
+                    className={[
+                      "border-t border-[var(--border)]",
+                      esVehiculoActivo(v) ? "" : "opacity-70",
+                    ].join(" ")}
+                  >
                     <td className="px-3 py-2 font-mono">
                       {v.placa}
                       {v.compartido ? (
@@ -2123,6 +2204,17 @@ function FlotaInner() {
                             : ""}
                         </span>
                       ) : null}
+                    </td>
+                    <td className="px-3 py-2">
+                      <span
+                        className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
+                          esVehiculoActivo(v)
+                            ? "bg-emerald-900/50 text-emerald-200"
+                            : "bg-slate-700 text-slate-300"
+                        }`}
+                      >
+                        {esVehiculoActivo(v) ? "Activo" : "Inactivo"}
+                      </span>
                     </td>
                     <td className="px-3 py-2">{v.descripcion ?? "—"}</td>
                     <td className="px-3 py-2">
@@ -2164,6 +2256,22 @@ function FlotaInner() {
                           >
                             Editar
                           </button>
+                          {v.esDueno !== false ? (
+                            <button
+                              type="button"
+                              className="text-violet-300 underline"
+                              onClick={() =>
+                                void cambiarActivoVehiculo(
+                                  v.id,
+                                  !esVehiculoActivo(v),
+                                )
+                              }
+                            >
+                              {esVehiculoActivo(v)
+                                ? "Desactivar"
+                                : "Activar"}
+                            </button>
+                          ) : null}
                           {v.en_taller ? (
                             <button
                               type="button"

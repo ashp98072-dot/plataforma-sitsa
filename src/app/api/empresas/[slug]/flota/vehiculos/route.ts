@@ -285,7 +285,13 @@ export async function PATCH(req: Request, ctx: Ctx) {
         fechaTaller,
         motivo,
         d.estado ??
-          (enTaller ? "En taller" : String(cur[0].estado || "Activo")),
+          (d.activo === false
+            ? "Inactivo"
+            : d.activo === true && !enTaller
+              ? "Activo"
+              : enTaller
+                ? "En taller"
+                : String(cur[0].estado || "Activo")),
         d.activo == null
           ? Number(cur[0].activo ?? 1)
           : d.activo
@@ -309,11 +315,16 @@ export async function PATCH(req: Request, ctx: Ctx) {
       );
     }
     return NextResponse.json({
-      mensaje: d.enTaller === true
-        ? "Vehículo enviado a taller."
-        : d.enTaller === false
-          ? "Vehículo salió de taller."
-          : "Vehículo actualizado.",
+      mensaje:
+        d.enTaller === true
+          ? "Vehículo enviado a taller."
+          : d.enTaller === false
+            ? "Vehículo salió de taller."
+            : d.activo === false
+              ? "Vehículo marcado como inactivo."
+              : d.activo === true
+                ? "Vehículo marcado como activo."
+                : "Vehículo actualizado.",
     });
   } catch (err) {
     // Fallback mínimo si faltan columnas nuevas
