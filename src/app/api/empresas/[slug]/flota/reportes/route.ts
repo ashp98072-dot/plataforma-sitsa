@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
 import { requireTenantFlota } from "@/lib/tenant";
+import { listarParadasDelPlan } from "@/lib/tms/paradas";
+import { asegurarSchemaFlota } from "@/lib/flota/schema";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -9,6 +11,12 @@ export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenantFlota(slug, "flota_reportes", "ver");
   if (guard.error) return guard.error;
+
+  try {
+    await asegurarSchemaFlota();
+  } catch {
+    /* ok */
+  }
 
   const url = new URL(req.url);
   const hoy = new Date().toISOString().slice(0, 10);
@@ -121,28 +129,38 @@ export async function GET(req: Request, ctx: Ctx) {
       total: Number(totalRow[0]?.total ?? 0),
       n: Number(totalRow[0]?.n ?? 0),
     },
-    viajes: viajesRows.map((r) => ({
-      id: Number(r.id),
-      vehiculo_id: Number(r.vehiculo_id),
-      placa: String(r.placa),
-      piloto_nombre: String(r.piloto_nombre ?? ""),
-      km_salida: Number(r.km_salida ?? 0),
-      km_llegada: r.km_llegada != null ? Number(r.km_llegada) : null,
-      hora_salida: r.hora_salida,
-      hora_llegada: r.hora_llegada ?? null,
-      destino: r.destino ? String(r.destino) : null,
-      observaciones: r.observaciones ? String(r.observaciones) : null,
-      estado: String(r.estado ?? ""),
-      es_externo: Number(r.es_externo ?? 0),
-      plan_id: r.plan_id != null ? Number(r.plan_id) : null,
-      plan_codigo: r.plan_codigo ? String(r.plan_codigo) : null,
-      plan_estado: r.plan_estado ? String(r.plan_estado) : null,
-      plan_cliente: r.plan_cliente ? String(r.plan_cliente) : null,
-      evidencias: Number(r.evidencias ?? 0),
-      km_recorridos:
-        r.km_llegada != null
-          ? Number(r.km_llegada) - Number(r.km_salida ?? 0)
-          : null,
-    })),
+    viajes: await Promise.all(
+      viajesRows.map(async (r) => {
+        const planId = r.plan_id != null ? Number(r.plan_id) : null;
+        const paradas = planId ? await listarParadasDelPlan(planId) : [];
+        return {
+          id: Number(r.id),
+          vehiculo_id: Number(r.vehiculo_id),
+          placa: String(r.placa),
+          piloto_nombre: String(r.piloto_nombre ?? ""),
+          km_salida: Number(r.km_salida ?? 0),
+          km_llegada: r.km_llegada != null ? Number(r.km_llegada) : null,
+          hora_salida: r.hora_salida,
+          hora_llegada: r.hora_llegada ?? null,
+          destino: r.destino ? String(r.destino) : null,
+          observaciones: r.observaciones ? String(r.observaciones) : null,
+          estado: String(r.estado ?? ""),
+          es_externo: Number(r.es_externo ?? 0),
+          plan_id: planId,
+          plan_codigo: r.plan_codigo ? String(r.plan_codigo) : null,
+          plan_estado: r.plan_estado ? String(r.plan_estado) : null,
+          plan_cliente: r.plan_cliente ? String(r.plan_cliente) : null,
+          evidencias: Number(r.evidencias ?? 0),
+          km_recorridos:
+            r.km_llegada != null
+              ? Number(r.km_llegada) - Number(r.km_salida ?? 0)
+              : null,
+          paradas,
+          paradasPendientes: paradas.filter(
+            (p) => p.requiere_evidencia && p.evidencias < 1,
+          ).length,
+        };
+      }),
+    ),
   });
 }

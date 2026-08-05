@@ -5,6 +5,11 @@ import { execute, query } from "@/lib/db";
 import { requireTenantModulo } from "@/lib/tenant";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
 import { listarVehiculosAccesibles } from "@/lib/flota/acceso";
+import {
+  guardarParadasPlan,
+  listarParadasDelPlan,
+  type ParadaInput,
+} from "@/lib/tms/paradas";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -58,10 +63,15 @@ export async function GET(_req: Request, ctx: Ctx) {
         : r.auxiliar
           ? [String(r.auxiliar)]
           : [];
+    const paradas = await listarParadasDelPlan(Number(r.id));
     planes.push({
       ...r,
       auxiliares: auxList,
       auxiliar: auxList.join(", ") || null,
+      paradas,
+      paradasPendientes: paradas.filter(
+        (p) => p.requiere_evidencia && p.evidencias < 1,
+      ).length,
     });
   }
 
@@ -95,6 +105,16 @@ const schema = z.object({
   auxiliarEmpleadoIds: z.array(z.number().int().positive()).max(8).optional(),
   lugarCarga: z.string().optional(),
   lugarDescarga: z.string().optional(),
+  paradas: z
+    .array(
+      z.object({
+        lugarNombre: z.string().min(1),
+        tipo: z.enum(["Carga", "Descarga", "Entrega"]).optional(),
+        requiereEvidencia: z.boolean().optional(),
+      }),
+    )
+    .max(20)
+    .optional(),
 });
 
 async function personalDesdeEmpleado(
@@ -257,10 +277,36 @@ export async function POST(req: Request, ctx: Ctx) {
   }
   const auxiliarId = auxPersonalIds[0] ?? null;
 
-  const lugarCargaId = await upsertLugar(empresaId, d.lugarCarga, "Carga");
+  // Paradas: array nuevo o compatibilidad con 2 campos clásicos
+  let paradasInput: ParadaInput[] = (d.paradas ?? []).filter((p) =>
+    p.lugarNombre?.trim(),
+  );
+  if (!paradasInput.length) {
+    if (d.lugarCarga?.trim()) {
+      paradasInput.push({
+        lugarNombre: d.lugarCarga.trim(),
+        tipo: "Carga",
+        requiereEvidencia: true,
+      });
+    }
+    if (d.lugarDescarga?.trim()) {
+      paradasInput.push({
+        lugarNombre: d.lugarDescarga.trim(),
+        tipo: "Descarga",
+        requiereEvidencia: true,
+      });
+    }
+  }
+
+  const lugarCargaId = await upsertLugar(
+    empresaId,
+    paradasInput.find((p) => p.tipo === "Carga")?.lugarNombre || d.lugarCarga,
+    "Carga",
+  );
   const lugarDescargaId = await upsertLugar(
     empresaId,
-    d.lugarDescarga,
+    paradasInput.find((p) => p.tipo === "Descarga" || p.tipo === "Entrega")
+      ?.lugarNombre || d.lugarDescarga,
     "Descarga",
   );
 
@@ -285,6 +331,9 @@ export async function POST(req: Request, ctx: Ctx) {
   );
   const planId = Number(result.insertId);
   await guardarAuxiliaresPlan(planId, auxPersonalIds);
+  if (paradasInput.length) {
+    await guardarParadasPlan(empresaId, planId, paradasInput);
+  }
 
   return NextResponse.json({
     id: planId,
@@ -292,7 +341,7 @@ export async function POST(req: Request, ctx: Ctx) {
       auxPersonalIds.length > 1
         ? ` con ${auxPersonalIds.length} auxiliares`
         : ""
-    }.`,
+    }${paradasInput.length ? ` · ${paradasInput.length} parada(s)` : ""}.`,
   });
 }
 
@@ -314,6 +363,16 @@ const patchSchema = z.object({
     .optional(),
   notas: z.string().optional(),
   horaCarga: z.string().optional(),
+  paradas: z
+    .array(
+      z.object({
+        lugarNombre: z.string().min(1),
+        tipo: z.enum(["Carga", "Descarga", "Entrega"]).optional(),
+        requiereEvidencia: z.boolean().optional(),
+      }),
+    )
+    .max(20)
+    .optional(),
 });
 
 export async function PATCH(req: Request, ctx: Ctx) {
@@ -399,5 +458,11 @@ export async function PATCH(req: Request, ctx: Ctx) {
       empresaId,
     ],
   );
+
+  if (d.paradas) {
+    const paradasInput = d.paradas.filter((p) => p.lugarNombre?.trim());
+    await guardarParadasPlan(empresaId, d.id, paradasInput);
+  }
+
   return NextResponse.json({ mensaje: "Plan actualizado." });
 }

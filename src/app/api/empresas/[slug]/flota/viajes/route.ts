@@ -15,6 +15,7 @@ import {
   marcarPlanDescargado,
   marcarPlanEnRuta,
 } from "@/lib/tms/planes-salida";
+import { paradasPendientesEvidencia } from "@/lib/tms/paradas";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -467,6 +468,25 @@ export async function POST(req: Request, ctx: Ctx) {
       );
     }
 
+    const planIdPre =
+      viaje[0].plan_id != null ? Number(viaje[0].plan_id) : null;
+    if (planIdPre) {
+      const pendientes = await paradasPendientesEvidencia(planIdPre);
+      if (pendientes.length) {
+        const nombres = pendientes
+          .map((p) => `${p.orden}. ${p.lugar_nombre}`)
+          .join("; ");
+        return NextResponse.json(
+          {
+            error: `Faltan evidencias de producto en ${pendientes.length} parada(s): ${nombres}. Sube las fotos antes de cerrar la llegada.`,
+            code: "PARADAS_SIN_EVIDENCIA",
+            pendientes,
+          },
+          { status: 422 },
+        );
+      }
+    }
+
     await execute(
       `UPDATE flota_viajes SET
         km_llegada = ?, hora_llegada = ?, estado = 'cerrado',
@@ -517,18 +537,16 @@ export async function POST(req: Request, ctx: Ctx) {
       [d.kmLlegada, Number(viaje[0].vehiculo_id), guard.empresa.id],
     );
 
-    const planId =
-      viaje[0].plan_id != null ? Number(viaje[0].plan_id) : null;
-    if (planId) {
-      await marcarPlanDescargado(guard.empresa.id, planId);
+    if (planIdPre) {
+      await marcarPlanDescargado(guard.empresa.id, planIdPre);
     }
 
     const recorridos = d.kmLlegada - Number(viaje[0].km_salida);
     return NextResponse.json({
       mensaje: `Llegada de ${viaje[0].placa}: ${recorridos.toLocaleString("es-GT")} km.${
-        planId ? " Plan TMS → Descargado." : ""
+        planIdPre ? " Plan TMS → Descargado." : ""
       }`,
-      planId,
+      planId: planIdPre,
     });
   }
 

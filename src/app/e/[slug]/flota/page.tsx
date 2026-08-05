@@ -56,6 +56,15 @@ type Vehiculo = {
 
 type EmpresaOpt = { id: number; codigo: string; nombre: string; slug: string };
 
+type PlanParadaUi = {
+  id: number;
+  orden: number;
+  lugar_nombre: string;
+  tipo: string;
+  requiere_evidencia: boolean;
+  evidencias: number;
+};
+
 type PlanSalida = {
   id: number;
   codigo: string;
@@ -70,6 +79,7 @@ type PlanSalida = {
   lugar_descarga?: string | null;
   estado?: string;
   auxiliares: string[];
+  paradas?: PlanParadaUi[];
 };
 
 type Lectura = {
@@ -130,6 +140,8 @@ type Viaje = {
   plan_cliente?: string | null;
   evidencias?: number;
   km_recorridos?: number | null;
+  paradas?: PlanParadaUi[];
+  paradasPendientes?: number;
 };
 
 type EvidenciaViaje = {
@@ -162,6 +174,9 @@ function labelTipoEvidencia(tipo: string): string {
       return "Tablero km";
     case "evidencia":
       return "Evidencia";
+    case "producto":
+    case "Producto":
+      return "Producto / parada";
     default:
       return tipo;
   }
@@ -244,6 +259,8 @@ function FlotaInner() {
   const [lecturaEvidencias, setLecturaEvidencias] = useState<
     Record<number, EvidenciaViaje[]>
   >({});
+  const [paradasViaje, setParadasViaje] = useState<PlanParadaUi[]>([]);
+  const [planIdViaje, setPlanIdViaje] = useState<number | null>(null);
   const [q, setQ] = useState("");
   const [filtroTaller, setFiltroTaller] = useState<"todos" | "taller" | "ruta">(
     "todos",
@@ -492,6 +509,13 @@ function FlotaInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug]);
 
+  useEffect(() => {
+    if (modoPiloto === "llegada" && viajeId) {
+      void cargarParadasViaje(viajeId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modoPiloto, viajeId, slug]);
+
   function exportar(tipo: "flota" | "servicios" | "viajes", formato: "xlsx" | "pdf") {
     const params = new URLSearchParams({ tipo, formato });
     if (q.trim()) params.set("q", q.trim());
@@ -643,6 +667,64 @@ function FlotaInner() {
     if (!res.ok) setErr(data.error ?? "Error");
     else setMsg(data.mensaje);
     await cargar();
+  }
+
+  async function cargarParadasViaje(viajeIdSel: number) {
+    if (!viajeIdSel) {
+      setParadasViaje([]);
+      setPlanIdViaje(null);
+      return;
+    }
+    const res = await fetch(
+      `/api/empresas/${slug}/flota/viajes/${viajeIdSel}/paradas`,
+    );
+    const data = await res.json();
+    if (!res.ok) {
+      setParadasViaje([]);
+      setPlanIdViaje(null);
+      return;
+    }
+    setPlanIdViaje(data.planId ?? null);
+    setParadasViaje((data.paradas ?? []) as PlanParadaUi[]);
+  }
+
+  async function subirEvidenciaParada(paradaId: number, files: FileList | null) {
+    if (!viajeId || !files?.length) return;
+    setErr("");
+    setSubiendoFotos(true);
+    try {
+      const geo = await obtenerGps();
+      const parada = paradasViaje.find((p) => p.id === paradaId);
+      const marked = await marcarVarias(
+        Array.from(files),
+        `PRODUCTO · ${parada?.orden ?? ""}. ${parada?.lugar_nombre ?? "Parada"}`,
+        geo,
+      );
+      const form = new FormData();
+      form.set("tipo", "producto");
+      form.set("paradaId", String(paradaId));
+      if (geo) {
+        form.set("latitud", String(geo.lat));
+        form.set("longitud", String(geo.lng));
+      }
+      form.set(
+        "capturadoEn",
+        new Date().toISOString().slice(0, 19).replace("T", " "),
+      );
+      for (const f of marked) form.append("files", f);
+      const res = await fetch(
+        `/api/empresas/${slug}/flota/viajes/${viajeId}/evidencias`,
+        { method: "POST", body: form },
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Error al subir evidencia");
+      setMsg(data.mensaje ?? "Evidencia de parada guardada.");
+      await cargarParadasViaje(viajeId);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Error al subir evidencia");
+    } finally {
+      setSubiendoFotos(false);
+    }
   }
 
   async function verEvidenciasLectura(lecturaIdSel: number) {
@@ -1124,9 +1206,45 @@ function FlotaInner() {
       setErr(data.error ?? "No se pudieron cargar evidencias");
       return;
     }
+    let list = (data.evidencias ?? []) as EvidenciaViaje[];
+    const viaje = viajesReporte.find((x) => x.id === viajeIdSel);
+    if (viaje?.plan_id) {
+      const tmsRes = await fetch(
+        `/api/empresas/${slug}/tms/evidencias?planId=${viaje.plan_id}`,
+      );
+      if (tmsRes.ok) {
+        const tms = await tmsRes.json();
+        const extras = ((tms.evidencias ?? []) as {
+          id: number;
+          tipo: string;
+          nombre: string;
+          latitud: number | null;
+          longitud: number | null;
+          capturadoEn?: string | null;
+          url: string;
+          parada_nombre?: string | null;
+        }[]).map((e) => ({
+          id: e.id,
+          tipo: e.parada_nombre
+            ? `producto · ${e.parada_nombre}`
+            : e.tipo,
+          nombre: e.nombre,
+          latitud: e.latitud,
+          longitud: e.longitud,
+          capturadoEn: e.capturadoEn,
+          url: e.url,
+          origen: "viaje" as const,
+        }));
+        // Evitar duplicar si ya están en flota (mismas urls relativas difíciles); unir por id+url
+        const urls = new Set(list.map((x) => x.url));
+        for (const e of extras) {
+          if (!urls.has(e.url)) list.push(e);
+        }
+      }
+    }
     setViajeEvidencias((prev) => ({
       ...prev,
-      [viajeIdSel]: (data.evidencias ?? []) as EvidenciaViaje[],
+      [viajeIdSel]: list,
     }));
   }
 
@@ -1212,6 +1330,23 @@ function FlotaInner() {
       setErr(
         "Adjunta al menos una foto de llegada (se marcará fecha, hora y ubicación).",
       );
+      return;
+    }
+    // Re-fetch paradas for accuracy before closing
+    const parRes = await fetch(
+      `/api/empresas/${slug}/flota/viajes/${viajeId}/paradas`,
+    );
+    const parData = await parRes.json();
+    const pendientesAhora = (
+      (parData.paradas ?? []) as PlanParadaUi[]
+    ).filter((p) => p.requiere_evidencia && p.evidencias < 1);
+    if (pendientesAhora.length) {
+      setErr(
+        `Faltan evidencias de producto en ${pendientesAhora.length} parada(s): ${pendientesAhora
+          .map((p) => `${p.orden}. ${p.lugar_nombre}`)
+          .join("; ")}.`,
+      );
+      setParadasViaje(parData.paradas ?? []);
       return;
     }
 
@@ -2614,6 +2749,28 @@ function FlotaInner() {
                           </span>
                         </p>
                       ) : null}
+                      {v.paradas?.length ? (
+                        <div className="sm:col-span-2 lg:col-span-3">
+                          <p className="mb-1 font-medium text-[var(--fg)]">
+                            Paradas / evidencias producto
+                            {v.paradasPendientes
+                              ? ` · ${v.paradasPendientes} pendiente(s)`
+                              : " · completas"}
+                          </p>
+                          <ul className="space-y-0.5">
+                            {v.paradas.map((pp) => (
+                              <li key={pp.id}>
+                                {pp.orden}. {pp.lugar_nombre} ({pp.tipo}) —{" "}
+                                {pp.evidencias > 0
+                                  ? `${pp.evidencias} foto(s)`
+                                  : pp.requiere_evidencia
+                                    ? "sin evidencia"
+                                    : "no requerida"}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
                     </div>
 
                     <div className="mt-2 flex flex-wrap gap-2">
@@ -2928,6 +3085,22 @@ function FlotaInner() {
                                 <p>Auxiliares: {p.auxiliares.join(", ")}</p>
                               ) : null}
                               {p.notas ? <p>Notas: {p.notas}</p> : null}
+                              {p.paradas?.length ? (
+                                <div className="mt-1 border-t border-sky-900/50 pt-1">
+                                  <p className="font-medium text-sky-200">
+                                    Paradas ({p.paradas.length}) — evidencia de
+                                    producto en cada una
+                                  </p>
+                                  {p.paradas.map((pp) => (
+                                    <p key={pp.id}>
+                                      {pp.orden}. {pp.lugar_nombre} ({pp.tipo})
+                                      {pp.requiere_evidencia
+                                        ? " · req. evidencia"
+                                        : ""}
+                                    </p>
+                                  ))}
+                                </div>
+                              ) : null}
                             </div>
                           );
                         })()
@@ -3118,6 +3291,75 @@ function FlotaInner() {
                       onChange={(e) => setObsViaje(e.target.value)}
                     />
                   </label>
+
+                  {planIdViaje && paradasViaje.length ? (
+                    <div className="sm:col-span-2 space-y-2 rounded-lg border border-amber-800/40 bg-amber-950/20 p-3">
+                      <p className="text-xs font-medium text-amber-100">
+                        Evidencias de producto por parada (obligatorio)
+                      </p>
+                      <p className="text-[11px] text-[var(--muted)]">
+                        Debes subir foto en cada lugar antes de cerrar la
+                        llegada.
+                      </p>
+                      {paradasViaje.map((pp) => {
+                        const ok =
+                          !pp.requiere_evidencia || pp.evidencias > 0;
+                        return (
+                          <div
+                            key={pp.id}
+                            className="flex flex-wrap items-center gap-2 rounded border border-[var(--border)] bg-[#0b1217]/50 p-2"
+                          >
+                            <div className="min-w-[140px] flex-1 text-xs">
+                              <p className="font-medium text-[var(--fg)]">
+                                {pp.orden}. {pp.lugar_nombre}
+                              </p>
+                              <p className="text-[var(--muted)]">
+                                {pp.tipo}
+                                {ok
+                                  ? ` · ${pp.evidencias} evidencia(s)`
+                                  : " · pendiente"}
+                              </p>
+                            </div>
+                            <span
+                              className={`rounded px-2 py-0.5 text-[10px] font-semibold ${
+                                ok
+                                  ? "bg-emerald-900/50 text-emerald-200"
+                                  : "bg-amber-900/50 text-amber-200"
+                              }`}
+                            >
+                              {ok ? "OK" : "Falta foto"}
+                            </span>
+                            <label className="cursor-pointer rounded bg-[#334155] px-2 py-1 text-[11px] text-white">
+                              Subir foto
+                              <input
+                                type="file"
+                                accept="image/*"
+                                capture="environment"
+                                multiple
+                                className="hidden"
+                                disabled={subiendoFotos}
+                                onChange={(e) => {
+                                  void subirEvidenciaParada(
+                                    pp.id,
+                                    e.target.files,
+                                  );
+                                  e.target.value = "";
+                                }}
+                              />
+                            </label>
+                          </div>
+                        );
+                      })}
+                      <button
+                        type="button"
+                        className="text-[11px] text-sky-300 underline"
+                        onClick={() => void cargarParadasViaje(viajeId)}
+                      >
+                        Actualizar estado paradas
+                      </button>
+                    </div>
+                  ) : null}
+
                   <label className="text-xs text-[var(--muted)] sm:col-span-2">
                     Fotos de llegada * (fecha, hora y ubicación en la imagen)
                     <input

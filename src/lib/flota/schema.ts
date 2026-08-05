@@ -321,4 +321,77 @@ export async function asegurarSchemaFlota(): Promise<void> {
       INDEX idx_tpa_plan (plan_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
+
+  // Paradas / lugares de un plan (N puntos con evidencia de producto)
+  await execute(`
+    CREATE TABLE IF NOT EXISTS tms_plan_paradas (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      plan_id INT NOT NULL,
+      orden TINYINT NOT NULL DEFAULT 1,
+      lugar_id INT NULL,
+      lugar_nombre VARCHAR(200) NOT NULL,
+      tipo VARCHAR(40) NOT NULL DEFAULT 'Entrega',
+      requiere_evidencia TINYINT(1) NOT NULL DEFAULT 1,
+      INDEX idx_tpp_plan (plan_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await ensureColumn(
+    "tms_evidencias",
+    "parada_id",
+    "parada_id INT NULL",
+  );
+
+  await ensureColumn(
+    "flota_viaje_evidencias",
+    "parada_id",
+    "parada_id INT NULL",
+  );
+
+  // Migrar planes viejos: carga + descarga → paradas
+  try {
+    const sinParadas = await query<RowDataPacket[]>(
+      `SELECT p.id, p.lugar_carga_id, p.lugar_descarga_id,
+              lc.nombre AS carga_nombre, ld.nombre AS descarga_nombre
+       FROM tms_planes_viaje p
+       LEFT JOIN tms_lugares lc ON lc.id = p.lugar_carga_id
+       LEFT JOIN tms_lugares ld ON ld.id = p.lugar_descarga_id
+       WHERE NOT EXISTS (
+         SELECT 1 FROM tms_plan_paradas x WHERE x.plan_id = p.id
+       )
+       AND (p.lugar_carga_id IS NOT NULL OR p.lugar_descarga_id IS NOT NULL)
+       LIMIT 500`,
+    );
+    for (const p of sinParadas) {
+      let orden = 1;
+      if (p.lugar_carga_id || p.carga_nombre) {
+        await execute(
+          `INSERT INTO tms_plan_paradas
+            (plan_id, orden, lugar_id, lugar_nombre, tipo, requiere_evidencia)
+           VALUES (?, ?, ?, ?, 'Carga', 1)`,
+          [
+            Number(p.id),
+            orden++,
+            p.lugar_carga_id ? Number(p.lugar_carga_id) : null,
+            String(p.carga_nombre || "Carga"),
+          ],
+        );
+      }
+      if (p.lugar_descarga_id || p.descarga_nombre) {
+        await execute(
+          `INSERT INTO tms_plan_paradas
+            (plan_id, orden, lugar_id, lugar_nombre, tipo, requiere_evidencia)
+           VALUES (?, ?, ?, ?, 'Descarga', 1)`,
+          [
+            Number(p.id),
+            orden++,
+            p.lugar_descarga_id ? Number(p.lugar_descarga_id) : null,
+            String(p.descarga_nombre || "Descarga"),
+          ],
+        );
+      }
+    }
+  } catch {
+    /* ok si tms aún no existe */
+  }
 }

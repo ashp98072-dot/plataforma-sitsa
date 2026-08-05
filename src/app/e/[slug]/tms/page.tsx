@@ -3,6 +3,21 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
 
+type ParadaForm = {
+  lugarNombre: string;
+  tipo: "Carga" | "Descarga" | "Entrega";
+  requiereEvidencia: boolean;
+};
+
+type PlanParada = {
+  id: number;
+  orden: number;
+  lugar_nombre: string;
+  tipo: string;
+  requiere_evidencia: boolean;
+  evidencias: number;
+};
+
 type Plan = {
   id: number;
   codigo: string;
@@ -15,6 +30,8 @@ type Plan = {
   auxiliar: string | null;
   auxiliares?: string[];
   evidencias: number;
+  paradas?: PlanParada[];
+  paradasPendientes?: number;
 };
 
 export default function TmsPage() {
@@ -37,6 +54,11 @@ export default function TmsPage() {
     lugarCarga: "",
     lugarDescarga: "",
   });
+  const [paradasForm, setParadasForm] = useState<ParadaForm[]>([
+    { lugarNombre: "", tipo: "Carga", requiereEvidencia: true },
+    { lugarNombre: "", tipo: "Entrega", requiereEvidencia: true },
+  ]);
+  const [editParadas, setEditParadas] = useState<ParadaForm[]>([]);
   const [auxInput, setAuxInput] = useState("");
   const [edit, setEdit] = useState({
     pilotoNombre: "",
@@ -44,6 +66,7 @@ export default function TmsPage() {
     placa: "",
     estado: "Programado",
   });
+  const [nuevaParadaNombre, setNuevaParadaNombre] = useState("");
   const [msg, setMsg] = useState("");
   const [catalogoMsg, setCatalogoMsg] = useState("");
   const [pilotos, setPilotos] = useState<EmpOps[]>([]);
@@ -127,6 +150,17 @@ export default function TmsPage() {
       setMsg("Indica el piloto (elige de RRHH o escríbelo).");
       return;
     }
+    const paradas = paradasForm
+      .filter((p) => p.lugarNombre.trim())
+      .map((p) => ({
+        lugarNombre: p.lugarNombre.trim(),
+        tipo: p.tipo,
+        requiereEvidencia: p.requiereEvidencia,
+      }));
+    if (!paradas.length) {
+      setMsg("Agrega al menos una parada (lugar) con evidencia de producto.");
+      return;
+    }
     const res = await fetch(`/api/empresas/${slug}/tms/planes`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -140,6 +174,11 @@ export default function TmsPage() {
         auxiliarNombres: form.auxiliarNombres.length
           ? form.auxiliarNombres
           : undefined,
+        paradas,
+        lugarCarga: paradas.find((p) => p.tipo === "Carga")?.lugarNombre,
+        lugarDescarga: paradas.find(
+          (p) => p.tipo === "Descarga" || p.tipo === "Entrega",
+        )?.lugarNombre,
       }),
     });
     const data = await res.json();
@@ -155,6 +194,10 @@ export default function TmsPage() {
         placa: "",
         clienteNombre: "",
       }));
+      setParadasForm([
+        { lugarNombre: "", tipo: "Carga", requiereEvidencia: true },
+        { lugarNombre: "", tipo: "Entrega", requiereEvidencia: true },
+      ]);
       setAuxInput("");
       await cargar();
     }
@@ -162,14 +205,38 @@ export default function TmsPage() {
 
   async function actualizarPlan() {
     if (!selected) return;
+    const paradas = editParadas
+      .filter((p) => p.lugarNombre.trim())
+      .map((p) => ({
+        lugarNombre: p.lugarNombre.trim(),
+        tipo: p.tipo,
+        requiereEvidencia: p.requiereEvidencia,
+      }));
     const res = await fetch(`/api/empresas/${slug}/tms/planes`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: selected, ...edit }),
+      body: JSON.stringify({
+        id: selected,
+        ...edit,
+        paradas: paradas.length ? paradas : undefined,
+      }),
     });
     const data = await res.json();
     setMsg(data.mensaje || data.error);
     if (res.ok) await cargar();
+  }
+
+  function seleccionarPlan(p: Plan) {
+    setSelected(p.id);
+    setEditParadas(
+      (p.paradas ?? []).map((x) => ({
+        lugarNombre: x.lugar_nombre,
+        tipo: (["Carga", "Descarga", "Entrega"].includes(x.tipo)
+          ? x.tipo
+          : "Entrega") as ParadaForm["tipo"],
+        requiereEvidencia: x.requiere_evidencia,
+      })),
+    );
   }
 
   async function subirEvidencia(tipo: "Carga" | "Descarga") {
@@ -414,22 +481,96 @@ export default function TmsPage() {
 
         <input
           className={input}
-          placeholder="Lugar carga"
-          value={form.lugarCarga}
-          onChange={(e) => setForm({ ...form, lugarCarga: e.target.value })}
-        />
-        <input
-          className={input}
-          placeholder="Lugar descarga"
-          value={form.lugarDescarga}
-          onChange={(e) => setForm({ ...form, lugarDescarga: e.target.value })}
-        />
-        <input
-          className={input}
           placeholder="Tipo traslado"
           value={form.tipoTraslado}
           onChange={(e) => setForm({ ...form, tipoTraslado: e.target.value })}
         />
+
+        <div className="md:col-span-3 space-y-2 rounded border border-[var(--border)] p-3">
+          <p className="text-xs text-[var(--muted)]">
+            Paradas / lugares (ej. 3 puntos). En cada una el piloto debe subir
+            evidencia del producto.
+          </p>
+          {paradasForm.map((p, idx) => (
+            <div key={idx} className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-[var(--muted)] w-6">{idx + 1}.</span>
+              <input
+                className={`${input} min-w-[160px] flex-1`}
+                placeholder="Nombre del lugar"
+                value={p.lugarNombre}
+                onChange={(e) =>
+                  setParadasForm((list) =>
+                    list.map((x, i) =>
+                      i === idx ? { ...x, lugarNombre: e.target.value } : x,
+                    ),
+                  )
+                }
+              />
+              <select
+                className={input}
+                value={p.tipo}
+                onChange={(e) =>
+                  setParadasForm((list) =>
+                    list.map((x, i) =>
+                      i === idx
+                        ? {
+                            ...x,
+                            tipo: e.target.value as ParadaForm["tipo"],
+                          }
+                        : x,
+                    ),
+                  )
+                }
+              >
+                <option value="Carga">Carga</option>
+                <option value="Entrega">Entrega</option>
+                <option value="Descarga">Descarga</option>
+              </select>
+              <label className="flex items-center gap-1 text-xs">
+                <input
+                  type="checkbox"
+                  checked={p.requiereEvidencia}
+                  onChange={(e) =>
+                    setParadasForm((list) =>
+                      list.map((x, i) =>
+                        i === idx
+                          ? { ...x, requiereEvidencia: e.target.checked }
+                          : x,
+                      ),
+                    )
+                  }
+                />
+                Evidencia
+              </label>
+              <button
+                type="button"
+                className="text-xs text-red-300"
+                onClick={() =>
+                  setParadasForm((list) => list.filter((_, i) => i !== idx))
+                }
+              >
+                Quitar
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            className="rounded bg-[#334155] px-2 py-1 text-xs text-white"
+            onClick={() =>
+              setParadasForm((list) => [
+                ...list,
+                {
+                  lugarNombre: "",
+                  tipo: "Entrega",
+                  requiereEvidencia: true,
+                },
+              ])
+            }
+          >
+            + Agregar parada
+          </button>
+        </div>
+
         <button className="rounded bg-[var(--accent)] px-3 py-1 text-sm text-white">
           Crear plan
         </button>
@@ -476,6 +617,117 @@ export default function TmsPage() {
               <option key={s}>{s}</option>
             ))}
           </select>
+
+          <div className="md:col-span-4 space-y-2 rounded border border-[var(--border)] p-3">
+            <p className="text-xs font-medium">Paradas del plan</p>
+            {editParadas.map((p, idx) => (
+              <div key={idx} className="flex flex-wrap items-center gap-2">
+                <span className="w-6 text-xs text-[var(--muted)]">{idx + 1}.</span>
+                <input
+                  className={`${input} min-w-[160px] flex-1`}
+                  value={p.lugarNombre}
+                  onChange={(e) =>
+                    setEditParadas((list) =>
+                      list.map((x, i) =>
+                        i === idx ? { ...x, lugarNombre: e.target.value } : x,
+                      ),
+                    )
+                  }
+                />
+                <select
+                  className={input}
+                  value={p.tipo}
+                  onChange={(e) =>
+                    setEditParadas((list) =>
+                      list.map((x, i) =>
+                        i === idx
+                          ? {
+                              ...x,
+                              tipo: e.target.value as ParadaForm["tipo"],
+                            }
+                          : x,
+                      ),
+                    )
+                  }
+                >
+                  <option value="Carga">Carga</option>
+                  <option value="Entrega">Entrega</option>
+                  <option value="Descarga">Descarga</option>
+                </select>
+                <label className="flex items-center gap-1 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={p.requiereEvidencia}
+                    onChange={(e) =>
+                      setEditParadas((list) =>
+                        list.map((x, i) =>
+                          i === idx
+                            ? { ...x, requiereEvidencia: e.target.checked }
+                            : x,
+                        ),
+                      )
+                    }
+                  />
+                  Evidencia
+                </label>
+                <button
+                  type="button"
+                  className="text-xs text-red-300"
+                  onClick={() =>
+                    setEditParadas((list) => list.filter((_, i) => i !== idx))
+                  }
+                >
+                  Quitar
+                </button>
+              </div>
+            ))}
+            <div className="flex flex-wrap gap-2">
+              <input
+                className={`${input} flex-1`}
+                placeholder="Nueva parada…"
+                value={nuevaParadaNombre}
+                onChange={(e) => setNuevaParadaNombre(e.target.value)}
+              />
+              <button
+                type="button"
+                className="rounded bg-[#334155] px-2 py-1 text-xs text-white"
+                onClick={() => {
+                  const n = nuevaParadaNombre.trim();
+                  if (!n) return;
+                  setEditParadas((list) => [
+                    ...list,
+                    {
+                      lugarNombre: n,
+                      tipo: "Entrega",
+                      requiereEvidencia: true,
+                    },
+                  ]);
+                  setNuevaParadaNombre("");
+                }}
+              >
+                + Parada
+              </button>
+            </div>
+            {(() => {
+              const plan = planes.find((x) => x.id === selected);
+              if (!plan?.paradas?.length) return null;
+              return (
+                <ul className="mt-1 space-y-0.5 text-[11px] text-[var(--muted)]">
+                  {plan.paradas.map((pp) => (
+                    <li key={pp.id}>
+                      {pp.orden}. {pp.lugar_nombre} ({pp.tipo}) ·{" "}
+                      {pp.evidencias > 0
+                        ? `${pp.evidencias} foto(s)`
+                        : pp.requiere_evidencia
+                          ? "pendiente"
+                          : "sin evidencia req."}
+                    </li>
+                  ))}
+                </ul>
+              );
+            })()}
+          </div>
+
           <button
             type="button"
             onClick={() => void actualizarPlan()}
@@ -513,6 +765,7 @@ export default function TmsPage() {
               <th className="px-3 py-2">Piloto</th>
               <th className="px-3 py-2">Auxiliares</th>
               <th className="px-3 py-2">Estado</th>
+              <th className="px-3 py-2">Paradas</th>
               <th className="px-3 py-2">Evid.</th>
             </tr>
           </thead>
@@ -524,7 +777,7 @@ export default function TmsPage() {
                   "cursor-pointer border-t border-[var(--border)]",
                   selected === p.id ? "bg-white/5" : "",
                 ].join(" ")}
-                onClick={() => setSelected(p.id)}
+                onClick={() => seleccionarPlan(p)}
               >
                 <td className="px-3 py-2">{p.codigo}</td>
                 <td className="px-3 py-2">
@@ -539,6 +792,15 @@ export default function TmsPage() {
                     : (p.auxiliar ?? "—")}
                 </td>
                 <td className="px-3 py-2">{p.estado}</td>
+                <td className="px-3 py-2 text-xs">
+                  {(p.paradas ?? []).length
+                    ? `${p.paradas!.length}${
+                        p.paradasPendientes
+                          ? ` · ${p.paradasPendientes} pend.`
+                          : " · ok"
+                      }`
+                    : "—"}
+                </td>
                 <td className="px-3 py-2">{Number(p.evidencias ?? 0)}</td>
               </tr>
             ))}

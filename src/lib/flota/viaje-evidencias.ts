@@ -7,7 +7,8 @@ export type TipoEvidenciaViaje =
   | "tablero_salida"
   | "salida"
   | "tablero_llegada"
-  | "llegada";
+  | "llegada"
+  | "producto";
 
 type UploadLike = {
   name: string;
@@ -26,7 +27,8 @@ export async function guardarEvidenciaViaje(opts: {
   capturadoEn?: string | null;
   username: string;
   planId?: number | null;
-  syncTmsTipo?: "Carga" | "Descarga" | null;
+  paradaId?: number | null;
+  syncTmsTipo?: "Carga" | "Descarga" | "Producto" | null;
 }): Promise<number> {
   const saved = await guardarUpload(
     opts.empresaId,
@@ -35,43 +37,90 @@ export async function guardarEvidenciaViaje(opts: {
     opts.file,
   );
   const ahora = ahoraLocal();
-  const r = await execute(
-    `INSERT INTO flota_viaje_evidencias
-      (empresa_id, viaje_id, tipo, ruta_relativa, nombre_original, mime, tamano,
-       latitud, longitud, capturado_en, subido_por, creado_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      opts.empresaId,
-      opts.viajeId,
-      opts.tipo,
-      saved.relative,
-      saved.original,
-      contentTypeFor(saved.original),
-      saved.size,
-      opts.latitud ?? null,
-      opts.longitud ?? null,
-      opts.capturadoEn || ahora,
-      opts.username,
-      ahora,
-    ],
-  );
-
-  if (opts.planId && opts.syncTmsTipo) {
-    await execute(
-      `INSERT INTO tms_evidencias
-        (empresa_id, plan_id, tipo, ruta_archivo, nombre_original, latitud, longitud, subido_por)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  let r;
+  try {
+    r = await execute(
+      `INSERT INTO flota_viaje_evidencias
+        (empresa_id, viaje_id, tipo, ruta_relativa, nombre_original, mime, tamano,
+         latitud, longitud, capturado_en, subido_por, creado_at, parada_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         opts.empresaId,
-        opts.planId,
-        opts.syncTmsTipo,
+        opts.viajeId,
+        opts.tipo,
+        saved.relative,
+        saved.original,
+        contentTypeFor(saved.original),
+        saved.size,
+        opts.latitud ?? null,
+        opts.longitud ?? null,
+        opts.capturadoEn || ahora,
+        opts.username,
+        ahora,
+        opts.paradaId ?? null,
+      ],
+    );
+  } catch {
+    r = await execute(
+      `INSERT INTO flota_viaje_evidencias
+        (empresa_id, viaje_id, tipo, ruta_relativa, nombre_original, mime, tamano,
+         latitud, longitud, capturado_en, subido_por, creado_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        opts.empresaId,
+        opts.viajeId,
+        opts.tipo,
+        saved.relative,
+        saved.original,
+        contentTypeFor(saved.original),
+        saved.size,
+        opts.latitud ?? null,
+        opts.longitud ?? null,
+        opts.capturadoEn || ahora,
+        opts.username,
+        ahora,
+      ],
+    );
+  }
+
+  const planIdSync = opts.planId ?? null;
+  const tmsTipo = opts.syncTmsTipo ?? null;
+  if (planIdSync && tmsTipo) {
+    const paradaSync = opts.paradaId ?? null;
+    await execute(
+      `INSERT INTO tms_evidencias
+        (empresa_id, plan_id, tipo, ruta_archivo, nombre_original, latitud, longitud,
+         subido_por, parada_id, capturado_en)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        opts.empresaId,
+        planIdSync,
+        tmsTipo,
         saved.relative,
         saved.original,
         opts.latitud ?? null,
         opts.longitud ?? null,
         opts.username,
+        paradaSync,
+        opts.capturadoEn || ahora,
       ],
-    ).catch(() => undefined);
+    ).catch(async () => {
+      await execute(
+        `INSERT INTO tms_evidencias
+          (empresa_id, plan_id, tipo, ruta_archivo, nombre_original, latitud, longitud, subido_por)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          opts.empresaId,
+          planIdSync,
+          tmsTipo,
+          saved.relative,
+          saved.original,
+          opts.latitud ?? null,
+          opts.longitud ?? null,
+          opts.username,
+        ],
+      ).catch(() => undefined);
+    });
   }
 
   return Number(r.insertId);

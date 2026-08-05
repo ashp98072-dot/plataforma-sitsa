@@ -1,6 +1,7 @@
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
 import { normalizarNombrePiloto } from "@/lib/flota/pilotos";
+import { listarParadasDelPlan, type PlanParada } from "@/lib/tms/paradas";
 
 export type PlanSalidaMatch = {
   id: number;
@@ -16,6 +17,7 @@ export type PlanSalidaMatch = {
   lugar_descarga: string | null;
   estado: string;
   auxiliares: string[];
+  paradas: PlanParada[];
 };
 
 export async function buscarPlanesParaSalida(
@@ -75,6 +77,7 @@ export async function buscarPlanesParaSalida(
       /* ok */
     }
 
+    const paradas = await listarParadasDelPlan(Number(r.id));
     out.push({
       id: Number(r.id),
       codigo: String(r.codigo),
@@ -89,6 +92,7 @@ export async function buscarPlanesParaSalida(
       lugar_descarga: r.lugar_descarga ? String(r.lugar_descarga) : null,
       estado: String(r.estado),
       auxiliares,
+      paradas,
     });
   }
 

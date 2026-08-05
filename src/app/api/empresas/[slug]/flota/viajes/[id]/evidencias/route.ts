@@ -18,6 +18,7 @@ const TIPOS: TipoEvidenciaViaje[] = [
   "salida",
   "tablero_llegada",
   "llegada",
+  "producto",
 ];
 
 export async function GET(req: Request, ctx: Ctx) {
@@ -135,6 +136,9 @@ export async function POST(req: Request, ctx: Ctx) {
   const capturadoEn = form.get("capturadoEn")
     ? String(form.get("capturadoEn"))
     : null;
+  const paradaId = form.get("paradaId")
+    ? Number(form.get("paradaId"))
+    : null;
 
   const files: File[] = [];
   for (const [key, val] of form.entries()) {
@@ -147,12 +151,21 @@ export async function POST(req: Request, ctx: Ctx) {
   }
 
   const planId = viaje[0].plan_id ? Number(viaje[0].plan_id) : null;
+  if (tipo === "producto" && (!planId || !paradaId)) {
+    return NextResponse.json(
+      { error: "Para evidencia de producto indica la parada del plan." },
+      { status: 400 },
+    );
+  }
+
   const syncTmsTipo =
-    tipo === "tablero_salida" || tipo === "salida"
-      ? ("Carga" as const)
-      : tipo === "tablero_llegada" || tipo === "llegada"
-        ? ("Descarga" as const)
-        : null;
+    tipo === "producto"
+      ? ("Producto" as const)
+      : tipo === "tablero_salida" || tipo === "salida"
+        ? ("Carga" as const)
+        : tipo === "tablero_llegada" || tipo === "llegada"
+          ? ("Descarga" as const)
+          : null;
 
   const ids: number[] = [];
   for (const file of files) {
@@ -166,6 +179,7 @@ export async function POST(req: Request, ctx: Ctx) {
       capturadoEn,
       username: guard.session.username,
       planId,
+      paradaId: paradaId || null,
       syncTmsTipo,
     });
     ids.push(id);
