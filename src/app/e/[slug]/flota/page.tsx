@@ -23,6 +23,8 @@ import {
   obtenerGps,
   type GeoCoords,
 } from "@/lib/flota/photo-meta";
+import { normalizarFotoCamara, normalizarFotosCamara } from "@/lib/flota/camera-file";
+import { TomarFotoButton } from "@/components/flota/tomar-foto";
 
 function normPiloto(nombre: string): string {
   return nombre
@@ -757,9 +759,17 @@ function FlotaInner() {
     setParadasViaje((data.paradas ?? []) as PlanParadaUi[]);
   }
 
-  async function subirEvidenciaParada(paradaId: number, files: FileList | null) {
-    if (!viajeId || !files?.length) {
-      setErr("Selecciona una foto para esta parada.");
+  async function subirEvidenciaParada(
+    paradaId: number,
+    files: FileList | File[] | File | null,
+  ) {
+    const lista = !files
+      ? []
+      : files instanceof File
+        ? [files]
+        : Array.from(files);
+    if (!viajeId || !lista.length) {
+      setErr("Toma una foto para esta parada.");
       return;
     }
     setErr("");
@@ -768,7 +778,10 @@ function FlotaInner() {
     try {
       const geo = await obtenerGps();
       const parada = paradasViaje.find((p) => p.id === paradaId);
-      const originales = Array.from(files).filter((f) => f && f.size > 0);
+      const originales = await normalizarFotosCamara(
+        lista,
+        `parada_${paradaId}`,
+      );
       if (!originales.length) {
         throw new Error("La foto está vacía. Toma otra con la cámara.");
       }
@@ -2095,33 +2108,44 @@ function FlotaInner() {
                 />
               </div>
               <div className="grid gap-2 sm:grid-cols-2">
-                <label className="text-xs text-[var(--muted)]">
+                <div className="text-xs text-[var(--muted)]">
                   Foto del tablero (km) *
-                  <input
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    className={`${input} mt-1 w-full`}
-                    onChange={(e) =>
-                      setFotoTableroLectura(e.target.files?.[0] ?? null)
-                    }
-                  />
-                </label>
-                <label className="text-xs text-[var(--muted)]">
+                  <div className="mt-1">
+                    <TomarFotoButton
+                      label="Tomar foto tablero"
+                      className={`${input} w-full !py-2 text-sm`}
+                      hint={
+                        fotoTableroLectura
+                          ? `Listo: ${fotoTableroLectura.name}`
+                          : "Solo cámara."
+                      }
+                      onCaptured={async (file) => {
+                        const n = await normalizarFotoCamara(file, "tablero");
+                        setFotoTableroLectura(n);
+                      }}
+                    />
+                  </div>
+                </div>
+                <div className="text-xs text-[var(--muted)]">
                   Evidencias adicionales (opcional)
-                  <input
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    multiple
-                    className={`${input} mt-1 w-full`}
-                    onChange={(e) =>
-                      setFotosExtraLectura(
-                        e.target.files ? Array.from(e.target.files) : [],
-                      )
-                    }
-                  />
-                </label>
+                  <div className="mt-1">
+                    <TomarFotoButton
+                      label="Tomar evidencia"
+                      className={`${input} w-full !py-2 text-sm`}
+                      hint={
+                        fotosExtraLectura.length
+                          ? `${fotosExtraLectura.length} foto(s)`
+                          : "Solo cámara."
+                      }
+                      onCaptured={async (file) => {
+                        const n = await normalizarFotoCamara(file, "extra");
+                        if (n) {
+                          setFotosExtraLectura((prev) => [...prev, n]);
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
               </div>
               <button
                 type="button"
@@ -3341,45 +3365,44 @@ function FlotaInner() {
                 )}
 
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <label className="text-xs text-[var(--muted)]">
+                  <div className="text-xs text-[var(--muted)]">
                     Foto del tablero (km) *
-                    <input
-                      type="file"
-                      accept="image/*"
-                      capture="environment"
-                      className={`${input} mt-1 w-full`}
-                      onChange={(e) =>
-                        setFotoTableroSalida(e.target.files?.[0] ?? null)
-                      }
-                    />
-                    <span className="mt-0.5 block text-[11px]">
-                      Obligatoria. Se marca fecha/hora/ubicación en la foto.
-                      {fotoTableroSalida
-                        ? ` · ${fotoTableroSalida.name}`
-                        : ""}
-                    </span>
-                  </label>
-                  <label className="text-xs text-[var(--muted)]">
-                    Evidencias de salida (opcional)
-                    <input
-                      type="file"
-                      accept="image/*"
-                      capture="environment"
-                      multiple
-                      className={`${input} mt-1 w-full`}
-                      onChange={(e) =>
-                        setFotosEvidenciaSalida(
-                          e.target.files ? Array.from(e.target.files) : [],
-                        )
-                      }
-                    />
-                    <span className="mt-0.5 block text-[11px]">
-                      Unidad, carga, documentos, etc.
-                      {fotosEvidenciaSalida.length
-                        ? ` · ${fotosEvidenciaSalida.length} archivo(s)`
-                        : ""}
-                    </span>
-                  </label>
+                    <div className="mt-1">
+                      <TomarFotoButton
+                        label="Tomar foto tablero"
+                        className={`${input} w-full !py-2 text-sm`}
+                        hint={
+                          fotoTableroSalida
+                            ? `Listo: ${fotoTableroSalida.name}`
+                            : "Obligatoria. Solo cámara (fecha/hora/GPS)."
+                        }
+                        onCaptured={async (file) => {
+                          const n = await normalizarFotoCamara(file, "tablero");
+                          setFotoTableroSalida(n);
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <div className="text-xs text-[var(--muted)]">
+                    Evidencia de salida (opcional)
+                    <div className="mt-1">
+                      <TomarFotoButton
+                        label="Tomar evidencia"
+                        className={`${input} w-full !py-2 text-sm`}
+                        hint={
+                          fotosEvidenciaSalida.length
+                            ? `${fotosEvidenciaSalida.length} foto(s) · toca para agregar otra`
+                            : "Unidad, carga, etc. Solo cámara."
+                        }
+                        onCaptured={async (file) => {
+                          const n = await normalizarFotoCamara(file, "salida");
+                          if (n) {
+                            setFotosEvidenciaSalida((prev) => [...prev, n]);
+                          }
+                        }}
+                      />
+                    </div>
+                  </div>
                 </div>
 
                 {verifPiloto ? (
@@ -3626,8 +3649,9 @@ function FlotaInner() {
                         evidencia de producto en cada uno
                       </p>
                       <p className="text-[11px] text-[var(--muted)]">
-                        En cada lugar solo adjunta foto del producto (con
-                        fecha/hora/GPS). Sin kilometraje en destinos.
+                        En cada lugar toma la foto del producto con la cámara
+                        (fecha/hora/GPS). No se puede adjuntar de la galería.
+                        Sin kilometraje en destinos.
                       </p>
                       {paradasViaje.map((pp) => {
                         const ok =
@@ -3657,24 +3681,13 @@ function FlotaInner() {
                             >
                               {ok ? "OK" : "Falta foto"}
                             </span>
-                            <label className="cursor-pointer rounded bg-[#334155] px-2 py-1 text-[11px] text-white">
-                              Subir evidencia
-                              <input
-                                type="file"
-                                accept="image/*"
-                                capture="environment"
-                                multiple
-                                className="hidden"
-                                disabled={subiendoFotos}
-                                onChange={(e) => {
-                                  void subirEvidenciaParada(
-                                    pp.id,
-                                    e.target.files,
-                                  );
-                                  e.target.value = "";
-                                }}
-                              />
-                            </label>
+                            <TomarFotoButton
+                              label={ok ? "Otra foto" : "Tomar foto"}
+                              disabled={subiendoFotos}
+                              onCaptured={(file) =>
+                                subirEvidenciaParada(pp.id, file)
+                              }
+                            />
                           </div>
                         );
                       })}
@@ -3695,50 +3708,75 @@ function FlotaInner() {
 
                   {paradasViaje.length === 0 ? (
                     <>
-                      <label className="text-xs text-[var(--muted)] sm:col-span-2">
-                        Fotos de llegada * (fecha, hora y ubicación)
-                        <input
-                          type="file"
-                          accept="image/*"
-                          capture="environment"
-                          multiple
-                          className={`${input} mt-1 w-full`}
-                          onChange={(e) =>
-                            setFotosLlegada(
-                              e.target.files ? Array.from(e.target.files) : [],
-                            )
-                          }
-                        />
-                      </label>
-                      <label className="text-xs text-[var(--muted)] sm:col-span-2">
+                      <div className="text-xs text-[var(--muted)] sm:col-span-2">
+                        Foto de llegada * (fecha, hora y ubicación)
+                        <div className="mt-1">
+                          <TomarFotoButton
+                            label="Tomar foto de llegada"
+                            className={`${input} w-full !py-2 text-sm`}
+                            hint={
+                              fotosLlegada.length
+                                ? `${fotosLlegada.length} foto(s) · toca para agregar otra`
+                                : "Solo cámara en vivo, no galería."
+                            }
+                            onCaptured={async (file) => {
+                              const n = await normalizarFotoCamara(
+                                file,
+                                "llegada",
+                              );
+                              if (n) {
+                                setFotosLlegada((prev) => [...prev, n]);
+                              }
+                            }}
+                          />
+                        </div>
+                      </div>
+                      <div className="text-xs text-[var(--muted)] sm:col-span-2">
                         Foto tablero km llegada (opcional)
-                        <input
-                          type="file"
-                          accept="image/*"
-                          capture="environment"
-                          className={`${input} mt-1 w-full`}
-                          onChange={(e) =>
-                            setFotoTableroLlegada(e.target.files?.[0] ?? null)
-                          }
-                        />
-                      </label>
+                        <div className="mt-1">
+                          <TomarFotoButton
+                            label="Tomar foto tablero"
+                            className={`${input} w-full !py-2 text-sm`}
+                            hint={
+                              fotoTableroLlegada
+                                ? `Listo: ${fotoTableroLlegada.name}`
+                                : "Solo cámara."
+                            }
+                            onCaptured={async (file) => {
+                              const n = await normalizarFotoCamara(
+                                file,
+                                "tablero_llegada",
+                              );
+                              setFotoTableroLlegada(n);
+                            }}
+                          />
+                        </div>
+                      </div>
                     </>
                   ) : (
-                    <label className="text-xs text-[var(--muted)] sm:col-span-2">
+                    <div className="text-xs text-[var(--muted)] sm:col-span-2">
                       Foto extra de cierre (opcional)
-                      <input
-                        type="file"
-                        accept="image/*"
-                        capture="environment"
-                        multiple
-                        className={`${input} mt-1 w-full`}
-                        onChange={(e) =>
-                          setFotosLlegada(
-                            e.target.files ? Array.from(e.target.files) : [],
-                          )
-                        }
-                      />
-                    </label>
+                      <div className="mt-1">
+                        <TomarFotoButton
+                          label="Tomar foto extra"
+                          className={`${input} w-full !py-2 text-sm`}
+                          hint={
+                            fotosLlegada.length
+                              ? `${fotosLlegada.length} foto(s)`
+                              : "Solo cámara."
+                          }
+                          onCaptured={async (file) => {
+                            const n = await normalizarFotoCamara(
+                              file,
+                              "cierre",
+                            );
+                            if (n) {
+                              setFotosLlegada((prev) => [...prev, n]);
+                            }
+                          }}
+                        />
+                      </div>
+                    </div>
                   )}
                   <div className="flex items-end">
                     <button
