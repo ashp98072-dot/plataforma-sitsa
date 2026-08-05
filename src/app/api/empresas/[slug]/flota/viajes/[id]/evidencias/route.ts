@@ -5,6 +5,7 @@ import { query } from "@/lib/db";
 import { requireTenantFlota, requireTenantFlotaAny } from "@/lib/tenant";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
 import {
+  eliminarEvidenciaViaje,
   guardarEvidenciaViaje,
   listarEvidenciasViaje,
   type TipoEvidenciaViaje,
@@ -210,4 +211,51 @@ export async function POST(req: Request, ctx: Ctx) {
     ids,
     mensaje: `${ids.length} evidencia(s) guardada(s).`,
   });
+}
+
+/** Solo Admin puede eliminar evidencias de viaje. */
+export async function DELETE(req: Request, ctx: Ctx) {
+  const { slug, id: raw } = await ctx.params;
+  const guard = await requireTenantFlotaAny(
+    slug,
+    ["flota_reportes", "flota_piloto"],
+    "ver",
+  );
+  if (guard.error) return guard.error;
+
+  if (guard.session.rol !== "Admin") {
+    return NextResponse.json(
+      {
+        error:
+          "Solo un administrador puede eliminar evidencias. Solicita el borrado a un Admin.",
+        code: "SOLO_ADMIN",
+      },
+      { status: 403 },
+    );
+  }
+
+  try {
+    await asegurarSchemaFlota();
+  } catch {
+    /* ok */
+  }
+
+  const viajeId = Number(raw);
+  const adjuntoId = Number(new URL(req.url).searchParams.get("adjuntoId") ?? 0);
+  if (!viajeId || !adjuntoId) {
+    return NextResponse.json(
+      { error: "viaje e adjuntoId son requeridos." },
+      { status: 400 },
+    );
+  }
+
+  const result = await eliminarEvidenciaViaje(
+    guard.empresa.id,
+    viajeId,
+    adjuntoId,
+  );
+  if (!result.ok) {
+    return NextResponse.json({ error: result.mensaje }, { status: 404 });
+  }
+  return NextResponse.json({ mensaje: result.mensaje });
 }

@@ -8,6 +8,7 @@ import { contentTypeFor, guardarUpload } from "@/lib/uploads";
 import { ahoraLocal } from "@/lib/rrhh/dates";
 import { readFileSync } from "fs";
 import { absPathFromRelative } from "@/lib/uploads";
+import { eliminarEvidenciaTms } from "@/lib/flota/viaje-evidencias";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -258,4 +259,49 @@ export async function POST(req: Request, ctx: Ctx) {
     ids,
     mensaje: `${ids.length} evidencia(s) registrada(s).`,
   });
+}
+
+/** Solo Admin puede eliminar evidencias TMS. */
+export async function DELETE(req: Request, ctx: Ctx) {
+  const { slug } = await ctx.params;
+  const tmsGuard = await requireTenantModulo(slug, "tms");
+  const guard = tmsGuard.error
+    ? await requireTenantFlotaAny(
+        slug,
+        ["flota_piloto", "flota_reportes"],
+        "ver",
+      )
+    : tmsGuard;
+  if (guard.error) return guard.error;
+
+  if (guard.session.rol !== "Admin") {
+    return NextResponse.json(
+      {
+        error:
+          "Solo un administrador puede eliminar evidencias. Solicita el borrado a un Admin.",
+        code: "SOLO_ADMIN",
+      },
+      { status: 403 },
+    );
+  }
+
+  try {
+    await asegurarSchemaFlota();
+  } catch {
+    /* ok */
+  }
+
+  const adjuntoId = Number(new URL(req.url).searchParams.get("adjuntoId") ?? 0);
+  if (!adjuntoId) {
+    return NextResponse.json(
+      { error: "adjuntoId requerido." },
+      { status: 400 },
+    );
+  }
+
+  const result = await eliminarEvidenciaTms(guard.empresa.id, adjuntoId);
+  if (!result.ok) {
+    return NextResponse.json({ error: result.mensaje }, { status: 404 });
+  }
+  return NextResponse.json({ mensaje: result.mensaje });
 }

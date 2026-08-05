@@ -164,6 +164,9 @@ type EvidenciaViaje = {
   capturadoEn?: string | null;
   url: string;
   origen?: "lectura" | "viaje";
+  /** Origen del registro para borrado (solo Admin). */
+  fuente?: "flota" | "tms" | "lectura";
+  viajeId?: number;
 };
 
 function fmtFechaHora(v: string | null | undefined): string {
@@ -1373,7 +1376,11 @@ function FlotaInner() {
       setErr(data.error ?? "No se pudieron cargar evidencias");
       return;
     }
-    let list = (data.evidencias ?? []) as EvidenciaViaje[];
+    let list = ((data.evidencias ?? []) as EvidenciaViaje[]).map((e) => ({
+      ...e,
+      fuente: "flota" as const,
+      viajeId: viajeIdSel,
+    }));
     const viaje = viajesReporte.find((x) => x.id === viajeIdSel);
     if (viaje?.plan_id) {
       const tmsRes = await fetch(
@@ -1401,6 +1408,8 @@ function FlotaInner() {
           capturadoEn: e.capturadoEn,
           url: e.url,
           origen: "viaje" as const,
+          fuente: "tms" as const,
+          viajeId: viajeIdSel,
         }));
         // Evitar duplicar si ya están en flota (mismas urls relativas difíciles); unir por id+url
         const urls = new Set(list.map((x) => x.url));
@@ -1413,6 +1422,55 @@ function FlotaInner() {
       ...prev,
       [viajeIdSel]: list,
     }));
+  }
+
+  async function eliminarEvidenciaAdmin(
+    ev: EvidenciaViaje,
+    viajeIdSel?: number,
+  ) {
+    if (rol !== "Admin") {
+      setErr(
+        "Solo un administrador puede eliminar evidencias. Solicita el borrado a un Admin.",
+      );
+      return;
+    }
+    const ok = window.confirm(
+      `¿Eliminar esta evidencia?\n\n${labelTipoEvidencia(ev.tipo)}\n${ev.nombre}\n\nSolo Admin puede hacerlo. Esta acción no se puede deshacer.`,
+    );
+    if (!ok) return;
+    setErr("");
+    setMsg("");
+    const vid = viajeIdSel ?? ev.viajeId;
+    const fuente = ev.fuente ?? (ev.url.includes("/tms/") ? "tms" : "flota");
+    if (fuente !== "tms" && !vid) {
+      setErr("No se pudo determinar el viaje de la evidencia.");
+      return;
+    }
+    const url =
+      fuente === "tms"
+        ? `/api/empresas/${slug}/tms/evidencias?adjuntoId=${ev.id}`
+        : `/api/empresas/${slug}/flota/viajes/${vid}/evidencias?adjuntoId=${ev.id}`;
+    const res = await fetch(url, { method: "DELETE" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setErr(data.error ?? "No se pudo eliminar la evidencia");
+      return;
+    }
+    setMsg(data.mensaje ?? "Evidencia eliminada.");
+    setFotoVista(null);
+    if (vid) {
+      setViajeEvidencias((prev) => ({
+        ...prev,
+        [vid]: (prev[vid] ?? []).filter(
+          (x) =>
+            !(
+              x.id === ev.id &&
+              (x.fuente ?? "flota") === fuente
+            ),
+        ),
+      }));
+    }
+    await cargar();
   }
 
   async function verAdjuntos(servicioId: number, placa?: string) {
@@ -2970,7 +3028,7 @@ function FlotaInner() {
                       ) : null}
                     </div>
 
-                    <div className="mt-2 flex flex-wrap gap-2">
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
                       <button
                         type="button"
                         className="rounded bg-[#334155] px-2.5 py-1 text-xs text-white"
@@ -2979,6 +3037,11 @@ function FlotaInner() {
                         {abierto ? "Ocultar" : "Ver"} evidencias (
                         {v.evidencias ?? 0})
                       </button>
+                      {rol === "Admin" && abierto ? (
+                        <span className="text-[10px] text-rose-300/80">
+                          Puedes eliminar evidencias (solo Admin)
+                        </span>
+                      ) : null}
                     </div>
 
                     {abierto ? (
@@ -2992,40 +3055,57 @@ function FlotaInner() {
                         ) : (
                           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                             {evs.map((ev) => (
-                              <button
-                                key={ev.id}
-                                type="button"
-                                className="overflow-hidden rounded border border-[var(--border)] text-left hover:border-sky-600"
-                                onClick={() => setFotoVista(ev)}
+                              <div
+                                key={`${ev.fuente ?? "flota"}-${ev.id}`}
+                                className="overflow-hidden rounded border border-[var(--border)]"
                               >
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                <img
-                                  src={ev.url}
-                                  alt={ev.nombre}
-                                  className="h-28 w-full object-cover bg-[#0b1217]"
-                                />
-                                <div className="space-y-0.5 p-1.5 text-[10px] text-[var(--muted)]">
-                                  <p className="font-medium text-sky-300">
-                                    {labelTipoEvidencia(ev.tipo)}
-                                  </p>
-                                  <p>
-                                    {fmtFechaHora(
-                                      ev.capturadoEn
-                                        ? String(ev.capturadoEn)
-                                        : null,
-                                    )}
-                                  </p>
-                                  {ev.latitud != null &&
-                                  ev.longitud != null ? (
-                                    <p>
-                                      GPS: {ev.latitud.toFixed(5)},{" "}
-                                      {ev.longitud.toFixed(5)}
+                                <button
+                                  type="button"
+                                  className="w-full text-left hover:border-sky-600"
+                                  onClick={() => setFotoVista(ev)}
+                                >
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img
+                                    src={ev.url}
+                                    alt={ev.nombre}
+                                    className="h-28 w-full object-cover bg-[#0b1217]"
+                                  />
+                                  <div className="space-y-0.5 p-1.5 text-[10px] text-[var(--muted)]">
+                                    <p className="font-medium text-sky-300">
+                                      {labelTipoEvidencia(ev.tipo)}
                                     </p>
-                                  ) : (
-                                    <p>GPS: no disponible</p>
-                                  )}
-                                </div>
-                              </button>
+                                    <p>
+                                      {fmtFechaHora(
+                                        ev.capturadoEn
+                                          ? String(ev.capturadoEn)
+                                          : null,
+                                      )}
+                                    </p>
+                                    {ev.latitud != null &&
+                                    ev.longitud != null ? (
+                                      <p>
+                                        GPS: {ev.latitud.toFixed(5)},{" "}
+                                        {ev.longitud.toFixed(5)}
+                                      </p>
+                                    ) : (
+                                      <p>GPS: no disponible</p>
+                                    )}
+                                  </div>
+                                </button>
+                                {rol === "Admin" ? (
+                                  <div className="border-t border-[var(--border)] p-1.5">
+                                    <button
+                                      type="button"
+                                      className="w-full rounded bg-rose-900/60 px-2 py-1 text-[10px] text-rose-100 hover:bg-rose-800"
+                                      onClick={() =>
+                                        void eliminarEvidenciaAdmin(ev, v.id)
+                                      }
+                                    >
+                                      Eliminar (Admin)
+                                    </button>
+                                  </div>
+                                ) : null}
+                              </div>
                             ))}
                           </div>
                         )}
@@ -3068,13 +3148,28 @@ function FlotaInner() {
                   </p>
                 ) : null}
               </div>
-              <button
-                type="button"
-                className="rounded bg-[#334155] px-2 py-1 text-xs text-white"
-                onClick={() => setFotoVista(null)}
-              >
-                Cerrar
-              </button>
+              <div className="flex flex-wrap gap-1.5">
+                {rol === "Admin" &&
+                (fotoVista.fuente === "flota" ||
+                  fotoVista.fuente === "tms" ||
+                  fotoVista.url.includes("/flota/viajes/") ||
+                  fotoVista.url.includes("/tms/")) ? (
+                  <button
+                    type="button"
+                    className="rounded bg-rose-800 px-2 py-1 text-xs text-white"
+                    onClick={() => void eliminarEvidenciaAdmin(fotoVista)}
+                  >
+                    Eliminar
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="rounded bg-[#334155] px-2 py-1 text-xs text-white"
+                  onClick={() => setFotoVista(null)}
+                >
+                  Cerrar
+                </button>
+              </div>
             </div>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img

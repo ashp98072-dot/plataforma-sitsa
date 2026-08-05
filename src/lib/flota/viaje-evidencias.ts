@@ -1,7 +1,7 @@
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
 import { ahoraLocal } from "@/lib/rrhh/dates";
-import { contentTypeFor, guardarUpload } from "@/lib/uploads";
+import { borrarUpload, contentTypeFor, guardarUpload } from "@/lib/uploads";
 
 export type TipoEvidenciaViaje =
   | "tablero_salida"
@@ -138,4 +138,62 @@ export async function listarEvidenciasViaje(
      ORDER BY id ASC`,
     [empresaId, viajeId],
   );
+}
+
+/** Elimina evidencia de viaje (archivo + fila; limpia copia TMS si comparte ruta). */
+export async function eliminarEvidenciaViaje(
+  empresaId: number,
+  viajeId: number,
+  evidenciaId: number,
+): Promise<{ ok: boolean; mensaje: string }> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT id, ruta_relativa FROM flota_viaje_evidencias
+     WHERE id = ? AND viaje_id = ? AND empresa_id = ? LIMIT 1`,
+    [evidenciaId, viajeId, empresaId],
+  );
+  if (!rows[0]) {
+    return { ok: false, mensaje: "Evidencia no encontrada." };
+  }
+  const ruta = String(rows[0].ruta_relativa ?? "");
+  await execute(
+    `DELETE FROM flota_viaje_evidencias
+     WHERE id = ? AND viaje_id = ? AND empresa_id = ?`,
+    [evidenciaId, viajeId, empresaId],
+  );
+  if (ruta) {
+    await execute(
+      `DELETE FROM tms_evidencias WHERE empresa_id = ? AND ruta_archivo = ?`,
+      [empresaId, ruta],
+    ).catch(() => undefined);
+    borrarUpload(ruta);
+  }
+  return { ok: true, mensaje: "Evidencia eliminada." };
+}
+
+export async function eliminarEvidenciaTms(
+  empresaId: number,
+  evidenciaId: number,
+): Promise<{ ok: boolean; mensaje: string }> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT id, ruta_archivo FROM tms_evidencias
+     WHERE id = ? AND empresa_id = ? LIMIT 1`,
+    [evidenciaId, empresaId],
+  );
+  if (!rows[0]) {
+    return { ok: false, mensaje: "Evidencia no encontrada." };
+  }
+  const ruta = String(rows[0].ruta_archivo ?? "");
+  await execute(
+    `DELETE FROM tms_evidencias WHERE id = ? AND empresa_id = ?`,
+    [evidenciaId, empresaId],
+  );
+  if (ruta) {
+    // Si también está en flota (misma ruta), quitarla
+    await execute(
+      `DELETE FROM flota_viaje_evidencias WHERE empresa_id = ? AND ruta_relativa = ?`,
+      [empresaId, ruta],
+    ).catch(() => undefined);
+    borrarUpload(ruta);
+  }
+  return { ok: true, mensaje: "Evidencia eliminada." };
 }
