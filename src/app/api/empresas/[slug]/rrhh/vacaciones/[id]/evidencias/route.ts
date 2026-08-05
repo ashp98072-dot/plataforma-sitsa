@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
-import { requireTenantRrhh } from "@/lib/tenant";
+import { requireTenantRrhhAny } from "@/lib/tenant";
 import { listarEvidencias, registrarEvidencia } from "@/lib/rrhh/evidencias";
 import { guardarUpload } from "@/lib/uploads";
 
@@ -20,7 +20,11 @@ async function incidenciaDeEmpresa(
 
 export async function GET(_req: Request, ctx: Ctx) {
   const { slug, id: raw } = await ctx.params;
-  const guard = await requireTenantRrhh(slug, "vacaciones", "ver");
+  const guard = await requireTenantRrhhAny(
+    slug,
+    ["vacaciones", "incidencias"],
+    "ver",
+  );
   if (guard.error) return guard.error;
 
   const id = Number(raw);
@@ -45,7 +49,18 @@ export async function GET(_req: Request, ctx: Ctx) {
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug, id: raw } = await ctx.params;
-  const guard = await requireTenantRrhh(slug, "vacaciones", "crear");
+  let guard = await requireTenantRrhhAny(
+    slug,
+    ["vacaciones", "incidencias"],
+    "crear",
+  );
+  if (guard.error) {
+    guard = await requireTenantRrhhAny(
+      slug,
+      ["vacaciones", "incidencias"],
+      "editar",
+    );
+  }
   if (guard.error) return guard.error;
 
   const id = Number(raw);
@@ -59,8 +74,8 @@ export async function POST(req: Request, ctx: Ctx) {
     }
 
     const form = await req.formData();
-    const file = form.get("file");
-    if (!(file instanceof File)) {
+    const file = form.get("file") as File | null;
+    if (!file || typeof file.arrayBuffer !== "function") {
       return NextResponse.json({ error: "Archivo requerido." }, { status: 400 });
     }
 

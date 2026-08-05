@@ -1,8 +1,11 @@
-import { createWriteStream, existsSync, mkdirSync, unlinkSync } from "fs";
-import { dirname, extname, join, resolve } from "path";
+import {
+  existsSync,
+  mkdirSync,
+  unlinkSync,
+  writeFileSync,
+} from "fs";
+import { dirname, extname, join, resolve, sep } from "path";
 import { randomBytes } from "crypto";
-import { pipeline } from "stream/promises";
-import { Readable } from "stream";
 
 export const EXT_PERMITIDAS = new Set([
   ".jpg",
@@ -21,16 +24,31 @@ export function getUploadsRoot(): string {
     return resolve(process.env.UPLOAD_DIR.trim());
   }
   const cwd = process.cwd();
-  if (existsSync(join(cwd, "..", "..", "..", "config"))) {
-    return resolve(join(cwd, "..", "..", "..", "uploads"));
+  const candidates = [
+    // .builds/current → .builds/uploads
+    join(cwd, "..", "uploads"),
+    // .builds/versions/<id> → .builds/uploads
+    join(cwd, "..", "..", "uploads"),
+    // .builds/versions/<id>/nodejs → .builds/uploads
+    join(cwd, "..", "..", "..", "uploads"),
+    join(cwd, "uploads"),
+  ];
+  for (const dir of candidates) {
+    const abs = resolve(dir);
+    const siblingConfig = join(dirname(abs), "config");
+    if (existsSync(siblingConfig) || existsSync(abs)) {
+      return abs;
+    }
   }
+  // Crear uploads junto al cwd si no hay estructura Hostinger
   return resolve(join(cwd, "uploads"));
 }
 
 export function absPathFromRelative(relative: string): string {
   const root = getUploadsRoot();
   const abs = resolve(root, relative);
-  if (!abs.startsWith(root)) {
+  const rootNorm = root.endsWith(sep) ? root : root + sep;
+  if (abs !== root && !abs.startsWith(rootNorm) && !abs.startsWith(root)) {
     throw new Error("Ruta de archivo inválida.");
   }
   return abs;
@@ -45,17 +63,26 @@ export function extensionValida(nombre: string): string | null {
   return EXT_PERMITIDAS.has(ext) ? ext : null;
 }
 
+type UploadLike = {
+  name: string;
+  size: number;
+  arrayBuffer: () => Promise<ArrayBuffer>;
+};
+
 export async function guardarUpload(
   empresaId: number,
   subdir: "documentos" | "evidencias",
   prefix: string,
-  file: File,
+  file: UploadLike,
 ): Promise<{ relative: string; original: string; size: number }> {
+  if (!file || typeof file.arrayBuffer !== "function") {
+    throw new Error("Archivo requerido.");
+  }
   if (file.size <= 0) throw new Error("Archivo vacío.");
   if (file.size > MAX_UPLOAD_BYTES) {
     throw new Error("El archivo supera el máximo de 8 MB.");
   }
-  const ext = extensionValida(file.name);
+  const ext = extensionValida(file.name || "archivo.jpg");
   if (!ext) {
     throw new Error("Formato no permitido. Usa: jpg, png, webp, bmp o pdf.");
   }
@@ -70,19 +97,21 @@ export async function guardarUpload(
     .slice(0, 14);
   const rand = randomBytes(4).toString("hex");
   const filename = `${prefix}_${stamp}_${rand}${ext}`;
-  const relative = join("empresas", String(empresaId), subdir, filename).replace(
-    /\\/g,
-    "/",
-  );
+  const relative = join(
+    "empresas",
+    String(empresaId),
+    subdir,
+    filename,
+  ).replace(/\\/g, "/");
   const abs = join(dir, filename);
 
   const buffer = Buffer.from(await file.arrayBuffer());
   ensureDir(dirname(abs));
-  await pipeline(Readable.from(buffer), createWriteStream(abs));
+  writeFileSync(abs, buffer);
 
   return {
     relative,
-    original: file.name.slice(0, 255),
+    original: String(file.name || filename).slice(0, 255),
     size: file.size,
   };
 }

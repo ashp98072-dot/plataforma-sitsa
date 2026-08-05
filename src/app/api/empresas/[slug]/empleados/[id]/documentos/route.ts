@@ -38,7 +38,11 @@ export async function GET(_req: Request, ctx: Ctx) {
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug, id: idRaw } = await ctx.params;
-  const guard = await requireTenantRrhh(slug, "empleados", "crear");
+  // Subir anexo: basta con crear o editar empleados
+  let guard = await requireTenantRrhh(slug, "empleados", "editar");
+  if (guard.error) {
+    guard = await requireTenantRrhh(slug, "empleados", "crear");
+  }
   if (guard.error) return guard.error;
 
   const id = Number(idRaw);
@@ -53,9 +57,9 @@ export async function POST(req: Request, ctx: Ctx) {
     }
 
     const form = await req.formData();
-    const file = form.get("file");
+    const file = form.get("file") as File | null;
     const tipoRaw = String(form.get("tipo") ?? "Otro");
-    if (!(file instanceof File)) {
+    if (!file || typeof (file as File).arrayBuffer !== "function") {
       return NextResponse.json({ error: "Archivo requerido." }, { status: 400 });
     }
 

@@ -127,3 +127,22 @@ export async function requireTenantRrhh(
   }
   return base;
 }
+
+/** Acepta cualquiera de varios submódulos (ej. evidencias: vacaciones o incidencias). */
+export async function requireTenantRrhhAny(
+  slug: string,
+  submodulos: RrhhSubmodulo[],
+  accion: AccionPermiso = "ver",
+): Promise<Ok | Fail> {
+  let last: Ok | Fail | null = null;
+  for (const sub of submodulos) {
+    const g = await requireTenantRrhh(slug, sub, accion);
+    if (!g.error) return g;
+    last = g;
+  }
+  return (
+    last ?? {
+      error: NextResponse.json({ error: "Sin permiso." }, { status: 403 }),
+    }
+  );
+}

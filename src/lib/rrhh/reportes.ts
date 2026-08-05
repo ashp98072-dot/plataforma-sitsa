@@ -113,24 +113,24 @@ async function mapaIncidenciasPorEmpleadoFecha(
   empresaId: number,
   fechaInicio: string,
   fechaFin: string,
-): Promise<Map<string, string>> {
+): Promise<Map<string, { tipo: string; incidenciaId: number }>> {
   const rows = await query<RowDataPacket[]>(
-    `SELECT id_empleado, tipo, fecha_inicio, fecha_fin
+    `SELECT id, id_empleado, tipo, fecha_inicio, fecha_fin
      FROM incidencias
      WHERE empresa_id = ? AND fecha_fin >= ? AND fecha_inicio <= ?`,
     [empresaId, fechaInicio, fechaFin],
   );
-  const map = new Map<string, string>();
+  const map = new Map<string, { tipo: string; incidenciaId: number }>();
   for (const r of rows) {
     const idEmp = Number(r.id_empleado);
     const tipo = String(r.tipo);
-    let d = toIso(r.fecha_inicio as string | Date);
+    const incidenciaId = Number(r.id);
     const fin = toIso(r.fecha_fin as string | Date);
-    const cur = new Date(d + "T00:00:00");
+    const cur = new Date(toIso(r.fecha_inicio as string | Date) + "T00:00:00");
     const end = new Date(fin + "T00:00:00");
     while (cur <= end) {
       const key = `${idEmp}|${toIso(cur)}`;
-      if (!map.has(key)) map.set(key, tipo);
+      if (!map.has(key)) map.set(key, { tipo, incidenciaId });
       cur.setDate(cur.getDate() + 1);
     }
   }
@@ -312,10 +312,10 @@ export async function obtenerReporteAsistencias(
             nombre,
             horaEntrada: null,
             horaSalida: null,
-            estadoEntrada: tipoInc,
+            estadoEntrada: tipoInc.tipo,
             estadoSalida: "—",
             comentarios: "",
-            motivo: tipoInc,
+            motivo: tipoInc.tipo,
             tipoHorario,
           });
         } else {
@@ -372,7 +372,12 @@ export type ResumenIncidencia = {
   totalSalidasTempranas: number;
   totalFaltas: number;
   totalDiasAsistidos: number;
-  detalle: { fecha: string; fechaUi: string; tipo: string }[];
+  detalle: {
+    fecha: string;
+    fechaUi: string;
+    tipo: string;
+    incidenciaId: number | null;
+  }[];
 };
 
 export async function obtenerResumenIncidenciasDetallado(
@@ -443,6 +448,7 @@ export async function obtenerResumenIncidenciasDetallado(
             fecha,
             fechaUi: formatearFechaVisible(fecha),
             tipo: tipos.join(" + "),
+            incidenciaId: incidencias.get(clave)?.incidenciaId ?? null,
           });
         }
       } else if (!incidencias.has(clave)) {
@@ -451,12 +457,15 @@ export async function obtenerResumenIncidenciasDetallado(
           fecha,
           fechaUi: formatearFechaVisible(fecha),
           tipo: "Falta",
+          incidenciaId: null,
         });
       } else {
+        const inc = incidencias.get(clave)!;
         detalle.push({
           fecha,
           fechaUi: formatearFechaVisible(fecha),
-          tipo: incidencias.get(clave) || "Incidencia",
+          tipo: inc.tipo || "Incidencia",
+          incidenciaId: inc.incidenciaId,
         });
       }
     }

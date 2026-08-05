@@ -66,22 +66,35 @@ export function DocumentosModal({
     if (!puedeEditar || !file) return;
     setError("");
     setMensaje("");
-    const fd = new FormData();
-    fd.append("file", file);
-    fd.append("tipo", tipo);
-    const res = await fetch(
-      `/api/empresas/${slug}/empleados/${empleadoId}/documentos`,
-      { method: "POST", body: fd },
-    );
-    const data = await res.json();
-    if (!res.ok) {
-      setError(data.error ?? "No se pudo subir");
-      return;
+    setLoading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("tipo", tipo);
+      const res = await fetch(
+        `/api/empresas/${slug}/empleados/${empleadoId}/documentos`,
+        { method: "POST", body: fd },
+      );
+      let data: { error?: string; mensaje?: string } = {};
+      try {
+        data = await res.json();
+      } catch {
+        setError(`Error del servidor (${res.status}). Revisa el Redeploy.`);
+        return;
+      }
+      if (!res.ok) {
+        setError(data.error ?? `No se pudo subir (${res.status})`);
+        return;
+      }
+      setMensaje(data.mensaje ?? "Documento subido.");
+      setFile(null);
+      await cargar();
+      onChanged?.();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error de red al subir");
+    } finally {
+      setLoading(false);
     }
-    setMensaje(data.mensaje);
-    setFile(null);
-    await cargar();
-    onChanged?.();
   }
 
   async function eliminar(id: number) {
