@@ -65,7 +65,7 @@ export async function vehiculoPorPlaca(
   const placa = placaRaw.trim().toUpperCase().replace(/\s+/g, "-");
   const placaAlt = placaRaw.trim().toUpperCase().replace(/[\s-]+/g, "");
   const rows = await query<RowDataPacket[]>(
-    `SELECT id, placa, en_taller, km_actual, activo FROM flota_vehiculos
+    `SELECT id, placa, en_taller, km_actual, activo, estado FROM flota_vehiculos
      WHERE empresa_id = ?
        AND (
          UPPER(REPLACE(placa,' ','')) = ?

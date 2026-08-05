@@ -62,6 +62,8 @@ type Servicio = {
   fecha_servicio: string;
   costo: number;
   descripcion?: string | null;
+  observaciones?: string | null;
+  repuestos?: string[];
   adjuntos?: number;
 };
 
@@ -160,7 +162,9 @@ function FlotaInner() {
   const [conductor, setConductor] = useState("");
   const [tipoServicio, setTipoServicio] = useState("mantenimiento");
   const [costo, setCosto] = useState(0);
-  const [descServicio, setDescServicio] = useState("");
+  const [repuestos, setRepuestos] = useState<string[]>([]);
+  const [repuestoInput, setRepuestoInput] = useState("");
+  const [obsServicio, setObsServicio] = useState("");
   const [pilotoNombre, setPilotoNombre] = useState("");
   const [placaSalida, setPlacaSalida] = useState("");
   const [destino, setDestino] = useState("");
@@ -468,15 +472,36 @@ function FlotaInner() {
     }
   }
 
+  function agregarRepuesto() {
+    const t = repuestoInput.trim();
+    if (!t) return;
+    if (repuestos.some((r) => r.toLowerCase() === t.toLowerCase())) {
+      setRepuestoInput("");
+      return;
+    }
+    setRepuestos((prev) => [...prev, t]);
+    setRepuestoInput("");
+  }
+
   async function registrarServicio() {
     setErr("");
+    const enRuta = abiertos.some((v) => v.vehiculo_id === vehiculoId);
+    if (enRuta) {
+      setErr(
+        "Esa unidad está en ruta. Cierra la llegada antes de registrar servicio.",
+      );
+      return;
+    }
+    const lista = [...repuestos];
+    if (repuestoInput.trim()) lista.push(repuestoInput.trim());
     const fd = new FormData();
     fd.append("vehiculoId", String(vehiculoId));
     fd.append("tipo", tipoServicio);
     if (kmLectura) fd.append("kmServicio", String(kmLectura));
     fd.append("fechaServicio", new Date().toISOString().slice(0, 10));
     fd.append("costo", String(costo || 0));
-    if (descServicio) fd.append("descripcion", descServicio);
+    fd.append("repuestos", JSON.stringify(lista));
+    if (obsServicio.trim()) fd.append("observaciones", obsServicio.trim());
     if (sacarDeServicio) fd.append("sacarDeServicio", "1");
     if (archivosServicio) {
       Array.from(archivosServicio).forEach((f, i) =>
@@ -491,7 +516,9 @@ function FlotaInner() {
     if (!res.ok) setErr(data.error ?? "Error");
     else {
       setMsg(data.mensaje);
-      setDescServicio("");
+      setRepuestos([]);
+      setRepuestoInput("");
+      setObsServicio("");
       setCosto(0);
       setArchivosServicio(null);
       await cargar();
@@ -521,6 +548,20 @@ function FlotaInner() {
   async function salidaViaje() {
     setErr("");
     setMsg("");
+    const placa = placaSalida.trim().toUpperCase();
+    if (placa) {
+      const veh = vehiculos.find(
+        (v) =>
+          v.placa.toUpperCase().replace(/[\s-]/g, "") ===
+          placa.replace(/[\s-]/g, ""),
+      );
+      if (veh?.en_taller) {
+        setErr(
+          `${veh.placa} está en taller. No se puede enviar a ruta hasta que salga de servicio.`,
+        );
+        return;
+      }
+    }
     const res = await fetch(`/api/empresas/${slug}/flota/viajes`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1114,8 +1155,9 @@ function FlotaInner() {
           {can("flota_servicios", "crear") ? (
             <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
               <p className="text-xs text-[var(--muted)]">
-                Al sacar la unidad del servicio / taller puedes adjuntar facturas
-                (PDF o imagen).
+                No se puede registrar servicio si la unidad está en ruta. Escribe
+                cada repuesto y pulsa Enter para agregarlo. Adjunta facturas PDF
+                o imagen.
               </p>
               <div className="flex flex-wrap gap-2">
                 <select
@@ -1123,15 +1165,19 @@ function FlotaInner() {
                   value={vehiculoId}
                   onChange={(e) => setVehiculoId(Number(e.target.value))}
                 >
-                  {activos.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.placa}
-                      {v.en_taller ? " · EN TALLER" : ""}
-                      {v.filtro_servicio_mayor
-                        ? ` · may:${v.filtro_servicio_mayor}`
-                        : ""}
-                    </option>
-                  ))}
+                  {activos.map((v) => {
+                    const ruta = abiertos.some((a) => a.vehiculo_id === v.id);
+                    return (
+                      <option key={v.id} value={v.id} disabled={ruta}>
+                        {v.placa}
+                        {ruta ? " · EN RUTA" : ""}
+                        {v.en_taller ? " · EN TALLER" : ""}
+                        {v.filtro_servicio_mayor
+                          ? ` · may:${v.filtro_servicio_mayor}`
+                          : ""}
+                      </option>
+                    );
+                  })}
                 </select>
                 <select
                   className={input}
@@ -1156,13 +1202,72 @@ function FlotaInner() {
                   value={costo || ""}
                   onChange={(e) => setCosto(Number(e.target.value))}
                 />
-                <input
-                  className={`${input} min-w-[160px]`}
-                  placeholder="Detalle / filtros usados"
-                  value={descServicio}
-                  onChange={(e) => setDescServicio(e.target.value)}
-                />
               </div>
+
+              <div>
+                <label className="text-xs text-[var(--muted)]">
+                  Repuestos utilizados (Enter para agregar)
+                  <div className="mt-1 flex gap-2">
+                    <input
+                      className={`${input} min-w-[220px] flex-1`}
+                      placeholder="Ej. Filtro de aceite"
+                      value={repuestoInput}
+                      onChange={(e) => setRepuestoInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          agregarRepuesto();
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="rounded bg-[#334155] px-3 py-1.5 text-xs text-white"
+                      onClick={() => agregarRepuesto()}
+                    >
+                      Agregar
+                    </button>
+                  </div>
+                </label>
+                {repuestos.length ? (
+                  <ul className="mt-2 flex flex-wrap gap-2">
+                    {repuestos.map((r) => (
+                      <li
+                        key={r}
+                        className="flex items-center gap-1 rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1 text-xs"
+                      >
+                        {r}
+                        <button
+                          type="button"
+                          className="text-red-300"
+                          aria-label={`Quitar ${r}`}
+                          onClick={() =>
+                            setRepuestos((prev) => prev.filter((x) => x !== r))
+                          }
+                        >
+                          ×
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-1 text-[11px] text-[var(--muted)]">
+                    Sin repuestos aún.
+                  </p>
+                )}
+              </div>
+
+              <label className="block text-xs text-[var(--muted)]">
+                Observaciones
+                <textarea
+                  className={`${input} mt-1 w-full`}
+                  rows={2}
+                  placeholder="Notas del servicio, hallazgos, recomendaciones…"
+                  value={obsServicio}
+                  onChange={(e) => setObsServicio(e.target.value)}
+                />
+              </label>
+
               <div className="flex flex-wrap items-center gap-3">
                 <label className="flex items-center gap-2 text-xs text-[var(--muted)]">
                   <input
@@ -1217,6 +1322,8 @@ function FlotaInner() {
                   <th className="px-3 py-2">Tipo</th>
                   <th className="px-3 py-2">Km</th>
                   <th className="px-3 py-2">Costo</th>
+                  <th className="px-3 py-2">Repuestos</th>
+                  <th className="px-3 py-2">Obs.</th>
                   <th className="px-3 py-2">Facturas</th>
                 </tr>
               </thead>
@@ -1233,6 +1340,14 @@ function FlotaInner() {
                     </td>
                     <td className="px-3 py-2">
                       Q{Number(s.costo).toFixed(2)}
+                    </td>
+                    <td className="max-w-[180px] px-3 py-2 text-xs text-[var(--muted)]">
+                      {(s.repuestos ?? []).length
+                        ? s.repuestos!.join(", ")
+                        : (s.descripcion ?? "—")}
+                    </td>
+                    <td className="max-w-[140px] truncate px-3 py-2 text-xs text-[var(--muted)]">
+                      {s.observaciones ?? "—"}
                     </td>
                     <td className="px-3 py-2">
                       {(s.adjuntos ?? 0) > 0 ? (

@@ -138,6 +138,16 @@ export async function asegurarSchemaFlota(): Promise<void> {
     "motivo_taller",
     "motivo_taller VARCHAR(300) NULL",
   );
+  await ensureColumn(
+    "flota_servicios",
+    "repuestos",
+    "repuestos TEXT NULL",
+  );
+  await ensureColumn(
+    "flota_servicios",
+    "observaciones",
+    "observaciones TEXT NULL",
+  );
 
   await execute(`
     CREATE TABLE IF NOT EXISTS flota_viajes (

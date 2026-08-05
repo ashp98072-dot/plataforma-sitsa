@@ -215,6 +215,22 @@ export async function PATCH(req: Request, ctx: Ctx) {
     );
   }
 
+  if (d.enTaller === true) {
+    const enRuta = await query<RowDataPacket[]>(
+      `SELECT id, piloto_nombre FROM flota_viajes
+       WHERE empresa_id = ? AND vehiculo_id = ? AND estado = 'abierto' LIMIT 1`,
+      [guard.empresa.id, d.id],
+    );
+    if (enRuta[0]) {
+      return NextResponse.json(
+        {
+          error: `${cur[0].placa} está en ruta con ${enRuta[0].piloto_nombre}. Cierra la llegada antes de enviarlo a taller.`,
+        },
+        { status: 409 },
+      );
+    }
+  }
+
   const enTaller =
     d.enTaller == null ? Number(cur[0].en_taller) : d.enTaller ? 1 : 0;
   const fechaTaller =

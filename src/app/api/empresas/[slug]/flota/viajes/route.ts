@@ -103,7 +103,7 @@ export async function POST(req: Request, ctx: Ctx) {
       veh = await vehiculoPorPlaca(guard.empresa.id, d.placa);
     } else if (d.vehiculoId) {
       const rows = await query<RowDataPacket[]>(
-        `SELECT id, placa, en_taller, km_actual, activo FROM flota_vehiculos
+        `SELECT id, placa, en_taller, km_actual, activo, estado FROM flota_vehiculos
          WHERE id = ? AND empresa_id = ? LIMIT 1`,
         [d.vehiculoId, guard.empresa.id],
       );
@@ -120,7 +120,21 @@ export async function POST(req: Request, ctx: Ctx) {
     }
     if (Number(veh.en_taller) === 1) {
       return NextResponse.json(
-        { error: `${veh.placa} está en taller.` },
+        {
+          error: `${veh.placa} está en taller. No se puede enviar a ruta hasta que salga de servicio.`,
+        },
+        { status: 400 },
+      );
+    }
+    // También bloquear si el estado textual indica taller
+    const estadoTxt = String(
+      (veh as { estado?: string }).estado ?? "",
+    ).toLowerCase();
+    if (estadoTxt.includes("taller")) {
+      return NextResponse.json(
+        {
+          error: `${veh.placa} está marcado en taller. No se puede registrar salida a ruta.`,
+        },
         { status: 400 },
       );
     }
