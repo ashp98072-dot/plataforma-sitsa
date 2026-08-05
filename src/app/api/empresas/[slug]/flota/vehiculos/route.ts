@@ -4,15 +4,14 @@ import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
 import { requireTenantFlota, requireTenantFlotaAny } from "@/lib/tenant";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
+import {
+  empresasAccesoVehiculo,
+  guardarAccesoVehiculo,
+  listarEmpresasActivasSimple,
+  listarVehiculosAccesibles,
+} from "@/lib/flota/acceso";
 
 type Ctx = { params: Promise<{ slug: string }> };
-
-const SELECT_COLS = `id, placa, marca, modelo, descripcion, color, tipo_combustible,
-  chasis, capacidad, credito, empresa_activo, nit, condicion_propiedad,
-  seguros, km_actual, km_intervalo_servicio, km_ultimo_servicio,
-  fecha_ultimo_servicio, en_taller, fecha_entrada_taller, motivo_taller,
-  estado, activo, notas, filtro_servicio_mayor, filtro_servicio_menor,
-  rin_llanta, medida_llanta, tipo_aceite`;
 
 export async function GET(_req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
@@ -35,24 +34,26 @@ export async function GET(_req: Request, ctx: Ctx) {
     /* ok */
   }
 
-  try {
-    const rows = await query<RowDataPacket[]>(
-      `SELECT ${SELECT_COLS}
-       FROM flota_vehiculos WHERE empresa_id = ?
-       ORDER BY activo DESC, placa`,
-      [guard.empresa.id],
-    );
-    return NextResponse.json({ vehiculos: rows });
-  } catch {
-    const rows = await query<RowDataPacket[]>(
-      `SELECT id, placa, marca, modelo, km_actual, km_intervalo_servicio,
-              km_ultimo_servicio, fecha_ultimo_servicio, en_taller,
-              fecha_entrada_taller, estado
-       FROM flota_vehiculos WHERE empresa_id = ? ORDER BY placa`,
-      [guard.empresa.id],
-    );
-    return NextResponse.json({ vehiculos: rows });
+  const rows = await listarVehiculosAccesibles(guard.empresa.id);
+  const vehiculos = [];
+  for (const r of rows) {
+    const acceso =
+      Number(r.empresa_id) === guard.empresa.id
+        ? await empresasAccesoVehiculo(Number(r.id))
+        : [];
+    vehiculos.push({
+      ...r,
+      compartido: Number(r.compartido ?? 0) === 1,
+      accesoEmpresaIds: acceso,
+      esDueno: Number(r.empresa_id) === guard.empresa.id,
+    });
   }
+  const empresas = await listarEmpresasActivasSimple();
+  return NextResponse.json({
+    vehiculos,
+    empresas,
+    empresaActualId: guard.empresa.id,
+  });
 }
 
 const schema = z.object({
@@ -181,6 +182,8 @@ const patchSchema = z.object({
   medidaLlanta: z.string().optional(),
   tipoAceite: z.string().optional(),
   tipoCombustible: z.string().optional(),
+  /** Empresas que pueden usar este vehículo (además de la dueña). */
+  accesoEmpresaIds: z.array(z.number().int().positive()).optional(),
 });
 
 export async function PATCH(req: Request, ctx: Ctx) {
@@ -298,6 +301,13 @@ export async function PATCH(req: Request, ctx: Ctx) {
         guard.empresa.id,
       ],
     );
+    if (d.accesoEmpresaIds) {
+      await guardarAccesoVehiculo(
+        d.id,
+        d.accesoEmpresaIds,
+        guard.empresa.id,
+      );
+    }
     return NextResponse.json({
       mensaje: d.enTaller === true
         ? "Vehículo enviado a taller."

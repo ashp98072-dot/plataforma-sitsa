@@ -3,13 +3,36 @@ import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
 import { requireTenantModulo } from "@/lib/tenant";
+import { asegurarSchemaFlota } from "@/lib/flota/schema";
+import { listarVehiculosAccesibles } from "@/lib/flota/acceso";
 
 type Ctx = { params: Promise<{ slug: string }> };
+
+async function auxiliaresDelPlan(planId: number): Promise<string[]> {
+  try {
+    const rows = await query<RowDataPacket[]>(
+      `SELECT per.nombre FROM tms_plan_auxiliares a
+       INNER JOIN tms_personal per ON per.id = a.personal_id
+       WHERE a.plan_id = ?
+       ORDER BY a.orden, a.id`,
+      [planId],
+    );
+    return rows.map((r) => String(r.nombre));
+  } catch {
+    return [];
+  }
+}
 
 export async function GET(_req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenantModulo(slug, "tms");
   if (guard.error) return guard.error;
+
+  try {
+    await asegurarSchemaFlota();
+  } catch {
+    /* ok */
+  }
 
   const rows = await query<RowDataPacket[]>(
     `SELECT p.id, p.codigo, p.fecha_plan, p.hora_carga, p.estado, p.tipo_traslado, p.notas,
@@ -25,7 +48,35 @@ export async function GET(_req: Request, ctx: Ctx) {
      LIMIT 200`,
     [guard.empresa.id],
   );
-  return NextResponse.json({ planes: rows });
+
+  const planes = [];
+  for (const r of rows) {
+    const extras = await auxiliaresDelPlan(Number(r.id));
+    const auxList =
+      extras.length > 0
+        ? extras
+        : r.auxiliar
+          ? [String(r.auxiliar)]
+          : [];
+    planes.push({
+      ...r,
+      auxiliares: auxList,
+      auxiliar: auxList.join(", ") || null,
+    });
+  }
+
+  // Placas de flota (propias + compartidas) para el formulario
+  let placasFlota: string[] = [];
+  try {
+    const vehs = await listarVehiculosAccesibles(guard.empresa.id);
+    placasFlota = vehs
+      .filter((v) => Number(v.activo ?? 1) !== 0)
+      .map((v) => String(v.placa));
+  } catch {
+    placasFlota = [];
+  }
+
+  return NextResponse.json({ planes, placasFlota });
 }
 
 const schema = z.object({
@@ -40,6 +91,7 @@ const schema = z.object({
   auxiliarNombre: z.string().optional(),
   pilotoEmpleadoId: z.number().int().positive().optional(),
   auxiliarEmpleadoId: z.number().int().positive().optional(),
+  auxiliarEmpleadoIds: z.array(z.number().int().positive()).max(8).optional(),
   lugarCarga: z.string().optional(),
   lugarDescarga: z.string().optional(),
 });
@@ -90,10 +142,35 @@ async function upsertLugar(
   return Number(r.insertId);
 }
 
+async function guardarAuxiliaresPlan(
+  planId: number,
+  personalIds: number[],
+): Promise<void> {
+  try {
+    await execute("DELETE FROM tms_plan_auxiliares WHERE plan_id = ?", [planId]);
+    let orden = 1;
+    for (const pid of personalIds.slice(0, 8)) {
+      await execute(
+        `INSERT INTO tms_plan_auxiliares (plan_id, personal_id, orden)
+         VALUES (?, ?, ?)`,
+        [planId, pid, orden++],
+      );
+    }
+  } catch {
+    /* tabla aún no existe */
+  }
+}
+
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenantModulo(slug, "tms", true);
   if (guard.error) return guard.error;
+
+  try {
+    await asegurarSchemaFlota();
+  } catch {
+    /* ok */
+  }
 
   const parsed = schema.safeParse(await req.json());
   if (!parsed.success) {
@@ -104,7 +181,6 @@ export async function POST(req: Request, ctx: Ctx) {
   let clienteId: number | null = null;
   let unidadId: number | null = null;
   let pilotoId: number | null = null;
-  let auxiliarId: number | null = null;
 
   if (d.clienteNombre?.trim()) {
     const found = await query<RowDataPacket[]>(
@@ -126,7 +202,7 @@ export async function POST(req: Request, ctx: Ctx) {
       `INSERT INTO tms_unidades (empresa_id, placa, tipo)
        VALUES (?, ?, 'Camion')
        ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)`,
-      [empresaId, d.placa.trim()],
+      [empresaId, d.placa.trim().toUpperCase()],
     );
     unidadId = Number(r.insertId);
   }
@@ -135,11 +211,6 @@ export async function POST(req: Request, ctx: Ctx) {
     d.pilotoEmpleadoId,
     "Piloto",
   );
-  auxiliarId = await personalDesdeEmpleado(
-    empresaId,
-    d.auxiliarEmpleadoId,
-    "Auxiliar",
-  );
   if (!pilotoId && d.pilotoNombre?.trim()) {
     const r = await execute(
       "INSERT INTO tms_personal (empresa_id, nombre, tipo) VALUES (?, ?, 'Piloto')",
@@ -147,16 +218,33 @@ export async function POST(req: Request, ctx: Ctx) {
     );
     pilotoId = Number(r.insertId);
   }
-  if (!auxiliarId && d.auxiliarNombre?.trim()) {
+
+  const auxIdsRaw =
+    d.auxiliarEmpleadoIds?.length
+      ? d.auxiliarEmpleadoIds
+      : d.auxiliarEmpleadoId
+        ? [d.auxiliarEmpleadoId]
+        : [];
+  const auxPersonalIds: number[] = [];
+  for (const eid of auxIdsRaw.slice(0, 8)) {
+    const pid = await personalDesdeEmpleado(empresaId, eid, "Auxiliar");
+    if (pid) auxPersonalIds.push(pid);
+  }
+  if (!auxPersonalIds.length && d.auxiliarNombre?.trim()) {
     const r = await execute(
       "INSERT INTO tms_personal (empresa_id, nombre, tipo) VALUES (?, ?, 'Auxiliar')",
       [empresaId, d.auxiliarNombre.trim()],
     );
-    auxiliarId = Number(r.insertId);
+    auxPersonalIds.push(Number(r.insertId));
   }
+  const auxiliarId = auxPersonalIds[0] ?? null;
 
   const lugarCargaId = await upsertLugar(empresaId, d.lugarCarga, "Carga");
-  const lugarDescargaId = await upsertLugar(empresaId, d.lugarDescarga, "Descarga");
+  const lugarDescargaId = await upsertLugar(
+    empresaId,
+    d.lugarDescarga,
+    "Descarga",
+  );
 
   const result = await execute(
     `INSERT INTO tms_planes_viaje
@@ -177,16 +265,34 @@ export async function POST(req: Request, ctx: Ctx) {
       d.notas ?? null,
     ],
   );
-  return NextResponse.json({ id: result.insertId, mensaje: "Plan creado." });
+  const planId = Number(result.insertId);
+  await guardarAuxiliaresPlan(planId, auxPersonalIds);
+
+  return NextResponse.json({
+    id: planId,
+    mensaje: `Plan creado${
+      auxPersonalIds.length > 1
+        ? ` con ${auxPersonalIds.length} auxiliares`
+        : ""
+    }.`,
+  });
 }
 
 const patchSchema = z.object({
   id: z.number().int().positive(),
   pilotoNombre: z.string().optional(),
   auxiliarNombre: z.string().optional(),
+  auxiliarEmpleadoIds: z.array(z.number().int().positive()).max(8).optional(),
   placa: z.string().optional(),
   estado: z
-    .enum(["Programado", "En ruta", "Cargado", "Descargado", "Cerrado", "Cancelado"])
+    .enum([
+      "Programado",
+      "En ruta",
+      "Cargado",
+      "Descargado",
+      "Cerrado",
+      "Cancelado",
+    ])
     .optional(),
   notas: z.string().optional(),
   horaCarga: z.string().optional(),
@@ -196,6 +302,12 @@ export async function PATCH(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenantModulo(slug, "tms", true);
   if (guard.error) return guard.error;
+
+  try {
+    await asegurarSchemaFlota();
+  } catch {
+    /* ok */
+  }
 
   const parsed = patchSchema.safeParse(await req.json());
   if (!parsed.success) {
@@ -223,19 +335,28 @@ export async function PATCH(req: Request, ctx: Ctx) {
     );
     pilotoId = Number(r.insertId);
   }
-  if (d.auxiliarNombre?.trim()) {
+  if (d.auxiliarEmpleadoIds) {
+    const ids: number[] = [];
+    for (const eid of d.auxiliarEmpleadoIds.slice(0, 8)) {
+      const pid = await personalDesdeEmpleado(empresaId, eid, "Auxiliar");
+      if (pid) ids.push(pid);
+    }
+    auxiliarId = ids[0];
+    await guardarAuxiliaresPlan(d.id, ids);
+  } else if (d.auxiliarNombre?.trim()) {
     const r = await execute(
       "INSERT INTO tms_personal (empresa_id, nombre, tipo) VALUES (?, ?, 'Auxiliar')",
       [empresaId, d.auxiliarNombre.trim()],
     );
     auxiliarId = Number(r.insertId);
+    await guardarAuxiliaresPlan(d.id, [auxiliarId]);
   }
   if (d.placa?.trim()) {
     const r = await execute(
       `INSERT INTO tms_unidades (empresa_id, placa, tipo)
        VALUES (?, ?, 'Camion')
        ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)`,
-      [empresaId, d.placa.trim()],
+      [empresaId, d.placa.trim().toUpperCase()],
     );
     unidadId = Number(r.insertId);
   }

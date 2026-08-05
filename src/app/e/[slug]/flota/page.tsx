@@ -43,6 +43,21 @@ type Vehiculo = {
   medida_llanta?: string | null;
   tipo_aceite?: string | null;
   tipo_combustible?: string | null;
+  compartido?: boolean;
+  esDueno?: boolean;
+  accesoEmpresaIds?: number[];
+  empresa_duena_codigo?: string | null;
+};
+
+type EmpresaOpt = { id: number; codigo: string; nombre: string; slug: string };
+
+type PlanSalida = {
+  id: number;
+  codigo: string;
+  placa: string | null;
+  piloto: string | null;
+  cliente: string | null;
+  auxiliares: string[];
 };
 
 type Lectura = {
@@ -174,6 +189,11 @@ function FlotaInner() {
     new Date().toISOString().slice(0, 10),
   );
   const [editServicioId, setEditServicioId] = useState<number | null>(null);
+  const [accesoEmpresaIds, setAccesoEmpresaIds] = useState<number[]>([]);
+  const [empresasFlota, setEmpresasFlota] = useState<EmpresaOpt[]>([]);
+  const [empresaActualId, setEmpresaActualId] = useState(0);
+  const [planesSalida, setPlanesSalida] = useState<PlanSalida[]>([]);
+  const [planIdSalida, setPlanIdSalida] = useState(0);
   const [pilotoNombre, setPilotoNombre] = useState("");
   const [placaSalida, setPlacaSalida] = useState("");
   const [destino, setDestino] = useState("");
@@ -316,6 +336,8 @@ function FlotaInner() {
       const data = await res.json();
       const list = (data.vehiculos ?? []) as Vehiculo[];
       setVehiculos(list);
+      setEmpresasFlota(data.empresas ?? []);
+      setEmpresaActualId(Number(data.empresaActualId ?? 0));
       if (list[0] && !vehiculoId) setVehiculoId(Number(list[0].id));
     }
     if (rep.ok) {
@@ -374,7 +396,12 @@ function FlotaInner() {
   }
 
   function empezarEdicion(v: Vehiculo) {
+    if (v.esDueno === false) {
+      setErr("Este vehículo es compartido; solo la empresa dueña puede editarlo.");
+      return;
+    }
     setEditId(v.id);
+    setAccesoEmpresaIds(v.accesoEmpresaIds ?? []);
     setForm({
       placa: v.placa,
       marca: v.marca ?? "",
@@ -412,6 +439,7 @@ function FlotaInner() {
       medidaLlanta: form.medidaLlanta,
       tipoAceite: form.tipoAceite,
       notas: form.notas,
+      accesoEmpresaIds: editId ? accesoEmpresaIds : undefined,
     };
     const res = await fetch(`/api/empresas/${slug}/flota/vehiculos`, {
       method: editId ? "PATCH" : "POST",
@@ -426,7 +454,28 @@ function FlotaInner() {
     setMsg(data.mensaje);
     setForm(emptyForm);
     setEditId(null);
+    setAccesoEmpresaIds([]);
     await cargar();
+  }
+
+  async function buscarPlanesSalida() {
+    if (!pilotoNombre.trim() && !placaSalida.trim()) {
+      setPlanesSalida([]);
+      setPlanIdSalida(0);
+      return;
+    }
+    const params = new URLSearchParams();
+    if (pilotoNombre.trim()) params.set("piloto", pilotoNombre.trim());
+    if (placaSalida.trim()) params.set("placa", placaSalida.trim());
+    const res = await fetch(
+      `/api/empresas/${slug}/flota/planes-salida?${params}`,
+    );
+    const data = await res.json();
+    if (!res.ok) return;
+    const list = (data.planes ?? []) as PlanSalida[];
+    setPlanesSalida(list);
+    if (data.sugerido?.id) setPlanIdSalida(Number(data.sugerido.id));
+    else if (list.length === 1) setPlanIdSalida(list[0].id);
   }
 
   async function confirmarTaller() {
@@ -675,6 +724,10 @@ function FlotaInner() {
         return;
       }
     }
+    if (planesSalida.length > 1 && !planIdSalida) {
+      setErr("Hay varios planes TMS. Selecciona el plan correcto.");
+      return;
+    }
     const res = await fetch(`/api/empresas/${slug}/flota/viajes`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -687,6 +740,7 @@ function FlotaInner() {
         destino: destino || undefined,
         esExterno: esExterno || undefined,
         motivoExterno: esExterno ? motivoExterno || undefined : undefined,
+        planId: planIdSalida || undefined,
       }),
     });
     const data = await res.json();
@@ -712,6 +766,8 @@ function FlotaInner() {
       setMotivoExterno("");
       setEsExterno(false);
       setVerifPiloto(null);
+      setPlanesSalida([]);
+      setPlanIdSalida(0);
       setModoPiloto("llegada");
       await cargar();
     }
@@ -1174,6 +1230,36 @@ function FlotaInner() {
                   }
                 />
               </label>
+              {editId ? (
+                <div className="rounded border border-[var(--border)] p-3">
+                  <p className="mb-2 text-xs text-[var(--muted)]">
+                    Empresas que pueden usar esta unidad (además de la dueña)
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {empresasFlota
+                      .filter((e) => e.id !== empresaActualId)
+                      .map((e) => (
+                        <label
+                          key={e.id}
+                          className="flex items-center gap-1 rounded border border-[var(--border)] px-2 py-1 text-xs"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={accesoEmpresaIds.includes(e.id)}
+                            onChange={() =>
+                              setAccesoEmpresaIds((prev) =>
+                                prev.includes(e.id)
+                                  ? prev.filter((x) => x !== e.id)
+                                  : [...prev, e.id],
+                              )
+                            }
+                          />
+                          {e.codigo}
+                        </label>
+                      ))}
+                  </div>
+                </div>
+              ) : null}
               <button className="rounded bg-[var(--accent)] px-4 py-2 text-sm text-white">
                 {editId ? "Guardar cambios" : "Registrar vehículo"}
               </button>
@@ -1197,7 +1283,17 @@ function FlotaInner() {
               <tbody>
                 {vehiculosFiltrados.map((v) => (
                   <tr key={v.id} className="border-t border-[var(--border)]">
-                    <td className="px-3 py-2 font-mono">{v.placa}</td>
+                    <td className="px-3 py-2 font-mono">
+                      {v.placa}
+                      {v.compartido ? (
+                        <span className="ml-1 text-[10px] text-amber-300">
+                          compartida
+                          {v.empresa_duena_codigo
+                            ? ` (${v.empresa_duena_codigo})`
+                            : ""}
+                        </span>
+                      ) : null}
+                    </td>
                     <td className="px-3 py-2">{v.descripcion ?? "—"}</td>
                     <td className="px-3 py-2">
                       {v.marca} {v.modelo}
@@ -1822,6 +1918,7 @@ function FlotaInner() {
                           setPilotoNombre(e.target.value);
                           setVerifPiloto(null);
                         }}
+                        onBlur={() => void buscarPlanesSalida()}
                         placeholder="Ej. Walter López"
                       />
                       <button
@@ -1839,6 +1936,7 @@ function FlotaInner() {
                       className={`${input} mt-1 w-full font-mono uppercase`}
                       value={placaSalida}
                       onChange={(e) => setPlacaSalida(e.target.value)}
+                      onBlur={() => void buscarPlanesSalida()}
                       placeholder="Ej. C-015BNG"
                       list="placas-flota"
                     />
@@ -1846,7 +1944,11 @@ function FlotaInner() {
                       {activos
                         .filter((v) => !v.en_taller)
                         .map((v) => (
-                          <option key={v.id} value={v.placa} />
+                          <option key={v.id} value={v.placa}>
+                            {v.compartido
+                              ? `${v.placa} (compartida ${v.empresa_duena_codigo ?? ""})`
+                              : v.placa}
+                          </option>
                         ))}
                     </datalist>
                   </label>
@@ -1869,6 +1971,60 @@ function FlotaInner() {
                     />
                   </label>
                 </div>
+
+                {planesSalida.length ? (
+                  <div className="rounded-lg border border-sky-800/50 bg-sky-950/30 p-3">
+                    <label className="block text-xs text-sky-200">
+                      Plan TMS detectado
+                      <select
+                        className={`${input} mt-1 w-full`}
+                        value={planIdSalida}
+                        onChange={(e) => {
+                          const id = Number(e.target.value);
+                          setPlanIdSalida(id);
+                          const p = planesSalida.find((x) => x.id === id);
+                          if (p?.cliente && !destino.trim()) {
+                            setDestino(p.cliente);
+                          }
+                          if (p?.placa && !placaSalida.trim()) {
+                            setPlacaSalida(p.placa);
+                          }
+                        }}
+                      >
+                        {planesSalida.length > 1 ? (
+                          <option value={0}>Selecciona plan…</option>
+                        ) : null}
+                        {planesSalida.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.codigo}
+                            {p.cliente ? ` · ${p.cliente}` : ""}
+                            {p.placa ? ` · ${p.placa}` : ""}
+                            {p.auxiliares?.length
+                              ? ` · aux: ${p.auxiliares.length}`
+                              : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {planIdSalida
+                      ? (() => {
+                          const p = planesSalida.find(
+                            (x) => x.id === planIdSalida,
+                          );
+                          return p?.auxiliares?.length ? (
+                            <p className="mt-1 text-[11px] text-[var(--muted)]">
+                              Auxiliares: {p.auxiliares.join(", ")}
+                            </p>
+                          ) : null;
+                        })()
+                      : null}
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-[var(--muted)]">
+                    Si Operaciones tiene un plan hoy con este piloto/placa, se
+                    detectará al salir del campo.
+                  </p>
+                )}
 
                 {verifPiloto ? (
                   <p

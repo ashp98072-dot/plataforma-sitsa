@@ -13,12 +13,14 @@ type Plan = {
   placa: string | null;
   piloto: string | null;
   auxiliar: string | null;
+  auxiliares?: string[];
   evidencias: number;
 };
 
 export default function TmsPage() {
   const slug = String(useParams().slug);
   const [planes, setPlanes] = useState<Plan[]>([]);
+  const [placasFlota, setPlacasFlota] = useState<string[]>([]);
   const [selected, setSelected] = useState<number | null>(null);
   type EmpOps = { id: number; codigo: string; nombre: string; categoriaOps: string };
   const [form, setForm] = useState({
@@ -28,7 +30,7 @@ export default function TmsPage() {
     clienteNombre: "",
     placa: "",
     pilotoEmpleadoId: 0,
-    auxiliarEmpleadoId: 0,
+    auxiliarEmpleadoIds: [] as number[],
     tipoTraslado: "",
     lugarCarga: "",
     lugarDescarga: "",
@@ -61,7 +63,10 @@ export default function TmsPage() {
     const c = await cat.json();
     const p = await pil.json();
     const a = await aux.json();
-    if (res.ok) setPlanes(data.planes ?? []);
+    if (res.ok) {
+      setPlanes(data.planes ?? []);
+      setPlacasFlota(data.placasFlota ?? []);
+    }
     if (cat.ok) {
       setCounts({
         clientes: (c.clientes ?? []).length,
@@ -78,6 +83,20 @@ export default function TmsPage() {
     void cargar();
   }, [cargar]);
 
+  function toggleAux(id: number) {
+    setForm((f) => {
+      const has = f.auxiliarEmpleadoIds.includes(id);
+      if (has) {
+        return {
+          ...f,
+          auxiliarEmpleadoIds: f.auxiliarEmpleadoIds.filter((x) => x !== id),
+        };
+      }
+      if (f.auxiliarEmpleadoIds.length >= 8) return f;
+      return { ...f, auxiliarEmpleadoIds: [...f.auxiliarEmpleadoIds, id] };
+    });
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     const res = await fetch(`/api/empresas/${slug}/tms/planes`, {
@@ -86,12 +105,23 @@ export default function TmsPage() {
       body: JSON.stringify({
         ...form,
         pilotoEmpleadoId: form.pilotoEmpleadoId || undefined,
-        auxiliarEmpleadoId: form.auxiliarEmpleadoId || undefined,
+        auxiliarEmpleadoIds: form.auxiliarEmpleadoIds.length
+          ? form.auxiliarEmpleadoIds
+          : undefined,
       }),
     });
     const data = await res.json();
     setMsg(data.mensaje || data.error);
-    if (res.ok) await cargar();
+    if (res.ok) {
+      setForm((f) => ({
+        ...f,
+        codigo: "",
+        auxiliarEmpleadoIds: [],
+        placa: "",
+        clienteNombre: "",
+      }));
+      await cargar();
+    }
   }
 
   async function actualizarPlan() {
@@ -111,11 +141,11 @@ export default function TmsPage() {
       setMsg("Selecciona un plan.");
       return;
     }
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "image/*";
-    input.onchange = async () => {
-      const file = input.files?.[0];
+    const inputEl = document.createElement("input");
+    inputEl.type = "file";
+    inputEl.accept = "image/*";
+    inputEl.onchange = async () => {
+      const file = inputEl.files?.[0];
       if (!file) return;
       let latitud: number | undefined;
       let longitud: number | undefined;
@@ -144,7 +174,7 @@ export default function TmsPage() {
       setMsg(data.mensaje || data.error);
       if (res.ok) await cargar();
     };
-    input.click();
+    inputEl.click();
   }
 
   const input =
@@ -155,15 +185,16 @@ export default function TmsPage() {
       <div>
         <h1 className="text-2xl font-semibold">TMS / Logística</h1>
         <p className="text-sm text-[var(--muted)]">
-          Planes de viaje. Pilotos y auxiliares salen del personal RRHH
-          (categoría operativa). Evidencias con foto + geo.
+          Planes de viaje. Puedes asignar hasta 8 auxiliares. Las placas salen
+          de Flota / Predios (propias y compartidas). Al registrar salida el
+          piloto se enlaza al plan.
         </p>
       </div>
 
       <div className="grid gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 text-sm sm:grid-cols-4">
         <p>Clientes: {counts.clientes}</p>
         <p>Lugares: {counts.lugares}</p>
-        <p>Unidades: {counts.unidades}</p>
+        <p>Unidades flota: {placasFlota.length || counts.unidades}</p>
         <p>
           RRHH ops: {pilotos.length} pilotos / {auxiliares.length} aux
         </p>
@@ -195,11 +226,46 @@ export default function TmsPage() {
         onSubmit={onSubmit}
         className="grid gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 md:grid-cols-3"
       >
-        <input className={input} placeholder="Código plan" value={form.codigo} onChange={(e) => setForm({ ...form, codigo: e.target.value })} required />
-        <input type="date" className={input} value={form.fechaPlan} onChange={(e) => setForm({ ...form, fechaPlan: e.target.value })} />
-        <input className={input} placeholder="Hora carga" value={form.horaCarga} onChange={(e) => setForm({ ...form, horaCarga: e.target.value })} />
-        <input className={input} placeholder="Cliente" value={form.clienteNombre} onChange={(e) => setForm({ ...form, clienteNombre: e.target.value })} />
-        <input className={input} placeholder="Placa unidad" value={form.placa} onChange={(e) => setForm({ ...form, placa: e.target.value })} />
+        <input
+          className={input}
+          placeholder="Código plan"
+          value={form.codigo}
+          onChange={(e) => setForm({ ...form, codigo: e.target.value })}
+          required
+        />
+        <input
+          type="date"
+          className={input}
+          value={form.fechaPlan}
+          onChange={(e) => setForm({ ...form, fechaPlan: e.target.value })}
+        />
+        <input
+          className={input}
+          placeholder="Hora carga"
+          value={form.horaCarga}
+          onChange={(e) => setForm({ ...form, horaCarga: e.target.value })}
+        />
+        <input
+          className={input}
+          placeholder="Cliente"
+          value={form.clienteNombre}
+          onChange={(e) => setForm({ ...form, clienteNombre: e.target.value })}
+        />
+        <label className="text-xs text-[var(--muted)] md:col-span-1">
+          Placa (flota)
+          <input
+            className={`${input} mt-1 w-full font-mono uppercase`}
+            placeholder="Ej. C-015BNG"
+            value={form.placa}
+            list="placas-tms-flota"
+            onChange={(e) => setForm({ ...form, placa: e.target.value })}
+          />
+          <datalist id="placas-tms-flota">
+            {placasFlota.map((p) => (
+              <option key={p} value={p} />
+            ))}
+          </datalist>
+        </label>
         <select
           className={input}
           value={form.pilotoEmpleadoId}
@@ -214,24 +280,64 @@ export default function TmsPage() {
             </option>
           ))}
         </select>
-        <select
+
+        <div className="md:col-span-3 rounded border border-[var(--border)] p-3">
+          <p className="mb-2 text-xs text-[var(--muted)]">
+            Auxiliares RRHH (máx. 8) — {form.auxiliarEmpleadoIds.length}/8
+          </p>
+          <div className="flex max-h-36 flex-wrap gap-2 overflow-y-auto">
+            {auxiliares.map((p) => {
+              const on = form.auxiliarEmpleadoIds.includes(p.id);
+              return (
+                <label
+                  key={p.id}
+                  className={[
+                    "flex cursor-pointer items-center gap-1 rounded border px-2 py-1 text-xs",
+                    on
+                      ? "border-sky-500 bg-sky-950/40"
+                      : "border-[var(--border)]",
+                  ].join(" ")}
+                >
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    disabled={!on && form.auxiliarEmpleadoIds.length >= 8}
+                    onChange={() => toggleAux(p.id)}
+                  />
+                  {p.nombre}
+                </label>
+              );
+            })}
+            {!auxiliares.length ? (
+              <span className="text-xs text-[var(--muted)]">
+                Sin auxiliares en RRHH ops. Márcalos en Empleados (categoría
+                Auxiliar).
+              </span>
+            ) : null}
+          </div>
+        </div>
+
+        <input
           className={input}
-          value={form.auxiliarEmpleadoId}
-          onChange={(e) =>
-            setForm({ ...form, auxiliarEmpleadoId: Number(e.target.value) || 0 })
-          }
-        >
-          <option value={0}>Auxiliar (RRHH)…</option>
-          {auxiliares.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.nombre} ({p.codigo})
-            </option>
-          ))}
-        </select>
-        <input className={input} placeholder="Lugar carga" value={form.lugarCarga} onChange={(e) => setForm({ ...form, lugarCarga: e.target.value })} />
-        <input className={input} placeholder="Lugar descarga" value={form.lugarDescarga} onChange={(e) => setForm({ ...form, lugarDescarga: e.target.value })} />
-        <input className={input} placeholder="Tipo traslado" value={form.tipoTraslado} onChange={(e) => setForm({ ...form, tipoTraslado: e.target.value })} />
-        <button className="rounded bg-[var(--accent)] px-3 py-1 text-sm text-white">Crear plan</button>
+          placeholder="Lugar carga"
+          value={form.lugarCarga}
+          onChange={(e) => setForm({ ...form, lugarCarga: e.target.value })}
+        />
+        <input
+          className={input}
+          placeholder="Lugar descarga"
+          value={form.lugarDescarga}
+          onChange={(e) => setForm({ ...form, lugarDescarga: e.target.value })}
+        />
+        <input
+          className={input}
+          placeholder="Tipo traslado"
+          value={form.tipoTraslado}
+          onChange={(e) => setForm({ ...form, tipoTraslado: e.target.value })}
+        />
+        <button className="rounded bg-[var(--accent)] px-3 py-1 text-sm text-white">
+          Crear plan
+        </button>
       </form>
 
       {selected ? (
@@ -239,21 +345,61 @@ export default function TmsPage() {
           <p className="md:col-span-4 text-sm text-[var(--muted)]">
             Editando plan #{selected} (cambio mismo día)
           </p>
-          <input className={input} placeholder="Nuevo piloto" value={edit.pilotoNombre} onChange={(e) => setEdit({ ...edit, pilotoNombre: e.target.value })} />
-          <input className={input} placeholder="Nuevo auxiliar" value={edit.auxiliarNombre} onChange={(e) => setEdit({ ...edit, auxiliarNombre: e.target.value })} />
-          <input className={input} placeholder="Nueva placa" value={edit.placa} onChange={(e) => setEdit({ ...edit, placa: e.target.value })} />
-          <select className={input} value={edit.estado} onChange={(e) => setEdit({ ...edit, estado: e.target.value })}>
-            {["Programado", "En ruta", "Cargado", "Descargado", "Cerrado", "Cancelado"].map((s) => (
+          <input
+            className={input}
+            placeholder="Nuevo piloto"
+            value={edit.pilotoNombre}
+            onChange={(e) => setEdit({ ...edit, pilotoNombre: e.target.value })}
+          />
+          <input
+            className={input}
+            placeholder="Nuevo auxiliar (texto)"
+            value={edit.auxiliarNombre}
+            onChange={(e) =>
+              setEdit({ ...edit, auxiliarNombre: e.target.value })
+            }
+          />
+          <input
+            className={input}
+            placeholder="Nueva placa"
+            value={edit.placa}
+            onChange={(e) => setEdit({ ...edit, placa: e.target.value })}
+          />
+          <select
+            className={input}
+            value={edit.estado}
+            onChange={(e) => setEdit({ ...edit, estado: e.target.value })}
+          >
+            {[
+              "Programado",
+              "En ruta",
+              "Cargado",
+              "Descargado",
+              "Cerrado",
+              "Cancelado",
+            ].map((s) => (
               <option key={s}>{s}</option>
             ))}
           </select>
-          <button type="button" onClick={() => void actualizarPlan()} className="rounded bg-[#1F6AA5] px-3 py-1 text-sm">
+          <button
+            type="button"
+            onClick={() => void actualizarPlan()}
+            className="rounded bg-[#1F6AA5] px-3 py-1 text-sm"
+          >
             Guardar cambios
           </button>
-          <button type="button" onClick={() => void subirEvidencia("Carga")} className="rounded bg-[#0d9488] px-3 py-1 text-sm">
+          <button
+            type="button"
+            onClick={() => void subirEvidencia("Carga")}
+            className="rounded bg-[#0d9488] px-3 py-1 text-sm"
+          >
             Evidencia carga
           </button>
-          <button type="button" onClick={() => void subirEvidencia("Descarga")} className="rounded bg-[#0f766e] px-3 py-1 text-sm">
+          <button
+            type="button"
+            onClick={() => void subirEvidencia("Descarga")}
+            className="rounded bg-[#0f766e] px-3 py-1 text-sm"
+          >
             Evidencia descarga
           </button>
         </div>
@@ -270,7 +416,7 @@ export default function TmsPage() {
               <th className="px-3 py-2">Cliente</th>
               <th className="px-3 py-2">Placa</th>
               <th className="px-3 py-2">Piloto</th>
-              <th className="px-3 py-2">Auxiliar</th>
+              <th className="px-3 py-2">Auxiliares</th>
               <th className="px-3 py-2">Estado</th>
               <th className="px-3 py-2">Evid.</th>
             </tr>
@@ -286,11 +432,17 @@ export default function TmsPage() {
                 onClick={() => setSelected(p.id)}
               >
                 <td className="px-3 py-2">{p.codigo}</td>
-                <td className="px-3 py-2">{String(p.fecha_plan).slice(0, 10)}</td>
+                <td className="px-3 py-2">
+                  {String(p.fecha_plan).slice(0, 10)}
+                </td>
                 <td className="px-3 py-2">{p.cliente ?? "—"}</td>
                 <td className="px-3 py-2">{p.placa ?? "—"}</td>
                 <td className="px-3 py-2">{p.piloto ?? "—"}</td>
-                <td className="px-3 py-2">{p.auxiliar ?? "—"}</td>
+                <td className="max-w-[200px] px-3 py-2 text-xs">
+                  {(p.auxiliares ?? []).length
+                    ? p.auxiliares!.join(", ")
+                    : (p.auxiliar ?? "—")}
+                </td>
                 <td className="px-3 py-2">{p.estado}</td>
                 <td className="px-3 py-2">{Number(p.evidencias ?? 0)}</td>
               </tr>

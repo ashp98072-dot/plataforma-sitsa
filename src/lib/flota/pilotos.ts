@@ -64,16 +64,40 @@ export async function vehiculoPorPlaca(
 ): Promise<RowDataPacket | null> {
   const placa = placaRaw.trim().toUpperCase().replace(/\s+/g, "-");
   const placaAlt = placaRaw.trim().toUpperCase().replace(/[\s-]+/g, "");
-  const rows = await query<RowDataPacket[]>(
-    `SELECT id, placa, en_taller, km_actual, activo, estado FROM flota_vehiculos
-     WHERE empresa_id = ?
-       AND (
-         UPPER(REPLACE(placa,' ','')) = ?
-         OR UPPER(placa) = ?
-         OR UPPER(REPLACE(placa,'-','')) = ?
-       )
-     LIMIT 1`,
-    [empresaId, placaAlt, placa, placaAlt],
-  );
-  return rows[0] ?? null;
+  const matchPlaca = `(
+    UPPER(REPLACE(v.placa,' ','')) = ?
+    OR UPPER(v.placa) = ?
+    OR UPPER(REPLACE(v.placa,'-','')) = ?
+  )`;
+  try {
+    const rows = await query<RowDataPacket[]>(
+      `SELECT v.id, v.placa, v.en_taller, v.km_actual, v.activo, v.estado, v.empresa_id
+       FROM flota_vehiculos v
+       WHERE ${matchPlaca}
+         AND (
+           v.empresa_id = ?
+           OR EXISTS (
+             SELECT 1 FROM flota_vehiculo_acceso a
+             WHERE a.vehiculo_id = v.id AND a.empresa_id = ?
+           )
+         )
+       LIMIT 1`,
+      [placaAlt, placa, placaAlt, empresaId, empresaId],
+    );
+    return rows[0] ?? null;
+  } catch {
+    const rows = await query<RowDataPacket[]>(
+      `SELECT id, placa, en_taller, km_actual, activo, estado, empresa_id
+       FROM flota_vehiculos
+       WHERE empresa_id = ?
+         AND (
+           UPPER(REPLACE(placa,' ','')) = ?
+           OR UPPER(placa) = ?
+           OR UPPER(REPLACE(placa,'-','')) = ?
+         )
+       LIMIT 1`,
+      [empresaId, placaAlt, placa, placaAlt],
+    );
+    return rows[0] ?? null;
+  }
 }

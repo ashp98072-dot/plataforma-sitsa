@@ -232,4 +232,32 @@ export async function asegurarSchemaFlota(): Promise<void> {
       INDEX idx_fsa_emp (empresa_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
+
+  // Qué empresas pueden usar un vehículo (además de la dueña)
+  await execute(`
+    CREATE TABLE IF NOT EXISTS flota_vehiculo_acceso (
+      vehiculo_id INT NOT NULL,
+      empresa_id INT NOT NULL,
+      PRIMARY KEY (vehiculo_id, empresa_id),
+      INDEX idx_fva_emp (empresa_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await ensureColumn(
+    "flota_viajes",
+    "plan_id",
+    "plan_id INT NULL",
+  );
+
+  // Varios auxiliares por plan TMS
+  await execute(`
+    CREATE TABLE IF NOT EXISTS tms_plan_auxiliares (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      plan_id INT NOT NULL,
+      personal_id INT NOT NULL,
+      orden TINYINT NOT NULL DEFAULT 1,
+      UNIQUE KEY uq_tpa (plan_id, personal_id),
+      INDEX idx_tpa_plan (plan_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
 }

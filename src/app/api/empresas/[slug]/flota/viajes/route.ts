@@ -10,6 +10,10 @@ import {
   normalizarNombrePiloto,
   vehiculoPorPlaca,
 } from "@/lib/flota/pilotos";
+import {
+  buscarPlanesParaSalida,
+  marcarPlanEnRuta,
+} from "@/lib/tms/planes-salida";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -62,6 +66,7 @@ const salidaSchema = z.object({
   esExterno: z.boolean().optional(),
   motivoExterno: z.string().optional(),
   permisoExternoId: z.number().int().positive().optional(),
+  planId: z.number().int().positive().optional(),
 });
 
 const llegadaSchema = z.object({
@@ -277,11 +282,43 @@ export async function POST(req: Request, ctx: Ctx) {
       esExterno = true;
     }
 
+    // Detectar plan TMS del día (piloto / placa)
+    const planesMatch = await buscarPlanesParaSalida(guard.empresa.id, {
+      pilotoNombre: nombre,
+      placa: String(veh.placa),
+    });
+    let planId: number | null = d.planId ?? null;
+    if (planId) {
+      const ok = planesMatch.find((p) => p.id === planId);
+      if (!ok) {
+        // Validar que el plan exista aunque no coincida filtro
+        const check = await query<RowDataPacket[]>(
+          `SELECT id FROM tms_planes_viaje
+           WHERE id = ? AND empresa_id = ?
+             AND estado IN ('Programado','En ruta') LIMIT 1`,
+          [planId, guard.empresa.id],
+        );
+        if (!check[0]) {
+          return NextResponse.json(
+            { error: "Plan TMS no válido o no está programado." },
+            { status: 400 },
+          );
+        }
+      }
+    } else if (planesMatch.length === 1) {
+      planId = planesMatch[0].id;
+    }
+
+    const destinoFinal =
+      d.destino?.trim() ||
+      planesMatch.find((p) => p.id === planId)?.cliente ||
+      null;
+
     const r = await execute(
       `INSERT INTO flota_viajes
         (empresa_id, vehiculo_id, piloto_nombre, piloto_nombre_norm, piloto_usuario_id,
-         km_salida, hora_salida, destino, estado, es_externo, empleado_id, permiso_externo_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'abierto', ?, ?, ?)`,
+         km_salida, hora_salida, destino, estado, es_externo, empleado_id, permiso_externo_id, plan_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'abierto', ?, ?, ?, ?)`,
       [
         guard.empresa.id,
         Number(veh.id),
@@ -290,10 +327,11 @@ export async function POST(req: Request, ctx: Ctx) {
         guard.session.id,
         d.kmSalida,
         ahora,
-        d.destino ?? null,
+        destinoFinal,
         esExterno ? 1 : 0,
         empleado?.id ?? null,
         permisoId,
+        planId,
       ],
     ).catch(async () =>
       execute(
@@ -308,10 +346,14 @@ export async function POST(req: Request, ctx: Ctx) {
           guard.session.id,
           d.kmSalida,
           ahora,
-          d.destino ?? null,
+          destinoFinal,
         ],
       ),
     );
+
+    if (planId) {
+      await marcarPlanEnRuta(guard.empresa.id, planId);
+    }
 
     await execute(
       `INSERT INTO flota_lecturas
@@ -342,20 +384,30 @@ export async function POST(req: Request, ctx: Ctx) {
 
     await execute(
       `UPDATE flota_vehiculos SET km_actual = GREATEST(COALESCE(km_actual,0), ?)
-       WHERE id = ? AND empresa_id = ?`,
-      [d.kmSalida, Number(veh.id), guard.empresa.id],
+       WHERE id = ?`,
+      [d.kmSalida, Number(veh.id)],
     );
 
     const extra = empleado
       ? ` RRHH: ${empleado.codigo}.`
       : " Conductor externo autorizado por Operaciones.";
+    const planInfo = planId
+      ? planesMatch.find((p) => p.id === planId)
+      : null;
+    const planMsg = planInfo
+      ? ` Plan TMS ${planInfo.codigo} → En ruta.`
+      : planesMatch.length > 1
+        ? ` Hay ${planesMatch.length} planes posibles; selecciona uno.`
+        : "";
 
     return NextResponse.json({
       id: r.insertId,
-      mensaje: `Salida de ${veh.placa} registrada (${nombre}).${extra}`,
+      mensaje: `Salida de ${veh.placa} registrada (${nombre}).${extra}${planMsg}`,
       esExterno,
       empleado,
       permisoExternoId: permisoId,
+      planId,
+      planesSugeridos: planesMatch,
     });
   }
 
