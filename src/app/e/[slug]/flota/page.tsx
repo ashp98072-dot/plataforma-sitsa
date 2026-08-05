@@ -446,6 +446,10 @@ function FlotaInner() {
     return abiertos.filter((v) => normPiloto(v.piloto_nombre) === n);
   }, [abiertos, pilotoSesion, pilotoSesionConfirmado]);
 
+  /** Con viaje abierto: no puede registrar otra salida. */
+  const pilotoEnViaje =
+    pilotoSesionConfirmado && abiertosDelPiloto.length > 0;
+
   const abiertosFiltrados = useMemo(() => {
     const base = pilotoSesionConfirmado ? abiertosDelPiloto : abiertos;
     const s = qLlegada.trim().toLowerCase();
@@ -554,6 +558,22 @@ function FlotaInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modoPiloto, viajeId, slug]);
 
+  useEffect(() => {
+    if (!pilotoSesionConfirmado) return;
+    if (abiertosDelPiloto.length) {
+      setModoPiloto("llegada");
+      setViajeId((prev) => {
+        if (prev && abiertosDelPiloto.some((a) => a.id === prev)) return prev;
+        return Number(abiertosDelPiloto[0].id);
+      });
+      setQLlegada("");
+    } else if (modoPiloto === "llegada") {
+      setModoPiloto("salida");
+      setViajeId(0);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pilotoSesionConfirmado, abiertosDelPiloto]);
+
   function confirmarPilotoSesion() {
     const n = pilotoSesionDraft.trim();
     if (n.length < 2) {
@@ -564,7 +584,6 @@ function FlotaInner() {
     setPilotoNombre(n);
     setPilotoSesionConfirmado(true);
     setErr("");
-    setMsg(`Sesión de piloto: ${n}. Solo verás tus viajes.`);
     try {
       sessionStorage.setItem(`flota_piloto_sesion_${slug}`, n);
     } catch {
@@ -573,8 +592,18 @@ function FlotaInner() {
     const mios = abiertos.filter(
       (v) => normPiloto(v.piloto_nombre) === normPiloto(n),
     );
-    if (mios[0]) setViajeId(mios[0].id);
-    else setViajeId(0);
+    if (mios[0]) {
+      setViajeId(mios[0].id);
+      setModoPiloto("llegada");
+      setQLlegada("");
+      setMsg(
+        `${n}: tienes ${mios.length} viaje(s) abierto(s). Solo puedes registrar llegada / cerrar ruta.`,
+      );
+    } else {
+      setViajeId(0);
+      setModoPiloto("salida");
+      setMsg(`${n}: sin viaje abierto. Puedes registrar una salida.`);
+    }
   }
 
   function cambiarPilotoSesion() {
@@ -1453,38 +1482,6 @@ function FlotaInner() {
     setPlanIdViaje(parData.planId ?? null);
     const esRutaConParadas = paradasAhora.length > 0;
 
-    if (!esRutaConParadas) {
-      if (!kmLlegada && kmLlegada !== 0) {
-        setErr("Indica el km de llegada.");
-        return;
-      }
-      const viajeSelPre = abiertos.find((v) => v.id === viajeId);
-      if (viajeSelPre && kmLlegada < Number(viajeSelPre.km_salida)) {
-        setErr(
-          `Km de llegada no puede ser menor al km de salida (${Number(viajeSelPre.km_salida).toLocaleString("es-GT")}).`,
-        );
-        return;
-      }
-      const vehLleg = viajeSelPre
-        ? vehiculos.find((v) => v.id === viajeSelPre.vehiculo_id)
-        : null;
-      const kmActLleg = Number(
-        vehLleg?.km_actual ?? viajeSelPre?.km_salida ?? 0,
-      );
-      if (kmLlegada < kmActLleg) {
-        setErr(
-          `Km de llegada (${kmLlegada.toLocaleString("es-GT")}) no puede ser menor al km actual (${kmActLleg.toLocaleString("es-GT")}). Debe ser mayor o igual.`,
-        );
-        return;
-      }
-      if (!fotosLlegada.length) {
-        setErr(
-          "Adjunta al menos una foto de llegada (se marcará fecha, hora y ubicación).",
-        );
-        return;
-      }
-    }
-
     const pendientesAhora = paradasAhora.filter(
       (p) => p.requiere_evidencia && p.evidencias < 1,
     );
@@ -1493,6 +1490,47 @@ function FlotaInner() {
         `Ruta detectada con ${paradasAhora.length} destino(s). Faltan evidencias en: ${pendientesAhora
           .map((p) => `${p.orden}. ${p.lugar_nombre}`)
           .join("; ")}.`,
+      );
+      return;
+    }
+
+    if (!kmLlegada && kmLlegada !== 0) {
+      setErr(
+        esRutaConParadas
+          ? "Al terminar la ruta indica el km final del odómetro."
+          : "Indica el km de llegada.",
+      );
+      return;
+    }
+    const viajeSelPre = abiertos.find((v) => v.id === viajeId);
+    if (viajeSelPre && kmLlegada < Number(viajeSelPre.km_salida)) {
+      setErr(
+        `Km final no puede ser menor al km de salida (${Number(viajeSelPre.km_salida).toLocaleString("es-GT")}).`,
+      );
+      return;
+    }
+    const vehLleg = viajeSelPre
+      ? vehiculos.find((v) => v.id === viajeSelPre.vehiculo_id)
+      : null;
+    const kmActLleg = Number(
+      vehLleg?.km_actual ?? viajeSelPre?.km_salida ?? 0,
+    );
+    if (kmLlegada < kmActLleg) {
+      setErr(
+        `Km final (${kmLlegada.toLocaleString("es-GT")}) no puede ser menor al km actual (${kmActLleg.toLocaleString("es-GT")}). Debe ser mayor o igual.`,
+      );
+      return;
+    }
+    if (esRutaConParadas) {
+      if (!fotoTableroLlegada) {
+        setErr(
+          "Toma la foto del tablero con el km final para cerrar la ruta.",
+        );
+        return;
+      }
+    } else if (!fotosLlegada.length) {
+      setErr(
+        "Toma al menos una foto de llegada (se marcará fecha, hora y ubicación).",
       );
       return;
     }
@@ -1506,14 +1544,12 @@ function FlotaInner() {
       if (fotosLlegada.length) {
         const llegadaMarked = await marcarVarias(
           fotosLlegada,
-          `LLEGADA${placa ? ` · ${placa}` : ""}${
-            esRutaConParadas ? "" : ` · km ${kmLlegada}`
-          }`,
+          `LLEGADA${placa ? ` · ${placa}` : ""} · km ${kmLlegada}`,
           geo,
         );
         await subirEvidenciasViaje(viajeId, "llegada", llegadaMarked, geo);
       }
-      if (fotoTableroLlegada && !esRutaConParadas) {
+      if (fotoTableroLlegada) {
         const tablero = await marcarVarias(
           [fotoTableroLlegada],
           `LLEGADA · Tablero km ${kmLlegada}${placa ? ` · ${placa}` : ""}`,
@@ -1528,9 +1564,7 @@ function FlotaInner() {
         body: JSON.stringify({
           accion: "llegada",
           viajeId,
-          kmLlegada: esRutaConParadas
-            ? undefined
-            : kmLlegada || undefined,
+          kmLlegada,
           pilotoNombre: pilotoNombre || undefined,
           observaciones: obsViaje || undefined,
         }),
@@ -3137,19 +3171,45 @@ function FlotaInner() {
                 : "",
             ].join(" ")}
           >
-            <div className="flex gap-2">
-              <button
-                type="button"
-                className={[
-                  "rounded px-3 py-1.5 text-sm",
-                  modoPiloto === "salida"
-                    ? "bg-[var(--accent)] text-white"
-                    : "bg-[#334155]",
-                ].join(" ")}
-                onClick={() => setModoPiloto("salida")}
-              >
-                Registrar salida
-              </button>
+            {pilotoEnViaje ? (
+              <p className="rounded-lg border border-amber-800/50 bg-amber-950/30 px-3 py-2 text-xs text-amber-100">
+                Ya tienes viaje abierto
+                {abiertosDelPiloto[0]
+                  ? ` (${abiertosDelPiloto[0].placa}${
+                      abiertosDelPiloto[0].destino
+                        ? ` → ${abiertosDelPiloto[0].destino}`
+                        : ""
+                    })`
+                  : ""}
+                . Salida bloqueada: completa evidencias de la ruta, km final y
+                foto del tablero para cerrar.
+              </p>
+            ) : null}
+
+            <div className="flex flex-wrap gap-2">
+              {!pilotoEnViaje ? (
+                <button
+                  type="button"
+                  className={[
+                    "rounded px-3 py-1.5 text-sm",
+                    modoPiloto === "salida"
+                      ? "bg-[var(--accent)] text-white"
+                      : "bg-[#334155]",
+                  ].join(" ")}
+                  onClick={() => setModoPiloto("salida")}
+                >
+                  Registrar salida
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled
+                  title="Cierra tu viaje actual antes de una nueva salida"
+                  className="cursor-not-allowed rounded px-3 py-1.5 text-sm opacity-40 bg-[#334155]"
+                >
+                  Registrar salida (bloqueada)
+                </button>
+              )}
               <button
                 type="button"
                 className={[
@@ -3161,14 +3221,17 @@ function FlotaInner() {
                 onClick={() => {
                   setModoPiloto("llegada");
                   setQLlegada("");
-                  if (abiertos[0] && !viajeId) setViajeId(abiertos[0].id);
+                  const lista = pilotoSesionConfirmado
+                    ? abiertosDelPiloto
+                    : abiertos;
+                  if (lista[0] && !viajeId) setViajeId(lista[0].id);
                 }}
               >
                 Registrar llegada
               </button>
             </div>
 
-            {modoPiloto === "salida" ? (
+            {modoPiloto === "salida" && !pilotoEnViaje ? (
               <div className="space-y-3">
                 <p className="text-xs text-[var(--muted)]">
                   Cuenta compartida de pilotos: escribe tu nombre completo y la
@@ -3624,13 +3687,14 @@ function FlotaInner() {
                     </label>
                   ) : (
                     <p className="text-[11px] text-amber-200 sm:col-span-1">
-                      Km solo al inicio de la ruta (
+                      Km salida:{" "}
                       {abiertos.find((v) => v.id === viajeId)?.km_salida != null
                         ? Number(
                             abiertos.find((v) => v.id === viajeId)!.km_salida,
                           ).toLocaleString("es-GT")
                         : "—"}
-                      ). No se pide km en los destinos ni al cerrar.
+                      . En destinos solo foto de producto; al terminar la ruta
+                      pide km final + foto tablero.
                     </p>
                   )}
                   <label className="text-xs text-[var(--muted)] sm:col-span-2">
@@ -3650,8 +3714,8 @@ function FlotaInner() {
                       </p>
                       <p className="text-[11px] text-[var(--muted)]">
                         En cada lugar toma la foto del producto con la cámara
-                        (fecha/hora/GPS). No se puede adjuntar de la galería.
-                        Sin kilometraje en destinos.
+                        (fecha/hora/GPS). Sin km en destinos. Al completar todos,
+                        ingresa km final y foto del tablero abajo.
                       </p>
                       {paradasViaje.map((pp) => {
                         const ok =
@@ -3754,27 +3818,50 @@ function FlotaInner() {
                       </div>
                     </>
                   ) : (
-                    <div className="text-xs text-[var(--muted)] sm:col-span-2">
-                      Foto extra de cierre (opcional)
-                      <div className="mt-1">
-                        <TomarFotoButton
-                          label="Tomar foto extra"
-                          className={`${input} w-full !py-2 text-sm`}
-                          hint={
-                            fotosLlegada.length
-                              ? `${fotosLlegada.length} foto(s)`
-                              : "Solo cámara."
+                    <div className="sm:col-span-2 lg:col-span-3 space-y-3 rounded-lg border border-sky-800/40 bg-sky-950/20 p-3">
+                      <p className="text-xs font-medium text-sky-100">
+                        Cierre de ruta (después de todas las paradas)
+                      </p>
+                      <p className="text-[11px] text-[var(--muted)]">
+                        Cuando todas las paradas estén en OK, ingresa el km
+                        final del odómetro y toma la foto del tablero.
+                      </p>
+                      <label className="block text-xs text-[var(--muted)]">
+                        Km final *
+                        <input
+                          type="number"
+                          className={`${input} mt-1 w-full max-w-xs`}
+                          value={kmLlegada || ""}
+                          min={
+                            abiertos.find((v) => v.id === viajeId)?.km_salida ??
+                            0
                           }
-                          onCaptured={async (file) => {
-                            const n = await normalizarFotoCamara(
-                              file,
-                              "cierre",
-                            );
-                            if (n) {
-                              setFotosLlegada((prev) => [...prev, n]);
-                            }
-                          }}
+                          onChange={(e) =>
+                            setKmLlegada(Number(e.target.value))
+                          }
+                          placeholder="Odómetro al terminar"
                         />
+                      </label>
+                      <div className="text-xs text-[var(--muted)]">
+                        Foto tablero km final *
+                        <div className="mt-1 max-w-xs">
+                          <TomarFotoButton
+                            label="Tomar foto tablero final"
+                            className={`${input} w-full !py-2 text-sm`}
+                            hint={
+                              fotoTableroLlegada
+                                ? `Listo: ${fotoTableroLlegada.name}`
+                                : "Obligatoria. Solo cámara."
+                            }
+                            onCaptured={async (file) => {
+                              const n = await normalizarFotoCamara(
+                                file,
+                                "tablero_llegada",
+                              );
+                              setFotoTableroLlegada(n);
+                            }}
+                          />
+                        </div>
                       </div>
                     </div>
                   )}
@@ -3785,7 +3872,11 @@ function FlotaInner() {
                       disabled={
                         !abiertosFiltrados.length ||
                         !viajeId ||
-                        subiendoFotos
+                        subiendoFotos ||
+                        (paradasViaje.length > 0 &&
+                          paradasViaje.some(
+                            (p) => p.requiere_evidencia && p.evidencias < 1,
+                          ))
                       }
                       onClick={() => void llegadaViaje()}
                     >
