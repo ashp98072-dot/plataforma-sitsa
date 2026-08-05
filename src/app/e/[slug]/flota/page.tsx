@@ -424,13 +424,43 @@ function FlotaInner() {
     () => servicios.filter((s) => matchQ(s.placa, s.tipo)),
     [servicios, matchQ],
   );
-  const viajesFiltrados = useMemo(
-    () =>
-      viajes.filter((v) =>
-        matchQ(v.placa, `${v.piloto_nombre} ${v.destino ?? ""}`),
-      ),
-    [viajes, matchQ],
-  );
+  /** Piloto (kiosco): solo ve viajes de su nombre de sesión. */
+  const esVistaPilotoRestringida =
+    rol === "Piloto" ||
+    (pilotoSesionConfirmado && Boolean(pilotoSesion.trim()));
+
+  const abiertosDelPiloto = useMemo(() => {
+    // Cuenta Piloto: sin identificar → no mostrar rutas ajenas
+    if (rol === "Piloto" && (!pilotoSesionConfirmado || !pilotoSesion.trim())) {
+      return [];
+    }
+    if (!pilotoSesionConfirmado || !pilotoSesion.trim()) return abiertos;
+    const n = normPiloto(pilotoSesion);
+    return abiertos.filter((v) => normPiloto(v.piloto_nombre) === n);
+  }, [abiertos, pilotoSesion, pilotoSesionConfirmado, rol]);
+
+  const viajesFiltrados = useMemo(() => {
+    let list = viajes;
+    if (rol === "Piloto") {
+      if (!pilotoSesionConfirmado || !pilotoSesion.trim()) list = [];
+      else {
+        const n = normPiloto(pilotoSesion);
+        list = viajes.filter((v) => normPiloto(v.piloto_nombre) === n);
+      }
+    } else if (pilotoSesionConfirmado && pilotoSesion.trim()) {
+      const n = normPiloto(pilotoSesion);
+      list = viajes.filter((v) => normPiloto(v.piloto_nombre) === n);
+    }
+    return list.filter((v) =>
+      matchQ(v.placa, `${v.piloto_nombre} ${v.destino ?? ""}`),
+    );
+  }, [
+    viajes,
+    matchQ,
+    rol,
+    pilotoSesion,
+    pilotoSesionConfirmado,
+  ]);
 
   const viajesReporteFiltrados = useMemo(
     () =>
@@ -443,18 +473,22 @@ function FlotaInner() {
     [viajesReporte, matchQ],
   );
 
-  const abiertosDelPiloto = useMemo(() => {
-    if (!pilotoSesionConfirmado || !pilotoSesion.trim()) return abiertos;
+  const permisosExtVisibles = useMemo(() => {
+    if (rol !== "Piloto") return permisosExt;
+    if (!pilotoSesionConfirmado || !pilotoSesion.trim()) return [];
     const n = normPiloto(pilotoSesion);
-    return abiertos.filter((v) => normPiloto(v.piloto_nombre) === n);
-  }, [abiertos, pilotoSesion, pilotoSesionConfirmado]);
+    return permisosExt.filter((p) => normPiloto(p.piloto_nombre) === n);
+  }, [permisosExt, rol, pilotoSesion, pilotoSesionConfirmado]);
 
   /** Con viaje abierto: no puede registrar otra salida. */
   const pilotoEnViaje =
     pilotoSesionConfirmado && abiertosDelPiloto.length > 0;
 
   const abiertosFiltrados = useMemo(() => {
-    const base = pilotoSesionConfirmado ? abiertosDelPiloto : abiertos;
+    const base =
+      rol === "Piloto" || pilotoSesionConfirmado
+        ? abiertosDelPiloto
+        : abiertos;
     const s = qLlegada.trim().toLowerCase();
     if (!s) return base;
     const filtrados = base.filter((v) => {
@@ -469,8 +503,16 @@ function FlotaInner() {
         (Number(v.es_externo) === 1 && "externo".includes(s))
       );
     });
+    // En vista piloto no ampliar a viajes ajenos si el filtro no coincide
+    if (rol === "Piloto" || pilotoSesionConfirmado) return filtrados;
     return filtrados.length ? filtrados : base;
-  }, [abiertos, abiertosDelPiloto, qLlegada, pilotoSesionConfirmado]);
+  }, [
+    abiertos,
+    abiertosDelPiloto,
+    qLlegada,
+    pilotoSesionConfirmado,
+    rol,
+  ]);
 
   const cargar = useCallback(async () => {
     const me = await fetch("/api/auth/me").then((r) => r.json());
@@ -3619,9 +3661,12 @@ function FlotaInner() {
                 </div>
 
                 <div>
-                  <h3 className="mb-1 text-sm font-medium">Viajes abiertos</h3>
+                  <h3 className="mb-1 text-sm font-medium">
+                    Viajes abiertos
+                    {esVistaPilotoRestringida ? " (tuyos)" : ""}
+                  </h3>
                   <ul className="space-y-1 text-xs text-[var(--muted)]">
-                    {abiertos.map((v) => (
+                    {abiertosDelPiloto.map((v) => (
                       <li key={v.id}>
                         <button
                           type="button"
@@ -3645,7 +3690,13 @@ function FlotaInner() {
                         </button>
                       </li>
                     ))}
-                    {!abiertos.length ? <li>Ningún viaje abierto.</li> : null}
+                    {!abiertosDelPiloto.length ? (
+                      <li>
+                        {rol === "Piloto" && !pilotoSesionConfirmado
+                          ? "Identifícate arriba para ver solo tus viajes."
+                          : "Ningún viaje abierto tuyo."}
+                      </li>
+                    ) : null}
                   </ul>
                 </div>
               </div>
@@ -3992,23 +4043,28 @@ function FlotaInner() {
 
             <div>
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <h3 className="text-sm font-medium">Viajes recientes</h3>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    className="rounded bg-[#1B5E20] px-2 py-1 text-xs text-white"
-                    onClick={() => exportar("viajes", "xlsx")}
-                  >
-                    Excel
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded bg-[#37474F] px-2 py-1 text-xs text-white"
-                    onClick={() => exportar("viajes", "pdf")}
-                  >
-                    PDF
-                  </button>
-                </div>
+                <h3 className="text-sm font-medium">
+                  Viajes recientes
+                  {esVistaPilotoRestringida ? " (tuyos)" : ""}
+                </h3>
+                {rol !== "Piloto" ? (
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      className="rounded bg-[#1B5E20] px-2 py-1 text-xs text-white"
+                      onClick={() => exportar("viajes", "xlsx")}
+                    >
+                      Excel
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded bg-[#37474F] px-2 py-1 text-xs text-white"
+                      onClick={() => exportar("viajes", "pdf")}
+                    >
+                      PDF
+                    </button>
+                  </div>
+                ) : null}
               </div>
               <ul className="space-y-1 text-xs text-[var(--muted)]">
                 {viajesFiltrados.slice(0, 12).map((v) => (
@@ -4019,17 +4075,24 @@ function FlotaInner() {
                     {v.km_llegada != null ? `→${v.km_llegada}` : ""}
                   </li>
                 ))}
-                {!viajesFiltrados.length ? <li>Sin viajes.</li> : null}
+                {!viajesFiltrados.length ? (
+                  <li>
+                    {rol === "Piloto" && !pilotoSesionConfirmado
+                      ? "Identifícate para ver tu historial."
+                      : "Sin viajes tuyos."}
+                  </li>
+                ) : null}
               </ul>
             </div>
 
-            {permisosExt.length ? (
+            {permisosExtVisibles.length ? (
               <div className="rounded-lg border border-[var(--border)] p-3">
                 <h3 className="mb-2 text-sm font-medium">
                   Permisos conductores externos
+                  {rol === "Piloto" ? " (tuyos)" : ""}
                 </h3>
                 <ul className="space-y-2 text-xs">
-                  {permisosExt.slice(0, 15).map((p) => (
+                  {permisosExtVisibles.slice(0, 15).map((p) => (
                     <li
                       key={p.id}
                       className="flex flex-wrap items-start justify-between gap-2 border-t border-[var(--border)] pt-2 first:border-0 first:pt-0"
