@@ -79,6 +79,24 @@ export default function TmsPage() {
     unidades: 0,
     personal: 0,
   });
+  type AudRow = {
+    id: number;
+    usuario: string | null;
+    accion: string;
+    modulo: string | null;
+    detalle: string | null;
+    creadoEn: string;
+  };
+  const [bitacora, setBitacora] = useState<AudRow[]>([]);
+  const [mostrarBitacora, setMostrarBitacora] = useState(false);
+
+  const cargarBitacora = useCallback(async () => {
+    const res = await fetch(
+      `/api/empresas/${slug}/auditoria?modulo=tms&limite=150`,
+    );
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) setBitacora((data.auditoria ?? []) as AudRow[]);
+  }, [slug]);
 
   const cargar = useCallback(async () => {
     const [res, cat, pil, aux] = await Promise.all([
@@ -202,6 +220,7 @@ export default function TmsPage() {
       ]);
       setAuxInput("");
       await cargar();
+      if (mostrarBitacora) await cargarBitacora();
     }
   }
 
@@ -263,7 +282,29 @@ export default function TmsPage() {
     });
     const data = await res.json();
     setMsg(data.mensaje || data.error);
-    if (res.ok) await cargar();
+    if (res.ok) {
+      await cargar();
+      if (mostrarBitacora) await cargarBitacora();
+    }
+  }
+
+  function labelAccionAud(accion: string): string {
+    switch (accion) {
+      case "crear_ruta":
+        return "Creó ruta";
+      case "editar_ruta":
+        return "Editó ruta";
+      case "cancelar_ruta":
+        return "Canceló ruta";
+      case "salida_viaje":
+        return "Salida (piloto)";
+      case "llegada_viaje":
+        return "Llegada / cierre";
+      case "eliminar_evidencia":
+        return "Eliminó evidencia";
+      default:
+        return accion;
+    }
   }
 
   function seleccionarPlan(p: Plan) {
@@ -885,6 +926,76 @@ export default function TmsPage() {
       ) : null}
 
       {msg ? <p className="text-sm text-emerald-300">{msg}</p> : null}
+
+      <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="text-sm font-medium">Bitácora de rutas</h2>
+            <p className="text-[11px] text-[var(--muted)]">
+              Quién crea, edita, cancela, sale, cierra o elimina evidencias — con
+              fecha y hora.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="rounded bg-[#334155] px-3 py-1.5 text-xs text-white"
+            onClick={() => {
+              const next = !mostrarBitacora;
+              setMostrarBitacora(next);
+              if (next) void cargarBitacora();
+            }}
+          >
+            {mostrarBitacora ? "Ocultar bitácora" : "Ver bitácora"}
+          </button>
+        </div>
+        {mostrarBitacora ? (
+          <div className="max-h-80 overflow-auto rounded border border-[var(--border)]">
+            <table className="min-w-full text-left text-xs">
+              <thead className="sticky top-0 bg-[#1e293b] text-[var(--muted)]">
+                <tr>
+                  <th className="px-2 py-1.5">Fecha / hora</th>
+                  <th className="px-2 py-1.5">Usuario</th>
+                  <th className="px-2 py-1.5">Acción</th>
+                  <th className="px-2 py-1.5">Detalle</th>
+                </tr>
+              </thead>
+              <tbody>
+                {bitacora.map((a) => (
+                  <tr
+                    key={a.id}
+                    className="border-t border-[var(--border)] align-top"
+                  >
+                    <td className="whitespace-nowrap px-2 py-1.5 font-mono text-[10px] text-sky-300">
+                      {a.creadoEn || "—"}
+                    </td>
+                    <td className="px-2 py-1.5 font-medium">
+                      {a.usuario || "—"}
+                    </td>
+                    <td className="px-2 py-1.5 text-amber-200">
+                      {labelAccionAud(a.accion)}
+                    </td>
+                    <td className="px-2 py-1.5 text-[var(--muted)]">
+                      {a.detalle || "—"}
+                    </td>
+                  </tr>
+                ))}
+                {!bitacora.length ? (
+                  <tr>
+                    <td
+                      colSpan={4}
+                      className="px-2 py-3 text-[var(--muted)]"
+                    >
+                      Aún no hay movimientos registrados. Se irán guardando al
+                      crear/editar rutas, salidas, llegadas y borrados de
+                      evidencias.
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+      </div>
 
       <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
         <table className="min-w-full text-left text-sm">

@@ -4,6 +4,7 @@ import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
 import { requireTenantFlota, requireTenantFlotaAny } from "@/lib/tenant";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
+import { registrarAuditoria } from "@/lib/auditoria";
 import {
   eliminarEvidenciaViaje,
   guardarEvidenciaViaje,
@@ -257,5 +258,12 @@ export async function DELETE(req: Request, ctx: Ctx) {
   if (!result.ok) {
     return NextResponse.json({ error: result.mensaje }, { status: 404 });
   }
+  await registrarAuditoria({
+    empresaId: guard.empresa.id,
+    usuario: guard.session.username,
+    accion: "eliminar_evidencia",
+    modulo: "tms",
+    detalle: `Evidencia flota #${adjuntoId} eliminada del viaje #${viajeId}`,
+  });
   return NextResponse.json({ mensaje: result.mensaje });
 }

@@ -8,6 +8,7 @@ import { contentTypeFor, guardarUpload } from "@/lib/uploads";
 import { ahoraLocal } from "@/lib/rrhh/dates";
 import { readFileSync } from "fs";
 import { absPathFromRelative } from "@/lib/uploads";
+import { registrarAuditoria } from "@/lib/auditoria";
 import { eliminarEvidenciaTms } from "@/lib/flota/viaje-evidencias";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -303,5 +304,12 @@ export async function DELETE(req: Request, ctx: Ctx) {
   if (!result.ok) {
     return NextResponse.json({ error: result.mensaje }, { status: 404 });
   }
+  await registrarAuditoria({
+    empresaId: guard.empresa.id,
+    usuario: guard.session.username,
+    accion: "eliminar_evidencia",
+    modulo: "tms",
+    detalle: `Evidencia TMS #${adjuntoId} eliminada`,
+  });
   return NextResponse.json({ mensaje: result.mensaje });
 }

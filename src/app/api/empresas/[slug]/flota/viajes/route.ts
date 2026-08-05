@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
+import { registrarAuditoria } from "@/lib/auditoria";
 import { requireTenantFlota } from "@/lib/tenant";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
 import { ahoraLocal } from "@/lib/rrhh/dates";
@@ -371,6 +372,16 @@ export async function POST(req: Request, ctx: Ctx) {
       await marcarPlanEnRuta(guard.empresa.id, planId);
     }
 
+    await registrarAuditoria({
+      empresaId: guard.empresa.id,
+      usuario: guard.session.username,
+      accion: "salida_viaje",
+      modulo: "tms",
+      detalle: `Viaje #${r.insertId} salida · piloto ${nombre} · placa ${String(veh.placa)} · km ${d.kmSalida}${
+        planId ? ` · plan TMS #${planId} → En ruta` : ""
+      }${destinoFinal ? ` · destino ${destinoFinal}` : ""}`,
+    });
+
     await execute(
       `INSERT INTO flota_lecturas
         (empresa_id, vehiculo_id, km, fecha_lectura, nota, conductor, registrado_por, viaje_id, capturado_en)
@@ -581,6 +592,18 @@ export async function POST(req: Request, ctx: Ctx) {
     if (planIdPre) {
       await marcarPlanDescargado(guard.empresa.id, planIdPre);
     }
+
+    await registrarAuditoria({
+      empresaId: guard.empresa.id,
+      usuario: guard.session.username,
+      accion: "llegada_viaje",
+      modulo: "tms",
+      detalle: `Viaje #${d.viajeId} llegada · piloto ${
+        d.pilotoNombre?.trim() || String(viaje[0].piloto_nombre)
+      } · placa ${String(viaje[0].placa)} · km ${kmSalida} → ${kmLlegadaDb}${
+        planIdPre ? ` · plan TMS #${planIdPre} → Descargado` : ""
+      }${esRutaConParadas ? ` · ${paradasRuta.length} parada(s)` : ""}`,
+    });
 
     return NextResponse.json({
       mensaje: `Llegada de ${viaje[0].placa}: ${(kmLlegadaDb - kmSalida).toLocaleString("es-GT")} km recorridos.${

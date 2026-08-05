@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
+import { registrarAuditoria } from "@/lib/auditoria";
 import { requireTenantModulo } from "@/lib/tenant";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
 import { listarVehiculosAccesibles } from "@/lib/flota/acceso";
@@ -335,6 +336,17 @@ export async function POST(req: Request, ctx: Ctx) {
     await guardarParadasPlan(empresaId, planId, paradasInput);
   }
 
+  const paradasTxt = paradasInput
+    .map((p, i) => `${i + 1}.${p.lugarNombre}(${p.tipo ?? "?"})`)
+    .join("; ");
+  await registrarAuditoria({
+    empresaId,
+    usuario: guard.session.username,
+    accion: "crear_ruta",
+    modulo: "tms",
+    detalle: `Plan #${planId} ${d.codigo} · fecha ${d.fechaPlan} · piloto ${d.pilotoNombre?.trim() || "—"} · placa ${(d.placa || "").toUpperCase() || "—"} · ${paradasInput.length} parada(s)${paradasTxt ? `: ${paradasTxt}` : ""}`,
+  });
+
   return NextResponse.json({
     id: planId,
     mensaje: `Plan creado${
@@ -395,12 +407,24 @@ export async function PATCH(req: Request, ctx: Ctx) {
   const empresaId = guard.empresa.id;
 
   const plan = await query<RowDataPacket[]>(
-    "SELECT id FROM tms_planes_viaje WHERE id = ? AND empresa_id = ? LIMIT 1",
+    `SELECT p.id, p.codigo, p.estado, p.hora_carga, p.notas,
+            u.placa, pil.nombre AS piloto
+     FROM tms_planes_viaje p
+     LEFT JOIN tms_unidades u ON u.id = p.unidad_id
+     LEFT JOIN tms_personal pil ON pil.id = p.piloto_id
+     WHERE p.id = ? AND p.empresa_id = ? LIMIT 1`,
     [d.id, empresaId],
   );
   if (!plan[0]) {
     return NextResponse.json({ error: "Plan no encontrado." }, { status: 404 });
   }
+  const antes = {
+    codigo: String(plan[0].codigo ?? ""),
+    estado: String(plan[0].estado ?? ""),
+    placa: plan[0].placa ? String(plan[0].placa) : "",
+    piloto: plan[0].piloto ? String(plan[0].piloto) : "",
+    hora: plan[0].hora_carga ? String(plan[0].hora_carga) : "",
+  };
 
   let pilotoId: number | undefined;
   let auxiliarId: number | null | undefined;
@@ -497,6 +521,47 @@ export async function PATCH(req: Request, ctx: Ctx) {
     const paradasInput = d.paradas.filter((p) => p.lugarNombre?.trim());
     await guardarParadasPlan(empresaId, d.id, paradasInput);
   }
+
+  const cambios: string[] = [];
+  if (d.estado && d.estado !== antes.estado) {
+    cambios.push(`estado ${antes.estado} → ${d.estado}`);
+  }
+  if (d.pilotoNombre?.trim()) {
+    cambios.push(`piloto → ${d.pilotoNombre.trim()}`);
+  }
+  if (d.placa?.trim()) {
+    cambios.push(`placa → ${d.placa.trim().toUpperCase()}`);
+  }
+  if (d.horaCarga != null) {
+    cambios.push(`hora → ${d.horaCarga}`);
+  }
+  if (d.notas != null) {
+    cambios.push("notas actualizadas");
+  }
+  if (
+    d.auxiliarEmpleadoIds != null ||
+    d.auxiliarNombres != null ||
+    d.auxiliarNombre != null
+  ) {
+    cambios.push("auxiliares actualizados");
+  }
+  if (d.paradas) {
+    const n = d.paradas.filter((p) => p.lugarNombre?.trim()).length;
+    cambios.push(`paradas redefinidas (${n})`);
+  }
+  const accion =
+    d.estado === "Cancelado" && d.estado !== antes.estado
+      ? "cancelar_ruta"
+      : "editar_ruta";
+  await registrarAuditoria({
+    empresaId,
+    usuario: guard.session.username,
+    accion,
+    modulo: "tms",
+    detalle: `Plan #${d.id} ${antes.codigo}${
+      cambios.length ? ` · ${cambios.join("; ")}` : " · sin cambios detectados"
+    }`,
+  });
 
   return NextResponse.json({ mensaje: "Plan actualizado." });
 }
