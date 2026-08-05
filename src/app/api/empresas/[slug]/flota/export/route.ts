@@ -154,6 +154,24 @@ export async function GET(req: Request, ctx: Ctx) {
   } else {
     title = "Inventario de flota";
     filename = "flota-inventario";
+    // PDF: columnas compactas y legibles. Excel: detalle completo abajo.
+    const headersPdf = [
+      "Placa",
+      "Descripción",
+      "Marca",
+      "Modelo",
+      "Km",
+      "Int.",
+      "Pend.",
+      "F.may",
+      "F.men",
+      "Rin",
+      "Llanta",
+      "Aceite",
+      "Emp.",
+      "Taller",
+      "Estado",
+    ];
     headers = [
       "Placa",
       "Descripción",
@@ -210,9 +228,9 @@ export async function GET(req: Request, ctx: Ctx) {
           String(r.descripcion ?? ""),
           String(r.marca ?? ""),
           String(r.modelo ?? ""),
-          String(r.km_actual ?? 0),
+          Number(r.km_actual ?? 0).toLocaleString("es-GT"),
           String(r.km_intervalo_servicio ?? ""),
-          pend == null ? "" : String(pend),
+          pend == null ? "" : Number(pend).toLocaleString("es-GT"),
           String(r.filtro_servicio_mayor ?? ""),
           String(r.filtro_servicio_menor ?? ""),
           String(r.rin_llanta ?? ""),
@@ -223,12 +241,22 @@ export async function GET(req: Request, ctx: Ctx) {
           String(r.estado ?? ""),
         ];
       });
+    // headersPdf se usa solo en PDF (mismo orden de columnas)
+    if (formato === "pdf") {
+      headers = headersPdf;
+    }
   }
 
   const subtitle = `${guard.empresa.nombre} · ${new Date().toLocaleString("es-GT")}`;
 
   if (formato === "pdf") {
-    const buf = await tablaAPdf({ title, subtitle, headers, rows });
+    const buf = await tablaAPdf({
+      title,
+      subtitle,
+      headers,
+      rows,
+      layout: headers.length > 6 ? "landscape" : "auto",
+    });
     return new NextResponse(new Uint8Array(buf), {
       headers: {
         "Content-Type": "application/pdf",
