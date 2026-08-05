@@ -428,16 +428,20 @@ function FlotaInner() {
   const abiertosFiltrados = useMemo(() => {
     const s = qLlegada.trim().toLowerCase();
     if (!s) return abiertos;
-    return abiertos.filter((v) => {
+    const filtrados = abiertos.filter((v) => {
       const placa = v.placa.toLowerCase().replace(/[\s-]/g, "");
       const qPlaca = s.replace(/[\s-]/g, "");
+      const piloto = v.piloto_nombre.toLowerCase();
       return (
         v.placa.toLowerCase().includes(s) ||
         placa.includes(qPlaca) ||
-        v.piloto_nombre.toLowerCase().includes(s) ||
-        (v.destino ?? "").toLowerCase().includes(s)
+        piloto.includes(s) ||
+        (v.destino ?? "").toLowerCase().includes(s) ||
+        (Number(v.es_externo) === 1 && "externo".includes(s))
       );
     });
+    // Si la búsqueda no coincide (ej. quedó el nombre del admin), mostrar todos
+    return filtrados.length ? filtrados : abiertos;
   }, [abiertos, qLlegada]);
 
   const cargar = useCallback(async () => {
@@ -445,14 +449,8 @@ function FlotaInner() {
     const rolMe = String(me.user?.rol ?? "");
     setRol(rolMe);
     setPermisos(me.permisos ?? []);
-    // Cuenta kiosko "piloto": no precargar el nombre genérico
-    if (
-      me.user?.nombre &&
-      rolMe !== "Piloto" &&
-      String(me.user.username ?? "").toLowerCase() !== "piloto"
-    ) {
-      setPilotoNombre(String(me.user.nombre));
-    }
+    // No precargar nombre del admin/usuario: el piloto se escribe a mano
+    // (RRHH o externo). Evita filtrar llegadas con "Administrador General".
 
     const paramsRep = new URLSearchParams({
       desde: repDesde,
@@ -495,8 +493,12 @@ function FlotaInner() {
     if (via.ok) {
       const data = await via.json();
       setViajes(data.viajes ?? []);
-      setAbiertos(data.abiertos ?? []);
-      if (data.abiertos?.[0]) setViajeId(Number(data.abiertos[0].id));
+      const abs = (data.abiertos ?? []) as Viaje[];
+      setAbiertos(abs);
+      setViajeId((prev) => {
+        if (prev && abs.some((a) => a.id === prev)) return prev;
+        return abs[0] ? Number(abs[0].id) : 0;
+      });
     }
     if (perm.ok) {
       const data = await perm.json();
@@ -1168,6 +1170,7 @@ function FlotaInner() {
     setFotoTableroSalida(null);
     setFotosEvidenciaSalida([]);
     setViajeId(nuevoId);
+    setQLlegada("");
     setModoPiloto("llegada");
     await cargar();
   }
@@ -2928,7 +2931,11 @@ function FlotaInner() {
                     ? "bg-[var(--accent)] text-white"
                     : "bg-[#334155]",
                 ].join(" ")}
-                onClick={() => setModoPiloto("llegada")}
+                onClick={() => {
+                  setModoPiloto("llegada");
+                  setQLlegada("");
+                  if (abiertos[0] && !viajeId) setViajeId(abiertos[0].id);
+                }}
               >
                 Registrar llegada
               </button>
@@ -3256,56 +3263,123 @@ function FlotaInner() {
               </div>
             ) : (
               <div className="space-y-3">
+                <p className="text-xs text-[var(--muted)]">
+                  Elige el viaje abierto por placa o nombre del piloto (incluye
+                  externos). Si no ves ninguno, limpia la búsqueda.
+                </p>
                 <label className="block text-xs text-[var(--muted)]">
                   Buscar viaje por placa o nombre del piloto
-                  <input
-                    className={`${input} mt-1 w-full`}
-                    value={qLlegada}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setQLlegada(val);
-                      const s = val.trim().toLowerCase();
-                      if (!s) return;
-                      const hit = abiertos.find((v) => {
-                        const placa = v.placa
-                          .toLowerCase()
-                          .replace(/[\s-]/g, "");
-                        const qPlaca = s.replace(/[\s-]/g, "");
-                        return (
-                          v.placa.toLowerCase().includes(s) ||
-                          placa.includes(qPlaca) ||
-                          v.piloto_nombre.toLowerCase().includes(s)
-                        );
-                      });
-                      if (hit) setViajeId(hit.id);
-                    }}
-                    placeholder="Ej. C-015BNG o Walter"
-                  />
+                  <div className="mt-1 flex gap-2">
+                    <input
+                      className={`${input} w-full`}
+                      value={qLlegada}
+                      autoComplete="off"
+                      name="buscar-viaje-llegada"
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setQLlegada(val);
+                        const s = val.trim().toLowerCase();
+                        if (!s) {
+                          if (abiertos[0]) setViajeId(abiertos[0].id);
+                          return;
+                        }
+                        const hit = abiertos.find((v) => {
+                          const placa = v.placa
+                            .toLowerCase()
+                            .replace(/[\s-]/g, "");
+                          const qPlaca = s.replace(/[\s-]/g, "");
+                          return (
+                            v.placa.toLowerCase().includes(s) ||
+                            placa.includes(qPlaca) ||
+                            v.piloto_nombre.toLowerCase().includes(s) ||
+                            (v.destino ?? "").toLowerCase().includes(s)
+                          );
+                        });
+                        if (hit) setViajeId(hit.id);
+                      }}
+                      placeholder="Ej. C-015BNG o Walter"
+                    />
+                    {qLlegada.trim() ? (
+                      <button
+                        type="button"
+                        className="shrink-0 rounded bg-[#334155] px-3 py-1.5 text-xs text-white"
+                        onClick={() => {
+                          setQLlegada("");
+                          if (abiertos[0]) setViajeId(abiertos[0].id);
+                        }}
+                      >
+                        Limpiar
+                      </button>
+                    ) : null}
+                  </div>
                 </label>
+
+                {abiertos.length ? (
+                  <ul className="space-y-1 rounded-lg border border-[var(--border)] p-2 text-xs">
+                    {abiertos.map((v) => (
+                      <li key={v.id}>
+                        <button
+                          type="button"
+                          className={[
+                            "w-full rounded px-2 py-1.5 text-left",
+                            viajeId === v.id
+                              ? "bg-sky-950/50 text-sky-200"
+                              : "hover:bg-white/5 text-[var(--muted)]",
+                          ].join(" ")}
+                          onClick={() => {
+                            setViajeId(v.id);
+                            setQLlegada("");
+                          }}
+                        >
+                          <span className="font-mono text-sky-300">
+                            {v.placa}
+                          </span>{" "}
+                          · {v.piloto_nombre}
+                          {Number(v.es_externo) ? " · externo" : ""}
+                          {" · km "}
+                          {Number(v.km_salida).toLocaleString("es-GT")}
+                          {v.destino ? ` · ${v.destino}` : ""}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-xs text-amber-300">
+                    No hay viajes abiertos. Registra primero la salida (con el
+                    nombre del piloto externo autorizado).
+                  </p>
+                )}
+
                 <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                   <label className="text-xs text-[var(--muted)] sm:col-span-2">
                     Viaje abierto
                     <select
                       className={`${input} mt-1 w-full`}
-                      value={viajeId}
+                      value={viajeId || ""}
                       onChange={(e) => setViajeId(Number(e.target.value))}
                     >
+                      {!abiertosFiltrados.length ? (
+                        <option value="">Sin viajes abiertos</option>
+                      ) : null}
                       {abiertosFiltrados.map((v) => (
                         <option key={v.id} value={v.id}>
-                          {v.placa} · {v.piloto_nombre} · km {v.km_salida}
+                          {v.placa} · {v.piloto_nombre}
+                          {Number(v.es_externo) ? " (externo)" : ""} · km{" "}
+                          {v.km_salida}
                           {v.destino ? ` → ${v.destino}` : ""}
                         </option>
                       ))}
                     </select>
-                    {!abiertosFiltrados.length ? (
-                      <span className="mt-1 block text-[11px] text-amber-300">
-                        Ningún viaje abierto coincide con la búsqueda.
-                      </span>
-                    ) : (
-                      <span className="mt-1 block text-[11px] text-[var(--muted)]">
-                        {abiertosFiltrados.length} de {abiertos.length} abiertos
-                      </span>
-                    )}
+                    <span className="mt-1 block text-[11px] text-[var(--muted)]">
+                      {abiertos.length
+                        ? `${abiertos.length} viaje(s) abierto(s)`
+                        : "Ningún viaje abierto"}
+                      {qLlegada.trim() &&
+                      abiertosFiltrados.length === abiertos.length &&
+                      abiertos.length > 0
+                        ? " · búsqueda sin coincidencia exacta; se muestran todos"
+                        : ""}
+                    </span>
                   </label>
                   {paradasViaje.length === 0 ? (
                     <label className="text-xs text-[var(--muted)]">
