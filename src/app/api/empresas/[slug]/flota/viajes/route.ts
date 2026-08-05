@@ -137,31 +137,33 @@ export async function POST(req: Request, ctx: Ctx) {
       );
     }
 
-    // Mismo piloto (mismo nombre) no puede tener otro viaje abierto
-    const abiertoPiloto = await query<RowDataPacket[]>(
-      `SELECT v.id, ve.placa FROM flota_viajes v
+    // Mismo piloto sin importar mayúsculas/acentos (Walter = walter)
+    const abiertosEmp = await query<RowDataPacket[]>(
+      `SELECT v.id, v.piloto_nombre, v.piloto_nombre_norm, ve.placa
+       FROM flota_viajes v
        INNER JOIN flota_vehiculos ve ON ve.id = v.vehiculo_id
-       WHERE v.empresa_id = ? AND v.estado = 'abierto'
-         AND (
-           LOWER(TRIM(v.piloto_nombre)) = ?
-           OR v.piloto_nombre_norm = ?
-         )
-       LIMIT 1`,
-      [guard.empresa.id, nombre.toLowerCase(), norm],
+       WHERE v.empresa_id = ? AND v.estado = 'abierto'`,
+      [guard.empresa.id],
     ).catch(async () =>
       query<RowDataPacket[]>(
-        `SELECT v.id, ve.placa FROM flota_viajes v
+        `SELECT v.id, v.piloto_nombre, ve.placa
+         FROM flota_viajes v
          INNER JOIN flota_vehiculos ve ON ve.id = v.vehiculo_id
-         WHERE v.empresa_id = ? AND v.estado = 'abierto'
-           AND LOWER(TRIM(v.piloto_nombre)) = ?
-         LIMIT 1`,
-        [guard.empresa.id, nombre.toLowerCase()],
+         WHERE v.empresa_id = ? AND v.estado = 'abierto'`,
+        [guard.empresa.id],
       ),
     );
-    if (abiertoPiloto[0]) {
+    const abiertoPiloto = abiertosEmp.find((row) => {
+      const rowNorm =
+        (row.piloto_nombre_norm
+          ? String(row.piloto_nombre_norm)
+          : null) || normalizarNombrePiloto(String(row.piloto_nombre ?? ""));
+      return rowNorm === norm;
+    });
+    if (abiertoPiloto) {
       return NextResponse.json(
         {
-          error: `El piloto "${nombre}" ya tiene viaje abierto en ${abiertoPiloto[0].placa}. Cierra la llegada primero.`,
+          error: `El piloto "${nombre}" ya tiene viaje abierto en ${abiertoPiloto.placa} (sin importar mayúsculas). Cierra la llegada primero.`,
         },
         { status: 409 },
       );

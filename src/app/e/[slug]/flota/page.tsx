@@ -168,6 +168,7 @@ function FlotaInner() {
   const [viajeId, setViajeId] = useState(0);
   const [kmLlegada, setKmLlegada] = useState(0);
   const [modoPiloto, setModoPiloto] = useState<"salida" | "llegada">("salida");
+  const [qLlegada, setQLlegada] = useState("");
   const [esExterno, setEsExterno] = useState(false);
   const [motivoExterno, setMotivoExterno] = useState("");
   const [verifPiloto, setVerifPiloto] = useState<VerifPiloto | null>(null);
@@ -255,6 +256,21 @@ function FlotaInner() {
       ),
     [viajes, matchQ],
   );
+
+  const abiertosFiltrados = useMemo(() => {
+    const s = qLlegada.trim().toLowerCase();
+    if (!s) return abiertos;
+    return abiertos.filter((v) => {
+      const placa = v.placa.toLowerCase().replace(/[\s-]/g, "");
+      const qPlaca = s.replace(/[\s-]/g, "");
+      return (
+        v.placa.toLowerCase().includes(s) ||
+        placa.includes(qPlaca) ||
+        v.piloto_nombre.toLowerCase().includes(s) ||
+        (v.destino ?? "").toLowerCase().includes(s)
+      );
+    });
+  }, [abiertos, qLlegada]);
 
   const cargar = useCallback(async () => {
     const me = await fetch("/api/auth/me").then((r) => r.json());
@@ -1492,50 +1508,85 @@ function FlotaInner() {
                 </div>
               </div>
             ) : (
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                <label className="text-xs text-[var(--muted)] sm:col-span-2">
-                  Viaje abierto
-                  <select
+              <div className="space-y-3">
+                <label className="block text-xs text-[var(--muted)]">
+                  Buscar viaje por placa o nombre del piloto
+                  <input
                     className={`${input} mt-1 w-full`}
-                    value={viajeId}
-                    onChange={(e) => setViajeId(Number(e.target.value))}
-                  >
-                    {abiertos
-                      .filter((v) => matchQ(v.placa, v.piloto_nombre))
-                      .map((v) => (
+                    value={qLlegada}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setQLlegada(val);
+                      const s = val.trim().toLowerCase();
+                      if (!s) return;
+                      const hit = abiertos.find((v) => {
+                        const placa = v.placa
+                          .toLowerCase()
+                          .replace(/[\s-]/g, "");
+                        const qPlaca = s.replace(/[\s-]/g, "");
+                        return (
+                          v.placa.toLowerCase().includes(s) ||
+                          placa.includes(qPlaca) ||
+                          v.piloto_nombre.toLowerCase().includes(s)
+                        );
+                      });
+                      if (hit) setViajeId(hit.id);
+                    }}
+                    placeholder="Ej. C-015BNG o Walter"
+                  />
+                </label>
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  <label className="text-xs text-[var(--muted)] sm:col-span-2">
+                    Viaje abierto
+                    <select
+                      className={`${input} mt-1 w-full`}
+                      value={viajeId}
+                      onChange={(e) => setViajeId(Number(e.target.value))}
+                    >
+                      {abiertosFiltrados.map((v) => (
                         <option key={v.id} value={v.id}>
                           {v.placa} · {v.piloto_nombre} · km {v.km_salida}
                           {v.destino ? ` → ${v.destino}` : ""}
                         </option>
                       ))}
-                  </select>
-                </label>
-                <label className="text-xs text-[var(--muted)]">
-                  Km llegada
-                  <input
-                    type="number"
-                    className={`${input} mt-1 w-full`}
-                    value={kmLlegada || ""}
-                    onChange={(e) => setKmLlegada(Number(e.target.value))}
-                  />
-                </label>
-                <label className="text-xs text-[var(--muted)] sm:col-span-2">
-                  Observaciones
-                  <input
-                    className={`${input} mt-1 w-full`}
-                    value={obsViaje}
-                    onChange={(e) => setObsViaje(e.target.value)}
-                  />
-                </label>
-                <div className="flex items-end">
-                  <button
-                    type="button"
-                    className="rounded bg-[#1F6AA5] px-4 py-2 text-sm text-white disabled:opacity-40"
-                    disabled={!abiertos.length}
-                    onClick={() => void llegadaViaje()}
-                  >
-                    Guardar llegada
-                  </button>
+                    </select>
+                    {!abiertosFiltrados.length ? (
+                      <span className="mt-1 block text-[11px] text-amber-300">
+                        Ningún viaje abierto coincide con la búsqueda.
+                      </span>
+                    ) : (
+                      <span className="mt-1 block text-[11px] text-[var(--muted)]">
+                        {abiertosFiltrados.length} de {abiertos.length} abiertos
+                      </span>
+                    )}
+                  </label>
+                  <label className="text-xs text-[var(--muted)]">
+                    Km llegada
+                    <input
+                      type="number"
+                      className={`${input} mt-1 w-full`}
+                      value={kmLlegada || ""}
+                      onChange={(e) => setKmLlegada(Number(e.target.value))}
+                    />
+                  </label>
+                  <label className="text-xs text-[var(--muted)] sm:col-span-2">
+                    Observaciones
+                    <input
+                      className={`${input} mt-1 w-full`}
+                      value={obsViaje}
+                      onChange={(e) => setObsViaje(e.target.value)}
+                    />
+                  </label>
+                  <div className="flex items-end">
+                    <button
+                      type="button"
+                      className="rounded bg-[#1F6AA5] px-4 py-2 text-sm text-white disabled:opacity-40"
+                      disabled={!abiertosFiltrados.length || !viajeId}
+                      onClick={() => void llegadaViaje()}
+                    >
+                      Guardar llegada
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
