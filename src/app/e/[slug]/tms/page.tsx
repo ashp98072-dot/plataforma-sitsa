@@ -62,10 +62,12 @@ export default function TmsPage() {
   const [auxInput, setAuxInput] = useState("");
   const [edit, setEdit] = useState({
     pilotoNombre: "",
-    auxiliarNombre: "",
     placa: "",
     estado: "Programado",
   });
+  const [editAuxEmpleadoIds, setEditAuxEmpleadoIds] = useState<number[]>([]);
+  const [editAuxNombres, setEditAuxNombres] = useState<string[]>([]);
+  const [editAuxInput, setEditAuxInput] = useState("");
   const [nuevaParadaNombre, setNuevaParadaNombre] = useState("");
   const [msg, setMsg] = useState("");
   const [catalogoMsg, setCatalogoMsg] = useState("");
@@ -203,6 +205,40 @@ export default function TmsPage() {
     }
   }
 
+  function totalAuxEdit() {
+    return editAuxEmpleadoIds.length + editAuxNombres.length;
+  }
+
+  function toggleAuxEdit(id: number) {
+    setEditAuxEmpleadoIds((ids) => {
+      if (ids.includes(id)) return ids.filter((x) => x !== id);
+      if (ids.length + editAuxNombres.length >= 8) return ids;
+      return [...ids, id];
+    });
+  }
+
+  function agregarAuxNombreEdit() {
+    const t = editAuxInput.trim();
+    if (t.length < 2) return;
+    if (totalAuxEdit() >= 8) return;
+    if (editAuxNombres.some((n) => n.toLowerCase() === t.toLowerCase())) {
+      setEditAuxInput("");
+      return;
+    }
+    // Si coincide con RRHH, marcar checkbox en vez de texto libre
+    const match = auxiliares.find(
+      (a) => a.nombre.toLowerCase() === t.toLowerCase(),
+    );
+    if (match) {
+      setEditAuxEmpleadoIds((ids) =>
+        ids.includes(match.id) ? ids : [...ids, match.id].slice(0, 8),
+      );
+    } else {
+      setEditAuxNombres((list) => [...list, t].slice(0, 8));
+    }
+    setEditAuxInput("");
+  }
+
   async function actualizarPlan() {
     if (!selected) return;
     const paradas = editParadas
@@ -217,7 +253,11 @@ export default function TmsPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         id: selected,
-        ...edit,
+        pilotoNombre: edit.pilotoNombre.trim() || undefined,
+        placa: edit.placa.trim() || undefined,
+        estado: edit.estado,
+        auxiliarEmpleadoIds: editAuxEmpleadoIds,
+        auxiliarNombres: editAuxNombres,
         paradas: paradas.length ? paradas : undefined,
       }),
     });
@@ -228,6 +268,11 @@ export default function TmsPage() {
 
   function seleccionarPlan(p: Plan) {
     setSelected(p.id);
+    setEdit({
+      pilotoNombre: p.piloto ?? "",
+      placa: p.placa ?? "",
+      estado: p.estado || "Programado",
+    });
     setEditParadas(
       (p.paradas ?? []).map((x) => ({
         lugarNombre: x.lugar_nombre,
@@ -237,6 +282,24 @@ export default function TmsPage() {
         requiereEvidencia: x.requiere_evidencia,
       })),
     );
+    // Precargar auxiliares actuales (nombres; RRHH si coincide)
+    const nombres = p.auxiliares?.length
+      ? p.auxiliares
+      : p.auxiliar
+        ? p.auxiliar.split(",").map((x) => x.trim()).filter(Boolean)
+        : [];
+    const ids: number[] = [];
+    const libres: string[] = [];
+    for (const n of nombres) {
+      const match = auxiliares.find(
+        (a) => a.nombre.toLowerCase() === n.toLowerCase(),
+      );
+      if (match) ids.push(match.id);
+      else libres.push(n);
+    }
+    setEditAuxEmpleadoIds(ids.slice(0, 8));
+    setEditAuxNombres(libres.slice(0, 8 - ids.length));
+    setEditAuxInput("");
   }
 
   async function subirEvidencia(tipo: "Carga" | "Descarga") {
@@ -583,21 +646,13 @@ export default function TmsPage() {
           </p>
           <input
             className={input}
-            placeholder="Nuevo piloto"
+            placeholder="Piloto"
             value={edit.pilotoNombre}
             onChange={(e) => setEdit({ ...edit, pilotoNombre: e.target.value })}
           />
           <input
             className={input}
-            placeholder="Nuevo auxiliar (texto)"
-            value={edit.auxiliarNombre}
-            onChange={(e) =>
-              setEdit({ ...edit, auxiliarNombre: e.target.value })
-            }
-          />
-          <input
-            className={input}
-            placeholder="Nueva placa"
+            placeholder="Placa"
             value={edit.placa}
             onChange={(e) => setEdit({ ...edit, placa: e.target.value })}
           />
@@ -617,6 +672,83 @@ export default function TmsPage() {
               <option key={s}>{s}</option>
             ))}
           </select>
+
+          <div className="md:col-span-4 space-y-2 rounded border border-[var(--border)] p-3">
+            <p className="text-xs text-[var(--muted)]">
+              Auxiliares (máx. 8) — {totalAuxEdit()}/8. Marca de RRHH o escribe
+              y pulsa Enter / Agregar.
+            </p>
+            <div className="flex gap-2">
+              <input
+                className={`${input} flex-1`}
+                placeholder="Escribir auxiliar y Enter"
+                value={editAuxInput}
+                onChange={(e) => setEditAuxInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    agregarAuxNombreEdit();
+                  }
+                }}
+                disabled={totalAuxEdit() >= 8}
+              />
+              <button
+                type="button"
+                className="rounded bg-[#334155] px-3 py-1 text-xs text-white disabled:opacity-40"
+                disabled={totalAuxEdit() >= 8}
+                onClick={() => agregarAuxNombreEdit()}
+              >
+                Agregar
+              </button>
+            </div>
+            {editAuxNombres.length ? (
+              <ul className="flex flex-wrap gap-2">
+                {editAuxNombres.map((n) => (
+                  <li
+                    key={n}
+                    className="flex items-center gap-1 rounded border border-sky-700 bg-sky-950/30 px-2 py-1 text-xs"
+                  >
+                    {n}
+                    <button
+                      type="button"
+                      className="text-red-300"
+                      onClick={() =>
+                        setEditAuxNombres((list) =>
+                          list.filter((x) => x !== n),
+                        )
+                      }
+                    >
+                      ×
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            <div className="flex max-h-28 flex-wrap gap-2 overflow-y-auto">
+              {auxiliares.map((p) => {
+                const on = editAuxEmpleadoIds.includes(p.id);
+                return (
+                  <label
+                    key={p.id}
+                    className={[
+                      "flex cursor-pointer items-center gap-1 rounded border px-2 py-1 text-xs",
+                      on
+                        ? "border-sky-500 bg-sky-950/40"
+                        : "border-[var(--border)]",
+                    ].join(" ")}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      disabled={!on && totalAuxEdit() >= 8}
+                      onChange={() => toggleAuxEdit(p.id)}
+                    />
+                    {p.nombre}
+                  </label>
+                );
+              })}
+            </div>
+          </div>
 
           <div className="md:col-span-4 space-y-2 rounded border border-[var(--border)] p-3">
             <p className="text-xs font-medium">Paradas del plan</p>

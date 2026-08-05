@@ -349,6 +349,7 @@ const patchSchema = z.object({
   id: z.number().int().positive(),
   pilotoNombre: z.string().optional(),
   auxiliarNombre: z.string().optional(),
+  auxiliarNombres: z.array(z.string().min(2)).max(8).optional(),
   auxiliarEmpleadoIds: z.array(z.number().int().positive()).max(8).optional(),
   placa: z.string().optional(),
   estado: z
@@ -402,31 +403,64 @@ export async function PATCH(req: Request, ctx: Ctx) {
   }
 
   let pilotoId: number | undefined;
-  let auxiliarId: number | undefined;
+  let auxiliarId: number | null | undefined;
   let unidadId: number | undefined;
 
   if (d.pilotoNombre?.trim()) {
-    const r = await execute(
-      "INSERT INTO tms_personal (empresa_id, nombre, tipo) VALUES (?, ?, 'Piloto')",
+    const existingPil = await query<RowDataPacket[]>(
+      `SELECT id FROM tms_personal
+       WHERE empresa_id = ? AND tipo = 'Piloto' AND LOWER(TRIM(nombre)) = LOWER(?)
+       LIMIT 1`,
       [empresaId, d.pilotoNombre.trim()],
     );
-    pilotoId = Number(r.insertId);
-  }
-  if (d.auxiliarEmpleadoIds) {
-    const ids: number[] = [];
-    for (const eid of d.auxiliarEmpleadoIds.slice(0, 8)) {
-      const pid = await personalDesdeEmpleado(empresaId, eid, "Auxiliar");
-      if (pid) ids.push(pid);
+    if (existingPil[0]) {
+      pilotoId = Number(existingPil[0].id);
+    } else {
+      const r = await execute(
+        "INSERT INTO tms_personal (empresa_id, nombre, tipo) VALUES (?, ?, 'Piloto')",
+        [empresaId, d.pilotoNombre.trim()],
+      );
+      pilotoId = Number(r.insertId);
     }
-    auxiliarId = ids[0];
-    await guardarAuxiliaresPlan(d.id, ids);
-  } else if (d.auxiliarNombre?.trim()) {
-    const r = await execute(
-      "INSERT INTO tms_personal (empresa_id, nombre, tipo) VALUES (?, ?, 'Auxiliar')",
-      [empresaId, d.auxiliarNombre.trim()],
-    );
-    auxiliarId = Number(r.insertId);
-    await guardarAuxiliaresPlan(d.id, [auxiliarId]);
+  }
+
+  const actualizarAux =
+    d.auxiliarEmpleadoIds != null ||
+    d.auxiliarNombres != null ||
+    d.auxiliarNombre != null;
+  if (actualizarAux) {
+    const auxPersonalIds: number[] = [];
+    for (const eid of (d.auxiliarEmpleadoIds ?? []).slice(0, 8)) {
+      const pid = await personalDesdeEmpleado(empresaId, eid, "Auxiliar");
+      if (pid) auxPersonalIds.push(pid);
+    }
+    const nombresAux = [
+      ...(d.auxiliarNombres ?? []),
+      ...(d.auxiliarNombre?.trim() ? [d.auxiliarNombre.trim()] : []),
+    ];
+    for (const nom of nombresAux) {
+      if (auxPersonalIds.length >= 8) break;
+      const nombre = nom.trim();
+      if (nombre.length < 2) continue;
+      const existing = await query<RowDataPacket[]>(
+        `SELECT id FROM tms_personal
+         WHERE empresa_id = ? AND tipo = 'Auxiliar' AND LOWER(TRIM(nombre)) = LOWER(?)
+         LIMIT 1`,
+        [empresaId, nombre],
+      );
+      if (existing[0]) {
+        const id = Number(existing[0].id);
+        if (!auxPersonalIds.includes(id)) auxPersonalIds.push(id);
+        continue;
+      }
+      const r = await execute(
+        "INSERT INTO tms_personal (empresa_id, nombre, tipo) VALUES (?, ?, 'Auxiliar')",
+        [empresaId, nombre],
+      );
+      auxPersonalIds.push(Number(r.insertId));
+    }
+    auxiliarId = auxPersonalIds[0] ?? null;
+    await guardarAuxiliaresPlan(d.id, auxPersonalIds);
   }
   if (d.placa?.trim()) {
     const r = await execute(
