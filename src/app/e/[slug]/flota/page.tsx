@@ -1376,7 +1376,9 @@ function FlotaInner() {
       setErr(data.error ?? "No se pudieron cargar evidencias");
       return;
     }
-    let list = ((data.evidencias ?? []) as EvidenciaViaje[]).map((e) => ({
+    const list: EvidenciaViaje[] = (
+      (data.evidencias ?? []) as EvidenciaViaje[]
+    ).map((e) => ({
       ...e,
       fuente: "flota" as const,
       viajeId: viajeIdSel,
@@ -1388,16 +1390,18 @@ function FlotaInner() {
       );
       if (tmsRes.ok) {
         const tms = await tmsRes.json();
-        const extras = ((tms.evidencias ?? []) as {
-          id: number;
-          tipo: string;
-          nombre: string;
-          latitud: number | null;
-          longitud: number | null;
-          capturadoEn?: string | null;
-          url: string;
-          parada_nombre?: string | null;
-        }[]).map((e) => ({
+        const extras: EvidenciaViaje[] = (
+          (tms.evidencias ?? []) as {
+            id: number;
+            tipo: string;
+            nombre: string;
+            latitud: number | null;
+            longitud: number | null;
+            capturadoEn?: string | null;
+            url: string;
+            parada_nombre?: string | null;
+          }[]
+        ).map((e) => ({
           id: e.id,
           tipo: e.parada_nombre
             ? `producto · ${e.parada_nombre}`
@@ -1407,8 +1411,8 @@ function FlotaInner() {
           longitud: e.longitud,
           capturadoEn: e.capturadoEn,
           url: e.url,
-          origen: "viaje" as const,
-          fuente: "tms" as const,
+          origen: "viaje",
+          fuente: "tms",
           viajeId: viajeIdSel,
         }));
         // Evitar duplicar si ya están en flota (mismas urls relativas difíciles); unir por id+url
