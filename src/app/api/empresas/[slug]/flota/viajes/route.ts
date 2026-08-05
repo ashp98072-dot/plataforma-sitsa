@@ -145,6 +145,16 @@ export async function POST(req: Request, ctx: Ctx) {
       );
     }
 
+    const kmActual = Number(veh.km_actual ?? 0);
+    if (d.kmSalida < kmActual) {
+      return NextResponse.json(
+        {
+          error: `Km de salida (${d.kmSalida.toLocaleString("es-GT")}) no puede ser menor al km actual de ${veh.placa} (${kmActual.toLocaleString("es-GT")}). Debe ser mayor o igual.`,
+        },
+        { status: 400 },
+      );
+    }
+
     const abiertoVeh = await query<RowDataPacket[]>(
       `SELECT id FROM flota_viajes
        WHERE empresa_id = ? AND vehiculo_id = ? AND estado = 'abierto' LIMIT 1`,
@@ -436,6 +446,20 @@ export async function POST(req: Request, ctx: Ctx) {
     if (d.kmLlegada < Number(viaje[0].km_salida)) {
       return NextResponse.json(
         { error: "Km de llegada no puede ser menor que la salida." },
+        { status: 400 },
+      );
+    }
+
+    const vehKm = await query<RowDataPacket[]>(
+      `SELECT km_actual FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1`,
+      [Number(viaje[0].vehiculo_id), guard.empresa.id],
+    );
+    const kmActualVeh = Number(vehKm[0]?.km_actual ?? viaje[0].km_salida ?? 0);
+    if (d.kmLlegada < kmActualVeh) {
+      return NextResponse.json(
+        {
+          error: `Km de llegada (${d.kmLlegada.toLocaleString("es-GT")}) no puede ser menor al km actual de la unidad (${kmActualVeh.toLocaleString("es-GT")}). Debe ser mayor o igual.`,
+        },
         { status: 400 },
       );
     }

@@ -806,8 +806,20 @@ function FlotaInner() {
       setErr("Toma o adjunta la foto del tablero (km) para registrar la salida.");
       return;
     }
-    if (!kmLectura) {
+    if (!kmLectura && kmLectura !== 0) {
       setErr("Indica el km de salida (debe coincidir con el tablero).");
+      return;
+    }
+    const vehKm = vehiculos.find(
+      (v) =>
+        v.placa.toUpperCase().replace(/[\s-]/g, "") ===
+        placa.replace(/[\s-]/g, ""),
+    );
+    const kmActual = Number(vehKm?.km_actual ?? 0);
+    if (kmLectura < kmActual) {
+      setErr(
+        `Km de salida (${kmLectura.toLocaleString("es-GT")}) no puede ser menor al km actual de la unidad (${kmActual.toLocaleString("es-GT")}). Debe ser mayor o igual.`,
+      );
       return;
     }
 
@@ -968,8 +980,25 @@ function FlotaInner() {
       setErr("Selecciona el viaje abierto.");
       return;
     }
-    if (!kmLlegada) {
+    if (!kmLlegada && kmLlegada !== 0) {
       setErr("Indica el km de llegada.");
+      return;
+    }
+    const viajeSelPre = abiertos.find((v) => v.id === viajeId);
+    if (viajeSelPre && kmLlegada < Number(viajeSelPre.km_salida)) {
+      setErr(
+        `Km de llegada no puede ser menor al km de salida (${Number(viajeSelPre.km_salida).toLocaleString("es-GT")}).`,
+      );
+      return;
+    }
+    const vehLleg = viajeSelPre
+      ? vehiculos.find((v) => v.id === viajeSelPre.vehiculo_id)
+      : null;
+    const kmActLleg = Number(vehLleg?.km_actual ?? viajeSelPre?.km_salida ?? 0);
+    if (kmLlegada < kmActLleg) {
+      setErr(
+        `Km de llegada (${kmLlegada.toLocaleString("es-GT")}) no puede ser menor al km actual (${kmActLleg.toLocaleString("es-GT")}). Debe ser mayor o igual.`,
+      );
       return;
     }
     if (!fotosLlegada.length) {
@@ -2242,7 +2271,36 @@ function FlotaInner() {
                       className={`${input} mt-1 w-full`}
                       value={kmLectura || ""}
                       onChange={(e) => setKmLectura(Number(e.target.value))}
+                      min={(() => {
+                        const p = placaSalida
+                          .trim()
+                          .toUpperCase()
+                          .replace(/[\s-]/g, "");
+                        const v = vehiculos.find(
+                          (x) =>
+                            x.placa.toUpperCase().replace(/[\s-]/g, "") === p,
+                        );
+                        return Number(v?.km_actual ?? 0);
+                      })()}
                     />
+                    {(() => {
+                      const p = placaSalida
+                        .trim()
+                        .toUpperCase()
+                        .replace(/[\s-]/g, "");
+                      const v = vehiculos.find(
+                        (x) =>
+                          x.placa.toUpperCase().replace(/[\s-]/g, "") === p,
+                      );
+                      if (!v) return null;
+                      return (
+                        <span className="mt-0.5 block text-[11px]">
+                          Km actual de la unidad:{" "}
+                          {Number(v.km_actual ?? 0).toLocaleString("es-GT")}{" "}
+                          (debe ser ≥)
+                        </span>
+                      );
+                    })()}
                   </label>
                   <label className="text-xs text-[var(--muted)] sm:col-span-2">
                     Destino
