@@ -195,6 +195,35 @@ export async function POST(req: Request, ctx: Ctx) {
     );
   }
 
+  // Normalizar tipo: servicio_mayor reinicia contador; reparacion no
+  const tipoRaw = d.tipo.trim().toLowerCase();
+  const esMayor =
+    tipoRaw === "servicio_mayor" ||
+    tipoRaw === "mantenimiento" ||
+    tipoRaw === "mayor";
+  const esReparacion =
+    tipoRaw === "reparacion" || tipoRaw === "reparación";
+  if (!esMayor && !esReparacion) {
+    return NextResponse.json(
+      {
+        error:
+          "Tipo inválido. Usa Servicio mayor (reinicia contador) o Reparación (mantiene kilometraje).",
+      },
+      { status: 400 },
+    );
+  }
+  const tipo = esMayor ? "servicio_mayor" : "reparacion";
+
+  if (esMayor && (d.kmServicio == null || d.kmServicio < 0)) {
+    return NextResponse.json(
+      {
+        error:
+          "Servicio mayor: el km es obligatorio para reiniciar el contador del servicio.",
+      },
+      { status: 400 },
+    );
+  }
+
   const reps = (d.repuestos?.length ? d.repuestos : parseRepuestos(d.descripcion)).map(
     (x) => x.trim(),
   ).filter(Boolean);
@@ -230,7 +259,7 @@ export async function POST(req: Request, ctx: Ctx) {
       [
         guard.empresa.id,
         d.vehiculoId,
-        d.tipo,
+        tipo,
         d.kmServicio ?? null,
         fechaServicio,
         d.costo,
@@ -250,7 +279,7 @@ export async function POST(req: Request, ctx: Ctx) {
       [
         guard.empresa.id,
         d.vehiculoId,
-        d.tipo,
+        tipo,
         d.kmServicio ?? null,
         fechaServicio,
         d.costo,
@@ -262,41 +291,74 @@ export async function POST(req: Request, ctx: Ctx) {
   }
   const servicioId = Number(result.insertId);
 
-  if (d.sacarDeServicio !== false) {
+  // Servicio mayor: SIEMPRE reinicia contador (km_ultimo_servicio = km actual)
+  // Reparación: NO toca el contador de servicio
+  if (esMayor) {
+    const kmReset = Number(d.kmServicio);
+    if (d.sacarDeServicio !== false) {
+      await execute(
+        `UPDATE flota_vehiculos SET
+          km_ultimo_servicio = ?,
+          fecha_ultimo_servicio = ?,
+          km_actual = GREATEST(COALESCE(km_actual, 0), ?),
+          en_taller = 0,
+          fecha_entrada_taller = NULL,
+          motivo_taller = NULL,
+          estado = 'Activo'
+         WHERE id = ? AND empresa_id = ?`,
+        [kmReset, fechaServicio, kmReset, d.vehiculoId, guard.empresa.id],
+      ).catch(async () => {
+        await execute(
+          `UPDATE flota_vehiculos SET
+            km_ultimo_servicio = ?,
+            fecha_ultimo_servicio = ?,
+            en_taller = 0,
+            fecha_entrada_taller = NULL
+           WHERE id = ? AND empresa_id = ?`,
+          [kmReset, fechaServicio, d.vehiculoId, guard.empresa.id],
+        );
+      });
+    } else {
+      await execute(
+        `UPDATE flota_vehiculos SET
+          km_ultimo_servicio = ?,
+          fecha_ultimo_servicio = ?,
+          km_actual = GREATEST(COALESCE(km_actual, 0), ?),
+          en_taller = 1,
+          fecha_entrada_taller = COALESCE(fecha_entrada_taller, ?),
+          estado = 'En taller'
+         WHERE id = ? AND empresa_id = ?`,
+        [
+          kmReset,
+          fechaServicio,
+          kmReset,
+          fechaEntrada,
+          d.vehiculoId,
+          guard.empresa.id,
+        ],
+      ).catch(() => undefined);
+    }
+  } else if (d.sacarDeServicio !== false) {
+    // Reparación: sale de taller sin reiniciar contador
     await execute(
       `UPDATE flota_vehiculos SET
-        km_ultimo_servicio = COALESCE(?, km_ultimo_servicio),
-        fecha_ultimo_servicio = ?,
         en_taller = 0,
         fecha_entrada_taller = NULL,
         motivo_taller = NULL,
-        estado = 'Activo'
+        estado = 'Activo',
+        km_actual = GREATEST(COALESCE(km_actual, 0), COALESCE(?, km_actual, 0))
        WHERE id = ? AND empresa_id = ?`,
-      [d.kmServicio ?? null, fechaServicio, d.vehiculoId, guard.empresa.id],
-    ).catch(async () => {
-      await execute(
-        `UPDATE flota_vehiculos SET
-          km_ultimo_servicio = COALESCE(?, km_ultimo_servicio),
-          fecha_ultimo_servicio = ?,
-          en_taller = 0,
-          fecha_entrada_taller = NULL
-         WHERE id = ? AND empresa_id = ?`,
-        [d.kmServicio ?? null, fechaServicio, d.vehiculoId, guard.empresa.id],
-      );
-    });
-  } else {
-    // Queda en taller: guardar / actualizar fecha de entrada
-    if (fechaEntrada) {
-      await execute(
-        `UPDATE flota_vehiculos SET
-          en_taller = 1,
-          fecha_entrada_taller = COALESCE(fecha_entrada_taller, ?),
-          estado = 'En taller',
-          km_ultimo_servicio = COALESCE(?, km_ultimo_servicio)
-         WHERE id = ? AND empresa_id = ?`,
-        [fechaEntrada, d.kmServicio ?? null, d.vehiculoId, guard.empresa.id],
-      ).catch(() => undefined);
-    }
+      [d.kmServicio ?? null, d.vehiculoId, guard.empresa.id],
+    ).catch(() => undefined);
+  } else if (fechaEntrada) {
+    await execute(
+      `UPDATE flota_vehiculos SET
+        en_taller = 1,
+        fecha_entrada_taller = COALESCE(fecha_entrada_taller, ?),
+        estado = 'En taller'
+       WHERE id = ? AND empresa_id = ?`,
+      [fechaEntrada, d.vehiculoId, guard.empresa.id],
+    ).catch(() => undefined);
   }
 
   const subidos: string[] = [];
@@ -329,14 +391,19 @@ export async function POST(req: Request, ctx: Ctx) {
     }
   }
 
+  const extraMayor = esMayor
+    ? ` Contador de servicio reiniciado en ${Number(d.kmServicio).toLocaleString("es-GT")} km.`
+    : " Contador de servicio sin cambios (reparación).";
+
   return NextResponse.json({
     id: servicioId,
-    mensaje: `Servicio de ${veh[0].placa} registrado.${
+    mensaje: `Servicio de ${veh[0].placa} registrado.${extraMayor}${
       reps.length ? ` ${reps.length} repuesto(s).` : ""
     }${subidos.length ? ` ${subidos.length} archivo(s) adjunto(s).` : ""}${
       d.sacarDeServicio !== false ? " Unidad fuera de taller / en servicio." : ""
     }`,
     adjuntos: subidos.length,
     repuestos: reps,
+    reinicioContador: esMayor,
   });
 }

@@ -163,7 +163,7 @@ function FlotaInner() {
   const [vehiculoId, setVehiculoId] = useState(0);
   const [kmLectura, setKmLectura] = useState(0);
   const [conductor, setConductor] = useState("");
-  const [tipoServicio, setTipoServicio] = useState("mantenimiento");
+  const [tipoServicio, setTipoServicio] = useState("servicio_mayor");
   const [costo, setCosto] = useState(0);
   const [repuestos, setRepuestos] = useState<string[]>([]);
   const [repuestoInput, setRepuestoInput] = useState("");
@@ -501,6 +501,15 @@ function FlotaInner() {
     if (enRuta) {
       setErr(
         "Esa unidad está en ruta. Cierra la llegada antes de registrar servicio.",
+      );
+      return;
+    }
+    if (
+      (tipoServicio === "servicio_mayor" || tipoServicio === "mantenimiento") &&
+      !(kmLectura > 0)
+    ) {
+      setErr(
+        "Servicio mayor: indica el km actual. Reinicia el contador del servicio.",
       );
       return;
     }
@@ -1283,16 +1292,24 @@ function FlotaInner() {
                   value={tipoServicio}
                   onChange={(e) => setTipoServicio(e.target.value)}
                 >
-                  <option value="mantenimiento">Mantenimiento (mayor)</option>
-                  <option value="servicio_menor">Servicio menor</option>
-                  <option value="reparacion">Reparación</option>
+                  <option value="servicio_mayor">
+                    Servicio mayor (reinicia el contador del servicio)
+                  </option>
+                  <option value="reparacion">
+                    Reparación (mantiene el kilometraje)
+                  </option>
                 </select>
                 <input
                   type="number"
                   className={`${input} w-28`}
-                  placeholder="Km"
+                  placeholder={
+                    tipoServicio === "servicio_mayor"
+                      ? "Km (obligatorio)"
+                      : "Km"
+                  }
                   value={kmLectura || ""}
                   onChange={(e) => setKmLectura(Number(e.target.value))}
+                  required={tipoServicio === "servicio_mayor"}
                 />
                 <input
                   type="number"
@@ -1486,7 +1503,13 @@ function FlotaInner() {
                       {s.dias_en_taller != null ? s.dias_en_taller : "—"}
                     </td>
                     <td className="px-3 py-2 font-mono">{s.placa}</td>
-                    <td className="px-3 py-2">{s.tipo}</td>
+                    <td className="px-3 py-2 text-xs">
+                      {s.tipo === "servicio_mayor" || s.tipo === "mantenimiento"
+                        ? "Servicio mayor"
+                        : s.tipo === "reparacion"
+                          ? "Reparación"
+                          : s.tipo}
+                    </td>
                     <td className="px-3 py-2">
                       {s.km_servicio?.toLocaleString("es-GT") ?? "—"}
                     </td>
