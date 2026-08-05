@@ -327,18 +327,22 @@ export default function UsuariosPage() {
     e.preventDefault();
     setError("");
     setMsg("");
+    // Solo Admin puede ir sin empresas concretas si marca "todas".
+    // RRHH / Contabilidad / Predios / etc. respetan el checkbox y la lista.
+    const todas =
+      rol === "Admin" ? true : Boolean(accesoTodas);
+    if (!todas && empresaIds.length === 0) {
+      setError("Selecciona al menos una empresa, o marca acceso a todas.");
+      return;
+    }
     const payload = {
       username,
       password: password || undefined,
       nombre,
       rol,
-      accesoTodas:
-        accesoTodas ||
-        rol === "RRHH" ||
-        rol === "Contabilidad" ||
-        rol === "Admin",
+      accesoTodas: todas,
       activo,
-      empresaIds,
+      empresaIds: todas ? [] : empresaIds,
       permisos:
         rol === "Admin"
           ? undefined
@@ -444,9 +448,8 @@ export default function UsuariosPage() {
                 setRol(r);
                 setPermisos(clonePermisos(r));
                 abrirGrupoPrincipal(r);
-                if (r === "RRHH" || r === "Contabilidad" || r === "Admin") {
-                  setAccesoTodas(true);
-                }
+                // Solo Admin implica acceso a todas; el resto elige empresas
+                if (r === "Admin") setAccesoTodas(true);
               }}
             >
               {ROLES.map((r) => (
@@ -461,10 +464,16 @@ export default function UsuariosPage() {
         <label className="flex items-center gap-2 text-sm">
           <input
             type="checkbox"
-            checked={accesoTodas}
+            checked={rol === "Admin" ? true : accesoTodas}
+            disabled={rol === "Admin"}
             onChange={(e) => setAccesoTodas(e.target.checked)}
           />
           Acceso a todas las empresas
+          {rol === "Admin" ? (
+            <span className="text-xs text-[var(--muted)]">
+              (Admin siempre tiene acceso a todas)
+            </span>
+          ) : null}
         </label>
 
         {editId ? (

@@ -24,8 +24,9 @@ export const MODULOS = [
 
 export type Modulo = (typeof MODULOS)[number];
 
+/** Solo Admin ve todas por rol. RRHH/Contabilidad usan el flag acceso_todas_empresas. */
 export function rolVeTodasLasEmpresas(rol: RolGlobal): boolean {
-  return rol === "Admin" || rol === "RRHH" || rol === "Contabilidad";
+  return rol === "Admin";
 }
 
 export function modulosPorRol(rol: RolGlobal): Modulo[] {
