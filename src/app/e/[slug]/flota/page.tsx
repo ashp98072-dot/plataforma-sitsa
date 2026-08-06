@@ -319,6 +319,12 @@ function FlotaInner() {
   const [compraCosto, setCompraCosto] = useState(0);
   const [compraFecha, setCompraFecha] = useState(() => hoyLocal());
   const [compraFiles, setCompraFiles] = useState<FileList | null>(null);
+  const [filtroHistorialServicios, setFiltroHistorialServicios] = useState<
+    "todos" | "en_taller" | "cerrados" | "compras"
+  >("todos");
+  const [sacarVehiculoId, setSacarVehiculoId] = useState(0);
+  const [sacarKm, setSacarKm] = useState(0);
+  const [sacarFecha, setSacarFecha] = useState(() => hoyLocal());
   const [accesoEmpresaIds, setAccesoEmpresaIds] = useState<number[]>([]);
   const [empresasFlota, setEmpresasFlota] = useState<EmpresaOpt[]>([]);
   const [empresaActualId, setEmpresaActualId] = useState(0);
@@ -439,9 +445,26 @@ function FlotaInner() {
     () => lecturas.filter((l) => matchQ(l.placa, l.nota ?? "")),
     [lecturas, matchQ],
   );
-  const serviciosFiltrados = useMemo(
-    () => servicios.filter((s) => matchQ(s.placa, s.tipo)),
-    [servicios, matchQ],
+  const serviciosFiltrados = useMemo(() => {
+    return servicios.filter((s) => {
+      if (!matchQ(s.placa, `${s.tipo} ${s.descripcion ?? ""}`)) return false;
+      if (filtroHistorialServicios === "compras") return s.tipo === "compra";
+      if (filtroHistorialServicios === "en_taller") {
+        return s.tipo !== "compra" && !s.fecha_salida_taller;
+      }
+      if (filtroHistorialServicios === "cerrados") {
+        return Boolean(s.fecha_salida_taller) || s.tipo === "compra";
+      }
+      return true;
+    });
+  }, [servicios, matchQ, filtroHistorialServicios]);
+
+  const vehiculosEnTaller = useMemo(
+    () =>
+      activos.filter(
+        (v) => Boolean(v.en_taller) && matchQ(v.placa, `${v.marca} ${v.modelo}`),
+      ),
+    [activos, matchQ],
   );
   /** Piloto (kiosco): solo ve viajes de su nombre de sesión. */
   const esVistaPilotoRestringida =
@@ -841,6 +864,69 @@ function FlotaInner() {
     if (!res.ok) setErr(data.error ?? "Error");
     else setMsg(data.mensaje);
     await cargar();
+  }
+
+  /** Cierra taller y, si hay servicio abierto, lo completa con fecha de salida. */
+  async function sacarVehiculoDeServicio() {
+    setErr("");
+    setMsg("");
+    const id = sacarVehiculoId;
+    if (!id) {
+      setErr("Selecciona el vehículo que sale de servicio / taller.");
+      return;
+    }
+    const abierto = servicios.find(
+      (s) =>
+        Number(s.vehiculo_id) === id &&
+        !s.fecha_salida_taller &&
+        s.tipo !== "compra",
+    );
+    if (
+      abierto &&
+      (can("flota_servicios", "editar") || can("flota_servicios", "crear"))
+    ) {
+      const patch = await fetch(`/api/empresas/${slug}/flota/servicios`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: abierto.id,
+          vehiculoId: id,
+          tipo: abierto.tipo,
+          kmServicio:
+            sacarKm ||
+            abierto.km_servicio ||
+            vehiculos.find((v) => v.id === id)?.km_actual ||
+            null,
+          fechaServicio: sacarFecha || hoyLocal(),
+          fechaEntradaTaller: abierto.fecha_entrada_taller
+            ? String(abierto.fecha_entrada_taller).slice(0, 10)
+            : undefined,
+          fechaSalidaTaller: sacarFecha || hoyLocal(),
+          sacarDeServicio: true,
+          costo: Number(abierto.costo ?? 0),
+          descripcion: abierto.descripcion ?? undefined,
+          observaciones: abierto.observaciones ?? undefined,
+          repuestos: abierto.repuestos ?? [],
+        }),
+      });
+      const pdata = await patch.json();
+      if (!patch.ok) {
+        await salirTaller(id);
+        setMsg(
+          `${pdata.error ? pdata.error + " · " : ""}Unidad marcada fuera de taller.`,
+        );
+        setSacarVehiculoId(0);
+        return;
+      }
+      setMsg(pdata.mensaje ?? "Vehículo sacado de servicio.");
+      setSacarVehiculoId(0);
+      setSacarKm(0);
+      await cargar();
+      return;
+    }
+    await salirTaller(id);
+    setSacarVehiculoId(0);
+    setSacarKm(0);
   }
 
   async function cambiarActivoVehiculo(id: number, activo: boolean) {
@@ -2838,16 +2924,170 @@ function FlotaInner() {
       ) : null}
 
       {tab === "servicios" && can("flota_servicios") ? (
-        <div className="space-y-4">
+        <div className="space-y-6">
           {SearchBar}
+
+          <section className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+            <div>
+              <h2 className="text-sm font-semibold">
+                1. Vehículos en servicio / taller
+              </h2>
+              <p className="text-xs text-[var(--muted)]">
+                Unidades actualmente en mantenimiento o reparación
+                {resumen ? (
+                  <>
+                    {" "}
+                    · En taller: <strong>{resumen.enTaller}</strong>
+                  </>
+                ) : null}
+              </p>
+            </div>
+            {vehiculosEnTaller.length ? (
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="bg-[var(--thead)] text-xs uppercase text-[var(--muted)]">
+                    <tr>
+                      <th className="px-3 py-2">Placa</th>
+                      <th className="px-3 py-2">Km</th>
+                      <th className="px-3 py-2">Entró</th>
+                      <th className="px-3 py-2">Motivo</th>
+                      <th className="px-3 py-2">Servicio</th>
+                      <th className="px-3 py-2">Acción</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {vehiculosEnTaller.map((v) => {
+                      const svc = servicios.find(
+                        (s) =>
+                          Number(s.vehiculo_id) === v.id &&
+                          !s.fecha_salida_taller &&
+                          s.tipo !== "compra",
+                      );
+                      return (
+                        <tr
+                          key={v.id}
+                          className="border-t border-[var(--border)]"
+                        >
+                          <td className="px-3 py-2 font-mono">{v.placa}</td>
+                          <td className="px-3 py-2">
+                            {Number(v.km_actual ?? 0).toLocaleString("es-GT")}
+                          </td>
+                          <td className="px-3 py-2">
+                            {v.fecha_entrada_taller
+                              ? String(v.fecha_entrada_taller).slice(0, 10)
+                              : "—"}
+                          </td>
+                          <td className="max-w-[10rem] truncate px-3 py-2 text-xs text-[var(--muted)]">
+                            {v.motivo_taller || "—"}
+                          </td>
+                          <td className="px-3 py-2 text-xs">
+                            {svc ? `#${svc.id} · ${svc.tipo}` : "—"}
+                          </td>
+                          <td className="px-3 py-2">
+                            <button
+                              type="button"
+                              className="rounded bg-emerald-700 px-2 py-1 text-xs text-white"
+                              onClick={() => {
+                                setSacarVehiculoId(v.id);
+                                setSacarKm(Number(v.km_actual ?? 0));
+                                setSacarFecha(hoyLocal());
+                                document
+                                  .getElementById("seccion-sacar-servicio")
+                                  ?.scrollIntoView({ behavior: "smooth" });
+                              }}
+                            >
+                              Sacar de servicio
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-sm text-[var(--muted)]">
+                No hay vehículos en taller ahora.
+              </p>
+            )}
+          </section>
+
+          <section
+            id="seccion-sacar-servicio"
+            className="space-y-3 rounded-xl border border-emerald-800/40 bg-[var(--card)] p-4"
+          >
+            <div>
+              <h2 className="text-sm font-semibold">
+                2. Sacar vehículo de servicio
+              </h2>
+              <p className="text-xs text-[var(--muted)]">
+                Vuelve la unidad a disponible y cierra el servicio abierto.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="text-xs text-[var(--muted)]">
+                Vehículo en taller
+                <select
+                  className={`${input} mt-1 block min-w-[12rem]`}
+                  value={sacarVehiculoId}
+                  onChange={(e) => {
+                    const id = Number(e.target.value);
+                    setSacarVehiculoId(id);
+                    const v = activos.find((x) => x.id === id);
+                    if (v) setSacarKm(Number(v.km_actual ?? 0));
+                  }}
+                >
+                  <option value={0}>— Elegir —</option>
+                  {vehiculosEnTaller.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.placa}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-xs text-[var(--muted)]">
+                Fecha salida
+                <input
+                  type="date"
+                  className={`${input} mt-1 block`}
+                  value={sacarFecha}
+                  onChange={(e) => setSacarFecha(e.target.value)}
+                />
+              </label>
+              <label className="text-xs text-[var(--muted)]">
+                Km al salir
+                <input
+                  type="number"
+                  className={`${input} mt-1 block w-32`}
+                  value={sacarKm || ""}
+                  onChange={(e) => setSacarKm(Number(e.target.value))}
+                  min={0}
+                />
+              </label>
+              <button
+                type="button"
+                className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+                disabled={!sacarVehiculoId}
+                onClick={() => void sacarVehiculoDeServicio()}
+              >
+                Confirmar salida de taller
+              </button>
+            </div>
+          </section>
+
           {can("flota_servicios", "crear") ? (
             <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-xs text-[var(--muted)]">
+                <div>
+                  <h2 className="text-sm font-semibold">
+                    3. Registrar servicio
+                  </h2>
+                  <p className="text-xs text-[var(--muted)]">
                   {editServicioId
                     ? `Editando servicio #${editServicioId}. Puedes corregir datos y agregar más facturas.`
                     : "No se puede registrar servicio si la unidad está en ruta. Escribe cada repuesto y pulsa Enter. Adjunta facturas PDF o imagen."}
-                </p>
+                  </p>
+                </div>
                 {editServicioId ? (
                   <button
                     type="button"
@@ -3035,7 +3275,7 @@ function FlotaInner() {
                     checked={sacarDeServicio}
                     onChange={(e) => setSacarDeServicio(e.target.checked)}
                   />
-                  Sacar de taller / volver a servicio
+                  Sacar de taller / volver a servicio al guardar
                 </label>
                 <label className="text-xs text-[var(--muted)]">
                   Facturas PDF / imágenes
@@ -3057,22 +3297,48 @@ function FlotaInner() {
               </div>
             </div>
           ) : null}
-          <div className="flex gap-2">
-            <button
-              type="button"
-              className="rounded bg-[#1B5E20] px-3 py-1.5 text-xs text-white"
-              onClick={() => exportar("servicios", "xlsx")}
-            >
-              Excel servicios
-            </button>
-            <button
-              type="button"
-              className="rounded bg-[#37474F] px-3 py-1.5 text-xs text-white"
-              onClick={() => exportar("servicios", "pdf")}
-            >
-              PDF servicios
-            </button>
-          </div>
+
+          <section className="space-y-3">
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold">
+                  4. Reportes de servicios
+                </h2>
+                <p className="text-xs text-[var(--muted)]">
+                  Historial y exportación Excel / PDF.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <select
+                  className={input}
+                  value={filtroHistorialServicios}
+                  onChange={(e) =>
+                    setFiltroHistorialServicios(
+                      e.target.value as typeof filtroHistorialServicios,
+                    )
+                  }
+                >
+                  <option value="todos">Todos</option>
+                  <option value="en_taller">Abiertos / en taller</option>
+                  <option value="cerrados">Cerrados</option>
+                  <option value="compras">Solo compras</option>
+                </select>
+                <button
+                  type="button"
+                  className="rounded bg-[#1B5E20] px-3 py-1.5 text-xs text-white"
+                  onClick={() => exportar("servicios", "xlsx")}
+                >
+                  Excel servicios
+                </button>
+                <button
+                  type="button"
+                  className="rounded bg-[#37474F] px-3 py-1.5 text-xs text-white"
+                  onClick={() => exportar("servicios", "pdf")}
+                >
+                  PDF servicios
+                </button>
+              </div>
+            </div>
           <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
             <table className="min-w-full text-left text-sm">
               <thead className="bg-[#334155] text-white">
@@ -3163,9 +3429,20 @@ function FlotaInner() {
                     </td>
                   </tr>
                 ))}
+                {!serviciosFiltrados.length ? (
+                  <tr>
+                    <td
+                      colSpan={11}
+                      className="px-3 py-6 text-center text-sm text-[var(--muted)]"
+                    >
+                      Sin registros con este filtro.
+                    </td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>
+          </section>
         </div>
       ) : null}
 
