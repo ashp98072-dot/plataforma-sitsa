@@ -53,8 +53,7 @@ type Vehiculo = {
   activo?: number;
   empresa_activo?: string | null;
   notas?: string | null;
-  filtro_servicio_mayor?: string | null;
-  filtro_servicio_menor?: string | null;
+  filtros?: { tipo: string; codigo: string; notas?: string | null }[];
   rin_llanta?: string | null;
   medida_llanta?: string | null;
   tipo_aceite?: string | null;
@@ -227,8 +226,6 @@ const emptyForm = {
   descripcion: "",
   kmActual: 0,
   intervalo: 10000,
-  filtroMayor: "",
-  filtroMenor: "",
   rin: "",
   medidaLlanta: "",
   tipoAceite: "",
@@ -292,6 +289,9 @@ function FlotaInner() {
   const [importando, setImportando] = useState(false);
 
   const [form, setForm] = useState(emptyForm);
+  const [filtrosForm, setFiltrosForm] = useState<
+    { tipo: string; codigo: string }[]
+  >([]);
   const [editId, setEditId] = useState<number | null>(null);
   const [tallerId, setTallerId] = useState<number | null>(null);
   const [motivoTaller, setMotivoTaller] = useState("");
@@ -711,8 +711,6 @@ function FlotaInner() {
       descripcion: v.descripcion ?? "",
       kmActual: Number(v.km_actual ?? 0),
       intervalo: Number(v.km_intervalo_servicio ?? 10000),
-      filtroMayor: v.filtro_servicio_mayor ?? "",
-      filtroMenor: v.filtro_servicio_menor ?? "",
       rin: v.rin_llanta ?? "",
       medidaLlanta: v.medida_llanta ?? "",
       tipoAceite: v.tipo_aceite ?? "",
@@ -720,6 +718,11 @@ function FlotaInner() {
       notas: v.notas ?? "",
       activo: esVehiculoActivo(v),
     });
+    setFiltrosForm(
+      (v.filtros ?? [])
+        .filter((f) => f.tipo && f.codigo)
+        .map((f) => ({ tipo: f.tipo, codigo: f.codigo })),
+    );
     setTab("vehiculos");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -736,13 +739,17 @@ function FlotaInner() {
       color: form.color,
       kmActual: form.kmActual,
       kmIntervaloServicio: form.intervalo,
-      filtroServicioMayor: form.filtroMayor,
-      filtroServicioMenor: form.filtroMenor,
       rinLlanta: form.rin,
       medidaLlanta: form.medidaLlanta,
       tipoAceite: form.tipoAceite,
       notas: form.notas,
       activo: form.activo,
+      filtros: filtrosForm
+        .map((f) => ({
+          tipo: f.tipo.trim(),
+          codigo: f.codigo.trim(),
+        }))
+        .filter((f) => f.tipo && f.codigo),
       accesoEmpresaIds: editId ? accesoEmpresaIds : undefined,
     };
     const res = await fetch(`/api/empresas/${slug}/flota/vehiculos`, {
@@ -757,6 +764,7 @@ function FlotaInner() {
     }
     setMsg(data.mensaje);
     setForm(emptyForm);
+    setFiltrosForm([]);
     setEditId(null);
     setAccesoEmpresaIds([]);
     await cargar();
@@ -882,6 +890,7 @@ function FlotaInner() {
       if (editId === v.id) {
         setEditId(null);
         setForm(emptyForm);
+        setFiltrosForm([]);
       }
     }
     await cargar();
@@ -2067,8 +2076,13 @@ function FlotaInner() {
                   </div>
                   <p className="text-xs text-[var(--muted)]">
                     Km {Number(v.km_actual ?? 0).toLocaleString("es-GT")} · Rin{" "}
-                    {v.rin_llanta || "—"} · Filtro may.{" "}
-                    {v.filtro_servicio_mayor || "—"}
+                    {v.rin_llanta || "—"}
+                    {(v.filtros ?? []).length
+                      ? ` · ${(v.filtros ?? [])
+                          .slice(0, 2)
+                          .map((f) => `${f.tipo}:${f.codigo}`)
+                          .join(" · ")}`
+                      : ""}
                   </p>
                 </div>
               );
@@ -2097,6 +2111,7 @@ function FlotaInner() {
                     onClick={() => {
                       setEditId(null);
                       setForm(emptyForm);
+                      setFiltrosForm([]);
                     }}
                   >
                     Cancelar edición
@@ -2111,8 +2126,6 @@ function FlotaInner() {
                     ["modelo", "Modelo (año)"],
                     ["descripcion", "Descripción"],
                     ["color", "Color"],
-                    ["filtroMayor", "Filtro servicio mayor"],
-                    ["filtroMenor", "Filtro servicio menor"],
                     ["rin", "Rin de llanta"],
                     ["medidaLlanta", "Medida de llanta"],
                     ["tipoAceite", "Tipo de aceite"],
@@ -2175,6 +2188,100 @@ function FlotaInner() {
                   </select>
                 </label>
               </div>
+
+              <div className="rounded-lg border border-[var(--border)] bg-[#0b1217] p-3">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-medium">Tipos de filtros</p>
+                    <p className="text-[11px] text-[var(--muted)]">
+                      Ej. aceite, aire, combustible… y el código de tienda de
+                      cada uno.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="rounded bg-[#1e293b] px-2 py-1 text-xs text-sky-200"
+                    onClick={() =>
+                      setFiltrosForm((prev) => [
+                        ...prev,
+                        { tipo: "", codigo: "" },
+                      ])
+                    }
+                  >
+                    + Agregar filtro
+                  </button>
+                </div>
+                {filtrosForm.length === 0 ? (
+                  <p className="text-xs text-[var(--muted)]">
+                    Sin filtros cargados. Usa «Agregar filtro».
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {filtrosForm.map((f, idx) => (
+                      <div
+                        key={idx}
+                        className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]"
+                      >
+                        <label className="text-[11px] text-[var(--muted)]">
+                          Tipo
+                          <input
+                            list="tipos-filtro-flota"
+                            className={`${input} mt-1 w-full`}
+                            placeholder="Aceite / Aire / Combustible…"
+                            value={f.tipo}
+                            onChange={(e) =>
+                              setFiltrosForm((prev) =>
+                                prev.map((x, i) =>
+                                  i === idx
+                                    ? { ...x, tipo: e.target.value }
+                                    : x,
+                                ),
+                              )
+                            }
+                          />
+                        </label>
+                        <label className="text-[11px] text-[var(--muted)]">
+                          Código tienda
+                          <input
+                            className={`${input} mt-1 w-full`}
+                            placeholder="Ej. WIX 51348"
+                            value={f.codigo}
+                            onChange={(e) =>
+                              setFiltrosForm((prev) =>
+                                prev.map((x, i) =>
+                                  i === idx
+                                    ? { ...x, codigo: e.target.value }
+                                    : x,
+                                ),
+                              )
+                            }
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          className="self-end rounded px-2 py-1 text-xs text-rose-300"
+                          onClick={() =>
+                            setFiltrosForm((prev) =>
+                              prev.filter((_, i) => i !== idx),
+                            )
+                          }
+                        >
+                          Quitar
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <datalist id="tipos-filtro-flota">
+                  <option value="Aceite" />
+                  <option value="Aire" />
+                  <option value="Combustible" />
+                  <option value="Habitáculo" />
+                  <option value="Hidráulico" />
+                  <option value="Separador de agua" />
+                </datalist>
+              </div>
+
               <label className="block text-xs text-[var(--muted)]">
                 Notas
                 <textarea
@@ -2309,9 +2416,20 @@ function FlotaInner() {
                       {Number(v.km_actual ?? 0).toLocaleString("es-GT")}
                     </td>
                     <td className="px-3 py-2 text-xs">
-                      May: {v.filtro_servicio_mayor || "—"}
-                      <br />
-                      Men: {v.filtro_servicio_menor || "—"}
+                      {(v.filtros ?? []).length ? (
+                        <ul className="space-y-0.5">
+                          {(v.filtros ?? []).map((f, i) => (
+                            <li key={`${f.tipo}-${f.codigo}-${i}`}>
+                              <span className="text-[var(--muted)]">
+                                {f.tipo}:
+                              </span>{" "}
+                              {f.codigo}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        "—"
+                      )}
                     </td>
                     <td className="px-3 py-2 text-xs">
                       {v.rin_llanta || "—"}
@@ -2679,8 +2797,11 @@ function FlotaInner() {
                         {v.placa}
                         {ruta ? " · EN RUTA" : ""}
                         {v.en_taller ? " · EN TALLER" : ""}
-                        {v.filtro_servicio_mayor
-                          ? ` · may:${v.filtro_servicio_mayor}`
+                        {(v.filtros ?? []).length
+                          ? ` · ${(v.filtros ?? [])
+                              .slice(0, 2)
+                              .map((f) => f.codigo)
+                              .join(",")}`
                           : ""}
                       </option>
                     );

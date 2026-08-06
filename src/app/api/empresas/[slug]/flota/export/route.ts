@@ -5,6 +5,10 @@ import { requireTenantFlotaAny } from "@/lib/tenant";
 import { celdaPdf, tablaAExcel, tablaAPdf } from "@/lib/rrhh/export-files";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
 import { kmPendienteServicio } from "@/lib/flota/import-excel";
+import {
+  formatearFiltrosCorto,
+  listarFiltrosPorVehiculos,
+} from "@/lib/flota/filtros";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -163,8 +167,7 @@ export async function GET(req: Request, ctx: Ctx) {
       "Km",
       "Int.",
       "Pend.",
-      "F.may",
-      "F.men",
+      "Filtros",
       "Rin",
       "Llanta",
       "Aceite",
@@ -180,8 +183,7 @@ export async function GET(req: Request, ctx: Ctx) {
       "Km",
       "Intervalo",
       "Pendiente svc",
-      "Filtro mayor",
-      "Filtro menor",
+      "Filtros (tipo: código)",
       "Rin",
       "Medida llanta",
       "Aceite",
@@ -192,7 +194,7 @@ export async function GET(req: Request, ctx: Ctx) {
     let data: RowDataPacket[] = [];
     try {
       data = await query<RowDataPacket[]>(
-        `SELECT placa, descripcion, marca, modelo, km_actual, km_intervalo_servicio,
+        `SELECT id, placa, descripcion, marca, modelo, km_actual, km_intervalo_servicio,
                 km_ultimo_servicio, filtro_servicio_mayor, filtro_servicio_menor,
                 rin_llanta, medida_llanta, tipo_aceite, empresa_activo, en_taller, estado, activo
          FROM flota_vehiculos WHERE empresa_id = ? ORDER BY placa`,
@@ -200,12 +202,15 @@ export async function GET(req: Request, ctx: Ctx) {
       );
     } catch {
       data = await query<RowDataPacket[]>(
-        `SELECT placa, marca, modelo, km_actual, km_intervalo_servicio,
+        `SELECT id, placa, marca, modelo, km_actual, km_intervalo_servicio,
                 km_ultimo_servicio, en_taller, estado
          FROM flota_vehiculos WHERE empresa_id = ? ORDER BY placa`,
         [guard.empresa.id],
       );
     }
+    const filtrosMap = await listarFiltrosPorVehiculos(
+      data.map((r) => Number(r.id)),
+    );
     rows = data
       .filter(
         (r) =>
@@ -223,6 +228,20 @@ export async function GET(req: Request, ctx: Ctx) {
             : Number(r.km_ultimo_servicio),
           Number(r.km_intervalo_servicio ?? 10000),
         );
+        let filtrosTxt = formatearFiltrosCorto(filtrosMap.get(Number(r.id)) ?? []);
+        if (filtrosTxt === "—") {
+          const legacy = [
+            r.filtro_servicio_mayor
+              ? `mayor: ${r.filtro_servicio_mayor}`
+              : "",
+            r.filtro_servicio_menor
+              ? `menor: ${r.filtro_servicio_menor}`
+              : "",
+          ]
+            .filter(Boolean)
+            .join(" · ");
+          if (legacy) filtrosTxt = legacy;
+        }
         return [
           String(r.placa),
           String(r.descripcion ?? ""),
@@ -231,8 +250,7 @@ export async function GET(req: Request, ctx: Ctx) {
           Number(r.km_actual ?? 0).toLocaleString("es-GT"),
           String(r.km_intervalo_servicio ?? ""),
           pend == null ? "" : Number(pend).toLocaleString("es-GT"),
-          String(r.filtro_servicio_mayor ?? ""),
-          String(r.filtro_servicio_menor ?? ""),
+          filtrosTxt === "—" ? "" : filtrosTxt,
           String(r.rin_llanta ?? ""),
           String(r.medida_llanta ?? ""),
           String(r.tipo_aceite ?? ""),

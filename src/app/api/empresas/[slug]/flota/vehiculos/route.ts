@@ -10,6 +10,12 @@ import {
   listarEmpresasActivasSimple,
   listarVehiculosAccesibles,
 } from "@/lib/flota/acceso";
+import {
+  guardarFiltrosVehiculo,
+  listarFiltrosPorVehiculos,
+  migrarFiltrosLegacySiVacio,
+  type FiltroVehiculo,
+} from "@/lib/flota/filtros";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -35,17 +41,35 @@ export async function GET(_req: Request, ctx: Ctx) {
   }
 
   const rows = await listarVehiculosAccesibles(guard.empresa.id);
+  const filtrosMap = await listarFiltrosPorVehiculos(
+    rows.map((r) => Number(r.id)),
+  );
   const vehiculos = [];
   for (const r of rows) {
+    const vid = Number(r.id);
+    let filtros = filtrosMap.get(vid) ?? [];
+    if (!filtros.length) {
+      filtros = await migrarFiltrosLegacySiVacio(
+        guard.empresa.id,
+        vid,
+        r.filtro_servicio_mayor != null
+          ? String(r.filtro_servicio_mayor)
+          : null,
+        r.filtro_servicio_menor != null
+          ? String(r.filtro_servicio_menor)
+          : null,
+      );
+    }
     const acceso =
       Number(r.empresa_id) === guard.empresa.id
-        ? await empresasAccesoVehiculo(Number(r.id))
+        ? await empresasAccesoVehiculo(vid)
         : [];
     vehiculos.push({
       ...r,
       compartido: Number(r.compartido ?? 0) === 1,
       accesoEmpresaIds: acceso,
       esDueno: Number(r.empresa_id) === guard.empresa.id,
+      filtros,
     });
   }
   const empresas = await listarEmpresasActivasSimple();
@@ -74,11 +98,18 @@ const schema = z.object({
   seguros: z.string().optional(),
   notas: z.string().optional(),
   activo: z.boolean().optional(),
-  filtroServicioMayor: z.string().optional(),
-  filtroServicioMenor: z.string().optional(),
   rinLlanta: z.string().optional(),
   medidaLlanta: z.string().optional(),
   tipoAceite: z.string().optional(),
+  filtros: z
+    .array(
+      z.object({
+        tipo: z.string().min(1),
+        codigo: z.string().min(1),
+        notas: z.string().optional().nullable(),
+      }),
+    )
+    .optional(),
 });
 
 export async function POST(req: Request, ctx: Ctx) {
@@ -138,15 +169,23 @@ export async function POST(req: Request, ctx: Ctx) {
         d.kmActual,
         d.notas ?? null,
         d.activo === false ? 0 : 1,
-        d.filtroServicioMayor ?? null,
-        d.filtroServicioMenor ?? null,
+        null,
+        null,
         d.rinLlanta ?? null,
         d.medidaLlanta ?? null,
         d.tipoAceite ?? null,
       ],
     );
+    const nuevoId = Number(result.insertId);
+    if (d.filtros?.length) {
+      await guardarFiltrosVehiculo(
+        guard.empresa.id,
+        nuevoId,
+        d.filtros as FiltroVehiculo[],
+      );
+    }
     return NextResponse.json({
-      id: result.insertId,
+      id: nuevoId,
       mensaje: "Vehículo registrado.",
     });
   } catch (err) {
@@ -176,12 +215,19 @@ const patchSchema = z.object({
   kmActual: z.number().int().nonnegative().optional(),
   kmIntervaloServicio: z.number().int().positive().optional(),
   notas: z.string().optional(),
-  filtroServicioMayor: z.string().optional(),
-  filtroServicioMenor: z.string().optional(),
   rinLlanta: z.string().optional(),
   medidaLlanta: z.string().optional(),
   tipoAceite: z.string().optional(),
   tipoCombustible: z.string().optional(),
+  filtros: z
+    .array(
+      z.object({
+        tipo: z.string().min(1),
+        codigo: z.string().min(1),
+        notas: z.string().optional().nullable(),
+      }),
+    )
+    .optional(),
   /** Empresas que pueden usar este vehículo (además de la dueña). */
   accesoEmpresaIds: z.array(z.number().int().positive()).optional(),
 });
@@ -298,8 +344,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
             ? 1
             : 0,
         d.notas ?? cur[0].notas,
-        d.filtroServicioMayor ?? cur[0].filtro_servicio_mayor,
-        d.filtroServicioMenor ?? cur[0].filtro_servicio_menor,
+        cur[0].filtro_servicio_mayor ?? null,
+        cur[0].filtro_servicio_menor ?? null,
         d.rinLlanta ?? cur[0].rin_llanta,
         d.medidaLlanta ?? cur[0].medida_llanta,
         d.tipoAceite ?? cur[0].tipo_aceite,
@@ -307,6 +353,13 @@ export async function PATCH(req: Request, ctx: Ctx) {
         guard.empresa.id,
       ],
     );
+    if (d.filtros) {
+      await guardarFiltrosVehiculo(
+        guard.empresa.id,
+        d.id,
+        d.filtros as FiltroVehiculo[],
+      );
+    }
     if (d.accesoEmpresaIds) {
       await guardarAccesoVehiculo(
         d.id,
@@ -478,6 +531,10 @@ export async function DELETE(req: Request, ctx: Ctx) {
   );
   await safe(
     "DELETE FROM flota_servicios WHERE vehiculo_id = ? AND empresa_id = ?",
+    [id, eid],
+  );
+  await safe(
+    "DELETE FROM flota_vehiculo_filtros WHERE vehiculo_id = ? AND empresa_id = ?",
     [id, eid],
   );
   await safe("DELETE FROM flota_vehiculo_acceso WHERE vehiculo_id = ?", [id]);

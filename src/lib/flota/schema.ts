@@ -118,6 +118,21 @@ export async function asegurarSchemaFlota(): Promise<void> {
     "tipo_aceite",
     "tipo_aceite VARCHAR(80) NULL",
   );
+
+  // Tipos de filtro por unidad (aceite, aire, etc.) + código de tienda
+  await execute(`
+    CREATE TABLE IF NOT EXISTS flota_vehiculo_filtros (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      empresa_id INT NOT NULL,
+      vehiculo_id INT NOT NULL,
+      tipo VARCHAR(80) NOT NULL,
+      codigo VARCHAR(120) NOT NULL,
+      notas VARCHAR(300) NULL,
+      INDEX idx_fvf_veh (vehiculo_id),
+      INDEX idx_fvf_emp (empresa_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
   await ensureColumn(
     "flota_lecturas",
     "conductor",
