@@ -7,6 +7,7 @@ import {
   listarEmpleados,
 } from "@/lib/rrhh/empleados";
 import { normalizarHora } from "@/lib/rrhh/dates";
+import { obtenerParametros } from "@/lib/rrhh/config";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -15,8 +16,17 @@ export async function GET(req: Request, ctx: Ctx) {
   const guard = await requireTenantRrhh(slug, "empleados", "ver");
   if (guard.error) return guard.error;
   const q = new URL(req.url).searchParams.get("q") ?? "";
-  const empleados = await listarEmpleados(guard.empresa.id, q);
-  return NextResponse.json({ empleados });
+  const [empleados, cfg] = await Promise.all([
+    listarEmpleados(guard.empresa.id, q),
+    obtenerParametros(guard.empresa.id),
+  ]);
+  return NextResponse.json({
+    empleados,
+    horarioDefault: {
+      entrada: (cfg.hora_entrada_default || "08:00:00").slice(0, 5),
+      salida: (cfg.hora_salida_default || "17:00:00").slice(0, 5),
+    },
+  });
 }
 
 const bodySchema = z.object({
@@ -48,10 +58,15 @@ export async function POST(req: Request, ctx: Ctx) {
       { status: 400 },
     );
   }
+  const cfg = await obtenerParametros(guard.empresa.id);
   const he =
-    normalizarHora(d.horaEntradaTeorica ?? "08:00") ?? "08:00:00";
+    normalizarHora(d.horaEntradaTeorica ?? cfg.hora_entrada_default) ??
+    cfg.hora_entrada_default ??
+    "08:00:00";
   const hs =
-    normalizarHora(d.horaSalidaTeorica ?? "17:00") ?? "17:00:00";
+    normalizarHora(d.horaSalidaTeorica ?? cfg.hora_salida_default) ??
+    cfg.hora_salida_default ??
+    "17:00:00";
 
   const id = await crearEmpleado(guard.empresa.id, {
     codigo: d.codigo,

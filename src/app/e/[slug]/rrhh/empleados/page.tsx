@@ -27,7 +27,13 @@ type Emp = {
   docsCount?: number;
 };
 
-function emptyForm() {
+function horaCortaCfg(v: string | undefined, fallback: string): string {
+  const s = String(v ?? "").trim();
+  if (!s) return fallback;
+  return s.slice(0, 5);
+}
+
+function emptyForm(entrada = "08:00", salida = "17:00") {
   return {
     codigo: "",
     nombre: "",
@@ -36,8 +42,8 @@ function emptyForm() {
     tipoHorario: "Fijo" as "Fijo" | "Variable",
     fechaAlta: hoyLocal(),
     fechaInicioLaboral: "",
-    horaEntradaTeorica: "08:00",
-    horaSalidaTeorica: "17:00",
+    horaEntradaTeorica: entrada,
+    horaSalidaTeorica: salida,
     estado: "Activo" as "Activo" | "Baja",
   };
 }
@@ -47,7 +53,8 @@ export default function EmpleadosPage() {
   const [empleados, setEmpleados] = useState<Emp[]>([]);
   const [q, setQ] = useState("");
   const [qDebounced, setQDebounced] = useState("");
-  const [form, setForm] = useState(emptyForm);
+  const [horaDef, setHoraDef] = useState({ entrada: "08:00", salida: "17:00" });
+  const [form, setForm] = useState(() => emptyForm());
   const [editId, setEditId] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [mensaje, setMensaje] = useState("");
@@ -65,7 +72,21 @@ export default function EmpleadosPage() {
       `/api/empresas/${slug}/empleados?q=${encodeURIComponent(qDebounced)}`,
     );
     const data = await res.json();
-    if (res.ok) setEmpleados(data.empleados ?? []);
+    if (!res.ok) return;
+    setEmpleados(data.empleados ?? []);
+    const entrada = horaCortaCfg(data.horarioDefault?.entrada, "08:00");
+    const salida = horaCortaCfg(data.horarioDefault?.salida, "17:00");
+    setHoraDef({ entrada, salida });
+    setEditId((id) => {
+      if (id == null) {
+        setForm((f) =>
+          f.codigo || f.nombre
+            ? f
+            : { ...f, horaEntradaTeorica: entrada, horaSalidaTeorica: salida },
+        );
+      }
+      return id;
+    });
   }, [slug, qDebounced]);
 
   useEffect(() => {
@@ -82,8 +103,14 @@ export default function EmpleadosPage() {
       tipoHorario: e.tipoHorario === "Variable" ? "Variable" : "Fijo",
       fechaAlta: e.fechaAlta || hoyLocal(),
       fechaInicioLaboral: e.fechaInicioLaboral || "",
-      horaEntradaTeorica: (e.horaEntradaTeorica || "08:00:00").slice(0, 5),
-      horaSalidaTeorica: (e.horaSalidaTeorica || "17:00:00").slice(0, 5),
+      horaEntradaTeorica: (e.horaEntradaTeorica || `${horaDef.entrada}:00`).slice(
+        0,
+        5,
+      ),
+      horaSalidaTeorica: (e.horaSalidaTeorica || `${horaDef.salida}:00`).slice(
+        0,
+        5,
+      ),
       estado: e.estado === "Baja" ? "Baja" : "Activo",
     });
   }
@@ -109,7 +136,7 @@ export default function EmpleadosPage() {
       return;
     }
     setMensaje(data.mensaje);
-    setForm(emptyForm());
+    setForm(emptyForm(horaDef.entrada, horaDef.salida));
     setEditId(null);
     await cargar();
   }
@@ -297,7 +324,7 @@ export default function EmpleadosPage() {
                 className="rounded-lg bg-[#334155] px-4 py-2 text-sm"
                 onClick={() => {
                   setEditId(null);
-                  setForm(emptyForm());
+                  setForm(emptyForm(horaDef.entrada, horaDef.salida));
                 }}
               >
                 Cancelar

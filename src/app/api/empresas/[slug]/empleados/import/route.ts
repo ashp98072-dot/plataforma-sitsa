@@ -11,6 +11,7 @@ import {
   obtenerEmpleadoPorCodigo,
 } from "@/lib/rrhh/empleados";
 import { parsearPlantillaEmpleados } from "@/lib/rrhh/empleados-export";
+import { obtenerParametros } from "@/lib/rrhh/config";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -44,6 +45,10 @@ export async function POST(req: Request, ctx: Ctx) {
       );
     }
 
+    const cfg = await obtenerParametros(guard.empresa.id);
+    const entradaDef = cfg.hora_entrada_default || "08:00:00";
+    const salidaDef = cfg.hora_salida_default || "17:00:00";
+
     let creados = 0;
     let actualizados = 0;
     const errores: string[] = [];
@@ -67,9 +72,9 @@ export async function POST(req: Request, ctx: Ctx) {
           fechaAlta,
           fechaInicioLaboral: fechaInicio,
           horaEntradaTeorica:
-            normalizarHora(fila.horaEntradaTeorica) || "08:00:00",
+            normalizarHora(fila.horaEntradaTeorica) || entradaDef,
           horaSalidaTeorica:
-            normalizarHora(fila.horaSalidaTeorica) || "17:00:00",
+            normalizarHora(fila.horaSalidaTeorica) || salidaDef,
           estado: fila.estado,
         };
 
