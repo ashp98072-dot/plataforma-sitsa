@@ -444,7 +444,9 @@ export const FLOTA_NAV: {
   path: string;
 }[] = [
   { sub: "flota_vehiculos", label: "Vehículos", path: "vehiculos" },
-  { sub: "flota_servicios", label: "Servicios", path: "servicios" },
+  { sub: "flota_servicios", label: "En taller", path: "taller" },
+  { sub: "flota_servicios", label: "Registrar servicio", path: "servicios" },
+  { sub: "flota_servicios", label: "Historial servicios", path: "historial-servicios" },
   { sub: "flota_compras", label: "Compras", path: "compras" },
   { sub: "flota_lecturas", label: "Lecturas", path: "lecturas" },
   { sub: "flota_reportes", label: "Reportes flota", path: "reportes" },

@@ -277,7 +277,7 @@ export function AppShell({
           flotaLinks.push({
             href: `${base}/flota?tab=${item.path}`,
             label: item.label,
-            key: `flota-${item.sub}`,
+            key: `flota-${item.path}`,
           });
         }
       }
