@@ -709,7 +709,7 @@ function FlotaInner() {
         v.km_ultimo_servicio,
         Number(v.km_intervalo_servicio || 10000),
       );
-      return pendiente <= 0;
+      return pendiente != null && pendiente <= 0;
     }).length;
     setResumen({
       totalVehiculos: vehiculos.length,
