@@ -90,13 +90,13 @@ export function NotificacionesBell({ slug, rol }: Props) {
           setOpen((o) => !o);
           if (!open) void cargar();
         }}
-        className="relative flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--card)] text-[var(--muted)] hover:text-[var(--text)]"
+        className="relative flex h-10 w-10 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--card)] text-[var(--muted)] shadow-sm hover:text-[var(--text)]"
         title="Notificaciones"
         aria-label="Notificaciones"
       >
         <svg
           viewBox="0 0 24 24"
-          className="h-4 w-4"
+          className="h-5 w-5"
           fill="none"
           stroke="currentColor"
           strokeWidth="1.8"
@@ -105,7 +105,7 @@ export function NotificacionesBell({ slug, rol }: Props) {
           <path d="M10 19a2 2 0 0 0 4 0" />
         </svg>
         {badge > 0 ? (
-          <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-600 px-1 text-[10px] font-bold text-white">
+          <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-rose-600 px-1 text-[11px] font-bold text-white ring-2 ring-[var(--sidebar)]">
             {badge > 9 ? "9+" : badge}
           </span>
         ) : null}

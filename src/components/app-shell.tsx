@@ -365,22 +365,16 @@ export function AppShell({
   return (
     <div className="min-h-screen md:grid md:grid-cols-[260px_1fr]">
       <aside className="border-b border-[var(--border)] bg-[var(--sidebar)] md:min-h-screen md:border-b-0 md:border-r">
-        <div className="flex items-start justify-between gap-2 p-4">
-          <div className="min-w-0">
-            <p className="text-xs uppercase tracking-wider text-[var(--muted)]">
-              SITSA
-            </p>
-            <h1 className="mt-1 text-lg font-semibold leading-tight">
-              {empresaNombre}
-            </h1>
-            <p className="mt-1 text-xs text-[var(--muted)]">
-              {username} · {labelRol(rol)}
-            </p>
-          </div>
-          <div className="flex shrink-0 items-center gap-1.5">
-            <NotificacionesBell slug={slug} rol={rol} />
-            <ThemeToggle />
-          </div>
+        <div className="p-4">
+          <p className="text-xs uppercase tracking-wider text-[var(--muted)]">
+            SITSA
+          </p>
+          <h1 className="mt-1 text-lg font-semibold leading-tight">
+            {empresaNombre}
+          </h1>
+          <p className="mt-1 text-xs text-[var(--muted)]">
+            {username} · {labelRol(rol)}
+          </p>
         </div>
 
         <nav className="space-y-1 px-2 pb-3">
@@ -452,7 +446,13 @@ export function AppShell({
           </button>
         </div>
       </aside>
-      <main className="p-4 md:p-6">{children}</main>
+      <div className="flex min-w-0 flex-col">
+        <header className="sticky top-0 z-40 flex items-center justify-end gap-2 border-b border-[var(--border)] bg-[var(--sidebar)]/95 px-4 py-2 backdrop-blur md:px-6">
+          <NotificacionesBell slug={slug} rol={rol} />
+          <ThemeToggle />
+        </header>
+        <main className="flex-1 p-4 md:p-6">{children}</main>
+      </div>
       <footer className="fixed bottom-0 left-0 right-0 border-t border-[var(--border)] bg-[var(--sidebar)]/90 px-3 py-1 text-xs text-[var(--muted)] backdrop-blur md:left-[260px]">
         Empresa: {empresaNombre} · Usuario: {username}
       </footer>
