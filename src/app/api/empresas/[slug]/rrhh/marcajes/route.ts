@@ -9,6 +9,7 @@ import {
   registrarMarcajeKiosko,
   registrarMarcajeManual,
 } from "@/lib/rrhh/marcajes";
+import { asegurarCorreccionTzGuatemala } from "@/lib/tz-guatemala-migrate";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -16,6 +17,8 @@ export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenantRrhh(slug, "marcajes", "ver");
   if (guard.error) return guard.error;
+
+  await asegurarCorreccionTzGuatemala();
 
   const url = new URL(req.url);
   const hoy = hoyLocal();
@@ -71,6 +74,8 @@ export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenantRrhh(slug, "marcajes", "crear");
   if (guard.error) return guard.error;
+
+  await asegurarCorreccionTzGuatemala();
 
   const body = await req.json();
 

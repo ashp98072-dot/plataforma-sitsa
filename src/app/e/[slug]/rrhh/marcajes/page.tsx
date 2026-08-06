@@ -9,6 +9,7 @@ import {
 } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { hoyLocal, TZ_GUATEMALA } from "@/lib/rrhh/dates";
 
 type Marcaje = {
   id: number;
@@ -22,13 +23,19 @@ type Marcaje = {
 };
 
 function formatReloj(d: Date): string {
-  const hh = d.getHours().toString().padStart(2, "0");
-  const mm = d.getMinutes().toString().padStart(2, "0");
-  const ss = d.getSeconds().toString().padStart(2, "0");
-  const dia = d.getDate().toString().padStart(2, "0");
-  const mes = (d.getMonth() + 1).toString().padStart(2, "0");
-  const anio = d.getFullYear();
-  return `${hh}:${mm}:${ss} — ${dia}/${mes}/${anio}`;
+  const parts = new Intl.DateTimeFormat("es-GT", {
+    timeZone: TZ_GUATEMALA,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hourCycle: "h23",
+  }).formatToParts(d);
+  const get = (t: Intl.DateTimeFormatPartTypes) =>
+    parts.find((p) => p.type === t)?.value ?? "";
+  return `${get("hour")}:${get("minute")}:${get("second")} — ${get("day")}/${get("month")}/${get("year")}`;
 }
 
 export default function MarcajesKioskoPage() {
@@ -60,7 +67,7 @@ export default function MarcajesKioskoPage() {
   const [error, setError] = useState("");
   const [tipoOk, setTipoOk] = useState<"Entrada" | "Salida" | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const hoy = new Date().toISOString().slice(0, 10);
+  const hoy = hoyLocal();
 
   function metrosEntre(
     lat1: number,
@@ -413,14 +420,16 @@ export default function MarcajesKioskoPage() {
                     <tr
                       key={`${m.id}-${idx}`}
                       className={[
-                        "border-t border-[var(--border)]",
-                        idx % 2 === 0 ? "bg-[#152028]" : "bg-[#121a20]",
+                        "border-t border-[var(--border)] text-[var(--text)]",
+                        idx % 2 === 0
+                          ? "bg-[var(--panel)]"
+                          : "bg-[var(--card)]",
                       ].join(" ")}
                     >
-                      <td className="px-3 py-2">
+                      <td className="px-3 py-2 font-medium text-[var(--text)]">
                         {m.nombre}
                         {m.viajeLargo ? (
-                          <span className="ml-2 text-[10px] uppercase text-[#e0c36a]">
+                          <span className="ml-2 text-[10px] uppercase text-amber-600">
                             viaje
                           </span>
                         ) : null}
@@ -431,9 +440,9 @@ export default function MarcajesKioskoPage() {
                         className={[
                           "px-3 py-2",
                           m.incidencia === "Retraso"
-                            ? "text-[#E67E22]"
+                            ? "text-orange-600"
                             : m.incidencia === "A tiempo"
-                              ? "text-[#2ECC71]"
+                              ? "text-emerald-600"
                               : "text-[var(--muted)]",
                         ].join(" ")}
                       >
@@ -443,7 +452,7 @@ export default function MarcajesKioskoPage() {
                         className={[
                           "px-3 py-2",
                           m.estado === "ABIERTA" || m.estado === "En curso"
-                            ? "text-[#5DADE2]"
+                            ? "text-sky-600"
                             : "text-[var(--muted)]",
                         ].join(" ")}
                       >
