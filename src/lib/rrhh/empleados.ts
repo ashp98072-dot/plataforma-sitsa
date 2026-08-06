@@ -149,33 +149,43 @@ function mapEmpleado(row: RowDataPacket): Empleado {
   };
 }
 
+/** Columnas de planilla / combos (sin sueldos, observaciones, demografía…). */
+const COLUMNAS_LISTA = `id, codigo, nombre, puesto, categoria_ops, tipo_horario,
+  fecha_alta, fecha_inicio_laboral, hora_entrada_teorica, hora_salida_teorica,
+  estado, dpi`;
+
 export async function listarEmpleados(
   empresaId: number,
   filtro = "",
+  opts?: { completo?: boolean; conDocs?: boolean },
 ): Promise<Empleado[]> {
   await asegurarSchemaEmpleados().catch(() => undefined);
   const f = filtro.trim();
+  const cols = opts?.completo ? "*" : COLUMNAS_LISTA;
   const rows = f
     ? await query<RowDataPacket[]>(
-        `SELECT * FROM empleados
+        `SELECT ${cols} FROM empleados
          WHERE empresa_id = ? AND (nombre LIKE ? OR codigo LIKE ? OR dpi LIKE ?)
          ORDER BY nombre`,
         [empresaId, `%${f}%`, `%${f}%`, `%${f}%`],
       )
     : await query<RowDataPacket[]>(
-        `SELECT * FROM empleados WHERE empresa_id = ? ORDER BY nombre`,
+        `SELECT ${cols} FROM empleados WHERE empresa_id = ? ORDER BY nombre`,
         [empresaId],
       );
   const empleados = rows.map(mapEmpleado);
-  try {
-    const { contarDocumentosPorEmpleado } = await import("./documentos");
-    const counts = await contarDocumentosPorEmpleado(
-      empresaId,
-      empleados.map((e) => e.id),
-    );
-    for (const e of empleados) e.docsCount = counts.get(e.id) ?? 0;
-  } catch {
-    for (const e of empleados) e.docsCount = 0;
+  const conDocs = opts?.conDocs ?? !opts?.completo;
+  if (conDocs) {
+    try {
+      const { contarDocumentosPorEmpleado } = await import("./documentos");
+      const counts = await contarDocumentosPorEmpleado(
+        empresaId,
+        empleados.map((e) => e.id),
+      );
+      for (const e of empleados) e.docsCount = counts.get(e.id) ?? 0;
+    } catch {
+      for (const e of empleados) e.docsCount = 0;
+    }
   }
   return empleados;
 }

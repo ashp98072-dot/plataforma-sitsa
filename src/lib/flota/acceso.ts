@@ -32,6 +32,32 @@ export async function listarVehiculosAccesibles(
   }
 }
 
+/**
+ * Lectura liviana para el poll de notificaciones: sin sync de KM ni SELECT *.
+ */
+export async function listarVehiculosParaAlertasKm(
+  empresaId: number,
+): Promise<RowDataPacket[]> {
+  try {
+    return await query<RowDataPacket[]>(
+      `SELECT v.placa, v.activo, v.km_actual, v.km_ultimo_servicio, v.km_intervalo_servicio
+       FROM flota_vehiculos v
+       WHERE v.empresa_id = ?
+          OR EXISTS (
+            SELECT 1 FROM flota_vehiculo_acceso a
+            WHERE a.vehiculo_id = v.id AND a.empresa_id = ?
+          )`,
+      [empresaId, empresaId],
+    );
+  } catch {
+    return query<RowDataPacket[]>(
+      `SELECT placa, activo, km_actual, km_ultimo_servicio, km_intervalo_servicio
+       FROM flota_vehiculos WHERE empresa_id = ?`,
+      [empresaId],
+    );
+  }
+}
+
 export async function empresasAccesoVehiculo(
   vehiculoId: number,
 ): Promise<number[]> {

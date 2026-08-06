@@ -49,10 +49,27 @@ export function NotificacionesBell({ slug, rol }: Props) {
   }, [slug, puedeVer]);
 
   useEffect(() => {
-    void cargar(false);
-    // Poll ligero cada 2 min (antes 60s + schema flota = muy pesado)
+    // Diferir primera carga para no competir con la página actual
+    let cancelled = false;
+    const run = () => {
+      if (!cancelled) void cargar(true);
+    };
+    let idleId: number | undefined;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    if (typeof requestIdleCallback !== "undefined") {
+      idleId = requestIdleCallback(run, { timeout: 2500 });
+    } else {
+      timeoutId = setTimeout(run, 800);
+    }
     const t = setInterval(() => void cargar(true), 120_000);
-    return () => clearInterval(t);
+    return () => {
+      cancelled = true;
+      if (idleId != null && typeof cancelIdleCallback !== "undefined") {
+        cancelIdleCallback(idleId);
+      }
+      if (timeoutId != null) clearTimeout(timeoutId);
+      clearInterval(t);
+    };
   }, [cargar]);
 
   useEffect(() => {

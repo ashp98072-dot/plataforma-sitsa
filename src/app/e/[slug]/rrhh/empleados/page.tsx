@@ -381,9 +381,32 @@ export default function EmpleadosPage() {
     licencia: false,
     otros: false,
   });
+  const [vista, setVista] = useState<"lista" | "ficha">("lista");
 
   function toggleSeccion(id: SeccionFicha) {
     setSecciones((prev) => ({ ...prev, [id]: !prev[id] }));
+  }
+
+  function irALista() {
+    setVista("lista");
+    setEditId(null);
+    setHistorial([]);
+    setForm(emptyForm(horaDef.entrada, horaDef.salida));
+  }
+
+  function irANuevo() {
+    setEditId(null);
+    setHistorial([]);
+    setForm(emptyForm(horaDef.entrada, horaDef.salida));
+    setSecciones({
+      identidad: true,
+      laboral: true,
+      salarios: false,
+      contacto: false,
+      licencia: false,
+      otros: false,
+    });
+    setVista("ficha");
   }
 
   const mostrarDpi = empleados.some((e) => e.dpi);
@@ -442,6 +465,7 @@ export default function EmpleadosPage() {
   async function empezarEdicion(e: Emp) {
     setEditId(e.id);
     setHistorial([]);
+    setVista("ficha");
     setSecciones({
       identidad: true,
       laboral: true,
@@ -487,6 +511,7 @@ export default function EmpleadosPage() {
     setForm(emptyForm(horaDef.entrada, horaDef.salida));
     setEditId(null);
     setHistorial([]);
+    setVista("lista");
     await cargar();
   }
 
@@ -501,9 +526,7 @@ export default function EmpleadosPage() {
   }
 
   function cancelarEdicion() {
-    setEditId(null);
-    setHistorial([]);
-    setForm(emptyForm(horaDef.entrada, horaDef.salida));
+    irALista();
   }
 
   const input =
@@ -511,29 +534,67 @@ export default function EmpleadosPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Personal / Empleados</h1>
-        <p className="text-sm text-[var(--muted)]">
-          Alta, edición y baja. Las vacaciones se calculan con la{" "}
-          <strong className="font-medium text-[var(--text)]">fecha de contratación</strong>
-          , no con la de entrada laboral.{" "}
-          <Link
-            href={`/e/${slug}/dashboard-rrhh`}
-            className="text-[var(--accent)] underline"
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold">Personal / Empleados</h1>
+          <p className="text-sm text-[var(--muted)]">
+            Alta, edición y baja. Las vacaciones se calculan con la{" "}
+            <strong className="font-medium text-[var(--text)]">
+              fecha de contratación
+            </strong>
+            , no con la de entrada laboral.{" "}
+            <Link
+              href={`/e/${slug}/dashboard-rrhh`}
+              className="text-[var(--accent)] underline"
+            >
+              Dashboard RRHH
+            </Link>
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={irALista}
+            className={[
+              "rounded-lg px-3 py-2 text-sm font-medium",
+              vista === "lista"
+                ? "bg-[var(--accent)] text-white"
+                : "border border-[var(--border)] bg-[var(--card)] text-[var(--muted)]",
+            ].join(" ")}
           >
-            Dashboard RRHH
-          </Link>
-        </p>
+            Lista de empleados
+          </button>
+          <button
+            type="button"
+            onClick={irANuevo}
+            className={[
+              "rounded-lg px-3 py-2 text-sm font-medium",
+              vista === "ficha" && !editId
+                ? "bg-[var(--accent)] text-white"
+                : "border border-[var(--border)] bg-[var(--card)] text-[var(--muted)]",
+            ].join(" ")}
+          >
+            Registrar nuevo
+          </button>
+        </div>
       </div>
 
+      {error ? <p className="text-sm text-red-400">{error}</p> : null}
+      {mensaje ? <p className="text-sm text-emerald-600">{mensaje}</p> : null}
+
+      {vista === "ficha" ? (
       <form onSubmit={onSubmit} className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-sm font-medium">
             {editId ? `Editando #${editId}` : "Nuevo empleado"}
           </p>
-          <p className="text-[11px] text-[var(--muted)]">
-            Abre solo las secciones que necesites
-          </p>
+          <button
+            type="button"
+            onClick={irALista}
+            className="text-xs text-[var(--accent)] underline"
+          >
+            ← Volver a la lista
+          </button>
         </div>
 
         <FormSection
@@ -1091,13 +1152,21 @@ export default function EmpleadosPage() {
                 Cancelar
               </button>
             </>
-          ) : null}
+          ) : (
+            <button
+              type="button"
+              className="rounded-lg bg-[#334155] px-4 py-2 text-sm text-white"
+              onClick={irALista}
+            >
+              Cancelar
+            </button>
+          )}
         </div>
       </form>
+      ) : null}
 
-      {error ? <p className="text-sm text-red-300">{error}</p> : null}
-      {mensaje ? <p className="text-sm text-emerald-300">{mensaje}</p> : null}
-
+      {vista === "lista" ? (
+      <>
       <div className="flex flex-wrap gap-2">
         <input
           className="min-w-[12rem] flex-1 rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm"
@@ -1105,9 +1174,16 @@ export default function EmpleadosPage() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
+        <button
+          type="button"
+          onClick={irANuevo}
+          className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white"
+        >
+          + Nuevo empleado
+        </button>
         <a
           href={`/api/empresas/${slug}/empleados/export?format=plantilla`}
-          className="rounded-lg bg-[#334155] px-3 py-2 text-sm"
+          className="rounded-lg bg-[#334155] px-3 py-2 text-sm text-white"
         >
           Plantilla Excel
         </a>
@@ -1166,7 +1242,7 @@ export default function EmpleadosPage() {
         </a>
         <a
           href={`/api/empresas/${slug}/empleados/export?format=pdf`}
-          className="rounded-lg bg-[#1e293b] px-3 py-2 text-sm"
+          className="rounded-lg bg-[#1e293b] px-3 py-2 text-sm text-white"
         >
           PDF
         </a>
@@ -1247,6 +1323,8 @@ export default function EmpleadosPage() {
           </tbody>
         </table>
       </div>
+      </>
+      ) : null}
 
       {docsEmp ? (
         <DocumentosModal

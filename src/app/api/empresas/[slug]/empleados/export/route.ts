@@ -29,7 +29,10 @@ export async function GET(req: Request, ctx: Ctx) {
       });
     }
 
-    const empleados = await listarEmpleados(guard.empresa.id);
+    const empleados = await listarEmpleados(guard.empresa.id, "", {
+      completo: true,
+      conDocs: false,
+    });
     const nombre = guard.empresa.nombre;
 
     if (format === "pdf") {

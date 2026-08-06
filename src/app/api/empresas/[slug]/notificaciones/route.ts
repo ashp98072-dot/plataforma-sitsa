@@ -3,9 +3,17 @@ import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
 import { requireTenant } from "@/lib/tenant";
 import { kmPendienteServicio } from "@/lib/flota/import-excel";
-import { listarVehiculosAccesibles } from "@/lib/flota/acceso";
+import { listarVehiculosParaAlertasKm } from "@/lib/flota/acceso";
 
 type Ctx = { params: Promise<{ slug: string }> };
+
+type AlertaCache = {
+  at: number;
+  alertas: number;
+  muestras: string[];
+};
+const alertasKmCache = new Map<number, AlertaCache>();
+const ALERTAS_TTL_MS = 90_000;
 
 export type NotificacionItem = {
   id: string;
@@ -64,27 +72,41 @@ export async function GET(_req: Request, ctx: Ctx) {
     /* tabla ausente */
   }
 
-  // Alertas de servicio (km) — Flota / Ops / Admin
+  // Alertas de servicio (km) — query liviana + TTL (sin sync KM / schema)
   if (puedeAprobar) {
     try {
-      const vehiculos = await listarVehiculosAccesibles(guard.empresa.id);
-      let alertas = 0;
-      const muestras: string[] = [];
-      for (const v of vehiculos) {
-        if (Number(v.activo ?? 1) === 0) continue;
-        const pend = kmPendienteServicio(
-          Number(v.km_actual ?? 0),
-          v.km_ultimo_servicio == null ? null : Number(v.km_ultimo_servicio),
-          Number(v.km_intervalo_servicio ?? 10000),
-        );
-        if (pend != null && pend <= 1500) {
-          alertas += 1;
-          if (muestras.length < 3) {
-            muestras.push(
-              `${v.placa}${pend <= 0 ? " (vencido)" : ` (${pend} km)`}`,
-            );
+      const empresaId = guard.empresa.id;
+      const hit = alertasKmCache.get(empresaId);
+      let alertas: number;
+      let muestras: string[];
+      if (hit && Date.now() - hit.at < ALERTAS_TTL_MS) {
+        alertas = hit.alertas;
+        muestras = hit.muestras;
+      } else {
+        const vehiculos = await listarVehiculosParaAlertasKm(empresaId);
+        alertas = 0;
+        muestras = [];
+        for (const v of vehiculos) {
+          if (Number(v.activo ?? 1) === 0) continue;
+          const pend = kmPendienteServicio(
+            Number(v.km_actual ?? 0),
+            v.km_ultimo_servicio == null ? null : Number(v.km_ultimo_servicio),
+            Number(v.km_intervalo_servicio ?? 10000),
+          );
+          if (pend != null && pend <= 1500) {
+            alertas += 1;
+            if (muestras.length < 3) {
+              muestras.push(
+                `${v.placa}${pend <= 0 ? " (vencido)" : ` (${pend} km)`}`,
+              );
+            }
           }
         }
+        alertasKmCache.set(empresaId, {
+          at: Date.now(),
+          alertas,
+          muestras,
+        });
       }
       if (alertas > 0) {
         items.push({

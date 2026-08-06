@@ -12,6 +12,12 @@ import {
 
 export * from "@/lib/permisos-shared";
 
+const PERMISOS_TTL_MS = 45_000;
+const permisosCache = new Map<
+  string,
+  { at: number; data: PermisoModulo[] }
+>();
+
 export async function listarPermisosUsuario(
   usuarioId: number,
 ): Promise<PermisoModulo[]> {
@@ -57,8 +63,17 @@ export async function permisosEfectivos(
   rol: RolGlobal,
 ): Promise<PermisoModulo[]> {
   if (rol === "Admin") return permisosDefaultPorRol("Admin");
+
+  const cacheKey = `${usuarioId}:${rol}`;
+  const hit = permisosCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < PERMISOS_TTL_MS) return hit.data;
+
   const stored = await listarPermisosUsuario(usuarioId);
-  if (stored.length === 0) return permisosDefaultPorRol(rol);
+  if (stored.length === 0) {
+    const data = permisosDefaultPorRol(rol);
+    permisosCache.set(cacheKey, { at: Date.now(), data });
+    return data;
+  }
 
   const defaults = permisosDefaultPorRol(rol);
   const defMap = new Map(defaults.map((p) => [p.modulo, p]));
@@ -73,7 +88,7 @@ export async function permisosEfectivos(
   // Filas antiguas fuera del catálogo actual.
   const extras = stored.filter((p) => !catalogo.includes(p.modulo));
 
-  return [
+  const data = [
     ...catalogo.map((m) => {
       if (byMod.has(m)) return byMod.get(m)!;
       // Compat: usuarios Operaciones/Contabilidad guardados solo con RRHH
@@ -85,12 +100,18 @@ export async function permisosEfectivos(
     }),
     ...extras,
   ];
+  permisosCache.set(cacheKey, { at: Date.now(), data });
+  return data;
 }
 
 export async function guardarPermisosUsuario(
   usuarioId: number,
   permisos: PermisoModulo[],
 ): Promise<void> {
+  permisosCache.delete(`${usuarioId}:Admin`);
+  for (const key of permisosCache.keys()) {
+    if (key.startsWith(`${usuarioId}:`)) permisosCache.delete(key);
+  }
   await execute(
     "DELETE FROM usuario_modulo WHERE usuario_id = ? AND empresa_id IS NULL",
     [usuarioId],
