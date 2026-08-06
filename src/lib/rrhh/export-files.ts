@@ -1,5 +1,6 @@
 import ExcelJS from "exceljs";
 import PDFDocument from "pdfkit";
+import { formatearTimestampVisible, fmtTs } from "@/lib/rrhh/dates";
 
 export async function tablaAExcel(opts: {
   sheetName: string;
@@ -26,35 +27,20 @@ export async function tablaAExcel(opts: {
 export function celdaPdf(v: unknown): string {
   if (v == null) return "";
   if (v instanceof Date && !Number.isNaN(v.getTime())) {
-    return formatearFechaHora(v);
+    return formatearTimestampVisible(fmtTs(v));
   }
   const s = String(v).replace(/\s+/g, " ").trim();
   if (!s) return "";
-  // ISO / MySQL datetime
+  // ISO / MySQL datetime (reloj de pared Guatemala; no reinterpretar zona)
   if (/^\d{4}-\d{2}-\d{2}/.test(s) || /T\d{2}:\d{2}/.test(s)) {
-    const d = new Date(s);
-    if (!Number.isNaN(d.getTime())) return formatearFechaHora(d);
-    return s.replace("T", " ").slice(0, 16);
+    return formatearTimestampVisible(s);
   }
   // Date.toString() del motor JS
   if (/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s/i.test(s)) {
     const d = new Date(s);
-    if (!Number.isNaN(d.getTime())) return formatearFechaHora(d);
+    if (!Number.isNaN(d.getTime())) return formatearTimestampVisible(fmtTs(d));
   }
   return s;
-}
-
-function formatearFechaHora(d: Date): string {
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const yyyy = d.getFullYear();
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mi = String(d.getMinutes()).padStart(2, "0");
-  // Si es medianoche exacta y viene de DATE, mostrar solo fecha
-  if (hh === "00" && mi === "00" && d.getSeconds() === 0) {
-    return `${dd}/${mm}/${yyyy}`;
-  }
-  return `${dd}/${mm}/${yyyy} ${hh}:${mi}`;
 }
 
 function truncar(s: string, max: number): string {

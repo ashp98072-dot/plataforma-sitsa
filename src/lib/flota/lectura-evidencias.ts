@@ -1,6 +1,6 @@
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
-import { ahoraLocal } from "@/lib/rrhh/dates";
+import { ahoraLocal, fmtTs } from "@/lib/rrhh/dates";
 import { contentTypeFor, guardarUpload } from "@/lib/uploads";
 
 export type TipoEvidenciaLectura = "tablero" | "evidencia";
@@ -29,6 +29,7 @@ export async function guardarEvidenciaLectura(opts: {
     opts.file,
   );
   const ahora = ahoraLocal();
+  const capturado = fmtTs(opts.capturadoEn) || ahora;
   const r = await execute(
     `INSERT INTO flota_lectura_evidencias
       (empresa_id, lectura_id, tipo, ruta_relativa, nombre_original, mime, tamano,
@@ -44,7 +45,7 @@ export async function guardarEvidenciaLectura(opts: {
       saved.size,
       opts.latitud ?? null,
       opts.longitud ?? null,
-      opts.capturadoEn || ahora,
+      capturado,
       opts.username,
       ahora,
     ],

@@ -1,6 +1,6 @@
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
-import { ahoraLocal } from "@/lib/rrhh/dates";
+import { ahoraLocal, fmtTs } from "@/lib/rrhh/dates";
 import { borrarUpload, contentTypeFor, guardarUpload } from "@/lib/uploads";
 
 export type TipoEvidenciaViaje =
@@ -37,6 +37,7 @@ export async function guardarEvidenciaViaje(opts: {
     opts.file,
   );
   const ahora = ahoraLocal();
+  const capturado = fmtTs(opts.capturadoEn) || ahora;
   let r;
   try {
     r = await execute(
@@ -54,7 +55,7 @@ export async function guardarEvidenciaViaje(opts: {
         saved.size,
         opts.latitud ?? null,
         opts.longitud ?? null,
-        opts.capturadoEn || ahora,
+        capturado,
         opts.username,
         ahora,
         opts.paradaId ?? null,
@@ -76,7 +77,7 @@ export async function guardarEvidenciaViaje(opts: {
         saved.size,
         opts.latitud ?? null,
         opts.longitud ?? null,
-        opts.capturadoEn || ahora,
+        capturado,
         opts.username,
         ahora,
       ],

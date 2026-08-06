@@ -4,6 +4,7 @@ import { query } from "@/lib/db";
 import { requireTenantFlota } from "@/lib/tenant";
 import { listarParadasDelPlan } from "@/lib/tms/paradas";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
+import { hoyLocal } from "@/lib/rrhh/dates";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -19,10 +20,12 @@ export async function GET(req: Request, ctx: Ctx) {
   }
 
   const url = new URL(req.url);
-  const hoy = new Date().toISOString().slice(0, 10);
-  const hace6 = new Date();
-  hace6.setMonth(hace6.getMonth() - 5);
-  const desdeDefault = `${hace6.getFullYear()}-${String(hace6.getMonth() + 1).padStart(2, "0")}-01`;
+  const hoy = hoyLocal();
+  const [y, m] = hoy.split("-").map(Number);
+  const mesInicio = m - 5;
+  const anioInicio = y + Math.floor((mesInicio - 1) / 12);
+  const mesNorm = ((((mesInicio - 1) % 12) + 12) % 12) + 1;
+  const desdeDefault = `${anioInicio}-${String(mesNorm).padStart(2, "0")}-01`;
 
   const fechaDesde = (url.searchParams.get("desde") || desdeDefault).slice(0, 10);
   const fechaHasta = (url.searchParams.get("hasta") || hoy).slice(0, 10);

@@ -25,6 +25,12 @@ import {
 } from "@/lib/flota/photo-meta";
 import { normalizarFotoCamara, normalizarFotosCamara } from "@/lib/flota/camera-file";
 import { TomarFotoButton } from "@/components/flota/tomar-foto";
+import {
+  ahoraLocal,
+  formatearFechaVisible,
+  formatearTimestampVisible,
+  hoyLocal,
+} from "@/lib/rrhh/dates";
 
 function normPiloto(nombre: string): string {
   return nombre
@@ -168,9 +174,8 @@ type EvidenciaViaje = {
   viajeId?: number;
 };
 
-function fmtFechaHora(v: string | null | undefined): string {
-  if (!v) return "—";
-  return String(v).replace("T", " ").slice(0, 19);
+function fmtFechaHora(v: string | Date | null | undefined): string {
+  return formatearTimestampVisible(v);
 }
 
 function labelTipoEvidencia(tipo: string): string {
@@ -305,9 +310,7 @@ function FlotaInner() {
   const [repuestoInput, setRepuestoInput] = useState("");
   const [obsServicio, setObsServicio] = useState("");
   const [fechaEntradaTaller, setFechaEntradaTaller] = useState("");
-  const [fechaSalidaTaller, setFechaSalidaTaller] = useState(() =>
-    new Date().toISOString().slice(0, 10),
-  );
+  const [fechaSalidaTaller, setFechaSalidaTaller] = useState(() => hoyLocal());
   const [editServicioId, setEditServicioId] = useState<number | null>(null);
   const [accesoEmpresaIds, setAccesoEmpresaIds] = useState<number[]>([]);
   const [empresasFlota, setEmpresasFlota] = useState<EmpresaOpt[]>([]);
@@ -359,9 +362,7 @@ function FlotaInner() {
     d.setMonth(d.getMonth() - 5);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
   });
-  const [repHasta, setRepHasta] = useState(() =>
-    new Date().toISOString().slice(0, 10),
-  );
+  const [repHasta, setRepHasta] = useState(() => hoyLocal());
 
   const isAdmin = rol === "Admin";
   const can = useCallback(
@@ -955,10 +956,7 @@ function FlotaInner() {
         form.set("latitud", String(geo.lat));
         form.set("longitud", String(geo.lng));
       }
-      form.set(
-        "capturadoEn",
-        new Date().toISOString().slice(0, 19).replace("T", " "),
-      );
+      form.set("capturadoEn", ahoraLocal());
       for (const f of marked) {
         form.append("files", f, f.name || `parada_${paradaId}.jpg`);
       }
@@ -1083,7 +1081,7 @@ function FlotaInner() {
       body: JSON.stringify({
         vehiculoId,
         km: kmLectura,
-        fechaLectura: new Date().toISOString().slice(0, 10),
+        fechaLectura: hoyLocal(),
         conductor: nombre || undefined,
         nota: nombre || undefined,
         latitud: geo?.lat ?? null,
@@ -1110,10 +1108,7 @@ function FlotaInner() {
         form.set("latitud", String(geo.lat));
         form.set("longitud", String(geo.lng));
       }
-      form.set(
-        "capturadoEn",
-        new Date().toISOString().slice(0, 19).replace("T", " "),
-      );
+      form.set("capturadoEn", ahoraLocal());
       for (const f of tablero) form.append("files", f);
       const up = await fetch(
         `/api/empresas/${slug}/flota/lecturas/${lecId}/evidencias`,
@@ -1135,10 +1130,7 @@ function FlotaInner() {
           form2.set("latitud", String(geo.lat));
           form2.set("longitud", String(geo.lng));
         }
-        form2.set(
-          "capturadoEn",
-          new Date().toISOString().slice(0, 19).replace("T", " "),
-        );
+        form2.set("capturadoEn", ahoraLocal());
         for (const f of extras) form2.append("files", f);
         await fetch(
           `/api/empresas/${slug}/flota/lecturas/${lecId}/evidencias`,
@@ -1185,7 +1177,7 @@ function FlotaInner() {
     setCosto(0);
     setKmLectura(0);
     setFechaEntradaTaller("");
-    setFechaSalidaTaller(new Date().toISOString().slice(0, 10));
+    setFechaSalidaTaller(hoyLocal());
     setArchivosServicio(null);
     setTipoServicio("servicio_mayor");
     setSacarDeServicio(true);
@@ -1258,7 +1250,7 @@ function FlotaInner() {
     if (kmLectura) fd.append("kmServicio", String(kmLectura));
     fd.append(
       "fechaServicio",
-      fechaSalidaTaller || new Date().toISOString().slice(0, 10),
+      fechaSalidaTaller || hoyLocal(),
     );
     fd.append("costo", String(costo || 0));
     fd.append("repuestos", JSON.stringify(lista));
@@ -1317,7 +1309,7 @@ function FlotaInner() {
       form.set("latitud", String(geo.lat));
       form.set("longitud", String(geo.lng));
     }
-    form.set("capturadoEn", new Date().toISOString().slice(0, 19).replace("T", " "));
+    form.set("capturadoEn", ahoraLocal());
     for (const f of files) form.append("files", f);
     const res = await fetch(
       `/api/empresas/${slug}/flota/viajes/${viajeCreadoId}/evidencias`,
@@ -3283,7 +3275,8 @@ function FlotaInner() {
               <div>
                 <h2 className="font-medium">Viajes del período</h2>
                 <p className="text-xs text-[var(--muted)]">
-                  {repDesde} → {repHasta}
+                  {formatearFechaVisible(repDesde)} →{" "}
+                  {formatearFechaVisible(repHasta)}
                   {q.trim() ? ` · filtro: ${q.trim()}` : ""} ·{" "}
                   {viajesReporteFiltrados.length} viaje(s)
                 </p>
