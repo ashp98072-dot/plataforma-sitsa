@@ -1,0 +1,56 @@
+import { z } from "zod";
+
+const optStr = z.string().optional().nullable();
+const optNum = z.number().optional().nullable();
+
+/** Body compartido crear/actualizar empleado (ficha Monaco). */
+export const empleadoBodySchema = z.object({
+  codigo: z.string().min(1),
+  nombre: z.string().optional().default(""),
+  puesto: z.string().optional(),
+  categoriaOps: z.string().optional(),
+  tipoHorario: z.enum(["Fijo", "Variable"]).default("Fijo"),
+  fechaAlta: z.string().min(8),
+  fechaInicioLaboral: z.string().nullable().optional(),
+  horaEntradaTeorica: z.string().optional(),
+  horaSalidaTeorica: z.string().optional(),
+  estado: z.enum(["Activo", "Baja"]).default("Activo"),
+  dpi: optStr,
+  nit: optStr,
+  igss: optStr,
+  irtra: optStr,
+  telefono: optStr,
+  email: optStr,
+  direccion: optStr,
+  sexo: optStr,
+  fechaNacimiento: optStr,
+  tipoContrato: optStr,
+  formaPago: optStr,
+  sueldoBase: optNum,
+  bonoIncentivo: optNum,
+  bonoHerramientas: optNum,
+  profesion: optStr,
+  primerNombre: optStr,
+  segundoNombre: optStr,
+  tercerNombre: optStr,
+  cuartoNombre: optStr,
+  primerApellido: optStr,
+  segundoApellido: optStr,
+  apellidoCasada: optStr,
+  paisOrigen: optStr,
+  municipio: optStr,
+  etnia: optStr,
+  religion: optStr,
+  idioma: optStr,
+  licenciaNumero: optStr,
+  licenciaTipo: optStr,
+  licenciaVence: optStr,
+  fechaEgreso: optStr,
+  observaciones: optStr,
+  cuentaBancaria: optStr,
+  tipoCuenta: optStr,
+  banco: optStr,
+  contactoEmergencia: optStr,
+});
+
+export type EmpleadoBody = z.infer<typeof empleadoBodySchema>;

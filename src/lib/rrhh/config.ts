@@ -3,9 +3,16 @@ import { execute, query } from "@/lib/db";
 import { normalizarHora } from "./dates";
 
 export const PARAMETROS_DEFAULT: Record<string, string> = {
-  hora_entrada_default: "08:00:00",
-  hora_salida_default: "17:00:00",
-  minutos_tolerancia: "10",
+  hora_entrada_default: "07:00:00",
+  hora_salida_default: "16:00:00",
+  /** Salida teórica los sábados (Monaco: 11:00) */
+  hora_salida_sabado: "11:00:00",
+  /** Gracia diaria (0 = tardanza desde el minuto 1) */
+  minutos_tolerancia: "0",
+  /** Banco semanal de minutos de retraso perdonados (Monaco: 20) */
+  minutos_tolerancia_semanal: "20",
+  /** Sin marcaje tras estos minutos → falta en el día */
+  minutos_para_falta: "60",
   ciclo_quincenal: "15",
   /** 1 = el kiosko solo permite marcar cerca del predio */
   geocerca_activa: "0",
@@ -61,7 +68,30 @@ export function validarParametros(
   }
   const tolerancia = Number.parseInt(parametros.minutos_tolerancia ?? "", 10);
   if (!Number.isFinite(tolerancia) || tolerancia < 0 || tolerancia > 120) {
-    return { ok: false, error: "Tolerancia debe ser entre 0 y 120 minutos." };
+    return { ok: false, error: "Tolerancia diaria debe ser entre 0 y 120 minutos." };
+  }
+  const horaSalidaSab = normalizarHora(
+    parametros.hora_salida_sabado ?? "11:00:00",
+  );
+  if (!horaSalidaSab) {
+    return { ok: false, error: "Hora de salida sábado inválida (HH:MM)." };
+  }
+  const tolSem = Number.parseInt(
+    parametros.minutos_tolerancia_semanal ?? "20",
+    10,
+  );
+  if (!Number.isFinite(tolSem) || tolSem < 0 || tolSem > 480) {
+    return {
+      ok: false,
+      error: "Tolerancia semanal: entre 0 y 480 minutos.",
+    };
+  }
+  const minFalta = Number.parseInt(parametros.minutos_para_falta ?? "60", 10);
+  if (!Number.isFinite(minFalta) || minFalta < 15 || minFalta > 240) {
+    return {
+      ok: false,
+      error: "Minutos para falta: entre 15 y 240.",
+    };
   }
   const ciclo = Number.parseInt(parametros.ciclo_quincenal ?? "", 10);
   if (!Number.isFinite(ciclo) || ciclo < 1 || ciclo > 28) {
@@ -102,7 +132,10 @@ export function validarParametros(
     datos: {
       hora_entrada_default: horaEntrada,
       hora_salida_default: horaSalida,
+      hora_salida_sabado: horaSalidaSab,
       minutos_tolerancia: String(tolerancia),
+      minutos_tolerancia_semanal: String(tolSem),
+      minutos_para_falta: String(minFalta),
       ciclo_quincenal: String(ciclo),
       geocerca_activa: geoActiva,
       geocerca_lat: latStr,
@@ -110,6 +143,22 @@ export function validarParametros(
       geocerca_radio_m: String(radio),
     },
   };
+}
+
+export async function obtenerToleranciaSemanal(
+  empresaId: number,
+): Promise<number> {
+  const p = await obtenerParametros(empresaId);
+  const n = Number.parseInt(p.minutos_tolerancia_semanal, 10);
+  return Number.isFinite(n) ? n : 20;
+}
+
+export async function obtenerMinutosParaFalta(
+  empresaId: number,
+): Promise<number> {
+  const p = await obtenerParametros(empresaId);
+  const n = Number.parseInt(p.minutos_para_falta, 10);
+  return Number.isFinite(n) ? n : 60;
 }
 
 export async function guardarParametros(

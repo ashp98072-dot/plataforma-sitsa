@@ -11,20 +11,118 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { DocumentosModal } from "@/components/rrhh/documentos-modal";
 import { formatearFechaVisible, hoyLocal } from "@/lib/rrhh/dates";
+import { CATEGORIAS_OPS } from "@/lib/rrhh/categorias-ops";
 
 type Emp = {
   id: number;
   codigo: string;
   nombre: string;
+  puesto?: string;
+  categoriaOps?: string;
+  tipoHorario?: string;
+  fechaAlta?: string;
+  fechaInicioLaboral?: string | null;
+  horaEntradaTeorica?: string;
+  horaSalidaTeorica?: string;
+  estado?: string;
+  docsCount?: number;
+  dpi?: string;
+  nit?: string;
+  igss?: string;
+  irtra?: string;
+  telefono?: string;
+  email?: string;
+  direccion?: string;
+  sexo?: string;
+  fechaNacimiento?: string | null;
+  tipoContrato?: string;
+  formaPago?: string;
+  sueldoBase?: number | null;
+  bonoIncentivo?: number | null;
+  bonoHerramientas?: number | null;
+  profesion?: string;
+  primerNombre?: string;
+  segundoNombre?: string;
+  tercerNombre?: string;
+  cuartoNombre?: string;
+  primerApellido?: string;
+  segundoApellido?: string;
+  apellidoCasada?: string;
+  paisOrigen?: string;
+  municipio?: string;
+  etnia?: string;
+  religion?: string;
+  idioma?: string;
+  licenciaNumero?: string;
+  licenciaTipo?: string;
+  licenciaVence?: string | null;
+  fechaEgreso?: string | null;
+  observaciones?: string;
+  cuentaBancaria?: string;
+  tipoCuenta?: string;
+  banco?: string;
+  contactoEmergencia?: string;
+};
+
+type EmpleadoCambio = {
+  id: number;
+  campo: string;
+  valorAnterior: string | null;
+  valorNuevo: string | null;
+  registradoPor: string | null;
+  creadoAt: string;
+};
+
+type LicenciaTipo = "" | "A" | "B" | "C" | "M";
+
+type FormState = {
+  codigo: string;
+  primerNombre: string;
+  segundoNombre: string;
+  tercerNombre: string;
+  cuartoNombre: string;
+  primerApellido: string;
+  segundoApellido: string;
+  apellidoCasada: string;
+  nombre: string;
+  nombreManual: boolean;
+  dpi: string;
+  nit: string;
+  igss: string;
+  irtra: string;
+  sexo: string;
+  fechaNacimiento: string;
   puesto: string;
   categoriaOps: string;
-  tipoHorario: string;
+  tipoContrato: "prueba" | "fijo";
+  formaPago: "cheque" | "transferencia";
+  profesion: string;
+  tipoHorario: "Fijo" | "Variable";
   fechaAlta: string;
-  fechaInicioLaboral: string | null;
+  fechaInicioLaboral: string;
+  fechaEgreso: string;
   horaEntradaTeorica: string;
   horaSalidaTeorica: string;
-  estado: string;
-  docsCount?: number;
+  estado: "Activo" | "Baja";
+  sueldoBase: string;
+  bonoIncentivo: string;
+  bonoHerramientas: string;
+  telefono: string;
+  email: string;
+  direccion: string;
+  licenciaNumero: string;
+  licenciaTipo: LicenciaTipo;
+  licenciaVence: string;
+  paisOrigen: string;
+  municipio: string;
+  etnia: string;
+  religion: string;
+  idioma: string;
+  cuentaBancaria: string;
+  tipoCuenta: string;
+  banco: string;
+  contactoEmergencia: string;
+  observaciones: string;
 };
 
 function horaCortaCfg(v: string | undefined, fallback: string): string {
@@ -33,19 +131,182 @@ function horaCortaCfg(v: string | undefined, fallback: string): string {
   return s.slice(0, 5);
 }
 
-function emptyForm(entrada = "08:00", salida = "17:00") {
+function componerNombre(f: Pick<
+  FormState,
+  | "primerNombre"
+  | "segundoNombre"
+  | "tercerNombre"
+  | "cuartoNombre"
+  | "primerApellido"
+  | "segundoApellido"
+  | "apellidoCasada"
+  | "nombre"
+>): string {
+  const nombres = [
+    f.primerNombre,
+    f.segundoNombre,
+    f.tercerNombre,
+    f.cuartoNombre,
+  ]
+    .map((x) => x.trim())
+    .filter(Boolean);
+  const apellidos = [
+    f.primerApellido,
+    f.segundoApellido,
+    f.apellidoCasada,
+  ]
+    .map((x) => x.trim())
+    .filter(Boolean);
+  const full = [...nombres, ...apellidos].join(" ").replace(/\s+/g, " ").trim();
+  return full || f.nombre.trim();
+}
+
+function emptyForm(entrada = "08:00", salida = "17:00"): FormState {
   return {
     codigo: "",
+    primerNombre: "",
+    segundoNombre: "",
+    tercerNombre: "",
+    cuartoNombre: "",
+    primerApellido: "",
+    segundoApellido: "",
+    apellidoCasada: "",
     nombre: "",
+    nombreManual: false,
+    dpi: "",
+    nit: "",
+    igss: "",
+    irtra: "",
+    sexo: "",
+    fechaNacimiento: "",
     puesto: "",
     categoriaOps: "",
-    tipoHorario: "Fijo" as "Fijo" | "Variable",
+    tipoContrato: "fijo",
+    formaPago: "transferencia",
+    profesion: "",
+    tipoHorario: "Fijo",
     fechaAlta: hoyLocal(),
     fechaInicioLaboral: "",
+    fechaEgreso: "",
     horaEntradaTeorica: entrada,
     horaSalidaTeorica: salida,
-    estado: "Activo" as "Activo" | "Baja",
+    estado: "Activo",
+    sueldoBase: "",
+    bonoIncentivo: "",
+    bonoHerramientas: "",
+    telefono: "",
+    email: "",
+    direccion: "",
+    licenciaNumero: "",
+    licenciaTipo: "",
+    licenciaVence: "",
+    paisOrigen: "",
+    municipio: "",
+    etnia: "",
+    religion: "",
+    idioma: "",
+    cuentaBancaria: "",
+    tipoCuenta: "",
+    banco: "",
+    contactoEmergencia: "",
+    observaciones: "",
   };
+}
+
+function empToForm(
+  e: Emp,
+  horaDef: { entrada: string; salida: string },
+): FormState {
+  const licencia = e.licenciaTipo ?? "";
+  return {
+    codigo: e.codigo,
+    primerNombre: e.primerNombre ?? "",
+    segundoNombre: e.segundoNombre ?? "",
+    tercerNombre: e.tercerNombre ?? "",
+    cuartoNombre: e.cuartoNombre ?? "",
+    primerApellido: e.primerApellido ?? "",
+    segundoApellido: e.segundoApellido ?? "",
+    apellidoCasada: e.apellidoCasada ?? "",
+    nombre: e.nombre,
+    nombreManual: true,
+    dpi: e.dpi ?? "",
+    nit: e.nit ?? "",
+    igss: e.igss ?? "",
+    irtra: e.irtra ?? "",
+    sexo: e.sexo ?? "",
+    fechaNacimiento: e.fechaNacimiento ?? "",
+    puesto: e.puesto ?? "",
+    categoriaOps: e.categoriaOps ?? "",
+    tipoContrato: e.tipoContrato === "prueba" ? "prueba" : "fijo",
+    formaPago: e.formaPago === "cheque" ? "cheque" : "transferencia",
+    profesion: e.profesion ?? "",
+    tipoHorario: e.tipoHorario === "Variable" ? "Variable" : "Fijo",
+    fechaAlta: e.fechaAlta || hoyLocal(),
+    fechaInicioLaboral: e.fechaInicioLaboral ?? "",
+    fechaEgreso: e.fechaEgreso ?? "",
+    horaEntradaTeorica: (e.horaEntradaTeorica || `${horaDef.entrada}:00`).slice(
+      0,
+      5,
+    ),
+    horaSalidaTeorica: (e.horaSalidaTeorica || `${horaDef.salida}:00`).slice(
+      0,
+      5,
+    ),
+    estado: e.estado === "Baja" ? "Baja" : "Activo",
+    sueldoBase: e.sueldoBase != null ? String(e.sueldoBase) : "",
+    bonoIncentivo: e.bonoIncentivo != null ? String(e.bonoIncentivo) : "",
+    bonoHerramientas:
+      e.bonoHerramientas != null ? String(e.bonoHerramientas) : "",
+    telefono: e.telefono ?? "",
+    email: e.email ?? "",
+    direccion: e.direccion ?? "",
+    licenciaNumero: e.licenciaNumero ?? "",
+    licenciaTipo: (["A", "B", "C", "M"].includes(licencia)
+      ? licencia
+      : "") as LicenciaTipo,
+    licenciaVence: e.licenciaVence ?? "",
+    paisOrigen: e.paisOrigen ?? "",
+    municipio: e.municipio ?? "",
+    etnia: e.etnia ?? "",
+    religion: e.religion ?? "",
+    idioma: e.idioma ?? "",
+    cuentaBancaria: e.cuentaBancaria ?? "",
+    tipoCuenta: e.tipoCuenta ?? "",
+    banco: e.banco ?? "",
+    contactoEmergencia: e.contactoEmergencia ?? "",
+    observaciones: e.observaciones ?? "",
+  };
+}
+
+function parseNum(s: string): number | null {
+  const t = s.trim();
+  if (!t) return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : null;
+}
+
+function formToBody(form: FormState) {
+  const { nombreManual: _nm, ...rest } = form;
+  return {
+    ...rest,
+    nombre: rest.nombre.trim() || componerNombre(rest),
+    fechaInicioLaboral: rest.fechaInicioLaboral || null,
+    fechaNacimiento: rest.fechaNacimiento || null,
+    licenciaVence: rest.licenciaVence || null,
+    fechaEgreso: rest.fechaEgreso || null,
+    sueldoBase: parseNum(rest.sueldoBase),
+    bonoIncentivo: parseNum(rest.bonoIncentivo),
+    bonoHerramientas: parseNum(rest.bonoHerramientas),
+    licenciaTipo: rest.licenciaTipo || "",
+  };
+}
+
+function SectionHeader({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="sm:col-span-2 lg:col-span-3 mt-2 border-b border-[var(--border)] pb-1 text-sm font-semibold text-[var(--text)]">
+      {children}
+    </p>
+  );
 }
 
 export default function EmpleadosPage() {
@@ -53,14 +314,17 @@ export default function EmpleadosPage() {
   const [empleados, setEmpleados] = useState<Emp[]>([]);
   const [q, setQ] = useState("");
   const [qDebounced, setQDebounced] = useState("");
-  const [horaDef, setHoraDef] = useState({ entrada: "08:00", salida: "17:00" });
-  const [form, setForm] = useState(() => emptyForm());
+  const [horaDef, setHoraDef] = useState({ entrada: "07:00", salida: "16:00" });
+  const [form, setForm] = useState<FormState>(() => emptyForm());
   const [editId, setEditId] = useState<number | null>(null);
+  const [historial, setHistorial] = useState<EmpleadoCambio[]>([]);
   const [error, setError] = useState("");
   const [mensaje, setMensaje] = useState("");
   const [importando, setImportando] = useState(false);
   const [docsEmp, setDocsEmp] = useState<Emp | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const mostrarDpi = empleados.some((e) => e.dpi);
 
   useEffect(() => {
     const t = setTimeout(() => setQDebounced(q), 300);
@@ -93,26 +357,43 @@ export default function EmpleadosPage() {
     void cargar();
   }, [cargar]);
 
-  function empezarEdicion(e: Emp) {
-    setEditId(e.id);
-    setForm({
-      codigo: e.codigo,
-      nombre: e.nombre,
-      puesto: e.puesto,
-      categoriaOps: e.categoriaOps,
-      tipoHorario: e.tipoHorario === "Variable" ? "Variable" : "Fijo",
-      fechaAlta: e.fechaAlta || hoyLocal(),
-      fechaInicioLaboral: e.fechaInicioLaboral || "",
-      horaEntradaTeorica: (e.horaEntradaTeorica || `${horaDef.entrada}:00`).slice(
-        0,
-        5,
-      ),
-      horaSalidaTeorica: (e.horaSalidaTeorica || `${horaDef.salida}:00`).slice(
-        0,
-        5,
-      ),
-      estado: e.estado === "Baja" ? "Baja" : "Activo",
+  function patchForm(patch: Partial<FormState>) {
+    setForm((f) => {
+      const next = { ...f, ...patch };
+      const identityKeys: (keyof FormState)[] = [
+        "primerNombre",
+        "segundoNombre",
+        "tercerNombre",
+        "cuartoNombre",
+        "primerApellido",
+        "segundoApellido",
+        "apellidoCasada",
+      ];
+      const touchesIdentity = identityKeys.some((k) => k in patch);
+      if (touchesIdentity && !next.nombreManual) {
+        next.nombre = componerNombre(next);
+      }
+      return next;
     });
+  }
+
+  async function empezarEdicion(e: Emp) {
+    setEditId(e.id);
+    setHistorial([]);
+    try {
+      const res = await fetch(
+        `/api/empresas/${slug}/empleados/${e.id}?historial=1`,
+      );
+      const data = await res.json();
+      if (res.ok && data.empleado) {
+        setForm(empToForm(data.empleado, horaDef));
+        setHistorial(data.historial ?? []);
+        return;
+      }
+    } catch {
+      /* fallback to list row */
+    }
+    setForm(empToForm(e, horaDef));
   }
 
   async function onSubmit(ev: FormEvent) {
@@ -125,10 +406,7 @@ export default function EmpleadosPage() {
     const res = await fetch(url, {
       method: editId ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ...form,
-        fechaInicioLaboral: form.fechaInicioLaboral || null,
-      }),
+      body: JSON.stringify(formToBody(form)),
     });
     const data = await res.json();
     if (!res.ok) {
@@ -138,6 +416,7 @@ export default function EmpleadosPage() {
     setMensaje(data.mensaje);
     setForm(emptyForm(horaDef.entrada, horaDef.salida));
     setEditId(null);
+    setHistorial([]);
     await cargar();
   }
 
@@ -149,6 +428,12 @@ export default function EmpleadosPage() {
     const data = await res.json();
     setMensaje(data.mensaje || data.error);
     await cargar();
+  }
+
+  function cancelarEdicion() {
+    setEditId(null);
+    setHistorial([]);
+    setForm(emptyForm(horaDef.entrada, horaDef.salida));
   }
 
   const input =
@@ -178,21 +463,141 @@ export default function EmpleadosPage() {
         <p className="sm:col-span-2 lg:col-span-3 text-sm font-medium">
           {editId ? `Editando #${editId}` : "Nuevo empleado"}
         </p>
+
+        <SectionHeader>Identidad</SectionHeader>
+        <label className="text-sm text-[var(--muted)]">
+          Primer nombre
+          <input
+            className={input}
+            value={form.primerNombre}
+            onChange={(e) => patchForm({ primerNombre: e.target.value })}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Segundo nombre
+          <input
+            className={input}
+            value={form.segundoNombre}
+            onChange={(e) => patchForm({ segundoNombre: e.target.value })}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Tercer nombre
+          <input
+            className={input}
+            value={form.tercerNombre}
+            onChange={(e) => patchForm({ tercerNombre: e.target.value })}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Cuarto nombre
+          <input
+            className={input}
+            value={form.cuartoNombre}
+            onChange={(e) => patchForm({ cuartoNombre: e.target.value })}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Primer apellido
+          <input
+            className={input}
+            value={form.primerApellido}
+            onChange={(e) => patchForm({ primerApellido: e.target.value })}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Segundo apellido
+          <input
+            className={input}
+            value={form.segundoApellido}
+            onChange={(e) => patchForm({ segundoApellido: e.target.value })}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Apellido casada
+          <input
+            className={input}
+            value={form.apellidoCasada}
+            onChange={(e) => patchForm({ apellidoCasada: e.target.value })}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)] sm:col-span-2">
+          Nombre completo
+          <span className="mt-0.5 block text-[10px] opacity-80">
+            {form.nombreManual
+              ? "Editado manualmente"
+              : "Se genera automáticamente desde los campos de identidad"}
+          </span>
+          <input
+            className={input}
+            value={form.nombre}
+            onChange={(e) =>
+              setForm({ ...form, nombre: e.target.value, nombreManual: true })
+            }
+            required
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          DPI
+          <input
+            className={input}
+            value={form.dpi}
+            onChange={(e) => patchForm({ dpi: e.target.value })}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          NIT
+          <input
+            className={input}
+            value={form.nit}
+            onChange={(e) => patchForm({ nit: e.target.value })}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          IGSS
+          <input
+            className={input}
+            value={form.igss}
+            onChange={(e) => patchForm({ igss: e.target.value })}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          IRTRA
+          <input
+            className={input}
+            value={form.irtra}
+            onChange={(e) => patchForm({ irtra: e.target.value })}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Sexo
+          <select
+            className={input}
+            value={form.sexo}
+            onChange={(e) => patchForm({ sexo: e.target.value })}
+          >
+            <option value="">—</option>
+            <option value="M">Masculino</option>
+            <option value="F">Femenino</option>
+          </select>
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Fecha nacimiento
+          <input
+            type="date"
+            className={input}
+            value={form.fechaNacimiento}
+            onChange={(e) => patchForm({ fechaNacimiento: e.target.value })}
+          />
+        </label>
+
+        <SectionHeader>Laboral</SectionHeader>
         <label className="text-sm text-[var(--muted)]">
           Código
           <input
             className={input}
             value={form.codigo}
-            onChange={(e) => setForm({ ...form, codigo: e.target.value })}
-            required
-          />
-        </label>
-        <label className="text-sm text-[var(--muted)]">
-          Nombre
-          <input
-            className={input}
-            value={form.nombre}
-            onChange={(e) => setForm({ ...form, nombre: e.target.value })}
+            onChange={(e) => patchForm({ codigo: e.target.value })}
             required
           />
         </label>
@@ -201,7 +606,7 @@ export default function EmpleadosPage() {
           <input
             className={input}
             value={form.puesto}
-            onChange={(e) => setForm({ ...form, puesto: e.target.value })}
+            onChange={(e) => patchForm({ puesto: e.target.value })}
           />
         </label>
         <label className="text-sm text-[var(--muted)]">
@@ -209,15 +614,53 @@ export default function EmpleadosPage() {
           <select
             className={input}
             value={form.categoriaOps}
-            onChange={(e) => setForm({ ...form, categoriaOps: e.target.value })}
+            onChange={(e) => patchForm({ categoriaOps: e.target.value })}
           >
             <option value="">—</option>
-            <option value="Piloto">Piloto</option>
-            <option value="Auxiliar">Auxiliar</option>
-            <option value="Bodega">Bodega</option>
-            <option value="Administrativo">Administrativo</option>
-            <option value="Otro">Otro</option>
+            {CATEGORIAS_OPS.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
           </select>
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Tipo contrato
+          <select
+            className={input}
+            value={form.tipoContrato}
+            onChange={(e) =>
+              patchForm({
+                tipoContrato: e.target.value as "prueba" | "fijo",
+              })
+            }
+          >
+            <option value="fijo">Fijo</option>
+            <option value="prueba">Prueba</option>
+          </select>
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Forma pago
+          <select
+            className={input}
+            value={form.formaPago}
+            onChange={(e) =>
+              patchForm({
+                formaPago: e.target.value as "cheque" | "transferencia",
+              })
+            }
+          >
+            <option value="transferencia">Transferencia</option>
+            <option value="cheque">Cheque</option>
+          </select>
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Profesión
+          <input
+            className={input}
+            value={form.profesion}
+            onChange={(e) => patchForm({ profesion: e.target.value })}
+          />
         </label>
         <label className="text-sm text-[var(--muted)]">
           Fecha entrada laboral
@@ -229,7 +672,7 @@ export default function EmpleadosPage() {
             className={input}
             value={form.fechaInicioLaboral}
             onChange={(e) =>
-              setForm({ ...form, fechaInicioLaboral: e.target.value })
+              patchForm({ fechaInicioLaboral: e.target.value })
             }
           />
         </label>
@@ -242,8 +685,17 @@ export default function EmpleadosPage() {
             type="date"
             className={input}
             value={form.fechaAlta}
-            onChange={(e) => setForm({ ...form, fechaAlta: e.target.value })}
+            onChange={(e) => patchForm({ fechaAlta: e.target.value })}
             required
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Fecha egreso
+          <input
+            type="date"
+            className={input}
+            value={form.fechaEgreso}
+            onChange={(e) => patchForm({ fechaEgreso: e.target.value })}
           />
         </label>
         <label className="text-sm text-[var(--muted)]">
@@ -252,8 +704,7 @@ export default function EmpleadosPage() {
             className={input}
             value={form.tipoHorario}
             onChange={(e) =>
-              setForm({
-                ...form,
+              patchForm({
                 tipoHorario: e.target.value as "Fijo" | "Variable",
               })
             }
@@ -269,7 +720,7 @@ export default function EmpleadosPage() {
             className={input}
             value={form.horaEntradaTeorica}
             onChange={(e) =>
-              setForm({ ...form, horaEntradaTeorica: e.target.value })
+              patchForm({ horaEntradaTeorica: e.target.value })
             }
           />
         </label>
@@ -280,7 +731,7 @@ export default function EmpleadosPage() {
             className={input}
             value={form.horaSalidaTeorica}
             onChange={(e) =>
-              setForm({ ...form, horaSalidaTeorica: e.target.value })
+              patchForm({ horaSalidaTeorica: e.target.value })
             }
           />
         </label>
@@ -290,8 +741,7 @@ export default function EmpleadosPage() {
             className={input}
             value={form.estado}
             onChange={(e) =>
-              setForm({
-                ...form,
+              patchForm({
                 estado: e.target.value as "Activo" | "Baja",
               })
             }
@@ -300,6 +750,206 @@ export default function EmpleadosPage() {
             <option value="Baja">Baja</option>
           </select>
         </label>
+
+        <SectionHeader>Salarios</SectionHeader>
+        <label className="text-sm text-[var(--muted)]">
+          Sueldo base
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            className={input}
+            value={form.sueldoBase}
+            onChange={(e) => patchForm({ sueldoBase: e.target.value })}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Bono incentivo
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            className={input}
+            value={form.bonoIncentivo}
+            onChange={(e) => patchForm({ bonoIncentivo: e.target.value })}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Bono herramientas
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            className={input}
+            value={form.bonoHerramientas}
+            onChange={(e) => patchForm({ bonoHerramientas: e.target.value })}
+          />
+        </label>
+
+        <SectionHeader>Contacto</SectionHeader>
+        <label className="text-sm text-[var(--muted)]">
+          Teléfono
+          <input
+            className={input}
+            value={form.telefono}
+            onChange={(e) => patchForm({ telefono: e.target.value })}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Email
+          <input
+            type="email"
+            className={input}
+            value={form.email}
+            onChange={(e) => patchForm({ email: e.target.value })}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)] sm:col-span-2 lg:col-span-3">
+          Dirección
+          <input
+            className={input}
+            value={form.direccion}
+            onChange={(e) => patchForm({ direccion: e.target.value })}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Contacto emergencia
+          <input
+            className={input}
+            value={form.contactoEmergencia}
+            onChange={(e) =>
+              patchForm({ contactoEmergencia: e.target.value })
+            }
+          />
+        </label>
+
+        <SectionHeader>Licencia</SectionHeader>
+        <label className="text-sm text-[var(--muted)]">
+          Número licencia
+          <input
+            className={input}
+            value={form.licenciaNumero}
+            onChange={(e) => patchForm({ licenciaNumero: e.target.value })}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Tipo licencia
+          <select
+            className={input}
+            value={form.licenciaTipo}
+            onChange={(e) =>
+              patchForm({ licenciaTipo: e.target.value as LicenciaTipo })
+            }
+          >
+            <option value="">—</option>
+            <option value="A">A</option>
+            <option value="B">B</option>
+            <option value="C">C</option>
+            <option value="M">M</option>
+          </select>
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Licencia vence
+          <input
+            type="date"
+            className={input}
+            value={form.licenciaVence}
+            onChange={(e) => patchForm({ licenciaVence: e.target.value })}
+          />
+        </label>
+
+        <SectionHeader>Otros</SectionHeader>
+        <label className="text-sm text-[var(--muted)]">
+          País origen
+          <input
+            className={input}
+            value={form.paisOrigen}
+            onChange={(e) => patchForm({ paisOrigen: e.target.value })}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Municipio
+          <input
+            className={input}
+            value={form.municipio}
+            onChange={(e) => patchForm({ municipio: e.target.value })}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Etnia
+          <input
+            className={input}
+            value={form.etnia}
+            onChange={(e) => patchForm({ etnia: e.target.value })}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Religión
+          <input
+            className={input}
+            value={form.religion}
+            onChange={(e) => patchForm({ religion: e.target.value })}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Idioma
+          <input
+            className={input}
+            value={form.idioma}
+            onChange={(e) => patchForm({ idioma: e.target.value })}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Cuenta bancaria
+          <input
+            className={input}
+            value={form.cuentaBancaria}
+            onChange={(e) => patchForm({ cuentaBancaria: e.target.value })}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Tipo cuenta
+          <input
+            className={input}
+            value={form.tipoCuenta}
+            onChange={(e) => patchForm({ tipoCuenta: e.target.value })}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Banco
+          <input
+            className={input}
+            value={form.banco}
+            onChange={(e) => patchForm({ banco: e.target.value })}
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)] sm:col-span-2 lg:col-span-3">
+          Observaciones
+          <textarea
+            className={`${input} min-h-[4rem] resize-y`}
+            value={form.observaciones}
+            onChange={(e) => patchForm({ observaciones: e.target.value })}
+            rows={2}
+          />
+        </label>
+
+        {editId && historial.length > 0 ? (
+          <div className="sm:col-span-2 lg:col-span-3 rounded-lg border border-[var(--border)] bg-[var(--input)]/30 p-3">
+            <p className="text-sm font-medium">Historial de cambios</p>
+            <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto text-xs text-[var(--muted)]">
+              {historial.map((h) => (
+                <li key={h.id}>
+                  <span className="font-medium text-[var(--text)]">
+                    {h.campo}
+                  </span>
+                  : {h.valorAnterior ?? "—"} → {h.valorNuevo ?? "—"} ·{" "}
+                  {h.registradoPor ?? "?"} · {h.creadoAt}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
         <div className="flex flex-wrap items-end gap-2 sm:col-span-2 lg:col-span-3">
           <button
             type="submit"
@@ -322,10 +972,7 @@ export default function EmpleadosPage() {
               <button
                 type="button"
                 className="rounded-lg bg-[#334155] px-4 py-2 text-sm"
-                onClick={() => {
-                  setEditId(null);
-                  setForm(emptyForm(horaDef.entrada, horaDef.salida));
-                }}
+                onClick={cancelarEdicion}
               >
                 Cancelar
               </button>
@@ -417,6 +1064,7 @@ export default function EmpleadosPage() {
             <tr>
               <th className="px-3 py-2">Código</th>
               <th className="px-3 py-2">Nombre</th>
+              {mostrarDpi ? <th className="px-3 py-2">DPI</th> : null}
               <th className="px-3 py-2">Puesto</th>
               <th className="px-3 py-2">Cat.</th>
               <th className="px-3 py-2">Entrada lab.</th>
@@ -437,6 +1085,9 @@ export default function EmpleadosPage() {
               >
                 <td className="px-3 py-2">{e.codigo}</td>
                 <td className="px-3 py-2">{e.nombre}</td>
+                {mostrarDpi ? (
+                  <td className="px-3 py-2">{e.dpi || "—"}</td>
+                ) : null}
                 <td className="px-3 py-2">{e.puesto || "—"}</td>
                 <td className="px-3 py-2">{e.categoriaOps || "—"}</td>
                 <td className="px-3 py-2">
@@ -465,7 +1116,7 @@ export default function EmpleadosPage() {
                   <button
                     type="button"
                     className="text-[var(--accent-2)] underline"
-                    onClick={() => empezarEdicion(e)}
+                    onClick={() => void empezarEdicion(e)}
                   >
                     Editar
                   </button>

@@ -1,5 +1,6 @@
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
+import { calcularEstadoAsistenciaSync } from "./asistencia-estado";
 import { obtenerMinutosTolerancia } from "./config";
 import { obtenerFeriadosEnRango } from "./vacaciones";
 
@@ -86,17 +87,16 @@ export function detectarEstadoEntrada(
   entradaAt: string | null,
   horaEntradaTeorica: string,
   tolerancia: number,
+  opts?: { toleranciaSemanal?: number; minutosYaUsadosSemana?: number },
 ): string {
   if (!entradaAt) return "Falta";
-  const horaEntrada = parseHora(entradaAt);
-  const horaTeorica = parseHora(horaEntradaTeorica);
-  if (!horaEntrada) return "Falta";
-  if (horaTeorica) {
-    const entMin = horaEntrada.h * 60 + horaEntrada.m;
-    const teoMin = horaTeorica.h * 60 + horaTeorica.m;
-    if (entMin > teoMin + tolerancia) return "Retraso";
-  }
-  return "A tiempo";
+  const { estado } = calcularEstadoAsistenciaSync(
+    entradaAt,
+    horaEntradaTeorica,
+    tolerancia,
+    opts,
+  );
+  return estado === "Presente" ? "A tiempo" : estado;
 }
 
 export function detectarEstadoSalida(

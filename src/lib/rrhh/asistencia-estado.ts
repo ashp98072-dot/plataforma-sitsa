@@ -13,10 +13,33 @@ function extraerHoraTexto(valor: string): Date | null {
   return new Date(2000, 0, 1, hh, mm, ss);
 }
 
+/** Minutos de retraso (0 si a tiempo o temprano). */
+export function minutosRetraso(
+  horaEntradaReal: string,
+  horaEntradaTeorica: string,
+): number {
+  const horaReal = extraerHoraTexto(horaEntradaReal);
+  const horaTeorica = extraerHoraTexto(horaEntradaTeorica);
+  if (!horaReal || !horaTeorica) return 0;
+  const diferenciaMinutos = Math.floor(
+    (horaReal.getTime() - horaTeorica.getTime()) / 60000,
+  );
+  return Math.max(0, diferenciaMinutos);
+}
+
+/**
+ * @param toleranciaDiaria minutos de gracia del día (0 = desde minuto 1)
+ * @param toleranciaSemanal tope semanal de minutos de retraso “perdonados”
+ * @param minutosYaUsadosSemana suma de retrasos de días previos en la semana
+ */
 export function calcularEstadoAsistenciaSync(
   horaEntradaReal: string,
   horaEntradaTeorica: string,
-  tolerancia: number,
+  toleranciaDiaria: number,
+  opts?: {
+    toleranciaSemanal?: number;
+    minutosYaUsadosSemana?: number;
+  },
 ): { estado: string; minutos: number } {
   const horaReal = extraerHoraTexto(horaEntradaReal);
   const horaTeorica = extraerHoraTexto(horaEntradaTeorica);
@@ -26,8 +49,33 @@ export function calcularEstadoAsistenciaSync(
   const diferenciaMinutos = Math.floor(
     (horaReal.getTime() - horaTeorica.getTime()) / 60000,
   );
-  if (diferenciaMinutos > tolerancia) {
-    return { estado: "Retraso", minutos: diferenciaMinutos };
+  if (diferenciaMinutos <= toleranciaDiaria) {
+    return { estado: "A tiempo", minutos: 0 };
   }
-  return { estado: "A tiempo", minutos: 0 };
+
+  const late = diferenciaMinutos;
+  const tolSem = opts?.toleranciaSemanal ?? 0;
+  const usados = opts?.minutosYaUsadosSemana ?? 0;
+  if (tolSem > 0) {
+    const disponible = Math.max(0, tolSem - usados);
+    if (late <= disponible) {
+      return { estado: "A tiempo", minutos: 0 };
+    }
+    return { estado: "Retraso", minutos: late - disponible };
+  }
+
+  return { estado: "Retraso", minutos: late };
+}
+
+/** Sin marcaje tras N minutos de la entrada teórica → falta (día en curso). */
+export function esFaltaPorNoMarcar(opts: {
+  horaTeoricaEntrada: string;
+  ahoraHora: string;
+  minutosParaFalta: number;
+}): boolean {
+  const teo = extraerHoraTexto(opts.horaTeoricaEntrada);
+  const ahora = extraerHoraTexto(opts.ahoraHora);
+  if (!teo || !ahora) return false;
+  const diff = Math.floor((ahora.getTime() - teo.getTime()) / 60000);
+  return diff >= opts.minutosParaFalta;
 }

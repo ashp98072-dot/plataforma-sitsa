@@ -44,9 +44,13 @@ export async function GET(req: Request, ctx: Ctx) {
       radioM: geocerca.radioM,
     },
     horario: {
-      horaEntrada: parametros.hora_entrada_default ?? "08:00:00",
-      horaSalida: parametros.hora_salida_default ?? "17:00:00",
-      tolerancia: Number(parametros.minutos_tolerancia ?? 10) || 10,
+      horaEntrada: parametros.hora_entrada_default ?? "07:00:00",
+      horaSalida: parametros.hora_salida_default ?? "16:00:00",
+      horaSalidaSabado: parametros.hora_salida_sabado ?? "11:00:00",
+      tolerancia: Number(parametros.minutos_tolerancia ?? 0) || 0,
+      toleranciaSemanal:
+        Number(parametros.minutos_tolerancia_semanal ?? 20) || 20,
+      minutosParaFalta: Number(parametros.minutos_para_falta ?? 60) || 60,
     },
   });
 }

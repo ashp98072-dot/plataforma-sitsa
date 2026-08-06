@@ -7,9 +7,12 @@ import Link from "next/link";
 export default function ConfigRrhhPage() {
   const slug = String(useParams().slug);
   const [params, setParams] = useState({
-    hora_entrada_default: "08:00:00",
-    hora_salida_default: "17:00:00",
-    minutos_tolerancia: "10",
+    hora_entrada_default: "07:00:00",
+    hora_salida_default: "16:00:00",
+    hora_salida_sabado: "11:00:00",
+    minutos_tolerancia: "0",
+    minutos_tolerancia_semanal: "20",
+    minutos_para_falta: "60",
     ciclo_quincenal: "15",
     geocerca_activa: "0",
     geocerca_lat: "",
@@ -20,7 +23,9 @@ export default function ConfigRrhhPage() {
     { id: number; descripcion: string; fecha: string; activo: boolean }[]
   >([]);
   const [desc, setDesc] = useState("");
-  const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10));
+  const [fecha, setFecha] = useState(() =>
+    new Date().toLocaleDateString("en-CA", { timeZone: "America/Guatemala" }),
+  );
   const [msg, setMsg] = useState("");
   const [gpsMsg, setGpsMsg] = useState("");
 
@@ -96,7 +101,7 @@ export default function ConfigRrhhPage() {
           />
         </label>
         <label className="text-sm text-[var(--muted)]">
-          Salida default
+          Salida default (lun–vie)
           <input
             className={input}
             value={params.hora_salida_default}
@@ -106,12 +111,45 @@ export default function ConfigRrhhPage() {
           />
         </label>
         <label className="text-sm text-[var(--muted)]">
-          Minutos tolerancia
+          Salida sábado
+          <input
+            className={input}
+            value={params.hora_salida_sabado}
+            onChange={(e) =>
+              setParams({ ...params, hora_salida_sabado: e.target.value })
+            }
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Tolerancia diaria (min) — 0 = desde el minuto 1
           <input
             className={input}
             value={params.minutos_tolerancia}
             onChange={(e) =>
               setParams({ ...params, minutos_tolerancia: e.target.value })
+            }
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Tolerancia semanal (min) — banco de retraso
+          <input
+            className={input}
+            value={params.minutos_tolerancia_semanal}
+            onChange={(e) =>
+              setParams({
+                ...params,
+                minutos_tolerancia_semanal: e.target.value,
+              })
+            }
+          />
+        </label>
+        <label className="text-sm text-[var(--muted)]">
+          Minutos sin marcar → falta
+          <input
+            className={input}
+            value={params.minutos_para_falta}
+            onChange={(e) =>
+              setParams({ ...params, minutos_para_falta: e.target.value })
             }
           />
         </label>
@@ -125,6 +163,11 @@ export default function ConfigRrhhPage() {
             }
           />
         </label>
+        <p className="sm:col-span-2 text-xs text-[var(--muted)]">
+          Monaco: Lun–Vie 7:00–16:00, Sáb 7:00–11:00. Retraso desde minuto 1;
+          hasta 20 min de retraso a la semana no cuentan como Retraso. Sin
+          marcaje tras 60 min de la entrada → falta.
+        </p>
 
         <div className="sm:col-span-2 mt-2 rounded-lg border border-sky-800/40 bg-sky-950/20 p-3 space-y-3">
           <div>

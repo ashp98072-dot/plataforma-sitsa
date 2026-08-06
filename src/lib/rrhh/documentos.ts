@@ -4,9 +4,16 @@ import { borrarUpload } from "@/lib/uploads";
 
 export const TIPOS_DOCUMENTO = [
   "DPI",
+  "Foto",
   "Contrato",
   "Licencia",
-  "Antecedentes",
+  "Antecedentes penales",
+  "Antecedentes policíacos",
+  "Tarjeta de pulmones",
+  "Tarjeta de salud",
+  "Manipulación de alimentos",
+  "IGSS",
+  "Boleta permiso",
   "Otro",
 ] as const;
 

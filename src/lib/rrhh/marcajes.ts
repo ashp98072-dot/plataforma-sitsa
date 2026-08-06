@@ -1,9 +1,13 @@
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
-import { calcularEstadoAsistenciaSync } from "./asistencia-estado";
+import {
+  calcularEstadoAsistenciaSync,
+  minutosRetraso,
+} from "./asistencia-estado";
 import {
   obtenerHoraEntradaDefault,
   obtenerMinutosTolerancia,
+  obtenerToleranciaSemanal,
 } from "./config";
 import {
   ahoraLocal,
@@ -13,6 +17,7 @@ import {
   normalizarHora,
 } from "./dates";
 import { validarGeocercaKiosko } from "./geocerca";
+import { lunesDeSemana } from "./horario-teorico";
 
 async function tieneSesionAbierta(
   empresaId: number,
@@ -82,19 +87,44 @@ export type MarcajeHoy = {
   viajeLargo: boolean;
 };
 
+async function minutosRetrasoSemanaAntes(
+  empresaId: number,
+  idEmpleado: number,
+  fechaJornada: string,
+  horaTeorica: string,
+): Promise<number> {
+  const lunes = lunesDeSemana(fechaJornada);
+  if (fechaJornada <= lunes) return 0;
+  const rows = await query<RowDataPacket[]>(
+    `SELECT entrada_at, fecha_jornada FROM sesiones_trabajo
+     WHERE empresa_id = ? AND id_empleado = ?
+       AND fecha_jornada >= ? AND fecha_jornada < ?
+     ORDER BY fecha_jornada ASC`,
+    [empresaId, idEmpleado, lunes, fechaJornada],
+  );
+  let sum = 0;
+  for (const r of rows) {
+    const entrada = fmtTs(r.entrada_at as string | Date | null);
+    if (!entrada) continue;
+    sum += minutosRetraso(entrada, horaTeorica);
+  }
+  return sum;
+}
+
 export async function listarMarcajesRango(
   empresaId: number,
   desde: string,
   hasta: string,
 ): Promise<MarcajeHoy[]> {
-  const [horaDefault, tolerancia] = await Promise.all([
+  const [horaDefault, tolerancia, tolSemanal] = await Promise.all([
     obtenerHoraEntradaDefault(empresaId),
     obtenerMinutosTolerancia(empresaId),
+    obtenerToleranciaSemanal(empresaId),
   ]);
 
   const rows = await query<RowDataPacket[]>(
-    `SELECT s.id, e.codigo, e.nombre, s.entrada_at, s.salida_at, s.estado,
-            e.hora_entrada_teorica, s.viaje_largo
+    `SELECT s.id, s.id_empleado, e.codigo, e.nombre, s.entrada_at, s.salida_at, s.estado,
+            e.hora_entrada_teorica, s.viaje_largo, s.fecha_jornada
      FROM sesiones_trabajo s
      INNER JOIN empleados e ON e.id = s.id_empleado
      WHERE s.empresa_id = ? AND s.fecha_jornada BETWEEN ? AND ?
@@ -103,16 +133,25 @@ export async function listarMarcajesRango(
     [empresaId, desde, hasta],
   );
 
-  return rows.map((r) => {
+  const out: MarcajeHoy[] = [];
+  for (const r of rows) {
     const entradaRaw = fmtTs(r.entrada_at as string | Date | null);
     const salidaRaw = fmtTs(r.salida_at as string | Date | null);
     const horaTeorica = String(r.hora_entrada_teorica || horaDefault);
+    const fechaJ = String(r.fecha_jornada).slice(0, 10);
+    const usados = await minutosRetrasoSemanaAntes(
+      empresaId,
+      Number(r.id_empleado),
+      fechaJ,
+      horaTeorica,
+    );
     const { estado: incidencia } = calcularEstadoAsistenciaSync(
       entradaRaw ?? "",
       horaTeorica,
       tolerancia,
+      { toleranciaSemanal: tolSemanal, minutosYaUsadosSemana: usados },
     );
-    return {
+    out.push({
       id: Number(r.id),
       nombre: String(r.nombre),
       codigo: String(r.codigo),
@@ -121,8 +160,9 @@ export async function listarMarcajesRango(
       incidencia,
       estado: String(r.estado),
       viajeLargo: Number(r.viaje_largo ?? 0) === 1,
-    };
-  });
+    });
+  }
+  return out;
 }
 
 export type ResultadoMarcajeKiosko =
@@ -247,11 +287,21 @@ export async function registrarMarcajeKiosko(
   }
 
   const hora = timestamp.split(" ")[1] ?? timestamp;
-  const tolerancia = await obtenerMinutosTolerancia(empresaId);
+  const [tolerancia, tolSemanal] = await Promise.all([
+    obtenerMinutosTolerancia(empresaId),
+    obtenerToleranciaSemanal(empresaId),
+  ]);
+  const usados = await minutosRetrasoSemanaAntes(
+    empresaId,
+    idEmpleado,
+    fechaJornada,
+    horaTeoricaEmp,
+  );
   const { estado: estadoEntrada, minutos } = calcularEstadoAsistenciaSync(
     hora,
     horaTeoricaEmp,
     tolerancia,
+    { toleranciaSemanal: tolSemanal, minutosYaUsadosSemana: usados },
   );
 
   return {
