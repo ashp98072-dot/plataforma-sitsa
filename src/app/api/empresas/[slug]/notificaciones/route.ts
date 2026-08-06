@@ -52,10 +52,6 @@ export async function GET(_req: Request, ctx: Ctx) {
       [guard.empresa.id],
     );
     for (const r of rows) {
-      if (!puedeAprobar && rol === "Piloto") {
-        // piloto: solo ver los suyos (opcional; por ahora Ops/Admin)
-        continue;
-      }
       if (!puedeAprobar) continue;
       items.push({
         id: `permiso-${r.id}`,
@@ -76,12 +72,7 @@ export async function GET(_req: Request, ctx: Ctx) {
   }
 
   // Alertas de servicio (km) — Flota / Ops / Admin
-  if (
-    puedeAprobar ||
-    rol === "Admin" ||
-    rol === "Operaciones" ||
-    rol === "CoordinadorPredios"
-  ) {
+  if (puedeAprobar) {
     try {
       const vehiculos = await listarVehiculosAccesibles(guard.empresa.id);
       let alertas = 0;
