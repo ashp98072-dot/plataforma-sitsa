@@ -7,8 +7,7 @@ import { listarEmpresasActivas } from "@/lib/empresas";
 export async function listarVehiculosAccesibles(
   empresaId: number,
 ): Promise<RowDataPacket[]> {
-  await asegurarSchemaFlota().catch(() => undefined);
-  // KM sync NO va en lecturas: se corrige al cerrar viaje / registrar lectura.
+  // Schema lo asegura la ruta API; no bloquear cada listado.
   try {
     return await query<RowDataPacket[]>(
       `SELECT v.id, v.empresa_id, v.placa, v.marca, v.modelo, v.descripcion,

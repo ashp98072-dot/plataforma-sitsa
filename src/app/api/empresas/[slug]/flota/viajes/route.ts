@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
-import { execute, query } from "@/lib/db";
+import { execute, getPool, query } from "@/lib/db";
 import { registrarAuditoria } from "@/lib/auditoria";
 import { requireTenantFlota } from "@/lib/tenant";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
@@ -333,20 +333,20 @@ export async function POST(req: Request, ctx: Ctx) {
       null;
 
     const lockKey = `flota_salida_${guard.empresa.id}_${Number(veh.id)}`;
-    try {
-      await query<RowDataPacket[]>("SELECT GET_LOCK(?, 8) AS l", [lockKey]);
-    } catch {
-      /* ok */
-    }
-
+    const lockConn = await getPool().getConnection();
     let r: Awaited<ReturnType<typeof execute>> | undefined;
     try {
-      const recheck = await query<RowDataPacket[]>(
+      try {
+        await lockConn.query("SELECT GET_LOCK(?, 8) AS l", [lockKey]);
+      } catch {
+        /* ok */
+      }
+      const [recheckRows] = await lockConn.query<RowDataPacket[]>(
         `SELECT id FROM flota_viajes
          WHERE empresa_id = ? AND vehiculo_id = ? AND estado = 'abierto' LIMIT 1`,
         [guard.empresa.id, veh.id],
       );
-      if (recheck[0]) {
+      if (recheckRows[0]) {
         return NextResponse.json(
           { error: `La unidad ${veh.placa} ya tiene un viaje abierto.` },
           { status: 409 },
@@ -391,10 +391,11 @@ export async function POST(req: Request, ctx: Ctx) {
       );
     } finally {
       try {
-        await query<RowDataPacket[]>("SELECT RELEASE_LOCK(?) AS l", [lockKey]);
+        await lockConn.query("SELECT RELEASE_LOCK(?) AS l", [lockKey]);
       } catch {
         /* ok */
       }
+      lockConn.release();
     }
     if (!r) {
       return NextResponse.json(

@@ -3,7 +3,7 @@
  * ADD COLUMN IF NOT EXISTS (ejecutar columna por columna ignorando errores).
  */
 import type { RowDataPacket } from "mysql2";
-import { execute, query } from "@/lib/db";
+import { execute, getPool, query } from "@/lib/db";
 
 /** Columnas ya vistas en este proceso (evita N consultas a information_schema). */
 let knownCols = new Set<string>();
@@ -57,15 +57,16 @@ let flotaSchemaReady: Promise<void> | null = null;
 export async function asegurarSchemaFlota(): Promise<void> {
   if (!flotaSchemaReady) {
     flotaSchemaReady = (async () => {
+      // GET_LOCK debe ir en la MISMA conexión que RELEASE_LOCK (pool)
+      const conn = await getPool().getConnection();
       try {
-        await query<RowDataPacket[]>(
-          "SELECT GET_LOCK(?, 30) AS l",
-          ["plataforma_flota_schema"],
-        );
-      } catch {
-        /* sin GET_LOCK seguimos (un proceso) */
-      }
-      try {
+        try {
+          await conn.query("SELECT GET_LOCK(?, 15) AS l", [
+            "plataforma_flota_schema",
+          ]);
+        } catch {
+          /* sin GET_LOCK seguimos */
+        }
         knownCols = await loadColumnSet([
           "flota_vehiculos",
           "flota_lecturas",
@@ -84,13 +85,13 @@ export async function asegurarSchemaFlota(): Promise<void> {
         await asegurarSchemaFlotaInner();
       } finally {
         try {
-          await query<RowDataPacket[]>(
-            "SELECT RELEASE_LOCK(?) AS l",
-            ["plataforma_flota_schema"],
-          );
+          await conn.query("SELECT RELEASE_LOCK(?) AS l", [
+            "plataforma_flota_schema",
+          ]);
         } catch {
           /* ok */
         }
+        conn.release();
       }
     })().catch((e) => {
       flotaSchemaReady = null;

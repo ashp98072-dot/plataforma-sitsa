@@ -28,7 +28,9 @@ export function getPool(): Pool {
     password: process.env.DB_PASSWORD ?? "",
     database,
     waitForConnections: true,
-    connectionLimit: 10,
+    connectionLimit: 15,
+    queueLimit: 50,
+    enableKeepAlive: true,
     timezone: "local",
   });
   return pool;

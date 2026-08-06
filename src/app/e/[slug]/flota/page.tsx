@@ -384,7 +384,6 @@ function FlotaInner() {
   const [enviandoForm, setEnviandoForm] = useState(false);
   const cargarSeq = useRef(0);
   const cacheAt = useRef<Record<string, number>>({});
-  const CACHE_MS = 60_000;
 
   const isAdmin = rol === "Admin";
   const can = useCallback(
@@ -554,11 +553,12 @@ function FlotaInner() {
     const s = qLlegada.trim().toLowerCase();
     if (!s) return base;
     const filtrados = base.filter((v) => {
-      const placa = v.placa.toLowerCase().replace(/[\s-]/g, "");
+      const placaRaw = String(v.placa ?? "");
+      const placa = placaRaw.toLowerCase().replace(/[\s-]/g, "");
       const qPlaca = s.replace(/[\s-]/g, "");
-      const piloto = v.piloto_nombre.toLowerCase();
+      const piloto = String(v.piloto_nombre ?? "").toLowerCase();
       return (
-        v.placa.toLowerCase().includes(s) ||
+        placaRaw.toLowerCase().includes(s) ||
         placa.includes(qPlaca) ||
         piloto.includes(s) ||
         (v.destino ?? "").toLowerCase().includes(s) ||
@@ -576,6 +576,8 @@ function FlotaInner() {
     rol,
   ]);
 
+  const FLOTA_CACHE_MS = 60_000;
+
   const cargar = useCallback(
     async (opts?: { forzarTodo?: boolean; solo?: string[] }) => {
       const t = tab;
@@ -584,20 +586,21 @@ function FlotaInner() {
       const enSolo = (key: string) => !solo || solo.includes(key);
       const seq = ++cargarSeq.current;
       const ahora = Date.now();
+      // forzar solo invalida caché; NO debe saltarse el filtro por pestaña
       const fresco = (key: string) =>
         !forzar &&
         !solo &&
-        ahora - (cacheAt.current[key] ?? 0) < CACHE_MS;
+        ahora - (cacheAt.current[key] ?? 0) < FLOTA_CACHE_MS;
 
       setCargandoFlota(true);
       try {
         if (!sesionLista) {
-          const me = await fetch("/api/auth/me").then((r) => r.json());
+          const meRes = await fetch("/api/auth/me");
+          const me = await meRes.json().catch(() => ({}));
           if (seq !== cargarSeq.current) return;
           setRol(String(me.user?.rol ?? ""));
           setPermisos(me.permisos ?? []);
           setSesionLista(true);
-          // El effect vuelve a correr con rol/tab correctos
           return;
         }
 
@@ -607,19 +610,17 @@ function FlotaInner() {
           }
         }
 
-        const quiereVeh = enSolo("vehiculos") && (forzar || Boolean(solo) || !fresco("vehiculos"));
         const quiereRep =
           enSolo("reportes") &&
-          (forzar || Boolean(solo) || t === "reportes") &&
+          (Boolean(solo) || t === "reportes") &&
           (forzar || Boolean(solo) || !fresco("reportes"));
         const quiereLec =
           enSolo("lecturas") &&
-          (forzar || Boolean(solo) || t === "lecturas") &&
+          (Boolean(solo) || t === "lecturas") &&
           (forzar || Boolean(solo) || !fresco("lecturas"));
         const quiereSvc =
           enSolo("servicios") &&
-          (forzar ||
-            Boolean(solo) ||
+          (Boolean(solo) ||
             t === "servicios" ||
             t === "taller" ||
             t === "historial-servicios" ||
@@ -627,8 +628,7 @@ function FlotaInner() {
           (forzar || Boolean(solo) || !fresco("servicios"));
         const quiereVia =
           enSolo("viajes") &&
-          (forzar ||
-            Boolean(solo) ||
+          (Boolean(solo) ||
             t === "piloto" ||
             t === "lecturas" ||
             t === "vehiculos" ||
@@ -637,23 +637,13 @@ function FlotaInner() {
           (forzar || Boolean(solo) || !fresco("viajes"));
         const quierePerm =
           enSolo("permisos") &&
-          (forzar || Boolean(solo) || t === "piloto") &&
+          (Boolean(solo) || t === "piloto") &&
           (forzar || Boolean(solo) || !fresco("permisos"));
 
-        // Vehículos: siempre en memoria para selects; re-fetch solo si caducó
+        // Vehículos: en memoria para selects; re-fetch si caducó / forzado / solo
         const needVeh =
-          quiereVeh ||
-          ((!solo || solo.includes("vehiculos")) &&
-            (t === "dashboard" ||
-              t === "vehiculos" ||
-              t === "taller" ||
-              t === "servicios" ||
-              t === "compras" ||
-              t === "lecturas" ||
-              t === "piloto" ||
-              t === "historial-servicios" ||
-              t === "reportes") &&
-            !fresco("vehiculos"));
+          enSolo("vehiculos") &&
+          (forzar || Boolean(solo) || !fresco("vehiculos"));
 
         const fetches: Promise<Response>[] = [];
         const keys: string[] = [];
@@ -749,13 +739,15 @@ function FlotaInner() {
         }
       } catch {
         if (seq === cargarSeq.current) {
-          setErr("No se pudo cargar Flota. Revisa la conexión e inténtalo de nuevo.");
+          setErr(
+            "No se pudo cargar Flota. Revisa la conexión e inténtalo de nuevo.",
+          );
         }
       } finally {
         if (seq === cargarSeq.current) setCargandoFlota(false);
       }
     },
-    [slug, tab, sesionLista, repDesde, repHasta, CACHE_MS],
+    [slug, tab, sesionLista, repDesde, repHasta],
   );
 
   useEffect(() => {
@@ -899,7 +891,7 @@ function FlotaInner() {
     if (!res.ok) setErr(data.error ?? "Error al importar");
     else setMsg(data.mensaje);
     setImportando(false);
-    if (res.ok) await cargar({ forzarTodo: true });
+    if (res.ok) await cargar({ solo: ["vehiculos"] });
   }
 
   function empezarEdicion(v: Vehiculo) {
@@ -2178,8 +2170,10 @@ function FlotaInner() {
           ))}
       </nav>
 
-      {cargandoFlota && !vehiculos.length ? (
-        <p className="text-sm text-[var(--muted)]">Cargando flota…</p>
+      {cargandoFlota ? (
+        <p className="rounded border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm text-[var(--muted)]">
+          Actualizando flota…
+        </p>
       ) : null}
 
       {err ? <p className="text-sm text-red-300">{err}</p> : null}

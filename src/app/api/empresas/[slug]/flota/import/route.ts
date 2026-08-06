@@ -195,7 +195,10 @@ export async function POST(req: Request, ctx: Ctx) {
         if (filtros.length) {
           await guardarFiltrosVehiculo(empId, vid, filtros);
         }
-        await guardarAccesoVehiculo(vid, accesosPara(empId), empId);
+        const acc = accesosPara(empId);
+        if (acc.length) {
+          await guardarAccesoVehiculo(vid, acc, empId);
+        }
         actualizados += 1;
       } else {
         const ins = await execute(
@@ -237,11 +240,10 @@ export async function POST(req: Request, ctx: Ctx) {
           await guardarFiltrosVehiculo(duenoId, nuevoId, filtros);
         }
         if (nuevoId) {
-          await guardarAccesoVehiculo(
-            nuevoId,
-            accesosPara(duenoId),
-            duenoId,
-          );
+          const acc = accesosPara(duenoId);
+          if (acc.length) {
+            await guardarAccesoVehiculo(nuevoId, acc, duenoId);
+          }
         }
         creados += 1;
       }

@@ -31,73 +31,71 @@ export async function GET(req: Request, ctx: Ctx) {
   const fechaHasta = (url.searchParams.get("hasta") || hoy).slice(0, 10);
   const hastaExclusive = `${fechaHasta} 23:59:59`;
 
-  const [vehiculos, costosPorMes, costosPorUnidad, totalRow, viajesRows] =
-    await Promise.all([
-      query<RowDataPacket[]>(
-        `SELECT id, placa, marca, modelo, km_actual, km_intervalo_servicio, km_ultimo_servicio,
-                en_taller, estado
-         FROM flota_vehiculos WHERE empresa_id = ? ORDER BY placa`,
-        [guard.empresa.id],
-      ),
-      query<RowDataPacket[]>(
-        `SELECT DATE_FORMAT(fecha_servicio, '%Y-%m') AS mes,
-                SUM(costo) AS total, COUNT(*) AS n
-         FROM flota_servicios
-         WHERE empresa_id = ?
-           AND fecha_servicio BETWEEN ? AND ?
-         GROUP BY DATE_FORMAT(fecha_servicio, '%Y-%m')
-         ORDER BY mes ASC`,
-        [guard.empresa.id, fechaDesde, fechaHasta],
-      ),
-      query<RowDataPacket[]>(
-        `SELECT v.placa, v.id AS vehiculo_id,
-                SUM(s.costo) AS total, COUNT(*) AS n
-         FROM flota_servicios s
-         INNER JOIN flota_vehiculos v ON v.id = s.vehiculo_id
-         WHERE s.empresa_id = ?
-           AND s.fecha_servicio BETWEEN ? AND ?
-         GROUP BY v.id, v.placa
-         ORDER BY total DESC
-         LIMIT 40`,
-        [guard.empresa.id, fechaDesde, fechaHasta],
-      ),
-      query<RowDataPacket[]>(
-        `SELECT COALESCE(SUM(costo), 0) AS total, COUNT(*) AS n
-         FROM flota_servicios
-         WHERE empresa_id = ?
-           AND fecha_servicio BETWEEN ? AND ?`,
-        [guard.empresa.id, fechaDesde, fechaHasta],
-      ),
-      query<RowDataPacket[]>(
-        `SELECT v.id, v.vehiculo_id, v.piloto_nombre, v.km_salida, v.km_llegada,
-                v.hora_salida, v.hora_llegada, v.destino, v.observaciones, v.estado,
-                v.es_externo, v.plan_id, ve.placa,
-                p.codigo AS plan_codigo, p.estado AS plan_estado,
-                c.nombre AS plan_cliente
-         FROM flota_viajes v
-         INNER JOIN flota_vehiculos ve ON ve.id = v.vehiculo_id
-         LEFT JOIN tms_planes_viaje p ON p.id = v.plan_id
-         LEFT JOIN tms_clientes c ON c.id = p.cliente_id
-         WHERE v.empresa_id = ?
-           AND v.hora_salida >= ? AND v.hora_salida <= ?
-         ORDER BY v.hora_salida DESC
-         LIMIT 200`,
-        [guard.empresa.id, fechaDesde, hastaExclusive],
-      ).catch(async () =>
-        query<RowDataPacket[]>(
-          `SELECT v.id, v.vehiculo_id, v.piloto_nombre, v.km_salida, v.km_llegada,
-                  v.hora_salida, v.hora_llegada, v.destino, v.observaciones, v.estado,
-                  ve.placa
-           FROM flota_viajes v
-           INNER JOIN flota_vehiculos ve ON ve.id = v.vehiculo_id
-           WHERE v.empresa_id = ?
-             AND v.hora_salida >= ? AND v.hora_salida <= ?
-           ORDER BY v.hora_salida DESC
-           LIMIT 200`,
-          [guard.empresa.id, fechaDesde, hastaExclusive],
-        ),
-      ),
-    ]);
+  // Secuencial: evita saturar el pool (máx. ~15 conexiones en Hostinger)
+  const vehiculos = await query<RowDataPacket[]>(
+    `SELECT id, placa, marca, modelo, km_actual, km_intervalo_servicio, km_ultimo_servicio,
+            en_taller, estado
+     FROM flota_vehiculos WHERE empresa_id = ? ORDER BY placa`,
+    [guard.empresa.id],
+  );
+  const costosPorMes = await query<RowDataPacket[]>(
+    `SELECT DATE_FORMAT(fecha_servicio, '%Y-%m') AS mes,
+            SUM(costo) AS total, COUNT(*) AS n
+     FROM flota_servicios
+     WHERE empresa_id = ?
+       AND fecha_servicio BETWEEN ? AND ?
+     GROUP BY DATE_FORMAT(fecha_servicio, '%Y-%m')
+     ORDER BY mes ASC`,
+    [guard.empresa.id, fechaDesde, fechaHasta],
+  );
+  const costosPorUnidad = await query<RowDataPacket[]>(
+    `SELECT v.placa, v.id AS vehiculo_id,
+            SUM(s.costo) AS total, COUNT(*) AS n
+     FROM flota_servicios s
+     INNER JOIN flota_vehiculos v ON v.id = s.vehiculo_id
+     WHERE s.empresa_id = ?
+       AND s.fecha_servicio BETWEEN ? AND ?
+     GROUP BY v.id, v.placa
+     ORDER BY total DESC
+     LIMIT 40`,
+    [guard.empresa.id, fechaDesde, fechaHasta],
+  );
+  const totalRow = await query<RowDataPacket[]>(
+    `SELECT COALESCE(SUM(costo), 0) AS total, COUNT(*) AS n
+     FROM flota_servicios
+     WHERE empresa_id = ?
+       AND fecha_servicio BETWEEN ? AND ?`,
+    [guard.empresa.id, fechaDesde, fechaHasta],
+  );
+  const viajesRows = await query<RowDataPacket[]>(
+    `SELECT v.id, v.vehiculo_id, v.piloto_nombre, v.km_salida, v.km_llegada,
+            v.hora_salida, v.hora_llegada, v.destino, v.observaciones, v.estado,
+            v.es_externo, v.plan_id, ve.placa,
+            p.codigo AS plan_codigo, p.estado AS plan_estado,
+            c.nombre AS plan_cliente
+     FROM flota_viajes v
+     INNER JOIN flota_vehiculos ve ON ve.id = v.vehiculo_id
+     LEFT JOIN tms_planes_viaje p ON p.id = v.plan_id
+     LEFT JOIN tms_clientes c ON c.id = p.cliente_id
+     WHERE v.empresa_id = ?
+       AND v.hora_salida >= ? AND v.hora_salida <= ?
+     ORDER BY v.hora_salida DESC
+     LIMIT 200`,
+    [guard.empresa.id, fechaDesde, hastaExclusive],
+  ).catch(async () =>
+    query<RowDataPacket[]>(
+      `SELECT v.id, v.vehiculo_id, v.piloto_nombre, v.km_salida, v.km_llegada,
+              v.hora_salida, v.hora_llegada, v.destino, v.observaciones, v.estado,
+              ve.placa
+       FROM flota_viajes v
+       INNER JOIN flota_vehiculos ve ON ve.id = v.vehiculo_id
+       WHERE v.empresa_id = ?
+         AND v.hora_salida >= ? AND v.hora_salida <= ?
+       ORDER BY v.hora_salida DESC
+       LIMIT 200`,
+      [guard.empresa.id, fechaDesde, hastaExclusive],
+    ),
+  );
 
   const alertas = vehiculos.filter((v) => {
     if (v.en_taller) return false;
