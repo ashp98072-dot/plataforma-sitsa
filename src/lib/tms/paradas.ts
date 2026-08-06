@@ -21,9 +21,35 @@ export type ParadaInput = {
   lugarId?: number | null;
 };
 
+function mapParadaRow(r: RowDataPacket): PlanParada {
+  return {
+    id: Number(r.id),
+    plan_id: Number(r.plan_id),
+    orden: Number(r.orden),
+    lugar_id: r.lugar_id != null ? Number(r.lugar_id) : null,
+    lugar_nombre: String(r.lugar_nombre),
+    tipo: String(r.tipo ?? "Entrega"),
+    requiere_evidencia: Number(r.requiere_evidencia ?? 1) === 1,
+    evidencias: Number(r.evidencias ?? 0),
+  };
+}
+
 export async function listarParadasDelPlan(
   planId: number,
 ): Promise<PlanParada[]> {
+  const byPlan = await listarParadasDePlanes([planId]);
+  return byPlan.get(planId) ?? [];
+}
+
+/** Paradas de varios planes en 1–2 queries (evita N+1 en reportes). */
+export async function listarParadasDePlanes(
+  planIds: number[],
+): Promise<Map<number, PlanParada[]>> {
+  const map = new Map<number, PlanParada[]>();
+  const ids = [...new Set(planIds.map(Number).filter((id) => id > 0))];
+  if (!ids.length) return map;
+
+  const placeholders = ids.map(() => "?").join(",");
   const rows = await query<RowDataPacket[]>(
     `SELECT pp.id, pp.plan_id, pp.orden, pp.lugar_id, pp.lugar_nombre, pp.tipo,
             pp.requiere_evidencia,
@@ -33,9 +59,9 @@ export async function listarParadasDelPlan(
               (SELECT COUNT(*) FROM flota_viaje_evidencias fe WHERE fe.parada_id = pp.id)
             ) AS evidencias
      FROM tms_plan_paradas pp
-     WHERE pp.plan_id = ?
-     ORDER BY pp.orden ASC, pp.id ASC`,
-    [planId],
+     WHERE pp.plan_id IN (${placeholders})
+     ORDER BY pp.plan_id ASC, pp.orden ASC, pp.id ASC`,
+    ids,
   ).catch(async () =>
     query<RowDataPacket[]>(
       `SELECT pp.id, pp.plan_id, pp.orden, pp.lugar_id, pp.lugar_nombre, pp.tipo,
@@ -43,22 +69,19 @@ export async function listarParadasDelPlan(
               (SELECT COUNT(*) FROM tms_evidencias ev
                WHERE ev.parada_id = pp.id) AS evidencias
        FROM tms_plan_paradas pp
-       WHERE pp.plan_id = ?
-       ORDER BY pp.orden ASC, pp.id ASC`,
-      [planId],
+       WHERE pp.plan_id IN (${placeholders})
+       ORDER BY pp.plan_id ASC, pp.orden ASC, pp.id ASC`,
+      ids,
     ).catch(() => [] as RowDataPacket[]),
   );
 
-  return rows.map((r) => ({
-    id: Number(r.id),
-    plan_id: Number(r.plan_id),
-    orden: Number(r.orden),
-    lugar_id: r.lugar_id != null ? Number(r.lugar_id) : null,
-    lugar_nombre: String(r.lugar_nombre),
-    tipo: String(r.tipo ?? "Entrega"),
-    requiere_evidencia: Number(r.requiere_evidencia ?? 1) === 1,
-    evidencias: Number(r.evidencias ?? 0),
-  }));
+  for (const r of rows) {
+    const planId = Number(r.plan_id);
+    const list = map.get(planId) ?? [];
+    list.push(mapParadaRow(r));
+    map.set(planId, list);
+  }
+  return map;
 }
 
 export async function guardarParadasPlan(

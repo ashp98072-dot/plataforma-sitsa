@@ -33,11 +33,7 @@ export async function GET(req: Request, ctx: Ctx) {
             j.destino AS viaje_destino, j.estado AS viaje_estado,
             j.hora_salida AS viaje_hora_salida, j.hora_llegada AS viaje_hora_llegada,
             j.plan_id,
-            p.codigo AS plan_codigo,
-            (SELECT COUNT(*) FROM flota_lectura_evidencias e
-             WHERE e.lectura_id = l.id AND e.empresa_id = l.empresa_id) AS evidencias_propias,
-            (SELECT COUNT(*) FROM flota_viaje_evidencias ve
-             WHERE ve.viaje_id = l.viaje_id AND ve.empresa_id = l.empresa_id) AS evidencias_viaje
+            p.codigo AS plan_codigo
      FROM flota_lecturas l
      INNER JOIN flota_vehiculos v ON v.id = l.vehiculo_id
      LEFT JOIN flota_viajes j ON j.id = l.viaje_id
@@ -49,7 +45,7 @@ export async function GET(req: Request, ctx: Ctx) {
   ).catch(async () =>
     query<RowDataPacket[]>(
       `SELECT l.id, l.vehiculo_id, l.km, l.fecha_lectura, l.nota, l.conductor,
-              l.registrado_por, v.placa, 0 AS evidencias_propias, 0 AS evidencias_viaje
+              l.registrado_por, v.placa, NULL AS viaje_id
        FROM flota_lecturas l
        INNER JOIN flota_vehiculos v ON v.id = l.vehiculo_id
        WHERE l.empresa_id = ? ${vehiculoId ? "AND l.vehiculo_id = ?" : ""}
@@ -59,10 +55,49 @@ export async function GET(req: Request, ctx: Ctx) {
     ),
   );
 
+  const lecturaIds = rows.map((r) => Number(r.id));
+  const viajeIds = [
+    ...new Set(
+      rows
+        .map((r) => (r.viaje_id != null ? Number(r.viaje_id) : 0))
+        .filter((id) => id > 0),
+    ),
+  ];
+  const propiasMap = new Map<number, number>();
+  const viajeEvMap = new Map<number, number>();
+
+  if (lecturaIds.length) {
+    try {
+      const propias = await query<RowDataPacket[]>(
+        `SELECT lectura_id, COUNT(*) AS n FROM flota_lectura_evidencias
+         WHERE empresa_id = ? AND lectura_id IN (${lecturaIds.map(() => "?").join(",")})
+         GROUP BY lectura_id`,
+        [guard.empresa.id, ...lecturaIds],
+      );
+      for (const a of propias) propiasMap.set(Number(a.lectura_id), Number(a.n));
+    } catch {
+      /* tabla ausente */
+    }
+  }
+  if (viajeIds.length) {
+    try {
+      const deViaje = await query<RowDataPacket[]>(
+        `SELECT viaje_id, COUNT(*) AS n FROM flota_viaje_evidencias
+         WHERE empresa_id = ? AND viaje_id IN (${viajeIds.map(() => "?").join(",")})
+         GROUP BY viaje_id`,
+        [guard.empresa.id, ...viajeIds],
+      );
+      for (const a of deViaje) viajeEvMap.set(Number(a.viaje_id), Number(a.n));
+    } catch {
+      /* ok */
+    }
+  }
+
   return NextResponse.json({
     lecturas: rows.map((r) => {
-      const propias = Number(r.evidencias_propias ?? 0);
-      const deViaje = Number(r.evidencias_viaje ?? 0);
+      const propias = propiasMap.get(Number(r.id)) ?? 0;
+      const deViaje =
+        r.viaje_id != null ? (viajeEvMap.get(Number(r.viaje_id)) ?? 0) : 0;
       return {
         ...r,
         evidencias: propias + deViaje,

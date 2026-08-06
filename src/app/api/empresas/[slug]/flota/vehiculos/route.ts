@@ -5,7 +5,7 @@ import { execute, query } from "@/lib/db";
 import { requireTenantFlota, requireTenantFlotaAny } from "@/lib/tenant";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
 import {
-  empresasAccesoVehiculo,
+  empresasAccesoPorVehiculos,
   guardarAccesoVehiculo,
   listarEmpresasActivasSimple,
   listarVehiculosAccesibles,
@@ -41,8 +41,12 @@ export async function GET(_req: Request, ctx: Ctx) {
   }
 
   const rows = await listarVehiculosAccesibles(guard.empresa.id);
-  const filtrosMap = await listarFiltrosPorVehiculos(
-    rows.map((r) => Number(r.id)),
+  const ids = rows.map((r) => Number(r.id));
+  const filtrosMap = await listarFiltrosPorVehiculos(ids);
+  const accesosMap = await empresasAccesoPorVehiculos(
+    rows
+      .filter((r) => Number(r.empresa_id) === guard.empresa.id)
+      .map((r) => Number(r.id)),
   );
   const vehiculos = [];
   for (const r of rows) {
@@ -60,15 +64,12 @@ export async function GET(_req: Request, ctx: Ctx) {
           : null,
       );
     }
-    const acceso =
-      Number(r.empresa_id) === guard.empresa.id
-        ? await empresasAccesoVehiculo(vid)
-        : [];
+    const esDueno = Number(r.empresa_id) === guard.empresa.id;
     vehiculos.push({
       ...r,
       compartido: Number(r.compartido ?? 0) === 1,
-      accesoEmpresaIds: acceso,
-      esDueno: Number(r.empresa_id) === guard.empresa.id,
+      accesoEmpresaIds: esDueno ? (accesosMap.get(vid) ?? []) : [],
+      esDueno,
       filtros,
     });
   }

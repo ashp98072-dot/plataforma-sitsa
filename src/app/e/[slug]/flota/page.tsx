@@ -5,6 +5,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
 } from "react";
@@ -555,73 +556,167 @@ function FlotaInner() {
     rol,
   ]);
 
-  const cargar = useCallback(async () => {
-    const me = await fetch("/api/auth/me").then((r) => r.json());
-    const rolMe = String(me.user?.rol ?? "");
-    setRol(rolMe);
-    setPermisos(me.permisos ?? []);
-    // No precargar nombre del admin/usuario: el piloto se escribe a mano
-    // (RRHH o externo). Evita filtrar llegadas con "Administrador General".
+  const cargar = useCallback(
+    async (opts?: { forzarTodo?: boolean; solo?: string[] }) => {
+      const t = tab;
+      const forzar = Boolean(opts?.forzarTodo);
+      const solo = opts?.solo;
+      const enSolo = (key: string) => !solo || solo.includes(key);
 
-    const paramsRep = new URLSearchParams({
-      desde: repDesde,
-      hasta: repHasta,
-    });
-    const [res, rep, lec, svc, via, perm] = await Promise.all([
-      fetch(`/api/empresas/${slug}/flota/vehiculos`),
-      fetch(`/api/empresas/${slug}/flota/reportes?${paramsRep}`),
-      fetch(`/api/empresas/${slug}/flota/lecturas`),
-      fetch(`/api/empresas/${slug}/flota/servicios`),
-      fetch(`/api/empresas/${slug}/flota/viajes`),
-      fetch(`/api/empresas/${slug}/flota/permisos-externos`),
-    ]);
-    if (res.ok) {
-      const data = await res.json();
-      const list = (data.vehiculos ?? []) as Vehiculo[];
-      setVehiculos(list);
-      setEmpresasFlota(data.empresas ?? []);
-      setEmpresaActualId(Number(data.empresaActualId ?? 0));
-      if (list[0] && !vehiculoId) setVehiculoId(Number(list[0].id));
-    }
-    if (rep.ok) {
-      const reporte = await rep.json();
-      setResumen(reporte.resumen ?? null);
-      setCostos(reporte.costosPorMes ?? []);
-      setCostosUnidad(reporte.costosPorUnidad ?? []);
-      setTotalPeriodo(
-        reporte.totalPeriodo ?? { total: 0, n: 0 },
-      );
-      setViajesReporte((reporte.viajes ?? []) as Viaje[]);
-    }
-    if (lec.ok) {
-      const data = await lec.json();
-      setLecturas(data.lecturas ?? []);
-    }
-    if (svc.ok) {
-      const data = await svc.json();
-      setServicios(data.servicios ?? []);
-    }
-    if (via.ok) {
-      const data = await via.json();
-      setViajes(data.viajes ?? []);
-      const abs = (data.abiertos ?? []) as Viaje[];
-      setAbiertos(abs);
-      setViajeId((prev) => {
-        if (prev && abs.some((a) => a.id === prev)) return prev;
-        return abs[0] ? Number(abs[0].id) : 0;
-      });
-    }
-    if (perm.ok) {
-      const data = await perm.json();
-      setPermisosExt(data.permisos ?? []);
-    }
-  }, [slug, vehiculoId, repDesde, repHasta]);
+      // Sesión solo la primera vez (evita /api/auth/me en cada refresh)
+      if (!rol || forzar) {
+        const me = await fetch("/api/auth/me").then((r) => r.json());
+        setRol(String(me.user?.rol ?? ""));
+        setPermisos(me.permisos ?? []);
+      }
+
+      const quiereVeh = enSolo("vehiculos");
+      const quiereRep =
+        enSolo("reportes") &&
+        (forzar || Boolean(solo) || t === "reportes");
+      const quiereLec =
+        enSolo("lecturas") &&
+        (forzar || Boolean(solo) || t === "lecturas");
+      const quiereSvc =
+        enSolo("servicios") &&
+        (forzar ||
+          Boolean(solo) ||
+          t === "servicios" ||
+          t === "taller" ||
+          t === "historial-servicios" ||
+          t === "compras");
+      const quiereVia =
+        enSolo("viajes") &&
+        (forzar ||
+          Boolean(solo) ||
+          t === "piloto" ||
+          t === "lecturas" ||
+          t === "vehiculos" ||
+          t === "servicios" ||
+          t === "taller");
+      const quierePerm =
+        enSolo("permisos") &&
+        (forzar || Boolean(solo) || t === "piloto");
+
+      // Con solo=… no arrastrar recursos de la pestaña actual
+      const fetches: Promise<Response>[] = [];
+      const keys: string[] = [];
+
+      if (quiereVeh) {
+        fetches.push(fetch(`/api/empresas/${slug}/flota/vehiculos`));
+        keys.push("vehiculos");
+      }
+      if (quiereRep) {
+        const paramsRep = new URLSearchParams({
+          desde: repDesde,
+          hasta: repHasta,
+        });
+        fetches.push(
+          fetch(`/api/empresas/${slug}/flota/reportes?${paramsRep}`),
+        );
+        keys.push("reportes");
+      }
+      if (quiereLec) {
+        fetches.push(fetch(`/api/empresas/${slug}/flota/lecturas`));
+        keys.push("lecturas");
+      }
+      if (quiereSvc) {
+        fetches.push(fetch(`/api/empresas/${slug}/flota/servicios`));
+        keys.push("servicios");
+      }
+      if (quiereVia) {
+        fetches.push(fetch(`/api/empresas/${slug}/flota/viajes`));
+        keys.push("viajes");
+      }
+      if (quierePerm) {
+        fetches.push(fetch(`/api/empresas/${slug}/flota/permisos-externos`));
+        keys.push("permisos");
+      }
+
+      if (!fetches.length) return;
+
+      const results = await Promise.all(fetches);
+      const byKey = Object.fromEntries(
+        keys.map((k, i) => [k, results[i]]),
+      ) as Record<string, Response>;
+
+      if (byKey.vehiculos?.ok) {
+        const data = await byKey.vehiculos.json();
+        const list = (data.vehiculos ?? []) as Vehiculo[];
+        setVehiculos(list);
+        setEmpresasFlota(data.empresas ?? []);
+        setEmpresaActualId(Number(data.empresaActualId ?? 0));
+        if (list[0] && !vehiculoId) setVehiculoId(Number(list[0].id));
+      }
+      if (byKey.reportes?.ok) {
+        const reporte = await byKey.reportes.json();
+        setResumen(reporte.resumen ?? null);
+        setCostos(reporte.costosPorMes ?? []);
+        setCostosUnidad(reporte.costosPorUnidad ?? []);
+        setTotalPeriodo(reporte.totalPeriodo ?? { total: 0, n: 0 });
+        setViajesReporte((reporte.viajes ?? []) as Viaje[]);
+      }
+      if (byKey.lecturas?.ok) {
+        const data = await byKey.lecturas.json();
+        setLecturas(data.lecturas ?? []);
+      }
+      if (byKey.servicios?.ok) {
+        const data = await byKey.servicios.json();
+        setServicios(data.servicios ?? []);
+      }
+      if (byKey.viajes?.ok) {
+        const data = await byKey.viajes.json();
+        setViajes(data.viajes ?? []);
+        const abs = (data.abiertos ?? []) as Viaje[];
+        setAbiertos(abs);
+        setViajeId((prev) => {
+          if (prev && abs.some((a) => a.id === prev)) return prev;
+          return abs[0] ? Number(abs[0].id) : 0;
+        });
+      }
+      if (byKey.permisos?.ok) {
+        const data = await byKey.permisos.json();
+        setPermisosExt(data.permisos ?? []);
+      }
+    },
+    [slug, tab, rol, vehiculoId, repDesde, repHasta],
+  );
 
   useEffect(() => {
     void cargar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slug]);
+  }, [slug, tab]);
 
+  const rangoRepInit = useRef(true);
+  useEffect(() => {
+    if (rangoRepInit.current) {
+      rangoRepInit.current = false;
+      return;
+    }
+    if (tab === "reportes") {
+      void cargar({ solo: ["reportes"] });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repDesde, repHasta]);
+
+  // Resumen del dashboard desde vehículos (sin pedir /reportes)
+  useEffect(() => {
+    if (tab !== "dashboard" || !vehiculos.length) return;
+    const alertasServicio = vehiculos.filter((v) => {
+      if (v.en_taller) return false;
+      const pendiente = kmPendienteServicio(
+        v.km_actual,
+        v.km_ultimo_servicio,
+        Number(v.km_intervalo_servicio || 10000),
+      );
+      return pendiente <= 0;
+    }).length;
+    setResumen({
+      totalVehiculos: vehiculos.length,
+      enTaller: vehiculos.filter((v) => v.en_taller).length,
+      alertasServicio,
+    });
+  }, [tab, vehiculos]);
   useEffect(() => {
     try {
       const key = `flota_piloto_sesion_${slug}`;
