@@ -2458,7 +2458,6 @@ function FlotaInner() {
                     ["descripcion", "Descripción"],
                     ["color", "Color"],
                     ["rin", "Rin de llanta"],
-                    ["medidaLlanta", "Medida de llanta"],
                     ["tipoAceite", "Tipo de aceite"],
                   ] as const
                 ).map(([key, label]) => (
@@ -2791,7 +2790,6 @@ function FlotaInner() {
                     </td>
                     <td className="px-3 py-2 text-xs">
                       {v.rin_llanta || "—"}
-                      {v.medida_llanta ? ` · ${v.medida_llanta}` : ""}
                     </td>
                     <td className="px-3 py-2">
                       {v.en_taller ? (
