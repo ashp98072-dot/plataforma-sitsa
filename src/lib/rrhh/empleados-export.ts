@@ -2,11 +2,14 @@ import ExcelJS from "exceljs";
 import type { Empleado } from "./empleados";
 import { formatearFechaVisible } from "./dates";
 import { tablaAPdf } from "@/lib/rrhh/export-files";
+import { CATEGORIAS_OPS, PUESTOS_MONACO } from "./categorias-ops";
 
 const HEADERS = [
   "codigo",
   "nombre",
+  "dpi",
   "puesto",
+  "area",
   "tipo_horario",
   "fecha_ingreso",
   "fecha_contratacion",
@@ -23,15 +26,26 @@ export async function generarPlantillaEmpleados(): Promise<Buffer> {
   ws.addRow([
     "DPI001",
     "Ejemplo Nombre",
-    "Operador",
+    "DPI001",
+    "Piloto",
+    "Transporte",
     "Fijo",
     "01/01/2024",
     "01/01/2024",
-    "08:00",
-    "17:00",
+    "07:00",
+    "16:00",
     "Activo",
   ]);
+  // Hoja de ayuda: áreas y puestos Monaco
+  const help = wb.addWorksheet("Catalogos");
+  help.addRow(["area", "puesto"]);
+  help.getRow(1).font = { bold: true };
+  const max = Math.max(CATEGORIAS_OPS.length, PUESTOS_MONACO.length);
+  for (let i = 0; i < max; i++) {
+    help.addRow([CATEGORIAS_OPS[i] ?? "", PUESTOS_MONACO[i] ?? ""]);
+  }
   ws.columns = HEADERS.map(() => ({ width: 18 }));
+  help.columns = [{ width: 22 }, { width: 28 }];
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
@@ -44,9 +58,9 @@ export async function exportarEmpleadosExcel(
   ws.addRow([
     "Código",
     "Nombre",
-    "Puesto",
-    "Cat. ops",
-    "Horario",
+      "Puesto",
+      "Área",
+      "Horario",
     "Fecha contratación",
     "Fecha entrada laboral",
     "Entrada",
@@ -108,7 +122,9 @@ export async function exportarEmpleadosPdf(
 export type FilaImportEmpleado = {
   codigo: string;
   nombre: string;
+  dpi: string;
   puesto: string;
+  categoriaOps: string;
   tipoHorario: "Fijo" | "Variable";
   fechaAlta: string;
   fechaInicioLaboral: string | null;
@@ -156,6 +172,8 @@ export async function parsearPlantillaEmpleados(
   }
 
   const iPuesto = idx("puesto");
+  const iArea = idx("area");
+  const iDpi = idx("dpi");
   const iHorario = idx("tipo_horario");
   const iIngreso = idx("fecha_ingreso");
   const iContra = idx("fecha_contratacion");
@@ -173,10 +191,13 @@ export async function parsearPlantillaEmpleados(
       iHorario > 0 ? cellStr(row.getCell(iHorario).value) : "Fijo";
     const estadoRaw =
       iEstado > 0 ? cellStr(row.getCell(iEstado).value) : "Activo";
+    const dpi = iDpi > 0 ? cellStr(row.getCell(iDpi).value) : "";
     filas.push({
       codigo,
       nombre,
+      dpi: dpi || codigo,
       puesto: iPuesto > 0 ? cellStr(row.getCell(iPuesto).value) : "",
+      categoriaOps: iArea > 0 ? cellStr(row.getCell(iArea).value) : "",
       tipoHorario: /variable/i.test(horarioRaw) ? "Variable" : "Fijo",
       fechaAlta:
         iContra > 0
@@ -187,10 +208,10 @@ export async function parsearPlantillaEmpleados(
       fechaInicioLaboral:
         iIngreso > 0 ? cellStr(row.getCell(iIngreso).value) || null : null,
       horaEntradaTeorica:
-        iEnt > 0 ? cellStr(row.getCell(iEnt).value) || "08:00" : "08:00",
+        iEnt > 0 ? cellStr(row.getCell(iEnt).value) || "07:00" : "07:00",
       horaSalidaTeorica:
-        iSal > 0 ? cellStr(row.getCell(iSal).value) || "17:00" : "17:00",
-      estado: /baja/i.test(estadoRaw) ? "Baja" : "Activo",
+        iSal > 0 ? cellStr(row.getCell(iSal).value) || "16:00" : "16:00",
+      estado: /baja|inactivo/i.test(estadoRaw) ? "Baja" : "Activo",
     });
   });
   return filas;

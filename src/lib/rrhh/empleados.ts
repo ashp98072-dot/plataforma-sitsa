@@ -549,4 +549,4 @@ export async function eliminarEmpleado(
   };
 }
 
-export { CATEGORIAS_OPS } from "./categorias-ops";
+export { CATEGORIAS_OPS, PUESTOS_MONACO } from "./categorias-ops";

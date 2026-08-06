@@ -8,7 +8,7 @@ import {
 } from "@/lib/rrhh/empleados";
 import { normalizarHora } from "@/lib/rrhh/dates";
 import { obtenerParametros } from "@/lib/rrhh/config";
-import { empleadoBodySchema } from "@/lib/rrhh/empleado-api-schema";
+import { empleadoBodySchema, validarAltaMonaco } from "@/lib/rrhh/empleado-api-schema";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -95,6 +95,10 @@ export async function POST(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
   }
   const d = parsed.data;
+  const falta = validarAltaMonaco(d);
+  if (falta) {
+    return NextResponse.json({ error: falta }, { status: 400 });
+  }
   const tienePartes = Boolean(
     (d.primerNombre || "").trim() && (d.primerApellido || "").trim(),
   );

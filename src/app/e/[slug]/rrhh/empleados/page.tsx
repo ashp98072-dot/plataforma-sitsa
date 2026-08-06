@@ -12,7 +12,8 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { DocumentosModal } from "@/components/rrhh/documentos-modal";
 import { formatearFechaVisible, hoyLocal } from "@/lib/rrhh/dates";
-import { CATEGORIAS_OPS } from "@/lib/rrhh/categorias-ops";
+import { CATEGORIAS_OPS, PUESTOS_MONACO } from "@/lib/rrhh/categorias-ops";
+import { faltantesAlta } from "@/lib/rrhh/empleado-validacion";
 
 type Emp = {
   id: number;
@@ -302,6 +303,34 @@ function formToBody(form: FormState) {
   };
 }
 
+function FieldLabel({
+  children,
+  required,
+  hint,
+}: {
+  children: ReactNode;
+  required?: boolean;
+  hint?: string;
+}) {
+  return (
+    <span className="block">
+      <span className="text-sm text-[var(--muted)]">
+        {children}
+        {required ? (
+          <span className="ml-0.5 text-red-500" title="Obligatorio">
+            *
+          </span>
+        ) : (
+          <span className="ml-1 text-[10px] opacity-60">(opc.)</span>
+        )}
+      </span>
+      {hint ? (
+        <span className="mt-0.5 block text-[10px] opacity-80">{hint}</span>
+      ) : null}
+    </span>
+  );
+}
+
 function FormSection({
   title,
   open,
@@ -401,10 +430,10 @@ export default function EmpleadosPage() {
     setSecciones({
       identidad: true,
       laboral: true,
-      salarios: false,
-      contacto: false,
+      salarios: true,
+      contacto: true,
       licencia: false,
-      otros: false,
+      otros: true,
     });
     setVista("ficha");
   }
@@ -445,6 +474,12 @@ export default function EmpleadosPage() {
   function patchForm(patch: Partial<FormState>) {
     setForm((f) => {
       const next = { ...f, ...patch };
+      if ("dpi" in patch) {
+        const dpi = (patch.dpi ?? "").trim();
+        if (dpi && (!f.codigo.trim() || f.codigo.trim() === f.dpi.trim())) {
+          next.codigo = dpi;
+        }
+      }
       const identityKeys: (keyof FormState)[] = [
         "primerNombre",
         "segundoNombre",
@@ -494,6 +529,25 @@ export default function EmpleadosPage() {
     ev.preventDefault();
     setError("");
     setMensaje("");
+    const { labels, secciones: secs } = faltantesAlta(
+      form as unknown as Record<string, unknown>,
+    );
+    if (labels.length) {
+      setSecciones((prev) => ({
+        ...prev,
+        identidad: prev.identidad || secs.has("identidad"),
+        laboral: prev.laboral || secs.has("laboral"),
+        salarios: prev.salarios || secs.has("salarios"),
+        contacto: prev.contacto || secs.has("contacto"),
+        otros: prev.otros || secs.has("otros"),
+      }));
+      setError(
+        `Faltan campos obligatorios (*): ${labels.slice(0, 8).join(", ")}${
+          labels.length > 8 ? ` (+${labels.length - 8} más)` : ""
+        }.`,
+      );
+      return;
+    }
     const url = editId
       ? `/api/empresas/${slug}/empleados/${editId}`
       : `/api/empresas/${slug}/empleados`;
@@ -599,73 +653,80 @@ export default function EmpleadosPage() {
 
         <FormSection
           title="1. Identidad"
-          hint="Nombres, DPI, NIT, IGSS…"
+          hint="* obligatorio según ficha Monaco · Foto en expediente"
           open={secciones.identidad}
           onToggle={() => toggleSeccion("identidad")}
         >
-        <label className="text-sm text-[var(--muted)]">
-          Primer nombre
+        <label>
+          <FieldLabel required>Primer nombre</FieldLabel>
           <input
             className={input}
             value={form.primerNombre}
             onChange={(e) => patchForm({ primerNombre: e.target.value })}
+            required
           />
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Segundo nombre
+        <label>
+          <FieldLabel>Segundo nombre</FieldLabel>
           <input
             className={input}
             value={form.segundoNombre}
             onChange={(e) => patchForm({ segundoNombre: e.target.value })}
           />
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Tercer nombre
+        <label>
+          <FieldLabel>Tercer nombre</FieldLabel>
           <input
             className={input}
             value={form.tercerNombre}
             onChange={(e) => patchForm({ tercerNombre: e.target.value })}
           />
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Cuarto nombre
+        <label>
+          <FieldLabel>Cuarto nombre</FieldLabel>
           <input
             className={input}
             value={form.cuartoNombre}
             onChange={(e) => patchForm({ cuartoNombre: e.target.value })}
           />
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Primer apellido
+        <label>
+          <FieldLabel required>Primer apellido</FieldLabel>
           <input
             className={input}
             value={form.primerApellido}
             onChange={(e) => patchForm({ primerApellido: e.target.value })}
+            required
           />
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Segundo apellido
+        <label>
+          <FieldLabel required>Segundo apellido</FieldLabel>
           <input
             className={input}
             value={form.segundoApellido}
             onChange={(e) => patchForm({ segundoApellido: e.target.value })}
+            required
           />
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Apellido casada
+        <label>
+          <FieldLabel>Apellido casada</FieldLabel>
           <input
             className={input}
             value={form.apellidoCasada}
             onChange={(e) => patchForm({ apellidoCasada: e.target.value })}
           />
         </label>
-        <label className="text-sm text-[var(--muted)] sm:col-span-2">
-          Nombre completo
-          <span className="mt-0.5 block text-[10px] opacity-80">
-            {form.nombreManual
-              ? "Editado manualmente"
-              : "Se genera automáticamente desde los campos de identidad"}
-          </span>
+        <label className="sm:col-span-2">
+          <FieldLabel
+            required
+            hint={
+              form.nombreManual
+                ? "Editado manualmente"
+                : "Se genera desde nombres y apellidos"
+            }
+          >
+            Nombre completo
+          </FieldLabel>
           <input
             className={input}
             value={form.nombre}
@@ -675,57 +736,65 @@ export default function EmpleadosPage() {
             required
           />
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          DPI
+        <label>
+          <FieldLabel required hint="También se usa como código si no hay otro">
+            DPI
+          </FieldLabel>
           <input
             className={input}
             value={form.dpi}
             onChange={(e) => patchForm({ dpi: e.target.value })}
+            required
           />
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          NIT
+        <label>
+          <FieldLabel required>NIT</FieldLabel>
           <input
             className={input}
             value={form.nit}
             onChange={(e) => patchForm({ nit: e.target.value })}
+            required
           />
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          IGSS
+        <label>
+          <FieldLabel required>IGSS</FieldLabel>
           <input
             className={input}
             value={form.igss}
             onChange={(e) => patchForm({ igss: e.target.value })}
+            required
           />
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          IRTRA
+        <label>
+          <FieldLabel required>IRTRA</FieldLabel>
           <input
             className={input}
             value={form.irtra}
             onChange={(e) => patchForm({ irtra: e.target.value })}
+            required
           />
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Sexo
+        <label>
+          <FieldLabel required>Sexo</FieldLabel>
           <select
             className={input}
             value={form.sexo}
             onChange={(e) => patchForm({ sexo: e.target.value })}
+            required
           >
             <option value="">—</option>
             <option value="M">Masculino</option>
             <option value="F">Femenino</option>
           </select>
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Fecha nacimiento
+        <label>
+          <FieldLabel required>Fecha nacimiento</FieldLabel>
           <input
             type="date"
             className={input}
             value={form.fechaNacimiento}
             onChange={(e) => patchForm({ fechaNacimiento: e.target.value })}
+            required
           />
         </label>
 
@@ -733,12 +802,14 @@ export default function EmpleadosPage() {
 
         <FormSection
           title="2. Laboral"
-          hint="Código, puesto, contrato, horarios"
+          hint="Área = organigrama · Puesto = cargo (Piloto, Auxiliar…)"
           open={secciones.laboral}
           onToggle={() => toggleSeccion("laboral")}
         >
-        <label className="text-sm text-[var(--muted)]">
-          Código
+        <label>
+          <FieldLabel required hint="Monaco no usa código propio: usar DPI">
+            Código
+          </FieldLabel>
           <input
             className={input}
             value={form.codigo}
@@ -746,20 +817,30 @@ export default function EmpleadosPage() {
             required
           />
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Puesto
+        <label>
+          <FieldLabel required hint="Piloto / Auxiliar aquí (para TMS)">
+            Puesto
+          </FieldLabel>
           <input
             className={input}
+            list="puestos-monaco"
             value={form.puesto}
             onChange={(e) => patchForm({ puesto: e.target.value })}
+            required
           />
+          <datalist id="puestos-monaco">
+            {PUESTOS_MONACO.map((p) => (
+              <option key={p} value={p} />
+            ))}
+          </datalist>
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Categoría ops
+        <label>
+          <FieldLabel required>Área</FieldLabel>
           <select
             className={input}
             value={form.categoriaOps}
             onChange={(e) => patchForm({ categoriaOps: e.target.value })}
+            required
           >
             <option value="">—</option>
             {CATEGORIAS_OPS.map((c) => (
@@ -767,10 +848,18 @@ export default function EmpleadosPage() {
                 {c}
               </option>
             ))}
+            {form.categoriaOps &&
+            !(CATEGORIAS_OPS as readonly string[]).includes(
+              form.categoriaOps,
+            ) ? (
+              <option value={form.categoriaOps}>
+                {form.categoriaOps} (anterior)
+              </option>
+            ) : null}
           </select>
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Tipo contrato
+        <label>
+          <FieldLabel required>Tipo contrato</FieldLabel>
           <select
             className={input}
             value={form.tipoContrato}
@@ -779,13 +868,14 @@ export default function EmpleadosPage() {
                 tipoContrato: e.target.value as "prueba" | "fijo",
               })
             }
+            required
           >
             <option value="fijo">Fijo</option>
             <option value="prueba">Prueba</option>
           </select>
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Forma pago
+        <label>
+          <FieldLabel required>Forma pago</FieldLabel>
           <select
             className={input}
             value={form.formaPago}
@@ -794,24 +884,25 @@ export default function EmpleadosPage() {
                 formaPago: e.target.value as "cheque" | "transferencia",
               })
             }
+            required
           >
             <option value="transferencia">Transferencia</option>
             <option value="cheque">Cheque</option>
           </select>
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Profesión
+        <label>
+          <FieldLabel required>Profesión</FieldLabel>
           <input
             className={input}
             value={form.profesion}
             onChange={(e) => patchForm({ profesion: e.target.value })}
+            required
           />
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Fecha entrada laboral
-          <span className="mt-0.5 block text-[10px] opacity-80">
-            Cuando empieza a trabajar (opcional)
-          </span>
+        <label>
+          <FieldLabel hint="Cuando empieza a trabajar">
+            Fecha entrada laboral
+          </FieldLabel>
           <input
             type="date"
             className={input}
@@ -821,11 +912,10 @@ export default function EmpleadosPage() {
             }
           />
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Fecha contratación / alta
-          <span className="mt-0.5 block text-[10px] text-emerald-400/80">
-            Contrato — base para vacaciones
-          </span>
+        <label>
+          <FieldLabel required hint="Base para vacaciones">
+            Fecha ingreso / contratación
+          </FieldLabel>
           <input
             type="date"
             className={input}
@@ -834,8 +924,8 @@ export default function EmpleadosPage() {
             required
           />
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Fecha egreso
+        <label>
+          <FieldLabel>Fecha egreso</FieldLabel>
           <input
             type="date"
             className={input}
@@ -843,8 +933,8 @@ export default function EmpleadosPage() {
             onChange={(e) => patchForm({ fechaEgreso: e.target.value })}
           />
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Horario
+        <label>
+          <FieldLabel required>Jornada / horario</FieldLabel>
           <select
             className={input}
             value={form.tipoHorario}
@@ -853,13 +943,14 @@ export default function EmpleadosPage() {
                 tipoHorario: e.target.value as "Fijo" | "Variable",
               })
             }
+            required
           >
-            <option value="Fijo">Fijo</option>
+            <option value="Fijo">Fijo (diurna)</option>
             <option value="Variable">Variable</option>
           </select>
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Entrada teórica
+        <label>
+          <FieldLabel required>Entrada teórica</FieldLabel>
           <input
             type="time"
             className={input}
@@ -867,10 +958,11 @@ export default function EmpleadosPage() {
             onChange={(e) =>
               patchForm({ horaEntradaTeorica: e.target.value })
             }
+            required
           />
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Salida teórica
+        <label>
+          <FieldLabel required>Salida teórica</FieldLabel>
           <input
             type="time"
             className={input}
@@ -878,10 +970,11 @@ export default function EmpleadosPage() {
             onChange={(e) =>
               patchForm({ horaSalidaTeorica: e.target.value })
             }
+            required
           />
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Estado
+        <label>
+          <FieldLabel required>Estado</FieldLabel>
           <select
             className={input}
             value={form.estado}
@@ -890,9 +983,10 @@ export default function EmpleadosPage() {
                 estado: e.target.value as "Activo" | "Baja",
               })
             }
+            required
           >
             <option value="Activo">Activo</option>
-            <option value="Baja">Baja</option>
+            <option value="Baja">Baja / Inactivo</option>
           </select>
         </label>
 
@@ -900,12 +994,12 @@ export default function EmpleadosPage() {
 
         <FormSection
           title="3. Salarios"
-          hint="Sueldo base y bonos"
+          hint="Obligatorios en alta Monaco"
           open={secciones.salarios}
           onToggle={() => toggleSeccion("salarios")}
         >
-        <label className="text-sm text-[var(--muted)]">
-          Sueldo base
+        <label>
+          <FieldLabel required>Sueldo base</FieldLabel>
           <input
             type="number"
             step="0.01"
@@ -913,10 +1007,11 @@ export default function EmpleadosPage() {
             className={input}
             value={form.sueldoBase}
             onChange={(e) => patchForm({ sueldoBase: e.target.value })}
+            required
           />
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Bono incentivo
+        <label>
+          <FieldLabel required>Bonificación incentivo</FieldLabel>
           <input
             type="number"
             step="0.01"
@@ -924,10 +1019,11 @@ export default function EmpleadosPage() {
             className={input}
             value={form.bonoIncentivo}
             onChange={(e) => patchForm({ bonoIncentivo: e.target.value })}
+            required
           />
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Bono herramientas
+        <label>
+          <FieldLabel required>Bono de herramientas</FieldLabel>
           <input
             type="number"
             step="0.01"
@@ -935,6 +1031,7 @@ export default function EmpleadosPage() {
             className={input}
             value={form.bonoHerramientas}
             onChange={(e) => patchForm({ bonoHerramientas: e.target.value })}
+            required
           />
         </label>
 
@@ -942,20 +1039,21 @@ export default function EmpleadosPage() {
 
         <FormSection
           title="4. Contacto"
-          hint="Teléfono, email, dirección"
+          hint="Teléfono y dirección obligatorios · email opcional"
           open={secciones.contacto}
           onToggle={() => toggleSeccion("contacto")}
         >
-        <label className="text-sm text-[var(--muted)]">
-          Teléfono
+        <label>
+          <FieldLabel required>Teléfono</FieldLabel>
           <input
             className={input}
             value={form.telefono}
             onChange={(e) => patchForm({ telefono: e.target.value })}
+            required
           />
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Email
+        <label>
+          <FieldLabel>Email</FieldLabel>
           <input
             type="email"
             className={input}
@@ -963,16 +1061,17 @@ export default function EmpleadosPage() {
             onChange={(e) => patchForm({ email: e.target.value })}
           />
         </label>
-        <label className="text-sm text-[var(--muted)] sm:col-span-2 lg:col-span-3">
-          Dirección
+        <label className="sm:col-span-2 lg:col-span-3">
+          <FieldLabel required>Dirección actual</FieldLabel>
           <input
             className={input}
             value={form.direccion}
             onChange={(e) => patchForm({ direccion: e.target.value })}
+            required
           />
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Contacto emergencia
+        <label>
+          <FieldLabel>Contacto emergencia</FieldLabel>
           <input
             className={input}
             value={form.contactoEmergencia}
@@ -986,7 +1085,7 @@ export default function EmpleadosPage() {
 
         <FormSection
           title="5. Licencia"
-          hint="Número, tipo y vencimiento"
+          hint="Opcional · recomendado para pilotos"
           open={secciones.licencia}
           onToggle={() => toggleSeccion("licencia")}
         >
@@ -1028,48 +1127,53 @@ export default function EmpleadosPage() {
 
         <FormSection
           title="6. Otros"
-          hint="Demografía, banco y observaciones"
+          hint="Demografía obligatoria · banco y observaciones opcionales"
           open={secciones.otros}
           onToggle={() => toggleSeccion("otros")}
         >
-        <label className="text-sm text-[var(--muted)]">
-          País origen
+        <label>
+          <FieldLabel required>País origen</FieldLabel>
           <input
             className={input}
             value={form.paisOrigen}
             onChange={(e) => patchForm({ paisOrigen: e.target.value })}
+            required
           />
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Municipio
+        <label>
+          <FieldLabel required>Municipio</FieldLabel>
           <input
             className={input}
             value={form.municipio}
             onChange={(e) => patchForm({ municipio: e.target.value })}
+            required
           />
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Etnia
+        <label>
+          <FieldLabel required>Etnia</FieldLabel>
           <input
             className={input}
             value={form.etnia}
             onChange={(e) => patchForm({ etnia: e.target.value })}
+            required
           />
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Religión
+        <label>
+          <FieldLabel required>Religión</FieldLabel>
           <input
             className={input}
             value={form.religion}
             onChange={(e) => patchForm({ religion: e.target.value })}
+            required
           />
         </label>
-        <label className="text-sm text-[var(--muted)]">
-          Idioma
+        <label>
+          <FieldLabel required>Idioma</FieldLabel>
           <input
             className={input}
             value={form.idioma}
             onChange={(e) => patchForm({ idioma: e.target.value })}
+            required
           />
         </label>
         <label className="text-sm text-[var(--muted)]">
@@ -1256,7 +1360,7 @@ export default function EmpleadosPage() {
               <th className="px-3 py-2">Nombre</th>
               {mostrarDpi ? <th className="px-3 py-2">DPI</th> : null}
               <th className="px-3 py-2">Puesto</th>
-              <th className="px-3 py-2">Cat.</th>
+              <th className="px-3 py-2">Área</th>
               <th className="px-3 py-2">Entrada lab.</th>
               <th className="px-3 py-2">Contratación</th>
               <th className="px-3 py-2">Horario</th>

@@ -17,6 +17,8 @@ export async function GET(req: Request, ctx: Ctx) {
   try {
     let rows: RowDataPacket[];
     if (tipo === "Piloto" || tipo === "Auxiliar") {
+      const like =
+        tipo === "Auxiliar" ? "%auxiliar%" : "%piloto%";
       rows = await query<RowDataPacket[]>(
         `SELECT id, codigo, nombre, puesto, categoria_ops, estado
          FROM empleados
@@ -24,9 +26,10 @@ export async function GET(req: Request, ctx: Ctx) {
            AND (
              categoria_ops = ?
              OR LOWER(COALESCE(puesto, '')) LIKE ?
+             OR LOWER(COALESCE(categoria_ops, '')) LIKE ?
            )
          ORDER BY nombre`,
-        [guard.empresa.id, tipo, `%${tipo.toLowerCase()}%`],
+        [guard.empresa.id, tipo, like, like],
       );
       if (rows.length === 0) {
         rows = await query<RowDataPacket[]>(

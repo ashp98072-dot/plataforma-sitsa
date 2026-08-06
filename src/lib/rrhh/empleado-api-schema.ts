@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { faltantesAlta } from "./empleado-validacion";
 
 const optStr = z.string().optional().nullable();
 const optNum = z.number().optional().nullable();
@@ -54,3 +55,12 @@ export const empleadoBodySchema = z.object({
 });
 
 export type EmpleadoBody = z.infer<typeof empleadoBodySchema>;
+
+/** Valida campos obligatorios del cuestionario Monaco. */
+export function validarAltaMonaco(data: EmpleadoBody): string | null {
+  const { labels } = faltantesAlta(data as Record<string, unknown>);
+  if (labels.length === 0) return null;
+  return `Faltan campos obligatorios: ${labels.slice(0, 8).join(", ")}${
+    labels.length > 8 ? ` (+${labels.length - 8} más)` : ""
+  }.`;
+}

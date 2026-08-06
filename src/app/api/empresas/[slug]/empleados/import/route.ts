@@ -67,7 +67,9 @@ export async function POST(req: Request, ctx: Ctx) {
         const payload = {
           codigo: fila.codigo,
           nombre: fila.nombre,
+          dpi: fila.dpi,
           puesto: fila.puesto,
+          categoriaOps: fila.categoriaOps,
           tipoHorario: fila.tipoHorario,
           fechaAlta,
           fechaInicioLaboral: fechaInicio,
