@@ -68,9 +68,29 @@ export async function POST(req: Request, ctx: Ctx) {
           codigo: fila.codigo,
           nombre: fila.nombre,
           dpi: fila.dpi,
+          primerNombre: fila.primerNombre || undefined,
+          segundoNombre: fila.segundoNombre || undefined,
+          primerApellido: fila.primerApellido || undefined,
+          segundoApellido: fila.segundoApellido || undefined,
+          apellidoCasada: fila.apellidoCasada || undefined,
+          nit: fila.nit || undefined,
+          igss: fila.igss || undefined,
+          irtra: fila.irtra || undefined,
+          sexo: fila.sexo || undefined,
+          fechaNacimiento: (() => {
+            if (!fila.fechaNacimiento) return null;
+            try {
+              return formatearFecha(fila.fechaNacimiento);
+            } catch {
+              return null;
+            }
+          })(),
           puesto: fila.puesto,
           categoriaOps: fila.categoriaOps,
           tipoHorario: fila.tipoHorario,
+          tipoContrato: fila.tipoContrato || undefined,
+          formaPago: fila.formaPago || undefined,
+          profesion: fila.profesion || undefined,
           fechaAlta,
           fechaInicioLaboral: fechaInicio,
           horaEntradaTeorica:
@@ -78,6 +98,32 @@ export async function POST(req: Request, ctx: Ctx) {
           horaSalidaTeorica:
             normalizarHora(fila.horaSalidaTeorica) || salidaDef,
           estado: fila.estado,
+          sueldoBase: fila.sueldoBase,
+          bonoIncentivo: fila.bonoIncentivo,
+          bonoHerramientas: fila.bonoHerramientas,
+          telefono: fila.telefono || undefined,
+          email: fila.email || undefined,
+          direccion: fila.direccion || undefined,
+          paisOrigen: fila.paisOrigen || undefined,
+          municipio: fila.municipio || undefined,
+          etnia: fila.etnia || undefined,
+          religion: fila.religion || undefined,
+          idioma: fila.idioma || undefined,
+          licenciaNumero: fila.licenciaNumero || undefined,
+          licenciaTipo: fila.licenciaTipo || undefined,
+          licenciaVence: (() => {
+            if (!fila.licenciaVence) return null;
+            try {
+              return formatearFecha(fila.licenciaVence);
+            } catch {
+              return null;
+            }
+          })(),
+          cuentaBancaria: fila.cuentaBancaria || undefined,
+          tipoCuenta: fila.tipoCuenta || undefined,
+          banco: fila.banco || undefined,
+          contactoEmergencia: fila.contactoEmergencia || undefined,
+          observaciones: fila.observaciones || undefined,
         };
 
         const existente = await obtenerEmpleadoPorCodigo(

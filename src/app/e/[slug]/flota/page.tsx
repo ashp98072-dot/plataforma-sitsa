@@ -2363,20 +2363,28 @@ function FlotaInner() {
             </p>
             <div className="flex flex-wrap gap-2">
               {can("flota_vehiculos", "crear") && rol !== "Piloto" ? (
-                <label className="cursor-pointer rounded bg-[var(--accent-2)] px-3 py-2 text-sm text-white">
-                  {importando ? "Importando…" : "Importar Excel"}
-                  <input
-                    type="file"
-                    accept=".xlsx"
-                    className="hidden"
-                    disabled={importando}
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) void onImport(f);
-                      e.target.value = "";
-                    }}
-                  />
-                </label>
+                <>
+                  <a
+                    className="rounded border border-[var(--border)] px-3 py-2 text-sm"
+                    href={`/api/empresas/${slug}/flota/export?tipo=flota&formato=plantilla`}
+                  >
+                    Plantilla Excel
+                  </a>
+                  <label className="cursor-pointer rounded bg-[var(--accent-2)] px-3 py-2 text-sm text-white">
+                    {importando ? "Importando…" : "Importar Excel"}
+                    <input
+                      type="file"
+                      accept=".xlsx"
+                      className="hidden"
+                      disabled={importando}
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) void onImport(f);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                </>
               ) : null}
               {can("flota_reportes") || can("flota_vehiculos") ? (
                 <>

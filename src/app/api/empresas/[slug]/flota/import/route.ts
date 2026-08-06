@@ -2,8 +2,12 @@ import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
 import { requireTenantFlota } from "@/lib/tenant";
-import { parsearExcelFlota } from "@/lib/flota/import-excel";
+import {
+  parsearExcelFlota,
+  parsearFiltrosTexto,
+} from "@/lib/flota/import-excel";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
+import { guardarFiltrosVehiculo } from "@/lib/flota/filtros";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -60,8 +64,13 @@ export async function POST(req: Request, ctx: Ctx) {
         "SELECT id FROM flota_vehiculos WHERE empresa_id = ? AND placa = ? LIMIT 1",
         [guard.empresa.id, f.placa],
       );
+      const kmActual = f.kmActual ?? 0;
+      const kmIntervalo = f.kmIntervalo && f.kmIntervalo > 0 ? f.kmIntervalo : 10000;
+      const kmUltimo = f.kmUltimoServicio ?? 0;
+      const filtros = parsearFiltrosTexto(f.filtros);
+
       if (existente[0]) {
-        // Marca y modelo van en columnas separadas (Excel: Marca | Modelo/año)
+        const vid = Number(existente[0].id);
         await execute(
           `UPDATE flota_vehiculos SET
             marca = ?,
@@ -74,6 +83,15 @@ export async function POST(req: Request, ctx: Ctx) {
             condicion_propiedad = COALESCE(?, condicion_propiedad),
             seguros = COALESCE(?, seguros),
             notas = COALESCE(?, notas),
+            km_actual = COALESCE(?, km_actual),
+            km_intervalo_servicio = COALESCE(?, km_intervalo_servicio),
+            km_ultimo_servicio = COALESCE(?, km_ultimo_servicio),
+            rin_llanta = COALESCE(?, rin_llanta),
+            medida_llanta = COALESCE(?, medida_llanta),
+            tipo_aceite = COALESCE(?, tipo_aceite),
+            tipo_combustible = COALESCE(?, tipo_combustible),
+            chasis = COALESCE(?, chasis),
+            capacidad = COALESCE(?, capacidad),
             activo = ?,
             estado = ?
            WHERE id = ? AND empresa_id = ?`,
@@ -88,20 +106,34 @@ export async function POST(req: Request, ctx: Ctx) {
             f.condicionPropiedad,
             f.seguros,
             f.notas,
+            f.kmActual,
+            f.kmIntervalo && f.kmIntervalo > 0 ? f.kmIntervalo : null,
+            f.kmUltimoServicio,
+            f.rinLlanta,
+            f.medidaLlanta,
+            f.tipoAceite,
+            f.tipoCombustible,
+            f.chasis,
+            f.capacidad,
             f.activo ? 1 : 0,
             f.activo ? "Activo" : "Inactivo",
-            Number(existente[0].id),
+            vid,
             guard.empresa.id,
           ],
         );
+        if (filtros.length) {
+          await guardarFiltrosVehiculo(guard.empresa.id, vid, filtros);
+        }
         actualizados += 1;
       } else {
-        await execute(
+        const ins = await execute(
           `INSERT INTO flota_vehiculos
             (empresa_id, placa, marca, modelo, descripcion, color, credito,
              empresa_activo, nit, condicion_propiedad, seguros, notas,
-             km_actual, km_intervalo_servicio, km_ultimo_servicio, activo, estado)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 10000, 0, ?, ?)`,
+             km_actual, km_intervalo_servicio, km_ultimo_servicio,
+             rin_llanta, medida_llanta, tipo_aceite, tipo_combustible,
+             chasis, capacidad, activo, estado)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             guard.empresa.id,
             f.placa,
@@ -115,10 +147,26 @@ export async function POST(req: Request, ctx: Ctx) {
             f.condicionPropiedad,
             f.seguros,
             f.notas,
+            kmActual,
+            kmIntervalo,
+            kmUltimo,
+            f.rinLlanta,
+            f.medidaLlanta,
+            f.tipoAceite,
+            f.tipoCombustible,
+            f.chasis,
+            f.capacidad,
             f.activo ? 1 : 0,
             f.activo ? "Activo" : "Inactivo",
           ],
         );
+        if (filtros.length && ins.insertId) {
+          await guardarFiltrosVehiculo(
+            guard.empresa.id,
+            Number(ins.insertId),
+            filtros,
+          );
+        }
         creados += 1;
       }
     } catch (err) {
