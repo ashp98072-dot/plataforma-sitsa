@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type ReactNode,
 } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
@@ -301,13 +302,62 @@ function formToBody(form: FormState) {
   };
 }
 
-function SectionHeader({ children }: { children: React.ReactNode }) {
+function FormSection({
+  title,
+  open,
+  onToggle,
+  children,
+  hint,
+}: {
+  title: string;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+  hint?: string;
+}) {
   return (
-    <p className="sm:col-span-2 lg:col-span-3 mt-2 border-b border-[var(--border)] pb-1 text-sm font-semibold text-[var(--text)]">
-      {children}
-    </p>
+    <section className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)]">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-[var(--nav-hover)]"
+      >
+        <span
+          className={[
+            "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-[var(--border)] text-xs text-[var(--muted)]",
+            open ? "bg-[var(--accent)] text-white border-transparent" : "",
+          ].join(" ")}
+          aria-hidden
+        >
+          {open ? "−" : "+"}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-semibold text-[var(--text)]">
+            {title}
+          </span>
+          {hint ? (
+            <span className="block text-[11px] text-[var(--muted)]">{hint}</span>
+          ) : null}
+        </span>
+      </button>
+      {open ? (
+        <div className="border-t border-[var(--border)] px-4 py-4">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {children}
+          </div>
+        </div>
+      ) : null}
+    </section>
   );
 }
+
+type SeccionFicha =
+  | "identidad"
+  | "laboral"
+  | "salarios"
+  | "contacto"
+  | "licencia"
+  | "otros";
 
 export default function EmpleadosPage() {
   const slug = String(useParams().slug);
@@ -323,6 +373,18 @@ export default function EmpleadosPage() {
   const [importando, setImportando] = useState(false);
   const [docsEmp, setDocsEmp] = useState<Emp | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [secciones, setSecciones] = useState<Record<SeccionFicha, boolean>>({
+    identidad: true,
+    laboral: true,
+    salarios: false,
+    contacto: false,
+    licencia: false,
+    otros: false,
+  });
+
+  function toggleSeccion(id: SeccionFicha) {
+    setSecciones((prev) => ({ ...prev, [id]: !prev[id] }));
+  }
 
   const mostrarDpi = empleados.some((e) => e.dpi);
 
@@ -380,6 +442,14 @@ export default function EmpleadosPage() {
   async function empezarEdicion(e: Emp) {
     setEditId(e.id);
     setHistorial([]);
+    setSecciones({
+      identidad: true,
+      laboral: true,
+      salarios: true,
+      contacto: true,
+      licencia: true,
+      otros: true,
+    });
     try {
       const res = await fetch(
         `/api/empresas/${slug}/empleados/${e.id}?historial=1`,
@@ -456,15 +526,22 @@ export default function EmpleadosPage() {
         </p>
       </div>
 
-      <form
-        onSubmit={onSubmit}
-        className="grid gap-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 sm:grid-cols-2 lg:grid-cols-3"
-      >
-        <p className="sm:col-span-2 lg:col-span-3 text-sm font-medium">
-          {editId ? `Editando #${editId}` : "Nuevo empleado"}
-        </p>
+      <form onSubmit={onSubmit} className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm font-medium">
+            {editId ? `Editando #${editId}` : "Nuevo empleado"}
+          </p>
+          <p className="text-[11px] text-[var(--muted)]">
+            Abre solo las secciones que necesites
+          </p>
+        </div>
 
-        <SectionHeader>Identidad</SectionHeader>
+        <FormSection
+          title="1. Identidad"
+          hint="Nombres, DPI, NIT, IGSS…"
+          open={secciones.identidad}
+          onToggle={() => toggleSeccion("identidad")}
+        >
         <label className="text-sm text-[var(--muted)]">
           Primer nombre
           <input
@@ -591,7 +668,14 @@ export default function EmpleadosPage() {
           />
         </label>
 
-        <SectionHeader>Laboral</SectionHeader>
+        </FormSection>
+
+        <FormSection
+          title="2. Laboral"
+          hint="Código, puesto, contrato, horarios"
+          open={secciones.laboral}
+          onToggle={() => toggleSeccion("laboral")}
+        >
         <label className="text-sm text-[var(--muted)]">
           Código
           <input
@@ -751,7 +835,14 @@ export default function EmpleadosPage() {
           </select>
         </label>
 
-        <SectionHeader>Salarios</SectionHeader>
+        </FormSection>
+
+        <FormSection
+          title="3. Salarios"
+          hint="Sueldo base y bonos"
+          open={secciones.salarios}
+          onToggle={() => toggleSeccion("salarios")}
+        >
         <label className="text-sm text-[var(--muted)]">
           Sueldo base
           <input
@@ -786,7 +877,14 @@ export default function EmpleadosPage() {
           />
         </label>
 
-        <SectionHeader>Contacto</SectionHeader>
+        </FormSection>
+
+        <FormSection
+          title="4. Contacto"
+          hint="Teléfono, email, dirección"
+          open={secciones.contacto}
+          onToggle={() => toggleSeccion("contacto")}
+        >
         <label className="text-sm text-[var(--muted)]">
           Teléfono
           <input
@@ -823,7 +921,14 @@ export default function EmpleadosPage() {
           />
         </label>
 
-        <SectionHeader>Licencia</SectionHeader>
+        </FormSection>
+
+        <FormSection
+          title="5. Licencia"
+          hint="Número, tipo y vencimiento"
+          open={secciones.licencia}
+          onToggle={() => toggleSeccion("licencia")}
+        >
         <label className="text-sm text-[var(--muted)]">
           Número licencia
           <input
@@ -858,7 +963,14 @@ export default function EmpleadosPage() {
           />
         </label>
 
-        <SectionHeader>Otros</SectionHeader>
+        </FormSection>
+
+        <FormSection
+          title="6. Otros"
+          hint="Demografía, banco y observaciones"
+          open={secciones.otros}
+          onToggle={() => toggleSeccion("otros")}
+        >
         <label className="text-sm text-[var(--muted)]">
           País origen
           <input
@@ -933,8 +1045,10 @@ export default function EmpleadosPage() {
           />
         </label>
 
+        </FormSection>
+
         {editId && historial.length > 0 ? (
-          <div className="sm:col-span-2 lg:col-span-3 rounded-lg border border-[var(--border)] bg-[var(--input)]/30 p-3">
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
             <p className="text-sm font-medium">Historial de cambios</p>
             <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto text-xs text-[var(--muted)]">
               {historial.map((h) => (
@@ -950,7 +1064,7 @@ export default function EmpleadosPage() {
           </div>
         ) : null}
 
-        <div className="flex flex-wrap items-end gap-2 sm:col-span-2 lg:col-span-3">
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3">
           <button
             type="submit"
             className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm text-white"
@@ -971,7 +1085,7 @@ export default function EmpleadosPage() {
               </button>
               <button
                 type="button"
-                className="rounded-lg bg-[#334155] px-4 py-2 text-sm"
+                className="rounded-lg bg-[#334155] px-4 py-2 text-sm text-white"
                 onClick={cancelarEdicion}
               >
                 Cancelar
