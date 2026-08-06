@@ -230,6 +230,47 @@ export async function sincronizarPeriodosVacaciones(
         );
       }
     }
+
+    /**
+     * Tope 30 días (2 periodos × 15): al acumular el periodo en curso,
+     * el excedente se descuenta FIFO del periodo completo más viejo.
+     * Ej.: 15 + 15 + 2.49 → 12.51 + 15 + 2.49 = 30.
+     */
+    const completadosVigentes = completados
+      .filter(
+        (p, idx) =>
+          idx < MAX_PERIODOS_VIGENTES && String(p.estado) !== "Vencido",
+      )
+      .sort((a, b) => Number(a.anio_laboral) - Number(b.anio_laboral));
+
+    const capTotal = completadosVigentes.reduce(
+      (s, p) => s + Number(p.dias_otorgados),
+      0,
+    );
+    const enCurso = periodos.find(
+      (p) => Number(p.anio_laboral) === periodoEnCursoN,
+    );
+    const dispEnCurso = enCurso ? Number(enCurso.dias_disponibles) : 0;
+    const totalActual =
+      completadosVigentes.reduce((s, p) => s + Number(p.dias_disponibles), 0) +
+      dispEnCurso;
+    let excedente = Math.round((totalActual - capTotal) * 100) / 100;
+
+    if (excedente > 0) {
+      for (const p of completadosVigentes) {
+        if (excedente <= 0) break;
+        const disp = Number(p.dias_disponibles);
+        const recorte = Math.min(disp, excedente);
+        if (recorte <= 0) continue;
+        const nuevoDisp = Math.round((disp - recorte) * 100) / 100;
+        await conn.execute(
+          "UPDATE saldos_vacaciones SET dias_disponibles = ? WHERE id = ?",
+          [nuevoDisp, Number(p.id)],
+        );
+        p.dias_disponibles = nuevoDisp;
+        excedente = Math.round((excedente - recorte) * 100) / 100;
+      }
+    }
   } finally {
     conn.release();
   }

@@ -218,8 +218,10 @@ export default function VacacionesPage() {
       {usaSaldo && saldo != null ? (
         <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 text-sm">
           <p className="text-xs text-[var(--muted)]">
-            El saldo se calcula desde la fecha de contratación / alta del
-            empleado (no desde la entrada laboral).
+            El saldo se calcula desde la fecha de contratación / alta (no la
+            entrada laboral). Máximo 2 periodos vigentes (30 días): al acumular
+            el periodo actual, el excedente se descuenta del periodo más viejo
+            (FIFO).
           </p>
           <p className="mt-1">
             Saldo disponible:{" "}
