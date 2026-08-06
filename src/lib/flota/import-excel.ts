@@ -89,8 +89,16 @@ export async function generarPlantillaFlota(): Promise<Buffer> {
   help.addRow(["placa", "Obligatoria. Única por empresa."]);
   help.addRow(["km_intervalo", "Km entre servicios (default 10000)."]);
   help.addRow(["filtros", "Separar con |  →  Tipo:código | Tipo:código"]);
+  help.addRow([
+    "Base coordinador",
+    "También acepta filas hijas: Tipo de Servicios + Codigo bajo la misma placa.",
+  ]);
   help.addRow(["activo", "1 / Activo  o  0 / Inactivo"]);
   help.addRow(["tipo_combustible", "diesel / gasolina / gas / eléctrico"]);
+  help.addRow([
+    "Columnas legacy",
+    "Unidades, Descripcion, Marca, Modelo, Color, Status SAT, Empresa, Tipo de Aceite, Tamaño de Llanta, Tipo de Servicios, Codigo",
+  ]);
   ws.columns = HEADERS_FLOTA_PLANTILLA.map(() => ({ width: 16 }));
   help.columns = [{ width: 20 }, { width: 50 }];
   return Buffer.from(await wb.xlsx.writeBuffer());
@@ -265,27 +273,63 @@ export async function parsearExcelFlota(
     colExact("km_ultimo_servicio", "km_ultimo") ||
     col("km_ultimo_servicio", "ultimo servicio");
   const cRin = colExact("rin_llanta", "rin") || col("rin_llanta", "rin");
+  // Base coordinador: "Tamaño de Llanta" / plantilla: medida_llanta
   const cMed =
-    colExact("medida_llanta", "medida") || col("medida_llanta", "llanta");
+    colExact("tamaño de llanta", "tamano de llanta", "medida_llanta", "medida") ||
+    col("tamaño de llanta", "tamano de llanta", "medida_llanta", "medida llanta");
   const cAceite =
-    colExact("tipo_aceite", "aceite") || col("tipo_aceite", "aceite");
+    colExact("tipo de aceite", "tipo_aceite") ||
+    col("tipo de aceite", "tipo_aceite", "aceite");
   const cComb =
     colExact("tipo_combustible", "combustible") ||
     col("tipo_combustible", "combustible");
   const cChasis = colExact("chasis") || col("chasis");
   const cCap = colExact("capacidad") || col("capacidad");
   const cFiltros = colExact("filtros") || col("filtros");
+  // Base coordinador: filas hijas con Tipo de Servicios + Codigo
+  const cTipoSvc =
+    colExact("tipo de servicios", "tipo de servicio", "tipo servicio") ||
+    col("tipo de servicios", "tipo de servicio");
+  const cCodigoFiltro =
+    colExact("codigo", "código") || col("codigo", "código");
 
   if (!cPlaca) return [];
 
   const out: FilaFlotaExcel[] = [];
   const seen = new Set<string>();
+  /** Última unidad (para filas de filtros sin placa). */
+  let ultimo: FilaFlotaExcel | null = null;
+  const filtrosDe = new Map<string, string[]>();
+
+  const pushFiltro = (placa: string, tipo: string, codigo: string) => {
+    const t = tipo.trim();
+    const c = codigo.trim();
+    if (!t && !c) return;
+    const list = filtrosDe.get(placa) ?? [];
+    list.push(`${t || "Filtro"}:${c || "—"}`);
+    filtrosDe.set(placa, list);
+  };
 
   for (let r = headerRow + 1; r <= ws.rowCount; r++) {
     const row = ws.getRow(r);
     const placa = cellStr(row.getCell(cPlaca).value).toUpperCase();
-    if (!placa || placa.length < 3) continue;
-    if (seen.has(placa)) continue;
+    const tipoSvc = cTipoSvc ? cellStr(row.getCell(cTipoSvc).value) : "";
+    const codigoFiltro = cCodigoFiltro
+      ? cellStr(row.getCell(cCodigoFiltro).value)
+      : "";
+
+    // Fila hija: sin placa, solo filtro → pertenece a la unidad anterior
+    if (!placa || placa.length < 3) {
+      if (ultimo && (tipoSvc || codigoFiltro)) {
+        pushFiltro(ultimo.placa, tipoSvc, codigoFiltro);
+      }
+      continue;
+    }
+    if (seen.has(placa)) {
+      // Misma placa repetida: solo acumular filtros extras
+      if (tipoSvc || codigoFiltro) pushFiltro(placa, tipoSvc, codigoFiltro);
+      continue;
+    }
     seen.add(placa);
 
     const status = cStatus ? cellStr(row.getCell(cStatus).value) : "Activo";
@@ -296,7 +340,11 @@ export async function parsearExcelFlota(
       cModelo ? cellStr(row.getCell(cModelo).value) || null : null,
     );
 
-    out.push({
+    const filtrosCelda = cFiltros
+      ? cellStr(row.getCell(cFiltros).value) || null
+      : null;
+
+    const fila: FilaFlotaExcel = {
       placa,
       descripcion: cDesc ? cellStr(row.getCell(cDesc).value) || null : null,
       marca,
@@ -323,8 +371,33 @@ export async function parsearExcelFlota(
         : null,
       chasis: cChasis ? cellStr(row.getCell(cChasis).value) || null : null,
       capacidad: cCap ? cellStr(row.getCell(cCap).value) || null : null,
-      filtros: cFiltros ? cellStr(row.getCell(cFiltros).value) || null : null,
-    });
+      filtros: filtrosCelda,
+    };
+
+    if (tipoSvc || codigoFiltro) {
+      pushFiltro(placa, tipoSvc, codigoFiltro);
+    }
+    // Si la columna filtros ya trae texto, también lo partimos después
+    if (filtrosCelda) {
+      for (const part of filtrosCelda.split(/[|;]/)) {
+        const p = part.trim();
+        if (!p) continue;
+        const m = p.match(/^([^:]+):\s*(.+)$/);
+        if (m) pushFiltro(placa, m[1], m[2]);
+        else pushFiltro(placa, "Filtro", p);
+      }
+    }
+
+    out.push(fila);
+    ultimo = fila;
+  }
+
+  for (const f of out) {
+    const list = filtrosDe.get(f.placa);
+    if (list?.length) {
+      // únicos
+      f.filtros = [...new Set(list)].join(" | ");
+    }
   }
 
   return out;
