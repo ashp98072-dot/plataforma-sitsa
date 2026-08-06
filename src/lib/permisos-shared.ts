@@ -39,6 +39,7 @@ export const RRHH_SUBMODULO_LABEL: Record<RrhhSubmodulo, string> = {
 export const FLOTA_SUBMODULOS = [
   "flota_vehiculos",
   "flota_servicios",
+  "flota_compras",
   "flota_lecturas",
   "flota_reportes",
   "flota_piloto",
@@ -49,6 +50,7 @@ export type FlotaSubmodulo = (typeof FLOTA_SUBMODULOS)[number];
 export const FLOTA_SUBMODULO_LABEL: Record<FlotaSubmodulo, string> = {
   flota_vehiculos: "Vehículos",
   flota_servicios: "Servicios / Taller",
+  flota_compras: "Compras / Facturas",
   flota_lecturas: "Lecturas km",
   flota_reportes: "Reportes flota",
   flota_piloto: "Registrar viaje (piloto)",
@@ -141,6 +143,7 @@ export function labelPermiso(modulo: string): string {
 /** Etiqueta amigable del rol en formularios. */
 export function labelRol(rol: string): string {
   if (rol === "CoordinadorPredios") return "Predios";
+  if (rol === "CoordinadorCompras") return "Compras";
   if (rol === "Piloto") return "Piloto";
   if (rol === "Marcaje") return "Marcaje (kiosco)";
   return rol;
@@ -208,6 +211,7 @@ export function grupoPrincipalDelRol(rol: RolGlobal): GrupoPermisosId {
     case "Operaciones":
       return "operaciones";
     case "CoordinadorPredios":
+    case "CoordinadorCompras":
     case "Piloto":
       return "flota";
     default:
@@ -231,6 +235,8 @@ export function modulosPropiosDelRol(rol: RolGlobal): string[] {
       return ["tms", ...FLOTA_SUBMODULOS, "reciclaje", "tarimas"];
     case "CoordinadorPredios":
       return [...FLOTA_SUBMODULOS, "tms"];
+    case "CoordinadorCompras":
+      return ["flota_compras", "flota_servicios", "flota_vehiculos"];
     case "Piloto":
       return ["flota_piloto", "flota_lecturas"];
     case "Visualizador":
@@ -289,6 +295,13 @@ export function permisosDefaultPorRol(rol: RolGlobal): PermisoModulo[] {
       ...propios.map((m) =>
         esFlotaSubmodulo(m) ? permisoFull(m) : permisoSoloVer(m),
       ),
+      ...cruzados.map((m) => permisoVacio(m)),
+    ];
+  }
+
+  if (rol === "CoordinadorCompras") {
+    return [
+      ...propios.map((m) => permisoFull(m)),
       ...cruzados.map((m) => permisoVacio(m)),
     ];
   }
@@ -432,6 +445,7 @@ export const FLOTA_NAV: {
 }[] = [
   { sub: "flota_vehiculos", label: "Vehículos", path: "vehiculos" },
   { sub: "flota_servicios", label: "Servicios", path: "servicios" },
+  { sub: "flota_compras", label: "Compras", path: "compras" },
   { sub: "flota_lecturas", label: "Lecturas", path: "lecturas" },
   { sub: "flota_reportes", label: "Reportes flota", path: "reportes" },
   { sub: "flota_piloto", label: "Registrar viaje", path: "piloto" },

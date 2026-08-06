@@ -56,6 +56,8 @@ export async function POST(request: Request) {
     redirect = `/e/${empresa.slug}/rrhh/marcajes`;
   } else if (rol === "Piloto") {
     redirect = `/e/${empresa.slug}/flota`;
+  } else if (rol === "CoordinadorCompras") {
+    redirect = `/e/${empresa.slug}/flota?tab=compras`;
   } else if (rol === "RRHH" || rol === "Admin") {
     redirect = `/e/${empresa.slug}/dashboard-rrhh`;
   } else if (rol === "Operaciones" || rol === "CoordinadorPredios") {

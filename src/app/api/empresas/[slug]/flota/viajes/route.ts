@@ -513,7 +513,7 @@ export async function POST(req: Request, ctx: Ctx) {
       }
     }
 
-    if (esRutaConParadas) {
+    if (esRutaConParadas && guard.session.rol === "Piloto") {
       const tablero = await query<RowDataPacket[]>(
         `SELECT id FROM flota_viaje_evidencias
          WHERE viaje_id = ? AND tipo = 'tablero_llegada' LIMIT 1`,

@@ -32,7 +32,10 @@ function parseRepuestos(raw: unknown): string[] {
 
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantFlota(slug, "flota_servicios", "ver");
+  let guard = await requireTenantFlota(slug, "flota_servicios", "ver");
+  if (guard.error) {
+    guard = await requireTenantFlota(slug, "flota_compras", "ver");
+  }
   if (guard.error) return guard.error;
 
   try {
@@ -116,7 +119,10 @@ function diasEntre(a: string | null, b: string | null): number | null {
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantFlota(slug, "flota_servicios", "crear");
+  let guard = await requireTenantFlota(slug, "flota_servicios", "crear");
+  if (guard.error) {
+    guard = await requireTenantFlota(slug, "flota_compras", "crear");
+  }
   if (guard.error) return guard.error;
 
   try {
@@ -195,24 +201,29 @@ export async function POST(req: Request, ctx: Ctx) {
     );
   }
 
-  // Normalizar tipo: servicio_mayor reinicia contador; reparacion no
+  // Normalizar tipo: servicio_mayor reinicia contador; reparacion no; compra = factura sin taller
   const tipoRaw = d.tipo.trim().toLowerCase();
+  const esCompra = tipoRaw === "compra" || tipoRaw === "factura";
   const esMayor =
     tipoRaw === "servicio_mayor" ||
     tipoRaw === "mantenimiento" ||
     tipoRaw === "mayor";
   const esReparacion =
     tipoRaw === "reparacion" || tipoRaw === "reparación";
-  if (!esMayor && !esReparacion) {
+  if (!esMayor && !esReparacion && !esCompra) {
     return NextResponse.json(
       {
         error:
-          "Tipo inválido. Usa Servicio mayor (reinicia contador) o Reparación (mantiene kilometraje).",
+          "Tipo inválido. Usa Servicio mayor, Reparación o Compra (factura).",
       },
       { status: 400 },
     );
   }
-  const tipo = esMayor ? "servicio_mayor" : "reparacion";
+  const tipo = esCompra
+    ? "compra"
+    : esMayor
+      ? "servicio_mayor"
+      : "reparacion";
 
   if (esMayor && (d.kmServicio == null || d.kmServicio < 0)) {
     return NextResponse.json(
@@ -230,15 +241,18 @@ export async function POST(req: Request, ctx: Ctx) {
   const desc = reps.length ? reps.join(" | ") : (d.descripcion?.trim() || null);
   const obs = d.observaciones?.trim() || null;
   const hoy = new Date().toISOString().slice(0, 10);
-  const fechaEntrada =
-    (d.fechaEntradaTaller?.slice(0, 10) ||
-      (veh[0].fecha_entrada_taller
-        ? String(veh[0].fecha_entrada_taller).slice(0, 10)
-        : null) ||
-      null) as string | null;
-  const fechaSalida = d.sacarDeServicio
-    ? (d.fechaSalidaTaller?.slice(0, 10) || d.fechaServicio.slice(0, 10) || hoy)
-    : (d.fechaSalidaTaller?.slice(0, 10) || null);
+  const fechaEntrada = esCompra
+    ? null
+    : ((d.fechaEntradaTaller?.slice(0, 10) ||
+        (veh[0].fecha_entrada_taller
+          ? String(veh[0].fecha_entrada_taller).slice(0, 10)
+          : null) ||
+        null) as string | null);
+  const fechaSalida = esCompra
+    ? null
+    : d.sacarDeServicio
+      ? (d.fechaSalidaTaller?.slice(0, 10) || d.fechaServicio.slice(0, 10) || hoy)
+      : (d.fechaSalidaTaller?.slice(0, 10) || null);
   if (fechaEntrada && fechaSalida && fechaSalida < fechaEntrada) {
     return NextResponse.json(
       { error: "La fecha de salida no puede ser anterior a la de entrada al taller." },
@@ -246,7 +260,9 @@ export async function POST(req: Request, ctx: Ctx) {
     );
   }
   const dias = diasEntre(fechaEntrada, fechaSalida);
-  const fechaServicio = fechaSalida || d.fechaServicio.slice(0, 10) || hoy;
+  const fechaServicio = esCompra
+    ? d.fechaServicio.slice(0, 10) || hoy
+    : fechaSalida || d.fechaServicio.slice(0, 10) || hoy;
 
   let result;
   try {
@@ -338,7 +354,7 @@ export async function POST(req: Request, ctx: Ctx) {
         ],
       ).catch(() => undefined);
     }
-  } else if (d.sacarDeServicio !== false) {
+  } else if (!esCompra && d.sacarDeServicio !== false) {
     // Reparación: sale de taller sin reiniciar contador
     await execute(
       `UPDATE flota_vehiculos SET
@@ -350,7 +366,7 @@ export async function POST(req: Request, ctx: Ctx) {
        WHERE id = ? AND empresa_id = ?`,
       [d.kmServicio ?? null, d.vehiculoId, guard.empresa.id],
     ).catch(() => undefined);
-  } else if (fechaEntrada) {
+  } else if (!esCompra && fechaEntrada) {
     await execute(
       `UPDATE flota_vehiculos SET
         en_taller = 1,

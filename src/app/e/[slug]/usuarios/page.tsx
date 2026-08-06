@@ -42,6 +42,7 @@ const ROLES = [
   "Contabilidad",
   "Operaciones",
   "CoordinadorPredios",
+  "CoordinadorCompras",
   "Piloto",
   "Visualizador",
 ] as const;

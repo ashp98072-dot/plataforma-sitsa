@@ -220,6 +220,7 @@ type Tab =
   | "dashboard"
   | "vehiculos"
   | "servicios"
+  | "compras"
   | "lecturas"
   | "reportes"
   | "piloto";
@@ -312,6 +313,12 @@ function FlotaInner() {
   const [fechaEntradaTaller, setFechaEntradaTaller] = useState("");
   const [fechaSalidaTaller, setFechaSalidaTaller] = useState(() => hoyLocal());
   const [editServicioId, setEditServicioId] = useState<number | null>(null);
+  const [compraVehiculoId, setCompraVehiculoId] = useState(0);
+  const [compraServicioId, setCompraServicioId] = useState(0);
+  const [compraDesc, setCompraDesc] = useState("");
+  const [compraCosto, setCompraCosto] = useState(0);
+  const [compraFecha, setCompraFecha] = useState(() => hoyLocal());
+  const [compraFiles, setCompraFiles] = useState<FileList | null>(null);
   const [accesoEmpresaIds, setAccesoEmpresaIds] = useState<number[]>([]);
   const [empresasFlota, setEmpresasFlota] = useState<EmpresaOpt[]>([]);
   const [empresaActualId, setEmpresaActualId] = useState(0);
@@ -1047,7 +1054,7 @@ function FlotaInner() {
       );
       return;
     }
-    if (!fotoTableroLectura) {
+    if (!fotoTableroLectura && rol === "Piloto") {
       setErr("Toma o adjunta la foto del tablero (km) para la lectura.");
       return;
     }
@@ -1095,8 +1102,10 @@ function FlotaInner() {
     }
 
     const lecId = Number(data.id);
+    if (fotoTableroLectura || fotosExtraLectura.length) {
     setSubiendoFotos(true);
     try {
+      if (fotoTableroLectura) {
       const tablero = await marcarVarias(
         [fotoTableroLectura],
         `LECTURA · Tablero km ${kmLectura}${veh ? ` · ${veh.placa}` : ""}`,
@@ -1117,6 +1126,7 @@ function FlotaInner() {
       if (!up.ok) {
         const ud = await up.json();
         throw new Error(ud.error ?? "Error al subir foto del tablero");
+      }
       }
       if (fotosExtraLectura.length) {
         const extras = await marcarVarias(
@@ -1150,6 +1160,9 @@ function FlotaInner() {
       );
     } finally {
       setSubiendoFotos(false);
+    }
+    } else {
+      setMsg(data.mensaje);
     }
 
     setKmLectura(0);
@@ -1354,7 +1367,7 @@ function FlotaInner() {
       setErr("Hay varios planes TMS. Selecciona el plan correcto.");
       return;
     }
-    if (!fotoTableroSalida) {
+    if (!fotoTableroSalida && rol === "Piloto") {
       setErr("Toma o adjunta la foto del tablero (km) para registrar la salida.");
       return;
     }
@@ -1411,15 +1424,18 @@ function FlotaInner() {
     }
 
     const nuevoId = Number(data.id);
+    if (fotoTableroSalida || fotosEvidenciaSalida.length) {
     setSubiendoFotos(true);
     try {
       const geo = await obtenerGps();
+      if (fotoTableroSalida) {
       const tablero = await marcarVarias(
         [fotoTableroSalida],
         `SALIDA · Tablero km ${kmLectura}${placa ? ` · ${placa}` : ""}`,
         geo,
       );
       await subirEvidenciasViaje(nuevoId, "tablero_salida", tablero, geo);
+      }
       if (fotosEvidenciaSalida.length) {
         const ev = await marcarVarias(
           fotosEvidenciaSalida,
@@ -1441,6 +1457,9 @@ function FlotaInner() {
       );
     } finally {
       setSubiendoFotos(false);
+    }
+    } else {
+      setMsg(data.mensaje);
     }
 
     setKmLectura(0);
@@ -1616,6 +1635,70 @@ function FlotaInner() {
     setPanelAdjuntos({ servicioId, placa, items: list });
   }
 
+  async function guardarCompraFactura() {
+    setErr("");
+    setMsg("");
+    const vid = compraVehiculoId || vehiculoId;
+    if (!vid) {
+      setErr("Selecciona el vehículo al que corresponde la compra / factura.");
+      return;
+    }
+    if (!compraFiles?.length && !compraServicioId) {
+      setErr("Adjunta al menos una factura (PDF o imagen).");
+      return;
+    }
+
+    // Adjuntar a servicio abierto en taller
+    if (compraServicioId) {
+      if (!compraFiles?.length) {
+        setErr("Selecciona el archivo de la factura.");
+        return;
+      }
+      const fd = new FormData();
+      Array.from(compraFiles).forEach((f) => fd.append("files", f));
+      const res = await fetch(
+        `/api/empresas/${slug}/flota/servicios/${compraServicioId}/adjuntos`,
+        { method: "POST", body: fd },
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        setErr(data.error ?? "No se pudo adjuntar la factura");
+        return;
+      }
+      setMsg(data.mensaje);
+      setCompraFiles(null);
+      setCompraServicioId(0);
+      await cargar();
+      return;
+    }
+
+    // Nueva compra enlazada al vehículo
+    const fd = new FormData();
+    fd.set("vehiculoId", String(vid));
+    fd.set("tipo", "compra");
+    fd.set("fechaServicio", compraFecha || hoyLocal());
+    fd.set("costo", String(compraCosto || 0));
+    fd.set("descripcion", compraDesc.trim() || "Compra / factura");
+    fd.set("sacarDeServicio", "1");
+    if (compraFiles) {
+      Array.from(compraFiles).forEach((f, i) => fd.set(`file${i}`, f));
+    }
+    const res = await fetch(`/api/empresas/${slug}/flota/servicios`, {
+      method: "POST",
+      body: fd,
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setErr(data.error ?? "No se pudo registrar la compra");
+      return;
+    }
+    setMsg(data.mensaje ?? "Compra / factura registrada y enlazada al vehículo.");
+    setCompraDesc("");
+    setCompraCosto(0);
+    setCompraFiles(null);
+    await cargar();
+  }
+
   async function abrirAdjunto(url: string, nombre: string) {
     try {
       const res = await fetch(url);
@@ -1700,13 +1783,13 @@ function FlotaInner() {
       return;
     }
     if (esRutaConParadas) {
-      if (!fotoTableroLlegada) {
+      if (!fotoTableroLlegada && rol === "Piloto") {
         setErr(
           "Toma la foto del tablero con el km final para cerrar la ruta.",
         );
         return;
       }
-    } else if (!fotosLlegada.length) {
+    } else if (!fotosLlegada.length && rol === "Piloto") {
       setErr(
         "Toma al menos una foto de llegada (se marcará fecha, hora y ubicación).",
       );
@@ -2520,8 +2603,10 @@ function FlotaInner() {
             <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
               <p className="text-xs text-[var(--muted)]">
                 No se permite unidad en taller ni el mismo piloto con viaje
-                abierto. El km debe ser ≥ al actual. Foto del tablero
-                obligatoria (marca fecha/hora/ubicación).
+                abierto. El km debe ser ≥ al actual.
+                {rol === "Piloto"
+                  ? " Foto del tablero obligatoria (marca fecha/hora/ubicación)."
+                  : " Registro manual: la foto del tablero es opcional (obligatoria solo para piloto)."}
               </p>
               <div className="flex flex-wrap gap-2">
                 <select
@@ -2564,7 +2649,8 @@ function FlotaInner() {
               </div>
               <div className="grid gap-2 sm:grid-cols-2">
                 <div className="text-xs text-[var(--muted)]">
-                  Foto del tablero (km) *
+                  Foto del tablero (km)
+                  {rol === "Piloto" ? " *" : " (opc.)"}
                   <div className="mt-1">
                     <TomarFotoButton
                       label="Tomar foto tablero"
@@ -2572,7 +2658,9 @@ function FlotaInner() {
                       hint={
                         fotoTableroLectura
                           ? `Listo: ${fotoTableroLectura.name}`
-                          : "Solo cámara."
+                          : rol === "Piloto"
+                            ? "Solo cámara."
+                            : "Opcional en registro manual."
                       }
                       onCaptured={async (file) => {
                         const n = await normalizarFotoCamara(file, "tablero");
@@ -3075,6 +3163,177 @@ function FlotaInner() {
                     </td>
                   </tr>
                 ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
+
+      {tab === "compras" &&
+      (can("flota_compras") || can("flota_servicios")) ? (
+        <div className="space-y-4">
+          {SearchBar}
+          <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+            <p className="text-sm font-medium">Compras / facturas</p>
+            <p className="text-xs text-[var(--muted)]">
+              Enlaza la factura al vehículo en taller (servicio abierto) o
+              registra una compra nueva para la unidad. PDF o imagen.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <select
+                className={input}
+                value={compraVehiculoId || vehiculoId}
+                onChange={(e) => {
+                  const id = Number(e.target.value);
+                  setCompraVehiculoId(id);
+                  setVehiculoId(id);
+                  setCompraServicioId(0);
+                }}
+              >
+                <option value={0}>— Vehículo —</option>
+                {activos.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.placa}
+                    {v.en_taller ? " · EN TALLER / SERVICIO" : ""}
+                  </option>
+                ))}
+              </select>
+              <select
+                className={input}
+                value={compraServicioId}
+                onChange={(e) => setCompraServicioId(Number(e.target.value))}
+              >
+                <option value={0}>
+                  Nueva compra (o elige servicio abierto)
+                </option>
+                {servicios
+                  .filter(
+                    (s) =>
+                      Number(s.vehiculo_id) ===
+                        (compraVehiculoId || vehiculoId) &&
+                      !s.fecha_salida_taller,
+                  )
+                  .map((s) => (
+                    <option key={s.id} value={s.id}>
+                      #{s.id} · {s.tipo} ·{" "}
+                      {String(s.fecha_servicio).slice(0, 10)} · en servicio
+                    </option>
+                  ))}
+              </select>
+            </div>
+            {!compraServicioId ? (
+              <div className="flex flex-wrap gap-2">
+                <input
+                  type="date"
+                  className={input}
+                  value={compraFecha}
+                  onChange={(e) => setCompraFecha(e.target.value)}
+                />
+                <input
+                  type="number"
+                  className={`${input} w-28`}
+                  placeholder="Costo Q"
+                  value={compraCosto || ""}
+                  onChange={(e) => setCompraCosto(Number(e.target.value))}
+                  min={0}
+                  step="0.01"
+                />
+                <input
+                  className={`${input} min-w-[14rem] flex-1`}
+                  placeholder="Descripción / proveedor / # factura"
+                  value={compraDesc}
+                  onChange={(e) => setCompraDesc(e.target.value)}
+                />
+              </div>
+            ) : (
+              <p className="text-xs text-emerald-600">
+                Se adjuntará al servicio #{compraServicioId} del vehículo
+                seleccionado (en taller).
+              </p>
+            )}
+            <label className="block text-xs text-[var(--muted)]">
+              Factura (PDF / imagen) *
+              <input
+                type="file"
+                accept="image/*,application/pdf"
+                multiple
+                className="mt-1 block w-full text-sm"
+                onChange={(e) => setCompraFiles(e.target.files)}
+              />
+            </label>
+            {(can("flota_compras", "crear") ||
+              can("flota_servicios", "crear")) && (
+              <button
+                type="button"
+                className="rounded-lg bg-[#0d9488] px-4 py-2 text-sm font-medium text-white"
+                onClick={() => void guardarCompraFactura()}
+              >
+                {compraServicioId
+                  ? "Adjuntar factura al servicio"
+                  : "Registrar compra + factura"}
+              </button>
+            )}
+          </div>
+
+          <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+            <table className="min-w-full text-left text-sm">
+              <thead className="bg-[var(--thead)] text-xs uppercase text-[var(--muted)]">
+                <tr>
+                  <th className="px-3 py-2">Fecha</th>
+                  <th className="px-3 py-2">Placa</th>
+                  <th className="px-3 py-2">Tipo</th>
+                  <th className="px-3 py-2">Detalle</th>
+                  <th className="px-3 py-2">Costo</th>
+                  <th className="px-3 py-2">Facturas</th>
+                </tr>
+              </thead>
+              <tbody>
+                {servicios
+                  .filter(
+                    (s) =>
+                      s.tipo === "compra" ||
+                      (s.adjuntos ?? 0) > 0 ||
+                      Boolean(s.fecha_entrada_taller && !s.fecha_salida_taller),
+                  )
+                  .filter((s) =>
+                    matchQ(s.placa, `${s.tipo} ${s.descripcion ?? ""}`),
+                  )
+                  .slice(0, 80)
+                  .map((s) => (
+                    <tr
+                      key={s.id}
+                      className="border-t border-[var(--border)]"
+                    >
+                      <td className="px-3 py-2">
+                        {String(s.fecha_servicio).slice(0, 10)}
+                      </td>
+                      <td className="px-3 py-2">
+                        {s.placa}
+                        {activos.find((v) => v.id === Number(s.vehiculo_id))
+                          ?.en_taller
+                          ? " · taller"
+                          : ""}
+                      </td>
+                      <td className="px-3 py-2">{s.tipo}</td>
+                      <td className="px-3 py-2 max-w-[14rem] truncate">
+                        {s.descripcion || "—"}
+                      </td>
+                      <td className="px-3 py-2">
+                        Q {Number(s.costo ?? 0).toLocaleString("es-GT")}
+                      </td>
+                      <td className="px-3 py-2">
+                        <button
+                          type="button"
+                          className="text-[var(--accent-2)] underline"
+                          onClick={() => void verAdjuntos(s.id, s.placa)}
+                        >
+                          {(s.adjuntos ?? 0) > 0
+                            ? `Ver (${s.adjuntos})`
+                            : "Sin factura"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
               </tbody>
             </table>
           </div>
@@ -3891,7 +4150,8 @@ function FlotaInner() {
 
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div className="text-xs text-[var(--muted)]">
-                    Foto del tablero (km) *
+                    Foto del tablero (km)
+                    {rol === "Piloto" ? " *" : " (opc.)"}
                     <div className="mt-1">
                       <TomarFotoButton
                         label="Tomar foto tablero"
@@ -3899,7 +4159,9 @@ function FlotaInner() {
                         hint={
                           fotoTableroSalida
                             ? `Listo: ${fotoTableroSalida.name}`
-                            : "Obligatoria. Solo cámara (fecha/hora/GPS)."
+                            : rol === "Piloto"
+                              ? "Obligatoria. Solo cámara (fecha/hora/GPS)."
+                              : "Opcional si registras el viaje de forma manual."
                         }
                         onCaptured={async (file) => {
                           const n = await normalizarFotoCamara(file, "tablero");
@@ -4295,7 +4557,10 @@ function FlotaInner() {
                       </p>
                       <p className="text-[11px] text-[var(--muted)]">
                         Cuando todas las paradas estén en OK, ingresa el km
-                        final del odómetro y toma la foto del tablero.
+                        final del odómetro
+                        {rol === "Piloto"
+                          ? " y toma la foto del tablero."
+                          : ". La foto del tablero es opcional en registro manual."}
                       </p>
                       <label className="block text-xs text-[var(--muted)]">
                         Km final *
@@ -4314,7 +4579,8 @@ function FlotaInner() {
                         />
                       </label>
                       <div className="text-xs text-[var(--muted)]">
-                        Foto tablero km final *
+                        Foto tablero km final
+                        {rol === "Piloto" ? " *" : " (opc.)"}
                         <div className="mt-1 max-w-xs">
                           <TomarFotoButton
                             label="Tomar foto tablero final"
