@@ -1,13 +1,34 @@
 @import "tailwindcss";
 
-:root {
+:root,
+[data-theme="dark"] {
   --bg: #0b1220;
   --card: #121a28;
+  --sidebar: #0d1522;
   --border: #243044;
   --text: #e8eef7;
   --muted: #93a4b8;
   --accent: #1f6aa5;
   --accent-2: #0d9488;
+  --danger: #5c2525;
+  --panel: #1e293b;
+  --glow-1: #1a3a55;
+  --glow-2: #134e4a;
+}
+
+[data-theme="light"] {
+  --bg: #eef3f8;
+  --card: #ffffff;
+  --sidebar: #f8fafc;
+  --border: #d0dbe8;
+  --text: #0f172a;
+  --muted: #64748b;
+  --accent: #1d5f96;
+  --accent-2: #0f766e;
+  --danger: #b91c1c;
+  --panel: #e2e8f0;
+  --glow-1: #bfdbfe;
+  --glow-2: #a7f3d0;
 }
 
 body {
@@ -15,10 +36,11 @@ body {
   min-height: 100vh;
   color: var(--text);
   background:
-    radial-gradient(1200px 600px at 10% -10%, #1a3a55 0%, transparent 55%),
-    radial-gradient(900px 500px at 100% 0%, #134e4a 0%, transparent 50%),
+    radial-gradient(1200px 600px at 10% -10%, var(--glow-1) 0%, transparent 55%),
+    radial-gradient(900px 500px at 100% 0%, var(--glow-2) 0%, transparent 50%),
     var(--bg);
   font-family: "Segoe UI", system-ui, sans-serif;
+  transition: background 0.2s ease, color 0.2s ease;
 }
 
 * {

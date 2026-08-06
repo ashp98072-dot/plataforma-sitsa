@@ -1839,49 +1839,11 @@ function FlotaInner() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold">Control de Flota / Predios</h1>
-          <p className="text-sm text-[var(--muted)]">
-            Búsqueda por placa, taller, edición, filtros/rin y exportación.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {can("flota_vehiculos", "crear") && rol !== "Piloto" ? (
-            <label className="cursor-pointer rounded bg-[#0d9488] px-3 py-2 text-sm text-white">
-              {importando ? "Importando…" : "Importar Excel"}
-              <input
-                type="file"
-                accept=".xlsx"
-                className="hidden"
-                disabled={importando}
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) void onImport(f);
-                  e.target.value = "";
-                }}
-              />
-            </label>
-          ) : null}
-          {can("flota_reportes") || can("flota_vehiculos") ? (
-            <>
-              <button
-                type="button"
-                className="rounded bg-[#1B5E20] px-3 py-2 text-sm text-white"
-                onClick={() => exportar("flota", "xlsx")}
-              >
-                Excel flota
-              </button>
-              <button
-                type="button"
-                className="rounded bg-[#37474F] px-3 py-2 text-sm text-white"
-                onClick={() => exportar("flota", "pdf")}
-              >
-                PDF flota
-              </button>
-            </>
-          ) : null}
-        </div>
+      <div>
+        <h1 className="text-2xl font-semibold">Control de Flota / Predios</h1>
+        <p className="text-sm text-[var(--muted)]">
+          Búsqueda por placa, taller, edición, filtros/rin y exportación.
+        </p>
       </div>
 
       <nav className="flex flex-wrap gap-1 border-b border-[var(--border)] pb-2">
@@ -2093,6 +2055,47 @@ function FlotaInner() {
 
       {tab === "vehiculos" && can("flota_vehiculos") ? (
         <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-[var(--muted)]">
+              Inventario de unidades · importar / exportar
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {can("flota_vehiculos", "crear") && rol !== "Piloto" ? (
+                <label className="cursor-pointer rounded bg-[var(--accent-2)] px-3 py-2 text-sm text-white">
+                  {importando ? "Importando…" : "Importar Excel"}
+                  <input
+                    type="file"
+                    accept=".xlsx"
+                    className="hidden"
+                    disabled={importando}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) void onImport(f);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+              ) : null}
+              {can("flota_reportes") || can("flota_vehiculos") ? (
+                <>
+                  <button
+                    type="button"
+                    className="rounded bg-[#1B5E20] px-3 py-2 text-sm text-white"
+                    onClick={() => exportar("flota", "xlsx")}
+                  >
+                    Excel flota
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded bg-[var(--panel)] px-3 py-2 text-sm"
+                    onClick={() => exportar("flota", "pdf")}
+                  >
+                    PDF flota
+                  </button>
+                </>
+              ) : null}
+            </div>
+          </div>
           {SearchBar}
           {(can("flota_vehiculos", "crear") || editId) &&
           (can("flota_vehiculos", "editar") || !editId) ? (
