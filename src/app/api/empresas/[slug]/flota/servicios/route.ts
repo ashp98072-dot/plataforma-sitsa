@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
-import { requireTenantFlota } from "@/lib/tenant";
+import { requireTenantFlota, requireTenantFlotaAny } from "@/lib/tenant";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
 import { ahoraLocal } from "@/lib/rrhh/dates";
 import { contentTypeFor, guardarUpload } from "@/lib/uploads";
@@ -32,10 +32,11 @@ function parseRepuestos(raw: unknown): string[] {
 
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  let guard = await requireTenantFlota(slug, "flota_servicios", "ver");
-  if (guard.error) {
-    guard = await requireTenantFlota(slug, "flota_compras", "ver");
-  }
+  const guard = await requireTenantFlotaAny(
+    slug,
+    ["flota_servicios", "flota_compras"],
+    "ver",
+  );
   if (guard.error) return guard.error;
 
   try {
@@ -119,10 +120,11 @@ function diasEntre(a: string | null, b: string | null): number | null {
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  let guard = await requireTenantFlota(slug, "flota_servicios", "crear");
-  if (guard.error) {
-    guard = await requireTenantFlota(slug, "flota_compras", "crear");
-  }
+  const guard = await requireTenantFlotaAny(
+    slug,
+    ["flota_servicios", "flota_compras"],
+    "crear",
+  );
   if (guard.error) return guard.error;
 
   try {

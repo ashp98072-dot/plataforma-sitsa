@@ -231,17 +231,37 @@ export async function requireTenantFlotaAny(
   submodulos: FlotaSubmodulo[],
   accion: AccionPermiso = "ver",
 ): Promise<Ok | Fail> {
-  let last: Ok | Fail | null = null;
-  for (const sub of submodulos) {
-    const g = await requireTenantFlota(slug, sub, accion);
-    if (!g.error) return g;
-    last = g;
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length
+    ? empresa.modulos
+    : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("flota")) {
+    return {
+      error: NextResponse.json(
+        { error: "Esta empresa no tiene el módulo Flota / Predios." },
+        { status: 403 },
+      ),
+    };
   }
-  return (
-    last ?? {
-      error: NextResponse.json({ error: "Sin permiso." }, { status: 403 }),
-    }
+
+  const perms = await permisosEfectivos(
+    session.id,
+    session.rol as RolGlobal,
   );
+  if (submodulos.some((sub) => tienePermiso(perms, sub, accion))) {
+    return { session, empresa };
+  }
+  return {
+    error: NextResponse.json(
+      { error: `Sin permiso para ${accion} en Predios.` },
+      { status: 403 },
+    ),
+  };
 }
 
 /** Acepta cualquiera de varios submódulos (ej. evidencias: vacaciones o incidencias). */
@@ -250,15 +270,35 @@ export async function requireTenantRrhhAny(
   submodulos: RrhhSubmodulo[],
   accion: AccionPermiso = "ver",
 ): Promise<Ok | Fail> {
-  let last: Ok | Fail | null = null;
-  for (const sub of submodulos) {
-    const g = await requireTenantRrhh(slug, sub, accion);
-    if (!g.error) return g;
-    last = g;
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length
+    ? empresa.modulos
+    : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("rrhh")) {
+    return {
+      error: NextResponse.json(
+        { error: "Esta empresa no tiene el módulo RRHH." },
+        { status: 403 },
+      ),
+    };
   }
-  return (
-    last ?? {
-      error: NextResponse.json({ error: "Sin permiso." }, { status: 403 }),
-    }
+
+  const perms = await permisosEfectivos(
+    session.id,
+    session.rol as RolGlobal,
   );
+  if (submodulos.some((sub) => tienePermiso(perms, sub, accion))) {
+    return { session, empresa };
+  }
+  return {
+    error: NextResponse.json(
+      { error: `Sin permiso para ${accion}.` },
+      { status: 403 },
+    ),
+  };
 }

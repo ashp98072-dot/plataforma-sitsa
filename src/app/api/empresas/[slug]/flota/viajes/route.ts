@@ -332,42 +332,76 @@ export async function POST(req: Request, ctx: Ctx) {
       planesMatch.find((p) => p.id === planId)?.cliente ||
       null;
 
-    const r = await execute(
-      `INSERT INTO flota_viajes
+    const lockKey = `flota_salida_${guard.empresa.id}_${Number(veh.id)}`;
+    try {
+      await query<RowDataPacket[]>("SELECT GET_LOCK(?, 8) AS l", [lockKey]);
+    } catch {
+      /* ok */
+    }
+
+    let r: Awaited<ReturnType<typeof execute>> | undefined;
+    try {
+      const recheck = await query<RowDataPacket[]>(
+        `SELECT id FROM flota_viajes
+         WHERE empresa_id = ? AND vehiculo_id = ? AND estado = 'abierto' LIMIT 1`,
+        [guard.empresa.id, veh.id],
+      );
+      if (recheck[0]) {
+        return NextResponse.json(
+          { error: `La unidad ${veh.placa} ya tiene un viaje abierto.` },
+          { status: 409 },
+        );
+      }
+
+      r = await execute(
+        `INSERT INTO flota_viajes
         (empresa_id, vehiculo_id, piloto_nombre, piloto_nombre_norm, piloto_usuario_id,
          km_salida, hora_salida, destino, estado, es_externo, empleado_id, permiso_externo_id, plan_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'abierto', ?, ?, ?, ?)`,
-      [
-        guard.empresa.id,
-        Number(veh.id),
-        nombre,
-        norm,
-        guard.session.id,
-        d.kmSalida,
-        ahora,
-        destinoFinal,
-        esExterno ? 1 : 0,
-        empleado?.id ?? null,
-        permisoId,
-        planId,
-      ],
-    ).catch(async () =>
-      execute(
-        `INSERT INTO flota_viajes
-          (empresa_id, vehiculo_id, piloto_nombre, piloto_usuario_id, km_salida,
-           hora_salida, destino, estado)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'abierto')`,
         [
           guard.empresa.id,
           Number(veh.id),
           nombre,
+          norm,
           guard.session.id,
           d.kmSalida,
           ahora,
           destinoFinal,
+          esExterno ? 1 : 0,
+          empleado?.id ?? null,
+          permisoId,
+          planId,
         ],
-      ),
-    );
+      ).catch(async () =>
+        execute(
+          `INSERT INTO flota_viajes
+          (empresa_id, vehiculo_id, piloto_nombre, piloto_usuario_id, km_salida,
+           hora_salida, destino, estado)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'abierto')`,
+          [
+            guard.empresa.id,
+            Number(veh.id),
+            nombre,
+            guard.session.id,
+            d.kmSalida,
+            ahora,
+            destinoFinal,
+          ],
+        ),
+      );
+    } finally {
+      try {
+        await query<RowDataPacket[]>("SELECT RELEASE_LOCK(?) AS l", [lockKey]);
+      } catch {
+        /* ok */
+      }
+    }
+    if (!r) {
+      return NextResponse.json(
+        { error: "No se pudo registrar la salida." },
+        { status: 500 },
+      );
+    }
 
     if (planId) {
       await marcarPlanEnRuta(guard.empresa.id, planId);
@@ -533,12 +567,12 @@ export async function POST(req: Request, ctx: Ctx) {
 
     const kmLlegadaDb = kmFinal;
 
-    await execute(
+    const upd = await execute(
       `UPDATE flota_viajes SET
         km_llegada = ?, hora_llegada = ?, estado = 'cerrado',
         observaciones = COALESCE(?, observaciones),
         piloto_nombre = COALESCE(?, piloto_nombre)
-       WHERE id = ? AND empresa_id = ?`,
+       WHERE id = ? AND empresa_id = ? AND estado = 'abierto'`,
       [
         kmLlegadaDb,
         ahora,
@@ -551,6 +585,12 @@ export async function POST(req: Request, ctx: Ctx) {
         guard.empresa.id,
       ],
     );
+    if (!upd.affectedRows) {
+      return NextResponse.json(
+        { error: "Este viaje ya fue cerrado. Actualiza la lista e inténtalo de nuevo." },
+        { status: 409 },
+      );
+    }
 
     await execute(
       `INSERT INTO flota_lecturas

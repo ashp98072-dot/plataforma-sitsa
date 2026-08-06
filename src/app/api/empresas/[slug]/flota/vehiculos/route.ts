@@ -13,7 +13,6 @@ import {
 import {
   guardarFiltrosVehiculo,
   listarFiltrosPorVehiculos,
-  migrarFiltrosLegacySiVacio,
   type FiltroVehiculo,
 } from "@/lib/flota/filtros";
 
@@ -52,17 +51,22 @@ export async function GET(_req: Request, ctx: Ctx) {
   for (const r of rows) {
     const vid = Number(r.id);
     let filtros = filtrosMap.get(vid) ?? [];
+    // GET no escribe migraciones (evita N+1). Mostrar legacy si aún no hay filas.
     if (!filtros.length) {
-      filtros = await migrarFiltrosLegacySiVacio(
-        guard.empresa.id,
-        vid,
-        r.filtro_servicio_mayor != null
-          ? String(r.filtro_servicio_mayor)
-          : null,
-        r.filtro_servicio_menor != null
-          ? String(r.filtro_servicio_menor)
-          : null,
-      );
+      const legacy: FiltroVehiculo[] = [];
+      if (r.filtro_servicio_mayor != null && String(r.filtro_servicio_mayor).trim()) {
+        legacy.push({
+          tipo: "Servicio mayor",
+          codigo: String(r.filtro_servicio_mayor).trim(),
+        });
+      }
+      if (r.filtro_servicio_menor != null && String(r.filtro_servicio_menor).trim()) {
+        legacy.push({
+          tipo: "Servicio menor",
+          codigo: String(r.filtro_servicio_menor).trim(),
+        });
+      }
+      filtros = legacy;
     }
     const esDueno = Number(r.empresa_id) === guard.empresa.id;
     vehiculos.push({

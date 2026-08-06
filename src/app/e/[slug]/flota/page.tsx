@@ -376,14 +376,21 @@ function FlotaInner() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
   });
   const [repHasta, setRepHasta] = useState(() => hoyLocal());
+  const [sesionLista, setSesionLista] = useState(false);
+  const [cargandoFlota, setCargandoFlota] = useState(true);
+  const [enviandoForm, setEnviandoForm] = useState(false);
+  const cargarSeq = useRef(0);
+  const cacheAt = useRef<Record<string, number>>({});
+  const CACHE_MS = 60_000;
 
   const isAdmin = rol === "Admin";
   const can = useCallback(
-    (sub: string, accion: "ver" | "crear" | "editar" | "eliminar" = "ver") =>
-      isAdmin ||
-      permisos.length === 0 ||
-      tienePermiso(permisos, sub, accion),
-    [isAdmin, permisos],
+    (sub: string, accion: "ver" | "crear" | "editar" | "eliminar" = "ver") => {
+      if (!sesionLista) return false;
+      if (isAdmin) return true;
+      return tienePermiso(permisos, sub, accion);
+    },
+    [isAdmin, permisos, sesionLista],
   );
 
   const tab: Tab = useMemo(() => {
@@ -407,8 +414,9 @@ function FlotaInner() {
       const s = q.trim().toLowerCase();
       if (!s) return true;
       return (
-        placa.toLowerCase().includes(s) ||
-        extra.toLowerCase().includes(s)
+        String(placa ?? "")
+          .toLowerCase()
+          .includes(s) || String(extra ?? "").toLowerCase().includes(s)
       );
     },
     [q],
@@ -562,130 +570,189 @@ function FlotaInner() {
       const forzar = Boolean(opts?.forzarTodo);
       const solo = opts?.solo;
       const enSolo = (key: string) => !solo || solo.includes(key);
+      const seq = ++cargarSeq.current;
+      const ahora = Date.now();
+      const fresco = (key: string) =>
+        !forzar &&
+        !solo &&
+        ahora - (cacheAt.current[key] ?? 0) < CACHE_MS;
 
-      // Sesión solo la primera vez (evita /api/auth/me en cada refresh)
-      if (!rol || forzar) {
-        const me = await fetch("/api/auth/me").then((r) => r.json());
-        setRol(String(me.user?.rol ?? ""));
-        setPermisos(me.permisos ?? []);
-      }
+      setCargandoFlota(true);
+      try {
+        if (!sesionLista) {
+          const me = await fetch("/api/auth/me").then((r) => r.json());
+          if (seq !== cargarSeq.current) return;
+          setRol(String(me.user?.rol ?? ""));
+          setPermisos(me.permisos ?? []);
+          setSesionLista(true);
+          // El effect vuelve a correr con rol/tab correctos
+          return;
+        }
 
-      const quiereVeh = enSolo("vehiculos");
-      const quiereRep =
-        enSolo("reportes") &&
-        (forzar || Boolean(solo) || t === "reportes");
-      const quiereLec =
-        enSolo("lecturas") &&
-        (forzar || Boolean(solo) || t === "lecturas");
-      const quiereSvc =
-        enSolo("servicios") &&
-        (forzar ||
-          Boolean(solo) ||
-          t === "servicios" ||
-          t === "taller" ||
-          t === "historial-servicios" ||
-          t === "compras");
-      const quiereVia =
-        enSolo("viajes") &&
-        (forzar ||
-          Boolean(solo) ||
-          t === "piloto" ||
-          t === "lecturas" ||
-          t === "vehiculos" ||
-          t === "servicios" ||
-          t === "taller");
-      const quierePerm =
-        enSolo("permisos") &&
-        (forzar || Boolean(solo) || t === "piloto");
+        if (forzar) {
+          for (const k of Object.keys(cacheAt.current)) {
+            cacheAt.current[k] = 0;
+          }
+        }
 
-      // Con solo=… no arrastrar recursos de la pestaña actual
-      const fetches: Promise<Response>[] = [];
-      const keys: string[] = [];
+        const quiereVeh = enSolo("vehiculos") && (forzar || Boolean(solo) || !fresco("vehiculos"));
+        const quiereRep =
+          enSolo("reportes") &&
+          (forzar || Boolean(solo) || t === "reportes") &&
+          (forzar || Boolean(solo) || !fresco("reportes"));
+        const quiereLec =
+          enSolo("lecturas") &&
+          (forzar || Boolean(solo) || t === "lecturas") &&
+          (forzar || Boolean(solo) || !fresco("lecturas"));
+        const quiereSvc =
+          enSolo("servicios") &&
+          (forzar ||
+            Boolean(solo) ||
+            t === "servicios" ||
+            t === "taller" ||
+            t === "historial-servicios" ||
+            t === "compras") &&
+          (forzar || Boolean(solo) || !fresco("servicios"));
+        const quiereVia =
+          enSolo("viajes") &&
+          (forzar ||
+            Boolean(solo) ||
+            t === "piloto" ||
+            t === "lecturas" ||
+            t === "vehiculos" ||
+            t === "servicios" ||
+            t === "taller") &&
+          (forzar || Boolean(solo) || !fresco("viajes"));
+        const quierePerm =
+          enSolo("permisos") &&
+          (forzar || Boolean(solo) || t === "piloto") &&
+          (forzar || Boolean(solo) || !fresco("permisos"));
 
-      if (quiereVeh) {
-        fetches.push(fetch(`/api/empresas/${slug}/flota/vehiculos`));
-        keys.push("vehiculos");
-      }
-      if (quiereRep) {
-        const paramsRep = new URLSearchParams({
-          desde: repDesde,
-          hasta: repHasta,
-        });
-        fetches.push(
-          fetch(`/api/empresas/${slug}/flota/reportes?${paramsRep}`),
-        );
-        keys.push("reportes");
-      }
-      if (quiereLec) {
-        fetches.push(fetch(`/api/empresas/${slug}/flota/lecturas`));
-        keys.push("lecturas");
-      }
-      if (quiereSvc) {
-        fetches.push(fetch(`/api/empresas/${slug}/flota/servicios`));
-        keys.push("servicios");
-      }
-      if (quiereVia) {
-        fetches.push(fetch(`/api/empresas/${slug}/flota/viajes`));
-        keys.push("viajes");
-      }
-      if (quierePerm) {
-        fetches.push(fetch(`/api/empresas/${slug}/flota/permisos-externos`));
-        keys.push("permisos");
-      }
+        // Vehículos: siempre en memoria para selects; re-fetch solo si caducó
+        const needVeh =
+          quiereVeh ||
+          ((!solo || solo.includes("vehiculos")) &&
+            (t === "dashboard" ||
+              t === "vehiculos" ||
+              t === "taller" ||
+              t === "servicios" ||
+              t === "compras" ||
+              t === "lecturas" ||
+              t === "piloto" ||
+              t === "historial-servicios" ||
+              t === "reportes") &&
+            !fresco("vehiculos"));
 
-      if (!fetches.length) return;
+        const fetches: Promise<Response>[] = [];
+        const keys: string[] = [];
 
-      const results = await Promise.all(fetches);
-      const byKey = Object.fromEntries(
-        keys.map((k, i) => [k, results[i]]),
-      ) as Record<string, Response>;
+        if (needVeh) {
+          fetches.push(fetch(`/api/empresas/${slug}/flota/vehiculos`));
+          keys.push("vehiculos");
+        }
+        if (quiereRep) {
+          const paramsRep = new URLSearchParams({
+            desde: repDesde,
+            hasta: repHasta,
+          });
+          fetches.push(
+            fetch(`/api/empresas/${slug}/flota/reportes?${paramsRep}`),
+          );
+          keys.push("reportes");
+        }
+        if (quiereLec) {
+          fetches.push(fetch(`/api/empresas/${slug}/flota/lecturas`));
+          keys.push("lecturas");
+        }
+        if (quiereSvc) {
+          fetches.push(fetch(`/api/empresas/${slug}/flota/servicios`));
+          keys.push("servicios");
+        }
+        if (quiereVia) {
+          fetches.push(fetch(`/api/empresas/${slug}/flota/viajes`));
+          keys.push("viajes");
+        }
+        if (quierePerm) {
+          fetches.push(fetch(`/api/empresas/${slug}/flota/permisos-externos`));
+          keys.push("permisos");
+        }
 
-      if (byKey.vehiculos?.ok) {
-        const data = await byKey.vehiculos.json();
-        const list = (data.vehiculos ?? []) as Vehiculo[];
-        setVehiculos(list);
-        setEmpresasFlota(data.empresas ?? []);
-        setEmpresaActualId(Number(data.empresaActualId ?? 0));
-        if (list[0] && !vehiculoId) setVehiculoId(Number(list[0].id));
-      }
-      if (byKey.reportes?.ok) {
-        const reporte = await byKey.reportes.json();
-        setResumen(reporte.resumen ?? null);
-        setCostos(reporte.costosPorMes ?? []);
-        setCostosUnidad(reporte.costosPorUnidad ?? []);
-        setTotalPeriodo(reporte.totalPeriodo ?? { total: 0, n: 0 });
-        setViajesReporte((reporte.viajes ?? []) as Viaje[]);
-      }
-      if (byKey.lecturas?.ok) {
-        const data = await byKey.lecturas.json();
-        setLecturas(data.lecturas ?? []);
-      }
-      if (byKey.servicios?.ok) {
-        const data = await byKey.servicios.json();
-        setServicios(data.servicios ?? []);
-      }
-      if (byKey.viajes?.ok) {
-        const data = await byKey.viajes.json();
-        setViajes(data.viajes ?? []);
-        const abs = (data.abiertos ?? []) as Viaje[];
-        setAbiertos(abs);
-        setViajeId((prev) => {
-          if (prev && abs.some((a) => a.id === prev)) return prev;
-          return abs[0] ? Number(abs[0].id) : 0;
-        });
-      }
-      if (byKey.permisos?.ok) {
-        const data = await byKey.permisos.json();
-        setPermisosExt(data.permisos ?? []);
+        if (!fetches.length) return;
+
+        const results = await Promise.all(fetches);
+        if (seq !== cargarSeq.current) return;
+        const byKey = Object.fromEntries(
+          keys.map((k, i) => [k, results[i]]),
+        ) as Record<string, Response>;
+
+        if (byKey.vehiculos?.ok) {
+          const data = await byKey.vehiculos.json();
+          if (seq !== cargarSeq.current) return;
+          const list = (data.vehiculos ?? []) as Vehiculo[];
+          setVehiculos(list);
+          setEmpresasFlota(data.empresas ?? []);
+          setEmpresaActualId(Number(data.empresaActualId ?? 0));
+          setVehiculoId((prev) => prev || (list[0] ? Number(list[0].id) : 0));
+          cacheAt.current.vehiculos = Date.now();
+        }
+        if (byKey.reportes?.ok) {
+          const reporte = await byKey.reportes.json();
+          if (seq !== cargarSeq.current) return;
+          setResumen(reporte.resumen ?? null);
+          setCostos(reporte.costosPorMes ?? []);
+          setCostosUnidad(reporte.costosPorUnidad ?? []);
+          setTotalPeriodo(reporte.totalPeriodo ?? { total: 0, n: 0 });
+          setViajesReporte((reporte.viajes ?? []) as Viaje[]);
+          cacheAt.current.reportes = Date.now();
+        }
+        if (byKey.lecturas?.ok) {
+          const data = await byKey.lecturas.json();
+          if (seq !== cargarSeq.current) return;
+          setLecturas(data.lecturas ?? []);
+          cacheAt.current.lecturas = Date.now();
+        }
+        if (byKey.servicios?.ok) {
+          const data = await byKey.servicios.json();
+          if (seq !== cargarSeq.current) return;
+          setServicios(data.servicios ?? []);
+          cacheAt.current.servicios = Date.now();
+        }
+        if (byKey.viajes?.ok) {
+          const data = await byKey.viajes.json();
+          if (seq !== cargarSeq.current) return;
+          setViajes(data.viajes ?? []);
+          const abs = (data.abiertos ?? []) as Viaje[];
+          setAbiertos(abs);
+          setViajeId((prev) => {
+            if (prev && abs.some((a) => a.id === prev)) return prev;
+            return abs[0] ? Number(abs[0].id) : 0;
+          });
+          cacheAt.current.viajes = Date.now();
+        }
+        if (byKey.permisos?.ok) {
+          const data = await byKey.permisos.json();
+          if (seq !== cargarSeq.current) return;
+          setPermisosExt(data.permisos ?? []);
+          cacheAt.current.permisos = Date.now();
+        }
+      } catch {
+        if (seq === cargarSeq.current) {
+          setErr("No se pudo cargar Flota. Revisa la conexión e inténtalo de nuevo.");
+        }
+      } finally {
+        if (seq === cargarSeq.current) setCargandoFlota(false);
       }
     },
-    [slug, tab, rol, vehiculoId, repDesde, repHasta],
+    [slug, tab, sesionLista, repDesde, repHasta, CACHE_MS],
   );
 
   useEffect(() => {
     void cargar();
+    return () => {
+      cargarSeq.current += 1;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slug, tab]);
+  }, [slug, tab, sesionLista]);
 
   const rangoRepInit = useRef(true);
   useEffect(() => {
@@ -694,6 +761,7 @@ function FlotaInner() {
       return;
     }
     if (tab === "reportes") {
+      cacheAt.current.reportes = 0;
       void cargar({ solo: ["reportes"] });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -819,7 +887,7 @@ function FlotaInner() {
     if (!res.ok) setErr(data.error ?? "Error al importar");
     else setMsg(data.mensaje);
     setImportando(false);
-    if (res.ok) await cargar();
+    if (res.ok) await cargar({ forzarTodo: true });
   }
 
   function empezarEdicion(v: Vehiculo) {
@@ -892,7 +960,7 @@ function FlotaInner() {
     setFiltrosForm([]);
     setEditId(null);
     setAccesoEmpresaIds([]);
-    await cargar();
+    await cargar({ forzarTodo: true });
   }
 
   async function buscarPlanesSalida() {
@@ -944,7 +1012,7 @@ function FlotaInner() {
     setMsg(data.mensaje);
     setTallerId(null);
     setMotivoTaller("");
-    await cargar();
+    await cargar({ forzarTodo: true });
   }
 
   async function salirTaller(id: number) {
@@ -957,7 +1025,7 @@ function FlotaInner() {
     const data = await res.json();
     if (!res.ok) setErr(data.error ?? "Error");
     else setMsg(data.mensaje);
-    await cargar();
+    await cargar({ forzarTodo: true });
   }
 
   /** Abre Registrar servicio con la unidad lista para salir de taller. */
@@ -1001,7 +1069,7 @@ function FlotaInner() {
       const data = await res.json();
       if (!res.ok) setErr(data.error ?? "No se pudo dar de baja");
       else setMsg(data.mensaje ?? "Vehículo dado de baja.");
-      await cargar();
+      await cargar({ forzarTodo: true });
       return;
     }
     const res = await fetch(`/api/empresas/${slug}/flota/vehiculos`, {
@@ -1012,7 +1080,7 @@ function FlotaInner() {
     const data = await res.json();
     if (!res.ok) setErr(data.error ?? "No se pudo activar");
     else setMsg(data.mensaje ?? "Vehículo activado.");
-    await cargar();
+    await cargar({ forzarTodo: true });
   }
 
   async function eliminarVehiculo(v: Vehiculo) {
@@ -1044,7 +1112,7 @@ function FlotaInner() {
         setFiltrosForm([]);
       }
     }
-    await cargar();
+    await cargar({ forzarTodo: true });
   }
 
   async function cargarParadasViaje(viajeIdSel: number) {
@@ -1311,7 +1379,7 @@ function FlotaInner() {
     setKmLectura(0);
     setFotoTableroLectura(null);
     setFotosExtraLectura([]);
-    await cargar();
+    await cargar({ forzarTodo: true });
   }
 
   function agregarRepuesto() {
@@ -1428,7 +1496,7 @@ function FlotaInner() {
     else {
       setMsg(data.mensaje);
       limpiarFormServicio();
-      await cargar();
+      await cargar({ forzarTodo: true });
     }
   }
 
@@ -1476,6 +1544,7 @@ function FlotaInner() {
   }
 
   async function salidaViaje() {
+    if (enviandoForm) return;
     setErr("");
     setMsg("");
     if (rol === "Piloto" && !pilotoSesionConfirmado) {
@@ -1531,7 +1600,9 @@ function FlotaInner() {
       return;
     }
 
-    const res = await fetch(`/api/empresas/${slug}/flota/viajes`, {
+    setEnviandoForm(true);
+    try {
+      const res = await fetch(`/api/empresas/${slug}/flota/viajes`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1558,7 +1629,7 @@ function FlotaInner() {
     ) {
       setMsg(data.mensaje ?? data.error);
       setEsExterno(true);
-      await cargar();
+      await cargar({ forzarTodo: true });
       return;
     }
     if (!res.ok) {
@@ -1617,7 +1688,10 @@ function FlotaInner() {
     setViajeId(nuevoId);
     setQLlegada("");
     setModoPiloto("llegada");
-    await cargar();
+    await cargar({ forzarTodo: true });
+    } finally {
+      setEnviandoForm(false);
+    }
   }
 
   async function resolverPermiso(
@@ -1634,7 +1708,7 @@ function FlotaInner() {
     if (!res.ok) setErr(data.error ?? "Error");
     else {
       setMsg(data.mensaje);
-      await cargar();
+      await cargar({ forzarTodo: true });
     }
   }
 
@@ -1752,7 +1826,7 @@ function FlotaInner() {
         ),
       }));
     }
-    await cargar();
+    await cargar({ forzarTodo: true });
   }
 
   async function verAdjuntos(servicioId: number, placa?: string) {
@@ -1811,7 +1885,7 @@ function FlotaInner() {
       setMsg(data.mensaje);
       setCompraFiles(null);
       setCompraServicioId(0);
-      await cargar();
+      await cargar({ forzarTodo: true });
       return;
     }
 
@@ -1839,7 +1913,7 @@ function FlotaInner() {
     setCompraDesc("");
     setCompraCosto(0);
     setCompraFiles(null);
-    await cargar();
+    await cargar({ forzarTodo: true });
   }
 
   async function abrirAdjunto(url: string, nombre: string) {
@@ -1870,6 +1944,7 @@ function FlotaInner() {
   }
 
   async function llegadaViaje() {
+    if (enviandoForm) return;
     setErr("");
     setMsg("");
     if (!viajeId) {
@@ -1877,6 +1952,8 @@ function FlotaInner() {
       return;
     }
 
+    setEnviandoForm(true);
+    try {
     const parRes = await fetch(
       `/api/empresas/${slug}/flota/viajes/${viajeId}/paradas`,
     );
@@ -1986,11 +2063,14 @@ function FlotaInner() {
       setParadasViaje([]);
       setPlanIdViaje(null);
       setViajeId(0);
-      await cargar();
+      await cargar({ forzarTodo: true });
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Error al guardar llegada");
     } finally {
       setSubiendoFotos(false);
+    }
+    } finally {
+      setEnviandoForm(false);
     }
   }
 
@@ -2083,6 +2163,10 @@ function FlotaInner() {
             </button>
           ))}
       </nav>
+
+      {cargandoFlota && !vehiculos.length ? (
+        <p className="text-sm text-[var(--muted)]">Cargando flota…</p>
+      ) : null}
 
       {err ? <p className="text-sm text-red-300">{err}</p> : null}
       {msg ? <p className="text-sm text-emerald-300">{msg}</p> : null}
@@ -3654,7 +3738,7 @@ function FlotaInner() {
             <button
               type="button"
               className="rounded bg-[var(--accent)] px-3 py-2 text-sm text-white"
-              onClick={() => void cargar()}
+              onClick={() => void cargar({ forzarTodo: true })}
             >
               Actualizar gráficas
             </button>
@@ -4525,10 +4609,12 @@ function FlotaInner() {
                   <button
                     type="button"
                     className="rounded bg-[var(--accent)] px-4 py-2 text-sm text-white disabled:opacity-40"
-                    disabled={subiendoFotos}
+                    disabled={subiendoFotos || enviandoForm}
                     onClick={() => void salidaViaje()}
                   >
-                    {subiendoFotos ? "Guardando fotos…" : "Guardar salida"}
+                    {subiendoFotos || enviandoForm
+                      ? "Guardando…"
+                      : "Guardar salida"}
                   </button>
                 </div>
 
@@ -4899,6 +4985,7 @@ function FlotaInner() {
                         !abiertosFiltrados.length ||
                         !viajeId ||
                         subiendoFotos ||
+                        enviandoForm ||
                         (paradasViaje.length > 0 &&
                           paradasViaje.some(
                             (p) => p.requiere_evidencia && p.evidencias < 1,
@@ -4906,7 +4993,7 @@ function FlotaInner() {
                       }
                       onClick={() => void llegadaViaje()}
                     >
-                      {subiendoFotos
+                      {subiendoFotos || enviandoForm
                         ? "Guardando…"
                         : paradasViaje.length
                           ? "Cerrar ruta"

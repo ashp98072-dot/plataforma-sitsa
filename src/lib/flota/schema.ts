@@ -5,16 +5,27 @@
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
 
-async function columnaExiste(
-  tabla: string,
-  columna: string,
-): Promise<boolean> {
-  const rows = await query<RowDataPacket[]>(
-    `SELECT COUNT(*) AS n FROM information_schema.COLUMNS
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
-    [tabla, columna],
-  );
-  return Number(rows[0]?.n ?? 0) > 0;
+/** Columnas ya vistas en este proceso (evita N consultas a information_schema). */
+let knownCols = new Set<string>();
+
+async function loadColumnSet(tables: string[]): Promise<Set<string>> {
+  const set = new Set<string>();
+  if (!tables.length) return set;
+  try {
+    const rows = await query<RowDataPacket[]>(
+      `SELECT TABLE_NAME AS t, COLUMN_NAME AS c
+       FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME IN (${tables.map(() => "?").join(",")})`,
+      tables,
+    );
+    for (const r of rows) {
+      set.add(`${String(r.t)}.${String(r.c)}`);
+    }
+  } catch {
+    /* information_schema no disponible */
+  }
+  return set;
 }
 
 async function ensureColumn(
@@ -22,8 +33,22 @@ async function ensureColumn(
   columna: string,
   ddl: string,
 ): Promise<void> {
-  if (await columnaExiste(tabla, columna)) return;
-  await execute(`ALTER TABLE ${tabla} ADD COLUMN ${ddl}`);
+  const key = `${tabla}.${columna}`;
+  if (knownCols.has(key)) return;
+  try {
+    await execute(`ALTER TABLE ${tabla} ADD COLUMN ${ddl}`);
+  } catch (e: unknown) {
+    const msg = String(
+      e && typeof e === "object" && "message" in e
+        ? (e as { message: unknown }).message
+        : e,
+    );
+    // Carrera entre instancias: la columna ya existe
+    if (!/duplicate column|ER_DUP_FIELDNAME|1060/i.test(msg)) {
+      throw e;
+    }
+  }
+  knownCols.add(key);
 }
 
 /** Asegura columnas/tablas de flota completa (idempotente). */
@@ -31,7 +56,43 @@ let flotaSchemaReady: Promise<void> | null = null;
 
 export async function asegurarSchemaFlota(): Promise<void> {
   if (!flotaSchemaReady) {
-    flotaSchemaReady = asegurarSchemaFlotaInner().catch((e) => {
+    flotaSchemaReady = (async () => {
+      try {
+        await query<RowDataPacket[]>(
+          "SELECT GET_LOCK(?, 30) AS l",
+          ["plataforma_flota_schema"],
+        );
+      } catch {
+        /* sin GET_LOCK seguimos (un proceso) */
+      }
+      try {
+        knownCols = await loadColumnSet([
+          "flota_vehiculos",
+          "flota_lecturas",
+          "flota_viajes",
+          "flota_servicios",
+          "flota_viaje_evidencias",
+          "flota_lectura_evidencias",
+          "flota_servicio_adjuntos",
+          "flota_vehiculo_filtros",
+          "flota_vehiculo_acceso",
+          "flota_permisos_externos",
+          "tms_evidencias",
+          "tms_plan_paradas",
+          "tms_planes_viaje",
+        ]);
+        await asegurarSchemaFlotaInner();
+      } finally {
+        try {
+          await query<RowDataPacket[]>(
+            "SELECT RELEASE_LOCK(?) AS l",
+            ["plataforma_flota_schema"],
+          );
+        } catch {
+          /* ok */
+        }
+      }
+    })().catch((e) => {
       flotaSchemaReady = null;
       throw e;
     });
