@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import { resolverEmpresaFlotaExcel } from "@/lib/flota/empresas-alias";
 
 export type FilaFlotaExcel = {
   placa: string;
@@ -92,6 +93,10 @@ export async function generarPlantillaFlota(): Promise<Buffer> {
   help.addRow([
     "Base coordinador",
     "También acepta filas hijas: Tipo de Servicios + Codigo bajo la misma placa.",
+  ]);
+  help.addRow([
+    "Empresa",
+    "KT=Kuiqtrans · MÓNACO=Mónaco · FSS=Fresco Fresh (comparten flota)",
   ]);
   help.addRow(["activo", "1 / Activo  o  0 / Inactivo"]);
   help.addRow(["tipo_combustible", "diesel / gasolina / gas / eléctrico"]);
@@ -354,7 +359,12 @@ export async function parsearExcelFlota(
       condicionPropiedad: cProp
         ? cellStr(row.getCell(cProp).value) || null
         : null,
-      empresaActivo: cEmp ? cellStr(row.getCell(cEmp).value) || null : null,
+      empresaActivo: (() => {
+        const raw = cEmp ? cellStr(row.getCell(cEmp).value) || null : null;
+        if (!raw) return null;
+        const r = resolverEmpresaFlotaExcel(raw);
+        return r.etiqueta || raw;
+      })(),
       nit: cNit ? cellStr(row.getCell(cNit).value) || null : null,
       credito: cCred ? cellStr(row.getCell(cCred).value) || null : null,
       seguros: cSeg ? cellStr(row.getCell(cSeg).value) || null : null,

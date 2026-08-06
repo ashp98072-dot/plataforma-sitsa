@@ -224,6 +224,7 @@ const patchSchema = z.object({
   medidaLlanta: z.string().optional(),
   tipoAceite: z.string().optional(),
   tipoCombustible: z.string().optional(),
+  empresaActivo: z.string().optional(),
   filtros: z
     .array(
       z.object({
@@ -321,7 +322,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
         filtro_servicio_menor = ?,
         rin_llanta = ?,
         medida_llanta = ?,
-        tipo_aceite = ?
+        tipo_aceite = ?,
+        empresa_activo = ?
        WHERE id = ? AND empresa_id = ?`,
       [
         d.placa?.trim().toUpperCase() || String(cur[0].placa),
@@ -354,6 +356,9 @@ export async function PATCH(req: Request, ctx: Ctx) {
         d.rinLlanta ?? cur[0].rin_llanta,
         d.medidaLlanta ?? cur[0].medida_llanta,
         d.tipoAceite ?? cur[0].tipo_aceite,
+        d.empresaActivo !== undefined
+          ? d.empresaActivo.trim() || null
+          : cur[0].empresa_activo,
         d.id,
         guard.empresa.id,
       ],

@@ -19,6 +19,7 @@ import {
   estiloAlertaKm,
   kmPendienteServicio,
 } from "@/lib/flota/import-excel";
+import { etiquetaEmpresaVehiculo } from "@/lib/flota/empresas-alias";
 import {
   marcarVarias,
   obtenerGps,
@@ -69,6 +70,7 @@ type Vehiculo = {
   esDueno?: boolean;
   accesoEmpresaIds?: number[];
   empresa_duena_codigo?: string | null;
+  empresa_duena_nombre?: string | null;
 };
 
 type EmpresaOpt = { id: number; codigo: string; nombre: string; slug: string };
@@ -239,6 +241,7 @@ const emptyForm = {
   medidaLlanta: "",
   tipoAceite: "",
   color: "",
+  empresaActivo: "",
   notas: "",
   activo: true,
 };
@@ -424,6 +427,15 @@ function FlotaInner() {
 
   function esVehiculoActivo(v: Vehiculo): boolean {
     return Number(v.activo ?? 1) !== 0;
+  }
+
+  function empresaDe(v: Vehiculo): string {
+    return etiquetaEmpresaVehiculo({
+      empresaActivo: v.empresa_activo,
+      empresaDuenaNombre: v.empresa_duena_nombre,
+      empresaDuenaCodigo: v.empresa_duena_codigo,
+      compartido: Boolean(v.compartido),
+    });
   }
 
   const vehiculosFiltrados = useMemo(() => {
@@ -908,6 +920,7 @@ function FlotaInner() {
       medidaLlanta: v.medida_llanta ?? "",
       tipoAceite: v.tipo_aceite ?? "",
       color: v.color ?? "",
+      empresaActivo: v.empresa_activo ?? "",
       notas: v.notas ?? "",
       activo: esVehiculoActivo(v),
     });
@@ -930,6 +943,7 @@ function FlotaInner() {
       modelo: form.modelo,
       descripcion: form.descripcion,
       color: form.color,
+      empresaActivo: form.empresaActivo || undefined,
       kmActual: form.kmActual,
       kmIntervaloServicio: form.intervalo,
       rinLlanta: form.rin,
@@ -2339,8 +2353,12 @@ function FlotaInner() {
                     </div>
                   </div>
                   <p className="text-xs text-[var(--muted)]">
-                    Km {Number(v.km_actual ?? 0).toLocaleString("es-GT")} · Rin{" "}
-                    {v.rin_llanta || "—"}
+                    Km {Number(v.km_actual ?? 0).toLocaleString("es-GT")} ·{" "}
+                    <span className="font-medium text-sky-300/90">
+                      {empresaDe(v)}
+                    </span>
+                    {" · "}
+                    Rin {v.rin_llanta || "—"}
                     {(v.filtros ?? []).length
                       ? ` · ${(v.filtros ?? [])
                           .slice(0, 2)
@@ -2499,6 +2517,32 @@ function FlotaInner() {
                     <option value="1">Activo</option>
                     <option value="0">Inactivo</option>
                   </select>
+                </label>
+                <label className="text-xs text-[var(--muted)] sm:col-span-2">
+                  Empresa / dueño de la unidad
+                  <input
+                    list="empresas-flota-alias"
+                    className={`${input} mt-1 w-full`}
+                    placeholder="Kuiqtrans, Mónaco, Fresco Fresh…"
+                    value={form.empresaActivo}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        empresaActivo: e.target.value,
+                      }))
+                    }
+                  />
+                  <datalist id="empresas-flota-alias">
+                    <option value="Kuiqtrans" />
+                    <option value="Mónaco" />
+                    <option value="Fresco Fresh" />
+                    <option value="Ecoplanet" />
+                    <option value="ELISA" />
+                  </datalist>
+                  <span className="mt-0.5 block text-[10px] text-[var(--muted)]">
+                    KT = Kuiqtrans · FSS = Fresco Fresh · Mónaco y KT comparten
+                    flota
+                  </span>
                 </label>
               </div>
 
@@ -2680,6 +2724,7 @@ function FlotaInner() {
               <thead className="bg-[#0d9488] text-white">
                 <tr>
                   <th className="px-3 py-2">Placa</th>
+                  <th className="px-3 py-2">Empresa</th>
                   <th className="px-3 py-2">Estado</th>
                   <th className="px-3 py-2">Descripción</th>
                   <th className="px-3 py-2">Marca</th>
@@ -2705,11 +2750,11 @@ function FlotaInner() {
                       {v.compartido ? (
                         <span className="ml-1 text-[10px] text-amber-300">
                           compartida
-                          {v.empresa_duena_codigo
-                            ? ` (${v.empresa_duena_codigo})`
-                            : ""}
                         </span>
                       ) : null}
+                    </td>
+                    <td className="px-3 py-2 text-xs font-medium text-sky-300/90">
+                      {empresaDe(v)}
                     </td>
                     <td className="px-3 py-2">
                       <span

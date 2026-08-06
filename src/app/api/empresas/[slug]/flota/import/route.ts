@@ -8,8 +8,28 @@ import {
 } from "@/lib/flota/import-excel";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
 import { guardarFiltrosVehiculo } from "@/lib/flota/filtros";
+import { guardarAccesoVehiculo } from "@/lib/flota/acceso";
+import { resolverEmpresaFlotaExcel } from "@/lib/flota/empresas-alias";
+import { listarEmpresasActivas } from "@/lib/empresas";
 
 type Ctx = { params: Promise<{ slug: string }> };
+
+/** Empresas del grupo que comparten camiones (KT / Mónaco / Fresco Fresh). */
+const SLUGS_FLOTA_COMPARTIDA = ["kt-monaco", "frescofresh"];
+
+function matchEmpresa(
+  empresas: { id: number; codigo: string; slug: string; nombre: string }[],
+  slugs: string[],
+  codigos: string[],
+): number | null {
+  const slugSet = new Set(slugs.map((s) => s.toLowerCase()));
+  const codSet = new Set(codigos.map((c) => c.toUpperCase()));
+  for (const e of empresas) {
+    if (slugSet.has(e.slug.toLowerCase())) return e.id;
+    if (codSet.has(e.codigo.toUpperCase())) return e.id;
+  }
+  return null;
+}
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
@@ -49,10 +69,20 @@ export async function POST(req: Request, ctx: Ctx) {
 
   if (soloEmpresa) {
     const q = soloEmpresa.toLowerCase();
-    filas = filas.filter((f) =>
-      (f.empresaActivo ?? "").toLowerCase().includes(q),
-    );
+    filas = filas.filter((f) => {
+      const r = resolverEmpresaFlotaExcel(f.empresaActivo);
+      return (
+        (f.empresaActivo ?? "").toLowerCase().includes(q) ||
+        r.etiqueta.toLowerCase().includes(q) ||
+        r.codigoCorto.toLowerCase().includes(q)
+      );
+    });
   }
+
+  const empresas = await listarEmpresasActivas();
+  const idsComparten = empresas
+    .filter((e) => SLUGS_FLOTA_COMPARTIDA.includes(e.slug))
+    .map((e) => e.id);
 
   let creados = 0;
   let actualizados = 0;
@@ -60,17 +90,59 @@ export async function POST(req: Request, ctx: Ctx) {
 
   for (const f of filas) {
     try {
-      const existente = await query<RowDataPacket[]>(
-        "SELECT id FROM flota_vehiculos WHERE empresa_id = ? AND placa = ? LIMIT 1",
-        [guard.empresa.id, f.placa],
+      const resuelta = resolverEmpresaFlotaExcel(f.empresaActivo);
+      const etiqueta =
+        resuelta.etiqueta || (f.empresaActivo ?? "").trim() || null;
+
+      // Dueño: empresa resuelta del Excel, o la empresa donde se importa
+      let duenoId =
+        matchEmpresa(empresas, resuelta.slugs, resuelta.codigos) ??
+        guard.empresa.id;
+      // KT y Mónaco comparten el tenant kt-monaco en plataforma
+      if (
+        resuelta.grupoCompartido &&
+        (resuelta.codigoCorto === "KT" || resuelta.codigoCorto === "MÓNACO")
+      ) {
+        const kt = empresas.find((e) => e.slug === "kt-monaco");
+        if (kt) duenoId = kt.id;
+      }
+
+      // Buscar por placa en dueño o en el tenant actual (evita duplicar unidad física)
+      let existente = await query<RowDataPacket[]>(
+        `SELECT id, empresa_id FROM flota_vehiculos
+         WHERE placa = ? AND empresa_id IN (?, ?)
+         ORDER BY CASE WHEN empresa_id = ? THEN 0 ELSE 1 END
+         LIMIT 1`,
+        [f.placa, duenoId, guard.empresa.id, duenoId],
       );
+      if (!existente[0]) {
+        existente = await query<RowDataPacket[]>(
+          "SELECT id, empresa_id FROM flota_vehiculos WHERE placa = ? LIMIT 1",
+          [f.placa],
+        );
+      }
+
       const kmActual = f.kmActual ?? 0;
-      const kmIntervalo = f.kmIntervalo && f.kmIntervalo > 0 ? f.kmIntervalo : 10000;
+      const kmIntervalo =
+        f.kmIntervalo && f.kmIntervalo > 0 ? f.kmIntervalo : 10000;
       const kmUltimo = f.kmUltimoServicio ?? 0;
       const filtros = parsearFiltrosTexto(f.filtros);
 
+      const accesosPara = (vehiculoEmpresaId: number) => {
+        const ids = new Set<number>();
+        // Quien importa siempre ve la unidad
+        ids.add(guard.empresa.id);
+        // Grupo compartido KT / Mónaco / Fresco Fresh
+        if (resuelta.grupoCompartido || idsComparten.includes(vehiculoEmpresaId)) {
+          for (const id of idsComparten) ids.add(id);
+        }
+        ids.delete(vehiculoEmpresaId);
+        return [...ids];
+      };
+
       if (existente[0]) {
         const vid = Number(existente[0].id);
+        const empId = Number(existente[0].empresa_id);
         await execute(
           `UPDATE flota_vehiculos SET
             marca = ?,
@@ -78,7 +150,7 @@ export async function POST(req: Request, ctx: Ctx) {
             descripcion = COALESCE(?, descripcion),
             color = COALESCE(?, color),
             credito = COALESCE(?, credito),
-            empresa_activo = COALESCE(?, empresa_activo),
+            empresa_activo = ?,
             nit = COALESCE(?, nit),
             condicion_propiedad = COALESCE(?, condicion_propiedad),
             seguros = COALESCE(?, seguros),
@@ -94,14 +166,14 @@ export async function POST(req: Request, ctx: Ctx) {
             capacidad = COALESCE(?, capacidad),
             activo = ?,
             estado = ?
-           WHERE id = ? AND empresa_id = ?`,
+           WHERE id = ?`,
           [
             f.marca,
             f.modelo,
             f.descripcion,
             f.color,
             f.credito,
-            f.empresaActivo,
+            etiqueta,
             f.nit,
             f.condicionPropiedad,
             f.seguros,
@@ -118,12 +190,12 @@ export async function POST(req: Request, ctx: Ctx) {
             f.activo ? 1 : 0,
             f.activo ? "Activo" : "Inactivo",
             vid,
-            guard.empresa.id,
           ],
         );
         if (filtros.length) {
-          await guardarFiltrosVehiculo(guard.empresa.id, vid, filtros);
+          await guardarFiltrosVehiculo(empId, vid, filtros);
         }
+        await guardarAccesoVehiculo(vid, accesosPara(empId), empId);
         actualizados += 1;
       } else {
         const ins = await execute(
@@ -135,14 +207,14 @@ export async function POST(req: Request, ctx: Ctx) {
              chasis, capacidad, activo, estado)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
-            guard.empresa.id,
+            duenoId,
             f.placa,
             f.marca,
             f.modelo,
             f.descripcion,
             f.color,
             f.credito,
-            f.empresaActivo,
+            etiqueta,
             f.nit,
             f.condicionPropiedad,
             f.seguros,
@@ -160,11 +232,15 @@ export async function POST(req: Request, ctx: Ctx) {
             f.activo ? "Activo" : "Inactivo",
           ],
         );
-        if (filtros.length && ins.insertId) {
-          await guardarFiltrosVehiculo(
-            guard.empresa.id,
-            Number(ins.insertId),
-            filtros,
+        const nuevoId = Number(ins.insertId);
+        if (filtros.length && nuevoId) {
+          await guardarFiltrosVehiculo(duenoId, nuevoId, filtros);
+        }
+        if (nuevoId) {
+          await guardarAccesoVehiculo(
+            nuevoId,
+            accesosPara(duenoId),
+            duenoId,
           );
         }
         creados += 1;
@@ -177,7 +253,7 @@ export async function POST(req: Request, ctx: Ctx) {
   }
 
   return NextResponse.json({
-    mensaje: `Importación: ${creados} nuevos, ${actualizados} actualizados.`,
+    mensaje: `Importación: ${creados} nuevos, ${actualizados} actualizados. KT=Kuiqtrans, Mónaco y FSS=Fresco Fresh quedan etiquetados y compartidos en flota.`,
     creados,
     actualizados,
     total: filas.length,
