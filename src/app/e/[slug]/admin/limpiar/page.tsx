@@ -155,7 +155,7 @@ export default function LimpiarModuloPage() {
                     "rounded-lg border px-3 py-2.5 text-left transition",
                     activa
                       ? "border-sky-500 bg-sky-950/40 ring-1 ring-sky-500/60"
-                      : "border-[var(--border)] bg-[#0b1217] hover:border-slate-500",
+                      : "border-[var(--border)] bg-[var(--input)] hover:border-slate-500",
                   ].join(" ")}
                 >
                   <span className="block text-sm font-semibold tracking-wide">
@@ -187,7 +187,7 @@ export default function LimpiarModuloPage() {
                     "rounded-lg border px-3 py-1.5 text-xs font-medium transition",
                     activa
                       ? "border-amber-500 bg-amber-950/40 text-amber-100"
-                      : "border-[var(--border)] bg-[#0b1217] text-[var(--muted)] hover:text-white",
+                      : "border-[var(--border)] bg-[var(--input)] text-[var(--muted)] hover:text-[var(--nav-text-strong)]",
                   ].join(" ")}
                 >
                   {m === "rrhh"
@@ -226,7 +226,7 @@ export default function LimpiarModuloPage() {
           </div>
         ) : null}
 
-        <div className="rounded-lg border border-[var(--border)] bg-[#0b1217] p-3 text-sm">
+        <div className="rounded-lg border border-[var(--border)] bg-[var(--input)] p-3 text-sm">
           <p className="mb-2 text-xs text-[var(--muted)]">
             Registros actuales
             {empresaSel ? ` en ${empresaSel.codigo}` : ""}
@@ -257,7 +257,7 @@ export default function LimpiarModuloPage() {
             </span>
           </span>
           <input
-            className="mt-2 w-full rounded border border-[var(--border)] bg-[#0b1217] px-2 py-2 font-mono text-sm"
+            className="mt-2 w-full rounded border border-[var(--border)] bg-[var(--input)] px-2 py-2 font-mono text-sm"
             value={confirmacion}
             onChange={(e) => setConfirmacion(e.target.value)}
             placeholder={confirmacionEsperada}

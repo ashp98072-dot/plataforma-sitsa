@@ -125,7 +125,7 @@ export default function VacacionesPage() {
   const usaSaldo =
     tipo === "Vacaciones" || tipo === "A cuenta de Vacaciones";
   const input =
-    "rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1 text-sm";
+    "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm";
 
   return (
     <div className="space-y-6">
@@ -245,7 +245,7 @@ export default function VacacionesPage() {
 
       <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
         <table className="w-full text-left text-sm">
-          <thead className="bg-[#0d1522] text-[var(--muted)]">
+          <thead className="bg-[var(--thead)] text-[var(--muted)]">
             <tr>
               <th className="px-3 py-2">Empleado</th>
               <th className="px-3 py-2">Tipo</th>

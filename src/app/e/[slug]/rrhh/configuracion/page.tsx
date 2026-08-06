@@ -64,7 +64,7 @@ export default function ConfigRrhhPage() {
   }
 
   const input =
-    "mt-1 w-full rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1 text-sm";
+    "mt-1 w-full rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm";
 
   return (
     <div className="space-y-6">
@@ -254,7 +254,7 @@ export default function ConfigRrhhPage() {
         className="flex flex-wrap gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4"
       >
         <input
-          className="rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1 text-sm"
+          className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm"
           placeholder="Descripción feriado"
           value={desc}
           onChange={(e) => setDesc(e.target.value)}
@@ -262,7 +262,7 @@ export default function ConfigRrhhPage() {
         />
         <input
           type="date"
-          className="rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1 text-sm"
+          className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm"
           value={fecha}
           onChange={(e) => setFecha(e.target.value)}
         />

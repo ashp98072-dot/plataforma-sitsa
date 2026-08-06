@@ -120,9 +120,9 @@ export default function ContabilidadPage() {
       </div>
 
       <form onSubmit={crearCuenta} className="flex flex-wrap gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-        <input className="rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1" placeholder="Código" value={codigo} onChange={(e) => setCodigo(e.target.value)} required />
-        <input className="rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1" placeholder="Nombre" value={nombre} onChange={(e) => setNombre(e.target.value)} required />
-        <select className="rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1" value={tipo} onChange={(e) => setTipo(e.target.value)}>
+        <input className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" placeholder="Código" value={codigo} onChange={(e) => setCodigo(e.target.value)} required />
+        <input className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" placeholder="Nombre" value={nombre} onChange={(e) => setNombre(e.target.value)} required />
+        <select className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" value={tipo} onChange={(e) => setTipo(e.target.value)}>
           {["Activo", "Pasivo", "Capital", "Ingreso", "Gasto"].map((t) => (
             <option key={t}>{t}</option>
           ))}
@@ -134,9 +134,9 @@ export default function ContabilidadPage() {
       </form>
 
       <div className="flex flex-wrap gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-        <input className="rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1" placeholder="Cliente CxC" value={cliente} onChange={(e) => setCliente(e.target.value)} />
-        <input className="rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1" placeholder="Proveedor CxP" value={proveedor} onChange={(e) => setProveedor(e.target.value)} />
-        <input type="number" className="w-28 rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1" value={monto} onChange={(e) => setMonto(Number(e.target.value))} />
+        <input className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" placeholder="Cliente CxC" value={cliente} onChange={(e) => setCliente(e.target.value)} />
+        <input className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" placeholder="Proveedor CxP" value={proveedor} onChange={(e) => setProveedor(e.target.value)} />
+        <input type="number" className="w-28 rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" value={monto} onChange={(e) => setMonto(Number(e.target.value))} />
         <button type="button" onClick={() => void crearCxc()} className="rounded bg-[var(--accent-2)] px-3 py-1 text-sm">CxC</button>
         <button type="button" onClick={() => void crearCxp()} className="rounded bg-[#0f766e] px-3 py-1 text-sm">CxP</button>
       </div>

@@ -95,7 +95,7 @@ export default function SelectEmpresaPage() {
             key={e.id}
             type="button"
             onClick={() => void elegir(e.id)}
-            className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 text-left transition hover:border-[var(--accent)] hover:bg-[#172234]"
+            className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 text-left transition hover:border-[var(--accent)] hover:bg-[var(--nav-hover)]"
           >
             <p className="text-xs uppercase tracking-wider text-[var(--muted)]">
               {e.codigo}

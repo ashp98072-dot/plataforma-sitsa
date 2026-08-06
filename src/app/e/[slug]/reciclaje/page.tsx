@@ -45,11 +45,11 @@ export default function ReciclajePage() {
         Módulo específico (Francisco / Ecoplanet): lotes de material.
       </p>
       <form onSubmit={onSubmit} className="flex flex-wrap gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-        <input className="rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1" placeholder="Código" value={form.codigo} onChange={(e) => setForm({ ...form, codigo: e.target.value })} required />
-        <input className="rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1" placeholder="Material" value={form.material} onChange={(e) => setForm({ ...form, material: e.target.value })} required />
-        <input type="number" className="w-28 rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1" value={form.pesoKg} onChange={(e) => setForm({ ...form, pesoKg: Number(e.target.value) })} />
-        <input className="rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1" placeholder="Proveedor" value={form.proveedor} onChange={(e) => setForm({ ...form, proveedor: e.target.value })} />
-        <input type="date" className="rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} />
+        <input className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" placeholder="Código" value={form.codigo} onChange={(e) => setForm({ ...form, codigo: e.target.value })} required />
+        <input className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" placeholder="Material" value={form.material} onChange={(e) => setForm({ ...form, material: e.target.value })} required />
+        <input type="number" className="w-28 rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" value={form.pesoKg} onChange={(e) => setForm({ ...form, pesoKg: Number(e.target.value) })} />
+        <input className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" placeholder="Proveedor" value={form.proveedor} onChange={(e) => setForm({ ...form, proveedor: e.target.value })} />
+        <input type="date" className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} />
         <button className="rounded bg-[var(--accent)] px-3 py-1 text-sm">Registrar lote</button>
       </form>
       {msg ? <p className="text-sm">{msg}</p> : null}

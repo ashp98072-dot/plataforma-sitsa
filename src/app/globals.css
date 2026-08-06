@@ -2,6 +2,7 @@
 
 :root,
 [data-theme="dark"] {
+  color-scheme: dark;
   --bg: #0b1220;
   --card: #121a28;
   --sidebar: #0d1522;
@@ -12,11 +13,17 @@
   --accent-2: #0d9488;
   --danger: #5c2525;
   --panel: #1e293b;
+  --input: #0b1217;
+  --thead: #0d1522;
+  --nav-hover: rgba(255, 255, 255, 0.05);
+  --nav-active: rgba(255, 255, 255, 0.1);
+  --nav-text-strong: #ffffff;
   --glow-1: #1a3a55;
   --glow-2: #134e4a;
 }
 
 [data-theme="light"] {
+  color-scheme: light;
   --bg: #eef3f8;
   --card: #ffffff;
   --sidebar: #f8fafc;
@@ -26,7 +33,12 @@
   --accent: #1d5f96;
   --accent-2: #0f766e;
   --danger: #b91c1c;
-  --panel: #e2e8f0;
+  --panel: #e8eef5;
+  --input: #ffffff;
+  --thead: #e8eef5;
+  --nav-hover: rgba(15, 23, 42, 0.06);
+  --nav-active: rgba(29, 95, 150, 0.12);
+  --nav-text-strong: #0f172a;
   --glow-1: #bfdbfe;
   --glow-2: #a7f3d0;
 }
@@ -40,9 +52,27 @@ body {
     radial-gradient(900px 500px at 100% 0%, var(--glow-2) 0%, transparent 50%),
     var(--bg);
   font-family: "Segoe UI", system-ui, sans-serif;
-  transition: background 0.2s ease, color 0.2s ease;
 }
 
 * {
   box-sizing: border-box;
+}
+
+/* Controles nativos legibles en ambos temas */
+input,
+select,
+textarea {
+  color: var(--text);
+  background-color: var(--input);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+  opacity: 0.85;
+}
+
+option {
+  color: var(--text);
+  background-color: var(--input);
 }

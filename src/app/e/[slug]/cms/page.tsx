@@ -45,10 +45,10 @@ export default function CmsPage() {
         </a>
       </p>
       <form onSubmit={onSubmit} className="space-y-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-        <input className="w-full rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1" placeholder="Clave (inicio, servicios…)" value={clave} onChange={(e) => setClave(e.target.value)} required />
-        <input className="w-full rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1" placeholder="Título" value={titulo} onChange={(e) => setTitulo(e.target.value)} />
-        <textarea className="w-full rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1" rows={4} placeholder="Contenido" value={contenido} onChange={(e) => setContenido(e.target.value)} />
-        <input className="w-full rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1" placeholder="URL imagen" value={imagenUrl} onChange={(e) => setImagenUrl(e.target.value)} />
+        <input className="w-full rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" placeholder="Clave (inicio, servicios…)" value={clave} onChange={(e) => setClave(e.target.value)} required />
+        <input className="w-full rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" placeholder="Título" value={titulo} onChange={(e) => setTitulo(e.target.value)} />
+        <textarea className="w-full rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" rows={4} placeholder="Contenido" value={contenido} onChange={(e) => setContenido(e.target.value)} />
+        <input className="w-full rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" placeholder="URL imagen" value={imagenUrl} onChange={(e) => setImagenUrl(e.target.value)} />
         <button className="rounded bg-[var(--accent)] px-3 py-1 text-sm">Guardar sección</button>
       </form>
       {msg ? <p className="text-sm text-emerald-300">{msg}</p> : null}

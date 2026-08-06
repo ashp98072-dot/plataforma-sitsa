@@ -1769,7 +1769,7 @@ function FlotaInner() {
   }
 
   const input =
-    "rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1.5 text-sm";
+    "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
 
   const tabs: { id: Tab; label: string; show: boolean }[] =
     rol === "Piloto"
@@ -2184,7 +2184,7 @@ function FlotaInner() {
                 </label>
               </div>
 
-              <div className="rounded-lg border border-[var(--border)] bg-[#0b1217] p-3">
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--input)] p-3">
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <p className="text-sm font-medium">Tipos de filtros</p>
@@ -2711,7 +2711,7 @@ function FlotaInner() {
                               <img
                                 src={ev.url}
                                 alt={ev.nombre}
-                                className="h-28 w-full object-cover bg-[#0b1217]"
+                                className="h-28 w-full object-cover bg-[var(--input)]"
                               />
                               <div className="space-y-0.5 p-1.5 text-[10px] text-[var(--muted)]">
                                 <p className="font-medium text-sky-300">
@@ -2906,7 +2906,7 @@ function FlotaInner() {
                     {repuestos.map((r) => (
                       <li
                         key={r}
-                        className="flex items-center gap-1 rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1 text-xs"
+                        className="flex items-center gap-1 rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-xs"
                       >
                         {r}
                         <button
@@ -3255,7 +3255,7 @@ function FlotaInner() {
                           · {c.n} svc
                         </span>
                       </div>
-                      <div className="h-3 overflow-hidden rounded bg-[#0b1217]">
+                      <div className="h-3 overflow-hidden rounded bg-[var(--input)]">
                         <div
                           className="h-full rounded bg-emerald-600"
                           style={{
@@ -3295,7 +3295,7 @@ function FlotaInner() {
                 return (
                   <div
                     key={v.id}
-                    className="rounded-lg border border-[var(--border)] bg-[#0b1217]/50 p-3"
+                    className="rounded-lg border border-[var(--border)] bg-[var(--input)]/50 p-3"
                   >
                     <div className="flex flex-wrap items-start justify-between gap-2">
                       <div>
@@ -3435,7 +3435,7 @@ function FlotaInner() {
                                   <img
                                     src={ev.url}
                                     alt={ev.nombre}
-                                    className="h-28 w-full object-cover bg-[#0b1217]"
+                                    className="h-28 w-full object-cover bg-[var(--input)]"
                                   />
                                   <div className="space-y-0.5 p-1.5 text-[10px] text-[var(--muted)]">
                                     <p className="font-medium text-sky-300">
@@ -3834,7 +3834,7 @@ function FlotaInner() {
                           );
                           if (!p) return null;
                           return (
-                            <div className="rounded border border-sky-900/60 bg-[#0b1217]/60 p-2 text-[11px] text-[var(--muted)] space-y-0.5">
+                            <div className="rounded border border-sky-900/60 bg-[var(--input)]/60 p-2 text-[11px] text-[var(--muted)] space-y-0.5">
                               <p className="font-medium text-sky-200">
                                 Detalle de ruta · {p.codigo}
                                 {p.estado ? ` (${p.estado})` : ""}
@@ -4194,7 +4194,7 @@ function FlotaInner() {
                         return (
                           <div
                             key={pp.id}
-                            className="flex flex-wrap items-center gap-2 rounded border border-[var(--border)] bg-[#0b1217]/50 p-2"
+                            className="flex flex-wrap items-center gap-2 rounded border border-[var(--border)] bg-[var(--input)]/50 p-2"
                           >
                             <div className="min-w-[140px] flex-1 text-xs">
                               <p className="font-medium text-[var(--fg)]">

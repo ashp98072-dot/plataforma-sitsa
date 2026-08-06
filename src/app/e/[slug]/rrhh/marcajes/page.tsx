@@ -282,7 +282,7 @@ export default function MarcajesKioskoPage() {
       </div>
 
       <div className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6 md:p-10">
-        <div className="mx-auto max-w-md rounded-xl bg-[#0b1217] px-6 py-4 text-center">
+        <div className="mx-auto max-w-md rounded-xl bg-[var(--input)] px-6 py-4 text-center">
           <p className="font-mono text-2xl font-semibold tracking-wide text-[#2F8FD1] md:text-3xl">
             {reloj}
           </p>
@@ -333,7 +333,7 @@ export default function MarcajesKioskoPage() {
             Ingrese su Código o DPI
             <input
               ref={inputRef}
-              className="mt-3 w-full rounded-lg border-2 border-[var(--accent)] bg-[#0b1217] px-4 py-3 text-center text-lg outline-none focus:ring-2 focus:ring-[#2F8FD1]"
+              className="mt-3 w-full rounded-lg border-2 border-[var(--accent)] bg-[var(--input)] px-4 py-3 text-center text-lg outline-none focus:ring-2 focus:ring-[#2F8FD1]"
               value={codigo}
               onChange={(e) => setCodigo(e.target.value)}
               placeholder="Ej: EMP001"

@@ -116,7 +116,7 @@ export default function MarcajeManualPage() {
   }
 
   const input =
-    "mt-1 w-full rounded border border-[var(--border)] bg-[#0b1217] px-2 py-2 text-sm";
+    "mt-1 w-full rounded border border-[var(--border)] bg-[var(--input)] px-2 py-2 text-sm";
 
   if (!allowed) {
     return (
@@ -284,7 +284,7 @@ export default function MarcajeManualPage() {
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead className="bg-[#0d1522] text-[var(--muted)]">
+            <thead className="bg-[var(--thead)] text-[var(--muted)]">
               <tr>
                 <th className="px-2 py-2">Código</th>
                 <th className="px-2 py-2">Empleado</th>

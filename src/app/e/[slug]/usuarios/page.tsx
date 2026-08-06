@@ -139,7 +139,7 @@ function PermisosTable({
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-left text-xs">
-        <thead className="bg-[#0b1217] text-[var(--muted)]">
+        <thead className="bg-[var(--input)] text-[var(--muted)]">
           <tr>
             <th className="px-2 py-2">Módulo</th>
             {FLAGS.map(([, label]) => (
@@ -390,7 +390,7 @@ export default function UsuariosPage() {
   }
 
   const input =
-    "rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1 text-sm w-full";
+    "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm w-full";
 
   return (
     <div className="space-y-6">
@@ -582,7 +582,7 @@ export default function UsuariosPage() {
                         [g.id]: !prev[g.id],
                       }))
                     }
-                    className="flex w-full items-center gap-2 bg-[#0d1522] px-3 py-2.5 text-left text-sm"
+                    className="flex w-full items-center gap-2 bg-[var(--thead)] px-3 py-2.5 text-left text-sm"
                   >
                     <IconChevron open={open} />
                     <span className="text-[var(--accent-2)]">

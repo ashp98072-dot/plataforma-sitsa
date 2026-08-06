@@ -138,7 +138,7 @@ export function DocumentosModal({
             <label className="block text-sm text-[var(--muted)]">
               Tipo
               <select
-                className="mt-1 w-full rounded-md border border-[var(--border)] bg-[#0b1217] px-3 py-2 text-sm"
+                className="mt-1 w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm"
                 value={tipo}
                 onChange={(e) =>
                   setTipo(e.target.value as (typeof TIPOS_DOCUMENTO)[number])

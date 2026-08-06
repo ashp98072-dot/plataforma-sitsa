@@ -63,7 +63,7 @@ export default function LoginPage() {
         <label className="mt-6 block text-sm text-[var(--muted)]">
           Usuario
           <input
-            className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[#0b1217] px-3 py-2"
+            className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
             required
@@ -73,7 +73,7 @@ export default function LoginPage() {
           Contraseña
           <input
             type="password"
-            className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[#0b1217] px-3 py-2"
+            className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required

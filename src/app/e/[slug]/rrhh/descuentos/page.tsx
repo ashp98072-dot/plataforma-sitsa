@@ -51,7 +51,7 @@ export default function DescuentosPage() {
   }
 
   const input =
-    "rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1 text-sm";
+    "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm";
 
   return (
     <div className="space-y-6">

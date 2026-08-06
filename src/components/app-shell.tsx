@@ -391,8 +391,8 @@ export function AppShell({
                   className={[
                     "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-medium",
                     groupActive
-                      ? "bg-white/10 text-white"
-                      : "text-[var(--muted)] hover:bg-white/5 hover:text-white",
+                      ? "bg-[var(--nav-active)] text-[var(--nav-text-strong)]"
+                      : "text-[var(--muted)] hover:bg-[var(--nav-hover)] hover:text-[var(--nav-text-strong)]",
                   ].join(" ")}
                 >
                   <IconChevron open={open} />
@@ -414,7 +414,7 @@ export function AppShell({
                             "block rounded-md px-2.5 py-1.5 text-sm",
                             active
                               ? "bg-[var(--accent)] text-white"
-                              : "text-[var(--muted)] hover:bg-white/5 hover:text-white",
+                              : "text-[var(--muted)] hover:bg-[var(--nav-hover)] hover:text-[var(--nav-text-strong)]",
                           ].join(" ")}
                         >
                           {l.label}

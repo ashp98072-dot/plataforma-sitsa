@@ -45,9 +45,9 @@ export default function InventarioRrhhPage() {
         EPP / útiles por empresa (no es el inventario de logística SKAS).
       </p>
       <form onSubmit={onSubmit} className="flex flex-wrap gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-        <input className="rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1" placeholder="Código" value={codigo} onChange={(e) => setCodigo(e.target.value)} required />
-        <input className="rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1" placeholder="Nombre" value={nombre} onChange={(e) => setNombre(e.target.value)} required />
-        <input type="number" className="w-24 rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1" value={stock} onChange={(e) => setStock(Number(e.target.value))} />
+        <input className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" placeholder="Código" value={codigo} onChange={(e) => setCodigo(e.target.value)} required />
+        <input className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" placeholder="Nombre" value={nombre} onChange={(e) => setNombre(e.target.value)} required />
+        <input type="number" className="w-24 rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" value={stock} onChange={(e) => setStock(Number(e.target.value))} />
         <button className="rounded bg-[var(--accent)] px-3 py-1 text-sm">Agregar</button>
       </form>
       {msg ? <p className="text-sm text-emerald-300">{msg}</p> : null}

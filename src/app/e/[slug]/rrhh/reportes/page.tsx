@@ -74,7 +74,7 @@ export default function ReportesPage() {
   }
 
   const input =
-    "rounded border border-[var(--border)] bg-[#0b1217] px-2 py-1 text-sm";
+    "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm";
 
   return (
     <div className="space-y-6">
@@ -173,7 +173,7 @@ export default function ReportesPage() {
 
       <div className="max-h-[70vh] overflow-auto rounded-xl border border-[var(--border)]">
         <table className="w-full text-left text-xs">
-          <thead className="sticky top-0 bg-[#0d1522] text-[var(--muted)]">
+          <thead className="sticky top-0 bg-[var(--thead)] text-[var(--muted)]">
             <tr>
               <th className="px-2 py-2">Fecha</th>
               <th className="px-2 py-2">Código</th>

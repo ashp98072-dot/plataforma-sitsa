@@ -10,6 +10,7 @@ import {
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { DocumentosModal } from "@/components/rrhh/documentos-modal";
+import { formatearFechaVisible, hoyLocal } from "@/lib/rrhh/dates";
 
 type Emp = {
   id: number;
@@ -26,23 +27,26 @@ type Emp = {
   docsCount?: number;
 };
 
-const emptyForm = {
-  codigo: "",
-  nombre: "",
-  puesto: "",
-  categoriaOps: "",
-  tipoHorario: "Fijo" as "Fijo" | "Variable",
-  fechaAlta: new Date().toISOString().slice(0, 10),
-  fechaInicioLaboral: "",
-  horaEntradaTeorica: "08:00",
-  horaSalidaTeorica: "17:00",
-  estado: "Activo" as "Activo" | "Baja",
-};
+function emptyForm() {
+  return {
+    codigo: "",
+    nombre: "",
+    puesto: "",
+    categoriaOps: "",
+    tipoHorario: "Fijo" as "Fijo" | "Variable",
+    fechaAlta: hoyLocal(),
+    fechaInicioLaboral: "",
+    horaEntradaTeorica: "08:00",
+    horaSalidaTeorica: "17:00",
+    estado: "Activo" as "Activo" | "Baja",
+  };
+}
 
 export default function EmpleadosPage() {
   const slug = String(useParams().slug);
   const [empleados, setEmpleados] = useState<Emp[]>([]);
   const [q, setQ] = useState("");
+  const [qDebounced, setQDebounced] = useState("");
   const [form, setForm] = useState(emptyForm);
   const [editId, setEditId] = useState<number | null>(null);
   const [error, setError] = useState("");
@@ -51,13 +55,18 @@ export default function EmpleadosPage() {
   const [docsEmp, setDocsEmp] = useState<Emp | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    const t = setTimeout(() => setQDebounced(q), 300);
+    return () => clearTimeout(t);
+  }, [q]);
+
   const cargar = useCallback(async () => {
     const res = await fetch(
-      `/api/empresas/${slug}/empleados?q=${encodeURIComponent(q)}`,
+      `/api/empresas/${slug}/empleados?q=${encodeURIComponent(qDebounced)}`,
     );
     const data = await res.json();
     if (res.ok) setEmpleados(data.empleados ?? []);
-  }, [slug, q]);
+  }, [slug, qDebounced]);
 
   useEffect(() => {
     void cargar();
@@ -71,7 +80,7 @@ export default function EmpleadosPage() {
       puesto: e.puesto,
       categoriaOps: e.categoriaOps,
       tipoHorario: e.tipoHorario === "Variable" ? "Variable" : "Fijo",
-      fechaAlta: e.fechaAlta || new Date().toISOString().slice(0, 10),
+      fechaAlta: e.fechaAlta || hoyLocal(),
       fechaInicioLaboral: e.fechaInicioLaboral || "",
       horaEntradaTeorica: (e.horaEntradaTeorica || "08:00:00").slice(0, 5),
       horaSalidaTeorica: (e.horaSalidaTeorica || "17:00:00").slice(0, 5),
@@ -100,7 +109,7 @@ export default function EmpleadosPage() {
       return;
     }
     setMensaje(data.mensaje);
-    setForm(emptyForm);
+    setForm(emptyForm());
     setEditId(null);
     await cargar();
   }
@@ -116,7 +125,7 @@ export default function EmpleadosPage() {
   }
 
   const input =
-    "mt-1 w-full rounded-lg border border-[var(--border)] bg-[#0b1217] px-3 py-2 text-sm";
+    "mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm";
 
   return (
     <div className="space-y-6">
@@ -124,7 +133,7 @@ export default function EmpleadosPage() {
         <h1 className="text-2xl font-semibold">Personal / Empleados</h1>
         <p className="text-sm text-[var(--muted)]">
           Alta, edición y baja. Las vacaciones se calculan con la{" "}
-          <strong className="font-medium text-white">fecha de contratación</strong>
+          <strong className="font-medium text-[var(--text)]">fecha de contratación</strong>
           , no con la de entrada laboral.{" "}
           <Link
             href={`/e/${slug}/dashboard-rrhh`}
@@ -288,7 +297,7 @@ export default function EmpleadosPage() {
                 className="rounded-lg bg-[#334155] px-4 py-2 text-sm"
                 onClick={() => {
                   setEditId(null);
-                  setForm(emptyForm);
+                  setForm(emptyForm());
                 }}
               >
                 Cancelar
@@ -303,7 +312,7 @@ export default function EmpleadosPage() {
 
       <div className="flex flex-wrap gap-2">
         <input
-          className="min-w-[12rem] flex-1 rounded-lg border border-[var(--border)] bg-[#0b1217] px-3 py-2 text-sm"
+          className="min-w-[12rem] flex-1 rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm"
           placeholder="Buscar por nombre o código…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
@@ -377,7 +386,7 @@ export default function EmpleadosPage() {
 
       <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
         <table className="w-full text-left text-sm">
-          <thead className="bg-[#0d1522] text-[var(--muted)]">
+          <thead className="bg-[var(--thead)] text-[var(--muted)]">
             <tr>
               <th className="px-3 py-2">Código</th>
               <th className="px-3 py-2">Nombre</th>
@@ -395,7 +404,7 @@ export default function EmpleadosPage() {
             {empleados.map((e) => (
               <tr
                 key={e.id}
-                className="cursor-pointer border-t border-[var(--border)] hover:bg-white/5"
+                className="cursor-pointer border-t border-[var(--border)] hover:bg-[var(--nav-hover)]"
                 title="Doble clic: expediente (PDF/fotos)"
                 onDoubleClick={() => setDocsEmp(e)}
               >
@@ -403,8 +412,12 @@ export default function EmpleadosPage() {
                 <td className="px-3 py-2">{e.nombre}</td>
                 <td className="px-3 py-2">{e.puesto || "—"}</td>
                 <td className="px-3 py-2">{e.categoriaOps || "—"}</td>
-                <td className="px-3 py-2">{e.fechaInicioLaboral || "—"}</td>
-                <td className="px-3 py-2">{e.fechaAlta || "—"}</td>
+                <td className="px-3 py-2">
+                  {formatearFechaVisible(e.fechaInicioLaboral) || "—"}
+                </td>
+                <td className="px-3 py-2">
+                  {formatearFechaVisible(e.fechaAlta) || "—"}
+                </td>
                 <td className="px-3 py-2">
                   {e.tipoHorario} {e.horaEntradaTeorica?.slice(0, 5)}
                 </td>
