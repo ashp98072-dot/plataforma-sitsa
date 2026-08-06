@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
 import { requireTenant } from "@/lib/tenant";
-import { asegurarSchemaFlota } from "@/lib/flota/schema";
 import { kmPendienteServicio } from "@/lib/flota/import-excel";
 import { listarVehiculosAccesibles } from "@/lib/flota/acceso";
 
@@ -34,12 +33,6 @@ export async function GET(_req: Request, ctx: Ctx) {
     rol === "Admin" ||
     rol === "Operaciones" ||
     rol === "CoordinadorPredios";
-
-  try {
-    await asegurarSchemaFlota();
-  } catch {
-    /* ok */
-  }
 
   // Permisos externos pendientes
   try {

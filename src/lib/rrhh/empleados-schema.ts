@@ -1,24 +1,6 @@
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
 
-async function columnaExiste(tabla: string, columna: string): Promise<boolean> {
-  const rows = await query<RowDataPacket[]>(
-    `SELECT COUNT(*) AS n FROM information_schema.COLUMNS
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
-    [tabla, columna],
-  );
-  return Number(rows[0]?.n ?? 0) > 0;
-}
-
-async function ensureColumn(
-  tabla: string,
-  columna: string,
-  ddl: string,
-): Promise<void> {
-  if (await columnaExiste(tabla, columna)) return;
-  await execute(`ALTER TABLE ${tabla} ADD COLUMN ${ddl}`);
-}
-
 const COLUMNAS: [string, string][] = [
   ["dpi", "dpi VARCHAR(20) NULL"],
   ["nit", "nit VARCHAR(20) NULL"],
@@ -62,31 +44,49 @@ let ready: Promise<void> | null = null;
 
 export async function asegurarSchemaEmpleados(): Promise<void> {
   if (!ready) {
-    ready = (async () => {
-      for (const [col, ddl] of COLUMNAS) {
-        try {
-          await ensureColumn("empleados", col, ddl);
-        } catch {
-          /* columna o permisos */
-        }
-      }
-      try {
-        await execute(`
-          CREATE TABLE IF NOT EXISTS empleado_cambios (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            empresa_id INT NOT NULL,
-            id_empleado INT NOT NULL,
-            campo VARCHAR(60) NOT NULL,
-            valor_anterior VARCHAR(255) NULL,
-            valor_nuevo VARCHAR(255) NULL,
-            registrado_por VARCHAR(80) NULL,
-            creado_at DATETIME NOT NULL,
-            INDEX idx_emp_cambios_emp (empresa_id, id_empleado)
-          )`);
-      } catch {
-        /* ok */
-      }
-    })();
+    ready = asegurarInner().catch((e) => {
+      ready = null;
+      throw e;
+    });
   }
   await ready;
+}
+
+async function asegurarInner(): Promise<void> {
+  let existentes = new Set<string>();
+  try {
+    const rows = await query<RowDataPacket[]>(
+      `SELECT COLUMN_NAME AS c FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'empleados'`,
+    );
+    existentes = new Set(rows.map((r) => String(r.c)));
+  } catch {
+    existentes = new Set();
+  }
+
+  for (const [col, ddl] of COLUMNAS) {
+    if (existentes.has(col)) continue;
+    try {
+      await execute(`ALTER TABLE empleados ADD COLUMN ${ddl}`);
+    } catch {
+      /* columna o permisos */
+    }
+  }
+
+  try {
+    await execute(`
+      CREATE TABLE IF NOT EXISTS empleado_cambios (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        empresa_id INT NOT NULL,
+        id_empleado INT NOT NULL,
+        campo VARCHAR(60) NOT NULL,
+        valor_anterior VARCHAR(255) NULL,
+        valor_nuevo VARCHAR(255) NULL,
+        registrado_por VARCHAR(80) NULL,
+        creado_at DATETIME NOT NULL,
+        INDEX idx_emp_cambios_emp (empresa_id, id_empleado)
+      )`);
+  } catch {
+    /* ok */
+  }
 }

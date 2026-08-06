@@ -24,6 +24,8 @@ export const PARAMETROS_DEFAULT: Record<string, string> = {
 export async function obtenerParametros(
   empresaId: number,
 ): Promise<Record<string, string>> {
+  const hit = paramsCache.get(empresaId);
+  if (hit && Date.now() - hit.at < 30_000) return { ...hit.data };
   try {
     const rows = await query<RowDataPacket[]>(
       "SELECT parametro, valor FROM configuracion WHERE empresa_id = ?",
@@ -34,10 +36,21 @@ export async function obtenerParametros(
       const key = String(r.parametro);
       if (key in map) map[key] = String(r.valor);
     }
-    return map;
+    paramsCache.set(empresaId, { at: Date.now(), data: map });
+    return { ...map };
   } catch {
     return { ...PARAMETROS_DEFAULT };
   }
+}
+
+const paramsCache = new Map<
+  number,
+  { at: number; data: Record<string, string> }
+>();
+
+export function invalidarCacheParametros(empresaId?: number): void {
+  if (empresaId == null) paramsCache.clear();
+  else paramsCache.delete(empresaId);
 }
 
 export async function obtenerMinutosTolerancia(
@@ -175,6 +188,7 @@ export async function guardarParametros(
         [empresaId, parametro, valor],
       );
     }
+    invalidarCacheParametros(empresaId);
     return { ok: true, mensaje: "Configuración guardada." };
   } catch {
     return {

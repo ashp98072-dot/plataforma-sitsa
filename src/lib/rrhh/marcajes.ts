@@ -7,6 +7,7 @@ import {
 import {
   obtenerHoraEntradaDefault,
   obtenerMinutosTolerancia,
+  obtenerParametros,
   obtenerToleranciaSemanal,
 } from "./config";
 import {
@@ -116,11 +117,12 @@ export async function listarMarcajesRango(
   desde: string,
   hasta: string,
 ): Promise<MarcajeHoy[]> {
-  const [horaDefault, tolerancia, tolSemanal] = await Promise.all([
-    obtenerHoraEntradaDefault(empresaId),
-    obtenerMinutosTolerancia(empresaId),
-    obtenerToleranciaSemanal(empresaId),
-  ]);
+  const p = await obtenerParametros(empresaId);
+  const horaDefault = p.hora_entrada_default || "07:00:00";
+  const tolerancia = Number.parseInt(p.minutos_tolerancia, 10);
+  const tolSemanal = Number.parseInt(p.minutos_tolerancia_semanal, 10);
+  const tol = Number.isFinite(tolerancia) ? tolerancia : 0;
+  const tolSem = Number.isFinite(tolSemanal) ? tolSemanal : 20;
 
   const rows = await query<RowDataPacket[]>(
     `SELECT s.id, s.id_empleado, e.codigo, e.nombre, s.entrada_at, s.salida_at, s.estado,
@@ -128,30 +130,35 @@ export async function listarMarcajesRango(
      FROM sesiones_trabajo s
      INNER JOIN empleados e ON e.id = s.id_empleado
      WHERE s.empresa_id = ? AND s.fecha_jornada BETWEEN ? AND ?
-     ORDER BY s.fecha_jornada DESC, s.entrada_at DESC
+     ORDER BY s.fecha_jornada ASC, s.entrada_at ASC
      LIMIT 500`,
     [empresaId, desde, hasta],
   );
 
-  const out: MarcajeHoy[] = [];
+  // Acumular minutos de retraso por empleado en la semana (sin N+1 queries)
+  const acumSemana = new Map<string, number>(); // empId|lunes -> minutos
+
+  const ordered: MarcajeHoy[] = [];
   for (const r of rows) {
     const entradaRaw = fmtTs(r.entrada_at as string | Date | null);
     const salidaRaw = fmtTs(r.salida_at as string | Date | null);
     const horaTeorica = String(r.hora_entrada_teorica || horaDefault);
     const fechaJ = String(r.fecha_jornada).slice(0, 10);
-    const usados = await minutosRetrasoSemanaAntes(
-      empresaId,
-      Number(r.id_empleado),
-      fechaJ,
-      horaTeorica,
-    );
+    const empId = Number(r.id_empleado);
+    const lunes = lunesDeSemana(fechaJ);
+    const keySem = `${empId}|${lunes}`;
+    const usados = acumSemana.get(keySem) ?? 0;
+
+    const lateHoy = entradaRaw ? minutosRetraso(entradaRaw, horaTeorica) : 0;
+    acumSemana.set(keySem, usados + lateHoy);
+
     const { estado: incidencia } = calcularEstadoAsistenciaSync(
       entradaRaw ?? "",
       horaTeorica,
-      tolerancia,
-      { toleranciaSemanal: tolSemanal, minutosYaUsadosSemana: usados },
+      tol,
+      { toleranciaSemanal: tolSem, minutosYaUsadosSemana: usados },
     );
-    out.push({
+    ordered.push({
       id: Number(r.id),
       nombre: String(r.nombre),
       codigo: String(r.codigo),
@@ -162,7 +169,10 @@ export async function listarMarcajesRango(
       viajeLargo: Number(r.viaje_largo ?? 0) === 1,
     });
   }
-  return out;
+
+  // UI espera más recientes primero
+  ordered.reverse();
+  return ordered;
 }
 
 export type ResultadoMarcajeKiosko =

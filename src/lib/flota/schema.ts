@@ -27,7 +27,19 @@ async function ensureColumn(
 }
 
 /** Asegura columnas/tablas de flota completa (idempotente). */
+let flotaSchemaReady: Promise<void> | null = null;
+
 export async function asegurarSchemaFlota(): Promise<void> {
+  if (!flotaSchemaReady) {
+    flotaSchemaReady = asegurarSchemaFlotaInner().catch((e) => {
+      flotaSchemaReady = null;
+      throw e;
+    });
+  }
+  await flotaSchemaReady;
+}
+
+async function asegurarSchemaFlotaInner(): Promise<void> {
   await ensureColumn(
     "flota_vehiculos",
     "descripcion",

@@ -33,9 +33,9 @@ export function NotificacionesBell({ slug, rol }: Props) {
     rol === "Operaciones" ||
     rol === "CoordinadorPredios";
 
-  const cargar = useCallback(async () => {
+  const cargar = useCallback(async (silencioso = false) => {
     if (!puedeVer) return;
-    setLoading(true);
+    if (!silencioso) setLoading(true);
     try {
       const res = await fetch(`/api/empresas/${slug}/notificaciones`);
       const data = await res.json();
@@ -44,13 +44,14 @@ export function NotificacionesBell({ slug, rol }: Props) {
         setPendientes(Number(data.pendientes ?? 0));
       }
     } finally {
-      setLoading(false);
+      if (!silencioso) setLoading(false);
     }
   }, [slug, puedeVer]);
 
   useEffect(() => {
-    void cargar();
-    const t = setInterval(() => void cargar(), 60_000);
+    void cargar(false);
+    // Poll ligero cada 2 min (antes 60s + schema flota = muy pesado)
+    const t = setInterval(() => void cargar(true), 120_000);
     return () => clearInterval(t);
   }, [cargar]);
 
