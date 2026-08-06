@@ -4423,9 +4423,7 @@ function FlotaInner() {
                         .filter((v) => !v.en_taller)
                         .map((v) => (
                           <option key={v.id} value={v.placa}>
-                            {v.compartido
-                              ? `${v.placa} (compartida ${v.empresa_duena_codigo ?? ""})`
-                              : v.placa}
+                            {`${v.placa} · ${empresaDe(v)}`}
                           </option>
                         ))}
                     </datalist>
