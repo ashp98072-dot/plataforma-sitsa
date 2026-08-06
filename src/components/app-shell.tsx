@@ -109,6 +109,22 @@ function IconAdmin() {
   );
 }
 
+function IconMenu() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M4 7h16M4 12h16M4 17h16" />
+    </svg>
+  );
+}
+
+function IconClose() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M6 6l12 12M18 6L6 18" />
+    </svg>
+  );
+}
+
 function linkActive(pathname: string, href: string) {
   const pathOnly = href.split("?")[0];
   if (pathname === pathOnly) return true;
@@ -130,11 +146,27 @@ export function AppShell({
   const base = `/e/${slug}`;
   const [dominioEmpresa, setDominioEmpresa] = useState(false);
   const [abiertos, setAbiertos] = useState<Record<string, boolean>>({});
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     const host = window.location.hostname.toLowerCase();
     setDominioEmpresa(Boolean(mapaDominios()[host]));
   }, []);
+
+  // Cerrar drawer al navegar (móvil)
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [pathname]);
+
+  // Evitar scroll del body con el menú abierto
+  useEffect(() => {
+    if (!menuOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [menuOpen]);
 
   const isAdmin = rol === "Admin";
   const homeRrhh = dominioEmpresa ? "/dashboard-rrhh" : `${base}/dashboard-rrhh`;
@@ -362,98 +394,153 @@ export function AppShell({
     router.push("/login");
   }
 
-  return (
-    <div className="min-h-screen md:grid md:grid-cols-[260px_1fr]">
-      <aside className="border-b border-[var(--border)] bg-[var(--sidebar)] md:min-h-screen md:border-b-0 md:border-r">
-        <div className="p-4">
-          <p className="text-xs uppercase tracking-wider text-[var(--muted)]">
-            SITSA
-          </p>
-          <h1 className="mt-1 text-lg font-semibold leading-tight">
-            {empresaNombre}
-          </h1>
-          <p className="mt-1 text-xs text-[var(--muted)]">
-            {username} · {labelRol(rol)}
-          </p>
-        </div>
-
-        <nav className="space-y-1 px-2 pb-3">
-          {groups.map((gr) => {
-            const open = Boolean(abiertos[gr.id]);
-            const groupActive = gr.links.some((l) =>
-              linkActive(pathname, l.href),
-            );
-            return (
-              <div key={gr.id} className="rounded-lg">
-                <button
-                  type="button"
-                  onClick={() => toggle(gr.id)}
-                  className={[
-                    "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-medium",
-                    groupActive
-                      ? "bg-[var(--nav-active)] text-[var(--nav-text-strong)]"
-                      : "text-[var(--muted)] hover:bg-[var(--nav-hover)] hover:text-[var(--nav-text-strong)]",
-                  ].join(" ")}
-                >
-                  <IconChevron open={open} />
-                  <span className="text-[var(--accent-2)]">{gr.icon}</span>
-                  <span className="flex-1">{gr.label}</span>
-                  <span className="text-[10px] text-[var(--muted)]">
-                    {gr.links.length}
-                  </span>
-                </button>
-                {open ? (
-                  <div className="ml-3 mt-0.5 space-y-0.5 border-l border-[var(--border)] pl-2">
-                    {gr.links.map((l) => {
-                      const active = linkActive(pathname, l.href);
-                      return (
-                        <Link
-                          key={l.key}
-                          href={l.href}
-                          className={[
-                            "block rounded-md px-2.5 py-1.5 text-sm",
-                            active
-                              ? "bg-[var(--accent)] text-white"
-                              : "text-[var(--muted)] hover:bg-[var(--nav-hover)] hover:text-[var(--nav-text-strong)]",
-                          ].join(" ")}
-                        >
-                          {l.label}
-                        </Link>
-                      );
-                    })}
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
-        </nav>
-
-        <div className="space-y-2 border-t border-[var(--border)] p-3">
-          {!dominioEmpresa ? (
-            <Link
-              href="/select-empresa"
-              className="block rounded-lg bg-[var(--panel)] px-3 py-2 text-center text-sm"
-            >
-              Cambiar empresa
-            </Link>
-          ) : null}
+  const nav = (
+    <>
+      <div className="p-4">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-xs uppercase tracking-wider text-[var(--muted)]">
+              SITSA
+            </p>
+            <h1 className="mt-1 text-lg font-semibold leading-tight">
+              {empresaNombre}
+            </h1>
+            <p className="mt-1 text-xs text-[var(--muted)]">
+              {username} · {labelRol(rol)}
+            </p>
+          </div>
           <button
             type="button"
-            onClick={() => void logout()}
-            className="w-full rounded-lg bg-[var(--danger)] px-3 py-2 text-sm text-white"
+            className="rounded-lg border border-[var(--border)] p-2 text-[var(--muted)] md:hidden"
+            onClick={() => setMenuOpen(false)}
+            aria-label="Cerrar menú"
           >
-            Salir
+            <IconClose />
           </button>
         </div>
+      </div>
+
+      <nav className="space-y-1 px-2 pb-3">
+        {groups.map((gr) => {
+          const open = Boolean(abiertos[gr.id]);
+          const groupActive = gr.links.some((l) =>
+            linkActive(pathname, l.href),
+          );
+          return (
+            <div key={gr.id} className="rounded-lg">
+              <button
+                type="button"
+                onClick={() => toggle(gr.id)}
+                className={[
+                  "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-medium",
+                  groupActive
+                    ? "bg-[var(--nav-active)] text-[var(--nav-text-strong)]"
+                    : "text-[var(--muted)] hover:bg-[var(--nav-hover)] hover:text-[var(--nav-text-strong)]",
+                ].join(" ")}
+              >
+                <IconChevron open={open} />
+                <span className="text-[var(--accent-2)]">{gr.icon}</span>
+                <span className="flex-1">{gr.label}</span>
+                <span className="text-[10px] text-[var(--muted)]">
+                  {gr.links.length}
+                </span>
+              </button>
+              {open ? (
+                <div className="ml-3 mt-0.5 space-y-0.5 border-l border-[var(--border)] pl-2">
+                  {gr.links.map((l) => {
+                    const active = linkActive(pathname, l.href);
+                    return (
+                      <Link
+                        key={l.key}
+                        href={l.href}
+                        prefetch={false}
+                        onClick={() => setMenuOpen(false)}
+                        className={[
+                          "block rounded-md px-2.5 py-1.5 text-sm",
+                          active
+                            ? "bg-[var(--accent)] text-white"
+                            : "text-[var(--muted)] hover:bg-[var(--nav-hover)] hover:text-[var(--nav-text-strong)]",
+                        ].join(" ")}
+                      >
+                        {l.label}
+                      </Link>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </nav>
+
+      <div className="mt-auto space-y-2 border-t border-[var(--border)] p-3">
+        {!dominioEmpresa ? (
+          <Link
+            href="/select-empresa"
+            prefetch={false}
+            onClick={() => setMenuOpen(false)}
+            className="block rounded-lg bg-[var(--panel)] px-3 py-2 text-center text-sm"
+          >
+            Cambiar empresa
+          </Link>
+        ) : null}
+        <button
+          type="button"
+          onClick={() => void logout()}
+          className="w-full rounded-lg bg-[var(--danger)] px-3 py-2 text-sm text-white"
+        >
+          Salir
+        </button>
+      </div>
+    </>
+  );
+
+  return (
+    <div className="min-h-screen md:grid md:grid-cols-[260px_1fr]">
+      {menuOpen ? (
+        <button
+          type="button"
+          className="fixed inset-0 z-40 bg-black/40 md:hidden"
+          aria-label="Cerrar menú"
+          onClick={() => setMenuOpen(false)}
+        />
+      ) : null}
+
+      <aside
+        className={[
+          "fixed inset-y-0 left-0 z-50 flex w-[min(100vw-3rem,280px)] flex-col border-r border-[var(--border)] bg-[var(--sidebar)] transition-transform duration-150 ease-out md:static md:z-auto md:w-auto md:translate-x-0 md:transition-none",
+          menuOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0",
+        ].join(" ")}
+      >
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
+          {nav}
+        </div>
       </aside>
-      <div className="flex min-w-0 flex-col">
-        <header className="sticky top-0 z-40 flex items-center justify-end gap-2 border-b border-[var(--border)] bg-[var(--sidebar)]/95 px-4 py-2 backdrop-blur md:px-6">
+
+      <div className="flex min-w-0 flex-col pb-8 md:pb-7">
+        <header className="sticky top-0 z-30 flex items-center gap-2 border-b border-[var(--border)] bg-[var(--sidebar)] px-3 py-2 md:justify-end md:px-6">
+          <button
+            type="button"
+            className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-2 text-[var(--text)] md:hidden"
+            onClick={() => setMenuOpen(true)}
+            aria-label="Abrir menú"
+          >
+            <IconMenu />
+          </button>
+          <div className="min-w-0 flex-1 md:hidden">
+            <p className="truncate text-sm font-semibold leading-tight">
+              {empresaNombre}
+            </p>
+            <p className="truncate text-[11px] text-[var(--muted)]">
+              {username} · {labelRol(rol)}
+            </p>
+          </div>
           <NotificacionesBell slug={slug} rol={rol} />
           <ThemeToggle />
         </header>
-        <main className="flex-1 p-4 md:p-6">{children}</main>
+        <main className="flex-1 p-3 sm:p-4 md:p-6">{children}</main>
       </div>
-      <footer className="fixed bottom-0 left-0 right-0 border-t border-[var(--border)] bg-[var(--sidebar)]/90 px-3 py-1 text-xs text-[var(--muted)] backdrop-blur md:left-[260px]">
+      <footer className="fixed bottom-0 left-0 right-0 z-20 border-t border-[var(--border)] bg-[var(--sidebar)] px-3 py-1 text-[10px] text-[var(--muted)] md:left-[260px] md:text-xs">
         Empresa: {empresaNombre} · Usuario: {username}
       </footer>
     </div>

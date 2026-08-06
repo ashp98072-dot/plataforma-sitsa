@@ -47,15 +47,27 @@ body {
   margin: 0;
   min-height: 100vh;
   color: var(--text);
-  background:
-    radial-gradient(1200px 600px at 10% -10%, var(--glow-1) 0%, transparent 55%),
-    radial-gradient(900px 500px at 100% 0%, var(--glow-2) 0%, transparent 50%),
-    var(--bg);
+  background: var(--bg);
   font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+@media (min-width: 768px) {
+  body {
+    background:
+      radial-gradient(1200px 600px at 10% -10%, var(--glow-1) 0%, transparent 55%),
+      radial-gradient(900px 500px at 100% 0%, var(--glow-2) 0%, transparent 50%),
+      var(--bg);
+  }
 }
 
 * {
   box-sizing: border-box;
+}
+
+/* Tablas: scroll horizontal en móvil sin romper el layout */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* Controles nativos legibles en ambos temas */
