@@ -296,6 +296,7 @@ function FlotaInner() {
   const [filtroTaller, setFiltroTaller] = useState<"todos" | "taller" | "ruta">(
     "todos",
   );
+  const [paginaVeh, setPaginaVeh] = useState(1);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [importando, setImportando] = useState(false);
@@ -450,6 +451,55 @@ function FlotaInner() {
       );
     });
   }, [vehiculos, filtroEstado, filtroTaller, matchQ]);
+
+  const PAGE_SIZE_VEH = 30;
+  const totalPaginasVeh = Math.max(
+    1,
+    Math.ceil(vehiculosFiltrados.length / PAGE_SIZE_VEH),
+  );
+  const vehiculosPagina = useMemo(() => {
+    const page = Math.min(Math.max(1, paginaVeh), totalPaginasVeh);
+    const start = (page - 1) * PAGE_SIZE_VEH;
+    return vehiculosFiltrados.slice(start, start + PAGE_SIZE_VEH);
+  }, [vehiculosFiltrados, paginaVeh, totalPaginasVeh]);
+
+  useEffect(() => {
+    setPaginaVeh(1);
+  }, [q, filtroEstado, filtroTaller, tab]);
+
+  useEffect(() => {
+    if (paginaVeh > totalPaginasVeh) setPaginaVeh(totalPaginasVeh);
+  }, [paginaVeh, totalPaginasVeh]);
+
+  const PaginacionVeh =
+    vehiculosFiltrados.length > PAGE_SIZE_VEH ? (
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--muted)]">
+        <span>
+          {vehiculosFiltrados.length} unidades · página{" "}
+          {Math.min(paginaVeh, totalPaginasVeh)} de {totalPaginasVeh}
+        </span>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            className="rounded border border-[var(--border)] px-2 py-1 disabled:opacity-40"
+            disabled={paginaVeh <= 1}
+            onClick={() => setPaginaVeh((p) => Math.max(1, p - 1))}
+          >
+            Anterior
+          </button>
+          <button
+            type="button"
+            className="rounded border border-[var(--border)] px-2 py-1 disabled:opacity-40"
+            disabled={paginaVeh >= totalPaginasVeh}
+            onClick={() =>
+              setPaginaVeh((p) => Math.min(totalPaginasVeh, p + 1))
+            }
+          >
+            Siguiente
+          </button>
+        </div>
+      </div>
+    ) : null;
 
   const activos = useMemo(
     () =>
@@ -966,7 +1016,7 @@ function FlotaInner() {
     setFiltrosForm([]);
     setEditId(null);
     setAccesoEmpresaIds([]);
-    await cargar({ forzarTodo: true });
+    await cargar({ solo: ["vehiculos"] });
   }
 
   async function buscarPlanesSalida() {
@@ -1018,7 +1068,7 @@ function FlotaInner() {
     setMsg(data.mensaje);
     setTallerId(null);
     setMotivoTaller("");
-    await cargar({ forzarTodo: true });
+    await cargar({ solo: ["vehiculos"] });
   }
 
   async function salirTaller(id: number) {
@@ -1031,7 +1081,7 @@ function FlotaInner() {
     const data = await res.json();
     if (!res.ok) setErr(data.error ?? "Error");
     else setMsg(data.mensaje);
-    await cargar({ forzarTodo: true });
+    await cargar({ solo: ["vehiculos"] });
   }
 
   /** Abre Registrar servicio con la unidad lista para salir de taller. */
@@ -1075,7 +1125,7 @@ function FlotaInner() {
       const data = await res.json();
       if (!res.ok) setErr(data.error ?? "No se pudo dar de baja");
       else setMsg(data.mensaje ?? "Vehículo dado de baja.");
-      await cargar({ forzarTodo: true });
+      await cargar({ solo: ["vehiculos"] });
       return;
     }
     const res = await fetch(`/api/empresas/${slug}/flota/vehiculos`, {
@@ -1086,7 +1136,7 @@ function FlotaInner() {
     const data = await res.json();
     if (!res.ok) setErr(data.error ?? "No se pudo activar");
     else setMsg(data.mensaje ?? "Vehículo activado.");
-    await cargar({ forzarTodo: true });
+    await cargar({ solo: ["vehiculos"] });
   }
 
   async function eliminarVehiculo(v: Vehiculo) {
@@ -1118,7 +1168,7 @@ function FlotaInner() {
         setFiltrosForm([]);
       }
     }
-    await cargar({ forzarTodo: true });
+    await cargar({ solo: ["vehiculos"] });
   }
 
   async function cargarParadasViaje(viajeIdSel: number) {
@@ -1385,7 +1435,7 @@ function FlotaInner() {
     setKmLectura(0);
     setFotoTableroLectura(null);
     setFotosExtraLectura([]);
-    await cargar({ forzarTodo: true });
+    await cargar({ solo: ["vehiculos", "lecturas"] });
   }
 
   function agregarRepuesto() {
@@ -1502,7 +1552,7 @@ function FlotaInner() {
     else {
       setMsg(data.mensaje);
       limpiarFormServicio();
-      await cargar({ forzarTodo: true });
+      await cargar({ solo: ["vehiculos", "servicios"] });
     }
   }
 
@@ -1635,7 +1685,7 @@ function FlotaInner() {
     ) {
       setMsg(data.mensaje ?? data.error);
       setEsExterno(true);
-      await cargar({ forzarTodo: true });
+      await cargar({ solo: ["vehiculos", "viajes", "permisos"] });
       return;
     }
     if (!res.ok) {
@@ -1694,7 +1744,7 @@ function FlotaInner() {
     setViajeId(nuevoId);
     setQLlegada("");
     setModoPiloto("llegada");
-    await cargar({ forzarTodo: true });
+    await cargar({ solo: ["vehiculos", "viajes"] });
     } finally {
       setEnviandoForm(false);
     }
@@ -1714,7 +1764,7 @@ function FlotaInner() {
     if (!res.ok) setErr(data.error ?? "Error");
     else {
       setMsg(data.mensaje);
-      await cargar({ forzarTodo: true });
+      await cargar({ solo: ["permisos", "viajes"] });
     }
   }
 
@@ -1832,7 +1882,7 @@ function FlotaInner() {
         ),
       }));
     }
-    await cargar({ forzarTodo: true });
+    await cargar({ solo: ["viajes", "lecturas"] });
   }
 
   async function verAdjuntos(servicioId: number, placa?: string) {
@@ -1891,7 +1941,7 @@ function FlotaInner() {
       setMsg(data.mensaje);
       setCompraFiles(null);
       setCompraServicioId(0);
-      await cargar({ forzarTodo: true });
+      await cargar({ solo: ["servicios", "vehiculos"] });
       return;
     }
 
@@ -1919,7 +1969,7 @@ function FlotaInner() {
     setCompraDesc("");
     setCompraCosto(0);
     setCompraFiles(null);
-    await cargar({ forzarTodo: true });
+    await cargar({ solo: ["servicios", "vehiculos"] });
   }
 
   async function abrirAdjunto(url: string, nombre: string) {
@@ -2069,7 +2119,7 @@ function FlotaInner() {
       setParadasViaje([]);
       setPlanIdViaje(null);
       setViajeId(0);
-      await cargar({ forzarTodo: true });
+      await cargar({ solo: ["vehiculos", "viajes"] });
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Error al guardar llegada");
     } finally {
@@ -2293,7 +2343,7 @@ function FlotaInner() {
             </div>
           ) : null}
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {vehiculosFiltrados.map((v) => {
+            {vehiculosPagina.map((v) => {
               const pendiente = kmPendienteServicio(
                 v.km_actual,
                 v.km_ultimo_servicio,
@@ -2364,6 +2414,7 @@ function FlotaInner() {
               );
             })}
           </div>
+          {PaginacionVeh}
         </div>
       ) : null}
 
@@ -2730,7 +2781,7 @@ function FlotaInner() {
                 </tr>
               </thead>
               <tbody>
-                {vehiculosFiltrados.map((v) => (
+                {vehiculosPagina.map((v) => (
                   <tr
                     key={v.id}
                     className={[
@@ -2865,6 +2916,7 @@ function FlotaInner() {
               </tbody>
             </table>
           </div>
+          {PaginacionVeh}
         </div>
       ) : null}
 
