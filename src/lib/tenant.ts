@@ -18,6 +18,7 @@ import {
 } from "./session";
 import {
   esFlotaSubmodulo,
+  esPlataformaPermisible,
   esRrhhSubmodulo,
   modulosPlataformaDesdePermisos,
   permisosEfectivos,
@@ -94,17 +95,30 @@ export async function requireTenantModulo(
     session.id,
     session.rol as RolGlobal,
   );
+  const accion: AccionPermiso = editar ? "editar" : "ver";
   const porRol = rolMods.includes(modulo);
   const porPermiso =
-    tienePermiso(perms, modulo, editar ? "editar" : "ver") ||
+    tienePermiso(perms, modulo, accion) ||
     (modulo === "rrhh" &&
       perms.some(
         (p) =>
           esRrhhSubmodulo(p.modulo) &&
-          tienePermiso(perms, p.modulo, editar ? "editar" : "ver"),
+          tienePermiso(perms, p.modulo, accion),
       )) ||
     (modulo !== "rrhh" &&
       modulosPlataformaDesdePermisos(perms).includes(modulo));
+
+  // Si hay matriz de permisos, un módulo de plataforma desmarcado no se
+  // abre por rol (menú y API alineados).
+  if (
+    perms.length > 0 &&
+    esPlataformaPermisible(modulo) &&
+    !tienePermiso(perms, modulo, "ver")
+  ) {
+    return {
+      error: NextResponse.json({ error: "Sin permiso de módulo." }, { status: 403 }),
+    };
+  }
 
   if (!empresaOk || (!porRol && !porPermiso)) {
     return {

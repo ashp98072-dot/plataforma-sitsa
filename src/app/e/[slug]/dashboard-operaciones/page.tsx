@@ -5,7 +5,7 @@ import {
   tienePermiso,
   type PermisoModulo,
 } from "@/lib/permisos";
-import type { RolGlobal } from "@/lib/roles";
+import { modulosPorRol, type RolGlobal } from "@/lib/roles";
 import { getSession } from "@/lib/session";
 
 type Props = { params: Promise<{ slug: string }> };
@@ -16,27 +16,30 @@ export default async function DashboardOperacionesPage({ params }: Props) {
   const empresa = await obtenerEmpresaPorSlug(slug);
   if (!session || !empresa) return null;
 
+  const rol = session.rol as RolGlobal;
   let permisos: PermisoModulo[] = [];
   try {
-    permisos = await permisosEfectivos(
-      session.id,
-      session.rol as RolGlobal,
-    );
+    permisos = await permisosEfectivos(session.id, rol);
   } catch {
     permisos = [];
   }
 
+  const rolMods = modulosPorRol(rol);
+  // Sin matriz cargada: caer al rol. Con matriz: solo si "ver" está activo.
   const puedeTms =
-    session.rol === "Admin" ||
-    permisos.length === 0 ||
-    tienePermiso(permisos, "tms", "ver");
+    rol === "Admin" ||
+    (permisos.length > 0
+      ? tienePermiso(permisos, "tms", "ver")
+      : rolMods.includes("tms"));
   const puedeFlota =
-    session.rol === "Admin" ||
-    empresa.modulos.includes("flota") ||
-    permisos.some(
-      (p) =>
-        (p.modulo === "flota" || p.modulo.startsWith("flota_")) && p.puedeVer,
-    );
+    rol === "Admin" ||
+    (permisos.length > 0
+      ? permisos.some(
+          (p) =>
+            (p.modulo === "flota" || p.modulo.startsWith("flota_")) &&
+            p.puedeVer,
+        )
+      : rolMods.includes("flota") || empresa.modulos.includes("flota"));
 
   const cards = [
     puedeTms
