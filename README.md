@@ -48,7 +48,7 @@ http://localhost:3000
 0. Núcleo multiempresa + usuarios/empresas + auditoría  
 1. RRHH: empleados, marcajes, vacaciones, incidencias, reportes Excel, inventario EPP  
 2. TMS: catálogos, planes de viaje, cambios mismo día, evidencias foto+geo  
-3. Flota/predios: vehículos, lecturas km, servicios, taller, alertas y costos  
+3. Flota/predios: vehículos, lecturas km, servicios, taller, alertas y costos, inventario de equipo/herramientas (empresa por área + propias del empleado RRHH)  
 4. Contabilidad: cuentas, asientos, CxC/CxP (esqueleto migración SKAS)  
 5. Reciclaje, Tarimas, CMS + sitio público `/site/[slug]`  
 

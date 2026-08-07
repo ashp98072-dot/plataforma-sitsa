@@ -10,6 +10,7 @@ import {
   type FormEvent,
 } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { InventarioEquipoPanel } from "@/components/flota/inventario-equipo";
 import {
   FLOTA_NAV,
   tienePermiso,
@@ -226,6 +227,7 @@ type Tab =
   | "servicios"
   | "historial-servicios"
   | "compras"
+  | "inventario-equipo"
   | "lecturas"
   | "reportes"
   | "piloto";
@@ -3637,6 +3639,10 @@ function FlotaInner() {
           </div>
           </section>
         </div>
+      ) : null}
+
+      {tab === "inventario-equipo" && can("flota_inventario") ? (
+        <InventarioEquipoPanel slug={slug} can={can} />
       ) : null}
 
       {tab === "compras" &&

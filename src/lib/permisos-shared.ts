@@ -43,6 +43,7 @@ export const FLOTA_SUBMODULOS = [
   "flota_lecturas",
   "flota_reportes",
   "flota_piloto",
+  "flota_inventario",
 ] as const;
 
 export type FlotaSubmodulo = (typeof FLOTA_SUBMODULOS)[number];
@@ -54,6 +55,7 @@ export const FLOTA_SUBMODULO_LABEL: Record<FlotaSubmodulo, string> = {
   flota_lecturas: "Lecturas km",
   flota_reportes: "Reportes flota",
   flota_piloto: "Registrar viaje (piloto)",
+  flota_inventario: "Inventario equipo",
 };
 
 /** Módulos de plataforma (sin flota: se desglosa en FLOTA_SUBMODULOS). */
@@ -448,6 +450,7 @@ export const FLOTA_NAV: {
   { sub: "flota_servicios", label: "Registrar servicio", path: "servicios" },
   { sub: "flota_servicios", label: "Historial servicios", path: "historial-servicios" },
   { sub: "flota_compras", label: "Compras", path: "compras" },
+  { sub: "flota_inventario", label: "Inventario equipo", path: "inventario-equipo" },
   { sub: "flota_lecturas", label: "Lecturas", path: "lecturas" },
   { sub: "flota_reportes", label: "Reportes flota", path: "reportes" },
   { sub: "flota_piloto", label: "Registrar viaje", path: "piloto" },

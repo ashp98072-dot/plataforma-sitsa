@@ -73,6 +73,7 @@ export async function contarModuloEmpresa(
           viajes: await count("flota_viajes"),
           lecturas: await count("flota_lecturas"),
           servicios: await count("flota_servicios"),
+          inv_equipo: await count("flota_inv_equipo"),
         };
       case "operaciones":
         return {
@@ -235,6 +236,24 @@ async function limpiarFlota(
     conn,
     "flota_lectura_evidencias",
     "DELETE FROM flota_lectura_evidencias WHERE empresa_id = ?",
+    [empresaId],
+  );
+  out.inv_equipo = await delSiExiste(
+    conn,
+    "flota_inv_equipo",
+    "DELETE FROM flota_inv_equipo WHERE empresa_id = ?",
+    [empresaId],
+  );
+  out.inv_areas = await delSiExiste(
+    conn,
+    "flota_inv_areas",
+    "DELETE FROM flota_inv_areas WHERE empresa_id = ?",
+    [empresaId],
+  );
+  out.inv_categorias = await delSiExiste(
+    conn,
+    "flota_inv_categorias",
+    "DELETE FROM flota_inv_categorias WHERE empresa_id = ?",
     [empresaId],
   );
   out.servicio_adjuntos = await delSiExiste(
