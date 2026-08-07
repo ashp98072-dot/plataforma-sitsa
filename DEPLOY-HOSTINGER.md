@@ -108,6 +108,7 @@ Cambia las contraseñas después del primer acceso.
 | 503 | Build OK, Node 20+, restart |
 | Página sin estilos / CSS 404 en consola | El HTML apunta a un CSS de un build viejo. **Redeploy completo** (Build + Start), luego en el navegador **Ctrl+F5** o ventana privada. No mezcles ZIP viejo con build nuevo. |
 | Sigue sin CSS | En hPanel verifica Output = `.next` y Start = `npm run start:hostinger`. Reinicia el sitio Node. |
+| Página en blanco / `HTTP ERROR 429` | Hostinger está limitando peticiones (Too Many Requests). Espera 1–2 min, cierra pestañas extra del mismo sitio, entra por `/login` (no recargues el dashboard a lo loco). Redeploy con el fix de `prefetch={false}` en dashboards. Si persiste, reinicia el sitio Node en hPanel. |
 
 ---
 

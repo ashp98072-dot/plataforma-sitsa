@@ -33,6 +33,7 @@ export default async function DashboardPage({ params }: Props) {
           <Link
             key={m}
             href={m === "gerencia" ? `/e/${slug}/dashboard` : `/e/${slug}/${m}`}
+            prefetch={false}
             className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 hover:border-[var(--accent)]"
           >
             <h2 className="font-medium">{MODULO_LABEL[m]}</h2>
