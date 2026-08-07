@@ -63,19 +63,26 @@ export default function LoginPage() {
         <label className="mt-6 block text-sm text-[var(--muted)]">
           Usuario
           <input
+            name="username"
+            autoComplete="username"
+            autoFocus
             className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
+            placeholder="Ingrese usuario"
             required
           />
         </label>
         <label className="mt-3 block text-sm text-[var(--muted)]">
           Contraseña
           <input
+            name="password"
             type="password"
+            autoComplete="current-password"
             className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            placeholder="Ingrese contraseña"
             required
           />
         </label>
