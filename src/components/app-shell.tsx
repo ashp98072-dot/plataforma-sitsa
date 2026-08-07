@@ -215,27 +215,29 @@ export function AppShell({
     }
 
     const opsLinks: NavLink[] = [];
-    if (
-      rol === "Operaciones" ||
-      rol === "CoordinadorPredios" ||
-      isAdmin
-    ) {
+    const opsMods = (["tms", "reciclaje", "tarimas"] as Modulo[]).filter(
+      (m) => {
+        if (!modulos.includes(m)) return false;
+        if (
+          !isAdmin &&
+          permisos.length > 0 &&
+          esPlataformaPermisible(m) &&
+          !tienePermiso(permisos, m, "ver")
+        ) {
+          return false;
+        }
+        return true;
+      },
+    );
+    // Dashboard Operaciones solo si el usuario tiene algún módulo de ops (no Predios puro).
+    if (isAdmin || rol === "Operaciones" || opsMods.length > 0) {
       opsLinks.push({
         href: homeOps,
         label: "Dashboard Operaciones",
         key: "dash-ops",
       });
     }
-    for (const m of ["tms", "reciclaje", "tarimas"] as Modulo[]) {
-      if (!modulos.includes(m)) continue;
-      if (
-        !isAdmin &&
-        permisos.length > 0 &&
-        esPlataformaPermisible(m) &&
-        !tienePermiso(permisos, m, "ver")
-      ) {
-        continue;
-      }
+    for (const m of opsMods) {
       opsLinks.push({
         href: `${base}/${m}`,
         label: MODULO_LABEL[m] ?? m,

@@ -234,7 +234,8 @@ export function modulosPropiosDelRol(rol: RolGlobal): string[] {
       // TMS + Predios (control-flota) + otros ops
       return ["tms", ...FLOTA_SUBMODULOS, "reciclaje", "tarimas"];
     case "CoordinadorPredios":
-      return [...FLOTA_SUBMODULOS, "tms"];
+      // Predios = flota. TMS/Reciclaje/Tarimas van en otras áreas si se otorgan.
+      return [...FLOTA_SUBMODULOS];
     case "CoordinadorCompras":
       return ["flota_compras", "flota_servicios", "flota_vehiculos"];
     case "Piloto":
@@ -292,9 +293,7 @@ export function permisosDefaultPorRol(rol: RolGlobal): PermisoModulo[] {
 
   if (rol === "CoordinadorPredios") {
     return [
-      ...propios.map((m) =>
-        esFlotaSubmodulo(m) ? permisoFull(m) : permisoSoloVer(m),
-      ),
+      ...propios.map((m) => permisoFull(m)),
       ...cruzados.map((m) => permisoVacio(m)),
     ];
   }

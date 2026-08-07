@@ -82,8 +82,11 @@ export function homePorRol(
       : `${base}/flota?tab=compras`;
   }
   if (rol === "RRHH" || rol === "Admin") return `${base}/dashboard-rrhh`;
-  if (rol === "Operaciones" || rol === "CoordinadorPredios") {
+  if (rol === "Operaciones") {
     return `${base}/dashboard-operaciones`;
+  }
+  if (rol === "CoordinadorPredios") {
+    return dominioEmpresa ? `/flota` : `${base}/flota`;
   }
   if (rol === "Contabilidad") {
     return dominioEmpresa ? `/contabilidad` : `/e/${slug}/contabilidad`;

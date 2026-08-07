@@ -20,7 +20,7 @@ Next.js + MySQL. Login → selector de empresa → módulos por tenant (`/e/[slu
 | RRHH | Todas | RRHH, Usuarios |
 | Contabilidad | Todas | Contabilidad |
 | Operaciones | Asignadas | TMS, Flota, Reciclaje, Tarimas |
-| CoordinadorPredios | Asignadas | Flota (+ lectura TMS) |
+| CoordinadorPredios | Asignadas | Flota / Predios (TMS solo si se otorga en permisos) |
 | Visualizador | Asignadas | Solo lectura |
 
 ## Arranque

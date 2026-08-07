@@ -44,7 +44,8 @@ export function modulosPorRol(rol: RolGlobal): Modulo[] {
     case "Operaciones":
       return ["tms", "flota", "reciclaje", "tarimas", "gerencia"];
     case "CoordinadorPredios":
-      return ["flota", "tms"];
+      // Solo Flota/Predios. TMS solo si se otorga en permisos.
+      return ["flota"];
     case "CoordinadorCompras":
       return ["flota"];
     case "Piloto":

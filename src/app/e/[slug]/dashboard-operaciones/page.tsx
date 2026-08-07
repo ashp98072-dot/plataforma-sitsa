@@ -1,5 +1,11 @@
 import Link from "next/link";
 import { obtenerEmpresaPorSlug } from "@/lib/empresas";
+import {
+  permisosEfectivos,
+  tienePermiso,
+  type PermisoModulo,
+} from "@/lib/permisos";
+import type { RolGlobal } from "@/lib/roles";
 import { getSession } from "@/lib/session";
 
 type Props = { params: Promise<{ slug: string }> };
@@ -10,18 +16,44 @@ export default async function DashboardOperacionesPage({ params }: Props) {
   const empresa = await obtenerEmpresaPorSlug(slug);
   if (!session || !empresa) return null;
 
+  let permisos: PermisoModulo[] = [];
+  try {
+    permisos = await permisosEfectivos(
+      session.id,
+      session.rol as RolGlobal,
+    );
+  } catch {
+    permisos = [];
+  }
+
+  const puedeTms =
+    session.rol === "Admin" ||
+    permisos.length === 0 ||
+    tienePermiso(permisos, "tms", "ver");
+  const puedeFlota =
+    session.rol === "Admin" ||
+    empresa.modulos.includes("flota") ||
+    permisos.some(
+      (p) =>
+        (p.modulo === "flota" || p.modulo.startsWith("flota_")) && p.puedeVer,
+    );
+
   const cards = [
-    {
-      href: `/e/${slug}/tms`,
-      title: "TMS / Planes de viaje",
-      desc: "Rutas, programación, evidencias. Ahí eliges pilotos y auxiliares de la planilla.",
-    },
-    {
-      href: `/e/${slug}/flota`,
-      title: "Flota / Predios",
-      desc: "Vehículos, km, talleres y servicios.",
-    },
-  ];
+    puedeTms
+      ? {
+          href: `/e/${slug}/tms`,
+          title: "TMS / Planes de viaje",
+          desc: "Rutas, programación, evidencias. Ahí eliges pilotos y auxiliares de la planilla.",
+        }
+      : null,
+    puedeFlota
+      ? {
+          href: `/e/${slug}/flota`,
+          title: "Flota / Predios",
+          desc: "Vehículos, km, talleres y servicios.",
+        }
+      : null,
+  ].filter(Boolean) as { href: string; title: string; desc: string }[];
 
   return (
     <div className="space-y-6">
@@ -31,8 +63,9 @@ export default async function DashboardOperacionesPage({ params }: Props) {
         </p>
         <h1 className="mt-1 text-2xl font-semibold">{empresa.nombre}</h1>
         <p className="mt-1 text-sm text-[var(--muted)]">
-          Transporte y flota. El alta de personal es solo RRHH; Operaciones
-          selecciona pilotos al crear planes en TMS.
+          {puedeTms
+            ? "Transporte y flota. El alta de personal es solo RRHH; Operaciones selecciona pilotos al crear planes en TMS."
+            : "Acceso a flota y predios según tus permisos."}
         </p>
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">

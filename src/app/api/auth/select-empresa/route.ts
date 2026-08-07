@@ -60,8 +60,10 @@ export async function POST(request: Request) {
     redirect = `/e/${empresa.slug}/flota?tab=compras`;
   } else if (rol === "RRHH" || rol === "Admin") {
     redirect = `/e/${empresa.slug}/dashboard-rrhh`;
-  } else if (rol === "Operaciones" || rol === "CoordinadorPredios") {
+  } else if (rol === "Operaciones") {
     redirect = `/e/${empresa.slug}/dashboard-operaciones`;
+  } else if (rol === "CoordinadorPredios") {
+    redirect = `/e/${empresa.slug}/flota`;
   } else if (rol === "Contabilidad") {
     redirect = `/e/${empresa.slug}/contabilidad`;
   }

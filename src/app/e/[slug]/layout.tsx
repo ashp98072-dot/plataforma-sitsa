@@ -6,7 +6,9 @@ import {
 } from "@/lib/empresas";
 import { permisosEfectivos } from "@/lib/permisos";
 import {
+  esPlataformaPermisible,
   modulosPlataformaDesdePermisos,
+  tienePermiso,
   type PermisoModulo,
 } from "@/lib/permisos-shared";
 import { modulosPorRol, type Modulo, type RolGlobal } from "@/lib/roles";
@@ -50,18 +52,26 @@ export default async function EmpresaLayout({ children, params }: Props) {
   }
 
   // Rol + permisos cruzados (ej. Operaciones con Planillas / Contabilidad).
+  // Módulos de plataforma (TMS, etc.) solo si el permiso "ver" está activo.
   const extraMods = modulosPlataformaDesdePermisos(permisos);
+  const moduloVisible = (m: Modulo) => {
+    if (!(empresaMods.includes(m) || m === "gerencia")) return false;
+    if (
+      permisos.length > 0 &&
+      esPlataformaPermisible(m) &&
+      !tienePermiso(permisos, m, "ver")
+    ) {
+      return false;
+    }
+    return true;
+  };
   const finalMods: Modulo[] =
     session.rol === "Admin"
       ? ([...new Set([...empresaMods, "usuarios", "gerencia", "cms"])] as Modulo[])
       : ([
           ...new Set([
-            ...rolMods.filter(
-              (m) => empresaMods.includes(m) || m === "gerencia",
-            ),
-            ...extraMods.filter(
-              (m) => empresaMods.includes(m) || m === "gerencia",
-            ),
+            ...rolMods.filter(moduloVisible),
+            ...extraMods.filter(moduloVisible),
           ]),
         ] as Modulo[]);
 
