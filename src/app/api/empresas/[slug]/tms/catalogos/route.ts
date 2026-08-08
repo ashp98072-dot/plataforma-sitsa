@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
-import { crearClienteDesdeTms } from "@/lib/clientes/repository";
+import {
+  asegurarVinculosTmsClientes,
+  crearClienteDesdeTms,
+  listarClientes,
+} from "@/lib/clientes/repository";
 import {
   asegurarModulosClientesFacturacion,
   asegurarSchemaClientes,
@@ -20,14 +24,16 @@ export async function GET(_req: Request, ctx: Ctx) {
   try {
     await asegurarSchemaClientes();
     await asegurarModulosClientesFacturacion(eid);
+    await asegurarVinculosTmsClientes(eid);
   } catch {
     /* TMS sigue aunque clientes aún no esté migrado */
   }
-  const [clientes, lugares, unidades, personal] = await Promise.all([
+  const [tmsClientes, shared, lugares, unidades, personal] = await Promise.all([
     query<RowDataPacket[]>(
       "SELECT id, nombre, nit, telefono, estado FROM tms_clientes WHERE empresa_id = ? ORDER BY nombre",
       [eid],
     ),
+    listarClientes(eid, { estado: "Activo" }).catch(() => []),
     query<RowDataPacket[]>(
       "SELECT id, nombre, tipo, direccion FROM tms_lugares WHERE empresa_id = ? ORDER BY nombre",
       [eid],
@@ -41,7 +47,28 @@ export async function GET(_req: Request, ctx: Ctx) {
       [eid],
     ),
   ]);
-  return NextResponse.json({ clientes, lugares, unidades, personal });
+
+  // Preferir datos del módulo Clientes cuando hay vínculo TMS.
+  const byTms = new Map(
+    shared
+      .filter((c) => c.tmsClienteId != null)
+      .map((c) => [c.tmsClienteId!, c]),
+  );
+  const clientes = tmsClientes.map((t) => {
+    const s = byTms.get(Number(t.id));
+    return {
+      id: Number(t.id),
+      nombre: s?.nombre ?? String(t.nombre),
+      nit: s?.nit ?? (t.nit != null ? String(t.nit) : null),
+      telefono: s?.telefono ?? (t.telefono != null ? String(t.telefono) : null),
+      estado: s?.estado ?? String(t.estado ?? "Activo"),
+    };
+  });
+
+  return NextResponse.json(
+    { clientes, lugares, unidades, personal },
+    { headers: { "Cache-Control": "private, no-store" } },
+  );
 }
 
 const schema = z.discriminatedUnion("kind", [

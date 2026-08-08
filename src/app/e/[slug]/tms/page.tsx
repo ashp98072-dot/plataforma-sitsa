@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
+import { ClienteSearch } from "@/components/tms/cliente-search";
 
 type ParadaForm = {
   lugarNombre: string;
@@ -44,6 +45,7 @@ export default function TmsPage() {
     codigo: "",
     fechaPlan: new Date().toISOString().slice(0, 10),
     horaCarga: "08:00",
+    clienteId: 0,
     clienteNombre: "",
     placa: "",
     pilotoEmpleadoId: 0,
@@ -54,6 +56,15 @@ export default function TmsPage() {
     lugarCarga: "",
     lugarDescarga: "",
   });
+  type ClienteCat = {
+    id: number;
+    nombre: string;
+    nit?: string | null;
+    telefono?: string | null;
+    estado?: string | null;
+  };
+  const [clientesCat, setClientesCat] = useState<ClienteCat[]>([]);
+  const [savingPlan, setSavingPlan] = useState(false);
   const [paradasForm, setParadasForm] = useState<ParadaForm[]>([
     { lugarNombre: "", tipo: "Carga", requiereEvidencia: true },
     { lugarNombre: "", tipo: "Entrega", requiereEvidencia: true },
@@ -98,6 +109,19 @@ export default function TmsPage() {
     if (res.ok) setBitacora((data.auditoria ?? []) as AudRow[]);
   }, [slug]);
 
+  const sugerirCodigo = useCallback(
+    async (fecha: string) => {
+      const res = await fetch(
+        `/api/empresas/${slug}/tms/planes?nextCodigo=1&fecha=${encodeURIComponent(fecha)}`,
+      );
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.codigo) {
+        setForm((f) => ({ ...f, codigo: String(data.codigo) }));
+      }
+    },
+    [slug],
+  );
+
   const cargar = useCallback(async () => {
     const [res, cat, pil, aux] = await Promise.all([
       fetch(`/api/empresas/${slug}/tms/planes`),
@@ -114,8 +138,10 @@ export default function TmsPage() {
       setPlacasFlota(data.placasFlota ?? []);
     }
     if (cat.ok) {
+      const clientes = (c.clientes ?? []) as ClienteCat[];
+      setClientesCat(clientes);
       setCounts({
-        clientes: (c.clientes ?? []).length,
+        clientes: clientes.length,
         lugares: (c.lugares ?? []).length,
         unidades: (c.unidades ?? []).length,
         personal: (c.personal ?? []).length,
@@ -128,6 +154,12 @@ export default function TmsPage() {
   useEffect(() => {
     void cargar();
   }, [cargar]);
+
+  useEffect(() => {
+    void sugerirCodigo(form.fechaPlan);
+    // Solo al montar / cambiar fecha (no en cada keystroke de otros campos)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intencional
+  }, [form.fechaPlan, sugerirCodigo]);
 
   function totalAux() {
     return form.auxiliarEmpleadoIds.length + form.auxiliarNombres.length;
@@ -166,6 +198,11 @@ export default function TmsPage() {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    if (savingPlan) return;
+    if (!form.clienteId && !form.clienteNombre.trim()) {
+      setMsg("Busca y selecciona un cliente (o escribe el nombre).");
+      return;
+    }
     if (!form.pilotoEmpleadoId && !form.pilotoNombre.trim()) {
       setMsg("Indica el piloto (elige de RRHH o escríbelo).");
       return;
@@ -181,46 +218,63 @@ export default function TmsPage() {
       setMsg("Agrega al menos una parada (lugar) con evidencia de producto.");
       return;
     }
-    const res = await fetch(`/api/empresas/${slug}/tms/planes`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ...form,
-        pilotoEmpleadoId: form.pilotoEmpleadoId || undefined,
-        pilotoNombre: form.pilotoNombre.trim() || undefined,
-        auxiliarEmpleadoIds: form.auxiliarEmpleadoIds.length
-          ? form.auxiliarEmpleadoIds
-          : undefined,
-        auxiliarNombres: form.auxiliarNombres.length
-          ? form.auxiliarNombres
-          : undefined,
-        paradas,
-        lugarCarga: paradas.find((p) => p.tipo === "Carga")?.lugarNombre,
-        lugarDescarga: paradas.find(
-          (p) => p.tipo === "Descarga" || p.tipo === "Entrega",
-        )?.lugarNombre,
-      }),
-    });
-    const data = await res.json();
-    setMsg(data.mensaje || data.error);
-    if (res.ok) {
-      setForm((f) => ({
-        ...f,
-        codigo: "",
-        pilotoEmpleadoId: 0,
-        pilotoNombre: "",
-        auxiliarEmpleadoIds: [],
-        auxiliarNombres: [],
-        placa: "",
-        clienteNombre: "",
-      }));
-      setParadasForm([
-        { lugarNombre: "", tipo: "Carga", requiereEvidencia: true },
-        { lugarNombre: "", tipo: "Entrega", requiereEvidencia: true },
-      ]);
-      setAuxInput("");
-      await cargar();
-      if (mostrarBitacora) await cargarBitacora();
+    setSavingPlan(true);
+    setMsg("");
+    try {
+      const res = await fetch(`/api/empresas/${slug}/tms/planes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          codigo: form.codigo || undefined,
+          fechaPlan: form.fechaPlan,
+          horaCarga: form.horaCarga,
+          tipoTraslado: form.tipoTraslado || undefined,
+          clienteId: form.clienteId || undefined,
+          clienteNombre: form.clienteNombre.trim() || undefined,
+          placa: form.placa || undefined,
+          pilotoEmpleadoId: form.pilotoEmpleadoId || undefined,
+          pilotoNombre: form.pilotoNombre.trim() || undefined,
+          auxiliarEmpleadoIds: form.auxiliarEmpleadoIds.length
+            ? form.auxiliarEmpleadoIds
+            : undefined,
+          auxiliarNombres: form.auxiliarNombres.length
+            ? form.auxiliarNombres
+            : undefined,
+          paradas,
+          lugarCarga: paradas.find((p) => p.tipo === "Carga")?.lugarNombre,
+          lugarDescarga: paradas.find(
+            (p) => p.tipo === "Descarga" || p.tipo === "Entrega",
+          )?.lugarNombre,
+        }),
+      });
+      const data = await res.json();
+      setMsg(data.mensaje || data.error);
+      if (res.ok) {
+        setForm((f) => ({
+          ...f,
+          codigo: "",
+          pilotoEmpleadoId: 0,
+          pilotoNombre: "",
+          auxiliarEmpleadoIds: [],
+          auxiliarNombres: [],
+          placa: "",
+          clienteId: 0,
+          clienteNombre: "",
+          tipoTraslado: "",
+        }));
+        setParadasForm([
+          { lugarNombre: "", tipo: "Carga", requiereEvidencia: true },
+          { lugarNombre: "", tipo: "Entrega", requiereEvidencia: true },
+        ]);
+        setAuxInput("");
+        await Promise.all([
+          cargar(),
+          sugerirCodigo(form.fechaPlan),
+          mostrarBitacora ? cargarBitacora() : Promise.resolve(),
+        ]);
+      }
+    } finally {
+      setSavingPlan(false);
     }
   }
 
@@ -409,17 +463,28 @@ export default function TmsPage() {
           type="button"
           className="rounded bg-[#334155] px-2 py-1 text-xs sm:col-span-4"
           onClick={async () => {
+            const nombre = window.prompt("Nombre del cliente:");
+            if (!nombre?.trim()) return;
             const res = await fetch(`/api/empresas/${slug}/tms/catalogos`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 kind: "cliente",
-                nombre: `Cliente ${Date.now().toString().slice(-4)}`,
+                nombre: nombre.trim(),
               }),
             });
             const data = await res.json();
             setCatalogoMsg(data.mensaje || data.error);
-            if (res.ok) await cargar();
+            if (res.ok) {
+              await cargar();
+              if (data.id) {
+                setForm((f) => ({
+                  ...f,
+                  clienteId: Number(data.id),
+                  clienteNombre: nombre.trim(),
+                }));
+              }
+            }
           }}
         >
           + Cliente rápido
@@ -433,30 +498,44 @@ export default function TmsPage() {
         onSubmit={onSubmit}
         className="grid gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 md:grid-cols-3"
       >
-        <input
-          className={input}
-          placeholder="Código plan"
-          value={form.codigo}
-          onChange={(e) => setForm({ ...form, codigo: e.target.value })}
-          required
-        />
-        <input
-          type="date"
-          className={input}
-          value={form.fechaPlan}
-          onChange={(e) => setForm({ ...form, fechaPlan: e.target.value })}
-        />
-        <input
-          className={input}
-          placeholder="Hora carga"
-          value={form.horaCarga}
-          onChange={(e) => setForm({ ...form, horaCarga: e.target.value })}
-        />
-        <input
-          className={input}
-          placeholder="Cliente"
-          value={form.clienteNombre}
-          onChange={(e) => setForm({ ...form, clienteNombre: e.target.value })}
+        <label className="text-xs text-[var(--muted)]">
+          Código plan (automático)
+          <input
+            className={`${input} mt-1 w-full font-mono`}
+            placeholder="Se genera solo…"
+            value={form.codigo}
+            readOnly
+            title="Se genera automáticamente según la fecha"
+          />
+        </label>
+        <label className="text-xs text-[var(--muted)]">
+          Fecha
+          <input
+            type="date"
+            className={`${input} mt-1 w-full`}
+            value={form.fechaPlan}
+            onChange={(e) =>
+              setForm({ ...form, fechaPlan: e.target.value })
+            }
+          />
+        </label>
+        <label className="text-xs text-[var(--muted)]">
+          Hora carga
+          <input
+            className={`${input} mt-1 w-full`}
+            placeholder="Hora carga"
+            value={form.horaCarga}
+            onChange={(e) => setForm({ ...form, horaCarga: e.target.value })}
+          />
+        </label>
+        <ClienteSearch
+          clientes={clientesCat}
+          valueNombre={form.clienteNombre}
+          valueId={form.clienteId}
+          inputClassName={input}
+          onChange={({ clienteId, clienteNombre }) =>
+            setForm((f) => ({ ...f, clienteId, clienteNombre }))
+          }
         />
         <label className="text-xs text-[var(--muted)] md:col-span-1">
           Placa (flota)
@@ -675,8 +754,12 @@ export default function TmsPage() {
           </button>
         </div>
 
-        <button className="rounded bg-[var(--accent)] px-3 py-1 text-sm text-white">
-          Crear plan
+        <button
+          type="submit"
+          disabled={savingPlan}
+          className="rounded bg-[var(--accent)] px-3 py-1 text-sm text-white disabled:opacity-60"
+        >
+          {savingPlan ? "Creando…" : "Crear plan"}
         </button>
       </form>
 

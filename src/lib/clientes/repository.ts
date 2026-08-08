@@ -247,6 +247,47 @@ export async function importarClientesDesdeTms(
   return { importados, existentes };
 }
 
+const vinculosReady = new Set<number>();
+
+/** Asegura que clientes activos del catálogo tengan fila en tms_clientes (para planes). */
+export async function asegurarVinculosTmsClientes(
+  empresaId: number,
+): Promise<void> {
+  if (vinculosReady.has(empresaId)) return;
+  await asegurarSchemaClientes();
+  try {
+    const rows = await query<RowDataPacket[]>(
+      `SELECT id, nombre, nit, telefono, direccion, estado, tms_cliente_id
+       FROM clientes
+       WHERE empresa_id = ? AND estado = 'Activo' AND tms_cliente_id IS NULL
+       LIMIT 200`,
+      [empresaId],
+    );
+    for (const r of rows) {
+      const tmsId = await syncTmsCliente(
+        empresaId,
+        {
+          nombre: String(r.nombre),
+          nit: r.nit != null ? String(r.nit) : null,
+          telefono: r.telefono != null ? String(r.telefono) : null,
+          direccion: r.direccion != null ? String(r.direccion) : null,
+          estado: (r.estado as ClienteEstado) || "Activo",
+        },
+        null,
+      );
+      if (tmsId) {
+        await execute(
+          `UPDATE clientes SET tms_cliente_id = ? WHERE id = ? AND empresa_id = ?`,
+          [tmsId, Number(r.id), empresaId],
+        );
+      }
+    }
+    vinculosReady.add(empresaId);
+  } catch {
+    /* no bloquear TMS */
+  }
+}
+
 /** Alta rápida usada por TMS (mantiene ids de tms_clientes para planes). */
 export async function crearClienteDesdeTms(
   empresaId: number,

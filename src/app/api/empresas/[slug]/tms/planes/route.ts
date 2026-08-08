@@ -7,32 +7,61 @@ import { requireTenantModulo } from "@/lib/tenant";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
 import { listarVehiculosAccesibles } from "@/lib/flota/acceso";
 import {
+  asegurarCodigoPlanUnico,
+  generarCodigoPlan,
+} from "@/lib/tms/codigo-plan";
+import {
   guardarParadasPlan,
-  listarParadasDelPlan,
+  listarParadasDePlanes,
   type ParadaInput,
 } from "@/lib/tms/paradas";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
-async function auxiliaresDelPlan(planId: number): Promise<string[]> {
+async function auxiliaresDePlanes(
+  planIds: number[],
+): Promise<Map<number, string[]>> {
+  const map = new Map<number, string[]>();
+  const ids = [...new Set(planIds.map(Number).filter((id) => id > 0))];
+  if (!ids.length) return map;
   try {
+    const placeholders = ids.map(() => "?").join(",");
     const rows = await query<RowDataPacket[]>(
-      `SELECT per.nombre FROM tms_plan_auxiliares a
+      `SELECT a.plan_id, per.nombre
+       FROM tms_plan_auxiliares a
        INNER JOIN tms_personal per ON per.id = a.personal_id
-       WHERE a.plan_id = ?
-       ORDER BY a.orden, a.id`,
-      [planId],
+       WHERE a.plan_id IN (${placeholders})
+       ORDER BY a.plan_id, a.orden, a.id`,
+      ids,
     );
-    return rows.map((r) => String(r.nombre));
+    for (const r of rows) {
+      const pid = Number(r.plan_id);
+      const list = map.get(pid) ?? [];
+      list.push(String(r.nombre));
+      map.set(pid, list);
+    }
   } catch {
-    return [];
+    /* tabla aún no existe */
   }
+  return map;
 }
 
-export async function GET(_req: Request, ctx: Ctx) {
+export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenantModulo(slug, "tms");
   if (guard.error) return guard.error;
+
+  const url = new URL(req.url);
+  if (url.searchParams.get("nextCodigo") === "1") {
+    const fecha =
+      url.searchParams.get("fecha") ||
+      new Date().toISOString().slice(0, 10);
+    const codigo = await generarCodigoPlan(guard.empresa.id, fecha);
+    return NextResponse.json(
+      { codigo },
+      { headers: { "Cache-Control": "private, no-store" } },
+    );
+  }
 
   try {
     await asegurarSchemaFlota();
@@ -40,32 +69,41 @@ export async function GET(_req: Request, ctx: Ctx) {
     /* ok */
   }
 
-  const rows = await query<RowDataPacket[]>(
-    `SELECT p.id, p.codigo, p.fecha_plan, p.hora_carga, p.estado, p.tipo_traslado, p.notas,
-            c.nombre AS cliente, u.placa, pil.nombre AS piloto, aux.nombre AS auxiliar,
-            (SELECT COUNT(*) FROM tms_evidencias ev WHERE ev.plan_id = p.id) AS evidencias
-     FROM tms_planes_viaje p
-     LEFT JOIN tms_clientes c ON c.id = p.cliente_id
-     LEFT JOIN tms_unidades u ON u.id = p.unidad_id
-     LEFT JOIN tms_personal pil ON pil.id = p.piloto_id
-     LEFT JOIN tms_personal aux ON aux.id = p.auxiliar_id
-     WHERE p.empresa_id = ?
-     ORDER BY p.fecha_plan DESC, p.id DESC
-     LIMIT 200`,
-    [guard.empresa.id],
-  );
+  const [rows, vehs] = await Promise.all([
+    query<RowDataPacket[]>(
+      `SELECT p.id, p.codigo, p.fecha_plan, p.hora_carga, p.estado, p.tipo_traslado, p.notas,
+              c.nombre AS cliente, u.placa, pil.nombre AS piloto, aux.nombre AS auxiliar,
+              (SELECT COUNT(*) FROM tms_evidencias ev WHERE ev.plan_id = p.id) AS evidencias
+       FROM tms_planes_viaje p
+       LEFT JOIN tms_clientes c ON c.id = p.cliente_id
+       LEFT JOIN tms_unidades u ON u.id = p.unidad_id
+       LEFT JOIN tms_personal pil ON pil.id = p.piloto_id
+       LEFT JOIN tms_personal aux ON aux.id = p.auxiliar_id
+       WHERE p.empresa_id = ?
+       ORDER BY p.fecha_plan DESC, p.id DESC
+       LIMIT 200`,
+      [guard.empresa.id],
+    ),
+    listarVehiculosAccesibles(guard.empresa.id).catch(() => []),
+  ]);
 
-  const planes = [];
-  for (const r of rows) {
-    const extras = await auxiliaresDelPlan(Number(r.id));
+  const planIds = rows.map((r) => Number(r.id));
+  const [paradasMap, auxMap] = await Promise.all([
+    listarParadasDePlanes(planIds),
+    auxiliaresDePlanes(planIds),
+  ]);
+
+  const planes = rows.map((r) => {
+    const id = Number(r.id);
+    const extras = auxMap.get(id) ?? [];
     const auxList =
       extras.length > 0
         ? extras
         : r.auxiliar
           ? [String(r.auxiliar)]
           : [];
-    const paradas = await listarParadasDelPlan(Number(r.id));
-    planes.push({
+    const paradas = paradasMap.get(id) ?? [];
+    return {
       ...r,
       auxiliares: auxList,
       auxiliar: auxList.join(", ") || null,
@@ -73,29 +111,26 @@ export async function GET(_req: Request, ctx: Ctx) {
       paradasPendientes: paradas.filter(
         (p) => p.requiere_evidencia && p.evidencias < 1,
       ).length,
-    });
-  }
+    };
+  });
 
-  // Placas de flota (propias + compartidas) para el formulario
-  let placasFlota: string[] = [];
-  try {
-    const vehs = await listarVehiculosAccesibles(guard.empresa.id);
-    placasFlota = vehs
-      .filter((v) => Number(v.activo ?? 1) !== 0)
-      .map((v) => String(v.placa));
-  } catch {
-    placasFlota = [];
-  }
+  const placasFlota = vehs
+    .filter((v) => Number(v.activo ?? 1) !== 0)
+    .map((v) => String(v.placa));
 
-  return NextResponse.json({ planes, placasFlota });
+  return NextResponse.json(
+    { planes, placasFlota },
+    { headers: { "Cache-Control": "private, no-store" } },
+  );
 }
 
 const schema = z.object({
-  codigo: z.string().min(1),
+  codigo: z.string().optional(),
   fechaPlan: z.string().min(1),
   horaCarga: z.string().optional(),
   tipoTraslado: z.string().optional(),
   notas: z.string().optional(),
+  clienteId: z.number().int().positive().optional(),
   clienteNombre: z.string().optional(),
   placa: z.string().optional(),
   pilotoNombre: z.string().optional(),
@@ -204,7 +239,20 @@ export async function POST(req: Request, ctx: Ctx) {
   let unidadId: number | null = null;
   let pilotoId: number | null = null;
 
-  if (d.clienteNombre?.trim()) {
+  const codigo = await asegurarCodigoPlanUnico(
+    empresaId,
+    d.fechaPlan,
+    d.codigo,
+  );
+
+  if (d.clienteId) {
+    const found = await query<RowDataPacket[]>(
+      "SELECT id FROM tms_clientes WHERE empresa_id = ? AND id = ? LIMIT 1",
+      [empresaId, d.clienteId],
+    );
+    if (found[0]) clienteId = Number(found[0].id);
+  }
+  if (!clienteId && d.clienteNombre?.trim()) {
     const found = await query<RowDataPacket[]>(
       "SELECT id FROM tms_clientes WHERE empresa_id = ? AND nombre = ? LIMIT 1",
       [empresaId, d.clienteNombre.trim()],
@@ -212,11 +260,21 @@ export async function POST(req: Request, ctx: Ctx) {
     if (found[0]) {
       clienteId = Number(found[0].id);
     } else {
-      const r = await execute(
-        "INSERT INTO tms_clientes (empresa_id, nombre) VALUES (?, ?)",
-        [empresaId, d.clienteNombre.trim()],
-      );
-      clienteId = Number(r.insertId);
+      try {
+        const { crearClienteDesdeTms } = await import(
+          "@/lib/clientes/repository"
+        );
+        const created = await crearClienteDesdeTms(empresaId, {
+          nombre: d.clienteNombre.trim(),
+        });
+        clienteId = created.tmsClienteId;
+      } catch {
+        const r = await execute(
+          "INSERT INTO tms_clientes (empresa_id, nombre) VALUES (?, ?)",
+          [empresaId, d.clienteNombre.trim()],
+        );
+        clienteId = Number(r.insertId);
+      }
     }
   }
   if (d.placa?.trim()) {
@@ -311,26 +369,45 @@ export async function POST(req: Request, ctx: Ctx) {
     "Descarga",
   );
 
-  const result = await execute(
-    `INSERT INTO tms_planes_viaje
-      (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, notas, estado)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado')`,
-    [
-      empresaId,
-      d.codigo,
-      clienteId,
-      lugarCargaId,
-      lugarDescargaId,
-      unidadId,
-      pilotoId,
-      auxiliarId,
-      d.fechaPlan,
-      d.horaCarga ?? null,
-      d.tipoTraslado ?? null,
-      d.notas ?? null,
-    ],
-  );
-  const planId = Number(result.insertId);
+  let planId = 0;
+  let codigoFinal = codigo;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const result = await execute(
+        `INSERT INTO tms_planes_viaje
+          (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, notas, estado)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado')`,
+        [
+          empresaId,
+          codigoFinal,
+          clienteId,
+          lugarCargaId,
+          lugarDescargaId,
+          unidadId,
+          pilotoId,
+          auxiliarId,
+          d.fechaPlan,
+          d.horaCarga ?? null,
+          d.tipoTraslado ?? null,
+          d.notas ?? null,
+        ],
+      );
+      planId = Number(result.insertId);
+      break;
+    } catch {
+      codigoFinal = await asegurarCodigoPlanUnico(
+        empresaId,
+        d.fechaPlan,
+        null,
+      );
+    }
+  }
+  if (!planId) {
+    return NextResponse.json(
+      { error: "No se pudo generar un código de plan único. Intenta de nuevo." },
+      { status: 409 },
+    );
+  }
   await guardarAuxiliaresPlan(planId, auxPersonalIds);
   if (paradasInput.length) {
     await guardarParadasPlan(empresaId, planId, paradasInput);
@@ -344,12 +421,13 @@ export async function POST(req: Request, ctx: Ctx) {
     usuario: guard.session.username,
     accion: "crear_ruta",
     modulo: "tms",
-    detalle: `Plan #${planId} ${d.codigo} · fecha ${d.fechaPlan} · piloto ${d.pilotoNombre?.trim() || "—"} · placa ${(d.placa || "").toUpperCase() || "—"} · ${paradasInput.length} parada(s)${paradasTxt ? `: ${paradasTxt}` : ""}`,
+    detalle: `Plan #${planId} ${codigoFinal} · fecha ${d.fechaPlan} · piloto ${d.pilotoNombre?.trim() || "—"} · placa ${(d.placa || "").toUpperCase() || "—"} · ${paradasInput.length} parada(s)${paradasTxt ? `: ${paradasTxt}` : ""}`,
   });
 
   return NextResponse.json({
     id: planId,
-    mensaje: `Plan creado${
+    codigo: codigoFinal,
+    mensaje: `Plan ${codigoFinal} creado${
       auxPersonalIds.length > 1
         ? ` con ${auxPersonalIds.length} auxiliares`
         : ""
