@@ -15,6 +15,7 @@ import {
 import { MODULO_LABEL, type Modulo } from "@/lib/roles";
 import { NotificacionesBell } from "@/components/notificaciones-bell";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { ShellNavLink } from "@/components/shell-nav-link";
 import { EmpresaSessionProvider } from "@/lib/empresa-session";
 
 type Props = {
@@ -148,16 +149,29 @@ export function AppShell({
   const [dominioEmpresa, setDominioEmpresa] = useState(false);
   const [abiertos, setAbiertos] = useState<Record<string, boolean>>({});
   const [menuOpen, setMenuOpen] = useState(false);
+  const [navPending, setNavPending] = useState(false);
 
   useEffect(() => {
     const host = window.location.hostname.toLowerCase();
     setDominioEmpresa(Boolean(mapaDominios()[host]));
   }, []);
 
-  // Cerrar drawer al navegar (móvil)
+  // Cerrar drawer al cambiar de ruta
   useEffect(() => {
     setMenuOpen(false);
   }, [pathname]);
+
+  // Quitar indicador al completar (pathname o ?tab= de Flota vía nuevo RSC).
+  useEffect(() => {
+    setNavPending(false);
+  }, [pathname, children]);
+
+  // Seguridad: no dejar la barra colgada si la nav se cancela.
+  useEffect(() => {
+    if (!navPending) return;
+    const t = window.setTimeout(() => setNavPending(false), 8000);
+    return () => window.clearTimeout(t);
+  }, [navPending]);
 
   // Evitar scroll del body con el menú abierto
   useEffect(() => {
@@ -489,20 +503,22 @@ export function AppShell({
                       {gr.links.map((l) => {
                         const active = linkActive(pathname, l.href);
                         return (
-                          <Link
+                          <ShellNavLink
                             key={l.key}
                             href={l.href}
-                            prefetch={false}
-                            onClick={() => setMenuOpen(false)}
+                            onNavigate={() => {
+                              setMenuOpen(false);
+                              if (!active) setNavPending(true);
+                            }}
                             className={[
-                              "block rounded-md px-2.5 py-1.5 text-sm",
+                              "rounded-md px-2.5 py-1.5 text-sm",
                               active
                                 ? "bg-[var(--accent)] text-white"
                                 : "text-[var(--muted)] hover:bg-[var(--nav-hover)] hover:text-[var(--nav-text-strong)]",
                             ].join(" ")}
                           >
                             {l.label}
-                          </Link>
+                          </ShellNavLink>
                         );
                       })}
                     </div>
@@ -534,7 +550,15 @@ export function AppShell({
         </div>
       </aside>
 
-      <div className="flex min-w-0 flex-col pb-8 md:pb-7">
+      <div className="relative flex min-w-0 flex-col pb-8 md:pb-7">
+        {navPending ? (
+          <div
+            className="pointer-events-none absolute inset-x-0 top-0 z-40 h-0.5 overflow-hidden bg-[var(--border)]"
+            aria-hidden
+          >
+            <div className="h-full w-full origin-left animate-pulse bg-[var(--accent)]" />
+          </div>
+        ) : null}
         <header className="sticky top-0 z-30 flex items-center gap-2 border-b border-[var(--border)] bg-[var(--sidebar)] px-3 py-2 md:justify-end md:px-6">
           <button
             type="button"
@@ -555,7 +579,14 @@ export function AppShell({
           <NotificacionesBell slug={slug} rol={rol} />
           <ThemeToggle />
         </header>
-        <main className="flex-1 p-3 sm:p-4 md:p-6">{children}</main>
+        <main
+          className={[
+            "flex-1 p-3 transition-opacity duration-150 sm:p-4 md:p-6",
+            navPending ? "opacity-70" : "opacity-100",
+          ].join(" ")}
+        >
+          {children}
+        </main>
       </div>
       <footer className="fixed bottom-0 left-0 right-0 z-20 border-t border-[var(--border)] bg-[var(--sidebar)] px-3 py-1 text-[10px] text-[var(--muted)] md:left-[260px] md:text-xs">
         Empresa: {empresaNombre} · Usuario: {username}

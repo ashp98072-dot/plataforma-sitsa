@@ -23,12 +23,16 @@ type Props = {
 
 export default async function EmpresaLayout({ children, params }: Props) {
   const { slug } = await params;
-  const session = await getSession();
+
+  // Session + tenant en paralelo (JWT es local; no depende de MySQL).
+  const sessionPromise = getSession();
+  const empresaPromise = obtenerEmpresaPorSlug(slug);
+  const session = await sessionPromise;
   if (!session) redirect("/login");
 
   // Paralelizar lecturas de tenant (menos latencia / menos riesgo de timeout).
   const [empresa, permitidas, permisosRaw] = await Promise.all([
-    obtenerEmpresaPorSlug(slug),
+    empresaPromise,
     empresasParaUsuario({
       usuarioId: session.id,
       rol: session.rol,

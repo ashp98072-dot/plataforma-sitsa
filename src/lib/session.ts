@@ -1,5 +1,6 @@
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
+import { cache } from "react";
 import type { RolGlobal } from "./roles";
 
 export const SESSION_COOKIE = "sitsa_session";
@@ -62,12 +63,15 @@ export async function verifySessionToken(
   }
 }
 
-export async function getSession(): Promise<SessionPayload | null> {
+async function readSession(): Promise<SessionPayload | null> {
   const jar = await cookies();
   const token = jar.get(SESSION_COOKIE)?.value;
   if (!token) return null;
   return verifySessionToken(token);
 }
+
+/** Deduplica getSession dentro del mismo request RSC (layout + page). */
+export const getSession = cache(readSession);
 
 export async function setSessionCookie(token: string): Promise<void> {
   const jar = await cookies();
