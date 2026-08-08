@@ -97,17 +97,31 @@ export async function middleware(request: NextRequest) {
   const session = await readSession(token);
   const valid = Boolean(session);
 
+  // Entrada del sitio: siempre mostrar login (sin entrar con sesión previa).
+  if (pathname === "/" || pathname === "/login") {
+    const res =
+      pathname === "/"
+        ? NextResponse.redirect(new URL("/login", request.url))
+        : NextResponse.next();
+    if (token) {
+      res.cookies.set(COOKIE, "", {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        path: "/",
+        maxAge: 0,
+      });
+    }
+    return res;
+  }
+
   if (!valid && !isPublic) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
   // --- Dominio de una empresa (logiserviciosmonaco.com, tarimascenter.com…) ---
   if (dominioEmpresa && empresaSlug) {
-    if (valid && (pathname === "/login" || pathname === "/select-empresa")) {
-      const dest = homePorRol(session!.rol ?? "Operaciones", empresaSlug, true);
-      return NextResponse.redirect(new URL(dest, request.url));
-    }
-    if (valid && pathname === "/") {
+    if (valid && pathname === "/select-empresa") {
       const dest = homePorRol(session!.rol ?? "Operaciones", empresaSlug, true);
       return NextResponse.redirect(new URL(dest, request.url));
     }
@@ -124,11 +138,6 @@ export async function middleware(request: NextRequest) {
       return NextResponse.rewrite(url);
     }
     return NextResponse.next();
-  }
-
-  // --- Dominio plataforma (Hostinger genérico / multiempresa) ---
-  if (valid && (pathname === "/login" || pathname === "/")) {
-    return NextResponse.redirect(new URL("/select-empresa", request.url));
   }
 
   return NextResponse.next();
