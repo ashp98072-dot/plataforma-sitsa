@@ -8,10 +8,14 @@ import { asegurarSchemaFacturacion } from "@/lib/facturacion/schema";
 import { obtenerEmpresaPorSlug } from "@/lib/empresas";
 import { getSession } from "@/lib/session";
 
-type Props = { params: Promise<{ slug: string }> };
+type Props = {
+  params: Promise<{ slug: string }>;
+  searchParams: Promise<{ vista?: string }>;
+};
 
-export default async function FacturacionPage({ params }: Props) {
+export default async function FacturacionPage({ params, searchParams }: Props) {
   const { slug } = await params;
+  const sp = await searchParams;
   const [session, empresa] = await Promise.all([
     getSession(),
     obtenerEmpresaPorSlug(slug),
@@ -22,6 +26,11 @@ export default async function FacturacionPage({ params }: Props) {
     await asegurarModulosClientesFacturacion(empresa.id);
   }
   const alcance = alcanceFacturacion(session?.rol ?? "");
+  const vistaRaw = (sp.vista ?? "").toLowerCase();
+  const vistaInicial =
+    vistaRaw === "clientes" || vistaRaw === "empresa" || vistaRaw === "ayuda"
+      ? (vistaRaw as "clientes" | "empresa" | "ayuda")
+      : null;
 
   return (
     <FacturacionClient
@@ -30,6 +39,7 @@ export default async function FacturacionPage({ params }: Props) {
       editarEmpresa={alcance.editarEmpresa}
       verClientes={alcance.verClientes}
       editarClientes={alcance.editarClientes}
+      vistaInicial={vistaInicial}
     />
   );
 }

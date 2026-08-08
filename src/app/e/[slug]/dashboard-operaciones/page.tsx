@@ -72,7 +72,7 @@ export default async function DashboardOperacionesPage({ params }: Props) {
       : null,
     puedeFactClientes
       ? {
-          href: `/e/${slug}/facturacion`,
+          href: `/e/${slug}/facturacion?vista=clientes`,
           title: "Facturación clientes",
           desc: "Cómo se factura a cada cliente (NIT, OC, evidencias, tarifa). La empresa la llena Contabilidad.",
         }

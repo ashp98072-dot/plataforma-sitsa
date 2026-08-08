@@ -5,7 +5,10 @@ import { execute, query } from "@/lib/db";
 import { registrarAuditoria } from "@/lib/auditoria";
 import { requireTenantModulo } from "@/lib/tenant";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
-import { listarVehiculosAccesibles } from "@/lib/flota/acceso";
+import {
+  listarDisponibilidadVehiculos,
+  placasDisponiblesParaPlan,
+} from "@/lib/operaciones/disponibilidad";
 import {
   asegurarCodigoPlanUnico,
   generarCodigoPlan,
@@ -69,7 +72,7 @@ export async function GET(req: Request, ctx: Ctx) {
     /* ok */
   }
 
-  const [rows, vehs] = await Promise.all([
+  const [rows, disp] = await Promise.all([
     query<RowDataPacket[]>(
       `SELECT p.id, p.codigo, p.fecha_plan, p.hora_carga, p.estado, p.tipo_traslado, p.notas,
               c.nombre AS cliente, u.placa, pil.nombre AS piloto, aux.nombre AS auxiliar,
@@ -84,7 +87,7 @@ export async function GET(req: Request, ctx: Ctx) {
        LIMIT 200`,
       [guard.empresa.id],
     ),
-    listarVehiculosAccesibles(guard.empresa.id).catch(() => []),
+    listarDisponibilidadVehiculos(guard.empresa.id).catch(() => null),
   ]);
 
   const planIds = rows.map((r) => Number(r.id));
@@ -114,12 +117,34 @@ export async function GET(req: Request, ctx: Ctx) {
     };
   });
 
-  const placasFlota = vehs
-    .filter((v) => Number(v.activo ?? 1) !== 0)
-    .map((v) => String(v.placa));
+  const vehiculos = disp?.vehiculos ?? [];
+  const placasFlota = placasDisponiblesParaPlan(vehiculos);
+  const vehiculosDisponibles = vehiculos
+    .filter((v) => v.puedeEnviar)
+    .map((v) => ({
+      placa: v.placa,
+      marca: v.marca,
+      modelo: v.modelo,
+      compartido: v.compartido,
+      esPropio: v.esPropio,
+    }));
+  const resumenFlota = disp?.resumen ?? {
+    total: 0,
+    disponibles: placasFlota.length,
+    enTaller: 0,
+    enRuta: 0,
+    inactivos: 0,
+    propios: 0,
+    compartidos: 0,
+  };
 
   return NextResponse.json(
-    { planes, placasFlota },
+    {
+      planes,
+      placasFlota,
+      vehiculosDisponibles,
+      resumenFlota,
+    },
     { headers: { "Cache-Control": "private, no-store" } },
   );
 }
@@ -278,11 +303,28 @@ export async function POST(req: Request, ctx: Ctx) {
     }
   }
   if (d.placa?.trim()) {
+    const placaNorm = d.placa.trim().toUpperCase();
+    try {
+      const dispCheck = await listarDisponibilidadVehiculos(empresaId);
+      const v = dispCheck.vehiculos.find(
+        (x) => x.placa.toUpperCase() === placaNorm,
+      );
+      if (v && !v.puedeEnviar) {
+        return NextResponse.json(
+          {
+            error: `La placa ${placaNorm} no está disponible: ${v.motivoNoDisponible ?? v.estadoDisponibilidad}.`,
+          },
+          { status: 400 },
+        );
+      }
+    } catch {
+      /* si falla disponibilidad, no bloquear creación */
+    }
     const r = await execute(
       `INSERT INTO tms_unidades (empresa_id, placa, tipo)
        VALUES (?, ?, 'Camion')
        ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)`,
-      [empresaId, d.placa.trim().toUpperCase()],
+      [empresaId, placaNorm],
     );
     unidadId = Number(r.insertId);
   }

@@ -276,15 +276,14 @@ export function AppShell({
       isAdmin ||
       permisos.length === 0 ||
       tienePermiso(permisos, "facturacion", "ver");
-    // Operaciones: facturación por cliente (Contabilidad usa el menú Contabilidad).
+    // Operaciones: facturación por cliente (también Admin, aparte de Conta).
     if (
       modulos.includes("facturacion") &&
       puedeVerFact &&
-      alcanceFact.verClientes &&
-      !alcanceFact.verEmpresa
+      alcanceFact.verClientes
     ) {
       opsLinks.push({
-        href: `${base}/facturacion`,
+        href: `${base}/facturacion?vista=clientes`,
         label: "Facturación clientes",
         key: "fact-cli",
       });
@@ -369,17 +368,15 @@ export function AppShell({
     }
 
     const contaLinks: NavLink[] = [];
-    // Contabilidad (y Admin): facturación de la empresa (+ clientes si Admin).
+    // Contabilidad (y Admin): facturación de la empresa.
     if (
       modulos.includes("facturacion") &&
       puedeVerFact &&
       alcanceFact.verEmpresa
     ) {
       contaLinks.push({
-        href: `${base}/facturacion`,
-        label: alcanceFact.verClientes
-          ? MODULO_LABEL.facturacion
-          : "Facturación empresa",
+        href: `${base}/facturacion?vista=empresa`,
+        label: "Facturación empresa",
         key: "facturacion",
       });
     }

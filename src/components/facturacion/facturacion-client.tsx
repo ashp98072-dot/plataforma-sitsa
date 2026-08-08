@@ -14,6 +14,8 @@ type Props = {
   editarEmpresa: boolean;
   verClientes: boolean;
   editarClientes: boolean;
+  /** Desde menú: Conta → empresa, Ops → clientes. */
+  vistaInicial?: "empresa" | "clientes" | "ayuda" | null;
 };
 
 type ResumenCliente = {
@@ -32,6 +34,7 @@ export function FacturacionClient({
   editarEmpresa,
   verClientes,
   editarClientes,
+  vistaInicial = null,
 }: Props) {
   const tabs = useMemo(() => {
     const list: { id: Tab; label: string }[] = [];
@@ -45,7 +48,18 @@ export function FacturacionClient({
     return list;
   }, [verEmpresa, verClientes]);
 
-  const [tab, setTab] = useState<Tab>(tabs[0]?.id ?? "ayuda");
+  const tabInicial = useMemo((): Tab => {
+    if (vistaInicial && tabs.some((t) => t.id === vistaInicial)) {
+      return vistaInicial;
+    }
+    return tabs[0]?.id ?? "ayuda";
+  }, [vistaInicial, tabs]);
+
+  const [tab, setTab] = useState<Tab>(tabInicial);
+
+  useEffect(() => {
+    setTab(tabInicial);
+  }, [tabInicial]);
   const [secciones, setSecciones] = useState<SeccionFacturacion[]>([]);
   const [respuestas, setRespuestas] = useState<RespuestasFacturacion>({});
   const [completadoPct, setCompletadoPct] = useState(0);
@@ -207,13 +221,14 @@ export function FacturacionClient({
       {tab === "ayuda" ? (
         <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 text-sm leading-relaxed">
           <p>
-            <strong>Contabilidad</strong> llena la facturación de{" "}
-            <em>la empresa</em> (emisor, FEL, cortes, moneda, cobro).
+            <strong>Contabilidad</strong> → menú Contabilidad →{" "}
+            <em>Facturación empresa</em> (cómo factura esa empresa: FEL, cortes,
+            moneda…). Cada empresa tiene su propio perfil.
           </p>
           <p>
-            <strong>Operaciones</strong> llena la facturación{" "}
-            <em>por cliente</em> (NIT a facturar, OC, evidencias, tarifa,
-            crédito).
+            <strong>Operaciones</strong> → menú Operaciones →{" "}
+            <em>Facturación clientes</em> (cómo se factura a cada cliente: NIT,
+            OC, evidencias, tarifa…). Cada cliente puede ser distinto.
           </p>
           <p>
             El catálogo de clientes es compartido:{" "}

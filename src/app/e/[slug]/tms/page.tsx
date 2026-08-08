@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
 import { ClienteSearch } from "@/components/tms/cliente-search";
+import { PlacaSelect, type VehiculoOpt } from "@/components/tms/placa-select";
+import { PilotoSelect } from "@/components/tms/piloto-select";
 
 type ParadaForm = {
   lugarNombre: string;
@@ -38,7 +40,14 @@ type Plan = {
 export default function TmsPage() {
   const slug = String(useParams().slug);
   const [planes, setPlanes] = useState<Plan[]>([]);
-  const [placasFlota, setPlacasFlota] = useState<string[]>([]);
+  const [vehiculosDisponibles, setVehiculosDisponibles] = useState<
+    VehiculoOpt[]
+  >([]);
+  const [resumenFlota, setResumenFlota] = useState({
+    disponibles: 0,
+    enTaller: 0,
+    enRuta: 0,
+  });
   const [selected, setSelected] = useState<number | null>(null);
   type EmpOps = { id: number; codigo: string; nombre: string; categoriaOps: string };
   const [form, setForm] = useState({
@@ -53,6 +62,7 @@ export default function TmsPage() {
     auxiliarEmpleadoIds: [] as number[],
     auxiliarNombres: [] as string[],
     tipoTraslado: "",
+    notas: "",
     lugarCarga: "",
     lugarDescarga: "",
   });
@@ -135,7 +145,18 @@ export default function TmsPage() {
     const a = await aux.json();
     if (res.ok) {
       setPlanes(data.planes ?? []);
-      setPlacasFlota(data.placasFlota ?? []);
+      const vd =
+        (data.vehiculosDisponibles as VehiculoOpt[] | undefined) ??
+        ((data.placasFlota as string[] | undefined) ?? []).map((p) => ({
+          placa: p,
+        }));
+      setVehiculosDisponibles(vd);
+      const rf = data.resumenFlota ?? {};
+      setResumenFlota({
+        disponibles: Number(rf.disponibles ?? vd.length),
+        enTaller: Number(rf.enTaller ?? 0),
+        enRuta: Number(rf.enRuta ?? 0),
+      });
     }
     if (cat.ok) {
       const clientes = (c.clientes ?? []) as ClienteCat[];
@@ -229,6 +250,7 @@ export default function TmsPage() {
           fechaPlan: form.fechaPlan,
           horaCarga: form.horaCarga,
           tipoTraslado: form.tipoTraslado || undefined,
+          notas: form.notas.trim() || undefined,
           clienteId: form.clienteId || undefined,
           clienteNombre: form.clienteNombre.trim() || undefined,
           placa: form.placa || undefined,
@@ -261,6 +283,7 @@ export default function TmsPage() {
           clienteId: 0,
           clienteNombre: "",
           tipoTraslado: "",
+          notas: "",
         }));
         setParadasForm([
           { lugarNombre: "", tipo: "Carga", requiereEvidencia: true },
@@ -455,7 +478,10 @@ export default function TmsPage() {
       <div className="grid gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 text-sm sm:grid-cols-4">
         <p>Clientes: {counts.clientes}</p>
         <p>Lugares: {counts.lugares}</p>
-        <p>Unidades flota: {placasFlota.length || counts.unidades}</p>
+        <p>
+          Flota: {resumenFlota.disponibles} disp. / {resumenFlota.enTaller}{" "}
+          taller / {resumenFlota.enRuta} ruta
+        </p>
         <p>
           RRHH ops: {pilotos.length} pilotos / {auxiliares.length} aux
         </p>
@@ -537,53 +563,26 @@ export default function TmsPage() {
             setForm((f) => ({ ...f, clienteId, clienteNombre }))
           }
         />
-        <label className="text-xs text-[var(--muted)] md:col-span-1">
-          Placa (flota)
-          <input
-            className={`${input} mt-1 w-full font-mono uppercase`}
-            placeholder="Ej. C-015BNG"
-            value={form.placa}
-            list="placas-tms-flota"
-            onChange={(e) => setForm({ ...form, placa: e.target.value })}
-          />
-          <datalist id="placas-tms-flota">
-            {placasFlota.map((p) => (
-              <option key={p} value={p} />
-            ))}
-          </datalist>
-        </label>
-        <label className="text-xs text-[var(--muted)]">
-          Piloto (escribe o elige de RRHH)
-          <input
-            className={`${input} mt-1 w-full`}
-            placeholder="Ej. Walter Villagrán"
-            value={
-              form.pilotoEmpleadoId
-                ? pilotos.find((p) => p.id === form.pilotoEmpleadoId)?.nombre ??
-                  form.pilotoNombre
-                : form.pilotoNombre
-            }
-            list="pilotos-rrhh-tms"
-            onChange={(e) => {
-              const val = e.target.value;
-              const match = pilotos.find(
-                (p) => p.nombre.toLowerCase() === val.trim().toLowerCase(),
-              );
-              setForm({
-                ...form,
-                pilotoNombre: val,
-                pilotoEmpleadoId: match ? match.id : 0,
-              });
-            }}
-          />
-          <datalist id="pilotos-rrhh-tms">
-            {pilotos.map((p) => (
-              <option key={p.id} value={p.nombre}>
-                {p.codigo}
-              </option>
-            ))}
-          </datalist>
-        </label>
+        <PlacaSelect
+          value={form.placa}
+          options={vehiculosDisponibles}
+          resumen={resumenFlota}
+          inputClassName={input}
+          onChange={(placa) => setForm((f) => ({ ...f, placa }))}
+        />
+        <PilotoSelect
+          pilotos={pilotos}
+          empleadoId={form.pilotoEmpleadoId}
+          nombre={form.pilotoNombre}
+          inputClassName={input}
+          onChange={({ empleadoId, nombre }) =>
+            setForm((f) => ({
+              ...f,
+              pilotoEmpleadoId: empleadoId,
+              pilotoNombre: nombre,
+            }))
+          }
+        />
 
         <div className="md:col-span-3 space-y-2 rounded border border-[var(--border)] p-3">
           <p className="text-xs text-[var(--muted)]">
@@ -662,12 +661,33 @@ export default function TmsPage() {
           </div>
         </div>
 
-        <input
-          className={input}
-          placeholder="Tipo traslado"
-          value={form.tipoTraslado}
-          onChange={(e) => setForm({ ...form, tipoTraslado: e.target.value })}
-        />
+        <label className="text-xs text-[var(--muted)]">
+          Tipo de traslado
+          <select
+            className={`${input} mt-1 w-full`}
+            value={form.tipoTraslado}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, tipoTraslado: e.target.value }))
+            }
+          >
+            <option value="">— Seleccionar —</option>
+            <option value="Carga general">Carga general</option>
+            <option value="Contenedor">Contenedor</option>
+            <option value="Distribución">Distribución</option>
+            <option value="Recolección">Recolección</option>
+            <option value="Traslado interno">Traslado interno</option>
+            <option value="Otro">Otro</option>
+          </select>
+        </label>
+        <label className="text-xs text-[var(--muted)] md:col-span-2">
+          Notas / instrucciones
+          <input
+            className={`${input} mt-1 w-full`}
+            placeholder="Referencia OC, contacto en sitio, restricciones…"
+            value={form.notas}
+            onChange={(e) => setForm((f) => ({ ...f, notas: e.target.value }))}
+          />
+        </label>
 
         <div className="md:col-span-3 space-y-2 rounded border border-[var(--border)] p-3">
           <p className="text-xs text-[var(--muted)]">
@@ -775,11 +795,19 @@ export default function TmsPage() {
             onChange={(e) => setEdit({ ...edit, pilotoNombre: e.target.value })}
           />
           <input
-            className={input}
-            placeholder="Placa"
+            className={`${input} font-mono uppercase`}
+            placeholder="Placa (disponible)"
             value={edit.placa}
-            onChange={(e) => setEdit({ ...edit, placa: e.target.value })}
+            list="placas-tms-edit"
+            onChange={(e) =>
+              setEdit({ ...edit, placa: e.target.value.toUpperCase() })
+            }
           />
+          <datalist id="placas-tms-edit">
+            {vehiculosDisponibles.map((v) => (
+              <option key={v.placa} value={v.placa} />
+            ))}
+          </datalist>
           <select
             className={input}
             value={edit.estado}
