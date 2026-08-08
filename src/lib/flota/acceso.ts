@@ -3,6 +3,52 @@ import { execute, query } from "@/lib/db";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
 import { listarEmpresasActivas } from "@/lib/empresas";
 
+/**
+ * Una unidad propia o compartida con esta empresa.
+ * Evita el falso "Vehículo no encontrado" en KT/Mónaco con flota compartida.
+ */
+export async function obtenerVehiculoAccesible(
+  empresaId: number,
+  vehiculoId: number,
+  cols =
+    "v.id, v.empresa_id, v.placa, v.marca, v.modelo, v.km_actual, v.en_taller, v.fecha_entrada_taller, v.motivo_taller, v.activo, v.estado, v.km_intervalo_servicio, v.km_ultimo_servicio, v.notas, v.rin_llanta, v.medida_llanta, v.tipo_aceite, v.descripcion, v.color, v.tipo_combustible, v.filtro_servicio_mayor, v.filtro_servicio_menor, v.empresa_activo",
+): Promise<RowDataPacket | null> {
+  if (!vehiculoId || !empresaId) return null;
+  try {
+    const rows = await query<RowDataPacket[]>(
+      `SELECT ${cols},
+              CASE WHEN v.empresa_id = ? THEN 0 ELSE 1 END AS compartido
+       FROM flota_vehiculos v
+       WHERE v.id = ?
+         AND (
+           v.empresa_id = ?
+           OR EXISTS (
+             SELECT 1 FROM flota_vehiculo_acceso a
+             WHERE a.vehiculo_id = v.id AND a.empresa_id = ?
+           )
+         )
+       LIMIT 1`,
+      [empresaId, vehiculoId, empresaId, empresaId],
+    );
+    return rows[0] ?? null;
+  } catch {
+    const rows = await query<RowDataPacket[]>(
+      `SELECT * FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1`,
+      [vehiculoId, empresaId],
+    );
+    return rows[0] ?? null;
+  }
+}
+
+/** True si la empresa es dueña o tiene acceso compartido. */
+export async function empresaPuedeUsarVehiculo(
+  empresaId: number,
+  vehiculoId: number,
+): Promise<boolean> {
+  const v = await obtenerVehiculoAccesible(empresaId, vehiculoId, "v.id");
+  return Boolean(v);
+}
+
 /** Vehículos propios + compartidos con esta empresa. */
 export async function listarVehiculosAccesibles(
   empresaId: number,

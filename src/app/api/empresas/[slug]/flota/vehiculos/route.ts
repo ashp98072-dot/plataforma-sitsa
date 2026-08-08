@@ -12,6 +12,7 @@ import {
   guardarAccesoVehiculo,
   listarEmpresasActivasSimple,
   listarVehiculosAccesibles,
+  obtenerVehiculoAccesible,
 } from "@/lib/flota/acceso";
 import {
   guardarFiltrosVehiculo,
@@ -260,13 +261,12 @@ export async function PATCH(req: Request, ctx: Ctx) {
   }
   const d = parsed.data;
 
-  const cur = await query<RowDataPacket[]>(
-    "SELECT * FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1",
-    [d.id, guard.empresa.id],
-  );
-  if (!cur[0]) {
+  const curRow = await obtenerVehiculoAccesible(guard.empresa.id, d.id);
+  if (!curRow) {
     return NextResponse.json({ error: "Vehículo no encontrado." }, { status: 404 });
   }
+  const cur = [curRow];
+  const esDueno = Number(curRow.empresa_id) === guard.empresa.id;
 
   if (d.enTaller === true && !String(d.motivoTaller ?? "").trim()) {
     return NextResponse.json(
@@ -278,8 +278,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
   if (d.enTaller === true) {
     const enRuta = await query<RowDataPacket[]>(
       `SELECT id, piloto_nombre FROM flota_viajes
-       WHERE empresa_id = ? AND vehiculo_id = ? AND estado = 'abierto' LIMIT 1`,
-      [guard.empresa.id, d.id],
+       WHERE vehiculo_id = ? AND estado = 'abierto' LIMIT 1`,
+      [d.id],
     );
     if (enRuta[0]) {
       return NextResponse.json(
@@ -289,6 +289,17 @@ export async function PATCH(req: Request, ctx: Ctx) {
         { status: 409 },
       );
     }
+  }
+
+  // Unidades compartidas: solo taller/estado operativo (no reasignar accesos ajenos).
+  if (!esDueno && d.accesoEmpresaIds) {
+    return NextResponse.json(
+      {
+        error:
+          "Solo la empresa dueña puede cambiar con quién se comparte esta unidad.",
+      },
+      { status: 403 },
+    );
   }
 
   const enTaller =
@@ -329,7 +340,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
         medida_llanta = ?,
         tipo_aceite = ?,
         empresa_activo = ?
-       WHERE id = ? AND empresa_id = ?`,
+       WHERE id = ?`,
       [
         d.placa?.trim().toUpperCase() || String(cur[0].placa),
         d.marca ?? cur[0].marca,
@@ -365,21 +376,20 @@ export async function PATCH(req: Request, ctx: Ctx) {
           ? d.empresaActivo.trim() || null
           : cur[0].empresa_activo,
         d.id,
-        guard.empresa.id,
       ],
     );
-    if (d.filtros) {
+    if (d.filtros && esDueno) {
       await guardarFiltrosVehiculo(
-        guard.empresa.id,
+        Number(cur[0].empresa_id),
         d.id,
         d.filtros as FiltroVehiculo[],
       );
     }
-    if (d.accesoEmpresaIds) {
+    if (d.accesoEmpresaIds && esDueno) {
       await guardarAccesoVehiculo(
         d.id,
         d.accesoEmpresaIds,
-        guard.empresa.id,
+        Number(cur[0].empresa_id),
       );
     }
     return NextResponse.json({
@@ -402,13 +412,12 @@ export async function PATCH(req: Request, ctx: Ctx) {
           en_taller = ?,
           fecha_entrada_taller = ?,
           estado = ?
-         WHERE id = ? AND empresa_id = ?`,
+         WHERE id = ?`,
         [
           enTaller,
           fechaTaller,
           enTaller ? "En taller" : "Activo",
           d.id,
-          guard.empresa.id,
         ],
       );
       return NextResponse.json({

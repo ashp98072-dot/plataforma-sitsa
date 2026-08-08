@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
 import { requireTenantFlotaAny } from "@/lib/tenant";
+import { obtenerVehiculoAccesible } from "@/lib/flota/acceso";
 import { actualizarKmActualVehiculo } from "@/lib/flota/km-vehiculo";
 import {
   asegurarSchemaFlota,
@@ -144,14 +145,15 @@ export async function POST(req: Request, ctx: Ctx) {
   const conductor = (d.conductor ?? "").trim() || (d.nota ?? "").trim();
   const nota = (d.nota ?? "").trim() || conductor || null;
 
-  const veh = await query<RowDataPacket[]>(
-    `SELECT id, placa, km_actual, en_taller, activo, estado
-     FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1`,
-    [d.vehiculoId, guard.empresa.id],
+  const vehRow = await obtenerVehiculoAccesible(
+    guard.empresa.id,
+    d.vehiculoId,
+    "v.id, v.placa, v.km_actual, v.en_taller, v.activo, v.estado, v.empresa_id",
   );
-  if (!veh[0]) {
+  if (!vehRow) {
     return NextResponse.json({ error: "Vehículo no encontrado." }, { status: 404 });
   }
+  const veh = [vehRow];
   if (Number(veh[0].activo) === 0) {
     return NextResponse.json({ error: "Vehículo inactivo." }, { status: 400 });
   }
@@ -182,8 +184,8 @@ export async function POST(req: Request, ctx: Ctx) {
 
   const abiertoVeh = await query<RowDataPacket[]>(
     `SELECT id, piloto_nombre FROM flota_viajes
-     WHERE empresa_id = ? AND vehiculo_id = ? AND estado = 'abierto' LIMIT 1`,
-    [guard.empresa.id, d.vehiculoId],
+     WHERE vehiculo_id = ? AND estado = 'abierto' LIMIT 1`,
+    [d.vehiculoId],
   );
   if (abiertoVeh[0]) {
     return NextResponse.json(

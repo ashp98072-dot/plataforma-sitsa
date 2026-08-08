@@ -7,6 +7,7 @@ import {
   asegurarSchemaFlota,
   asegurarSchemaFlotaLectura,
 } from "@/lib/flota/schema";
+import { obtenerVehiculoAccesible } from "@/lib/flota/acceso";
 import { ahoraLocal } from "@/lib/rrhh/dates";
 import { contentTypeFor, guardarUpload } from "@/lib/uploads";
 
@@ -242,20 +243,21 @@ export async function POST(req: Request, ctx: Ctx) {
     d = parsed.data;
   }
 
-  const veh = await query<RowDataPacket[]>(
-    `SELECT id, placa, en_taller, fecha_entrada_taller
-     FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1`,
-    [d.vehiculoId, guard.empresa.id],
+  const vehRow = await obtenerVehiculoAccesible(
+    guard.empresa.id,
+    d.vehiculoId,
+    "v.id, v.placa, v.en_taller, v.fecha_entrada_taller, v.empresa_id",
   );
-  if (!veh[0]) {
+  if (!vehRow) {
     return NextResponse.json({ error: "Vehículo no encontrado." }, { status: 404 });
   }
+  const veh = [vehRow];
 
-  // No registrar servicio si la unidad está en ruta (viaje abierto)
+  // No registrar servicio si la unidad está en ruta (viaje abierto en cualquier empresa)
   const enRuta = await query<RowDataPacket[]>(
     `SELECT v.id, v.piloto_nombre FROM flota_viajes v
-     WHERE v.empresa_id = ? AND v.vehiculo_id = ? AND v.estado = 'abierto' LIMIT 1`,
-    [guard.empresa.id, d.vehiculoId],
+     WHERE v.vehiculo_id = ? AND v.estado = 'abierto' LIMIT 1`,
+    [d.vehiculoId],
   );
   if (enRuta[0]) {
     return NextResponse.json(
@@ -454,6 +456,7 @@ export async function POST(req: Request, ctx: Ctx) {
   if (esMayor) {
     const kmReset = Number(d.kmServicio);
     if (d.sacarDeServicio !== false) {
+      // Por id (unidades compartidas entre empresas del grupo).
       await execute(
         `UPDATE flota_vehiculos SET
           km_ultimo_servicio = ?,
@@ -463,8 +466,8 @@ export async function POST(req: Request, ctx: Ctx) {
           fecha_entrada_taller = NULL,
           motivo_taller = NULL,
           estado = 'Activo'
-         WHERE id = ? AND empresa_id = ?`,
-        [kmReset, fechaServicio, kmReset, d.vehiculoId, guard.empresa.id],
+         WHERE id = ?`,
+        [kmReset, fechaServicio, kmReset, d.vehiculoId],
       ).catch(async () => {
         await execute(
           `UPDATE flota_vehiculos SET
@@ -472,8 +475,8 @@ export async function POST(req: Request, ctx: Ctx) {
             fecha_ultimo_servicio = ?,
             en_taller = 0,
             fecha_entrada_taller = NULL
-           WHERE id = ? AND empresa_id = ?`,
-          [kmReset, fechaServicio, d.vehiculoId, guard.empresa.id],
+           WHERE id = ?`,
+          [kmReset, fechaServicio, d.vehiculoId],
         );
       });
     } else {
@@ -485,15 +488,8 @@ export async function POST(req: Request, ctx: Ctx) {
           en_taller = 1,
           fecha_entrada_taller = COALESCE(fecha_entrada_taller, ?),
           estado = 'En taller'
-         WHERE id = ? AND empresa_id = ?`,
-        [
-          kmReset,
-          fechaServicio,
-          kmReset,
-          fechaEntrada,
-          d.vehiculoId,
-          guard.empresa.id,
-        ],
+         WHERE id = ?`,
+        [kmReset, fechaServicio, kmReset, fechaEntrada, d.vehiculoId],
       ).catch(() => undefined);
     }
   } else if (!esCompra && d.sacarDeServicio !== false) {
@@ -505,8 +501,8 @@ export async function POST(req: Request, ctx: Ctx) {
         motivo_taller = NULL,
         estado = 'Activo',
         km_actual = GREATEST(COALESCE(km_actual, 0), COALESCE(?, km_actual, 0))
-       WHERE id = ? AND empresa_id = ?`,
-      [d.kmServicio ?? null, d.vehiculoId, guard.empresa.id],
+       WHERE id = ?`,
+      [d.kmServicio ?? null, d.vehiculoId],
     ).catch(() => undefined);
   } else if (!esCompra && fechaEntrada) {
     await execute(
@@ -514,8 +510,8 @@ export async function POST(req: Request, ctx: Ctx) {
         en_taller = 1,
         fecha_entrada_taller = COALESCE(fecha_entrada_taller, ?),
         estado = 'En taller'
-       WHERE id = ? AND empresa_id = ?`,
-      [fechaEntrada, d.vehiculoId, guard.empresa.id],
+       WHERE id = ?`,
+      [fechaEntrada, d.vehiculoId],
     ).catch(() => undefined);
   }
 
@@ -644,6 +640,15 @@ export async function PATCH(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: "Servicio no encontrado." }, { status: 404 });
   }
 
+  const vehOk = await obtenerVehiculoAccesible(
+    g.empresa.id,
+    d.vehiculoId,
+    "v.id, v.placa",
+  );
+  if (!vehOk) {
+    return NextResponse.json({ error: "Vehículo no encontrado." }, { status: 404 });
+  }
+
   const tipoRaw = d.tipo.trim().toLowerCase();
   const esMayor =
     tipoRaw === "servicio_mayor" ||
@@ -734,14 +739,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
         km_ultimo_servicio = ?,
         fecha_ultimo_servicio = ?,
         km_actual = GREATEST(COALESCE(km_actual, 0), ?)
-       WHERE id = ? AND empresa_id = ?`,
-      [
-        d.kmServicio,
-        fechaServicio,
-        d.kmServicio,
-        d.vehiculoId,
-        g.empresa.id,
-      ],
+       WHERE id = ?`,
+      [d.kmServicio, fechaServicio, d.kmServicio, d.vehiculoId],
     ).catch(() => undefined);
   }
 
