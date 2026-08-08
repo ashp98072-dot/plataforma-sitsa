@@ -3,9 +3,9 @@ import {
   asegurarModulosClientesFacturacion,
   asegurarSchemaClientes,
 } from "@/lib/clientes/schema";
+import { alcanceFacturacion } from "@/lib/facturacion/alcance";
 import { asegurarSchemaFacturacion } from "@/lib/facturacion/schema";
 import { obtenerEmpresaPorSlug } from "@/lib/empresas";
-import { puedeEditarModulo, type RolGlobal } from "@/lib/roles";
 import { getSession } from "@/lib/session";
 
 type Props = { params: Promise<{ slug: string }> };
@@ -21,10 +21,15 @@ export default async function FacturacionPage({ params }: Props) {
     await asegurarSchemaFacturacion();
     await asegurarModulosClientesFacturacion(empresa.id);
   }
-  const rol = (session?.rol ?? "Visualizador") as RolGlobal;
-  const puedeEditar = session
-    ? puedeEditarModulo(rol, "facturacion")
-    : false;
+  const alcance = alcanceFacturacion(session?.rol ?? "");
 
-  return <FacturacionClient slug={slug} puedeEditar={puedeEditar} />;
+  return (
+    <FacturacionClient
+      slug={slug}
+      verEmpresa={alcance.verEmpresa}
+      editarEmpresa={alcance.editarEmpresa}
+      verClientes={alcance.verClientes}
+      editarClientes={alcance.editarClientes}
+    />
+  );
 }

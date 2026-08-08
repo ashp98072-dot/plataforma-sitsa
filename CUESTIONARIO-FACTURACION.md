@@ -81,5 +81,7 @@ Marquen qué necesitan primero (1 = más urgente):
 
 ---
 
-**Captura en sistema:** menú **Facturación** → Perfil empresa / Por cliente.  
-**Catálogo:** menú **Clientes** (compartido con Operaciones).
+**Captura en sistema**
+- **Contabilidad** → menú **Facturación empresa** (sección A).
+- **Operaciones** → menú **Facturación clientes** (sección B).
+- **Catálogo** → menú **Clientes** (compartido).

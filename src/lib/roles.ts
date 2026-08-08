@@ -44,7 +44,15 @@ export function modulosPorRol(rol: RolGlobal): Modulo[] {
     case "Contabilidad":
       return ["contabilidad", "facturacion", "clientes", "gerencia"];
     case "Operaciones":
-      return ["tms", "flota", "clientes", "reciclaje", "tarimas", "gerencia"];
+      return [
+        "tms",
+        "flota",
+        "clientes",
+        "facturacion",
+        "reciclaje",
+        "tarimas",
+        "gerencia",
+      ];
     case "CoordinadorPredios":
       // Solo Flota/Predios. TMS solo si se otorga en permisos.
       return ["flota"];
@@ -85,6 +93,7 @@ export function puedeEditarModulo(rol: RolGlobal, modulo: Modulo): boolean {
       modulo === "tms" ||
       modulo === "flota" ||
       modulo === "clientes" ||
+      modulo === "facturacion" ||
       modulo === "reciclaje" ||
       modulo === "tarimas"
     );

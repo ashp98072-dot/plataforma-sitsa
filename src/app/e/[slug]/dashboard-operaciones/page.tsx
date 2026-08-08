@@ -47,6 +47,13 @@ export default async function DashboardOperacionesPage({ params }: Props) {
     (permisos.length > 0
       ? tienePermiso(permisos, "clientes", "ver")
       : rolMods.includes("clientes") || empresa.modulos.includes("clientes"));
+  const puedeFactClientes =
+    rol === "Admin" ||
+    rol === "Operaciones" ||
+    (permisos.length > 0
+      ? tienePermiso(permisos, "facturacion", "ver")
+      : rolMods.includes("facturacion") ||
+        empresa.modulos.includes("facturacion"));
 
   const cards = [
     puedeDisponibilidad
@@ -61,6 +68,13 @@ export default async function DashboardOperacionesPage({ params }: Props) {
           href: `/e/${slug}/clientes`,
           title: "Clientes",
           desc: "Catálogo compartido con Facturación y Contabilidad (KT / Mónaco y demás empresas).",
+        }
+      : null,
+    puedeFactClientes
+      ? {
+          href: `/e/${slug}/facturacion`,
+          title: "Facturación clientes",
+          desc: "Cómo se factura a cada cliente (NIT, OC, evidencias, tarifa). La empresa la llena Contabilidad.",
         }
       : null,
     puedeTms

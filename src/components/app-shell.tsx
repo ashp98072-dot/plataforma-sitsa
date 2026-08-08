@@ -17,6 +17,7 @@ import { NotificacionesBell } from "@/components/notificaciones-bell";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { ShellNavLink } from "@/components/shell-nav-link";
 import { EmpresaSessionProvider } from "@/lib/empresa-session";
+import { alcanceFacturacion } from "@/lib/facturacion/alcance";
 
 type Props = {
   slug: string;
@@ -270,6 +271,24 @@ export function AppShell({
         key: "disp-flota",
       });
     }
+    const alcanceFact = alcanceFacturacion(rol);
+    const puedeVerFact =
+      isAdmin ||
+      permisos.length === 0 ||
+      tienePermiso(permisos, "facturacion", "ver");
+    // Operaciones: facturación por cliente (Contabilidad usa el menú Contabilidad).
+    if (
+      modulos.includes("facturacion") &&
+      puedeVerFact &&
+      alcanceFact.verClientes &&
+      !alcanceFact.verEmpresa
+    ) {
+      opsLinks.push({
+        href: `${base}/facturacion`,
+        label: "Facturación clientes",
+        key: "fact-cli",
+      });
+    }
     for (const m of opsMods) {
       opsLinks.push({
         href: `${base}/${m}`,
@@ -350,18 +369,19 @@ export function AppShell({
     }
 
     const contaLinks: NavLink[] = [];
-    if (modulos.includes("facturacion")) {
-      if (
-        isAdmin ||
-        permisos.length === 0 ||
-        tienePermiso(permisos, "facturacion", "ver")
-      ) {
-        contaLinks.push({
-          href: `${base}/facturacion`,
-          label: MODULO_LABEL.facturacion,
-          key: "facturacion",
-        });
-      }
+    // Contabilidad (y Admin): facturación de la empresa (+ clientes si Admin).
+    if (
+      modulos.includes("facturacion") &&
+      puedeVerFact &&
+      alcanceFact.verEmpresa
+    ) {
+      contaLinks.push({
+        href: `${base}/facturacion`,
+        label: alcanceFact.verClientes
+          ? MODULO_LABEL.facturacion
+          : "Facturación empresa",
+        key: "facturacion",
+      });
     }
     if (modulos.includes("contabilidad")) {
       if (

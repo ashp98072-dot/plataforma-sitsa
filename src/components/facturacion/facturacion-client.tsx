@@ -1,14 +1,20 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { CuestionarioFields } from "@/components/clientes/cuestionario-fields";
 import type {
   RespuestasFacturacion,
   SeccionFacturacion,
 } from "@/lib/facturacion/cuestionario";
 
-type Props = { slug: string; puedeEditar: boolean };
+type Props = {
+  slug: string;
+  verEmpresa: boolean;
+  editarEmpresa: boolean;
+  verClientes: boolean;
+  editarClientes: boolean;
+};
 
 type ResumenCliente = {
   clienteId: number;
@@ -20,8 +26,26 @@ type ResumenCliente = {
 
 type Tab = "empresa" | "clientes" | "ayuda";
 
-export function FacturacionClient({ slug, puedeEditar }: Props) {
-  const [tab, setTab] = useState<Tab>("empresa");
+export function FacturacionClient({
+  slug,
+  verEmpresa,
+  editarEmpresa,
+  verClientes,
+  editarClientes,
+}: Props) {
+  const tabs = useMemo(() => {
+    const list: { id: Tab; label: string }[] = [];
+    if (verEmpresa) {
+      list.push({ id: "empresa", label: "Facturación de la empresa" });
+    }
+    if (verClientes) {
+      list.push({ id: "clientes", label: "Facturación por cliente" });
+    }
+    list.push({ id: "ayuda", label: "Cómo llenarlo" });
+    return list;
+  }, [verEmpresa, verClientes]);
+
+  const [tab, setTab] = useState<Tab>(tabs[0]?.id ?? "ayuda");
   const [secciones, setSecciones] = useState<SeccionFacturacion[]>([]);
   const [respuestas, setRespuestas] = useState<RespuestasFacturacion>({});
   const [completadoPct, setCompletadoPct] = useState(0);
@@ -33,7 +57,14 @@ export function FacturacionClient({ slug, puedeEditar }: Props) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
+  useEffect(() => {
+    if (!tabs.some((t) => t.id === tab)) {
+      setTab(tabs[0]?.id ?? "ayuda");
+    }
+  }, [tabs, tab]);
+
   const cargarEmpresa = useCallback(async () => {
+    if (!verEmpresa) return;
     setLoading(true);
     setMsg("");
     try {
@@ -50,16 +81,19 @@ export function FacturacionClient({ slug, puedeEditar }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [slug]);
+  }, [slug, verEmpresa]);
 
   const cargarResumen = useCallback(async () => {
+    if (!verClientes) return;
     const res = await fetch(`/api/empresas/${slug}/facturacion/clientes`);
     const data = await res.json();
     if (res.ok) setResumen(data.clientes ?? []);
-  }, [slug]);
+    else setMsg(data.error || "No se pudo cargar clientes.");
+  }, [slug, verClientes]);
 
   const cargarCliente = useCallback(
     async (id: number) => {
+      if (!verClientes) return;
       setLoading(true);
       setMsg("");
       try {
@@ -80,7 +114,7 @@ export function FacturacionClient({ slug, puedeEditar }: Props) {
         setLoading(false);
       }
     },
-    [slug],
+    [slug, verClientes],
   );
 
   useEffect(() => {
@@ -95,13 +129,17 @@ export function FacturacionClient({ slug, puedeEditar }: Props) {
     setRespuestas((prev) => ({ ...prev, [id]: value }));
   }
 
+  const puedeGuardar =
+    (tab === "empresa" && editarEmpresa) ||
+    (tab === "clientes" && clienteId != null && editarClientes);
+
   async function guardar() {
-    if (!puedeEditar || saving) return;
+    if (!puedeGuardar || saving) return;
     setSaving(true);
     setMsg("");
     try {
       const url =
-        tab === "empresa" || clienteId == null
+        tab === "empresa"
           ? `/api/empresas/${slug}/facturacion/empresa`
           : `/api/empresas/${slug}/facturacion/clientes/${clienteId}`;
       const res = await fetch(url, {
@@ -120,6 +158,12 @@ export function FacturacionClient({ slug, puedeEditar }: Props) {
     }
   }
 
+  const subtitulo = verEmpresa && !verClientes
+    ? "Contabilidad completa cómo factura esta empresa (FEL, cortes, crédito…)."
+    : verClientes && !verEmpresa
+      ? "Operaciones completa cómo se factura a cada cliente (NIT, OC, tarifa…)."
+      : "Contabilidad: empresa. Operaciones: por cliente. Cada uno llena su parte.";
+
   return (
     <div className="space-y-5">
       <div>
@@ -127,75 +171,69 @@ export function FacturacionClient({ slug, puedeEditar }: Props) {
           Facturación
         </p>
         <h1 className="mt-1 text-2xl font-semibold">
-          Configuración de facturación
+          {verEmpresa && !verClientes
+            ? "Facturación de la empresa"
+            : verClientes && !verEmpresa
+              ? "Facturación por cliente"
+              : "Configuración de facturación"}
         </h1>
-        <p className="mt-1 max-w-2xl text-sm text-[var(--muted)]">
-          Cada empresa factura distinto y cada cliente también. Completen este
-          formulario para dejar las reglas listas antes de emitir facturas en la
-          plataforma.
-        </p>
+        <p className="mt-1 max-w-2xl text-sm text-[var(--muted)]">{subtitulo}</p>
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        {(
-          [
-            ["empresa", "Perfil de la empresa"],
-            ["clientes", "Por cliente"],
-            ["ayuda", "Cómo llenarlo"],
-          ] as const
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => {
-              setTab(id);
-              setClienteId(null);
-              setMsg("");
-            }}
-            className={[
-              "rounded-lg px-3 py-1.5 text-sm",
-              tab === id
-                ? "bg-[var(--accent)] text-white"
-                : "border border-[var(--border)] text-[var(--muted)]",
-            ].join(" ")}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      {tabs.length > 1 ? (
+        <div className="flex flex-wrap gap-2">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => {
+                setTab(t.id);
+                setClienteId(null);
+                setMsg("");
+              }}
+              className={[
+                "rounded-lg px-3 py-1.5 text-sm",
+                tab === t.id
+                  ? "bg-[var(--accent)] text-white"
+                  : "border border-[var(--border)] text-[var(--muted)]",
+              ].join(" ")}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       {tab === "ayuda" ? (
         <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 text-sm leading-relaxed">
           <p>
-            <strong>1.</strong> Empiecen por <em>Perfil de la empresa</em>{" "}
-            ({empresaNombre || "esta empresa"}): FEL, quién factura, cortes,
-            moneda.
+            <strong>Contabilidad</strong> llena la facturación de{" "}
+            <em>la empresa</em> (emisor, FEL, cortes, moneda, cobro).
           </p>
           <p>
-            <strong>2.</strong> En <em>Clientes</em> den de alta el catálogo
-            compartido (Operaciones y Facturación usan el mismo).
+            <strong>Operaciones</strong> llena la facturación{" "}
+            <em>por cliente</em> (NIT a facturar, OC, evidencias, tarifa,
+            crédito).
           </p>
           <p>
-            <strong>3.</strong> Vuelvan aquí → <em>Por cliente</em> y completen
-            NIT a facturar, OC, evidencias, tarifa y crédito de cada uno.
+            El catálogo de clientes es compartido:{" "}
+            <Link
+              href={`/e/${slug}/clientes`}
+              prefetch={false}
+              className="text-[var(--accent)] underline"
+            >
+              módulo Clientes
+            </Link>
+            .
           </p>
           <p className="text-[var(--muted)]">
-            También pueden compartir el documento{" "}
-            <code className="text-xs">CUESTIONARIO-FACTURACION.md</code> del
-            repositorio para recolectar respuestas fuera del sistema y luego
-            capturarlas aquí.
+            Fuera del sistema pueden usar{" "}
+            <code className="text-xs">CUESTIONARIO-FACTURACION.md</code>.
           </p>
-          <Link
-            href={`/e/${slug}/clientes`}
-            prefetch={false}
-            className="inline-block text-[var(--accent)] underline"
-          >
-            Ir al módulo Clientes
-          </Link>
         </div>
       ) : null}
 
-      {tab === "clientes" && clienteId == null ? (
+      {tab === "clientes" && verClientes && clienteId == null ? (
         <div className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-sm text-[var(--muted)]">
@@ -224,7 +262,10 @@ export function FacturacionClient({ slug, puedeEditar }: Props) {
                 </thead>
                 <tbody>
                   {resumen.map((c) => (
-                    <tr key={c.clienteId} className="border-t border-[var(--border)]">
+                    <tr
+                      key={c.clienteId}
+                      className="border-t border-[var(--border)]"
+                    >
                       <td className="px-3 py-2 font-medium">{c.nombre}</td>
                       <td className="px-3 py-2">{c.nit || "—"}</td>
                       <td className="px-3 py-2">
@@ -244,7 +285,7 @@ export function FacturacionClient({ slug, puedeEditar }: Props) {
                           className="text-xs text-[var(--accent)] underline"
                           onClick={() => void cargarCliente(c.clienteId)}
                         >
-                          Llenar / editar
+                          {editarClientes ? "Llenar / editar" : "Ver"}
                         </button>
                       </td>
                     </tr>
@@ -266,7 +307,8 @@ export function FacturacionClient({ slug, puedeEditar }: Props) {
         </div>
       ) : null}
 
-      {(tab === "empresa" || (tab === "clientes" && clienteId != null)) && (
+      {(tab === "empresa" && verEmpresa) ||
+      (tab === "clientes" && verClientes && clienteId != null) ? (
         <div className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
@@ -292,7 +334,7 @@ export function FacturacionClient({ slug, puedeEditar }: Props) {
                   Volver al listado
                 </button>
               ) : null}
-              {puedeEditar ? (
+              {puedeGuardar ? (
                 <button
                   type="button"
                   disabled={saving || loading}
@@ -317,13 +359,15 @@ export function FacturacionClient({ slug, puedeEditar }: Props) {
               secciones={secciones}
               respuestas={respuestas}
               onChange={setRespuesta}
-              readOnly={!puedeEditar}
+              readOnly={!puedeGuardar}
             />
           )}
         </div>
-      )}
+      ) : null}
 
-      {msg ? <p className="text-sm text-emerald-600 dark:text-emerald-300">{msg}</p> : null}
+      {msg ? (
+        <p className="text-sm text-emerald-600 dark:text-emerald-300">{msg}</p>
+      ) : null}
     </div>
   );
 }

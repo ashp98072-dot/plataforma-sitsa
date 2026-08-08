@@ -181,8 +181,8 @@ export const GRUPOS_PERMISOS: {
   {
     id: "operaciones",
     titulo: "Permisos Operaciones por módulos",
-    descripcion: "TMS / logística, clientes, reciclaje y tarimas.",
-    modulos: ["tms", "clientes", "reciclaje", "tarimas"],
+    descripcion: "TMS / logística, clientes, facturación de clientes, reciclaje y tarimas.",
+    modulos: ["tms", "clientes", "facturacion", "reciclaje", "tarimas"],
   },
   {
     id: "flota",
@@ -193,7 +193,7 @@ export const GRUPOS_PERMISOS: {
   {
     id: "contabilidad",
     titulo: "Permisos Contabilidad / Facturación",
-    descripcion: "Cuentas, asientos, cartera y reglas de facturación.",
+    descripcion: "Cuentas, asientos, cartera y facturación de la empresa.",
     modulos: ["contabilidad", "facturacion"],
   },
   {
@@ -235,8 +235,15 @@ export function modulosPropiosDelRol(rol: RolGlobal): string[] {
     case "Contabilidad":
       return ["contabilidad", "facturacion", "clientes"];
     case "Operaciones":
-      // TMS + Predios (control-flota) + clientes compartidos + otros ops
-      return ["tms", "clientes", ...FLOTA_SUBMODULOS, "reciclaje", "tarimas"];
+      // TMS + Predios + clientes + facturación por cliente + otros ops
+      return [
+        "tms",
+        "clientes",
+        "facturacion",
+        ...FLOTA_SUBMODULOS,
+        "reciclaje",
+        "tarimas",
+      ];
     case "CoordinadorPredios":
       // Predios = flota. TMS/Reciclaje/Tarimas van en otras áreas si se otorgan.
       return [...FLOTA_SUBMODULOS];
