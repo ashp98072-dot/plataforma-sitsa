@@ -396,107 +396,6 @@ export function AppShell({
     router.push("/login");
   }
 
-  const nav = (
-    <>
-      <div className="p-4">
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <p className="text-xs uppercase tracking-wider text-[var(--muted)]">
-              SITSA
-            </p>
-            <h1 className="mt-1 text-lg font-semibold leading-tight">
-              {empresaNombre}
-            </h1>
-            <p className="mt-1 text-xs text-[var(--muted)]">
-              {username} · {labelRol(rol)}
-            </p>
-          </div>
-          <button
-            type="button"
-            className="rounded-lg border border-[var(--border)] p-2 text-[var(--muted)] md:hidden"
-            onClick={() => setMenuOpen(false)}
-            aria-label="Cerrar menú"
-          >
-            <IconClose />
-          </button>
-        </div>
-      </div>
-
-      <nav className="space-y-1 px-2 pb-3">
-        {groups.map((gr) => {
-          const open = Boolean(abiertos[gr.id]);
-          const groupActive = gr.links.some((l) =>
-            linkActive(pathname, l.href),
-          );
-          return (
-            <div key={gr.id} className="rounded-lg">
-              <button
-                type="button"
-                onClick={() => toggle(gr.id)}
-                className={[
-                  "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-medium",
-                  groupActive
-                    ? "bg-[var(--nav-active)] text-[var(--nav-text-strong)]"
-                    : "text-[var(--muted)] hover:bg-[var(--nav-hover)] hover:text-[var(--nav-text-strong)]",
-                ].join(" ")}
-              >
-                <IconChevron open={open} />
-                <span className="text-[var(--accent-2)]">{gr.icon}</span>
-                <span className="flex-1">{gr.label}</span>
-                <span className="text-[10px] text-[var(--muted)]">
-                  {gr.links.length}
-                </span>
-              </button>
-              {open ? (
-                <div className="ml-3 mt-0.5 space-y-0.5 border-l border-[var(--border)] pl-2">
-                  {gr.links.map((l) => {
-                    const active = linkActive(pathname, l.href);
-                    return (
-                      <Link
-                        key={l.key}
-                        href={l.href}
-                        prefetch={false}
-                        onClick={() => setMenuOpen(false)}
-                        className={[
-                          "block rounded-md px-2.5 py-1.5 text-sm",
-                          active
-                            ? "bg-[var(--accent)] text-white"
-                            : "text-[var(--muted)] hover:bg-[var(--nav-hover)] hover:text-[var(--nav-text-strong)]",
-                        ].join(" ")}
-                      >
-                        {l.label}
-                      </Link>
-                    );
-                  })}
-                </div>
-              ) : null}
-            </div>
-          );
-        })}
-      </nav>
-
-      <div className="mt-auto space-y-2 border-t border-[var(--border)] p-3">
-        {!dominioEmpresa ? (
-          <Link
-            href="/select-empresa"
-            prefetch={false}
-            onClick={() => setMenuOpen(false)}
-            className="block rounded-lg bg-[var(--panel)] px-3 py-2 text-center text-sm"
-          >
-            Cambiar empresa
-          </Link>
-        ) : null}
-        <button
-          type="button"
-          onClick={() => void logout()}
-          className="w-full rounded-lg bg-[var(--danger)] px-3 py-2 text-sm text-white"
-        >
-          Salir
-        </button>
-      </div>
-    </>
-  );
-
   return (
     <div className="min-h-screen md:grid md:grid-cols-[260px_1fr]">
       {menuOpen ? (
@@ -510,12 +409,108 @@ export function AppShell({
 
       <aside
         className={[
-          "fixed inset-y-0 left-0 z-50 flex w-[min(100vw-3rem,280px)] flex-col border-r border-[var(--border)] bg-[var(--sidebar)] transition-transform duration-150 ease-out md:static md:z-auto md:w-auto md:translate-x-0 md:transition-none",
+          // Altura de viewport + sticky en desktop: la lista puede hacer scroll.
+          "fixed inset-y-0 left-0 z-50 flex h-dvh max-h-dvh w-[min(100vw-3rem,280px)] flex-col border-r border-[var(--border)] bg-[var(--sidebar)] transition-transform duration-150 ease-out md:sticky md:top-0 md:z-auto md:h-screen md:max-h-screen md:w-auto md:translate-x-0 md:transition-none",
           menuOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0",
         ].join(" ")}
       >
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
-          {nav}
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="shrink-0 p-4">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-xs uppercase tracking-wider text-[var(--muted)]">
+                  SITSA
+                </p>
+                <h1 className="mt-1 text-lg font-semibold leading-tight">
+                  {empresaNombre}
+                </h1>
+                <p className="mt-1 text-xs text-[var(--muted)]">
+                  {username} · {labelRol(rol)}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="rounded-lg border border-[var(--border)] p-2 text-[var(--muted)] md:hidden"
+                onClick={() => setMenuOpen(false)}
+                aria-label="Cerrar menú"
+              >
+                <IconClose />
+              </button>
+            </div>
+          </div>
+
+          <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain px-2 pb-3 [scrollbar-gutter:stable]">
+            {groups.map((gr) => {
+              const open = Boolean(abiertos[gr.id]);
+              const groupActive = gr.links.some((l) =>
+                linkActive(pathname, l.href),
+              );
+              return (
+                <div key={gr.id} className="rounded-lg">
+                  <button
+                    type="button"
+                    onClick={() => toggle(gr.id)}
+                    className={[
+                      "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-medium",
+                      groupActive
+                        ? "bg-[var(--nav-active)] text-[var(--nav-text-strong)]"
+                        : "text-[var(--muted)] hover:bg-[var(--nav-hover)] hover:text-[var(--nav-text-strong)]",
+                    ].join(" ")}
+                  >
+                    <IconChevron open={open} />
+                    <span className="text-[var(--accent-2)]">{gr.icon}</span>
+                    <span className="flex-1">{gr.label}</span>
+                    <span className="text-[10px] text-[var(--muted)]">
+                      {gr.links.length}
+                    </span>
+                  </button>
+                  {open ? (
+                    <div className="ml-3 mt-0.5 space-y-0.5 border-l border-[var(--border)] pl-2">
+                      {gr.links.map((l) => {
+                        const active = linkActive(pathname, l.href);
+                        return (
+                          <Link
+                            key={l.key}
+                            href={l.href}
+                            prefetch={false}
+                            onClick={() => setMenuOpen(false)}
+                            className={[
+                              "block rounded-md px-2.5 py-1.5 text-sm",
+                              active
+                                ? "bg-[var(--accent)] text-white"
+                                : "text-[var(--muted)] hover:bg-[var(--nav-hover)] hover:text-[var(--nav-text-strong)]",
+                            ].join(" ")}
+                          >
+                            {l.label}
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </nav>
+
+          <div className="shrink-0 space-y-2 border-t border-[var(--border)] p-3">
+            {!dominioEmpresa ? (
+              <Link
+                href="/select-empresa"
+                prefetch={false}
+                onClick={() => setMenuOpen(false)}
+                className="block rounded-lg bg-[var(--panel)] px-3 py-2 text-center text-sm"
+              >
+                Cambiar empresa
+              </Link>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => void logout()}
+              className="w-full rounded-lg bg-[var(--danger)] px-3 py-2 text-sm text-white"
+            >
+              Salir
+            </button>
+          </div>
         </div>
       </aside>
 
