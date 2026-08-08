@@ -14,6 +14,8 @@ import {
 import { modulosPorRol, type Modulo, type RolGlobal } from "@/lib/roles";
 import { getSession } from "@/lib/session";
 
+export const dynamic = "force-dynamic";
+
 type Props = {
   children: React.ReactNode;
   params: Promise<{ slug: string }>;
@@ -24,35 +26,30 @@ export default async function EmpresaLayout({ children, params }: Props) {
   const session = await getSession();
   if (!session) redirect("/login");
 
-  const empresa = await obtenerEmpresaPorSlug(slug);
-  if (!empresa) redirect("/select-empresa");
+  // Paralelizar lecturas de tenant (menos latencia / menos riesgo de timeout).
+  const [empresa, permitidas, permisosRaw] = await Promise.all([
+    obtenerEmpresaPorSlug(slug),
+    empresasParaUsuario({
+      usuarioId: session.id,
+      rol: session.rol,
+      accesoTodas: Boolean(session.accesoTodas),
+    }),
+    permisosEfectivos(session.id, session.rol as RolGlobal).catch(
+      () => [] as PermisoModulo[],
+    ),
+  ]);
 
-  const permitidas = await empresasParaUsuario({
-    usuarioId: session.id,
-    rol: session.rol,
-    accesoTodas: Boolean(session.accesoTodas),
-  });
+  if (!empresa) redirect("/select-empresa");
   if (!permitidas.some((e) => e.id === empresa.id)) {
     redirect("/select-empresa");
   }
 
+  const permisos = permisosRaw;
   const rolMods = modulosPorRol(session.rol);
   const empresaMods = (
     empresa.modulos.length ? empresa.modulos : rolMods
   ) as Modulo[];
 
-  let permisos: PermisoModulo[] = [];
-  try {
-    permisos = await permisosEfectivos(
-      session.id,
-      session.rol as RolGlobal,
-    );
-  } catch {
-    permisos = [];
-  }
-
-  // Rol + permisos cruzados (ej. Operaciones con Planillas / Contabilidad).
-  // Módulos de plataforma (TMS, etc.) solo si el permiso "ver" está activo.
   const extraMods = modulosPlataformaDesdePermisos(permisos);
   const moduloVisible = (m: Modulo) => {
     if (!(empresaMods.includes(m) || m === "gerencia")) return false;
