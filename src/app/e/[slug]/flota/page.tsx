@@ -1,5 +1,6 @@
 "use client";
 
+import { Suspense } from "react";
 import dynamic from "next/dynamic";
 
 /**
@@ -15,5 +16,11 @@ const FlotaClient = dynamic(() => import("./flota-client"), {
 });
 
 export default function FlotaPage() {
-  return <FlotaClient />;
+  return (
+    <Suspense
+      fallback={<p className="text-sm text-[var(--muted)]">Cargando flota…</p>}
+    >
+      <FlotaClient />
+    </Suspense>
+  );
 }
