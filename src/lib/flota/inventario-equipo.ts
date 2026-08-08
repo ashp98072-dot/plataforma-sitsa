@@ -11,36 +11,49 @@ const CATEGORIAS_SEED = [
 
 const AREAS_SEED = ["Taller", "Bodega", "Predios"];
 
+/** Evita re-chequear seed en cada request (misma instancia Node). */
+const seedListo = new Set<number>();
+
 export async function asegurarInventarioEquipo(empresaId: number) {
   await asegurarSchemaFlota();
+  if (seedListo.has(empresaId)) return;
 
-  const cats = await query<RowDataPacket[]>(
-    "SELECT COUNT(*) AS n FROM flota_inv_categorias WHERE empresa_id = ?",
-    [empresaId],
-  );
+  const [cats, areas] = await Promise.all([
+    query<RowDataPacket[]>(
+      "SELECT COUNT(*) AS n FROM flota_inv_categorias WHERE empresa_id = ?",
+      [empresaId],
+    ),
+    query<RowDataPacket[]>(
+      "SELECT COUNT(*) AS n FROM flota_inv_areas WHERE empresa_id = ?",
+      [empresaId],
+    ),
+  ]);
+
+  const jobs: Promise<unknown>[] = [];
   if (Number(cats[0]?.n ?? 0) === 0) {
     for (const nombre of CATEGORIAS_SEED) {
-      await execute(
-        `INSERT IGNORE INTO flota_inv_categorias (empresa_id, nombre)
-         VALUES (?, ?)`,
-        [empresaId, nombre],
+      jobs.push(
+        execute(
+          `INSERT IGNORE INTO flota_inv_categorias (empresa_id, nombre)
+           VALUES (?, ?)`,
+          [empresaId, nombre],
+        ),
       );
     }
   }
-
-  const areas = await query<RowDataPacket[]>(
-    "SELECT COUNT(*) AS n FROM flota_inv_areas WHERE empresa_id = ?",
-    [empresaId],
-  );
   if (Number(areas[0]?.n ?? 0) === 0) {
     for (const nombre of AREAS_SEED) {
-      await execute(
-        `INSERT IGNORE INTO flota_inv_areas (empresa_id, nombre)
-         VALUES (?, ?)`,
-        [empresaId, nombre],
+      jobs.push(
+        execute(
+          `INSERT IGNORE INTO flota_inv_areas (empresa_id, nombre)
+           VALUES (?, ?)`,
+          [empresaId, nombre],
+        ),
       );
     }
   }
+  if (jobs.length) await Promise.all(jobs);
+  seedListo.add(empresaId);
 }
 
 export type InvCategoria = {

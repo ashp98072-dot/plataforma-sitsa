@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Props = {
   slug: string;
@@ -90,6 +90,7 @@ export function InventarioEquipoPanel({ slug, can }: Props) {
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const empleadosCargados = useRef(false);
 
   const base = `/api/empresas/${slug}/flota/inventario-equipo`;
 
@@ -97,9 +98,8 @@ export function InventarioEquipoPanel({ slug, can }: Props) {
     setLoading(true);
     setErr("");
     try {
-      const params = new URLSearchParams();
-      if (q.trim()) params.set("q", q.trim());
-      const res = await fetch(`${base}?${params}`);
+      // Una sola carga; el filtro de búsqueda es local (más rápido).
+      const res = await fetch(base);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "No se pudo cargar inventario.");
       setItems(data.items ?? []);
@@ -111,13 +111,15 @@ export function InventarioEquipoPanel({ slug, can }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [base, q]);
+  }, [base]);
 
   const cargarEmpleados = useCallback(async () => {
+    if (empleadosCargados.current) return;
     const res = await fetch(`${base}/empleados`);
     if (!res.ok) return;
     const data = await res.json();
     setEmpleados(data.empleados ?? []);
+    empleadosCargados.current = true;
   }, [base]);
 
   useEffect(() => {
@@ -125,15 +127,32 @@ export function InventarioEquipoPanel({ slug, can }: Props) {
   }, [cargar]);
 
   useEffect(() => {
-    if (vista === "empleado" || form.propiedad === "empleado") {
+    if (vista === "empleado") {
       void cargarEmpleados();
     }
-  }, [vista, form.propiedad, cargarEmpleados]);
+  }, [vista, cargarEmpleados]);
 
   const filtrados = useMemo(() => {
     if (vista === "catalogos") return [];
-    return items.filter((i) => i.propiedad === vista);
-  }, [items, vista]);
+    const s = q.trim().toLowerCase();
+    return items.filter((i) => {
+      if (i.propiedad !== vista) return false;
+      if (!s) return true;
+      const blob = [
+        i.codigo,
+        i.nombre,
+        i.categoriaNombre,
+        i.areaNombre,
+        i.empleadoNombre,
+        i.marca,
+        i.serie,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return blob.includes(s);
+    });
+  }, [items, vista, q]);
 
   async function guardarItem() {
     if (!can("flota_inventario", "crear")) return;
@@ -399,78 +418,104 @@ export function InventarioEquipoPanel({ slug, can }: Props) {
                   ? "Registrar herramienta de la empresa"
                   : "Registrar herramienta propia del empleado"}
               </p>
+              <p className="text-xs text-[var(--muted)]">
+                <strong>Código</strong> = identificador de la{" "}
+                <em>herramienta</em> (ej. DES-01). No es el empleado.
+                {vista === "empleado"
+                  ? " El trabajador se elige en el selector Empleado RRHH."
+                  : " Si lo dejas vacío se genera solo."}
+              </p>
               <div className="flex flex-wrap gap-2">
-                <input
-                  className={`${input} w-28`}
-                  placeholder="Código"
-                  value={form.codigo}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, codigo: e.target.value }))
-                  }
-                />
-                <input
-                  className={`${input} min-w-[12rem] flex-1`}
-                  placeholder="Nombre (ej. Desarmador plano)"
-                  value={form.nombre}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, nombre: e.target.value }))
-                  }
-                />
-                <select
-                  className={input}
-                  value={form.categoriaId}
-                  onChange={(e) =>
-                    setForm((f) => ({
-                      ...f,
-                      categoriaId: Number(e.target.value),
-                    }))
-                  }
-                >
-                  <option value={0}>— Categoría —</option>
-                  {categorias
-                    .filter((c) => c.activa)
-                    .map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.nombre}
-                      </option>
-                    ))}
-                </select>
-                {vista === "empresa" ? (
-                  <select
-                    className={input}
-                    value={form.areaId}
+                <label className="text-xs text-[var(--muted)]">
+                  Código herramienta
+                  <input
+                    className={`${input} mt-1 block w-36`}
+                    placeholder="Auto si vacío"
+                    value={form.codigo}
                     onChange={(e) =>
-                      setForm((f) => ({ ...f, areaId: Number(e.target.value) }))
+                      setForm((f) => ({ ...f, codigo: e.target.value }))
                     }
-                  >
-                    <option value={0}>— Área —</option>
-                    {areas
-                      .filter((a) => a.activa)
-                      .map((a) => (
-                        <option key={a.id} value={a.id}>
-                          {a.nombre}
-                        </option>
-                      ))}
-                  </select>
-                ) : (
+                  />
+                </label>
+                <label className="min-w-[12rem] flex-1 text-xs text-[var(--muted)]">
+                  Nombre
+                  <input
+                    className={`${input} mt-1 block w-full`}
+                    placeholder="Ej. Desarmador plano"
+                    value={form.nombre}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, nombre: e.target.value }))
+                    }
+                  />
+                </label>
+                <label className="text-xs text-[var(--muted)]">
+                  Categoría
                   <select
-                    className={`${input} min-w-[14rem]`}
-                    value={form.empleadoId}
+                    className={`${input} mt-1 block`}
+                    value={form.categoriaId}
                     onChange={(e) =>
                       setForm((f) => ({
                         ...f,
-                        empleadoId: Number(e.target.value),
+                        categoriaId: Number(e.target.value),
                       }))
                     }
                   >
-                    <option value={0}>— Empleado RRHH —</option>
-                    {empleados.map((e) => (
-                      <option key={e.id} value={e.id}>
-                        {e.nombre}
-                        {e.puesto ? ` · ${e.puesto}` : ""}
-                      </option>
-                    ))}
+                    <option value={0}>— Categoría —</option>
+                    {categorias
+                      .filter((c) => c.activa)
+                      .map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.nombre}
+                        </option>
+                      ))}
                   </select>
+                </label>
+                {vista === "empresa" ? (
+                  <label className="text-xs text-[var(--muted)]">
+                    Área
+                    <select
+                      className={`${input} mt-1 block`}
+                      value={form.areaId}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          areaId: Number(e.target.value),
+                        }))
+                      }
+                    >
+                      <option value={0}>— Área —</option>
+                      {areas
+                        .filter((a) => a.activa)
+                        .map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {a.nombre}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                ) : (
+                  <label className="min-w-[14rem] text-xs text-[var(--muted)]">
+                    Empleado RRHH
+                    <select
+                      className={`${input} mt-1 block min-w-[14rem]`}
+                      value={form.empleadoId}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          empleadoId: Number(e.target.value),
+                        }))
+                      }
+                    >
+                      <option value={0}>— Empleado RRHH —</option>
+                      {empleados.map((e) => (
+                        <option key={e.id} value={e.id}>
+                          {e.codigo ? `${e.codigo} · ` : ""}
+                          {e.nombre}
+                          {e.puesto ? ` · ${e.puesto}` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                 )}
                 <input
                   type="number"
@@ -515,10 +560,10 @@ export function InventarioEquipoPanel({ slug, can }: Props) {
 
           <div className="flex flex-wrap items-end gap-2">
             <label className="text-xs text-[var(--muted)]">
-              Buscar
+              Buscar (filtra en pantalla, sin recargar)
               <input
                 className={`${input} mt-1 block min-w-[220px]`}
-                placeholder="Código, nombre, área, empleado…"
+                placeholder="Código herramienta, nombre, área, empleado…"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
               />
