@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useId, useRef, useState } from "react";
+
 type ClienteOpt = {
   id: number;
   nombre: string;
@@ -17,7 +19,8 @@ type Props = {
 };
 
 /**
- * Buscador de cliente del catálogo TMS/Clientes (sin crear módulos nuevos).
+ * Buscador de cliente: la lista solo se abre al enfocar/escribir y se cierra
+ * al elegir o salir, sin tapar el resto del formulario.
  */
 export function ClienteSearch({
   clientes,
@@ -26,16 +29,26 @@ export function ClienteSearch({
   onChange,
   inputClassName,
 }: Props) {
+  const listId = useId();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
   const q = valueNombre.trim().toLowerCase();
+
   const activos = clientes.filter(
     (c) => !c.estado || String(c.estado).toLowerCase() === "activo",
   );
+
+  const selected = valueId
+    ? activos.find((c) => c.id === valueId) ?? null
+    : null;
+
   const filtered =
     q.length < 1
       ? activos.slice(0, 12)
       : activos
           .filter((c) => {
-            const hay = `${c.nombre} ${c.nit ?? ""} ${c.telefono ?? ""}`.toLowerCase();
+            const hay =
+              `${c.nombre} ${c.nit ?? ""} ${c.telefono ?? ""}`.toLowerCase();
             return hay.includes(q);
           })
           .slice(0, 20);
@@ -44,14 +57,46 @@ export function ClienteSearch({
     (c) => c.nombre.toLowerCase() === q && q.length > 0,
   );
 
+  useEffect(() => {
+    if (!open) return;
+    function onDoc(e: MouseEvent) {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  function elegir(c: ClienteOpt) {
+    onChange({ clienteId: c.id, clienteNombre: c.nombre });
+    setOpen(false);
+  }
+
   return (
-    <label className="relative block text-xs text-[var(--muted)] md:col-span-1">
-      Cliente (buscar en catálogo)
+    <div
+      ref={rootRef}
+      className="relative z-10 block text-xs text-[var(--muted)] md:col-span-1"
+    >
+      <label htmlFor={listId} className="block">
+        Cliente (buscar en catálogo)
+      </label>
       <input
+        id={listId}
         className={`${inputClassName} mt-1 w-full`}
         placeholder="Escribe nombre o NIT…"
         value={valueNombre}
         autoComplete="off"
+        role="combobox"
+        aria-expanded={open}
+        aria-controls={`${listId}-list`}
+        aria-autocomplete="list"
+        onFocus={() => setOpen(true)}
         onChange={(e) => {
           const nombre = e.target.value;
           const match = activos.find(
@@ -61,32 +106,54 @@ export function ClienteSearch({
             clienteId: match ? match.id : 0,
             clienteNombre: nombre,
           });
+          setOpen(true);
         }}
-        onBlur={() => {
-          // Si hay coincidencia exacta al salir, fijar id
-          if (!valueId && exact) {
-            onChange({ clienteId: exact.id, clienteNombre: exact.nombre });
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            setOpen(false);
+            (e.target as HTMLInputElement).blur();
+          }
+          if (e.key === "Enter" && open && filtered[0]) {
+            e.preventDefault();
+            elegir(filtered[0]);
           }
         }}
+        onBlur={() => {
+          // Retraso breve para permitir click en la lista
+          window.setTimeout(() => {
+            if (!rootRef.current?.contains(document.activeElement)) {
+              setOpen(false);
+              if (!valueId && exact) {
+                onChange({ clienteId: exact.id, clienteNombre: exact.nombre });
+              }
+            }
+          }, 120);
+        }}
       />
-      {valueId ? (
+      {valueId && selected ? (
         <span className="mt-0.5 block text-[10px] text-emerald-400">
-          Cliente del catálogo #{valueId}
-          {exact?.nit ? ` · NIT ${exact.nit}` : ""}
+          Seleccionado #{valueId}
+          {selected.nit ? ` · NIT ${selected.nit}` : ""}
         </span>
       ) : valueNombre.trim() ? (
         <span className="mt-0.5 block text-[10px] text-amber-300/90">
-          Sin coincidencia exacta: se creará/usará por nombre al guardar
+          Sin coincidencia exacta: se usará el nombre al guardar
         </span>
       ) : (
         <span className="mt-0.5 block text-[10px]">
-          Elige de la lista o busca por nombre/NIT
+          Haz clic y elige de la lista, o busca por nombre/NIT
         </span>
       )}
-      {filtered.length > 0 && (q.length > 0 || !valueId) ? (
-        <ul className="absolute z-20 mt-1 max-h-48 w-full overflow-auto rounded-lg border border-[var(--border)] bg-[var(--card)] shadow-lg">
+
+      {open && filtered.length > 0 ? (
+        <ul
+          id={`${listId}-list`}
+          role="listbox"
+          className="absolute left-0 right-0 top-full z-50 mt-1 max-h-44 overflow-auto rounded-lg border border-[var(--border)] bg-[var(--card)] py-1 shadow-lg"
+        >
           {filtered.map((c) => (
-            <li key={c.id}>
+            <li key={c.id} role="option" aria-selected={valueId === c.id}>
               <button
                 type="button"
                 className={[
@@ -94,9 +161,7 @@ export function ClienteSearch({
                   valueId === c.id ? "bg-[var(--nav-active)]" : "",
                 ].join(" ")}
                 onMouseDown={(e) => e.preventDefault()}
-                onClick={() =>
-                  onChange({ clienteId: c.id, clienteNombre: c.nombre })
-                }
+                onClick={() => elegir(c)}
               >
                 <span className="text-[var(--text)]">{c.nombre}</span>
                 <span className="text-[10px] text-[var(--muted)]">
@@ -108,6 +173,6 @@ export function ClienteSearch({
           ))}
         </ul>
       ) : null}
-    </label>
+    </div>
   );
 }
