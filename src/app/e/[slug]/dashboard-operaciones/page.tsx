@@ -41,7 +41,16 @@ export default async function DashboardOperacionesPage({ params }: Props) {
         )
       : rolMods.includes("flota") || empresa.modulos.includes("flota"));
 
+  const puedeDisponibilidad = puedeTms || puedeFlota;
+
   const cards = [
+    puedeDisponibilidad
+      ? {
+          href: `/e/${slug}/disponibilidad`,
+          title: "Disponibilidad de flota",
+          desc: "Qué unidades propias o compartidas puedes enviar: activas, en taller, en ruta o inactivas.",
+        }
+      : null,
     puedeTms
       ? {
           href: `/e/${slug}/tms`,

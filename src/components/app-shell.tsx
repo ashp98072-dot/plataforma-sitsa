@@ -238,6 +238,24 @@ export function AppShell({
         key: "dash-ops",
       });
     }
+    // Disponibilidad flota (aditivo): Operaciones / TMS / Flota (no kiosco piloto).
+    const puedeDisponibilidad =
+      rol !== "Piloto" &&
+      (isAdmin ||
+        rol === "Operaciones" ||
+        opsMods.includes("tms") ||
+        (modulos.includes("flota") &&
+          (permisos.length === 0 ||
+            tienePermiso(permisos, "flota_vehiculos", "ver") ||
+            tienePermiso(permisos, "flota_reportes", "ver") ||
+            tienePermiso(permisos, "tms", "ver"))));
+    if (puedeDisponibilidad) {
+      opsLinks.push({
+        href: `${base}/disponibilidad`,
+        label: "Disponibilidad flota",
+        key: "disp-flota",
+      });
+    }
     for (const m of opsMods) {
       opsLinks.push({
         href: `${base}/${m}`,
