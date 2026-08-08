@@ -29,6 +29,7 @@ import {
 import { normalizarFotoCamara, normalizarFotosCamara } from "@/lib/flota/camera-file";
 import { TomarFotoButton } from "@/components/flota/tomar-foto";
 import { resolverVehiculoPorPlacaInput } from "@/lib/flota/placa";
+import { useEmpresaSession } from "@/lib/empresa-session";
 import {
   ahoraLocal,
   formatearFechaVisible,
@@ -255,9 +256,12 @@ export default function FlotaClient() {
   const router = useRouter();
   const search = useSearchParams();
   const tabParam = (search.get("tab") as Tab | null) ?? "dashboard";
+  const bootstrap = useEmpresaSession();
 
-  const [permisos, setPermisos] = useState<PermisoModulo[]>([]);
-  const [rol, setRol] = useState("");
+  const [permisos, setPermisos] = useState<PermisoModulo[]>(
+    () => bootstrap.permisos ?? [],
+  );
+  const [rol, setRol] = useState(() => bootstrap.rol || "");
   const [vehiculos, setVehiculos] = useState<Vehiculo[]>([]);
   const [lecturas, setLecturas] = useState<Lectura[]>([]);
   const [servicios, setServicios] = useState<Servicio[]>([]);
@@ -375,11 +379,13 @@ export default function FlotaClient() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
   });
   const [repHasta, setRepHasta] = useState(() => hoyLocal());
-  const [sesionLista, setSesionLista] = useState(false);
+  // Layout ya trae rol/permisos → saltar /api/auth/me en el primer paint.
+  const [sesionLista, setSesionLista] = useState(() => Boolean(bootstrap.rol));
   const [cargandoFlota, setCargandoFlota] = useState(true);
   const [enviandoForm, setEnviandoForm] = useState(false);
   const cargarSeq = useRef(0);
   const cacheAt = useRef<Record<string, number>>({});
+  const placaSuggestTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isAdmin = rol === "Admin";
   const can = useCallback(
@@ -643,7 +649,7 @@ export default function FlotaClient() {
     rol,
   ]);
 
-  const FLOTA_CACHE_MS = 60_000;
+  const FLOTA_CACHE_MS = 180_000;
 
   const cargar = useCallback(
     async (opts?: { forzarTodo?: boolean; solo?: string[] }) => {
@@ -661,6 +667,12 @@ export default function FlotaClient() {
 
       try {
         if (!sesionLista) {
+          if (bootstrap.rol) {
+            setRol(bootstrap.rol);
+            setPermisos(bootstrap.permisos ?? []);
+            setSesionLista(true);
+            return;
+          }
           setCargandoFlota(true);
           const meRes = await fetch("/api/auth/me");
           const me = await meRes.json().catch(() => ({}));
@@ -776,43 +788,61 @@ export default function FlotaClient() {
           keys.map((k, i) => [k, results[i]]),
         ) as Record<string, Response>;
 
-        if (byKey.vehiculos?.ok) {
-          const data = await byKey.vehiculos.json();
-          if (seq !== cargarSeq.current) return;
+        // Parsear JSON en paralelo (antes era secuencial).
+        const parsed = await Promise.all(
+          keys.map(async (k) => {
+            const res = byKey[k];
+            if (!res?.ok) return [k, null] as const;
+            try {
+              return [k, await res.json()] as const;
+            } catch {
+              return [k, null] as const;
+            }
+          }),
+        );
+        if (seq !== cargarSeq.current) return;
+        const dataByKey = Object.fromEntries(parsed) as Record<
+          string,
+          Record<string, unknown> | null
+        >;
+
+        if (dataByKey.vehiculos) {
+          const data = dataByKey.vehiculos;
           const list = (data.vehiculos ?? []) as Vehiculo[];
           setVehiculos(list);
-          setEmpresasFlota(data.empresas ?? []);
+          setEmpresasFlota((data.empresas as EmpresaOpt[]) ?? []);
           setEmpresaActualId(Number(data.empresaActualId ?? 0));
           setVehiculoId((prev) => prev || (list[0] ? Number(list[0].id) : 0));
           cacheAt.current.vehiculos = Date.now();
         }
-        if (byKey.reportes?.ok) {
-          const reporte = await byKey.reportes.json();
-          if (seq !== cargarSeq.current) return;
-          setResumen(reporte.resumen ?? null);
-          setCostos(reporte.costosPorMes ?? []);
-          setCostosUnidad(reporte.costosPorUnidad ?? []);
-          setTotalPeriodo(reporte.totalPeriodo ?? { total: 0, n: 0 });
-          setViajesReporte((reporte.viajes ?? []) as Viaje[]);
+        if (dataByKey.reportes) {
+          const reporte = dataByKey.reportes;
+          setResumen((reporte.resumen as typeof resumen) ?? null);
+          setCostos((reporte.costosPorMes as typeof costos) ?? []);
+          setCostosUnidad(
+            (reporte.costosPorUnidad as typeof costosUnidad) ?? [],
+          );
+          setTotalPeriodo(
+            (reporte.totalPeriodo as typeof totalPeriodo) ?? {
+              total: 0,
+              n: 0,
+            },
+          );
+          setViajesReporte((reporte.viajes as Viaje[]) ?? []);
           cacheAt.current.reportes = Date.now();
         }
-        if (byKey.lecturas?.ok) {
-          const data = await byKey.lecturas.json();
-          if (seq !== cargarSeq.current) return;
-          setLecturas(data.lecturas ?? []);
+        if (dataByKey.lecturas) {
+          setLecturas((dataByKey.lecturas.lecturas as Lectura[]) ?? []);
           cacheAt.current.lecturas = Date.now();
         }
-        if (byKey.servicios?.ok) {
-          const data = await byKey.servicios.json();
-          if (seq !== cargarSeq.current) return;
-          setServicios(data.servicios ?? []);
+        if (dataByKey.servicios) {
+          setServicios((dataByKey.servicios.servicios as Servicio[]) ?? []);
           cacheAt.current.servicios = Date.now();
         }
-        if (byKey.viajes?.ok) {
-          const data = await byKey.viajes.json();
-          if (seq !== cargarSeq.current) return;
-          setViajes(data.viajes ?? []);
-          const abs = (data.abiertos ?? []) as Viaje[];
+        if (dataByKey.viajes) {
+          const data = dataByKey.viajes;
+          setViajes((data.viajes as Viaje[]) ?? []);
+          const abs = (data.abiertos as Viaje[]) ?? [];
           setAbiertos(abs);
           setViajeId((prev) => {
             if (prev && abs.some((a) => a.id === prev)) return prev;
@@ -820,10 +850,10 @@ export default function FlotaClient() {
           });
           cacheAt.current.viajes = Date.now();
         }
-        if (byKey.permisos?.ok) {
-          const data = await byKey.permisos.json();
-          if (seq !== cargarSeq.current) return;
-          setPermisosExt(data.permisos ?? []);
+        if (dataByKey.permisos) {
+          setPermisosExt(
+            (dataByKey.permisos.permisos as PermisoExterno[]) ?? [],
+          );
           cacheAt.current.permisos = Date.now();
         }
       } catch {
@@ -836,7 +866,7 @@ export default function FlotaClient() {
         if (seq === cargarSeq.current) setCargandoFlota(false);
       }
     },
-    [slug, tab, sesionLista, repDesde, repHasta],
+    [slug, tab, sesionLista, repDesde, repHasta, bootstrap.rol, bootstrap.permisos],
   );
 
   useEffect(() => {
@@ -2383,14 +2413,22 @@ export default function FlotaClient() {
           onChange={(e) => {
             const val = e.target.value;
             setQ(val);
-            // En Registrar viaje: la búsqueda también sugiere la placa del formulario.
+            // En Registrar viaje: sugerir placa sin resolver en cada tecla (debounce).
             if (tab === "piloto" && modoPiloto === "salida") {
-              const hit = resolverVehiculoPorPlacaInput(vehiculosActivos, val);
-              if (hit) {
-                setPlacaSalida(hit.placa);
-                setKmLectura(Number(hit.km_actual ?? 0));
-                setVehiculoId(hit.id);
+              if (placaSuggestTimer.current) {
+                clearTimeout(placaSuggestTimer.current);
               }
+              placaSuggestTimer.current = setTimeout(() => {
+                const hit = resolverVehiculoPorPlacaInput(
+                  vehiculosActivos,
+                  val,
+                );
+                if (hit) {
+                  setPlacaSalida(hit.placa);
+                  setKmLectura(Number(hit.km_actual ?? 0));
+                  setVehiculoId(hit.id);
+                }
+              }, 160);
             }
           }}
         />

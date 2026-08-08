@@ -3,7 +3,10 @@ import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
 import { requireTenantFlota, requireTenantModulo } from "@/lib/tenant";
-import { asegurarSchemaFlota } from "@/lib/flota/schema";
+import {
+  asegurarSchemaFlota,
+  asegurarSchemaFlotaLectura,
+} from "@/lib/flota/schema";
 import { normalizarNombrePiloto } from "@/lib/flota/pilotos";
 import { ahoraLocal } from "@/lib/rrhh/dates";
 
@@ -16,7 +19,7 @@ export async function GET(_req: Request, ctx: Ctx) {
   if (guard.error) return guard.error;
 
   try {
-    await asegurarSchemaFlota();
+    await asegurarSchemaFlotaLectura();
   } catch {
     /* ok */
   }

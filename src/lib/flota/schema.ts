@@ -53,8 +53,29 @@ async function ensureColumn(
 
 /** Asegura columnas/tablas de flota completa (idempotente). */
 let flotaSchemaReady: Promise<void> | null = null;
+let schemaResolved = false;
+/** Migración TMS paradas: una vez por proceso (no en cada cold GET). */
+let tmsParadasMigrated = false;
+
+export function schemaFlotaYaListo(): boolean {
+  return schemaResolved;
+}
+
+/**
+ * Para lecturas GET: si el schema ya corrió en este proceso, no hace nada.
+ * Si no, lo asegura (primera petición). Evita trabajo muerto en cada listado.
+ */
+export async function asegurarSchemaFlotaLectura(): Promise<void> {
+  if (schemaResolved) return;
+  try {
+    await asegurarSchemaFlota();
+  } catch {
+    /* ok: las queries fallarán con mensaje propio si falta algo */
+  }
+}
 
 export async function asegurarSchemaFlota(): Promise<void> {
+  if (schemaResolved) return;
   if (!flotaSchemaReady) {
     flotaSchemaReady = (async () => {
       // GET_LOCK debe ir en la MISMA conexión que RELEASE_LOCK (pool)
@@ -83,6 +104,7 @@ export async function asegurarSchemaFlota(): Promise<void> {
           "tms_planes_viaje",
         ]);
         await asegurarSchemaFlotaInner();
+        schemaResolved = true;
       } finally {
         try {
           await conn.query("SELECT RELEASE_LOCK(?) AS l", [
@@ -500,50 +522,55 @@ async function asegurarSchemaFlotaInner(): Promise<void> {
     "parada_id INT NULL",
   );
 
-  // Migrar planes viejos: carga + descarga → paradas
-  try {
-    const sinParadas = await query<RowDataPacket[]>(
-      `SELECT p.id, p.lugar_carga_id, p.lugar_descarga_id,
-              lc.nombre AS carga_nombre, ld.nombre AS descarga_nombre
-       FROM tms_planes_viaje p
-       LEFT JOIN tms_lugares lc ON lc.id = p.lugar_carga_id
-       LEFT JOIN tms_lugares ld ON ld.id = p.lugar_descarga_id
-       WHERE NOT EXISTS (
-         SELECT 1 FROM tms_plan_paradas x WHERE x.plan_id = p.id
-       )
-       AND (p.lugar_carga_id IS NOT NULL OR p.lugar_descarga_id IS NOT NULL)
-       LIMIT 500`,
-    );
-    for (const p of sinParadas) {
-      let orden = 1;
-      if (p.lugar_carga_id || p.carga_nombre) {
-        await execute(
-          `INSERT INTO tms_plan_paradas
-            (plan_id, orden, lugar_id, lugar_nombre, tipo, requiere_evidencia)
-           VALUES (?, ?, ?, ?, 'Carga', 1)`,
-          [
-            Number(p.id),
-            orden++,
-            p.lugar_carga_id ? Number(p.lugar_carga_id) : null,
-            String(p.carga_nombre || "Carga"),
-          ],
-        );
+  // Migrar planes viejos: carga + descarga → paradas (una vez por proceso, lotes chicos).
+  if (!tmsParadasMigrated) {
+    tmsParadasMigrated = true;
+    try {
+      const sinParadas = await query<RowDataPacket[]>(
+        `SELECT p.id, p.lugar_carga_id, p.lugar_descarga_id,
+                lc.nombre AS carga_nombre, ld.nombre AS descarga_nombre
+         FROM tms_planes_viaje p
+         LEFT JOIN tms_lugares lc ON lc.id = p.lugar_carga_id
+         LEFT JOIN tms_lugares ld ON ld.id = p.lugar_descarga_id
+         WHERE NOT EXISTS (
+           SELECT 1 FROM tms_plan_paradas x WHERE x.plan_id = p.id
+         )
+         AND (p.lugar_carga_id IS NOT NULL OR p.lugar_descarga_id IS NOT NULL)
+         LIMIT 40`,
+      );
+      for (const p of sinParadas) {
+        let orden = 1;
+        if (p.lugar_carga_id || p.carga_nombre) {
+          await execute(
+            `INSERT INTO tms_plan_paradas
+              (plan_id, orden, lugar_id, lugar_nombre, tipo, requiere_evidencia)
+             VALUES (?, ?, ?, ?, 'Carga', 1)`,
+            [
+              Number(p.id),
+              orden++,
+              p.lugar_carga_id ? Number(p.lugar_carga_id) : null,
+              String(p.carga_nombre || "Carga"),
+            ],
+          );
+        }
+        if (p.lugar_descarga_id || p.descarga_nombre) {
+          await execute(
+            `INSERT INTO tms_plan_paradas
+              (plan_id, orden, lugar_id, lugar_nombre, tipo, requiere_evidencia)
+             VALUES (?, ?, ?, ?, 'Descarga', 1)`,
+            [
+              Number(p.id),
+              orden++,
+              p.lugar_descarga_id ? Number(p.lugar_descarga_id) : null,
+              String(p.descarga_nombre || "Descarga"),
+            ],
+          );
+        }
       }
-      if (p.lugar_descarga_id || p.descarga_nombre) {
-        await execute(
-          `INSERT INTO tms_plan_paradas
-            (plan_id, orden, lugar_id, lugar_nombre, tipo, requiere_evidencia)
-           VALUES (?, ?, ?, ?, 'Descarga', 1)`,
-          [
-            Number(p.id),
-            orden++,
-            p.lugar_descarga_id ? Number(p.lugar_descarga_id) : null,
-            String(p.descarga_nombre || "Descarga"),
-          ],
-        );
-      }
+      // Si aún quedan, permitir otro lote en el próximo arranque en frío.
+      if (sinParadas.length >= 40) tmsParadasMigrated = false;
+    } catch {
+      /* ok si tms aún no existe */
     }
-  } catch {
-    /* ok si tms aún no existe */
   }
 }

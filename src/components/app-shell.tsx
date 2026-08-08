@@ -15,6 +15,7 @@ import {
 import { MODULO_LABEL, type Modulo } from "@/lib/roles";
 import { NotificacionesBell } from "@/components/notificaciones-bell";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { EmpresaSessionProvider } from "@/lib/empresa-session";
 
 type Props = {
   slug: string;
@@ -397,6 +398,7 @@ export function AppShell({
   }
 
   return (
+    <EmpresaSessionProvider rol={rol} permisos={permisos ?? []}>
     <div className="min-h-screen md:grid md:grid-cols-[260px_1fr]">
       {menuOpen ? (
         <button
@@ -541,5 +543,6 @@ export function AppShell({
         Empresa: {empresaNombre} · Usuario: {username}
       </footer>
     </div>
+    </EmpresaSessionProvider>
   );
 }

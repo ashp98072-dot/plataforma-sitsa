@@ -4,7 +4,10 @@ import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
 import { requireTenantFlotaAny } from "@/lib/tenant";
 import { actualizarKmActualVehiculo } from "@/lib/flota/km-vehiculo";
-import { asegurarSchemaFlota } from "@/lib/flota/schema";
+import {
+  asegurarSchemaFlota,
+  asegurarSchemaFlotaLectura,
+} from "@/lib/flota/schema";
 import { normalizarNombrePiloto } from "@/lib/flota/pilotos";
 import { ahoraLocal } from "@/lib/rrhh/dates";
 
@@ -20,7 +23,7 @@ export async function GET(req: Request, ctx: Ctx) {
   if (guard.error) return guard.error;
 
   try {
-    await asegurarSchemaFlota();
+    await asegurarSchemaFlotaLectura();
   } catch {
     /* ok */
   }

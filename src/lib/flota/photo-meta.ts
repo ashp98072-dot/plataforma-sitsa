@@ -2,10 +2,14 @@
 
 export type GeoCoords = { lat: number; lng: number } | null;
 
-export function obtenerGps(timeoutMs = 8000): Promise<GeoCoords> {
+export function obtenerGps(
+  timeoutMs = 8000,
+  opts?: { altaPrecision?: boolean },
+): Promise<GeoCoords> {
   if (typeof navigator === "undefined" || !navigator.geolocation) {
     return Promise.resolve(null);
   }
+  const alta = opts?.altaPrecision ?? timeoutMs >= 4000;
   return new Promise((resolve) => {
     navigator.geolocation.getCurrentPosition(
       (pos) =>
@@ -14,7 +18,12 @@ export function obtenerGps(timeoutMs = 8000): Promise<GeoCoords> {
           lng: pos.coords.longitude,
         }),
       () => resolve(null),
-      { enableHighAccuracy: true, timeout: timeoutMs, maximumAge: 60_000 },
+      {
+        enableHighAccuracy: alta,
+        timeout: timeoutMs,
+        // Reutilizar fix reciente acelera registros manuales en Hostinger.
+        maximumAge: alta ? 90_000 : 180_000,
+      },
     );
   });
 }

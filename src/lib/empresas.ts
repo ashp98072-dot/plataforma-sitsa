@@ -12,7 +12,8 @@ export type Empresa = {
   modulos: string[];
 };
 
-const TTL_MS = 45_000;
+/** Caché de lectura de empresas (Hostinger): menos hits a MySQL al navegar. */
+const TTL_MS = 180_000;
 const slugCache = new Map<string, { at: number; data: Empresa | null }>();
 const idCache = new Map<number, { at: number; data: Empresa | null }>();
 const activasCache: { at: number; data: Empresa[] | null } = {

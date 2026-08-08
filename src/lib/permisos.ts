@@ -13,7 +13,8 @@ import {
 
 export * from "@/lib/permisos-shared";
 
-const PERMISOS_TTL_MS = 45_000;
+/** Caché de permisos efectivos (Hostinger): menos hits al cambiar de módulo. */
+const PERMISOS_TTL_MS = 180_000;
 const permisosCache = new Map<
   string,
   { at: number; data: PermisoModulo[] }

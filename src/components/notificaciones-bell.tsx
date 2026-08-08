@@ -56,12 +56,13 @@ export function NotificacionesBell({ slug, rol }: Props) {
     };
     let idleId: number | undefined;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    // Más deferido: no competir con la primera pintura de Flota/RRHH.
     if (typeof requestIdleCallback !== "undefined") {
-      idleId = requestIdleCallback(run, { timeout: 2500 });
+      idleId = requestIdleCallback(run, { timeout: 5000 });
     } else {
-      timeoutId = setTimeout(run, 800);
+      timeoutId = setTimeout(run, 2500);
     }
-    const t = setInterval(() => void cargar(true), 120_000);
+    const t = setInterval(() => void cargar(true), 150_000);
     return () => {
       cancelled = true;
       if (idleId != null && typeof cancelIdleCallback !== "undefined") {

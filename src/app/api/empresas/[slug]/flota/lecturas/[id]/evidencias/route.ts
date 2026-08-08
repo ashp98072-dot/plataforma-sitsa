@@ -3,7 +3,10 @@ import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
 import { requireTenantFlotaAny } from "@/lib/tenant";
-import { asegurarSchemaFlota } from "@/lib/flota/schema";
+import {
+  asegurarSchemaFlota,
+  asegurarSchemaFlotaLectura,
+} from "@/lib/flota/schema";
 import {
   guardarEvidenciaLectura,
   listarEvidenciasLectura,
@@ -26,7 +29,7 @@ export async function GET(req: Request, ctx: Ctx) {
   if (guard.error) return guard.error;
 
   try {
-    await asegurarSchemaFlota();
+    await asegurarSchemaFlotaLectura();
   } catch {
     /* ok */
   }

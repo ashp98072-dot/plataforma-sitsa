@@ -6,7 +6,10 @@ import {
   parsearExcelFlota,
   parsearFiltrosTexto,
 } from "@/lib/flota/import-excel";
-import { asegurarSchemaFlota } from "@/lib/flota/schema";
+import {
+  asegurarSchemaFlota,
+  asegurarSchemaFlotaLectura,
+} from "@/lib/flota/schema";
 import { guardarFiltrosVehiculo } from "@/lib/flota/filtros";
 import { guardarAccesoVehiculo } from "@/lib/flota/acceso";
 import { resolverEmpresaFlotaExcel } from "@/lib/flota/empresas-alias";

@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { requireTenantFlota } from "@/lib/tenant";
-import { asegurarSchemaFlota } from "@/lib/flota/schema";
+import {
+  asegurarSchemaFlota,
+  asegurarSchemaFlotaLectura,
+} from "@/lib/flota/schema";
 import { buscarEmpleadoPorNombre } from "@/lib/flota/pilotos";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -12,7 +15,7 @@ export async function GET(req: Request, ctx: Ctx) {
   if (guard.error) return guard.error;
 
   try {
-    await asegurarSchemaFlota();
+    await asegurarSchemaFlotaLectura();
   } catch {
     /* ok */
   }
