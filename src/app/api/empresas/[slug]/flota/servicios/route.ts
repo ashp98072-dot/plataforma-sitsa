@@ -1,13 +1,60 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
-import { execute, query } from "@/lib/db";
+import { execute, getPool, query } from "@/lib/db";
 import { requireTenantFlota, requireTenantFlotaAny } from "@/lib/tenant";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
 import { ahoraLocal } from "@/lib/rrhh/dates";
 import { contentTypeFor, guardarUpload } from "@/lib/uploads";
 
 type Ctx = { params: Promise<{ slug: string }> };
+
+/** Evita compras gemelas por doble clic / reintento de red en Hostinger. */
+async function compraDuplicadaReciente(opts: {
+  empresaId: number;
+  vehiculoId: number;
+  costo: number;
+  descripcion: string | null;
+  fechaServicio: string;
+  idempotencyKey?: string | null;
+}): Promise<RowDataPacket | null> {
+  const { empresaId, vehiculoId, costo, descripcion, fechaServicio, idempotencyKey } =
+    opts;
+  if (idempotencyKey) {
+    try {
+      const byKey = await query<RowDataPacket[]>(
+        `SELECT id, vehiculo_id, tipo, costo, descripcion, fecha_servicio
+         FROM flota_servicios
+         WHERE empresa_id = ? AND idempotency_key = ?
+         LIMIT 1`,
+        [empresaId, idempotencyKey],
+      );
+      if (byKey[0]) return byKey[0];
+    } catch {
+      /* columna ausente */
+    }
+  }
+  try {
+    const rows = await query<RowDataPacket[]>(
+      `SELECT id, vehiculo_id, tipo, costo, descripcion, fecha_servicio
+       FROM flota_servicios
+       WHERE empresa_id = ?
+         AND vehiculo_id = ?
+         AND tipo = 'compra'
+         AND ROUND(costo, 2) = ROUND(?, 2)
+         AND COALESCE(descripcion, '') = ?
+         AND fecha_servicio = ?
+         AND creado_at >= DATE_SUB(NOW(), INTERVAL 3 MINUTE)
+       ORDER BY id DESC
+       LIMIT 1`,
+      [empresaId, vehiculoId, costo, descripcion ?? "", fechaServicio],
+    );
+    return rows[0] ?? null;
+  } catch {
+    // Sin columna creado_at aún: no deduplicar por contenido (evitar bloquear compras legítimas).
+    return null;
+  }
+}
 
 function parseRepuestos(raw: unknown): string[] {
   if (Array.isArray(raw)) {
@@ -136,9 +183,13 @@ export async function POST(req: Request, ctx: Ctx) {
   const ctype = req.headers.get("content-type") ?? "";
   let d: z.infer<typeof schema>;
   const files: File[] = [];
+  let idempotencyKey =
+    req.headers.get("x-idempotency-key")?.trim().slice(0, 64) || null;
 
   if (ctype.includes("multipart/form-data")) {
     const form = await req.formData();
+    const fromForm = String(form.get("idempotencyKey") ?? "").trim();
+    if (fromForm) idempotencyKey = fromForm.slice(0, 64);
     d = schema.parse({
       vehiculoId: Number(form.get("vehiculoId")),
       tipo: String(form.get("tipo") ?? "mantenimiento"),
@@ -166,13 +217,22 @@ export async function POST(req: Request, ctx: Ctx) {
         : undefined,
       sacarDeServicio: form.get("sacarDeServicio") === "1",
     });
+    // Un solo archivo por clave fileN (evita duplicar si el form trae basura).
+    const seenFileKeys = new Set<string>();
     for (const [key, val] of form.entries()) {
-      if (key.startsWith("file") && val instanceof File && val.size > 0) {
-        files.push(val);
+      if (!key.startsWith("file") || !(val instanceof File) || val.size <= 0) {
+        continue;
       }
+      if (seenFileKeys.has(key)) continue;
+      seenFileKeys.add(key);
+      files.push(val);
     }
   } else {
-    const parsed = schema.safeParse(await req.json());
+    const body = await req.json();
+    if (body?.idempotencyKey) {
+      idempotencyKey = String(body.idempotencyKey).trim().slice(0, 64);
+    }
+    const parsed = schema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
     }
@@ -266,14 +326,56 @@ export async function POST(req: Request, ctx: Ctx) {
     ? d.fechaServicio.slice(0, 10) || hoy
     : fechaSalida || d.fechaServicio.slice(0, 10) || hoy;
 
+  // Compra: candado + idempotencia (doble clic / reintento Hostinger).
+  let lockConn: { query: (sql: string, params?: unknown[]) => Promise<unknown>; release: () => void } | null =
+    null;
+  const lockKey = esCompra
+    ? `flota_compra_${guard.empresa.id}_${d.vehiculoId}`
+    : null;
+  if (esCompra && lockKey) {
+    try {
+      lockConn = await getPool().getConnection();
+      await lockConn.query("SELECT GET_LOCK(?, 8) AS l", [lockKey]);
+    } catch {
+      lockConn = null;
+    }
+    const dup = await compraDuplicadaReciente({
+      empresaId: guard.empresa.id,
+      vehiculoId: d.vehiculoId,
+      costo: d.costo,
+      descripcion: desc,
+      fechaServicio,
+      idempotencyKey,
+    });
+    if (dup) {
+      if (lockConn && lockKey) {
+        try {
+          await lockConn.query("SELECT RELEASE_LOCK(?) AS l", [lockKey]);
+        } catch {
+          /* ok */
+        }
+        lockConn.release();
+      }
+      return NextResponse.json({
+        id: Number(dup.id),
+        mensaje: `Compra de ${veh[0].placa} ya estaba registrada (se evitó duplicar).`,
+        adjuntos: 0,
+        duplicado: true,
+        reinicioContador: false,
+      });
+    }
+  }
+
+  const ahora = ahoraLocal();
   let result;
   try {
     result = await execute(
       `INSERT INTO flota_servicios
         (empresa_id, vehiculo_id, tipo, km_servicio, fecha_servicio, costo,
          descripcion, repuestos, observaciones,
-         fecha_entrada_taller, fecha_salida_taller, dias_en_taller)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         fecha_entrada_taller, fecha_salida_taller, dias_en_taller,
+         creado_at, idempotency_key)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         guard.empresa.id,
         d.vehiculoId,
@@ -287,25 +389,60 @@ export async function POST(req: Request, ctx: Ctx) {
         fechaEntrada,
         fechaSalida,
         dias,
+        ahora,
+        idempotencyKey,
       ],
     );
   } catch {
-    result = await execute(
-      `INSERT INTO flota_servicios
-        (empresa_id, vehiculo_id, tipo, km_servicio, fecha_servicio, costo, descripcion)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [
-        guard.empresa.id,
-        d.vehiculoId,
-        tipo,
-        d.kmServicio ?? null,
-        fechaServicio,
-        d.costo,
-        [desc, obs, fechaEntrada ? `Ent:${fechaEntrada}` : null, fechaSalida ? `Sal:${fechaSalida}` : null]
-          .filter(Boolean)
-          .join(" · ") || null,
-      ],
-    );
+    try {
+      result = await execute(
+        `INSERT INTO flota_servicios
+          (empresa_id, vehiculo_id, tipo, km_servicio, fecha_servicio, costo,
+           descripcion, repuestos, observaciones,
+           fecha_entrada_taller, fecha_salida_taller, dias_en_taller, creado_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          guard.empresa.id,
+          d.vehiculoId,
+          tipo,
+          d.kmServicio ?? null,
+          fechaServicio,
+          d.costo,
+          desc,
+          reps.length ? JSON.stringify(reps) : null,
+          obs,
+          fechaEntrada,
+          fechaSalida,
+          dias,
+          ahora,
+        ],
+      );
+    } catch {
+      result = await execute(
+        `INSERT INTO flota_servicios
+          (empresa_id, vehiculo_id, tipo, km_servicio, fecha_servicio, costo, descripcion)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          guard.empresa.id,
+          d.vehiculoId,
+          tipo,
+          d.kmServicio ?? null,
+          fechaServicio,
+          d.costo,
+          [desc, obs, fechaEntrada ? `Ent:${fechaEntrada}` : null, fechaSalida ? `Sal:${fechaSalida}` : null]
+            .filter(Boolean)
+            .join(" · ") || null,
+        ],
+      );
+    }
+  }
+  if (lockConn && lockKey) {
+    try {
+      await lockConn.query("SELECT RELEASE_LOCK(?) AS l", [lockKey]);
+    } catch {
+      /* ok */
+    }
+    lockConn.release();
   }
   const servicioId = Number(result.insertId);
 
@@ -409,20 +546,27 @@ export async function POST(req: Request, ctx: Ctx) {
     }
   }
 
-  const extraMayor = esMayor
-    ? ` Contador de servicio reiniciado en ${Number(d.kmServicio).toLocaleString("es-GT")} km.`
-    : " Contador de servicio sin cambios (reparación).";
+  const extraTipo = esCompra
+    ? " Compra / factura enlazada a la unidad."
+    : esMayor
+      ? ` Contador de servicio reiniciado en ${Number(d.kmServicio).toLocaleString("es-GT")} km.`
+      : " Contador de servicio sin cambios (reparación).";
+  const extraTaller =
+    !esCompra && d.sacarDeServicio !== false
+      ? " Unidad fuera de taller / en servicio."
+      : "";
 
   return NextResponse.json({
     id: servicioId,
-    mensaje: `Servicio de ${veh[0].placa} registrado.${extraMayor}${
+    mensaje: `${esCompra ? "Compra" : "Servicio"} de ${veh[0].placa} ${
+      esCompra ? "registrada" : "registrado"
+    }.${extraTipo}${
       reps.length ? ` ${reps.length} repuesto(s).` : ""
-    }${subidos.length ? ` ${subidos.length} archivo(s) adjunto(s).` : ""}${
-      d.sacarDeServicio !== false ? " Unidad fuera de taller / en servicio." : ""
-    }`,
+    }${subidos.length ? ` ${subidos.length} archivo(s) adjunto(s).` : ""}${extraTaller}`,
     adjuntos: subidos.length,
     repuestos: reps,
     reinicioContador: esMayor,
+    tipo,
   });
 }
 

@@ -320,6 +320,7 @@ export default function FlotaClient() {
   const [compraCosto, setCompraCosto] = useState(0);
   const [compraFecha, setCompraFecha] = useState(() => hoyLocal());
   const [compraFiles, setCompraFiles] = useState<FileList | null>(null);
+  const [compraFileKey, setCompraFileKey] = useState(0);
   const [filtroHistorialServicios, setFiltroHistorialServicios] = useState<
     "todos" | "en_taller" | "cerrados" | "compras"
   >("todos");
@@ -1593,6 +1594,7 @@ export default function FlotaClient() {
   }
 
   async function registrarServicio() {
+    if (enviandoForm) return;
     setErr("");
     const enRuta =
       !editServicioId &&
@@ -1634,16 +1636,21 @@ export default function FlotaClient() {
         fd.append(`file${i}`, f),
       );
     }
-    const res = await fetch(`/api/empresas/${slug}/flota/servicios`, {
-      method: editServicioId ? "PATCH" : "POST",
-      body: fd,
-    });
-    const data = await res.json();
-    if (!res.ok) setErr(data.error ?? "Error");
-    else {
-      setMsg(data.mensaje);
-      limpiarFormServicio();
-      await cargar({ solo: ["vehiculos", "servicios"] });
+    setEnviandoForm(true);
+    try {
+      const res = await fetch(`/api/empresas/${slug}/flota/servicios`, {
+        method: editServicioId ? "PATCH" : "POST",
+        body: fd,
+      });
+      const data = await res.json();
+      if (!res.ok) setErr(data.error ?? "Error");
+      else {
+        setMsg(data.mensaje);
+        limpiarFormServicio();
+        await cargar({ solo: ["vehiculos", "servicios"] });
+      }
+    } finally {
+      setEnviandoForm(false);
     }
   }
 
@@ -2056,6 +2063,7 @@ export default function FlotaClient() {
   }
 
   async function guardarCompraFactura() {
+    if (enviandoForm) return;
     setErr("");
     setMsg("");
     const vid = compraVehiculoId || vehiculoId;
@@ -2068,55 +2076,69 @@ export default function FlotaClient() {
       return;
     }
 
-    // Adjuntar a servicio abierto en taller
-    if (compraServicioId) {
-      if (!compraFiles?.length) {
-        setErr("Selecciona el archivo de la factura.");
+    setEnviandoForm(true);
+    try {
+      // Adjuntar a servicio abierto en taller
+      if (compraServicioId) {
+        if (!compraFiles?.length) {
+          setErr("Selecciona el archivo de la factura.");
+          return;
+        }
+        const fd = new FormData();
+        Array.from(compraFiles).forEach((f) => fd.append("files", f));
+        const res = await fetch(
+          `/api/empresas/${slug}/flota/servicios/${compraServicioId}/adjuntos`,
+          { method: "POST", body: fd },
+        );
+        const data = await res.json();
+        if (!res.ok) {
+          setErr(data.error ?? "No se pudo adjuntar la factura");
+          return;
+        }
+        setMsg(data.mensaje);
+        setCompraFiles(null);
+        setCompraServicioId(0);
+        setCompraFileKey((k) => k + 1);
+        await cargar({ solo: ["servicios", "vehiculos"] });
         return;
       }
+
+      // Nueva compra enlazada al vehículo (una sola, con clave anti-duplicado).
+      const idempotencyKey =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `compra-${vid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const fd = new FormData();
-      Array.from(compraFiles).forEach((f) => fd.append("files", f));
-      const res = await fetch(
-        `/api/empresas/${slug}/flota/servicios/${compraServicioId}/adjuntos`,
-        { method: "POST", body: fd },
-      );
+      fd.set("vehiculoId", String(vid));
+      fd.set("tipo", "compra");
+      fd.set("fechaServicio", compraFecha || hoyLocal());
+      fd.set("costo", String(compraCosto || 0));
+      fd.set("descripcion", compraDesc.trim() || "Compra / factura");
+      fd.set("idempotencyKey", idempotencyKey);
+      if (compraFiles) {
+        Array.from(compraFiles).forEach((f, i) => fd.set(`file${i}`, f));
+      }
+      const res = await fetch(`/api/empresas/${slug}/flota/servicios`, {
+        method: "POST",
+        headers: { "X-Idempotency-Key": idempotencyKey },
+        body: fd,
+      });
       const data = await res.json();
       if (!res.ok) {
-        setErr(data.error ?? "No se pudo adjuntar la factura");
+        setErr(data.error ?? "No se pudo registrar la compra");
         return;
       }
-      setMsg(data.mensaje);
+      setMsg(
+        data.mensaje ?? "Compra / factura registrada y enlazada al vehículo.",
+      );
+      setCompraDesc("");
+      setCompraCosto(0);
       setCompraFiles(null);
-      setCompraServicioId(0);
+      setCompraFileKey((k) => k + 1);
       await cargar({ solo: ["servicios", "vehiculos"] });
-      return;
+    } finally {
+      setEnviandoForm(false);
     }
-
-    // Nueva compra enlazada al vehículo
-    const fd = new FormData();
-    fd.set("vehiculoId", String(vid));
-    fd.set("tipo", "compra");
-    fd.set("fechaServicio", compraFecha || hoyLocal());
-    fd.set("costo", String(compraCosto || 0));
-    fd.set("descripcion", compraDesc.trim() || "Compra / factura");
-    fd.set("sacarDeServicio", "1");
-    if (compraFiles) {
-      Array.from(compraFiles).forEach((f, i) => fd.set(`file${i}`, f));
-    }
-    const res = await fetch(`/api/empresas/${slug}/flota/servicios`, {
-      method: "POST",
-      body: fd,
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setErr(data.error ?? "No se pudo registrar la compra");
-      return;
-    }
-    setMsg(data.mensaje ?? "Compra / factura registrada y enlazada al vehículo.");
-    setCompraDesc("");
-    setCompraCosto(0);
-    setCompraFiles(null);
-    await cargar({ solo: ["servicios", "vehiculos"] });
   }
 
   async function abrirAdjunto(url: string, nombre: string) {
@@ -3715,10 +3737,15 @@ export default function FlotaClient() {
                 </label>
                 <button
                   type="button"
+                  disabled={enviandoForm}
                   onClick={() => void registrarServicio()}
-                  className="rounded bg-[#1F6AA5] px-3 py-1.5 text-sm text-white"
+                  className="rounded bg-[#1F6AA5] px-3 py-1.5 text-sm text-white disabled:opacity-40"
                 >
-                  {editServicioId ? "Guardar cambios" : "Registrar servicio"}
+                  {enviandoForm
+                    ? "Guardando…"
+                    : editServicioId
+                      ? "Guardar cambios"
+                      : "Registrar servicio"}
                 </button>
               </div>
             </div>
@@ -3806,9 +3833,11 @@ export default function FlotaClient() {
                         : "—"}
                     </td>
                     <td className="px-3 py-2">
-                      {s.fecha_salida_taller
-                        ? String(s.fecha_salida_taller).slice(0, 10)
-                        : String(s.fecha_servicio).slice(0, 10)}
+                      {s.tipo === "compra"
+                        ? String(s.fecha_servicio).slice(0, 10)
+                        : s.fecha_salida_taller
+                          ? String(s.fecha_salida_taller).slice(0, 10)
+                          : "—"}
                     </td>
                     <td className="px-3 py-2">
                       {s.dias_en_taller != null ? s.dias_en_taller : "—"}
@@ -3973,6 +4002,7 @@ export default function FlotaClient() {
             <label className="block text-xs text-[var(--muted)]">
               Factura (PDF / imagen) *
               <input
+                key={compraFileKey}
                 type="file"
                 accept="image/*,application/pdf"
                 multiple
@@ -3984,12 +4014,15 @@ export default function FlotaClient() {
               can("flota_servicios", "crear")) && (
               <button
                 type="button"
-                className="rounded-lg bg-[#0d9488] px-4 py-2 text-sm font-medium text-white"
+                disabled={enviandoForm}
+                className="rounded-lg bg-[#0d9488] px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
                 onClick={() => void guardarCompraFactura()}
               >
-                {compraServicioId
-                  ? "Adjuntar factura al servicio"
-                  : "Registrar compra + factura"}
+                {enviandoForm
+                  ? "Guardando…"
+                  : compraServicioId
+                    ? "Adjuntar factura al servicio"
+                    : "Registrar compra + factura"}
               </button>
             )}
           </div>

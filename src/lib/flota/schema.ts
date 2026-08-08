@@ -267,6 +267,16 @@ async function asegurarSchemaFlotaInner(): Promise<void> {
     "fecha_salida_taller",
     "fecha_salida_taller DATE NULL",
   );
+  await ensureColumn(
+    "flota_servicios",
+    "creado_at",
+    "creado_at DATETIME NULL",
+  );
+  await ensureColumn(
+    "flota_servicios",
+    "idempotency_key",
+    "idempotency_key VARCHAR(64) NULL",
+  );
 
   await execute(`
     CREATE TABLE IF NOT EXISTS flota_viajes (
