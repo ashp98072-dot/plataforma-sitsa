@@ -1,7 +1,10 @@
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
 
-/** Actualiza km_actual por id de unidad (sin filtrar empresa: unidades compartidas). */
+/**
+ * Actualiza km_actual de la unidad y, si aplica, duplicados compartidos
+ * de la misma placa en el mismo grupo de acceso (no toda la BD).
+ */
 export async function actualizarKmActualVehiculo(
   vehiculoId: number,
   km: number,
@@ -15,23 +18,30 @@ export async function actualizarKmActualVehiculo(
     [valor, vehiculoId],
   ).catch(() => undefined);
 
-  // Si hay otra fila con la misma placa (otra empresa del grupo), también actualiza
+  // Duplicados de la misma placa solo entre dueño + empresas con acceso cruzado.
+  // Evita pisar km de otra unidad ajena que coincida en placa.
   try {
-    const rows = await query<RowDataPacket[]>(
-      `SELECT placa FROM flota_vehiculos WHERE id = ? LIMIT 1`,
-      [vehiculoId],
+    await execute(
+      `UPDATE flota_vehiculos v
+       INNER JOIN flota_vehiculos src ON src.id = ?
+       SET v.km_actual = GREATEST(COALESCE(v.km_actual, 0), ?)
+       WHERE v.id <> src.id
+         AND UPPER(REPLACE(REPLACE(COALESCE(v.placa,''),' ',''),'-','')) =
+             UPPER(REPLACE(REPLACE(COALESCE(src.placa,''),' ',''),'-',''))
+         AND UPPER(REPLACE(REPLACE(COALESCE(src.placa,''),' ',''),'-','')) <> ''
+         AND (
+           v.empresa_id = src.empresa_id
+           OR EXISTS (
+             SELECT 1 FROM flota_vehiculo_acceso a
+             WHERE a.vehiculo_id = src.id AND a.empresa_id = v.empresa_id
+           )
+           OR EXISTS (
+             SELECT 1 FROM flota_vehiculo_acceso a
+             WHERE a.vehiculo_id = v.id AND a.empresa_id = src.empresa_id
+           )
+         )`,
+      [vehiculoId, valor],
     );
-    const placa = String(rows[0]?.placa ?? "")
-      .toUpperCase()
-      .replace(/[\s-]+/g, "");
-    if (placa) {
-      await execute(
-        `UPDATE flota_vehiculos
-         SET km_actual = GREATEST(COALESCE(km_actual, 0), ?)
-         WHERE UPPER(REPLACE(REPLACE(placa,' ',''),'-','')) = ?`,
-        [valor, placa],
-      );
-    }
   } catch {
     /* ok */
   }

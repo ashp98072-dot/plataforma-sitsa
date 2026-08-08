@@ -267,6 +267,9 @@ export async function POST(req: Request, ctx: Ctx) {
 
   return NextResponse.json({
     id: result.insertId,
-    mensaje: "Lectura registrada.",
+    vehiculoId: d.vehiculoId,
+    placa: String(veh[0].placa ?? ""),
+    km: d.km,
+    mensaje: `Lectura registrada en ${veh[0].placa}.`,
   });
 }

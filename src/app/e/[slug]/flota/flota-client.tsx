@@ -2,6 +2,7 @@
 
 import {
   useCallback,
+  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
@@ -404,9 +405,12 @@ export default function FlotaClient() {
     router.replace(`/e/${slug}/flota${t === "dashboard" ? "" : `?tab=${t}`}`);
   };
 
+  /** Búsqueda diferida: el input responde al toque; el filtrado pesado no bloquea. */
+  const qDeferred = useDeferredValue(q.trim().toLowerCase());
+
   const matchQ = useCallback(
     (placa: string, extra = "") => {
-      const s = q.trim().toLowerCase();
+      const s = qDeferred;
       if (!s) return true;
       return (
         String(placa ?? "")
@@ -414,7 +418,7 @@ export default function FlotaClient() {
           .includes(s) || String(extra ?? "").toLowerCase().includes(s)
       );
     },
-    [q],
+    [qDeferred],
   );
 
   function esVehiculoActivo(v: Vehiculo): boolean {
@@ -493,14 +497,33 @@ export default function FlotaClient() {
       </div>
     ) : null;
 
-  const activos = useMemo(
-    () =>
-      vehiculos.filter(
-        (v) =>
-          esVehiculoActivo(v) && matchQ(v.placa, `${v.marca} ${v.modelo}`),
-      ),
-    [vehiculos, matchQ],
+  /** Activos sin filtro de búsqueda (base). */
+  const vehiculosActivos = useMemo(
+    () => vehiculos.filter((v) => esVehiculoActivo(v)),
+    [vehiculos],
   );
+
+  /**
+   * Opciones del <select> de unidad.
+   * Si hay búsqueda, prioriza coincidencias; si no hay match, mantiene la lista
+   * completa para no dejar el value del select huérfano (bug: UI muestra una
+   * placa y se guarda otra).
+   */
+  const activos = useMemo(() => {
+    if (!qDeferred) return vehiculosActivos;
+    const filtrados = vehiculosActivos.filter((v) =>
+      matchQ(v.placa, `${v.marca ?? ""} ${v.modelo ?? ""}`),
+    );
+    return filtrados.length ? filtrados : vehiculosActivos;
+  }, [vehiculosActivos, matchQ, qDeferred]);
+
+  /** Si el id seleccionado no está en las opciones visibles, alinear con la UI. */
+  useEffect(() => {
+    if (!activos.length) return;
+    if (!activos.some((v) => v.id === vehiculoId)) {
+      setVehiculoId(Number(activos[0].id));
+    }
+  }, [activos, vehiculoId]);
 
   const lecturasFiltradas = useMemo(
     () => lecturas.filter((l) => matchQ(l.placa, l.nota ?? "")),
@@ -673,11 +696,11 @@ export default function FlotaClient() {
             t === "historial-servicios" ||
             t === "compras") &&
           (forzar || Boolean(solo) || !fresco("servicios"));
+        // Lecturas valida "en ruta" en el API; no hace falta cargar todo el historial de viajes.
         const quiereVia =
           enSolo("viajes") &&
           (Boolean(solo) ||
             t === "piloto" ||
-            t === "lecturas" ||
             t === "vehiculos" ||
             t === "servicios" ||
             t === "taller") &&
@@ -1314,21 +1337,36 @@ export default function FlotaClient() {
   async function registrarLectura() {
     setErr("");
     setMsg("");
-    const veh = vehiculos.find((v) => v.id === vehiculoId);
-    if (veh?.en_taller) {
+    // Congelar id al inicio: evita carrera si el select/búsqueda cambia mid-request.
+    const vehiculoIdGuardar = Number(vehiculoId);
+    const veh =
+      activos.find((v) => v.id === vehiculoIdGuardar) ??
+      vehiculos.find((v) => v.id === vehiculoIdGuardar);
+    if (!vehiculoIdGuardar || !veh) {
+      setErr("Selecciona la unidad correcta antes de guardar la lectura.");
+      return;
+    }
+    // GPS en paralelo (admin sin foto: timeout corto para no demorar el guardado).
+    const necesitaGpsFuerte =
+      rol === "Piloto" || Boolean(fotoTableroLectura) || fotosExtraLectura.length > 0;
+    const geoPromise = obtenerGps(necesitaGpsFuerte ? 6000 : 1500);
+
+    if (veh.en_taller) {
       setErr(
         `${veh.placa} está en taller. No se puede registrar lectura ni enviarlo a ruta.`,
       );
       return;
     }
-    if (abiertos.some((a) => a.vehiculo_id === vehiculoId)) {
-      setErr("Esa unidad ya tiene un viaje abierto. Cierra la llegada primero.");
+    if (abiertos.some((a) => a.vehiculo_id === vehiculoIdGuardar)) {
+      setErr(
+        `${veh.placa} ya tiene un viaje abierto. Cierra la llegada primero.`,
+      );
       return;
     }
-    const kmActual = Number(veh?.km_actual ?? 0);
+    const kmActual = Number(veh.km_actual ?? 0);
     if (kmLectura < kmActual) {
       setErr(
-        `Km (${kmLectura.toLocaleString("es-GT")}) no puede ser menor al km actual (${kmActual.toLocaleString("es-GT")}). Debe ser mayor o igual.`,
+        `Km (${kmLectura.toLocaleString("es-GT")}) no puede ser menor al km actual de ${veh.placa} (${kmActual.toLocaleString("es-GT")}). Debe ser mayor o igual.`,
       );
       return;
     }
@@ -1359,12 +1397,12 @@ export default function FlotaClient() {
       }
     }
 
-    const geo = await obtenerGps();
+    const geo = await geoPromise;
     const res = await fetch(`/api/empresas/${slug}/flota/lecturas`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        vehiculoId,
+        vehiculoId: vehiculoIdGuardar,
         km: kmLectura,
         fechaLectura: hoyLocal(),
         conductor: nombre || undefined,
@@ -1376,6 +1414,17 @@ export default function FlotaClient() {
     const data = await res.json();
     if (!res.ok) {
       setErr(data.error ?? "Error");
+      return;
+    }
+    const placaOk = String(data.placa ?? veh.placa);
+    if (
+      data.vehiculoId != null &&
+      Number(data.vehiculoId) !== vehiculoIdGuardar
+    ) {
+      setErr(
+        `Advertencia: el servidor registró la lectura en otra unidad (${placaOk}). Revisa e intenta de nuevo.`,
+      );
+      await cargar({ solo: ["vehiculos", "lecturas"] });
       return;
     }
 
@@ -1440,13 +1489,40 @@ export default function FlotaClient() {
       setSubiendoFotos(false);
     }
     } else {
-      setMsg(data.mensaje);
+      setMsg(data.mensaje ?? `Lectura registrada en ${placaOk}.`);
     }
+
+    // Actualización local inmediata (el refetch confirma en segundo plano).
+    const kmGuardado = Number(data.km ?? kmLectura);
+    setVehiculos((prev) =>
+      prev.map((v) =>
+        v.id === vehiculoIdGuardar
+          ? { ...v, km_actual: Math.max(Number(v.km_actual ?? 0), kmGuardado) }
+          : v,
+      ),
+    );
+    setLecturas((prev) => [
+      {
+        id: lecId,
+        placa: placaOk,
+        km: kmGuardado,
+        fecha_lectura: hoyLocal(),
+        nota: nombre || null,
+        conductor: nombre || null,
+        registrado_por: "tú",
+        viaje_id: null,
+        latitud: geo?.lat ?? null,
+        longitud: geo?.lng ?? null,
+        capturado_en: ahoraLocal(),
+        evidencias: fotoTableroLectura || fotosExtraLectura.length ? 1 : 0,
+      },
+      ...prev,
+    ]);
 
     setKmLectura(0);
     setFotoTableroLectura(null);
     setFotosExtraLectura([]);
-    await cargar({ solo: ["vehiculos", "lecturas"] });
+    void cargar({ solo: ["vehiculos", "lecturas"] });
   }
 
   function agregarRepuesto() {
@@ -2946,8 +3022,17 @@ export default function FlotaClient() {
               <div className="flex flex-wrap gap-2">
                 <select
                   className={input}
-                  value={vehiculoId}
-                  onChange={(e) => setVehiculoId(Number(e.target.value))}
+                  value={
+                    activos.some((v) => v.id === vehiculoId)
+                      ? vehiculoId
+                      : (activos[0]?.id ?? "")
+                  }
+                  onChange={(e) => {
+                    const id = Number(e.target.value);
+                    setVehiculoId(id);
+                    const v = activos.find((x) => x.id === id);
+                    if (v) setKmLectura(Number(v.km_actual ?? 0));
+                  }}
                 >
                   {activos.map((v) => {
                     const ruta = abiertos.some((a) => a.vehiculo_id === v.id);
@@ -2972,7 +3057,10 @@ export default function FlotaClient() {
                   value={kmLectura || ""}
                   onChange={(e) => setKmLectura(Number(e.target.value))}
                   min={Number(
-                    vehiculos.find((v) => v.id === vehiculoId)?.km_actual ?? 0,
+                    (
+                      activos.find((v) => v.id === vehiculoId) ??
+                      vehiculos.find((v) => v.id === vehiculoId)
+                    )?.km_actual ?? 0,
                   )}
                 />
                 <input
@@ -2982,6 +3070,18 @@ export default function FlotaClient() {
                   onChange={(e) => setConductor(e.target.value)}
                 />
               </div>
+              <p className="text-xs text-sky-300">
+                Se guardará en:{" "}
+                <span className="font-mono font-semibold">
+                  {(
+                    activos.find((v) => v.id === vehiculoId) ??
+                    vehiculos.find((v) => v.id === vehiculoId)
+                  )?.placa ?? "—"}
+                </span>
+                {q.trim()
+                  ? " (la búsqueda también filtra el historial abajo)"
+                  : ""}
+              </p>
               <div className="grid gap-2 sm:grid-cols-2">
                 <div className="text-xs text-[var(--muted)]">
                   Foto del tablero (km)
@@ -3293,7 +3393,11 @@ export default function FlotaClient() {
               <div className="flex flex-wrap gap-2">
                 <select
                   className={input}
-                  value={vehiculoId}
+                  value={
+                    activos.some((v) => v.id === vehiculoId)
+                      ? vehiculoId
+                      : (activos[0]?.id ?? "")
+                  }
                   onChange={(e) => {
                     const id = Number(e.target.value);
                     setVehiculoId(id);
