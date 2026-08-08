@@ -24,7 +24,7 @@ import {
 
 type Ctx = { params: Promise<{ slug: string }> };
 
-export async function GET(_req: Request, ctx: Ctx) {
+export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenantFlota(slug, "flota_piloto", "ver");
   if (guard.error) return guard.error;
@@ -35,6 +35,38 @@ export async function GET(_req: Request, ctx: Ctx) {
     /* ok */
   }
 
+  const url = new URL(req.url);
+  const soloAbiertos = url.searchParams.get("solo") === "abiertos";
+  const limitRaw = Number(url.searchParams.get("limit") ?? (soloAbiertos ? 40 : 80));
+  const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 80, 1), 200);
+
+  if (soloAbiertos) {
+    const abiertos = await query<RowDataPacket[]>(
+      `SELECT v.id, v.vehiculo_id, v.piloto_nombre, v.km_salida, v.km_llegada,
+              v.hora_salida, v.hora_llegada, v.destino, v.observaciones, v.estado,
+              v.es_externo, v.empleado_id, v.plan_id, ve.placa
+       FROM flota_viajes v
+       INNER JOIN flota_vehiculos ve ON ve.id = v.vehiculo_id
+       WHERE v.empresa_id = ? AND v.estado = 'abierto'
+       ORDER BY v.hora_salida DESC
+       LIMIT ${limit}`,
+      [guard.empresa.id],
+    ).catch(async () =>
+      query<RowDataPacket[]>(
+        `SELECT v.id, v.vehiculo_id, v.piloto_nombre, v.km_salida, v.km_llegada,
+                v.hora_salida, v.hora_llegada, v.destino, v.observaciones, v.estado,
+                ve.placa
+         FROM flota_viajes v
+         INNER JOIN flota_vehiculos ve ON ve.id = v.vehiculo_id
+         WHERE v.empresa_id = ? AND v.estado = 'abierto'
+         ORDER BY v.hora_salida DESC
+         LIMIT ${limit}`,
+        [guard.empresa.id],
+      ),
+    );
+    return NextResponse.json({ viajes: abiertos, abiertos });
+  }
+
   const viajes = await query<RowDataPacket[]>(
     `SELECT v.id, v.vehiculo_id, v.piloto_nombre, v.km_salida, v.km_llegada,
             v.hora_salida, v.hora_llegada, v.destino, v.observaciones, v.estado,
@@ -43,7 +75,7 @@ export async function GET(_req: Request, ctx: Ctx) {
      INNER JOIN flota_vehiculos ve ON ve.id = v.vehiculo_id
      WHERE v.empresa_id = ?
      ORDER BY v.hora_salida DESC
-     LIMIT 100`,
+     LIMIT ${limit}`,
     [guard.empresa.id],
   ).catch(async () =>
     query<RowDataPacket[]>(
@@ -54,7 +86,7 @@ export async function GET(_req: Request, ctx: Ctx) {
        INNER JOIN flota_vehiculos ve ON ve.id = v.vehiculo_id
        WHERE v.empresa_id = ?
        ORDER BY v.hora_salida DESC
-       LIMIT 100`,
+       LIMIT ${limit}`,
       [guard.empresa.id],
     ),
   );
@@ -115,16 +147,36 @@ export async function POST(req: Request, ctx: Ctx) {
     if (d.placa?.trim()) {
       veh = await vehiculoPorPlaca(guard.empresa.id, d.placa);
     } else if (d.vehiculoId) {
+      // Incluye unidades compartidas (dueño en otra empresa del grupo).
+      const vid = Number(d.vehiculoId);
       const rows = await query<RowDataPacket[]>(
-        `SELECT id, placa, en_taller, km_actual, activo, estado FROM flota_vehiculos
-         WHERE id = ? AND empresa_id = ? LIMIT 1`,
-        [d.vehiculoId, guard.empresa.id],
+        `SELECT v.id, v.placa, v.en_taller, v.km_actual, v.activo, v.estado
+         FROM flota_vehiculos v
+         WHERE v.id = ?
+           AND (
+             v.empresa_id = ?
+             OR EXISTS (
+               SELECT 1 FROM flota_vehiculo_acceso a
+               WHERE a.vehiculo_id = v.id AND a.empresa_id = ?
+             )
+           )
+         LIMIT 1`,
+        [vid, guard.empresa.id, guard.empresa.id],
+      ).catch(async () =>
+        query<RowDataPacket[]>(
+          `SELECT id, placa, en_taller, km_actual, activo, estado FROM flota_vehiculos
+           WHERE id = ? AND empresa_id = ? LIMIT 1`,
+          [vid, guard.empresa.id],
+        ),
       );
       veh = rows[0] ?? null;
     }
     if (!veh) {
       return NextResponse.json(
-        { error: "Placa / unidad no encontrada. Escríbela como en el listado (ej. C-034BXR)." },
+        {
+          error:
+            "Placa / unidad no encontrada. Escríbela completa (ej. C-034BXR). Si es parcial, debe coincidir con una sola unidad.",
+        },
         { status: 404 },
       );
     }
@@ -464,6 +516,9 @@ export async function POST(req: Request, ctx: Ctx) {
 
     return NextResponse.json({
       id: r.insertId,
+      vehiculoId: Number(veh.id),
+      placa: String(veh.placa),
+      kmSalida: d.kmSalida,
       mensaje: `Salida de ${veh.placa} registrada (${nombre}).${extra}${planMsg}`,
       esExterno,
       empleado,
@@ -518,8 +573,8 @@ export async function POST(req: Request, ctx: Ctx) {
       );
     }
     const vehKm = await query<RowDataPacket[]>(
-      `SELECT km_actual FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1`,
-      [Number(viaje[0].vehiculo_id), guard.empresa.id],
+      `SELECT km_actual FROM flota_vehiculos WHERE id = ? LIMIT 1`,
+      [Number(viaje[0].vehiculo_id)],
     );
     const kmActualVeh = Number(vehKm[0]?.km_actual ?? kmSalida);
     if (kmFinal < kmActualVeh) {
@@ -644,6 +699,11 @@ export async function POST(req: Request, ctx: Ctx) {
     });
 
     return NextResponse.json({
+      viajeId: d.viajeId,
+      vehiculoId: Number(viaje[0].vehiculo_id),
+      placa: String(viaje[0].placa),
+      kmSalida,
+      kmLlegada: kmLlegadaDb,
       mensaje: `Llegada de ${viaje[0].placa}: ${(kmLlegadaDb - kmSalida).toLocaleString("es-GT")} km recorridos.${
         planIdPre ? " Plan TMS → Descargado." : ""
       }`,

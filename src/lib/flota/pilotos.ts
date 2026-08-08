@@ -17,13 +17,24 @@ export async function buscarEmpleadoPorNombre(
   const norm = normalizarNombrePiloto(nombre);
   if (norm.length < 2) return null;
 
-  // Coincidencia exacta (sin acentos) o LIKE por partes
+  const tokens = norm.split(" ").filter((t) => t.length > 1);
+  const likeSeed = tokens[0] ?? norm;
+  // Prefiltro SQL para no cargar 500 empleados en cada salida.
   const rows = await query<RowDataPacket[]>(
     `SELECT id, codigo, nombre, estado FROM empleados
      WHERE empresa_id = ? AND estado = 'Activo'
+       AND LOWER(nombre) LIKE ?
      ORDER BY nombre
-     LIMIT 500`,
-    [empresaId],
+     LIMIT 80`,
+    [empresaId, `%${likeSeed}%`],
+  ).catch(async () =>
+    query<RowDataPacket[]>(
+      `SELECT id, codigo, nombre, estado FROM empleados
+       WHERE empresa_id = ? AND estado = 'Activo'
+       ORDER BY nombre
+       LIMIT 200`,
+      [empresaId],
+    ),
   );
 
   const exacto = rows.find(
@@ -39,7 +50,6 @@ export async function buscarEmpleadoPorNombre(
   }
 
   // Si escribió "Juan Perez" y en RRHH está "Juan Carlos Perez"
-  const tokens = norm.split(" ").filter((t) => t.length > 1);
   if (tokens.length >= 2) {
     const parcial = rows.find((r) => {
       const n = normalizarNombrePiloto(String(r.nombre));
@@ -64,34 +74,46 @@ export async function vehiculoPorPlaca(
 ): Promise<RowDataPacket | null> {
   const placa = placaRaw.trim().toUpperCase().replace(/\s+/g, "-");
   const placaAlt = placaRaw.trim().toUpperCase().replace(/[\s-]+/g, "");
-  const matchPlaca = `(
-    UPPER(REPLACE(v.placa,' ','')) = ?
+  if (!placaAlt) return null;
+  const acceso = `(
+    v.empresa_id = ?
+    OR EXISTS (
+      SELECT 1 FROM flota_vehiculo_acceso a
+      WHERE a.vehiculo_id = v.id AND a.empresa_id = ?
+    )
+  )`;
+  const matchExacto = `(
+    UPPER(REPLACE(REPLACE(v.placa,' ',''),'-','')) = ?
     OR UPPER(v.placa) = ?
     OR UPPER(REPLACE(v.placa,'-','')) = ?
   )`;
   try {
-    const rows = await query<RowDataPacket[]>(
+    const exactas = await query<RowDataPacket[]>(
       `SELECT v.id, v.placa, v.en_taller, v.km_actual, v.activo, v.estado, v.empresa_id
        FROM flota_vehiculos v
-       WHERE ${matchPlaca}
-         AND (
-           v.empresa_id = ?
-           OR EXISTS (
-             SELECT 1 FROM flota_vehiculo_acceso a
-             WHERE a.vehiculo_id = v.id AND a.empresa_id = ?
-           )
-         )
+       WHERE ${matchExacto} AND ${acceso}
        LIMIT 1`,
       [placaAlt, placa, placaAlt, empresaId, empresaId],
     );
-    return rows[0] ?? null;
+    if (exactas[0]) return exactas[0];
+
+    // Coincidencia parcial única (piloto escribe "147CCT" y la placa es "C-147CCT").
+    const parciales = await query<RowDataPacket[]>(
+      `SELECT v.id, v.placa, v.en_taller, v.km_actual, v.activo, v.estado, v.empresa_id
+       FROM flota_vehiculos v
+       WHERE ${acceso}
+         AND UPPER(REPLACE(REPLACE(COALESCE(v.placa,''),' ',''),'-','')) LIKE ?
+       LIMIT 5`,
+      [empresaId, empresaId, `%${placaAlt}%`],
+    );
+    return parciales.length === 1 ? parciales[0] : null;
   } catch {
     const rows = await query<RowDataPacket[]>(
       `SELECT id, placa, en_taller, km_actual, activo, estado, empresa_id
        FROM flota_vehiculos
        WHERE empresa_id = ?
          AND (
-           UPPER(REPLACE(placa,' ','')) = ?
+           UPPER(REPLACE(REPLACE(placa,' ',''),'-','')) = ?
            OR UPPER(placa) = ?
            OR UPPER(REPLACE(placa,'-','')) = ?
          )

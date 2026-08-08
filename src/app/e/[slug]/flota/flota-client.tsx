@@ -28,6 +28,7 @@ import {
 } from "@/lib/flota/photo-meta";
 import { normalizarFotoCamara, normalizarFotosCamara } from "@/lib/flota/camera-file";
 import { TomarFotoButton } from "@/components/flota/tomar-foto";
+import { resolverVehiculoPorPlacaInput } from "@/lib/flota/placa";
 import {
   ahoraLocal,
   formatearFechaVisible,
@@ -754,7 +755,10 @@ export default function FlotaClient() {
           keys.push("servicios");
         }
         if (quiereVia) {
-          fetches.push(fetch(`/api/empresas/${slug}/flota/viajes`));
+          // En pestaña piloto basta con recientes + abiertos (límite menor).
+          const viaQs =
+            t === "piloto" ? "?limit=40" : "";
+          fetches.push(fetch(`/api/empresas/${slug}/flota/viajes${viaQs}`));
           keys.push("viajes");
         }
         if (quierePerm) {
@@ -1704,19 +1708,33 @@ export default function FlotaClient() {
       setErr("Escribe el nombre del piloto.");
       return;
     }
-    const placa = placaSalida.trim().toUpperCase();
-    if (placa) {
-      const veh = vehiculos.find(
-        (v) =>
-          v.placa.toUpperCase().replace(/[\s-]/g, "") ===
-          placa.replace(/[\s-]/g, ""),
+
+    // Placa del formulario (no usar búsqueda global ni vehiculoId de otras pestañas).
+    const placaInput = placaSalida.trim() || q.trim();
+    const veh =
+      resolverVehiculoPorPlacaInput(vehiculos, placaInput) ??
+      resolverVehiculoPorPlacaInput(activos, placaInput);
+    if (!placaInput) {
+      setErr("Escribe la placa de la unidad (campo «Placa de la unidad»).");
+      return;
+    }
+    if (!veh) {
+      setErr(
+        `No se encontró una unidad única para «${placaInput}». Usa la placa completa (ej. C-015BNG).`,
       );
-      if (veh?.en_taller) {
-        setErr(
-          `${veh.placa} está en taller. No se puede enviar a ruta hasta que salga de servicio.`,
-        );
-        return;
-      }
+      return;
+    }
+    // Congelar datos al inicio del request.
+    const placaCanon = String(veh.placa);
+    const vehiculoIdSalida = Number(veh.id);
+    const kmSalidaGuardar = Number(kmLectura);
+    setPlacaSalida(placaCanon);
+
+    if (veh.en_taller) {
+      setErr(
+        `${placaCanon} está en taller. No se puede enviar a ruta hasta que salga de servicio.`,
+      );
+      return;
     }
     if (planesSalida.length > 1 && !planIdSalida) {
       setErr("Hay varios planes TMS. Selecciona el plan correcto.");
@@ -1726,112 +1744,154 @@ export default function FlotaClient() {
       setErr("Toma o adjunta la foto del tablero (km) para registrar la salida.");
       return;
     }
-    if (!kmLectura && kmLectura !== 0) {
+    if (!Number.isFinite(kmSalidaGuardar)) {
       setErr("Indica el km de salida (debe coincidir con el tablero).");
       return;
     }
-    const vehKm = vehiculos.find(
-      (v) =>
-        v.placa.toUpperCase().replace(/[\s-]/g, "") ===
-        placa.replace(/[\s-]/g, ""),
-    );
-    const kmActual = Number(vehKm?.km_actual ?? 0);
-    if (kmLectura < kmActual) {
+    const kmActual = Number(veh.km_actual ?? 0);
+    if (kmSalidaGuardar < kmActual) {
       setErr(
-        `Km de salida (${kmLectura.toLocaleString("es-GT")}) no puede ser menor al km actual de la unidad (${kmActual.toLocaleString("es-GT")}). Debe ser mayor o igual.`,
+        `Km de salida (${kmSalidaGuardar.toLocaleString("es-GT")}) no puede ser menor al km actual de ${placaCanon} (${kmActual.toLocaleString("es-GT")}). Debe ser mayor o igual.`,
       );
       return;
     }
+
+    const geoPromise =
+      fotoTableroSalida || fotosEvidenciaSalida.length
+        ? obtenerGps(rol === "Piloto" ? 6000 : 2000)
+        : Promise.resolve(null);
 
     setEnviandoForm(true);
     try {
       const res = await fetch(`/api/empresas/${slug}/flota/viajes`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        accion: "salida",
-        placa: placaSalida.trim() || undefined,
-        vehiculoId: placaSalida.trim() ? undefined : vehiculoId || undefined,
-        pilotoNombre: nombreSalida,
-        kmSalida: kmLectura,
-        destino: destino || undefined,
-        esExterno: esExterno || undefined,
-        motivoExterno: esExterno ? motivoExterno || undefined : undefined,
-        planId: planIdSalida || undefined,
-      }),
-    });
-    const data = await res.json();
-    if (data.code === "NO_EN_RRHH") {
-      setEsExterno(true);
-      setErr(data.mensaje ?? data.error);
-      return;
-    }
-    if (
-      data.code === "SOLICITUD_ENVIADA" ||
-      data.code === "PERMISO_PENDIENTE"
-    ) {
-      setMsg(data.mensaje ?? data.error);
-      setEsExterno(true);
-      await cargar({ solo: ["vehiculos", "viajes", "permisos"] });
-      return;
-    }
-    if (!res.ok) {
-      setErr(data.mensaje ?? data.error ?? "Error");
-      return;
-    }
-
-    const nuevoId = Number(data.id);
-    if (fotoTableroSalida || fotosEvidenciaSalida.length) {
-    setSubiendoFotos(true);
-    try {
-      const geo = await obtenerGps();
-      if (fotoTableroSalida) {
-      const tablero = await marcarVarias(
-        [fotoTableroSalida],
-        `SALIDA · Tablero km ${kmLectura}${placa ? ` · ${placa}` : ""}`,
-        geo,
-      );
-      await subirEvidenciasViaje(nuevoId, "tablero_salida", tablero, geo);
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accion: "salida",
+          placa: placaCanon,
+          vehiculoId: vehiculoIdSalida,
+          pilotoNombre: nombreSalida,
+          kmSalida: kmSalidaGuardar,
+          destino: destino || undefined,
+          esExterno: esExterno || undefined,
+          motivoExterno: esExterno ? motivoExterno || undefined : undefined,
+          planId: planIdSalida || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (data.code === "NO_EN_RRHH") {
+        setEsExterno(true);
+        setErr(data.mensaje ?? data.error);
+        return;
       }
-      if (fotosEvidenciaSalida.length) {
-        const ev = await marcarVarias(
-          fotosEvidenciaSalida,
-          `SALIDA · Evidencia${placa ? ` · ${placa}` : ""}`,
-          geo,
+      if (
+        data.code === "SOLICITUD_ENVIADA" ||
+        data.code === "PERMISO_PENDIENTE"
+      ) {
+        setMsg(data.mensaje ?? data.error);
+        setEsExterno(true);
+        await cargar({ solo: ["vehiculos", "viajes", "permisos"] });
+        return;
+      }
+      if (!res.ok) {
+        setErr(data.mensaje ?? data.error ?? "Error");
+        return;
+      }
+
+      const placaOk = String(data.placa ?? placaCanon);
+      if (
+        data.vehiculoId != null &&
+        Number(data.vehiculoId) !== vehiculoIdSalida
+      ) {
+        setErr(
+          `Advertencia: la salida quedó en otra unidad (${placaOk}). Revisa e intenta de nuevo.`,
         );
-        await subirEvidenciasViaje(nuevoId, "salida", ev, geo);
+        await cargar({ solo: ["vehiculos", "viajes"] });
+        return;
       }
-      setMsg(
-        `${data.mensaje} Fotos de salida guardadas${
-          geo ? " con ubicación." : " (sin GPS)."
-        }`,
-      );
-    } catch (e) {
-      setErr(
-        `Salida registrada, pero falló subir fotos: ${
-          e instanceof Error ? e.message : "error"
-        }`,
-      );
-    } finally {
-      setSubiendoFotos(false);
-    }
-    } else {
-      setMsg(data.mensaje);
-    }
 
-    setKmLectura(0);
-    setDestino("");
-    setMotivoExterno("");
-    setEsExterno(false);
-    setVerifPiloto(null);
-    setPlanesSalida([]);
-    setPlanIdSalida(0);
-    setFotoTableroSalida(null);
-    setFotosEvidenciaSalida([]);
-    setViajeId(nuevoId);
-    setQLlegada("");
-    setModoPiloto("llegada");
-    await cargar({ solo: ["vehiculos", "viajes"] });
+      const nuevoId = Number(data.id);
+      if (fotoTableroSalida || fotosEvidenciaSalida.length) {
+        setSubiendoFotos(true);
+        try {
+          const geo = await geoPromise;
+          if (fotoTableroSalida) {
+            const tablero = await marcarVarias(
+              [fotoTableroSalida],
+              `SALIDA · Tablero km ${kmSalidaGuardar} · ${placaOk}`,
+              geo,
+            );
+            await subirEvidenciasViaje(nuevoId, "tablero_salida", tablero, geo);
+          }
+          if (fotosEvidenciaSalida.length) {
+            const ev = await marcarVarias(
+              fotosEvidenciaSalida,
+              `SALIDA · Evidencia · ${placaOk}`,
+              geo,
+            );
+            await subirEvidenciasViaje(nuevoId, "salida", ev, geo);
+          }
+          setMsg(
+            `${data.mensaje} Fotos de salida guardadas${
+              geo ? " con ubicación." : " (sin GPS)."
+            }`,
+          );
+        } catch (e) {
+          setErr(
+            `Salida registrada en ${placaOk}, pero falló subir fotos: ${
+              e instanceof Error ? e.message : "error"
+            }`,
+          );
+        } finally {
+          setSubiendoFotos(false);
+        }
+      } else {
+        setMsg(data.mensaje ?? `Salida de ${placaOk} registrada.`);
+      }
+
+      // UI inmediata: km de la unidad + viaje abierto.
+      setVehiculos((prev) =>
+        prev.map((v) =>
+          v.id === vehiculoIdSalida
+            ? {
+                ...v,
+                km_actual: Math.max(
+                  Number(v.km_actual ?? 0),
+                  kmSalidaGuardar,
+                ),
+              }
+            : v,
+        ),
+      );
+      const abiertoNuevo: Viaje = {
+        id: nuevoId,
+        vehiculo_id: vehiculoIdSalida,
+        placa: placaOk,
+        piloto_nombre: nombreSalida,
+        km_salida: kmSalidaGuardar,
+        km_llegada: null,
+        destino: destino || null,
+        estado: "abierto",
+        hora_salida: ahoraLocal(),
+        es_externo: esExterno ? 1 : 0,
+        plan_id: planIdSalida || null,
+      };
+      setAbiertos((prev) => [abiertoNuevo, ...prev.filter((x) => x.id !== nuevoId)]);
+      setViajes((prev) => [abiertoNuevo, ...prev.filter((x) => x.id !== nuevoId)]);
+
+      setKmLectura(0);
+      setDestino("");
+      setMotivoExterno("");
+      setEsExterno(false);
+      setVerifPiloto(null);
+      setPlanesSalida([]);
+      setPlanIdSalida(0);
+      setFotoTableroSalida(null);
+      setFotosEvidenciaSalida([]);
+      setViajeId(nuevoId);
+      setQLlegada("");
+      setModoPiloto("llegada");
+      void cargar({ solo: ["vehiculos", "viajes"] });
     } finally {
       setEnviandoForm(false);
     }
@@ -2090,128 +2150,184 @@ export default function FlotaClient() {
     if (enviandoForm) return;
     setErr("");
     setMsg("");
-    if (!viajeId) {
+    const viajeIdGuardar = Number(viajeId);
+    if (!viajeIdGuardar) {
       setErr("Selecciona el viaje abierto.");
+      return;
+    }
+    const kmLlegadaGuardar = Number(kmLlegada);
+    const viajeSelPre =
+      abiertos.find((v) => v.id === viajeIdGuardar) ??
+      viajes.find((v) => v.id === viajeIdGuardar);
+    if (!viajeSelPre) {
+      setErr("Viaje abierto no encontrado. Actualiza la lista.");
       return;
     }
 
     setEnviandoForm(true);
     try {
-    const parRes = await fetch(
-      `/api/empresas/${slug}/flota/viajes/${viajeId}/paradas`,
-    );
-    const parData = await parRes.json();
-    const paradasAhora = (parData.paradas ?? []) as PlanParadaUi[];
-    setParadasViaje(paradasAhora);
-    setPlanIdViaje(parData.planId ?? null);
-    const esRutaConParadas = paradasAhora.length > 0;
+      const necesitaGps =
+        Boolean(fotoTableroLlegada) ||
+        fotosLlegada.length > 0 ||
+        rol === "Piloto";
+      // GPS + paradas en paralelo (antes se esperaban en serie).
+      const [geo, parRes] = await Promise.all([
+        necesitaGps
+          ? obtenerGps(rol === "Piloto" ? 6000 : 2000)
+          : Promise.resolve(null),
+        fetch(`/api/empresas/${slug}/flota/viajes/${viajeIdGuardar}/paradas`),
+      ]);
+      const parData = await parRes.json();
+      const paradasAhora = (parData.paradas ?? []) as PlanParadaUi[];
+      setParadasViaje(paradasAhora);
+      setPlanIdViaje(parData.planId ?? null);
+      const esRutaConParadas = paradasAhora.length > 0;
 
-    const pendientesAhora = paradasAhora.filter(
-      (p) => p.requiere_evidencia && p.evidencias < 1,
-    );
-    if (pendientesAhora.length) {
-      setErr(
-        `Ruta detectada con ${paradasAhora.length} destino(s). Faltan evidencias en: ${pendientesAhora
-          .map((p) => `${p.orden}. ${p.lugar_nombre}`)
-          .join("; ")}.`,
+      const pendientesAhora = paradasAhora.filter(
+        (p) => p.requiere_evidencia && p.evidencias < 1,
       );
-      return;
-    }
-
-    if (!kmLlegada && kmLlegada !== 0) {
-      setErr(
-        esRutaConParadas
-          ? "Al terminar la ruta indica el km final del odómetro."
-          : "Indica el km de llegada.",
-      );
-      return;
-    }
-    const viajeSelPre = abiertos.find((v) => v.id === viajeId);
-    if (viajeSelPre && kmLlegada < Number(viajeSelPre.km_salida)) {
-      setErr(
-        `Km final no puede ser menor al km de salida (${Number(viajeSelPre.km_salida).toLocaleString("es-GT")}).`,
-      );
-      return;
-    }
-    const vehLleg = viajeSelPre
-      ? vehiculos.find((v) => v.id === viajeSelPre.vehiculo_id)
-      : null;
-    const kmActLleg = Number(
-      vehLleg?.km_actual ?? viajeSelPre?.km_salida ?? 0,
-    );
-    if (kmLlegada < kmActLleg) {
-      setErr(
-        `Km final (${kmLlegada.toLocaleString("es-GT")}) no puede ser menor al km actual (${kmActLleg.toLocaleString("es-GT")}). Debe ser mayor o igual.`,
-      );
-      return;
-    }
-    if (esRutaConParadas) {
-      if (!fotoTableroLlegada && rol === "Piloto") {
+      if (pendientesAhora.length) {
         setErr(
-          "Toma la foto del tablero con el km final para cerrar la ruta.",
+          `Ruta detectada con ${paradasAhora.length} destino(s). Faltan evidencias en: ${pendientesAhora
+            .map((p) => `${p.orden}. ${p.lugar_nombre}`)
+            .join("; ")}.`,
         );
         return;
       }
-    } else if (!fotosLlegada.length && rol === "Piloto") {
-      setErr(
-        "Toma al menos una foto de llegada (se marcará fecha, hora y ubicación).",
+
+      if (!Number.isFinite(kmLlegadaGuardar)) {
+        setErr(
+          esRutaConParadas
+            ? "Al terminar la ruta indica el km final del odómetro."
+            : "Indica el km de llegada.",
+        );
+        return;
+      }
+      if (kmLlegadaGuardar < Number(viajeSelPre.km_salida)) {
+        setErr(
+          `Km final no puede ser menor al km de salida (${Number(viajeSelPre.km_salida).toLocaleString("es-GT")}).`,
+        );
+        return;
+      }
+      const vehLleg = vehiculos.find(
+        (v) => v.id === viajeSelPre.vehiculo_id,
       );
-      return;
-    }
-
-    setSubiendoFotos(true);
-    try {
-      const geo = await obtenerGps();
-      const viajeSel = abiertos.find((v) => v.id === viajeId);
-      const placa = viajeSel?.placa ?? "";
-
-      if (fotosLlegada.length) {
-        const llegadaMarked = await marcarVarias(
-          fotosLlegada,
-          `LLEGADA${placa ? ` · ${placa}` : ""} · km ${kmLlegada}`,
-          geo,
+      const kmActLleg = Number(
+        vehLleg?.km_actual ?? viajeSelPre.km_salida ?? 0,
+      );
+      if (kmLlegadaGuardar < kmActLleg) {
+        setErr(
+          `Km final (${kmLlegadaGuardar.toLocaleString("es-GT")}) no puede ser menor al km actual de ${viajeSelPre.placa} (${kmActLleg.toLocaleString("es-GT")}). Debe ser mayor o igual.`,
         );
-        await subirEvidenciasViaje(viajeId, "llegada", llegadaMarked, geo);
-      }
-      if (fotoTableroLlegada) {
-        const tablero = await marcarVarias(
-          [fotoTableroLlegada],
-          `LLEGADA · Tablero km ${kmLlegada}${placa ? ` · ${placa}` : ""}`,
-          geo,
-        );
-        await subirEvidenciasViaje(viajeId, "tablero_llegada", tablero, geo);
-      }
-
-      const res = await fetch(`/api/empresas/${slug}/flota/viajes`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          accion: "llegada",
-          viajeId,
-          kmLlegada,
-          pilotoNombre: pilotoNombre || undefined,
-          observaciones: obsViaje || undefined,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setErr(data.error ?? "Error al cerrar llegada");
         return;
       }
-      setMsg(data.mensaje);
-      setKmLlegada(0);
-      setObsViaje("");
-      setFotosLlegada([]);
-      setFotoTableroLlegada(null);
-      setParadasViaje([]);
-      setPlanIdViaje(null);
-      setViajeId(0);
-      await cargar({ solo: ["vehiculos", "viajes"] });
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "Error al guardar llegada");
-    } finally {
-      setSubiendoFotos(false);
-    }
+      if (esRutaConParadas) {
+        if (!fotoTableroLlegada && rol === "Piloto") {
+          setErr(
+            "Toma la foto del tablero con el km final para cerrar la ruta.",
+          );
+          return;
+        }
+      } else if (!fotosLlegada.length && rol === "Piloto") {
+        setErr(
+          "Toma al menos una foto de llegada (se marcará fecha, hora y ubicación).",
+        );
+        return;
+      }
+
+      setSubiendoFotos(true);
+      try {
+        const placa = viajeSelPre.placa ?? "";
+
+        if (fotosLlegada.length) {
+          const llegadaMarked = await marcarVarias(
+            fotosLlegada,
+            `LLEGADA${placa ? ` · ${placa}` : ""} · km ${kmLlegadaGuardar}`,
+            geo,
+          );
+          await subirEvidenciasViaje(
+            viajeIdGuardar,
+            "llegada",
+            llegadaMarked,
+            geo,
+          );
+        }
+        if (fotoTableroLlegada) {
+          const tablero = await marcarVarias(
+            [fotoTableroLlegada],
+            `LLEGADA · Tablero km ${kmLlegadaGuardar}${placa ? ` · ${placa}` : ""}`,
+            geo,
+          );
+          await subirEvidenciasViaje(
+            viajeIdGuardar,
+            "tablero_llegada",
+            tablero,
+            geo,
+          );
+        }
+
+        const res = await fetch(`/api/empresas/${slug}/flota/viajes`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            accion: "llegada",
+            viajeId: viajeIdGuardar,
+            kmLlegada: kmLlegadaGuardar,
+            pilotoNombre:
+              (pilotoSesionConfirmado ? pilotoSesion : pilotoNombre) ||
+              undefined,
+            observaciones: obsViaje || undefined,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setErr(data.error ?? "Error al cerrar llegada");
+          return;
+        }
+        const placaOk = String(data.placa ?? placa);
+        const vidOk = Number(data.vehiculoId ?? viajeSelPre.vehiculo_id);
+        setMsg(data.mensaje ?? `Llegada de ${placaOk} registrada.`);
+
+        setVehiculos((prev) =>
+          prev.map((v) =>
+            v.id === vidOk
+              ? {
+                  ...v,
+                  km_actual: Math.max(
+                    Number(v.km_actual ?? 0),
+                    kmLlegadaGuardar,
+                  ),
+                }
+              : v,
+          ),
+        );
+        setAbiertos((prev) => prev.filter((v) => v.id !== viajeIdGuardar));
+        setViajes((prev) =>
+          prev.map((v) =>
+            v.id === viajeIdGuardar
+              ? {
+                  ...v,
+                  estado: "cerrado",
+                  km_llegada: kmLlegadaGuardar,
+                  hora_llegada: ahoraLocal(),
+                }
+              : v,
+          ),
+        );
+
+        setKmLlegada(0);
+        setObsViaje("");
+        setFotosLlegada([]);
+        setFotoTableroLlegada(null);
+        setParadasViaje([]);
+        setPlanIdViaje(null);
+        setViajeId(0);
+        void cargar({ solo: ["vehiculos", "viajes"] });
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : "Error al guardar llegada");
+      } finally {
+        setSubiendoFotos(false);
+      }
     } finally {
       setEnviandoForm(false);
     }
@@ -2235,12 +2351,26 @@ export default function FlotaClient() {
   const SearchBar = (
     <div className="flex flex-wrap items-end gap-2">
       <label className="text-xs text-[var(--muted)]">
-        Buscar por placa / marca
+        {tab === "piloto"
+          ? "Buscar / sugerir placa"
+          : "Buscar por placa / marca"}
         <input
           className={`${input} mt-1 block min-w-[220px]`}
           placeholder="Ej. C-034BXR"
           value={q}
-          onChange={(e) => setQ(e.target.value)}
+          onChange={(e) => {
+            const val = e.target.value;
+            setQ(val);
+            // En Registrar viaje: la búsqueda también sugiere la placa del formulario.
+            if (tab === "piloto" && modoPiloto === "salida") {
+              const hit = resolverVehiculoPorPlacaInput(vehiculosActivos, val);
+              if (hit) {
+                setPlacaSalida(hit.placa);
+                setKmLectura(Number(hit.km_actual ?? 0));
+                setVehiculoId(hit.id);
+              }
+            }
+          }}
         />
       </label>
       {tab === "vehiculos" || tab === "dashboard" ? (
@@ -4398,7 +4528,7 @@ export default function FlotaClient() {
 
       {tab === "piloto" && can("flota_piloto") ? (
         <div className="space-y-4">
-          {SearchBar}
+          {modoPiloto === "salida" ? SearchBar : null}
 
           {rol === "Piloto" && !pilotoSesionConfirmado ? (
             <div className="space-y-3 rounded-xl border border-sky-700 bg-sky-950/30 p-4">
@@ -4576,17 +4706,29 @@ export default function FlotaClient() {
                     <input
                       className={`${input} mt-1 w-full font-mono uppercase`}
                       value={placaSalida}
-                      onChange={(e) => setPlacaSalida(e.target.value)}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setPlacaSalida(val);
+                        const hit = resolverVehiculoPorPlacaInput(
+                          vehiculosActivos,
+                          val,
+                        );
+                        if (hit) {
+                          setVehiculoId(hit.id);
+                          setKmLectura(Number(hit.km_actual ?? 0));
+                        }
+                      }}
                       onBlur={() => void buscarPlanesSalida()}
                       placeholder="Ej. C-015BNG"
                       list="placas-flota"
+                      autoComplete="off"
                     />
                     <datalist id="placas-flota">
-                      {activos
+                      {vehiculosActivos
                         .filter((v) => !v.en_taller)
                         .map((v) => (
                           <option key={v.id} value={v.placa}>
-                            {`${v.placa} · ${empresaDe(v)}`}
+                            {`${v.placa} · km ${Number(v.km_actual ?? 0).toLocaleString("es-GT")} · ${empresaDe(v)}`}
                           </option>
                         ))}
                     </datalist>
@@ -4599,30 +4741,33 @@ export default function FlotaClient() {
                       value={kmLectura || ""}
                       onChange={(e) => setKmLectura(Number(e.target.value))}
                       min={(() => {
-                        const p = placaSalida
-                          .trim()
-                          .toUpperCase()
-                          .replace(/[\s-]/g, "");
-                        const v = vehiculos.find(
-                          (x) =>
-                            x.placa.toUpperCase().replace(/[\s-]/g, "") === p,
+                        const v = resolverVehiculoPorPlacaInput(
+                          vehiculos,
+                          placaSalida,
                         );
                         return Number(v?.km_actual ?? 0);
                       })()}
                     />
                     {(() => {
-                      const p = placaSalida
-                        .trim()
-                        .toUpperCase()
-                        .replace(/[\s-]/g, "");
-                      const v = vehiculos.find(
-                        (x) =>
-                          x.placa.toUpperCase().replace(/[\s-]/g, "") === p,
+                      const v = resolverVehiculoPorPlacaInput(
+                        vehiculos,
+                        placaSalida,
                       );
-                      if (!v) return null;
+                      if (!v) {
+                        return placaSalida.trim() ? (
+                          <span className="mt-0.5 block text-[11px] text-amber-300">
+                            Placa no resuelta aún — usa la completa del listado.
+                          </span>
+                        ) : null;
+                      }
                       return (
                         <span className="mt-0.5 block text-[11px]">
-                          Km actual de la unidad:{" "}
+                          Unidad:{" "}
+                          <span className="font-mono text-sky-300">
+                            {v.placa}
+                          </span>
+                          {" · "}
+                          km actual{" "}
                           {Number(v.km_actual ?? 0).toLocaleString("es-GT")}{" "}
                           (debe ser ≥)
                         </span>
@@ -4819,6 +4964,17 @@ export default function FlotaClient() {
                   </div>
                 ) : null}
 
+                <p className="text-xs text-sky-300">
+                  Se registrará salida en:{" "}
+                  <span className="font-mono font-semibold">
+                    {resolverVehiculoPorPlacaInput(vehiculos, placaSalida)
+                      ?.placa ??
+                      (placaSalida.trim() || "— (escribe la placa)")}
+                  </span>
+                  {kmLectura
+                    ? ` · km ${Number(kmLectura).toLocaleString("es-GT")}`
+                    : ""}
+                </p>
                 <div className="flex items-end">
                   <button
                     type="button"
