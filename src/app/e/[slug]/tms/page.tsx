@@ -446,9 +446,9 @@ export default function TmsPage() {
       <div>
         <h1 className="text-2xl font-semibold">TMS / Logística</h1>
         <p className="text-sm text-[var(--muted)]">
-          Planes de viaje. Puedes asignar hasta 8 auxiliares. Las placas salen
-          de Flota / Predios (propias y compartidas). Al registrar salida el
-          piloto se enlaza al plan.
+          Planes de viaje. El código se genera solo. Busca el cliente del
+          catálogo compartido. Hasta 8 auxiliares; placas de Flota (propias y
+          compartidas).
         </p>
       </div>
 
