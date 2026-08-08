@@ -11,12 +11,20 @@ const CATEGORIAS_SEED = [
 
 const AREAS_SEED = ["Taller", "Bodega", "Predios"];
 
-/** Evita re-chequear seed en cada request (misma instancia Node). */
+/** Evita re-chequear seed / schema en cada request (misma instancia Node). */
 const seedListo = new Set<number>();
 
+const CATALOGO_TTL_MS = 60_000;
+const catalogoCache = new Map<
+  number,
+  { at: number; categorias: InvCategoria[]; areas: InvArea[] }
+>();
+
 export async function asegurarInventarioEquipo(empresaId: number) {
-  await asegurarSchemaFlota();
+  // Si ya sembramos esta empresa en este proceso, no tocar schema ni COUNT.
   if (seedListo.has(empresaId)) return;
+
+  await asegurarSchemaFlota();
 
   const [cats, areas] = await Promise.all([
     query<RowDataPacket[]>(
@@ -89,6 +97,15 @@ export type InvEquipo = {
   notas: string | null;
 };
 
+export type InvResumen = {
+  qtyEmpresa: number;
+  qtyEmpleado: number;
+  itemsEmpresa: number;
+  itemsEmpleado: number;
+  porArea: { area: string; cantidad: number; items: number }[];
+  porEmpleado: { empleado: string; cantidad: number; items: number }[];
+};
+
 export async function listarCategorias(
   empresaId: number,
 ): Promise<InvCategoria[]> {
@@ -121,6 +138,31 @@ export async function listarAreas(empresaId: number): Promise<InvArea[]> {
     descripcion: r.descripcion ? String(r.descripcion) : null,
     activa: Boolean(r.activa),
   }));
+}
+
+/** Categorías + áreas con TTL corto (se invalidan al crear). */
+export async function listarCatalogos(
+  empresaId: number,
+  forzar = false,
+): Promise<{ categorias: InvCategoria[]; areas: InvArea[] }> {
+  const hit = catalogoCache.get(empresaId);
+  if (
+    !forzar &&
+    hit &&
+    Date.now() - hit.at < CATALOGO_TTL_MS
+  ) {
+    return { categorias: hit.categorias, areas: hit.areas };
+  }
+  const [categorias, areas] = await Promise.all([
+    listarCategorias(empresaId),
+    listarAreas(empresaId),
+  ]);
+  catalogoCache.set(empresaId, { at: Date.now(), categorias, areas });
+  return { categorias, areas };
+}
+
+export function invalidarCatalogoInventario(empresaId: number) {
+  catalogoCache.delete(empresaId);
 }
 
 export async function listarEquipo(
@@ -175,38 +217,86 @@ export async function listarEquipo(
   }));
 }
 
-export async function resumenInventario(empresaId: number) {
-  const rows = await query<RowDataPacket[]>(
-    `SELECT
-       SUM(CASE WHEN propiedad = 'empresa' THEN cantidad ELSE 0 END) AS qty_empresa,
-       SUM(CASE WHEN propiedad = 'empleado' THEN cantidad ELSE 0 END) AS qty_empleado,
-       COUNT(CASE WHEN propiedad = 'empresa' THEN 1 END) AS items_empresa,
-       COUNT(CASE WHEN propiedad = 'empleado' THEN 1 END) AS items_empleado
-     FROM flota_inv_equipo
-     WHERE empresa_id = ? AND estado <> 'Baja'`,
-    [empresaId],
-  );
-  const porArea = await query<RowDataPacket[]>(
-    `SELECT COALESCE(a.nombre, '(Sin área)') AS area,
-            SUM(e.cantidad) AS cantidad,
-            COUNT(*) AS items
-     FROM flota_inv_equipo e
-     LEFT JOIN flota_inv_areas a ON a.id = e.area_id
-     WHERE e.empresa_id = ? AND e.propiedad = 'empresa' AND e.estado <> 'Baja'
-     GROUP BY COALESCE(a.nombre, '(Sin área)')
-     ORDER BY area`,
-    [empresaId],
-  );
-  const porEmpleado = await query<RowDataPacket[]>(
-    `SELECT COALESCE(e.empleado_nombre, '(Sin nombre)') AS empleado,
-            SUM(e.cantidad) AS cantidad,
-            COUNT(*) AS items
-     FROM flota_inv_equipo e
-     WHERE e.empresa_id = ? AND e.propiedad = 'empleado' AND e.estado <> 'Baja'
-     GROUP BY COALESCE(e.empleado_nombre, '(Sin nombre)')
-     ORDER BY empleado`,
-    [empresaId],
-  );
+/** Resumen desde ítems ya cargados (0 queries extra). */
+export function resumenDesdeItems(items: InvEquipo[]): InvResumen {
+  let qtyEmpresa = 0;
+  let qtyEmpleado = 0;
+  let itemsEmpresa = 0;
+  let itemsEmpleado = 0;
+  const areaMap = new Map<string, { cantidad: number; items: number }>();
+  const empMap = new Map<string, { cantidad: number; items: number }>();
+
+  for (const it of items) {
+    if (it.estado === "Baja") continue;
+    if (it.propiedad === "empresa") {
+      qtyEmpresa += it.cantidad;
+      itemsEmpresa += 1;
+      const key = it.areaNombre || "(Sin área)";
+      const cur = areaMap.get(key) ?? { cantidad: 0, items: 0 };
+      cur.cantidad += it.cantidad;
+      cur.items += 1;
+      areaMap.set(key, cur);
+    } else {
+      qtyEmpleado += it.cantidad;
+      itemsEmpleado += 1;
+      const key = it.empleadoNombre || "(Sin nombre)";
+      const cur = empMap.get(key) ?? { cantidad: 0, items: 0 };
+      cur.cantidad += it.cantidad;
+      cur.items += 1;
+      empMap.set(key, cur);
+    }
+  }
+
+  return {
+    qtyEmpresa,
+    qtyEmpleado,
+    itemsEmpresa,
+    itemsEmpleado,
+    porArea: [...areaMap.entries()]
+      .map(([area, v]) => ({ area, ...v }))
+      .sort((a, b) => a.area.localeCompare(b.area)),
+    porEmpleado: [...empMap.entries()]
+      .map(([empleado, v]) => ({ empleado, ...v }))
+      .sort((a, b) => a.empleado.localeCompare(b.empleado)),
+  };
+}
+
+export async function resumenInventario(
+  empresaId: number,
+): Promise<InvResumen> {
+  const [rows, porArea, porEmpleado] = await Promise.all([
+    query<RowDataPacket[]>(
+      `SELECT
+         SUM(CASE WHEN propiedad = 'empresa' THEN cantidad ELSE 0 END) AS qty_empresa,
+         SUM(CASE WHEN propiedad = 'empleado' THEN cantidad ELSE 0 END) AS qty_empleado,
+         COUNT(CASE WHEN propiedad = 'empresa' THEN 1 END) AS items_empresa,
+         COUNT(CASE WHEN propiedad = 'empleado' THEN 1 END) AS items_empleado
+       FROM flota_inv_equipo
+       WHERE empresa_id = ? AND estado <> 'Baja'`,
+      [empresaId],
+    ),
+    query<RowDataPacket[]>(
+      `SELECT COALESCE(a.nombre, '(Sin área)') AS area,
+              SUM(e.cantidad) AS cantidad,
+              COUNT(*) AS items
+       FROM flota_inv_equipo e
+       LEFT JOIN flota_inv_areas a ON a.id = e.area_id
+       WHERE e.empresa_id = ? AND e.propiedad = 'empresa' AND e.estado <> 'Baja'
+       GROUP BY COALESCE(a.nombre, '(Sin área)')
+       ORDER BY area`,
+      [empresaId],
+    ),
+    query<RowDataPacket[]>(
+      `SELECT COALESCE(e.empleado_nombre, '(Sin nombre)') AS empleado,
+              SUM(e.cantidad) AS cantidad,
+              COUNT(*) AS items
+       FROM flota_inv_equipo e
+       WHERE e.empresa_id = ? AND e.propiedad = 'empleado' AND e.estado <> 'Baja'
+       GROUP BY COALESCE(e.empleado_nombre, '(Sin nombre)')
+       ORDER BY empleado`,
+      [empresaId],
+    ),
+  ]);
   const r = rows[0];
   return {
     qtyEmpresa: Number(r?.qty_empresa ?? 0),

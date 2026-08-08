@@ -644,15 +644,20 @@ function FlotaInner() {
         !solo &&
         ahora - (cacheAt.current[key] ?? 0) < FLOTA_CACHE_MS;
 
-      setCargandoFlota(true);
       try {
         if (!sesionLista) {
+          setCargandoFlota(true);
           const meRes = await fetch("/api/auth/me");
           const me = await meRes.json().catch(() => ({}));
           if (seq !== cargarSeq.current) return;
           setRol(String(me.user?.rol ?? ""));
           setPermisos(me.permisos ?? []);
           setSesionLista(true);
+          return;
+        }
+
+        // Inventario equipo trae sus propios datos; no bloquear Flota con vehículos/etc.
+        if (t === "inventario-equipo" && !solo && !forzar) {
           return;
         }
 
@@ -692,9 +697,22 @@ function FlotaInner() {
           (Boolean(solo) || t === "piloto") &&
           (forzar || Boolean(solo) || !fresco("permisos"));
 
-        // Vehículos: en memoria para selects; re-fetch si caducó / forzado / solo
+        // Vehículos: solo en pestañas que los usan (Inventario no los necesita).
+        const tabUsaVehiculos =
+          t !== "inventario-equipo" &&
+          (Boolean(solo) ||
+            t === "dashboard" ||
+            t === "vehiculos" ||
+            t === "lecturas" ||
+            t === "taller" ||
+            t === "servicios" ||
+            t === "historial-servicios" ||
+            t === "compras" ||
+            t === "piloto" ||
+            t === "reportes");
         const needVeh =
           enSolo("vehiculos") &&
+          tabUsaVehiculos &&
           (forzar || Boolean(solo) || !fresco("vehiculos"));
 
         const fetches: Promise<Response>[] = [];
@@ -732,6 +750,7 @@ function FlotaInner() {
         }
 
         if (!fetches.length) return;
+        setCargandoFlota(true);
 
         const results = await Promise.all(fetches);
         if (seq !== cargarSeq.current) return;

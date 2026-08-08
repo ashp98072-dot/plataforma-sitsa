@@ -4,10 +4,10 @@ import type { RowDataPacket } from "mysql2";
 import { execute, query, type SqlParams, type SqlValue } from "@/lib/db";
 import {
   asegurarInventarioEquipo,
-  listarAreas,
-  listarCategorias,
+  invalidarCatalogoInventario,
+  listarCatalogos,
   listarEquipo,
-  resumenInventario,
+  resumenDesdeItems,
 } from "@/lib/flota/inventario-equipo";
 import { requireTenantFlota } from "@/lib/tenant";
 
@@ -23,14 +23,18 @@ export async function GET(req: Request, ctx: Ctx) {
   const propiedad = sp.get("propiedad") ?? undefined;
   const q = sp.get("q") ?? undefined;
 
-  const [items, categorias, areas, resumen] = await Promise.all([
+  // 2 queries en paralelo; el resumen se deriva de items (sin 3 queries extra).
+  const [items, catalogos] = await Promise.all([
     listarEquipo(guard.empresa.id, { propiedad, q }),
-    listarCategorias(guard.empresa.id),
-    listarAreas(guard.empresa.id),
-    resumenInventario(guard.empresa.id),
+    listarCatalogos(guard.empresa.id),
   ]);
 
-  return NextResponse.json({ items, categorias, areas, resumen });
+  return NextResponse.json({
+    items,
+    categorias: catalogos.categorias,
+    areas: catalogos.areas,
+    resumen: resumenDesdeItems(items),
+  });
 }
 
 const schema = z.object({

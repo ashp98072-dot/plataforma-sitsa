@@ -91,25 +91,33 @@ export function InventarioEquipoPanel({ slug, can }: Props) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const empleadosCargados = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
+  const tieneDatos = useRef(false);
 
   const base = `/api/empresas/${slug}/flota/inventario-equipo`;
 
   const cargar = useCallback(async () => {
-    setLoading(true);
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
+    // Solo spinner completo en la primera carga; refrescos mantienen la UI.
+    if (!tieneDatos.current) setLoading(true);
     setErr("");
     try {
-      // Una sola carga; el filtro de búsqueda es local (más rápido).
-      const res = await fetch(base);
+      const res = await fetch(base, { signal: ac.signal });
       const data = await res.json().catch(() => ({}));
+      if (ac.signal.aborted) return;
       if (!res.ok) throw new Error(data.error ?? "No se pudo cargar inventario.");
       setItems(data.items ?? []);
       setCategorias(data.categorias ?? []);
       setAreas(data.areas ?? []);
       setResumen(data.resumen ?? null);
+      tieneDatos.current = true;
     } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
       setErr(e instanceof Error ? e.message : "Error al cargar");
     } finally {
-      setLoading(false);
+      if (!ac.signal.aborted) setLoading(false);
     }
   }, [base]);
 
@@ -124,6 +132,9 @@ export function InventarioEquipoPanel({ slug, can }: Props) {
 
   useEffect(() => {
     void cargar();
+    return () => {
+      abortRef.current?.abort();
+    };
   }, [cargar]);
 
   useEffect(() => {

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { execute } from "@/lib/db";
 import {
   asegurarInventarioEquipo,
+  invalidarCatalogoInventario,
   listarAreas,
 } from "@/lib/flota/inventario-equipo";
 import { requireTenantFlota } from "@/lib/tenant";
@@ -42,6 +43,7 @@ export async function POST(req: Request, ctx: Ctx) {
         parsed.data.descripcion?.trim() || null,
       ],
     );
+    invalidarCatalogoInventario(guard.empresa.id);
     return NextResponse.json({
       id: result.insertId,
       mensaje: "Área creada.",
