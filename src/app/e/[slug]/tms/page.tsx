@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent,
+} from "react";
 import { useParams } from "next/navigation";
 import { ClienteSearch } from "@/components/tms/cliente-search";
 import { PlacaSelect, type VehiculoOpt } from "@/components/tms/placa-select";
@@ -186,6 +192,30 @@ export default function TmsPage() {
     return form.auxiliarEmpleadoIds.length + form.auxiliarNombres.length;
   }
 
+  function filtrarPersonal(list: EmpOps[], q: string, selectedIds: number[]) {
+    const term = q.trim().toLowerCase();
+    const selected = list.filter((p) => selectedIds.includes(p.id));
+    const rest = term
+      ? list.filter(
+          (p) =>
+            !selectedIds.includes(p.id) &&
+            (`${p.nombre} ${p.codigo}`.toLowerCase().includes(term)),
+        )
+      : list.filter((p) => !selectedIds.includes(p.id));
+    // Seleccionados siempre visibles; el resto filtrado (máx. 80 para UI rápida).
+    return [...selected, ...rest.slice(0, 80)];
+  }
+
+  const auxiliaresFiltrados = useMemo(
+    () => filtrarPersonal(auxiliares, auxInput, form.auxiliarEmpleadoIds),
+    [auxiliares, auxInput, form.auxiliarEmpleadoIds],
+  );
+
+  const auxiliaresFiltradosEdit = useMemo(
+    () => filtrarPersonal(auxiliares, editAuxInput, editAuxEmpleadoIds),
+    [auxiliares, editAuxInput, editAuxEmpleadoIds],
+  );
+
   function toggleAux(id: number) {
     setForm((f) => {
       const has = f.auxiliarEmpleadoIds.includes(id);
@@ -203,6 +233,34 @@ export default function TmsPage() {
   function agregarAuxNombre() {
     const t = auxInput.trim();
     if (t.length < 2) return;
+    // Si hay coincidencia exacta o un solo resultado del filtro → marcar RRHH.
+    const matchExact = auxiliares.find(
+      (p) => p.nombre.toLowerCase() === t.toLowerCase(),
+    );
+    const soloUno =
+      !matchExact &&
+      auxiliaresFiltrados.filter(
+        (p) => !form.auxiliarEmpleadoIds.includes(p.id),
+      ).length === 1
+        ? auxiliaresFiltrados.find(
+            (p) => !form.auxiliarEmpleadoIds.includes(p.id),
+          )
+        : null;
+    const pick = matchExact ?? soloUno ?? null;
+    if (pick) {
+      setForm((f) => {
+        if (f.auxiliarEmpleadoIds.includes(pick.id)) return f;
+        if (f.auxiliarEmpleadoIds.length + f.auxiliarNombres.length >= 8) {
+          return f;
+        }
+        return {
+          ...f,
+          auxiliarEmpleadoIds: [...f.auxiliarEmpleadoIds, pick.id],
+        };
+      });
+      setAuxInput("");
+      return;
+    }
     setForm((f) => {
       if (f.auxiliarEmpleadoIds.length + f.auxiliarNombres.length >= 8) return f;
       if (
@@ -321,13 +379,21 @@ export default function TmsPage() {
       setEditAuxInput("");
       return;
     }
-    // Si coincide con RRHH, marcar checkbox en vez de texto libre
     const match = auxiliares.find(
       (a) => a.nombre.toLowerCase() === t.toLowerCase(),
     );
-    if (match) {
+    const soloUno =
+      !match &&
+      auxiliaresFiltradosEdit.filter((p) => !editAuxEmpleadoIds.includes(p.id))
+        .length === 1
+        ? auxiliaresFiltradosEdit.find(
+            (p) => !editAuxEmpleadoIds.includes(p.id),
+          )
+        : null;
+    const pick = match ?? soloUno ?? null;
+    if (pick) {
       setEditAuxEmpleadoIds((ids) =>
-        ids.includes(match.id) ? ids : [...ids, match.id].slice(0, 8),
+        ids.includes(pick.id) ? ids : [...ids, pick.id].slice(0, 8),
       );
     } else {
       setEditAuxNombres((list) => [...list, t].slice(0, 8));
@@ -586,13 +652,13 @@ export default function TmsPage() {
 
         <div className="md:col-span-3 space-y-2 rounded border border-[var(--border)] p-3">
           <p className="text-xs text-[var(--muted)]">
-            Auxiliares (máx. 8) — {totalAux()}/8. Marca de RRHH o escribe y
-            pulsa Enter.
+            Auxiliares (máx. 8) — {totalAux()}/8. Filtra por nombre, marca de
+            RRHH o Enter para agregar.
           </p>
           <div className="flex gap-2">
             <input
               className={`${input} flex-1`}
-              placeholder="Escribir auxiliar y Enter"
+              placeholder="Filtrar / escribir auxiliar y Enter"
               value={auxInput}
               onChange={(e) => setAuxInput(e.target.value)}
               onKeyDown={(e) => {
@@ -601,7 +667,7 @@ export default function TmsPage() {
                   agregarAuxNombre();
                 }
               }}
-              disabled={totalAux() >= 8}
+              disabled={totalAux() >= 8 && !auxInput.trim()}
             />
             <button
               type="button"
@@ -611,6 +677,11 @@ export default function TmsPage() {
               Agregar
             </button>
           </div>
+          <p className="text-[10px] text-[var(--muted)]">
+            {auxInput.trim()
+              ? `${auxiliaresFiltrados.length} resultado(s) · ${form.auxiliarEmpleadoIds.length} marcado(s)`
+              : `${auxiliares.length} en planilla · mostrando selección + primeros 80`}
+          </p>
           {form.auxiliarNombres.length ? (
             <ul className="flex flex-wrap gap-2">
               {form.auxiliarNombres.map((n) => (
@@ -635,8 +706,8 @@ export default function TmsPage() {
               ))}
             </ul>
           ) : null}
-          <div className="flex max-h-28 flex-wrap gap-2 overflow-y-auto">
-            {auxiliares.map((p) => {
+          <div className="flex max-h-40 flex-wrap gap-2 overflow-y-auto overscroll-contain">
+            {auxiliaresFiltrados.map((p) => {
               const on = form.auxiliarEmpleadoIds.includes(p.id);
               return (
                 <label
@@ -658,6 +729,11 @@ export default function TmsPage() {
                 </label>
               );
             })}
+            {!auxiliaresFiltrados.length ? (
+              <p className="text-xs text-[var(--muted)]">
+                Sin coincidencias. Ajusta el filtro o Agregar como nombre libre.
+              </p>
+            ) : null}
           </div>
         </div>
 
@@ -827,13 +903,13 @@ export default function TmsPage() {
 
           <div className="md:col-span-4 space-y-2 rounded border border-[var(--border)] p-3">
             <p className="text-xs text-[var(--muted)]">
-              Auxiliares (máx. 8) — {totalAuxEdit()}/8. Marca de RRHH o escribe
-              y pulsa Enter / Agregar.
+              Auxiliares (máx. 8) — {totalAuxEdit()}/8. Filtra por nombre, marca
+              de RRHH o Enter / Agregar.
             </p>
             <div className="flex gap-2">
               <input
                 className={`${input} flex-1`}
-                placeholder="Escribir auxiliar y Enter"
+                placeholder="Filtrar / escribir auxiliar y Enter"
                 value={editAuxInput}
                 onChange={(e) => setEditAuxInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -842,17 +918,22 @@ export default function TmsPage() {
                     agregarAuxNombreEdit();
                   }
                 }}
-                disabled={totalAuxEdit() >= 8}
+                disabled={totalAuxEdit() >= 8 && !editAuxInput.trim()}
               />
               <button
                 type="button"
                 className="rounded bg-[#334155] px-3 py-1 text-xs text-white disabled:opacity-40"
-                disabled={totalAuxEdit() >= 8}
+                disabled={totalAuxEdit() >= 8 && !editAuxInput.trim()}
                 onClick={() => agregarAuxNombreEdit()}
               >
                 Agregar
               </button>
             </div>
+            <p className="text-[10px] text-[var(--muted)]">
+              {editAuxInput.trim()
+                ? `${auxiliaresFiltradosEdit.length} resultado(s)`
+                : `${auxiliares.length} en planilla`}
+            </p>
             {editAuxNombres.length ? (
               <ul className="flex flex-wrap gap-2">
                 {editAuxNombres.map((n) => (
@@ -876,8 +957,8 @@ export default function TmsPage() {
                 ))}
               </ul>
             ) : null}
-            <div className="flex max-h-28 flex-wrap gap-2 overflow-y-auto">
-              {auxiliares.map((p) => {
+            <div className="flex max-h-40 flex-wrap gap-2 overflow-y-auto overscroll-contain">
+              {auxiliaresFiltradosEdit.map((p) => {
                 const on = editAuxEmpleadoIds.includes(p.id);
                 return (
                   <label
@@ -899,6 +980,11 @@ export default function TmsPage() {
                   </label>
                 );
               })}
+              {!auxiliaresFiltradosEdit.length ? (
+                <p className="text-xs text-[var(--muted)]">
+                  Sin coincidencias.
+                </p>
+              ) : null}
             </div>
           </div>
 
