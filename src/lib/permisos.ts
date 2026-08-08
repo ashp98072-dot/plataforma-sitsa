@@ -5,6 +5,7 @@ import {
   catalogoPermisosRol,
   esFlotaSubmodulo,
   esPlataformaPermisible,
+  modulosPropiosDelRol,
   permisoVacio,
   permisosDefaultPorRol,
   type PermisoModulo,
@@ -88,12 +89,22 @@ export async function permisosEfectivos(
   // Filas antiguas fuera del catálogo actual.
   const extras = stored.filter((p) => !catalogo.includes(p.modulo));
 
+  const propiosRol = new Set(modulosPropiosDelRol(rol));
   const data = [
     ...catalogo.map((m) => {
       if (byMod.has(m)) return byMod.get(m)!;
       // Compat: usuarios Operaciones/Contabilidad guardados solo con RRHH
       // conservan los módulos propios del rol por defecto.
       if (esPlataformaPermisible(m) && !tienePlataformaGuardada) {
+        return defMap.get(m) ?? permisoVacio(m);
+      }
+      // Submódulo Flota nuevo (ej. inventario): heredar default del rol
+      // si el usuario ya tenía matriz Flota y el módulo es propio del perfil.
+      if (
+        esFlotaSubmodulo(m) &&
+        propiosRol.has(m) &&
+        tienePlataformaGuardada
+      ) {
         return defMap.get(m) ?? permisoVacio(m);
       }
       return permisoVacio(m);
