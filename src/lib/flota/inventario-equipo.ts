@@ -1,5 +1,5 @@
 import type { RowDataPacket } from "mysql2";
-import { execute, query } from "@/lib/db";
+import { execute, query, type SqlParams } from "@/lib/db";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
 
 const CATEGORIAS_SEED = [
@@ -114,7 +114,7 @@ export async function listarEquipo(
   empresaId: number,
   opts?: { propiedad?: string; q?: string },
 ): Promise<InvEquipo[]> {
-  const params: unknown[] = [empresaId];
+  const params: SqlParams = [empresaId];
   let where = "e.empresa_id = ?";
   if (opts?.propiedad === "empresa" || opts?.propiedad === "empleado") {
     where += " AND e.propiedad = ?";

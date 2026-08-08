@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
-import { query } from "@/lib/db";
+import { query, type SqlParams } from "@/lib/db";
 import { requireTenantFlota } from "@/lib/tenant";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -13,7 +13,7 @@ export async function GET(req: Request, ctx: Ctx) {
 
   const q = (new URL(req.url).searchParams.get("q") ?? "").trim();
   try {
-    const params: unknown[] = [guard.empresa.id];
+    const params: SqlParams = [guard.empresa.id];
     let where = `empresa_id = ? AND estado = 'Activo'`;
     if (q) {
       where += ` AND (nombre LIKE ? OR codigo LIKE ? OR COALESCE(puesto,'') LIKE ?)`;

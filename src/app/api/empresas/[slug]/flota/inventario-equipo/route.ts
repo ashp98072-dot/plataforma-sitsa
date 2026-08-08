@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
-import { execute, query } from "@/lib/db";
+import { execute, query, type SqlParams, type SqlValue } from "@/lib/db";
 import {
   asegurarInventarioEquipo,
   listarAreas,
@@ -179,8 +179,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
   }
 
   const sets: string[] = [];
-  const params: unknown[] = [];
-  const set = (col: string, val: unknown) => {
+  const params: SqlParams = [];
+  const set = (col: string, val: SqlValue) => {
     sets.push(`${col} = ?`);
     params.push(val);
   };
