@@ -326,25 +326,63 @@ export function AppShell({
       });
     }
 
+    const clientesLinks: NavLink[] = [];
+    if (modulos.includes("clientes")) {
+      if (
+        isAdmin ||
+        permisos.length === 0 ||
+        tienePermiso(permisos, "clientes", "ver")
+      ) {
+        clientesLinks.push({
+          href: `${base}/clientes`,
+          label: MODULO_LABEL.clientes,
+          key: "clientes",
+        });
+      }
+    }
+    if (clientesLinks.length) {
+      g.push({
+        id: "clientes",
+        label: "Clientes",
+        icon: <IconUsers />,
+        links: clientesLinks,
+      });
+    }
+
+    const contaLinks: NavLink[] = [];
+    if (modulos.includes("facturacion")) {
+      if (
+        isAdmin ||
+        permisos.length === 0 ||
+        tienePermiso(permisos, "facturacion", "ver")
+      ) {
+        contaLinks.push({
+          href: `${base}/facturacion`,
+          label: MODULO_LABEL.facturacion,
+          key: "facturacion",
+        });
+      }
+    }
     if (modulos.includes("contabilidad")) {
       if (
         isAdmin ||
         permisos.length === 0 ||
         tienePermiso(permisos, "contabilidad", "ver")
       ) {
-        g.push({
-          id: "contabilidad",
-          label: "Contabilidad",
-          icon: <IconConta />,
-          links: [
-            {
-              href: `${base}/contabilidad`,
-              label: MODULO_LABEL.contabilidad,
-              key: "contabilidad",
-            },
-          ],
+        contaLinks.push({
+          href: `${base}/contabilidad`,
+          label: MODULO_LABEL.contabilidad,
+          key: "contabilidad",
         });
       }
+    }
+    if (contaLinks.length) {
+      g.push({
+        id: "contabilidad",
+        label: "Contabilidad",
+        icon: <IconConta />,
+        links: contaLinks,
+      });
     }
 
     if (modulos.includes("cms")) {

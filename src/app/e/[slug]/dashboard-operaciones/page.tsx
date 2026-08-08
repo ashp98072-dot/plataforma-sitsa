@@ -42,6 +42,11 @@ export default async function DashboardOperacionesPage({ params }: Props) {
       : rolMods.includes("flota") || empresa.modulos.includes("flota"));
 
   const puedeDisponibilidad = puedeTms || puedeFlota;
+  const puedeClientes =
+    rol === "Admin" ||
+    (permisos.length > 0
+      ? tienePermiso(permisos, "clientes", "ver")
+      : rolMods.includes("clientes") || empresa.modulos.includes("clientes"));
 
   const cards = [
     puedeDisponibilidad
@@ -49,6 +54,13 @@ export default async function DashboardOperacionesPage({ params }: Props) {
           href: `/e/${slug}/disponibilidad`,
           title: "Disponibilidad de flota",
           desc: "Qué unidades propias o compartidas puedes enviar: activas, en taller, en ruta o inactivas.",
+        }
+      : null,
+    puedeClientes
+      ? {
+          href: `/e/${slug}/clientes`,
+          title: "Clientes",
+          desc: "Catálogo compartido con Facturación y Contabilidad (KT / Mónaco y demás empresas).",
         }
       : null,
     puedeTms

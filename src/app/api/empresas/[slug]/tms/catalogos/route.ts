@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
+import { crearClienteDesdeTms } from "@/lib/clientes/repository";
+import {
+  asegurarModulosClientesFacturacion,
+  asegurarSchemaClientes,
+} from "@/lib/clientes/schema";
 import { execute, query } from "@/lib/db";
 import { requireTenantModulo } from "@/lib/tenant";
 
@@ -11,6 +16,13 @@ export async function GET(_req: Request, ctx: Ctx) {
   const guard = await requireTenantModulo(slug, "tms");
   if (guard.error) return guard.error;
   const eid = guard.empresa.id;
+  // Puente ligero: mantiene tms_clientes (FK de planes) y alinea catálogo compartido.
+  try {
+    await asegurarSchemaClientes();
+    await asegurarModulosClientesFacturacion(eid);
+  } catch {
+    /* TMS sigue aunque clientes aún no esté migrado */
+  }
   const [clientes, lugares, unidades, personal] = await Promise.all([
     query<RowDataPacket[]>(
       "SELECT id, nombre, nit, telefono, estado FROM tms_clientes WHERE empresa_id = ? ORDER BY nombre",
@@ -73,11 +85,24 @@ export async function POST(req: Request, ctx: Ctx) {
   const eid = guard.empresa.id;
 
   if (d.kind === "cliente") {
-    const r = await execute(
-      "INSERT INTO tms_clientes (empresa_id, nombre, nit, telefono) VALUES (?, ?, ?, ?)",
-      [eid, d.nombre, d.nit ?? null, d.telefono ?? null],
-    );
-    return NextResponse.json({ id: r.insertId, mensaje: "Cliente creado." });
+    try {
+      const created = await crearClienteDesdeTms(eid, {
+        nombre: d.nombre,
+        nit: d.nit,
+        telefono: d.telefono,
+      });
+      return NextResponse.json({
+        id: created.tmsClienteId,
+        clienteId: created.clienteId,
+        mensaje: "Cliente creado.",
+      });
+    } catch {
+      const r = await execute(
+        "INSERT INTO tms_clientes (empresa_id, nombre, nit, telefono) VALUES (?, ?, ?, ?)",
+        [eid, d.nombre, d.nit ?? null, d.telefono ?? null],
+      );
+      return NextResponse.json({ id: r.insertId, mensaje: "Cliente creado." });
+    }
   }
   if (d.kind === "lugar") {
     const r = await execute(

@@ -50,9 +50,27 @@ export default async function EmpresaLayout({ children, params }: Props) {
 
   const permisos = permisosRaw;
   const rolMods = modulosPorRol(session.rol);
-  const empresaMods = (
+  const baseEmpresaMods = (
     empresa.modulos.length ? empresa.modulos : rolMods
   ) as Modulo[];
+  // Clientes / Facturación: visibles si la empresa ya opera TMS/Conta/etc.
+  // (el JSON se actualiza al abrir esos módulos; aquí no bloqueamos el layout).
+  const empresaMods = [...new Set([
+    ...baseEmpresaMods,
+    ...(baseEmpresaMods.some((m) =>
+      ["tms", "contabilidad", "reciclaje", "tarimas", "clientes"].includes(m),
+    )
+      ? (["clientes"] as Modulo[])
+      : []),
+    ...(baseEmpresaMods.some((m) =>
+      ["contabilidad", "facturacion", "clientes"].includes(m),
+    ) ||
+    baseEmpresaMods.some((m) =>
+      ["tms", "reciclaje", "tarimas"].includes(m),
+    )
+      ? (["facturacion"] as Modulo[])
+      : []),
+  ])] as Modulo[];
 
   const extraMods = modulosPlataformaDesdePermisos(permisos);
   const moduloVisible = (m: Modulo) => {

@@ -94,18 +94,14 @@ export async function permisosEfectivos(
   const data = [
     ...catalogo.map((m) => {
       if (byMod.has(m)) return byMod.get(m)!;
-      // Compat: usuarios Operaciones/Contabilidad guardados solo con RRHH
-      // conservan los módulos propios del rol por defecto.
-      if (esPlataformaPermisible(m) && !tienePlataformaGuardada) {
+      // Módulo propio nuevo (ej. clientes / facturación): heredar default del rol
+      // aunque la matriz guardada sea anterior al alta del módulo.
+      if (propiosRol.has(m)) {
         return defMap.get(m) ?? permisoVacio(m);
       }
-      // Submódulo Flota nuevo (ej. inventario): heredar default del rol
-      // si el usuario ya tenía matriz Flota y el módulo es propio del perfil.
-      if (
-        esFlotaSubmodulo(m) &&
-        propiosRol.has(m) &&
-        tienePlataformaGuardada
-      ) {
+      // Compat: usuarios Operaciones/Contabilidad guardados solo con RRHH
+      // conservan módulos de plataforma por defecto si no había matriz ops.
+      if (esPlataformaPermisible(m) && !tienePlataformaGuardada) {
         return defMap.get(m) ?? permisoVacio(m);
       }
       return permisoVacio(m);

@@ -61,6 +61,8 @@ export const FLOTA_SUBMODULO_LABEL: Record<FlotaSubmodulo, string> = {
 /** Módulos de plataforma (sin flota: se desglosa en FLOTA_SUBMODULOS). */
 export const PLATAFORMA_PERMISIBLES = [
   "tms",
+  "clientes",
+  "facturacion",
   "contabilidad",
   "reciclaje",
   "tarimas",
@@ -179,8 +181,8 @@ export const GRUPOS_PERMISOS: {
   {
     id: "operaciones",
     titulo: "Permisos Operaciones por módulos",
-    descripcion: "TMS / logística, reciclaje y tarimas.",
-    modulos: ["tms", "reciclaje", "tarimas"],
+    descripcion: "TMS / logística, clientes, reciclaje y tarimas.",
+    modulos: ["tms", "clientes", "reciclaje", "tarimas"],
   },
   {
     id: "flota",
@@ -190,9 +192,9 @@ export const GRUPOS_PERMISOS: {
   },
   {
     id: "contabilidad",
-    titulo: "Permisos Contabilidad por módulos",
-    descripcion: "Cuentas, asientos y cartera.",
-    modulos: ["contabilidad"],
+    titulo: "Permisos Contabilidad / Facturación",
+    descripcion: "Cuentas, asientos, cartera y reglas de facturación.",
+    modulos: ["contabilidad", "facturacion"],
   },
   {
     id: "otros",
@@ -231,10 +233,10 @@ export function modulosPropiosDelRol(rol: RolGlobal): string[] {
     case "Marcaje":
       return ["marcajes"];
     case "Contabilidad":
-      return ["contabilidad"];
+      return ["contabilidad", "facturacion", "clientes"];
     case "Operaciones":
-      // TMS + Predios (control-flota) + otros ops
-      return ["tms", ...FLOTA_SUBMODULOS, "reciclaje", "tarimas"];
+      // TMS + Predios (control-flota) + clientes compartidos + otros ops
+      return ["tms", "clientes", ...FLOTA_SUBMODULOS, "reciclaje", "tarimas"];
     case "CoordinadorPredios":
       // Predios = flota. TMS/Reciclaje/Tarimas van en otras áreas si se otorgan.
       return [...FLOTA_SUBMODULOS];
@@ -247,6 +249,8 @@ export function modulosPropiosDelRol(rol: RolGlobal): string[] {
         ...RRHH_SUBMODULOS,
         ...FLOTA_SUBMODULOS,
         "tms",
+        "clientes",
+        "facturacion",
         "contabilidad",
         "reciclaje",
         "tarimas",

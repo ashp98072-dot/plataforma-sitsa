@@ -16,6 +16,8 @@ export const MODULOS = [
   "rrhh",
   "tms",
   "flota",
+  "clientes",
+  "facturacion",
   "contabilidad",
   "gerencia",
   "cms",
@@ -40,9 +42,9 @@ export function modulosPorRol(rol: RolGlobal): Modulo[] {
     case "Marcaje":
       return ["rrhh"];
     case "Contabilidad":
-      return ["contabilidad", "gerencia"];
+      return ["contabilidad", "facturacion", "clientes", "gerencia"];
     case "Operaciones":
-      return ["tms", "flota", "reciclaje", "tarimas", "gerencia"];
+      return ["tms", "flota", "clientes", "reciclaje", "tarimas", "gerencia"];
     case "CoordinadorPredios":
       // Solo Flota/Predios. TMS solo si se otorga en permisos.
       return ["flota"];
@@ -51,7 +53,17 @@ export function modulosPorRol(rol: RolGlobal): Modulo[] {
     case "Piloto":
       return ["flota"];
     case "Visualizador":
-      return ["gerencia", "rrhh", "tms", "flota", "contabilidad", "reciclaje", "tarimas"];
+      return [
+        "gerencia",
+        "rrhh",
+        "tms",
+        "flota",
+        "clientes",
+        "facturacion",
+        "contabilidad",
+        "reciclaje",
+        "tarimas",
+      ];
     default:
       return ["gerencia"];
   }
@@ -61,11 +73,18 @@ export function puedeEditarModulo(rol: RolGlobal, modulo: Modulo): boolean {
   if (rol === "Visualizador" || rol === "Marcaje") return false;
   if (rol === "Admin") return true;
   if (rol === "RRHH") return modulo === "rrhh";
-  if (rol === "Contabilidad") return modulo === "contabilidad";
+  if (rol === "Contabilidad") {
+    return (
+      modulo === "contabilidad" ||
+      modulo === "facturacion" ||
+      modulo === "clientes"
+    );
+  }
   if (rol === "Operaciones") {
     return (
       modulo === "tms" ||
       modulo === "flota" ||
+      modulo === "clientes" ||
       modulo === "reciclaje" ||
       modulo === "tarimas"
     );
@@ -80,6 +99,8 @@ export const MODULO_LABEL: Record<Modulo, string> = {
   rrhh: "Control de asistencias",
   tms: "TMS / Logística",
   flota: "Flota / Predios",
+  clientes: "Clientes",
+  facturacion: "Facturación",
   contabilidad: "Contabilidad",
   gerencia: "Gerencia",
   cms: "Sitio Web (CMS)",

@@ -11,11 +11,26 @@ export default async function DashboardPage({ params }: Props) {
   const empresa = await obtenerEmpresaPorSlug(slug);
   if (!session || !empresa) return null;
 
+  const empMods = new Set(empresa.modulos as string[]);
+  if (
+    [...empMods].some((m) =>
+      ["tms", "contabilidad", "reciclaje", "tarimas", "clientes"].includes(m),
+    )
+  ) {
+    empMods.add("clientes");
+  }
+  if (
+    [...empMods].some((m) =>
+      ["contabilidad", "facturacion", "clientes", "tms", "reciclaje", "tarimas"].includes(
+        m,
+      ),
+    )
+  ) {
+    empMods.add("facturacion");
+  }
   const mods = modulosPorRol(session.rol).filter((m) => {
     if (m === "usuarios") return session.rol === "Admin";
-    return (
-      (empresa.modulos as string[]).includes(m) || m === "gerencia"
-    );
+    return empMods.has(m) || m === "gerencia";
   }) as Modulo[];
   if (session.rol === "Admin" && !mods.includes("usuarios")) {
     mods.push("usuarios");

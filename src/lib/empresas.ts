@@ -70,6 +70,18 @@ export async function obtenerEmpresaPorId(id: number): Promise<Empresa | null> {
   return data;
 }
 
+/** Invalida caché de lectura (tras actualizar modulos_json, etc.). */
+export function invalidarCacheEmpresa(opts: {
+  id?: number;
+  slug?: string;
+}): void {
+  if (opts.slug) slugCache.delete(opts.slug);
+  if (opts.id != null) idCache.delete(opts.id);
+  activasCache.at = 0;
+  activasCache.data = null;
+  userEmpresasCache.clear();
+}
+
 export async function obtenerEmpresaPorSlug(
   slug: string,
 ): Promise<Empresa | null> {

@@ -3,27 +3,27 @@
 
 INSERT INTO empresas (codigo, nombre, slug, modulos_json, activa)
 SELECT 'KT', 'Kuiqtrans / Logiservicios Mónaco', 'kt-monaco',
-       '["rrhh","tms","flota","contabilidad","gerencia","cms"]', 1
+       '["rrhh","tms","flota","clientes","facturacion","contabilidad","gerencia","cms"]', 1
 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM empresas WHERE codigo = 'KT');
 
 INSERT INTO empresas (codigo, nombre, slug, modulos_json, activa)
 SELECT 'FRANCISCO', 'Francisco', 'francisco',
-       '["rrhh","contabilidad","reciclaje","gerencia","cms"]', 1
+       '["rrhh","clientes","facturacion","contabilidad","reciclaje","gerencia","cms"]', 1
 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM empresas WHERE codigo = 'FRANCISCO');
 
 INSERT INTO empresas (codigo, nombre, slug, modulos_json, activa)
 SELECT 'TARIMAS', 'Tarimas Center', 'tarimas',
-       '["rrhh","contabilidad","tarimas","gerencia","cms"]', 1
+       '["rrhh","clientes","facturacion","contabilidad","tarimas","gerencia","cms"]', 1
 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM empresas WHERE codigo = 'TARIMAS');
 
 INSERT INTO empresas (codigo, nombre, slug, modulos_json, activa)
 SELECT 'FRESCOFRESH', 'Frescofresh', 'frescofresh',
-       '["rrhh","contabilidad","gerencia","cms"]', 1
+       '["rrhh","clientes","facturacion","contabilidad","gerencia","cms"]', 1
 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM empresas WHERE codigo = 'FRESCOFRESH');
 
 INSERT INTO empresas (codigo, nombre, slug, modulos_json, activa)
 SELECT 'ECOPLANET', 'Ecoplanet', 'ecoplanet',
-       '["rrhh","contabilidad","reciclaje","gerencia","cms"]', 1
+       '["rrhh","clientes","facturacion","contabilidad","reciclaje","gerencia","cms"]', 1
 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM empresas WHERE codigo = 'ECOPLANET');
 
 -- Passwords: admin123 / rrhh123 / conta123 / ops123 / predios123
