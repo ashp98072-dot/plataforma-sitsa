@@ -10,6 +10,7 @@ import {
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { hoyLocal, TZ_GUATEMALA } from "@/lib/rrhh/dates";
+import { useEmpresaSession } from "@/lib/empresa-session";
 
 type Marcaje = {
   id: number;
@@ -40,6 +41,7 @@ function formatReloj(d: Date): string {
 
 export default function MarcajesKioskoPage() {
   const slug = String(useParams().slug);
+  const { rol: rolSesion, empresaNombre: nombreSesion } = useEmpresaSession();
   const [reloj, setReloj] = useState(() => formatReloj(new Date()));
   const [codigo, setCodigo] = useState("");
   const [esVariable, setEsVariable] = useState(false);
@@ -53,7 +55,6 @@ export default function MarcajesKioskoPage() {
   const [geocercaLat, setGeocercaLat] = useState<number | null>(null);
   const [geocercaLng, setGeocercaLng] = useState<number | null>(null);
   const [empresaNombre, setEmpresaNombre] = useState("");
-  const [rolUsuario, setRolUsuario] = useState("");
   const [loading, setLoading] = useState(false);
   const [enviando, setEnviando] = useState(false);
   const [detectandoGps, setDetectandoGps] = useState(false);
@@ -145,12 +146,9 @@ export default function MarcajesKioskoPage() {
   const cargar = useCallback(async () => {
     setLoading(true);
     try {
-      const [m, me] = await Promise.all([
-        fetch(
-          `/api/empresas/${slug}/rrhh/marcajes?desde=${hoy}&hasta=${hoy}`,
-        ).then((r) => r.json()),
-        fetch("/api/auth/me").then((r) => r.json()),
-      ]);
+      const m = await fetch(
+        `/api/empresas/${slug}/rrhh/marcajes?desde=${hoy}&hasta=${hoy}`,
+      ).then((r) => r.json());
       setMarcajes(m.marcajes ?? []);
       if (m.empresa?.nombre) setEmpresaNombre(String(m.empresa.nombre));
       if (m.horario) {
@@ -168,7 +166,6 @@ export default function MarcajesKioskoPage() {
           typeof m.geocerca.lng === "number" ? m.geocerca.lng : null,
         );
       }
-      if (me.user?.rol) setRolUsuario(String(me.user.rol));
     } finally {
       setLoading(false);
     }
@@ -258,7 +255,9 @@ export default function MarcajesKioskoPage() {
         <div>
           <h1 className="text-2xl font-semibold">
             Registro de Marcajes
-            {empresaNombre ? ` – ${empresaNombre}` : ""}
+            {empresaNombre || nombreSesion
+              ? ` – ${empresaNombre || nombreSesion}`
+              : ""}
           </h1>
           <p className="text-sm text-[var(--muted)]">
             Entrada / salida automática por código (misma lógica que Control de
@@ -278,7 +277,7 @@ export default function MarcajesKioskoPage() {
             </p>
           ) : null}
         </div>
-        {rolUsuario && rolUsuario !== "Marcaje" ? (
+        {rolSesion && rolSesion !== "Marcaje" ? (
           <Link
             href={`/e/${slug}/rrhh/marcajes/manual`}
             className="rounded-lg bg-[#1e293b] px-3 py-2 text-xs text-[var(--muted)] hover:text-white"

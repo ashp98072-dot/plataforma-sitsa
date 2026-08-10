@@ -55,7 +55,13 @@ export default function TmsPage() {
     enRuta: 0,
   });
   const [selected, setSelected] = useState<number | null>(null);
-  type EmpOps = { id: number; codigo: string; nombre: string; categoriaOps: string };
+  type EmpOps = {
+    id: number;
+    codigo: string;
+    nombre: string;
+    puesto?: string;
+    categoriaOps: string;
+  };
   const [form, setForm] = useState({
     codigo: "",
     fechaPlan: new Date().toISOString().slice(0, 10),
@@ -139,16 +145,15 @@ export default function TmsPage() {
   );
 
   const cargar = useCallback(async () => {
-    const [res, cat, pil, aux] = await Promise.all([
+    const [res, cat, ops] = await Promise.all([
       fetch(`/api/empresas/${slug}/tms/planes`),
       fetch(`/api/empresas/${slug}/tms/catalogos`),
-      fetch(`/api/empresas/${slug}/rrhh/personal-ops?tipo=Piloto`),
-      fetch(`/api/empresas/${slug}/rrhh/personal-ops?tipo=Auxiliar`),
+      // Una sola carga de personal RRHH (antes: 2 requests Piloto + Auxiliar).
+      fetch(`/api/empresas/${slug}/rrhh/personal-ops?tipo=all`),
     ]);
     const data = await res.json();
     const c = await cat.json();
-    const p = await pil.json();
-    const a = await aux.json();
+    const o = await ops.json();
     if (res.ok) {
       setPlanes(data.planes ?? []);
       const vd =
@@ -174,8 +179,30 @@ export default function TmsPage() {
         personal: (c.personal ?? []).length,
       });
     }
-    if (pil.ok) setPilotos(p.personal ?? []);
-    if (aux.ok) setAuxiliares(a.personal ?? []);
+    if (ops.ok) {
+      const list = (o.personal ?? []) as EmpOps[];
+      const match = (p: EmpOps, kind: "piloto" | "auxiliar") => {
+        const cat = (p.categoriaOps || "").toLowerCase();
+        const puesto = (p.puesto || "").toLowerCase();
+        if (kind === "piloto") {
+          return (
+            p.categoriaOps === "Piloto" ||
+            cat.includes("piloto") ||
+            puesto.includes("piloto")
+          );
+        }
+        return (
+          p.categoriaOps === "Auxiliar" ||
+          cat.includes("auxiliar") ||
+          puesto.includes("auxiliar")
+        );
+      };
+      const pilotosFil = list.filter((p) => match(p, "piloto"));
+      const auxFil = list.filter((p) => match(p, "auxiliar"));
+      // Misma lógica que la API: si no hay match, usar todos los activos.
+      setPilotos(pilotosFil.length ? pilotosFil : list);
+      setAuxiliares(auxFil.length ? auxFil : list);
+    }
   }, [slug]);
 
   useEffect(() => {

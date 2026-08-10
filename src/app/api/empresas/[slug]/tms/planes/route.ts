@@ -76,12 +76,17 @@ export async function GET(req: Request, ctx: Ctx) {
     query<RowDataPacket[]>(
       `SELECT p.id, p.codigo, p.fecha_plan, p.hora_carga, p.estado, p.tipo_traslado, p.notas,
               c.nombre AS cliente, u.placa, pil.nombre AS piloto, aux.nombre AS auxiliar,
-              (SELECT COUNT(*) FROM tms_evidencias ev WHERE ev.plan_id = p.id) AS evidencias
+              COALESCE(ev.cnt, 0) AS evidencias
        FROM tms_planes_viaje p
        LEFT JOIN tms_clientes c ON c.id = p.cliente_id
        LEFT JOIN tms_unidades u ON u.id = p.unidad_id
        LEFT JOIN tms_personal pil ON pil.id = p.piloto_id
        LEFT JOIN tms_personal aux ON aux.id = p.auxiliar_id
+       LEFT JOIN (
+         SELECT plan_id, COUNT(*) AS cnt
+         FROM tms_evidencias
+         GROUP BY plan_id
+       ) ev ON ev.plan_id = p.id
        WHERE p.empresa_id = ?
        ORDER BY p.fecha_plan DESC, p.id DESC
        LIMIT 200`,

@@ -1,16 +1,53 @@
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
-import { requireTenantModulo } from "@/lib/tenant";
+import {
+  esRrhhSubmodulo,
+  permisosEfectivos,
+  tienePermiso,
+} from "@/lib/permisos";
+import { modulosPorRol, type RolGlobal } from "@/lib/roles";
+import { requireTenant } from "@/lib/tenant";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
 /** Empleados operativos desde RRHH para TMS (pilotos / auxiliares). */
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  let guard = await requireTenantModulo(slug, "tms");
-  if (guard.error) guard = await requireTenantModulo(slug, "rrhh");
+  // Un solo requireTenant (antes se hacía 2× si TMS fallaba y caía a RRHH).
+  const guard = await requireTenant(slug);
   if (guard.error) return guard.error;
+
+  const { session, empresa } = guard;
+  if (session.rol !== "Admin") {
+    const empresaMods = empresa.modulos.length
+      ? empresa.modulos
+      : modulosPorRol(session.rol);
+    const perms = await permisosEfectivos(
+      session.id,
+      session.rol as RolGlobal,
+    );
+    const rolMods = modulosPorRol(session.rol);
+    const canTms =
+      (empresaMods.includes("tms") || rolMods.includes("tms")) &&
+      (perms.length === 0
+        ? rolMods.includes("tms")
+        : tienePermiso(perms, "tms", "ver"));
+    const canRrhh =
+      (empresaMods.includes("rrhh") || rolMods.includes("rrhh")) &&
+      (perms.length === 0
+        ? rolMods.includes("rrhh")
+        : tienePermiso(perms, "rrhh", "ver") ||
+          perms.some(
+            (p) => esRrhhSubmodulo(p.modulo) && tienePermiso(perms, p.modulo, "ver"),
+          ));
+    if (!canTms && !canRrhh) {
+      return NextResponse.json(
+        { error: "Sin permiso de módulo." },
+        { status: 403 },
+      );
+    }
+  }
 
   const tipo = (new URL(req.url).searchParams.get("tipo") ?? "all").trim();
 

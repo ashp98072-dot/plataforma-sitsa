@@ -43,6 +43,7 @@ const vacio: FormState = {
 export function ClientesClient({ slug, puedeEditar }: Props) {
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [q, setQ] = useState("");
+  const [qDebounced, setQDebounced] = useState("");
   const [estado, setEstado] = useState("Activo");
   const [form, setForm] = useState<FormState>(vacio);
   const [editId, setEditId] = useState<number | null>(null);
@@ -50,11 +51,16 @@ export function ClientesClient({ slug, puedeEditar }: Props) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
+  useEffect(() => {
+    const t = setTimeout(() => setQDebounced(q), 300);
+    return () => clearTimeout(t);
+  }, [q]);
+
   const cargar = useCallback(async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams();
-      if (q.trim()) params.set("q", q.trim());
+      if (qDebounced.trim()) params.set("q", qDebounced.trim());
       if (estado) params.set("estado", estado);
       const res = await fetch(
         `/api/empresas/${slug}/clientes?${params.toString()}`,
@@ -65,7 +71,7 @@ export function ClientesClient({ slug, puedeEditar }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [slug, q, estado]);
+  }, [slug, qDebounced, estado]);
 
   useEffect(() => {
     void cargar();

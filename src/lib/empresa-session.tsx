@@ -6,11 +6,15 @@ import type { PermisoModulo } from "@/lib/permisos-shared";
 export type EmpresaSessionValue = {
   rol: string;
   permisos: PermisoModulo[];
+  empresaNombre: string;
+  username: string;
 };
 
 const EmpresaSessionContext = createContext<EmpresaSessionValue>({
   rol: "",
   permisos: [],
+  empresaNombre: "",
+  username: "",
 });
 
 function samePermisos(a: PermisoModulo[], b: PermisoModulo[]) {
@@ -35,16 +39,25 @@ function samePermisos(a: PermisoModulo[], b: PermisoModulo[]) {
 export function EmpresaSessionProvider({
   rol,
   permisos,
+  empresaNombre,
+  username,
   children,
 }: EmpresaSessionValue & { children: React.ReactNode }) {
   // Evitar churn de context al navegar: el layout RSC manda arrays nuevos
   // con el mismo contenido y re-renderiza Flota/RRHH sin necesidad.
-  const valueRef = useRef<EmpresaSessionValue>({ rol, permisos });
+  const valueRef = useRef<EmpresaSessionValue>({
+    rol,
+    permisos,
+    empresaNombre,
+    username,
+  });
   if (
     valueRef.current.rol !== rol ||
+    valueRef.current.empresaNombre !== empresaNombre ||
+    valueRef.current.username !== username ||
     !samePermisos(valueRef.current.permisos, permisos)
   ) {
-    valueRef.current = { rol, permisos };
+    valueRef.current = { rol, permisos, empresaNombre, username };
   }
 
   return (
@@ -54,7 +67,7 @@ export function EmpresaSessionProvider({
   );
 }
 
-/** Sesión ya resuelta en el layout (evita /api/auth/me en Flota). */
+/** Sesión ya resuelta en el layout (evita /api/auth/me en Flota/RRHH). */
 export function useEmpresaSession(): EmpresaSessionValue {
   return useContext(EmpresaSessionContext);
 }

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { useEmpresaSession } from "@/lib/empresa-session";
 
 type Stats = {
   totalEmpleados: number;
@@ -13,18 +14,22 @@ type Stats = {
 
 export default function DashboardRrhhPage() {
   const slug = String(useParams().slug);
+  const { empresaNombre } = useEmpresaSession();
   const [stats, setStats] = useState<Stats | null>(null);
-  const [empresa, setEmpresa] = useState("");
+  const [empresa, setEmpresa] = useState(empresaNombre);
 
   useEffect(() => {
+    let cancelled = false;
     void (async () => {
       const res = await fetch(`/api/empresas/${slug}/rrhh/dashboard`);
       const data = await res.json();
-      if (res.ok) {
-        setStats(data.stats);
-        setEmpresa(data.empresa ?? "");
-      }
+      if (!res.ok || cancelled) return;
+      setStats(data.stats);
+      if (data.empresa) setEmpresa(String(data.empresa));
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [slug]);
 
   const cards = [

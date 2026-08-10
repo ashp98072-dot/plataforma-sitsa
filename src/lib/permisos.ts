@@ -1,4 +1,5 @@
 import type { RowDataPacket } from "mysql2";
+import { cache } from "react";
 import { execute, query } from "@/lib/db";
 import type { RolGlobal } from "@/lib/roles";
 import {
@@ -60,7 +61,7 @@ export async function listarPermisosUsuario(
   }
 }
 
-export async function permisosEfectivos(
+async function permisosEfectivosUncached(
   usuarioId: number,
   rol: RolGlobal,
 ): Promise<PermisoModulo[]> {
@@ -111,6 +112,9 @@ export async function permisosEfectivos(
   permisosCache.set(cacheKey, { at: Date.now(), data });
   return data;
 }
+
+/** Dedup por request + TTL entre requests. */
+export const permisosEfectivos = cache(permisosEfectivosUncached);
 
 export async function guardarPermisosUsuario(
   usuarioId: number,

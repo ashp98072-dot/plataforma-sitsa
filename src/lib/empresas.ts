@@ -1,4 +1,5 @@
 import type { RowDataPacket } from "mysql2";
+import { cache } from "react";
 import { query } from "./db";
 import { rolVeTodasLasEmpresas, type RolGlobal } from "./roles";
 
@@ -82,7 +83,7 @@ export function invalidarCacheEmpresa(opts: {
   userEmpresasCache.clear();
 }
 
-export async function obtenerEmpresaPorSlug(
+export async function obtenerEmpresaPorSlugUncached(
   slug: string,
 ): Promise<Empresa | null> {
   const hit = slugCache.get(slug);
@@ -97,15 +98,18 @@ export async function obtenerEmpresaPorSlug(
   return data;
 }
 
-export async function empresasParaUsuario(input: {
-  usuarioId: number;
-  rol: RolGlobal;
-  accesoTodas: boolean;
-}): Promise<Empresa[]> {
-  if (input.accesoTodas || rolVeTodasLasEmpresas(input.rol)) {
+/** Dedup por request (layout + APIs concurrentes) + TTL entre requests. */
+export const obtenerEmpresaPorSlug = cache(obtenerEmpresaPorSlugUncached);
+
+async function empresasParaUsuarioCached(
+  usuarioId: number,
+  rol: RolGlobal,
+  accesoTodas: boolean,
+): Promise<Empresa[]> {
+  if (accesoTodas || rolVeTodasLasEmpresas(rol)) {
     return listarEmpresasActivas();
   }
-  const key = String(input.usuarioId);
+  const key = String(usuarioId);
   const hit = userEmpresasCache.get(key);
   if (hit && Date.now() - hit.at < TTL_MS) return hit.data;
   const rows = await query<RowDataPacket[]>(
@@ -114,9 +118,24 @@ export async function empresasParaUsuario(input: {
      INNER JOIN usuario_empresa ue ON ue.empresa_id = e.id
      WHERE ue.usuario_id = ? AND e.activa = 1
      ORDER BY e.nombre`,
-    [input.usuarioId],
+    [usuarioId],
   );
   const data = rows.map(mapEmpresa);
   userEmpresasCache.set(key, { at: Date.now(), data });
   return data;
+}
+
+const empresasParaUsuarioMemo = cache(empresasParaUsuarioCached);
+
+/** Misma API pública; cachea por primitivos (objetos literales no deduplican). */
+export function empresasParaUsuario(input: {
+  usuarioId: number;
+  rol: RolGlobal;
+  accesoTodas: boolean;
+}): Promise<Empresa[]> {
+  return empresasParaUsuarioMemo(
+    input.usuarioId,
+    input.rol,
+    Boolean(input.accesoTodas),
+  );
 }

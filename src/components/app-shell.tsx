@@ -485,7 +485,12 @@ export function AppShell({
   }
 
   return (
-    <EmpresaSessionProvider rol={rol} permisos={permisos ?? []}>
+    <EmpresaSessionProvider
+      rol={rol}
+      permisos={permisos ?? []}
+      empresaNombre={empresaNombre}
+      username={username}
+    >
     <div className="min-h-screen md:grid md:grid-cols-[260px_1fr]">
       {menuOpen ? (
         <button

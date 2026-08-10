@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { horaAhora } from "@/lib/rrhh/dates";
+import { useEmpresaSession } from "@/lib/empresa-session";
 
 type Emp = { id: number; codigo: string; nombre: string };
 
@@ -11,6 +12,7 @@ type Emp = { id: number; codigo: string; nombre: string };
 export default function MarcajeManualPage() {
   const slug = String(useParams().slug);
   const router = useRouter();
+  const { rol } = useEmpresaSession();
   const [empleados, setEmpleados] = useState<Emp[]>([]);
   const [buscar, setBuscar] = useState("");
   const [empleadoId, setEmpleadoId] = useState(0);
@@ -30,8 +32,7 @@ export default function MarcajeManualPage() {
   const [allowed, setAllowed] = useState(false);
 
   const cargar = useCallback(async () => {
-    const me = await fetch("/api/auth/me").then((r) => r.json());
-    if (me.user?.rol === "Marcaje") {
+    if (rol === "Marcaje") {
       router.replace(`/e/${slug}/rrhh/marcajes`);
       return;
     }
@@ -40,7 +41,7 @@ export default function MarcajeManualPage() {
       r.json(),
     );
     setEmpleados(e.empleados ?? []);
-  }, [slug, router]);
+  }, [slug, router, rol]);
 
   const cargarRegistros = useCallback(async () => {
     const res = await fetch(

@@ -7,8 +7,10 @@ type Props = { params: Promise<{ slug: string }> };
 
 export default async function DashboardPage({ params }: Props) {
   const { slug } = await params;
-  const session = await getSession();
-  const empresa = await obtenerEmpresaPorSlug(slug);
+  const [session, empresa] = await Promise.all([
+    getSession(),
+    obtenerEmpresaPorSlug(slug),
+  ]);
   if (!session || !empresa) return null;
 
   const empMods = new Set(empresa.modulos as string[]);

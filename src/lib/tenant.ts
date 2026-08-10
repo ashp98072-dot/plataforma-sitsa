@@ -39,18 +39,20 @@ export async function requireTenant(slug: string): Promise<Ok | Fail> {
     };
   }
 
-  const empresa = await obtenerEmpresaPorSlug(slug);
+  // Empresa + lista de acceso en paralelo (misma latencia, menos round-trips).
+  const [empresa, permitidas] = await Promise.all([
+    obtenerEmpresaPorSlug(slug),
+    empresasParaUsuario({
+      usuarioId: session.id,
+      rol: session.rol,
+      accesoTodas: Boolean(session.accesoTodas),
+    }),
+  ]);
   if (!empresa || !empresa.activa) {
     return {
       error: NextResponse.json({ error: "Empresa no encontrada." }, { status: 404 }),
     };
   }
-
-  const permitidas = await empresasParaUsuario({
-    usuarioId: session.id,
-    rol: session.rol,
-    accesoTodas: Boolean(session.accesoTodas),
-  });
   if (!permitidas.some((e) => e.id === empresa.id)) {
     return {
       error: NextResponse.json({ error: "Sin acceso a esta empresa." }, { status: 403 }),

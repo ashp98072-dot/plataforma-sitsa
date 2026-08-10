@@ -9,8 +9,8 @@ import {
   useState,
   type FormEvent,
 } from "react";
+import dynamic from "next/dynamic";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { InventarioEquipoPanel } from "@/components/flota/inventario-equipo";
 import {
   FLOTA_NAV,
   tienePermiso,
@@ -27,7 +27,6 @@ import {
   type GeoCoords,
 } from "@/lib/flota/photo-meta";
 import { normalizarFotoCamara, normalizarFotosCamara } from "@/lib/flota/camera-file";
-import { TomarFotoButton } from "@/components/flota/tomar-foto";
 import { ImportErroresLista } from "@/components/import-errores-lista";
 import { resolverVehiculoPorPlacaInput } from "@/lib/flota/placa";
 import { useEmpresaSession } from "@/lib/empresa-session";
@@ -37,6 +36,25 @@ import {
   formatearTimestampVisible,
   hoyLocal,
 } from "@/lib/rrhh/dates";
+
+const InventarioEquipoPanel = dynamic(
+  () =>
+    import("@/components/flota/inventario-equipo").then(
+      (m) => m.InventarioEquipoPanel,
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <p className="text-sm text-[var(--muted)]">Cargando inventario…</p>
+    ),
+  },
+);
+
+const TomarFotoButton = dynamic(
+  () =>
+    import("@/components/flota/tomar-foto").then((m) => m.TomarFotoButton),
+  { ssr: false },
+);
 
 function normPiloto(nombre: string): string {
   return nombre
