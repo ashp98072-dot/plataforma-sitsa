@@ -18,6 +18,7 @@ import {
   formatoErrorImport,
   identidadVehiculoImport,
 } from "@/lib/import-errores";
+import { KM_INTERVALO_SERVICIO_DEFAULT } from "@/lib/flota/constants";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -131,7 +132,9 @@ export async function POST(req: Request, ctx: Ctx) {
 
       const kmActual = f.kmActual ?? 0;
       const kmIntervalo =
-        f.kmIntervalo && f.kmIntervalo > 0 ? f.kmIntervalo : 10000;
+        f.kmIntervalo && f.kmIntervalo > 0
+          ? f.kmIntervalo
+          : KM_INTERVALO_SERVICIO_DEFAULT;
       const kmUltimo = f.kmUltimoServicio ?? 0;
       const filtros = parsearFiltrosTexto(f.filtros);
 

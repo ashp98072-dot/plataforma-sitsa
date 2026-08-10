@@ -390,7 +390,7 @@ CREATE TABLE IF NOT EXISTS flota_vehiculos (
   condicion_propiedad VARCHAR(120) NULL,
   seguros VARCHAR(120) NULL,
   km_actual INT NULL,
-  km_intervalo_servicio INT NOT NULL DEFAULT 10000,
+  km_intervalo_servicio INT NOT NULL DEFAULT 5000,
   km_ultimo_servicio INT NULL,
   fecha_ultimo_servicio DATE NULL,
   en_taller TINYINT(1) NOT NULL DEFAULT 0,

@@ -68,7 +68,7 @@ export async function generarPlantillaFlota(): Promise<Buffer> {
     "2024",
     "Blanco",
     "125000",
-    "10000",
+    "5000",
     "120000",
     "22.5",
     "295/80R22.5",
@@ -90,7 +90,7 @@ export async function generarPlantillaFlota(): Promise<Buffer> {
   help.addRow(["Campo", "Notas"]);
   help.getRow(1).font = { bold: true };
   help.addRow(["placa", "Obligatoria. Única por empresa."]);
-  help.addRow(["km_intervalo", "Km entre servicios (default 10000)."]);
+  help.addRow(["km_intervalo", "Km entre servicios (default 5000)."]);
   help.addRow(["filtros", "Separar con |  →  Tipo:código | Tipo:código"]);
   help.addRow([
     "Base coordinador",

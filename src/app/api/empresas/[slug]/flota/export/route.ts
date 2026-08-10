@@ -15,6 +15,7 @@ import {
   formatearFiltrosCorto,
   listarFiltrosPorVehiculos,
 } from "@/lib/flota/filtros";
+import { KM_INTERVALO_SERVICIO_DEFAULT } from "@/lib/flota/constants";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -257,7 +258,7 @@ export async function GET(req: Request, ctx: Ctx) {
           r.km_ultimo_servicio == null
             ? null
             : Number(r.km_ultimo_servicio),
-          Number(r.km_intervalo_servicio ?? 10000),
+          Number(r.km_intervalo_servicio ?? KM_INTERVALO_SERVICIO_DEFAULT),
         );
         const listaFiltros = filtrosMap.get(Number(r.id)) ?? [];
         let filtrosTxt = listaFiltros

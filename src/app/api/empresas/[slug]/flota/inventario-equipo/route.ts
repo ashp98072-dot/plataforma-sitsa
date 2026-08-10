@@ -37,6 +37,18 @@ export async function GET(req: Request, ctx: Ctx) {
   });
 }
 
+const itemLoteSchema = z.object({
+  codigo: z.string().max(80).optional().nullable(),
+  nombre: z.string().min(1).max(200),
+  categoriaId: z.number().int().positive().nullable().optional(),
+  cantidad: z.number().int().min(0).default(1),
+  unidad: z.string().max(40).default("Unidad"),
+  marca: z.string().max(80).optional().nullable(),
+  serie: z.string().max(120).optional().nullable(),
+  estado: z.string().max(40).default("Activo"),
+  notas: z.string().max(2000).optional().nullable(),
+});
+
 const schema = z.object({
   codigo: z.string().min(1).max(80),
   nombre: z.string().min(1).max(200),
@@ -53,13 +65,116 @@ const schema = z.object({
   notas: z.string().max(2000).optional().nullable(),
 });
 
+/** Lote: un empleado + varias herramientas en una sola petición. */
+const loteSchema = z.object({
+  lote: z.literal(true),
+  propiedad: z.literal("empleado"),
+  empleadoId: z.number().int().positive(),
+  items: z.array(itemLoteSchema).min(1).max(80),
+});
+
+async function resolverEmpleadoNombre(
+  empresaId: number,
+  empleadoId: number,
+): Promise<string | null> {
+  const emp = await query<RowDataPacket[]>(
+    `SELECT id, nombre FROM empleados
+     WHERE id = ? AND empresa_id = ? LIMIT 1`,
+    [empleadoId, empresaId],
+  );
+  return emp[0] ? String(emp[0].nombre) : null;
+}
+
+function codigoAuto(idx = 0): string {
+  return `EQ-${Date.now().toString(36).toUpperCase()}${idx ? `-${idx}` : ""}`;
+}
+
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenantFlota(slug, "flota_inventario", "crear");
   if (guard.error) return guard.error;
 
   await asegurarInventarioEquipo(guard.empresa.id);
-  const parsed = schema.safeParse(await req.json());
+  const body = await req.json().catch(() => null);
+
+  // --- Lote por empleado ---
+  if (body && typeof body === "object" && body.lote === true) {
+    const parsed = loteSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: "Datos de lote inválidos. Revisa empleado y herramientas." },
+        { status: 400 },
+      );
+    }
+    const d = parsed.data;
+    const empleadoNombre = await resolverEmpleadoNombre(
+      guard.empresa.id,
+      d.empleadoId,
+    );
+    if (!empleadoNombre) {
+      return NextResponse.json(
+        { error: "Empleado no encontrado en RRHH de esta empresa." },
+        { status: 400 },
+      );
+    }
+
+    let creados = 0;
+    const errores: string[] = [];
+    for (let i = 0; i < d.items.length; i++) {
+      const it = d.items[i]!;
+      const nombre = it.nombre.trim();
+      if (!nombre) continue;
+      const codigo = (it.codigo?.trim() || codigoAuto(i + 1)).slice(0, 80);
+      try {
+        await execute(
+          `INSERT INTO flota_inv_equipo
+            (empresa_id, codigo, nombre, categoria_id, propiedad, area_id,
+             empleado_id, empleado_nombre, cantidad, unidad, marca, serie, estado, notas)
+           VALUES (?, ?, ?, ?, 'empleado', NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            guard.empresa.id,
+            codigo,
+            nombre,
+            it.categoriaId ?? null,
+            d.empleadoId,
+            empleadoNombre,
+            it.cantidad ?? 1,
+            it.unidad || "Unidad",
+            it.marca?.trim() || null,
+            it.serie?.trim() || null,
+            it.estado || "Activo",
+            it.notas?.trim() || null,
+          ],
+        );
+        creados += 1;
+      } catch (err) {
+        const code =
+          typeof err === "object" && err && "code" in err
+            ? String((err as { code?: string }).code)
+            : "";
+        errores.push(
+          code === "ER_DUP_ENTRY"
+            ? `${nombre}: código duplicado (${codigo})`
+            : `${nombre}: no se pudo guardar`,
+        );
+      }
+    }
+
+    if (!creados && errores.length) {
+      return NextResponse.json(
+        { error: errores[0] ?? "No se pudo guardar el lote.", errores },
+        { status: 400 },
+      );
+    }
+    return NextResponse.json({
+      mensaje: `Inventario de ${empleadoNombre}: ${creados} herramienta(s) agregada(s).`,
+      creados,
+      errores: errores.slice(0, 20),
+    });
+  }
+
+  // --- Ítem único (empresa o empleado) ---
+  const parsed = schema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
   }
@@ -80,18 +195,16 @@ export async function POST(req: Request, ctx: Ctx) {
 
   let empleadoNombre = d.empleadoNombre?.trim() || null;
   if (d.empleadoId) {
-    const emp = await query<RowDataPacket[]>(
-      `SELECT id, nombre FROM empleados
-       WHERE id = ? AND empresa_id = ? LIMIT 1`,
-      [d.empleadoId, guard.empresa.id],
+    empleadoNombre = await resolverEmpleadoNombre(
+      guard.empresa.id,
+      d.empleadoId,
     );
-    if (!emp[0]) {
+    if (!empleadoNombre) {
       return NextResponse.json(
         { error: "Empleado no encontrado en RRHH de esta empresa." },
         { status: 400 },
       );
     }
-    empleadoNombre = String(emp[0].nombre);
   }
 
   try {

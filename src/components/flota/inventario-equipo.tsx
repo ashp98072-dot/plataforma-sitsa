@@ -55,6 +55,15 @@ type Resumen = {
   porEmpleado: { empleado: string; cantidad: number; items: number }[];
 };
 
+type FilaLote = {
+  key: string;
+  nombre: string;
+  cantidad: number;
+  categoriaId: number;
+  unidad: string;
+  marca: string;
+};
+
 const input =
   "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
 
@@ -73,6 +82,17 @@ const emptyForm = {
   notas: "",
 };
 
+function filaVacia(): FilaLote {
+  return {
+    key: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    nombre: "",
+    cantidad: 1,
+    categoriaId: 0,
+    unidad: "Unidad",
+    marca: "",
+  };
+}
+
 export function InventarioEquipoPanel({ slug, can }: Props) {
   const [vista, setVista] = useState<"empresa" | "empleado" | "catalogos">(
     "empresa",
@@ -84,6 +104,11 @@ export function InventarioEquipoPanel({ slug, can }: Props) {
   const [resumen, setResumen] = useState<Resumen | null>(null);
   const [q, setQ] = useState("");
   const [form, setForm] = useState(emptyForm);
+  const [empleadoLoteId, setEmpleadoLoteId] = useState(0);
+  const [empFiltro, setEmpFiltro] = useState("");
+  const [filasLote, setFilasLote] = useState<FilaLote[]>(() =>
+    Array.from({ length: 5 }, () => filaVacia()),
+  );
   const [catNombre, setCatNombre] = useState("");
   const [areaNombre, setAreaNombre] = useState("");
   const [msg, setMsg] = useState("");
@@ -100,7 +125,6 @@ export function InventarioEquipoPanel({ slug, can }: Props) {
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
-    // Solo spinner completo en la primera carga; refrescos mantienen la UI.
     if (!tieneDatos.current) setLoading(true);
     setErr("");
     try {
@@ -143,6 +167,21 @@ export function InventarioEquipoPanel({ slug, can }: Props) {
     }
   }, [vista, cargarEmpleados]);
 
+  const empleadosFiltrados = useMemo(() => {
+    const term = empFiltro.trim().toLowerCase();
+    if (!term) return empleados;
+    return empleados.filter((e) =>
+      `${e.codigo} ${e.nombre} ${e.puesto}`.toLowerCase().includes(term),
+    );
+  }, [empleados, empFiltro]);
+
+  const itemsEmpleadoSeleccionado = useMemo(() => {
+    if (!empleadoLoteId) return [];
+    return items.filter(
+      (i) => i.propiedad === "empleado" && i.empleadoId === empleadoLoteId,
+    );
+  }, [items, empleadoLoteId]);
+
   const filtrados = useMemo(() => {
     if (vista === "catalogos") return [];
     const s = q.trim().toLowerCase();
@@ -172,12 +211,15 @@ export function InventarioEquipoPanel({ slug, can }: Props) {
     setErr("");
     try {
       const body = {
-        codigo: form.codigo.trim() || `EQ-${Date.now().toString(36).toUpperCase()}`,
+        codigo:
+          form.codigo.trim() ||
+          `EQ-${Date.now().toString(36).toUpperCase()}`,
         nombre: form.nombre.trim(),
         categoriaId: form.categoriaId || null,
         propiedad: form.propiedad,
         areaId: form.propiedad === "empresa" ? form.areaId || null : null,
-        empleadoId: form.propiedad === "empleado" ? form.empleadoId || null : null,
+        empleadoId:
+          form.propiedad === "empleado" ? form.empleadoId || null : null,
         cantidad: Number(form.cantidad) || 0,
         unidad: form.unidad || "Unidad",
         marca: form.marca.trim() || null,
@@ -194,6 +236,56 @@ export function InventarioEquipoPanel({ slug, can }: Props) {
       if (!res.ok) throw new Error(data.error ?? "No se pudo guardar.");
       setMsg(data.mensaje ?? "Guardado.");
       setForm({ ...emptyForm, propiedad: form.propiedad });
+      await cargar();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function guardarLoteEmpleado() {
+    if (!can("flota_inventario", "crear")) return;
+    if (!empleadoLoteId) {
+      setErr("Selecciona el empleado.");
+      return;
+    }
+    const itemsOk = filasLote
+      .map((f) => ({
+        nombre: f.nombre.trim(),
+        cantidad: Number(f.cantidad) || 0,
+        categoriaId: f.categoriaId || null,
+        unidad: f.unidad.trim() || "Unidad",
+        marca: f.marca.trim() || null,
+      }))
+      .filter((f) => f.nombre);
+
+    if (!itemsOk.length) {
+      setErr("Escribe al menos una herramienta con nombre.");
+      return;
+    }
+
+    setSaving(true);
+    setMsg("");
+    setErr("");
+    try {
+      const res = await fetch(base, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lote: true,
+          propiedad: "empleado",
+          empleadoId: empleadoLoteId,
+          items: itemsOk,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "No se pudo guardar el lote.");
+      setMsg(data.mensaje ?? "Lote guardado.");
+      if (Array.isArray(data.errores) && data.errores.length) {
+        setErr(data.errores.slice(0, 5).join(" · "));
+      }
+      setFilasLote(Array.from({ length: 5 }, () => filaVacia()));
       await cargar();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Error");
@@ -252,13 +344,19 @@ export function InventarioEquipoPanel({ slug, can }: Props) {
     await cargar();
   }
 
+  function patchFila(key: string, patch: Partial<FilaLote>) {
+    setFilasLote((rows) =>
+      rows.map((r) => (r.key === key ? { ...r, ...patch } : r)),
+    );
+  }
+
   return (
     <div className="space-y-4">
       <div>
         <h2 className="text-lg font-semibold">Inventario de equipo</h2>
         <p className="text-sm text-[var(--muted)]">
-          Herramientas de la empresa por área, y herramientas propias de
-          mecánicos, electricistas, herreros, etc. (empleados de RRHH).
+          Herramientas de la empresa por área, y por empleado: carga varias
+          herramientas de una vez (cantidades incluidas).
         </p>
       </div>
 
@@ -291,7 +389,7 @@ export function InventarioEquipoPanel({ slug, can }: Props) {
         {(
           [
             ["empresa", "De la empresa"],
-            ["empleado", "Propias del empleado"],
+            ["empleado", "Por empleado"],
             ["catalogos", "Categorías y áreas"],
           ] as const
         ).map(([id, label]) => (
@@ -422,19 +520,14 @@ export function InventarioEquipoPanel({ slug, can }: Props) {
         </div>
       ) : (
         <>
-          {can("flota_inventario", "crear") ? (
+          {can("flota_inventario", "crear") && vista === "empresa" ? (
             <section className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
               <p className="text-sm font-medium">
-                {vista === "empresa"
-                  ? "Registrar herramienta de la empresa"
-                  : "Registrar herramienta propia del empleado"}
+                Registrar herramienta de la empresa
               </p>
               <p className="text-xs text-[var(--muted)]">
-                <strong>Código</strong> = identificador de la{" "}
-                <em>herramienta</em> (ej. DES-01). No es el empleado.
-                {vista === "empleado"
-                  ? " El trabajador se elige en el selector Empleado RRHH."
-                  : " Si lo dejas vacío se genera solo."}
+                <strong>Código</strong> = identificador de la herramienta (ej.
+                DES-01). Si lo dejas vacío se genera solo.
               </p>
               <div className="flex flex-wrap gap-2">
                 <label className="text-xs text-[var(--muted)]">
@@ -481,53 +574,28 @@ export function InventarioEquipoPanel({ slug, can }: Props) {
                       ))}
                   </select>
                 </label>
-                {vista === "empresa" ? (
-                  <label className="text-xs text-[var(--muted)]">
-                    Área
-                    <select
-                      className={`${input} mt-1 block`}
-                      value={form.areaId}
-                      onChange={(e) =>
-                        setForm((f) => ({
-                          ...f,
-                          areaId: Number(e.target.value),
-                        }))
-                      }
-                    >
-                      <option value={0}>— Área —</option>
-                      {areas
-                        .filter((a) => a.activa)
-                        .map((a) => (
-                          <option key={a.id} value={a.id}>
-                            {a.nombre}
-                          </option>
-                        ))}
-                    </select>
-                  </label>
-                ) : (
-                  <label className="min-w-[14rem] text-xs text-[var(--muted)]">
-                    Empleado RRHH
-                    <select
-                      className={`${input} mt-1 block min-w-[14rem]`}
-                      value={form.empleadoId}
-                      onChange={(e) =>
-                        setForm((f) => ({
-                          ...f,
-                          empleadoId: Number(e.target.value),
-                        }))
-                      }
-                    >
-                      <option value={0}>— Empleado RRHH —</option>
-                      {empleados.map((e) => (
-                        <option key={e.id} value={e.id}>
-                          {e.codigo ? `${e.codigo} · ` : ""}
-                          {e.nombre}
-                          {e.puesto ? ` · ${e.puesto}` : ""}
+                <label className="text-xs text-[var(--muted)]">
+                  Área
+                  <select
+                    className={`${input} mt-1 block`}
+                    value={form.areaId}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        areaId: Number(e.target.value),
+                      }))
+                    }
+                  >
+                    <option value={0}>— Área —</option>
+                    {areas
+                      .filter((a) => a.activa)
+                      .map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.nombre}
                         </option>
                       ))}
-                    </select>
-                  </label>
-                )}
+                  </select>
+                </label>
                 <input
                   type="number"
                   min={0}
@@ -564,6 +632,188 @@ export function InventarioEquipoPanel({ slug, can }: Props) {
                   onClick={() => void guardarItem()}
                 >
                   {saving ? "Guardando…" : "Agregar"}
+                </button>
+              </div>
+            </section>
+          ) : null}
+
+          {can("flota_inventario", "crear") && vista === "empleado" ? (
+            <section className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+              <p className="text-sm font-medium">
+                Inventario por empleado (varias herramientas)
+              </p>
+              <p className="text-xs text-[var(--muted)]">
+                Elige al empleado y llena la lista: herramienta + cantidad (+
+                categoría/marca si quieres). Se guardan todas de una vez.
+              </p>
+
+              <div className="flex flex-wrap gap-2">
+                <label className="text-xs text-[var(--muted)]">
+                  Buscar empleado
+                  <input
+                    className={`${input} mt-1 block min-w-[14rem]`}
+                    placeholder="Nombre, código o puesto…"
+                    value={empFiltro}
+                    onChange={(e) => setEmpFiltro(e.target.value)}
+                  />
+                </label>
+                <label className="min-w-[16rem] flex-1 text-xs text-[var(--muted)]">
+                  Empleado RRHH
+                  <select
+                    className={`${input} mt-1 block w-full`}
+                    value={empleadoLoteId}
+                    onChange={(e) =>
+                      setEmpleadoLoteId(Number(e.target.value))
+                    }
+                  >
+                    <option value={0}>— Seleccionar empleado —</option>
+                    {empleadosFiltrados.map((e) => (
+                      <option key={e.id} value={e.id}>
+                        {e.codigo ? `${e.codigo} · ` : ""}
+                        {e.nombre}
+                        {e.puesto ? ` · ${e.puesto}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              {empleadoLoteId && itemsEmpleadoSeleccionado.length ? (
+                <p className="text-xs text-[var(--muted)]">
+                  Ya tiene {itemsEmpleadoSeleccionado.length} ítem(s) registrado(s)
+                  (
+                  {itemsEmpleadoSeleccionado.reduce(
+                    (a, i) => a + Number(i.cantidad || 0),
+                    0,
+                  )}{" "}
+                  uds). Lo que agregues abajo se suma al inventario.
+                </p>
+              ) : null}
+
+              <div className="overflow-x-auto rounded-lg border border-[var(--border)]">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="bg-[var(--thead)] text-xs uppercase text-[var(--muted)]">
+                    <tr>
+                      <th className="px-2 py-2">Herramienta</th>
+                      <th className="px-2 py-2">Cant.</th>
+                      <th className="px-2 py-2">Categoría</th>
+                      <th className="px-2 py-2">Marca</th>
+                      <th className="px-2 py-2">Unidad</th>
+                      <th className="px-2 py-2" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filasLote.map((fila, idx) => (
+                      <tr
+                        key={fila.key}
+                        className="border-t border-[var(--border)]"
+                      >
+                        <td className="px-2 py-1.5">
+                          <input
+                            className={`${input} w-full min-w-[10rem]`}
+                            placeholder={`Herramienta ${idx + 1}`}
+                            value={fila.nombre}
+                            onChange={(e) =>
+                              patchFila(fila.key, { nombre: e.target.value })
+                            }
+                          />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <input
+                            type="number"
+                            min={0}
+                            className={`${input} w-20`}
+                            value={fila.cantidad}
+                            onChange={(e) =>
+                              patchFila(fila.key, {
+                                cantidad: Number(e.target.value),
+                              })
+                            }
+                          />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <select
+                            className={input}
+                            value={fila.categoriaId}
+                            onChange={(e) =>
+                              patchFila(fila.key, {
+                                categoriaId: Number(e.target.value),
+                              })
+                            }
+                          >
+                            <option value={0}>—</option>
+                            {categorias
+                              .filter((c) => c.activa)
+                              .map((c) => (
+                                <option key={c.id} value={c.id}>
+                                  {c.nombre}
+                                </option>
+                              ))}
+                          </select>
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <input
+                            className={`${input} w-28`}
+                            placeholder="Marca"
+                            value={fila.marca}
+                            onChange={(e) =>
+                              patchFila(fila.key, { marca: e.target.value })
+                            }
+                          />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <input
+                            className={`${input} w-24`}
+                            value={fila.unidad}
+                            onChange={(e) =>
+                              patchFila(fila.key, { unidad: e.target.value })
+                            }
+                          />
+                        </td>
+                        <td className="px-2 py-1.5 text-right">
+                          <button
+                            type="button"
+                            className="text-xs text-red-400 hover:underline"
+                            onClick={() =>
+                              setFilasLote((rows) =>
+                                rows.length <= 1
+                                  ? [filaVacia()]
+                                  : rows.filter((r) => r.key !== fila.key),
+                              )
+                            }
+                          >
+                            Quitar
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm"
+                  onClick={() =>
+                    setFilasLote((rows) => [...rows, filaVacia()])
+                  }
+                >
+                  + Otra herramienta
+                </button>
+                <button
+                  type="button"
+                  disabled={
+                    saving ||
+                    !empleadoLoteId ||
+                    !filasLote.some((f) => f.nombre.trim())
+                  }
+                  className="rounded-lg bg-[var(--accent)] px-4 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+                  onClick={() => void guardarLoteEmpleado()}
+                >
+                  {saving
+                    ? "Guardando…"
+                    : "Guardar inventario del empleado"}
                 </button>
               </div>
             </section>

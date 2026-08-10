@@ -20,6 +20,7 @@ import {
   estiloAlertaKm,
   kmPendienteServicio,
 } from "@/lib/flota/import-excel";
+import { KM_INTERVALO_SERVICIO_DEFAULT } from "@/lib/flota/constants";
 import { etiquetaEmpresaVehiculo } from "@/lib/flota/empresas-alias";
 import {
   marcarVarias,
@@ -259,7 +260,7 @@ const emptyForm = {
   modelo: "",
   descripcion: "",
   kmActual: 0,
-  intervalo: 10000,
+  intervalo: KM_INTERVALO_SERVICIO_DEFAULT,
   rin: "",
   medidaLlanta: "",
   tipoAceite: "",
@@ -918,7 +919,7 @@ export default function FlotaClient() {
       const pendiente = kmPendienteServicio(
         v.km_actual,
         v.km_ultimo_servicio,
-        Number(v.km_intervalo_servicio || 10000),
+        Number(v.km_intervalo_servicio || KM_INTERVALO_SERVICIO_DEFAULT),
       );
       return pendiente != null && pendiente <= 0;
     }).length;
@@ -1053,7 +1054,9 @@ export default function FlotaClient() {
       modelo: v.modelo ?? "",
       descripcion: v.descripcion ?? "",
       kmActual: Number(v.km_actual ?? 0),
-      intervalo: Number(v.km_intervalo_servicio ?? 10000),
+      intervalo: Number(
+        v.km_intervalo_servicio ?? KM_INTERVALO_SERVICIO_DEFAULT,
+      ),
       rin: v.rin_llanta ?? "",
       medidaLlanta: v.medida_llanta ?? "",
       tipoAceite: v.tipo_aceite ?? "",
@@ -2652,7 +2655,7 @@ export default function FlotaClient() {
               const pendiente = kmPendienteServicio(
                 v.km_actual,
                 v.km_ultimo_servicio,
-                Number(v.km_intervalo_servicio || 10000),
+                Number(v.km_intervalo_servicio || KM_INTERVALO_SERVICIO_DEFAULT),
               );
               const alerta = estiloAlertaKm(pendiente);
               const enTaller = Boolean(v.en_taller);

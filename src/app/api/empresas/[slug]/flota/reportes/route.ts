@@ -8,6 +8,7 @@ import {
   asegurarSchemaFlotaLectura,
 } from "@/lib/flota/schema";
 import { hoyLocal } from "@/lib/rrhh/dates";
+import { KM_INTERVALO_SERVICIO_DEFAULT } from "@/lib/flota/constants";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -107,7 +108,9 @@ export async function GET(req: Request, ctx: Ctx) {
   const alertas = vehiculos.filter((v) => {
     if (v.en_taller) return false;
     const km = Number(v.km_actual ?? 0);
-    const intervalo = Number(v.km_intervalo_servicio ?? 10000);
+    const intervalo = Number(
+      v.km_intervalo_servicio ?? KM_INTERVALO_SERVICIO_DEFAULT,
+    );
     const ultimo = Number(v.km_ultimo_servicio ?? 0);
     return km - ultimo >= intervalo;
   });

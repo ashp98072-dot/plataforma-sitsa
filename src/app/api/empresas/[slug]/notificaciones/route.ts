@@ -4,6 +4,7 @@ import { query } from "@/lib/db";
 import { requireTenant } from "@/lib/tenant";
 import { kmPendienteServicio } from "@/lib/flota/import-excel";
 import { listarVehiculosParaAlertasKm } from "@/lib/flota/acceso";
+import { KM_INTERVALO_SERVICIO_DEFAULT } from "@/lib/flota/constants";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -91,7 +92,7 @@ export async function GET(_req: Request, ctx: Ctx) {
           const pend = kmPendienteServicio(
             Number(v.km_actual ?? 0),
             v.km_ultimo_servicio == null ? null : Number(v.km_ultimo_servicio),
-            Number(v.km_intervalo_servicio ?? 10000),
+            Number(v.km_intervalo_servicio ?? KM_INTERVALO_SERVICIO_DEFAULT),
           );
           if (pend != null && pend <= 1500) {
             alertas += 1;

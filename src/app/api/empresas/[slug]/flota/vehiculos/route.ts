@@ -19,6 +19,7 @@ import {
   listarFiltrosPorVehiculos,
   type FiltroVehiculo,
 } from "@/lib/flota/filtros";
+import { KM_INTERVALO_SERVICIO_DEFAULT } from "@/lib/flota/constants";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -101,7 +102,11 @@ const schema = z.object({
   chasis: z.string().optional(),
   capacidad: z.string().optional(),
   kmActual: z.number().int().nonnegative().default(0),
-  kmIntervaloServicio: z.number().int().positive().default(10000),
+  kmIntervaloServicio: z
+    .number()
+    .int()
+    .positive()
+    .default(KM_INTERVALO_SERVICIO_DEFAULT),
   credito: z.string().optional(),
   empresaActivo: z.string().optional(),
   nit: z.string().optional(),
