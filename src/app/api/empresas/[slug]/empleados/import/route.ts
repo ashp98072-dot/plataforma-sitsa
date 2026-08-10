@@ -12,6 +12,10 @@ import {
 } from "@/lib/rrhh/empleados";
 import { parsearPlantillaEmpleados } from "@/lib/rrhh/empleados-export";
 import { obtenerParametros } from "@/lib/rrhh/config";
+import {
+  formatoErrorImport,
+  identidadEmpleadoImport,
+} from "@/lib/import-errores";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -54,9 +58,19 @@ export async function POST(req: Request, ctx: Ctx) {
     const errores: string[] = [];
 
     for (const fila of filas) {
+      const identidad = identidadEmpleadoImport({
+        codigo: fila.codigo,
+        nombre: fila.nombre,
+      });
       try {
         if (!fila.fechaAlta) {
-          errores.push(`${fila.codigo}: falta fecha de contratación.`);
+          errores.push(
+            formatoErrorImport({
+              filaExcel: fila.filaExcel,
+              identidad,
+              detalle: "falta fecha de contratación",
+            }),
+          );
           continue;
         }
         const fechaAlta = formatearFecha(fila.fechaAlta);
@@ -144,12 +158,22 @@ export async function POST(req: Request, ctx: Ctx) {
             : e instanceof Error
               ? e.message
               : "error";
-        errores.push(`${fila.codigo}: ${msg}`);
+        errores.push(
+          formatoErrorImport({
+            filaExcel: fila.filaExcel,
+            identidad,
+            detalle: msg,
+          }),
+        );
       }
     }
 
+    const totalErr = errores.length;
     return NextResponse.json({
-      mensaje: `Importación: ${creados} nuevos, ${actualizados} actualizados.`,
+      mensaje:
+        totalErr > 0
+          ? `Importación: ${creados} nuevos, ${actualizados} actualizados, ${totalErr} con error.`
+          : `Importación: ${creados} nuevos, ${actualizados} actualizados.`,
       creados,
       actualizados,
       errores,

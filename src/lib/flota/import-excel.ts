@@ -2,6 +2,8 @@ import ExcelJS from "exceljs";
 import { resolverEmpresaFlotaExcel } from "@/lib/flota/empresas-alias";
 
 export type FilaFlotaExcel = {
+  /** Número de fila en el Excel (1 = encabezado). */
+  filaExcel: number;
   placa: string;
   descripcion: string | null;
   marca: string | null;
@@ -350,6 +352,7 @@ export async function parsearExcelFlota(
       : null;
 
     const fila: FilaFlotaExcel = {
+      filaExcel: r,
       placa,
       descripcion: cDesc ? cellStr(row.getCell(cDesc).value) || null : null,
       marca,

@@ -229,6 +229,8 @@ export async function exportarEmpleadosPdf(
 }
 
 export type FilaImportEmpleado = {
+  /** Número de fila en el Excel (1 = encabezado). */
+  filaExcel: number;
   codigo: string;
   nombre: string;
   dpi: string;
@@ -362,6 +364,7 @@ export async function parsearPlantillaEmpleados(
       get(col("estado_laboral", "estado")) || "Activo";
 
     filas.push({
+      filaExcel: rowNumber,
       codigo,
       nombre,
       dpi: get(col("dpi")) || codigo,

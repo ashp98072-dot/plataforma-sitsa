@@ -28,6 +28,7 @@ import {
 } from "@/lib/flota/photo-meta";
 import { normalizarFotoCamara, normalizarFotosCamara } from "@/lib/flota/camera-file";
 import { TomarFotoButton } from "@/components/flota/tomar-foto";
+import { ImportErroresLista } from "@/components/import-errores-lista";
 import { resolverVehiculoPorPlacaInput } from "@/lib/flota/placa";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import {
@@ -297,6 +298,7 @@ export default function FlotaClient() {
   const [paginaVeh, setPaginaVeh] = useState(1);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
+  const [erroresImport, setErroresImport] = useState<string[]>([]);
   const [importando, setImportando] = useState(false);
 
   const [form, setForm] = useState(emptyForm);
@@ -1000,6 +1002,8 @@ export default function FlotaClient() {
   async function onImport(file: File) {
     setImportando(true);
     setErr("");
+    setMsg("");
+    setErroresImport([]);
     const fd = new FormData();
     fd.append("file", file);
     const res = await fetch(`/api/empresas/${slug}/flota/import`, {
@@ -1008,7 +1012,12 @@ export default function FlotaClient() {
     });
     const data = await res.json();
     if (!res.ok) setErr(data.error ?? "Error al importar");
-    else setMsg(data.mensaje);
+    else {
+      setMsg(data.mensaje);
+      setErroresImport(
+        Array.isArray(data.errores) ? data.errores.map(String) : [],
+      );
+    }
     setImportando(false);
     if (res.ok) await cargar({ solo: ["vehiculos"] });
   }
@@ -2505,6 +2514,7 @@ export default function FlotaClient() {
 
       {err ? <p className="text-sm text-red-300">{err}</p> : null}
       {msg ? <p className="text-sm text-emerald-300">{msg}</p> : null}
+      <ImportErroresLista errores={erroresImport} />
 
       {panelAdjuntos ? (
         <div

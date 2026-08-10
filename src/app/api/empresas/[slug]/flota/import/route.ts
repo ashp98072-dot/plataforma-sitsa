@@ -14,6 +14,10 @@ import { guardarFiltrosVehiculo } from "@/lib/flota/filtros";
 import { guardarAccesoVehiculo } from "@/lib/flota/acceso";
 import { resolverEmpresaFlotaExcel } from "@/lib/flota/empresas-alias";
 import { listarEmpresasActivas } from "@/lib/empresas";
+import {
+  formatoErrorImport,
+  identidadVehiculoImport,
+} from "@/lib/import-errores";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -252,16 +256,27 @@ export async function POST(req: Request, ctx: Ctx) {
       }
     } catch (err) {
       errores.push(
-        `${f.placa}: ${err instanceof Error ? err.message : "error"}`,
+        formatoErrorImport({
+          filaExcel: f.filaExcel,
+          identidad: identidadVehiculoImport({
+            placa: f.placa,
+            descripcion: f.descripcion,
+          }),
+          detalle: err instanceof Error ? err.message : "error",
+        }),
       );
     }
   }
 
+  const totalErr = errores.length;
   return NextResponse.json({
-    mensaje: `Importación: ${creados} nuevos, ${actualizados} actualizados. KT=Kuiqtrans, Mónaco y FSS=Fresco Fresh quedan etiquetados y compartidos en flota.`,
+    mensaje:
+      totalErr > 0
+        ? `Importación: ${creados} nuevos, ${actualizados} actualizados, ${totalErr} con error. KT=Kuiqtrans, Mónaco y FSS=Fresco Fresh quedan etiquetados y compartidos en flota.`
+        : `Importación: ${creados} nuevos, ${actualizados} actualizados. KT=Kuiqtrans, Mónaco y FSS=Fresco Fresh quedan etiquetados y compartidos en flota.`,
     creados,
     actualizados,
     total: filas.length,
-    errores: errores.slice(0, 30),
+    errores,
   });
 }

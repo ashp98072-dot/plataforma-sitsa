@@ -11,6 +11,7 @@ import {
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { DocumentosModal } from "@/components/rrhh/documentos-modal";
+import { ImportErroresLista } from "@/components/import-errores-lista";
 import { formatearFechaVisible, hoyLocal } from "@/lib/rrhh/dates";
 import { CATEGORIAS_OPS, PUESTOS_MONACO } from "@/lib/rrhh/categorias-ops";
 import { faltantesAlta } from "@/lib/rrhh/empleado-validacion";
@@ -399,6 +400,7 @@ export default function EmpleadosPage() {
   const [historial, setHistorial] = useState<EmpleadoCambio[]>([]);
   const [error, setError] = useState("");
   const [mensaje, setMensaje] = useState("");
+  const [erroresImport, setErroresImport] = useState<string[]>([]);
   const [importando, setImportando] = useState(false);
   const [docsEmp, setDocsEmp] = useState<Emp | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -635,6 +637,7 @@ export default function EmpleadosPage() {
 
       {error ? <p className="text-sm text-red-400">{error}</p> : null}
       {mensaje ? <p className="text-sm text-emerald-600">{mensaje}</p> : null}
+      <ImportErroresLista errores={erroresImport} />
 
       {vista === "ficha" ? (
       <form onSubmit={onSubmit} className="space-y-3">
@@ -1311,6 +1314,7 @@ export default function EmpleadosPage() {
             setImportando(true);
             setError("");
             setMensaje("");
+            setErroresImport([]);
             try {
               const fd = new FormData();
               fd.set("file", file);
@@ -1323,15 +1327,12 @@ export default function EmpleadosPage() {
                 setError(data.error ?? "Error al importar");
                 return;
               }
-              setMensaje(
-                data.mensaje +
-                  (data.errores?.length
-                    ? ` · ${data.errores.length} fila(s) con error`
-                    : ""),
+              setMensaje(data.mensaje ?? "Importación completada.");
+              setErroresImport(
+                Array.isArray(data.errores)
+                  ? data.errores.map(String)
+                  : [],
               );
-              if (data.errores?.length) {
-                console.warn("Errores import:", data.errores);
-              }
               await cargar();
             } finally {
               setImportando(false);
