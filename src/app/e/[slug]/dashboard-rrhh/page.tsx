@@ -71,7 +71,7 @@ export default function DashboardRrhhPage() {
     {
       href: `/e/${slug}/rrhh/planillas`,
       title: "Planillas",
-      desc: "Periodos de nómina.",
+      desc: "Nómina, pagos y cuadres (efectivo/cheque/transfer).",
     },
     {
       href: `/e/${slug}/rrhh/descuentos`,

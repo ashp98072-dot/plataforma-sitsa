@@ -72,8 +72,16 @@ export async function GET(req: Request, ctx: Ctx) {
   const guard = await requireTenantRrhh(slug, "empleados", "ver");
   if (guard.error) return guard.error;
   const q = new URL(req.url).searchParams.get("q") ?? "";
+  const tipoContrato =
+    new URL(req.url).searchParams.get("tipoContrato") ?? "";
+  const formaPago = new URL(req.url).searchParams.get("formaPago") ?? "";
+  const estado = new URL(req.url).searchParams.get("estado") ?? "";
   const [empleados, cfg] = await Promise.all([
-    listarEmpleados(guard.empresa.id, q),
+    listarEmpleados(guard.empresa.id, q, {
+      tipoContrato: tipoContrato || undefined,
+      formaPago: formaPago || undefined,
+      estado: estado || undefined,
+    }),
     obtenerParametros(guard.empresa.id),
   ]);
   return NextResponse.json({

@@ -4,8 +4,9 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { EvidenciasModal } from "@/components/rrhh/evidencias-modal";
+import { EmpleadoPicker } from "@/components/rrhh/empleado-picker";
 
-type Emp = { id: number; codigo: string; nombre: string };
+type Emp = { id: number; codigo: string; nombre: string; dpi?: string };
 type Periodo = {
   id: number;
   anioLaboral: number;
@@ -156,20 +157,13 @@ export default function VacacionesPage() {
         onSubmit={onSubmit}
         className="grid gap-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 sm:grid-cols-2 lg:grid-cols-3"
       >
-        <label className="text-sm text-[var(--muted)]">
-          Empleado
-          <select
-            className={`${input} mt-1 w-full`}
-            value={empleadoId}
-            onChange={(e) => setEmpleadoId(Number(e.target.value))}
-          >
-            {empleados.map((e) => (
-              <option key={e.id} value={e.id}>
-                {e.codigo} — {e.nombre}
-              </option>
-            ))}
-          </select>
-        </label>
+        <EmpleadoPicker
+          empleados={empleados}
+          value={empleadoId}
+          onChange={setEmpleadoId}
+          className="sm:col-span-2 lg:col-span-1"
+          inputClassName={input}
+        />
         <label className="text-sm text-[var(--muted)]">
           Tipo
           <select
@@ -178,7 +172,9 @@ export default function VacacionesPage() {
             onChange={(e) => setTipo(e.target.value as (typeof TIPOS)[number])}
           >
             {TIPOS.map((t) => (
-              <option key={t}>{t}</option>
+              <option key={t} value={t}>
+                {t}
+              </option>
             ))}
           </select>
         </label>

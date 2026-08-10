@@ -198,6 +198,12 @@ async function limpiarRrhh(
     "DELETE FROM rrhh_prestaciones WHERE empresa_id = ?",
     [empresaId],
   );
+  out.rrhh_planilla_lineas = await delSiExiste(
+    conn,
+    "rrhh_planilla_lineas",
+    "DELETE FROM rrhh_planilla_lineas WHERE empresa_id = ?",
+    [empresaId],
+  );
   out.rrhh_planilla_periodos = await delSiExiste(
     conn,
     "rrhh_planilla_periodos",

@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import type { RowDataPacket } from "mysql2";
-import { execute, query } from "@/lib/db";
 import { requireTenantRrhh } from "@/lib/tenant";
+import {
+  contarEmpleadosActivos,
+  listarPeriodos,
+  asegurarSchemaPlanillas,
+} from "@/lib/rrhh/planillas";
+import { execute } from "@/lib/db";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -11,25 +15,25 @@ export async function GET(_req: Request, ctx: Ctx) {
   const guard = await requireTenantRrhh(slug, "planillas", "ver");
   if (guard.error) return guard.error;
   try {
-    const rows = await query<RowDataPacket[]>(
-      `SELECT * FROM rrhh_planilla_periodos
-       WHERE empresa_id = ? ORDER BY fecha_inicio DESC LIMIT 100`,
-      [guard.empresa.id],
-    );
-    const empleados = await query<RowDataPacket[]>(
-      `SELECT COUNT(*) AS n FROM empleados
-       WHERE empresa_id = ? AND estado = 'Activo'`,
-      [guard.empresa.id],
-    );
+    await asegurarSchemaPlanillas();
+    const [planillas, conteo] = await Promise.all([
+      listarPeriodos(guard.empresa.id),
+      contarEmpleadosActivos(guard.empresa.id),
+    ]);
     return NextResponse.json({
-      planillas: rows,
-      empleadosActivos: Number(empleados[0]?.n ?? 0),
+      planillas,
+      empleadosActivos: conteo.total,
+      empleadosFormales: conteo.formales,
+      empleadosOutsourcing: conteo.outsourcing,
     });
   } catch {
     return NextResponse.json({
       planillas: [],
       empleadosActivos: 0,
-      aviso: "Importa sql/migrate-2026-08-rrhh-ops.sql en phpMyAdmin.",
+      empleadosFormales: 0,
+      empleadosOutsourcing: 0,
+      aviso:
+        "No se pudo leer planillas. Verifica MySQL o importa sql/migrate-2026-08-rrhh-planillas-lineas.sql.",
     });
   }
 }
@@ -51,6 +55,7 @@ export async function POST(req: Request, ctx: Ctx) {
   }
   const d = parsed.data;
   try {
+    await asegurarSchemaPlanillas();
     const r = await execute(
       `INSERT INTO rrhh_planilla_periodos
         (empresa_id, codigo, fecha_inicio, fecha_fin, estado, notas, creado_por)
@@ -68,9 +73,16 @@ export async function POST(req: Request, ctx: Ctx) {
       id: r.insertId,
       mensaje: "Periodo de planilla creado (borrador).",
     });
-  } catch {
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "";
+    if (/Duplicate|uq_planilla/i.test(msg)) {
+      return NextResponse.json(
+        { error: "Ya existe un periodo con ese código." },
+        { status: 409 },
+      );
+    }
     return NextResponse.json(
-      { error: "Falta migrate-2026-08-rrhh-ops.sql en la base." },
+      { error: "No se pudo crear el periodo de planilla." },
       { status: 500 },
     );
   }

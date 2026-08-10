@@ -120,7 +120,7 @@ export async function generarPlantillaEmpleados(): Promise<Buffer> {
   help.addRow([]);
   help.addRow([
     "Sexo: M / F",
-    "tipo_contrato: fijo / temporal / …",
+    "tipo_contrato: fijo / prueba / temporal / outsourcing",
     "forma_pago: transferencia / efectivo / cheque",
   ]);
   help.addRow([

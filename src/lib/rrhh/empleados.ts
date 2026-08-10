@@ -152,27 +152,47 @@ function mapEmpleado(row: RowDataPacket): Empleado {
 /** Columnas de planilla / combos (sin sueldos, observaciones, demografía…). */
 const COLUMNAS_LISTA = `id, codigo, nombre, puesto, categoria_ops, tipo_horario,
   fecha_alta, fecha_inicio_laboral, hora_entrada_teorica, hora_salida_teorica,
-  estado, dpi`;
+  estado, dpi, tipo_contrato, forma_pago`;
 
 export async function listarEmpleados(
   empresaId: number,
   filtro = "",
-  opts?: { completo?: boolean; conDocs?: boolean },
+  opts?: {
+    completo?: boolean;
+    conDocs?: boolean;
+    tipoContrato?: string;
+    formaPago?: string;
+    estado?: string;
+  },
 ): Promise<Empleado[]> {
   await asegurarSchemaEmpleados().catch(() => undefined);
   const f = filtro.trim();
   const cols = opts?.completo ? "*" : COLUMNAS_LISTA;
-  const rows = f
-    ? await query<RowDataPacket[]>(
-        `SELECT ${cols} FROM empleados
-         WHERE empresa_id = ? AND (nombre LIKE ? OR codigo LIKE ? OR dpi LIKE ?)
-         ORDER BY nombre`,
-        [empresaId, `%${f}%`, `%${f}%`, `%${f}%`],
-      )
-    : await query<RowDataPacket[]>(
-        `SELECT ${cols} FROM empleados WHERE empresa_id = ? ORDER BY nombre`,
-        [empresaId],
-      );
+  const where: string[] = ["empresa_id = ?"];
+  const params: (string | number)[] = [empresaId];
+  if (f) {
+    where.push(`(nombre LIKE ? OR codigo LIKE ? OR dpi LIKE ?)`);
+    const like = `%${f}%`;
+    params.push(like, like, like);
+  }
+  if (opts?.tipoContrato) {
+    where.push(`LOWER(COALESCE(tipo_contrato,'')) = ?`);
+    params.push(opts.tipoContrato.toLowerCase());
+  }
+  if (opts?.formaPago) {
+    where.push(`LOWER(COALESCE(forma_pago,'')) = ?`);
+    params.push(opts.formaPago.toLowerCase());
+  }
+  if (opts?.estado) {
+    where.push(`estado = ?`);
+    params.push(opts.estado);
+  }
+  const rows = await query<RowDataPacket[]>(
+    `SELECT ${cols} FROM empleados
+     WHERE ${where.join(" AND ")}
+     ORDER BY nombre`,
+    params,
+  );
   const empleados = rows.map(mapEmpleado);
   const conDocs = opts?.conDocs ?? !opts?.completo;
   if (conDocs) {

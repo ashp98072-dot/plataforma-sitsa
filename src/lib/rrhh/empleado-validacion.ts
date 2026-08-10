@@ -50,7 +50,19 @@ export function faltantesAlta(
 ): { labels: string[]; secciones: Set<string> } {
   const labels: string[] = [];
   const secciones = new Set<string>();
+  const outsourcing =
+    String(data.tipoContrato ?? "")
+      .trim()
+      .toLowerCase() === "outsourcing";
+  const skipOutsourcing = new Set([
+    "igss",
+    "irtra",
+    "nit",
+    "bonoIncentivo",
+    "bonoHerramientas",
+  ]);
   for (const c of CAMPOS_OBLIGATORIOS_ALTA) {
+    if (outsourcing && skipOutsourcing.has(c.key)) continue;
     if (valorCampoVacio(data[c.key])) {
       labels.push(c.label);
       secciones.add(c.seccion);

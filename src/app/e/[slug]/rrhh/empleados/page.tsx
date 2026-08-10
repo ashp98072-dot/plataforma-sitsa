@@ -15,6 +15,14 @@ import { ImportErroresLista } from "@/components/import-errores-lista";
 import { formatearFechaVisible, hoyLocal } from "@/lib/rrhh/dates";
 import { CATEGORIAS_OPS, PUESTOS_MONACO } from "@/lib/rrhh/categorias-ops";
 import { faltantesAlta } from "@/lib/rrhh/empleado-validacion";
+import {
+  FORMAS_PAGO,
+  TIPOS_CONTRATO,
+  normalizarFormaPago,
+  normalizarTipoContrato,
+  type FormaPago,
+  type TipoContrato,
+} from "@/lib/rrhh/contratos-pago";
 
 type Emp = {
   id: number;
@@ -97,8 +105,8 @@ type FormState = {
   fechaNacimiento: string;
   puesto: string;
   categoriaOps: string;
-  tipoContrato: "prueba" | "fijo";
-  formaPago: "cheque" | "transferencia";
+  tipoContrato: TipoContrato;
+  formaPago: FormaPago;
   profesion: string;
   tipoHorario: "Fijo" | "Variable";
   fechaAlta: string;
@@ -240,8 +248,8 @@ function empToForm(
     fechaNacimiento: e.fechaNacimiento ?? "",
     puesto: e.puesto ?? "",
     categoriaOps: e.categoriaOps ?? "",
-    tipoContrato: e.tipoContrato === "prueba" ? "prueba" : "fijo",
-    formaPago: e.formaPago === "cheque" ? "cheque" : "transferencia",
+    tipoContrato: normalizarTipoContrato(e.tipoContrato),
+    formaPago: normalizarFormaPago(e.formaPago),
     profesion: e.profesion ?? "",
     tipoHorario: e.tipoHorario === "Variable" ? "Variable" : "Fijo",
     fechaAlta: e.fechaAlta || hoyLocal(),
@@ -394,6 +402,9 @@ export default function EmpleadosPage() {
   const [empleados, setEmpleados] = useState<Emp[]>([]);
   const [q, setQ] = useState("");
   const [qDebounced, setQDebounced] = useState("");
+  const [filtroTipo, setFiltroTipo] = useState("");
+  const [filtroPago, setFiltroPago] = useState("");
+  const [filtroEstado, setFiltroEstado] = useState("");
   const [horaDef, setHoraDef] = useState({ entrada: "07:00", salida: "16:00" });
   const [form, setForm] = useState<FormState>(() => emptyForm());
   const [editId, setEditId] = useState<number | null>(null);
@@ -440,7 +451,7 @@ export default function EmpleadosPage() {
     setVista("ficha");
   }
 
-  const mostrarDpi = empleados.some((e) => e.dpi);
+  const mostrarDpi = true;
 
   useEffect(() => {
     const t = setTimeout(() => setQDebounced(q), 300);
@@ -448,8 +459,13 @@ export default function EmpleadosPage() {
   }, [q]);
 
   const cargar = useCallback(async () => {
+    const params = new URLSearchParams();
+    if (qDebounced.trim()) params.set("q", qDebounced.trim());
+    if (filtroTipo) params.set("tipoContrato", filtroTipo);
+    if (filtroPago) params.set("formaPago", filtroPago);
+    if (filtroEstado) params.set("estado", filtroEstado);
     const res = await fetch(
-      `/api/empresas/${slug}/empleados?q=${encodeURIComponent(qDebounced)}`,
+      `/api/empresas/${slug}/empleados?${params.toString()}`,
     );
     const data = await res.json();
     if (!res.ok) return;
@@ -467,7 +483,7 @@ export default function EmpleadosPage() {
       }
       return id;
     });
-  }, [slug, qDebounced]);
+  }, [slug, qDebounced, filtroTipo, filtroPago, filtroEstado]);
 
   useEffect(() => {
     void cargar();
@@ -868,14 +884,23 @@ export default function EmpleadosPage() {
             value={form.tipoContrato}
             onChange={(e) =>
               patchForm({
-                tipoContrato: e.target.value as "prueba" | "fijo",
+                tipoContrato: normalizarTipoContrato(e.target.value),
               })
             }
             required
           >
-            <option value="fijo">Fijo</option>
-            <option value="prueba">Prueba</option>
+            {TIPOS_CONTRATO.map((t) => (
+              <option key={t.value} value={t.value}>
+                {t.label}
+              </option>
+            ))}
           </select>
+          {form.tipoContrato === "outsourcing" ? (
+            <p className="mt-1 text-xs text-amber-300">
+              Outsourcing: no requiere IGSS/IRTRA; se paga por efectivo/cheque/
+              transferencia y se controla en Planillas.
+            </p>
+          ) : null}
         </label>
         <label>
           <FieldLabel required>Forma pago</FieldLabel>
@@ -884,13 +909,16 @@ export default function EmpleadosPage() {
             value={form.formaPago}
             onChange={(e) =>
               patchForm({
-                formaPago: e.target.value as "cheque" | "transferencia",
+                formaPago: normalizarFormaPago(e.target.value),
               })
             }
             required
           >
-            <option value="transferencia">Transferencia</option>
-            <option value="cheque">Cheque</option>
+            {FORMAS_PAGO.map((f) => (
+              <option key={f.value} value={f.value}>
+                {f.label}
+              </option>
+            ))}
           </select>
         </label>
         <label>
@@ -1276,11 +1304,44 @@ export default function EmpleadosPage() {
       <>
       <div className="flex flex-wrap gap-2">
         <input
-          className="min-w-[12rem] flex-1 rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm"
-          placeholder="Buscar por nombre o código…"
+          className="min-w-[14rem] flex-1 rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm"
+          placeholder="Buscar por nombre, código o DPI…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
+        <select
+          className="rounded-lg border border-[var(--border)] bg-[var(--input)] px-2 py-2 text-sm"
+          value={filtroTipo}
+          onChange={(e) => setFiltroTipo(e.target.value)}
+        >
+          <option value="">Todos los contratos</option>
+          {TIPOS_CONTRATO.map((t) => (
+            <option key={t.value} value={t.value}>
+              {t.label}
+            </option>
+          ))}
+        </select>
+        <select
+          className="rounded-lg border border-[var(--border)] bg-[var(--input)] px-2 py-2 text-sm"
+          value={filtroPago}
+          onChange={(e) => setFiltroPago(e.target.value)}
+        >
+          <option value="">Todas las formas de pago</option>
+          {FORMAS_PAGO.map((f) => (
+            <option key={f.value} value={f.value}>
+              {f.label}
+            </option>
+          ))}
+        </select>
+        <select
+          className="rounded-lg border border-[var(--border)] bg-[var(--input)] px-2 py-2 text-sm"
+          value={filtroEstado}
+          onChange={(e) => setFiltroEstado(e.target.value)}
+        >
+          <option value="">Activos y bajas</option>
+          <option value="Activo">Activo</option>
+          <option value="Baja">Baja</option>
+        </select>
         <button
           type="button"
           onClick={irANuevo}
@@ -1361,6 +1422,8 @@ export default function EmpleadosPage() {
               <th className="px-3 py-2">Nombre</th>
               {mostrarDpi ? <th className="px-3 py-2">DPI</th> : null}
               <th className="px-3 py-2">Puesto</th>
+              <th className="px-3 py-2">Contrato</th>
+              <th className="px-3 py-2">Pago</th>
               <th className="px-3 py-2">Área</th>
               <th className="px-3 py-2">Entrada lab.</th>
               <th className="px-3 py-2">Contratación</th>
@@ -1384,6 +1447,22 @@ export default function EmpleadosPage() {
                   <td className="px-3 py-2">{e.dpi || "—"}</td>
                 ) : null}
                 <td className="px-3 py-2">{e.puesto || "—"}</td>
+                <td className="px-3 py-2 text-xs">
+                  {e.tipoContrato === "outsourcing"
+                    ? "Outsourcing"
+                    : e.tipoContrato === "prueba"
+                      ? "Prueba"
+                      : e.tipoContrato === "temporal"
+                        ? "Temporal"
+                        : "Fijo"}
+                </td>
+                <td className="px-3 py-2 text-xs">
+                  {e.formaPago === "cheque"
+                    ? "Cheque"
+                    : e.formaPago === "efectivo"
+                      ? "Efectivo"
+                      : "Transferencia"}
+                </td>
                 <td className="px-3 py-2">{e.categoriaOps || "—"}</td>
                 <td className="px-3 py-2">
                   {formatearFechaVisible(e.fechaInicioLaboral) || "—"}
