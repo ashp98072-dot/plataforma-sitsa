@@ -243,32 +243,40 @@ export async function sincronizarPeriodosVacaciones(
       )
       .sort((a, b) => Number(a.anio_laboral) - Number(b.anio_laboral));
 
-    const capTotal = completadosVigentes.reduce(
-      (s, p) => s + Number(p.dias_otorgados),
-      0,
-    );
-    const enCurso = periodos.find(
-      (p) => Number(p.anio_laboral) === periodoEnCursoN,
-    );
-    const dispEnCurso = enCurso ? Number(enCurso.dias_disponibles) : 0;
-    const totalActual =
-      completadosVigentes.reduce((s, p) => s + Number(p.dias_disponibles), 0) +
-      dispEnCurso;
-    let excedente = Math.round((totalActual - capTotal) * 100) / 100;
+    // El descuento por exceso solo tiene sentido cuando YA existen 2 periodos
+    // completos vigentes. Si todavía no se completa el segundo periodo, la
+    // suma de ambos nunca puede superar el tope (15 + hasta 15 = 30 como
+    // máximo), así que no hay excedente real que descontar todavía.
+    if (completadosVigentes.length >= MAX_PERIODOS_VIGENTES) {
+      const capTotal = completadosVigentes.reduce(
+        (s, p) => s + Number(p.dias_otorgados),
+        0,
+      );
+      const enCurso = periodos.find(
+        (p) => Number(p.anio_laboral) === periodoEnCursoN,
+      );
+      const dispEnCurso = enCurso ? Number(enCurso.dias_disponibles) : 0;
+      const totalActual =
+        completadosVigentes.reduce(
+          (s, p) => s + Number(p.dias_disponibles),
+          0,
+        ) + dispEnCurso;
+      let excedente = Math.round((totalActual - capTotal) * 100) / 100;
 
-    if (excedente > 0) {
-      for (const p of completadosVigentes) {
-        if (excedente <= 0) break;
-        const disp = Number(p.dias_disponibles);
-        const recorte = Math.min(disp, excedente);
-        if (recorte <= 0) continue;
-        const nuevoDisp = Math.round((disp - recorte) * 100) / 100;
-        await conn.execute(
-          "UPDATE saldos_vacaciones SET dias_disponibles = ? WHERE id = ?",
-          [nuevoDisp, Number(p.id)],
-        );
-        p.dias_disponibles = nuevoDisp;
-        excedente = Math.round((excedente - recorte) * 100) / 100;
+      if (excedente > 0) {
+        for (const p of completadosVigentes) {
+          if (excedente <= 0) break;
+          const disp = Number(p.dias_disponibles);
+          const recorte = Math.min(disp, excedente);
+          if (recorte <= 0) continue;
+          const nuevoDisp = Math.round((disp - recorte) * 100) / 100;
+          await conn.execute(
+            "UPDATE saldos_vacaciones SET dias_disponibles = ? WHERE id = ?",
+            [nuevoDisp, Number(p.id)],
+          );
+          p.dias_disponibles = nuevoDisp;
+          excedente = Math.round((excedente - recorte) * 100) / 100;
+        }
       }
     }
   } finally {
