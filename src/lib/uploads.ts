@@ -16,7 +16,7 @@ export const EXT_PERMITIDAS = new Set([
   ".pdf",
 ]);
 
-export const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
+export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 
 /** Raíz persistente en Hostinger: .builds/uploads (fuera de versions/). */
 export function getUploadsRoot(): string {
@@ -80,7 +80,7 @@ export async function guardarUpload(
   }
   if (file.size <= 0) throw new Error("Archivo vacío.");
   if (file.size > MAX_UPLOAD_BYTES) {
-    throw new Error("El archivo supera el máximo de 8 MB.");
+    throw new Error("El archivo supera el máximo de 50 MB.");
   }
   const ext = extensionValida(file.name || "archivo.jpg");
   if (!ext) {

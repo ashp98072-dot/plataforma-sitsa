@@ -122,7 +122,7 @@ export function EvidenciasModal({
               Subir evidencia
             </button>
             <p className="text-xs text-[var(--muted)]">
-              jpg, png, webp, bmp, pdf · máx. 8 MB
+              jpg, png, webp, bmp, pdf · máx. 50 MB
             </p>
           </div>
         ) : null}

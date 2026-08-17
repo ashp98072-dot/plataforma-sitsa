@@ -1,0 +1,48 @@
+diff --git a/src/components/rrhh/documentos-modal.tsx b/src/components/rrhh/documentos-modal.tsx
+index 8cbcdfa..30a30ad 100644
+--- a/src/components/rrhh/documentos-modal.tsx
++++ b/src/components/rrhh/documentos-modal.tsx
+@@ -166,7 +166,7 @@ export function DocumentosModal({
+               Subir archivo
+             </button>
+             <p className="text-xs text-[var(--muted)]">
+-              Formatos: jpg, png, webp, bmp, pdf · máx. 8 MB
++              Formatos: jpg, png, webp, bmp, pdf · máx. 50 MB
+             </p>
+           </div>
+         ) : null}
+diff --git a/src/components/rrhh/evidencias-modal.tsx b/src/components/rrhh/evidencias-modal.tsx
+index cd8178b..df5460e 100644
+--- a/src/components/rrhh/evidencias-modal.tsx
++++ b/src/components/rrhh/evidencias-modal.tsx
+@@ -122,7 +122,7 @@ export function EvidenciasModal({
+               Subir evidencia
+             </button>
+             <p className="text-xs text-[var(--muted)]">
+-              jpg, png, webp, bmp, pdf · máx. 8 MB
++              jpg, png, webp, bmp, pdf · máx. 50 MB
+             </p>
+           </div>
+         ) : null}
+diff --git a/src/lib/uploads.ts b/src/lib/uploads.ts
+index 5a6e8f4..b419ea9 100644
+--- a/src/lib/uploads.ts
++++ b/src/lib/uploads.ts
+@@ -16,7 +16,7 @@ export const EXT_PERMITIDAS = new Set([
+   ".pdf",
+ ]);
+ 
+-export const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
++export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+ 
+ /** Raíz persistente en Hostinger: .builds/uploads (fuera de versions/). */
+ export function getUploadsRoot(): string {
+@@ -80,7 +80,7 @@ export async function guardarUpload(
+   }
+   if (file.size <= 0) throw new Error("Archivo vacío.");
+   if (file.size > MAX_UPLOAD_BYTES) {
+-    throw new Error("El archivo supera el máximo de 8 MB.");
++    throw new Error("El archivo supera el máximo de 50 MB.");
+   }
+   const ext = extensionValida(file.name || "archivo.jpg");
+   if (!ext) {

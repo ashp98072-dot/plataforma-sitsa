@@ -166,7 +166,7 @@ export function DocumentosModal({
               Subir archivo
             </button>
             <p className="text-xs text-[var(--muted)]">
-              Formatos: jpg, png, webp, bmp, pdf · máx. 8 MB
+              Formatos: jpg, png, webp, bmp, pdf · máx. 50 MB
             </p>
           </div>
         ) : null}
