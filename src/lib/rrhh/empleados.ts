@@ -52,6 +52,8 @@ export type Empleado = {
   tipoCuenta?: string;
   banco?: string;
   contactoEmergencia?: string;
+  supervisorId?: number | null;
+  supervisorNombre?: string | null;
 };
 
 function str(v: unknown): string {
@@ -146,13 +148,15 @@ function mapEmpleado(row: RowDataPacket): Empleado {
     tipoCuenta: str(row.tipo_cuenta),
     banco: str(row.banco),
     contactoEmergencia: str(row.contacto_emergencia),
+    supervisorId: row.supervisor_id != null ? Number(row.supervisor_id) : null,
+    supervisorNombre: row.supervisor_nombre != null ? str(row.supervisor_nombre) : null,
   };
 }
 
 /** Columnas de planilla / combos (sin sueldos, observaciones, demografía…). */
 const COLUMNAS_LISTA = `id, codigo, nombre, puesto, categoria_ops, tipo_horario,
   fecha_alta, fecha_inicio_laboral, hora_entrada_teorica, hora_salida_teorica,
-  estado, dpi, tipo_contrato, forma_pago`;
+  estado, dpi, tipo_contrato, forma_pago, supervisor_id`;
 
 export async function listarEmpleados(
   empresaId: number,
@@ -216,7 +220,10 @@ export async function obtenerEmpleado(
 ): Promise<Empleado | null> {
   await asegurarSchemaEmpleados().catch(() => undefined);
   const rows = await query<RowDataPacket[]>(
-    `SELECT * FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1`,
+    `SELECT e.*, sup.nombre AS supervisor_nombre
+     FROM empleados e
+     LEFT JOIN empleados sup ON sup.id = e.supervisor_id
+     WHERE e.id = ? AND e.empresa_id = ? LIMIT 1`,
     [id, empresaId],
   );
   return rows[0] ? mapEmpleado(rows[0]) : null;
@@ -252,6 +259,43 @@ export async function codigoDuplicado(
     [empresaId, codigo.trim()],
   );
   return rows.length > 0;
+}
+
+/**
+ * Valida que un supervisor propuesto sea utilizable: debe existir en la misma
+ * empresa (aislamiento multiempresa) y no puede ser el propio empleado (evita
+ * un caso trivial de referencia circular a sí mismo). No recorre la cadena
+ * completa de supervisores; eso se deja para una validación futura si hace falta.
+ */
+export async function supervisorValido(
+  empresaId: number,
+  supervisorId: number,
+  idPropio?: number | null,
+): Promise<boolean> {
+  if (idPropio != null && supervisorId === idPropio) return false;
+  const rows = await query<RowDataPacket[]>(
+    `SELECT id FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1`,
+    [supervisorId, empresaId],
+  );
+  return rows.length > 0;
+}
+
+/** Lista simple (id, nombre) para poblar el selector de supervisor en la ficha. */
+export async function listarEmpleadosParaSupervisor(
+  empresaId: number,
+  excluirId?: number | null,
+): Promise<{ id: number; nombre: string }[]> {
+  const where: string[] = ["empresa_id = ?", "estado = 'Activo'"];
+  const params: (string | number)[] = [empresaId];
+  if (excluirId != null) {
+    where.push("id != ?");
+    params.push(excluirId);
+  }
+  const rows = await query<RowDataPacket[]>(
+    `SELECT id, nombre FROM empleados WHERE ${where.join(" AND ")} ORDER BY nombre`,
+    params,
+  );
+  return rows.map((r) => ({ id: Number(r.id), nombre: str(r.nombre) }));
 }
 
 export type EmpleadoInput = {
@@ -301,6 +345,7 @@ export type EmpleadoInput = {
   tipoCuenta?: string;
   banco?: string;
   contactoEmergencia?: string;
+  supervisorId?: number | null;
 };
 
 function paramsFicha(data: EmpleadoInput) {
@@ -344,6 +389,7 @@ function paramsFicha(data: EmpleadoInput) {
     tipoCuenta: data.tipoCuenta?.trim() || null,
     banco: data.banco?.trim() || null,
     contactoEmergencia: data.contactoEmergencia?.trim() || null,
+    supervisorId: data.supervisorId ?? null,
   };
 }
 
@@ -354,6 +400,9 @@ export async function crearEmpleado(
   await asegurarSchemaEmpleados().catch(() => undefined);
   const f = paramsFicha(data);
   if (!f.nombre) throw new Error("El nombre del empleado es obligatorio.");
+  if (f.supervisorId != null && !(await supervisorValido(empresaId, f.supervisorId))) {
+    throw new Error("El supervisor seleccionado no es válido.");
+  }
   try {
     const result = await execute(
       `INSERT INTO empleados (
@@ -365,7 +414,7 @@ export async function crearEmpleado(
         primer_apellido, segundo_apellido, apellido_casada,
         pais_origen, municipio, etnia, religion, idioma,
         licencia_numero, licencia_tipo, licencia_vence, fecha_egreso, observaciones,
-        cuenta_bancaria, tipo_cuenta, banco, contacto_emergencia
+        cuenta_bancaria, tipo_cuenta, banco, contacto_emergencia, supervisor_id
       ) VALUES (
         ?,?,?,?,?,?,?,?,?,?,?,
         ?,?,?,?,?,?,?,?,?,
@@ -373,7 +422,7 @@ export async function crearEmpleado(
         ?,?,?,?,?,?,?,
         ?,?,?,?,?,
         ?,?,?,?,?,
-        ?,?,?,?
+        ?,?,?,?,?
       )`,
       [
         empresaId,
@@ -423,6 +472,7 @@ export async function crearEmpleado(
         f.tipoCuenta,
         f.banco,
         f.contactoEmergencia,
+        f.supervisorId,
       ],
     );
     return Number((result as ResultSetHeader).insertId);
@@ -458,6 +508,12 @@ export async function actualizarEmpleado(
   await asegurarSchemaEmpleados().catch(() => undefined);
   const f = paramsFicha(data);
   if (!f.nombre) throw new Error("El nombre del empleado es obligatorio.");
+  if (
+    f.supervisorId != null &&
+    !(await supervisorValido(empresaId, f.supervisorId, id))
+  ) {
+    throw new Error("El supervisor seleccionado no es válido.");
+  }
   try {
     const result = await execute(
       `UPDATE empleados SET
@@ -470,7 +526,7 @@ export async function actualizarEmpleado(
         primer_apellido=?, segundo_apellido=?, apellido_casada=?,
         pais_origen=?, municipio=?, etnia=?, religion=?, idioma=?,
         licencia_numero=?, licencia_tipo=?, licencia_vence=?, fecha_egreso=?, observaciones=?,
-        cuenta_bancaria=?, tipo_cuenta=?, banco=?, contacto_emergencia=?
+        cuenta_bancaria=?, tipo_cuenta=?, banco=?, contacto_emergencia=?, supervisor_id=?
        WHERE id=? AND empresa_id=?`,
       [
         data.codigo.trim(),
@@ -519,6 +575,7 @@ export async function actualizarEmpleado(
         f.tipoCuenta,
         f.banco,
         f.contactoEmergencia,
+        f.supervisorId,
         id,
         empresaId,
       ],
