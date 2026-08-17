@@ -1,5 +1,5 @@
 import type { RowDataPacket } from "mysql2";
-import { query } from "@/lib/db";
+import { query, type SqlParams } from "@/lib/db";
 import { hoyLocal } from "./dates";
 
 export type DashboardStats = {
@@ -14,31 +14,45 @@ export async function obtenerEstadisticasDashboard(
 ): Promise<DashboardStats> {
   const fechaHoy = hoyLocal();
 
+  const consultaSegura = (
+    nombre: string,
+    sql: string,
+    params: SqlParams,
+  ): Promise<RowDataPacket[]> =>
+    query<RowDataPacket[]>(sql, params).catch((error) => {
+      console.error(`[dashboard-rrhh] Falló consulta "${nombre}":`, error);
+      return [] as RowDataPacket[];
+    });
+
   const [totalRows, presentesRows, asistieronRows, vacRows] = await Promise.all([
-    query<RowDataPacket[]>(
+    consultaSegura(
+      "totalEmpleados",
       `SELECT COUNT(*) AS total FROM empleados
        WHERE empresa_id = ? AND estado = 'Activo'`,
       [empresaId],
     ),
-    query<RowDataPacket[]>(
+    consultaSegura(
+      "presentesHoy",
       `SELECT COUNT(DISTINCT id_empleado) AS total
        FROM sesiones_trabajo
        WHERE empresa_id = ? AND fecha_jornada = ?
-         AND (estado = 'ABIERTA' OR estado = 'En curso')`,
+         AND estado IN ('ABIERTA', 'En curso')`,
       [empresaId, fechaHoy],
     ),
-    query<RowDataPacket[]>(
+    consultaSegura(
+      "asistieronHoy",
       `SELECT COUNT(DISTINCT id_empleado) AS total
        FROM sesiones_trabajo
        WHERE empresa_id = ? AND fecha_jornada = ?`,
       [empresaId, fechaHoy],
     ),
-    query<RowDataPacket[]>(
+    consultaSegura(
+      "enVacaciones",
       `SELECT COUNT(DISTINCT id_empleado) AS total FROM incidencias
        WHERE empresa_id = ? AND tipo LIKE '%Vacaciones%'
          AND ? BETWEEN fecha_inicio AND fecha_fin`,
       [empresaId, fechaHoy],
-    ).catch(() => [] as RowDataPacket[]),
+    ),
   ]);
 
   const totalEmpleados = Number(totalRows[0]?.total ?? 0);
@@ -46,10 +60,14 @@ export async function obtenerEstadisticasDashboard(
   const asistieronHoy = Number(asistieronRows[0]?.total ?? 0);
   const enVacaciones = Number(vacRows[0]?.total ?? 0);
 
+  // Un empleado en vacaciones no genera sesión de trabajo, así que sin este
+  // ajuste contaría como "ausente" y "en vacaciones" al mismo tiempo.
+  const ausentesHoy = Math.max(totalEmpleados - asistieronHoy - enVacaciones, 0);
+
   return {
     totalEmpleados,
     presentesHoy,
-    ausentesHoy: Math.max(totalEmpleados - asistieronHoy, 0),
+    ausentesHoy,
     enVacaciones,
   };
 }
