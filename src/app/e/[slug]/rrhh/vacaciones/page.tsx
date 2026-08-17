@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { EvidenciasModal } from "@/components/rrhh/evidencias-modal";
 import { EmpleadoPicker } from "@/components/rrhh/empleado-picker";
+import { SolicitudesVacacionesPanel } from "@/components/rrhh/solicitudes-vacaciones-panel";
 
 type Emp = { id: number; codigo: string; nombre: string; dpi?: string };
 type Periodo = {
@@ -152,6 +153,8 @@ export default function VacacionesPage() {
       </div>
 
       {aviso ? <p className="text-sm text-amber-300">{aviso}</p> : null}
+
+      <SolicitudesVacacionesPanel slug={slug} onResuelto={() => void cargar()} />
 
       <form
         onSubmit={onSubmit}
