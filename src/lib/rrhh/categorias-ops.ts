@@ -36,25 +36,3 @@ export const PUESTOS_MONACO = [
   "Administrativo",
   "Otro",
 ] as const;
-
-/** Valores antiguos de categoria_ops (compat. listados / edición). */
-export const CATEGORIAS_OPS_LEGACY = [
-  "Piloto",
-  "Auxiliar",
-  "Auxiliar de Transporte",
-  "Mensajero",
-  "Mecánico",
-  "Soldador",
-  "Enderezador y Pintor",
-  "Coordinador de logística",
-  "Auxiliar de logística",
-  "Gerente de operaciones",
-  "Asistente de Recursos Humanos",
-  "IT",
-  "Gerente General",
-  "Coordinador de predios",
-  "Coordinador de compras",
-  "Bodega",
-  "Administrativo",
-  "Otro",
-] as const;
