@@ -49,6 +49,83 @@ async function tieneJornadaCompletaHoy(
   return rows.length > 0;
 }
 
+export type MarcajeColaborador = {
+  fecha: string;
+  entrada: string;
+  salida: string;
+  incidencia: string;
+  estado: string;
+  viajeLargo: boolean;
+};
+
+/**
+ * Marcajes de UN empleado en un rango de fechas, para el portal de
+ * autogestión. A diferencia de listarMarcajesRango (que trae de toda la
+ * empresa con un LIMIT compartido, pensado para la pantalla de staff), esta
+ * función filtra por id_empleado directamente en SQL: así el colaborador
+ * siempre ve su propio historial completo, sin riesgo de quedar fuera de un
+ * límite pensado para el total de la empresa.
+ */
+export async function listarMarcajesEmpleadoRango(
+  empresaId: number,
+  idEmpleado: number,
+  desde: string,
+  hasta: string,
+): Promise<MarcajeColaborador[]> {
+  const p = await obtenerParametros(empresaId);
+  const horaDefault = p.hora_entrada_default || "07:00:00";
+  const tolerancia = Number.parseInt(p.minutos_tolerancia, 10);
+  const tolSemanal = Number.parseInt(p.minutos_tolerancia_semanal, 10);
+  const tol = Number.isFinite(tolerancia) ? tolerancia : 0;
+  const tolSem = Number.isFinite(tolSemanal) ? tolSemanal : 20;
+
+  const rows = await query<RowDataPacket[]>(
+    `SELECT s.entrada_at, s.salida_at, s.estado, s.viaje_largo, s.fecha_jornada,
+            e.hora_entrada_teorica
+     FROM sesiones_trabajo s
+     INNER JOIN empleados e ON e.id = s.id_empleado
+     WHERE s.empresa_id = ? AND s.id_empleado = ?
+       AND s.fecha_jornada BETWEEN ? AND ?
+     ORDER BY s.fecha_jornada ASC
+     LIMIT 500`,
+    [empresaId, idEmpleado, desde, hasta],
+  );
+
+  const acumSemana = new Map<string, number>(); // lunes -> minutos usados
+  const ordered: MarcajeColaborador[] = [];
+  for (const r of rows) {
+    const entradaRaw = fmtTs(r.entrada_at as string | Date | null);
+    const salidaRaw = fmtTs(r.salida_at as string | Date | null);
+    const horaTeorica = String(r.hora_entrada_teorica || horaDefault);
+    const fechaJ = String(r.fecha_jornada).slice(0, 10);
+    const lunes = lunesDeSemana(fechaJ);
+    const usados = acumSemana.get(lunes) ?? 0;
+
+    const lateHoy = entradaRaw ? minutosRetraso(entradaRaw, horaTeorica) : 0;
+    acumSemana.set(lunes, usados + lateHoy);
+
+    const { estado: incidencia } = calcularEstadoAsistenciaSync(
+      entradaRaw ?? "",
+      horaTeorica,
+      tol,
+      { toleranciaSemanal: tolSem, minutosYaUsadosSemana: usados },
+    );
+
+    ordered.push({
+      fecha: fechaJ,
+      entrada: formatearTimestampVisible(entradaRaw),
+      salida: formatearTimestampVisible(salidaRaw),
+      incidencia,
+      estado: String(r.estado),
+      viajeLargo: Number(r.viaje_largo ?? 0) === 1,
+    });
+  }
+
+  // Más reciente primero, igual que la pantalla de staff.
+  ordered.reverse();
+  return ordered;
+}
+
 export type InfoCodigoMarcaje = {
   encontrado: boolean;
   nombre?: string;

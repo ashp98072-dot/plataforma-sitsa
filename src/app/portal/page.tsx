@@ -22,6 +22,11 @@ const DISPONIBLES = [
     detalle: "Días disponibles, historial y solicitud de vacaciones.",
     href: "/portal/vacaciones",
   },
+  {
+    titulo: "Mis marcajes",
+    detalle: "Historial de entradas, salidas y retrasos por fecha.",
+    href: "/portal/marcajes",
+  },
 ];
 
 export default async function PortalHomePage() {
