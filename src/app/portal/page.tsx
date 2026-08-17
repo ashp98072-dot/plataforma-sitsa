@@ -3,12 +3,7 @@ import { redirect } from "next/navigation";
 import { getColaboradorSession } from "@/lib/rrhh/colaborador-session";
 import LogoutButton from "./logout-button";
 
-const PROXIMAMENTE = [
-  {
-    titulo: "Vacaciones",
-    detalle: "Días disponibles, historial y solicitud de vacaciones.",
-  },
-];
+const PROXIMAMENTE: { titulo: string; detalle: string }[] = [];
 
 const DISPONIBLES = [
   {
@@ -21,6 +16,11 @@ const DISPONIBLES = [
     detalle:
       "Descuentos, pagos adicionales, viáticos y devengados no afectos del mes.",
     href: "/portal/boletas",
+  },
+  {
+    titulo: "Vacaciones",
+    detalle: "Días disponibles, historial y solicitud de vacaciones.",
+    href: "/portal/vacaciones",
   },
 ];
 
