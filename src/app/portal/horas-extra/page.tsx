@@ -1,0 +1,113 @@
+import Link from "next/link";
+import { redirect } from "next/navigation";
+import { getColaboradorSession } from "@/lib/rrhh/colaborador-session";
+import {
+  listarHorasExtraPorSupervisor,
+  listarHorasExtraPropias,
+  listarSubordinados,
+} from "@/lib/rrhh/horas-extra";
+import RegistrarHorasExtraForm from "./registrar-form";
+
+function formatQ(valor: number): string {
+  return `Q${valor.toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+export default async function HorasExtraPage() {
+  const session = await getColaboradorSession();
+  if (!session) {
+    redirect("/portal/login");
+  }
+
+  const [subordinados, registrosEquipo, propias] = await Promise.all([
+    listarSubordinados(session!.empresaId, session!.empleadoId),
+    listarHorasExtraPorSupervisor(session!.empresaId, session!.empleadoId),
+    listarHorasExtraPropias(session!.empresaId, session!.empleadoId),
+  ]);
+
+  const esSupervisor = subordinados.length > 0;
+
+  return (
+    <main className="min-h-screen p-4 sm:p-8">
+      <div className="mx-auto max-w-3xl">
+        <Link href="/portal" className="text-sm text-[var(--muted)] hover:underline">
+          ← Volver
+        </Link>
+
+        <header className="mt-4">
+          <p className="text-sm uppercase tracking-[0.2em] text-[var(--muted)]">
+            Horas extra
+          </p>
+          <h1 className="mt-1 text-2xl font-semibold">
+            {esSupervisor ? "Mi equipo" : "Mis horas extra"}
+          </h1>
+        </header>
+
+        {esSupervisor ? (
+          <>
+            <div className="mt-6">
+              <RegistrarHorasExtraForm subordinados={subordinados} />
+            </div>
+
+            <section className="mt-6">
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">
+                Registros de mi equipo
+              </h2>
+              {registrosEquipo.length === 0 ? (
+                <p className="mt-3 text-sm text-[var(--muted)]">
+                  Todavía no has registrado horas extra para tu equipo.
+                </p>
+              ) : (
+                <div className="mt-3 space-y-2">
+                  {registrosEquipo.map((r) => (
+                    <div
+                      key={r.id}
+                      className="flex items-center justify-between rounded-2xl border border-[var(--border)] bg-[var(--card)] p-4"
+                    >
+                      <div>
+                        <p className="font-medium">{r.empleadoNombre}</p>
+                        <p className="mt-0.5 text-sm text-[var(--muted)]">
+                          {r.fecha} · {r.horas} hora(s)
+                        </p>
+                      </div>
+                      <p className="text-sm font-semibold">{formatQ(r.monto)}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          </>
+        ) : null}
+
+        <section className={esSupervisor ? "mt-8" : "mt-6"}>
+          {esSupervisor ? (
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">
+              Mis propias horas extra
+            </h2>
+          ) : null}
+          {propias.length === 0 ? (
+            <p className="mt-3 text-sm text-[var(--muted)]">
+              No tienes horas extra registradas todavía.
+            </p>
+          ) : (
+            <div className="mt-3 space-y-2">
+              {propias.map((r) => (
+                <div
+                  key={r.id}
+                  className="flex items-center justify-between rounded-2xl border border-[var(--border)] bg-[var(--card)] p-4"
+                >
+                  <div>
+                    <p className="font-medium">{r.fecha}</p>
+                    <p className="mt-0.5 text-sm text-[var(--muted)]">
+                      {r.horas} hora(s) · registrado por {r.registradoPorNombre}
+                    </p>
+                  </div>
+                  <p className="text-sm font-semibold">{formatQ(r.monto)}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
+    </main>
+  );
+}

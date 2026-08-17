@@ -27,6 +27,12 @@ const DISPONIBLES = [
     detalle: "Historial de entradas, salidas y retrasos por fecha.",
     href: "/portal/marcajes",
   },
+  {
+    titulo: "Horas extra",
+    detalle:
+      "Si eres supervisor: registra horas de tu equipo. Todos: consulta tu historial.",
+    href: "/portal/horas-extra",
+  },
 ];
 
 export default async function PortalHomePage() {
