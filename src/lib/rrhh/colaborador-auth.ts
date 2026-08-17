@@ -1,6 +1,6 @@
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
-import { hashPassword, verifyPassword } from "@/lib/password";
+import { hashPassword, necesitaRehash, verifyPassword } from "@/lib/password";
 
 export type ColaboradorCredencial = {
   id: number;
@@ -117,8 +117,24 @@ export async function verificarCredencialesColaborador(
   );
   const r = rows[0];
   if (!r || !r.activo || r.empleado_estado !== "Activo") return null;
-  if (!verifyPassword(password, String(r.salt), String(r.password_hash))) {
+  const saltActual = String(r.salt);
+  const hashActual = String(r.password_hash);
+  if (!verifyPassword(password, saltActual, hashActual)) {
     return null;
+  }
+
+  // Migración transparente al esquema nuevo de hash (scrypt), igual que en
+  // el login de staff (ver src/lib/auth.ts).
+  if (necesitaRehash(hashActual)) {
+    try {
+      const { salt, passwordHash } = hashPassword(password);
+      await execute(
+        "UPDATE colaborador_credenciales SET password_hash = ?, salt = ? WHERE id = ?",
+        [passwordHash, salt, Number(r.id)],
+      );
+    } catch (err) {
+      console.error("No se pudo migrar el hash de contraseña del colaborador:", err);
+    }
   }
 
   await execute(

@@ -1,6 +1,6 @@
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "./db";
-import { hashPassword, verifyPassword } from "./password";
+import { hashPassword, necesitaRehash, verifyPassword } from "./password";
 import type { RolGlobal } from "./roles";
 import {
   guardarPermisosUsuario,
@@ -31,8 +31,25 @@ export async function verificarCredenciales(
   );
   const r = rows[0];
   if (!r || !r.activo) return null;
-  if (!verifyPassword(password, String(r.salt), String(r.password_hash))) {
+  const saltActual = String(r.salt);
+  const hashActual = String(r.password_hash);
+  if (!verifyPassword(password, saltActual, hashActual)) {
     return null;
+  }
+  // Migración transparente: si la cuenta todavía usa el hash antiguo
+  // (sha256 de una sola pasada), lo regeneramos con scrypt ahora que
+  // sabemos que la contraseña es correcta. No bloquea el login si falla.
+  if (necesitaRehash(hashActual)) {
+    try {
+      const { salt, passwordHash } = hashPassword(password);
+      await execute("UPDATE usuarios SET password_hash = ?, salt = ? WHERE id = ?", [
+        passwordHash,
+        salt,
+        Number(r.id),
+      ]);
+    } catch (err) {
+      console.error("No se pudo migrar el hash de contraseña:", err);
+    }
   }
   return {
     id: Number(r.id),
