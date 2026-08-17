@@ -37,6 +37,7 @@ export async function POST(request: Request) {
       empresaId: colaborador.empresaId,
       empresaSlug: colaborador.empresaSlug,
       nombre: colaborador.nombre,
+      debeCambiarPassword: colaborador.debeCambiarPassword,
     });
     await setColaboradorSessionCookie(token);
 

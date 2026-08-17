@@ -15,6 +15,7 @@ export type ColaboradorSessionPayload = {
   empresaId: number;
   empresaSlug?: string | null;
   nombre?: string;
+  debeCambiarPassword?: boolean;
 };
 
 // Mismo secreto (AUTH_SECRET) que usa la sesión de staff: es el mismo
@@ -52,6 +53,7 @@ export async function verifyColaboradorSessionToken(
       empresaId,
       empresaSlug: payload.empresaSlug ? String(payload.empresaSlug) : null,
       nombre: payload.nombre ? String(payload.nombre) : undefined,
+      debeCambiarPassword: Boolean(payload.debeCambiarPassword),
     };
   } catch {
     return null;

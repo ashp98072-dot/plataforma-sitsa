@@ -5,6 +5,9 @@ import { homePorRol, slugPorHost } from "@/lib/dominios";
 const PUBLIC = ["/login", "/site"];
 const COOKIE = "sitsa_session";
 
+const COLABORADOR_COOKIE = "sitsa_colab_session";
+const PORTAL_PUBLIC = ["/portal/login"];
+
 function getSecret(): Uint8Array {
   const secret = process.env.AUTH_SECRET;
   if (!secret || secret.length < 16) {
@@ -26,6 +29,29 @@ async function readSession(
       empresaSlug: payload.empresaSlug
         ? String(payload.empresaSlug)
         : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+type ColaboradorSessionLite = {
+  empleadoId?: number;
+  debeCambiarPassword?: boolean;
+};
+
+/** Igual que readSession pero para la cookie separada del portal de colaborador. */
+async function readColaboradorSession(
+  token: string | undefined,
+): Promise<ColaboradorSessionLite | null> {
+  if (!token) return null;
+  try {
+    const { payload } = await jwtVerify(token, getSecret());
+    const empleadoId = payload.empleadoId ? Number(payload.empleadoId) : undefined;
+    if (!empleadoId) return null;
+    return {
+      empleadoId,
+      debeCambiarPassword: Boolean(payload.debeCambiarPassword),
     };
   } catch {
     return null;
@@ -91,6 +117,40 @@ export async function middleware(request: NextRequest) {
     pathname.startsWith("/_next") ||
     pathname.includes(".")
   ) {
+    return NextResponse.next();
+  }
+
+  // --- Portal de colaborador: cookie y flujo totalmente separados del staff ---
+  // Se resuelve aquí, antes que nada, para que jamás caiga en la lógica de
+  // abajo (que redirige a /login usando la cookie de staff sitsa_session).
+  if (pathname.startsWith("/portal")) {
+    const colabToken = request.cookies.get(COLABORADOR_COOKIE)?.value;
+    const colabSession = await readColaboradorSession(colabToken);
+    const colabValid = Boolean(colabSession);
+    const isPortalPublic = PORTAL_PUBLIC.some(
+      (p) => pathname === p || pathname.startsWith(`${p}/`),
+    );
+
+    if (!colabValid && !isPortalPublic) {
+      return NextResponse.redirect(new URL("/portal/login", request.url));
+    }
+    if (colabValid && pathname === "/portal/login") {
+      const dest = colabSession!.debeCambiarPassword
+        ? "/portal/cambiar-password"
+        : "/portal";
+      return NextResponse.redirect(new URL(dest, request.url));
+    }
+    if (
+      colabValid &&
+      colabSession!.debeCambiarPassword &&
+      pathname !== "/portal/cambiar-password"
+    ) {
+      // Primer login o después de un reset: no lo dejamos navegar a nada
+      // más hasta que cambie la contraseña.
+      return NextResponse.redirect(
+        new URL("/portal/cambiar-password", request.url),
+      );
+    }
     return NextResponse.next();
   }
 
