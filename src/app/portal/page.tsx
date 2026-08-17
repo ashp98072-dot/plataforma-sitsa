@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getColaboradorSession } from "@/lib/rrhh/colaborador-session";
 import LogoutButton from "./logout-button";
@@ -12,11 +13,13 @@ const PROXIMAMENTE = [
     titulo: "Vacaciones",
     detalle: "Días disponibles, historial y solicitud de vacaciones.",
   },
-  {
-    titulo: "Mi ficha",
-    detalle: "Datos de ingreso, centro de costo y supervisor.",
-  },
 ];
+
+const DISPONIBLE = {
+  titulo: "Mi ficha",
+  detalle: "Datos de ingreso, centro de costo y supervisor.",
+  href: "/portal/ficha",
+};
 
 export default async function PortalHomePage() {
   // El middleware ya bloquea esta ruta sin sesión válida; esto es un
@@ -42,10 +45,24 @@ export default async function PortalHomePage() {
         </header>
 
         <div className="mt-8 grid gap-4 sm:grid-cols-2">
+          <Link
+            href={DISPONIBLE.href}
+            className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6 transition hover:border-[var(--accent)]"
+          >
+            <p className="text-xs font-medium uppercase tracking-wide text-[var(--accent)]">
+              Disponible
+            </p>
+            <h2 className="mt-1 text-lg font-semibold">
+              {DISPONIBLE.titulo}
+            </h2>
+            <p className="mt-2 text-sm text-[var(--muted)]">
+              {DISPONIBLE.detalle}
+            </p>
+          </Link>
           {PROXIMAMENTE.map((item) => (
             <div
               key={item.titulo}
-              className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6"
+              className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6 opacity-70"
             >
               <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
                 Próximamente

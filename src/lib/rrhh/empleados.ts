@@ -54,6 +54,7 @@ export type Empleado = {
   contactoEmergencia?: string;
   supervisorId?: number | null;
   supervisorNombre?: string | null;
+  centroCostoId?: number | null;
 };
 
 function str(v: unknown): string {
@@ -150,6 +151,7 @@ function mapEmpleado(row: RowDataPacket): Empleado {
     contactoEmergencia: str(row.contacto_emergencia),
     supervisorId: row.supervisor_id != null ? Number(row.supervisor_id) : null,
     supervisorNombre: row.supervisor_nombre != null ? str(row.supervisor_nombre) : null,
+    centroCostoId: row.centro_costo_id != null ? Number(row.centro_costo_id) : null,
   };
 }
 
