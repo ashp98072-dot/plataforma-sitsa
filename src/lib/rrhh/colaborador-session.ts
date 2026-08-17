@@ -1,6 +1,7 @@
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { cache } from "react";
+import { getAuthSecretBytes } from "@/lib/auth-secret";
 
 /**
  * Cookie DISTINTA de `sitsa_session` (staff). Un mismo navegador puede así
@@ -23,11 +24,7 @@ export type ColaboradorSessionPayload = {
 // se confunden entre sí porque van en cookies distintas y tienen forma
 // distinta de payload.
 function getSecret(): Uint8Array {
-  const secret = process.env.AUTH_SECRET;
-  if (!secret || secret.length < 16) {
-    return new TextEncoder().encode("dev-insecure-secret-change-me-32");
-  }
-  return new TextEncoder().encode(secret);
+  return getAuthSecretBytes();
 }
 
 export async function createColaboradorSessionToken(

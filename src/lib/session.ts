@@ -2,6 +2,7 @@ import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { cache } from "react";
 import type { RolGlobal } from "./roles";
+import { getAuthSecretBytes } from "./auth-secret";
 
 export const SESSION_COOKIE = "sitsa_session";
 const SESSION_HOURS = 12;
@@ -18,11 +19,7 @@ export type SessionPayload = {
 };
 
 function getSecret(): Uint8Array {
-  const secret = process.env.AUTH_SECRET;
-  if (!secret || secret.length < 16) {
-    return new TextEncoder().encode("dev-insecure-secret-change-me-32");
-  }
-  return new TextEncoder().encode(secret);
+  return getAuthSecretBytes();
 }
 
 export async function createSessionToken(

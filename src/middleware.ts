@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { jwtVerify } from "jose";
 import { homePorRol, slugPorHost } from "@/lib/dominios";
+import { getAuthSecretBytes } from "@/lib/auth-secret";
 
 const PUBLIC = ["/login", "/site"];
 const COOKIE = "sitsa_session";
@@ -9,11 +10,7 @@ const COLABORADOR_COOKIE = "sitsa_colab_session";
 const PORTAL_PUBLIC = ["/portal/login"];
 
 function getSecret(): Uint8Array {
-  const secret = process.env.AUTH_SECRET;
-  if (!secret || secret.length < 16) {
-    return new TextEncoder().encode("dev-insecure-secret-change-me-32");
-  }
-  return new TextEncoder().encode(secret);
+  return getAuthSecretBytes();
 }
 
 type SessionLite = { rol?: string; empresaSlug?: string | null };
