@@ -16,20 +16,25 @@ export const empleadoBodySchema = z.object({
   horaEntradaTeorica: z.string().optional(),
   horaSalidaTeorica: z.string().optional(),
   estado: z.enum(["Activo", "Baja"]).default("Activo"),
-  dpi: optStr,
+  dpi: z
+    .string()
+    .regex(/^\d{13}$/, "El DPI debe tener 13 dígitos")
+    .optional()
+    .nullable()
+    .or(z.literal("")),
   nit: optStr,
   igss: optStr,
   irtra: optStr,
   telefono: optStr,
-  email: optStr,
+  email: z.string().email("Email inválido").optional().nullable().or(z.literal("")),
   direccion: optStr,
   sexo: optStr,
   fechaNacimiento: optStr,
   tipoContrato: optStr,
   formaPago: optStr,
-  sueldoBase: optNum,
-  bonoIncentivo: optNum,
-  bonoHerramientas: optNum,
+  sueldoBase: z.number().min(0, "El sueldo base no puede ser negativo").optional().nullable(),
+  bonoIncentivo: z.number().min(0, "La bonificación no puede ser negativa").optional().nullable(),
+  bonoHerramientas: z.number().min(0, "El bono de herramientas no puede ser negativo").optional().nullable(),
   profesion: optStr,
   primerNombre: optStr,
   segundoNombre: optStr,
