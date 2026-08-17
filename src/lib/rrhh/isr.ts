@@ -1,4 +1,4 @@
-import { redondearQ } from "@/lib/rrhh/contratos-pago";
+import { redondearQ, IGSS_LABORAL_PCT } from "@/lib/rrhh/contratos-pago";
 
 /**
  * Módulo de cálculo de ISR Mensual (Guatemala)
@@ -48,7 +48,7 @@ export function calcularISRDetallado(
     throw new Error(`otrosIngresosGravablesMensual inválido: ${otrosIngresosGravablesMensual}`);
   }
 
-  const cuotaIgssLaboralMensual = sueldoBaseMensual * 0.0483;
+  const cuotaIgssLaboralMensual = sueldoBaseMensual * IGSS_LABORAL_PCT;
   const rentaBrutaAnual = (sueldoBaseMensual + otrosIngresosGravablesMensual) * 12;
   const igssAnual = cuotaIgssLaboralMensual * 12;
 
