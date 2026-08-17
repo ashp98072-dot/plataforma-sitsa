@@ -9,6 +9,7 @@ import {
   redondearQ,
   type FormaPago,
 } from "@/lib/rrhh/contratos-pago";
+import { calcularISRMensual } from "@/lib/rrhh/isr";
 
 export type PlanillaPeriodo = {
   id: number;
@@ -359,7 +360,13 @@ export async function generarLineasPeriodo(
     const igssLab = out ? 0 : redondearQ(sueldo * IGSS_LABORAL_PCT);
     const igssPat = out ? 0 : redondearQ(sueldo * IGSS_PATRONAL_PCT);
     const anterior = prevMap.get(empId);
-    const isr = anterior ? Number(anterior.isr) || 0 : 0;
+    const anioFiscal =
+      Number(periodo.fechaInicio.slice(0, 4)) || new Date().getFullYear();
+    const isr = out
+      ? 0
+      : anterior && anterior.isr != null
+        ? Number(anterior.isr) || 0
+        : calcularISRMensual(sueldo, bonoInc, anioFiscal);
     const forma = anterior
       ? anterior.formaPago
       : normalizarFormaPago(String(e.forma_pago ?? "transferencia"));
