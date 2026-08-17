@@ -32,12 +32,6 @@ export const IGSS_LABORAL_PCT = 0.0483;
 /** IGSS patronal + IRTRA/INTECAP aproximado (costo empleador, no se descuenta al trabajador). */
 export const IGSS_PATRONAL_PCT = 0.1267;
 
-export function esOutsourcing(tipo: string | null | undefined): boolean {
-  return String(tipo ?? "")
-    .trim()
-    .toLowerCase() === "outsourcing";
-}
-
 export function normalizarFormaPago(raw: string | null | undefined): FormaPago {
   const v = String(raw ?? "")
     .trim()
@@ -59,6 +53,17 @@ export function normalizarTipoContrato(
     return "outsourcing";
   }
   return "fijo";
+}
+
+/**
+ * Determina si un tipo de contrato (crudo o ya normalizado) corresponde a
+ * outsourcing. Usa la misma normalización que normalizarTipoContrato, por lo
+ * que reconoce también los typos conocidos en datos reales ("outsorcing",
+ * "absorbing"), evitando que un registro con un typo se salte cálculos de
+ * nómina como el descuento de IGSS.
+ */
+export function esOutsourcing(tipo: string | null | undefined): boolean {
+  return normalizarTipoContrato(tipo) === "outsourcing";
 }
 
 export function etiquetaTipoContrato(raw: string | null | undefined): string {
