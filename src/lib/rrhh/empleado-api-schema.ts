@@ -4,6 +4,42 @@ import { faltantesAlta } from "./empleado-validacion";
 const optStr = z.string().optional().nullable();
 const optNum = z.number().optional().nullable();
 
+/**
+ * Valida que un texto sea una fecha calendario real en formato YYYY-MM-DD
+ * (rechaza cosas como "aaaaaaaa", "2026-13-01" o "2026-02-30").
+ */
+function esFechaValida(value: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!m) return false;
+  const [, y, mo, d] = m;
+  const anio = Number(y);
+  const mes = Number(mo);
+  const dia = Number(d);
+  if (mes < 1 || mes > 12 || dia < 1 || dia > 31) return false;
+  const fecha = new Date(Date.UTC(anio, mes - 1, dia));
+  return (
+    fecha.getUTCFullYear() === anio &&
+    fecha.getUTCMonth() === mes - 1 &&
+    fecha.getUTCDate() === dia
+  );
+}
+
+const MSG_FECHA_INVALIDA = "Fecha inválida (formato esperado YYYY-MM-DD).";
+
+/** Fecha obligatoria: string no vacío que debe ser una fecha calendario real. */
+const fechaRequerida = z
+  .string()
+  .min(8)
+  .refine(esFechaValida, { message: MSG_FECHA_INVALIDA });
+
+/** Fecha opcional: si viene, debe ser una fecha calendario real; permite vacío/null. */
+const fechaOpcional = z
+  .string()
+  .refine(esFechaValida, { message: MSG_FECHA_INVALIDA })
+  .optional()
+  .nullable()
+  .or(z.literal(""));
+
 /** Body compartido crear/actualizar empleado (ficha Monaco). */
 export const empleadoBodySchema = z.object({
   codigo: z.string().min(1),
@@ -11,8 +47,8 @@ export const empleadoBodySchema = z.object({
   puesto: z.string().optional(),
   categoriaOps: z.string().optional(),
   tipoHorario: z.enum(["Fijo", "Variable"]).default("Fijo"),
-  fechaAlta: z.string().min(8),
-  fechaInicioLaboral: z.string().nullable().optional(),
+  fechaAlta: fechaRequerida,
+  fechaInicioLaboral: fechaOpcional,
   horaEntradaTeorica: z.string().optional(),
   horaSalidaTeorica: z.string().optional(),
   estado: z.enum(["Activo", "Baja"]).default("Activo"),
@@ -29,7 +65,7 @@ export const empleadoBodySchema = z.object({
   email: z.string().email("Email inválido").optional().nullable().or(z.literal("")),
   direccion: optStr,
   sexo: optStr,
-  fechaNacimiento: optStr,
+  fechaNacimiento: fechaOpcional,
   tipoContrato: optStr,
   formaPago: optStr,
   sueldoBase: z.number().min(0, "El sueldo base no puede ser negativo").optional().nullable(),
@@ -50,8 +86,8 @@ export const empleadoBodySchema = z.object({
   idioma: optStr,
   licenciaNumero: optStr,
   licenciaTipo: optStr,
-  licenciaVence: optStr,
-  fechaEgreso: optStr,
+  licenciaVence: fechaOpcional,
+  fechaEgreso: fechaOpcional,
   observaciones: optStr,
   cuentaBancaria: optStr,
   tipoCuenta: optStr,
