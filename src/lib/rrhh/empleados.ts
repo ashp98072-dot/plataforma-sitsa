@@ -1,6 +1,6 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
-import { toIsoDate } from "./dates";
+import { toIsoDate, hoyLocal } from "./dates";
 import { asegurarSchemaEmpleados } from "./empleados-schema";
 
 export type Empleado = {
@@ -385,7 +385,12 @@ function paramsFicha(data: EmpleadoInput) {
     licenciaNumero: data.licenciaNumero?.trim() || null,
     licenciaTipo: data.licenciaTipo?.trim() || null,
     licenciaVence: data.licenciaVence || null,
-    fechaEgreso: data.fechaEgreso || null,
+    // Si se marca "Baja" sin indicar fecha, se autocompleta con hoy para no
+    // perder el dato — necesario para reportes de bajas por mes (dashboard
+    // gerencial). Si el usuario sí indicó una fecha (p.ej. baja retroactiva),
+    // se respeta esa fecha y no se sobrescribe.
+    fechaEgreso:
+      data.fechaEgreso || (data.estado === "Baja" ? hoyLocal() : null),
     observaciones: data.observaciones?.trim() || null,
     cuentaBancaria: data.cuentaBancaria?.trim() || null,
     tipoCuenta: data.tipoCuenta?.trim() || null,
