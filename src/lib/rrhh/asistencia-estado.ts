@@ -66,16 +66,3 @@ export function calcularEstadoAsistenciaSync(
 
   return { estado: "Retraso", minutos: late };
 }
-
-/** Sin marcaje tras N minutos de la entrada teórica → falta (día en curso). */
-export function esFaltaPorNoMarcar(opts: {
-  horaTeoricaEntrada: string;
-  ahoraHora: string;
-  minutosParaFalta: number;
-}): boolean {
-  const teo = extraerHoraTexto(opts.horaTeoricaEntrada);
-  const ahora = extraerHoraTexto(opts.ahoraHora);
-  if (!teo || !ahora) return false;
-  const diff = Math.floor((ahora.getTime() - teo.getTime()) / 60000);
-  return diff >= opts.minutosParaFalta;
-}
