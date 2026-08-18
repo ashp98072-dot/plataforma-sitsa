@@ -44,7 +44,7 @@ export type PlanillaLinea = {
 };
 
 export type CuadrePlanilla = {
-  porFormaPago: Record<
+  porFormaPago: Record
     FormaPago,
     {
       cantidad: number;
@@ -298,6 +298,65 @@ async function sumasPorEmpleado(
     /* tabla ausente */
   }
   return { descuentos, prestaciones };
+}
+
+export type ItemDetalle = {
+  concepto: string;
+  monto: number;
+  fecha: string;
+  notas: string;
+};
+
+/** Detalle itemizado de descuentos de un empleado en un rango de fechas (para la boleta). */
+export async function listarDescuentosDetalle(
+  empresaId: number,
+  empleadoId: number,
+  desde: string,
+  hasta: string,
+): Promise<ItemDetalle[]> {
+  try {
+    const rows = await query<RowDataPacket[]>(
+      `SELECT concepto, monto, fecha, notas
+       FROM rrhh_descuentos
+       WHERE empresa_id = ? AND id_empleado = ? AND fecha BETWEEN ? AND ?
+       ORDER BY fecha`,
+      [empresaId, empleadoId, desde, hasta],
+    );
+    return rows.map((r) => ({
+      concepto: String(r.concepto ?? "Descuento"),
+      monto: Number(r.monto ?? 0),
+      fecha: String(r.fecha).slice(0, 10),
+      notas: r.notas ? String(r.notas) : "",
+    }));
+  } catch {
+    return []; // tabla ausente
+  }
+}
+
+/** Detalle itemizado de prestaciones/devengados de un empleado en un rango de fechas (para la boleta). */
+export async function listarPrestacionesDetalle(
+  empresaId: number,
+  empleadoId: number,
+  desde: string,
+  hasta: string,
+): Promise<ItemDetalle[]> {
+  try {
+    const rows = await query<RowDataPacket[]>(
+      `SELECT tipo AS concepto, monto, fecha, notas
+       FROM rrhh_prestaciones
+       WHERE empresa_id = ? AND id_empleado = ? AND fecha BETWEEN ? AND ?
+       ORDER BY fecha`,
+      [empresaId, empleadoId, desde, hasta],
+    );
+    return rows.map((r) => ({
+      concepto: String(r.concepto ?? "Otro ingreso"),
+      monto: Number(r.monto ?? 0),
+      fecha: String(r.fecha).slice(0, 10),
+      notas: r.notas ? String(r.notas) : "",
+    }));
+  } catch {
+    return []; // tabla ausente
+  }
 }
 
 /**

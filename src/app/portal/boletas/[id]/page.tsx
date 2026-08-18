@@ -1,7 +1,12 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { getColaboradorSession } from "@/lib/rrhh/colaborador-session";
-import { obtenerPeriodo, listarLineas } from "@/lib/rrhh/planillas";
+import {
+  obtenerPeriodo,
+  listarLineas,
+  listarDescuentosDetalle,
+  listarPrestacionesDetalle,
+} from "@/lib/rrhh/planillas";
 
 const ESTADOS_VISIBLES_COLABORADOR = ["Cerrada", "Pagada"];
 
@@ -55,6 +60,27 @@ export default async function BoletaDetallePage({
     notFound();
   }
 
+  const [prestacionesDetalle, descuentosDetalle] = await Promise.all([
+    listarPrestacionesDetalle(
+      session!.empresaId,
+      session!.empleadoId,
+      periodo!.fechaInicio,
+      periodo!.fechaFin,
+    ),
+    listarDescuentosDetalle(
+      session!.empresaId,
+      session!.empleadoId,
+      periodo!.fechaInicio,
+      periodo!.fechaFin,
+    ),
+  ]);
+
+  const sumaPrestacionesDetalle = prestacionesDetalle.reduce((a, i) => a + i.monto, 0);
+  const sumaDescuentosDetalle = descuentosDetalle.reduce((a, i) => a + i.monto, 0);
+  const prestacionesCuadran =
+    Math.abs(sumaPrestacionesDetalle - linea!.otrosIngresos) < 0.01;
+  const descuentosCuadran = Math.abs(sumaDescuentosDetalle - linea!.descuentos) < 0.01;
+
   const ingresos =
     linea!.sueldoBase + linea!.bonoIncentivo + linea!.bonoHerramientas + linea!.otrosIngresos;
 
@@ -86,8 +112,24 @@ export default async function BoletaDetallePage({
             <Renglon label="Sueldo base" valor={linea!.sueldoBase} />
             <Renglon label="Bonificación incentivo" valor={linea!.bonoIncentivo} />
             <Renglon label="Bono herramientas" valor={linea!.bonoHerramientas} />
-            <Renglon label="Otros ingresos / viáticos" valor={linea!.otrosIngresos} />
+            {prestacionesDetalle.length > 0
+              ? prestacionesDetalle.map((item, i) => (
+                  <Renglon
+                    key={i}
+                    label={`${item.concepto} (${item.fecha})`}
+                    valor={item.monto}
+                  />
+                ))
+              : (
+                  <Renglon label="Otros ingresos / viáticos" valor={linea!.otrosIngresos} />
+                )}
           </div>
+          {prestacionesDetalle.length > 0 && !prestacionesCuadran ? (
+            <p className="mt-2 text-xs text-amber-600">
+              El detalle ({formatQ(sumaPrestacionesDetalle)}) no coincide exactamente
+              con el total registrado ({formatQ(linea!.otrosIngresos)}). Consulta con RRHH.
+            </p>
+          ) : null}
           <div className="mt-2 flex items-center justify-between border-t border-[var(--border)] pt-2">
             <span className="text-sm font-medium">Total ingresos</span>
             <span className="text-sm font-semibold">{formatQ(ingresos)}</span>
@@ -101,8 +143,25 @@ export default async function BoletaDetallePage({
           <div className="mt-2 divide-y divide-[var(--border)]">
             <Renglon label="IGSS laboral" valor={linea!.igssLaboral} resta />
             <Renglon label="ISR" valor={linea!.isr} resta />
-            <Renglon label="Otros descuentos" valor={linea!.descuentos} resta />
+            {descuentosDetalle.length > 0
+              ? descuentosDetalle.map((item, i) => (
+                  <Renglon
+                    key={i}
+                    label={`${item.concepto} (${item.fecha})`}
+                    valor={item.monto}
+                    resta
+                  />
+                ))
+              : (
+                  <Renglon label="Otros descuentos" valor={linea!.descuentos} resta />
+                )}
           </div>
+          {descuentosDetalle.length > 0 && !descuentosCuadran ? (
+            <p className="mt-2 text-xs text-amber-600">
+              El detalle ({formatQ(sumaDescuentosDetalle)}) no coincide exactamente
+              con el total registrado ({formatQ(linea!.descuentos)}). Consulta con RRHH.
+            </p>
+          ) : null}
           {linea!.igssLaboral === 0 && linea!.isr === 0 && linea!.descuentos === 0 ? (
             <p className="mt-2 text-sm text-[var(--muted)]">Sin descuentos este periodo.</p>
           ) : null}
