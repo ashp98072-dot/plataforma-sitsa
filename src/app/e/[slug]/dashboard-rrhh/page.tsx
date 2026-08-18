@@ -98,6 +98,11 @@ export default function DashboardRrhhPage() {
       desc: "Permisos y resumen operativo.",
     },
     {
+      href: `/e/${slug}/rrhh/entrevistas`,
+      title: "Entrevistas",
+      desc: "Calendario de entrevistas a candidatos.",
+    },
+    {
       href: `/e/${slug}/rrhh/configuracion`,
       title: "Configuración",
       desc: "Tolerancia y feriados.",
