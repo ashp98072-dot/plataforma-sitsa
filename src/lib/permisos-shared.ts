@@ -14,6 +14,7 @@ export const RRHH_SUBMODULOS = [
   "descuentos",
   "prestaciones",
   "inventario",
+  "centros_costo",
 ] as const;
 
 export type RrhhSubmodulo = (typeof RRHH_SUBMODULOS)[number];
@@ -30,6 +31,7 @@ export const RRHH_SUBMODULO_LABEL: Record<RrhhSubmodulo, string> = {
   descuentos: "Descuentos",
   prestaciones: "Prestaciones",
   inventario: "Inventario",
+  centros_costo: "Centros de Costo",
 };
 
 /**
