@@ -33,6 +33,11 @@ const DISPONIBLES = [
       "Si eres supervisor: registra horas de tu equipo. Todos: consulta tu historial.",
     href: "/portal/horas-extra",
   },
+  {
+    titulo: "Entrevistas",
+    detalle: "Tus entrevistas asignadas como entrevistador.",
+    href: "/portal/entrevistas",
+  },
 ];
 
 export default async function PortalHomePage() {
