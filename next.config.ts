@@ -35,6 +35,16 @@ const nextConfig: NextConfig = {
         ],
       },
       {
+        // Portal del colaborador: mismo problema que /login — si el CDN
+        // sirve HTML viejo de /portal/login (o cualquier ruta del portal),
+        // el navegador pide CSS/JS con hash de un build anterior que ya no
+        // existe → pantalla sin estilos o payload RSC crudo sin renderizar.
+        source: "/portal/:path*",
+        headers: [
+          { key: "Cache-Control", value: "private, no-store, no-cache" },
+        ],
+      },
+      {
         // Assets con hash: cache largo (el nombre cambia en cada build).
         source: "/_next/static/:path*",
         headers: [
