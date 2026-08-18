@@ -16,6 +16,8 @@ export const RRHH_SUBMODULOS = [
   "inventario",
   "centros_costo",
   "entrevistas",
+  "recordatorios",
+  "bitacora_legal",
 ] as const;
 
 export type RrhhSubmodulo = (typeof RRHH_SUBMODULOS)[number];
@@ -34,6 +36,8 @@ export const RRHH_SUBMODULO_LABEL: Record<RrhhSubmodulo, string> = {
   inventario: "Inventario",
   centros_costo: "Centros de Costo",
   entrevistas: "Entrevistas",
+  recordatorios: "Recordatorios",
+  bitacora_legal: "Bitácora Legal",
 };
 
 /**
@@ -451,6 +455,8 @@ export const RRHH_NAV: {
   { sub: "prestaciones", label: "Prestaciones", path: "prestaciones" },
   { sub: "inventario", label: "Inventario", path: "inventario" },
   { sub: "entrevistas", label: "Entrevistas", path: "entrevistas" },
+  { sub: "recordatorios", label: "Recordatorios", path: "recordatorios" },
+  { sub: "bitacora_legal", label: "Bitácora Legal", path: "bitacora-legal" },
   { sub: "configuracion", label: "Configuración", path: "configuracion" },
 ];
 
