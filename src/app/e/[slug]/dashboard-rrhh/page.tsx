@@ -103,6 +103,16 @@ export default function DashboardRrhhPage() {
       desc: "Calendario de entrevistas a candidatos.",
     },
     {
+      href: `/e/${slug}/rrhh/recordatorios`,
+      title: "Recordatorios",
+      desc: "Vencimientos de contratos, licencias, obligaciones legales.",
+    },
+    {
+      href: `/e/${slug}/rrhh/bitacora-legal`,
+      title: "Bitácora Legal",
+      desc: "Amonestaciones, suspensiones, despidos y gestiones.",
+    },
+    {
       href: `/e/${slug}/rrhh/configuracion`,
       title: "Configuración",
       desc: "Tolerancia y feriados.",
