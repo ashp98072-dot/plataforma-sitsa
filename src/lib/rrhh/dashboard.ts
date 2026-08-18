@@ -9,6 +9,15 @@ export type DashboardStats = {
   enVacaciones: number;
 };
 
+export type ResumenMensual = {
+  /** "YYYY-MM" */
+  mes: string;
+  altas: number;
+  bajas: number;
+  /** Suma de neto de todas las líneas de planilla cuyo periodo inicia en ese mes. */
+  costoNomina: number;
+};
+
 export async function obtenerEstadisticasDashboard(
   empresaId: number,
 ): Promise<DashboardStats> {
@@ -70,4 +79,74 @@ export async function obtenerEstadisticasDashboard(
     ausentesHoy,
     enVacaciones,
   };
+}
+
+/**
+ * Resumen gerencial mensual (altas, bajas y costo de nómina) de los
+ * últimos `meses` calendario, incluyendo el mes actual (parcial si aún
+ * no termina). No toca obtenerEstadisticasDashboard (ese sigue siendo
+ * el snapshot "de hoy").
+ */
+export async function obtenerResumenGerencial(
+  empresaId: number,
+  meses = 6,
+): Promise<ResumenMensual[]> {
+  const hoy = new Date();
+  const rangos: { mes: string; desde: string; hasta: string }[] = [];
+  for (let i = meses - 1; i >= 0; i--) {
+    const d = new Date(hoy.getFullYear(), hoy.getMonth() - i, 1);
+    const y = d.getFullYear();
+    const m = d.getMonth(); // 0-based
+    const desde = `${y}-${String(m + 1).padStart(2, "0")}-01`;
+    const ultimoDia = new Date(y, m + 1, 0).getDate();
+    const hasta = `${y}-${String(m + 1).padStart(2, "0")}-${String(ultimoDia).padStart(2, "0")}`;
+    rangos.push({ mes: `${y}-${String(m + 1).padStart(2, "0")}`, desde, hasta });
+  }
+
+  const consultaSegura = (
+    nombre: string,
+    sql: string,
+    params: SqlParams,
+  ): Promise<RowDataPacket[]> =>
+    query<RowDataPacket[]>(sql, params).catch((error) => {
+      console.error(`[dashboard-gerencial] Falló consulta "${nombre}":`, error);
+      return [] as RowDataPacket[];
+    });
+
+  const resultados = await Promise.all(
+    rangos.map(async ({ mes, desde, hasta }) => {
+      const [altasRows, bajasRows, costoRows] = await Promise.all([
+        consultaSegura(
+          "altas",
+          `SELECT COUNT(*) AS total FROM empleados
+           WHERE empresa_id = ? AND fecha_alta BETWEEN ? AND ?`,
+          [empresaId, desde, hasta],
+        ),
+        consultaSegura(
+          "bajas",
+          `SELECT COUNT(*) AS total FROM empleados
+           WHERE empresa_id = ? AND estado = 'Baja'
+             AND fecha_egreso BETWEEN ? AND ?`,
+          [empresaId, desde, hasta],
+        ),
+        consultaSegura(
+          "costoNomina",
+          `SELECT COALESCE(SUM(l.neto), 0) AS total
+           FROM rrhh_planilla_lineas l
+           INNER JOIN rrhh_planilla_periodos p ON p.id = l.periodo_id
+           WHERE l.empresa_id = ? AND p.empresa_id = ?
+             AND p.fecha_inicio BETWEEN ? AND ?`,
+          [empresaId, empresaId, desde, hasta],
+        ),
+      ]);
+      return {
+        mes,
+        altas: Number(altasRows[0]?.total ?? 0),
+        bajas: Number(bajasRows[0]?.total ?? 0),
+        costoNomina: Number(costoRows[0]?.total ?? 0),
+      };
+    }),
+  );
+
+  return resultados;
 }
