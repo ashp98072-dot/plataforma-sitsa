@@ -164,7 +164,7 @@ export async function listarSolicitudes(
   return rows.map(mapSolicitud);
 }
 
-async function obtenerSolicitud(
+export async function obtenerSolicitud(
   empresaId: number,
   id: number,
 ): Promise<SolicitudVacaciones | null> {
