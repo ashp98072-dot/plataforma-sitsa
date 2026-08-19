@@ -11,6 +11,7 @@ import {
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { DocumentosModal } from "@/components/rrhh/documentos-modal";
+import { PortalAccesoModal } from "@/components/rrhh/portal-acceso-modal";
 import { ImportErroresLista } from "@/components/import-errores-lista";
 import { formatearFechaVisible, hoyLocal } from "@/lib/rrhh/dates";
 import { CATEGORIAS_OPS, PUESTOS_MONACO } from "@/lib/rrhh/categorias-ops";
@@ -414,6 +415,7 @@ export default function EmpleadosPage() {
   const [erroresImport, setErroresImport] = useState<string[]>([]);
   const [importando, setImportando] = useState(false);
   const [docsEmp, setDocsEmp] = useState<Emp | null>(null);
+  const [portalEmp, setPortalEmp] = useState<Emp | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [secciones, setSecciones] = useState<Record<SeccionFicha, boolean>>({
     identidad: true,
@@ -1496,6 +1498,16 @@ export default function EmpleadosPage() {
                   </button>
                   <button
                     type="button"
+                    className="text-[var(--accent-2)] underline"
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      setPortalEmp(e);
+                    }}
+                  >
+                    Portal
+                  </button>
+                  <button
+                    type="button"
                     className="text-red-300 underline"
                     onClick={() => void borrar(e.id)}
                   >
@@ -1516,6 +1528,16 @@ export default function EmpleadosPage() {
           empleadoId={docsEmp.id}
           empleadoNombre={`${docsEmp.codigo} — ${docsEmp.nombre}`}
           onClose={() => setDocsEmp(null)}
+          onChanged={() => void cargar()}
+        />
+      ) : null}
+
+      {portalEmp ? (
+        <PortalAccesoModal
+          slug={slug}
+          empleadoId={portalEmp.id}
+          empleadoNombre={`${portalEmp.codigo} — ${portalEmp.nombre}`}
+          onClose={() => setPortalEmp(null)}
           onChanged={() => void cargar()}
         />
       ) : null}
