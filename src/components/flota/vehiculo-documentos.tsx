@@ -315,7 +315,7 @@ export function VehiculoDocumentos({ slug, vehiculoId, can }: Props) {
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {d.url ? (
-                    
+         <a           
                       href={d.url}
                       target="_blank"
                       rel="noreferrer"
