@@ -33,6 +33,9 @@ function fmtUi(iso: string | null | undefined): string {
 }
 
 export function SolicitudesVacacionesPanel({ slug, onResuelto }: Props) {
+  const [vista, setVista] = useState<"pendientes" | "resueltas">(
+    "pendientes",
+  );
   const [items, setItems] = useState<Solicitud[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -43,18 +46,24 @@ export function SolicitudesVacacionesPanel({ slug, onResuelto }: Props) {
     setLoading(true);
     setError("");
     try {
+      const estadoQs = vista === "pendientes" ? "Pendiente" : "todas";
       const res = await fetch(
-        `/api/empresas/${slug}/rrhh/vacaciones/solicitudes`,
+        `/api/empresas/${slug}/rrhh/vacaciones/solicitudes?estado=${estadoQs}`,
       );
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Error al cargar.");
-      setItems(data.solicitudes ?? []);
+      const todas = (data.solicitudes ?? []) as Solicitud[];
+      setItems(
+        vista === "pendientes"
+          ? todas
+          : todas.filter((s) => s.estado !== "Pendiente"),
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error al cargar.");
     } finally {
       setLoading(false);
     }
-  }, [slug]);
+  }, [slug, vista]);
 
   useEffect(() => {
     void cargar();
@@ -86,24 +95,79 @@ export function SolicitudesVacacionesPanel({ slug, onResuelto }: Props) {
     }
   }
 
-  if (!loading && items.length === 0 && !error) return null;
+  function descargarBoleta(id: number) {
+    window.open(
+      `/api/empresas/${slug}/rrhh/vacaciones/solicitudes/${id}/boleta`,
+      "_blank",
+    );
+  }
+
+  if (
+    !loading &&
+    items.length === 0 &&
+    !error &&
+    vista === "pendientes"
+  ) {
+    return (
+      <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-3">
+        <button
+          type="button"
+          onClick={() => setVista("resueltas")}
+          className="text-xs text-[var(--accent-2)] underline"
+        >
+          No hay solicitudes pendientes · Ver resueltas
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-      <div className="mb-2 flex items-center justify-between">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-sm font-semibold">
-          Solicitudes pendientes de aprobación
-          {items.length > 0 ? (
+          {vista === "pendientes"
+            ? "Solicitudes pendientes de aprobación"
+            : "Solicitudes resueltas"}
+          {vista === "pendientes" && items.length > 0 ? (
             <span className="ml-2 rounded-full bg-amber-500/20 px-2 py-0.5 text-xs text-amber-300">
               {items.length}
             </span>
           ) : null}
         </h2>
+        <div className="flex gap-1 text-xs">
+          <button
+            type="button"
+            onClick={() => setVista("pendientes")}
+            className={`rounded px-2 py-1 ${
+              vista === "pendientes"
+                ? "bg-[var(--accent)] text-white"
+                : "bg-black/10 text-[var(--muted)]"
+            }`}
+          >
+            Pendientes
+          </button>
+          <button
+            type="button"
+            onClick={() => setVista("resueltas")}
+            className={`rounded px-2 py-1 ${
+              vista === "resueltas"
+                ? "bg-[var(--accent)] text-white"
+                : "bg-black/10 text-[var(--muted)]"
+            }`}
+          >
+            Resueltas
+          </button>
+        </div>
       </div>
 
       {error ? <p className="mb-2 text-sm text-red-300">{error}</p> : null}
       {loading ? (
         <p className="text-sm text-[var(--muted)]">Cargando…</p>
+      ) : null}
+      {!loading && items.length === 0 && !error ? (
+        <p className="text-sm text-[var(--muted)]">
+          No hay solicitudes resueltas todavía.
+        </p>
       ) : null}
 
       <div className="space-y-2">
@@ -115,6 +179,17 @@ export function SolicitudesVacacionesPanel({ slug, onResuelto }: Props) {
             <div>
               <p className="font-medium">
                 {s.empleadoNombre ?? `Empleado #${s.empleadoId}`} — {s.tipo}
+                {vista === "resueltas" ? (
+                  <span
+                    className={`ml-2 rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                      s.estado === "Aprobada"
+                        ? "bg-emerald-900/50 text-emerald-200"
+                        : "bg-rose-900/50 text-rose-200"
+                    }`}
+                  >
+                    {s.estado}
+                  </span>
+                ) : null}
               </p>
               <p className="text-[var(--muted)]">
                 {fmtUi(s.fechaInicio)} → {fmtUi(s.fechaFin)} ·{" "}
@@ -125,38 +200,55 @@ export function SolicitudesVacacionesPanel({ slug, onResuelto }: Props) {
                   “{s.comentarioColaborador}”
                 </p>
               ) : null}
+              {vista === "resueltas" && s.comentarioRrhh ? (
+                <p className="text-xs text-[var(--muted)]">
+                  RRHH: {s.comentarioRrhh}
+                </p>
+              ) : null}
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
-              <input
-                type="text"
-                placeholder="Comentario (opcional)"
-                className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-xs"
-                value={comentarios[s.id] ?? ""}
-                onChange={(e) =>
-                  setComentarios((prev) => ({
-                    ...prev,
-                    [s.id]: e.target.value,
-                  }))
-                }
-              />
-              <button
-                type="button"
-                disabled={procesando === s.id}
-                onClick={() => resolver(s.id, "aprobar")}
-                className="rounded bg-emerald-600 px-3 py-1.5 text-xs text-white disabled:opacity-50"
-              >
-                {procesando === s.id ? "…" : "Aprobar"}
-              </button>
-              <button
-                type="button"
-                disabled={procesando === s.id}
-                onClick={() => resolver(s.id, "rechazar")}
-                className="rounded bg-red-600/80 px-3 py-1.5 text-xs text-white disabled:opacity-50"
-              >
-                {procesando === s.id ? "…" : "Rechazar"}
-              </button>
-            </div>
+            {vista === "pendientes" ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="text"
+                  placeholder="Comentario (opcional)"
+                  className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-xs"
+                  value={comentarios[s.id] ?? ""}
+                  onChange={(e) =>
+                    setComentarios((prev) => ({
+                      ...prev,
+                      [s.id]: e.target.value,
+                    }))
+                  }
+                />
+                <button
+                  type="button"
+                  disabled={procesando === s.id}
+                  onClick={() => resolver(s.id, "aprobar")}
+                  className="rounded bg-emerald-600 px-3 py-1.5 text-xs text-white disabled:opacity-50"
+                >
+                  {procesando === s.id ? "…" : "Aprobar"}
+                </button>
+                <button
+                  type="button"
+                  disabled={procesando === s.id}
+                  onClick={() => resolver(s.id, "rechazar")}
+                  className="rounded bg-red-600/80 px-3 py-1.5 text-xs text-white disabled:opacity-50"
+                >
+                  {procesando === s.id ? "…" : "Rechazar"}
+                </button>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => descargarBoleta(s.id)}
+                  className="rounded bg-[#1F6AA5] px-3 py-1.5 text-xs text-white"
+                >
+                  Descargar boleta
+                </button>
+              </div>
+            )}
           </div>
         ))}
       </div>
