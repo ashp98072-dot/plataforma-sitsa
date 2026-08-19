@@ -339,6 +339,7 @@ export default function FlotaClient() {
     { tipo: string; codigo: string }[]
   >([]);
   const [editId, setEditId] = useState<number | null>(null);
+  const [mostrarFormVehiculo, setMostrarFormVehiculo] = useState(false);
   const [tallerId, setTallerId] = useState<number | null>(null);
   const [motivoTaller, setMotivoTaller] = useState("");
 
@@ -1085,6 +1086,17 @@ export default function FlotaClient() {
         .map((f) => ({ tipo: f.tipo, codigo: f.codigo })),
     );
     setTab("vehiculos");
+    setMostrarFormVehiculo(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function irANuevoVehiculo() {
+    setEditId(null);
+    setForm(emptyForm);
+    setFiltrosForm([]);
+    setAccesoEmpresaIds([]);
+    setMostrarFormVehiculo(true);
+    setTab("vehiculos");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -1125,10 +1137,19 @@ export default function FlotaClient() {
       return;
     }
     setMsg(data.mensaje);
-    setForm(emptyForm);
-    setFiltrosForm([]);
-    setEditId(null);
-    setAccesoEmpresaIds([]);
+    if (editId) {
+      // Edición: cerramos el formulario como antes.
+      setForm(emptyForm);
+      setFiltrosForm([]);
+      setEditId(null);
+      setAccesoEmpresaIds([]);
+      setMostrarFormVehiculo(false);
+    } else {
+      // Recién creado: nos quedamos en modo edición de ESTE vehículo para
+      // poder agregar su papelería (tarjeta de circulación, póliza, etc.)
+      // sin tener que buscarlo de nuevo en la tabla.
+      setEditId(Number(data.id));
+    }
     await cargar({ solo: ["vehiculos"] });
   }
 
@@ -2792,7 +2813,17 @@ export default function FlotaClient() {
             </div>
           </div>
           {SearchBar}
-          {(can("flota_vehiculos", "crear") || editId) &&
+          {!mostrarFormVehiculo && can("flota_vehiculos", "crear") ? (
+            <button
+              type="button"
+              onClick={irANuevoVehiculo}
+              className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white"
+            >
+              + Nuevo vehículo
+            </button>
+          ) : null}
+          {mostrarFormVehiculo &&
+          (can("flota_vehiculos", "crear") || editId) &&
           (can("flota_vehiculos", "editar") || !editId) ? (
             <form
               onSubmit={onSubmitVehiculo}
@@ -2802,19 +2833,19 @@ export default function FlotaClient() {
                 <h2 className="font-medium">
                   {editId ? `Editar vehículo` : "Registrar vehículo"}
                 </h2>
-                {editId ? (
-                  <button
-                    type="button"
-                    className="text-xs underline"
-                    onClick={() => {
-                      setEditId(null);
-                      setForm(emptyForm);
-                      setFiltrosForm([]);
-                    }}
-                  >
-                    Cancelar edición
-                  </button>
-                ) : null}
+                <button
+                  type="button"
+                  className="text-xs underline"
+                  onClick={() => {
+                    setEditId(null);
+                    setForm(emptyForm);
+                    setFiltrosForm([]);
+                    setAccesoEmpresaIds([]);
+                    setMostrarFormVehiculo(false);
+                  }}
+                >
+                  {editId ? "Cancelar edición" : "Cerrar"}
+                </button>
               </div>
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                 {(
@@ -3083,7 +3114,13 @@ export default function FlotaClient() {
                 ) : null}
               </div>
               {editId ? (
-                <VehiculoDocumentos slug={slug} vehiculoId={editId} can={can} />
+                <>
+                  <p className="text-xs text-[var(--muted)]">
+                    Ya puedes agregar la papelería de este vehículo (tarjeta
+                    de circulación, póliza, etc.) sin salir de esta pantalla.
+                  </p>
+                  <VehiculoDocumentos slug={slug} vehiculoId={editId} can={can} />
+                </>
               ) : null}
             </form>
           ) : null}
