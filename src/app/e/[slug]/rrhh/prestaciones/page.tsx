@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { TIPOS_DEVENGADO } from "@/lib/rrhh/catalogos-nomina";
 
 type Emp = { id: number; codigo: string; nombre: string };
 
@@ -13,6 +14,7 @@ export default function PrestacionesPage() {
   const [aviso, setAviso] = useState("");
   const [empleadoId, setEmpleadoId] = useState(0);
   const [tipo, setTipo] = useState("Bono");
+  const [tipoOtro, setTipoOtro] = useState("");
   const [monto, setMonto] = useState(0);
   const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10));
   const [notas, setNotas] = useState("");
@@ -35,16 +37,22 @@ export default function PrestacionesPage() {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    const tipoFinal = tipo === "Otro" ? tipoOtro.trim() : tipo;
+    if (!tipoFinal) {
+      setMsg("Escribe el tipo de devengado en 'Otro'.");
+      return;
+    }
     const res = await fetch(`/api/empresas/${slug}/rrhh/prestaciones`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ empleadoId, tipo, monto, fecha, notas }),
+      body: JSON.stringify({ empleadoId, tipo: tipoFinal, monto, fecha, notas }),
     });
     const data = await res.json();
     setMsg(data.mensaje || data.error);
     if (res.ok) {
       setMonto(0);
       setNotas("");
+      setTipoOtro("");
       await cargar();
     }
   }
@@ -84,10 +92,19 @@ export default function PrestacionesPage() {
           value={tipo}
           onChange={(e) => setTipo(e.target.value)}
         >
-          {["Bono", "Aguinaldo", "Bono14", "Indemnización", "Otro"].map((t) => (
+          {TIPOS_DEVENGADO.map((t) => (
             <option key={t}>{t}</option>
           ))}
         </select>
+        {tipo === "Otro" ? (
+          <input
+            className={input}
+            placeholder="Especifica el tipo"
+            value={tipoOtro}
+            onChange={(e) => setTipoOtro(e.target.value)}
+            required
+          />
+        ) : null}
         <input
           type="number"
           step="0.01"

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { CONCEPTOS_DESCUENTO } from "@/lib/rrhh/catalogos-nomina";
 
 type Emp = { id: number; codigo: string; nombre: string };
 
@@ -12,7 +13,8 @@ export default function DescuentosPage() {
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
   const [aviso, setAviso] = useState("");
   const [empleadoId, setEmpleadoId] = useState(0);
-  const [concepto, setConcepto] = useState("");
+  const [concepto, setConcepto] = useState(CONCEPTOS_DESCUENTO[0] as string);
+  const [conceptoOtro, setConceptoOtro] = useState("");
   const [monto, setMonto] = useState(0);
   const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10));
   const [notas, setNotas] = useState("");
@@ -35,15 +37,28 @@ export default function DescuentosPage() {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    const conceptoFinal =
+      concepto === "Otro" ? conceptoOtro.trim() : concepto;
+    if (!conceptoFinal) {
+      setMsg("Escribe el concepto en 'Otro'.");
+      return;
+    }
     const res = await fetch(`/api/empresas/${slug}/rrhh/descuentos`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ empleadoId, concepto, monto, fecha, notas }),
+      body: JSON.stringify({
+        empleadoId,
+        concepto: conceptoFinal,
+        monto,
+        fecha,
+        notas,
+      }),
     });
     const data = await res.json();
     setMsg(data.mensaje || data.error);
     if (res.ok) {
-      setConcepto("");
+      setConcepto(CONCEPTOS_DESCUENTO[0] as string);
+      setConceptoOtro("");
       setMonto(0);
       setNotas("");
       await cargar();
@@ -80,13 +95,24 @@ export default function DescuentosPage() {
             </option>
           ))}
         </select>
-        <input
+        <select
           className={input}
-          placeholder="Concepto"
           value={concepto}
           onChange={(e) => setConcepto(e.target.value)}
-          required
-        />
+        >
+          {CONCEPTOS_DESCUENTO.map((c) => (
+            <option key={c}>{c}</option>
+          ))}
+        </select>
+        {concepto === "Otro" ? (
+          <input
+            className={input}
+            placeholder="Especifica el concepto"
+            value={conceptoOtro}
+            onChange={(e) => setConceptoOtro(e.target.value)}
+            required
+          />
+        ) : null}
         <input
           type="number"
           step="0.01"
