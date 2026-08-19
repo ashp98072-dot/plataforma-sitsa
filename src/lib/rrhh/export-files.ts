@@ -1,6 +1,8 @@
 import ExcelJS from "exceljs";
 import PDFDocument from "pdfkit";
-import { formatearTimestampVisible, fmtTs } from "@/lib/rrhh/dates";
+import { existsSync, readFileSync } from "fs";
+import { formatearTimestampVisible, fmtTs, formatearFechaVisible } from "@/lib/rrhh/dates";
+import { absPathFromRelative } from "@/lib/uploads";
 
 export async function tablaAExcel(opts: {
   sheetName: string;
@@ -464,4 +466,184 @@ function piePaginas(
         { width: pageWidth, align: "center", lineBreak: false },
       );
   }
+}
+
+/**
+ * Boleta formal de vacaciones (1 página), para firma física del
+ * colaborador, jefe inmediato y RRHH. Diseñada para funcionar aunque la
+ * empresa todavía no tenga logo cargado (empresaLogoUrl null / archivo
+ * inexistente en disco): en ese caso cae a un encabezado solo de texto sin
+ * romper la generación del PDF.
+ */
+export async function boletaVacacionesPdf(opts: {
+  empresaNombre: string;
+  empresaLogoUrl?: string | null;
+  empleadoNombre: string;
+  empleadoCodigo?: string;
+  empleadoPuesto?: string;
+  empleadoDpi?: string;
+  jefeNombre?: string | null;
+  solicitud: {
+    tipo: string;
+    fechaInicio: string;
+    fechaFin: string;
+    diasHabiles: number;
+    estado: "Pendiente" | "Aprobada" | "Rechazada";
+    comentarioColaborador?: string | null;
+    comentarioRrhh?: string | null;
+    resueltoEn?: string | null;
+    resueltoPor?: string | null;
+  };
+  saldoAntes?: number | null;
+  saldoDespues?: number | null;
+}): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({
+      size: "LETTER",
+      layout: "portrait",
+      margins: { top: 50, bottom: 50, left: 54, right: 54 },
+      bufferPages: true,
+    });
+    const chunks: Buffer[] = [];
+    doc.on("data", (c) => chunks.push(c as Buffer));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+
+    const marginL = doc.page.margins.left;
+    const marginR = doc.page.margins.right;
+    const pageWidth = doc.page.width - marginL - marginR;
+
+    // --- Encabezado: logo si existe y se puede leer, si no solo texto ---
+    let logoDibujado = false;
+    if (opts.empresaLogoUrl) {
+      try {
+        const abs = absPathFromRelative(opts.empresaLogoUrl);
+        if (existsSync(abs)) {
+          const buf = readFileSync(abs);
+          doc.image(buf, marginL, doc.y, { fit: [90, 55] });
+          logoDibujado = true;
+        }
+      } catch {
+        // Sin logo válido: seguimos con encabezado de solo texto.
+      }
+    }
+
+    const textoX = logoDibujado ? marginL + 105 : marginL;
+    const textoW = logoDibujado ? pageWidth - 105 : pageWidth;
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(13)
+      .fillColor("#0f172a")
+      .text(opts.empresaNombre, textoX, doc.y, { width: textoW });
+    doc
+      .font("Helvetica")
+      .fontSize(9)
+      .fillColor("#475569")
+      .text("Recursos Humanos", textoX, doc.y, { width: textoW });
+
+    doc.y = Math.max(doc.y, logoDibujado ? 50 + 55 + 10 : doc.y) ;
+    doc.moveDown(1);
+
+    doc
+      .moveTo(marginL, doc.y)
+      .lineTo(marginL + pageWidth, doc.y)
+      .strokeColor("#cbd5e1")
+      .lineWidth(1)
+      .stroke();
+    doc.moveDown(0.8);
+
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(16)
+      .fillColor("#0f172a")
+      .text("Boleta de Vacaciones", { width: pageWidth, align: "center" });
+    doc.moveDown(1);
+
+    // --- Datos del colaborador ---
+    const campo = (label: string, valor: string) => {
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(9.5)
+        .fillColor("#334155")
+        .text(`${label}: `, { continued: true, width: pageWidth });
+      doc.font("Helvetica").fillColor("#0f172a").text(valor || "—");
+      doc.moveDown(0.35);
+    };
+
+    campo("Colaborador", opts.empleadoNombre);
+    if (opts.empleadoCodigo) campo("Código", opts.empleadoCodigo);
+    if (opts.empleadoPuesto) campo("Puesto", opts.empleadoPuesto);
+    if (opts.empleadoDpi) campo("DPI", opts.empleadoDpi);
+    doc.moveDown(0.5);
+
+    // --- Detalle de la solicitud ---
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(11)
+      .fillColor("#0f172a")
+      .text("Detalle de la solicitud");
+    doc.moveDown(0.4);
+
+    campo("Tipo", opts.solicitud.tipo);
+    campo("Fecha de inicio", formatearFechaVisible(opts.solicitud.fechaInicio));
+    campo("Fecha de fin", formatearFechaVisible(opts.solicitud.fechaFin));
+    campo("Días hábiles", String(opts.solicitud.diasHabiles));
+    if (opts.saldoAntes != null) campo("Saldo antes", `${opts.saldoAntes} día(s)`);
+    if (opts.saldoDespues != null) campo("Saldo después", `${opts.saldoDespues} día(s)`);
+    campo("Estado", opts.solicitud.estado);
+    if (opts.solicitud.resueltoEn) {
+      campo("Resuelto el", formatearTimestampVisible(fmtTs(opts.solicitud.resueltoEn)));
+    }
+    if (opts.solicitud.resueltoPor) campo("Resuelto por", opts.solicitud.resueltoPor);
+    if (opts.solicitud.comentarioColaborador) {
+      campo("Comentario del colaborador", opts.solicitud.comentarioColaborador);
+    }
+    if (opts.solicitud.comentarioRrhh) {
+      campo("Comentario de RRHH", opts.solicitud.comentarioRrhh);
+    }
+
+    // --- Firmas: Colaborador / Jefe inmediato / RRHH ---
+    const firmaY = Math.max(doc.y + 50, doc.page.height - doc.page.margins.bottom - 110);
+    doc.y = firmaY;
+    const colW = pageWidth / 3;
+    const firmas: [string, string][] = [
+      ["Colaborador", opts.empleadoNombre],
+      ["Jefe inmediato", opts.jefeNombre || ""],
+      ["Recursos Humanos", ""],
+    ];
+    firmas.forEach(([label, nombre], i) => {
+      const x = marginL + colW * i;
+      doc
+        .moveTo(x + 8, firmaY + 30)
+        .lineTo(x + colW - 8, firmaY + 30)
+        .strokeColor("#94a3b8")
+        .lineWidth(1)
+        .stroke();
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(8.5)
+        .fillColor("#334155")
+        .text(label, x + 8, firmaY + 34, { width: colW - 16, align: "center" });
+      if (nombre) {
+        doc
+          .font("Helvetica")
+          .fontSize(8)
+          .fillColor("#64748b")
+          .text(nombre, x + 8, firmaY + 46, { width: colW - 16, align: "center" });
+      }
+    });
+
+    doc
+      .font("Helvetica")
+      .fontSize(7.5)
+      .fillColor("#94a3b8")
+      .text(
+        `Documento generado el ${formatearTimestampVisible(fmtTs(new Date()))}`,
+        marginL,
+        doc.page.height - doc.page.margins.bottom + 10,
+        { width: pageWidth, align: "center", lineBreak: false },
+      );
+
+    doc.end();
+  });
 }
