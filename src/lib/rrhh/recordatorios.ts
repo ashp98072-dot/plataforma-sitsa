@@ -8,6 +8,7 @@ export type TipoRecordatorio =
   | "ExamenMedico"
   | "CitaLegal"
   | "Licencia" // solo para los generados automáticamente desde empleados.licencia_vence
+  | "DocumentoVehiculo" // solo para los generados automáticamente desde flota_vehiculo_documentos
   | "Otro";
 
 export type Recordatorio = {
@@ -132,25 +133,83 @@ async function licenciasComoRecordatorios(
 }
 
 /**
- * Todos los recordatorios vigentes de la empresa (guardados + licencias
- * automáticas), ordenados por los que vencen antes. `soloPendientesProximos`
- * filtra a los no atendidos dentro de su ventana de aviso (para el
- * dashboard); sin ese flag trae todo (para la pantalla de administración).
+ * Documentos de vehículo (tarjeta de circulación, póliza, etc.) por vencer,
+ * generados al vuelo desde flota_vehiculo_documentos (no se duplican en
+ * rrhh_recordatorios). Solo documentos Vigentes con fecha_vencimiento
+ * dentro de +/- 1 año.
  */
+async function documentosVehiculoComoRecordatorios(
+  empresaId: number,
+  hoyIso: string,
+): Promise<Recordatorio[]> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT d.id, d.tipo, d.titulo, d.fecha_vencimiento, v.placa, v.marca, v.modelo
+     FROM flota_vehiculo_documentos d
+     JOIN flota_vehiculos v ON v.id = d.vehiculo_id AND v.empresa_id = d.empresa_id
+     WHERE d.empresa_id = ? AND d.estado = 'Vigente' AND d.fecha_vencimiento IS NOT NULL
+       AND d.fecha_vencimiento BETWEEN DATE_SUB(?, INTERVAL 1 YEAR) AND DATE_ADD(?, INTERVAL 1 YEAR)`,
+    [empresaId, hoyIso, hoyIso],
+  ).catch((error) => {
+    // Si la tabla aún no existe en esta base (empresa que nunca usó
+    // papelería de vehículos), no debe romper el resto de recordatorios.
+    console.error("[recordatorios] documentosVehiculoComoRecordatorios:", error);
+    return [] as RowDataPacket[];
+  });
+
+  const TIPO_DOC_LABEL: Record<string, string> = {
+    TarjetaCirculacion: "Tarjeta de circulación",
+    PolizaSeguro: "Póliza de seguro",
+    TituloPropiedad: "Título de propiedad",
+    PermisoLinea: "Permiso de línea",
+    Otro: "Documento",
+  };
+
+  return rows.map((r) => {
+    const fecha = String(r.fecha_vencimiento).slice(0, 10);
+    const tipoDoc = String(r.tipo);
+    const etiquetaDoc =
+      tipoDoc === "Otro" && r.titulo ? String(r.titulo) : TIPO_DOC_LABEL[tipoDoc] ?? tipoDoc;
+    const placa = String(r.placa);
+    const descVehiculo = [r.marca, r.modelo].filter(Boolean).join(" ");
+    return {
+      id: null,
+      empresaId,
+      tipo: "DocumentoVehiculo" as TipoRecordatorio,
+      titulo: `${etiquetaDoc} — ${placa}${descVehiculo ? ` (${descVehiculo})` : ""}`,
+      fecha,
+      recurrente: false,
+      diasAvisoPrevio: 30,
+      empleadoId: null,
+      empleadoNombre: null,
+      notas: null,
+      atendido: false, // se renueva el documento -> cambia la fecha -> desaparece de aquí
+      diasRestantes: diasEntre(hoyIso, fecha),
+      creadoPor: null,
+      creadoEn: null,
+    };
+  });
+}
+
+
 export async function listarRecordatorios(
   empresaId: number,
   opts?: { soloPendientesProximos?: boolean },
 ): Promise<Recordatorio[]> {
   const hoyIso = hoyLocal();
-  const [rows, licencias] = await Promise.all([
+  const [rows, licencias, documentosVehiculo] = await Promise.all([
     query<RowDataPacket[]>(
       `${SELECT_BASE} WHERE rec.empresa_id = ? ORDER BY rec.fecha`,
       [empresaId],
     ),
     licenciasComoRecordatorios(empresaId, hoyIso),
+    documentosVehiculoComoRecordatorios(empresaId, hoyIso),
   ]);
 
-  let todos = [...rows.map((r) => mapRecordatorio(r, hoyIso)), ...licencias];
+  let todos = [
+    ...rows.map((r) => mapRecordatorio(r, hoyIso)),
+    ...licencias,
+    ...documentosVehiculo,
+  ];
 
   if (opts?.soloPendientesProximos) {
     todos = todos.filter(

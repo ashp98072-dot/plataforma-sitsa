@@ -11,6 +11,7 @@ type TipoRecordatorio =
   | "ExamenMedico"
   | "CitaLegal"
   | "Licencia"
+  | "DocumentoVehiculo"
   | "Otro";
 
 type Recordatorio = {
@@ -33,6 +34,7 @@ const TIPO_LABEL: Record<TipoRecordatorio, string> = {
   ExamenMedico: "Examen médico",
   CitaLegal: "Cita legal / demanda",
   Licencia: "Licencia de conducir",
+  DocumentoVehiculo: "Documento de vehículo",
   Otro: "Otro",
 };
 
