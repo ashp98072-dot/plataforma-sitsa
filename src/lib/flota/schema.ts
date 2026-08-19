@@ -96,6 +96,7 @@ export async function asegurarSchemaFlota(): Promise<void> {
           "flota_viaje_evidencias",
           "flota_lectura_evidencias",
           "flota_servicio_adjuntos",
+          "flota_vehiculo_documentos",
           "flota_vehiculo_filtros",
           "flota_vehiculo_acceso",
           "flota_permisos_externos",
@@ -371,6 +372,32 @@ async function asegurarSchemaFlotaInner(): Promise<void> {
       creado_at DATETIME NOT NULL,
       INDEX idx_fsa_svc (servicio_id),
       INDEX idx_fsa_emp (empresa_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  // Papelería del vehículo (tarjeta de circulación, póliza, título, etc.).
+  // El archivo es opcional (ruta_relativa puede ser NULL) porque a veces
+  // solo se quiere dejar una nota — p.ej. "se desactivó la póliza porque…"
+  // — sin necesariamente adjuntar un PDF en ese momento.
+  await execute(`
+    CREATE TABLE IF NOT EXISTS flota_vehiculo_documentos (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      empresa_id INT NOT NULL,
+      vehiculo_id INT NOT NULL,
+      tipo VARCHAR(40) NOT NULL, -- TarjetaCirculacion | PolizaSeguro | TituloPropiedad | PermisoLinea | Otro
+      titulo VARCHAR(150) NULL, -- solo cuando tipo = Otro, para que el usuario lo nombre
+      estado VARCHAR(20) NOT NULL DEFAULT 'Vigente', -- Vigente | Inactivo
+      fecha_vencimiento DATE NULL,
+      notas TEXT NULL, -- p.ej. motivo de por qué está Inactivo
+      ruta_relativa VARCHAR(400) NULL,
+      nombre_original VARCHAR(255) NULL,
+      mime VARCHAR(80) NULL,
+      tamano INT NULL,
+      subido_por VARCHAR(100) NULL,
+      creado_at DATETIME NOT NULL,
+      INDEX idx_fvd_veh (vehiculo_id),
+      INDEX idx_fvd_emp (empresa_id),
+      INDEX idx_fvd_vence (empresa_id, fecha_vencimiento)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 
