@@ -17,6 +17,9 @@ type ResumenMensual = {
   altas: number;
   bajas: number;
   costoNomina: number;
+  amonestaciones: number;
+  suspensiones: number;
+  despidos: number;
 };
 
 function fmtMes(iso: string): string {
@@ -216,7 +219,10 @@ export default function DashboardRrhhPage() {
                     <th className="pb-2 pr-4">Mes</th>
                     <th className="pb-2 pr-4">Altas</th>
                     <th className="pb-2 pr-4">Bajas</th>
-                    <th className="pb-2">Costo nómina</th>
+                    <th className="pb-2 pr-4">Costo nómina</th>
+                    <th className="pb-2 pr-4">Amonest.</th>
+                    <th className="pb-2 pr-4">Suspens.</th>
+                    <th className="pb-2">Despidos</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -225,7 +231,10 @@ export default function DashboardRrhhPage() {
                       <td className="py-1.5 pr-4">{fmtMes(r.mes)}</td>
                       <td className="py-1.5 pr-4 text-[#8fd4a0]">+{r.altas}</td>
                       <td className="py-1.5 pr-4 text-[#e08a8a]">-{r.bajas}</td>
-                      <td className="py-1.5">{fmtQ(r.costoNomina)}</td>
+                      <td className="py-1.5 pr-4">{fmtQ(r.costoNomina)}</td>
+                      <td className="py-1.5 pr-4">{r.amonestaciones}</td>
+                      <td className="py-1.5 pr-4">{r.suspensiones}</td>
+                      <td className="py-1.5">{r.despidos}</td>
                     </tr>
                   ))}
                 </tbody>
