@@ -5,6 +5,9 @@ import { requireTenant } from "@/lib/tenant";
 import { kmPendienteServicio } from "@/lib/flota/import-excel";
 import { listarVehiculosParaAlertasKm } from "@/lib/flota/acceso";
 import { KM_INTERVALO_SERVICIO_DEFAULT } from "@/lib/flota/constants";
+import { permisosEfectivos, tienePermiso } from "@/lib/permisos";
+import type { RolGlobal } from "@/lib/roles";
+import { listarRecordatorios } from "@/lib/rrhh/recordatorios";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -122,6 +125,46 @@ export async function GET(_req: Request, ctx: Ctx) {
     } catch {
       /* ok */
     }
+  }
+
+  // Recordatorios urgentes — cada tipo se muestra solo a quien le corresponde:
+  // Licencia de conducir y papelería de vehículo son asunto de Flota (los
+  // pilotos/vehículos no pueden operar sin eso), el resto es asunto de RRHH.
+  try {
+    const perms =
+      rol === "Admin" ? null : await permisosEfectivos(guard.session.id, rol as RolGlobal);
+    const puedeFlota =
+      rol === "Admin" || (perms && tienePermiso(perms, "flota_vehiculos", "ver"));
+    const puedeRrhh =
+      rol === "Admin" || (perms && tienePermiso(perms, "recordatorios", "ver"));
+
+    if (puedeFlota || puedeRrhh) {
+      const recordatorios = await listarRecordatorios(guard.empresa.id, {
+        soloPendientesProximos: true,
+      });
+      for (const r of recordatorios) {
+        const esDeFlota = r.tipo === "Licencia" || r.tipo === "DocumentoVehiculo";
+        if (esDeFlota && !puedeFlota) continue;
+        if (!esDeFlota && !puedeRrhh) continue;
+        items.push({
+          id: r.id != null ? `recordatorio-${r.id}` : `recordatorio-${r.tipo}-${r.titulo}-${r.fecha}`,
+          tipo: "alerta",
+          titulo: r.titulo,
+          detalle:
+            r.diasRestantes < 0
+              ? `Vencido hace ${Math.abs(r.diasRestantes)} día(s)`
+              : r.diasRestantes === 0
+                ? "Vence hoy"
+                : `Vence en ${r.diasRestantes} día(s)`,
+          enlace: esDeFlota
+            ? `/e/${slug}/flota?tab=vehiculos`
+            : `/e/${slug}/rrhh/recordatorios`,
+          creadoAt: null,
+        });
+      }
+    }
+  } catch (e) {
+    console.error("[notificaciones] recordatorios:", e);
   }
 
   return NextResponse.json({
