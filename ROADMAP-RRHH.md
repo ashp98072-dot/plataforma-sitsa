@@ -25,9 +25,9 @@ costo, recordatorios + bitácora legal). Quedaron 4 gaps reales:
 
 | # | Gap | Esfuerzo | Estado |
 | - | --- | -------- | ------ |
-| 1 | Bitácora legal no se ve dentro de la ficha del empleado | Chico | ⏳ Pendiente |
-| 2 | Dashboard gerencial no cuenta amonestaciones/despidos del mes | Chico-mediano | ⏳ Pendiente |
-| 3 | Devengados (Prestaciones) y Descuentos son texto libre, sin catálogo estándar | Chico-mediano | ⏳ Pendiente |
+| 1 | Bitácora legal no se ve dentro de la ficha del empleado | Chico | ✅ Hecho (`d5f2641`) |
+| 2 | Dashboard gerencial no cuenta amonestaciones/despidos del mes | Chico-mediano | ✅ Hecho (`9703a55` backend + `908dfbd` fix de frontend, quedó desconectado en el commit original) |
+| 3 | Devengados (Prestaciones) y Descuentos son texto libre, sin catálogo estándar | Chico-mediano | ✅ Hecho (`0abb455`) |
 | 4 | No hay boleta de vacaciones imprimible/firmable (PDF) | Mediano | ⏳ Pendiente |
 
 Marcar cada fila como `✅ Hecho` (con el hash del commit) al completarla.
