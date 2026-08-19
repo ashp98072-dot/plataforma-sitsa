@@ -454,6 +454,7 @@ export const RRHH_NAV: {
   { sub: "descuentos", label: "Descuentos", path: "descuentos" },
   { sub: "prestaciones", label: "Prestaciones", path: "prestaciones" },
   { sub: "inventario", label: "Inventario", path: "inventario" },
+  { sub: "centros_costo", label: "Centros de Costo", path: "centros-costo" },
   { sub: "entrevistas", label: "Entrevistas", path: "entrevistas" },
   { sub: "recordatorios", label: "Recordatorios", path: "recordatorios" },
   { sub: "bitacora_legal", label: "Bitácora Legal", path: "bitacora-legal" },
