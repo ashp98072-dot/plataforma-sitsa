@@ -12,6 +12,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { DocumentosModal } from "@/components/rrhh/documentos-modal";
 import { PortalAccesoModal } from "@/components/rrhh/portal-acceso-modal";
+import { BitacoraLegalEmpleado } from "@/components/rrhh/bitacora-legal-empleado";
 import { ImportErroresLista } from "@/components/import-errores-lista";
 import { formatearFechaVisible, hoyLocal } from "@/lib/rrhh/dates";
 import { CATEGORIAS_OPS, PUESTOS_MONACO } from "@/lib/rrhh/categorias-ops";
@@ -1260,6 +1261,10 @@ export default function EmpleadosPage() {
               ))}
             </ul>
           </div>
+        ) : null}
+
+        {editId ? (
+          <BitacoraLegalEmpleado slug={slug} empleadoId={editId} />
         ) : null}
 
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3">
