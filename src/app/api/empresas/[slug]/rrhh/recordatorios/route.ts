@@ -31,7 +31,11 @@ export async function GET(req: Request, ctx: Ctx) {
   const recordatorios = await listarRecordatorios(guard.empresa.id, {
     soloPendientesProximos: soloProximos,
   });
-  return NextResponse.json({ recordatorios });
+  // Papelería de vehículos es asunto de Flota, no de RRHH: se muestra en su
+  // propia pantalla (Flota → Vehículos) y en la campanita solo a quien
+  // tiene permiso de Flota. Aquí se excluye para no mezclarla.
+  const paraRrhh = recordatorios.filter((r) => r.tipo !== "DocumentoVehiculo");
+  return NextResponse.json({ recordatorios: paraRrhh });
 }
 
 /**
