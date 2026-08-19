@@ -115,7 +115,7 @@ export async function obtenerResumenGerencial(
 
   const resultados = await Promise.all(
     rangos.map(async ({ mes, desde, hasta }) => {
-      const [altasRows, bajasRows, costoRows] = await Promise.all([
+      const [altasRows, bajasRows, costoRows, bitacoraRows] = await Promise.all([
         consultaSegura(
           "altas",
           `SELECT COUNT(*) AS total FROM empleados
@@ -138,12 +138,26 @@ export async function obtenerResumenGerencial(
              AND p.fecha_inicio BETWEEN ? AND ?`,
           [empresaId, empresaId, desde, hasta],
         ),
+        consultaSegura(
+          "bitacoraLegal",
+          `SELECT tipo, COUNT(*) AS total FROM rrhh_bitacora_legal
+           WHERE empresa_id = ? AND fecha BETWEEN ? AND ?
+             AND tipo IN ('Amonestacion', 'Suspension', 'Despido')
+           GROUP BY tipo`,
+          [empresaId, desde, hasta],
+        ),
       ]);
+      const bitacoraPorTipo = new Map<string, number>(
+        bitacoraRows.map((r) => [String(r.tipo), Number(r.total ?? 0)]),
+      );
       return {
         mes,
         altas: Number(altasRows[0]?.total ?? 0),
         bajas: Number(bajasRows[0]?.total ?? 0),
         costoNomina: Number(costoRows[0]?.total ?? 0),
+        amonestaciones: bitacoraPorTipo.get("Amonestacion") ?? 0,
+        suspensiones: bitacoraPorTipo.get("Suspension") ?? 0,
+        despidos: bitacoraPorTipo.get("Despido") ?? 0,
       };
     }),
   );
