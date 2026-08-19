@@ -35,10 +35,10 @@ const nextConfig: NextConfig = {
         ],
       },
       {
-        // Portal del colaborador: mismo problema que /login — si el CDN
-        // sirve HTML viejo de /portal/login (o cualquier ruta del portal),
-        // el navegador pide CSS/JS con hash de un build anterior que ya no
-        // existe → pantalla sin estilos o payload RSC crudo sin renderizar.
+        // Igual que /e/:path* arriba, pero para el portal de colaboradores:
+        // se había quedado fuera de esta lista, por eso el CDN de Hostinger
+        // cacheaba /portal/login y servía versiones viejas (sin estilos, o
+        // el payload crudo de React Server Components) en algunos equipos.
         source: "/portal/:path*",
         headers: [
           { key: "Cache-Control", value: "private, no-store, no-cache" },
