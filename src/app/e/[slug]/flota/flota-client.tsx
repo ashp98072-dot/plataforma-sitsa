@@ -51,11 +51,25 @@ const InventarioEquipoPanel = dynamic(
   },
 );
 
+const VehiculoDocumentos = dynamic(
+  () =>
+    import("@/components/flota/vehiculo-documentos").then(
+      (m) => m.VehiculoDocumentos,
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <p className="text-sm text-[var(--muted)]">Cargando papelería…</p>
+    ),
+  },
+);
+
 const TomarFotoButton = dynamic(
   () =>
     import("@/components/flota/tomar-foto").then((m) => m.TomarFotoButton),
   { ssr: false },
 );
+
 
 function normPiloto(nombre: string): string {
   return nombre
@@ -3068,6 +3082,9 @@ export default function FlotaClient() {
                   </>
                 ) : null}
               </div>
+              {editId ? (
+                <VehiculoDocumentos slug={slug} vehiculoId={editId} can={can} />
+              ) : null}
             </form>
           ) : null}
 
