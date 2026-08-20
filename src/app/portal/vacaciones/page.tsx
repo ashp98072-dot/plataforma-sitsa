@@ -105,6 +105,14 @@ export default async function VacacionesPage() {
                       RRHH: {s.comentarioRrhh}
                     </p>
                   ) : null}
+                  {s.estado !== "Pendiente" ? (
+                    <a
+                      href={`/api/portal/vacaciones/${s.id}/boleta`}
+                      className="mt-3 inline-block text-sm text-[var(--accent)] underline"
+                    >
+                      Descargar boleta (PDF)
+                    </a>
+                  ) : null}
                 </div>
               ))}
             </div>
