@@ -28,6 +28,7 @@ import {
 
 type Emp = {
   id: number;
+  numeroEmpleado?: string;
   codigo: string;
   nombre: string;
   puesto?: string;

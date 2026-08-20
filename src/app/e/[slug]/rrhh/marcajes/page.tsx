@@ -23,6 +23,17 @@ type Marcaje = {
   viajeLargo: boolean;
 };
 
+type InfoEmpleadoMarcaje = {
+  encontrado: boolean;
+  numeroEmpleado?: string;
+  nombre?: string;
+  empresaId?: number;
+  empresaNombre?: string;
+  tipoHorario?: string;
+  esVariable?: boolean;
+  estado?: string;
+};
+
 function formatReloj(d: Date): string {
   const parts = new Intl.DateTimeFormat("es-GT", {
     timeZone: TZ_GUATEMALA,
@@ -34,64 +45,54 @@ function formatReloj(d: Date): string {
     year: "numeric",
     hourCycle: "h23",
   }).formatToParts(d);
+
   const get = (t: Intl.DateTimeFormatPartTypes) =>
     parts.find((p) => p.type === t)?.value ?? "";
+
   return `${get("hour")}:${get("minute")}:${get("second")} — ${get("day")}/${get("month")}/${get("year")}`;
 }
 
 export default function MarcajesKioskoPage() {
   const slug = String(useParams().slug);
   const { rol: rolSesion, empresaNombre: nombreSesion } = useEmpresaSession();
+
   const [reloj, setReloj] = useState(() => formatReloj(new Date()));
-  const [codigo, setCodigo] = useState("");
+  const [numeroEmpleado, setNumeroEmpleado] = useState("");
+  const [infoEmpleado, setInfoEmpleado] =
+    useState<InfoEmpleadoMarcaje | null>(null);
+  const [buscandoEmpleado, setBuscandoEmpleado] = useState(false);
+
   const [esVariable, setEsVariable] = useState(false);
   const [viajeLargo, setViajeLargo] = useState(false);
+
   const [marcajes, setMarcajes] = useState<Marcaje[]>([]);
   const [horaEntrada, setHoraEntrada] = useState("08:00:00");
   const [horaSalida, setHoraSalida] = useState("17:00:00");
   const [tolerancia, setTolerancia] = useState(10);
-  const [geocercaActiva, setGeocercaActiva] = useState(false);
-  const [geocercaRadio, setGeocercaRadio] = useState(150);
-  const [geocercaLat, setGeocercaLat] = useState<number | null>(null);
-  const [geocercaLng, setGeocercaLng] = useState<number | null>(null);
   const [empresaNombre, setEmpresaNombre] = useState("");
+
   const [loading, setLoading] = useState(false);
   const [enviando, setEnviando] = useState(false);
   const [detectandoGps, setDetectandoGps] = useState(false);
+
   const [gpsActual, setGpsActual] = useState<{
     lat: number;
     lng: number;
-    metros: number | null;
   } | null>(null);
+
   const [gpsInfo, setGpsInfo] = useState("");
   const [mensaje, setMensaje] = useState("");
   const [error, setError] = useState("");
   const [tipoOk, setTipoOk] = useState<"Entrada" | "Salida" | null>(null);
+
   const inputRef = useRef<HTMLInputElement>(null);
   const hoy = hoyLocal();
-
-  function metrosEntre(
-    lat1: number,
-    lng1: number,
-    lat2: number,
-    lng2: number,
-  ): number {
-    const R = 6371000;
-    const toRad = (d: number) => (d * Math.PI) / 180;
-    const dLat = toRad(lat2 - lat1);
-    const dLng = toRad(lng2 - lng1);
-    const a =
-      Math.sin(dLat / 2) ** 2 +
-      Math.cos(toRad(lat1)) *
-        Math.cos(toRad(lat2)) *
-        Math.sin(dLng / 2) ** 2;
-    return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
-  }
 
   function obtenerGps(): Promise<{ lat: number; lng: number } | null> {
     if (typeof navigator === "undefined" || !navigator.geolocation) {
       return Promise.resolve(null);
     }
+
     return new Promise((resolve) => {
       navigator.geolocation.getCurrentPosition(
         (pos) =>
@@ -100,7 +101,11 @@ export default function MarcajesKioskoPage() {
             lng: pos.coords.longitude,
           }),
         () => resolve(null),
-        { enableHighAccuracy: true, timeout: 12000, maximumAge: 15_000 },
+        {
+          enableHighAccuracy: true,
+          timeout: 12000,
+          maximumAge: 15_000,
+        },
       );
     });
   }
@@ -109,8 +114,11 @@ export default function MarcajesKioskoPage() {
     setDetectandoGps(true);
     setGpsInfo("");
     setError("");
+
     const gps = await obtenerGps();
+
     setDetectandoGps(false);
+
     if (!gps) {
       setGpsActual(null);
       setGpsInfo(
@@ -118,53 +126,43 @@ export default function MarcajesKioskoPage() {
       );
       return;
     }
-    let metros: number | null = null;
-    if (geocercaLat != null && geocercaLng != null) {
-      metros = Math.round(
-        metrosEntre(geocercaLat, geocercaLng, gps.lat, gps.lng),
-      );
-    }
-    setGpsActual({ lat: gps.lat, lng: gps.lng, metros });
-    if (metros != null && geocercaActiva) {
-      setGpsInfo(
-        metros <= geocercaRadio
-          ? `Ubicación OK: estás a ~${metros} m del predio (límite ${geocercaRadio} m).`
-          : `Fuera de zona: ~${metros} m del predio (límite ${geocercaRadio} m). Acércate para marcar.`,
-      );
-    } else {
-      setGpsInfo(
-        `Ubicación detectada: ${gps.lat.toFixed(5)}, ${gps.lng.toFixed(5)}`,
-      );
-    }
+
+    setGpsActual({
+      lat: gps.lat,
+      lng: gps.lng,
+    });
+
+    setGpsInfo(
+      `Ubicación detectada: ${gps.lat.toFixed(5)}, ${gps.lng.toFixed(5)}. El servidor validará automáticamente la ubicación autorizada más cercana.`,
+    );
   }
 
   useEffect(() => {
-    const id = setInterval(() => setReloj(formatReloj(new Date())), 1000);
+    const id = setInterval(() => {
+      setReloj(formatReloj(new Date()));
+    }, 1000);
+
     return () => clearInterval(id);
   }, []);
 
   const cargar = useCallback(async () => {
     setLoading(true);
+
     try {
       const m = await fetch(
         `/api/empresas/${slug}/rrhh/marcajes?desde=${hoy}&hasta=${hoy}`,
       ).then((r) => r.json());
+
       setMarcajes(m.marcajes ?? []);
-      if (m.empresa?.nombre) setEmpresaNombre(String(m.empresa.nombre));
+
+      if (m.empresa?.nombre) {
+        setEmpresaNombre(String(m.empresa.nombre));
+      }
+
       if (m.horario) {
         setHoraEntrada(m.horario.horaEntrada ?? "08:00:00");
         setHoraSalida(m.horario.horaSalida ?? "17:00:00");
         setTolerancia(Number(m.horario.tolerancia ?? 10) || 10);
-      }
-      if (m.geocerca) {
-        setGeocercaActiva(Boolean(m.geocerca.activa));
-        setGeocercaRadio(Number(m.geocerca.radioM ?? 150) || 150);
-        setGeocercaLat(
-          typeof m.geocerca.lat === "number" ? m.geocerca.lat : null,
-        );
-        setGeocercaLng(
-          typeof m.geocerca.lng === "number" ? m.geocerca.lng : null,
-        );
       }
     } finally {
       setLoading(false);
@@ -176,70 +174,128 @@ export default function MarcajesKioskoPage() {
   }, [cargar]);
 
   useEffect(() => {
-    if (!codigo.trim()) {
+    const numero = numeroEmpleado.trim();
+
+    if (!numero) {
+      setInfoEmpleado(null);
+      setBuscandoEmpleado(false);
       setEsVariable(false);
       setViajeLargo(false);
       return;
     }
+
+    let cancelado = false;
+
     const t = setTimeout(async () => {
-      const res = await fetch(
-        `/api/empresas/${slug}/rrhh/marcajes/empleado?codigo=${encodeURIComponent(codigo)}`,
-      );
-      const data = await res.json();
-      if (res.ok && data.info?.esVariable) setEsVariable(true);
-      else {
-        setEsVariable(false);
-        setViajeLargo(false);
+      setBuscandoEmpleado(true);
+
+      try {
+        const res = await fetch(
+          `/api/empresas/${slug}/rrhh/marcajes/empleado?codigo=${encodeURIComponent(numero)}`,
+        );
+
+        const data = await res.json();
+
+        if (cancelado) return;
+
+        const info: InfoEmpleadoMarcaje =
+          data.info ?? { encontrado: false };
+
+        setInfoEmpleado(info);
+
+        if (res.ok && info.encontrado && info.esVariable) {
+          setEsVariable(true);
+        } else {
+          setEsVariable(false);
+          setViajeLargo(false);
+        }
+      } catch {
+        if (!cancelado) {
+          setInfoEmpleado({ encontrado: false });
+          setEsVariable(false);
+          setViajeLargo(false);
+        }
+      } finally {
+        if (!cancelado) {
+          setBuscandoEmpleado(false);
+        }
       }
-    }, 200);
-    return () => clearTimeout(t);
-  }, [codigo, slug]);
+    }, 250);
+
+    return () => {
+      cancelado = true;
+      clearTimeout(t);
+    };
+  }, [numeroEmpleado, slug]);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+
     if (enviando) return;
+
     setError("");
     setMensaje("");
     setTipoOk(null);
     setEnviando(true);
+
     try {
       let latitud: number | null = gpsActual?.lat ?? null;
       let longitud: number | null = gpsActual?.lng ?? null;
+
       if (latitud == null || longitud == null) {
         const gps = await obtenerGps();
+
         if (gps) {
           latitud = gps.lat;
           longitud = gps.lng;
+
+          setGpsActual({
+            lat: gps.lat,
+            lng: gps.lng,
+          });
         }
-      }
-      if (geocercaActiva && (latitud == null || longitud == null)) {
-        setError(
-          "Activa la ubicación (GPS). Usa «Detectar mi ubicación» o permite el permiso del navegador.",
-        );
-        return;
       }
 
       const res = await fetch(`/api/empresas/${slug}/rrhh/marcajes`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
           modo: "kiosko",
-          codigo,
+
+          // La API conserva temporalmente el nombre "codigo",
+          // pero ahora recibe el numero_empleado global.
+          codigo: numeroEmpleado.trim(),
+
           viajeLargo,
           latitud,
           longitud,
         }),
       });
+
       const data = await res.json();
+
       if (!res.ok) {
-        setError(data.error ?? "No se pudo registrar");
+        setError(data.error ?? "No se pudo registrar el marcaje.");
         return;
       }
-      setMensaje(data.mensaje);
+
+      const ubicacion =
+        data.ubicacionNombre && data.metros != null
+          ? ` · ${data.ubicacionNombre} (~${data.metros} m)`
+          : data.ubicacionNombre
+            ? ` · ${data.ubicacionNombre}`
+            : "";
+
+      setMensaje(`${data.mensaje}${ubicacion}`);
       setTipoOk(data.tipo ?? null);
-      setCodigo("");
+
+      setNumeroEmpleado("");
+      setInfoEmpleado(null);
       setEsVariable(false);
       setViajeLargo(false);
+
       await cargar();
       inputRef.current?.focus();
     } catch {
@@ -259,24 +315,22 @@ export default function MarcajesKioskoPage() {
               ? ` – ${empresaNombre || nombreSesion}`
               : ""}
           </h1>
+
           <p className="text-sm text-[var(--muted)]">
-            Entrada / salida automática por código (misma lógica que Control de
-            Asistencias).
+            Entrada / salida automática por número de empleado global.
           </p>
+
           <p className="mt-1 text-sm text-[var(--muted)]">
-            Horario referencia: {horaEntrada} — {horaSalida} | Tolerancia:{" "}
-            {tolerancia} min
-            {geocercaActiva
-              ? ` | Geocerca activa (±${geocercaRadio} m del predio)`
-              : ""}
+            Horario referencia del kiosko: {horaEntrada} — {horaSalida} |
+            Tolerancia: {tolerancia} min
           </p>
-          {geocercaActiva ? (
-            <p className="mt-1 text-xs text-amber-200">
-              Solo se permite marcar dentro del radio configurado. El navegador
-              pedirá permiso de ubicación.
-            </p>
-          ) : null}
+
+          <p className="mt-1 text-xs text-amber-200">
+            El GPS se valida en el servidor contra todas las ubicaciones de
+            marcaje activas del grupo.
+          </p>
         </div>
+
         {rolSesion && rolSesion !== "Marcaje" ? (
           <Link
             href={`/e/${slug}/rrhh/marcajes/manual`}
@@ -295,59 +349,65 @@ export default function MarcajesKioskoPage() {
         </div>
 
         <form onSubmit={onSubmit} className="mx-auto mt-8 max-w-md">
-          <div className="mb-5 rounded-lg border border-sky-800/40 bg-sky-950/25 p-3 text-left">
-            <p className="text-xs font-medium text-sky-100">
-              Ubicación del dispositivo
-            </p>
-            <p className="mt-0.5 text-[11px] text-[var(--muted)]">
-              {geocercaActiva
-                ? "La geocerca está activa: detecta tu ubicación antes de marcar."
-                : "Opcional: puedes detectar GPS aunque la geocerca esté apagada."}
-            </p>
-            <button
-              type="button"
-              disabled={detectandoGps || enviando}
-              onClick={() => void detectarUbicacion()}
-              className="mt-2 w-full rounded bg-[#0ea5e9] px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
-            >
-              {detectandoGps ? "Detectando…" : "Detectar mi ubicación"}
-            </button>
-            {gpsActual ? (
-              <p className="mt-2 font-mono text-[11px] text-sky-200">
-                GPS: {gpsActual.lat.toFixed(5)}, {gpsActual.lng.toFixed(5)}
-                {gpsActual.metros != null
-                  ? ` · ~${gpsActual.metros} m del predio`
-                  : ""}
-              </p>
-            ) : null}
-            {gpsInfo ? (
-              <p
-                className={`mt-1 text-xs ${
-                  gpsActual?.metros != null &&
-                  geocercaActiva &&
-                  gpsActual.metros > geocercaRadio
-                    ? "text-rose-300"
-                    : "text-emerald-300"
-                }`}
-              >
-                {gpsInfo}
-              </p>
-            ) : null}
-          </div>
-
           <label className="block text-center text-sm font-semibold">
-            Ingrese su Código o DPI
+            Número de empleado
             <input
               ref={inputRef}
               className="mt-3 w-full rounded-lg border-2 border-[var(--accent)] bg-[var(--input)] px-4 py-3 text-center text-lg outline-none focus:ring-2 focus:ring-[#2F8FD1]"
-              value={codigo}
-              onChange={(e) => setCodigo(e.target.value)}
-              placeholder="Ej: EMP001"
+              value={numeroEmpleado}
+              onChange={(e) => setNumeroEmpleado(e.target.value)}
+              placeholder="Ej: 000028"
               autoFocus
               disabled={enviando}
               autoComplete="off"
+              inputMode="numeric"
             />
           </label>
+
+          {numeroEmpleado.trim() ? (
+            <div className="mt-4 rounded-lg border border-[var(--border)] bg-[var(--panel)] p-3 text-sm">
+              {buscandoEmpleado ? (
+                <p className="text-[var(--muted)]">
+                  Buscando empleado…
+                </p>
+              ) : infoEmpleado?.encontrado ? (
+                <div className="space-y-1">
+                  <p>
+                    <span className="text-[var(--muted)]">Empleado: </span>
+                    <span className="font-medium">
+                      {infoEmpleado.nombre}
+                    </span>
+                  </p>
+
+                  <p>
+                    <span className="text-[var(--muted)]">Empresa: </span>
+                    <span className="font-medium">
+                      {infoEmpleado.empresaNombre || "—"}
+                    </span>
+                  </p>
+
+                  <p>
+                    <span className="text-[var(--muted)]">
+                      No. empleado:{" "}
+                    </span>
+                    <span className="font-mono">
+                      {infoEmpleado.numeroEmpleado || numeroEmpleado}
+                    </span>
+                  </p>
+
+                  {infoEmpleado.estado === "Baja" ? (
+                    <p className="text-rose-300">
+                      Este empleado está de Baja y no puede marcar.
+                    </p>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="text-rose-300">
+                  No se encontró ningún empleado con ese número.
+                </p>
+              )}
+            </div>
+          ) : null}
 
           {esVariable ? (
             <label className="mt-4 flex items-center justify-center gap-2 text-sm">
@@ -361,9 +421,51 @@ export default function MarcajesKioskoPage() {
             </label>
           ) : null}
 
+          <div className="mt-5 rounded-lg border border-sky-800/40 bg-sky-950/25 p-3 text-left">
+            <p className="text-xs font-medium text-sky-100">
+              Ubicación del dispositivo
+            </p>
+
+            <p className="mt-0.5 text-[11px] text-[var(--muted)]">
+              Detecta tu GPS. El servidor determinará automáticamente si estás
+              dentro de una ubicación autorizada y cuál es la más cercana.
+            </p>
+
+            <button
+              type="button"
+              disabled={detectandoGps || enviando}
+              onClick={() => void detectarUbicacion()}
+              className="mt-2 w-full rounded bg-[#0ea5e9] px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+            >
+              {detectandoGps ? "Detectando…" : "Detectar mi ubicación"}
+            </button>
+
+            {gpsActual ? (
+              <p className="mt-2 font-mono text-[11px] text-sky-200">
+                GPS: {gpsActual.lat.toFixed(5)}, {gpsActual.lng.toFixed(5)}
+              </p>
+            ) : null}
+
+            {gpsInfo ? (
+              <p
+                className={`mt-1 text-xs ${
+                  gpsActual ? "text-emerald-300" : "text-rose-300"
+                }`}
+              >
+                {gpsInfo}
+              </p>
+            ) : null}
+          </div>
+
           <button
             type="submit"
-            disabled={enviando || !codigo.trim()}
+            disabled={
+              enviando ||
+              !numeroEmpleado.trim() ||
+              buscandoEmpleado ||
+              infoEmpleado?.encontrado === false ||
+              infoEmpleado?.estado === "Baja"
+            }
             className="mt-6 w-full rounded-lg bg-[var(--accent)] px-4 py-3 text-sm font-semibold text-white transition hover:brightness-110 disabled:opacity-50"
           >
             {enviando ? "Registrando…" : "Registrar Marcaje"}
@@ -375,6 +477,7 @@ export default function MarcajesKioskoPage() {
             {error}
           </p>
         ) : null}
+
         {mensaje ? (
           <p
             className={[
@@ -389,7 +492,10 @@ export default function MarcajesKioskoPage() {
         ) : null}
 
         <div className="mt-10">
-          <h2 className="mb-3 text-sm font-semibold">Últimos marcajes de hoy</h2>
+          <h2 className="mb-3 text-sm font-semibold">
+            Últimos marcajes de hoy
+          </h2>
+
           <div className="overflow-x-auto rounded-lg border border-[var(--border)]">
             <table className="min-w-full text-left text-sm">
               <thead className="bg-[#1F6AA5] text-white">
@@ -401,16 +507,23 @@ export default function MarcajesKioskoPage() {
                   <th className="px-3 py-2">Estado</th>
                 </tr>
               </thead>
+
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={5} className="px-3 py-6 text-[var(--muted)]">
+                    <td
+                      colSpan={5}
+                      className="px-3 py-6 text-[var(--muted)]"
+                    >
                       Cargando…
                     </td>
                   </tr>
                 ) : marcajes.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="px-3 py-6 text-[var(--muted)]">
+                    <td
+                      colSpan={5}
+                      className="px-3 py-6 text-[var(--muted)]"
+                    >
                       No se han registrado marcajes el día de hoy.
                     </td>
                   </tr>
@@ -427,14 +540,17 @@ export default function MarcajesKioskoPage() {
                     >
                       <td className="px-3 py-2 font-medium text-[var(--text)]">
                         {m.nombre}
+
                         {m.viajeLargo ? (
                           <span className="ml-2 text-[10px] uppercase text-amber-600">
                             viaje
                           </span>
                         ) : null}
                       </td>
+
                       <td className="px-3 py-2">{m.entrada}</td>
                       <td className="px-3 py-2">{m.salida}</td>
+
                       <td
                         className={[
                           "px-3 py-2",
@@ -447,10 +563,12 @@ export default function MarcajesKioskoPage() {
                       >
                         {m.incidencia}
                       </td>
+
                       <td
                         className={[
                           "px-3 py-2",
-                          m.estado === "ABIERTA" || m.estado === "En curso"
+                          m.estado === "ABIERTA" ||
+                          m.estado === "En curso"
                             ? "text-sky-600"
                             : "text-[var(--muted)]",
                         ].join(" ")}

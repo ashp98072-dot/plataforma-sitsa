@@ -74,21 +74,29 @@ export type UbicacionMarcaje = {
 };
 
 /**
- * Obtiene todas las ubicaciones de marcaje activas de una empresa.
+ * Obtiene TODAS las ubicaciones de marcaje activas del grupo.
  *
- * DECIMAL de MySQL puede llegar como string, por eso lat/lng se convierten
- * explícitamente a number antes de usarlos.
+ * Importante:
+ * empresa_id identifica la empresa administradora/propietaria de la ubicación,
+ * pero NO restringe qué empleados pueden marcar ahí.
+ *
+ * Cualquier empleado de cualquiera de las empresas del grupo puede marcar
+ * dentro de cualquiera de estas ubicaciones activas.
  */
-export async function obtenerUbicacionesMarcajeActivas(
-  empresaId: number,
-): Promise<UbicacionMarcaje[]> {
+export async function obtenerUbicacionesMarcajeActivas(): Promise<
+  UbicacionMarcaje[]
+> {
   const rows = await query<UbicacionMarcajeRow[]>(
-    `SELECT id, empresa_id, nombre, lat, lng, radio_m
+    `SELECT
+       id,
+       empresa_id,
+       nombre,
+       lat,
+       lng,
+       radio_m
      FROM ubicaciones_marcaje
-     WHERE empresa_id = ?
-       AND activa = 1
-     ORDER BY id ASC`,
-    [empresaId],
+     WHERE activa = 1
+     ORDER BY nombre ASC, id ASC`,
   );
 
   return rows
@@ -133,28 +141,42 @@ async function empleadoEnRutaHoy(
   }
 }
 
+export type ResultadoGeocercaKiosko =
+  | {
+      ok: true;
+      metros?: number;
+      ubicacionId?: number;
+      ubicacionNombre?: string;
+    }
+  | {
+      ok: false;
+      error: string;
+      code: string;
+    };
+
 /**
- * Valida geocerca para kiosko usando todas las ubicaciones activas
- * registradas para la empresa.
+ * Valida geocerca para kiosko usando TODAS las ubicaciones activas
+ * autorizadas del grupo.
  *
  * Reglas:
- * - Si la geocerca está desactivada en configuración → permite.
+ * - Si la geocerca está desactivada para la empresa del empleado → permite.
  * - Empleado "en ruta" hoy → permite.
- * - Si no existen ubicaciones activas → permite por compatibilidad.
+ * - Si no existen ubicaciones activas → permite temporalmente por compatibilidad.
  * - Sin GPS del dispositivo → bloquea.
- * - Se calcula la distancia contra todas las ubicaciones.
+ * - Calcula distancia contra todas las ubicaciones activas.
  * - Si está dentro del radio de cualquiera → permite.
- * - Si está fuera de todas → bloquea usando la ubicación más cercana.
+ * - Si está dentro de varias → usa la más cercana.
+ * - Si está fuera de todas → bloquea e informa la ubicación más cercana.
  */
 export async function validarGeocercaKiosko(
   empresaId: number,
   empleadoId: number,
   coords: { lat?: number | null; lng?: number | null } | null | undefined,
-): Promise<
-  { ok: true; metros?: number } | { ok: false; error: string; code: string }
-> {
-  // Durante la transición conservamos geocerca_activa como interruptor
-  // general de la empresa.
+): Promise<ResultadoGeocercaKiosko> {
+  /*
+   * Durante la transición conservamos geocerca_activa como interruptor
+   * general para la empresa a la que pertenece el empleado.
+   */
   const geo = await obtenerGeocerca(empresaId);
 
   if (!geo.activa) {
@@ -165,12 +187,15 @@ export async function validarGeocercaKiosko(
     return { ok: true };
   }
 
-  const ubicaciones = await obtenerUbicacionesMarcajeActivas(empresaId);
+  const ubicaciones = await obtenerUbicacionesMarcajeActivas();
 
   /*
-   * Compatibilidad durante la migración:
-   * si una empresa tiene geocerca activa pero todavía no fue migrada
-   * a ubicaciones_marcaje, no bloqueamos todos sus marcajes.
+   * Compatibilidad temporal:
+   * si aún no existen ubicaciones activas en la nueva tabla,
+   * no bloqueamos todos los marcajes del grupo.
+   *
+   * Más adelante debe cambiarse a fail-closed cuando la migración
+   * de todas las ubicaciones esté confirmada.
    */
   if (ubicaciones.length === 0) {
     return { ok: true };
@@ -184,7 +209,7 @@ export async function validarGeocercaKiosko(
       ok: false,
       code: "GPS_REQUERIDO",
       error:
-        "Esta empresa exige marcar dentro de una ubicación autorizada. Activa la ubicación (GPS) del teléfono/navegador e intenta de nuevo.",
+        "Debes activar la ubicación (GPS) del teléfono o navegador para registrar el marcaje.",
     };
   }
 
@@ -209,11 +234,13 @@ export async function validarGeocercaKiosko(
   if (dentro) {
     return {
       ok: true,
+      ubicacionId: dentro.ubicacion.id,
+      ubicacionNombre: dentro.ubicacion.nombre,
       metros: Math.round(dentro.metros),
     };
   }
 
-  const masCercana = distancias.sort(
+  const masCercana = [...distancias].sort(
     (a, b) => a.metros - b.metros,
   )[0];
 
@@ -221,9 +248,9 @@ export async function validarGeocercaKiosko(
     ok: false,
     code: "FUERA_GEOCERCA",
     error:
-      `Estás fuera del área permitida. La ubicación autorizada más cercana ` +
-      `es "${masCercana.ubicacion.nombre}" (~${Math.round(
+      `Estás fuera de las ubicaciones autorizadas. La más cercana es ` +
+      `"${masCercana.ubicacion.nombre}" (~${Math.round(
         masCercana.metros,
-      )} m). Debes estar a menos de ${masCercana.ubicacion.radioM} m.`,
+      )} m). Su radio permitido es ${masCercana.ubicacion.radioM} m.`,
   };
 }

@@ -5,6 +5,7 @@ import { asegurarSchemaEmpleados } from "./empleados-schema";
 
 export type Empleado = {
   id: number;
+  numeroEmpleado: string;
   codigo: string;
   nombre: string;
   puesto: string;
@@ -99,6 +100,7 @@ function componerNombre(parts: {
 function mapEmpleado(row: RowDataPacket): Empleado {
   return {
     id: Number(row.id),
+    numeroEmpleado: str(row.numero_empleado),
     codigo: str(row.codigo),
     nombre: str(row.nombre),
     puesto: str(row.puesto),
@@ -156,7 +158,7 @@ function mapEmpleado(row: RowDataPacket): Empleado {
 }
 
 /** Columnas de planilla / combos (sin sueldos, observaciones, demografía…). */
-const COLUMNAS_LISTA = `id, codigo, nombre, puesto, categoria_ops, tipo_horario,
+const COLUMNAS_LISTA = `id, numero_empleado, codigo, nombre, puesto, categoria_ops, tipo_horario,
   fecha_alta, fecha_inicio_laboral, hora_entrada_teorica, hora_salida_teorica,
   estado, dpi, tipo_contrato, forma_pago, supervisor_id`;
 
@@ -177,9 +179,13 @@ export async function listarEmpleados(
   const where: string[] = ["empresa_id = ?"];
   const params: (string | number)[] = [empresaId];
   if (f) {
-    where.push(`(nombre LIKE ? OR codigo LIKE ? OR dpi LIKE ?)`);
+    where.push(
+      `(nombre LIKE ? OR numero_empleado LIKE ? OR codigo LIKE ? OR dpi LIKE ?)`,
+    );
+
     const like = `%${f}%`;
-    params.push(like, like, like);
+
+    params.push(like, like, like, like);
   }
   if (opts?.tipoContrato) {
     where.push(`LOWER(COALESCE(tipo_contrato,'')) = ?`);
@@ -405,11 +411,22 @@ export async function crearEmpleado(
   data: EmpleadoInput,
 ): Promise<number> {
   await asegurarSchemaEmpleados().catch(() => undefined);
+
   const f = paramsFicha(data);
-  if (!f.nombre) throw new Error("El nombre del empleado es obligatorio.");
-  if (f.supervisorId != null && !(await supervisorValido(empresaId, f.supervisorId))) {
+
+  if (!f.nombre) {
+    throw new Error("El nombre del empleado es obligatorio.");
+  }
+
+  if (
+    f.supervisorId != null &&
+    !(await supervisorValido(empresaId, f.supervisorId))
+  ) {
     throw new Error("El supervisor seleccionado no es válido.");
   }
+
+  let empleadoId: number;
+
   try {
     const result = await execute(
       `INSERT INTO empleados (
@@ -482,7 +499,8 @@ export async function crearEmpleado(
         f.supervisorId,
       ],
     );
-    return Number((result as ResultSetHeader).insertId);
+
+    empleadoId = Number((result as ResultSetHeader).insertId);
   } catch {
     const result = await execute(
       `INSERT INTO empleados (
@@ -503,8 +521,22 @@ export async function crearEmpleado(
         data.estado,
       ],
     );
-    return Number((result as ResultSetHeader).insertId);
+
+    empleadoId = Number((result as ResultSetHeader).insertId);
   }
+
+  await execute(
+    `UPDATE empleados
+     SET numero_empleado = LPAD(id, 6, '0')
+     WHERE id = ?
+       AND (
+         numero_empleado IS NULL
+         OR numero_empleado = ''
+       )`,
+    [empleadoId],
+  );
+
+  return empleadoId;
 }
 
 export async function actualizarEmpleado(

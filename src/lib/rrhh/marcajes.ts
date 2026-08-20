@@ -128,26 +128,52 @@ export async function listarMarcajesEmpleadoRango(
 
 export type InfoCodigoMarcaje = {
   encontrado: boolean;
+  numeroEmpleado?: string;
   nombre?: string;
+  empresaId?: number;
+  empresaNombre?: string;
   tipoHorario?: string;
   esVariable?: boolean;
   estado?: string;
 };
 
 export async function infoCodigoParaMarcaje(
-  empresaId: number,
-  codigo: string,
+  _empresaKioskoId: number,
+  numeroEmpleado: string,
 ): Promise<InfoCodigoMarcaje> {
+  const numero = numeroEmpleado.trim();
+
+  if (!numero) {
+    return { encontrado: false };
+  }
+
   const rows = await query<RowDataPacket[]>(
-    `SELECT nombre, tipo_horario, estado FROM empleados
-     WHERE empresa_id = ? AND codigo = ? LIMIT 1`,
-    [empresaId, codigo.trim()],
+    `SELECT
+       e.numero_empleado,
+       e.nombre,
+       e.empresa_id,
+       e.tipo_horario,
+       e.estado,
+       emp.nombre AS empresa_nombre
+     FROM empleados e
+     INNER JOIN empresas emp ON emp.id = e.empresa_id
+     WHERE e.numero_empleado = ?
+     LIMIT 1`,
+    [numero],
   );
-  if (!rows[0]) return { encontrado: false };
+
+  if (!rows[0]) {
+    return { encontrado: false };
+  }
+
   const tipo = String(rows[0].tipo_horario ?? "Fijo");
+
   return {
     encontrado: true,
+    numeroEmpleado: String(rows[0].numero_empleado ?? ""),
     nombre: String(rows[0].nombre),
+    empresaId: Number(rows[0].empresa_id),
+    empresaNombre: String(rows[0].empresa_nombre ?? ""),
     tipoHorario: tipo,
     esVariable: tipo === "Variable" || tipo.includes("Variable"),
     estado: String(rows[0].estado ?? "Activo"),
@@ -261,6 +287,9 @@ export type ResultadoMarcajeKiosko =
       estadoEntrada?: string;
       minutosRetraso?: number;
       viajeLargo?: boolean;
+      ubicacionId?: number;
+      ubicacionNombre?: string;
+      metros?: number;
     }
   | {
       ok: false;
@@ -269,7 +298,7 @@ export type ResultadoMarcajeKiosko =
     };
 
 export async function registrarMarcajeKiosko(
-  empresaId: number,
+  _empresaKioskoId: number,
   input: {
     codigo: string;
     viajeLargo?: boolean;
@@ -277,33 +306,59 @@ export async function registrarMarcajeKiosko(
     longitud?: number | null;
   },
 ): Promise<ResultadoMarcajeKiosko> {
-  const codigo = input.codigo.trim();
-  if (!codigo) {
-    return { ok: false, code: "EMPTY", error: "Ingrese un código válido." };
+  /*
+   * Por compatibilidad con la API/UI actual el campo todavía
+   * se llama "codigo", pero representa numero_empleado.
+   */
+  const numeroEmpleado = input.codigo.trim();
+
+  if (!numeroEmpleado) {
+    return {
+      ok: false,
+      code: "EMPTY",
+      error: "Ingrese su número de empleado.",
+    };
   }
 
   const fechaJornada = hoyLocal();
   const timestamp = ahoraLocal();
 
+  /*
+   * El empleado se identifica globalmente por numero_empleado.
+   * La empresa real se obtiene del propio registro del empleado.
+   */
   const empRows = await query<RowDataPacket[]>(
-    `SELECT id, nombre, estado, hora_entrada_teorica, tipo_horario
-     FROM empleados WHERE empresa_id = ? AND codigo = ? LIMIT 1`,
-    [empresaId, codigo],
+    `SELECT
+       id,
+       empresa_id,
+       numero_empleado,
+       nombre,
+       estado,
+       hora_entrada_teorica,
+       tipo_horario
+     FROM empleados
+     WHERE numero_empleado = ?
+     LIMIT 1`,
+    [numeroEmpleado],
   );
+
   if (!empRows[0]) {
     return {
       ok: false,
       code: "NOT_FOUND",
-      error: "El código no pertenece a ningún empleado de esta empresa.",
+      error: "No se encontró ningún empleado con ese número.",
     };
   }
 
   const idEmpleado = Number(empRows[0].id);
+  const empresaId = Number(empRows[0].empresa_id);
   const nombre = String(empRows[0].nombre);
   const estado = String(empRows[0].estado);
+
   const horaTeoricaEmp = empRows[0].hora_entrada_teorica
     ? String(empRows[0].hora_entrada_teorica)
     : await obtenerHoraEntradaDefault(empresaId);
+
   const tipoHorario = String(empRows[0].tipo_horario ?? "Fijo");
   const esVariable =
     tipoHorario === "Variable" || tipoHorario.includes("Variable");
@@ -316,22 +371,71 @@ export async function registrarMarcajeKiosko(
     };
   }
 
-  const geo = await validarGeocercaKiosko(empresaId, idEmpleado, {
-    lat: input.latitud,
-    lng: input.longitud,
-  });
+  /*
+   * Valida el GPS contra TODAS las ubicaciones autorizadas
+   * del grupo.
+   */
+  const geo = await validarGeocercaKiosko(
+    empresaId,
+    idEmpleado,
+    {
+      lat: input.latitud,
+      lng: input.longitud,
+    },
+  );
+
   if (!geo.ok) {
-    return { ok: false, code: geo.code, error: geo.error };
+    return {
+      ok: false,
+      code: geo.code,
+      error: geo.error,
+    };
   }
 
+  /*
+   * Normalizamos las coordenadas recibidas.
+   *
+   * Si no vienen coordenadas porque el empleado está en ruta o
+   * porque la geocerca está desactivada, se guardará NULL.
+   */
+  const latitud =
+    input.latitud != null &&
+    Number.isFinite(Number(input.latitud))
+      ? Number(input.latitud)
+      : null;
+
+  const longitud =
+    input.longitud != null &&
+    Number.isFinite(Number(input.longitud))
+      ? Number(input.longitud)
+      : null;
+
+  const ubicacionId = geo.ubicacionId ?? null;
+  const distanciaM = geo.metros ?? null;
+
+  /*
+   * ========================================================
+   * SALIDA
+   * ========================================================
+   *
+   * Si ya existe una sesión abierta, el marcaje actual
+   * corresponde a la salida.
+   */
   if (await tieneSesionAbierta(empresaId, idEmpleado)) {
     const abiertas = await query<RowDataPacket[]>(
-      `SELECT id FROM sesiones_trabajo
-       WHERE empresa_id = ? AND id_empleado = ?
-         AND (estado = 'ABIERTA' OR estado = 'En curso')
-       ORDER BY entrada_at DESC LIMIT 1`,
+      `SELECT id
+       FROM sesiones_trabajo
+       WHERE empresa_id = ?
+         AND id_empleado = ?
+         AND (
+           estado = 'ABIERTA'
+           OR estado = 'En curso'
+         )
+       ORDER BY entrada_at DESC
+       LIMIT 1`,
       [empresaId, idEmpleado],
     );
+
     if (!abiertas[0]) {
       return {
         ok: false,
@@ -339,16 +443,54 @@ export async function registrarMarcajeKiosko(
         error: `${nombre} no tiene sesión abierta.`,
       };
     }
+
     await execute(
-      `UPDATE sesiones_trabajo SET salida_at = ?, estado = 'CERRADA'
-       WHERE id = ? AND empresa_id = ?`,
-      [timestamp, Number(abiertas[0].id), empresaId],
+      `UPDATE sesiones_trabajo
+       SET
+         salida_at = ?,
+         ubicacion_salida_id = ?,
+         salida_lat = ?,
+         salida_lng = ?,
+         salida_distancia_m = ?,
+         estado = 'CERRADA'
+       WHERE id = ?
+         AND empresa_id = ?`,
+      [
+        timestamp,
+        ubicacionId,
+        latitud,
+        longitud,
+        distanciaM,
+        Number(abiertas[0].id),
+        empresaId,
+      ],
     );
-    const hora = timestamp.split(" ")[1] ?? timestamp;
-    return { ok: true, tipo: "Salida", nombre, hora };
+
+    const hora =
+      timestamp.split(" ")[1] ?? timestamp;
+
+    return {
+      ok: true,
+      tipo: "Salida",
+      nombre,
+      hora,
+      ubicacionId: geo.ubicacionId,
+      ubicacionNombre: geo.ubicacionNombre,
+      metros: geo.metros,
+    };
   }
 
-  if (await tieneJornadaCompletaHoy(empresaId, idEmpleado, fechaJornada)) {
+  /*
+   * Evita crear otra entrada después de que el empleado
+   * ya cerró su jornada del día.
+   */
+  if (
+    await tieneJornadaCompletaHoy(
+      empresaId,
+      idEmpleado,
+      fechaJornada,
+    )
+  ) {
     return {
       ok: false,
       code: "JORNADA_COMPLETA",
@@ -356,39 +498,105 @@ export async function registrarMarcajeKiosko(
     };
   }
 
-  const viajeLargo = esVariable && !!input.viajeLargo;
+  const viajeLargo =
+    esVariable && !!input.viajeLargo;
+
+  /*
+   * ========================================================
+   * ENTRADA
+   * ========================================================
+   */
   try {
     await execute(
       `INSERT INTO sesiones_trabajo
-        (empresa_id, id_empleado, entrada_at, fecha_jornada, estado, viaje_largo)
-       VALUES (?, ?, ?, ?, 'ABIERTA', ?)`,
-      [empresaId, idEmpleado, timestamp, fechaJornada, viajeLargo ? 1 : 0],
+        (
+          empresa_id,
+          id_empleado,
+          entrada_at,
+          ubicacion_entrada_id,
+          entrada_lat,
+          entrada_lng,
+          entrada_distancia_m,
+          fecha_jornada,
+          estado,
+          viaje_largo
+        )
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ABIERTA', ?)`,
+      [
+        empresaId,
+        idEmpleado,
+        timestamp,
+        ubicacionId,
+        latitud,
+        longitud,
+        distanciaM,
+        fechaJornada,
+        viajeLargo ? 1 : 0,
+      ],
     );
   } catch {
+    /*
+     * Compatibilidad con instalaciones antiguas donde
+     * viaje_largo todavía pudiera no existir.
+     *
+     * Las columnas de trazabilidad GPS sí forman parte de
+     * la migración obligatoria de Fase 1.1.
+     */
     await execute(
       `INSERT INTO sesiones_trabajo
-        (empresa_id, id_empleado, entrada_at, fecha_jornada, estado)
-       VALUES (?, ?, ?, ?, 'ABIERTA')`,
-      [empresaId, idEmpleado, timestamp, fechaJornada],
+        (
+          empresa_id,
+          id_empleado,
+          entrada_at,
+          ubicacion_entrada_id,
+          entrada_lat,
+          entrada_lng,
+          entrada_distancia_m,
+          fecha_jornada,
+          estado
+        )
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ABIERTA')`,
+      [
+        empresaId,
+        idEmpleado,
+        timestamp,
+        ubicacionId,
+        latitud,
+        longitud,
+        distanciaM,
+        fechaJornada,
+      ],
     );
   }
 
-  const hora = timestamp.split(" ")[1] ?? timestamp;
-  const [tolerancia, tolSemanal] = await Promise.all([
-    obtenerMinutosTolerancia(empresaId),
-    obtenerToleranciaSemanal(empresaId),
-  ]);
-  const usados = await minutosRetrasoSemanaAntes(
-    empresaId,
-    idEmpleado,
-    fechaJornada,
-    horaTeoricaEmp,
-  );
-  const { estado: estadoEntrada, minutos } = calcularEstadoAsistenciaSync(
+  const hora =
+    timestamp.split(" ")[1] ?? timestamp;
+
+  const [tolerancia, tolSemanal] =
+    await Promise.all([
+      obtenerMinutosTolerancia(empresaId),
+      obtenerToleranciaSemanal(empresaId),
+    ]);
+
+  const usados =
+    await minutosRetrasoSemanaAntes(
+      empresaId,
+      idEmpleado,
+      fechaJornada,
+      horaTeoricaEmp,
+    );
+
+  const {
+    estado: estadoEntrada,
+    minutos,
+  } = calcularEstadoAsistenciaSync(
     hora,
     horaTeoricaEmp,
     tolerancia,
-    { toleranciaSemanal: tolSemanal, minutosYaUsadosSemana: usados },
+    {
+      toleranciaSemanal: tolSemanal,
+      minutosYaUsadosSemana: usados,
+    },
   );
 
   return {
@@ -399,6 +607,9 @@ export async function registrarMarcajeKiosko(
     estadoEntrada,
     minutosRetraso: minutos,
     viajeLargo,
+    ubicacionId: geo.ubicacionId,
+    ubicacionNombre: geo.ubicacionNombre,
+    metros: geo.metros,
   };
 }
 
