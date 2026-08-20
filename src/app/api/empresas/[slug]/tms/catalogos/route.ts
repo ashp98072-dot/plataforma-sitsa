@@ -28,12 +28,13 @@ export async function GET(_req: Request, ctx: Ctx) {
   } catch {
     /* TMS sigue aunque clientes aún no esté migrado */
   }
-  const [tmsClientes, shared, lugares, unidades, personal] = await Promise.all([
+
+  const [shared, tmsClientes, lugares, unidades, personal] = await Promise.all([
+    listarClientes(eid).catch(() => []),
     query<RowDataPacket[]>(
       "SELECT id, nombre, nit, telefono, estado FROM tms_clientes WHERE empresa_id = ? ORDER BY nombre",
       [eid],
     ),
-    listarClientes(eid, { estado: "Activo" }).catch(() => []),
     query<RowDataPacket[]>(
       "SELECT id, nombre, tipo, direccion FROM tms_lugares WHERE empresa_id = ? ORDER BY nombre",
       [eid],
@@ -43,7 +44,7 @@ export async function GET(_req: Request, ctx: Ctx) {
       [eid],
     ),
     query<RowDataPacket[]>(
-      "SELECT id, codigo, nombre, tipo, telefono, estado FROM tms_personal WHERE empresa_id = ? ORDER BY nombre",
+      "SELECT id, id_empleado, codigo, nombre, tipo, telefono, estado FROM tms_personal WHERE empresa_id = ? ORDER BY nombre",
       [eid],
     ),
   ]);
@@ -97,6 +98,7 @@ const schema = z.discriminatedUnion("kind", [
     tipo: z.enum(["Piloto", "Auxiliar"]).default("Piloto"),
     telefono: z.string().optional(),
     codigo: z.string().optional(),
+    idEmpleado: z.number().int().positive().optional(),
   }),
 ]);
 
@@ -145,9 +147,23 @@ export async function POST(req: Request, ctx: Ctx) {
     );
     return NextResponse.json({ id: r.insertId, mensaje: "Unidad creada." });
   }
+  let idEmpleadoValido: number | null = null;
+  if (d.idEmpleado != null) {
+    const emp = await query<RowDataPacket[]>(
+      "SELECT id FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1",
+      [d.idEmpleado, eid],
+    );
+    if (!emp[0]) {
+      return NextResponse.json(
+        { error: "El empleado indicado no pertenece a esta empresa." },
+        { status: 400 },
+      );
+    }
+    idEmpleadoValido = d.idEmpleado;
+  }
   const r = await execute(
-    "INSERT INTO tms_personal (empresa_id, codigo, nombre, tipo, telefono) VALUES (?, ?, ?, ?, ?)",
-    [eid, d.codigo ?? null, d.nombre, d.tipo, d.telefono ?? null],
+    "INSERT INTO tms_personal (empresa_id, id_empleado, codigo, nombre, tipo, telefono) VALUES (?, ?, ?, ?, ?, ?)",
+    [eid, idEmpleadoValido, d.codigo ?? null, d.nombre, d.tipo, d.telefono ?? null],
   );
   return NextResponse.json({ id: r.insertId, mensaje: "Personal creado." });
 }
