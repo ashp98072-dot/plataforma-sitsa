@@ -459,6 +459,11 @@ export const RRHH_NAV: {
   { sub: "recordatorios", label: "Recordatorios", path: "recordatorios" },
   { sub: "bitacora_legal", label: "Bitácora Legal", path: "bitacora-legal" },
   { sub: "configuracion", label: "Configuración", path: "configuracion" },
+  {
+    sub: "configuracion",
+    label: "Ubicaciones de Marcaje",
+    path: "ubicaciones-marcaje",
+  },
 ];
 
 /** Navegación Predios / control-flota. */
