@@ -80,8 +80,13 @@ export async function listarMarcajesEmpleadoRango(
   const tolSem = Number.isFinite(tolSemanal) ? tolSemanal : 20;
 
   const rows = await query<RowDataPacket[]>(
-    `SELECT s.entrada_at, s.salida_at, s.estado, s.viaje_largo, s.fecha_jornada,
-            e.hora_entrada_teorica
+    `SELECT
+    s.entrada_at,
+    s.salida_at,
+    s.estado,
+    s.viaje_largo,
+    DATE_FORMAT(s.fecha_jornada, '%Y-%m-%d') AS fecha_jornada,
+    e.hora_entrada_teorica
      FROM sesiones_trabajo s
      INNER JOIN empleados e ON e.id = s.id_empleado
      WHERE s.empresa_id = ? AND s.id_empleado = ?
@@ -228,13 +233,23 @@ export async function listarMarcajesRango(
   const tolSem = Number.isFinite(tolSemanal) ? tolSemanal : 20;
 
   const rows = await query<RowDataPacket[]>(
-    `SELECT s.id, s.id_empleado, e.codigo, e.nombre, s.entrada_at, s.salida_at, s.estado,
-            e.hora_entrada_teorica, s.viaje_largo, s.fecha_jornada
-     FROM sesiones_trabajo s
-     INNER JOIN empleados e ON e.id = s.id_empleado
-     WHERE s.empresa_id = ? AND s.fecha_jornada BETWEEN ? AND ?
-     ORDER BY s.fecha_jornada ASC, s.entrada_at ASC
-     LIMIT 500`,
+`SELECT
+    s.id,
+    s.id_empleado,
+    e.codigo,
+    e.nombre,
+    s.entrada_at,
+    s.salida_at,
+    s.estado,
+    e.hora_entrada_teorica,
+    s.viaje_largo,
+    DATE_FORMAT(s.fecha_jornada, '%Y-%m-%d') AS fecha_jornada
+ FROM sesiones_trabajo s
+ INNER JOIN empleados e ON e.id = s.id_empleado
+ WHERE s.empresa_id = ?
+   AND s.fecha_jornada BETWEEN ? AND ?
+ ORDER BY s.fecha_jornada ASC, s.entrada_at ASC
+ LIMIT 500`,
     [empresaId, desde, hasta],
   );
 
