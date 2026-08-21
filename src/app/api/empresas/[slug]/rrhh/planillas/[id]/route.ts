@@ -4,12 +4,14 @@ import { requireTenantRrhh } from "@/lib/tenant";
 import {
   actualizarEstadoPeriodo,
   calcularCuadre,
+  cancelarPeriodo,
   generarLineasPeriodo,
   listarLineas,
   marcarPagos,
   obtenerPeriodo,
 } from "@/lib/rrhh/planillas";
 import { normalizarFormaPago } from "@/lib/rrhh/contratos-pago";
+import { registrarAuditoria } from "@/lib/auditoria";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
 
@@ -40,11 +42,14 @@ const patchSchema = z.object({
     "marcar_pendientes",
     "cerrar",
     "reabrir",
+    "cancelar",
   ]),
   formaPago: z
     .enum(["efectivo", "cheque", "transferencia", "todas"])
     .optional(),
   conservarPagos: z.boolean().optional(),
+  // Fase P0: obligatorio solo para accion:"cancelar" (validado en el handler).
+  motivo: z.string().optional(),
 });
 
 export async function POST(req: Request, ctx: Ctx) {
@@ -98,6 +103,13 @@ export async function POST(req: Request, ctx: Ctx) {
     }
     if (accion === "cerrar") {
       await actualizarEstadoPeriodo(guard.empresa.id, periodoId, "Cerrada");
+      await registrarAuditoria({
+        empresaId: guard.empresa.id,
+        usuario: guard.session.username,
+        accion: "cerrar_periodo_planilla",
+        modulo: "rrhh",
+        detalle: `Periodo #${periodoId} ${periodo.codigo} · Generada → Cerrada`,
+      });
       return NextResponse.json({
         mensaje: "Planilla cerrada.",
         periodo: await obtenerPeriodo(guard.empresa.id, periodoId),
@@ -105,8 +117,37 @@ export async function POST(req: Request, ctx: Ctx) {
     }
     if (accion === "reabrir") {
       await actualizarEstadoPeriodo(guard.empresa.id, periodoId, "Generada");
+      await registrarAuditoria({
+        empresaId: guard.empresa.id,
+        usuario: guard.session.username,
+        accion: "reabrir_periodo_planilla",
+        modulo: "rrhh",
+        detalle: `Periodo #${periodoId} ${periodo.codigo} · Cerrada → Generada`,
+      });
       return NextResponse.json({
         mensaje: "Planilla reabierta.",
+        periodo: await obtenerPeriodo(guard.empresa.id, periodoId),
+      });
+    }
+    if (accion === "cancelar") {
+      const r = await cancelarPeriodo(
+        guard.empresa.id,
+        periodoId,
+        parsed.data.motivo ?? "",
+      );
+      if (!r.ok) {
+        const status = r.motivo === "no_encontrado" ? 404 : 409;
+        return NextResponse.json({ error: r.mensaje }, { status });
+      }
+      await registrarAuditoria({
+        empresaId: guard.empresa.id,
+        usuario: guard.session.username,
+        accion: "cancelar_periodo_planilla",
+        modulo: "rrhh",
+        detalle: `Periodo #${periodoId} ${periodo.codigo} · ${periodo.estado} → Cancelado · motivo: ${(parsed.data.motivo ?? "").trim()}`,
+      });
+      return NextResponse.json({
+        mensaje: "Periodo cancelado.",
         periodo: await obtenerPeriodo(guard.empresa.id, periodoId),
       });
     }

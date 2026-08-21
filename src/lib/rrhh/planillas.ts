@@ -1,5 +1,5 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
-import { execute, query } from "@/lib/db";
+import { execute, getPool, query } from "@/lib/db";
 import {
   esOutsourcing,
   IGSS_LABORAL_PCT,
@@ -11,6 +11,16 @@ import {
 } from "@/lib/rrhh/contratos-pago";
 import { calcularISRMensual } from "@/lib/rrhh/isr";
 
+/** Fase P0: identidad opcional de quincena/mes de un periodo. */
+export type TipoPeriodo = "QUINCENA_1" | "QUINCENA_2" | "MENSUAL" | "ESPECIAL";
+
+const TIPOS_PERIODO: readonly TipoPeriodo[] = [
+  "QUINCENA_1",
+  "QUINCENA_2",
+  "MENSUAL",
+  "ESPECIAL",
+];
+
 export type PlanillaPeriodo = {
   id: number;
   codigo: string;
@@ -18,6 +28,12 @@ export type PlanillaPeriodo = {
   fechaFin: string;
   estado: string;
   notas: string | null;
+  // Fase P0: aditivos, NULL en periodos históricos.
+  tipoPeriodo: TipoPeriodo | null;
+  numeroQuincena: 1 | 2 | null;
+  mes: number | null;
+  anio: number | null;
+  motivoCancelacion: string | null;
 };
 
 export type PlanillaLinea = {
@@ -98,6 +114,14 @@ async function asegurarInner(): Promise<void> {
       INDEX idx_plan_emp (empresa_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
+  // Fase P0: tipo_periodo/numero_quincena/mes/anio/motivo_cancelacion y los
+  // índices idx_periodos_fechas/uq_planilla_identidad ya NO se crean aquí
+  // en runtime — son responsabilidad exclusiva de sql/schema.sql
+  // (instalaciones nuevas) y de la migración manual
+  // sql/migrate-2026-08-rrhh-planilla-periodos-p0.sql (producción, ya
+  // ejecutada). La aplicación solo LEE/ESCRIBE estas columnas, nunca
+  // modifica la estructura de la base al entrar al módulo.
+
   await execute(`
     CREATE TABLE IF NOT EXISTS rrhh_planilla_lineas (
       id INT AUTO_INCREMENT PRIMARY KEY,
@@ -128,6 +152,7 @@ async function asegurarInner(): Promise<void> {
 }
 
 function mapPeriodo(r: RowDataPacket): PlanillaPeriodo {
+  const tipo = r.tipo_periodo != null ? String(r.tipo_periodo) : null;
   return {
     id: Number(r.id),
     codigo: String(r.codigo),
@@ -135,6 +160,17 @@ function mapPeriodo(r: RowDataPacket): PlanillaPeriodo {
     fechaFin: String(r.fecha_fin).slice(0, 10),
     estado: String(r.estado),
     notas: r.notas != null ? String(r.notas) : null,
+    tipoPeriodo: (TIPOS_PERIODO as readonly string[]).includes(tipo ?? "")
+      ? (tipo as TipoPeriodo)
+      : null,
+    numeroQuincena:
+      r.numero_quincena === 1 || r.numero_quincena === 2
+        ? (r.numero_quincena as 1 | 2)
+        : null,
+    mes: r.mes != null ? Number(r.mes) : null,
+    anio: r.anio != null ? Number(r.anio) : null,
+    motivoCancelacion:
+      r.motivo_cancelacion != null ? String(r.motivo_cancelacion) : null,
   };
 }
 
@@ -186,6 +222,180 @@ export async function obtenerPeriodo(
     [empresaId, id],
   );
   return rows[0] ? mapPeriodo(rows[0]) : null;
+}
+
+export type NuevoPeriodoInput = {
+  codigo: string;
+  fechaInicio: string;
+  fechaFin: string;
+  notas?: string | null;
+  creadoPor: string;
+  tipoPeriodo?: TipoPeriodo | null;
+  numeroQuincena?: 1 | 2 | null;
+  mes?: number | null;
+  anio?: number | null;
+};
+
+export type ResultadoCrearPeriodo =
+  | { ok: true; id: number }
+  | {
+      ok: false;
+      motivo: "fechas_invalidas" | "solapado" | "codigo_duplicado" | "lock" | "error";
+      mensaje: string;
+    };
+
+/**
+ * Fase P0: crea un periodo validando fechas y solapamiento, protegido con
+ * GET_LOCK por empresa (mismo patrón ya usado en flota/viajes y
+ * flota/servicios) para que dos requests concurrentes no puedan crear dos
+ * periodos solapados — un SELECT de verificación seguido de un INSERT
+ * separado no es suficiente contra esa carrera.
+ */
+export async function crearPeriodo(
+  empresaId: number,
+  input: NuevoPeriodoInput,
+): Promise<ResultadoCrearPeriodo> {
+  await asegurarSchemaPlanillas();
+
+  if (input.fechaInicio > input.fechaFin) {
+    return {
+      ok: false,
+      motivo: "fechas_invalidas",
+      mensaje: "La fecha de inicio no puede ser posterior a la fecha de fin.",
+    };
+  }
+
+  const lockKey = `rrhh_planilla_periodo_${empresaId}`;
+  const conn = await getPool().getConnection();
+  try {
+    let bloqueado = false;
+    try {
+      const [lockRows] = await conn.query<RowDataPacket[]>(
+        "SELECT GET_LOCK(?, 8) AS l",
+        [lockKey],
+      );
+      bloqueado = Number(lockRows[0]?.l ?? 0) === 1;
+    } catch {
+      /* bloqueado sigue en false → se rechaza abajo, no se sigue sin lock */
+    }
+    if (!bloqueado) {
+      return {
+        ok: false,
+        motivo: "lock",
+        mensaje:
+          "El sistema está ocupado creando otro periodo de esta empresa. Intenta de nuevo en unos segundos.",
+      };
+    }
+
+    const [overlapRows] = await conn.query<RowDataPacket[]>(
+      `SELECT id, codigo FROM rrhh_planilla_periodos
+       WHERE empresa_id = ? AND estado <> 'Cancelado'
+         AND fecha_inicio <= ? AND fecha_fin >= ?
+       LIMIT 1`,
+      [empresaId, input.fechaFin, input.fechaInicio],
+    );
+    if (overlapRows[0]) {
+      return {
+        ok: false,
+        motivo: "solapado",
+        mensaje: `El rango de fechas se solapa con el periodo "${String(overlapRows[0].codigo)}" (id ${Number(overlapRows[0].id)}).`,
+      };
+    }
+
+    try {
+      const [result] = await conn.execute<ResultSetHeader>(
+        `INSERT INTO rrhh_planilla_periodos
+          (empresa_id, codigo, fecha_inicio, fecha_fin, estado, notas, creado_por,
+           tipo_periodo, numero_quincena, mes, anio)
+         VALUES (?, ?, ?, ?, 'Borrador', ?, ?, ?, ?, ?, ?)`,
+        [
+          empresaId,
+          input.codigo,
+          input.fechaInicio,
+          input.fechaFin,
+          input.notas ?? null,
+          input.creadoPor,
+          input.tipoPeriodo ?? null,
+          input.numeroQuincena ?? null,
+          input.mes ?? null,
+          input.anio ?? null,
+        ],
+      );
+      return { ok: true, id: Number(result.insertId) };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "";
+      if (/Duplicate|uq_planilla/i.test(msg)) {
+        return {
+          ok: false,
+          motivo: "codigo_duplicado",
+          mensaje:
+            "Ya existe un periodo con ese código, o ya existe esa misma quincena/mes para esta empresa.",
+        };
+      }
+      return {
+        ok: false,
+        motivo: "error",
+        mensaje: "No se pudo crear el periodo de planilla.",
+      };
+    }
+  } finally {
+    try {
+      await conn.query("SELECT RELEASE_LOCK(?) AS l", [lockKey]);
+    } catch {
+      /* ok */
+    }
+    conn.release();
+  }
+}
+
+export type ResultadoCancelarPeriodo =
+  | { ok: true }
+  | {
+      ok: false;
+      motivo: "no_encontrado" | "motivo_requerido" | "estado_no_permite";
+      mensaje: string;
+    };
+
+/**
+ * Fase P0: cancela un periodo (Borrador o Generada únicamente). No borra
+ * rrhh_planilla_lineas ya generadas — quedan como histórico. Un periodo
+ * Cancelado queda excluido del control de solapamiento de crearPeriodo() y
+ * bloqueado para generar/regenerar (ver generarLineasPeriodo).
+ */
+export async function cancelarPeriodo(
+  empresaId: number,
+  periodoId: number,
+  motivoCancelacion: string,
+): Promise<ResultadoCancelarPeriodo> {
+  await asegurarSchemaPlanillas();
+
+  if (!motivoCancelacion?.trim()) {
+    return {
+      ok: false,
+      motivo: "motivo_requerido",
+      mensaje: "Debes indicar un motivo para cancelar el periodo.",
+    };
+  }
+
+  const periodo = await obtenerPeriodo(empresaId, periodoId);
+  if (!periodo) {
+    return { ok: false, motivo: "no_encontrado", mensaje: "Periodo no encontrado." };
+  }
+  if (periodo.estado !== "Borrador" && periodo.estado !== "Generada") {
+    return {
+      ok: false,
+      motivo: "estado_no_permite",
+      mensaje: `No se puede cancelar un periodo en estado "${periodo.estado}".`,
+    };
+  }
+
+  await execute(
+    `UPDATE rrhh_planilla_periodos
+     SET estado = 'Cancelado', motivo_cancelacion = ?
+     WHERE id = ? AND empresa_id = ?`,
+    [motivoCancelacion.trim(), periodoId, empresaId],
+  );
+  return { ok: true };
 }
 
 export async function listarLineas(
@@ -372,8 +582,16 @@ export async function generarLineasPeriodo(
   await asegurarSchemaPlanillas();
   const periodo = await obtenerPeriodo(empresaId, periodoId);
   if (!periodo) throw new Error("Periodo no encontrado.");
-  if (periodo.estado === "Cerrada" || periodo.estado === "Pagada") {
-    throw new Error("La planilla ya está cerrada; no se puede regenerar.");
+  if (
+    periodo.estado === "Cerrada" ||
+    periodo.estado === "Pagada" ||
+    periodo.estado === "Cancelado"
+  ) {
+    throw new Error(
+      periodo.estado === "Cancelado"
+        ? "El periodo está cancelado; no se puede generar."
+        : "La planilla ya está cerrada; no se puede regenerar.",
+    );
   }
 
   const prev = opts?.conservarPagos

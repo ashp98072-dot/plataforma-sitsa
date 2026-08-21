@@ -5,8 +5,9 @@ import {
   contarEmpleadosActivos,
   listarPeriodos,
   asegurarSchemaPlanillas,
+  crearPeriodo,
 } from "@/lib/rrhh/planillas";
-import { execute } from "@/lib/db";
+import { registrarAuditoria } from "@/lib/auditoria";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -43,6 +44,12 @@ const schema = z.object({
   fechaInicio: z.string().min(8),
   fechaFin: z.string().min(8),
   notas: z.string().optional(),
+  // Fase P0: identidad opcional de quincena/mes — aditivo, no rompe
+  // clientes existentes que solo envían codigo/fechaInicio/fechaFin/notas.
+  tipoPeriodo: z.enum(["QUINCENA_1", "QUINCENA_2", "MENSUAL", "ESPECIAL"]).optional(),
+  numeroQuincena: z.union([z.literal(1), z.literal(2)]).optional(),
+  mes: z.number().int().min(1).max(12).optional(),
+  anio: z.number().int().min(2000).max(2100).optional(),
 });
 
 export async function POST(req: Request, ctx: Ctx) {
@@ -56,31 +63,38 @@ export async function POST(req: Request, ctx: Ctx) {
   const d = parsed.data;
   try {
     await asegurarSchemaPlanillas();
-    const r = await execute(
-      `INSERT INTO rrhh_planilla_periodos
-        (empresa_id, codigo, fecha_inicio, fecha_fin, estado, notas, creado_por)
-       VALUES (?, ?, ?, ?, 'Borrador', ?, ?)`,
-      [
-        guard.empresa.id,
-        d.codigo,
-        d.fechaInicio,
-        d.fechaFin,
-        d.notas ?? null,
-        guard.session.username,
-      ],
-    );
+    const r = await crearPeriodo(guard.empresa.id, {
+      codigo: d.codigo,
+      fechaInicio: d.fechaInicio,
+      fechaFin: d.fechaFin,
+      notas: d.notas ?? null,
+      creadoPor: guard.session.username,
+      tipoPeriodo: d.tipoPeriodo ?? null,
+      numeroQuincena: d.numeroQuincena ?? null,
+      mes: d.mes ?? null,
+      anio: d.anio ?? null,
+    });
+    if (!r.ok) {
+      const status =
+        r.motivo === "fechas_invalidas"
+          ? 400
+          : r.motivo === "error"
+            ? 500
+            : 409; // solapado | codigo_duplicado | lock
+      return NextResponse.json({ error: r.mensaje }, { status });
+    }
+    await registrarAuditoria({
+      empresaId: guard.empresa.id,
+      usuario: guard.session.username,
+      accion: "crear_periodo_planilla",
+      modulo: "rrhh",
+      detalle: `Periodo #${r.id} ${d.codigo} · ${d.fechaInicio} → ${d.fechaFin}${d.tipoPeriodo ? ` · ${d.tipoPeriodo}` : ""}`,
+    });
     return NextResponse.json({
-      id: r.insertId,
+      id: r.id,
       mensaje: "Periodo de planilla creado (borrador).",
     });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "";
-    if (/Duplicate|uq_planilla/i.test(msg)) {
-      return NextResponse.json(
-        { error: "Ya existe un periodo con ese código." },
-        { status: 409 },
-      );
-    }
+  } catch {
     return NextResponse.json(
       { error: "No se pudo crear el periodo de planilla." },
       { status: 500 },

@@ -103,10 +103,27 @@ CREATE TABLE IF NOT EXISTS rrhh_planilla_periodos (
   fecha_inicio DATE NOT NULL,
   fecha_fin DATE NOT NULL,
   estado VARCHAR(40) NOT NULL DEFAULT 'Borrador',
+  -- Fase P0 (integridad de periodos): identidad de quincena, opcional y
+  -- aditiva. NULL en periodos históricos — no se reinterpretan. Sirve para
+  -- que la UI sugiera fechas (vía ciclo_quincenal de rrhh_configuracion,
+  -- ver src/lib/rrhh/periodos.ts) y para el índice único de identidad de
+  -- abajo. QUINCENA_1 | QUINCENA_2 | MENSUAL | ESPECIAL.
+  tipo_periodo VARCHAR(20) NULL,
+  numero_quincena TINYINT NULL,
+  mes TINYINT NULL,
+  anio SMALLINT NULL,
   notas TEXT NULL,
+  -- Fase P0: obligatorio en la aplicación (no en el schema) cuando
+  -- estado = 'Cancelado'.
+  motivo_cancelacion VARCHAR(300) NULL,
   creado_por VARCHAR(100) NULL,
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uq_planilla (empresa_id, codigo),
+  -- Fase P0: evita crear dos veces la misma quincena/mes "estándar" para la
+  -- misma empresa. No aplica a ESPECIAL (mes/numero_quincena quedan NULL
+  -- ahí, y MySQL no considera iguales dos NULL en un índice único).
+  UNIQUE KEY uq_planilla_identidad (empresa_id, anio, mes, numero_quincena, tipo_periodo),
+  INDEX idx_periodos_fechas (empresa_id, fecha_inicio, fecha_fin),
   CONSTRAINT fk_plan_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 

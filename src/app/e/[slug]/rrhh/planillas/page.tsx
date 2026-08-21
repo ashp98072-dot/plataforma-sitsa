@@ -10,6 +10,15 @@ import {
   type FormaPago,
 } from "@/lib/rrhh/contratos-pago";
 
+type TipoPeriodo = "QUINCENA_1" | "QUINCENA_2" | "MENSUAL" | "ESPECIAL";
+
+const TIPOS_PERIODO_OPCIONES: { value: TipoPeriodo; label: string }[] = [
+  { value: "QUINCENA_1", label: "Primera quincena" },
+  { value: "QUINCENA_2", label: "Segunda quincena" },
+  { value: "MENSUAL", label: "Mensual" },
+  { value: "ESPECIAL", label: "Especial" },
+];
+
 type Periodo = {
   id: number;
   codigo: string;
@@ -17,6 +26,11 @@ type Periodo = {
   fechaFin: string;
   estado: string;
   notas: string | null;
+  tipoPeriodo: TipoPeriodo | null;
+  numeroQuincena: 1 | 2 | null;
+  mes: number | null;
+  anio: number | null;
+  motivoCancelacion: string | null;
 };
 
 type Linea = {
@@ -84,6 +98,10 @@ export default function PlanillasPage() {
     new Date().toISOString().slice(0, 10),
   );
   const [notas, setNotas] = useState("");
+  const [tipoPeriodo, setTipoPeriodo] = useState<TipoPeriodo | "">("");
+  const [mesSel, setMesSel] = useState(new Date().getMonth() + 1);
+  const [anioSel, setAnioSel] = useState(new Date().getFullYear());
+  const [sugiriendo, setSugiriendo] = useState(false);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
   const [periodoId, setPeriodoId] = useState<number | null>(null);
@@ -124,6 +142,34 @@ export default function PlanillasPage() {
     void cargar();
   }, [cargar]);
 
+  // Fase P0: sugiere fechaInicio/fechaFin al elegir tipo+mes+año (reutiliza
+  // ciclo_quincenal vía el endpoint /planillas/sugerir). El usuario sigue
+  // pudiendo ajustar las fechas a mano antes de crear — esto solo pre-llena.
+  useEffect(() => {
+    if (!tipoPeriodo || tipoPeriodo === "ESPECIAL") return;
+    let ignore = false;
+    (async () => {
+      setSugiriendo(true);
+      try {
+        const res = await fetch(
+          `/api/empresas/${slug}/rrhh/planillas/sugerir?tipo=${tipoPeriodo}&mes=${mesSel}&anio=${anioSel}`,
+        );
+        const data = await res.json();
+        if (!ignore && res.ok) {
+          setFechaInicio(data.fechaInicio);
+          setFechaFin(data.fechaFin);
+        }
+      } catch {
+        /* si falla, el usuario captura las fechas a mano */
+      } finally {
+        if (!ignore) setSugiriendo(false);
+      }
+    })();
+    return () => {
+      ignore = true;
+    };
+  }, [slug, tipoPeriodo, mesSel, anioSel]);
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setError("");
@@ -131,7 +177,18 @@ export default function PlanillasPage() {
     const res = await fetch(`/api/empresas/${slug}/rrhh/planillas`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ codigo, fechaInicio, fechaFin, notas }),
+      body: JSON.stringify({
+        codigo,
+        fechaInicio,
+        fechaFin,
+        notas,
+        ...(tipoPeriodo ? { tipoPeriodo } : {}),
+        ...(tipoPeriodo === "QUINCENA_1" ? { numeroQuincena: 1 } : {}),
+        ...(tipoPeriodo === "QUINCENA_2" ? { numeroQuincena: 2 } : {}),
+        ...(tipoPeriodo && tipoPeriodo !== "ESPECIAL"
+          ? { mes: mesSel, anio: anioSel }
+          : {}),
+      }),
     });
     const data = await res.json();
     if (!res.ok) {
@@ -141,6 +198,7 @@ export default function PlanillasPage() {
     setMsg(data.mensaje);
     setCodigo("");
     setNotas("");
+    setTipoPeriodo("");
     await cargar();
     if (data.id) await cargarDetalle(Number(data.id));
   }
@@ -151,8 +209,10 @@ export default function PlanillasPage() {
       | "marcar_pagados"
       | "marcar_pendientes"
       | "cerrar"
-      | "reabrir",
+      | "reabrir"
+      | "cancelar",
     formaPago?: "todas" | FormaPago,
+    motivo?: string,
   ) {
     if (!periodoId) return;
     setBusy(true);
@@ -168,6 +228,7 @@ export default function PlanillasPage() {
             accion: act,
             formaPago: formaPago ?? "todas",
             conservarPagos: true,
+            ...(motivo != null ? { motivo } : {}),
           }),
         },
       );
@@ -219,10 +280,27 @@ export default function PlanillasPage() {
     });
   }, [lineas, filtro, filtroForma]);
 
+  function solicitarCancelacion() {
+    const motivo = window.prompt("Motivo de la cancelación (obligatorio):");
+    if (motivo == null) return;
+    if (!motivo.trim()) {
+      setError("Debes indicar un motivo para cancelar el periodo.");
+      return;
+    }
+    void accion("cancelar", undefined, motivo.trim());
+  }
+
   const input =
     "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm";
+  // Fase P0: Cancelado se trata como bloqueado igual que Cerrada/Pagada —
+  // ningún periodo terminal (en cualquiera de estos 3 sentidos) es editable.
   const cerrada =
-    periodo?.estado === "Cerrada" || periodo?.estado === "Pagada";
+    periodo?.estado === "Cerrada" ||
+    periodo?.estado === "Pagada" ||
+    periodo?.estado === "Cancelado";
+  const cancelada = periodo?.estado === "Cancelado";
+  const puedeCancelar =
+    periodo?.estado === "Borrador" || periodo?.estado === "Generada";
 
   return (
     <div className="space-y-6">
@@ -256,17 +334,57 @@ export default function PlanillasPage() {
           onChange={(e) => setCodigo(e.target.value)}
           required
         />
+        <select
+          className={input}
+          value={tipoPeriodo}
+          onChange={(e) => setTipoPeriodo(e.target.value as TipoPeriodo | "")}
+        >
+          <option value="">Tipo de periodo (opcional)</option>
+          {TIPOS_PERIODO_OPCIONES.map((t) => (
+            <option key={t.value} value={t.value}>
+              {t.label}
+            </option>
+          ))}
+        </select>
+        {tipoPeriodo && tipoPeriodo !== "ESPECIAL" ? (
+          <>
+            <select
+              className={input}
+              value={mesSel}
+              onChange={(e) => setMesSel(Number(e.target.value))}
+            >
+              {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+            <input
+              type="number"
+              className={`${input} w-24`}
+              value={anioSel}
+              onChange={(e) => setAnioSel(Number(e.target.value))}
+            />
+            {sugiriendo ? (
+              <span className="self-center text-xs text-[var(--muted)]">
+                Calculando fechas…
+              </span>
+            ) : null}
+          </>
+        ) : null}
         <input
           type="date"
           className={input}
           value={fechaInicio}
           onChange={(e) => setFechaInicio(e.target.value)}
+          required
         />
         <input
           type="date"
           className={input}
           value={fechaFin}
           onChange={(e) => setFechaFin(e.target.value)}
+          required
         />
         <input
           className={`${input} min-w-[12rem]`}
@@ -278,6 +396,11 @@ export default function PlanillasPage() {
           Crear periodo
         </button>
       </form>
+      {tipoPeriodo && tipoPeriodo !== "ESPECIAL" ? (
+        <p className="text-xs text-[var(--muted)]">
+          Fechas sugeridas para {TIPOS_PERIODO_OPCIONES.find((t) => t.value === tipoPeriodo)?.label.toLowerCase()} de {mesSel}/{anioSel}: {fechaInicio} → {fechaFin}. Puedes ajustarlas antes de crear.
+        </p>
+      ) : null}
 
       <div className="grid gap-4 lg:grid-cols-[240px_1fr]">
         <ul className="space-y-1 text-sm">
@@ -316,25 +439,35 @@ export default function PlanillasPage() {
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-lg font-medium">
                   {periodo.codigo}{" "}
-                  <span className="text-sm font-normal text-[var(--muted)]">
+                  <span
+                    className={[
+                      "text-sm font-normal",
+                      cancelada ? "text-red-400" : "text-[var(--muted)]",
+                    ].join(" ")}
+                  >
                     · {periodo.estado}
+                    {periodo.tipoPeriodo
+                      ? ` · ${TIPOS_PERIODO_OPCIONES.find((t) => t.value === periodo.tipoPeriodo)?.label ?? periodo.tipoPeriodo}`
+                      : ""}
                   </span>
                 </h2>
-                <button
-                  type="button"
-                  disabled={busy || cerrada}
-                  onClick={() => void accion("generar")}
-                  className="rounded bg-[var(--accent)] px-3 py-1 text-sm text-white disabled:opacity-50"
-                >
-                  Generar / actualizar líneas
-                </button>
+                {!cancelada ? (
+                  <button
+                    type="button"
+                    disabled={busy || cerrada}
+                    onClick={() => void accion("generar")}
+                    className="rounded bg-[var(--accent)] px-3 py-1 text-sm text-white disabled:opacity-50"
+                  >
+                    Generar / actualizar líneas
+                  </button>
+                ) : null}
                 <a
                   href={`/api/empresas/${slug}/rrhh/planillas/${periodo.id}/export`}
                   className="rounded bg-[#0d9488] px-3 py-1 text-sm text-white"
                 >
                   Exportar Excel + cuadre
                 </a>
-                {!cerrada ? (
+                {periodo.estado === "Generada" ? (
                   <button
                     type="button"
                     disabled={busy}
@@ -343,7 +476,8 @@ export default function PlanillasPage() {
                   >
                     Cerrar planilla
                   </button>
-                ) : (
+                ) : null}
+                {periodo.estado === "Cerrada" ? (
                   <button
                     type="button"
                     disabled={busy}
@@ -352,8 +486,24 @@ export default function PlanillasPage() {
                   >
                     Reabrir
                   </button>
-                )}
+                ) : null}
+                {puedeCancelar ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={solicitarCancelacion}
+                    className="rounded bg-red-900/60 px-3 py-1 text-sm text-white disabled:opacity-50"
+                  >
+                    Cancelar periodo
+                  </button>
+                ) : null}
               </div>
+
+              {cancelada ? (
+                <p className="rounded-lg border border-red-900/50 bg-red-950/20 px-3 py-2 text-sm text-red-300">
+                  Periodo cancelado. Motivo: {periodo.motivoCancelacion || "—"}
+                </p>
+              ) : null}
 
               <p className="text-xs text-[var(--muted)]">
                 Guatemala: IGSS laboral 4.83% y patronal 12.67% sobre sueldo
