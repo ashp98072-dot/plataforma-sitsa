@@ -74,11 +74,18 @@ export async function POST(req: Request, ctx: Ctx) {
     if (accion === "generar") {
       const r = await generarLineasPeriodo(guard.empresa.id, periodoId, {
         conservarPagos: parsed.data.conservarPagos !== false,
+        usuario: guard.session.username,
       });
       const lineas = await listarLineas(guard.empresa.id, periodoId);
       return NextResponse.json({
-        mensaje: `Planilla generada: ${r.generadas} empleado(s).`,
+        mensaje:
+          `Planilla generada: ${r.generadas} empleado(s).` +
+          (r.cuotasAplicadas > 0
+            ? ` ${r.cuotasAplicadas} cuota(s) de descuento aplicada(s) (Q${r.totalCuotasAplicado.toFixed(2)}).`
+            : ""),
         generadas: r.generadas,
+        cuotasAplicadas: r.cuotasAplicadas,
+        totalCuotasAplicado: r.totalCuotasAplicado,
         periodo: await obtenerPeriodo(guard.empresa.id, periodoId),
         lineas,
         cuadre: calcularCuadre(lineas),

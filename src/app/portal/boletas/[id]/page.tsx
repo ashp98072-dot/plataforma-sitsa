@@ -7,6 +7,7 @@ import {
   listarDescuentosDetalle,
   listarPrestacionesDetalle,
 } from "@/lib/rrhh/planillas";
+import { listarCuotasAplicadasDetalle } from "@/lib/rrhh/descuentos";
 
 const ESTADOS_VISIBLES_COLABORADOR = ["Cerrada", "Pagada"];
 
@@ -60,7 +61,7 @@ export default async function BoletaDetallePage({
     notFound();
   }
 
-  const [prestacionesDetalle, descuentosDetalle] = await Promise.all([
+  const [prestacionesDetalle, descuentosLegadoDetalle, cuotasD1Detalle] = await Promise.all([
     listarPrestacionesDetalle(
       session!.empresaId,
       session!.empleadoId,
@@ -73,7 +74,12 @@ export default async function BoletaDetallePage({
       periodo!.fechaInicio,
       periodo!.fechaFin,
     ),
+    // Fase D2: cuotas del motor nuevo (rrhh_descuento_cuotas) aplicadas
+    // específicamente a ESTE periodo — fuente adicional, no reemplaza el
+    // detalle legado de arriba.
+    listarCuotasAplicadasDetalle(session!.empresaId, session!.empleadoId, periodoId),
   ]);
+  const descuentosDetalle = [...descuentosLegadoDetalle, ...cuotasD1Detalle];
 
   const sumaPrestacionesDetalle = prestacionesDetalle.reduce((a, i) => a + i.monto, 0);
   const sumaDescuentosDetalle = descuentosDetalle.reduce((a, i) => a + i.monto, 0);

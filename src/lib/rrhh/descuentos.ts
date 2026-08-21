@@ -1114,9 +1114,188 @@ export async function registrarAbonoExtraordinario(
   return { ok: true, id: descuentoId };
 }
 
-// Referencia de tipo, evita import sin uso si algún consumidor solo
-// necesita el tipo de conexión para pruebas/mocks futuros.
 export type { PoolConnection };
+
+// ---------------------------------------------------------------------------
+// Fase D2 — integración con generación de planilla. Vive aquí (no en
+// planillas.ts) porque descuentos.ts es el dueño del modelo de cuotas; el
+// generador de planilla solo llama a estas funciones dentro de SU MISMA
+// transacción (recibe `conn`), sin conocer los detalles internos.
+// ---------------------------------------------------------------------------
+
+/**
+ * Marca FINALIZADO un descuento ACTIVO si ya no tiene saldo cobrable ni
+ * cuotas PENDIENTES. Nunca fuerza FINALIZADO con saldo pendiente. Debe
+ * llamarse con la misma `conn` de la transacción que aplicó la cuota/abono.
+ */
+async function finalizarSiCorresponde(
+  conn: PoolConnection,
+  empresaId: number,
+  descuentoId: number,
+): Promise<void> {
+  const [rows] = await conn.query<RowDataPacket[]>(
+    `SELECT
+       d.estado,
+       d.monto_original,
+       COALESCE((SELECT SUM(monto_aplicado) FROM rrhh_descuento_cuotas
+                  WHERE empresa_id = ? AND descuento_id = ? AND estado = 'APLICADA'), 0) AS aplicado,
+       COALESCE((SELECT SUM(monto) FROM rrhh_descuento_abonos
+                  WHERE empresa_id = ? AND descuento_id = ?), 0) AS abonado,
+       (SELECT COUNT(*) FROM rrhh_descuento_cuotas
+         WHERE empresa_id = ? AND descuento_id = ? AND estado = 'PENDIENTE') AS pendientes
+     FROM rrhh_descuentos_maestro d
+     WHERE d.id = ? AND d.empresa_id = ? LIMIT 1`,
+    [empresaId, descuentoId, empresaId, descuentoId, empresaId, descuentoId, descuentoId, empresaId],
+  );
+  const r = rows[0];
+  if (!r || String(r.estado) !== "ACTIVO") return;
+  const saldo =
+    Number(r.monto_original) - Number(r.aplicado ?? 0) - Number(r.abonado ?? 0);
+  if (saldo <= 0.004 && Number(r.pendientes) === 0) {
+    await conn.execute(
+      `UPDATE rrhh_descuentos_maestro SET estado = 'FINALIZADO' WHERE id = ? AND empresa_id = ?`,
+      [descuentoId, empresaId],
+    );
+  }
+}
+
+export type PeriodoParaCuotas = { id: number; fechaInicio: string; fechaFin: string };
+
+/**
+ * Aplica, dentro de la transacción `conn` del llamador (generarLineasPeriodo),
+ * todas las cuotas PENDIENTE elegibles para `periodo`:
+ * - descuento maestro ACTIVO (nunca BORRADOR/PAUSADO/CANCELADO/FINALIZADO);
+ * - fecha_programada dentro de [periodo.fechaInicio, periodo.fechaFin];
+ * - fecha_programada es la fuente de verdad — D2 NO recalcula periodicidad.
+ *
+ * Cada cuota se transiciona con un UPDATE condicional
+ * (WHERE estado='PENDIENTE' AND planilla_periodo_id IS NULL) y se verifica
+ * affectedRows === 1 antes de contarla — si otra ejecución concurrente ya la
+ * aplicó, esta pasada la ignora en vez de reintentar. Al regenerar el mismo
+ * periodo, las cuotas ya APLICADA con planilla_periodo_id = periodo.id NO
+ * vuelven a aparecer en el SELECT de elegibles (ya no son PENDIENTE) — nunca
+ * se reprocesan.
+ */
+export async function aplicarCuotasElegibles(
+  conn: PoolConnection,
+  empresaId: number,
+  periodo: PeriodoParaCuotas,
+  usuario: string,
+): Promise<{ aplicadas: number; totalAplicado: number }> {
+  const [elegibles] = await conn.query<RowDataPacket[]>(
+    `SELECT c.id, c.descuento_id, c.monto_programado
+     FROM rrhh_descuento_cuotas c
+     INNER JOIN rrhh_descuentos_maestro d ON d.id = c.descuento_id AND d.empresa_id = c.empresa_id
+     WHERE c.empresa_id = ?
+       AND c.estado = 'PENDIENTE' AND c.planilla_periodo_id IS NULL
+       AND d.estado = 'ACTIVO'
+       AND c.fecha_programada BETWEEN ? AND ?
+     ORDER BY c.id`,
+    [empresaId, periodo.fechaInicio, periodo.fechaFin],
+  );
+
+  let aplicadas = 0;
+  let totalAplicado = 0;
+  const descuentosAfectados = new Set<number>();
+
+  for (const c of elegibles) {
+    const monto = Number(c.monto_programado);
+    const [r] = await conn.execute<ResultSetHeader>(
+      `UPDATE rrhh_descuento_cuotas
+       SET estado = 'APLICADA', planilla_periodo_id = ?, monto_aplicado = ?,
+           aplicado_en = NOW(), aplicado_por = ?
+       WHERE id = ? AND empresa_id = ? AND estado = 'PENDIENTE' AND planilla_periodo_id IS NULL`,
+      [periodo.id, monto, usuario, Number(c.id), empresaId],
+    );
+    if (r.affectedRows === 1) {
+      aplicadas += 1;
+      totalAplicado += monto;
+      descuentosAfectados.add(Number(c.descuento_id));
+    }
+    // affectedRows === 0: otra ejecución ya la aplicó — no se reintenta.
+  }
+
+  for (const descuentoId of descuentosAfectados) {
+    await finalizarSiCorresponde(conn, empresaId, descuentoId);
+  }
+
+  return { aplicadas, totalAplicado: redondearCentavos(totalAplicado) };
+}
+
+/**
+ * Suma, por empleado, TODAS las cuotas APLICADA vinculadas a este periodo —
+ * tanto las recién aplicadas en esta misma generación como las que ya
+ * estaban aplicadas de una generación/regeneración anterior del mismo
+ * periodo. Debe llamarse DESPUÉS de aplicarCuotasElegibles(), en la misma
+ * transacción, para que el resultado incluya ambos casos.
+ */
+export async function sumaCuotasAplicadasPorPeriodo(
+  conn: PoolConnection,
+  empresaId: number,
+  periodoId: number,
+): Promise<Map<number, number>> {
+  const [rows] = await conn.query<RowDataPacket[]>(
+    `SELECT d.empleado_id, SUM(c.monto_aplicado) AS total
+     FROM rrhh_descuento_cuotas c
+     INNER JOIN rrhh_descuentos_maestro d ON d.id = c.descuento_id AND d.empresa_id = c.empresa_id
+     WHERE c.empresa_id = ? AND c.planilla_periodo_id = ? AND c.estado = 'APLICADA'
+     GROUP BY d.empleado_id`,
+    [empresaId, periodoId],
+  );
+  const map = new Map<number, number>();
+  for (const r of rows) {
+    map.set(Number(r.empleado_id), Number(r.total ?? 0));
+  }
+  return map;
+}
+
+/**
+ * Detalle itemizado de cuotas D1 aplicadas a un empleado en un periodo
+ * específico — para la boleta, mismo formato (concepto/monto/fecha/notas)
+ * que ItemDetalle de planillas.ts (no se importa el tipo para evitar un
+ * ciclo de imports entre descuentos.ts y planillas.ts; es estructuralmente
+ * compatible, se concatena sin problema en el consumidor).
+ */
+export async function listarCuotasAplicadasDetalle(
+  empresaId: number,
+  empleadoId: number,
+  periodoId: number,
+): Promise<{ concepto: string; monto: number; fecha: string; notas: string }[]> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT d.codigo, d.concepto, d.numero_cuotas, c.numero_cuota, c.monto_aplicado, c.aplicado_en
+     FROM rrhh_descuento_cuotas c
+     INNER JOIN rrhh_descuentos_maestro d ON d.id = c.descuento_id AND d.empresa_id = c.empresa_id
+     WHERE c.empresa_id = ? AND c.planilla_periodo_id = ? AND c.estado = 'APLICADA'
+       AND d.empleado_id = ?
+     ORDER BY d.codigo, c.numero_cuota`,
+    [empresaId, periodoId, empleadoId],
+  );
+  return rows.map((r) => ({
+    concepto: `${String(r.concepto)} · Cuota ${Number(r.numero_cuota)} de ${Number(r.numero_cuotas)}`,
+    monto: Number(r.monto_aplicado ?? 0),
+    fecha: toIsoDate(r.aplicado_en) ?? "",
+    notas: `Descuento ${String(r.codigo)}`,
+  }));
+}
+
+/**
+ * Fase D2: si el periodo tiene cuotas D1 ya APLICADA vinculadas
+ * (planilla_periodo_id = periodo.id), no se puede cancelar sin antes
+ * revertirlas — la reversión explícita no está implementada todavía. Se
+ * llama desde cancelarPeriodo() de planillas.ts antes de cambiar el estado.
+ */
+export async function tieneCuotasAplicadasEnPeriodo(
+  empresaId: number,
+  periodoId: number,
+): Promise<boolean> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT id FROM rrhh_descuento_cuotas
+     WHERE empresa_id = ? AND planilla_periodo_id = ? AND estado = 'APLICADA'
+     LIMIT 1`,
+    [empresaId, periodoId],
+  );
+  return rows.length > 0;
+}
 
 /** Mapea el `motivo` de un ResultadoDescuento fallido a un status HTTP. Reutilizado por ambos endpoints. */
 const MOTIVOS_CONFLICTO = new Set([

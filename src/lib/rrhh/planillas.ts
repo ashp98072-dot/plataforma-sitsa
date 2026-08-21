@@ -10,6 +10,12 @@ import {
   type FormaPago,
 } from "@/lib/rrhh/contratos-pago";
 import { calcularISRMensual } from "@/lib/rrhh/isr";
+import {
+  aplicarCuotasElegibles,
+  sumaCuotasAplicadasPorPeriodo,
+  tieneCuotasAplicadasEnPeriodo,
+} from "@/lib/rrhh/descuentos";
+import { registrarAuditoria } from "@/lib/auditoria";
 
 /** Fase P0: identidad opcional de quincena/mes de un periodo. */
 export type TipoPeriodo = "QUINCENA_1" | "QUINCENA_2" | "MENSUAL" | "ESPECIAL";
@@ -352,7 +358,7 @@ export type ResultadoCancelarPeriodo =
   | { ok: true }
   | {
       ok: false;
-      motivo: "no_encontrado" | "motivo_requerido" | "estado_no_permite";
+      motivo: "no_encontrado" | "motivo_requerido" | "estado_no_permite" | "cuotas_aplicadas";
       mensaje: string;
     };
 
@@ -361,6 +367,10 @@ export type ResultadoCancelarPeriodo =
  * rrhh_planilla_lineas ya generadas — quedan como histórico. Un periodo
  * Cancelado queda excluido del control de solapamiento de crearPeriodo() y
  * bloqueado para generar/regenerar (ver generarLineasPeriodo).
+ *
+ * Fase D2: si el periodo ya tiene cuotas D1 APLICADA vinculadas, se bloquea
+ * la cancelación — no dejamos descuentos cobrados contra una planilla
+ * cancelada. La reversión explícita de cuotas no está implementada todavía.
  */
 export async function cancelarPeriodo(
   empresaId: number,
@@ -386,6 +396,13 @@ export async function cancelarPeriodo(
       ok: false,
       motivo: "estado_no_permite",
       mensaje: `No se puede cancelar un periodo en estado "${periodo.estado}".`,
+    };
+  }
+  if (await tieneCuotasAplicadasEnPeriodo(empresaId, periodoId)) {
+    return {
+      ok: false,
+      motivo: "cuotas_aplicadas",
+      mensaje: "El periodo tiene descuentos aplicados. Debe revertirse antes de cancelarlo.",
     };
   }
 
@@ -573,12 +590,24 @@ export async function listarPrestacionesDetalle(
  * Genera (o regenera) líneas de nómina del periodo.
  * Conserva estado_pago / ref_pago / isr / forma_pago si la línea ya existía
  * y se pide conservarPagos.
+ *
+ * Fase D2: además de los descuentos legado (rrhh_descuentos, sin cambios),
+ * aplica dentro de la MISMA transacción las cuotas D1 (rrhh_descuento_cuotas)
+ * elegibles para este periodo — transición PENDIENTE→APLICADA atómica y
+ * verificada (ver aplicarCuotasElegibles en descuentos.ts) — y las suma al
+ * campo agregado `descuentos` de cada línea junto con el legado, sin doblar
+ * ninguna de las dos fuentes. Al regenerar, las cuotas ya APLICADA de este
+ * mismo periodo no se vuelven a tocar (ya no son PENDIENTE) pero SÍ se
+ * vuelven a sumar en el total (sumaCuotasAplicadasPorPeriodo cubre ambas).
+ * Todo — aplicar cuotas, calcular líneas, escribir rrhh_planilla_lineas,
+ * marcar el periodo Generada — ocurre en una única transacción: si algo
+ * falla, se revierte todo (nunca queda una cuota APLICADA sin su línea).
  */
 export async function generarLineasPeriodo(
   empresaId: number,
   periodoId: number,
-  opts?: { conservarPagos?: boolean },
-): Promise<{ generadas: number }> {
+  opts: { conservarPagos?: boolean; usuario: string },
+): Promise<{ generadas: number; cuotasAplicadas: number; totalCuotasAplicado: number }> {
   await asegurarSchemaPlanillas();
   const periodo = await obtenerPeriodo(empresaId, periodoId);
   if (!periodo) throw new Error("Periodo no encontrado.");
@@ -608,89 +637,129 @@ export async function generarLineasPeriodo(
     [empresaId],
   );
 
-  const { descuentos, prestaciones } = await sumasPorEmpleado(
+  const { descuentos: descuentosLegado, prestaciones } = await sumasPorEmpleado(
     empresaId,
     periodo.fechaInicio,
     periodo.fechaFin,
   );
 
-  await execute(
-    `DELETE FROM rrhh_planilla_lineas WHERE empresa_id = ? AND periodo_id = ?`,
-    [empresaId, periodoId],
-  );
-
+  const conn = await getPool().getConnection();
   let generadas = 0;
-  for (const e of empleados) {
-    const empId = Number(e.id);
-    const tipo = normalizarTipoContrato(String(e.tipo_contrato ?? "fijo"));
-    const out = esOutsourcing(tipo);
-    const sueldo = Number(e.sueldo_base ?? 0) || 0;
-    const bonoInc =
-      e.bono_incentivo != null && e.bono_incentivo !== ""
-        ? Number(e.bono_incentivo)
-        : out
-          ? 0
-          : 250;
-    const bonoHerr = Number(e.bono_herramientas ?? 0) || 0;
-    const otros = Number(prestaciones.get(empId) ?? 0);
-    const desc = Number(descuentos.get(empId) ?? 0);
-    const igssLab = out ? 0 : redondearQ(sueldo * IGSS_LABORAL_PCT);
-    const igssPat = out ? 0 : redondearQ(sueldo * IGSS_PATRONAL_PCT);
-    const anterior = prevMap.get(empId);
-    const anioFiscal =
-      Number(periodo.fechaInicio.slice(0, 4)) || new Date().getFullYear();
-    const isr = out
-      ? 0
-      : anterior && anterior.isr != null
-        ? Number(anterior.isr) || 0
-        : calcularISRMensual(sueldo, bonoInc, anioFiscal);
-    const forma = anterior
-      ? anterior.formaPago
-      : normalizarFormaPago(String(e.forma_pago ?? "transferencia"));
-    const estadoPago = anterior?.estadoPago === "Pagado" ? "Pagado" : "Pendiente";
-    const refPago = anterior?.refPago ?? "";
-    const neto = redondearQ(
-      sueldo + bonoInc + bonoHerr + otros - igssLab - desc - isr,
+  let cuotasAplicadas = 0;
+  let totalCuotasAplicado = 0;
+  try {
+    await conn.beginTransaction();
+
+    const aplicado = await aplicarCuotasElegibles(
+      conn,
+      empresaId,
+      { id: periodo.id, fechaInicio: periodo.fechaInicio, fechaFin: periodo.fechaFin },
+      opts.usuario,
+    );
+    cuotasAplicadas = aplicado.aplicadas;
+    totalCuotasAplicado = aplicado.totalAplicado;
+
+    // Incluye tanto las recién aplicadas arriba como las que ya estaban
+    // APLICADA de una generación anterior de este mismo periodo — ambas
+    // comparten planilla_periodo_id = periodo.id en este punto.
+    const descuentosD1 = await sumaCuotasAplicadasPorPeriodo(conn, empresaId, periodoId);
+
+    await conn.execute(
+      `DELETE FROM rrhh_planilla_lineas WHERE empresa_id = ? AND periodo_id = ?`,
+      [empresaId, periodoId],
     );
 
-    await execute(
-      `INSERT INTO rrhh_planilla_lineas
-        (empresa_id, periodo_id, id_empleado, codigo_empleado, nombre_empleado,
-         dpi, tipo_contrato, forma_pago, sueldo_base, bono_incentivo, bono_herramientas,
-         otros_ingresos, igss_laboral, igss_patronal, descuentos, isr, neto,
-         estado_pago, ref_pago)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        empresaId,
-        periodoId,
-        empId,
-        String(e.codigo ?? ""),
-        String(e.nombre ?? ""),
-        e.dpi ? String(e.dpi) : null,
-        tipo,
-        forma,
-        sueldo,
-        bonoInc,
-        bonoHerr,
-        otros,
-        igssLab,
-        igssPat,
-        desc,
-        isr,
-        neto,
-        estadoPago,
-        refPago || null,
-      ],
+    for (const e of empleados) {
+      const empId = Number(e.id);
+      const tipo = normalizarTipoContrato(String(e.tipo_contrato ?? "fijo"));
+      const out = esOutsourcing(tipo);
+      const sueldo = Number(e.sueldo_base ?? 0) || 0;
+      const bonoInc =
+        e.bono_incentivo != null && e.bono_incentivo !== ""
+          ? Number(e.bono_incentivo)
+          : out
+            ? 0
+            : 250;
+      const bonoHerr = Number(e.bono_herramientas ?? 0) || 0;
+      const otros = Number(prestaciones.get(empId) ?? 0);
+      const desc = redondearQ(
+        Number(descuentosLegado.get(empId) ?? 0) + Number(descuentosD1.get(empId) ?? 0),
+      );
+      const igssLab = out ? 0 : redondearQ(sueldo * IGSS_LABORAL_PCT);
+      const igssPat = out ? 0 : redondearQ(sueldo * IGSS_PATRONAL_PCT);
+      const anterior = prevMap.get(empId);
+      const anioFiscal =
+        Number(periodo.fechaInicio.slice(0, 4)) || new Date().getFullYear();
+      const isr = out
+        ? 0
+        : anterior && anterior.isr != null
+          ? Number(anterior.isr) || 0
+          : calcularISRMensual(sueldo, bonoInc, anioFiscal);
+      const forma = anterior
+        ? anterior.formaPago
+        : normalizarFormaPago(String(e.forma_pago ?? "transferencia"));
+      const estadoPago = anterior?.estadoPago === "Pagado" ? "Pagado" : "Pendiente";
+      const refPago = anterior?.refPago ?? "";
+      const neto = redondearQ(
+        sueldo + bonoInc + bonoHerr + otros - igssLab - desc - isr,
+      );
+
+      await conn.execute(
+        `INSERT INTO rrhh_planilla_lineas
+          (empresa_id, periodo_id, id_empleado, codigo_empleado, nombre_empleado,
+           dpi, tipo_contrato, forma_pago, sueldo_base, bono_incentivo, bono_herramientas,
+           otros_ingresos, igss_laboral, igss_patronal, descuentos, isr, neto,
+           estado_pago, ref_pago)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          empresaId,
+          periodoId,
+          empId,
+          String(e.codigo ?? ""),
+          String(e.nombre ?? ""),
+          e.dpi ? String(e.dpi) : null,
+          tipo,
+          forma,
+          sueldo,
+          bonoInc,
+          bonoHerr,
+          otros,
+          igssLab,
+          igssPat,
+          desc,
+          isr,
+          neto,
+          estadoPago,
+          refPago || null,
+        ],
+      );
+      generadas += 1;
+    }
+
+    await conn.execute(
+      `UPDATE rrhh_planilla_periodos SET estado = 'Generada' WHERE id = ? AND empresa_id = ?`,
+      [periodoId, empresaId],
     );
-    generadas += 1;
+
+    await conn.commit();
+  } catch (e) {
+    await conn.rollback();
+    throw e;
+  } finally {
+    conn.release();
   }
 
-  await execute(
-    `UPDATE rrhh_planilla_periodos SET estado = 'Generada' WHERE id = ? AND empresa_id = ?`,
-    [periodoId, empresaId],
-  );
+  if (cuotasAplicadas > 0) {
+    await registrarAuditoria({
+      empresaId,
+      usuario: opts.usuario,
+      accion: "aplicar_descuentos_planilla",
+      modulo: "rrhh",
+      detalle: `Periodo #${periodoId} ${periodo.codigo} · ${cuotasAplicadas} cuota(s) nueva(s) aplicada(s) · Q${totalCuotasAplicado.toFixed(2)}`,
+    });
+  }
 
-  return { generadas };
+  return { generadas, cuotasAplicadas, totalCuotasAplicado };
 }
 
 export async function actualizarLinea(
