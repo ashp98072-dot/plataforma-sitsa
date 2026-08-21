@@ -105,13 +105,18 @@ export async function PUT(req: Request, ctx: Ctx) {
       `[empleados][editar] id=${empId} validacion fallida (${issues.length} campo(s)):`,
       JSON.stringify(issues),
     );
+    // Mensaje público: solo path + message de cada issue (nunca el valor
+    // recibido). Un solo campo → frase corta; varios → lista separada por ";".
+    const mensaje =
+      issues.length === 1
+        ? `Campo "${issues[0].path}": ${issues[0].message}.`
+        : `Datos inválidos: ${issues
+            .map((i) => `${i.path}: ${i.message}`)
+            .join("; ")}.`;
     if (process.env.NODE_ENV !== "production") {
-      return NextResponse.json(
-        { error: "Datos inválidos.", issues },
-        { status: 400 },
-      );
+      return NextResponse.json({ error: mensaje, issues }, { status: 400 });
     }
-    return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
+    return NextResponse.json({ error: mensaje }, { status: 400 });
   }
   const d = parsed.data;
   const falta = validarAltaMonaco(d);
