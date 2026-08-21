@@ -142,12 +142,22 @@ export async function GET(req: Request, ctx: Ctx) {
     propios: 0,
     compartidos: 0,
   };
+  // Fase P3 (Programación): estado real por placa, sin queries nuevas — ya
+  // estaba calculado en `vehiculos` (listarDisponibilidadVehiculos), solo
+  // se exponía filtrado/recortado como vehiculosDisponibles. No cambia
+  // listarDisponibilidadVehiculos ni la lógica de disponibilidad.
+  const estadoVehiculos = vehiculos.map((v) => ({
+    placa: v.placa,
+    estadoDisponibilidad: v.estadoDisponibilidad,
+    motivoNoDisponible: v.motivoNoDisponible,
+  }));
 
   return NextResponse.json(
     {
       planes,
       placasFlota,
       vehiculosDisponibles,
+      estadoVehiculos,
       resumenFlota,
     },
     { headers: { "Cache-Control": "private, no-store" } },

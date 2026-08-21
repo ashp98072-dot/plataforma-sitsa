@@ -271,6 +271,18 @@ export function AppShell({
         key: "disp-flota",
       });
     }
+    // Programación (Fase P3, aditivo): tablero de planes TMS, solo lectura.
+    // Misma audiencia que TMS: si puede abrir TMS, puede ver Programación.
+    const puedeProgramacion =
+      rol !== "Piloto" &&
+      (isAdmin || rol === "Operaciones" || opsMods.includes("tms"));
+    if (puedeProgramacion) {
+      opsLinks.push({
+        href: `${base}/programacion`,
+        label: "Programación",
+        key: "programacion",
+      });
+    }
     const alcanceFact = alcanceFacturacion(rol);
     const puedeVerFact =
       isAdmin ||
