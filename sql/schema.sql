@@ -251,6 +251,85 @@ CREATE TABLE IF NOT EXISTS documentos_empleados (
   CONSTRAINT fk_doc_emp FOREIGN KEY (id_empleado) REFERENCES empleados(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Fase D1 (RRHH): motor de descuentos y cuotas. rrhh_descuentos (arriba)
+-- queda como histórico/legado — NO se toca, NO se migra automáticamente.
+-- Este motor nuevo aplica solo a descuentos creados de aquí en adelante.
+-- IGSS/ISR siguen con sus propios motores (contratos-pago.ts / isr.ts) —
+-- estas tablas son exclusivamente para descuentos adicionales/manuales
+-- (LEGAL/AUTORIZADO/JUDICIAL/SISTEMA).
+CREATE TABLE IF NOT EXISTS rrhh_descuentos_maestro (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  empleado_id INT NOT NULL,
+  codigo VARCHAR(40) NOT NULL,
+  concepto VARCHAR(200) NOT NULL,
+  clasificacion VARCHAR(20) NOT NULL, -- LEGAL | AUTORIZADO | JUDICIAL | SISTEMA
+  motivo TEXT NULL,
+  monto_original DECIMAL(12,2) NOT NULL,
+  estado VARCHAR(20) NOT NULL DEFAULT 'BORRADOR', -- BORRADOR | ACTIVO | PAUSADO | FINALIZADO | CANCELADO
+  periodicidad VARCHAR(20) NOT NULL, -- UNA_VEZ | CADA_QUINCENA | SOLO_QUINCENA_1 | SOLO_QUINCENA_2 | CADA_N_QUINCENAS | MENSUAL | MANUAL
+  numero_cuotas INT NOT NULL DEFAULT 1,
+  monto_cuota DECIMAL(12,2) NOT NULL,
+  cada_n_quincenas INT NULL,
+  tipo_quincena_inicio VARCHAR(20) NULL, -- QUINCENA_1 | QUINCENA_2 | MENSUAL (informativo; fecha_inicio manda)
+  quincena_inicio TINYINT NULL, -- 1 | 2 (informativo)
+  fecha_inicio DATE NOT NULL,
+  documento_id INT NULL,
+  autorizado_por VARCHAR(100) NULL,
+  autorizado_en DATETIME NULL,
+  motivo_pausa VARCHAR(300) NULL,
+  motivo_cancelacion VARCHAR(300) NULL,
+  creado_por VARCHAR(100) NULL,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actualizado_en DATETIME NULL ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_descm_codigo (empresa_id, codigo),
+  INDEX idx_descm_emp (empresa_id, empleado_id),
+  INDEX idx_descm_estado (empresa_id, estado),
+  CONSTRAINT fk_descm_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
+  CONSTRAINT fk_descm_empleado FOREIGN KEY (empleado_id) REFERENCES empleados(id) ON DELETE CASCADE,
+  CONSTRAINT fk_descm_documento FOREIGN KEY (documento_id) REFERENCES documentos_empleados(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS rrhh_descuento_cuotas (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  descuento_id INT NOT NULL,
+  numero_cuota INT NOT NULL,
+  fecha_programada DATE NOT NULL,
+  monto_programado DECIMAL(12,2) NOT NULL,
+  monto_aplicado DECIMAL(12,2) NULL,
+  estado VARCHAR(20) NOT NULL DEFAULT 'PENDIENTE', -- PENDIENTE | APLICADA | OMITIDA | CANCELADA
+  -- Fase D1: la columna existe y queda vinculable, pero D1 NO la conecta a
+  -- generarLineasPeriodo — nadie la escribe todavía. Eso es D2.
+  planilla_periodo_id INT NULL,
+  aplicado_en DATETIME NULL,
+  aplicado_por VARCHAR(100) NULL,
+  motivo_ajuste VARCHAR(300) NULL,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  -- Prevención estructural de cuotas duplicadas dentro del mismo descuento.
+  UNIQUE KEY uq_cuota_numero (descuento_id, numero_cuota),
+  INDEX idx_cuota_desc (descuento_id),
+  INDEX idx_cuota_estado (empresa_id, estado),
+  INDEX idx_cuota_fecha (empresa_id, fecha_programada),
+  CONSTRAINT fk_cuota_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
+  CONSTRAINT fk_cuota_descuento FOREIGN KEY (descuento_id) REFERENCES rrhh_descuentos_maestro(id) ON DELETE CASCADE,
+  CONSTRAINT fk_cuota_periodo FOREIGN KEY (planilla_periodo_id) REFERENCES rrhh_planilla_periodos(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS rrhh_descuento_abonos (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  descuento_id INT NOT NULL,
+  monto DECIMAL(12,2) NOT NULL,
+  fecha DATE NOT NULL,
+  motivo VARCHAR(300) NOT NULL,
+  registrado_por VARCHAR(100) NULL,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_abono_desc (descuento_id),
+  CONSTRAINT fk_abono_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
+  CONSTRAINT fk_abono_descuento FOREIGN KEY (descuento_id) REFERENCES rrhh_descuentos_maestro(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS evidencias_incidencias (
   id INT AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,
