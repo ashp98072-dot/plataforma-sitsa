@@ -313,11 +313,18 @@ CREATE TABLE IF NOT EXISTS tms_unidades (
   id INT AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,
   placa VARCHAR(40) NOT NULL,
+  -- Fase A del plan Programación SITSA: vínculo estructural hacia
+  -- flota_vehiculos.id. Nullable a propósito (backfill progresivo, ver
+  -- migrate-2026-08-fase-a1-tms-unidades-flota-vinculo.sql). La FK se
+  -- declara más abajo, DESPUÉS de flota_vehiculos, porque esa tabla
+  -- todavía no existe en este punto del archivo (orden de creación).
+  flota_vehiculo_id INT NULL,
   tipo VARCHAR(40) NOT NULL DEFAULT 'Camion',
   marca VARCHAR(80) NULL,
   modelo VARCHAR(80) NULL,
   estado VARCHAR(40) NOT NULL DEFAULT 'Disponible',
   UNIQUE KEY uq_unidad (empresa_id, placa),
+  INDEX idx_tmsuni_flota (flota_vehiculo_id),
   CONSTRAINT fk_tmsuni_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -402,6 +409,14 @@ CREATE TABLE IF NOT EXISTS flota_vehiculos (
   UNIQUE KEY uq_flota_placa (empresa_id, placa),
   CONSTRAINT fk_flota_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Fase A del plan Programación SITSA: la FK de tms_unidades.flota_vehiculo_id
+-- se declara aquí (no inline arriba en tms_unidades) porque flota_vehiculos
+-- recién queda definida en este punto del archivo.
+ALTER TABLE tms_unidades
+  ADD CONSTRAINT fk_tmsuni_flota
+  FOREIGN KEY (flota_vehiculo_id) REFERENCES flota_vehiculos(id)
+  ON DELETE SET NULL;
 
 CREATE TABLE IF NOT EXISTS flota_lecturas (
   id INT AUTO_INCREMENT PRIMARY KEY,
