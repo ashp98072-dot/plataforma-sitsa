@@ -1,5 +1,34 @@
-import type { RowDataPacket } from "mysql2";
-import { execute, query } from "@/lib/db";
+import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
+import { execute, query, type SqlParams } from "@/lib/db";
+
+/**
+ * Fase P5.1b: helpers de lectura/escritura conn-aware. Si se pasa `conn`
+ * (dentro de una transacción), usan esa misma conexión; si no, mantienen
+ * exactamente el comportamiento actual (pool global vía @/lib/db).
+ */
+async function runExecute(
+  conn: PoolConnection | undefined,
+  sql: string,
+  params: SqlParams = [],
+): Promise<ResultSetHeader> {
+  if (conn) {
+    const [result] = await conn.execute<ResultSetHeader>(sql, params);
+    return result;
+  }
+  return execute(sql, params);
+}
+
+async function runQuery<T extends RowDataPacket[]>(
+  conn: PoolConnection | undefined,
+  sql: string,
+  params: SqlParams = [],
+): Promise<T> {
+  if (conn) {
+    const [rows] = await conn.query<T>(sql, params);
+    return rows;
+  }
+  return query<T>(sql, params);
+}
 
 export type TipoParada = "Carga" | "Descarga" | "Entrega";
 
@@ -84,12 +113,22 @@ export async function listarParadasDePlanes(
   return map;
 }
 
+/**
+ * Fase P5.1b: `conn` opcional — si viene (dentro de una transacción de
+ * Programación), TODAS las escrituras/lecturas internas (DELETE, el
+ * auto-alta de tms_lugares, e INSERT de cada parada) usan esa misma
+ * conexión, para que un reemplazo de paradas sea atómico junto con el
+ * resto del cambio. Sin `conn`, comportamiento idéntico al actual (pool
+ * global) — compatibilidad total con los 2 consumidores existentes
+ * (POST/PATCH de tms/planes/route.ts), que siguen llamándola sin `conn`.
+ */
 export async function guardarParadasPlan(
   empresaId: number,
   planId: number,
   paradas: ParadaInput[],
+  conn?: PoolConnection,
 ): Promise<void> {
-  await execute("DELETE FROM tms_plan_paradas WHERE plan_id = ?", [planId]);
+  await runExecute(conn, "DELETE FROM tms_plan_paradas WHERE plan_id = ?", [planId]);
   let orden = 1;
   for (const p of paradas) {
     const nombre = (p.lugarNombre || "").trim();
@@ -97,21 +136,24 @@ export async function guardarParadasPlan(
     const tipo = String(p.tipo || "Entrega");
     let lugarId = p.lugarId ?? null;
     if (!lugarId) {
-      const existing = await query<RowDataPacket[]>(
+      const existing = await runQuery<RowDataPacket[]>(
+        conn,
         "SELECT id FROM tms_lugares WHERE empresa_id = ? AND nombre = ? LIMIT 1",
         [empresaId, nombre],
       );
       if (existing[0]) {
         lugarId = Number(existing[0].id);
       } else {
-        const r = await execute(
+        const r = await runExecute(
+          conn,
           "INSERT INTO tms_lugares (empresa_id, nombre, tipo) VALUES (?, ?, ?)",
           [empresaId, nombre, tipo === "Carga" ? "Carga" : "Descarga"],
         );
         lugarId = Number(r.insertId);
       }
     }
-    await execute(
+    await runExecute(
+      conn,
       `INSERT INTO tms_plan_paradas
         (plan_id, orden, lugar_id, lugar_nombre, tipo, requiere_evidencia)
        VALUES (?, ?, ?, ?, ?, ?)`,

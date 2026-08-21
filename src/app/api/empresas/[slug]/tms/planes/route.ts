@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
-import { execute, query } from "@/lib/db";
+import { execute, getPool, query, type SqlParams } from "@/lib/db";
 import { registrarAuditoria } from "@/lib/auditoria";
 import { requireTenantModulo } from "@/lib/tenant";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
@@ -18,8 +18,51 @@ import {
   listarParadasDePlanes,
   type ParadaInput,
 } from "@/lib/tms/paradas";
+import { obtenerVehiculoAccesible } from "@/lib/flota/acceso";
+import { listarDisponibilidadPersonal } from "@/lib/operaciones/disponibilidad-personal";
+import { hoyLocal, toIsoDate } from "@/lib/rrhh/dates";
+import type { PoolConnection, ResultSetHeader } from "mysql2/promise";
 
 type Ctx = { params: Promise<{ slug: string }> };
+
+/**
+ * Fase P5.1c: mensaje informativo devuelto junto a un PATCH exitoso — nunca
+ * bloquea el guardado, solo advierte (viaje/estado actual, otro plan del
+ * día, incidencia informativa). Pensado para que P5.2 (UI) lo muestre en el
+ * modal; se agrega de forma aditiva, ningún consumidor existente lo lee hoy.
+ */
+type AdvertenciaPatch = { tipo: string; mensaje: string };
+
+/**
+ * Fase P5.1c (ajuste final confirmado): reglas por estado del plan para
+ * ediciones desde Programación. "Programado" Y "Cargado" (no listados aquí)
+ * admiten edición operativa completa — "Cargado" NO se trata como "En
+ * ruta". "En ruta" admite únicamente notas (bloquea piloto, auxiliares,
+ * unidad, fecha, paradas y horaCarga — horaCarga es planificación; la hora
+ * real de salida vive en flota_viajes.hora_salida y no debe alterarse
+ * retrospectivamente una vez iniciado el viaje). "Descargado", "Cerrado" y
+ * "Cancelado" bloquean toda edición.
+ */
+const ESTADOS_SOLO_NOTAS = new Set(["En ruta"]);
+const ESTADOS_BLOQUEADOS = new Set(["Descargado", "Cerrado", "Cancelado"]);
+
+/**
+ * Fase P5.1b: helper conn-aware para escrituras. Si se pasa `conn` (dentro
+ * de una transacción de Programación), usa esa misma conexión; si no,
+ * mantiene exactamente el comportamiento actual (pool global vía @/lib/db).
+ * Mismo patrón que runExecute en src/lib/tms/paradas.ts.
+ */
+async function runExecute(
+  conn: PoolConnection | undefined,
+  sql: string,
+  params: SqlParams = [],
+): Promise<ResultSetHeader> {
+  if (conn) {
+    const [result] = await conn.execute<ResultSetHeader>(sql, params);
+    return result;
+  }
+  return execute(sql, params);
+}
 
 /** Auxiliar de un plan con su id real de tms_personal (Fase P4.3). */
 type AuxiliarPlan = { personalId: number; nombre: string };
@@ -243,6 +286,27 @@ async function personalDesdeEmpleado(
   return Number(r.insertId);
 }
 
+/**
+ * Fase P5.1a: valida un personal_id EXACTO (sin resolver/auto-crear por
+ * nombre o id_empleado) — existe, pertenece a la empresa, es del tipo
+ * esperado y está activo. Usado exclusivamente por los campos nuevos
+ * pilotoPersonalId/auxiliarPersonalIds de Programación.
+ */
+async function validarPersonalId(
+  empresaId: number,
+  personalId: number,
+  tipoEsperado: "Piloto" | "Auxiliar",
+): Promise<{ id: number; nombre: string } | null> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT id, nombre FROM tms_personal
+     WHERE id = ? AND empresa_id = ? AND tipo = ? AND estado = 'Activo' LIMIT 1`,
+    [personalId, empresaId, tipoEsperado],
+  );
+  return rows[0]
+    ? { id: Number(rows[0].id), nombre: String(rows[0].nombre) }
+    : null;
+}
+
 async function upsertLugar(
   empresaId: number,
   nombre: string | undefined,
@@ -261,22 +325,43 @@ async function upsertLugar(
   return Number(r.insertId);
 }
 
+/**
+ * Fase P5.1b: `conn` opcional — si viene (dentro de una transacción de
+ * Programación), el DELETE + INSERTs usan esa misma conexión y los errores
+ * SE PROPAGAN (para que el caller pueda hacer ROLLBACK) en vez de
+ * silenciarse. Sin `conn`, comportamiento IDÉNTICO al actual: pool global
+ * y errores silenciados (tolerancia histórica a "tabla aún no existe") —
+ * compatibilidad total con el POST y con el resto del PATCH legado, que
+ * siguen llamándola sin `conn`. No se duplica la función: una sola función,
+ * dos ramas de manejo de errores según haya o no transacción activa.
+ */
 async function guardarAuxiliaresPlan(
   planId: number,
   personalIds: number[],
+  conn?: PoolConnection,
 ): Promise<void> {
-  try {
-    await execute("DELETE FROM tms_plan_auxiliares WHERE plan_id = ?", [planId]);
+  async function escribir(): Promise<void> {
+    await runExecute(conn, "DELETE FROM tms_plan_auxiliares WHERE plan_id = ?", [
+      planId,
+    ]);
     let orden = 1;
     for (const pid of personalIds.slice(0, 8)) {
-      await execute(
+      await runExecute(
+        conn,
         `INSERT INTO tms_plan_auxiliares (plan_id, personal_id, orden)
          VALUES (?, ?, ?)`,
         [planId, pid, orden++],
       );
     }
+  }
+  if (conn) {
+    await escribir();
+    return;
+  }
+  try {
+    await escribir();
   } catch {
-    /* tabla aún no existe */
+    /* tabla aún no existe (comportamiento legado, sin conn) */
   }
 }
 
@@ -552,6 +637,18 @@ const patchSchema = z.object({
     )
     .max(20)
     .optional(),
+  // --- Fase P5.1a: campos por ID, exclusivos de Programación. Aditivos —
+  // no reemplazan pilotoNombre/auxiliarNombres/auxiliarEmpleadoIds/placa,
+  // que TMS (staff) sigue usando tal cual. Si un request trae ambos (ID y
+  // nombre) para el mismo recurso, el campo por ID tiene precedencia por
+  // aplicarse después en el código.
+  fechaPlan: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "Fecha inválida (YYYY-MM-DD).")
+    .optional(),
+  pilotoPersonalId: z.number().int().positive().optional(),
+  auxiliarPersonalIds: z.array(z.number().int().positive()).max(8).optional(),
+  flotaVehiculoId: z.number().int().positive().optional(),
 });
 
 export async function PATCH(req: Request, ctx: Ctx) {
@@ -572,9 +669,13 @@ export async function PATCH(req: Request, ctx: Ctx) {
   const d = parsed.data;
   const empresaId = guard.empresa.id;
 
+  // Fase P5.1c: SELECT ampliado — se agregan fecha_plan, piloto_id y
+  // flota_vehiculo_id (antes no se traían) para poder calcular la fecha
+  // efectiva y revalidar disponibilidad de los recursos YA asignados
+  // cuando cambia la fecha (ver "revalidación al cambiar fecha").
   const plan = await query<RowDataPacket[]>(
-    `SELECT p.id, p.codigo, p.estado, p.hora_carga, p.notas,
-            u.placa, pil.nombre AS piloto
+    `SELECT p.id, p.codigo, p.estado, p.fecha_plan, p.hora_carga, p.notas,
+            p.piloto_id, u.placa, u.flota_vehiculo_id, pil.nombre AS piloto
      FROM tms_planes_viaje p
      LEFT JOIN tms_unidades u ON u.id = p.unidad_id
      LEFT JOIN tms_personal pil ON pil.id = p.piloto_id
@@ -590,7 +691,87 @@ export async function PATCH(req: Request, ctx: Ctx) {
     placa: plan[0].placa ? String(plan[0].placa) : "",
     piloto: plan[0].piloto ? String(plan[0].piloto) : "",
     hora: plan[0].hora_carga ? String(plan[0].hora_carga) : "",
+    fechaPlan: toIsoDate(plan[0].fecha_plan) ?? "",
+    pilotoId: plan[0].piloto_id != null ? Number(plan[0].piloto_id) : null,
+    flotaVehiculoId:
+      plan[0].flota_vehiculo_id != null
+        ? Number(plan[0].flota_vehiculo_id)
+        : null,
   };
+  // Auxiliares y paradas actuales del plan (antes de cualquier cambio) —
+  // reutiliza los mismos helpers que ya usa GET, sin duplicar SQL. Sirven
+  // para: (a) el detalle "antes → después" de la auditoría, y (b) revalidar
+  // disponibilidad de los auxiliares YA asignados si la fecha cambia.
+  const antesAuxMap = await auxiliaresDePlanes([d.id]);
+  const antesAuxiliares = antesAuxMap.get(d.id) ?? [];
+  const antesAuxiliaresIds = antesAuxiliares.map((a) => a.personalId);
+  const antesAuxiliaresNombres = antesAuxiliares.map((a) => a.nombre);
+  const paradasAntesMap = await listarParadasDePlanes([d.id]);
+  const paradasAntesCount = (paradasAntesMap.get(d.id) ?? []).length;
+
+  // Fase P5.1c — REGLAS POR ESTADO DEL PLAN. Se evalúa contra el estado
+  // ANTES del cambio (si esta misma solicitud también transiciona el
+  // estado, eso sigue permitido — solo se restringen piloto/auxiliares/
+  // unidad/fecha/paradas/hora, nunca la transición de `estado` en sí).
+  // Aplica por igual a los campos legado (nombre/placa) y a los nuevos por
+  // ID — es una protección de integridad del viaje ya iniciado, no una
+  // regla exclusiva de Programación (mismo criterio ya usado para bloquear
+  // paradas en "En ruta").
+  const tocaPiloto = d.pilotoNombre != null || d.pilotoPersonalId != null;
+  const tocaAuxiliares =
+    d.auxiliarEmpleadoIds != null ||
+    d.auxiliarNombres != null ||
+    d.auxiliarNombre != null ||
+    d.auxiliarPersonalIds != null;
+  const tocaUnidad = d.placa != null || d.flotaVehiculoId != null;
+  const tocaFecha = d.fechaPlan != null;
+  const tocaParadas = d.paradas != null;
+  const tocaHora = d.horaCarga != null;
+
+  if (ESTADOS_BLOQUEADOS.has(antes.estado)) {
+    return NextResponse.json(
+      {
+        error: `Este plan está en estado "${antes.estado}" y ya no admite modificaciones desde Programación.`,
+      },
+      { status: 409 },
+    );
+  }
+  if (ESTADOS_SOLO_NOTAS.has(antes.estado)) {
+    const camposNoPermitidos: string[] = [];
+    if (tocaPiloto) camposNoPermitidos.push("piloto");
+    if (tocaAuxiliares) camposNoPermitidos.push("auxiliares");
+    if (tocaUnidad) camposNoPermitidos.push("unidad");
+    if (tocaFecha) camposNoPermitidos.push("fecha");
+    if (tocaParadas) camposNoPermitidos.push("paradas");
+    if (tocaHora) camposNoPermitidos.push("hora de carga");
+    if (camposNoPermitidos.length) {
+      return NextResponse.json(
+        {
+          error: `El plan está "${antes.estado}"; solo se pueden editar notas mientras está en ruta (no permitido: ${camposNoPermitidos.join(", ")}).`,
+        },
+        { status: 409 },
+      );
+    }
+  }
+
+  // Fase P5.1c — FECHA EFECTIVA Y FECHA PASADA. "hoy" se calcula en
+  // America/Guatemala (hoyLocal(), ya existente y reutilizado en el resto
+  // del proyecto) — nunca con new Date().toISOString(), que es UTC y puede
+  // desfasar un día cerca de medianoche. Aplica únicamente al PATCH de
+  // Programación (no se toca el POST ni su comportamiento histórico).
+  const hoy = hoyLocal();
+  const fechaEfectiva = d.fechaPlan ?? antes.fechaPlan;
+  if (fechaEfectiva && fechaEfectiva < hoy) {
+    return NextResponse.json(
+      { error: "No se puede reprogramar un viaje hacia una fecha pasada." },
+      { status: 400 },
+    );
+  }
+  const esHoy = fechaEfectiva === hoy;
+  // Si la fecha cambia, los recursos YA asignados (que no cambian de ID en
+  // este mismo request) deben revalidarse contra la NUEVA fecha — cambia el
+  // contexto temporal de toda la asignación.
+  const fechaCambia = d.fechaPlan != null && d.fechaPlan !== antes.fechaPlan;
 
   let pilotoId: number | undefined;
   let auxiliarId: number | null | undefined;
@@ -614,10 +795,32 @@ export async function PATCH(req: Request, ctx: Ctx) {
     }
   }
 
+  // Fase P5.1a: campo por ID exclusivo de Programación. Se evalúa DESPUÉS
+  // del bloque por nombre a propósito — si un request trajera ambos (no
+  // debería ocurrir en uso normal), el id validado tiene precedencia.
+  if (d.pilotoPersonalId != null) {
+    const piloto = await validarPersonalId(empresaId, d.pilotoPersonalId, "Piloto");
+    if (!piloto) {
+      return NextResponse.json(
+        { error: "El piloto seleccionado no existe o no pertenece a esta empresa." },
+        { status: 400 },
+      );
+    }
+    pilotoId = piloto.id;
+  }
+
+  // Fase P5.1b: de aquí en adelante solo RESOLUCIÓN/VALIDACIÓN (sin tocar
+  // tms_unidades, tms_planes_viaje ni tms_plan_auxiliares todavía) — las 4
+  // escrituras relacionadas se ejecutan más abajo dentro de una única
+  // transacción. personalDesdeEmpleado()/el alta por nombre SÍ pueden
+  // crear filas en tms_personal aquí (fuera de la transacción): es el
+  // mismo patrón, sin envolver, que ya usa el POST para clientes/personal
+  // nuevos — no es una de las 4 escrituras que P5.1b debe hacer atómicas.
   const actualizarAux =
     d.auxiliarEmpleadoIds != null ||
     d.auxiliarNombres != null ||
     d.auxiliarNombre != null;
+  let auxPersonalIdsLegado: number[] | undefined;
   if (actualizarAux) {
     const auxPersonalIds: number[] = [];
     for (const eid of (d.auxiliarEmpleadoIds ?? []).slice(0, 8)) {
@@ -650,53 +853,325 @@ export async function PATCH(req: Request, ctx: Ctx) {
       auxPersonalIds.push(Number(r.insertId));
     }
     auxiliarId = auxPersonalIds[0] ?? null;
-    await guardarAuxiliaresPlan(d.id, auxPersonalIds);
-  }
-  if (d.placa?.trim()) {
-    const r = await execute(
-      `INSERT INTO tms_unidades (empresa_id, placa, tipo)
-       VALUES (?, ?, 'Camion')
-       ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)`,
-      [empresaId, d.placa.trim().toUpperCase()],
-    );
-    unidadId = Number(r.insertId);
+    auxPersonalIdsLegado = auxPersonalIds;
   }
 
-  await execute(
-    `UPDATE tms_planes_viaje SET
-      piloto_id = COALESCE(?, piloto_id),
-      auxiliar_id = COALESCE(?, auxiliar_id),
-      unidad_id = COALESCE(?, unidad_id),
-      estado = COALESCE(?, estado),
-      notas = COALESCE(?, notas),
-      hora_carga = COALESCE(?, hora_carga)
-     WHERE id = ? AND empresa_id = ?`,
-    [
-      pilotoId ?? null,
-      auxiliarId ?? null,
-      unidadId ?? null,
-      d.estado ?? null,
-      d.notas ?? null,
-      d.horaCarga ?? null,
-      d.id,
+  // Fase P5.1a: campo por ID exclusivo de Programación. Igual que piloto,
+  // se evalúa después del bloque por nombre/id_empleado y tiene precedencia
+  // si ambos vinieran en el mismo request. Fase P5.1b: solo valida aquí —
+  // el reemplazo real de tms_plan_auxiliares se hace dentro de la
+  // transacción, más abajo.
+  let auxPersonalIdsNuevo: number[] | undefined;
+  if (d.auxiliarPersonalIds != null) {
+    const auxIds: number[] = [];
+    for (const pid of d.auxiliarPersonalIds.slice(0, 8)) {
+      const aux = await validarPersonalId(empresaId, pid, "Auxiliar");
+      if (!aux) {
+        return NextResponse.json(
+          {
+            error: `Un auxiliar seleccionado no existe o no pertenece a esta empresa (id ${pid}).`,
+          },
+          { status: 400 },
+        );
+      }
+      if (!auxIds.includes(aux.id)) auxIds.push(aux.id);
+    }
+    auxiliarId = auxIds[0] ?? null;
+    auxPersonalIdsNuevo = auxIds;
+  }
+
+  // Placa legada: solo normaliza el texto aquí. El upsert real de
+  // tms_unidades (categoría 1 de la transacción) se ejecuta más abajo.
+  const placaNorm = d.placa?.trim() ? d.placa.trim().toUpperCase() : undefined;
+
+  // Fase P5.1a: vínculo real Flota/TMS (tms_unidades.flota_vehiculo_id),
+  // exclusivo de Programación. obtenerVehiculoAccesible ya valida
+  // multiempresa (propio o compartido vía flota_vehiculo_acceso) — nunca
+  // se confía en el id solo por venir del cliente. Fase P5.1b: solo valida
+  // aquí (lectura); el upsert real se ejecuta dentro de la transacción.
+  let vehiculoAccesible: Awaited<
+    ReturnType<typeof obtenerVehiculoAccesible>
+  > = null;
+  if (d.flotaVehiculoId != null) {
+    vehiculoAccesible = await obtenerVehiculoAccesible(
       empresaId,
-    ],
-  );
-
-  if (d.paradas) {
-    const paradasInput = d.paradas.filter((p) => p.lugarNombre?.trim());
-    await guardarParadasPlan(empresaId, d.id, paradasInput);
+      d.flotaVehiculoId,
+    );
+    if (!vehiculoAccesible) {
+      return NextResponse.json(
+        { error: "La unidad seleccionada no existe o no es accesible para esta empresa." },
+        { status: 400 },
+      );
+    }
   }
+
+  const paradasInput = d.paradas
+    ? d.paradas.filter((p) => p.lugarNombre?.trim())
+    : undefined;
+
+  // Fase P5.1c — DISPONIBILIDAD. Exclusiva de los campos por ID de
+  // Programación (pilotoPersonalId/auxiliarPersonalIds/flotaVehiculoId) —
+  // los campos legado (pilotoNombre/auxiliar*/placa) NO se validan aquí,
+  // igual que en P5.1a, para no cambiar el comportamiento ya existente de
+  // TMS (staff). Se valida: (a) el recurso NUEVO si viene en el payload, o
+  // (b) el recurso YA asignado si la fecha cambió y no viene un id nuevo
+  // para ese recurso (revalidación por cambio de fecha). Todo esto corre
+  // ANTES de abrir la transacción.
+  const pilotoIdParaValidar =
+    d.pilotoPersonalId != null
+      ? (pilotoId ?? null)
+      : fechaCambia && antes.pilotoId != null
+        ? antes.pilotoId
+        : null;
+  const auxiliaresIdsParaValidar: number[] =
+    d.auxiliarPersonalIds != null
+      ? (auxPersonalIdsNuevo ?? [])
+      : fechaCambia
+        ? antesAuxiliaresIds
+        : [];
+  const vehiculoIdParaValidar =
+    d.flotaVehiculoId != null
+      ? d.flotaVehiculoId
+      : fechaCambia && antes.flotaVehiculoId != null
+        ? antes.flotaVehiculoId
+        : null;
+
+  const advertencias: AdvertenciaPatch[] = [];
+
+  if (pilotoIdParaValidar != null || auxiliaresIdsParaValidar.length > 0) {
+    const personalDisp = await listarDisponibilidadPersonal(
+      empresaId,
+      fechaEfectiva,
+    );
+    const recursos: { personalId: number; rol: "piloto" | "auxiliar" }[] = [];
+    if (pilotoIdParaValidar != null) {
+      recursos.push({ personalId: pilotoIdParaValidar, rol: "piloto" });
+    }
+    for (const pid of auxiliaresIdsParaValidar) {
+      recursos.push({ personalId: pid, rol: "auxiliar" });
+    }
+    for (const r of recursos) {
+      const disp = personalDisp.find((p) => p.personalId === r.personalId);
+      // No debería faltar (tms_personal ya se validó antes) — si por alguna
+      // inconsistencia no aparece, no se bloquea por un dato que no se pudo
+      // verificar (mismo criterio de "no bloquear por falla ajena" que ya
+      // usa el POST con la disponibilidad de placa).
+      if (!disp) continue;
+      const etiqueta =
+        r.rol === "piloto" ? "El piloto seleccionado" : `El auxiliar ${disp.nombre}`;
+
+      if (disp.incidenciasBloqueantes.length > 0) {
+        const inc = disp.incidenciasBloqueantes[0];
+        return NextResponse.json(
+          {
+            error: `${etiqueta} tiene una incidencia (${inc.tipo}) del ${inc.fechaInicio} al ${inc.fechaFin} que cubre el ${fechaEfectiva}.`,
+          },
+          { status: 409 },
+        );
+      }
+      if (disp.viajeActual != null) {
+        if (esHoy) {
+          return NextResponse.json(
+            { error: `${etiqueta} tiene un viaje en curso.` },
+            { status: 409 },
+          );
+        }
+        // Futuro: el viaje abierto ahora mismo NO bloquea — no se conoce
+        // cuándo terminará y no se inventa una duración estimada.
+        advertencias.push({
+          tipo: r.rol === "piloto" ? "viaje_actual_piloto" : "viaje_actual_auxiliar",
+          mensaje: `${disp.nombre} está actualmente en ruta. Esto no impide su programación para el ${fechaEfectiva}.`,
+        });
+      } else if (disp.estadoDisponibilidad === "no_disponible") {
+        // Por eliminación (ya se descartaron incidencia bloqueante y viaje
+        // actual arriba): personal inactivo o empleado de baja — hecho
+        // estructural, bloquea siempre sin importar la fecha.
+        return NextResponse.json(
+          {
+            error: `${etiqueta} no está activo o el empleado vinculado está de baja.`,
+          },
+          { status: 409 },
+        );
+      }
+      for (const otro of disp.otrosPlanesDelDia) {
+        if (otro.planId === d.id) continue; // nunca advertir contra el propio plan
+        advertencias.push({
+          tipo: r.rol === "piloto" ? "otro_plan_dia_piloto" : "otro_plan_dia_auxiliar",
+          mensaje: `${disp.nombre} ya tiene otro plan el mismo día (${otro.planCodigo}).`,
+        });
+      }
+      for (const a of disp.advertencias) {
+        if (a.tipo === "incidencia_informativa") {
+          advertencias.push({
+            tipo:
+              r.rol === "piloto"
+                ? "incidencia_informativa_piloto"
+                : "incidencia_informativa_auxiliar",
+            mensaje: `${disp.nombre} tiene una incidencia informativa (${a.incidencia.tipo}) el ${fechaEfectiva}.`,
+          });
+        }
+      }
+    }
+  }
+
+  if (vehiculoIdParaValidar != null) {
+    const dispVeh = await listarDisponibilidadVehiculos(empresaId);
+    const v = dispVeh.vehiculos.find((x) => x.id === vehiculoIdParaValidar);
+    if (v) {
+      if (v.estadoDisponibilidad === "inactivo") {
+        return NextResponse.json(
+          { error: "La unidad seleccionada está inactiva." },
+          { status: 409 },
+        );
+      }
+      if (v.estadoDisponibilidad === "en_taller") {
+        if (esHoy) {
+          return NextResponse.json(
+            { error: "La unidad seleccionada está actualmente en taller." },
+            { status: 409 },
+          );
+        }
+        // Futuro: no bloquea, pero SIN fecha de salida conocida — el
+        // sistema no tiene ese dato y no se inventa. Advertencia fuerte.
+        advertencias.push({
+          tipo: "vehiculo_en_taller",
+          mensaje: `La unidad ${v.placa} está actualmente en taller y no tiene fecha de salida registrada. Verifique su disponibilidad antes de confirmar.`,
+        });
+      } else if (v.estadoDisponibilidad === "en_ruta") {
+        if (esHoy) {
+          return NextResponse.json(
+            {
+              error: `La unidad seleccionada está actualmente en ruta${v.viajeAbierto ? ` con ${v.viajeAbierto.pilotoNombre}` : ""}.`,
+            },
+            { status: 409 },
+          );
+        }
+        advertencias.push({
+          tipo: "vehiculo_en_ruta",
+          mensaje: `La unidad ${v.placa} está actualmente en ruta. Esto no impide su programación para el ${fechaEfectiva}.`,
+        });
+      }
+    }
+  }
+
+  // Fase P5.1b: TODO O NADA. Las 4 escrituras relacionadas de una
+  // modificación de Programación —upsert de tms_unidades, UPDATE de
+  // tms_planes_viaje, reemplazo de tms_plan_auxiliares y reemplazo de
+  // tms_plan_paradas— comparten una única conexión/transacción: si
+  // cualquiera falla, se revierten todas. La conexión se abre lo más tarde
+  // posible (todas las validaciones de arriba ya corrieron) y se libera
+  // siempre en el `finally`, sin excepción.
+  const conn = await getPool().getConnection();
+  try {
+    await conn.beginTransaction();
+
+    if (placaNorm) {
+      const [r] = await conn.execute<ResultSetHeader>(
+        `INSERT INTO tms_unidades (empresa_id, placa, tipo)
+         VALUES (?, ?, 'Camion')
+         ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)`,
+        [empresaId, placaNorm],
+      );
+      unidadId = Number(r.insertId);
+    }
+
+    if (d.flotaVehiculoId != null && vehiculoAccesible) {
+      const [r] = await conn.execute<ResultSetHeader>(
+        `INSERT INTO tms_unidades (empresa_id, placa, tipo, flota_vehiculo_id)
+         VALUES (?, ?, 'Camion', ?)
+         ON DUPLICATE KEY UPDATE
+           id = LAST_INSERT_ID(id),
+           flota_vehiculo_id = COALESCE(flota_vehiculo_id, VALUES(flota_vehiculo_id))`,
+        [empresaId, String(vehiculoAccesible.placa).toUpperCase(), d.flotaVehiculoId],
+      );
+      unidadId = Number(r.insertId);
+    }
+
+    await conn.execute(
+      `UPDATE tms_planes_viaje SET
+        fecha_plan = COALESCE(?, fecha_plan),
+        piloto_id = COALESCE(?, piloto_id),
+        auxiliar_id = COALESCE(?, auxiliar_id),
+        unidad_id = COALESCE(?, unidad_id),
+        estado = COALESCE(?, estado),
+        notas = COALESCE(?, notas),
+        hora_carga = COALESCE(?, hora_carga)
+       WHERE id = ? AND empresa_id = ?`,
+      [
+        d.fechaPlan ?? null,
+        pilotoId ?? null,
+        auxiliarId ?? null,
+        unidadId ?? null,
+        d.estado ?? null,
+        d.notas ?? null,
+        d.horaCarga ?? null,
+        d.id,
+        empresaId,
+      ],
+    );
+
+    if (auxPersonalIdsLegado != null) {
+      await guardarAuxiliaresPlan(d.id, auxPersonalIdsLegado, conn);
+    }
+    if (auxPersonalIdsNuevo != null) {
+      await guardarAuxiliaresPlan(d.id, auxPersonalIdsNuevo, conn);
+    }
+
+    if (paradasInput != null) {
+      await guardarParadasPlan(empresaId, d.id, paradasInput, conn);
+    }
+
+    await conn.commit();
+  } catch (e) {
+    await conn.rollback();
+    console.error("PATCH tms/planes transacción", e);
+    return NextResponse.json(
+      { error: "No se pudo actualizar el plan. Intenta de nuevo." },
+      { status: 500 },
+    );
+  } finally {
+    conn.release();
+  }
+
+  // Solo se llega aquí si la transacción hizo COMMIT correctamente. Se
+  // relee el estado final del plan (fuera de la transacción — ya no hay
+  // nada que revertir) para construir un detalle de auditoría real
+  // "antes → después", en vez de solo echar de vuelta el payload recibido.
+  const despuesRows = await query<RowDataPacket[]>(
+    `SELECT p.fecha_plan, u.placa, pil.nombre AS piloto
+     FROM tms_planes_viaje p
+     LEFT JOIN tms_unidades u ON u.id = p.unidad_id
+     LEFT JOIN tms_personal pil ON pil.id = p.piloto_id
+     WHERE p.id = ? AND p.empresa_id = ? LIMIT 1`,
+    [d.id, empresaId],
+  );
+  const despuesAuxMap = await auxiliaresDePlanes([d.id]);
+  const despues = {
+    fechaPlan: toIsoDate(despuesRows[0]?.fecha_plan) || "",
+    piloto: despuesRows[0]?.piloto ? String(despuesRows[0].piloto) : "",
+    placa: despuesRows[0]?.placa ? String(despuesRows[0].placa) : "",
+    auxiliares: (despuesAuxMap.get(d.id) ?? []).map((a) => a.nombre),
+  };
 
   const cambios: string[] = [];
   if (d.estado && d.estado !== antes.estado) {
     cambios.push(`estado ${antes.estado} → ${d.estado}`);
   }
-  if (d.pilotoNombre?.trim()) {
-    cambios.push(`piloto → ${d.pilotoNombre.trim()}`);
+  if (despues.fechaPlan && despues.fechaPlan !== antes.fechaPlan) {
+    cambios.push(`fecha ${antes.fechaPlan || "—"} → ${despues.fechaPlan}`);
   }
-  if (d.placa?.trim()) {
-    cambios.push(`placa → ${d.placa.trim().toUpperCase()}`);
+  if (despues.piloto !== antes.piloto) {
+    cambios.push(`piloto ${antes.piloto || "—"} → ${despues.piloto || "—"}`);
+  }
+  if (despues.placa !== antes.placa) {
+    cambios.push(`unidad ${antes.placa || "—"} → ${despues.placa || "—"}`);
+  }
+  const auxAntesTxt = antesAuxiliaresNombres.join(", ");
+  const auxDespuesTxt = despues.auxiliares.join(", ");
+  if (auxAntesTxt !== auxDespuesTxt) {
+    cambios.push(
+      `auxiliares [${auxAntesTxt || "—"}] → [${auxDespuesTxt || "—"}]`,
+    );
   }
   if (d.horaCarga != null) {
     cambios.push(`hora → ${d.horaCarga}`);
@@ -704,16 +1179,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
   if (d.notas != null) {
     cambios.push("notas actualizadas");
   }
-  if (
-    d.auxiliarEmpleadoIds != null ||
-    d.auxiliarNombres != null ||
-    d.auxiliarNombre != null
-  ) {
-    cambios.push("auxiliares actualizados");
-  }
-  if (d.paradas) {
-    const n = d.paradas.filter((p) => p.lugarNombre?.trim()).length;
-    cambios.push(`paradas redefinidas (${n})`);
+  if (paradasInput != null) {
+    cambios.push(`paradas redefinidas (${paradasAntesCount} → ${paradasInput.length})`);
   }
   const accion =
     d.estado === "Cancelado" && d.estado !== antes.estado
@@ -729,5 +1196,5 @@ export async function PATCH(req: Request, ctx: Ctx) {
     }`,
   });
 
-  return NextResponse.json({ mensaje: "Plan actualizado." });
+  return NextResponse.json({ mensaje: "Plan actualizado.", advertencias });
 }
