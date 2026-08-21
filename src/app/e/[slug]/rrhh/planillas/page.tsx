@@ -83,6 +83,30 @@ function q(n: number) {
   });
 }
 
+// Fase D3: conciliación IGSS quincenal — un mes/año, por empleado y total.
+type CuadreIgssEmpleado = {
+  empleadoId: number;
+  codigoEmpleado: string;
+  nombreEmpleado: string;
+  igssMensualEsperado: number;
+  igssQ1: number | null;
+  igssQ2: number | null;
+  totalRetenido: number;
+  diferencia: number;
+  cuadra: boolean;
+};
+type CuadreIgssMensual = {
+  mes: number;
+  anio: number;
+  empleados: CuadreIgssEmpleado[];
+  totales: {
+    igssMensualEsperado: number;
+    totalRetenido: number;
+    diferencia: number;
+    cuadra: boolean;
+  };
+};
+
 export default function PlanillasPage() {
   const slug = String(useParams().slug);
   const [rows, setRows] = useState<Periodo[]>([]);
@@ -111,6 +135,14 @@ export default function PlanillasPage() {
   const [filtro, setFiltro] = useState("");
   const [filtroForma, setFiltroForma] = useState<"todas" | FormaPago>("todas");
   const [busy, setBusy] = useState(false);
+
+  // Fase D3: cuadre IGSS — panel colapsado por defecto, no forma parte del
+  // flujo normal de crear/generar planilla.
+  const [mostrarCuadreIgss, setMostrarCuadreIgss] = useState(false);
+  const [cuadreIgssMes, setCuadreIgssMes] = useState(new Date().getMonth() + 1);
+  const [cuadreIgssAnio, setCuadreIgssAnio] = useState(new Date().getFullYear());
+  const [cuadreIgss, setCuadreIgss] = useState<CuadreIgssMensual | null>(null);
+  const [cargandoCuadreIgss, setCargandoCuadreIgss] = useState(false);
 
   const cargar = useCallback(async () => {
     const res = await fetch(`/api/empresas/${slug}/rrhh/planillas`);
@@ -280,6 +312,27 @@ export default function PlanillasPage() {
     });
   }, [lineas, filtro, filtroForma]);
 
+  // Fase D3: consulta bajo demanda (botón), no un efecto — no necesita
+  // bandera `ignore`.
+  async function consultarCuadreIgss() {
+    setCargandoCuadreIgss(true);
+    setError("");
+    try {
+      const res = await fetch(
+        `/api/empresas/${slug}/rrhh/planillas/cuadre-igss?mes=${cuadreIgssMes}&anio=${cuadreIgssAnio}`,
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "No se pudo calcular el cuadre de IGSS.");
+        setCuadreIgss(null);
+        return;
+      }
+      setCuadreIgss(data);
+    } finally {
+      setCargandoCuadreIgss(false);
+    }
+  }
+
   function solicitarCancelacion() {
     const motivo = window.prompt("Motivo de la cancelación (obligatorio):");
     if (motivo == null) return;
@@ -402,6 +455,104 @@ export default function PlanillasPage() {
         </p>
       ) : null}
 
+      <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+        <button
+          type="button"
+          onClick={() => setMostrarCuadreIgss((v) => !v)}
+          className="text-sm font-medium text-[var(--accent)] underline"
+        >
+          {mostrarCuadreIgss ? "Ocultar" : "Ver"} cuadre IGSS mensual (Quincena 1 + Quincena 2)
+        </button>
+        {mostrarCuadreIgss ? (
+          <div className="mt-3 space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                className={input}
+                value={cuadreIgssMes}
+                onChange={(e) => setCuadreIgssMes(Number(e.target.value))}
+              >
+                {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="number"
+                className={`${input} w-24`}
+                value={cuadreIgssAnio}
+                onChange={(e) => setCuadreIgssAnio(Number(e.target.value))}
+              />
+              <button
+                type="button"
+                disabled={cargandoCuadreIgss}
+                onClick={() => void consultarCuadreIgss()}
+                className="rounded bg-[var(--accent)] px-3 py-1 text-sm text-white disabled:opacity-50"
+              >
+                {cargandoCuadreIgss ? "Consultando…" : "Consultar"}
+              </button>
+              {cuadreIgss ? (
+                <span
+                  className={`text-sm font-medium ${cuadreIgss.totales.cuadra ? "text-emerald-400" : "text-red-400"}`}
+                >
+                  Total: {cuadreIgss.totales.cuadra ? "CUADRA" : "REVISAR"} (esperado Q
+                  {q(cuadreIgss.totales.igssMensualEsperado)} · retenido Q
+                  {q(cuadreIgss.totales.totalRetenido)} · diferencia Q
+                  {q(cuadreIgss.totales.diferencia)})
+                </span>
+              ) : null}
+            </div>
+            {cuadreIgss ? (
+              <div className="overflow-x-auto rounded-lg border border-[var(--border)]">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="bg-[var(--background)] text-[var(--muted)]">
+                    <tr>
+                      <th className="px-2 py-1">Empleado</th>
+                      <th className="px-2 py-1">Esperado</th>
+                      <th className="px-2 py-1">Q1</th>
+                      <th className="px-2 py-1">Q2</th>
+                      <th className="px-2 py-1">Retenido</th>
+                      <th className="px-2 py-1">Diferencia</th>
+                      <th className="px-2 py-1">Estado</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cuadreIgss.empleados.map((e) => (
+                      <tr key={e.empleadoId} className="border-t border-[var(--border)]">
+                        <td className="px-2 py-1">
+                          {e.codigoEmpleado} — {e.nombreEmpleado}
+                        </td>
+                        <td className="px-2 py-1">Q{q(e.igssMensualEsperado)}</td>
+                        <td className="px-2 py-1">
+                          {e.igssQ1 != null ? `Q${q(e.igssQ1)}` : "—"}
+                        </td>
+                        <td className="px-2 py-1">
+                          {e.igssQ2 != null ? `Q${q(e.igssQ2)}` : "—"}
+                        </td>
+                        <td className="px-2 py-1">Q{q(e.totalRetenido)}</td>
+                        <td className="px-2 py-1">Q{q(e.diferencia)}</td>
+                        <td
+                          className={`px-2 py-1 text-xs font-medium ${e.cuadra ? "text-emerald-400" : "text-red-400"}`}
+                        >
+                          {e.cuadra ? "CUADRA" : "REVISAR"}
+                        </td>
+                      </tr>
+                    ))}
+                    {!cuadreIgss.empleados.length ? (
+                      <tr>
+                        <td colSpan={7} className="px-3 py-3 text-[var(--muted)]">
+                          Sin empleados activos.
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+
       <div className="grid gap-4 lg:grid-cols-[240px_1fr]">
         <ul className="space-y-1 text-sm">
           {rows.map((r) => (
@@ -509,6 +660,12 @@ export default function PlanillasPage() {
                 Guatemala: IGSS laboral 4.83% y patronal 12.67% sobre sueldo
                 ordinario (sin bono incentivo Q250). Outsourcing no calcula IGSS.
                 ISR se edita manualmente por línea (RetenISR/SAT).
+                {periodo.tipoPeriodo === "QUINCENA_1" || periodo.tipoPeriodo === "QUINCENA_2"
+                  ? " El IGSS mensual se retiene mitad en Quincena 1 y el resto exacto en Quincena 2 (ver «Cuadre IGSS mensual» arriba)."
+                  : ""}
+                {periodo.tipoPeriodo === "ESPECIAL"
+                  ? " Los periodos Especiales no cotizan IGSS automáticamente."
+                  : ""}
               </p>
 
               {cuadre ? (

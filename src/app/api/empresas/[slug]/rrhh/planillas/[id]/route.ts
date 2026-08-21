@@ -82,10 +82,14 @@ export async function POST(req: Request, ctx: Ctx) {
           `Planilla generada: ${r.generadas} empleado(s).` +
           (r.cuotasAplicadas > 0
             ? ` ${r.cuotasAplicadas} cuota(s) de descuento aplicada(s) (Q${r.totalCuotasAplicado.toFixed(2)}).`
+            : "") +
+          (r.empleadosSinIgssQ1 > 0
+            ? ` Aviso: ${r.empleadosSinIgssQ1} empleado(s) sin retención IGSS en la primera quincena; se aplicó el saldo mensual completo en esta quincena.`
             : ""),
         generadas: r.generadas,
         cuotasAplicadas: r.cuotasAplicadas,
         totalCuotasAplicado: r.totalCuotasAplicado,
+        empleadosSinIgssQ1: r.empleadosSinIgssQ1,
         periodo: await obtenerPeriodo(guard.empresa.id, periodoId),
         lineas,
         cuadre: calcularCuadre(lineas),

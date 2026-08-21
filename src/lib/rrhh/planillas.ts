@@ -602,12 +602,36 @@ export async function listarPrestacionesDetalle(
  * Todo — aplicar cuotas, calcular líneas, escribir rrhh_planilla_lineas,
  * marcar el periodo Generada — ocurre en una única transacción: si algo
  * falla, se revierte todo (nunca queda una cuota APLICADA sin su línea).
+ *
+ * Fase D3 — IGSS quincenal. El IGSS mensual (sueldo_base × IGSS_LABORAL_PCT,
+ * sueldo_base ya es el sueldo CONTRACTUAL mensual del empleado, no se divide
+ * en ningún punto del cálculo) es la fuente de verdad; cómo se retiene según
+ * el tipo de periodo:
+ * - tipoPeriodo NULL (histórico, sin metadatos de P0): comportamiento
+ *   EXACTO de siempre — igss_laboral = IGSS mensual completo. Ningún
+ *   periodo histórico cambia de valor.
+ * - MENSUAL: igss_laboral = IGSS mensual completo (no se divide).
+ * - ESPECIAL (nuevo): igss_laboral = 0 — no se asume que un periodo
+ *   especial siempre cotiza IGSS.
+ * - QUINCENA_1: igss_laboral = redondearQ(IGSS mensual / 2).
+ * - QUINCENA_2: busca la línea de QUINCENA_1 del mismo empresa/mes/año/
+ *   empleado (misma conexión/transacción, sin congelar un valor viejo si Q1
+ *   fue regenerada después) y retiene exactamente el resto
+ *   (IGSS mensual − Q1 retenido), para que Q1+Q2 cuadre siempre con el
+ *   mensual. Si no existe Q1 válida (periodo cancelado o no generado
+ *   todavía), retiene el IGSS mensual COMPLETO en Q2 y lo reporta en una
+ *   advertencia de auditoría — nunca deja el mes sin retener silenciosamente.
  */
 export async function generarLineasPeriodo(
   empresaId: number,
   periodoId: number,
   opts: { conservarPagos?: boolean; usuario: string },
-): Promise<{ generadas: number; cuotasAplicadas: number; totalCuotasAplicado: number }> {
+): Promise<{
+  generadas: number;
+  cuotasAplicadas: number;
+  totalCuotasAplicado: number;
+  empleadosSinIgssQ1: number;
+}> {
   await asegurarSchemaPlanillas();
   const periodo = await obtenerPeriodo(empresaId, periodoId);
   if (!periodo) throw new Error("Periodo no encontrado.");
@@ -643,10 +667,19 @@ export async function generarLineasPeriodo(
     periodo.fechaFin,
   );
 
+  // Fase D3: solo relevante para QUINCENA_2 — IGSS ya retenido en QUINCENA_1
+  // del mismo empresa/mes/año, por empleado. Se consulta DENTRO de la misma
+  // conexión/transacción (más abajo) para no congelar un valor viejo si Q1
+  // se regeneró justo antes de generar Q2, y para no abrir una segunda
+  // transacción en paralelo.
+  const necesitaIgssQ1 =
+    periodo.tipoPeriodo === "QUINCENA_2" && periodo.mes != null && periodo.anio != null;
+
   const conn = await getPool().getConnection();
   let generadas = 0;
   let cuotasAplicadas = 0;
   let totalCuotasAplicado = 0;
+  let empleadosSinIgssQ1 = 0;
   try {
     await conn.beginTransaction();
 
@@ -663,6 +696,21 @@ export async function generarLineasPeriodo(
     // APLICADA de una generación anterior de este mismo periodo — ambas
     // comparten planilla_periodo_id = periodo.id en este punto.
     const descuentosD1 = await sumaCuotasAplicadasPorPeriodo(conn, empresaId, periodoId);
+
+    const igssQ1PorEmpleado = new Map<number, number>();
+    if (necesitaIgssQ1) {
+      const [q1Rows] = await conn.query<RowDataPacket[]>(
+        `SELECT l.id_empleado, l.igss_laboral
+         FROM rrhh_planilla_periodos p
+         INNER JOIN rrhh_planilla_lineas l ON l.periodo_id = p.id AND l.empresa_id = p.empresa_id
+         WHERE p.empresa_id = ? AND p.tipo_periodo = 'QUINCENA_1'
+           AND p.mes = ? AND p.anio = ? AND p.estado <> 'Cancelado'`,
+        [empresaId, periodo.mes, periodo.anio],
+      );
+      for (const r of q1Rows) {
+        igssQ1PorEmpleado.set(Number(r.id_empleado), Number(r.igss_laboral ?? 0));
+      }
+    }
 
     await conn.execute(
       `DELETE FROM rrhh_planilla_lineas WHERE empresa_id = ? AND periodo_id = ?`,
@@ -685,7 +733,30 @@ export async function generarLineasPeriodo(
       const desc = redondearQ(
         Number(descuentosLegado.get(empId) ?? 0) + Number(descuentosD1.get(empId) ?? 0),
       );
-      const igssLab = out ? 0 : redondearQ(sueldo * IGSS_LABORAL_PCT);
+
+      // Fase D3: IGSS mensual esperado, siempre sobre sueldo_base (mensual
+      // contractual) — igual que antes. Cómo se retiene depende del tipo de
+      // periodo (ver comentario de la función).
+      const igssMensual = out ? 0 : redondearQ(sueldo * IGSS_LABORAL_PCT);
+      let igssLab: number;
+      if (out) {
+        igssLab = 0;
+      } else if (periodo.tipoPeriodo == null || periodo.tipoPeriodo === "MENSUAL") {
+        igssLab = igssMensual;
+      } else if (periodo.tipoPeriodo === "ESPECIAL") {
+        igssLab = 0;
+      } else if (periodo.tipoPeriodo === "QUINCENA_1") {
+        igssLab = redondearQ(igssMensual / 2);
+      } else {
+        // QUINCENA_2
+        const q1 = necesitaIgssQ1 ? igssQ1PorEmpleado.get(empId) : undefined;
+        if (q1 == null) {
+          igssLab = igssMensual;
+          empleadosSinIgssQ1 += 1;
+        } else {
+          igssLab = redondearQ(igssMensual - q1);
+        }
+      }
       const igssPat = out ? 0 : redondearQ(sueldo * IGSS_PATRONAL_PCT);
       const anterior = prevMap.get(empId);
       const anioFiscal =
@@ -758,8 +829,131 @@ export async function generarLineasPeriodo(
       detalle: `Periodo #${periodoId} ${periodo.codigo} · ${cuotasAplicadas} cuota(s) nueva(s) aplicada(s) · Q${totalCuotasAplicado.toFixed(2)}`,
     });
   }
+  // Fase D3: un solo resumen por periodo, no una entrada por empleado.
+  if (empleadosSinIgssQ1 > 0) {
+    await registrarAuditoria({
+      empresaId,
+      usuario: opts.usuario,
+      accion: "igss_quincena2_sin_q1",
+      modulo: "rrhh",
+      detalle: `Periodo #${periodoId} ${periodo.codigo} (Q2) · ${empleadosSinIgssQ1} empleado(s) sin retención Q1 · se aplicó el saldo IGSS mensual completo en Q2.`,
+    });
+  }
 
-  return { generadas, cuotasAplicadas, totalCuotasAplicado };
+  return { generadas, cuotasAplicadas, totalCuotasAplicado, empleadosSinIgssQ1 };
+}
+
+export type CuadreIgssEmpleado = {
+  empleadoId: number;
+  codigoEmpleado: string;
+  nombreEmpleado: string;
+  igssMensualEsperado: number;
+  igssQ1: number | null;
+  igssQ2: number | null;
+  totalRetenido: number;
+  diferencia: number;
+  cuadra: boolean;
+};
+
+export type CuadreIgssMensual = {
+  mes: number;
+  anio: number;
+  empleados: CuadreIgssEmpleado[];
+  totales: {
+    igssMensualEsperado: number;
+    totalRetenido: number;
+    diferencia: number;
+    cuadra: boolean;
+  };
+};
+
+/**
+ * Fase D3 — conciliación de IGSS quincenal. Para un mes/año, compara el
+ * IGSS mensual esperado (sueldo_base × IGSS_LABORAL_PCT = 4.83%) contra lo
+ * realmente retenido en las líneas de QUINCENA_1 + QUINCENA_2 de ese mes.
+ * Detecta el caso "Q1 se corrigió después de generar Q2" (diferencia != 0)
+ * sin corregir nada automáticamente — es solo lectura/diagnóstico, nunca
+ * modifica una línea ya generada.
+ */
+export async function calcularCuadreIgssMensual(
+  empresaId: number,
+  mes: number,
+  anio: number,
+): Promise<CuadreIgssMensual> {
+  await asegurarSchemaPlanillas();
+
+  const empleados = await query<RowDataPacket[]>(
+    `SELECT id, codigo, nombre, tipo_contrato, sueldo_base
+     FROM empleados WHERE empresa_id = ? AND estado = 'Activo' ORDER BY nombre`,
+    [empresaId],
+  );
+
+  const periodosRows = await query<RowDataPacket[]>(
+    `SELECT id, tipo_periodo FROM rrhh_planilla_periodos
+     WHERE empresa_id = ? AND mes = ? AND anio = ?
+       AND tipo_periodo IN ('QUINCENA_1','QUINCENA_2') AND estado <> 'Cancelado'`,
+    [empresaId, mes, anio],
+  );
+  const periodoQ1Id = periodosRows.find((r) => r.tipo_periodo === "QUINCENA_1")?.id;
+  const periodoQ2Id = periodosRows.find((r) => r.tipo_periodo === "QUINCENA_2")?.id;
+
+  const q1Map = new Map<number, number>();
+  const q2Map = new Map<number, number>();
+  if (periodoQ1Id) {
+    const rows = await query<RowDataPacket[]>(
+      `SELECT id_empleado, igss_laboral FROM rrhh_planilla_lineas
+       WHERE empresa_id = ? AND periodo_id = ?`,
+      [empresaId, Number(periodoQ1Id)],
+    );
+    for (const r of rows) q1Map.set(Number(r.id_empleado), Number(r.igss_laboral ?? 0));
+  }
+  if (periodoQ2Id) {
+    const rows = await query<RowDataPacket[]>(
+      `SELECT id_empleado, igss_laboral FROM rrhh_planilla_lineas
+       WHERE empresa_id = ? AND periodo_id = ?`,
+      [empresaId, Number(periodoQ2Id)],
+    );
+    for (const r of rows) q2Map.set(Number(r.id_empleado), Number(r.igss_laboral ?? 0));
+  }
+
+  let totalEsperado = 0;
+  let totalRetenidoGlobal = 0;
+  const filas: CuadreIgssEmpleado[] = empleados.map((e) => {
+    const empId = Number(e.id);
+    const out = esOutsourcing(String(e.tipo_contrato ?? "fijo"));
+    const sueldo = Number(e.sueldo_base ?? 0) || 0;
+    const igssMensualEsperado = out ? 0 : redondearQ(sueldo * IGSS_LABORAL_PCT);
+    const igssQ1 = q1Map.has(empId) ? (q1Map.get(empId) as number) : null;
+    const igssQ2 = q2Map.has(empId) ? (q2Map.get(empId) as number) : null;
+    const totalRetenido = redondearQ((igssQ1 ?? 0) + (igssQ2 ?? 0));
+    const diferencia = redondearQ(igssMensualEsperado - totalRetenido);
+    totalEsperado = redondearQ(totalEsperado + igssMensualEsperado);
+    totalRetenidoGlobal = redondearQ(totalRetenidoGlobal + totalRetenido);
+    return {
+      empleadoId: empId,
+      codigoEmpleado: String(e.codigo ?? ""),
+      nombreEmpleado: String(e.nombre ?? ""),
+      igssMensualEsperado,
+      igssQ1,
+      igssQ2,
+      totalRetenido,
+      diferencia,
+      cuadra: Math.abs(diferencia) < 0.01,
+    };
+  });
+
+  const diferenciaTotal = redondearQ(totalEsperado - totalRetenidoGlobal);
+  return {
+    mes,
+    anio,
+    empleados: filas,
+    totales: {
+      igssMensualEsperado: totalEsperado,
+      totalRetenido: totalRetenidoGlobal,
+      diferencia: diferenciaTotal,
+      cuadra: Math.abs(diferenciaTotal) < 0.01,
+    },
+  };
 }
 
 export async function actualizarLinea(
