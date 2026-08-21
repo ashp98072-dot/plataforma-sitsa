@@ -93,6 +93,24 @@ export async function PUT(req: Request, ctx: Ctx) {
   const empId = Number(id);
   const parsed = empleadoBodySchema.safeParse(await req.json());
   if (!parsed.success) {
+    // Diagnóstico seguro (autorizado 2026-08-21): solo estructura del error
+    // de Zod — path/code/message de la regla que falló. NUNCA el valor
+    // rechazado ni el resto del body (podría contener DPI, email, etc.).
+    const issues = parsed.error.issues.map((i) => ({
+      path: i.path.join("."),
+      code: i.code,
+      message: i.message,
+    }));
+    console.error(
+      `[empleados][editar] id=${empId} validacion fallida (${issues.length} campo(s)):`,
+      JSON.stringify(issues),
+    );
+    if (process.env.NODE_ENV !== "production") {
+      return NextResponse.json(
+        { error: "Datos inválidos.", issues },
+        { status: 400 },
+      );
+    }
     return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
   }
   const d = parsed.data;
