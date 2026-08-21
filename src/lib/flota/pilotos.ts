@@ -68,6 +68,25 @@ export async function buscarEmpleadoPorNombre(
   return null;
 }
 
+/**
+ * ¿El empleado (RRHH) de la sesión del portal está vinculado como piloto
+ * activo en TMS? Usa el id_empleado real (Fase 0), no un cruce por nombre.
+ */
+export async function obtenerPilotoDeEmpleado(
+  empresaId: number,
+  empleadoId: number,
+): Promise<{ id: number; nombre: string } | null> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT id, nombre FROM tms_personal
+     WHERE empresa_id = ? AND id_empleado = ? AND tipo = 'Piloto' AND estado = 'Activo'
+     LIMIT 1`,
+    [empresaId, empleadoId],
+  ).catch(() => [] as RowDataPacket[]);
+  return rows[0]
+    ? { id: Number(rows[0].id), nombre: String(rows[0].nombre) }
+    : null;
+}
+
 export async function vehiculoPorPlaca(
   empresaId: number,
   placaRaw: string,

@@ -55,20 +55,41 @@
         + backfill), en vez de cruzar por nombre de texto. Riesgo bajo — no
         toca nada que ya funcione.
 
-  - [ ] **Fase 1 — Ubicaciones múltiples de marcaje.**
+  - [x] **Fase 1 — Ubicaciones múltiples de marcaje.**
         Reemplazar la geocerca única por empresa por una tabla de ubicaciones
         (sede, predio, patio, etc.), cada una con su propio radio. Riesgo medio
         — toca el flujo de marcaje que usan todos los empleados a diario.
+        3/3 pasos completos y subidos (`c64d780`, `d26f238`, `b950ecf`,
+        `378f3d4`, `25693bd`), más mejoras posteriores ya en `main`: número de
+        empleado global (`4a80e15`), fix de fecha en listado (`b5cf086`) e
+        importación masiva de marcajes por Excel (`709a931`).
 
-  - [ ] **Fase 3 — Portal del piloto: marcar salida/entrada de camión con km.**
-        Nueva pantalla en el portal del colaborador (visible solo para quien
-        tenga rol/puesto de piloto), reutilizando `flota_viajes` (ya existe y
-        ya está conectado a TMS). Depende de Fase 0 y Fase 1.
+  - [x] **Fase 3 — Portal del piloto: marcar salida/entrada de camión con km.**
+        Nueva pantalla `/portal/viajes`, visible en el inicio del portal solo
+        para quien esté vinculado como piloto activo en `tms_personal`
+        (`obtenerPilotoDeEmpleado`, usando el `id_empleado` real de la Fase 0
+        — no cruce por nombre). Reutiliza `flota_viajes` y el flujo de
+        salida/llegada de la ruta de staff, pero fuerza el piloto al dueño de
+        la sesión (nunca texto libre) y restringe "llegada" a que solo pueda
+        cerrar su propio viaje abierto (`empleado_id` en el WHERE).
+        Archivos: `src/lib/flota/pilotos.ts` (helper `obtenerPilotoDeEmpleado`),
+        `src/lib/flota/viajes-piloto.ts`, `src/app/api/portal/viajes/route.ts`,
+        `src/app/portal/viajes/page.tsx` + `viaje-form.tsx`, y tile condicional
+        en `src/app/portal/page.tsx`. `npx tsc --noEmit` y `eslint` limpios.
+        Pendiente de probar en real y de que el usuario haga
+        `git add/commit/push`.
 
-  - [ ] **Fase 4 — Detección automática de ruta asignada.**
+  - [x] **Fase 4 — Detección automática de ruta asignada.**
         Al marcar salida, buscar automáticamente en `tms_planes_viaje` si hay
         un plan "Programado" para ese piloto y vincularlo solo. Depende de
         Fase 0 y Fase 3.
+        Ya existía en la ruta de staff (`buscarPlanesParaSalida` +
+        `marcarPlanEnRuta`/`marcarPlanDescargado` en
+        `src/lib/tms/planes-salida.ts`) desde antes de este plan. La Fase 3
+        del portal la reutiliza tal cual: si hay un único plan
+        Programado/En ruta que coincide con el piloto o la placa, se vincula
+        solo; si hay varios, se deja sin vincular para que Operaciones lo
+        resuelva manualmente (mismo criterio que ya usaba staff).
 
   - [ ] **Fase 2 — Sesión del portal multiempresa.**
         Ampliar `ColaboradorSessionPayload` para soportar colaboradores en 2+
@@ -93,3 +114,13 @@
   corregido (había quedado sin marcar por un entorno sin push). Arrancamos
   Fase 1 en pasos chicos: Paso 1/3 = tabla `ubicaciones_marcaje` sin tocar
   todavía la validación real.
+
+  - 2026-08-21 — Este doc estaba desactualizado: la Fase 1 ya había llegado a
+  3/3 pasos y se habían subido varias mejoras más sobre marcajes (número de
+  empleado global, importación masiva por Excel) sin que el plan lo
+  reflejara. Se corrigieron los checkboxes de Fase 1 y Fase 4 (esta última ya
+  existía de antes, dentro de la ruta de staff). Se construyó la Fase 3
+  completa (portal del piloto en `/portal/viajes`) — código en el working
+  tree, `tsc`/`eslint` limpios, **falta que el usuario pruebe en real y haga
+  git add/commit/push**. Quedó pendiente: Fase 2 (sesión multiempresa del
+  portal) y Fase 5 (revisar módulo Programación de TMS).

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getColaboradorSession } from "@/lib/rrhh/colaborador-session";
+import { obtenerPilotoDeEmpleado } from "@/lib/flota/pilotos";
 import LogoutButton from "./logout-button";
 
 const PROXIMAMENTE: { titulo: string; detalle: string }[] = [];
@@ -48,6 +49,21 @@ export default async function PortalHomePage() {
     redirect("/portal/login");
   }
 
+  const esPiloto = await obtenerPilotoDeEmpleado(
+    session!.empresaId,
+    session!.empleadoId,
+  );
+  const disponibles = esPiloto
+    ? [
+        ...DISPONIBLES,
+        {
+          titulo: "Marcar viaje",
+          detalle: "Registra salida y llegada de tu camión con kilometraje.",
+          href: "/portal/viajes",
+        },
+      ]
+    : DISPONIBLES;
+
   return (
     <main className="min-h-screen p-4 sm:p-8">
       <div className="mx-auto max-w-3xl">
@@ -64,7 +80,7 @@ export default async function PortalHomePage() {
         </header>
 
         <div className="mt-8 grid gap-4 sm:grid-cols-2">
-          {DISPONIBLES.map((item) => (
+          {disponibles.map((item) => (
             <Link
               key={item.titulo}
               href={item.href}
