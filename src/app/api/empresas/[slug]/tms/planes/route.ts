@@ -309,6 +309,12 @@ export async function POST(req: Request, ctx: Ctx) {
   }
   if (d.placa?.trim()) {
     const placaNorm = d.placa.trim().toUpperCase();
+    // Fase A4.2: si listarDisponibilidadVehiculos (server-side, ya valida
+    // acceso propio/compartido contra Flota) encontró el vehículo real,
+    // guardamos también su id en tms_unidades.flota_vehiculo_id. Nunca se
+    // confía en un id enviado por el cliente — sale exclusivamente de esta
+    // consulta ya validada.
+    let flotaVehiculoId: number | null = null;
     try {
       const dispCheck = await listarDisponibilidadVehiculos(empresaId);
       const v = dispCheck.vehiculos.find(
@@ -322,14 +328,17 @@ export async function POST(req: Request, ctx: Ctx) {
           { status: 400 },
         );
       }
+      flotaVehiculoId = v?.id ?? null;
     } catch {
       /* si falla disponibilidad, no bloquear creación */
     }
     const r = await execute(
-      `INSERT INTO tms_unidades (empresa_id, placa, tipo)
-       VALUES (?, ?, 'Camion')
-       ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)`,
-      [empresaId, placaNorm],
+      `INSERT INTO tms_unidades (empresa_id, placa, tipo, flota_vehiculo_id)
+       VALUES (?, ?, 'Camion', ?)
+       ON DUPLICATE KEY UPDATE
+         id = LAST_INSERT_ID(id),
+         flota_vehiculo_id = COALESCE(flota_vehiculo_id, VALUES(flota_vehiculo_id))`,
+      [empresaId, placaNorm, flotaVehiculoId],
     );
     unidadId = Number(r.insertId);
   }
