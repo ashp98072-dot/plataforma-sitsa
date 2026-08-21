@@ -76,6 +76,8 @@ type Emp = {
   tipoCuenta?: string;
   banco?: string;
   contactoEmergencia?: string;
+  /** Fase H1: elegibilidad individual de horas extra. Solo RRHH/admin la cambia. */
+  horasExtraHabilitado?: boolean;
 };
 
 type EmpleadoCambio = {
@@ -118,6 +120,7 @@ type FormState = {
   horaEntradaTeorica: string;
   horaSalidaTeorica: string;
   estado: "Activo" | "Baja";
+  horasExtraHabilitado: boolean;
   sueldoBase: string;
   bonoIncentivo: string;
   bonoHerramientas: string;
@@ -205,6 +208,7 @@ function emptyForm(entrada = "08:00", salida = "17:00"): FormState {
     horaEntradaTeorica: entrada,
     horaSalidaTeorica: salida,
     estado: "Activo",
+    horasExtraHabilitado: false,
     sueldoBase: "",
     bonoIncentivo: "",
     bonoHerramientas: "",
@@ -267,6 +271,7 @@ function empToForm(
       5,
     ),
     estado: e.estado === "Baja" ? "Baja" : "Activo",
+    horasExtraHabilitado: e.horasExtraHabilitado ?? false,
     sueldoBase: e.sueldoBase != null ? String(e.sueldoBase) : "",
     bonoIncentivo: e.bonoIncentivo != null ? String(e.bonoIncentivo) : "",
     bonoHerramientas:
@@ -1031,6 +1036,18 @@ export default function EmpleadosPage() {
             <option value="Activo">Activo</option>
             <option value="Baja">Baja / Inactivo</option>
           </select>
+        </label>
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={form.horasExtraHabilitado}
+            onChange={(e) =>
+              patchForm({ horasExtraHabilitado: e.target.checked })
+            }
+          />
+          <span className="text-sm">
+            Horas extra: habilitado para pago de horas extra
+          </span>
         </label>
 
         </FormSection>

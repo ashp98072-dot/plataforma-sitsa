@@ -56,6 +56,8 @@ export type Empleado = {
   supervisorId?: number | null;
   supervisorNombre?: string | null;
   centroCostoId?: number | null;
+  /** Fase H1: elegibilidad individual para pago de horas extra. Default false. */
+  horasExtraHabilitado?: boolean;
 };
 
 function str(v: unknown): string {
@@ -154,6 +156,7 @@ function mapEmpleado(row: RowDataPacket): Empleado {
     supervisorId: row.supervisor_id != null ? Number(row.supervisor_id) : null,
     supervisorNombre: row.supervisor_nombre != null ? str(row.supervisor_nombre) : null,
     centroCostoId: row.centro_costo_id != null ? Number(row.centro_costo_id) : null,
+    horasExtraHabilitado: Number(row.horas_extra_habilitado ?? 0) === 1,
   };
 }
 
@@ -354,6 +357,8 @@ export type EmpleadoInput = {
   banco?: string;
   contactoEmergencia?: string;
   supervisorId?: number | null;
+  /** Fase H1: solo RRHH/admin la cambia, desde la edición de empleado. */
+  horasExtraHabilitado?: boolean;
 };
 
 function paramsFicha(data: EmpleadoInput) {
@@ -403,6 +408,7 @@ function paramsFicha(data: EmpleadoInput) {
     banco: data.banco?.trim() || null,
     contactoEmergencia: data.contactoEmergencia?.trim() || null,
     supervisorId: data.supervisorId ?? null,
+    horasExtraHabilitado: data.horasExtraHabilitado ? 1 : 0,
   };
 }
 
@@ -565,7 +571,8 @@ export async function actualizarEmpleado(
         primer_apellido=?, segundo_apellido=?, apellido_casada=?,
         pais_origen=?, municipio=?, etnia=?, religion=?, idioma=?,
         licencia_numero=?, licencia_tipo=?, licencia_vence=?, fecha_egreso=?, observaciones=?,
-        cuenta_bancaria=?, tipo_cuenta=?, banco=?, contacto_emergencia=?, supervisor_id=?
+        cuenta_bancaria=?, tipo_cuenta=?, banco=?, contacto_emergencia=?, supervisor_id=?,
+        horas_extra_habilitado=?
        WHERE id=? AND empresa_id=?`,
       [
         data.codigo.trim(),
@@ -615,6 +622,7 @@ export async function actualizarEmpleado(
         f.banco,
         f.contactoEmergencia,
         f.supervisorId,
+        f.horasExtraHabilitado,
         id,
         empresaId,
       ],

@@ -11,6 +11,7 @@ import { normalizarHora } from "@/lib/rrhh/dates";
 import { empleadoBodySchema, validarAltaMonaco } from "@/lib/rrhh/empleado-api-schema";
 import { listarCambiosEmpleado, registrarCambiosEmpleado } from "@/lib/rrhh/empleado-cambios";
 import { obtenerParametros } from "@/lib/rrhh/config";
+import { registrarAuditoria } from "@/lib/auditoria";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
 
@@ -66,6 +67,7 @@ function toInput(
     tipoCuenta: d.tipoCuenta ?? "",
     banco: d.banco ?? "",
     contactoEmergencia: d.contactoEmergencia ?? "",
+    horasExtraHabilitado: d.horasExtraHabilitado ?? false,
   };
 }
 
@@ -197,6 +199,22 @@ export async function PUT(req: Request, ctx: Ctx) {
       "categoriaOps",
     ],
   });
+
+  // Fase H1: auditoría dedicada solo cuando la elegibilidad de horas extra
+  // realmente cambió (no en cada guardado del formulario).
+  const antesHabilitado = Boolean(antes.horasExtraHabilitado);
+  const despuesHabilitado = Boolean(input.horasExtraHabilitado);
+  if (antesHabilitado !== despuesHabilitado) {
+    await registrarAuditoria({
+      empresaId: guard.empresa.id,
+      usuario: guard.session.username,
+      accion: despuesHabilitado
+        ? "habilitar_horas_extra_empleado"
+        : "deshabilitar_horas_extra_empleado",
+      modulo: "rrhh",
+      detalle: `Empleado #${empId} ${antes.codigo} · horas_extra_habilitado ${antesHabilitado} → ${despuesHabilitado}`,
+    });
+  }
 
   return NextResponse.json({ mensaje: "Empleado actualizado." });
 }

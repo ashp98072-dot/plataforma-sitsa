@@ -93,6 +93,9 @@ export const empleadoBodySchema = z.object({
   tipoCuenta: optStr,
   banco: optStr,
   contactoEmergencia: optStr,
+  // Fase H1: elegibilidad individual de horas extra — solo RRHH/admin la
+  // cambia, desde este mismo formulario de edición de empleado.
+  horasExtraHabilitado: z.boolean().optional(),
 });
 
 export type EmpleadoBody = z.infer<typeof empleadoBodySchema>;

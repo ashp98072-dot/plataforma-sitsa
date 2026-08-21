@@ -12,6 +12,26 @@ function formatQ(valor: number): string {
   return `Q${valor.toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+/** Fase H1: badge de estado — null = registro histórico (previo a H1, ya procesado, no se reinterpreta). */
+function EstadoBadge({ estado }: { estado: string | null }) {
+  const map: Record<string, { label: string; className: string }> = {
+    PENDIENTE: { label: "Pendiente", className: "bg-amber-500/20 text-amber-300" },
+    APROBADA: { label: "Aprobada", className: "bg-emerald-500/20 text-emerald-300" },
+    RECHAZADA: { label: "Rechazada", className: "bg-red-500/20 text-red-300" },
+    APLICADA_EN_PLANILLA: { label: "Aplicada", className: "bg-sky-500/20 text-sky-300" },
+  };
+  const info = estado != null ? map[estado] : null;
+  const { label, className } = info ?? {
+    label: "Histórico",
+    className: "bg-white/10 text-[var(--muted)]",
+  };
+  return (
+    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${className}`}>
+      {label}
+    </span>
+  );
+}
+
 export default async function HorasExtraPage() {
   const session = await getColaboradorSession();
   if (!session) {
@@ -69,7 +89,12 @@ export default async function HorasExtraPage() {
                           {r.fecha} · {r.horas} hora(s)
                         </p>
                       </div>
-                      <p className="text-sm font-semibold">{formatQ(r.monto)}</p>
+                      <div className="text-right">
+                        <p className="text-sm font-semibold">{formatQ(r.monto)}</p>
+                        <div className="mt-1">
+                          <EstadoBadge estado={r.estado} />
+                        </div>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -100,8 +125,18 @@ export default async function HorasExtraPage() {
                     <p className="mt-0.5 text-sm text-[var(--muted)]">
                       {r.horas} hora(s) · registrado por {r.registradoPorNombre}
                     </p>
+                    {r.estado === "RECHAZADA" && r.motivoRechazo ? (
+                      <p className="mt-0.5 text-xs text-red-300">
+                        Motivo: {r.motivoRechazo}
+                      </p>
+                    ) : null}
                   </div>
-                  <p className="text-sm font-semibold">{formatQ(r.monto)}</p>
+                  <div className="text-right">
+                    <p className="text-sm font-semibold">{formatQ(r.monto)}</p>
+                    <div className="mt-1">
+                      <EstadoBadge estado={r.estado} />
+                    </div>
+                  </div>
                 </div>
               ))}
             </div>

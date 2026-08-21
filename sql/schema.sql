@@ -64,6 +64,10 @@ CREATE TABLE IF NOT EXISTS empleados (
   hora_entrada_teorica VARCHAR(20) NOT NULL DEFAULT '08:00:00',
   hora_salida_teorica VARCHAR(20) NOT NULL DEFAULT '17:00:00',
   estado VARCHAR(20) NOT NULL DEFAULT 'Activo',
+  -- Fase H1: elegibilidad individual para pago de horas extra. Por defecto
+  -- NO elegible — solo RRHH/admin la activa por colaborador, nunca se
+  -- deriva de puesto/categoria_ops/rol.
+  horas_extra_habilitado TINYINT(1) NOT NULL DEFAULT 0,
   UNIQUE KEY uq_emp_empresa_codigo (empresa_id, codigo),
   CONSTRAINT fk_emp_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -152,6 +156,43 @@ CREATE TABLE IF NOT EXISTS rrhh_planilla_lineas (
   UNIQUE KEY uq_plan_linea (periodo_id, id_empleado),
   INDEX idx_plan_lineas_periodo (empresa_id, periodo_id),
   INDEX idx_plan_lineas_pago (empresa_id, forma_pago, estado_pago)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Horas extra — registro (supervisor) separado de autorización (RRHH).
+-- Fase H1: agrega estado/autorizado_por/autorizado_en/motivo_rechazo y
+-- planilla_periodo_id (sin usar todavía — lo conecta H2, igual que
+-- rrhh_descuento_cuotas.planilla_periodo_id en D1/D2). Registros históricos
+-- (previos a H1) quedan con estado NULL — no se reinterpretan como
+-- PENDIENTE ni se marcan automáticamente APLICADA_EN_PLANILLA: ya fueron
+-- procesados bajo el modelo anterior (prestacion_id) y no hay forma segura
+-- de confirmar cuáles llegaron a pagarse en una planilla real.
+CREATE TABLE IF NOT EXISTS horas_extra_registros (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  id_empleado INT NOT NULL,
+  fecha DATE NOT NULL,
+  horas DECIMAL(5,2) NOT NULL,
+  tarifa_hora DECIMAL(10,4) NOT NULL,
+  monto DECIMAL(12,2) NOT NULL,
+  motivo TEXT NULL,
+  registrado_por_id INT NOT NULL,
+  registrado_por_nombre VARCHAR(150) NOT NULL,
+  prestacion_id INT NULL,
+  -- Fase H1:
+  estado VARCHAR(30) NULL, -- PENDIENTE | APROBADA | RECHAZADA | APLICADA_EN_PLANILLA | NULL (legado, previo a H1)
+  autorizado_por VARCHAR(100) NULL,
+  autorizado_en DATETIME NULL,
+  motivo_rechazo VARCHAR(300) NULL,
+  planilla_periodo_id INT NULL, -- reservado para H2, sin usar todavía
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_horext_empresa_emp (empresa_id, id_empleado),
+  INDEX idx_horext_supervisor (empresa_id, registrado_por_id),
+  INDEX idx_horext_estado (empresa_id, estado),
+  CONSTRAINT fk_horext_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
+  CONSTRAINT fk_horext_emp FOREIGN KEY (id_empleado) REFERENCES empleados(id) ON DELETE CASCADE,
+  CONSTRAINT fk_horext_supervisor FOREIGN KEY (registrado_por_id) REFERENCES empleados(id) ON DELETE CASCADE,
+  CONSTRAINT fk_horext_prestacion FOREIGN KEY (prestacion_id) REFERENCES rrhh_prestaciones(id) ON DELETE SET NULL,
+  CONSTRAINT fk_horext_periodo FOREIGN KEY (planilla_periodo_id) REFERENCES rrhh_planilla_periodos(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS configuracion (
