@@ -578,12 +578,21 @@ export default function EmpleadosPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(formToBody(form)),
     });
-    const data = await res.json();
+    // El backend siempre responde JSON, pero un 500 inesperado (proxy,
+    // timeout, etc.) puede llegar con body vacío o no-JSON: sin este
+    // try/catch, res.json() lanzaba y el usuario solo veía un 400/500 en
+    // consola, sin mensaje en pantalla.
+    let data: { error?: string; mensaje?: string } = {};
+    try {
+      data = await res.json();
+    } catch {
+      /* respuesta sin JSON válido */
+    }
     if (!res.ok) {
-      setError(data.error ?? "Error");
+      setError(data.error || `No se pudo guardar (código ${res.status}).`);
       return;
     }
-    setMensaje(data.mensaje);
+    setMensaje(data.mensaje ?? "Empleado guardado.");
     setForm(emptyForm(horaDef.entrada, horaDef.salida));
     setEditId(null);
     setHistorial([]);
@@ -723,12 +732,11 @@ export default function EmpleadosPage() {
           />
         </label>
         <label>
-          <FieldLabel required>Segundo apellido</FieldLabel>
+          <FieldLabel>Segundo apellido</FieldLabel>
           <input
             className={input}
             value={form.segundoApellido}
             onChange={(e) => patchForm({ segundoApellido: e.target.value })}
-            required
           />
         </label>
         <label>

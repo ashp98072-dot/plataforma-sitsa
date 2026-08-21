@@ -10,7 +10,6 @@ export const CAMPOS_OBLIGATORIOS_ALTA: {
   { key: "dpi", label: "DPI", seccion: "identidad" },
   { key: "primerNombre", label: "Primer nombre", seccion: "identidad" },
   { key: "primerApellido", label: "Primer apellido", seccion: "identidad" },
-  { key: "segundoApellido", label: "Segundo apellido", seccion: "identidad" },
   { key: "nit", label: "NIT", seccion: "identidad" },
   { key: "igss", label: "IGSS", seccion: "identidad" },
   { key: "irtra", label: "IRTRA", seccion: "identidad" },
