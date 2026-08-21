@@ -1,6 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type {
+  DisponibilidadPersonal,
+  EstadoDisponibilidad,
+} from "@/lib/operaciones/disponibilidad-personal";
 
 /**
  * Operaciones → Programación (Fase P3) — tablero de SOLO LECTURA.
@@ -9,7 +13,18 @@ import { useEffect, useMemo, useState } from "react";
  * que ya usa la pantalla TMS existente) — no hay escritura, no hay estados
  * nuevos, no hay SQL nuevo. Todos los indicadores se calculan en el cliente
  * a partir de lo que el GET ya entrega hoy.
+ *
+ * Fase P4.2: además consume GET /api/empresas/[slug]/operaciones/
+ * disponibilidad-personal?fecha=YYYY-MM-DD (envuelve listarDisponibilidadPersonal,
+ * que sí vive en servidor — nunca se importa esa lib aquí). El cruce plan↔persona
+ * es por NOMBRE normalizado: el GET de planes solo expone nombres de
+ * piloto/auxiliar, no su id de tms_personal — limitación conocida, documentada
+ * en el informe de esta fase, no resuelta aquí para no tocar tms/planes/route.ts
+ * fuera del alcance autorizado.
  */
+
+/** Solo `import type` — tipos, no código; no arrastra mysql2 al bundle del cliente. */
+type AdvertenciaPersonal = DisponibilidadPersonal["advertencias"][number];
 
 type ParadaPlan = {
   id: number;
@@ -79,6 +94,105 @@ const ESTADO_BADGE: Record<string, string> = {
 
 function normPlaca(p: string): string {
   return p.toUpperCase().replace(/[\s-]/g, "");
+}
+
+function normNombre(n: string): string {
+  return n.trim().toLowerCase();
+}
+
+const ESTADO_PERSONA_ICONO: Record<EstadoDisponibilidad, string> = {
+  disponible: "🟢",
+  no_disponible: "🔴",
+  verificacion_parcial: "🟡",
+};
+
+const ESTADO_PERSONA_LABEL: Record<EstadoDisponibilidad, string> = {
+  disponible: "Disponible",
+  no_disponible: "No disponible",
+  verificacion_parcial: "Verificación parcial",
+};
+
+/**
+ * Badge compacto de disponibilidad para un piloto/auxiliar nombrado en un
+ * plan. Si no hay match por nombre contra disponibilidad-personal, se
+ * muestra solo el nombre — nunca se inventa un estado.
+ */
+function PersonaEstado({
+  nombre,
+  disp,
+  planIdActual,
+}: {
+  nombre: string;
+  disp: DisponibilidadPersonal | undefined;
+  planIdActual: number;
+}) {
+  if (!disp) {
+    return <span className="text-[12px]">{nombre}</span>;
+  }
+
+  const enRutaAhora =
+    disp.estadoDisponibilidad === "no_disponible" && disp.viajeActual != null;
+  const porIncidencia =
+    disp.estadoDisponibilidad === "no_disponible" &&
+    !enRutaAhora &&
+    disp.incidenciasBloqueantes.length > 0;
+  const sinVinculo = disp.advertencias.some((a) => a.tipo === "sin_vinculo_empleado");
+
+  let detalle = "";
+  let etiqueta = ESTADO_PERSONA_LABEL[disp.estadoDisponibilidad];
+  if (enRutaAhora && disp.viajeActual) {
+    etiqueta = "En ruta actualmente";
+    detalle = [
+      disp.viajeActual.placa ? `Unidad ${disp.viajeActual.placa}` : null,
+      `Salida real ${disp.viajeActual.horaSalidaReal}`,
+      disp.viajeActual.planCodigo ? `Plan ${disp.viajeActual.planCodigo}` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  } else if (porIncidencia) {
+    const i = disp.incidenciasBloqueantes[0];
+    detalle = `${i.tipo}: ${i.fechaInicio} — ${i.fechaFin}`;
+  } else if (sinVinculo) {
+    detalle = "Personal sin vínculo con colaborador";
+  }
+
+  const otrosPlanes = disp.otrosPlanesDelDia.filter((pl) => pl.planId !== planIdActual);
+  const incidenciaInfo = disp.advertencias.find(
+    (a): a is Extract<AdvertenciaPersonal, { tipo: "incidencia_informativa" }> =>
+      a.tipo === "incidencia_informativa",
+  );
+
+  return (
+    <span className="flex flex-wrap items-center gap-1 text-[12px]">
+      <span>{nombre}</span>
+      <span title={detalle || undefined}>
+        {ESTADO_PERSONA_ICONO[disp.estadoDisponibilidad]} {etiqueta}
+      </span>
+      {otrosPlanes.length ? (
+        <span
+          className="rounded bg-amber-900/40 px-1 py-0.5 text-[10px] text-amber-200"
+          title={otrosPlanes
+            .map(
+              (pl) =>
+                `${pl.planCodigo} · ${pl.horaCarga ?? "—"}${pl.placa ? ` · ${pl.placa}` : ""}${
+                  pl.origen || pl.destino ? ` · ${pl.origen ?? "—"} → ${pl.destino ?? "—"}` : ""
+                }`,
+            )
+            .join(" | ")}
+        >
+          ⚠ Otro viaje hoy{otrosPlanes.length > 1 ? ` (${otrosPlanes.length})` : ""}
+        </span>
+      ) : null}
+      {incidenciaInfo ? (
+        <span
+          className="rounded bg-sky-900/30 px-1 py-0.5 text-[10px] text-sky-200"
+          title={`${incidenciaInfo.incidencia.fechaInicio} — ${incidenciaInfo.incidencia.fechaFin}`}
+        >
+          ℹ {incidenciaInfo.incidencia.tipo}
+        </span>
+      ) : null}
+    </span>
+  );
 }
 
 /** Suma/resta días a una fecha YYYY-MM-DD sin problemas de huso horario. */
@@ -159,6 +273,15 @@ export function ProgramacionClient({ slug, hoy }: Props) {
   const [estadoVehiculos, setEstadoVehiculos] = useState<EstadoVehiculo[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
+
+  // Fase P4.2: disponibilidad de personal, una entrada por fecha (nunca por
+  // persona ni por plan). fetchedFechasRef evita re-pedir una fecha ya
+  // cargada sin meter el Map como dependencia del efecto (eso causaría un
+  // loop: efecto -> setState -> Map cambia -> efecto de nuevo).
+  const [disponibilidadPorFecha, setDisponibilidadPorFecha] = useState<
+    Map<string, DisponibilidadPersonal[]>
+  >(new Map());
+  const fetchedFechasRef = useRef<Set<string>>(new Set());
 
   const [rango, setRango] = useState<Rango>("hoy");
   const [filtroRapido, setFiltroRapido] = useState<FiltroRapido>("todos");
@@ -250,6 +373,45 @@ export function ProgramacionClient({ slug, hoy }: Props) {
     () => planes.filter((p) => p.fecha_plan >= desde && p.fecha_plan <= hasta),
     [planes, desde, hasta],
   );
+
+  // Fase P4.2: una llamada por FECHA ÚNICA visible (máximo 7, acotado por
+  // "Semana"), nunca por persona ni por plan — evita N+1. listarDisponibilidadPersonal()
+  // solo acepta una fecha a la vez (diseño aprobado, no se cambió su firma),
+  // así que el batching real ocurre aquí, agrupando por fecha_plan.
+  useEffect(() => {
+    let ignore = false;
+    const fechas = [...new Set(enRango.map((p) => p.fecha_plan))];
+    const faltantes = fechas.filter((f) => !fetchedFechasRef.current.has(f));
+    if (!faltantes.length) return;
+
+    async function cargarDisponibilidadPersonal() {
+      const entradas = await Promise.all(
+        faltantes.map(async (fecha) => {
+          try {
+            const res = await fetch(
+              `/api/empresas/${slug}/operaciones/disponibilidad-personal?fecha=${fecha}`,
+            );
+            const data = await res.json();
+            const lista = res.ok ? ((data.personal ?? []) as DisponibilidadPersonal[]) : [];
+            return [fecha, lista] as const;
+          } catch {
+            return [fecha, [] as DisponibilidadPersonal[]] as const;
+          }
+        }),
+      );
+      if (ignore) return;
+      for (const f of faltantes) fetchedFechasRef.current.add(f);
+      setDisponibilidadPorFecha((prev) => {
+        const next = new Map(prev);
+        for (const [fecha, lista] of entradas) next.set(fecha, lista);
+        return next;
+      });
+    }
+    void cargarDisponibilidadPersonal();
+    return () => {
+      ignore = true;
+    };
+  }, [enRango, slug]);
 
   // Opciones de los filtros secundarios, solo con lo que aparece en el rango.
   const opcionesPiloto = useMemo(
@@ -456,6 +618,13 @@ export function ProgramacionClient({ slug, hoy }: Props) {
         {visibles.map((p) => {
           const { origen, destino, intermedias } = origenDestino(p.paradas);
           const estadoUnidad = unidadEstado(p.placa);
+          // Cruce por nombre normalizado — el GET de planes solo trae el
+          // nombre del piloto/auxiliar, no su id de tms_personal (ver nota
+          // al inicio del archivo).
+          const dispDelDia = disponibilidadPorFecha.get(p.fecha_plan) ?? [];
+          const dispPorNombre = new Map(
+            dispDelDia.map((d) => [normNombre(d.nombre), d]),
+          );
           return (
             <div
               key={p.id}
@@ -502,15 +671,32 @@ export function ProgramacionClient({ slug, hoy }: Props) {
                 </div>
                 <div>
                   <p className="text-[11px] text-[var(--muted)]">Piloto</p>
-                  <p className={p.piloto ? "" : "text-amber-300"}>
-                    {p.piloto || "Sin piloto"}
-                  </p>
+                  {p.piloto ? (
+                    <PersonaEstado
+                      nombre={p.piloto}
+                      disp={dispPorNombre.get(normNombre(p.piloto))}
+                      planIdActual={p.id}
+                    />
+                  ) : (
+                    <p className="text-amber-300">Sin piloto</p>
+                  )}
                 </div>
                 <div>
                   <p className="text-[11px] text-[var(--muted)]">Auxiliares</p>
-                  <p className={p.auxiliares.length ? "" : "text-[var(--muted)]"}>
-                    {p.auxiliares.length ? p.auxiliares.join(", ") : "Sin auxiliares"}
-                  </p>
+                  {p.auxiliares.length ? (
+                    <div className="space-y-0.5">
+                      {p.auxiliares.map((nombre) => (
+                        <PersonaEstado
+                          key={nombre}
+                          nombre={nombre}
+                          disp={dispPorNombre.get(normNombre(nombre))}
+                          planIdActual={p.id}
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-[var(--muted)]">Sin auxiliares</p>
+                  )}
                 </div>
               </div>
 
