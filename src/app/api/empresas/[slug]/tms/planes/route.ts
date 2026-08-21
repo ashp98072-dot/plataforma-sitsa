@@ -21,16 +21,19 @@ import {
 
 type Ctx = { params: Promise<{ slug: string }> };
 
+/** Auxiliar de un plan con su id real de tms_personal (Fase P4.3). */
+type AuxiliarPlan = { personalId: number; nombre: string };
+
 async function auxiliaresDePlanes(
   planIds: number[],
-): Promise<Map<number, string[]>> {
-  const map = new Map<number, string[]>();
+): Promise<Map<number, AuxiliarPlan[]>> {
+  const map = new Map<number, AuxiliarPlan[]>();
   const ids = [...new Set(planIds.map(Number).filter((id) => id > 0))];
   if (!ids.length) return map;
   try {
     const placeholders = ids.map(() => "?").join(",");
     const rows = await query<RowDataPacket[]>(
-      `SELECT a.plan_id, per.nombre
+      `SELECT a.plan_id, a.personal_id, per.nombre
        FROM tms_plan_auxiliares a
        INNER JOIN tms_personal per ON per.id = a.personal_id
        WHERE a.plan_id IN (${placeholders})
@@ -40,7 +43,7 @@ async function auxiliaresDePlanes(
     for (const r of rows) {
       const pid = Number(r.plan_id);
       const list = map.get(pid) ?? [];
-      list.push(String(r.nombre));
+      list.push({ personalId: Number(r.personal_id), nombre: String(r.nombre) });
       map.set(pid, list);
     }
   } catch {
@@ -76,6 +79,7 @@ export async function GET(req: Request, ctx: Ctx) {
     query<RowDataPacket[]>(
       `SELECT p.id, p.codigo, p.fecha_plan, p.hora_carga, p.estado, p.tipo_traslado, p.notas,
               c.nombre AS cliente, u.placa, pil.nombre AS piloto, aux.nombre AS auxiliar,
+              p.piloto_id, p.auxiliar_id,
               COALESCE(ev.cnt, 0) AS evidencias
        FROM tms_planes_viaje p
        LEFT JOIN tms_clientes c ON c.id = p.cliente_id
@@ -103,18 +107,36 @@ export async function GET(req: Request, ctx: Ctx) {
 
   const planes = rows.map((r) => {
     const id = Number(r.id);
+    // piloto_id/auxiliar_id se separan del resto para no duplicarlos en el
+    // payload junto a sus versiones camelCase (pilotoId/auxiliaresDetalle).
+    const { piloto_id, auxiliar_id, ...resto } = r;
+    const pilotoId = piloto_id != null ? Number(piloto_id) : null;
+
     const extras = auxMap.get(id) ?? [];
-    const auxList =
+    // Fase P4.3: misma semántica de siempre — si tms_plan_auxiliares tiene
+    // filas para este plan, se usan esas (ya con personal_id real); si no,
+    // fallback al auxiliar_id legado de la columna singular de la propia
+    // tms_planes_viaje (que SÍ es un personal_id real, vía su FK). No es
+    // una unión de ambos — es "preferir lo nuevo, si no hay, usar lo
+    // legado", igual que el comportamiento previo para `auxiliares`.
+    const auxiliaresDetalle: AuxiliarPlan[] =
       extras.length > 0
         ? extras
-        : r.auxiliar
-          ? [String(r.auxiliar)]
+        : auxiliar_id != null && r.auxiliar
+          ? [{ personalId: Number(auxiliar_id), nombre: String(r.auxiliar) }]
           : [];
+    const auxList = auxiliaresDetalle.map((a) => a.nombre);
     const paradas = paradasMap.get(id) ?? [];
     return {
-      ...r,
+      ...resto,
+      // Aditivo (Fase P4.3): id real del piloto, cuando existe.
+      pilotoId,
       auxiliares: auxList,
       auxiliar: auxList.join(", ") || null,
+      // Aditivo (Fase P4.3): auxiliares con su personal_id real. No
+      // reemplaza `auxiliares` (string[]) — TMS y otros consumidores
+      // existentes siguen leyendo ese campo tal cual.
+      auxiliaresDetalle,
       paradas,
       paradasPendientes: paradas.filter(
         (p) => p.requiere_evidencia && p.evidencias < 1,

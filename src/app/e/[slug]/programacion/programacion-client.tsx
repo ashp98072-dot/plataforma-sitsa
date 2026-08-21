@@ -16,11 +16,14 @@ import type {
  *
  * Fase P4.2: además consume GET /api/empresas/[slug]/operaciones/
  * disponibilidad-personal?fecha=YYYY-MM-DD (envuelve listarDisponibilidadPersonal,
- * que sí vive en servidor — nunca se importa esa lib aquí). El cruce plan↔persona
- * es por NOMBRE normalizado: el GET de planes solo expone nombres de
- * piloto/auxiliar, no su id de tms_personal — limitación conocida, documentada
- * en el informe de esta fase, no resuelta aquí para no tocar tms/planes/route.ts
- * fuera del alcance autorizado.
+ * que sí vive en servidor — nunca se importa esa lib aquí).
+ *
+ * Fase P4.3: el cruce plan↔persona es por personalId (pilotoId /
+ * auxiliaresDetalle[].personalId), IDs reales que el GET de planes ya
+ * expone de forma aditiva. Ya NO se cruza por nombre — si un plan legado no
+ * trae un id válido, se muestra el nombre sin badge de disponibilidad
+ * ("Sin información de disponibilidad"), nunca se asocia por coincidencia
+ * de texto con otra persona.
  */
 
 /** Solo `import type` — tipos, no código; no arrastra mysql2 al bundle del cliente. */
@@ -35,6 +38,9 @@ type ParadaPlan = {
   evidencias: number;
 };
 
+/** Auxiliar de un plan con su id real de tms_personal (Fase P4.3). */
+type AuxiliarPlan = { personalId: number; nombre: string };
+
 type Plan = {
   id: number;
   codigo: string;
@@ -48,6 +54,10 @@ type Plan = {
   piloto: string | null;
   auxiliar: string | null;
   auxiliares: string[];
+  /** Aditivo (Fase P4.3): id real del piloto, cuando el plan lo tiene. */
+  pilotoId: number | null;
+  /** Aditivo (Fase P4.3): auxiliares con su personal_id real. */
+  auxiliaresDetalle: AuxiliarPlan[];
   paradas: ParadaPlan[];
   paradasPendientes: number;
   evidencias: number;
@@ -96,10 +106,6 @@ function normPlaca(p: string): string {
   return p.toUpperCase().replace(/[\s-]/g, "");
 }
 
-function normNombre(n: string): string {
-  return n.trim().toLowerCase();
-}
-
 const ESTADO_PERSONA_ICONO: Record<EstadoDisponibilidad, string> = {
   disponible: "🟢",
   no_disponible: "🔴",
@@ -113,21 +119,38 @@ const ESTADO_PERSONA_LABEL: Record<EstadoDisponibilidad, string> = {
 };
 
 /**
- * Badge compacto de disponibilidad para un piloto/auxiliar nombrado en un
- * plan. Si no hay match por nombre contra disponibilidad-personal, se
- * muestra solo el nombre — nunca se inventa un estado.
+ * Badge compacto de disponibilidad para un piloto/auxiliar de un plan.
+ * Cruce EXCLUSIVAMENTE por personalId (Fase P4.3) — nunca por nombre. Si el
+ * plan no trae un id válido (dato legado) o no hay disponibilidad cargada
+ * todavía para esa fecha, se muestra el nombre con un aviso neutral, nunca
+ * se adivina el estado de otra persona por coincidencia de texto.
  */
 function PersonaEstado({
   nombre,
   disp,
+  tieneId,
   planIdActual,
 }: {
   nombre: string;
   disp: DisponibilidadPersonal | undefined;
+  /** false = el plan no trae personalId para esta persona (dato legado). */
+  tieneId: boolean;
   planIdActual: number;
 }) {
   if (!disp) {
-    return <span className="text-[12px]">{nombre}</span>;
+    return (
+      <span className="flex flex-wrap items-center gap-1 text-[12px]">
+        <span>{nombre}</span>
+        {!tieneId ? (
+          <span
+            className="rounded bg-[var(--input)] px-1 py-0.5 text-[10px] text-[var(--muted)]"
+            title="Este plan no tiene un id de personal vinculado (dato legado) — no se puede verificar disponibilidad sin adivinar por nombre."
+          >
+            Sin información de disponibilidad
+          </span>
+        ) : null}
+      </span>
+    );
   }
 
   const enRutaAhora =
@@ -618,12 +641,10 @@ export function ProgramacionClient({ slug, hoy }: Props) {
         {visibles.map((p) => {
           const { origen, destino, intermedias } = origenDestino(p.paradas);
           const estadoUnidad = unidadEstado(p.placa);
-          // Cruce por nombre normalizado — el GET de planes solo trae el
-          // nombre del piloto/auxiliar, no su id de tms_personal (ver nota
-          // al inicio del archivo).
+          // Fase P4.3: cruce EXCLUSIVAMENTE por personalId — nunca por nombre.
           const dispDelDia = disponibilidadPorFecha.get(p.fecha_plan) ?? [];
-          const dispPorNombre = new Map(
-            dispDelDia.map((d) => [normNombre(d.nombre), d]),
+          const dispPorPersonalId = new Map(
+            dispDelDia.map((d) => [d.personalId, d]),
           );
           return (
             <div
@@ -674,7 +695,8 @@ export function ProgramacionClient({ slug, hoy }: Props) {
                   {p.piloto ? (
                     <PersonaEstado
                       nombre={p.piloto}
-                      disp={dispPorNombre.get(normNombre(p.piloto))}
+                      disp={p.pilotoId != null ? dispPorPersonalId.get(p.pilotoId) : undefined}
+                      tieneId={p.pilotoId != null}
                       planIdActual={p.id}
                     />
                   ) : (
@@ -683,13 +705,14 @@ export function ProgramacionClient({ slug, hoy }: Props) {
                 </div>
                 <div>
                   <p className="text-[11px] text-[var(--muted)]">Auxiliares</p>
-                  {p.auxiliares.length ? (
+                  {p.auxiliaresDetalle.length ? (
                     <div className="space-y-0.5">
-                      {p.auxiliares.map((nombre) => (
+                      {p.auxiliaresDetalle.map((aux) => (
                         <PersonaEstado
-                          key={nombre}
-                          nombre={nombre}
-                          disp={dispPorNombre.get(normNombre(nombre))}
+                          key={aux.personalId}
+                          nombre={aux.nombre}
+                          disp={dispPorPersonalId.get(aux.personalId)}
+                          tieneId
                           planIdActual={p.id}
                         />
                       ))}
