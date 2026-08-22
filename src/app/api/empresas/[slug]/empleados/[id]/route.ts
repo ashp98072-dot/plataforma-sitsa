@@ -4,6 +4,7 @@ import {
   actualizarEmpleado,
   codigoDuplicado,
   eliminarEmpleado,
+  listarSupervisoresDeEmpleado,
   obtenerEmpleado,
   type EmpleadoInput,
 } from "@/lib/rrhh/empleados";
@@ -68,7 +69,11 @@ function toInput(
     banco: d.banco ?? "",
     contactoEmergencia: d.contactoEmergencia ?? "",
     horasExtraHabilitado: d.horasExtraHabilitado ?? false,
-    supervisorId: d.supervisorId ?? null,
+    // Sin "?? []": omitido (undefined) = "no tocar supervisores" en
+    // actualizarEmpleado(); [] explícito = "quitar todos". La ficha de
+    // RRHH siempre envía el campo, así que en la práctica esto no cambia
+    // su comportamiento — ver EmpleadoInput.supervisorIds.
+    supervisorIds: d.supervisorIds,
   };
 }
 
@@ -83,10 +88,11 @@ export async function GET(req: Request, ctx: Ctx) {
   }
   const url = new URL(req.url);
   const conHistorial = url.searchParams.get("historial") === "1";
-  const historial = conHistorial
-    ? await listarCambiosEmpleado(guard.empresa.id, empId)
-    : undefined;
-  return NextResponse.json({ empleado: emp, historial });
+  const [historial, supervisores] = await Promise.all([
+    conHistorial ? listarCambiosEmpleado(guard.empresa.id, empId) : Promise.resolve(undefined),
+    listarSupervisoresDeEmpleado(guard.empresa.id, empId),
+  ]);
+  return NextResponse.json({ empleado: emp, historial, supervisores });
 }
 
 export async function PUT(req: Request, ctx: Ctx) {

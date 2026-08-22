@@ -196,6 +196,22 @@ CREATE TABLE IF NOT EXISTS horas_extra_registros (
   CONSTRAINT fk_horext_periodo FOREIGN KEY (planilla_periodo_id) REFERENCES rrhh_planilla_periodos(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Múltiples supervisores por empleado (tabla puente). empleados.supervisor_id
+-- se mantiene en paralelo como compatibilidad legado (= primer supervisor).
+CREATE TABLE IF NOT EXISTS empleado_supervisores (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  empleado_id INT NOT NULL,
+  supervisor_id INT NOT NULL,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_empsup_relacion (empresa_id, empleado_id, supervisor_id),
+  INDEX idx_empsup_empleado (empresa_id, empleado_id),
+  INDEX idx_empsup_supervisor (empresa_id, supervisor_id),
+  CONSTRAINT fk_empsup_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
+  CONSTRAINT fk_empsup_empleado FOREIGN KEY (empleado_id) REFERENCES empleados(id) ON DELETE CASCADE,
+  CONSTRAINT fk_empsup_supervisor FOREIGN KEY (supervisor_id) REFERENCES empleados(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS configuracion (
   empresa_id INT NOT NULL,
   parametro VARCHAR(100) NOT NULL,

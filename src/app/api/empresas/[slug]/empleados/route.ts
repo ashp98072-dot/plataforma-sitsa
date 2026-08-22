@@ -64,7 +64,12 @@ function toInput(
     tipoCuenta: d.tipoCuenta ?? "",
     banco: d.banco ?? "",
     contactoEmergencia: d.contactoEmergencia ?? "",
-    supervisorId: d.supervisorId ?? null,
+    // Sin "?? []": se preserva la distinción entre "omitido" (undefined) y
+    // "[]" explícito — crearEmpleado()/actualizarEmpleado() la interpretan
+    // de forma distinta (ver EmpleadoInput.supervisorIds). El alta desde
+    // esta ruta (formulario RRHH) siempre envía el campo, así que en la
+    // práctica esto no cambia su comportamiento.
+    supervisorIds: d.supervisorIds,
   };
 }
 
