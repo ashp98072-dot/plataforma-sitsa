@@ -96,6 +96,11 @@ export const empleadoBodySchema = z.object({
   // Fase H1: elegibilidad individual de horas extra — solo RRHH/admin la
   // cambia, desde este mismo formulario de edición de empleado.
   horasExtraHabilitado: z.boolean().optional(),
+  // Supervisor directo del empleado (ficha, sección Laboral). Acepta number
+  // positivo, null (sin supervisor) o campo omitido — validación de
+  // existencia/misma-empresa/no-auto-referencia ocurre en supervisorValido()
+  // (src/lib/rrhh/empleados.ts), no aquí.
+  supervisorId: z.number().int().positive().nullable().optional(),
 });
 
 export type EmpleadoBody = z.infer<typeof empleadoBodySchema>;

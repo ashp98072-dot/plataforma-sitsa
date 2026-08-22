@@ -64,6 +64,7 @@ function toInput(
     tipoCuenta: d.tipoCuenta ?? "",
     banco: d.banco ?? "",
     contactoEmergencia: d.contactoEmergencia ?? "",
+    supervisorId: d.supervisorId ?? null,
   };
 }
 

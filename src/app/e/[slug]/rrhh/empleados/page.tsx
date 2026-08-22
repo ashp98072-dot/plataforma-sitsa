@@ -78,6 +78,8 @@ type Emp = {
   contactoEmergencia?: string;
   /** Fase H1: elegibilidad individual de horas extra. Solo RRHH/admin la cambia. */
   horasExtraHabilitado?: boolean;
+  supervisorId?: number | null;
+  supervisorNombre?: string | null;
 };
 
 type EmpleadoCambio = {
@@ -120,6 +122,7 @@ type FormState = {
   horaEntradaTeorica: string;
   horaSalidaTeorica: string;
   estado: "Activo" | "Baja";
+  supervisorId: number | null;
   horasExtraHabilitado: boolean;
   sueldoBase: string;
   bonoIncentivo: string;
@@ -208,6 +211,7 @@ function emptyForm(entrada = "08:00", salida = "17:00"): FormState {
     horaEntradaTeorica: entrada,
     horaSalidaTeorica: salida,
     estado: "Activo",
+    supervisorId: null,
     horasExtraHabilitado: false,
     sueldoBase: "",
     bonoIncentivo: "",
@@ -271,6 +275,7 @@ function empToForm(
       5,
     ),
     estado: e.estado === "Baja" ? "Baja" : "Activo",
+    supervisorId: e.supervisorId ?? null,
     horasExtraHabilitado: e.horasExtraHabilitado ?? false,
     sueldoBase: e.sueldoBase != null ? String(e.sueldoBase) : "",
     bonoIncentivo: e.bonoIncentivo != null ? String(e.bonoIncentivo) : "",
@@ -317,6 +322,7 @@ function formToBody(form: FormState) {
     bonoIncentivo: parseNum(rest.bonoIncentivo),
     bonoHerramientas: parseNum(rest.bonoHerramientas),
     licenciaTipo: rest.licenciaTipo || "",
+    supervisorId: rest.supervisorId ?? null,
   };
 }
 
@@ -408,6 +414,9 @@ type SeccionFicha =
 export default function EmpleadosPage() {
   const slug = String(useParams().slug);
   const [empleados, setEmpleados] = useState<Emp[]>([]);
+  // Activos de la empresa para el selector de Supervisor — independiente de
+  // los filtros de búsqueda/estado de la tabla (esos sí acotan `empleados`).
+  const [supervisoresDisponibles, setSupervisoresDisponibles] = useState<Emp[]>([]);
   const [q, setQ] = useState("");
   const [qDebounced, setQDebounced] = useState("");
   const [filtroTipo, setFiltroTipo] = useState("");
@@ -494,9 +503,25 @@ export default function EmpleadosPage() {
     });
   }, [slug, qDebounced, filtroTipo, filtroPago, filtroEstado]);
 
+  // Reutiliza el mismo GET /empleados, con estado=Activo, para poblar el
+  // selector de Supervisor — no crea una ruta nueva. Se llama desde dentro
+  // de `cargar()` (mismo efecto ya existente abajo) en vez de un efecto
+  // aparte, para no depender de los filtros/búsqueda que el usuario haya
+  // aplicado a la tabla y para no agregar un segundo useEffect con
+  // setState.
+  const cargarSupervisores = useCallback(async () => {
+    const res = await fetch(
+      `/api/empresas/${slug}/empleados?estado=Activo`,
+    );
+    const data = await res.json();
+    if (!res.ok) return;
+    setSupervisoresDisponibles(data.empleados ?? []);
+  }, [slug]);
+
   useEffect(() => {
     void cargar();
-  }, [cargar]);
+    void cargarSupervisores();
+  }, [cargar, cargarSupervisores]);
 
   function patchForm(patch: Partial<FormState>) {
     setForm((f) => {
@@ -603,6 +628,7 @@ export default function EmpleadosPage() {
     setHistorial([]);
     setVista("lista");
     await cargar();
+    await cargarSupervisores();
   }
 
   async function borrar(id: number) {
@@ -1035,6 +1061,29 @@ export default function EmpleadosPage() {
           >
             <option value="Activo">Activo</option>
             <option value="Baja">Baja / Inactivo</option>
+          </select>
+        </label>
+        <label>
+          <FieldLabel hint="Para horas extra y jerarquía del equipo">
+            Supervisor
+          </FieldLabel>
+          <select
+            className={input}
+            value={form.supervisorId ?? ""}
+            onChange={(e) =>
+              patchForm({
+                supervisorId: e.target.value ? Number(e.target.value) : null,
+              })
+            }
+          >
+            <option value="">Sin supervisor</option>
+            {supervisoresDisponibles
+              .filter((s) => s.id !== editId)
+              .map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.numeroEmpleado || s.codigo} — {s.nombre}
+                </option>
+              ))}
           </select>
         </label>
         <label className="flex items-center gap-2">
