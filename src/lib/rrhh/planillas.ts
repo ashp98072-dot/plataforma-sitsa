@@ -11,6 +11,7 @@ import {
 } from "@/lib/rrhh/contratos-pago";
 import { calcularISRMensual } from "@/lib/rrhh/isr";
 import { obtenerRangoPeriodo } from "@/lib/rrhh/periodos";
+import { toIsoDate } from "@/lib/rrhh/dates";
 import {
   aplicarCuotasElegibles,
   sumaCuotasAplicadasPorPeriodo,
@@ -178,8 +179,11 @@ function mapPeriodo(r: RowDataPacket): PlanillaPeriodo {
   return {
     id: Number(r.id),
     codigo: String(r.codigo),
-    fechaInicio: String(r.fecha_inicio).slice(0, 10),
-    fechaFin: String(r.fecha_fin).slice(0, 10),
+    // mysql2 entrega DATE como Date cuando no está activo dateStrings.
+    // String(date).slice(0, 10) producía "Sun Aug 16" y ese texto luego se
+    // enviaba a comparaciones SQL, dejando fuera todas las cuotas elegibles.
+    fechaInicio: toIsoDate(r.fecha_inicio as string | Date) ?? "",
+    fechaFin: toIsoDate(r.fecha_fin as string | Date) ?? "",
     estado: String(r.estado),
     notas: r.notas != null ? String(r.notas) : null,
     tipoPeriodo: (TIPOS_PERIODO as readonly string[]).includes(tipo ?? "")
