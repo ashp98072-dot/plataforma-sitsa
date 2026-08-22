@@ -150,6 +150,7 @@ export function AppShell({
   const [dominioEmpresa, setDominioEmpresa] = useState(false);
   const [abiertos, setAbiertos] = useState<Record<string, boolean>>({});
   const [menuOpen, setMenuOpen] = useState(false);
+  const [sidebarVisible, setSidebarVisible] = useState(true);
   const [navPending, setNavPending] = useState(false);
 
   useEffect(() => {
@@ -503,7 +504,14 @@ export function AppShell({
       empresaNombre={empresaNombre}
       username={username}
     >
-    <div className="min-h-screen md:grid md:grid-cols-[260px_1fr]">
+    <div
+      className={[
+        "min-h-screen max-w-full overflow-x-hidden md:grid",
+        sidebarVisible
+          ? "md:grid-cols-[260px_minmax(0,1fr)]"
+          : "md:grid-cols-[0_minmax(0,1fr)]",
+      ].join(" ")}
+    >
       {menuOpen ? (
         <button
           type="button"
@@ -516,8 +524,11 @@ export function AppShell({
       <aside
         className={[
           // Altura de viewport + sticky en desktop: la lista puede hacer scroll.
-          "fixed inset-y-0 left-0 z-50 flex h-dvh max-h-dvh w-[min(100vw-3rem,280px)] flex-col border-r border-[var(--border)] bg-[var(--sidebar)] transition-transform duration-150 ease-out md:sticky md:top-0 md:z-auto md:h-screen md:max-h-screen md:w-auto md:translate-x-0 md:transition-none",
-          menuOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0",
+          "fixed inset-y-0 left-0 z-50 flex h-dvh max-h-dvh w-[min(100vw-3rem,280px)] overflow-hidden border-r border-[var(--border)] bg-[var(--sidebar)] transition-all duration-200 ease-out md:sticky md:top-0 md:z-auto md:h-screen md:max-h-screen",
+          menuOpen ? "translate-x-0" : "-translate-x-full",
+          sidebarVisible
+            ? "md:w-[260px] md:translate-x-0 md:opacity-100"
+            : "md:pointer-events-none md:w-0 md:-translate-x-full md:border-r-0 md:opacity-0",
         ].join(" ")}
       >
         <div className="flex min-h-0 flex-1 flex-col">
@@ -622,7 +633,7 @@ export function AppShell({
         </div>
       </aside>
 
-      <div className="relative flex min-w-0 flex-col pb-8 md:pb-7">
+      <div className="relative flex min-w-0 max-w-full flex-col overflow-x-hidden pb-8 md:pb-7">
         {navPending ? (
           <div
             className="pointer-events-none absolute inset-x-0 top-0 z-40 h-0.5 overflow-hidden bg-[var(--border)]"
@@ -640,6 +651,17 @@ export function AppShell({
           >
             <IconMenu />
           </button>
+          <button
+            type="button"
+            className="hidden rounded-lg border border-[var(--border)] bg-[var(--card)] p-2 text-[var(--text)] md:inline-flex"
+            onClick={() => setSidebarVisible((visible) => !visible)}
+            aria-label={sidebarVisible ? "Ocultar menú lateral" : "Mostrar menú lateral"}
+            title={sidebarVisible ? "Ocultar menú lateral" : "Mostrar menú lateral"}
+            aria-expanded={sidebarVisible}
+          >
+            <IconMenu />
+          </button>
+          <div className="hidden min-w-0 flex-1 md:block" />
           <div className="min-w-0 flex-1 md:hidden">
             <p className="truncate text-sm font-semibold leading-tight">
               {empresaNombre}
@@ -653,14 +675,19 @@ export function AppShell({
         </header>
         <main
           className={[
-            "flex-1 p-3 transition-opacity duration-150 sm:p-4 md:p-6",
+            "min-w-0 max-w-full flex-1 overflow-x-hidden p-3 transition-opacity duration-150 sm:p-4 md:p-6",
             navPending ? "opacity-70" : "opacity-100",
           ].join(" ")}
         >
           {children}
         </main>
       </div>
-      <footer className="fixed bottom-0 left-0 right-0 z-20 border-t border-[var(--border)] bg-[var(--sidebar)] px-3 py-1 text-[10px] text-[var(--muted)] md:left-[260px] md:text-xs">
+      <footer
+        className={[
+          "fixed bottom-0 left-0 right-0 z-20 border-t border-[var(--border)] bg-[var(--sidebar)] px-3 py-1 text-[10px] text-[var(--muted)] transition-[left] duration-200 md:text-xs",
+          sidebarVisible ? "md:left-[260px]" : "md:left-0",
+        ].join(" ")}
+      >
         Empresa: {empresaNombre} · Usuario: {username}
       </footer>
     </div>

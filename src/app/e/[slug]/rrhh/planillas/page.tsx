@@ -361,7 +361,7 @@ export default function PlanillasPage() {
     periodo?.estado === "Borrador" || periodo?.estado === "Generada";
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 max-w-full space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">Planillas / Nómina</h1>
         <p className="text-sm text-[var(--muted)]">
@@ -574,7 +574,7 @@ export default function PlanillasPage() {
         ) : null}
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[240px_1fr]">
+      <div className="grid min-w-0 gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
         <ul className="space-y-1 text-sm">
           {rows.map((r) => (
             <li key={r.id}>
@@ -600,7 +600,7 @@ export default function PlanillasPage() {
           ) : null}
         </ul>
 
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           {!periodo ? (
             <p className="text-sm text-[var(--muted)]">
               Selecciona un periodo o crea uno nuevo. Luego genera la nómina
