@@ -436,6 +436,38 @@ CREATE TABLE IF NOT EXISTS inventario_rrhh_movimientos (
   CONSTRAINT fk_invmov_articulo FOREIGN KEY (articulo_id) REFERENCES inventario_rrhh(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Fase INV-1: entrega de un artículo a un empleado, con o sin cobro.
+-- descuento_id apunta HACIA rrhh_descuentos_maestro (no al revés) — D1/D2
+-- no requieren ningún cambio de schema. costo_unitario_entrega es el precio
+-- histórico al momento de la entrega (no cambia si luego cambia
+-- inventario_rrhh.costo_unitario). Sin hard delete desde la aplicación —
+-- registro histórico/contable (por eso articulo_id/empleado_id usan
+-- ON DELETE RESTRICT, no CASCADE).
+CREATE TABLE IF NOT EXISTS inventario_rrhh_entregas (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  articulo_id INT NOT NULL,
+  empleado_id INT NOT NULL,
+  cantidad INT NOT NULL,
+  costo_unitario_entrega DECIMAL(12,2) NOT NULL,
+  costo_total DECIMAL(12,2) NOT NULL,
+  monto_cobrado DECIMAL(12,2) NOT NULL DEFAULT 0,
+  descuento_id INT NULL,
+  movimiento_id INT NULL,
+  motivo VARCHAR(300) NULL,
+  entregado_por VARCHAR(100) NULL,
+  estado VARCHAR(20) NOT NULL DEFAULT 'ENTREGADO',
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_entregas_articulo (empresa_id, articulo_id),
+  INDEX idx_entregas_empleado (empresa_id, empleado_id),
+  INDEX idx_entregas_descuento (descuento_id),
+  CONSTRAINT fk_entregas_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
+  CONSTRAINT fk_entregas_articulo FOREIGN KEY (articulo_id) REFERENCES inventario_rrhh(id) ON DELETE RESTRICT,
+  CONSTRAINT fk_entregas_empleado FOREIGN KEY (empleado_id) REFERENCES empleados(id) ON DELETE RESTRICT,
+  CONSTRAINT fk_entregas_descuento FOREIGN KEY (descuento_id) REFERENCES rrhh_descuentos_maestro(id) ON DELETE SET NULL,
+  CONSTRAINT fk_entregas_movimiento FOREIGN KEY (movimiento_id) REFERENCES inventario_rrhh_movimientos(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS vacaciones (
   id INT AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,
