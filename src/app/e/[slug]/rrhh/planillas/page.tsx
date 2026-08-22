@@ -7,6 +7,7 @@ import {
   FORMAS_PAGO,
   etiquetaFormaPago,
   etiquetaTipoContrato,
+  redondearQ,
   type FormaPago,
 } from "@/lib/rrhh/contratos-pago";
 
@@ -41,6 +42,7 @@ type Linea = {
   dpi: string;
   tipoContrato: string;
   formaPago: FormaPago;
+  sueldoMensual: number;
   sueldoBase: number;
   bonoIncentivo: number;
   bonoHerramientas: number;
@@ -202,6 +204,11 @@ export default function PlanillasPage() {
     };
   }, [slug, tipoPeriodo, mesSel, anioSel]);
 
+  // Fase P1: para quincenas, código y fechas los calcula/genera el backend
+  // (crearPeriodo) — no se envían desde aquí. Mensual/Especial siguen el
+  // flujo manual de siempre.
+  const esQuincenal = tipoPeriodo === "QUINCENA_1" || tipoPeriodo === "QUINCENA_2";
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setError("");
@@ -210,9 +217,7 @@ export default function PlanillasPage() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        codigo,
-        fechaInicio,
-        fechaFin,
+        ...(esQuincenal ? {} : { codigo, fechaInicio, fechaFin }),
         notas,
         ...(tipoPeriodo ? { tipoPeriodo } : {}),
         ...(tipoPeriodo === "QUINCENA_1" ? { numeroQuincena: 1 } : {}),
@@ -380,13 +385,6 @@ export default function PlanillasPage() {
         onSubmit={onSubmit}
         className="flex flex-wrap gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4"
       >
-        <input
-          className={input}
-          placeholder="Código (ej. 2026-08)"
-          value={codigo}
-          onChange={(e) => setCodigo(e.target.value)}
-          required
-        />
         <select
           className={input}
           value={tipoPeriodo}
@@ -425,20 +423,33 @@ export default function PlanillasPage() {
             ) : null}
           </>
         ) : null}
-        <input
-          type="date"
-          className={input}
-          value={fechaInicio}
-          onChange={(e) => setFechaInicio(e.target.value)}
-          required
-        />
-        <input
-          type="date"
-          className={input}
-          value={fechaFin}
-          onChange={(e) => setFechaFin(e.target.value)}
-          required
-        />
+        {/* Fase P1: para quincenas, código y fechas los calcula el backend —
+            solo se muestran como información de solo lectura, más abajo. */}
+        {!esQuincenal ? (
+          <>
+            <input
+              className={input}
+              placeholder="Código (ej. 2026-08)"
+              value={codigo}
+              onChange={(e) => setCodigo(e.target.value)}
+              required
+            />
+            <input
+              type="date"
+              className={input}
+              value={fechaInicio}
+              onChange={(e) => setFechaInicio(e.target.value)}
+              required
+            />
+            <input
+              type="date"
+              className={input}
+              value={fechaFin}
+              onChange={(e) => setFechaFin(e.target.value)}
+              required
+            />
+          </>
+        ) : null}
         <input
           className={`${input} min-w-[12rem]`}
           placeholder="Notas"
@@ -449,9 +460,19 @@ export default function PlanillasPage() {
           Crear periodo
         </button>
       </form>
-      {tipoPeriodo && tipoPeriodo !== "ESPECIAL" ? (
+      {esQuincenal ? (
         <p className="text-xs text-[var(--muted)]">
-          Fechas sugeridas para {TIPOS_PERIODO_OPCIONES.find((t) => t.value === tipoPeriodo)?.label.toLowerCase()} de {mesSel}/{anioSel}: {fechaInicio} → {fechaFin}. Puedes ajustarlas antes de crear.
+          Código y fechas se generan automáticamente:{" "}
+          <strong className="text-[var(--text)]">
+            {anioSel}-{String(mesSel).padStart(2, "0")}-Q
+            {tipoPeriodo === "QUINCENA_1" ? "1" : "2"}
+          </strong>{" "}
+          · {sugiriendo ? "calculando fechas…" : `${fechaInicio} → ${fechaFin}`}.
+        </p>
+      ) : tipoPeriodo === "MENSUAL" ? (
+        <p className="text-xs text-[var(--muted)]">
+          Fechas sugeridas para mensual de {mesSel}/{anioSel}: {fechaInicio} → {fechaFin}.
+          Puedes ajustarlas antes de crear.
         </p>
       ) : null}
 
@@ -759,103 +780,134 @@ export default function PlanillasPage() {
                       <th className="px-2 py-2">Empleado</th>
                       <th className="px-2 py-2">Contrato</th>
                       <th className="px-2 py-2">Forma pago</th>
-                      <th className="px-2 py-2">Neto</th>
+                      <th className="px-2 py-2 text-right">Sueldo mensual</th>
+                      <th className="px-2 py-2 text-right">Sueldo período</th>
+                      <th className="px-2 py-2 text-right">Bono incentivo</th>
+                      <th className="px-2 py-2 text-right">Bono herram.</th>
+                      <th className="px-2 py-2 text-right">Otros ingresos</th>
+                      <th className="px-2 py-2 text-right">Total ingresos</th>
+                      <th className="px-2 py-2 text-right">IGSS laboral</th>
+                      <th className="px-2 py-2 text-right">IGSS patronal</th>
                       <th className="px-2 py-2">ISR</th>
+                      <th className="px-2 py-2 text-right">Descuentos</th>
+                      <th className="px-2 py-2 text-right">Total desc.</th>
+                      <th className="px-2 py-2 text-right">Neto</th>
                       <th className="px-2 py-2">Estado</th>
                       <th className="px-2 py-2">Ref.</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {lineasFiltradas.map((l) => (
-                      <tr
-                        key={l.id}
-                        className="border-t border-[var(--border)]"
-                      >
-                        <td className="px-2 py-2">
-                          <div className="font-medium">{l.nombreEmpleado}</div>
-                          <div className="text-xs text-[var(--muted)]">
-                            {l.codigoEmpleado}
-                            {l.dpi ? ` · DPI ${l.dpi}` : ""}
-                          </div>
-                          <div className="text-xs text-[var(--muted)]">
-                            Base {q(l.sueldoBase)} · IGSS {q(l.igssLaboral)} ·
-                            Desc. {q(l.descuentos)}
-                          </div>
-                        </td>
-                        <td className="px-2 py-2 text-xs">
-                          {etiquetaTipoContrato(l.tipoContrato)}
-                        </td>
-                        <td className="px-2 py-2">
-                          <select
-                            className={input}
-                            disabled={cerrada}
-                            value={l.formaPago}
-                            onChange={(e) =>
-                              void patchLinea(l.id, {
-                                formaPago: e.target.value,
-                              })
-                            }
-                          >
-                            {FORMAS_PAGO.map((f) => (
-                              <option key={f.value} value={f.value}>
-                                {f.label}
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-                        <td className="px-2 py-2 font-medium">Q{q(l.neto)}</td>
-                        <td className="px-2 py-2">
-                          <input
-                            type="number"
-                            step="0.01"
-                            className={`${input} w-24`}
-                            disabled={cerrada}
-                            defaultValue={l.isr}
-                            key={`isr-${l.id}-${l.isr}`}
-                            onBlur={(e) => {
-                              const v = Number(e.target.value);
-                              if (Number.isFinite(v) && v !== l.isr) {
-                                void patchLinea(l.id, { isr: v });
+                    {lineasFiltradas.map((l) => {
+                      const totalIngresos = redondearQ(
+                        l.sueldoBase + l.bonoIncentivo + l.bonoHerramientas + l.otrosIngresos,
+                      );
+                      // Fase P1: IGSS patronal es un costo/aporte patronal —
+                      // no se incluye aquí, no debe verse como si redujera
+                      // el líquido del trabajador.
+                      const totalDescuentos = redondearQ(
+                        l.igssLaboral + l.descuentos + l.isr,
+                      );
+                      return (
+                        <tr
+                          key={l.id}
+                          className="border-t border-[var(--border)]"
+                        >
+                          <td className="px-2 py-2">
+                            <div className="font-medium">{l.nombreEmpleado}</div>
+                            <div className="text-xs text-[var(--muted)]">
+                              {l.codigoEmpleado}
+                              {l.dpi ? ` · DPI ${l.dpi}` : ""}
+                            </div>
+                          </td>
+                          <td className="px-2 py-2 text-xs">
+                            {etiquetaTipoContrato(l.tipoContrato)}
+                          </td>
+                          <td className="px-2 py-2">
+                            <select
+                              className={input}
+                              disabled={cerrada}
+                              value={l.formaPago}
+                              onChange={(e) =>
+                                void patchLinea(l.id, {
+                                  formaPago: e.target.value,
+                                })
                               }
-                            }}
-                          />
-                        </td>
-                        <td className="px-2 py-2">
-                          <select
-                            className={input}
-                            disabled={cerrada}
-                            value={l.estadoPago}
-                            onChange={(e) =>
-                              void patchLinea(l.id, {
-                                estadoPago: e.target.value,
-                              })
-                            }
-                          >
-                            <option value="Pendiente">Pendiente</option>
-                            <option value="Pagado">Pagado</option>
-                          </select>
-                        </td>
-                        <td className="px-2 py-2">
-                          <input
-                            className={`${input} w-28`}
-                            disabled={cerrada}
-                            placeholder="Cheque # / ref"
-                            defaultValue={l.refPago}
-                            key={`ref-${l.id}-${l.refPago}`}
-                            onBlur={(e) => {
-                              const v = e.target.value.trim();
-                              if (v !== l.refPago) {
-                                void patchLinea(l.id, { refPago: v });
+                            >
+                              {FORMAS_PAGO.map((f) => (
+                                <option key={f.value} value={f.value}>
+                                  {f.label}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+                          <td className="px-2 py-2 text-right">Q{q(l.sueldoMensual)}</td>
+                          <td className="px-2 py-2 text-right">Q{q(l.sueldoBase)}</td>
+                          <td className="px-2 py-2 text-right">Q{q(l.bonoIncentivo)}</td>
+                          <td className="px-2 py-2 text-right">Q{q(l.bonoHerramientas)}</td>
+                          <td className="px-2 py-2 text-right">Q{q(l.otrosIngresos)}</td>
+                          <td className="px-2 py-2 text-right font-medium">
+                            Q{q(totalIngresos)}
+                          </td>
+                          <td className="px-2 py-2 text-right">Q{q(l.igssLaboral)}</td>
+                          <td className="px-2 py-2 text-right">Q{q(l.igssPatronal)}</td>
+                          <td className="px-2 py-2">
+                            <input
+                              type="number"
+                              step="0.01"
+                              className={`${input} w-24`}
+                              disabled={cerrada}
+                              defaultValue={l.isr}
+                              key={`isr-${l.id}-${l.isr}`}
+                              onBlur={(e) => {
+                                const v = Number(e.target.value);
+                                if (Number.isFinite(v) && v !== l.isr) {
+                                  void patchLinea(l.id, { isr: v });
+                                }
+                              }}
+                            />
+                          </td>
+                          <td className="px-2 py-2 text-right">Q{q(l.descuentos)}</td>
+                          <td className="px-2 py-2 text-right font-medium">
+                            Q{q(totalDescuentos)}
+                          </td>
+                          <td className="px-2 py-2 text-right font-medium">Q{q(l.neto)}</td>
+                          <td className="px-2 py-2">
+                            <select
+                              className={input}
+                              disabled={cerrada}
+                              value={l.estadoPago}
+                              onChange={(e) =>
+                                void patchLinea(l.id, {
+                                  estadoPago: e.target.value,
+                                })
                               }
-                            }}
-                          />
-                        </td>
-                      </tr>
-                    ))}
+                            >
+                              <option value="Pendiente">Pendiente</option>
+                              <option value="Pagado">Pagado</option>
+                            </select>
+                          </td>
+                          <td className="px-2 py-2">
+                            <input
+                              className={`${input} w-28`}
+                              disabled={cerrada}
+                              placeholder="Cheque # / ref"
+                              defaultValue={l.refPago}
+                              key={`ref-${l.id}-${l.refPago}`}
+                              onBlur={(e) => {
+                                const v = e.target.value.trim();
+                                if (v !== l.refPago) {
+                                  void patchLinea(l.id, { refPago: v });
+                                }
+                              }}
+                            />
+                          </td>
+                        </tr>
+                      );
+                    })}
                     {!lineasFiltradas.length ? (
                       <tr>
                         <td
-                          colSpan={7}
+                          colSpan={17}
                           className="px-3 py-4 text-[var(--muted)]"
                         >
                           {lineas.length
