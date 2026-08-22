@@ -87,7 +87,7 @@ export async function POST(req: Request, ctx: Ctx) {
             ? ` ${r.horasExtraAplicadas} registro(s) de horas extra aplicado(s) (${r.totalHorasExtraHoras.toFixed(2)}h, Q${r.totalHorasExtraMonto.toFixed(2)}).`
             : "") +
           (r.empleadosSinIgssQ1 > 0
-            ? ` Aviso: ${r.empleadosSinIgssQ1} empleado(s) sin retención IGSS en la primera quincena; se aplicó el saldo mensual completo en esta quincena.`
+            ? ` Aviso: ${r.empleadosSinIgssQ1} empleado(s) sin primera quincena generada; se aplicó la mitad mensual en esta segunda quincena.`
             : ""),
         generadas: r.generadas,
         cuotasAplicadas: r.cuotasAplicadas,

@@ -258,7 +258,7 @@ export default function DescuentosPage() {
       motivo: motivo || undefined,
       montoOriginal,
       periodicidad,
-      numeroCuotas: periodicidad === "UNA_VEZ" ? 1 : numeroCuotas,
+      numeroCuotas: periodicidad === "UNA_VEZ" || periodicidad === "MANUAL" ? 1 : numeroCuotas,
       fechaInicio,
     };
     if (periodicidad === "CADA_N_QUINCENAS") body.cadaNQuincenas = cadaNQuincenas;

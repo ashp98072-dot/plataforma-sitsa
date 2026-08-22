@@ -780,9 +780,9 @@ export async function listarPrestacionesDetalle(
  *   mensual − lo que Q1 REALMENTE tiene persistido) — no un recálculo
  *   teórico, así Q1+Q2 cuadra exacto con el mensual incluso si alguien
  *   editó el ISR de Q1 a mano. Si no existe Q1 válida (periodo cancelado o
- *   no generado todavía), Q2 recibe el valor mensual COMPLETO de los 6
- *   conceptos y se reporta en una sola advertencia de auditoría — nunca se
- *   retiene/paga de menos silenciosamente.
+ *   no generado todavía), Q2 usa la mitad mensual de los 6 conceptos. Esto
+ *   evita que una segunda quincena independiente muestre/pague el sueldo
+ *   mensual completo; si Q1 existe, se conserva la conciliación exacta.
  * - Horas extra, descuentos/cuotas y prestaciones/otros ingresos NO se
  *   reparten — ya llegan acotados por rango de fecha o por
  *   planilla_periodo_id (D1/D2/H2), así que cada uno cae naturalmente en su
@@ -1006,12 +1006,14 @@ export async function generarLineasPeriodo(
         // persistido (ver JSDoc de la función).
         const q1 = necesitaIgssQ1 ? datosQ1PorEmpleado.get(empId) : undefined;
         if (q1 == null) {
-          sueldoLinea = sueldo;
-          bonoIncLinea = bonoInc;
-          bonoHerrLinea = bonoHerr;
-          igssLab = igssMensual;
-          igssPat = igssPatMensual;
-          isr = isrMensual;
+          // Q2 puede generarse antes que Q1. Aun así sigue siendo una
+          // quincena: nunca debe cargar el valor mensual completo.
+          sueldoLinea = redondearQ(sueldo / 2);
+          bonoIncLinea = redondearQ(bonoInc / 2);
+          bonoHerrLinea = redondearQ(bonoHerr / 2);
+          igssLab = redondearQ(igssMensual / 2);
+          igssPat = redondearQ(igssPatMensual / 2);
+          isr = redondearQ(isrMensual / 2);
           empleadosSinIgssQ1 += 1;
         } else {
           sueldoLinea = redondearQ(sueldo - q1.sueldoBase);
@@ -1093,7 +1095,7 @@ export async function generarLineasPeriodo(
       usuario: opts.usuario,
       accion: "igss_quincena2_sin_q1",
       modulo: "rrhh",
-      detalle: `Periodo #${periodoId} ${periodo.codigo} (Q2) · ${empleadosSinIgssQ1} empleado(s) sin Q1 válida · se aplicó el valor mensual completo (sueldo, bonos, IGSS e ISR) en Q2 en vez de repartirlo.`,
+      detalle: `Periodo #${periodoId} ${periodo.codigo} (Q2) · ${empleadosSinIgssQ1} empleado(s) sin Q1 válida · se aplicó la mitad mensual (sueldo, bonos, IGSS e ISR).`,
     });
   }
   // Fase H2: un solo resumen por periodo, no una entrada por registro.

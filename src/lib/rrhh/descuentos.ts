@@ -227,7 +227,11 @@ export async function calcularFechasCuotas(
   numeroCuotas: number,
   cadaNQuincenas: number | null,
 ): Promise<string[]> {
-  if (periodicidad === "MANUAL") return [];
+  // MANUAL no crea un calendario recurrente, pero sí necesita una cuota
+  // inicial para que el descuento autorizado pueda llegar a planilla. Sin
+  // ella el maestro quedaba ACTIVO con cero cuotas y jamás aparecía en la
+  // columna Descuentos.
+  if (periodicidad === "MANUAL") return [fechaInicio];
   if (periodicidad === "UNA_VEZ") return [fechaInicio];
 
   const posInicial = await posicionQuincenaDeFecha(empresaId, fechaInicio);
@@ -596,7 +600,9 @@ export async function crearDescuentoInterno(
   input: NuevoDescuentoInput,
 ): Promise<{ id: number; codigo: string }> {
   const numeroCuotas =
-    input.periodicidad === "UNA_VEZ" ? 1 : Math.max(1, Math.trunc(input.numeroCuotas || 1));
+    input.periodicidad === "UNA_VEZ" || input.periodicidad === "MANUAL"
+      ? 1
+      : Math.max(1, Math.trunc(input.numeroCuotas || 1));
   const anio = Number(input.fechaInicio.slice(0, 4)) || new Date().getFullYear();
   const codigo = await generarCodigoDescuento(empresaId, anio);
   const [montoCuota] = distribuirCuotas(input.montoOriginal, numeroCuotas);
@@ -644,7 +650,9 @@ export async function crearDescuento(
     return { ok: false, motivo: "monto_invalido", mensaje: "El monto original debe ser mayor a cero." };
   }
   const numeroCuotas =
-    input.periodicidad === "UNA_VEZ" ? 1 : Math.max(1, Math.trunc(input.numeroCuotas || 1));
+    input.periodicidad === "UNA_VEZ" || input.periodicidad === "MANUAL"
+      ? 1
+      : Math.max(1, Math.trunc(input.numeroCuotas || 1));
   if (numeroCuotas > 60) {
     return { ok: false, motivo: "cuotas_invalidas", mensaje: "Máximo 60 cuotas por descuento." };
   }
@@ -1279,6 +1287,32 @@ export async function aplicarCuotasElegibles(
   periodo: PeriodoParaCuotas,
   usuario: string,
 ): Promise<{ aplicadas: number; totalAplicado: number }> {
+  // Recupera descuentos MANUAL autorizados con la implementación anterior,
+  // que los dejaba ACTIVO pero sin ninguna cuota y por eso nunca aparecían
+  // en planilla. INSERT IGNORE + la llave (descuento_id, numero_cuota) hace
+  // esta reparación idempotente incluso ante generaciones concurrentes.
+  await conn.execute(
+    `INSERT IGNORE INTO rrhh_descuento_cuotas
+       (empresa_id, descuento_id, numero_cuota, fecha_programada, monto_programado, estado)
+     SELECT d.empresa_id, d.id, 1, d.fecha_inicio,
+            d.monto_original - COALESCE((
+              SELECT SUM(a.monto) FROM rrhh_descuento_abonos a
+              WHERE a.empresa_id = d.empresa_id AND a.descuento_id = d.id
+            ), 0),
+            'PENDIENTE'
+     FROM rrhh_descuentos_maestro d
+     WHERE d.empresa_id = ? AND d.estado = 'ACTIVO' AND d.periodicidad = 'MANUAL'
+       AND NOT EXISTS (
+         SELECT 1 FROM rrhh_descuento_cuotas c0
+         WHERE c0.empresa_id = d.empresa_id AND c0.descuento_id = d.id
+       )
+       AND d.monto_original - COALESCE((
+         SELECT SUM(a2.monto) FROM rrhh_descuento_abonos a2
+         WHERE a2.empresa_id = d.empresa_id AND a2.descuento_id = d.id
+       ), 0) > 0.004`,
+    [empresaId],
+  );
+
   const [elegibles] = await conn.query<RowDataPacket[]>(
     `SELECT c.id, c.descuento_id, c.monto_programado
      FROM rrhh_descuento_cuotas c
