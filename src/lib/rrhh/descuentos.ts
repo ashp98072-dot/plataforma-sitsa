@@ -1229,16 +1229,31 @@ export type PeriodoParaCuotas = { id: number; fechaInicio: string; fechaFin: str
  * Aplica, dentro de la transacción `conn` del llamador (generarLineasPeriodo),
  * todas las cuotas PENDIENTE elegibles para `periodo`:
  * - descuento maestro ACTIVO (nunca BORRADOR/PAUSADO/CANCELADO/FINALIZADO);
- * - fecha_programada dentro de [periodo.fechaInicio, periodo.fechaFin];
+ * - fecha_programada <= periodo.fechaFin (SIN piso en periodo.fechaInicio —
+ *   ver nota de corrección de bug abajo);
  * - fecha_programada es la fuente de verdad — D2 NO recalcula periodicidad.
+ *
+ * CORRECCIÓN (bug confirmado en producción): antes se exigía
+ * `fecha_programada BETWEEN periodo.fechaInicio AND periodo.fechaFin`. Una
+ * cuota con fecha_programada anterior a fechaInicio (p.ej. vencida en un
+ * periodo que nunca se generó, o de una quincena anterior saltada) nunca
+ * volvía a aparecer como elegible en NINGÚN periodo futuro, aunque
+ * estuviera PENDIENTE — quedaba huérfana indefinidamente. La regla de
+ * negocio correcta es que una cuota vencida y pendiente se arrastre y se
+ * aplique en el primer periodo que se genere después de su fecha, no que
+ * se pierda. Por eso ahora solo se exige fecha_programada <= fechaFin, sin
+ * comparar contra fechaInicio.
  *
  * Cada cuota se transiciona con un UPDATE condicional
  * (WHERE estado='PENDIENTE' AND planilla_periodo_id IS NULL) y se verifica
  * affectedRows === 1 antes de contarla — si otra ejecución concurrente ya la
- * aplicó, esta pasada la ignora en vez de reintentar. Al regenerar el mismo
- * periodo, las cuotas ya APLICADA con planilla_periodo_id = periodo.id NO
- * vuelven a aparecer en el SELECT de elegibles (ya no son PENDIENTE) — nunca
- * se reprocesan.
+ * aplicó, esta pasada la ignora en vez de reintentar; esto también es lo
+ * que impide aplicar la misma cuota dos veces si dos periodos se generan
+ * casi al mismo tiempo, o si una cuota vencida "calificaría" para más de un
+ * periodo — el primero que la reclame gana, el resto ve affectedRows=0. Al
+ * regenerar el mismo periodo, las cuotas ya APLICADA con
+ * planilla_periodo_id = periodo.id NO vuelven a aparecer en el SELECT de
+ * elegibles (ya no son PENDIENTE) — nunca se reprocesan.
  */
 export async function aplicarCuotasElegibles(
   conn: PoolConnection,
@@ -1253,9 +1268,9 @@ export async function aplicarCuotasElegibles(
      WHERE c.empresa_id = ?
        AND c.estado = 'PENDIENTE' AND c.planilla_periodo_id IS NULL
        AND d.estado = 'ACTIVO'
-       AND c.fecha_programada BETWEEN ? AND ?
+       AND c.fecha_programada <= ?
      ORDER BY c.id`,
-    [empresaId, periodo.fechaInicio, periodo.fechaFin],
+    [empresaId, periodo.fechaFin],
   );
 
   let aplicadas = 0;
