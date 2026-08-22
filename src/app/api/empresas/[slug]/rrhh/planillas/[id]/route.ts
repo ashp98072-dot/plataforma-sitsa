@@ -83,6 +83,9 @@ export async function POST(req: Request, ctx: Ctx) {
           (r.cuotasAplicadas > 0
             ? ` ${r.cuotasAplicadas} cuota(s) de descuento aplicada(s) (Q${r.totalCuotasAplicado.toFixed(2)}).`
             : "") +
+          (r.horasExtraAplicadas > 0
+            ? ` ${r.horasExtraAplicadas} registro(s) de horas extra aplicado(s) (${r.totalHorasExtraHoras.toFixed(2)}h, Q${r.totalHorasExtraMonto.toFixed(2)}).`
+            : "") +
           (r.empleadosSinIgssQ1 > 0
             ? ` Aviso: ${r.empleadosSinIgssQ1} empleado(s) sin retención IGSS en la primera quincena; se aplicó el saldo mensual completo en esta quincena.`
             : ""),
@@ -90,6 +93,9 @@ export async function POST(req: Request, ctx: Ctx) {
         cuotasAplicadas: r.cuotasAplicadas,
         totalCuotasAplicado: r.totalCuotasAplicado,
         empleadosSinIgssQ1: r.empleadosSinIgssQ1,
+        horasExtraAplicadas: r.horasExtraAplicadas,
+        totalHorasExtraHoras: r.totalHorasExtraHoras,
+        totalHorasExtraMonto: r.totalHorasExtraMonto,
         periodo: await obtenerPeriodo(guard.empresa.id, periodoId),
         lineas,
         cuadre: calcularCuadre(lineas),

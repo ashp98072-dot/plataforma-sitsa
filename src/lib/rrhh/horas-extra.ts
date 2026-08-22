@@ -1,4 +1,5 @@
 import type { RowDataPacket } from "mysql2";
+import type { PoolConnection, ResultSetHeader } from "mysql2/promise";
 import { execute, query } from "@/lib/db";
 import { redondearQ } from "./contratos-pago";
 import { hoyLocal, toIsoDate } from "./dates";
@@ -381,4 +382,140 @@ export async function rechazarHorasExtra(
     detalle: `Registro #${registroId} · ${reg[0] ? String(reg[0].emp_nombre) : ""} · PENDIENTE → RECHAZADA · motivo: ${motivoRechazo.trim()}`,
   });
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Fase H2 — integración con generación de planilla. Vive aquí (no en
+// planillas.ts) porque horas-extra.ts es el dueño del modelo de registros;
+// el generador de planilla solo llama a estas funciones dentro de SU MISMA
+// transacción (recibe `conn`), sin conocer los detalles internos. Mismo
+// patrón exacto ya usado en descuentos.ts para las cuotas D1 (D2).
+// ---------------------------------------------------------------------------
+
+export type PeriodoParaHorasExtra = { id: number; fechaInicio: string; fechaFin: string };
+
+/**
+ * Aplica, dentro de la transacción `conn` del llamador (generarLineasPeriodo),
+ * todos los registros APROBADA elegibles para `periodo`:
+ * - estado = 'APROBADA' (nunca PENDIENTE, RECHAZADA, APLICADA_EN_PLANILLA, ni
+ *   histórico con estado NULL — el filtro WHERE estado='APROBADA' los excluye
+ *   a todos estructuralmente);
+ * - fecha dentro de [periodo.fechaInicio, periodo.fechaFin] — la fecha del
+ *   registro es la única fuente de verdad, H2 no recalcula nada.
+ *
+ * Cada registro se transiciona con un UPDATE condicional
+ * (WHERE estado='APROBADA' AND planilla_periodo_id IS NULL) y se verifica
+ * affectedRows === 1 antes de contarlo — si otra ejecución concurrente ya lo
+ * aplicó, esta pasada lo ignora en vez de reintentar/pagar de nuevo. Al
+ * regenerar el mismo periodo, los registros ya APLICADA_EN_PLANILLA con
+ * planilla_periodo_id = periodo.id NO vuelven a aparecer en el SELECT de
+ * elegibles (ya no son APROBADA) — nunca se reprocesan ni se pagan dos veces.
+ */
+export async function aplicarHorasExtraElegibles(
+  conn: PoolConnection,
+  empresaId: number,
+  periodo: PeriodoParaHorasExtra,
+): Promise<{ aplicadas: number; totalHoras: number; totalMonto: number }> {
+  const [elegibles] = await conn.query<RowDataPacket[]>(
+    `SELECT id, horas, monto FROM horas_extra_registros
+     WHERE empresa_id = ? AND estado = 'APROBADA' AND planilla_periodo_id IS NULL
+       AND fecha BETWEEN ? AND ?
+     ORDER BY id`,
+    [empresaId, periodo.fechaInicio, periodo.fechaFin],
+  );
+
+  let aplicadas = 0;
+  let totalHoras = 0;
+  let totalMonto = 0;
+  for (const r of elegibles) {
+    const [res] = await conn.execute<ResultSetHeader>(
+      `UPDATE horas_extra_registros
+       SET estado = 'APLICADA_EN_PLANILLA', planilla_periodo_id = ?, aplicado_en = NOW()
+       WHERE id = ? AND empresa_id = ? AND estado = 'APROBADA' AND planilla_periodo_id IS NULL`,
+      [periodo.id, Number(r.id), empresaId],
+    );
+    if (res.affectedRows === 1) {
+      aplicadas += 1;
+      totalHoras = redondearQ(totalHoras + Number(r.horas));
+      totalMonto = redondearQ(totalMonto + Number(r.monto));
+    }
+    // affectedRows === 0: otra ejecución ya lo aplicó — no se reintenta, no se paga dos veces.
+  }
+
+  return { aplicadas, totalHoras, totalMonto };
+}
+
+/**
+ * Suma, por empleado, TODAS las horas extra APLICADA_EN_PLANILLA vinculadas
+ * a este periodo — tanto las recién aplicadas en esta misma generación como
+ * las que ya estaban aplicadas de una generación/regeneración anterior del
+ * mismo periodo. Debe llamarse DESPUÉS de aplicarHorasExtraElegibles(), en
+ * la misma transacción, para que el resultado incluya ambos casos (mismo
+ * patrón que sumaCuotasAplicadasPorPeriodo en descuentos.ts).
+ */
+export async function sumaHorasExtraAplicadasPorPeriodo(
+  conn: PoolConnection,
+  empresaId: number,
+  periodoId: number,
+): Promise<Map<number, number>> {
+  const [rows] = await conn.query<RowDataPacket[]>(
+    `SELECT id_empleado, SUM(monto) AS total
+     FROM horas_extra_registros
+     WHERE empresa_id = ? AND planilla_periodo_id = ? AND estado = 'APLICADA_EN_PLANILLA'
+     GROUP BY id_empleado`,
+    [empresaId, periodoId],
+  );
+  const map = new Map<number, number>();
+  for (const r of rows) {
+    map.set(Number(r.id_empleado), Number(r.total ?? 0));
+  }
+  return map;
+}
+
+/**
+ * Fase H2: si el periodo tiene horas extra ya APLICADA_EN_PLANILLA
+ * vinculadas (planilla_periodo_id = periodo.id), no se puede cancelar sin
+ * antes revertirlas — mismo criterio ya usado para cuotas D1/D2. La
+ * reversión explícita no está implementada todavía. Se llama desde
+ * cancelarPeriodo() de planillas.ts antes de cambiar el estado.
+ */
+export async function tieneHorasExtraAplicadasEnPeriodo(
+  empresaId: number,
+  periodoId: number,
+): Promise<boolean> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT id FROM horas_extra_registros
+     WHERE empresa_id = ? AND planilla_periodo_id = ? AND estado = 'APLICADA_EN_PLANILLA'
+     LIMIT 1`,
+    [empresaId, periodoId],
+  );
+  return rows.length > 0;
+}
+
+/**
+ * Detalle itemizado de horas extra aplicadas a un empleado en un periodo
+ * específico — para la boleta, mismo formato (concepto/monto/fecha/notas)
+ * que ItemDetalle de planillas.ts y que listarCuotasAplicadasDetalle de
+ * descuentos.ts (no se importa el tipo, para evitar un ciclo de imports;
+ * es estructuralmente compatible, se concatena sin problema).
+ */
+export async function listarHorasExtraAplicadasDetalle(
+  empresaId: number,
+  empleadoId: number,
+  periodoId: number,
+): Promise<{ concepto: string; monto: number; fecha: string; notas: string }[]> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT fecha, horas, monto, motivo
+     FROM horas_extra_registros
+     WHERE empresa_id = ? AND planilla_periodo_id = ? AND estado = 'APLICADA_EN_PLANILLA'
+       AND id_empleado = ?
+     ORDER BY fecha`,
+    [empresaId, periodoId, empleadoId],
+  );
+  return rows.map((r) => ({
+    concepto: `Horas extra — ${Number(r.horas).toFixed(2)} h`,
+    monto: Number(r.monto ?? 0),
+    fecha: toIsoDate(r.fecha) ?? "",
+    notas: r.motivo ? String(r.motivo) : "",
+  }));
 }

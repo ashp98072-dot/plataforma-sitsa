@@ -15,6 +15,11 @@ import {
   sumaCuotasAplicadasPorPeriodo,
   tieneCuotasAplicadasEnPeriodo,
 } from "@/lib/rrhh/descuentos";
+import {
+  aplicarHorasExtraElegibles,
+  sumaHorasExtraAplicadasPorPeriodo,
+  tieneHorasExtraAplicadasEnPeriodo,
+} from "@/lib/rrhh/horas-extra";
 import { registrarAuditoria } from "@/lib/auditoria";
 
 /** Fase P0: identidad opcional de quincena/mes de un periodo. */
@@ -358,7 +363,12 @@ export type ResultadoCancelarPeriodo =
   | { ok: true }
   | {
       ok: false;
-      motivo: "no_encontrado" | "motivo_requerido" | "estado_no_permite" | "cuotas_aplicadas";
+      motivo:
+        | "no_encontrado"
+        | "motivo_requerido"
+        | "estado_no_permite"
+        | "cuotas_aplicadas"
+        | "horas_extra_aplicadas";
       mensaje: string;
     };
 
@@ -371,6 +381,9 @@ export type ResultadoCancelarPeriodo =
  * Fase D2: si el periodo ya tiene cuotas D1 APLICADA vinculadas, se bloquea
  * la cancelación — no dejamos descuentos cobrados contra una planilla
  * cancelada. La reversión explícita de cuotas no está implementada todavía.
+ *
+ * Fase H2: mismo criterio para horas extra APLICADA_EN_PLANILLA — no
+ * dejamos horas extra pagadas contra una planilla cancelada.
  */
 export async function cancelarPeriodo(
   empresaId: number,
@@ -403,6 +416,13 @@ export async function cancelarPeriodo(
       ok: false,
       motivo: "cuotas_aplicadas",
       mensaje: "El periodo tiene descuentos aplicados. Debe revertirse antes de cancelarlo.",
+    };
+  }
+  if (await tieneHorasExtraAplicadasEnPeriodo(empresaId, periodoId)) {
+    return {
+      ok: false,
+      motivo: "horas_extra_aplicadas",
+      mensaje: "El periodo tiene horas extra aplicadas. Debe revertirse antes de cancelarlo.",
     };
   }
 
@@ -603,6 +623,15 @@ export async function listarPrestacionesDetalle(
  * marcar el periodo Generada — ocurre en una única transacción: si algo
  * falla, se revierte todo (nunca queda una cuota APLICADA sin su línea).
  *
+ * Fase H2 — horas extra APROBADA se aplican dentro de la MISMA transacción
+ * (mismo patrón exacto que D2 para cuotas D1 — ver aplicarHorasExtraElegibles
+ * en horas-extra.ts): transición APROBADA→APLICADA_EN_PLANILLA atómica y
+ * verificada, sumadas a `otros_ingresos` de cada línea junto con las
+ * prestaciones legado (fuente distinta, sin solape — H1/H2 ya no escriben en
+ * rrhh_prestaciones). Al regenerar, las horas ya APLICADA_EN_PLANILLA de este
+ * mismo periodo no se vuelven a tocar pero sí se vuelven a sumar (mismo
+ * criterio que las cuotas D1).
+ *
  * Fase D3 — IGSS quincenal. El IGSS mensual (sueldo_base × IGSS_LABORAL_PCT,
  * sueldo_base ya es el sueldo CONTRACTUAL mensual del empleado, no se divide
  * en ningún punto del cálculo) es la fuente de verdad; cómo se retiene según
@@ -631,6 +660,9 @@ export async function generarLineasPeriodo(
   cuotasAplicadas: number;
   totalCuotasAplicado: number;
   empleadosSinIgssQ1: number;
+  horasExtraAplicadas: number;
+  totalHorasExtraHoras: number;
+  totalHorasExtraMonto: number;
 }> {
   await asegurarSchemaPlanillas();
   const periodo = await obtenerPeriodo(empresaId, periodoId);
@@ -680,6 +712,9 @@ export async function generarLineasPeriodo(
   let cuotasAplicadas = 0;
   let totalCuotasAplicado = 0;
   let empleadosSinIgssQ1 = 0;
+  let horasExtraAplicadas = 0;
+  let totalHorasExtraHoras = 0;
+  let totalHorasExtraMonto = 0;
   try {
     await conn.beginTransaction();
 
@@ -696,6 +731,21 @@ export async function generarLineasPeriodo(
     // APLICADA de una generación anterior de este mismo periodo — ambas
     // comparten planilla_periodo_id = periodo.id en este punto.
     const descuentosD1 = await sumaCuotasAplicadasPorPeriodo(conn, empresaId, periodoId);
+
+    // Fase H2: mismo patrón exacto que las cuotas D1 justo arriba.
+    const aplicadoHoras = await aplicarHorasExtraElegibles(conn, empresaId, {
+      id: periodo.id,
+      fechaInicio: periodo.fechaInicio,
+      fechaFin: periodo.fechaFin,
+    });
+    horasExtraAplicadas = aplicadoHoras.aplicadas;
+    totalHorasExtraHoras = aplicadoHoras.totalHoras;
+    totalHorasExtraMonto = aplicadoHoras.totalMonto;
+    const horasExtraPorEmpleado = await sumaHorasExtraAplicadasPorPeriodo(
+      conn,
+      empresaId,
+      periodoId,
+    );
 
     const igssQ1PorEmpleado = new Map<number, number>();
     if (necesitaIgssQ1) {
@@ -729,7 +779,14 @@ export async function generarLineasPeriodo(
             ? 0
             : 250;
       const bonoHerr = Number(e.bono_herramientas ?? 0) || 0;
-      const otros = Number(prestaciones.get(empId) ?? 0);
+      // Fase H2: prestaciones legado (incluye horas extra históricas
+      // pre-H1, ya insertadas ahí bajo el modelo anterior) + horas extra
+      // H2 aplicadas a este periodo (fuente nueva y separada — H1/H2 ya no
+      // escriben en rrhh_prestaciones, así que no hay solape/doble conteo
+      // entre ambas fuentes).
+      const otros = redondearQ(
+        Number(prestaciones.get(empId) ?? 0) + Number(horasExtraPorEmpleado.get(empId) ?? 0),
+      );
       const desc = redondearQ(
         Number(descuentosLegado.get(empId) ?? 0) + Number(descuentosD1.get(empId) ?? 0),
       );
@@ -839,8 +896,26 @@ export async function generarLineasPeriodo(
       detalle: `Periodo #${periodoId} ${periodo.codigo} (Q2) · ${empleadosSinIgssQ1} empleado(s) sin retención Q1 · se aplicó el saldo IGSS mensual completo en Q2.`,
     });
   }
+  // Fase H2: un solo resumen por periodo, no una entrada por registro.
+  if (horasExtraAplicadas > 0) {
+    await registrarAuditoria({
+      empresaId,
+      usuario: opts.usuario,
+      accion: "aplicar_horas_extra_planilla",
+      modulo: "rrhh",
+      detalle: `Periodo #${periodoId} ${periodo.codigo} · ${horasExtraAplicadas} registro(s) de horas extra aplicado(s) · ${totalHorasExtraHoras.toFixed(2)}h · Q${totalHorasExtraMonto.toFixed(2)}`,
+    });
+  }
 
-  return { generadas, cuotasAplicadas, totalCuotasAplicado, empleadosSinIgssQ1 };
+  return {
+    generadas,
+    cuotasAplicadas,
+    totalCuotasAplicado,
+    empleadosSinIgssQ1,
+    horasExtraAplicadas,
+    totalHorasExtraHoras,
+    totalHorasExtraMonto,
+  };
 }
 
 export type CuadreIgssEmpleado = {
