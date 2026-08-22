@@ -55,7 +55,8 @@ export default function LimpiarModuloPage() {
   }, [router, slug]);
 
   useEffect(() => {
-    void cargarEmpresas();
+    const timer = window.setTimeout(() => void cargarEmpresas(), 0);
+    return () => window.clearTimeout(timer);
   }, [cargarEmpresas]);
 
   const cargarConteos = useCallback(async () => {
@@ -82,7 +83,9 @@ export default function LimpiarModuloPage() {
   }, [empresaId, modulo]);
 
   useEffect(() => {
-    if (allowed && empresaId) void cargarConteos();
+    if (!allowed || !empresaId) return;
+    const timer = window.setTimeout(() => void cargarConteos(), 0);
+    return () => window.clearTimeout(timer);
   }, [allowed, empresaId, modulo, cargarConteos]);
 
   async function ejecutar() {
@@ -171,11 +174,11 @@ export default function LimpiarModuloPage() {
         </div>
 
         <div>
-          <p className="text-sm font-medium">2. Módulo (solo de esa empresa)</p>
+          <p className="text-sm font-medium">2. Módulo o área de RRHH</p>
           <p className="mb-2 text-xs text-[var(--muted)]">
             {MODULO_LIMPIEZA_NOTA[modulo]}
           </p>
-          <div className="flex flex-wrap gap-2">
+          <div className="grid gap-2 sm:grid-cols-2">
             {MODULOS_LIMPIEZA.map((m) => {
               const activa = modulo === m;
               return (
@@ -184,25 +187,13 @@ export default function LimpiarModuloPage() {
                   type="button"
                   onClick={() => setModulo(m)}
                   className={[
-                    "rounded-lg border px-3 py-1.5 text-xs font-medium transition",
+                    "rounded-lg border px-3 py-2 text-left text-xs font-medium transition",
                     activa
                       ? "border-amber-500 bg-amber-950/40 text-amber-100"
                       : "border-[var(--border)] bg-[var(--input)] text-[var(--muted)] hover:text-[var(--nav-text-strong)]",
                   ].join(" ")}
                 >
-                  {m === "rrhh"
-                    ? "RRHH"
-                    : m === "flota"
-                      ? "Flota"
-                      : m === "operaciones"
-                        ? "Operaciones"
-                        : m === "contabilidad"
-                          ? "Contabilidad"
-                          : m === "cms"
-                            ? "CMS"
-                            : m === "reciclaje"
-                              ? "Reciclaje"
-                              : "Tarimas"}
+                  {MODULO_LIMPIEZA_LABEL[m]}
                 </button>
               );
             })}
@@ -251,9 +242,9 @@ export default function LimpiarModuloPage() {
             {confirmacionEsperada || "…"}
           </span>
           <span className="mt-1 block text-[11px]">
-            Ejemplo: si eliges Ecoplanet + RRHH →{" "}
+            Ejemplo: si eliges Ecoplanet + Planillas →{" "}
             <span className="font-mono text-amber-100/90">
-              ECOPLANET LIMPIAR RRHH
+              ECOPLANET LIMPIAR RRHH_PLANILLAS
             </span>
           </span>
           <input

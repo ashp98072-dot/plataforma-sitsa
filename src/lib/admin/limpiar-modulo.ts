@@ -67,6 +67,49 @@ export async function contarModuloEmpresa(
           incidencias: await count("incidencias"),
           vacaciones: await count("vacaciones"),
         };
+      case "rrhh_planillas":
+        return {
+          periodos: await count("rrhh_planilla_periodos"),
+          lineas: await count("rrhh_planilla_lineas"),
+        };
+      case "rrhh_vacaciones":
+        return {
+          solicitudes: await count("solicitudes_vacaciones"),
+          vacaciones: await count("vacaciones"),
+          saldos: await count("saldos_vacaciones"),
+          incidencias_vacaciones: await count(
+            "incidencias",
+            "empresa_id = ? AND tipo IN ('Vacaciones', 'A cuenta de Vacaciones')",
+          ),
+        };
+      case "rrhh_marcajes":
+        return {
+          jornadas: await count("sesiones_trabajo"),
+          marcajes_en_ruta: await count("marcajes_en_ruta"),
+        };
+      case "rrhh_incidencias":
+        return {
+          incidencias: await count("incidencias"),
+          evidencias: await count("evidencias_incidencias"),
+        };
+      case "rrhh_descuentos":
+        return {
+          descuentos: await count("rrhh_descuentos_maestro"),
+          cuotas: await count("rrhh_descuento_cuotas"),
+          abonos: await count("rrhh_descuento_abonos"),
+          descuentos_heredados: await count("rrhh_descuentos"),
+        };
+      case "rrhh_horas_extra":
+        return {
+          horas_extra: await count("horas_extra_registros"),
+          prestaciones: await count("rrhh_prestaciones"),
+        };
+      case "rrhh_inventario":
+        return {
+          articulos: await count("inventario_rrhh"),
+          movimientos: await count("inventario_rrhh_movimientos"),
+          entregas: await count("inventario_rrhh_entregas"),
+        };
       case "flota":
         return {
           vehiculos: await count("flota_vehiculos"),
@@ -108,6 +151,24 @@ async function limpiarRrhh(
   empresaId: number,
 ): Promise<Record<string, number>> {
   const out: Record<string, number> = {};
+
+  // Respeta el mismo orden seguro de las limpiezas parciales antes de
+  // eliminar empleados. Esto también cubre las tablas RRHH agregadas en
+  // fases posteriores a la implementación original de esta pantalla.
+  const parciales: Array<[string, Record<string, number>]> = [
+    ["planillas", await limpiarPlanillasRrhh(conn, empresaId)],
+    ["vacaciones", await limpiarVacacionesRrhh(conn, empresaId)],
+    ["incidencias", await limpiarIncidenciasRrhh(conn, empresaId)],
+    ["marcajes", await limpiarMarcajesRrhh(conn, empresaId)],
+    ["horas_extra", await limpiarHorasExtraRrhh(conn, empresaId)],
+    ["inventario", await limpiarInventarioRrhh(conn, empresaId)],
+    ["descuentos", await limpiarDescuentosRrhh(conn, empresaId)],
+  ];
+  for (const [grupo, conteos] of parciales) {
+    for (const [tabla, total] of Object.entries(conteos)) {
+      out[`${grupo}_${tabla}`] = total;
+    }
+  }
 
   out.flota_viajes_empleado_null = await delSiExiste(
     conn,
@@ -223,6 +284,175 @@ async function limpiarRrhh(
     [empresaId],
   );
   // configuracion + feriados se conservan (geocerca, horarios)
+  return out;
+}
+
+async function limpiarPlanillasRrhh(
+  conn: Awaited<ReturnType<ReturnType<typeof getPool>["getConnection"]>>,
+  empresaId: number,
+): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  // Una planilla de prueba no debe consumir definitivamente sus insumos.
+  out.cuotas_reabiertas = await delSiExiste(
+    conn,
+    "rrhh_descuento_cuotas",
+    `UPDATE rrhh_descuento_cuotas
+     SET estado = 'PENDIENTE', planilla_periodo_id = NULL, monto_aplicado = NULL,
+         aplicado_en = NULL, aplicado_por = NULL
+     WHERE empresa_id = ? AND planilla_periodo_id IS NOT NULL AND estado = 'APLICADA'`,
+    [empresaId],
+  );
+  out.horas_extra_reabiertas = await delSiExiste(
+    conn,
+    "horas_extra_registros",
+    `UPDATE horas_extra_registros
+     SET estado = 'APROBADA', planilla_periodo_id = NULL, aplicado_en = NULL
+     WHERE empresa_id = ? AND planilla_periodo_id IS NOT NULL
+       AND estado = 'APLICADA_EN_PLANILLA'`,
+    [empresaId],
+  );
+  out.lineas = await delSiExiste(
+    conn,
+    "rrhh_planilla_lineas",
+    "DELETE FROM rrhh_planilla_lineas WHERE empresa_id = ?",
+    [empresaId],
+  );
+  out.periodos = await delSiExiste(
+    conn,
+    "rrhh_planilla_periodos",
+    "DELETE FROM rrhh_planilla_periodos WHERE empresa_id = ?",
+    [empresaId],
+  );
+  return out;
+}
+
+async function limpiarVacacionesRrhh(
+  conn: Awaited<ReturnType<ReturnType<typeof getPool>["getConnection"]>>,
+  empresaId: number,
+): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  out.evidencias = await delSiExiste(
+    conn,
+    "evidencias_incidencias",
+    `DELETE e FROM evidencias_incidencias e
+     INNER JOIN incidencias i ON i.id = e.incidencia_id
+     WHERE i.empresa_id = ? AND i.tipo IN ('Vacaciones', 'A cuenta de Vacaciones')`,
+    [empresaId],
+  );
+  out.consumos = await delSiExiste(
+    conn,
+    "detalle_consumo_vacaciones",
+    `DELETE d FROM detalle_consumo_vacaciones d
+     INNER JOIN saldos_vacaciones s ON s.id = d.saldo_id
+     WHERE s.empresa_id = ?`,
+    [empresaId],
+  );
+  out.solicitudes = await delSiExiste(
+    conn,
+    "solicitudes_vacaciones",
+    "DELETE FROM solicitudes_vacaciones WHERE empresa_id = ?",
+    [empresaId],
+  );
+  out.vacaciones = await delSiExiste(
+    conn,
+    "vacaciones",
+    "DELETE FROM vacaciones WHERE empresa_id = ?",
+    [empresaId],
+  );
+  out.incidencias = await delSiExiste(
+    conn,
+    "incidencias",
+    `DELETE FROM incidencias
+     WHERE empresa_id = ? AND tipo IN ('Vacaciones', 'A cuenta de Vacaciones')`,
+    [empresaId],
+  );
+  out.saldos = await delSiExiste(
+    conn,
+    "saldos_vacaciones",
+    "DELETE FROM saldos_vacaciones WHERE empresa_id = ?",
+    [empresaId],
+  );
+  return out;
+}
+
+async function limpiarMarcajesRrhh(
+  conn: Awaited<ReturnType<ReturnType<typeof getPool>["getConnection"]>>,
+  empresaId: number,
+): Promise<Record<string, number>> {
+  return {
+    marcajes_en_ruta: await delSiExiste(
+      conn,
+      "marcajes_en_ruta",
+      "DELETE FROM marcajes_en_ruta WHERE empresa_id = ?",
+      [empresaId],
+    ),
+    jornadas: await delSiExiste(
+      conn,
+      "sesiones_trabajo",
+      "DELETE FROM sesiones_trabajo WHERE empresa_id = ?",
+      [empresaId],
+    ),
+  };
+}
+
+async function limpiarIncidenciasRrhh(
+  conn: Awaited<ReturnType<ReturnType<typeof getPool>["getConnection"]>>,
+  empresaId: number,
+): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  out.evidencias = await delSiExiste(
+    conn,
+    "evidencias_incidencias",
+    `DELETE e FROM evidencias_incidencias e
+     INNER JOIN incidencias i ON i.id = e.incidencia_id WHERE i.empresa_id = ?`,
+    [empresaId],
+  );
+  out.consumos = await delSiExiste(
+    conn,
+    "detalle_consumo_vacaciones",
+    `DELETE d FROM detalle_consumo_vacaciones d
+     INNER JOIN incidencias i ON i.id = d.incidencia_id WHERE i.empresa_id = ?`,
+    [empresaId],
+  );
+  out.incidencias = await delSiExiste(
+    conn,
+    "incidencias",
+    "DELETE FROM incidencias WHERE empresa_id = ?",
+    [empresaId],
+  );
+  return out;
+}
+
+async function limpiarDescuentosRrhh(
+  conn: Awaited<ReturnType<ReturnType<typeof getPool>["getConnection"]>>,
+  empresaId: number,
+): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  out.cuotas = await delSiExiste(conn, "rrhh_descuento_cuotas", "DELETE FROM rrhh_descuento_cuotas WHERE empresa_id = ?", [empresaId]);
+  out.abonos = await delSiExiste(conn, "rrhh_descuento_abonos", "DELETE FROM rrhh_descuento_abonos WHERE empresa_id = ?", [empresaId]);
+  out.descuentos = await delSiExiste(conn, "rrhh_descuentos_maestro", "DELETE FROM rrhh_descuentos_maestro WHERE empresa_id = ?", [empresaId]);
+  out.heredados = await delSiExiste(conn, "rrhh_descuentos", "DELETE FROM rrhh_descuentos WHERE empresa_id = ?", [empresaId]);
+  return out;
+}
+
+async function limpiarHorasExtraRrhh(
+  conn: Awaited<ReturnType<ReturnType<typeof getPool>["getConnection"]>>,
+  empresaId: number,
+): Promise<Record<string, number>> {
+  return {
+    horas_extra: await delSiExiste(conn, "horas_extra_registros", "DELETE FROM horas_extra_registros WHERE empresa_id = ?", [empresaId]),
+    prestaciones: await delSiExiste(conn, "rrhh_prestaciones", "DELETE FROM rrhh_prestaciones WHERE empresa_id = ?", [empresaId]),
+  };
+}
+
+async function limpiarInventarioRrhh(
+  conn: Awaited<ReturnType<ReturnType<typeof getPool>["getConnection"]>>,
+  empresaId: number,
+): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  out.entregas = await delSiExiste(conn, "inventario_rrhh_entregas", "DELETE FROM inventario_rrhh_entregas WHERE empresa_id = ?", [empresaId]);
+  out.movimientos = await delSiExiste(conn, "inventario_rrhh_movimientos", "DELETE FROM inventario_rrhh_movimientos WHERE empresa_id = ?", [empresaId]);
+  out.articulos = await delSiExiste(conn, "inventario_rrhh", "DELETE FROM inventario_rrhh WHERE empresa_id = ?", [empresaId]);
   return out;
 }
 
@@ -441,6 +671,27 @@ export async function limpiarModuloEmpresa(opts: {
     switch (opts.modulo) {
       case "rrhh":
         afectados = await limpiarRrhh(conn, opts.empresaId);
+        break;
+      case "rrhh_planillas":
+        afectados = await limpiarPlanillasRrhh(conn, opts.empresaId);
+        break;
+      case "rrhh_vacaciones":
+        afectados = await limpiarVacacionesRrhh(conn, opts.empresaId);
+        break;
+      case "rrhh_marcajes":
+        afectados = await limpiarMarcajesRrhh(conn, opts.empresaId);
+        break;
+      case "rrhh_incidencias":
+        afectados = await limpiarIncidenciasRrhh(conn, opts.empresaId);
+        break;
+      case "rrhh_descuentos":
+        afectados = await limpiarDescuentosRrhh(conn, opts.empresaId);
+        break;
+      case "rrhh_horas_extra":
+        afectados = await limpiarHorasExtraRrhh(conn, opts.empresaId);
+        break;
+      case "rrhh_inventario":
+        afectados = await limpiarInventarioRrhh(conn, opts.empresaId);
         break;
       case "flota":
         afectados = await limpiarFlota(conn, opts.empresaId);
