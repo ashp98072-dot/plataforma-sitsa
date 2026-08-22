@@ -1,4 +1,5 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
+import type { PoolConnection } from "mysql2/promise";
 import { execute, getPool, query } from "@/lib/db";
 import { toIsoDate, hoyLocal } from "./dates";
 import { asegurarSchemaEmpleados } from "./empleados-schema";
@@ -68,6 +69,20 @@ function numOrNull(v: unknown): number | null {
   if (v == null || v === "") return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * true SOLO si el error es específicamente "columna desconocida"
+ * (ER_BAD_FIELD_ERROR / errno 1054) — es decir, la migración que agrega esa
+ * columna todavía no se aplicó en esta base. Se usa para decidir si
+ * crearEmpleado/actualizarEmpleado deben degradar a un INSERT/UPDATE mínimo
+ * (compatibilidad con una base sin migrar). Cualquier otro error (FK,
+ * tabla inexistente, duplicado, validación, etc.) NO debe camuflarse como
+ * "hay que degradar" — debe abortar toda la transacción.
+ */
+function esColumnaDesconocida(e: unknown): boolean {
+  const err = e as { code?: string; errno?: number };
+  return err?.code === "ER_BAD_FIELD_ERROR" || err?.errno === 1054;
 }
 
 function componerNombre(parts: {
@@ -341,35 +356,28 @@ export async function supervisoresValidos(
 /**
  * Reemplaza todas las relaciones de supervisor de `empleadoId` en
  * empleado_supervisores por `supervisorIds` (ya validados por
- * supervisoresValidos). Transaccional — borra las relaciones actuales e
- * inserta las nuevas dentro de la misma transacción, así nunca queda un
- * estado a medio guardar si algo falla a mitad de camino.
+ * supervisoresValidos). Recibe `conn`: participa en la MISMA transacción
+ * que el INSERT/UPDATE de `empleados` en crearEmpleado/actualizarEmpleado
+ * — no abre ninguna transacción propia. Así, si algo falla en cualquiera de
+ * los dos pasos, el rollback deshace ambos (el empleado, su supervisor_id
+ * legado, y las relaciones de la tabla puente) como una sola unidad.
  */
 export async function sincronizarSupervisoresEmpleado(
+  conn: PoolConnection,
   empresaId: number,
   empleadoId: number,
   supervisorIds: number[],
 ): Promise<void> {
-  const conn = await getPool().getConnection();
-  try {
-    await conn.beginTransaction();
+  await conn.execute(
+    `DELETE FROM empleado_supervisores WHERE empresa_id = ? AND empleado_id = ?`,
+    [empresaId, empleadoId],
+  );
+  for (const supervisorId of supervisorIds) {
     await conn.execute(
-      `DELETE FROM empleado_supervisores WHERE empresa_id = ? AND empleado_id = ?`,
-      [empresaId, empleadoId],
+      `INSERT INTO empleado_supervisores (empresa_id, empleado_id, supervisor_id)
+       VALUES (?, ?, ?)`,
+      [empresaId, empleadoId, supervisorId],
     );
-    for (const supervisorId of supervisorIds) {
-      await conn.execute(
-        `INSERT INTO empleado_supervisores (empresa_id, empleado_id, supervisor_id)
-         VALUES (?, ?, ?)`,
-        [empresaId, empleadoId, supervisorId],
-      );
-    }
-    await conn.commit();
-  } catch (e) {
-    await conn.rollback();
-    throw e;
-  } finally {
-    conn.release();
   }
 }
 
@@ -549,118 +557,141 @@ export async function crearEmpleado(
     throw new Error(supervisores.mensaje);
   }
 
+  // Alta, numeración y sincronización de supervisores ocurren en UNA sola
+  // transacción: si cualquier paso falla (incluida la tabla puente), se
+  // revierte todo — nunca queda un empleado a medio guardar ni un
+  // supervisor_id legado desincronizado de empleado_supervisores.
+  const conn = await getPool().getConnection();
   let empleadoId: number;
-
   try {
-    const result = await execute(
-      `INSERT INTO empleados (
-        empresa_id, codigo, nombre, puesto, categoria_ops, tipo_horario,
-        fecha_alta, fecha_inicio_laboral, hora_entrada_teorica, hora_salida_teorica, estado,
-        dpi, nit, igss, irtra, telefono, email, direccion, sexo, fecha_nacimiento,
-        tipo_contrato, forma_pago, sueldo_base, bono_incentivo, bono_herramientas, profesion,
-        primer_nombre, segundo_nombre, tercer_nombre, cuarto_nombre,
-        primer_apellido, segundo_apellido, apellido_casada,
-        pais_origen, municipio, etnia, religion, idioma,
-        licencia_numero, licencia_tipo, licencia_vence, fecha_egreso, observaciones,
-        cuenta_bancaria, tipo_cuenta, banco, contacto_emergencia, supervisor_id
-      ) VALUES (
-        ?,?,?,?,?,?,?,?,?,?,?,
-        ?,?,?,?,?,?,?,?,?,
-        ?,?,?,?,?,?,
-        ?,?,?,?,?,?,?,
-        ?,?,?,?,?,
-        ?,?,?,?,?,
-        ?,?,?,?,?
-      )`,
-      [
-        empresaId,
-        data.codigo.trim(),
-        f.nombre,
-        data.puesto ?? "",
-        f.cat,
-        data.tipoHorario,
-        data.fechaAlta,
-        data.fechaInicioLaboral ?? null,
-        data.horaEntradaTeorica,
-        data.horaSalidaTeorica,
-        data.estado,
-        f.dpi,
-        f.nit,
-        f.igss,
-        f.irtra,
-        f.telefono,
-        f.email,
-        f.direccion,
-        f.sexo,
-        f.fechaNacimiento,
-        f.tipoContrato,
-        f.formaPago,
-        f.sueldoBase,
-        f.bonoIncentivo,
-        f.bonoHerramientas,
-        f.profesion,
-        f.primerNombre,
-        f.segundoNombre,
-        f.tercerNombre,
-        f.cuartoNombre,
-        f.primerApellido,
-        f.segundoApellido,
-        f.apellidoCasada,
-        f.paisOrigen,
-        f.municipio,
-        f.etnia,
-        f.religion,
-        f.idioma,
-        f.licenciaNumero,
-        f.licenciaTipo,
-        f.licenciaVence,
-        f.fechaEgreso,
-        f.observaciones,
-        f.cuentaBancaria,
-        f.tipoCuenta,
-        f.banco,
-        f.contactoEmergencia,
-        f.supervisorId,
-      ],
+    await conn.beginTransaction();
+
+    // schemaCompleto=false solo si el motivo del fallo del INSERT completo
+    // fue específicamente una columna inexistente (ver esColumnaDesconocida)
+    // — en ese caso se degrada a un alta mínima y se omite la
+    // sincronización de supervisores (la tabla puente tampoco existiría
+    // todavía). Cualquier otro error se relanza y aborta la transacción.
+    let schemaCompleto = true;
+    try {
+      const [result] = await conn.execute<ResultSetHeader>(
+        `INSERT INTO empleados (
+          empresa_id, codigo, nombre, puesto, categoria_ops, tipo_horario,
+          fecha_alta, fecha_inicio_laboral, hora_entrada_teorica, hora_salida_teorica, estado,
+          dpi, nit, igss, irtra, telefono, email, direccion, sexo, fecha_nacimiento,
+          tipo_contrato, forma_pago, sueldo_base, bono_incentivo, bono_herramientas, profesion,
+          primer_nombre, segundo_nombre, tercer_nombre, cuarto_nombre,
+          primer_apellido, segundo_apellido, apellido_casada,
+          pais_origen, municipio, etnia, religion, idioma,
+          licencia_numero, licencia_tipo, licencia_vence, fecha_egreso, observaciones,
+          cuenta_bancaria, tipo_cuenta, banco, contacto_emergencia, supervisor_id
+        ) VALUES (
+          ?,?,?,?,?,?,?,?,?,?,?,
+          ?,?,?,?,?,?,?,?,?,
+          ?,?,?,?,?,?,
+          ?,?,?,?,?,?,?,
+          ?,?,?,?,?,
+          ?,?,?,?,?,
+          ?,?,?,?,?
+        )`,
+        [
+          empresaId,
+          data.codigo.trim(),
+          f.nombre,
+          data.puesto ?? "",
+          f.cat,
+          data.tipoHorario,
+          data.fechaAlta,
+          data.fechaInicioLaboral ?? null,
+          data.horaEntradaTeorica,
+          data.horaSalidaTeorica,
+          data.estado,
+          f.dpi,
+          f.nit,
+          f.igss,
+          f.irtra,
+          f.telefono,
+          f.email,
+          f.direccion,
+          f.sexo,
+          f.fechaNacimiento,
+          f.tipoContrato,
+          f.formaPago,
+          f.sueldoBase,
+          f.bonoIncentivo,
+          f.bonoHerramientas,
+          f.profesion,
+          f.primerNombre,
+          f.segundoNombre,
+          f.tercerNombre,
+          f.cuartoNombre,
+          f.primerApellido,
+          f.segundoApellido,
+          f.apellidoCasada,
+          f.paisOrigen,
+          f.municipio,
+          f.etnia,
+          f.religion,
+          f.idioma,
+          f.licenciaNumero,
+          f.licenciaTipo,
+          f.licenciaVence,
+          f.fechaEgreso,
+          f.observaciones,
+          f.cuentaBancaria,
+          f.tipoCuenta,
+          f.banco,
+          f.contactoEmergencia,
+          f.supervisorId,
+        ],
+      );
+      empleadoId = Number(result.insertId);
+    } catch (e) {
+      if (!esColumnaDesconocida(e)) throw e;
+      schemaCompleto = false;
+      const [result] = await conn.execute<ResultSetHeader>(
+        `INSERT INTO empleados (
+          empresa_id, codigo, nombre, puesto, categoria_ops, tipo_horario,
+          fecha_alta, fecha_inicio_laboral, hora_entrada_teorica, hora_salida_teorica, estado
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          empresaId,
+          data.codigo.trim(),
+          f.nombre,
+          data.puesto ?? "",
+          f.cat,
+          data.tipoHorario,
+          data.fechaAlta,
+          data.fechaInicioLaboral ?? null,
+          data.horaEntradaTeorica,
+          data.horaSalidaTeorica,
+          data.estado,
+        ],
+      );
+      empleadoId = Number(result.insertId);
+    }
+
+    await conn.execute(
+      `UPDATE empleados
+       SET numero_empleado = LPAD(id, 6, '0')
+       WHERE id = ?
+         AND (
+           numero_empleado IS NULL
+           OR numero_empleado = ''
+         )`,
+      [empleadoId],
     );
 
-    empleadoId = Number((result as ResultSetHeader).insertId);
-  } catch {
-    const result = await execute(
-      `INSERT INTO empleados (
-        empresa_id, codigo, nombre, puesto, categoria_ops, tipo_horario,
-        fecha_alta, fecha_inicio_laboral, hora_entrada_teorica, hora_salida_teorica, estado
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        empresaId,
-        data.codigo.trim(),
-        f.nombre,
-        data.puesto ?? "",
-        f.cat,
-        data.tipoHorario,
-        data.fechaAlta,
-        data.fechaInicioLaboral ?? null,
-        data.horaEntradaTeorica,
-        data.horaSalidaTeorica,
-        data.estado,
-      ],
-    );
+    if (schemaCompleto) {
+      await sincronizarSupervisoresEmpleado(conn, empresaId, empleadoId, supervisores.ids);
+    }
 
-    empleadoId = Number((result as ResultSetHeader).insertId);
+    await conn.commit();
+  } catch (e) {
+    await conn.rollback();
+    throw e;
+  } finally {
+    conn.release();
   }
-
-  await execute(
-    `UPDATE empleados
-     SET numero_empleado = LPAD(id, 6, '0')
-     WHERE id = ?
-       AND (
-         numero_empleado IS NULL
-         OR numero_empleado = ''
-       )`,
-    [empleadoId],
-  );
-
-  await sincronizarSupervisoresEmpleado(empresaId, empleadoId, supervisores.ids);
 
   return empleadoId;
 }
@@ -681,102 +712,122 @@ export async function actualizarEmpleado(
   if (!supervisores.ok) {
     throw new Error(supervisores.mensaje);
   }
+  // Misma razón que en crearEmpleado: UPDATE de empleados + numero_empleado
+  // (no aplica aquí) + sincronización de supervisores en UNA transacción.
+  const conn = await getPool().getConnection();
+  let affectedRows: number;
   try {
-    const result = await execute(
-      `UPDATE empleados SET
-        codigo=?, nombre=?, puesto=?, categoria_ops=?, tipo_horario=?,
-        fecha_alta=?, fecha_inicio_laboral=?,
-        hora_entrada_teorica=?, hora_salida_teorica=?, estado=?,
-        dpi=?, nit=?, igss=?, irtra=?, telefono=?, email=?, direccion=?, sexo=?, fecha_nacimiento=?,
-        tipo_contrato=?, forma_pago=?, sueldo_base=?, bono_incentivo=?, bono_herramientas=?, profesion=?,
-        primer_nombre=?, segundo_nombre=?, tercer_nombre=?, cuarto_nombre=?,
-        primer_apellido=?, segundo_apellido=?, apellido_casada=?,
-        pais_origen=?, municipio=?, etnia=?, religion=?, idioma=?,
-        licencia_numero=?, licencia_tipo=?, licencia_vence=?, fecha_egreso=?, observaciones=?,
-        cuenta_bancaria=?, tipo_cuenta=?, banco=?, contacto_emergencia=?, supervisor_id=?,
-        horas_extra_habilitado=?
-       WHERE id=? AND empresa_id=?`,
-      [
-        data.codigo.trim(),
-        f.nombre,
-        data.puesto ?? "",
-        f.cat,
-        data.tipoHorario,
-        data.fechaAlta,
-        data.fechaInicioLaboral ?? null,
-        data.horaEntradaTeorica,
-        data.horaSalidaTeorica,
-        data.estado,
-        f.dpi,
-        f.nit,
-        f.igss,
-        f.irtra,
-        f.telefono,
-        f.email,
-        f.direccion,
-        f.sexo,
-        f.fechaNacimiento,
-        f.tipoContrato,
-        f.formaPago,
-        f.sueldoBase,
-        f.bonoIncentivo,
-        f.bonoHerramientas,
-        f.profesion,
-        f.primerNombre,
-        f.segundoNombre,
-        f.tercerNombre,
-        f.cuartoNombre,
-        f.primerApellido,
-        f.segundoApellido,
-        f.apellidoCasada,
-        f.paisOrigen,
-        f.municipio,
-        f.etnia,
-        f.religion,
-        f.idioma,
-        f.licenciaNumero,
-        f.licenciaTipo,
-        f.licenciaVence,
-        f.fechaEgreso,
-        f.observaciones,
-        f.cuentaBancaria,
-        f.tipoCuenta,
-        f.banco,
-        f.contactoEmergencia,
-        f.supervisorId,
-        f.horasExtraHabilitado,
-        id,
-        empresaId,
-      ],
-    );
-    if (result.affectedRows > 0) {
-      await sincronizarSupervisoresEmpleado(empresaId, id, supervisores.ids);
+    await conn.beginTransaction();
+
+    let schemaCompleto = true;
+    try {
+      const [result] = await conn.execute<ResultSetHeader>(
+        `UPDATE empleados SET
+          codigo=?, nombre=?, puesto=?, categoria_ops=?, tipo_horario=?,
+          fecha_alta=?, fecha_inicio_laboral=?,
+          hora_entrada_teorica=?, hora_salida_teorica=?, estado=?,
+          dpi=?, nit=?, igss=?, irtra=?, telefono=?, email=?, direccion=?, sexo=?, fecha_nacimiento=?,
+          tipo_contrato=?, forma_pago=?, sueldo_base=?, bono_incentivo=?, bono_herramientas=?, profesion=?,
+          primer_nombre=?, segundo_nombre=?, tercer_nombre=?, cuarto_nombre=?,
+          primer_apellido=?, segundo_apellido=?, apellido_casada=?,
+          pais_origen=?, municipio=?, etnia=?, religion=?, idioma=?,
+          licencia_numero=?, licencia_tipo=?, licencia_vence=?, fecha_egreso=?, observaciones=?,
+          cuenta_bancaria=?, tipo_cuenta=?, banco=?, contacto_emergencia=?, supervisor_id=?,
+          horas_extra_habilitado=?
+         WHERE id=? AND empresa_id=?`,
+        [
+          data.codigo.trim(),
+          f.nombre,
+          data.puesto ?? "",
+          f.cat,
+          data.tipoHorario,
+          data.fechaAlta,
+          data.fechaInicioLaboral ?? null,
+          data.horaEntradaTeorica,
+          data.horaSalidaTeorica,
+          data.estado,
+          f.dpi,
+          f.nit,
+          f.igss,
+          f.irtra,
+          f.telefono,
+          f.email,
+          f.direccion,
+          f.sexo,
+          f.fechaNacimiento,
+          f.tipoContrato,
+          f.formaPago,
+          f.sueldoBase,
+          f.bonoIncentivo,
+          f.bonoHerramientas,
+          f.profesion,
+          f.primerNombre,
+          f.segundoNombre,
+          f.tercerNombre,
+          f.cuartoNombre,
+          f.primerApellido,
+          f.segundoApellido,
+          f.apellidoCasada,
+          f.paisOrigen,
+          f.municipio,
+          f.etnia,
+          f.religion,
+          f.idioma,
+          f.licenciaNumero,
+          f.licenciaTipo,
+          f.licenciaVence,
+          f.fechaEgreso,
+          f.observaciones,
+          f.cuentaBancaria,
+          f.tipoCuenta,
+          f.banco,
+          f.contactoEmergencia,
+          f.supervisorId,
+          f.horasExtraHabilitado,
+          id,
+          empresaId,
+        ],
+      );
+      affectedRows = result.affectedRows;
+    } catch (e) {
+      if (!esColumnaDesconocida(e)) throw e;
+      schemaCompleto = false;
+      const [result] = await conn.execute<ResultSetHeader>(
+        `UPDATE empleados SET
+          codigo=?, nombre=?, puesto=?, categoria_ops=?, tipo_horario=?,
+          fecha_alta=?, fecha_inicio_laboral=?,
+          hora_entrada_teorica=?, hora_salida_teorica=?, estado=?
+         WHERE id=? AND empresa_id=?`,
+        [
+          data.codigo.trim(),
+          f.nombre,
+          data.puesto ?? "",
+          f.cat,
+          data.tipoHorario,
+          data.fechaAlta,
+          data.fechaInicioLaboral ?? null,
+          data.horaEntradaTeorica,
+          data.horaSalidaTeorica,
+          data.estado,
+          id,
+          empresaId,
+        ],
+      );
+      affectedRows = result.affectedRows;
     }
-    return result.affectedRows > 0;
-  } catch {
-    const result = await execute(
-      `UPDATE empleados SET
-        codigo=?, nombre=?, puesto=?, categoria_ops=?, tipo_horario=?,
-        fecha_alta=?, fecha_inicio_laboral=?,
-        hora_entrada_teorica=?, hora_salida_teorica=?, estado=?
-       WHERE id=? AND empresa_id=?`,
-      [
-        data.codigo.trim(),
-        f.nombre,
-        data.puesto ?? "",
-        f.cat,
-        data.tipoHorario,
-        data.fechaAlta,
-        data.fechaInicioLaboral ?? null,
-        data.horaEntradaTeorica,
-        data.horaSalidaTeorica,
-        data.estado,
-        id,
-        empresaId,
-      ],
-    );
-    return result.affectedRows > 0;
+
+    if (affectedRows > 0 && schemaCompleto) {
+      await sincronizarSupervisoresEmpleado(conn, empresaId, id, supervisores.ids);
+    }
+
+    await conn.commit();
+  } catch (e) {
+    await conn.rollback();
+    throw e;
+  } finally {
+    conn.release();
   }
+  return affectedRows > 0;
 }
 
 export async function eliminarEmpleado(
