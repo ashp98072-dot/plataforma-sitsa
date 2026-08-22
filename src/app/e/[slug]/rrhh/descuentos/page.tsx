@@ -92,6 +92,8 @@ type FiltrosLista = {
   estado: "" | Estado;
   clasificacion: "" | ClasificacionFiltro;
   concepto: string;
+  fechaDesde: string;
+  fechaHasta: string;
 };
 
 type ResultadoLista =
@@ -113,6 +115,8 @@ async function obtenerListaDescuentos(
   if (filtros.estado) params.set("estado", filtros.estado);
   if (filtros.clasificacion) params.set("clasificacion", filtros.clasificacion);
   if (filtros.concepto.trim()) params.set("concepto", filtros.concepto.trim());
+  if (filtros.fechaDesde) params.set("fechaDesde", filtros.fechaDesde);
+  if (filtros.fechaHasta) params.set("fechaHasta", filtros.fechaHasta);
   try {
     const [e, d] = await Promise.all([
       fetch(`/api/empresas/${slug}/empleados`).then((r) => r.json()),
@@ -159,6 +163,8 @@ export default function DescuentosPage() {
   const [fEstado, setFEstado] = useState<"" | Estado>("");
   const [fClasificacion, setFClasificacion] = useState<"" | ClasificacionFiltro>("");
   const [fConcepto, setFConcepto] = useState("");
+  const [fFechaDesde, setFFechaDesde] = useState("");
+  const [fFechaHasta, setFFechaHasta] = useState("");
 
   // Formulario de creación
   const [empleadoId, setEmpleadoId] = useState(0);
@@ -194,6 +200,8 @@ export default function DescuentosPage() {
         estado: fEstado,
         clasificacion: fClasificacion,
         concepto: fConcepto,
+        fechaDesde: fFechaDesde,
+        fechaHasta: fFechaHasta,
       });
       if (ignore) return;
       if (!r.ok) {
@@ -209,7 +217,7 @@ export default function DescuentosPage() {
     return () => {
       ignore = true;
     };
-  }, [slug, fEmpleado, fEstado, fClasificacion, fConcepto]);
+  }, [slug, fEmpleado, fEstado, fClasificacion, fConcepto, fFechaDesde, fFechaHasta]);
 
   async function cargar() {
     const r = await obtenerListaDescuentos(slug, {
@@ -217,6 +225,8 @@ export default function DescuentosPage() {
       estado: fEstado,
       clasificacion: fClasificacion,
       concepto: fConcepto,
+      fechaDesde: fFechaDesde,
+      fechaHasta: fFechaHasta,
     });
     if (!r.ok) {
       setError(r.error);
@@ -349,6 +359,17 @@ export default function DescuentosPage() {
   }
 
   const rowsFiltradas = useMemo(() => rows, [rows]);
+  const totales = useMemo(
+    () => rows.reduce(
+      (acc, r) => ({
+        original: acc.original + r.montoOriginal,
+        pagado: acc.pagado + r.pagado,
+        saldo: acc.saldo + r.saldo,
+      }),
+      { original: 0, pagado: 0, saldo: 0 },
+    ),
+    [rows],
+  );
 
   const input =
     "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm";
@@ -519,6 +540,28 @@ export default function DescuentosPage() {
           value={fConcepto}
           onChange={(e) => setFConcepto(e.target.value)}
         />
+        <label className="flex items-center gap-1 text-xs text-[var(--muted)]">
+          Desde
+          <input type="date" className={input} value={fFechaDesde} onChange={(e) => setFFechaDesde(e.target.value)} />
+        </label>
+        <label className="flex items-center gap-1 text-xs text-[var(--muted)]">
+          Hasta
+          <input type="date" className={input} value={fFechaHasta} onChange={(e) => setFFechaHasta(e.target.value)} />
+        </label>
+        {(fEmpleado || fEstado || fClasificacion || fConcepto || fFechaDesde || fFechaHasta) ? (
+          <button type="button" className={`${input} text-[var(--accent)]`} onClick={() => {
+            setFEmpleado(0); setFEstado(""); setFClasificacion(""); setFConcepto(""); setFFechaDesde(""); setFFechaHasta("");
+          }}>
+            Limpiar filtros
+          </button>
+        ) : null}
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-3"><p className="text-xs text-[var(--muted)]">Descuentos encontrados</p><p className="text-lg font-semibold">{rows.length}</p></div>
+        <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-3"><p className="text-xs text-[var(--muted)]">Total original</p><p className="text-lg font-semibold">Q{q(totales.original)}</p></div>
+        <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-3"><p className="text-xs text-[var(--muted)]">Total descontado</p><p className="text-lg font-semibold text-emerald-400">Q{q(totales.pagado)}</p></div>
+        <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-3"><p className="text-xs text-[var(--muted)]">Saldo pendiente</p><p className="text-lg font-semibold text-amber-300">Q{q(totales.saldo)}</p></div>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[1fr_380px]">
@@ -553,7 +596,10 @@ export default function DescuentosPage() {
                   <td className="px-2 py-2">
                     {r.empleadoCodigo} — {r.empleadoNombre}
                   </td>
-                  <td className="px-2 py-2">{r.concepto}</td>
+                  <td className="px-2 py-2">
+                    <div>{r.concepto}</div>
+                    {r.motivo ? <div className="text-xs text-[var(--muted)]">{r.motivo}</div> : null}
+                  </td>
                   <td className="px-2 py-2 text-xs">
                     {r.clasificacion === "INVENTARIO" ? (
                       <span className="rounded-full bg-sky-500/20 px-2 py-0.5 text-sky-300">

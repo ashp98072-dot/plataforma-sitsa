@@ -56,6 +56,8 @@ type Linea = {
   refPago: string;
 };
 
+type DescuentoDetalle = { concepto: string; monto: number; fecha: string; notas: string };
+
 type Cuadre = {
   porFormaPago: Record<
     FormaPago,
@@ -134,6 +136,7 @@ export default function PlanillasPage() {
   const [periodo, setPeriodo] = useState<Periodo | null>(null);
   const [lineas, setLineas] = useState<Linea[]>([]);
   const [cuadre, setCuadre] = useState<Cuadre | null>(null);
+  const [descuentosDetalle, setDescuentosDetalle] = useState<Record<number, DescuentoDetalle[]>>({});
   const [filtro, setFiltro] = useState("");
   const [filtroForma, setFiltroForma] = useState<"todas" | FormaPago>("todas");
   const [busy, setBusy] = useState(false);
@@ -168,6 +171,7 @@ export default function PlanillasPage() {
       setPeriodo(data.periodo);
       setLineas(data.lineas ?? []);
       setCuadre(data.cuadre ?? null);
+      setDescuentosDetalle(data.descuentosDetallePorEmpleado ?? {});
     },
     [slug],
   );
@@ -278,6 +282,7 @@ export default function PlanillasPage() {
       if (data.periodo) setPeriodo(data.periodo);
       if (data.lineas) setLineas(data.lineas);
       if (data.cuadre) setCuadre(data.cuadre);
+      if (data.descuentosDetallePorEmpleado) setDescuentosDetalle(data.descuentosDetallePorEmpleado);
       await cargar();
     } finally {
       setBusy(false);
@@ -866,7 +871,15 @@ export default function PlanillasPage() {
                               }}
                             />
                           </td>
-                          <td className="px-2 py-2 text-right">Q{q(l.descuentos)}</td>
+                          <td className="px-2 py-2 text-right">
+                            <div className="font-medium">Q{q(l.descuentos)}</div>
+                            {(descuentosDetalle[l.empleadoId] ?? []).map((d, i) => (
+                              <div key={`${d.concepto}-${i}`} className="mt-1 max-w-56 text-xs text-[var(--muted)]" title={d.notas}>
+                                {d.concepto}: Q{q(d.monto)}
+                                {d.notas ? <span className="block">{d.notas}</span> : null}
+                              </div>
+                            ))}
+                          </td>
                           <td className="px-2 py-2 text-right font-medium">
                             Q{q(totalDescuentos)}
                           </td>

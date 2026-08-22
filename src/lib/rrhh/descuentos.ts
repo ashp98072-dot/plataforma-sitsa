@@ -371,6 +371,8 @@ export type FiltrosDescuentos = {
   estado?: EstadoDescuento;
   clasificacion?: Clasificacion;
   concepto?: string;
+  fechaDesde?: string;
+  fechaHasta?: string;
 };
 
 /** Saldo/pagado/cuotas — calculado siempre (nunca cacheado), en lote para N descuentos. */
@@ -475,6 +477,14 @@ export async function listarDescuentos(
   if (filtros.concepto?.trim()) {
     where.push("d.concepto LIKE ?");
     params.push(`%${filtros.concepto.trim()}%`);
+  }
+  if (filtros.fechaDesde) {
+    where.push("d.fecha_inicio >= ?");
+    params.push(filtros.fechaDesde);
+  }
+  if (filtros.fechaHasta) {
+    where.push("d.fecha_inicio <= ?");
+    params.push(filtros.fechaHasta);
   }
   const rows = await query<RowDataPacket[]>(
     `${SELECT_MAESTRO} WHERE ${where.join(" AND ")} ORDER BY d.creado_en DESC LIMIT 300`,
@@ -1317,19 +1327,27 @@ export async function aplicarCuotasElegibles(
     `SELECT c.id, c.descuento_id, c.monto_programado
      FROM rrhh_descuento_cuotas c
      INNER JOIN rrhh_descuentos_maestro d ON d.id = c.descuento_id AND d.empresa_id = c.empresa_id
+     INNER JOIN (
+       SELECT empresa_id, descuento_id, MIN(numero_cuota) AS numero_cuota
+       FROM rrhh_descuento_cuotas
+       WHERE empresa_id = ? AND estado = 'PENDIENTE' AND planilla_periodo_id IS NULL
+       GROUP BY empresa_id, descuento_id
+     ) siguiente ON siguiente.empresa_id = c.empresa_id
+       AND siguiente.descuento_id = c.descuento_id
+       AND siguiente.numero_cuota = c.numero_cuota
      WHERE c.empresa_id = ?
        AND c.estado = 'PENDIENTE' AND c.planilla_periodo_id IS NULL
        AND d.estado = 'ACTIVO'
        AND c.fecha_programada <= ?
-       AND c.numero_cuota = (
-         SELECT MIN(c2.numero_cuota)
-         FROM rrhh_descuento_cuotas c2
-         WHERE c2.descuento_id = c.descuento_id
-           AND c2.empresa_id = c.empresa_id
-           AND c2.estado = 'PENDIENTE'
+       AND NOT EXISTS (
+         SELECT 1 FROM rrhh_descuento_cuotas aplicada
+         WHERE aplicada.empresa_id = c.empresa_id
+           AND aplicada.descuento_id = c.descuento_id
+           AND aplicada.planilla_periodo_id = ?
+           AND aplicada.estado = 'APLICADA'
        )
      ORDER BY c.id`,
-    [empresaId, periodo.fechaFin],
+    [empresaId, empresaId, periodo.fechaFin, periodo.id],
   );
 
   let aplicadas = 0;
@@ -1400,7 +1418,7 @@ export async function listarCuotasAplicadasDetalle(
   periodoId: number,
 ): Promise<{ concepto: string; monto: number; fecha: string; notas: string }[]> {
   const rows = await query<RowDataPacket[]>(
-    `SELECT d.codigo, d.concepto, d.numero_cuotas, c.numero_cuota, c.monto_aplicado, c.aplicado_en
+    `SELECT d.codigo, d.concepto, d.motivo, d.numero_cuotas, c.numero_cuota, c.monto_aplicado, c.aplicado_en
      FROM rrhh_descuento_cuotas c
      INNER JOIN rrhh_descuentos_maestro d ON d.id = c.descuento_id AND d.empresa_id = c.empresa_id
      WHERE c.empresa_id = ? AND c.planilla_periodo_id = ? AND c.estado = 'APLICADA'
@@ -1412,8 +1430,38 @@ export async function listarCuotasAplicadasDetalle(
     concepto: `${String(r.concepto)} · Cuota ${Number(r.numero_cuota)} de ${Number(r.numero_cuotas)}`,
     monto: Number(r.monto_aplicado ?? 0),
     fecha: toIsoDate(r.aplicado_en) ?? "",
-    notas: `Descuento ${String(r.codigo)}`,
+    notas: [r.motivo ? String(r.motivo) : "", `Descuento ${String(r.codigo)}`]
+      .filter(Boolean)
+      .join(" · "),
   }));
+}
+
+export async function listarCuotasAplicadasPeriodoDetalle(
+  empresaId: number,
+  periodoId: number,
+): Promise<Record<number, { concepto: string; monto: number; fecha: string; notas: string }[]>> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT d.empleado_id, d.codigo, d.concepto, d.motivo, d.numero_cuotas,
+            c.numero_cuota, c.monto_aplicado, c.aplicado_en
+     FROM rrhh_descuento_cuotas c
+     INNER JOIN rrhh_descuentos_maestro d ON d.id = c.descuento_id AND d.empresa_id = c.empresa_id
+     WHERE c.empresa_id = ? AND c.planilla_periodo_id = ? AND c.estado = 'APLICADA'
+     ORDER BY d.empleado_id, d.codigo, c.numero_cuota`,
+    [empresaId, periodoId],
+  );
+  const detalle: Record<number, { concepto: string; monto: number; fecha: string; notas: string }[]> = {};
+  for (const r of rows) {
+    const empleadoId = Number(r.empleado_id);
+    (detalle[empleadoId] ??= []).push({
+      concepto: `${String(r.concepto)} · Cuota ${Number(r.numero_cuota)} de ${Number(r.numero_cuotas)}`,
+      monto: Number(r.monto_aplicado ?? 0),
+      fecha: toIsoDate(r.aplicado_en) ?? "",
+      notas: [r.motivo ? String(r.motivo) : "", `Descuento ${String(r.codigo)}`]
+        .filter(Boolean)
+        .join(" · "),
+    });
+  }
+  return detalle;
 }
 
 /**

@@ -30,6 +30,9 @@ export async function GET(req: Request, ctx: Ctx) {
   const estado = url.searchParams.get("estado");
   const clasificacion = url.searchParams.get("clasificacion");
   const concepto = url.searchParams.get("concepto");
+  const fechaDesde = url.searchParams.get("fechaDesde");
+  const fechaHasta = url.searchParams.get("fechaHasta");
+  const fechaValida = /^\d{4}-\d{2}-\d{2}$/;
 
   try {
     const descuentos = await listarDescuentos(guard.empresa.id, {
@@ -43,6 +46,8 @@ export async function GET(req: Request, ctx: Ctx) {
           ? (clasificacion as Clasificacion)
           : undefined,
       concepto: concepto ?? undefined,
+      fechaDesde: fechaDesde && fechaValida.test(fechaDesde) ? fechaDesde : undefined,
+      fechaHasta: fechaHasta && fechaValida.test(fechaHasta) ? fechaHasta : undefined,
     });
     return NextResponse.json(
       { descuentos },

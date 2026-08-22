@@ -11,7 +11,6 @@ import {
 } from "@/lib/rrhh/contratos-pago";
 import { calcularISRMensual } from "@/lib/rrhh/isr";
 import { obtenerRangoPeriodo } from "@/lib/rrhh/periodos";
-import { toIsoDate } from "@/lib/rrhh/dates";
 import {
   aplicarCuotasElegibles,
   sumaCuotasAplicadasPorPeriodo,
@@ -179,11 +178,10 @@ function mapPeriodo(r: RowDataPacket): PlanillaPeriodo {
   return {
     id: Number(r.id),
     codigo: String(r.codigo),
-    // mysql2 entrega DATE como Date cuando no está activo dateStrings.
-    // String(date).slice(0, 10) producía "Sun Aug 16" y ese texto luego se
-    // enviaba a comparaciones SQL, dejando fuera todas las cuotas elegibles.
-    fechaInicio: toIsoDate(r.fecha_inicio as string | Date) ?? "",
-    fechaFin: toIsoDate(r.fecha_fin as string | Date) ?? "",
+    // DATE no representa una hora local. Si mysql2 lo entrega como Date,
+    // conservar el calendario UTC evita que Guatemala reste un día.
+    fechaInicio: fechaSql(r.fecha_inicio),
+    fechaFin: fechaSql(r.fecha_fin),
     estado: String(r.estado),
     notas: r.notas != null ? String(r.notas) : null,
     tipoPeriodo: (TIPOS_PERIODO as readonly string[]).includes(tipo ?? "")
@@ -198,6 +196,11 @@ function mapPeriodo(r: RowDataPacket): PlanillaPeriodo {
     motivoCancelacion:
       r.motivo_cancelacion != null ? String(r.motivo_cancelacion) : null,
   };
+}
+
+function fechaSql(value: unknown): string {
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value ?? "").slice(0, 10);
 }
 
 function mapLinea(r: RowDataPacket): PlanillaLinea {

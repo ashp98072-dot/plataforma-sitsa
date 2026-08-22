@@ -20,15 +20,20 @@ function Renglon({
   label,
   valor,
   resta,
+  detalle,
 }: {
   label: string;
   valor: number;
   resta?: boolean;
+  detalle?: string;
 }) {
   if (valor === 0) return null;
   return (
     <div className="flex items-center justify-between py-2">
-      <span className="text-sm text-[var(--muted)]">{label}</span>
+      <span className="text-sm text-[var(--muted)]">
+        {label}
+        {detalle ? <span className="mt-0.5 block text-xs">Motivo: {detalle}</span> : null}
+      </span>
       <span className="text-sm font-medium">
         {resta ? "− " : ""}
         {formatQ(valor)}
@@ -132,6 +137,7 @@ export default async function BoletaDetallePage({
                     key={i}
                     label={`${item.concepto} (${item.fecha})`}
                     valor={item.monto}
+                    detalle={item.notas}
                   />
                 ))
               : (
@@ -164,6 +170,7 @@ export default async function BoletaDetallePage({
                     label={`${item.concepto} (${item.fecha})`}
                     valor={item.monto}
                     resta
+                    detalle={item.notas}
                   />
                 ))
               : (

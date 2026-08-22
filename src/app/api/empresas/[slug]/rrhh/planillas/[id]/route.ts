@@ -12,6 +12,7 @@ import {
 } from "@/lib/rrhh/planillas";
 import { normalizarFormaPago } from "@/lib/rrhh/contratos-pago";
 import { registrarAuditoria } from "@/lib/auditoria";
+import { listarCuotasAplicadasPeriodoDetalle } from "@/lib/rrhh/descuentos";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
 
@@ -27,10 +28,14 @@ export async function GET(_req: Request, ctx: Ctx) {
   if (!periodo) {
     return NextResponse.json({ error: "Periodo no encontrado." }, { status: 404 });
   }
-  const lineas = await listarLineas(guard.empresa.id, periodoId);
+  const [lineas, descuentosDetallePorEmpleado] = await Promise.all([
+    listarLineas(guard.empresa.id, periodoId),
+    listarCuotasAplicadasPeriodoDetalle(guard.empresa.id, periodoId),
+  ]);
   return NextResponse.json({
     periodo,
     lineas,
+    descuentosDetallePorEmpleado,
     cuadre: calcularCuadre(lineas),
   });
 }
@@ -76,7 +81,10 @@ export async function POST(req: Request, ctx: Ctx) {
         conservarPagos: parsed.data.conservarPagos !== false,
         usuario: guard.session.username,
       });
-      const lineas = await listarLineas(guard.empresa.id, periodoId);
+      const [lineas, descuentosDetallePorEmpleado] = await Promise.all([
+        listarLineas(guard.empresa.id, periodoId),
+        listarCuotasAplicadasPeriodoDetalle(guard.empresa.id, periodoId),
+      ]);
       return NextResponse.json({
         mensaje:
           `Planilla generada: ${r.generadas} empleado(s).` +
@@ -98,6 +106,7 @@ export async function POST(req: Request, ctx: Ctx) {
         totalHorasExtraMonto: r.totalHorasExtraMonto,
         periodo: await obtenerPeriodo(guard.empresa.id, periodoId),
         lineas,
+        descuentosDetallePorEmpleado,
         cuadre: calcularCuadre(lineas),
       });
     }
