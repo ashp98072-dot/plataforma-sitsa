@@ -11,6 +11,11 @@ import Link from "next/link";
  */
 
 const CLASIFICACIONES = ["LEGAL", "AUTORIZADO", "JUDICIAL", "SISTEMA"] as const;
+// Fase INV-1: "INVENTARIO" existe en el backend (descuentos generados desde
+// RRHH > Inventario > Entregar) pero NO se ofrece aquí como opción de alta
+// manual — solo se agrega a la lista de FILTRO, para no duplicar el
+// formulario de entrega dentro de Descuentos.
+const CLASIFICACIONES_FILTRO = [...CLASIFICACIONES, "INVENTARIO"] as const;
 const ESTADOS = ["BORRADOR", "ACTIVO", "PAUSADO", "FINALIZADO", "CANCELADO"] as const;
 const PERIODICIDADES = [
   { value: "UNA_VEZ", label: "Una vez" },
@@ -23,6 +28,7 @@ const PERIODICIDADES = [
 ] as const;
 
 type Clasificacion = (typeof CLASIFICACIONES)[number];
+type ClasificacionFiltro = (typeof CLASIFICACIONES_FILTRO)[number];
 type Estado = (typeof ESTADOS)[number];
 type Periodicidad = (typeof PERIODICIDADES)[number]["value"];
 
@@ -35,7 +41,10 @@ type Descuento = {
   empleadoNombre: string;
   codigo: string;
   concepto: string;
-  clasificacion: Clasificacion;
+  // Fase INV-1: puede venir "INVENTARIO" además de las 4 clasificaciones de
+  // alta manual — de ahí ClasificacionFiltro (más amplio que Clasificacion)
+  // en vez del tipo usado por el formulario de creación.
+  clasificacion: ClasificacionFiltro;
   motivo: string | null;
   montoOriginal: number;
   estado: Estado;
@@ -81,7 +90,7 @@ function q(n: number) {
 type FiltrosLista = {
   empleado: number;
   estado: "" | Estado;
-  clasificacion: "" | Clasificacion;
+  clasificacion: "" | ClasificacionFiltro;
   concepto: string;
 };
 
@@ -148,7 +157,7 @@ export default function DescuentosPage() {
   // Filtros
   const [fEmpleado, setFEmpleado] = useState(0);
   const [fEstado, setFEstado] = useState<"" | Estado>("");
-  const [fClasificacion, setFClasificacion] = useState<"" | Clasificacion>("");
+  const [fClasificacion, setFClasificacion] = useState<"" | ClasificacionFiltro>("");
   const [fConcepto, setFConcepto] = useState("");
 
   // Formulario de creación
@@ -495,12 +504,12 @@ export default function DescuentosPage() {
         <select
           className={input}
           value={fClasificacion}
-          onChange={(e) => setFClasificacion(e.target.value as "" | Clasificacion)}
+          onChange={(e) => setFClasificacion(e.target.value as "" | ClasificacionFiltro)}
         >
           <option value="">Toda clasificación</option>
-          {CLASIFICACIONES.map((c) => (
+          {CLASIFICACIONES_FILTRO.map((c) => (
             <option key={c} value={c}>
-              {c}
+              {c === "INVENTARIO" ? "INVENTARIO (origen: Inventario)" : c}
             </option>
           ))}
         </select>
@@ -545,7 +554,15 @@ export default function DescuentosPage() {
                     {r.empleadoCodigo} — {r.empleadoNombre}
                   </td>
                   <td className="px-2 py-2">{r.concepto}</td>
-                  <td className="px-2 py-2 text-xs">{r.clasificacion}</td>
+                  <td className="px-2 py-2 text-xs">
+                    {r.clasificacion === "INVENTARIO" ? (
+                      <span className="rounded-full bg-sky-500/20 px-2 py-0.5 text-sky-300">
+                        Inventario
+                      </span>
+                    ) : (
+                      r.clasificacion
+                    )}
+                  </td>
                   <td className="px-2 py-2">Q{q(r.montoOriginal)}</td>
                   <td className="px-2 py-2">Q{q(r.pagado)}</td>
                   <td className="px-2 py-2 font-medium">Q{q(r.saldo)}</td>

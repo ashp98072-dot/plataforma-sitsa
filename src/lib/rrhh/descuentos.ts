@@ -25,12 +25,18 @@ import { registrarAuditoria } from "@/lib/auditoria";
  * LEGAL/AUTORIZADO/JUDICIAL/SISTEMA), nunca para sustituir esos cálculos.
  */
 
-export type Clasificacion = "LEGAL" | "AUTORIZADO" | "JUDICIAL" | "SISTEMA";
+// Fase INV-1: "INVENTARIO" agregado para descuentos originados por una
+// entrega de artículo (RRHH > Inventario > Entregar). Columna VARCHAR(20)
+// sin lista cerrada en BD — aditivo, sin migración. generarLineasPeriodo()/
+// aplicarCuotasElegibles() no filtran por clasificación, así que estas
+// cuotas entran a planilla exactamente igual que cualquier otra.
+export type Clasificacion = "LEGAL" | "AUTORIZADO" | "JUDICIAL" | "SISTEMA" | "INVENTARIO";
 export const CLASIFICACIONES: readonly Clasificacion[] = [
   "LEGAL",
   "AUTORIZADO",
   "JUDICIAL",
   "SISTEMA",
+  "INVENTARIO",
 ];
 
 export type EstadoDescuento =
@@ -536,7 +542,8 @@ export async function listarAbonos(
 // confía en que un id pertenezca a la empresa solo porque llegó del cliente).
 // ---------------------------------------------------------------------------
 
-async function validarEmpleado(
+/** Exportada (Fase INV-1) para que inventario.ts valide el empleado de una entrega sin duplicar esta consulta. */
+export async function validarEmpleado(
   empresaId: number,
   empleadoId: number,
 ): Promise<{ id: number; codigo: string; nombre: string } | null> {
@@ -573,6 +580,55 @@ export type NuevoDescuentoInput = {
 export type ResultadoDescuento =
   | { ok: true; id: number }
   | { ok: false; motivo: string; mensaje: string };
+
+/**
+ * Núcleo del INSERT en BORRADOR (Fase INV-1, exportada). Asume que el
+ * llamador YA validó `input` (clasificación, periodicidad, monto, cuotas,
+ * empleado, documento) — no repite esas validaciones. Recibe `conn`: si el
+ * llamador tiene una transacción abierta (p.ej. la entrega de inventario),
+ * este INSERT participa en ella. Lanza en caso de error de BD (incluido
+ * ER_DUP_ENTRY de código, extremadamente improbable) — el llamador decide
+ * cómo traducirlo.
+ */
+export async function crearDescuentoInterno(
+  conn: PoolConnection,
+  empresaId: number,
+  input: NuevoDescuentoInput,
+): Promise<{ id: number; codigo: string }> {
+  const numeroCuotas =
+    input.periodicidad === "UNA_VEZ" ? 1 : Math.max(1, Math.trunc(input.numeroCuotas || 1));
+  const anio = Number(input.fechaInicio.slice(0, 4)) || new Date().getFullYear();
+  const codigo = await generarCodigoDescuento(empresaId, anio);
+  const [montoCuota] = distribuirCuotas(input.montoOriginal, numeroCuotas);
+
+  const [r] = await conn.execute<ResultSetHeader>(
+    `INSERT INTO rrhh_descuentos_maestro
+      (empresa_id, empleado_id, codigo, concepto, clasificacion, motivo,
+       monto_original, estado, periodicidad, numero_cuotas, monto_cuota,
+       cada_n_quincenas, tipo_quincena_inicio, quincena_inicio, fecha_inicio,
+       documento_id, creado_por)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'BORRADOR', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      empresaId,
+      input.empleadoId,
+      codigo,
+      input.concepto.trim(),
+      input.clasificacion,
+      input.motivo?.trim() || null,
+      input.montoOriginal,
+      input.periodicidad,
+      numeroCuotas,
+      montoCuota,
+      input.periodicidad === "CADA_N_QUINCENAS" ? Math.trunc(Number(input.cadaNQuincenas)) : null,
+      input.tipoQuincenaInicio ?? null,
+      input.quincenaInicio ?? null,
+      input.fechaInicio,
+      input.documentoId ?? null,
+      input.creadoPor,
+    ],
+  );
+  return { id: Number(r.insertId), codigo };
+}
 
 export async function crearDescuento(
   empresaId: number,
@@ -620,38 +676,12 @@ export async function crearDescuento(
     }
   }
 
-  const anio = Number(input.fechaInicio.slice(0, 4)) || new Date().getFullYear();
-  const codigo = await generarCodigoDescuento(empresaId, anio);
-  const [montoCuota] = distribuirCuotas(input.montoOriginal, numeroCuotas);
-
+  const conn = await getPool().getConnection();
   try {
-    const r = await execute(
-      `INSERT INTO rrhh_descuentos_maestro
-        (empresa_id, empleado_id, codigo, concepto, clasificacion, motivo,
-         monto_original, estado, periodicidad, numero_cuotas, monto_cuota,
-         cada_n_quincenas, tipo_quincena_inicio, quincena_inicio, fecha_inicio,
-         documento_id, creado_por)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'BORRADOR', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        empresaId,
-        empleado.id,
-        codigo,
-        input.concepto.trim(),
-        input.clasificacion,
-        input.motivo?.trim() || null,
-        input.montoOriginal,
-        input.periodicidad,
-        numeroCuotas,
-        montoCuota,
-        input.periodicidad === "CADA_N_QUINCENAS" ? Math.trunc(Number(input.cadaNQuincenas)) : null,
-        input.tipoQuincenaInicio ?? null,
-        input.quincenaInicio ?? null,
-        input.fechaInicio,
-        input.documentoId ?? null,
-        input.creadoPor,
-      ],
-    );
-    const id = Number(r.insertId);
+    const { id, codigo } = await crearDescuentoInterno(conn, empresaId, {
+      ...input,
+      numeroCuotas,
+    });
     await registrarAuditoria({
       empresaId,
       usuario: input.creadoPor,
@@ -662,12 +692,63 @@ export async function crearDescuento(
     return { ok: true, id };
   } catch {
     return { ok: false, motivo: "error", mensaje: "No se pudo crear el descuento." };
+  } finally {
+    conn.release();
   }
 }
 
 // ---------------------------------------------------------------------------
 // Autorizar: BORRADOR -> ACTIVO, genera cuotas (transacción).
 // ---------------------------------------------------------------------------
+
+/**
+ * Núcleo de la autorización (Fase INV-1, exportada): genera las cuotas
+ * PENDIENTE y pasa el descuento a ACTIVO. Recibe `conn` — no abre ni
+ * confirma ninguna transacción propia, participa en la del llamador. No
+ * repite las validaciones de estado/JUDICIAL — eso lo hace autorizarDescuento
+ * (o, en el caso de una entrega de inventario, el llamador ya construyó el
+ * descuento con clasificación INVENTARIO, que nunca exige documento).
+ */
+export async function autorizarDescuentoInterno(
+  conn: PoolConnection,
+  empresaId: number,
+  descuentoId: number,
+  autorizadoPor: string,
+  descuento: {
+    periodicidad: Periodicidad;
+    fechaInicio: string;
+    numeroCuotas: number;
+    cadaNQuincenas: number | null;
+    montoOriginal: number;
+  },
+): Promise<{ cuotasGeneradas: number }> {
+  const fechas = await calcularFechasCuotas(
+    empresaId,
+    descuento.periodicidad,
+    descuento.fechaInicio,
+    descuento.numeroCuotas,
+    descuento.cadaNQuincenas,
+  );
+  const montos = distribuirCuotas(descuento.montoOriginal, descuento.numeroCuotas);
+
+  for (let i = 0; i < fechas.length; i++) {
+    await conn.execute<ResultSetHeader>(
+      `INSERT INTO rrhh_descuento_cuotas
+        (empresa_id, descuento_id, numero_cuota, fecha_programada, monto_programado, estado)
+       VALUES (?, ?, ?, ?, ?, 'PENDIENTE')`,
+      [empresaId, descuentoId, i + 1, fechas[i], montos[i]],
+    );
+  }
+
+  await conn.execute(
+    `UPDATE rrhh_descuentos_maestro
+     SET estado = 'ACTIVO', autorizado_por = ?, autorizado_en = NOW()
+     WHERE id = ? AND empresa_id = ?`,
+    [autorizadoPor, descuentoId, empresaId],
+  );
+
+  return { cuotasGeneradas: fechas.length };
+}
 
 export async function autorizarDescuento(
   empresaId: number,
@@ -694,35 +775,18 @@ export async function autorizarDescuento(
     };
   }
 
-  const fechas = await calcularFechasCuotas(
-    empresaId,
-    descuento.periodicidad,
-    descuento.fechaInicio,
-    descuento.numeroCuotas,
-    descuento.cadaNQuincenas,
-  );
-  const montos = distribuirCuotas(descuento.montoOriginal, descuento.numeroCuotas);
-
   const conn = await getPool().getConnection();
+  let cuotasGeneradas = 0;
   try {
     await conn.beginTransaction();
-
-    for (let i = 0; i < fechas.length; i++) {
-      await conn.execute<ResultSetHeader>(
-        `INSERT INTO rrhh_descuento_cuotas
-          (empresa_id, descuento_id, numero_cuota, fecha_programada, monto_programado, estado)
-         VALUES (?, ?, ?, ?, ?, 'PENDIENTE')`,
-        [empresaId, descuentoId, i + 1, fechas[i], montos[i]],
-      );
-    }
-
-    await conn.execute(
-      `UPDATE rrhh_descuentos_maestro
-       SET estado = 'ACTIVO', autorizado_por = ?, autorizado_en = NOW()
-       WHERE id = ? AND empresa_id = ?`,
-      [autorizadoPor, descuentoId, empresaId],
-    );
-
+    const r = await autorizarDescuentoInterno(conn, empresaId, descuentoId, autorizadoPor, {
+      periodicidad: descuento.periodicidad,
+      fechaInicio: descuento.fechaInicio,
+      numeroCuotas: descuento.numeroCuotas,
+      cadaNQuincenas: descuento.cadaNQuincenas,
+      montoOriginal: descuento.montoOriginal,
+    });
+    cuotasGeneradas = r.cuotasGeneradas;
     await conn.commit();
   } catch (e) {
     await conn.rollback();
@@ -737,7 +801,7 @@ export async function autorizarDescuento(
     usuario: autorizadoPor,
     accion: "autorizar_descuento",
     modulo: "rrhh",
-    detalle: `Descuento #${descuentoId} ${descuento.codigo} · BORRADOR → ACTIVO · ${fechas.length} cuota(s) generada(s)`,
+    detalle: `Descuento #${descuentoId} ${descuento.codigo} · BORRADOR → ACTIVO · ${cuotasGeneradas} cuota(s) generada(s)`,
   });
   return { ok: true, id: descuentoId };
 }
