@@ -68,6 +68,7 @@ function toInput(
     banco: d.banco ?? "",
     contactoEmergencia: d.contactoEmergencia ?? "",
     horasExtraHabilitado: d.horasExtraHabilitado ?? false,
+    supervisorId: d.supervisorId ?? null,
   };
 }
 
