@@ -1227,13 +1227,17 @@ export type PeriodoParaCuotas = { id: number; fechaInicio: string; fechaFin: str
 
 /**
  * Aplica, dentro de la transacción `conn` del llamador (generarLineasPeriodo),
- * todas las cuotas PENDIENTE elegibles para `periodo`:
+ * A LO SUMO UNA cuota PENDIENTE por descuento — la siguiente en la
+ * secuencia (MIN(numero_cuota) entre las PENDIENTE de ese descuento) —
+ * elegible para `periodo`:
  * - descuento maestro ACTIVO (nunca BORRADOR/PAUSADO/CANCELADO/FINALIZADO);
- * - fecha_programada <= periodo.fechaFin (SIN piso en periodo.fechaInicio —
- *   ver nota de corrección de bug abajo);
+ * - es la cuota siguiente pendiente de su descuento (no salta cuotas ni
+ *   aplica dos en la misma pasada, ver nota de semántica abajo);
+ * - esa cuota siguiente tiene fecha_programada <= periodo.fechaFin (SIN
+ *   piso en periodo.fechaInicio — ver nota de corrección de bug abajo);
  * - fecha_programada es la fuente de verdad — D2 NO recalcula periodicidad.
  *
- * CORRECCIÓN (bug confirmado en producción): antes se exigía
+ * CORRECCIÓN 1 (bug confirmado en producción): antes se exigía
  * `fecha_programada BETWEEN periodo.fechaInicio AND periodo.fechaFin`. Una
  * cuota con fecha_programada anterior a fechaInicio (p.ej. vencida en un
  * periodo que nunca se generó, o de una quincena anterior saltada) nunca
@@ -1241,19 +1245,33 @@ export type PeriodoParaCuotas = { id: number; fechaInicio: string; fechaFin: str
  * estuviera PENDIENTE — quedaba huérfana indefinidamente. La regla de
  * negocio correcta es que una cuota vencida y pendiente se arrastre y se
  * aplique en el primer periodo que se genere después de su fecha, no que
- * se pierda. Por eso ahora solo se exige fecha_programada <= fechaFin, sin
- * comparar contra fechaInicio.
+ * se pierda.
+ *
+ * CORRECCIÓN 2 (semántica de periodicidad, segundo bug confirmado): quitar
+ * el piso de fechaInicio por sí solo permitía que, si dos o más cuotas del
+ * MISMO descuento quedaban vencidas y pendientes a la vez (p.ej. cuota 1 de
+ * agosto y cuota 2 de la quincena de septiembre, ambas <= fechaFin de un
+ * único periodo), TODAS calificaran como elegibles y se aplicaran juntas en
+ * una sola planilla — cobrando de una vez varias cuotas de un descuento
+ * pensado como "cada quincena". Eso rompe la periodicidad del descuento.
+ * La corrección: el filtro ahora exige que la cuota sea la MIN(numero_cuota)
+ * entre las PENDIENTE de ese descuento_id — es decir, siempre avanza
+ * exactamente una cuota por descuento en cada llamada, en orden estricto,
+ * sin importar cuántas queden vencidas acumuladas. Si quedan varias
+ * vencidas, la siguiente se recupera en la próxima generación (de este
+ * periodo o del que sea), nunca dos juntas en la misma planilla. Aplica
+ * igual para cualquier descuento D1/D2, sin importar su clasificación.
  *
  * Cada cuota se transiciona con un UPDATE condicional
  * (WHERE estado='PENDIENTE' AND planilla_periodo_id IS NULL) y se verifica
  * affectedRows === 1 antes de contarla — si otra ejecución concurrente ya la
  * aplicó, esta pasada la ignora en vez de reintentar; esto también es lo
  * que impide aplicar la misma cuota dos veces si dos periodos se generan
- * casi al mismo tiempo, o si una cuota vencida "calificaría" para más de un
- * periodo — el primero que la reclame gana, el resto ve affectedRows=0. Al
- * regenerar el mismo periodo, las cuotas ya APLICADA con
+ * casi al mismo tiempo — el primero que la reclame gana, el resto ve
+ * affectedRows=0. Al regenerar el mismo periodo, las cuotas ya APLICADA con
  * planilla_periodo_id = periodo.id NO vuelven a aparecer en el SELECT de
- * elegibles (ya no son PENDIENTE) — nunca se reprocesan.
+ * elegibles (ya no son PENDIENTE, y tampoco son ya la "siguiente pendiente"
+ * de su descuento) — nunca se reprocesan ni se duplican.
  */
 export async function aplicarCuotasElegibles(
   conn: PoolConnection,
@@ -1269,6 +1287,13 @@ export async function aplicarCuotasElegibles(
        AND c.estado = 'PENDIENTE' AND c.planilla_periodo_id IS NULL
        AND d.estado = 'ACTIVO'
        AND c.fecha_programada <= ?
+       AND c.numero_cuota = (
+         SELECT MIN(c2.numero_cuota)
+         FROM rrhh_descuento_cuotas c2
+         WHERE c2.descuento_id = c.descuento_id
+           AND c2.empresa_id = c.empresa_id
+           AND c2.estado = 'PENDIENTE'
+       )
      ORDER BY c.id`,
     [empresaId, periodo.fechaFin],
   );
