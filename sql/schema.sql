@@ -410,9 +410,30 @@ CREATE TABLE IF NOT EXISTS inventario_rrhh (
   categoria VARCHAR(80) NULL,
   stock INT NOT NULL DEFAULT 0,
   unidad VARCHAR(40) NOT NULL DEFAULT 'Unidad',
+  costo_unitario DECIMAL(12,2) NULL, -- Fase INV-0
   estado VARCHAR(20) NOT NULL DEFAULT 'Activo',
   UNIQUE KEY uq_inv_rrhh (empresa_id, codigo),
   CONSTRAINT fk_invrh_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Fase INV-0: historial de movimientos de stock (append-only). Solo
+-- 'ENTRADA' y 'AJUSTE' por ahora; entrega/devolución/pérdida son fases
+-- futuras (columna VARCHAR sin lista cerrada, no requieren migración
+-- nueva para agregarse).
+CREATE TABLE IF NOT EXISTS inventario_rrhh_movimientos (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  articulo_id INT NOT NULL,
+  tipo VARCHAR(20) NOT NULL,
+  cantidad INT NOT NULL, -- delta con signo: + entrada/incremento, - ajuste a la baja
+  stock_resultante INT NOT NULL, -- stock del artículo justo después de este movimiento
+  motivo VARCHAR(300) NULL,
+  registrado_por VARCHAR(100) NULL,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_invmov_articulo (empresa_id, articulo_id),
+  INDEX idx_invmov_empresa (empresa_id, creado_en),
+  CONSTRAINT fk_invmov_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
+  CONSTRAINT fk_invmov_articulo FOREIGN KEY (articulo_id) REFERENCES inventario_rrhh(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS vacaciones (
