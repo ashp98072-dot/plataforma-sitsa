@@ -183,7 +183,8 @@ CREATE TABLE IF NOT EXISTS horas_extra_registros (
   autorizado_por VARCHAR(100) NULL,
   autorizado_en DATETIME NULL,
   motivo_rechazo VARCHAR(300) NULL,
-  planilla_periodo_id INT NULL, -- reservado para H2, sin usar todavía
+  planilla_periodo_id INT NULL, -- Fase H1/H2: periodo de planilla donde se aplicó
+  aplicado_en DATETIME NULL, -- Fase H2: fecha/hora de aplicación a planilla
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_horext_empresa_emp (empresa_id, id_empleado),
   INDEX idx_horext_supervisor (empresa_id, registrado_por_id),
