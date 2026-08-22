@@ -69,7 +69,11 @@ function toInput(
     banco: d.banco ?? "",
     contactoEmergencia: d.contactoEmergencia ?? "",
     horasExtraHabilitado: d.horasExtraHabilitado ?? false,
-    supervisorIds: d.supervisorIds ?? [],
+    // Sin "?? []": omitido (undefined) = "no tocar supervisores" en
+    // actualizarEmpleado(); [] explícito = "quitar todos". La ficha de
+    // RRHH siempre envía el campo, así que en la práctica esto no cambia
+    // su comportamiento — ver EmpleadoInput.supervisorIds.
+    supervisorIds: d.supervisorIds,
   };
 }
 

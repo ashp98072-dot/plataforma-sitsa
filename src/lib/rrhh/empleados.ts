@@ -468,10 +468,20 @@ export type EmpleadoInput = {
   banco?: string;
   contactoEmergencia?: string;
   /**
-   * Lista de supervisores (múltiples). empleados.supervisor_id se deriva de
-   * aquí (= primer elemento, o null si está vacía) — ver paramsFicha(). El
-   * guardado real en empleado_supervisores ocurre después del
-   * INSERT/UPDATE de empleados, vía sincronizarSupervisoresEmpleado().
+   * Lista de supervisores (múltiples). Distingue explícitamente "campo
+   * omitido" de "array vacío" — no son lo mismo:
+   * - undefined (campo omitido, p.ej. una fila del importador Excel que no
+   *   conoce este concepto): en crearEmpleado() se trata como sin
+   *   supervisores; en actualizarEmpleado() significa "no tocar" — se
+   *   preservan supervisor_id y las relaciones de empleado_supervisores tal
+   *   como están.
+   * - [] (array vacío explícito, p.ej. la ficha al quitar todos los
+   *   supervisores): quita todas las relaciones, supervisor_id → NULL.
+   * - [ids] (uno o varios): reemplaza la lista completa de relaciones,
+   *   supervisor_id → primer elemento.
+   * La ficha de RRHH siempre envía este campo (nunca omitido), así que para
+   * ese flujo [] sigue significando "Sin supervisores" y [ids] reemplaza,
+   * sin cambios de comportamiento.
    */
   supervisorIds?: number[];
   /** Fase H1: solo RRHH/admin la cambia, desde la edición de empleado. */
@@ -547,7 +557,9 @@ export async function crearEmpleado(
   }
 
   // Alta: todavía no existe el propio id, así que no hay auto-referencia
-  // posible que validar (idPropio queda null).
+  // posible que validar (idPropio queda null). Alta también es el único
+  // caso donde supervisorIds omitido (undefined) se trata igual que []
+  // (nuevo empleado sin supervisores) — no hay nada previo que preservar.
   const supervisores = await supervisoresValidos(
     empresaId,
     data.supervisorIds ?? [],
@@ -704,20 +716,63 @@ export async function actualizarEmpleado(
   await asegurarSchemaEmpleados().catch(() => undefined);
   const f = paramsFicha(data);
   if (!f.nombre) throw new Error("El nombre del empleado es obligatorio.");
-  const supervisores = await supervisoresValidos(
-    empresaId,
-    data.supervisorIds ?? [],
-    id,
-  );
-  if (!supervisores.ok) {
-    throw new Error(supervisores.mensaje);
+
+  // undefined (campo omitido, p.ej. reimportación Excel) = "no tocar
+  // relaciones de supervisor": ni supervisor_id legado ni
+  // empleado_supervisores se modifican, se preservan tal como están. Solo
+  // se valida/sincroniza cuando el campo SÍ viene presente ([] incluido —
+  // eso sí significa "quitar todos", explícitamente).
+  const tocaSupervisores = data.supervisorIds !== undefined;
+  let supervisorIdsNuevos: number[] | undefined;
+  if (tocaSupervisores) {
+    const validados = await supervisoresValidos(
+      empresaId,
+      data.supervisorIds ?? [],
+      id,
+    );
+    if (!validados.ok) {
+      throw new Error(validados.mensaje);
+    }
+    supervisorIdsNuevos = validados.ids;
   }
+
   // Misma razón que en crearEmpleado: UPDATE de empleados + numero_empleado
   // (no aplica aquí) + sincronización de supervisores en UNA transacción.
   const conn = await getPool().getConnection();
   let affectedRows: number;
   try {
     await conn.beginTransaction();
+
+    // Si no se debe tocar el supervisor (campo omitido), se conserva el
+    // valor actual de la columna leyéndolo dentro de la MISMA transacción
+    // y reescribiéndolo tal cual — el resultado neto es "no modificar",
+    // sin tener que mantener una segunda variante del UPDATE sin esa
+    // columna.
+    let supervisorIdParaGuardar: number | null;
+    if (tocaSupervisores) {
+      supervisorIdParaGuardar =
+        supervisorIdsNuevos && supervisorIdsNuevos.length > 0
+          ? supervisorIdsNuevos[0]
+          : null;
+    } else {
+      // defensivo: si esta base todavía no tiene la columna supervisor_id
+      // (esColumnaDesconocida), no hay nada que preservar — se sigue de
+      // largo y el INSERT/UPDATE completo de abajo fallará por el mismo
+      // motivo y degradará a la variante mínima como ya hacía antes.
+      let actualRows: RowDataPacket[] = [];
+      try {
+        [actualRows] = await conn.query<RowDataPacket[]>(
+          `SELECT supervisor_id FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1`,
+          [id, empresaId],
+        );
+      } catch (e) {
+        if (!esColumnaDesconocida(e)) throw e;
+      }
+      supervisorIdParaGuardar =
+        actualRows[0]?.supervisor_id != null
+          ? Number(actualRows[0].supervisor_id)
+          : null;
+    }
 
     let schemaCompleto = true;
     try {
@@ -782,7 +837,7 @@ export async function actualizarEmpleado(
           f.tipoCuenta,
           f.banco,
           f.contactoEmergencia,
-          f.supervisorId,
+          supervisorIdParaGuardar,
           f.horasExtraHabilitado,
           id,
           empresaId,
@@ -816,8 +871,8 @@ export async function actualizarEmpleado(
       affectedRows = result.affectedRows;
     }
 
-    if (affectedRows > 0 && schemaCompleto) {
-      await sincronizarSupervisoresEmpleado(conn, empresaId, id, supervisores.ids);
+    if (affectedRows > 0 && schemaCompleto && supervisorIdsNuevos !== undefined) {
+      await sincronizarSupervisoresEmpleado(conn, empresaId, id, supervisorIdsNuevos);
     }
 
     await conn.commit();
