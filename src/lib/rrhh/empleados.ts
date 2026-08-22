@@ -1,5 +1,5 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
-import { execute, query } from "@/lib/db";
+import { execute, getPool, query } from "@/lib/db";
 import { toIsoDate, hoyLocal } from "./dates";
 import { asegurarSchemaEmpleados } from "./empleados-schema";
 
@@ -291,6 +291,109 @@ export async function supervisorValido(
   return rows.length > 0;
 }
 
+// ---------------------------------------------------------------------------
+// Múltiples supervisores por empleado (tabla puente empleado_supervisores).
+// empleados.supervisor_id se sigue escribiendo en paralelo (= primer
+// supervisor de la lista, o NULL si no hay ninguno) como compatibilidad
+// legado — ver paramsFicha(). No se modificó supervisorValido() (arriba):
+// queda intacta para no romper ningún llamador existente; la validación
+// múltiple vive en supervisoresValidos(), una función nueva y separada.
+// ---------------------------------------------------------------------------
+
+/**
+ * Valida una lista de supervisores propuestos para un empleado: cada uno
+ * debe existir, pertenecer a la misma empresa y estar Activo; ninguno puede
+ * ser el propio empleado (`idPropio`). Duplicados en la lista de entrada se
+ * ignoran (se deduplica antes de validar). Lista vacía es válida (sin
+ * supervisores).
+ */
+export async function supervisoresValidos(
+  empresaId: number,
+  supervisorIds: number[],
+  idPropio?: number | null,
+): Promise<{ ok: true; ids: number[] } | { ok: false; mensaje: string }> {
+  const unicos = Array.from(
+    new Set(supervisorIds.filter((n) => Number.isInteger(n) && n > 0)),
+  );
+  if (idPropio != null && unicos.includes(idPropio)) {
+    return {
+      ok: false,
+      mensaje: "Un empleado no puede ser su propio supervisor.",
+    };
+  }
+  if (unicos.length === 0) return { ok: true, ids: [] };
+  const rows = await query<RowDataPacket[]>(
+    `SELECT id FROM empleados
+     WHERE empresa_id = ? AND estado = 'Activo' AND id IN (${unicos.map(() => "?").join(",")})`,
+    [empresaId, ...unicos],
+  );
+  const validos = new Set(rows.map((r) => Number(r.id)));
+  const invalidos = unicos.filter((id) => !validos.has(id));
+  if (invalidos.length > 0) {
+    return {
+      ok: false,
+      mensaje: `Supervisor(es) inválido(s), inactivo(s) o de otra empresa: ${invalidos.join(", ")}.`,
+    };
+  }
+  return { ok: true, ids: unicos };
+}
+
+/**
+ * Reemplaza todas las relaciones de supervisor de `empleadoId` en
+ * empleado_supervisores por `supervisorIds` (ya validados por
+ * supervisoresValidos). Transaccional — borra las relaciones actuales e
+ * inserta las nuevas dentro de la misma transacción, así nunca queda un
+ * estado a medio guardar si algo falla a mitad de camino.
+ */
+export async function sincronizarSupervisoresEmpleado(
+  empresaId: number,
+  empleadoId: number,
+  supervisorIds: number[],
+): Promise<void> {
+  const conn = await getPool().getConnection();
+  try {
+    await conn.beginTransaction();
+    await conn.execute(
+      `DELETE FROM empleado_supervisores WHERE empresa_id = ? AND empleado_id = ?`,
+      [empresaId, empleadoId],
+    );
+    for (const supervisorId of supervisorIds) {
+      await conn.execute(
+        `INSERT INTO empleado_supervisores (empresa_id, empleado_id, supervisor_id)
+         VALUES (?, ?, ?)`,
+        [empresaId, empleadoId, supervisorId],
+      );
+    }
+    await conn.commit();
+  } catch (e) {
+    await conn.rollback();
+    throw e;
+  } finally {
+    conn.release();
+  }
+}
+
+/** Supervisores actualmente asignados a un empleado (para cargar la ficha al editar). */
+export async function listarSupervisoresDeEmpleado(
+  empresaId: number,
+  empleadoId: number,
+): Promise<{ id: number; nombre: string; numeroEmpleado: string; codigo: string }[]> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT sup.id, sup.nombre, sup.numero_empleado, sup.codigo
+     FROM empleado_supervisores es
+     INNER JOIN empleados sup ON sup.id = es.supervisor_id AND sup.empresa_id = es.empresa_id
+     WHERE es.empresa_id = ? AND es.empleado_id = ?
+     ORDER BY sup.nombre`,
+    [empresaId, empleadoId],
+  );
+  return rows.map((r) => ({
+    id: Number(r.id),
+    nombre: str(r.nombre),
+    numeroEmpleado: str(r.numero_empleado),
+    codigo: str(r.codigo),
+  }));
+}
+
 /** Lista simple (id, nombre) para poblar el selector de supervisor en la ficha. */
 export async function listarEmpleadosParaSupervisor(
   empresaId: number,
@@ -356,7 +459,13 @@ export type EmpleadoInput = {
   tipoCuenta?: string;
   banco?: string;
   contactoEmergencia?: string;
-  supervisorId?: number | null;
+  /**
+   * Lista de supervisores (múltiples). empleados.supervisor_id se deriva de
+   * aquí (= primer elemento, o null si está vacía) — ver paramsFicha(). El
+   * guardado real en empleado_supervisores ocurre después del
+   * INSERT/UPDATE de empleados, vía sincronizarSupervisoresEmpleado().
+   */
+  supervisorIds?: number[];
   /** Fase H1: solo RRHH/admin la cambia, desde la edición de empleado. */
   horasExtraHabilitado?: boolean;
 };
@@ -407,7 +516,12 @@ function paramsFicha(data: EmpleadoInput) {
     tipoCuenta: data.tipoCuenta?.trim() || null,
     banco: data.banco?.trim() || null,
     contactoEmergencia: data.contactoEmergencia?.trim() || null,
-    supervisorId: data.supervisorId ?? null,
+    // Compat legado: primer supervisor de la lista, o null si no hay
+    // ninguno. Única fuente de esta derivación en todo el módulo.
+    supervisorId:
+      data.supervisorIds && data.supervisorIds.length > 0
+        ? data.supervisorIds[0]
+        : null,
     horasExtraHabilitado: data.horasExtraHabilitado ? 1 : 0,
   };
 }
@@ -424,11 +538,15 @@ export async function crearEmpleado(
     throw new Error("El nombre del empleado es obligatorio.");
   }
 
-  if (
-    f.supervisorId != null &&
-    !(await supervisorValido(empresaId, f.supervisorId))
-  ) {
-    throw new Error("El supervisor seleccionado no es válido.");
+  // Alta: todavía no existe el propio id, así que no hay auto-referencia
+  // posible que validar (idPropio queda null).
+  const supervisores = await supervisoresValidos(
+    empresaId,
+    data.supervisorIds ?? [],
+    null,
+  );
+  if (!supervisores.ok) {
+    throw new Error(supervisores.mensaje);
   }
 
   let empleadoId: number;
@@ -542,6 +660,8 @@ export async function crearEmpleado(
     [empleadoId],
   );
 
+  await sincronizarSupervisoresEmpleado(empresaId, empleadoId, supervisores.ids);
+
   return empleadoId;
 }
 
@@ -553,11 +673,13 @@ export async function actualizarEmpleado(
   await asegurarSchemaEmpleados().catch(() => undefined);
   const f = paramsFicha(data);
   if (!f.nombre) throw new Error("El nombre del empleado es obligatorio.");
-  if (
-    f.supervisorId != null &&
-    !(await supervisorValido(empresaId, f.supervisorId, id))
-  ) {
-    throw new Error("El supervisor seleccionado no es válido.");
+  const supervisores = await supervisoresValidos(
+    empresaId,
+    data.supervisorIds ?? [],
+    id,
+  );
+  if (!supervisores.ok) {
+    throw new Error(supervisores.mensaje);
   }
   try {
     const result = await execute(
@@ -627,6 +749,9 @@ export async function actualizarEmpleado(
         empresaId,
       ],
     );
+    if (result.affectedRows > 0) {
+      await sincronizarSupervisoresEmpleado(empresaId, id, supervisores.ids);
+    }
     return result.affectedRows > 0;
   } catch {
     const result = await execute(

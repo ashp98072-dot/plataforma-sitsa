@@ -82,6 +82,14 @@ type Emp = {
   supervisorNombre?: string | null;
 };
 
+/** Fila de empleado_supervisores (vía GET /empleados/[id]) — múltiples supervisores. */
+type SupervisorInfo = {
+  id: number;
+  nombre: string;
+  numeroEmpleado?: string;
+  codigo: string;
+};
+
 type EmpleadoCambio = {
   id: number;
   campo: string;
@@ -122,7 +130,7 @@ type FormState = {
   horaEntradaTeorica: string;
   horaSalidaTeorica: string;
   estado: "Activo" | "Baja";
-  supervisorId: number | null;
+  supervisorIds: number[];
   horasExtraHabilitado: boolean;
   sueldoBase: string;
   bonoIncentivo: string;
@@ -211,7 +219,7 @@ function emptyForm(entrada = "08:00", salida = "17:00"): FormState {
     horaEntradaTeorica: entrada,
     horaSalidaTeorica: salida,
     estado: "Activo",
-    supervisorId: null,
+    supervisorIds: [],
     horasExtraHabilitado: false,
     sueldoBase: "",
     bonoIncentivo: "",
@@ -238,6 +246,7 @@ function emptyForm(entrada = "08:00", salida = "17:00"): FormState {
 function empToForm(
   e: Emp,
   horaDef: { entrada: string; salida: string },
+  supervisorIds: number[] = [],
 ): FormState {
   const licencia = e.licenciaTipo ?? "";
   return {
@@ -275,7 +284,7 @@ function empToForm(
       5,
     ),
     estado: e.estado === "Baja" ? "Baja" : "Activo",
-    supervisorId: e.supervisorId ?? null,
+    supervisorIds,
     horasExtraHabilitado: e.horasExtraHabilitado ?? false,
     sueldoBase: e.sueldoBase != null ? String(e.sueldoBase) : "",
     bonoIncentivo: e.bonoIncentivo != null ? String(e.bonoIncentivo) : "",
@@ -322,7 +331,7 @@ function formToBody(form: FormState) {
     bonoIncentivo: parseNum(rest.bonoIncentivo),
     bonoHerramientas: parseNum(rest.bonoHerramientas),
     licenciaTipo: rest.licenciaTipo || "",
-    supervisorId: rest.supervisorId ?? null,
+    supervisorIds: rest.supervisorIds,
   };
 }
 
@@ -414,9 +423,15 @@ type SeccionFicha =
 export default function EmpleadosPage() {
   const slug = String(useParams().slug);
   const [empleados, setEmpleados] = useState<Emp[]>([]);
-  // Activos de la empresa para el selector de Supervisor — independiente de
-  // los filtros de búsqueda/estado de la tabla (esos sí acotan `empleados`).
+  // Activos de la empresa para buscar/agregar Supervisor(es) — independiente
+  // de los filtros de búsqueda/estado de la tabla (esos sí acotan `empleados`).
   const [supervisoresDisponibles, setSupervisoresDisponibles] = useState<Emp[]>([]);
+  // Texto de búsqueda por nombre/código para el selector múltiple de supervisor.
+  const [supervisorBusqueda, setSupervisorBusqueda] = useState("");
+  // id -> "numeroEmpleado — nombre" para mostrar los chips seleccionados,
+  // incluyendo supervisores ya asignados que ya no estén Activos (no
+  // aparecerían en supervisoresDisponibles, que solo trae Activos).
+  const [supervisorLabels, setSupervisorLabels] = useState<Record<number, string>>({});
   const [q, setQ] = useState("");
   const [qDebounced, setQDebounced] = useState("");
   const [filtroTipo, setFiltroTipo] = useState("");
@@ -451,12 +466,14 @@ export default function EmpleadosPage() {
     setVista("lista");
     setEditId(null);
     setHistorial([]);
+    setSupervisorBusqueda("");
     setForm(emptyForm(horaDef.entrada, horaDef.salida));
   }
 
   function irANuevo() {
     setEditId(null);
     setHistorial([]);
+    setSupervisorBusqueda("");
     setForm(emptyForm(horaDef.entrada, horaDef.salida));
     setSecciones({
       identidad: true,
@@ -503,11 +520,26 @@ export default function EmpleadosPage() {
     });
   }, [slug, qDebounced, filtroTipo, filtroPago, filtroEstado]);
 
+  // Acumula id -> etiqueta para los chips, sin perder las de supervisores ya
+  // asignados que dejaron de estar Activos (esos no vuelven a llegar por
+  // supervisoresDisponibles, que solo trae Activos).
+  function mergeSupervisorLabels(
+    lista: { id: number; nombre: string; numeroEmpleado?: string; codigo: string }[],
+  ) {
+    setSupervisorLabels((prev) => {
+      const next = { ...prev };
+      for (const s of lista) {
+        next[s.id] = `${s.numeroEmpleado || s.codigo} — ${s.nombre}`;
+      }
+      return next;
+    });
+  }
+
   // Reutiliza el mismo GET /empleados, con estado=Activo, para poblar el
-  // selector de Supervisor — no crea una ruta nueva. Se llama desde dentro
-  // de `cargar()` (mismo efecto ya existente abajo) en vez de un efecto
-  // aparte, para no depender de los filtros/búsqueda que el usuario haya
-  // aplicado a la tabla y para no agregar un segundo useEffect con
+  // buscador de Supervisor(es) — no crea una ruta nueva. Se llama desde
+  // dentro de `cargar()` (mismo efecto ya existente abajo) en vez de un
+  // efecto aparte, para no depender de los filtros/búsqueda que el usuario
+  // haya aplicado a la tabla y para no agregar un segundo useEffect con
   // setState.
   const cargarSupervisores = useCallback(async () => {
     const res = await fetch(
@@ -515,7 +547,9 @@ export default function EmpleadosPage() {
     );
     const data = await res.json();
     if (!res.ok) return;
-    setSupervisoresDisponibles(data.empleados ?? []);
+    const activos: Emp[] = data.empleados ?? [];
+    setSupervisoresDisponibles(activos);
+    mergeSupervisorLabels(activos);
   }, [slug]);
 
   useEffect(() => {
@@ -552,6 +586,7 @@ export default function EmpleadosPage() {
   async function empezarEdicion(e: Emp) {
     setEditId(e.id);
     setHistorial([]);
+    setSupervisorBusqueda("");
     setVista("ficha");
     setSecciones({
       identidad: true,
@@ -567,7 +602,15 @@ export default function EmpleadosPage() {
       );
       const data = await res.json();
       if (res.ok && data.empleado) {
-        setForm(empToForm(data.empleado, horaDef));
+        const supervisores: SupervisorInfo[] = data.supervisores ?? [];
+        mergeSupervisorLabels(supervisores);
+        setForm(
+          empToForm(
+            data.empleado,
+            horaDef,
+            supervisores.map((s) => s.id),
+          ),
+        );
         setHistorial(data.historial ?? []);
         return;
       }
@@ -626,6 +669,7 @@ export default function EmpleadosPage() {
     setForm(emptyForm(horaDef.entrada, horaDef.salida));
     setEditId(null);
     setHistorial([]);
+    setSupervisorBusqueda("");
     setVista("lista");
     await cargar();
     await cargarSupervisores();
@@ -1063,29 +1107,88 @@ export default function EmpleadosPage() {
             <option value="Baja">Baja / Inactivo</option>
           </select>
         </label>
-        <label>
-          <FieldLabel hint="Para horas extra y jerarquía del equipo">
-            Supervisor
+        <div className="sm:col-span-2 lg:col-span-3">
+          <FieldLabel hint="Para horas extra y jerarquía del equipo — puede tener uno, varios o ninguno">
+            Supervisor(es)
           </FieldLabel>
-          <select
+          <input
+            type="text"
             className={input}
-            value={form.supervisorId ?? ""}
-            onChange={(e) =>
-              patchForm({
-                supervisorId: e.target.value ? Number(e.target.value) : null,
+            placeholder="Buscar supervisor por nombre"
+            value={supervisorBusqueda}
+            onChange={(e) => setSupervisorBusqueda(e.target.value)}
+          />
+          {supervisorBusqueda.trim() ? (
+            <div className="mt-1 max-h-40 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--card)]">
+              {(() => {
+                const q = supervisorBusqueda.trim().toLowerCase();
+                const candidatos = supervisoresDisponibles.filter((s) => {
+                  if (s.id === editId) return false;
+                  if (form.supervisorIds.includes(s.id)) return false;
+                  const haystack =
+                    `${s.nombre} ${s.numeroEmpleado ?? ""} ${s.codigo}`.toLowerCase();
+                  return haystack.includes(q);
+                });
+                if (candidatos.length === 0) {
+                  return (
+                    <p className="px-3 py-2 text-xs text-[var(--muted)]">
+                      Sin resultados.
+                    </p>
+                  );
+                }
+                return candidatos.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    className="block w-full px-3 py-2 text-left text-sm hover:bg-[var(--nav-hover)]"
+                    onClick={() => {
+                      mergeSupervisorLabels([s]);
+                      patchForm({
+                        supervisorIds: [...form.supervisorIds, s.id],
+                      });
+                      setSupervisorBusqueda("");
+                    }}
+                  >
+                    {s.numeroEmpleado || s.codigo} — {s.nombre}
+                  </button>
+                ));
+              })()}
+            </div>
+          ) : null}
+          <div className="mt-2 flex flex-wrap gap-2">
+            {form.supervisorIds.length === 0 ? (
+              <p className="text-xs text-[var(--muted)]">
+                Sin supervisores asignados
+              </p>
+            ) : (
+              form.supervisorIds.map((sid) => {
+                const label = supervisorLabels[sid] ?? `#${sid}`;
+                return (
+                  <span
+                    key={sid}
+                    className="inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--input)] px-3 py-1 text-xs"
+                  >
+                    {label}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        patchForm({
+                          supervisorIds: form.supervisorIds.filter(
+                            (id) => id !== sid,
+                          ),
+                        })
+                      }
+                      className="ml-1 text-[var(--muted)] hover:text-red-400"
+                      aria-label={`Quitar ${label}`}
+                    >
+                      ×
+                    </button>
+                  </span>
+                );
               })
-            }
-          >
-            <option value="">Sin supervisor</option>
-            {supervisoresDisponibles
-              .filter((s) => s.id !== editId)
-              .map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.numeroEmpleado || s.codigo} — {s.nombre}
-                </option>
-              ))}
-          </select>
-        </label>
+            )}
+          </div>
+        </div>
         <label className="flex items-center gap-2">
           <input
             type="checkbox"

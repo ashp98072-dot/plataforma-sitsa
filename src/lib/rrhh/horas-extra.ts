@@ -45,17 +45,25 @@ export type Subordinado = {
  * Equipo directo de un supervisor (para el selector del portal). Fase H1:
  * solo colaboradores elegibles para horas extra — un supervisor ya no ve en
  * el selector a quien no está habilitado.
+ *
+ * Múltiples supervisores: usa empleado_supervisores (no
+ * empleados.supervisor_id) como fuente de verdad, para reconocer también
+ * relaciones creadas cuando un empleado tiene varios supervisores. DISTINCT
+ * evita duplicados si por alguna razón hubiera más de una fila para el
+ * mismo par empleado/supervisor.
  */
 export async function listarSubordinados(
   empresaId: number,
   supervisorId: number,
 ): Promise<Subordinado[]> {
   const rows = await query<RowDataPacket[]>(
-    `SELECT id, codigo, nombre, sueldo_base
-     FROM empleados
-     WHERE empresa_id = ? AND supervisor_id = ? AND estado = 'Activo'
-       AND horas_extra_habilitado = 1
-     ORDER BY nombre`,
+    `SELECT DISTINCT e.id, e.codigo, e.nombre, e.sueldo_base
+     FROM empleados e
+     INNER JOIN empleado_supervisores es
+       ON es.empresa_id = e.empresa_id AND es.empleado_id = e.id
+     WHERE e.empresa_id = ? AND es.supervisor_id = ? AND e.estado = 'Activo'
+       AND e.horas_extra_habilitado = 1
+     ORDER BY e.nombre`,
     [empresaId, supervisorId],
   );
   return rows.map((r) => ({
@@ -150,10 +158,15 @@ export async function registrarHorasExtra(input: {
   // equipo directo, nunca de un empleado de otro supervisor cambiando el id
   // en la petición (esta consulta filtra por ambos, no solo por el
   // empleado) — validación server-side, no se confía en que la UI ya haya
-  // filtrado el selector.
+  // filtrado el selector. Usa empleado_supervisores (múltiples
+  // supervisores), no empleados.supervisor_id — mismo criterio que
+  // listarSubordinados().
   const subordinado = await query<RowDataPacket[]>(
-    `SELECT id, nombre, sueldo_base, horas_extra_habilitado FROM empleados
-     WHERE id = ? AND empresa_id = ? AND supervisor_id = ? AND estado = 'Activo'
+    `SELECT e.id, e.nombre, e.sueldo_base, e.horas_extra_habilitado
+     FROM empleados e
+     INNER JOIN empleado_supervisores es
+       ON es.empresa_id = e.empresa_id AND es.empleado_id = e.id
+     WHERE e.id = ? AND e.empresa_id = ? AND es.supervisor_id = ? AND e.estado = 'Activo'
      LIMIT 1`,
     [input.empleadoId, input.empresaId, input.supervisorId],
   );
