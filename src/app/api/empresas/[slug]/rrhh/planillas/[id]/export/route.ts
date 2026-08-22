@@ -106,14 +106,14 @@ export async function GET(_req: Request, ctx: Ctx) {
   cu.addRow(["IGSS laboral retenido", cuadre.totales.igssLaboral]);
   cu.addRow(["IGSS patronal (costo empresa)", cuadre.totales.igssPatronal]);
   cu.addRow(["Descuentos", cuadre.totales.descuentos]);
-  cu.addRow(["ISR (manual)", cuadre.totales.isr]);
+  cu.addRow(["ISR", cuadre.totales.isr]);
   cu.addRow(["Neto a pagar", cuadre.totales.neto]);
   cu.addRow(["Ya pagado", cuadre.totales.pagado]);
   cu.addRow(["Pendiente de pago", cuadre.totales.pendiente]);
   cu.addRow([]);
   cu.addRow([
     "Notas",
-    "IGSS laboral 4.83% e IGSS patronal 12.67% sobre sueldo ordinario (sin bono incentivo). Outsourcing no calcula IGSS. ISR se captura manualmente (RetenISR/SAT). Exportar y cruzar con planilla electrónica IGSS.",
+    "IGSS laboral 4.83% e IGSS patronal 12.67% sobre sueldo ordinario (sin bono incentivo). Outsourcing no calcula IGSS. ISR se calcula automáticamente (proyección anual SAT) y es ajustable manualmente por línea si hace falta. En periodos de Quincena 1/Quincena 2, sueldo, bonos, IGSS e ISR se reparten entre ambas quincenas del mes. Exportar y cruzar con planilla electrónica IGSS.",
   ]);
 
   const buf = Buffer.from(await wb.xlsx.writeBuffer());

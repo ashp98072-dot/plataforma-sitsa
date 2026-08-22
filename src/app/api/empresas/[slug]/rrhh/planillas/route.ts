@@ -40,9 +40,13 @@ export async function GET(_req: Request, ctx: Ctx) {
 }
 
 const schema = z.object({
-  codigo: z.string().min(1),
-  fechaInicio: z.string().min(8),
-  fechaFin: z.string().min(8),
+  // Fase P1: código/fechas ahora opcionales — para QUINCENA_1/QUINCENA_2
+  // con mes+anio, crearPeriodo() los calcula/genera automáticamente. Sigue
+  // aceptando clientes existentes que envían todo manualmente (MENSUAL,
+  // ESPECIAL, o cualquier caso donde RRHH prefiera ajustarlo a mano).
+  codigo: z.string().min(1).optional(),
+  fechaInicio: z.string().min(8).optional(),
+  fechaFin: z.string().min(8).optional(),
   notas: z.string().optional(),
   // Fase P0: identidad opcional de quincena/mes — aditivo, no rompe
   // clientes existentes que solo envían codigo/fechaInicio/fechaFin/notas.
@@ -88,11 +92,14 @@ export async function POST(req: Request, ctx: Ctx) {
       usuario: guard.session.username,
       accion: "crear_periodo_planilla",
       modulo: "rrhh",
-      detalle: `Periodo #${r.id} ${d.codigo} · ${d.fechaInicio} → ${d.fechaFin}${d.tipoPeriodo ? ` · ${d.tipoPeriodo}` : ""}`,
+      detalle: `Periodo #${r.id} ${r.codigo} · ${r.fechaInicio} → ${r.fechaFin}${d.tipoPeriodo ? ` · ${d.tipoPeriodo}` : ""}`,
     });
     return NextResponse.json({
       id: r.id,
-      mensaje: "Periodo de planilla creado (borrador).",
+      codigo: r.codigo,
+      fechaInicio: r.fechaInicio,
+      fechaFin: r.fechaFin,
+      mensaje: `Periodo de planilla creado (borrador): ${r.codigo}, ${r.fechaInicio} → ${r.fechaFin}.`,
     });
   } catch {
     return NextResponse.json(

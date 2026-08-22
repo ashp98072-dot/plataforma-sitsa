@@ -10,6 +10,7 @@ import {
   type FormaPago,
 } from "@/lib/rrhh/contratos-pago";
 import { calcularISRMensual } from "@/lib/rrhh/isr";
+import { obtenerRangoPeriodo } from "@/lib/rrhh/periodos";
 import {
   aplicarCuotasElegibles,
   sumaCuotasAplicadasPorPeriodo,
@@ -56,6 +57,16 @@ export type PlanillaLinea = {
   dpi: string;
   tipoContrato: string;
   formaPago: FormaPago;
+  /**
+   * Fase P1: sueldo CONTRACTUAL mensual del empleado, para mostrar junto al
+   * sueldo del período — leído en vivo de `empleados.sueldo_base` (no es una
+   * copia histórica: si el sueldo del empleado cambia después de generar un
+   * periodo antiguo, este campo reflejará el valor actual, no el vigente en
+   * ese momento). `sueldoBase` de abajo sigue siendo el valor REAL usado
+   * para ese período — completo en MENSUAL/ESPECIAL/histórico, repartido en
+   * QUINCENA_1/QUINCENA_2 (ver generarLineasPeriodo).
+   */
+  sueldoMensual: number;
   sueldoBase: number;
   bonoIncentivo: number;
   bonoHerramientas: number;
@@ -195,6 +206,7 @@ function mapLinea(r: RowDataPacket): PlanillaLinea {
     dpi: r.dpi ? String(r.dpi) : "",
     tipoContrato: String(r.tipo_contrato ?? "fijo"),
     formaPago: normalizarFormaPago(String(r.forma_pago ?? "transferencia")),
+    sueldoMensual: Number(r.sueldo_mensual ?? r.sueldo_base ?? 0),
     sueldoBase: Number(r.sueldo_base ?? 0),
     bonoIncentivo: Number(r.bono_incentivo ?? 0),
     bonoHerramientas: Number(r.bono_herramientas ?? 0),
@@ -236,9 +248,23 @@ export async function obtenerPeriodo(
 }
 
 export type NuevoPeriodoInput = {
-  codigo: string;
-  fechaInicio: string;
-  fechaFin: string;
+  /**
+   * Fase P1: opcional. Si se omite y hay identidad de quincena completa
+   * (tipoPeriodo QUINCENA_1/QUINCENA_2 + mes + anio + numeroQuincena), se
+   * genera automáticamente como YYYY-MM-Q1/YYYY-MM-Q2 (ver
+   * generarCodigoPeriodoQuincenal). MENSUAL/ESPECIAL siguen requiriendo
+   * código manual, igual que antes.
+   */
+  codigo?: string;
+  /**
+   * Fase P1: opcional. Si se omiten y hay identidad de quincena/mes
+   * (tipoPeriodo + mes + anio), se calculan automáticamente con
+   * obtenerRangoPeriodo() — mismo cálculo ya usado por /planillas/sugerir,
+   * respetando ciclo_quincenal configurado por empresa y el último día
+   * real del mes (28/29/30/31).
+   */
+  fechaInicio?: string;
+  fechaFin?: string;
   notas?: string | null;
   creadoPor: string;
   tipoPeriodo?: TipoPeriodo | null;
@@ -248,7 +274,7 @@ export type NuevoPeriodoInput = {
 };
 
 export type ResultadoCrearPeriodo =
-  | { ok: true; id: number }
+  | { ok: true; id: number; codigo: string; fechaInicio: string; fechaFin: string }
   | {
       ok: false;
       motivo: "fechas_invalidas" | "solapado" | "codigo_duplicado" | "lock" | "error";
@@ -256,11 +282,45 @@ export type ResultadoCrearPeriodo =
     };
 
 /**
+ * Código legible determinístico para una quincena: YYYY-MM-Q1 / YYYY-MM-Q2.
+ * Verifica colisión contra códigos ya existentes de la empresa (poco
+ * probable — solo ocurriría si algún periodo anterior ya usó manualmente
+ * ese mismo texto) y agrega un sufijo numérico como salida seguras. Se
+ * llama SIEMPRE dentro del GET_LOCK de crearPeriodo, así que no hay carrera
+ * posible entre dos altas concurrentes de la misma empresa.
+ */
+async function generarCodigoPeriodoQuincenal(
+  empresaId: number,
+  anio: number,
+  mes: number,
+  quincena: 1 | 2,
+): Promise<string | null> {
+  const base = `${anio}-${String(mes).padStart(2, "0")}-Q${quincena}`;
+  for (let intento = 0; intento < 6; intento++) {
+    const candidato = intento === 0 ? base : `${base}-${intento + 1}`;
+    const rows = await query<RowDataPacket[]>(
+      `SELECT id FROM rrhh_planilla_periodos WHERE empresa_id = ? AND codigo = ? LIMIT 1`,
+      [empresaId, candidato],
+    );
+    if (!rows[0]) return candidato;
+  }
+  return null;
+}
+
+/**
  * Fase P0: crea un periodo validando fechas y solapamiento, protegido con
  * GET_LOCK por empresa (mismo patrón ya usado en flota/viajes y
  * flota/servicios) para que dos requests concurrentes no puedan crear dos
  * periodos solapados — un SELECT de verificación seguido de un INSERT
  * separado no es suficiente contra esa carrera.
+ *
+ * Fase P1: código y fechas ahora son opcionales en el input — si hay
+ * identidad de quincena completa (tipoPeriodo QUINCENA_1/QUINCENA_2 + mes +
+ * anio + numeroQuincena), ambos se calculan/generan automáticamente DENTRO
+ * del mismo GET_LOCK, antes de la verificación de solapamiento. MENSUAL,
+ * ESPECIAL, y cualquier llamador que ya envíe código/fechas manualmente
+ * (compatibilidad con clientes existentes) siguen funcionando exactamente
+ * igual que antes.
  */
 export async function crearPeriodo(
   empresaId: number,
@@ -268,13 +328,15 @@ export async function crearPeriodo(
 ): Promise<ResultadoCrearPeriodo> {
   await asegurarSchemaPlanillas();
 
-  if (input.fechaInicio > input.fechaFin) {
-    return {
-      ok: false,
-      motivo: "fechas_invalidas",
-      mensaje: "La fecha de inicio no puede ser posterior a la fecha de fin.",
-    };
-  }
+  const esQuincenal =
+    input.tipoPeriodo === "QUINCENA_1" || input.tipoPeriodo === "QUINCENA_2";
+  const numeroQuincenaEsperado: 1 | 2 | null =
+    input.tipoPeriodo === "QUINCENA_1" ? 1 : input.tipoPeriodo === "QUINCENA_2" ? 2 : null;
+  const tieneIdentidadQuincenal =
+    esQuincenal &&
+    input.mes != null &&
+    input.anio != null &&
+    (input.numeroQuincena == null || input.numeroQuincena === numeroQuincenaEsperado);
 
   const lockKey = `rrhh_planilla_periodo_${empresaId}`;
   const conn = await getPool().getConnection();
@@ -298,12 +360,70 @@ export async function crearPeriodo(
       };
     }
 
+    // Fase P1: resolver fechas automáticamente (dentro del lock, mismo
+    // cálculo que /planillas/sugerir) si el llamador no las envió.
+    let fechaInicio = input.fechaInicio;
+    let fechaFin = input.fechaFin;
+    if ((!fechaInicio || !fechaFin) && tieneIdentidadQuincenal) {
+      const etiqueta = input.tipoPeriodo === "QUINCENA_1" ? "Quincena 1" : "Quincena 2";
+      const rango = await obtenerRangoPeriodo(
+        empresaId,
+        etiqueta,
+        new Date(input.anio!, input.mes! - 1, 1),
+      );
+      if (rango) {
+        fechaInicio = rango.desde;
+        fechaFin = rango.hasta;
+      }
+    }
+    if (!fechaInicio || !fechaFin) {
+      return {
+        ok: false,
+        motivo: "fechas_invalidas",
+        mensaje:
+          "Indica fecha de inicio y fin, o año/mes/quincena para calcularlas automáticamente.",
+      };
+    }
+    if (fechaInicio > fechaFin) {
+      return {
+        ok: false,
+        motivo: "fechas_invalidas",
+        mensaje: "La fecha de inicio no puede ser posterior a la fecha de fin.",
+      };
+    }
+
+    // Fase P1: generar código automáticamente si no vino en el input.
+    let codigo = input.codigo?.trim() || "";
+    if (!codigo && tieneIdentidadQuincenal) {
+      const generado = await generarCodigoPeriodoQuincenal(
+        empresaId,
+        input.anio!,
+        input.mes!,
+        numeroQuincenaEsperado as 1 | 2,
+      );
+      if (!generado) {
+        return {
+          ok: false,
+          motivo: "error",
+          mensaje: "No se pudo generar un código único para este periodo.",
+        };
+      }
+      codigo = generado;
+    }
+    if (!codigo) {
+      return {
+        ok: false,
+        motivo: "fechas_invalidas",
+        mensaje: "Indica un código, o tipo de periodo + año + mes + quincena para generarlo.",
+      };
+    }
+
     const [overlapRows] = await conn.query<RowDataPacket[]>(
       `SELECT id, codigo FROM rrhh_planilla_periodos
        WHERE empresa_id = ? AND estado <> 'Cancelado'
          AND fecha_inicio <= ? AND fecha_fin >= ?
        LIMIT 1`,
-      [empresaId, input.fechaFin, input.fechaInicio],
+      [empresaId, fechaFin, fechaInicio],
     );
     if (overlapRows[0]) {
       return {
@@ -321,18 +441,18 @@ export async function crearPeriodo(
          VALUES (?, ?, ?, ?, 'Borrador', ?, ?, ?, ?, ?, ?)`,
         [
           empresaId,
-          input.codigo,
-          input.fechaInicio,
-          input.fechaFin,
+          codigo,
+          fechaInicio,
+          fechaFin,
           input.notas ?? null,
           input.creadoPor,
           input.tipoPeriodo ?? null,
-          input.numeroQuincena ?? null,
+          input.numeroQuincena ?? numeroQuincenaEsperado ?? null,
           input.mes ?? null,
           input.anio ?? null,
         ],
       );
-      return { ok: true, id: Number(result.insertId) };
+      return { ok: true, id: Number(result.insertId), codigo, fechaInicio, fechaFin };
     } catch (e) {
       const msg = e instanceof Error ? e.message : "";
       if (/Duplicate|uq_planilla/i.test(msg)) {
@@ -440,10 +560,16 @@ export async function listarLineas(
   periodoId: number,
 ): Promise<PlanillaLinea[]> {
   await asegurarSchemaPlanillas();
+  // Fase P1: sueldo mensual leído en vivo del empleado (LEFT JOIN — nunca
+  // bloquea la lectura de la línea si el empleado ya no existe/cambió de
+  // empresa; COALESCE cae de vuelta al sueldo_base ya persistido en la
+  // línea en ese caso).
   const rows = await query<RowDataPacket[]>(
-    `SELECT * FROM rrhh_planilla_lineas
-     WHERE empresa_id = ? AND periodo_id = ?
-     ORDER BY nombre_empleado`,
+    `SELECT l.*, COALESCE(e.sueldo_base, l.sueldo_base) AS sueldo_mensual
+     FROM rrhh_planilla_lineas l
+     LEFT JOIN empleados e ON e.id = l.id_empleado AND e.empresa_id = l.empresa_id
+     WHERE l.empresa_id = ? AND l.periodo_id = ?
+     ORDER BY l.nombre_empleado`,
     [empresaId, periodoId],
   );
   return rows.map(mapLinea);
@@ -632,24 +758,40 @@ export async function listarPrestacionesDetalle(
  * mismo periodo no se vuelven a tocar pero sí se vuelven a sumar (mismo
  * criterio que las cuotas D1).
  *
- * Fase D3 — IGSS quincenal. El IGSS mensual (sueldo_base × IGSS_LABORAL_PCT,
- * sueldo_base ya es el sueldo CONTRACTUAL mensual del empleado, no se divide
- * en ningún punto del cálculo) es la fuente de verdad; cómo se retiene según
- * el tipo de periodo:
- * - tipoPeriodo NULL (histórico, sin metadatos de P0): comportamiento
- *   EXACTO de siempre — igss_laboral = IGSS mensual completo. Ningún
- *   periodo histórico cambia de valor.
- * - MENSUAL: igss_laboral = IGSS mensual completo (no se divide).
- * - ESPECIAL (nuevo): igss_laboral = 0 — no se asume que un periodo
- *   especial siempre cotiza IGSS.
- * - QUINCENA_1: igss_laboral = redondearQ(IGSS mensual / 2).
+ * Fase D3 / Fase P1 — reparto quincenal. `sueldo`/`bonoInc`/`bonoHerr` leídos
+ * de `empleados` siguen siendo los valores CONTRACTUALES MENSUALES completos
+ * (nunca se sobreescriben ahí) — lo que cambia según el tipo de periodo es
+ * cuánto de ese valor mensual entra en CADA línea:
+ * - tipoPeriodo NULL (histórico, sin metadatos de P0): comportamiento EXACTO
+ *   de siempre — todo el valor mensual completo. Ningún periodo histórico
+ *   cambia de valor (y no puede regenerarse: generarLineasPeriodo ya rechaza
+ *   periodos Cerrada/Pagada/Cancelado, así que esta fórmula nueva nunca
+ *   toca una planilla histórica ya cerrada).
+ * - MENSUAL: valor mensual completo para sueldo/bono/IGSS laboral/IGSS
+ *   patronal/ISR (sin cambios respecto a antes).
+ * - ESPECIAL: igual que MENSUAL salvo igss_laboral = 0 (no se asume que un
+ *   periodo especial siempre cotiza IGSS) — se conserva la regla existente,
+ *   no se tocó nada más aquí por decisión explícita.
+ * - QUINCENA_1: cada uno de sueldo_base, bono_incentivo, bono_herramientas,
+ *   igss_laboral, igss_patronal e ISR = redondearQ(valor mensual / 2).
  * - QUINCENA_2: busca la línea de QUINCENA_1 del mismo empresa/mes/año/
  *   empleado (misma conexión/transacción, sin congelar un valor viejo si Q1
- *   fue regenerada después) y retiene exactamente el resto
- *   (IGSS mensual − Q1 retenido), para que Q1+Q2 cuadre siempre con el
- *   mensual. Si no existe Q1 válida (periodo cancelado o no generado
- *   todavía), retiene el IGSS mensual COMPLETO en Q2 y lo reporta en una
- *   advertencia de auditoría — nunca deja el mes sin retener silenciosamente.
+ *   fue regenerada después) y cada uno de esos 6 conceptos = redondearQ(valor
+ *   mensual − lo que Q1 REALMENTE tiene persistido) — no un recálculo
+ *   teórico, así Q1+Q2 cuadra exacto con el mensual incluso si alguien
+ *   editó el ISR de Q1 a mano. Si no existe Q1 válida (periodo cancelado o
+ *   no generado todavía), Q2 recibe el valor mensual COMPLETO de los 6
+ *   conceptos y se reporta en una sola advertencia de auditoría — nunca se
+ *   retiene/paga de menos silenciosamente.
+ * - Horas extra, descuentos/cuotas y prestaciones/otros ingresos NO se
+ *   reparten — ya llegan acotados por rango de fecha o por
+ *   planilla_periodo_id (D1/D2/H2), así que cada uno cae naturalmente en su
+ *   propia quincena sin ningún cambio adicional aquí.
+ * - Outsourcing: igss_laboral/igss_patronal/isr siempre 0 (como antes);
+ *   sueldo/bono_incentivo/bono_herramientas SÍ se reparten igual que un
+ *   empleado formal en QUINCENA_1/QUINCENA_2, por consistencia con la regla
+ *   general — no había ninguna excepción documentada para outsourcing en
+ *   estos tres conceptos.
  */
 export async function generarLineasPeriodo(
   empresaId: number,
@@ -747,10 +889,25 @@ export async function generarLineasPeriodo(
       periodoId,
     );
 
-    const igssQ1PorEmpleado = new Map<number, number>();
+    // Fase P1: se amplía de "solo igss_laboral" a los 6 conceptos que ahora
+    // se reparten entre Q1/Q2 (sueldo, bono incentivo, bono herramientas,
+    // IGSS laboral, IGSS patronal, ISR) — mismo mecanismo, misma garantía de
+    // no congelar un valor viejo si Q1 se regeneró justo antes.
+    const datosQ1PorEmpleado = new Map<
+      number,
+      {
+        sueldoBase: number;
+        bonoIncentivo: number;
+        bonoHerramientas: number;
+        igssLaboral: number;
+        igssPatronal: number;
+        isr: number;
+      }
+    >();
     if (necesitaIgssQ1) {
       const [q1Rows] = await conn.query<RowDataPacket[]>(
-        `SELECT l.id_empleado, l.igss_laboral
+        `SELECT l.id_empleado, l.sueldo_base, l.bono_incentivo, l.bono_herramientas,
+                l.igss_laboral, l.igss_patronal, l.isr
          FROM rrhh_planilla_periodos p
          INNER JOIN rrhh_planilla_lineas l ON l.periodo_id = p.id AND l.empresa_id = p.empresa_id
          WHERE p.empresa_id = ? AND p.tipo_periodo = 'QUINCENA_1'
@@ -758,7 +915,14 @@ export async function generarLineasPeriodo(
         [empresaId, periodo.mes, periodo.anio],
       );
       for (const r of q1Rows) {
-        igssQ1PorEmpleado.set(Number(r.id_empleado), Number(r.igss_laboral ?? 0));
+        datosQ1PorEmpleado.set(Number(r.id_empleado), {
+          sueldoBase: Number(r.sueldo_base ?? 0),
+          bonoIncentivo: Number(r.bono_incentivo ?? 0),
+          bonoHerramientas: Number(r.bono_herramientas ?? 0),
+          igssLaboral: Number(r.igss_laboral ?? 0),
+          igssPatronal: Number(r.igss_patronal ?? 0),
+          isr: Number(r.isr ?? 0),
+        });
       }
     }
 
@@ -791,45 +955,81 @@ export async function generarLineasPeriodo(
         Number(descuentosLegado.get(empId) ?? 0) + Number(descuentosD1.get(empId) ?? 0),
       );
 
-      // Fase D3: IGSS mensual esperado, siempre sobre sueldo_base (mensual
-      // contractual) — igual que antes. Cómo se retiene depende del tipo de
-      // periodo (ver comentario de la función).
+      // Fase D3 / P1: valores mensuales esperados — siempre sobre los
+      // campos CONTRACTUALES completos del empleado (nunca se sobreescriben
+      // aquí). igssMensual/igssPatMensual/isrMensual ya quedan en 0 para
+      // outsourcing (out), así que la repartición 50/50 de más abajo
+      // produce 0/0 en ambas quincenas para esos tres conceptos sin
+      // necesitar una rama aparte.
       const igssMensual = out ? 0 : redondearQ(sueldo * IGSS_LABORAL_PCT);
-      let igssLab: number;
-      if (out) {
-        igssLab = 0;
-      } else if (periodo.tipoPeriodo == null || periodo.tipoPeriodo === "MENSUAL") {
-        igssLab = igssMensual;
-      } else if (periodo.tipoPeriodo === "ESPECIAL") {
-        igssLab = 0;
-      } else if (periodo.tipoPeriodo === "QUINCENA_1") {
-        igssLab = redondearQ(igssMensual / 2);
-      } else {
-        // QUINCENA_2
-        const q1 = necesitaIgssQ1 ? igssQ1PorEmpleado.get(empId) : undefined;
-        if (q1 == null) {
-          igssLab = igssMensual;
-          empleadosSinIgssQ1 += 1;
-        } else {
-          igssLab = redondearQ(igssMensual - q1);
-        }
-      }
-      const igssPat = out ? 0 : redondearQ(sueldo * IGSS_PATRONAL_PCT);
+      const igssPatMensual = out ? 0 : redondearQ(sueldo * IGSS_PATRONAL_PCT);
       const anterior = prevMap.get(empId);
       const anioFiscal =
         Number(periodo.fechaInicio.slice(0, 4)) || new Date().getFullYear();
-      const isr = out
+      const isrMensual = out
         ? 0
         : anterior && anterior.isr != null
           ? Number(anterior.isr) || 0
           : calcularISRMensual(sueldo, bonoInc, anioFiscal);
+
+      let sueldoLinea: number;
+      let bonoIncLinea: number;
+      let bonoHerrLinea: number;
+      let igssLab: number;
+      let igssPat: number;
+      let isr: number;
+
+      if (periodo.tipoPeriodo == null || periodo.tipoPeriodo === "MENSUAL") {
+        sueldoLinea = sueldo;
+        bonoIncLinea = bonoInc;
+        bonoHerrLinea = bonoHerr;
+        igssLab = igssMensual;
+        igssPat = igssPatMensual;
+        isr = isrMensual;
+      } else if (periodo.tipoPeriodo === "ESPECIAL") {
+        // Regla existente conservada tal cual: solo igss_laboral = 0 aquí.
+        sueldoLinea = sueldo;
+        bonoIncLinea = bonoInc;
+        bonoHerrLinea = bonoHerr;
+        igssLab = 0;
+        igssPat = igssPatMensual;
+        isr = isrMensual;
+      } else if (periodo.tipoPeriodo === "QUINCENA_1") {
+        sueldoLinea = redondearQ(sueldo / 2);
+        bonoIncLinea = redondearQ(bonoInc / 2);
+        bonoHerrLinea = redondearQ(bonoHerr / 2);
+        igssLab = redondearQ(igssMensual / 2);
+        igssPat = redondearQ(igssPatMensual / 2);
+        isr = redondearQ(isrMensual / 2);
+      } else {
+        // QUINCENA_2 — reconcilia contra lo que Q1 REALMENTE tiene
+        // persistido (ver JSDoc de la función).
+        const q1 = necesitaIgssQ1 ? datosQ1PorEmpleado.get(empId) : undefined;
+        if (q1 == null) {
+          sueldoLinea = sueldo;
+          bonoIncLinea = bonoInc;
+          bonoHerrLinea = bonoHerr;
+          igssLab = igssMensual;
+          igssPat = igssPatMensual;
+          isr = isrMensual;
+          empleadosSinIgssQ1 += 1;
+        } else {
+          sueldoLinea = redondearQ(sueldo - q1.sueldoBase);
+          bonoIncLinea = redondearQ(bonoInc - q1.bonoIncentivo);
+          bonoHerrLinea = redondearQ(bonoHerr - q1.bonoHerramientas);
+          igssLab = redondearQ(igssMensual - q1.igssLaboral);
+          igssPat = redondearQ(igssPatMensual - q1.igssPatronal);
+          isr = redondearQ(isrMensual - q1.isr);
+        }
+      }
+
       const forma = anterior
         ? anterior.formaPago
         : normalizarFormaPago(String(e.forma_pago ?? "transferencia"));
       const estadoPago = anterior?.estadoPago === "Pagado" ? "Pagado" : "Pendiente";
       const refPago = anterior?.refPago ?? "";
       const neto = redondearQ(
-        sueldo + bonoInc + bonoHerr + otros - igssLab - desc - isr,
+        sueldoLinea + bonoIncLinea + bonoHerrLinea + otros - igssLab - desc - isr,
       );
 
       await conn.execute(
@@ -848,9 +1048,9 @@ export async function generarLineasPeriodo(
           e.dpi ? String(e.dpi) : null,
           tipo,
           forma,
-          sueldo,
-          bonoInc,
-          bonoHerr,
+          sueldoLinea,
+          bonoIncLinea,
+          bonoHerrLinea,
           otros,
           igssLab,
           igssPat,
@@ -893,7 +1093,7 @@ export async function generarLineasPeriodo(
       usuario: opts.usuario,
       accion: "igss_quincena2_sin_q1",
       modulo: "rrhh",
-      detalle: `Periodo #${periodoId} ${periodo.codigo} (Q2) · ${empleadosSinIgssQ1} empleado(s) sin retención Q1 · se aplicó el saldo IGSS mensual completo en Q2.`,
+      detalle: `Periodo #${periodoId} ${periodo.codigo} (Q2) · ${empleadosSinIgssQ1} empleado(s) sin Q1 válida · se aplicó el valor mensual completo (sueldo, bonos, IGSS e ISR) en Q2 en vez de repartirlo.`,
     });
   }
   // Fase H2: un solo resumen por periodo, no una entrada por registro.
