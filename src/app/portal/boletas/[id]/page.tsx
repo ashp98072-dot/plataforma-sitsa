@@ -8,6 +8,7 @@ import {
   listarPrestacionesDetalle,
 } from "@/lib/rrhh/planillas";
 import { listarCuotasAplicadasDetalle } from "@/lib/rrhh/descuentos";
+import { listarHorasExtraAplicadasDetalle } from "@/lib/rrhh/horas-extra";
 
 const ESTADOS_VISIBLES_COLABORADOR = ["Cerrada", "Pagada"];
 
@@ -61,24 +62,31 @@ export default async function BoletaDetallePage({
     notFound();
   }
 
-  const [prestacionesDetalle, descuentosLegadoDetalle, cuotasD1Detalle] = await Promise.all([
-    listarPrestacionesDetalle(
-      session!.empresaId,
-      session!.empleadoId,
-      periodo!.fechaInicio,
-      periodo!.fechaFin,
-    ),
-    listarDescuentosDetalle(
-      session!.empresaId,
-      session!.empleadoId,
-      periodo!.fechaInicio,
-      periodo!.fechaFin,
-    ),
-    // Fase D2: cuotas del motor nuevo (rrhh_descuento_cuotas) aplicadas
-    // específicamente a ESTE periodo — fuente adicional, no reemplaza el
-    // detalle legado de arriba.
-    listarCuotasAplicadasDetalle(session!.empresaId, session!.empleadoId, periodoId),
-  ]);
+  const [prestacionesLegadoDetalle, descuentosLegadoDetalle, cuotasD1Detalle, horasExtraDetalle] =
+    await Promise.all([
+      listarPrestacionesDetalle(
+        session!.empresaId,
+        session!.empleadoId,
+        periodo!.fechaInicio,
+        periodo!.fechaFin,
+      ),
+      listarDescuentosDetalle(
+        session!.empresaId,
+        session!.empleadoId,
+        periodo!.fechaInicio,
+        periodo!.fechaFin,
+      ),
+      // Fase D2: cuotas del motor nuevo (rrhh_descuento_cuotas) aplicadas
+      // específicamente a ESTE periodo — fuente adicional, no reemplaza el
+      // detalle legado de arriba.
+      listarCuotasAplicadasDetalle(session!.empresaId, session!.empleadoId, periodoId),
+      // Fase H2: horas extra (horas_extra_registros) aplicadas
+      // específicamente a ESTE periodo — igual que las cuotas D1, fuente
+      // adicional sin solape con las prestaciones legado (H1/H2 ya no
+      // escriben en rrhh_prestaciones).
+      listarHorasExtraAplicadasDetalle(session!.empresaId, session!.empleadoId, periodoId),
+    ]);
+  const prestacionesDetalle = [...prestacionesLegadoDetalle, ...horasExtraDetalle];
   const descuentosDetalle = [...descuentosLegadoDetalle, ...cuotasD1Detalle];
 
   const sumaPrestacionesDetalle = prestacionesDetalle.reduce((a, i) => a + i.monto, 0);

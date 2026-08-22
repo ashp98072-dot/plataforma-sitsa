@@ -18,7 +18,10 @@ function EstadoBadge({ estado }: { estado: string | null }) {
     PENDIENTE: { label: "Pendiente", className: "bg-amber-500/20 text-amber-300" },
     APROBADA: { label: "Aprobada", className: "bg-emerald-500/20 text-emerald-300" },
     RECHAZADA: { label: "Rechazada", className: "bg-red-500/20 text-red-300" },
-    APLICADA_EN_PLANILLA: { label: "Aplicada", className: "bg-sky-500/20 text-sky-300" },
+    APLICADA_EN_PLANILLA: {
+      label: "Aplicada en planilla",
+      className: "bg-sky-500/20 text-sky-300",
+    },
   };
   const info = estado != null ? map[estado] : null;
   const { label, className } = info ?? {
