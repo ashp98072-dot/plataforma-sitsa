@@ -1,5 +1,5 @@
 import type { RowDataPacket } from "mysql2";
-import { query } from "@/lib/db";
+import { execute, query } from "@/lib/db";
 
 export function normalizarNombrePiloto(nombre: string): string {
   return nombre
@@ -76,14 +76,9 @@ export async function obtenerPilotoDeEmpleado(
   empresaId: number,
   empleadoId: number,
 ): Promise<{ id: number; nombre: string } | null> {
-  const rows = await query<RowDataPacket[]>(
-    `SELECT id, nombre FROM tms_personal
-     WHERE empresa_id = ? AND id_empleado = ? AND tipo = 'Piloto' AND estado = 'Activo'
-     LIMIT 1`,
-    [empresaId, empleadoId],
-  ).catch(() => [] as RowDataPacket[]);
-  return rows[0]
-    ? { id: Number(rows[0].id), nombre: String(rows[0].nombre) }
+  const personal = await obtenerPersonalOperativoDeEmpleado(empresaId, empleadoId);
+  return personal?.tipo === "Piloto"
+    ? { id: personal.id, nombre: personal.nombre }
     : null;
 }
 
@@ -98,7 +93,7 @@ export async function obtenerPersonalOperativoDeEmpleado(
   empresaId: number,
   empleadoId: number,
 ): Promise<PersonalOperativoEmpleado | null> {
-  const rows = await query<RowDataPacket[]>(
+  let rows = await query<RowDataPacket[]>(
     `SELECT id, nombre, tipo FROM tms_personal
      WHERE empresa_id = ? AND id_empleado = ?
        AND tipo IN ('Piloto', 'Auxiliar') AND estado = 'Activo'
@@ -106,6 +101,50 @@ export async function obtenerPersonalOperativoDeEmpleado(
      LIMIT 1`,
     [empresaId, empleadoId],
   ).catch(() => [] as RowDataPacket[]);
+  if (!rows[0]) {
+    const empleados = await query<RowDataPacket[]>(
+      `SELECT codigo, nombre FROM empleados
+       WHERE id = ? AND empresa_id = ? AND estado = 'Activo' LIMIT 1`,
+      [empleadoId, empresaId],
+    ).catch(() => [] as RowDataPacket[]);
+    const emp = empleados[0];
+    if (emp) {
+      const codigo = String(emp.codigo ?? "").trim();
+      const nombre = String(emp.nombre ?? "").trim();
+      let candidatos = codigo
+        ? await query<RowDataPacket[]>(
+            `SELECT id FROM tms_personal
+             WHERE empresa_id = ? AND codigo = ? AND id_empleado IS NULL
+               AND tipo IN ('Piloto', 'Auxiliar') AND estado = 'Activo'`,
+            [empresaId, codigo],
+          ).catch(() => [] as RowDataPacket[])
+        : [];
+      if (candidatos.length !== 1 && nombre) {
+        candidatos = await query<RowDataPacket[]>(
+          `SELECT id FROM tms_personal
+           WHERE empresa_id = ? AND LOWER(TRIM(nombre)) = LOWER(TRIM(?))
+             AND id_empleado IS NULL AND tipo IN ('Piloto', 'Auxiliar')
+             AND estado = 'Activo'`,
+          [empresaId, nombre],
+        ).catch(() => [] as RowDataPacket[]);
+      }
+      // Solo repara coincidencias inequívocas; nunca reasigna una fila ya ligada.
+      if (candidatos.length === 1) {
+        await execute(
+          `UPDATE tms_personal SET id_empleado = ?, codigo = COALESCE(NULLIF(codigo, ''), ?)
+           WHERE id = ? AND empresa_id = ? AND id_empleado IS NULL`,
+          [empleadoId, codigo || null, candidatos[0].id, empresaId],
+        );
+        rows = await query<RowDataPacket[]>(
+          `SELECT id, nombre, tipo FROM tms_personal
+           WHERE empresa_id = ? AND id_empleado = ?
+             AND tipo IN ('Piloto', 'Auxiliar') AND estado = 'Activo'
+           ORDER BY FIELD(tipo, 'Piloto', 'Auxiliar') LIMIT 1`,
+          [empresaId, empleadoId],
+        ).catch(() => [] as RowDataPacket[]);
+      }
+    }
+  }
   if (!rows[0]) return null;
   return {
     id: Number(rows[0].id),

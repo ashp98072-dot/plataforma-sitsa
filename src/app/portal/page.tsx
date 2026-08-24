@@ -2,6 +2,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getColaboradorSession } from "@/lib/rrhh/colaborador-session";
 import { obtenerPersonalOperativoDeEmpleado } from "@/lib/flota/pilotos";
+import { obtenerEmpleado } from "@/lib/rrhh/empleados";
+import { listarSubordinados } from "@/lib/rrhh/horas-extra";
 import LogoutButton from "./logout-button";
 
 const PROXIMAMENTE: { titulo: string; detalle: string }[] = [];
@@ -29,12 +31,6 @@ const DISPONIBLES = [
     href: "/portal/marcajes",
   },
   {
-    titulo: "Horas extra",
-    detalle:
-      "Si eres supervisor: registra horas de tu equipo. Todos: consulta tu historial.",
-    href: "/portal/horas-extra",
-  },
-  {
     titulo: "Entrevistas",
     detalle: "Tus entrevistas asignadas como entrevistador.",
     href: "/portal/entrevistas",
@@ -49,13 +45,26 @@ export default async function PortalHomePage() {
     redirect("/portal/login");
   }
 
-  const personalOperativo = await obtenerPersonalOperativoDeEmpleado(
-    session!.empresaId,
-    session!.empleadoId,
-  );
-  const disponibles = personalOperativo
-    ? [
-        ...DISPONIBLES,
+  const [personalOperativo, empleado, subordinados] = await Promise.all([
+    obtenerPersonalOperativoDeEmpleado(session!.empresaId, session!.empleadoId),
+    obtenerEmpleado(session!.empresaId, session!.empleadoId),
+    listarSubordinados(session!.empresaId, session!.empleadoId),
+  ]);
+  const horasExtraDisponible =
+    Boolean(empleado?.horasExtraHabilitado) || subordinados.length > 0;
+  const disponibles = [
+    ...DISPONIBLES,
+    ...(horasExtraDisponible
+      ? [{
+          titulo: "Horas extra",
+          detalle: subordinados.length
+            ? "Registra horas extra del personal habilitado de tu equipo."
+            : "Consulta tus horas extra autorizadas por RRHH.",
+          href: "/portal/horas-extra",
+        }]
+      : []),
+    ...(personalOperativo
+      ? [
         {
           titulo: "Mis viajes",
           detalle:
@@ -65,7 +74,8 @@ export default async function PortalHomePage() {
           href: "/portal/viajes",
         },
       ]
-    : DISPONIBLES;
+      : []),
+  ];
 
   return (
     <main className="min-h-screen p-4 sm:p-8">
@@ -98,6 +108,17 @@ export default async function PortalHomePage() {
               </p>
             </Link>
           ))}
+          {!horasExtraDisponible ? (
+            <div className="cursor-not-allowed rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6 opacity-50" aria-disabled="true">
+              <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
+                No habilitado por RRHH
+              </p>
+              <h2 className="mt-1 text-lg font-semibold">Horas extra</h2>
+              <p className="mt-2 text-sm text-[var(--muted)]">
+                RRHH debe habilitar las horas extra en tu ficha de colaborador.
+              </p>
+            </div>
+          ) : null}
           {PROXIMAMENTE.map((item) => (
             <div
               key={item.titulo}
