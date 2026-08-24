@@ -7,23 +7,23 @@ import ViaticosConfigPanel from "@/components/tms/viaticos-config-panel";
 import ClienteUbicacionesAdmin from "@/components/tms/cliente-ubicaciones-admin";
 
 /**
- * Operaciones → TMS / Logística — VIAT-1b: centro de configuración/
+ * Operaciones → TMS / Logística — VIAT-1b/1c: centro de configuración/
  * administración/soporte operativo. Programación (src/app/e/[slug]/
- * programacion/) es ahora la pantalla operativa diaria (crear/editar
- * viajes, asignar piloto/auxiliares/unidad, paradas, viáticos, estados) —
- * esta pantalla YA NO duplica ese formulario. Mismo backend/endpoints de
- * siempre (nada se eliminó de la API ni de las tablas), solo se
- * reorganizó la UI en 4 secciones:
- *   1. Configuración de viáticos (ViaticosConfigPanel, sin cambios).
- *   2. Ubicaciones de clientes (ClienteUbicacionesAdmin, nuevo — admin de
- *      tms_cliente_ubicaciones).
- *   3. Catálogos/información operativa (clientes, unidades, personal,
- *      lugares) — resumen de solo lectura de GET /tms/catalogos.
- *   4. Viajes / consulta administrativa — tabla de solo lectura de
- *      GET /tms/planes con filtros, enlace "Ver en Programación", y
- *      evidencia de carga/descarga en el detalle (soporte de campo ya
- *      existente — no reasigna piloto/auxiliares/unidad/paradas, no
- *      cambia estado).
+ * programacion/) es la pantalla operativa diaria (crear/editar viajes,
+ * asignar piloto/auxiliares/unidad, paradas, viáticos, estados) — esta
+ * pantalla YA NO duplica ese formulario. Mismo backend/endpoints de
+ * siempre, solo UI reorganizada en 3 secciones (VIAT-1c: se simplifica de
+ * 4 a 3, Catálogos colapsado por defecto para no saturar la pantalla):
+ *   1. Configuración: viáticos predeterminados (ViaticosConfigPanel) +
+ *      ubicaciones de clientes (ClienteUbicacionesAdmin).
+ *   2. Viajes / control administrativo: tabla de solo lectura de
+ *      GET /tms/planes con filtros, detalle, evidencia de carga/descarga
+ *      (soporte de campo ya existente — no reasigna piloto/auxiliares/
+ *      unidad/paradas, no cambia estado), enlace "Ver en Programación" y
+ *      la bitácora de auditoría.
+ *   3. Catálogos (clientes, unidades, pilotos, auxiliares, lugares) —
+ *      resumen de solo lectura de GET /tms/catalogos, colapsado por
+ *      defecto (<details>, sin JS adicional).
  */
 
 type ClienteCat = {
@@ -107,7 +107,7 @@ export default function TmsPage() {
   const slug = String(useParams().slug);
 
   // --- Sección 3: catálogos (fuente única para el resumen y para el
-  // buscador de cliente de la sección 2) ---
+  // buscador de cliente de la sección 1) ---
   const [clientesCat, setClientesCat] = useState<ClienteCat[]>([]);
   const [lugaresCat, setLugaresCat] = useState<LugarCat[]>([]);
   const [unidadesCat, setUnidadesCat] = useState<UnidadCat[]>([]);
@@ -133,7 +133,7 @@ export default function TmsPage() {
   const pilotosCat = useMemo(() => personalCat.filter((p) => p.tipo === "Piloto"), [personalCat]);
   const auxiliaresCat = useMemo(() => personalCat.filter((p) => p.tipo === "Auxiliar"), [personalCat]);
 
-  // --- Sección 4: viajes / consulta administrativa ---
+  // --- Sección 2: viajes / control administrativo ---
   const [planes, setPlanes] = useState<Plan[]>([]);
   const [loadingPlanes, setLoadingPlanes] = useState(true);
   const [fCodigo, setFCodigo] = useState("");
@@ -209,7 +209,7 @@ export default function TmsPage() {
     inputEl.click();
   }
 
-  // --- Bitácora (administración avanzada) ---
+  // --- Bitácora (dentro de la sección 2 — administración avanzada de viajes) ---
   const [bitacora, setBitacora] = useState<AudRow[]>([]);
   const [mostrarBitacora, setMostrarBitacora] = useState(false);
   const cargarBitacora = useCallback(async () => {
@@ -246,16 +246,237 @@ export default function TmsPage() {
         </p>
       </div>
 
-      {/* 1. Configuración de viáticos */}
-      <ViaticosConfigPanel slug={slug} />
+      {/* 1. Configuración: viáticos predeterminados + ubicaciones de clientes */}
+      <section className="space-y-3">
+        <h2 className="text-xs font-semibold uppercase tracking-[0.15em] text-[var(--muted)]">
+          1. Configuración
+        </h2>
+        <ViaticosConfigPanel slug={slug} />
+        <ClienteUbicacionesAdmin slug={slug} clientes={clientesCat} />
+      </section>
 
-      {/* 2. Ubicaciones de clientes */}
-      <ClienteUbicacionesAdmin slug={slug} clientes={clientesCat} />
+      {/* 2. Viajes / control administrativo (incluye bitácora) */}
+      <section className="space-y-3">
+        <h2 className="text-xs font-semibold uppercase tracking-[0.15em] text-[var(--muted)]">
+          2. Viajes / control administrativo
+        </h2>
 
-      {/* 3. Catálogos / información operativa */}
-      <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-sm font-medium">Catálogos / información operativa</p>
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+          <p className="text-xs text-[var(--muted)]">
+            Solo lectura, más evidencia de carga/descarga. Para crear, reasignar o reprogramar, usa Programación.
+          </p>
+          {msg ? <p className="mt-1 text-xs text-emerald-300">{msg}</p> : null}
+
+          <div className="mt-3 flex flex-wrap items-end gap-2">
+            <label className="text-xs text-[var(--muted)]">
+              Código
+              <input className={`${inputCls} mt-0.5 block w-36`} value={fCodigo} onChange={(e) => setFCodigo(e.target.value)} />
+            </label>
+            <label className="text-xs text-[var(--muted)]">
+              Cliente
+              <input className={`${inputCls} mt-0.5 block w-40`} value={fCliente} onChange={(e) => setFCliente(e.target.value)} />
+            </label>
+            <label className="text-xs text-[var(--muted)]">
+              Fecha
+              <input type="date" className={`${inputCls} mt-0.5 block`} value={fFecha} onChange={(e) => setFFecha(e.target.value)} />
+            </label>
+            <label className="text-xs text-[var(--muted)]">
+              Estado
+              <select className={`${inputCls} mt-0.5 block`} value={fEstado} onChange={(e) => setFEstado(e.target.value)}>
+                <option value="">Todos</option>
+                {estadosDisponibles.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              className="rounded bg-[#334155] px-3 py-1.5 text-xs text-white"
+              disabled={loadingPlanes}
+              onClick={() => void cargarPlanes()}
+            >
+              {loadingPlanes ? "Actualizando…" : "Actualizar"}
+            </button>
+          </div>
+
+          <div className="mt-3 overflow-x-auto rounded-xl border border-[var(--border)]">
+            <table className="min-w-full text-left text-sm">
+              <thead className="bg-[#1F6AA5] text-white">
+                <tr>
+                  <th className="px-3 py-2">Código</th>
+                  <th className="px-3 py-2">Fecha</th>
+                  <th className="px-3 py-2">Cliente</th>
+                  <th className="px-3 py-2">Placa</th>
+                  <th className="px-3 py-2">Piloto</th>
+                  <th className="px-3 py-2">Estado</th>
+                  <th className="px-3 py-2">Evid.</th>
+                  <th className="px-3 py-2">Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {planesFiltrados.map((p) => (
+                  <Fragment key={p.id}>
+                    <tr className="border-t border-[var(--border)]">
+                      <td className="px-3 py-2">{p.codigo}</td>
+                      <td className="px-3 py-2">{String(p.fecha_plan).slice(0, 10)}</td>
+                      <td className="px-3 py-2">{p.cliente ?? "—"}</td>
+                      <td className="px-3 py-2">{p.placa ?? "—"}</td>
+                      <td className="px-3 py-2">{p.piloto ?? "—"}</td>
+                      <td className="px-3 py-2">{p.estado}</td>
+                      <td className="px-3 py-2">{Number(p.evidencias ?? 0)}</td>
+                      <td className="px-3 py-2">
+                        <div className="flex flex-wrap gap-2 text-xs">
+                          <button
+                            type="button"
+                            className="text-sky-300 hover:underline"
+                            onClick={() => setExpandido((cur) => (cur === p.id ? null : p.id))}
+                          >
+                            {expandido === p.id ? "Cerrar" : "Detalle"}
+                          </button>
+                          <Link href={`/e/${slug}/programacion?plan=${p.id}`} className="text-[var(--accent)] hover:underline">
+                            Ver en Programación
+                          </Link>
+                        </div>
+                      </td>
+                    </tr>
+                    {expandido === p.id ? (
+                      <tr className="border-t border-[var(--border)] bg-black/10">
+                        <td colSpan={8} className="px-3 py-3">
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            <div>
+                              <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--muted)]">
+                                Datos comerciales
+                              </p>
+                              <p className="text-xs">Cliente: {p.cliente ?? "—"}</p>
+                              <p className="text-xs">
+                                Tarifa comercial:{" "}
+                                {p.tarifa_comercial != null
+                                  ? `Q${Number(p.tarifa_comercial).toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                                  : "—"}
+                              </p>
+                              <p className="text-xs">Referencia cliente: {p.referencia_cliente || "—"}</p>
+                              <p className="text-xs">Tipo de traslado: {p.tipo_traslado || "—"}</p>
+                              <p className="text-xs">
+                                Regreso estimado: {p.regreso_estimado ? p.regreso_estimado.replace("T", " · ") : "—"}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--muted)]">
+                                Personal y paradas
+                              </p>
+                              <p className="text-xs">
+                                Auxiliares: {(p.auxiliares ?? []).length ? p.auxiliares!.join(", ") : p.auxiliar || "—"}
+                              </p>
+                              <p className="text-xs">Notas: {p.notas || "—"}</p>
+                              {(p.paradas ?? []).length ? (
+                                <ul className="mt-1 space-y-0.5 text-[11px] text-[var(--muted)]">
+                                  {p.paradas!.map((pp) => (
+                                    <li key={pp.id}>
+                                      {pp.orden}. {pp.lugar_nombre} ({pp.tipo}) ·{" "}
+                                      {pp.evidencias > 0 ? `${pp.evidencias} foto(s)` : pp.requiere_evidencia ? "pendiente" : "sin evidencia req."}
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <p className="text-[11px] text-[var(--muted)]">Sin paradas registradas.</p>
+                              )}
+                            </div>
+                          </div>
+                          <div className="mt-2 flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => void subirEvidencia(p.id, "Carga")}
+                              className="rounded bg-[#0d9488] px-3 py-1 text-xs text-white"
+                            >
+                              Evidencia carga
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void subirEvidencia(p.id, "Descarga")}
+                              className="rounded bg-[#0f766e] px-3 py-1 text-xs text-white"
+                            >
+                              Evidencia descarga
+                            </button>
+                          </div>
+                          <p className="mt-2 text-[10px] text-amber-200/80">
+                            Información interna: los viáticos de este viaje NO se muestran aquí ni en ninguna vista de
+                            cliente — se administran desde Programación.
+                          </p>
+                        </td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
+                ))}
+                {!planesFiltrados.length && !loadingPlanes ? (
+                  <tr>
+                    <td colSpan={8} className="px-3 py-4 text-[var(--muted)]">
+                      Sin viajes con este filtro.
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <details className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+          <summary className="cursor-pointer text-sm font-medium">Bitácora de rutas</summary>
+          <p className="mt-1 text-[11px] text-[var(--muted)]">
+            Quién crea, edita, cancela, sale, cierra o elimina evidencias — con fecha y hora.
+          </p>
+          <button
+            type="button"
+            className="mt-2 rounded bg-[#334155] px-3 py-1.5 text-xs text-white"
+            onClick={() => {
+              if (!mostrarBitacora) void cargarBitacora();
+              setMostrarBitacora(true);
+            }}
+          >
+            Cargar bitácora
+          </button>
+          {mostrarBitacora ? (
+            <div className="mt-2 max-h-80 overflow-auto rounded border border-[var(--border)]">
+              <table className="min-w-full text-left text-xs">
+                <thead className="sticky top-0 bg-[#1e293b] text-[var(--muted)]">
+                  <tr>
+                    <th className="px-2 py-1.5">Fecha / hora</th>
+                    <th className="px-2 py-1.5">Usuario</th>
+                    <th className="px-2 py-1.5">Acción</th>
+                    <th className="px-2 py-1.5">Detalle</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bitacora.map((a) => (
+                    <tr key={a.id} className="border-t border-[var(--border)] align-top">
+                      <td className="whitespace-nowrap px-2 py-1.5 font-mono text-[10px] text-sky-300">{a.creadoEn || "—"}</td>
+                      <td className="px-2 py-1.5 font-medium">{a.usuario || "—"}</td>
+                      <td className="px-2 py-1.5 text-amber-200">{labelAccionAud(a.accion)}</td>
+                      <td className="px-2 py-1.5 text-[var(--muted)]">{a.detalle || "—"}</td>
+                    </tr>
+                  ))}
+                  {!bitacora.length ? (
+                    <tr>
+                      <td colSpan={4} className="px-2 py-3 text-[var(--muted)]">
+                        Aún no hay movimientos registrados.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        </details>
+      </section>
+
+      {/* 3. Catálogos — colapsado por defecto para no saturar la pantalla; el resumen de solo lectura no es lo primero que necesita el día a día. */}
+      <details className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+        <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.15em] text-[var(--muted)]">
+          3. Catálogos
+        </summary>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm font-medium">Clientes, unidades, personal y lugares</p>
           <button type="button" className="rounded bg-[#334155] px-2 py-1 text-xs text-white" onClick={() => void crearClienteRapido()}>
             + Cliente rápido
           </button>
@@ -324,223 +545,7 @@ export default function TmsPage() {
             </ul>
           </div>
         </div>
-      </div>
-
-      {/* 4. Viajes / consulta administrativa */}
-      <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-        <p className="text-sm font-medium">Viajes / consulta administrativa</p>
-        <p className="mt-0.5 text-xs text-[var(--muted)]">
-          Solo lectura, más evidencia de carga/descarga. Para crear, reasignar o reprogramar, usa Programación.
-        </p>
-        {msg ? <p className="mt-1 text-xs text-emerald-300">{msg}</p> : null}
-
-        <div className="mt-3 flex flex-wrap items-end gap-2">
-          <label className="text-xs text-[var(--muted)]">
-            Código
-            <input className={`${inputCls} mt-0.5 block w-36`} value={fCodigo} onChange={(e) => setFCodigo(e.target.value)} />
-          </label>
-          <label className="text-xs text-[var(--muted)]">
-            Cliente
-            <input className={`${inputCls} mt-0.5 block w-40`} value={fCliente} onChange={(e) => setFCliente(e.target.value)} />
-          </label>
-          <label className="text-xs text-[var(--muted)]">
-            Fecha
-            <input type="date" className={`${inputCls} mt-0.5 block`} value={fFecha} onChange={(e) => setFFecha(e.target.value)} />
-          </label>
-          <label className="text-xs text-[var(--muted)]">
-            Estado
-            <select className={`${inputCls} mt-0.5 block`} value={fEstado} onChange={(e) => setFEstado(e.target.value)}>
-              <option value="">Todos</option>
-              {estadosDisponibles.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            type="button"
-            className="rounded bg-[#334155] px-3 py-1.5 text-xs text-white"
-            disabled={loadingPlanes}
-            onClick={() => void cargarPlanes()}
-          >
-            {loadingPlanes ? "Actualizando…" : "Actualizar"}
-          </button>
-        </div>
-
-        <div className="mt-3 overflow-x-auto rounded-xl border border-[var(--border)]">
-          <table className="min-w-full text-left text-sm">
-            <thead className="bg-[#1F6AA5] text-white">
-              <tr>
-                <th className="px-3 py-2">Código</th>
-                <th className="px-3 py-2">Fecha</th>
-                <th className="px-3 py-2">Cliente</th>
-                <th className="px-3 py-2">Placa</th>
-                <th className="px-3 py-2">Piloto</th>
-                <th className="px-3 py-2">Estado</th>
-                <th className="px-3 py-2">Evid.</th>
-                <th className="px-3 py-2">Acciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              {planesFiltrados.map((p) => (
-                <Fragment key={p.id}>
-                  <tr className="border-t border-[var(--border)]">
-                    <td className="px-3 py-2">{p.codigo}</td>
-                    <td className="px-3 py-2">{String(p.fecha_plan).slice(0, 10)}</td>
-                    <td className="px-3 py-2">{p.cliente ?? "—"}</td>
-                    <td className="px-3 py-2">{p.placa ?? "—"}</td>
-                    <td className="px-3 py-2">{p.piloto ?? "—"}</td>
-                    <td className="px-3 py-2">{p.estado}</td>
-                    <td className="px-3 py-2">{Number(p.evidencias ?? 0)}</td>
-                    <td className="px-3 py-2">
-                      <div className="flex flex-wrap gap-2 text-xs">
-                        <button
-                          type="button"
-                          className="text-sky-300 hover:underline"
-                          onClick={() => setExpandido((cur) => (cur === p.id ? null : p.id))}
-                        >
-                          {expandido === p.id ? "Cerrar" : "Detalle"}
-                        </button>
-                        <Link href={`/e/${slug}/programacion?plan=${p.id}`} className="text-[var(--accent)] hover:underline">
-                          Ver en Programación
-                        </Link>
-                      </div>
-                    </td>
-                  </tr>
-                  {expandido === p.id ? (
-                    <tr key={`${p.id}-detalle`} className="border-t border-[var(--border)] bg-black/10">
-                      <td colSpan={8} className="px-3 py-3">
-                        <div className="grid gap-3 sm:grid-cols-2">
-                          <div>
-                            <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--muted)]">
-                              Datos comerciales
-                            </p>
-                            <p className="text-xs">Cliente: {p.cliente ?? "—"}</p>
-                            <p className="text-xs">
-                              Tarifa comercial:{" "}
-                              {p.tarifa_comercial != null
-                                ? `Q${Number(p.tarifa_comercial).toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                                : "—"}
-                            </p>
-                            <p className="text-xs">Referencia cliente: {p.referencia_cliente || "—"}</p>
-                            <p className="text-xs">Tipo de traslado: {p.tipo_traslado || "—"}</p>
-                            <p className="text-xs">
-                              Regreso estimado: {p.regreso_estimado ? p.regreso_estimado.replace("T", " · ") : "—"}
-                            </p>
-                          </div>
-                          <div>
-                            <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--muted)]">
-                              Personal y paradas
-                            </p>
-                            <p className="text-xs">
-                              Auxiliares: {(p.auxiliares ?? []).length ? p.auxiliares!.join(", ") : p.auxiliar || "—"}
-                            </p>
-                            <p className="text-xs">Notas: {p.notas || "—"}</p>
-                            {(p.paradas ?? []).length ? (
-                              <ul className="mt-1 space-y-0.5 text-[11px] text-[var(--muted)]">
-                                {p.paradas!.map((pp) => (
-                                  <li key={pp.id}>
-                                    {pp.orden}. {pp.lugar_nombre} ({pp.tipo}) ·{" "}
-                                    {pp.evidencias > 0 ? `${pp.evidencias} foto(s)` : pp.requiere_evidencia ? "pendiente" : "sin evidencia req."}
-                                  </li>
-                                ))}
-                              </ul>
-                            ) : (
-                              <p className="text-[11px] text-[var(--muted)]">Sin paradas registradas.</p>
-                            )}
-                          </div>
-                        </div>
-                        <div className="mt-2 flex gap-2">
-                          <button
-                            type="button"
-                            onClick={() => void subirEvidencia(p.id, "Carga")}
-                            className="rounded bg-[#0d9488] px-3 py-1 text-xs text-white"
-                          >
-                            Evidencia carga
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void subirEvidencia(p.id, "Descarga")}
-                            className="rounded bg-[#0f766e] px-3 py-1 text-xs text-white"
-                          >
-                            Evidencia descarga
-                          </button>
-                        </div>
-                        <p className="mt-2 text-[10px] text-amber-200/80">
-                          Información interna: los viáticos de este viaje NO se muestran aquí ni en ninguna vista de
-                          cliente — se administran desde Programación.
-                        </p>
-                      </td>
-                    </tr>
-                  ) : null}
-                </Fragment>
-              ))}
-              {!planesFiltrados.length && !loadingPlanes ? (
-                <tr>
-                  <td colSpan={8} className="px-3 py-4 text-[var(--muted)]">
-                    Sin viajes con este filtro.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Bitácora — administración avanzada */}
-      <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h2 className="text-sm font-medium">Bitácora de rutas</h2>
-            <p className="text-[11px] text-[var(--muted)]">
-              Quién crea, edita, cancela, sale, cierra o elimina evidencias — con fecha y hora.
-            </p>
-          </div>
-          <button
-            type="button"
-            className="rounded bg-[#334155] px-3 py-1.5 text-xs text-white"
-            onClick={() => {
-              const next = !mostrarBitacora;
-              setMostrarBitacora(next);
-              if (next) void cargarBitacora();
-            }}
-          >
-            {mostrarBitacora ? "Ocultar bitácora" : "Ver bitácora"}
-          </button>
-        </div>
-        {mostrarBitacora ? (
-          <div className="max-h-80 overflow-auto rounded border border-[var(--border)]">
-            <table className="min-w-full text-left text-xs">
-              <thead className="sticky top-0 bg-[#1e293b] text-[var(--muted)]">
-                <tr>
-                  <th className="px-2 py-1.5">Fecha / hora</th>
-                  <th className="px-2 py-1.5">Usuario</th>
-                  <th className="px-2 py-1.5">Acción</th>
-                  <th className="px-2 py-1.5">Detalle</th>
-                </tr>
-              </thead>
-              <tbody>
-                {bitacora.map((a) => (
-                  <tr key={a.id} className="border-t border-[var(--border)] align-top">
-                    <td className="whitespace-nowrap px-2 py-1.5 font-mono text-[10px] text-sky-300">{a.creadoEn || "—"}</td>
-                    <td className="px-2 py-1.5 font-medium">{a.usuario || "—"}</td>
-                    <td className="px-2 py-1.5 text-amber-200">{labelAccionAud(a.accion)}</td>
-                    <td className="px-2 py-1.5 text-[var(--muted)]">{a.detalle || "—"}</td>
-                  </tr>
-                ))}
-                {!bitacora.length ? (
-                  <tr>
-                    <td colSpan={4} className="px-2 py-3 text-[var(--muted)]">
-                      Aún no hay movimientos registrados.
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
-      </div>
+      </details>
     </div>
   );
 }
