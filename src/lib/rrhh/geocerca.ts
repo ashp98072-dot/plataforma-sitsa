@@ -172,33 +172,36 @@ export async function validarGeocercaKiosko(
   empresaId: number,
   empleadoId: number,
   coords: { lat?: number | null; lng?: number | null } | null | undefined,
+  opciones: { requerirUbicacionRegistrada?: boolean } = {},
 ): Promise<ResultadoGeocercaKiosko> {
+  const modoEstricto = opciones.requerirUbicacionRegistrada === true;
   /*
-   * Durante la transición conservamos geocerca_activa como interruptor
-   * general para la empresa a la que pertenece el empleado.
+   * El kiosco conserva geocerca_activa como interruptor de transición.
+   * El portal usa modo estricto y siempre exige una ubicación activa de RRHH.
    */
   const geo = await obtenerGeocerca(empresaId);
 
-  if (!geo.activa) {
+  if (!modoEstricto && !geo.activa) {
     return { ok: true };
   }
 
-  if (await empleadoEnRutaHoy(empresaId, empleadoId)) {
+  if (!modoEstricto && (await empleadoEnRutaHoy(empresaId, empleadoId))) {
     return { ok: true };
   }
 
   const ubicaciones = await obtenerUbicacionesMarcajeActivas();
 
-  /*
-   * Compatibilidad temporal:
-   * si aún no existen ubicaciones activas en la nueva tabla,
-   * no bloqueamos todos los marcajes del grupo.
-   *
-   * Más adelante debe cambiarse a fail-closed cuando la migración
-   * de todas las ubicaciones esté confirmada.
-   */
-  if (ubicaciones.length === 0) {
+  /* El kiosco mantiene compatibilidad si aún no hay ubicaciones configuradas. */
+  if (ubicaciones.length === 0 && !modoEstricto) {
     return { ok: true };
+  }
+  if (ubicaciones.length === 0) {
+    return {
+      ok: false,
+      code: "SIN_UBICACIONES_AUTORIZADAS",
+      error:
+        "RRHH todavía no ha registrado una ubicación activa para marcajes. Comunícate con Recursos Humanos.",
+    };
   }
 
   const lat = coords?.lat != null ? Number(coords.lat) : NaN;

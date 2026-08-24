@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { getColaboradorSession } from "@/lib/rrhh/colaborador-session";
 import { hoyLocal } from "@/lib/rrhh/dates";
 import { listarMarcajesEmpleadoRango } from "@/lib/rrhh/marcajes";
+import { MarcajePortalClient } from "./marcaje-portal-client";
 
 const FECHA_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -60,6 +61,8 @@ export default async function MarcajesPage({
           </p>
           <h1 className="mt-1 text-2xl font-semibold">Mis marcajes</h1>
         </header>
+
+        <MarcajePortalClient />
 
         {/* Filtro por GET: no requiere JavaScript, funciona igual con y sin cliente */}
         <form

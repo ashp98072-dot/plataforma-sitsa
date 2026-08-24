@@ -319,6 +319,7 @@ export async function registrarMarcajeKiosko(
     viajeLargo?: boolean;
     latitud?: number | null;
     longitud?: number | null;
+    requerirUbicacionRegistrada?: boolean;
   },
 ): Promise<ResultadoMarcajeKiosko> {
   /*
@@ -397,6 +398,7 @@ export async function registrarMarcajeKiosko(
       lat: input.latitud,
       lng: input.longitud,
     },
+    { requerirUbicacionRegistrada: input.requerirUbicacionRegistrada },
   );
 
   if (!geo.ok) {
@@ -774,4 +776,36 @@ export async function registrarMarcajeManual(
     tipoMarcaje: "Salida (corregida)",
     nombre,
   };
+}
+
+/**
+ * Marcaje desde el portal autenticado. La identidad nunca viene del cliente:
+ * se resuelve por empresa + empleado de la sesión y luego reutiliza el mismo
+ * motor transaccional/geográfico del kiosco en modo estricto.
+ */
+export async function registrarMarcajePortal(
+  empresaId: number,
+  empleadoId: number,
+  input: { latitud: number; longitud: number },
+): Promise<ResultadoMarcajeKiosko> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT numero_empleado
+     FROM empleados
+     WHERE id = ? AND empresa_id = ? AND estado <> 'Baja'
+     LIMIT 1`,
+    [empleadoId, empresaId],
+  );
+  if (!rows[0]?.numero_empleado) {
+    return {
+      ok: false,
+      code: "EMPLEADO_INVALIDO",
+      error: "Tu colaborador no está activo o no tiene número de empleado asignado.",
+    };
+  }
+  return registrarMarcajeKiosko(empresaId, {
+    codigo: String(rows[0].numero_empleado),
+    latitud: input.latitud,
+    longitud: input.longitud,
+    requerirUbicacionRegistrada: true,
+  });
 }
