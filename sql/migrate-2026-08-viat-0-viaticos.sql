@@ -1,10 +1,11 @@
 -- VIAT-0: viáticos operativos asociados a una programación/viaje (piloto y
 -- auxiliares). Aditivo e idempotente — seguro correrlo más de una vez.
--- Nota: src/lib/tms/viaticos.ts ya crea estas tablas en tiempo de ejecución
--- (mismo patrón que src/lib/clientes/schema.ts / src/lib/flota/schema.ts),
--- así que en la práctica no hace falta ejecutar este archivo a mano; se deja
--- como referencia documental explícita del esquema, tal como el resto de
--- migrate-*.sql del proyecto.
+--
+-- MIGRACIÓN REAL: debe ejecutarse manualmente antes de desplegar el código
+-- de esta fase (src/lib/tms/viaticos.ts NO crea ni altera tablas en tiempo
+-- de ejecución — asume que esta migración ya se aplicó; si las tablas no
+-- existen, las funciones fallan con el error real de MySQL en vez de crear
+-- estructura por su cuenta).
 
 CREATE TABLE IF NOT EXISTS tms_viaticos_config (
   id INT AUTO_INCREMENT PRIMARY KEY,

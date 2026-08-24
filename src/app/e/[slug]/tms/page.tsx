@@ -12,6 +12,7 @@ import { ClienteSearch } from "@/components/tms/cliente-search";
 import { PlacaSelect, type VehiculoOpt } from "@/components/tms/placa-select";
 import { PilotoSelect } from "@/components/tms/piloto-select";
 import ViaticosPanel from "@/components/tms/viaticos-panel";
+import ViaticosConfigPanel from "@/components/tms/viaticos-config-panel";
 
 type ParadaForm = {
   lugarNombre: string;
@@ -639,6 +640,8 @@ export default function TmsPage() {
           <p className="text-emerald-300 sm:col-span-4">{catalogoMsg}</p>
         ) : null}
       </div>
+
+      <ViaticosConfigPanel slug={slug} />
 
       <form
         onSubmit={onSubmit}
