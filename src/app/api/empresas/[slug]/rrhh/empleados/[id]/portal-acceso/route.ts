@@ -4,6 +4,7 @@ import { requireTenantRrhh } from "@/lib/tenant";
 import { obtenerEmpleado } from "@/lib/rrhh/empleados";
 import {
   activarCredencialColaborador,
+  cambiarUsernameColaborador,
   crearCredencialColaborador,
   obtenerCredencialPorEmpleado,
   resetearPasswordColaborador,
@@ -76,9 +77,13 @@ const patchSchema = z.union([
     accion: z.literal("activar"),
     activo: z.boolean(),
   }),
+  z.object({
+    accion: z.literal("cambiar-username"),
+    username: z.string().trim().min(3, "El usuario debe tener al menos 3 caracteres."),
+  }),
 ]);
 
-/** Resetea la contraseña, o activa/desactiva el acceso ya existente. */
+/** Cambia usuario/contraseña, o activa/desactiva el acceso existente. */
 export async function PATCH(req: Request, ctx: Ctx) {
   const { slug, id } = await ctx.params;
   const guard = await requireTenantRrhh(slug, "empleados", "editar");
@@ -110,6 +115,16 @@ export async function PATCH(req: Request, ctx: Ctx) {
       guard.empresa.id,
       empleadoId,
       parsed.data.passwordNueva,
+    );
+    if (!r.ok) return NextResponse.json({ error: r.mensaje }, { status: 400 });
+    return NextResponse.json({ mensaje: r.mensaje });
+  }
+
+  if (parsed.data.accion === "cambiar-username") {
+    const r = await cambiarUsernameColaborador(
+      guard.empresa.id,
+      empleadoId,
+      parsed.data.username,
     );
     if (!r.ok) return NextResponse.json({ error: r.mensaje }, { status: 400 });
     return NextResponse.json({ mensaje: r.mensaje });

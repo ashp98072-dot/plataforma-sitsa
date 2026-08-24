@@ -52,6 +52,8 @@ export function PortalAccesoModal({
   // Formulario para resetear contraseña (cuando ya tiene acceso).
   const [passwordNueva, setPasswordNueva] = useState("");
   const [mostrarReset, setMostrarReset] = useState(false);
+  const [mostrarUsername, setMostrarUsername] = useState(false);
+  const [usernameNuevo, setUsernameNuevo] = useState("");
 
   const cargar = useCallback(async () => {
     setCargando(true);
@@ -62,7 +64,9 @@ export function PortalAccesoModal({
       );
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Error al consultar el acceso.");
-      setCredencial(data.credencial ?? null);
+      const actual = (data.credencial ?? null) as Credencial | null;
+      setCredencial(actual);
+      if (actual) setUsernameNuevo(actual.username);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error al consultar el acceso.");
     } finally {
@@ -71,6 +75,8 @@ export function PortalAccesoModal({
   }, [slug, empleadoId]);
 
   useEffect(() => {
+    // La carga es asíncrona y sincroniza este modal con la credencial remota.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void cargar();
   }, [cargar]);
 
@@ -161,6 +167,35 @@ export function PortalAccesoModal({
     }
   }
 
+  async function cambiarUsername() {
+    setError("");
+    setMensaje("");
+    setEnviando(true);
+    try {
+      const res = await fetch(
+        `/api/empresas/${slug}/rrhh/empleados/${empleadoId}/portal-acceso`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ accion: "cambiar-username", username: usernameNuevo }),
+        },
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "No se pudo cambiar el usuario.");
+        return;
+      }
+      setMensaje(data.mensaje ?? "Nombre de usuario actualizado.");
+      setMostrarUsername(false);
+      await cargar();
+      onChanged?.();
+    } catch {
+      setError("Error de red al cambiar el usuario.");
+    } finally {
+      setEnviando(false);
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
       <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-xl">
@@ -212,6 +247,14 @@ export function PortalAccesoModal({
               <button
                 type="button"
                 disabled={enviando}
+                onClick={() => setMostrarUsername((v) => !v)}
+                className="rounded-md bg-[#455A64] px-3 py-2 text-sm text-white disabled:opacity-40"
+              >
+                Cambiar usuario
+              </button>
+              <button
+                type="button"
+                disabled={enviando}
                 onClick={() => setMostrarReset((v) => !v)}
                 className="rounded-md bg-[var(--accent)] px-3 py-2 text-sm text-white disabled:opacity-40"
               >
@@ -228,6 +271,36 @@ export function PortalAccesoModal({
                 {credencial.activo ? "Desactivar acceso" : "Reactivar acceso"}
               </button>
             </div>
+
+            {mostrarUsername ? (
+              <div className="space-y-2 rounded-lg border border-[var(--border)] p-3">
+                <label className="block text-sm text-[var(--muted)]">
+                  Nombre de usuario nuevo
+                  <input
+                    type="text"
+                    autoComplete="off"
+                    value={usernameNuevo}
+                    onChange={(e) => setUsernameNuevo(e.target.value)}
+                    className="mt-1 w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm"
+                  />
+                </label>
+                <button
+                  type="button"
+                  disabled={
+                    enviando ||
+                    usernameNuevo.trim().length < 3 ||
+                    usernameNuevo.trim() === credencial.username
+                  }
+                  onClick={() => void cambiarUsername()}
+                  className="rounded-md bg-[var(--accent)] px-4 py-2 text-sm text-white disabled:opacity-40"
+                >
+                  Guardar usuario nuevo
+                </button>
+                <p className="text-xs text-[var(--muted)]">
+                  La contraseña y el estado del acceso no cambian.
+                </p>
+              </div>
+            ) : null}
 
             {mostrarReset ? (
               <div className="space-y-2 rounded-lg border border-[var(--border)] p-3">
