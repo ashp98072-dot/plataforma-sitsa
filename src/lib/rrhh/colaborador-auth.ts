@@ -205,6 +205,40 @@ export async function resetearPasswordColaborador(
   return { ok: true, mensaje: "Contraseña reiniciada." };
 }
 
+/** Uso de RRHH/admin: cambia el usuario sin alterar contraseña ni estado. */
+export async function cambiarUsernameColaborador(
+  empresaId: number,
+  empleadoId: number,
+  usernameNuevo: string,
+): Promise<{ ok: boolean; mensaje: string }> {
+  const username = usernameNuevo.trim();
+  if (username.length < 3) {
+    return { ok: false, mensaje: "El usuario debe tener al menos 3 caracteres." };
+  }
+  const empleado = await query<RowDataPacket[]>(
+    `SELECT id FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1`,
+    [empleadoId, empresaId],
+  );
+  if (!empleado[0]) {
+    return { ok: false, mensaje: "Empleado no encontrado en esta empresa." };
+  }
+  const enUso = await query<RowDataPacket[]>(
+    `SELECT id FROM colaborador_credenciales
+     WHERE username = ? AND empleado_id <> ? LIMIT 1`,
+    [username, empleadoId],
+  );
+  if (enUso[0]) return { ok: false, mensaje: "Ese usuario ya está en uso." };
+
+  const result = await execute(
+    `UPDATE colaborador_credenciales SET username = ? WHERE empleado_id = ?`,
+    [username, empleadoId],
+  );
+  if (result.affectedRows === 0) {
+    return { ok: false, mensaje: "Este empleado no tiene acceso al portal." };
+  }
+  return { ok: true, mensaje: "Nombre de usuario actualizado." };
+}
+
 export async function activarCredencialColaborador(
   empleadoId: number,
   activo: boolean,
