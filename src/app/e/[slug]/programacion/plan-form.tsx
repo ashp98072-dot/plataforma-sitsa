@@ -24,6 +24,20 @@ type ParadaForm = {
   lugarNombre: string;
   tipo: "Carga" | "Descarga" | "Entrega";
   requiereEvidencia: boolean;
+  /** VIAT-1: ubicación guardada del cliente de la que salió esta parada (si se eligió del catálogo). */
+  clienteUbicacionId?: number | null;
+};
+
+type TipoUbicacion = "CARGA" | "ENTREGA" | "AMBOS";
+
+type UbicacionCliente = {
+  id: number;
+  nombre: string;
+  direccion: string | null;
+  municipio: string | null;
+  departamento: string | null;
+  referencia: string | null;
+  tipo: TipoUbicacion;
 };
 
 type EmpOps = {
@@ -64,13 +78,24 @@ function filtrarPersonal(list: EmpOps[], q: string, selectedIds: number[]) {
 
 export default function PlanForm({
   slug,
+  hoy,
   plan,
   onSaved,
   onCancel,
 }: {
   slug: string;
+  /**
+   * Fecha "hoy" en America/Guatemala (hoyLocal(), calculada server-side en
+   * page.tsx y bajada por props hasta aquí) — NUNCA new Date().toISOString(),
+   * que es UTC y en horas de la tarde/noche en Guatemala ya cae en el día
+   * siguiente. Bug corregido: un viaje creado sin tocar la fecha quedaba con
+   * fecha_plan = mañana (UTC) mientras el tablero, filtrado por "Hoy",
+   * mostraba el día real en Guatemala — el viaje existía pero nunca
+   * aparecía bajo ese filtro.
+   */
+  hoy: string;
   plan?: Plan | null;
-  onSaved: () => void;
+  onSaved: (info: { id: number; fechaPlan: string }) => void;
   onCancel?: () => void;
 }) {
   const esEdicion = plan != null;
@@ -86,7 +111,7 @@ export default function PlanForm({
   // usado en tms/page.tsx (seleccionarPlan()), no se inventa un cruce nuevo.
   const [form, setForm] = useState({
     codigo: plan?.codigo ?? "",
-    fechaPlan: plan?.fecha_plan ?? new Date().toISOString().slice(0, 10),
+    fechaPlan: plan?.fecha_plan ?? hoy,
     horaCarga: plan?.hora_carga?.slice(0, 5) ?? "08:00",
     clienteId: 0,
     clienteNombre: plan?.cliente ?? "",
@@ -116,6 +141,13 @@ export default function PlanForm({
   );
   const [auxInput, setAuxInput] = useState("");
   const [saving, setSaving] = useState(false);
+
+  // VIAT-1: ubicaciones guardadas del cliente seleccionado, para armar
+  // paradas rápido en vez de escribir la dirección cada vez.
+  const [ubicacionesCliente, setUbicacionesCliente] = useState<UbicacionCliente[]>([]);
+  const [nuevaUbicacion, setNuevaUbicacion] = useState({ nombre: "", direccion: "" });
+  const [mostrarNuevaUbicacion, setMostrarNuevaUbicacion] = useState(false);
+  const [guardandoUbicacion, setGuardandoUbicacion] = useState(false);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
 
@@ -223,6 +255,78 @@ export default function PlanForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clientesCat.length, plan?.cliente]);
 
+  // VIAT-1: recarga las ubicaciones guardadas cada vez que cambia el
+  // cliente elegido — IIFE inline con bandera `ignore` (mismo patrón que
+  // ViaticosPanel), no un setState síncrono directo en el efecto.
+  useEffect(() => {
+    let ignore = false;
+    (async () => {
+      if (!form.clienteId) {
+        setUbicacionesCliente([]);
+        return;
+      }
+      try {
+        const res = await fetch(`/api/empresas/${slug}/tms/clientes/${form.clienteId}/ubicaciones`);
+        const data = await res.json();
+        if (ignore) return;
+        setUbicacionesCliente(res.ok ? ((data.ubicaciones ?? []) as UbicacionCliente[]) : []);
+      } catch {
+        if (!ignore) setUbicacionesCliente([]);
+      }
+    })();
+    return () => {
+      ignore = true;
+    };
+  }, [slug, form.clienteId]);
+
+  function agregarParadaDesdeUbicacion(u: UbicacionCliente) {
+    const tipo: ParadaForm["tipo"] = u.tipo === "CARGA" ? "Carga" : u.tipo === "ENTREGA" ? "Entrega" : "Entrega";
+    setParadasForm((list) => [
+      ...list,
+      {
+        lugarNombre: u.direccion?.trim() || u.nombre,
+        tipo,
+        requiereEvidencia: true,
+        clienteUbicacionId: u.id,
+      },
+    ]);
+  }
+
+  async function guardarNuevaUbicacion() {
+    if (!form.clienteId) {
+      setError("Selecciona primero un cliente para guardarle una ubicación.");
+      return;
+    }
+    const nombre = nuevaUbicacion.nombre.trim();
+    if (!nombre) {
+      setError("Indica un nombre/alias para la ubicación (ej. Bodega Central).");
+      return;
+    }
+    setGuardandoUbicacion(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/empresas/${slug}/tms/clientes/${form.clienteId}/ubicaciones`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nombre, direccion: nuevaUbicacion.direccion.trim() || undefined }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "No se pudo guardar la ubicación.");
+        return;
+      }
+      const nueva = data.ubicacion as UbicacionCliente;
+      setUbicacionesCliente((list) => [...list, nueva].sort((a, b) => a.nombre.localeCompare(b.nombre)));
+      agregarParadaDesdeUbicacion(nueva);
+      setNuevaUbicacion({ nombre: "", direccion: "" });
+      setMostrarNuevaUbicacion(false);
+    } catch {
+      setError("Error de conexión.");
+    } finally {
+      setGuardandoUbicacion(false);
+    }
+  }
+
   const auxiliaresFiltrados = useMemo(
     () => filtrarPersonal(auxiliares, auxInput, form.auxiliarEmpleadoIds),
     [auxiliares, auxInput, form.auxiliarEmpleadoIds],
@@ -284,7 +388,12 @@ export default function PlanForm({
     setMsg("");
     const paradas = paradasForm
       .filter((p) => p.lugarNombre.trim())
-      .map((p) => ({ lugarNombre: p.lugarNombre.trim(), tipo: p.tipo, requiereEvidencia: p.requiereEvidencia }));
+      .map((p) => ({
+        lugarNombre: p.lugarNombre.trim(),
+        tipo: p.tipo,
+        requiereEvidencia: p.requiereEvidencia,
+        clienteUbicacionId: p.clienteUbicacionId ?? undefined,
+      }));
 
     if (!esEdicion) {
       if (!form.clienteId && !form.clienteNombre.trim()) {
@@ -339,7 +448,7 @@ export default function PlanForm({
           return;
         }
         setMsg(data.mensaje ?? "Viaje creado.");
-        onSaved();
+        onSaved({ id: Number(data.id), fechaPlan: form.fechaPlan });
         return;
       }
 
@@ -378,7 +487,7 @@ export default function PlanForm({
           `${data.mensaje ?? "Viaje actualizado."} — ${data.advertencias.map((a: { mensaje: string }) => a.mensaje).join(" · ")}`,
         );
       }
-      onSaved();
+      onSaved({ id: plan!.id, fechaPlan: form.fechaPlan });
     } catch {
       setError("Error de conexión.");
     } finally {
@@ -600,6 +709,67 @@ export default function PlanForm({
         }`}
       >
         <p className="text-xs font-medium">Paradas del viaje</p>
+
+        {form.clienteId ? (
+          <div className="rounded border border-[var(--border)] bg-black/10 p-2">
+            <p className="text-[11px] text-[var(--muted)]">
+              Ubicaciones guardadas de {form.clienteNombre || "este cliente"} — clic para agregar como parada.
+            </p>
+            <div className="mt-1 flex flex-wrap gap-2">
+              {ubicacionesCliente.map((u) => (
+                <button
+                  key={u.id}
+                  type="button"
+                  className="rounded border border-sky-700 bg-sky-950/30 px-2 py-1 text-xs hover:bg-sky-900/40"
+                  onClick={() => agregarParadaDesdeUbicacion(u)}
+                  title={u.direccion ?? undefined}
+                >
+                  + {u.nombre}
+                </button>
+              ))}
+              {!ubicacionesCliente.length ? (
+                <span className="text-[11px] text-[var(--muted)]">Sin ubicaciones guardadas todavía.</span>
+              ) : null}
+              <button
+                type="button"
+                className="rounded border border-[var(--border)] px-2 py-1 text-xs text-[var(--muted)] hover:border-[var(--accent)]/60"
+                onClick={() => setMostrarNuevaUbicacion((v) => !v)}
+              >
+                {mostrarNuevaUbicacion ? "Cancelar" : "+ Guardar nueva ubicación"}
+              </button>
+            </div>
+            {mostrarNuevaUbicacion ? (
+              <div className="mt-2 flex flex-wrap items-end gap-2">
+                <label className="text-[11px] text-[var(--muted)]">
+                  Nombre/alias
+                  <input
+                    className={`${inputCls} mt-0.5 block w-40`}
+                    placeholder="Ej. Bodega Central"
+                    value={nuevaUbicacion.nombre}
+                    onChange={(e) => setNuevaUbicacion((n) => ({ ...n, nombre: e.target.value }))}
+                  />
+                </label>
+                <label className="text-[11px] text-[var(--muted)]">
+                  Dirección
+                  <input
+                    className={`${inputCls} mt-0.5 block w-56`}
+                    value={nuevaUbicacion.direccion}
+                    onChange={(e) => setNuevaUbicacion((n) => ({ ...n, direccion: e.target.value }))}
+                  />
+                </label>
+                <button
+                  type="button"
+                  disabled={guardandoUbicacion}
+                  onClick={() => void guardarNuevaUbicacion()}
+                  className="rounded bg-[var(--accent)] px-2 py-1 text-xs text-white disabled:opacity-50"
+                >
+                  {guardandoUbicacion ? "Guardando…" : "Guardar y agregar como parada"}
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
         {paradasForm.map((p, idx) => (
           <div key={idx} className="flex flex-wrap items-center gap-2">
             <span className="w-6 text-xs text-[var(--muted)]">{idx + 1}.</span>

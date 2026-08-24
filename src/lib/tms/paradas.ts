@@ -48,6 +48,15 @@ export type ParadaInput = {
   tipo?: TipoParada | string;
   requiereEvidencia?: boolean;
   lugarId?: number | null;
+  /**
+   * VIAT-1: id de tms_cliente_ubicaciones (la ubicación guardada del
+   * cliente) de la que salió esta parada, si el programador la eligió del
+   * catálogo en vez de escribirla a mano. Puramente informativo/de
+   * referencia — `lugarNombre` sigue siendo el texto/dirección HISTÓRICO
+   * real de este viaje, no se recalcula desde la ubicación si esta cambia
+   * después.
+   */
+  clienteUbicacionId?: number | null;
 };
 
 function mapParadaRow(r: RowDataPacket): PlanParada {
@@ -152,20 +161,31 @@ export async function guardarParadasPlan(
         lugarId = Number(r.insertId);
       }
     }
-    await runExecute(
-      conn,
-      `INSERT INTO tms_plan_paradas
-        (plan_id, orden, lugar_id, lugar_nombre, tipo, requiere_evidencia)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [
-        planId,
-        orden++,
-        lugarId,
-        nombre,
-        tipo,
-        p.requiereEvidencia === false ? 0 : 1,
-      ],
-    );
+    const ordenActual = orden++;
+    const requiereEvidencia = p.requiereEvidencia === false ? 0 : 1;
+    try {
+      // VIAT-1: intenta guardar cliente_ubicacion_id (columna aditiva, ver
+      // sql/migrate-2026-08-viat-1-cliente-ubicaciones.sql). Si esa
+      // migración todavía no se aplicó en este entorno, MySQL rechaza la
+      // columna desconocida y se reintenta sin ella (mismo `ordenActual`,
+      // capturado ANTES del try — no se pierde la parada ni se salta un
+      // número de orden por un campo opcional/de referencia).
+      await runExecute(
+        conn,
+        `INSERT INTO tms_plan_paradas
+          (plan_id, orden, lugar_id, lugar_nombre, tipo, requiere_evidencia, cliente_ubicacion_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [planId, ordenActual, lugarId, nombre, tipo, requiereEvidencia, p.clienteUbicacionId ?? null],
+      );
+    } catch {
+      await runExecute(
+        conn,
+        `INSERT INTO tms_plan_paradas
+          (plan_id, orden, lugar_id, lugar_nombre, tipo, requiere_evidencia)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [planId, ordenActual, lugarId, nombre, tipo, requiereEvidencia],
+      );
+    }
   }
 }
 

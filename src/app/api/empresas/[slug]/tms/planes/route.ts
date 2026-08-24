@@ -258,6 +258,9 @@ const schema = z.object({
         lugarNombre: z.string().min(1),
         tipo: z.enum(["Carga", "Descarga", "Entrega"]).optional(),
         requiereEvidencia: z.boolean().optional(),
+        // VIAT-1: referencia opcional a la ubicación guardada del cliente
+        // (tms_cliente_ubicaciones) de la que salió esta parada.
+        clienteUbicacionId: z.number().int().positive().optional(),
       }),
     )
     .max(20)
@@ -664,6 +667,9 @@ const patchSchema = z.object({
         lugarNombre: z.string().min(1),
         tipo: z.enum(["Carga", "Descarga", "Entrega"]).optional(),
         requiereEvidencia: z.boolean().optional(),
+        // VIAT-1: referencia opcional a la ubicación guardada del cliente
+        // (tms_cliente_ubicaciones) de la que salió esta parada.
+        clienteUbicacionId: z.number().int().positive().optional(),
       }),
     )
     .max(20)
