@@ -1,19 +1,34 @@
 import { NextResponse } from "next/server";
-import { requireTenantViaticos } from "@/lib/tenant";
+import { requireTenantViaticosAny } from "@/lib/tenant";
 import { listarViaticosControl, type EstadoViatico } from "@/lib/tms/viaticos";
+import { permisosEfectivos, tienePermiso } from "@/lib/permisos";
+import type { RolGlobal } from "@/lib/roles";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
 const ESTADOS: EstadoViatico[] = ["PROGRAMADO", "AUTORIZADO", "ENTREGADO", "LIQUIDADO"];
 
 /**
- * VIAT-1 (punto 7) — listado para el panel "Control de Viáticos" en TMS.
- * Permiso EXPLÍCITO `viaticos:ver` (solo lectura; autorizar/entregar/
- * liquidar exigen `viaticos:editar` en sus propios endpoints).
+ * VIAT-3 — listado global para el módulo "Operaciones > Viáticos" (antes
+ * "Control de Viáticos" de TMS, VIAT-1 punto 7 — misma función de backend
+ * reutilizada, ver src/lib/tms/viaticos.ts). Permiso: CUALQUIERA de
+ * viaticos/viaticos_autorizar/viaticos_pagar con `ver`
+ * (requireTenantViaticosAny) — un facturador que solo tiene
+ * `viaticos_pagar` también debe poder ver este listado para ubicar sus
+ * AUTORIZADOS.
+ *
+ * Devuelve además flags de capacidad (puedeAutorizar/puedePagar/
+ * puedeLiquidar/puedeVerBancario) para que la UI oculte botones que el
+ * usuario no puede ejecutar — la seguridad real sigue en cada endpoint de
+ * acción (requireTenantViaticosAutorizar/Pagar/Viaticos), nunca en estos
+ * flags. `puedeVerBancario` controla si esta respuesta incluye
+ * banco/cuenta (ver incluirBancario en listarViaticosControl) — un
+ * usuario sin `viaticos_pagar:ver` JAMÁS recibe esos campos, ni siquiera
+ * en la respuesta cruda (no es solo ocultarlos en la UI).
  */
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantViaticos(slug, "ver");
+  const guard = await requireTenantViaticosAny(slug, "ver");
   if (guard.error) return guard.error;
 
   const url = new URL(req.url);
@@ -25,12 +40,22 @@ export async function GET(req: Request, ctx: Ctx) {
   const estadoRaw = url.searchParams.get("estado");
   const estado = estadoRaw && (ESTADOS as string[]).includes(estadoRaw) ? (estadoRaw as EstadoViatico) : undefined;
 
-  const resultado = await listarViaticosControl(guard.empresa.id, {
-    planId,
-    fechaDesde,
-    fechaHasta,
-    empleadoNombre,
-    estado,
+  const perms = await permisosEfectivos(guard.session.id, guard.session.rol as RolGlobal);
+  const puedeAutorizar = tienePermiso(perms, "viaticos_autorizar", "editar");
+  const puedePagar = tienePermiso(perms, "viaticos_pagar", "editar");
+  const puedeLiquidar = tienePermiso(perms, "viaticos", "editar");
+  const puedeVerBancario = tienePermiso(perms, "viaticos_pagar", "ver");
+
+  const resultado = await listarViaticosControl(
+    guard.empresa.id,
+    { planId, fechaDesde, fechaHasta, empleadoNombre, estado },
+    { incluirBancario: puedeVerBancario },
+  );
+  return NextResponse.json({
+    ...resultado,
+    puedeAutorizar,
+    puedePagar,
+    puedeLiquidar,
+    puedeVerBancario,
   });
-  return NextResponse.json(resultado);
 }

@@ -558,18 +558,34 @@ export type ResumenControlViaticos = {
   liquidados: number;
 };
 
+export type ViaticoControlItem = ViaticoDetalle & {
+  banco?: string | null;
+  tipoCuenta?: string | null;
+  cuentaBancaria?: string | null;
+};
+
 /**
- * Listado para el panel "Control de Viáticos" en TMS (punto 7 de VIAT-1):
- * todos los viáticos de la empresa con filtros de viaje/fecha/empleado/
- * estado, más el resumen de conteos por estado (sobre el resultado ya
- * filtrado, salvo el propio filtro de estado — el resumen siempre refleja
- * los otros filtros aplicados para que los 4 contadores sumen el total
- * visible al cambiar de estado).
+ * Listado para el módulo "Operaciones > Viáticos" (VIAT-3; antes "Control
+ * de Viáticos" de TMS, VIAT-1 punto 7): todos los viáticos de la empresa
+ * con filtros de viaje/fecha/empleado/estado, más el resumen de conteos
+ * por estado (sobre el resultado ya filtrado, salvo el propio filtro de
+ * estado — el resumen siempre refleja los otros filtros aplicados para
+ * que los 4 contadores sumen el total visible al cambiar de estado).
+ *
+ * `incluirBancario` (VIAT-3): agrega banco/tipo cuenta/cuenta bancaria vía
+ * una consulta SEPARADA (no se agrega a DETALLE_SELECT/ViaticoDetalle a
+ * propósito) para que listarViaticosDePlan (usado por el panel de
+ * Programación, audiencia más amplia que `viaticos_pagar`) nunca reciba
+ * ese dato aunque comparta el mismo SELECT base. El endpoint que llama a
+ * esta función decide `incluirBancario` según si el usuario tiene
+ * `viaticos_pagar:ver` — nunca a partir de un valor enviado por el
+ * cliente.
  */
 export async function listarViaticosControl(
   empresaId: number,
   filtros: FiltrosControlViaticos = {},
-): Promise<{ items: ViaticoDetalle[]; resumen: ResumenControlViaticos }> {
+  opts: { incluirBancario?: boolean } = {},
+): Promise<{ items: ViaticoControlItem[]; resumen: ResumenControlViaticos }> {
   const condiciones: string[] = ["v.empresa_id = ?"];
   const params: SqlParams = [empresaId];
 
@@ -635,7 +651,29 @@ export async function listarViaticosControl(
     `${DETALLE_SELECT} WHERE ${condicionesItems.join(" AND ")} ORDER BY pl.fecha_plan DESC, pl.codigo DESC, v.rol DESC, tp.nombre`,
     paramsItems,
   );
-  return { items: rows.map(mapDetalle), resumen };
+  const items: ViaticoControlItem[] = rows.map(mapDetalle);
+
+  if (opts.incluirBancario && items.length) {
+    const ids = items.map((i) => i.id);
+    const placeholders = ids.map(() => "?").join(",");
+    const bancoRows = await query<RowDataPacket[]>(
+      `SELECT v.id, e.banco, e.cuenta_bancaria, e.tipo_cuenta
+       FROM tms_viaticos v
+       INNER JOIN tms_personal tp ON tp.id = v.personal_id
+       LEFT JOIN empleados e ON e.id = tp.id_empleado AND e.empresa_id = tp.empresa_id
+       WHERE v.id IN (${placeholders})`,
+      ids,
+    );
+    const bancoMap = new Map(bancoRows.map((r) => [Number(r.id), r]));
+    for (const item of items) {
+      const b = bancoMap.get(item.id);
+      item.banco = b?.banco != null ? String(b.banco) : null;
+      item.tipoCuenta = b?.tipo_cuenta != null ? String(b.tipo_cuenta) : null;
+      item.cuentaBancaria = b?.cuenta_bancaria != null ? String(b.cuenta_bancaria) : null;
+    }
+  }
+
+  return { items, resumen };
 }
 
 export type ViaticoPropio = {

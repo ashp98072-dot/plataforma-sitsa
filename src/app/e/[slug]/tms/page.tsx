@@ -4,8 +4,6 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import ViaticosConfigPanel from "@/components/tms/viaticos-config-panel";
-import ViaticosControlPanel from "@/components/tms/viaticos-control-panel";
-import ViaticosPorPagarPanel from "@/components/tms/viaticos-por-pagar-panel";
 import ClienteUbicacionesAdmin from "@/components/tms/cliente-ubicaciones-admin";
 
 /**
@@ -14,31 +12,22 @@ import ClienteUbicacionesAdmin from "@/components/tms/cliente-ubicaciones-admin"
  * programacion/) es la pantalla operativa diaria (crear/editar viajes,
  * asignar piloto/auxiliares/unidad, paradas, viáticos, estados) — esta
  * pantalla YA NO duplica ese formulario. Mismo backend/endpoints de
- * siempre, solo UI reorganizada en 5 secciones (VIAT-1c: se simplificó de
- * 4 a 3; VIAT-1 agregó de vuelta "Control de Viáticos"; VIAT-2 agrega
- * "Viáticos por pagar" — la bandeja del facturador, distinta y separada
- * del Control general porque incluye dato bancario y requiere el permiso
- * `viaticos_pagar`, no `viaticos`. Ninguna de las dos reintroduce la
- * duplicación que VIAT-1c evitó: siguen siendo de solo lectura/acciones
- * puntuales, sin editar piloto/auxiliares/unidad/paradas. Catálogos sigue
- * colapsado por defecto para no saturar la pantalla):
+ * siempre, solo UI reorganizada en 3 secciones (VIAT-1c: se simplificó de
+ * 4 a 3; VIAT-1/VIAT-2 agregaron temporalmente "Control de Viáticos" y
+ * "Viáticos por pagar" aquí; VIAT-3 las traslada a su propio módulo
+ * visible — Operaciones → Viáticos (src/app/e/[slug]/viaticos/) — porque
+ * estaban "escondidas" dentro de TMS y el usuario no las encontraba. TMS
+ * ya NO mantiene esas dos bandejas: solo conserva la configuración de
+ * montos por puesto y un enlace directo al módulo):
  *   1. Configuración: viáticos predeterminados (ViaticosConfigPanel) +
- *      ubicaciones de clientes (ClienteUbicacionesAdmin).
- *   2. Control de Viáticos (VIAT-1, punto 7): supervisión de solo lectura
- *      de todos los viáticos de la empresa — filtros viaje/cliente/fecha/
- *      empleado/estado, resumen de conteos por estado. Requiere permiso
- *      `viaticos:ver` (lo exige el propio endpoint).
- *   3. Viáticos por pagar (VIAT-2, punto 3): bandeja del facturador —
- *      AUTORIZADOS por defecto, selección, exportar Excel/archivo
- *      bancario genérico, registrar entrega/pago. Requiere permiso
- *      `viaticos_pagar` (lo exige el propio endpoint) — separado de
- *      autorizar (Operaciones) y de liquidar (administración).
- *   4. Viajes / control administrativo: tabla de solo lectura de
+ *      ubicaciones de clientes (ClienteUbicacionesAdmin) + enlace al
+ *      módulo Viáticos para autorizar/pagar/liquidar.
+ *   2. Viajes / control administrativo: tabla de solo lectura de
  *      GET /tms/planes con filtros, detalle y seguimiento de evidencias
  *      registradas desde el portal — no reasigna piloto/auxiliares/
  *      unidad/paradas, no cambia estado), enlace "Ver en Programación" y
  *      la bitácora de auditoría.
- *   5. Catálogos (clientes, unidades, pilotos, auxiliares, lugares) —
+ *   3. Catálogos (clientes, unidades, pilotos, auxiliares, lugares) —
  *      resumen de solo lectura de GET /tms/catalogos, colapsado por
  *      defecto (<details>, sin JS adicional).
  */
@@ -279,35 +268,31 @@ export default function TmsPage() {
         </p>
       </div>
 
-      {/* 1. Configuración: viáticos predeterminados + ubicaciones de clientes */}
+      {/* 1. Configuración: viáticos predeterminados + ubicaciones de clientes + enlace al módulo Viáticos */}
       <section className="space-y-3">
         <h2 className="text-xs font-semibold uppercase tracking-[0.15em] text-[var(--muted)]">
           1. Configuración
         </h2>
         <ViaticosConfigPanel slug={slug} />
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+          <p className="text-sm">
+            Para autorizar, pagar/entregar o liquidar viáticos de cualquier viaje, usa el módulo
+            dedicado:
+          </p>
+          <Link
+            href={`/e/${slug}/viaticos`}
+            className="mt-2 inline-block rounded bg-[var(--accent)] px-3 py-1.5 text-xs font-medium text-white"
+          >
+            Ir al módulo Viáticos →
+          </Link>
+        </div>
         <ClienteUbicacionesAdmin slug={slug} clientes={clientesCat} />
       </section>
 
-      {/* 2. Control de Viáticos — supervisión general, solo lectura + resumen */}
+      {/* 2. Viajes / control administrativo (incluye bitácora) */}
       <section className="space-y-3">
         <h2 className="text-xs font-semibold uppercase tracking-[0.15em] text-[var(--muted)]">
-          2. Control de Viáticos
-        </h2>
-        <ViaticosControlPanel slug={slug} />
-      </section>
-
-      {/* 3. Viáticos por pagar — bandeja del facturador */}
-      <section className="space-y-3">
-        <h2 className="text-xs font-semibold uppercase tracking-[0.15em] text-[var(--muted)]">
-          3. Viáticos por pagar
-        </h2>
-        <ViaticosPorPagarPanel slug={slug} />
-      </section>
-
-      {/* 4. Viajes / control administrativo (incluye bitácora) */}
-      <section className="space-y-3">
-        <h2 className="text-xs font-semibold uppercase tracking-[0.15em] text-[var(--muted)]">
-          4. Viajes / control administrativo
+          2. Viajes / control administrativo
         </h2>
 
         <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
@@ -578,10 +563,10 @@ export default function TmsPage() {
         </details>
       </section>
 
-      {/* 5. Catálogos — colapsado por defecto para no saturar la pantalla; el resumen de solo lectura no es lo primero que necesita el día a día. */}
+      {/* 3. Catálogos — colapsado por defecto para no saturar la pantalla; el resumen de solo lectura no es lo primero que necesita el día a día. */}
       <details className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
         <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.15em] text-[var(--muted)]">
-          5. Catálogos
+          3. Catálogos
         </summary>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
           <p className="text-sm font-medium">Clientes, unidades, personal y lugares</p>
