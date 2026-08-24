@@ -375,7 +375,22 @@ export type FiltrosDescuentos = {
   fechaHasta?: string;
 };
 
-/** Saldo/pagado/cuotas — calculado siempre (nunca cacheado), en lote para N descuentos. */
+/**
+ * Saldo/pagado/cuotas — calculado siempre (nunca cacheado), en lote para N
+ * descuentos.
+ *
+ * Distinción importante: una cuota `estado='APLICADA'` significa que ya fue
+ * RECLAMADA por una generación de planilla (tiene planilla_periodo_id y
+ * cuenta en `descuentos` de esa línea) — no significa que la planilla ya se
+ * pagó de verdad. El saldo/"pagado" del descuento (montos en Q, distinto de
+ * `cuotasAplicadas` que sigue contando el progreso de reclamos) solo debe
+ * reflejar dinero REALMENTE pagado — es decir, cuotas APLICADA cuya línea
+ * de planilla (mismo periodo + mismo empleado) ya tiene
+ * estado_pago='Pagado' (el evento real de pago, vía "Marcar pagados" en
+ * Planillas). Antes de esta distinción, el saldo bajaba apenas se
+ * generaba/regeneraba la planilla, aunque RRHH nunca hubiera confirmado
+ * ningún pago real.
+ */
 async function resumenesPorDescuento(
   empresaId: number,
   descuentoIds: number[],
@@ -386,7 +401,7 @@ async function resumenesPorDescuento(
 
   const cuotasRows = await query<RowDataPacket[]>(
     `SELECT descuento_id, numero_cuota, fecha_programada, monto_programado,
-            monto_aplicado, estado
+            monto_aplicado, estado, planilla_periodo_id
      FROM rrhh_descuento_cuotas
      WHERE empresa_id = ? AND descuento_id IN (${ph})
      ORDER BY descuento_id, numero_cuota`,
@@ -413,23 +428,59 @@ async function resumenesPorDescuento(
   }
 
   const montosRows = await query<RowDataPacket[]>(
-    `SELECT id, monto_original FROM rrhh_descuentos_maestro
+    `SELECT id, empleado_id, monto_original FROM rrhh_descuentos_maestro
      WHERE empresa_id = ? AND id IN (${ph})`,
     [empresaId, ...descuentoIds],
   );
+  const empleadoPorDescuento = new Map<number, number>();
+  for (const mr of montosRows) {
+    empleadoPorDescuento.set(Number(mr.id), Number(mr.empleado_id));
+  }
+
+  // Periodos de planilla realmente ya pagados (estado_pago='Pagado'), por
+  // empleado — solo se consultan los periodos que de verdad aparecen en
+  // cuotas APLICADA de este lote, para no traer toda la tabla.
+  const periodoIds = Array.from(
+    new Set(
+      cuotasRows
+        .filter((r) => String(r.estado) === "APLICADA" && r.planilla_periodo_id != null)
+        .map((r) => Number(r.planilla_periodo_id)),
+    ),
+  );
+  const lineasPagadas = new Set<string>();
+  if (periodoIds.length) {
+    const ph2 = periodoIds.map(() => "?").join(",");
+    const rows = await query<RowDataPacket[]>(
+      `SELECT periodo_id, id_empleado
+       FROM rrhh_planilla_lineas
+       WHERE empresa_id = ? AND estado_pago = 'Pagado' AND periodo_id IN (${ph2})`,
+      [empresaId, ...periodoIds],
+    );
+    for (const r of rows) {
+      lineasPagadas.add(`${Number(r.periodo_id)}:${Number(r.id_empleado)}`);
+    }
+  }
 
   const hoy = hoyLocal();
   for (const mr of montosRows) {
     const id = Number(mr.id);
     const montoOriginal = Number(mr.monto_original);
+    const empleadoId = empleadoPorDescuento.get(id);
     const cuotas = cuotasPorDescuento.get(id) ?? [];
     let pagadoCuotas = 0;
     let cuotasAplicadas = 0;
     let proxima: ResumenSaldo["proximaCuota"] = null;
     for (const c of cuotas) {
       if (String(c.estado) === "APLICADA") {
-        pagadoCuotas += Number(c.monto_aplicado ?? c.monto_programado ?? 0);
         cuotasAplicadas += 1;
+        const periodoId = c.planilla_periodo_id != null ? Number(c.planilla_periodo_id) : null;
+        const realmentePagada =
+          periodoId != null &&
+          empleadoId != null &&
+          lineasPagadas.has(`${periodoId}:${empleadoId}`);
+        if (realmentePagada) {
+          pagadoCuotas += Number(c.monto_aplicado ?? c.monto_programado ?? 0);
+        }
       }
       if (!proxima && String(c.estado) === "PENDIENTE") {
         const fecha = toIsoDate(c.fecha_programada) ?? "";
