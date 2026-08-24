@@ -64,7 +64,7 @@ export default async function ViajesPage() {
             Consulta lo que te asignó Operaciones y adjunta evidencias del viaje.
             {personal.tipo === "Piloto"
               ? " Puedes iniciar, registrar el avance y cerrar la llegada."
-              : " Como auxiliar puedes iniciar y aportar evidencias en el mismo viaje."}
+              : " Como auxiliar puedes registrar carga y aportar evidencias en el mismo viaje cuando el piloto lo haya iniciado."}
           </p>
         </header>
 

@@ -261,13 +261,13 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
       </> : null}
     </form> : null}
 
-    {!viajeAbierto ? <form onSubmit={onSalida} className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
+    {!viajeAbierto && tipo === "Piloto" ? <form onSubmit={onSalida} className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
       <h2 className="font-semibold">Iniciar viaje</h2>
-      {programados.length ? <label className="mt-4 block text-sm text-[var(--muted)]">Viaje asignado<select className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={planId} onChange={(e) => elegirPlan(Number(e.target.value))}>{programados.map((a) => <option key={a.planId} value={a.planId}>{a.codigo} · {a.cliente ?? "Sin cliente"} · {a.placa ?? "Sin unidad"}</option>)}</select></label> : <p className="mt-2 text-sm text-amber-300">{tipo === "Auxiliar" ? "No tienes viajes programados pendientes para iniciar." : "No hay programación pendiente; registra una salida manual solo si Operaciones lo indicó."}</p>}
+      {programados.length ? <label className="mt-4 block text-sm text-[var(--muted)]">Viaje asignado<select className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={planId} onChange={(e) => elegirPlan(Number(e.target.value))}>{programados.map((a) => <option key={a.planId} value={a.planId}>{a.codigo} · {a.cliente ?? "Sin cliente"} · {a.placa ?? "Sin unidad"}</option>)}</select></label> : <p className="mt-2 text-sm text-amber-300">No hay programación pendiente; registra una salida manual solo si Operaciones lo indicó.</p>}
       <label className="mt-3 block text-sm text-[var(--muted)]">Placa<input className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 uppercase" value={placa} onChange={(e) => setPlaca(e.target.value)} required readOnly={Boolean(planSeleccionado?.placa)} /></label>
       <label className="mt-3 block text-sm text-[var(--muted)]">Km de salida<input type="number" min={0} className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={kmSalida} onChange={(e) => setKmSalida(e.target.value)} required /></label>
       <label className="mt-3 block text-sm text-[var(--muted)]">Destino<input className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={destino} onChange={(e) => setDestino(e.target.value)} maxLength={200} /></label>
-      <button className="mt-4 rounded-lg bg-[var(--accent)] px-4 py-2.5 font-medium text-white disabled:opacity-50" disabled={loading || (tipo === "Auxiliar" && !programados.length)}>Iniciar viaje</button>
+      <button className="mt-4 rounded-lg bg-[var(--accent)] px-4 py-2.5 font-medium text-white disabled:opacity-50" disabled={loading}>Iniciar viaje</button>
     </form> : null}
   </div>;
 }

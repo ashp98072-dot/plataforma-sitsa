@@ -97,6 +97,12 @@ export async function POST(req: Request) {
   const nombre = empleado.nombre;
 
   if (body?.accion === "salida") {
+    if (personal.tipo !== "Piloto") {
+      return NextResponse.json(
+        { error: "Solo el piloto asignado puede iniciar el viaje." },
+        { status: 403 },
+      );
+    }
     const parsed = salidaSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json(
@@ -113,14 +119,10 @@ export async function POST(req: Request) {
                 pil.nombre AS piloto_nombre, pil.id_empleado AS piloto_empleado_id
          FROM tms_planes_viaje p
          INNER JOIN tms_personal pil ON pil.id = p.piloto_id
-         LEFT JOIN tms_plan_auxiliares pa ON pa.plan_id = p.id
-         LEFT JOIN tms_personal aux ON aux.id = pa.personal_id
-         LEFT JOIN tms_personal aux_legacy ON aux_legacy.id = p.auxiliar_id
          LEFT JOIN tms_lugares ld ON ld.id = p.lugar_descarga_id
-         WHERE p.id = ? AND p.empresa_id = ?
-           AND (pil.id_empleado = ? OR aux.id_empleado = ? OR aux_legacy.id_empleado = ?)
+         WHERE p.id = ? AND p.empresa_id = ? AND pil.id_empleado = ?
            AND p.estado = 'Programado' LIMIT 1`,
-        [d.planId, empresaId, session.empleadoId, session.empleadoId, session.empleadoId],
+        [d.planId, empresaId, session.empleadoId],
       );
       planAsignado = planes[0] ?? null;
       if (!planAsignado) {
@@ -135,11 +137,6 @@ export async function POST(req: Request) {
           { status: 409 },
         );
       }
-    } else if (personal.tipo !== "Piloto") {
-      return NextResponse.json(
-        { error: "Como auxiliar solo puedes iniciar un viaje asignado por Operaciones." },
-        { status: 403 },
-      );
     }
     const resuelto = planAsignado?.unidad_id
       ? await resolverVehiculoDeUnidadTms(empresaId, Number(planAsignado.unidad_id))
