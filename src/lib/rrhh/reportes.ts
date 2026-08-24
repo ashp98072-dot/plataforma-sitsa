@@ -180,6 +180,8 @@ export type FilaReporteAsistencia = {
   comentarios: string;
   motivo: string;
   tipoHorario: string;
+  fotoEntradaId: number | null;
+  fotoSalidaId: number | null;
 };
 
 export async function obtenerReporteAsistencias(
@@ -194,9 +196,15 @@ export async function obtenerReporteAsistencias(
     `SELECT s.id, s.id_empleado, s.fecha_jornada, e.codigo, e.nombre,
             s.entrada_at, s.salida_at,
             e.hora_entrada_teorica, e.hora_salida_teorica,
-            s.comentarios_rrhh, e.tipo_horario
+            s.comentarios_rrhh, e.tipo_horario,
+            ev_entrada.id AS foto_entrada_id,
+            ev_salida.id AS foto_salida_id
      FROM sesiones_trabajo s
      JOIN empleados e ON s.id_empleado = e.id AND e.empresa_id = ?
+     LEFT JOIN marcaje_evidencias ev_entrada
+       ON ev_entrada.sesion_id = s.id AND ev_entrada.tipo = 'entrada'
+     LEFT JOIN marcaje_evidencias ev_salida
+       ON ev_salida.sesion_id = s.id AND ev_salida.tipo = 'salida'
      WHERE s.empresa_id = ? AND s.fecha_jornada BETWEEN ? AND ?
        AND e.estado = 'Activo'
      ORDER BY s.fecha_jornada DESC, e.nombre ASC`,
@@ -277,6 +285,8 @@ export async function obtenerReporteAsistencias(
             ? `Inició ${fmtDm(fechaJornada)} — Terminó ${fmtDm(salidaAt!.split(" ")[0])}`
             : "Trabajando",
           tipoHorario,
+          fotoEntradaId: s.foto_entrada_id != null ? Number(s.foto_entrada_id) : null,
+          fotoSalidaId: s.foto_salida_id != null ? Number(s.foto_salida_id) : null,
         });
       } else if (diasCubiertosViaje.has(clave)) {
         resultado.push({
@@ -292,6 +302,8 @@ export async function obtenerReporteAsistencias(
           comentarios: "",
           motivo: diasCubiertosViaje.get(clave)!,
           tipoHorario,
+          fotoEntradaId: null,
+          fotoSalidaId: null,
         });
       } else if (enRuta.has(clave)) {
         resultado.push({
@@ -307,6 +319,8 @@ export async function obtenerReporteAsistencias(
           comentarios: "",
           motivo: "En Ruta",
           tipoHorario,
+          fotoEntradaId: null,
+          fotoSalidaId: null,
         });
       } else {
         const tipoInc = incidencias.get(clave);
@@ -324,6 +338,8 @@ export async function obtenerReporteAsistencias(
             comentarios: "",
             motivo: tipoInc.tipo,
             tipoHorario,
+            fotoEntradaId: null,
+            fotoSalidaId: null,
           });
         } else {
           resultado.push({
@@ -339,6 +355,8 @@ export async function obtenerReporteAsistencias(
             comentarios: "",
             motivo: "Falta",
             tipoHorario,
+            fotoEntradaId: null,
+            fotoSalidaId: null,
           });
         }
       }

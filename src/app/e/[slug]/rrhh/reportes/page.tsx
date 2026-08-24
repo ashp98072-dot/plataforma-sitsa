@@ -15,6 +15,8 @@ type Fila = {
   estadoSalida: string;
   motivo: string;
   tipoHorario: string;
+  fotoEntradaId: number | null;
+  fotoSalidaId: number | null;
 };
 
 const PERIODOS = [
@@ -58,6 +60,7 @@ export default function ReportesPage() {
   }, [slug, periodo, desde, hasta, tipo, horario]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void cargar();
   }, [cargar]);
 
@@ -183,6 +186,7 @@ export default function ReportesPage() {
               <th className="px-2 py-2">Est. ent.</th>
               <th className="px-2 py-2">Est. sal.</th>
               <th className="px-2 py-2">Motivo</th>
+              <th className="px-2 py-2">Fotografías</th>
             </tr>
           </thead>
           <tbody>
@@ -199,6 +203,31 @@ export default function ReportesPage() {
                 <td className="px-2 py-1.5">{f.estadoEntrada}</td>
                 <td className="px-2 py-1.5">{f.estadoSalida}</td>
                 <td className="px-2 py-1.5">{f.motivo}</td>
+                <td className="px-2 py-1.5">
+                  <div className="flex gap-2">
+                    {f.fotoEntradaId ? (
+                      <a
+                        href={`/api/empresas/${slug}/rrhh/marcajes/evidencias/${f.fotoEntradaId}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-sky-300 hover:underline"
+                      >
+                        Entrada
+                      </a>
+                    ) : null}
+                    {f.fotoSalidaId ? (
+                      <a
+                        href={`/api/empresas/${slug}/rrhh/marcajes/evidencias/${f.fotoSalidaId}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-sky-300 hover:underline"
+                      >
+                        Salida
+                      </a>
+                    ) : null}
+                    {!f.fotoEntradaId && !f.fotoSalidaId ? "—" : null}
+                  </div>
+                </td>
               </tr>
             ))}
           </tbody>

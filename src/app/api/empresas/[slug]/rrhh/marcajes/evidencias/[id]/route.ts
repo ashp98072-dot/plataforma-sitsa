@@ -9,7 +9,10 @@ type Ctx = { params: Promise<{ slug: string; id: string }> };
 
 export async function GET(_req: Request, ctx: Ctx) {
   const { slug, id: rawId } = await ctx.params;
-  const guard = await requireTenantRrhh(slug, "marcajes", "ver");
+  const guardMarcajes = await requireTenantRrhh(slug, "marcajes", "ver");
+  const guard = guardMarcajes.error
+    ? await requireTenantRrhh(slug, "reportes", "ver")
+    : guardMarcajes;
   if (guard.error) return guard.error;
   if (guard.session.rol === "Marcaje") {
     return NextResponse.json(
