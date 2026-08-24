@@ -1,11 +1,9 @@
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
-import { execute, query } from "@/lib/db";
+import { query } from "@/lib/db";
 import { requireTenantModulo, requireTenantFlotaAny } from "@/lib/tenant";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
-import { validarParadaDelPlan } from "@/lib/tms/paradas";
-import { contentTypeFor, guardarUpload } from "@/lib/uploads";
-import { ahoraLocal } from "@/lib/rrhh/dates";
+import { contentTypeFor } from "@/lib/uploads";
 import { readFileSync } from "fs";
 import { absPathFromRelative } from "@/lib/uploads";
 import { registrarAuditoria } from "@/lib/auditoria";
@@ -127,139 +125,16 @@ export async function GET(req: Request, ctx: Ctx) {
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  // Ops o piloto pueden subir evidencia de producto
-  let guard = await requireTenantModulo(slug, "tms", true);
-  if (guard.error) {
-    guard = await requireTenantFlotaAny(slug, ["flota_piloto"], "crear");
-  }
+  const guard = await requireTenantModulo(slug, "tms", true);
   if (guard.error) return guard.error;
-
-  try {
-    await asegurarSchemaFlota();
-  } catch {
-    /* ok */
-  }
-
-  const form = await req.formData();
-  const planId = Number(form.get("planId") ?? 0);
-  const paradaId = form.get("paradaId")
-    ? Number(form.get("paradaId"))
-    : null;
-  const tipo = String(form.get("tipo") ?? (paradaId ? "Producto" : "Carga"));
-  const latitud = form.get("latitud") ? Number(form.get("latitud")) : null;
-  const longitud = form.get("longitud") ? Number(form.get("longitud")) : null;
-  const capturadoEn = form.get("capturadoEn")
-    ? String(form.get("capturadoEn"))
-    : ahoraLocal();
-
-  const files: {
-    name: string;
-    size: number;
-    type?: string;
-    arrayBuffer: () => Promise<ArrayBuffer>;
-  }[] = [];
-  for (const [key, val] of form.entries()) {
-    if (key !== "file" && key !== "files") continue;
-    if (
-      val &&
-      typeof val === "object" &&
-      "arrayBuffer" in val &&
-      typeof (val as Blob).arrayBuffer === "function" &&
-      typeof (val as Blob).size === "number" &&
-      (val as Blob).size > 0
-    ) {
-      const blob = val as Blob & { name?: string };
-      files.push({
-        name: blob.name || `foto_${Date.now()}.jpg`,
-        size: blob.size,
-        type: blob.type,
-        arrayBuffer: () => blob.arrayBuffer(),
-      });
-    }
-  }
-  if (!planId || !files.length) {
-    return NextResponse.json(
-      {
-        error:
-          "planId y archivo son requeridos. Si ya elegiste foto, prueba JPG/PNG.",
-      },
-      { status: 400 },
-    );
-  }
-
-  const plan = await query<RowDataPacket[]>(
-    "SELECT id FROM tms_planes_viaje WHERE id = ? AND empresa_id = ? LIMIT 1",
-    [planId, guard.empresa.id],
+  void req;
+  return NextResponse.json(
+    {
+      error:
+        "Las evidencias se registran desde el portal operativo por el piloto o personal asignado. TMS es solo consulta.",
+    },
+    { status: 403 },
   );
-  if (!plan[0]) {
-    return NextResponse.json({ error: "Plan no encontrado." }, { status: 404 });
-  }
-
-  let paradaOk: number | null = null;
-  if (paradaId) {
-    const p = await validarParadaDelPlan(guard.empresa.id, planId, paradaId);
-    if (!p) {
-      return NextResponse.json(
-        { error: "Parada no válida para este plan." },
-        { status: 400 },
-      );
-    }
-    paradaOk = p.id;
-  }
-
-  const ids: number[] = [];
-  for (const file of files) {
-    const saved = await guardarUpload(
-      guard.empresa.id,
-      "evidencias",
-      `plan_${planId}${paradaOk ? `_p${paradaOk}` : ""}`,
-      file,
-    );
-
-    let result;
-    try {
-      result = await execute(
-        `INSERT INTO tms_evidencias
-          (empresa_id, plan_id, tipo, ruta_archivo, nombre_original, latitud, longitud,
-           subido_por, parada_id, capturado_en)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          guard.empresa.id,
-          planId,
-          tipo,
-          saved.relative,
-          saved.original,
-          Number.isFinite(latitud as number) ? latitud : null,
-          Number.isFinite(longitud as number) ? longitud : null,
-          guard.session.username,
-          paradaOk,
-          capturadoEn,
-        ],
-      );
-    } catch {
-      result = await execute(
-        `INSERT INTO tms_evidencias
-          (empresa_id, plan_id, tipo, ruta_archivo, nombre_original, latitud, longitud, subido_por)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          guard.empresa.id,
-          planId,
-          tipo,
-          saved.relative,
-          saved.original,
-          Number.isFinite(latitud as number) ? latitud : null,
-          Number.isFinite(longitud as number) ? longitud : null,
-          guard.session.username,
-        ],
-      );
-    }
-    ids.push(Number(result.insertId));
-  }
-
-  return NextResponse.json({
-    ids,
-    mensaje: `${ids.length} evidencia(s) registrada(s).`,
-  });
 }
 
 /** Solo Admin puede eliminar evidencias TMS. */
