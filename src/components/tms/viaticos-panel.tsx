@@ -153,10 +153,66 @@ export default function ViaticosPanel({
     );
   }
 
+  const pilotos = rows.filter((r) => r.rol === "Piloto");
+  const auxiliares = rows.filter((r) => r.rol !== "Piloto");
+
+  function fila(r: ViaticoRow) {
+    const montoTxt = montos[r.id] ?? String(r.montoAsignado);
+    const monto = Number(montoTxt);
+    const difiere = Number.isFinite(monto) && Math.abs(monto - r.montoSugerido) > 0.005;
+    return (
+      <div key={r.id} className="flex flex-wrap items-center gap-2 rounded border border-[var(--border)] p-2">
+        <div className="min-w-[140px] flex-1">
+          <p className="text-sm">{r.personalNombre}</p>
+          <p className="text-[10px] text-[var(--muted)]">puesto: {r.puesto}</p>
+        </div>
+        <div className="text-[11px] text-[var(--muted)]">
+          Sugerido
+          <br />
+          {q(r.montoSugerido)}
+        </div>
+        <label className="text-[11px] text-[var(--muted)]">
+          Asignado
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            className={`${inputCls} mt-0.5 block w-24`}
+            value={montoTxt}
+            onChange={(e) => setMontos((m) => ({ ...m, [r.id]: e.target.value }))}
+          />
+        </label>
+        {difiere ? (
+          <input
+            className={`${inputCls} min-w-[160px] flex-1`}
+            placeholder="Motivo del ajuste (obligatorio)"
+            value={motivos[r.id] ?? ""}
+            onChange={(e) => setMotivos((m) => ({ ...m, [r.id]: e.target.value }))}
+          />
+        ) : null}
+        <button
+          type="button"
+          disabled={savingId === r.id}
+          onClick={() => void guardar(r)}
+          className="rounded bg-[var(--accent)] px-2 py-1 text-xs text-white disabled:opacity-50"
+        >
+          {savingId === r.id ? "Guardando…" : "Guardar"}
+        </button>
+        {okId === r.id ? <span className="text-[10px] text-emerald-400">Guardado</span> : null}
+        {r.modificadoPor ? (
+          <span className="w-full text-[10px] text-[var(--muted)]">
+            Último cambio: {r.modificadoPor}
+            {r.motivoCambio ? ` · ${r.motivoCambio}` : ""}
+          </span>
+        ) : null}
+      </div>
+    );
+  }
+
   return (
     <div className="md:col-span-4 space-y-2 rounded border border-[var(--border)] p-3">
       <p className="text-xs font-medium">
-        Viáticos (información interna — no se muestra al cliente)
+        Viáticos del viaje (información interna — no se muestra al cliente)
       </p>
       {error ? <p className="text-xs text-red-300">{error}</p> : null}
       {!rows.length ? (
@@ -164,71 +220,19 @@ export default function ViaticosPanel({
           Sin piloto/auxiliares asignados todavía, o el plan aún no se ha guardado.
         </p>
       ) : (
-        <div className="space-y-2">
-          {rows.map((r) => {
-            const montoTxt = montos[r.id] ?? String(r.montoAsignado);
-            const monto = Number(montoTxt);
-            const difiere =
-              Number.isFinite(monto) && Math.abs(monto - r.montoSugerido) > 0.005;
-            return (
-              <div
-                key={r.id}
-                className="flex flex-wrap items-center gap-2 rounded border border-[var(--border)] p-2"
-              >
-                <div className="min-w-[140px] flex-1">
-                  <p className="text-sm">{r.personalNombre}</p>
-                  <p className="text-[10px] text-[var(--muted)]">
-                    {r.rol} · puesto: {r.puesto}
-                  </p>
-                </div>
-                <div className="text-[11px] text-[var(--muted)]">
-                  Predeterminado
-                  <br />
-                  {q(r.montoSugerido)}
-                </div>
-                <label className="text-[11px] text-[var(--muted)]">
-                  Asignado
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    className={`${inputCls} mt-0.5 block w-24`}
-                    value={montoTxt}
-                    onChange={(e) =>
-                      setMontos((m) => ({ ...m, [r.id]: e.target.value }))
-                    }
-                  />
-                </label>
-                {difiere ? (
-                  <input
-                    className={`${inputCls} min-w-[160px] flex-1`}
-                    placeholder="Motivo del cambio (obligatorio)"
-                    value={motivos[r.id] ?? ""}
-                    onChange={(e) =>
-                      setMotivos((m) => ({ ...m, [r.id]: e.target.value }))
-                    }
-                  />
-                ) : null}
-                <button
-                  type="button"
-                  disabled={savingId === r.id}
-                  onClick={() => void guardar(r)}
-                  className="rounded bg-[var(--accent)] px-2 py-1 text-xs text-white disabled:opacity-50"
-                >
-                  {savingId === r.id ? "Guardando…" : "Guardar"}
-                </button>
-                {okId === r.id ? (
-                  <span className="text-[10px] text-emerald-400">Guardado</span>
-                ) : null}
-                {r.modificadoPor ? (
-                  <span className="w-full text-[10px] text-[var(--muted)]">
-                    Último cambio: {r.modificadoPor}
-                    {r.motivoCambio ? ` · ${r.motivoCambio}` : ""}
-                  </span>
-                ) : null}
-              </div>
-            );
-          })}
+        <div className="space-y-3">
+          {pilotos.length ? (
+            <div className="space-y-2">
+              <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--muted)]">Piloto</p>
+              {pilotos.map(fila)}
+            </div>
+          ) : null}
+          {auxiliares.length ? (
+            <div className="space-y-2">
+              <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--muted)]">Auxiliares</p>
+              {auxiliares.map(fila)}
+            </div>
+          ) : null}
         </div>
       )}
     </div>

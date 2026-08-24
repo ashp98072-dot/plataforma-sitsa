@@ -279,17 +279,35 @@ export default function PlanForm({
     };
   }, [slug, form.clienteId]);
 
-  function agregarParadaDesdeUbicacion(u: UbicacionCliente) {
-    const tipo: ParadaForm["tipo"] = u.tipo === "CARGA" ? "Carga" : u.tipo === "ENTREGA" ? "Entrega" : "Entrega";
-    setParadasForm((list) => [
-      ...list,
-      {
-        lugarNombre: u.direccion?.trim() || u.nombre,
-        tipo,
-        requiereEvidencia: true,
-        clienteUbicacionId: u.id,
-      },
-    ]);
+  /**
+   * Rellena la fila de parada EXISTENTE `idx` con la ubicación guardada
+   * elegida — nunca crea una fila nueva ni toca el tipo (Carga/Entrega) que
+   * esa fila ya tenía: el tipo de la ubicación (CARGA/ENTREGA/AMBOS) es solo
+   * una sugerencia para ORDENAR las opciones del selector, no algo que
+   * sobrescriba silenciosamente la fila. Para agregar una parada nueva se
+   * usa el botón "+ Agregar parada" de siempre y luego se elige la
+   * ubicación en esa fila.
+   */
+  function seleccionarUbicacionParaFila(idx: number, ubicacionId: number) {
+    const u = ubicacionesCliente.find((x) => x.id === ubicacionId);
+    if (!u) return;
+    setParadasForm((list) =>
+      list.map((row, i) =>
+        i === idx
+          ? { ...row, lugarNombre: u.direccion?.trim() || u.nombre, clienteUbicacionId: u.id }
+          : row,
+      ),
+    );
+  }
+
+  /** Ubicaciones de este cliente ordenadas: primero las que coinciden con el tipo de la fila (o AMBOS), luego el resto. */
+  function ubicacionesParaFila(tipoFila: ParadaForm["tipo"]): UbicacionCliente[] {
+    const tipoUbic: TipoUbicacion = tipoFila === "Carga" ? "CARGA" : "ENTREGA";
+    return [...ubicacionesCliente].sort((a, b) => {
+      const aMatch = a.tipo === tipoUbic || a.tipo === "AMBOS" ? 0 : 1;
+      const bMatch = b.tipo === tipoUbic || b.tipo === "AMBOS" ? 0 : 1;
+      return aMatch - bMatch || a.nombre.localeCompare(b.nombre);
+    });
   }
 
   async function guardarNuevaUbicacion() {
@@ -316,10 +334,13 @@ export default function PlanForm({
         return;
       }
       const nueva = data.ubicacion as UbicacionCliente;
+      // Solo queda disponible para elegir en el selector de cada fila — no
+      // crea ninguna parada por su cuenta (punto 1: nunca una fila
+      // inesperada).
       setUbicacionesCliente((list) => [...list, nueva].sort((a, b) => a.nombre.localeCompare(b.nombre)));
-      agregarParadaDesdeUbicacion(nueva);
       setNuevaUbicacion({ nombre: "", direccion: "" });
       setMostrarNuevaUbicacion(false);
+      setMsg(`Ubicación "${nueva.nombre}" guardada — ya puedes elegirla en cualquier fila de parada.`);
     } catch {
       setError("Error de conexión.");
     } finally {
@@ -713,23 +734,11 @@ export default function PlanForm({
         {form.clienteId ? (
           <div className="rounded border border-[var(--border)] bg-black/10 p-2">
             <p className="text-[11px] text-[var(--muted)]">
-              Ubicaciones guardadas de {form.clienteNombre || "este cliente"} — clic para agregar como parada.
+              {ubicacionesCliente.length
+                ? `${ubicacionesCliente.length} ubicación(es) guardada(s) de ${form.clienteNombre || "este cliente"} — elígelas en el selector de cada fila.`
+                : `Sin ubicaciones guardadas de ${form.clienteNombre || "este cliente"} todavía.`}
             </p>
-            <div className="mt-1 flex flex-wrap gap-2">
-              {ubicacionesCliente.map((u) => (
-                <button
-                  key={u.id}
-                  type="button"
-                  className="rounded border border-sky-700 bg-sky-950/30 px-2 py-1 text-xs hover:bg-sky-900/40"
-                  onClick={() => agregarParadaDesdeUbicacion(u)}
-                  title={u.direccion ?? undefined}
-                >
-                  + {u.nombre}
-                </button>
-              ))}
-              {!ubicacionesCliente.length ? (
-                <span className="text-[11px] text-[var(--muted)]">Sin ubicaciones guardadas todavía.</span>
-              ) : null}
+            <div className="mt-1">
               <button
                 type="button"
                 className="rounded border border-[var(--border)] px-2 py-1 text-xs text-[var(--muted)] hover:border-[var(--accent)]/60"
@@ -763,7 +772,7 @@ export default function PlanForm({
                   onClick={() => void guardarNuevaUbicacion()}
                   className="rounded bg-[var(--accent)] px-2 py-1 text-xs text-white disabled:opacity-50"
                 >
-                  {guardandoUbicacion ? "Guardando…" : "Guardar y agregar como parada"}
+                  {guardandoUbicacion ? "Guardando…" : "Guardar ubicación"}
                 </button>
               </div>
             ) : null}
@@ -776,7 +785,15 @@ export default function PlanForm({
             <input
               className={`${inputCls} min-w-[160px] flex-1`}
               value={p.lugarNombre}
-              onChange={(e) => setParadasForm((list) => list.map((x, i) => (i === idx ? { ...x, lugarNombre: e.target.value } : x)))}
+              onChange={(e) =>
+                setParadasForm((list) =>
+                  list.map((x, i) =>
+                    // Escribir a mano desvincula la fila de la ubicación guardada
+                    // que tuviera antes — lugarNombre vuelve a ser texto libre.
+                    i === idx ? { ...x, lugarNombre: e.target.value, clienteUbicacionId: null } : x,
+                  ),
+                )
+              }
             />
             <select
               className={inputCls}
@@ -789,6 +806,24 @@ export default function PlanForm({
               <option value="Entrega">Entrega</option>
               <option value="Descarga">Descarga</option>
             </select>
+            {form.clienteId ? (
+              <select
+                className={`${inputCls} max-w-[200px]`}
+                value={p.clienteUbicacionId ?? ""}
+                onChange={(e) => {
+                  const id = Number(e.target.value);
+                  if (id) seleccionarUbicacionParaFila(idx, id);
+                }}
+                title="Rellena esta fila con una ubicación guardada del cliente — no cambia el tipo Carga/Entrega."
+              >
+                <option value="">— Ubicación guardada —</option>
+                {ubicacionesParaFila(p.tipo).map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.nombre} ({u.tipo === "AMBOS" ? "Carga/Entrega" : u.tipo === "CARGA" ? "Carga" : "Entrega"})
+                  </option>
+                ))}
+              </select>
+            ) : null}
             <label className="flex items-center gap-1 text-xs">
               <input
                 type="checkbox"
