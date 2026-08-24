@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { getColaboradorSession } from "@/lib/rrhh/colaborador-session";
 import { hoyLocal } from "@/lib/rrhh/dates";
-import { listarMarcajesEmpleadoRango } from "@/lib/rrhh/marcajes";
+import {
+  listarMarcajesEmpleadoRango,
+  registrarMarcajePortal,
+} from "@/lib/rrhh/marcajes";
+import { z } from "zod";
 
 const RANGO_MAX_DIAS = 90;
 
@@ -56,4 +60,38 @@ export async function GET(req: Request) {
   );
 
   return NextResponse.json({ marcajes, desde, hasta });
+}
+
+const marcarSchema = z.object({
+  latitud: z.number().finite().min(-90).max(90),
+  longitud: z.number().finite().min(-180).max(180),
+});
+
+export async function POST(req: Request) {
+  const session = await getColaboradorSession();
+  if (!session) {
+    return NextResponse.json({ error: "No autenticado." }, { status: 401 });
+  }
+  const parsed = marcarSchema.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "No se recibió una ubicación GPS válida." },
+      { status: 400 },
+    );
+  }
+  const resultado = await registrarMarcajePortal(
+    session.empresaId,
+    session.empleadoId,
+    parsed.data,
+  );
+  if (!resultado.ok) {
+    return NextResponse.json(
+      { error: resultado.error, code: resultado.code },
+      { status: resultado.code === "FUERA_GEOCERCA" ? 409 : 400 },
+    );
+  }
+  return NextResponse.json({
+    mensaje: `${resultado.tipo} registrada a las ${resultado.hora}.`,
+    resultado,
+  });
 }
