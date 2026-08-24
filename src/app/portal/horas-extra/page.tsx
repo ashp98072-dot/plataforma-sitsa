@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getColaboradorSession } from "@/lib/rrhh/colaborador-session";
+import { obtenerEmpleado } from "@/lib/rrhh/empleados";
 import {
   listarHorasExtraPorSupervisor,
   listarHorasExtraPropias,
@@ -20,13 +21,29 @@ export default async function HorasExtraPage() {
     redirect("/portal/login");
   }
 
-  const [subordinados, registrosEquipo, propias] = await Promise.all([
+  const [empleado, subordinados, registrosEquipo, propias] = await Promise.all([
+    obtenerEmpleado(session!.empresaId, session!.empleadoId),
     listarSubordinados(session!.empresaId, session!.empleadoId),
     listarHorasExtraPorSupervisor(session!.empresaId, session!.empleadoId),
     listarHorasExtraPropias(session!.empresaId, session!.empleadoId),
   ]);
 
   const esSupervisor = subordinados.length > 0;
+  if (!empleado?.horasExtraHabilitado && !esSupervisor) {
+    return (
+      <main className="min-h-screen p-4 sm:p-8">
+        <div className="mx-auto max-w-3xl">
+          <Link href="/portal" className="text-sm text-[var(--muted)] hover:underline">← Volver</Link>
+          <div className="mt-6 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6">
+            <h1 className="text-xl font-semibold">Horas extra no habilitadas</h1>
+            <p className="mt-2 text-sm text-[var(--muted)]">
+              RRHH debe habilitar las horas extra en tu ficha antes de que puedas acceder a esta sección.
+            </p>
+          </div>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen p-4 sm:p-8">

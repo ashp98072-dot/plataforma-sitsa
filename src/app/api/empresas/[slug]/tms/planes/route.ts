@@ -286,11 +286,20 @@ async function personalDesdeEmpleado(
      WHERE empresa_id = ? AND codigo = ? AND tipo = ? LIMIT 1`,
     [empresaId, codigo, tipo],
   );
-  if (existing[0]) return Number(existing[0].id);
+  if (existing[0]) {
+    await execute(
+      `UPDATE tms_personal SET id_empleado = ?, nombre = ?
+       WHERE id = ? AND empresa_id = ?
+         AND (id_empleado IS NULL OR id_empleado = ?)`,
+      [empleadoId, nombre, existing[0].id, empresaId, empleadoId],
+    );
+    return Number(existing[0].id);
+  }
   const r = await execute(
-    `INSERT INTO tms_personal (empresa_id, codigo, nombre, tipo, estado)
-     VALUES (?, ?, ?, ?, 'Activo')`,
-    [empresaId, codigo, nombre, tipo],
+    `INSERT INTO tms_personal
+      (empresa_id, codigo, nombre, tipo, estado, id_empleado)
+     VALUES (?, ?, ?, ?, 'Activo', ?)`,
+    [empresaId, codigo, nombre, tipo, empleadoId],
   );
   return Number(r.insertId);
 }
