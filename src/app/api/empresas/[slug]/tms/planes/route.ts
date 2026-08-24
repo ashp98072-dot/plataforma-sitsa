@@ -21,6 +21,7 @@ import {
 import { obtenerVehiculoAccesible } from "@/lib/flota/acceso";
 import { listarDisponibilidadPersonal } from "@/lib/operaciones/disponibilidad-personal";
 import { hoyLocal, toIsoDate } from "@/lib/rrhh/dates";
+import { sincronizarViaticosPlan } from "@/lib/tms/viaticos";
 import type { PoolConnection, ResultSetHeader } from "mysql2/promise";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -600,6 +601,18 @@ export async function POST(req: Request, ctx: Ctx) {
   if (paradasInput.length) {
     await guardarParadasPlan(empresaId, planId, paradasInput);
   }
+  // VIAT-0: crea automáticamente el viático sugerido para el piloto y cada
+  // auxiliar recién asignados (punto 6). Nunca bloquea la creación del plan
+  // — los viáticos son información interna secundaria, no un requisito para
+  // registrar el viaje.
+  try {
+    await sincronizarViaticosPlan(empresaId, planId, {
+      piloto: pilotoId,
+      auxiliares: auxPersonalIds,
+    });
+  } catch (e) {
+    console.error("sincronizarViaticosPlan (POST tms/planes)", e);
+  }
 
   const paradasTxt = paradasInput
     .map((p, i) => `${i + 1}.${p.lugarNombre}(${p.tipo ?? "?"})`)
@@ -1157,6 +1170,25 @@ export async function PATCH(req: Request, ctx: Ctx) {
     }
     if (auxPersonalIdsNuevo != null) {
       await guardarAuxiliaresPlan(d.id, auxPersonalIdsNuevo, conn);
+    }
+
+    // VIAT-0 (punto 12): solo si esta solicitud realmente tocó piloto y/o
+    // auxiliares — misma transacción/conexión que el UPDATE de arriba y que
+    // guardarAuxiliaresPlan, así la asignación de personal y sus viáticos
+    // quedan consistentes en un único commit/rollback. Usa el personal
+    // EFECTIVO resultante (lo nuevo si vino en el request, si no lo que ya
+    // tenía el plan) para que el sync siempre refleje quién queda
+    // realmente asignado.
+    if (pilotoId !== undefined || auxPersonalIdsLegado != null || auxPersonalIdsNuevo != null) {
+      await sincronizarViaticosPlan(
+        empresaId,
+        d.id,
+        {
+          piloto: pilotoId ?? antes.pilotoId ?? null,
+          auxiliares: auxPersonalIdsNuevo ?? auxPersonalIdsLegado ?? antesAuxiliaresIds,
+        },
+        conn,
+      );
     }
 
     if (paradasInput != null) {

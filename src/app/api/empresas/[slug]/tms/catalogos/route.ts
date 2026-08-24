@@ -55,10 +55,15 @@ export async function GET(_req: Request, ctx: Ctx) {
       .filter((c) => c.tmsClienteId != null)
       .map((c) => [c.tmsClienteId!, c]),
   );
+  // VIAT-0 (punto 1): se agrega `codigo` — solo existe en el maestro
+  // compartido `clientes` (tms_clientes no tiene esa columna). Sin vínculo
+  // (cliente creado directo en TMS, aún sin código en el catálogo
+  // compartido) queda null; la búsqueda cae a nombre/NIT como ya hacía.
   const clientes = tmsClientes.map((t) => {
     const s = byTms.get(Number(t.id));
     return {
       id: Number(t.id),
+      codigo: s?.codigo ?? null,
       nombre: s?.nombre ?? String(t.nombre),
       nit: s?.nit ?? (t.nit != null ? String(t.nit) : null),
       telefono: s?.telefono ?? (t.telefono != null ? String(t.telefono) : null),
