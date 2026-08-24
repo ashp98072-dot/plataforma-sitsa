@@ -11,6 +11,8 @@ import { useParams } from "next/navigation";
 import { ClienteSearch } from "@/components/tms/cliente-search";
 import { PlacaSelect, type VehiculoOpt } from "@/components/tms/placa-select";
 import { PilotoSelect } from "@/components/tms/piloto-select";
+import ViaticosPanel from "@/components/tms/viaticos-panel";
+import ViaticosConfigPanel from "@/components/tms/viaticos-config-panel";
 
 type ParadaForm = {
   lugarNombre: string;
@@ -88,6 +90,7 @@ export default function TmsPage() {
   type ClienteCat = {
     id: number;
     nombre: string;
+    codigo?: string | null;
     nit?: string | null;
     telefono?: string | null;
     estado?: string | null;
@@ -638,6 +641,8 @@ export default function TmsPage() {
         ) : null}
       </div>
 
+      <ViaticosConfigPanel slug={slug} />
+
       <form
         onSubmit={onSubmit}
         className="grid gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 md:grid-cols-3"
@@ -1077,6 +1082,8 @@ export default function TmsPage() {
               ) : null}
             </div>
           </div>
+
+          <ViaticosPanel slug={slug} planId={selected} />
 
           <div className="md:col-span-4 space-y-2 rounded border border-[var(--border)] p-3">
             <p className="text-xs font-medium">Paradas del plan</p>

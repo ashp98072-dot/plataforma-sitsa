@@ -5,6 +5,7 @@ import { useEffect, useId, useRef, useState } from "react";
 type ClienteOpt = {
   id: number;
   nombre: string;
+  codigo?: string | null;
   nit?: string | null;
   telefono?: string | null;
   estado?: string | null;
@@ -47,8 +48,10 @@ export function ClienteSearch({
       ? activos.slice(0, 12)
       : activos
           .filter((c) => {
+            // VIAT-0 (punto 1): también localizable por código, no solo
+            // nombre/NIT/teléfono.
             const hay =
-              `${c.nombre} ${c.nit ?? ""} ${c.telefono ?? ""}`.toLowerCase();
+              `${c.nombre} ${c.codigo ?? ""} ${c.nit ?? ""} ${c.telefono ?? ""}`.toLowerCase();
             return hay.includes(q);
           })
           .slice(0, 20);
@@ -89,7 +92,7 @@ export function ClienteSearch({
       <input
         id={listId}
         className={`${inputClassName} mt-1 w-full`}
-        placeholder="Escribe nombre o NIT…"
+        placeholder="Escribe nombre, código o NIT…"
         value={valueNombre}
         autoComplete="off"
         role="combobox"
@@ -163,7 +166,10 @@ export function ClienteSearch({
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => elegir(c)}
               >
-                <span className="text-[var(--text)]">{c.nombre}</span>
+                <span className="text-[var(--text)]">
+                  {c.codigo ? `${c.codigo} · ` : ""}
+                  {c.nombre}
+                </span>
                 <span className="text-[10px] text-[var(--muted)]">
                   {c.nit ? `NIT ${c.nit}` : "Sin NIT"}
                   {c.telefono ? ` · ${c.telefono}` : ""}
