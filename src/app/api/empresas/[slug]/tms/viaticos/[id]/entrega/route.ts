@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireTenantViaticos } from "@/lib/tenant";
+import { requireTenantViaticosPagar } from "@/lib/tenant";
 import { registrarEntregaViatico } from "@/lib/tms/viaticos";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
@@ -12,14 +12,17 @@ const schema = z.object({
 });
 
 /**
- * VIAT-1 — AUTORIZADO -> ENTREGADO. Permiso EXPLÍCITO `viaticos:editar`,
- * igual que autorizar/liquidar — no se asume que quien autoriza pueda
- * entregar por ser supervisor; el mismo permiso reutilizado cubre las tres
- * acciones (ver justificación en src/lib/permisos-shared.ts).
+ * VIAT-2 — AUTORIZADO -> ENTREGADO. "OPERACIONES AUTORIZA, FACTURADOR
+ * PAGA": permiso EXPLÍCITO `viaticos_pagar:editar`
+ * (requireTenantViaticosPagar), separado de `viaticos_autorizar` — quien
+ * autorizó no puede entregar solo por eso, y viceversa. El body nunca
+ * acepta monto/monto_asignado — actualizarMontoViatico además bloquea
+ * cualquier cambio de monto fuera de PROGRAMADO, así que el facturador no
+ * puede modificarlo aunque lo intentara por otra vía.
  */
 export async function POST(req: Request, ctx: Ctx) {
   const { slug, id } = await ctx.params;
-  const guard = await requireTenantViaticos(slug, "editar");
+  const guard = await requireTenantViaticosPagar(slug, "editar");
   if (guard.error) return guard.error;
 
   const viaticoId = Number(id);

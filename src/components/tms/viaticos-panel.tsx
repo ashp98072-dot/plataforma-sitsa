@@ -53,6 +53,13 @@ const METODO_PAGO_LABEL: Record<string, string> = {
  *
  * Información INTERNA (punto 4): vive únicamente en TMS/RRHH, nunca en una
  * pantalla o respuesta destinada al cliente.
+ *
+ * VIAT-2 — "OPERACIONES AUTORIZA, FACTURADOR PAGA": Autorizar, Registrar
+ * entrega y Liquidar dependen cada uno de un permiso distinto
+ * (puedeAutorizar/puedePagar/puedeLiquidar) — un usuario puede tener uno
+ * sin los otros dos. El pago masivo/exportación bancaria vive en la
+ * bandeja aparte "Viáticos por pagar" (ver viaticos-por-pagar-panel.tsx);
+ * este panel sigue siendo por-viaje.
  */
 export default function ViaticosPanel({
   slug,
@@ -68,9 +75,14 @@ export default function ViaticosPanel({
   const [motivos, setMotivos] = useState<Record<number, string>>({});
   const [savingId, setSavingId] = useState<number | null>(null);
   const [okId, setOkId] = useState<number | null>(null);
-  // VIAT-1 — solo controla qué botones se muestran; la seguridad real está
-  // en cada endpoint (requireTenantViaticos), nunca en este flag del cliente.
-  const [puedeGestionar, setPuedeGestionar] = useState(false);
+  // VIAT-2 — "OPERACIONES AUTORIZA, FACTURADOR PAGA": tres flags
+  // independientes (uno por permiso/paso), solo controlan qué botones se
+  // muestran; la seguridad real está en cada endpoint
+  // (requireTenantViaticosAutorizar/Pagar/Viaticos), nunca en estos flags
+  // del cliente.
+  const [puedeAutorizar, setPuedeAutorizar] = useState(false);
+  const [puedePagar, setPuedePagar] = useState(false);
+  const [puedeLiquidar, setPuedeLiquidar] = useState(false);
   const [metodoPago, setMetodoPago] = useState<Record<number, string>>({});
   const [referenciaPago, setReferenciaPago] = useState<Record<number, string>>({});
   const [obsEntrega, setObsEntrega] = useState<Record<number, string>>({});
@@ -90,7 +102,9 @@ export default function ViaticosPanel({
         }
         const list: ViaticoRow[] = data.viaticos ?? [];
         setRows(list);
-        setPuedeGestionar(Boolean(data.puedeGestionar));
+        setPuedeAutorizar(Boolean(data.puedeAutorizar));
+        setPuedePagar(Boolean(data.puedePagar));
+        setPuedeLiquidar(Boolean(data.puedeLiquidar));
         setMontos(Object.fromEntries(list.map((r) => [r.id, String(r.montoAsignado)])));
         setMotivos(Object.fromEntries(list.map((r) => [r.id, r.motivoCambio ?? ""])));
       } catch {
@@ -121,7 +135,9 @@ export default function ViaticosPanel({
         }
         const list: ViaticoRow[] = data.viaticos ?? [];
         setRows(list);
-        setPuedeGestionar(Boolean(data.puedeGestionar));
+        setPuedeAutorizar(Boolean(data.puedeAutorizar));
+        setPuedePagar(Boolean(data.puedePagar));
+        setPuedeLiquidar(Boolean(data.puedeLiquidar));
         setMontos(Object.fromEntries(list.map((r) => [r.id, String(r.montoAsignado)])));
         setMotivos(Object.fromEntries(list.map((r) => [r.id, r.motivoCambio ?? ""])));
       } catch {
@@ -328,10 +344,11 @@ export default function ViaticosPanel({
           </span>
         ) : null}
 
-        {/* VIAT-1 — acciones de ciclo de vida: solo se muestran si el usuario
-            tiene permiso (puedeGestionar); la seguridad real está en cada
-            endpoint, no en este condicional. */}
-        {puedeGestionar && r.estado === "PROGRAMADO" ? (
+        {/* VIAT-2 — acciones de ciclo de vida: cada una se muestra solo si
+            el usuario tiene el permiso específico de ese paso
+            (puedeAutorizar/puedePagar/puedeLiquidar); la seguridad real
+            está en cada endpoint, no en este condicional. */}
+        {puedeAutorizar && r.estado === "PROGRAMADO" ? (
           <button
             type="button"
             disabled={enAccion}
@@ -342,7 +359,7 @@ export default function ViaticosPanel({
           </button>
         ) : null}
 
-        {puedeGestionar && r.estado === "AUTORIZADO" ? (
+        {puedePagar && r.estado === "AUTORIZADO" ? (
           <div className="w-full flex flex-wrap items-center gap-2 rounded border border-sky-900/40 bg-sky-950/10 p-2">
             <select
               className={inputCls}
@@ -387,7 +404,7 @@ export default function ViaticosPanel({
           </div>
         ) : null}
 
-        {puedeGestionar && r.estado === "ENTREGADO" ? (
+        {puedeLiquidar && r.estado === "ENTREGADO" ? (
           <div className="w-full flex flex-wrap items-center gap-2 rounded border border-emerald-900/40 bg-emerald-950/10 p-2">
             <input
               className={`${inputCls} min-w-[160px] flex-1`}

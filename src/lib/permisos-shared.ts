@@ -75,12 +75,28 @@ export const FLOTA_SUBMODULO_LABEL: Record<FlotaSubmodulo, string> = {
  * ser supervisor — ningún rol lo incluye por defecto en
  * modulosPropiosDelRol() (queda como "cruzado" con permisoVacio para
  * todos, Admin aparte). Un Admin debe otorgarlo persona por persona desde
- * Usuarios. `ver` = puede ver el Control de Viáticos (TMS); `editar` =
- * puede autorizar, registrar entrega y liquidar (las tres acciones
- * comparten un mismo permiso — el catálogo de acciones de este sistema es
- * ver/crear/editar/eliminar, sin una acción específica por cada paso del
- * flujo; no se crea un segundo sistema de permisos para eso). Ver
- * src/lib/tms/viaticos.ts.
+ * Usuarios.
+ *
+ * VIAT-2 — "OPERACIONES AUTORIZA, FACTURADOR PAGA": se separa la capacidad
+ * de autorizar de la de pagar/entregar en dos permisos propios, mismo
+ * catálogo ver/crear/editar/eliminar de siempre, sin segundo sistema de
+ * permisos:
+ *   - "viaticos_autorizar": `editar` = autorizar (PROGRAMADO -> AUTORIZADO).
+ *   - "viaticos_pagar": `editar` = registrar entrega/pago
+ *     (AUTORIZADO -> ENTREGADO); `ver` = ver la bandeja "Viáticos por
+ *     pagar" (incluye dato bancario ya existente en la ficha RRHH del
+ *     empleado — banco/cuenta_bancaria/tipo_cuenta — nunca se inventa ni
+ *     se muestra en ningún otro panel de viáticos).
+ *   - "viaticos" queda con alcance más angosto: `ver` = ver el Control de
+ *     Viáticos general (TMS, todas las solicitudes); `editar` = liquidar
+ *     (ENTREGADO -> LIQUIDADO), el único paso que no se reasignó a un
+ *     permiso propio en esta fase.
+ * "Facturador" en este sistema no es un RolGlobal nuevo — es cualquier
+ * usuario al que un Admin le otorgue `viaticos_pagar` desde Usuarios
+ * (típicamente alguien de Contabilidad), igual que "viaticos_autorizar"
+ * no depende de ser supervisor ni del rol "Operaciones": ningún rol trae
+ * ninguno de los tres por defecto. Ver src/lib/tms/viaticos.ts y
+ * src/lib/tenant.ts (requireTenantViaticosAutorizar/Pagar).
  */
 export const PLATAFORMA_PERMISIBLES = [
   "tms",
@@ -91,6 +107,8 @@ export const PLATAFORMA_PERMISIBLES = [
   "tarimas",
   "cms",
   "viaticos",
+  "viaticos_autorizar",
+  "viaticos_pagar",
 ] as const;
 
 export type PlataformaPermisible = (typeof PLATAFORMA_PERMISIBLES)[number];
@@ -162,9 +180,12 @@ export function labelPermiso(modulo: string): string {
   if (esRrhhSubmodulo(modulo)) return RRHH_SUBMODULO_LABEL[modulo];
   if (esFlotaSubmodulo(modulo)) return FLOTA_SUBMODULO_LABEL[modulo];
   if (modulo === "flota") return MODULO_LABEL.flota;
-  // "viaticos" no es un Modulo de roles.ts (no toca el gate de módulo por
-  // empresa/rol) — solo un permiso explícito dentro de PLATAFORMA_PERMISIBLES.
-  if (modulo === "viaticos") return "Viáticos (autorizar/entregar/liquidar)";
+  // "viaticos"/"viaticos_autorizar"/"viaticos_pagar" no son un Modulo de
+  // roles.ts (no tocan el gate de módulo por empresa/rol) — solo permisos
+  // explícitos dentro de PLATAFORMA_PERMISIBLES.
+  if (modulo === "viaticos") return "Viáticos (liquidar / ver control general)";
+  if (modulo === "viaticos_autorizar") return "Viáticos: autorizar";
+  if (modulo === "viaticos_pagar") return "Viáticos: registrar pago/entrega";
   if (esPlataformaPermisible(modulo)) {
     return MODULO_LABEL[modulo as Modulo] ?? modulo;
   }
@@ -209,8 +230,17 @@ export const GRUPOS_PERMISOS: {
     id: "operaciones",
     titulo: "Permisos Operaciones por módulos",
     descripcion:
-      "TMS / logística, clientes, facturación de clientes, reciclaje, tarimas y autorización de viáticos.",
-    modulos: ["tms", "clientes", "facturacion", "reciclaje", "tarimas", "viaticos"],
+      "TMS / logística, clientes, facturación de clientes, reciclaje, tarimas y viáticos (control, autorizar, pagar).",
+    modulos: [
+      "tms",
+      "clientes",
+      "facturacion",
+      "reciclaje",
+      "tarimas",
+      "viaticos",
+      "viaticos_autorizar",
+      "viaticos_pagar",
+    ],
   },
   {
     id: "flota",
@@ -449,12 +479,18 @@ export function modulosPlataformaDesdePermisos(
       continue;
     }
     if (!tienePermiso(permisos, p.modulo, "ver")) continue;
-    // "viaticos" es un permiso de acción dentro de TMS, no un módulo de
-    // navegación propio (no hay un Modulo "viaticos" en roles.ts) — se
-    // excluye aquí para no romper el tipo Modulo[] de esta función; sigue
-    // siendo un PlataformaPermisible válido para el resto del sistema
-    // (catálogo, editor de permisos, tienePermiso()).
-    if (esPlataformaPermisible(p.modulo) && p.modulo !== "viaticos") {
+    // "viaticos"/"viaticos_autorizar"/"viaticos_pagar" son permisos de
+    // acción dentro de TMS, no módulos de navegación propios (no hay un
+    // Modulo "viaticos*" en roles.ts) — se excluyen aquí para no romper el
+    // tipo Modulo[] de esta función; siguen siendo PlataformaPermisible
+    // válidos para el resto del sistema (catálogo, editor de permisos,
+    // tienePermiso()).
+    if (
+      esPlataformaPermisible(p.modulo) &&
+      p.modulo !== "viaticos" &&
+      p.modulo !== "viaticos_autorizar" &&
+      p.modulo !== "viaticos_pagar"
+    ) {
       out.add(p.modulo);
     }
     if (esRrhhSubmodulo(p.modulo)) {
