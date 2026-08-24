@@ -38,9 +38,7 @@ export default async function ViajesPage() {
   }
 
   const [viajeAbiertoPiloto, asignaciones] = await Promise.all([
-    personal.tipo === "Piloto"
-      ? obtenerViajeAbiertoDeEmpleado(session!.empresaId, session!.empleadoId)
-      : Promise.resolve(null),
+    obtenerViajeAbiertoDeEmpleado(session!.empresaId, session!.empleadoId),
     listarAsignacionesOperativasEmpleado(session!.empresaId, session!.empleadoId),
   ]);
   const asignacionEnCurso = asignaciones.find(
@@ -65,8 +63,8 @@ export default async function ViajesPage() {
           <p className="mt-2 text-sm text-[var(--muted)]">
             Consulta lo que te asignó Operaciones y adjunta evidencias del viaje.
             {personal.tipo === "Piloto"
-              ? " Como piloto también registras salida, kilometraje y llegada."
-              : " Como auxiliar puedes aportar evidencias en el mismo viaje."}
+              ? " Puedes iniciar, registrar el avance y cerrar la llegada."
+              : " Como auxiliar puedes registrar carga y aportar evidencias en el mismo viaje cuando el piloto lo haya iniciado."}
           </p>
         </header>
 
