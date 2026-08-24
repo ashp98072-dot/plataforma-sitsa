@@ -5,6 +5,27 @@ import { useRouter } from "next/navigation";
 import type { AsignacionOperativaPortal, ViajeAbiertoPiloto } from "@/lib/flota/viajes-piloto";
 import type { PlanParada } from "@/lib/tms/paradas";
 
+function fechaEnEspanol(fecha: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return fecha || "Fecha pendiente";
+  const [anio, mes, dia] = fecha.split("-").map(Number);
+  return new Intl.DateTimeFormat("es-GT", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(new Date(anio, mes - 1, dia));
+}
+
+function regresoEnEspanol(valor: string | null): string {
+  if (!valor) return "Pendiente";
+  const fecha = new Date(valor);
+  if (Number.isNaN(fecha.getTime())) return valor;
+  return new Intl.DateTimeFormat("es-GT", {
+    dateStyle: "long",
+    timeStyle: "short",
+  }).format(fecha);
+}
+
 export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacionEnCurso, viajeEnCursoId, paradas }: {
   tipo: "Piloto" | "Auxiliar";
   viajeAbierto: ViajeAbiertoPiloto | null;
@@ -109,9 +130,12 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
       <h2 className="font-semibold">Asignaciones</h2>
       {!asignaciones.length ? <p className="mt-2 text-sm text-[var(--muted)]">No tienes viajes recientes o próximos asignados.</p> : <div className="mt-3 space-y-3">
         {asignaciones.map((a) => <article key={a.planId} className="rounded-xl border border-[var(--border)] p-4 text-sm">
-          <div className="flex flex-wrap items-center justify-between gap-2"><strong>{a.codigo} · {a.fecha}{a.horaSalida ? ` ${a.horaSalida}` : ""}</strong><span className="rounded-full bg-[var(--input)] px-2 py-1 text-xs">{a.viajeEstado === "abierto" ? "EN VIAJE" : a.estado}</span></div>
-          <p className="mt-2 text-[var(--muted)]">{a.cliente ?? "Sin cliente"} · {a.origen ?? "Origen pendiente"} → {a.destino ?? "Destino pendiente"}</p>
-          <p className="mt-1 text-[var(--muted)]">Unidad: {a.placa ?? "pendiente"} · Piloto: {a.piloto ?? "pendiente"}</p>
+          <div className="flex flex-wrap items-center justify-between gap-2"><strong>{a.codigo}</strong><span className="rounded-full bg-[var(--input)] px-2 py-1 text-xs">{a.viajeEstado === "abierto" ? "EN VIAJE" : a.estado}</span></div>
+          <p className="mt-2 text-[var(--muted)]"><span className="text-[var(--foreground)]">Fecha de salida:</span> {fechaEnEspanol(a.fecha)}{a.horaSalida ? ` a las ${a.horaSalida.slice(0, 5)}` : ""}</p>
+          <p className="mt-1 text-[var(--muted)]"><span className="text-[var(--foreground)]">Cliente:</span> {a.cliente ?? "Sin cliente"}</p>
+          <p className="mt-1 text-[var(--muted)]"><span className="text-[var(--foreground)]">Ruta:</span> {a.origen ?? "Origen pendiente"} → {a.destino ?? "Destino pendiente"}</p>
+          <p className="mt-1 text-[var(--muted)]"><span className="text-[var(--foreground)]">Regreso estimado:</span> {regresoEnEspanol(a.regresoEstimado)}</p>
+          <p className="mt-1 text-[var(--muted)]"><span className="text-[var(--foreground)]">Unidad:</span> {a.placa ?? "Pendiente"} · <span className="text-[var(--foreground)]">Piloto:</span> {a.piloto ?? "Pendiente"}</p>
           {a.auxiliares.length ? <p className="mt-1 text-[var(--muted)]">Auxiliares: {a.auxiliares.join(", ")}</p> : null}
         </article>)}
       </div>}
