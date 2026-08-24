@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import ViaticosConfigPanel from "@/components/tms/viaticos-config-panel";
+import ViaticosControlPanel from "@/components/tms/viaticos-control-panel";
 import ClienteUbicacionesAdmin from "@/components/tms/cliente-ubicaciones-admin";
 
 /**
@@ -12,16 +13,25 @@ import ClienteUbicacionesAdmin from "@/components/tms/cliente-ubicaciones-admin"
  * programacion/) es la pantalla operativa diaria (crear/editar viajes,
  * asignar piloto/auxiliares/unidad, paradas, viáticos, estados) — esta
  * pantalla YA NO duplica ese formulario. Mismo backend/endpoints de
- * siempre, solo UI reorganizada en 3 secciones (VIAT-1c: se simplifica de
- * 4 a 3, Catálogos colapsado por defecto para no saturar la pantalla):
+ * siempre, solo UI reorganizada en 4 secciones (VIAT-1c: se simplificó de
+ * 4 a 3; VIAT-1 agrega de vuelta "Control de Viáticos" como supervisión
+ * general — de solo lectura y sin editar piloto/auxiliares/unidad/paradas,
+ * por lo que NO reintroduce la duplicación que VIAT-1c evitó. Catálogos
+ * sigue colapsado por defecto para no saturar la pantalla):
  *   1. Configuración: viáticos predeterminados (ViaticosConfigPanel) +
  *      ubicaciones de clientes (ClienteUbicacionesAdmin).
- *   2. Viajes / control administrativo: tabla de solo lectura de
+ *   2. Control de Viáticos (VIAT-1, punto 7): supervisión de solo lectura
+ *      de todos los viáticos de la empresa — filtros viaje/cliente/fecha/
+ *      empleado/estado, resumen de conteos por estado. Autorizar/registrar
+ *      entrega/liquidar se hace desde Programación (ViaticosPanel, dentro
+ *      de cada viaje) — este panel no lo duplica. Requiere permiso
+ *      `viaticos:ver` (lo exige el propio endpoint).
+ *   3. Viajes / control administrativo: tabla de solo lectura de
  *      GET /tms/planes con filtros, detalle y seguimiento de evidencias
  *      registradas desde el portal — no reasigna piloto/auxiliares/
  *      unidad/paradas, no cambia estado), enlace "Ver en Programación" y
  *      la bitácora de auditoría.
- *   3. Catálogos (clientes, unidades, pilotos, auxiliares, lugares) —
+ *   4. Catálogos (clientes, unidades, pilotos, auxiliares, lugares) —
  *      resumen de solo lectura de GET /tms/catalogos, colapsado por
  *      defecto (<details>, sin JS adicional).
  */
@@ -271,10 +281,18 @@ export default function TmsPage() {
         <ClienteUbicacionesAdmin slug={slug} clientes={clientesCat} />
       </section>
 
-      {/* 2. Viajes / control administrativo (incluye bitácora) */}
+      {/* 2. Control de Viáticos — supervisión general, solo lectura + resumen */}
       <section className="space-y-3">
         <h2 className="text-xs font-semibold uppercase tracking-[0.15em] text-[var(--muted)]">
-          2. Viajes / control administrativo
+          2. Control de Viáticos
+        </h2>
+        <ViaticosControlPanel slug={slug} />
+      </section>
+
+      {/* 3. Viajes / control administrativo (incluye bitácora) */}
+      <section className="space-y-3">
+        <h2 className="text-xs font-semibold uppercase tracking-[0.15em] text-[var(--muted)]">
+          3. Viajes / control administrativo
         </h2>
 
         <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
@@ -545,10 +563,10 @@ export default function TmsPage() {
         </details>
       </section>
 
-      {/* 3. Catálogos — colapsado por defecto para no saturar la pantalla; el resumen de solo lectura no es lo primero que necesita el día a día. */}
+      {/* 4. Catálogos — colapsado por defecto para no saturar la pantalla; el resumen de solo lectura no es lo primero que necesita el día a día. */}
       <details className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
         <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.15em] text-[var(--muted)]">
-          3. Catálogos
+          4. Catálogos
         </summary>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
           <p className="text-sm font-medium">Clientes, unidades, personal y lugares</p>

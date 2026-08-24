@@ -68,7 +68,20 @@ export const FLOTA_SUBMODULO_LABEL: Record<FlotaSubmodulo, string> = {
   flota_inventario: "Inventario equipo",
 };
 
-/** Módulos de plataforma (sin flota: se desglosa en FLOTA_SUBMODULOS). */
+/**
+ * Módulos de plataforma (sin flota: se desglosa en FLOTA_SUBMODULOS).
+ *
+ * VIAT-1: "viaticos" es un permiso EXPLÍCITO e independiente del rol o de
+ * ser supervisor — ningún rol lo incluye por defecto en
+ * modulosPropiosDelRol() (queda como "cruzado" con permisoVacio para
+ * todos, Admin aparte). Un Admin debe otorgarlo persona por persona desde
+ * Usuarios. `ver` = puede ver el Control de Viáticos (TMS); `editar` =
+ * puede autorizar, registrar entrega y liquidar (las tres acciones
+ * comparten un mismo permiso — el catálogo de acciones de este sistema es
+ * ver/crear/editar/eliminar, sin una acción específica por cada paso del
+ * flujo; no se crea un segundo sistema de permisos para eso). Ver
+ * src/lib/tms/viaticos.ts.
+ */
 export const PLATAFORMA_PERMISIBLES = [
   "tms",
   "clientes",
@@ -77,6 +90,7 @@ export const PLATAFORMA_PERMISIBLES = [
   "reciclaje",
   "tarimas",
   "cms",
+  "viaticos",
 ] as const;
 
 export type PlataformaPermisible = (typeof PLATAFORMA_PERMISIBLES)[number];
@@ -148,6 +162,9 @@ export function labelPermiso(modulo: string): string {
   if (esRrhhSubmodulo(modulo)) return RRHH_SUBMODULO_LABEL[modulo];
   if (esFlotaSubmodulo(modulo)) return FLOTA_SUBMODULO_LABEL[modulo];
   if (modulo === "flota") return MODULO_LABEL.flota;
+  // "viaticos" no es un Modulo de roles.ts (no toca el gate de módulo por
+  // empresa/rol) — solo un permiso explícito dentro de PLATAFORMA_PERMISIBLES.
+  if (modulo === "viaticos") return "Viáticos (autorizar/entregar/liquidar)";
   if (esPlataformaPermisible(modulo)) {
     return MODULO_LABEL[modulo as Modulo] ?? modulo;
   }
@@ -191,8 +208,9 @@ export const GRUPOS_PERMISOS: {
   {
     id: "operaciones",
     titulo: "Permisos Operaciones por módulos",
-    descripcion: "TMS / logística, clientes, facturación de clientes, reciclaje y tarimas.",
-    modulos: ["tms", "clientes", "facturacion", "reciclaje", "tarimas"],
+    descripcion:
+      "TMS / logística, clientes, facturación de clientes, reciclaje, tarimas y autorización de viáticos.",
+    modulos: ["tms", "clientes", "facturacion", "reciclaje", "tarimas", "viaticos"],
   },
   {
     id: "flota",
@@ -431,7 +449,12 @@ export function modulosPlataformaDesdePermisos(
       continue;
     }
     if (!tienePermiso(permisos, p.modulo, "ver")) continue;
-    if (esPlataformaPermisible(p.modulo)) {
+    // "viaticos" es un permiso de acción dentro de TMS, no un módulo de
+    // navegación propio (no hay un Modulo "viaticos" en roles.ts) — se
+    // excluye aquí para no romper el tipo Modulo[] de esta función; sigue
+    // siendo un PlataformaPermisible válido para el resto del sistema
+    // (catálogo, editor de permisos, tienePermiso()).
+    if (esPlataformaPermisible(p.modulo) && p.modulo !== "viaticos") {
       out.add(p.modulo);
     }
     if (esRrhhSubmodulo(p.modulo)) {

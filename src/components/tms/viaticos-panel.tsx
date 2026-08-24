@@ -12,6 +12,14 @@ type ViaticoRow = {
   motivoCambio: string | null;
   modificadoPor: string | null;
   estado: string;
+  metodoPago: string | null;
+  autorizadoPor: string | null;
+  autorizadoEn: string | null;
+  entregadoPor: string | null;
+  entregadoEn: string | null;
+  referenciaPago: string | null;
+  liquidadoPor: string | null;
+  liquidadoEn: string | null;
 };
 
 function q(n: number): string {
@@ -20,6 +28,19 @@ function q(n: number): string {
 
 const inputCls =
   "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm";
+
+const ESTADO_BADGE_CLS: Record<string, string> = {
+  PROGRAMADO: "bg-[var(--input)] text-[var(--muted)]",
+  AUTORIZADO: "bg-sky-950/40 text-sky-300",
+  ENTREGADO: "bg-amber-950/40 text-amber-300",
+  LIQUIDADO: "bg-emerald-950/40 text-emerald-300",
+};
+
+const METODO_PAGO_LABEL: Record<string, string> = {
+  EFECTIVO: "Efectivo",
+  TRANSFERENCIA: "Transferencia",
+  CHEQUE: "Cheque",
+};
 
 /**
  * VIAT-0 (puntos 6-7) — viáticos operativos del plan: viático sugerido
@@ -47,6 +68,14 @@ export default function ViaticosPanel({
   const [motivos, setMotivos] = useState<Record<number, string>>({});
   const [savingId, setSavingId] = useState<number | null>(null);
   const [okId, setOkId] = useState<number | null>(null);
+  // VIAT-1 — solo controla qué botones se muestran; la seguridad real está
+  // en cada endpoint (requireTenantViaticos), nunca en este flag del cliente.
+  const [puedeGestionar, setPuedeGestionar] = useState(false);
+  const [metodoPago, setMetodoPago] = useState<Record<number, string>>({});
+  const [referenciaPago, setReferenciaPago] = useState<Record<number, string>>({});
+  const [obsEntrega, setObsEntrega] = useState<Record<number, string>>({});
+  const [obsLiquidacion, setObsLiquidacion] = useState<Record<number, string>>({});
+  const [accionandoId, setAccionandoId] = useState<number | null>(null);
 
   const cargar = useCallback(
     async (opts?: { silencioso?: boolean }) => {
@@ -61,6 +90,7 @@ export default function ViaticosPanel({
         }
         const list: ViaticoRow[] = data.viaticos ?? [];
         setRows(list);
+        setPuedeGestionar(Boolean(data.puedeGestionar));
         setMontos(Object.fromEntries(list.map((r) => [r.id, String(r.montoAsignado)])));
         setMotivos(Object.fromEntries(list.map((r) => [r.id, r.motivoCambio ?? ""])));
       } catch {
@@ -91,6 +121,7 @@ export default function ViaticosPanel({
         }
         const list: ViaticoRow[] = data.viaticos ?? [];
         setRows(list);
+        setPuedeGestionar(Boolean(data.puedeGestionar));
         setMontos(Object.fromEntries(list.map((r) => [r.id, String(r.montoAsignado)])));
         setMotivos(Object.fromEntries(list.map((r) => [r.id, r.motivoCambio ?? ""])));
       } catch {
@@ -145,6 +176,83 @@ export default function ViaticosPanel({
     }
   }
 
+  async function autorizar(row: ViaticoRow) {
+    setAccionandoId(row.id);
+    setError("");
+    setOkId(null);
+    try {
+      const res = await fetch(`/api/empresas/${slug}/tms/viaticos/${row.id}/autorizar`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "No se pudo autorizar el viático.");
+        return;
+      }
+      setOkId(row.id);
+      await cargar({ silencioso: true });
+    } catch {
+      setError("Error de conexión.");
+    } finally {
+      setAccionandoId(null);
+    }
+  }
+
+  async function registrarEntrega(row: ViaticoRow) {
+    const metodo = metodoPago[row.id] ?? "EFECTIVO";
+    setAccionandoId(row.id);
+    setError("");
+    setOkId(null);
+    try {
+      const res = await fetch(`/api/empresas/${slug}/tms/viaticos/${row.id}/entrega`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          metodoPago: metodo,
+          referenciaPago: (referenciaPago[row.id] ?? "").trim() || undefined,
+          observaciones: (obsEntrega[row.id] ?? "").trim() || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "No se pudo registrar la entrega.");
+        return;
+      }
+      setOkId(row.id);
+      await cargar({ silencioso: true });
+    } catch {
+      setError("Error de conexión.");
+    } finally {
+      setAccionandoId(null);
+    }
+  }
+
+  async function liquidar(row: ViaticoRow) {
+    setAccionandoId(row.id);
+    setError("");
+    setOkId(null);
+    try {
+      const res = await fetch(`/api/empresas/${slug}/tms/viaticos/${row.id}/liquidar`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          observaciones: (obsLiquidacion[row.id] ?? "").trim() || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "No se pudo liquidar el viático.");
+        return;
+      }
+      setOkId(row.id);
+      await cargar({ silencioso: true });
+    } catch {
+      setError("Error de conexión.");
+    } finally {
+      setAccionandoId(null);
+    }
+  }
+
   if (loading) {
     return (
       <div className="md:col-span-4 rounded border border-[var(--border)] p-3 text-xs text-[var(--muted)]">
@@ -160,6 +268,7 @@ export default function ViaticosPanel({
     const montoTxt = montos[r.id] ?? String(r.montoAsignado);
     const monto = Number(montoTxt);
     const difiere = Number.isFinite(monto) && Math.abs(monto - r.montoSugerido) > 0.005;
+    const enAccion = accionandoId === r.id;
     return (
       <div key={r.id} className="flex flex-wrap items-center gap-2 rounded border border-[var(--border)] p-2">
         <div className="min-w-[140px] flex-1">
@@ -171,38 +280,137 @@ export default function ViaticosPanel({
           <br />
           {q(r.montoSugerido)}
         </div>
-        <label className="text-[11px] text-[var(--muted)]">
-          Asignado
-          <input
-            type="number"
-            min="0"
-            step="0.01"
-            className={`${inputCls} mt-0.5 block w-24`}
-            value={montoTxt}
-            onChange={(e) => setMontos((m) => ({ ...m, [r.id]: e.target.value }))}
-          />
-        </label>
-        {difiere ? (
-          <input
-            className={`${inputCls} min-w-[160px] flex-1`}
-            placeholder="Motivo del ajuste (obligatorio)"
-            value={motivos[r.id] ?? ""}
-            onChange={(e) => setMotivos((m) => ({ ...m, [r.id]: e.target.value }))}
-          />
-        ) : null}
-        <button
-          type="button"
-          disabled={savingId === r.id}
-          onClick={() => void guardar(r)}
-          className="rounded bg-[var(--accent)] px-2 py-1 text-xs text-white disabled:opacity-50"
-        >
-          {savingId === r.id ? "Guardando…" : "Guardar"}
-        </button>
+        {r.estado === "PROGRAMADO" ? (
+          <>
+            <label className="text-[11px] text-[var(--muted)]">
+              Asignado
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                className={`${inputCls} mt-0.5 block w-24`}
+                value={montoTxt}
+                onChange={(e) => setMontos((m) => ({ ...m, [r.id]: e.target.value }))}
+              />
+            </label>
+            {difiere ? (
+              <input
+                className={`${inputCls} min-w-[160px] flex-1`}
+                placeholder="Motivo del ajuste (obligatorio)"
+                value={motivos[r.id] ?? ""}
+                onChange={(e) => setMotivos((m) => ({ ...m, [r.id]: e.target.value }))}
+              />
+            ) : null}
+            <button
+              type="button"
+              disabled={savingId === r.id}
+              onClick={() => void guardar(r)}
+              className="rounded bg-[var(--accent)] px-2 py-1 text-xs text-white disabled:opacity-50"
+            >
+              {savingId === r.id ? "Guardando…" : "Guardar"}
+            </button>
+          </>
+        ) : (
+          <div className="text-[11px] text-[var(--muted)]">
+            Asignado
+            <br />
+            {q(r.montoAsignado)}
+          </div>
+        )}
+        <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${ESTADO_BADGE_CLS[r.estado] ?? ""}`}>
+          {r.estado}
+        </span>
         {okId === r.id ? <span className="text-[10px] text-emerald-400">Guardado</span> : null}
         {r.modificadoPor ? (
           <span className="w-full text-[10px] text-[var(--muted)]">
             Último cambio: {r.modificadoPor}
             {r.motivoCambio ? ` · ${r.motivoCambio}` : ""}
+          </span>
+        ) : null}
+
+        {/* VIAT-1 — acciones de ciclo de vida: solo se muestran si el usuario
+            tiene permiso (puedeGestionar); la seguridad real está en cada
+            endpoint, no en este condicional. */}
+        {puedeGestionar && r.estado === "PROGRAMADO" ? (
+          <button
+            type="button"
+            disabled={enAccion}
+            onClick={() => void autorizar(r)}
+            className="rounded bg-sky-700 px-2 py-1 text-xs text-white disabled:opacity-50"
+          >
+            {enAccion ? "Autorizando…" : "Autorizar"}
+          </button>
+        ) : null}
+
+        {puedeGestionar && r.estado === "AUTORIZADO" ? (
+          <div className="w-full flex flex-wrap items-center gap-2 rounded border border-sky-900/40 bg-sky-950/10 p-2">
+            <select
+              className={inputCls}
+              value={metodoPago[r.id] ?? "EFECTIVO"}
+              onChange={(e) => setMetodoPago((m) => ({ ...m, [r.id]: e.target.value }))}
+            >
+              <option value="EFECTIVO">Efectivo</option>
+              <option value="TRANSFERENCIA">Transferencia</option>
+              <option value="CHEQUE">Cheque</option>
+            </select>
+            {(metodoPago[r.id] ?? "EFECTIVO") !== "EFECTIVO" ? (
+              <input
+                className={`${inputCls} min-w-[160px] flex-1`}
+                placeholder={
+                  (metodoPago[r.id] ?? "") === "CHEQUE" ? "Número de cheque" : "Referencia de transferencia"
+                }
+                value={referenciaPago[r.id] ?? ""}
+                onChange={(e) => setReferenciaPago((m) => ({ ...m, [r.id]: e.target.value }))}
+              />
+            ) : (
+              <input
+                className={`${inputCls} min-w-[160px] flex-1`}
+                placeholder="Referencia (opcional)"
+                value={referenciaPago[r.id] ?? ""}
+                onChange={(e) => setReferenciaPago((m) => ({ ...m, [r.id]: e.target.value }))}
+              />
+            )}
+            <input
+              className={`${inputCls} min-w-[160px] flex-1`}
+              placeholder="Observaciones (opcional)"
+              value={obsEntrega[r.id] ?? ""}
+              onChange={(e) => setObsEntrega((m) => ({ ...m, [r.id]: e.target.value }))}
+            />
+            <button
+              type="button"
+              disabled={enAccion}
+              onClick={() => void registrarEntrega(r)}
+              className="rounded bg-amber-700 px-2 py-1 text-xs text-white disabled:opacity-50"
+            >
+              {enAccion ? "Guardando…" : "Registrar entrega"}
+            </button>
+          </div>
+        ) : null}
+
+        {puedeGestionar && r.estado === "ENTREGADO" ? (
+          <div className="w-full flex flex-wrap items-center gap-2 rounded border border-emerald-900/40 bg-emerald-950/10 p-2">
+            <input
+              className={`${inputCls} min-w-[160px] flex-1`}
+              placeholder="Observaciones de liquidación (opcional)"
+              value={obsLiquidacion[r.id] ?? ""}
+              onChange={(e) => setObsLiquidacion((m) => ({ ...m, [r.id]: e.target.value }))}
+            />
+            <button
+              type="button"
+              disabled={enAccion}
+              onClick={() => void liquidar(r)}
+              className="rounded bg-emerald-700 px-2 py-1 text-xs text-white disabled:opacity-50"
+            >
+              {enAccion ? "Guardando…" : "Liquidar"}
+            </button>
+          </div>
+        ) : null}
+
+        {r.estado !== "PROGRAMADO" ? (
+          <span className="w-full text-[10px] text-[var(--muted)]">
+            {r.autorizadoPor ? `Autorizado por ${r.autorizadoPor}${r.autorizadoEn ? ` · ${r.autorizadoEn}` : ""}` : null}
+            {r.entregadoPor ? ` · Entregado por ${r.entregadoPor}${r.metodoPago ? ` (${METODO_PAGO_LABEL[r.metodoPago] ?? r.metodoPago}${r.referenciaPago ? ` · ref. ${r.referenciaPago}` : ""})` : ""}` : ""}
+            {r.liquidadoPor ? ` · Liquidado por ${r.liquidadoPor}` : ""}
           </span>
         ) : null}
       </div>

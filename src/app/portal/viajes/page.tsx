@@ -8,6 +8,7 @@ import {
   obtenerViajeAbiertoDeEmpleado,
 } from "@/lib/flota/viajes-piloto";
 import { listarParadasDelPlan } from "@/lib/tms/paradas";
+import { listarViaticosPropiosPorPlanes } from "@/lib/tms/viaticos";
 import ViajeForm from "./viaje-form";
 
 export default async function ViajesPage({
@@ -57,6 +58,21 @@ export default async function ViajesPage({
     ? await listarParadasDelPlan(asignacionEnCurso.planId)
     : [];
 
+  // VIAT-1 — enriquecer con el viático propio de cada viaje (monto + estado,
+  // sin datos administrativos). Consulta independiente del JOIN de arriba,
+  // ver comentario en listarViaticosPropiosPorPlanes (src/lib/tms/viaticos.ts).
+  const viaticosPropios = await listarViaticosPropiosPorPlanes(
+    session!.empresaId,
+    session!.empleadoId,
+    asignaciones.map((a) => a.planId),
+  );
+  const asignacionesConViatico = asignaciones.map((a) => {
+    const v = viaticosPropios.get(a.planId);
+    return v
+      ? { ...a, viaticoAsignado: v.montoAsignado, viaticoEstado: v.estado }
+      : a;
+  });
+
   return (
     <main className="min-h-screen p-4 sm:p-8">
       <div className="mx-auto max-w-3xl">
@@ -80,7 +96,7 @@ export default async function ViajesPage({
         <ViajeForm
           tipo={personal.tipo}
           viajeAbierto={viajeAbiertoPiloto}
-          asignaciones={asignaciones}
+          asignaciones={asignacionesConViatico}
           asignacionEnCurso={asignacionEnCurso}
           viajeEnCursoId={asignacionEnCurso?.viajeId ?? viajeAbiertoPiloto?.id ?? null}
           paradas={paradas}
