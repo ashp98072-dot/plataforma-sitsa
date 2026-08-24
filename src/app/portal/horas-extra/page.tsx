@@ -7,32 +7,11 @@ import {
   listarSubordinados,
 } from "@/lib/rrhh/horas-extra";
 import RegistrarHorasExtraForm from "./registrar-form";
+import EquipoRegistros from "./equipo-registros";
+import EstadoBadge from "./estado-badge";
 
 function formatQ(valor: number): string {
   return `Q${valor.toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-/** Fase H1: badge de estado — null = registro histórico (previo a H1, ya procesado, no se reinterpreta). */
-function EstadoBadge({ estado }: { estado: string | null }) {
-  const map: Record<string, { label: string; className: string }> = {
-    PENDIENTE: { label: "Pendiente", className: "bg-amber-500/20 text-amber-300" },
-    APROBADA: { label: "Aprobada", className: "bg-emerald-500/20 text-emerald-300" },
-    RECHAZADA: { label: "Rechazada", className: "bg-red-500/20 text-red-300" },
-    APLICADA_EN_PLANILLA: {
-      label: "Aplicada en planilla",
-      className: "bg-sky-500/20 text-sky-300",
-    },
-  };
-  const info = estado != null ? map[estado] : null;
-  const { label, className } = info ?? {
-    label: "Histórico",
-    className: "bg-white/10 text-[var(--muted)]",
-  };
-  return (
-    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${className}`}>
-      {label}
-    </span>
-  );
 }
 
 export default async function HorasExtraPage() {
@@ -80,27 +59,7 @@ export default async function HorasExtraPage() {
                   Todavía no has registrado horas extra para tu equipo.
                 </p>
               ) : (
-                <div className="mt-3 space-y-2">
-                  {registrosEquipo.map((r) => (
-                    <div
-                      key={r.id}
-                      className="flex items-center justify-between rounded-2xl border border-[var(--border)] bg-[var(--card)] p-4"
-                    >
-                      <div>
-                        <p className="font-medium">{r.empleadoNombre}</p>
-                        <p className="mt-0.5 text-sm text-[var(--muted)]">
-                          {r.fecha} · {r.horas} hora(s)
-                        </p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-sm font-semibold">{formatQ(r.monto)}</p>
-                        <div className="mt-1">
-                          <EstadoBadge estado={r.estado} />
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                <EquipoRegistros registros={registrosEquipo} />
               )}
             </section>
           </>
@@ -137,7 +96,7 @@ export default async function HorasExtraPage() {
                   <div className="text-right">
                     <p className="text-sm font-semibold">{formatQ(r.monto)}</p>
                     <div className="mt-1">
-                      <EstadoBadge estado={r.estado} />
+                      <EstadoBadge estado={r.estado} pagada={r.pagada} />
                     </div>
                   </div>
                 </div>

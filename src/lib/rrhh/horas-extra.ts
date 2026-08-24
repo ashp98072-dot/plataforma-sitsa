@@ -96,6 +96,18 @@ export type RegistroHorasExtra = {
   autorizadoPor: string | null;
   autorizadoEn: string | null;
   motivoRechazo: string | null;
+  /**
+   * Fase H3 — derivado en tiempo de lectura, NUNCA persistido: true solo si
+   * este registro está APLICADA_EN_PLANILLA y la línea de planilla vinculada
+   * (mismo planilla_periodo_id + mismo empleado en rrhh_planilla_lineas)
+   * tiene estado_pago='Pagado' — el único evento real de pago del sistema
+   * (marcarPagos() en planillas.ts). No existe ni existirá un estado
+   * 'PAGADA' en horas_extra_registros.estado; es puramente informativo para
+   * el colaborador/supervisor. Mismo patrón ya usado para D1/D2 en
+   * resumenesPorDescuento() de descuentos.ts. Por defecto false; se completa
+   * con marcarPagadas() donde se necesita mostrarlo.
+   */
+  pagada: boolean;
 };
 
 function mapRegistro(r: RowDataPacket): RegistroHorasExtra {
@@ -119,7 +131,56 @@ function mapRegistro(r: RowDataPacket): RegistroHorasExtra {
     autorizadoPor: r.autorizado_por != null ? String(r.autorizado_por) : null,
     autorizadoEn: r.autorizado_en != null ? String(r.autorizado_en) : null,
     motivoRechazo: r.motivo_rechazo != null ? String(r.motivo_rechazo) : null,
+    pagada: false,
   };
+}
+
+/**
+ * Fase H3 — enriquece un listado ya mapeado con `pagada`, cruzando cada
+ * registro APLICADA_EN_PLANILLA contra rrhh_planilla_lineas.estado_pago del
+ * mismo periodo/empleado. `rows` debe ser el mismo arreglo (y mismo orden)
+ * de RowDataPacket usado para producir `registros` con mapRegistro — se lee
+ * `planilla_periodo_id` de ahí porque RegistroHorasExtra no lo expone
+ * públicamente. No hace ninguna escritura; es de solo lectura.
+ */
+async function marcarPagadas(
+  empresaId: number,
+  rows: RowDataPacket[],
+  registros: RegistroHorasExtra[],
+): Promise<RegistroHorasExtra[]> {
+  const periodoIds = Array.from(
+    new Set(
+      rows
+        .filter(
+          (r) => String(r.estado) === "APLICADA_EN_PLANILLA" && r.planilla_periodo_id != null,
+        )
+        .map((r) => Number(r.planilla_periodo_id)),
+    ),
+  );
+  if (!periodoIds.length) return registros;
+
+  const placeholders = periodoIds.map(() => "?").join(",");
+  const pagos = await query<RowDataPacket[]>(
+    `SELECT periodo_id, id_empleado FROM rrhh_planilla_lineas
+     WHERE empresa_id = ? AND estado_pago = 'Pagado' AND periodo_id IN (${placeholders})`,
+    [empresaId, ...periodoIds],
+  );
+  const lineasPagadas = new Set<string>();
+  for (const p of pagos) {
+    lineasPagadas.add(`${Number(p.periodo_id)}:${Number(p.id_empleado)}`);
+  }
+
+  return registros.map((reg, i) => {
+    const periodoId = rows[i]?.planilla_periodo_id;
+    if (
+      reg.estado !== "APLICADA_EN_PLANILLA" ||
+      periodoId == null ||
+      !lineasPagadas.has(`${Number(periodoId)}:${reg.empleadoId}`)
+    ) {
+      return reg;
+    }
+    return { ...reg, pagada: true };
+  });
 }
 
 export type ResultadoRegistro =
@@ -245,7 +306,7 @@ export async function listarHorasExtraPorSupervisor(
      ORDER BY h.creado_en DESC LIMIT 100`,
     [empresaId, supervisorId],
   );
-  return rows.map(mapRegistro);
+  return marcarPagadas(empresaId, rows, rows.map(mapRegistro));
 }
 
 /** Horas extra propias de un empleado (para que las vea en su historial). */
@@ -261,7 +322,7 @@ export async function listarHorasExtraPropias(
      ORDER BY h.creado_en DESC LIMIT 100`,
     [empresaId, empleadoId],
   );
-  return rows.map(mapRegistro);
+  return marcarPagadas(empresaId, rows, rows.map(mapRegistro));
 }
 
 // ---------------------------------------------------------------------------
@@ -295,7 +356,11 @@ export async function listarHorasExtraAdmin(
 
 export type ResultadoDecision =
   | { ok: true }
-  | { ok: false; motivo: "no_encontrado" | "estado_no_permite" | "motivo_requerido"; mensaje: string };
+  | {
+      ok: false;
+      motivo: "no_encontrado" | "estado_no_permite" | "motivo_requerido" | "no_autorizado";
+      mensaje: string;
+    };
 
 /**
  * Aprueba un registro PENDIENTE. Transición atómica y verificada
@@ -395,6 +460,82 @@ export async function rechazarHorasExtra(
     detalle: `Registro #${registroId} · ${reg[0] ? String(reg[0].emp_nombre) : ""} · PENDIENTE → RECHAZADA · motivo: ${motivoRechazo.trim()}`,
   });
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Fase H4 — aprobación/rechazo desde el Portal del supervisor, ADEMÁS de la
+// bandeja de RRHH (no la reemplaza). Reutiliza exactamente la misma
+// transición atómica de aprobarHorasExtra()/rechazarHorasExtra() — la única
+// diferencia es una verificación previa de subordinación real.
+// ---------------------------------------------------------------------------
+
+/**
+ * Verifica en el servidor que `registroId` pertenece a un empleado que es
+ * subordinado directo de `supervisorId`, vía empleado_supervisores — misma
+ * fuente de verdad que listarSubordinados()/registrarHorasExtra(), nunca se
+ * confía en que la UI ya filtró. Bloquea estructuralmente: aprobar horas
+ * propias (el supervisor no puede ser subordinado de sí mismo salvo un dato
+ * corrupto, mismo criterio ya usado en el resto del módulo), horas de un
+ * empleado no asignado, y horas de otra empresa (empresa_id en ambas
+ * tablas).
+ */
+async function esSubordinadoDelRegistro(
+  empresaId: number,
+  registroId: number,
+  supervisorId: number,
+): Promise<boolean> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT h.id
+     FROM horas_extra_registros h
+     INNER JOIN empleado_supervisores es
+       ON es.empresa_id = h.empresa_id AND es.empleado_id = h.id_empleado
+     WHERE h.id = ? AND h.empresa_id = ? AND es.supervisor_id = ?
+     LIMIT 1`,
+    [registroId, empresaId, supervisorId],
+  );
+  return rows.length > 0;
+}
+
+/**
+ * Aprueba desde el Portal del supervisor. Delega la transición atómica en
+ * aprobarHorasExtra() — no la duplica — así que si el registro ya no está
+ * PENDIENTE (por ejemplo otra persona ya lo procesó, o RRHH ya lo aprobó),
+ * el mismo affectedRows===1 de siempre evita sobreescribir.
+ */
+export async function aprobarHorasExtraSupervisor(
+  empresaId: number,
+  registroId: number,
+  supervisorId: number,
+  supervisorNombre: string,
+): Promise<ResultadoDecision> {
+  const autorizado = await esSubordinadoDelRegistro(empresaId, registroId, supervisorId);
+  if (!autorizado) {
+    return {
+      ok: false,
+      motivo: "no_autorizado",
+      mensaje: "No puedes aprobar horas extra de un colaborador que no está a tu cargo.",
+    };
+  }
+  return aprobarHorasExtra(empresaId, registroId, supervisorNombre);
+}
+
+/** Rechaza desde el Portal del supervisor — mismo criterio que aprobarHorasExtraSupervisor. */
+export async function rechazarHorasExtraSupervisor(
+  empresaId: number,
+  registroId: number,
+  supervisorId: number,
+  supervisorNombre: string,
+  motivoRechazo: string,
+): Promise<ResultadoDecision> {
+  const autorizado = await esSubordinadoDelRegistro(empresaId, registroId, supervisorId);
+  if (!autorizado) {
+    return {
+      ok: false,
+      motivo: "no_autorizado",
+      mensaje: "No puedes rechazar horas extra de un colaborador que no está a tu cargo.",
+    };
+  }
+  return rechazarHorasExtra(empresaId, registroId, supervisorNombre, motivoRechazo);
 }
 
 // ---------------------------------------------------------------------------
