@@ -87,6 +87,33 @@ export async function obtenerPilotoDeEmpleado(
     : null;
 }
 
+export type PersonalOperativoEmpleado = {
+  id: number;
+  nombre: string;
+  tipo: "Piloto" | "Auxiliar";
+};
+
+/** Identidad operativa del colaborador, vinculada por id real de RRHH. */
+export async function obtenerPersonalOperativoDeEmpleado(
+  empresaId: number,
+  empleadoId: number,
+): Promise<PersonalOperativoEmpleado | null> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT id, nombre, tipo FROM tms_personal
+     WHERE empresa_id = ? AND id_empleado = ?
+       AND tipo IN ('Piloto', 'Auxiliar') AND estado = 'Activo'
+     ORDER BY FIELD(tipo, 'Piloto', 'Auxiliar')
+     LIMIT 1`,
+    [empresaId, empleadoId],
+  ).catch(() => [] as RowDataPacket[]);
+  if (!rows[0]) return null;
+  return {
+    id: Number(rows[0].id),
+    nombre: String(rows[0].nombre),
+    tipo: String(rows[0].tipo) === "Auxiliar" ? "Auxiliar" : "Piloto",
+  };
+}
+
 export async function vehiculoPorPlaca(
   empresaId: number,
   placaRaw: string,

@@ -282,7 +282,9 @@ export function modulosPropiosDelRol(rol: RolGlobal): string[] {
  * Ej.: Operaciones → Planillas; Contabilidad → Vehículos / Predios…
  */
 export function modulosOtrasAreasDelRol(rol: RolGlobal): string[] {
-  if (rol === "Admin" || rol === "Marcaje") return [];
+  // Piloto es una cuenta operativa no vinculada a RRHH; no se le ofrecen
+  // permisos cruzados. Los colaboradores usan /portal con identidad propia.
+  if (rol === "Admin" || rol === "Marcaje" || rol === "Piloto") return [];
   const propios = new Set(modulosPropiosDelRol(rol));
   return catalogoGlobalPermisos().filter((m) => !propios.has(m));
 }

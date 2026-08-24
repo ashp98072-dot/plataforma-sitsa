@@ -19,6 +19,7 @@ import {
   marcarPlanEnRuta,
 } from "@/lib/tms/planes-salida";
 import { paradasPendientesEvidencia } from "@/lib/tms/paradas";
+import { resolverVehiculoDeUnidadTms } from "@/lib/tms/unidad-flota";
 
 /**
  * Marcaje de viaje (salida/llegada de camión con km) desde el portal del
@@ -37,6 +38,7 @@ const salidaSchema = z.object({
   placa: z.string().min(2),
   kmSalida: z.number().int().nonnegative(),
   destino: z.string().optional(),
+  planId: z.number().int().positive().optional(),
 });
 
 const llegadaSchema = z.object({
@@ -93,7 +95,35 @@ export async function POST(req: Request) {
     }
     const d = parsed.data;
 
-    const veh = await vehiculoPorPlaca(empresaId, d.placa);
+    let planAsignado: RowDataPacket | null = null;
+    if (d.planId) {
+      const planes = await query<RowDataPacket[]>(
+        `SELECT p.id, p.unidad_id, p.codigo, ld.nombre AS destino
+         FROM tms_planes_viaje p
+         INNER JOIN tms_personal pil ON pil.id = p.piloto_id
+         LEFT JOIN tms_lugares ld ON ld.id = p.lugar_descarga_id
+         WHERE p.id = ? AND p.empresa_id = ? AND pil.id_empleado = ?
+           AND p.estado = 'Programado' LIMIT 1`,
+        [d.planId, empresaId, session.empleadoId],
+      );
+      planAsignado = planes[0] ?? null;
+      if (!planAsignado) {
+        return NextResponse.json(
+          { error: "El viaje programado no está asignado a tu usuario o ya fue iniciado." },
+          { status: 403 },
+        );
+      }
+    }
+    const resuelto = planAsignado?.unidad_id
+      ? await resolverVehiculoDeUnidadTms(empresaId, Number(planAsignado.unidad_id))
+      : null;
+    if (planAsignado && !resuelto) {
+      return NextResponse.json(
+        { error: "Operaciones debe asignar una unidad válida antes de iniciar este viaje." },
+        { status: 409 },
+      );
+    }
+    const veh = resuelto?.vehiculo ?? await vehiculoPorPlaca(empresaId, d.placa);
     if (!veh) {
       return NextResponse.json(
         {
@@ -168,9 +198,12 @@ export async function POST(req: Request) {
       pilotoNombre: nombre,
       placa: String(veh.placa),
     });
-    const planId = planesMatch.length === 1 ? planesMatch[0].id : null;
+    const planId = planAsignado
+      ? Number(planAsignado.id)
+      : planesMatch.length === 1 ? planesMatch[0].id : null;
     const destinoFinal =
       d.destino?.trim() ||
+      (planAsignado?.destino ? String(planAsignado.destino) : "") ||
       planesMatch.find((p) => p.id === planId)?.cliente ||
       null;
 
