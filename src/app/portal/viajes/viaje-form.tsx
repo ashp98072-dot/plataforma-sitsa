@@ -51,21 +51,22 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
   const [foto, setFoto] = useState<{ blob: Blob; url: string; etapa: string } | null>(null);
   const [cierreExcepcional, setCierreExcepcional] = useState(false);
   const [motivoExcepcional, setMotivoExcepcional] = useState("");
+  const odometroFuncional = viajeAbierto?.odometroFuncional ?? planSeleccionado?.odometroFuncional ?? true;
 
   const siguienteParada = paradas.find((p) => p.requiere_evidencia && p.evidencias < 1) ?? null;
   const etapa = viajeAbierto
-    ? !viajeAbierto.evidenciaTableroSalida
+    ? odometroFuncional && !viajeAbierto.evidenciaTableroSalida
       ? { tipo: "tablero_salida", titulo: "Evidencia de salida", detalle: "Fotografía del tablero al salir del predio.", paradaId: 0 }
-      : viajeAbierto.kmCarga == null ? null
+      : odometroFuncional && viajeAbierto.kmCarga == null ? null
         : !viajeAbierto.evidenciaCarga
           ? { tipo: "salida", titulo: "Evidencia de carga", detalle: "Adjunta la evidencia al completar la carga.", paradaId: 0 }
           : siguienteParada
             ? { tipo: "producto", titulo: `Siguiente parada: ${siguienteParada.orden}. ${siguienteParada.lugar_nombre}`, detalle: "Al llegar, adjunta la evidencia para habilitar la siguiente parada.", paradaId: siguienteParada.id }
-            : !viajeAbierto.evidenciaTableroLlegada
+            : odometroFuncional && !viajeAbierto.evidenciaTableroLlegada
               ? { tipo: "tablero_llegada", titulo: "Regreso al predio", detalle: "Ya en el predio, adjunta el tablero de llegada.", paradaId: 0 }
               : null
     : null;
-  const rutaCompleta = Boolean(viajeAbierto?.evidenciaTableroSalida && viajeAbierto.kmCarga != null && viajeAbierto.evidenciaCarga && !siguienteParada && viajeAbierto.evidenciaTableroLlegada);
+  const rutaCompleta = Boolean(viajeAbierto?.evidenciaCarga && !siguienteParada && (!odometroFuncional || (viajeAbierto.evidenciaTableroSalida && viajeAbierto.kmCarga != null && viajeAbierto.evidenciaTableroLlegada)));
 
   useEffect(() => {
     if (!viajeDestacadoId || !viajeDestacadoAsignado) return;
@@ -150,8 +151,8 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
 
   async function onSalida(e: FormEvent) {
     e.preventDefault();
-    const km = Number(kmSalida);
-    if (!placa.trim() || !Number.isFinite(km) || km < 0) return setError("Indica la unidad y un kilometraje de salida válido.");
+    const km = odometroFuncional ? Number(kmSalida) : undefined;
+    if (!placa.trim() || (odometroFuncional && (!Number.isFinite(km) || Number(km) < 0))) return setError("Indica la unidad y un kilometraje de salida válido.");
     await enviar({ accion: "salida", placa: placa.trim(), kmSalida: km, destino: destino.trim() || undefined, planId: planId || undefined });
   }
 
@@ -159,7 +160,7 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
     e.preventDefault();
     if (!viajeAbierto) return;
     const km = Number(kmCarga);
-    if (!Number.isFinite(km) || km < viajeAbierto.kmSalida) return setError("El kilometraje de carga no puede ser menor al de salida.");
+    if (!Number.isFinite(km) || viajeAbierto.kmSalida == null || km < viajeAbierto.kmSalida) return setError("El kilometraje de carga no puede ser menor al de salida.");
     await enviar({ accion: "carga", viajeId: viajeAbierto.id, kmCarga: km });
   }
 
@@ -174,8 +175,9 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
   async function onLlegada(e: FormEvent) {
     e.preventDefault();
     if (!viajeAbierto) return;
-    const km = Number(kmLlegada);
-    if (!Number.isFinite(km) || km < (viajeAbierto.kmCarga ?? viajeAbierto.kmSalida)) return setError("El kilometraje final no puede ser menor al último registrado.");
+    const km = odometroFuncional ? Number(kmLlegada) : undefined;
+    const kmMinimo = viajeAbierto.kmCarga ?? viajeAbierto.kmSalida;
+    if (odometroFuncional && (!Number.isFinite(km) || kmMinimo == null || Number(km) < kmMinimo)) return setError("El kilometraje final no puede ser menor al último registrado.");
     if (cierreExcepcional && motivoExcepcional.trim().length < 10) return setError("Describe el contratiempo mayor con al menos 10 caracteres.");
     if (!cierreExcepcional && !rutaCompleta) return setError("Completa toda la ruta y regresa al predio antes de cerrar.");
     const gps = cierreExcepcional ? {} : await obtenerGps();
@@ -230,19 +232,18 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
 
     {viajeAbierto ? <section className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
       <h2 className="font-semibold">Avance del viaje · {asignacionEnCurso?.codigo ?? `#${viajeAbierto.id}`}</h2>
-      <p className="mt-1 text-sm text-[var(--muted)]">Unidad {viajeAbierto.placa} · salida {viajeAbierto.kmSalida.toLocaleString("es-GT")} km</p>
+      <p className="mt-1 text-sm text-[var(--muted)]">Unidad {viajeAbierto.placa}{odometroFuncional && viajeAbierto.kmSalida != null ? ` · salida ${viajeAbierto.kmSalida.toLocaleString("es-GT")} km` : " · sin odómetro funcional"}</p>
       <ol className="mt-4 space-y-2 text-sm">
-        <li>{viajeAbierto.evidenciaTableroSalida ? "✓" : "○"} Tablero de salida</li>
-        <li>{viajeAbierto.kmCarga != null ? "✓" : "○"} Kilometraje en carga{viajeAbierto.kmCarga != null ? `: ${viajeAbierto.kmCarga.toLocaleString("es-GT")} km` : ""}</li>
+        {odometroFuncional ? <><li>{viajeAbierto.evidenciaTableroSalida ? "✓" : "○"} Tablero de salida</li><li>{viajeAbierto.kmCarga != null ? "✓" : "○"} Kilometraje en carga{viajeAbierto.kmCarga != null ? `: ${viajeAbierto.kmCarga.toLocaleString("es-GT")} km` : ""}</li></> : null}
         <li>{viajeAbierto.evidenciaCarga ? "✓" : "○"} Evidencia de carga</li>
         {paradas.map((p) => <li key={p.id}>{!p.requiere_evidencia || p.evidencias > 0 ? "✓" : "○"} Parada {p.orden}: {p.lugar_nombre}</li>)}
-        <li>{viajeAbierto.evidenciaTableroLlegada ? "✓" : "○"} Regreso al predio y tablero de llegada</li>
+        <li>{odometroFuncional ? (viajeAbierto.evidenciaTableroLlegada ? "✓" : "○") : "○"} Regreso al predio{odometroFuncional ? " y tablero de llegada" : " (sin kilometraje)"}</li>
       </ol>
     </section> : null}
 
-    {viajeAbierto?.evidenciaTableroSalida && viajeAbierto.kmCarga == null ? <form onSubmit={onCarga} className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
+    {odometroFuncional && viajeAbierto?.evidenciaTableroSalida && viajeAbierto.kmCarga == null ? <form onSubmit={onCarga} className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
       <h2 className="font-semibold">Registrar llegada al punto de carga</h2>
-      <label className="mt-4 block text-sm text-[var(--muted)]">Kilometraje en carga<input type="number" min={viajeAbierto.kmSalida} className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={kmCarga} onChange={(e) => setKmCarga(e.target.value)} required /></label>
+      <label className="mt-4 block text-sm text-[var(--muted)]">Kilometraje en carga<input type="number" min={viajeAbierto.kmSalida ?? 0} className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={kmCarga} onChange={(e) => setKmCarga(e.target.value)} required /></label>
       <button className="mt-4 rounded-lg bg-[var(--accent)] px-4 py-2.5 font-medium text-white disabled:opacity-50" disabled={loading}>Registrar kilometraje de carga</button>
     </form> : null}
 
@@ -265,7 +266,7 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
       <label className="mt-4 flex items-start gap-2 text-sm text-[var(--muted)]"><input type="checkbox" className="mt-1" checked={cierreExcepcional} onChange={(e) => setCierreExcepcional(e.target.checked)} /> Cierre excepcional por contratiempo mayor (por ejemplo, avería de la unidad)</label>
       {cierreExcepcional ? <label className="mt-3 block text-sm text-[var(--muted)]">Motivo obligatorio<textarea className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" rows={3} minLength={10} maxLength={500} value={motivoExcepcional} onChange={(e) => setMotivoExcepcional(e.target.value)} required /></label> : null}
       {rutaCompleta || cierreExcepcional ? <>
-        <label className="mt-3 block text-sm text-[var(--muted)]">Kilometraje al cerrar<input type="number" min={viajeAbierto.kmCarga ?? viajeAbierto.kmSalida} className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={kmLlegada} onChange={(e) => setKmLlegada(e.target.value)} required /></label>
+        {odometroFuncional ? <label className="mt-3 block text-sm text-[var(--muted)]">Kilometraje al cerrar<input type="number" min={viajeAbierto.kmCarga ?? viajeAbierto.kmSalida ?? 0} className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={kmLlegada} onChange={(e) => setKmLlegada(e.target.value)} required /></label> : null}
         {!cierreExcepcional ? <label className="mt-3 block text-sm text-[var(--muted)]">Observaciones<textarea className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" rows={2} maxLength={500} value={observaciones} onChange={(e) => setObservaciones(e.target.value)} /></label> : null}
         <button className={`mt-4 rounded-lg px-4 py-2.5 font-medium text-white disabled:opacity-50 ${cierreExcepcional ? "bg-red-700" : "bg-[var(--accent)]"}`} disabled={loading}>{cierreExcepcional ? "Cerrar por contratiempo mayor" : "Registrar llegada y cerrar viaje"}</button>
       </> : null}
@@ -275,7 +276,7 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
       <h2 className="font-semibold">Iniciar viaje</h2>
       {programados.length ? <label className="mt-4 block text-sm text-[var(--muted)]">Viaje asignado<select className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={planId} onChange={(e) => elegirPlan(Number(e.target.value))}>{programados.map((a) => <option key={a.planId} value={a.planId}>{a.codigo} · {a.cliente ?? "Sin cliente"} · {a.placa ?? "Sin unidad"}</option>)}</select></label> : <p className="mt-2 text-sm text-amber-300">No hay programación pendiente; registra una salida manual solo si Operaciones lo indicó.</p>}
       <label className="mt-3 block text-sm text-[var(--muted)]">Placa<input className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 uppercase" value={placa} onChange={(e) => setPlaca(e.target.value)} required readOnly={Boolean(planSeleccionado?.placa)} /></label>
-      <label className="mt-3 block text-sm text-[var(--muted)]">Km de salida<input type="number" min={0} className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={kmSalida} onChange={(e) => setKmSalida(e.target.value)} required /></label>
+      {odometroFuncional ? <label className="mt-3 block text-sm text-[var(--muted)]">Km de salida<input type="number" min={0} className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={kmSalida} onChange={(e) => setKmSalida(e.target.value)} required /></label> : <p className="mt-3 rounded-lg border border-amber-800/40 bg-amber-950/20 p-3 text-sm text-amber-200">Unidad sin odómetro funcional: no se solicitará kilometraje ni fotografía del tablero.</p>}
       <label className="mt-3 block text-sm text-[var(--muted)]">Destino<input className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={destino} onChange={(e) => setDestino(e.target.value)} maxLength={200} /></label>
       <button className="mt-4 rounded-lg bg-[var(--accent)] px-4 py-2.5 font-medium text-white disabled:opacity-50" disabled={loading}>Iniciar viaje</button>
     </form> : null}

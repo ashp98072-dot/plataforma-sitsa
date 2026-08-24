@@ -246,7 +246,7 @@ export async function POST(req: Request, ctx: Ctx) {
   const vehRow = await obtenerVehiculoAccesible(
     guard.empresa.id,
     d.vehiculoId,
-    "v.id, v.placa, v.en_taller, v.fecha_entrada_taller, v.empresa_id",
+    "v.id, v.placa, v.en_taller, v.fecha_entrada_taller, v.empresa_id, v.odometro_funcional",
   );
   if (!vehRow) {
     return NextResponse.json({ error: "Vehículo no encontrado." }, { status: 404 });
@@ -292,7 +292,8 @@ export async function POST(req: Request, ctx: Ctx) {
       ? "servicio_mayor"
       : "reparacion";
 
-  if (esMayor && (d.kmServicio == null || d.kmServicio < 0)) {
+  const odometroFuncional = Number(veh[0].odometro_funcional ?? 1) === 1;
+  if (esMayor && odometroFuncional && (d.kmServicio == null || d.kmServicio < 0)) {
     return NextResponse.json(
       {
         error:
@@ -454,7 +455,7 @@ export async function POST(req: Request, ctx: Ctx) {
   // Servicio mayor: SIEMPRE reinicia contador (km_ultimo_servicio = km actual)
   // Reparación: NO toca el contador de servicio
   if (esMayor) {
-    const kmReset = Number(d.kmServicio);
+    const kmReset = odometroFuncional ? Number(d.kmServicio) : null;
     if (d.sacarDeServicio !== false) {
       // Por id (unidades compartidas entre empresas del grupo).
       await execute(

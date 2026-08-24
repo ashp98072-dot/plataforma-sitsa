@@ -98,6 +98,16 @@ export async function POST(req: Request, ctx: Ctx) {
     : null;
   if (!tipo) return NextResponse.json({ error: "Tipo inválido." }, { status: 400 });
   const paradaId = Number(form.get("paradaId") ?? 0) || null;
+  const vehiculo = await query<RowDataPacket[]>(
+    `SELECT COALESCE(ve.odometro_funcional, 1) AS odometro_funcional
+     FROM flota_viajes v INNER JOIN flota_vehiculos ve ON ve.id = v.vehiculo_id
+     WHERE v.id = ? AND v.empresa_id = ? LIMIT 1`,
+    [viajeId, session.empresaId],
+  );
+  const odometroFuncional = Number(vehiculo[0]?.odometro_funcional ?? 1) === 1;
+  if (!odometroFuncional && (tipo === "tablero_salida" || tipo === "tablero_llegada")) {
+    return NextResponse.json({ error: "Esta unidad no requiere fotografías del medidor de kilometraje." }, { status: 409 });
+  }
   const progreso = await query<RowDataPacket[]>(
     `SELECT
        SUM(tipo = 'tablero_salida') AS tablero_salida,
@@ -112,19 +122,19 @@ export async function POST(req: Request, ctx: Ctx) {
   if (tipo === "tablero_salida" && tieneTableroSalida) {
     return NextResponse.json({ error: "La evidencia del tablero de salida ya fue registrada." }, { status: 409 });
   }
-  if (tipo !== "tablero_salida" && !tieneTableroSalida) {
+  if (odometroFuncional && tipo !== "tablero_salida" && !tieneTableroSalida) {
     return NextResponse.json({ error: "Primero adjunta el tablero de salida." }, { status: 409 });
   }
   if (tipo === "salida") {
     if (tieneCarga) {
       return NextResponse.json({ error: "La evidencia de carga ya fue registrada." }, { status: 409 });
     }
-    const kmCarga = await query<RowDataPacket[]>(
+    const kmCarga = odometroFuncional ? await query<RowDataPacket[]>(
       `SELECT id FROM flota_lecturas
        WHERE viaje_id = ? AND nota = 'Kilometraje en punto de carga' LIMIT 1`,
       [viajeId],
-    );
-    if (!kmCarga[0]) return NextResponse.json({ error: "Primero registra el kilometraje en el punto de carga." }, { status: 409 });
+    ) : [];
+    if (odometroFuncional && !kmCarga[0]) return NextResponse.json({ error: "Primero registra el kilometraje en el punto de carga." }, { status: 409 });
   }
   if (tipo === "tablero_llegada" && tieneTableroLlegada) {
     return NextResponse.json({ error: "El tablero de llegada ya fue registrado." }, { status: 409 });
