@@ -456,17 +456,20 @@ export default function TmsPage() {
                             {evidenciasRecientes.length ? (
                               <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                                 {evidenciasRecientes.map((evidencia) => (
-                                  <a
+                                  <div
                                     key={evidencia.id}
-                                    href={evidencia.url}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="rounded border border-[var(--border)] p-2 text-[11px] hover:border-sky-500"
+                                    className="rounded border border-[var(--border)] p-2 text-[11px]"
                                   >
-                                    <span className="block font-medium text-sky-300">{evidencia.tipo}</span>
+                                    <a href={evidencia.url} target="_blank" rel="noreferrer" className="block font-medium text-sky-300 hover:underline">{evidencia.tipo}</a>
                                     <span className="block">{evidencia.parada_nombre || "Evidencia general del viaje"}</span>
                                     <span className="block text-[var(--muted)]">{fechaHoraEvidencia(evidencia.capturadoEn)}</span>
-                                  </a>
+                                    {evidencia.latitud != null && evidencia.longitud != null ? (
+                                      <>
+                                        <span className="block font-mono text-[var(--muted)]">GPS: {evidencia.latitud.toFixed(6)}, {evidencia.longitud.toFixed(6)}</span>
+                                        <a href={`https://www.google.com/maps?q=${evidencia.latitud},${evidencia.longitud}`} target="_blank" rel="noreferrer" className="block text-sky-300 underline">Ver ubicación en el mapa</a>
+                                      </>
+                                    ) : <span className="block text-amber-300">Sin ubicación GPS</span>}
+                                  </div>
                                 ))}
                               </div>
                             ) : null}
