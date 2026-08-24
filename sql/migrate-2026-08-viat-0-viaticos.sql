@@ -1,11 +1,18 @@
 -- VIAT-0: viáticos operativos asociados a una programación/viaje (piloto y
 -- auxiliares). Aditivo e idempotente — seguro correrlo más de una vez.
 --
--- MIGRACIÓN REAL: debe ejecutarse manualmente antes de desplegar el código
--- de esta fase (src/lib/tms/viaticos.ts NO crea ni altera tablas en tiempo
--- de ejecución — asume que esta migración ya se aplicó; si las tablas no
--- existen, las funciones fallan con el error real de MySQL en vez de crear
--- estructura por su cuenta).
+-- MIGRACIÓN REAL: YA SE EJECUTÓ MANUALMENTE EN PRODUCCIÓN. Se deja aquí
+-- como referencia del esquema real (src/lib/tms/viaticos.ts NO crea ni
+-- altera tablas en tiempo de ejecución — asume que esta migración ya está
+-- aplicada; si las tablas no existen, las funciones fallan con el error
+-- real de MySQL en vez de crear estructura por su cuenta). No volver a
+-- ejecutar como parte de un cambio de código; es aditiva/idempotente por
+-- si hiciera falta reaplicarla en otro entorno (dev/staging), no porque
+-- deba correrse de nuevo en producción.
+--
+-- Los viáticos son un flujo puramente OPERATIVO de TMS/viaje — NUNCA se
+-- pagan por planilla/nómina. Sin relación con rrhh_planilla_lineas, sin
+-- descuentos/ingresos de nómina generados desde aquí.
 
 CREATE TABLE IF NOT EXISTS tms_viaticos_config (
   id INT AUTO_INCREMENT PRIMARY KEY,
@@ -35,10 +42,15 @@ CREATE TABLE IF NOT EXISTS tms_viaticos (
   monto_asignado DECIMAL(12,2) NOT NULL DEFAULT 0,
   motivo_cambio VARCHAR(300) NULL,
   modificado_por VARCHAR(100) NULL,
-  -- Fase posterior (no usado todavía): PROGRAMADO -> AUTORIZADO_POR_PAGAR ->
-  -- PAGADO. VIAT-0 nunca escribe otro valor que 'PROGRAMADO'.
+  -- Fase operativa posterior VIAT-1 (no usado todavía): PENDIENTE/
+  -- PROGRAMADO -> AUTORIZADO -> ENTREGADO (dinero entregado al piloto/
+  -- auxiliar) -> LIQUIDADO (cierre administrativo del viático). VIAT-0
+  -- nunca escribe otro valor que 'PROGRAMADO'. Nunca depende de una
+  -- planilla ni de rrhh_planilla_lineas.
   estado VARCHAR(30) NOT NULL DEFAULT 'PROGRAMADO',
-  -- Fase posterior (no usado todavía): Planilla | Transferencia | Efectivo | Cheque.
+  -- Fase VIAT-1 (no usado todavía): medio de entrega del efectivo, p. ej.
+  -- Efectivo | Transferencia | Cheque. NUNCA 'Planilla' -- los viáticos no
+  -- se pagan por nómina.
   metodo_pago VARCHAR(20) NULL,
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

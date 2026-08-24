@@ -589,8 +589,10 @@ CREATE TABLE IF NOT EXISTS tms_evidencias (
   CONSTRAINT fk_tmsev_plan FOREIGN KEY (plan_id) REFERENCES tms_planes_viaje(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- VIAT-0: viáticos operativos asociados a una programación/viaje.
--- Ver sql/migrate-2026-08-viat-0-viaticos.sql para el detalle de diseño.
+-- VIAT-0: viáticos operativos asociados a una programación/viaje. Flujo
+-- puramente OPERATIVO de TMS/viaje — NUNCA se pagan por planilla/nómina;
+-- sin relación con rrhh_planilla_lineas. Ver
+-- sql/migrate-2026-08-viat-0-viaticos.sql para el detalle de diseño.
 CREATE TABLE IF NOT EXISTS tms_viaticos_config (
   id INT AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,
@@ -618,10 +620,12 @@ CREATE TABLE IF NOT EXISTS tms_viaticos (
   monto_asignado DECIMAL(12,2) NOT NULL DEFAULT 0,
   motivo_cambio VARCHAR(300) NULL,
   modificado_por VARCHAR(100) NULL,
-  -- Fase posterior (no usado todavía): PROGRAMADO -> AUTORIZADO_POR_PAGAR ->
-  -- PAGADO.
+  -- Fase operativa posterior VIAT-1 (no usado todavía): PENDIENTE/
+  -- PROGRAMADO -> AUTORIZADO -> ENTREGADO -> LIQUIDADO. Nunca depende de
+  -- una planilla ni de rrhh_planilla_lineas.
   estado VARCHAR(30) NOT NULL DEFAULT 'PROGRAMADO',
-  -- Fase posterior (no usado todavía): Planilla | Transferencia | Efectivo | Cheque.
+  -- Fase VIAT-1 (no usado todavía): medio de entrega del efectivo, p. ej.
+  -- Efectivo | Transferencia | Cheque. NUNCA 'Planilla'.
   metodo_pago VARCHAR(20) NULL,
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

@@ -15,8 +15,9 @@ const schema = z.object({
  * (creado automáticamente al asignar piloto/auxiliares). Si el monto difiere
  * del sugerido, exige motivo (actualizarMontoViatico lo valida de nuevo
  * server-side, nunca se confía solo en que la UI ya lo pidió). Guarda quién
- * hizo el cambio. No permite marcar PAGADO ni cambiar estado — ese endpoint
- * no existe todavía (punto 9/10).
+ * hizo el cambio. No permite marcar ENTREGADO/LIQUIDADO ni cambiar estado —
+ * ese endpoint no existe todavía (fase VIAT-1, operativa, sin relación con
+ * Planillas/nómina).
  */
 export async function PATCH(req: Request, ctx: Ctx) {
   const { slug, id } = await ctx.params;

@@ -9,11 +9,20 @@ import { registrarAuditoria } from "@/lib/auditoria";
  * cliente/facturación (ver src/app/api/empresas/[slug]/facturacion/**), ni se
  * mezcla con `tarifa_comercial`/`referencia_cliente` de tms_planes_viaje.
  *
- * Diseño (punto 10 de VIAT-0): `estado` y `metodo_pago` quedan preparados
- * para una fase posterior (PROGRAMADO → AUTORIZADO/POR PAGAR → PAGADO;
- * Planilla | Transferencia | Efectivo | Cheque). En esta fase NINGÚN código
- * escribe otro valor de `estado` que 'PROGRAMADO', ni toca Planillas —
- * columnas aditivas, sin lógica de pago todavía.
+ * Diseño (punto 10 de VIAT-0, ajustado por aclaración de negocio): `estado`
+ * y `metodo_pago` quedan preparados para una fase operativa posterior
+ * VIAT-1, conceptualmente PENDIENTE/PROGRAMADO → AUTORIZADO → ENTREGADO →
+ * LIQUIDADO — ENTREGADO es el dinero entregado al piloto/auxiliar,
+ * LIQUIDADO el cierre administrativo del viático. En esta fase NINGÚN
+ * código escribe otro valor de `estado` que 'PROGRAMADO'.
+ *
+ * IMPORTANTE: los viáticos son un flujo puramente OPERATIVO de TMS/viaje —
+ * NUNCA se pagan por planilla/nómina. No hay ni habrá relación con
+ * rrhh_planilla_lineas, ni descuentos/ingresos de nómina generados desde
+ * viáticos, ni lógica que dependa de una planilla para determinar si un
+ * viático está pagado. `metodo_pago` (sin usar todavía) describirá en
+ * VIAT-1 el medio de entrega del efectivo (p. ej. Efectivo/Transferencia/
+ * Cheque) — Planilla no es, y no será, una opción válida.
  *
  * Puesto/tipo: se reutiliza el vocabulario ya existente (empleados.puesto /
  * empleados.categoria_ops: Piloto | Auxiliar | ...; tms_personal.tipo, que ya
