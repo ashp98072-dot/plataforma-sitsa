@@ -32,6 +32,10 @@ type Plan = {
   codigo: string;
   fecha_plan: string;
   hora_carga: string | null;
+  tipo_traslado: string | null;
+  regreso_estimado: string | null;
+  tarifa_comercial: number | null;
+  referencia_cliente: string | null;
   estado: string;
   cliente: string | null;
   placa: string | null;
@@ -74,6 +78,9 @@ export default function TmsPage() {
     auxiliarEmpleadoIds: [] as number[],
     auxiliarNombres: [] as string[],
     tipoTraslado: "",
+    regresoEstimado: "",
+    tarifaComercial: "",
+    referenciaCliente: "",
     notas: "",
     lugarCarga: "",
     lugarDescarga: "",
@@ -206,13 +213,15 @@ export default function TmsPage() {
   }, [slug]);
 
   useEffect(() => {
+    // La carga es asíncrona y solo se dispara al cambiar la empresa.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void cargar();
   }, [cargar]);
 
   useEffect(() => {
+    // La sugerencia es una consulta asíncrona dependiente de la fecha.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void sugerirCodigo(form.fechaPlan);
-    // Solo al montar / cambiar fecha (no en cada keystroke de otros campos)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intencional
   }, [form.fechaPlan, sugerirCodigo]);
 
   function totalAux() {
@@ -235,11 +244,15 @@ export default function TmsPage() {
 
   const auxiliaresFiltrados = useMemo(
     () => filtrarPersonal(auxiliares, auxInput, form.auxiliarEmpleadoIds),
+    // filtrarPersonal es pura y se recrea junto con este componente.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [auxiliares, auxInput, form.auxiliarEmpleadoIds],
   );
 
   const auxiliaresFiltradosEdit = useMemo(
     () => filtrarPersonal(auxiliares, editAuxInput, editAuxEmpleadoIds),
+    // filtrarPersonal es pura y se recrea junto con este componente.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [auxiliares, editAuxInput, editAuxEmpleadoIds],
   );
 
@@ -324,6 +337,11 @@ export default function TmsPage() {
       setMsg("Agrega al menos una parada (lugar) con evidencia de producto.");
       return;
     }
+    const salidaProgramada = `${form.fechaPlan}T${form.horaCarga || "00:00"}`;
+    if (form.regresoEstimado && form.regresoEstimado <= salidaProgramada) {
+      setMsg("El regreso estimado debe ser posterior a la salida programada.");
+      return;
+    }
     setSavingPlan(true);
     setMsg("");
     try {
@@ -335,6 +353,10 @@ export default function TmsPage() {
           fechaPlan: form.fechaPlan,
           horaCarga: form.horaCarga,
           tipoTraslado: form.tipoTraslado || undefined,
+          regresoEstimado: form.regresoEstimado || undefined,
+          tarifaComercial:
+            form.tarifaComercial === "" ? undefined : Number(form.tarifaComercial),
+          referenciaCliente: form.referenciaCliente.trim() || undefined,
           notas: form.notas.trim() || undefined,
           clienteId: form.clienteId || undefined,
           clienteNombre: form.clienteNombre.trim() || undefined,
@@ -368,6 +390,9 @@ export default function TmsPage() {
           clienteId: 0,
           clienteNombre: "",
           tipoTraslado: "",
+          regresoEstimado: "",
+          tarifaComercial: "",
+          referenciaCliente: "",
           notas: "",
         }));
         setParadasForm([
@@ -639,7 +664,7 @@ export default function TmsPage() {
           />
         </label>
         <label className="text-xs text-[var(--muted)]">
-          Hora carga
+          Hora programada de salida / carga
           <input
             className={`${input} mt-1 w-full`}
             placeholder="Hora carga"
@@ -782,7 +807,45 @@ export default function TmsPage() {
             <option value="Otro">Otro</option>
           </select>
         </label>
-        <label className="text-xs text-[var(--muted)] md:col-span-2">
+        <label className="text-xs text-[var(--muted)]">
+          Regreso estimado
+          <input
+            type="datetime-local"
+            className={`${input} mt-1 w-full`}
+            value={form.regresoEstimado}
+            min={`${form.fechaPlan}T${form.horaCarga || "00:00"}`}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, regresoEstimado: e.target.value }))
+            }
+          />
+        </label>
+        <label className="text-xs text-[var(--muted)]">
+          Tarifa comercial (GTQ)
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            className={`${input} mt-1 w-full`}
+            placeholder="0.00"
+            value={form.tarifaComercial}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, tarifaComercial: e.target.value }))
+            }
+          />
+        </label>
+        <label className="text-xs text-[var(--muted)]">
+          Referencia del cliente
+          <input
+            className={`${input} mt-1 w-full`}
+            maxLength={160}
+            placeholder="OC, pedido o referencia"
+            value={form.referenciaCliente}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, referenciaCliente: e.target.value }))
+            }
+          />
+        </label>
+        <label className="text-xs text-[var(--muted)] md:col-span-3">
           Notas / instrucciones
           <input
             className={`${input} mt-1 w-full`}

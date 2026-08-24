@@ -121,6 +121,8 @@ export async function GET(req: Request, ctx: Ctx) {
   const [rows, disp] = await Promise.all([
     query<RowDataPacket[]>(
       `SELECT p.id, p.codigo, p.fecha_plan, p.hora_carga, p.estado, p.tipo_traslado, p.notas,
+              DATE_FORMAT(p.regreso_estimado, '%Y-%m-%dT%H:%i') AS regreso_estimado,
+              p.tarifa_comercial, p.referencia_cliente,
               c.nombre AS cliente, u.placa, pil.nombre AS piloto, aux.nombre AS auxiliar,
               p.piloto_id, p.auxiliar_id,
               COALESCE(ev.cnt, 0) AS evidencias
@@ -231,9 +233,12 @@ export async function GET(req: Request, ctx: Ctx) {
 
 const schema = z.object({
   codigo: z.string().optional(),
-  fechaPlan: z.string().min(1),
-  horaCarga: z.string().optional(),
+  fechaPlan: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  horaCarga: z.string().regex(/^\d{2}:\d{2}(?::\d{2})?$/).optional(),
   tipoTraslado: z.string().optional(),
+  regresoEstimado: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/).optional(),
+  tarifaComercial: z.number().nonnegative().optional(),
+  referenciaCliente: z.string().max(160).optional(),
   notas: z.string().optional(),
   clienteId: z.number().int().positive().optional(),
   clienteNombre: z.string().optional(),
@@ -382,6 +387,13 @@ export async function POST(req: Request, ctx: Ctx) {
   }
   const d = parsed.data;
   const empresaId = guard.empresa.id;
+  const salidaProgramada = `${d.fechaPlan}T${(d.horaCarga || "00:00").slice(0, 5)}`;
+  if (d.regresoEstimado && d.regresoEstimado <= salidaProgramada) {
+    return NextResponse.json(
+      { error: "El regreso estimado debe ser posterior a la salida programada." },
+      { status: 400 },
+    );
+  }
   let clienteId: number | null = null;
   let unidadId: number | null = null;
   let pilotoId: number | null = null;
@@ -510,7 +522,7 @@ export async function POST(req: Request, ctx: Ctx) {
   const auxiliarId = auxPersonalIds[0] ?? null;
 
   // Paradas: array nuevo o compatibilidad con 2 campos clásicos
-  let paradasInput: ParadaInput[] = (d.paradas ?? []).filter((p) =>
+  const paradasInput: ParadaInput[] = (d.paradas ?? []).filter((p) =>
     p.lugarNombre?.trim(),
   );
   if (!paradasInput.length) {
@@ -548,8 +560,8 @@ export async function POST(req: Request, ctx: Ctx) {
     try {
       const result = await execute(
         `INSERT INTO tms_planes_viaje
-          (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, notas, estado)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado')`,
+          (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, referencia_cliente, notas, estado)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado')`,
         [
           empresaId,
           codigoFinal,
@@ -562,6 +574,9 @@ export async function POST(req: Request, ctx: Ctx) {
           d.fechaPlan,
           d.horaCarga ?? null,
           d.tipoTraslado ?? null,
+          d.regresoEstimado?.replace("T", " ") ?? null,
+          d.tarifaComercial ?? null,
+          d.referenciaCliente?.trim() || null,
           d.notas ?? null,
         ],
       );
@@ -627,6 +642,9 @@ const patchSchema = z.object({
     .optional(),
   notas: z.string().optional(),
   horaCarga: z.string().optional(),
+  regresoEstimado: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/).nullable().optional(),
+  tarifaComercial: z.number().nonnegative().nullable().optional(),
+  referenciaCliente: z.string().max(160).nullable().optional(),
   paradas: z
     .array(
       z.object({
@@ -727,6 +745,10 @@ export async function PATCH(req: Request, ctx: Ctx) {
   const tocaFecha = d.fechaPlan != null;
   const tocaParadas = d.paradas != null;
   const tocaHora = d.horaCarga != null;
+  const tocaComercial =
+    d.regresoEstimado !== undefined ||
+    d.tarifaComercial !== undefined ||
+    d.referenciaCliente !== undefined;
 
   if (ESTADOS_BLOQUEADOS.has(antes.estado)) {
     return NextResponse.json(
@@ -744,6 +766,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
     if (tocaFecha) camposNoPermitidos.push("fecha");
     if (tocaParadas) camposNoPermitidos.push("paradas");
     if (tocaHora) camposNoPermitidos.push("hora de carga");
+    if (tocaComercial) camposNoPermitidos.push("datos comerciales/regreso estimado");
     if (camposNoPermitidos.length) {
       return NextResponse.json(
         {
@@ -772,6 +795,16 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // este mismo request) deben revalidarse contra la NUEVA fecha — cambia el
   // contexto temporal de toda la asignación.
   const fechaCambia = d.fechaPlan != null && d.fechaPlan !== antes.fechaPlan;
+  if (d.regresoEstimado) {
+    const horaEfectiva = d.horaCarga ?? antes.hora ?? "00:00";
+    const salidaProgramada = `${fechaEfectiva}T${(horaEfectiva || "00:00").slice(0, 5)}`;
+    if (d.regresoEstimado <= salidaProgramada) {
+      return NextResponse.json(
+        { error: "El regreso estimado debe ser posterior a la salida programada." },
+        { status: 400 },
+      );
+    }
+  }
 
   let pilotoId: number | undefined;
   let auxiliarId: number | null | undefined;
@@ -1095,7 +1128,10 @@ export async function PATCH(req: Request, ctx: Ctx) {
         unidad_id = COALESCE(?, unidad_id),
         estado = COALESCE(?, estado),
         notas = COALESCE(?, notas),
-        hora_carga = COALESCE(?, hora_carga)
+        hora_carga = COALESCE(?, hora_carga),
+        regreso_estimado = CASE WHEN ? THEN ? ELSE regreso_estimado END,
+        tarifa_comercial = CASE WHEN ? THEN ? ELSE tarifa_comercial END,
+        referencia_cliente = CASE WHEN ? THEN ? ELSE referencia_cliente END
        WHERE id = ? AND empresa_id = ?`,
       [
         d.fechaPlan ?? null,
@@ -1105,6 +1141,12 @@ export async function PATCH(req: Request, ctx: Ctx) {
         d.estado ?? null,
         d.notas ?? null,
         d.horaCarga ?? null,
+        d.regresoEstimado !== undefined,
+        d.regresoEstimado?.replace("T", " ") ?? null,
+        d.tarifaComercial !== undefined,
+        d.tarifaComercial ?? null,
+        d.referenciaCliente !== undefined,
+        d.referenciaCliente?.trim() || null,
         d.id,
         empresaId,
       ],
@@ -1179,6 +1221,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
   if (d.notas != null) {
     cambios.push("notas actualizadas");
   }
+  if (tocaComercial) cambios.push("datos comerciales/regreso estimado actualizados");
   if (paradasInput != null) {
     cambios.push(`paradas redefinidas (${paradasAntesCount} → ${paradasInput.length})`);
   }

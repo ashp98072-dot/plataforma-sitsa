@@ -48,6 +48,9 @@ type Plan = {
   hora_carga: string | null;
   estado: string;
   tipo_traslado: string | null;
+  regreso_estimado: string | null;
+  tarifa_comercial: number | null;
+  referencia_cliente: string | null;
   notas: string | null;
   cliente: string | null;
   placa: string | null;
@@ -720,6 +723,29 @@ export function ProgramacionClient({ slug, hoy }: Props) {
                   ) : (
                     <p className="text-[var(--muted)]">Sin auxiliares</p>
                   )}
+                </div>
+              </div>
+
+              <div className="mt-3 grid gap-2 border-t border-[var(--border)] pt-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                <div>
+                  <p className="text-[11px] text-[var(--muted)]">Servicio</p>
+                  <p>{p.tipo_traslado || "—"}</p>
+                </div>
+                <div>
+                  <p className="text-[11px] text-[var(--muted)]">Regreso estimado</p>
+                  <p>{p.regreso_estimado ? p.regreso_estimado.replace("T", " · ") : "—"}</p>
+                </div>
+                <div>
+                  <p className="text-[11px] text-[var(--muted)]">Tarifa comercial</p>
+                  <p>
+                    {p.tarifa_comercial != null
+                      ? `Q${Number(p.tarifa_comercial).toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                      : "—"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[11px] text-[var(--muted)]">Referencia cliente</p>
+                  <p>{p.referencia_cliente || "—"}</p>
                 </div>
               </div>
 
