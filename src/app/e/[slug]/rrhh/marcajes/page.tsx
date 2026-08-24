@@ -82,6 +82,7 @@ export default function MarcajesKioskoPage() {
   const [gpsActual, setGpsActual] = useState<{
     lat: number;
     lng: number;
+    actualizadoEn: Date;
   } | null>(null);
 
   const [gpsInfo, setGpsInfo] = useState("");
@@ -94,7 +95,7 @@ export default function MarcajesKioskoPage() {
   const inputRef = useRef<HTMLInputElement>(null);
   const hoy = hoyLocal();
 
-  function obtenerGps(): Promise<{ lat: number; lng: number } | null> {
+  const obtenerGps = useCallback((): Promise<{ lat: number; lng: number } | null> => {
     if (typeof navigator === "undefined" || !navigator.geolocation) {
       return Promise.resolve(null);
     }
@@ -110,16 +111,15 @@ export default function MarcajesKioskoPage() {
         {
           enableHighAccuracy: true,
           timeout: 12000,
-          maximumAge: 15_000,
+          maximumAge: 10_000,
         },
       );
     });
-  }
+  }, []);
 
-  async function detectarUbicacion() {
+  const detectarUbicacion = useCallback(async () => {
     setDetectandoGps(true);
     setGpsInfo("");
-    setError("");
 
     const gps = await obtenerGps();
 
@@ -128,7 +128,7 @@ export default function MarcajesKioskoPage() {
     if (!gps) {
       setGpsActual(null);
       setGpsInfo(
-        "No se pudo detectar GPS. Permite la ubicación en el navegador (candado → Ubicación → Permitir) y vuelve a intentar.",
+        "No se pudo detectar GPS. Permite la ubicación en el navegador (candado → Ubicación → Permitir). El sistema volverá a intentarlo automáticamente.",
       );
       return;
     }
@@ -136,12 +136,21 @@ export default function MarcajesKioskoPage() {
     setGpsActual({
       lat: gps.lat,
       lng: gps.lng,
+      actualizadoEn: new Date(),
     });
 
     setGpsInfo(
-      `Ubicación detectada: ${gps.lat.toFixed(5)}, ${gps.lng.toFixed(5)}. El servidor validará automáticamente la ubicación autorizada más cercana.`,
+      "GPS disponible. El servidor validará automáticamente la ubicación autorizada más cercana.",
     );
-  }
+  }, [obtenerGps]);
+
+  useEffect(() => {
+    // Se solicita al abrir el kiosco y se renueva para evitar usar una posición antigua.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void detectarUbicacion();
+    const id = window.setInterval(() => void detectarUbicacion(), 30_000);
+    return () => window.clearInterval(id);
+  }, [detectarUbicacion]);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -264,6 +273,7 @@ export default function MarcajesKioskoPage() {
           setGpsActual({
             lat: gps.lat,
             lng: gps.lng,
+            actualizadoEn: new Date(),
           });
         }
       }
@@ -451,24 +461,20 @@ export default function MarcajesKioskoPage() {
             </p>
 
             <p className="mt-0.5 text-[11px] text-[var(--muted)]">
-              Detecta tu GPS. El servidor determinará automáticamente si estás
-              dentro de una ubicación autorizada y cuál es la más cercana.
+              El GPS se detecta al abrir esta pantalla y se actualiza
+              automáticamente cada 30 segundos. El servidor determinará si
+              estás dentro de una ubicación autorizada.
             </p>
 
-            <button
-              type="button"
-              disabled={detectandoGps || enviando}
-              onClick={() => void detectarUbicacion()}
-              className="mt-2 w-full rounded bg-[#0ea5e9] px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
-            >
-              {detectandoGps ? "Detectando…" : "Detectar mi ubicación"}
-            </button>
-
             {gpsActual ? (
-              <p className="mt-2 font-mono text-[11px] text-sky-200">
-                GPS: {gpsActual.lat.toFixed(5)}, {gpsActual.lng.toFixed(5)}
+              <p className="mt-2 text-[11px] text-emerald-300">
+                GPS activo · actualizado a las {gpsActual.actualizadoEn.toLocaleTimeString("es-GT")}
               </p>
-            ) : null}
+            ) : (
+              <p className="mt-2 text-[11px] text-amber-200">
+                {detectandoGps ? "Detectando ubicación automáticamente…" : "Esperando señal GPS…"}
+              </p>
+            )}
 
             {gpsInfo ? (
               <p
