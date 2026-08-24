@@ -48,6 +48,14 @@ const METODO_PAGO_LABEL: Record<string, string> = {
  * endpoint). No se mezcla con Facturación de clientes: el "facturador"
  * aquí es un usuario interno de la empresa con este permiso, no el
  * cliente ni el módulo de Facturación.
+ *
+ * VIAT-2b — el archivo bancario ahora usa el layout REAL de Bi Banking
+ * (5 columnas, sin encabezado, Windows-1252 — ver
+ * src/lib/tms/viaticos-exportar-banco.ts) y se genera solo si TODOS los
+ * seleccionados pasan validación; si no, se muestra la lista de problemas
+ * en vez de descargar algo. Generar/descargar es de solo lectura: nunca
+ * cambia AUTORIZADO → ENTREGADO por sí solo (eso requiere confirmar
+ * "Registrar entrega/pago" en la fila correspondiente).
  */
 export default function ViaticosPorPagarPanel({ slug }: { slug: string }) {
   const [items, setItems] = useState<ViaticoPorPagarRow[]>([]);
@@ -66,6 +74,15 @@ export default function ViaticosPorPagarPanel({ slug }: { slug: string }) {
   const [metodoPago, setMetodoPago] = useState<Record<number, string>>({});
   const [referenciaPago, setReferenciaPago] = useState<Record<number, string>>({});
   const [obsEntrega, setObsEntrega] = useState<Record<number, string>>({});
+
+  // VIAT-2b — archivo Bi Banking: se genera vía fetch (no un <a href> plano)
+  // porque el endpoint puede responder 400 con la lista de problemas en vez
+  // del archivo — generar/descargar NUNCA cambia estado, solo valida y lee.
+  const [tipoOperacion, setTipoOperacion] = useState("1");
+  const [generandoBanco, setGenerandoBanco] = useState(false);
+  const [problemasBanco, setProblemasBanco] = useState<
+    { id: number; planCodigo: string; personalNombre: string; motivo: string }[]
+  >([]);
 
   const queryFiltros = useCallback(() => {
     const params = new URLSearchParams();
@@ -123,7 +140,49 @@ export default function ViaticosPorPagarPanel({ slug }: { slug: string }) {
     const params = queryFiltros();
     params.set("formato", formato);
     if (seleccionados.size) params.set("ids", [...seleccionados].join(","));
+    if (formato === "banco") params.set("tipo", tipoOperacion.trim() || "1");
     return `/api/empresas/${slug}/tms/viaticos/por-pagar/exportar?${params.toString()}`;
+  }
+
+  /**
+   * Descarga el archivo Bi Banking. Si el servidor rechaza la selección
+   * (algún viático no AUTORIZADO, sin cuenta bancaria o con monto <= 0),
+   * NO se genera nada — se muestra la lista exacta de problemas para que
+   * el facturador corrija la selección. Un fetch exitoso solo lee/valida:
+   * no hace ningún POST de entrega ni cambia estado.
+   */
+  async function generarArchivoBancario() {
+    if (!seleccionados.size) {
+      setError("Selecciona al menos un viático para generar el archivo bancario.");
+      return;
+    }
+    setGenerandoBanco(true);
+    setError("");
+    setMensaje("");
+    setProblemasBanco([]);
+    try {
+      const res = await fetch(urlExportar("banco"));
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error ?? "No se pudo generar el archivo bancario.");
+        setProblemasBanco(data.problemas ?? []);
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `viaticos-bibanking-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setMensaje("Archivo bancario generado. El estado de los viáticos sigue AUTORIZADO hasta que registres la entrega.");
+    } catch {
+      setError("Error de conexión.");
+    } finally {
+      setGenerandoBanco(false);
+    }
   }
 
   async function registrarPago(row: ViaticoPorPagarRow) {
@@ -206,19 +265,44 @@ export default function ViaticosPorPagarPanel({ slug }: { slug: string }) {
         >
           Exportar Excel{seleccionados.size ? ` (${seleccionados.size} sel.)` : ""}
         </a>
-        <a
-          href={urlExportar("banco")}
-          className="rounded bg-[#334155] px-3 py-1.5 text-xs text-white hover:bg-[#3f4b5f]"
+        <button
+          type="button"
+          disabled={generandoBanco}
+          onClick={() => void generarArchivoBancario()}
+          className="rounded bg-[#334155] px-3 py-1.5 text-xs text-white hover:bg-[#3f4b5f] disabled:opacity-50"
         >
-          Generar archivo bancario{seleccionados.size ? ` (${seleccionados.size} sel.)` : ""}
-        </a>
+          {generandoBanco ? "Generando…" : "Generar archivo bancario"}
+          {seleccionados.size ? ` (${seleccionados.size} sel.)` : ""}
+        </button>
+        <label className="text-[10px] text-[var(--muted)]">
+          Tipo (col. 1)
+          <input
+            className={`${inputCls} ml-1 w-12 py-0.5 text-center`}
+            value={tipoOperacion}
+            onChange={(e) => setTipoOperacion(e.target.value)}
+          />
+        </label>
         <span className="text-[10px] text-amber-200/80">
-          Archivo bancario genérico (.csv) — layout de control, no el formato oficial del convenio Bi
-          Banking/GuateACH (aún no definido).
+          Archivo Bi Banking (.csv, Windows-1252, sin encabezados) según el layout real de la
+          empresa. Solo se genera si todos los seleccionados están AUTORIZADOS, con cuenta
+          bancaria y monto válido — descargarlo no cambia ningún estado.
         </span>
       </div>
 
       {error ? <p className="text-xs text-red-300">{error}</p> : null}
+      {problemasBanco.length ? (
+        <div className="rounded border border-red-900/40 bg-red-950/10 p-2 text-xs text-red-300">
+          <p className="font-medium">No se generó el archivo bancario — corrige estos registros:</p>
+          <ul className="mt-1 space-y-0.5">
+            {problemasBanco.map((p, i) => (
+              <li key={`${p.id}-${i}`}>
+                {p.personalNombre || `Viático #${p.id}`}
+                {p.planCodigo ? ` (${p.planCodigo})` : ""}: {p.motivo}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       {mensaje ? <p className="text-xs text-emerald-300">{mensaje}</p> : null}
 
       <div className="overflow-x-auto rounded-xl border border-[var(--border)]">

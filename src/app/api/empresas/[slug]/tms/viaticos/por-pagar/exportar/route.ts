@@ -2,7 +2,12 @@ import { NextResponse } from "next/server";
 import { requireTenantViaticosPagar } from "@/lib/tenant";
 import { listarViaticosPorPagar, type EstadoViatico } from "@/lib/tms/viaticos";
 import { tablaAExcel } from "@/lib/rrhh/export-files";
-import { generarArchivoBancoGenerico } from "@/lib/tms/viaticos-exportar-banco";
+import {
+  codificarCp1252,
+  generarArchivoBiBanking,
+  TIPO_OPERACION_DEFAULT,
+  validarParaBiBanking,
+} from "@/lib/tms/viaticos-exportar-banco";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -14,17 +19,28 @@ const METODO_PAGO_LABEL: Record<string, string> = {
 };
 
 /**
- * VIAT-2 (puntos 3-5) — exportación de la bandeja "Viáticos por pagar".
- * `?formato=xlsx` (por defecto): Excel administrativo — reutiliza
- * tablaAExcel (src/lib/rrhh/export-files.ts), el mismo exportador genérico
- * que usan flota/reportes RRHH, sin crear uno nuevo.
- * `?formato=banco`: archivo genérico delimitado (.csv), NO el layout
- * oficial de Bi Banking — ver documentación en
- * src/lib/tms/viaticos-exportar-banco.ts.
- * `?ids=1,2,3` limita la exportación a filas seleccionadas en la UI; sin
- * `ids`, exporta según los mismos filtros que la bandeja (por defecto solo
- * AUTORIZADOS).
- * Mismo permiso que la bandeja: `viaticos_pagar:ver` — exportar es una
+ * VIAT-2 / VIAT-2b — exportación de la bandeja "Viáticos por pagar".
+ *
+ * `?formato=xlsx` (por defecto, SIN CAMBIOS desde VIAT-2): Excel
+ * administrativo completo — reutiliza tablaAExcel (src/lib/rrhh/export-
+ * files.ts). Incluye código empleado/banco/tipo cuenta/estado para control
+ * interno; no valida nada, exporta lo que la bandeja esté mostrando.
+ *
+ * `?formato=banco`: archivo Bi Banking (layout real de la empresa, ver
+ * src/lib/tms/viaticos-exportar-banco.ts) — 5 columnas sin encabezado,
+ * codificado Windows-1252. Requiere `ids` explícito (no exporta "todo lo
+ * visible" sin selección) y SOLO genera el archivo si todos los
+ * seleccionados pasan validación (AUTORIZADO, con cuenta bancaria, monto >
+ * 0) — si alguno falla, responde 400 con el detalle de cada problema en
+ * vez de generar un archivo parcial. Descargar este archivo NO cambia
+ * ningún estado: es de solo lectura, igual que el Excel — el paso
+ * AUTORIZADO -> ENTREGADO solo ocurre cuando el facturador confirma la
+ * entrega desde "Registrar entrega/pago" (POST .../viaticos/[id]/entrega).
+ * `?tipo=` opcional (default "1") — columna 1, ver documentación en
+ * viaticos-exportar-banco.ts sobre por qué es configurable y no un valor
+ * bancario confirmado.
+ *
+ * Mismo permiso en ambos formatos: `viaticos_pagar:ver` — exportar es una
  * operación de lectura/reporte, no de escritura.
  */
 export async function GET(req: Request, ctx: Ctx) {
@@ -40,6 +56,70 @@ export async function GET(req: Request, ctx: Ctx) {
   const fechaHasta = url.searchParams.get("fechaHasta") || undefined;
   const empleadoNombre = url.searchParams.get("empleado") || undefined;
   const estadoRaw = url.searchParams.get("estado");
+
+  const idsRaw = url.searchParams.get("ids");
+  const idsSeleccionados = idsRaw
+    ? new Set(
+        idsRaw
+          .split(",")
+          .map((s) => Number(s.trim()))
+          .filter((n) => Number.isFinite(n)),
+      )
+    : new Set<number>();
+
+  const fecha = new Date().toISOString().slice(0, 10);
+
+  if (formato === "banco") {
+    if (!idsSeleccionados.size) {
+      return NextResponse.json(
+        { error: "Selecciona al menos un viático para generar el archivo bancario." },
+        { status: 400 },
+      );
+    }
+    // Sin filtro de estado aquí a propósito: si el usuario seleccionó un
+    // id que ya no está AUTORIZADO, queremos que aparezca en `problemas`
+    // (validarParaBiBanking), no que desaparezca silenciosamente del
+    // resultado por el filtro de estado.
+    const candidatos = await listarViaticosPorPagar(guard.empresa.id, {
+      planId,
+      fechaDesde,
+      fechaHasta,
+      empleadoNombre,
+    });
+    const items = candidatos.filter((r) => idsSeleccionados.has(r.id));
+
+    const encontrados = new Set(items.map((r) => r.id));
+    const faltantes = [...idsSeleccionados].filter((id) => !encontrados.has(id));
+
+    const validacion = validarParaBiBanking(items);
+    if (!validacion.ok || faltantes.length) {
+      return NextResponse.json(
+        {
+          error: "Hay viáticos seleccionados que no se pueden incluir en el archivo bancario.",
+          problemas: [
+            ...(validacion.ok ? [] : validacion.problemas),
+            ...faltantes.map((id) => ({
+              id,
+              planCodigo: "",
+              personalNombre: "",
+              motivo: "No encontrado con los filtros actuales.",
+            })),
+          ],
+        },
+        { status: 400 },
+      );
+    }
+
+    const tipoOperacion = url.searchParams.get("tipo")?.trim() || TIPO_OPERACION_DEFAULT;
+    const contenido = generarArchivoBiBanking(items, { tipoOperacion });
+    return new NextResponse(new Uint8Array(codificarCp1252(contenido)), {
+      headers: {
+        "Content-Type": "text/csv; charset=windows-1252",
+        "Content-Disposition": `attachment; filename="viaticos-bibanking-${fecha}.csv"`,
+      },
+    });
+  }
+
   const estado: EstadoViatico | undefined =
     estadoRaw === "TODOS"
       ? undefined
@@ -54,29 +134,7 @@ export async function GET(req: Request, ctx: Ctx) {
     empleadoNombre,
     estado,
   });
-
-  const idsRaw = url.searchParams.get("ids");
-  if (idsRaw) {
-    const ids = new Set(
-      idsRaw
-        .split(",")
-        .map((s) => Number(s.trim()))
-        .filter((n) => Number.isFinite(n)),
-    );
-    if (ids.size) items = items.filter((r) => ids.has(r.id));
-  }
-
-  const fecha = new Date().toISOString().slice(0, 10);
-
-  if (formato === "banco") {
-    const contenido = generarArchivoBancoGenerico(items);
-    return new NextResponse(contenido, {
-      headers: {
-        "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename="viaticos-por-pagar-${fecha}.csv"`,
-      },
-    });
-  }
+  if (idsSeleccionados.size) items = items.filter((r) => idsSeleccionados.has(r.id));
 
   const headers = [
     "Código viaje",
