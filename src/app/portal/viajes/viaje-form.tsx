@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import type { AsignacionOperativaPortal, ViajeAbiertoPiloto } from "@/lib/flota/viajes-piloto";
 import type { PlanParada } from "@/lib/tms/paradas";
 
@@ -38,7 +39,11 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
   const [destino, setDestino] = useState(planSeleccionado?.destino ?? "");
   const [kmLlegada, setKmLlegada] = useState("");
   const [observaciones, setObservaciones] = useState("");
-  const [archivos, setArchivos] = useState<FileList | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const previewUrlRef = useRef<string | null>(null);
+  const [camaraActiva, setCamaraActiva] = useState(false);
+  const [foto, setFoto] = useState<{ blob: Blob; url: string; etapa: string } | null>(null);
   const [cierreExcepcional, setCierreExcepcional] = useState(false);
   const [motivoExcepcional, setMotivoExcepcional] = useState("");
 
@@ -59,8 +64,60 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
 
   useEffect(() => {
     const intervalo = window.setInterval(() => router.refresh(), 5000);
-    return () => window.clearInterval(intervalo);
+    return () => {
+      window.clearInterval(intervalo);
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    };
   }, [router]);
+
+  const etapaClave = etapa ? `${etapa.tipo}:${etapa.paradaId}` : "";
+  const fotoActual = foto?.etapa === etapaClave ? foto : null;
+
+  function detenerCamara() {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    setCamaraActiva(false);
+  }
+
+  async function abrirCamara() {
+    setError("");
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError("Este dispositivo o navegador no permite abrir la cámara directamente.");
+      return;
+    }
+    try {
+      detenerCamara();
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+      setCamaraActiva(true);
+    } catch {
+      setError("No se pudo abrir la cámara. Autoriza el permiso de cámara e inténtalo nuevamente.");
+    }
+  }
+
+  async function tomarFoto() {
+    const video = videoRef.current;
+    if (!video || video.videoWidth < 1 || video.videoHeight < 1) {
+      setError("La cámara todavía no está lista.");
+      return;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.9));
+    if (!blob) return setError("No se pudo capturar la fotografía.");
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    const url = URL.createObjectURL(blob);
+    previewUrlRef.current = url;
+    setFoto({ blob, url, etapa: etapaClave });
+    detenerCamara();
+  }
 
   function elegirPlan(id: number) {
     setPlanId(id);
@@ -117,20 +174,27 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
 
   async function subirEvidencias(e: FormEvent) {
     e.preventDefault();
-    if (!viajeEnCursoId || !etapa || !archivos?.length) return setError("Selecciona al menos una evidencia.");
+    if (!viajeEnCursoId || !etapa || !fotoActual) return setError("Toma la fotografía desde la cámara antes de continuar.");
     setError(""); setMensaje(""); setLoading(true);
     try {
       const gps = await obtenerGps();
+      if (gps.latitud == null || gps.longitud == null) {
+        throw new Error("Activa y autoriza la ubicación GPS para guardar la evidencia.");
+      }
       const form = new FormData();
       form.set("tipo", etapa.tipo);
       if (etapa.paradaId) form.set("paradaId", String(etapa.paradaId));
       if (gps.latitud != null) form.set("latitud", String(gps.latitud));
       if (gps.longitud != null) form.set("longitud", String(gps.longitud));
-      for (const file of Array.from(archivos)) form.append("files", file);
+      form.append("files", fotoActual.blob, `evidencia_${Date.now()}.jpg`);
       const res = await fetch(`/api/portal/viajes/${viajeEnCursoId}/evidencias`, { method: "POST", body: form });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "No se pudieron guardar las evidencias.");
-      setMensaje(data.mensaje); setArchivos(null); router.refresh();
+      setMensaje(data.mensaje);
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = null;
+      setFoto(null);
+      router.refresh();
     } catch (err) { setError(err instanceof Error ? err.message : "No se pudieron guardar las evidencias."); }
     finally { setLoading(false); }
   }
@@ -174,8 +238,15 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
 
     {viajeEnCursoId && etapa ? <form onSubmit={subirEvidencias} className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
       <h2 className="font-semibold">{etapa.titulo}</h2><p className="mt-1 text-sm text-[var(--muted)]">{etapa.detalle}</p>
-      <input className="mt-4 block w-full text-sm" type="file" accept="image/*" capture="environment" multiple onChange={(e) => setArchivos(e.target.files)} required />
-      <button className="mt-4 rounded-lg bg-[var(--accent)] px-4 py-2.5 font-medium text-white disabled:opacity-50" disabled={loading}>Adjuntar evidencia y continuar</button>
+      <p className="mt-2 text-xs text-[var(--muted)]">La evidencia debe tomarse ahora. Se guardarán fecha, hora y ubicación GPS; no se permite seleccionar archivos de la galería.</p>
+      <video ref={videoRef} className={`mt-4 w-full rounded-xl bg-black ${camaraActiva ? "block" : "hidden"}`} playsInline muted />
+      {fotoActual ? <Image src={fotoActual.url} alt="Vista previa de la evidencia capturada" width={1280} height={720} unoptimized className="mt-4 h-auto w-full rounded-xl" /> : null}
+      <div className="mt-4 flex flex-wrap gap-2">
+        {!camaraActiva ? <button type="button" className="rounded-lg bg-[#334155] px-4 py-2.5 font-medium text-white" onClick={() => void abrirCamara()}>{fotoActual ? "Tomar otra foto" : "Abrir cámara"}</button> : null}
+        {camaraActiva ? <button type="button" className="rounded-lg bg-[var(--accent)] px-4 py-2.5 font-medium text-white" onClick={() => void tomarFoto()}>Tomar foto</button> : null}
+        {camaraActiva ? <button type="button" className="rounded-lg border border-[var(--border)] px-4 py-2.5" onClick={detenerCamara}>Cancelar cámara</button> : null}
+      </div>
+      <button className="mt-4 rounded-lg bg-[var(--accent)] px-4 py-2.5 font-medium text-white disabled:opacity-50" disabled={loading || !fotoActual}>Guardar evidencia y continuar</button>
     </form> : null}
 
     {tipo === "Piloto" && viajeAbierto ? <form onSubmit={onLlegada} className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">

@@ -160,8 +160,17 @@ export async function POST(req: Request, ctx: Ctx) {
     }
   }
 
-  const latitud = Number(form.get("latitud"));
-  const longitud = Number(form.get("longitud"));
+  const latitudRaw = form.get("latitud");
+  const longitudRaw = form.get("longitud");
+  const latitud = typeof latitudRaw === "string" ? Number(latitudRaw) : NaN;
+  const longitud = typeof longitudRaw === "string" ? Number(longitudRaw) : NaN;
+  if (!Number.isFinite(latitud) || latitud < -90 || latitud > 90 ||
+      !Number.isFinite(longitud) || longitud < -180 || longitud > 180) {
+    return NextResponse.json(
+      { error: "Activa y autoriza la ubicación GPS para guardar la evidencia." },
+      { status: 400 },
+    );
+  }
   const archivos: Array<Blob & { name?: string }> = [];
   for (const [key, value] of form.entries()) {
     if ((key === "file" || key === "files") && value instanceof Blob && value.size > 0) {
@@ -182,8 +191,8 @@ export async function POST(req: Request, ctx: Ctx) {
         type: archivo.type,
         arrayBuffer: () => archivo.arrayBuffer(),
       },
-      latitud: Number.isFinite(latitud) ? latitud : null,
-      longitud: Number.isFinite(longitud) ? longitud : null,
+      latitud,
+      longitud,
       capturadoEn: ahoraLocal(),
       username: `portal:${empleado.codigo}`,
       planId: participacion.planId,
