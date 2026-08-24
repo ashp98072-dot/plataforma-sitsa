@@ -2906,10 +2906,10 @@ export default function FlotaClient() {
                   </label>
                 ))}
                 <label className="text-xs text-[var(--muted)]">
-                  Control de mantenimiento
-                  <select className={`${input} mt-1 w-full`} value={form.odometroFuncional ? "km" : "tiempo"} onChange={(e) => setForm((f) => ({ ...f, odometroFuncional: e.target.value === "km" }))}>
-                    <option value="km">Por kilometraje (odómetro funcional)</option>
-                    <option value="tiempo">Por tiempo (odómetro no funciona)</option>
+                  ¿Funciona el odómetro / medidor de kilometraje?
+                  <select className={`${input} mt-1 w-full`} value={form.odometroFuncional ? "si" : "no"} onChange={(e) => setForm((f) => ({ ...f, odometroFuncional: e.target.value === "si" }))}>
+                    <option value="si">Sí, funciona</option>
+                    <option value="no">No funciona</option>
                   </select>
                 </label>
                 {form.odometroFuncional ? <label className="text-xs text-[var(--muted)]">
@@ -2925,7 +2925,7 @@ export default function FlotaClient() {
                       }))
                     }
                   />
-                </label> : <label className="text-xs text-[var(--muted)]">Servicio cada (meses)<input type="number" min={1} max={60} className={`${input} mt-1 w-full`} value={form.intervaloMeses} onChange={(e) => setForm((f) => ({ ...f, intervaloMeses: Number(e.target.value) }))} required /></label>}
+                </label> : <label className="text-xs text-[var(--muted)]">Frecuencia de servicio (cada cuántos meses)<input type="number" min={1} max={60} className={`${input} mt-1 w-full`} value={form.intervaloMeses} onChange={(e) => setForm((f) => ({ ...f, intervaloMeses: Number(e.target.value) }))} required /><span className="mt-1 block text-[10px]">Ejemplo: 2 para servicio cada 2 meses; 3 para cada 3 meses.</span></label>}
                 {form.odometroFuncional ? <label className="text-xs text-[var(--muted)]">
                   Intervalo servicio (km)
                   <input

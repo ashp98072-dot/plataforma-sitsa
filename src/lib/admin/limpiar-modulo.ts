@@ -110,6 +110,13 @@ export async function contarModuloEmpresa(
           movimientos: await count("inventario_rrhh_movimientos"),
           entregas: await count("inventario_rrhh_entregas"),
         };
+      case "flota_kilometraje":
+        return {
+          vehiculos_con_kilometraje: await count(
+            "flota_vehiculos",
+            "empresa_id = ? AND km_actual IS NOT NULL",
+          ),
+        };
       case "flota":
         return {
           vehiculos: await count("flota_vehiculos"),
@@ -547,6 +554,22 @@ async function limpiarFlota(
   return out;
 }
 
+async function limpiarKilometrajeFlota(
+  conn: Awaited<ReturnType<ReturnType<typeof getPool>["getConnection"]>>,
+  empresaId: number,
+): Promise<Record<string, number>> {
+  return {
+    kilometrajes_limpiados: await delSiExiste(
+      conn,
+      "flota_vehiculos",
+      `UPDATE flota_vehiculos
+       SET km_actual = NULL
+       WHERE empresa_id = ? AND km_actual IS NOT NULL`,
+      [empresaId],
+    ),
+  };
+}
+
 async function limpiarOperaciones(
   conn: Awaited<ReturnType<ReturnType<typeof getPool>["getConnection"]>>,
   empresaId: number,
@@ -692,6 +715,9 @@ export async function limpiarModuloEmpresa(opts: {
         break;
       case "rrhh_inventario":
         afectados = await limpiarInventarioRrhh(conn, opts.empresaId);
+        break;
+      case "flota_kilometraje":
+        afectados = await limpiarKilometrajeFlota(conn, opts.empresaId);
         break;
       case "flota":
         afectados = await limpiarFlota(conn, opts.empresaId);
