@@ -1,8 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireTenantModulo } from "@/lib/tenant";
 import { listarViaticosDePlan } from "@/lib/tms/viaticos";
-import { permisosEfectivos, tienePermiso } from "@/lib/permisos";
-import type { RolGlobal } from "@/lib/roles";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
 
@@ -13,17 +11,13 @@ type Ctx = { params: Promise<{ slug: string; id: string }> };
  * información interna, nunca se expone en endpoints de cliente/facturación
  * (punto 4/11).
  *
- * VIAT-1 (punto 6) — se agregó `puedeGestionar`: solo informativo para que
- * la UI oculte botones que el usuario no puede ejecutar. La seguridad real
- * está en los propios endpoints de autorizar/entrega/liquidar
- * (requireTenantViaticos*) — estos flags nunca se usan para autorizar
- * nada, solo para no mostrar botones que fallarían.
- *
- * VIAT-2 — "OPERACIONES AUTORIZA, FACTURADOR PAGA": `puedeGestionar` se
- * separa en tres flags independientes, uno por permiso/paso:
- * `puedeAutorizar` (viaticos_autorizar:editar), `puedePagar`
- * (viaticos_pagar:editar) y `puedeLiquidar` (viaticos:editar, el permiso
- * general que quedó a cargo del cierre administrativo).
+ * VIAT-3 — "Programación = definir monto; Viáticos = autorizar/pagar/
+ * liquidar": este endpoint ya NO devuelve flags de gestión
+ * (puedeAutorizar/puedePagar/puedeLiquidar, agregados en VIAT-1/VIAT-2) —
+ * el panel de Programación (viaticos-panel.tsx) dejó de tener esos botones
+ * a propósito, para no duplicar esa UX con el nuevo módulo Operaciones →
+ * Viáticos (src/app/e/[slug]/viaticos/), que sí las expone vía
+ * /tms/viaticos/control.
  */
 export async function GET(_req: Request, ctx: Ctx) {
   const { slug, id } = await ctx.params;
@@ -35,14 +29,9 @@ export async function GET(_req: Request, ctx: Ctx) {
     return NextResponse.json({ error: "ID de plan inválido." }, { status: 400 });
   }
 
-  const perms = await permisosEfectivos(guard.session.id, guard.session.rol as RolGlobal);
-  const puedeAutorizar = tienePermiso(perms, "viaticos_autorizar", "editar");
-  const puedePagar = tienePermiso(perms, "viaticos_pagar", "editar");
-  const puedeLiquidar = tienePermiso(perms, "viaticos", "editar");
-
   const viaticos = await listarViaticosDePlan(guard.empresa.id, planId);
   return NextResponse.json(
-    { viaticos, puedeAutorizar, puedePagar, puedeLiquidar },
+    { viaticos },
     { headers: { "Cache-Control": "private, no-store" } },
   );
 }

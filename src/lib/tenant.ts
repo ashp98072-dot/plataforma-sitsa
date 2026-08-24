@@ -366,6 +366,53 @@ export async function requireTenantViaticosPagar(
   return { session, empresa };
 }
 
+/**
+ * VIAT-3 — módulo "Operaciones > Viáticos": acepta CUALQUIERA de los tres
+ * permisos de viáticos (`viaticos`, `viaticos_autorizar`, `viaticos_pagar`)
+ * con la acción pedida — no crea un permiso nuevo, solo reutiliza los tres
+ * ya existentes con un OR, igual que requireTenantFlotaAny/RrhhAny. Sirve
+ * para la vista general (resumen + listado global): un usuario con
+ * únicamente `viaticos_pagar:ver` (el facturador) debe poder verla para
+ * ubicar sus AUTORIZADOS, igual que uno con únicamente `viaticos_autorizar`
+ * o con el `viaticos` general de supervisión. Cada ACCIÓN puntual
+ * (autorizar/pagar/liquidar) sigue exigiendo su propio permiso específico
+ * en su propio endpoint — este gate solo cubre la lectura del listado.
+ */
+export async function requireTenantViaticosAny(
+  slug: string,
+  accion: AccionPermiso = "ver",
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length
+    ? empresa.modulos
+    : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("tms")) {
+    return {
+      error: NextResponse.json(
+        { error: "Esta empresa no tiene el módulo TMS." },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  const permisosViaticos = ["viaticos", "viaticos_autorizar", "viaticos_pagar"] as const;
+  if (permisosViaticos.some((m) => tienePermiso(perms, m, accion))) {
+    return { session, empresa };
+  }
+  return {
+    error: NextResponse.json(
+      { error: `Sin permiso para ${accion} viáticos.` },
+      { status: 403 },
+    ),
+  };
+}
+
 /** Acepta cualquiera de varios submódulos de Predios. */
 export async function requireTenantFlotaAny(
   slug: string,

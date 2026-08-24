@@ -284,6 +284,25 @@ export function AppShell({
         key: "programacion",
       });
     }
+    // Viáticos (VIAT-3): módulo propio, visible con CUALQUIERA de los tres
+    // permisos de viáticos (viaticos/viaticos_autorizar/viaticos_pagar) —
+    // "viaticos" no es un Modulo de empresa/rol (roles.ts), es un permiso
+    // de acción dentro de TMS, por eso se checa aparte de opsMods.
+    const puedeViaticos =
+      rol !== "Piloto" &&
+      modulos.includes("tms") &&
+      (isAdmin ||
+        permisos.length === 0 ||
+        tienePermiso(permisos, "viaticos", "ver") ||
+        tienePermiso(permisos, "viaticos_autorizar", "ver") ||
+        tienePermiso(permisos, "viaticos_pagar", "ver"));
+    if (puedeViaticos) {
+      opsLinks.push({
+        href: `${base}/viaticos`,
+        label: "Viáticos",
+        key: "viaticos",
+      });
+    }
     const alcanceFact = alcanceFacturacion(rol);
     const puedeVerFact =
       isAdmin ||
