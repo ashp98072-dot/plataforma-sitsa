@@ -18,6 +18,15 @@ function regresoEnEspanol(valor: string | null) {
   return Number.isNaN(fecha.getTime()) ? valor : new Intl.DateTimeFormat("es-GT", { dateStyle: "long", timeStyle: "short" }).format(fecha);
 }
 
+// VIAT-1 — el colaborador solo ve el estado del viático en lenguaje simple,
+// nunca quién autorizó/entregó ni referencias de pago.
+const ESTADO_VIATICO_LABEL: Record<string, string> = {
+  PROGRAMADO: "Pendiente de autorizar",
+  AUTORIZADO: "Autorizado",
+  ENTREGADO: "Entregado",
+  LIQUIDADO: "Liquidado",
+};
+
 export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacionEnCurso, viajeEnCursoId, paradas, viajeDestacadoId }: {
   tipo: "Piloto" | "Auxiliar";
   viajeAbierto: ViajeAbiertoPiloto | null;
@@ -226,6 +235,7 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
           <p className="mt-1 text-[var(--muted)]"><span className="text-[var(--foreground)]">Regreso estimado:</span> {regresoEnEspanol(a.regresoEstimado)}</p>
           <p className="mt-1 text-[var(--muted)]"><span className="text-[var(--foreground)]">Unidad:</span> {a.placa ?? "Pendiente"} · <span className="text-[var(--foreground)]">Piloto:</span> {a.piloto ?? "Pendiente"}</p>
           {a.auxiliares.length ? <p className="mt-1 text-[var(--muted)]">Auxiliares: {a.auxiliares.join(", ")}</p> : null}
+          {a.viaticoAsignado != null ? <p className="mt-1 text-[var(--muted)]"><span className="text-[var(--foreground)]">Viático asignado:</span> Q{a.viaticoAsignado.toFixed(2)} · <span className="text-[var(--foreground)]">Estado:</span> {ESTADO_VIATICO_LABEL[a.viaticoEstado ?? "PROGRAMADO"] ?? a.viaticoEstado}</p> : null}
         </article>)}
       </div>}
     </section>

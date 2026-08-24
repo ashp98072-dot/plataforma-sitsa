@@ -241,6 +241,48 @@ export async function requireTenantRrhh(
   return { session, empresa };
 }
 
+/**
+ * VIAT-1 — autorizar/entregar/liquidar viáticos. Permiso EXPLÍCITO e
+ * independiente de ser supervisor o de tener acceso general a TMS: un
+ * usuario puede ver/editar TMS por completo y aun así no tener
+ * `viaticos:editar` — deben concedérselo aparte desde Usuarios. Mismo
+ * patrón exacto que requireTenantRrhh, solo que el módulo padre es "tms"
+ * en vez de "rrhh" (los viáticos viven dentro de TMS).
+ */
+export async function requireTenantViaticos(
+  slug: string,
+  accion: AccionPermiso = "ver",
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length
+    ? empresa.modulos
+    : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("tms")) {
+    return {
+      error: NextResponse.json(
+        { error: "Esta empresa no tiene el módulo TMS." },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  if (!tienePermiso(perms, "viaticos", accion)) {
+    return {
+      error: NextResponse.json(
+        { error: `Sin permiso para ${accion} viáticos.` },
+        { status: 403 },
+      ),
+    };
+  }
+  return { session, empresa };
+}
+
 /** Acepta cualquiera de varios submódulos de Predios. */
 export async function requireTenantFlotaAny(
   slug: string,

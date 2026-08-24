@@ -645,9 +645,20 @@ CREATE TABLE IF NOT EXISTS tms_viaticos (
   -- PROGRAMADO -> AUTORIZADO -> ENTREGADO -> LIQUIDADO. Nunca depende de
   -- una planilla ni de rrhh_planilla_lineas.
   estado VARCHAR(30) NOT NULL DEFAULT 'PROGRAMADO',
-  -- Fase VIAT-1 (no usado todavía): medio de entrega del efectivo, p. ej.
-  -- Efectivo | Transferencia | Cheque. NUNCA 'Planilla'.
+  -- Fase VIAT-1: medio de entrega del efectivo — EFECTIVO | TRANSFERENCIA |
+  -- CHEQUE. NUNCA 'Planilla'.
   metodo_pago VARCHAR(20) NULL,
+  -- VIAT-1: trazabilidad de las 3 transiciones (PROGRAMADO -> AUTORIZADO ->
+  -- ENTREGADO -> LIQUIDADO). Ver sql/migrate-2026-08-viat-1-ciclo-viaticos.sql.
+  autorizado_por VARCHAR(100) NULL,
+  autorizado_en DATETIME NULL,
+  entregado_por VARCHAR(100) NULL,
+  entregado_en DATETIME NULL,
+  referencia_pago VARCHAR(100) NULL,
+  observaciones_entrega VARCHAR(300) NULL,
+  liquidado_por VARCHAR(100) NULL,
+  liquidado_en DATETIME NULL,
+  observaciones_liquidacion VARCHAR(300) NULL,
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY uq_viatico_plan_personal (plan_id, personal_id),

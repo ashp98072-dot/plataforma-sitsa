@@ -219,6 +219,14 @@ export type ResultadoActualizarMonto =
  * exige antes de enviar). Guarda quién lo modificó y cuándo
  * (actualizado_en). No permite cambiar plan_id/personal_id/estado — este
  * endpoint es exclusivamente para el monto y su motivo.
+ *
+ * VIAT-1: una vez el viático dejó de estar PROGRAMADO (ya se autorizó, se
+ * entregó o se liquidó), este endpoint YA NO permite tocar el monto —
+ * "evitar modificaciones silenciosas del monto" una vez autorizado. No hay
+ * todavía una acción explícita de "volver a Programado"/reautorización en
+ * esta fase (mantener solución sencilla, según lo pedido); si el negocio
+ * necesita corregir un monto ya autorizado, por ahora requiere intervención
+ * manual en BD — riesgo documentado en el reporte de esta fase.
  */
 export async function actualizarMontoViatico(
   empresaId: number,
@@ -231,11 +239,18 @@ export async function actualizarMontoViatico(
     return { ok: false, error: "El monto no puede ser negativo." };
   }
   const rows = await query<RowDataPacket[]>(
-    `SELECT monto_sugerido FROM tms_viaticos WHERE id = ? AND empresa_id = ? LIMIT 1`,
+    `SELECT monto_sugerido, estado FROM tms_viaticos WHERE id = ? AND empresa_id = ? LIMIT 1`,
     [viaticoId, empresaId],
   );
   if (!rows[0]) {
     return { ok: false, error: "Viático no encontrado." };
+  }
+  const estadoActual = String(rows[0].estado ?? "PROGRAMADO");
+  if (estadoActual !== "PROGRAMADO") {
+    return {
+      ok: false,
+      error: `Este viático ya está ${estadoActual}; no se puede modificar el monto directamente.`,
+    };
   }
   const sugerido = Number(rows[0].monto_sugerido ?? 0);
   const difiere = Math.abs(montoAsignado - sugerido) > 0.005;
@@ -248,7 +263,7 @@ export async function actualizarMontoViatico(
   await execute(
     `UPDATE tms_viaticos
      SET monto_asignado = ?, motivo_cambio = ?, modificado_por = ?
-     WHERE id = ? AND empresa_id = ?`,
+     WHERE id = ? AND empresa_id = ? AND estado = 'PROGRAMADO'`,
     [montoAsignado, difiere ? motivoCambio!.trim() : null, usuario, viaticoId, empresaId],
   );
   await registrarAuditoria({
@@ -261,6 +276,167 @@ export async function actualizarMontoViatico(
     }`,
   });
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// VIAT-1 — ciclo PROGRAMADO -> AUTORIZADO -> ENTREGADO -> LIQUIDADO.
+// Transiciones atómicas y verificadas (UPDATE condicional por estado +
+// affectedRows), mismo patrón ya usado en todo el proyecto (aprobarHorasExtra,
+// aplicarCuotasElegibles, etc.) para que dos acciones concurrentes nunca
+// dupliquen ni pisen una transición ya hecha por otra.
+// ---------------------------------------------------------------------------
+
+export type EstadoViatico = "PROGRAMADO" | "AUTORIZADO" | "ENTREGADO" | "LIQUIDADO";
+export type MetodoPagoViatico = "EFECTIVO" | "TRANSFERENCIA" | "CHEQUE";
+
+export type ResultadoTransicionViatico =
+  | { ok: true }
+  | { ok: false; error: string };
+
+/**
+ * PROGRAMADO -> AUTORIZADO. Quién puede: exclusivamente usuarios con el
+ * permiso explícito `viaticos:editar` (ver requireTenantViaticos en
+ * src/lib/tenant.ts) — NUNCA por ser supervisor del empleado. El
+ * permiso/rol lo verifica el endpoint antes de llamar aquí; esta función
+ * solo aplica la transición atómica.
+ */
+export async function autorizarViatico(
+  empresaId: number,
+  viaticoId: number,
+  usuario: string,
+): Promise<ResultadoTransicionViatico> {
+  const r = await execute(
+    `UPDATE tms_viaticos
+     SET estado = 'AUTORIZADO', autorizado_por = ?, autorizado_en = NOW()
+     WHERE id = ? AND empresa_id = ? AND estado = 'PROGRAMADO'`,
+    [usuario, viaticoId, empresaId],
+  );
+  if (r.affectedRows !== 1) {
+    return await estadoActualComoError(empresaId, viaticoId, "autorizar");
+  }
+  await registrarAuditoria({
+    empresaId,
+    usuario,
+    accion: "autorizar_viatico",
+    modulo: "tms",
+    detalle: `Viático #${viaticoId} · PROGRAMADO → AUTORIZADO`,
+  });
+  return { ok: true };
+}
+
+export type DatosEntregaViatico = {
+  metodoPago: MetodoPagoViatico;
+  referenciaPago: string | null;
+  observaciones: string | null;
+};
+
+/**
+ * AUTORIZADO -> ENTREGADO. Requiere método de pago; referencia obligatoria
+ * para TRANSFERENCIA y CHEQUE (tienen un número de operación/cheque real
+ * que registrar), opcional para EFECTIVO. No integra bancos ni APIs
+ * externas — solo guarda el dato para trazabilidad.
+ */
+export async function registrarEntregaViatico(
+  empresaId: number,
+  viaticoId: number,
+  datos: DatosEntregaViatico,
+  usuario: string,
+): Promise<ResultadoTransicionViatico> {
+  if (
+    (datos.metodoPago === "TRANSFERENCIA" || datos.metodoPago === "CHEQUE") &&
+    !datos.referenciaPago?.trim()
+  ) {
+    return {
+      ok: false,
+      error:
+        datos.metodoPago === "CHEQUE"
+          ? "Indica el número de cheque."
+          : "Indica la referencia/número de la transferencia.",
+    };
+  }
+  const r = await execute(
+    `UPDATE tms_viaticos
+     SET estado = 'ENTREGADO', entregado_por = ?, entregado_en = NOW(),
+         metodo_pago = ?, referencia_pago = ?, observaciones_entrega = ?
+     WHERE id = ? AND empresa_id = ? AND estado = 'AUTORIZADO'`,
+    [
+      usuario,
+      datos.metodoPago,
+      datos.referenciaPago?.trim() || null,
+      datos.observaciones?.trim() || null,
+      viaticoId,
+      empresaId,
+    ],
+  );
+  if (r.affectedRows !== 1) {
+    return await estadoActualComoError(empresaId, viaticoId, "registrar la entrega de");
+  }
+  await registrarAuditoria({
+    empresaId,
+    usuario,
+    accion: "entregar_viatico",
+    modulo: "tms",
+    detalle: `Viático #${viaticoId} · AUTORIZADO → ENTREGADO · ${datos.metodoPago}${
+      datos.referenciaPago?.trim() ? ` · ref. ${datos.referenciaPago.trim()}` : ""
+    }`,
+  });
+  return { ok: true };
+}
+
+export type DatosLiquidacionViatico = {
+  observaciones: string | null;
+};
+
+/**
+ * ENTREGADO -> LIQUIDADO. En esta fase significa únicamente "cerrado
+ * administrativamente" — NO implica devolución de sobrante ni presentación
+ * de comprobantes (eso, si el negocio lo requiere, es una ampliación
+ * posterior; el modelo queda preparado con observaciones_liquidacion como
+ * texto libre para entonces).
+ */
+export async function liquidarViatico(
+  empresaId: number,
+  viaticoId: number,
+  datos: DatosLiquidacionViatico,
+  usuario: string,
+): Promise<ResultadoTransicionViatico> {
+  const r = await execute(
+    `UPDATE tms_viaticos
+     SET estado = 'LIQUIDADO', liquidado_por = ?, liquidado_en = NOW(),
+         observaciones_liquidacion = ?
+     WHERE id = ? AND empresa_id = ? AND estado = 'ENTREGADO'`,
+    [usuario, datos.observaciones?.trim() || null, viaticoId, empresaId],
+  );
+  if (r.affectedRows !== 1) {
+    return await estadoActualComoError(empresaId, viaticoId, "liquidar");
+  }
+  await registrarAuditoria({
+    empresaId,
+    usuario,
+    accion: "liquidar_viatico",
+    modulo: "tms",
+    detalle: `Viático #${viaticoId} · ENTREGADO → LIQUIDADO`,
+  });
+  return { ok: true };
+}
+
+/** Mensaje de error cuando una transición no aplicó — distingue "no existe" de "estado no permite". */
+async function estadoActualComoError(
+  empresaId: number,
+  viaticoId: number,
+  accionTexto: string,
+): Promise<{ ok: false; error: string }> {
+  const existe = await query<RowDataPacket[]>(
+    `SELECT estado FROM tms_viaticos WHERE id = ? AND empresa_id = ? LIMIT 1`,
+    [viaticoId, empresaId],
+  );
+  if (!existe[0]) {
+    return { ok: false, error: "Viático no encontrado." };
+  }
+  return {
+    ok: false,
+    error: `Este viático está ${String(existe[0].estado)}; no se puede ${accionTexto} desde ese estado.`,
+  };
 }
 
 export type ViaticoDetalle = {
@@ -282,6 +458,15 @@ export type ViaticoDetalle = {
   metodoPago: string | null;
   creadoEn: string;
   actualizadoEn: string;
+  autorizadoPor: string | null;
+  autorizadoEn: string | null;
+  entregadoPor: string | null;
+  entregadoEn: string | null;
+  referenciaPago: string | null;
+  observacionesEntrega: string | null;
+  liquidadoPor: string | null;
+  liquidadoEn: string | null;
+  observacionesLiquidacion: string | null;
 };
 
 function mapDetalle(r: RowDataPacket): ViaticoDetalle {
@@ -304,12 +489,26 @@ function mapDetalle(r: RowDataPacket): ViaticoDetalle {
     metodoPago: r.metodo_pago != null ? String(r.metodo_pago) : null,
     creadoEn: String(r.creado_en ?? ""),
     actualizadoEn: String(r.actualizado_en ?? ""),
+    autorizadoPor: r.autorizado_por != null ? String(r.autorizado_por) : null,
+    autorizadoEn: r.autorizado_en != null ? String(r.autorizado_en) : null,
+    entregadoPor: r.entregado_por != null ? String(r.entregado_por) : null,
+    entregadoEn: r.entregado_en != null ? String(r.entregado_en) : null,
+    referenciaPago: r.referencia_pago != null ? String(r.referencia_pago) : null,
+    observacionesEntrega:
+      r.observaciones_entrega != null ? String(r.observaciones_entrega) : null,
+    liquidadoPor: r.liquidado_por != null ? String(r.liquidado_por) : null,
+    liquidadoEn: r.liquidado_en != null ? String(r.liquidado_en) : null,
+    observacionesLiquidacion:
+      r.observaciones_liquidacion != null ? String(r.observaciones_liquidacion) : null,
   };
 }
 
 const DETALLE_SELECT = `
   SELECT v.id, v.plan_id, v.personal_id, v.rol, v.monto_sugerido, v.monto_asignado,
          v.motivo_cambio, v.modificado_por, v.estado, v.metodo_pago, v.creado_en, v.actualizado_en,
+         v.autorizado_por, v.autorizado_en, v.entregado_por, v.entregado_en,
+         v.referencia_pago, v.observaciones_entrega,
+         v.liquidado_por, v.liquidado_en, v.observaciones_liquidacion,
          pl.codigo AS plan_codigo, pl.fecha_plan,
          c.nombre AS cliente, u.placa AS unidad_placa,
          tp.nombre AS personal_nombre,
@@ -332,4 +531,140 @@ export async function listarViaticosDePlan(
     [empresaId, planId],
   );
   return rows.map(mapDetalle);
+}
+
+export type FiltrosControlViaticos = {
+  planId?: number;
+  fechaDesde?: string;
+  fechaHasta?: string;
+  empleadoNombre?: string;
+  estado?: EstadoViatico;
+};
+
+export type ResumenControlViaticos = {
+  pendientes: number;
+  autorizados: number;
+  entregados: number;
+  liquidados: number;
+};
+
+/**
+ * Listado para el panel "Control de Viáticos" en TMS (punto 7 de VIAT-1):
+ * todos los viáticos de la empresa con filtros de viaje/fecha/empleado/
+ * estado, más el resumen de conteos por estado (sobre el resultado ya
+ * filtrado, salvo el propio filtro de estado — el resumen siempre refleja
+ * los otros filtros aplicados para que los 4 contadores sumen el total
+ * visible al cambiar de estado).
+ */
+export async function listarViaticosControl(
+  empresaId: number,
+  filtros: FiltrosControlViaticos = {},
+): Promise<{ items: ViaticoDetalle[]; resumen: ResumenControlViaticos }> {
+  const condiciones: string[] = ["v.empresa_id = ?"];
+  const params: SqlParams = [empresaId];
+
+  if (filtros.planId != null) {
+    condiciones.push("v.plan_id = ?");
+    params.push(filtros.planId);
+  }
+  if (filtros.fechaDesde) {
+    condiciones.push("pl.fecha_plan >= ?");
+    params.push(filtros.fechaDesde);
+  }
+  if (filtros.fechaHasta) {
+    condiciones.push("pl.fecha_plan <= ?");
+    params.push(filtros.fechaHasta);
+  }
+  if (filtros.empleadoNombre?.trim()) {
+    condiciones.push("tp.nombre LIKE ?");
+    params.push(`%${filtros.empleadoNombre.trim()}%`);
+  }
+
+  const whereBase = condiciones.join(" AND ");
+
+  const resumenRows = await query<RowDataPacket[]>(
+    `SELECT v.estado, COUNT(*) AS total
+     FROM tms_viaticos v
+     INNER JOIN tms_planes_viaje pl ON pl.id = v.plan_id
+     INNER JOIN tms_personal tp ON tp.id = v.personal_id
+     WHERE ${whereBase}
+     GROUP BY v.estado`,
+    params,
+  );
+  const resumen: ResumenControlViaticos = {
+    pendientes: 0,
+    autorizados: 0,
+    entregados: 0,
+    liquidados: 0,
+  };
+  for (const r of resumenRows) {
+    const total = Number(r.total ?? 0);
+    switch (String(r.estado)) {
+      case "PROGRAMADO":
+        resumen.pendientes = total;
+        break;
+      case "AUTORIZADO":
+        resumen.autorizados = total;
+        break;
+      case "ENTREGADO":
+        resumen.entregados = total;
+        break;
+      case "LIQUIDADO":
+        resumen.liquidados = total;
+        break;
+    }
+  }
+
+  const condicionesItems = [...condiciones];
+  const paramsItems = [...params];
+  if (filtros.estado) {
+    condicionesItems.push("v.estado = ?");
+    paramsItems.push(filtros.estado);
+  }
+  const rows = await query<RowDataPacket[]>(
+    `${DETALLE_SELECT} WHERE ${condicionesItems.join(" AND ")} ORDER BY pl.fecha_plan DESC, pl.codigo DESC, v.rol DESC, tp.nombre`,
+    paramsItems,
+  );
+  return { items: rows.map(mapDetalle), resumen };
+}
+
+export type ViaticoPropio = {
+  planId: number;
+  montoAsignado: number;
+  estado: EstadoViatico;
+};
+
+/**
+ * Viáticos propios de UN colaborador para un conjunto de planes/viajes —
+ * punto 8 (Portal): el piloto/auxiliar solo ve "Viático asignado" y
+ * "Estado", nunca quién autorizó/entregó ni referencias de pago. Consulta
+ * independiente y deliberadamente simple (no reutiliza el JOIN complejo de
+ * listarAsignacionesOperativasEmpleado en src/lib/flota/viajes-piloto.ts,
+ * que es de otro flujo y cambia con frecuencia) — filtra por el empleado
+ * dueño de la fila tms_personal, igual que el resto de la resolución
+ * piloto→empleado en este módulo (puestoDePersonal).
+ */
+export async function listarViaticosPropiosPorPlanes(
+  empresaId: number,
+  empleadoId: number,
+  planIds: number[],
+): Promise<Map<number, ViaticoPropio>> {
+  const mapa = new Map<number, ViaticoPropio>();
+  if (!planIds.length) return mapa;
+  const placeholders = planIds.map(() => "?").join(",");
+  const rows = await query<RowDataPacket[]>(
+    `SELECT v.plan_id, v.monto_asignado, v.estado
+     FROM tms_viaticos v
+     INNER JOIN tms_personal tp ON tp.id = v.personal_id AND tp.empresa_id = v.empresa_id
+     WHERE v.empresa_id = ? AND tp.id_empleado = ? AND v.plan_id IN (${placeholders})`,
+    [empresaId, empleadoId, ...planIds],
+  );
+  for (const r of rows) {
+    mapa.set(Number(r.plan_id), {
+      planId: Number(r.plan_id),
+      montoAsignado: Number(r.monto_asignado ?? 0),
+      estado: (String(r.estado ?? "PROGRAMADO") as EstadoViatico),
+    });
+  }
+  return mapa;
 }

@@ -33,6 +33,15 @@ export type AsignacionOperativaPortal = {
   viajeEstado: string | null;
   kmSalida: number | null;
   odometroFuncional: boolean;
+  /**
+   * VIAT-1 — viático propio del colaborador en este viaje (monto asignado +
+   * estado, nada de datos administrativos). Opcionales y NO llenados por la
+   * consulta de este archivo: se agregan en src/app/portal/viajes/page.tsx
+   * enriqueciendo el arreglo con listarViaticosPropiosPorPlanes()
+   * (src/lib/tms/viaticos.ts) para no tocar este JOIN compartido.
+   */
+  viaticoAsignado?: number | null;
+  viaticoEstado?: string | null;
 };
 
 /** Planes donde el colaborador participa como piloto o auxiliar. */
