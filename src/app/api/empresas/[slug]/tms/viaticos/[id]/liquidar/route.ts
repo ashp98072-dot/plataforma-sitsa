@@ -10,9 +10,14 @@ const schema = z.object({
 });
 
 /**
- * VIAT-1 — ENTREGADO -> LIQUIDADO. Permiso EXPLÍCITO `viaticos:editar`. En
- * esta fase "liquidar" significa solo cierre administrativo (observaciones
- * de texto libre) — no implica devolución de sobrante ni comprobantes.
+ * ENTREGADO -> LIQUIDADO. Permiso EXPLÍCITO `viaticos:editar` — desde
+ * VIAT-2 este permiso YA NO cubre autorizar ni pagar/entregar (esos
+ * tienen su propio permiso: `viaticos_autorizar` / `viaticos_pagar`);
+ * queda reservado para el cierre administrativo ("Administración
+ * autorizada"), el único paso que no se reasignó a un permiso propio en
+ * esta fase. "Liquidar" significa solo cierre administrativo
+ * (observaciones de texto libre) — no implica devolución de sobrante ni
+ * comprobantes.
  */
 export async function POST(req: Request, ctx: Ctx) {
   const { slug, id } = await ctx.params;

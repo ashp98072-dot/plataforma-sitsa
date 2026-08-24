@@ -283,6 +283,89 @@ export async function requireTenantViaticos(
   return { session, empresa };
 }
 
+/**
+ * VIAT-2 — "OPERACIONES AUTORIZA, FACTURADOR PAGA": autorizar
+ * (PROGRAMADO -> AUTORIZADO) es un permiso propio, separado de
+ * pagar/entregar y de ser supervisor del empleado. Mismo patrón que
+ * requireTenantViaticos, solo que el módulo checado es
+ * "viaticos_autorizar".
+ */
+export async function requireTenantViaticosAutorizar(
+  slug: string,
+  accion: AccionPermiso = "ver",
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length
+    ? empresa.modulos
+    : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("tms")) {
+    return {
+      error: NextResponse.json(
+        { error: "Esta empresa no tiene el módulo TMS." },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  if (!tienePermiso(perms, "viaticos_autorizar", accion)) {
+    return {
+      error: NextResponse.json(
+        { error: `Sin permiso para ${accion} la autorización de viáticos.` },
+        { status: 403 },
+      ),
+    };
+  }
+  return { session, empresa };
+}
+
+/**
+ * VIAT-2 — pagar/registrar entrega (AUTORIZADO -> ENTREGADO) es un permiso
+ * propio, separado de autorizar. Quien solo tiene `viaticos_pagar` puede
+ * ver la bandeja "Viáticos por pagar" (incluye dato bancario existente del
+ * empleado) y registrar la entrega — nunca autorizar ni modificar montos
+ * (eso lo bloquea actualizarMontoViatico independientemente del permiso,
+ * ver src/lib/tms/viaticos.ts).
+ */
+export async function requireTenantViaticosPagar(
+  slug: string,
+  accion: AccionPermiso = "ver",
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length
+    ? empresa.modulos
+    : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("tms")) {
+    return {
+      error: NextResponse.json(
+        { error: "Esta empresa no tiene el módulo TMS." },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  if (!tienePermiso(perms, "viaticos_pagar", accion)) {
+    return {
+      error: NextResponse.json(
+        { error: `Sin permiso para ${accion} el pago/entrega de viáticos.` },
+        { status: 403 },
+      ),
+    };
+  }
+  return { session, empresa };
+}
+
 /** Acepta cualquiera de varios submódulos de Predios. */
 export async function requireTenantFlotaAny(
   slug: string,

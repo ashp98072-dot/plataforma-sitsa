@@ -295,10 +295,11 @@ export type ResultadoTransicionViatico =
 
 /**
  * PROGRAMADO -> AUTORIZADO. Quién puede: exclusivamente usuarios con el
- * permiso explícito `viaticos:editar` (ver requireTenantViaticos en
- * src/lib/tenant.ts) — NUNCA por ser supervisor del empleado. El
- * permiso/rol lo verifica el endpoint antes de llamar aquí; esta función
- * solo aplica la transición atómica.
+ * permiso explícito `viaticos_autorizar:editar` (VIAT-2 — "OPERACIONES
+ * AUTORIZA"; ver requireTenantViaticosAutorizar en src/lib/tenant.ts) —
+ * NUNCA por ser supervisor del empleado, y separado del permiso de
+ * pagar/entregar (`viaticos_pagar`). El permiso lo verifica el endpoint
+ * antes de llamar aquí; esta función solo aplica la transición atómica.
  */
 export async function autorizarViatico(
   empresaId: number,
@@ -331,10 +332,16 @@ export type DatosEntregaViatico = {
 };
 
 /**
- * AUTORIZADO -> ENTREGADO. Requiere método de pago; referencia obligatoria
+ * AUTORIZADO -> ENTREGADO. Quién puede: exclusivamente usuarios con el
+ * permiso explícito `viaticos_pagar:editar` (VIAT-2 — "FACTURADOR PAGA";
+ * ver requireTenantViaticosPagar en src/lib/tenant.ts) — separado de
+ * `viaticos_autorizar`. Requiere método de pago; referencia obligatoria
  * para TRANSFERENCIA y CHEQUE (tienen un número de operación/cheque real
  * que registrar), opcional para EFECTIVO. No integra bancos ni APIs
- * externas — solo guarda el dato para trazabilidad.
+ * externas — solo guarda el dato para trazabilidad. DatosEntregaViatico no
+ * tiene campo de monto: quien entrega no puede tocar monto_sugerido ni
+ * monto_asignado por este camino, y actualizarMontoViatico ya lo bloquea
+ * de forma independiente fuera de PROGRAMADO.
  */
 export async function registrarEntregaViatico(
   empresaId: number,
@@ -388,11 +395,14 @@ export type DatosLiquidacionViatico = {
 };
 
 /**
- * ENTREGADO -> LIQUIDADO. En esta fase significa únicamente "cerrado
- * administrativamente" — NO implica devolución de sobrante ni presentación
- * de comprobantes (eso, si el negocio lo requiere, es una ampliación
- * posterior; el modelo queda preparado con observaciones_liquidacion como
- * texto libre para entonces).
+ * ENTREGADO -> LIQUIDADO. Quién puede: usuarios con el permiso explícito
+ * `viaticos:editar` (administración autorizada — VIAT-2 no le asignó un
+ * permiso propio como a autorizar/pagar, es el único paso que queda bajo
+ * el permiso general `viaticos`). En esta fase significa únicamente
+ * "cerrado administrativamente" — NO implica devolución de sobrante ni
+ * presentación de comprobantes (eso, si el negocio lo requiere, es una
+ * ampliación posterior; el modelo queda preparado con
+ * observaciones_liquidacion como texto libre para entonces).
  */
 export async function liquidarViatico(
   empresaId: number,
@@ -667,4 +677,113 @@ export async function listarViaticosPropiosPorPlanes(
     });
   }
   return mapa;
+}
+
+// ---------------------------------------------------------------------------
+// VIAT-2 — "Bandeja del Facturador": viáticos por pagar. Consulta propia,
+// separada de DETALLE_SELECT/ViaticoDetalle a propósito — es la ÚNICA
+// consulta de este módulo que expone dato bancario (banco/cuenta_bancaria/
+// tipo_cuenta, YA EXISTENTES en la ficha RRHH del empleado desde
+// migrate-2026-08-rrhh-ficha-monaco.sql — no se inventa ni se agrega
+// columna nueva). No se reutiliza para el panel de Programación ni para el
+// Control de Viáticos general de TMS, para no exponer cuentas bancarias de
+// compañeros a quien no tiene el permiso de pagar.
+// ---------------------------------------------------------------------------
+
+export type ViaticoPorPagar = {
+  id: number;
+  planId: number;
+  planCodigo: string;
+  fechaPlan: string;
+  personalCodigo: string | null;
+  personalNombre: string;
+  rol: string;
+  montoAsignado: number;
+  estado: EstadoViatico;
+  metodoPago: string | null;
+  referenciaPago: string | null;
+  banco: string | null;
+  tipoCuenta: string | null;
+  cuentaBancaria: string | null;
+};
+
+export type FiltrosViaticosPorPagar = {
+  planId?: number;
+  fechaDesde?: string;
+  fechaHasta?: string;
+  empleadoNombre?: string;
+  estado?: EstadoViatico;
+};
+
+function mapPorPagar(r: RowDataPacket): ViaticoPorPagar {
+  return {
+    id: Number(r.id),
+    planId: Number(r.plan_id),
+    planCodigo: String(r.plan_codigo ?? ""),
+    fechaPlan: r.fecha_plan != null ? String(r.fecha_plan).slice(0, 10) : "",
+    personalCodigo: r.personal_codigo != null ? String(r.personal_codigo) : null,
+    personalNombre: String(r.personal_nombre ?? ""),
+    rol: String(r.rol),
+    montoAsignado: Number(r.monto_asignado ?? 0),
+    estado: String(r.estado ?? "PROGRAMADO") as EstadoViatico,
+    metodoPago: r.metodo_pago != null ? String(r.metodo_pago) : null,
+    referenciaPago: r.referencia_pago != null ? String(r.referencia_pago) : null,
+    banco: r.banco != null ? String(r.banco) : null,
+    tipoCuenta: r.tipo_cuenta != null ? String(r.tipo_cuenta) : null,
+    cuentaBancaria: r.cuenta_bancaria != null ? String(r.cuenta_bancaria) : null,
+  };
+}
+
+/**
+ * Listado para la bandeja "Viáticos por pagar" (VIAT-2, punto 3). Por
+ * convención el endpoint aplica `estado: "AUTORIZADO"` por defecto cuando
+ * el llamador no pide otro estado explícitamente — esta función en sí es
+ * un primitivo flexible (sin default propio) para poder filtrar por
+ * cualquier estado desde la UI si el facturador necesita revisar
+ * entregados/liquidados.
+ */
+export async function listarViaticosPorPagar(
+  empresaId: number,
+  filtros: FiltrosViaticosPorPagar = {},
+): Promise<ViaticoPorPagar[]> {
+  const condiciones: string[] = ["v.empresa_id = ?"];
+  const params: SqlParams = [empresaId];
+
+  if (filtros.planId != null) {
+    condiciones.push("v.plan_id = ?");
+    params.push(filtros.planId);
+  }
+  if (filtros.fechaDesde) {
+    condiciones.push("pl.fecha_plan >= ?");
+    params.push(filtros.fechaDesde);
+  }
+  if (filtros.fechaHasta) {
+    condiciones.push("pl.fecha_plan <= ?");
+    params.push(filtros.fechaHasta);
+  }
+  if (filtros.empleadoNombre?.trim()) {
+    condiciones.push("tp.nombre LIKE ?");
+    params.push(`%${filtros.empleadoNombre.trim()}%`);
+  }
+  if (filtros.estado) {
+    condiciones.push("v.estado = ?");
+    params.push(filtros.estado);
+  }
+
+  const rows = await query<RowDataPacket[]>(
+    `SELECT v.id, v.plan_id, v.monto_asignado, v.estado, v.metodo_pago, v.referencia_pago,
+            v.rol,
+            pl.codigo AS plan_codigo, pl.fecha_plan,
+            COALESCE(e.codigo, tp.codigo) AS personal_codigo,
+            tp.nombre AS personal_nombre,
+            e.banco, e.cuenta_bancaria, e.tipo_cuenta
+     FROM tms_viaticos v
+     INNER JOIN tms_planes_viaje pl ON pl.id = v.plan_id
+     INNER JOIN tms_personal tp ON tp.id = v.personal_id
+     LEFT JOIN empleados e ON e.id = tp.id_empleado AND e.empresa_id = tp.empresa_id
+     WHERE ${condiciones.join(" AND ")}
+     ORDER BY pl.fecha_plan, pl.codigo, v.rol DESC, tp.nombre`,
+    params,
+  );
+  return rows.map(mapPorPagar);
 }
