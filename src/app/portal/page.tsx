@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getColaboradorSession } from "@/lib/rrhh/colaborador-session";
-import { obtenerPilotoDeEmpleado } from "@/lib/flota/pilotos";
+import { obtenerPersonalOperativoDeEmpleado } from "@/lib/flota/pilotos";
 import LogoutButton from "./logout-button";
 
 const PROXIMAMENTE: { titulo: string; detalle: string }[] = [];
@@ -49,16 +49,19 @@ export default async function PortalHomePage() {
     redirect("/portal/login");
   }
 
-  const esPiloto = await obtenerPilotoDeEmpleado(
+  const personalOperativo = await obtenerPersonalOperativoDeEmpleado(
     session!.empresaId,
     session!.empleadoId,
   );
-  const disponibles = esPiloto
+  const disponibles = personalOperativo
     ? [
         ...DISPONIBLES,
         {
-          titulo: "Marcar viaje",
-          detalle: "Registra salida y llegada de tu camión con kilometraje.",
+          titulo: "Mis viajes",
+          detalle:
+            personalOperativo.tipo === "Piloto"
+              ? "Consulta asignaciones, inicia/cierra viajes y adjunta evidencias."
+              : "Consulta tus viajes asignados y adjunta evidencias como auxiliar.",
           href: "/portal/viajes",
         },
       ]

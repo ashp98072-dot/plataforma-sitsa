@@ -2,9 +2,12 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getColaboradorSession } from "@/lib/rrhh/colaborador-session";
 import { obtenerEmpleado } from "@/lib/rrhh/empleados";
-import { obtenerPilotoDeEmpleado } from "@/lib/flota/pilotos";
-import { obtenerViajeAbiertoDeEmpleado } from "@/lib/flota/viajes-piloto";
-import { buscarPlanesParaSalida } from "@/lib/tms/planes-salida";
+import { obtenerPersonalOperativoDeEmpleado } from "@/lib/flota/pilotos";
+import {
+  listarAsignacionesOperativasEmpleado,
+  obtenerViajeAbiertoDeEmpleado,
+} from "@/lib/flota/viajes-piloto";
+import { listarParadasDelPlan } from "@/lib/tms/paradas";
 import ViajeForm from "./viaje-form";
 
 export default async function ViajesPage() {
@@ -13,12 +16,12 @@ export default async function ViajesPage() {
     redirect("/portal/login");
   }
 
-  const [piloto, empleado] = await Promise.all([
-    obtenerPilotoDeEmpleado(session!.empresaId, session!.empleadoId),
+  const [personal, empleado] = await Promise.all([
+    obtenerPersonalOperativoDeEmpleado(session!.empresaId, session!.empleadoId),
     obtenerEmpleado(session!.empresaId, session!.empleadoId),
   ]);
 
-  if (!piloto || !empleado) {
+  if (!personal || !empleado) {
     return (
       <main className="min-h-screen p-4 sm:p-8">
         <div className="mx-auto max-w-3xl">
@@ -26,7 +29,7 @@ export default async function ViajesPage() {
             ← Volver
           </Link>
           <p className="mt-8 text-sm text-[var(--muted)]">
-            Esta pantalla es solo para pilotos registrados en TMS. Si crees
+            Esta pantalla es para pilotos y auxiliares registrados en TMS. Si crees
             que esto es un error, contacta a Operaciones.
           </p>
         </div>
@@ -34,19 +37,18 @@ export default async function ViajesPage() {
     );
   }
 
-  const viajeAbierto = await obtenerViajeAbiertoDeEmpleado(
-    session!.empresaId,
-    session!.empleadoId,
-  );
-
-  // Aviso informativo: ¿Operaciones ya te asignó una ruta hoy? La vinculación
-  // real (Fase 4) ocurre en el servidor al registrar la salida; esto es solo
-  // para que el piloto lo vea antes de marcar.
-  const planesHoy = viajeAbierto
-    ? []
-    : await buscarPlanesParaSalida(session!.empresaId, {
-        pilotoNombre: empleado.nombre,
-      });
+  const [viajeAbiertoPiloto, asignaciones] = await Promise.all([
+    personal.tipo === "Piloto"
+      ? obtenerViajeAbiertoDeEmpleado(session!.empresaId, session!.empleadoId)
+      : Promise.resolve(null),
+    listarAsignacionesOperativasEmpleado(session!.empresaId, session!.empleadoId),
+  ]);
+  const asignacionEnCurso = asignaciones.find(
+    (a) => a.viajeId && a.viajeEstado === "abierto",
+  ) ?? null;
+  const paradas = asignacionEnCurso
+    ? await listarParadasDelPlan(asignacionEnCurso.planId)
+    : [];
 
   return (
     <main className="min-h-screen p-4 sm:p-8">
@@ -57,16 +59,25 @@ export default async function ViajesPage() {
 
         <header className="mt-4">
           <p className="text-sm uppercase tracking-[0.2em] text-[var(--muted)]">
-            Portal del piloto
+            Portal operativo · {personal.tipo}
           </p>
-          <h1 className="mt-1 text-2xl font-semibold">Marcar viaje</h1>
+          <h1 className="mt-1 text-2xl font-semibold">Mis viajes</h1>
           <p className="mt-2 text-sm text-[var(--muted)]">
-            Registra la salida y llegada de tu camión con el kilometraje. Si
-            Operaciones ya te asignó una ruta hoy, se vincula automáticamente.
+            Consulta lo que te asignó Operaciones y adjunta evidencias del viaje.
+            {personal.tipo === "Piloto"
+              ? " Como piloto también registras salida, kilometraje y llegada."
+              : " Como auxiliar puedes aportar evidencias en el mismo viaje."}
           </p>
         </header>
 
-        <ViajeForm viajeAbierto={viajeAbierto} planesHoy={planesHoy} />
+        <ViajeForm
+          tipo={personal.tipo}
+          viajeAbierto={viajeAbiertoPiloto}
+          asignaciones={asignaciones}
+          asignacionEnCurso={asignacionEnCurso}
+          viajeEnCursoId={asignacionEnCurso?.viajeId ?? viajeAbiertoPiloto?.id ?? null}
+          paradas={paradas}
+        />
       </div>
     </main>
   );

@@ -2,212 +2,144 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import type { ViajeAbiertoPiloto } from "@/lib/flota/viajes-piloto";
-import type { PlanSalidaMatch } from "@/lib/tms/planes-salida";
+import type { AsignacionOperativaPortal, ViajeAbiertoPiloto } from "@/lib/flota/viajes-piloto";
+import type { PlanParada } from "@/lib/tms/paradas";
 
-export default function ViajeForm({
-  viajeAbierto,
-  planesHoy,
-}: {
+export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacionEnCurso, viajeEnCursoId, paradas }: {
+  tipo: "Piloto" | "Auxiliar";
   viajeAbierto: ViajeAbiertoPiloto | null;
-  planesHoy: PlanSalidaMatch[];
+  asignaciones: AsignacionOperativaPortal[];
+  asignacionEnCurso: AsignacionOperativaPortal | null;
+  viajeEnCursoId: number | null;
+  paradas: PlanParada[];
 }) {
   const router = useRouter();
   const [error, setError] = useState("");
   const [mensaje, setMensaje] = useState("");
   const [loading, setLoading] = useState(false);
-
-  // Formulario de salida
-  const [placa, setPlaca] = useState("");
+  const programados = asignaciones.filter((a) => a.estado === "Programado" && !a.viajeId);
+  const [planId, setPlanId] = useState(programados[0]?.planId ?? 0);
+  const planSeleccionado = programados.find((a) => a.planId === planId) ?? null;
+  const [placa, setPlaca] = useState(planSeleccionado?.placa ?? "");
   const [kmSalida, setKmSalida] = useState("");
-  const [destino, setDestino] = useState("");
-
-  // Formulario de llegada
+  const [destino, setDestino] = useState(planSeleccionado?.destino ?? "");
   const [kmLlegada, setKmLlegada] = useState("");
   const [observaciones, setObservaciones] = useState("");
+  const [tipoEvidencia, setTipoEvidencia] = useState(paradas.length ? "producto" : "salida");
+  const [paradaId, setParadaId] = useState(paradas[0]?.id ?? 0);
+  const [archivos, setArchivos] = useState<FileList | null>(null);
+
+  function elegirPlan(id: number) {
+    setPlanId(id);
+    const plan = programados.find((a) => a.planId === id);
+    setPlaca(plan?.placa ?? "");
+    setDestino(plan?.destino ?? "");
+  }
 
   async function enviar(payload: Record<string, unknown>) {
-    setError("");
-    setMensaje("");
-    setLoading(true);
+    setError(""); setMensaje(""); setLoading(true);
     try {
       const res = await fetch("/api/portal/viajes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "No se pudo completar la acción.");
       setMensaje(data.mensaje ?? "Listo.");
-      setPlaca("");
-      setKmSalida("");
-      setDestino("");
-      setKmLlegada("");
-      setObservaciones("");
+      setKmSalida(""); setKmLlegada(""); setObservaciones("");
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo completar la acción.");
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }
 
   async function onSalida(e: FormEvent) {
     e.preventDefault();
     const km = Number(kmSalida);
     if (!placa.trim() || !Number.isFinite(km) || km < 0) {
-      setError("Indica placa y kilometraje de salida válidos.");
-      return;
+      setError("Indica la unidad y un kilometraje de salida válido."); return;
     }
-    await enviar({
-      accion: "salida",
-      placa: placa.trim(),
-      kmSalida: km,
-      destino: destino.trim() || undefined,
-    });
+    await enviar({ accion: "salida", placa: placa.trim(), kmSalida: km, destino: destino.trim() || undefined, planId: planId || undefined });
   }
 
   async function onLlegada(e: FormEvent) {
     e.preventDefault();
     if (!viajeAbierto) return;
     const km = Number(kmLlegada);
-    if (!Number.isFinite(km) || km < 0) {
-      setError("Indica el kilometraje de llegada.");
-      return;
+    if (!Number.isFinite(km) || km < viajeAbierto.kmSalida) {
+      setError("El kilometraje de llegada no puede ser menor al de salida."); return;
     }
-    await enviar({
-      accion: "llegada",
-      viajeId: viajeAbierto.id,
-      kmLlegada: km,
-      observaciones: observaciones.trim() || undefined,
-    });
+    await enviar({ accion: "llegada", viajeId: viajeAbierto.id, kmLlegada: km, observaciones: observaciones.trim() || undefined });
   }
 
-  return (
-    <div className="mt-6 space-y-4">
-      {error ? (
-        <p className="rounded-lg border border-red-900/40 bg-red-950/20 p-3 text-sm text-red-300" role="alert">
-          {error}
-        </p>
-      ) : null}
-      {mensaje ? (
-        <p className="rounded-lg border border-emerald-900/40 bg-emerald-950/10 p-3 text-sm text-[#8fd4a0]" role="status">
-          {mensaje}
-        </p>
-      ) : null}
+  async function obtenerGps(): Promise<{ latitud?: number; longitud?: number }> {
+    if (!("geolocation" in navigator)) return {};
+    return new Promise((resolve) => navigator.geolocation.getCurrentPosition(
+      (p) => resolve({ latitud: p.coords.latitude, longitud: p.coords.longitude }),
+      () => resolve({}), { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 },
+    ));
+  }
 
-      {viajeAbierto ? (
-        <form
-          onSubmit={onLlegada}
-          className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6"
-        >
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">
-            Viaje en curso
-          </h2>
-          <p className="mt-1 text-sm text-[var(--muted)]">
-            Placa <span className="font-medium text-[var(--foreground)]">{viajeAbierto.placa}</span> ·
-            {" "}Km salida {viajeAbierto.kmSalida.toLocaleString("es-GT")} ·{" "}
-            {viajeAbierto.horaSalida}
-            {viajeAbierto.destino ? ` · Destino: ${viajeAbierto.destino}` : ""}
-            {viajeAbierto.planId ? " · Ruta asignada por Operaciones vinculada" : ""}
-          </p>
+  async function subirEvidencias(e: FormEvent) {
+    e.preventDefault();
+    if (!viajeEnCursoId || !archivos?.length) { setError("Selecciona al menos una evidencia."); return; }
+    if (tipoEvidencia === "producto" && !paradaId) { setError("Selecciona la parada correspondiente."); return; }
+    setError(""); setMensaje(""); setLoading(true);
+    try {
+      const gps = await obtenerGps();
+      const form = new FormData();
+      form.set("tipo", tipoEvidencia);
+      if (paradaId) form.set("paradaId", String(paradaId));
+      if (gps.latitud != null) form.set("latitud", String(gps.latitud));
+      if (gps.longitud != null) form.set("longitud", String(gps.longitud));
+      for (const file of Array.from(archivos)) form.append("files", file);
+      const res = await fetch(`/api/portal/viajes/${viajeEnCursoId}/evidencias`, { method: "POST", body: form });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "No se pudieron guardar las evidencias.");
+      setMensaje(data.mensaje); setArchivos(null); router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudieron guardar las evidencias.");
+    } finally { setLoading(false); }
+  }
 
-          <label className="mt-4 block text-sm text-[var(--muted)]">
-            Km de llegada
-            <input
-              type="number"
-              inputMode="numeric"
-              min={viajeAbierto.kmSalida}
-              className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2"
-              value={kmLlegada}
-              onChange={(e) => setKmLlegada(e.target.value)}
-              required
-            />
-          </label>
+  return <div className="mt-6 space-y-5">
+    {error ? <p className="rounded-lg border border-red-900/40 bg-red-950/20 p-3 text-sm text-red-300" role="alert">{error}</p> : null}
+    {mensaje ? <p className="rounded-lg border border-emerald-900/40 bg-emerald-950/10 p-3 text-sm text-[#8fd4a0]" role="status">{mensaje}</p> : null}
 
-          <label className="mt-3 block text-sm text-[var(--muted)]">
-            Observaciones (opcional)
-            <textarea
-              className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2"
-              rows={2}
-              maxLength={500}
-              value={observaciones}
-              onChange={(e) => setObservaciones(e.target.value)}
-            />
-          </label>
+    <section className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
+      <h2 className="font-semibold">Asignaciones</h2>
+      {!asignaciones.length ? <p className="mt-2 text-sm text-[var(--muted)]">No tienes viajes recientes o próximos asignados.</p> : <div className="mt-3 space-y-3">
+        {asignaciones.map((a) => <article key={a.planId} className="rounded-xl border border-[var(--border)] p-4 text-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2"><strong>{a.codigo} · {a.fecha}{a.horaSalida ? ` ${a.horaSalida}` : ""}</strong><span className="rounded-full bg-[var(--input)] px-2 py-1 text-xs">{a.viajeEstado === "abierto" ? "EN VIAJE" : a.estado}</span></div>
+          <p className="mt-2 text-[var(--muted)]">{a.cliente ?? "Sin cliente"} · {a.origen ?? "Origen pendiente"} → {a.destino ?? "Destino pendiente"}</p>
+          <p className="mt-1 text-[var(--muted)]">Unidad: {a.placa ?? "pendiente"} · Piloto: {a.piloto ?? "pendiente"}</p>
+          {a.auxiliares.length ? <p className="mt-1 text-[var(--muted)]">Auxiliares: {a.auxiliares.join(", ")}</p> : null}
+        </article>)}
+      </div>}
+    </section>
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="mt-5 w-full rounded-lg bg-[var(--accent)] px-4 py-2.5 font-medium text-white hover:brightness-110 disabled:opacity-50 sm:w-auto"
-          >
-            {loading ? "Registrando…" : "Registrar llegada"}
-          </button>
-        </form>
-      ) : (
-        <form
-          onSubmit={onSalida}
-          className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6"
-        >
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">
-            Registrar salida
-          </h2>
+    {viajeEnCursoId ? <form onSubmit={subirEvidencias} className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
+      <h2 className="font-semibold">Evidencias del viaje {asignacionEnCurso?.codigo ?? `#${viajeEnCursoId}`}</h2>
+      <p className="mt-1 text-sm text-[var(--muted)]">Piloto y auxiliares asignados pueden aportar fotos al mismo expediente.</p>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <label className="text-sm text-[var(--muted)]">Tipo<select className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={tipoEvidencia} onChange={(e) => setTipoEvidencia(e.target.value)}>{paradas.length ? <option value="producto">Producto / parada</option> : null}<option value="salida">Salida general</option><option value="tablero_salida">Tablero de salida</option><option value="llegada">Llegada general</option><option value="tablero_llegada">Tablero de llegada</option></select></label>
+        {tipoEvidencia === "producto" ? <label className="text-sm text-[var(--muted)]">Parada<select className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={paradaId} onChange={(e) => setParadaId(Number(e.target.value))} required><option value={0}>Seleccionar…</option>{paradas.map((p) => <option key={p.id} value={p.id}>{p.orden}. {p.lugar_nombre}</option>)}</select></label> : null}
+      </div>
+      <input className="mt-3 block w-full text-sm" type="file" accept="image/*" capture="environment" multiple onChange={(e) => setArchivos(e.target.files)} required />
+      <button className="mt-4 rounded-lg bg-[var(--accent)] px-4 py-2.5 font-medium text-white disabled:opacity-50" disabled={loading}>Adjuntar evidencias</button>
+    </form> : null}
 
-          {planesHoy.length ? (
-            <p className="mt-1 text-xs text-[#8fd4a0]">
-              Operaciones te asignó {planesHoy.length === 1 ? "una ruta" : `${planesHoy.length} rutas`} hoy
-              {planesHoy.length === 1
-                ? ` (${planesHoy[0].codigo}${planesHoy[0].cliente ? ` · ${planesHoy[0].cliente}` : ""})`
-                : ""}
-              . Se vincula sola al marcar la salida.
-            </p>
-          ) : null}
-
-          <label className="mt-4 block text-sm text-[var(--muted)]">
-            Placa del camión
-            <input
-              type="text"
-              className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 uppercase"
-              value={placa}
-              onChange={(e) => setPlaca(e.target.value)}
-              placeholder="Ej. C-034BXR"
-              required
-            />
-          </label>
-
-          <label className="mt-3 block text-sm text-[var(--muted)]">
-            Km de salida
-            <input
-              type="number"
-              inputMode="numeric"
-              min={0}
-              className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2"
-              value={kmSalida}
-              onChange={(e) => setKmSalida(e.target.value)}
-              required
-            />
-          </label>
-
-          <label className="mt-3 block text-sm text-[var(--muted)]">
-            Destino (opcional)
-            <input
-              type="text"
-              className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2"
-              value={destino}
-              onChange={(e) => setDestino(e.target.value)}
-              maxLength={200}
-            />
-          </label>
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="mt-5 w-full rounded-lg bg-[var(--accent)] px-4 py-2.5 font-medium text-white hover:brightness-110 disabled:opacity-50 sm:w-auto"
-          >
-            {loading ? "Registrando…" : "Registrar salida"}
-          </button>
-        </form>
-      )}
-    </div>
-  );
+    {tipo === "Piloto" && viajeAbierto ? <form onSubmit={onLlegada} className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
+      <h2 className="font-semibold">Cerrar viaje · {viajeAbierto.placa}</h2><p className="mt-1 text-sm text-[var(--muted)]">Salida: {viajeAbierto.kmSalida.toLocaleString("es-GT")} km · {viajeAbierto.horaSalida}</p>
+      <label className="mt-4 block text-sm text-[var(--muted)]">Km de llegada<input type="number" min={viajeAbierto.kmSalida} className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={kmLlegada} onChange={(e) => setKmLlegada(e.target.value)} required /></label>
+      <label className="mt-3 block text-sm text-[var(--muted)]">Observaciones<textarea className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" rows={2} maxLength={500} value={observaciones} onChange={(e) => setObservaciones(e.target.value)} /></label>
+      <button className="mt-4 rounded-lg bg-[var(--accent)] px-4 py-2.5 font-medium text-white disabled:opacity-50" disabled={loading}>Registrar llegada</button>
+    </form> : tipo === "Piloto" ? <form onSubmit={onSalida} className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
+      <h2 className="font-semibold">Iniciar viaje</h2>
+      {programados.length ? <label className="mt-4 block text-sm text-[var(--muted)]">Viaje asignado<select className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={planId} onChange={(e) => elegirPlan(Number(e.target.value))}>{programados.map((a) => <option key={a.planId} value={a.planId}>{a.codigo} · {a.cliente ?? "Sin cliente"} · {a.placa ?? "Sin unidad"}</option>)}</select></label> : <p className="mt-2 text-sm text-amber-300">No hay programación pendiente; registra una salida manual solo si Operaciones lo indicó.</p>}
+      <label className="mt-3 block text-sm text-[var(--muted)]">Placa<input className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 uppercase" value={placa} onChange={(e) => setPlaca(e.target.value)} required readOnly={Boolean(planSeleccionado?.placa)} /></label>
+      <label className="mt-3 block text-sm text-[var(--muted)]">Km de salida<input type="number" min={0} className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={kmSalida} onChange={(e) => setKmSalida(e.target.value)} required /></label>
+      <label className="mt-3 block text-sm text-[var(--muted)]">Destino<input className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={destino} onChange={(e) => setDestino(e.target.value)} maxLength={200} /></label>
+      <button className="mt-4 rounded-lg bg-[var(--accent)] px-4 py-2.5 font-medium text-white disabled:opacity-50" disabled={loading}>Iniciar viaje</button>
+    </form> : null}
+  </div>;
 }
