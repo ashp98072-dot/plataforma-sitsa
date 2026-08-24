@@ -6,6 +6,7 @@ import { PlacaSelect, type VehiculoOpt } from "@/components/tms/placa-select";
 import { PilotoSelect } from "@/components/tms/piloto-select";
 import ViaticosPanel from "@/components/tms/viaticos-panel";
 import type { Plan } from "./programacion-client";
+import NotificarPersonal from "./notificar-personal";
 
 /**
  * Formulario propio de Programación para crear/editar un viaje — reutiliza
@@ -871,6 +872,8 @@ export default function PlanForm({
           + Agregar parada
         </button>
       </div>
+
+      {esEdicion ? <NotificarPersonal plan={plan!} /> : null}
 
       {esEdicion ? (
         <div className="md:col-span-3">

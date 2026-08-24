@@ -42,7 +42,12 @@ type ParadaPlan = {
 };
 
 /** Auxiliar de un plan con su id real de tms_personal (Fase P4.3). */
-type AuxiliarPlan = { personalId: number; nombre: string };
+type AuxiliarPlan = {
+  personalId: number;
+  empleadoId: number | null;
+  nombre: string;
+  telefono: string | null;
+};
 
 export type Plan = {
   id: number;
@@ -62,6 +67,8 @@ export type Plan = {
   auxiliares: string[];
   /** Aditivo (Fase P4.3): id real del piloto, cuando el plan lo tiene. */
   pilotoId: number | null;
+  pilotoEmpleadoId: number | null;
+  pilotoTelefono: string | null;
   /** Aditivo (Fase P4.3): auxiliares con su personal_id real. */
   auxiliaresDetalle: AuxiliarPlan[];
   paradas: ParadaPlan[];

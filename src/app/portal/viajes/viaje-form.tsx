@@ -18,20 +18,25 @@ function regresoEnEspanol(valor: string | null) {
   return Number.isNaN(fecha.getTime()) ? valor : new Intl.DateTimeFormat("es-GT", { dateStyle: "long", timeStyle: "short" }).format(fecha);
 }
 
-export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacionEnCurso, viajeEnCursoId, paradas }: {
+export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacionEnCurso, viajeEnCursoId, paradas, viajeDestacadoId }: {
   tipo: "Piloto" | "Auxiliar";
   viajeAbierto: ViajeAbiertoPiloto | null;
   asignaciones: AsignacionOperativaPortal[];
   asignacionEnCurso: AsignacionOperativaPortal | null;
   viajeEnCursoId: number | null;
   paradas: PlanParada[];
+  viajeDestacadoId: number | null;
 }) {
   const router = useRouter();
   const [error, setError] = useState("");
   const [mensaje, setMensaje] = useState("");
   const [loading, setLoading] = useState(false);
   const programados = asignaciones.filter((a) => a.estado === "Programado" && !a.viajeId);
-  const [planId, setPlanId] = useState(programados[0]?.planId ?? 0);
+  const viajeDestacadoAsignado = Boolean(
+    viajeDestacadoId && asignaciones.some((a) => a.planId === viajeDestacadoId),
+  );
+  const planInicial = programados.find((a) => a.planId === viajeDestacadoId) ?? programados[0];
+  const [planId, setPlanId] = useState(planInicial?.planId ?? 0);
   const planSeleccionado = programados.find((a) => a.planId === planId) ?? null;
   const [placa, setPlaca] = useState(planSeleccionado?.placa ?? "");
   const [kmSalida, setKmSalida] = useState("");
@@ -61,6 +66,11 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
               : null
     : null;
   const rutaCompleta = Boolean(viajeAbierto?.evidenciaTableroSalida && viajeAbierto.kmCarga != null && viajeAbierto.evidenciaCarga && !siguienteParada && viajeAbierto.evidenciaTableroLlegada);
+
+  useEffect(() => {
+    if (!viajeDestacadoId || !viajeDestacadoAsignado) return;
+    document.getElementById(`viaje-${viajeDestacadoId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [viajeDestacadoAsignado, viajeDestacadoId]);
 
   useEffect(() => {
     const intervalo = window.setInterval(() => router.refresh(), 5000);
@@ -206,7 +216,7 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
     <section className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
       <h2 className="font-semibold">Asignaciones</h2>
       {!asignaciones.length ? <p className="mt-2 text-sm text-[var(--muted)]">No tienes viajes recientes o próximos asignados.</p> : <div className="mt-3 space-y-3">
-        {asignaciones.map((a) => <article key={a.planId} className="rounded-xl border border-[var(--border)] p-4 text-sm">
+        {asignaciones.map((a) => <article id={`viaje-${a.planId}`} key={a.planId} className={`rounded-xl border p-4 text-sm ${a.planId === viajeDestacadoId ? "border-sky-400 bg-sky-950/20 ring-1 ring-sky-500/40" : "border-[var(--border)]"}`}>
           <div className="flex flex-wrap items-center justify-between gap-2"><strong>{a.codigo}</strong><span className="rounded-full bg-[var(--input)] px-2 py-1 text-xs">{a.viajeEstado === "abierto" ? "EN VIAJE" : a.estado}</span></div>
           <p className="mt-2 text-[var(--muted)]"><span className="text-[var(--foreground)]">Fecha de salida:</span> {fechaEnEspanol(a.fecha)}{a.horaSalida ? ` a las ${a.horaSalida.slice(0, 5)}` : ""}</p>
           <p className="mt-1 text-[var(--muted)]"><span className="text-[var(--foreground)]">Cliente:</span> {a.cliente ?? "Sin cliente"}</p>

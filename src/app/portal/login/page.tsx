@@ -22,7 +22,14 @@ export default function PortalLoginPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Error");
-      router.push(data.redirect ?? "/portal");
+      const solicitado = new URLSearchParams(window.location.search).get("next");
+      const retornoSeguro = solicitado?.startsWith("/portal/") && !solicitado.startsWith("//")
+        ? solicitado
+        : null;
+      if (data.redirect === "/portal/cambiar-password" && retornoSeguro) {
+        window.sessionStorage.setItem("portal_next", retornoSeguro);
+      }
+      router.push(data.redirect === "/portal/cambiar-password" ? data.redirect : retornoSeguro ?? data.redirect ?? "/portal");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error");
     } finally {

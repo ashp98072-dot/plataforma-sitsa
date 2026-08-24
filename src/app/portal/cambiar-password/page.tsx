@@ -27,7 +27,12 @@ export default function CambiarPasswordPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Error");
-      router.push(data.redirect ?? "/portal");
+      const solicitado = window.sessionStorage.getItem("portal_next");
+      window.sessionStorage.removeItem("portal_next");
+      const retornoSeguro = solicitado?.startsWith("/portal/") && !solicitado.startsWith("//")
+        ? solicitado
+        : null;
+      router.push(retornoSeguro ?? data.redirect ?? "/portal");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error");
     } finally {

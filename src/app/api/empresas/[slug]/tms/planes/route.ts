@@ -74,7 +74,12 @@ async function runExecute(
 }
 
 /** Auxiliar de un plan con su id real de tms_personal (Fase P4.3). */
-type AuxiliarPlan = { personalId: number; nombre: string };
+type AuxiliarPlan = {
+  personalId: number;
+  empleadoId: number | null;
+  nombre: string;
+  telefono: string | null;
+};
 
 async function auxiliaresDePlanes(
   planIds: number[],
@@ -85,9 +90,11 @@ async function auxiliaresDePlanes(
   try {
     const placeholders = ids.map(() => "?").join(",");
     const rows = await query<RowDataPacket[]>(
-      `SELECT a.plan_id, a.personal_id, per.nombre
+      `SELECT a.plan_id, a.personal_id, per.id_empleado, per.nombre, emp.telefono
        FROM tms_plan_auxiliares a
        INNER JOIN tms_personal per ON per.id = a.personal_id
+       LEFT JOIN empleados emp
+         ON emp.id = per.id_empleado AND emp.empresa_id = per.empresa_id
        WHERE a.plan_id IN (${placeholders})
        ORDER BY a.plan_id, a.orden, a.id`,
       ids,
@@ -95,7 +102,12 @@ async function auxiliaresDePlanes(
     for (const r of rows) {
       const pid = Number(r.plan_id);
       const list = map.get(pid) ?? [];
-      list.push({ personalId: Number(r.personal_id), nombre: String(r.nombre) });
+      list.push({
+        personalId: Number(r.personal_id),
+        empleadoId: r.id_empleado != null ? Number(r.id_empleado) : null,
+        nombre: String(r.nombre),
+        telefono: r.telefono ? String(r.telefono) : null,
+      });
       map.set(pid, list);
     }
   } catch {
@@ -134,13 +146,20 @@ export async function GET(req: Request, ctx: Ctx) {
               DATE_FORMAT(p.regreso_estimado, '%Y-%m-%dT%H:%i') AS regreso_estimado,
               p.tarifa_comercial, p.referencia_cliente,
               c.nombre AS cliente, u.placa, pil.nombre AS piloto, aux.nombre AS auxiliar,
-              p.piloto_id, p.auxiliar_id,
+              p.piloto_id, p.auxiliar_id, pil.id_empleado AS piloto_empleado_id,
+              emp_pil.telefono AS piloto_telefono,
+              aux.id_empleado AS auxiliar_empleado_id,
+              emp_aux.telefono AS auxiliar_telefono,
               COALESCE(ev.cnt, 0) AS evidencias
        FROM tms_planes_viaje p
        LEFT JOIN tms_clientes c ON c.id = p.cliente_id
        LEFT JOIN tms_unidades u ON u.id = p.unidad_id
        LEFT JOIN tms_personal pil ON pil.id = p.piloto_id
+       LEFT JOIN empleados emp_pil
+         ON emp_pil.id = pil.id_empleado AND emp_pil.empresa_id = p.empresa_id
        LEFT JOIN tms_personal aux ON aux.id = p.auxiliar_id
+       LEFT JOIN empleados emp_aux
+         ON emp_aux.id = aux.id_empleado AND emp_aux.empresa_id = p.empresa_id
        LEFT JOIN (
          SELECT plan_id, COUNT(*) AS cnt
          FROM tms_evidencias
@@ -164,7 +183,15 @@ export async function GET(req: Request, ctx: Ctx) {
     const id = Number(r.id);
     // piloto_id/auxiliar_id se separan del resto para no duplicarlos en el
     // payload junto a sus versiones camelCase (pilotoId/auxiliaresDetalle).
-    const { piloto_id, auxiliar_id, ...resto } = r;
+    const {
+      piloto_id,
+      auxiliar_id,
+      piloto_empleado_id,
+      piloto_telefono,
+      auxiliar_empleado_id,
+      auxiliar_telefono,
+      ...resto
+    } = r;
     const pilotoId = piloto_id != null ? Number(piloto_id) : null;
 
     const extras = auxMap.get(id) ?? [];
@@ -178,7 +205,12 @@ export async function GET(req: Request, ctx: Ctx) {
       extras.length > 0
         ? extras
         : auxiliar_id != null && r.auxiliar
-          ? [{ personalId: Number(auxiliar_id), nombre: String(r.auxiliar) }]
+          ? [{
+              personalId: Number(auxiliar_id),
+              empleadoId: auxiliar_empleado_id != null ? Number(auxiliar_empleado_id) : null,
+              nombre: String(r.auxiliar),
+              telefono: auxiliar_telefono ? String(auxiliar_telefono) : null,
+            }]
           : [];
     const auxList = auxiliaresDetalle.map((a) => a.nombre);
     const paradas = paradasMap.get(id) ?? [];
@@ -186,6 +218,8 @@ export async function GET(req: Request, ctx: Ctx) {
       ...resto,
       // Aditivo (Fase P4.3): id real del piloto, cuando existe.
       pilotoId,
+      pilotoEmpleadoId: piloto_empleado_id != null ? Number(piloto_empleado_id) : null,
+      pilotoTelefono: piloto_telefono ? String(piloto_telefono) : null,
       auxiliares: auxList,
       auxiliar: auxList.join(", ") || null,
       // Aditivo (Fase P4.3): auxiliares con su personal_id real. No

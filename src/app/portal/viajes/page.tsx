@@ -10,10 +10,19 @@ import {
 import { listarParadasDelPlan } from "@/lib/tms/paradas";
 import ViajeForm from "./viaje-form";
 
-export default async function ViajesPage() {
+export default async function ViajesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ viaje?: string }>;
+}) {
+  const { viaje } = await searchParams;
+  const viajeDestacadoId = viaje && Number.isInteger(Number(viaje)) && Number(viaje) > 0
+    ? Number(viaje)
+    : null;
   const session = await getColaboradorSession();
   if (!session) {
-    redirect("/portal/login");
+    const retorno = viajeDestacadoId ? `/portal/viajes?viaje=${viajeDestacadoId}` : "/portal/viajes";
+    redirect(`/portal/login?next=${encodeURIComponent(retorno)}`);
   }
 
   const [personal, empleado] = await Promise.all([
@@ -75,6 +84,7 @@ export default async function ViajesPage() {
           asignacionEnCurso={asignacionEnCurso}
           viajeEnCursoId={asignacionEnCurso?.viajeId ?? viajeAbiertoPiloto?.id ?? null}
           paradas={paradas}
+          viajeDestacadoId={viajeDestacadoId}
         />
       </div>
     </main>
