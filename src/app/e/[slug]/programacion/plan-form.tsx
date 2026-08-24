@@ -402,6 +402,18 @@ export default function PlanForm({
   const soloNotas = esEdicion && ESTADOS_SOLO_NOTAS.has(plan!.estado);
   const bloqueado = esEdicion && ESTADOS_BLOQUEADOS.has(plan!.estado);
 
+  // VIAT-2: el servidor exige regreso_estimado cuando el plan queda con
+  // piloto, auxiliares o unidad asignados (lo necesita para poder validar
+  // traslapes) — esto es solo ayuda de UI, la regla real la aplica
+  // planes/route.ts.
+  const requiereRegreso = Boolean(
+    form.pilotoEmpleadoId ||
+      form.pilotoNombre.trim() ||
+      form.auxiliarEmpleadoIds.length ||
+      form.auxiliarNombres.length ||
+      form.placa.trim(),
+  );
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (saving || bloqueado) return;
@@ -433,6 +445,12 @@ export default function PlanForm({
     const salidaProgramada = `${form.fechaPlan}T${form.horaCarga || "00:00"}`;
     if (form.regresoEstimado && form.regresoEstimado <= salidaProgramada) {
       setError("El regreso estimado debe ser posterior a la salida programada.");
+      return;
+    }
+    if (requiereRegreso && !form.regresoEstimado) {
+      setError(
+        "Indica el regreso estimado: es obligatorio para poder validar disponibilidad cuando hay piloto, auxiliares o unidad asignados.",
+      );
       return;
     }
 
@@ -669,13 +687,19 @@ export default function PlanForm({
         />
       </label>
       <label className={`text-xs text-[var(--muted)] ${soloNotas || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
-        Regreso estimado
+        Regreso estimado{requiereRegreso ? " (obligatorio)" : ""}
         <input
           type="datetime-local"
+          required={requiereRegreso}
           className={`${inputCls} mt-1 w-full`}
           value={form.regresoEstimado}
           onChange={(e) => setForm((f) => ({ ...f, regresoEstimado: e.target.value }))}
         />
+        {requiereRegreso ? (
+          <span className="mt-0.5 block text-[10px] text-amber-300/90">
+            Necesario para validar que piloto/auxiliares/unidad no queden asignados a dos viajes a la vez.
+          </span>
+        ) : null}
       </label>
       <label className={`text-xs text-[var(--muted)] ${soloNotas || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
         Tarifa comercial (GTQ)

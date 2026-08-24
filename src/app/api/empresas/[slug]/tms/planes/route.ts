@@ -22,6 +22,14 @@ import { obtenerVehiculoAccesible } from "@/lib/flota/acceso";
 import { listarDisponibilidadPersonal } from "@/lib/operaciones/disponibilidad-personal";
 import { hoyLocal, toIsoDate } from "@/lib/rrhh/dates";
 import { sincronizarViaticosPlan } from "@/lib/tms/viaticos";
+import {
+  ESTADOS_QUE_RESERVAN_RECURSOS,
+  finViajeDesdeInput,
+  inicioViaje,
+  mensajeConflicto,
+  primerConflictoTraslape,
+  type RecursoAValidar,
+} from "@/lib/tms/disponibilidad-traslapes";
 import type { PoolConnection, ResultSetHeader } from "mysql2/promise";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -568,49 +576,110 @@ export async function POST(req: Request, ctx: Ctx) {
     "Descarga",
   );
 
-  let planId = 0;
-  let codigoFinal = codigo;
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try {
-      const result = await execute(
-        `INSERT INTO tms_planes_viaje
-          (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, referencia_cliente, notas, estado)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado')`,
-        [
-          empresaId,
-          codigoFinal,
-          clienteId,
-          lugarCargaId,
-          lugarDescargaId,
-          unidadId,
-          pilotoId,
-          auxiliarId,
-          d.fechaPlan,
-          d.horaCarga ?? null,
-          d.tipoTraslado ?? null,
-          d.regresoEstimado?.replace("T", " ") ?? null,
-          d.tarifaComercial ?? null,
-          d.referenciaCliente?.trim() || null,
-          d.notas ?? null,
-        ],
-      );
-      planId = Number(result.insertId);
-      break;
-    } catch {
-      codigoFinal = await asegurarCodigoPlanUnico(
-        empresaId,
-        d.fechaPlan,
-        null,
-      );
-    }
-  }
-  if (!planId) {
+  // VIAT-2: recursos que este plan reservaría (piloto + cada auxiliar +
+  // unidad) y su intervalo real (fecha_plan+hora_carga → regreso_estimado).
+  // Sin "misma fecha" — dos viajes el mismo día que no se traslapan en hora
+  // están permitidos (ver disponibilidad-traslapes.ts).
+  const recursosNuevoPlan: RecursoAValidar[] = [
+    ...(pilotoId ? [{ tipo: "piloto" as const, id: pilotoId }] : []),
+    ...auxPersonalIds.map((id) => ({ tipo: "auxiliar" as const, id })),
+    ...(unidadId ? [{ tipo: "unidad" as const, id: unidadId }] : []),
+  ];
+  const finNuevo = finViajeDesdeInput(d.regresoEstimado);
+  if (recursosNuevoPlan.length && !finNuevo) {
     return NextResponse.json(
-      { error: "No se pudo generar un código de plan único. Intenta de nuevo." },
-      { status: 409 },
+      {
+        error:
+          "Indica el regreso estimado: es obligatorio para poder validar disponibilidad y guardar la programación cuando hay piloto, auxiliares o unidad asignados.",
+      },
+      { status: 400 },
     );
   }
-  await guardarAuxiliaresPlan(planId, auxPersonalIds);
+  const intervaloNuevo = finNuevo
+    ? { inicio: inicioViaje(d.fechaPlan, d.horaCarga), fin: finNuevo }
+    : null;
+
+  let planId = 0;
+  let codigoFinal = codigo;
+  // VIAT-2 (concurrencia): candado con nombre por empresa, igual patrón que
+  // ya usa portal/viajes/route.ts para la exclusividad de unidad en salida
+  // — evita la ventana SELECT (verificar traslape) -> INSERT donde dos
+  // solicitudes concurrentes pasarían la verificación antes de que
+  // cualquiera escriba. Se libera siempre en el finally, sin excepción.
+  const lockKey = `tms_traslape_${empresaId}`;
+  const lockConn = recursosNuevoPlan.length ? await getPool().getConnection() : null;
+  try {
+    if (lockConn && intervaloNuevo) {
+      try {
+        await lockConn.query("SELECT GET_LOCK(?, 8) AS l", [lockKey]);
+      } catch {
+        /* ok */
+      }
+      const conflicto = await primerConflictoTraslape(
+        empresaId,
+        recursosNuevoPlan,
+        intervaloNuevo,
+        null,
+      );
+      if (conflicto) {
+        return NextResponse.json({ error: mensajeConflicto(conflicto) }, { status: 409 });
+      }
+    }
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        const result = await execute(
+          `INSERT INTO tms_planes_viaje
+            (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, referencia_cliente, notas, estado)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado')`,
+          [
+            empresaId,
+            codigoFinal,
+            clienteId,
+            lugarCargaId,
+            lugarDescargaId,
+            unidadId,
+            pilotoId,
+            auxiliarId,
+            d.fechaPlan,
+            d.horaCarga ?? null,
+            d.tipoTraslado ?? null,
+            d.regresoEstimado?.replace("T", " ") ?? null,
+            d.tarifaComercial ?? null,
+            d.referenciaCliente?.trim() || null,
+            d.notas ?? null,
+          ],
+        );
+        planId = Number(result.insertId);
+        break;
+      } catch {
+        codigoFinal = await asegurarCodigoPlanUnico(
+          empresaId,
+          d.fechaPlan,
+          null,
+        );
+      }
+    }
+    if (!planId) {
+      return NextResponse.json(
+        { error: "No se pudo generar un código de plan único. Intenta de nuevo." },
+        { status: 409 },
+      );
+    }
+    await guardarAuxiliaresPlan(planId, auxPersonalIds);
+  } finally {
+    if (lockConn) {
+      try {
+        await lockConn.query("SELECT RELEASE_LOCK(?) AS l", [lockKey]);
+      } catch {
+        /* ok */
+      }
+      lockConn.release();
+    }
+  }
+  // Si se llega aquí, planId siempre es válido: cualquier salida sin plan
+  // (conflicto de traslape, o fallo al generar código único) ya retornó
+  // dentro del try/finally de arriba.
   if (paradasInput.length) {
     await guardarParadasPlan(empresaId, planId, paradasInput);
   }
@@ -720,9 +789,13 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // flota_vehiculo_id (antes no se traían) para poder calcular la fecha
   // efectiva y revalidar disponibilidad de los recursos YA asignados
   // cuando cambia la fecha (ver "revalidación al cambiar fecha").
+  // VIAT-2: se agregan unidad_id y regreso_estimado (antes no se traían)
+  // para poder calcular el intervalo EFECTIVO del plan (recursos ya
+  // asignados que esta solicitud no toca) al validar traslapes.
   const plan = await query<RowDataPacket[]>(
     `SELECT p.id, p.codigo, p.estado, p.fecha_plan, p.hora_carga, p.notas,
-            p.piloto_id, u.placa, u.flota_vehiculo_id, pil.nombre AS piloto
+            p.piloto_id, p.unidad_id, p.regreso_estimado,
+            u.placa, u.flota_vehiculo_id, pil.nombre AS piloto
      FROM tms_planes_viaje p
      LEFT JOIN tms_unidades u ON u.id = p.unidad_id
      LEFT JOIN tms_personal pil ON pil.id = p.piloto_id
@@ -740,6 +813,11 @@ export async function PATCH(req: Request, ctx: Ctx) {
     hora: plan[0].hora_carga ? String(plan[0].hora_carga) : "",
     fechaPlan: toIsoDate(plan[0].fecha_plan) ?? "",
     pilotoId: plan[0].piloto_id != null ? Number(plan[0].piloto_id) : null,
+    unidadId: plan[0].unidad_id != null ? Number(plan[0].unidad_id) : null,
+    regresoEstimado:
+      plan[0].regreso_estimado != null
+        ? String(plan[0].regreso_estimado).slice(0, 19).replace("T", " ")
+        : null,
     flotaVehiculoId:
       plan[0].flota_vehiculo_id != null
         ? Number(plan[0].flota_vehiculo_id)
@@ -1147,6 +1225,64 @@ export async function PATCH(req: Request, ctx: Ctx) {
         [empresaId, String(vehiculoAccesible.placa).toUpperCase(), d.flotaVehiculoId],
       );
       unidadId = Number(r.insertId);
+    }
+
+    // VIAT-2: valida traslapes con el recurso EFECTIVO resultante (lo nuevo
+    // si vino en esta solicitud, si no lo que el plan ya tenía) — misma
+    // conexión/transacción que el UPDATE de abajo, y bajo el mismo GET_LOCK
+    // por empresa que POST, para que dos ediciones concurrentes no pasen la
+    // verificación antes de que cualquiera escriba. Se omite si el estado
+    // efectivo ya no reserva recursos (Descargado/Cerrado/Cancelado) — no
+    // tiene sentido validar disponibilidad de algo que se está liberando.
+    const estadoEfectivo = d.estado ?? antes.estado;
+    if ((ESTADOS_QUE_RESERVAN_RECURSOS as readonly string[]).includes(estadoEfectivo)) {
+      const pilotoEfectivo = pilotoId ?? antes.pilotoId;
+      const unidadEfectiva = unidadId ?? antes.unidadId;
+      const auxiliaresEfectivos = auxPersonalIdsNuevo ?? auxPersonalIdsLegado ?? antesAuxiliaresIds;
+      const recursosEfectivos: RecursoAValidar[] = [
+        ...(pilotoEfectivo ? [{ tipo: "piloto" as const, id: pilotoEfectivo }] : []),
+        ...auxiliaresEfectivos.map((id) => ({ tipo: "auxiliar" as const, id })),
+        ...(unidadEfectiva ? [{ tipo: "unidad" as const, id: unidadEfectiva }] : []),
+      ];
+      if (recursosEfectivos.length) {
+        const fechaEfectivaPlan = d.fechaPlan ?? antes.fechaPlan;
+        const horaEfectivaCarga = d.horaCarga ?? antes.hora;
+        const finEfectivo =
+          d.regresoEstimado !== undefined
+            ? finViajeDesdeInput(d.regresoEstimado)
+            : antes.regresoEstimado;
+        if (!finEfectivo) {
+          await conn.rollback();
+          return NextResponse.json(
+            {
+              error:
+                "Indica el regreso estimado: es obligatorio para poder validar disponibilidad y guardar la programación cuando hay piloto, auxiliares o unidad asignados.",
+            },
+            { status: 400 },
+          );
+        }
+        try {
+          await conn.query("SELECT GET_LOCK(?, 8) AS l", [`tms_traslape_${empresaId}`]);
+        } catch {
+          /* ok */
+        }
+        const conflicto = await primerConflictoTraslape(
+          empresaId,
+          recursosEfectivos,
+          { inicio: inicioViaje(fechaEfectivaPlan, horaEfectivaCarga), fin: finEfectivo },
+          d.id,
+          conn,
+        );
+        try {
+          await conn.query("SELECT RELEASE_LOCK(?) AS l", [`tms_traslape_${empresaId}`]);
+        } catch {
+          /* ok */
+        }
+        if (conflicto) {
+          await conn.rollback();
+          return NextResponse.json({ error: mensajeConflicto(conflicto) }, { status: 409 });
+        }
+      }
     }
 
     await conn.execute(
