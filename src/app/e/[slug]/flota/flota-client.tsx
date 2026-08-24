@@ -91,6 +91,8 @@ type Vehiculo = {
   km_intervalo_servicio: number;
   km_ultimo_servicio: number | null;
   fecha_ultimo_servicio?: string | null;
+  odometro_funcional?: number;
+  mantenimiento_intervalo_meses?: number | null;
   en_taller: number;
   fecha_entrada_taller?: string | null;
   motivo_taller?: string | null;
@@ -275,6 +277,8 @@ const emptyForm = {
   descripcion: "",
   kmActual: 0,
   intervalo: KM_INTERVALO_SERVICIO_DEFAULT,
+  odometroFuncional: true,
+  intervaloMeses: 3,
   rin: "",
   medidaLlanta: "",
   tipoAceite: "",
@@ -1072,6 +1076,8 @@ export default function FlotaClient() {
       intervalo: Number(
         v.km_intervalo_servicio ?? KM_INTERVALO_SERVICIO_DEFAULT,
       ),
+      odometroFuncional: Number(v.odometro_funcional ?? 1) === 1,
+      intervaloMeses: Number(v.mantenimiento_intervalo_meses ?? 3),
       rin: v.rin_llanta ?? "",
       medidaLlanta: v.medida_llanta ?? "",
       tipoAceite: v.tipo_aceite ?? "",
@@ -1113,6 +1119,8 @@ export default function FlotaClient() {
       empresaActivo: form.empresaActivo || undefined,
       kmActual: form.kmActual,
       kmIntervaloServicio: form.intervalo,
+      odometroFuncional: form.odometroFuncional,
+      mantenimientoIntervaloMeses: form.odometroFuncional ? undefined : form.intervaloMeses,
       rinLlanta: form.rin,
       medidaLlanta: form.medidaLlanta,
       tipoAceite: form.tipoAceite,
@@ -1150,6 +1158,21 @@ export default function FlotaClient() {
       // sin tener que buscarlo de nuevo en la tabla.
       setEditId(Number(data.id));
     }
+    await cargar({ solo: ["vehiculos"] });
+  }
+
+  async function limpiarKilometrajeActual() {
+    if (!editId) return;
+    if (!window.confirm("¿Limpiar únicamente el kilometraje actual? Los viajes, lecturas y servicios históricos se conservarán.")) return;
+    const res = await fetch(`/api/empresas/${slug}/flota/vehiculos`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: editId, reiniciarKilometraje: true }),
+    });
+    const data = await res.json();
+    if (!res.ok) return setErr(data.error ?? "No se pudo limpiar el kilometraje.");
+    setMsg(data.mensaje);
+    setForm((f) => ({ ...f, kmActual: 0 }));
     await cargar({ solo: ["vehiculos"] });
   }
 
@@ -1691,6 +1714,8 @@ export default function FlotaClient() {
   async function registrarServicio() {
     if (enviandoForm) return;
     setErr("");
+    const unidadServicio = vehiculos.find((v) => v.id === vehiculoId);
+    const requiereKmServicio = Number(unidadServicio?.odometro_funcional ?? 1) === 1;
     const enRuta =
       !editServicioId &&
       abiertos.some((v) => v.vehiculo_id === vehiculoId);
@@ -1702,6 +1727,7 @@ export default function FlotaClient() {
     }
     if (
       (tipoServicio === "servicio_mayor" || tipoServicio === "mantenimiento") &&
+      requiereKmServicio &&
       !(kmLectura > 0)
     ) {
       setErr(
@@ -2687,12 +2713,19 @@ export default function FlotaClient() {
           ) : null}
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {vehiculosPagina.map((v) => {
+              const usaOdometro = Number(v.odometro_funcional ?? 1) === 1;
               const pendiente = kmPendienteServicio(
                 v.km_actual,
                 v.km_ultimo_servicio,
                 Number(v.km_intervalo_servicio || KM_INTERVALO_SERVICIO_DEFAULT),
               );
               const alerta = estiloAlertaKm(pendiente);
+              const proximoServicio = !usaOdometro && v.fecha_ultimo_servicio
+                ? (() => { const d = new Date(`${String(v.fecha_ultimo_servicio).slice(0, 10)}T12:00:00`); d.setMonth(d.getMonth() + Number(v.mantenimiento_intervalo_meses ?? 3)); return d; })()
+                : null;
+              const alertaTiempo = proximoServicio
+                ? proximoServicio.getTime() <= Date.now() ? "Servicio vencido" : `Servicio ${proximoServicio.toLocaleDateString("es-GT")}`
+                : "Registrar último servicio";
               const enTaller = Boolean(v.en_taller);
               const activo = esVehiculoActivo(v);
               return (
@@ -2735,12 +2768,12 @@ export default function FlotaClient() {
                             : alerta.badge
                         }`}
                       >
-                        {enTaller ? "En Taller" : alerta.texto}
+                        {enTaller ? "En Taller" : usaOdometro ? alerta.texto : alertaTiempo}
                       </span>
                     </div>
                   </div>
                   <p className="text-xs text-[var(--muted)]">
-                    Km {Number(v.km_actual ?? 0).toLocaleString("es-GT")} ·{" "}
+                    {usaOdometro ? `Km ${Number(v.km_actual ?? 0).toLocaleString("es-GT")}` : `Sin odómetro · servicio cada ${Number(v.mantenimiento_intervalo_meses ?? 3)} mes(es)`} ·{" "}
                     <span className="font-medium text-sky-300/90">
                       {empresaDe(v)}
                     </span>
@@ -2833,7 +2866,7 @@ export default function FlotaClient() {
                 <h2 className="font-medium">
                   {editId ? `Editar vehículo` : "Registrar vehículo"}
                 </h2>
-                <button
+                <div className="flex gap-3">{editId ? <button type="button" className="text-xs text-amber-300 underline" onClick={() => void limpiarKilometrajeActual()}>Limpiar km actual</button> : null}<button
                   type="button"
                   className="text-xs underline"
                   onClick={() => {
@@ -2846,6 +2879,7 @@ export default function FlotaClient() {
                 >
                   {editId ? "Cancelar edición" : "Cerrar"}
                 </button>
+                </div>
               </div>
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                 {(
@@ -2872,6 +2906,13 @@ export default function FlotaClient() {
                   </label>
                 ))}
                 <label className="text-xs text-[var(--muted)]">
+                  Control de mantenimiento
+                  <select className={`${input} mt-1 w-full`} value={form.odometroFuncional ? "km" : "tiempo"} onChange={(e) => setForm((f) => ({ ...f, odometroFuncional: e.target.value === "km" }))}>
+                    <option value="km">Por kilometraje (odómetro funcional)</option>
+                    <option value="tiempo">Por tiempo (odómetro no funciona)</option>
+                  </select>
+                </label>
+                {form.odometroFuncional ? <label className="text-xs text-[var(--muted)]">
                   Km actual
                   <input
                     type="number"
@@ -2884,8 +2925,8 @@ export default function FlotaClient() {
                       }))
                     }
                   />
-                </label>
-                <label className="text-xs text-[var(--muted)]">
+                </label> : <label className="text-xs text-[var(--muted)]">Servicio cada (meses)<input type="number" min={1} max={60} className={`${input} mt-1 w-full`} value={form.intervaloMeses} onChange={(e) => setForm((f) => ({ ...f, intervaloMeses: Number(e.target.value) }))} required /></label>}
+                {form.odometroFuncional ? <label className="text-xs text-[var(--muted)]">
                   Intervalo servicio (km)
                   <input
                     type="number"
@@ -2898,7 +2939,7 @@ export default function FlotaClient() {
                       }))
                     }
                   />
-                </label>
+                </label> : null}
                 <label className="text-xs text-[var(--muted)]">
                   Estado
                   <select
@@ -3713,7 +3754,7 @@ export default function FlotaClient() {
                     Reparación (mantiene el kilometraje)
                   </option>
                 </select>
-                <input
+                {Number(activos.find((v) => v.id === vehiculoId)?.odometro_funcional ?? 1) === 1 ? <input
                   type="number"
                   className={`${input} w-28`}
                   placeholder={
@@ -3724,7 +3765,7 @@ export default function FlotaClient() {
                   value={kmLectura || ""}
                   onChange={(e) => setKmLectura(Number(e.target.value))}
                   required={tipoServicio === "servicio_mayor"}
-                />
+                /> : <span className="rounded border border-amber-800/40 px-3 py-2 text-xs text-amber-200">Mantenimiento por tiempo; sin km</span>}
                 <input
                   type="number"
                   className={`${input} w-28`}

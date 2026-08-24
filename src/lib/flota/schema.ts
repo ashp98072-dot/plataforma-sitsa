@@ -215,6 +215,16 @@ async function asegurarSchemaFlotaInner(): Promise<void> {
     "tipo_aceite",
     "tipo_aceite VARCHAR(80) NULL",
   );
+  await ensureColumn(
+    "flota_vehiculos",
+    "odometro_funcional",
+    "odometro_funcional TINYINT(1) NOT NULL DEFAULT 1",
+  );
+  await ensureColumn(
+    "flota_vehiculos",
+    "mantenimiento_intervalo_meses",
+    "mantenimiento_intervalo_meses SMALLINT NULL",
+  );
 
   // Tipos de filtro por unidad (aceite, aire, etc.) + código de tienda
   await execute(`

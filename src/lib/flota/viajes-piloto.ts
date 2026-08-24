@@ -5,7 +5,8 @@ import { toIsoDate } from "@/lib/rrhh/dates";
 export type ViajeAbiertoPiloto = {
   id: number;
   placa: string;
-  kmSalida: number;
+  kmSalida: number | null;
+  odometroFuncional: boolean;
   horaSalida: string;
   destino: string | null;
   planId: number | null;
@@ -31,6 +32,7 @@ export type AsignacionOperativaPortal = {
   viajeId: number | null;
   viajeEstado: string | null;
   kmSalida: number | null;
+  odometroFuncional: boolean;
 };
 
 /** Planes donde el colaborador participa como piloto o auxiliar. */
@@ -43,12 +45,14 @@ export async function listarAsignacionesOperativasEmpleado(
             p.regreso_estimado, p.estado, c.nombre AS cliente,
             lc.nombre AS origen, ld.nombre AS destino, u.placa,
             pil.nombre AS piloto, fv.id AS viaje_id,
-            fv.estado AS viaje_estado, fv.km_salida
+            fv.estado AS viaje_estado, fv.km_salida,
+            COALESCE(ve.odometro_funcional, 1) AS odometro_funcional
      FROM tms_planes_viaje p
      LEFT JOIN tms_clientes c ON c.id = p.cliente_id
      LEFT JOIN tms_lugares lc ON lc.id = p.lugar_carga_id
      LEFT JOIN tms_lugares ld ON ld.id = p.lugar_descarga_id
      LEFT JOIN tms_unidades u ON u.id = p.unidad_id
+     LEFT JOIN flota_vehiculos ve ON ve.id = u.flota_vehiculo_id
      LEFT JOIN tms_personal pil ON pil.id = p.piloto_id
      LEFT JOIN tms_plan_auxiliares pa ON pa.plan_id = p.id
      LEFT JOIN tms_personal aux ON aux.id = pa.personal_id
@@ -95,6 +99,7 @@ export async function listarAsignacionesOperativasEmpleado(
     viajeId: r.viaje_id != null ? Number(r.viaje_id) : null,
     viajeEstado: r.viaje_estado ? String(r.viaje_estado) : null,
     kmSalida: r.km_salida != null ? Number(r.km_salida) : null,
+    odometroFuncional: Number(r.odometro_funcional ?? 1) === 1,
   }));
 }
 
@@ -134,6 +139,7 @@ export async function obtenerViajeAbiertoDeEmpleado(
 ): Promise<ViajeAbiertoPiloto | null> {
   const rows = await query<RowDataPacket[]>(
     `SELECT DISTINCT v.id, v.km_salida, v.hora_salida, v.destino, v.plan_id, ve.placa,
+            COALESCE(ve.odometro_funcional, 1) AS odometro_funcional,
             (SELECT MAX(l.km) FROM flota_lecturas l
              WHERE l.viaje_id = v.id AND l.nota = 'Kilometraje en punto de carga') AS km_carga,
             (SELECT COUNT(*) FROM flota_viaje_evidencias ev
@@ -160,7 +166,8 @@ export async function obtenerViajeAbiertoDeEmpleado(
   return {
     id: Number(r.id),
     placa: String(r.placa),
-    kmSalida: Number(r.km_salida),
+    kmSalida: r.km_salida == null ? null : Number(r.km_salida),
+    odometroFuncional: Number(r.odometro_funcional ?? 1) === 1,
     horaSalida: String(r.hora_salida),
     destino: r.destino ? String(r.destino) : null,
     planId: r.plan_id != null ? Number(r.plan_id) : null,

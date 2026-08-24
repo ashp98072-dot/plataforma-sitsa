@@ -174,7 +174,7 @@ export async function vehiculoPorPlaca(
   )`;
   try {
     const exactas = await query<RowDataPacket[]>(
-      `SELECT v.id, v.placa, v.en_taller, v.km_actual, v.activo, v.estado, v.empresa_id
+      `SELECT v.id, v.placa, v.en_taller, v.km_actual, v.odometro_funcional, v.activo, v.estado, v.empresa_id
        FROM flota_vehiculos v
        WHERE ${matchExacto} AND ${acceso}
        LIMIT 1`,
@@ -184,7 +184,7 @@ export async function vehiculoPorPlaca(
 
     // Coincidencia parcial única (piloto escribe "147CCT" y la placa es "C-147CCT").
     const parciales = await query<RowDataPacket[]>(
-      `SELECT v.id, v.placa, v.en_taller, v.km_actual, v.activo, v.estado, v.empresa_id
+      `SELECT v.id, v.placa, v.en_taller, v.km_actual, v.odometro_funcional, v.activo, v.estado, v.empresa_id
        FROM flota_vehiculos v
        WHERE ${acceso}
          AND UPPER(REPLACE(REPLACE(COALESCE(v.placa,''),' ',''),'-','')) LIKE ?
@@ -194,7 +194,7 @@ export async function vehiculoPorPlaca(
     return parciales.length === 1 ? parciales[0] : null;
   } catch {
     const rows = await query<RowDataPacket[]>(
-      `SELECT id, placa, en_taller, km_actual, activo, estado, empresa_id
+      `SELECT id, placa, en_taller, km_actual, odometro_funcional, activo, estado, empresa_id
        FROM flota_vehiculos
        WHERE empresa_id = ?
          AND (

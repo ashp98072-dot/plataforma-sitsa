@@ -11,7 +11,7 @@ export async function obtenerVehiculoAccesible(
   empresaId: number,
   vehiculoId: number,
   cols =
-    "v.id, v.empresa_id, v.placa, v.marca, v.modelo, v.km_actual, v.en_taller, v.fecha_entrada_taller, v.motivo_taller, v.activo, v.estado, v.km_intervalo_servicio, v.km_ultimo_servicio, v.notas, v.rin_llanta, v.medida_llanta, v.tipo_aceite, v.descripcion, v.color, v.tipo_combustible, v.filtro_servicio_mayor, v.filtro_servicio_menor, v.empresa_activo",
+    "v.id, v.empresa_id, v.placa, v.marca, v.modelo, v.km_actual, v.en_taller, v.fecha_entrada_taller, v.motivo_taller, v.activo, v.estado, v.km_intervalo_servicio, v.km_ultimo_servicio, v.fecha_ultimo_servicio, v.odometro_funcional, v.mantenimiento_intervalo_meses, v.notas, v.rin_llanta, v.medida_llanta, v.tipo_aceite, v.descripcion, v.color, v.tipo_combustible, v.filtro_servicio_mayor, v.filtro_servicio_menor, v.empresa_activo",
 ): Promise<RowDataPacket | null> {
   if (!vehiculoId || !empresaId) return null;
   try {
@@ -59,6 +59,7 @@ export async function listarVehiculosAccesibles(
       `SELECT v.id, v.empresa_id, v.placa, v.marca, v.modelo, v.descripcion,
               v.color, v.tipo_combustible, v.chasis, v.capacidad, v.km_actual,
               v.km_intervalo_servicio, v.km_ultimo_servicio, v.fecha_ultimo_servicio,
+              v.odometro_funcional, v.mantenimiento_intervalo_meses,
               v.credito, v.empresa_activo, v.nit, v.condicion_propiedad, v.seguros,
               v.notas, v.activo, v.estado, v.en_taller, v.fecha_entrada_taller,
               v.motivo_taller, v.rin_llanta, v.medida_llanta, v.tipo_aceite,

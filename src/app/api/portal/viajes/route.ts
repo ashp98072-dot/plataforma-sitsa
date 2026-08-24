@@ -38,7 +38,7 @@ import { validarGeocercaKiosko } from "@/lib/rrhh/geocerca";
 const salidaSchema = z.object({
   accion: z.literal("salida"),
   placa: z.string().min(2),
-  kmSalida: z.number().int().nonnegative(),
+  kmSalida: z.number().int().nonnegative().optional(),
   destino: z.string().optional(),
   planId: z.number().int().positive().optional(),
 });
@@ -46,7 +46,7 @@ const salidaSchema = z.object({
 const llegadaSchema = z.object({
   accion: z.literal("llegada"),
   viajeId: z.number().int().positive(),
-  kmLlegada: z.number().int().nonnegative(),
+  kmLlegada: z.number().int().nonnegative().optional(),
   observaciones: z.string().optional(),
   latitud: z.number().min(-90).max(90).optional(),
   longitud: z.number().min(-180).max(180).optional(),
@@ -57,7 +57,7 @@ const llegadaSchema = z.object({
 const cargaSchema = z.object({
   accion: z.literal("carga"),
   viajeId: z.number().int().positive(),
-  kmCarga: z.number().int().nonnegative(),
+  kmCarga: z.number().int().nonnegative().optional(),
 });
 
 export async function POST(req: Request) {
@@ -157,6 +157,10 @@ export async function POST(req: Request) {
         { status: 404 },
       );
     }
+    const odometroFuncional = Number(veh.odometro_funcional ?? 1) === 1;
+    if (odometroFuncional && d.kmSalida == null) {
+      return NextResponse.json({ error: "Completa el kilometraje de salida." }, { status: 400 });
+    }
     if (Number(veh.activo) === 0) {
       return NextResponse.json({ error: "Vehículo inactivo." }, { status: 400 });
     }
@@ -179,10 +183,10 @@ export async function POST(req: Request) {
     }
 
     const kmActual = Number(veh.km_actual ?? 0);
-    if (d.kmSalida < kmActual) {
+    if (odometroFuncional && Number(d.kmSalida) < kmActual) {
       return NextResponse.json(
         {
-          error: `Km de salida (${d.kmSalida.toLocaleString("es-GT")}) no puede ser menor al km actual de ${veh.placa} (${kmActual.toLocaleString("es-GT")}). Debe ser mayor o igual.`,
+          error: `Km de salida (${Number(d.kmSalida).toLocaleString("es-GT")}) no puede ser menor al km actual de ${veh.placa} (${kmActual.toLocaleString("es-GT")}). Debe ser mayor o igual.`,
         },
         { status: 400 },
       );
@@ -266,7 +270,7 @@ export async function POST(req: Request) {
           Number(veh.id),
           pilotoNombre,
           normalizarNombrePiloto(pilotoNombre),
-          d.kmSalida,
+          odometroFuncional ? Number(d.kmSalida) : null,
           ahora,
           destinoFinal,
           pilotoEmpleadoId,
@@ -297,19 +301,19 @@ export async function POST(req: Request) {
       usuario: `portal:${empleado.codigo}`,
       accion: "salida_viaje",
       modulo: "tms",
-      detalle: `Viaje #${r.insertId} iniciado por ${personal.tipo.toLowerCase()} ${nombre} · piloto ${pilotoNombre} · placa ${String(veh.placa)} · km ${d.kmSalida}${
+      detalle: `Viaje #${r.insertId} iniciado por ${personal.tipo.toLowerCase()} ${nombre} · piloto ${pilotoNombre} · placa ${String(veh.placa)}${odometroFuncional ? ` · km ${d.kmSalida}` : " · unidad sin odómetro funcional"}${
         planId ? ` · plan TMS #${planId} → En ruta` : ""
       }${destinoFinal ? ` · destino ${destinoFinal}` : ""}`,
     });
 
-    await execute(
+    if (odometroFuncional) await execute(
       `INSERT INTO flota_lecturas
         (empresa_id, vehiculo_id, km, fecha_lectura, nota, conductor, registrado_por, viaje_id, capturado_en)
        VALUES (?, ?, ?, CURDATE(), ?, ?, ?, ?, ?)`,
       [
         empresaId,
         Number(veh.id),
-        d.kmSalida,
+        Number(d.kmSalida),
         d.destino ? `Salida viaje → ${d.destino}` : "Salida viaje",
         pilotoNombre,
         `portal:${empleado.codigo}`,
@@ -318,7 +322,7 @@ export async function POST(req: Request) {
       ],
     ).catch(() => undefined);
 
-    await actualizarKmActualVehiculo(Number(veh.id), d.kmSalida);
+    if (odometroFuncional) await actualizarKmActualVehiculo(Number(veh.id), Number(d.kmSalida));
 
     const planInfo = planId ? planesMatch.find((p) => p.id === planId) : null;
     const planMsg = planInfo
@@ -330,7 +334,7 @@ export async function POST(req: Request) {
     return NextResponse.json({
       id: r.insertId,
       placa: String(veh.placa),
-      kmSalida: d.kmSalida,
+      kmSalida: odometroFuncional ? d.kmSalida : null,
       planId,
       mensaje: `Salida de ${veh.placa} registrada.${planMsg}`,
     });
@@ -348,11 +352,16 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "No estás asignado a ese viaje abierto." }, { status: 403 });
     }
     const viaje = await query<RowDataPacket[]>(
-      `SELECT v.id, v.km_salida, v.vehiculo_id FROM flota_viajes v
+      `SELECT v.id, v.km_salida, v.vehiculo_id, ve.odometro_funcional
+       FROM flota_viajes v INNER JOIN flota_vehiculos ve ON ve.id = v.vehiculo_id
        WHERE v.id = ? AND v.empresa_id = ? AND v.estado = 'abierto' LIMIT 1`,
       [parsed.data.viajeId, empresaId],
     );
     if (!viaje[0]) return NextResponse.json({ error: "No tienes ese viaje abierto." }, { status: 404 });
+    if (Number(viaje[0].odometro_funcional ?? 1) !== 1) {
+      return NextResponse.json({ error: "Esta unidad no usa registro de kilometraje." }, { status: 409 });
+    }
+    if (parsed.data.kmCarga == null) return NextResponse.json({ error: "Kilometraje de carga inválido." }, { status: 400 });
     if (parsed.data.kmCarga < Number(viaje[0].km_salida)) {
       return NextResponse.json({ error: "El kilometraje de carga no puede ser menor al de salida." }, { status: 400 });
     }
@@ -396,7 +405,7 @@ export async function POST(req: Request) {
 
     // Solo puede cerrar SU PROPIO viaje abierto — nunca el de otro piloto.
     const viaje = await query<RowDataPacket[]>(
-      `SELECT v.*, ve.placa FROM flota_viajes v
+      `SELECT v.*, ve.placa, ve.odometro_funcional FROM flota_viajes v
        INNER JOIN flota_vehiculos ve ON ve.id = v.vehiculo_id
        WHERE v.id = ? AND v.empresa_id = ? AND v.empleado_id = ? LIMIT 1`,
       [d.viajeId, empresaId, session.empleadoId],
@@ -409,10 +418,14 @@ export async function POST(req: Request) {
     }
 
     const planIdPre = viaje[0].plan_id != null ? Number(viaje[0].plan_id) : null;
-    const kmSalida = Number(viaje[0].km_salida);
-    const kmFinal = d.kmLlegada;
+    const odometroFuncional = Number(viaje[0].odometro_funcional ?? 1) === 1;
+    const kmSalida = viaje[0].km_salida == null ? null : Number(viaje[0].km_salida);
+    const kmFinal = odometroFuncional ? d.kmLlegada : null;
+    if (odometroFuncional && (kmFinal == null || kmSalida == null)) {
+      return NextResponse.json({ error: "Completa el kilometraje de llegada." }, { status: 400 });
+    }
 
-    if (kmFinal < kmSalida) {
+    if (odometroFuncional && Number(kmFinal) < Number(kmSalida)) {
       return NextResponse.json(
         { error: "Km final no puede ser menor que la salida." },
         { status: 400 },
@@ -422,11 +435,11 @@ export async function POST(req: Request) {
       `SELECT km_actual FROM flota_vehiculos WHERE id = ? LIMIT 1`,
       [Number(viaje[0].vehiculo_id)],
     );
-    const kmActualVeh = Number(vehKm[0]?.km_actual ?? kmSalida);
-    if (kmFinal < kmActualVeh) {
+    const kmActualVeh = Number(vehKm[0]?.km_actual ?? kmSalida ?? 0);
+    if (odometroFuncional && Number(kmFinal) < kmActualVeh) {
       return NextResponse.json(
         {
-          error: `Km final (${kmFinal.toLocaleString("es-GT")}) no puede ser menor al km actual de la unidad (${kmActualVeh.toLocaleString("es-GT")}). Debe ser mayor o igual.`,
+          error: `Km final (${Number(kmFinal).toLocaleString("es-GT")}) no puede ser menor al km actual de la unidad (${kmActualVeh.toLocaleString("es-GT")}). Debe ser mayor o igual.`,
         },
         { status: 400 },
       );
@@ -446,10 +459,10 @@ export async function POST(req: Request) {
       [d.viajeId],
     );
     if (!excepcional && (
-      Number(requisitos[0]?.tablero_salida ?? 0) < 1 ||
+      (odometroFuncional && Number(requisitos[0]?.tablero_salida ?? 0) < 1) ||
       Number(requisitos[0]?.carga ?? 0) < 1 ||
-      Number(requisitos[0]?.tablero_llegada ?? 0) < 1 ||
-      !kmCarga[0]
+      (odometroFuncional && Number(requisitos[0]?.tablero_llegada ?? 0) < 1) ||
+      (odometroFuncional && !kmCarga[0])
     )) {
       return NextResponse.json({ error: "Completa tablero de salida, kilometraje/evidencia de carga y tablero de llegada antes de cerrar." }, { status: 422 });
     }
@@ -484,7 +497,7 @@ export async function POST(req: Request) {
         observaciones = COALESCE(?, observaciones)
        WHERE id = ? AND empresa_id = ? AND empleado_id = ? AND estado = 'abierto'`,
       [
-        kmFinal,
+        kmFinal == null ? null : Number(kmFinal),
         ahora,
         excepcional
           ? `CIERRE EXCEPCIONAL: ${d.motivoExcepcional}`
@@ -501,14 +514,14 @@ export async function POST(req: Request) {
       );
     }
 
-    await execute(
+    if (odometroFuncional) await execute(
       `INSERT INTO flota_lecturas
         (empresa_id, vehiculo_id, km, fecha_lectura, nota, conductor, registrado_por, viaje_id, capturado_en)
        VALUES (?, ?, ?, CURDATE(), 'Llegada viaje', ?, ?, ?, ?)`,
       [
         empresaId,
         Number(viaje[0].vehiculo_id),
-        kmFinal,
+        Number(kmFinal),
         nombre,
         `portal:${empleado.codigo}`,
         d.viajeId,
@@ -516,7 +529,7 @@ export async function POST(req: Request) {
       ],
     ).catch(() => undefined);
 
-    await actualizarKmActualVehiculo(Number(viaje[0].vehiculo_id), kmFinal);
+    if (odometroFuncional) await actualizarKmActualVehiculo(Number(viaje[0].vehiculo_id), Number(kmFinal));
 
     if (planIdPre && !excepcional) {
       await marcarPlanDescargado(empresaId, planIdPre);
@@ -533,7 +546,7 @@ export async function POST(req: Request) {
       usuario: `portal:${empleado.codigo}`,
       accion: excepcional ? "cierre_excepcional_viaje" : "llegada_viaje",
       modulo: "tms",
-      detalle: `Viaje #${d.viajeId} ${excepcional ? `cierre excepcional: ${d.motivoExcepcional}` : "llegada al predio"} · ${nombre} · placa ${String(viaje[0].placa)} · km ${kmSalida} → ${kmFinal}${
+      detalle: `Viaje #${d.viajeId} ${excepcional ? `cierre excepcional: ${d.motivoExcepcional}` : "llegada al predio"} · ${nombre} · placa ${String(viaje[0].placa)}${odometroFuncional ? ` · km ${kmSalida} → ${kmFinal}` : " · unidad sin odómetro funcional"}${
         planIdPre ? ` · plan TMS #${planIdPre} → ${excepcional ? "Cancelado" : "Descargado"}` : ""
       }`,
     });
@@ -545,7 +558,9 @@ export async function POST(req: Request) {
       kmLlegada: kmFinal,
       mensaje: excepcional
         ? "Viaje cerrado excepcionalmente y contratiempo registrado en auditoría."
-        : `Llegada registrada: ${(kmFinal - kmSalida).toLocaleString("es-GT")} km recorridos.${planIdPre ? " Plan TMS → Descargado." : ""}`,
+        : odometroFuncional
+          ? `Llegada registrada: ${(Number(kmFinal) - Number(kmSalida)).toLocaleString("es-GT")} km recorridos.${planIdPre ? " Plan TMS → Descargado." : ""}`
+          : `Llegada registrada sin kilometraje.${planIdPre ? " Plan TMS → Descargado." : ""}`,
     });
   }
 

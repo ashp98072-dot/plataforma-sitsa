@@ -107,6 +107,8 @@ const schema = z.object({
     .int()
     .positive()
     .default(KM_INTERVALO_SERVICIO_DEFAULT),
+  odometroFuncional: z.boolean().default(true),
+  mantenimientoIntervaloMeses: z.number().int().min(1).max(60).optional(),
   credito: z.string().optional(),
   empresaActivo: z.string().optional(),
   nit: z.string().optional(),
@@ -193,6 +195,18 @@ export async function POST(req: Request, ctx: Ctx) {
       ],
     );
     const nuevoId = Number(result.insertId);
+    await execute(
+      `UPDATE flota_vehiculos
+       SET odometro_funcional = ?, mantenimiento_intervalo_meses = ?, km_actual = ?
+       WHERE id = ? AND empresa_id = ?`,
+      [
+        d.odometroFuncional ? 1 : 0,
+        d.odometroFuncional ? null : (d.mantenimientoIntervaloMeses ?? 3),
+        d.odometroFuncional ? d.kmActual : null,
+        nuevoId,
+        guard.empresa.id,
+      ],
+    );
     if (d.filtros?.length) {
       await guardarFiltrosVehiculo(
         guard.empresa.id,
@@ -230,6 +244,9 @@ const patchSchema = z.object({
   color: z.string().optional(),
   kmActual: z.number().int().nonnegative().optional(),
   kmIntervaloServicio: z.number().int().positive().optional(),
+  odometroFuncional: z.boolean().optional(),
+  mantenimientoIntervaloMeses: z.number().int().min(1).max(60).optional(),
+  reiniciarKilometraje: z.boolean().optional(),
   notas: z.string().optional(),
   rinLlanta: z.string().optional(),
   medidaLlanta: z.string().optional(),
@@ -272,6 +289,22 @@ export async function PATCH(req: Request, ctx: Ctx) {
   }
   const cur = [curRow];
   const esDueno = Number(curRow.empresa_id) === guard.empresa.id;
+
+  if (d.reiniciarKilometraje) {
+    if (!esDueno) {
+      return NextResponse.json(
+        { error: "Solo la empresa dueña puede limpiar el kilometraje." },
+        { status: 403 },
+      );
+    }
+    await execute(
+      "UPDATE flota_vehiculos SET km_actual = NULL WHERE id = ? AND empresa_id = ?",
+      [d.id, guard.empresa.id],
+    );
+    return NextResponse.json({
+      mensaje: "Kilometraje actual limpiado. El historial de viajes, lecturas y servicios se conservó.",
+    });
+  }
 
   if (d.enTaller === true && !String(d.motivoTaller ?? "").trim()) {
     return NextResponse.json(
@@ -333,6 +366,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
         tipo_combustible = ?,
         km_actual = ?,
         km_intervalo_servicio = ?,
+        odometro_funcional = ?,
+        mantenimiento_intervalo_meses = ?,
         en_taller = ?,
         fecha_entrada_taller = ?,
         motivo_taller = ?,
@@ -355,6 +390,12 @@ export async function PATCH(req: Request, ctx: Ctx) {
         d.tipoCombustible ?? cur[0].tipo_combustible,
         d.kmActual ?? cur[0].km_actual,
         d.kmIntervaloServicio ?? cur[0].km_intervalo_servicio,
+        d.odometroFuncional == null
+          ? Number(cur[0].odometro_funcional ?? 1)
+          : d.odometroFuncional ? 1 : 0,
+        d.odometroFuncional === false
+          ? (d.mantenimientoIntervaloMeses ?? Number(cur[0].mantenimiento_intervalo_meses ?? 3))
+          : d.mantenimientoIntervaloMeses ?? cur[0].mantenimiento_intervalo_meses,
         enTaller,
         fechaTaller,
         motivo,
