@@ -45,13 +45,20 @@ function mapRow(r: RowDataPacket): UbicacionCliente {
 const SELECT =
   "SELECT id, cliente_id, nombre, direccion, municipio, departamento, referencia, tipo, activo FROM tms_cliente_ubicaciones";
 
-/** Ubicaciones activas de un cliente, para el selector de paradas en Programación. */
+/**
+ * Ubicaciones de un cliente. Por defecto solo las activas (selector de
+ * paradas en Programación); `incluirInactivas` para la administración en
+ * TMS, donde también deben poder verse/reactivarse las inactivas — nunca
+ * se borran filas, "dejar de usarse" es `activo = 0`, no un DELETE.
+ */
 export async function listarUbicacionesCliente(
   empresaId: number,
   clienteId: number,
+  opts?: { incluirInactivas?: boolean },
 ): Promise<UbicacionCliente[]> {
+  const filtroActivo = opts?.incluirInactivas ? "" : " AND activo = 1";
   const rows = await query<RowDataPacket[]>(
-    `${SELECT} WHERE empresa_id = ? AND cliente_id = ? AND activo = 1 ORDER BY nombre`,
+    `${SELECT} WHERE empresa_id = ? AND cliente_id = ?${filtroActivo} ORDER BY nombre`,
     [empresaId, clienteId],
   );
   return rows.map(mapRow);
@@ -95,4 +102,49 @@ export async function crearUbicacionCliente(
   );
   const rows = await query<RowDataPacket[]>(`${SELECT} WHERE id = ? LIMIT 1`, [Number(r.insertId)]);
   return mapRow(rows[0]);
+}
+
+export type UbicacionClienteUpdate = Partial<UbicacionClienteInput> & {
+  activo?: boolean;
+};
+
+/**
+ * Edita una ubicación existente y/o cambia su estado activo. Nunca hace
+ * DELETE — "dejar de usarse" se modela como activo=0 (punto 2: "no borrar
+ * históricos... preferir inactivarla"), preservando el histórico y
+ * cualquier tms_plan_paradas.cliente_ubicacion_id que ya la referencie.
+ */
+export async function actualizarUbicacionCliente(
+  empresaId: number,
+  id: number,
+  cambios: UbicacionClienteUpdate,
+): Promise<UbicacionCliente | null> {
+  const actualRows = await query<RowDataPacket[]>(
+    `${SELECT} WHERE id = ? AND empresa_id = ? LIMIT 1`,
+    [id, empresaId],
+  );
+  const actual = actualRows[0] ? mapRow(actualRows[0]) : null;
+  if (!actual) return null;
+
+  const nombre = cambios.nombre !== undefined ? cambios.nombre.trim() : actual.nombre;
+  if (!nombre) throw new Error("Nombre/alias de la ubicación requerido.");
+
+  await execute(
+    `UPDATE tms_cliente_ubicaciones
+     SET nombre = ?, direccion = ?, municipio = ?, departamento = ?, referencia = ?, tipo = ?, activo = ?
+     WHERE id = ? AND empresa_id = ?`,
+    [
+      nombre,
+      cambios.direccion !== undefined ? cambios.direccion?.trim() || null : actual.direccion,
+      cambios.municipio !== undefined ? cambios.municipio?.trim() || null : actual.municipio,
+      cambios.departamento !== undefined ? cambios.departamento?.trim() || null : actual.departamento,
+      cambios.referencia !== undefined ? cambios.referencia?.trim() || null : actual.referencia,
+      cambios.tipo ?? actual.tipo,
+      cambios.activo !== undefined ? (cambios.activo ? 1 : 0) : actual.activo ? 1 : 0,
+      id,
+      empresaId,
+    ],
+  );
+  const rows = await query<RowDataPacket[]>(`${SELECT} WHERE id = ? LIMIT 1`, [id]);
+  return rows[0] ? mapRow(rows[0]) : null;
 }
