@@ -85,17 +85,6 @@ export async function POST(req: Request, ctx: Ctx) {
   if (!participacion) {
     return NextResponse.json({ error: "No estás asignado a este viaje." }, { status: 403 });
   }
-  const propietario = await query<RowDataPacket[]>(
-    `SELECT id FROM flota_viajes
-     WHERE id = ? AND empresa_id = ? AND empleado_id = ? LIMIT 1`,
-    [viajeId, session.empresaId, session.empleadoId],
-  );
-  if (!propietario[0]) {
-    return NextResponse.json(
-      { error: "Solo el piloto asignado puede adjuntar evidencias." },
-      { status: 403 },
-    );
-  }
   if (participacion.estado !== "abierto") {
     return NextResponse.json({ error: "Solo se agregan evidencias mientras el viaje está en curso." }, { status: 409 });
   }

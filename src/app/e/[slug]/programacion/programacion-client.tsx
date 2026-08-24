@@ -348,8 +348,16 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
       setLoading(false);
     }
     void cargarInicial();
+    const intervalo = window.setInterval(async () => {
+      const r = await obtenerProgramacion(slug).catch(() => null);
+      if (!ignore && r?.ok) {
+        setPlanes(r.datos.planes);
+        setEstadoVehiculos(r.datos.estadoVehiculos);
+      }
+    }, 5000);
     return () => {
       ignore = true;
+      window.clearInterval(intervalo);
     };
   }, [slug]);
 

@@ -127,13 +127,13 @@ export async function colaboradorParticipaEnViaje(
     : null;
 }
 
-/** El viaje abierto del propio piloto, si tiene uno (portal). */
+/** El viaje abierto donde el colaborador participa como piloto o auxiliar. */
 export async function obtenerViajeAbiertoDeEmpleado(
   empresaId: number,
   empleadoId: number,
 ): Promise<ViajeAbiertoPiloto | null> {
   const rows = await query<RowDataPacket[]>(
-    `SELECT v.id, v.km_salida, v.hora_salida, v.destino, v.plan_id, ve.placa,
+    `SELECT DISTINCT v.id, v.km_salida, v.hora_salida, v.destino, v.plan_id, ve.placa,
             (SELECT MAX(l.km) FROM flota_lecturas l
              WHERE l.viaje_id = v.id AND l.nota = 'Kilometraje en punto de carga') AS km_carga,
             (SELECT COUNT(*) FROM flota_viaje_evidencias ev
@@ -144,9 +144,16 @@ export async function obtenerViajeAbiertoDeEmpleado(
              WHERE ev.viaje_id = v.id AND ev.tipo = 'tablero_llegada') AS ev_tablero_llegada
      FROM flota_viajes v
      INNER JOIN flota_vehiculos ve ON ve.id = v.vehiculo_id
-     WHERE v.empresa_id = ? AND v.empleado_id = ? AND v.estado = 'abierto'
+     LEFT JOIN tms_planes_viaje p ON p.id = v.plan_id AND p.empresa_id = v.empresa_id
+     LEFT JOIN tms_personal pil ON pil.id = p.piloto_id
+     LEFT JOIN tms_plan_auxiliares pa ON pa.plan_id = p.id
+     LEFT JOIN tms_personal aux ON aux.id = pa.personal_id
+     LEFT JOIN tms_personal aux_legacy ON aux_legacy.id = p.auxiliar_id
+     WHERE v.empresa_id = ? AND v.estado = 'abierto'
+       AND (v.empleado_id = ? OR pil.id_empleado = ?
+            OR aux.id_empleado = ? OR aux_legacy.id_empleado = ?)
      LIMIT 1`,
-    [empresaId, empleadoId],
+    [empresaId, empleadoId, empleadoId, empleadoId, empleadoId],
   ).catch(() => [] as RowDataPacket[]);
   const r = rows[0];
   if (!r) return null;

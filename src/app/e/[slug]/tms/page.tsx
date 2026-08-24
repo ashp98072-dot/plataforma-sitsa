@@ -143,20 +143,22 @@ export default function TmsPage() {
   const [expandido, setExpandido] = useState<number | null>(null);
   const [msg, setMsg] = useState("");
 
-  const cargarPlanes = useCallback(async () => {
-    setLoadingPlanes(true);
+  const cargarPlanes = useCallback(async (mostrarCarga = true) => {
+    if (mostrarCarga) setLoadingPlanes(true);
     try {
       const res = await fetch(`/api/empresas/${slug}/tms/planes`);
       const data = await res.json().catch(() => ({}));
       if (res.ok) setPlanes((data.planes ?? []) as Plan[]);
     } finally {
-      setLoadingPlanes(false);
+      if (mostrarCarga) setLoadingPlanes(false);
     }
   }, [slug]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void cargarPlanes();
+    const intervalo = window.setInterval(() => void cargarPlanes(false), 5000);
+    return () => window.clearInterval(intervalo);
   }, [cargarPlanes]);
 
   const planesFiltrados = useMemo(() => {
@@ -264,6 +266,7 @@ export default function TmsPage() {
         <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
           <p className="text-xs text-[var(--muted)]">
             Solo lectura, más evidencia de carga/descarga. Para crear, reasignar o reprogramar, usa Programación.
+            El avance del portal se actualiza automáticamente cada 5 segundos.
           </p>
           {msg ? <p className="mt-1 text-xs text-emerald-300">{msg}</p> : null}
 

@@ -10,9 +10,10 @@ import { asegurarSchemaFlota } from "@/lib/flota/schema";
 import { actualizarKmActualVehiculo } from "@/lib/flota/km-vehiculo";
 import {
   normalizarNombrePiloto,
-  obtenerPilotoDeEmpleado,
+  obtenerPersonalOperativoDeEmpleado,
   vehiculoPorPlaca,
 } from "@/lib/flota/pilotos";
+import { colaboradorParticipaEnViaje } from "@/lib/flota/viajes-piloto";
 import {
   buscarPlanesParaSalida,
   marcarPlanDescargado,
@@ -65,13 +66,13 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "No autenticado." }, { status: 401 });
   }
 
-  const piloto = await obtenerPilotoDeEmpleado(
+  const personal = await obtenerPersonalOperativoDeEmpleado(
     session.empresaId,
     session.empleadoId,
   );
-  if (!piloto) {
+  if (!personal) {
     return NextResponse.json(
-      { error: "Esta pantalla es solo para pilotos registrados en TMS." },
+      { error: "Esta pantalla es para pilotos y auxiliares activos registrados en TMS." },
       { status: 403 },
     );
   }
@@ -94,7 +95,6 @@ export async function POST(req: Request) {
   const ahora = ahoraLocal();
   const empresaId = session.empresaId;
   const nombre = empleado.nombre;
-  const norm = normalizarNombrePiloto(nombre);
 
   if (body?.accion === "salida") {
     const parsed = salidaSchema.safeParse(body);
@@ -109,13 +109,18 @@ export async function POST(req: Request) {
     let planAsignado: RowDataPacket | null = null;
     if (d.planId) {
       const planes = await query<RowDataPacket[]>(
-        `SELECT p.id, p.unidad_id, p.codigo, ld.nombre AS destino
+        `SELECT DISTINCT p.id, p.unidad_id, p.codigo, ld.nombre AS destino,
+                pil.nombre AS piloto_nombre, pil.id_empleado AS piloto_empleado_id
          FROM tms_planes_viaje p
          INNER JOIN tms_personal pil ON pil.id = p.piloto_id
+         LEFT JOIN tms_plan_auxiliares pa ON pa.plan_id = p.id
+         LEFT JOIN tms_personal aux ON aux.id = pa.personal_id
+         LEFT JOIN tms_personal aux_legacy ON aux_legacy.id = p.auxiliar_id
          LEFT JOIN tms_lugares ld ON ld.id = p.lugar_descarga_id
-         WHERE p.id = ? AND p.empresa_id = ? AND pil.id_empleado = ?
+         WHERE p.id = ? AND p.empresa_id = ?
+           AND (pil.id_empleado = ? OR aux.id_empleado = ? OR aux_legacy.id_empleado = ?)
            AND p.estado = 'Programado' LIMIT 1`,
-        [d.planId, empresaId, session.empleadoId],
+        [d.planId, empresaId, session.empleadoId, session.empleadoId, session.empleadoId],
       );
       planAsignado = planes[0] ?? null;
       if (!planAsignado) {
@@ -124,6 +129,17 @@ export async function POST(req: Request) {
           { status: 403 },
         );
       }
+      if (!planAsignado.piloto_empleado_id) {
+        return NextResponse.json(
+          { error: "Operaciones debe vincular al piloto con un colaborador antes de iniciar el viaje." },
+          { status: 409 },
+        );
+      }
+    } else if (personal.tipo !== "Piloto") {
+      return NextResponse.json(
+        { error: "Como auxiliar solo puedes iniciar un viaje asignado por Operaciones." },
+        { status: 403 },
+      );
     }
     const resuelto = planAsignado?.unidad_id
       ? await resolverVehiculoDeUnidadTms(empresaId, Number(planAsignado.unidad_id))
@@ -205,8 +221,12 @@ export async function POST(req: Request) {
     // Detección automática de ruta asignada por Operaciones (Fase 4): si hay
     // un único plan "Programado"/"En ruta" para hoy que coincida con el
     // piloto o la placa, se vincula solo — el piloto no tiene que buscarlo.
+    const pilotoNombre = planAsignado?.piloto_nombre ? String(planAsignado.piloto_nombre) : nombre;
+    const pilotoEmpleadoId = planAsignado?.piloto_empleado_id
+      ? Number(planAsignado.piloto_empleado_id)
+      : session.empleadoId;
     const planesMatch = await buscarPlanesParaSalida(empresaId, {
-      pilotoNombre: nombre,
+      pilotoNombre,
       placa: String(veh.placa),
     });
     const planId = planAsignado
@@ -247,12 +267,12 @@ export async function POST(req: Request) {
         [
           empresaId,
           Number(veh.id),
-          nombre,
-          norm,
+          pilotoNombre,
+          normalizarNombrePiloto(pilotoNombre),
           d.kmSalida,
           ahora,
           destinoFinal,
-          session.empleadoId,
+          pilotoEmpleadoId,
           planId,
         ],
       );
@@ -280,7 +300,7 @@ export async function POST(req: Request) {
       usuario: `portal:${empleado.codigo}`,
       accion: "salida_viaje",
       modulo: "tms",
-      detalle: `Viaje #${r.insertId} salida (portal piloto) · ${nombre} · placa ${String(veh.placa)} · km ${d.kmSalida}${
+      detalle: `Viaje #${r.insertId} iniciado por ${personal.tipo.toLowerCase()} ${nombre} · piloto ${pilotoNombre} · placa ${String(veh.placa)} · km ${d.kmSalida}${
         planId ? ` · plan TMS #${planId} → En ruta` : ""
       }${destinoFinal ? ` · destino ${destinoFinal}` : ""}`,
     });
@@ -294,7 +314,7 @@ export async function POST(req: Request) {
         Number(veh.id),
         d.kmSalida,
         d.destino ? `Salida viaje → ${d.destino}` : "Salida viaje",
-        nombre,
+        pilotoNombre,
         `portal:${empleado.codigo}`,
         Number(r.insertId),
         ahora,
@@ -322,10 +342,18 @@ export async function POST(req: Request) {
   if (body?.accion === "carga") {
     const parsed = cargaSchema.safeParse(body);
     if (!parsed.success) return NextResponse.json({ error: "Kilometraje de carga inválido." }, { status: 400 });
+    const participacion = await colaboradorParticipaEnViaje(
+      empresaId,
+      session.empleadoId,
+      parsed.data.viajeId,
+    );
+    if (!participacion || participacion.estado !== "abierto") {
+      return NextResponse.json({ error: "No estás asignado a ese viaje abierto." }, { status: 403 });
+    }
     const viaje = await query<RowDataPacket[]>(
       `SELECT v.id, v.km_salida, v.vehiculo_id FROM flota_viajes v
-       WHERE v.id = ? AND v.empresa_id = ? AND v.empleado_id = ? AND v.estado = 'abierto' LIMIT 1`,
-      [parsed.data.viajeId, empresaId, session.empleadoId],
+       WHERE v.id = ? AND v.empresa_id = ? AND v.estado = 'abierto' LIMIT 1`,
+      [parsed.data.viajeId, empresaId],
     );
     if (!viaje[0]) return NextResponse.json({ error: "No tienes ese viaje abierto." }, { status: 404 });
     if (parsed.data.kmCarga < Number(viaje[0].km_salida)) {
