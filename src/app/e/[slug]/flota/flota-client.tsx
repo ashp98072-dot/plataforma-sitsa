@@ -1161,21 +1161,6 @@ export default function FlotaClient() {
     await cargar({ solo: ["vehiculos"] });
   }
 
-  async function limpiarKilometrajeActual() {
-    if (!editId) return;
-    if (!window.confirm("¿Limpiar únicamente el kilometraje actual? Los viajes, lecturas y servicios históricos se conservarán.")) return;
-    const res = await fetch(`/api/empresas/${slug}/flota/vehiculos`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: editId, reiniciarKilometraje: true }),
-    });
-    const data = await res.json();
-    if (!res.ok) return setErr(data.error ?? "No se pudo limpiar el kilometraje.");
-    setMsg(data.mensaje);
-    setForm((f) => ({ ...f, kmActual: 0 }));
-    await cargar({ solo: ["vehiculos"] });
-  }
-
   async function buscarPlanesSalida() {
     if (!pilotoNombre.trim() && !placaSalida.trim()) {
       setPlanesSalida([]);
@@ -2866,7 +2851,7 @@ export default function FlotaClient() {
                 <h2 className="font-medium">
                   {editId ? `Editar vehículo` : "Registrar vehículo"}
                 </h2>
-                <div className="flex gap-3">{editId ? <button type="button" className="text-xs text-amber-300 underline" onClick={() => void limpiarKilometrajeActual()}>Limpiar km actual</button> : null}<button
+                <div className="flex gap-3"><button
                   type="button"
                   className="text-xs underline"
                   onClick={() => {
