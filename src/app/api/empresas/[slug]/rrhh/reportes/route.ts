@@ -109,6 +109,8 @@ export async function GET(req: Request, ctx: Ctx) {
     "Motivo",
     "Horario",
     "Comentarios",
+    "Foto entrada",
+    "Foto salida",
   ];
   const rows = filas.map((r) => [
     r.fecha,
@@ -121,6 +123,8 @@ export async function GET(req: Request, ctx: Ctx) {
     r.motivo,
     r.tipoHorario,
     r.comentarios,
+    r.fotoEntradaId ? "Disponible en el sistema" : "",
+    r.fotoSalidaId ? "Disponible en el sistema" : "",
   ]);
 
   if (formato === "xlsx") {
