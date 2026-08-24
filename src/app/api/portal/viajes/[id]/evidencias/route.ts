@@ -14,7 +14,7 @@ import {
   listarEvidenciasViaje,
   type TipoEvidenciaViaje,
 } from "@/lib/flota/viaje-evidencias";
-import { validarParadaDelPlan } from "@/lib/tms/paradas";
+import { listarParadasDelPlan, validarParadaDelPlan } from "@/lib/tms/paradas";
 import { absPathFromRelative, contentTypeFor } from "@/lib/uploads";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -22,7 +22,6 @@ const TIPOS: TipoEvidenciaViaje[] = [
   "tablero_salida",
   "salida",
   "tablero_llegada",
-  "llegada",
   "producto",
 ];
 
@@ -86,6 +85,17 @@ export async function POST(req: Request, ctx: Ctx) {
   if (!participacion) {
     return NextResponse.json({ error: "No estás asignado a este viaje." }, { status: 403 });
   }
+  const propietario = await query<RowDataPacket[]>(
+    `SELECT id FROM flota_viajes
+     WHERE id = ? AND empresa_id = ? AND empleado_id = ? LIMIT 1`,
+    [viajeId, session.empresaId, session.empleadoId],
+  );
+  if (!propietario[0]) {
+    return NextResponse.json(
+      { error: "Solo el piloto asignado puede adjuntar evidencias." },
+      { status: 403 },
+    );
+  }
   if (participacion.estado !== "abierto") {
     return NextResponse.json({ error: "Solo se agregan evidencias mientras el viaje está en curso." }, { status: 409 });
   }
@@ -99,7 +109,42 @@ export async function POST(req: Request, ctx: Ctx) {
     : null;
   if (!tipo) return NextResponse.json({ error: "Tipo inválido." }, { status: 400 });
   const paradaId = Number(form.get("paradaId") ?? 0) || null;
+  const progreso = await query<RowDataPacket[]>(
+    `SELECT
+       SUM(tipo = 'tablero_salida') AS tablero_salida,
+       SUM(tipo = 'salida') AS carga,
+       SUM(tipo = 'tablero_llegada') AS tablero_llegada
+     FROM flota_viaje_evidencias WHERE empresa_id = ? AND viaje_id = ?`,
+    [session.empresaId, viajeId],
+  );
+  const tieneTableroSalida = Number(progreso[0]?.tablero_salida ?? 0) > 0;
+  const tieneCarga = Number(progreso[0]?.carga ?? 0) > 0;
+  const tieneTableroLlegada = Number(progreso[0]?.tablero_llegada ?? 0) > 0;
+  if (tipo === "tablero_salida" && tieneTableroSalida) {
+    return NextResponse.json({ error: "La evidencia del tablero de salida ya fue registrada." }, { status: 409 });
+  }
+  if (tipo !== "tablero_salida" && !tieneTableroSalida) {
+    return NextResponse.json({ error: "Primero adjunta el tablero de salida." }, { status: 409 });
+  }
+  if (tipo === "salida") {
+    if (tieneCarga) {
+      return NextResponse.json({ error: "La evidencia de carga ya fue registrada." }, { status: 409 });
+    }
+    const kmCarga = await query<RowDataPacket[]>(
+      `SELECT id FROM flota_lecturas
+       WHERE viaje_id = ? AND nota = 'Kilometraje en punto de carga' LIMIT 1`,
+      [viajeId],
+    );
+    if (!kmCarga[0]) return NextResponse.json({ error: "Primero registra el kilometraje en el punto de carga." }, { status: 409 });
+  }
+  if (tipo === "tablero_llegada" && tieneTableroLlegada) {
+    return NextResponse.json({ error: "El tablero de llegada ya fue registrado." }, { status: 409 });
+  }
+  if (tipo === "tablero_llegada" && !tieneCarga) {
+    return NextResponse.json({ error: "Primero registra el kilometraje y la evidencia de carga." }, { status: 409 });
+  }
   if (tipo === "producto") {
+    if (!tieneCarga) return NextResponse.json({ error: "Primero adjunta la evidencia de carga." }, { status: 409 });
     if (!participacion.planId || !paradaId) {
       return NextResponse.json({ error: "Selecciona la parada de esta evidencia." }, { status: 400 });
     }
@@ -109,6 +154,21 @@ export async function POST(req: Request, ctx: Ctx) {
       paradaId,
     );
     if (!parada) return NextResponse.json({ error: "La parada no pertenece al viaje." }, { status: 400 });
+    const paradas = await listarParadasDelPlan(participacion.planId);
+    const siguiente = paradas.find((p) => p.requiere_evidencia && p.evidencias < 1);
+    if (!siguiente || siguiente.id !== paradaId) {
+      return NextResponse.json(
+        { error: siguiente ? `La siguiente parada es ${siguiente.orden}. ${siguiente.lugar_nombre}.` : "Todas las paradas ya están completas." },
+        { status: 409 },
+      );
+    }
+  }
+  if (tipo === "tablero_llegada" && participacion.planId) {
+    const pendientes = (await listarParadasDelPlan(participacion.planId))
+      .filter((p) => p.requiere_evidencia && p.evidencias < 1);
+    if (pendientes.length) {
+      return NextResponse.json({ error: "Completa todas las paradas antes de registrar el regreso al predio." }, { status: 409 });
+    }
   }
 
   const latitud = Number(form.get("latitud"));
