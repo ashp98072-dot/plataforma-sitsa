@@ -636,6 +636,28 @@ CREATE TABLE IF NOT EXISTS tms_viaticos (
   CONSTRAINT fk_via_personal FOREIGN KEY (personal_id) REFERENCES tms_personal(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- VIAT-1: ubicaciones guardadas por cliente (paradas frecuentes), para
+-- acelerar Programación. Ver sql/migrate-2026-08-viat-1-cliente-ubicaciones.sql
+-- para el detalle. (tms_plan_paradas.cliente_ubicacion_id no se declara
+-- aquí: esa tabla se crea vía código en tiempo de ejecución, no en este
+-- archivo — ver src/lib/flota/schema.ts).
+CREATE TABLE IF NOT EXISTS tms_cliente_ubicaciones (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  cliente_id INT NOT NULL,
+  nombre VARCHAR(160) NOT NULL,
+  direccion VARCHAR(300) NULL,
+  municipio VARCHAR(120) NULL,
+  departamento VARCHAR(120) NULL,
+  referencia VARCHAR(300) NULL,
+  tipo VARCHAR(20) NOT NULL DEFAULT 'AMBOS',
+  activo TINYINT(1) NOT NULL DEFAULT 1,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_tmscliub_cliente (empresa_id, cliente_id, activo),
+  CONSTRAINT fk_tmscliub_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
+  CONSTRAINT fk_tmscliub_cliente FOREIGN KEY (cliente_id) REFERENCES tms_clientes(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- Flota / Predios
 CREATE TABLE IF NOT EXISTS flota_vehiculos (
   id INT AUTO_INCREMENT PRIMARY KEY,

@@ -323,6 +323,7 @@ export function ProgramacionClient({ slug, hoy }: Props) {
   // formulario en modo edición (mutuamente excluyentes).
   const [mostrarCrear, setMostrarCrear] = useState(false);
   const [editandoId, setEditandoId] = useState<number | null>(null);
+  const [avisoRango, setAvisoRango] = useState("");
 
   // Carga inicial: función definida DENTRO del efecto (patrón oficial de
   // React para "Fetching data with Effects", con bandera `ignore` para
@@ -506,11 +507,35 @@ export function ProgramacionClient({ slug, hoy }: Props) {
   function cerrarFormulario() {
     setMostrarCrear(false);
     setEditandoId(null);
+    setAvisoRango("");
   }
 
-  async function alGuardar() {
-    cerrarFormulario();
+  /**
+   * Tras crear/editar: refresca el listado y pasa DIRECTO al modo edición
+   * del mismo viaje (para que los viáticos sugeridos, que solo existen una
+   * vez que el viaje tiene id, queden a un clic — sin tener que ubicarlo a
+   * mano en el tablero). Si su fecha cae fuera del filtro de rango activo
+   * (Hoy/Mañana/Semana), cambia a "Semana" cuando entra en esos 7 días, o
+   * deja un aviso claro cuando quedó más adelante — así el viaje nunca
+   * "desaparece" solo porque el filtro no lo cubre.
+   */
+  async function alGuardar(info: { id: number; fechaPlan: string }) {
+    setMostrarCrear(false);
     await cargar();
+    setEditandoId(info.id);
+    const { desde, hasta } = rangoFechas(hoy, rango);
+    if (info.fechaPlan >= desde && info.fechaPlan <= hasta) {
+      setAvisoRango("");
+      return;
+    }
+    if (info.fechaPlan >= hoy && info.fechaPlan <= sumarDias(hoy, 6)) {
+      setRango("semana");
+      setAvisoRango("");
+    } else {
+      setAvisoRango(
+        `El viaje quedó programado para ${info.fechaPlan}, fuera del rango visible actual (${desde === hasta ? desde : `${desde} → ${hasta}`}). Ajusta los filtros de fecha para verlo en el tablero.`,
+      );
+    }
   }
 
   return (
@@ -551,15 +576,21 @@ export function ProgramacionClient({ slug, hoy }: Props) {
       </div>
 
       {mostrarCrear ? (
-        <PlanForm slug={slug} onSaved={() => void alGuardar()} onCancel={cerrarFormulario} />
+        <PlanForm slug={slug} hoy={hoy} onSaved={(info) => void alGuardar(info)} onCancel={cerrarFormulario} />
       ) : null}
       {planEditando ? (
         <PlanForm
           slug={slug}
+          hoy={hoy}
           plan={planEditando}
-          onSaved={() => void alGuardar()}
+          onSaved={(info) => void alGuardar(info)}
           onCancel={cerrarFormulario}
         />
+      ) : null}
+      {avisoRango ? (
+        <p className="rounded-lg border border-amber-700/60 bg-amber-900/20 px-3 py-2 text-sm text-amber-200">
+          {avisoRango}
+        </p>
       ) : null}
 
       {err ? <p className="text-sm text-rose-300">{err}</p> : null}
@@ -605,7 +636,10 @@ export function ProgramacionClient({ slug, hoy }: Props) {
           <button
             key={key}
             type="button"
-            onClick={() => setRango(key)}
+            onClick={() => {
+              setRango(key);
+              setAvisoRango("");
+            }}
             className={[
               "rounded-lg border px-3 py-1.5 text-sm font-medium transition",
               rango === key
