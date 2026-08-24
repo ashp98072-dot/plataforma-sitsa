@@ -11,6 +11,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { hoyLocal, TZ_GUATEMALA } from "@/lib/rrhh/dates";
 import { useEmpresaSession } from "@/lib/empresa-session";
+import { CamaraMarcaje } from "./camara-marcaje";
 
 type Marcaje = {
   id: number;
@@ -21,11 +22,14 @@ type Marcaje = {
   incidencia: string;
   estado: string;
   viajeLargo: boolean;
+  fotoEntradaId: number | null;
+  fotoSalidaId: number | null;
 };
 
 type InfoEmpleadoMarcaje = {
   encontrado: boolean;
   numeroEmpleado?: string;
+  dpiEnmascarado?: string;
   nombre?: string;
   empresaId?: number;
   empresaNombre?: string;
@@ -84,6 +88,8 @@ export default function MarcajesKioskoPage() {
   const [mensaje, setMensaje] = useState("");
   const [error, setError] = useState("");
   const [tipoOk, setTipoOk] = useState<"Entrada" | "Salida" | null>(null);
+  const [fotoMarcaje, setFotoMarcaje] = useState<Blob | null>(null);
+  const [capturaKey, setCapturaKey] = useState(0);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const hoy = hoyLocal();
@@ -170,13 +176,15 @@ export default function MarcajesKioskoPage() {
   }, [slug, hoy]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void cargar();
   }, [cargar]);
 
   useEffect(() => {
     const numero = numeroEmpleado.trim();
 
-    if (!numero) {
+    if (!numero || numero.length !== 13) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setInfoEmpleado(null);
       setBuscandoEmpleado(false);
       setEsVariable(false);
@@ -191,7 +199,7 @@ export default function MarcajesKioskoPage() {
 
       try {
         const res = await fetch(
-          `/api/empresas/${slug}/rrhh/marcajes/empleado?codigo=${encodeURIComponent(numero)}`,
+          `/api/empresas/${slug}/rrhh/marcajes/empleado?dpi=${encodeURIComponent(numero)}`,
         );
 
         const data = await res.json();
@@ -239,6 +247,10 @@ export default function MarcajesKioskoPage() {
     setEnviando(true);
 
     try {
+      if (!fotoMarcaje) {
+        setError("Toma una fotografía desde la cámara antes de registrar el marcaje.");
+        return;
+      }
       let latitud: number | null = gpsActual?.lat ?? null;
       let longitud: number | null = gpsActual?.lng ?? null;
 
@@ -256,22 +268,21 @@ export default function MarcajesKioskoPage() {
         }
       }
 
+      if (latitud == null || longitud == null) {
+        setError("Activa y autoriza el GPS antes de registrar el marcaje.");
+        return;
+      }
+
+      const form = new FormData();
+      form.set("modo", "kiosko");
+      form.set("dpi", numeroEmpleado.trim());
+      form.set("viajeLargo", String(viajeLargo));
+      form.set("latitud", String(latitud));
+      form.set("longitud", String(longitud));
+      form.set("foto", fotoMarcaje, `marcaje_${Date.now()}.jpg`);
       const res = await fetch(`/api/empresas/${slug}/rrhh/marcajes`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          modo: "kiosko",
-
-          // La API conserva temporalmente el nombre "codigo",
-          // pero ahora recibe el numero_empleado global.
-          codigo: numeroEmpleado.trim(),
-
-          viajeLargo,
-          latitud,
-          longitud,
-        }),
+        body: form,
       });
 
       const data = await res.json();
@@ -295,6 +306,8 @@ export default function MarcajesKioskoPage() {
       setInfoEmpleado(null);
       setEsVariable(false);
       setViajeLargo(false);
+      setFotoMarcaje(null);
+      setCapturaKey((actual) => actual + 1);
 
       await cargar();
       inputRef.current?.focus();
@@ -317,7 +330,7 @@ export default function MarcajesKioskoPage() {
           </h1>
 
           <p className="text-sm text-[var(--muted)]">
-            Entrada / salida automática por número de empleado global.
+            Entrada / salida por DPI, fotografía en vivo y ubicación GPS.
           </p>
 
           <p className="mt-1 text-sm text-[var(--muted)]">
@@ -350,17 +363,22 @@ export default function MarcajesKioskoPage() {
 
         <form onSubmit={onSubmit} className="mx-auto mt-8 max-w-md">
           <label className="block text-center text-sm font-semibold">
-            Número de empleado
+            DPI
             <input
               ref={inputRef}
               className="mt-3 w-full rounded-lg border-2 border-[var(--accent)] bg-[var(--input)] px-4 py-3 text-center text-lg outline-none focus:ring-2 focus:ring-[#2F8FD1]"
               value={numeroEmpleado}
-              onChange={(e) => setNumeroEmpleado(e.target.value)}
-              placeholder="Ej: 000028"
+              onChange={(e) => {
+                setNumeroEmpleado(e.target.value.replace(/\D/g, "").slice(0, 13));
+                setFotoMarcaje(null);
+                setCapturaKey((actual) => actual + 1);
+              }}
+              placeholder="13 dígitos"
               autoFocus
               disabled={enviando}
               autoComplete="off"
               inputMode="numeric"
+              maxLength={13}
             />
           </label>
 
@@ -388,10 +406,10 @@ export default function MarcajesKioskoPage() {
 
                   <p>
                     <span className="text-[var(--muted)]">
-                      No. empleado:{" "}
+                      DPI:{" "}
                     </span>
                     <span className="font-mono">
-                      {infoEmpleado.numeroEmpleado || numeroEmpleado}
+                      {infoEmpleado.dpiEnmascarado || "*************"}
                     </span>
                   </p>
 
@@ -420,6 +438,12 @@ export default function MarcajesKioskoPage() {
               Inicia viaje largo
             </label>
           ) : null}
+
+          <CamaraMarcaje
+            key={capturaKey}
+            disabled={enviando || !infoEmpleado?.encontrado || infoEmpleado.estado === "Baja"}
+            onCapture={setFotoMarcaje}
+          />
 
           <div className="mt-5 rounded-lg border border-sky-800/40 bg-sky-950/25 p-3 text-left">
             <p className="text-xs font-medium text-sky-100">
@@ -464,7 +488,9 @@ export default function MarcajesKioskoPage() {
               !numeroEmpleado.trim() ||
               buscandoEmpleado ||
               infoEmpleado?.encontrado === false ||
-              infoEmpleado?.estado === "Baja"
+              infoEmpleado?.estado === "Baja" ||
+              !fotoMarcaje ||
+              !gpsActual
             }
             className="mt-6 w-full rounded-lg bg-[var(--accent)] px-4 py-3 text-sm font-semibold text-white transition hover:brightness-110 disabled:opacity-50"
           >
@@ -505,6 +531,7 @@ export default function MarcajesKioskoPage() {
                   <th className="px-3 py-2">Salida</th>
                   <th className="px-3 py-2">Incid.</th>
                   <th className="px-3 py-2">Estado</th>
+                  {rolSesion !== "Marcaje" ? <th className="px-3 py-2">Fotografías</th> : null}
                 </tr>
               </thead>
 
@@ -512,7 +539,7 @@ export default function MarcajesKioskoPage() {
                 {loading ? (
                   <tr>
                     <td
-                      colSpan={5}
+                      colSpan={rolSesion !== "Marcaje" ? 6 : 5}
                       className="px-3 py-6 text-[var(--muted)]"
                     >
                       Cargando…
@@ -521,7 +548,7 @@ export default function MarcajesKioskoPage() {
                 ) : marcajes.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={5}
+                      colSpan={rolSesion !== "Marcaje" ? 6 : 5}
                       className="px-3 py-6 text-[var(--muted)]"
                     >
                       No se han registrado marcajes el día de hoy.
@@ -575,6 +602,15 @@ export default function MarcajesKioskoPage() {
                       >
                         {m.estado}
                       </td>
+                      {rolSesion !== "Marcaje" ? (
+                        <td className="px-3 py-2">
+                          <div className="flex gap-2 text-xs">
+                            {m.fotoEntradaId ? <a href={`/api/empresas/${slug}/rrhh/marcajes/evidencias/${m.fotoEntradaId}`} target="_blank" rel="noreferrer" className="text-sky-300 hover:underline">Entrada</a> : null}
+                            {m.fotoSalidaId ? <a href={`/api/empresas/${slug}/rrhh/marcajes/evidencias/${m.fotoSalidaId}`} target="_blank" rel="noreferrer" className="text-sky-300 hover:underline">Salida</a> : null}
+                            {!m.fotoEntradaId && !m.fotoSalidaId ? <span className="text-[var(--muted)]">—</span> : null}
+                          </div>
+                        </td>
+                      ) : null}
                     </tr>
                   ))
                 )}

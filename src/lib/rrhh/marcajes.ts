@@ -134,6 +134,7 @@ export async function listarMarcajesEmpleadoRango(
 export type InfoCodigoMarcaje = {
   encontrado: boolean;
   numeroEmpleado?: string;
+  dpiEnmascarado?: string;
   nombre?: string;
   empresaId?: number;
   empresaNombre?: string;
@@ -144,9 +145,9 @@ export type InfoCodigoMarcaje = {
 
 export async function infoCodigoParaMarcaje(
   _empresaKioskoId: number,
-  numeroEmpleado: string,
+  dpi: string,
 ): Promise<InfoCodigoMarcaje> {
-  const numero = numeroEmpleado.trim();
+  const numero = dpi.replace(/\D/g, "");
 
   if (!numero) {
     return { encontrado: false };
@@ -155,6 +156,7 @@ export async function infoCodigoParaMarcaje(
   const rows = await query<RowDataPacket[]>(
     `SELECT
        e.numero_empleado,
+       e.dpi,
        e.nombre,
        e.empresa_id,
        e.tipo_horario,
@@ -162,7 +164,7 @@ export async function infoCodigoParaMarcaje(
        emp.nombre AS empresa_nombre
      FROM empleados e
      INNER JOIN empresas emp ON emp.id = e.empresa_id
-     WHERE e.numero_empleado = ?
+     WHERE e.dpi = ?
      LIMIT 1`,
     [numero],
   );
@@ -176,6 +178,7 @@ export async function infoCodigoParaMarcaje(
   return {
     encontrado: true,
     numeroEmpleado: String(rows[0].numero_empleado ?? ""),
+    dpiEnmascarado: `*********${String(rows[0].dpi ?? "").slice(-4)}`,
     nombre: String(rows[0].nombre),
     empresaId: Number(rows[0].empresa_id),
     empresaNombre: String(rows[0].empresa_nombre ?? ""),
@@ -194,6 +197,8 @@ export type MarcajeHoy = {
   incidencia: string;
   estado: string;
   viajeLargo: boolean;
+  fotoEntradaId: number | null;
+  fotoSalidaId: number | null;
 };
 
 async function minutosRetrasoSemanaAntes(
@@ -243,15 +248,31 @@ export async function listarMarcajesRango(
     s.estado,
     e.hora_entrada_teorica,
     s.viaje_largo,
+    ev_entrada.id AS foto_entrada_id,
+    ev_salida.id AS foto_salida_id,
     DATE_FORMAT(s.fecha_jornada, '%Y-%m-%d') AS fecha_jornada
  FROM sesiones_trabajo s
  INNER JOIN empleados e ON e.id = s.id_empleado
+ LEFT JOIN marcaje_evidencias ev_entrada ON ev_entrada.sesion_id = s.id AND ev_entrada.tipo = 'entrada'
+ LEFT JOIN marcaje_evidencias ev_salida ON ev_salida.sesion_id = s.id AND ev_salida.tipo = 'salida'
  WHERE s.empresa_id = ?
    AND s.fecha_jornada BETWEEN ? AND ?
  ORDER BY s.fecha_jornada ASC, s.entrada_at ASC
  LIMIT 500`,
     [empresaId, desde, hasta],
-  );
+  ).catch(() => query<RowDataPacket[]>(
+    `SELECT
+       s.id, s.id_empleado, e.codigo, e.nombre, s.entrada_at, s.salida_at,
+       s.estado, e.hora_entrada_teorica, s.viaje_largo,
+       NULL AS foto_entrada_id, NULL AS foto_salida_id,
+       DATE_FORMAT(s.fecha_jornada, '%Y-%m-%d') AS fecha_jornada
+     FROM sesiones_trabajo s
+     INNER JOIN empleados e ON e.id = s.id_empleado
+     WHERE s.empresa_id = ? AND s.fecha_jornada BETWEEN ? AND ?
+     ORDER BY s.fecha_jornada ASC, s.entrada_at ASC
+     LIMIT 500`,
+    [empresaId, desde, hasta],
+  ));
 
   // Acumular minutos de retraso por empleado en la semana (sin N+1 queries)
   const acumSemana = new Map<string, number>(); // empId|lunes -> minutos
@@ -285,6 +306,8 @@ export async function listarMarcajesRango(
       incidencia,
       estado: String(r.estado),
       viajeLargo: Number(r.viaje_largo ?? 0) === 1,
+      fotoEntradaId: r.foto_entrada_id != null ? Number(r.foto_entrada_id) : null,
+      fotoSalidaId: r.foto_salida_id != null ? Number(r.foto_salida_id) : null,
     });
   }
 
@@ -296,6 +319,8 @@ export async function listarMarcajesRango(
 export type ResultadoMarcajeKiosko =
   | {
       ok: true;
+      sesionId: number;
+      empresaId: number;
       tipo: "Entrada" | "Salida";
       nombre: string;
       hora: string;
@@ -324,15 +349,15 @@ export async function registrarMarcajeKiosko(
 ): Promise<ResultadoMarcajeKiosko> {
   /*
    * Por compatibilidad con la API/UI actual el campo todavía
-   * se llama "codigo", pero representa numero_empleado.
+   * se llama "codigo" por compatibilidad interna, pero representa el DPI.
    */
-  const numeroEmpleado = input.codigo.trim();
+  const dpi = input.codigo.replace(/\D/g, "");
 
-  if (!numeroEmpleado) {
+  if (!/^\d{13}$/.test(dpi)) {
     return {
       ok: false,
       code: "EMPTY",
-      error: "Ingrese su número de empleado.",
+      error: "Ingrese un DPI válido de 13 dígitos.",
     };
   }
 
@@ -340,7 +365,7 @@ export async function registrarMarcajeKiosko(
   const timestamp = ahoraLocal();
 
   /*
-   * El empleado se identifica globalmente por numero_empleado.
+   * El empleado se identifica globalmente por DPI.
    * La empresa real se obtiene del propio registro del empleado.
    */
   const empRows = await query<RowDataPacket[]>(
@@ -348,21 +373,22 @@ export async function registrarMarcajeKiosko(
        id,
        empresa_id,
        numero_empleado,
+       dpi,
        nombre,
        estado,
        hora_entrada_teorica,
        tipo_horario
      FROM empleados
-     WHERE numero_empleado = ?
+     WHERE dpi = ?
      LIMIT 1`,
-    [numeroEmpleado],
+    [dpi],
   );
 
   if (!empRows[0]) {
     return {
       ok: false,
       code: "NOT_FOUND",
-      error: "No se encontró ningún empleado con ese número.",
+      error: "No se encontró ningún empleado con ese DPI.",
     };
   }
 
@@ -488,6 +514,8 @@ export async function registrarMarcajeKiosko(
 
     return {
       ok: true,
+      sesionId: Number(abiertas[0].id),
+      empresaId,
       tipo: "Salida",
       nombre,
       hora,
@@ -523,8 +551,9 @@ export async function registrarMarcajeKiosko(
    * ENTRADA
    * ========================================================
    */
+  let sesionId = 0;
   try {
-    await execute(
+    const insert = await execute(
       `INSERT INTO sesiones_trabajo
         (
           empresa_id,
@@ -551,6 +580,7 @@ export async function registrarMarcajeKiosko(
         viajeLargo ? 1 : 0,
       ],
     );
+    sesionId = Number(insert.insertId);
   } catch {
     /*
      * Compatibilidad con instalaciones antiguas donde
@@ -559,7 +589,7 @@ export async function registrarMarcajeKiosko(
      * Las columnas de trazabilidad GPS sí forman parte de
      * la migración obligatoria de Fase 1.1.
      */
-    await execute(
+    const insert = await execute(
       `INSERT INTO sesiones_trabajo
         (
           empresa_id,
@@ -584,6 +614,7 @@ export async function registrarMarcajeKiosko(
         fechaJornada,
       ],
     );
+    sesionId = Number(insert.insertId);
   }
 
   const hora =
@@ -618,6 +649,8 @@ export async function registrarMarcajeKiosko(
 
   return {
     ok: true,
+    sesionId,
+    empresaId,
     tipo: "Entrada",
     nombre,
     hora,
