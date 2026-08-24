@@ -174,7 +174,7 @@ export default function LimpiarModuloPage() {
         </div>
 
         <div>
-          <p className="text-sm font-medium">2. Módulo o área de RRHH</p>
+          <p className="text-sm font-medium">2. Módulo o dato específico</p>
           <p className="mb-2 text-xs text-[var(--muted)]">
             {MODULO_LIMPIEZA_NOTA[modulo]}
           </p>
