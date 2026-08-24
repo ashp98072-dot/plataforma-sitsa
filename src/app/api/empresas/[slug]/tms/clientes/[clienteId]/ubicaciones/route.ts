@@ -10,7 +10,7 @@ type Ctx = { params: Promise<{ slug: string; clienteId: string }> };
  * (tms_clientes.id, la misma identidad que ya usa tms_planes_viaje.
  * cliente_id). Uso interno TMS/Programación.
  */
-export async function GET(_req: Request, ctx: Ctx) {
+export async function GET(req: Request, ctx: Ctx) {
   const { slug, clienteId } = await ctx.params;
   const guard = await requireTenantModulo(slug, "tms");
   if (guard.error) return guard.error;
@@ -19,9 +19,15 @@ export async function GET(_req: Request, ctx: Ctx) {
   if (!Number.isFinite(cid)) {
     return NextResponse.json({ error: "Cliente inválido." }, { status: 400 });
   }
+  // ?todas=1: administración en TMS (ver también inactivas para poder
+  // reactivarlas). Sin el parámetro, comportamiento igual que antes (solo
+  // activas — selector de paradas en Programación).
+  const todas = new URL(req.url).searchParams.get("todas") === "1";
 
   try {
-    const ubicaciones = await listarUbicacionesCliente(guard.empresa.id, cid);
+    const ubicaciones = await listarUbicacionesCliente(guard.empresa.id, cid, {
+      incluirInactivas: todas,
+    });
     return NextResponse.json(
       { ubicaciones },
       { headers: { "Cache-Control": "private, no-store" } },

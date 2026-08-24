@@ -295,9 +295,9 @@ async function obtenerProgramacion(
   };
 }
 
-type Props = { slug: string; hoy: string };
+type Props = { slug: string; hoy: string; planInicialId?: number | null };
 
-export function ProgramacionClient({ slug, hoy }: Props) {
+export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   const [planes, setPlanes] = useState<Plan[]>([]);
   const [estadoVehiculos, setEstadoVehiculos] = useState<EstadoVehiculo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -322,7 +322,7 @@ export function ProgramacionClient({ slug, hoy }: Props) {
   // creación; `editando` selecciona un plan del tablero para abrir el mismo
   // formulario en modo edición (mutuamente excluyentes).
   const [mostrarCrear, setMostrarCrear] = useState(false);
-  const [editandoId, setEditandoId] = useState<number | null>(null);
+  const [editandoId, setEditandoId] = useState<number | null>(planInicialId);
   const [avisoRango, setAvisoRango] = useState("");
 
   // Carga inicial: función definida DENTRO del efecto (patrón oficial de
