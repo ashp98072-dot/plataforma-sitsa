@@ -5,14 +5,17 @@ import type {
   DisponibilidadPersonal,
   EstadoDisponibilidad,
 } from "@/lib/operaciones/disponibilidad-personal";
+import PlanForm from "./plan-form";
 
 /**
- * Operaciones → Programación (Fase P3) — tablero de SOLO LECTURA.
+ * Operaciones → Programación — pantalla operativa principal para crear y
+ * gestionar viajes (antes Fase P3, solo lectura).
  *
  * Consume tal cual GET /api/empresas/[slug]/tms/planes (el mismo endpoint
- * que ya usa la pantalla TMS existente) — no hay escritura, no hay estados
- * nuevos, no hay SQL nuevo. Todos los indicadores se calculan en el cliente
- * a partir de lo que el GET ya entrega hoy.
+ * que ya usa la pantalla TMS existente). El tablero/resumen/filtros siguen
+ * siendo de solo lectura y se calculan en el cliente a partir de lo que el
+ * GET ya entrega; la creación/edición real vive en ./plan-form.tsx (mismos
+ * endpoints POST/PATCH que ya usaba TMS, sin modelo ni tabla nuevos).
  *
  * Fase P4.2: además consume GET /api/empresas/[slug]/operaciones/
  * disponibilidad-personal?fecha=YYYY-MM-DD (envuelve listarDisponibilidadPersonal,
@@ -41,7 +44,7 @@ type ParadaPlan = {
 /** Auxiliar de un plan con su id real de tms_personal (Fase P4.3). */
 type AuxiliarPlan = { personalId: number; nombre: string };
 
-type Plan = {
+export type Plan = {
   id: number;
   codigo: string;
   fecha_plan: string;
@@ -315,6 +318,12 @@ export function ProgramacionClient({ slug, hoy }: Props) {
   const [fUnidad, setFUnidad] = useState("");
   const [fCliente, setFCliente] = useState("");
 
+  // Creación/edición de viajes: `mostrarCrear` abre el formulario en modo
+  // creación; `editando` selecciona un plan del tablero para abrir el mismo
+  // formulario en modo edición (mutuamente excluyentes).
+  const [mostrarCrear, setMostrarCrear] = useState(false);
+  const [editandoId, setEditandoId] = useState<number | null>(null);
+
   // Carga inicial: función definida DENTRO del efecto (patrón oficial de
   // React para "Fetching data with Effects", con bandera `ignore` para
   // evitar aplicar una respuesta obsoleta si `slug` cambia rápido). No usa
@@ -489,6 +498,21 @@ export function ProgramacionClient({ slug, hoy }: Props) {
   const input =
     "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
 
+  const planEditando = useMemo(
+    () => (editandoId != null ? (planes.find((p) => p.id === editandoId) ?? null) : null),
+    [planes, editandoId],
+  );
+
+  function cerrarFormulario() {
+    setMostrarCrear(false);
+    setEditandoId(null);
+  }
+
+  async function alGuardar() {
+    cerrarFormulario();
+    await cargar();
+  }
+
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -498,19 +522,45 @@ export function ProgramacionClient({ slug, hoy }: Props) {
           </p>
           <h1 className="mt-1 text-2xl font-semibold">Programación</h1>
           <p className="mt-1 max-w-2xl text-sm text-[var(--muted)]">
-            Vista operativa de viajes programados. Solo lectura — para
-            asignar, reprogramar o cancelar, usa TMS por ahora.
+            Pantalla operativa diaria: crea viajes, asigna piloto/auxiliares/
+            unidad, reprograma y gestiona viáticos. Clic en un viaje para
+            editarlo.
           </p>
         </div>
-        <button
-          type="button"
-          className="rounded bg-[#334155] px-3 py-1.5 text-sm text-white disabled:opacity-40"
-          disabled={loading}
-          onClick={() => void cargar()}
-        >
-          {loading ? "Actualizando…" : "Actualizar"}
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm text-white disabled:opacity-40"
+            disabled={loading}
+            onClick={() => {
+              setEditandoId(null);
+              setMostrarCrear((v) => !v);
+            }}
+          >
+            {mostrarCrear ? "Cancelar" : "+ Nuevo viaje"}
+          </button>
+          <button
+            type="button"
+            className="rounded bg-[#334155] px-3 py-1.5 text-sm text-white disabled:opacity-40"
+            disabled={loading}
+            onClick={() => void cargar()}
+          >
+            {loading ? "Actualizando…" : "Actualizar"}
+          </button>
+        </div>
       </div>
+
+      {mostrarCrear ? (
+        <PlanForm slug={slug} onSaved={() => void alGuardar()} onCancel={cerrarFormulario} />
+      ) : null}
+      {planEditando ? (
+        <PlanForm
+          slug={slug}
+          plan={planEditando}
+          onSaved={() => void alGuardar()}
+          onCancel={cerrarFormulario}
+        />
+      ) : null}
 
       {err ? <p className="text-sm text-rose-300">{err}</p> : null}
 
@@ -652,7 +702,25 @@ export function ProgramacionClient({ slug, hoy }: Props) {
           return (
             <div
               key={p.id}
-              className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4"
+              role="button"
+              tabIndex={0}
+              onClick={() => {
+                setMostrarCrear(false);
+                setEditandoId((cur) => (cur === p.id ? null : p.id));
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setMostrarCrear(false);
+                  setEditandoId((cur) => (cur === p.id ? null : p.id));
+                }
+              }}
+              className={[
+                "cursor-pointer rounded-xl border p-4 transition hover:border-[var(--accent)]/60",
+                editandoId === p.id
+                  ? "border-[var(--accent)] bg-[var(--card)]"
+                  : "border-[var(--border)] bg-[var(--card)]",
+              ].join(" ")}
             >
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div>
