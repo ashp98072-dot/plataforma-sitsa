@@ -1,5 +1,6 @@
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
+import { toIsoDate } from "@/lib/rrhh/dates";
 
 export type ViajeAbiertoPiloto = {
   id: number;
@@ -77,7 +78,7 @@ export async function listarAsignacionesOperativasEmpleado(
   return rows.map((r) => ({
     planId: Number(r.id),
     codigo: String(r.codigo),
-    fecha: String(r.fecha_plan).slice(0, 10),
+    fecha: toIsoDate(r.fecha_plan as string | Date | null) ?? "",
     horaSalida: r.hora_carga ? String(r.hora_carga).slice(0, 8) : null,
     regresoEstimado: r.regreso_estimado ? String(r.regreso_estimado) : null,
     estado: String(r.estado),
