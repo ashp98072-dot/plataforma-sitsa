@@ -17,8 +17,8 @@ import ClienteUbicacionesAdmin from "@/components/tms/cliente-ubicaciones-admin"
  *   1. Configuración: viáticos predeterminados (ViaticosConfigPanel) +
  *      ubicaciones de clientes (ClienteUbicacionesAdmin).
  *   2. Viajes / control administrativo: tabla de solo lectura de
- *      GET /tms/planes con filtros, detalle, evidencia de carga/descarga
- *      (soporte de campo ya existente — no reasigna piloto/auxiliares/
+ *      GET /tms/planes con filtros, detalle y seguimiento de evidencias
+ *      registradas desde el portal — no reasigna piloto/auxiliares/
  *      unidad/paradas, no cambia estado), enlace "Ver en Programación" y
  *      la bitácora de auditoría.
  *   3. Catálogos (clientes, unidades, pilotos, auxiliares, lugares) —
@@ -68,6 +68,20 @@ type Plan = {
   evidencias: number;
 };
 
+type EvidenciaTms = {
+  id: number;
+  tipo: string;
+  parada_id: number | null;
+  parada_nombre: string | null;
+  parada_orden: number | null;
+  nombre: string;
+  latitud: number | null;
+  longitud: number | null;
+  capturadoEn: string | null;
+  subidoPor: string | null;
+  url: string;
+};
+
 type AudRow = {
   id: number;
   usuario: string | null;
@@ -101,6 +115,16 @@ function labelAccionAud(accion: string): string {
     default:
       return accion;
   }
+}
+
+function fechaHoraEvidencia(valor: string | null): string {
+  if (!valor) return "Fecha no disponible";
+  const fecha = new Date(valor);
+  if (Number.isNaN(fecha.getTime())) return valor;
+  return new Intl.DateTimeFormat("es-GT", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(fecha);
 }
 
 export default function TmsPage() {
@@ -141,7 +165,8 @@ export default function TmsPage() {
   const [fFecha, setFFecha] = useState("");
   const [fEstado, setFEstado] = useState("");
   const [expandido, setExpandido] = useState<number | null>(null);
-  const [msg, setMsg] = useState("");
+  const [evidenciasPorPlan, setEvidenciasPorPlan] = useState<Record<number, EvidenciaTms[]>>({});
+  const [cargandoEvidencias, setCargandoEvidencias] = useState(false);
 
   const cargarPlanes = useCallback(async (mostrarCarga = true) => {
     if (mostrarCarga) setLoadingPlanes(true);
@@ -176,40 +201,29 @@ export default function TmsPage() {
     [planes],
   );
 
-  // --- Evidencia de carga/descarga (soporte de campo — no reasigna
-  // personal/unidad/paradas, no cambia estado). Misma lógica que ya
-  // existía en el formulario retirado de esta pantalla. ---
-  async function subirEvidencia(planId: number, tipo: "Carga" | "Descarga") {
-    const inputEl = document.createElement("input");
-    inputEl.type = "file";
-    inputEl.accept = "image/*";
-    inputEl.onchange = async () => {
-      const file = inputEl.files?.[0];
-      if (!file) return;
-      let latitud: number | undefined;
-      let longitud: number | undefined;
-      try {
-        const pos = await new Promise<GeolocationPosition>((resolve, reject) =>
-          navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 5000 }),
-        );
-        latitud = pos.coords.latitude;
-        longitud = pos.coords.longitude;
-      } catch {
-        /* geo opcional */
+  const cargarEvidencias = useCallback(async (planId: number, mostrarCarga = true) => {
+    if (mostrarCarga) setCargandoEvidencias(true);
+    try {
+      const res = await fetch(`/api/empresas/${slug}/tms/evidencias?planId=${planId}`);
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setEvidenciasPorPlan((actual) => ({
+          ...actual,
+          [planId]: (data.evidencias ?? []) as EvidenciaTms[],
+        }));
       }
-      const fd = new FormData();
-      fd.set("planId", String(planId));
-      fd.set("tipo", tipo);
-      fd.set("file", file);
-      if (latitud != null) fd.set("latitud", String(latitud));
-      if (longitud != null) fd.set("longitud", String(longitud));
-      const res = await fetch(`/api/empresas/${slug}/tms/evidencias`, { method: "POST", body: fd });
-      const data = await res.json();
-      setMsg(data.mensaje || data.error);
-      if (res.ok) await cargarPlanes();
-    };
-    inputEl.click();
-  }
+    } finally {
+      if (mostrarCarga) setCargandoEvidencias(false);
+    }
+  }, [slug]);
+
+  useEffect(() => {
+    if (expandido == null) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void cargarEvidencias(expandido);
+    const intervalo = window.setInterval(() => void cargarEvidencias(expandido, false), 5000);
+    return () => window.clearInterval(intervalo);
+  }, [cargarEvidencias, expandido]);
 
   // --- Bitácora (dentro de la sección 2 — administración avanzada de viajes) ---
   const [bitacora, setBitacora] = useState<AudRow[]>([]);
@@ -265,10 +279,9 @@ export default function TmsPage() {
 
         <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
           <p className="text-xs text-[var(--muted)]">
-            Solo lectura, más evidencia de carga/descarga. Para crear, reasignar o reprogramar, usa Programación.
-            El avance del portal se actualiza automáticamente cada 5 segundos.
+            TMS es solo consulta. Las evidencias las registra el piloto o personal asignado desde su portal.
+            El avance de la ruta y la última ubicación reportada se actualizan cada 5 segundos.
           </p>
-          {msg ? <p className="mt-1 text-xs text-emerald-300">{msg}</p> : null}
 
           <div className="mt-3 flex flex-wrap items-end gap-2">
             <label className="text-xs text-[var(--muted)]">
@@ -319,7 +332,14 @@ export default function TmsPage() {
                 </tr>
               </thead>
               <tbody>
-                {planesFiltrados.map((p) => (
+                {planesFiltrados.map((p) => {
+                  const evidenciasPlan = evidenciasPorPlan[p.id] ?? [];
+                  const evidenciasRecientes = [...evidenciasPlan].sort((a, b) => b.id - a.id);
+                  const ultimaEvidencia = evidenciasRecientes[0] ?? null;
+                  const paradasRequeridas = (p.paradas ?? []).filter((parada) => parada.requiere_evidencia);
+                  const paradasCompletadas = paradasRequeridas.filter((parada) => parada.evidencias > 0);
+                  const siguienteParada = paradasRequeridas.find((parada) => parada.evidencias < 1) ?? null;
+                  return (
                   <Fragment key={p.id}>
                     <tr className="border-t border-[var(--border)]">
                       <td className="px-3 py-2">{p.codigo}</td>
@@ -387,21 +407,69 @@ export default function TmsPage() {
                               )}
                             </div>
                           </div>
-                          <div className="mt-2 flex gap-2">
-                            <button
-                              type="button"
-                              onClick={() => void subirEvidencia(p.id, "Carga")}
-                              className="rounded bg-[#0d9488] px-3 py-1 text-xs text-white"
-                            >
-                              Evidencia carga
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => void subirEvidencia(p.id, "Descarga")}
-                              className="rounded bg-[#0f766e] px-3 py-1 text-xs text-white"
-                            >
-                              Evidencia descarga
-                            </button>
+                          <div className="mt-3 rounded-lg border border-[var(--border)] bg-black/10 p-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <p className="text-xs font-semibold">Seguimiento operativo</p>
+                              <span className="text-[11px] text-sky-300">
+                                {paradasCompletadas.length}/{paradasRequeridas.length} paradas con evidencia
+                              </span>
+                            </div>
+                            <p className="mt-1 text-xs">
+                              {p.estado === "Programado"
+                                ? "Esperando que el piloto inicie el viaje."
+                                : p.estado === "En ruta" && siguienteParada
+                                  ? `En ruta · Siguiente parada: ${siguienteParada.orden}. ${siguienteParada.lugar_nombre}`
+                                  : p.estado === "En ruta"
+                                    ? "Ruta completada; pendiente regreso al predio y cierre del piloto."
+                                    : p.estado === "Descargado"
+                                      ? "Viaje finalizado."
+                                      : `Estado actual: ${p.estado}`}
+                            </p>
+
+                            {cargandoEvidencias && !evidenciasPlan.length ? (
+                              <p className="mt-2 text-[11px] text-[var(--muted)]">Cargando evidencias…</p>
+                            ) : ultimaEvidencia ? (
+                              <div className="mt-2 text-[11px] text-[var(--muted)]">
+                                <p>
+                                  Último reporte: {ultimaEvidencia.tipo}
+                                  {ultimaEvidencia.parada_nombre ? ` · ${ultimaEvidencia.parada_nombre}` : ""}
+                                  {` · ${fechaHoraEvidencia(ultimaEvidencia.capturadoEn)}`}
+                                </p>
+                                <p>Registrado por: {ultimaEvidencia.subidoPor || "Usuario operativo"}</p>
+                                {ultimaEvidencia.latitud != null && ultimaEvidencia.longitud != null ? (
+                                  <a
+                                    className="text-sky-300 underline"
+                                    href={`https://www.google.com/maps?q=${ultimaEvidencia.latitud},${ultimaEvidencia.longitud}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  >
+                                    Ver última ubicación reportada en el mapa
+                                  </a>
+                                ) : (
+                                  <p>Esta evidencia no contiene ubicación GPS.</p>
+                                )}
+                              </div>
+                            ) : (
+                              <p className="mt-2 text-[11px] text-[var(--muted)]">Aún no hay evidencias del viaje.</p>
+                            )}
+
+                            {evidenciasRecientes.length ? (
+                              <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                                {evidenciasRecientes.map((evidencia) => (
+                                  <a
+                                    key={evidencia.id}
+                                    href={evidencia.url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="rounded border border-[var(--border)] p-2 text-[11px] hover:border-sky-500"
+                                  >
+                                    <span className="block font-medium text-sky-300">{evidencia.tipo}</span>
+                                    <span className="block">{evidencia.parada_nombre || "Evidencia general del viaje"}</span>
+                                    <span className="block text-[var(--muted)]">{fechaHoraEvidencia(evidencia.capturadoEn)}</span>
+                                  </a>
+                                ))}
+                              </div>
+                            ) : null}
                           </div>
                           <p className="mt-2 text-[10px] text-amber-200/80">
                             Información interna: los viáticos de este viaje NO se muestran aquí ni en ninguna vista de
@@ -411,7 +479,8 @@ export default function TmsPage() {
                       </tr>
                     ) : null}
                   </Fragment>
-                ))}
+                  );
+                })}
                 {!planesFiltrados.length && !loadingPlanes ? (
                   <tr>
                     <td colSpan={8} className="px-3 py-4 text-[var(--muted)]">
