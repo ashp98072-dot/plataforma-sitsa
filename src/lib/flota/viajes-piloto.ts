@@ -9,6 +9,10 @@ export type ViajeAbiertoPiloto = {
   horaSalida: string;
   destino: string | null;
   planId: number | null;
+  kmCarga: number | null;
+  evidenciaTableroSalida: boolean;
+  evidenciaCarga: boolean;
+  evidenciaTableroLlegada: boolean;
 };
 
 export type AsignacionOperativaPortal = {
@@ -129,7 +133,15 @@ export async function obtenerViajeAbiertoDeEmpleado(
   empleadoId: number,
 ): Promise<ViajeAbiertoPiloto | null> {
   const rows = await query<RowDataPacket[]>(
-    `SELECT v.id, v.km_salida, v.hora_salida, v.destino, v.plan_id, ve.placa
+    `SELECT v.id, v.km_salida, v.hora_salida, v.destino, v.plan_id, ve.placa,
+            (SELECT MAX(l.km) FROM flota_lecturas l
+             WHERE l.viaje_id = v.id AND l.nota = 'Kilometraje en punto de carga') AS km_carga,
+            (SELECT COUNT(*) FROM flota_viaje_evidencias ev
+             WHERE ev.viaje_id = v.id AND ev.tipo = 'tablero_salida') AS ev_tablero_salida,
+            (SELECT COUNT(*) FROM flota_viaje_evidencias ev
+             WHERE ev.viaje_id = v.id AND ev.tipo = 'salida') AS ev_carga,
+            (SELECT COUNT(*) FROM flota_viaje_evidencias ev
+             WHERE ev.viaje_id = v.id AND ev.tipo = 'tablero_llegada') AS ev_tablero_llegada
      FROM flota_viajes v
      INNER JOIN flota_vehiculos ve ON ve.id = v.vehiculo_id
      WHERE v.empresa_id = ? AND v.empleado_id = ? AND v.estado = 'abierto'
@@ -145,5 +157,9 @@ export async function obtenerViajeAbiertoDeEmpleado(
     horaSalida: String(r.hora_salida),
     destino: r.destino ? String(r.destino) : null,
     planId: r.plan_id != null ? Number(r.plan_id) : null,
+    kmCarga: r.km_carga != null ? Number(r.km_carga) : null,
+    evidenciaTableroSalida: Number(r.ev_tablero_salida ?? 0) > 0,
+    evidenciaCarga: Number(r.ev_carga ?? 0) > 0,
+    evidenciaTableroLlegada: Number(r.ev_tablero_llegada ?? 0) > 0,
   };
 }

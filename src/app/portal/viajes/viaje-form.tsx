@@ -5,25 +5,16 @@ import { useRouter } from "next/navigation";
 import type { AsignacionOperativaPortal, ViajeAbiertoPiloto } from "@/lib/flota/viajes-piloto";
 import type { PlanParada } from "@/lib/tms/paradas";
 
-function fechaEnEspanol(fecha: string): string {
+function fechaEnEspanol(fecha: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return fecha || "Fecha pendiente";
-  const [anio, mes, dia] = fecha.split("-").map(Number);
-  return new Intl.DateTimeFormat("es-GT", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  }).format(new Date(anio, mes - 1, dia));
+  const [a, m, d] = fecha.split("-").map(Number);
+  return new Intl.DateTimeFormat("es-GT", { weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(new Date(a, m - 1, d));
 }
 
-function regresoEnEspanol(valor: string | null): string {
+function regresoEnEspanol(valor: string | null) {
   if (!valor) return "Pendiente";
   const fecha = new Date(valor);
-  if (Number.isNaN(fecha.getTime())) return valor;
-  return new Intl.DateTimeFormat("es-GT", {
-    dateStyle: "long",
-    timeStyle: "short",
-  }).format(fecha);
+  return Number.isNaN(fecha.getTime()) ? valor : new Intl.DateTimeFormat("es-GT", { dateStyle: "long", timeStyle: "short" }).format(fecha);
 }
 
 export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacionEnCurso, viajeEnCursoId, paradas }: {
@@ -43,73 +34,91 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
   const planSeleccionado = programados.find((a) => a.planId === planId) ?? null;
   const [placa, setPlaca] = useState(planSeleccionado?.placa ?? "");
   const [kmSalida, setKmSalida] = useState("");
+  const [kmCarga, setKmCarga] = useState("");
   const [destino, setDestino] = useState(planSeleccionado?.destino ?? "");
   const [kmLlegada, setKmLlegada] = useState("");
   const [observaciones, setObservaciones] = useState("");
-  const [tipoEvidencia, setTipoEvidencia] = useState(paradas.length ? "producto" : "salida");
-  const [paradaId, setParadaId] = useState(paradas[0]?.id ?? 0);
   const [archivos, setArchivos] = useState<FileList | null>(null);
+  const [cierreExcepcional, setCierreExcepcional] = useState(false);
+  const [motivoExcepcional, setMotivoExcepcional] = useState("");
+
+  const siguienteParada = paradas.find((p) => p.requiere_evidencia && p.evidencias < 1) ?? null;
+  const etapa = viajeAbierto
+    ? !viajeAbierto.evidenciaTableroSalida
+      ? { tipo: "tablero_salida", titulo: "Evidencia de salida", detalle: "Fotografía del tablero al salir del predio.", paradaId: 0 }
+      : viajeAbierto.kmCarga == null ? null
+        : !viajeAbierto.evidenciaCarga
+          ? { tipo: "salida", titulo: "Evidencia de carga", detalle: "Adjunta la evidencia al completar la carga.", paradaId: 0 }
+          : siguienteParada
+            ? { tipo: "producto", titulo: `Siguiente parada: ${siguienteParada.orden}. ${siguienteParada.lugar_nombre}`, detalle: "Al llegar, adjunta la evidencia para habilitar la siguiente parada.", paradaId: siguienteParada.id }
+            : !viajeAbierto.evidenciaTableroLlegada
+              ? { tipo: "tablero_llegada", titulo: "Regreso al predio", detalle: "Ya en el predio, adjunta el tablero de llegada.", paradaId: 0 }
+              : null
+    : null;
+  const rutaCompleta = Boolean(viajeAbierto?.evidenciaTableroSalida && viajeAbierto.kmCarga != null && viajeAbierto.evidenciaCarga && !siguienteParada && viajeAbierto.evidenciaTableroLlegada);
 
   function elegirPlan(id: number) {
     setPlanId(id);
     const plan = programados.find((a) => a.planId === id);
-    setPlaca(plan?.placa ?? "");
-    setDestino(plan?.destino ?? "");
+    setPlaca(plan?.placa ?? ""); setDestino(plan?.destino ?? "");
   }
 
   async function enviar(payload: Record<string, unknown>) {
     setError(""); setMensaje(""); setLoading(true);
     try {
-      const res = await fetch("/api/portal/viajes", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
-      });
+      const res = await fetch("/api/portal/viajes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "No se pudo completar la acción.");
       setMensaje(data.mensaje ?? "Listo.");
-      setKmSalida(""); setKmLlegada(""); setObservaciones("");
+      setKmSalida(""); setKmCarga(""); setKmLlegada(""); setObservaciones(""); setMotivoExcepcional(""); setCierreExcepcional(false);
       router.refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo completar la acción.");
-    } finally { setLoading(false); }
+    } catch (err) { setError(err instanceof Error ? err.message : "No se pudo completar la acción."); }
+    finally { setLoading(false); }
   }
 
   async function onSalida(e: FormEvent) {
     e.preventDefault();
     const km = Number(kmSalida);
-    if (!placa.trim() || !Number.isFinite(km) || km < 0) {
-      setError("Indica la unidad y un kilometraje de salida válido."); return;
-    }
+    if (!placa.trim() || !Number.isFinite(km) || km < 0) return setError("Indica la unidad y un kilometraje de salida válido.");
     await enviar({ accion: "salida", placa: placa.trim(), kmSalida: km, destino: destino.trim() || undefined, planId: planId || undefined });
+  }
+
+  async function onCarga(e: FormEvent) {
+    e.preventDefault();
+    if (!viajeAbierto) return;
+    const km = Number(kmCarga);
+    if (!Number.isFinite(km) || km < viajeAbierto.kmSalida) return setError("El kilometraje de carga no puede ser menor al de salida.");
+    await enviar({ accion: "carga", viajeId: viajeAbierto.id, kmCarga: km });
+  }
+
+  async function obtenerGps(): Promise<{ latitud?: number; longitud?: number }> {
+    if (!("geolocation" in navigator)) return {};
+    return new Promise((resolve) => navigator.geolocation.getCurrentPosition(
+      (p) => resolve({ latitud: p.coords.latitude, longitud: p.coords.longitude }), () => resolve({}),
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 },
+    ));
   }
 
   async function onLlegada(e: FormEvent) {
     e.preventDefault();
     if (!viajeAbierto) return;
     const km = Number(kmLlegada);
-    if (!Number.isFinite(km) || km < viajeAbierto.kmSalida) {
-      setError("El kilometraje de llegada no puede ser menor al de salida."); return;
-    }
-    await enviar({ accion: "llegada", viajeId: viajeAbierto.id, kmLlegada: km, observaciones: observaciones.trim() || undefined });
-  }
-
-  async function obtenerGps(): Promise<{ latitud?: number; longitud?: number }> {
-    if (!("geolocation" in navigator)) return {};
-    return new Promise((resolve) => navigator.geolocation.getCurrentPosition(
-      (p) => resolve({ latitud: p.coords.latitude, longitud: p.coords.longitude }),
-      () => resolve({}), { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 },
-    ));
+    if (!Number.isFinite(km) || km < (viajeAbierto.kmCarga ?? viajeAbierto.kmSalida)) return setError("El kilometraje final no puede ser menor al último registrado.");
+    if (cierreExcepcional && motivoExcepcional.trim().length < 10) return setError("Describe el contratiempo mayor con al menos 10 caracteres.");
+    if (!cierreExcepcional && !rutaCompleta) return setError("Completa toda la ruta y regresa al predio antes de cerrar.");
+    const gps = cierreExcepcional ? {} : await obtenerGps();
+    await enviar({ accion: "llegada", viajeId: viajeAbierto.id, kmLlegada: km, observaciones: observaciones.trim() || undefined, cierreExcepcional, motivoExcepcional: cierreExcepcional ? motivoExcepcional.trim() : undefined, ...gps });
   }
 
   async function subirEvidencias(e: FormEvent) {
     e.preventDefault();
-    if (!viajeEnCursoId || !archivos?.length) { setError("Selecciona al menos una evidencia."); return; }
-    if (tipoEvidencia === "producto" && !paradaId) { setError("Selecciona la parada correspondiente."); return; }
+    if (!viajeEnCursoId || !etapa || !archivos?.length) return setError("Selecciona al menos una evidencia.");
     setError(""); setMensaje(""); setLoading(true);
     try {
       const gps = await obtenerGps();
       const form = new FormData();
-      form.set("tipo", tipoEvidencia);
-      if (paradaId) form.set("paradaId", String(paradaId));
+      form.set("tipo", etapa.tipo);
+      if (etapa.paradaId) form.set("paradaId", String(etapa.paradaId));
       if (gps.latitud != null) form.set("latitud", String(gps.latitud));
       if (gps.longitud != null) form.set("longitud", String(gps.longitud));
       for (const file of Array.from(archivos)) form.append("files", file);
@@ -117,9 +126,8 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "No se pudieron guardar las evidencias.");
       setMensaje(data.mensaje); setArchivos(null); router.refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudieron guardar las evidencias.");
-    } finally { setLoading(false); }
+    } catch (err) { setError(err instanceof Error ? err.message : "No se pudieron guardar las evidencias."); }
+    finally { setLoading(false); }
   }
 
   return <div className="mt-6 space-y-5">
@@ -141,22 +149,42 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
       </div>}
     </section>
 
-    {viajeEnCursoId ? <form onSubmit={subirEvidencias} className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
-      <h2 className="font-semibold">Evidencias del viaje {asignacionEnCurso?.codigo ?? `#${viajeEnCursoId}`}</h2>
-      <p className="mt-1 text-sm text-[var(--muted)]">Piloto y auxiliares asignados pueden aportar fotos al mismo expediente.</p>
-      <div className="mt-4 grid gap-3 sm:grid-cols-2">
-        <label className="text-sm text-[var(--muted)]">Tipo<select className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={tipoEvidencia} onChange={(e) => setTipoEvidencia(e.target.value)}>{paradas.length ? <option value="producto">Producto / parada</option> : null}<option value="salida">Salida general</option><option value="tablero_salida">Tablero de salida</option><option value="llegada">Llegada general</option><option value="tablero_llegada">Tablero de llegada</option></select></label>
-        {tipoEvidencia === "producto" ? <label className="text-sm text-[var(--muted)]">Parada<select className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={paradaId} onChange={(e) => setParadaId(Number(e.target.value))} required><option value={0}>Seleccionar…</option>{paradas.map((p) => <option key={p.id} value={p.id}>{p.orden}. {p.lugar_nombre}</option>)}</select></label> : null}
-      </div>
-      <input className="mt-3 block w-full text-sm" type="file" accept="image/*" capture="environment" multiple onChange={(e) => setArchivos(e.target.files)} required />
-      <button className="mt-4 rounded-lg bg-[var(--accent)] px-4 py-2.5 font-medium text-white disabled:opacity-50" disabled={loading}>Adjuntar evidencias</button>
+    {tipo === "Auxiliar" && viajeEnCursoId ? <section className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5"><h2 className="font-semibold">Viaje en curso · {asignacionEnCurso?.codigo}</h2><p className="mt-2 text-sm text-[var(--muted)]">Puedes consultar la asignación. Las evidencias y el cierre corresponden exclusivamente al piloto.</p></section> : null}
+
+    {tipo === "Piloto" && viajeAbierto ? <section className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
+      <h2 className="font-semibold">Avance del viaje · {asignacionEnCurso?.codigo ?? `#${viajeAbierto.id}`}</h2>
+      <p className="mt-1 text-sm text-[var(--muted)]">Unidad {viajeAbierto.placa} · salida {viajeAbierto.kmSalida.toLocaleString("es-GT")} km</p>
+      <ol className="mt-4 space-y-2 text-sm">
+        <li>{viajeAbierto.evidenciaTableroSalida ? "✓" : "○"} Tablero de salida</li>
+        <li>{viajeAbierto.kmCarga != null ? "✓" : "○"} Kilometraje en carga{viajeAbierto.kmCarga != null ? `: ${viajeAbierto.kmCarga.toLocaleString("es-GT")} km` : ""}</li>
+        <li>{viajeAbierto.evidenciaCarga ? "✓" : "○"} Evidencia de carga</li>
+        {paradas.map((p) => <li key={p.id}>{!p.requiere_evidencia || p.evidencias > 0 ? "✓" : "○"} Parada {p.orden}: {p.lugar_nombre}</li>)}
+        <li>{viajeAbierto.evidenciaTableroLlegada ? "✓" : "○"} Regreso al predio y tablero de llegada</li>
+      </ol>
+    </section> : null}
+
+    {tipo === "Piloto" && viajeAbierto?.evidenciaTableroSalida && viajeAbierto.kmCarga == null ? <form onSubmit={onCarga} className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
+      <h2 className="font-semibold">Registrar llegada al punto de carga</h2>
+      <label className="mt-4 block text-sm text-[var(--muted)]">Kilometraje en carga<input type="number" min={viajeAbierto.kmSalida} className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={kmCarga} onChange={(e) => setKmCarga(e.target.value)} required /></label>
+      <button className="mt-4 rounded-lg bg-[var(--accent)] px-4 py-2.5 font-medium text-white disabled:opacity-50" disabled={loading}>Registrar kilometraje de carga</button>
+    </form> : null}
+
+    {tipo === "Piloto" && viajeEnCursoId && etapa ? <form onSubmit={subirEvidencias} className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
+      <h2 className="font-semibold">{etapa.titulo}</h2><p className="mt-1 text-sm text-[var(--muted)]">{etapa.detalle}</p>
+      <input className="mt-4 block w-full text-sm" type="file" accept="image/*" capture="environment" multiple onChange={(e) => setArchivos(e.target.files)} required />
+      <button className="mt-4 rounded-lg bg-[var(--accent)] px-4 py-2.5 font-medium text-white disabled:opacity-50" disabled={loading}>Adjuntar evidencia y continuar</button>
     </form> : null}
 
     {tipo === "Piloto" && viajeAbierto ? <form onSubmit={onLlegada} className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
-      <h2 className="font-semibold">Cerrar viaje · {viajeAbierto.placa}</h2><p className="mt-1 text-sm text-[var(--muted)]">Salida: {viajeAbierto.kmSalida.toLocaleString("es-GT")} km · {viajeAbierto.horaSalida}</p>
-      <label className="mt-4 block text-sm text-[var(--muted)]">Km de llegada<input type="number" min={viajeAbierto.kmSalida} className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={kmLlegada} onChange={(e) => setKmLlegada(e.target.value)} required /></label>
-      <label className="mt-3 block text-sm text-[var(--muted)]">Observaciones<textarea className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" rows={2} maxLength={500} value={observaciones} onChange={(e) => setObservaciones(e.target.value)} /></label>
-      <button className="mt-4 rounded-lg bg-[var(--accent)] px-4 py-2.5 font-medium text-white disabled:opacity-50" disabled={loading}>Registrar llegada</button>
+      <h2 className="font-semibold">Cerrar viaje</h2>
+      {!rutaCompleta && !cierreExcepcional ? <p className="mt-2 text-sm text-amber-300">El cierre normal se habilitará cuando completes la carga, todas las paradas y regreses al predio.</p> : null}
+      <label className="mt-4 flex items-start gap-2 text-sm text-[var(--muted)]"><input type="checkbox" className="mt-1" checked={cierreExcepcional} onChange={(e) => setCierreExcepcional(e.target.checked)} /> Cierre excepcional por contratiempo mayor (por ejemplo, avería de la unidad)</label>
+      {cierreExcepcional ? <label className="mt-3 block text-sm text-[var(--muted)]">Motivo obligatorio<textarea className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" rows={3} minLength={10} maxLength={500} value={motivoExcepcional} onChange={(e) => setMotivoExcepcional(e.target.value)} required /></label> : null}
+      {rutaCompleta || cierreExcepcional ? <>
+        <label className="mt-3 block text-sm text-[var(--muted)]">Kilometraje al cerrar<input type="number" min={viajeAbierto.kmCarga ?? viajeAbierto.kmSalida} className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={kmLlegada} onChange={(e) => setKmLlegada(e.target.value)} required /></label>
+        {!cierreExcepcional ? <label className="mt-3 block text-sm text-[var(--muted)]">Observaciones<textarea className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" rows={2} maxLength={500} value={observaciones} onChange={(e) => setObservaciones(e.target.value)} /></label> : null}
+        <button className={`mt-4 rounded-lg px-4 py-2.5 font-medium text-white disabled:opacity-50 ${cierreExcepcional ? "bg-red-700" : "bg-[var(--accent)]"}`} disabled={loading}>{cierreExcepcional ? "Cerrar por contratiempo mayor" : "Registrar llegada y cerrar viaje"}</button>
+      </> : null}
     </form> : tipo === "Piloto" ? <form onSubmit={onSalida} className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
       <h2 className="font-semibold">Iniciar viaje</h2>
       {programados.length ? <label className="mt-4 block text-sm text-[var(--muted)]">Viaje asignado<select className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={planId} onChange={(e) => elegirPlan(Number(e.target.value))}>{programados.map((a) => <option key={a.planId} value={a.planId}>{a.codigo} · {a.cliente ?? "Sin cliente"} · {a.placa ?? "Sin unidad"}</option>)}</select></label> : <p className="mt-2 text-sm text-amber-300">No hay programación pendiente; registra una salida manual solo si Operaciones lo indicó.</p>}

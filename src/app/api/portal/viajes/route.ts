@@ -20,6 +20,7 @@ import {
 } from "@/lib/tms/planes-salida";
 import { paradasPendientesEvidencia } from "@/lib/tms/paradas";
 import { resolverVehiculoDeUnidadTms } from "@/lib/tms/unidad-flota";
+import { validarGeocercaKiosko } from "@/lib/rrhh/geocerca";
 
 /**
  * Marcaje de viaje (salida/llegada de camión con km) desde el portal del
@@ -46,6 +47,16 @@ const llegadaSchema = z.object({
   viajeId: z.number().int().positive(),
   kmLlegada: z.number().int().nonnegative(),
   observaciones: z.string().optional(),
+  latitud: z.number().min(-90).max(90).optional(),
+  longitud: z.number().min(-180).max(180).optional(),
+  cierreExcepcional: z.boolean().optional(),
+  motivoExcepcional: z.string().trim().min(10).max(500).optional(),
+});
+
+const cargaSchema = z.object({
+  accion: z.literal("carga"),
+  viajeId: z.number().int().positive(),
+  kmCarga: z.number().int().nonnegative(),
 });
 
 export async function POST(req: Request) {
@@ -308,6 +319,42 @@ export async function POST(req: Request) {
     });
   }
 
+  if (body?.accion === "carga") {
+    const parsed = cargaSchema.safeParse(body);
+    if (!parsed.success) return NextResponse.json({ error: "Kilometraje de carga inválido." }, { status: 400 });
+    const viaje = await query<RowDataPacket[]>(
+      `SELECT v.id, v.km_salida, v.vehiculo_id FROM flota_viajes v
+       WHERE v.id = ? AND v.empresa_id = ? AND v.empleado_id = ? AND v.estado = 'abierto' LIMIT 1`,
+      [parsed.data.viajeId, empresaId, session.empleadoId],
+    );
+    if (!viaje[0]) return NextResponse.json({ error: "No tienes ese viaje abierto." }, { status: 404 });
+    if (parsed.data.kmCarga < Number(viaje[0].km_salida)) {
+      return NextResponse.json({ error: "El kilometraje de carga no puede ser menor al de salida." }, { status: 400 });
+    }
+    const cargaExistente = await query<RowDataPacket[]>(
+      `SELECT id FROM flota_lecturas
+       WHERE empresa_id = ? AND viaje_id = ? AND nota = 'Kilometraje en punto de carga' LIMIT 1`,
+      [empresaId, parsed.data.viajeId],
+    );
+    if (cargaExistente[0]) {
+      return NextResponse.json({ error: "El kilometraje de carga ya fue registrado." }, { status: 409 });
+    }
+    const tablero = await query<RowDataPacket[]>(
+      `SELECT id FROM flota_viaje_evidencias
+       WHERE empresa_id = ? AND viaje_id = ? AND tipo = 'tablero_salida' LIMIT 1`,
+      [empresaId, parsed.data.viajeId],
+    );
+    if (!tablero[0]) return NextResponse.json({ error: "Primero adjunta el tablero de salida." }, { status: 409 });
+    await execute(
+      `INSERT INTO flota_lecturas
+        (empresa_id, vehiculo_id, km, fecha_lectura, nota, conductor, registrado_por, viaje_id, capturado_en)
+       VALUES (?, ?, ?, CURDATE(), 'Kilometraje en punto de carga', ?, ?, ?, ?)`,
+      [empresaId, viaje[0].vehiculo_id, parsed.data.kmCarga, nombre, `portal:${empleado.codigo}`, parsed.data.viajeId, ahora],
+    );
+    await actualizarKmActualVehiculo(Number(viaje[0].vehiculo_id), parsed.data.kmCarga);
+    return NextResponse.json({ mensaje: "Kilometraje en el punto de carga registrado." });
+  }
+
   if (body?.accion === "llegada") {
     const parsed = llegadaSchema.safeParse(body);
     if (!parsed.success) {
@@ -317,6 +364,10 @@ export async function POST(req: Request) {
       );
     }
     const d = parsed.data;
+    const excepcional = d.cierreExcepcional === true;
+    if (excepcional && !d.motivoExcepcional) {
+      return NextResponse.json({ error: "Describe el contratiempo mayor para cerrar excepcionalmente." }, { status: 400 });
+    }
 
     // Solo puede cerrar SU PROPIO viaje abierto — nunca el de otro piloto.
     const viaje = await query<RowDataPacket[]>(
@@ -356,7 +407,39 @@ export async function POST(req: Request) {
       );
     }
 
-    if (planIdPre) {
+    const requisitos = await query<RowDataPacket[]>(
+      `SELECT
+         SUM(tipo = 'tablero_salida') AS tablero_salida,
+         SUM(tipo = 'salida') AS carga,
+         SUM(tipo = 'tablero_llegada') AS tablero_llegada
+       FROM flota_viaje_evidencias WHERE empresa_id = ? AND viaje_id = ?`,
+      [empresaId, d.viajeId],
+    );
+    const kmCarga = await query<RowDataPacket[]>(
+      `SELECT id FROM flota_lecturas
+       WHERE viaje_id = ? AND nota = 'Kilometraje en punto de carga' LIMIT 1`,
+      [d.viajeId],
+    );
+    if (!excepcional && (
+      Number(requisitos[0]?.tablero_salida ?? 0) < 1 ||
+      Number(requisitos[0]?.carga ?? 0) < 1 ||
+      Number(requisitos[0]?.tablero_llegada ?? 0) < 1 ||
+      !kmCarga[0]
+    )) {
+      return NextResponse.json({ error: "Completa tablero de salida, kilometraje/evidencia de carga y tablero de llegada antes de cerrar." }, { status: 422 });
+    }
+
+    if (!excepcional) {
+      const geo = await validarGeocercaKiosko(
+        empresaId,
+        session.empleadoId,
+        { lat: d.latitud, lng: d.longitud },
+        { requerirUbicacionRegistrada: true },
+      );
+      if (!geo.ok) return NextResponse.json({ error: `Debes regresar al predio para cerrar. ${geo.error}` }, { status: 409 });
+    }
+
+    if (planIdPre && !excepcional) {
       const pendientes = await paradasPendientesEvidencia(planIdPre);
       if (pendientes.length) {
         const nombres = pendientes.map((p) => `${p.orden}. ${p.lugar_nombre}`).join("; ");
@@ -378,7 +461,9 @@ export async function POST(req: Request) {
       [
         kmFinal,
         ahora,
-        d.observaciones?.trim() || null,
+        excepcional
+          ? `CIERRE EXCEPCIONAL: ${d.motivoExcepcional}`
+          : d.observaciones?.trim() || null,
         d.viajeId,
         empresaId,
         session.empleadoId,
@@ -408,17 +493,23 @@ export async function POST(req: Request) {
 
     await actualizarKmActualVehiculo(Number(viaje[0].vehiculo_id), kmFinal);
 
-    if (planIdPre) {
+    if (planIdPre && !excepcional) {
       await marcarPlanDescargado(empresaId, planIdPre);
+    } else if (planIdPre && excepcional) {
+      await execute(
+        `UPDATE tms_planes_viaje SET estado = 'Cancelado'
+         WHERE id = ? AND empresa_id = ? AND estado IN ('Programado', 'En ruta')`,
+        [planIdPre, empresaId],
+      );
     }
 
     await registrarAuditoria({
       empresaId,
       usuario: `portal:${empleado.codigo}`,
-      accion: "llegada_viaje",
+      accion: excepcional ? "cierre_excepcional_viaje" : "llegada_viaje",
       modulo: "tms",
-      detalle: `Viaje #${d.viajeId} llegada (portal piloto) · ${nombre} · placa ${String(viaje[0].placa)} · km ${kmSalida} → ${kmFinal}${
-        planIdPre ? ` · plan TMS #${planIdPre} → Descargado` : ""
+      detalle: `Viaje #${d.viajeId} ${excepcional ? `cierre excepcional: ${d.motivoExcepcional}` : "llegada al predio"} · ${nombre} · placa ${String(viaje[0].placa)} · km ${kmSalida} → ${kmFinal}${
+        planIdPre ? ` · plan TMS #${planIdPre} → ${excepcional ? "Cancelado" : "Descargado"}` : ""
       }`,
     });
 
@@ -427,9 +518,9 @@ export async function POST(req: Request) {
       placa: String(viaje[0].placa),
       kmSalida,
       kmLlegada: kmFinal,
-      mensaje: `Llegada registrada: ${(kmFinal - kmSalida).toLocaleString("es-GT")} km recorridos.${
-        planIdPre ? " Plan TMS → Descargado." : ""
-      }`,
+      mensaje: excepcional
+        ? "Viaje cerrado excepcionalmente y contratiempo registrado en auditoría."
+        : `Llegada registrada: ${(kmFinal - kmSalida).toLocaleString("es-GT")} km recorridos.${planIdPre ? " Plan TMS → Descargado." : ""}`,
     });
   }
 
