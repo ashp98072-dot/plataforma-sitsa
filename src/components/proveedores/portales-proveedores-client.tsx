@@ -38,6 +38,8 @@ export function PortalesProveedoresClient({ slug }: { slug: string }) {
   const [portales, setPortales] = useState<Portal[]>([]);
   const [usuarios, setUsuarios] = useState<Usuario[]>([]);
   const [puedeAdministrar, setPuedeAdministrar] = useState(false);
+  const [puedeCrear, setPuedeCrear] = useState(false);
+  const [usuarioActualId, setUsuarioActualId] = useState(0);
   const [form, setForm] = useState(FORM_INICIAL);
   const [passwords, setPasswords] = useState<Record<number, string>>({});
   const [cargando, setCargando] = useState(true);
@@ -53,10 +55,14 @@ export function PortalesProveedoresClient({ slug }: { slug: string }) {
     setPortales(body.portales ?? []);
     setUsuarios(body.usuariosAsignables ?? []);
     setPuedeAdministrar(Boolean(body.puedeAdministrar));
+    setPuedeCrear(Boolean(body.puedeCrear));
+    setUsuarioActualId(Number(body.usuarioActualId ?? 0));
     setForm((actual) => ({
       ...actual,
       asignadoUsuarioId:
-        actual.asignadoUsuarioId || body.usuariosAsignables?.[0]?.id || 0,
+        actual.asignadoUsuarioId ||
+        body.usuariosAsignables?.[0]?.id ||
+        Number(body.usuarioActualId ?? 0),
     }));
   }, [slug]);
 
@@ -86,7 +92,7 @@ export function PortalesProveedoresClient({ slug }: { slug: string }) {
     setMensaje(body.mensaje);
     setForm({
       ...FORM_INICIAL,
-      asignadoUsuarioId: usuarios[0]?.id ?? 0,
+      asignadoUsuarioId: usuarios[0]?.id ?? usuarioActualId,
     });
     setPasswords({});
     await cargar();
@@ -163,7 +169,7 @@ export function PortalesProveedoresClient({ slug }: { slug: string }) {
       {error ? <p className="rounded border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-200">{error}</p> : null}
       {mensaje ? <p className="rounded border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm text-emerald-200">{mensaje}</p> : null}
 
-      {puedeAdministrar ? (
+      {puedeCrear ? (
         <form onSubmit={guardar} className="grid gap-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 md:grid-cols-2 xl:grid-cols-3">
           <h2 className="text-lg font-semibold md:col-span-2 xl:col-span-3">
             {form.id ? "Editar portal" : "Registrar portal"}
@@ -173,12 +179,12 @@ export function PortalesProveedoresClient({ slug }: { slug: string }) {
           <label className="text-sm">Enlace<input className={`${input} mt-1 w-full`} type="url" placeholder="https://..." value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} required /></label>
           <label className="text-sm">Usuario del proveedor<input className={`${input} mt-1 w-full`} value={form.usuarioPortal} onChange={(e) => setForm({ ...form, usuarioPortal: e.target.value })} required /></label>
           <label className="text-sm">Contraseña{form.id ? " (vacío conserva la actual)" : ""}<input className={`${input} mt-1 w-full`} type="password" autoComplete="new-password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required={!form.id} /></label>
-          <label className="text-sm">Asignar a usuario<select className={`${input} mt-1 w-full`} value={form.asignadoUsuarioId} onChange={(e) => setForm({ ...form, asignadoUsuarioId: Number(e.target.value) })} required><option value={0}>Seleccionar…</option>{usuarios.map((u) => <option key={u.id} value={u.id}>{u.nombre ?? u.username} · {u.rol} ({u.username})</option>)}</select></label>
+          {puedeAdministrar ? <label className="text-sm">Asignar a usuario<select className={`${input} mt-1 w-full`} value={form.asignadoUsuarioId} onChange={(e) => setForm({ ...form, asignadoUsuarioId: Number(e.target.value) })} required><option value={0}>Seleccionar…</option>{usuarios.map((u) => <option key={u.id} value={u.id}>{u.nombre ?? u.username} · {u.rol} ({u.username})</option>)}</select></label> : <p className="self-end rounded border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm text-[var(--muted)]">Este acceso se guardará únicamente para tu usuario.</p>}
           <label className="text-sm md:col-span-2 xl:col-span-3">Notas<textarea className={`${input} mt-1 min-h-20 w-full`} value={form.notas} onChange={(e) => setForm({ ...form, notas: e.target.value })} /></label>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.activo} onChange={(e) => setForm({ ...form, activo: e.target.checked })} /> Portal activo</label>
           <div className="flex gap-2 md:col-span-2 xl:col-span-3">
             <button className="rounded bg-[var(--accent)] px-4 py-2 text-sm text-white" type="submit">{form.id ? "Guardar cambios" : "Guardar portal"}</button>
-            {form.id ? <button className="rounded bg-slate-600 px-4 py-2 text-sm" type="button" onClick={() => setForm({ ...FORM_INICIAL, asignadoUsuarioId: usuarios[0]?.id ?? 0 })}>Cancelar</button> : null}
+            {form.id ? <button className="rounded bg-slate-600 px-4 py-2 text-sm" type="button" onClick={() => setForm({ ...FORM_INICIAL, asignadoUsuarioId: usuarios[0]?.id ?? usuarioActualId })}>Cancelar</button> : null}
           </div>
         </form>
       ) : null}
@@ -208,7 +214,7 @@ export function PortalesProveedoresClient({ slug }: { slug: string }) {
                 <button type="button" className="rounded bg-slate-700 px-3 py-1.5 text-sm" onClick={() => void copiar(p.usuarioPortal, "Usuario")}>Copiar usuario</button>
                 <button type="button" className="rounded bg-slate-700 px-3 py-1.5 text-sm" onClick={() => void revelar(p.id)}>{passwords[p.id] ? "Ocultar contraseña" : "Mostrar contraseña"}</button>
                 {passwords[p.id] ? <button type="button" className="rounded bg-slate-700 px-3 py-1.5 text-sm" onClick={() => void copiar(passwords[p.id], "Contraseña")}>Copiar contraseña</button> : null}
-                {puedeAdministrar ? <><button type="button" className="rounded bg-amber-700 px-3 py-1.5 text-sm" onClick={() => editar(p)}>Editar</button><button type="button" className="rounded bg-red-800 px-3 py-1.5 text-sm" onClick={() => void eliminar(p.id)}>Eliminar</button></> : null}
+                {puedeCrear ? <><button type="button" className="rounded bg-amber-700 px-3 py-1.5 text-sm" onClick={() => editar(p)}>Editar</button><button type="button" className="rounded bg-red-800 px-3 py-1.5 text-sm" onClick={() => void eliminar(p.id)}>Eliminar</button></> : null}
               </div>
             </article>
           ))}
