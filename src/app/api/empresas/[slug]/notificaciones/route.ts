@@ -188,8 +188,7 @@ export async function GET(_req: Request, ctx: Ctx) {
          INNER JOIN empleados e
            ON e.id = sv.id_empleado AND e.empresa_id = sv.empresa_id
          WHERE sv.empresa_id = ? AND sv.estado = 'Pendiente'
-         ORDER BY sv.creado_en ASC
-         LIMIT 30`,
+         ORDER BY sv.creado_en ASC`,
         [guard.empresa.id],
       ).catch(() => [] as RowDataPacket[]);
 
@@ -213,8 +212,7 @@ export async function GET(_req: Request, ctx: Ctx) {
            AND e.estado = 'Activo' AND s.dias_disponibles > 0
          GROUP BY e.id, e.nombre
          HAVING SUM(s.dias_disponibles) >= 15
-         ORDER BY dias_disponibles DESC, e.nombre
-         LIMIT 30`,
+         ORDER BY dias_disponibles DESC, e.nombre`,
         [guard.empresa.id],
       ).catch(() => [] as RowDataPacket[]);
 

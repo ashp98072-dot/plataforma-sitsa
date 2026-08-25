@@ -6,6 +6,7 @@ import Link from "next/link";
 import { EvidenciasModal } from "@/components/rrhh/evidencias-modal";
 import { EmpleadoPicker } from "@/components/rrhh/empleado-picker";
 import { SolicitudesVacacionesPanel } from "@/components/rrhh/solicitudes-vacaciones-panel";
+import { VacacionesAlertasPanel } from "@/components/rrhh/vacaciones-alertas-panel";
 
 type Emp = { id: number; codigo: string; nombre: string; dpi?: string };
 type Periodo = {
@@ -75,7 +76,8 @@ export default function VacacionesPage() {
   }, [slug, empleadoId]);
 
   useEffect(() => {
-    void cargar();
+    const inicio = window.setTimeout(() => void cargar(), 0);
+    return () => window.clearTimeout(inicio);
   }, [cargar]);
 
   useEffect(() => {
@@ -153,6 +155,8 @@ export default function VacacionesPage() {
       </div>
 
       {aviso ? <p className="text-sm text-amber-300">{aviso}</p> : null}
+
+      <VacacionesAlertasPanel slug={slug} />
 
       <SolicitudesVacacionesPanel slug={slug} onResuelto={() => void cargar()} />
 
