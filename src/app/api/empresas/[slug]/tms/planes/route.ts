@@ -325,24 +325,25 @@ const schema = z.object({
     .max(20)
     .optional(),
   // Mejora Programación (Opción A) — viáticos definidos desde el PRIMER
-  // guardado del viaje. `personalId` aquí es el id de RRHH (empleados.id)
-  // — el MISMO espacio de ids que pilotoEmpleadoId/auxiliarEmpleadoIds,
-  // nunca tms_personal.id (interno, resuelto server-side; el cliente no
-  // puede conocerlo antes de guardar el plan). Se valida más abajo que
-  // cada personalId corresponda realmente al piloto/auxiliares
-  // RESUELTOS de este mismo POST — nunca se confía en lo que mande el
-  // cliente HTTP.
+  // guardado del viaje. `empleadoId` aquí es el id de RRHH (empleados.id)
+  // — el MISMO espacio de ids que pilotoEmpleadoId/auxiliarEmpleadoIds
+  // (deliberadamente NO se llama "personalId": en TMS ese nombre ya
+  // designa tms_personal.id, un id interno resuelto server-side que el
+  // cliente nunca conoce antes de guardar el plan — no se expone). Se
+  // valida más abajo que cada empleadoId corresponda realmente al
+  // piloto/auxiliares RESUELTOS de este mismo POST — nunca se confía en
+  // lo que mande el cliente HTTP.
   viaticosAsignados: z
     .array(
       z.object({
-        personalId: z.number().int().positive(),
+        empleadoId: z.number().int().positive(),
         montoAsignado: z.number().min(0),
       }),
     )
     .max(9)
     .optional()
-    .refine((arr) => !arr || new Set(arr.map((x) => x.personalId)).size === arr.length, {
-      message: "No se permiten personalId duplicados en viaticosAsignados.",
+    .refine((arr) => !arr || new Set(arr.map((x) => x.empleadoId)).size === arr.length, {
+      message: "No se permiten empleadoId duplicados en viaticosAsignados.",
     }),
 });
 
@@ -625,18 +626,21 @@ export async function POST(req: Request, ctx: Ctx) {
   const auxiliarId = auxPersonalIds[0] ?? null;
 
   // Mejora Programación (Opción A) — validar viaticosAsignados ANTES de
-  // escribir absolutamente nada: cada personalId debe corresponder
+  // escribir absolutamente nada: cada empleadoId debe corresponder
   // realmente al piloto/auxiliares RESUELTOS arriba (empleadoIdAPersonalId
   // -- nunca se confía en lo que mande el cliente). Si algo no calza, 400
-  // inmediato, sin crear el plan (CASO E).
+  // inmediato, sin crear el plan (CASO E). Aquí es donde empleadoId se
+  // traduce al personalId real (tms_personal.id) que espera
+  // sincronizarViaticosPlan — el único lugar de todo el flujo donde ese id
+  // interno aparece, nunca antes.
   const viaticosOverrides: { personalId: number; montoAsignado: number }[] = [];
   if (d.viaticosAsignados?.length) {
     for (const item of d.viaticosAsignados) {
-      const personalIdReal = empleadoIdAPersonalId.get(item.personalId);
+      const personalIdReal = empleadoIdAPersonalId.get(item.empleadoId);
       if (personalIdReal == null) {
         return NextResponse.json(
           {
-            error: `El personal indicado en viáticos (id ${item.personalId}) no corresponde al piloto/auxiliares de este viaje.`,
+            error: `El personal indicado en viáticos (empleado #${item.empleadoId}) no corresponde al piloto/auxiliares de este viaje.`,
           },
           { status: 400 },
         );

@@ -597,14 +597,14 @@ export default function PlanForm({
     });
   }
 
-  /** POST viaticosAsignados — solo filas con vínculo RRHH (empleadoId conocido); el backend traduce empleadoId -> personalId real y valida pertenencia. */
-  function construirViaticosAsignados(): { personalId: number; montoAsignado: number }[] {
+  /** POST viaticosAsignados — solo filas con vínculo RRHH (empleadoId conocido, el único id que este formulario tiene antes de guardar); el backend valida pertenencia y traduce a tms_personal.id internamente. */
+  function construirViaticosAsignados(): { empleadoId: number; montoAsignado: number }[] {
     return filasViaticos
       .filter((f) => f.empleadoId != null)
       .map((f) => {
         const txt = viaticosMontos[f.key];
         const monto = txt != null && txt.trim() !== "" ? Number(txt) : f.sugerido;
-        return { personalId: f.empleadoId as number, montoAsignado: Number.isFinite(monto) && monto >= 0 ? monto : f.sugerido };
+        return { empleadoId: f.empleadoId as number, montoAsignado: Number.isFinite(monto) && monto >= 0 ? monto : f.sugerido };
       });
   }
 
