@@ -32,7 +32,7 @@ export type NotificacionItem = {
 };
 
 /**
- * Feed unificado: permisos de piloto externo pendientes + alertas de servicio.
+ * Feed unificado: aprobaciones operativas, alertas de Flota y alertas de RRHH.
  */
 export async function GET(_req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
@@ -136,7 +136,9 @@ export async function GET(_req: Request, ctx: Ctx) {
     const puedeFlota =
       rol === "Admin" || (perms && tienePermiso(perms, "flota_vehiculos", "ver"));
     const puedeRrhh =
-      rol === "Admin" || (perms && tienePermiso(perms, "recordatorios", "ver"));
+      rol === "Admin" ||
+      rol === "RRHH" ||
+      (perms && tienePermiso(perms, "recordatorios", "ver"));
 
     if (puedeFlota || puedeRrhh) {
       const recordatorios = await listarRecordatorios(guard.empresa.id, {
@@ -165,6 +167,71 @@ export async function GET(_req: Request, ctx: Ctx) {
     }
   } catch (e) {
     console.error("[notificaciones] recordatorios:", e);
+  }
+
+  // Alertas de vacaciones para RRHH. Son derivadas y de solo lectura: el
+  // polling no crea recordatorios ni modifica saldos. Los IDs son estables,
+  // por lo que cada recarga reemplaza el feed y no duplica notificaciones.
+  try {
+    const perms =
+      rol === "Admin" ? null : await permisosEfectivos(guard.session.id, rol as RolGlobal);
+    const puedeVacaciones =
+      rol === "Admin" ||
+      rol === "RRHH" ||
+      (perms && tienePermiso(perms, "vacaciones", "ver"));
+
+    if (puedeVacaciones) {
+      const solicitudes = await query<RowDataPacket[]>(
+        `SELECT sv.id, sv.dias_habiles, sv.fecha_inicio, sv.fecha_fin,
+                sv.creado_en, e.nombre AS empleado_nombre
+         FROM solicitudes_vacaciones sv
+         INNER JOIN empleados e
+           ON e.id = sv.id_empleado AND e.empresa_id = sv.empresa_id
+         WHERE sv.empresa_id = ? AND sv.estado = 'Pendiente'
+         ORDER BY sv.creado_en ASC
+         LIMIT 30`,
+        [guard.empresa.id],
+      ).catch(() => [] as RowDataPacket[]);
+
+      for (const solicitud of solicitudes) {
+        items.push({
+          id: `vacaciones-solicitud-${Number(solicitud.id)}`,
+          tipo: "aprobacion",
+          titulo: `Vacaciones pendientes — ${String(solicitud.empleado_nombre)}`,
+          detalle: `${Number(solicitud.dias_habiles)} día(s) · ${String(solicitud.fecha_inicio).slice(0, 10)} al ${String(solicitud.fecha_fin).slice(0, 10)}`,
+          enlace: `/e/${slug}/rrhh/vacaciones`,
+          creadoAt: solicitud.creado_en ? String(solicitud.creado_en) : null,
+        });
+      }
+
+      const saldos = await query<RowDataPacket[]>(
+        `SELECT e.id, e.nombre, ROUND(SUM(s.dias_disponibles), 2) AS dias_disponibles
+         FROM saldos_vacaciones s
+         INNER JOIN empleados e
+           ON e.id = s.id_empleado AND e.empresa_id = s.empresa_id
+         WHERE s.empresa_id = ? AND s.estado = 'Vigente'
+           AND e.estado = 'Activo' AND s.dias_disponibles > 0
+         GROUP BY e.id, e.nombre
+         HAVING SUM(s.dias_disponibles) >= 15
+         ORDER BY dias_disponibles DESC, e.nombre
+         LIMIT 30`,
+        [guard.empresa.id],
+      ).catch(() => [] as RowDataPacket[]);
+
+      for (const saldo of saldos) {
+        const dias = Number(saldo.dias_disponibles);
+        items.push({
+          id: `vacaciones-saldo-15-${Number(saldo.id)}`,
+          tipo: "alerta",
+          titulo: `Vacaciones acumuladas — ${String(saldo.nombre)}`,
+          detalle: `${dias.toLocaleString("es-GT", { maximumFractionDigits: 2 })} días disponibles; alcanzó el umbral de 15 días.`,
+          enlace: `/e/${slug}/rrhh/vacaciones`,
+          creadoAt: null,
+        });
+      }
+    }
+  } catch (e) {
+    console.error("[notificaciones] vacaciones:", e);
   }
 
   return NextResponse.json({
