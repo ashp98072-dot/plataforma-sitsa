@@ -60,6 +60,22 @@ type ContactoCliente = {
   telefono: string | null;
 };
 
+/** Mejora Programación (Opción A) — mismo shape que devuelve GET /tms/viaticos-config. */
+type ViaticoConfigOpt = {
+  puesto: string;
+  montoDefecto: number;
+};
+
+/** Una fila de la sección "Viáticos del viaje" en modo creación (derivada de piloto/auxiliares — nunca un estado aparte que se pueda desincronizar). */
+type FilaViaticoCreacion = {
+  key: string;
+  nombre: string;
+  rol: "Piloto" | "Auxiliar";
+  /** empleadoId (RRHH) — null si es un nombre libre (sin vínculo RRHH, no se puede enviar override todavía). */
+  empleadoId: number | null;
+  sugerido: number;
+};
+
 type ClienteCat = {
   id: number;
   nombre: string;
@@ -111,6 +127,13 @@ export default function PlanForm({
   const [clientesCat, setClientesCat] = useState<ClienteCat[]>([]);
   const [pilotos, setPilotos] = useState<EmpOps[]>([]);
   const [auxiliares, setAuxiliares] = useState<EmpOps[]>([]);
+  // Mejora Programación (Opción A) — configuración de montos sugeridos
+  // (tms_viaticos_config, misma que ya usa ViaticosConfigPanel en TMS) y
+  // los montos que el usuario ajusta ANTES del primer guardado, keyed por
+  // FilaViaticoCreacion.key. Solo aplica en modo creación — en edición
+  // sigue mandando ViaticosPanel (ya existente).
+  const [viaticosConfig, setViaticosConfig] = useState<ViaticoConfigOpt[]>([]);
+  const [viaticosMontos, setViaticosMontos] = useState<Record<string, string>>({});
   const [vehiculosDisponibles, setVehiculosDisponibles] = useState<VehiculoOpt[]>([]);
   const [resumenFlota, setResumenFlota] = useState({ disponibles: 0, enTaller: 0, enRuta: 0 });
 
@@ -186,10 +209,11 @@ export default function PlanForm({
   const [error, setError] = useState("");
 
   const cargarCatalogos = useCallback(async () => {
-    const [resPlanes, cat, ops] = await Promise.all([
+    const [resPlanes, cat, ops, viaticosCfg] = await Promise.all([
       fetch(`/api/empresas/${slug}/tms/planes`),
       fetch(`/api/empresas/${slug}/tms/catalogos`),
       fetch(`/api/empresas/${slug}/rrhh/personal-ops?tipo=all`),
+      fetch(`/api/empresas/${slug}/tms/viaticos-config`),
     ]);
     if (resPlanes.ok) {
       const data = await resPlanes.json();
@@ -222,6 +246,10 @@ export default function PlanForm({
       const auxFil = list.filter((p) => match(p, "auxiliar"));
       setPilotos(pilotosFil.length ? pilotosFil : list);
       setAuxiliares(auxFil.length ? auxFil : list);
+    }
+    if (viaticosCfg.ok) {
+      const vc = await viaticosCfg.json();
+      setViaticosConfig((vc.config ?? []) as ViaticoConfigOpt[]);
     }
   }, [slug]);
 
@@ -522,6 +550,64 @@ export default function PlanForm({
       form.placa.trim(),
   );
 
+  // Mejora Programación (Opción A, punto 1/7) — filas de la sección
+  // "Viáticos del viaje" en modo creación, SIEMPRE derivadas de
+  // piloto/auxiliares actuales (nunca un estado aparte): cambiar de
+  // piloto o quitar un auxiliar hace que su fila desaparezca de
+  // inmediato, sin ningún efecto/sincronización manual. Personal sin
+  // vínculo RRHH (nombre libre) se muestra con el sugerido pero sin
+  // override editable -- el backend no tiene forma de identificarlo antes
+  // de crearse.
+  const sugeridoPorRol = (rol: "Piloto" | "Auxiliar") =>
+    viaticosConfig.find((c) => c.puesto === rol)?.montoDefecto ?? 0;
+  const filasViaticos: FilaViaticoCreacion[] = [];
+  if (form.pilotoEmpleadoId) {
+    filasViaticos.push({
+      key: "piloto",
+      nombre: form.pilotoNombre || `Empleado #${form.pilotoEmpleadoId}`,
+      rol: "Piloto",
+      empleadoId: form.pilotoEmpleadoId,
+      sugerido: sugeridoPorRol("Piloto"),
+    });
+  } else if (form.pilotoNombre.trim()) {
+    filasViaticos.push({
+      key: "piloto-libre",
+      nombre: form.pilotoNombre.trim(),
+      rol: "Piloto",
+      empleadoId: null,
+      sugerido: sugeridoPorRol("Piloto"),
+    });
+  }
+  for (const id of form.auxiliarEmpleadoIds) {
+    filasViaticos.push({
+      key: `aux-emp-${id}`,
+      nombre: auxiliares.find((a) => a.id === id)?.nombre ?? `Empleado #${id}`,
+      rol: "Auxiliar",
+      empleadoId: id,
+      sugerido: sugeridoPorRol("Auxiliar"),
+    });
+  }
+  for (const nombreLibre of form.auxiliarNombres) {
+    filasViaticos.push({
+      key: `aux-nombre-${nombreLibre}`,
+      nombre: nombreLibre,
+      rol: "Auxiliar",
+      empleadoId: null,
+      sugerido: sugeridoPorRol("Auxiliar"),
+    });
+  }
+
+  /** POST viaticosAsignados — solo filas con vínculo RRHH (empleadoId conocido); el backend traduce empleadoId -> personalId real y valida pertenencia. */
+  function construirViaticosAsignados(): { personalId: number; montoAsignado: number }[] {
+    return filasViaticos
+      .filter((f) => f.empleadoId != null)
+      .map((f) => {
+        const txt = viaticosMontos[f.key];
+        const monto = txt != null && txt.trim() !== "" ? Number(txt) : f.sugerido;
+        return { personalId: f.empleadoId as number, montoAsignado: Number.isFinite(monto) && monto >= 0 ? monto : f.sugerido };
+      });
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (saving || bloqueado) return;
@@ -593,6 +679,7 @@ export default function PlanForm({
             paradas,
             lugarCarga: paradas.find((p) => p.tipo === "Carga")?.lugarNombre,
             lugarDescarga: paradas.find((p) => p.tipo === "Descarga" || p.tipo === "Entrega")?.lugarNombre,
+            viaticosAsignados: construirViaticosAsignados(),
           }),
         });
         const data = await res.json();
@@ -1029,9 +1116,48 @@ export default function PlanForm({
           <ViaticosPanel key={viaticosVersion} slug={slug} planId={plan!.id} />
         </div>
       ) : (
-        <p className="md:col-span-3 text-xs text-[var(--muted)]">
-          El viático sugerido de piloto/auxiliares aparece al guardar el viaje (edítalo desde aquí después de crearlo).
-        </p>
+        <div className="md:col-span-3 space-y-2 rounded border border-[var(--border)] p-3">
+          <p className="text-xs font-medium">Viáticos del viaje</p>
+          {filasViaticos.length ? (
+            <div className="space-y-2">
+              {filasViaticos.map((f) => (
+                <div key={f.key} className="flex flex-wrap items-center gap-3 rounded border border-[var(--border)] p-2 text-xs">
+                  <div className="min-w-[140px] flex-1">
+                    <p className="text-sm">{f.nombre}</p>
+                    <p className="text-[10px] text-[var(--muted)]">{f.rol}</p>
+                  </div>
+                  <div className="text-[11px] text-[var(--muted)]">
+                    Sugerido
+                    <br />
+                    Q{f.sugerido.toFixed(2)}
+                  </div>
+                  {f.empleadoId != null ? (
+                    <label className="text-[11px] text-[var(--muted)]">
+                      Asignado
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        className={`${inputCls} mt-0.5 block w-24`}
+                        value={viaticosMontos[f.key] ?? String(f.sugerido)}
+                        onChange={(e) => setViaticosMontos((m) => ({ ...m, [f.key]: e.target.value }))}
+                      />
+                    </label>
+                  ) : (
+                    <p className="text-[11px] text-[var(--muted)]">
+                      Usará el sugerido (Q{f.sugerido.toFixed(2)}) — el ajuste inicial solo aplica a personal de RRHH.
+                    </p>
+                  )}
+                </div>
+              ))}
+              <p className="text-[10px] text-[var(--muted)]">
+                Se guarda junto con el viaje. Mientras el viático esté PROGRAMADO puede seguir ajustándose desde aquí; una vez AUTORIZADO queda bloqueado.
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-[var(--muted)]">Selecciona piloto y/o auxiliares para definir sus viáticos.</p>
+          )}
+        </div>
       )}
 
       {error ? <p className="md:col-span-3 text-sm text-red-300">{error}</p> : null}
