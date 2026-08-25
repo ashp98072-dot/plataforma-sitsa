@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
 import { execute, getPool, query, type SqlParams } from "@/lib/db";
 import { registrarAuditoria } from "@/lib/auditoria";
-import { requireTenantModulo, requireTenantProgramacion } from "@/lib/tenant";
+import { requireTenantProgramacion, requireTenantProgramacionOTms } from "@/lib/tenant";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
 import {
   listarDisponibilidadVehiculos,
@@ -130,7 +130,10 @@ async function auxiliaresDePlanes(
 
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "tms");
+  // Corrección de matriz de permisos: este GET alimenta tanto el tablero
+  // de Programación como la tabla de solo lectura de TMS — acepta
+  // programacion:ver O tms:ver (nunca exige ambos).
+  const guard = await requireTenantProgramacionOTms(slug);
   if (guard.error) return guard.error;
 
   const url = new URL(req.url);

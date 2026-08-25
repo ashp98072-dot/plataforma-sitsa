@@ -21,7 +21,7 @@ import {
   type GrupoPermisosId,
   type PermisoModulo,
 } from "@/lib/permisos-shared";
-import type { RolGlobal } from "@/lib/roles";
+import { derivarModulosEmpresa, type Modulo, type RolGlobal } from "@/lib/roles";
 
 // Corrección de matriz de permisos: `modulos`/`slug` se agregan para
 // poder filtrar la matriz por los módulos que la EMPRESA ACTUAL (la del
@@ -232,10 +232,15 @@ export default function UsuariosPage() {
   // (empresa.modulos vacío) no se filtran aquí — evita ocultar de más
   // por falta de dato, mismo criterio permisivo que ya usa el backend
   // (empresa.modulos.length ? empresa.modulos : rolMods).
-  const modulosEmpresaActual = useMemo(
-    () => empresas.find((e) => e.slug === slug)?.modulos ?? [],
-    [empresas, slug],
-  );
+  // derivarModulosEmpresa() agrega Clientes/Facturación cuando la
+  // empresa ya opera TMS/Contabilidad/Reciclaje/Tarimas aunque
+  // modulos_json no los liste explícitamente — misma regla que usa el
+  // menú (src/app/e/[slug]/layout.tsx), para no ocultar filas que en la
+  // práctica sí aplican.
+  const modulosEmpresaActual = useMemo(() => {
+    const base = empresas.find((e) => e.slug === slug)?.modulos ?? [];
+    return base.length ? derivarModulosEmpresa(base as Modulo[]) : [];
+  }, [empresas, slug]);
 
   const gruposVisibles = useMemo(() => {
     const set = new Set(catalogoRol);
