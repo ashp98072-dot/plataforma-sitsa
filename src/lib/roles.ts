@@ -135,6 +135,34 @@ export function puedeEditarModulo(rol: RolGlobal, modulo: Modulo): boolean {
   return false;
 }
 
+/**
+ * Deriva módulos "implícitos" a partir de los módulos base de una
+ * empresa: Clientes/Facturación se habilitan automáticamente cuando la
+ * empresa ya opera TMS/Contabilidad/Reciclaje/Tarimas (el modulos_json de
+ * la empresa no siempre los lista explícitamente, pero conceptualmente
+ * ya los necesita — p.ej. TMS factura a sus clientes). Extraído de
+ * src/app/e/[slug]/layout.tsx (que lo usa para el menú) para reutilizarlo
+ * también en la matriz de permisos de Usuarios, sin duplicar la regla.
+ */
+export function derivarModulosEmpresa(baseMods: Modulo[]): Modulo[] {
+  return [
+    ...new Set([
+      ...baseMods,
+      ...(baseMods.some((m) =>
+        (["tms", "contabilidad", "reciclaje", "tarimas", "clientes"] as Modulo[]).includes(m),
+      )
+        ? (["clientes"] as Modulo[])
+        : []),
+      ...(baseMods.some((m) =>
+        (["contabilidad", "facturacion", "clientes"] as Modulo[]).includes(m),
+      ) ||
+      baseMods.some((m) => (["tms", "reciclaje", "tarimas"] as Modulo[]).includes(m))
+        ? (["facturacion"] as Modulo[])
+        : []),
+    ]),
+  ] as Modulo[];
+}
+
 export const MODULO_LABEL: Record<Modulo, string> = {
   rrhh: "Control de asistencias",
   tms: "TMS / Logística",

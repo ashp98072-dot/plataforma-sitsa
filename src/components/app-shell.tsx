@@ -279,11 +279,18 @@ export function AppShell({
         key: "disp-flota",
       });
     }
-    // Programación (Fase P3, aditivo): tablero de planes TMS, solo lectura.
-    // Misma audiencia que TMS: si puede abrir TMS, puede ver Programación.
+    // Corrección de matriz de permisos: Programación ya NO depende
+    // exclusivamente de "tms" — si el usuario tiene una matriz de
+    // permisos configurada, además exige "programacion:ver" explícito
+    // (igual que Viáticos exige sus propios permisos más abajo). Sin
+    // matriz configurada (permisos.length === 0, legado) se mantiene el
+    // criterio anterior, sin regresión.
     const puedeProgramacion =
       rol !== "Piloto" &&
-      (isAdmin || rol === "Operaciones" || opsMods.includes("tms"));
+      (isAdmin ||
+        rol === "Operaciones" ||
+        (opsMods.includes("tms") &&
+          (permisos.length === 0 || tienePermiso(permisos, "programacion", "ver"))));
     if (puedeProgramacion) {
       opsLinks.push({
         href: `${base}/programacion`,

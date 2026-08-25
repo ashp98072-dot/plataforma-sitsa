@@ -11,7 +11,7 @@ import {
   tienePermiso,
   type PermisoModulo,
 } from "@/lib/permisos-shared";
-import { modulosPorRol, type Modulo, type RolGlobal } from "@/lib/roles";
+import { derivarModulosEmpresa, modulosPorRol, type Modulo, type RolGlobal } from "@/lib/roles";
 import { getSession } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
@@ -54,23 +54,10 @@ export default async function EmpresaLayout({ children, params }: Props) {
     empresa.modulos.length ? empresa.modulos : rolMods
   ) as Modulo[];
   // Clientes / Facturación: visibles si la empresa ya opera TMS/Conta/etc.
-  // (el JSON se actualiza al abrir esos módulos; aquí no bloqueamos el layout).
-  const empresaMods = [...new Set([
-    ...baseEmpresaMods,
-    ...(baseEmpresaMods.some((m) =>
-      ["tms", "contabilidad", "reciclaje", "tarimas", "clientes"].includes(m),
-    )
-      ? (["clientes"] as Modulo[])
-      : []),
-    ...(baseEmpresaMods.some((m) =>
-      ["contabilidad", "facturacion", "clientes"].includes(m),
-    ) ||
-    baseEmpresaMods.some((m) =>
-      ["tms", "reciclaje", "tarimas"].includes(m),
-    )
-      ? (["facturacion"] as Modulo[])
-      : []),
-  ])] as Modulo[];
+  // (el JSON se actualiza al abrir esos módulos; aquí no bloqueamos el
+  // layout). Regla compartida con la matriz de permisos de Usuarios —
+  // ver derivarModulosEmpresa en src/lib/roles.ts.
+  const empresaMods = derivarModulosEmpresa(baseEmpresaMods);
 
   const extraMods = modulosPlataformaDesdePermisos(permisos);
   const moduloVisible = (m: Modulo) => {

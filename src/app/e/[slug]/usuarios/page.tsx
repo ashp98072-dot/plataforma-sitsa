@@ -16,13 +16,21 @@ import {
   labelPermiso,
   labelRol,
   mergePermisosConCatalogo,
+  moduloEmpresaDelPermiso,
   permisosDefaultPorRol,
   type GrupoPermisosId,
   type PermisoModulo,
 } from "@/lib/permisos-shared";
-import type { RolGlobal } from "@/lib/roles";
+import { derivarModulosEmpresa, type Modulo, type RolGlobal } from "@/lib/roles";
 
-type Empresa = { id: number; nombre: string; codigo: string };
+// Corrección de matriz de permisos: `modulos`/`slug` se agregan para
+// poder filtrar la matriz por los módulos que la EMPRESA ACTUAL (la del
+// slug en la URL) tiene habilitados — reutiliza empresa.modulos
+// (modulos_json), que /api/auth/me YA devuelve por empresa, sin crear
+// ningún mecanismo nuevo. No afecta el modelo de datos del usuario (su
+// lista de permisos sigue siendo una sola, global a sus empresas
+// asignadas) — esto es solo un filtro de VISIBILIDAD en este formulario.
+type Empresa = { id: number; nombre: string; codigo: string; slug: string; modulos: string[] };
 type Usuario = {
   id: number;
   username: string;
@@ -216,13 +224,36 @@ export default function UsuariosPage() {
     [rol],
   );
 
+  // Corrección de matriz de permisos: módulos habilitados en la empresa
+  // ACTUAL (la del slug de la URL) — filtra filas como "Reciclaje"/
+  // "Tarimas" cuando esa empresa no los tiene en modulos_json, sin
+  // tocarlos globalmente (otra empresa que sí los tenga los sigue
+  // viendo al editar SUS usuarios). Empresas legado sin modulos_json
+  // (empresa.modulos vacío) no se filtran aquí — evita ocultar de más
+  // por falta de dato, mismo criterio permisivo que ya usa el backend
+  // (empresa.modulos.length ? empresa.modulos : rolMods).
+  // derivarModulosEmpresa() agrega Clientes/Facturación cuando la
+  // empresa ya opera TMS/Contabilidad/Reciclaje/Tarimas aunque
+  // modulos_json no los liste explícitamente — misma regla que usa el
+  // menú (src/app/e/[slug]/layout.tsx), para no ocultar filas que en la
+  // práctica sí aplican.
+  const modulosEmpresaActual = useMemo(() => {
+    const base = empresas.find((e) => e.slug === slug)?.modulos ?? [];
+    return base.length ? derivarModulosEmpresa(base as Modulo[]) : [];
+  }, [empresas, slug]);
+
   const gruposVisibles = useMemo(() => {
     const set = new Set(catalogoRol);
     return GRUPOS_PERMISOS.map((g) => ({
       ...g,
-      modulos: g.modulos.filter((m) => set.has(m)),
+      modulos: g.modulos.filter((m) => {
+        if (!set.has(m)) return false;
+        if (!modulosEmpresaActual.length) return true;
+        const padre = moduloEmpresaDelPermiso(m);
+        return padre == null || modulosEmpresaActual.includes(padre);
+      }),
     })).filter((g) => g.modulos.length > 0);
-  }, [catalogoRol]);
+  }, [catalogoRol, modulosEmpresaActual]);
 
   const cargar = useCallback(async () => {
     const me = await fetch("/api/auth/me").then((r) => r.json());

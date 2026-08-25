@@ -409,6 +409,97 @@ export async function requireTenantViajesCerrar(
 }
 
 /**
+ * Corrección de matriz de permisos — Programación deja de depender
+ * exclusivamente de "tms": mismo patrón que requireTenantViajesCerrar
+ * (permiso propio, permisosEfectivos ya trae el default por rol —
+ * GerenteOperaciones/JefeOperaciones/AuxiliarOperaciones/Operaciones
+ * (legado) lo traen completo por defecto, Facturador no). Sigue exigiendo
+ * que la empresa tenga "tms" habilitado — Programación vive dentro de
+ * TMS, no es un módulo de empresa aparte. Usado por las acciones de
+ * ESCRITURA de Programación (crear/editar viajes) — nunca por "ver": un
+ * usuario con programacion:ver pero sin programacion:crear/editar no
+ * debe poder crear/editar solo porque puede ver (ver requireTenant
+ * ProgramacionOTms para la lectura compartida con TMS).
+ */
+export async function requireTenantProgramacion(
+  slug: string,
+  accion: AccionPermiso = "ver",
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length
+    ? empresa.modulos
+    : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("tms")) {
+    return {
+      error: NextResponse.json(
+        { error: "Esta empresa no tiene el módulo TMS." },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  if (!tienePermiso(perms, "programacion", accion)) {
+    return {
+      error: NextResponse.json(
+        { error: `Sin permiso para ${accion} en Programación.` },
+        { status: 403 },
+      ),
+    };
+  }
+  return { session, empresa };
+}
+
+/**
+ * Lectura de GET /tms/planes: alimenta TANTO el tablero de Programación
+ * como la tabla de solo lectura de TMS — acepta CUALQUIERA de los dos
+ * permisos de lectura ("programacion" o "tms"), mismo patrón OR que
+ * requireTenantViaticosAny. Evita que un usuario con programacion:ver
+ * pero tms:ver=false (o viceversa) se quede sin poder cargar datos en
+ * ninguna de las dos pantallas.
+ */
+export async function requireTenantProgramacionOTms(
+  slug: string,
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length
+    ? empresa.modulos
+    : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("tms")) {
+    return {
+      error: NextResponse.json(
+        { error: "Esta empresa no tiene el módulo TMS." },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  if (
+    tienePermiso(perms, "programacion", "ver") ||
+    tienePermiso(perms, "tms", "ver")
+  ) {
+    return { session, empresa };
+  }
+  return {
+    error: NextResponse.json(
+      { error: "Sin permiso para ver Programación/TMS." },
+      { status: 403 },
+    ),
+  };
+}
+
+/**
  * VIAT-3 — módulo "Operaciones > Viáticos": acepta CUALQUIERA de los tres
  * permisos de viáticos (`viaticos`, `viaticos_autorizar`, `viaticos_pagar`)
  * con la acción pedida — no crea un permiso nuevo, solo reutiliza los tres
