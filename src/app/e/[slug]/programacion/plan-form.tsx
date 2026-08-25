@@ -1,10 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
+import Link from "next/link";
 import { ClienteSearch } from "@/components/tms/cliente-search";
 import { PlacaSelect, type VehiculoOpt } from "@/components/tms/placa-select";
 import { PilotoSelect } from "@/components/tms/piloto-select";
 import { RutaSelect, type RutaOpt } from "@/components/tms/ruta-select";
+import { AuxiliaresSelect } from "@/components/tms/auxiliares-select";
 import ViaticosPanel from "@/components/tms/viaticos-panel";
 import type { Plan } from "./programacion-client";
 import NotificarPersonal from "./notificar-personal";
@@ -50,6 +52,30 @@ type EmpOps = {
   categoriaOps: string;
 };
 
+/** Mejora Programación (contacto) — mismo shape que devuelve GET /tms/clientes/[clienteId]/contactos. */
+type ContactoCliente = {
+  id: number;
+  nombre: string;
+  cargo: string | null;
+  telefono: string | null;
+};
+
+/** Mejora Programación (Opción A) — mismo shape que devuelve GET /tms/viaticos-config. */
+type ViaticoConfigOpt = {
+  puesto: string;
+  montoDefecto: number;
+};
+
+/** Una fila de la sección "Viáticos del viaje" en modo creación (derivada de piloto/auxiliares — nunca un estado aparte que se pueda desincronizar). */
+type FilaViaticoCreacion = {
+  key: string;
+  nombre: string;
+  rol: "Piloto" | "Auxiliar";
+  /** empleadoId (RRHH) — null si es un nombre libre (sin vínculo RRHH, no se puede enviar override todavía). */
+  empleadoId: number | null;
+  sugerido: number;
+};
+
 type ClienteCat = {
   id: number;
   nombre: string;
@@ -66,17 +92,6 @@ const ESTADOS_BLOQUEADOS = new Set(["Descargado", "Cerrado", "Cancelado"]);
 
 const inputCls =
   "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
-
-function filtrarPersonal(list: EmpOps[], q: string, selectedIds: number[]) {
-  const term = q.trim().toLowerCase();
-  const selected = list.filter((p) => selectedIds.includes(p.id));
-  const rest = term
-    ? list.filter(
-        (p) => !selectedIds.includes(p.id) && `${p.nombre} ${p.codigo}`.toLowerCase().includes(term),
-      )
-    : list.filter((p) => !selectedIds.includes(p.id));
-  return [...selected, ...rest.slice(0, 80)];
-}
 
 export default function PlanForm({
   slug,
@@ -112,6 +127,13 @@ export default function PlanForm({
   const [clientesCat, setClientesCat] = useState<ClienteCat[]>([]);
   const [pilotos, setPilotos] = useState<EmpOps[]>([]);
   const [auxiliares, setAuxiliares] = useState<EmpOps[]>([]);
+  // Mejora Programación (Opción A) — configuración de montos sugeridos
+  // (tms_viaticos_config, misma que ya usa ViaticosConfigPanel en TMS) y
+  // los montos que el usuario ajusta ANTES del primer guardado, keyed por
+  // FilaViaticoCreacion.key. Solo aplica en modo creación — en edición
+  // sigue mandando ViaticosPanel (ya existente).
+  const [viaticosConfig, setViaticosConfig] = useState<ViaticoConfigOpt[]>([]);
+  const [viaticosMontos, setViaticosMontos] = useState<Record<string, string>>({});
   const [vehiculosDisponibles, setVehiculosDisponibles] = useState<VehiculoOpt[]>([]);
   const [resumenFlota, setResumenFlota] = useState({ disponibles: 0, enTaller: 0, enRuta: 0 });
 
@@ -161,12 +183,25 @@ export default function PlanForm({
           { lugarNombre: "", tipo: "Entrega", requiereEvidencia: true },
         ],
   );
-  const [auxInput, setAuxInput] = useState("");
   const [saving, setSaving] = useState(false);
+  // Mejora Programación (punto 20) — ViaticosPanel solo refetch en su
+  // propio mount ([slug, planId]); como este formulario NO se desmonta
+  // entre guardados del mismo plan (mismo id), un cambio de piloto/
+  // auxiliares no se reflejaba visualmente hasta recargar la página.
+  // Forzamos un remount limpio del panel tras cada guardado exitoso vía
+  // `key` — así siempre refleja lo que sincronizarViaticosPlan acaba de
+  // dejar en BD, sin tocar ViaticosPanel.
+  const [viaticosVersion, setViaticosVersion] = useState(0);
 
   // VIAT-1: ubicaciones guardadas del cliente seleccionado, para armar
   // paradas rápido en vez de escribir la dirección cada vez.
   const [ubicacionesCliente, setUbicacionesCliente] = useState<UbicacionCliente[]>([]);
+  // Mejora Programación — contactos activos del cliente seleccionado
+  // (tms_cliente_contactos vía GET /tms/clientes/[clienteId]/contactos).
+  // El teléfono SIEMPRE sale de aquí (o del contacto de la ruta elegida) —
+  // Programación nunca guarda un teléfono "maestro" propio.
+  const [contactosCliente, setContactosCliente] = useState<ContactoCliente[]>([]);
+  const [contactoClienteIdSeleccionado, setContactoClienteIdSeleccionado] = useState<number | null>(null);
   const [nuevaUbicacion, setNuevaUbicacion] = useState({ nombre: "", direccion: "" });
   const [mostrarNuevaUbicacion, setMostrarNuevaUbicacion] = useState(false);
   const [guardandoUbicacion, setGuardandoUbicacion] = useState(false);
@@ -174,10 +209,11 @@ export default function PlanForm({
   const [error, setError] = useState("");
 
   const cargarCatalogos = useCallback(async () => {
-    const [resPlanes, cat, ops] = await Promise.all([
+    const [resPlanes, cat, ops, viaticosCfg] = await Promise.all([
       fetch(`/api/empresas/${slug}/tms/planes`),
       fetch(`/api/empresas/${slug}/tms/catalogos`),
       fetch(`/api/empresas/${slug}/rrhh/personal-ops?tipo=all`),
+      fetch(`/api/empresas/${slug}/tms/viaticos-config`),
     ]);
     if (resPlanes.ok) {
       const data = await resPlanes.json();
@@ -210,6 +246,10 @@ export default function PlanForm({
       const auxFil = list.filter((p) => match(p, "auxiliar"));
       setPilotos(pilotosFil.length ? pilotosFil : list);
       setAuxiliares(auxFil.length ? auxFil : list);
+    }
+    if (viaticosCfg.ok) {
+      const vc = await viaticosCfg.json();
+      setViaticosConfig((vc.config ?? []) as ViaticoConfigOpt[]);
     }
   }, [slug]);
 
@@ -301,6 +341,70 @@ export default function PlanForm({
     };
   }, [slug, form.clienteId]);
 
+  // Mejora Programación (punto 2) — contactos activos del cliente elegido.
+  // Mismo patrón IIFE que ubicacionesCliente arriba.
+  useEffect(() => {
+    let ignore = false;
+    (async () => {
+      if (!form.clienteId) {
+        setContactosCliente([]);
+        return;
+      }
+      try {
+        const res = await fetch(`/api/empresas/${slug}/tms/clientes/${form.clienteId}/contactos`);
+        const data = await res.json();
+        if (ignore) return;
+        setContactosCliente(res.ok ? ((data.contactos ?? []) as ContactoCliente[]) : []);
+      } catch {
+        if (!ignore) setContactosCliente([]);
+      }
+    })();
+    return () => {
+      ignore = true;
+    };
+  }, [slug, form.clienteId]);
+
+  /** Aplica un contacto del cliente (elegido a mano o auto-seleccionado) a la fotografía histórica del formulario. */
+  function aplicarContactoCliente(id: number) {
+    if (!id) {
+      setContactoClienteIdSeleccionado(null);
+      setForm((f) => ({ ...f, contactoNombreHistorico: "", contactoCargoHistorico: "", contactoTelefonoHistorico: "" }));
+      return;
+    }
+    const c = contactosCliente.find((x) => x.id === id);
+    if (!c) return;
+    setContactoClienteIdSeleccionado(id);
+    setForm((f) => ({
+      ...f,
+      contactoNombreHistorico: c.nombre,
+      contactoCargoHistorico: c.cargo ?? "",
+      contactoTelefonoHistorico: c.telefono ?? "",
+    }));
+  }
+
+  // Mejora Programación (punto 2B) — si el cliente tiene EXACTAMENTE un
+  // contacto activo, se autoselecciona; con varios, el usuario elige en el
+  // selector compacto de abajo (nunca se adivina). Guard clave: solo actúa
+  // mientras no haya YA un contacto resuelto (por ruta, por elección manual,
+  // o porque es un viaje en edición que ya tenía su fotografía histórica
+  // guardada) — nunca pisa un contacto ya asignado.
+  useEffect(() => {
+    if (form.contactoNombreHistorico.trim()) return;
+    if (contactosCliente.length !== 1) return;
+    const unico = contactosCliente[0];
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setContactoClienteIdSeleccionado(unico.id);
+    setForm((f) => ({
+      ...f,
+      contactoNombreHistorico: unico.nombre,
+      contactoCargoHistorico: unico.cargo ?? "",
+      contactoTelefonoHistorico: unico.telefono ?? "",
+    }));
+    // Solo debe re-evaluarse cuando cambia la lista de contactos disponibles
+    // (p. ej. al cambiar de cliente) — no en cada tecleo de otros campos.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contactosCliente]);
+
   /**
    * Rellena la fila de parada EXISTENTE `idx` con la ubicación guardada
    * elegida — nunca crea una fila nueva ni toca el tipo (Carga/Entrega) que
@@ -370,51 +474,6 @@ export default function PlanForm({
     }
   }
 
-  const auxiliaresFiltrados = useMemo(
-    () => filtrarPersonal(auxiliares, auxInput, form.auxiliarEmpleadoIds),
-    [auxiliares, auxInput, form.auxiliarEmpleadoIds],
-  );
-
-  function totalAux() {
-    return form.auxiliarEmpleadoIds.length + form.auxiliarNombres.length;
-  }
-
-  function toggleAux(id: number) {
-    setForm((f) => {
-      const has = f.auxiliarEmpleadoIds.includes(id);
-      if (has) return { ...f, auxiliarEmpleadoIds: f.auxiliarEmpleadoIds.filter((x) => x !== id) };
-      if (f.auxiliarEmpleadoIds.length + f.auxiliarNombres.length >= 8) return f;
-      return { ...f, auxiliarEmpleadoIds: [...f.auxiliarEmpleadoIds, id] };
-    });
-  }
-
-  function agregarAuxNombre() {
-    const t = auxInput.trim();
-    if (t.length < 2) return;
-    const matchExact = auxiliares.find((p) => p.nombre.toLowerCase() === t.toLowerCase());
-    const soloUno =
-      !matchExact &&
-      auxiliaresFiltrados.filter((p) => !form.auxiliarEmpleadoIds.includes(p.id)).length === 1
-        ? auxiliaresFiltrados.find((p) => !form.auxiliarEmpleadoIds.includes(p.id))
-        : null;
-    const pick = matchExact ?? soloUno ?? null;
-    if (pick) {
-      setForm((f) => {
-        if (f.auxiliarEmpleadoIds.includes(pick.id)) return f;
-        if (f.auxiliarEmpleadoIds.length + f.auxiliarNombres.length >= 8) return f;
-        return { ...f, auxiliarEmpleadoIds: [...f.auxiliarEmpleadoIds, pick.id] };
-      });
-      setAuxInput("");
-      return;
-    }
-    setForm((f) => {
-      if (f.auxiliarEmpleadoIds.length + f.auxiliarNombres.length >= 8) return f;
-      if (f.auxiliarNombres.some((n) => n.toLowerCase() === t.toLowerCase())) return f;
-      return { ...f, auxiliarNombres: [...f.auxiliarNombres, t] };
-    });
-    setAuxInput("");
-  }
-
   /**
    * VIAT-4/VIAT-4b — al elegir una ruta del catálogo (Código/Ruta), COPIA
    * sus datos al formulario (fotografía histórica): cliente (modo A:
@@ -449,6 +508,7 @@ export default function PlanForm({
       contactoCargoHistorico: ruta.contactoCargo ?? "",
       contactoTelefonoHistorico: ruta.contactoTelefono ?? "",
     }));
+    setContactoClienteIdSeleccionado(ruta.contactoClienteId ?? null);
     const nuevasParadas: ParadaForm[] = [];
     if (ruta.lugarCargaTexto) {
       nuevasParadas.push({ lugarNombre: ruta.lugarCargaTexto, tipo: "Carga", requiereEvidencia: true, clienteUbicacionId: ruta.ubicacionCargaId });
@@ -489,6 +549,64 @@ export default function PlanForm({
       form.auxiliarNombres.length ||
       form.placa.trim(),
   );
+
+  // Mejora Programación (Opción A, punto 1/7) — filas de la sección
+  // "Viáticos del viaje" en modo creación, SIEMPRE derivadas de
+  // piloto/auxiliares actuales (nunca un estado aparte): cambiar de
+  // piloto o quitar un auxiliar hace que su fila desaparezca de
+  // inmediato, sin ningún efecto/sincronización manual. Personal sin
+  // vínculo RRHH (nombre libre) se muestra con el sugerido pero sin
+  // override editable -- el backend no tiene forma de identificarlo antes
+  // de crearse.
+  const sugeridoPorRol = (rol: "Piloto" | "Auxiliar") =>
+    viaticosConfig.find((c) => c.puesto === rol)?.montoDefecto ?? 0;
+  const filasViaticos: FilaViaticoCreacion[] = [];
+  if (form.pilotoEmpleadoId) {
+    filasViaticos.push({
+      key: "piloto",
+      nombre: form.pilotoNombre || `Empleado #${form.pilotoEmpleadoId}`,
+      rol: "Piloto",
+      empleadoId: form.pilotoEmpleadoId,
+      sugerido: sugeridoPorRol("Piloto"),
+    });
+  } else if (form.pilotoNombre.trim()) {
+    filasViaticos.push({
+      key: "piloto-libre",
+      nombre: form.pilotoNombre.trim(),
+      rol: "Piloto",
+      empleadoId: null,
+      sugerido: sugeridoPorRol("Piloto"),
+    });
+  }
+  for (const id of form.auxiliarEmpleadoIds) {
+    filasViaticos.push({
+      key: `aux-emp-${id}`,
+      nombre: auxiliares.find((a) => a.id === id)?.nombre ?? `Empleado #${id}`,
+      rol: "Auxiliar",
+      empleadoId: id,
+      sugerido: sugeridoPorRol("Auxiliar"),
+    });
+  }
+  for (const nombreLibre of form.auxiliarNombres) {
+    filasViaticos.push({
+      key: `aux-nombre-${nombreLibre}`,
+      nombre: nombreLibre,
+      rol: "Auxiliar",
+      empleadoId: null,
+      sugerido: sugeridoPorRol("Auxiliar"),
+    });
+  }
+
+  /** POST viaticosAsignados — solo filas con vínculo RRHH (empleadoId conocido, el único id que este formulario tiene antes de guardar); el backend valida pertenencia y traduce a tms_personal.id internamente. */
+  function construirViaticosAsignados(): { empleadoId: number; montoAsignado: number }[] {
+    return filasViaticos
+      .filter((f) => f.empleadoId != null)
+      .map((f) => {
+        const txt = viaticosMontos[f.key];
+        const monto = txt != null && txt.trim() !== "" ? Number(txt) : f.sugerido;
+        return { empleadoId: f.empleadoId as number, montoAsignado: Number.isFinite(monto) && monto >= 0 ? monto : f.sugerido };
+      });
+  }
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -561,6 +679,7 @@ export default function PlanForm({
             paradas,
             lugarCarga: paradas.find((p) => p.tipo === "Carga")?.lugarNombre,
             lugarDescarga: paradas.find((p) => p.tipo === "Descarga" || p.tipo === "Entrega")?.lugarNombre,
+            viaticosAsignados: construirViaticosAsignados(),
           }),
         });
         const data = await res.json();
@@ -614,6 +733,10 @@ export default function PlanForm({
           `${data.mensaje ?? "Viaje actualizado."} — ${data.advertencias.map((a: { mensaje: string }) => a.mensaje).join(" · ")}`,
         );
       }
+      // El servidor ya sincronizó tms_viaticos con el piloto/auxiliares
+      // recién guardados (sincronizarViaticosPlan) — forzar un remount
+      // limpio de ViaticosPanel para que lo refleje de inmediato.
+      setViaticosVersion((v) => v + 1);
       onSaved({ id: plan!.id, fechaPlan: form.fechaPlan });
     } catch {
       setError("Error de conexión.");
@@ -707,35 +830,53 @@ export default function PlanForm({
           Es lo que sale en el reporte tradicional (columna &quot;Lugar de Descarga&quot;).
         </span>
       </label>
-      <div className={`md:col-span-3 flex flex-wrap items-end gap-2 rounded border border-[var(--border)] p-2 ${soloNotas || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
-        <p className="w-full text-[11px] text-[var(--muted)]">
-          Contacto (copiado de la ruta al elegirla — un cambio futuro del contacto del cliente NO
-          altera este viaje ya creado):
+      <div className={`md:col-span-3 space-y-2 rounded border border-[var(--border)] p-2 ${soloNotas || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
+        <p className="text-[11px] font-medium text-[var(--muted)]">
+          Contacto operativo — viene del cliente (o de la ruta elegida). El teléfono no se edita
+          aquí; se copia tal cual quedará guardado en este viaje.
         </p>
-        <label className="text-[11px] text-[var(--muted)]">
-          Nombre
-          <input
-            className={`${inputCls} mt-0.5 block w-40`}
-            value={form.contactoNombreHistorico}
-            onChange={(e) => setForm((f) => ({ ...f, contactoNombreHistorico: e.target.value }))}
-          />
-        </label>
-        <label className="text-[11px] text-[var(--muted)]">
-          Cargo
-          <input
-            className={`${inputCls} mt-0.5 block w-32`}
-            value={form.contactoCargoHistorico}
-            onChange={(e) => setForm((f) => ({ ...f, contactoCargoHistorico: e.target.value }))}
-          />
-        </label>
-        <label className="text-[11px] text-[var(--muted)]">
-          Teléfono
-          <input
-            className={`${inputCls} mt-0.5 block w-32`}
-            value={form.contactoTelefonoHistorico}
-            onChange={(e) => setForm((f) => ({ ...f, contactoTelefonoHistorico: e.target.value }))}
-          />
-        </label>
+
+        {contactosCliente.length ? (
+          <label className="block text-[11px] text-[var(--muted)]">
+            Contacto
+            <select
+              className={`${inputCls} mt-0.5 block w-full max-w-xs`}
+              value={contactoClienteIdSeleccionado ?? ""}
+              onChange={(e) => aplicarContactoCliente(Number(e.target.value))}
+            >
+              <option value="">— Sin contacto —</option>
+              {contactosCliente.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.nombre}
+                  {c.cargo ? ` (${c.cargo})` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+
+        {form.contactoNombreHistorico ? (
+          <div className="rounded bg-black/10 p-2 text-xs">
+            <p>Nombre: {form.contactoNombreHistorico}</p>
+            <p>Cargo: {form.contactoCargoHistorico || "—"}</p>
+            <p>Teléfono: {form.contactoTelefonoHistorico || "Sin teléfono registrado"}</p>
+          </div>
+        ) : (
+          <p className="text-xs text-amber-300">
+            {form.clienteId ? "Sin contacto registrado para este cliente." : "Selecciona un cliente o una ruta para ver su contacto."}
+          </p>
+        )}
+
+        {form.clienteId && (!form.contactoNombreHistorico || !form.contactoTelefonoHistorico) ? (
+          <Link
+            href={`/e/${slug}/tms#cliente-contactos`}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-block text-[11px] text-sky-300 underline"
+          >
+            Editar contacto del cliente →
+          </Link>
+        ) : null}
       </div>
       <div className={soloNotas || bloqueado ? "pointer-events-none opacity-50" : ""}>
         <PlacaSelect
@@ -757,64 +898,20 @@ export default function PlanForm({
       </div>
 
       <div
-        className={`md:col-span-3 space-y-2 rounded border border-[var(--border)] p-3 ${
+        className={`md:col-span-3 rounded border border-[var(--border)] p-3 ${
           soloNotas || bloqueado ? "pointer-events-none opacity-50" : ""
         }`}
       >
-        <p className="text-xs text-[var(--muted)]">
-          Auxiliares (máx. 8) — {totalAux()}/8. Filtra por nombre, marca de RRHH o Enter para agregar.
-        </p>
-        <div className="flex gap-2">
-          <input
-            className={`${inputCls} flex-1`}
-            placeholder="Filtrar / escribir auxiliar y Enter"
-            value={auxInput}
-            onChange={(e) => setAuxInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                agregarAuxNombre();
-              }
-            }}
-          />
-          <button type="button" className="rounded bg-[#334155] px-3 py-1 text-xs text-white" onClick={agregarAuxNombre}>
-            Agregar
-          </button>
-        </div>
-        {form.auxiliarNombres.length ? (
-          <ul className="flex flex-wrap gap-2">
-            {form.auxiliarNombres.map((n) => (
-              <li key={n} className="flex items-center gap-1 rounded border border-sky-700 bg-sky-950/30 px-2 py-1 text-xs">
-                {n}
-                <button
-                  type="button"
-                  className="text-red-300"
-                  onClick={() => setForm((f) => ({ ...f, auxiliarNombres: f.auxiliarNombres.filter((x) => x !== n) }))}
-                >
-                  ×
-                </button>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-        <div className="flex max-h-40 flex-wrap gap-2 overflow-y-auto overscroll-contain">
-          {auxiliaresFiltrados.map((p) => {
-            const on = form.auxiliarEmpleadoIds.includes(p.id);
-            return (
-              <label
-                key={p.id}
-                className={[
-                  "flex cursor-pointer items-center gap-1 rounded border px-2 py-1 text-xs",
-                  on ? "border-sky-500 bg-sky-950/40" : "border-[var(--border)]",
-                ].join(" ")}
-              >
-                <input type="checkbox" checked={on} disabled={!on && totalAux() >= 8} onChange={() => toggleAux(p.id)} />
-                {p.nombre}
-              </label>
-            );
-          })}
-          {!auxiliaresFiltrados.length ? <p className="text-xs text-[var(--muted)]">Sin coincidencias.</p> : null}
-        </div>
+        <AuxiliaresSelect
+          auxiliares={auxiliares}
+          empleadoIds={form.auxiliarEmpleadoIds}
+          nombresLibres={form.auxiliarNombres}
+          max={8}
+          inputClassName={inputCls}
+          onChange={({ empleadoIds, nombresLibres }) =>
+            setForm((f) => ({ ...f, auxiliarEmpleadoIds: empleadoIds, auxiliarNombres: nombresLibres }))
+          }
+        />
       </div>
 
       <label className={`text-xs text-[var(--muted)] ${soloNotas || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
@@ -1016,12 +1113,51 @@ export default function PlanForm({
 
       {esEdicion ? (
         <div className="md:col-span-3">
-          <ViaticosPanel slug={slug} planId={plan!.id} />
+          <ViaticosPanel key={viaticosVersion} slug={slug} planId={plan!.id} />
         </div>
       ) : (
-        <p className="md:col-span-3 text-xs text-[var(--muted)]">
-          El viático sugerido de piloto/auxiliares aparece al guardar el viaje (edítalo desde aquí después de crearlo).
-        </p>
+        <div className="md:col-span-3 space-y-2 rounded border border-[var(--border)] p-3">
+          <p className="text-xs font-medium">Viáticos del viaje</p>
+          {filasViaticos.length ? (
+            <div className="space-y-2">
+              {filasViaticos.map((f) => (
+                <div key={f.key} className="flex flex-wrap items-center gap-3 rounded border border-[var(--border)] p-2 text-xs">
+                  <div className="min-w-[140px] flex-1">
+                    <p className="text-sm">{f.nombre}</p>
+                    <p className="text-[10px] text-[var(--muted)]">{f.rol}</p>
+                  </div>
+                  <div className="text-[11px] text-[var(--muted)]">
+                    Sugerido
+                    <br />
+                    Q{f.sugerido.toFixed(2)}
+                  </div>
+                  {f.empleadoId != null ? (
+                    <label className="text-[11px] text-[var(--muted)]">
+                      Asignado
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        className={`${inputCls} mt-0.5 block w-24`}
+                        value={viaticosMontos[f.key] ?? String(f.sugerido)}
+                        onChange={(e) => setViaticosMontos((m) => ({ ...m, [f.key]: e.target.value }))}
+                      />
+                    </label>
+                  ) : (
+                    <p className="text-[11px] text-[var(--muted)]">
+                      Usará el sugerido (Q{f.sugerido.toFixed(2)}) — el ajuste inicial solo aplica a personal de RRHH.
+                    </p>
+                  )}
+                </div>
+              ))}
+              <p className="text-[10px] text-[var(--muted)]">
+                Se guarda junto con el viaje. Mientras el viático esté PROGRAMADO puede seguir ajustándose desde aquí; una vez AUTORIZADO queda bloqueado.
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-[var(--muted)]">Selecciona piloto y/o auxiliares para definir sus viáticos.</p>
+          )}
+        </div>
       )}
 
       {error ? <p className="md:col-span-3 text-sm text-red-300">{error}</p> : null}

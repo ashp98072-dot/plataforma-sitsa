@@ -324,6 +324,27 @@ const schema = z.object({
     )
     .max(20)
     .optional(),
+  // Mejora Programación (Opción A) — viáticos definidos desde el PRIMER
+  // guardado del viaje. `empleadoId` aquí es el id de RRHH (empleados.id)
+  // — el MISMO espacio de ids que pilotoEmpleadoId/auxiliarEmpleadoIds
+  // (deliberadamente NO se llama "personalId": en TMS ese nombre ya
+  // designa tms_personal.id, un id interno resuelto server-side que el
+  // cliente nunca conoce antes de guardar el plan — no se expone). Se
+  // valida más abajo que cada empleadoId corresponda realmente al
+  // piloto/auxiliares RESUELTOS de este mismo POST — nunca se confía en
+  // lo que mande el cliente HTTP.
+  viaticosAsignados: z
+    .array(
+      z.object({
+        empleadoId: z.number().int().positive(),
+        montoAsignado: z.number().min(0),
+      }),
+    )
+    .max(9)
+    .optional()
+    .refine((arr) => !arr || new Set(arr.map((x) => x.empleadoId)).size === arr.length, {
+      message: "No se permiten empleadoId duplicados en viaticosAsignados.",
+    }),
 });
 
 async function personalDesdeEmpleado(
@@ -543,6 +564,13 @@ export async function POST(req: Request, ctx: Ctx) {
     );
     unidadId = Number(r.insertId);
   }
+  // Mejora Programación (Opción A) — mapa empleadoId (RRHH) -> personalId
+  // (tms_personal, recién resuelto) SOLO para el personal ligado a RRHH —
+  // es la clave para traducir viaticosAsignados (que llega en espacio de
+  // empleadoId, el único que el cliente conoce antes de guardar) al
+  // personalId real que espera sincronizarViaticosPlan.
+  const empleadoIdAPersonalId = new Map<number, number>();
+
   pilotoId = await personalDesdeEmpleado(
     empresaId,
     d.pilotoEmpleadoId,
@@ -555,6 +583,7 @@ export async function POST(req: Request, ctx: Ctx) {
     );
     pilotoId = Number(r.insertId);
   }
+  if (pilotoId && d.pilotoEmpleadoId) empleadoIdAPersonalId.set(d.pilotoEmpleadoId, pilotoId);
 
   const auxIdsRaw =
     d.auxiliarEmpleadoIds?.length
@@ -565,7 +594,10 @@ export async function POST(req: Request, ctx: Ctx) {
   const auxPersonalIds: number[] = [];
   for (const eid of auxIdsRaw.slice(0, 8)) {
     const pid = await personalDesdeEmpleado(empresaId, eid, "Auxiliar");
-    if (pid) auxPersonalIds.push(pid);
+    if (pid) {
+      auxPersonalIds.push(pid);
+      empleadoIdAPersonalId.set(eid, pid);
+    }
   }
   const nombresAux = [
     ...(d.auxiliarNombres ?? []),
@@ -592,6 +624,30 @@ export async function POST(req: Request, ctx: Ctx) {
     auxPersonalIds.push(Number(r.insertId));
   }
   const auxiliarId = auxPersonalIds[0] ?? null;
+
+  // Mejora Programación (Opción A) — validar viaticosAsignados ANTES de
+  // escribir absolutamente nada: cada empleadoId debe corresponder
+  // realmente al piloto/auxiliares RESUELTOS arriba (empleadoIdAPersonalId
+  // -- nunca se confía en lo que mande el cliente). Si algo no calza, 400
+  // inmediato, sin crear el plan (CASO E). Aquí es donde empleadoId se
+  // traduce al personalId real (tms_personal.id) que espera
+  // sincronizarViaticosPlan — el único lugar de todo el flujo donde ese id
+  // interno aparece, nunca antes.
+  const viaticosOverrides: { personalId: number; montoAsignado: number }[] = [];
+  if (d.viaticosAsignados?.length) {
+    for (const item of d.viaticosAsignados) {
+      const personalIdReal = empleadoIdAPersonalId.get(item.empleadoId);
+      if (personalIdReal == null) {
+        return NextResponse.json(
+          {
+            error: `El personal indicado en viáticos (empleado #${item.empleadoId}) no corresponde al piloto/auxiliares de este viaje.`,
+          },
+          { status: 400 },
+        );
+      }
+      viaticosOverrides.push({ personalId: personalIdReal, montoAsignado: item.montoAsignado });
+    }
+  }
 
   // Paradas: array nuevo o compatibilidad con 2 campos clásicos
   const paradasInput: ParadaInput[] = (d.paradas ?? []).filter((p) =>
@@ -658,6 +714,14 @@ export async function POST(req: Request, ctx: Ctx) {
   // cualquiera escriba. Se libera siempre en el finally, sin excepción.
   const lockKey = `tms_traslape_${empresaId}`;
   const lockConn = recursosNuevoPlan.length ? await getPool().getConnection() : null;
+  // Mejora Programación (Opción A, punto 4) — el alta completa (plan +
+  // auxiliares + paradas + viáticos) ahora es UNA transacción real: si
+  // sincronizarViaticosPlan falla, TODO se revierte (incluido el plan
+  // recién insertado) en vez de dejar un plan creado con viáticos a
+  // medias. `conn` es independiente de `lockConn` (que solo sirve para el
+  // candado GET_LOCK/RELEASE_LOCK del chequeo de traslapes, sin relación
+  // con la atomicidad de la escritura).
+  const conn = await getPool().getConnection();
   try {
     if (lockConn && intervaloNuevo) {
       try {
@@ -676,9 +740,11 @@ export async function POST(req: Request, ctx: Ctx) {
       }
     }
 
+    await conn.beginTransaction();
+
     for (let attempt = 0; attempt < 5; attempt++) {
       try {
-        const result = await execute(
+        const [result] = await conn.execute<ResultSetHeader>(
           `INSERT INTO tms_planes_viaje
             (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado')`,
@@ -717,13 +783,40 @@ export async function POST(req: Request, ctx: Ctx) {
       }
     }
     if (!planId) {
+      await conn.rollback();
       return NextResponse.json(
         { error: "No se pudo generar un código de plan único. Intenta de nuevo." },
         { status: 409 },
       );
     }
-    await guardarAuxiliaresPlan(planId, auxPersonalIds);
+    await guardarAuxiliaresPlan(planId, auxPersonalIds, conn);
+    if (paradasInput.length) {
+      await guardarParadasPlan(empresaId, planId, paradasInput, conn);
+    }
+    // VIAT-0 + mejora Programación: crea/actualiza el viático de cada
+    // piloto/auxiliar recién asignado — con el monto explícito de
+    // viaticosOverrides si el POST lo trajo, o el sugerido si no. Ahora SÍ
+    // forma parte de la transacción del alta: si esto falla, se revierte
+    // todo (antes se tragaba el error para no bloquear la creación del
+    // plan; el negocio confirmó que ya no debe ser así).
+    await sincronizarViaticosPlan(
+      empresaId,
+      planId,
+      { piloto: pilotoId, auxiliares: auxPersonalIds },
+      conn,
+      viaticosOverrides,
+    );
+
+    await conn.commit();
+  } catch (e) {
+    await conn.rollback();
+    console.error("POST tms/planes (transacción de alta)", e);
+    return NextResponse.json(
+      { error: "No se pudo crear el viaje. No se guardó ningún cambio." },
+      { status: 500 },
+    );
   } finally {
+    conn.release();
     if (lockConn) {
       try {
         await lockConn.query("SELECT RELEASE_LOCK(?) AS l", [lockKey]);
@@ -733,24 +826,10 @@ export async function POST(req: Request, ctx: Ctx) {
       lockConn.release();
     }
   }
-  // Si se llega aquí, planId siempre es válido: cualquier salida sin plan
-  // (conflicto de traslape, o fallo al generar código único) ya retornó
-  // dentro del try/finally de arriba.
-  if (paradasInput.length) {
-    await guardarParadasPlan(empresaId, planId, paradasInput);
-  }
-  // VIAT-0: crea automáticamente el viático sugerido para el piloto y cada
-  // auxiliar recién asignados (punto 6). Nunca bloquea la creación del plan
-  // — los viáticos son información interna secundaria, no un requisito para
-  // registrar el viaje.
-  try {
-    await sincronizarViaticosPlan(empresaId, planId, {
-      piloto: pilotoId,
-      auxiliares: auxPersonalIds,
-    });
-  } catch (e) {
-    console.error("sincronizarViaticosPlan (POST tms/planes)", e);
-  }
+  // Si se llega aquí, el commit fue exitoso: plan + auxiliares + paradas +
+  // viáticos quedaron guardados juntos. Cualquier salida sin eso (conflicto
+  // de traslape, código único no generado, o fallo en cualquier escritura
+  // de la transacción) ya retornó dentro del try/catch/finally de arriba.
 
   const paradasTxt = paradasInput
     .map((p, i) => `${i + 1}.${p.lugarNombre}(${p.tipo ?? "?"})`)
@@ -1082,6 +1161,55 @@ export async function PATCH(req: Request, ctx: Ctx) {
     }
     auxiliarId = auxIds[0] ?? null;
     auxPersonalIdsNuevo = auxIds;
+  }
+
+  // Mejora Programación — bloquear el cambio de personal si a quien se
+  // quita/reemplaza ya se le procesó un viático (AUTORIZADO/ENTREGADO/
+  // LIQUIDADO). Solo corre si esta solicitud REALMENTE toca piloto y/o
+  // auxiliares (mismo gate que ya decide si se llama a
+  // sincronizarViaticosPlan más abajo) — editar notas/tarifa/hora/etc. sin
+  // tocar personal nunca se bloquea por esto. Se calcula el personal
+  // REALMENTE removido (antes menos el conjunto final que aplicaría este
+  // PATCH) y se consulta su viático ANTES de escribir nada — 409 sin
+  // ningún cambio si alguno no está PROGRAMADO.
+  const cambiaPersonal = pilotoId !== undefined || auxPersonalIdsLegado != null || auxPersonalIdsNuevo != null;
+  if (cambiaPersonal) {
+    const pilotoFinal = pilotoId !== undefined ? pilotoId : antes.pilotoId;
+    const auxiliaresFinal = auxPersonalIdsNuevo ?? auxPersonalIdsLegado ?? antesAuxiliaresIds;
+
+    const removidos: { personalId: number; nombre: string }[] = [];
+    if (antes.pilotoId != null && antes.pilotoId !== pilotoFinal) {
+      removidos.push({ personalId: antes.pilotoId, nombre: antes.piloto || `Piloto #${antes.pilotoId}` });
+    }
+    antesAuxiliaresIds.forEach((id, i) => {
+      if (!auxiliaresFinal.includes(id)) {
+        removidos.push({ personalId: id, nombre: antesAuxiliaresNombres[i] || `Auxiliar #${id}` });
+      }
+    });
+
+    if (removidos.length) {
+      const viaticosRemovidos = await query<RowDataPacket[]>(
+        `SELECT personal_id, estado FROM tms_viaticos
+         WHERE plan_id = ? AND personal_id IN (${removidos.map(() => "?").join(",")}) AND estado != 'PROGRAMADO'`,
+        [d.id, ...removidos.map((r) => r.personalId)],
+      );
+      if (viaticosRemovidos.length) {
+        const estadoPorPersonal = new Map(viaticosRemovidos.map((r) => [Number(r.personal_id), String(r.estado)]));
+        const bloqueados = removidos.filter((r) => estadoPorPersonal.has(r.personalId));
+        const detalle = bloqueados
+          .map((b) => `${b.nombre} (viático ${estadoPorPersonal.get(b.personalId)!.toLowerCase()})`)
+          .join(", ");
+        return NextResponse.json(
+          {
+            error:
+              bloqueados.length === 1
+                ? `No se puede quitar a ${bloqueados[0].nombre} del viaje porque su viático ya fue ${estadoPorPersonal.get(bloqueados[0].personalId)!.toLowerCase()}.`
+                : `No se puede modificar el personal del viaje: ${detalle} — su(s) viático(s) ya fue(ron) procesado(s).`,
+          },
+          { status: 409 },
+        );
+      }
+    }
   }
 
   // Placa legada: solo normaliza el texto aquí. El upsert real de

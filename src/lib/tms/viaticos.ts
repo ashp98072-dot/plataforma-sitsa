@@ -151,18 +151,42 @@ export type AsignacionPersonalPlan = {
   auxiliares: number[];
 };
 
+/** Monto explícito para UNA persona al sincronizar (Opción A — viáticos definidos desde el primer guardado). */
+export type OverrideMontoViatico = {
+  personalId: number;
+  montoAsignado: number;
+};
+
 /**
  * Sincroniza tms_viaticos con el personal REALMENTE asignado a un plan
  * (punto 6, 8, 12). Reutiliza el mismo patrón "reemplazar según lo
  * actualmente asignado" que guardarAuxiliaresPlan() en
  * src/app/api/empresas/[slug]/tms/planes/route.ts:
  * - elimina filas de personal que ya no está asignado al plan;
- * - crea una fila (monto_asignado = monto_sugerido, sin motivo/usuario) para
- *   cada personal recién asignado que todavía no tenía viático;
+ * - crea una fila para cada personal recién asignado que todavía no tenía
+ *   viático (monto_asignado = el override recibido para esa persona, o el
+ *   monto sugerido si no se envió override);
  * - NO toca monto_asignado/motivo_cambio/modificado_por de un personal que
- *   ya tenía fila (una edición de otros campos del plan, o un resave con el
- *   mismo personal, nunca resetea un monto ya ajustado manualmente).
- * `conn` opcional: si viene (dentro de la transacción de PATCH en
+ *   ya tenía fila y NO trae override (una edición de otros campos del
+ *   plan, o un resave con el mismo personal, nunca resetea a ciegas un
+ *   monto ya ajustado manualmente) — pero SÍ lo actualiza si esta llamada
+ *   trae explícitamente un override para esa persona.
+ *
+ * Protección (revisión previa a merge, VIAT-3/Programación): la
+ * sincronización automática por cambio de personal SOLO puede tocar
+ * (borrar, refrescar rol/monto_sugerido, o aplicar un override de monto)
+ * registros en estado PROGRAMADO. Un viático ya AUTORIZADO/ENTREGADO/
+ * LIQUIDADO es información financiera/operativa ya procesada — si la
+ * persona deja de estar asignada al plan, esa fila se PRESERVA intacta
+ * (queda "huérfana" de la asignación actual del plan, pero es exactamente
+ * el registro histórico de que esa persona sí fue programada y su
+ * viático sí se autorizó/pagó/liquidó). Nunca se borra ni se modifica
+ * automáticamente por un cambio de piloto/auxiliares o por un override —
+ * solo por las transiciones explícitas de autorizarViatico/
+ * registrarEntregaViatico/liquidarViatico o por una intervención manual
+ * en BD, igual que cualquier otro dato ya cerrado.
+ *
+ * `conn` opcional: si viene (dentro de la transacción de POST/PATCH en
  * planes/route.ts), todas las escrituras usan esa misma conexión — la
  * asignación de personal y sus viáticos quedan consistentes en un solo
  * commit/rollback.
@@ -172,6 +196,7 @@ export async function sincronizarViaticosPlan(
   planId: number,
   asignacion: AsignacionPersonalPlan,
   conn?: PoolConnection,
+  overrides?: OverrideMontoViatico[],
 ): Promise<void> {
   const objetivo: { personalId: number; rol: "Piloto" | "Auxiliar" }[] = [];
   if (asignacion.piloto != null) {
@@ -182,29 +207,65 @@ export async function sincronizarViaticosPlan(
       objetivo.push({ personalId: pid, rol: "Auxiliar" });
     }
   }
+  const overridePorPersonal = new Map<number, number>(
+    (overrides ?? []).map((o) => [o.personalId, o.montoAsignado]),
+  );
 
+  // Solo estado PROGRAMADO se toca automáticamente -- ver protección arriba.
   if (objetivo.length) {
     const placeholders = objetivo.map(() => "?").join(",");
     await runExecute(
       conn,
-      `DELETE FROM tms_viaticos WHERE plan_id = ? AND personal_id NOT IN (${placeholders})`,
+      `DELETE FROM tms_viaticos WHERE plan_id = ? AND personal_id NOT IN (${placeholders}) AND estado = 'PROGRAMADO'`,
       [planId, ...objetivo.map((o) => o.personalId)],
     );
   } else {
-    await runExecute(conn, `DELETE FROM tms_viaticos WHERE plan_id = ?`, [planId]);
+    await runExecute(conn, `DELETE FROM tms_viaticos WHERE plan_id = ? AND estado = 'PROGRAMADO'`, [planId]);
   }
 
+  // Si ya existe una fila para esta persona en este plan y NO está
+  // PROGRAMADO (ya se autorizó/entregó/liquidó), se deja completamente
+  // intacta -- ni rol, ni monto_sugerido, ni monto_asignado se tocan sobre
+  // un registro ya cerrado, ni siquiera si viene un override para esa
+  // persona.
+  const existentesRows = await runQuery<RowDataPacket[]>(
+    conn,
+    `SELECT personal_id, estado, monto_asignado FROM tms_viaticos WHERE plan_id = ?`,
+    [planId],
+  );
+  const existentePorPersonal = new Map<number, { estado: string; montoAsignado: number }>(
+    existentesRows.map((r) => [
+      Number(r.personal_id),
+      { estado: String(r.estado ?? "PROGRAMADO"), montoAsignado: Number(r.monto_asignado ?? 0) },
+    ]),
+  );
+
   for (const o of objetivo) {
+    const existente = existentePorPersonal.get(o.personalId);
+    if (existente && existente.estado !== "PROGRAMADO") continue;
+
     const puesto = await puestoDePersonal(empresaId, o.personalId, conn);
     const sugerido = await montoSugeridoParaPuesto(empresaId, puesto, conn);
+    // Prioridad del monto asignado: 1) override explícito de ESTA llamada
+    // (gana siempre que la fila esté PROGRAMADO o sea nueva); 2) si la fila
+    // ya existía (PROGRAMADO) y no hay override, se preserva su monto
+    // actual (nunca se resetea a sugerido en un resave); 3) fila nueva sin
+    // override -> sugerido.
+    const asignado = overridePorPersonal.has(o.personalId)
+      ? overridePorPersonal.get(o.personalId)!
+      : existente
+        ? existente.montoAsignado
+        : sugerido;
+
     await runExecute(
       conn,
       `INSERT INTO tms_viaticos (empresa_id, plan_id, personal_id, rol, monto_sugerido, monto_asignado)
        VALUES (?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          rol = VALUES(rol),
-         monto_sugerido = VALUES(monto_sugerido)`,
-      [empresaId, planId, o.personalId, o.rol, sugerido, sugerido],
+         monto_sugerido = VALUES(monto_sugerido),
+         monto_asignado = VALUES(monto_asignado)`,
+      [empresaId, planId, o.personalId, o.rol, sugerido, asignado],
     );
   }
 }
