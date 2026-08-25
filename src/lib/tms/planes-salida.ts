@@ -129,7 +129,14 @@ export async function marcarPlanEnRuta(
   ).catch(() => undefined);
 }
 
-/** Al cerrar llegada en flota: plan → Descargado (luego Ops puede cerrarlo). */
+/**
+ * OPS-1 (corregido): esta función YA NO se invoca automáticamente desde
+ * ningún endpoint de llegada (Portal ni Flota) — registrar llegada es
+ * solo respaldo operativo, no cambia el estado administrativo del plan.
+ * Se conserva solo por compatibilidad histórica (documenta cómo
+ * quedaron marcados en "Descargado" los planes del flujo anterior; ver
+ * src/lib/tms/cierre-viaje.ts, que sí sabe cerrar esos registros).
+ */
 export async function marcarPlanDescargado(
   empresaId: number,
   planId: number,

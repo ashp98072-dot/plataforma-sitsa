@@ -291,8 +291,18 @@ export async function GET(_req: Request, ctx: Ctx) {
 
   if (puede("viajes_cerrar", "ver")) {
     try {
+      // OPS-1 (corregido): mismo criterio que el pendiente_cierre calculado
+      // en GET /tms/planes — ya no es estado = 'Descargado' únicamente,
+      // sino "no Cerrado/Cancelado" + llegada real registrada en
+      // flota_viajes para ese plan.
       const rows = await query<RowDataPacket[]>(
-        `SELECT COUNT(*) AS c FROM tms_planes_viaje WHERE empresa_id = ? AND estado = 'Descargado'`,
+        `SELECT COUNT(*) AS c FROM tms_planes_viaje p
+         WHERE p.empresa_id = ?
+           AND p.estado NOT IN ('Cerrado', 'Cancelado')
+           AND EXISTS (
+             SELECT 1 FROM flota_viajes fv
+             WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
+           )`,
         [empresaId],
       );
       const c = Number(rows[0]?.c ?? 0);
@@ -301,7 +311,7 @@ export async function GET(_req: Request, ctx: Ctx) {
           id: "alerta-viajes-cerrar",
           tipo: "alerta",
           titulo: "Viajes pendientes de cierre",
-          detalle: `${c} viaje(s) con operación finalizada, sin cierre administrativo`,
+          detalle: `${c} viaje(s) con llegada registrada, sin cierre administrativo`,
           enlace: `/e/${slug}/programacion`,
           creadoAt: null,
         });

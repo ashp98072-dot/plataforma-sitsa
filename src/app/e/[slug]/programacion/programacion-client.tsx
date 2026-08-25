@@ -55,9 +55,16 @@ export type Plan = {
   fecha_plan: string;
   hora_carga: string | null;
   estado: string;
-  /** OPS-1: cierre administrativo (Descargado -> Cerrado). Null hasta que se cierra. */
+  /** OPS-1: cierre administrativo. Null hasta que se cierra. */
   cerrado_por: string | null;
   cerrado_en: string | null;
+  /**
+   * OPS-1 (corregido): calculado en el backend (GET /tms/planes) — no es
+   * un valor de estado. true cuando el plan no está Cerrado/Cancelado Y
+   * ya existe un registro de llegada real en flota_viajes. MySQL lo
+   * devuelve como 0/1, no como boolean nativo.
+   */
+  pendiente_cierre: number;
   tipo_traslado: string | null;
   regreso_estimado: string | null;
   tarifa_comercial: number | null;
@@ -99,10 +106,8 @@ type Rango = "hoy" | "manana" | "semana";
 const ESTADO_LABEL: Record<string, string> = {
   Programado: "Programado",
   "En ruta": "En ruta",
-  // OPS-1: "Descargado" = operación finalizada por el piloto, pendiente de
-  // cierre administrativo por Operaciones — mismo valor interno, solo
-  // cambia la etiqueta visible (antes decía "Finalizado", lo cual no
-  // dejaba claro que todavía falta el cierre).
+  // Compatibilidad: planes históricos que ya quedaron en "Descargado" con
+  // el flujo anterior. Ya no se genera para viajes nuevos.
   Descargado: "Pendiente de cierre",
   Cerrado: "Cerrado",
   Cancelado: "Cancelado",
@@ -128,12 +133,31 @@ const ESTADO_VEHICULO_BADGE: Record<EstadoVehiculo["estadoDisponibilidad"], stri
 const ESTADO_BADGE: Record<string, string> = {
   Programado: "bg-sky-900/50 text-sky-200",
   "En ruta": "bg-amber-900/50 text-amber-200",
-  // OPS-1: amber (pendiente de acción) en vez de verde — "Descargado"
-  // todavía requiere el cierre de Operaciones, no está terminado.
+  // Compatibilidad histórica (ver ESTADO_LABEL).
   Descargado: "bg-amber-900/50 text-amber-200",
   Cerrado: "bg-emerald-900/50 text-emerald-200",
   Cancelado: "bg-rose-900/40 text-rose-200",
 };
+
+/**
+ * OPS-1 (corregido): "pendiente de cierre" ya no es siempre igual a
+ * `estado` — para viajes nuevos, el plan sigue "En ruta" aunque el
+ * piloto ya haya registrado llegada (ver Plan.pendiente_cierre, viene
+ * calculado del backend). Esta función es la única fuente de verdad
+ * para mostrar la etiqueta/color de estado en el tablero.
+ */
+function estadoVisible(p: Plan): { label: string; badge: string } {
+  if (p.estado === "Cerrado" || p.estado === "Cancelado") {
+    return { label: ESTADO_LABEL[p.estado], badge: ESTADO_BADGE[p.estado] };
+  }
+  if (p.pendiente_cierre) {
+    return { label: "Pendiente de cierre", badge: "bg-amber-900/50 text-amber-200" };
+  }
+  return {
+    label: ESTADO_LABEL[p.estado] ?? p.estado,
+    badge: ESTADO_BADGE[p.estado] ?? "bg-[var(--input)] text-[var(--muted)]",
+  };
+}
 
 function normPlaca(p: string): string {
   return p.toUpperCase().replace(/[\s-]/g, "");
@@ -293,7 +317,9 @@ type FiltroRapido =
   | "sin_auxiliares"
   | "Programado"
   | "En ruta"
-  | "Descargado"
+  // OPS-1 (corregido): valor virtual, no un estado real — filtra por
+  // Plan.pendiente_cierre, no por p.estado === "Descargado".
+  | "PendienteCierre"
   | "Cerrado";
 
 type DatosProgramacion = {
@@ -513,15 +539,10 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
       if (filtroRapido === "sin_piloto" && p.piloto) return false;
       if (filtroRapido === "sin_unidad" && p.placa) return false;
       if (filtroRapido === "sin_auxiliares" && p.auxiliares.length > 0) return false;
-      if (
-        (filtroRapido === "Programado" ||
-          filtroRapido === "En ruta" ||
-          filtroRapido === "Descargado" ||
-          filtroRapido === "Cerrado") &&
-        p.estado !== filtroRapido
-      ) {
-        return false;
-      }
+      if (filtroRapido === "Programado" && p.estado !== "Programado") return false;
+      if (filtroRapido === "En ruta" && p.estado !== "En ruta") return false;
+      if (filtroRapido === "PendienteCierre" && !p.pendiente_cierre) return false;
+      if (filtroRapido === "Cerrado" && p.estado !== "Cerrado") return false;
       if (fPiloto && p.piloto !== fPiloto) return false;
       if (fUnidad && p.placa !== fUnidad) return false;
       if (fCliente && p.cliente !== fCliente) return false;
@@ -534,7 +555,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
       total: enRango.length,
       programados: enRango.filter((p) => p.estado === "Programado").length,
       enRuta: enRango.filter((p) => p.estado === "En ruta").length,
-      finalizados: enRango.filter((p) => p.estado === "Descargado").length,
+      finalizados: enRango.filter((p) => Boolean(p.pendiente_cierre)).length,
       sinPiloto: enRango.filter((p) => !p.piloto).length,
       sinUnidad: enRango.filter((p) => !p.placa).length,
     }),
@@ -653,7 +674,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
             ["Total viajes", resumen.total, "todos"],
             ["Programados", resumen.programados, "Programado"],
             ["En ruta", resumen.enRuta, "En ruta"],
-            ["Pendientes de cierre", resumen.finalizados, "Descargado"],
+            ["Pendientes de cierre", resumen.finalizados, "PendienteCierre"],
             ["Sin piloto", resumen.sinPiloto, "sin_piloto"],
             ["Sin unidad", resumen.sinUnidad, "sin_unidad"],
           ] as const
@@ -754,7 +775,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
             value={
               filtroRapido === "Programado" ||
               filtroRapido === "En ruta" ||
-              filtroRapido === "Descargado" ||
+              filtroRapido === "PendienteCierre" ||
               filtroRapido === "Cerrado"
                 ? filtroRapido
                 : "todos"
@@ -764,7 +785,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
             <option value="todos">Todos</option>
             <option value="Programado">Programado</option>
             <option value="En ruta">En ruta</option>
-            <option value="Descargado">Pendiente de cierre</option>
+            <option value="PendienteCierre">Pendiente de cierre</option>
             <option value="Cerrado">Cerrado</option>
           </select>
         </label>
@@ -859,11 +880,9 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
                   </span>
                 </div>
                 <span
-                  className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
-                    ESTADO_BADGE[p.estado] ?? "bg-[var(--input)] text-[var(--muted)]"
-                  }`}
+                  className={`rounded px-2 py-0.5 text-[11px] font-semibold ${estadoVisible(p).badge}`}
                 >
-                  {ESTADO_LABEL[p.estado] ?? p.estado}
+                  {estadoVisible(p).label}
                 </span>
               </div>
 

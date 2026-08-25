@@ -62,9 +62,11 @@ type Plan = {
   fecha_plan: string;
   hora_carga: string | null;
   estado: string;
-  /** OPS-1: cierre administrativo (Descargado -> Cerrado). Null hasta que se cierra. */
+  /** OPS-1: cierre administrativo. Null hasta que se cierra. */
   cerrado_por: string | null;
   cerrado_en: string | null;
+  /** OPS-1 (corregido): calculado en el backend — no es un valor de estado. Ver programacion-client.tsx. */
+  pendiente_cierre: number;
   tipo_traslado: string | null;
   regreso_estimado: string | null;
   tarifa_comercial: number | null;
@@ -117,11 +119,11 @@ function labelAccionAud(accion: string): string {
     case "salida_viaje":
       return "Salida (piloto)";
     case "llegada_viaje":
-      // OPS-1: esta acción la registra el piloto al finalizar su
-      // operación (Portal) — deja el plan en "Descargado", NUNCA en
-      // "Cerrado". El cierre administrativo es una acción aparte, ver
-      // "cerrar_viaje" abajo.
-      return "Llegada (operación finalizada)";
+      // OPS-1 (corregido): el piloto solo registra llegada (respaldo
+      // operativo) — ya NO cambia el estado del plan. El cierre
+      // administrativo es una acción aparte, exclusiva de Operaciones,
+      // ver "cerrar_viaje" abajo.
+      return "Llegada registrada (piloto)";
     case "cerrar_viaje":
       return "Cerró viaje (Operaciones)";
     case "eliminar_evidencia":
@@ -143,10 +145,24 @@ function labelAccionAud(accion: string): string {
 const ESTADO_LABEL: Record<string, string> = {
   Programado: "Programado",
   "En ruta": "En ruta",
+  // Compatibilidad: planes históricos ya marcados "Descargado" por el
+  // flujo anterior. Ya no se genera para viajes nuevos.
   Descargado: "Pendiente de cierre",
   Cerrado: "Cerrado",
   Cancelado: "Cancelado",
 };
+
+/**
+ * OPS-1 (corregido): "pendiente de cierre" ya no es siempre igual a
+ * `estado` — para viajes nuevos el plan sigue "En ruta" aunque el
+ * piloto ya haya registrado llegada (ver Plan.pendiente_cierre,
+ * calculado por el backend).
+ */
+function estadoLabelVisible(p: Plan): string {
+  if (p.estado === "Cerrado" || p.estado === "Cancelado") return ESTADO_LABEL[p.estado];
+  if (p.pendiente_cierre) return "Pendiente de cierre";
+  return ESTADO_LABEL[p.estado] ?? p.estado;
+}
 
 function fechaHoraEvidencia(valor: string | null): string {
   if (!valor) return "Fecha no disponible";
@@ -421,7 +437,7 @@ export default function TmsPage() {
                       <td className="px-3 py-2">{p.cliente ?? "—"}</td>
                       <td className="px-3 py-2">{p.placa ?? "—"}</td>
                       <td className="px-3 py-2">{p.piloto ?? "—"}</td>
-                      <td className="px-3 py-2">{ESTADO_LABEL[p.estado] ?? p.estado}</td>
+                      <td className="px-3 py-2">{estadoLabelVisible(p)}</td>
                       <td className="px-3 py-2">{Number(p.evidencias ?? 0)}</td>
                       <td className="px-3 py-2">
                         <div className="flex flex-wrap gap-2 text-xs">
@@ -488,7 +504,7 @@ export default function TmsPage() {
                                 <span className="text-[11px] text-sky-300">
                                   {paradasCompletadas.length}/{paradasRequeridas.length} paradas con evidencia
                                 </span>
-                                {p.estado === "Descargado" && puedeCerrarViaje ? (
+                                {p.pendiente_cierre && puedeCerrarViaje ? (
                                   <button
                                     type="button"
                                     disabled={cerrandoId === p.id}
@@ -500,18 +516,18 @@ export default function TmsPage() {
                                 ) : null}
                               </div>
                             </div>
-                            {errorCierre && cerrandoId === null && p.estado === "Descargado" ? (
+                            {errorCierre && cerrandoId === null && p.pendiente_cierre ? (
                               <p className="mt-1 text-[11px] text-red-300">{errorCierre}</p>
                             ) : null}
                             <p className="mt-1 text-xs">
                               {p.estado === "Programado"
                                 ? "Esperando que el piloto inicie el viaje."
-                                : p.estado === "En ruta" && siguienteParada
-                                  ? `En ruta · Siguiente parada: ${siguienteParada.orden}. ${siguienteParada.lugar_nombre}`
-                                  : p.estado === "En ruta"
-                                    ? "Ruta completada; pendiente regreso al predio y finalización de la operación."
-                                    : p.estado === "Descargado"
-                                      ? "Operación finalizada por el piloto — pendiente de cierre administrativo."
+                                : p.pendiente_cierre
+                                  ? "Piloto registró la llegada — pendiente de cierre administrativo."
+                                  : p.estado === "En ruta" && siguienteParada
+                                    ? `En ruta · Siguiente parada: ${siguienteParada.orden}. ${siguienteParada.lugar_nombre}`
+                                    : p.estado === "En ruta"
+                                      ? "Ruta completada; pendiente regreso al predio."
                                       : p.estado === "Cerrado"
                                         ? `Viaje cerrado${p.cerrado_por ? ` por ${p.cerrado_por}` : ""}${p.cerrado_en ? ` · ${p.cerrado_en.replace("T", " ")}` : ""}.`
                                         : `Estado actual: ${p.estado}`}
