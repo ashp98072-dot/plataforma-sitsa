@@ -162,6 +162,20 @@ export type AsignacionPersonalPlan = {
  * - NO toca monto_asignado/motivo_cambio/modificado_por de un personal que
  *   ya tenía fila (una edición de otros campos del plan, o un resave con el
  *   mismo personal, nunca resetea un monto ya ajustado manualmente).
+ *
+ * Protección (revisión previa a merge, VIAT-3/Programación): la
+ * sincronización automática por cambio de personal SOLO puede tocar
+ * (borrar o refrescar rol/monto_sugerido) registros en estado
+ * PROGRAMADO. Un viático ya AUTORIZADO/ENTREGADO/LIQUIDADO es información
+ * financiera/operativa ya procesada — si la persona deja de estar
+ * asignada al plan, esa fila se PRESERVA intacta (queda "huérfana" de la
+ * asignación actual del plan, pero es exactamente el registro histórico
+ * de que esa persona sí fue programada y su viático sí se autorizó/pagó/
+ * liquidó). Nunca se borra ni se modifica automáticamente por un cambio
+ * de piloto/auxiliares — solo por las transiciones explícitas de
+ * autorizarViatico/registrarEntregaViatico/liquidarViatico o por una
+ * intervención manual en BD, igual que cualquier otro dato ya cerrado.
+ *
  * `conn` opcional: si viene (dentro de la transacción de PATCH en
  * planes/route.ts), todas las escrituras usan esa misma conexión — la
  * asignación de personal y sus viáticos quedan consistentes en un solo
@@ -183,18 +197,33 @@ export async function sincronizarViaticosPlan(
     }
   }
 
+  // Solo estado PROGRAMADO se toca automáticamente -- ver protección arriba.
   if (objetivo.length) {
     const placeholders = objetivo.map(() => "?").join(",");
     await runExecute(
       conn,
-      `DELETE FROM tms_viaticos WHERE plan_id = ? AND personal_id NOT IN (${placeholders})`,
+      `DELETE FROM tms_viaticos WHERE plan_id = ? AND personal_id NOT IN (${placeholders}) AND estado = 'PROGRAMADO'`,
       [planId, ...objetivo.map((o) => o.personalId)],
     );
   } else {
-    await runExecute(conn, `DELETE FROM tms_viaticos WHERE plan_id = ?`, [planId]);
+    await runExecute(conn, `DELETE FROM tms_viaticos WHERE plan_id = ? AND estado = 'PROGRAMADO'`, [planId]);
   }
 
+  // Si ya existe una fila para esta persona en este plan y NO está
+  // PROGRAMADO (ya se autorizó/entregó/liquidó), se deja completamente
+  // intacta -- ni rol ni monto_sugerido se refrescan sobre un registro ya
+  // cerrado.
+  const existentesRows = await runQuery<RowDataPacket[]>(
+    conn,
+    `SELECT personal_id, estado FROM tms_viaticos WHERE plan_id = ?`,
+    [planId],
+  );
+  const estadoPorPersonal = new Map<number, string>(
+    existentesRows.map((r) => [Number(r.personal_id), String(r.estado ?? "PROGRAMADO")]),
+  );
+
   for (const o of objetivo) {
+    if ((estadoPorPersonal.get(o.personalId) ?? "PROGRAMADO") !== "PROGRAMADO") continue;
     const puesto = await puestoDePersonal(empresaId, o.personalId, conn);
     const sugerido = await montoSugeridoParaPuesto(empresaId, puesto, conn);
     await runExecute(
