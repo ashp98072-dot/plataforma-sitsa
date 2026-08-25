@@ -1,6 +1,7 @@
 import type { RolGlobal } from "@/lib/roles";
 
 export const ROLES_PORTALES_PROVEEDORES = [
+  "Operaciones",
   "GerenteOperaciones",
   "JefeOperaciones",
   "AuxiliarOperaciones",

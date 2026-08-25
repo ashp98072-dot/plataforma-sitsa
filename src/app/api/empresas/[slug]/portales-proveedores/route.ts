@@ -29,7 +29,7 @@ async function usuarioAsignable(usuarioId: number, empresaId: number) {
     `SELECT u.id
      FROM usuarios u
      WHERE u.id = ? AND u.activo = 1
-       AND u.rol_global IN (?, ?, ?, ?)
+       AND u.rol_global IN (?, ?, ?, ?, ?)
        AND (u.acceso_todas_empresas = 1 OR EXISTS (
          SELECT 1 FROM usuario_empresa ue
          WHERE ue.usuario_id = u.id AND ue.empresa_id = ?
@@ -67,7 +67,7 @@ export async function GET(_req: Request, ctx: Ctx) {
         `SELECT u.id, u.username, u.nombre, u.rol_global
          FROM usuarios u
          WHERE u.activo = 1
-           AND u.rol_global IN (?, ?, ?, ?)
+           AND u.rol_global IN (?, ?, ?, ?, ?)
            AND (u.acceso_todas_empresas = 1 OR EXISTS (
              SELECT 1 FROM usuario_empresa ue
              WHERE ue.usuario_id = u.id AND ue.empresa_id = ?
