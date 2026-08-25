@@ -153,10 +153,10 @@ export function PortalesProveedoresClient({ slug }: { slug: string }) {
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-2xl font-semibold">Portales de proveedores</h1>
+        <h1 className="text-2xl font-semibold">Accesos de proveedores</h1>
         <p className="text-sm text-[var(--muted)]">
-          Accesos asignados exclusivamente a tu usuario. Las contraseñas se
-          almacenan cifradas y se muestran solo bajo solicitud.
+          Módulo interno de Operaciones para consultar enlaces y credenciales
+          asignados exclusivamente a tu usuario.
         </p>
       </header>
 
