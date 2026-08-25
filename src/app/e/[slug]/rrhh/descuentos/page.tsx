@@ -85,6 +85,16 @@ type Abono = {
   registradoPor: string | null;
 };
 
+type FilaImportacion = {
+  filaExcel: number;
+  empleadoNombre?: string;
+  concepto: string;
+  montoOriginal: number;
+  numeroCuotas: number;
+  estadoValidacion: "VALIDA" | "ERROR" | "DUPLICADO";
+  detalle: string;
+};
+
 function q(n: number) {
   return n.toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
@@ -159,6 +169,10 @@ export default function DescuentosPage() {
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [archivoImportacion, setArchivoImportacion] = useState<File | null>(null);
+  const [filasImportacion, setFilasImportacion] = useState<FilaImportacion[]>([]);
+  const [resumenImportacion, setResumenImportacion] = useState<{ total: number; validas: number; errores: number; duplicados: number } | null>(null);
+  const [importando, setImportando] = useState(false);
 
   // Filtros
   const [fEmpleado, setFEmpleado] = useState(0);
@@ -387,6 +401,45 @@ export default function DescuentosPage() {
     return `/api/empresas/${slug}/rrhh/descuentos/export?${params.toString()}`;
   }
 
+  async function procesarImportacion(accion: "validar" | "importar") {
+    if (!archivoImportacion) {
+      setError("Selecciona un archivo Excel de descuentos.");
+      return;
+    }
+    setImportando(true);
+    setError("");
+    setMsg("");
+    try {
+      const form = new FormData();
+      form.set("archivo", archivoImportacion);
+      form.set("accion", accion);
+      const response = await fetch(`/api/empresas/${slug}/rrhh/descuentos/import`, {
+        method: "POST",
+        body: form,
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setError(data.error ?? "No se pudo procesar el Excel.");
+        return;
+      }
+      if (accion === "validar") {
+        setFilasImportacion(data.filas ?? []);
+        setResumenImportacion(data.resumen ?? null);
+        setMsg("Validación terminada. Revisa el resultado antes de importar.");
+      } else {
+        setMsg(data.mensaje ?? "Importación finalizada.");
+        setFilasImportacion([]);
+        setResumenImportacion(null);
+        setArchivoImportacion(null);
+        await cargar();
+      }
+    } catch {
+      setError("Error de conexión al importar descuentos.");
+    } finally {
+      setImportando(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -402,6 +455,66 @@ export default function DescuentosPage() {
       {aviso ? <p className="text-sm text-amber-300">{aviso}</p> : null}
       {error ? <p className="text-sm text-red-400">{error}</p> : null}
       {msg ? <p className="text-sm text-emerald-400">{msg}</p> : null}
+
+      <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="min-w-[18rem] flex-1">
+            <h2 className="font-medium">Importar descuentos desde Excel</h2>
+            <p className="text-xs text-[var(--muted)]">
+              El sistema identifica al colaborador por código o DPI, valida el motivo y calcula las cuotas según la periodicidad.
+            </p>
+            <input
+              type="file"
+              accept=".xlsx,.xlsm"
+              className="mt-2 block w-full text-sm"
+              onChange={(e) => {
+                setArchivoImportacion(e.target.files?.[0] ?? null);
+                setFilasImportacion([]);
+                setResumenImportacion(null);
+              }}
+            />
+          </div>
+          <a
+            href={`/api/empresas/${slug}/rrhh/descuentos/import`}
+            className={`${input} text-[var(--accent)]`}
+          >
+            Descargar plantilla
+          </a>
+          <button
+            type="button"
+            disabled={!archivoImportacion || importando}
+            onClick={() => void procesarImportacion("validar")}
+            className="rounded bg-[#334155] px-3 py-1 text-sm text-white disabled:opacity-50"
+          >
+            {importando ? "Procesando…" : "Validar Excel"}
+          </button>
+          <button
+            type="button"
+            disabled={!resumenImportacion?.validas || importando}
+            onClick={() => void procesarImportacion("importar")}
+            className="rounded bg-emerald-700 px-3 py-1 text-sm text-white disabled:opacity-50"
+          >
+            Importar filas válidas
+          </button>
+        </div>
+        {resumenImportacion ? (
+          <div className="mt-3 space-y-2">
+            <p className="text-sm">
+              Total {resumenImportacion.total} · Válidas {resumenImportacion.validas} · Errores {resumenImportacion.errores} · Duplicados {resumenImportacion.duplicados}
+            </p>
+            <div className="max-h-64 overflow-auto rounded border border-[var(--border)]">
+              <table className="min-w-full text-left text-xs">
+                <thead className="sticky top-0 bg-[var(--card)]"><tr><th className="p-2">Fila</th><th className="p-2">Colaborador</th><th className="p-2">Concepto</th><th className="p-2">Monto</th><th className="p-2">Cuotas</th><th className="p-2">Resultado</th></tr></thead>
+                <tbody>{filasImportacion.map((fila) => (
+                  <tr key={fila.filaExcel} className="border-t border-[var(--border)]">
+                    <td className="p-2">{fila.filaExcel}</td><td className="p-2">{fila.empleadoNombre ?? "—"}</td><td className="p-2">{fila.concepto || "—"}</td><td className="p-2">Q{q(fila.montoOriginal)}</td><td className="p-2">{fila.numeroCuotas || "—"}</td><td className={`p-2 ${fila.estadoValidacion === "VALIDA" ? "text-emerald-400" : fila.estadoValidacion === "DUPLICADO" ? "text-amber-300" : "text-red-400"}`}>{fila.detalle}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+          </div>
+        ) : null}
+      </section>
 
       {/* Crear */}
       <form
