@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import Link from "next/link";
 import { ClienteSearch } from "@/components/tms/cliente-search";
 
 type ClienteOpt = {
@@ -283,13 +284,18 @@ export default function RutasPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Rutas</h1>
-        <p className="text-sm text-[var(--muted)]">
-          Catálogo maestro de rutas/servicios preconfigurados por cliente (código, lugar de carga
-          habitual, hora habitual, contacto y destinos). Programación copia estos datos al crear un
-          viaje — cambiar una ruta aquí nunca altera viajes ya creados.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold">Rutas</h1>
+          <p className="text-sm text-[var(--muted)]">
+            Catálogo maestro de rutas/servicios preconfigurados por cliente (código, lugar de carga
+            habitual, hora habitual, contacto y destinos). Programación copia estos datos al crear un
+            viaje — cambiar una ruta aquí nunca altera viajes ya creados.
+          </p>
+        </div>
+        <Link href={`/e/${slug}/rutas/importar`} className="rounded bg-[#37474F] px-3 py-2 text-xs text-white">
+          Importar Excel
+        </Link>
       </div>
 
       <div className="flex flex-wrap items-end gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
