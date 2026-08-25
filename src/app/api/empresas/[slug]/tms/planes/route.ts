@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
 import { execute, getPool, query, type SqlParams } from "@/lib/db";
 import { registrarAuditoria } from "@/lib/auditoria";
-import { requireTenantModulo } from "@/lib/tenant";
+import { requireTenantModulo, requireTenantProgramacion } from "@/lib/tenant";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
 import {
   listarDisponibilidadVehiculos,
@@ -493,7 +493,9 @@ async function guardarAuxiliaresPlan(
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "tms", true);
+  // Corrección de matriz de permisos: crear un viaje es una acción propia
+  // de Programación — ya no basta con "tms:editar" genérico.
+  const guard = await requireTenantProgramacion(slug, "crear");
   if (guard.error) return guard.error;
 
   try {
@@ -943,7 +945,9 @@ const patchSchema = z.object({
 
 export async function PATCH(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "tms", true);
+  // Corrección de matriz de permisos: editar un viaje es una acción propia
+  // de Programación — ya no basta con "tms:editar" genérico.
+  const guard = await requireTenantProgramacion(slug, "editar");
   if (guard.error) return guard.error;
 
   try {
