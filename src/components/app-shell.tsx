@@ -154,18 +154,23 @@ export function AppShell({
   const [navPending, setNavPending] = useState(false);
 
   useEffect(() => {
-    const host = window.location.hostname.toLowerCase();
-    setDominioEmpresa(Boolean(mapaDominios()[host]));
+    const t = window.setTimeout(() => {
+      const host = window.location.hostname.toLowerCase();
+      setDominioEmpresa(Boolean(mapaDominios()[host]));
+    }, 0);
+    return () => window.clearTimeout(t);
   }, []);
 
   // Cerrar drawer al cambiar de ruta
   useEffect(() => {
-    setMenuOpen(false);
+    const t = window.setTimeout(() => setMenuOpen(false), 0);
+    return () => window.clearTimeout(t);
   }, [pathname]);
 
   // Quitar indicador al completar (pathname o ?tab= de Flota vía nuevo RSC).
   useEffect(() => {
-    setNavPending(false);
+    const t = window.setTimeout(() => setNavPending(false), 0);
+    return () => window.clearTimeout(t);
   }, [pathname, children]);
 
   // Seguridad: no dejar la barra colgada si la nav se cancela.
@@ -460,6 +465,21 @@ export function AppShell({
       }
     }
 
+    if (isAdmin || rol === "Operaciones" || rol === "Visualizador") {
+      g.push({
+        id: "proveedores",
+        label: "Proveedores",
+        icon: <IconConta />,
+        links: [
+          {
+            href: `${base}/portales-proveedores`,
+            label: "Portales de proveedores",
+            key: "portales-proveedores",
+          },
+        ],
+      });
+    }
+
     if (isAdmin && modulos.includes("usuarios")) {
       g.push({
         id: "admin",
@@ -511,9 +531,12 @@ export function AppShell({
       gr.links.some((l) => linkActive(pathname, l.href)),
     );
     if (!activo) return;
-    setAbiertos((prev) =>
-      prev[activo.id] ? prev : { ...prev, [activo.id]: true },
-    );
+    const t = window.setTimeout(() => {
+      setAbiertos((prev) =>
+        prev[activo.id] ? prev : { ...prev, [activo.id]: true },
+      );
+    }, 0);
+    return () => window.clearTimeout(t);
   }, [pathname, groups]);
 
   function toggle(id: string) {
