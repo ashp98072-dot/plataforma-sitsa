@@ -70,8 +70,14 @@ export async function POST(req: Request, ctx: Ctx) {
 
   if (accion === "validar") {
     try {
-      const { filas, resumen, erroresDetalle } = await previsualizarImportacionRutas(guard.empresa.id, filasExcel);
-      return NextResponse.json({ accion: "validar", filas, resumen, erroresDetalle });
+      const { filas, resumen, clientesPorResolver, erroresDetalle } = await previsualizarImportacionRutas(
+        guard.empresa.id,
+        filasExcel,
+      );
+      // Las 3 colecciones SIEMPRE van en la respuesta, aunque estén vacías
+      // (previsualizarImportacionRutas ya las devuelve como array, nunca
+      // undefined) -- el frontend las trata como obligatorias.
+      return NextResponse.json({ accion: "validar", filas, resumen, clientesPorResolver, erroresDetalle });
     } catch (e) {
       console.error("POST tms/rutas/importar validar", e);
       return NextResponse.json({ error: "No se pudo analizar el archivo." }, { status: 500 });

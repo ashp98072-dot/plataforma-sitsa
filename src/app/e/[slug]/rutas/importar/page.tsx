@@ -131,6 +131,25 @@ async function leerJsonSeguro(res: Response): Promise<Record<string, unknown>> {
   }
 }
 
+/**
+ * Verifica en runtime que la respuesta de accion=validar tenga la forma
+ * esperada ANTES de guardarla en el estado — un contrato roto entre
+ * backend y frontend (p. ej. una colección que el backend deja de
+ * mandar) no debe tumbar la página entera con un `.length`/`.map` sobre
+ * `undefined`. Si algo no cuadra, se registra en consola (el error real
+ * no se oculta) y se le pide al usuario reintentar, sin crashear.
+ */
+function respuestaValidarValida(data: Record<string, unknown>): data is RespuestaValidar {
+  return (
+    data.accion === "validar" &&
+    Array.isArray(data.filas) &&
+    Array.isArray(data.clientesPorResolver) &&
+    Array.isArray(data.erroresDetalle) &&
+    typeof data.resumen === "object" &&
+    data.resumen !== null
+  );
+}
+
 export default function ImportarRutasPage() {
   const slug = String(useParams().slug);
 
@@ -194,8 +213,12 @@ export default function ImportarRutasPage() {
         setError(typeof data.error === "string" ? data.error : "No se pudo validar el archivo.");
         return;
       }
-      const respuesta = data as unknown as RespuestaValidar;
-      setPreview(respuesta);
+      if (!respuestaValidarValida(data)) {
+        console.error("Respuesta de accion=validar con forma inesperada:", data);
+        setError("No se pudo interpretar la previsualización. Intenta nuevamente.");
+        return;
+      }
+      setPreview(data);
       setDecisionesFila({});
       setDecisionesCliente({});
     } catch {
@@ -240,7 +263,14 @@ export default function ImportarRutasPage() {
     }
   }
 
-  const gruposPendientes = (preview?.clientesPorResolver ?? []).filter(
+  // Defensas de UI (además del contrato ya corregido en el backend): estas
+  // colecciones NUNCA deberían venir ausentes, pero si algún día vuelven a
+  // faltar, la pantalla se degrada con listas vacías en vez de caerse.
+  const filasPreview = preview?.filas ?? [];
+  const clientesPorResolverPreview = preview?.clientesPorResolver ?? [];
+  const erroresDetallePreview = preview?.erroresDetalle ?? [];
+
+  const gruposPendientes = clientesPorResolverPreview.filter(
     (g) => decisionesCliente[g.clienteExcelNormalizado] === undefined,
   ).length;
 
@@ -299,21 +329,21 @@ export default function ImportarRutasPage() {
         {preview ? (
           <div className="space-y-4">
             <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-5">
-              <ResumenCard label="Registros detectados" value={preview.resumen.registrosDetectados} />
-              <ResumenCard label="Rutas listas" value={preview.resumen.rutasListas} className="text-emerald-300" />
-              <ResumenCard label="Códigos existentes" value={preview.resumen.codigosExistentes} />
-              <ResumenCard label="Filas incompletas" value={preview.resumen.filasIncompletas} className="text-red-300" />
-              <ResumenCard label="Duplicados en archivo" value={preview.resumen.duplicadosEnArchivo} className="text-red-300" />
-              <ResumenCard label="Rutas pendientes de cliente" value={preview.resumen.rutasPendientesCliente} className="text-amber-300" />
-              <ResumenCard label="Clientes únicos por resolver" value={preview.resumen.clientesUnicosPorResolver} className="text-amber-300" />
-              <ResumenCard label="— ambiguos" value={preview.resumen.clientesAmbiguosUnicos} className="text-amber-300" />
-              <ResumenCard label="— nuevos" value={preview.resumen.clientesNuevosUnicos} className="text-amber-300" />
+              <ResumenCard label="Registros detectados" value={preview.resumen.registrosDetectados ?? 0} />
+              <ResumenCard label="Rutas listas" value={preview.resumen.rutasListas ?? 0} className="text-emerald-300" />
+              <ResumenCard label="Códigos existentes" value={preview.resumen.codigosExistentes ?? 0} />
+              <ResumenCard label="Filas incompletas" value={preview.resumen.filasIncompletas ?? 0} className="text-red-300" />
+              <ResumenCard label="Duplicados en archivo" value={preview.resumen.duplicadosEnArchivo ?? 0} className="text-red-300" />
+              <ResumenCard label="Rutas pendientes de cliente" value={preview.resumen.rutasPendientesCliente ?? 0} className="text-amber-300" />
+              <ResumenCard label="Clientes únicos por resolver" value={preview.resumen.clientesUnicosPorResolver ?? 0} className="text-amber-300" />
+              <ResumenCard label="— ambiguos" value={preview.resumen.clientesAmbiguosUnicos ?? 0} className="text-amber-300" />
+              <ResumenCard label="— nuevos" value={preview.resumen.clientesNuevosUnicos ?? 0} className="text-amber-300" />
             </div>
 
-            {preview.clientesPorResolver.length ? (
+            {clientesPorResolverPreview.length ? (
               <div className="space-y-2 rounded-lg border border-amber-700/50 bg-[var(--panel)] p-3">
                 <p className="text-sm font-medium">
-                  Clientes por resolver ({preview.clientesPorResolver.length})
+                  Clientes por resolver ({clientesPorResolverPreview.length})
                   {gruposPendientes > 0 ? (
                     <span className="ml-2 text-xs font-normal text-amber-300">
                       {gruposPendientes} sin decisión — esas filas no se importarán hasta resolverse.
@@ -321,7 +351,7 @@ export default function ImportarRutasPage() {
                   ) : null}
                 </p>
                 <div className="space-y-2">
-                  {preview.clientesPorResolver.map((g) => (
+                  {clientesPorResolverPreview.map((g) => (
                     <GrupoClienteRow
                       key={g.clienteExcelNormalizado}
                       grupo={g}
@@ -350,7 +380,7 @@ export default function ImportarRutasPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {preview.filas.map((f) => (
+                  {filasPreview.map((f) => (
                     <tr key={f.filaExcel} className="border-t border-[var(--border)] align-top">
                       <td className="px-2 py-2">{f.filaExcel}</td>
                       <td className="px-2 py-2 font-mono">{f.codigo || "—"}</td>
@@ -376,11 +406,11 @@ export default function ImportarRutasPage() {
               </table>
             </div>
 
-            {preview.erroresDetalle.length ? (
+            {erroresDetallePreview.length ? (
               <div className="rounded-lg border border-[var(--border)] bg-[var(--panel)] p-3">
                 <p className="text-xs font-medium text-red-300">Detalle de filas con problema</p>
                 <ul className="mt-1 space-y-0.5 text-[11px] text-[var(--muted)]">
-                  {preview.erroresDetalle.map((linea, i) => (
+                  {erroresDetallePreview.map((linea, i) => (
                     <li key={i}>{linea}</li>
                   ))}
                 </ul>
