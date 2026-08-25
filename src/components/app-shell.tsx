@@ -303,6 +303,15 @@ export function AppShell({
         key: "viaticos",
       });
     }
+    // Rutas (VIAT-4): catálogo maestro de rutas/servicios por cliente —
+    // misma audiencia que TMS/Programación (opsMods.includes("tms")).
+    if (rol !== "Piloto" && (isAdmin || rol === "Operaciones" || opsMods.includes("tms"))) {
+      opsLinks.push({
+        href: `${base}/rutas`,
+        label: "Rutas",
+        key: "rutas",
+      });
+    }
     const alcanceFact = alcanceFacturacion(rol);
     const puedeVerFact =
       isAdmin ||

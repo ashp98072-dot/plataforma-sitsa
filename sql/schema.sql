@@ -583,6 +583,14 @@ CREATE TABLE IF NOT EXISTS tms_planes_viaje (
   regreso_estimado DATETIME NULL,
   tarifa_comercial DECIMAL(12,2) NULL,
   referencia_cliente VARCHAR(160) NULL,
+  -- VIAT-4: fotografía histórica de qué ruta maestra (tms_cliente_rutas)
+  -- se usó para armar este viaje. ruta_id es solo informativo (sin FK,
+  -- mismo criterio que tms_plan_paradas.cliente_ubicacion_id) —
+  -- ruta_codigo_historico es el código YA COPIADO en el momento, el que
+  -- debe salir en el reporte tradicional (nunca se recalcula desde la
+  -- ruta viva, que puede cambiar o desactivarse después).
+  ruta_id INT NULL,
+  ruta_codigo_historico VARCHAR(40) NULL,
   estado VARCHAR(40) NOT NULL DEFAULT 'Programado',
   notas TEXT NULL,
   UNIQUE KEY uq_plan (empresa_id, codigo),
@@ -688,6 +696,63 @@ CREATE TABLE IF NOT EXISTS tms_cliente_ubicaciones (
   INDEX idx_tmscliub_cliente (empresa_id, cliente_id, activo),
   CONSTRAINT fk_tmscliub_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
   CONSTRAINT fk_tmscliub_cliente FOREIGN KEY (cliente_id) REFERENCES tms_clientes(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- VIAT-4: contactos operativos por cliente (modelo reutilizable, no un
+-- campo suelto) + catálogo maestro de rutas/servicios (Operaciones >
+-- Rutas) + sus paradas. Ver
+-- sql/migrate-2026-08-viat-4-contactos-rutas.sql para el detalle de
+-- diseño (por qué UNIQUE por cliente y no global, por qué ruta_id en
+-- tms_planes_viaje va sin FK, etc.).
+CREATE TABLE IF NOT EXISTS tms_cliente_contactos (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  cliente_id INT NOT NULL,
+  nombre VARCHAR(160) NOT NULL,
+  cargo VARCHAR(120) NULL,
+  telefono VARCHAR(80) NULL,
+  email VARCHAR(160) NULL,
+  observaciones VARCHAR(300) NULL,
+  activo TINYINT(1) NOT NULL DEFAULT 1,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_tmsclicont_cliente (empresa_id, cliente_id, activo),
+  CONSTRAINT fk_tmsclicont_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
+  CONSTRAINT fk_tmsclicont_cliente FOREIGN KEY (cliente_id) REFERENCES tms_clientes(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS tms_cliente_rutas (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  cliente_id INT NOT NULL,
+  codigo VARCHAR(40) NOT NULL,
+  nombre VARCHAR(200) NULL,
+  ubicacion_carga_id INT NULL,
+  lugar_carga_texto VARCHAR(300) NULL,
+  hora_habitual VARCHAR(20) NULL,
+  contacto_cliente_id INT NULL,
+  observaciones VARCHAR(300) NULL,
+  activo TINYINT(1) NOT NULL DEFAULT 1,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_tmsclirutas_codigo (empresa_id, cliente_id, codigo),
+  INDEX idx_tmsclirutas_cliente (empresa_id, cliente_id, activo),
+  INDEX idx_tmsclirutas_codigo (empresa_id, codigo),
+  CONSTRAINT fk_tmsclirutas_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
+  CONSTRAINT fk_tmsclirutas_cliente FOREIGN KEY (cliente_id) REFERENCES tms_clientes(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS tms_cliente_ruta_paradas (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  ruta_id INT NOT NULL,
+  cliente_ubicacion_id INT NULL,
+  orden TINYINT NOT NULL DEFAULT 1,
+  tipo VARCHAR(40) NOT NULL DEFAULT 'Entrega',
+  lugar_nombre VARCHAR(200) NOT NULL,
+  activo TINYINT(1) NOT NULL DEFAULT 1,
+  INDEX idx_tmscliparadas_ruta (ruta_id, activo, orden),
+  CONSTRAINT fk_tmscliparadas_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
+  CONSTRAINT fk_tmscliparadas_ruta FOREIGN KEY (ruta_id) REFERENCES tms_cliente_rutas(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Flota / Predios

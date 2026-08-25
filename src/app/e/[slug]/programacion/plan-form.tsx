@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import { ClienteSearch } from "@/components/tms/cliente-search";
 import { PlacaSelect, type VehiculoOpt } from "@/components/tms/placa-select";
 import { PilotoSelect } from "@/components/tms/piloto-select";
+import { RutaSelect, type RutaOpt } from "@/components/tms/ruta-select";
 import ViaticosPanel from "@/components/tms/viaticos-panel";
 import type { Plan } from "./programacion-client";
 import NotificarPersonal from "./notificar-personal";
@@ -80,6 +81,7 @@ function filtrarPersonal(list: EmpOps[], q: string, selectedIds: number[]) {
 export default function PlanForm({
   slug,
   hoy,
+  fechaSugerida,
   plan,
   onSaved,
   onCancel,
@@ -95,6 +97,12 @@ export default function PlanForm({
    * aparecía bajo ese filtro.
    */
   hoy: string;
+  /**
+   * VIAT-4 (punto 5) — fecha por defecto al CREAR un viaje nuevo, coherente
+   * con la vista actual (Hoy/Mañana/Semana) de Programación en vez de
+   * siempre "hoy". Si no se pasa, cae a `hoy` (mismo comportamiento previo).
+   */
+  fechaSugerida?: string;
   plan?: Plan | null;
   onSaved: (info: { id: number; fechaPlan: string }) => void;
   onCancel?: () => void;
@@ -112,7 +120,7 @@ export default function PlanForm({
   // usado en tms/page.tsx (seleccionarPlan()), no se inventa un cruce nuevo.
   const [form, setForm] = useState({
     codigo: plan?.codigo ?? "",
-    fechaPlan: plan?.fecha_plan ?? hoy,
+    fechaPlan: plan?.fecha_plan ?? fechaSugerida ?? hoy,
     horaCarga: plan?.hora_carga?.slice(0, 5) ?? "08:00",
     clienteId: 0,
     clienteNombre: plan?.cliente ?? "",
@@ -125,9 +133,19 @@ export default function PlanForm({
     regresoEstimado: plan?.regreso_estimado?.slice(0, 16) ?? "",
     tarifaComercial: plan?.tarifa_comercial != null ? String(plan.tarifa_comercial) : "",
     referenciaCliente: plan?.referencia_cliente ?? "",
+    // VIAT-4: fotografía histórica de qué ruta maestra se usó — solo
+    // informativo, se recalcula al elegir otra ruta; no bloquea guardar
+    // el viaje sin ruta (código/ruta sigue siendo opcional).
+    rutaId: plan?.ruta_id ?? 0,
+    rutaCodigo: plan?.ruta_codigo_historico ?? "",
     notas: plan?.notas ?? "",
     estado: plan?.estado ?? "Programado",
   });
+  // VIAT-4: contacto de la ruta elegida — solo para mostrarlo en pantalla
+  // (comunicación operativa), NO se copia al viaje (ver nota de diseño en
+  // sql/migrate-2026-08-viat-4-contactos-rutas.sql: el contacto se
+  // consulta en vivo, no es parte de la fotografía histórica).
+  const [contactoRuta, setContactoRuta] = useState<{ nombre: string; cargo: string | null; telefono: string | null } | null>(null);
   const [paradasForm, setParadasForm] = useState<ParadaForm[]>(
     plan?.paradas?.length
       ? plan.paradas.map((p) => ({
@@ -394,6 +412,44 @@ export default function PlanForm({
     setAuxInput("");
   }
 
+  /**
+   * VIAT-4 — al elegir una ruta del catálogo (Código/Ruta), COPIA sus
+   * datos al formulario (fotografía histórica): cliente (modo A: buscar
+   * por código sin cliente elegido), hora habitual, ruta_id/código, y las
+   * paradas (carga + destinos, en orden). El programador puede seguir
+   * editando cualquiera de estos campos después para ESTE viaje sin
+   * modificar la ruta maestra — es una copia, no una referencia en vivo.
+   * El contacto NO se copia (se muestra en vivo, ver contactoRuta).
+   */
+  function aplicarRuta(ruta: RutaOpt) {
+    setForm((f) => ({
+      ...f,
+      clienteId: ruta.clienteId,
+      clienteNombre: ruta.clienteNombre,
+      horaCarga: ruta.horaHabitual || f.horaCarga,
+      rutaId: ruta.id,
+      rutaCodigo: ruta.codigo,
+    }));
+    setContactoRuta(
+      ruta.contactoNombre
+        ? { nombre: ruta.contactoNombre, cargo: ruta.contactoCargo, telefono: ruta.contactoTelefono }
+        : null,
+    );
+    const nuevasParadas: ParadaForm[] = [];
+    if (ruta.lugarCargaTexto) {
+      nuevasParadas.push({ lugarNombre: ruta.lugarCargaTexto, tipo: "Carga", requiereEvidencia: true, clienteUbicacionId: ruta.ubicacionCargaId });
+    }
+    for (const p of ruta.paradas) {
+      nuevasParadas.push({
+        lugarNombre: p.lugarNombre,
+        tipo: (["Carga", "Descarga", "Entrega"].includes(p.tipo) ? p.tipo : "Entrega") as ParadaForm["tipo"],
+        requiereEvidencia: true,
+        clienteUbicacionId: p.clienteUbicacionId,
+      });
+    }
+    if (nuevasParadas.length) setParadasForm(nuevasParadas);
+  }
+
   // Se evalúa contra el estado ORIGINAL del plan (antes de este guardado),
   // igual que el servidor (ver ESTADOS_SOLO_NOTAS en planes/route.ts) — la
   // transición de estado en sí siempre está permitida; lo que se restringe
@@ -469,6 +525,8 @@ export default function PlanForm({
             regresoEstimado: form.regresoEstimado || undefined,
             tarifaComercial: form.tarifaComercial === "" ? undefined : Number(form.tarifaComercial),
             referenciaCliente: form.referenciaCliente.trim() || undefined,
+            rutaId: form.rutaId || undefined,
+            rutaCodigo: form.rutaCodigo.trim() || undefined,
             notas: form.notas.trim() || undefined,
             clienteId: form.clienteId || undefined,
             clienteNombre: form.clienteNombre.trim() || undefined,
@@ -512,6 +570,8 @@ export default function PlanForm({
               ? null
               : Number(form.tarifaComercial),
           referenciaCliente: soloNotas ? undefined : form.referenciaCliente.trim() || null,
+          rutaId: soloNotas ? undefined : form.rutaId || undefined,
+          rutaCodigo: soloNotas ? undefined : form.rutaCodigo.trim() || undefined,
           notas: form.notas.trim() || undefined,
           paradas: soloNotas || !paradas.length ? undefined : paradas,
         }),
@@ -597,6 +657,22 @@ export default function PlanForm({
           inputClassName={inputCls}
           onChange={({ clienteId, clienteNombre }) => setForm((f) => ({ ...f, clienteId, clienteNombre }))}
         />
+      </div>
+      <div className={soloNotas || bloqueado ? "pointer-events-none opacity-50" : ""}>
+        <RutaSelect
+          slug={slug}
+          clienteId={form.clienteId}
+          value={form.rutaCodigo}
+          inputClassName={inputCls}
+          onSeleccionar={aplicarRuta}
+        />
+        {contactoRuta ? (
+          <p className="mt-1 rounded border border-[var(--border)] bg-black/10 px-2 py-1 text-[11px] text-[var(--muted)]">
+            Contacto: <span className="text-[var(--foreground)]">{contactoRuta.nombre}</span>
+            {contactoRuta.cargo ? ` · ${contactoRuta.cargo}` : ""}
+            {contactoRuta.telefono ? ` · ${contactoRuta.telefono}` : ""}
+          </p>
+        ) : null}
       </div>
       <div className={soloNotas || bloqueado ? "pointer-events-none opacity-50" : ""}>
         <PlacaSelect
