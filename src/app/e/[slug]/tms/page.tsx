@@ -215,12 +215,26 @@ export default function TmsPage() {
   const [evidenciasPorPlan, setEvidenciasPorPlan] = useState<Record<number, EvidenciaTms[]>>({});
   const [cargandoEvidencias, setCargandoEvidencias] = useState(false);
 
+  // OPS-2.1: esta tabla también está sujeta al recorte de 200 filas de
+  // GET /tms/planes (mismo riesgo que Programación) — se complementa con
+  // la lista COMPLETA de pendientes de cierre (pendienteCierre=1, sin
+  // límite) para que uno antiguo nunca desaparezca de este seguimiento
+  // tampoco. No se le agrega un rango de fechas propio (esta pantalla no
+  // tenía uno) — solo se corrige el riesgo de pérdida silenciosa.
   const cargarPlanes = useCallback(async (mostrarCarga = true) => {
     if (mostrarCarga) setLoadingPlanes(true);
     try {
-      const res = await fetch(`/api/empresas/${slug}/tms/planes`);
-      const data = await res.json().catch(() => ({}));
-      if (res.ok) setPlanes((data.planes ?? []) as Plan[]);
+      const [resBase, resPendientes] = await Promise.all([
+        fetch(`/api/empresas/${slug}/tms/planes`),
+        fetch(`/api/empresas/${slug}/tms/planes?pendienteCierre=1`),
+      ]);
+      const dataBase = await resBase.json().catch(() => ({}));
+      if (!resBase.ok) return;
+      const base = (dataBase.planes ?? []) as Plan[];
+      const dataPendientes = await resPendientes.json().catch(() => ({}));
+      const pendientes = resPendientes.ok ? ((dataPendientes.planes ?? []) as Plan[]) : [];
+      const vistos = new Set(base.map((p) => p.id));
+      setPlanes([...base, ...pendientes.filter((p) => !vistos.has(p.id))]);
     } finally {
       if (mostrarCarga) setLoadingPlanes(false);
     }
