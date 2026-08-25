@@ -156,6 +156,20 @@ export async function GET(req: Request, ctx: Ctx) {
       `SELECT p.id, p.codigo, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan,
               p.hora_carga, p.estado, p.cerrado_por,
               DATE_FORMAT(p.cerrado_en, '%Y-%m-%dT%H:%i') AS cerrado_en,
+              -- OPS-1 (corregido): "pendiente de cierre" ya no es un valor
+              -- de estado (marcarPlanDescargado ya no se invoca desde
+              -- llegada) — se calcula: el plan no está Cerrado/Cancelado Y
+              -- ya existe un registro de llegada real en flota_viajes para
+              -- este plan. Cubre tanto viajes nuevos ("En ruta" + llegada)
+              -- como el histórico "Descargado" (que siempre tuvo su
+              -- flota_viajes en 'cerrado' antes de marcarse así).
+              (
+                p.estado NOT IN ('Cerrado', 'Cancelado')
+                AND EXISTS (
+                  SELECT 1 FROM flota_viajes fv
+                  WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
+                )
+              ) AS pendiente_cierre,
               p.tipo_traslado, p.notas,
               DATE_FORMAT(p.regreso_estimado, '%Y-%m-%dT%H:%i') AS regreso_estimado,
               p.tarifa_comercial, p.referencia_cliente, p.ruta_id, p.ruta_codigo_historico,
@@ -874,15 +888,18 @@ const patchSchema = z.object({
   auxiliarNombres: z.array(z.string().min(2)).max(8).optional(),
   auxiliarEmpleadoIds: z.array(z.number().int().positive()).max(8).optional(),
   placa: z.string().optional(),
+  // OPS-1 (corregido) — hallazgo real durante la revisión: este PATCH
+  // genérico aceptaba "Cerrado" (y "Descargado") como cualquier otro
+  // valor de estado, lo que permitía a CUALQUIER usuario con edición de
+  // TMS cerrar administrativamente un plan sin el permiso
+  // `viajes_cerrar:editar` y sin pasar por la transición atómica de
+  // src/lib/tms/cierre-viaje.ts (sin cerrado_por/cerrado_en). El cierre
+  // ahora es EXCLUSIVO de POST /tms/planes/[id]/cerrar. "Descargado" se
+  // retira también: ya no se genera para viajes nuevos (ver
+  // marcarPlanDescargado en planes-salida.ts) y no tiene sentido que
+  // este formulario general lo re-introduzca a mano.
   estado: z
-    .enum([
-      "Programado",
-      "En ruta",
-      "Cargado",
-      "Descargado",
-      "Cerrado",
-      "Cancelado",
-    ])
+    .enum(["Programado", "En ruta", "Cargado", "Cancelado"])
     .optional(),
   notas: z.string().optional(),
   horaCarga: z.string().optional(),

@@ -17,7 +17,6 @@ import {
 } from "@/lib/flota/pilotos";
 import {
   buscarPlanesParaSalida,
-  marcarPlanDescargado,
   marcarPlanEnRuta,
 } from "@/lib/tms/planes-salida";
 import {
@@ -685,9 +684,11 @@ export async function POST(req: Request, ctx: Ctx) {
       kmLlegadaDb,
     );
 
-    if (planIdPre) {
-      await marcarPlanDescargado(guard.empresa.id, planIdPre);
-    }
+    // OPS-1 (corregido): registrar llegada es solo respaldo operativo —
+    // igual desde el Portal del piloto que desde esta pantalla de staff.
+    // YA NO se toca tms_planes_viaje.estado aquí; el plan permanece "En
+    // ruta" hasta que un usuario con viajes_cerrar:editar lo cierre
+    // explícitamente (ver src/lib/tms/cierre-viaje.ts).
 
     await registrarAuditoria({
       empresaId: guard.empresa.id,
@@ -697,7 +698,7 @@ export async function POST(req: Request, ctx: Ctx) {
       detalle: `Viaje #${d.viajeId} llegada · piloto ${
         d.pilotoNombre?.trim() || String(viaje[0].piloto_nombre)
       } · placa ${String(viaje[0].placa)} · km ${kmSalida} → ${kmLlegadaDb}${
-        planIdPre ? ` · plan TMS #${planIdPre} → Descargado` : ""
+        planIdPre ? ` · plan TMS #${planIdPre} (llegada registrada; sin cambio de estado, pendiente de cierre por Operaciones)` : ""
       }${esRutaConParadas ? ` · ${paradasRuta.length} parada(s)` : ""}`,
     });
 
@@ -707,9 +708,7 @@ export async function POST(req: Request, ctx: Ctx) {
       placa: String(viaje[0].placa),
       kmSalida,
       kmLlegada: kmLlegadaDb,
-      mensaje: `Llegada de ${viaje[0].placa}: ${(kmLlegadaDb - kmSalida).toLocaleString("es-GT")} km recorridos.${
-        planIdPre ? " Plan TMS → Descargado." : ""
-      }`,
+      mensaje: `Llegada de ${viaje[0].placa}: ${(kmLlegadaDb - kmSalida).toLocaleString("es-GT")} km recorridos.`,
       planId: planIdPre,
       esRutaConParadas,
       paradas: paradasRuta.length,

@@ -550,10 +550,13 @@ export default function PlanForm({
   // parte de este mismo guardado bloquearía por error los demás campos.
   const soloNotas = esEdicion && ESTADOS_SOLO_NOTAS.has(plan!.estado);
   const bloqueado = esEdicion && ESTADOS_BLOQUEADOS.has(plan!.estado);
-  // OPS-1: operación finalizada por el piloto, pendiente de cierre
-  // administrativo — el viaje sigue editable (bloqueado = false), pero
-  // además se ofrece la acción de cierre si el usuario tiene el permiso.
-  const pendienteCierre = esEdicion && plan!.estado === "Descargado";
+  // OPS-1 (corregido): "pendiente de cierre" ya NO es estado === "Descargado"
+  // — viene calculado por el backend (GET /tms/planes) en
+  // plan.pendiente_cierre: el plan no está Cerrado/Cancelado Y ya existe
+  // un registro real de llegada en flota_viajes. El viaje sigue editable
+  // (bloqueado = false); además se ofrece la acción de cierre si el
+  // usuario tiene el permiso.
+  const pendienteCierre = esEdicion && Boolean(plan!.pendiente_cierre);
   const yaCerrado = esEdicion && plan!.estado === "Cerrado";
 
   // VIAT-2: el servidor exige regreso_estimado cuando el plan queda con
@@ -831,7 +834,7 @@ export default function PlanForm({
         <div className="md:col-span-3 space-y-2 rounded-lg border border-amber-700/60 bg-amber-950/20 px-3 py-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs font-medium text-amber-200">
-              Operación finalizada — pendiente de cierre por Operaciones.
+              El piloto ya registró la llegada — pendiente de cierre por Operaciones.
             </p>
             {puedeCerrarViaje && !confirmandoCierre ? (
               <button
@@ -1085,7 +1088,11 @@ export default function PlanForm({
             disabled={bloqueado}
             onChange={(e) => setForm((f) => ({ ...f, estado: e.target.value }))}
           >
-            {["Programado", "En ruta", "Cargado", "Descargado", "Cerrado", "Cancelado"].map((s) => (
+            {/* OPS-1 (corregido): "Cerrado" y "Descargado" ya NO son
+                seleccionables aquí — el backend los rechaza (ver
+                patchSchema en planes/route.ts). El cierre real es la
+                acción dedicada "Cerrar viaje" más abajo. */}
+            {["Programado", "En ruta", "Cargado", "Cancelado"].map((s) => (
               <option key={s}>{s}</option>
             ))}
           </select>

@@ -16,7 +16,6 @@ import {
 import { colaboradorParticipaEnViaje } from "@/lib/flota/viajes-piloto";
 import {
   buscarPlanesParaSalida,
-  marcarPlanDescargado,
   marcarPlanEnRuta,
 } from "@/lib/tms/planes-salida";
 import { paradasPendientesEvidencia } from "@/lib/tms/paradas";
@@ -531,9 +530,14 @@ export async function POST(req: Request) {
 
     if (odometroFuncional) await actualizarKmActualVehiculo(Number(viaje[0].vehiculo_id), Number(kmFinal));
 
-    if (planIdPre && !excepcional) {
-      await marcarPlanDescargado(empresaId, planIdPre);
-    } else if (planIdPre && excepcional) {
+    // OPS-1 (corregido): registrar llegada es solo respaldo operativo — el
+    // piloto NUNCA finaliza ni cierra la operación, así que YA NO se toca
+    // tms_planes_viaje.estado aquí. El plan permanece "En ruta" hasta que
+    // un usuario con viajes_cerrar:editar lo cierre explícitamente (ver
+    // src/lib/tms/cierre-viaje.ts). El cierre excepcional por contratiempo
+    // mayor sigue siendo la única excepción: eso SÍ es un cierre real
+    // (Cancelado), decidido en el momento por el propio piloto.
+    if (planIdPre && excepcional) {
       await execute(
         `UPDATE tms_planes_viaje SET estado = 'Cancelado'
          WHERE id = ? AND empresa_id = ? AND estado IN ('Programado', 'En ruta')`,
@@ -547,7 +551,7 @@ export async function POST(req: Request) {
       accion: excepcional ? "cierre_excepcional_viaje" : "llegada_viaje",
       modulo: "tms",
       detalle: `Viaje #${d.viajeId} ${excepcional ? `cierre excepcional: ${d.motivoExcepcional}` : "llegada al predio"} · ${nombre} · placa ${String(viaje[0].placa)}${odometroFuncional ? ` · km ${kmSalida} → ${kmFinal}` : " · unidad sin odómetro funcional"}${
-        planIdPre ? ` · plan TMS #${planIdPre} → ${excepcional ? "Cancelado" : "Descargado"}` : ""
+        planIdPre ? ` · plan TMS #${planIdPre}${excepcional ? " → Cancelado" : " (llegada registrada; sin cambio de estado, pendiente de cierre por Operaciones)"}` : ""
       }`,
     });
 
@@ -559,8 +563,8 @@ export async function POST(req: Request) {
       mensaje: excepcional
         ? "Viaje cerrado excepcionalmente y contratiempo registrado en auditoría."
         : odometroFuncional
-          ? `Llegada registrada: ${(Number(kmFinal) - Number(kmSalida)).toLocaleString("es-GT")} km recorridos.${planIdPre ? " Operación finalizada. Pendiente de cierre por Operaciones." : ""}`
-          : `Llegada registrada sin kilometraje.${planIdPre ? " Operación finalizada. Pendiente de cierre por Operaciones." : ""}`,
+          ? `Llegada registrada: ${(Number(kmFinal) - Number(kmSalida)).toLocaleString("es-GT")} km recorridos.`
+          : `Llegada registrada sin kilometraje.`,
     });
   }
 
