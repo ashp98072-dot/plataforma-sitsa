@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 
 type Solicitud = {
   id: number;
@@ -21,14 +22,36 @@ type Saldo = {
   diasDisponibles: number;
 };
 
+type Recordatorio = {
+  id: number | null;
+  tipo: string;
+  titulo: string;
+  fecha: string;
+  empleadoNombre?: string | null;
+  diasRestantes: number;
+};
+
+type Bitacora = {
+  id: number;
+  tipo: string;
+  fecha: string;
+  descripcion: string;
+  empleadoNombre?: string | null;
+  creadoPor?: string | null;
+};
+
 type Alertas = {
   solicitudesPendientes: Solicitud[];
   colaboradoresConQuinceDias: Saldo[];
+  recordatoriosPendientes: Recordatorio[];
+  bitacoras: Bitacora[];
 };
 
 const VACIO: Alertas = {
   solicitudesPendientes: [],
   colaboradoresConQuinceDias: [],
+  recordatoriosPendientes: [],
+  bitacoras: [],
 };
 
 function fecha(value: string) {
@@ -46,17 +69,34 @@ export function VacacionesAlertasPanel({ slug }: { slug: string }) {
 
     async function cargar() {
       try {
-        const res = await fetch(
-          `/api/empresas/${slug}/rrhh/vacaciones/alertas`,
-          { cache: "no-store" },
-        );
-        const body = await res.json();
-        if (!res.ok) throw new Error(body.error ?? "No se pudieron cargar las alertas.");
+        const [res, recordatoriosRes, bitacoraRes] = await Promise.all([
+          fetch(`/api/empresas/${slug}/rrhh/vacaciones/alertas`, {
+            cache: "no-store",
+          }),
+          fetch(`/api/empresas/${slug}/rrhh/recordatorios?proximos=1`, {
+            cache: "no-store",
+          }),
+          fetch(`/api/empresas/${slug}/rrhh/bitacora-legal`, {
+            cache: "no-store",
+          }),
+        ]);
+        const [body, recordatoriosBody, bitacoraBody] = await Promise.all([
+          res.json(),
+          recordatoriosRes.json(),
+          bitacoraRes.json(),
+        ]);
+        if (!res.ok) {
+          throw new Error(body.error ?? "No se pudieron cargar las alertas.");
+        }
         if (activo) {
           setData({
             solicitudesPendientes: body.solicitudesPendientes ?? [],
             colaboradoresConQuinceDias:
               body.colaboradoresConQuinceDias ?? [],
+            recordatoriosPendientes: recordatoriosRes.ok
+              ? recordatoriosBody.recordatorios ?? []
+              : [],
+            bitacoras: bitacoraRes.ok ? bitacoraBody.entradas ?? [] : [],
           });
           setError("");
         }
@@ -79,10 +119,10 @@ export function VacacionesAlertasPanel({ slug }: { slug: string }) {
   return (
     <section className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
       <div>
-        <h2 className="text-lg font-semibold">Pendientes de vacaciones</h2>
+        <h2 className="text-lg font-semibold">Alertas y seguimiento de RRHH</h2>
         <p className="text-sm text-[var(--muted)]">
-          Solicitudes sin resolver y colaboradores activos con 15 días o más
-          acumulados.
+          Vacaciones pendientes, saldos acumulados, recordatorios próximos y
+          registros de la bitácora legal.
         </p>
       </div>
 
@@ -147,6 +187,82 @@ export function VacacionesAlertasPanel({ slug }: { slug: string }) {
                 Ningún colaborador activo tiene 15 días acumulados.
               </p>
             )}
+          </div>
+
+          <div className="overflow-hidden rounded-lg border border-[var(--border)]">
+            <div className="flex items-center justify-between bg-[var(--input)] px-3 py-2">
+              <h3 className="font-medium">Recordatorios pendientes</h3>
+              <span className="rounded bg-sky-500/20 px-2 py-0.5 text-sm text-sky-200">
+                {data.recordatoriosPendientes.length}
+              </span>
+            </div>
+            {data.recordatoriosPendientes.length ? (
+              <div className="max-h-80 divide-y divide-[var(--border)] overflow-y-auto">
+                {data.recordatoriosPendientes.map((r, index) => (
+                  <div key={`${r.id ?? r.tipo}-${r.fecha}-${index}`} className="px-3 py-2 text-sm">
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="font-medium">{r.titulo}</p>
+                      <span className={r.diasRestantes < 0 ? "text-red-200" : "text-amber-200"}>
+                        {r.diasRestantes < 0
+                          ? `Vencido hace ${Math.abs(r.diasRestantes)} día(s)`
+                          : r.diasRestantes === 0
+                            ? "Vence hoy"
+                            : `Vence en ${r.diasRestantes} día(s)`}
+                      </span>
+                    </div>
+                    <p className="text-[var(--muted)]">
+                      {r.tipo} · {fecha(r.fecha)}
+                      {r.empleadoNombre ? ` · ${r.empleadoNombre}` : ""}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="px-3 py-4 text-sm text-[var(--muted)]">
+                No hay recordatorios pendientes o próximos.
+              </p>
+            )}
+            <div className="border-t border-[var(--border)] px-3 py-2 text-right">
+              <Link href={`/e/${slug}/rrhh/recordatorios`} className="text-sm text-sky-300 underline">
+                Ver recordatorios
+              </Link>
+            </div>
+          </div>
+
+          <div className="overflow-hidden rounded-lg border border-[var(--border)]">
+            <div className="flex items-center justify-between bg-[var(--input)] px-3 py-2">
+              <h3 className="font-medium">Bitácora legal</h3>
+              <span className="rounded bg-violet-500/20 px-2 py-0.5 text-sm text-violet-200">
+                {data.bitacoras.length}
+              </span>
+            </div>
+            {data.bitacoras.length ? (
+              <div className="max-h-80 divide-y divide-[var(--border)] overflow-y-auto">
+                {data.bitacoras.map((b) => (
+                  <div key={b.id} className="px-3 py-2 text-sm">
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="font-medium">
+                        {b.tipo}{b.empleadoNombre ? ` — ${b.empleadoNombre}` : ""}
+                      </p>
+                      <span className="whitespace-nowrap text-[var(--muted)]">{fecha(b.fecha)}</span>
+                    </div>
+                    <p>{b.descripcion}</p>
+                    {b.creadoPor ? (
+                      <p className="text-[var(--muted)]">Registró: {b.creadoPor}</p>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="px-3 py-4 text-sm text-[var(--muted)]">
+                No hay registros en la bitácora o no tiene permiso para verlos.
+              </p>
+            )}
+            <div className="border-t border-[var(--border)] px-3 py-2 text-right">
+              <Link href={`/e/${slug}/rrhh/bitacora-legal`} className="text-sm text-sky-300 underline">
+                Ver bitácora completa
+              </Link>
+            </div>
           </div>
         </div>
       ) : null}
