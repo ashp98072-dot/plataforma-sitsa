@@ -319,6 +319,13 @@ export function AppShell({
         key: "rutas",
       });
     }
+    if (puedeUsarPortalesProveedores(rol as RolGlobal)) {
+      opsLinks.push({
+        href: `${base}/portales-proveedores`,
+        label: "Accesos proveedores",
+        key: "portales-proveedores",
+      });
+    }
     const alcanceFact = alcanceFacturacion(rol);
     const puedeVerFact =
       isAdmin ||
@@ -465,21 +472,6 @@ export function AppShell({
           ],
         });
       }
-    }
-
-    if (puedeUsarPortalesProveedores(rol as RolGlobal)) {
-      g.push({
-        id: "proveedores",
-        label: "Proveedores",
-        icon: <IconConta />,
-        links: [
-          {
-            href: `${base}/portales-proveedores`,
-            label: "Portales de proveedores",
-            key: "portales-proveedores",
-          },
-        ],
-      });
     }
 
     if (isAdmin && modulos.includes("usuarios")) {
