@@ -51,6 +51,9 @@ type PreviewFilaRuta = {
   contactoId: number | null;
   contactoEsNuevo: boolean;
   rutaExistenteId: number | null;
+  clienteActualId: number | null;
+  clienteActualNombre: string | null;
+  cambioClienteDetectado: boolean;
 };
 
 type ResumenPreviewRutas = {
@@ -80,7 +83,12 @@ type RespuestaValidar = { accion: "validar"; filas: PreviewFilaRuta[]; resumen: 
 type RespuestaImportar = { accion: "importar"; resultado: ResultadoImportacionRutas };
 
 /** Decisión tomada en pantalla para una fila (por filaExcel). -1 = crear cliente nuevo. */
-type Decision = { clienteIdElegido?: number | -1; actualizarExistente?: boolean };
+type Decision = {
+  clienteIdElegido?: number | -1;
+  actualizarExistente?: boolean;
+  /** Requerido cuando actualizar cambiaría el cliente dueño de la ruta — nunca se reasigna sin esto. */
+  confirmarCambioCliente?: boolean;
+};
 
 const ESTADO_LABEL: Record<EstadoFilaRuta, string> = {
   nueva: "Ruta nueva",
@@ -269,8 +277,9 @@ export default function ImportarRutasPage() {
 
             {pendientesDecision > 0 ? (
               <p className="text-xs text-amber-300">
-                {pendientesDecision} fila(s) requieren elegir el cliente antes de confirmar (o se
-                crearán como cliente nuevo por defecto).
+                {pendientesDecision} fila(s) requieren elegir el cliente (o &quot;Crear cliente
+                nuevo&quot;) antes de confirmar — mientras no se elija, esa fila NO se importa y
+                queda reportada como error.
               </p>
             ) : null}
 
@@ -431,6 +440,25 @@ function FilaDecision({
         Código {fila.codigo} ya existe — actualizar (si no, se omite)
       </label>,
     );
+
+    // El cliente actual de la ruta puede diferir del que trae el Excel
+    // (match exacto a OTRO cliente, o todavía sin resolver por ser
+    // ambiguo/nuevo). Nunca se reasigna sin marcar esto explícitamente —
+    // el servidor lo exige aparte, esto es solo para que quede visible
+    // antes de confirmar.
+    const podriaCambiarCliente = fila.clienteActualNombre != null && (fila.cambioClienteDetectado || necesitaCliente);
+    if (decision?.actualizarExistente && podriaCambiarCliente) {
+      controles.push(
+        <label key="cambiocliente" className="flex items-center gap-1 text-[11px] text-amber-300">
+          <input
+            type="checkbox"
+            checked={decision?.confirmarCambioCliente ?? false}
+            onChange={(e) => onChange({ confirmarCambioCliente: e.target.checked })}
+          />
+          Ruta actualmente de &quot;{fila.clienteActualNombre}&quot; — confirmar reasignar a otro cliente
+        </label>,
+      );
+    }
   }
 
   if (!controles.length) return <span className="text-[11px] text-[var(--muted)]">—</span>;

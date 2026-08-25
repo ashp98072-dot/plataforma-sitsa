@@ -57,6 +57,11 @@ export type PreviewFilaRuta = {
   contactoId: number | null;
   contactoEsNuevo: boolean;
   rutaExistenteId: number | null;
+  /** Cliente actualmente dueño de la ruta existente (solo si rutaExistenteId != null). */
+  clienteActualId: number | null;
+  clienteActualNombre: string | null;
+  /** true si el cliente resuelto del Excel difiere del cliente actual de la ruta -> requiere confirmación explícita antes de reasignar. */
+  cambioClienteDetectado: boolean;
 };
 
 export type ResumenPreviewRutas = {
@@ -93,12 +98,14 @@ export async function previsualizarImportacionRutas(
       "SELECT id, cliente_id, nombre FROM tms_cliente_contactos WHERE empresa_id = ? AND activo = 1",
       [empresaId],
     ),
-    query<RowDataPacket[]>("SELECT id, codigo FROM tms_cliente_rutas WHERE empresa_id = ?", [empresaId]),
+    query<RowDataPacket[]>("SELECT id, codigo, cliente_id FROM tms_cliente_rutas WHERE empresa_id = ?", [empresaId]),
   ]);
 
   const clientesPorNombreExacto = new Map<string, CandidatoCliente>();
   const clientesLista: CandidatoCliente[] = clientes.map((c) => ({ id: Number(c.id), nombre: String(c.nombre) }));
   for (const c of clientesLista) clientesPorNombreExacto.set(normalizar(c.nombre), c);
+  const nombrePorClienteId = new Map<number, string>();
+  for (const c of clientesLista) nombrePorClienteId.set(c.id, c.nombre);
 
   const ubicacionesPorCliente = new Map<number, { id: number; nombreNorm: string }[]>();
   for (const u of ubicaciones) {
@@ -116,8 +123,8 @@ export async function previsualizarImportacionRutas(
     contactosPorCliente.set(cid, list);
   }
 
-  const rutasPorCodigo = new Map<string, number>();
-  for (const r of rutasExistentes) rutasPorCodigo.set(String(r.codigo), Number(r.id));
+  const rutasPorCodigo = new Map<string, { id: number; clienteId: number }>();
+  for (const r of rutasExistentes) rutasPorCodigo.set(String(r.codigo), { id: Number(r.id), clienteId: Number(r.cliente_id) });
 
   const codigosVistos = new Set<string>();
   const resultado: PreviewFilaRuta[] = [];
@@ -150,21 +157,30 @@ export async function previsualizarImportacionRutas(
 
     const normCliente = normalizar(f.clienteExcel);
     const exacto = clientesPorNombreExacto.get(normCliente);
-    const rutaExistenteId = rutasPorCodigo.get(f.codigoExcel) ?? null;
+    const rutaExistente = rutasPorCodigo.get(f.codigoExcel) ?? null;
+    const rutaExistenteId = rutaExistente?.id ?? null;
+    const clienteActualId = rutaExistente?.clienteId ?? null;
+    const clienteActualNombre = clienteActualId != null ? (nombrePorClienteId.get(clienteActualId) ?? null) : null;
 
     let clienteId: number | null = null;
     let clienteNombre: string | null = null;
     let clienteCandidatos: CandidatoCliente[] = [];
     let estado: EstadoFilaRuta;
     let detalle: string;
+    let cambioClienteDetectado = false;
 
     if (exacto) {
       clienteId = exacto.id;
       clienteNombre = exacto.nombre;
       estado = rutaExistenteId ? "omitir" : "nueva";
-      detalle = rutaExistenteId
-        ? `Código ${f.codigoExcel} ya existe (se omite por defecto; puede marcarse para actualizar).`
-        : `Cliente "${exacto.nombre}" reconocido — ruta nueva.`;
+      if (rutaExistenteId) {
+        cambioClienteDetectado = clienteActualId != null && clienteActualId !== exacto.id;
+        detalle = cambioClienteDetectado
+          ? `Código ${f.codigoExcel} ya existe y pertenece a "${clienteActualNombre}" — el Excel trae un cliente distinto ("${exacto.nombre}"). Se omite por defecto; si se marca Actualizar, hay que confirmar explícitamente el cambio de cliente.`
+          : `Código ${f.codigoExcel} ya existe (se omite por defecto; puede marcarse para actualizar).`;
+      } else {
+        detalle = `Cliente "${exacto.nombre}" reconocido — ruta nueva.`;
+      }
     } else {
       // Sin match exacto: candidatos "parecidos" (contención normalizada en cualquier dirección).
       clienteCandidatos = clientesLista.filter(
@@ -222,6 +238,9 @@ export async function previsualizarImportacionRutas(
       contactoId,
       contactoEsNuevo,
       rutaExistenteId,
+      clienteActualId,
+      clienteActualNombre,
+      cambioClienteDetectado,
     });
   }
 
@@ -258,6 +277,9 @@ function filaBase(f: FilaRutaExcel, estado: EstadoFilaRuta, detalle: string): Pr
     contactoId: null,
     contactoEsNuevo: false,
     rutaExistenteId: null,
+    clienteActualId: null,
+    clienteActualNombre: null,
+    cambioClienteDetectado: false,
   };
 }
 
@@ -268,6 +290,8 @@ export type DecisionFilaRuta = {
   clienteIdElegido?: number | -1;
   /** Si el código ya existe: true = actualizar, false/ausente = omitir (default). */
   actualizarExistente?: boolean;
+  /** Requerido cuando actualizar implica cambiar el cliente dueño de la ruta — nunca se reasigna sin esto. */
+  confirmarCambioCliente?: boolean;
   /** Si la fila es "error"/"duplicado_en_archivo"/inválida: se ignora siempre, no hay decisión posible. */
 };
 
@@ -317,14 +341,62 @@ export async function confirmarImportacionRutas(
   try {
     await conn.beginTransaction();
 
-    // Recalcular duplicados-en-archivo y códigos existentes AHORA, dentro
-    // de la transacción, por si el estado cambió desde el preview.
-    const [rutasExistentesRows] = await conn.query<RowDataPacket[]>(
-      "SELECT id, codigo FROM tms_cliente_rutas WHERE empresa_id = ?",
-      [empresaId],
-    );
-    const rutasPorCodigo = new Map<string, number>();
-    for (const r of rutasExistentesRows) rutasPorCodigo.set(String(r.codigo), Number(r.id));
+    // Precargar el mismo universo que usó el preview y comparar SIEMPRE en
+    // JS con la misma normalizar() (trim + colapsar espacios + minúsculas).
+    // Antes esto se hacía con "LOWER(TRIM(nombre)) = ?" en SQL, que NO
+    // colapsa espacios internos repetidos: un nombre real con doble
+    // espacio interno podía darse por "reutilizado" en el preview y no
+    // encontrarse aquí, generando duplicados o filas que el preview
+    // prometía limpias y terminaban en error. Los mapas se actualizan en
+    // cada iteración tras un INSERT para no duplicar dentro del mismo
+    // archivo cuando dos filas comparten cliente/ubicación/contacto nuevo.
+    const [clientesRows, ubicacionesRows, contactosRows, rutasExistentesRows] = await Promise.all([
+      conn.query<RowDataPacket[]>("SELECT id, nombre FROM tms_clientes WHERE empresa_id = ?", [empresaId]),
+      conn.query<RowDataPacket[]>(
+        "SELECT id, cliente_id, nombre FROM tms_cliente_ubicaciones WHERE empresa_id = ? AND activo = 1",
+        [empresaId],
+      ),
+      conn.query<RowDataPacket[]>(
+        "SELECT id, cliente_id, nombre FROM tms_cliente_contactos WHERE empresa_id = ? AND activo = 1",
+        [empresaId],
+      ),
+      conn.query<RowDataPacket[]>("SELECT id, codigo, cliente_id FROM tms_cliente_rutas WHERE empresa_id = ?", [
+        empresaId,
+      ]),
+    ]);
+
+    // clientesPorEmpresa: única fuente de verdad de "qué cliente pertenece
+    // a esta empresa" — un clienteIdElegido que no aparezca aquí (de otra
+    // empresa, o inexistente) NUNCA se acepta, sin importar lo que mande
+    // el cliente HTTP en `decisiones`.
+    const clientesPorEmpresa = new Map<number, string>();
+    const clientesPorNombreNorm = new Map<string, number>();
+    for (const c of clientesRows[0]) {
+      const id = Number(c.id);
+      clientesPorEmpresa.set(id, String(c.nombre));
+      clientesPorNombreNorm.set(normalizar(String(c.nombre)), id);
+    }
+
+    const ubicacionesPorCliente = new Map<number, { id: number; nombreNorm: string }[]>();
+    for (const u of ubicacionesRows[0]) {
+      const cid = Number(u.cliente_id);
+      const list = ubicacionesPorCliente.get(cid) ?? [];
+      list.push({ id: Number(u.id), nombreNorm: normalizar(String(u.nombre)) });
+      ubicacionesPorCliente.set(cid, list);
+    }
+
+    const contactosPorCliente = new Map<number, { id: number; nombreNorm: string }[]>();
+    for (const c of contactosRows[0]) {
+      const cid = Number(c.cliente_id);
+      const list = contactosPorCliente.get(cid) ?? [];
+      list.push({ id: Number(c.id), nombreNorm: normalizar(String(c.nombre)) });
+      contactosPorCliente.set(cid, list);
+    }
+
+    const rutasPorCodigo = new Map<string, { id: number; clienteId: number }>();
+    for (const r of rutasExistentesRows[0]) {
+      rutasPorCodigo.set(String(r.codigo), { id: Number(r.id), clienteId: Number(r.cliente_id) });
+    }
 
     const codigosVistos = new Set<string>();
 
@@ -353,23 +425,31 @@ export async function confirmarImportacionRutas(
 
       const decision = decisionPorFila.get(f.filaExcel);
 
-      // Resolver cliente_id definitivo.
+      // Resolver cliente_id definitivo. Prioridad: 1) match exacto por
+      // nombre normalizado (siempre gana, incluso si el usuario pidió
+      // "crear nuevo" -- evita duplicar); 2) decisión explícita de crear
+      // nuevo; 3) decisión explícita de un cliente EXISTENTE de ESTA
+      // empresa (se verifica contra clientesPorEmpresa -- nunca se confía
+      // ciegamente en el id que mande el cliente HTTP).
       let clienteId: number | null = null;
       const normCliente = normalizar(f.clienteExcel);
-      const [clienteExactoRows] = await conn.query<RowDataPacket[]>(
-        "SELECT id FROM tms_clientes WHERE empresa_id = ? AND LOWER(TRIM(nombre)) = ? LIMIT 1",
-        [empresaId, normCliente],
-      );
-      if (clienteExactoRows[0]) {
-        clienteId = Number(clienteExactoRows[0].id);
+      const clienteExactoId = clientesPorNombreNorm.get(normCliente) ?? null;
+      if (clienteExactoId != null) {
+        clienteId = clienteExactoId;
       } else if (decision?.clienteIdElegido === -1) {
         const [rCliente] = await conn.execute<import("mysql2/promise").ResultSetHeader>(
           "INSERT INTO tms_clientes (empresa_id, nombre) VALUES (?, ?)",
           [empresaId, f.clienteExcel],
         );
         clienteId = Number(rCliente.insertId);
+        clientesPorEmpresa.set(clienteId, f.clienteExcel);
+        clientesPorNombreNorm.set(normCliente, clienteId);
         resultado.clientesCreados++;
-      } else if (decision?.clienteIdElegido && decision.clienteIdElegido > 0) {
+      } else if (
+        decision?.clienteIdElegido != null &&
+        decision.clienteIdElegido > 0 &&
+        clientesPorEmpresa.has(decision.clienteIdElegido)
+      ) {
         clienteId = decision.clienteIdElegido;
       }
 
@@ -379,57 +459,75 @@ export async function confirmarImportacionRutas(
           formatoErrorImport({
             filaExcel: f.filaExcel,
             identidad,
-            detalle: `Cliente "${f.clienteExcel}" sin resolver — pendiente de elegir/crear antes de importar.`,
+            detalle:
+              decision?.clienteIdElegido != null && !clientesPorEmpresa.has(decision.clienteIdElegido)
+                ? `Cliente elegido inválido (no pertenece a esta empresa) para "${f.clienteExcel}".`
+                : `Cliente "${f.clienteExcel}" sin resolver — pendiente de elegir/crear antes de importar.`,
           }),
         );
         continue;
       }
 
-      // Ubicación de carga: reutilizar por nombre normalizado, o crear.
+      const rutaExistente = rutasPorCodigo.get(f.codigoExcel) ?? null;
+      const rutaExistenteId = rutaExistente?.id ?? null;
+
+      // Protección contra reasignación silenciosa: si el código ya existe
+      // y el cliente resuelto difiere del dueño actual de la ruta, exigir
+      // confirmación explícita ANTES de tocar cliente_id. Nunca se infiere.
+      if (rutaExistenteId && decision?.actualizarExistente && rutaExistente!.clienteId !== clienteId && !decision?.confirmarCambioCliente) {
+        resultado.errores++;
+        resultado.erroresDetalle.push(
+          formatoErrorImport({
+            filaExcel: f.filaExcel,
+            identidad,
+            detalle: `Código ${f.codigoExcel} pertenece a "${clientesPorEmpresa.get(rutaExistente!.clienteId) ?? "otro cliente"}" y el Excel trae "${f.clienteExcel}" — requiere confirmar explícitamente el cambio de cliente. No se modificó.`,
+          }),
+        );
+        continue;
+      }
+
+      // Ubicación de carga: reutilizar por cliente + nombre normalizado, o crear.
       let ubicacionCargaId: number | null = null;
       let lugarCargaTexto: string | null = null;
       if (f.lugarCargaExcel) {
         lugarCargaTexto = f.lugarCargaExcel;
         const normLugar = normalizar(f.lugarCargaExcel);
-        const [ubicRows] = await conn.query<RowDataPacket[]>(
-          `SELECT id FROM tms_cliente_ubicaciones
-           WHERE empresa_id = ? AND cliente_id = ? AND LOWER(TRIM(nombre)) = ? AND activo = 1 LIMIT 1`,
-          [empresaId, clienteId, normLugar],
-        );
-        if (ubicRows[0]) {
-          ubicacionCargaId = Number(ubicRows[0].id);
+        const match = (ubicacionesPorCliente.get(clienteId) ?? []).find((u) => u.nombreNorm === normLugar);
+        if (match) {
+          ubicacionCargaId = match.id;
         } else {
           const [rUbic] = await conn.execute<import("mysql2/promise").ResultSetHeader>(
             "INSERT INTO tms_cliente_ubicaciones (empresa_id, cliente_id, nombre, tipo) VALUES (?, ?, ?, 'CARGA')",
             [empresaId, clienteId, f.lugarCargaExcel],
           );
           ubicacionCargaId = Number(rUbic.insertId);
+          const list = ubicacionesPorCliente.get(clienteId) ?? [];
+          list.push({ id: ubicacionCargaId, nombreNorm: normLugar });
+          ubicacionesPorCliente.set(clienteId, list);
           resultado.ubicacionesCreadas++;
         }
       }
 
-      // Contacto: reutilizar por nombre normalizado, o crear (sin inventar cargo/telefono/email).
+      // Contacto: reutilizar por cliente + nombre normalizado, o crear (sin inventar cargo/telefono/email).
       let contactoClienteId: number | null = null;
       if (f.contactoExcel) {
         const normContacto = normalizar(f.contactoExcel);
-        const [contRows] = await conn.query<RowDataPacket[]>(
-          `SELECT id FROM tms_cliente_contactos
-           WHERE empresa_id = ? AND cliente_id = ? AND LOWER(TRIM(nombre)) = ? AND activo = 1 LIMIT 1`,
-          [empresaId, clienteId, normContacto],
-        );
-        if (contRows[0]) {
-          contactoClienteId = Number(contRows[0].id);
+        const match = (contactosPorCliente.get(clienteId) ?? []).find((c) => c.nombreNorm === normContacto);
+        if (match) {
+          contactoClienteId = match.id;
         } else {
           const [rCont] = await conn.execute<import("mysql2/promise").ResultSetHeader>(
             "INSERT INTO tms_cliente_contactos (empresa_id, cliente_id, nombre) VALUES (?, ?, ?)",
             [empresaId, clienteId, f.contactoExcel],
           );
           contactoClienteId = Number(rCont.insertId);
+          const list = contactosPorCliente.get(clienteId) ?? [];
+          list.push({ id: contactoClienteId, nombreNorm: normContacto });
+          contactosPorCliente.set(clienteId, list);
           resultado.contactosCreados++;
         }
       }
 
-      const rutaExistenteId = rutasPorCodigo.get(f.codigoExcel) ?? null;
       const horaHabitual = f.horaExcel;
       // Destino: SIEMPRE el texto exacto del Excel — nunca se parte en paradas.
       const destinoDescripcion = f.destinoExcel || null;
@@ -457,7 +555,7 @@ export async function confirmarImportacionRutas(
         );
         resultado.actualizadas++;
       } else {
-        await conn.execute(
+        const [rRuta] = await conn.execute<import("mysql2/promise").ResultSetHeader>(
           `INSERT INTO tms_cliente_rutas
             (empresa_id, cliente_id, codigo, ubicacion_carga_id, lugar_carga_texto, destino_descripcion, hora_habitual, contacto_cliente_id)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -472,7 +570,8 @@ export async function confirmarImportacionRutas(
             contactoClienteId,
           ],
         );
-        rutasPorCodigo.set(f.codigoExcel, -1); // evita reprocesar el mismo código si se repitiera por error de datos
+        // evita reprocesar/duplicar el mismo código si se repitiera por error de datos
+        rutasPorCodigo.set(f.codigoExcel, { id: Number(rRuta.insertId), clienteId });
         resultado.creadas++;
       }
     }
