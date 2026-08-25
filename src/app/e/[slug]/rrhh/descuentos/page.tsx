@@ -39,6 +39,8 @@ type Descuento = {
   empleadoId: number;
   empleadoCodigo: string;
   empleadoNombre: string;
+  empleadoDpi: string;
+  empleadoPuesto: string;
   codigo: string;
   concepto: string;
   // Fase INV-1: puede venir "INVENTARIO" además de las 4 clasificaciones de
@@ -374,6 +376,17 @@ export default function DescuentosPage() {
   const input =
     "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm";
 
+  function urlExportacion() {
+    const params = new URLSearchParams();
+    if (fEmpleado) params.set("empleadoId", String(fEmpleado));
+    if (fEstado) params.set("estado", fEstado);
+    if (fClasificacion) params.set("clasificacion", fClasificacion);
+    if (fConcepto.trim()) params.set("concepto", fConcepto.trim());
+    if (fFechaDesde) params.set("fechaDesde", fFechaDesde);
+    if (fFechaHasta) params.set("fechaHasta", fFechaHasta);
+    return `/api/empresas/${slug}/rrhh/descuentos/export?${params.toString()}`;
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -555,6 +568,12 @@ export default function DescuentosPage() {
             Limpiar filtros
           </button>
         ) : null}
+        <a
+          href={urlExportacion()}
+          className="rounded bg-emerald-700 px-3 py-1 text-sm font-medium text-white hover:bg-emerald-600"
+        >
+          Exportar para Contabilidad
+        </a>
       </div>
 
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
@@ -573,6 +592,7 @@ export default function DescuentosPage() {
                 <th className="px-2 py-2">Código</th>
                 <th className="px-2 py-2">Colaborador</th>
                 <th className="px-2 py-2">Concepto</th>
+                <th className="px-2 py-2">Motivo / por qué</th>
                 <th className="px-2 py-2">Clasif.</th>
                 <th className="px-2 py-2">Original</th>
                 <th className="px-2 py-2">Pagado</th>
@@ -597,9 +617,9 @@ export default function DescuentosPage() {
                     {r.empleadoCodigo} — {r.empleadoNombre}
                   </td>
                   <td className="px-2 py-2">
-                    <div>{r.concepto}</div>
-                    {r.motivo ? <div className="text-xs text-[var(--muted)]">{r.motivo}</div> : null}
+                    {r.concepto}
                   </td>
+                  <td className="max-w-xs px-2 py-2 text-xs">{r.motivo || "Sin motivo registrado"}</td>
                   <td className="px-2 py-2 text-xs">
                     {r.clasificacion === "INVENTARIO" ? (
                       <span className="rounded-full bg-sky-500/20 px-2 py-0.5 text-sky-300">
@@ -627,7 +647,7 @@ export default function DescuentosPage() {
               ))}
               {!rowsFiltradas.length ? (
                 <tr>
-                  <td colSpan={10} className="px-3 py-4 text-[var(--muted)]">
+                  <td colSpan={11} className="px-3 py-4 text-[var(--muted)]">
                     Sin descuentos con estos filtros.
                   </td>
                 </tr>
@@ -655,6 +675,13 @@ export default function DescuentosPage() {
                   {detalle.empleadoCodigo} — {detalle.empleadoNombre} · {detalle.concepto} ·{" "}
                   {detalle.clasificacion}
                 </p>
+                <div className="mt-3 grid grid-cols-2 gap-2 rounded-lg border border-[var(--border)] p-3 text-sm">
+                  <div><p className="text-xs text-[var(--muted)]">Nombre del colaborador</p><p>{detalle.empleadoNombre}</p></div>
+                  <div><p className="text-xs text-[var(--muted)]">Puesto</p><p>{detalle.empleadoPuesto || "Sin registrar"}</p></div>
+                  <div><p className="text-xs text-[var(--muted)]">Número de DPI</p><p>{detalle.empleadoDpi || "Sin registrar"}</p></div>
+                  <div><p className="text-xs text-[var(--muted)]">Cuotas aplicadas</p><p>{detalle.cuotasAplicadas} de {detalle.numeroCuotas}</p></div>
+                  <div className="col-span-2"><p className="text-xs text-[var(--muted)]">Observaciones / motivo del descuento</p><p>{detalle.motivo || "Sin motivo registrado"}</p></div>
+                </div>
                 {detalle.motivo ? (
                   <p className="mt-1 text-xs text-[var(--muted)]">Motivo: {detalle.motivo}</p>
                 ) : null}

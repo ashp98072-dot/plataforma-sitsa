@@ -82,6 +82,8 @@ export type DescuentoMaestro = {
   empleadoId: number;
   empleadoCodigo: string;
   empleadoNombre: string;
+  empleadoDpi: string;
+  empleadoPuesto: string;
   codigo: string;
   concepto: string;
   clasificacion: Clasificacion;
@@ -304,6 +306,8 @@ function mapMaestro(r: RowDataPacket): DescuentoMaestro {
     empleadoId: Number(r.empleado_id),
     empleadoCodigo: r.empleado_codigo != null ? String(r.empleado_codigo) : "",
     empleadoNombre: r.empleado_nombre != null ? String(r.empleado_nombre) : "",
+    empleadoDpi: r.empleado_dpi != null ? String(r.empleado_dpi) : "",
+    empleadoPuesto: r.empleado_puesto != null ? String(r.empleado_puesto) : "",
     codigo: String(r.codigo),
     concepto: String(r.concepto),
     clasificacion: String(r.clasificacion) as Clasificacion,
@@ -362,7 +366,8 @@ function mapAbono(r: RowDataPacket): AbonoDescuento {
 // ---------------------------------------------------------------------------
 
 const SELECT_MAESTRO = `
-  SELECT d.*, e.codigo AS empleado_codigo, e.nombre AS empleado_nombre
+  SELECT d.*, e.codigo AS empleado_codigo, e.nombre AS empleado_nombre,
+         e.dpi AS empleado_dpi, e.puesto AS empleado_puesto
   FROM rrhh_descuentos_maestro d
   INNER JOIN empleados e ON e.id = d.empleado_id`;
 
@@ -554,6 +559,23 @@ export async function listarDescuentos(
       proximaCuota: r?.proximaCuota ?? null,
     };
   });
+}
+
+/** Obtiene en una sola consulta las cuotas de varios descuentos del mismo tenant. */
+export async function listarCuotasDeDescuentos(
+  empresaId: number,
+  descuentoIds: number[],
+): Promise<CuotaDescuento[]> {
+  const ids = Array.from(new Set(descuentoIds.filter(Number.isFinite)));
+  if (!ids.length) return [];
+  const ph = ids.map(() => "?").join(",");
+  const rows = await query<RowDataPacket[]>(
+    `SELECT * FROM rrhh_descuento_cuotas
+     WHERE empresa_id = ? AND descuento_id IN (${ph})
+     ORDER BY descuento_id, numero_cuota`,
+    [empresaId, ...ids],
+  );
+  return rows.map(mapCuota);
 }
 
 export async function obtenerDescuento(
