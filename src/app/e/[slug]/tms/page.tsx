@@ -287,7 +287,9 @@ export default function TmsPage() {
             Ir al módulo Viáticos →
           </Link>
         </div>
-        <ClienteContactosAdmin slug={slug} clientes={clientesCat} />
+        <div id="cliente-contactos">
+          <ClienteContactosAdmin slug={slug} clientes={clientesCat} />
+        </div>
         <ClienteUbicacionesAdmin slug={slug} clientes={clientesCat} />
       </section>
 
