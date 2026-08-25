@@ -4,6 +4,10 @@ export const ROLES = [
   "Marcaje",
   "Contabilidad",
   "Operaciones",
+  "GerenteOperaciones",
+  "JefeOperaciones",
+  "AuxiliarOperaciones",
+  "Facturador",
   "CoordinadorPredios",
   "CoordinadorCompras",
   "Piloto",
@@ -53,6 +57,24 @@ export function modulosPorRol(rol: RolGlobal): Modulo[] {
         "tarimas",
         "gerencia",
       ];
+    // OPS-1: jerarquía operativa real, separada del rol legado
+    // "Operaciones" (que se mantiene sin cambios para no afectar usuarios
+    // existentes — ver permisos-shared.ts). El techo por rol aquí es el
+    // MÓDULO grueso (para menú/fallback de empresa); la autoridad real de
+    // cada acción sigue viviendo en el permiso explícito
+    // (viaticos_autorizar/viaticos_pagar/viajes_cerrar), nunca en
+    // `rol === "..."`.
+    case "GerenteOperaciones":
+    case "JefeOperaciones":
+      return ["tms", "clientes", "gerencia"];
+    case "AuxiliarOperaciones":
+      return ["tms", "clientes"];
+    case "Facturador":
+      // "tms" se necesita porque viaticos_pagar/facturación de viajes
+      // viven dentro del módulo TMS (ver requireTenantViaticosPagar) —
+      // Facturador NO obtiene edición general de TMS por esto, solo el
+      // permiso explícito viaticos_pagar la habilita.
+      return ["tms", "facturacion"];
     case "CoordinadorPredios":
       // Solo Flota/Predios. TMS solo si se otorga en permisos.
       return ["flota"];
@@ -97,6 +119,15 @@ export function puedeEditarModulo(rol: RolGlobal, modulo: Modulo): boolean {
       modulo === "reciclaje" ||
       modulo === "tarimas"
     );
+  }
+  if (rol === "GerenteOperaciones" || rol === "JefeOperaciones" || rol === "AuxiliarOperaciones") {
+    return modulo === "tms" || modulo === "clientes";
+  }
+  if (rol === "Facturador") {
+    // Edición de TMS/viajes NO se concede por rol — solo por el permiso
+    // explícito viaticos_pagar (ver requireTenantViaticosPagar), que no
+    // pasa por esta función.
+    return modulo === "facturacion";
   }
   if (rol === "CoordinadorPredios") return modulo === "flota";
   if (rol === "CoordinadorCompras") return modulo === "flota";

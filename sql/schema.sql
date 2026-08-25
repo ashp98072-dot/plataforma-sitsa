@@ -21,7 +21,12 @@ CREATE TABLE IF NOT EXISTS usuarios (
   nombre VARCHAR(200) NULL,
   email VARCHAR(200) NULL,
   rol_global VARCHAR(40) NOT NULL DEFAULT 'Operaciones',
-  -- Admin | RRHH | Marcaje | Contabilidad | Operaciones | CoordinadorPredios | Piloto | Visualizador
+  -- Admin | RRHH | Marcaje | Contabilidad | Operaciones (legado) |
+  -- GerenteOperaciones | JefeOperaciones | AuxiliarOperaciones |
+  -- Facturador | CoordinadorPredios | CoordinadorCompras | Piloto |
+  -- Visualizador — VARCHAR simple (no ENUM), agregar un rol nuevo NUNCA
+  -- requiere ALTER TABLE aquí, ver sql/migrate-2026-08-ops-1-roles-cierre.sql
+  -- para el detalle de OPS-1 (roles nuevos + cierre administrativo).
   activo TINYINT(1) NOT NULL DEFAULT 1,
   acceso_todas_empresas TINYINT(1) NOT NULL DEFAULT 0,
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -602,6 +607,14 @@ CREATE TABLE IF NOT EXISTS tms_planes_viaje (
   contacto_cargo_historico VARCHAR(120) NULL,
   contacto_telefono_historico VARCHAR(80) NULL,
   estado VARCHAR(40) NOT NULL DEFAULT 'Programado',
+  -- OPS-1: Programado -> En ruta -> Descargado (operación finalizada por
+  -- el piloto, pendiente de cierre) -> Cerrado (cierre administrativo,
+  -- permiso viajes_cerrar) — o Cancelado en cualquier punto anterior. Ver
+  -- sql/migrate-2026-08-ops-1-roles-cierre.sql y
+  -- src/lib/tms/cierre-viaje.ts. cerrado_por/cerrado_en quedan NULL hasta
+  -- que el UPDATE condicional (WHERE estado = 'Descargado') los llena.
+  cerrado_por VARCHAR(100) NULL,
+  cerrado_en DATETIME NULL,
   notas TEXT NULL,
   UNIQUE KEY uq_plan (empresa_id, codigo),
   CONSTRAINT fk_tmsplan_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,

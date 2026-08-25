@@ -10,6 +10,8 @@ import { AuxiliaresSelect } from "@/components/tms/auxiliares-select";
 import ViaticosPanel from "@/components/tms/viaticos-panel";
 import type { Plan } from "./programacion-client";
 import NotificarPersonal from "./notificar-personal";
+import { useEmpresaSession } from "@/lib/empresa-session";
+import { tienePermiso } from "@/lib/permisos-shared";
 
 /**
  * Formulario propio de Programación para crear/editar un viaje — reutiliza
@@ -87,8 +89,10 @@ type ClienteCat = {
 
 // Mismo criterio que planes/route.ts (ESTADOS_SOLO_NOTAS / ESTADOS_BLOQUEADOS)
 // — solo para avisar en la UI; el servidor es quien realmente lo hace cumplir.
+// OPS-1: "Descargado" (operación finalizada, pendiente de cierre) ya NO
+// bloquea edición — Operaciones debe poder corregir antes de cerrar.
 const ESTADOS_SOLO_NOTAS = new Set(["En ruta"]);
-const ESTADOS_BLOQUEADOS = new Set(["Descargado", "Cerrado", "Cancelado"]);
+const ESTADOS_BLOQUEADOS = new Set(["Cerrado", "Cancelado"]);
 
 const inputCls =
   "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
@@ -192,6 +196,15 @@ export default function PlanForm({
   // `key` — así siempre refleja lo que sincronizarViaticosPlan acaba de
   // dejar en BD, sin tocar ViaticosPanel.
   const [viaticosVersion, setViaticosVersion] = useState(0);
+  // OPS-1 — cierre administrativo (Descargado -> Cerrado). Solo botón +
+  // confirmación explícita; la autoridad real es el permiso
+  // `viajes_cerrar:editar` que valida el endpoint (esto es únicamente UX,
+  // igual que puedeAutorizar en el panel de viáticos — nunca seguridad).
+  const { permisos } = useEmpresaSession();
+  const puedeCerrarViaje = tienePermiso(permisos, "viajes_cerrar", "editar");
+  const [confirmandoCierre, setConfirmandoCierre] = useState(false);
+  const [cerrando, setCerrando] = useState(false);
+  const [errorCierre, setErrorCierre] = useState("");
 
   // VIAT-1: ubicaciones guardadas del cliente seleccionado, para armar
   // paradas rápido en vez de escribir la dirección cada vez.
@@ -537,6 +550,11 @@ export default function PlanForm({
   // parte de este mismo guardado bloquearía por error los demás campos.
   const soloNotas = esEdicion && ESTADOS_SOLO_NOTAS.has(plan!.estado);
   const bloqueado = esEdicion && ESTADOS_BLOQUEADOS.has(plan!.estado);
+  // OPS-1: operación finalizada por el piloto, pendiente de cierre
+  // administrativo — el viaje sigue editable (bloqueado = false), pero
+  // además se ofrece la acción de cierre si el usuario tiene el permiso.
+  const pendienteCierre = esEdicion && plan!.estado === "Descargado";
+  const yaCerrado = esEdicion && plan!.estado === "Cerrado";
 
   // VIAT-2: el servidor exige regreso_estimado cuando el plan queda con
   // piloto, auxiliares o unidad asignados (lo necesita para poder validar
@@ -745,6 +763,37 @@ export default function PlanForm({
     }
   }
 
+  /**
+   * OPS-1 — cierre administrativo. Confirmación explícita en dos pasos
+   * (botón "Cerrar viaje" -> revela el resumen + botón "Confirmar cierre")
+   * en vez de un `confirm()` nativo, consistente con el resto de la UI.
+   * El backend es la autoridad real (permiso + UPDATE condicional por
+   * estado) — este botón solo deja de mostrarse si el usuario no tiene
+   * `viajes_cerrar:editar`, nunca es la única protección.
+   */
+  async function confirmarCierre() {
+    if (!esEdicion || cerrando) return;
+    setCerrando(true);
+    setErrorCierre("");
+    try {
+      const res = await fetch(`/api/empresas/${slug}/tms/planes/${plan!.id}/cerrar`, {
+        method: "POST",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setErrorCierre(data.error ?? "No se pudo cerrar el viaje.");
+        return;
+      }
+      setMsg(data.mensaje ?? "Viaje cerrado.");
+      setConfirmandoCierre(false);
+      onSaved({ id: plan!.id, fechaPlan: form.fechaPlan });
+    } catch {
+      setErrorCierre("Error de conexión.");
+    } finally {
+      setCerrando(false);
+    }
+  }
+
   return (
     <form
       onSubmit={onSubmit}
@@ -770,6 +819,74 @@ export default function PlanForm({
         <p className="md:col-span-3 rounded bg-sky-900/30 px-3 py-2 text-xs text-sky-200">
           El viaje está &quot;En ruta&quot;: solo se pueden editar notas mientras dura el viaje.
         </p>
+      ) : null}
+      {yaCerrado ? (
+        <p className="md:col-span-3 rounded bg-slate-800/60 px-3 py-2 text-xs text-[var(--muted)]">
+          Viaje cerrado{plan!.cerrado_por ? ` por ${plan!.cerrado_por}` : ""}
+          {plan!.cerrado_en ? ` · ${plan!.cerrado_en.replace("T", " ")}` : ""}.
+        </p>
+      ) : null}
+
+      {pendienteCierre ? (
+        <div className="md:col-span-3 space-y-2 rounded-lg border border-amber-700/60 bg-amber-950/20 px-3 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs font-medium text-amber-200">
+              Operación finalizada — pendiente de cierre por Operaciones.
+            </p>
+            {puedeCerrarViaje && !confirmandoCierre ? (
+              <button
+                type="button"
+                className="rounded bg-amber-700 px-3 py-1.5 text-xs font-medium text-white"
+                onClick={() => setConfirmandoCierre(true)}
+              >
+                Cerrar viaje
+              </button>
+            ) : null}
+          </div>
+          {!puedeCerrarViaje ? (
+            <p className="text-[11px] text-[var(--muted)]">
+              El cierre administrativo lo realiza Operaciones (Jefe/Gerente) — no tienes el permiso
+              &quot;Viajes: cerrar administrativamente&quot;.
+            </p>
+          ) : null}
+          {confirmandoCierre ? (
+            <div className="space-y-2 rounded border border-amber-700/60 bg-black/20 p-2 text-xs">
+              <p className="font-medium">Revisa antes de cerrar — ya no podrá editarse después:</p>
+              <ul className="grid gap-x-4 gap-y-0.5 text-[11px] text-[var(--muted)] sm:grid-cols-2">
+                <li>Código: {plan!.codigo}</li>
+                <li>Cliente: {form.clienteNombre || "—"}</li>
+                <li>Ruta: {form.rutaCodigo || "—"}</li>
+                <li>Destino: {form.lugarDescargaHistorico || "—"}</li>
+                <li>Unidad: {form.placa || "—"}</li>
+                <li>Piloto: {form.pilotoNombre || "—"}</li>
+                <li>Auxiliares: {[...form.auxiliarNombres, ...form.auxiliarEmpleadoIds.map((id) => auxiliares.find((a) => a.id === id)?.nombre ?? `#${id}`)].join(", ") || "—"}</li>
+                <li>Tarifa comercial: {form.tarifaComercial ? `Q${form.tarifaComercial}` : "—"}</li>
+                <li>Referencia cliente: {form.referenciaCliente || "—"}</li>
+              </ul>
+              {errorCierre ? <p className="text-red-300">{errorCierre}</p> : null}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={cerrando}
+                  onClick={() => void confirmarCierre()}
+                  className="rounded bg-amber-700 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+                >
+                  {cerrando ? "Cerrando…" : "Confirmar cierre"}
+                </button>
+                <button
+                  type="button"
+                  className="rounded border border-[var(--border)] px-3 py-1.5 text-xs"
+                  onClick={() => {
+                    setConfirmandoCierre(false);
+                    setErrorCierre("");
+                  }}
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
       ) : null}
 
       {!esEdicion ? (

@@ -91,12 +91,18 @@ export const FLOTA_SUBMODULO_LABEL: Record<FlotaSubmodulo, string> = {
  *     Viáticos general (TMS, todas las solicitudes); `editar` = liquidar
  *     (ENTREGADO -> LIQUIDADO), el único paso que no se reasignó a un
  *     permiso propio en esta fase.
- * "Facturador" en este sistema no es un RolGlobal nuevo — es cualquier
- * usuario al que un Admin le otorgue `viaticos_pagar` desde Usuarios
- * (típicamente alguien de Contabilidad), igual que "viaticos_autorizar"
- * no depende de ser supervisor ni del rol "Operaciones": ningún rol trae
- * ninguno de los tres por defecto. Ver src/lib/tms/viaticos.ts y
- * src/lib/tenant.ts (requireTenantViaticosAutorizar/Pagar).
+ * OPS-1 (actualización): "Facturador" SÍ es ahora un RolGlobal propio
+ * (jerarquía operativa real confirmada por la empresa) — pero eso NO
+ * cambia la regla de fondo: `viaticos_pagar` sigue siendo un permiso
+ * explícito, independiente del rol, que un Admin puede otorgar a
+ * CUALQUIER usuario (Facturador lo trae por defecto, pero también podría
+ * quitársele o dárselo a alguien con otro rol). Igual que
+ * "viaticos_autorizar" (que GerenteOperaciones/JefeOperaciones traen por
+ * defecto) y el nuevo "viajes_cerrar" (que JefeOperaciones/
+ * GerenteOperaciones traen por defecto): el rol solo fija el DEFAULT al
+ * crear el usuario, nunca es la autoridad real del endpoint. Ver
+ * src/lib/tms/viaticos.ts, src/lib/tms/cierre-viaje.ts y
+ * src/lib/tenant.ts (requireTenantViaticosAutorizar/Pagar/ViajesCerrar).
  */
 export const PLATAFORMA_PERMISIBLES = [
   "tms",
@@ -109,6 +115,12 @@ export const PLATAFORMA_PERMISIBLES = [
   "viaticos",
   "viaticos_autorizar",
   "viaticos_pagar",
+  // OPS-1: cierre administrativo del viaje (Descargado -> Cerrado).
+  // Mismo patrón que viaticos_autorizar/viaticos_pagar: permiso propio,
+  // ningún rol lo trae salvo los explícitamente definidos abajo
+  // (GerenteOperaciones/JefeOperaciones), y el endpoint de cierre lo
+  // exige sin importar el rol.
+  "viajes_cerrar",
 ] as const;
 
 export type PlataformaPermisible = (typeof PLATAFORMA_PERMISIBLES)[number];
@@ -186,6 +198,7 @@ export function labelPermiso(modulo: string): string {
   if (modulo === "viaticos") return "Viáticos (liquidar / ver control general)";
   if (modulo === "viaticos_autorizar") return "Viáticos: autorizar";
   if (modulo === "viaticos_pagar") return "Viáticos: registrar pago/entrega";
+  if (modulo === "viajes_cerrar") return "Viajes: cerrar administrativamente";
   if (esPlataformaPermisible(modulo)) {
     return MODULO_LABEL[modulo as Modulo] ?? modulo;
   }
@@ -198,6 +211,11 @@ export function labelRol(rol: string): string {
   if (rol === "CoordinadorCompras") return "Compras";
   if (rol === "Piloto") return "Piloto";
   if (rol === "Marcaje") return "Marcaje (kiosco)";
+  if (rol === "GerenteOperaciones") return "Gerente de Operaciones";
+  if (rol === "JefeOperaciones") return "Jefe de Operaciones";
+  if (rol === "AuxiliarOperaciones") return "Auxiliar de Operaciones";
+  if (rol === "Facturador") return "Facturador";
+  if (rol === "Operaciones") return "Operaciones (legado)";
   return rol;
 }
 
@@ -230,7 +248,7 @@ export const GRUPOS_PERMISOS: {
     id: "operaciones",
     titulo: "Permisos Operaciones por módulos",
     descripcion:
-      "TMS / logística, clientes, facturación de clientes, reciclaje, tarimas y viáticos (control, autorizar, pagar).",
+      "TMS / logística, clientes, facturación de clientes, reciclaje, tarimas, viáticos (control, autorizar, pagar) y cierre administrativo de viajes.",
     modulos: [
       "tms",
       "clientes",
@@ -240,6 +258,7 @@ export const GRUPOS_PERMISOS: {
       "viaticos",
       "viaticos_autorizar",
       "viaticos_pagar",
+      "viajes_cerrar",
     ],
   },
   {
@@ -271,6 +290,10 @@ export function grupoPrincipalDelRol(rol: RolGlobal): GrupoPermisosId {
     case "Contabilidad":
       return "contabilidad";
     case "Operaciones":
+    case "GerenteOperaciones":
+    case "JefeOperaciones":
+    case "AuxiliarOperaciones":
+    case "Facturador":
       return "operaciones";
     case "CoordinadorPredios":
     case "CoordinadorCompras":
@@ -302,6 +325,27 @@ export function modulosPropiosDelRol(rol: RolGlobal): string[] {
         "reciclaje",
         "tarimas",
       ];
+    // OPS-1 — jerarquía operativa real. "Programación"/"Rutas"/"TMS
+    // seguimiento" viven todas bajo el permiso "tms" (las 3 pantallas
+    // exigen requireTenantModulo(slug, "tms")) — no son permisos
+    // separados. GerenteOperaciones y JefeOperaciones traen por defecto
+    // viaticos_autorizar y viajes_cerrar; NUNCA viaticos_pagar (eso es de
+    // Facturador). AuxiliarOperaciones NO trae ninguno de los tres
+    // permisos de viáticos/cierre — solo tms+clientes (crear/editar
+    // Programación), tal como se confirmó.
+    case "GerenteOperaciones":
+    case "JefeOperaciones":
+      return ["tms", "clientes", "viaticos", "viaticos_autorizar", "viajes_cerrar"];
+    case "AuxiliarOperaciones":
+      return ["tms", "clientes"];
+    case "Facturador":
+      // Facturador NO recibe "tms" por defecto (no debe editar viajes en
+      // general) — su alcance es viaticos_pagar (que su propio guard,
+      // requireTenantViaticosPagar, exige aparte) y facturación. Ver
+      // "viajes cerrados listos para facturación" queda cubierto por la
+      // alerta de la campana (gateada por facturacion:ver), no por acceso
+      // a TMS.
+      return ["viaticos_pagar", "facturacion"];
     case "CoordinadorPredios":
       // Predios = flota. TMS/Reciclaje/Tarimas van en otras áreas si se otorgan.
       return [...FLOTA_SUBMODULOS];
@@ -357,7 +401,15 @@ export function permisosDefaultPorRol(rol: RolGlobal): PermisoModulo[] {
     ];
   }
 
-  if (rol === "RRHH" || rol === "Contabilidad" || rol === "Operaciones") {
+  if (
+    rol === "RRHH" ||
+    rol === "Contabilidad" ||
+    rol === "Operaciones" ||
+    rol === "GerenteOperaciones" ||
+    rol === "JefeOperaciones" ||
+    rol === "AuxiliarOperaciones" ||
+    rol === "Facturador"
+  ) {
     return [
       ...propios.map((m) => permisoFull(m)),
       ...cruzados.map((m) => permisoVacio(m)),
@@ -479,17 +531,18 @@ export function modulosPlataformaDesdePermisos(
       continue;
     }
     if (!tienePermiso(permisos, p.modulo, "ver")) continue;
-    // "viaticos"/"viaticos_autorizar"/"viaticos_pagar" son permisos de
-    // acción dentro de TMS, no módulos de navegación propios (no hay un
-    // Modulo "viaticos*" en roles.ts) — se excluyen aquí para no romper el
-    // tipo Modulo[] de esta función; siguen siendo PlataformaPermisible
-    // válidos para el resto del sistema (catálogo, editor de permisos,
-    // tienePermiso()).
+    // "viaticos"/"viaticos_autorizar"/"viaticos_pagar"/"viajes_cerrar" son
+    // permisos de acción dentro de TMS, no módulos de navegación propios
+    // (no hay un Modulo "viaticos*"/"viajes_cerrar" en roles.ts) — se
+    // excluyen aquí para no romper el tipo Modulo[] de esta función;
+    // siguen siendo PlataformaPermisible válidos para el resto del
+    // sistema (catálogo, editor de permisos, tienePermiso()).
     if (
       esPlataformaPermisible(p.modulo) &&
       p.modulo !== "viaticos" &&
       p.modulo !== "viaticos_autorizar" &&
-      p.modulo !== "viaticos_pagar"
+      p.modulo !== "viaticos_pagar" &&
+      p.modulo !== "viajes_cerrar"
     ) {
       out.add(p.modulo);
     }

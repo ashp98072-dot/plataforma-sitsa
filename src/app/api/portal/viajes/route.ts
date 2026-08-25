@@ -464,7 +464,7 @@ export async function POST(req: Request) {
       (odometroFuncional && Number(requisitos[0]?.tablero_llegada ?? 0) < 1) ||
       (odometroFuncional && !kmCarga[0])
     )) {
-      return NextResponse.json({ error: "Completa tablero de salida, kilometraje/evidencia de carga y tablero de llegada antes de cerrar." }, { status: 422 });
+      return NextResponse.json({ error: "Completa tablero de salida, kilometraje/evidencia de carga y tablero de llegada antes de finalizar." }, { status: 422 });
     }
 
     if (!excepcional) {
@@ -474,7 +474,7 @@ export async function POST(req: Request) {
         { lat: d.latitud, lng: d.longitud },
         { requerirUbicacionRegistrada: true },
       );
-      if (!geo.ok) return NextResponse.json({ error: `Debes regresar al predio para cerrar. ${geo.error}` }, { status: 409 });
+      if (!geo.ok) return NextResponse.json({ error: `Debes regresar al predio para finalizar. ${geo.error}` }, { status: 409 });
     }
 
     if (planIdPre && !excepcional) {
@@ -483,7 +483,7 @@ export async function POST(req: Request) {
         const nombres = pendientes.map((p) => `${p.orden}. ${p.lugar_nombre}`).join("; ");
         return NextResponse.json(
           {
-            error: `Faltan evidencias de producto en ${pendientes.length} parada(s) de la ruta: ${nombres}. Súbelas desde Flota antes de cerrar, o pide apoyo a Operaciones.`,
+            error: `Faltan evidencias de producto en ${pendientes.length} parada(s) de la ruta: ${nombres}. Súbelas desde Flota antes de finalizar, o pide apoyo a Operaciones.`,
             code: "PARADAS_SIN_EVIDENCIA",
           },
           { status: 422 },
@@ -559,8 +559,8 @@ export async function POST(req: Request) {
       mensaje: excepcional
         ? "Viaje cerrado excepcionalmente y contratiempo registrado en auditoría."
         : odometroFuncional
-          ? `Llegada registrada: ${(Number(kmFinal) - Number(kmSalida)).toLocaleString("es-GT")} km recorridos.${planIdPre ? " Plan TMS → Descargado." : ""}`
-          : `Llegada registrada sin kilometraje.${planIdPre ? " Plan TMS → Descargado." : ""}`,
+          ? `Llegada registrada: ${(Number(kmFinal) - Number(kmSalida)).toLocaleString("es-GT")} km recorridos.${planIdPre ? " Operación finalizada. Pendiente de cierre por Operaciones." : ""}`
+          : `Llegada registrada sin kilometraje.${planIdPre ? " Operación finalizada. Pendiente de cierre por Operaciones." : ""}`,
     });
   }
 
