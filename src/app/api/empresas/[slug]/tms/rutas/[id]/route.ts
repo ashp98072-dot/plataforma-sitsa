@@ -33,6 +33,7 @@ const schema = z.object({
   nombre: z.string().max(200).nullable().optional(),
   ubicacionCargaId: z.number().int().positive().nullable().optional(),
   lugarCargaTexto: z.string().max(300).nullable().optional(),
+  destinoDescripcion: z.string().max(300).nullable().optional(),
   horaHabitual: z.string().max(20).nullable().optional(),
   contactoClienteId: z.number().int().positive().nullable().optional(),
   observaciones: z.string().max(300).nullable().optional(),

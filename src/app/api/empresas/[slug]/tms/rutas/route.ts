@@ -54,6 +54,7 @@ const schema = z.object({
   nombre: z.string().max(200).optional(),
   ubicacionCargaId: z.number().int().positive().optional(),
   lugarCargaTexto: z.string().max(300).optional(),
+  destinoDescripcion: z.string().max(300).optional(),
   horaHabitual: z.string().max(20).optional(),
   contactoClienteId: z.number().int().positive().optional(),
   observaciones: z.string().max(300).optional(),

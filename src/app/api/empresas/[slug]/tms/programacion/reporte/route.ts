@@ -7,34 +7,39 @@ import { tablaAExcel, tablaAPdf } from "@/lib/rrhh/export-files";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
+// VIAT-4b: abreviatura de 3 letras, confirmado contra el Excel real
+// (Libro1.xlsx / hoja PROGRAMACIÓN usa "AGO", no "Agosto").
 const MESES = [
-  "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
-  "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
+  "ENE", "FEB", "MAR", "ABR", "MAY", "JUN",
+  "JUL", "AGO", "SEP", "OCT", "NOV", "DIC",
 ];
 
 type AuxiliarOrdenado = { plan_id: number; nombre: string; orden: number };
 
 /**
- * VIAT-4 (puntos 8-10) — reporte TRADICIONAL de Programación, en el orden
- * EXACTO del Excel operativo actual: Mes, Día, Placa, Piloto, Auxiliar 1,
- * Auxiliar 2, Código, Cliente, Lugar de Carga, Hora, Lugar de Descarga.
- * A propósito NO incluye tarifa comercial, viáticos, datos bancarios,
- * contactos internos ni estados técnicos — este es el reporte
+ * VIAT-4/VIAT-4b (puntos 8-10) — reporte TRADICIONAL de Programación, en
+ * el orden EXACTO del Excel operativo actual: Mes, Día, Placa, Piloto,
+ * Auxiliar 1, Auxiliar 2, Código, Cliente, Lugar de Carga, Hora, Lugar de
+ * Descarga. A propósito NO incluye tarifa comercial, viáticos, datos
+ * bancarios, contactos internos ni estados técnicos — este es el reporte
  * "tradicional"; una versión ampliada, si Operaciones la pide después, es
- * un endpoint/():columnas aparte, no se mezcla aquí.
+ * un endpoint/columnas aparte, no se mezcla aquí.
  *
- * "Código" sale de ruta_codigo_historico (VIAT-4: fotografía histórica de
- * la ruta usada, no el código interno del viaje — ver
- * tms_planes_viaje.codigo vs. ruta_codigo_historico). Si el viaje no usó
- * una ruta del catálogo, la celda queda vacía (no se inventa un código).
+ * "Código" sale de ruta_codigo_historico (fotografía histórica de la
+ * ruta usada, no el código interno del viaje). Si el viaje no usó una
+ * ruta del catálogo, la celda queda vacía (no se inventa un código).
  *
- * "Lugar de Descarga": si el viaje tiene varios destinos (paradas tipo
- * Entrega/Descarga), este reporte tradicional muestra solo el PRIMERO —
- * sin haber podido revisar el Excel real en esta fase para confirmar
- * cómo se representan múltiples destinos ahí, se prefirió no concatenar
- * de forma potencialmente ilegible. El sistema conserva TODOS los
- * destinos igual (tms_plan_paradas) — no se pierde información interna,
- * solo no se listan todos en esta columna tradicional.
+ * "Lugar de Descarga" sale de lugar_descarga_historico (VIAT-4b —
+ * corrección tras revisar el Excel real: la columna H de "CODIGOS DATA"
+ * es una descripción operativa completa de texto libre (formato tipo
+ * "RUTA-X - punto1-punto2-punto3"), NO una lista de paradas). NUNCA se toma de
+ * "primera parada" — las paradas estructuradas (tms_plan_paradas) siguen
+ * existiendo intactas para seguimiento operativo/evidencia, pero esta
+ * columna no depende de ellas.
+ *
+ * "Lugar de Carga" sí sigue viniendo de la parada tipo Carga
+ * (tms_plan_paradas, texto congelado en el momento de guardar el viaje,
+ * no un JOIN en vivo) — no tenía el mismo problema que Descarga.
  */
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
@@ -56,7 +61,7 @@ export async function GET(req: Request, ctx: Ctx) {
 
   const rows = await query<RowDataPacket[]>(
     `SELECT p.id, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan,
-            p.hora_carga, p.ruta_codigo_historico,
+            p.hora_carga, p.ruta_codigo_historico, p.lugar_descarga_historico,
             c.nombre AS cliente, u.placa, pil.nombre AS piloto
      FROM tms_planes_viaje p
      LEFT JOIN tms_clientes c ON c.id = p.cliente_id
@@ -101,7 +106,8 @@ export async function GET(req: Request, ctx: Ctx) {
     void anio;
     const paradas = paradasMap.get(id) ?? [];
     const lugarCarga = paradas.find((p) => p.tipo === "Carga")?.lugar_nombre ?? "";
-    const lugarDescarga = paradas.find((p) => p.tipo === "Descarga" || p.tipo === "Entrega")?.lugar_nombre ?? "";
+    // VIAT-4b: NUNCA "primera parada" — siempre el histórico congelado del viaje.
+    const lugarDescarga = r.lugar_descarga_historico ? String(r.lugar_descarga_historico) : "";
     const auxiliares = auxPorPlan.get(id) ?? [];
     const hora = r.hora_carga ? String(r.hora_carga).slice(0, 5) : "";
     return [

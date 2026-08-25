@@ -6,15 +6,24 @@ import { execute, query } from "@/lib/db";
  * servicios preconfigurados por cliente, a partir de la hoja "CODIGOS
  * DATA" del Excel operativo real. Es una PLANTILLA: Programación COPIA
  * sus datos al viaje (ver src/app/api/empresas/[slug]/tms/planes/route.ts,
- * campos ruta_id/ruta_codigo_historico) — cambiar o desactivar una ruta
- * después NUNCA altera viajes ya creados.
+ * campos ruta_id/ruta_codigo_historico/lugar_descarga_historico/
+ * contacto_*_historico) — cambiar o desactivar una ruta después NUNCA
+ * altera viajes ya creados.
  *
  * No duplica maestros: cliente_id referencia tms_clientes;
  * ubicacion_carga_id y las paradas de la ruta referencian
  * tms_cliente_ubicaciones (VIAT-1); contacto_cliente_id referencia
  * tms_cliente_contactos (VIAT-4). Esquema: NO se crea/altera desde este
- * módulo — asume que sql/migrate-2026-08-viat-4-contactos-rutas.sql ya se
- * aplicó manualmente.
+ * módulo — asume que sql/migrate-2026-08-viat-4-contactos-rutas.sql y
+ * sql/migrate-2026-08-viat-4b-rutas-correcciones.sql ya se aplicaron
+ * manualmente.
+ *
+ * VIAT-4b (corrección tras revisar el Excel real): el código es
+ * GLOBAL por empresa, no por cliente — 147 registros/147 códigos únicos
+ * en la muestra real. `destino_descripcion` es la descripción operativa
+ * completa del destino (texto libre, formato tipo "RUTA-X -
+ * punto1-punto2-punto3"), SEPARADA de las paradas estructuradas
+ * (tms_cliente_ruta_paradas), que se mantienen intactas en paralelo.
  */
 
 export type RutaParada = {
@@ -39,6 +48,7 @@ export type ClienteRuta = {
   nombre: string | null;
   ubicacionCargaId: number | null;
   lugarCargaTexto: string | null;
+  destinoDescripcion: string | null;
   horaHabitual: string | null;
   contactoClienteId: number | null;
   contactoNombre: string | null;
@@ -60,6 +70,7 @@ function mapRuta(r: RowDataPacket): Omit<ClienteRuta, "paradas"> {
     nombre: r.nombre != null ? String(r.nombre) : null,
     ubicacionCargaId: r.ubicacion_carga_id != null ? Number(r.ubicacion_carga_id) : null,
     lugarCargaTexto: r.lugar_carga_texto != null ? String(r.lugar_carga_texto) : null,
+    destinoDescripcion: r.destino_descripcion != null ? String(r.destino_descripcion) : null,
     horaHabitual: r.hora_habitual != null ? String(r.hora_habitual) : null,
     contactoClienteId: r.contacto_cliente_id != null ? Number(r.contacto_cliente_id) : null,
     contactoNombre: r.contacto_nombre != null ? String(r.contacto_nombre) : null,
@@ -74,7 +85,7 @@ function mapRuta(r: RowDataPacket): Omit<ClienteRuta, "paradas"> {
 
 const SELECT_RUTA = `
   SELECT r.id, r.cliente_id, c.nombre AS cliente_nombre, r.codigo, r.nombre,
-         r.ubicacion_carga_id, r.lugar_carga_texto, r.hora_habitual,
+         r.ubicacion_carga_id, r.lugar_carga_texto, r.destino_descripcion, r.hora_habitual,
          r.contacto_cliente_id, ct.nombre AS contacto_nombre, ct.cargo AS contacto_cargo,
          ct.telefono AS contacto_telefono,
          r.observaciones, r.activo, r.creado_en, r.actualizado_en
@@ -112,15 +123,19 @@ async function paradasDeRutas(rutaIds: number[]): Promise<Map<number, RutaParada
 export type FiltrosRutas = {
   clienteId?: number;
   codigo?: string;
-  q?: string; // busca en código, nombre de ruta y nombre de cliente
+  q?: string; // busca en código, nombre de ruta, descripción de destino y nombre de cliente
   incluirInactivas?: boolean;
 };
 
 /**
  * Buscar/listar rutas (Operaciones > Rutas y el selector de Programación).
- * Búsqueda de dos formas (punto "CÓDIGO" de VIAT-4): por código exacto/
- * parcial, o filtrando primero por cliente — ambas funcionan a la vez si
- * se combinan.
+ * Dos formas de buscar, como pide el proceso real: A) escribir un código
+ * (el código es único por EMPRESA — VIAT-4b — así que "17" resuelve
+ * directamente sin ambigüedad, sin necesitar elegir cliente antes); B) si
+ * ya hay cliente elegido, filtrar solo entre sus rutas. Cuando `q`
+ * coincide EXACTAMENTE con un código, esa fila se ordena primero (para
+ * que escribir "17" traiga la ruta 17 al tope aunque también existan
+ * códigos como "170").
  */
 export async function listarRutas(
   empresaId: number,
@@ -137,14 +152,25 @@ export async function listarRutas(
     condiciones.push("r.codigo LIKE ?");
     params.push(`%${filtros.codigo.trim()}%`);
   }
+
+  let ordenExacto = "";
+  const ordenParams: (string | number)[] = [];
   if (filtros.q?.trim()) {
-    condiciones.push("(r.codigo LIKE ? OR r.nombre LIKE ? OR c.nombre LIKE ?)");
-    const like = `%${filtros.q.trim()}%`;
-    params.push(like, like, like);
+    const termino = filtros.q.trim();
+    condiciones.push(
+      "(r.codigo LIKE ? OR r.nombre LIKE ? OR r.destino_descripcion LIKE ? OR c.nombre LIKE ?)",
+    );
+    const like = `%${termino}%`;
+    params.push(like, like, like, like);
+    // Coincidencia EXACTA de código primero (punto "escribir 17 resuelve
+    // directamente" — el orden importa cuando además hay matches parciales).
+    ordenExacto = "(r.codigo = ?) DESC, ";
+    ordenParams.push(termino);
   }
+
   const rows = await query<RowDataPacket[]>(
-    `${SELECT_RUTA} WHERE ${condiciones.join(" AND ")} ORDER BY c.nombre, r.codigo LIMIT 200`,
-    params,
+    `${SELECT_RUTA} WHERE ${condiciones.join(" AND ")} ORDER BY ${ordenExacto}c.nombre, r.codigo LIMIT 200`,
+    [...params, ...ordenParams],
   );
   const base = rows.map(mapRuta);
   const paradasMap = await paradasDeRutas(base.map((r) => r.id));
@@ -168,6 +194,7 @@ export type ClienteRutaInput = {
   nombre?: string | null;
   ubicacionCargaId?: number | null;
   lugarCargaTexto?: string | null;
+  destinoDescripcion?: string | null;
   horaHabitual?: string | null;
   contactoClienteId?: number | null;
   observaciones?: string | null;
@@ -182,6 +209,8 @@ async function guardarParadasRuta(
   // Reemplazo total, mismo patrón que guardarParadasPlan (src/lib/tms/paradas.ts):
   // borra y vuelve a insertar en el orden recibido. No es un DELETE de la
   // ruta ni de viajes ya copiados — solo de las paradas de LA PLANTILLA.
+  // Independiente de destino_descripcion: las paradas estructuradas
+  // siguen existiendo aparte, esta función nunca las reemplaza por texto.
   await execute("DELETE FROM tms_cliente_ruta_paradas WHERE ruta_id = ?", [rutaId]);
   let orden = 1;
   for (const p of paradas) {
@@ -218,7 +247,7 @@ async function resolverLugarCargaTexto(
   return rows[0]?.nombre ? String(rows[0].nombre) : null;
 }
 
-/** Código único por CLIENTE (no global) — ver nota de diseño en la migración. */
+/** VIAT-4b — código único por EMPRESA (no por cliente); ver nota de diseño en la migración. */
 export async function crearRuta(
   empresaId: number,
   input: ClienteRutaInput,
@@ -228,11 +257,11 @@ export async function crearRuta(
   if (!input.clienteId) throw new Error("Cliente requerido.");
 
   const existente = await query<RowDataPacket[]>(
-    "SELECT id FROM tms_cliente_rutas WHERE empresa_id = ? AND cliente_id = ? AND codigo = ? LIMIT 1",
-    [empresaId, input.clienteId, codigo],
+    "SELECT id FROM tms_cliente_rutas WHERE empresa_id = ? AND codigo = ? LIMIT 1",
+    [empresaId, codigo],
   );
   if (existente[0]) {
-    throw new Error(`El código "${codigo}" ya existe para este cliente.`);
+    throw new Error(`El código "${codigo}" ya existe en esta empresa (el código es único, no por cliente).`);
   }
 
   const lugarCargaTexto = await resolverLugarCargaTexto(
@@ -242,8 +271,8 @@ export async function crearRuta(
   );
   const r = await execute(
     `INSERT INTO tms_cliente_rutas
-      (empresa_id, cliente_id, codigo, nombre, ubicacion_carga_id, lugar_carga_texto, hora_habitual, contacto_cliente_id, observaciones)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (empresa_id, cliente_id, codigo, nombre, ubicacion_carga_id, lugar_carga_texto, destino_descripcion, hora_habitual, contacto_cliente_id, observaciones)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       empresaId,
       input.clienteId,
@@ -251,6 +280,7 @@ export async function crearRuta(
       input.nombre?.trim() || null,
       input.ubicacionCargaId ?? null,
       lugarCargaTexto,
+      input.destinoDescripcion?.trim() || null,
       input.horaHabitual?.trim() || null,
       input.contactoClienteId ?? null,
       input.observaciones?.trim() || null,
@@ -279,11 +309,11 @@ export async function actualizarRuta(
   if (!codigo) throw new Error("Código de ruta requerido.");
   if (codigo !== actual.codigo) {
     const existente = await query<RowDataPacket[]>(
-      "SELECT id FROM tms_cliente_rutas WHERE empresa_id = ? AND cliente_id = ? AND codigo = ? AND id <> ? LIMIT 1",
-      [empresaId, actual.clienteId, codigo, id],
+      "SELECT id FROM tms_cliente_rutas WHERE empresa_id = ? AND codigo = ? AND id <> ? LIMIT 1",
+      [empresaId, codigo, id],
     );
     if (existente[0]) {
-      throw new Error(`El código "${codigo}" ya existe para este cliente.`);
+      throw new Error(`El código "${codigo}" ya existe en esta empresa (el código es único, no por cliente).`);
     }
   }
 
@@ -296,14 +326,17 @@ export async function actualizarRuta(
 
   await execute(
     `UPDATE tms_cliente_rutas
-     SET codigo = ?, nombre = ?, ubicacion_carga_id = ?, lugar_carga_texto = ?, hora_habitual = ?,
-         contacto_cliente_id = ?, observaciones = ?, activo = ?
+     SET codigo = ?, nombre = ?, ubicacion_carga_id = ?, lugar_carga_texto = ?, destino_descripcion = ?,
+         hora_habitual = ?, contacto_cliente_id = ?, observaciones = ?, activo = ?
      WHERE id = ? AND empresa_id = ?`,
     [
       codigo,
       cambios.nombre !== undefined ? cambios.nombre?.trim() || null : actual.nombre,
       ubicacionCargaIdEfectiva,
       lugarCargaTextoEfectivo,
+      cambios.destinoDescripcion !== undefined
+        ? cambios.destinoDescripcion?.trim() || null
+        : actual.destinoDescripcion,
       cambios.horaHabitual !== undefined ? cambios.horaHabitual?.trim() || null : actual.horaHabitual,
       cambios.contactoClienteId !== undefined
         ? cambios.contactoClienteId ?? null

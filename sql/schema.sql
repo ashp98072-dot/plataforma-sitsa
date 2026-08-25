@@ -591,6 +591,16 @@ CREATE TABLE IF NOT EXISTS tms_planes_viaje (
   -- ruta viva, que puede cambiar o desactivarse después).
   ruta_id INT NULL,
   ruta_codigo_historico VARCHAR(40) NULL,
+  -- VIAT-4b: fotografía histórica adicional (destino + contacto) — ver
+  -- sql/migrate-2026-08-viat-4b-rutas-correcciones.sql. El reporte
+  -- tradicional usa lugar_descarga_historico, NUNCA "primera parada".
+  -- Los contacto_*_historico son la copia de nombre/cargo/teléfono en el
+  -- momento; si el contacto del cliente cambia después, este viaje ya
+  -- creado no se ve afectado.
+  lugar_descarga_historico VARCHAR(300) NULL,
+  contacto_nombre_historico VARCHAR(160) NULL,
+  contacto_cargo_historico VARCHAR(120) NULL,
+  contacto_telefono_historico VARCHAR(80) NULL,
   estado VARCHAR(40) NOT NULL DEFAULT 'Programado',
   notas TEXT NULL,
   UNIQUE KEY uq_plan (empresa_id, codigo),
@@ -728,13 +738,21 @@ CREATE TABLE IF NOT EXISTS tms_cliente_rutas (
   nombre VARCHAR(200) NULL,
   ubicacion_carga_id INT NULL,
   lugar_carga_texto VARCHAR(300) NULL,
+  -- VIAT-4b: descripción operativa completa del destino (texto libre,
+  -- formato tipo "RUTA-X - punto1-punto2-punto3"), confirmada contra el
+  -- Excel real de Operaciones — DISTINTA de tms_cliente_ruta_paradas (paradas
+  -- estructuradas con orden, que se mantienen en paralelo).
+  destino_descripcion VARCHAR(300) NULL,
   hora_habitual VARCHAR(20) NULL,
   contacto_cliente_id INT NULL,
   observaciones VARCHAR(300) NULL,
   activo TINYINT(1) NOT NULL DEFAULT 1,
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_tmsclirutas_codigo (empresa_id, cliente_id, codigo),
+  -- VIAT-4b: único POR EMPRESA (no por cliente) — confirmado contra el
+  -- Excel real: 147 códigos, 147 únicos, funciona como identificador
+  -- global del catálogo.
+  UNIQUE KEY uq_tmsclirutas_codigo (empresa_id, codigo),
   INDEX idx_tmsclirutas_cliente (empresa_id, cliente_id, activo),
   INDEX idx_tmsclirutas_codigo (empresa_id, codigo),
   CONSTRAINT fk_tmsclirutas_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,

@@ -145,6 +145,8 @@ export async function GET(req: Request, ctx: Ctx) {
               p.hora_carga, p.estado, p.tipo_traslado, p.notas,
               DATE_FORMAT(p.regreso_estimado, '%Y-%m-%dT%H:%i') AS regreso_estimado,
               p.tarifa_comercial, p.referencia_cliente, p.ruta_id, p.ruta_codigo_historico,
+              p.lugar_descarga_historico, p.contacto_nombre_historico, p.contacto_cargo_historico,
+              p.contacto_telefono_historico,
               c.nombre AS cliente, u.placa, pil.nombre AS piloto, aux.nombre AS auxiliar,
               p.piloto_id, p.auxiliar_id, pil.id_empleado AS piloto_empleado_id,
               emp_pil.telefono AS piloto_telefono,
@@ -295,11 +297,20 @@ const schema = z.object({
   auxiliarEmpleadoIds: z.array(z.number().int().positive()).max(8).optional(),
   lugarCarga: z.string().optional(),
   lugarDescarga: z.string().optional(),
-  // VIAT-4: de qué ruta maestra (tms_cliente_rutas) salió la fotografía
-  // copiada a este viaje — puramente informativo/histórico, ver
-  // sql/migrate-2026-08-viat-4-contactos-rutas.sql.
+  // VIAT-4/VIAT-4b: de qué ruta maestra (tms_cliente_rutas) salió la
+  // fotografía copiada a este viaje — puramente informativo/histórico,
+  // ver sql/migrate-2026-08-viat-4-contactos-rutas.sql y
+  // sql/migrate-2026-08-viat-4b-rutas-correcciones.sql. El reporte
+  // tradicional lee lugarDescargaHistorico directamente, nunca "primera
+  // parada". contacto*Historico es la copia de nombre/cargo/teléfono en
+  // el momento — un cambio posterior del contacto del cliente no debe
+  // alterar este viaje ya creado.
   rutaId: z.number().int().positive().optional(),
   rutaCodigo: z.string().max(40).optional(),
+  lugarDescargaHistorico: z.string().max(300).optional(),
+  contactoNombreHistorico: z.string().max(160).optional(),
+  contactoCargoHistorico: z.string().max(120).optional(),
+  contactoTelefonoHistorico: z.string().max(80).optional(),
   paradas: z
     .array(
       z.object({
@@ -669,8 +680,8 @@ export async function POST(req: Request, ctx: Ctx) {
       try {
         const result = await execute(
           `INSERT INTO tms_planes_viaje
-            (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, referencia_cliente, ruta_id, ruta_codigo_historico, notas, estado)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado')`,
+            (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado')`,
           [
             empresaId,
             codigoFinal,
@@ -688,6 +699,10 @@ export async function POST(req: Request, ctx: Ctx) {
             d.referenciaCliente?.trim() || null,
             d.rutaId ?? null,
             d.rutaCodigo?.trim() || null,
+            d.lugarDescargaHistorico?.trim() || null,
+            d.contactoNombreHistorico?.trim() || null,
+            d.contactoCargoHistorico?.trim() || null,
+            d.contactoTelefonoHistorico?.trim() || null,
             d.notas ?? null,
           ],
         );
@@ -781,9 +796,14 @@ const patchSchema = z.object({
   regresoEstimado: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/).nullable().optional(),
   tarifaComercial: z.number().nonnegative().nullable().optional(),
   referenciaCliente: z.string().max(160).nullable().optional(),
-  // VIAT-4: igual que en el POST — fotografía histórica de la ruta usada.
+  // VIAT-4/VIAT-4b: igual que en el POST — fotografía histórica de la
+  // ruta usada.
   rutaId: z.number().int().positive().optional(),
   rutaCodigo: z.string().max(40).optional(),
+  lugarDescargaHistorico: z.string().max(300).optional(),
+  contactoNombreHistorico: z.string().max(160).optional(),
+  contactoCargoHistorico: z.string().max(120).optional(),
+  contactoTelefonoHistorico: z.string().max(80).optional(),
   paradas: z
     .array(
       z.object({
@@ -1342,7 +1362,11 @@ export async function PATCH(req: Request, ctx: Ctx) {
         tarifa_comercial = CASE WHEN ? THEN ? ELSE tarifa_comercial END,
         referencia_cliente = CASE WHEN ? THEN ? ELSE referencia_cliente END,
         ruta_id = COALESCE(?, ruta_id),
-        ruta_codigo_historico = COALESCE(?, ruta_codigo_historico)
+        ruta_codigo_historico = COALESCE(?, ruta_codigo_historico),
+        lugar_descarga_historico = COALESCE(?, lugar_descarga_historico),
+        contacto_nombre_historico = COALESCE(?, contacto_nombre_historico),
+        contacto_cargo_historico = COALESCE(?, contacto_cargo_historico),
+        contacto_telefono_historico = COALESCE(?, contacto_telefono_historico)
        WHERE id = ? AND empresa_id = ?`,
       [
         d.fechaPlan ?? null,
@@ -1360,6 +1384,10 @@ export async function PATCH(req: Request, ctx: Ctx) {
         d.referenciaCliente?.trim() || null,
         d.rutaId ?? null,
         d.rutaCodigo?.trim() || null,
+        d.lugarDescargaHistorico?.trim() || null,
+        d.contactoNombreHistorico?.trim() || null,
+        d.contactoCargoHistorico?.trim() || null,
+        d.contactoTelefonoHistorico?.trim() || null,
         d.id,
         empresaId,
       ],

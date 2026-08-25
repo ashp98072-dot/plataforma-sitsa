@@ -42,6 +42,7 @@ type ClienteRuta = {
   nombre: string | null;
   ubicacionCargaId: number | null;
   lugarCargaTexto: string | null;
+  destinoDescripcion: string | null;
   horaHabitual: string | null;
   contactoClienteId: number | null;
   contactoNombre: string | null;
@@ -62,6 +63,7 @@ const FORM_VACIO = {
   nombre: "",
   ubicacionCargaId: null as number | null,
   lugarCargaTexto: "",
+  destinoDescripcion: "",
   horaHabitual: "",
   contactoClienteId: null as number | null,
   observaciones: "",
@@ -70,10 +72,16 @@ const FORM_VACIO = {
 /**
  * VIAT-4 (punto 2) — Operaciones > Rutas: catálogo maestro de rutas/
  * servicios preconfigurados por cliente (de la hoja "CODIGOS DATA" del
- * Excel real). Buscar por código, cliente o nombre; crear/editar/activar-
- * desactivar (nunca hard-delete). Reutiliza ClienteSearch (ya existente),
- * tms_cliente_ubicaciones (VIAT-1) y tms_cliente_contactos (VIAT-4,
- * arriba) — no duplica direcciones ni teléfonos.
+ * Excel real). Buscar por código, cliente, nombre o descripción de
+ * destino; crear/editar/activar-desactivar (nunca hard-delete). Reutiliza
+ * ClienteSearch (ya existente), tms_cliente_ubicaciones (VIAT-1) y
+ * tms_cliente_contactos (VIAT-4) — no duplica direcciones ni teléfonos.
+ *
+ * VIAT-4b — código único POR EMPRESA (confirmado contra el Excel real:
+ * 147 registros, 147 códigos únicos). `destinoDescripcion` es la
+ * descripción operativa completa del destino (texto libre, formato tipo
+ * "RUTA-X - punto1-punto2-punto3"), SEPARADA de las paradas estructuradas
+ * de abajo — ambas se guardan y se muestran, ninguna reemplaza a la otra.
  */
 export default function RutasPage() {
   const slug = String(useParams().slug);
@@ -177,6 +185,7 @@ export default function RutasPage() {
       nombre: r.nombre ?? "",
       ubicacionCargaId: r.ubicacionCargaId,
       lugarCargaTexto: r.lugarCargaTexto ?? "",
+      destinoDescripcion: r.destinoDescripcion ?? "",
       horaHabitual: r.horaHabitual ?? "",
       contactoClienteId: r.contactoClienteId,
       observaciones: r.observaciones ?? "",
@@ -211,6 +220,7 @@ export default function RutasPage() {
         nombre: form.nombre.trim() || undefined,
         ubicacionCargaId: form.ubicacionCargaId ?? undefined,
         lugarCargaTexto: form.lugarCargaTexto.trim() || undefined,
+        destinoDescripcion: form.destinoDescripcion.trim() || undefined,
         horaHabitual: form.horaHabitual.trim() || undefined,
         contactoClienteId: form.contactoClienteId ?? undefined,
         observaciones: form.observaciones.trim() || undefined,
@@ -370,6 +380,20 @@ export default function RutasPage() {
                 onChange={(e) => setForm((f) => ({ ...f, horaHabitual: e.target.value }))}
               />
             </label>
+            <label className="text-xs text-[var(--muted)] sm:col-span-3">
+              Destino (descripción operativa completa — como la usa Operaciones, ej. &quot;RUTA-A -
+              punto1-punto2-punto3&quot;)
+              <input
+                className={`${inputCls} mt-0.5 w-full`}
+                value={form.destinoDescripcion}
+                onChange={(e) => setForm((f) => ({ ...f, destinoDescripcion: e.target.value }))}
+              />
+              <span className="mt-0.5 block text-[10px]">
+                Esta descripción es lo que sale en el reporte tradicional (columna &quot;Lugar de
+                Descarga&quot;). Las paradas estructuradas de abajo son un dato aparte, para
+                seguimiento operativo — no la reemplazan.
+              </span>
+            </label>
 
             <label className="text-xs text-[var(--muted)] sm:col-span-2">
               Contacto del cliente
@@ -398,7 +422,7 @@ export default function RutasPage() {
           </div>
 
           <div className="space-y-2 rounded border border-[var(--border)] p-3">
-            <p className="text-xs font-medium">Destinos / paradas (uno o varios, con orden)</p>
+            <p className="text-xs font-medium">Paradas estructuradas (opcional, uno o varios puntos con orden — para seguimiento operativo, aparte de la descripción de destino)</p>
             {paradasForm.map((p, idx) => (
               <div key={idx} className="flex flex-wrap items-center gap-2">
                 <span className="w-6 text-xs text-[var(--muted)]">{idx + 1}.</span>
@@ -472,7 +496,8 @@ export default function RutasPage() {
               <th className="px-3 py-2">Carga</th>
               <th className="px-3 py-2">Hora</th>
               <th className="px-3 py-2">Contacto</th>
-              <th className="px-3 py-2">Destinos</th>
+              <th className="px-3 py-2">Destino (descripción)</th>
+              <th className="px-3 py-2">Paradas estructuradas</th>
               <th className="px-3 py-2">Estado</th>
               <th className="px-3 py-2">Acciones</th>
             </tr>
@@ -488,6 +513,7 @@ export default function RutasPage() {
                 <td className="px-3 py-2 text-[11px]">
                   {r.contactoNombre ? `${r.contactoNombre}${r.contactoTelefono ? ` · ${r.contactoTelefono}` : ""}` : "—"}
                 </td>
+                <td className="px-3 py-2 text-[11px]">{r.destinoDescripcion || "—"}</td>
                 <td className="px-3 py-2 text-[11px]">
                   {r.paradas.length ? r.paradas.map((p) => p.lugarNombre).join(" → ") : "—"}
                 </td>
@@ -512,7 +538,7 @@ export default function RutasPage() {
             ))}
             {!rutasFiltradas.length && !loading ? (
               <tr>
-                <td colSpan={9} className="px-3 py-4 text-[var(--muted)]">Sin rutas con este filtro.</td>
+                <td colSpan={10} className="px-3 py-4 text-[var(--muted)]">Sin rutas con este filtro.</td>
               </tr>
             ) : null}
           </tbody>

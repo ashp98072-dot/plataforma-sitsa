@@ -59,9 +59,13 @@ export type Plan = {
   regreso_estimado: string | null;
   tarifa_comercial: number | null;
   referencia_cliente: string | null;
-  /** VIAT-4: fotografía histórica de la ruta maestra usada al armar el viaje (informativo). */
+  /** VIAT-4/VIAT-4b: fotografía histórica de la ruta usada al armar el viaje. */
   ruta_id: number | null;
   ruta_codigo_historico: string | null;
+  lugar_descarga_historico: string | null;
+  contacto_nombre_historico: string | null;
+  contacto_cargo_historico: string | null;
+  contacto_telefono_historico: string | null;
   notas: string | null;
   cliente: string | null;
   placa: string | null;

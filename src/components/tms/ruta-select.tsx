@@ -18,6 +18,7 @@ export type RutaOpt = {
   nombre: string | null;
   ubicacionCargaId: number | null;
   lugarCargaTexto: string | null;
+  destinoDescripcion: string | null;
   horaHabitual: string | null;
   contactoClienteId: number | null;
   contactoNombre: string | null;
@@ -112,7 +113,7 @@ export function RutaSelect({ slug, clienteId, value, inputClassName, onSeleccion
       <input
         id={listId}
         className={`${inputClassName} mt-1 w-full`}
-        placeholder="Ej. 8, o QueDely, o nombre de la ruta…"
+        placeholder="Ej. 8, o el nombre del cliente, o nombre de la ruta…"
         value={texto}
         autoComplete="off"
         role="combobox"
@@ -171,7 +172,7 @@ export function RutaSelect({ slug, clienteId, value, inputClassName, onSeleccion
                 <span className="text-[10px] text-[var(--muted)]">
                   {r.lugarCargaTexto || "Sin carga configurada"}
                   {r.horaHabitual ? ` · ${r.horaHabitual}` : ""}
-                  {r.paradas.length ? ` · ${r.paradas.length} destino(s)` : ""}
+                  {r.destinoDescripcion ? ` → ${r.destinoDescripcion}` : ""}
                 </span>
               </button>
             </li>
