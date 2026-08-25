@@ -96,8 +96,8 @@ export async function GET(req: Request, ctx: Ctx) {
   for (const cuota of cuotas) {
     const [anio, mes, dia] = cuota.fechaProgramada.split("-").map(Number);
     if (!anio || !mes || !dia) continue;
-    const quincena = dia <= 15 ? "Q1" : "Q2";
-    const clave = `${anio}-${String(mes).padStart(2, "0")}-${quincena}`;
+    const quincena = dia <= 15 ? "Primera quincena" : "Segunda quincena";
+    const clave = `${anio}-${String(mes).padStart(2, "0")}-${dia <= 15 ? "01" : "02"}`;
     const actual = porQuincena.get(clave) ?? {
       quincena,
       mes: new Intl.DateTimeFormat("es-GT", { month: "long", timeZone: "UTC" }).format(
