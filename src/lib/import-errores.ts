@@ -38,3 +38,16 @@ export function identidadVehiculoImport(opts: {
   if (desc) return `Vehículo (${desc})`;
   return "Vehículo sin placa";
 }
+
+/** VIAT-5 — identidad de una fila de importación de rutas (Operaciones > Rutas > Importar Excel). */
+export function identidadRutaImport(opts: {
+  codigo?: string | null;
+  cliente?: string | null;
+}): string {
+  const codigo = (opts.codigo ?? "").trim();
+  const cliente = (opts.cliente ?? "").trim();
+  if (codigo && cliente) return `Código ${codigo} (${cliente})`;
+  if (codigo) return `Código ${codigo}`;
+  if (cliente) return `Ruta de ${cliente} sin código`;
+  return "Fila sin código";
+}
