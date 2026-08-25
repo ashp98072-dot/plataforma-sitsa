@@ -1163,6 +1163,55 @@ export async function PATCH(req: Request, ctx: Ctx) {
     auxPersonalIdsNuevo = auxIds;
   }
 
+  // Mejora Programación — bloquear el cambio de personal si a quien se
+  // quita/reemplaza ya se le procesó un viático (AUTORIZADO/ENTREGADO/
+  // LIQUIDADO). Solo corre si esta solicitud REALMENTE toca piloto y/o
+  // auxiliares (mismo gate que ya decide si se llama a
+  // sincronizarViaticosPlan más abajo) — editar notas/tarifa/hora/etc. sin
+  // tocar personal nunca se bloquea por esto. Se calcula el personal
+  // REALMENTE removido (antes menos el conjunto final que aplicaría este
+  // PATCH) y se consulta su viático ANTES de escribir nada — 409 sin
+  // ningún cambio si alguno no está PROGRAMADO.
+  const cambiaPersonal = pilotoId !== undefined || auxPersonalIdsLegado != null || auxPersonalIdsNuevo != null;
+  if (cambiaPersonal) {
+    const pilotoFinal = pilotoId !== undefined ? pilotoId : antes.pilotoId;
+    const auxiliaresFinal = auxPersonalIdsNuevo ?? auxPersonalIdsLegado ?? antesAuxiliaresIds;
+
+    const removidos: { personalId: number; nombre: string }[] = [];
+    if (antes.pilotoId != null && antes.pilotoId !== pilotoFinal) {
+      removidos.push({ personalId: antes.pilotoId, nombre: antes.piloto || `Piloto #${antes.pilotoId}` });
+    }
+    antesAuxiliaresIds.forEach((id, i) => {
+      if (!auxiliaresFinal.includes(id)) {
+        removidos.push({ personalId: id, nombre: antesAuxiliaresNombres[i] || `Auxiliar #${id}` });
+      }
+    });
+
+    if (removidos.length) {
+      const viaticosRemovidos = await query<RowDataPacket[]>(
+        `SELECT personal_id, estado FROM tms_viaticos
+         WHERE plan_id = ? AND personal_id IN (${removidos.map(() => "?").join(",")}) AND estado != 'PROGRAMADO'`,
+        [d.id, ...removidos.map((r) => r.personalId)],
+      );
+      if (viaticosRemovidos.length) {
+        const estadoPorPersonal = new Map(viaticosRemovidos.map((r) => [Number(r.personal_id), String(r.estado)]));
+        const bloqueados = removidos.filter((r) => estadoPorPersonal.has(r.personalId));
+        const detalle = bloqueados
+          .map((b) => `${b.nombre} (viático ${estadoPorPersonal.get(b.personalId)!.toLowerCase()})`)
+          .join(", ");
+        return NextResponse.json(
+          {
+            error:
+              bloqueados.length === 1
+                ? `No se puede quitar a ${bloqueados[0].nombre} del viaje porque su viático ya fue ${estadoPorPersonal.get(bloqueados[0].personalId)!.toLowerCase()}.`
+                : `No se puede modificar el personal del viaje: ${detalle} — su(s) viático(s) ya fue(ron) procesado(s).`,
+          },
+          { status: 409 },
+        );
+      }
+    }
+  }
+
   // Placa legada: solo normaliza el texto aquí. El upsert real de
   // tms_unidades (categoría 1 de la transacción) se ejecuta más abajo.
   const placaNorm = d.placa?.trim() ? d.placa.trim().toUpperCase() : undefined;
