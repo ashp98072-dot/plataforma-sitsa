@@ -188,7 +188,7 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
     const kmMinimo = viajeAbierto.kmCarga ?? viajeAbierto.kmSalida;
     if (odometroFuncional && (!Number.isFinite(km) || kmMinimo == null || Number(km) < kmMinimo)) return setError("El kilometraje final no puede ser menor al último registrado.");
     if (cierreExcepcional && motivoExcepcional.trim().length < 10) return setError("Describe el contratiempo mayor con al menos 10 caracteres.");
-    if (!cierreExcepcional && !rutaCompleta) return setError("Completa toda la ruta y regresa al predio antes de cerrar.");
+    if (!cierreExcepcional && !rutaCompleta) return setError("Completa toda la ruta y regresa al predio antes de finalizar.");
     const gps = cierreExcepcional ? {} : await obtenerGps();
     await enviar({ accion: "llegada", viajeId: viajeAbierto.id, kmLlegada: km, observaciones: observaciones.trim() || undefined, cierreExcepcional, motivoExcepcional: cierreExcepcional ? motivoExcepcional.trim() : undefined, ...gps });
   }
@@ -271,14 +271,20 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
     </form> : null}
 
     {tipo === "Piloto" && viajeAbierto ? <form onSubmit={onLlegada} className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
-      <h2 className="font-semibold">Cerrar viaje</h2>
-      {!rutaCompleta && !cierreExcepcional ? <p className="mt-2 text-sm text-amber-300">El cierre normal se habilitará cuando completes la carga, todas las paradas y regreses al predio.</p> : null}
+      {/* OPS-1: el piloto EJECUTA Y FINALIZA la operación — no "cierra" el
+          viaje administrativamente, eso lo hace Jefe/Gerente de
+          Operaciones desde TMS/Programación después de revisar el
+          expediente (ver src/lib/tms/cierre-viaje.ts). El backend de esta
+          acción ya deja el plan en "Descargado" (pendiente de cierre),
+          nunca en "Cerrado" — solo se ajusta el texto visible aquí. */}
+      <h2 className="font-semibold">Finalizar operación</h2>
+      {!rutaCompleta && !cierreExcepcional ? <p className="mt-2 text-sm text-amber-300">La finalización normal se habilitará cuando completes la carga, todas las paradas y regreses al predio.</p> : null}
       <label className="mt-4 flex items-start gap-2 text-sm text-[var(--muted)]"><input type="checkbox" className="mt-1" checked={cierreExcepcional} onChange={(e) => setCierreExcepcional(e.target.checked)} /> Cierre excepcional por contratiempo mayor (por ejemplo, avería de la unidad)</label>
       {cierreExcepcional ? <label className="mt-3 block text-sm text-[var(--muted)]">Motivo obligatorio<textarea className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" rows={3} minLength={10} maxLength={500} value={motivoExcepcional} onChange={(e) => setMotivoExcepcional(e.target.value)} required /></label> : null}
       {rutaCompleta || cierreExcepcional ? <>
-        {odometroFuncional ? <label className="mt-3 block text-sm text-[var(--muted)]">Kilometraje al cerrar<input type="number" min={viajeAbierto.kmCarga ?? viajeAbierto.kmSalida ?? 0} className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={kmLlegada} onChange={(e) => setKmLlegada(e.target.value)} required /></label> : null}
+        {odometroFuncional ? <label className="mt-3 block text-sm text-[var(--muted)]">Kilometraje al finalizar<input type="number" min={viajeAbierto.kmCarga ?? viajeAbierto.kmSalida ?? 0} className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={kmLlegada} onChange={(e) => setKmLlegada(e.target.value)} required /></label> : null}
         {!cierreExcepcional ? <label className="mt-3 block text-sm text-[var(--muted)]">Observaciones<textarea className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" rows={2} maxLength={500} value={observaciones} onChange={(e) => setObservaciones(e.target.value)} /></label> : null}
-        <button className={`mt-4 rounded-lg px-4 py-2.5 font-medium text-white disabled:opacity-50 ${cierreExcepcional ? "bg-red-700" : "bg-[var(--accent)]"}`} disabled={loading}>{cierreExcepcional ? "Cerrar por contratiempo mayor" : "Registrar llegada y cerrar viaje"}</button>
+        <button className={`mt-4 rounded-lg px-4 py-2.5 font-medium text-white disabled:opacity-50 ${cierreExcepcional ? "bg-red-700" : "bg-[var(--accent)]"}`} disabled={loading}>{cierreExcepcional ? "Cerrar por contratiempo mayor" : "Registrar llegada y finalizar operación"}</button>
       </> : null}
     </form> : null}
 

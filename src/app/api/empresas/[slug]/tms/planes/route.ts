@@ -43,17 +43,29 @@ type Ctx = { params: Promise<{ slug: string }> };
 type AdvertenciaPatch = { tipo: string; mensaje: string };
 
 /**
- * Fase P5.1c (ajuste final confirmado): reglas por estado del plan para
- * ediciones desde Programación. "Programado" Y "Cargado" (no listados aquí)
- * admiten edición operativa completa — "Cargado" NO se trata como "En
- * ruta". "En ruta" admite únicamente notas (bloquea piloto, auxiliares,
- * unidad, fecha, paradas y horaCarga — horaCarga es planificación; la hora
- * real de salida vive en flota_viajes.hora_salida y no debe alterarse
- * retrospectivamente una vez iniciado el viaje). "Descargado", "Cerrado" y
- * "Cancelado" bloquean toda edición.
+ * Fase P5.1c (ajuste final confirmado) + OPS-1 (revisión): reglas por
+ * estado del plan para ediciones desde Programación. "Programado" Y
+ * "Cargado" (no listados aquí) admiten edición operativa completa —
+ * "Cargado" NO se trata como "En ruta". "En ruta" admite únicamente notas
+ * (bloquea piloto, auxiliares, unidad, fecha, paradas y horaCarga —
+ * horaCarga es planificación; la hora real de salida vive en
+ * flota_viajes.hora_salida y no debe alterarse retrospectivamente una vez
+ * iniciado el viaje).
+ *
+ * OPS-1: "Descargado" (operación finalizada por el piloto, pendiente de
+ * cierre administrativo) YA NO bloquea edición — Operaciones necesita
+ * poder corregir lo que realmente ocurrió (destino, tarifa, personal,
+ * observaciones…) ANTES del cierre, porque la ejecución real puede haber
+ * diferido de lo programado. Las protecciones existentes (disponibilidad,
+ * traslapes, viáticos ya avanzados, snapshots históricos) siguen
+ * aplicando sin cambios — "editable" no significa "sin reglas". Solo
+ * "Cerrado" y "Cancelado" bloquean toda edición; el cierre en sí (
+ * Descargado -> Cerrado) es una acción aparte, ver
+ * /tms/planes/[id]/cerrar y src/lib/tms/cierre-viaje.ts — nunca ocurre
+ * vía este PATCH general.
  */
 const ESTADOS_SOLO_NOTAS = new Set(["En ruta"]);
-const ESTADOS_BLOQUEADOS = new Set(["Descargado", "Cerrado", "Cancelado"]);
+const ESTADOS_BLOQUEADOS = new Set(["Cerrado", "Cancelado"]);
 
 /**
  * Fase P5.1b: helper conn-aware para escrituras. Si se pasa `conn` (dentro
@@ -142,7 +154,9 @@ export async function GET(req: Request, ctx: Ctx) {
   const [rows, disp] = await Promise.all([
     query<RowDataPacket[]>(
       `SELECT p.id, p.codigo, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan,
-              p.hora_carga, p.estado, p.tipo_traslado, p.notas,
+              p.hora_carga, p.estado, p.cerrado_por,
+              DATE_FORMAT(p.cerrado_en, '%Y-%m-%dT%H:%i') AS cerrado_en,
+              p.tipo_traslado, p.notas,
               DATE_FORMAT(p.regreso_estimado, '%Y-%m-%dT%H:%i') AS regreso_estimado,
               p.tarifa_comercial, p.referencia_cliente, p.ruta_id, p.ruta_codigo_historico,
               p.lugar_descarga_historico, p.contacto_nombre_historico, p.contacto_cargo_historico,

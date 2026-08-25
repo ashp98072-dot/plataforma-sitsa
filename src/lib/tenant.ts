@@ -367,6 +367,48 @@ export async function requireTenantViaticosPagar(
 }
 
 /**
+ * OPS-1 — cerrar administrativamente un viaje (Descargado -> Cerrado).
+ * Permiso EXPLÍCITO e independiente del rol — JefeOperaciones/
+ * GerenteOperaciones lo traen por defecto, pero cualquier rol puede
+ * recibirlo desde Usuarios y ningún endpoint de cierre confía en
+ * `rol === "JefeOperaciones"` como autoridad. Mismo patrón exacto que
+ * requireTenantViaticosAutorizar/Pagar.
+ */
+export async function requireTenantViajesCerrar(
+  slug: string,
+  accion: AccionPermiso = "ver",
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length
+    ? empresa.modulos
+    : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("tms")) {
+    return {
+      error: NextResponse.json(
+        { error: "Esta empresa no tiene el módulo TMS." },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  if (!tienePermiso(perms, "viajes_cerrar", accion)) {
+    return {
+      error: NextResponse.json(
+        { error: `Sin permiso para ${accion} el cierre de viajes.` },
+        { status: 403 },
+      ),
+    };
+  }
+  return { session, empresa };
+}
+
+/**
  * VIAT-3 — módulo "Operaciones > Viáticos": acepta CUALQUIERA de los tres
  * permisos de viáticos (`viaticos`, `viaticos_autorizar`, `viaticos_pagar`)
  * con la acción pedida — no crea un permiso nuevo, solo reutiliza los tres

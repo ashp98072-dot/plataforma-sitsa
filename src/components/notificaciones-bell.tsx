@@ -28,10 +28,19 @@ export function NotificacionesBell({ slug, rol }: Props) {
   const [msg, setMsg] = useState("");
   const ref = useRef<HTMLDivElement>(null);
 
+  // OPS-1: se agregan los roles operativos nuevos — el filtrado real de
+  // QUÉ alerta ve cada quien ya lo hace el propio endpoint por permiso
+  // explícito (viaticos_autorizar/viaticos_pagar/viajes_cerrar/
+  // facturacion); esto solo evita la petición para roles que nunca
+  // tendrían nada que ver aquí (RRHH, Marcaje, Piloto, Visualizador…).
   const puedeVer =
     rol === "Admin" ||
     rol === "RRHH" ||
     rol === "Operaciones" ||
+    rol === "GerenteOperaciones" ||
+    rol === "JefeOperaciones" ||
+    rol === "AuxiliarOperaciones" ||
+    rol === "Facturador" ||
     rol === "CoordinadorPredios";
 
   const cargar = useCallback(async (silencioso = false) => {

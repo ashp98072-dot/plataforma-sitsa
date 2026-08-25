@@ -46,6 +46,17 @@ export async function GET(_req: Request, ctx: Ctx) {
     rol === "Operaciones" ||
     rol === "CoordinadorPredios";
 
+  // OPS-1: perms se calcula UNA vez aquí y se reutiliza en todas las
+  // secciones de abajo (antes cada sección recalculaba las suyas por
+  // separado) — mismo criterio ya usado en la sección de recordatorios,
+  // ahora extendido a viáticos/cierre/facturación. Admin siempre puede
+  // ver todo, sin consultar la matriz.
+  const empresaId = guard.empresa.id;
+  const perms =
+    rol === "Admin" ? null : await permisosEfectivos(guard.session.id, rol as RolGlobal);
+  const puede = (modulo: string, accion: "ver" | "editar" = "ver") =>
+    rol === "Admin" || Boolean(perms && tienePermiso(perms, modulo, accion));
+
   // Permisos externos pendientes
   try {
     const rows = await query<RowDataPacket[]>(
@@ -131,8 +142,6 @@ export async function GET(_req: Request, ctx: Ctx) {
   // Licencia de conducir y papelería de vehículo son asunto de Flota (los
   // pilotos/vehículos no pueden operar sin eso), el resto es asunto de RRHH.
   try {
-    const perms =
-      rol === "Admin" ? null : await permisosEfectivos(guard.session.id, rol as RolGlobal);
     const puedeFlota =
       rol === "Admin" || (perms && tienePermiso(perms, "flota_vehiculos", "ver"));
     const puedeRrhh =
@@ -173,8 +182,6 @@ export async function GET(_req: Request, ctx: Ctx) {
   // polling no crea recordatorios ni modifica saldos. Los IDs son estables,
   // por lo que cada recarga reemplaza el feed y no duplica notificaciones.
   try {
-    const perms =
-      rol === "Admin" ? null : await permisosEfectivos(guard.session.id, rol as RolGlobal);
     const puedeVacaciones =
       rol === "Admin" ||
       rol === "RRHH" ||
@@ -230,6 +237,104 @@ export async function GET(_req: Request, ctx: Ctx) {
     }
   } catch (e) {
     console.error("[notificaciones] vacaciones:", e);
+  }
+
+  // OPS-1 — alertas derivadas de estados reales, reutilizando esta MISMA
+  // campana (sin tabla de notificaciones nueva, sin segundo sistema): cada
+  // conteo es un COUNT(...) directo sobre la máquina de estados ya
+  // existente, gateado por el permiso explícito correspondiente — nunca
+  // por rol. Un usuario sin el permiso simplemente no ve esa fila (ni el
+  // conteo se calcula para él).
+  if (puede("viaticos_autorizar", "ver")) {
+    try {
+      const rows = await query<RowDataPacket[]>(
+        `SELECT COUNT(*) AS c FROM tms_viaticos WHERE empresa_id = ? AND estado = 'PROGRAMADO'`,
+        [empresaId],
+      );
+      const c = Number(rows[0]?.c ?? 0);
+      if (c > 0) {
+        items.push({
+          id: "alerta-viaticos-autorizar",
+          tipo: "alerta",
+          titulo: "Viáticos pendientes de autorización",
+          detalle: `${c} viático(s) en estado PROGRAMADO`,
+          enlace: `/e/${slug}/viaticos`,
+          creadoAt: null,
+        });
+      }
+    } catch (e) {
+      console.error("[notificaciones] viaticos_autorizar:", e);
+    }
+  }
+
+  if (puede("viaticos_pagar", "ver")) {
+    try {
+      const rows = await query<RowDataPacket[]>(
+        `SELECT COUNT(*) AS c FROM tms_viaticos WHERE empresa_id = ? AND estado = 'AUTORIZADO'`,
+        [empresaId],
+      );
+      const c = Number(rows[0]?.c ?? 0);
+      if (c > 0) {
+        items.push({
+          id: "alerta-viaticos-pagar",
+          tipo: "alerta",
+          titulo: "Viáticos por pagar",
+          detalle: `${c} viático(s) autorizado(s), pendiente de entrega`,
+          enlace: `/e/${slug}/viaticos`,
+          creadoAt: null,
+        });
+      }
+    } catch (e) {
+      console.error("[notificaciones] viaticos_pagar:", e);
+    }
+  }
+
+  if (puede("viajes_cerrar", "ver")) {
+    try {
+      const rows = await query<RowDataPacket[]>(
+        `SELECT COUNT(*) AS c FROM tms_planes_viaje WHERE empresa_id = ? AND estado = 'Descargado'`,
+        [empresaId],
+      );
+      const c = Number(rows[0]?.c ?? 0);
+      if (c > 0) {
+        items.push({
+          id: "alerta-viajes-cerrar",
+          tipo: "alerta",
+          titulo: "Viajes pendientes de cierre",
+          detalle: `${c} viaje(s) con operación finalizada, sin cierre administrativo`,
+          enlace: `/e/${slug}/programacion`,
+          creadoAt: null,
+        });
+      }
+    } catch (e) {
+      console.error("[notificaciones] viajes_cerrar:", e);
+    }
+  }
+
+  // OPS-1 (punto 17): todavía NO existe tabla de facturas — "facturable"
+  // en esta fase es únicamente estado = 'Cerrado'. Deliberadamente NO se
+  // llama "sin facturar" (eso implicaría saber si ya se facturó, lo cual
+  // requiere FACT-1 con su propia tabla y un NOT EXISTS contra ella).
+  if (puede("facturacion", "ver")) {
+    try {
+      const rows = await query<RowDataPacket[]>(
+        `SELECT COUNT(*) AS c FROM tms_planes_viaje WHERE empresa_id = ? AND estado = 'Cerrado'`,
+        [empresaId],
+      );
+      const c = Number(rows[0]?.c ?? 0);
+      if (c > 0) {
+        items.push({
+          id: "alerta-viajes-facturables",
+          tipo: "alerta",
+          titulo: "Viajes cerrados listos para facturación",
+          detalle: `${c} viaje(s) cerrado(s)`,
+          enlace: `/e/${slug}/tms`,
+          creadoAt: null,
+        });
+      }
+    } catch (e) {
+      console.error("[notificaciones] viajes_facturables:", e);
+    }
   }
 
   return NextResponse.json({

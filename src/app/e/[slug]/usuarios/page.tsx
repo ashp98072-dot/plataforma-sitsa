@@ -35,12 +35,20 @@ type Usuario = {
   permisos: PermisoModulo[];
 };
 
+// OPS-1: se agregan los 4 roles operativos nuevos; "Operaciones" se
+// mantiene (legado, usuarios existentes sin migrar) — ver
+// src/lib/roles.ts para la lista canónica (esta lista local solo existe
+// para el <select> de este formulario, no duplica lógica de permisos).
 const ROLES = [
   "Admin",
   "RRHH",
   "Marcaje",
   "Contabilidad",
   "Operaciones",
+  "GerenteOperaciones",
+  "JefeOperaciones",
+  "AuxiliarOperaciones",
+  "Facturador",
   "CoordinadorPredios",
   "CoordinadorCompras",
   "Piloto",

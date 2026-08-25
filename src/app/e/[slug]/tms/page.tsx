@@ -6,6 +6,8 @@ import Link from "next/link";
 import ViaticosConfigPanel from "@/components/tms/viaticos-config-panel";
 import ClienteUbicacionesAdmin from "@/components/tms/cliente-ubicaciones-admin";
 import ClienteContactosAdmin from "@/components/tms/cliente-contactos-admin";
+import { useEmpresaSession } from "@/lib/empresa-session";
+import { tienePermiso } from "@/lib/permisos-shared";
 
 /**
  * Operaciones → TMS / Logística — VIAT-1b/1c: centro de configuración/
@@ -60,6 +62,9 @@ type Plan = {
   fecha_plan: string;
   hora_carga: string | null;
   estado: string;
+  /** OPS-1: cierre administrativo (Descargado -> Cerrado). Null hasta que se cierra. */
+  cerrado_por: string | null;
+  cerrado_en: string | null;
   tipo_traslado: string | null;
   regreso_estimado: string | null;
   tarifa_comercial: number | null;
@@ -112,7 +117,13 @@ function labelAccionAud(accion: string): string {
     case "salida_viaje":
       return "Salida (piloto)";
     case "llegada_viaje":
-      return "Llegada / cierre";
+      // OPS-1: esta acción la registra el piloto al finalizar su
+      // operación (Portal) — deja el plan en "Descargado", NUNCA en
+      // "Cerrado". El cierre administrativo es una acción aparte, ver
+      // "cerrar_viaje" abajo.
+      return "Llegada (operación finalizada)";
+    case "cerrar_viaje":
+      return "Cerró viaje (Operaciones)";
     case "eliminar_evidencia":
       return "Eliminó evidencia";
     case "config_viatico":
@@ -123,6 +134,19 @@ function labelAccionAud(accion: string): string {
       return accion;
   }
 }
+
+// OPS-1: mismas etiquetas visibles que Programación
+// (programacion-client.tsx) — se repite aquí en vez de importar porque
+// ese archivo es "use client" propio de otra pantalla, mismo criterio ya
+// usado para otras constantes pequeñas duplicadas por pantalla en este
+// proyecto.
+const ESTADO_LABEL: Record<string, string> = {
+  Programado: "Programado",
+  "En ruta": "En ruta",
+  Descargado: "Pendiente de cierre",
+  Cerrado: "Cerrado",
+  Cancelado: "Cancelado",
+};
 
 function fechaHoraEvidencia(valor: string | null): string {
   if (!valor) return "Fecha no disponible";
@@ -192,6 +216,34 @@ export default function TmsPage() {
     const intervalo = window.setInterval(() => void cargarPlanes(false), 5000);
     return () => window.clearInterval(intervalo);
   }, [cargarPlanes]);
+
+  // OPS-1 — cierre administrativo desde TMS/Seguimiento (mismo endpoint que
+  // Programación; esta vista ya muestra hora de regreso/evidencias/
+  // incidencias del expediente, así que sirve como la "revisión antes de
+  // cerrar" sin construir un modal nuevo). El botón solo se OCULTA sin el
+  // permiso — la autoridad real es el 403 del endpoint.
+  const { permisos: permisosTms } = useEmpresaSession();
+  const puedeCerrarViaje = tienePermiso(permisosTms, "viajes_cerrar", "editar");
+  const [cerrandoId, setCerrandoId] = useState<number | null>(null);
+  const [errorCierre, setErrorCierre] = useState("");
+
+  async function cerrarViajeTms(planId: number) {
+    setCerrandoId(planId);
+    setErrorCierre("");
+    try {
+      const res = await fetch(`/api/empresas/${slug}/tms/planes/${planId}/cerrar`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setErrorCierre(data.error ?? "No se pudo cerrar el viaje.");
+        return;
+      }
+      await cargarPlanes(false);
+    } catch {
+      setErrorCierre("Error de conexión.");
+    } finally {
+      setCerrandoId(null);
+    }
+  }
 
   const planesFiltrados = useMemo(() => {
     return planes.filter((p) => {
@@ -369,7 +421,7 @@ export default function TmsPage() {
                       <td className="px-3 py-2">{p.cliente ?? "—"}</td>
                       <td className="px-3 py-2">{p.placa ?? "—"}</td>
                       <td className="px-3 py-2">{p.piloto ?? "—"}</td>
-                      <td className="px-3 py-2">{p.estado}</td>
+                      <td className="px-3 py-2">{ESTADO_LABEL[p.estado] ?? p.estado}</td>
                       <td className="px-3 py-2">{Number(p.evidencias ?? 0)}</td>
                       <td className="px-3 py-2">
                         <div className="flex flex-wrap gap-2 text-xs">
@@ -432,20 +484,37 @@ export default function TmsPage() {
                           <div className="mt-3 rounded-lg border border-[var(--border)] bg-black/10 p-3">
                             <div className="flex flex-wrap items-center justify-between gap-2">
                               <p className="text-xs font-semibold">Seguimiento operativo</p>
-                              <span className="text-[11px] text-sky-300">
-                                {paradasCompletadas.length}/{paradasRequeridas.length} paradas con evidencia
-                              </span>
+                              <div className="flex items-center gap-2">
+                                <span className="text-[11px] text-sky-300">
+                                  {paradasCompletadas.length}/{paradasRequeridas.length} paradas con evidencia
+                                </span>
+                                {p.estado === "Descargado" && puedeCerrarViaje ? (
+                                  <button
+                                    type="button"
+                                    disabled={cerrandoId === p.id}
+                                    onClick={() => void cerrarViajeTms(p.id)}
+                                    className="rounded bg-amber-700 px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
+                                  >
+                                    {cerrandoId === p.id ? "Cerrando…" : "Cerrar viaje"}
+                                  </button>
+                                ) : null}
+                              </div>
                             </div>
+                            {errorCierre && cerrandoId === null && p.estado === "Descargado" ? (
+                              <p className="mt-1 text-[11px] text-red-300">{errorCierre}</p>
+                            ) : null}
                             <p className="mt-1 text-xs">
                               {p.estado === "Programado"
                                 ? "Esperando que el piloto inicie el viaje."
                                 : p.estado === "En ruta" && siguienteParada
                                   ? `En ruta · Siguiente parada: ${siguienteParada.orden}. ${siguienteParada.lugar_nombre}`
                                   : p.estado === "En ruta"
-                                    ? "Ruta completada; pendiente regreso al predio y cierre del piloto."
+                                    ? "Ruta completada; pendiente regreso al predio y finalización de la operación."
                                     : p.estado === "Descargado"
-                                      ? "Viaje finalizado."
-                                      : `Estado actual: ${p.estado}`}
+                                      ? "Operación finalizada por el piloto — pendiente de cierre administrativo."
+                                      : p.estado === "Cerrado"
+                                        ? `Viaje cerrado${p.cerrado_por ? ` por ${p.cerrado_por}` : ""}${p.cerrado_en ? ` · ${p.cerrado_en.replace("T", " ")}` : ""}.`
+                                        : `Estado actual: ${p.estado}`}
                             </p>
 
                             {cargandoEvidencias && !evidenciasPlan.length ? (

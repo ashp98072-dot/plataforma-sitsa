@@ -55,6 +55,9 @@ export type Plan = {
   fecha_plan: string;
   hora_carga: string | null;
   estado: string;
+  /** OPS-1: cierre administrativo (Descargado -> Cerrado). Null hasta que se cierra. */
+  cerrado_por: string | null;
+  cerrado_en: string | null;
   tipo_traslado: string | null;
   regreso_estimado: string | null;
   tarifa_comercial: number | null;
@@ -96,7 +99,13 @@ type Rango = "hoy" | "manana" | "semana";
 const ESTADO_LABEL: Record<string, string> = {
   Programado: "Programado",
   "En ruta": "En ruta",
-  Descargado: "Finalizado", // Fase A: mismo valor interno, solo cambia la etiqueta visible.
+  // OPS-1: "Descargado" = operación finalizada por el piloto, pendiente de
+  // cierre administrativo por Operaciones — mismo valor interno, solo
+  // cambia la etiqueta visible (antes decía "Finalizado", lo cual no
+  // dejaba claro que todavía falta el cierre).
+  Descargado: "Pendiente de cierre",
+  Cerrado: "Cerrado",
+  Cancelado: "Cancelado",
 };
 
 // Mismas etiquetas/colores que ya usa Disponibilidad flota
@@ -119,7 +128,11 @@ const ESTADO_VEHICULO_BADGE: Record<EstadoVehiculo["estadoDisponibilidad"], stri
 const ESTADO_BADGE: Record<string, string> = {
   Programado: "bg-sky-900/50 text-sky-200",
   "En ruta": "bg-amber-900/50 text-amber-200",
-  Descargado: "bg-emerald-900/50 text-emerald-200",
+  // OPS-1: amber (pendiente de acción) en vez de verde — "Descargado"
+  // todavía requiere el cierre de Operaciones, no está terminado.
+  Descargado: "bg-amber-900/50 text-amber-200",
+  Cerrado: "bg-emerald-900/50 text-emerald-200",
+  Cancelado: "bg-rose-900/40 text-rose-200",
 };
 
 function normPlaca(p: string): string {
@@ -280,7 +293,8 @@ type FiltroRapido =
   | "sin_auxiliares"
   | "Programado"
   | "En ruta"
-  | "Descargado";
+  | "Descargado"
+  | "Cerrado";
 
 type DatosProgramacion = {
   planes: Plan[];
@@ -502,7 +516,8 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
       if (
         (filtroRapido === "Programado" ||
           filtroRapido === "En ruta" ||
-          filtroRapido === "Descargado") &&
+          filtroRapido === "Descargado" ||
+          filtroRapido === "Cerrado") &&
         p.estado !== filtroRapido
       ) {
         return false;
@@ -638,7 +653,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
             ["Total viajes", resumen.total, "todos"],
             ["Programados", resumen.programados, "Programado"],
             ["En ruta", resumen.enRuta, "En ruta"],
-            ["Finalizados", resumen.finalizados, "Descargado"],
+            ["Pendientes de cierre", resumen.finalizados, "Descargado"],
             ["Sin piloto", resumen.sinPiloto, "sin_piloto"],
             ["Sin unidad", resumen.sinUnidad, "sin_unidad"],
           ] as const
@@ -739,7 +754,8 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
             value={
               filtroRapido === "Programado" ||
               filtroRapido === "En ruta" ||
-              filtroRapido === "Descargado"
+              filtroRapido === "Descargado" ||
+              filtroRapido === "Cerrado"
                 ? filtroRapido
                 : "todos"
             }
@@ -748,7 +764,8 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
             <option value="todos">Todos</option>
             <option value="Programado">Programado</option>
             <option value="En ruta">En ruta</option>
-            <option value="Descargado">Finalizado</option>
+            <option value="Descargado">Pendiente de cierre</option>
+            <option value="Cerrado">Cerrado</option>
           </select>
         </label>
         <label className="text-xs text-[var(--muted)]">
