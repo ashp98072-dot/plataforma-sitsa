@@ -30,6 +30,7 @@ export function NotificacionesBell({ slug, rol }: Props) {
 
   const puedeVer =
     rol === "Admin" ||
+    rol === "RRHH" ||
     rol === "Operaciones" ||
     rol === "CoordinadorPredios";
 
