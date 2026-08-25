@@ -3,6 +3,11 @@ import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { z } from "zod";
 import { execute, query } from "@/lib/db";
 import { cifrarCredencial } from "@/lib/proveedores/credenciales";
+import {
+  puedeUsarPortalesProveedores,
+  ROLES_PORTALES_PROVEEDORES,
+} from "@/lib/proveedores/acceso";
+import { labelRol } from "@/lib/permisos-shared";
 import { requireTenant } from "@/lib/tenant";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -24,12 +29,13 @@ async function usuarioAsignable(usuarioId: number, empresaId: number) {
     `SELECT u.id
      FROM usuarios u
      WHERE u.id = ? AND u.activo = 1
-       AND (u.rol_global = 'Admin' OR u.acceso_todas_empresas = 1 OR EXISTS (
+       AND u.rol_global IN (?, ?, ?, ?)
+       AND (u.acceso_todas_empresas = 1 OR EXISTS (
          SELECT 1 FROM usuario_empresa ue
          WHERE ue.usuario_id = u.id AND ue.empresa_id = ?
        ))
      LIMIT 1`,
-    [usuarioId, empresaId],
+    [usuarioId, ...ROLES_PORTALES_PROVEEDORES, empresaId],
   );
   return Boolean(rows[0]);
 }
@@ -38,6 +44,9 @@ export async function GET(_req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenant(slug);
   if (guard.error) return guard.error;
+  if (!puedeUsarPortalesProveedores(guard.session.rol)) {
+    return NextResponse.json({ error: "Sin acceso a portales de proveedores." }, { status: 403 });
+  }
 
   const admin = guard.session.rol === "Admin";
   const rows = await query<RowDataPacket[]>(
@@ -58,12 +67,13 @@ export async function GET(_req: Request, ctx: Ctx) {
         `SELECT u.id, u.username, u.nombre, u.rol_global
          FROM usuarios u
          WHERE u.activo = 1
-           AND (u.rol_global = 'Admin' OR u.acceso_todas_empresas = 1 OR EXISTS (
+           AND u.rol_global IN (?, ?, ?, ?)
+           AND (u.acceso_todas_empresas = 1 OR EXISTS (
              SELECT 1 FROM usuario_empresa ue
              WHERE ue.usuario_id = u.id AND ue.empresa_id = ?
            ))
          ORDER BY COALESCE(u.nombre, u.username), u.username`,
-        [guard.empresa.id],
+        [...ROLES_PORTALES_PROVEEDORES, guard.empresa.id],
       )
     : [];
 
@@ -88,7 +98,7 @@ export async function GET(_req: Request, ctx: Ctx) {
         id: Number(u.id),
         username: String(u.username),
         nombre: u.nombre ? String(u.nombre) : null,
-        rol: String(u.rol_global),
+        rol: labelRol(String(u.rol_global)),
       })),
     },
     { headers: { "Cache-Control": "private, no-store" } },

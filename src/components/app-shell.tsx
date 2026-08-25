@@ -18,6 +18,8 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { ShellNavLink } from "@/components/shell-nav-link";
 import { EmpresaSessionProvider } from "@/lib/empresa-session";
 import { alcanceFacturacion } from "@/lib/facturacion/alcance";
+import { puedeUsarPortalesProveedores } from "@/lib/proveedores/acceso";
+import type { RolGlobal } from "@/lib/roles";
 
 type Props = {
   slug: string;
@@ -465,7 +467,7 @@ export function AppShell({
       }
     }
 
-    if (isAdmin || rol === "Operaciones" || rol === "Visualizador") {
+    if (puedeUsarPortalesProveedores(rol as RolGlobal)) {
       g.push({
         id: "proveedores",
         label: "Proveedores",

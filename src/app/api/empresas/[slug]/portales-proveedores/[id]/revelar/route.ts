@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
 import { descifrarCredencial } from "@/lib/proveedores/credenciales";
+import { puedeUsarPortalesProveedores } from "@/lib/proveedores/acceso";
 import { requireTenant } from "@/lib/tenant";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
@@ -10,6 +11,9 @@ export async function POST(_req: Request, ctx: Ctx) {
   const { slug, id } = await ctx.params;
   const guard = await requireTenant(slug);
   if (guard.error) return guard.error;
+  if (!puedeUsarPortalesProveedores(guard.session.rol)) {
+    return NextResponse.json({ error: "Sin acceso a portales de proveedores." }, { status: 403 });
+  }
   const portalId = Number(id);
   if (!Number.isInteger(portalId) || portalId <= 0) {
     return NextResponse.json({ error: "Portal inválido." }, { status: 400 });
