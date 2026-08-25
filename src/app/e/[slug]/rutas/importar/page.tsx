@@ -18,25 +18,22 @@ import Link from "next/link";
  * Omitir). Cliente/ubicación/contacto se reutilizan si ya existen
  * (comparación normalizada); solo se crean cuando genuinamente no hay
  * coincidencia, y siempre visible antes de confirmar.
+ *
+ * La resolución de cliente se decide POR GRUPO (sección "Clientes por
+ * resolver"): una sola decisión por nombre normalizado se aplica a TODAS
+ * las filas de ese cliente Excel — no se pide elegir cliente fila por
+ * fila cuando un mismo cliente aparece en muchas rutas.
  */
 
 type ClienteOpt = { id: number; nombre: string };
 
-type EstadoFilaRuta =
-  | "nueva"
-  | "actualizar"
-  | "omitir"
-  | "cliente_nuevo"
-  | "cliente_ambiguo"
-  | "duplicado_en_archivo"
-  | "error";
-
-type CandidatoCliente = { id: number; nombre: string };
+type EstadoFilaRuta = "nueva" | "omitir" | "cliente_nuevo" | "cliente_ambiguo" | "duplicado_en_archivo" | "error";
 
 type PreviewFilaRuta = {
   filaExcel: number;
   codigo: string;
   clienteExcel: string;
+  clienteExcelNormalizado: string;
   lugarCargaExcel: string;
   horaExcel: string | null;
   contactoExcel: string;
@@ -45,7 +42,6 @@ type PreviewFilaRuta = {
   detalle: string;
   clienteId: number | null;
   clienteNombre: string | null;
-  clienteCandidatos: CandidatoCliente[];
   ubicacionId: number | null;
   ubicacionEsNueva: boolean;
   contactoId: number | null;
@@ -56,15 +52,29 @@ type PreviewFilaRuta = {
   cambioClienteDetectado: boolean;
 };
 
+type TipoGrupoCliente = "ambiguo" | "nuevo";
+
+type CandidatoCliente = { id: number; nombre: string };
+
+type GrupoClientePendiente = {
+  clienteExcelNormalizado: string;
+  clienteExcelNombre: string;
+  tipo: TipoGrupoCliente;
+  candidatos: CandidatoCliente[];
+  filas: number[];
+  cantidadFilas: number;
+};
+
 type ResumenPreviewRutas = {
-  total: number;
-  nuevas: number;
-  actualizables: number;
-  omitidas: number;
-  clientesNuevos: number;
-  clientesAmbiguos: number;
+  registrosDetectados: number;
+  filasIncompletas: number;
   duplicadosEnArchivo: number;
-  errores: number;
+  rutasListas: number;
+  codigosExistentes: number;
+  rutasPendientesCliente: number;
+  clientesUnicosPorResolver: number;
+  clientesAmbiguosUnicos: number;
+  clientesNuevosUnicos: number;
 };
 
 type ResultadoImportacionRutas = {
@@ -79,30 +89,29 @@ type ResultadoImportacionRutas = {
   erroresDetalle: string[];
 };
 
-type RespuestaValidar = { accion: "validar"; filas: PreviewFilaRuta[]; resumen: ResumenPreviewRutas; erroresDetalle: string[] };
+type RespuestaValidar = {
+  accion: "validar";
+  filas: PreviewFilaRuta[];
+  resumen: ResumenPreviewRutas;
+  clientesPorResolver: GrupoClientePendiente[];
+  erroresDetalle: string[];
+};
 type RespuestaImportar = { accion: "importar"; resultado: ResultadoImportacionRutas };
 
-/** Decisión tomada en pantalla para una fila (por filaExcel). -1 = crear cliente nuevo. */
-type Decision = {
-  clienteIdElegido?: number | -1;
-  actualizarExistente?: boolean;
-  /** Requerido cuando actualizar cambiaría el cliente dueño de la ruta — nunca se reasigna sin esto. */
-  confirmarCambioCliente?: boolean;
-};
+/** Decisión por fila (solo lo que es inherentemente por código, no por cliente). */
+type DecisionFila = { actualizarExistente?: boolean; confirmarCambioCliente?: boolean };
 
 const ESTADO_LABEL: Record<EstadoFilaRuta, string> = {
   nueva: "Ruta nueva",
-  actualizar: "Se actualizará",
   omitir: "Código ya existe — se omite",
   cliente_nuevo: "Cliente no encontrado",
-  cliente_ambiguo: "Cliente ambiguo — elegir",
+  cliente_ambiguo: "Cliente ambiguo",
   duplicado_en_archivo: "Duplicado en el archivo",
   error: "Error",
 };
 
 const ESTADO_CLASS: Record<EstadoFilaRuta, string> = {
   nueva: "text-emerald-300",
-  actualizar: "text-sky-300",
   omitir: "text-[var(--muted)]",
   cliente_nuevo: "text-amber-300",
   cliente_ambiguo: "text-amber-300",
@@ -110,8 +119,7 @@ const ESTADO_CLASS: Record<EstadoFilaRuta, string> = {
   error: "text-red-300",
 };
 
-const input =
-  "mt-1 w-full rounded border border-[var(--border)] bg-[var(--input)] px-2 py-2 text-sm";
+const input = "mt-1 w-full rounded border border-[var(--border)] bg-[var(--input)] px-2 py-2 text-sm";
 
 async function leerJsonSeguro(res: Response): Promise<Record<string, unknown>> {
   const texto = await res.text();
@@ -134,7 +142,9 @@ export default function ImportarRutasPage() {
   const [mensaje, setMensaje] = useState("");
   const [preview, setPreview] = useState<RespuestaValidar | null>(null);
   const [resultado, setResultado] = useState<ResultadoImportacionRutas | null>(null);
-  const [decisiones, setDecisiones] = useState<Record<number, Decision>>({});
+  const [decisionesFila, setDecisionesFila] = useState<Record<number, DecisionFila>>({});
+  /** clienteExcelNormalizado -> clienteId elegido (-1 = crear nuevo). Una decisión cubre TODAS las filas de ese cliente. */
+  const [decisionesCliente, setDecisionesCliente] = useState<Record<string, number>>({});
 
   const cargarClientes = useCallback(async () => {
     const res = await fetch(`/api/empresas/${slug}/tms/catalogos`);
@@ -151,13 +161,18 @@ export default function ImportarRutasPage() {
     setArchivo(e.target.files?.[0] ?? null);
     setPreview(null);
     setResultado(null);
-    setDecisiones({});
+    setDecisionesFila({});
+    setDecisionesCliente({});
     setError("");
     setMensaje("");
   }
 
-  function setDecision(filaExcel: number, patch: Partial<Decision>) {
-    setDecisiones((d) => ({ ...d, [filaExcel]: { ...d[filaExcel], ...patch } }));
+  function setDecisionFila(filaExcel: number, patch: Partial<DecisionFila>) {
+    setDecisionesFila((d) => ({ ...d, [filaExcel]: { ...d[filaExcel], ...patch } }));
+  }
+
+  function setDecisionCliente(clienteExcelNormalizado: string, clienteIdElegido: number) {
+    setDecisionesCliente((d) => ({ ...d, [clienteExcelNormalizado]: clienteIdElegido }));
   }
 
   async function previsualizar() {
@@ -181,7 +196,8 @@ export default function ImportarRutasPage() {
       }
       const respuesta = data as unknown as RespuestaValidar;
       setPreview(respuesta);
-      setDecisiones({});
+      setDecisionesFila({});
+      setDecisionesCliente({});
     } catch {
       setError("Error de conexión al validar el archivo.");
     } finally {
@@ -198,11 +214,16 @@ export default function ImportarRutasPage() {
       const formData = new FormData();
       formData.set("archivo", archivo);
       formData.set("accion", "importar");
-      const listaDecisiones = Object.entries(decisiones).map(([filaExcel, d]) => ({
+      const listaDecisionesFila = Object.entries(decisionesFila).map(([filaExcel, d]) => ({
         filaExcel: Number(filaExcel),
         ...d,
       }));
-      formData.set("decisiones", JSON.stringify(listaDecisiones));
+      formData.set("decisiones", JSON.stringify(listaDecisionesFila));
+      const listaDecisionesCliente = Object.entries(decisionesCliente).map(([clienteExcelNormalizado, clienteIdElegido]) => ({
+        clienteExcelNormalizado,
+        clienteIdElegido,
+      }));
+      formData.set("decisionesCliente", JSON.stringify(listaDecisionesCliente));
       const res = await fetch(`/api/empresas/${slug}/tms/rutas/importar`, { method: "POST", body: formData });
       const data = await leerJsonSeguro(res);
       if (!res.ok) {
@@ -219,9 +240,21 @@ export default function ImportarRutasPage() {
     }
   }
 
-  const pendientesDecision = (preview?.filas ?? []).filter(
-    (f) => f.estado === "cliente_ambiguo" || f.estado === "cliente_nuevo",
+  const gruposPendientes = (preview?.clientesPorResolver ?? []).filter(
+    (g) => decisionesCliente[g.clienteExcelNormalizado] === undefined,
   ).length;
+
+  function nombreClientePorId(id: number): string {
+    return clientes.find((c) => c.id === id)?.nombre ?? `#${id}`;
+  }
+
+  /** Texto derivado para la columna Decisión de una fila cuyo cliente depende de un grupo. */
+  function textoDecisionGrupo(fila: PreviewFilaRuta): string {
+    const elegido = decisionesCliente[fila.clienteExcelNormalizado];
+    if (elegido === undefined) return "Pendiente en Clientes por resolver";
+    if (elegido === -1) return `Creará cliente nuevo: "${fila.clienteExcel}"`;
+    return `Usará: ${nombreClientePorId(elegido)}`;
+  }
 
   return (
     <div className="space-y-6">
@@ -242,8 +275,8 @@ export default function ImportarRutasPage() {
         <p>Columnas esperadas en &quot;CODIGOS DATA&quot;: Código · Cliente · Lugar de carga · Hora · Contacto · Destino.</p>
         <p className="mt-1">
           Los códigos que ya existen se omiten por defecto — puedes marcarlos individualmente para
-          actualizar. Los clientes se reutilizan por nombre; solo se crean nuevos cuando no hay
-          coincidencia, y siempre quedan visibles antes de confirmar.
+          actualizar. Si un mismo cliente aparece en varias rutas, se resuelve UNA sola vez en
+          &quot;Clientes por resolver&quot; y se aplica a todas.
         </p>
       </div>
 
@@ -265,22 +298,40 @@ export default function ImportarRutasPage() {
 
         {preview ? (
           <div className="space-y-4">
-            <div className="grid gap-2 sm:grid-cols-4 lg:grid-cols-8">
-              <ResumenCard label="Total" value={preview.resumen.total} />
-              <ResumenCard label="Nuevas" value={preview.resumen.nuevas} className="text-emerald-300" />
-              <ResumenCard label="Código ya existe (omitir)" value={preview.resumen.omitidas} />
-              <ResumenCard label="Clientes nuevos" value={preview.resumen.clientesNuevos} className="text-amber-300" />
-              <ResumenCard label="Clientes ambiguos" value={preview.resumen.clientesAmbiguos} className="text-amber-300" />
+            <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-5">
+              <ResumenCard label="Registros detectados" value={preview.resumen.registrosDetectados} />
+              <ResumenCard label="Rutas listas" value={preview.resumen.rutasListas} className="text-emerald-300" />
+              <ResumenCard label="Códigos existentes" value={preview.resumen.codigosExistentes} />
+              <ResumenCard label="Filas incompletas" value={preview.resumen.filasIncompletas} className="text-red-300" />
               <ResumenCard label="Duplicados en archivo" value={preview.resumen.duplicadosEnArchivo} className="text-red-300" />
-              <ResumenCard label="Errores" value={preview.resumen.errores} className="text-red-300" />
+              <ResumenCard label="Rutas pendientes de cliente" value={preview.resumen.rutasPendientesCliente} className="text-amber-300" />
+              <ResumenCard label="Clientes únicos por resolver" value={preview.resumen.clientesUnicosPorResolver} className="text-amber-300" />
+              <ResumenCard label="— ambiguos" value={preview.resumen.clientesAmbiguosUnicos} className="text-amber-300" />
+              <ResumenCard label="— nuevos" value={preview.resumen.clientesNuevosUnicos} className="text-amber-300" />
             </div>
 
-            {pendientesDecision > 0 ? (
-              <p className="text-xs text-amber-300">
-                {pendientesDecision} fila(s) requieren elegir el cliente (o &quot;Crear cliente
-                nuevo&quot;) antes de confirmar — mientras no se elija, esa fila NO se importa y
-                queda reportada como error.
-              </p>
+            {preview.clientesPorResolver.length ? (
+              <div className="space-y-2 rounded-lg border border-amber-700/50 bg-[var(--panel)] p-3">
+                <p className="text-sm font-medium">
+                  Clientes por resolver ({preview.clientesPorResolver.length})
+                  {gruposPendientes > 0 ? (
+                    <span className="ml-2 text-xs font-normal text-amber-300">
+                      {gruposPendientes} sin decisión — esas filas no se importarán hasta resolverse.
+                    </span>
+                  ) : null}
+                </p>
+                <div className="space-y-2">
+                  {preview.clientesPorResolver.map((g) => (
+                    <GrupoClienteRow
+                      key={g.clienteExcelNormalizado}
+                      grupo={g}
+                      clientes={clientes}
+                      valor={decisionesCliente[g.clienteExcelNormalizado]}
+                      onChange={(v) => setDecisionCliente(g.clienteExcelNormalizado, v)}
+                    />
+                  ))}
+                </div>
+              </div>
             ) : null}
 
             <div className="overflow-x-auto rounded-lg border border-[var(--border)]">
@@ -310,7 +361,14 @@ export default function ImportarRutasPage() {
                       <td className="px-2 py-2">{f.destinoExcel || "—"}</td>
                       <td className={`px-2 py-2 font-medium ${ESTADO_CLASS[f.estado]}`}>{ESTADO_LABEL[f.estado]}</td>
                       <td className="px-2 py-2">
-                        <FilaDecision fila={f} clientes={clientes} decision={decisiones[f.filaExcel]} onChange={(patch) => setDecision(f.filaExcel, patch)} />
+                        <FilaDecision
+                          fila={f}
+                          decision={decisionesFila[f.filaExcel]}
+                          textoGrupo={
+                            f.estado === "cliente_ambiguo" || f.estado === "cliente_nuevo" ? textoDecisionGrupo(f) : null
+                          }
+                          onChange={(patch) => setDecisionFila(f.filaExcel, patch)}
+                        />
                       </td>
                     </tr>
                   ))}
@@ -342,7 +400,8 @@ export default function ImportarRutasPage() {
                 type="button"
                 onClick={() => {
                   setPreview(null);
-                  setDecisiones({});
+                  setDecisionesFila({});
+                  setDecisionesCliente({});
                 }}
                 className="rounded border border-[var(--border)] px-4 py-2 text-sm"
               >
@@ -392,40 +451,64 @@ function ResumenCard({ label, value, className }: { label: string; value: number
   );
 }
 
-function FilaDecision({
-  fila,
+function GrupoClienteRow({
+  grupo,
   clientes,
-  decision,
+  valor,
   onChange,
 }: {
-  fila: PreviewFilaRuta;
+  grupo: GrupoClientePendiente;
   clientes: ClienteOpt[];
-  decision: Decision | undefined;
-  onChange: (patch: Partial<Decision>) => void;
+  valor: number | undefined;
+  onChange: (clienteIdElegido: number) => void;
 }) {
-  const necesitaCliente = fila.estado === "cliente_ambiguo" || fila.estado === "cliente_nuevo";
-  const controles: ReactNode[] = [];
-
-  if (necesitaCliente) {
-    const opciones = fila.estado === "cliente_ambiguo" ? fila.clienteCandidatos : clientes;
-    controles.push(
+  const opciones = grupo.tipo === "ambiguo" ? grupo.candidatos : clientes;
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded border border-[var(--border)] bg-[var(--card)] p-2 text-xs">
+      <span className="min-w-[160px] font-medium">
+        {grupo.clienteExcelNombre} — {grupo.cantidadFilas} ruta(s)
+      </span>
+      <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${grupo.tipo === "ambiguo" ? "bg-amber-900/40 text-amber-200" : "bg-sky-900/40 text-sky-200"}`}>
+        {grupo.tipo === "ambiguo" ? "Ambiguo" : "No encontrado"}
+      </span>
       <select
-        key="cliente"
-        className="rounded border border-[var(--border)] bg-[var(--input)] px-1.5 py-1 text-[11px]"
-        value={decision?.clienteIdElegido ?? ""}
+        className="rounded border border-[var(--border)] bg-[var(--input)] px-1.5 py-1"
+        value={valor ?? ""}
         onChange={(e) => {
           const v = e.target.value;
-          onChange({ clienteIdElegido: v === "-1" ? -1 : v ? Number(v) : undefined });
+          if (v) onChange(v === "-1" ? -1 : Number(v));
         }}
       >
         <option value="">— Elegir cliente —</option>
-        <option value="-1">Crear cliente nuevo: &quot;{fila.clienteExcel}&quot;</option>
+        <option value="-1">Crear cliente nuevo: &quot;{grupo.clienteExcelNombre}&quot;</option>
         {opciones.map((c) => (
           <option key={c.id} value={c.id}>
             {c.nombre}
           </option>
         ))}
-      </select>,
+      </select>
+    </div>
+  );
+}
+
+function FilaDecision({
+  fila,
+  decision,
+  textoGrupo,
+  onChange,
+}: {
+  fila: PreviewFilaRuta;
+  decision: DecisionFila | undefined;
+  textoGrupo: string | null;
+  onChange: (patch: Partial<DecisionFila>) => void;
+}) {
+  const controles: ReactNode[] = [];
+
+  if (textoGrupo) {
+    controles.push(
+      <span key="grupo" className="text-[11px] text-[var(--muted)]">
+        {textoGrupo}
+      </span>,
     );
   }
 
@@ -446,7 +529,7 @@ function FilaDecision({
     // ambiguo/nuevo). Nunca se reasigna sin marcar esto explícitamente —
     // el servidor lo exige aparte, esto es solo para que quede visible
     // antes de confirmar.
-    const podriaCambiarCliente = fila.clienteActualNombre != null && (fila.cambioClienteDetectado || necesitaCliente);
+    const podriaCambiarCliente = fila.clienteActualNombre != null && (fila.cambioClienteDetectado || Boolean(textoGrupo));
     if (decision?.actualizarExistente && podriaCambiarCliente) {
       controles.push(
         <label key="cambiocliente" className="flex items-center gap-1 text-[11px] text-amber-300">

@@ -37,6 +37,20 @@ const COL_CONTACTO = 7; // G
 const COL_DESTINO = 8; // H
 const FILA_INICIO_DATOS = 2;
 
+/** trim + colapsar espacios + minúsculas — solo para comparar contra encabezados conocidos. */
+function normalizarTexto(s: string): string {
+  return s.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+// Confirmado contra un preview real en producción: la hoja "CODIGOS DATA"
+// tiene, más abajo del catálogo, una fila que repite literalmente el
+// encabezado de columnas (Código/Cliente/Lugar de Carga/Hora/Contacto/
+// Lugar de Descarga) en vez de datos reales. Como Código no está vacío
+// ("Codigo"), antes se colaba como si fuera una ruta válida. Se descarta
+// por el valor exacto de la columna Código, sin depender de las demás
+// columnas (más robusto ante variaciones de esa fila repetida).
+const CODIGOS_ENCABEZADO = new Set(["codigo", "código"]);
+
 function cellStr(value: unknown): string {
   if (value == null) return "";
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -84,16 +98,16 @@ function normalizarHora(value: unknown): string | null {
  * lugar de carga/hora/contacto/destino), en el mismo orden del archivo.
  * Lanza un error claro si la hoja no existe.
  *
- * Solo se incluyen filas con un valor en la columna Código (C). Verificado
- * contra el Excel real ("PROGRAMACION AGOSTO 2026 ACTUALIZADA.xlsx"): la
- * hoja "CODIGOS DATA" tiene el catálogo real en un bloque contiguo (147
- * códigos únicos, 0 duplicados, coincide exactamente con el conteo
- * reportado), pero MÁS ABAJO en la misma hoja hay un bloque de ~1500 filas
- * completamente ajeno al catálogo (otra tabla, sin relación con rutas) que
- * por coincidencia reutiliza las mismas columnas D..H. Ese bloque no tiene
- * código en la columna C — filtrar por "código no vacío" excluye ese ruido
- * sin perder ningún registro real (una fila sin código nunca fue un
- * registro de ruta: el código es su identificador).
+ * Solo se incluyen filas con un valor en la columna Código (C), y no un
+ * encabezado repetido (ver CODIGOS_ENCABEZADO). Verificado contra el
+ * Excel real ("PROGRAMACION AGOSTO 2026 ACTUALIZADA.xlsx"): la hoja
+ * "CODIGOS DATA" tiene el catálogo real en un bloque contiguo, pero MÁS
+ * ABAJO en la misma hoja hay un bloque de ~1500 filas completamente ajeno
+ * al catálogo (otra tabla, sin relación con rutas) que por coincidencia
+ * reutiliza las mismas columnas D..H, y una fila que repite el encabezado
+ * de columnas en vez de datos. Filtrar por "código no vacío y no
+ * encabezado" excluye ambos sin perder ningún registro real (una fila sin
+ * código, o con el texto del encabezado, nunca fue un registro de ruta).
  */
 export async function parsearExcelRutas(buffer: Buffer): Promise<FilaRutaExcel[]> {
   const wb = new ExcelJS.Workbook();
@@ -118,11 +132,13 @@ export async function parsearExcelRutas(buffer: Buffer): Promise<FilaRutaExcel[]
     const contactoExcel = cellStr(row.getCell(COL_CONTACTO).value);
     const destinoExcel = cellStr(row.getCell(COL_DESTINO).value);
 
-    if (!codigoExcel.trim()) continue;
+    const codigoTrim = codigoExcel.trim();
+    if (!codigoTrim) continue;
+    if (CODIGOS_ENCABEZADO.has(normalizarTexto(codigoTrim))) continue; // fila de encabezado repetido, no es una ruta
 
     filas.push({
       filaExcel: rowIndex,
-      codigoExcel: codigoExcel.trim(),
+      codigoExcel: codigoTrim,
       clienteExcel: clienteExcel.trim(),
       lugarCargaExcel: lugarCargaExcel.trim(),
       horaExcel,

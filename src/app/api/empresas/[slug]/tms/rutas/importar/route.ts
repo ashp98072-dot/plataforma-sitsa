@@ -5,6 +5,7 @@ import {
   previsualizarImportacionRutas,
   confirmarImportacionRutas,
   type DecisionFilaRuta,
+  type DecisionClienteGrupo,
 } from "@/lib/tms/rutas-import";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -89,12 +90,24 @@ export async function POST(req: Request, ctx: Ctx) {
     }
   }
 
+  let decisionesCliente: DecisionClienteGrupo[] = [];
+  const decisionesClienteRaw = form.get("decisionesCliente");
+  if (typeof decisionesClienteRaw === "string" && decisionesClienteRaw.trim()) {
+    try {
+      const parsed: unknown = JSON.parse(decisionesClienteRaw);
+      if (Array.isArray(parsed)) decisionesCliente = parsed as DecisionClienteGrupo[];
+    } catch {
+      return NextResponse.json({ error: "Decisiones de cliente inválidas." }, { status: 400 });
+    }
+  }
+
   try {
     const resultado = await confirmarImportacionRutas(
       guard.empresa.id,
       guard.session.username,
       filasExcel,
       decisiones,
+      decisionesCliente,
     );
     return NextResponse.json({ accion: "importar", resultado });
   } catch (e) {
