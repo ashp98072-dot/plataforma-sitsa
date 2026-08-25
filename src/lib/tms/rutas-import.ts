@@ -19,6 +19,14 @@ import type { FilaRutaExcel } from "./rutas-import-excel";
  * cual en destino_descripcion (punto 2/6). Nunca acepta empresa_id desde
  * el Excel — siempre viene del parámetro `empresaId` (de la sesión/
  * tenant, resuelto por el endpoint antes de llamar aquí).
+ *
+ * La resolución de cliente se decide POR GRUPO (nombre normalizado del
+ * Excel), no fila por fila: si un mismo cliente aparece en N filas y no
+ * matchea, el usuario toma UNA decisión para el grupo y se aplica a las
+ * N — ver GrupoClientePendiente/DecisionClienteGrupo. El servidor
+ * siempre recalcula a qué grupo pertenece cada fila normalizando su
+ * propio cliente Excel (nunca confía en una asociación fila->grupo que
+ * mande el cliente HTTP).
  */
 
 /** trim + colapsa espacios + minúsculas — SOLO para comparar, nunca para guardar. */
@@ -26,14 +34,16 @@ function normalizar(s: string): string {
   return s.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
+/** Los códigos operativos del catálogo real son numéricos (confirmado). No es una regla de esquema, es una validación defensiva contra filas ajenas (p. ej. encabezados repetidos) que no se detecten por otra vía. */
+const CODIGO_FORMATO_ESPERADO = /^\d+$/;
+
 export type EstadoFilaRuta =
   | "nueva" // cliente resuelto, código no existe -> se crea
-  | "actualizar" // código ya existe Y el usuario eligió actualizar
   | "omitir" // código ya existe, se omite (default)
-  | "cliente_nuevo" // no hay cliente con ese nombre -> se crearía uno
-  | "cliente_ambiguo" // hay candidatos parecidos, requiere elegir manualmente
+  | "cliente_nuevo" // no hay cliente con ese nombre -> se crearía uno (decisión por grupo)
+  | "cliente_ambiguo" // hay candidatos parecidos, requiere elegir manualmente (decisión por grupo)
   | "duplicado_en_archivo" // mismo código ya apareció antes en el mismo Excel
-  | "error"; // fila inválida (p. ej. sin código)
+  | "error"; // fila inválida (sin código/cliente, formato de código inesperado, etc.)
 
 export type CandidatoCliente = { id: number; nombre: string };
 
@@ -41,17 +51,17 @@ export type PreviewFilaRuta = {
   filaExcel: number;
   codigo: string;
   clienteExcel: string;
+  /** Clave de agrupación — mismo valor para todas las filas cuyo cliente Excel normaliza igual. */
+  clienteExcelNormalizado: string;
   lugarCargaExcel: string;
   horaExcel: string | null;
   contactoExcel: string;
   destinoExcel: string;
   estado: EstadoFilaRuta;
   detalle: string;
-  /** Cliente ya resuelto (match exacto) o elegido manualmente. */
+  /** Cliente ya resuelto (match exacto). Para cliente_ambiguo/cliente_nuevo queda null aquí -- la resolución vive en el grupo (ver GrupoClientePendiente), no por fila. */
   clienteId: number | null;
   clienteNombre: string | null;
-  /** Candidatos cuando estado = cliente_ambiguo (el usuario debe elegir uno, o "crear nuevo"). */
-  clienteCandidatos: CandidatoCliente[];
   ubicacionId: number | null;
   ubicacionEsNueva: boolean;
   contactoId: number | null;
@@ -60,19 +70,34 @@ export type PreviewFilaRuta = {
   /** Cliente actualmente dueño de la ruta existente (solo si rutaExistenteId != null). */
   clienteActualId: number | null;
   clienteActualNombre: string | null;
-  /** true si el cliente resuelto del Excel difiere del cliente actual de la ruta -> requiere confirmación explícita antes de reasignar. */
+  /** true si el cliente resuelto (match exacto) del Excel difiere del cliente actual de la ruta -> requiere confirmación explícita antes de reasignar. */
   cambioClienteDetectado: boolean;
 };
 
+export type TipoGrupoCliente = "ambiguo" | "nuevo";
+
+/** Una decisión de cliente pendiente, agrupada por nombre normalizado -- cubre TODAS las filas de ese cliente Excel a la vez. */
+export type GrupoClientePendiente = {
+  clienteExcelNormalizado: string;
+  /** Nombre tal cual apareció la primera vez en el Excel (para mostrar en la UI). */
+  clienteExcelNombre: string;
+  tipo: TipoGrupoCliente;
+  /** Candidatos parecidos (solo cuando tipo = "ambiguo"). */
+  candidatos: CandidatoCliente[];
+  filas: number[];
+  cantidadFilas: number;
+};
+
 export type ResumenPreviewRutas = {
-  total: number;
-  nuevas: number;
-  actualizables: number;
-  omitidas: number;
-  clientesNuevos: number;
-  clientesAmbiguos: number;
+  registrosDetectados: number;
+  filasIncompletas: number;
   duplicadosEnArchivo: number;
-  errores: number;
+  rutasListas: number;
+  codigosExistentes: number;
+  rutasPendientesCliente: number;
+  clientesUnicosPorResolver: number;
+  clientesAmbiguosUnicos: number;
+  clientesNuevosUnicos: number;
 };
 
 /**
@@ -80,14 +105,21 @@ export type ResumenPreviewRutas = {
  * existente para cada fila, sin escribir nada. Prioridad de match de
  * cliente (punto 3): 1) nombre normalizado EXACTO -> reutiliza; 2) sin
  * match exacto pero con candidatos "parecidos" (uno contiene al otro,
- * normalizado) -> cliente_ambiguo, requiere revisión manual; 3) sin
- * ningún candidato -> cliente_nuevo (se crearía al confirmar, pero
- * siempre visible en el preview para revisión, nunca silencioso).
+ * normalizado) -> cliente_ambiguo, requiere revisión manual POR GRUPO;
+ * 3) sin ningún candidato -> cliente_nuevo (se crearía al confirmar,
+ * pero siempre visible para revisión, nunca silencioso). Ubicación y
+ * contacto solo se resuelven cuando el cliente ya es cierto (match
+ * exacto) -- para clientes pendientes de grupo se resuelven al confirmar.
  */
 export async function previsualizarImportacionRutas(
   empresaId: number,
   filas: FilaRutaExcel[],
-): Promise<{ filas: PreviewFilaRuta[]; resumen: ResumenPreviewRutas; erroresDetalle: string[] }> {
+): Promise<{
+  filas: PreviewFilaRuta[];
+  resumen: ResumenPreviewRutas;
+  clientesPorResolver: GrupoClientePendiente[];
+  erroresDetalle: string[];
+}> {
   const [clientes, ubicaciones, contactos, rutasExistentes] = await Promise.all([
     query<RowDataPacket[]>("SELECT id, nombre FROM tms_clientes WHERE empresa_id = ?", [empresaId]),
     query<RowDataPacket[]>(
@@ -129,33 +161,42 @@ export async function previsualizarImportacionRutas(
   const codigosVistos = new Set<string>();
   const resultado: PreviewFilaRuta[] = [];
   const erroresDetalle: string[] = [];
+  const gruposPorNorm = new Map<string, GrupoClientePendiente>();
 
   for (const f of filas) {
     const identidad = identidadRutaImport({ codigo: f.codigoExcel, cliente: f.clienteExcel });
+    const normClienteSiempre = f.clienteExcel ? normalizar(f.clienteExcel) : "";
 
     if (!f.codigoExcel) {
-      const detalle = "Sin código — fila omitida.";
+      const detalle = "Falta código — no se importará.";
       erroresDetalle.push(formatoErrorImport({ filaExcel: f.filaExcel, identidad, detalle }));
-      resultado.push(filaBase(f, "error", detalle));
+      resultado.push(filaBase(f, normClienteSiempre, "error", detalle));
+      continue;
+    }
+
+    if (!CODIGO_FORMATO_ESPERADO.test(f.codigoExcel)) {
+      const detalle = `Código "${f.codigoExcel}" no tiene el formato numérico esperado — revisar manualmente, no se importará.`;
+      erroresDetalle.push(formatoErrorImport({ filaExcel: f.filaExcel, identidad, detalle }));
+      resultado.push(filaBase(f, normClienteSiempre, "error", detalle));
       continue;
     }
 
     if (codigosVistos.has(f.codigoExcel)) {
       const detalle = `Código "${f.codigoExcel}" repetido dentro del mismo archivo — solo la primera aparición se procesa.`;
       erroresDetalle.push(formatoErrorImport({ filaExcel: f.filaExcel, identidad, detalle }));
-      resultado.push(filaBase(f, "duplicado_en_archivo", detalle));
+      resultado.push(filaBase(f, normClienteSiempre, "duplicado_en_archivo", detalle));
       continue;
     }
     codigosVistos.add(f.codigoExcel);
 
     if (!f.clienteExcel) {
-      const detalle = "Sin cliente — fila omitida.";
+      const detalle = `Código ${f.codigoExcel} — falta cliente — no se importará.`;
       erroresDetalle.push(formatoErrorImport({ filaExcel: f.filaExcel, identidad, detalle }));
-      resultado.push(filaBase(f, "error", detalle));
+      resultado.push(filaBase(f, normClienteSiempre, "error", detalle));
       continue;
     }
 
-    const normCliente = normalizar(f.clienteExcel);
+    const normCliente = normClienteSiempre;
     const exacto = clientesPorNombreExacto.get(normCliente);
     const rutaExistente = rutasPorCodigo.get(f.codigoExcel) ?? null;
     const rutaExistenteId = rutaExistente?.id ?? null;
@@ -164,7 +205,6 @@ export async function previsualizarImportacionRutas(
 
     let clienteId: number | null = null;
     let clienteNombre: string | null = null;
-    let clienteCandidatos: CandidatoCliente[] = [];
     let estado: EstadoFilaRuta;
     let detalle: string;
     let cambioClienteDetectado = false;
@@ -183,21 +223,37 @@ export async function previsualizarImportacionRutas(
       }
     } else {
       // Sin match exacto: candidatos "parecidos" (contención normalizada en cualquier dirección).
-      clienteCandidatos = clientesLista.filter(
-        (c) => normalizar(c.nombre).includes(normCliente) || normCliente.includes(normalizar(c.nombre)),
-      );
-      if (clienteCandidatos.length) {
+      // Se calcula UNA vez por grupo (mismo resultado para todas las filas de este cliente Excel).
+      let grupo = gruposPorNorm.get(normCliente);
+      if (!grupo) {
+        const candidatos = clientesLista.filter(
+          (c) => normalizar(c.nombre).includes(normCliente) || normCliente.includes(normalizar(c.nombre)),
+        );
+        grupo = {
+          clienteExcelNormalizado: normCliente,
+          clienteExcelNombre: f.clienteExcel,
+          tipo: candidatos.length ? "ambiguo" : "nuevo",
+          candidatos,
+          filas: [],
+          cantidadFilas: 0,
+        };
+        gruposPorNorm.set(normCliente, grupo);
+      }
+      grupo.filas.push(f.filaExcel);
+      grupo.cantidadFilas++;
+
+      if (grupo.tipo === "ambiguo") {
         estado = "cliente_ambiguo";
-        detalle = `"${f.clienteExcel}" no coincide exactamente con ningún cliente — ${clienteCandidatos.length} candidato(s) parecido(s), requiere elegir manualmente.`;
+        detalle = `"${f.clienteExcel}" no coincide exactamente con ningún cliente — ${grupo.candidatos.length} candidato(s) parecido(s), requiere elegir manualmente (aplica a las ${grupo.cantidadFilas} fila(s) de este cliente).`;
       } else {
         estado = "cliente_nuevo";
-        detalle = `No existe un cliente "${f.clienteExcel}" — se crearía uno nuevo al confirmar.`;
+        detalle = `No existe un cliente "${f.clienteExcel}" — se crearía uno nuevo al confirmar (aplica a las ${grupo.cantidadFilas} fila(s) de este cliente).`;
       }
     }
 
     // Ubicación/contacto solo se resuelven si ya hay un cliente cierto
     // (exacto) — para clientes ambiguos/nuevos se resuelven en confirmar,
-    // una vez se sepa el cliente_id definitivo.
+    // una vez se sepa el cliente_id definitivo del grupo.
     let ubicacionId: number | null = null;
     let ubicacionEsNueva = false;
     let contactoId: number | null = null;
@@ -224,6 +280,7 @@ export async function previsualizarImportacionRutas(
       filaExcel: f.filaExcel,
       codigo: f.codigoExcel,
       clienteExcel: f.clienteExcel,
+      clienteExcelNormalizado: normCliente,
       lugarCargaExcel: f.lugarCargaExcel,
       horaExcel: f.horaExcel,
       contactoExcel: f.contactoExcel,
@@ -232,7 +289,6 @@ export async function previsualizarImportacionRutas(
       detalle,
       clienteId,
       clienteNombre,
-      clienteCandidatos,
       ubicacionId,
       ubicacionEsNueva,
       contactoId,
@@ -244,25 +300,29 @@ export async function previsualizarImportacionRutas(
     });
   }
 
+  const clientesPorResolver = [...gruposPorNorm.values()];
+
   const resumen: ResumenPreviewRutas = {
-    total: resultado.length,
-    nuevas: resultado.filter((f) => f.estado === "nueva").length,
-    actualizables: 0, // se decide en el frontend por fila existente; ver "omitir" abajo
-    omitidas: resultado.filter((f) => f.estado === "omitir").length,
-    clientesNuevos: resultado.filter((f) => f.estado === "cliente_nuevo").length,
-    clientesAmbiguos: resultado.filter((f) => f.estado === "cliente_ambiguo").length,
+    registrosDetectados: resultado.length,
+    filasIncompletas: resultado.filter((f) => f.estado === "error").length,
     duplicadosEnArchivo: resultado.filter((f) => f.estado === "duplicado_en_archivo").length,
-    errores: resultado.filter((f) => f.estado === "error").length,
+    rutasListas: resultado.filter((f) => f.estado === "nueva").length,
+    codigosExistentes: resultado.filter((f) => f.estado === "omitir").length,
+    rutasPendientesCliente: resultado.filter((f) => f.estado === "cliente_ambiguo" || f.estado === "cliente_nuevo").length,
+    clientesUnicosPorResolver: clientesPorResolver.length,
+    clientesAmbiguosUnicos: clientesPorResolver.filter((g) => g.tipo === "ambiguo").length,
+    clientesNuevosUnicos: clientesPorResolver.filter((g) => g.tipo === "nuevo").length,
   };
 
-  return { filas: resultado, resumen, erroresDetalle };
+  return { filas: resultado, resumen, clientesPorResolver, erroresDetalle };
 }
 
-function filaBase(f: FilaRutaExcel, estado: EstadoFilaRuta, detalle: string): PreviewFilaRuta {
+function filaBase(f: FilaRutaExcel, normCliente: string, estado: EstadoFilaRuta, detalle: string): PreviewFilaRuta {
   return {
     filaExcel: f.filaExcel,
     codigo: f.codigoExcel,
     clienteExcel: f.clienteExcel,
+    clienteExcelNormalizado: normCliente,
     lugarCargaExcel: f.lugarCargaExcel,
     horaExcel: f.horaExcel,
     contactoExcel: f.contactoExcel,
@@ -271,7 +331,6 @@ function filaBase(f: FilaRutaExcel, estado: EstadoFilaRuta, detalle: string): Pr
     detalle,
     clienteId: null,
     clienteNombre: null,
-    clienteCandidatos: [],
     ubicacionId: null,
     ubicacionEsNueva: false,
     contactoId: null,
@@ -283,16 +342,19 @@ function filaBase(f: FilaRutaExcel, estado: EstadoFilaRuta, detalle: string): Pr
   };
 }
 
-/** Decisión del frontend para UNA fila al confirmar (punto 8: default omitir). */
+/** Decisión de UN grupo de cliente (todas las filas cuyo cliente Excel normaliza igual). -1 = crear cliente nuevo. */
+export type DecisionClienteGrupo = {
+  clienteExcelNormalizado: string;
+  clienteIdElegido: number | -1;
+};
+
+/** Decisión del frontend para UNA fila al confirmar (solo lo que es inherentemente por fila/código, no por cliente). */
 export type DecisionFilaRuta = {
   filaExcel: number;
-  /** Si la fila quedó "cliente_ambiguo" o "cliente_nuevo", el usuario confirma/elige el cliente aquí. -1 = crear cliente nuevo con el nombre del Excel. */
-  clienteIdElegido?: number | -1;
   /** Si el código ya existe: true = actualizar, false/ausente = omitir (default). */
   actualizarExistente?: boolean;
   /** Requerido cuando actualizar implica cambiar el cliente dueño de la ruta — nunca se reasigna sin esto. */
   confirmarCambioCliente?: boolean;
-  /** Si la fila es "error"/"duplicado_en_archivo"/inválida: se ignora siempre, no hay decisión posible. */
 };
 
 export type ResultadoImportacionRutas = {
@@ -316,14 +378,22 @@ export type ResultadoImportacionRutas = {
  * inesperado (no una validación) revierte toda la transacción, para no
  * dejar la importación en un estado a medias por una causa que ningún
  * usuario pudo prever ni revisar en el preview.
+ *
+ * La resolución de cliente usa `decisionesCliente` (por grupo, ver
+ * DecisionClienteGrupo) — el servidor recalcula normalizar(f.clienteExcel)
+ * para CADA fila y busca esa clave en el mapa de decisiones; nunca confía
+ * en una asociación fila->grupo que mande el cliente HTTP, y siempre
+ * revalida que el cliente elegido pertenezca a `empresaId`.
  */
 export async function confirmarImportacionRutas(
   empresaId: number,
   usuario: string,
   filas: FilaRutaExcel[],
   decisiones: DecisionFilaRuta[],
+  decisionesCliente: DecisionClienteGrupo[],
 ): Promise<ResultadoImportacionRutas> {
   const decisionPorFila = new Map(decisiones.map((d) => [d.filaExcel, d]));
+  const decisionClientePorNorm = new Map(decisionesCliente.map((d) => [d.clienteExcelNormalizado, d.clienteIdElegido]));
 
   const resultado: ResultadoImportacionRutas = {
     procesadas: filas.length,
@@ -368,7 +438,7 @@ export async function confirmarImportacionRutas(
     // clientesPorEmpresa: única fuente de verdad de "qué cliente pertenece
     // a esta empresa" — un clienteIdElegido que no aparezca aquí (de otra
     // empresa, o inexistente) NUNCA se acepta, sin importar lo que mande
-    // el cliente HTTP en `decisiones`.
+    // el cliente HTTP en `decisionesCliente`.
     const clientesPorEmpresa = new Map<number, string>();
     const clientesPorNombreNorm = new Map<string, number>();
     for (const c of clientesRows[0]) {
@@ -399,6 +469,10 @@ export async function confirmarImportacionRutas(
     }
 
     const codigosVistos = new Set<string>();
+    // Cliente ya creado EN ESTA importación por decisión de grupo, para no
+    // volver a crear uno por cada fila adicional del mismo cliente Excel
+    // (independiente del orden de las filas en el archivo).
+    const clienteCreadoPorGrupo = new Map<string, number>();
 
     for (const f of filas) {
       const identidad = identidadRutaImport({ codigo: f.codigoExcel, cliente: f.clienteExcel });
@@ -406,7 +480,18 @@ export async function confirmarImportacionRutas(
       if (!f.codigoExcel || !f.clienteExcel) {
         resultado.errores++;
         resultado.erroresDetalle.push(
-          formatoErrorImport({ filaExcel: f.filaExcel, identidad, detalle: "Sin código o sin cliente." }),
+          formatoErrorImport({ filaExcel: f.filaExcel, identidad, detalle: "Falta código o falta cliente — no se importará." }),
+        );
+        continue;
+      }
+      if (!CODIGO_FORMATO_ESPERADO.test(f.codigoExcel)) {
+        resultado.errores++;
+        resultado.erroresDetalle.push(
+          formatoErrorImport({
+            filaExcel: f.filaExcel,
+            identidad,
+            detalle: `Código "${f.codigoExcel}" no tiene el formato numérico esperado — no se importará.`,
+          }),
         );
         continue;
       }
@@ -427,16 +512,23 @@ export async function confirmarImportacionRutas(
 
       // Resolver cliente_id definitivo. Prioridad: 1) match exacto por
       // nombre normalizado (siempre gana, incluso si el usuario pidió
-      // "crear nuevo" -- evita duplicar); 2) decisión explícita de crear
-      // nuevo; 3) decisión explícita de un cliente EXISTENTE de ESTA
-      // empresa (se verifica contra clientesPorEmpresa -- nunca se confía
-      // ciegamente en el id que mande el cliente HTTP).
+      // "crear nuevo" -- evita duplicar); 2) cliente ya creado en esta
+      // importación por una fila anterior del mismo grupo; 3) decisión de
+      // grupo explícita de crear nuevo; 4) decisión de grupo explícita de
+      // un cliente EXISTENTE de ESTA empresa (se verifica contra
+      // clientesPorEmpresa -- nunca se confía ciegamente en el id que
+      // mande el cliente HTTP). La clave de grupo (normCliente) SIEMPRE
+      // se recalcula aquí a partir del dato real de la fila, nunca se
+      // toma de una asociación fila->grupo enviada por el cliente HTTP.
       let clienteId: number | null = null;
       const normCliente = normalizar(f.clienteExcel);
       const clienteExactoId = clientesPorNombreNorm.get(normCliente) ?? null;
+      const decisionCliente = decisionClientePorNorm.get(normCliente);
       if (clienteExactoId != null) {
         clienteId = clienteExactoId;
-      } else if (decision?.clienteIdElegido === -1) {
+      } else if (clienteCreadoPorGrupo.has(normCliente)) {
+        clienteId = clienteCreadoPorGrupo.get(normCliente)!;
+      } else if (decisionCliente === -1) {
         const [rCliente] = await conn.execute<import("mysql2/promise").ResultSetHeader>(
           "INSERT INTO tms_clientes (empresa_id, nombre) VALUES (?, ?)",
           [empresaId, f.clienteExcel],
@@ -444,13 +536,10 @@ export async function confirmarImportacionRutas(
         clienteId = Number(rCliente.insertId);
         clientesPorEmpresa.set(clienteId, f.clienteExcel);
         clientesPorNombreNorm.set(normCliente, clienteId);
+        clienteCreadoPorGrupo.set(normCliente, clienteId);
         resultado.clientesCreados++;
-      } else if (
-        decision?.clienteIdElegido != null &&
-        decision.clienteIdElegido > 0 &&
-        clientesPorEmpresa.has(decision.clienteIdElegido)
-      ) {
-        clienteId = decision.clienteIdElegido;
+      } else if (decisionCliente != null && decisionCliente > 0 && clientesPorEmpresa.has(decisionCliente)) {
+        clienteId = decisionCliente;
       }
 
       if (clienteId == null) {
@@ -460,7 +549,7 @@ export async function confirmarImportacionRutas(
             filaExcel: f.filaExcel,
             identidad,
             detalle:
-              decision?.clienteIdElegido != null && !clientesPorEmpresa.has(decision.clienteIdElegido)
+              decisionCliente != null && !clientesPorEmpresa.has(decisionCliente)
                 ? `Cliente elegido inválido (no pertenece a esta empresa) para "${f.clienteExcel}".`
                 : `Cliente "${f.clienteExcel}" sin resolver — pendiente de elegir/crear antes de importar.`,
           }),
