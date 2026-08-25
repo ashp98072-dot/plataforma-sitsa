@@ -148,11 +148,70 @@ export async function GET(req: Request, ctx: Ctx) {
     );
   }
 
+  // OPS-2.1 — filtros servidor OPCIONALES para que el LIMIT 200 de abajo
+  // deje de poder "perder" viajes silenciosamente conforme crece el
+  // historial (hallazgo de la auditoría). Sin parámetros, el comportamiento
+  // es EXACTAMENTE el de antes (compat: plan-form.tsx y cualquier otro
+  // consumidor que llame el GET sin querystring). Nombres alineados con el
+  // precedente ya existente en /tms/programacion/reporte (fechaDesde/
+  // fechaHasta), no se inventan nombres nuevos.
+  const FECHA_RE = /^\d{4}-\d{2}-\d{2}$/;
+  const fechaDesdeParam = url.searchParams.get("fechaDesde");
+  const fechaHastaParam = url.searchParams.get("fechaHasta");
+  if (fechaDesdeParam && !FECHA_RE.test(fechaDesdeParam)) {
+    return NextResponse.json(
+      { error: "fechaDesde inválida; usa YYYY-MM-DD." },
+      { status: 400 },
+    );
+  }
+  if (fechaHastaParam && !FECHA_RE.test(fechaHastaParam)) {
+    return NextResponse.json(
+      { error: "fechaHasta inválida; usa YYYY-MM-DD." },
+      { status: 400 },
+    );
+  }
+  // El rango solo se aplica si vienen los DOS extremos — un solo extremo
+  // suelto se ignora en vez de interpretarlo a medias.
+  const usarRangoFecha = Boolean(fechaDesdeParam && fechaHastaParam);
+  const pendienteCierreParam = url.searchParams.get("pendienteCierre") === "1";
+
   try {
     await asegurarSchemaFlota();
   } catch {
     /* ok */
   }
+
+  // Misma definición que la columna calculada de abajo — un alias de SELECT
+  // no se puede reutilizar en WHERE, así que se comparte esta constante en
+  // vez de escribir la condición dos veces "a mano". OJO: es la MISMA
+  // definición que ya usan notificaciones/route.ts (alerta "Viajes
+  // pendientes de cierre") y cierre-viaje.ts — esos dos archivos quedan
+  // fuera del alcance de este cambio (OPS-2.1 no toca cierre/alertas), así
+  // que la constante vive solo aquí; si algún día diverge, extraerla a un
+  // helper compartido sería lo correcto.
+  const SQL_PENDIENTE_CIERRE = `(
+                p.estado NOT IN ('Cerrado', 'Cancelado')
+                AND EXISTS (
+                  SELECT 1 FROM flota_viajes fv
+                  WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
+                )
+              )`;
+
+  const condiciones = ["p.empresa_id = ?"];
+  const paramsRows: SqlParams = [guard.empresa.id];
+  if (usarRangoFecha) {
+    condiciones.push("p.fecha_plan BETWEEN ? AND ?");
+    paramsRows.push(fechaDesdeParam as string, fechaHastaParam as string);
+  }
+  if (pendienteCierreParam) {
+    condiciones.push(SQL_PENDIENTE_CIERRE);
+  }
+  // LIMIT: "pendienteCierre=1" es justamente la vista que NUNCA debe poder
+  // perder un registro por límite — el volumen esperado es bajo (viajes ya
+  // finalizados, aún no cerrados), así que se deja sin límite. El GET sin
+  // filtros (compat) y el filtro por rango de fecha conservan el límite de
+  // seguridad de siempre.
+  const limitSql = pendienteCierreParam ? "" : "LIMIT 200";
 
   const [rows, disp] = await Promise.all([
     query<RowDataPacket[]>(
@@ -166,13 +225,7 @@ export async function GET(req: Request, ctx: Ctx) {
               -- este plan. Cubre tanto viajes nuevos ("En ruta" + llegada)
               -- como el histórico "Descargado" (que siempre tuvo su
               -- flota_viajes en 'cerrado' antes de marcarse así).
-              (
-                p.estado NOT IN ('Cerrado', 'Cancelado')
-                AND EXISTS (
-                  SELECT 1 FROM flota_viajes fv
-                  WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
-                )
-              ) AS pendiente_cierre,
+              ${SQL_PENDIENTE_CIERRE} AS pendiente_cierre,
               p.tipo_traslado, p.notas,
               DATE_FORMAT(p.regreso_estimado, '%Y-%m-%dT%H:%i') AS regreso_estimado,
               p.tarifa_comercial, p.referencia_cliente, p.ruta_id, p.ruta_codigo_historico,
@@ -198,10 +251,10 @@ export async function GET(req: Request, ctx: Ctx) {
          FROM tms_evidencias
          GROUP BY plan_id
        ) ev ON ev.plan_id = p.id
-       WHERE p.empresa_id = ?
+       WHERE ${condiciones.join(" AND ")}
        ORDER BY p.fecha_plan DESC, p.id DESC
-       LIMIT 200`,
-      [guard.empresa.id],
+       ${limitSql}`,
+      paramsRows,
     ),
     listarDisponibilidadVehiculos(guard.empresa.id).catch(() => null),
   ]);

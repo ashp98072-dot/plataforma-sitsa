@@ -324,6 +324,15 @@ type FiltroRapido =
 
 type DatosProgramacion = {
   planes: Plan[];
+  /**
+   * OPS-2.1 — lista COMPLETA de pendientes de cierre, pedida aparte con
+   * `pendienteCierre=1` (sin límite, sin depender del rango de fechas
+   * visible). Antes se calculaba recortando el mismo array de `planes`
+   * ya limitado a 200 filas y al rango Hoy/Mañana/Semana — un viaje
+   * antiguo pendiente de cierre podía quedar fuera de ambos recortes y
+   * desaparecer del tablero sin aviso.
+   */
+  pendientesCierre: Plan[];
   estadoVehiculos: EstadoVehiculo[];
 };
 
@@ -331,20 +340,40 @@ type DatosProgramacion = {
  * Fetch puro, sin tocar estado de React — lo reutilizan tanto el efecto de
  * montaje como el botón "Actualizar", cada uno aplicando el resultado a su
  * propio estado por separado (ver nota en el useEffect de abajo).
+ *
+ * OPS-2.1: dos peticiones en paralelo, no una — la lista principal ahora
+ * pide al servidor solo el rango de fechas visible (fechaDesde/fechaHasta,
+ * mismos nombres que ya usa /tms/programacion/reporte) en vez de traer
+ * hasta 200 viajes y filtrar el rango en el navegador; la de pendientes de
+ * cierre se pide aparte, siempre completa, para que la tarjeta resumen y
+ * el filtro "Pendiente de cierre" nunca dependan del rango visible.
  */
 async function obtenerProgramacion(
   slug: string,
+  desde: string,
+  hasta: string,
 ): Promise<{ ok: true; datos: DatosProgramacion } | { ok: false; error: string }> {
-  const res = await fetch(`/api/empresas/${slug}/tms/planes`);
-  const data = await res.json();
-  if (!res.ok) {
-    return { ok: false, error: data.error ?? "No se pudo cargar la programación." };
+  const [resPlanes, resPendientes] = await Promise.all([
+    fetch(`/api/empresas/${slug}/tms/planes?fechaDesde=${desde}&fechaHasta=${hasta}`),
+    fetch(`/api/empresas/${slug}/tms/planes?pendienteCierre=1`),
+  ]);
+  const dataPlanes = await resPlanes.json();
+  if (!resPlanes.ok) {
+    return { ok: false, error: dataPlanes.error ?? "No se pudo cargar la programación." };
   }
+  // La lista de pendientes es un complemento del tablero (resumen + filtro
+  // rápido) — si esta segunda petición falla, no debe tumbar la pantalla
+  // completa; se degrada a vacío y "Actualizar" la vuelve a intentar.
+  const dataPendientes = await resPendientes.json().catch(() => ({}));
+  const pendientesCierre = resPendientes.ok
+    ? ((dataPendientes.planes ?? []) as Plan[])
+    : [];
   return {
     ok: true,
     datos: {
-      planes: (data.planes ?? []) as Plan[],
-      estadoVehiculos: (data.estadoVehiculos ?? []) as EstadoVehiculo[],
+      planes: (dataPlanes.planes ?? []) as Plan[],
+      pendientesCierre,
+      estadoVehiculos: (dataPlanes.estadoVehiculos ?? []) as EstadoVehiculo[],
     },
   };
 }
@@ -353,6 +382,9 @@ type Props = { slug: string; hoy: string; planInicialId?: number | null };
 
 export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   const [planes, setPlanes] = useState<Plan[]>([]);
+  // OPS-2.1: lista completa e independiente del rango de fechas — ver
+  // DatosProgramacion.pendientesCierre.
+  const [pendientesCierre, setPendientesCierre] = useState<Plan[]>([]);
   const [estadoVehiculos, setEstadoVehiculos] = useState<EstadoVehiculo[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
@@ -375,6 +407,12 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   const [fUnidad, setFUnidad] = useState("");
   const [fCliente, setFCliente] = useState("");
 
+  // OPS-2.1: se calcula aquí arriba (no más abajo, junto a `enRango` como
+  // antes) porque el efecto de carga ahora depende de desde/hasta — el
+  // servidor filtra por fecha, ya no el navegador sobre un array de hasta
+  // 200 filas.
+  const { desde, hasta } = rangoFechas(hoy, rango);
+
   // Creación/edición de viajes: `mostrarCrear` abre el formulario en modo
   // creación; `editando` selecciona un plan del tablero para abrir el mismo
   // formulario en modo edición (mutuamente excluyentes).
@@ -392,12 +430,17 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   // evitar aplicar una respuesta obsoleta si `slug` cambia rápido). No usa
   // la función `cargar` de abajo — esa es la que dispara el botón
   // "Actualizar" (un manejador de clic, no un efecto).
+  //
+  // OPS-2.1: depende también de desde/hasta — al cambiar Hoy/Mañana/Semana
+  // se vuelve a consultar el servidor con el rango correcto (antes solo
+  // filtraba en el navegador el array ya cargado). El intervalo de sondeo
+  // sigue siendo de 5s, sin cambios — solo cambia QUÉ pide cada vez.
   useEffect(() => {
     let ignore = false;
     async function cargarInicial() {
       setLoading(true);
       setErr("");
-      const r = await obtenerProgramacion(slug).catch(
+      const r = await obtenerProgramacion(slug, desde, hasta).catch(
         () => ({ ok: false, error: "Error de conexión al cargar la programación." }) as const,
       );
       if (ignore) return;
@@ -405,15 +448,17 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
         setErr(r.error);
       } else {
         setPlanes(r.datos.planes);
+        setPendientesCierre(r.datos.pendientesCierre);
         setEstadoVehiculos(r.datos.estadoVehiculos);
       }
       setLoading(false);
     }
     void cargarInicial();
     const intervalo = window.setInterval(async () => {
-      const r = await obtenerProgramacion(slug).catch(() => null);
+      const r = await obtenerProgramacion(slug, desde, hasta).catch(() => null);
       if (!ignore && r?.ok) {
         setPlanes(r.datos.planes);
+        setPendientesCierre(r.datos.pendientesCierre);
         setEstadoVehiculos(r.datos.estadoVehiculos);
       }
     }, 5000);
@@ -421,18 +466,19 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
       ignore = true;
       window.clearInterval(intervalo);
     };
-  }, [slug]);
+  }, [slug, desde, hasta]);
 
   async function cargar() {
     setLoading(true);
     setErr("");
     try {
-      const r = await obtenerProgramacion(slug);
+      const r = await obtenerProgramacion(slug, desde, hasta);
       if (!r.ok) {
         setErr(r.error);
         return;
       }
       setPlanes(r.datos.planes);
+      setPendientesCierre(r.datos.pendientesCierre);
       setEstadoVehiculos(r.datos.estadoVehiculos);
     } catch {
       setErr("Error de conexión al cargar la programación.");
@@ -472,9 +518,10 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
     };
   }
 
-  const { desde, hasta } = rangoFechas(hoy, rango);
-
-  // 1) Filtro de fecha (Hoy / Mañana / Semana) — SIEMPRE aplicado primero.
+  // OPS-2.1: el servidor ya devuelve solo el rango desde/hasta pedido —
+  // este filtro queda como respaldo defensivo (por ejemplo, si `planes`
+  // trae datos de un fetch anterior a un cambio de rango que aún no
+  // resolvió), no como el mecanismo principal de acotar por fecha.
   const enRango = useMemo(
     () => planes.filter((p) => p.fecha_plan >= desde && p.fecha_plan <= hasta),
     [planes, desde, hasta],
@@ -534,40 +581,55 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   );
 
   // 2) Filtro rápido (tarjetas resumen) + filtros de piloto/unidad/cliente.
+  // OPS-2.1: "Pendiente de cierre" parte de `pendientesCierre` (completo,
+  // sin recorte de fecha) en vez de `enRango` — es justamente el filtro
+  // que debe poder consultarse sin depender del rango de fechas visible.
+  const baseFiltroRapido = filtroRapido === "PendienteCierre" ? pendientesCierre : enRango;
   const visibles = useMemo(() => {
-    return enRango.filter((p) => {
+    return baseFiltroRapido.filter((p) => {
       if (filtroRapido === "sin_piloto" && p.piloto) return false;
       if (filtroRapido === "sin_unidad" && p.placa) return false;
       if (filtroRapido === "sin_auxiliares" && p.auxiliares.length > 0) return false;
       if (filtroRapido === "Programado" && p.estado !== "Programado") return false;
       if (filtroRapido === "En ruta" && p.estado !== "En ruta") return false;
-      if (filtroRapido === "PendienteCierre" && !p.pendiente_cierre) return false;
+      // PendienteCierre: baseFiltroRapido ya ES la lista de pendientes.
       if (filtroRapido === "Cerrado" && p.estado !== "Cerrado") return false;
       if (fPiloto && p.piloto !== fPiloto) return false;
       if (fUnidad && p.placa !== fUnidad) return false;
       if (fCliente && p.cliente !== fCliente) return false;
       return true;
     });
-  }, [enRango, filtroRapido, fPiloto, fUnidad, fCliente]);
+  }, [baseFiltroRapido, filtroRapido, fPiloto, fUnidad, fCliente]);
 
   const resumen = useMemo(
     () => ({
       total: enRango.length,
       programados: enRango.filter((p) => p.estado === "Programado").length,
       enRuta: enRango.filter((p) => p.estado === "En ruta").length,
-      finalizados: enRango.filter((p) => Boolean(p.pendiente_cierre)).length,
+      // OPS-2.1: cuenta real y completa (pendientesCierre), no acotada al
+      // rango de fechas visible — antes podía mostrar menos de los que
+      // en realidad hay pendientes.
+      finalizados: pendientesCierre.length,
       sinPiloto: enRango.filter((p) => !p.piloto).length,
       sinUnidad: enRango.filter((p) => !p.placa).length,
     }),
-    [enRango],
+    [enRango, pendientesCierre],
   );
 
   const input =
     "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
 
+  // OPS-2.1: también busca en `pendientesCierre` — un viaje pendiente de
+  // cierre puede quedar fuera del rango de fechas visible (`planes`) y aun
+  // así el usuario lo abre desde el filtro rápido "Pendiente de cierre".
   const planEditando = useMemo(
-    () => (editandoId != null ? (planes.find((p) => p.id === editandoId) ?? null) : null),
-    [planes, editandoId],
+    () =>
+      editandoId != null
+        ? (planes.find((p) => p.id === editandoId) ??
+          pendientesCierre.find((p) => p.id === editandoId) ??
+          null)
+        : null,
+    [planes, pendientesCierre, editandoId],
   );
 
   function cerrarFormulario() {
@@ -723,7 +785,11 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
           </button>
         ))}
         <span className="self-center text-xs text-[var(--muted)]">
-          {desde === hasta ? desde : `${desde} → ${hasta}`}
+          {filtroRapido === "PendienteCierre"
+            ? "Pendientes de cierre: se muestran todos, sin importar la fecha."
+            : desde === hasta
+              ? desde
+              : `${desde} → ${hasta}`}
         </span>
       </div>
 
