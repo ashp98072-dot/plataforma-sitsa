@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import { ClienteSearch } from "@/components/tms/cliente-search";
 import { PlacaSelect, type VehiculoOpt } from "@/components/tms/placa-select";
 import { PilotoSelect } from "@/components/tms/piloto-select";
+import { RutaSelect, type RutaOpt } from "@/components/tms/ruta-select";
 import ViaticosPanel from "@/components/tms/viaticos-panel";
 import type { Plan } from "./programacion-client";
 import NotificarPersonal from "./notificar-personal";
@@ -80,6 +81,7 @@ function filtrarPersonal(list: EmpOps[], q: string, selectedIds: number[]) {
 export default function PlanForm({
   slug,
   hoy,
+  fechaSugerida,
   plan,
   onSaved,
   onCancel,
@@ -95,6 +97,12 @@ export default function PlanForm({
    * aparecía bajo ese filtro.
    */
   hoy: string;
+  /**
+   * VIAT-4 (punto 5) — fecha por defecto al CREAR un viaje nuevo, coherente
+   * con la vista actual (Hoy/Mañana/Semana) de Programación en vez de
+   * siempre "hoy". Si no se pasa, cae a `hoy` (mismo comportamiento previo).
+   */
+  fechaSugerida?: string;
   plan?: Plan | null;
   onSaved: (info: { id: number; fechaPlan: string }) => void;
   onCancel?: () => void;
@@ -112,7 +120,7 @@ export default function PlanForm({
   // usado en tms/page.tsx (seleccionarPlan()), no se inventa un cruce nuevo.
   const [form, setForm] = useState({
     codigo: plan?.codigo ?? "",
-    fechaPlan: plan?.fecha_plan ?? hoy,
+    fechaPlan: plan?.fecha_plan ?? fechaSugerida ?? hoy,
     horaCarga: plan?.hora_carga?.slice(0, 5) ?? "08:00",
     clienteId: 0,
     clienteNombre: plan?.cliente ?? "",
@@ -125,6 +133,19 @@ export default function PlanForm({
     regresoEstimado: plan?.regreso_estimado?.slice(0, 16) ?? "",
     tarifaComercial: plan?.tarifa_comercial != null ? String(plan.tarifa_comercial) : "",
     referenciaCliente: plan?.referencia_cliente ?? "",
+    // VIAT-4/VIAT-4b: fotografía histórica de qué ruta maestra se usó —
+    // se recalcula al elegir otra ruta; no bloquea guardar el viaje sin
+    // ruta (código/ruta sigue siendo opcional). lugarDescargaHistorico y
+    // contacto*Historico son la COPIA congelada en este momento — si la
+    // ruta o el contacto del cliente cambian después, este viaje ya
+    // guardado no se ve afectado (corrección VIAT-4b: antes el contacto
+    // se mostraba "en vivo" sin copiarse; ahora sí se copia).
+    rutaId: plan?.ruta_id ?? 0,
+    rutaCodigo: plan?.ruta_codigo_historico ?? "",
+    lugarDescargaHistorico: plan?.lugar_descarga_historico ?? "",
+    contactoNombreHistorico: plan?.contacto_nombre_historico ?? "",
+    contactoCargoHistorico: plan?.contacto_cargo_historico ?? "",
+    contactoTelefonoHistorico: plan?.contacto_telefono_historico ?? "",
     notas: plan?.notas ?? "",
     estado: plan?.estado ?? "Programado",
   });
@@ -394,6 +415,60 @@ export default function PlanForm({
     setAuxInput("");
   }
 
+  /**
+   * VIAT-4/VIAT-4b — al elegir una ruta del catálogo (Código/Ruta), COPIA
+   * sus datos al formulario (fotografía histórica): cliente (modo A:
+   * buscar por código sin cliente elegido — el código es único por
+   * empresa), hora habitual, ruta_id/código, la descripción de destino
+   * (lugar_descarga_historico — NO se deriva de paradas) y el contacto
+   * (nombre/cargo/teléfono, copiados AHORA — corrección VIAT-4b: antes se
+   * mostraban "en vivo" sin copiarse; si el contacto del cliente cambia
+   * después, este viaje ya guardado no debe reflejarlo). El programador
+   * puede seguir editando cualquiera de estos campos después para ESTE
+   * viaje sin modificar la ruta maestra — es una copia, no una
+   * referencia en vivo.
+   *
+   * Paradas estructuradas: se copian tal cual si la ruta las tiene (no se
+   * pierden ni se reordenan). Si la ruta NO tiene paradas estructuradas
+   * pero sí descripción de destino, se agrega una parada de respaldo con
+   * esa descripción — solo para que el tablero de Programación
+   * (origen/destino por parada) y el seguimiento operativo sigan
+   * funcionando; el REPORTE tradicional nunca lee esta parada de
+   * respaldo, siempre lee lugar_descarga_historico directamente.
+   */
+  function aplicarRuta(ruta: RutaOpt) {
+    setForm((f) => ({
+      ...f,
+      clienteId: ruta.clienteId,
+      clienteNombre: ruta.clienteNombre,
+      horaCarga: ruta.horaHabitual || f.horaCarga,
+      rutaId: ruta.id,
+      rutaCodigo: ruta.codigo,
+      lugarDescargaHistorico: ruta.destinoDescripcion ?? f.lugarDescargaHistorico,
+      contactoNombreHistorico: ruta.contactoNombre ?? "",
+      contactoCargoHistorico: ruta.contactoCargo ?? "",
+      contactoTelefonoHistorico: ruta.contactoTelefono ?? "",
+    }));
+    const nuevasParadas: ParadaForm[] = [];
+    if (ruta.lugarCargaTexto) {
+      nuevasParadas.push({ lugarNombre: ruta.lugarCargaTexto, tipo: "Carga", requiereEvidencia: true, clienteUbicacionId: ruta.ubicacionCargaId });
+    }
+    if (ruta.paradas.length) {
+      for (const p of ruta.paradas) {
+        nuevasParadas.push({
+          lugarNombre: p.lugarNombre,
+          tipo: (["Carga", "Descarga", "Entrega"].includes(p.tipo) ? p.tipo : "Entrega") as ParadaForm["tipo"],
+          requiereEvidencia: true,
+          clienteUbicacionId: p.clienteUbicacionId,
+        });
+      }
+    } else if (ruta.destinoDescripcion) {
+      // Respaldo solo para el tablero/seguimiento — el reporte no depende de esto.
+      nuevasParadas.push({ lugarNombre: ruta.destinoDescripcion, tipo: "Entrega", requiereEvidencia: true, clienteUbicacionId: null });
+    }
+    if (nuevasParadas.length) setParadasForm(nuevasParadas);
+  }
+
   // Se evalúa contra el estado ORIGINAL del plan (antes de este guardado),
   // igual que el servidor (ver ESTADOS_SOLO_NOTAS en planes/route.ts) — la
   // transición de estado en sí siempre está permitida; lo que se restringe
@@ -469,6 +544,12 @@ export default function PlanForm({
             regresoEstimado: form.regresoEstimado || undefined,
             tarifaComercial: form.tarifaComercial === "" ? undefined : Number(form.tarifaComercial),
             referenciaCliente: form.referenciaCliente.trim() || undefined,
+            rutaId: form.rutaId || undefined,
+            rutaCodigo: form.rutaCodigo.trim() || undefined,
+            lugarDescargaHistorico: form.lugarDescargaHistorico.trim() || undefined,
+            contactoNombreHistorico: form.contactoNombreHistorico.trim() || undefined,
+            contactoCargoHistorico: form.contactoCargoHistorico.trim() || undefined,
+            contactoTelefonoHistorico: form.contactoTelefonoHistorico.trim() || undefined,
             notas: form.notas.trim() || undefined,
             clienteId: form.clienteId || undefined,
             clienteNombre: form.clienteNombre.trim() || undefined,
@@ -512,6 +593,12 @@ export default function PlanForm({
               ? null
               : Number(form.tarifaComercial),
           referenciaCliente: soloNotas ? undefined : form.referenciaCliente.trim() || null,
+          rutaId: soloNotas ? undefined : form.rutaId || undefined,
+          rutaCodigo: soloNotas ? undefined : form.rutaCodigo.trim() || undefined,
+          lugarDescargaHistorico: soloNotas ? undefined : form.lugarDescargaHistorico.trim() || undefined,
+          contactoNombreHistorico: soloNotas ? undefined : form.contactoNombreHistorico.trim() || undefined,
+          contactoCargoHistorico: soloNotas ? undefined : form.contactoCargoHistorico.trim() || undefined,
+          contactoTelefonoHistorico: soloNotas ? undefined : form.contactoTelefonoHistorico.trim() || undefined,
           notas: form.notas.trim() || undefined,
           paradas: soloNotas || !paradas.length ? undefined : paradas,
         }),
@@ -597,6 +684,58 @@ export default function PlanForm({
           inputClassName={inputCls}
           onChange={({ clienteId, clienteNombre }) => setForm((f) => ({ ...f, clienteId, clienteNombre }))}
         />
+      </div>
+      <div className={soloNotas || bloqueado ? "pointer-events-none opacity-50" : ""}>
+        <RutaSelect
+          slug={slug}
+          clienteId={form.clienteId}
+          value={form.rutaCodigo}
+          inputClassName={inputCls}
+          onSeleccionar={aplicarRuta}
+        />
+      </div>
+      <label className={`text-xs text-[var(--muted)] md:col-span-2 ${soloNotas || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
+        Lugar de descarga (descripción operativa — como la usa Operaciones)
+        <input
+          className={`${inputCls} mt-1 w-full`}
+          placeholder="Ej. RUTA-A - punto1-punto2-punto3"
+          value={form.lugarDescargaHistorico}
+          onChange={(e) => setForm((f) => ({ ...f, lugarDescargaHistorico: e.target.value }))}
+        />
+        <span className="mt-0.5 block text-[10px]">
+          Se copió de la ruta elegida arriba (si aplica) — puedes ajustarla solo para este viaje.
+          Es lo que sale en el reporte tradicional (columna &quot;Lugar de Descarga&quot;).
+        </span>
+      </label>
+      <div className={`md:col-span-3 flex flex-wrap items-end gap-2 rounded border border-[var(--border)] p-2 ${soloNotas || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
+        <p className="w-full text-[11px] text-[var(--muted)]">
+          Contacto (copiado de la ruta al elegirla — un cambio futuro del contacto del cliente NO
+          altera este viaje ya creado):
+        </p>
+        <label className="text-[11px] text-[var(--muted)]">
+          Nombre
+          <input
+            className={`${inputCls} mt-0.5 block w-40`}
+            value={form.contactoNombreHistorico}
+            onChange={(e) => setForm((f) => ({ ...f, contactoNombreHistorico: e.target.value }))}
+          />
+        </label>
+        <label className="text-[11px] text-[var(--muted)]">
+          Cargo
+          <input
+            className={`${inputCls} mt-0.5 block w-32`}
+            value={form.contactoCargoHistorico}
+            onChange={(e) => setForm((f) => ({ ...f, contactoCargoHistorico: e.target.value }))}
+          />
+        </label>
+        <label className="text-[11px] text-[var(--muted)]">
+          Teléfono
+          <input
+            className={`${inputCls} mt-0.5 block w-32`}
+            value={form.contactoTelefonoHistorico}
+            onChange={(e) => setForm((f) => ({ ...f, contactoTelefonoHistorico: e.target.value }))}
+          />
+        </label>
       </div>
       <div className={soloNotas || bloqueado ? "pointer-events-none opacity-50" : ""}>
         <PlacaSelect

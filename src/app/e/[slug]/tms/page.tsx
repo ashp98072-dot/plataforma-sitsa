@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import ViaticosConfigPanel from "@/components/tms/viaticos-config-panel";
 import ClienteUbicacionesAdmin from "@/components/tms/cliente-ubicaciones-admin";
+import ClienteContactosAdmin from "@/components/tms/cliente-contactos-admin";
 
 /**
  * Operaciones → TMS / Logística — VIAT-1b/1c: centro de configuración/
@@ -286,6 +287,7 @@ export default function TmsPage() {
             Ir al módulo Viáticos →
           </Link>
         </div>
+        <ClienteContactosAdmin slug={slug} clientes={clientesCat} />
         <ClienteUbicacionesAdmin slug={slug} clientes={clientesCat} />
       </section>
 

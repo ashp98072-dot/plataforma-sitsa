@@ -121,6 +121,16 @@ export default function ViaticosPorPagarPanel({ slug }: { slug: string }) {
     ? items.filter((r) => r.planCodigo.toLowerCase().includes(fBusqueda.trim().toLowerCase()))
     : items;
 
+  // VIAT-4 (punto 11) — antes de exportar el archivo bancario: cuántos
+  // AUTORIZADOS realmente calificarían (cuenta bancaria + monto > 0) y
+  // cuántos no tienen cuenta — para que el facturador no descubra la
+  // exclusión recién al intentar generar el archivo. Los que no tienen
+  // cuenta NO se ocultan de la tabla: siguen disponibles para pagarse por
+  // otro método (efectivo/cheque) vía "Registrar entrega/pago".
+  const autorizadosVisibles = filtrados.filter((r) => r.estado === "AUTORIZADO");
+  const aptosBanco = autorizadosVisibles.filter((r) => r.cuentaBancaria?.trim() && r.montoAsignado > 0);
+  const sinCuentaBanco = autorizadosVisibles.filter((r) => !r.cuentaBancaria?.trim());
+
   function toggleSeleccion(id: number) {
     setSeleccionados((prev) => {
       const next = new Set(prev);
@@ -257,6 +267,18 @@ export default function ViaticosPorPagarPanel({ slug }: { slug: string }) {
           {loading ? "Actualizando…" : "Actualizar"}
         </button>
       </div>
+
+      {autorizadosVisibles.length ? (
+        <p className="text-xs">
+          <span className="text-emerald-300">{aptosBanco.length} apto(s) para archivo bancario</span>
+          {sinCuentaBanco.length ? (
+            <span className="text-amber-300">
+              {" "}
+              · {sinCuentaBanco.length} sin cuenta bancaria (disponibles para pagar por otro método)
+            </span>
+          ) : null}
+        </p>
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-2">
         <a

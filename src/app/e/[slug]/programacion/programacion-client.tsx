@@ -59,6 +59,13 @@ export type Plan = {
   regreso_estimado: string | null;
   tarifa_comercial: number | null;
   referencia_cliente: string | null;
+  /** VIAT-4/VIAT-4b: fotografía histórica de la ruta usada al armar el viaje. */
+  ruta_id: number | null;
+  ruta_codigo_historico: string | null;
+  lugar_descarga_historico: string | null;
+  contacto_nombre_historico: string | null;
+  contacto_cargo_historico: string | null;
+  contacto_telefono_historico: string | null;
   notas: string | null;
   cliente: string | null;
   placa: string | null;
@@ -319,7 +326,10 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   >(new Map());
   const fetchedFechasRef = useRef<Set<string>>(new Set());
 
-  const [rango, setRango] = useState<Rango>("hoy");
+  // VIAT-4 (punto 5) — la empresa normalmente programa un día antes: la
+  // vista inicial de Programación abre en "Mañana", no "Hoy". Botones Hoy/
+  // Mañana/Semana siguen disponibles para cambiarlo.
+  const [rango, setRango] = useState<Rango>("manana");
   const [filtroRapido, setFiltroRapido] = useState<FiltroRapido>("todos");
   const [fPiloto, setFPiloto] = useState("");
   const [fUnidad, setFUnidad] = useState("");
@@ -331,6 +341,11 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   const [mostrarCrear, setMostrarCrear] = useState(false);
   const [editandoId, setEditandoId] = useState<number | null>(planInicialId);
   const [avisoRango, setAvisoRango] = useState("");
+
+  // VIAT-4 (puntos 8-10) — reporte tradicional de Programación (Excel/PDF).
+  // Fecha específica: dejar "hasta" igual a "desde". Rango: ajustar ambos.
+  const [exportDesde, setExportDesde] = useState(hoy);
+  const [exportHasta, setExportHasta] = useState(hoy);
 
   // Carga inicial: función definida DENTRO del efecto (patrón oficial de
   // React para "Fetching data with Effects", con bandera `ignore` para
@@ -591,7 +606,13 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
       </div>
 
       {mostrarCrear ? (
-        <PlanForm slug={slug} hoy={hoy} onSaved={(info) => void alGuardar(info)} onCancel={cerrarFormulario} />
+        <PlanForm
+          slug={slug}
+          hoy={hoy}
+          fechaSugerida={rango === "hoy" ? hoy : sumarDias(hoy, 1)}
+          onSaved={(info) => void alGuardar(info)}
+          onCancel={cerrarFormulario}
+        />
       ) : null}
       {planEditando ? (
         <PlanForm
@@ -667,6 +688,45 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
         ))}
         <span className="self-center text-xs text-[var(--muted)]">
           {desde === hasta ? desde : `${desde} → ${hasta}`}
+        </span>
+      </div>
+
+      {/* VIAT-4 (puntos 8-10) — reporte tradicional de Programación */}
+      <div className="flex flex-wrap items-end gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-3">
+        <label className="text-xs text-[var(--muted)]">
+          Reporte desde
+          <input
+            type="date"
+            className={`${input} mt-1 block`}
+            value={exportDesde}
+            onChange={(e) => setExportDesde(e.target.value)}
+          />
+        </label>
+        <label className="text-xs text-[var(--muted)]">
+          hasta
+          <input
+            type="date"
+            className={`${input} mt-1 block`}
+            value={exportHasta}
+            onChange={(e) => setExportHasta(e.target.value)}
+          />
+        </label>
+        <a
+          href={`/api/empresas/${slug}/tms/programacion/reporte?formato=xlsx&fechaDesde=${exportDesde}&fechaHasta=${exportHasta}`}
+          className="rounded bg-emerald-700 px-3 py-1.5 text-xs text-white hover:bg-emerald-600"
+        >
+          Exportar Excel
+        </a>
+        <a
+          href={`/api/empresas/${slug}/tms/programacion/reporte?formato=pdf&fechaDesde=${exportDesde}&fechaHasta=${exportHasta}`}
+          className="rounded bg-[#334155] px-3 py-1.5 text-xs text-white hover:bg-[#3f4b5f]"
+        >
+          Exportar PDF
+        </a>
+        <span className="text-[10px] text-[var(--muted)]">
+          Reporte tradicional: Mes, Día, Placa, Piloto, Auxiliar 1, Auxiliar 2, Código, Cliente,
+          Lugar de Carga, Hora, Lugar de Descarga. Usa la misma fecha en ambos campos para un día
+          específico.
         </span>
       </div>
 
