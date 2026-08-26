@@ -70,6 +70,7 @@ function toInput(
     // esta ruta (formulario RRHH) siempre envía el campo, así que en la
     // práctica esto no cambia su comportamiento.
     supervisorIds: d.supervisorIds,
+    entrevistaId: d.entrevistaId,
   };
 }
 
