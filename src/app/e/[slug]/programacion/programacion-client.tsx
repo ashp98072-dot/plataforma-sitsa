@@ -65,6 +65,16 @@ export type Plan = {
    * devuelve como 0/1, no como boolean nativo.
    */
   pendiente_cierre: number;
+  /**
+   * OPS-4.2e: indicador derivado (GET /tms/planes) — true cuando el plan
+   * está "En ruta"/"Cargado", su regreso_estimado ya venció y TODAVÍA no
+   * hay llegada técnica en flota_viajes. Mutuamente excluyente con
+   * pendiente_cierre por diseño del backend (si ya hay llegada, es
+   * pendiente_cierre, nunca atrasado) — no se revalida aquí. MySQL lo
+   * devuelve como 0/1, no como boolean nativo. Opcional: si el GET no lo
+   * trae (compatibilidad), se trata como ausente/false, sin romper la UI.
+   */
+  atrasado?: number;
   tipo_traslado: string | null;
   regreso_estimado: string | null;
   tarifa_comercial: number | null;
@@ -1001,11 +1011,26 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
                     {p.hora_carga ? ` · ${p.hora_carga.slice(0, 5)}` : ""}
                   </span>
                 </div>
-                <span
-                  className={`rounded px-2 py-0.5 text-[11px] font-semibold ${estadoVisible(p).badge}`}
-                >
-                  {estadoVisible(p).label}
-                </span>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span
+                    className={`rounded px-2 py-0.5 text-[11px] font-semibold ${estadoVisible(p).badge}`}
+                  >
+                    {estadoVisible(p).label}
+                  </span>
+                  {/* OPS-4.2e: indicador adicional, no reemplaza el badge de
+                      estado real de arriba — mutuamente excluyente con
+                      "Pendiente de cierre" por diseño del backend (ver
+                      Plan.atrasado). Solo visual: no cambia estado, flujo,
+                      llegada, cierre ni asignaciones. */}
+                  {p.atrasado ? (
+                    <span
+                      className="rounded bg-rose-900/50 px-2 py-0.5 text-[11px] font-semibold text-rose-200"
+                      title="Superó el regreso estimado y aún no registra llegada."
+                    >
+                      Atrasado
+                    </span>
+                  ) : null}
+                </div>
               </div>
 
               <div className="mt-2 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
