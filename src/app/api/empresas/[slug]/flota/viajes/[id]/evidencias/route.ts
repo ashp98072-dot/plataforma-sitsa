@@ -1,7 +1,7 @@
 import { readFileSync } from "fs";
 import { NextResponse } from "next/server";
-import type { RowDataPacket } from "mysql2";
-import { query } from "@/lib/db";
+import type { RowDataPacket } from "mysql2/promise";
+import { getPool, query } from "@/lib/db";
 import { requireTenantFlota, requireTenantFlotaAny } from "@/lib/tenant";
 import {
   asegurarSchemaFlota,
@@ -14,6 +14,7 @@ import {
   listarEvidenciasViaje,
   type TipoEvidenciaViaje,
 } from "@/lib/flota/viaje-evidencias";
+import { bloquearParadaDelPlan } from "@/lib/tms/paradas";
 import { absPathFromRelative, contentTypeFor } from "@/lib/uploads";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
@@ -183,6 +184,18 @@ export async function POST(req: Request, ctx: Ctx) {
       { status: 400 },
     );
   }
+  // CORRECCIÓN PR #80: cualquier paradaId (no solo tipo "producto") exige
+  // un plan asociado — antes se pasaba crudo a guardarEvidenciaViaje sin
+  // comprobar siquiera que el viaje tuviera plan.
+  if (paradaId && !planId) {
+    return NextResponse.json(
+      {
+        error:
+          "Este viaje no tiene un plan asociado; no se puede asociar evidencia a una parada.",
+      },
+      { status: 400 },
+    );
+  }
 
   const syncTmsTipo =
     tipo === "producto"
@@ -193,28 +206,73 @@ export async function POST(req: Request, ctx: Ctx) {
           ? ("Descarga" as const)
           : null;
 
-  const ids: number[] = [];
-  for (const file of files) {
-    const id = await guardarEvidenciaViaje({
-      empresaId: guard.empresa.id,
-      viajeId,
-      tipo,
-      file,
-      latitud: Number.isFinite(latitud as number) ? latitud : null,
-      longitud: Number.isFinite(longitud as number) ? longitud : null,
-      capturadoEn,
-      username: guard.session.username,
-      planId,
-      paradaId: paradaId || null,
-      syncTmsTipo,
-    });
-    ids.push(id);
-  }
+  // CORRECCIÓN PR #80 (integridad concurrente evidencia ↔ parada): si
+  // viene paradaId, se BLOQUEA (SELECT ... FOR UPDATE, vía
+  // bloquearParadaDelPlan) esa fila de tms_plan_paradas ANTES de
+  // insertar evidencia — validando de paso que existe, que pertenece a
+  // ESTE plan y que ese plan pertenece a esta empresa. El INSERT se hace
+  // con la MISMA conexión/transacción que adquirió el lock
+  // (guardarEvidenciaViaje recibe `conn`). Es el mismo lock que
+  // guardarParadasPlan adquiere antes de decidir un DELETE de esa parada
+  // (ver src/lib/tms/paradas.ts): quien llegue primero serializa al
+  // otro, así ninguno puede dejar una evidencia huérfana. Sin paradaId
+  // no hay nada que bloquear — la transacción solo envuelve el/los
+  // INSERT sin cambiar ningún comportamiento observable.
+  const conn = await getPool().getConnection();
+  try {
+    await conn.beginTransaction();
 
-  return NextResponse.json({
-    ids,
-    mensaje: `${ids.length} evidencia(s) guardada(s).`,
-  });
+    if (paradaId) {
+      const existe = await bloquearParadaDelPlan(
+        conn,
+        guard.empresa.id,
+        planId as number,
+        paradaId,
+      );
+      if (!existe) {
+        await conn.rollback();
+        return NextResponse.json(
+          { error: "La parada no pertenece a este viaje." },
+          { status: 400 },
+        );
+      }
+    }
+
+    const ids: number[] = [];
+    for (const file of files) {
+      const id = await guardarEvidenciaViaje({
+        empresaId: guard.empresa.id,
+        viajeId,
+        tipo,
+        file,
+        latitud: Number.isFinite(latitud as number) ? latitud : null,
+        longitud: Number.isFinite(longitud as number) ? longitud : null,
+        capturadoEn,
+        username: guard.session.username,
+        planId,
+        paradaId: paradaId || null,
+        syncTmsTipo,
+        conn,
+      });
+      ids.push(id);
+    }
+
+    await conn.commit();
+
+    return NextResponse.json({
+      ids,
+      mensaje: `${ids.length} evidencia(s) guardada(s).`,
+    });
+  } catch (e) {
+    await conn.rollback();
+    console.error("POST flota/viajes/evidencias transacción", e);
+    return NextResponse.json(
+      { error: "No se pudo guardar la evidencia. Intenta de nuevo." },
+      { status: 500 },
+    );
+  } finally {
+    conn.release();
+  }
 }
 
 /** Solo Admin puede eliminar evidencias de viaje. */

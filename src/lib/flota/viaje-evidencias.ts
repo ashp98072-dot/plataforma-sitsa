@@ -1,5 +1,5 @@
-import type { RowDataPacket } from "mysql2";
-import { execute, query } from "@/lib/db";
+import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
+import { execute, query, type SqlParams } from "@/lib/db";
 import { ahoraLocal, fmtTs } from "@/lib/rrhh/dates";
 import { borrarUpload, contentTypeFor, guardarUpload } from "@/lib/uploads";
 
@@ -29,6 +29,17 @@ export async function guardarEvidenciaViaje(opts: {
   planId?: number | null;
   paradaId?: number | null;
   syncTmsTipo?: "Carga" | "Descarga" | "Producto" | null;
+  /**
+   * CORRECCIÓN PR #80 (integridad concurrente evidencia ↔ parada):
+   * conexión/transacción opcional del caller. Si viene (endpoint de staff
+   * de evidencias, que ya bloqueó la parada con `bloquearParadaDelPlan`
+   * en esta misma conexión), los INSERT de esta función participan de esa
+   * MISMA transacción — necesario para que el lock de la parada siga
+   * activo mientras se inserta la evidencia. Si no viene (portal del
+   * piloto y cualquier otro caller existente), se comporta EXACTAMENTE
+   * igual que antes: pool global vía @/lib/db, sin transacción propia.
+   */
+  conn?: PoolConnection;
 }): Promise<number> {
   const saved = await guardarUpload(
     opts.empresaId,
@@ -38,9 +49,16 @@ export async function guardarEvidenciaViaje(opts: {
   );
   const ahora = ahoraLocal();
   const capturado = fmtTs(opts.capturadoEn) || ahora;
-  let r;
+  const run = async (sql: string, params: SqlParams): Promise<ResultSetHeader> => {
+    if (opts.conn) {
+      const [result] = await opts.conn.execute<ResultSetHeader>(sql, params);
+      return result;
+    }
+    return execute(sql, params);
+  };
+  let r: ResultSetHeader;
   try {
-    r = await execute(
+    r = await run(
       `INSERT INTO flota_viaje_evidencias
         (empresa_id, viaje_id, tipo, ruta_relativa, nombre_original, mime, tamano,
          latitud, longitud, capturado_en, subido_por, creado_at, parada_id)
@@ -62,7 +80,7 @@ export async function guardarEvidenciaViaje(opts: {
       ],
     );
   } catch {
-    r = await execute(
+    r = await run(
       `INSERT INTO flota_viaje_evidencias
         (empresa_id, viaje_id, tipo, ruta_relativa, nombre_original, mime, tamano,
          latitud, longitud, capturado_en, subido_por, creado_at)
@@ -88,25 +106,27 @@ export async function guardarEvidenciaViaje(opts: {
   const tmsTipo = opts.syncTmsTipo ?? null;
   if (planIdSync && tmsTipo) {
     const paradaSync = opts.paradaId ?? null;
-    await execute(
-      `INSERT INTO tms_evidencias
-        (empresa_id, plan_id, tipo, ruta_archivo, nombre_original, latitud, longitud,
-         subido_por, parada_id, capturado_en)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        opts.empresaId,
-        planIdSync,
-        tmsTipo,
-        saved.relative,
-        saved.original,
-        opts.latitud ?? null,
-        opts.longitud ?? null,
-        opts.username,
-        paradaSync,
-        opts.capturadoEn || ahora,
-      ],
-    ).catch(async () => {
-      await execute(
+    try {
+      await run(
+        `INSERT INTO tms_evidencias
+          (empresa_id, plan_id, tipo, ruta_archivo, nombre_original, latitud, longitud,
+           subido_por, parada_id, capturado_en)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          opts.empresaId,
+          planIdSync,
+          tmsTipo,
+          saved.relative,
+          saved.original,
+          opts.latitud ?? null,
+          opts.longitud ?? null,
+          opts.username,
+          paradaSync,
+          opts.capturadoEn || ahora,
+        ],
+      );
+    } catch {
+      await run(
         `INSERT INTO tms_evidencias
           (empresa_id, plan_id, tipo, ruta_archivo, nombre_original, latitud, longitud, subido_por)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -121,7 +141,7 @@ export async function guardarEvidenciaViaje(opts: {
           opts.username,
         ],
       ).catch(() => undefined);
-    });
+    }
   }
 
   return Number(r.insertId);
