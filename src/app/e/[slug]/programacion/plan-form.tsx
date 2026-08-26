@@ -778,7 +778,14 @@ export default function PlanForm({
           contactoCargoHistorico: bloqueadoParaPreCierre ? undefined : form.contactoCargoHistorico.trim() || undefined,
           contactoTelefonoHistorico: bloqueadoParaPreCierre ? undefined : form.contactoTelefonoHistorico.trim() || undefined,
           notas: form.notas.trim() || undefined,
-          paradas: bloqueadoParaPreCierre || !paradas.length ? undefined : paradas,
+          // CORRECCIÓN PR #80: NO usar `!paradas.length` para colapsar a
+          // `undefined` — eso confundía "no tocar paradas" (undefined) con
+          // "el usuario dejó la lista final vacía" ([]). Si las paradas
+          // están habilitadas (`!bloqueadoParaPreCierre`) se envían
+          // SIEMPRE, incluso como arreglo vacío, para que el backend
+          // procese la eliminación real (y aplique el 409 si alguna
+          // omitida todavía tiene evidencia).
+          paradas: bloqueadoParaPreCierre ? undefined : paradas,
         }),
       });
       const data = await res.json();
