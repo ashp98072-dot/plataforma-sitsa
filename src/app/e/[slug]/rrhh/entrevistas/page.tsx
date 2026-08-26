@@ -124,6 +124,12 @@ export default function EntrevistasPage() {
     setDiaSel(diaIso ?? null);
   }
 
+  function seleccionarDia(diaIso: string) {
+    setDiaSel(diaIso);
+    setEditandoId(null);
+    setForm((actual) => ({ ...actual, id: 0, fecha: diaIso }));
+  }
+
   function abrirEditar(ent: Entrevista) {
     setEditandoId(ent.id);
     setForm({
@@ -171,7 +177,7 @@ export default function EntrevistasPage() {
     const data = await res.json();
     setMsg(data.mensaje || data.error || "");
     if (res.ok) {
-      setForm(vacio());
+      setForm({ ...vacio(), fecha: diaSel ?? form.fecha });
       setEditandoId(null);
       await cargar();
     }
@@ -252,7 +258,7 @@ export default function EntrevistasPage() {
             <button
               key={diaIso}
               type="button"
-              onClick={() => setDiaSel(diaIso)}
+              onClick={() => seleccionarDia(diaIso)}
               className={`min-h-[4.5rem] rounded border p-1 text-left text-xs transition ${
                 diaSel === diaIso
                   ? "border-[var(--accent)] bg-[var(--accent)]/10"
