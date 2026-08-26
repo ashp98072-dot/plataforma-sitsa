@@ -352,6 +352,11 @@ export async function GET(_req: Request, ctx: Ctx) {
   // por defecto, Facturador no).
   if (puede("programacion", "ver")) {
     try {
+      // CORRECCIÓN PR #85: sin LIMIT — un viaje atrasado real nunca debe
+      // quedar invisible para Operaciones solo porque hay más de N. La
+      // query ya está acotada por empresa/estado/regreso_estimado/
+      // llegada técnica; no hace falta (ni corresponde en este ticket)
+      // paginación ni un COUNT aparte.
       const rows = await query<RowDataPacket[]>(
         `SELECT p.id, p.codigo, p.regreso_estimado
          FROM tms_planes_viaje p
@@ -363,8 +368,7 @@ export async function GET(_req: Request, ctx: Ctx) {
              SELECT 1 FROM flota_viajes fv
              WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
            )
-         ORDER BY p.regreso_estimado ASC
-         LIMIT 30`,
+         ORDER BY p.regreso_estimado ASC`,
         [empresaId, ahoraLocal()],
       );
       for (const r of rows) {
