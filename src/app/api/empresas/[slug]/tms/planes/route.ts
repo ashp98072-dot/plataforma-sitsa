@@ -1568,7 +1568,15 @@ export async function PATCH(req: Request, ctx: Ctx) {
       }
     }
 
-    await conn.execute(
+    // OPS-3.2a — guard atómico contra la carrera PATCH vs. cierre: si el
+    // Jefe cierra el viaje (POST /planes/[id]/cerrar, atómico y ajeno a
+    // este archivo) entre la lectura de `antes` (arriba, fuera de la
+    // transacción) y este UPDATE, el WHERE de abajo ya no debe hacer
+    // match — "estado = ?" compara contra el valor LEÍDO al inicio
+    // (antes.estado), nunca contra el nuevo valor del body. Así, un
+    // "Cerrado" recién puesto por el Jefe queda protegido: este UPDATE no
+    // lo toca.
+    const [patchResult] = await conn.execute<ResultSetHeader>(
       `UPDATE tms_planes_viaje SET
         fecha_plan = COALESCE(?, fecha_plan),
         piloto_id = COALESCE(?, piloto_id),
@@ -1586,7 +1594,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
         contacto_nombre_historico = COALESCE(?, contacto_nombre_historico),
         contacto_cargo_historico = COALESCE(?, contacto_cargo_historico),
         contacto_telefono_historico = COALESCE(?, contacto_telefono_historico)
-       WHERE id = ? AND empresa_id = ?`,
+       WHERE id = ? AND empresa_id = ? AND estado = ?`,
       [
         d.fechaPlan ?? null,
         pilotoId ?? null,
@@ -1609,8 +1617,52 @@ export async function PATCH(req: Request, ctx: Ctx) {
         d.contactoTelefonoHistorico?.trim() || null,
         d.id,
         empresaId,
+        antes.estado,
       ],
     );
+
+    if (patchResult.affectedRows === 0) {
+      // Ambiguo a propósito: sin CLIENT_FOUND_ROWS (el pool de @/lib/db no
+      // lo habilita), MySQL reporta affectedRows=0 tanto si el WHERE no
+      // matcheó ninguna fila (el conflicto real que queremos detectar) COMO
+      // si matcheó pero el SET resultante es idéntico al valor ya
+      // guardado (nada que reportar — no es un conflicto). Para distinguir
+      // los dos casos se re-consulta el estado DENTRO de la misma
+      // transacción/conexión.
+      //
+      // CRÍTICO: tiene que ser una lectura ACTUAL (`FOR UPDATE`), no un
+      // SELECT normal. Bajo REPEATABLE READ (aislamiento por defecto de
+      // InnoDB/MySQL) un SELECT plano dentro de esta misma transacción
+      // puede seguir viendo el snapshot consistente establecido por una
+      // lectura anterior de la propia transacción (p.ej. la de
+      // primerConflictoTraslape, que corre antes con este mismo `conn`) —
+      // ese snapshot podría seguir mostrando "En ruta" aunque el commit
+      // del Jefe (cierre) ya haya cambiado la fila a "Cerrado" en la base.
+      // El propio UPDATE de arriba SÍ ve el dato real (todo DML hace
+      // lectura actual, nunca snapshot, en cualquier nivel de
+      // aislamiento) — por eso su affectedRows=0 ya fue correcto; lo que
+      // hay que corregir es que la RE-CONSULTA lea igual de "actual" que
+      // el UPDATE, o el diagnóstico podría concluir por error "valores
+      // idénticos" cuando en realidad el estado sí cambió. `FOR UPDATE`
+      // fuerza una lectura actual (bypassa el snapshot) y, de paso,
+      // espera correctamente si otro cierre todavía está en vuelo
+      // (bloqueado hasta que esa transacción haga commit/rollback).
+      const [verifRows] = await conn.query<RowDataPacket[]>(
+        `SELECT estado FROM tms_planes_viaje WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
+        [d.id, empresaId],
+      );
+      const estadoActual = verifRows[0]?.estado != null ? String(verifRows[0].estado) : null;
+      if (estadoActual !== antes.estado) {
+        await conn.rollback();
+        return NextResponse.json(
+          {
+            error:
+              "El estado del viaje cambió mientras se guardaban los cambios. Recarga la información y vuelve a intentarlo.",
+          },
+          { status: 409 },
+        );
+      }
+    }
 
     if (auxPersonalIdsLegado != null) {
       await guardarAuxiliaresPlan(d.id, auxPersonalIdsLegado, conn);
