@@ -1293,6 +1293,30 @@ export async function PATCH(req: Request, ctx: Ctx) {
     auxPersonalIdsNuevo = auxIds;
   }
 
+  // OPS-3.2c (corrección) — recursos EFECTIVOS y si realmente CAMBIARON,
+  // no solo si el campo vino en el request. El formulario real de
+  // Programación reenvía normalmente piloto/placa/auxiliares actuales
+  // aunque el usuario solo esté editando tarifa/notas/etc. — usar
+  // "¿vino el campo?" (tocaPiloto/actualizarAux/placaNorm) como señal de
+  // "cambió" habría revalidado disponibilidad de un recurso que no se
+  // está reasignando, arriesgando un bloqueo falso (p.ej. el mismo
+  // piloto ya ocupado en OTRO viaje que arrancó después de la llegada
+  // de este). Se levantan aquí (antes usaban una versión local dentro
+  // de `cambiaPersonal`) para reutilizarse también en la sección de
+  // disponibilidad, más abajo — sin recalcular dos veces.
+  const pilotoFinal = pilotoId !== undefined ? pilotoId : antes.pilotoId;
+  const pilotoCambioReal = pilotoFinal !== antes.pilotoId;
+  const auxiliaresFinal = auxPersonalIdsNuevo ?? auxPersonalIdsLegado ?? antesAuxiliaresIds;
+  // Comparación como CONJUNTOS — el orden en que el formulario mande los
+  // auxiliares no representa una diferencia de asignación real.
+  const auxiliaresCambioReal = (() => {
+    const finalSet = new Set(auxiliaresFinal);
+    const antesSet = new Set(antesAuxiliaresIds);
+    if (finalSet.size !== antesSet.size) return true;
+    for (const id of finalSet) if (!antesSet.has(id)) return true;
+    return false;
+  })();
+
   // Mejora Programación — bloquear el cambio de personal si a quien se
   // quita/reemplaza ya se le procesó un viático (AUTORIZADO/ENTREGADO/
   // LIQUIDADO). Solo corre si esta solicitud REALMENTE toca piloto y/o
@@ -1301,12 +1325,14 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // tocar personal nunca se bloquea por esto. Se calcula el personal
   // REALMENTE removido (antes menos el conjunto final que aplicaría este
   // PATCH) y se consulta su viático ANTES de escribir nada — 409 sin
-  // ningún cambio si alguno no está PROGRAMADO.
+  // ningún cambio si alguno no está PROGRAMADO. Nota: este gate sigue
+  // siendo "¿vino el campo?" (no "¿cambió realmente?") a propósito — es
+  // inofensivo dejarlo así porque `removidos` de abajo ya solo detecta
+  // personal REALMENTE quitado comparando pilotoFinal/auxiliaresFinal
+  // contra antes.*; si el campo vino pero nadie cambió, `removidos`
+  // queda vacío y no se bloquea nada.
   const cambiaPersonal = pilotoId !== undefined || auxPersonalIdsLegado != null || auxPersonalIdsNuevo != null;
   if (cambiaPersonal) {
-    const pilotoFinal = pilotoId !== undefined ? pilotoId : antes.pilotoId;
-    const auxiliaresFinal = auxPersonalIdsNuevo ?? auxPersonalIdsLegado ?? antesAuxiliaresIds;
-
     const removidos: { personalId: number; nombre: string }[] = [];
     if (antes.pilotoId != null && antes.pilotoId !== pilotoFinal) {
       removidos.push({ personalId: antes.pilotoId, nombre: antes.piloto || `Piloto #${antes.pilotoId}` });
@@ -1371,66 +1397,78 @@ export async function PATCH(req: Request, ctx: Ctx) {
     ? d.paradas.filter((p) => p.lugarNombre?.trim())
     : undefined;
 
+  // OPS-3.2c (corrección) — unidad EFECTIVA (mismo espacio flota_vehiculos.id
+  // que ya usa flotaVehiculoId) y si realmente CAMBIÓ contra
+  // antes.flotaVehiculoId. Se resuelve por placa vía vehiculoPorPlaca()
+  // (mismo resolver multiempresa-seguro que ya usa el portal del piloto)
+  // cuando no vino el campo por ID — necesario para poder COMPARAR, no
+  // para decidir todavía si se valida disponibilidad (eso lo decide
+  // unidadCambioReal más abajo).
+  let unidadFinalId: number | null = antes.flotaVehiculoId ?? null;
+  if (d.flotaVehiculoId != null) {
+    unidadFinalId = d.flotaVehiculoId;
+  } else if (placaNorm) {
+    const vehiculoLegado = await vehiculoPorPlaca(empresaId, placaNorm);
+    unidadFinalId = vehiculoLegado ? Number(vehiculoLegado.id) : null;
+  }
+  const unidadCambioReal = unidadFinalId !== (antes.flotaVehiculoId ?? null);
+
   // Fase P5.1c — DISPONIBILIDAD.
   //
-  // OPS-3.2c (corrección) — el comentario original decía que esta
-  // validación era exclusiva de los campos por ID (pilotoPersonalId/
-  // auxiliarPersonalIds/flotaVehiculoId) y que los campos LEGADO
-  // (pilotoNombre/auxiliar*/placa) no pasaban por aquí. Ese es
-  // justamente el camino que usa el formulario REAL de Programación
-  // (plan-form.tsx) — con OPS-3.2c habilitando reasignar piloto/unidad/
-  // auxiliares en pendiente de cierre, dejar ese hueco abierto habría
-  // permitido saltarse el bloqueo por incidencia/viaje técnico en curso/
-  // inactivo (traslapes y viáticos avanzados NO tenían este problema —
-  // esos ya validaban sin importar el origen del campo). Corregido
-  // reutilizando, sin duplicar lógica, los IDs que el propio PATCH YA
-  // resuelve más arriba sin importar si vinieron por nombre o por ID:
-  // `pilotoId` converge ambos caminos; `auxPersonalIdsLegado` es el
-  // equivalente ya resuelto de auxiliarEmpleadoIds/auxiliarNombres; para
-  // placa se reutiliza vehiculoPorPlaca() (mismo resolver multiempresa-
-  // seguro que ya usa el portal del piloto) para obtener el
-  // flota_vehiculos.id equivalente a flotaVehiculoId. Aplica por igual a
-  // cualquier estado que llegue hasta aquí (Programado y pendiente de
-  // cierre) — es una corrección de consistencia, no una regla nueva; el
-  // campo por ID sigue teniendo precedencia si ambos vinieran en el
-  // mismo request (mismo criterio que ya usa el resto del archivo). Se
-  // valida: (a) el recurso NUEVO si viene en el payload (por nombre o
-  // por ID), o (b) el recurso YA asignado si la fecha cambió y no viene
-  // uno nuevo para ese recurso (revalidación por cambio de fecha). Todo
-  // esto corre ANTES de abrir la transacción.
+  // OPS-3.2c (corrección, dos pasadas):
+  // 1) El comentario original decía que esta validación era exclusiva de
+  //    los campos por ID (pilotoPersonalId/auxiliarPersonalIds/
+  //    flotaVehiculoId) y que los campos LEGADO (pilotoNombre/auxiliar*/
+  //    placa) no pasaban por aquí. Ese es justamente el camino que usa
+  //    el formulario REAL de Programación (plan-form.tsx) — dejar ese
+  //    hueco abierto habría permitido saltarse el bloqueo por incidencia/
+  //    viaje técnico en curso/inactivo (traslapes y viáticos avanzados NO
+  //    tenían este problema — esos ya validaban sin importar el origen
+  //    del campo).
+  // 2) Corrección siguiente: "¿vino el campo?" (tocaPiloto/actualizarAux/
+  //    placaNorm) NO es lo mismo que "¿el recurso realmente cambió?" — el
+  //    formulario reenvía normalmente los valores YA asignados aunque el
+  //    usuario solo esté editando tarifa/notas. Revalidar disponibilidad
+  //    de un recurso que no se está reasignando podía producir un
+  //    bloqueo falso (p.ej. el mismo piloto ya ocupado en otro viaje que
+  //    arrancó DESPUÉS de la llegada de este). Ahora se usa
+  //    pilotoCambioReal/auxiliaresCambioReal/unidadCambioReal (arriba) —
+  //    comparación contra `antes.*`, no presencia del campo.
+  //
+  // Se valida: (a) el recurso NUEVO si REALMENTE cambió (por nombre o
+  // por ID), o (b) el recurso YA asignado si la fecha cambió y ese
+  // recurso en particular no cambió (revalidación preexistente por
+  // cambio de fecha). Todo esto corre ANTES de abrir la transacción.
   const pilotoIdParaValidar =
-    tocaPiloto
-      ? (pilotoId ?? null)
+    pilotoCambioReal
+      ? pilotoFinal
       : fechaCambia && antes.pilotoId != null
         ? antes.pilotoId
         : null;
   const auxiliaresIdsParaValidar: number[] =
-    d.auxiliarPersonalIds != null
-      ? (auxPersonalIdsNuevo ?? [])
-      : actualizarAux
-        ? (auxPersonalIdsLegado ?? [])
-        : fechaCambia
-          ? antesAuxiliaresIds
-          : [];
-  let vehiculoIdParaValidar: number | null = null;
-  if (d.flotaVehiculoId != null) {
-    vehiculoIdParaValidar = d.flotaVehiculoId;
-  } else if (placaNorm) {
-    const vehiculoLegado = await vehiculoPorPlaca(empresaId, placaNorm);
-    vehiculoIdParaValidar = vehiculoLegado ? Number(vehiculoLegado.id) : null;
-  } else if (fechaCambia && antes.flotaVehiculoId != null) {
-    vehiculoIdParaValidar = antes.flotaVehiculoId;
-  }
+    auxiliaresCambioReal
+      ? auxiliaresFinal
+      : fechaCambia
+        ? antesAuxiliaresIds
+        : [];
+  const vehiculoIdParaValidar: number | null =
+    unidadCambioReal
+      ? unidadFinalId
+      : fechaCambia && antes.flotaVehiculoId != null
+        ? antes.flotaVehiculoId
+        : null;
 
   const advertencias: AdvertenciaPatch[] = [];
 
-  // OPS-3.2c: aviso informativo (nunca bloquea) cuando se reasigna piloto/
-  // unidad/auxiliares en un plan pendiente de cierre — deja claro que
-  // esto es una corrección ADMINISTRATIVA de tms_planes_viaje; el
+  // OPS-3.2c: aviso informativo (nunca bloquea) cuando REALMENTE se
+  // reasigna piloto/unidad/auxiliares (no solo porque el campo vino en
+  // el payload — ver pilotoCambioReal/auxiliaresCambioReal/
+  // unidadCambioReal arriba) en un plan pendiente de cierre — deja claro
+  // que esto es una corrección ADMINISTRATIVA de tms_planes_viaje; el
   // registro técnico de flota_viajes (piloto_nombre, vehiculo_id,
   // kilometraje, horas, evidencias) capturado durante la ejecución real
   // del viaje NO se toca ni se sincroniza automáticamente.
-  if (antes.pendienteCierre && (tocaPiloto || tocaAuxiliares || tocaUnidad)) {
+  if (antes.pendienteCierre && (pilotoCambioReal || auxiliaresCambioReal || unidadCambioReal)) {
     advertencias.push({
       tipo: "reasignacion_pre_cierre",
       mensaje:
