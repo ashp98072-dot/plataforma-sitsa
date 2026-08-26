@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireTenantRutas } from "@/lib/tenant";
-import { parsearExcelRutas, type FilaRutaExcel } from "@/lib/tms/rutas-import-excel";
+import { generarPlantillaRutas, parsearExcelRutas, type FilaRutaExcel } from "@/lib/tms/rutas-import-excel";
 import {
   previsualizarImportacionRutas,
   confirmarImportacionRutas,
@@ -12,6 +12,20 @@ type Ctx = { params: Promise<{ slug: string }> };
 
 const MAX_FILAS = 2000; // muy por encima de las ~147 reales; mismo criterio que rrhh/marcajes/importar
 const MAX_BYTES = 15 * 1024 * 1024; // 15 MB
+
+export async function GET(_req: Request, ctx: Ctx) {
+  const { slug } = await ctx.params;
+  const guard = await requireTenantRutas(slug, "ver");
+  if (guard.error) return guard.error;
+  const body = new Uint8Array(await generarPlantillaRutas());
+  return new NextResponse(body, {
+    headers: {
+      "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "Content-Disposition": 'attachment; filename="excel-modelo-rutas.xlsx"',
+      "Cache-Control": "private, no-store",
+    },
+  });
+}
 
 /**
  * VIAT-5 (Operaciones > Rutas > Importar Excel) — un solo endpoint con

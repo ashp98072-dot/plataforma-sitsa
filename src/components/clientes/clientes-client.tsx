@@ -7,6 +7,7 @@ import {
   type ClienteEstado,
   type ClienteTipo,
 } from "@/lib/clientes/tipos";
+import { ClientesImportador } from "@/components/clientes/clientes-importador";
 
 type Props = { slug: string; puedeEditar: boolean };
 
@@ -74,6 +75,7 @@ export function ClientesClient({ slug, puedeEditar }: Props) {
   }, [slug, qDebounced, estado]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void cargar();
   }, [cargar]);
 
@@ -309,6 +311,8 @@ export function ClientesClient({ slug, puedeEditar }: Props) {
           </div>
         </form>
       ) : null}
+
+      {puedeEditar ? <ClientesImportador slug={slug} onImported={cargar} /> : null}
 
       {msg ? <p className="text-sm text-emerald-600 dark:text-emerald-300">{msg}</p> : null}
 
