@@ -201,11 +201,16 @@ export async function listarParadasDePlanes(
  *   no tiene evidencia asociada (tms_evidencias + flota_viaje_evidencias).
  *   El COUNT del paso 1 rechaza rápido el caso obvio (ok:false) ANTES de
  *   escribir nada; pero la decisión DEFINITIVA de cada DELETE se toma más
- *   abajo, fila por fila, bajo `SELECT ... FOR UPDATE`
- *   (bloquearParadaDelPlan) — CORRECCIÓN PR #80: sin este lock, una
- *   evidencia podría insertarse concurrentemente entre el COUNT y el
- *   DELETE (vía el endpoint de staff que también adquiere este mismo
- *   lock antes de insertar) y quedar huérfana.
+ *   abajo, fila por fila: primero se bloquea la fila de la parada
+ *   (`bloquearParadaDelPlan`, FOR UPDATE) y LUEGO se relee la existencia
+ *   de evidencia con su propio `SELECT ... LIMIT 1 FOR UPDATE` por tabla
+ *   (current/locking read, no un SELECT normal — bajo REPEATABLE READ un
+ *   SELECT normal podría seguir viendo el snapshot de una lectura
+ *   anterior de la transacción, como `actuales` del paso 1, e ignorar un
+ *   INSERT ya confirmado por otra transacción). CORRECCIÓN PR #80: sin
+ *   esto, una evidencia podría insertarse concurrentemente entre el
+ *   COUNT del paso 1 y el DELETE (vía el endpoint de staff, que adquiere
+ *   este mismo lock de la parada antes de insertar) y quedar huérfana.
  *
  * Para un plan NUEVO (POST) o sin paradas previas, `actuales` sale vacío
  * — el comportamiento se reduce exactamente al INSERT de siempre, sin
@@ -357,49 +362,70 @@ export async function guardarParadasPlan(
     }
   }
 
-  // 5) CORRECCIÓN PR #80 (integridad concurrente evidencia ↔ parada): el
-  // COUNT del paso 1 (usado para el rechazo rápido del paso 3) puede
-  // quedar desactualizado — sin FK ni lock compartido, una evidencia
-  // podría insertarse para una de estas paradas DESPUÉS de ese COUNT y
-  // ANTES del DELETE. La decisión DEFINITIVA de borrar cada parada se
-  // toma aquí, una por una, bajo `SELECT ... FOR UPDATE` sobre su propia
-  // fila (bloquearParadaDelPlan) — el mismo lock que adquiere el
-  // endpoint de staff (evidencias/route.ts) antes de insertar evidencia
-  // con `paradaId`. Quien llegue primero (este DELETE o ese INSERT)
-  // bloquea al otro hasta su commit/rollback:
-  // - si este PATCH gana el lock y borra+confirma, el INSERT del staff
-  //   ya no encuentra la fila → se rechaza antes de escribir evidencia;
-  // - si el staff gana el lock e inserta+confirma, el re-conteo de aquí
-  //   (hecho DESPUÉS de adquirir el lock) ya ve esa evidencia → esta
-  //   parada NO se borra y se aborta con el mismo error de siempre
-  //   (rollback completo de la transacción del PATCH).
+  // 5) CORRECCIÓN PR #80 (integridad concurrente evidencia ↔ parada,
+  // ronda 2): el COUNT del paso 1 (usado solo para el rechazo rápido de
+  // UX del paso 3) puede quedar desactualizado — sin FK ni lock
+  // compartido, una evidencia podría insertarse para una de estas
+  // paradas DESPUÉS de ese COUNT y ANTES del DELETE.
+  //
+  // La primera versión de esta corrección volvía a bloquear la fila de
+  // la parada (bloquearParadaDelPlan, FOR UPDATE) pero decidía con un
+  // SELECT NORMAL sobre tms_evidencias/flota_viaje_evidencias — bajo
+  // REPEATABLE READ (el nivel de aislamiento de este pool), un SELECT
+  // sin FOR UPDATE puede seguir devolviendo el snapshot consistente que
+  // la transacción ya estableció con una lectura anterior (p.ej. el
+  // `actuales` del paso 1), IGNORANDO un INSERT de otra transacción ya
+  // confirmado — el mismo problema que OPS-3.2a ya había corregido para
+  // el estado del plan, reproducido aquí para evidencias. Bloquear la
+  // fila de la parada no alcanza: la lectura que decide el DELETE tiene
+  // que ser ella misma un current/locking read.
+  //
+  // Por eso cada tabla de evidencia se lee con su propio
+  // `SELECT id ... LIMIT 1 FOR UPDATE` (existencia, no COUNT — solo
+  // importa si hay al menos una), sobre la MISMA `conn`/transacción.
+  // Es el mismo lock que adquiere el endpoint de staff
+  // (evidencias/route.ts) antes de insertar evidencia con `paradaId` —
+  // quien llegue primero (este DELETE o ese INSERT) bloquea al otro
+  // hasta su commit/rollback:
+  // - PATCH gana el lock de la parada y borra+confirma → el INSERT del
+  //   staff ya no encuentra la fila (bloquearParadaDelPlan) → se
+  //   rechaza antes de escribir evidencia.
+  // - Staff gana el lock, inserta y confirma → el current read de aquí
+  //   (hecho DESPUÉS de esperar ese mismo lock) ve la fila YA
+  //   confirmada, no un snapshot viejo → esta parada NO se borra, se
+  //   aborta con el mismo error de siempre (rollback completo del
+  //   PATCH).
   for (const id of idsAEliminar) {
     if (conn) {
       const existe = await bloquearParadaDelPlan(conn, empresaId, planId, id);
       if (!existe) continue; // ya no existe (o dejó de pertenecer) — nada que borrar
     }
-    const evidenciasBajoLock = await runQuery<RowDataPacket[]>(
+    // Current read de tms_evidencias — sin FOR UPDATE no serviría (ver
+    // arriba). No se atrapa el error: si esta tabla fallara sería un
+    // problema real de conexión/esquema, no el fallback esperado de
+    // flota_viaje_evidencias de abajo — mejor abortar toda la
+    // transacción (catch de route.ts → rollback) que arriesgar un falso
+    // "sin evidencia".
+    const tmsEvidencia = await runQuery<RowDataPacket[]>(
       conn,
-      `SELECT
-         (
-           (SELECT COUNT(*) FROM tms_evidencias ev WHERE ev.parada_id = pp.id)
-           +
-           (SELECT COUNT(*) FROM flota_viaje_evidencias fe WHERE fe.parada_id = pp.id)
-         ) AS evidencias
-       FROM tms_plan_paradas pp
-       WHERE pp.id = ?`,
+      `SELECT id FROM tms_evidencias WHERE parada_id = ? LIMIT 1 FOR UPDATE`,
       [id],
-    ).catch(async () =>
-      runQuery<RowDataPacket[]>(
-        conn,
-        `SELECT (SELECT COUNT(*) FROM tms_evidencias ev WHERE ev.parada_id = pp.id) AS evidencias
-         FROM tms_plan_paradas pp
-         WHERE pp.id = ?`,
-        [id],
-      ).catch(() => [] as RowDataPacket[]),
     );
-    const evidencias = Number(evidenciasBajoLock[0]?.evidencias ?? 0);
-    if (evidencias > 0) {
+    // Current read de flota_viaje_evidencias — mismo fallback de
+    // siempre (columna parada_id aditiva, puede no existir todavía en
+    // algún entorno): si la columna no existe, no hay ninguna fila que
+    // pueda referenciarla, así que se omite el check sin riesgo.
+    let flotaEvidencia: RowDataPacket[] = [];
+    try {
+      flotaEvidencia = await runQuery<RowDataPacket[]>(
+        conn,
+        `SELECT id FROM flota_viaje_evidencias WHERE parada_id = ? LIMIT 1 FOR UPDATE`,
+        [id],
+      );
+    } catch {
+      flotaEvidencia = [];
+    }
+    if (tmsEvidencia.length || flotaEvidencia.length) {
       return {
         ok: false,
         error: "No se puede eliminar una parada que ya tiene evidencias asociadas.",
