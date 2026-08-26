@@ -558,6 +558,16 @@ export default function PlanForm({
   // usuario tiene el permiso.
   const pendienteCierre = esEdicion && Boolean(plan!.pendiente_cierre);
   const yaCerrado = esEdicion && plan!.estado === "Cerrado";
+  // OPS-3.2b — reconciliación administrativa pre-cierre: mientras el
+  // plan está "En ruta" sin llegada registrada, sigue tan bloqueado como
+  // antes (`soloNotas` a secas); con llegada registrada (pendienteCierre)
+  // se habilitan tarifa/referencia/regreso/ruta/lugar de descarga/
+  // contacto — piloto/unidad/auxiliares/fecha/hora/paradas siguen
+  // bloqueados en ambos casos (quedan para una fase posterior, ver
+  // src/app/api/empresas/[slug]/tms/planes/route.ts). Usa el mismo
+  // `plan.pendiente_cierre` que ya devuelve GET — no infiere llegada por
+  // evidencias ni hace una llamada adicional a Flota.
+  const bloqueadoParaPreCierre = soloNotas && !pendienteCierre;
 
   // VIAT-2: el servidor exige regreso_estimado cuando el plan queda con
   // piloto, auxiliares o unidad asignados (lo necesita para poder validar
@@ -726,19 +736,24 @@ export default function PlanForm({
           auxiliarEmpleadoIds: soloNotas ? undefined : form.auxiliarEmpleadoIds,
           auxiliarNombres: soloNotas ? undefined : form.auxiliarNombres,
           tipoTraslado: undefined,
-          regresoEstimado: soloNotas ? undefined : form.regresoEstimado || null,
-          tarifaComercial: soloNotas
+          // OPS-3.2b: estos seis ya no dependen de `soloNotas` a secas —
+          // `bloqueadoParaPreCierre` los libera cuando el plan está
+          // pendiente de cierre (llegada ya registrada), aunque siga
+          // "En ruta". piloto/unidad/auxiliares/fecha/hora/paradas (arriba)
+          // siguen atados a `soloNotas` sin cambios.
+          regresoEstimado: bloqueadoParaPreCierre ? undefined : form.regresoEstimado || null,
+          tarifaComercial: bloqueadoParaPreCierre
             ? undefined
             : form.tarifaComercial === ""
               ? null
               : Number(form.tarifaComercial),
-          referenciaCliente: soloNotas ? undefined : form.referenciaCliente.trim() || null,
-          rutaId: soloNotas ? undefined : form.rutaId || undefined,
-          rutaCodigo: soloNotas ? undefined : form.rutaCodigo.trim() || undefined,
-          lugarDescargaHistorico: soloNotas ? undefined : form.lugarDescargaHistorico.trim() || undefined,
-          contactoNombreHistorico: soloNotas ? undefined : form.contactoNombreHistorico.trim() || undefined,
-          contactoCargoHistorico: soloNotas ? undefined : form.contactoCargoHistorico.trim() || undefined,
-          contactoTelefonoHistorico: soloNotas ? undefined : form.contactoTelefonoHistorico.trim() || undefined,
+          referenciaCliente: bloqueadoParaPreCierre ? undefined : form.referenciaCliente.trim() || null,
+          rutaId: bloqueadoParaPreCierre ? undefined : form.rutaId || undefined,
+          rutaCodigo: bloqueadoParaPreCierre ? undefined : form.rutaCodigo.trim() || undefined,
+          lugarDescargaHistorico: bloqueadoParaPreCierre ? undefined : form.lugarDescargaHistorico.trim() || undefined,
+          contactoNombreHistorico: bloqueadoParaPreCierre ? undefined : form.contactoNombreHistorico.trim() || undefined,
+          contactoCargoHistorico: bloqueadoParaPreCierre ? undefined : form.contactoCargoHistorico.trim() || undefined,
+          contactoTelefonoHistorico: bloqueadoParaPreCierre ? undefined : form.contactoTelefonoHistorico.trim() || undefined,
           notas: form.notas.trim() || undefined,
           paradas: soloNotas || !paradas.length ? undefined : paradas,
         }),
@@ -835,6 +850,8 @@ export default function PlanForm({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs font-medium text-amber-200">
               El piloto ya registró la llegada — pendiente de cierre por Operaciones.
+              Puedes corregir tarifa, referencia, regreso estimado y los datos de ruta/contacto
+              antes de cerrar.
             </p>
             {puedeCerrarViaje && !confirmandoCierre ? (
               <button
@@ -928,7 +945,7 @@ export default function PlanForm({
           onChange={({ clienteId, clienteNombre }) => setForm((f) => ({ ...f, clienteId, clienteNombre }))}
         />
       </div>
-      <div className={soloNotas || bloqueado ? "pointer-events-none opacity-50" : ""}>
+      <div className={bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}>
         <RutaSelect
           slug={slug}
           clienteId={form.clienteId}
@@ -937,7 +954,7 @@ export default function PlanForm({
           onSeleccionar={aplicarRuta}
         />
       </div>
-      <label className={`text-xs text-[var(--muted)] md:col-span-2 ${soloNotas || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
+      <label className={`text-xs text-[var(--muted)] md:col-span-2 ${bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
         Lugar de descarga (descripción operativa — como la usa Operaciones)
         <input
           className={`${inputCls} mt-1 w-full`}
@@ -950,7 +967,7 @@ export default function PlanForm({
           Es lo que sale en el reporte tradicional (columna &quot;Lugar de Descarga&quot;).
         </span>
       </label>
-      <div className={`md:col-span-3 space-y-2 rounded border border-[var(--border)] p-2 ${soloNotas || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
+      <div className={`md:col-span-3 space-y-2 rounded border border-[var(--border)] p-2 ${bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
         <p className="text-[11px] font-medium text-[var(--muted)]">
           Contacto operativo — viene del cliente (o de la ruta elegida). El teléfono no se edita
           aquí; se copia tal cual quedará guardado en este viaje.
@@ -1043,7 +1060,7 @@ export default function PlanForm({
           onChange={(e) => setForm((f) => ({ ...f, tipoTraslado: e.target.value }))}
         />
       </label>
-      <label className={`text-xs text-[var(--muted)] ${soloNotas || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
+      <label className={`text-xs text-[var(--muted)] ${bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
         Regreso estimado{requiereRegreso ? " (obligatorio)" : ""}
         <input
           type="datetime-local"
@@ -1058,7 +1075,7 @@ export default function PlanForm({
           </span>
         ) : null}
       </label>
-      <label className={`text-xs text-[var(--muted)] ${soloNotas || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
+      <label className={`text-xs text-[var(--muted)] ${bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
         Tarifa comercial (GTQ)
         <input
           type="number"
@@ -1070,7 +1087,7 @@ export default function PlanForm({
         />
       </label>
 
-      <label className={`md:col-span-2 text-xs text-[var(--muted)] ${soloNotas || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
+      <label className={`md:col-span-2 text-xs text-[var(--muted)] ${bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
         Referencia del cliente
         <input
           className={`${inputCls} mt-1 w-full`}

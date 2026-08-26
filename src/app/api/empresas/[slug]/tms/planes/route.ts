@@ -68,6 +68,25 @@ const ESTADOS_SOLO_NOTAS = new Set(["En ruta"]);
 const ESTADOS_BLOQUEADOS = new Set(["Cerrado", "Cancelado"]);
 
 /**
+ * OPS-2.1: misma definición que la columna calculada de GET — un alias de
+ * SELECT no se puede reutilizar en WHERE, así que se comparte esta
+ * constante en vez de escribir la condición dos veces "a mano". OJO: es la
+ * MISMA definición que ya usan notificaciones/route.ts (alerta "Viajes
+ * pendientes de cierre") y cierre-viaje.ts — esos dos archivos quedan
+ * fuera del alcance de este módulo, así que la constante vive solo aquí;
+ * si algún día diverge, extraerla a un helper compartido sería lo
+ * correcto. Movida a nivel de módulo en OPS-3.2b para que tanto GET como
+ * PATCH puedan reutilizarla (antes vivía solo dentro de GET).
+ */
+const SQL_PENDIENTE_CIERRE = `(
+                p.estado NOT IN ('Cerrado', 'Cancelado')
+                AND EXISTS (
+                  SELECT 1 FROM flota_viajes fv
+                  WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
+                )
+              )`;
+
+/**
  * Fase P5.1b: helper conn-aware para escrituras. Si se pasa `conn` (dentro
  * de una transacción de Programación), usa esa misma conexión; si no,
  * mantiene exactamente el comportamiento actual (pool global vía @/lib/db).
@@ -180,22 +199,6 @@ export async function GET(req: Request, ctx: Ctx) {
   } catch {
     /* ok */
   }
-
-  // Misma definición que la columna calculada de abajo — un alias de SELECT
-  // no se puede reutilizar en WHERE, así que se comparte esta constante en
-  // vez de escribir la condición dos veces "a mano". OJO: es la MISMA
-  // definición que ya usan notificaciones/route.ts (alerta "Viajes
-  // pendientes de cierre") y cierre-viaje.ts — esos dos archivos quedan
-  // fuera del alcance de este cambio (OPS-2.1 no toca cierre/alertas), así
-  // que la constante vive solo aquí; si algún día diverge, extraerla a un
-  // helper compartido sería lo correcto.
-  const SQL_PENDIENTE_CIERRE = `(
-                p.estado NOT IN ('Cerrado', 'Cancelado')
-                AND EXISTS (
-                  SELECT 1 FROM flota_viajes fv
-                  WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
-                )
-              )`;
 
   const condiciones = ["p.empresa_id = ?"];
   const paramsRows: SqlParams = [guard.empresa.id];
@@ -1029,7 +1032,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
   const plan = await query<RowDataPacket[]>(
     `SELECT p.id, p.codigo, p.estado, p.fecha_plan, p.hora_carga, p.notas,
             p.piloto_id, p.unidad_id, p.regreso_estimado,
-            u.placa, u.flota_vehiculo_id, pil.nombre AS piloto
+            u.placa, u.flota_vehiculo_id, pil.nombre AS piloto,
+            ${SQL_PENDIENTE_CIERRE} AS pendiente_cierre
      FROM tms_planes_viaje p
      LEFT JOIN tms_unidades u ON u.id = p.unidad_id
      LEFT JOIN tms_personal pil ON pil.id = p.piloto_id
@@ -1056,6 +1060,12 @@ export async function PATCH(req: Request, ctx: Ctx) {
       plan[0].flota_vehiculo_id != null
         ? Number(plan[0].flota_vehiculo_id)
         : null,
+    // OPS-3.2b: true cuando el plan no está Cerrado/Cancelado Y ya existe
+    // un registro real de llegada en flota_viajes (misma definición que
+    // GET, ver SQL_PENDIENTE_CIERRE) — distingue "En ruta sin llegada"
+    // (solo notas, sin cambios) de "En ruta con llegada / pendiente de
+    // cierre" (reconciliación administrativa habilitada más abajo).
+    pendienteCierre: Number(plan[0].pendiente_cierre) === 1,
   };
   // Auxiliares y paradas actuales del plan (antes de cualquier cambio) —
   // reutiliza los mismos helpers que ya usa GET, sin duplicar SQL. Sirven
@@ -1099,7 +1109,10 @@ export async function PATCH(req: Request, ctx: Ctx) {
       { status: 409 },
     );
   }
-  if (ESTADOS_SOLO_NOTAS.has(antes.estado)) {
+  if (ESTADOS_SOLO_NOTAS.has(antes.estado) && !antes.pendienteCierre) {
+    // En ruta SIN llegada registrada — comportamiento sin cambios: solo
+    // notas. piloto/auxiliares/unidad/fecha/paradas/hora/comercial siguen
+    // bloqueados exactamente igual que antes de OPS-3.2b.
     const camposNoPermitidos: string[] = [];
     if (tocaPiloto) camposNoPermitidos.push("piloto");
     if (tocaAuxiliares) camposNoPermitidos.push("auxiliares");
@@ -1112,6 +1125,30 @@ export async function PATCH(req: Request, ctx: Ctx) {
       return NextResponse.json(
         {
           error: `El plan está "${antes.estado}"; solo se pueden editar notas mientras está en ruta (no permitido: ${camposNoPermitidos.join(", ")}).`,
+        },
+        { status: 409 },
+      );
+    }
+  } else if (ESTADOS_SOLO_NOTAS.has(antes.estado) && antes.pendienteCierre) {
+    // OPS-3.2b — En ruta CON llegada registrada (pendiente de cierre):
+    // reconciliación administrativa. Se habilitan notas, tarifa
+    // comercial, referencia de cliente, regreso estimado, y los snapshots
+    // de ruta/lugar de descarga/contacto (estos últimos ya eran editables
+    // sin gate en cualquier estado — no se tocan aquí, ver comentario más
+    // abajo). piloto/auxiliares/unidad/fecha/hora/paradas SIGUEN
+    // bloqueados — quedan para OPS-3.2c/3.2d. `tocaComercial` NO se
+    // revisa en esta rama a propósito: es justo lo que este PR habilita.
+    const camposNoPermitidos: string[] = [];
+    if (tocaPiloto) camposNoPermitidos.push("piloto");
+    if (tocaAuxiliares) camposNoPermitidos.push("auxiliares");
+    if (tocaUnidad) camposNoPermitidos.push("unidad");
+    if (tocaFecha) camposNoPermitidos.push("fecha");
+    if (tocaParadas) camposNoPermitidos.push("paradas");
+    if (tocaHora) camposNoPermitidos.push("hora de carga");
+    if (camposNoPermitidos.length) {
+      return NextResponse.json(
+        {
+          error: `El plan está "${antes.estado}" (pendiente de cierre); no se puede modificar: ${camposNoPermitidos.join(", ")}. Antes del cierre solo se pueden corregir notas, tarifa comercial, referencia de cliente, regreso estimado y los datos de ruta/contacto.`,
         },
         { status: 409 },
       );
@@ -1756,10 +1793,16 @@ export async function PATCH(req: Request, ctx: Ctx) {
   if (paradasInput != null) {
     cambios.push(`paradas redefinidas (${paradasAntesCount} → ${paradasInput.length})`);
   }
+  // OPS-3.2b: distingue en la bitácora una corrección administrativa
+  // pre-cierre de una edición común — mismo `detalle` "antes → después"
+  // de siempre, solo cambia la etiqueta de `accion`. cancelar_ruta sigue
+  // teniendo prioridad si la solicitud además cancela el viaje.
   const accion =
     d.estado === "Cancelado" && d.estado !== antes.estado
       ? "cancelar_ruta"
-      : "editar_ruta";
+      : antes.estado === "En ruta" && antes.pendienteCierre
+        ? "corregir_pre_cierre"
+        : "editar_ruta";
   await registrarAuditoria({
     empresaId,
     usuario: guard.session.username,
