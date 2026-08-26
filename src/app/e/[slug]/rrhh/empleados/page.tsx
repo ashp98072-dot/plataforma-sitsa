@@ -723,16 +723,6 @@ export default function EmpleadosPage() {
     await cargarSupervisores();
   }
 
-  async function borrar(id: number) {
-    if (!confirm("¿Eliminar empleado y su historial?")) return;
-    const res = await fetch(`/api/empresas/${slug}/empleados/${id}`, {
-      method: "DELETE",
-    });
-    const data = await res.json();
-    setMensaje(data.mensaje || data.error);
-    await cargar();
-  }
-
   function cancelarEdicion() {
     irALista();
   }
@@ -1736,13 +1726,6 @@ export default function EmpleadosPage() {
                     }}
                   >
                     Portal
-                  </button>
-                  <button
-                    type="button"
-                    className="text-red-300 underline"
-                    onClick={() => void borrar(e.id)}
-                  >
-                    Eliminar
                   </button>
                 </td>
               </tr>
