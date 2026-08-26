@@ -812,12 +812,36 @@ export async function POST(req: Request, ctx: Ctx) {
   // candado GET_LOCK/RELEASE_LOCK del chequeo de traslapes, sin relación
   // con la atomicidad de la escritura).
   const conn = await getPool().getConnection();
+  // CORRECCIÓN PR #81: solo true si GET_LOCK devolvió realmente 1 (ver
+  // comentario dentro del try) — gatea el RELEASE_LOCK del finally, igual
+  // que `lockTraslapeAdquirido` en el PATCH de más abajo.
+  let lockTraslapePostAdquirido = false;
   try {
     if (lockConn && intervaloNuevo) {
+      // CORRECCIÓN PR #81: GET_LOCK() de MySQL NO lanza excepción cuando no
+      // consigue el candado — retorna 1 (adquirido), 0 (timeout) o NULL
+      // (error). Hay que leer el valor real de `l`: sin candado
+      // confirmado, primerConflictoTraslape no tiene exclusión mutua real
+      // contra otra transacción concurrente, así que no debe correr, y
+      // esta solicitud no debe crear el plan.
+      let lockRows: RowDataPacket[] = [];
       try {
-        await lockConn.query("SELECT GET_LOCK(?, 8) AS l", [lockKey]);
+        [lockRows] = await lockConn.query<RowDataPacket[]>(
+          "SELECT GET_LOCK(?, 8) AS l",
+          [lockKey],
+        );
       } catch {
-        /* ok */
+        lockRows = [];
+      }
+      lockTraslapePostAdquirido = Number(lockRows[0]?.l) === 1;
+      if (!lockTraslapePostAdquirido) {
+        return NextResponse.json(
+          {
+            error:
+              "No se pudo validar la disponibilidad de recursos porque hay otra operación en curso. Intenta de nuevo.",
+          },
+          { status: 409 },
+        );
       }
       const conflicto = await primerConflictoTraslape(
         empresaId,
@@ -915,10 +939,16 @@ export async function POST(req: Request, ctx: Ctx) {
   } finally {
     conn.release();
     if (lockConn) {
-      try {
-        await lockConn.query("SELECT RELEASE_LOCK(?) AS l", [lockKey]);
-      } catch {
-        /* ok */
+      // CORRECCIÓN PR #81: RELEASE_LOCK solo si realmente se adquirió
+      // (lockTraslapePostAdquirido) — no llamarlo porque GET_LOCK devolvió
+      // 0/NULL o lanzó excepción, eso liberaría un candado que esta sesión
+      // nunca tuvo (a lo sumo un no-op de MySQL, pero no hay que asumirlo).
+      if (lockTraslapePostAdquirido) {
+        try {
+          await lockConn.query("SELECT RELEASE_LOCK(?) AS l", [lockKey]);
+        } catch {
+          /* ok */
+        }
       }
       lockConn.release();
     }
@@ -1612,6 +1642,9 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // posible (todas las validaciones de arriba ya corrieron) y se libera
   // siempre en el `finally`, sin excepción.
   const conn = await getPool().getConnection();
+  // OPS-3.3: bandera para liberar el GET_LOCK de traslapes (si se llegó a
+  // adquirir) en el `finally` de abajo — ver el bloque VIAT-2 más adelante.
+  let lockTraslapeAdquirido = false;
   try {
     await conn.beginTransaction();
 
@@ -1641,9 +1674,28 @@ export async function PATCH(req: Request, ctx: Ctx) {
     // si vino en esta solicitud, si no lo que el plan ya tenía) — misma
     // conexión/transacción que el UPDATE de abajo, y bajo el mismo GET_LOCK
     // por empresa que POST, para que dos ediciones concurrentes no pasen la
-    // verificación antes de que cualquiera escriba. Se omite si el estado
-    // efectivo ya no reserva recursos (Descargado/Cerrado/Cancelado) — no
-    // tiene sentido validar disponibilidad de algo que se está liberando.
+    // verificación antes de que cualquiera escriba.
+    //
+    // OPS-3.3 (corrección de carrera): el candado se libera en el `finally`
+    // de esta función, DESPUÉS de conn.commit() (o conn.rollback()) — antes
+    // se liberaba aquí mismo, justo después de leer el conflicto y ANTES de
+    // escribir/confirmar. Bajo REPEATABLE READ eso dejaba una ventana real:
+    // dos transacciones concurrentes podían adquirir el candado una tras
+    // otra, ambas leer "sin conflicto" (ninguna veía todavía la escritura
+    // no confirmada de la otra) y ambas terminar asignando el mismo
+    // piloto/auxiliar/unidad a planes que se solapan. Mantener el candado
+    // hasta el commit fuerza a que quien llegue segundo espere hasta que el
+    // primero haya confirmado — y como primerConflictoTraslape recibe este
+    // mismo `conn` (más abajo) y es la PRIMERA lectura consistente que hace
+    // esta transacción sobre tablas InnoDB (lo de arriba son solo
+    // INSERT..ON DUPLICATE KEY UPDATE), su propio snapshot de REPEATABLE
+    // READ se establece recién AL EJECUTARSE — es decir, DESPUÉS de haber
+    // esperado el candado — así que ya ve el commit de quien lo tenía antes
+    // (current read correcto, sin necesidad de FOR UPDATE aquí).
+    //
+    // Se omite si el estado efectivo ya no reserva recursos (Descargado/
+    // Cerrado/Cancelado) — no tiene sentido validar disponibilidad de algo
+    // que se está liberando.
     const estadoEfectivo = d.estado ?? antes.estado;
     if ((ESTADOS_QUE_RESERVAN_RECURSOS as readonly string[]).includes(estadoEfectivo)) {
       const pilotoEfectivo = pilotoId ?? antes.pilotoId;
@@ -1671,10 +1723,34 @@ export async function PATCH(req: Request, ctx: Ctx) {
             { status: 400 },
           );
         }
+        // CORRECCIÓN PR #81: GET_LOCK() de MySQL NO lanza excepción cuando
+        // no consigue el candado — retorna 1 (adquirido), 0 (timeout) o
+        // NULL (error). Un try/catch vacío alrededor de la llamada no basta
+        // como gate de integridad: hay que leer el valor real de la
+        // columna `l` y tratar cualquier cosa distinta de 1 (incluida una
+        // excepción de la propia consulta) como "NO adquirido" — sin
+        // candado real, primerConflictoTraslape ya no tiene exclusión
+        // mutua contra otra transacción concurrente, así que no debe
+        // correr, y esta solicitud no debe escribir nada.
+        let lockRows: RowDataPacket[] = [];
         try {
-          await conn.query("SELECT GET_LOCK(?, 8) AS l", [`tms_traslape_${empresaId}`]);
+          [lockRows] = await conn.query<RowDataPacket[]>(
+            "SELECT GET_LOCK(?, 8) AS l",
+            [`tms_traslape_${empresaId}`],
+          );
         } catch {
-          /* ok */
+          lockRows = [];
+        }
+        lockTraslapeAdquirido = Number(lockRows[0]?.l) === 1;
+        if (!lockTraslapeAdquirido) {
+          await conn.rollback();
+          return NextResponse.json(
+            {
+              error:
+                "No se pudo validar la disponibilidad de recursos porque hay otra operación en curso. Intenta de nuevo.",
+            },
+            { status: 409 },
+          );
         }
         const conflicto = await primerConflictoTraslape(
           empresaId,
@@ -1683,11 +1759,9 @@ export async function PATCH(req: Request, ctx: Ctx) {
           d.id,
           conn,
         );
-        try {
-          await conn.query("SELECT RELEASE_LOCK(?) AS l", [`tms_traslape_${empresaId}`]);
-        } catch {
-          /* ok */
-        }
+        // OPS-3.3: el candado YA NO se libera aquí — se mantiene hasta el
+        // `finally` de esta función (después de commit/rollback), incluso
+        // en este `return` por conflicto (ver comentario arriba del bloque).
         if (conflicto) {
           await conn.rollback();
           return NextResponse.json({ error: mensajeConflicto(conflicto) }, { status: 409 });
@@ -1841,6 +1915,21 @@ export async function PATCH(req: Request, ctx: Ctx) {
       { status: 500 },
     );
   } finally {
+    // OPS-3.3: libera el candado de traslapes (si se adquirió) DESPUÉS de
+    // que la transacción ya confirmó o revirtió — en CUALQUIER salida de
+    // este try/catch (éxito, conflicto de traslape, error de escritura,
+    // excepción). Debe ir ANTES de conn.release(): GET_LOCK/RELEASE_LOCK
+    // son locks de sesión de MySQL, no de la transacción — si la conexión
+    // vuelve al pool sin liberarlo, el lock queda retenido por esa sesión
+    // y podría bloquear indefinidamente futuros traslapes de esta empresa
+    // en cuanto esa conexión se reutilice para otra solicitud.
+    if (lockTraslapeAdquirido) {
+      try {
+        await conn.query("SELECT RELEASE_LOCK(?) AS l", [`tms_traslape_${empresaId}`]);
+      } catch {
+        /* ok */
+      }
+    }
     conn.release();
   }
 
