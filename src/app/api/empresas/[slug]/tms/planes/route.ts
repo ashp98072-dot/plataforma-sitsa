@@ -21,7 +21,7 @@ import {
 import { obtenerVehiculoAccesible } from "@/lib/flota/acceso";
 import { vehiculoPorPlaca } from "@/lib/flota/pilotos";
 import { listarDisponibilidadPersonal } from "@/lib/operaciones/disponibilidad-personal";
-import { hoyLocal, toIsoDate } from "@/lib/rrhh/dates";
+import { ahoraLocal, hoyLocal, toIsoDate } from "@/lib/rrhh/dates";
 import { sincronizarViaticosPlan } from "@/lib/tms/viaticos";
 import {
   ESTADOS_QUE_RESERVAN_RECURSOS,
@@ -82,6 +82,37 @@ const ESTADOS_BLOQUEADOS = new Set(["Cerrado", "Cancelado"]);
 const SQL_PENDIENTE_CIERRE = `(
                 p.estado NOT IN ('Cerrado', 'Cancelado')
                 AND EXISTS (
+                  SELECT 1 FROM flota_viajes fv
+                  WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
+                )
+              )`;
+
+/**
+ * OPS-4.2e: indicador derivado "Viaje atrasado" para la lista de
+ * Programación/TMS — MISMO criterio ya aprobado en OPS-4.2d (alerta de
+ * la campana en notificaciones/route.ts): viaje físicamente iniciado (En
+ * ruta/Cargado) cuyo regreso_estimado ya venció y que TODAVÍA no
+ * registra llegada técnica. "Programado" vencido queda deliberadamente
+ * FUERA — es "no iniciado", no "atrasado" (posible señal futura aparte,
+ * no este ticket).
+ *
+ * "Llegada técnica" es el mismo EXISTS flota_viajes...estado='cerrado'
+ * que ya usa SQL_PENDIENTE_CIERRE arriba, aquí en NOT — por diseño,
+ * "atrasado" y "pendiente_cierre" son mutuamente excluyentes: si ya hay
+ * llegada, el plan es "pendiente de cierre", nunca "atrasado". No se
+ * importa desde notificaciones/route.ts (mismo criterio de aislamiento
+ * ya documentado para SQL_PENDIENTE_CIERRE: dos rutas de API distintas,
+ * si algún día diverge, extraerla a un helper compartido sería lo
+ * correcto).
+ *
+ * Requiere UN parámetro posicional ("ahora", ver ahoraLocal() más abajo)
+ * — a diferencia de SQL_PENDIENTE_CIERRE, que no necesita ninguno.
+ */
+const SQL_ATRASADO = `(
+                p.estado IN ('En ruta', 'Cargado')
+                AND p.regreso_estimado IS NOT NULL
+                AND p.regreso_estimado < ?
+                AND NOT EXISTS (
                   SELECT 1 FROM flota_viajes fv
                   WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
                 )
@@ -202,7 +233,12 @@ export async function GET(req: Request, ctx: Ctx) {
   }
 
   const condiciones = ["p.empresa_id = ?"];
-  const paramsRows: SqlParams = [guard.empresa.id];
+  // OPS-4.2e: "ahora" en Guatemala (ahoraLocal(), no NOW() de MySQL ni
+  // Date().toISOString()) para el indicador derivado `atrasado` —
+  // SQL_ATRASADO va en la lista SELECT (antes del WHERE en el texto de
+  // la query), así que su `?` debe ser el PRIMER parámetro posicional.
+  const ahora = ahoraLocal();
+  const paramsRows: SqlParams = [ahora, guard.empresa.id];
   if (usarRangoFecha) {
     condiciones.push("p.fecha_plan BETWEEN ? AND ?");
     paramsRows.push(fechaDesdeParam as string, fechaHastaParam as string);
@@ -230,6 +266,9 @@ export async function GET(req: Request, ctx: Ctx) {
               -- como el histórico "Descargado" (que siempre tuvo su
               -- flota_viajes en 'cerrado' antes de marcarse así).
               ${SQL_PENDIENTE_CIERRE} AS pendiente_cierre,
+              -- OPS-4.2e: indicador derivado, mutuamente excluyente con
+              -- pendiente_cierre por diseño (ver SQL_ATRASADO arriba).
+              ${SQL_ATRASADO} AS atrasado,
               p.tipo_traslado, p.notas,
               DATE_FORMAT(p.regreso_estimado, '%Y-%m-%dT%H:%i') AS regreso_estimado,
               p.tarifa_comercial, p.referencia_cliente, p.ruta_id, p.ruta_codigo_historico,
