@@ -8,6 +8,8 @@
     "start": "next start",
     "start:hostinger": "node scripts/start-hostinger.mjs",
     "lint": "eslint",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "db:init": "node scripts/init-db.mjs",
     "pack:hostinger": "node scripts/pack-hostinger.mjs"
   },
@@ -35,6 +37,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.12",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.11"
   }
 }

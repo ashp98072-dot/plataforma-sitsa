@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
 import { requireTenantRrhh } from "@/lib/tenant";
+import { sincronizarVacacionesEmpleadosActivos } from "@/lib/rrhh/vacaciones";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -11,6 +12,7 @@ export async function GET(_req: Request, ctx: Ctx) {
   if (guard.error) return guard.error;
 
   const empresaId = guard.empresa.id;
+  await sincronizarVacacionesEmpleadosActivos(empresaId);
   const [solicitudes, saldos] = await Promise.all([
     query<RowDataPacket[]>(
       `SELECT sv.id, sv.id_empleado, sv.tipo, sv.fecha_inicio, sv.fecha_fin,

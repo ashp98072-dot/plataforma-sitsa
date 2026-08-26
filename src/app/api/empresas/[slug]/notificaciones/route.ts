@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
+import { sincronizarVacacionesEmpleadosActivos } from "@/lib/rrhh/vacaciones";
 import { query } from "@/lib/db";
 import { requireTenant } from "@/lib/tenant";
 import { kmPendienteServicio } from "@/lib/flota/import-excel";
@@ -189,6 +190,7 @@ export async function GET(_req: Request, ctx: Ctx) {
       (perms && tienePermiso(perms, "vacaciones", "ver"));
 
     if (puedeVacaciones) {
+      await sincronizarVacacionesEmpleadosActivos(guard.empresa.id);
       const solicitudes = await query<RowDataPacket[]>(
         `SELECT sv.id, sv.dias_habiles, sv.fecha_inicio, sv.fecha_fin,
                 sv.creado_en, e.nombre AS empleado_nombre
