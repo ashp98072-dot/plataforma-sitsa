@@ -3,6 +3,7 @@ import { requireTenantRrhh } from "@/lib/tenant";
 import {
   obtenerEstadisticasDashboard,
   obtenerResumenGerencial,
+  obtenerSituacionEmpleadosHoy,
 } from "@/lib/rrhh/dashboard";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -11,13 +12,15 @@ export async function GET(_req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenantRrhh(slug, "empleados", "ver");
   if (guard.error) return guard.error;
-  const [stats, resumenGerencial] = await Promise.all([
+  const [stats, resumenGerencial, situacionHoy] = await Promise.all([
     obtenerEstadisticasDashboard(guard.empresa.id),
     obtenerResumenGerencial(guard.empresa.id),
+    obtenerSituacionEmpleadosHoy(guard.empresa.id),
   ]);
   return NextResponse.json({
     stats,
     resumenGerencial,
+    situacionHoy,
     empresa: guard.empresa.nombre,
   });
 }
