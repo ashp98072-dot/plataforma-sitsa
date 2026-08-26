@@ -10,7 +10,7 @@ describe("reglas críticas de programación TMS", () => {
   it("construye el intervalo real del viaje", () => {
     expect(inicioViaje("2026-08-26", "08:30")).toBe("2026-08-26 08:30:00");
     expect(inicioViaje("2026-08-26", null)).toBe("2026-08-26 00:00:00");
-    expect(finViajeDesdeInput("2026-08-27T17:15")).toBe("2026-08-27 17:15");
+    expect(finViajeDesdeInput("2026-08-27T17:15")).toBe("2026-08-27 17:15:00");
   });
 
   it("solo reserva recursos en estados operativos activos", () => {
