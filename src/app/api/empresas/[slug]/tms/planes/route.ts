@@ -1626,14 +1626,29 @@ export async function PATCH(req: Request, ctx: Ctx) {
       // lo habilita), MySQL reporta affectedRows=0 tanto si el WHERE no
       // matcheó ninguna fila (el conflicto real que queremos detectar) COMO
       // si matcheó pero el SET resultante es idéntico al valor ya
-      // guardado (nada que reportar — no es un conflicto). Para no abrir
-      // falsos 409 en el segundo caso, se re-consulta el estado actual
-      // DENTRO de la misma transacción/conexión: si sigue siendo
-      // `antes.estado`, el WHERE sí matcheó (solo no había nada que
-      // cambiar) y se continúa normalmente; si es distinto (o la fila ya
-      // no existe), ahí sí hubo una carrera real.
+      // guardado (nada que reportar — no es un conflicto). Para distinguir
+      // los dos casos se re-consulta el estado DENTRO de la misma
+      // transacción/conexión.
+      //
+      // CRÍTICO: tiene que ser una lectura ACTUAL (`FOR UPDATE`), no un
+      // SELECT normal. Bajo REPEATABLE READ (aislamiento por defecto de
+      // InnoDB/MySQL) un SELECT plano dentro de esta misma transacción
+      // puede seguir viendo el snapshot consistente establecido por una
+      // lectura anterior de la propia transacción (p.ej. la de
+      // primerConflictoTraslape, que corre antes con este mismo `conn`) —
+      // ese snapshot podría seguir mostrando "En ruta" aunque el commit
+      // del Jefe (cierre) ya haya cambiado la fila a "Cerrado" en la base.
+      // El propio UPDATE de arriba SÍ ve el dato real (todo DML hace
+      // lectura actual, nunca snapshot, en cualquier nivel de
+      // aislamiento) — por eso su affectedRows=0 ya fue correcto; lo que
+      // hay que corregir es que la RE-CONSULTA lea igual de "actual" que
+      // el UPDATE, o el diagnóstico podría concluir por error "valores
+      // idénticos" cuando en realidad el estado sí cambió. `FOR UPDATE`
+      // fuerza una lectura actual (bypassa el snapshot) y, de paso,
+      // espera correctamente si otro cierre todavía está en vuelo
+      // (bloqueado hasta que esa transacción haga commit/rollback).
       const [verifRows] = await conn.query<RowDataPacket[]>(
-        `SELECT estado FROM tms_planes_viaje WHERE id = ? AND empresa_id = ? LIMIT 1`,
+        `SELECT estado FROM tms_planes_viaje WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
         [d.id, empresaId],
       );
       const estadoActual = verifRows[0]?.estado != null ? String(verifRows[0].estado) : null;
