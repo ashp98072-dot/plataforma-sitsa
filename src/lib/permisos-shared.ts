@@ -245,6 +245,7 @@ export function labelPermiso(modulo: string): string {
 
 /** Etiqueta amigable del rol en formularios. */
 export function labelRol(rol: string): string {
+  if (rol === "Reclutamiento") return "Reclutamiento";
   if (rol === "CoordinadorPredios") return "Predios";
   if (rol === "CoordinadorCompras") return "Compras";
   if (rol === "Piloto") return "Piloto";
@@ -324,6 +325,7 @@ export const GRUPOS_PERMISOS: {
 export function grupoPrincipalDelRol(rol: RolGlobal): GrupoPermisosId {
   switch (rol) {
     case "RRHH":
+    case "Reclutamiento":
     case "Marcaje":
       return "rrhh";
     case "Contabilidad":
@@ -350,6 +352,8 @@ export function modulosPropiosDelRol(rol: RolGlobal): string[] {
       return catalogoGlobalPermisos();
     case "RRHH":
       return [...RRHH_SUBMODULOS];
+    case "Reclutamiento":
+      return ["entrevistas", "empleados"];
     case "Marcaje":
       return ["marcajes"];
     case "Contabilidad":
@@ -443,6 +447,14 @@ export function permisosDefaultPorRol(rol: RolGlobal): PermisoModulo[] {
   if (rol === "Visualizador") {
     return [
       ...propios.map((m) => permisoSoloVer(m)),
+      ...cruzados.map((m) => permisoVacio(m)),
+    ];
+  }
+
+  if (rol === "Reclutamiento") {
+    return [
+      permisoFull("entrevistas"),
+      { ...permisoVerCrear("empleados") },
       ...cruzados.map((m) => permisoVacio(m)),
     ];
   }

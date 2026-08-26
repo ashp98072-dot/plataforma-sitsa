@@ -50,6 +50,7 @@ type Usuario = {
 const ROLES = [
   "Admin",
   "RRHH",
+  "Reclutamiento",
   "Marcaje",
   "Contabilidad",
   "Operaciones",
@@ -270,6 +271,7 @@ export default function UsuariosPage() {
   }, [router, slug]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- carga remota inicial del catálogo de usuarios
     void cargar();
   }, [cargar]);
 

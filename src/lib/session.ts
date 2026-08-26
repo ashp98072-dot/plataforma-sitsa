@@ -3,6 +3,8 @@ import { cookies } from "next/headers";
 import { cache } from "react";
 import type { RolGlobal } from "./roles";
 import { getAuthSecretBytes } from "./auth-secret";
+import type { RowDataPacket } from "mysql2";
+import { query } from "./db";
 
 export const SESSION_COOKIE = "sitsa_session";
 const SESSION_HOURS = 12;
@@ -64,7 +66,26 @@ async function readSession(): Promise<SessionPayload | null> {
   const jar = await cookies();
   const token = jar.get(SESSION_COOKIE)?.value;
   if (!token) return null;
-  return verifySessionToken(token);
+  const payload = await verifySessionToken(token);
+  if (!payload) return null;
+
+  // Rol, estado y alcance empresarial son revocables. La cookie identifica
+  // la sesión, pero la autorización vigente siempre sale de la BD para que
+  // un cambio administrativo aplique inmediatamente sin cerrar sesión.
+  const rows = await query<RowDataPacket[]>(
+    `SELECT username, nombre, rol_global, activo, acceso_todas_empresas
+     FROM usuarios WHERE id = ? LIMIT 1`,
+    [payload.id],
+  );
+  const actual = rows[0];
+  if (!actual || !Boolean(actual.activo)) return null;
+  return {
+    ...payload,
+    username: String(actual.username),
+    nombre: actual.nombre ? String(actual.nombre) : undefined,
+    rol: String(actual.rol_global) as RolGlobal,
+    accesoTodas: Boolean(actual.acceso_todas_empresas),
+  };
 }
 
 /** Deduplica getSession dentro del mismo request RSC (layout + page). */

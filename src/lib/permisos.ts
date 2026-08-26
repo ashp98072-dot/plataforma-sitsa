@@ -1,5 +1,4 @@
 import type { RowDataPacket } from "mysql2";
-import { cache } from "react";
 import { execute, query } from "@/lib/db";
 import type { RolGlobal } from "@/lib/roles";
 import {
@@ -13,13 +12,6 @@ import {
 } from "@/lib/permisos-shared";
 
 export * from "@/lib/permisos-shared";
-
-/** Caché de permisos efectivos (Hostinger): menos hits al cambiar de módulo. */
-const PERMISOS_TTL_MS = 180_000;
-const permisosCache = new Map<
-  string,
-  { at: number; data: PermisoModulo[] }
->();
 
 export async function listarPermisosUsuario(
   usuarioId: number,
@@ -67,15 +59,9 @@ async function permisosEfectivosUncached(
 ): Promise<PermisoModulo[]> {
   if (rol === "Admin") return permisosDefaultPorRol("Admin");
 
-  const cacheKey = `${usuarioId}:${rol}`;
-  const hit = permisosCache.get(cacheKey);
-  if (hit && Date.now() - hit.at < PERMISOS_TTL_MS) return hit.data;
-
   const stored = await listarPermisosUsuario(usuarioId);
   if (stored.length === 0) {
-    const data = permisosDefaultPorRol(rol);
-    permisosCache.set(cacheKey, { at: Date.now(), data });
-    return data;
+    return permisosDefaultPorRol(rol);
   }
 
   const defaults = permisosDefaultPorRol(rol);
@@ -109,21 +95,16 @@ async function permisosEfectivosUncached(
     }),
     ...extras,
   ];
-  permisosCache.set(cacheKey, { at: Date.now(), data });
   return data;
 }
 
-/** Dedup por request + TTL entre requests. */
-export const permisosEfectivos = cache(permisosEfectivosUncached);
+/** Lectura vigente: evita permisos obsoletos entre procesos/instancias. */
+export const permisosEfectivos = permisosEfectivosUncached;
 
 export async function guardarPermisosUsuario(
   usuarioId: number,
   permisos: PermisoModulo[],
 ): Promise<void> {
-  permisosCache.delete(`${usuarioId}:Admin`);
-  for (const key of permisosCache.keys()) {
-    if (key.startsWith(`${usuarioId}:`)) permisosCache.delete(key);
-  }
   await execute(
     "DELETE FROM usuario_modulo WHERE usuario_id = ? AND empresa_id IS NULL",
     [usuarioId],
