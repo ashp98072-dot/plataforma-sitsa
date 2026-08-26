@@ -812,12 +812,36 @@ export async function POST(req: Request, ctx: Ctx) {
   // candado GET_LOCK/RELEASE_LOCK del chequeo de traslapes, sin relación
   // con la atomicidad de la escritura).
   const conn = await getPool().getConnection();
+  // CORRECCIÓN PR #81: solo true si GET_LOCK devolvió realmente 1 (ver
+  // comentario dentro del try) — gatea el RELEASE_LOCK del finally, igual
+  // que `lockTraslapeAdquirido` en el PATCH de más abajo.
+  let lockTraslapePostAdquirido = false;
   try {
     if (lockConn && intervaloNuevo) {
+      // CORRECCIÓN PR #81: GET_LOCK() de MySQL NO lanza excepción cuando no
+      // consigue el candado — retorna 1 (adquirido), 0 (timeout) o NULL
+      // (error). Hay que leer el valor real de `l`: sin candado
+      // confirmado, primerConflictoTraslape no tiene exclusión mutua real
+      // contra otra transacción concurrente, así que no debe correr, y
+      // esta solicitud no debe crear el plan.
+      let lockRows: RowDataPacket[] = [];
       try {
-        await lockConn.query("SELECT GET_LOCK(?, 8) AS l", [lockKey]);
+        [lockRows] = await lockConn.query<RowDataPacket[]>(
+          "SELECT GET_LOCK(?, 8) AS l",
+          [lockKey],
+        );
       } catch {
-        /* ok */
+        lockRows = [];
+      }
+      lockTraslapePostAdquirido = Number(lockRows[0]?.l) === 1;
+      if (!lockTraslapePostAdquirido) {
+        return NextResponse.json(
+          {
+            error:
+              "No se pudo validar la disponibilidad de recursos porque hay otra operación en curso. Intenta de nuevo.",
+          },
+          { status: 409 },
+        );
       }
       const conflicto = await primerConflictoTraslape(
         empresaId,
@@ -915,10 +939,16 @@ export async function POST(req: Request, ctx: Ctx) {
   } finally {
     conn.release();
     if (lockConn) {
-      try {
-        await lockConn.query("SELECT RELEASE_LOCK(?) AS l", [lockKey]);
-      } catch {
-        /* ok */
+      // CORRECCIÓN PR #81: RELEASE_LOCK solo si realmente se adquirió
+      // (lockTraslapePostAdquirido) — no llamarlo porque GET_LOCK devolvió
+      // 0/NULL o lanzó excepción, eso liberaría un candado que esta sesión
+      // nunca tuvo (a lo sumo un no-op de MySQL, pero no hay que asumirlo).
+      if (lockTraslapePostAdquirido) {
+        try {
+          await lockConn.query("SELECT RELEASE_LOCK(?) AS l", [lockKey]);
+        } catch {
+          /* ok */
+        }
       }
       lockConn.release();
     }
@@ -1693,11 +1723,34 @@ export async function PATCH(req: Request, ctx: Ctx) {
             { status: 400 },
           );
         }
+        // CORRECCIÓN PR #81: GET_LOCK() de MySQL NO lanza excepción cuando
+        // no consigue el candado — retorna 1 (adquirido), 0 (timeout) o
+        // NULL (error). Un try/catch vacío alrededor de la llamada no basta
+        // como gate de integridad: hay que leer el valor real de la
+        // columna `l` y tratar cualquier cosa distinta de 1 (incluida una
+        // excepción de la propia consulta) como "NO adquirido" — sin
+        // candado real, primerConflictoTraslape ya no tiene exclusión
+        // mutua contra otra transacción concurrente, así que no debe
+        // correr, y esta solicitud no debe escribir nada.
+        let lockRows: RowDataPacket[] = [];
         try {
-          await conn.query("SELECT GET_LOCK(?, 8) AS l", [`tms_traslape_${empresaId}`]);
-          lockTraslapeAdquirido = true;
+          [lockRows] = await conn.query<RowDataPacket[]>(
+            "SELECT GET_LOCK(?, 8) AS l",
+            [`tms_traslape_${empresaId}`],
+          );
         } catch {
-          /* ok */
+          lockRows = [];
+        }
+        lockTraslapeAdquirido = Number(lockRows[0]?.l) === 1;
+        if (!lockTraslapeAdquirido) {
+          await conn.rollback();
+          return NextResponse.json(
+            {
+              error:
+                "No se pudo validar la disponibilidad de recursos porque hay otra operación en curso. Intenta de nuevo.",
+            },
+            { status: 409 },
+          );
         }
         const conflicto = await primerConflictoTraslape(
           empresaId,
