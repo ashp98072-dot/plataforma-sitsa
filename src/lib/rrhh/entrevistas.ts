@@ -74,6 +74,20 @@ const SELECT_BASE = `
     ON e.id = ent.entrevistador_empleado_id AND e.empresa_id = ent.empresa_id
 `;
 
+/** Obtiene una entrevista aislada por empresa para reutilizar sus datos en el alta. */
+export async function obtenerEntrevista(
+  empresaId: number,
+  id: number,
+): Promise<Entrevista | null> {
+  const rows = await query<RowDataPacket[]>(
+    `${SELECT_BASE}
+     WHERE ent.empresa_id = ? AND ent.id = ?
+     LIMIT 1`,
+    [empresaId, id],
+  );
+  return rows[0] ? mapEntrevista(rows[0]) : null;
+}
+
 /** Todas las entrevistas de un mes calendario (para el calendario de RRHH). */
 export async function listarEntrevistasPorMes(
   empresaId: number,

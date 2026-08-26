@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
+import Link from "next/link";
 import { EmpleadoPicker, type EmpOpt } from "@/components/rrhh/empleado-picker";
 
 type Entrevista = {
@@ -72,6 +73,7 @@ export default function EntrevistasPage() {
   }, [slug, anio, mes]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- carga remota al cambiar el mes
     void cargar();
   }, [cargar]);
 
@@ -180,6 +182,15 @@ export default function EntrevistasPage() {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ estado }),
+    });
+    await cargar();
+  }
+
+  async function cambiarResultado(id: number, resultado: Entrevista["resultado"]) {
+    await fetch(`/api/empresas/${slug}/rrhh/entrevistas/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ resultado }),
     });
     await cargar();
   }
@@ -314,6 +325,26 @@ export default function EntrevistasPage() {
                     <option value="Cancelada">Cancelada</option>
                     <option value="No asistió">No asistió</option>
                   </select>
+                  <select
+                    className={input}
+                    value={ent.resultado}
+                    onChange={(e) =>
+                      cambiarResultado(ent.id, e.target.value as Entrevista["resultado"])
+                    }
+                    aria-label={`Resultado de ${ent.candidatoNombre}`}
+                  >
+                    <option value="Pendiente">Resultado pendiente</option>
+                    <option value="Aprobado">Aprobado</option>
+                    <option value="Rechazado">Rechazado</option>
+                  </select>
+                  {ent.resultado === "Aprobado" ? (
+                    <Link
+                      href={`/e/${slug}/rrhh/empleados?entrevista=${ent.id}`}
+                      className="rounded bg-emerald-600 px-2 py-1 text-xs text-white"
+                    >
+                      Crear empleado
+                    </Link>
+                  ) : null}
                   <button
                     type="button"
                     className="rounded border border-[var(--border)] px-2 py-1 text-xs"

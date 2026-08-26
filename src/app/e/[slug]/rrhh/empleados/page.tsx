@@ -8,7 +8,7 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { DocumentosModal } from "@/components/rrhh/documentos-modal";
 import { PortalAccesoModal } from "@/components/rrhh/portal-acceso-modal";
@@ -319,6 +319,7 @@ function parseNum(s: string): number | null {
 }
 
 function formToBody(form: FormState) {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- campo exclusivo de UI
   const { nombreManual: _nm, ...rest } = form;
   return {
     ...rest,
@@ -422,6 +423,8 @@ type SeccionFicha =
 
 export default function EmpleadosPage() {
   const slug = String(useParams().slug);
+  const searchParams = useSearchParams();
+  const entrevistaId = searchParams.get("entrevista");
   const [empleados, setEmpleados] = useState<Emp[]>([]);
   // Activos de la empresa para buscar/agregar Supervisor(es) — independiente
   // de los filtros de búsqueda/estado de la tabla (esos sí acotan `empleados`).
@@ -457,6 +460,7 @@ export default function EmpleadosPage() {
     otros: false,
   });
   const [vista, setVista] = useState<"lista" | "ficha">("lista");
+  const entrevistaCargada = useRef<string | null>(null);
 
   function toggleSeccion(id: SeccionFicha) {
     setSecciones((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -553,9 +557,53 @@ export default function EmpleadosPage() {
   }, [slug]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- carga inicial remota existente
     void cargar();
     void cargarSupervisores();
   }, [cargar, cargarSupervisores]);
+
+  useEffect(() => {
+    if (!entrevistaId || entrevistaCargada.current === entrevistaId) return;
+    entrevistaCargada.current = entrevistaId;
+    void (async () => {
+      const res = await fetch(
+        `/api/empresas/${slug}/rrhh/entrevistas/${encodeURIComponent(entrevistaId)}`,
+      );
+      const data = await res.json();
+      if (!res.ok || data.entrevista?.resultado !== "Aprobado") {
+        setError(
+          data.error || "La entrevista debe estar aprobada antes de crear al empleado.",
+        );
+        return;
+      }
+      const candidato = data.entrevista as {
+        candidatoNombre: string;
+        candidatoTelefono: string | null;
+        candidatoEmail: string | null;
+        puesto: string;
+      };
+      setEditId(null);
+      setHistorial([]);
+      setForm({
+        ...emptyForm(horaDef.entrada, horaDef.salida),
+        nombre: candidato.candidatoNombre,
+        nombreManual: true,
+        puesto: candidato.puesto,
+        telefono: candidato.candidatoTelefono ?? "",
+        email: candidato.candidatoEmail ?? "",
+      });
+      setSecciones({
+        identidad: true,
+        laboral: true,
+        salarios: true,
+        contacto: true,
+        licencia: false,
+        otros: true,
+      });
+      setMensaje("Datos del candidato aprobados cargados. Complete la ficha laboral.");
+      setVista("ficha");
+    })();
+  }, [entrevistaId, horaDef.entrada, horaDef.salida, slug]);
 
   function patchForm(patch: Partial<FormState>) {
     setForm((f) => {
