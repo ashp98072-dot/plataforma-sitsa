@@ -6,11 +6,22 @@ import Link from "next/link";
 import { TIPOS_DEVENGADO } from "@/lib/rrhh/catalogos-nomina";
 
 type Emp = { id: number; codigo: string; nombre: string };
+type Prestacion = {
+  id: number;
+  id_empleado: number;
+  emp_codigo: string;
+  emp_nombre: string;
+  tipo: string;
+  monto: number | string;
+  fecha: string;
+  notas: string | null;
+};
 
 export default function PrestacionesPage() {
   const slug = String(useParams().slug);
   const [empleados, setEmpleados] = useState<Emp[]>([]);
-  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
+  const [rows, setRows] = useState<Prestacion[]>([]);
+  const [editandoId, setEditandoId] = useState<number | null>(null);
   const [aviso, setAviso] = useState("");
   const [empleadoId, setEmpleadoId] = useState(0);
   const [tipo, setTipo] = useState("Bono");
@@ -32,8 +43,21 @@ export default function PrestacionesPage() {
   }, [slug, empleadoId]);
 
   useEffect(() => {
-    void cargar();
-  }, [cargar]);
+    let cancelado = false;
+    void Promise.all([
+      fetch(`/api/empresas/${slug}/empleados`).then((r) => r.json()),
+      fetch(`/api/empresas/${slug}/rrhh/prestaciones`).then((r) => r.json()),
+    ]).then(([e, p]) => {
+      if (cancelado) return;
+      setEmpleados(e.empleados ?? []);
+      setRows(p.prestaciones ?? []);
+      setAviso(p.aviso ?? "");
+      setEmpleadoId((actual) => actual || e.empleados?.[0]?.id || 0);
+    });
+    return () => {
+      cancelado = true;
+    };
+  }, [slug]);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -42,17 +66,58 @@ export default function PrestacionesPage() {
       setMsg("Escribe el tipo de devengado en 'Otro'.");
       return;
     }
-    const res = await fetch(`/api/empresas/${slug}/rrhh/prestaciones`, {
-      method: "POST",
+    const res = await fetch(
+      editandoId
+        ? `/api/empresas/${slug}/rrhh/prestaciones/${editandoId}`
+        : `/api/empresas/${slug}/rrhh/prestaciones`,
+      {
+      method: editandoId ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ empleadoId, tipo: tipoFinal, monto, fecha, notas }),
-    });
+      },
+    );
     const data = await res.json();
     setMsg(data.mensaje || data.error);
     if (res.ok) {
       setMonto(0);
       setNotas("");
       setTipoOtro("");
+      setEditandoId(null);
+      await cargar();
+    }
+  }
+
+  function editar(row: Prestacion) {
+    const esCatalogo = TIPOS_DEVENGADO.some((item) => item === row.tipo);
+    setEditandoId(row.id);
+    setEmpleadoId(row.id_empleado);
+    setTipo(esCatalogo ? row.tipo : "Otro");
+    setTipoOtro(esCatalogo ? "" : row.tipo);
+    setMonto(Number(row.monto));
+    setFecha(String(row.fecha).slice(0, 10));
+    setNotas(row.notas ?? "");
+    setMsg("");
+  }
+
+  function cancelarEdicion() {
+    setEditandoId(null);
+    setMonto(0);
+    setNotas("");
+    setTipoOtro("");
+  }
+
+  async function anular(row: Prestacion) {
+    const motivo = window.prompt(`Motivo para anular ${row.tipo} de ${row.emp_nombre}:`);
+    if (!motivo) return;
+    const res = await fetch(`/api/empresas/${slug}/rrhh/prestaciones/${row.id}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ motivo }),
+    });
+    const data = await res.json();
+    setMsg(data.mensaje || data.error);
+    if (res.ok) {
+      if (editandoId === row.id) cancelarEdicion();
       await cargar();
     }
   }
@@ -126,8 +191,13 @@ export default function PrestacionesPage() {
           onChange={(e) => setNotas(e.target.value)}
         />
         <button className="rounded bg-[var(--accent)] px-3 py-1 text-sm text-white">
-          Guardar
+          {editandoId ? "Guardar cambios" : "Guardar"}
         </button>
+        {editandoId ? (
+          <button type="button" className="rounded border border-[var(--border)] px-3 py-1 text-sm" onClick={cancelarEdicion}>
+            Cancelar edición
+          </button>
+        ) : null}
       </form>
       {msg ? <p className="text-sm text-emerald-300">{msg}</p> : null}
       <ul className="space-y-1 text-sm">
@@ -136,8 +206,25 @@ export default function PrestacionesPage() {
             key={String(r.id)}
             className="rounded border border-[var(--border)] px-3 py-2"
           >
-            {String(r.emp_codigo)} — {String(r.tipo)} · Q{String(r.monto)} ·{" "}
-            {String(r.fecha).slice(0, 10)}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span>
+                {r.emp_codigo} — {r.emp_nombre} · {r.tipo} · Q{String(r.monto)} ·{" "}
+                {String(r.fecha).slice(0, 10)}
+              </span>
+              {!r.tipo.startsWith("Anulada · ") ? (
+                <span className="flex gap-2 text-xs">
+                  <button type="button" onClick={() => editar(r)} className="text-[var(--accent)] underline">
+                    Editar
+                  </button>
+                  <button type="button" onClick={() => void anular(r)} className="text-red-300 underline">
+                    Anular
+                  </button>
+                </span>
+              ) : (
+                <span className="text-xs text-amber-300">Anulada</span>
+              )}
+            </div>
+            {r.notas ? <p className="mt-1 text-xs text-[var(--muted)]">{r.notas}</p> : null}
           </li>
         ))}
         {!rows.length ? (
