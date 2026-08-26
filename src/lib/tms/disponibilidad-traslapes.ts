@@ -220,3 +220,136 @@ export function mensajeConflicto(c: ConflictoTraslape): string {
   const etiqueta = c.tipo === "piloto" ? `El piloto ${c.nombre}` : `El auxiliar ${c.nombre}`;
   return `${etiqueta} ya está asignado al viaje ${c.codigoConflicto} de ${horaInicio} a ${horaFin}.`;
 }
+
+// ============================================================================
+// OPS-4.2a — criterio unificado de OCUPACIÓN REAL (infraestructura).
+//
+// NO USADO TODAVÍA por buscarConflictoPersonal / buscarConflictoUnidad /
+// primerConflictoTraslape de arriba — esas siguen exactamente igual que
+// antes (intervalo planificado vs. regreso_estimado, sin distinguir
+// llegada técnica). Conectar este criterio a esas funciones es OPS-4.2b;
+// aquí solo se agrega la pieza base reutilizable, ya diseñada para eso.
+//
+// Origen: hallazgo OPS-4.1 — el intervalo planificado
+// (inicio, regreso_estimado) deja de proteger un recurso en cuanto
+// regreso_estimado vence, aunque el viaje siga físicamente activo (sin
+// llegada técnica registrada en Flota); y al revés, sigue "reservando"
+// un recurso ya físicamente libre si la llegada se registró antes de
+// regreso_estimado. Este módulo separa el intervalo PLANIFICADO (el que
+// ya usa el traslape hoy) del intervalo de OCUPACIÓN REAL (el que
+// reflejaría lo que de verdad está pasando con el recurso).
+// ============================================================================
+
+/**
+ * "Llegada técnica" de un plan: EXACTAMENTE el mismo hecho que ya usa
+ * `pendiente_cierre` (constante `SQL_PENDIENTE_CIERRE` en
+ * src/app/api/empresas/[slug]/tms/planes/route.ts) — un `flota_viajes`
+ * de este plan con `estado = 'cerrado'`. No se infiere por evidencias ni
+ * por ningún otro dato.
+ *
+ * Se repite aquí (en vez de importarse desde route.ts) para no crear una
+ * dependencia cruzada API -> lib en sentido inverso — mismo criterio que
+ * ya documenta el comentario de `SQL_PENDIENTE_CIERRE`: si algún día
+ * diverge, extraerla a un helper compartido sería lo correcto. Referencia
+ * el alias `p` de `tms_planes_viaje` — quien la use debe incluir ese
+ * alias en su FROM/JOIN.
+ */
+export const SQL_LLEGADA_TECNICA = `EXISTS (
+  SELECT 1 FROM flota_viajes fv
+  WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
+)`;
+
+/**
+ * Estados que, SIN llegada técnica, ocupan el recurso indefinidamente
+ * (más allá de `regreso_estimado`, si venció) — el viaje ya salió
+ * físicamente y no hay registro de que haya vuelto. "Cargado" se trata
+ * igual que "En ruta" para este criterio (ver OPS-4.1 punto 6: hoy ya
+ * reserva recursos igual, sin que ningún flujo automático lo transicione
+ * a "En ruta" — esa anomalía queda fuera de alcance aquí).
+ */
+export const ESTADOS_OCUPACION_INDEFINIDA_SIN_LLEGADA = ["En ruta", "Cargado"] as const;
+
+/**
+ * Intervalo de ocupación real de un plan.
+ *
+ * `fin: null` tiene un significado ESTRICTO y EXCLUSIVO: "viaje
+ * físicamente activo, sin llegada técnica registrada, sin fin real
+ * conocido" — es decir, únicamente En ruta/Cargado SIN llegada. NUNCA
+ * representa "falta un dato" — un Programado sin `regreso_estimado`
+ * (dato faltante/histórico) no es lo mismo que un viaje sin fin conocido
+ * porque sigue en curso; ese caso se resuelve devolviendo `null` (no
+ * ocupa) en vez de inventarle un `fin` a un plan que ni siquiera ha
+ * salido. Mantener este significado único es lo que permite a
+ * OPS-4.2b razonar `fin === null` como "activo físico" sin ambigüedad.
+ *
+ * `null` (el tipo completo) = no ocupa en absoluto.
+ */
+export type IntervaloOcupacion = { inicio: string; fin: string | null } | null;
+
+/**
+ * Deriva el intervalo de OCUPACIÓN REAL de un plan a partir de su estado,
+ * su intervalo planificado y si ya tiene llegada técnica — puro, sin
+ * acceso a base de datos (el caller resuelve `llegadaTecnica`, igual que
+ * ya hace planes/route.ts para `pendiente_cierre`).
+ *
+ * - Programado CON `regresoEstimado`: ocupa por su intervalo PLANIFICADO
+ *   tal cual siempre (`fin = regresoEstimado`) — un Programado vencido NO
+ *   se vuelve "ocupado indefinido"; simplemente ya no bloquea (mismo
+ *   comportamiento de hoy).
+ * - Programado SIN `regresoEstimado` (dato faltante — plan histórico
+ *   anterior a la regla que ya lo exige al asignar recursos, ver
+ *   planes/route.ts): `null` (no ocupa). NUNCA `{ inicio, fin: null }` —
+ *   ese `fin: null` está reservado exclusivamente para un viaje
+ *   físicamente en curso (ver arriba); un Programado no ha salido, no
+ *   hay base para tratarlo como "activo sin fin conocido".
+ * - En ruta / Cargado SIN llegada técnica: ocupa desde `inicio` sin fin
+ *   conocido (`fin = null`) — `regresoEstimado` vencido (o incluso
+ *   ausente) no libera el recurso, el viaje sigue físicamente activo.
+ * - En ruta / Cargado CON llegada técnica: deja de ocupar (`null`) — el
+ *   recurso ya volvió físicamente, aunque TMS siga "En ruta" hasta el
+ *   cierre administrativo del Jefe de Operaciones.
+ * - Cerrado / Cancelado (o cualquier otro estado no contemplado aquí):
+ *   nunca ocupa (`null`).
+ */
+export function intervaloOcupacionReal(plan: {
+  estado: string;
+  /** "YYYY-MM-DD HH:mm:ss" — mismo formato que produce inicioViaje(). */
+  inicio: string;
+  regresoEstimado: string | null;
+  llegadaTecnica: boolean;
+}): IntervaloOcupacion {
+  if (plan.estado === "Programado") {
+    // CORRECCIÓN PR #82: sin regresoEstimado no hay intervalo planificado
+    // que devolver — nunca se usa `fin: null` aquí, ese significado queda
+    // reservado exclusivamente para "viaje físicamente activo sin
+    // llegada" (En ruta/Cargado). No inventar un fin que no existe.
+    if (plan.regresoEstimado == null) return null;
+    return { inicio: plan.inicio, fin: plan.regresoEstimado };
+  }
+  if (
+    (ESTADOS_OCUPACION_INDEFINIDA_SIN_LLEGADA as readonly string[]).includes(plan.estado)
+  ) {
+    if (plan.llegadaTecnica) return null;
+    return { inicio: plan.inicio, fin: null };
+  }
+  return null;
+}
+
+/**
+ * ¿El intervalo de ocupación real se solapa con un intervalo de consulta
+ * (p.ej. el del plan NUEVO que se quiere validar)? Mismo criterio de
+ * solape que ya usa primerConflictoTraslape — sin "misma fecha": dos
+ * intervalos que no se tocan en hora no chocan aunque sea el mismo día.
+ * `fin: null` en la ocupación se trata como "sin límite superior" (nunca
+ * termina, siempre se solapa si ya empezó antes de que acabe la consulta).
+ */
+export function seSolapaConOcupacionReal(
+  ocupacion: IntervaloOcupacion,
+  consulta: IntervaloViaje,
+): boolean {
+  if (!ocupacion) return false;
+  const empiezaAntesDeQueTermineConsulta = ocupacion.inicio < consulta.fin;
+  const terminaDespuesDeQueEmpieceConsulta =
+    ocupacion.fin == null || ocupacion.fin > consulta.inicio;
+  return empiezaAntesDeQueTermineConsulta && terminaDespuesDeQueEmpieceConsulta;
+}
