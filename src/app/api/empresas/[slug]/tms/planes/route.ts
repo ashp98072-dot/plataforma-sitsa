@@ -1568,7 +1568,15 @@ export async function PATCH(req: Request, ctx: Ctx) {
       }
     }
 
-    await conn.execute(
+    // OPS-3.2a — guard atómico contra la carrera PATCH vs. cierre: si el
+    // Jefe cierra el viaje (POST /planes/[id]/cerrar, atómico y ajeno a
+    // este archivo) entre la lectura de `antes` (arriba, fuera de la
+    // transacción) y este UPDATE, el WHERE de abajo ya no debe hacer
+    // match — "estado = ?" compara contra el valor LEÍDO al inicio
+    // (antes.estado), nunca contra el nuevo valor del body. Así, un
+    // "Cerrado" recién puesto por el Jefe queda protegido: este UPDATE no
+    // lo toca.
+    const [patchResult] = await conn.execute<ResultSetHeader>(
       `UPDATE tms_planes_viaje SET
         fecha_plan = COALESCE(?, fecha_plan),
         piloto_id = COALESCE(?, piloto_id),
@@ -1586,7 +1594,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
         contacto_nombre_historico = COALESCE(?, contacto_nombre_historico),
         contacto_cargo_historico = COALESCE(?, contacto_cargo_historico),
         contacto_telefono_historico = COALESCE(?, contacto_telefono_historico)
-       WHERE id = ? AND empresa_id = ?`,
+       WHERE id = ? AND empresa_id = ? AND estado = ?`,
       [
         d.fechaPlan ?? null,
         pilotoId ?? null,
@@ -1609,8 +1617,37 @@ export async function PATCH(req: Request, ctx: Ctx) {
         d.contactoTelefonoHistorico?.trim() || null,
         d.id,
         empresaId,
+        antes.estado,
       ],
     );
+
+    if (patchResult.affectedRows === 0) {
+      // Ambiguo a propósito: sin CLIENT_FOUND_ROWS (el pool de @/lib/db no
+      // lo habilita), MySQL reporta affectedRows=0 tanto si el WHERE no
+      // matcheó ninguna fila (el conflicto real que queremos detectar) COMO
+      // si matcheó pero el SET resultante es idéntico al valor ya
+      // guardado (nada que reportar — no es un conflicto). Para no abrir
+      // falsos 409 en el segundo caso, se re-consulta el estado actual
+      // DENTRO de la misma transacción/conexión: si sigue siendo
+      // `antes.estado`, el WHERE sí matcheó (solo no había nada que
+      // cambiar) y se continúa normalmente; si es distinto (o la fila ya
+      // no existe), ahí sí hubo una carrera real.
+      const [verifRows] = await conn.query<RowDataPacket[]>(
+        `SELECT estado FROM tms_planes_viaje WHERE id = ? AND empresa_id = ? LIMIT 1`,
+        [d.id, empresaId],
+      );
+      const estadoActual = verifRows[0]?.estado != null ? String(verifRows[0].estado) : null;
+      if (estadoActual !== antes.estado) {
+        await conn.rollback();
+        return NextResponse.json(
+          {
+            error:
+              "El estado del viaje cambió mientras se guardaban los cambios. Recarga la información y vuelve a intentarlo.",
+          },
+          { status: 409 },
+        );
+      }
+    }
 
     if (auxPersonalIdsLegado != null) {
       await guardarAuxiliaresPlan(d.id, auxPersonalIdsLegado, conn);
