@@ -67,14 +67,14 @@ export function ClientesImportador({ slug, onImported }: { slug: string; onImpor
     <section className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h2 className="font-medium">Importar clientes desde Excel</h2>
-          <p className="text-xs text-[var(--muted)]">Descarga el modelo, llena los clientes y valida antes de guardar.</p>
+          <h2 className="font-medium">Importación masiva de clientes</h2>
+          <p className="text-xs text-[var(--muted)]">Descarga el formato oficial, agrega los clientes y valida el archivo antes de guardarlo.</p>
         </div>
         <a
           href={`/api/empresas/${slug}/clientes/import`}
           className="rounded border border-[var(--border)] px-3 py-1.5 text-xs"
         >
-          Excel modelo
+          Descargar formato Excel
         </a>
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -83,7 +83,7 @@ export function ClientesImportador({ slug, onImported }: { slug: string; onImpor
           {procesando ? "Procesando…" : "Validar Excel"}
         </button>
         <button type="button" disabled={!archivo || !preview || preview.resumen.errores > 0 || procesando} onClick={() => void procesar("importar")} className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm text-white disabled:opacity-50">
-          Importar clientes
+          Importar clientes masivamente
         </button>
       </div>
       {error ? <p className="text-sm text-red-300">{error}</p> : null}

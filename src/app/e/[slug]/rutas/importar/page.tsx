@@ -298,7 +298,7 @@ export default function ImportarRutasPage() {
         </div>
         <div className="flex flex-wrap gap-2">
           <a href={`/api/empresas/${slug}/tms/rutas/importar`} className="rounded bg-[#1F6AA5] px-3 py-2 text-xs text-white">
-            Excel modelo
+            Descargar formato Excel
           </a>
           <Link href={`/e/${slug}/rutas`} className="rounded border border-[var(--border)] px-3 py-2 text-xs">
             ← Volver a Rutas
