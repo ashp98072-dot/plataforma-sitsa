@@ -1,7 +1,14 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireTenantModulo, requireTenantProgramacionOTms } from "@/lib/tenant";
-import { crearContactoCliente, listarContactosCliente } from "@/lib/tms/cliente-contactos";
+import {
+  requireTenantCatalogoOperativoCliente,
+  requireTenantModulo,
+} from "@/lib/tenant";
+import {
+  crearContactoCliente,
+  listarContactosCliente,
+  type ContactoCliente,
+} from "@/lib/tms/cliente-contactos";
 
 type Ctx = { params: Promise<{ slug: string; clienteId: string }> };
 
@@ -14,24 +21,51 @@ type Ctx = { params: Promise<{ slug: string; clienteId: string }> };
  * sigue exigiendo tms:crear sin cambios: confirmado por lectura que
  * plan-form.tsx solo hace GET aquí (nunca crea un contacto desde el
  * formulario de Programación).
+ *
+ * OPS-5.2c: GET ahora también acepta rutas:ver (ver
+ * requireTenantCatalogoOperativoCliente en tenant.ts — corrige el 403
+ * detectado en OPS-5.2c.1 para un usuario con SOLO rutas:ver). Además,
+ * el payload se proyecta según `accesoCompleto`: quien NO tiene tms:ver
+ * (Programación/Rutas) recibe solo {id, nombre, cargo, telefono} —
+ * confirmado por barrido de consumidores (OPS-5.2c/OPS-5.2c.1) que ni
+ * plan-form.tsx ni rutas/page.tsx leen email/observaciones/activo/
+ * clienteId. `?todas=1` (inactivos) queda reservado a quien tiene
+ * accesoCompleto — un caller operativo no puede elevar el payload ni
+ * incluir inactivos solo agregando el querystring, porque `activo` ni
+ * siquiera forma parte de su payload.
  */
+function proyectarOperativo(c: ContactoCliente) {
+  return {
+    id: c.id,
+    nombre: c.nombre,
+    cargo: c.cargo,
+    telefono: c.telefono,
+  };
+}
+
 export async function GET(req: Request, ctx: Ctx) {
   const { slug, clienteId } = await ctx.params;
-  const guard = await requireTenantProgramacionOTms(slug);
+  const guard = await requireTenantCatalogoOperativoCliente(slug);
   if (guard.error) return guard.error;
 
   const cid = Number(clienteId);
   if (!Number.isFinite(cid)) {
     return NextResponse.json({ error: "Cliente inválido." }, { status: 400 });
   }
-  const todas = new URL(req.url).searchParams.get("todas") === "1";
+  const todasSolicitadas = new URL(req.url).searchParams.get("todas") === "1";
+  // OPS-5.2c: la querystring del cliente nunca eleva privilegios — solo
+  // se respeta `todas=1` cuando el permiso efectivo ya da accesoCompleto.
+  const incluirInactivos = guard.accesoCompleto && todasSolicitadas;
 
   try {
     const contactos = await listarContactosCliente(guard.empresa.id, cid, {
-      incluirInactivos: todas,
+      incluirInactivos,
     });
+    const payload = guard.accesoCompleto
+      ? contactos
+      : contactos.map(proyectarOperativo);
     return NextResponse.json(
-      { contactos },
+      { contactos: payload },
       { headers: { "Cache-Control": "private, no-store" } },
     );
   } catch (e) {

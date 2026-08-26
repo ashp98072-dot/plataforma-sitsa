@@ -562,6 +562,72 @@ export async function requireTenantProgramacionOTms(
 }
 
 /**
+ * OPS-5.2c — catálogo operativo de cliente (contactos/ubicaciones):
+ * unifica el acceso de lectura entre Programación, Rutas y TMS, que
+ * comparten las mismas dependencias operativas de tms_clientes. Agrega
+ * `rutas:ver` al mismo OR que ya usa requireTenantProgramacionOTms —
+ * OPS-5.2c.1 confirmó por barrido de consumidores que un usuario con
+ * SOLO rutas:ver (sin programacion:ver ni tms:ver) puede abrir
+ * Operaciones > Rutas, pero antes de este cambio recibía 403 al pedir
+ * los contactos/ubicaciones del cliente para armar la ruta — su
+ * formulario quedaba parcialmente roto. Misma capacidad de empresa que
+ * los tres helpers anteriores: exige "tms" habilitado (Programación y
+ * Rutas viven dentro de esa capacidad, no son módulos de empresa
+ * aparte).
+ *
+ * Además calcula `accesoCompleto` (true solo para Admin o para quien
+ * tenga tms:ver) para que el endpoint decida qué payload devolver:
+ * completo para las pantallas administrativas de TMS
+ * (cliente-contactos-admin.tsx/cliente-ubicaciones-admin.tsx), reducido
+ * a los campos operativos para Programación/Rutas (que nunca los
+ * necesitaron completos — confirmado por lectura de sus consumidores en
+ * OPS-5.2c/OPS-5.2c.1). La señal se calcula aquí, en el servidor, a
+ * partir de permisos efectivos reales — nunca se expone la lista
+ * completa de permisos al cliente, y el endpoint NO debe decidir el
+ * payload por rol, pathname, Referer ni querystring.
+ */
+export async function requireTenantCatalogoOperativoCliente(
+  slug: string,
+  accion: AccionPermiso = "ver",
+): Promise<(Ok & { accesoCompleto: boolean }) | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") {
+    return { session, empresa, accesoCompleto: true };
+  }
+
+  const empresaMods = empresa.modulos.length
+    ? empresa.modulos
+    : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("tms")) {
+    return {
+      error: NextResponse.json(
+        { error: "Esta empresa no tiene el módulo TMS." },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  const puedeTms = tienePermiso(perms, "tms", accion);
+  const puedeProgramacion = tienePermiso(perms, "programacion", accion);
+  const puedeRutas = tienePermiso(perms, "rutas", accion);
+
+  if (!puedeTms && !puedeProgramacion && !puedeRutas) {
+    return {
+      error: NextResponse.json(
+        { error: `Sin permiso para ${accion} en Programación/Rutas/TMS.` },
+        { status: 403 },
+      ),
+    };
+  }
+
+  return { session, empresa, accesoCompleto: puedeTms };
+}
+
+/**
  * VIAT-3 — módulo "Operaciones > Viáticos": acepta CUALQUIERA de los tres
  * permisos de viáticos (`viaticos`, `viaticos_autorizar`, `viaticos_pagar`)
  * con la acción pedida — no crea un permiso nuevo, solo reutiliza los tres
