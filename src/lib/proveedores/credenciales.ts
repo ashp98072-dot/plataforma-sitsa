@@ -1,15 +1,17 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { getAuthSecretBytes } from "@/lib/auth-secret";
 
 const VERSION = "v1";
 
 function clave(): Buffer {
-  const secret = process.env.PORTAL_CREDENTIALS_KEY?.trim();
-  if (!secret || secret.length < 32) {
-    throw new Error(
-      "PORTAL_CREDENTIALS_KEY debe configurarse con al menos 32 caracteres.",
-    );
+  const dedicada = process.env.PORTAL_CREDENTIALS_KEY?.trim();
+  // Compatibilidad: una clave dedicada válida conserva exactamente la misma
+  // derivación usada por credenciales ya guardadas. Para instalaciones que no
+  // necesitan otra variable, AUTH_SECRET funciona como material maestro.
+  if (dedicada && dedicada.length >= 32) {
+    return createHash("sha256").update(dedicada, "utf8").digest();
   }
-  return createHash("sha256").update(secret, "utf8").digest();
+  return createHash("sha256").update(getAuthSecretBytes()).digest();
 }
 
 export function cifrarCredencial(valor: string): string {

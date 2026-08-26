@@ -7,7 +7,7 @@ import {
 } from "date-fns";
 import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { getPool, query } from "@/lib/db";
-import { toIsoDate } from "./dates";
+import { hoyLocal, toIsoDate } from "./dates";
 import { contarEvidenciasPorIncidencia } from "./evidencias";
 
 const DIAS_POR_PERIODO = 15;
@@ -87,7 +87,7 @@ function diasLaborablesEnRango(fechaInicio: Date, fechaFin: Date): number {
   return diasTotales - contarDomingosEnRango(fechaInicio, fechaFin);
 }
 
-function calcularDiasAcumuladosProporcional(
+export function calcularDiasAcumuladosProporcional(
   periodoInicio: Date,
   periodoFinTeorico: Date,
   hoy: Date,
@@ -107,6 +107,64 @@ function calcularDiasAcumuladosProporcional(
   const acumulados =
     (diasMeta * laborablesTranscurridos) / laborablesCompleto;
   return Math.round(Math.min(acumulados, diasMeta) * 100) / 100;
+}
+
+type ResultadoSincronizacionEmpresa = {
+  empleados: number;
+  errores: number;
+};
+
+/**
+ * Mantiene al día los saldos de todos los colaboradores activos sin exigir
+ * que RRHH abra primero la ficha de cada uno. La campana y el panel de
+ * alertas llaman esta función antes de consultar quién alcanzó 15 días.
+ *
+ * Se deduplica por empresa y día de Guatemala para que el polling de la
+ * campana siga siendo barato: como máximo se recalcula una vez al día por
+ * proceso de servidor. Las promesas concurrentes comparten el mismo trabajo.
+ */
+const sincronizacionesEmpresa = new Map<
+  number,
+  { fecha: string; promesa: Promise<ResultadoSincronizacionEmpresa> }
+>();
+
+export async function sincronizarVacacionesEmpleadosActivos(
+  empresaId: number,
+): Promise<ResultadoSincronizacionEmpresa> {
+  const fecha = hoyLocal();
+  const vigente = sincronizacionesEmpresa.get(empresaId);
+  if (vigente?.fecha === fecha) return vigente.promesa;
+
+  const promesa = (async () => {
+    const empleados = await query<RowDataPacket[]>(
+      `SELECT id
+       FROM empleados
+       WHERE empresa_id = ? AND estado = 'Activo' AND fecha_alta IS NOT NULL
+       ORDER BY id`,
+      [empresaId],
+    );
+    let errores = 0;
+    for (const empleado of empleados) {
+      try {
+        await sincronizarPeriodosVacaciones(empresaId, Number(empleado.id));
+      } catch (error) {
+        errores += 1;
+        console.error(
+          `[vacaciones] No se pudo sincronizar empleado ${Number(empleado.id)}:`,
+          error,
+        );
+      }
+    }
+    return { empleados: empleados.length, errores };
+  })();
+
+  sincronizacionesEmpresa.set(empresaId, { fecha, promesa });
+  try {
+    return await promesa;
+  } catch (error) {
+    sincronizacionesEmpresa.delete(empresaId);
+    throw error;
+  }
 }
 
 async function fechaBaseAntiguedad(
