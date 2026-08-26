@@ -881,7 +881,14 @@ export async function POST(req: Request, ctx: Ctx) {
     }
     await guardarAuxiliaresPlan(planId, auxPersonalIds, conn);
     if (paradasInput.length) {
-      await guardarParadasPlan(empresaId, planId, paradasInput, conn);
+      // OPS-3.2d: plan recién creado — guardarParadasPlan nunca puede
+      // rechazar aquí (no hay paradas previas ni evidencia posible), pero
+      // se revisa el resultado igual, por consistencia con el PATCH.
+      const rParadas = await guardarParadasPlan(empresaId, planId, paradasInput, conn);
+      if (!rParadas.ok) {
+        await conn.rollback();
+        return NextResponse.json({ error: rParadas.error }, { status: 409 });
+      }
     }
     // VIAT-0 + mejora Programación: crea/actualiza el viático de cada
     // piloto/auxiliar recién asignado — con el monto explícito de
@@ -985,6 +992,11 @@ const patchSchema = z.object({
         // VIAT-1: referencia opcional a la ubicación guardada del cliente
         // (tms_cliente_ubicaciones) de la que salió esta parada.
         clienteUbicacionId: z.number().int().positive().optional(),
+        // OPS-3.2d: identidad de la parada YA EXISTENTE
+        // (tms_plan_paradas.id) — ausente = parada nueva. Nunca se confía
+        // en este id sin validarlo contra el plan real, ver
+        // guardarParadasPlan en src/lib/tms/paradas.ts.
+        id: z.number().int().positive().optional(),
       }),
     )
     .max(20)
@@ -1131,26 +1143,26 @@ export async function PATCH(req: Request, ctx: Ctx) {
       );
     }
   } else if (ESTADOS_SOLO_NOTAS.has(antes.estado) && antes.pendienteCierre) {
-    // OPS-3.2b/c — En ruta CON llegada registrada (pendiente de cierre):
-    // reconciliación administrativa. Se habilitan notas, tarifa
+    // OPS-3.2b/c/d — En ruta CON llegada registrada (pendiente de
+    // cierre): reconciliación administrativa. Se habilitan notas, tarifa
     // comercial, referencia de cliente, regreso estimado, snapshots de
-    // ruta/lugar de descarga/contacto (OPS-3.2b) y, desde OPS-3.2c,
-    // también piloto/unidad/auxiliares — pasan por EXACTAMENTE las mismas
-    // validaciones de abajo (personal existente, tipo correcto, unidad
-    // accesible, disponibilidad, traslapes, viáticos avanzados) que ya
+    // ruta/lugar de descarga/contacto (OPS-3.2b), piloto/unidad/
+    // auxiliares (OPS-3.2c) y, desde OPS-3.2d, también paradas — todas
+    // pasan por EXACTAMENTE las mismas validaciones de abajo (personal/
+    // unidad existente, disponibilidad, traslapes, viáticos avanzados,
+    // y ahora guardado seguro por identidad para no romper evidencias ya
+    // subidas — ver guardarParadasPlan en src/lib/tms/paradas.ts) que ya
     // corren para "Programado"; no se salta ninguna. Solo fecha/hora de
-    // carga/paradas SIGUEN bloqueadas — quedan para OPS-3.2d.
-    // `tocaComercial`/`tocaPiloto`/`tocaAuxiliares`/`tocaUnidad` NO se
-    // revisan en esta rama a propósito: es justo lo que estos PR
-    // habilitan.
+    // carga SIGUEN bloqueadas. `tocaComercial`/`tocaPiloto`/
+    // `tocaAuxiliares`/`tocaUnidad`/`tocaParadas` NO se revisan en esta
+    // rama a propósito: es justo lo que estos PR habilitan.
     const camposNoPermitidos: string[] = [];
     if (tocaFecha) camposNoPermitidos.push("fecha");
-    if (tocaParadas) camposNoPermitidos.push("paradas");
     if (tocaHora) camposNoPermitidos.push("hora de carga");
     if (camposNoPermitidos.length) {
       return NextResponse.json(
         {
-          error: `El plan está "${antes.estado}" (pendiente de cierre); no se puede modificar: ${camposNoPermitidos.join(", ")}. Antes del cierre solo se pueden corregir notas, tarifa comercial, referencia de cliente, regreso estimado, ruta/contacto, piloto, unidad y auxiliares.`,
+          error: `El plan está "${antes.estado}" (pendiente de cierre); no se puede modificar: ${camposNoPermitidos.join(", ")}. Antes del cierre solo se pueden corregir notas, tarifa comercial, referencia de cliente, regreso estimado, ruta/contacto, piloto, unidad, auxiliares y paradas.`,
         },
         { status: 409 },
       );
@@ -1806,7 +1818,18 @@ export async function PATCH(req: Request, ctx: Ctx) {
     }
 
     if (paradasInput != null) {
-      await guardarParadasPlan(empresaId, d.id, paradasInput, conn);
+      // OPS-3.2d: guardado seguro por identidad (UPDATE in-place para
+      // paradas con id, INSERT para nuevas, DELETE solo de las omitidas
+      // SIN evidencia). Si intenta eliminar una con evidencia, o llega un
+      // id que no pertenece a este plan, `ok:false` — rollback completo
+      // de TODA la transacción (piloto/unidad/auxiliares/comercial que
+      // este mismo PATCH también estuviera guardando NO se aplican
+      // parcialmente).
+      const rParadas = await guardarParadasPlan(empresaId, d.id, paradasInput, conn);
+      if (!rParadas.ok) {
+        await conn.rollback();
+        return NextResponse.json({ error: rParadas.error }, { status: 409 });
+      }
     }
 
     await conn.commit();
