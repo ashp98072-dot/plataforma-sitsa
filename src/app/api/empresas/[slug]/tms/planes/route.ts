@@ -1130,25 +1130,26 @@ export async function PATCH(req: Request, ctx: Ctx) {
       );
     }
   } else if (ESTADOS_SOLO_NOTAS.has(antes.estado) && antes.pendienteCierre) {
-    // OPS-3.2b — En ruta CON llegada registrada (pendiente de cierre):
+    // OPS-3.2b/c — En ruta CON llegada registrada (pendiente de cierre):
     // reconciliación administrativa. Se habilitan notas, tarifa
-    // comercial, referencia de cliente, regreso estimado, y los snapshots
-    // de ruta/lugar de descarga/contacto (estos últimos ya eran editables
-    // sin gate en cualquier estado — no se tocan aquí, ver comentario más
-    // abajo). piloto/auxiliares/unidad/fecha/hora/paradas SIGUEN
-    // bloqueados — quedan para OPS-3.2c/3.2d. `tocaComercial` NO se
-    // revisa en esta rama a propósito: es justo lo que este PR habilita.
+    // comercial, referencia de cliente, regreso estimado, snapshots de
+    // ruta/lugar de descarga/contacto (OPS-3.2b) y, desde OPS-3.2c,
+    // también piloto/unidad/auxiliares — pasan por EXACTAMENTE las mismas
+    // validaciones de abajo (personal existente, tipo correcto, unidad
+    // accesible, disponibilidad, traslapes, viáticos avanzados) que ya
+    // corren para "Programado"; no se salta ninguna. Solo fecha/hora de
+    // carga/paradas SIGUEN bloqueadas — quedan para OPS-3.2d.
+    // `tocaComercial`/`tocaPiloto`/`tocaAuxiliares`/`tocaUnidad` NO se
+    // revisan en esta rama a propósito: es justo lo que estos PR
+    // habilitan.
     const camposNoPermitidos: string[] = [];
-    if (tocaPiloto) camposNoPermitidos.push("piloto");
-    if (tocaAuxiliares) camposNoPermitidos.push("auxiliares");
-    if (tocaUnidad) camposNoPermitidos.push("unidad");
     if (tocaFecha) camposNoPermitidos.push("fecha");
     if (tocaParadas) camposNoPermitidos.push("paradas");
     if (tocaHora) camposNoPermitidos.push("hora de carga");
     if (camposNoPermitidos.length) {
       return NextResponse.json(
         {
-          error: `El plan está "${antes.estado}" (pendiente de cierre); no se puede modificar: ${camposNoPermitidos.join(", ")}. Antes del cierre solo se pueden corregir notas, tarifa comercial, referencia de cliente, regreso estimado y los datos de ruta/contacto.`,
+          error: `El plan está "${antes.estado}" (pendiente de cierre); no se puede modificar: ${camposNoPermitidos.join(", ")}. Antes del cierre solo se pueden corregir notas, tarifa comercial, referencia de cliente, regreso estimado, ruta/contacto, piloto, unidad y auxiliares.`,
         },
         { status: 409 },
       );
@@ -1397,6 +1398,20 @@ export async function PATCH(req: Request, ctx: Ctx) {
         : null;
 
   const advertencias: AdvertenciaPatch[] = [];
+
+  // OPS-3.2c: aviso informativo (nunca bloquea) cuando se reasigna piloto/
+  // unidad/auxiliares en un plan pendiente de cierre — deja claro que
+  // esto es una corrección ADMINISTRATIVA de tms_planes_viaje; el
+  // registro técnico de flota_viajes (piloto_nombre, vehiculo_id,
+  // kilometraje, horas, evidencias) capturado durante la ejecución real
+  // del viaje NO se toca ni se sincroniza automáticamente.
+  if (antes.pendienteCierre && (tocaPiloto || tocaAuxiliares || tocaUnidad)) {
+    advertencias.push({
+      tipo: "reasignacion_pre_cierre",
+      mensaje:
+        "Se actualizó la asignación administrativa del viaje. El registro técnico de Flota conserva los datos capturados durante la ejecución.",
+    });
+  }
 
   if (pilotoIdParaValidar != null || auxiliaresIdsParaValidar.length > 0) {
     const personalDisp = await listarDisponibilidadPersonal(
