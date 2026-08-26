@@ -296,9 +296,14 @@ export default function ImportarRutasPage() {
             (.xlsx). Primero se previsualiza sin guardar nada; solo se escribe al confirmar.
           </p>
         </div>
-        <Link href={`/e/${slug}/rutas`} className="rounded border border-[var(--border)] px-3 py-2 text-xs">
-          ← Volver a Rutas
-        </Link>
+        <div className="flex flex-wrap gap-2">
+          <a href={`/api/empresas/${slug}/tms/rutas/importar`} className="rounded bg-[#1F6AA5] px-3 py-2 text-xs text-white">
+            Excel modelo
+          </a>
+          <Link href={`/e/${slug}/rutas`} className="rounded border border-[var(--border)] px-3 py-2 text-xs">
+            ← Volver a Rutas
+          </Link>
+        </div>
       </div>
 
       <div className="rounded-lg border border-[var(--border)] bg-[var(--panel)] p-3 text-xs text-[var(--muted)]">
