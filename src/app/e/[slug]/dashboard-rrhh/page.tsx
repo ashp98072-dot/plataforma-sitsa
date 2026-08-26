@@ -10,6 +10,15 @@ type Stats = {
   presentesHoy: number;
   ausentesHoy: number;
   enVacaciones: number;
+  otrasIncidenciasHoy: number;
+};
+
+type SituacionHoy = {
+  idEmpleado: number;
+  codigo: string;
+  nombre: string;
+  situacion: "Sin marcaje" | "Vacaciones" | "Otra incidencia";
+  detalle: string;
 };
 
 type ResumenMensual = {
@@ -57,6 +66,7 @@ export default function DashboardRrhhPage() {
   const [resumenGerencial, setResumenGerencial] = useState<
     ResumenMensual[]
   >([]);
+  const [situacionHoy, setSituacionHoy] = useState<SituacionHoy[]>([]);
   const [empresa, setEmpresa] = useState(empresaNombre);
 
   useEffect(() => {
@@ -70,6 +80,7 @@ export default function DashboardRrhhPage() {
 
       setStats(data.stats);
       setResumenGerencial(data.resumenGerencial ?? []);
+      setSituacionHoy(data.situacionHoy ?? []);
 
       if (data.empresa) {
         setEmpresa(String(data.empresa));
@@ -184,12 +195,13 @@ export default function DashboardRrhhPage() {
       </div>
 
       {stats ? (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
           {[
             { label: "Empleados activos", value: stats.totalEmpleados },
             { label: "Presentes (abiertos)", value: stats.presentesHoy },
             { label: "Sin marcar hoy", value: stats.ausentesHoy },
             { label: "En vacaciones", value: stats.enVacaciones },
+            { label: "Otras incidencias", value: stats.otrasIncidenciasHoy },
           ].map((s) => (
             <div
               key={s.label}
@@ -200,6 +212,60 @@ export default function DashboardRrhhPage() {
             </div>
           ))}
         </div>
+      ) : null}
+
+      {stats ? (
+        <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="font-semibold">Situación del personal hoy</h2>
+              <p className="text-xs text-[var(--muted)]">
+                Personal sin marcaje y ausencias justificadas vigentes.
+              </p>
+            </div>
+            <div className="flex gap-3 text-xs">
+              <Link href={`/e/${slug}/rrhh/marcajes`} className="text-[var(--accent)] underline">
+                Revisar marcajes
+              </Link>
+              <Link href={`/e/${slug}/rrhh/incidencias`} className="text-[var(--accent)] underline">
+                Gestionar incidencias
+              </Link>
+            </div>
+          </div>
+
+          {situacionHoy.length ? (
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-[var(--border)] text-left text-[var(--muted)]">
+                    <th className="pb-2 pr-4">Código</th>
+                    <th className="pb-2 pr-4">Empleado</th>
+                    <th className="pb-2 pr-4">Situación</th>
+                    <th className="pb-2">Detalle</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {situacionHoy.map((persona) => (
+                    <tr key={persona.idEmpleado} className="border-b border-[var(--border)]/50">
+                      <td className="py-2 pr-4 text-[var(--muted)]">{persona.codigo}</td>
+                      <td className="py-2 pr-4">{persona.nombre}</td>
+                      <td className="py-2 pr-4">
+                        <span className={persona.situacion === "Sin marcaje" ? "text-[#e08a8a]" : "text-[#e8c468]"}>
+                          {persona.situacion}
+                        </span>
+                      </td>
+                      <td className="py-2">{persona.detalle}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="mt-3 text-sm text-[#8fd4a0]">
+              Todo el personal activo tiene marcaje y no hay ausencias vigentes.
+            </p>
+          )}
+        </section>
       ) : null}
 
       {mesActual ? (
