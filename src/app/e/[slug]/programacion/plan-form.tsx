@@ -32,6 +32,15 @@ type ParadaForm = {
   requiereEvidencia: boolean;
   /** VIAT-1: ubicación guardada del cliente de la que salió esta parada (si se eligió del catálogo). */
   clienteUbicacionId?: number | null;
+  /**
+   * OPS-3.2d: id real (tms_plan_paradas.id) cuando la fila viene de un
+   * plan ya guardado — se conserva desde la carga inicial y se reenvía
+   * tal cual al guardar, para que el backend la actualice IN-PLACE (sin
+   * romper evidencias ya asociadas). Una fila agregada por el usuario en
+   * este formulario, o generada al aplicar una ruta, no tiene id — el
+   * backend la trata como nueva.
+   */
+  id?: number;
 };
 
 type TipoUbicacion = "CARGA" | "ENTREGA" | "AMBOS";
@@ -178,6 +187,10 @@ export default function PlanForm({
   const [paradasForm, setParadasForm] = useState<ParadaForm[]>(
     plan?.paradas?.length
       ? plan.paradas.map((p) => ({
+          // OPS-3.2d: se conserva el id real — se reenvía tal cual al
+          // guardar para que el backend actualice esta misma fila en vez
+          // de recrearla (evita romper evidencias ya asociadas).
+          id: p.id,
           lugarNombre: p.lugar_nombre,
           tipo: (["Carga", "Descarga", "Entrega"].includes(p.tipo) ? p.tipo : "Entrega") as ParadaForm["tipo"],
           requiereEvidencia: p.requiere_evidencia,
@@ -558,15 +571,15 @@ export default function PlanForm({
   // usuario tiene el permiso.
   const pendienteCierre = esEdicion && Boolean(plan!.pendiente_cierre);
   const yaCerrado = esEdicion && plan!.estado === "Cerrado";
-  // OPS-3.2b — reconciliación administrativa pre-cierre: mientras el
+  // OPS-3.2b/c/d — reconciliación administrativa pre-cierre: mientras el
   // plan está "En ruta" sin llegada registrada, sigue tan bloqueado como
   // antes (`soloNotas` a secas); con llegada registrada (pendienteCierre)
   // se habilitan tarifa/referencia/regreso/ruta/lugar de descarga/
-  // contacto — piloto/unidad/auxiliares/fecha/hora/paradas siguen
-  // bloqueados en ambos casos (quedan para una fase posterior, ver
-  // src/app/api/empresas/[slug]/tms/planes/route.ts). Usa el mismo
-  // `plan.pendiente_cierre` que ya devuelve GET — no infiere llegada por
-  // evidencias ni hace una llamada adicional a Flota.
+  // contacto (OPS-3.2b), piloto/unidad/auxiliares (OPS-3.2c) y paradas
+  // (OPS-3.2d, guardadas por identidad en el backend para no romper
+  // evidencias ya asociadas) — fecha/hora siguen bloqueadas en ambos
+  // casos. Usa el mismo `plan.pendiente_cierre` que ya devuelve GET — no
+  // infiere llegada por evidencias ni hace una llamada adicional a Flota.
   const bloqueadoParaPreCierre = soloNotas && !pendienteCierre;
 
   // VIAT-2: el servidor exige regreso_estimado cuando el plan queda con
@@ -647,6 +660,11 @@ export default function PlanForm({
     const paradas = paradasForm
       .filter((p) => p.lugarNombre.trim())
       .map((p) => ({
+        // OPS-3.2d: se reenvía el id si la parada ya existía — sin él, el
+        // backend la trata como nueva (y una existente que se deje de
+        // enviar se interpreta como "eliminar", rechazado si ya tiene
+        // evidencia).
+        id: p.id,
         lugarNombre: p.lugarNombre.trim(),
         tipo: p.tipo,
         requiereEvidencia: p.requiereEvidencia,
@@ -760,7 +778,7 @@ export default function PlanForm({
           contactoCargoHistorico: bloqueadoParaPreCierre ? undefined : form.contactoCargoHistorico.trim() || undefined,
           contactoTelefonoHistorico: bloqueadoParaPreCierre ? undefined : form.contactoTelefonoHistorico.trim() || undefined,
           notas: form.notas.trim() || undefined,
-          paradas: soloNotas || !paradas.length ? undefined : paradas,
+          paradas: bloqueadoParaPreCierre || !paradas.length ? undefined : paradas,
         }),
       });
       const data = await res.json();
@@ -855,9 +873,10 @@ export default function PlanForm({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs font-medium text-amber-200">
               El piloto ya registró la llegada — pendiente de cierre por Operaciones.
-              Puedes corregir tarifa, referencia, regreso estimado, ruta/contacto y también
-              piloto, unidad y auxiliares si se registraron mal — el registro técnico de Flota
-              (kilometraje, horas, evidencias) no cambia.
+              Puedes corregir tarifa, referencia, regreso estimado, ruta/contacto, piloto,
+              unidad, auxiliares y paradas si se registraron mal — el registro técnico de
+              Flota (kilometraje, horas, evidencias) no cambia. Una parada que ya tenga
+              evidencia no se puede eliminar, solo corregir.
             </p>
             {puedeCerrarViaje && !confirmandoCierre ? (
               <button
@@ -1135,9 +1154,13 @@ export default function PlanForm({
         />
       </label>
 
+      {/* OPS-3.2d: paradas pasan de `soloNotas` a `bloqueadoParaPreCierre` —
+          se habilitan en pendiente de cierre (backend las guarda por
+          identidad, sin romper evidencias ya asociadas a una parada
+          existente). fecha/hora siguen atadas a `soloNotas` sin cambios. */}
       <div
         className={`md:col-span-3 space-y-2 rounded border border-[var(--border)] p-3 ${
-          soloNotas || bloqueado ? "pointer-events-none opacity-50" : ""
+          bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""
         }`}
       >
         <p className="text-xs font-medium">Paradas del viaje</p>

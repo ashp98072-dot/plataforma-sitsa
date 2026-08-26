@@ -57,7 +57,21 @@ export type ParadaInput = {
    * después.
    */
   clienteUbicacionId?: number | null;
+  /**
+   * OPS-3.2d: identidad de la parada YA EXISTENTE (tms_plan_paradas.id).
+   * Ausente/undefined = parada NUEVA (se inserta). Presente = parada
+   * existente que se actualiza IN-PLACE, conservando el mismo id — así
+   * las evidencias ya subidas (tms_evidencias.parada_id /
+   * flota_viaje_evidencias.parada_id, ninguna con FK/cascade) siguen
+   * apuntando a una fila real. Nunca se confía en este id sin validarlo
+   * contra el plan real (ver guardarParadasPlan).
+   */
+  id?: number;
 };
+
+export type ResultadoGuardarParadas =
+  | { ok: true }
+  | { ok: false; error: string };
 
 function mapParadaRow(r: RowDataPacket): PlanParada {
   return {
@@ -123,21 +137,106 @@ export async function listarParadasDePlanes(
 }
 
 /**
- * Fase P5.1b: `conn` opcional — si viene (dentro de una transacción de
- * Programación), TODAS las escrituras/lecturas internas (DELETE, el
- * auto-alta de tms_lugares, e INSERT de cada parada) usan esa misma
- * conexión, para que un reemplazo de paradas sea atómico junto con el
- * resto del cambio. Sin `conn`, comportamiento idéntico al actual (pool
- * global) — compatibilidad total con los 2 consumidores existentes
- * (POST/PATCH de tms/planes/route.ts), que siguen llamándola sin `conn`.
+ * OPS-3.2d — guardado SEGURO por identidad, ya no destructivo.
+ *
+ * Antes: DELETE FROM tms_plan_paradas WHERE plan_id = ? + INSERT de todas
+ * de nuevo, siempre con ids nuevos. Eso era inofensivo mientras "paradas"
+ * estuvo bloqueado en cualquier estado con evidencia (En ruta). Ahora que
+ * OPS-3.2b/c/d permiten corregir un plan pendiente de cierre — momento en
+ * el que YA puede haber evidencia subida por el piloto (tms_evidencias.
+ * parada_id / flota_viaje_evidencias.parada_id, ambas columnas
+ * aditivas SIN FK ni ON DELETE CASCADE, confirmado en
+ * src/lib/flota/schema.ts) — repetir ese DELETE+INSERT habría dejado esas
+ * evidencias con un parada_id que ya no existe: invisibles en el conteo
+ * de cualquier parada nueva, pero sin borrarse (huérfanas).
+ *
+ * Estrategia por identidad (ParadaInput.id, opcional):
+ * - Con id: DEBE existir y pertenecer a ESTE plan (si no, error — nunca
+ *   se confía en un id del cliente) → UPDATE in-place, mismo id, mismas
+ *   evidencias siguen vinculadas.
+ * - Sin id: parada nueva → INSERT (mismo comportamiento de siempre).
+ * - Una parada EXISTENTE que no aparece en `paradas` (omitida del
+ *   payload) se interpreta como "se quiere eliminar" — permitido SOLO si
+ *   no tiene evidencia asociada (tms_evidencias + flota_viaje_evidencias);
+ *   si tiene, se rechaza ANTES de escribir nada (ok:false), para que el
+ *   caller pueda hacer rollback completo de la transacción del PATCH sin
+ *   dejar cambios parciales.
+ *
+ * Para un plan NUEVO (POST) o sin paradas previas, `actuales` sale vacío
+ * — el comportamiento se reduce exactamente al INSERT de siempre, sin
+ * ningún UPDATE/DELETE ni validación de por medio.
+ *
+ * `conn` opcional: si viene (dentro de una transacción de Programación),
+ * TODAS las escrituras/lecturas internas usan esa misma conexión, para
+ * que el guardado de paradas sea atómico junto con el resto del cambio.
  */
 export async function guardarParadasPlan(
   empresaId: number,
   planId: number,
   paradas: ParadaInput[],
   conn?: PoolConnection,
-): Promise<void> {
-  await runExecute(conn, "DELETE FROM tms_plan_paradas WHERE plan_id = ?", [planId]);
+): Promise<ResultadoGuardarParadas> {
+  // 1) Estado actual real del plan: id + conteo de evidencias de cada
+  // parada YA guardada — misma definición de "evidencias" que ya usa
+  // listarParadasDePlanes (con el mismo fallback si flota_viaje_evidencias
+  // aún no tiene la columna parada_id en este entorno).
+  const actuales = await runQuery<RowDataPacket[]>(
+    conn,
+    `SELECT pp.id,
+            (
+              (SELECT COUNT(*) FROM tms_evidencias ev WHERE ev.parada_id = pp.id)
+              +
+              (SELECT COUNT(*) FROM flota_viaje_evidencias fe WHERE fe.parada_id = pp.id)
+            ) AS evidencias
+     FROM tms_plan_paradas pp
+     WHERE pp.plan_id = ?`,
+    [planId],
+  ).catch(async () =>
+    runQuery<RowDataPacket[]>(
+      conn,
+      `SELECT pp.id, (SELECT COUNT(*) FROM tms_evidencias ev
+                      WHERE ev.parada_id = pp.id) AS evidencias
+       FROM tms_plan_paradas pp
+       WHERE pp.plan_id = ?`,
+      [planId],
+    ).catch(() => [] as RowDataPacket[]),
+  );
+  const evidenciasPorId = new Map<number, number>(
+    actuales.map((r) => [Number(r.id), Number(r.evidencias ?? 0)]),
+  );
+
+  // 2) Validar de una vez todos los ids que llegaron — nunca se confía en
+  // un id del cliente: debe existir y pertenecer a ESTE plan.
+  const idsEnviados = new Set<number>();
+  for (const p of paradas) {
+    if (p.id == null) continue;
+    const id = Number(p.id);
+    if (!evidenciasPorId.has(id)) {
+      return {
+        ok: false,
+        error: `Una de las paradas enviadas (id ${id}) no existe o no pertenece a este viaje.`,
+      };
+    }
+    idsEnviados.add(id);
+  }
+
+  // 3) Cualquier parada EXISTENTE que no vino en el payload se interpreta
+  // como "eliminar" — bloqueado si tiene evidencia. Se revisa ANTES de
+  // escribir nada, para poder devolver el error sin dejar cambios
+  // parciales (el caller hace rollback de la transacción completa).
+  const idsAEliminar: number[] = [];
+  for (const [id, evidencias] of evidenciasPorId) {
+    if (idsEnviados.has(id)) continue;
+    if (evidencias > 0) {
+      return {
+        ok: false,
+        error: "No se puede eliminar una parada que ya tiene evidencias asociadas.",
+      };
+    }
+    idsAEliminar.push(id);
+  }
+
+  // 4) A partir de aquí, todo lo recibido es válido — aplicar cambios.
   let orden = 1;
   for (const p of paradas) {
     const nombre = (p.lugarNombre || "").trim();
@@ -163,30 +262,67 @@ export async function guardarParadasPlan(
     }
     const ordenActual = orden++;
     const requiereEvidencia = p.requiereEvidencia === false ? 0 : 1;
-    try {
-      // VIAT-1: intenta guardar cliente_ubicacion_id (columna aditiva, ver
-      // sql/migrate-2026-08-viat-1-cliente-ubicaciones.sql). Si esa
-      // migración todavía no se aplicó en este entorno, MySQL rechaza la
-      // columna desconocida y se reintenta sin ella (mismo `ordenActual`,
-      // capturado ANTES del try — no se pierde la parada ni se salta un
-      // número de orden por un campo opcional/de referencia).
-      await runExecute(
-        conn,
-        `INSERT INTO tms_plan_paradas
-          (plan_id, orden, lugar_id, lugar_nombre, tipo, requiere_evidencia, cliente_ubicacion_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [planId, ordenActual, lugarId, nombre, tipo, requiereEvidencia, p.clienteUbicacionId ?? null],
-      );
-    } catch {
-      await runExecute(
-        conn,
-        `INSERT INTO tms_plan_paradas
-          (plan_id, orden, lugar_id, lugar_nombre, tipo, requiere_evidencia)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [planId, ordenActual, lugarId, nombre, tipo, requiereEvidencia],
-      );
+
+    if (p.id != null) {
+      // Parada EXISTENTE — UPDATE in-place, mismo id, evidencias intactas.
+      try {
+        await runExecute(
+          conn,
+          `UPDATE tms_plan_paradas
+            SET orden = ?, lugar_id = ?, lugar_nombre = ?, tipo = ?,
+                requiere_evidencia = ?, cliente_ubicacion_id = ?
+           WHERE id = ? AND plan_id = ?`,
+          [ordenActual, lugarId, nombre, tipo, requiereEvidencia, p.clienteUbicacionId ?? null, p.id, planId],
+        );
+      } catch {
+        await runExecute(
+          conn,
+          `UPDATE tms_plan_paradas
+            SET orden = ?, lugar_id = ?, lugar_nombre = ?, tipo = ?,
+                requiere_evidencia = ?
+           WHERE id = ? AND plan_id = ?`,
+          [ordenActual, lugarId, nombre, tipo, requiereEvidencia, p.id, planId],
+        );
+      }
+    } else {
+      // Parada NUEVA — INSERT (mismo comportamiento de siempre).
+      try {
+        // VIAT-1: intenta guardar cliente_ubicacion_id (columna aditiva, ver
+        // sql/migrate-2026-08-viat-1-cliente-ubicaciones.sql). Si esa
+        // migración todavía no se aplicó en este entorno, MySQL rechaza la
+        // columna desconocida y se reintenta sin ella (mismo `ordenActual`,
+        // capturado ANTES del try — no se pierde la parada ni se salta un
+        // número de orden por un campo opcional/de referencia).
+        await runExecute(
+          conn,
+          `INSERT INTO tms_plan_paradas
+            (plan_id, orden, lugar_id, lugar_nombre, tipo, requiere_evidencia, cliente_ubicacion_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [planId, ordenActual, lugarId, nombre, tipo, requiereEvidencia, p.clienteUbicacionId ?? null],
+        );
+      } catch {
+        await runExecute(
+          conn,
+          `INSERT INTO tms_plan_paradas
+            (plan_id, orden, lugar_id, lugar_nombre, tipo, requiere_evidencia)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [planId, ordenActual, lugarId, nombre, tipo, requiereEvidencia],
+        );
+      }
     }
   }
+
+  // 5) Eliminar las que quedaron omitidas y SIN evidencia (ya validado en
+  // el paso 3 que ninguna de estas tiene evidencia asociada).
+  if (idsAEliminar.length) {
+    await runExecute(
+      conn,
+      `DELETE FROM tms_plan_paradas WHERE plan_id = ? AND id IN (${idsAEliminar.map(() => "?").join(",")})`,
+      [planId, ...idsAEliminar],
+    );
+  }
+
+  return { ok: true };
 }
 
 /** Paradas que aún no tienen evidencia (requiere_evidencia = 1). */
