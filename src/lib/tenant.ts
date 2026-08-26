@@ -456,15 +456,20 @@ export async function requireTenantProgramacion(
 }
 
 /**
- * Lectura de GET /tms/planes: alimenta TANTO el tablero de Programación
- * como la tabla de solo lectura de TMS — acepta CUALQUIERA de los dos
- * permisos de lectura ("programacion" o "tms"), mismo patrón OR que
- * requireTenantViaticosAny. Evita que un usuario con programacion:ver
- * pero tms:ver=false (o viceversa) se quede sin poder cargar datos en
- * ninguna de las dos pantallas.
+ * OPS-5.2a — Rutas (catálogo maestro de rutas/servicios por cliente,
+ * VIAT-4) deja de depender exclusivamente de "tms": permiso propio
+ * (rutas:ver/crear/editar/eliminar). A diferencia de Programación (que
+ * separa lectura compartida de escritura exclusiva en dos funciones),
+ * Rutas siempre vivió dentro de "tms" sin distinguir acción — por
+ * compatibilidad histórica, TODA acción acepta rutas:<accion> O
+ * tms:<accion> (quien hoy edita rutas vía tms:editar debe seguir
+ * pudiendo hacerlo sin regresión). Sigue exigiendo que la empresa tenga
+ * "tms" habilitado — Rutas vive dentro de TMS, no es una capacidad de
+ * empresa aparte (no se crea ningún flag/tabla nuevo).
  */
-export async function requireTenantProgramacionOTms(
+export async function requireTenantRutas(
   slug: string,
+  accion: AccionPermiso = "ver",
 ): Promise<Ok | Fail> {
   const tenant = await requireTenant(slug);
   if (tenant.error) return tenant;
@@ -486,14 +491,71 @@ export async function requireTenantProgramacionOTms(
 
   const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
   if (
-    tienePermiso(perms, "programacion", "ver") ||
-    tienePermiso(perms, "tms", "ver")
+    tienePermiso(perms, "rutas", accion) ||
+    tienePermiso(perms, "tms", accion)
   ) {
     return { session, empresa };
   }
   return {
     error: NextResponse.json(
-      { error: "Sin permiso para ver Programación/TMS." },
+      { error: `Sin permiso para ${accion} en Rutas.` },
+      { status: 403 },
+    ),
+  };
+}
+
+/**
+ * Lectura/escritura de dependencias compartidas entre Programación y
+ * TMS: acepta CUALQUIERA de los dos permisos para la MISMA acción
+ * (programacion:<accion> O tms:<accion>), mismo patrón OR que
+ * requireTenantViaticosAny. Evita que un usuario con programacion:ver
+ * pero tms:ver=false (o viceversa) se quede sin poder cargar datos.
+ *
+ * Originalmente exclusivo de GET /tms/planes (alimenta TANTO el tablero
+ * de Programación como la tabla de solo lectura de TMS, único caller
+ * antes de OPS-5.2b, siempre con accion="ver" implícito). OPS-5.2b
+ * generaliza el parámetro `accion` (default "ver", 100% compatible con
+ * los callers existentes que solo pasaban `slug`) para reutilizarlo
+ * también en los endpoints que Programación consume como dependencias
+ * operativas reales (catálogos, disponibilidad de personal, ubicaciones/
+ * contactos de cliente, configuración de viáticos de solo lectura) —
+ * NUNCA para convertir programacion:* en acceso administrativo general a
+ * TMS: cada endpoint decide, caso por caso y verificado por lectura de
+ * su consumidor real, si su escritura es realmente una dependencia
+ * operativa de Programación antes de usar accion="crear"/"editar" aquí.
+ */
+export async function requireTenantProgramacionOTms(
+  slug: string,
+  accion: AccionPermiso = "ver",
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length
+    ? empresa.modulos
+    : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("tms")) {
+    return {
+      error: NextResponse.json(
+        { error: "Esta empresa no tiene el módulo TMS." },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  if (
+    tienePermiso(perms, "programacion", accion) ||
+    tienePermiso(perms, "tms", accion)
+  ) {
+    return { session, empresa };
+  }
+  return {
+    error: NextResponse.json(
+      { error: `Sin permiso para ${accion} en Programación/TMS.` },
       { status: 403 },
     ),
   };

@@ -11,13 +11,22 @@ import {
   asegurarSchemaClientes,
 } from "@/lib/clientes/schema";
 import { execute, query } from "@/lib/db";
-import { requireTenantModulo } from "@/lib/tenant";
+import { requireTenantModulo, requireTenantProgramacionOTms } from "@/lib/tenant";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
+/**
+ * OPS-5.2b: GET alimenta el formulario de Programación (clientes/lugares/
+ * unidades/personal para armar un plan) — acepta programacion:ver O
+ * tms:ver (ver requireTenantProgramacionOTms en tenant.ts). El POST de
+ * abajo (alta rápida de cliente/lugar/unidad/personal) sigue exigiendo
+ * tms:crear/editar sin cambios: confirmado por lectura que Programación
+ * (plan-form.tsx) NUNCA lo llama — solo lo usa la página TMS
+ * (crearClienteRapido en tms/page.tsx).
+ */
 export async function GET(_req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "tms");
+  const guard = await requireTenantProgramacionOTms(slug);
   if (guard.error) return guard.error;
   const eid = guard.empresa.id;
   // Puente ligero: mantiene tms_clientes (FK de planes) y alinea catálogo compartido.

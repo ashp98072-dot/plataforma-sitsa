@@ -21,7 +21,7 @@ import {
 import { obtenerVehiculoAccesible } from "@/lib/flota/acceso";
 import { vehiculoPorPlaca } from "@/lib/flota/pilotos";
 import { listarDisponibilidadPersonal } from "@/lib/operaciones/disponibilidad-personal";
-import { hoyLocal, toIsoDate } from "@/lib/rrhh/dates";
+import { ahoraLocal, hoyLocal, toIsoDate } from "@/lib/rrhh/dates";
 import { sincronizarViaticosPlan } from "@/lib/tms/viaticos";
 import {
   ESTADOS_QUE_RESERVAN_RECURSOS,
@@ -82,6 +82,37 @@ const ESTADOS_BLOQUEADOS = new Set(["Cerrado", "Cancelado"]);
 const SQL_PENDIENTE_CIERRE = `(
                 p.estado NOT IN ('Cerrado', 'Cancelado')
                 AND EXISTS (
+                  SELECT 1 FROM flota_viajes fv
+                  WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
+                )
+              )`;
+
+/**
+ * OPS-4.2e: indicador derivado "Viaje atrasado" para la lista de
+ * Programación/TMS — MISMO criterio ya aprobado en OPS-4.2d (alerta de
+ * la campana en notificaciones/route.ts): viaje físicamente iniciado (En
+ * ruta/Cargado) cuyo regreso_estimado ya venció y que TODAVÍA no
+ * registra llegada técnica. "Programado" vencido queda deliberadamente
+ * FUERA — es "no iniciado", no "atrasado" (posible señal futura aparte,
+ * no este ticket).
+ *
+ * "Llegada técnica" es el mismo EXISTS flota_viajes...estado='cerrado'
+ * que ya usa SQL_PENDIENTE_CIERRE arriba, aquí en NOT — por diseño,
+ * "atrasado" y "pendiente_cierre" son mutuamente excluyentes: si ya hay
+ * llegada, el plan es "pendiente de cierre", nunca "atrasado". No se
+ * importa desde notificaciones/route.ts (mismo criterio de aislamiento
+ * ya documentado para SQL_PENDIENTE_CIERRE: dos rutas de API distintas,
+ * si algún día diverge, extraerla a un helper compartido sería lo
+ * correcto).
+ *
+ * Requiere UN parámetro posicional ("ahora", ver ahoraLocal() más abajo)
+ * — a diferencia de SQL_PENDIENTE_CIERRE, que no necesita ninguno.
+ */
+const SQL_ATRASADO = `(
+                p.estado IN ('En ruta', 'Cargado')
+                AND p.regreso_estimado IS NOT NULL
+                AND p.regreso_estimado < ?
+                AND NOT EXISTS (
                   SELECT 1 FROM flota_viajes fv
                   WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
                 )
@@ -202,7 +233,12 @@ export async function GET(req: Request, ctx: Ctx) {
   }
 
   const condiciones = ["p.empresa_id = ?"];
-  const paramsRows: SqlParams = [guard.empresa.id];
+  // OPS-4.2e: "ahora" en Guatemala (ahoraLocal(), no NOW() de MySQL ni
+  // Date().toISOString()) para el indicador derivado `atrasado` —
+  // SQL_ATRASADO va en la lista SELECT (antes del WHERE en el texto de
+  // la query), así que su `?` debe ser el PRIMER parámetro posicional.
+  const ahora = ahoraLocal();
+  const paramsRows: SqlParams = [ahora, guard.empresa.id];
   if (usarRangoFecha) {
     condiciones.push("p.fecha_plan BETWEEN ? AND ?");
     paramsRows.push(fechaDesdeParam as string, fechaHastaParam as string);
@@ -230,6 +266,9 @@ export async function GET(req: Request, ctx: Ctx) {
               -- como el histórico "Descargado" (que siempre tuvo su
               -- flota_viajes en 'cerrado' antes de marcarse así).
               ${SQL_PENDIENTE_CIERRE} AS pendiente_cierre,
+              -- OPS-4.2e: indicador derivado, mutuamente excluyente con
+              -- pendiente_cierre por diseño (ver SQL_ATRASADO arriba).
+              ${SQL_ATRASADO} AS atrasado,
               p.tipo_traslado, p.notas,
               DATE_FORMAT(p.regreso_estimado, '%Y-%m-%dT%H:%i') AS regreso_estimado,
               p.tarifa_comercial, p.referencia_cliente, p.ruta_id, p.ruta_codigo_historico,
@@ -795,6 +834,50 @@ export async function POST(req: Request, ctx: Ctx) {
     ? { inicio: inicioViaje(d.fechaPlan, d.horaCarga), fin: finNuevo }
     : null;
 
+  // OPS-4.2c: disponibilidad FÍSICA actual (viaje realmente abierto en
+  // Flota, flota_viajes.estado='abierto') — protección complementaria a
+  // primerConflictoTraslape de más abajo (que valida TMS/planificación/
+  // ocupación real, ver OPS-4.2b). El POST nunca la había consultado para
+  // piloto/auxiliares (solo para la unidad, vía listarDisponibilidadVehiculos
+  // arriba) — hueco detectado en OPS-4.1.
+  //
+  // Mismo criterio ya usado por el PATCH (bloque VIAT-2/OPS-3.2c más
+  // abajo en este archivo, sin duplicar su lógica de incidencias/otros
+  // planes del día — aquí SOLO el hecho físico "viaje en curso" que pidió
+  // este ticket): solo aplica para HOY. Un viaje abierto ahora mismo NO
+  // debe bloquear una programación futura — no se sabe cuándo terminará
+  // y no se inventa una duración estimada; esa protección futura ya la
+  // da primerConflictoTraslape con la ocupación real (OPS-4.2b).
+  //
+  // Una sola llamada a listarDisponibilidadPersonal (piloto + auxiliares
+  // juntos, vía un Map por personalId) — nunca una por recurso, evita N+1.
+  // Sin piloto ni auxiliares, o si no es hoy, no se ejecuta en absoluto.
+  const esHoyPost = d.fechaPlan === hoyLocal();
+  if (esHoyPost && (pilotoId != null || auxPersonalIds.length > 0)) {
+    const personalDisp = await listarDisponibilidadPersonal(empresaId, d.fechaPlan);
+    const dispPorPersonalId = new Map(personalDisp.map((p) => [p.personalId, p]));
+    const recursosFisicos: { personalId: number; rol: "piloto" | "auxiliar" }[] = [
+      ...(pilotoId != null ? [{ personalId: pilotoId, rol: "piloto" as const }] : []),
+      ...auxPersonalIds.map((id) => ({ personalId: id, rol: "auxiliar" as const })),
+    ];
+    for (const r of recursosFisicos) {
+      const disp = dispPorPersonalId.get(r.personalId);
+      // No debería faltar (tms_personal ya se resolvió arriba) — si por
+      // alguna inconsistencia no aparece, no se bloquea por un dato que
+      // no se pudo verificar (mismo criterio ya usado por el PATCH y por
+      // la disponibilidad de placa de este mismo POST).
+      if (!disp) continue;
+      if (disp.viajeActual != null) {
+        const etiqueta =
+          r.rol === "piloto" ? "El piloto seleccionado" : `El auxiliar ${disp.nombre}`;
+        return NextResponse.json(
+          { error: `${etiqueta} tiene un viaje en curso.` },
+          { status: 409 },
+        );
+      }
+    }
+  }
+
   let planId = 0;
   let codigoFinal = codigo;
   // VIAT-2 (concurrencia): candado con nombre por empresa, igual patrón que
@@ -812,12 +895,36 @@ export async function POST(req: Request, ctx: Ctx) {
   // candado GET_LOCK/RELEASE_LOCK del chequeo de traslapes, sin relación
   // con la atomicidad de la escritura).
   const conn = await getPool().getConnection();
+  // CORRECCIÓN PR #81: solo true si GET_LOCK devolvió realmente 1 (ver
+  // comentario dentro del try) — gatea el RELEASE_LOCK del finally, igual
+  // que `lockTraslapeAdquirido` en el PATCH de más abajo.
+  let lockTraslapePostAdquirido = false;
   try {
     if (lockConn && intervaloNuevo) {
+      // CORRECCIÓN PR #81: GET_LOCK() de MySQL NO lanza excepción cuando no
+      // consigue el candado — retorna 1 (adquirido), 0 (timeout) o NULL
+      // (error). Hay que leer el valor real de `l`: sin candado
+      // confirmado, primerConflictoTraslape no tiene exclusión mutua real
+      // contra otra transacción concurrente, así que no debe correr, y
+      // esta solicitud no debe crear el plan.
+      let lockRows: RowDataPacket[] = [];
       try {
-        await lockConn.query("SELECT GET_LOCK(?, 8) AS l", [lockKey]);
+        [lockRows] = await lockConn.query<RowDataPacket[]>(
+          "SELECT GET_LOCK(?, 8) AS l",
+          [lockKey],
+        );
       } catch {
-        /* ok */
+        lockRows = [];
+      }
+      lockTraslapePostAdquirido = Number(lockRows[0]?.l) === 1;
+      if (!lockTraslapePostAdquirido) {
+        return NextResponse.json(
+          {
+            error:
+              "No se pudo validar la disponibilidad de recursos porque hay otra operación en curso. Intenta de nuevo.",
+          },
+          { status: 409 },
+        );
       }
       const conflicto = await primerConflictoTraslape(
         empresaId,
@@ -915,10 +1022,16 @@ export async function POST(req: Request, ctx: Ctx) {
   } finally {
     conn.release();
     if (lockConn) {
-      try {
-        await lockConn.query("SELECT RELEASE_LOCK(?) AS l", [lockKey]);
-      } catch {
-        /* ok */
+      // CORRECCIÓN PR #81: RELEASE_LOCK solo si realmente se adquirió
+      // (lockTraslapePostAdquirido) — no llamarlo porque GET_LOCK devolvió
+      // 0/NULL o lanzó excepción, eso liberaría un candado que esta sesión
+      // nunca tuvo (a lo sumo un no-op de MySQL, pero no hay que asumirlo).
+      if (lockTraslapePostAdquirido) {
+        try {
+          await lockConn.query("SELECT RELEASE_LOCK(?) AS l", [lockKey]);
+        } catch {
+          /* ok */
+        }
       }
       lockConn.release();
     }
@@ -1612,6 +1725,9 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // posible (todas las validaciones de arriba ya corrieron) y se libera
   // siempre en el `finally`, sin excepción.
   const conn = await getPool().getConnection();
+  // OPS-3.3: bandera para liberar el GET_LOCK de traslapes (si se llegó a
+  // adquirir) en el `finally` de abajo — ver el bloque VIAT-2 más adelante.
+  let lockTraslapeAdquirido = false;
   try {
     await conn.beginTransaction();
 
@@ -1641,9 +1757,28 @@ export async function PATCH(req: Request, ctx: Ctx) {
     // si vino en esta solicitud, si no lo que el plan ya tenía) — misma
     // conexión/transacción que el UPDATE de abajo, y bajo el mismo GET_LOCK
     // por empresa que POST, para que dos ediciones concurrentes no pasen la
-    // verificación antes de que cualquiera escriba. Se omite si el estado
-    // efectivo ya no reserva recursos (Descargado/Cerrado/Cancelado) — no
-    // tiene sentido validar disponibilidad de algo que se está liberando.
+    // verificación antes de que cualquiera escriba.
+    //
+    // OPS-3.3 (corrección de carrera): el candado se libera en el `finally`
+    // de esta función, DESPUÉS de conn.commit() (o conn.rollback()) — antes
+    // se liberaba aquí mismo, justo después de leer el conflicto y ANTES de
+    // escribir/confirmar. Bajo REPEATABLE READ eso dejaba una ventana real:
+    // dos transacciones concurrentes podían adquirir el candado una tras
+    // otra, ambas leer "sin conflicto" (ninguna veía todavía la escritura
+    // no confirmada de la otra) y ambas terminar asignando el mismo
+    // piloto/auxiliar/unidad a planes que se solapan. Mantener el candado
+    // hasta el commit fuerza a que quien llegue segundo espere hasta que el
+    // primero haya confirmado — y como primerConflictoTraslape recibe este
+    // mismo `conn` (más abajo) y es la PRIMERA lectura consistente que hace
+    // esta transacción sobre tablas InnoDB (lo de arriba son solo
+    // INSERT..ON DUPLICATE KEY UPDATE), su propio snapshot de REPEATABLE
+    // READ se establece recién AL EJECUTARSE — es decir, DESPUÉS de haber
+    // esperado el candado — así que ya ve el commit de quien lo tenía antes
+    // (current read correcto, sin necesidad de FOR UPDATE aquí).
+    //
+    // Se omite si el estado efectivo ya no reserva recursos (Descargado/
+    // Cerrado/Cancelado) — no tiene sentido validar disponibilidad de algo
+    // que se está liberando.
     const estadoEfectivo = d.estado ?? antes.estado;
     if ((ESTADOS_QUE_RESERVAN_RECURSOS as readonly string[]).includes(estadoEfectivo)) {
       const pilotoEfectivo = pilotoId ?? antes.pilotoId;
@@ -1671,10 +1806,34 @@ export async function PATCH(req: Request, ctx: Ctx) {
             { status: 400 },
           );
         }
+        // CORRECCIÓN PR #81: GET_LOCK() de MySQL NO lanza excepción cuando
+        // no consigue el candado — retorna 1 (adquirido), 0 (timeout) o
+        // NULL (error). Un try/catch vacío alrededor de la llamada no basta
+        // como gate de integridad: hay que leer el valor real de la
+        // columna `l` y tratar cualquier cosa distinta de 1 (incluida una
+        // excepción de la propia consulta) como "NO adquirido" — sin
+        // candado real, primerConflictoTraslape ya no tiene exclusión
+        // mutua contra otra transacción concurrente, así que no debe
+        // correr, y esta solicitud no debe escribir nada.
+        let lockRows: RowDataPacket[] = [];
         try {
-          await conn.query("SELECT GET_LOCK(?, 8) AS l", [`tms_traslape_${empresaId}`]);
+          [lockRows] = await conn.query<RowDataPacket[]>(
+            "SELECT GET_LOCK(?, 8) AS l",
+            [`tms_traslape_${empresaId}`],
+          );
         } catch {
-          /* ok */
+          lockRows = [];
+        }
+        lockTraslapeAdquirido = Number(lockRows[0]?.l) === 1;
+        if (!lockTraslapeAdquirido) {
+          await conn.rollback();
+          return NextResponse.json(
+            {
+              error:
+                "No se pudo validar la disponibilidad de recursos porque hay otra operación en curso. Intenta de nuevo.",
+            },
+            { status: 409 },
+          );
         }
         const conflicto = await primerConflictoTraslape(
           empresaId,
@@ -1683,11 +1842,9 @@ export async function PATCH(req: Request, ctx: Ctx) {
           d.id,
           conn,
         );
-        try {
-          await conn.query("SELECT RELEASE_LOCK(?) AS l", [`tms_traslape_${empresaId}`]);
-        } catch {
-          /* ok */
-        }
+        // OPS-3.3: el candado YA NO se libera aquí — se mantiene hasta el
+        // `finally` de esta función (después de commit/rollback), incluso
+        // en este `return` por conflicto (ver comentario arriba del bloque).
         if (conflicto) {
           await conn.rollback();
           return NextResponse.json({ error: mensajeConflicto(conflicto) }, { status: 409 });
@@ -1841,6 +1998,21 @@ export async function PATCH(req: Request, ctx: Ctx) {
       { status: 500 },
     );
   } finally {
+    // OPS-3.3: libera el candado de traslapes (si se adquirió) DESPUÉS de
+    // que la transacción ya confirmó o revirtió — en CUALQUIER salida de
+    // este try/catch (éxito, conflicto de traslape, error de escritura,
+    // excepción). Debe ir ANTES de conn.release(): GET_LOCK/RELEASE_LOCK
+    // son locks de sesión de MySQL, no de la transacción — si la conexión
+    // vuelve al pool sin liberarlo, el lock queda retenido por esa sesión
+    // y podría bloquear indefinidamente futuros traslapes de esta empresa
+    // en cuanto esa conexión se reutilice para otra solicitud.
+    if (lockTraslapeAdquirido) {
+      try {
+        await conn.query("SELECT RELEASE_LOCK(?) AS l", [`tms_traslape_${empresaId}`]);
+      } catch {
+        /* ok */
+      }
+    }
     conn.release();
   }
 

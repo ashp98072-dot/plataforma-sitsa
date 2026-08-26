@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireTenantModulo } from "@/lib/tenant";
+import { requireTenantRutas } from "@/lib/tenant";
 import { parsearExcelRutas, type FilaRutaExcel } from "@/lib/tms/rutas-import-excel";
 import {
   previsualizarImportacionRutas,
@@ -21,13 +21,18 @@ const MAX_BYTES = 15 * 1024 * 1024; // 15 MB
  *   - accion=importar -> escribe dentro de una transacción; espera además
  *     un campo `decisiones` (JSON) con las elecciones manuales por fila
  *     (cliente ambiguo/nuevo, actualizar código existente).
- * El mismo permiso que ya protege crear/editar rutas (tms, editar) — no
- * se agrega ningún permiso nuevo. empresaId SIEMPRE viene de
- * requireTenantModulo (sesión/tenant), nunca del Excel ni del cliente.
+ * OPS-5.2a: mismo permiso que ya protege editar rutas — `rutas:editar`
+ * (con fallback a `tms:editar` por compatibilidad histórica, ver
+ * requireTenantRutas en tenant.ts). Se usa "editar" y no "crear" porque
+ * la fase `importar` puede tanto crear rutas nuevas como actualizar el
+ * código de una ruta existente (ver confirmarImportacionRutas) — mismo
+ * criterio que ya usaba el guard anterior (`tms`, editar=true).
+ * empresaId SIEMPRE viene de requireTenantRutas (sesión/tenant), nunca
+ * del Excel ni del cliente.
  */
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "tms", true);
+  const guard = await requireTenantRutas(slug, "editar");
   if (guard.error) return guard.error;
 
   const form = await req.formData();

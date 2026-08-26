@@ -317,9 +317,25 @@ export function AppShell({
         key: "viaticos",
       });
     }
-    // Rutas (VIAT-4): catálogo maestro de rutas/servicios por cliente —
-    // misma audiencia que TMS/Programación (opsMods.includes("tms")).
-    if (rol !== "Piloto" && (isAdmin || rol === "Operaciones" || opsMods.includes("tms"))) {
+    // Rutas (VIAT-4 / OPS-5.2a): catálogo maestro de rutas/servicios por
+    // cliente. Ya NO depende únicamente de la audiencia gruesa de TMS —
+    // si el usuario tiene una matriz de permisos configurada, exige
+    // "rutas:ver" O "tms:ver" explícito (compatibilidad histórica: quien
+    // hoy edita rutas vía tms:editar sigue viendo el link, ver
+    // requireTenantRutas en tenant.ts). Sin matriz configurada
+    // (permisos.length === 0, legado) se mantiene el criterio anterior.
+    // A diferencia de Programación arriba, NO se conserva el bypass
+    // incondicional `rol === "Operaciones"` — si la matriz de un usuario
+    // Operaciones niega explícitamente rutas Y tms, el link se oculta:
+    // la matriz fina es la autoridad real, nunca el rol por sí solo.
+    const puedeRutas =
+      rol !== "Piloto" &&
+      (isAdmin ||
+        (opsMods.includes("tms") &&
+          (permisos.length === 0 ||
+            tienePermiso(permisos, "rutas", "ver") ||
+            tienePermiso(permisos, "tms", "ver"))));
+    if (puedeRutas) {
       opsLinks.push({
         href: `${base}/rutas`,
         label: "Rutas",

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireTenantModulo } from "@/lib/tenant";
+import { requireTenantModulo, requireTenantProgramacionOTms } from "@/lib/tenant";
 import { crearContactoCliente, listarContactosCliente } from "@/lib/tms/cliente-contactos";
 
 type Ctx = { params: Promise<{ slug: string; clienteId: string }> };
@@ -9,10 +9,15 @@ type Ctx = { params: Promise<{ slug: string; clienteId: string }> };
  * VIAT-4 (punto 1) — contactos operativos de un cliente. Uso interno
  * TMS/Programación/Operaciones > Rutas. Mismo patrón que
  * /tms/clientes/[clienteId]/ubicaciones (VIAT-1).
+ *
+ * OPS-5.2b: GET acepta programacion:ver O tms:ver — el POST de abajo
+ * sigue exigiendo tms:crear sin cambios: confirmado por lectura que
+ * plan-form.tsx solo hace GET aquí (nunca crea un contacto desde el
+ * formulario de Programación).
  */
 export async function GET(req: Request, ctx: Ctx) {
   const { slug, clienteId } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "tms");
+  const guard = await requireTenantProgramacionOTms(slug);
   if (guard.error) return guard.error;
 
   const cid = Number(clienteId);

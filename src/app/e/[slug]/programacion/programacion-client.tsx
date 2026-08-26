@@ -65,6 +65,16 @@ export type Plan = {
    * devuelve como 0/1, no como boolean nativo.
    */
   pendiente_cierre: number;
+  /**
+   * OPS-4.2e: indicador derivado (GET /tms/planes) — true cuando el plan
+   * está "En ruta"/"Cargado", su regreso_estimado ya venció y TODAVÍA no
+   * hay llegada técnica en flota_viajes. Mutuamente excluyente con
+   * pendiente_cierre por diseño del backend (si ya hay llegada, es
+   * pendiente_cierre, nunca atrasado) — no se revalida aquí. MySQL lo
+   * devuelve como 0/1, no como boolean nativo. Opcional: si el GET no lo
+   * trae (compatibilidad), se trata como ausente/false, sin romper la UI.
+   */
+  atrasado?: number;
   tipo_traslado: string | null;
   regreso_estimado: string | null;
   tarifa_comercial: number | null;
@@ -105,6 +115,12 @@ type Rango = "hoy" | "manana" | "semana";
 
 const ESTADO_LABEL: Record<string, string> = {
   Programado: "Programado",
+  // OPS-5.2d: "Cargado" = el vehículo ya fue cargado/preparado, pero
+  // TODAVÍA no ha salido (definición aprobada del negocio) — sin label
+  // propio antes, caía al fallback genérico (p.estado crudo). Marcarlo
+  // sigue siendo opcional: un plan puede pasar directo de Programado a
+  // En ruta sin pasar por aquí.
+  Cargado: "Cargado",
   "En ruta": "En ruta",
   // Compatibilidad: planes históricos que ya quedaron en "Descargado" con
   // el flujo anterior. Ya no se genera para viajes nuevos.
@@ -132,6 +148,9 @@ const ESTADO_VEHICULO_BADGE: Record<EstadoVehiculo["estadoDisponibilidad"], stri
 
 const ESTADO_BADGE: Record<string, string> = {
   Programado: "bg-sky-900/50 text-sky-200",
+  // OPS-5.2d: color propio, distinto de Programado (sky) y En ruta
+  // (amber) — "Cargado" es un paso intermedio visualmente distinguible.
+  Cargado: "bg-violet-900/50 text-violet-200",
   "En ruta": "bg-amber-900/50 text-amber-200",
   // Compatibilidad histórica (ver ESTADO_LABEL).
   Descargado: "bg-amber-900/50 text-amber-200",
@@ -1001,11 +1020,26 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
                     {p.hora_carga ? ` · ${p.hora_carga.slice(0, 5)}` : ""}
                   </span>
                 </div>
-                <span
-                  className={`rounded px-2 py-0.5 text-[11px] font-semibold ${estadoVisible(p).badge}`}
-                >
-                  {estadoVisible(p).label}
-                </span>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span
+                    className={`rounded px-2 py-0.5 text-[11px] font-semibold ${estadoVisible(p).badge}`}
+                  >
+                    {estadoVisible(p).label}
+                  </span>
+                  {/* OPS-4.2e: indicador adicional, no reemplaza el badge de
+                      estado real de arriba — mutuamente excluyente con
+                      "Pendiente de cierre" por diseño del backend (ver
+                      Plan.atrasado). Solo visual: no cambia estado, flujo,
+                      llegada, cierre ni asignaciones. */}
+                  {p.atrasado ? (
+                    <span
+                      className="rounded bg-rose-900/50 px-2 py-0.5 text-[11px] font-semibold text-rose-200"
+                      title="Superó el regreso estimado y aún no registra llegada."
+                    >
+                      Atrasado
+                    </span>
+                  ) : null}
+                </div>
               </div>
 
               <div className="mt-2 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">

@@ -11,7 +11,20 @@ import { requireTenant } from "@/lib/tenant";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
-/** Empleados operativos desde RRHH para TMS (pilotos / auxiliares). */
+/**
+ * Empleados operativos desde RRHH para TMS (pilotos / auxiliares).
+ *
+ * OPS-5.2b: confirmado por lectura (grep exhaustivo) que el ÚNICO
+ * consumidor real de este endpoint en todo el repo es
+ * plan-form.tsx (?tipo=all, selector de piloto/auxiliar de
+ * Programación) — no hay ninguna pantalla de RRHH que lo use hoy. Se
+ * agrega `canProgramacion` como tercera rama OR, sin tocar `canTms`/
+ * `canRrhh` (se preservan intactos para cualquier consumidor RRHH/TMS
+ * legítimo futuro) — antes un usuario con SOLO programacion:ver (sin
+ * tms:ver ni permiso RRHH) recibía 403 aquí, rompiendo el selector de
+ * Programación exactamente en el escenario que OPS-1/OPS-3 quisieron
+ * habilitar (programacion:* independiente de tms:*).
+ */
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   // Un solo requireTenant (antes se hacía 2× si TMS fallaba y caía a RRHH).
@@ -41,7 +54,14 @@ export async function GET(req: Request, ctx: Ctx) {
           perms.some(
             (p) => esRrhhSubmodulo(p.modulo) && tienePermiso(perms, p.modulo, "ver"),
           ));
-    if (!canTms && !canRrhh) {
+    // OPS-5.2b: mismo criterio "capacidad de empresa TMS" que ya exige
+    // canTms — Programación vive dentro de TMS, no es una capacidad
+    // aparte (ver requireTenantProgramacionOTms en tenant.ts).
+    const canProgramacion =
+      (empresaMods.includes("tms") || rolMods.includes("tms")) &&
+      perms.length > 0 &&
+      tienePermiso(perms, "programacion", "ver");
+    if (!canTms && !canRrhh && !canProgramacion) {
       return NextResponse.json(
         { error: "Sin permiso de módulo." },
         { status: 403 },
