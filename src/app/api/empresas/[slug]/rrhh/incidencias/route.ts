@@ -4,6 +4,7 @@ import type { RowDataPacket } from "mysql2";
 import { registrarAuditoria } from "@/lib/auditoria";
 import { execute, query } from "@/lib/db";
 import { requireTenantRrhh } from "@/lib/tenant";
+import { contarDiasHabiles } from "@/lib/rrhh/vacaciones";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -25,13 +26,23 @@ export async function GET(_req: Request, ctx: Ctx) {
   return NextResponse.json({ incidencias: rows });
 }
 
-const schema = z.object({
-  empleadoId: z.number().int().positive(),
-  tipo: z.string().min(1),
-  fechaInicio: z.string().min(8),
-  fechaFin: z.string().min(8),
-  diasHabiles: z.number().nonnegative().default(1),
-});
+const fechaSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Fecha inválida.")
+  .refine((value) => {
+    const date = new Date(`${value}T00:00:00Z`);
+    return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+  }, "Fecha inválida.");
+const schema = z
+  .object({
+    empleadoId: z.number().int().positive(),
+    tipo: z.string().trim().min(1),
+    fechaInicio: fechaSchema,
+    fechaFin: fechaSchema,
+  })
+  .refine((d) => d.fechaFin >= d.fechaInicio, {
+    message: "La fecha final no puede ser anterior a la fecha inicial.",
+  });
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
@@ -40,7 +51,10 @@ export async function POST(req: Request, ctx: Ctx) {
 
   const parsed = schema.safeParse(await req.json());
   if (!parsed.success) {
-    return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
+    return NextResponse.json(
+      { error: parsed.error.issues[0]?.message ?? "Datos inválidos." },
+      { status: 400 },
+    );
   }
   const d = parsed.data;
   const emp = await query<RowDataPacket[]>(
@@ -51,6 +65,11 @@ export async function POST(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: "Empleado no encontrado." }, { status: 404 });
   }
 
+  const diasHabiles = await contarDiasHabiles(
+    guard.empresa.id,
+    d.fechaInicio,
+    d.fechaFin,
+  );
   const result = await execute(
     `INSERT INTO incidencias (empresa_id, id_empleado, tipo, fecha_inicio, fecha_fin, dias_habiles)
      VALUES (?, ?, ?, ?, ?, ?)`,
@@ -60,7 +79,7 @@ export async function POST(req: Request, ctx: Ctx) {
       d.tipo,
       d.fechaInicio,
       d.fechaFin,
-      d.diasHabiles,
+      diasHabiles,
     ],
   );
 
@@ -72,5 +91,9 @@ export async function POST(req: Request, ctx: Ctx) {
     detalle: `Incidencia #${result.insertId} ${d.tipo}`,
   });
 
-  return NextResponse.json({ id: result.insertId, mensaje: "Incidencia registrada." });
+  return NextResponse.json({
+    id: result.insertId,
+    diasHabiles,
+    mensaje: `Incidencia registrada: ${diasHabiles} día(s) hábil(es).`,
+  });
 }
