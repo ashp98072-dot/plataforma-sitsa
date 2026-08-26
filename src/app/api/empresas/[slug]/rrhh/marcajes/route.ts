@@ -8,6 +8,7 @@ import { obtenerParametros } from "@/lib/rrhh/config";
 import { obtenerGeocerca } from "@/lib/rrhh/geocerca";
 import {
   listarMarcajesRango,
+  listarJornadasPendientesCierre,
   registrarMarcajeKiosko,
   registrarMarcajeManual,
 } from "@/lib/rrhh/marcajes";
@@ -27,13 +28,20 @@ export async function GET(req: Request, ctx: Ctx) {
   const hoy = hoyLocal();
   const desde = url.searchParams.get("desde") ?? hoy;
   const hasta = url.searchParams.get("hasta") ?? desde;
-  const [marcajes, geocerca, parametros] = await Promise.all([
+  const incluirPendientes =
+    url.searchParams.get("incluirPendientes") === "true" &&
+    guard.session.rol !== "Marcaje";
+  const [marcajes, geocerca, parametros, pendientesCierre] = await Promise.all([
     listarMarcajesRango(guard.empresa.id, desde, hasta),
     obtenerGeocerca(guard.empresa.id),
     obtenerParametros(guard.empresa.id),
+    incluirPendientes
+      ? listarJornadasPendientesCierre(guard.empresa.id)
+      : Promise.resolve([]),
   ]);
   return NextResponse.json({
     marcajes,
+    pendientesCierre,
     empresa: {
       id: guard.empresa.id,
       nombre: guard.empresa.nombre,
