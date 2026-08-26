@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { EmpleadoPicker, type EmpOpt } from "@/components/rrhh/empleado-picker";
 import { EntrevistaDocumentos } from "@/components/rrhh/entrevista-documentos";
+import { ExpedienteCandidato } from "@/components/rrhh/expediente-candidato";
 
 type Entrevista = {
   id: number;
@@ -60,6 +61,7 @@ export default function EntrevistasPage() {
   const [diaSel, setDiaSel] = useState<string | null>(null);
   const [form, setForm] = useState(vacio());
   const [editandoId, setEditandoId] = useState<number | null>(null);
+  const [expedienteId, setExpedienteId] = useState<number | null>(null);
   const [msg, setMsg] = useState("");
   const [cargando, setCargando] = useState(false);
 
@@ -354,6 +356,13 @@ export default function EntrevistasPage() {
                   ) : null}
                   <button
                     type="button"
+                    className="rounded bg-[#1F6AA5] px-2 py-1 text-xs text-white"
+                    onClick={() => setExpedienteId(ent.id)}
+                  >
+                    Ver expediente
+                  </button>
+                  <button
+                    type="button"
                     className="rounded border border-[var(--border)] px-2 py-1 text-xs"
                     onClick={() => abrirEditar(ent)}
                   >
@@ -488,6 +497,9 @@ export default function EntrevistasPage() {
         </div>
         {msg ? <p className="text-sm text-emerald-300">{msg}</p> : null}
       </form>
+      {expedienteId ? (
+        <ExpedienteCandidato slug={slug} entrevistaId={expedienteId} onClose={() => setExpedienteId(null)} />
+      ) : null}
     </div>
   );
 }
