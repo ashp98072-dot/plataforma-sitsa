@@ -795,6 +795,50 @@ export async function POST(req: Request, ctx: Ctx) {
     ? { inicio: inicioViaje(d.fechaPlan, d.horaCarga), fin: finNuevo }
     : null;
 
+  // OPS-4.2c: disponibilidad FÍSICA actual (viaje realmente abierto en
+  // Flota, flota_viajes.estado='abierto') — protección complementaria a
+  // primerConflictoTraslape de más abajo (que valida TMS/planificación/
+  // ocupación real, ver OPS-4.2b). El POST nunca la había consultado para
+  // piloto/auxiliares (solo para la unidad, vía listarDisponibilidadVehiculos
+  // arriba) — hueco detectado en OPS-4.1.
+  //
+  // Mismo criterio ya usado por el PATCH (bloque VIAT-2/OPS-3.2c más
+  // abajo en este archivo, sin duplicar su lógica de incidencias/otros
+  // planes del día — aquí SOLO el hecho físico "viaje en curso" que pidió
+  // este ticket): solo aplica para HOY. Un viaje abierto ahora mismo NO
+  // debe bloquear una programación futura — no se sabe cuándo terminará
+  // y no se inventa una duración estimada; esa protección futura ya la
+  // da primerConflictoTraslape con la ocupación real (OPS-4.2b).
+  //
+  // Una sola llamada a listarDisponibilidadPersonal (piloto + auxiliares
+  // juntos, vía un Map por personalId) — nunca una por recurso, evita N+1.
+  // Sin piloto ni auxiliares, o si no es hoy, no se ejecuta en absoluto.
+  const esHoyPost = d.fechaPlan === hoyLocal();
+  if (esHoyPost && (pilotoId != null || auxPersonalIds.length > 0)) {
+    const personalDisp = await listarDisponibilidadPersonal(empresaId, d.fechaPlan);
+    const dispPorPersonalId = new Map(personalDisp.map((p) => [p.personalId, p]));
+    const recursosFisicos: { personalId: number; rol: "piloto" | "auxiliar" }[] = [
+      ...(pilotoId != null ? [{ personalId: pilotoId, rol: "piloto" as const }] : []),
+      ...auxPersonalIds.map((id) => ({ personalId: id, rol: "auxiliar" as const })),
+    ];
+    for (const r of recursosFisicos) {
+      const disp = dispPorPersonalId.get(r.personalId);
+      // No debería faltar (tms_personal ya se resolvió arriba) — si por
+      // alguna inconsistencia no aparece, no se bloquea por un dato que
+      // no se pudo verificar (mismo criterio ya usado por el PATCH y por
+      // la disponibilidad de placa de este mismo POST).
+      if (!disp) continue;
+      if (disp.viajeActual != null) {
+        const etiqueta =
+          r.rol === "piloto" ? "El piloto seleccionado" : `El auxiliar ${disp.nombre}`;
+        return NextResponse.json(
+          { error: `${etiqueta} tiene un viaje en curso.` },
+          { status: 409 },
+        );
+      }
+    }
+  }
+
   let planId = 0;
   let codigoFinal = codigo;
   // VIAT-2 (concurrencia): candado con nombre por empresa, igual patrón que
