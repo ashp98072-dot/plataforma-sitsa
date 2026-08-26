@@ -728,19 +728,24 @@ export default function PlanForm({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id: plan!.id,
+          // fechaPlan/horaCarga siguen atados a `soloNotas` a secas — OPS-3.2c
+          // NO los habilita (quedan para OPS-3.2d, junto con paradas).
           fechaPlan: soloNotas ? undefined : form.fechaPlan || undefined,
           horaCarga: soloNotas ? undefined : form.horaCarga || undefined,
-          pilotoNombre: soloNotas ? undefined : form.pilotoNombre.trim() || undefined,
-          placa: soloNotas ? undefined : form.placa.trim() || undefined,
+          // OPS-3.2c: piloto/unidad/auxiliares pasan de `soloNotas` a
+          // `bloqueadoParaPreCierre` — se liberan en pendiente de cierre,
+          // igual que los seis campos de OPS-3.2b de abajo.
+          pilotoNombre: bloqueadoParaPreCierre ? undefined : form.pilotoNombre.trim() || undefined,
+          placa: bloqueadoParaPreCierre ? undefined : form.placa.trim() || undefined,
           estado: form.estado !== plan!.estado ? form.estado : undefined,
-          auxiliarEmpleadoIds: soloNotas ? undefined : form.auxiliarEmpleadoIds,
-          auxiliarNombres: soloNotas ? undefined : form.auxiliarNombres,
+          auxiliarEmpleadoIds: bloqueadoParaPreCierre ? undefined : form.auxiliarEmpleadoIds,
+          auxiliarNombres: bloqueadoParaPreCierre ? undefined : form.auxiliarNombres,
           tipoTraslado: undefined,
           // OPS-3.2b: estos seis ya no dependen de `soloNotas` a secas —
           // `bloqueadoParaPreCierre` los libera cuando el plan está
           // pendiente de cierre (llegada ya registrada), aunque siga
-          // "En ruta". piloto/unidad/auxiliares/fecha/hora/paradas (arriba)
-          // siguen atados a `soloNotas` sin cambios.
+          // "En ruta". fecha/hora/paradas (arriba/abajo) siguen atados a
+          // `soloNotas` sin cambios.
           regresoEstimado: bloqueadoParaPreCierre ? undefined : form.regresoEstimado || null,
           tarifaComercial: bloqueadoParaPreCierre
             ? undefined
@@ -850,8 +855,9 @@ export default function PlanForm({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs font-medium text-amber-200">
               El piloto ya registró la llegada — pendiente de cierre por Operaciones.
-              Puedes corregir tarifa, referencia, regreso estimado y los datos de ruta/contacto
-              antes de cerrar.
+              Puedes corregir tarifa, referencia, regreso estimado, ruta/contacto y también
+              piloto, unidad y auxiliares si se registraron mal — el registro técnico de Flota
+              (kilometraje, horas, evidencias) no cambia.
             </p>
             {puedeCerrarViaje && !confirmandoCierre ? (
               <button
@@ -1015,7 +1021,10 @@ export default function PlanForm({
           </Link>
         ) : null}
       </div>
-      <div className={soloNotas || bloqueado ? "pointer-events-none opacity-50" : ""}>
+      {/* OPS-3.2c: unidad/piloto/auxiliares pasan de `soloNotas` a
+          `bloqueadoParaPreCierre` — se habilitan en pendiente de cierre.
+          fecha/hora/paradas siguen atadas a `soloNotas` sin cambios. */}
+      <div className={bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}>
         <PlacaSelect
           value={form.placa}
           options={vehiculosDisponibles}
@@ -1024,7 +1033,7 @@ export default function PlanForm({
           onChange={(placa) => setForm((f) => ({ ...f, placa }))}
         />
       </div>
-      <div className={soloNotas || bloqueado ? "pointer-events-none opacity-50" : ""}>
+      <div className={bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}>
         <PilotoSelect
           pilotos={pilotos}
           empleadoId={form.pilotoEmpleadoId}
@@ -1036,7 +1045,7 @@ export default function PlanForm({
 
       <div
         className={`md:col-span-3 rounded border border-[var(--border)] p-3 ${
-          soloNotas || bloqueado ? "pointer-events-none opacity-50" : ""
+          bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""
         }`}
       >
         <AuxiliaresSelect

@@ -19,6 +19,7 @@ import {
   type ParadaInput,
 } from "@/lib/tms/paradas";
 import { obtenerVehiculoAccesible } from "@/lib/flota/acceso";
+import { vehiculoPorPlaca } from "@/lib/flota/pilotos";
 import { listarDisponibilidadPersonal } from "@/lib/operaciones/disponibilidad-personal";
 import { hoyLocal, toIsoDate } from "@/lib/rrhh/dates";
 import { sincronizarViaticosPlan } from "@/lib/tms/viaticos";
@@ -1130,25 +1131,26 @@ export async function PATCH(req: Request, ctx: Ctx) {
       );
     }
   } else if (ESTADOS_SOLO_NOTAS.has(antes.estado) && antes.pendienteCierre) {
-    // OPS-3.2b — En ruta CON llegada registrada (pendiente de cierre):
+    // OPS-3.2b/c — En ruta CON llegada registrada (pendiente de cierre):
     // reconciliación administrativa. Se habilitan notas, tarifa
-    // comercial, referencia de cliente, regreso estimado, y los snapshots
-    // de ruta/lugar de descarga/contacto (estos últimos ya eran editables
-    // sin gate en cualquier estado — no se tocan aquí, ver comentario más
-    // abajo). piloto/auxiliares/unidad/fecha/hora/paradas SIGUEN
-    // bloqueados — quedan para OPS-3.2c/3.2d. `tocaComercial` NO se
-    // revisa en esta rama a propósito: es justo lo que este PR habilita.
+    // comercial, referencia de cliente, regreso estimado, snapshots de
+    // ruta/lugar de descarga/contacto (OPS-3.2b) y, desde OPS-3.2c,
+    // también piloto/unidad/auxiliares — pasan por EXACTAMENTE las mismas
+    // validaciones de abajo (personal existente, tipo correcto, unidad
+    // accesible, disponibilidad, traslapes, viáticos avanzados) que ya
+    // corren para "Programado"; no se salta ninguna. Solo fecha/hora de
+    // carga/paradas SIGUEN bloqueadas — quedan para OPS-3.2d.
+    // `tocaComercial`/`tocaPiloto`/`tocaAuxiliares`/`tocaUnidad` NO se
+    // revisan en esta rama a propósito: es justo lo que estos PR
+    // habilitan.
     const camposNoPermitidos: string[] = [];
-    if (tocaPiloto) camposNoPermitidos.push("piloto");
-    if (tocaAuxiliares) camposNoPermitidos.push("auxiliares");
-    if (tocaUnidad) camposNoPermitidos.push("unidad");
     if (tocaFecha) camposNoPermitidos.push("fecha");
     if (tocaParadas) camposNoPermitidos.push("paradas");
     if (tocaHora) camposNoPermitidos.push("hora de carga");
     if (camposNoPermitidos.length) {
       return NextResponse.json(
         {
-          error: `El plan está "${antes.estado}" (pendiente de cierre); no se puede modificar: ${camposNoPermitidos.join(", ")}. Antes del cierre solo se pueden corregir notas, tarifa comercial, referencia de cliente, regreso estimado y los datos de ruta/contacto.`,
+          error: `El plan está "${antes.estado}" (pendiente de cierre); no se puede modificar: ${camposNoPermitidos.join(", ")}. Antes del cierre solo se pueden corregir notas, tarifa comercial, referencia de cliente, regreso estimado, ruta/contacto, piloto, unidad y auxiliares.`,
         },
         { status: 409 },
       );
@@ -1291,6 +1293,30 @@ export async function PATCH(req: Request, ctx: Ctx) {
     auxPersonalIdsNuevo = auxIds;
   }
 
+  // OPS-3.2c (corrección) — recursos EFECTIVOS y si realmente CAMBIARON,
+  // no solo si el campo vino en el request. El formulario real de
+  // Programación reenvía normalmente piloto/placa/auxiliares actuales
+  // aunque el usuario solo esté editando tarifa/notas/etc. — usar
+  // "¿vino el campo?" (tocaPiloto/actualizarAux/placaNorm) como señal de
+  // "cambió" habría revalidado disponibilidad de un recurso que no se
+  // está reasignando, arriesgando un bloqueo falso (p.ej. el mismo
+  // piloto ya ocupado en OTRO viaje que arrancó después de la llegada
+  // de este). Se levantan aquí (antes usaban una versión local dentro
+  // de `cambiaPersonal`) para reutilizarse también en la sección de
+  // disponibilidad, más abajo — sin recalcular dos veces.
+  const pilotoFinal = pilotoId !== undefined ? pilotoId : antes.pilotoId;
+  const pilotoCambioReal = pilotoFinal !== antes.pilotoId;
+  const auxiliaresFinal = auxPersonalIdsNuevo ?? auxPersonalIdsLegado ?? antesAuxiliaresIds;
+  // Comparación como CONJUNTOS — el orden en que el formulario mande los
+  // auxiliares no representa una diferencia de asignación real.
+  const auxiliaresCambioReal = (() => {
+    const finalSet = new Set(auxiliaresFinal);
+    const antesSet = new Set(antesAuxiliaresIds);
+    if (finalSet.size !== antesSet.size) return true;
+    for (const id of finalSet) if (!antesSet.has(id)) return true;
+    return false;
+  })();
+
   // Mejora Programación — bloquear el cambio de personal si a quien se
   // quita/reemplaza ya se le procesó un viático (AUTORIZADO/ENTREGADO/
   // LIQUIDADO). Solo corre si esta solicitud REALMENTE toca piloto y/o
@@ -1299,12 +1325,14 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // tocar personal nunca se bloquea por esto. Se calcula el personal
   // REALMENTE removido (antes menos el conjunto final que aplicaría este
   // PATCH) y se consulta su viático ANTES de escribir nada — 409 sin
-  // ningún cambio si alguno no está PROGRAMADO.
+  // ningún cambio si alguno no está PROGRAMADO. Nota: este gate sigue
+  // siendo "¿vino el campo?" (no "¿cambió realmente?") a propósito — es
+  // inofensivo dejarlo así porque `removidos` de abajo ya solo detecta
+  // personal REALMENTE quitado comparando pilotoFinal/auxiliaresFinal
+  // contra antes.*; si el campo vino pero nadie cambió, `removidos`
+  // queda vacío y no se bloquea nada.
   const cambiaPersonal = pilotoId !== undefined || auxPersonalIdsLegado != null || auxPersonalIdsNuevo != null;
   if (cambiaPersonal) {
-    const pilotoFinal = pilotoId !== undefined ? pilotoId : antes.pilotoId;
-    const auxiliaresFinal = auxPersonalIdsNuevo ?? auxPersonalIdsLegado ?? antesAuxiliaresIds;
-
     const removidos: { personalId: number; nombre: string }[] = [];
     if (antes.pilotoId != null && antes.pilotoId !== pilotoFinal) {
       removidos.push({ personalId: antes.pilotoId, nombre: antes.piloto || `Piloto #${antes.pilotoId}` });
@@ -1369,34 +1397,84 @@ export async function PATCH(req: Request, ctx: Ctx) {
     ? d.paradas.filter((p) => p.lugarNombre?.trim())
     : undefined;
 
-  // Fase P5.1c — DISPONIBILIDAD. Exclusiva de los campos por ID de
-  // Programación (pilotoPersonalId/auxiliarPersonalIds/flotaVehiculoId) —
-  // los campos legado (pilotoNombre/auxiliar*/placa) NO se validan aquí,
-  // igual que en P5.1a, para no cambiar el comportamiento ya existente de
-  // TMS (staff). Se valida: (a) el recurso NUEVO si viene en el payload, o
-  // (b) el recurso YA asignado si la fecha cambió y no viene un id nuevo
-  // para ese recurso (revalidación por cambio de fecha). Todo esto corre
-  // ANTES de abrir la transacción.
+  // OPS-3.2c (corrección) — unidad EFECTIVA (mismo espacio flota_vehiculos.id
+  // que ya usa flotaVehiculoId) y si realmente CAMBIÓ contra
+  // antes.flotaVehiculoId. Se resuelve por placa vía vehiculoPorPlaca()
+  // (mismo resolver multiempresa-seguro que ya usa el portal del piloto)
+  // cuando no vino el campo por ID — necesario para poder COMPARAR, no
+  // para decidir todavía si se valida disponibilidad (eso lo decide
+  // unidadCambioReal más abajo).
+  let unidadFinalId: number | null = antes.flotaVehiculoId ?? null;
+  if (d.flotaVehiculoId != null) {
+    unidadFinalId = d.flotaVehiculoId;
+  } else if (placaNorm) {
+    const vehiculoLegado = await vehiculoPorPlaca(empresaId, placaNorm);
+    unidadFinalId = vehiculoLegado ? Number(vehiculoLegado.id) : null;
+  }
+  const unidadCambioReal = unidadFinalId !== (antes.flotaVehiculoId ?? null);
+
+  // Fase P5.1c — DISPONIBILIDAD.
+  //
+  // OPS-3.2c (corrección, dos pasadas):
+  // 1) El comentario original decía que esta validación era exclusiva de
+  //    los campos por ID (pilotoPersonalId/auxiliarPersonalIds/
+  //    flotaVehiculoId) y que los campos LEGADO (pilotoNombre/auxiliar*/
+  //    placa) no pasaban por aquí. Ese es justamente el camino que usa
+  //    el formulario REAL de Programación (plan-form.tsx) — dejar ese
+  //    hueco abierto habría permitido saltarse el bloqueo por incidencia/
+  //    viaje técnico en curso/inactivo (traslapes y viáticos avanzados NO
+  //    tenían este problema — esos ya validaban sin importar el origen
+  //    del campo).
+  // 2) Corrección siguiente: "¿vino el campo?" (tocaPiloto/actualizarAux/
+  //    placaNorm) NO es lo mismo que "¿el recurso realmente cambió?" — el
+  //    formulario reenvía normalmente los valores YA asignados aunque el
+  //    usuario solo esté editando tarifa/notas. Revalidar disponibilidad
+  //    de un recurso que no se está reasignando podía producir un
+  //    bloqueo falso (p.ej. el mismo piloto ya ocupado en otro viaje que
+  //    arrancó DESPUÉS de la llegada de este). Ahora se usa
+  //    pilotoCambioReal/auxiliaresCambioReal/unidadCambioReal (arriba) —
+  //    comparación contra `antes.*`, no presencia del campo.
+  //
+  // Se valida: (a) el recurso NUEVO si REALMENTE cambió (por nombre o
+  // por ID), o (b) el recurso YA asignado si la fecha cambió y ese
+  // recurso en particular no cambió (revalidación preexistente por
+  // cambio de fecha). Todo esto corre ANTES de abrir la transacción.
   const pilotoIdParaValidar =
-    d.pilotoPersonalId != null
-      ? (pilotoId ?? null)
+    pilotoCambioReal
+      ? pilotoFinal
       : fechaCambia && antes.pilotoId != null
         ? antes.pilotoId
         : null;
   const auxiliaresIdsParaValidar: number[] =
-    d.auxiliarPersonalIds != null
-      ? (auxPersonalIdsNuevo ?? [])
+    auxiliaresCambioReal
+      ? auxiliaresFinal
       : fechaCambia
         ? antesAuxiliaresIds
         : [];
-  const vehiculoIdParaValidar =
-    d.flotaVehiculoId != null
-      ? d.flotaVehiculoId
+  const vehiculoIdParaValidar: number | null =
+    unidadCambioReal
+      ? unidadFinalId
       : fechaCambia && antes.flotaVehiculoId != null
         ? antes.flotaVehiculoId
         : null;
 
   const advertencias: AdvertenciaPatch[] = [];
+
+  // OPS-3.2c: aviso informativo (nunca bloquea) cuando REALMENTE se
+  // reasigna piloto/unidad/auxiliares (no solo porque el campo vino en
+  // el payload — ver pilotoCambioReal/auxiliaresCambioReal/
+  // unidadCambioReal arriba) en un plan pendiente de cierre — deja claro
+  // que esto es una corrección ADMINISTRATIVA de tms_planes_viaje; el
+  // registro técnico de flota_viajes (piloto_nombre, vehiculo_id,
+  // kilometraje, horas, evidencias) capturado durante la ejecución real
+  // del viaje NO se toca ni se sincroniza automáticamente.
+  if (antes.pendienteCierre && (pilotoCambioReal || auxiliaresCambioReal || unidadCambioReal)) {
+    advertencias.push({
+      tipo: "reasignacion_pre_cierre",
+      mensaje:
+        "Se actualizó la asignación administrativa del viaje. El registro técnico de Flota conserva los datos capturados durante la ejecución.",
+    });
+  }
 
   if (pilotoIdParaValidar != null || auxiliaresIdsParaValidar.length > 0) {
     const personalDisp = await listarDisponibilidadPersonal(
