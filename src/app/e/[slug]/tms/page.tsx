@@ -174,6 +174,11 @@ function fechaHoraEvidencia(valor: string | null): string {
   }).format(fecha);
 }
 
+// OPS-2.2: sondeo pasivo cada 30s (antes 5s), tanto para el listado de
+// viajes como para las evidencias de la fila expandida — ver los efectos
+// más abajo para el resto de las reglas de polling inteligente.
+const POLLING_MS = 30_000;
+
 export default function TmsPage() {
   const slug = String(useParams().slug);
 
@@ -240,11 +245,50 @@ export default function TmsPage() {
     }
   }, [slug]);
 
+  // OPS-2.2 (polling inteligente): 5s -> POLLING_MS (30s), sin sondear con
+  // la pestaña oculta, refresh inmediato + reinicio del conteo al volver
+  // visible. `enVuelo` es un candado ÚNICO compartido por la carga
+  // inicial y los refrescos automáticos de este efecto (tick + volver
+  // visible) — no por el botón "Actualizar" ni por cerrarViajeTms(), que
+  // llaman cargarPlanes() por su cuenta y deben poder hacerlo en
+  // cualquier momento. Mismo criterio que Programación
+  // (programacion-client.tsx).
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void cargarPlanes();
-    const intervalo = window.setInterval(() => void cargarPlanes(false), 5000);
-    return () => window.clearInterval(intervalo);
+    let enVuelo = false;
+    let intervalo: number | undefined;
+
+    async function ejecutar(mostrarCarga: boolean) {
+      if (enVuelo) return;
+      enVuelo = true;
+      try {
+        await cargarPlanes(mostrarCarga);
+      } finally {
+        enVuelo = false;
+      }
+    }
+
+    function iniciarIntervalo() {
+      window.clearInterval(intervalo);
+      intervalo = window.setInterval(() => {
+        if (document.visibilityState === "visible") void ejecutar(false);
+      }, POLLING_MS);
+    }
+
+    void ejecutar(true); // carga inicial (mostrarCarga=true, como antes)
+    iniciarIntervalo();
+
+    function onVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        void ejecutar(false);
+        iniciarIntervalo();
+      }
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      window.clearInterval(intervalo);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, [cargarPlanes]);
 
   // OPS-1 — cierre administrativo desde TMS/Seguimiento (mismo endpoint que
@@ -306,12 +350,55 @@ export default function TmsPage() {
     }
   }, [slug]);
 
+  // OPS-2.2: mismo criterio de polling inteligente — ya solo corría con
+  // una fila expandida (expandido != null); ahora además: 5s -> POLLING_MS,
+  // nada de sondeo con la pestaña oculta, refresh inmediato + reinicio del
+  // conteo al volver visible, y `enVuelo` como candado ÚNICO compartido
+  // por la carga inicial de este efecto y sus refrescos automáticos
+  // (nunca por un llamado externo a cargarEvidencias, que no existe hoy
+  // fuera de este efecto).
   useEffect(() => {
     if (expandido == null) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void cargarEvidencias(expandido);
-    const intervalo = window.setInterval(() => void cargarEvidencias(expandido, false), 5000);
-    return () => window.clearInterval(intervalo);
+    // Se captura en una constante propia: dentro de una function
+    // declaration anidada TypeScript no conserva el angostamiento de
+    // `expandido !== null` del guard de arriba para la variable
+    // capturada del closure.
+    const planId = expandido;
+    let enVuelo = false;
+    let intervalo: number | undefined;
+
+    async function ejecutar(mostrarCarga: boolean) {
+      if (enVuelo) return;
+      enVuelo = true;
+      try {
+        await cargarEvidencias(planId, mostrarCarga);
+      } finally {
+        enVuelo = false;
+      }
+    }
+
+    function iniciarIntervalo() {
+      window.clearInterval(intervalo);
+      intervalo = window.setInterval(() => {
+        if (document.visibilityState === "visible") void ejecutar(false);
+      }, POLLING_MS);
+    }
+
+    void ejecutar(true); // carga inicial (mostrarCarga=true, como antes)
+    iniciarIntervalo();
+
+    function onVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        void ejecutar(false);
+        iniciarIntervalo();
+      }
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      window.clearInterval(intervalo);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, [cargarEvidencias, expandido]);
 
   // --- Bitácora (dentro de la sección 2 — administración avanzada de viajes) ---
