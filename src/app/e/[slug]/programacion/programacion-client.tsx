@@ -380,6 +380,11 @@ async function obtenerProgramacion(
 
 type Props = { slug: string; hoy: string; planInicialId?: number | null };
 
+// OPS-2.2: sondeo pasivo cada 30s (antes 5s) — ver el efecto de carga más
+// abajo para el resto de las reglas de polling inteligente (pestaña
+// oculta, refresh inmediato al volver, sin requests superpuestos).
+const POLLING_MS = 30_000;
+
 export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   const [planes, setPlanes] = useState<Plan[]>([]);
   // OPS-2.1: lista completa e independiente del rango de fechas — ver
@@ -433,10 +438,46 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   //
   // OPS-2.1: depende también de desde/hasta — al cambiar Hoy/Mañana/Semana
   // se vuelve a consultar el servidor con el rango correcto (antes solo
-  // filtraba en el navegador el array ya cargado). El intervalo de sondeo
-  // sigue siendo de 5s, sin cambios — solo cambia QUÉ pide cada vez.
+  // filtraba en el navegador el array ya cargado).
+  //
+  // OPS-2.2 (polling inteligente):
+  // - Intervalo normal 5s -> POLLING_MS (30s) — ver constante arriba.
+  // - Con la pestaña oculta (document.visibilityState !== "visible") el
+  //   tick del intervalo no dispara ningún fetch; al volver visible se
+  //   refresca de inmediato y se reinicia el conteo de 30s (para no
+  //   encadenar un segundo refresh a los pocos segundos del primero).
+  // - `enVuelo` evita que un tick de polling dispare un segundo fetch
+  //   mientras el anterior todavía no responde (respuesta lenta >30s).
+  //   El botón "Actualizar" (cargar(), más abajo) NO comparte este
+  //   candado — sigue pudiendo dispararse en cualquier momento, ya
+  //   protegido por su propio `disabled={loading}` en el JSX.
   useEffect(() => {
     let ignore = false;
+    let enVuelo = false;
+    let intervalo: number | undefined;
+
+    async function refrescar() {
+      if (enVuelo) return;
+      enVuelo = true;
+      try {
+        const r = await obtenerProgramacion(slug, desde, hasta).catch(() => null);
+        if (!ignore && r?.ok) {
+          setPlanes(r.datos.planes);
+          setPendientesCierre(r.datos.pendientesCierre);
+          setEstadoVehiculos(r.datos.estadoVehiculos);
+        }
+      } finally {
+        enVuelo = false;
+      }
+    }
+
+    function iniciarIntervalo() {
+      window.clearInterval(intervalo);
+      intervalo = window.setInterval(() => {
+        if (document.visibilityState === "visible") void refrescar();
+      }, POLLING_MS);
+    }
+
     async function cargarInicial() {
       setLoading(true);
       setErr("");
@@ -454,17 +495,20 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
       setLoading(false);
     }
     void cargarInicial();
-    const intervalo = window.setInterval(async () => {
-      const r = await obtenerProgramacion(slug, desde, hasta).catch(() => null);
-      if (!ignore && r?.ok) {
-        setPlanes(r.datos.planes);
-        setPendientesCierre(r.datos.pendientesCierre);
-        setEstadoVehiculos(r.datos.estadoVehiculos);
+    iniciarIntervalo();
+
+    function onVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        void refrescar();
+        iniciarIntervalo();
       }
-    }, 5000);
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
     return () => {
       ignore = true;
       window.clearInterval(intervalo);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [slug, desde, hasta]);
 
