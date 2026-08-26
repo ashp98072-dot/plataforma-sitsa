@@ -19,6 +19,7 @@ import {
   type ParadaInput,
 } from "@/lib/tms/paradas";
 import { obtenerVehiculoAccesible } from "@/lib/flota/acceso";
+import { vehiculoPorPlaca } from "@/lib/flota/pilotos";
 import { listarDisponibilidadPersonal } from "@/lib/operaciones/disponibilidad-personal";
 import { hoyLocal, toIsoDate } from "@/lib/rrhh/dates";
 import { sincronizarViaticosPlan } from "@/lib/tms/viaticos";
@@ -1370,16 +1371,35 @@ export async function PATCH(req: Request, ctx: Ctx) {
     ? d.paradas.filter((p) => p.lugarNombre?.trim())
     : undefined;
 
-  // Fase P5.1c — DISPONIBILIDAD. Exclusiva de los campos por ID de
-  // Programación (pilotoPersonalId/auxiliarPersonalIds/flotaVehiculoId) —
-  // los campos legado (pilotoNombre/auxiliar*/placa) NO se validan aquí,
-  // igual que en P5.1a, para no cambiar el comportamiento ya existente de
-  // TMS (staff). Se valida: (a) el recurso NUEVO si viene en el payload, o
-  // (b) el recurso YA asignado si la fecha cambió y no viene un id nuevo
-  // para ese recurso (revalidación por cambio de fecha). Todo esto corre
-  // ANTES de abrir la transacción.
+  // Fase P5.1c — DISPONIBILIDAD.
+  //
+  // OPS-3.2c (corrección) — el comentario original decía que esta
+  // validación era exclusiva de los campos por ID (pilotoPersonalId/
+  // auxiliarPersonalIds/flotaVehiculoId) y que los campos LEGADO
+  // (pilotoNombre/auxiliar*/placa) no pasaban por aquí. Ese es
+  // justamente el camino que usa el formulario REAL de Programación
+  // (plan-form.tsx) — con OPS-3.2c habilitando reasignar piloto/unidad/
+  // auxiliares en pendiente de cierre, dejar ese hueco abierto habría
+  // permitido saltarse el bloqueo por incidencia/viaje técnico en curso/
+  // inactivo (traslapes y viáticos avanzados NO tenían este problema —
+  // esos ya validaban sin importar el origen del campo). Corregido
+  // reutilizando, sin duplicar lógica, los IDs que el propio PATCH YA
+  // resuelve más arriba sin importar si vinieron por nombre o por ID:
+  // `pilotoId` converge ambos caminos; `auxPersonalIdsLegado` es el
+  // equivalente ya resuelto de auxiliarEmpleadoIds/auxiliarNombres; para
+  // placa se reutiliza vehiculoPorPlaca() (mismo resolver multiempresa-
+  // seguro que ya usa el portal del piloto) para obtener el
+  // flota_vehiculos.id equivalente a flotaVehiculoId. Aplica por igual a
+  // cualquier estado que llegue hasta aquí (Programado y pendiente de
+  // cierre) — es una corrección de consistencia, no una regla nueva; el
+  // campo por ID sigue teniendo precedencia si ambos vinieran en el
+  // mismo request (mismo criterio que ya usa el resto del archivo). Se
+  // valida: (a) el recurso NUEVO si viene en el payload (por nombre o
+  // por ID), o (b) el recurso YA asignado si la fecha cambió y no viene
+  // uno nuevo para ese recurso (revalidación por cambio de fecha). Todo
+  // esto corre ANTES de abrir la transacción.
   const pilotoIdParaValidar =
-    d.pilotoPersonalId != null
+    tocaPiloto
       ? (pilotoId ?? null)
       : fechaCambia && antes.pilotoId != null
         ? antes.pilotoId
@@ -1387,15 +1407,20 @@ export async function PATCH(req: Request, ctx: Ctx) {
   const auxiliaresIdsParaValidar: number[] =
     d.auxiliarPersonalIds != null
       ? (auxPersonalIdsNuevo ?? [])
-      : fechaCambia
-        ? antesAuxiliaresIds
-        : [];
-  const vehiculoIdParaValidar =
-    d.flotaVehiculoId != null
-      ? d.flotaVehiculoId
-      : fechaCambia && antes.flotaVehiculoId != null
-        ? antes.flotaVehiculoId
-        : null;
+      : actualizarAux
+        ? (auxPersonalIdsLegado ?? [])
+        : fechaCambia
+          ? antesAuxiliaresIds
+          : [];
+  let vehiculoIdParaValidar: number | null = null;
+  if (d.flotaVehiculoId != null) {
+    vehiculoIdParaValidar = d.flotaVehiculoId;
+  } else if (placaNorm) {
+    const vehiculoLegado = await vehiculoPorPlaca(empresaId, placaNorm);
+    vehiculoIdParaValidar = vehiculoLegado ? Number(vehiculoLegado.id) : null;
+  } else if (fechaCambia && antes.flotaVehiculoId != null) {
+    vehiculoIdParaValidar = antes.flotaVehiculoId;
+  }
 
   const advertencias: AdvertenciaPatch[] = [];
 
