@@ -8,6 +8,7 @@ import { KM_INTERVALO_SERVICIO_DEFAULT } from "@/lib/flota/constants";
 import { permisosEfectivos, tienePermiso } from "@/lib/permisos";
 import type { RolGlobal } from "@/lib/roles";
 import { listarRecordatorios } from "@/lib/rrhh/recordatorios";
+import { ahoraLocal, formatearTimestampVisible } from "@/lib/rrhh/dates";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -318,6 +319,70 @@ export async function GET(_req: Request, ctx: Ctx) {
       }
     } catch (e) {
       console.error("[notificaciones] viajes_cerrar:", e);
+    }
+  }
+
+  // OPS-4.2d — "Viaje atrasado": viaje físicamente iniciado (En ruta /
+  // Cargado — mismo criterio de OPS-4.2b, ver
+  // ESTADOS_OCUPACION_INDEFINIDA_SIN_LLEGADA en
+  // src/lib/tms/disponibilidad-traslapes.ts, no importado aquí para no
+  // crear una dependencia cruzada — mismo criterio que ya justifica
+  // SQL_LLEGADA_TECNICA en ese archivo) cuyo regreso_estimado ya venció
+  // y que TODAVÍA no registra llegada técnica.
+  //
+  // Deliberadamente EXCLUYE "Programado": un Programado vencido es "no
+  // iniciado"/"programación vencida", un concepto distinto que no se
+  // mezcla aquí (ver ticket OPS-4.2d).
+  //
+  // "Llegada técnica" es EXACTAMENTE el mismo NOT EXISTS que la alerta
+  // "Viajes pendientes de cierre" de arriba usa en positivo — ambas
+  // alertas son mutuamente excluyentes por diseño: si YA hay llegada,
+  // el viaje aparece ahí como "pendiente de cierre", nunca aquí como
+  // "atrasado". Evidencias NO cuentan como llegada — no se consultan.
+  //
+  // "Ahora" se resuelve con ahoraLocal() (America/Guatemala vía
+  // Intl.DateTimeFormat, ver src/lib/rrhh/dates.ts) y se pasa como
+  // parámetro — NO se usa NOW() de MySQL (el timezone de la conexión no
+  // está garantizado) ni new Date().toISOString() (UTC).
+  //
+  // Una notificación POR PLAN (a diferencia de las alertas agregadas de
+  // arriba) — id estable `viaje-atrasado-${id}` para que el polling no
+  // duplique entradas. Mismo permiso que ya usa Programación
+  // (programacion:ver — Gerente/Jefe/Auxiliar de Operaciones lo traen
+  // por defecto, Facturador no).
+  if (puede("programacion", "ver")) {
+    try {
+      // CORRECCIÓN PR #85: sin LIMIT — un viaje atrasado real nunca debe
+      // quedar invisible para Operaciones solo porque hay más de N. La
+      // query ya está acotada por empresa/estado/regreso_estimado/
+      // llegada técnica; no hace falta (ni corresponde en este ticket)
+      // paginación ni un COUNT aparte.
+      const rows = await query<RowDataPacket[]>(
+        `SELECT p.id, p.codigo, p.regreso_estimado
+         FROM tms_planes_viaje p
+         WHERE p.empresa_id = ?
+           AND p.estado IN ('En ruta', 'Cargado')
+           AND p.regreso_estimado IS NOT NULL
+           AND p.regreso_estimado < ?
+           AND NOT EXISTS (
+             SELECT 1 FROM flota_viajes fv
+             WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
+           )
+         ORDER BY p.regreso_estimado ASC`,
+        [empresaId, ahoraLocal()],
+      );
+      for (const r of rows) {
+        items.push({
+          id: `viaje-atrasado-${Number(r.id)}`,
+          tipo: "alerta",
+          titulo: "Viaje atrasado",
+          detalle: `El viaje ${String(r.codigo)} superó su regreso estimado (${formatearTimestampVisible(r.regreso_estimado as string | Date | null)}) y aún no registra llegada.`,
+          enlace: `/e/${slug}/programacion`,
+          creadoAt: null,
+        });
+      }
+    } catch (e) {
+      console.error("[notificaciones] viajes_atrasados:", e);
     }
   }
 
