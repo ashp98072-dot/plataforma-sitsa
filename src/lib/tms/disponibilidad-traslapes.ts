@@ -3,25 +3,32 @@ import type { PoolConnection } from "mysql2/promise";
 import { query, type SqlParams } from "@/lib/db";
 
 /**
- * VIAT-2 — validación real de traslapes de piloto/auxiliar/unidad al
- * crear o editar un viaje en Programación. Única función reutilizable
- * (nada de tres validaciones duplicadas): recibe la lista de recursos a
- * comprobar (piloto, cada auxiliar, unidad) contra el intervalo real del
- * NUEVO viaje y devuelve el primer conflicto real que encuentra, con toda
- * la info necesaria para el mensaje de error.
+ * VIAT-2 (OPS-4.2b) — validación real de traslapes de piloto/auxiliar/
+ * unidad al crear o editar un viaje en Programación. Única función
+ * reutilizable (nada de tres validaciones duplicadas): recibe la lista de
+ * recursos a comprobar (piloto, cada auxiliar, unidad) contra el
+ * intervalo real del NUEVO viaje y devuelve el primer conflicto real que
+ * encuentra, con toda la info necesaria para el mensaje de error.
  *
- * Intervalo real de un viaje:
- *   inicio = fecha_plan + hora_carga (COALESCE 00:00:00 si no hay hora)
- *   fin    = regreso_estimado (COALESCE fin de día si un plan histórico no
- *            lo tiene — nunca se inventa una duración; ver
- *            planes/route.ts, que ahora exige regreso_estimado para poder
- *            guardar cuando hay piloto/unidad/auxiliares asignados, así
- *            que este COALESCE solo protege contra planes ANTERIORES a
- *            esa regla).
+ * Un candidato (plan existente que ya tiene asignado ese recurso) bloquea
+ * si su OCUPACIÓN REAL se solapa con el intervalo del nuevo viaje —
+ * `intervaloOcupacionReal()` + `seSolapaConOcupacionReal()` (bloque
+ * OPS-4.2a más abajo), NO el intervalo puramente planificado
+ * (fecha_plan+hora_carga → regreso_estimado) que se usaba antes de este
+ * PR. Diferencia clave, por estado:
+ *   - Programado: intervalo planificado tal cual (sin cambios).
+ *   - En ruta / Cargado SIN llegada técnica (ver SQL_LLEGADA_TECNICA):
+ *     ocupa indefinidamente desde que inicia — un regreso_estimado
+ *     vencido YA NO libera el recurso (corrige la SUB-protección
+ *     detectada en OPS-4.1).
+ *   - En ruta / Cargado CON llegada técnica: deja de bloquear, aunque TMS
+ *     siga "En ruta" hasta el cierre administrativo (corrige la
+ *     SOBRE-protección detectada en OPS-4.1).
+ *   - Cerrado / Cancelado: nunca bloquean (sin cambios).
  *
- * Hay conflicto si: inicio_existente < fin_nuevo AND fin_existente > inicio_nuevo
- * (no se bloquea por "misma fecha" — 08:00-12:00 y 13:00-18:00 el mismo
- * día NO chocan).
+ * Hay conflicto si: inicio_existente < fin_nuevo AND (fin_existente ==
+ * null O fin_existente > inicio_nuevo) — no se bloquea por "misma fecha"
+ * (08:00-12:00 y 13:00-18:00 el mismo día NO chocan).
  *
  * Un mismo empleado (personal_id de tms_personal) no puede estar en dos
  * viajes traslapados sin importar si en cada uno es piloto o auxiliar —
@@ -29,11 +36,10 @@ import { query, type SqlParams } from "@/lib/db";
  * la misma comprobación (piloto_id, auxiliar_id legado, o
  * tms_plan_auxiliares); solo cambia la etiqueta que se usa en el mensaje.
  *
- * Estados que reservan el recurso (bloquean): Programado, En ruta, Cargado.
- * Estados que YA NO reservan (se excluyen, igual que el propio plan que se
- * edita): Descargado, Cerrado, Cancelado — según el modelo actual, un
- * viaje en cualquiera de esos tres estados ya liberó piloto/auxiliares/
- * unidad (Descargado/Cerrado = viaje terminado; Cancelado = nunca se hizo).
+ * Estados candidatos a bloquear (filtro SQL, antes de aplicar ocupación
+ * real): Programado, En ruta, Cargado. Estados que YA NO reservan (se
+ * excluyen, igual que el propio plan que se edita): Descargado, Cerrado,
+ * Cancelado — sin cambios respecto a antes de este PR.
  */
 export const ESTADOS_QUE_RESERVAN_RECURSOS = ["Programado", "En ruta", "Cargado"] as const;
 
@@ -59,7 +65,13 @@ export type ConflictoTraslape = {
   planIdConflicto: number;
   codigoConflicto: string;
   inicioConflicto: string;
-  finConflicto: string;
+  /**
+   * OPS-4.2b: `null` cuando el conflicto es un viaje físicamente activo
+   * SIN llegada técnica (En ruta/Cargado) — no hay una hora de fin real
+   * conocida (ver IntervaloOcupacion en el bloque de más abajo). NUNCA se
+   * inventa un fin en ese caso; mensajeConflicto() debe manejarlo aparte.
+   */
+  finConflicto: string | null;
 };
 
 async function runQuery<T extends RowDataPacket[]>(
@@ -85,11 +97,60 @@ export function inicioViaje(fechaPlan: string, horaCarga: string | null | undefi
 /**
  * regreso_estimado ya viene como "YYYY-MM-DDTHH:mm" desde el formulario/zod
  * — mismo `.replace("T", " ")` que ya usa el resto de planes/route.ts al
- * guardar (MySQL acepta un DATETIME sin segundos).
+ * guardar (MySQL acepta un DATETIME sin segundos, así que esto no cambia
+ * ningún valor real guardado).
+ *
+ * OPS-4.2b: se agregan segundos explícitos ("YYYY-MM-DD HH:mm:ss") cuando
+ * faltan — necesario para que las comparaciones lexicográficas de string
+ * en seSolapaConOcupacionReal() sean seguras (mismo largo/formato que
+ * inicioViaje() y que los DATE_FORMAT con segundos que ahora usan
+ * buscarConflictoPersonal/buscarConflictoUnidad). Antes esto solo se usaba
+ * como parámetro de una comparación SQL (`TIMESTAMP(...) > ?`), donde
+ * MySQL ya hacía el cast sin importar el formato de texto — ahí no había
+ * ningún efecto observable.
  */
 export function finViajeDesdeInput(regresoEstimado: string | null | undefined): string | null {
   if (!regresoEstimado) return null;
-  return regresoEstimado.replace("T", " ");
+  const normalizado = regresoEstimado.replace("T", " ");
+  return normalizado.length === 16 ? `${normalizado}:00` : normalizado;
+}
+
+/**
+ * OPS-4.2b: de una lista de planes candidatos (ya filtrados por SQL a
+ * ESTADOS_QUE_RESERVAN_RECURSOS y por recurso), decide el PRIMERO cuya
+ * OCUPACIÓN REAL (no su intervalo planificado) se solapa con el intervalo
+ * de consulta — usando la infraestructura de OPS-4.2a
+ * (intervaloOcupacionReal + seSolapaConOcupacionReal), no una query SQL
+ * de rango. Cada fila ya trae su `llegada_tecnica` resuelta por la MISMA
+ * query (vía SQL_LLEGADA_TECNICA) — sin N+1, una sola consulta por
+ * recurso a validar, igual que antes.
+ */
+function primerCandidatoQueOcupa(
+  filas: RowDataPacket[],
+  nombreCampo: string,
+  intervaloConsulta: IntervaloViaje,
+): { nombre: string; planId: number; codigo: string; inicioConflicto: string; finConflicto: string | null } | null {
+  for (const r of filas) {
+    const ocupacion = intervaloOcupacionReal({
+      estado: String(r.estado),
+      inicio: String(r.inicio),
+      regresoEstimado: r.regreso_estimado != null ? String(r.regreso_estimado) : null,
+      llegadaTecnica: Number(r.llegada_tecnica) === 1,
+    });
+    if (seSolapaConOcupacionReal(ocupacion, intervaloConsulta)) {
+      // ocupacion no puede ser null aquí: seSolapaConOcupacionReal(null, ..)
+      // siempre retorna false, así que si llegamos a este punto ocupacion
+      // es { inicio, fin }.
+      return {
+        nombre: String(r[nombreCampo]),
+        planId: Number(r.plan_id),
+        codigo: String(r.codigo),
+        inicioConflicto: ocupacion!.inicio,
+        finConflicto: ocupacion!.fin,
+      };
+    }
+  }
+  return null;
 }
 
 async function buscarConflictoPersonal(
@@ -98,12 +159,13 @@ async function buscarConflictoPersonal(
   personalId: number,
   intervalo: IntervaloViaje,
   excluirPlanId: number | null,
-): Promise<{ nombre: string; conflicto: RowDataPacket } | null> {
+): Promise<{ nombre: string; planId: number; codigo: string; inicioConflicto: string; finConflicto: string | null } | null> {
   const rows = await runQuery<RowDataPacket[]>(
     conn,
-    `SELECT tp.nombre AS recurso_nombre, p.id AS plan_id, p.codigo,
-            DATE_FORMAT(TIMESTAMP(p.fecha_plan, COALESCE(p.hora_carga, '00:00:00')), '%Y-%m-%d %H:%i') AS inicio,
-            DATE_FORMAT(COALESCE(p.regreso_estimado, TIMESTAMP(p.fecha_plan, '23:59:59')), '%Y-%m-%d %H:%i') AS fin
+    `SELECT tp.nombre AS recurso_nombre, p.id AS plan_id, p.codigo, p.estado,
+            DATE_FORMAT(TIMESTAMP(p.fecha_plan, COALESCE(p.hora_carga, '00:00:00')), '%Y-%m-%d %H:%i:%s') AS inicio,
+            DATE_FORMAT(p.regreso_estimado, '%Y-%m-%d %H:%i:%s') AS regreso_estimado,
+            ${SQL_LLEGADA_TECNICA} AS llegada_tecnica
      FROM tms_personal tp
      INNER JOIN tms_planes_viaje p
        ON p.empresa_id = tp.empresa_id
@@ -114,21 +176,15 @@ async function buscarConflictoPersonal(
            ))
      WHERE tp.id = ? AND tp.empresa_id = ?
        AND p.estado IN (${RESERVA_PLACEHOLDERS})
-       ${excluirPlanId ? "AND p.id != ?" : ""}
-       AND TIMESTAMP(p.fecha_plan, COALESCE(p.hora_carga, '00:00:00')) < ?
-       AND COALESCE(p.regreso_estimado, TIMESTAMP(p.fecha_plan, '23:59:59')) > ?
-     LIMIT 1`,
+       ${excluirPlanId ? "AND p.id != ?" : ""}`,
     [
       personalId,
       empresaId,
       ...ESTADOS_QUE_RESERVAN_RECURSOS,
       ...(excluirPlanId ? [excluirPlanId] : []),
-      intervalo.fin,
-      intervalo.inicio,
     ],
   );
-  if (!rows[0]) return null;
-  return { nombre: String(rows[0].recurso_nombre), conflicto: rows[0] };
+  return primerCandidatoQueOcupa(rows, "recurso_nombre", intervalo);
 }
 
 async function buscarConflictoUnidad(
@@ -137,32 +193,27 @@ async function buscarConflictoUnidad(
   unidadId: number,
   intervalo: IntervaloViaje,
   excluirPlanId: number | null,
-): Promise<{ nombre: string; conflicto: RowDataPacket } | null> {
+): Promise<{ nombre: string; planId: number; codigo: string; inicioConflicto: string; finConflicto: string | null } | null> {
   const rows = await runQuery<RowDataPacket[]>(
     conn,
-    `SELECT u.placa AS recurso_nombre, p.id AS plan_id, p.codigo,
-            DATE_FORMAT(TIMESTAMP(p.fecha_plan, COALESCE(p.hora_carga, '00:00:00')), '%Y-%m-%d %H:%i') AS inicio,
-            DATE_FORMAT(COALESCE(p.regreso_estimado, TIMESTAMP(p.fecha_plan, '23:59:59')), '%Y-%m-%d %H:%i') AS fin
+    `SELECT u.placa AS recurso_nombre, p.id AS plan_id, p.codigo, p.estado,
+            DATE_FORMAT(TIMESTAMP(p.fecha_plan, COALESCE(p.hora_carga, '00:00:00')), '%Y-%m-%d %H:%i:%s') AS inicio,
+            DATE_FORMAT(p.regreso_estimado, '%Y-%m-%d %H:%i:%s') AS regreso_estimado,
+            ${SQL_LLEGADA_TECNICA} AS llegada_tecnica
      FROM tms_unidades u
      INNER JOIN tms_planes_viaje p
        ON p.empresa_id = u.empresa_id AND p.unidad_id = u.id
      WHERE u.id = ? AND u.empresa_id = ?
        AND p.estado IN (${RESERVA_PLACEHOLDERS})
-       ${excluirPlanId ? "AND p.id != ?" : ""}
-       AND TIMESTAMP(p.fecha_plan, COALESCE(p.hora_carga, '00:00:00')) < ?
-       AND COALESCE(p.regreso_estimado, TIMESTAMP(p.fecha_plan, '23:59:59')) > ?
-     LIMIT 1`,
+       ${excluirPlanId ? "AND p.id != ?" : ""}`,
     [
       unidadId,
       empresaId,
       ...ESTADOS_QUE_RESERVAN_RECURSOS,
       ...(excluirPlanId ? [excluirPlanId] : []),
-      intervalo.fin,
-      intervalo.inicio,
     ],
   );
-  if (!rows[0]) return null;
-  return { nombre: String(rows[0].recurso_nombre), conflicto: rows[0] };
+  return primerCandidatoQueOcupa(rows, "recurso_nombre", intervalo);
 }
 
 /**
@@ -191,27 +242,45 @@ export async function primerConflictoTraslape(
         ? await buscarConflictoUnidad(conn, empresaId, recurso.id, intervalo, excluirPlanId)
         : await buscarConflictoPersonal(conn, empresaId, recurso.id, intervalo, excluirPlanId);
     if (resultado) {
-      const c = resultado.conflicto;
       return {
         tipo: recurso.tipo,
         id: recurso.id,
         nombre: resultado.nombre,
-        planIdConflicto: Number(c.plan_id),
-        codigoConflicto: String(c.codigo),
-        // Ya vienen formateados como "YYYY-MM-DD HH:mm" desde SQL
-        // (DATE_FORMAT) — nunca se deja que mysql2 convierta esto a un
-        // objeto Date de JS y se serialice con su toString() por defecto
-        // (mismo tipo de bug ya corregido antes para fecha_plan en el GET).
-        inicioConflicto: String(c.inicio),
-        finConflicto: String(c.fin),
+        planIdConflicto: resultado.planId,
+        codigoConflicto: resultado.codigo,
+        // Ya vienen formateados como "YYYY-MM-DD HH:mm:ss" (inicioViaje /
+        // DATE_FORMAT con segundos) o son directamente `null` (ocupación
+        // sin fin real conocido) — nunca se deja que mysql2 convierta un
+        // DATETIME a un objeto Date de JS y se serialice con su toString()
+        // por defecto (mismo tipo de bug ya corregido antes para
+        // fecha_plan en el GET).
+        inicioConflicto: resultado.inicioConflicto,
+        finConflicto: resultado.finConflicto,
       };
     }
   }
   return null;
 }
 
-/** Mensaje de error legible a partir de un conflicto detectado. */
+/**
+ * Mensaje de error legible a partir de un conflicto detectado.
+ *
+ * OPS-4.2b: `finConflicto: null` significa "viaje físicamente activo sin
+ * llegada técnica" (En ruta/Cargado) — no hay una hora de fin real que
+ * mostrar, así que NO se inventa (nunca se imprime un regreso_estimado
+ * vencido como si fuera el fin real de la ocupación). Se usa un mensaje
+ * distinto, sin rango horario.
+ */
 export function mensajeConflicto(c: ConflictoTraslape): string {
+  if (c.finConflicto == null) {
+    const etiqueta =
+      c.tipo === "unidad"
+        ? `La unidad ${c.nombre}`
+        : c.tipo === "piloto"
+          ? `El piloto ${c.nombre}`
+          : `El auxiliar ${c.nombre}`;
+    return `${etiqueta} sigue asignado al viaje ${c.codigoConflicto}, que aún no registra llegada.`;
+  }
   const horaInicio = c.inicioConflicto.slice(11, 16) || "00:00";
   const horaFin = c.finConflicto.slice(11, 16) || "23:59";
   if (c.tipo === "unidad") {
@@ -222,13 +291,13 @@ export function mensajeConflicto(c: ConflictoTraslape): string {
 }
 
 // ============================================================================
-// OPS-4.2a — criterio unificado de OCUPACIÓN REAL (infraestructura).
+// OPS-4.2a/b — criterio unificado de OCUPACIÓN REAL.
 //
-// NO USADO TODAVÍA por buscarConflictoPersonal / buscarConflictoUnidad /
-// primerConflictoTraslape de arriba — esas siguen exactamente igual que
-// antes (intervalo planificado vs. regreso_estimado, sin distinguir
-// llegada técnica). Conectar este criterio a esas funciones es OPS-4.2b;
-// aquí solo se agrega la pieza base reutilizable, ya diseñada para eso.
+// USADO por buscarConflictoPersonal / buscarConflictoUnidad /
+// primerConflictoTraslape de arriba (OPS-4.2b conectó este criterio ahí —
+// antes de ese PR, esas funciones seguían el intervalo puramente
+// planificado, sin distinguir llegada técnica; OPS-4.2a solo había
+// agregado esta pieza base sin usarla todavía).
 //
 // Origen: hallazgo OPS-4.1 — el intervalo planificado
 // (inicio, regreso_estimado) deja de proteger un recurso en cuanto
