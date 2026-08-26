@@ -463,6 +463,55 @@ export async function requireTenantProgramacion(
  * pero tms:ver=false (o viceversa) se quede sin poder cargar datos en
  * ninguna de las dos pantallas.
  */
+/**
+ * OPS-5.2a — Rutas (catálogo maestro de rutas/servicios por cliente,
+ * VIAT-4) deja de depender exclusivamente de "tms": permiso propio
+ * (rutas:ver/crear/editar/eliminar). A diferencia de Programación (que
+ * separa lectura compartida de escritura exclusiva en dos funciones),
+ * Rutas siempre vivió dentro de "tms" sin distinguir acción — por
+ * compatibilidad histórica, TODA acción acepta rutas:<accion> O
+ * tms:<accion> (quien hoy edita rutas vía tms:editar debe seguir
+ * pudiendo hacerlo sin regresión). Sigue exigiendo que la empresa tenga
+ * "tms" habilitado — Rutas vive dentro de TMS, no es una capacidad de
+ * empresa aparte (no se crea ningún flag/tabla nuevo).
+ */
+export async function requireTenantRutas(
+  slug: string,
+  accion: AccionPermiso = "ver",
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length
+    ? empresa.modulos
+    : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("tms")) {
+    return {
+      error: NextResponse.json(
+        { error: "Esta empresa no tiene el módulo TMS." },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  if (
+    tienePermiso(perms, "rutas", accion) ||
+    tienePermiso(perms, "tms", accion)
+  ) {
+    return { session, empresa };
+  }
+  return {
+    error: NextResponse.json(
+      { error: `Sin permiso para ${accion} en Rutas.` },
+      { status: 403 },
+    ),
+  };
+}
+
 export async function requireTenantProgramacionOTms(
   slug: string,
 ): Promise<Ok | Fail> {

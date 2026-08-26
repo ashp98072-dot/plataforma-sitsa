@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireTenantModulo } from "@/lib/tenant";
+import { requireTenantRutas } from "@/lib/tenant";
 import { crearRuta, listarRutas } from "@/lib/tms/cliente-rutas";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -11,10 +11,13 @@ type Ctx = { params: Promise<{ slug: string }> };
  * administración (Operaciones > Rutas, ?todas=1 incluye inactivas) como
  * el selector compacto de Programación (búsqueda por código y/o cliente
  * vía ?q=/?clienteId=, solo activas).
+ *
+ * OPS-5.2a: permiso propio `rutas` (con fallback a `tms` por
+ * compatibilidad histórica) — ver requireTenantRutas en tenant.ts.
  */
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "tms");
+  const guard = await requireTenantRutas(slug, "ver");
   if (guard.error) return guard.error;
 
   const url = new URL(req.url);
@@ -63,7 +66,7 @@ const schema = z.object({
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "tms", true);
+  const guard = await requireTenantRutas(slug, "crear");
   if (guard.error) return guard.error;
 
   const parsed = schema.safeParse(await req.json());
