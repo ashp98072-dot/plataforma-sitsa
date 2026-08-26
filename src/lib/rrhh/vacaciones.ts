@@ -123,13 +123,11 @@ async function fechaBaseAntiguedad(
   return toDate(rows[0].fecha_alta as string | Date);
 }
 
-export async function sincronizarPeriodosVacaciones(
+export async function sincronizarPeriodosVacacionesEnConexion(
+  conn: PoolConnection,
   empresaId: number,
   idEmpleado: number,
 ): Promise<void> {
-  const pool = getPool();
-  const conn = await pool.getConnection();
-  try {
     const fechaAlta = await fechaBaseAntiguedad(conn, empresaId, idEmpleado);
     if (!fechaAlta) return;
 
@@ -142,7 +140,8 @@ export async function sincronizarPeriodosVacaciones(
       `SELECT id, anio_laboral, periodo_inicio, periodo_fin,
               dias_otorgados, dias_disponibles, estado
        FROM saldos_vacaciones
-       WHERE empresa_id = ? AND id_empleado = ?`,
+       WHERE empresa_id = ? AND id_empleado = ?
+       FOR UPDATE`,
       [empresaId, idEmpleado],
     );
     const existentes = new Map<number, RowDataPacket>();
@@ -213,7 +212,8 @@ export async function sincronizarPeriodosVacaciones(
       `SELECT id, estado, anio_laboral, dias_otorgados, dias_disponibles
        FROM saldos_vacaciones
        WHERE empresa_id = ? AND id_empleado = ?
-       ORDER BY anio_laboral DESC`,
+       ORDER BY anio_laboral DESC
+       FOR UPDATE`,
       [empresaId, idEmpleado],
     );
     const completados = periodos.filter(
@@ -279,6 +279,20 @@ export async function sincronizarPeriodosVacaciones(
         }
       }
     }
+}
+
+export async function sincronizarPeriodosVacaciones(
+  empresaId: number,
+  idEmpleado: number,
+): Promise<void> {
+  const conn = await getPool().getConnection();
+  try {
+    await conn.beginTransaction();
+    await sincronizarPeriodosVacacionesEnConexion(conn, empresaId, idEmpleado);
+    await conn.commit();
+  } catch (error) {
+    await conn.rollback();
+    throw error;
   } finally {
     conn.release();
   }
@@ -333,7 +347,7 @@ export type DesgloseConsumo = {
   diasRestantes: number;
 };
 
-export async function registrarVacacionesFifo(input: {
+export type VacacionesFifoInput = {
   empresaId: number;
   idEmpleado: number;
   fechaInicio: string;
@@ -341,12 +355,25 @@ export async function registrarVacacionesFifo(input: {
   diasATomar: number;
   tipo?: string;
   subtipo?: string | null;
-}): Promise<{
+};
+
+export type ResultadoVacacionesFifo = {
   ok: boolean;
   mensaje: string;
   desglose: DesgloseConsumo[];
   incidenciaId: number | null;
-}> {
+};
+
+/**
+ * Consume saldo y crea el historial usando una transacción que ya pertenece
+ * al llamador. No confirma ni revierte la conexión: así la aprobación de una
+ * solicitud puede bloquear la solicitud, descontar FIFO y resolverla como
+ * una sola operación atómica.
+ */
+export async function registrarVacacionesFifoEnConexion(
+  conn: PoolConnection,
+  input: VacacionesFifoInput,
+): Promise<ResultadoVacacionesFifo> {
   const diasATomar = input.diasATomar;
   if (diasATomar <= 0) {
     return {
@@ -357,116 +384,130 @@ export async function registrarVacacionesFifo(input: {
     };
   }
 
-  await sincronizarPeriodosVacaciones(input.empresaId, input.idEmpleado);
-  const conn = await getPool().getConnection();
+  const [periodos] = await conn.query<RowDataPacket[]>(
+    `SELECT id, periodo_inicio, periodo_fin, dias_disponibles
+     FROM saldos_vacaciones
+     WHERE empresa_id = ? AND id_empleado = ?
+       AND estado = 'Vigente' AND dias_disponibles > 0
+     ORDER BY anio_laboral ASC
+     FOR UPDATE`,
+    [input.empresaId, input.idEmpleado],
+  );
+  const saldoTotal = periodos.reduce(
+    (s, p) => s + Number(p.dias_disponibles),
+    0,
+  );
+
+  if (saldoTotal < diasATomar) {
+    return {
+      ok: false,
+      mensaje: `Saldo insuficiente. Disponible: ${saldoTotal.toFixed(2)} día(s).`,
+      desglose: [],
+      incidenciaId: null,
+    };
+  }
+
+  let incidenciaId: number;
   try {
-    await conn.beginTransaction();
-
-    const [periodos] = await conn.query<RowDataPacket[]>(
-      `SELECT id, periodo_inicio, periodo_fin, dias_disponibles
-       FROM saldos_vacaciones
-       WHERE empresa_id = ? AND id_empleado = ?
-         AND estado = 'Vigente' AND dias_disponibles > 0
-       ORDER BY anio_laboral ASC`,
-      [input.empresaId, input.idEmpleado],
-    );
-    const saldoTotal = periodos.reduce(
-      (s, p) => s + Number(p.dias_disponibles),
-      0,
-    );
-
-    if (saldoTotal < diasATomar) {
-      await conn.rollback();
-      return {
-        ok: false,
-        mensaje: `Saldo insuficiente. Disponible: ${saldoTotal.toFixed(2)} día(s).`,
-        desglose: [],
-        incidenciaId: null,
-      };
-    }
-
-    let incidenciaId: number;
-    try {
-      const [insertResult] = await conn.execute<ResultSetHeader>(
-        `INSERT INTO incidencias
-          (empresa_id, id_empleado, tipo, subtipo, fecha_inicio, fecha_fin, dias_habiles)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [
-          input.empresaId,
-          input.idEmpleado,
-          input.tipo ?? "Vacaciones",
-          input.subtipo ?? null,
-          input.fechaInicio,
-          input.fechaFin,
-          diasATomar,
-        ],
-      );
-      incidenciaId = Number(insertResult.insertId);
-    } catch {
-      const [insertResult] = await conn.execute<ResultSetHeader>(
-        `INSERT INTO incidencias
-          (empresa_id, id_empleado, tipo, fecha_inicio, fecha_fin, dias_habiles)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [
-          input.empresaId,
-          input.idEmpleado,
-          input.tipo ?? "Vacaciones",
-          input.fechaInicio,
-          input.fechaFin,
-          diasATomar,
-        ],
-      );
-      incidenciaId = Number(insertResult.insertId);
-    }
-
-    // También en tabla vacaciones (historial simple)
-    await conn.execute(
-      `INSERT INTO vacaciones
-        (empresa_id, id_empleado, fecha_inicio, fecha_fin, dias_habiles, estado)
-       VALUES (?, ?, ?, ?, ?, 'Aprobado')`,
+    const [insertResult] = await conn.execute<ResultSetHeader>(
+      `INSERT INTO incidencias
+        (empresa_id, id_empleado, tipo, subtipo, fecha_inicio, fecha_fin, dias_habiles)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [
         input.empresaId,
         input.idEmpleado,
+        input.tipo ?? "Vacaciones",
+        input.subtipo ?? null,
         input.fechaInicio,
         input.fechaFin,
         diasATomar,
       ],
     );
+    incidenciaId = Number(insertResult.insertId);
+  } catch {
+    const [insertResult] = await conn.execute<ResultSetHeader>(
+      `INSERT INTO incidencias
+        (empresa_id, id_empleado, tipo, fecha_inicio, fecha_fin, dias_habiles)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        input.empresaId,
+        input.idEmpleado,
+        input.tipo ?? "Vacaciones",
+        input.fechaInicio,
+        input.fechaFin,
+        diasATomar,
+      ],
+    );
+    incidenciaId = Number(insertResult.insertId);
+  }
 
-    let restante = diasATomar;
-    const desglose: DesgloseConsumo[] = [];
+  // También en tabla vacaciones (historial simple)
+  await conn.execute(
+    `INSERT INTO vacaciones
+      (empresa_id, id_empleado, fecha_inicio, fecha_fin, dias_habiles, estado)
+     VALUES (?, ?, ?, ?, ?, 'Aprobado')`,
+    [
+      input.empresaId,
+      input.idEmpleado,
+      input.fechaInicio,
+      input.fechaFin,
+      diasATomar,
+    ],
+  );
 
-    for (const p of periodos) {
-      if (restante <= 0) break;
-      const disponibles = Number(p.dias_disponibles);
-      const tomar = Math.min(disponibles, restante);
-      if (tomar <= 0) continue;
-      const nuevoDisponible = disponibles - tomar;
-      await conn.execute(
-        "UPDATE saldos_vacaciones SET dias_disponibles = ? WHERE id = ?",
-        [nuevoDisponible, Number(p.id)],
-      );
-      await conn.execute(
-        `INSERT INTO detalle_consumo_vacaciones
-          (incidencia_id, saldo_id, dias_tomados) VALUES (?, ?, ?)`,
-        [incidenciaId, Number(p.id), tomar],
-      );
-      desglose.push({
-        periodoInicio: String(p.periodo_inicio).slice(0, 10),
-        periodoFin: String(p.periodo_fin).slice(0, 10),
-        diasTomados: tomar,
-        diasRestantes: nuevoDisponible,
-      });
-      restante -= tomar;
+  let restante = diasATomar;
+  const desglose: DesgloseConsumo[] = [];
+
+  for (const p of periodos) {
+    if (restante <= 0) break;
+    const disponibles = Number(p.dias_disponibles);
+    const tomar = Math.min(disponibles, restante);
+    if (tomar <= 0) continue;
+    const nuevoDisponible = disponibles - tomar;
+    await conn.execute(
+      "UPDATE saldos_vacaciones SET dias_disponibles = ? WHERE id = ?",
+      [nuevoDisponible, Number(p.id)],
+    );
+    await conn.execute(
+      `INSERT INTO detalle_consumo_vacaciones
+        (incidencia_id, saldo_id, dias_tomados) VALUES (?, ?, ?)`,
+      [incidenciaId, Number(p.id), tomar],
+    );
+    desglose.push({
+      periodoInicio: String(p.periodo_inicio).slice(0, 10),
+      periodoFin: String(p.periodo_fin).slice(0, 10),
+      diasTomados: tomar,
+      diasRestantes: nuevoDisponible,
+    });
+    restante -= tomar;
+  }
+
+  return {
+    ok: true,
+    mensaje: "Vacaciones registradas (FIFO).",
+    desglose,
+    incidenciaId,
+  };
+}
+
+export async function registrarVacacionesFifo(
+  input: VacacionesFifoInput,
+): Promise<ResultadoVacacionesFifo> {
+  const conn = await getPool().getConnection();
+  try {
+    await conn.beginTransaction();
+    await sincronizarPeriodosVacacionesEnConexion(
+      conn,
+      input.empresaId,
+      input.idEmpleado,
+    );
+    const resultado = await registrarVacacionesFifoEnConexion(conn, input);
+    if (!resultado.ok) {
+      await conn.rollback();
+      return resultado;
     }
-
     await conn.commit();
-    return {
-      ok: true,
-      mensaje: "Vacaciones registradas (FIFO).",
-      desglose,
-      incidenciaId,
-    };
+    return resultado;
   } catch (err) {
     await conn.rollback();
     return {

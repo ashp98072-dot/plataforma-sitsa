@@ -1,10 +1,11 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
-import { execute, query } from "@/lib/db";
+import { execute, getPool, query } from "@/lib/db";
 import { toIsoDate } from "./dates";
 import {
   calcularSaldoTotalDisponible,
   contarDiasHabiles,
-  registrarVacacionesFifo,
+  registrarVacacionesFifoEnConexion,
+  sincronizarPeriodosVacacionesEnConexion,
 } from "./vacaciones";
 
 export type EstadoSolicitud = "Pendiente" | "Aprobada" | "Rechazada";
@@ -188,32 +189,65 @@ export async function aprobarSolicitud(
   resueltoPor: string,
   comentario?: string | null,
 ): Promise<{ ok: boolean; mensaje: string }> {
-  const sol = await obtenerSolicitud(empresaId, id);
-  if (!sol) return { ok: false, mensaje: "Solicitud no encontrada." };
-  if (sol.estado !== "Pendiente") {
-    return { ok: false, mensaje: `Esta solicitud ya está ${sol.estado}.` };
-  }
+  const conn = await getPool().getConnection();
+  try {
+    await conn.beginTransaction();
+    const [rows] = await conn.query<RowDataPacket[]>(
+      `SELECT * FROM solicitudes_vacaciones
+       WHERE id = ? AND empresa_id = ?
+       LIMIT 1 FOR UPDATE`,
+      [id, empresaId],
+    );
+    const sol = rows[0] ? mapSolicitud(rows[0]) : null;
+    if (!sol) {
+      await conn.rollback();
+      return { ok: false, mensaje: "Solicitud no encontrada." };
+    }
+    if (sol.estado !== "Pendiente") {
+      await conn.rollback();
+      return { ok: false, mensaje: `Esta solicitud ya está ${sol.estado}.` };
+    }
 
-  const r = await registrarVacacionesFifo({
-    empresaId,
-    idEmpleado: sol.empleadoId,
-    fechaInicio: sol.fechaInicio,
-    fechaFin: sol.fechaFin,
-    diasATomar: sol.diasHabiles,
-    tipo: sol.tipo,
-  });
-  if (!r.ok) {
-    return { ok: false, mensaje: r.mensaje };
-  }
+    await sincronizarPeriodosVacacionesEnConexion(
+      conn,
+      empresaId,
+      sol.empleadoId,
+    );
+    const r = await registrarVacacionesFifoEnConexion(conn, {
+      empresaId,
+      idEmpleado: sol.empleadoId,
+      fechaInicio: sol.fechaInicio,
+      fechaFin: sol.fechaFin,
+      diasATomar: sol.diasHabiles,
+      tipo: sol.tipo,
+    });
+    if (!r.ok) {
+      await conn.rollback();
+      return { ok: false, mensaje: r.mensaje };
+    }
 
-  await execute(
-    `UPDATE solicitudes_vacaciones
-     SET estado = 'Aprobada', incidencia_id = ?, comentario_rrhh = ?,
-         resuelto_en = NOW(), resuelto_por = ?
-     WHERE id = ? AND empresa_id = ?`,
-    [r.incidenciaId, comentario?.trim() || null, resueltoPor, id, empresaId],
-  );
-  return { ok: true, mensaje: "Solicitud aprobada y saldo descontado." };
+    const [actualizada] = await conn.execute<ResultSetHeader>(
+      `UPDATE solicitudes_vacaciones
+       SET estado = 'Aprobada', incidencia_id = ?, comentario_rrhh = ?,
+           resuelto_en = NOW(), resuelto_por = ?
+       WHERE id = ? AND empresa_id = ? AND estado = 'Pendiente'`,
+      [r.incidenciaId, comentario?.trim() || null, resueltoPor, id, empresaId],
+    );
+    if (!actualizada.affectedRows) {
+      await conn.rollback();
+      return { ok: false, mensaje: "La solicitud ya fue resuelta por otro usuario." };
+    }
+    await conn.commit();
+    return { ok: true, mensaje: "Solicitud aprobada y saldo descontado." };
+  } catch (error) {
+    await conn.rollback();
+    return {
+      ok: false,
+      mensaje: error instanceof Error ? error.message : "No se pudo aprobar la solicitud.",
+    };
+  } finally {
+    conn.release();
+  }
 }
 
 /** Rechaza la solicitud. No toca saldo (nunca se descontó). */
@@ -228,11 +262,14 @@ export async function rechazarSolicitud(
   if (sol.estado !== "Pendiente") {
     return { ok: false, mensaje: `Esta solicitud ya está ${sol.estado}.` };
   }
-  await execute(
+  const result = await execute(
     `UPDATE solicitudes_vacaciones
      SET estado = 'Rechazada', comentario_rrhh = ?, resuelto_en = NOW(), resuelto_por = ?
-     WHERE id = ? AND empresa_id = ?`,
+     WHERE id = ? AND empresa_id = ? AND estado = 'Pendiente'`,
     [comentario?.trim() || null, resueltoPor, id, empresaId],
   );
+  if (!result.affectedRows) {
+    return { ok: false, mensaje: "La solicitud ya fue resuelta por otro usuario." };
+  }
   return { ok: true, mensaje: "Solicitud rechazada." };
 }
