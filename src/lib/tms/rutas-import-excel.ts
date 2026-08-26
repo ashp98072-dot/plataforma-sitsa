@@ -41,43 +41,37 @@ export async function generarPlantillaRutas(): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   wb.creator = "SITSA Plataforma";
   const ws = wb.addWorksheet("CODIGOS DATA", { views: [{ state: "frozen", ySplit: 1 }] });
-  ws.getCell("C1").value = "Código";
-  ws.getCell("D1").value = "Cliente";
-  ws.getCell("E1").value = "Lugar de carga";
-  ws.getCell("F1").value = "Hora";
-  ws.getCell("G1").value = "Contacto";
-  ws.getCell("H1").value = "Destino";
-  ws.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
-  ws.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F4E78" } };
-  ws.getRow(1).alignment = { vertical: "middle", horizontal: "center", wrapText: true };
-  ws.getRow(1).height = 30;
-  ws.getCell("C2").value = "EJEMPLO-NO-IMPORTAR";
-  ws.getCell("D2").value = "Cliente de ejemplo";
-  ws.getCell("E2").value = "Bodega central, Guatemala";
-  ws.getCell("F2").value = "08:00";
-  ws.getCell("G2").value = "Ana Pérez · 55550000";
-  ws.getCell("H2").value = "Sucursal zona 10, Guatemala";
-  ws.autoFilter = "C1:H1";
-  ws.getColumn("C").width = 16;
-  ws.getColumn("D").width = 32;
-  ws.getColumn("E").width = 42;
-  ws.getColumn("F").width = 14;
-  ws.getColumn("G").width = 32;
-  ws.getColumn("H").width = 48;
+  // Replica el formato operativo histórico: columnas C..H, numeradas 1..6
+  // en la primera fila. El importador lee por posición, no por el texto del
+  // encabezado, por lo que también sigue aceptando archivos anteriores.
+  [1, 2, 3, 4, 5, 6].forEach((value, index) => {
+    ws.getCell(1, COL_CODIGO + index).value = value;
+  });
+  ws.getRow(1).font = { name: "Calibri", size: 12, bold: true };
+  ws.getRow(1).alignment = { vertical: "middle", horizontal: "center" };
+  ws.getRow(1).height = 15.75;
+  ws.getColumn("C").width = 7.86;
+  ws.getColumn("D").width = 25.43;
+  ws.getColumn("E").width = 59.86;
+  ws.getColumn("F").width = 9;
+  ws.getColumn("G").width = 21.43;
+  ws.getColumn("H").width = 57.43;
   ws.getColumn("C").numFmt = "@";
-  ws.getColumn("F").numFmt = "@";
+  ws.getColumn("F").numFmt = "h:mm";
+  ws.getCell("F1").numFmt = "General";
 
   const ayuda = wb.addWorksheet("AYUDA");
   ayuda.addRow(["Campo", "Descripción"]);
   ayuda.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
   ayuda.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F4E78" } };
   [
-    ["Código", "Obligatorio y único dentro del archivo. Los códigos existentes se omiten por defecto en la previsualización."],
-    ["Cliente", "Obligatorio. Debe coincidir con el catálogo de Clientes o podrá resolverse antes de confirmar."],
-    ["Lugar de carga", "Dirección o descripción habitual del punto de carga."],
-    ["Hora", "Hora habitual en formato HH:MM."],
-    ["Contacto", "Nombre y teléfono del contacto operativo."],
-    ["Destino", "Descripción completa del destino o lugar de descarga."],
+    ["1 · Código (columna C)", "Obligatorio y único dentro del archivo. Los códigos existentes se omiten por defecto en la previsualización."],
+    ["2 · Cliente (columna D)", "Obligatorio. Debe coincidir con el catálogo de Clientes o podrá resolverse antes de confirmar."],
+    ["3 · Lugar de carga (columna E)", "Dirección o descripción habitual del punto de carga."],
+    ["4 · Hora (columna F)", "Hora habitual como valor de hora de Excel; se muestra en formato h:mm."],
+    ["5 · Contacto (columna G)", "Nombre del contacto operativo, como en el archivo de Programación actual."],
+    ["6 · Destino (columna H)", "Descripción completa del destino o lugar de descarga."],
+    ["Ejemplo", "1 | Calsa | BODEGAS CALSA, ZONA 12 | 3:00 | Herbert Santiso | BODEGAS DE CONRED, ZONA 13"],
     ["Importante", "No cambie el nombre de la hoja CODIGOS DATA ni mueva las columnas C a H."],
   ].forEach((row) => ayuda.addRow(row));
   ayuda.columns = [{ width: 24 }, { width: 105 }];
