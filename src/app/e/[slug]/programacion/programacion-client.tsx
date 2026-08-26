@@ -446,60 +446,72 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   //   tick del intervalo no dispara ningún fetch; al volver visible se
   //   refresca de inmediato y se reinicia el conteo de 30s (para no
   //   encadenar un segundo refresh a los pocos segundos del primero).
-  // - `enVuelo` evita que un tick de polling dispare un segundo fetch
-  //   mientras el anterior todavía no responde (respuesta lenta >30s).
-  //   El botón "Actualizar" (cargar(), más abajo) NO comparte este
-  //   candado — sigue pudiendo dispararse en cualquier momento, ya
-  //   protegido por su propio `disabled={loading}` en el JSX.
+  // - `enVuelo` es un candado ÚNICO compartido por la carga inicial y los
+  //   refrescos automáticos (tick de polling y visibilitychange) de ESTE
+  //   efecto — si la carga inicial tarda más de 30s, el primer tick no
+  //   arranca otro fetch encima; y viceversa. El botón "Actualizar"
+  //   (cargar(), más abajo) y el refresh explícito tras guardar
+  //   (alGuardar -> cargar()) NO comparten este candado — siguen
+  //   pudiendo dispararse en cualquier momento, ya protegidos por su
+  //   propio `disabled={loading}` en el JSX.
   useEffect(() => {
     let ignore = false;
     let enVuelo = false;
     let intervalo: number | undefined;
 
-    async function refrescar() {
+    /**
+     * `silencioso=false` (carga inicial): setLoading/setErr como antes,
+     * y un error de red se muestra. `silencioso=true` (polling/
+     * visibilitychange): sin loading, y un fallo se descarta en
+     * silencio — se conserva el último dato válido, sin error repetido.
+     */
+    async function ejecutarRefresh(silencioso: boolean) {
       if (enVuelo) return;
       enVuelo = true;
+      if (!silencioso) {
+        setLoading(true);
+        setErr("");
+      }
       try {
-        const r = await obtenerProgramacion(slug, desde, hasta).catch(() => null);
-        if (!ignore && r?.ok) {
-          setPlanes(r.datos.planes);
-          setPendientesCierre(r.datos.pendientesCierre);
-          setEstadoVehiculos(r.datos.estadoVehiculos);
+        if (silencioso) {
+          const r = await obtenerProgramacion(slug, desde, hasta).catch(() => null);
+          if (!ignore && r?.ok) {
+            setPlanes(r.datos.planes);
+            setPendientesCierre(r.datos.pendientesCierre);
+            setEstadoVehiculos(r.datos.estadoVehiculos);
+          }
+        } else {
+          const r = await obtenerProgramacion(slug, desde, hasta).catch(
+            () => ({ ok: false, error: "Error de conexión al cargar la programación." }) as const,
+          );
+          if (ignore) return;
+          if (!r.ok) {
+            setErr(r.error);
+          } else {
+            setPlanes(r.datos.planes);
+            setPendientesCierre(r.datos.pendientesCierre);
+            setEstadoVehiculos(r.datos.estadoVehiculos);
+          }
         }
       } finally {
         enVuelo = false;
+        if (!silencioso) setLoading(false);
       }
     }
 
     function iniciarIntervalo() {
       window.clearInterval(intervalo);
       intervalo = window.setInterval(() => {
-        if (document.visibilityState === "visible") void refrescar();
+        if (document.visibilityState === "visible") void ejecutarRefresh(true);
       }, POLLING_MS);
     }
 
-    async function cargarInicial() {
-      setLoading(true);
-      setErr("");
-      const r = await obtenerProgramacion(slug, desde, hasta).catch(
-        () => ({ ok: false, error: "Error de conexión al cargar la programación." }) as const,
-      );
-      if (ignore) return;
-      if (!r.ok) {
-        setErr(r.error);
-      } else {
-        setPlanes(r.datos.planes);
-        setPendientesCierre(r.datos.pendientesCierre);
-        setEstadoVehiculos(r.datos.estadoVehiculos);
-      }
-      setLoading(false);
-    }
-    void cargarInicial();
+    void ejecutarRefresh(false); // carga inicial
     iniciarIntervalo();
 
     function onVisibilityChange() {
       if (document.visibilityState === "visible") {
-        void refrescar();
+        void ejecutarRefresh(true);
         iniciarIntervalo();
       }
     }

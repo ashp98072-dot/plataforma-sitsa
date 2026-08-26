@@ -247,17 +247,21 @@ export default function TmsPage() {
 
   // OPS-2.2 (polling inteligente): 5s -> POLLING_MS (30s), sin sondear con
   // la pestaña oculta, refresh inmediato + reinicio del conteo al volver
-  // visible, y sin superponer un tick nuevo mientras el anterior sigue en
-  // vuelo. Mismo criterio que Programación (programacion-client.tsx).
+  // visible. `enVuelo` es un candado ÚNICO compartido por la carga
+  // inicial y los refrescos automáticos de este efecto (tick + volver
+  // visible) — no por el botón "Actualizar" ni por cerrarViajeTms(), que
+  // llaman cargarPlanes() por su cuenta y deben poder hacerlo en
+  // cualquier momento. Mismo criterio que Programación
+  // (programacion-client.tsx).
   useEffect(() => {
     let enVuelo = false;
     let intervalo: number | undefined;
 
-    async function refrescar() {
+    async function ejecutar(mostrarCarga: boolean) {
       if (enVuelo) return;
       enVuelo = true;
       try {
-        await cargarPlanes(false);
+        await cargarPlanes(mostrarCarga);
       } finally {
         enVuelo = false;
       }
@@ -266,17 +270,16 @@ export default function TmsPage() {
     function iniciarIntervalo() {
       window.clearInterval(intervalo);
       intervalo = window.setInterval(() => {
-        if (document.visibilityState === "visible") void refrescar();
+        if (document.visibilityState === "visible") void ejecutar(false);
       }, POLLING_MS);
     }
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void cargarPlanes();
+    void ejecutar(true); // carga inicial (mostrarCarga=true, como antes)
     iniciarIntervalo();
 
     function onVisibilityChange() {
       if (document.visibilityState === "visible") {
-        void refrescar();
+        void ejecutar(false);
         iniciarIntervalo();
       }
     }
@@ -349,23 +352,26 @@ export default function TmsPage() {
 
   // OPS-2.2: mismo criterio de polling inteligente — ya solo corría con
   // una fila expandida (expandido != null); ahora además: 5s -> POLLING_MS,
-  // nada de sondeo con la pestaña oculta, y refresh inmediato + reinicio
-  // del conteo al volver visible.
+  // nada de sondeo con la pestaña oculta, refresh inmediato + reinicio del
+  // conteo al volver visible, y `enVuelo` como candado ÚNICO compartido
+  // por la carga inicial de este efecto y sus refrescos automáticos
+  // (nunca por un llamado externo a cargarEvidencias, que no existe hoy
+  // fuera de este efecto).
   useEffect(() => {
     if (expandido == null) return;
-    // Se captura en una constante propia: dentro de `function refrescar()`
-    // (una function declaration, no una arrow function) TypeScript no
-    // conserva el angostamiento de `expandido !== null` del guard de
-    // arriba para la variable capturada del closure.
+    // Se captura en una constante propia: dentro de una function
+    // declaration anidada TypeScript no conserva el angostamiento de
+    // `expandido !== null` del guard de arriba para la variable
+    // capturada del closure.
     const planId = expandido;
     let enVuelo = false;
     let intervalo: number | undefined;
 
-    async function refrescar() {
+    async function ejecutar(mostrarCarga: boolean) {
       if (enVuelo) return;
       enVuelo = true;
       try {
-        await cargarEvidencias(planId, false);
+        await cargarEvidencias(planId, mostrarCarga);
       } finally {
         enVuelo = false;
       }
@@ -374,17 +380,16 @@ export default function TmsPage() {
     function iniciarIntervalo() {
       window.clearInterval(intervalo);
       intervalo = window.setInterval(() => {
-        if (document.visibilityState === "visible") void refrescar();
+        if (document.visibilityState === "visible") void ejecutar(false);
       }, POLLING_MS);
     }
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void cargarEvidencias(planId);
+    void ejecutar(true); // carga inicial (mostrarCarga=true, como antes)
     iniciarIntervalo();
 
     function onVisibilityChange() {
       if (document.visibilityState === "visible") {
-        void refrescar();
+        void ejecutar(false);
         iniciarIntervalo();
       }
     }
