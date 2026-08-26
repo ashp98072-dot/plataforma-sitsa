@@ -486,6 +486,7 @@ export type EmpleadoInput = {
   supervisorIds?: number[];
   /** Fase H1: solo RRHH/admin la cambia, desde la edición de empleado. */
   horasExtraHabilitado?: boolean;
+  entrevistaId?: number;
 };
 
 function paramsFicha(data: EmpleadoInput) {
@@ -695,6 +696,11 @@ export async function crearEmpleado(
 
     if (schemaCompleto) {
       await sincronizarSupervisoresEmpleado(conn, empresaId, empleadoId, supervisores.ids);
+    }
+
+    if (data.entrevistaId) {
+      const { transferirDocumentosAEmpleado } = await import("./entrevista-documentos");
+      await transferirDocumentosAEmpleado(conn, empresaId, data.entrevistaId, empleadoId);
     }
 
     await conn.commit();

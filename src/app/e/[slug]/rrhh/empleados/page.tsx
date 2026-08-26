@@ -697,7 +697,10 @@ export default function EmpleadosPage() {
     const res = await fetch(url, {
       method: editId ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(formToBody(form)),
+      body: JSON.stringify({
+        ...formToBody(form),
+        ...(entrevistaId && !editId ? { entrevistaId: Number(entrevistaId) } : {}),
+      }),
     });
     // El backend siempre responde JSON, pero un 500 inesperado (proxy,
     // timeout, etc.) puede llegar con body vacío o no-JSON: sin este

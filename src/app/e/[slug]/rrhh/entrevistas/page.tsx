@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { EmpleadoPicker, type EmpOpt } from "@/components/rrhh/empleado-picker";
+import { EntrevistaDocumentos } from "@/components/rrhh/entrevista-documentos";
 
 type Entrevista = {
   id: number;
@@ -453,11 +454,20 @@ export default function EntrevistasPage() {
 
         <textarea
           className={`${input} w-full`}
-          placeholder="Notas (opcional)"
-          rows={2}
+          placeholder="Comentarios y evaluación: experiencia, fortalezas, disponibilidad, observaciones y motivo del resultado (opcional)"
+          aria-label="Comentarios y evaluación de la entrevista"
+          rows={4}
           value={form.notas}
           onChange={(e) => setForm({ ...form, notas: e.target.value })}
         />
+
+        {editandoId ? (
+          <EntrevistaDocumentos slug={slug} entrevistaId={editandoId} />
+        ) : (
+          <p className="text-xs text-[var(--muted)]">
+            Guarda primero la entrevista para habilitar la papelería del candidato.
+          </p>
+        )}
 
         <div className="flex gap-2">
           <button className="rounded bg-[var(--accent)] px-3 py-1 text-sm text-white">

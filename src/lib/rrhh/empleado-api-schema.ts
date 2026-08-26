@@ -2,8 +2,6 @@ import { z } from "zod";
 import { faltantesAlta } from "./empleado-validacion";
 
 const optStr = z.string().optional().nullable();
-const optNum = z.number().optional().nullable();
-
 /**
  * Valida que un texto sea una fecha calendario real en formato YYYY-MM-DD
  * (rechaza cosas como "aaaaaaaa", "2026-13-01" o "2026-02-30").
@@ -102,6 +100,8 @@ export const empleadoBodySchema = z.object({
   // activo/no-auto-referencia ocurre en supervisoresValidos()
   // (src/lib/rrhh/empleados.ts), no aquí.
   supervisorIds: z.array(z.number().int().positive()).max(50).optional(),
+  /** Entrevista aprobada de origen; permite trasladar su papelería al expediente laboral. */
+  entrevistaId: z.number().int().positive().optional(),
 });
 
 export type EmpleadoBody = z.infer<typeof empleadoBodySchema>;
