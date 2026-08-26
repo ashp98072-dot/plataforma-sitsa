@@ -192,12 +192,12 @@ export default function PlanForm({
           // de recrearla (evita romper evidencias ya asociadas).
           id: p.id,
           lugarNombre: p.lugar_nombre,
-          tipo: (["Carga", "Descarga", "Entrega"].includes(p.tipo) ? p.tipo : "Entrega") as ParadaForm["tipo"],
+          tipo: (["Carga", "Descarga", "Entrega"].includes(p.tipo) ? p.tipo : "Descarga") as ParadaForm["tipo"],
           requiereEvidencia: p.requiere_evidencia,
         }))
       : [
           { lugarNombre: "", tipo: "Carga", requiereEvidencia: true },
-          { lugarNombre: "", tipo: "Entrega", requiereEvidencia: true },
+          { lugarNombre: "", tipo: "Descarga", requiereEvidencia: true },
         ],
   );
   const [saving, setSaving] = useState(false);
@@ -433,7 +433,7 @@ export default function PlanForm({
 
   /**
    * Rellena la fila de parada EXISTENTE `idx` con la ubicación guardada
-   * elegida — nunca crea una fila nueva ni toca el tipo (Carga/Entrega) que
+   * elegida — nunca crea una fila nueva ni toca el tipo (Carga/Descarga/Entrega) que
    * esa fila ya tenía: el tipo de la ubicación (CARGA/ENTREGA/AMBOS) es solo
    * una sugerencia para ORDENAR las opciones del selector, no algo que
    * sobrescriba silenciosamente la fila. Para agregar una parada nueva se
@@ -543,14 +543,14 @@ export default function PlanForm({
       for (const p of ruta.paradas) {
         nuevasParadas.push({
           lugarNombre: p.lugarNombre,
-          tipo: (["Carga", "Descarga", "Entrega"].includes(p.tipo) ? p.tipo : "Entrega") as ParadaForm["tipo"],
+          tipo: (["Carga", "Descarga", "Entrega"].includes(p.tipo) ? p.tipo : "Descarga") as ParadaForm["tipo"],
           requiereEvidencia: true,
           clienteUbicacionId: p.clienteUbicacionId,
         });
       }
     } else if (ruta.destinoDescripcion) {
       // Respaldo solo para el tablero/seguimiento — el reporte no depende de esto.
-      nuevasParadas.push({ lugarNombre: ruta.destinoDescripcion, tipo: "Entrega", requiereEvidencia: true, clienteUbicacionId: null });
+      nuevasParadas.push({ lugarNombre: ruta.destinoDescripcion, tipo: "Descarga", requiereEvidencia: true, clienteUbicacionId: null });
     }
     if (nuevasParadas.length) setParadasForm(nuevasParadas);
   }
@@ -1244,8 +1244,8 @@ export default function PlanForm({
               }
             >
               <option value="Carga">Carga</option>
-              <option value="Entrega">Entrega</option>
               <option value="Descarga">Descarga</option>
+              <option value="Entrega">Entrega (legado)</option>
             </select>
             {form.clienteId ? (
               <select
@@ -1255,7 +1255,7 @@ export default function PlanForm({
                   const id = Number(e.target.value);
                   if (id) seleccionarUbicacionParaFila(idx, id);
                 }}
-                title="Rellena esta fila con una ubicación guardada del cliente — no cambia el tipo Carga/Entrega."
+                title="Rellena esta fila con una ubicación guardada del cliente — no cambia el tipo Carga/Descarga/Entrega."
               >
                 <option value="">— Ubicación guardada —</option>
                 {ubicacionesParaFila(p.tipo).map((u) => (
@@ -1283,7 +1283,7 @@ export default function PlanForm({
         <button
           type="button"
           className="rounded bg-[#334155] px-2 py-1 text-xs text-white"
-          onClick={() => setParadasForm((list) => [...list, { lugarNombre: "", tipo: "Entrega", requiereEvidencia: true }])}
+          onClick={() => setParadasForm((list) => [...list, { lugarNombre: "", tipo: "Descarga", requiereEvidencia: true }])}
         >
           + Agregar parada
         </button>
