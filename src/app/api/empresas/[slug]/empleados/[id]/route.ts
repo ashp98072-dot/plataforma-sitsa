@@ -3,7 +3,6 @@ import { requireTenantRrhh } from "@/lib/tenant";
 import {
   actualizarEmpleado,
   codigoDuplicado,
-  eliminarEmpleado,
   listarSupervisoresDeEmpleado,
   obtenerEmpleado,
   type EmpleadoInput,
@@ -128,6 +127,12 @@ export async function PUT(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: mensaje }, { status: 400 });
   }
   const d = parsed.data;
+  if (d.estado === "Baja" && !d.fechaEgreso) {
+    return NextResponse.json(
+      { error: "La fecha de egreso es obligatoria para dar de baja al empleado." },
+      { status: 400 },
+    );
+  }
   const falta = validarAltaMonaco(d);
   if (falta) {
     return NextResponse.json({ error: falta }, { status: 400 });
@@ -230,9 +235,15 @@ export async function DELETE(_req: Request, ctx: Ctx) {
   const { slug, id } = await ctx.params;
   const guard = await requireTenantRrhh(slug, "empleados", "eliminar");
   if (guard.error) return guard.error;
-  const result = await eliminarEmpleado(guard.empresa.id, Number(id));
-  if (!result.ok) {
-    return NextResponse.json({ error: result.mensaje }, { status: 404 });
+  const empleado = await obtenerEmpleado(guard.empresa.id, Number(id));
+  if (!empleado) {
+    return NextResponse.json({ error: "Empleado no encontrado." }, { status: 404 });
   }
-  return NextResponse.json({ mensaje: result.mensaje });
+  return NextResponse.json(
+    {
+      error:
+        "El expediente laboral no se puede eliminar. Edite al empleado, seleccione Baja e indique la fecha de egreso.",
+    },
+    { status: 409 },
+  );
 }

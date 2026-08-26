@@ -1,6 +1,6 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import type { PoolConnection } from "mysql2/promise";
-import { execute, getPool, query } from "@/lib/db";
+import { getPool, query } from "@/lib/db";
 import { toIsoDate, hoyLocal } from "./dates";
 import { asegurarSchemaEmpleados } from "./empleados-schema";
 
@@ -875,6 +875,18 @@ export async function actualizarEmpleado(
       await sincronizarSupervisoresEmpleado(conn, empresaId, id, supervisorIdsNuevos);
     }
 
+    // Una baja conserva el expediente histórico, pero revoca inmediatamente
+    // el acceso del colaborador al portal dentro de la misma transacción.
+    if (affectedRows > 0 && data.estado === "Baja") {
+      await conn.execute(
+        `UPDATE colaborador_credenciales cc
+         INNER JOIN empleados e ON e.id = cc.empleado_id
+         SET cc.activo = 0
+         WHERE cc.empleado_id = ? AND e.empresa_id = ?`,
+        [id, empresaId],
+      );
+    }
+
     await conn.commit();
   } catch (e) {
     await conn.rollback();
@@ -883,25 +895,6 @@ export async function actualizarEmpleado(
     conn.release();
   }
   return affectedRows > 0;
-}
-
-export async function eliminarEmpleado(
-  empresaId: number,
-  id: number,
-): Promise<{ ok: boolean; mensaje: string }> {
-  const emp = await obtenerEmpleado(empresaId, id);
-  if (!emp) return { ok: false, mensaje: "Empleado no encontrado." };
-  const result = await execute(
-    "DELETE FROM empleados WHERE id = ? AND empresa_id = ?",
-    [id, empresaId],
-  );
-  if (result.affectedRows === 0) {
-    return { ok: false, mensaje: "No se pudo eliminar." };
-  }
-  return {
-    ok: true,
-    mensaje: `Empleado '${emp.nombre}' eliminado.`,
-  };
 }
 
 export { CATEGORIAS_OPS, PUESTOS_MONACO } from "./categorias-ops";
