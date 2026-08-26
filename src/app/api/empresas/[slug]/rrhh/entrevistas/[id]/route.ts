@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireTenantRrhh } from "@/lib/tenant";
-import { actualizarEntrevista, eliminarEntrevista } from "@/lib/rrhh/entrevistas";
+import {
+  actualizarEntrevista,
+  eliminarEntrevista,
+  obtenerEntrevista,
+} from "@/lib/rrhh/entrevistas";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
 
@@ -16,6 +20,22 @@ const patchSchema = z.object({
   resultado: z.enum(["Pendiente", "Aprobado", "Rechazado"]).optional(),
   notas: z.string().nullable().optional(),
 });
+
+export async function GET(_req: Request, ctx: Ctx) {
+  const { slug, id } = await ctx.params;
+  const guard = await requireTenantRrhh(slug, "entrevistas", "ver");
+  if (guard.error) return guard.error;
+
+  const entrevistaId = Number(id);
+  if (!Number.isInteger(entrevistaId) || entrevistaId <= 0) {
+    return NextResponse.json({ error: "ID inválido." }, { status: 400 });
+  }
+  const entrevista = await obtenerEntrevista(guard.empresa.id, entrevistaId);
+  if (!entrevista) {
+    return NextResponse.json({ error: "Entrevista no encontrada." }, { status: 404 });
+  }
+  return NextResponse.json({ entrevista });
+}
 
 /**
  * PATCH /api/empresas/[slug]/rrhh/entrevistas/[id]
