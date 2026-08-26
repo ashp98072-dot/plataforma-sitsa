@@ -14,7 +14,8 @@ export async function GET(_req: Request, ctx: Ctx) {
     const rows = await query<RowDataPacket[]>(
       `SELECT p.*, e.codigo AS emp_codigo, e.nombre AS emp_nombre
        FROM rrhh_prestaciones p
-       INNER JOIN empleados e ON e.id = p.id_empleado
+       INNER JOIN empleados e
+         ON e.id = p.id_empleado AND e.empresa_id = p.empresa_id
        WHERE p.empresa_id = ?
        ORDER BY p.fecha DESC LIMIT 300`,
       [guard.empresa.id],
@@ -49,17 +50,27 @@ export async function POST(req: Request, ctx: Ctx) {
     const r = await execute(
       `INSERT INTO rrhh_prestaciones
         (empresa_id, id_empleado, tipo, monto, fecha, notas, creado_por)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       SELECT ?, e.id, ?, ?, ?, ?, ?
+       FROM empleados e
+       WHERE e.id = ? AND e.empresa_id = ?
+       LIMIT 1`,
       [
         guard.empresa.id,
-        d.empleadoId,
         d.tipo,
         d.monto,
         d.fecha,
         d.notas ?? null,
         guard.session.username,
+        d.empleadoId,
+        guard.empresa.id,
       ],
     );
+    if (!r.affectedRows) {
+      return NextResponse.json(
+        { error: "El empleado no pertenece a la empresa activa." },
+        { status: 400 },
+      );
+    }
     return NextResponse.json({ id: r.insertId, mensaje: "Prestación registrada." });
   } catch {
     return NextResponse.json(
