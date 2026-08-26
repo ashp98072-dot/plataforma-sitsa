@@ -1,14 +1,20 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireTenantModulo } from "@/lib/tenant";
+import { requireTenantRutas } from "@/lib/tenant";
 import { actualizarRuta, obtenerRuta } from "@/lib/tms/cliente-rutas";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
 
-/** VIAT-4 — detalle completo de una ruta (con paradas), para autocompletar Programación al elegirla. */
+/**
+ * VIAT-4 — detalle completo de una ruta (con paradas), para autocompletar
+ * Programación al elegirla.
+ *
+ * OPS-5.2a: permiso propio `rutas` (con fallback a `tms` por
+ * compatibilidad histórica) — ver requireTenantRutas en tenant.ts.
+ */
 export async function GET(_req: Request, ctx: Ctx) {
   const { slug, id } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "tms");
+  const guard = await requireTenantRutas(slug, "ver");
   if (guard.error) return guard.error;
 
   const rutaId = Number(id);
@@ -48,7 +54,7 @@ const schema = z.object({
  */
 export async function PATCH(req: Request, ctx: Ctx) {
   const { slug, id } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "tms", true);
+  const guard = await requireTenantRutas(slug, "editar");
   if (guard.error) return guard.error;
 
   const rutaId = Number(id);
