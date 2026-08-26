@@ -49,7 +49,9 @@ function mapEntrevista(r: RowDataPacket): Entrevista {
     candidatoTelefono: r.candidato_telefono ? String(r.candidato_telefono) : null,
     candidatoEmail: r.candidato_email ? String(r.candidato_email) : null,
     puesto: String(r.puesto),
-    fechaHora: String(r.fecha_hora).slice(0, 19).replace(" ", "T"),
+    fechaHora: String(r.fecha_hora_iso ?? r.fecha_hora)
+      .slice(0, 19)
+      .replace(" ", "T"),
     entrevistadorEmpleadoId:
       r.entrevistador_empleado_id != null
         ? Number(r.entrevistador_empleado_id)
@@ -68,7 +70,9 @@ function mapEntrevista(r: RowDataPacket): Entrevista {
 }
 
 const SELECT_BASE = `
-  SELECT ent.*, e.nombre AS entrevistador_nombre
+  SELECT ent.*,
+         DATE_FORMAT(ent.fecha_hora, '%Y-%m-%dT%H:%i:%s') AS fecha_hora_iso,
+         e.nombre AS entrevistador_nombre
   FROM entrevistas ent
   LEFT JOIN empleados e
     ON e.id = ent.entrevistador_empleado_id AND e.empresa_id = ent.empresa_id
