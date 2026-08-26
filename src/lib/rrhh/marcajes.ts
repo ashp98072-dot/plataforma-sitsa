@@ -20,20 +20,6 @@ import {
 import { validarGeocercaKiosko } from "./geocerca";
 import { lunesDeSemana } from "./horario-teorico";
 
-async function tieneSesionAbierta(
-  empresaId: number,
-  idEmpleado: number,
-): Promise<boolean> {
-  const rows = await query<RowDataPacket[]>(
-    `SELECT id FROM sesiones_trabajo
-     WHERE empresa_id = ? AND id_empleado = ?
-       AND (estado = 'ABIERTA' OR estado = 'En curso')
-     LIMIT 1`,
-    [empresaId, idEmpleado],
-  );
-  return rows.length > 0;
-}
-
 async function tieneJornadaCompletaHoy(
   empresaId: number,
   idEmpleado: number,
@@ -200,6 +186,44 @@ export type MarcajeHoy = {
   fotoEntradaId: number | null;
   fotoSalidaId: number | null;
 };
+
+export type JornadaPendienteCierre = {
+  id: number;
+  idEmpleado: number;
+  codigo: string;
+  nombre: string;
+  fechaJornada: string;
+  entrada: string;
+};
+
+export async function listarJornadasPendientesCierre(
+  empresaId: number,
+): Promise<JornadaPendienteCierre[]> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT s.id, s.id_empleado, e.codigo, e.nombre, s.entrada_at,
+            DATE_FORMAT(s.fecha_jornada, '%Y-%m-%d') AS fecha_jornada
+     FROM sesiones_trabajo s
+     INNER JOIN empleados e
+       ON e.id = s.id_empleado AND e.empresa_id = s.empresa_id
+     WHERE s.empresa_id = ?
+       AND s.fecha_jornada < ?
+       AND s.salida_at IS NULL
+       AND s.estado IN ('ABIERTA', 'En curso')
+     ORDER BY s.fecha_jornada ASC, s.entrada_at ASC
+     LIMIT 100`,
+    [empresaId, hoyLocal()],
+  );
+  return rows.map((row) => ({
+    id: Number(row.id),
+    idEmpleado: Number(row.id_empleado),
+    codigo: String(row.codigo ?? ""),
+    nombre: String(row.nombre ?? ""),
+    fechaJornada: String(row.fecha_jornada).slice(0, 10),
+    entrada: formatearTimestampVisible(
+      fmtTs(row.entrada_at as string | Date | null),
+    ),
+  }));
+}
 
 async function minutosRetrasoSemanaAntes(
   empresaId: number,
@@ -464,9 +488,8 @@ export async function registrarMarcajeKiosko(
    * Si ya existe una sesión abierta, el marcaje actual
    * corresponde a la salida.
    */
-  if (await tieneSesionAbierta(empresaId, idEmpleado)) {
-    const abiertas = await query<RowDataPacket[]>(
-      `SELECT id
+  const abiertas = await query<RowDataPacket[]>(
+      `SELECT id, DATE_FORMAT(fecha_jornada, '%Y-%m-%d') AS fecha_jornada
        FROM sesiones_trabajo
        WHERE empresa_id = ?
          AND id_empleado = ?
@@ -479,15 +502,17 @@ export async function registrarMarcajeKiosko(
       [empresaId, idEmpleado],
     );
 
-    if (!abiertas[0]) {
+  if (abiertas[0]) {
+    const fechaAbierta = String(abiertas[0].fecha_jornada).slice(0, 10);
+    if (fechaAbierta !== fechaJornada) {
       return {
         ok: false,
-        code: "SIN_ENTRADA",
-        error: `${nombre} no tiene sesión abierta.`,
+        code: "JORNADA_ANTERIOR_ABIERTA",
+        error: `${nombre} tiene una jornada pendiente de cierre del ${fechaAbierta}. RRHH debe completar la salida antes de registrar un nuevo día.`,
       };
     }
 
-    await execute(
+    const cierre = await execute(
       `UPDATE sesiones_trabajo
        SET
          salida_at = ?,
@@ -497,7 +522,9 @@ export async function registrarMarcajeKiosko(
          salida_distancia_m = ?,
          estado = 'CERRADA'
        WHERE id = ?
-         AND empresa_id = ?`,
+         AND empresa_id = ?
+         AND salida_at IS NULL
+         AND estado IN ('ABIERTA', 'En curso')`,
       [
         timestamp,
         ubicacionId,
@@ -508,6 +535,13 @@ export async function registrarMarcajeKiosko(
         empresaId,
       ],
     );
+    if (!cierre.affectedRows) {
+      return {
+        ok: false,
+        code: "JORNADA_YA_CERRADA",
+        error: `La jornada de ${nombre} ya fue cerrada por otro marcaje. Actualiza la pantalla.`,
+      };
+    }
 
     const hora =
       timestamp.split(" ")[1] ?? timestamp;

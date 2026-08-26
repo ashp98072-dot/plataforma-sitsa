@@ -26,6 +26,14 @@ type Marcaje = {
   fotoSalidaId: number | null;
 };
 
+type JornadaPendiente = {
+  id: number;
+  codigo: string;
+  nombre: string;
+  fechaJornada: string;
+  entrada: string;
+};
+
 type InfoEmpleadoMarcaje = {
   encontrado: boolean;
   numeroEmpleado?: string;
@@ -70,6 +78,7 @@ export default function MarcajesKioskoPage() {
   const [viajeLargo, setViajeLargo] = useState(false);
 
   const [marcajes, setMarcajes] = useState<Marcaje[]>([]);
+  const [pendientesCierre, setPendientesCierre] = useState<JornadaPendiente[]>([]);
   const [horaEntrada, setHoraEntrada] = useState("08:00:00");
   const [horaSalida, setHoraSalida] = useState("17:00:00");
   const [tolerancia, setTolerancia] = useState(10);
@@ -165,10 +174,11 @@ export default function MarcajesKioskoPage() {
 
     try {
       const m = await fetch(
-        `/api/empresas/${slug}/rrhh/marcajes?desde=${hoy}&hasta=${hoy}`,
+        `/api/empresas/${slug}/rrhh/marcajes?desde=${hoy}&hasta=${hoy}&incluirPendientes=${rolSesion && rolSesion !== "Marcaje" ? "true" : "false"}`,
       ).then((r) => r.json());
 
       setMarcajes(m.marcajes ?? []);
+      setPendientesCierre(m.pendientesCierre ?? []);
 
       if (m.empresa?.nombre) {
         setEmpresaNombre(String(m.empresa.nombre));
@@ -182,7 +192,7 @@ export default function MarcajesKioskoPage() {
     } finally {
       setLoading(false);
     }
-  }, [slug, hoy]);
+  }, [slug, hoy, rolSesion]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -363,6 +373,39 @@ export default function MarcajesKioskoPage() {
           </Link>
         ) : null}
       </div>
+
+      {rolSesion && rolSesion !== "Marcaje" && pendientesCierre.length > 0 ? (
+        <section className="mb-4 rounded-xl border border-amber-700/50 bg-amber-950/20 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="font-semibold text-amber-200">
+                Jornadas anteriores pendientes de cierre ({pendientesCierre.length})
+              </h2>
+              <p className="mt-1 text-xs text-[var(--muted)]">
+                Revisa la hora real de salida. El sistema no cerrará jornadas automáticamente.
+              </p>
+            </div>
+            <Link
+              href={`/e/${slug}/rrhh/marcajes/manual`}
+              className="rounded bg-amber-700 px-3 py-2 text-xs text-white"
+            >
+              Completar en modo manual
+            </Link>
+          </div>
+          <ul className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
+            {pendientesCierre.map((jornada) => (
+              <li key={jornada.id} className="rounded border border-amber-800/40 p-2">
+                <span className="font-medium">{jornada.nombre}</span>
+                <span className="text-[var(--muted)]"> · {jornada.codigo}</span>
+                <br />
+                <span className="text-xs text-[var(--muted)]">
+                  {jornada.fechaJornada} · entrada {jornada.entrada}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       <div className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6 md:p-10">
         <div className="mx-auto max-w-md rounded-xl bg-[var(--input)] px-6 py-4 text-center">
