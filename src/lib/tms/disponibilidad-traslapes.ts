@@ -176,12 +176,14 @@ async function buscarConflictoPersonal(
            ))
      WHERE tp.id = ? AND tp.empresa_id = ?
        AND p.estado IN (${RESERVA_PLACEHOLDERS})
-       ${excluirPlanId ? "AND p.id != ?" : ""}`,
+       ${excluirPlanId ? "AND p.id != ?" : ""}
+       ${SQL_PREFILTRO_OCUPACION}`,
     [
       personalId,
       empresaId,
       ...ESTADOS_QUE_RESERVAN_RECURSOS,
       ...(excluirPlanId ? [excluirPlanId] : []),
+      ...paramsPrefiltroOcupacion(intervalo),
     ],
   );
   return primerCandidatoQueOcupa(rows, "recurso_nombre", intervalo);
@@ -205,12 +207,14 @@ async function buscarConflictoUnidad(
        ON p.empresa_id = u.empresa_id AND p.unidad_id = u.id
      WHERE u.id = ? AND u.empresa_id = ?
        AND p.estado IN (${RESERVA_PLACEHOLDERS})
-       ${excluirPlanId ? "AND p.id != ?" : ""}`,
+       ${excluirPlanId ? "AND p.id != ?" : ""}
+       ${SQL_PREFILTRO_OCUPACION}`,
     [
       unidadId,
       empresaId,
       ...ESTADOS_QUE_RESERVAN_RECURSOS,
       ...(excluirPlanId ? [excluirPlanId] : []),
+      ...paramsPrefiltroOcupacion(intervalo),
     ],
   );
   return primerCandidatoQueOcupa(rows, "recurso_nombre", intervalo);
@@ -327,6 +331,55 @@ export const SQL_LLEGADA_TECNICA = `EXISTS (
   SELECT 1 FROM flota_viajes fv
   WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
 )`;
+
+/**
+ * CORRECCIÓN PR #83 — prefiltro SQL de candidatos, usado por
+ * buscarConflictoPersonal/buscarConflictoUnidad (arriba) ANTES de traer
+ * las filas a JS. Sin este filtro, la query solo acotaba por
+ * `estado IN (...)` — sin límite temporal ni LIMIT — pudiendo leer todo
+ * el historial "activo" del recurso (cualquier plan Programado/En ruta/
+ * Cargado alguna vez asignado a él, sin importar qué tan viejo).
+ *
+ * Por construcción, este filtro es EXACTAMENTE equivalente a lo que
+ * decidirían intervaloOcupacionReal() + seSolapaConOcupacionReal() para
+ * cada fila — no una aproximación amplia: una fila que lo pasa SIEMPRE
+ * haría match ahí, y una que no lo pasa NUNCA lo haría. Aun así, el
+ * helper JS se mantiene como autoridad final (no se agrega `LIMIT` aquí)
+ * — este filtro es solo una reducción segura de candidatos, no un
+ * reemplazo de la lógica de negocio.
+ *
+ * - Programado: solo puede chocar por su intervalo PLANIFICADO — mismo
+ *   criterio de siempre (`regreso_estimado` como fin), incluyendo excluir
+ *   los que no tienen `regreso_estimado` (nunca ocupan, ver
+ *   intervaloOcupacionReal — un Programado sin regreso_estimado jamás
+ *   genera conflicto).
+ * - En ruta / Cargado: NUNCA se filtra por `regreso_estimado` — ese era
+ *   exactamente el bug que corrigió OPS-4.2b (un regreso_estimado vencido
+ *   no puede excluir un viaje que sigue físicamente activo). Solo se
+ *   exige que ya haya iniciado antes de que termine el nuevo intervalo, y
+ *   que NO tenga llegada técnica (con llegada, ya no ocupa — se descarta
+ *   aquí mismo, sin esperar al helper JS).
+ *
+ * Placeholders en el mismo orden que produce paramsPrefiltroOcupacion().
+ */
+const SQL_PREFILTRO_OCUPACION = `AND (
+  (
+    p.estado = 'Programado'
+    AND p.regreso_estimado IS NOT NULL
+    AND TIMESTAMP(p.fecha_plan, COALESCE(p.hora_carga, '00:00:00')) < ?
+    AND p.regreso_estimado > ?
+  )
+  OR (
+    p.estado IN ('En ruta', 'Cargado')
+    AND TIMESTAMP(p.fecha_plan, COALESCE(p.hora_carga, '00:00:00')) < ?
+    AND NOT (${SQL_LLEGADA_TECNICA})
+  )
+)`;
+
+/** Parámetros de SQL_PREFILTRO_OCUPACION, en el mismo orden que sus `?`. */
+function paramsPrefiltroOcupacion(intervalo: IntervaloViaje): [string, string, string] {
+  return [intervalo.fin, intervalo.inicio, intervalo.fin];
+}
 
 /**
  * Estados que, SIN llegada técnica, ocupan el recurso indefinidamente
