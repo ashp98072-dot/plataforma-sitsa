@@ -93,6 +93,7 @@ export default function IncidenciasPage() {
   }, [slug, tab, periodo, empleadoId]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- carga remota al cambiar filtros
     void cargar();
   }, [cargar]);
 
@@ -106,7 +107,6 @@ export default function IncidenciasPage() {
         tipo,
         fechaInicio,
         fechaFin,
-        diasHabiles: 1,
       }),
     });
     const data = await res.json();
@@ -336,6 +336,7 @@ export default function IncidenciasPage() {
                 </button>
               ) : null}
             </div>
+            {/* eslint-disable-next-line react-hooks/static-components -- vista local sin estado */}
             <DetalleLista compact />
           </aside>
         </div>
@@ -391,7 +392,8 @@ export default function IncidenciasPage() {
                 <span>
                   {String(r.emp_codigo)} — {String(r.tipo)} ·{" "}
                   {String(r.fecha_inicio).slice(0, 10)} →{" "}
-                  {String(r.fecha_fin).slice(0, 10)}
+                  {String(r.fecha_fin).slice(0, 10)} ·{" "}
+                  {Number(r.dias_habiles ?? 0)} día(s) hábil(es)
                 </span>
                 <button
                   type="button"
@@ -437,6 +439,7 @@ export default function IncidenciasPage() {
               </button>
             </div>
             <div className="overflow-y-auto p-4">
+              {/* eslint-disable-next-line react-hooks/static-components -- vista local sin estado */}
               <DetalleLista />
             </div>
           </div>
