@@ -269,7 +269,21 @@ export const SQL_LLEGADA_TECNICA = `EXISTS (
  */
 export const ESTADOS_OCUPACION_INDEFINIDA_SIN_LLEGADA = ["En ruta", "Cargado"] as const;
 
-/** Intervalo de ocupación real de un plan. `fin: null` = sin límite superior conocido (nunca termina por sí solo). `null` = no ocupa. */
+/**
+ * Intervalo de ocupación real de un plan.
+ *
+ * `fin: null` tiene un significado ESTRICTO y EXCLUSIVO: "viaje
+ * físicamente activo, sin llegada técnica registrada, sin fin real
+ * conocido" — es decir, únicamente En ruta/Cargado SIN llegada. NUNCA
+ * representa "falta un dato" — un Programado sin `regreso_estimado`
+ * (dato faltante/histórico) no es lo mismo que un viaje sin fin conocido
+ * porque sigue en curso; ese caso se resuelve devolviendo `null` (no
+ * ocupa) en vez de inventarle un `fin` a un plan que ni siquiera ha
+ * salido. Mantener este significado único es lo que permite a
+ * OPS-4.2b razonar `fin === null` como "activo físico" sin ambigüedad.
+ *
+ * `null` (el tipo completo) = no ocupa en absoluto.
+ */
 export type IntervaloOcupacion = { inicio: string; fin: string | null } | null;
 
 /**
@@ -278,13 +292,19 @@ export type IntervaloOcupacion = { inicio: string; fin: string | null } | null;
  * acceso a base de datos (el caller resuelve `llegadaTecnica`, igual que
  * ya hace planes/route.ts para `pendiente_cierre`).
  *
- * - Programado: ocupa por su intervalo PLANIFICADO tal cual siempre
- *   (`fin = regresoEstimado`) — un Programado vencido NO se vuelve
- *   "ocupado indefinido"; simplemente ya no bloquea (mismo comportamiento
- *   de hoy).
+ * - Programado CON `regresoEstimado`: ocupa por su intervalo PLANIFICADO
+ *   tal cual siempre (`fin = regresoEstimado`) — un Programado vencido NO
+ *   se vuelve "ocupado indefinido"; simplemente ya no bloquea (mismo
+ *   comportamiento de hoy).
+ * - Programado SIN `regresoEstimado` (dato faltante — plan histórico
+ *   anterior a la regla que ya lo exige al asignar recursos, ver
+ *   planes/route.ts): `null` (no ocupa). NUNCA `{ inicio, fin: null }` —
+ *   ese `fin: null` está reservado exclusivamente para un viaje
+ *   físicamente en curso (ver arriba); un Programado no ha salido, no
+ *   hay base para tratarlo como "activo sin fin conocido".
  * - En ruta / Cargado SIN llegada técnica: ocupa desde `inicio` sin fin
- *   conocido (`fin = null`) — `regresoEstimado` vencido no libera el
- *   recurso, el viaje sigue físicamente activo.
+ *   conocido (`fin = null`) — `regresoEstimado` vencido (o incluso
+ *   ausente) no libera el recurso, el viaje sigue físicamente activo.
  * - En ruta / Cargado CON llegada técnica: deja de ocupar (`null`) — el
  *   recurso ya volvió físicamente, aunque TMS siga "En ruta" hasta el
  *   cierre administrativo del Jefe de Operaciones.
@@ -299,6 +319,11 @@ export function intervaloOcupacionReal(plan: {
   llegadaTecnica: boolean;
 }): IntervaloOcupacion {
   if (plan.estado === "Programado") {
+    // CORRECCIÓN PR #82: sin regresoEstimado no hay intervalo planificado
+    // que devolver — nunca se usa `fin: null` aquí, ese significado queda
+    // reservado exclusivamente para "viaje físicamente activo sin
+    // llegada" (En ruta/Cargado). No inventar un fin que no existe.
+    if (plan.regresoEstimado == null) return null;
     return { inicio: plan.inicio, fin: plan.regresoEstimado };
   }
   if (
