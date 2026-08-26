@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireTenantModulo } from "@/lib/tenant";
+import { requireTenantProgramacionOTms } from "@/lib/tenant";
 import { listarDisponibilidadPersonal } from "@/lib/operaciones/disponibilidad-personal";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -10,13 +10,15 @@ const FECHA_RE = /^\d{4}-\d{2}-\d{2}$/;
  * GET disponibilidad de personal (piloto/auxiliar) para Operaciones →
  * Programación. Mismo patrón que operaciones/disponibilidad (vehículos):
  * endpoint delgado que envuelve listarDisponibilidadPersonal(), sin lógica
- * propia. Misma puerta de acceso que ya usa GET /tms/planes (requireTenantModulo
- * "tms") — quien puede ver los planes puede ver la disponibilidad de quienes
- * los operan.
+ * propia.
+ *
+ * OPS-5.2b: misma puerta de acceso que ya usa GET /tms/planes
+ * (requireTenantProgramacionOTms — programacion:ver O tms:ver) — quien
+ * puede ver los planes puede ver la disponibilidad de quienes los operan.
  */
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "tms");
+  const guard = await requireTenantProgramacionOTms(slug);
   if (guard.error) return guard.error;
 
   const fecha = new URL(req.url).searchParams.get("fecha");

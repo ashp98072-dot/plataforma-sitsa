@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireTenantModulo } from "@/lib/tenant";
+import { requireTenantProgramacionOTms } from "@/lib/tenant";
 import { crearUbicacionCliente, listarUbicacionesCliente } from "@/lib/tms/cliente-ubicaciones";
 
 type Ctx = { params: Promise<{ slug: string; clienteId: string }> };
@@ -9,10 +9,15 @@ type Ctx = { params: Promise<{ slug: string; clienteId: string }> };
  * VIAT-1 (punto 3) — ubicaciones/paradas guardadas de un cliente
  * (tms_clientes.id, la misma identidad que ya usa tms_planes_viaje.
  * cliente_id). Uso interno TMS/Programación.
+ *
+ * OPS-5.2b: GET y POST aceptan programacion:ver/crear O tms:ver/crear —
+ * confirmado por lectura que plan-form.tsx (guardarNuevaUbicacion) SÍ
+ * crea ubicaciones directamente desde el formulario de Programación
+ * (alta rápida de "Bodega Central", etc.), no solo las lee.
  */
 export async function GET(req: Request, ctx: Ctx) {
   const { slug, clienteId } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "tms");
+  const guard = await requireTenantProgramacionOTms(slug);
   if (guard.error) return guard.error;
 
   const cid = Number(clienteId);
@@ -52,7 +57,7 @@ const schema = z.object({
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug, clienteId } = await ctx.params;
-  const guard = await requireTenantModulo(slug, "tms", true);
+  const guard = await requireTenantProgramacionOTms(slug, "crear");
   if (guard.error) return guard.error;
 
   const cid = Number(clienteId);

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireTenantRutas } from "@/lib/tenant";
+import { requireTenantProgramacionOTms, requireTenantRutas } from "@/lib/tenant";
 import { crearRuta, listarRutas } from "@/lib/tms/cliente-rutas";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -14,17 +14,29 @@ type Ctx = { params: Promise<{ slug: string }> };
  *
  * OPS-5.2a: permiso propio `rutas` (con fallback a `tms` por
  * compatibilidad histórica) — ver requireTenantRutas en tenant.ts.
+ *
+ * OPS-5.2b: el modo ACOTADO (selector de Programación — sin `?todas=1`,
+ * solo rutas activas) TAMBIÉN acepta programacion:ver como segunda
+ * alternativa — confirmado por lectura que RutaSelect (usado por
+ * plan-form.tsx) solo llama este GET sin `todas`, nunca el listado
+ * completo. Principio de mínimo privilegio: programacion:ver deja
+ * ELEGIR una ruta existente, pero el listado ADMINISTRATIVO (`?todas=1`,
+ * incluye inactivas) sigue exigiendo ÚNICAMENTE rutas:ver O tms:ver —
+ * programacion:ver nunca destapa esa vista completa.
  */
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantRutas(slug, "ver");
-  if (guard.error) return guard.error;
-
   const url = new URL(req.url);
   const clienteIdRaw = url.searchParams.get("clienteId");
   const clienteId = clienteIdRaw && Number.isFinite(Number(clienteIdRaw)) ? Number(clienteIdRaw) : undefined;
   const q = url.searchParams.get("q") || undefined;
   const todas = url.searchParams.get("todas") === "1";
+
+  let guard = await requireTenantRutas(slug, "ver");
+  if (guard.error && !todas) {
+    guard = await requireTenantProgramacionOTms(slug);
+  }
+  if (guard.error) return guard.error;
 
   try {
     const rutas = await listarRutas(guard.empresa.id, {
