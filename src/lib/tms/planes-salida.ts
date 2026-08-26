@@ -40,7 +40,12 @@ export async function buscarPlanesParaSalida(
      LEFT JOIN tms_lugares ld ON ld.id = p.lugar_descarga_id
      WHERE p.empresa_id = ?
        AND p.fecha_plan = ?
-       AND p.estado IN ('Programado', 'En ruta')
+       -- OPS-5.2d: "Cargado" significa "el vehículo ya fue cargado/
+       -- preparado, pero TODAVÍA no ha salido" — un candidato válido de
+       -- salida igual que "Programado" (marcar Cargado es opcional, no
+       -- obligatorio). Cerrado/Cancelado/Descargado quedan fuera
+       -- deliberadamente: ya no admiten una nueva salida.
+       AND p.estado IN ('Programado', 'Cargado', 'En ruta')
      ORDER BY p.id DESC
      LIMIT 50`,
     [empresaId, fecha],
@@ -118,13 +123,23 @@ export async function buscarPlanesParaSalida(
   return out;
 }
 
+/**
+ * OPS-5.2d: acepta transición desde "Programado" O "Cargado" — "Cargado"
+ * significa "el vehículo ya fue cargado/preparado, pero TODAVÍA no ha
+ * salido" (definición aprobada del negocio), así que la salida real del
+ * piloto también debe poder avanzarlo a "En ruta". Antes solo aceptaba
+ * "Programado": si Operaciones había marcado el plan como "Cargado" a
+ * mano, la salida del piloto no lo movía y quedaba atascado ahí
+ * indefinidamente. Deliberadamente NO incluye "Cerrado"/"Cancelado"/
+ * "Descargado" — esos estados ya no admiten una nueva salida.
+ */
 export async function marcarPlanEnRuta(
   empresaId: number,
   planId: number,
 ): Promise<void> {
   await execute(
     `UPDATE tms_planes_viaje SET estado = 'En ruta'
-     WHERE id = ? AND empresa_id = ? AND estado = 'Programado'`,
+     WHERE id = ? AND empresa_id = ? AND estado IN ('Programado', 'Cargado')`,
     [planId, empresaId],
   ).catch(() => undefined);
 }

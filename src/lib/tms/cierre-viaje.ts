@@ -20,6 +20,18 @@ import { registrarAuditoria } from "@/lib/auditoria";
  * plan (fv.plan_id = p.id, fv.estado = 'cerrado') — si el piloto
  * todavía no ha regresado, no hay nada que cerrar.
  *
+ * OPS-5.2d: "Cargado" (definición aprobada del negocio: el vehículo ya
+ * fue cargado/preparado pero TODAVÍA no ha salido) sigue exactamente el
+ * mismo criterio que "En ruta" — también puede cerrarse SI ya existe
+ * llegada técnica registrada. Esto es compatibilidad/reparación de
+ * casos históricos o anómalos (en el flujo normal, "Cargado" avanza a
+ * "En ruta" en cuanto el piloto registra salida — ver marcarPlanEnRuta
+ * en planes-salida.ts — así que el cierre normalmente llegará desde
+ * "En ruta"); pero si un plan quedó en "Cargado" con llegada ya
+ * registrada, no se obliga a editarlo artificialmente a "En ruta" solo
+ * para poder cerrarlo. "Cargado" SIN llegada sigue sin poder cerrarse,
+ * igual que "En ruta" sin llegada.
+ *
  * Compatibilidad: los planes que ya quedaron en "Descargado" por el
  * flujo anterior (antes de esta corrección) también se pueden cerrar
  * directamente, sin exigir la subconsulta a flota_viajes.
@@ -58,7 +70,7 @@ export async function cerrarViaje(
        AND (
          p.estado = 'Descargado'
          OR (
-           p.estado = 'En ruta'
+           p.estado IN ('En ruta', 'Cargado')
            AND EXISTS (
              SELECT 1 FROM flota_viajes fv
              WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
@@ -85,7 +97,16 @@ export async function cerrarViaje(
     if (estadoActual === "Cerrado") {
       return { ok: false, error: "Este viaje ya fue cerrado." };
     }
-    if (estadoActual === "En ruta" && !llegadaRegistrada) {
+    // OPS-5.2d: "Cargado" sigue el mismo criterio que "En ruta" — si
+    // llegó hasta aquí (no hizo match en el UPDATE de arriba) es porque
+    // TODAVÍA no tiene llegada técnica registrada; nunca porque estar
+    // "Cargado" en sí mismo sea insuficiente. Mismo mensaje para ambos
+    // estados — evita el mensaje engañoso anterior ("solo se puede
+    // cerrar cuando el piloto ya registró la llegada") que un plan
+    // "Cargado" CON llegada ya registrada habría recibido antes de esta
+    // corrección (ese caso ahora cierra directamente en el UPDATE, sin
+    // llegar a este bloque).
+    if ((estadoActual === "En ruta" || estadoActual === "Cargado") && !llegadaRegistrada) {
       return {
         ok: false,
         error: "El piloto todavía no ha registrado la llegada de este viaje; no se puede cerrar todavía.",

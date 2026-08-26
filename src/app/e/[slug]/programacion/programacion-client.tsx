@@ -115,6 +115,12 @@ type Rango = "hoy" | "manana" | "semana";
 
 const ESTADO_LABEL: Record<string, string> = {
   Programado: "Programado",
+  // OPS-5.2d: "Cargado" = el vehículo ya fue cargado/preparado, pero
+  // TODAVÍA no ha salido (definición aprobada del negocio) — sin label
+  // propio antes, caía al fallback genérico (p.estado crudo). Marcarlo
+  // sigue siendo opcional: un plan puede pasar directo de Programado a
+  // En ruta sin pasar por aquí.
+  Cargado: "Cargado",
   "En ruta": "En ruta",
   // Compatibilidad: planes históricos que ya quedaron en "Descargado" con
   // el flujo anterior. Ya no se genera para viajes nuevos.
@@ -142,6 +148,9 @@ const ESTADO_VEHICULO_BADGE: Record<EstadoVehiculo["estadoDisponibilidad"], stri
 
 const ESTADO_BADGE: Record<string, string> = {
   Programado: "bg-sky-900/50 text-sky-200",
+  // OPS-5.2d: color propio, distinto de Programado (sky) y En ruta
+  // (amber) — "Cargado" es un paso intermedio visualmente distinguible.
+  Cargado: "bg-violet-900/50 text-violet-200",
   "En ruta": "bg-amber-900/50 text-amber-200",
   // Compatibilidad histórica (ver ESTADO_LABEL).
   Descargado: "bg-amber-900/50 text-amber-200",
