@@ -12,7 +12,7 @@ export async function listarHistorialViaticosPropios(empresaId: number, empleado
      FROM tms_viaticos v
      INNER JOIN tms_personal tp ON tp.id = v.personal_id AND tp.empresa_id = v.empresa_id
      INNER JOIN tms_planes_viaje pl ON pl.id = v.plan_id AND pl.empresa_id = v.empresa_id
-     WHERE v.empresa_id = ? AND tp.id_empleado = ? AND tp.tipo = 'Piloto'
+     WHERE v.empresa_id = ? AND tp.id_empleado = ? AND tp.tipo IN ('Piloto', 'Auxiliar')
      ORDER BY pl.fecha_plan DESC, v.id DESC LIMIT 51 OFFSET ?`,
     [empresaId, empleadoId, offset],
   );

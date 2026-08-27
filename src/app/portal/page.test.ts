@@ -37,3 +37,19 @@ it("no ofrece la tarjeta de viáticos de piloto a personal no operativo", async 
   vi.mocked(obtenerPersonalOperativoDeEmpleado).mockResolvedValue(null);
   expect(enlaces(await PortalHomePage())).not.toContain("/portal/viaticos");
 });
+it("auxiliar vinculado a TMS también ve sus viáticos", async () => {
+  vi.mocked(obtenerPersonalOperativoDeEmpleado).mockResolvedValue({ id: 8, tipo: "Auxiliar", nombre: "Prueba" });
+  expect(enlaces(await PortalHomePage())).toContain("/portal/viaticos");
+});
+it.each(["Piloto de Transporte", "Piloto 10 toneladas", "AUXILIAR DE TRANSPORTE", "Auxiliar"])("muestra viáticos por puesto RRHH sin exigir vínculo previo TMS: %s", async (puesto) => {
+  vi.mocked(obtenerPersonalOperativoDeEmpleado).mockResolvedValue(null);
+  vi.mocked(obtenerEmpleado).mockResolvedValue({ puesto, estado: "Activo", categoriaOps: "Transportes" } as NonNullable<Awaited<ReturnType<typeof obtenerEmpleado>>>);
+  const links = enlaces(await PortalHomePage());
+  expect(links).toContain("/portal/viaticos");
+  expect(links).not.toContain("/portal/viajes"); // no concede acceso operativo por título.
+});
+it.each(["Auxiliar de Recursos Humanos", "Administrativo", "Empleados de servicios de transporte"])("el área Transportes por sí sola no convierte el puesto en piloto/auxiliar: %s", async (puesto) => {
+  vi.mocked(obtenerPersonalOperativoDeEmpleado).mockResolvedValue(null);
+  vi.mocked(obtenerEmpleado).mockResolvedValue({ puesto, estado: "Activo", categoriaOps: "Transportes" } as NonNullable<Awaited<ReturnType<typeof obtenerEmpleado>>>);
+  expect(enlaces(await PortalHomePage())).not.toContain("/portal/viaticos");
+});
