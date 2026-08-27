@@ -342,6 +342,21 @@ export function AppShell({
         key: "rutas",
       });
     }
+    // Multas y sanciones (MULTAS-2/3): permiso propio "multas", exige TMS
+    // habilitado (requireTenantMultas). Mismo criterio que Rutas arriba —
+    // SOLO permisos efectivos, nunca un bypass por rol (sección 21 del
+    // ticket lo pide explícito: "Usar permiso multas:ver. NO usar rol.").
+    const puedeMultas =
+      rol !== "Piloto" &&
+      opsMods.includes("tms") &&
+      (isAdmin || permisos.length === 0 || tienePermiso(permisos, "multas", "ver"));
+    if (puedeMultas) {
+      opsLinks.push({
+        href: `${base}/operaciones/multas`,
+        label: "Multas y sanciones",
+        key: "multas",
+      });
+    }
     if (puedeUsarPortalesProveedores(rol as RolGlobal)) {
       opsLinks.push({
         href: `${base}/portales-proveedores`,

@@ -449,6 +449,10 @@ export default function DescuentosPage() {
           <Link href={`/e/${slug}/dashboard-rrhh`} className="text-[var(--accent)] underline">
             Dashboard RRHH
           </Link>
+          {" · "}
+          <Link href={`/e/${slug}/rrhh/descuentos/multas-pendientes`} className="text-[var(--accent)] underline">
+            Multas pendientes de descuento
+          </Link>
         </p>
       </div>
 

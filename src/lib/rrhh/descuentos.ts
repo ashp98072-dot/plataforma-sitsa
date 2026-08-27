@@ -1010,6 +1010,34 @@ export async function reanudarDescuento(
 // Cancelar
 // ---------------------------------------------------------------------------
 
+/**
+ * Núcleo de la cancelación (MULTAS-3.2, exportada — mismo espíritu que
+ * crearDescuentoInterno/autorizarDescuentoInterno): cancela cuotas
+ * PENDIENTE y pasa el maestro a CANCELADO. Recibe `conn` — no abre ni
+ * confirma ninguna transacción propia, participa en la del llamador. NO
+ * repite la validación de estado/motivo — eso lo hace cancelarDescuento()
+ * (o, en el caso de anular una multa con descuento vinculado sin cuotas
+ * aplicadas, el llamador ya validó eso dentro de su propia transacción —
+ * ver anularMultaConDescuentoVinculado en multas/backend.ts).
+ */
+export async function cancelarDescuentoInterno(
+  conn: PoolConnection,
+  empresaId: number,
+  descuentoId: number,
+  motivo: string,
+): Promise<void> {
+  await conn.execute(
+    `UPDATE rrhh_descuento_cuotas SET estado = 'CANCELADA'
+     WHERE empresa_id = ? AND descuento_id = ? AND estado = 'PENDIENTE'`,
+    [empresaId, descuentoId],
+  );
+  await conn.execute(
+    `UPDATE rrhh_descuentos_maestro SET estado = 'CANCELADO', motivo_cancelacion = ?
+     WHERE id = ? AND empresa_id = ?`,
+    [motivo.trim(), descuentoId, empresaId],
+  );
+}
+
 export async function cancelarDescuento(
   empresaId: number,
   descuentoId: number,
@@ -1032,16 +1060,7 @@ export async function cancelarDescuento(
   const conn = await getPool().getConnection();
   try {
     await conn.beginTransaction();
-    await conn.execute(
-      `UPDATE rrhh_descuento_cuotas SET estado = 'CANCELADA'
-       WHERE empresa_id = ? AND descuento_id = ? AND estado = 'PENDIENTE'`,
-      [empresaId, descuentoId],
-    );
-    await conn.execute(
-      `UPDATE rrhh_descuentos_maestro SET estado = 'CANCELADO', motivo_cancelacion = ?
-       WHERE id = ? AND empresa_id = ?`,
-      [motivo.trim(), descuentoId, empresaId],
-    );
+    await cancelarDescuentoInterno(conn, empresaId, descuentoId, motivo);
     await conn.commit();
   } catch (e) {
     await conn.rollback();
