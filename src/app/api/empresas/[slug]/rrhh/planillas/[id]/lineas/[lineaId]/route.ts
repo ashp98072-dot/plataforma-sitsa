@@ -10,7 +10,7 @@ type Ctx = {
 
 const schema = z.object({
   formaPago: z.enum(["efectivo", "cheque", "transferencia"]).optional(),
-  isr: z.number().optional(),
+  isr: z.number().finite().nonnegative().optional(),
   estadoPago: z.enum(["Pendiente", "Pagado"]).optional(),
   refPago: z.string().nullable().optional(),
   notas: z.string().nullable().optional(),
@@ -30,7 +30,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
   }
   const d = parsed.data;
-  const linea = await actualizarLinea(guard.empresa.id, lid, {
+  try {
+  const linea = await actualizarLinea(guard.empresa.id, periodoId, lid, {
     formaPago: d.formaPago ? normalizarFormaPago(d.formaPago) : undefined,
     isr: d.isr,
     estadoPago: d.estadoPago,
@@ -47,4 +48,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
     lineas,
     cuadre: calcularCuadre(lineas),
   });
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "No se pudo actualizar la línea." }, { status: 409 });
+  }
 }

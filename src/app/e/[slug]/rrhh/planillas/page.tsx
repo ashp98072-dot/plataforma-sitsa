@@ -344,7 +344,7 @@ export default function PlanillasPage() {
   }
 
   function solicitarCancelacion() {
-    const motivo = window.prompt("Motivo de la cancelación (obligatorio):");
+    const motivo = window.prompt("Cancelar libera las cuotas y horas extra reservadas para otra planilla, conserva las líneas históricas y no permite revertir pagos. Motivo de la cancelación (obligatorio):");
     if (motivo == null) return;
     if (!motivo.trim()) {
       setError("Debes indicar un motivo para cancelar el periodo.");

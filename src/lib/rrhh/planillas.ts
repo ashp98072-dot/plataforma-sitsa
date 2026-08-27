@@ -14,14 +14,14 @@ import { obtenerRangoPeriodo } from "@/lib/rrhh/periodos";
 import {
   aplicarCuotasElegibles,
   sumaCuotasAplicadasPorPeriodo,
-  tieneCuotasAplicadasEnPeriodo,
 } from "@/lib/rrhh/descuentos";
 import {
   aplicarHorasExtraElegibles,
   sumaHorasExtraAplicadasPorPeriodo,
-  tieneHorasExtraAplicadasEnPeriodo,
 } from "@/lib/rrhh/horas-extra";
-import { registrarAuditoria } from "@/lib/auditoria";
+import { registrarAuditoria, registrarAuditoriaTx } from "@/lib/auditoria";
+import { conPeriodoBloqueado } from "./planilla-control";
+import { liberarReservasPeriodo } from "./planilla-reversion";
 
 /** Fase P0: identidad opcional de quincena/mes de un periodo. */
 export type TipoPeriodo = "QUINCENA_1" | "QUINCENA_2" | "MENSUAL" | "ESPECIAL";
@@ -505,17 +505,14 @@ export type ResultadoCancelarPeriodo =
  * Cancelado queda excluido del control de solapamiento de crearPeriodo() y
  * bloqueado para generar/regenerar (ver generarLineasPeriodo).
  *
- * Fase D2: si el periodo ya tiene cuotas D1 APLICADA vinculadas, se bloquea
- * la cancelación — no dejamos descuentos cobrados contra una planilla
- * cancelada. La reversión explícita de cuotas no está implementada todavía.
- *
- * Fase H2: mismo criterio para horas extra APLICADA_EN_PLANILLA — no
- * dejamos horas extra pagadas contra una planilla cancelada.
+ * Libera cuotas y horas reservadas únicamente cuando no hay pagos.
+ * Conserva las líneas históricas y audita la reversión en la misma transacción.
  */
 export async function cancelarPeriodo(
   empresaId: number,
   periodoId: number,
   motivoCancelacion: string,
+  usuario: string,
 ): Promise<ResultadoCancelarPeriodo> {
   await asegurarSchemaPlanillas();
 
@@ -531,35 +528,33 @@ export async function cancelarPeriodo(
   if (!periodo) {
     return { ok: false, motivo: "no_encontrado", mensaje: "Periodo no encontrado." };
   }
-  if (periodo.estado !== "Borrador" && periodo.estado !== "Generada") {
+  return conPeriodoBloqueado<ResultadoCancelarPeriodo>(empresaId, periodoId, async (conn, estado) => {
+  if (estado !== "Borrador" && estado !== "Generada") {
     return {
       ok: false,
       motivo: "estado_no_permite",
-      mensaje: `No se puede cancelar un periodo en estado "${periodo.estado}".`,
+      mensaje: `No se puede cancelar un periodo en estado "${estado}".`,
     };
   }
-  if (await tieneCuotasAplicadasEnPeriodo(empresaId, periodoId)) {
-    return {
-      ok: false,
-      motivo: "cuotas_aplicadas",
-      mensaje: "El periodo tiene descuentos aplicados. Debe revertirse antes de cancelarlo.",
-    };
-  }
-  if (await tieneHorasExtraAplicadasEnPeriodo(empresaId, periodoId)) {
-    return {
-      ok: false,
-      motivo: "horas_extra_aplicadas",
-      mensaje: "El periodo tiene horas extra aplicadas. Debe revertirse antes de cancelarlo.",
-    };
-  }
+  const [pagos] = await conn.query<RowDataPacket[]>(
+    "SELECT id FROM rrhh_planilla_lineas WHERE empresa_id = ? AND periodo_id = ? AND estado_pago = 'Pagado' LIMIT 1 FOR UPDATE",
+    [empresaId, periodoId],
+  );
+  if (pagos.length) return { ok: false, motivo: "estado_no_permite", mensaje: "No se puede cancelar una planilla con pagos registrados." };
+  await liberarReservasPeriodo(conn, empresaId, periodoId, usuario);
 
-  await execute(
+  await conn.execute(
     `UPDATE rrhh_planilla_periodos
      SET estado = 'Cancelado', motivo_cancelacion = ?
      WHERE id = ? AND empresa_id = ?`,
     [motivoCancelacion.trim(), periodoId, empresaId],
   );
+  await registrarAuditoriaTx(conn, {
+    empresaId, usuario, accion: "cancelar_periodo_planilla", modulo: "rrhh",
+    detalle: JSON.stringify({ periodoId, estadoAnterior: estado, motivo: motivoCancelacion.trim() }),
+  });
   return { ok: true };
+  });
 }
 
 export async function listarLineas(
@@ -741,8 +736,9 @@ export async function listarPrestacionesDetalle(
 
 /**
  * Genera (o regenera) líneas de nómina del periodo.
- * Conserva estado_pago / ref_pago / isr / forma_pago si la línea ya existía
- * y se pide conservarPagos.
+ * Conserva ID, referencias, notas, ISR y forma de pago de líneas existentes.
+ * Rechaza regenerar si hay pagos registrados. conservarPagos se acepta por
+ * compatibilidad, pero ya no permite descartar datos persistidos.
  *
  * Fase D2: además de los descuentos legado (rrhh_descuentos, sin cambios),
  * aplica dentro de la MISMA transacción las cuotas D1 (rrhh_descuento_cuotas)
@@ -828,11 +824,6 @@ export async function generarLineasPeriodo(
     );
   }
 
-  const prev = opts?.conservarPagos
-    ? await listarLineas(empresaId, periodoId)
-    : [];
-  const prevMap = new Map(prev.map((l) => [l.empleadoId, l]));
-
   const empleados = await query<RowDataPacket[]>(
     `SELECT id, codigo, nombre, dpi, tipo_contrato, forma_pago,
             sueldo_base, bono_incentivo, bono_herramientas
@@ -867,6 +858,30 @@ export async function generarLineasPeriodo(
   try {
     await conn.beginTransaction();
 
+    // Serializa regeneraciones y vuelve a validar el estado tras esperar el lock.
+    const [periodosBloqueados] = await conn.query<RowDataPacket[]>(
+      `SELECT estado FROM rrhh_planilla_periodos WHERE id = ? AND empresa_id = ? FOR UPDATE`,
+      [periodoId, empresaId],
+    );
+    if (!periodosBloqueados[0] || !["Borrador", "Generada"].includes(String(periodosBloqueados[0].estado))) {
+      throw new Error("El periodo ya no está abierto para generar. Actualiza la pantalla.");
+    }
+    const [prevRows] = await conn.query<RowDataPacket[]>(
+      `SELECT * FROM rrhh_planilla_lineas WHERE empresa_id = ? AND periodo_id = ? FOR UPDATE`,
+      [empresaId, periodoId],
+    );
+    const prev = prevRows.map(mapLinea);
+    if (prev.some((linea) => linea.estadoPago === "Pagado")) {
+      throw new Error("No se puede regenerar una planilla con pagos registrados. Debe revisarse antes de modificar importes.");
+    }
+    const empleadosIncluidos = new Set(empleados.map((e) => Number(e.id)));
+    if (prev.some((linea) => !empleadosIncluidos.has(linea.empleadoId))) {
+      throw new Error("Hay empleados de esta planilla que ya no están activos. No se eliminaron sus líneas; revisa sus movimientos antes de regenerar.");
+    }
+    // Nunca descartar referencias/notas ni ajustes al regenerar, incluso si un
+    // cliente antiguo envía conservarPagos=false.
+    const prevMap = new Map(prev.map((l) => [l.empleadoId, l]));
+
     const aplicado = await aplicarCuotasElegibles(
       conn,
       empresaId,
@@ -880,6 +895,9 @@ export async function generarLineasPeriodo(
     // APLICADA de una generación anterior de este mismo periodo — ambas
     // comparten planilla_periodo_id = periodo.id en este punto.
     const descuentosD1 = await sumaCuotasAplicadasPorPeriodo(conn, empresaId, periodoId);
+    if ([...descuentosD1.keys()].some((id) => !empleadosIncluidos.has(id))) {
+      throw new Error("Una cuota corresponde a un empleado no incluido. La generación se revirtió sin modificar los descuentos.");
+    }
 
     // Fase H2: mismo patrón exacto que las cuotas D1 justo arriba.
     const aplicadoHoras = await aplicarHorasExtraElegibles(conn, empresaId, {
@@ -918,10 +936,14 @@ export async function generarLineasPeriodo(
          FROM rrhh_planilla_periodos p
          INNER JOIN rrhh_planilla_lineas l ON l.periodo_id = p.id AND l.empresa_id = p.empresa_id
          WHERE p.empresa_id = ? AND p.tipo_periodo = 'QUINCENA_1'
-           AND p.mes = ? AND p.anio = ? AND p.estado <> 'Cancelado'`,
+           AND p.mes = ? AND p.anio = ? AND p.estado <> 'Cancelado'
+         FOR UPDATE`,
         [empresaId, periodo.mes, periodo.anio],
       );
       for (const r of q1Rows) {
+        if (datosQ1PorEmpleado.has(Number(r.id_empleado))) {
+          throw new Error("Hay más de una primera quincena para el mismo empleado. Revisa los períodos antes de generar.");
+        }
         datosQ1PorEmpleado.set(Number(r.id_empleado), {
           sueldoBase: Number(r.sueldo_base ?? 0),
           bonoIncentivo: Number(r.bono_incentivo ?? 0),
@@ -932,11 +954,6 @@ export async function generarLineasPeriodo(
         });
       }
     }
-
-    await conn.execute(
-      `DELETE FROM rrhh_planilla_lineas WHERE empresa_id = ? AND periodo_id = ?`,
-      [empresaId, periodoId],
-    );
 
     for (const e of empleados) {
       const empId = Number(e.id);
@@ -975,9 +992,7 @@ export async function generarLineasPeriodo(
         Number(periodo.fechaInicio.slice(0, 4)) || new Date().getFullYear();
       const isrMensual = out
         ? 0
-        : anterior && anterior.isr != null
-          ? Number(anterior.isr) || 0
-          : calcularISRMensual(sueldo, bonoInc, anioFiscal);
+        : calcularISRMensual(sueldo, bonoInc, anioFiscal);
 
       let sueldoLinea: number;
       let bonoIncLinea: number;
@@ -1037,6 +1052,20 @@ export async function generarLineasPeriodo(
         : normalizarFormaPago(String(e.forma_pago ?? "transferencia"));
       const estadoPago = anterior?.estadoPago === "Pagado" ? "Pagado" : "Pendiente";
       const refPago = anterior?.refPago ?? "";
+      // El ISR persistido ya es del período, no un importe mensual a dividir.
+      if (anterior) isr = anterior.isr;
+      // No convertir una diferencia inconsistente en retención negativa
+      // (o devolución automática). Requiere revisión explícita de RRHH.
+      const conceptos = {
+        sueldo: sueldoLinea, bonoIncentivo: bonoIncLinea,
+        bonoHerramientas: bonoHerrLinea, igssLaboral: igssLab,
+        igssPatronal: igssPat, isr,
+      };
+      for (const [concepto, importe] of Object.entries(conceptos)) {
+        if (!Number.isFinite(importe) || importe < 0) {
+          throw new Error(`El concepto ${concepto} del empleado #${empId} resulta negativo o inválido. Revisa la primera quincena y los importes mensuales; no se guardó la generación.`);
+        }
+      }
       const neto = redondearQ(
         sueldoLinea + bonoIncLinea + bonoHerrLinea + otros - igssLab - desc - isr,
       );
@@ -1047,7 +1076,14 @@ export async function generarLineasPeriodo(
            dpi, tipo_contrato, forma_pago, sueldo_base, bono_incentivo, bono_herramientas,
            otros_ingresos, igss_laboral, igss_patronal, descuentos, isr, neto,
            estado_pago, ref_pago)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           codigo_empleado = VALUES(codigo_empleado), nombre_empleado = VALUES(nombre_empleado),
+           dpi = VALUES(dpi), tipo_contrato = VALUES(tipo_contrato),
+           sueldo_base = VALUES(sueldo_base), bono_incentivo = VALUES(bono_incentivo),
+           bono_herramientas = VALUES(bono_herramientas), otros_ingresos = VALUES(otros_ingresos),
+           igss_laboral = VALUES(igss_laboral), igss_patronal = VALUES(igss_patronal),
+           descuentos = VALUES(descuentos), neto = VALUES(neto)`,
         [
           empresaId,
           periodoId,
@@ -1242,6 +1278,7 @@ export async function calcularCuadreIgssMensual(
 
 export async function actualizarLinea(
   empresaId: number,
+  periodoId: number,
   lineaId: number,
   patch: {
     formaPago?: FormaPago;
@@ -1252,12 +1289,23 @@ export async function actualizarLinea(
   },
 ): Promise<PlanillaLinea | null> {
   await asegurarSchemaPlanillas();
-  const rows = await query<RowDataPacket[]>(
-    `SELECT * FROM rrhh_planilla_lineas WHERE empresa_id = ? AND id = ? LIMIT 1`,
-    [empresaId, lineaId],
+  return conPeriodoBloqueado(empresaId, periodoId, async (conn, estadoPeriodo) => {
+  if (!["Generada", "Cerrada"].includes(estadoPeriodo)) throw new Error("El periodo no permite cambios de líneas.");
+  const [rows] = await conn.query<RowDataPacket[]>(
+    `SELECT * FROM rrhh_planilla_lineas WHERE empresa_id = ? AND periodo_id = ? AND id = ? FOR UPDATE`,
+    [empresaId, periodoId, lineaId],
   );
   if (!rows[0]) return null;
   const cur = mapLinea(rows[0]);
+  if (patch.isr != null && (!Number.isFinite(patch.isr) || patch.isr < 0)) throw new Error("El ISR debe ser un importe no negativo.");
+  const cambiaImporte = patch.isr != null && redondearQ(patch.isr) !== cur.isr;
+  const cambiaForma = patch.formaPago != null && normalizarFormaPago(patch.formaPago) !== cur.formaPago;
+  if ((estadoPeriodo === "Cerrada" || cur.estadoPago === "Pagado") && (cambiaImporte || cambiaForma)) {
+    throw new Error("No se pueden cambiar importes ni forma de pago de una planilla cerrada o una línea pagada.");
+  }
+  if (cur.estadoPago === "Pagado" && patch.estadoPago === "Pendiente") {
+    throw new Error("Un pago registrado requiere una reversión explícita; no puede volver a pendiente desde esta edición.");
+  }
   const forma = patch.formaPago
     ? normalizarFormaPago(patch.formaPago)
     : cur.formaPago;
@@ -1280,7 +1328,7 @@ export async function actualizarLinea(
       isr,
   );
 
-  await execute(
+  await conn.execute(
     `UPDATE rrhh_planilla_lineas SET
       forma_pago = ?, isr = ?, neto = ?, estado_pago = ?, ref_pago = ?, notas = ?
      WHERE id = ? AND empresa_id = ?`,
@@ -1295,18 +1343,8 @@ export async function actualizarLinea(
       empresaId,
     ],
   );
-  return obtenerLinea(empresaId, lineaId);
-}
-
-async function obtenerLinea(
-  empresaId: number,
-  lineaId: number,
-): Promise<PlanillaLinea | null> {
-  const rows = await query<RowDataPacket[]>(
-    `SELECT * FROM rrhh_planilla_lineas WHERE empresa_id = ? AND id = ? LIMIT 1`,
-    [empresaId, lineaId],
-  );
-  return rows[0] ? mapLinea(rows[0]) : null;
+  return { ...cur, formaPago: forma, isr, neto, estadoPago, refPago, notas };
+  });
 }
 
 export async function marcarPagos(
@@ -1319,6 +1357,9 @@ export async function marcarPagos(
   },
 ): Promise<number> {
   await asegurarSchemaPlanillas();
+  return conPeriodoBloqueado(empresaId, periodoId, async (conn, estado) => {
+  if (!["Generada", "Cerrada"].includes(estado)) throw new Error("El periodo no permite registrar pagos.");
+  if (opts.estadoPago === "Pendiente") throw new Error("Los pagos requieren una reversión explícita; no se pueden desmarcar en lote.");
   const params: (string | number)[] = [opts.estadoPago, empresaId, periodoId];
   let sql = `UPDATE rrhh_planilla_lineas SET estado_pago = ?
               WHERE empresa_id = ? AND periodo_id = ?`;
@@ -1329,8 +1370,9 @@ export async function marcarPagos(
   if (opts.soloPendientes && opts.estadoPago === "Pagado") {
     sql += ` AND estado_pago = 'Pendiente'`;
   }
-  const r = await execute(sql, params);
+  const [r] = await conn.execute<ResultSetHeader>(sql, params);
   return Number((r as ResultSetHeader).affectedRows ?? 0);
+  });
 }
 
 export async function actualizarEstadoPeriodo(
@@ -1339,10 +1381,23 @@ export async function actualizarEstadoPeriodo(
   estado: string,
 ): Promise<void> {
   await asegurarSchemaPlanillas();
-  await execute(
+  await conPeriodoBloqueado(empresaId, periodoId, async (conn, actual) => {
+  if (!((actual === "Generada" && estado === "Cerrada") || (actual === "Cerrada" && estado === "Generada"))) {
+    throw new Error(`Transición de planilla no permitida: ${actual} → ${estado}.`);
+  }
+  const [lineas] = await conn.query<RowDataPacket[]>(
+    "SELECT id, estado_pago FROM rrhh_planilla_lineas WHERE empresa_id = ? AND periodo_id = ? FOR UPDATE",
+    [empresaId, periodoId],
+  );
+  if (!lineas.length) throw new Error("No se puede cerrar o reabrir una planilla sin líneas.");
+  if (estado === "Generada" && lineas.some((l) => l.estado_pago === "Pagado")) {
+    throw new Error("No se puede reabrir una planilla con pagos registrados.");
+  }
+  await conn.execute(
     `UPDATE rrhh_planilla_periodos SET estado = ? WHERE id = ? AND empresa_id = ?`,
     [estado, periodoId, empresaId],
   );
+  });
 }
 
 export async function contarEmpleadosActivos(
