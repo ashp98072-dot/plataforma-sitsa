@@ -1,5 +1,7 @@
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
+import { execute as executeDirect, query as queryDirect, getPool, type SqlParams } from "@/lib/db";
+import type { PoolConnection, ResultSetHeader } from "mysql2/promise";
 import {
   calcularEstadoAsistenciaSync,
   minutosRetraso,
@@ -24,8 +26,9 @@ async function tieneJornadaCompletaHoy(
   empresaId: number,
   idEmpleado: number,
   fechaJornada: string,
+  consultar: typeof query = query,
 ): Promise<boolean> {
-  const rows = await query<RowDataPacket[]>(
+  const rows = await consultar<RowDataPacket[]>(
     `SELECT id FROM sesiones_trabajo
      WHERE empresa_id = ? AND id_empleado = ? AND fecha_jornada = ?
        AND (estado = 'CERRADA' OR estado = 'Cerrada')
@@ -370,14 +373,20 @@ export async function registrarMarcajeKiosko(
     longitud?: number | null;
     requerirUbicacionRegistrada?: boolean;
   },
+  portal?: { conn: PoolConnection; empleadoId: number },
 ): Promise<ResultadoMarcajeKiosko> {
+  // Solo el portal proporciona esta conexión e identidad, resueltas en servidor.
+  const query = async <T extends RowDataPacket[]>(sql: string, params: SqlParams = []): Promise<T> =>
+    portal ? (await portal.conn.query<T>(sql, params))[0] : queryDirect<T>(sql, params);
+  const execute = async (sql: string, params: SqlParams = []): Promise<ResultSetHeader> =>
+    portal ? (await portal.conn.execute<ResultSetHeader>(sql, params))[0] : executeDirect(sql, params);
   /*
    * Por compatibilidad con la API/UI actual el campo todavía
    * se llama "codigo" por compatibilidad interna, pero representa el DPI.
    */
   const dpi = input.codigo.replace(/\D/g, "");
 
-  if (!/^\d{13}$/.test(dpi)) {
+  if (!portal && !/^\d{13}$/.test(dpi)) {
     return {
       ok: false,
       code: "EMPTY",
@@ -403,9 +412,9 @@ export async function registrarMarcajeKiosko(
        hora_entrada_teorica,
        tipo_horario
      FROM empleados
-     WHERE dpi = ?
-     LIMIT 1`,
-    [dpi],
+     WHERE ${portal ? "id = ? AND empresa_id = ?" : "dpi = ?"}
+     LIMIT 1${portal ? " FOR UPDATE" : ""}`,
+    portal ? [portal.empleadoId, _empresaKioskoId] : [dpi],
   );
 
   if (!empRows[0]) {
@@ -568,6 +577,7 @@ export async function registrarMarcajeKiosko(
       empresaId,
       idEmpleado,
       fechaJornada,
+      query,
     )
   ) {
     return {
@@ -854,25 +864,33 @@ export async function registrarMarcajePortal(
   empresaId: number,
   empleadoId: number,
   input: { latitud: number; longitud: number },
+  foto: { relative: string; original: string; size: number; mime: string },
 ): Promise<ResultadoMarcajeKiosko> {
-  const rows = await query<RowDataPacket[]>(
-    `SELECT numero_empleado
-     FROM empleados
-     WHERE id = ? AND empresa_id = ? AND estado <> 'Baja'
-     LIMIT 1`,
-    [empleadoId, empresaId],
-  );
-  if (!rows[0]?.numero_empleado) {
-    return {
-      ok: false,
-      code: "EMPLEADO_INVALIDO",
-      error: "Tu colaborador no está activo o no tiene número de empleado asignado.",
-    };
+  const conn = await getPool().getConnection();
+  try {
+    await conn.beginTransaction();
+    const resultado = await registrarMarcajeKiosko(empresaId, {
+      codigo: "", ...input, requerirUbicacionRegistrada: true,
+    }, { conn, empleadoId });
+    if (!resultado.ok) {
+      await conn.rollback();
+      return resultado;
+    }
+    await conn.execute(
+      `INSERT INTO marcaje_evidencias
+       (empresa_id, sesion_id, tipo, ruta_relativa, nombre_original, mime, tamano,
+        latitud, longitud, ubicacion_id, capturado_en, registrado_por)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [empresaId, resultado.sesionId, resultado.tipo.toLowerCase(), foto.relative,
+        foto.original, foto.mime, foto.size, input.latitud, input.longitud,
+        resultado.ubicacionId ?? null, ahoraLocal(), `portal:${empleadoId}`],
+    );
+    await conn.commit();
+    return resultado;
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
   }
-  return registrarMarcajeKiosko(empresaId, {
-    codigo: String(rows[0].numero_empleado),
-    latitud: input.latitud,
-    longitud: input.longitud,
-    requerirUbicacionRegistrada: true,
-  });
 }

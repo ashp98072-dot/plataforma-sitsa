@@ -51,9 +51,14 @@ export default async function PortalHomePage() {
     listarSubordinados(session!.empresaId, session!.empleadoId),
   ]);
   const horasExtraDisponible =
-    Boolean(empleado?.horasExtraHabilitado) || subordinados.length > 0;
+    Boolean(empleado?.horasExtraHabilitado);
   const disponibles = [
     ...DISPONIBLES,
+    ...(personalOperativo?.tipo === "Piloto" ? [{
+      titulo: "Mis viáticos",
+      detalle: "Consulta tus viáticos asignados y el historial de entregas por viaje.",
+      href: "/portal/viaticos",
+    }] : []),
     ...(horasExtraDisponible
       ? [{
           titulo: "Horas extra",
@@ -108,17 +113,6 @@ export default async function PortalHomePage() {
               </p>
             </Link>
           ))}
-          {!horasExtraDisponible ? (
-            <div className="cursor-not-allowed rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6 opacity-50" aria-disabled="true">
-              <p className="text-xs font-medium uppercase tracking-wide text-[var(--muted)]">
-                No habilitado por RRHH
-              </p>
-              <h2 className="mt-1 text-lg font-semibold">Horas extra</h2>
-              <p className="mt-2 text-sm text-[var(--muted)]">
-                RRHH debe habilitar las horas extra en tu ficha de colaborador.
-              </p>
-            </div>
-          ) : null}
           {PROXIMAMENTE.map((item) => (
             <div
               key={item.titulo}
