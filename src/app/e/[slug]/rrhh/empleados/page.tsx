@@ -11,6 +11,7 @@ import {
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { DocumentosModal } from "@/components/rrhh/documentos-modal";
+import { FotoEmpleado } from "@/components/rrhh/foto-empleado";
 import { PortalAccesoModal } from "@/components/rrhh/portal-acceso-modal";
 import { BitacoraLegalEmpleado } from "@/components/rrhh/bitacora-legal-empleado";
 import { ImportErroresLista } from "@/components/import-errores-lista";
@@ -443,6 +444,19 @@ export default function EmpleadosPage() {
   const [horaDef, setHoraDef] = useState({ entrada: "07:00", salida: "16:00" });
   const [form, setForm] = useState<FormState>(() => emptyForm());
   const [editId, setEditId] = useState<number | null>(null);
+  const [foto, setFoto] = useState<File | null>(null);
+  const [fotoPreview, setFotoPreview] = useState<string>();
+  const [guardando, setGuardando] = useState(false);
+  const guardandoRef = useRef(false);
+  useEffect(() => () => { if (fotoPreview) URL.revokeObjectURL(fotoPreview); }, [fotoPreview]);
+  function seleccionarFoto(file: File | null) {
+    if (file && (!file.size || file.size > 5 * 1024 * 1024 || !["image/jpeg", "image/png", "image/webp"].includes(file.type))) {
+      setError("Selecciona una foto JPG, PNG o WebP de hasta 5 MB.");
+      return;
+    }
+    setFoto(file);
+    setFotoPreview(file ? URL.createObjectURL(file) : undefined);
+  }
   const [historial, setHistorial] = useState<EmpleadoCambio[]>([]);
   const [error, setError] = useState("");
   const [mensaje, setMensaje] = useState("");
@@ -467,6 +481,8 @@ export default function EmpleadosPage() {
   }
 
   function irALista() {
+    if (guardandoRef.current) return;
+    seleccionarFoto(null);
     setVista("lista");
     setEditId(null);
     setHistorial([]);
@@ -475,6 +491,8 @@ export default function EmpleadosPage() {
   }
 
   function irANuevo() {
+    if (guardandoRef.current) return;
+    seleccionarFoto(null);
     setEditId(null);
     setHistorial([]);
     setSupervisorBusqueda("");
@@ -583,6 +601,8 @@ export default function EmpleadosPage() {
         puesto: string;
       };
       setEditId(null);
+      setFoto(null);
+      setFotoPreview(undefined);
       setHistorial([]);
       setForm({
         ...emptyForm(horaDef.entrada, horaDef.salida),
@@ -632,6 +652,8 @@ export default function EmpleadosPage() {
   }
 
   async function empezarEdicion(e: Emp) {
+    if (guardandoRef.current) return;
+    seleccionarFoto(null);
     setEditId(e.id);
     setHistorial([]);
     setSupervisorBusqueda("");
@@ -670,6 +692,7 @@ export default function EmpleadosPage() {
 
   async function onSubmit(ev: FormEvent) {
     ev.preventDefault();
+    if (guardandoRef.current) return;
     setError("");
     setMensaje("");
     const { labels, secciones: secs } = faltantesAlta(
@@ -691,6 +714,9 @@ export default function EmpleadosPage() {
       );
       return;
     }
+    guardandoRef.current = true;
+    setGuardando(true);
+    try {
     const url = editId
       ? `/api/empresas/${slug}/empleados/${editId}`
       : `/api/empresas/${slug}/empleados`;
@@ -706,7 +732,7 @@ export default function EmpleadosPage() {
     // timeout, etc.) puede llegar con body vacío o no-JSON: sin este
     // try/catch, res.json() lanzaba y el usuario solo veía un 400/500 en
     // consola, sin mensaje en pantalla.
-    let data: { error?: string; mensaje?: string } = {};
+    let data: { id?: number; error?: string; mensaje?: string } = {};
     try {
       data = await res.json();
     } catch {
@@ -716,7 +742,24 @@ export default function EmpleadosPage() {
       setError(data.error || `No se pudo guardar (código ${res.status}).`);
       return;
     }
-    setMensaje(data.mensaje ?? "Empleado guardado.");
+    if (foto) {
+      const empleadoId = editId ?? data.id;
+      if (!empleadoId) throw new Error("Empleado guardado; vuelve a abrir su ficha para adjuntar la foto.");
+      // Si falla la foto, conservar el ID creado: reintentar nunca crea otro empleado.
+      setEditId(empleadoId);
+      const fd = new FormData();
+      fd.set("file", foto);
+      try {
+        const fotoRes = await fetch(`/api/empresas/${slug}/empleados/${empleadoId}/foto`, { method: "POST", body: fd });
+        const fotoData = await fotoRes.json();
+        if (!fotoRes.ok) throw new Error(fotoData.error || "No se pudo subir la foto.");
+      } catch (errorFoto) {
+        setError(`Los datos del empleado se guardaron, pero la fotografía no. ${errorFoto instanceof Error ? errorFoto.message : "Intenta nuevamente."}`);
+        return;
+      }
+    }
+    seleccionarFoto(null);
+    setMensaje(foto ? "Empleado y fotografía guardados." : data.mensaje ?? "Empleado guardado.");
     setForm(emptyForm(horaDef.entrada, horaDef.salida));
     setEditId(null);
     setHistorial([]);
@@ -724,6 +767,12 @@ export default function EmpleadosPage() {
     setVista("lista");
     await cargar();
     await cargarSupervisores();
+    } catch (errorGuardado) {
+      setError(errorGuardado instanceof Error ? errorGuardado.message : "No se pudo completar el guardado.");
+    } finally {
+      guardandoRef.current = false;
+      setGuardando(false);
+    }
   }
 
   function cancelarEdicion() {
@@ -786,6 +835,7 @@ export default function EmpleadosPage() {
 
       {vista === "ficha" ? (
       <form onSubmit={onSubmit} className="space-y-3">
+        <fieldset disabled={guardando} className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-sm font-medium">
             {editId ? `Editando #${editId}` : "Nuevo empleado"}
@@ -799,9 +849,23 @@ export default function EmpleadosPage() {
           </button>
         </div>
 
+        <section className="flex flex-wrap items-center gap-5 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+          <FotoEmpleado src={fotoPreview ?? (editId ? `/api/empresas/${slug}/empleados/${editId}/foto` : undefined)} nombre={form.nombre} />
+          <div className="space-y-2">
+            <label className="block text-sm font-medium">
+              Fotografía del empleado (opcional)
+              <input key={fotoPreview ?? editId ?? "nueva"} type="file" accept="image/jpeg,image/png,image/webp" className="mt-2 block text-sm"
+                onChange={(e) => seleccionarFoto(e.target.files?.[0] ?? null)} />
+            </label>
+            <p className="text-xs text-[var(--muted)]">JPG, PNG o WebP, máximo 5 MB. Se guarda junto con la ficha y se muestra en el portal del colaborador.</p>
+            {foto ? <p className="text-xs">Seleccionada: {foto.name} <button type="button" className="ml-2 underline" onClick={() => seleccionarFoto(null)}>Cancelar selección</button></p> : null}
+            {editId ? <p className="text-xs text-[var(--muted)]">La foto más reciente del expediente es la que se muestra. Las anteriores se conservan.</p> : null}
+          </div>
+        </section>
+
         <FormSection
           title="1. Identidad"
-          hint="* obligatorio según ficha Monaco · Foto en expediente"
+          hint="* obligatorio según ficha Monaco"
           open={secciones.identidad}
           onToggle={() => toggleSeccion("identidad")}
         >
@@ -895,30 +959,27 @@ export default function EmpleadosPage() {
           />
         </label>
         <label>
-          <FieldLabel required>NIT</FieldLabel>
+          <FieldLabel>NIT (opcional)</FieldLabel>
           <input
             className={input}
             value={form.nit}
             onChange={(e) => patchForm({ nit: e.target.value })}
-            required
           />
         </label>
         <label>
-          <FieldLabel required>IGSS</FieldLabel>
+          <FieldLabel>IGSS (opcional)</FieldLabel>
           <input
             className={input}
             value={form.igss}
             onChange={(e) => patchForm({ igss: e.target.value })}
-            required
           />
         </label>
         <label>
-          <FieldLabel required>IRTRA</FieldLabel>
+          <FieldLabel>IRTRA (opcional)</FieldLabel>
           <input
             className={input}
             value={form.irtra}
             onChange={(e) => patchForm({ irtra: e.target.value })}
-            required
           />
         </label>
         <label>
@@ -1491,7 +1552,7 @@ export default function EmpleadosPage() {
             type="submit"
             className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm text-white"
           >
-            {editId ? "Guardar cambios" : "Crear"}
+            {guardando ? "Guardando…" : editId ? "Guardar cambios" : "Crear"}
           </button>
           {editId ? (
             <>
@@ -1523,6 +1584,7 @@ export default function EmpleadosPage() {
             </button>
           )}
         </div>
+        </fieldset>
       </form>
       ) : null}
 
