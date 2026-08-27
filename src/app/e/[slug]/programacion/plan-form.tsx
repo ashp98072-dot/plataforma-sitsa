@@ -219,6 +219,37 @@ export default function PlanForm({
   const [cerrando, setCerrando] = useState(false);
   const [errorCierre, setErrorCierre] = useState("");
 
+  // OPS-AJUSTES — motivo obligatorio (sección 3) para piloto/unidad/
+  // auxiliares. Preset + texto libre adicional; el backend vuelve a
+  // exigirlo (nunca confiar solo en esta validación de UX).
+  const MOTIVOS_PRESET = [
+    "Piloto indispuesto", "Unidad con falla", "Reasignación operativa",
+    "Cambio solicitado por cliente", "Otro",
+  ] as const;
+  const [motivoPreset, setMotivoPreset] = useState<string>(MOTIVOS_PRESET[0]);
+  const [motivoTexto, setMotivoTexto] = useState("");
+  const motivoCambioFinal =
+    motivoPreset === "Otro" ? motivoTexto.trim() : [motivoPreset, motivoTexto.trim()].filter(Boolean).join(" — ");
+
+  // OPS-AJUSTES (sección 7) — "Cancelar viaje" como acción explícita con
+  // confirmación, reutilizando la MISMA transición ya soportada por el
+  // backend (estado: "Cancelado", accion "cancelar_ruta" en la
+  // auditoría) — no se crea un flujo nuevo, solo se retira del dropdown
+  // libre y se envuelve en un botón + confirmación dedicados.
+  const [confirmandoCancelar, setConfirmandoCancelar] = useState(false);
+  const [cancelando, setCancelando] = useState(false);
+  const [errorCancelar, setErrorCancelar] = useState("");
+  const [marcandoCargado, setMarcandoCargado] = useState(false);
+
+  // OPS-AJUSTES (sección 4-5) — "Bitácora del viaje": reutiliza la
+  // auditoría ya existente (GET /tms/planes/[id]/bitacora), sin sistema
+  // paralelo.
+  const [bitacora, setBitacora] = useState<
+    { id: number; usuario: string | null; accion: string; detalle: string | null; creadoEn: string }[]
+  >([]);
+  const [cargandoBitacora, setCargandoBitacora] = useState(false);
+  const [mostrarBitacora, setMostrarBitacora] = useState(false);
+
   // VIAT-1: ubicaciones guardadas del cliente seleccionado, para armar
   // paradas rápido en vez de escribir la dirección cada vez.
   const [ubicacionesCliente, setUbicacionesCliente] = useState<UbicacionCliente[]>([]);
@@ -582,6 +613,21 @@ export default function PlanForm({
   // infiere llegada por evidencias ni hace una llamada adicional a Flota.
   const bloqueadoParaPreCierre = soloNotas && !pendienteCierre;
 
+  // OPS-AJUSTES (sección 3) — ¿esta edición realmente cambia piloto,
+  // unidad o auxiliares respecto al plan ORIGINAL (no respecto al form
+  // vacío)? Solo entonces se exige motivo — reenviar el mismo valor no
+  // debe forzar al usuario a justificar nada. El backend vuelve a
+  // validar esto por su cuenta (nunca confiar solo en el cliente).
+  const auxOriginalTxt = esEdicion ? [...(plan!.auxiliares ?? [])].sort().join(",") : "";
+  const auxActualesTxt = esEdicion
+    ? [...form.auxiliarNombres, ...form.auxiliarEmpleadoIds.map((id) => auxiliares.find((a) => a.id === id)?.nombre ?? `#${id}`)].sort().join(",")
+    : "";
+  const cambioSensible =
+    esEdicion &&
+    (form.pilotoNombre.trim() !== (plan!.piloto ?? "").trim() ||
+      form.placa.trim().toUpperCase() !== (plan!.placa ?? "").trim().toUpperCase() ||
+      auxActualesTxt !== auxOriginalTxt);
+
   // VIAT-2: el servidor exige regreso_estimado cuando el plan queda con
   // piloto, auxiliares o unidad asignados (lo necesita para poder validar
   // traslapes) — esto es solo ayuda de UI, la regla real la aplica
@@ -696,6 +742,12 @@ export default function PlanForm({
       );
       return;
     }
+    // OPS-AJUSTES (sección 3) — mismo requisito del backend, verificado
+    // aquí primero para no obligar un viaje redondo solo por el motivo.
+    if (cambioSensible && !motivoCambioFinal) {
+      setError("Indica el motivo del cambio de piloto, unidad o auxiliares.");
+      return;
+    }
 
     setSaving(true);
     try {
@@ -755,7 +807,12 @@ export default function PlanForm({
           // igual que los seis campos de OPS-3.2b de abajo.
           pilotoNombre: bloqueadoParaPreCierre ? undefined : form.pilotoNombre.trim() || undefined,
           placa: bloqueadoParaPreCierre ? undefined : form.placa.trim() || undefined,
-          estado: form.estado !== plan!.estado ? form.estado : undefined,
+          // OPS-AJUSTES (sección 7): "estado" ya NO se envía desde este
+          // guardado general — Cargado/Cancelado ahora son acciones
+          // dedicadas (marcarCargado()/cancelarViaje() más abajo), y
+          // "En ruta"/"Cerrado" nunca fueron responsabilidad de este
+          // formulario (Portal y /cerrar respectivamente).
+          motivoCambio: cambioSensible ? motivoCambioFinal : undefined,
           auxiliarEmpleadoIds: bloqueadoParaPreCierre ? undefined : form.auxiliarEmpleadoIds,
           auxiliarNombres: bloqueadoParaPreCierre ? undefined : form.auxiliarNombres,
           tipoTraslado: undefined,
@@ -842,6 +899,87 @@ export default function PlanForm({
     }
   }
 
+  /**
+   * OPS-AJUSTES (sección 7) — única transición administrativa que queda
+   * como botón directo: Programado → Cargado. Reutiliza el mismo PATCH
+   * general (estado ya validado por el backend: solo Programado/Cargado/
+   * Cancelado) — no es un endpoint nuevo, solo una acción explícita en
+   * vez de un valor libre de un <select>.
+   */
+  async function marcarCargado() {
+    if (!esEdicion || marcandoCargado) return;
+    setMarcandoCargado(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/empresas/${slug}/tms/planes`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: plan!.id, estado: "Cargado" }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "No se pudo marcar como Cargado.");
+        return;
+      }
+      setMsg(data.mensaje ?? "Viaje marcado como Cargado.");
+      onSaved({ id: plan!.id, fechaPlan: form.fechaPlan });
+    } catch {
+      setError("Error de conexión.");
+    } finally {
+      setMarcandoCargado(false);
+    }
+  }
+
+  /**
+   * OPS-AJUSTES (sección 7/14) — "Cancelar viaje": el backend YA acepta
+   * estado="Cancelado" en este mismo PATCH (accion "cancelar_ruta" en la
+   * auditoría, control administrativo real y existente) — se reutiliza
+   * tal cual, solo se saca del <select> libre y se envuelve en un botón +
+   * confirmación explícita, igual que "Cerrar viaje".
+   */
+  async function cancelarViaje() {
+    if (!esEdicion || cancelando) return;
+    setCancelando(true);
+    setErrorCancelar("");
+    try {
+      const res = await fetch(`/api/empresas/${slug}/tms/planes`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: plan!.id, estado: "Cancelado" }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setErrorCancelar(data.error ?? "No se pudo cancelar el viaje.");
+        return;
+      }
+      setMsg(data.mensaje ?? "Viaje cancelado.");
+      setConfirmandoCancelar(false);
+      onSaved({ id: plan!.id, fechaPlan: form.fechaPlan });
+    } catch {
+      setErrorCancelar("Error de conexión.");
+    } finally {
+      setCancelando(false);
+    }
+  }
+
+  /** OPS-AJUSTES (sección 4-5) — "Bitácora del viaje", carga bajo demanda. */
+  async function cargarBitacora() {
+    if (!esEdicion) return;
+    const abrir = !mostrarBitacora;
+    setMostrarBitacora(abrir);
+    if (!abrir || bitacora.length || cargandoBitacora) return;
+    setCargandoBitacora(true);
+    try {
+      const res = await fetch(`/api/empresas/${slug}/tms/planes/${plan!.id}/bitacora`);
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) setBitacora(data.eventos ?? []);
+    } catch {
+      /* la sección de bitácora queda vacía, sin bloquear el resto del formulario */
+    } finally {
+      setCargandoBitacora(false);
+    }
+  }
+
   return (
     <form
       onSubmit={onSubmit}
@@ -877,6 +1015,7 @@ export default function PlanForm({
 
       {pendienteCierre ? (
         <div className="md:col-span-3 space-y-2 rounded-lg border border-amber-700/60 bg-amber-950/20 px-3 py-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-amber-200">Revisión para cierre</p>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs font-medium text-amber-200">
               El piloto ya registró la llegada — pendiente de cierre por Operaciones.
@@ -903,7 +1042,10 @@ export default function PlanForm({
           ) : null}
           {confirmandoCierre ? (
             <div className="space-y-2 rounded border border-amber-700/60 bg-black/20 p-2 text-xs">
-              <p className="font-medium">Revisa antes de cerrar — ya no podrá editarse después:</p>
+              {/* Sección 11 del ticket: texto exacto de confirmación. */}
+              <p className="font-medium">
+                Esta acción cerrará administrativamente el viaje. Después del cierre quedará disponible para Facturación.
+              </p>
               <ul className="grid gap-x-4 gap-y-0.5 text-[11px] text-[var(--muted)] sm:grid-cols-2">
                 <li>Código: {plan!.codigo}</li>
                 <li>Cliente: {form.clienteNombre || "—"}</li>
@@ -914,7 +1056,12 @@ export default function PlanForm({
                 <li>Auxiliares: {[...form.auxiliarNombres, ...form.auxiliarEmpleadoIds.map((id) => auxiliares.find((a) => a.id === id)?.nombre ?? `#${id}`)].join(", ") || "—"}</li>
                 <li>Tarifa comercial: {form.tarifaComercial ? `Q${form.tarifaComercial}` : "—"}</li>
                 <li>Referencia cliente: {form.referenciaCliente || "—"}</li>
+                <li>Paradas: {paradasForm.filter((p) => p.lugarNombre.trim()).length}</li>
+                <li>Observaciones: {form.notas || "—"}</li>
               </ul>
+              <p className="text-[11px] text-[var(--muted)]">
+                Las evidencias del piloto quedan como respaldo — no bloquean este cierre.
+              </p>
               {errorCierre ? <p className="text-red-300">{errorCierre}</p> : null}
               <div className="flex gap-2">
                 <button
@@ -1047,6 +1194,11 @@ export default function PlanForm({
           </Link>
         ) : null}
       </div>
+      {esEdicion ? (
+        <p className="md:col-span-3 mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
+          Ajustes operativos
+        </p>
+      ) : null}
       {/* OPS-3.2c: unidad/piloto/auxiliares pasan de `soloNotas` a
           `bloqueadoParaPreCierre` — se habilitan en pendiente de cierre.
           fecha/hora/paradas siguen atadas a `soloNotas` sin cambios. */}
@@ -1085,6 +1237,32 @@ export default function PlanForm({
           }
         />
       </div>
+
+      {/* OPS-AJUSTES (sección 3) — motivo obligatorio, solo visible cuando
+          piloto/unidad/auxiliares realmente cambian respecto al plan
+          original (cambioSensible). El backend lo vuelve a exigir. */}
+      {cambioSensible ? (
+        <div className="md:col-span-3 space-y-1 rounded border border-amber-700/60 bg-amber-950/10 p-2 text-xs">
+          <label className="block text-[var(--muted)]">
+            Motivo del cambio (piloto/unidad/auxiliares)
+            <select
+              className={`${inputCls} mt-0.5 w-full`}
+              value={motivoPreset}
+              onChange={(e) => setMotivoPreset(e.target.value)}
+            >
+              {MOTIVOS_PRESET.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </label>
+          <label className="block text-[var(--muted)]">
+            {motivoPreset === "Otro" ? "Detalle (obligatorio)" : "Detalle adicional (opcional)"}
+            <input
+              className={`${inputCls} mt-0.5 w-full`}
+              value={motivoTexto}
+              onChange={(e) => setMotivoTexto(e.target.value)}
+            />
+          </label>
+        </div>
+      ) : null}
 
       <label className={`text-xs text-[var(--muted)] ${soloNotas || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
         Tipo de traslado
@@ -1132,23 +1310,64 @@ export default function PlanForm({
         />
       </label>
       {esEdicion ? (
-        <label className="text-xs text-[var(--muted)]">
-          Estado
-          <select
-            className={`${inputCls} mt-1 w-full`}
-            value={form.estado}
-            disabled={bloqueado}
-            onChange={(e) => setForm((f) => ({ ...f, estado: e.target.value }))}
-          >
-            {/* OPS-1 (corregido): "Cerrado" y "Descargado" ya NO son
-                seleccionables aquí — el backend los rechaza (ver
-                patchSchema en planes/route.ts). El cierre real es la
-                acción dedicada "Cerrar viaje" más abajo. */}
-            {["Programado", "En ruta", "Cargado", "Cancelado"].map((s) => (
-              <option key={s}>{s}</option>
-            ))}
-          </select>
-        </label>
+        <div className="md:col-span-3 space-y-1.5 text-xs text-[var(--muted)]">
+          {/*
+            OPS-AJUSTES (sección 7) — el <select> libre de estado se retira:
+            permitía elegir "En ruta" (responsabilidad exclusiva del piloto
+            desde Portal) o "Cancelado" como cualquier otro valor, sin una
+            confirmación explícita. "Cerrado"/"Descargado" ya no eran
+            seleccionables (OPS-1). Ahora solo quedan dos acciones directas:
+            - "Marcar como Cargado" (Programado → Cargado, opcional — Programado
+              → En ruta directo desde Portal sigue siendo válido, sección 7).
+            - "Cancelar viaje" (control administrativo YA existente en el
+              backend, reutilizado, con confirmación explícita).
+          */}
+          <p>Estado actual: <span className="font-medium text-[var(--foreground)]">{plan!.estado}</span></p>
+          <div className="flex flex-wrap gap-2">
+            {plan!.estado === "Programado" ? (
+              <button
+                type="button"
+                disabled={marcandoCargado}
+                onClick={() => void marcarCargado()}
+                className="rounded border border-[var(--border)] px-3 py-1.5 text-xs font-medium disabled:opacity-50"
+              >
+                {marcandoCargado ? "Marcando…" : "Marcar como Cargado"}
+              </button>
+            ) : null}
+            {!bloqueado && plan!.estado !== "Cancelado" && !confirmandoCancelar ? (
+              <button
+                type="button"
+                onClick={() => setConfirmandoCancelar(true)}
+                className="rounded border border-rose-800/60 px-3 py-1.5 text-xs font-medium text-rose-300"
+              >
+                Cancelar viaje
+              </button>
+            ) : null}
+          </div>
+          {confirmandoCancelar ? (
+            <div className="space-y-2 rounded border border-rose-800/60 bg-black/20 p-2">
+              <p>Esta acción cancelará administrativamente el viaje. No podrá reactivarse desde aquí.</p>
+              {errorCancelar ? <p className="text-red-300">{errorCancelar}</p> : null}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={cancelando}
+                  onClick={() => void cancelarViaje()}
+                  className="rounded bg-rose-800 px-3 py-1.5 font-medium text-white disabled:opacity-50"
+                >
+                  {cancelando ? "Cancelando…" : "Confirmar cancelación"}
+                </button>
+                <button
+                  type="button"
+                  className="rounded border border-[var(--border)] px-3 py-1.5"
+                  onClick={() => { setConfirmandoCancelar(false); setErrorCancelar(""); }}
+                >
+                  Volver
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
       ) : null}
 
       <label className="md:col-span-3 text-xs text-[var(--muted)]">
@@ -1339,6 +1558,33 @@ export default function PlanForm({
           )}
         </div>
       )}
+
+      {/* OPS-AJUSTES (sección 4) — "Bitácora del viaje": visible en
+          cualquier estado, incluido Cerrado (sección 12: "Bitácora sigue
+          visible"). Reutiliza la auditoría existente, sin tabla nueva. */}
+      {esEdicion ? (
+        <div className="md:col-span-3 rounded border border-[var(--border)] p-3 text-xs">
+          <button type="button" className="font-semibold uppercase tracking-wide text-[var(--muted)]" onClick={() => void cargarBitacora()}>
+            {mostrarBitacora ? "▾" : "▸"} Bitácora del viaje
+          </button>
+          {mostrarBitacora ? (
+            cargandoBitacora ? (
+              <p className="mt-2 text-[var(--muted)]">Cargando…</p>
+            ) : !bitacora.length ? (
+              <p className="mt-2 text-[var(--muted)]">Sin cambios registrados todavía.</p>
+            ) : (
+              <ul className="mt-2 space-y-1.5">
+                {bitacora.map((ev) => (
+                  <li key={ev.id} className="border-t border-[var(--border)] pt-1.5 first:border-t-0 first:pt-0">
+                    <p className="text-[10px] text-[var(--muted)]">{ev.creadoEn} · {ev.usuario ?? "—"}</p>
+                    <p>{ev.detalle}</p>
+                  </li>
+                ))}
+              </ul>
+            )
+          ) : null}
+        </div>
+      ) : null}
 
       {error ? <p className="md:col-span-3 text-sm text-red-300">{error}</p> : null}
       {msg ? <p className="md:col-span-3 text-sm text-emerald-300">{msg}</p> : null}
