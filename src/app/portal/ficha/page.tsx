@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { getColaboradorSession } from "@/lib/rrhh/colaborador-session";
 import { obtenerEmpleado } from "@/lib/rrhh/empleados";
 import { obtenerCentroCosto } from "@/lib/rrhh/centros-costo";
+import { FotoEmpleado } from "@/components/rrhh/foto-empleado";
 
 const FORMA_PAGO_LABEL: Record<string, string> = {
   efectivo: "Efectivo",
@@ -61,6 +62,7 @@ export default async function MiFichaPage() {
         </Link>
 
         <header className="mt-4">
+          <FotoEmpleado src="/api/portal/ficha/foto" nombre={empleado.nombre} />
           <p className="text-sm uppercase tracking-[0.2em] text-[var(--muted)]">
             Mi ficha
           </p>
