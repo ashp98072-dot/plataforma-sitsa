@@ -1,5 +1,19 @@
 import type { RowDataPacket } from "mysql2";
+import type { PoolConnection } from "mysql2/promise";
 import { execute, query } from "./db";
+
+/** No inicia/termina transacciones ni silencia fallos: responsabilidad del caller. */
+export async function registrarAuditoriaTx(
+  conn: PoolConnection,
+  input: Parameters<typeof registrarAuditoria>[0],
+): Promise<void> {
+  await conn.execute(
+    `INSERT INTO auditoria (empresa_id, usuario, accion, modulo, detalle)
+     VALUES (?, ?, ?, ?, ?)`,
+    [input.empresaId ?? null, input.usuario ?? null, input.accion,
+      input.modulo ?? null, input.detalle ?? null],
+  );
+}
 
 export async function registrarAuditoria(input: {
   empresaId?: number | null;
