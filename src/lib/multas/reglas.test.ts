@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { centavos, nuevaMulta, transicion, validarMulta } from "./reglas";
+import { centavos, nuevaMulta, patchSchema, transicion, validarMulta } from "./reglas";
 
 const base = { revision_id: 2, vehiculo_id: 3, fecha_infraccion: "2026-08-01", tipo_multa: "Prueba",
   descripcion: "Caso sintético", monto_total: "100.00", tipo_responsabilidad: "POR_DEFINIR", resolucion_economica: "PENDIENTE" };
@@ -52,24 +52,52 @@ describe("reglas Multas", () => {
     expect(() => validarMulta({ ...m, estado_pago: "PAGADA" })).toThrow(/Metadatos/);
     expect(() => validarMulta({ ...m, estado_descuento: "DESCONTADO" })).toThrow(/Metadatos/);
   });
-  it("solo servidor fija metadatos; completa pago y descuento antes de resolver", () => {
+  it("solo servidor fija metadatos de pago; sin 'descontar' no se puede resolver un COLABORADOR", () => {
     const m = nuevaMulta({ ...base, ...personal, resolucion_economica: "COLABORADOR", monto_empresa: 0, monto_colaborador: 100 });
     const ahora = new Date();
     const pagada = transicion(m, { accion: "pagar" }, 8, ahora).multa;
     expect(pagada.pagada_en).toBe(ahora); expect(pagada.pagada_por_usuario_id).toBe(8);
-    expect(() => transicion(pagada, { accion: "estado", estado: "RESUELTA" }, 8)).toThrow();
-    const descontada = transicion(pagada, { accion: "descontar" }, 9, ahora).multa;
-    expect(descontada.descontada_por_usuario_id).toBe(9);
-    expect(transicion(descontada, { accion: "estado", estado: "RESUELTA" }, 8).multa.estado).toBe("RESUELTA");
+    // MULTAS-3.1: ya pagada, pero estado_descuento sigue PENDIENTE (COLABORADOR,
+    // monto_colaborador > 0) — sin MULTAS-3.2 no hay forma de resolverla.
+    expect(() => transicion(pagada, { accion: "estado", estado: "RESUELTA" }, 8)).toThrow(/pendientes/);
     expect(() => transicion(pagada, { accion: "pagar" }, 8)).toThrow();
     expect(() => transicion(m, { accion: "pagar", pagada_por_usuario_id: 99 }, 8)).toThrow();
   });
-  it.each(["pagar", "descontar"])("bloquea anulación y cambios económicos después de %s", (accion) => {
+  it("bloquea anulación y cambios económicos después de pagar", () => {
     const m = nuevaMulta({ ...base, ...personal, resolucion_economica: "COLABORADOR", monto_empresa: 0, monto_colaborador: 100 });
-    const movida = transicion(m, { accion }, 8).multa;
+    const movida = transicion(m, { accion: "pagar" }, 8).multa;
     expect(() => transicion(movida, { accion: "anular", motivo_anulacion: "Error" }, 8)).toThrow();
     expect(() => transicion(movida, { accion: "responsable", ...personal }, 8)).toThrow();
     expect(() => transicion(movida, { accion: "resolucion", resolucion_economica: "PENDIENTE" }, 8)).toThrow();
+  });
+  // MULTAS-3.1: corrección P0 — "descontar" ya no existe como acción del contrato.
+  it("PATCH accion 'descontar' ya no existe: rechazado por el schema", () => {
+    const m = nuevaMulta({ ...base, ...personal, resolucion_economica: "COLABORADOR", monto_empresa: 0, monto_colaborador: 100 });
+    expect(() => patchSchema.parse({ accion: "descontar" })).toThrow();
+    expect(() => transicion(m, { accion: "descontar" }, 9)).toThrow();
+  });
+  it("COLABORADOR y COMPARTIDO nacen con estado_descuento PENDIENTE y ninguna acción los mueve a DESCONTADO", () => {
+    const colaborador = nuevaMulta({ ...base, ...personal, resolucion_economica: "COLABORADOR", monto_empresa: 0, monto_colaborador: 100 });
+    const compartido = nuevaMulta({ ...base, ...personal, resolucion_economica: "COMPARTIDO", monto_empresa: 40, monto_colaborador: 60 });
+    expect(colaborador.estado_descuento).toBe("PENDIENTE");
+    expect(compartido.estado_descuento).toBe("PENDIENTE");
+    // Recorre CADA acción real del contrato (nunca "descontar", que ya no existe)
+    // y confirma que ninguna deja estado_descuento en DESCONTADO.
+    const acciones: unknown[] = [
+      { accion: "datos", descripcion: "Actualizada" },
+      { accion: "pagar" },
+      { accion: "estado", estado: "EN_REVISION" },
+    ];
+    for (const input of acciones) {
+      const { multa } = transicion(colaborador, input, 8);
+      expect(multa.estado_descuento).not.toBe("DESCONTADO");
+    }
+  });
+  it("EMPRESA y NO_APLICA nacen con estado_descuento NO_APLICA", () => {
+    const empresa = nuevaMulta({ ...base, ...personal, resolucion_economica: "EMPRESA", monto_empresa: 100, monto_colaborador: 0 });
+    const noAplica = nuevaMulta({ ...base, resolucion_economica: "NO_APLICA", monto_empresa: 0, monto_colaborador: 0, observaciones: "Exoneración documentada" });
+    expect(empresa.estado_descuento).toBe("NO_APLICA");
+    expect(noAplica.estado_descuento).toBe("NO_APLICA");
   });
   it("anulación exige motivo y es terminal", () => {
     const m = nuevaMulta(base);

@@ -47,13 +47,23 @@ export const crearMultaSchema = z.object({
   estado: z.enum(["PENDIENTE", "EN_REVISION"]).default("PENDIENTE"),
   observaciones: opcional(4000),
 }).strict();
+// MULTAS-3.1 (corrección P0): "descontar" se retiró del contrato. Marcar
+// estado_descuento = DESCONTADO a mano, sin ningún descuento real en
+// rrhh_descuentos_maestro/rrhh_descuento_cuotas detrás, es un estado falso
+// — RRHH/Contabilidad no pueden confiar en él. Mientras no exista MULTAS-3.2
+// (integración real con el motor de descuentos de RRHH), un colaborador/
+// compartido con monto_colaborador > 0 permanece en estado_descuento =
+// PENDIENTE indefinidamente; no hay ninguna acción de este módulo que pueda
+// avanzarlo a DESCONTADO. El valor "DESCONTADO" se conserva en el tipo
+// Multa (y en obligaciones()/tieneMovimientos()/validarMulta()) porque
+// sigue siendo un estado válido del esquema — MULTAS-3.2 lo escribirá desde
+// un flujo real vinculado a rrhh_descuento_id, no desde este patchSchema.
 export const patchSchema = z.discriminatedUnion("accion", [
   z.object({ accion: z.literal("datos"), tipo_multa: texto(120).optional(), descripcion: texto(4000).optional(),
     lugar: texto(300).nullable().optional(), observaciones: texto(4000).nullable().optional() }).strict(),
   z.object({ accion: z.literal("responsable"), ...responsabilidad }).strict(),
   z.object({ accion: z.literal("resolucion"), ...resolucion, observaciones: opcional(4000) }).strict(),
   z.object({ accion: z.literal("pagar") }).strict(),
-  z.object({ accion: z.literal("descontar") }).strict(),
   z.object({ accion: z.literal("estado"), estado: z.enum(["PENDIENTE", "EN_REVISION", "RESUELTA"]) }).strict(),
   z.object({ accion: z.literal("anular"), motivo_anulacion: texto(4000) }).strict(),
 ]);
@@ -139,10 +149,10 @@ export function transicion(m: Multa, input: unknown, usuarioId: number, ahora = 
       if (m.estado_pago !== "PENDIENTE") throw new ErrorMultas("No existe pago pendiente.", 409);
       next.estado_pago = "PAGADA"; next.pagada_en = ahora; next.pagada_por_usuario_id = usuarioId;
       evento = "multa_pagada"; break;
-    case "descontar":
-      if (m.estado_descuento !== "PENDIENTE") throw new ErrorMultas("No existe descuento pendiente.", 409);
-      next.estado_descuento = "DESCONTADO"; next.descontada_en = ahora; next.descontada_por_usuario_id = usuarioId;
-      evento = "multa_descuento_registrado"; break;
+    // MULTAS-3.1: "descontar" retirado — ver comentario sobre patchSchema.
+    // estado_descuento solo se mueve a PENDIENTE/NO_APLICA (obligaciones(),
+    // caso "resolucion" arriba); ninguna rama de este switch lo lleva a
+    // DESCONTADO. Eso queda para MULTAS-3.2, vinculado a un descuento real.
     case "estado":
       if (m.estado === "RESUELTA" && p.estado !== "RESUELTA") throw new ErrorMultas("No se permite reabrir una multa resuelta.", 409);
       next.estado = p.estado; break;
