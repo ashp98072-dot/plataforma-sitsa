@@ -25,7 +25,7 @@
 --          uq_descm_empresa_id (empresa_id, id)
 --        SHOW CREATE TABLE ops_multas;  -- debe incluir la columna
 --          rrhh_descuento_id, el índice idx_om_rrhh_descuento y la FK
---          fk_om_rrhh_descuento
+--          fk_ops_multas_rrhh_descuento
 --   4. Solo entonces desplegar el código de MULTAS-3.2 (este PR).
 --
 -- SI EL CÓDIGO SE DESPLIEGA ANTES DE APLICAR ESTA MIGRACIÓN: todo lo que
@@ -97,9 +97,9 @@ DEALLOCATE PREPARE m32_stmt;
 -- existentes.
 SET @m32_ddl = IF(EXISTS (
   SELECT 1 FROM information_schema.table_constraints
-  WHERE table_schema = DATABASE() AND table_name = 'ops_multas' AND constraint_name = 'fk_om_rrhh_descuento'
+  WHERE table_schema = DATABASE() AND table_name = 'ops_multas' AND constraint_name = 'fk_ops_multas_rrhh_descuento'
 ), 'SELECT 1',
-  'ALTER TABLE ops_multas ADD CONSTRAINT fk_om_rrhh_descuento FOREIGN KEY (empresa_id, rrhh_descuento_id)
+  'ALTER TABLE ops_multas ADD CONSTRAINT fk_ops_multas_rrhh_descuento FOREIGN KEY (empresa_id, rrhh_descuento_id)
      REFERENCES rrhh_descuentos_maestro(empresa_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT');
 PREPARE m32_stmt FROM @m32_ddl;
 EXECUTE m32_stmt;
