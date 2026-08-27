@@ -15,7 +15,6 @@ import {
   type TipoEvidenciaViaje,
 } from "@/lib/flota/viaje-evidencias";
 import { validarParadaDelPlan } from "@/lib/tms/paradas";
-import { buscarPlanesParaSalida } from "@/lib/tms/planes-salida";
 import { absPathFromRelative, contentTypeFor } from "@/lib/uploads";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -100,38 +99,69 @@ export async function POST(req: Request, ctx: Ctx) {
   const empleado = await obtenerEmpleado(session.empresaId, session.empleadoId);
   if (!empleado) return NextResponse.json({ error: "Colaborador no encontrado." }, { status: 404 });
 
-  // PORTAL-HARDENING-2 (Fase E — causa raíz de "evidencia subida pero no
-  // visible en Operaciones/TMS"): la sincronización a tms_evidencias
-  // (guardarEvidenciaViaje) exige un plan_id. Si al iniciar el viaje
-  // buscarPlanesParaSalida no encontró una coincidencia única (0 o 2+
-  // planes candidatos ese día), flota_viajes.plan_id queda NULL para
-  // siempre — no existe ningún flujo de Operaciones que lo vincule
-  // manualmente después, así que TODA evidencia de ese viaje quedaba
-  // guardada solo en flota_viaje_evidencias, invisible en TMS. Aquí se
-  // reintenta el mismo emparejamiento automático en cada subida: si para
-  // ese momento ya hay un único plan candidato (p.ej. Operaciones lo
-  // programó después de que el piloto salió), se vincula el viaje al
-  // plan y esta y las evidencias futuras sí sincronizan. No repara
-  // evidencia ya subida antes de este cambio.
+  // PORTAL-HARDENING-2 (Fase E, endurecido en revisión de PR #107 —
+  // HALLAZGO 1): causa raíz de "evidencia subida pero no visible en
+  // Operaciones/TMS" — la sincronización a tms_evidencias
+  // (guardarEvidenciaViaje) exige un plan_id. Si al iniciar el viaje el
+  // emparejamiento automático no encontró una coincidencia única,
+  // flota_viajes.plan_id queda NULL para siempre — no existe ningún
+  // flujo de Operaciones que lo vincule manualmente después.
+  //
+  // El primer intento de esta corrección reutilizaba buscarPlanesParaSalida
+  // (match por NOMBRE de piloto normalizado + PLACA normalizada, sobre
+  // "hoy") — heurística demasiado débil para vincular retroactivamente:
+  // dos pilotos con nombre similar, o el viaje evaluado en una fecha
+  // distinta a la del plan, podían producir "exactamente un candidato"
+  // incorrecto.
+  //
+  // Criterio estricto actual (SOLO vincula si TODO coincide, con datos ya
+  // existentes, sin heurística de texto):
+  //   - misma empresa (guard.empresa.id de la sesión, nunca del cliente)
+  //   - mismo PILOTO por identidad real (tms_personal.id_empleado =
+  //     flota_viajes.empleado_id — el piloto dueño del viaje, no
+  //     necesariamente quien sube la evidencia si es un auxiliar)
+  //   - misma UNIDAD exacta (tms_unidades.flota_vehiculo_id =
+  //     flota_viajes.vehiculo_id — IDs, no placa como texto)
+  //   - misma FECHA (tms_planes_viaje.fecha_plan = fecha real de
+  //     flota_viajes.hora_salida, no "hoy")
+  //   - estado operativo compatible (Programado/Cargado/En ruta)
+  //   - exactamente UN plan cumple todo lo anterior
+  // Si no se cumple TODO lo anterior con un único resultado, NO se
+  // vincula — la evidencia igual se guarda en flota_viaje_evidencias, y
+  // la respuesta agrega un aviso para que Operaciones resuelva el vínculo
+  // manualmente. No repara evidencia ya subida antes de este cambio.
+  let avisoVinculoPendiente: string | null = null;
   if (!participacion.planId) {
     const viajeInfo = await query<RowDataPacket[]>(
-      `SELECT v.piloto_nombre, ve.placa FROM flota_viajes v
-       INNER JOIN flota_vehiculos ve ON ve.id = v.vehiculo_id
-       WHERE v.id = ? AND v.empresa_id = ? LIMIT 1`,
+      `SELECT v.empleado_id, v.vehiculo_id, v.hora_salida
+       FROM flota_viajes v WHERE v.id = ? AND v.empresa_id = ? LIMIT 1`,
       [viajeId, session.empresaId],
     );
-    if (viajeInfo[0]) {
-      const candidatos = await buscarPlanesParaSalida(session.empresaId, {
-        pilotoNombre: String(viajeInfo[0].piloto_nombre ?? ""),
-        placa: String(viajeInfo[0].placa ?? ""),
-      });
+    const vi = viajeInfo[0];
+    if (vi && vi.empleado_id != null && vi.vehiculo_id != null && vi.hora_salida) {
+      const fechaViaje = String(vi.hora_salida).slice(0, 10);
+      const candidatos = await query<RowDataPacket[]>(
+        `SELECT p.id FROM tms_planes_viaje p
+         INNER JOIN tms_personal pil ON pil.id = p.piloto_id
+         INNER JOIN tms_unidades u ON u.id = p.unidad_id
+         WHERE p.empresa_id = ?
+           AND pil.id_empleado = ?
+           AND u.flota_vehiculo_id = ?
+           AND p.fecha_plan = ?
+           AND p.estado IN ('Programado', 'Cargado', 'En ruta')
+         LIMIT 2`,
+        [session.empresaId, Number(vi.empleado_id), Number(vi.vehiculo_id), fechaViaje],
+      );
       if (candidatos.length === 1) {
-        await execute(
+        const upd = await execute(
           `UPDATE flota_viajes SET plan_id = ?
            WHERE id = ? AND empresa_id = ? AND plan_id IS NULL`,
           [candidatos[0].id, viajeId, session.empresaId],
         );
-        participacion.planId = candidatos[0].id;
+        if (upd.affectedRows) participacion.planId = Number(candidatos[0].id);
+      } else {
+        avisoVinculoPendiente =
+          "Este viaje no está vinculado a un plan de Programación. La evidencia se guardó, pero Operaciones debe revisar y vincular el plan manualmente para que aparezca en TMS.";
       }
     }
   }
@@ -223,5 +253,9 @@ export async function POST(req: Request, ctx: Ctx) {
     modulo: "tms",
     detalle: `${ids.length} evidencia(s) agregadas al viaje #${viajeId} por ${empleado.nombre}`,
   });
-  return NextResponse.json({ ids, mensaje: `${ids.length} evidencia(s) guardada(s).` });
+  return NextResponse.json({
+    ids,
+    mensaje: `${ids.length} evidencia(s) guardada(s).`,
+    ...(avisoVinculoPendiente ? { aviso: avisoVinculoPendiente } : {}),
+  });
 }

@@ -13,6 +13,7 @@ import {
   obtenerPersonalOperativoDeEmpleado,
   vehiculoPorPlaca,
 } from "@/lib/flota/pilotos";
+import { colaboradorParticipaEnViaje } from "@/lib/flota/viajes-piloto";
 import {
   buscarPlanesParaSalida,
   marcarPlanEnRuta,
@@ -497,26 +498,37 @@ export async function POST(req: Request) {
       );
     }
     const d = parsed.data;
-    // Solo el propio piloto/auxiliar del viaje puede reportar, y solo
-    // mientras el viaje sigue abierto — nunca administra el de otro.
-    const viaje = await query<RowDataPacket[]>(
-      `SELECT v.id, v.estado, ve.placa FROM flota_viajes v
-       INNER JOIN flota_vehiculos ve ON ve.id = v.vehiculo_id
-       WHERE v.id = ? AND v.empresa_id = ? AND v.empleado_id = ? LIMIT 1`,
-      [d.viajeId, empresaId, session.empleadoId],
+    // CORRECCIÓN PR #107 (HALLAZGO 2): el piloto ASIGNADO puede reportar,
+    // y también cualquier AUXILIAR realmente asignado al mismo viaje — no
+    // solo el dueño de flota_viajes.empleado_id. Se reutiliza
+    // colaboradorParticipaEnViaje (misma función que ya autoriza al
+    // endpoint de evidencias) en vez de duplicar la lógica de
+    // participación piloto/auxiliar con un JOIN propio aquí.
+    const participacion = await colaboradorParticipaEnViaje(
+      empresaId,
+      session.empleadoId,
+      d.viajeId,
     );
-    if (!viaje[0]) {
+    if (!participacion) {
       return NextResponse.json({ error: "No tienes ese viaje." }, { status: 404 });
     }
+    const viaje = await query<RowDataPacket[]>(
+      `SELECT ve.placa FROM flota_viajes v
+       INNER JOIN flota_vehiculos ve ON ve.id = v.vehiculo_id
+       WHERE v.id = ? AND v.empresa_id = ? LIMIT 1`,
+      [d.viajeId, empresaId],
+    );
+    const placaViaje = viaje[0]?.placa ? String(viaje[0].placa) : "—";
     // PORTAL-HARDENING-2 (Fase F): esto es SOLO una observación/incidencia
     // de auditoría — a propósito no cambia flota_viajes.estado ni
-    // tms_planes_viaje.estado. El piloto reporta, Operaciones decide.
+    // tms_planes_viaje.estado. El piloto o auxiliar reporta, Operaciones
+    // decide.
     await registrarAuditoria({
       empresaId,
       usuario: `portal:${empleado.codigo}`,
       accion: "reportar_contratiempo",
       modulo: "tms",
-      detalle: `Viaje #${d.viajeId} contratiempo reportado por ${nombre} · placa ${String(viaje[0].placa)}: ${d.motivo}`,
+      detalle: `Viaje #${d.viajeId} contratiempo reportado por ${personal.tipo.toLowerCase()} ${nombre} · placa ${placaViaje}: ${d.motivo}`,
     });
     return NextResponse.json({
       mensaje: "Contratiempo registrado. Operaciones lo revisará; tu viaje sigue abierto.",

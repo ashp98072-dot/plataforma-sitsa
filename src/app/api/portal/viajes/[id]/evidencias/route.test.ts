@@ -11,7 +11,6 @@ vi.mock("@/lib/flota/viaje-evidencias", () => ({
   listarEvidenciasViaje: vi.fn(() => Promise.resolve([])),
 }));
 vi.mock("@/lib/tms/paradas", () => ({ validarParadaDelPlan: vi.fn() }));
-vi.mock("@/lib/tms/planes-salida", () => ({ buscarPlanesParaSalida: vi.fn(() => Promise.resolve([])) }));
 vi.mock("@/lib/uploads", () => ({
   absPathFromRelative: vi.fn((p: string) => p),
   contentTypeFor: vi.fn(() => "image/jpeg"),
@@ -21,7 +20,6 @@ import { execute, query } from "@/lib/db";
 import { colaboradorParticipaEnViaje } from "@/lib/flota/viajes-piloto";
 import { guardarEvidenciaViaje } from "@/lib/flota/viaje-evidencias";
 import { validarParadaDelPlan } from "@/lib/tms/paradas";
-import { buscarPlanesParaSalida } from "@/lib/tms/planes-salida";
 import { getColaboradorSession } from "@/lib/rrhh/colaborador-session";
 import { obtenerEmpleado } from "@/lib/rrhh/empleados";
 import { POST } from "./route";
@@ -50,6 +48,7 @@ beforeEach(() => {
   vi.mocked(colaboradorParticipaEnViaje).mockResolvedValue({ viajeId: 5, planId: 30, estado: "abierto" });
   // SELECT odometro_funcional (vehiculo)
   vi.mocked(query).mockResolvedValue([{ odometro_funcional: 1 }] as unknown as Awaited<ReturnType<typeof query>>);
+  vi.mocked(execute).mockResolvedValue({ affectedRows: 1 } as unknown as Awaited<ReturnType<typeof execute>>);
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -104,35 +103,105 @@ describe("PORTAL-HARDENING-2 — Fase D: tipo OTRO soportado; tipo de punto de c
   });
 });
 
-describe("PORTAL-HARDENING-2 — Fase E: auto-vínculo de plan cuando el viaje quedó sin plan_id", () => {
-  it("si el viaje no tiene plan vinculado pero ya hay un único candidato, se vincula y la evidencia sincroniza a TMS", async () => {
+// CORRECCIÓN PR #107 (HALLAZGO 1): el auto-vínculo YA NO usa la heurística
+// débil de buscarPlanesParaSalida (nombre normalizado + placa normalizada,
+// "hoy") — usa una consulta ESTRICTA sobre datos ya existentes: mismo
+// piloto por id_empleado, misma unidad por flota_vehiculo_id, misma fecha
+// del plan (= fecha real del viaje, no "hoy"), estado operativo compatible,
+// y exactamente un resultado.
+describe("PORTAL-HARDENING-2 (HALLAZGO 1) — auto-vínculo de plan solo con coincidencia estricta y verificable", () => {
+  function mockViajeInfo() {
+    // 1ª query(): datos reales del viaje (empleado_id/vehiculo_id/hora_salida)
+    vi.mocked(query).mockResolvedValueOnce(
+      [{ empleado_id: 9, vehiculo_id: 15, hora_salida: "2026-08-27 07:00:00" }] as unknown as Awaited<ReturnType<typeof query>>,
+    );
+  }
+
+  it("1) candidato fuerte único (piloto+unidad+fecha+estado coinciden) → vincula", async () => {
     vi.mocked(colaboradorParticipaEnViaje).mockResolvedValue({ viajeId: 5, planId: null, estado: "abierto" });
-    vi.mocked(query)
-      .mockResolvedValueOnce([{ piloto_nombre: "Juan Pérez", placa: "C-034BXR" }] as unknown as Awaited<ReturnType<typeof query>>) // viajeInfo
-      .mockResolvedValueOnce([{ odometro_funcional: 1 }] as unknown as Awaited<ReturnType<typeof query>>); // vehiculo lookup
-    vi.mocked(buscarPlanesParaSalida).mockResolvedValue([
-      { id: 77, codigo: "PLAN-1", fecha_plan: "2026-08-27", hora_carga: null, tipo_traslado: null, notas: null, placa: "C-034BXR", piloto: "Juan Pérez", cliente: null, lugar_carga: null, lugar_descarga: null, estado: "Programado", auxiliares: [], paradas: [] },
-    ]);
+    mockViajeInfo();
+    // 2ª query(): candidatos estrictos → exactamente uno
+    vi.mocked(query).mockResolvedValueOnce([{ id: 77 }] as unknown as Awaited<ReturnType<typeof query>>);
+
     const form = fotoFormData({ tipo: "tablero_salida", latitud: "14.6", longitud: "-90.5" });
     const res = await POST(req(form), ctx);
     expect(res.status).toBe(200);
+
+    // Confirma que la consulta de candidatos exige TODOS los criterios
+    // estrictos (piloto por id_empleado, unidad por flota_vehiculo_id,
+    // misma fecha del viaje) — no una heurística de texto.
+    const candidatosCall = vi.mocked(query).mock.calls[1];
+    expect(candidatosCall[0]).toContain("pil.id_empleado = ?");
+    expect(candidatosCall[0]).toContain("u.flota_vehiculo_id = ?");
+    expect(candidatosCall[0]).toContain("p.fecha_plan = ?");
+    expect(candidatosCall[1]).toEqual([7, 9, 15, "2026-08-27"]);
+
     expect(execute).toHaveBeenCalledWith(
       expect.stringContaining("UPDATE flota_viajes SET plan_id"),
       [77, 5, 7],
     );
     expect(guardarEvidenciaViaje).toHaveBeenCalledWith(expect.objectContaining({ planId: 77 }));
+    const data = await res.clone().json();
+    expect(data.aviso).toBeUndefined();
   });
 
-  it("si sigue habiendo ambigüedad (0 o 2+ candidatos), no se vincula y la evidencia se guarda sin sincronizar a TMS", async () => {
+  it("2) 0 candidatos → NO vincula; evidencia se guarda igual, con aviso para Operaciones", async () => {
     vi.mocked(colaboradorParticipaEnViaje).mockResolvedValue({ viajeId: 5, planId: null, estado: "abierto" });
-    vi.mocked(query)
-      .mockResolvedValueOnce([{ piloto_nombre: "Juan Pérez", placa: "C-034BXR" }] as unknown as Awaited<ReturnType<typeof query>>)
-      .mockResolvedValueOnce([{ odometro_funcional: 1 }] as unknown as Awaited<ReturnType<typeof query>>);
-    vi.mocked(buscarPlanesParaSalida).mockResolvedValue([]);
+    mockViajeInfo();
+    vi.mocked(query).mockResolvedValueOnce([] as unknown as Awaited<ReturnType<typeof query>>);
+
     const form = fotoFormData({ tipo: "tablero_salida", latitud: "14.6", longitud: "-90.5" });
     const res = await POST(req(form), ctx);
     expect(res.status).toBe(200);
     expect(execute).not.toHaveBeenCalled();
     expect(guardarEvidenciaViaje).toHaveBeenCalledWith(expect.objectContaining({ planId: null }));
+    const data = await res.clone().json();
+    expect(data.aviso).toContain("Operaciones debe revisar y vincular el plan manualmente");
+  });
+
+  it("3) 2+ candidatos (ambigüedad real) → NO vincula, con aviso", async () => {
+    vi.mocked(colaboradorParticipaEnViaje).mockResolvedValue({ viajeId: 5, planId: null, estado: "abierto" });
+    mockViajeInfo();
+    vi.mocked(query).mockResolvedValueOnce(
+      [{ id: 77 }, { id: 78 }] as unknown as Awaited<ReturnType<typeof query>>,
+    );
+
+    const form = fotoFormData({ tipo: "tablero_salida", latitud: "14.6", longitud: "-90.5" });
+    const res = await POST(req(form), ctx);
+    expect(res.status).toBe(200);
+    expect(execute).not.toHaveBeenCalled();
+    expect(guardarEvidenciaViaje).toHaveBeenCalledWith(expect.objectContaining({ planId: null }));
+  });
+
+  it("4) candidato único pero incompatible en piloto/unidad/fecha (la consulta estricta no lo devuelve) → NO vincula", async () => {
+    // La consulta ya filtra por id_empleado + flota_vehiculo_id + fecha_plan
+    // en el propio SQL — un "candidato" que no cumpla los tres no puede
+    // aparecer en el resultado. Se simula ese caso real (0 filas) para
+    // distinguirlo explícitamente del caso 2 (ambigüedad) en el reporte.
+    vi.mocked(colaboradorParticipaEnViaje).mockResolvedValue({ viajeId: 5, planId: null, estado: "abierto" });
+    mockViajeInfo();
+    vi.mocked(query).mockResolvedValueOnce([] as unknown as Awaited<ReturnType<typeof query>>);
+
+    const form = fotoFormData({ tipo: "tablero_salida", latitud: "14.6", longitud: "-90.5" });
+    const res = await POST(req(form), ctx);
+    expect(res.status).toBe(200);
+    const candidatosCall = vi.mocked(query).mock.calls[1];
+    // La query en sí exige coincidencia exacta de piloto/unidad/fecha —
+    // por eso un plan con cualquiera de esos tres distinto nunca se cuela.
+    expect(candidatosCall[1]).toEqual([7, 9, 15, "2026-08-27"]);
+    expect(execute).not.toHaveBeenCalled();
+    expect(guardarEvidenciaViaje).toHaveBeenCalledWith(expect.objectContaining({ planId: null }));
+  });
+
+  it("5) viaje ya con plan_id → no reintenta vincular (ni siquiera consulta candidatos)", async () => {
+    vi.mocked(colaboradorParticipaEnViaje).mockResolvedValue({ viajeId: 5, planId: 30, estado: "abierto" });
+    const form = fotoFormData({ tipo: "tablero_salida", latitud: "14.6", longitud: "-90.5" });
+    const res = await POST(req(form), ctx);
+    expect(res.status).toBe(200);
+    // Única query() esperada: la del vehículo (odometro_funcional) — nunca
+    // viajeInfo ni candidatos.
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(execute).not.toHaveBeenCalled();
+    expect(guardarEvidenciaViaje).toHaveBeenCalledWith(expect.objectContaining({ planId: 30 }));
   });
 });

@@ -16,6 +16,7 @@ vi.mock("@/lib/flota/pilotos", () => ({
   obtenerPersonalOperativoDeEmpleado: vi.fn(),
   vehiculoPorPlaca: vi.fn(),
 }));
+vi.mock("@/lib/flota/viajes-piloto", () => ({ colaboradorParticipaEnViaje: vi.fn() }));
 vi.mock("@/lib/tms/planes-salida", () => ({
   buscarPlanesParaSalida: vi.fn(() => Promise.resolve([])),
   marcarPlanEnRuta: vi.fn(),
@@ -29,6 +30,7 @@ import { registrarAuditoria } from "@/lib/auditoria";
 import { getColaboradorSession } from "@/lib/rrhh/colaborador-session";
 import { obtenerEmpleado } from "@/lib/rrhh/empleados";
 import { obtenerPersonalOperativoDeEmpleado } from "@/lib/flota/pilotos";
+import { colaboradorParticipaEnViaje } from "@/lib/flota/viajes-piloto";
 import { POST } from "./route";
 
 function req(body: unknown) {
@@ -63,34 +65,10 @@ describe("PORTAL-HARDENING-2 — Fase B: eliminación de kmCarga del flujo Porta
 });
 
 describe("PORTAL-HARDENING-2 — Fase F: piloto ya no cierra/cancela el plan", () => {
-  it('accion="contratiempo" registra auditoría y NO ejecuta ningún UPDATE (no cambia estado)', async () => {
-    vi.mocked(query).mockResolvedValueOnce([
-      { id: 5, estado: "abierto", placa: "C-034BXR" },
-    ] as unknown as Awaited<ReturnType<typeof query>>);
-
-    const res = await POST(req({ accion: "contratiempo", viajeId: 5, motivo: "Avería de la unidad en ruta" }));
-    expect(res.status).toBe(200);
-    const data = await res.json();
-    expect(data.mensaje).toContain("Contratiempo registrado");
-
-    expect(execute).not.toHaveBeenCalled();
-    expect(registrarAuditoria).toHaveBeenCalledTimes(1);
-    const call = vi.mocked(registrarAuditoria).mock.calls[0][0];
-    expect(call.accion).toBe("reportar_contratiempo");
-    expect(call.detalle).toContain("Avería de la unidad en ruta");
-  });
-
   it('accion="contratiempo" exige motivo de al menos 10 caracteres', async () => {
     const res = await POST(req({ accion: "contratiempo", viajeId: 5, motivo: "corto" }));
     expect(res.status).toBe(400);
-    expect(query).not.toHaveBeenCalled();
-  });
-
-  it('accion="contratiempo" solo permite reportar el PROPIO viaje (nunca el de otro piloto)', async () => {
-    vi.mocked(query).mockResolvedValueOnce([] as unknown as Awaited<ReturnType<typeof query>>);
-    const res = await POST(req({ accion: "contratiempo", viajeId: 999, motivo: "Avería de la unidad en ruta" }));
-    expect(res.status).toBe(404);
-    expect(registrarAuditoria).not.toHaveBeenCalled();
+    expect(colaboradorParticipaEnViaje).not.toHaveBeenCalled();
   });
 
   it('el body de "llegada" ya no acepta cierreExcepcional/motivoExcepcional como mecanismo de cierre (campos ignorados por el schema, sin efecto)', async () => {
@@ -105,5 +83,58 @@ describe("PORTAL-HARDENING-2 — Fase F: piloto ya no cierra/cancela el plan", (
       motivoExcepcional: "Cualquier motivo",
     }));
     expect(res.status).toBe(404);
+  });
+});
+
+// CORRECCIÓN PR #107 (HALLAZGO 2): contratiempo debe autorizar al piloto Y
+// al auxiliar REALMENTE asignados al viaje (colaboradorParticipaEnViaje),
+// nunca a un colaborador ajeno — y nunca debe tocar flota_viajes.estado ni
+// tms_planes_viaje.estado (ambos solo se mutan vía `execute`, así que basta
+// con comprobar que `execute` nunca se llama).
+describe("PORTAL-HARDENING-2 (HALLAZGO 2) — contratiempo: piloto Y auxiliar asignados, nunca cambia estado", () => {
+  it("1) piloto participante → permitido, registra auditoría", async () => {
+    vi.mocked(colaboradorParticipaEnViaje).mockResolvedValue({ viajeId: 5, planId: 30, estado: "abierto" });
+    vi.mocked(query).mockResolvedValueOnce([{ placa: "C-034BXR" }] as unknown as Awaited<ReturnType<typeof query>>);
+
+    const res = await POST(req({ accion: "contratiempo", viajeId: 5, motivo: "Avería de la unidad en ruta" }));
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.mensaje).toContain("Contratiempo registrado");
+    expect(colaboradorParticipaEnViaje).toHaveBeenCalledWith(7, 42, 5);
+    expect(registrarAuditoria).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(registrarAuditoria).mock.calls[0][0];
+    expect(call.accion).toBe("reportar_contratiempo");
+    expect(call.detalle).toContain("Avería de la unidad en ruta");
+  });
+
+  it("2) auxiliar participante → permitido (mismo contrato que el piloto)", async () => {
+    vi.mocked(obtenerPersonalOperativoDeEmpleado).mockResolvedValue(
+      { id: 2, tipo: "Auxiliar", nombre: "Carlos" } as Awaited<ReturnType<typeof obtenerPersonalOperativoDeEmpleado>>,
+    );
+    vi.mocked(obtenerEmpleado).mockResolvedValue(
+      { nombre: "Carlos Ruiz", codigo: "E002" } as unknown as Awaited<ReturnType<typeof obtenerEmpleado>>,
+    );
+    vi.mocked(colaboradorParticipaEnViaje).mockResolvedValue({ viajeId: 5, planId: 30, estado: "abierto" });
+    vi.mocked(query).mockResolvedValueOnce([{ placa: "C-034BXR" }] as unknown as Awaited<ReturnType<typeof query>>);
+
+    const res = await POST(req({ accion: "contratiempo", viajeId: 5, motivo: "Avería de la unidad en ruta" }));
+    expect(res.status).toBe(200);
+    const call = vi.mocked(registrarAuditoria).mock.calls[0][0];
+    expect(call.detalle).toContain("auxiliar Carlos Ruiz");
+  });
+
+  it("3) colaborador ajeno al viaje → 404, sin auditoría", async () => {
+    vi.mocked(colaboradorParticipaEnViaje).mockResolvedValue(null);
+    const res = await POST(req({ accion: "contratiempo", viajeId: 999, motivo: "Avería de la unidad en ruta" }));
+    expect(res.status).toBe(404);
+    expect(registrarAuditoria).not.toHaveBeenCalled();
+  });
+
+  it("4) nunca cambia tms_planes_viaje.estado / 5) nunca cambia flota_viajes.estado (ninguna escritura vía execute)", async () => {
+    vi.mocked(colaboradorParticipaEnViaje).mockResolvedValue({ viajeId: 5, planId: 30, estado: "abierto" });
+    vi.mocked(query).mockResolvedValueOnce([{ placa: "C-034BXR" }] as unknown as Awaited<ReturnType<typeof query>>);
+    const res = await POST(req({ accion: "contratiempo", viajeId: 5, motivo: "Avería de la unidad en ruta" }));
+    expect(res.status).toBe(200);
+    expect(execute).not.toHaveBeenCalled();
   });
 });
