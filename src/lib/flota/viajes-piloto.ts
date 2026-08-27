@@ -10,9 +10,7 @@ export type ViajeAbiertoPiloto = {
   horaSalida: string;
   destino: string | null;
   planId: number | null;
-  kmCarga: number | null;
   evidenciaTableroSalida: boolean;
-  evidenciaCarga: boolean;
   evidenciaTableroLlegada: boolean;
 };
 
@@ -141,7 +139,14 @@ export async function colaboradorParticipaEnViaje(
     : null;
 }
 
-/** El viaje abierto donde el colaborador participa como piloto o auxiliar. */
+/**
+ * PORTAL-HARDENING-2 (Fase B): el flujo del piloto solo conoce km de
+ * salida/llegada — no existe "kilometraje de carga". Se dejó de exponer
+ * `kmCarga`/`evidenciaCarga` aquí (y las subconsultas que las calculaban)
+ * porque ya no tienen consumidor en el Portal; el histórico en
+ * `flota_lecturas` (nota = 'Kilometraje en punto de carga') NO se borra
+ * ni se migra, solo deja de leerse desde este flujo.
+ */
 export async function obtenerViajeAbiertoDeEmpleado(
   empresaId: number,
   empleadoId: number,
@@ -149,12 +154,8 @@ export async function obtenerViajeAbiertoDeEmpleado(
   const rows = await query<RowDataPacket[]>(
     `SELECT DISTINCT v.id, v.km_salida, v.hora_salida, v.destino, v.plan_id, ve.placa,
             COALESCE(ve.odometro_funcional, 1) AS odometro_funcional,
-            (SELECT MAX(l.km) FROM flota_lecturas l
-             WHERE l.viaje_id = v.id AND l.nota = 'Kilometraje en punto de carga') AS km_carga,
             (SELECT COUNT(*) FROM flota_viaje_evidencias ev
              WHERE ev.viaje_id = v.id AND ev.tipo = 'tablero_salida') AS ev_tablero_salida,
-            (SELECT COUNT(*) FROM flota_viaje_evidencias ev
-             WHERE ev.viaje_id = v.id AND ev.tipo = 'salida') AS ev_carga,
             (SELECT COUNT(*) FROM flota_viaje_evidencias ev
              WHERE ev.viaje_id = v.id AND ev.tipo = 'tablero_llegada') AS ev_tablero_llegada
      FROM flota_viajes v
@@ -180,9 +181,7 @@ export async function obtenerViajeAbiertoDeEmpleado(
     horaSalida: String(r.hora_salida),
     destino: r.destino ? String(r.destino) : null,
     planId: r.plan_id != null ? Number(r.plan_id) : null,
-    kmCarga: r.km_carga != null ? Number(r.km_carga) : null,
     evidenciaTableroSalida: Number(r.ev_tablero_salida ?? 0) > 0,
-    evidenciaCarga: Number(r.ev_carga ?? 0) > 0,
     evidenciaTableroLlegada: Number(r.ev_tablero_llegada ?? 0) > 0,
   };
 }

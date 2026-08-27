@@ -1,7 +1,7 @@
 import { readFileSync } from "fs";
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
-import { query } from "@/lib/db";
+import { execute, query } from "@/lib/db";
 import { registrarAuditoria } from "@/lib/auditoria";
 import { getColaboradorSession } from "@/lib/rrhh/colaborador-session";
 import { obtenerEmpleado } from "@/lib/rrhh/empleados";
@@ -14,15 +14,24 @@ import {
   listarEvidenciasViaje,
   type TipoEvidenciaViaje,
 } from "@/lib/flota/viaje-evidencias";
-import { listarParadasDelPlan, validarParadaDelPlan } from "@/lib/tms/paradas";
+import { validarParadaDelPlan } from "@/lib/tms/paradas";
+import { buscarPlanesParaSalida } from "@/lib/tms/planes-salida";
 import { absPathFromRelative, contentTypeFor } from "@/lib/uploads";
 
 type Ctx = { params: Promise<{ id: string }> };
+/**
+ * PORTAL-HARDENING-2 (Fase C/D): vocabulario simplificado
+ * SALIDA/PARADA/LLEGADA/OTRO, mapeado sobre los mismos valores ya
+ * existentes en flota_viaje_evidencias.tipo (VARCHAR libre, sin ENUM —
+ * no requiere migración). Se retira "salida" (evidencia del punto de
+ * carga, ligada al kmCarga eliminado en Fase B) y se agrega "otro" para
+ * evidencia libre/de contratiempo.
+ */
 const TIPOS: TipoEvidenciaViaje[] = [
   "tablero_salida",
-  "salida",
   "tablero_llegada",
   "producto",
+  "otro",
 ];
 
 async function contextoParticipante(ctx: Ctx) {
@@ -91,6 +100,42 @@ export async function POST(req: Request, ctx: Ctx) {
   const empleado = await obtenerEmpleado(session.empresaId, session.empleadoId);
   if (!empleado) return NextResponse.json({ error: "Colaborador no encontrado." }, { status: 404 });
 
+  // PORTAL-HARDENING-2 (Fase E — causa raíz de "evidencia subida pero no
+  // visible en Operaciones/TMS"): la sincronización a tms_evidencias
+  // (guardarEvidenciaViaje) exige un plan_id. Si al iniciar el viaje
+  // buscarPlanesParaSalida no encontró una coincidencia única (0 o 2+
+  // planes candidatos ese día), flota_viajes.plan_id queda NULL para
+  // siempre — no existe ningún flujo de Operaciones que lo vincule
+  // manualmente después, así que TODA evidencia de ese viaje quedaba
+  // guardada solo en flota_viaje_evidencias, invisible en TMS. Aquí se
+  // reintenta el mismo emparejamiento automático en cada subida: si para
+  // ese momento ya hay un único plan candidato (p.ej. Operaciones lo
+  // programó después de que el piloto salió), se vincula el viaje al
+  // plan y esta y las evidencias futuras sí sincronizan. No repara
+  // evidencia ya subida antes de este cambio.
+  if (!participacion.planId) {
+    const viajeInfo = await query<RowDataPacket[]>(
+      `SELECT v.piloto_nombre, ve.placa FROM flota_viajes v
+       INNER JOIN flota_vehiculos ve ON ve.id = v.vehiculo_id
+       WHERE v.id = ? AND v.empresa_id = ? LIMIT 1`,
+      [viajeId, session.empresaId],
+    );
+    if (viajeInfo[0]) {
+      const candidatos = await buscarPlanesParaSalida(session.empresaId, {
+        pilotoNombre: String(viajeInfo[0].piloto_nombre ?? ""),
+        placa: String(viajeInfo[0].placa ?? ""),
+      });
+      if (candidatos.length === 1) {
+        await execute(
+          `UPDATE flota_viajes SET plan_id = ?
+           WHERE id = ? AND empresa_id = ? AND plan_id IS NULL`,
+          [candidatos[0].id, viajeId, session.empresaId],
+        );
+        participacion.planId = candidatos[0].id;
+      }
+    }
+  }
+
   const form = await req.formData();
   const tipoRaw = String(form.get("tipo") ?? "producto");
   const tipo = TIPOS.includes(tipoRaw as TipoEvidenciaViaje)
@@ -108,42 +153,14 @@ export async function POST(req: Request, ctx: Ctx) {
   if (!odometroFuncional && (tipo === "tablero_salida" || tipo === "tablero_llegada")) {
     return NextResponse.json({ error: "Esta unidad no requiere fotografías del medidor de kilometraje." }, { status: 409 });
   }
-  const progreso = await query<RowDataPacket[]>(
-    `SELECT
-       SUM(tipo = 'tablero_salida') AS tablero_salida,
-       SUM(tipo = 'salida') AS carga,
-       SUM(tipo = 'tablero_llegada') AS tablero_llegada
-     FROM flota_viaje_evidencias WHERE empresa_id = ? AND viaje_id = ?`,
-    [session.empresaId, viajeId],
-  );
-  const tieneTableroSalida = Number(progreso[0]?.tablero_salida ?? 0) > 0;
-  const tieneCarga = Number(progreso[0]?.carga ?? 0) > 0;
-  const tieneTableroLlegada = Number(progreso[0]?.tablero_llegada ?? 0) > 0;
-  if (tipo === "tablero_salida" && tieneTableroSalida) {
-    return NextResponse.json({ error: "La evidencia del tablero de salida ya fue registrada." }, { status: 409 });
-  }
-  if (odometroFuncional && tipo !== "tablero_salida" && !tieneTableroSalida) {
-    return NextResponse.json({ error: "Primero adjunta el tablero de salida." }, { status: 409 });
-  }
-  if (tipo === "salida") {
-    if (tieneCarga) {
-      return NextResponse.json({ error: "La evidencia de carga ya fue registrada." }, { status: 409 });
-    }
-    const kmCarga = odometroFuncional ? await query<RowDataPacket[]>(
-      `SELECT id FROM flota_lecturas
-       WHERE viaje_id = ? AND nota = 'Kilometraje en punto de carga' LIMIT 1`,
-      [viajeId],
-    ) : [];
-    if (odometroFuncional && !kmCarga[0]) return NextResponse.json({ error: "Primero registra el kilometraje en el punto de carga." }, { status: 409 });
-  }
-  if (tipo === "tablero_llegada" && tieneTableroLlegada) {
-    return NextResponse.json({ error: "El tablero de llegada ya fue registrado." }, { status: 409 });
-  }
-  if (tipo === "tablero_llegada" && !tieneCarga) {
-    return NextResponse.json({ error: "Primero registra el kilometraje y la evidencia de carga." }, { status: 409 });
-  }
+  // PORTAL-HARDENING-2 (Fase C): las evidencias son respaldo, no controlan
+  // estado ni orden. Ya NO se exige orden secuencial (tablero de salida
+  // primero, carga antes de paradas/llegada, etc.) — el piloto adjunta lo
+  // que tiene, cuando lo tiene. Para "producto" (evidencia de parada), el
+  // piloto ELIGE explícitamente la dirección/parada (paradaId) en vez de
+  // que el sistema calcule "la siguiente" — solo se valida que la parada
+  // pertenezca a este viaje/plan.
   if (tipo === "producto") {
-    if (!tieneCarga) return NextResponse.json({ error: "Primero adjunta la evidencia de carga." }, { status: 409 });
     if (!participacion.planId || !paradaId) {
       return NextResponse.json({ error: "Selecciona la parada de esta evidencia." }, { status: 400 });
     }
@@ -153,21 +170,6 @@ export async function POST(req: Request, ctx: Ctx) {
       paradaId,
     );
     if (!parada) return NextResponse.json({ error: "La parada no pertenece al viaje." }, { status: 400 });
-    const paradas = await listarParadasDelPlan(participacion.planId);
-    const siguiente = paradas.find((p) => p.requiere_evidencia && p.evidencias < 1);
-    if (!siguiente || siguiente.id !== paradaId) {
-      return NextResponse.json(
-        { error: siguiente ? `La siguiente parada es ${siguiente.orden}. ${siguiente.lugar_nombre}.` : "Todas las paradas ya están completas." },
-        { status: 409 },
-      );
-    }
-  }
-  if (tipo === "tablero_llegada" && participacion.planId) {
-    const pendientes = (await listarParadasDelPlan(participacion.planId))
-      .filter((p) => p.requiere_evidencia && p.evidencias < 1);
-    if (pendientes.length) {
-      return NextResponse.json({ error: "Completa todas las paradas antes de registrar el regreso al predio." }, { status: 409 });
-    }
   }
 
   const latitudRaw = form.get("latitud");
@@ -207,7 +209,11 @@ export async function POST(req: Request, ctx: Ctx) {
       username: `portal:${empleado.codigo}`,
       planId: participacion.planId,
       paradaId,
-      syncTmsTipo: tipo === "producto" ? "Producto" : tipo.includes("salida") ? "Carga" : "Descarga",
+      syncTmsTipo:
+        tipo === "producto" ? "Producto"
+        : tipo === "otro" ? "Otro"
+        : tipo === "tablero_salida" ? "Carga"
+        : "Descarga",
     }));
   }
   await registrarAuditoria({
