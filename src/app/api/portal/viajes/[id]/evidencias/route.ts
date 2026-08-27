@@ -1,7 +1,7 @@
 import { readFileSync } from "fs";
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
-import { execute, query } from "@/lib/db";
+import { query } from "@/lib/db";
 import { registrarAuditoria } from "@/lib/auditoria";
 import { getColaboradorSession } from "@/lib/rrhh/colaborador-session";
 import { obtenerEmpleado } from "@/lib/rrhh/empleados";
@@ -15,6 +15,7 @@ import {
   type TipoEvidenciaViaje,
 } from "@/lib/flota/viaje-evidencias";
 import { validarParadaDelPlan } from "@/lib/tms/paradas";
+import { buscarPlanCandidatoUnicoParaViaje, vincularViajeAPlan } from "@/lib/tms/vincular-viaje-plan";
 import { absPathFromRelative, contentTypeFor } from "@/lib/uploads";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -99,78 +100,62 @@ export async function POST(req: Request, ctx: Ctx) {
   const empleado = await obtenerEmpleado(session.empresaId, session.empleadoId);
   if (!empleado) return NextResponse.json({ error: "Colaborador no encontrado." }, { status: 404 });
 
-  // PORTAL-HARDENING-2 (Fase E, endurecido en revisión de PR #107 —
-  // HALLAZGO 1): causa raíz de "evidencia subida pero no visible en
-  // Operaciones/TMS" — la sincronización a tms_evidencias
+  // PORTAL-HARDENING-2 (Fase E) + ÚLTIMA CORRECCIÓN P1 (unificación de
+  // autoridad de vínculo): causa raíz de "evidencia subida pero no visible
+  // en Operaciones/TMS" — la sincronización a tms_evidencias
   // (guardarEvidenciaViaje) exige un plan_id. Si al iniciar el viaje el
   // emparejamiento automático no encontró una coincidencia única,
-  // flota_viajes.plan_id queda NULL. Si tampoco se puede vincular aquí con
-  // certeza, la herramienta administrativa REAL para resolverlo es
-  // POST /api/empresas/[slug]/tms/planes/[id]/vincular-viaje (ver
-  // src/lib/tms/vincular-viaje-plan.ts) — no un flujo prometido pero
-  // inexistente.
-  //
-  // El primer intento de esta corrección reutilizaba buscarPlanesParaSalida
-  // (match por NOMBRE de piloto normalizado + PLACA normalizada, sobre
-  // "hoy") — heurística demasiado débil para vincular retroactivamente:
-  // dos pilotos con nombre similar, o el viaje evaluado en una fecha
-  // distinta a la del plan, podían producir "exactamente un candidato"
-  // incorrecto.
-  //
-  // Criterio estricto actual (SOLO vincula si TODO coincide, con datos ya
-  // existentes, sin heurística de texto):
-  //   - misma empresa (guard.empresa.id de la sesión, nunca del cliente)
-  //   - mismo PILOTO por identidad real (tms_personal.id_empleado =
-  //     flota_viajes.empleado_id — el piloto dueño del viaje, no
-  //     necesariamente quien sube la evidencia si es un auxiliar)
-  //   - misma UNIDAD exacta (tms_unidades.flota_vehiculo_id =
-  //     flota_viajes.vehiculo_id — IDs, no placa como texto)
-  //   - misma FECHA (tms_planes_viaje.fecha_plan = fecha real de
-  //     flota_viajes.hora_salida, no "hoy")
-  //   - estado operativo compatible (Programado/Cargado/En ruta)
-  //   - exactamente UN plan cumple todo lo anterior
-  // Si no se cumple TODO lo anterior con un único resultado, NO se
-  // vincula — la evidencia igual se guarda en flota_viaje_evidencias, y
-  // la respuesta agrega un aviso para que Operaciones resuelva el vínculo
-  // manualmente. No repara evidencia ya subida antes de este cambio.
+  // flota_viajes.plan_id queda NULL. Este auto-vínculo YA NO escribe
+  // flota_viajes.plan_id por su cuenta con una UPDATE propia — usa la
+  // MISMA autoridad transaccional que el vínculo administrativo manual
+  // (src/lib/tms/vincular-viaje-plan.ts): un candidato único y verificable
+  // (mismo piloto por ID, misma unidad por ID, misma fecha, estado
+  // compatible) se busca aquí de forma best-effort
+  // (buscarPlanCandidatoUnicoParaViaje), pero la decisión FINAL —
+  // incluida la exclusividad "un plan = un solo viaje técnico" y el
+  // backfill de evidencia previa — la hace vincularViajeAPlan bajo FOR
+  // UPDATE, exactamente igual que si Operaciones lo vinculara a mano
+  // (origen: "AUTO_PORTAL", solo para que auditoría/mensajes sean
+  // correctos). Si el vínculo NO se concreta por cualquier motivo
+  // esperado (0/2+ candidatos, el plan ya está en uso por otro viaje,
+  // carrera con otra solicitud), la evidencia se guarda de todas formas y
+  // se agrega un aviso — nunca bloquea la subida. Un error técnico
+  // inesperado del intento de vínculo tampoco bloquea la subida, pero SÍ
+  // queda en el log del servidor (no se esconde).
   let avisoVinculoPendiente: string | null = null;
   if (!participacion.planId) {
-    const viajeInfo = await query<RowDataPacket[]>(
-      `SELECT v.empleado_id, v.vehiculo_id, v.hora_salida
-       FROM flota_viajes v WHERE v.id = ? AND v.empresa_id = ? LIMIT 1`,
-      [viajeId, session.empresaId],
-    );
-    const vi = viajeInfo[0];
-    if (vi && vi.empleado_id != null && vi.vehiculo_id != null && vi.hora_salida) {
-      const fechaViaje = String(vi.hora_salida).slice(0, 10);
-      const candidatos = await query<RowDataPacket[]>(
-        `SELECT p.id FROM tms_planes_viaje p
-         INNER JOIN tms_personal pil ON pil.id = p.piloto_id
-         INNER JOIN tms_unidades u ON u.id = p.unidad_id
-         WHERE p.empresa_id = ?
-           AND pil.id_empleado = ?
-           AND u.flota_vehiculo_id = ?
-           AND p.fecha_plan = ?
-           AND p.estado IN ('Programado', 'Cargado', 'En ruta')
-         LIMIT 2`,
-        [session.empresaId, Number(vi.empleado_id), Number(vi.vehiculo_id), fechaViaje],
-      );
-      if (candidatos.length === 1) {
-        const upd = await execute(
-          `UPDATE flota_viajes SET plan_id = ?
-           WHERE id = ? AND empresa_id = ? AND plan_id IS NULL`,
-          [candidatos[0].id, viajeId, session.empresaId],
-        );
-        if (upd.affectedRows) participacion.planId = Number(candidatos[0].id);
+    try {
+      const candidatoPlanId = await buscarPlanCandidatoUnicoParaViaje(session.empresaId, viajeId);
+      const resultado = candidatoPlanId
+        ? await vincularViajeAPlan(
+            session.empresaId,
+            candidatoPlanId,
+            viajeId,
+            `portal:${empleado.codigo}`,
+            "AUTO_PORTAL",
+          )
+        : null;
+      if (resultado?.ok) {
+        participacion.planId = candidatoPlanId;
       } else {
-        // CORRECCIÓN PR #107 (última revisión): ya no se promete un
-        // vínculo automático futuro ni que "aparecerá en TMS" — ahora sí
-        // existe una herramienta real para que Operaciones lo resuelva
-        // (POST /api/empresas/[slug]/tms/planes/[id]/vincular-viaje), pero
-        // el aviso al piloto no debe anticipar el resultado.
+        // CORRECCIÓN PR #107: ya no se promete un vínculo automático
+        // futuro ni que "aparecerá en TMS" — ahora sí existe una
+        // herramienta real para que Operaciones lo resuelva (POST
+        // /api/empresas/[slug]/tms/planes/[id]/vincular-viaje), pero el
+        // aviso al piloto no debe anticipar el resultado. Se muestra
+        // tanto si nunca hubo candidato como si el intento de vínculo
+        // falló por una condición esperada (409: exclusividad, carrera).
         avisoVinculoPendiente =
           "La evidencia se guardó. El viaje aún no está vinculado a su programación; Operaciones deberá revisarlo.";
       }
+    } catch (err) {
+      // Error técnico inesperado (p.ej. falla del backfill dentro de
+      // vincularViajeAPlan) — no debe bloquear la subida de evidencia
+      // (que es respaldo, nunca condicionada al vínculo), pero tampoco se
+      // esconde: queda en el log del servidor.
+      console.error("Auto-vínculo de plan (evidencias portal)", err);
+      avisoVinculoPendiente =
+        "La evidencia se guardó. El viaje aún no está vinculado a su programación; Operaciones deberá revisarlo.";
     }
   }
 

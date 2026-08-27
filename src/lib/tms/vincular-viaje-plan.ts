@@ -37,6 +37,22 @@ export type ResultadoVincularViaje =
   | { ok: false; error: string; status: number };
 
 /**
+ * ÚLTIMA CORRECCIÓN P1 (unificación de autoridad de vínculo): de dónde
+ * viene la solicitud de vínculo — usado SOLO para que la auditoría y los
+ * mensajes sean correctos (nunca decir "vinculado manualmente" para algo
+ * que decidió el sistema, ni al revés). La regla de integridad
+ * (exclusividad plan↔viaje, transacción, backfill) es LA MISMA para
+ * ambos orígenes — nunca dos implementaciones de concurrencia distintas.
+ * - "AUTO_PORTAL": lo dispara el propio Portal del piloto al subir
+ *   evidencia con un candidato único y seguro — solo escribe
+ *   flota_viajes.plan_id, nunca estado administrativo, así que no viola
+ *   "el piloto nunca cierra/cancela/modifica estado".
+ * - "MANUAL_OPERACIONES": lo dispara un usuario administrativo desde
+ *   Programación/TMS (POST /tms/planes/[id]/vincular-viaje).
+ */
+export type OrigenVinculo = "AUTO_PORTAL" | "MANUAL_OPERACIONES";
+
+/**
  * true SOLO si el error es específicamente "columna desconocida"
  * (ER_BAD_FIELD_ERROR / errno 1054) — mismo criterio ya usado en
  * src/lib/rrhh/empleados.ts (esColumnaDesconocida) para decidir cuándo es
@@ -117,11 +133,50 @@ export async function listarViajesCandidatosParaPlan(
   }));
 }
 
+/**
+ * ÚLTIMA CORRECCIÓN P1 (unificación de autoridad de vínculo): mismo
+ * criterio estricto que listarViajesCandidatosParaPlan, pero en la
+ * dirección inversa (dado un viaje técnico sin plan_id, busca el ÚNICO
+ * plan candidato) — es la búsqueda que antes vivía embebida en
+ * api/portal/viajes/[id]/evidencias/route.ts. Es una lectura NO
+ * transaccional (best-effort): la autoridad real de "sigue siendo válido
+ * y sigue siendo el único" la revalida vincularViajeAPlan bajo FOR UPDATE
+ * dentro de su propia transacción — así que una carrera aquí es inocua,
+ * nunca produce un vínculo incorrecto.
+ */
+export async function buscarPlanCandidatoUnicoParaViaje(
+  empresaId: number,
+  viajeId: number,
+): Promise<number | null> {
+  const viajeRows = await query<RowDataPacket[]>(
+    `SELECT v.empleado_id, v.vehiculo_id, v.hora_salida
+     FROM flota_viajes v WHERE v.id = ? AND v.empresa_id = ? LIMIT 1`,
+    [viajeId, empresaId],
+  );
+  const viaje = viajeRows[0];
+  if (!viaje || viaje.empleado_id == null || viaje.vehiculo_id == null || !viaje.hora_salida) return null;
+  const fechaViaje = String(viaje.hora_salida).slice(0, 10);
+  const candidatos = await query<RowDataPacket[]>(
+    `SELECT p.id FROM tms_planes_viaje p
+     INNER JOIN tms_personal pil ON pil.id = p.piloto_id
+     INNER JOIN tms_unidades u ON u.id = p.unidad_id
+     WHERE p.empresa_id = ?
+       AND pil.id_empleado = ?
+       AND u.flota_vehiculo_id = ?
+       AND p.fecha_plan = ?
+       AND p.estado IN (${ESTADOS_COMPATIBLES.map(() => "?").join(",")})
+     LIMIT 2`,
+    [empresaId, Number(viaje.empleado_id), Number(viaje.vehiculo_id), fechaViaje, ...ESTADOS_COMPATIBLES],
+  );
+  return candidatos.length === 1 ? Number(candidatos[0].id) : null;
+}
+
 export async function vincularViajeAPlan(
   empresaId: number,
   planId: number,
   viajeId: number,
   usuario: string,
+  origen: OrigenVinculo,
 ): Promise<ResultadoVincularViaje> {
   const conn: PoolConnection = await getPool().getConnection();
   let descartada = false;
@@ -280,12 +335,19 @@ export async function vincularViajeAPlan(
       sincronizadas++;
     }
 
+    // ÚLTIMA CORRECCIÓN P1: la auditoría distingue el origen real — nunca
+    // "vinculado manualmente" para algo que decidió el propio sistema al
+    // subir evidencia, ni al revés.
+    const accion = origen === "AUTO_PORTAL" ? "vincular_viaje_plan_auto" : "vincular_viaje_plan";
+    const comoTexto = origen === "AUTO_PORTAL"
+      ? `vinculado automáticamente por el sistema al subir evidencia (colaborador: ${usuario})`
+      : `vinculado manualmente por ${usuario}`;
     await registrarAuditoriaTx(conn, {
       empresaId,
       usuario,
       modulo: "tms",
-      accion: "vincular_viaje_plan",
-      detalle: `Plan #${planId} ${plan.codigo} · viaje técnico #${viajeId} vinculado manualmente por ${usuario} · piloto empleado #${viaje.empleado_id} · unidad vehículo #${viaje.vehiculo_id} · fecha ${fechaPlan} · ${sincronizadas} evidencia(s) sincronizada(s) a TMS`,
+      accion,
+      detalle: `Plan #${planId} ${plan.codigo} · viaje técnico #${viajeId} ${comoTexto} · piloto empleado #${viaje.empleado_id} · unidad vehículo #${viaje.vehiculo_id} · fecha ${fechaPlan} · ${sincronizadas} evidencia(s) sincronizada(s) a TMS`,
     });
 
     await conn.commit();

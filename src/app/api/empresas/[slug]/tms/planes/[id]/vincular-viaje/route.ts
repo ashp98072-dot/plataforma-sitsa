@@ -61,7 +61,7 @@ export async function POST(req: Request, ctx: Ctx) {
   // excepción sin manejar.
   let r;
   try {
-    r = await vincularViajeAPlan(guard.empresa.id, planId, parsed.data.viajeId, guard.session.username);
+    r = await vincularViajeAPlan(guard.empresa.id, planId, parsed.data.viajeId, guard.session.username, "MANUAL_OPERACIONES");
   } catch (err) {
     console.error("vincularViajeAPlan", err);
     return NextResponse.json(

@@ -55,7 +55,7 @@ describe("PORTAL-HARDENING-2 (corrección final) — endpoint administrativo de 
       ctx,
     );
     expect(res.status).toBe(200);
-    expect(vincularViajeAPlan).toHaveBeenCalledWith(7, 30, 5, "ops1");
+    expect(vincularViajeAPlan).toHaveBeenCalledWith(7, 30, 5, "ops1", "MANUAL_OPERACIONES");
     const data = await res.json();
     expect(data.mensaje).toContain("PLAN-1");
     expect(data.mensaje).toContain("2 evidencia");

@@ -5,7 +5,7 @@ vi.mock("@/lib/auditoria", () => ({ registrarAuditoriaTx: vi.fn() }));
 
 import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
-import { listarViajesCandidatosParaPlan, vincularViajeAPlan } from "./vincular-viaje-plan";
+import { buscarPlanCandidatoUnicoParaViaje, listarViajesCandidatosParaPlan, vincularViajeAPlan } from "./vincular-viaje-plan";
 
 const conn = {
   beginTransaction: vi.fn(),
@@ -65,7 +65,7 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("PORTAL-HARDENING-2 (corrección final) — vincularViajeAPlan: solo vínculo estricto y verificable", () => {
   it("1) vínculo válido (piloto+unidad+fecha+estado coinciden, sin otro viaje en curso) → éxito", async () => {
-    const r = await vincularViajeAPlan(7, 30, 5, "ops1");
+    const r = await vincularViajeAPlan(7, 30, 5, "ops1", "MANUAL_OPERACIONES");
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.planCodigo).toBe("PLAN-20260827-001");
@@ -84,7 +84,7 @@ describe("PORTAL-HARDENING-2 (corrección final) — vincularViajeAPlan: solo v�
     // fila pertenece a otra empresa, MySQL real simplemente no la
     // devuelve — se simula ese caso (plan no encontrado para esta empresa).
     mockConnQuery({ plan: null });
-    const r = await vincularViajeAPlan(999, 30, 5, "ops1");
+    const r = await vincularViajeAPlan(999, 30, 5, "ops1", "MANUAL_OPERACIONES");
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.status).toBe(404);
@@ -96,7 +96,7 @@ describe("PORTAL-HARDENING-2 (corrección final) — vincularViajeAPlan: solo v�
 
   it("3) piloto del plan distinto al del viaje → rechazo 409", async () => {
     mockConnQuery({ plan: { ...PLAN_BASE, piloto_empleado_id: 999 } });
-    const r = await vincularViajeAPlan(7, 30, 5, "ops1");
+    const r = await vincularViajeAPlan(7, 30, 5, "ops1", "MANUAL_OPERACIONES");
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.status).toBe(409);
@@ -107,7 +107,7 @@ describe("PORTAL-HARDENING-2 (corrección final) — vincularViajeAPlan: solo v�
 
   it("4) unidad del plan distinta a la del viaje → rechazo 409", async () => {
     mockConnQuery({ plan: { ...PLAN_BASE, flota_vehiculo_id: 999 } });
-    const r = await vincularViajeAPlan(7, 30, 5, "ops1");
+    const r = await vincularViajeAPlan(7, 30, 5, "ops1", "MANUAL_OPERACIONES");
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.status).toBe(409);
@@ -118,7 +118,7 @@ describe("PORTAL-HARDENING-2 (corrección final) — vincularViajeAPlan: solo v�
 
   it("5) fecha del plan distinta a la fecha real del viaje → rechazo 409", async () => {
     mockConnQuery({ plan: { ...PLAN_BASE, fecha_plan: "2026-08-20" } });
-    const r = await vincularViajeAPlan(7, 30, 5, "ops1");
+    const r = await vincularViajeAPlan(7, 30, 5, "ops1", "MANUAL_OPERACIONES");
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.status).toBe(409);
@@ -129,7 +129,7 @@ describe("PORTAL-HARDENING-2 (corrección final) — vincularViajeAPlan: solo v�
 
   it("6) viaje ya vinculado a un plan → 409", async () => {
     mockConnQuery({ viaje: { ...VIAJE_BASE, plan_id: 999 } });
-    const r = await vincularViajeAPlan(7, 30, 5, "ops1");
+    const r = await vincularViajeAPlan(7, 30, 5, "ops1", "MANUAL_OPERACIONES");
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.status).toBe(409);
@@ -140,7 +140,7 @@ describe("PORTAL-HARDENING-2 (corrección final) — vincularViajeAPlan: solo v�
 
   it('6b) [P1] el plan ya tiene OTRO viaje técnico ABIERTO → 409 "ya está vinculado a otro viaje técnico"', async () => {
     mockConnQuery({ otroViaje: { id: 100, estado: "abierto" } });
-    const r = await vincularViajeAPlan(7, 30, 5, "ops1");
+    const r = await vincularViajeAPlan(7, 30, 5, "ops1", "MANUAL_OPERACIONES");
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.status).toBe(409);
@@ -153,7 +153,7 @@ describe("PORTAL-HARDENING-2 (corrección final) — vincularViajeAPlan: solo v�
     // Antes de esta corrección, un viaje CERRADO no bloqueaba — permitía
     // que el mismo plan quedara apuntado por dos flota_viajes distintos.
     mockConnQuery({ otroViaje: { id: 100, estado: "cerrado" } });
-    const r = await vincularViajeAPlan(7, 30, 5, "ops1");
+    const r = await vincularViajeAPlan(7, 30, 5, "ops1", "MANUAL_OPERACIONES");
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.status).toBe(409);
@@ -167,7 +167,7 @@ describe("PORTAL-HARDENING-2 (corrección final) — vincularViajeAPlan: solo v�
 
   it("6d) [P1] ningún otro viaje vinculado al plan → permitido (no bloquea el vínculo)", async () => {
     mockConnQuery({ otroViaje: null });
-    const r = await vincularViajeAPlan(7, 30, 5, "ops1");
+    const r = await vincularViajeAPlan(7, 30, 5, "ops1", "MANUAL_OPERACIONES");
     expect(r.ok).toBe(true);
   });
 
@@ -176,7 +176,7 @@ describe("PORTAL-HARDENING-2 (corrección final) — vincularViajeAPlan: solo v�
       if (sql.includes("UPDATE flota_viajes SET plan_id")) return [{ affectedRows: 0 }, []];
       return [{ affectedRows: 1, insertId: 1 }, []];
     });
-    const r = await vincularViajeAPlan(7, 30, 5, "ops1");
+    const r = await vincularViajeAPlan(7, 30, 5, "ops1", "MANUAL_OPERACIONES");
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.status).toBe(409);
     expect(registrarAuditoriaTx).not.toHaveBeenCalled();
@@ -188,7 +188,7 @@ describe("PORTAL-HARDENING-2 (corrección final) — vincularViajeAPlan: solo v�
     mockConnQuery({
       evidencias: [{ id: 1, tipo: "tablero_salida", ruta_relativa: "flota/e1.jpg", nombre_original: "e1.jpg", latitud: 14.6, longitud: -90.5, capturado_en: "2026-08-27 07:05:00", subido_por: "portal:E001", parada_id: null }],
     });
-    await vincularViajeAPlan(7, 30, 5, "ops1");
+    await vincularViajeAPlan(7, 30, 5, "ops1", "MANUAL_OPERACIONES");
     for (const call of conn.execute.mock.calls) {
       const sql = String(call[0]);
       expect(sql).not.toMatch(/SET\s+estado/i);
@@ -196,7 +196,7 @@ describe("PORTAL-HARDENING-2 (corrección final) — vincularViajeAPlan: solo v�
   });
 
   it("9) registra auditoría con plan, viaje, piloto, unidad y fecha", async () => {
-    await vincularViajeAPlan(7, 30, 5, "jefe.operaciones");
+    await vincularViajeAPlan(7, 30, 5, "jefe.operaciones", "MANUAL_OPERACIONES");
     expect(registrarAuditoriaTx).toHaveBeenCalledTimes(1);
     const [, payload] = vi.mocked(registrarAuditoriaTx).mock.calls[0];
     expect(payload.accion).toBe("vincular_viaje_plan");
@@ -209,6 +209,15 @@ describe("PORTAL-HARDENING-2 (corrección final) — vincularViajeAPlan: solo v�
     expect(payload.usuario).toBe("jefe.operaciones");
   });
 
+  it('9b) [P1] origen "AUTO_PORTAL" audita distinto de "MANUAL_OPERACIONES" — nunca dice "vinculado manualmente" para algo que decidió el sistema', async () => {
+    const r = await vincularViajeAPlan(7, 30, 5, "portal:E001", "AUTO_PORTAL");
+    expect(r.ok).toBe(true);
+    const [, payload] = vi.mocked(registrarAuditoriaTx).mock.calls[0];
+    expect(payload.accion).toBe("vincular_viaje_plan_auto");
+    expect(payload.detalle).toContain("vinculado automáticamente por el sistema al subir evidencia");
+    expect(payload.detalle).not.toContain("vinculado manualmente");
+  });
+
   it("10) backfill de evidencia existente: una fila NUEVA se sincroniza una sola vez, una YA sincronizada no se duplica", async () => {
     mockConnQuery({
       evidencias: [
@@ -217,7 +226,7 @@ describe("PORTAL-HARDENING-2 (corrección final) — vincularViajeAPlan: solo v�
       ],
       yaSincronizada: (ruta) => ruta === "flota/ya-sincronizada.jpg",
     });
-    const r = await vincularViajeAPlan(7, 30, 5, "ops1");
+    const r = await vincularViajeAPlan(7, 30, 5, "ops1", "MANUAL_OPERACIONES");
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.evidenciasSincronizadas).toBe(1);
     const insertsTms = conn.execute.mock.calls.filter((c) => String(c[0]).includes("INSERT INTO tms_evidencias"));
@@ -237,7 +246,7 @@ describe("PORTAL-HARDENING-2 (corrección final) — vincularViajeAPlan: solo v�
       }
       throw new Error(`Consulta inesperada: ${sql}`);
     });
-    await expect(vincularViajeAPlan(7, 30, 5, "ops1")).rejects.toThrow("Conexión perdida");
+    await expect(vincularViajeAPlan(7, 30, 5, "ops1", "MANUAL_OPERACIONES")).rejects.toThrow("Conexión perdida");
     // El UPDATE de plan_id ya se había ejecutado ANTES de leer evidencias
     // — por eso el rollback es indispensable, no un simple "no hacer nada".
     expect(conn.execute).toHaveBeenCalledWith(
@@ -262,7 +271,7 @@ describe("PORTAL-HARDENING-2 (corrección final) — vincularViajeAPlan: solo v�
       }
       return [{ affectedRows: 1, insertId: 1 }, []];
     });
-    await expect(vincularViajeAPlan(7, 30, 5, "ops1")).rejects.toThrow(/foreign key/);
+    await expect(vincularViajeAPlan(7, 30, 5, "ops1", "MANUAL_OPERACIONES")).rejects.toThrow(/foreign key/);
     const insertsTms = conn.execute.mock.calls.filter((c) => String(c[0]).includes("INSERT INTO tms_evidencias"));
     expect(insertsTms).toHaveLength(1); // nunca un segundo INSERT "reducido" ocultando el error real
     expect(conn.rollback).toHaveBeenCalledTimes(1);
@@ -288,7 +297,7 @@ describe("PORTAL-HARDENING-2 (corrección final) — vincularViajeAPlan: solo v�
       }
       return [{ affectedRows: 1, insertId: 1 }, []];
     });
-    const r = await vincularViajeAPlan(7, 30, 5, "ops1");
+    const r = await vincularViajeAPlan(7, 30, 5, "ops1", "MANUAL_OPERACIONES");
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.evidenciasSincronizadas).toBe(1);
     const insertsTms = conn.execute.mock.calls.filter((c) => String(c[0]).includes("INSERT INTO tms_evidencias"));
@@ -344,4 +353,45 @@ describe("PORTAL-HARDENING-2 (corrección final) — listarViajesCandidatosParaP
       expect(candidatos).toHaveLength(1);
     },
   );
+});
+
+// ÚLTIMA CORRECCIÓN P1 (unificación de autoridad de vínculo) — la
+// búsqueda que antes vivía embebida en
+// api/portal/viajes/[id]/evidencias/route.ts, ahora aquí como pieza
+// reutilizable. Es solo la mitad "búsqueda best-effort" del auto-vínculo
+// — la autoridad real de exclusividad/concurrencia sigue siendo
+// vincularViajeAPlan (probado arriba), a la que el Portal debe delegar.
+describe("PORTAL-HARDENING-2 (última corrección) — buscarPlanCandidatoUnicoParaViaje: mitad 'búsqueda' del auto-vínculo del Portal", () => {
+  it("candidato único (piloto+unidad+fecha+estado coinciden) → devuelve su id", async () => {
+    vi.mocked(query)
+      .mockResolvedValueOnce([{ empleado_id: 501, vehiculo_id: 15, hora_salida: "2026-08-27 07:00:00" }] as unknown as Awaited<ReturnType<typeof query>>)
+      .mockResolvedValueOnce([{ id: 30 }] as unknown as Awaited<ReturnType<typeof query>>);
+    const planId = await buscarPlanCandidatoUnicoParaViaje(7, 5);
+    expect(planId).toBe(30);
+    const [sql, params] = vi.mocked(query).mock.calls[1];
+    expect(sql).toContain("pil.id_empleado = ?");
+    expect(sql).toContain("u.flota_vehiculo_id = ?");
+    expect(sql).toContain("p.fecha_plan = ?");
+    expect(params).toEqual([7, 501, 15, "2026-08-27", "Programado", "Cargado", "En ruta"]);
+  });
+
+  it("0 candidatos → null", async () => {
+    vi.mocked(query)
+      .mockResolvedValueOnce([{ empleado_id: 501, vehiculo_id: 15, hora_salida: "2026-08-27 07:00:00" }] as unknown as Awaited<ReturnType<typeof query>>)
+      .mockResolvedValueOnce([] as unknown as Awaited<ReturnType<typeof query>>);
+    expect(await buscarPlanCandidatoUnicoParaViaje(7, 5)).toBeNull();
+  });
+
+  it("2+ candidatos (ambigüedad real) → null", async () => {
+    vi.mocked(query)
+      .mockResolvedValueOnce([{ empleado_id: 501, vehiculo_id: 15, hora_salida: "2026-08-27 07:00:00" }] as unknown as Awaited<ReturnType<typeof query>>)
+      .mockResolvedValueOnce([{ id: 30 }, { id: 31 }] as unknown as Awaited<ReturnType<typeof query>>);
+    expect(await buscarPlanCandidatoUnicoParaViaje(7, 5)).toBeNull();
+  });
+
+  it("viaje inexistente o con datos incompletos (sin empleado/vehículo/hora) → null, sin buscar candidatos", async () => {
+    vi.mocked(query).mockResolvedValueOnce([] as unknown as Awaited<ReturnType<typeof query>>);
+    expect(await buscarPlanCandidatoUnicoParaViaje(7, 5)).toBeNull();
+    expect(query).toHaveBeenCalledTimes(1);
+  });
 });
