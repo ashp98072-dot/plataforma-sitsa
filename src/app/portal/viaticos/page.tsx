@@ -20,10 +20,10 @@ export default async function ViaticosPage({ searchParams }: { searchParams: Pro
         <Link href="/portal" className="text-sm underline">← Volver</Link>
         <header>
           <h1 className="text-2xl font-semibold">Mis viáticos</h1>
-          <p className="mt-2 text-sm text-[var(--muted)]">Viáticos asignados e historial de entregas de tus viajes como piloto. Solo se muestran tus montos.</p>
+          <p className="mt-2 text-sm text-[var(--muted)]">Viáticos asignados e historial de entregas de tus viajes como piloto o auxiliar. Solo se muestran tus montos.</p>
           <p className="mt-1 text-xs text-[var(--muted)]">Programado o autorizado no significa entregado. La entrega la registra Operaciones.</p>
         </header>
-        {items.length === 0 ? <p>No hay viáticos registrados en esta página.</p> : items.map((v) => (
+        {items.length === 0 ? <p>No hay viáticos vinculados a tu usuario en esta página. Si ya tienes una asignación, solicita a Operaciones verificar que tu registro de TMS esté vinculado a tu ficha de empleado.</p> : items.map((v) => (
           <section key={v.id} className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-5">
             <div className="flex flex-wrap justify-between gap-2">
               <Link className="font-semibold underline" href={`/portal/viajes?viaje=${v.planId}`}>{v.codigo}</Link>

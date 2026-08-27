@@ -52,9 +52,17 @@ export default async function PortalHomePage() {
   ]);
   const horasExtraDisponible =
     Boolean(empleado?.horasExtraHabilitado);
+  // Visibilidad de la tarjeta, NO autorización sobre viajes ni vinculación TMS.
+  // Un puesto válido de RRHH puede existir antes de registrar personal en TMS.
+  const puesto = (empleado?.puesto ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  const viaticosDisponible = Boolean(personalOperativo) || (
+    empleado?.estado === "Activo" && (
+      /^piloto\b/.test(puesto) || /^(auxiliar|auxiliar (de )?transportes?)$/.test(puesto)
+    )
+  );
   const disponibles = [
     ...DISPONIBLES,
-    ...(personalOperativo?.tipo === "Piloto" ? [{
+    ...(viaticosDisponible ? [{
       titulo: "Mis viáticos",
       detalle: "Consulta tus viáticos asignados y el historial de entregas por viaje.",
       href: "/portal/viaticos",
