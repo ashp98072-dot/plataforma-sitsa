@@ -178,6 +178,20 @@ function estadoVisible(p: Plan): { label: string; badge: string } {
   };
 }
 
+/**
+ * OPS-AJUSTES (sección 16) — la tarjeta completa ya es clicable (abre
+ * plan-form.tsx debajo), pero no había ninguna pista visual de qué hace
+ * ese clic; el usuario tenía que "adivinar". Esta etiqueta es puramente
+ * informativa (mismo onClick del contenedor padre, sin lógica propia) —
+ * no cambia ningún permiso ni flujo, solo aclara la acción esperada
+ * según el estado real/derivado del plan.
+ */
+function accionVisible(p: Plan): string {
+  if (p.estado === "Cerrado") return "Ver expediente";
+  if (p.pendiente_cierre) return "Revisar y cerrar";
+  return "Editar / Ajustes";
+}
+
 function normPlaca(p: string): string {
   return p.toUpperCase().replace(/[\s-]/g, "");
 }
@@ -1039,6 +1053,9 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
                       Atrasado
                     </span>
                   ) : null}
+                  <span className="rounded border border-[var(--border)] px-2 py-0.5 text-[11px] text-[var(--muted)]">
+                    {accionVisible(p)}
+                  </span>
                 </div>
               </div>
 

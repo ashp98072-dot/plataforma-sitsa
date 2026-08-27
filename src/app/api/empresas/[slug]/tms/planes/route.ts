@@ -1080,9 +1080,25 @@ const patchSchema = z.object({
   // retira también: ya no se genera para viajes nuevos (ver
   // marcarPlanDescargado en planes-salida.ts) y no tiene sentido que
   // este formulario general lo re-introduzca a mano.
+  //
+  // OPS-AJUSTES: mismo hallazgo, ahora con "En ruta" — este PATCH
+  // también lo aceptaba como cualquier otro valor, permitiendo a
+  // cualquier usuario con programacion:editar forzar el inicio del
+  // viaje sin pasar por el piloto (Portal) ni por Flota registrando en
+  // su nombre. La transición real Programado/Cargado → "En ruta" sigue
+  // siendo EXCLUSIVA de marcarPlanEnRuta() (src/lib/tms/planes-salida.ts),
+  // invocada solo desde /api/portal/viajes y
+  // /api/empresas/[slug]/flota/viajes — nunca desde aquí. Confirmado por
+  // grep que ningún caller legítimo de este PATCH envía "En ruta" hoy.
   estado: z
-    .enum(["Programado", "En ruta", "Cargado", "Cancelado"])
+    .enum(["Programado", "Cargado", "Cancelado"])
     .optional(),
+  // OPS-AJUSTES (sección 3) — motivo obligatorio para cambios sensibles
+  // de piloto/unidad/auxiliares (verificado más abajo, después de
+  // calcular `cambios`, porque solo ahí se sabe si esos campos realmente
+  // cambiaron respecto al valor anterior — un PATCH que reenvía el mismo
+  // piloto no debe exigir motivo).
+  motivoCambio: z.string().trim().max(300).optional(),
   notas: z.string().optional(),
   horaCarga: z.string().optional(),
   regresoEstimado: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/).nullable().optional(),
@@ -1158,6 +1174,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
   const plan = await query<RowDataPacket[]>(
     `SELECT p.id, p.codigo, p.estado, p.fecha_plan, p.hora_carga, p.notas,
             p.piloto_id, p.unidad_id, p.regreso_estimado,
+            p.tarifa_comercial, p.referencia_cliente,
             u.placa, u.flota_vehiculo_id, pil.nombre AS piloto,
             ${SQL_PENDIENTE_CIERRE} AS pendiente_cierre
      FROM tms_planes_viaje p
@@ -1182,6 +1199,14 @@ export async function PATCH(req: Request, ctx: Ctx) {
       plan[0].regreso_estimado != null
         ? String(plan[0].regreso_estimado).slice(0, 19).replace("T", " ")
         : null,
+    // OPS-AJUSTES (sección 4) — para que la bitácora muestre "Tarifa:
+    // Q1,000 → Q1,200" en vez de un genérico "datos comerciales
+    // actualizados". Solo lectura para el detalle de auditoría; no
+    // cambia ninguna regla de negocio existente sobre estos campos.
+    tarifaComercial:
+      plan[0].tarifa_comercial != null ? Number(plan[0].tarifa_comercial) : null,
+    referenciaCliente:
+      plan[0].referencia_cliente != null ? String(plan[0].referencia_cliente) : null,
     flotaVehiculoId:
       plan[0].flota_vehiculo_id != null
         ? Number(plan[0].flota_vehiculo_id)
@@ -1226,6 +1251,20 @@ export async function PATCH(req: Request, ctx: Ctx) {
     d.regresoEstimado !== undefined ||
     d.tarifaComercial !== undefined ||
     d.referenciaCliente !== undefined;
+
+  // OPS-AJUSTES (sección 3) — motivo obligatorio para cambios sensibles:
+  // piloto, unidad y auxiliares. Se valida aquí, ANTES de cualquier
+  // escritura (misma zona que los guards de ESTADOS_BLOQUEADOS/
+  // ESTADOS_SOLO_NOTAS de abajo, que tampoco han escrito nada todavía) —
+  // usa toca* (ya calculados arriba: "la solicitud incluye un valor para
+  // este campo"), no una comparación contra el valor anterior, para
+  // nunca dejar pasar un cambio real sin motivo registrado.
+  if ((tocaPiloto || tocaUnidad || tocaAuxiliares) && !d.motivoCambio?.trim()) {
+    return NextResponse.json(
+      { error: "Indica el motivo del cambio de piloto, unidad o auxiliares." },
+      { status: 400 },
+    );
+  }
 
   if (ESTADOS_BLOQUEADOS.has(antes.estado)) {
     return NextResponse.json(
@@ -2062,10 +2101,23 @@ export async function PATCH(req: Request, ctx: Ctx) {
   if (d.notas != null) {
     cambios.push("notas actualizadas");
   }
-  if (tocaComercial) cambios.push("datos comerciales/regreso estimado actualizados");
+  // OPS-AJUSTES (sección 4, ejemplo de bitácora "Tarifa: Q1,000 → Q1,200"):
+  // mensaje específico para tarifa cuando realmente cambia; el resto de
+  // "datos comerciales" (regreso estimado, referencia) conserva el
+  // resumen genérico existente, sin ampliar más de lo pedido.
+  if (d.tarifaComercial !== undefined && d.tarifaComercial !== antes.tarifaComercial) {
+    cambios.push(`tarifa Q${antes.tarifaComercial ?? "—"} → Q${d.tarifaComercial ?? "—"}`);
+  }
+  if (d.regresoEstimado !== undefined || d.referenciaCliente !== undefined) {
+    cambios.push("datos comerciales/regreso estimado actualizados");
+  }
   if (paradasInput != null) {
     cambios.push(`paradas redefinidas (${paradasAntesCount} → ${paradasInput.length})`);
   }
+  // OPS-AJUSTES (sección 4) — motivo del cambio, visible en la bitácora
+  // junto al resto de "antes → después" de este mismo registro de
+  // auditoría (no se crea un sistema de auditoría paralelo).
+  if (d.motivoCambio?.trim()) cambios.push(`motivo: ${d.motivoCambio.trim()}`);
   // OPS-3.2b: distingue en la bitácora una corrección administrativa
   // pre-cierre de una edición común — mismo `detalle` "antes → después"
   // de siempre, solo cambia la etiqueta de `accion`. cancelar_ruta sigue
