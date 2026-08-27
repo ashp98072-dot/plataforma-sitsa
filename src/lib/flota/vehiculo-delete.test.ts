@@ -33,7 +33,7 @@ beforeEach(() => {
   } as Awaited<ReturnType<typeof requireTenantFlota>>);
   vi.mocked(getPool).mockReturnValue({ getConnection } as unknown as ReturnType<typeof getPool>);
   getConnection.mockResolvedValue(conn);
-  conn.query.mockResolvedValueOnce([[{ id: 7, placa: "PRUEBA" }], []]).mockResolvedValueOnce([[], []]);
+  conn.query.mockResolvedValueOnce([[{ id: 7, placa: "PRUEBA" }], []]).mockResolvedValue([[], []]);
   conn.execute.mockResolvedValue([{ affectedRows: 1 }, []]);
 });
 afterEach(() => vi.restoreAllMocks());
@@ -45,6 +45,9 @@ describe("DELETE físico de vehículos", () => {
     expect(conn.query.mock.calls[0][0]).toContain("empresa_id = ? LIMIT 1 FOR UPDATE");
     expect(conn.query.mock.calls[0][1]).toEqual([7, 3]);
     expect(conn.query.mock.calls[1][0]).toContain("FOR UPDATE");
+    expect(conn.query.mock.calls[1][0]).toContain("ops_multas_revisiones");
+    expect(conn.query.mock.calls[1][1]).toEqual([3, 7]);
+    expect(conn.query.mock.calls[2][0]).toContain("flota_viajes");
     expect(conn.execute).toHaveBeenCalledTimes(9);
     expect(conn.beginTransaction.mock.invocationCallOrder[0]).toBeLessThan(conn.query.mock.invocationCallOrder[0]);
     expect(conn.query.mock.invocationCallOrder[1]).toBeLessThan(conn.execute.mock.invocationCallOrder[0]);
@@ -54,9 +57,7 @@ describe("DELETE físico de vehículos", () => {
     expect(conn.release).toHaveBeenCalledTimes(1);
     expect(query).not.toHaveBeenCalled();
     expect(execute).not.toHaveBeenCalled();
-    for (const [sql] of [...conn.query.mock.calls, ...conn.execute.mock.calls]) {
-      expect(sql).not.toMatch(/ops_multas|ops_multa_documentos/);
-    }
+    for (const [sql] of conn.execute.mock.calls) expect(sql).not.toMatch(/ops_multas|ops_multa_documentos/);
     expect(conn.execute.mock.calls[8][1]).toEqual([7, 3]);
   });
 
@@ -80,10 +81,34 @@ describe("DELETE físico de vehículos", () => {
   });
 
   it("rechaza un viaje abierto antes de borrar dependencias", async () => {
-    conn.query.mockReset().mockResolvedValueOnce([[{ id: 7, placa: "PRUEBA" }], []]).mockResolvedValueOnce([[{ id: 9 }], []]);
+    conn.query.mockReset().mockResolvedValueOnce([[{ id: 7, placa: "PRUEBA" }], []]).mockResolvedValueOnce([[], []]).mockResolvedValueOnce([[{ id: 9 }], []]);
     expect((await request()).status).toBe(409);
     expect(conn.execute).not.toHaveBeenCalled();
     expect(conn.rollback).toHaveBeenCalledTimes(1);
+  });
+
+  it("rechaza cualquier revisión histórica de multas antes de borrar dependencias", async () => {
+    conn.query.mockReset().mockResolvedValueOnce([[{ id: 7, placa: "PRUEBA" }], []]).mockResolvedValueOnce([[{ id: 12 }], []]);
+    const response = await request();
+    expect(response.status).toBe(409);
+    expect((await response.json()).error).toContain("Dar de baja");
+    expect(conn.query).toHaveBeenCalledTimes(2);
+    expect(conn.query.mock.calls[1][0]).not.toMatch(/estado|periodo/);
+    expect(conn.execute).not.toHaveBeenCalled();
+    expect(conn.rollback).toHaveBeenCalledTimes(1);
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(conn.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("falla cerrado sin borrados si aún no se aplicó la migración de Multas", async () => {
+    conn.query.mockReset().mockResolvedValueOnce([[{ id: 7, placa: "PRUEBA" }], []])
+      .mockRejectedValueOnce(Object.assign(new Error("Tabla inexistente"), { code: "ER_NO_SUCH_TABLE" }));
+    expect((await request()).status).toBe(500);
+    expect(conn.execute).not.toHaveBeenCalled();
+    expect(conn.rollback).toHaveBeenCalledTimes(1);
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalled();
+    expect(conn.release).toHaveBeenCalledTimes(1);
   });
 
   it("no adquiere conexión sin permiso eliminar", async () => {
