@@ -554,10 +554,21 @@ export async function DELETE(req: Request, ctx: Ctx) {
       return NextResponse.json({ error: "Vehículo no encontrado." }, { status: 404 });
     }
 
-    // FUTURO MULTAS: después de aplicar su migración, agregar AQUÍ el guard
-    // de revisiones/multas históricas de esta unidad, usando esta misma conn.
-    // Si existen: rollback + 409 indicando utilizar "Dar de baja".
-    // No consultar tablas de Multas antes de que exista la migración.
+    // Despliegue obligatorio: migrate-2026-08-operaciones-multas.sql primero.
+    // Current read bajo el lock de la unidad: cualquier revisión es historial,
+    // incluso sin multas o con multas anuladas. No ignorar errores de esquema.
+    const [historialMultas] = await conn.query<RowDataPacket[]>(
+      `SELECT id FROM ops_multas_revisiones
+       WHERE empresa_id = ? AND vehiculo_id = ? LIMIT 1 FOR UPDATE`,
+      [guard.empresa.id, id],
+    );
+    if (historialMultas[0]) {
+      await conn.rollback();
+      return NextResponse.json(
+        { error: "Esta unidad tiene historial de multas y no puede eliminarse definitivamente. Utiliza ‘Dar de baja’ para conservar su historial." },
+        { status: 409 },
+      );
+    }
     const [abierto] = await conn.query<RowDataPacket[]>(
       `SELECT id FROM flota_viajes
        WHERE empresa_id = ? AND vehiculo_id = ? AND estado = 'abierto' LIMIT 1 FOR UPDATE`,
