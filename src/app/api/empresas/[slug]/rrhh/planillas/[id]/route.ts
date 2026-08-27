@@ -160,20 +160,14 @@ export async function POST(req: Request, ctx: Ctx) {
         guard.empresa.id,
         periodoId,
         parsed.data.motivo ?? "",
+        guard.session.username,
       );
       if (!r.ok) {
         const status = r.motivo === "no_encontrado" ? 404 : 409;
         return NextResponse.json({ error: r.mensaje }, { status });
       }
-      await registrarAuditoria({
-        empresaId: guard.empresa.id,
-        usuario: guard.session.username,
-        accion: "cancelar_periodo_planilla",
-        modulo: "rrhh",
-        detalle: `Periodo #${periodoId} ${periodo.codigo} · ${periodo.estado} → Cancelado · motivo: ${(parsed.data.motivo ?? "").trim()}`,
-      });
       return NextResponse.json({
-        mensaje: "Periodo cancelado.",
+        mensaje: "Periodo cancelado. Sus cuotas y horas extra no pagadas vuelven a estar disponibles; las líneas se conservan como histórico.",
         periodo: await obtenerPeriodo(guard.empresa.id, periodoId),
       });
     }
