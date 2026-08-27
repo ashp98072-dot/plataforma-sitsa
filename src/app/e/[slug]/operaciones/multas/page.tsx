@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import { useParams } from "next/navigation";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
@@ -85,6 +85,98 @@ const formVacio = {
   responsable_texto: "", resolucion_economica: "PENDIENTE" as Resolucion, monto_empresa: "", monto_colaborador: "",
   observaciones: "",
 };
+type FormMultaState = typeof formVacio;
+
+/**
+ * Bug UX (feedback de Operaciones): con >100 unidades, el formulario
+ * renderizado al final de la página quedaba fuera de vista al pulsar
+ * "Registrar multa" cerca del principio de la tabla. Se extrae el bloque
+ * de campos a este componente local (mismas reglas, mismo formVacio, sin
+ * segundo formulario) para poder montarlo INLINE, en una fila justo
+ * debajo de la unidad seleccionada — igual que ya hacía "Registrar
+ * revisión" — en vez de en una sección aparte al final.
+ */
+function FormularioMulta({
+  placa, form, setForm, esPersonal, empleados, guardando, onGuardar, onCancelar,
+}: {
+  placa: string;
+  form: FormMultaState;
+  setForm: Dispatch<SetStateAction<FormMultaState>>;
+  esPersonal: boolean;
+  empleados: Empleado[] | null;
+  guardando: boolean;
+  onGuardar: () => void;
+  onCancelar: () => void;
+}) {
+  return (
+    <div className="rounded-lg border border-[var(--accent)] bg-[var(--card)] p-4">
+      <h3 className="mb-2 text-sm font-semibold">Nueva multa — {placa}</h3>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="text-xs text-[var(--muted)]">Fecha de infracción
+          <input type="date" className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.fecha_infraccion} onChange={(e) => setForm((f) => ({ ...f, fecha_infraccion: e.target.value }))} />
+        </label>
+        <label className="text-xs text-[var(--muted)]">Referencia de boleta
+          <input className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.referencia_boleta} onChange={(e) => setForm((f) => ({ ...f, referencia_boleta: e.target.value }))} />
+        </label>
+        <label className="text-xs text-[var(--muted)]">Tipo de multa
+          <input className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.tipo_multa} onChange={(e) => setForm((f) => ({ ...f, tipo_multa: e.target.value }))} />
+        </label>
+        <label className="text-xs text-[var(--muted)]">Lugar
+          <input className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.lugar} onChange={(e) => setForm((f) => ({ ...f, lugar: e.target.value }))} />
+        </label>
+        <label className="text-xs text-[var(--muted)] sm:col-span-2">Descripción
+          <textarea className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" rows={2} value={form.descripcion} onChange={(e) => setForm((f) => ({ ...f, descripcion: e.target.value }))} />
+        </label>
+        <label className="text-xs text-[var(--muted)]">Monto (Q)
+          <input inputMode="decimal" className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.monto_total} onChange={(e) => setForm((f) => ({ ...f, monto_total: e.target.value }))} placeholder="0.00" />
+        </label>
+        <label className="text-xs text-[var(--muted)]">Responsabilidad
+          <select className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.tipo_responsabilidad} onChange={(e) => setForm((f) => ({ ...f, tipo_responsabilidad: e.target.value as Responsabilidad, empleado_responsable_id: "", responsable_texto: "" }))}>
+            {RESPONSABILIDADES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+          </select>
+        </label>
+        {esPersonal ? (
+          empleados ? (
+            <label className="text-xs text-[var(--muted)]">Colaborador responsable
+              <select className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.empleado_responsable_id} onChange={(e) => setForm((f) => ({ ...f, empleado_responsable_id: e.target.value }))}>
+                <option value="">— Seleccionar —</option>
+                {empleados.map((e) => <option key={e.id} value={e.id}>{e.codigo} · {e.nombre}</option>)}
+              </select>
+            </label>
+          ) : (
+            <label className="text-xs text-[var(--muted)]">Responsable (nombre)
+              <input className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.responsable_texto} onChange={(e) => setForm((f) => ({ ...f, responsable_texto: e.target.value }))} />
+            </label>
+          )
+        ) : null}
+        <label className="text-xs text-[var(--muted)]">Resolución económica
+          <select className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.resolucion_economica} onChange={(e) => setForm((f) => ({ ...f, resolucion_economica: e.target.value as Resolucion }))}>
+            {RESOLUCIONES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+          </select>
+        </label>
+        {form.resolucion_economica === "COMPARTIDO" ? (
+          <>
+            <label className="text-xs text-[var(--muted)]">Monto a cargo de la empresa (Q)
+              <input inputMode="decimal" className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.monto_empresa} onChange={(e) => setForm((f) => ({ ...f, monto_empresa: e.target.value }))} />
+            </label>
+            <label className="text-xs text-[var(--muted)]">Monto a cargo del colaborador (Q)
+              <input inputMode="decimal" className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.monto_colaborador} onChange={(e) => setForm((f) => ({ ...f, monto_colaborador: e.target.value }))} />
+            </label>
+          </>
+        ) : null}
+        <label className="text-xs text-[var(--muted)] sm:col-span-2">Observaciones (obligatorio si NO_APLICA)
+          <textarea className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" rows={2} value={form.observaciones} onChange={(e) => setForm((f) => ({ ...f, observaciones: e.target.value }))} />
+        </label>
+      </div>
+      <div className="mt-3 flex gap-2">
+        <button type="button" disabled={guardando} className="rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50" onClick={onGuardar}>
+          {guardando ? "Guardando…" : "Registrar multa"}
+        </button>
+        <button type="button" className="rounded-md border border-[var(--border)] px-3 py-1.5 text-xs" onClick={onCancelar}>Cancelar</button>
+      </div>
+    </div>
+  );
+}
 
 export default function MultasPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -342,13 +434,23 @@ export default function MultasPage() {
                       <td className="py-2 pr-3">
                         {u.estadoRevision === "PENDIENTE" ? (
                           <button type="button" className="rounded-md bg-[var(--accent)] px-3 py-1 text-xs font-medium text-white"
-                            onClick={() => { setRevisionAbierta(revisionAbierta === u.vehiculoId ? null : u.vehiculoId); setObsRevision(""); }}>
+                            onClick={() => {
+                              setMultaFormPara(null);
+                              setRevisionAbierta(revisionAbierta === u.vehiculoId ? null : u.vehiculoId);
+                              setObsRevision("");
+                            }}>
                             {revisionAbierta === u.vehiculoId ? "Cerrar" : "Registrar revisión"}
                           </button>
                         ) : (
                           <button type="button" className="rounded-md border border-[var(--border)] px-3 py-1 text-xs font-medium"
-                            onClick={() => { setMultaFormPara({ vehiculoId: u.vehiculoId, revisionId: u.revisionId!, placa: u.placa }); setForm(formVacio); }}>
-                            Registrar multa
+                            onClick={() => {
+                              setRevisionAbierta(null);
+                              setMultaFormPara(
+                                multaFormPara?.vehiculoId === u.vehiculoId ? null : { vehiculoId: u.vehiculoId, revisionId: u.revisionId!, placa: u.placa },
+                              );
+                              setForm(formVacio);
+                            }}>
+                            {multaFormPara?.vehiculoId === u.vehiculoId ? "Cerrar" : "Registrar multa"}
                           </button>
                         )}
                       </td>
@@ -369,6 +471,22 @@ export default function MultasPage() {
                         </td>
                       </tr>
                     ) : null}
+                    {multaFormPara?.vehiculoId === u.vehiculoId ? (
+                      <tr key={`${u.vehiculoId}-multa`} className="border-t border-[var(--border)] bg-[var(--input)]/30">
+                        <td colSpan={7} className="py-3 pr-3">
+                          <FormularioMulta
+                            placa={multaFormPara.placa}
+                            form={form}
+                            setForm={setForm}
+                            esPersonal={esPersonal}
+                            empleados={empleados}
+                            guardando={guardando}
+                            onGuardar={() => void guardarMulta()}
+                            onCancelar={() => { setMultaFormPara(null); setForm(formVacio); }}
+                          />
+                        </td>
+                      </tr>
+                    ) : null}
                   </>
                 ))}
               </tbody>
@@ -376,75 +494,6 @@ export default function MultasPage() {
           </div>
         )}
       </section>
-
-      {multaFormPara ? (
-        <section className="rounded-xl border border-[var(--accent)] bg-[var(--card)] p-4">
-          <h2 className="mb-2 text-sm font-semibold">Nueva multa — {multaFormPara.placa}</h2>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="text-xs text-[var(--muted)]">Fecha de infracción
-              <input type="date" className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.fecha_infraccion} onChange={(e) => setForm((f) => ({ ...f, fecha_infraccion: e.target.value }))} />
-            </label>
-            <label className="text-xs text-[var(--muted)]">Referencia de boleta
-              <input className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.referencia_boleta} onChange={(e) => setForm((f) => ({ ...f, referencia_boleta: e.target.value }))} />
-            </label>
-            <label className="text-xs text-[var(--muted)]">Tipo de multa
-              <input className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.tipo_multa} onChange={(e) => setForm((f) => ({ ...f, tipo_multa: e.target.value }))} />
-            </label>
-            <label className="text-xs text-[var(--muted)]">Lugar
-              <input className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.lugar} onChange={(e) => setForm((f) => ({ ...f, lugar: e.target.value }))} />
-            </label>
-            <label className="text-xs text-[var(--muted)] sm:col-span-2">Descripción
-              <textarea className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" rows={2} value={form.descripcion} onChange={(e) => setForm((f) => ({ ...f, descripcion: e.target.value }))} />
-            </label>
-            <label className="text-xs text-[var(--muted)]">Monto (Q)
-              <input inputMode="decimal" className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.monto_total} onChange={(e) => setForm((f) => ({ ...f, monto_total: e.target.value }))} placeholder="0.00" />
-            </label>
-            <label className="text-xs text-[var(--muted)]">Responsabilidad
-              <select className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.tipo_responsabilidad} onChange={(e) => setForm((f) => ({ ...f, tipo_responsabilidad: e.target.value as Responsabilidad, empleado_responsable_id: "", responsable_texto: "" }))}>
-                {RESPONSABILIDADES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
-              </select>
-            </label>
-            {esPersonal ? (
-              empleados ? (
-                <label className="text-xs text-[var(--muted)]">Colaborador responsable
-                  <select className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.empleado_responsable_id} onChange={(e) => setForm((f) => ({ ...f, empleado_responsable_id: e.target.value }))}>
-                    <option value="">— Seleccionar —</option>
-                    {empleados.map((e) => <option key={e.id} value={e.id}>{e.codigo} · {e.nombre}</option>)}
-                  </select>
-                </label>
-              ) : (
-                <label className="text-xs text-[var(--muted)]">Responsable (nombre)
-                  <input className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.responsable_texto} onChange={(e) => setForm((f) => ({ ...f, responsable_texto: e.target.value }))} />
-                </label>
-              )
-            ) : null}
-            <label className="text-xs text-[var(--muted)]">Resolución económica
-              <select className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.resolucion_economica} onChange={(e) => setForm((f) => ({ ...f, resolucion_economica: e.target.value as Resolucion }))}>
-                {RESOLUCIONES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
-              </select>
-            </label>
-            {form.resolucion_economica === "COMPARTIDO" ? (
-              <>
-                <label className="text-xs text-[var(--muted)]">Monto a cargo de la empresa (Q)
-                  <input inputMode="decimal" className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.monto_empresa} onChange={(e) => setForm((f) => ({ ...f, monto_empresa: e.target.value }))} />
-                </label>
-                <label className="text-xs text-[var(--muted)]">Monto a cargo del colaborador (Q)
-                  <input inputMode="decimal" className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.monto_colaborador} onChange={(e) => setForm((f) => ({ ...f, monto_colaborador: e.target.value }))} />
-                </label>
-              </>
-            ) : null}
-            <label className="text-xs text-[var(--muted)] sm:col-span-2">Observaciones (obligatorio si NO_APLICA)
-              <textarea className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" rows={2} value={form.observaciones} onChange={(e) => setForm((f) => ({ ...f, observaciones: e.target.value }))} />
-            </label>
-          </div>
-          <div className="mt-3 flex gap-2">
-            <button type="button" disabled={guardando} className="rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50" onClick={() => void guardarMulta()}>
-              {guardando ? "Guardando…" : "Registrar multa"}
-            </button>
-            <button type="button" className="rounded-md border border-[var(--border)] px-3 py-1.5 text-xs" onClick={() => setMultaFormPara(null)}>Cancelar</button>
-          </div>
-        </section>
-      ) : null}
 
       <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
         <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">Multas — {MESES[mes - 1]} {anio}</h2>
