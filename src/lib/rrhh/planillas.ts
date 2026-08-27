@@ -20,7 +20,7 @@ import {
   sumaHorasExtraAplicadasPorPeriodo,
 } from "@/lib/rrhh/horas-extra";
 import { registrarAuditoria, registrarAuditoriaTx } from "@/lib/auditoria";
-import { conPeriodoBloqueado } from "./planilla-control";
+import { bloquearPeriodosPlanilla, conPeriodoBloqueado, exigirPrimeraQuincenaSinDependientes } from "./planilla-control";
 import { liberarReservasPeriodo } from "./planilla-reversion";
 
 /** Fase P0: identidad opcional de quincena/mes de un periodo. */
@@ -541,6 +541,7 @@ export async function cancelarPeriodo(
     [empresaId, periodoId],
   );
   if (pagos.length) return { ok: false, motivo: "estado_no_permite", mensaje: "No se puede cancelar una planilla con pagos registrados." };
+  await exigirPrimeraQuincenaSinDependientes(conn, empresaId, periodoId);
   await liberarReservasPeriodo(conn, empresaId, periodoId, usuario);
 
   await conn.execute(
@@ -859,13 +860,11 @@ export async function generarLineasPeriodo(
     await conn.beginTransaction();
 
     // Serializa regeneraciones y vuelve a validar el estado tras esperar el lock.
-    const [periodosBloqueados] = await conn.query<RowDataPacket[]>(
-      `SELECT estado FROM rrhh_planilla_periodos WHERE id = ? AND empresa_id = ? FOR UPDATE`,
-      [periodoId, empresaId],
-    );
-    if (!periodosBloqueados[0] || !["Borrador", "Generada"].includes(String(periodosBloqueados[0].estado))) {
+    const periodoBloqueado = await bloquearPeriodosPlanilla(conn, empresaId, periodoId);
+    if (!periodoBloqueado || !["Borrador", "Generada"].includes(String(periodoBloqueado.estado))) {
       throw new Error("El periodo ya no está abierto para generar. Actualiza la pantalla.");
     }
+    await exigirPrimeraQuincenaSinDependientes(conn, empresaId, periodoId);
     const [prevRows] = await conn.query<RowDataPacket[]>(
       `SELECT * FROM rrhh_planilla_lineas WHERE empresa_id = ? AND periodo_id = ? FOR UPDATE`,
       [empresaId, periodoId],
@@ -913,6 +912,9 @@ export async function generarLineasPeriodo(
       empresaId,
       periodoId,
     );
+    if ([...horasExtraPorEmpleado.keys()].some((id) => !empleadosIncluidos.has(id))) {
+      throw new Error("Hay horas extra de un empleado no incluido. La generación se revirtió sin dejar registros aplicados sin línea de pago.");
+    }
 
     // Fase P1: se amplía de "solo igss_laboral" a los 6 conceptos que ahora
     // se reparten entre Q1/Q2 (sueldo, bono incentivo, bono herramientas,
@@ -1299,6 +1301,7 @@ export async function actualizarLinea(
   const cur = mapLinea(rows[0]);
   if (patch.isr != null && (!Number.isFinite(patch.isr) || patch.isr < 0)) throw new Error("El ISR debe ser un importe no negativo.");
   const cambiaImporte = patch.isr != null && redondearQ(patch.isr) !== cur.isr;
+  if (cambiaImporte) await exigirPrimeraQuincenaSinDependientes(conn, empresaId, periodoId);
   const cambiaForma = patch.formaPago != null && normalizarFormaPago(patch.formaPago) !== cur.formaPago;
   if ((estadoPeriodo === "Cerrada" || cur.estadoPago === "Pagado") && (cambiaImporte || cambiaForma)) {
     throw new Error("No se pueden cambiar importes ni forma de pago de una planilla cerrada o una línea pagada.");
@@ -1379,7 +1382,12 @@ export async function actualizarEstadoPeriodo(
   empresaId: number,
   periodoId: number,
   estado: string,
+  contexto: { usuario: string; motivo?: string },
 ): Promise<void> {
+  const motivo = contexto.motivo?.trim() ?? "";
+  if (!contexto.usuario.trim()) throw new Error("Se requiere el usuario responsable.");
+  if (estado === "Generada" && !motivo) throw new Error("Debes indicar un motivo para reabrir la planilla.");
+  if (motivo.length > 1000) throw new Error("El motivo no debe exceder 1000 caracteres.");
   await asegurarSchemaPlanillas();
   await conPeriodoBloqueado(empresaId, periodoId, async (conn, actual) => {
   if (!((actual === "Generada" && estado === "Cerrada") || (actual === "Cerrada" && estado === "Generada"))) {
@@ -1393,10 +1401,17 @@ export async function actualizarEstadoPeriodo(
   if (estado === "Generada" && lineas.some((l) => l.estado_pago === "Pagado")) {
     throw new Error("No se puede reabrir una planilla con pagos registrados.");
   }
+  if (estado === "Generada") await exigirPrimeraQuincenaSinDependientes(conn, empresaId, periodoId);
   await conn.execute(
     `UPDATE rrhh_planilla_periodos SET estado = ? WHERE id = ? AND empresa_id = ?`,
     [estado, periodoId, empresaId],
   );
+  await registrarAuditoriaTx(conn, {
+    empresaId, usuario: contexto.usuario,
+    accion: estado === "Cerrada" ? "cerrar_periodo_planilla" : "reabrir_periodo_planilla",
+    modulo: "rrhh",
+    detalle: JSON.stringify({ periodoId, estadoAnterior: actual, estadoNuevo: estado, motivo: motivo || null }),
+  });
   });
 }
 

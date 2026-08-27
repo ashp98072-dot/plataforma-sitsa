@@ -11,7 +11,6 @@ import {
   obtenerPeriodo,
 } from "@/lib/rrhh/planillas";
 import { normalizarFormaPago } from "@/lib/rrhh/contratos-pago";
-import { registrarAuditoria } from "@/lib/auditoria";
 import { listarCuotasAplicadasPeriodoDetalle } from "@/lib/rrhh/descuentos";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
@@ -53,8 +52,8 @@ const patchSchema = z.object({
     .enum(["efectivo", "cheque", "transferencia", "todas"])
     .optional(),
   conservarPagos: z.boolean().optional(),
-  // Fase P0: obligatorio solo para accion:"cancelar" (validado en el handler).
-  motivo: z.string().optional(),
+  // Obligatorio al cancelar o reabrir, también validado en el servicio.
+  motivo: z.string().trim().max(1000).optional(),
 });
 
 export async function POST(req: Request, ctx: Ctx) {
@@ -128,13 +127,8 @@ export async function POST(req: Request, ctx: Ctx) {
       });
     }
     if (accion === "cerrar") {
-      await actualizarEstadoPeriodo(guard.empresa.id, periodoId, "Cerrada");
-      await registrarAuditoria({
-        empresaId: guard.empresa.id,
+      await actualizarEstadoPeriodo(guard.empresa.id, periodoId, "Cerrada", {
         usuario: guard.session.username,
-        accion: "cerrar_periodo_planilla",
-        modulo: "rrhh",
-        detalle: `Periodo #${periodoId} ${periodo.codigo} · Generada → Cerrada`,
       });
       return NextResponse.json({
         mensaje: "Planilla cerrada.",
@@ -142,13 +136,9 @@ export async function POST(req: Request, ctx: Ctx) {
       });
     }
     if (accion === "reabrir") {
-      await actualizarEstadoPeriodo(guard.empresa.id, periodoId, "Generada");
-      await registrarAuditoria({
-        empresaId: guard.empresa.id,
+      await actualizarEstadoPeriodo(guard.empresa.id, periodoId, "Generada", {
         usuario: guard.session.username,
-        accion: "reabrir_periodo_planilla",
-        modulo: "rrhh",
-        detalle: `Periodo #${periodoId} ${periodo.codigo} · Cerrada → Generada`,
+        motivo: parsed.data.motivo,
       });
       return NextResponse.json({
         mensaje: "Planilla reabierta.",

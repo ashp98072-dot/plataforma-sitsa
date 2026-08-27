@@ -353,6 +353,16 @@ export default function PlanillasPage() {
     void accion("cancelar", undefined, motivo.trim());
   }
 
+  function solicitarReapertura() {
+    const motivo = window.prompt("Motivo de la reapertura (obligatorio, máximo 1000 caracteres). No se pueden reabrir planillas con pagos ni una primera quincena con segunda quincena generada:");
+    if (motivo == null) return;
+    if (!motivo.trim() || motivo.trim().length > 1000) {
+      setError("Indica un motivo de reapertura de entre 1 y 1000 caracteres.");
+      return;
+    }
+    void accion("reabrir", undefined, motivo.trim());
+  }
+
   const input =
     "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm";
   // Fase P0: Cancelado se trata como bloqueado igual que Cerrada/Pagada —
@@ -658,7 +668,7 @@ export default function PlanillasPage() {
                   <button
                     type="button"
                     disabled={busy}
-                    onClick={() => void accion("reabrir")}
+                    onClick={solicitarReapertura}
                     className="rounded bg-[#334155] px-3 py-1 text-sm text-white disabled:opacity-50"
                   >
                     Reabrir
