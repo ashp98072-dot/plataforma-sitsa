@@ -1,10 +1,19 @@
 import { NextResponse } from "next/server";
 import { requireTenantMultas } from "@/lib/tenant";
-import { actualizarMulta } from "@/lib/multas/backend";
+import { actualizarMulta, obtenerMulta } from "@/lib/multas/backend";
 import { errorMultas } from "@/lib/multas/http";
 import { idSchema } from "@/lib/multas/reglas";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
+/** MULTAS-3.2 (sección 29): detalle enriquecido con descuentoRrhh — ver enriquecerConDescuentoRrhh en backend.ts. */
+export async function GET(_req: Request, ctx: Ctx) {
+  try {
+    const { slug, id } = await ctx.params;
+    const guard = await requireTenantMultas(slug, "ver");
+    if (guard.error) return guard.error;
+    return NextResponse.json({ multa: await obtenerMulta(guard.empresa.id, idSchema.parse(id)) }, { headers: { "Cache-Control": "no-store" } });
+  } catch (error) { return errorMultas(error); }
+}
 export async function PATCH(req: Request, ctx: Ctx) {
   try {
     const { slug, id } = await ctx.params;

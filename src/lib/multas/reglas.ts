@@ -70,10 +70,20 @@ export const patchSchema = z.discriminatedUnion("accion", [
 export type Multa = Omit<z.infer<typeof crearMultaSchema>, "estado"> & {
   estado: "PENDIENTE" | "EN_REVISION" | "RESUELTA" | "ANULADA";
   estado_pago: "PENDIENTE" | "PAGADA" | "NO_APLICA";
+  // estado_descuento: columna heredada, escrita SOLO por obligaciones()
+  // (PENDIENTE/NO_APLICA) — MULTAS-3.1 ya retiró toda escritura manual a
+  // DESCONTADO. MULTAS-3.2: el valor DESCONTADO ahora se DERIVA en lectura
+  // (backend.ts, a partir de rrhh_descuento_id + cuotas realmente APLICADA
+  // en RRHH), nunca se persiste — ver enriquecerConDescuentoRrhh().
   estado_descuento: "NO_APLICA" | "PENDIENTE" | "DESCONTADO";
   pagada_en: Date | string | null; pagada_por_usuario_id: number | null;
   descontada_en: Date | string | null; descontada_por_usuario_id: number | null;
   motivo_anulacion: string | null; anulada_en: Date | string | null; anulada_por_usuario_id: number | null;
+  // MULTAS-3.2: vínculo con rrhh_descuentos_maestro.id (mismo tenant) —
+  // único dato que Multas guarda de RRHH; todo lo demás (cuotas, saldo,
+  // periodicidad) se consulta, nunca se duplica (ver reglas.ts:5 del
+  // ticket). NULL hasta que RRHH cree y autorice un descuento real.
+  rrhh_descuento_id: number | null;
 };
 export function validarMulta(m: Multa): void {
   const personal = ["PILOTO", "LOGISTICA", "OTRO_COLABORADOR"].includes(m.tipo_responsabilidad);
@@ -100,7 +110,11 @@ export function validarMulta(m: Multa): void {
     throw new ErrorMultas("Metadatos de pago incompletos o incompatibles.");
   if (m.estado_descuento === "DESCONTADO" ? !m.descontada_en || !m.descontada_por_usuario_id : m.descontada_en != null || m.descontada_por_usuario_id != null)
     throw new ErrorMultas("Metadatos de descuento incompletos o incompatibles.");
-  if (m.estado === "RESUELTA" && (m.resolucion_economica === "PENDIENTE" || m.estado_pago === "PENDIENTE" || m.estado_descuento === "PENDIENTE"))
+  // MULTAS-3.2: RESUELTA es un estado ADMINISTRATIVO (Operaciones ya decidió
+  // quién asume), no financiero — NO exige que RRHH ya haya cobrado todas
+  // las cuotas. Si aplica descuento, exige que exista un descuento RRHH
+  // VINCULADO (rrhh_descuento_id) — no que esté totalmente recuperado.
+  if (m.estado === "RESUELTA" && (m.resolucion_economica === "PENDIENTE" || m.estado_pago === "PENDIENTE" || (descuentoAplica && m.rrhh_descuento_id == null)))
     throw new ErrorMultas("No puede resolver una multa con obligaciones pendientes.");
   if (m.estado === "ANULADA" && (!m.motivo_anulacion?.trim() || !m.anulada_en || !m.anulada_por_usuario_id || tieneMovimientos(m)))
     throw new ErrorMultas("Anulación inválida o con movimientos reales.");
@@ -115,7 +129,7 @@ function obligaciones(m: Multa): void {
 export function nuevaMulta(input: unknown): Multa {
   const m: Multa = { ...crearMultaSchema.parse(input), estado_pago: "PENDIENTE", estado_descuento: "NO_APLICA",
     pagada_en: null, pagada_por_usuario_id: null, descontada_en: null, descontada_por_usuario_id: null,
-    anulada_en: null, anulada_por_usuario_id: null, motivo_anulacion: null };
+    anulada_en: null, anulada_por_usuario_id: null, motivo_anulacion: null, rrhh_descuento_id: null };
   obligaciones(m);
   validarMulta(m);
   return m;
@@ -125,8 +139,13 @@ export function transicion(m: Multa, input: unknown, usuarioId: number, ahora = 
   if (m.estado === "ANULADA") throw new ErrorMultas("Una multa anulada no admite cambios.", 409);
   const next = { ...m };
   let evento = "multa_actualizada";
-  if (["responsable", "resolucion", "anular"].includes(p.accion) && (tieneMovimientos(m) || m.estado === "RESUELTA"))
-    throw new ErrorMultas("No se permite cambiar responsabilidad, reparto o anular tras movimientos/cierre.", 409);
+  // MULTAS-3.2: con rrhh_descuento_id vinculado, responsable/reparto/monto
+  // quedan congelados (secciones 17-18) y anular ya NO es este PATCH simple
+  // — pasa por backend.anularMultaConDescuentoVinculado(), que decide entre
+  // cancelar el descuento (sin cuotas aplicada) o rechazar con 409 (con
+  // cuotas aplicada). Este guard solo bloquea la vía directa.
+  if (["responsable", "resolucion", "anular"].includes(p.accion) && (tieneMovimientos(m) || m.estado === "RESUELTA" || m.rrhh_descuento_id != null))
+    throw new ErrorMultas("No se permite cambiar responsabilidad, reparto o anular tras movimientos/cierre/vínculo con RRHH.", 409);
   switch (p.accion) {
     case "datos": {
       const { accion: _accion, ...datos } = p;
@@ -163,4 +182,42 @@ export function transicion(m: Multa, input: unknown, usuarioId: number, ahora = 
   }
   validarMulta(next);
   return { multa: next, evento };
+}
+
+// ---------------------------------------------------------------------------
+// MULTAS-3.2 — puente hacia el motor de descuentos de RRHH (sin duplicarlo).
+// ---------------------------------------------------------------------------
+
+/**
+ * Clasificación elegida para el descuento RRHH creado desde una multa
+ * (sección 13 del ticket). De las 5 existentes (LEGAL/AUTORIZADO/JUDICIAL/
+ * SISTEMA/INVENTARIO): JUDICIAL queda descartada porque exige documento_id
+ * (autorizarDescuento lo rechaza sin documento) y esta fase NO trabaja
+ * documentos/evidencias (fuera de alcance, sección 30); SISTEMA sugiere
+ * origen automático sin intervención humana, pero aquí SIEMPRE hay una
+ * autorización real de RRHH de por medio; LEGAL sugiere una deducción de
+ * ley (tipo IGSS), no es el caso. AUTORIZADO es la más correcta: un monto
+ * que la empresa (Operaciones, y luego RRHH al autorizar el descuento)
+ * decide/autoriza descontarle al colaborador — exactamente lo que ocurre
+ * aquí. No se amplía el enum/columna (es VARCHAR(20) sin lista cerrada en
+ * BD, ver descuentos.ts) — se reutiliza un valor ya existente.
+ */
+export const CLASIFICACION_MULTA_RRHH = "AUTORIZADO" as const;
+
+/** Concepto estable, sin datos administrativos internos (sección 12). */
+export const CONCEPTO_MULTA_RRHH = "Multa de tránsito";
+
+/**
+ * Motivo visible en la boleta del colaborador — solo datos operativos.
+ * placa_historica no forma parte del tipo Multa (se guarda aparte, ver
+ * backend.ts crearMulta) — se recibe explícita, tal como ya la lee
+ * actualizarMulta desde la fila real de ops_multas.
+ */
+export function motivoDescuentoMulta(m: { placa_historica: string; referencia_boleta: string | null; descripcion: string }): string {
+  const partes = [
+    `Unidad ${m.placa_historica}`,
+    m.referencia_boleta ? `Boleta ${m.referencia_boleta}` : null,
+    m.descripcion.slice(0, 160),
+  ].filter(Boolean);
+  return partes.join(" · ");
 }
