@@ -104,8 +104,11 @@ export async function POST(req: Request, ctx: Ctx) {
   // Operaciones/TMS" — la sincronización a tms_evidencias
   // (guardarEvidenciaViaje) exige un plan_id. Si al iniciar el viaje el
   // emparejamiento automático no encontró una coincidencia única,
-  // flota_viajes.plan_id queda NULL para siempre — no existe ningún
-  // flujo de Operaciones que lo vincule manualmente después.
+  // flota_viajes.plan_id queda NULL. Si tampoco se puede vincular aquí con
+  // certeza, la herramienta administrativa REAL para resolverlo es
+  // POST /api/empresas/[slug]/tms/planes/[id]/vincular-viaje (ver
+  // src/lib/tms/vincular-viaje-plan.ts) — no un flujo prometido pero
+  // inexistente.
   //
   // El primer intento de esta corrección reutilizaba buscarPlanesParaSalida
   // (match por NOMBRE de piloto normalizado + PLACA normalizada, sobre
@@ -160,8 +163,13 @@ export async function POST(req: Request, ctx: Ctx) {
         );
         if (upd.affectedRows) participacion.planId = Number(candidatos[0].id);
       } else {
+        // CORRECCIÓN PR #107 (última revisión): ya no se promete un
+        // vínculo automático futuro ni que "aparecerá en TMS" — ahora sí
+        // existe una herramienta real para que Operaciones lo resuelva
+        // (POST /api/empresas/[slug]/tms/planes/[id]/vincular-viaje), pero
+        // el aviso al piloto no debe anticipar el resultado.
         avisoVinculoPendiente =
-          "Este viaje no está vinculado a un plan de Programación. La evidencia se guardó, pero Operaciones debe revisar y vincular el plan manualmente para que aparezca en TMS.";
+          "La evidencia se guardó. El viaje aún no está vinculado a su programación; Operaciones deberá revisarlo.";
       }
     }
   }

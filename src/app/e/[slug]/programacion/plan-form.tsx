@@ -215,6 +215,10 @@ export default function PlanForm({
   // igual que puedeAutorizar en el panel de viáticos — nunca seguridad).
   const { permisos } = useEmpresaSession();
   const puedeCerrarViaje = tienePermiso(permisos, "viajes_cerrar", "editar");
+  // PORTAL-HARDENING-2 (corrección final PR #107): la autoridad real la
+  // valida el endpoint (programacion:editar O tms:editar) — esto es
+  // únicamente UX, igual que puedeCerrarViaje arriba.
+  const puedeVincularViaje = tienePermiso(permisos, "programacion", "editar") || tienePermiso(permisos, "tms", "editar");
   const [confirmandoCierre, setConfirmandoCierre] = useState(false);
   const [cerrando, setCerrando] = useState(false);
   const [errorCierre, setErrorCierre] = useState("");
@@ -249,6 +253,20 @@ export default function PlanForm({
   >([]);
   const [cargandoBitacora, setCargandoBitacora] = useState(false);
   const [mostrarBitacora, setMostrarBitacora] = useState(false);
+
+  // PORTAL-HARDENING-2 (corrección final PR #107) — "Vincular viaje
+  // técnico": herramienta administrativa para los casos en que el
+  // auto-vínculo estricto del Portal no encontró coincidencia segura.
+  // Solo lista candidatos REALES (mismo piloto/unidad/fecha, sin plan_id)
+  // — nunca texto libre de IDs.
+  const [mostrarVinculo, setMostrarVinculo] = useState(false);
+  const [cargandoVinculo, setCargandoVinculo] = useState(false);
+  const [candidatosVinculo, setCandidatosVinculo] = useState<
+    { viajeId: number; horaSalida: string; placa: string }[] | null
+  >(null);
+  const [vinculando, setVinculando] = useState<number | null>(null);
+  const [errorVinculo, setErrorVinculo] = useState("");
+  const [confirmandoVinculo, setConfirmandoVinculo] = useState<number | null>(null);
 
   // VIAT-1: ubicaciones guardadas del cliente seleccionado, para armar
   // paradas rápido en vez de escribir la dirección cada vez.
@@ -980,6 +998,47 @@ export default function PlanForm({
     }
   }
 
+  /** PORTAL-HARDENING-2 (corrección final PR #107) — carga candidatos bajo demanda. */
+  async function cargarCandidatosVinculo() {
+    if (!esEdicion) return;
+    const abrir = !mostrarVinculo;
+    setMostrarVinculo(abrir);
+    if (!abrir || candidatosVinculo != null || cargandoVinculo) return;
+    setCargandoVinculo(true);
+    setErrorVinculo("");
+    try {
+      const res = await fetch(`/api/empresas/${slug}/tms/planes/${plan!.id}/vincular-viaje`);
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) setCandidatosVinculo(data.candidatos ?? []);
+      else setErrorVinculo(data.error ?? "No se pudieron cargar los viajes candidatos.");
+    } catch {
+      setErrorVinculo("No se pudieron cargar los viajes candidatos.");
+    } finally {
+      setCargandoVinculo(false);
+    }
+  }
+
+  async function confirmarVincularViaje(viajeId: number) {
+    setVinculando(viajeId);
+    setErrorVinculo("");
+    try {
+      const res = await fetch(`/api/empresas/${slug}/tms/planes/${plan!.id}/vincular-viaje`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ viajeId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "No se pudo vincular el viaje.");
+      setMsg(data.mensaje ?? "Viaje vinculado.");
+      setCandidatosVinculo((prev) => (prev ?? []).filter((c) => c.viajeId !== viajeId));
+      setConfirmandoVinculo(null);
+    } catch (err) {
+      setErrorVinculo(err instanceof Error ? err.message : "No se pudo vincular el viaje.");
+    } finally {
+      setVinculando(null);
+    }
+  }
+
   return (
     <form
       onSubmit={onSubmit}
@@ -1582,6 +1641,50 @@ export default function PlanForm({
                 ))}
               </ul>
             )
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* PORTAL-HARDENING-2 (corrección final PR #107) — "Vincular viaje
+          técnico": solo visible con permiso administrativo (UX; la
+          autoridad real la valida el endpoint). Reemplaza el aviso vacío
+          que antes prometía un vínculo manual inexistente. */}
+      {esEdicion && puedeVincularViaje ? (
+        <div className="md:col-span-3 rounded border border-[var(--border)] p-3 text-xs">
+          <button type="button" className="font-semibold uppercase tracking-wide text-[var(--muted)]" onClick={() => void cargarCandidatosVinculo()}>
+            {mostrarVinculo ? "▾" : "▸"} Vincular viaje técnico
+          </button>
+          {mostrarVinculo ? (
+            <div className="mt-2">
+              <p className="text-[var(--muted)]">
+                Viajes técnicos de Flota sin plan vinculado, con el mismo piloto, unidad y fecha de este plan.
+              </p>
+              {errorVinculo ? <p className="mt-2 text-red-300">{errorVinculo}</p> : null}
+              {cargandoVinculo ? (
+                <p className="mt-2 text-[var(--muted)]">Cargando…</p>
+              ) : !candidatosVinculo?.length ? (
+                <p className="mt-2 text-[var(--muted)]">No hay viajes técnicos compatibles sin vincular.</p>
+              ) : (
+                <ul className="mt-2 space-y-2">
+                  {candidatosVinculo.map((c) => (
+                    <li key={c.viajeId} className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border)] pt-2 first:border-t-0 first:pt-0">
+                      <span>Viaje técnico #{c.viajeId} · {c.placa} · salida {String(c.horaSalida).replace("T", " ").slice(0, 16)}</span>
+                      {confirmandoVinculo === c.viajeId ? (
+                        <span className="flex items-center gap-2">
+                          <span>Vincular el viaje técnico #{c.viajeId} con {plan?.codigo}. Esta acción no cambia el estado del plan.</span>
+                          <button type="button" className="rounded bg-[var(--accent)] px-2 py-1 text-white disabled:opacity-50" disabled={vinculando === c.viajeId} onClick={() => void confirmarVincularViaje(c.viajeId)}>
+                            {vinculando === c.viajeId ? "Vinculando…" : "Confirmar"}
+                          </button>
+                          <button type="button" className="rounded border border-[var(--border)] px-2 py-1" onClick={() => setConfirmandoVinculo(null)}>Cancelar</button>
+                        </span>
+                      ) : (
+                        <button type="button" className="rounded border border-[var(--border)] px-2 py-1" onClick={() => setConfirmandoVinculo(c.viajeId)}>Vincular</button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           ) : null}
         </div>
       ) : null}

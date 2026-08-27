@@ -156,7 +156,7 @@ describe("PORTAL-HARDENING-2 (HALLAZGO 1) — auto-vínculo de plan solo con coi
     expect(execute).not.toHaveBeenCalled();
     expect(guardarEvidenciaViaje).toHaveBeenCalledWith(expect.objectContaining({ planId: null }));
     const data = await res.clone().json();
-    expect(data.aviso).toContain("Operaciones debe revisar y vincular el plan manualmente");
+    expect(data.aviso).toContain("Operaciones deberá revisarlo");
   });
 
   it("3) 2+ candidatos (ambigüedad real) → NO vincula, con aviso", async () => {
