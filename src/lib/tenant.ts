@@ -31,6 +31,26 @@ import {
 type Ok = { session: SessionPayload; empresa: Empresa; error?: undefined };
 type Fail = { session?: undefined; empresa?: undefined; error: NextResponse };
 
+/** Multas tiene permiso propio: nunca hereda autoridad de TMS/Flota. */
+export async function requireTenantMultas(
+  slug: string,
+  accion: AccionPermiso = "ver",
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return tenant;
+  const modulos = empresa.modulos.length ? empresa.modulos : modulosPorRol(session.rol);
+  if (!modulos.includes("tms")) {
+    return { error: NextResponse.json({ error: "Esta empresa no tiene el módulo TMS." }, { status: 403 }) };
+  }
+  const permisos = await permisosEfectivos(session.id, session.rol);
+  if (!tienePermiso(permisos, "multas", accion)) {
+    return { error: NextResponse.json({ error: `Sin permiso para ${accion} multas.` }, { status: 403 }) };
+  }
+  return tenant;
+}
+
 export async function requireTenant(slug: string): Promise<Ok | Fail> {
   const session = await getSession();
   if (!session) {

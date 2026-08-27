@@ -105,6 +105,7 @@ export const FLOTA_SUBMODULO_LABEL: Record<FlotaSubmodulo, string> = {
  * src/lib/tenant.ts (requireTenantViaticosAutorizar/Pagar/ViajesCerrar).
  */
 export const PLATAFORMA_PERMISIBLES = [
+  "multas",
   "tms",
   "clientes",
   "facturacion",
@@ -221,6 +222,7 @@ export function esPlataformaPermisible(m: string): m is PlataformaPermisible {
  * null (no aplica este filtro — se rigen por otro mecanismo).
  */
 export function moduloEmpresaDelPermiso(m: string): Modulo | null {
+  if (m === "multas") return "tms";
   if (
     m === "viaticos" ||
     m === "viaticos_autorizar" ||
@@ -238,6 +240,7 @@ export function moduloEmpresaDelPermiso(m: string): Modulo | null {
 }
 
 export function labelPermiso(modulo: string): string {
+  if (modulo === "multas") return "Multas y sanciones";
   if (esRrhhSubmodulo(modulo)) return RRHH_SUBMODULO_LABEL[modulo];
   if (esFlotaSubmodulo(modulo)) return FLOTA_SUBMODULO_LABEL[modulo];
   if (modulo === "flota") return MODULO_LABEL.flota;
@@ -303,6 +306,7 @@ export const GRUPOS_PERMISOS: {
       "Programación, TMS / logística, clientes, facturación de clientes, reciclaje, tarimas, viáticos (control, autorizar, pagar) y cierre administrativo de viajes.",
     modulos: [
       "programacion",
+      "multas",
       "rutas",
       "tms",
       "clientes",
@@ -405,9 +409,9 @@ export function modulosPropiosDelRol(rol: RolGlobal): string[] {
     // criterio que "programacion").
     case "GerenteOperaciones":
     case "JefeOperaciones":
-      return ["tms", "programacion", "rutas", "clientes", "viaticos", "viaticos_autorizar", "viajes_cerrar"];
+      return ["tms", "programacion", "rutas", "clientes", "viaticos", "viaticos_autorizar", "viajes_cerrar", "multas"];
     case "AuxiliarOperaciones":
-      return ["tms", "programacion", "rutas", "clientes"];
+      return ["tms", "programacion", "rutas", "clientes", "multas"];
     case "Facturador":
       // Facturador NO recibe "tms" por defecto (no debe editar viajes en
       // general) — su alcance es viaticos_pagar (que su propio guard,
@@ -464,6 +468,15 @@ export function permisosDefaultPorRol(rol: RolGlobal): PermisoModulo[] {
   const propios = modulosPropiosDelRol(rol);
   const cruzados = modulosOtrasAreasDelRol(rol);
 
+  if (rol === "GerenteOperaciones" || rol === "JefeOperaciones" || rol === "AuxiliarOperaciones") {
+    return [
+      ...propios.map((m) => m === "multas"
+        ? { ...permisoVerCrear(m), puedeEditar: rol !== "AuxiliarOperaciones" }
+        : permisoFull(m)),
+      ...cruzados.map((m) => permisoVacio(m)),
+    ];
+  }
+
   if (rol === "Visualizador") {
     return [
       ...propios.map((m) => permisoSoloVer(m)),
@@ -483,9 +496,6 @@ export function permisosDefaultPorRol(rol: RolGlobal): PermisoModulo[] {
     rol === "RRHH" ||
     rol === "Contabilidad" ||
     rol === "Operaciones" ||
-    rol === "GerenteOperaciones" ||
-    rol === "JefeOperaciones" ||
-    rol === "AuxiliarOperaciones" ||
     rol === "Facturador"
   ) {
     return [
@@ -618,6 +628,7 @@ export function modulosPlataformaDesdePermisos(
     // (catálogo, editor de permisos, tienePermiso()).
     if (
       esPlataformaPermisible(p.modulo) &&
+      p.modulo !== "multas" &&
       p.modulo !== "viaticos" &&
       p.modulo !== "viaticos_autorizar" &&
       p.modulo !== "viaticos_pagar" &&
