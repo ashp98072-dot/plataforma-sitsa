@@ -15,11 +15,13 @@ const empleado = { id: 7, codigo: "PRUEBA", nombre: "Empleado ficticio", sueldo_
 let prev: Record<string, unknown>[];
 let estado: string;
 let q1: Record<string, unknown>[];
+let dependientes: { id: number }[];
 const generar = (conservarPagos = true) => generarLineasPeriodo(3, 1, { usuario: "prueba", conservarPagos });
 beforeEach(() => {
   vi.resetAllMocks();
   prev = []; estado = "Generada";
   q1 = [];
+  dependientes = [];
   periodo.tipo_periodo = "QUINCENA_1";
   vi.mocked(getPool).mockReturnValue({ getConnection: async () => conn } as unknown as ReturnType<typeof getPool>);
   vi.mocked(query).mockImplementation(async (sql) => {
@@ -28,8 +30,10 @@ beforeEach(() => {
     return [] as never;
   });
   conn.query.mockImplementation(async (sql: string) => {
-    if (sql.includes("SELECT estado FROM rrhh_planilla_periodos")) return [[{ estado }], []];
+    if (sql.includes("SELECT id, estado FROM rrhh_planilla_periodos")) return [[{ id: 1, estado }], []];
+    if (sql.includes("SELECT q2.id")) return [dependientes, []];
     if (sql.includes("SELECT * FROM rrhh_planilla_lineas")) return [prev, []];
+    if (sql.includes("SELECT id, estado_pago FROM rrhh_planilla_lineas")) return [prev, []];
     if (sql.includes("INNER JOIN rrhh_planilla_lineas")) return [q1, []];
     return [[], []];
   });
@@ -47,6 +51,41 @@ beforeEach(() => {
   vi.mocked(sumaHorasExtraAplicadasPorPeriodo).mockResolvedValue(new Map());
 });
 describe("controles compartidos de planilla", () => {
+  it("exige motivo al reabrir antes de iniciar transacción", async () => {
+    estado = "Cerrada";
+    await expect(actualizarEstadoPeriodo(3, 1, "Generada", { usuario: "prueba", motivo: " " })).rejects.toThrow("motivo");
+    expect(conn.beginTransaction).not.toHaveBeenCalled();
+  });
+  it.each(["Cerrada", "Generada"])("audita transaccionalmente el cambio a %s", async (nuevo) => {
+    estado = nuevo === "Generada" ? "Cerrada" : "Generada";
+    prev = [{ id: 50, estado_pago: "Pendiente" }];
+    await actualizarEstadoPeriodo(3, 1, nuevo, { usuario: "prueba", motivo: " Revisión " });
+    expect(registrarAuditoriaTx).toHaveBeenCalledWith(conn, expect.objectContaining({
+      empresaId: 3, usuario: "prueba",
+      detalle: JSON.stringify({ periodoId: 1, estadoAnterior: estado, estadoNuevo: nuevo, motivo: "Revisión" }),
+    }));
+    expect(vi.mocked(registrarAuditoriaTx).mock.invocationCallOrder[0]).toBeLessThan(conn.commit.mock.invocationCallOrder[0]);
+    expect(conn.commit).toHaveBeenCalledOnce();
+  });
+  it.each(["Cerrada", "Generada"])("falla toda la transición a %s si falla auditoría", async (nuevo) => {
+    estado = nuevo === "Generada" ? "Cerrada" : "Generada";
+    prev = [{ id: 50, estado_pago: "Pendiente" }];
+    vi.mocked(registrarAuditoriaTx).mockRejectedValueOnce(new Error("Auditoría falló"));
+    await expect(actualizarEstadoPeriodo(3, 1, nuevo, { usuario: "prueba", motivo: "Revisión" })).rejects.toThrow("Auditoría falló");
+    expect(conn.rollback).toHaveBeenCalledOnce();
+    expect(conn.commit).not.toHaveBeenCalled();
+  });
+  it("no reabre una primera quincena con segunda dependiente", async () => {
+    estado = "Cerrada"; dependientes = [{ id: 2 }];
+    prev = [{ id: 50, estado_pago: "Pendiente" }];
+    await expect(actualizarEstadoPeriodo(3, 1, "Generada", { usuario: "prueba", motivo: "Revisión" })).rejects.toThrow("segunda quincena");
+    expect(conn.execute).not.toHaveBeenCalled();
+  });
+  it("no reabre una planilla pagada aunque se indique motivo", async () => {
+    estado = "Cerrada"; prev = [{ id: 50, estado_pago: "Pagado" }];
+    await expect(actualizarEstadoPeriodo(3, 1, "Generada", { usuario: "prueba", motivo: "Revisión" })).rejects.toThrow("pagos registrados");
+    expect(conn.execute).not.toHaveBeenCalled();
+  });
   it("cancela sin borrar líneas y audita antes del commit", async () => {
     expect(await cancelarPeriodo(3, 1, "Prueba", "prueba")).toEqual({ ok: true });
     expect(conn.execute.mock.calls.some(([sql]) => sql.includes("DELETE"))).toBe(false);
@@ -64,7 +103,7 @@ describe("controles compartidos de planilla", () => {
   });
   it("bloquea cancelación con pagos antes de liberar cuotas", async () => {
     conn.query.mockImplementation(async (sql: string) => {
-      if (sql.includes("SELECT estado")) return [[{ estado: "Generada" }], []];
+      if (sql.includes("SELECT id, estado")) return [[{ id: 1, estado: "Generada" }], []];
       if (sql.includes("estado_pago = 'Pagado'")) return [[{ id: 50 }], []];
       throw new Error("No debe consultar reservas");
     });
@@ -89,17 +128,17 @@ describe("controles compartidos de planilla", () => {
   it("no paga ni reabre un periodo cancelado", async () => {
     estado = "Cancelado";
     await expect(marcarPagos(3, 1, { estadoPago: "Pagado" })).rejects.toThrow("no permite");
-    await expect(actualizarEstadoPeriodo(3, 1, "Generada")).rejects.toThrow("no permitida");
+    await expect(actualizarEstadoPeriodo(3, 1, "Generada", { usuario: "prueba", motivo: "Revisión" })).rejects.toThrow("no permitida");
     expect(conn.execute).not.toHaveBeenCalled();
   });
   it("no cierra una planilla sin líneas", async () => {
-    await expect(actualizarEstadoPeriodo(3, 1, "Cerrada")).rejects.toThrow("sin líneas");
+    await expect(actualizarEstadoPeriodo(3, 1, "Cerrada", { usuario: "prueba" })).rejects.toThrow("sin líneas");
     expect(conn.execute).not.toHaveBeenCalled();
   });
   it("paga una planilla cerrada bajo el mismo lock del período", async () => {
     estado = "Cerrada";
     expect(await marcarPagos(3, 1, { estadoPago: "Pagado", soloPendientes: true })).toBe(1);
-    expect(conn.query.mock.calls[0]).toEqual([expect.stringContaining("FOR UPDATE"), [1, 3]]);
+    expect(conn.query.mock.calls[0]).toEqual([expect.stringContaining("ORDER BY id FOR UPDATE"), [3]]);
     expect(conn.execute.mock.calls[0][0]).toContain("estado_pago = 'Pendiente'");
     expect(conn.commit).toHaveBeenCalledOnce();
   });
@@ -117,6 +156,35 @@ describe("controles compartidos de planilla", () => {
   });
 });
 describe("regeneración segura de planilla", () => {
+  it("no regenera Q1 con Q2 dependiente ni alcanza a reservar descuentos", async () => {
+    dependientes = [{ id: 2 }];
+    await expect(generar()).rejects.toThrow("segunda quincena ya está generada");
+    expect(aplicarCuotasElegibles).not.toHaveBeenCalled();
+    expect(conn.rollback).toHaveBeenCalledOnce();
+    expect(conn.commit).not.toHaveBeenCalled();
+  });
+  it("no cancela Q1 con Q2 dependiente ni libera cuotas", async () => {
+    dependientes = [{ id: 2 }];
+    await expect(cancelarPeriodo(3, 1, "Prueba", "prueba")).rejects.toThrow("segunda quincena");
+    expect(conn.execute).not.toHaveBeenCalled();
+    expect(conn.query.mock.calls.some(([sql]) => sql.includes("FROM rrhh_descuento_cuotas"))).toBe(false);
+  });
+  it("impide editar ISR de Q1 pero permite referencias si existe Q2", async () => {
+    dependientes = [{ id: 2 }];
+    prev = [{ id: 50, id_empleado: 7, estado_pago: "Pendiente", isr: 50 }];
+    await expect(actualizarLinea(3, 1, 50, { isr: 60 })).rejects.toThrow("segunda quincena");
+    expect(conn.execute).not.toHaveBeenCalled();
+    expect(await actualizarLinea(3, 1, 50, { refPago: "Referencia" })).toMatchObject({ refPago: "Referencia", isr: 50 });
+  });
+  it("la consulta de dependencias limita empresa, mes, año y estados vigentes", async () => {
+    await generar();
+    const consulta = conn.query.mock.calls.find(([sql]) => sql.includes("SELECT q2.id"));
+    expect(consulta?.[1]).toEqual([3, 1]);
+    expect(consulta?.[0]).toContain("q2.empresa_id = q1.empresa_id");
+    expect(consulta?.[0]).toContain("q2.mes = q1.mes AND q2.anio = q1.anio");
+    expect(consulta?.[0]).toContain("('Generada', 'Cerrada', 'Pagada')");
+    expect(consulta?.[0]).toContain("FOR UPDATE");
+  });
   it("segunda quincena sin primera solo cobra la mitad mensual", async () => {
     periodo.tipo_periodo = "QUINCENA_2";
     const result = await generar();
@@ -173,7 +241,7 @@ describe("regeneración segura de planilla", () => {
   it("revalida el estado después de bloquear el período", async () => {
     estado = "Cerrada";
     await expect(generar()).rejects.toThrow("ya no está abierto");
-    expect(conn.query.mock.calls[0]).toEqual([expect.stringContaining("FOR UPDATE"), [1, 3]]);
+    expect(conn.query.mock.calls[0]).toEqual([expect.stringContaining("ORDER BY id FOR UPDATE"), [3]]);
     expect(aplicarCuotasElegibles).not.toHaveBeenCalled();
   });
   it("no borra líneas de empleados que dejaron de estar activos", async () => {
@@ -186,6 +254,21 @@ describe("regeneración segura de planilla", () => {
     await expect(generar()).rejects.toThrow("Una cuota corresponde");
     expect(conn.rollback).toHaveBeenCalledOnce();
     expect(conn.commit).not.toHaveBeenCalled();
+  });
+  it("revierte si las horas extra quedarían aplicadas sin empleado en planilla", async () => {
+    vi.mocked(sumaHorasExtraAplicadasPorPeriodo).mockResolvedValue(new Map([[99, 125]]));
+    await expect(generar()).rejects.toThrow("horas extra de un empleado no incluido");
+    expect(conn.rollback).toHaveBeenCalledOnce();
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(conn.execute.mock.calls.some(([sql]) => sql.includes("INSERT INTO rrhh_planilla_lineas"))).toBe(false);
+  });
+  it("las horas extra incluidas se conservan al regenerar sin duplicar su importe", async () => {
+    vi.mocked(sumaHorasExtraAplicadasPorPeriodo).mockResolvedValue(new Map([[7, 125]]));
+    await generar();
+    const neto = prev[0].neto;
+    await generar();
+    expect(prev[0]).toMatchObject({ otros_ingresos: 125, neto });
+    expect(conn.commit).toHaveBeenCalledTimes(2);
   });
   it("revierte si falla guardar líneas tras aplicar cuotas", async () => {
     conn.execute.mockRejectedValue(new Error("fallo simulado"));
