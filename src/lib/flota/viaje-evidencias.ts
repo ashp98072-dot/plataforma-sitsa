@@ -8,7 +8,10 @@ export type TipoEvidenciaViaje =
   | "salida"
   | "tablero_llegada"
   | "llegada"
-  | "producto";
+  | "producto"
+  // PORTAL-HARDENING-2 (Fase C/D): evidencia libre/OTRO (p.ej. respaldo de
+  // un contratiempo) — mismo VARCHAR libre, sin migración.
+  | "otro";
 
 type UploadLike = {
   name: string;
@@ -28,7 +31,7 @@ export async function guardarEvidenciaViaje(opts: {
   username: string;
   planId?: number | null;
   paradaId?: number | null;
-  syncTmsTipo?: "Carga" | "Descarga" | "Producto" | null;
+  syncTmsTipo?: "Carga" | "Descarga" | "Producto" | "Otro" | null;
   /**
    * CORRECCIÓN PR #80 (integridad concurrente evidencia ↔ parada):
    * conexión/transacción opcional del caller. Si viene (endpoint de staff

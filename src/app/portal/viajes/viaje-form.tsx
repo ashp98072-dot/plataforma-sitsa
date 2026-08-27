@@ -27,6 +27,17 @@ const ESTADO_VIATICO_LABEL: Record<string, string> = {
   LIQUIDADO: "Liquidado",
 };
 
+// PORTAL-HARDENING-2 (Fase C/D): vocabulario simplificado de evidencia —
+// mismo mapeo que TIPOS en api/portal/viajes/[id]/evidencias/route.ts.
+const TIPOS_EVIDENCIA: { value: "tablero_salida" | "producto" | "tablero_llegada" | "otro"; label: string }[] = [
+  { value: "tablero_salida", label: "Salida (tablero/odómetro)" },
+  { value: "producto", label: "Parada / dirección" },
+  { value: "tablero_llegada", label: "Llegada (tablero/odómetro)" },
+  { value: "otro", label: "Otro" },
+];
+
+type GpsCoords = { latitud: number; longitud: number };
+
 export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacionEnCurso, viajeEnCursoId, paradas, viajeDestacadoId }: {
   tipo: "Piloto" | "Auxiliar";
   viajeAbierto: ViajeAbiertoPiloto | null;
@@ -40,7 +51,11 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
   const [error, setError] = useState("");
   const [mensaje, setMensaje] = useState("");
   const [loading, setLoading] = useState(false);
-  const programados = asignaciones.filter((a) => a.estado === "Programado" && !a.viajeId);
+  // PORTAL-HARDENING-2 (Fase G): "Cargado" es un candidato de salida tan
+  // válido como "Programado" — antes solo se mostraba "Programado" en el
+  // selector y el viaje quedaba atascado si Operaciones ya lo había
+  // marcado Cargado a mano.
+  const programados = asignaciones.filter((a) => (a.estado === "Programado" || a.estado === "Cargado") && !a.viajeId);
   const viajeDestacadoAsignado = Boolean(
     viajeDestacadoId && asignaciones.some((a) => a.planId === viajeDestacadoId),
   );
@@ -49,33 +64,35 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
   const planSeleccionado = programados.find((a) => a.planId === planId) ?? null;
   const [placa, setPlaca] = useState(planSeleccionado?.placa ?? "");
   const [kmSalida, setKmSalida] = useState("");
-  const [kmCarga, setKmCarga] = useState("");
   const [destino, setDestino] = useState(planSeleccionado?.destino ?? "");
   const [kmLlegada, setKmLlegada] = useState("");
   const [observaciones, setObservaciones] = useState("");
+  const [motivoContratiempo, setMotivoContratiempo] = useState("");
+  const [mostrarContratiempo, setMostrarContratiempo] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const previewUrlRef = useRef<string | null>(null);
   const [camaraActiva, setCamaraActiva] = useState(false);
   const [foto, setFoto] = useState<{ blob: Blob; url: string; etapa: string } | null>(null);
-  const [cierreExcepcional, setCierreExcepcional] = useState(false);
-  const [motivoExcepcional, setMotivoExcepcional] = useState("");
   const odometroFuncional = viajeAbierto?.odometroFuncional ?? planSeleccionado?.odometroFuncional ?? true;
 
-  const siguienteParada = paradas.find((p) => p.requiere_evidencia && p.evidencias < 1) ?? null;
-  const etapa = viajeAbierto
-    ? odometroFuncional && !viajeAbierto.evidenciaTableroSalida
-      ? { tipo: "tablero_salida", titulo: "Evidencia de salida", detalle: "Fotografía del tablero al salir del predio.", paradaId: 0 }
-      : odometroFuncional && viajeAbierto.kmCarga == null ? null
-        : !viajeAbierto.evidenciaCarga
-          ? { tipo: "salida", titulo: "Evidencia de carga", detalle: "Adjunta la evidencia al completar la carga.", paradaId: 0 }
-          : siguienteParada
-            ? { tipo: "producto", titulo: `Siguiente parada: ${siguienteParada.orden}. ${siguienteParada.lugar_nombre}`, detalle: "Al llegar, adjunta la evidencia para habilitar la siguiente parada.", paradaId: siguienteParada.id }
-            : odometroFuncional && !viajeAbierto.evidenciaTableroLlegada
-              ? { tipo: "tablero_llegada", titulo: "Regreso al predio", detalle: "Ya en el predio, adjunta el tablero de llegada.", paradaId: 0 }
-              : null
-    : null;
-  const rutaCompleta = Boolean(viajeAbierto?.evidenciaCarga && !siguienteParada && (!odometroFuncional || (viajeAbierto.evidenciaTableroSalida && viajeAbierto.kmCarga != null && viajeAbierto.evidenciaTableroLlegada)));
+  // PORTAL-HARDENING-2 (Fase C): el piloto elige el tipo de evidencia y,
+  // si es de parada, la dirección exacta — ya no se calcula "la
+  // siguiente parada" automáticamente ni se exige un orden.
+  const paradaPendienteSugerida = paradas.find((p) => p.requiere_evidencia && p.evidencias < 1) ?? paradas[0] ?? null;
+  const [tipoEvidencia, setTipoEvidencia] = useState<"tablero_salida" | "producto" | "tablero_llegada" | "otro">(
+    paradas.length ? "producto" : "tablero_salida",
+  );
+  const [paradaSeleccionada, setParadaSeleccionada] = useState<number>(paradaPendienteSugerida?.id ?? 0);
+  const paradasSinEvidencia = paradas.filter((p) => p.requiere_evidencia && p.evidencias < 1);
+
+  // PORTAL-HARDENING-2 (Fase D): GPS + hora de servidor cacheados ANTES de
+  // disparar la foto, para poder dibujar el sello en el mismo instante de
+  // la captura (canvas → overlay → toBlob), sin depender de una segunda
+  // red después de tomar la foto.
+  const [gps, setGps] = useState<GpsCoords | null>(null);
+  const [gpsError, setGpsError] = useState("");
+  const offsetServidorRef = useRef<number>(0); // epochMs(servidor) - Date.now(dispositivo)
 
   useEffect(() => {
     if (!viajeDestacadoId || !viajeDestacadoAsignado) return;
@@ -91,7 +108,14 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
     };
   }, [router]);
 
-  const etapaClave = etapa ? `${etapa.tipo}:${etapa.paradaId}` : "";
+  const etiquetaEvidencia = (t: typeof tipoEvidencia, paradaId: number) => {
+    if (t === "tablero_salida") return "SALIDA";
+    if (t === "tablero_llegada") return "LLEGADA";
+    if (t === "otro") return "OTRO";
+    const p = paradas.find((x) => x.id === paradaId);
+    return p ? `${p.orden}. ${p.lugar_nombre}` : "PARADA";
+  };
+  const etapaClave = `${tipoEvidencia}:${tipoEvidencia === "producto" ? paradaSeleccionada : 0}`;
   const fotoActual = foto?.etapa === etapaClave ? foto : null;
 
   function detenerCamara() {
@@ -100,12 +124,44 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
     setCamaraActiva(false);
   }
 
+  async function obtenerGps(): Promise<GpsCoords | null> {
+    if (!("geolocation" in navigator)) return null;
+    return new Promise((resolve) => navigator.geolocation.getCurrentPosition(
+      (p) => resolve({ latitud: p.coords.latitude, longitud: p.coords.longitude }), () => resolve(null),
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 },
+    ));
+  }
+
+  async function sincronizarHoraServidor() {
+    try {
+      const antes = Date.now();
+      const res = await fetch("/api/portal/hora-servidor", { cache: "no-store" });
+      if (!res.ok) return;
+      const data = await res.json();
+      const epochMs = Number(data.epochMs);
+      if (!Number.isFinite(epochMs)) return;
+      // Corrige aproximadamente la latencia del viaje redondo (mitiga,
+      // no elimina, el riesgo de un reloj local desconfigurado — ver nota
+      // de riesgo en el reporte de PORTAL-HARDENING-2).
+      const latenciaAprox = (Date.now() - antes) / 2;
+      offsetServidorRef.current = epochMs + latenciaAprox - Date.now();
+    } catch {
+      /* si falla, se usa la hora del dispositivo sin corrección */
+    }
+  }
+
   async function abrirCamara() {
-    setError("");
+    setError(""); setGpsError("");
     if (!navigator.mediaDevices?.getUserMedia) {
       setError("Este dispositivo o navegador no permite abrir la cámara directamente.");
       return;
     }
+    const [coords] = await Promise.all([obtenerGps(), sincronizarHoraServidor()]);
+    if (!coords) {
+      setGpsError("Activa y autoriza la ubicación GPS para poder tomar la evidencia.");
+      return;
+    }
+    setGps(coords);
     try {
       detenerCamara();
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
@@ -126,10 +182,43 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
       setError("La cámara todavía no está lista.");
       return;
     }
+    if (!gps) {
+      setError("No se pudo obtener la ubicación GPS. Vuelve a abrir la cámara.");
+      return;
+    }
     const canvas = document.createElement("canvas");
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
-    canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return setError("No se pudo preparar la fotografía.");
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    // PORTAL-HARDENING-2 (Fase D): geoestampado real — fecha/hora/GPS/
+    // código de viaje/parada quedan DIBUJADOS en los píxeles de la foto
+    // (no solo en metadata), vía canvas antes de subir.
+    const ahoraCorregida = new Date(Date.now() + offsetServidorRef.current);
+    const fechaTxt = ahoraCorregida.toLocaleDateString("es-GT");
+    const horaTxt = ahoraCorregida.toLocaleTimeString("es-GT", { hour: "2-digit", minute: "2-digit" });
+    const codigoViaje = asignacionEnCurso?.codigo ?? `#${viajeAbierto?.id ?? ""}`;
+    const etiqueta = etiquetaEvidencia(tipoEvidencia, paradaSeleccionada);
+    const lineas = [
+      "SITSA",
+      `${fechaTxt} ${horaTxt} · GPS: ${gps.latitud.toFixed(6)}, ${gps.longitud.toFixed(6)}`,
+      `${codigoViaje} · ${etiqueta}`,
+    ];
+    const alturaBarra = Math.max(64, Math.round(canvas.height * 0.12));
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.fillRect(0, canvas.height - alturaBarra, canvas.width, alturaBarra);
+    const tamanoFuente = Math.max(12, Math.round(canvas.width / 42));
+    ctx.font = `${tamanoFuente}px sans-serif`;
+    ctx.fillStyle = "#ffffff";
+    ctx.textBaseline = "top";
+    let y = canvas.height - alturaBarra + Math.round(tamanoFuente * 0.4);
+    for (const linea of lineas) {
+      ctx.fillText(linea, Math.round(canvas.width * 0.02), y, canvas.width * 0.96);
+      y += Math.round(tamanoFuente * 1.3);
+    }
+
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.9));
     if (!blob) return setError("No se pudo capturar la fotografía.");
     if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
@@ -152,7 +241,7 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "No se pudo completar la acción.");
       setMensaje(data.mensaje ?? "Listo.");
-      setKmSalida(""); setKmCarga(""); setKmLlegada(""); setObservaciones(""); setMotivoExcepcional(""); setCierreExcepcional(false);
+      setKmSalida(""); setKmLlegada(""); setObservaciones(""); setMotivoContratiempo(""); setMostrarContratiempo(false);
       router.refresh();
     } catch (err) { setError(err instanceof Error ? err.message : "No se pudo completar la acción."); }
     finally { setLoading(false); }
@@ -165,48 +254,43 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
     await enviar({ accion: "salida", placa: placa.trim(), kmSalida: km, destino: destino.trim() || undefined, planId: planId || undefined });
   }
 
-  async function onCarga(e: FormEvent) {
-    e.preventDefault();
-    if (!viajeAbierto) return;
-    const km = Number(kmCarga);
-    if (!Number.isFinite(km) || viajeAbierto.kmSalida == null || km < viajeAbierto.kmSalida) return setError("El kilometraje de carga no puede ser menor al de salida.");
-    await enviar({ accion: "carga", viajeId: viajeAbierto.id, kmCarga: km });
-  }
-
-  async function obtenerGps(): Promise<{ latitud?: number; longitud?: number }> {
-    if (!("geolocation" in navigator)) return {};
-    return new Promise((resolve) => navigator.geolocation.getCurrentPosition(
-      (p) => resolve({ latitud: p.coords.latitude, longitud: p.coords.longitude }), () => resolve({}),
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 },
-    ));
-  }
-
   async function onLlegada(e: FormEvent) {
     e.preventDefault();
     if (!viajeAbierto) return;
     const km = odometroFuncional ? Number(kmLlegada) : undefined;
-    const kmMinimo = viajeAbierto.kmCarga ?? viajeAbierto.kmSalida;
-    if (odometroFuncional && (!Number.isFinite(km) || kmMinimo == null || Number(km) < kmMinimo)) return setError("El kilometraje final no puede ser menor al último registrado.");
-    if (cierreExcepcional && motivoExcepcional.trim().length < 10) return setError("Describe el contratiempo mayor con al menos 10 caracteres.");
-    if (!cierreExcepcional && !rutaCompleta) return setError("Completa toda la ruta y regresa al predio antes de registrar la llegada.");
-    const gps = cierreExcepcional ? {} : await obtenerGps();
-    await enviar({ accion: "llegada", viajeId: viajeAbierto.id, kmLlegada: km, observaciones: observaciones.trim() || undefined, cierreExcepcional, motivoExcepcional: cierreExcepcional ? motivoExcepcional.trim() : undefined, ...gps });
+    if (odometroFuncional && (!Number.isFinite(km) || viajeAbierto.kmSalida == null || Number(km) < viajeAbierto.kmSalida)) {
+      return setError("El kilometraje final no puede ser menor al de salida.");
+    }
+    const coords = await obtenerGps();
+    await enviar({
+      accion: "llegada",
+      viajeId: viajeAbierto.id,
+      kmLlegada: km,
+      observaciones: observaciones.trim() || undefined,
+      latitud: coords?.latitud,
+      longitud: coords?.longitud,
+    });
+  }
+
+  async function onContratiempo(e: FormEvent) {
+    e.preventDefault();
+    if (!viajeAbierto) return;
+    if (motivoContratiempo.trim().length < 10) return setError("Describe el contratiempo con al menos 10 caracteres.");
+    await enviar({ accion: "contratiempo", viajeId: viajeAbierto.id, motivo: motivoContratiempo.trim() });
   }
 
   async function subirEvidencias(e: FormEvent) {
     e.preventDefault();
-    if (!viajeEnCursoId || !etapa || !fotoActual) return setError("Toma la fotografía desde la cámara antes de continuar.");
+    if (!viajeEnCursoId || !fotoActual) return setError("Toma la fotografía desde la cámara antes de continuar.");
+    if (tipoEvidencia === "producto" && !paradaSeleccionada) return setError("Selecciona la parada de esta evidencia.");
+    if (!gps) return setError("No se pudo obtener la ubicación GPS. Vuelve a abrir la cámara.");
     setError(""); setMensaje(""); setLoading(true);
     try {
-      const gps = await obtenerGps();
-      if (gps.latitud == null || gps.longitud == null) {
-        throw new Error("Activa y autoriza la ubicación GPS para guardar la evidencia.");
-      }
       const form = new FormData();
-      form.set("tipo", etapa.tipo);
-      if (etapa.paradaId) form.set("paradaId", String(etapa.paradaId));
-      if (gps.latitud != null) form.set("latitud", String(gps.latitud));
-      if (gps.longitud != null) form.set("longitud", String(gps.longitud));
+      form.set("tipo", tipoEvidencia);
+      if (tipoEvidencia === "producto") form.set("paradaId", String(paradaSeleccionada));
+      form.set("latitud", String(gps.latitud));
+      form.set("longitud", String(gps.longitud));
       form.append("files", fotoActual.blob, `evidencia_${Date.now()}.jpg`);
       const res = await fetch(`/api/portal/viajes/${viajeEnCursoId}/evidencias`, { method: "POST", body: form });
       const data = await res.json();
@@ -244,22 +328,43 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
       <h2 className="font-semibold">Avance del viaje · {asignacionEnCurso?.codigo ?? `#${viajeAbierto.id}`}</h2>
       <p className="mt-1 text-sm text-[var(--muted)]">Unidad {viajeAbierto.placa}{odometroFuncional && viajeAbierto.kmSalida != null ? ` · salida ${viajeAbierto.kmSalida.toLocaleString("es-GT")} km` : " · sin odómetro funcional"}</p>
       <ol className="mt-4 space-y-2 text-sm">
-        {odometroFuncional ? <><li>{viajeAbierto.evidenciaTableroSalida ? "✓" : "○"} Tablero de salida</li><li>{viajeAbierto.kmCarga != null ? "✓" : "○"} Kilometraje en carga{viajeAbierto.kmCarga != null ? `: ${viajeAbierto.kmCarga.toLocaleString("es-GT")} km` : ""}</li></> : null}
-        <li>{viajeAbierto.evidenciaCarga ? "✓" : "○"} Evidencia de carga</li>
+        {odometroFuncional ? <li>{viajeAbierto.evidenciaTableroSalida ? "✓" : "○"} Tablero de salida</li> : null}
         {paradas.map((p) => <li key={p.id}>{!p.requiere_evidencia || p.evidencias > 0 ? "✓" : "○"} Parada {p.orden}: {p.lugar_nombre}</li>)}
-        <li>{odometroFuncional ? (viajeAbierto.evidenciaTableroLlegada ? "✓" : "○") : "○"} Regreso al predio{odometroFuncional ? " y tablero de llegada" : " (sin kilometraje)"}</li>
+        {odometroFuncional ? <li>{viajeAbierto.evidenciaTableroLlegada ? "✓" : "○"} Tablero de llegada</li> : null}
       </ol>
+      {/* PORTAL-HARDENING-2 (Fase C): informativo, nunca bloquea salida,
+          llegada ni cierre. */}
+      {paradasSinEvidencia.length ? <p className="mt-3 rounded-lg border border-amber-800/40 bg-amber-950/20 p-3 text-sm text-amber-200">Hay {paradasSinEvidencia.length} parada(s) sin evidencia. Puedes registrar la llegada de todos modos.</p> : null}
     </section> : null}
 
-    {odometroFuncional && viajeAbierto?.evidenciaTableroSalida && viajeAbierto.kmCarga == null ? <form onSubmit={onCarga} className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
-      <h2 className="font-semibold">Registrar llegada al punto de carga</h2>
-      <label className="mt-4 block text-sm text-[var(--muted)]">Kilometraje en carga<input type="number" min={viajeAbierto.kmSalida ?? 0} className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={kmCarga} onChange={(e) => setKmCarga(e.target.value)} required /></label>
-      <button className="mt-4 rounded-lg bg-[var(--accent)] px-4 py-2.5 font-medium text-white disabled:opacity-50" disabled={loading}>Registrar kilometraje de carga</button>
-    </form> : null}
+    {viajeEnCursoId ? <form onSubmit={subirEvidencias} className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
+      <h2 className="font-semibold">Adjuntar evidencia</h2>
+      <p className="mt-1 text-xs text-[var(--muted)]">La evidencia debe tomarse ahora, con fecha, hora y GPS impresos en la foto. No se permite seleccionar archivos de la galería. Es un respaldo — no bloquea salida, llegada ni cierre.</p>
 
-    {viajeEnCursoId && etapa ? <form onSubmit={subirEvidencias} className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
-      <h2 className="font-semibold">{etapa.titulo}</h2><p className="mt-1 text-sm text-[var(--muted)]">{etapa.detalle}</p>
-      <p className="mt-2 text-xs text-[var(--muted)]">La evidencia debe tomarse ahora. Se guardarán fecha, hora y ubicación GPS; no se permite seleccionar archivos de la galería.</p>
+      <label className="mt-4 block text-sm text-[var(--muted)]">Tipo de evidencia
+        <select
+          className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2"
+          value={tipoEvidencia}
+          onChange={(e) => { setTipoEvidencia(e.target.value as typeof tipoEvidencia); setFoto(null); }}
+        >
+          {TIPOS_EVIDENCIA.filter((t) => odometroFuncional || (t.value !== "tablero_salida" && t.value !== "tablero_llegada")).map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+        </select>
+      </label>
+
+      {tipoEvidencia === "producto" ? (
+        paradas.length ? <label className="mt-3 block text-sm text-[var(--muted)]">Selecciona dirección/parada
+          <select
+            className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2"
+            value={paradaSeleccionada}
+            onChange={(e) => { setParadaSeleccionada(Number(e.target.value)); setFoto(null); }}
+          >
+            <option value={0}>Selecciona…</option>
+            {paradas.map((p) => <option key={p.id} value={p.id}>{p.orden}. {p.lugar_nombre}{p.evidencias > 0 ? " ✓" : ""}</option>)}
+          </select>
+        </label> : <p className="mt-3 text-sm text-amber-300">Este viaje no tiene paradas registradas por Operaciones.</p>
+      ) : null}
+
+      {gpsError ? <p className="mt-3 text-sm text-red-300">{gpsError}</p> : null}
       <video ref={videoRef} className={`mt-4 w-full rounded-xl bg-black ${camaraActiva ? "block" : "hidden"}`} playsInline muted />
       {fotoActual ? <Image src={fotoActual.url} alt="Vista previa de la evidencia capturada" width={1280} height={720} unoptimized className="mt-4 h-auto w-full rounded-xl" /> : null}
       <div className="mt-4 flex flex-wrap gap-2">
@@ -267,26 +372,40 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
         {camaraActiva ? <button type="button" className="rounded-lg bg-[var(--accent)] px-4 py-2.5 font-medium text-white" onClick={() => void tomarFoto()}>Tomar foto</button> : null}
         {camaraActiva ? <button type="button" className="rounded-lg border border-[var(--border)] px-4 py-2.5" onClick={detenerCamara}>Cancelar cámara</button> : null}
       </div>
-      <button className="mt-4 rounded-lg bg-[var(--accent)] px-4 py-2.5 font-medium text-white disabled:opacity-50" disabled={loading || !fotoActual}>Guardar evidencia y continuar</button>
+      <button className="mt-4 rounded-lg bg-[var(--accent)] px-4 py-2.5 font-medium text-white disabled:opacity-50" disabled={loading || !fotoActual || (tipoEvidencia === "producto" && !paradaSeleccionada)}>Guardar evidencia</button>
     </form> : null}
 
     {tipo === "Piloto" && viajeAbierto ? <form onSubmit={onLlegada} className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
-      {/* OPS-1 (corregido): el piloto NUNCA finaliza ni cierra la
-          operación — esta acción es solo registro de llegada (respaldo
-          operativo). El cierre administrativo lo hace exclusivamente
-          Jefe/Gerente de Operaciones desde TMS/Programación (ver
+      {/* OPS-1 (corregido) + PORTAL-HARDENING-2 (Fase F): el piloto NUNCA
+          finaliza, cierra ni cancela la operación — esta acción es solo
+          registro de llegada física (respaldo operativo). El cierre
+          administrativo lo hace exclusivamente Jefe/Gerente de
+          Operaciones desde TMS/Programación (ver
           src/lib/tms/cierre-viaje.ts). Registrar la llegada aquí ya NO
-          cambia el estado del plan TMS. */}
+          cambia el estado del plan TMS, y ya NO exige completar
+          evidencias primero. */}
       <h2 className="font-semibold">Registrar llegada</h2>
-      {!rutaCompleta && !cierreExcepcional ? <p className="mt-2 text-sm text-amber-300">El registro de llegada se habilitará cuando completes la carga, todas las paradas y regreses al predio.</p> : null}
-      <label className="mt-4 flex items-start gap-2 text-sm text-[var(--muted)]"><input type="checkbox" className="mt-1" checked={cierreExcepcional} onChange={(e) => setCierreExcepcional(e.target.checked)} /> Cierre excepcional por contratiempo mayor (por ejemplo, avería de la unidad)</label>
-      {cierreExcepcional ? <label className="mt-3 block text-sm text-[var(--muted)]">Motivo obligatorio<textarea className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" rows={3} minLength={10} maxLength={500} value={motivoExcepcional} onChange={(e) => setMotivoExcepcional(e.target.value)} required /></label> : null}
-      {rutaCompleta || cierreExcepcional ? <>
-        {odometroFuncional ? <label className="mt-3 block text-sm text-[var(--muted)]">Kilometraje de llegada<input type="number" min={viajeAbierto.kmCarga ?? viajeAbierto.kmSalida ?? 0} className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={kmLlegada} onChange={(e) => setKmLlegada(e.target.value)} required /></label> : null}
-        {!cierreExcepcional ? <label className="mt-3 block text-sm text-[var(--muted)]">Observaciones<textarea className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" rows={2} maxLength={500} value={observaciones} onChange={(e) => setObservaciones(e.target.value)} /></label> : null}
-        <button className={`mt-4 rounded-lg px-4 py-2.5 font-medium text-white disabled:opacity-50 ${cierreExcepcional ? "bg-red-700" : "bg-[var(--accent)]"}`} disabled={loading}>{cierreExcepcional ? "Cerrar por contratiempo mayor" : "Registrar llegada"}</button>
-      </> : null}
+      {odometroFuncional ? <label className="mt-3 block text-sm text-[var(--muted)]">Kilometraje de llegada<input type="number" min={viajeAbierto.kmSalida ?? 0} className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={kmLlegada} onChange={(e) => setKmLlegada(e.target.value)} required /></label> : null}
+      <label className="mt-3 block text-sm text-[var(--muted)]">Observaciones<textarea className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" rows={2} maxLength={500} value={observaciones} onChange={(e) => setObservaciones(e.target.value)} /></label>
+      <button className="mt-4 rounded-lg bg-[var(--accent)] px-4 py-2.5 font-medium text-white disabled:opacity-50" disabled={loading}>Registrar llegada</button>
     </form> : null}
+
+    {tipo === "Piloto" && viajeAbierto ? <section className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
+      {/* PORTAL-HARDENING-2 (Fase F): reemplaza al antiguo "cierre
+          excepcional por contratiempo mayor", que cerraba/cancelaba el
+          plan desde el Portal. Reportar un contratiempo ya NO cambia
+          ningún estado administrativo — solo queda registrado en la
+          bitácora/auditoría para que Operaciones lo revise. */}
+      <h2 className="font-semibold">Reportar contratiempo</h2>
+      <p className="mt-1 text-sm text-[var(--muted)]">Para averías u otros imprevistos. Esto NO cierra ni cancela el viaje — solo avisa a Operaciones.</p>
+      {mostrarContratiempo ? <form onSubmit={onContratiempo}>
+        <label className="mt-3 block text-sm text-[var(--muted)]">Describe el contratiempo<textarea className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" rows={3} minLength={10} maxLength={500} value={motivoContratiempo} onChange={(e) => setMotivoContratiempo(e.target.value)} required /></label>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button className="rounded-lg bg-amber-700 px-4 py-2.5 font-medium text-white disabled:opacity-50" disabled={loading}>Enviar reporte</button>
+          <button type="button" className="rounded-lg border border-[var(--border)] px-4 py-2.5" onClick={() => setMostrarContratiempo(false)}>Cancelar</button>
+        </div>
+      </form> : <button type="button" className="mt-3 rounded-lg border border-amber-700 px-4 py-2.5 font-medium text-amber-300" onClick={() => setMostrarContratiempo(true)}>Reportar contratiempo</button>}
+    </section> : null}
 
     {!viajeAbierto && tipo === "Piloto" ? <form onSubmit={onSalida} className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
       <h2 className="font-semibold">Iniciar viaje</h2>

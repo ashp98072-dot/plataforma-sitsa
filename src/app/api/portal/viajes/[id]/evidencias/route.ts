@@ -14,15 +14,24 @@ import {
   listarEvidenciasViaje,
   type TipoEvidenciaViaje,
 } from "@/lib/flota/viaje-evidencias";
-import { listarParadasDelPlan, validarParadaDelPlan } from "@/lib/tms/paradas";
+import { validarParadaDelPlan } from "@/lib/tms/paradas";
+import { buscarPlanCandidatoUnicoParaViaje, vincularViajeAPlan } from "@/lib/tms/vincular-viaje-plan";
 import { absPathFromRelative, contentTypeFor } from "@/lib/uploads";
 
 type Ctx = { params: Promise<{ id: string }> };
+/**
+ * PORTAL-HARDENING-2 (Fase C/D): vocabulario simplificado
+ * SALIDA/PARADA/LLEGADA/OTRO, mapeado sobre los mismos valores ya
+ * existentes en flota_viaje_evidencias.tipo (VARCHAR libre, sin ENUM —
+ * no requiere migración). Se retira "salida" (evidencia del punto de
+ * carga, ligada al kmCarga eliminado en Fase B) y se agrega "otro" para
+ * evidencia libre/de contratiempo.
+ */
 const TIPOS: TipoEvidenciaViaje[] = [
   "tablero_salida",
-  "salida",
   "tablero_llegada",
   "producto",
+  "otro",
 ];
 
 async function contextoParticipante(ctx: Ctx) {
@@ -91,6 +100,65 @@ export async function POST(req: Request, ctx: Ctx) {
   const empleado = await obtenerEmpleado(session.empresaId, session.empleadoId);
   if (!empleado) return NextResponse.json({ error: "Colaborador no encontrado." }, { status: 404 });
 
+  // PORTAL-HARDENING-2 (Fase E) + ÚLTIMA CORRECCIÓN P1 (unificación de
+  // autoridad de vínculo): causa raíz de "evidencia subida pero no visible
+  // en Operaciones/TMS" — la sincronización a tms_evidencias
+  // (guardarEvidenciaViaje) exige un plan_id. Si al iniciar el viaje el
+  // emparejamiento automático no encontró una coincidencia única,
+  // flota_viajes.plan_id queda NULL. Este auto-vínculo YA NO escribe
+  // flota_viajes.plan_id por su cuenta con una UPDATE propia — usa la
+  // MISMA autoridad transaccional que el vínculo administrativo manual
+  // (src/lib/tms/vincular-viaje-plan.ts): un candidato único y verificable
+  // (mismo piloto por ID, misma unidad por ID, misma fecha, estado
+  // compatible) se busca aquí de forma best-effort
+  // (buscarPlanCandidatoUnicoParaViaje), pero la decisión FINAL —
+  // incluida la exclusividad "un plan = un solo viaje técnico" y el
+  // backfill de evidencia previa — la hace vincularViajeAPlan bajo FOR
+  // UPDATE, exactamente igual que si Operaciones lo vinculara a mano
+  // (origen: "AUTO_PORTAL", solo para que auditoría/mensajes sean
+  // correctos). Si el vínculo NO se concreta por cualquier motivo
+  // esperado (0/2+ candidatos, el plan ya está en uso por otro viaje,
+  // carrera con otra solicitud), la evidencia se guarda de todas formas y
+  // se agrega un aviso — nunca bloquea la subida. Un error técnico
+  // inesperado del intento de vínculo tampoco bloquea la subida, pero SÍ
+  // queda en el log del servidor (no se esconde).
+  let avisoVinculoPendiente: string | null = null;
+  if (!participacion.planId) {
+    try {
+      const candidatoPlanId = await buscarPlanCandidatoUnicoParaViaje(session.empresaId, viajeId);
+      const resultado = candidatoPlanId
+        ? await vincularViajeAPlan(
+            session.empresaId,
+            candidatoPlanId,
+            viajeId,
+            `portal:${empleado.codigo}`,
+            "AUTO_PORTAL",
+          )
+        : null;
+      if (resultado?.ok) {
+        participacion.planId = candidatoPlanId;
+      } else {
+        // CORRECCIÓN PR #107: ya no se promete un vínculo automático
+        // futuro ni que "aparecerá en TMS" — ahora sí existe una
+        // herramienta real para que Operaciones lo resuelva (POST
+        // /api/empresas/[slug]/tms/planes/[id]/vincular-viaje), pero el
+        // aviso al piloto no debe anticipar el resultado. Se muestra
+        // tanto si nunca hubo candidato como si el intento de vínculo
+        // falló por una condición esperada (409: exclusividad, carrera).
+        avisoVinculoPendiente =
+          "La evidencia se guardó. El viaje aún no está vinculado a su programación; Operaciones deberá revisarlo.";
+      }
+    } catch (err) {
+      // Error técnico inesperado (p.ej. falla del backfill dentro de
+      // vincularViajeAPlan) — no debe bloquear la subida de evidencia
+      // (que es respaldo, nunca condicionada al vínculo), pero tampoco se
+      // esconde: queda en el log del servidor.
+      console.error("Auto-vínculo de plan (evidencias portal)", err);
+      avisoVinculoPendiente =
+        "La evidencia se guardó. El viaje aún no está vinculado a su programación; Operaciones deberá revisarlo.";
+    }
+  }
+
   const form = await req.formData();
   const tipoRaw = String(form.get("tipo") ?? "producto");
   const tipo = TIPOS.includes(tipoRaw as TipoEvidenciaViaje)
@@ -108,42 +176,14 @@ export async function POST(req: Request, ctx: Ctx) {
   if (!odometroFuncional && (tipo === "tablero_salida" || tipo === "tablero_llegada")) {
     return NextResponse.json({ error: "Esta unidad no requiere fotografías del medidor de kilometraje." }, { status: 409 });
   }
-  const progreso = await query<RowDataPacket[]>(
-    `SELECT
-       SUM(tipo = 'tablero_salida') AS tablero_salida,
-       SUM(tipo = 'salida') AS carga,
-       SUM(tipo = 'tablero_llegada') AS tablero_llegada
-     FROM flota_viaje_evidencias WHERE empresa_id = ? AND viaje_id = ?`,
-    [session.empresaId, viajeId],
-  );
-  const tieneTableroSalida = Number(progreso[0]?.tablero_salida ?? 0) > 0;
-  const tieneCarga = Number(progreso[0]?.carga ?? 0) > 0;
-  const tieneTableroLlegada = Number(progreso[0]?.tablero_llegada ?? 0) > 0;
-  if (tipo === "tablero_salida" && tieneTableroSalida) {
-    return NextResponse.json({ error: "La evidencia del tablero de salida ya fue registrada." }, { status: 409 });
-  }
-  if (odometroFuncional && tipo !== "tablero_salida" && !tieneTableroSalida) {
-    return NextResponse.json({ error: "Primero adjunta el tablero de salida." }, { status: 409 });
-  }
-  if (tipo === "salida") {
-    if (tieneCarga) {
-      return NextResponse.json({ error: "La evidencia de carga ya fue registrada." }, { status: 409 });
-    }
-    const kmCarga = odometroFuncional ? await query<RowDataPacket[]>(
-      `SELECT id FROM flota_lecturas
-       WHERE viaje_id = ? AND nota = 'Kilometraje en punto de carga' LIMIT 1`,
-      [viajeId],
-    ) : [];
-    if (odometroFuncional && !kmCarga[0]) return NextResponse.json({ error: "Primero registra el kilometraje en el punto de carga." }, { status: 409 });
-  }
-  if (tipo === "tablero_llegada" && tieneTableroLlegada) {
-    return NextResponse.json({ error: "El tablero de llegada ya fue registrado." }, { status: 409 });
-  }
-  if (tipo === "tablero_llegada" && !tieneCarga) {
-    return NextResponse.json({ error: "Primero registra el kilometraje y la evidencia de carga." }, { status: 409 });
-  }
+  // PORTAL-HARDENING-2 (Fase C): las evidencias son respaldo, no controlan
+  // estado ni orden. Ya NO se exige orden secuencial (tablero de salida
+  // primero, carga antes de paradas/llegada, etc.) — el piloto adjunta lo
+  // que tiene, cuando lo tiene. Para "producto" (evidencia de parada), el
+  // piloto ELIGE explícitamente la dirección/parada (paradaId) en vez de
+  // que el sistema calcule "la siguiente" — solo se valida que la parada
+  // pertenezca a este viaje/plan.
   if (tipo === "producto") {
-    if (!tieneCarga) return NextResponse.json({ error: "Primero adjunta la evidencia de carga." }, { status: 409 });
     if (!participacion.planId || !paradaId) {
       return NextResponse.json({ error: "Selecciona la parada de esta evidencia." }, { status: 400 });
     }
@@ -153,21 +193,6 @@ export async function POST(req: Request, ctx: Ctx) {
       paradaId,
     );
     if (!parada) return NextResponse.json({ error: "La parada no pertenece al viaje." }, { status: 400 });
-    const paradas = await listarParadasDelPlan(participacion.planId);
-    const siguiente = paradas.find((p) => p.requiere_evidencia && p.evidencias < 1);
-    if (!siguiente || siguiente.id !== paradaId) {
-      return NextResponse.json(
-        { error: siguiente ? `La siguiente parada es ${siguiente.orden}. ${siguiente.lugar_nombre}.` : "Todas las paradas ya están completas." },
-        { status: 409 },
-      );
-    }
-  }
-  if (tipo === "tablero_llegada" && participacion.planId) {
-    const pendientes = (await listarParadasDelPlan(participacion.planId))
-      .filter((p) => p.requiere_evidencia && p.evidencias < 1);
-    if (pendientes.length) {
-      return NextResponse.json({ error: "Completa todas las paradas antes de registrar el regreso al predio." }, { status: 409 });
-    }
   }
 
   const latitudRaw = form.get("latitud");
@@ -207,7 +232,11 @@ export async function POST(req: Request, ctx: Ctx) {
       username: `portal:${empleado.codigo}`,
       planId: participacion.planId,
       paradaId,
-      syncTmsTipo: tipo === "producto" ? "Producto" : tipo.includes("salida") ? "Carga" : "Descarga",
+      syncTmsTipo:
+        tipo === "producto" ? "Producto"
+        : tipo === "otro" ? "Otro"
+        : tipo === "tablero_salida" ? "Carga"
+        : "Descarga",
     }));
   }
   await registrarAuditoria({
@@ -217,5 +246,9 @@ export async function POST(req: Request, ctx: Ctx) {
     modulo: "tms",
     detalle: `${ids.length} evidencia(s) agregadas al viaje #${viajeId} por ${empleado.nombre}`,
   });
-  return NextResponse.json({ ids, mensaje: `${ids.length} evidencia(s) guardada(s).` });
+  return NextResponse.json({
+    ids,
+    mensaje: `${ids.length} evidencia(s) guardada(s).`,
+    ...(avisoVinculoPendiente ? { aviso: avisoVinculoPendiente } : {}),
+  });
 }
