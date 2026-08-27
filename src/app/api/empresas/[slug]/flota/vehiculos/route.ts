@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import type { RowDataPacket } from "mysql2";
-import { execute, query } from "@/lib/db";
+import type { ResultSetHeader, RowDataPacket } from "mysql2";
+import { execute, getPool, query } from "@/lib/db";
 import { requireTenantFlota, requireTenantFlotaAny } from "@/lib/tenant";
 import {
   asegurarSchemaFlota,
@@ -541,79 +541,102 @@ export async function DELETE(req: Request, ctx: Ctx) {
   const guard = await requireTenantFlota(slug, "flota_vehiculos", "eliminar");
   if (guard.error) return guard.error;
 
-  const cur = await query<RowDataPacket[]>(
-    "SELECT id, placa FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1",
-    [id, guard.empresa.id],
-  );
-  if (!cur[0]) {
-    return NextResponse.json({ error: "Vehículo no encontrado." }, { status: 404 });
-  }
-
-  const abierto = await query<RowDataPacket[]>(
-    `SELECT id FROM flota_viajes
-     WHERE empresa_id = ? AND vehiculo_id = ? AND estado = 'abierto' LIMIT 1`,
-    [guard.empresa.id, id],
-  );
-  if (abierto[0]) {
-    return NextResponse.json(
-      {
-        error:
-          "Tiene un viaje abierto. Cierra la llegada o dale de baja en lugar de eliminar.",
-      },
-      { status: 409 },
+  const conn = await getPool().getConnection();
+  let descartarConexion = false;
+  try {
+    await conn.beginTransaction();
+    const [cur] = await conn.query<RowDataPacket[]>(
+      "SELECT id, placa FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE",
+      [id, guard.empresa.id],
     );
-  }
-
-  const eid = guard.empresa.id;
-  const safe = async (sql: string, params: (string | number)[]) => {
-    try {
-      await execute(sql, params);
-    } catch {
-      /* tabla/columna opcional */
+    if (!cur[0]) {
+      await conn.rollback();
+      return NextResponse.json({ error: "Vehículo no encontrado." }, { status: 404 });
     }
-  };
 
-  await safe(
-    `DELETE e FROM flota_viaje_evidencias e
-     INNER JOIN flota_viajes v ON v.id = e.viaje_id
-     WHERE v.vehiculo_id = ? AND v.empresa_id = ?`,
-    [id, eid],
-  );
-  await safe(
-    `DELETE e FROM flota_lectura_evidencias e
-     INNER JOIN flota_lecturas l ON l.id = e.lectura_id
-     WHERE l.vehiculo_id = ? AND l.empresa_id = ?`,
-    [id, eid],
-  );
-  await safe(
-    `DELETE a FROM flota_servicio_adjuntos a
-     INNER JOIN flota_servicios s ON s.id = a.servicio_id
-     WHERE s.vehiculo_id = ? AND s.empresa_id = ?`,
-    [id, eid],
-  );
-  await safe(
-    "DELETE FROM flota_viajes WHERE vehiculo_id = ? AND empresa_id = ?",
-    [id, eid],
-  );
-  await safe(
-    "DELETE FROM flota_lecturas WHERE vehiculo_id = ? AND empresa_id = ?",
-    [id, eid],
-  );
-  await safe(
-    "DELETE FROM flota_servicios WHERE vehiculo_id = ? AND empresa_id = ?",
-    [id, eid],
-  );
-  await safe(
-    "DELETE FROM flota_vehiculo_filtros WHERE vehiculo_id = ? AND empresa_id = ?",
-    [id, eid],
-  );
-  await safe("DELETE FROM flota_vehiculo_acceso WHERE vehiculo_id = ?", [id]);
+    // FUTURO MULTAS: después de aplicar su migración, agregar AQUÍ el guard
+    // de revisiones/multas históricas de esta unidad, usando esta misma conn.
+    // Si existen: rollback + 409 indicando utilizar "Dar de baja".
+    // No consultar tablas de Multas antes de que exista la migración.
+    const [abierto] = await conn.query<RowDataPacket[]>(
+      `SELECT id FROM flota_viajes
+       WHERE empresa_id = ? AND vehiculo_id = ? AND estado = 'abierto' LIMIT 1 FOR UPDATE`,
+      [guard.empresa.id, id],
+    );
+    if (abierto[0]) {
+      await conn.rollback();
+      return NextResponse.json(
+        {
+          error:
+            "Tiene un viaje abierto. Cierra la llegada o dale de baja en lugar de eliminar.",
+        },
+        { status: 409 },
+      );
+    }
 
-  await execute(
-    "DELETE FROM flota_vehiculos WHERE id = ? AND empresa_id = ?",
-    [id, eid],
-  );
-  return NextResponse.json({
-    mensaje: `Vehículo ${cur[0].placa} eliminado definitivamente.`,
-  });
+    const eid = guard.empresa.id;
+
+    await conn.execute(
+      `DELETE e FROM flota_viaje_evidencias e
+       INNER JOIN flota_viajes v ON v.id = e.viaje_id
+       WHERE v.vehiculo_id = ? AND v.empresa_id = ?`,
+      [id, eid],
+    );
+    await conn.execute(
+      `DELETE e FROM flota_lectura_evidencias e
+       INNER JOIN flota_lecturas l ON l.id = e.lectura_id
+       WHERE l.vehiculo_id = ? AND l.empresa_id = ?`,
+      [id, eid],
+    );
+    await conn.execute(
+      `DELETE a FROM flota_servicio_adjuntos a
+       INNER JOIN flota_servicios s ON s.id = a.servicio_id
+       WHERE s.vehiculo_id = ? AND s.empresa_id = ?`,
+      [id, eid],
+    );
+    await conn.execute(
+      "DELETE FROM flota_viajes WHERE vehiculo_id = ? AND empresa_id = ?",
+      [id, eid],
+    );
+    await conn.execute(
+      "DELETE FROM flota_lecturas WHERE vehiculo_id = ? AND empresa_id = ?",
+      [id, eid],
+    );
+    await conn.execute(
+      "DELETE FROM flota_servicios WHERE vehiculo_id = ? AND empresa_id = ?",
+      [id, eid],
+    );
+    await conn.execute(
+      "DELETE FROM flota_vehiculo_filtros WHERE vehiculo_id = ? AND empresa_id = ?",
+      [id, eid],
+    );
+    await conn.execute("DELETE FROM flota_vehiculo_acceso WHERE vehiculo_id = ?", [id]);
+
+    const [resultado] = await conn.execute<ResultSetHeader>(
+      "DELETE FROM flota_vehiculos WHERE id = ? AND empresa_id = ?",
+      [id, eid],
+    );
+    if (resultado.affectedRows !== 1) {
+      throw new Error("No se eliminó exactamente una unidad.");
+    }
+    await conn.commit();
+    return NextResponse.json({
+      mensaje: `Vehículo ${cur[0].placa} eliminado definitivamente.`,
+    });
+  } catch (error) {
+    try {
+      await conn.rollback();
+    } catch (rollbackError) {
+      descartarConexion = true;
+      conn.destroy();
+      console.error("Rollback DELETE vehículo", rollbackError);
+    }
+    console.error("DELETE vehículo", error);
+    return NextResponse.json(
+      { error: "No se pudo completar la eliminación del vehículo. Utiliza Dar de baja si debe conservarse su historial." },
+      { status: 500 },
+    );
+  } finally {
+    if (!descartarConexion) conn.release();
+  }
 }
