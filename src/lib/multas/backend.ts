@@ -95,7 +95,8 @@ export async function crearMulta(actor: ActorMultas, input: unknown) {
 // Whitelist fija: identidad, importe total, moneda y fecha no son editables.
 const columnasEdicion = ["tipo_multa", "descripcion", "lugar", "tipo_responsabilidad", "empleado_responsable_id",
   "responsable_texto", "resolucion_economica", "monto_empresa", "monto_colaborador", "estado", "estado_pago",
-  "estado_descuento", "observaciones", "pagada_en", "pagada_por_usuario_id", "descontada_en",
+  "estado_descuento", "observaciones", "pagada_en", "pagada_por_usuario_id",
+  "monto_pagado", "referencia_pago", "observaciones_pago", "descontada_en",
   "descontada_por_usuario_id", "motivo_anulacion", "anulada_en", "anulada_por_usuario_id"] as const;
 export async function actualizarMulta(actor: ActorMultas, id: number, input: unknown) {
   idSchema.parse(id);
@@ -166,11 +167,13 @@ export async function listarMultas(empresaId: number, input: Record<string, stri
   }
   if (f.vehiculo_id) params.push(f.vehiculo_id);
   const rows = await query<RowDataPacket[]>(
-    `SELECT m.*, r.periodo_anio, r.periodo_mes, v.placa AS placa_actual, e.nombre AS empleado_responsable_nombre
+    `SELECT m.*, r.periodo_anio, r.periodo_mes, v.placa AS placa_actual, e.nombre AS empleado_responsable_nombre,
+            up.nombre AS pagada_por_nombre
      FROM ops_multas m
      INNER JOIN ops_multas_revisiones r ON r.empresa_id = m.empresa_id AND r.id = m.revision_id AND r.vehiculo_id = m.vehiculo_id
      INNER JOIN flota_vehiculos v ON v.empresa_id = m.empresa_id AND v.id = m.vehiculo_id
      LEFT JOIN empleados e ON e.empresa_id = m.empresa_id AND e.id = m.empleado_responsable_id
+     LEFT JOIN usuarios up ON up.id = m.pagada_por_usuario_id
      WHERE m.empresa_id = ? ${periodo} ${f.vehiculo_id ? "AND m.vehiculo_id = ?" : ""}
      ORDER BY m.id DESC LIMIT 101 OFFSET ${(f.pagina - 1) * 100}`, params);
   const multas = await enriquecerConDescuentoRrhh(empresaId, rows.slice(0, 100));
@@ -181,11 +184,13 @@ export async function listarMultas(empresaId: number, input: Record<string, stri
 export async function obtenerMulta(empresaId: number, id: number) {
   idSchema.parse(id);
   const rows = await query<RowDataPacket[]>(
-    `SELECT m.*, r.periodo_anio, r.periodo_mes, v.placa AS placa_actual, e.nombre AS empleado_responsable_nombre
+    `SELECT m.*, r.periodo_anio, r.periodo_mes, v.placa AS placa_actual, e.nombre AS empleado_responsable_nombre,
+            up.nombre AS pagada_por_nombre
      FROM ops_multas m
      INNER JOIN ops_multas_revisiones r ON r.empresa_id = m.empresa_id AND r.id = m.revision_id AND r.vehiculo_id = m.vehiculo_id
      INNER JOIN flota_vehiculos v ON v.empresa_id = m.empresa_id AND v.id = m.vehiculo_id
      LEFT JOIN empleados e ON e.empresa_id = m.empresa_id AND e.id = m.empleado_responsable_id
+     LEFT JOIN usuarios up ON up.id = m.pagada_por_usuario_id
      WHERE m.empresa_id = ? AND m.id = ? LIMIT 1`,
     [empresaId, id],
   );
@@ -251,7 +256,7 @@ export async function listarMultasPendientesDescuento(empresaId: number, input: 
   const rows = await query<RowDataPacket[]>(
     `SELECT m.id, m.fecha_infraccion, m.placa_historica, m.tipo_multa, m.descripcion,
             m.empleado_responsable_id, e.nombre AS empleado_responsable_nombre,
-            m.monto_total, m.monto_colaborador, m.referencia_boleta, m.creado_en
+            m.monto_total, m.monto_colaborador, m.referencia_boleta, m.creado_en, m.estado_pago
      FROM ops_multas m
      LEFT JOIN empleados e ON e.empresa_id = m.empresa_id AND e.id = m.empleado_responsable_id
      WHERE m.empresa_id = ? AND m.estado <> 'ANULADA'
@@ -306,6 +311,14 @@ export async function crearDescuentoDesdeMulta(actor: ActorRrhh, multaId: number
     const multa = rows[0] as RowDataPacket & Multa & { placa_historica: string };
     if (multa.estado === "ANULADA") throw new ErrorMultas("No se puede generar descuento de una multa anulada.", 409);
     if (multa.rrhh_descuento_id != null) throw new ErrorMultas("Esta multa ya tiene un descuento RRHH vinculado.", 409);
+    // MULTAS-5 (sección 27): flujo preferido "Multa → Empresa paga → RRHH
+    // descuenta" — la empresa paga el total a la autoridad ANTES de que
+    // empiece la recuperación al colaborador. No rompe la arquitectura
+    // (mismo guard atómico, mismo mensaje 409 que las demás validaciones
+    // de esta función) y evita que RRHH programe cuotas sobre una multa
+    // que la empresa todavía no pagó.
+    if (multa.estado_pago !== "PAGADA")
+      throw new ErrorMultas("La empresa debe registrar el pago de la multa a la autoridad antes de generar el descuento del colaborador.", 409);
     if (!["COLABORADOR", "COMPARTIDO"].includes(multa.resolucion_economica))
       throw new ErrorMultas("Esta multa no tiene monto a cargo del colaborador.", 409);
     const montoColaborador = Number(multa.monto_colaborador);
