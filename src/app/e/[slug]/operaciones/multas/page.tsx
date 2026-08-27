@@ -6,12 +6,17 @@ import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
 
 /**
- * MULTAS-4 base (secciones 21-29) — primera UI funcional de Operaciones >
- * Multas y sanciones. Reutiliza el backend transaccional de MULTAS-3/3.1/
- * 3.2 tal cual (GET/POST/PATCH ya existentes + /panel para el dashboard) —
- * esta pantalla no reimplementa ninguna regla de negocio, solo la
- * consume. Documentos/evidencias, Excel, notificaciones y Portal del
- * piloto quedan fuera de esta fase (sección 30).
+ * MULTAS-4/5 — UI de Operaciones > Multas y sanciones. Reutiliza el
+ * backend transaccional de MULTAS-3/3.1/3.2/5 tal cual — esta pantalla
+ * no reimplementa ninguna regla de negocio, solo la consume.
+ *
+ * MULTAS-5 separa claramente:
+ *  1) "Revisión mensual de unidades" (bloque propio, sin cambios de
+ *     lógica) de
+ *  2) "Expedientes de multas" (sección nueva, con filtros propios y
+ *     detalle enriquecido: pago a la autoridad, documentos, RRHH) —
+ *     ya NO queda escondida al final de la tabla de unidades.
+ * Excel, notificaciones y Portal del piloto siguen fuera de alcance.
  */
 
 const MESES = [
@@ -36,6 +41,14 @@ const RESOLUCIONES = [
 type Responsabilidad = (typeof RESPONSABILIDADES)[number]["value"];
 type Resolucion = (typeof RESOLUCIONES)[number]["value"];
 
+const TIPOS_DOCUMENTO = [
+  { value: "MULTA", label: "Boleta / documento de la multa" },
+  { value: "COMPROBANTE_PAGO", label: "Comprobante de pago" },
+  { value: "FACTURA", label: "Factura" },
+  { value: "OTRO", label: "Otro" },
+] as const;
+type TipoDocumento = (typeof TIPOS_DOCUMENTO)[number]["value"];
+
 type Indicadores = {
   unidadesActivas: number; revisadas: number; pendientesRevision: number; unidadesConMultas: number;
   cantidadMultasMes: number; montoTotalMes: number;
@@ -57,21 +70,35 @@ type Multa = {
   monto_total: string; monto_empresa: string | null; monto_colaborador: string | null;
   tipo_responsabilidad: Responsabilidad; empleado_responsable_nombre: string | null; responsable_texto: string | null;
   resolucion_economica: Resolucion; estado: "PENDIENTE" | "EN_REVISION" | "RESUELTA" | "ANULADA";
-  estado_pago: "PENDIENTE" | "PAGADA" | "NO_APLICA"; estado_descuento: "NO_APLICA" | "PENDIENTE" | "DESCONTADO";
+  estado_pago: "PENDIENTE" | "PAGADA" | "NO_APLICA";
+  pagada_en: string | null; monto_pagado: string | null; referencia_pago: string | null;
+  observaciones_pago: string | null; pagada_por_nombre: string | null;
+  estado_descuento: "NO_APLICA" | "PENDIENTE" | "DESCONTADO";
   observaciones: string | null; descuentoRrhh: DescuentoRrhhResumen | null; rrhh_descuento_id: number | null;
 };
 type Empleado = { id: number; codigo: string; nombre: string };
+type DocumentoMulta = {
+  id: number; tipoDocumento: TipoDocumento; nombreOriginal: string; mimeType: string; tamano: number; subidoEn: string;
+};
 
 function formatQ(v: string | number | null | undefined): string {
   return `Q${Number(v ?? 0).toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function badgeRrhh(m: Multa): { texto: string; clase: string } | null {
-  if (m.resolucion_economica !== "COLABORADOR" && m.resolucion_economica !== "COMPARTIDO") return null;
+/** Sección 23 del ticket: vocabulario exacto de los estados visuales de RRHH. */
+function badgeRrhh(m: Multa): { texto: string; clase: string } {
+  if (m.resolucion_economica !== "COLABORADOR" && m.resolucion_economica !== "COMPARTIDO") {
+    return { texto: "No aplica", clase: "bg-[var(--input)] text-[var(--muted)]" };
+  }
   if (!m.rrhh_descuento_id || !m.descuentoRrhh) return { texto: "Pendiente RRHH", clase: "bg-amber-900/50 text-amber-200" };
-  if (m.descuentoRrhh.saldo <= 0.004) return { texto: "Descuento completado", clase: "bg-emerald-900/50 text-emerald-200" };
-  if (m.descuentoRrhh.cuotasAplicadas > 0) return { texto: "Descuento en curso", clase: "bg-sky-900/50 text-sky-200" };
-  return { texto: "Descuento programado", clase: "bg-violet-900/50 text-violet-200" };
+  if (m.descuentoRrhh.saldo <= 0.004) return { texto: "Completado", clase: "bg-emerald-900/50 text-emerald-200" };
+  if (m.descuentoRrhh.cuotasAplicadas > 0) return { texto: "En curso", clase: "bg-sky-900/50 text-sky-200" };
+  return { texto: "Programado", clase: "bg-violet-900/50 text-violet-200" };
+}
+function badgePago(m: Multa): { texto: string; clase: string } {
+  if (m.estado_pago === "NO_APLICA") return { texto: "No aplica", clase: "bg-[var(--input)] text-[var(--muted)]" };
+  if (m.estado_pago === "PAGADA") return { texto: "Pagada", clase: "bg-emerald-900/50 text-emerald-200" };
+  return { texto: "Pendiente pago", clase: "bg-amber-900/50 text-amber-200" };
 }
 
 const ESTADO_BADGE: Record<string, string> = {
@@ -178,6 +205,168 @@ function FormularioMulta({
   );
 }
 
+/**
+ * MULTAS-5 (sección 13) — expediente completo de una multa: monto/
+ * responsabilidad (solo lectura, ya fijados al crear/resolver), pago a
+ * la autoridad, documentos, RRHH, y anulación. Un solo componente para
+ * no repetir este bloque grande entre "Expedientes" y cualquier otra
+ * vista que lo necesite.
+ */
+function ExpedienteDetalle({
+  m, puedeAnularConDescuento, puedeRegistrarPago,
+  motivoAnular, setMotivoAnular, anulando, onAnular,
+  pagoForm, setPagoForm, pagando, onRegistrarPago,
+  documentos, cargandoDocumentos, tipoSubida, setTipoSubida, subiendo, onSubirDocumento, onEliminarDocumento,
+  onVerDocumento,
+}: {
+  m: Multa;
+  puedeAnularConDescuento: boolean;
+  puedeRegistrarPago: boolean;
+  motivoAnular: string; setMotivoAnular: (v: string) => void; anulando: boolean; onAnular: () => void;
+  pagoForm: { referencia_pago: string; observaciones_pago: string };
+  setPagoForm: Dispatch<SetStateAction<{ referencia_pago: string; observaciones_pago: string }>>;
+  pagando: boolean; onRegistrarPago: () => void;
+  documentos: DocumentoMulta[]; cargandoDocumentos: boolean;
+  tipoSubida: TipoDocumento; setTipoSubida: (v: TipoDocumento) => void; subiendo: boolean;
+  onSubirDocumento: (file: File) => void; onEliminarDocumento: (docId: number) => void;
+  onVerDocumento: (docId: number) => void;
+}) {
+  return (
+    <div className="space-y-4 text-xs">
+      <div className="grid gap-1 sm:grid-cols-2">
+        <p><span className="text-[var(--muted)]">Unidad:</span> {m.placa_actual}</p>
+        <p><span className="text-[var(--muted)]">Fecha:</span> {m.fecha_infraccion}</p>
+        <p><span className="text-[var(--muted)]">Boleta:</span> {m.referencia_boleta ?? "—"}</p>
+        <p><span className="text-[var(--muted)]">Tipo:</span> {m.tipo_multa}</p>
+        <p><span className="text-[var(--muted)]">Lugar:</span> {m.lugar ?? "—"}</p>
+        <p className="sm:col-span-2"><span className="text-[var(--muted)]">Descripción:</span> {m.descripcion}</p>
+      </div>
+
+      <div className="rounded-md border border-[var(--border)] p-3">
+        <h4 className="mb-1 font-semibold uppercase tracking-wide text-[var(--muted)]">Monto</h4>
+        <div className="grid gap-1 sm:grid-cols-3">
+          <p><span className="text-[var(--muted)]">Total:</span> {formatQ(m.monto_total)}</p>
+          <p><span className="text-[var(--muted)]">Empresa:</span> {formatQ(m.monto_empresa)}</p>
+          <p><span className="text-[var(--muted)]">Colaborador:</span> {formatQ(m.monto_colaborador)}</p>
+        </div>
+      </div>
+
+      <div className="rounded-md border border-[var(--border)] p-3">
+        <h4 className="mb-1 font-semibold uppercase tracking-wide text-[var(--muted)]">Responsabilidad</h4>
+        <p><span className="text-[var(--muted)]">Tipo:</span> {RESPONSABILIDADES.find((r) => r.value === m.tipo_responsabilidad)?.label ?? m.tipo_responsabilidad}</p>
+        <p><span className="text-[var(--muted)]">Colaborador responsable:</span> {m.empleado_responsable_nombre ?? m.responsable_texto ?? "—"}</p>
+        <p><span className="text-[var(--muted)]">Resolución:</span> {RESOLUCIONES.find((r) => r.value === m.resolucion_economica)?.label ?? m.resolucion_economica}</p>
+      </div>
+
+      <div className="rounded-md border border-[var(--border)] p-3">
+        <h4 className="mb-1 font-semibold uppercase tracking-wide text-[var(--muted)]">Pago de la multa (a la autoridad)</h4>
+        {m.estado_pago === "PAGADA" ? (
+          <div className="grid gap-1 sm:grid-cols-2">
+            <p><span className="text-[var(--muted)]">Estado:</span> Pagada</p>
+            <p><span className="text-[var(--muted)]">Fecha:</span> {m.pagada_en ? String(m.pagada_en).slice(0, 10) : "—"}</p>
+            <p><span className="text-[var(--muted)]">Monto:</span> {formatQ(m.monto_pagado)}</p>
+            <p><span className="text-[var(--muted)]">Referencia:</span> {m.referencia_pago ?? "—"}</p>
+            <p><span className="text-[var(--muted)]">Registrado por:</span> {m.pagada_por_nombre ?? "—"}</p>
+            {m.observaciones_pago ? <p className="sm:col-span-2"><span className="text-[var(--muted)]">Observaciones:</span> {m.observaciones_pago}</p> : null}
+            {!documentos.some((d) => d.tipoDocumento === "COMPROBANTE_PAGO") ? (
+              <p className="sm:col-span-2 text-amber-300">Pago registrado sin comprobante.</p>
+            ) : null}
+          </div>
+        ) : m.estado_pago === "NO_APLICA" ? (
+          <p>No aplica.</p>
+        ) : puedeRegistrarPago ? (
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="min-w-[12rem] flex-1">Referencia de pago (opcional)
+              <input className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1" value={pagoForm.referencia_pago} onChange={(e) => setPagoForm((f) => ({ ...f, referencia_pago: e.target.value }))} />
+            </label>
+            <label className="min-w-[12rem] flex-1">Observaciones (opcional)
+              <input className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1" value={pagoForm.observaciones_pago} onChange={(e) => setPagoForm((f) => ({ ...f, observaciones_pago: e.target.value }))} />
+            </label>
+            <button type="button" disabled={pagando} className="rounded-md bg-emerald-700 px-3 py-1.5 font-medium text-white disabled:opacity-50" onClick={onRegistrarPago}>
+              {pagando ? "Registrando…" : `Registrar pago (${formatQ(m.monto_total)})`}
+            </button>
+            <p className="w-full text-[10px] text-[var(--muted)]">La empresa paga el total de la multa a la autoridad — sin pagos parciales en esta fase.</p>
+          </div>
+        ) : (
+          <p className="text-[var(--muted)]">Pendiente de pago — requiere permiso para registrar pagos.</p>
+        )}
+      </div>
+
+      <div className="rounded-md border border-[var(--border)] p-3">
+        <h4 className="mb-1 font-semibold uppercase tracking-wide text-[var(--muted)]">Documentos</h4>
+        {cargandoDocumentos ? <p className="text-[var(--muted)]">Cargando…</p> : (
+          <>
+            {!documentos.length ? <p className="text-[var(--muted)]">Sin documentos todavía.</p> : (
+              <ul className="mb-2 space-y-1">
+                {documentos.map((d) => (
+                  <li key={d.id} className="flex items-center justify-between gap-2">
+                    <span>
+                      <span className="rounded bg-[var(--input)] px-1.5 py-0.5 text-[10px] font-medium">{TIPOS_DOCUMENTO.find((t) => t.value === d.tipoDocumento)?.label ?? d.tipoDocumento}</span>
+                      {" "}
+                      <button type="button" className="text-[var(--accent)] underline" onClick={() => onVerDocumento(d.id)}>{d.nombreOriginal}</button>
+                    </span>
+                    <button type="button" className="text-rose-300 underline" onClick={() => onEliminarDocumento(d.id)}>Eliminar</button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="flex flex-wrap items-end gap-2">
+              <label>Tipo
+                <select className="mt-0.5 block rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1" value={tipoSubida} onChange={(e) => setTipoSubida(e.target.value as TipoDocumento)}>
+                  {TIPOS_DOCUMENTO.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+                </select>
+              </label>
+              <label>Archivo (JPG, PNG o PDF)
+                <input
+                  type="file" accept=".jpg,.jpeg,.png,.pdf"
+                  className="mt-0.5 block text-[var(--muted)]"
+                  disabled={subiendo}
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) onSubirDocumento(f); e.target.value = ""; }}
+                />
+              </label>
+              {subiendo ? <span className="text-[var(--muted)]">Subiendo…</span> : null}
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="rounded-md border border-[var(--border)] p-3">
+        <h4 className="mb-1 font-semibold uppercase tracking-wide text-[var(--muted)]">RRHH</h4>
+        {m.descuentoRrhh ? (
+          <div className="grid gap-1 sm:grid-cols-2">
+            <p><span className="text-[var(--muted)]">Código descuento:</span> {m.descuentoRrhh.codigo}</p>
+            <p><span className="text-[var(--muted)]">Cuotas:</span> {m.descuentoRrhh.cuotasAplicadas}/{m.descuentoRrhh.numeroCuotas}</p>
+            <p><span className="text-[var(--muted)]">Monto recuperado:</span> {formatQ(m.descuentoRrhh.pagado)}</p>
+            <p><span className="text-[var(--muted)]">Saldo:</span> {formatQ(m.descuentoRrhh.saldo)}</p>
+            <p><span className="text-[var(--muted)]">Próxima cuota:</span> {m.descuentoRrhh.proximaCuota ? `#${m.descuentoRrhh.proximaCuota.numero} · ${m.descuentoRrhh.proximaCuota.fecha} · ${formatQ(m.descuentoRrhh.proximaCuota.monto)}` : "—"}</p>
+          </div>
+        ) : (m.resolucion_economica === "COLABORADOR" || m.resolucion_economica === "COMPARTIDO") ? (
+          <p className="text-[var(--muted)]">
+            {m.estado_pago === "PAGADA" ? "Pendiente de que RRHH genere el descuento." : "Se habilita para RRHH en cuanto la empresa registre el pago de la multa."}
+          </p>
+        ) : (
+          <p className="text-[var(--muted)]">No aplica.</p>
+        )}
+      </div>
+
+      {m.estado !== "ANULADA" && (!m.rrhh_descuento_id || puedeAnularConDescuento) ? (
+        <div className="flex flex-wrap items-end gap-2 border-t border-[var(--border)] pt-3">
+          <label className="min-w-[16rem] flex-1">Motivo de anulación
+            <input className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1" value={motivoAnular} onChange={(e) => setMotivoAnular(e.target.value)} />
+          </label>
+          <button type="button" disabled={anulando} className="rounded-md bg-rose-800 px-3 py-1.5 font-medium text-white disabled:opacity-50" onClick={onAnular}>
+            {anulando ? "Anulando…" : m.rrhh_descuento_id ? "Anular y cancelar descuento RRHH" : "Anular multa"}
+          </button>
+        </div>
+      ) : m.estado !== "ANULADA" && m.rrhh_descuento_id ? (
+        <p className="border-t border-[var(--border)] pt-3 text-[var(--muted)]">
+          Esta multa tiene un descuento RRHH vinculado — anularla requiere permiso de RRHH (editar descuentos).
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 export default function MultasPage() {
   const { slug } = useParams<{ slug: string }>();
   const { rol, permisos } = useEmpresaSession();
@@ -186,6 +375,14 @@ export default function MultasPage() {
   // además rrhh:descuentos:editar (el backend ya lo exige; esto solo
   // evita ofrecer un botón que va a rebotar en 403).
   const puedeAnularConDescuento = rol === "Admin" || tienePermiso(permisos, "descuentos", "editar");
+  // MULTAS-5 (sección 15) — MVP: multas:editar (mismo permiso que el
+  // resto de escrituras de Operaciones sobre Multas) basta para
+  // registrar el pago a la autoridad. Recomendación documentada en el
+  // reporte del PR: si el negocio quiere separar "quién edita el
+  // expediente" de "quién autoriza pagos a la autoridad", un permiso
+  // propio (ej. multas_pagar:editar, mismo patrón que viaticos_pagar)
+  // sería el siguiente paso — no se crea aquí por no existir todavía.
+  const puedeRegistrarPago = rol === "Admin" || tienePermiso(permisos, "multas", "editar") || permisos.length === 0;
   const [motivoAnular, setMotivoAnular] = useState("");
   const [anulando, setAnulando] = useState(false);
   const hoy = new Date();
@@ -198,12 +395,34 @@ export default function MultasPage() {
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
   const [empleados, setEmpleados] = useState<Empleado[] | null>(null); // null = catálogo no disponible (fallback a texto libre)
-  const [detalleAbierto, setDetalleAbierto] = useState<number | null>(null);
+  const [expedienteAbierto, setExpedienteAbierto] = useState<number | null>(null);
   const [revisionAbierta, setRevisionAbierta] = useState<number | null>(null); // vehiculoId
   const [obsRevision, setObsRevision] = useState("");
   const [multaFormPara, setMultaFormPara] = useState<{ vehiculoId: number; revisionId: number; placa: string } | null>(null);
   const [form, setForm] = useState(formVacio);
   const [guardando, setGuardando] = useState(false);
+
+  // Filtros de "Expedientes de multas" (sección 12): mes/año ya acotan
+  // la consulta al backend (paginada); placa/responsable/estado son
+  // client-side sobre ese mismo período (máx. 100 filas por diseño de
+  // listarMultas) — no son "decorativos": el dataset ya está acotado por
+  // el backend, filtrar en memoria sobre ≤100 filas es correcto, no un
+  // riesgo de crecimiento sin límite.
+  const [fPlaca, setFPlaca] = useState("");
+  const [fResponsable, setFResponsable] = useState("");
+  const [fEstadoMulta, setFEstadoMulta] = useState("");
+  const [fEstadoPago, setFEstadoPago] = useState("");
+  const [fEstadoRrhh, setFEstadoRrhh] = useState("");
+
+  // Pago
+  const [pagoForm, setPagoForm] = useState({ referencia_pago: "", observaciones_pago: "" });
+  const [pagando, setPagando] = useState(false);
+
+  // Documentos
+  const [documentosPorMulta, setDocumentosPorMulta] = useState<Record<number, DocumentoMulta[]>>({});
+  const [cargandoDocumentos, setCargandoDocumentos] = useState(false);
+  const [tipoSubida, setTipoSubida] = useState<TipoDocumento>("MULTA");
+  const [subiendo, setSubiendo] = useState(false);
 
   const cargarPanel = useCallback(async () => {
     setCargando(true);
@@ -343,7 +562,7 @@ export default function MultasPage() {
       if (!res.ok) throw new Error(data.error ?? "No se pudo anular la multa.");
       setMsg(`Multa #${m.id} anulada.`);
       setMotivoAnular("");
-      setDetalleAbierto(null);
+      setExpedienteAbierto(null);
       await cargarPanel();
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se pudo anular la multa.");
@@ -352,13 +571,104 @@ export default function MultasPage() {
     }
   }
 
+  async function registrarPago(m: Multa) {
+    setPagando(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/empresas/${slug}/operaciones/multas/${m.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accion: "pagar",
+          referencia_pago: pagoForm.referencia_pago.trim() || undefined,
+          observaciones_pago: pagoForm.observaciones_pago.trim() || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "No se pudo registrar el pago.");
+      setMsg(`Pago de la multa #${m.id} registrado.`);
+      setPagoForm({ referencia_pago: "", observaciones_pago: "" });
+      await cargarPanel();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo registrar el pago.");
+    } finally {
+      setPagando(false);
+    }
+  }
+
+  const cargarDocumentos = useCallback(async (multaId: number) => {
+    setCargandoDocumentos(true);
+    try {
+      const res = await fetch(`/api/empresas/${slug}/operaciones/multas/${multaId}/documentos`);
+      const data = await res.json();
+      if (res.ok) setDocumentosPorMulta((prev) => ({ ...prev, [multaId]: data.documentos ?? [] }));
+    } catch { /* silencioso: la sección de documentos queda vacía */ }
+    finally { setCargandoDocumentos(false); }
+  }, [slug]);
+
+  function abrirExpediente(multaId: number) {
+    if (expedienteAbierto === multaId) { setExpedienteAbierto(null); return; }
+    setExpedienteAbierto(multaId);
+    setMotivoAnular("");
+    setPagoForm({ referencia_pago: "", observaciones_pago: "" });
+    setTipoSubida("MULTA");
+    void cargarDocumentos(multaId);
+  }
+
+  async function subirDocumento(multaId: number, file: File) {
+    setSubiendo(true);
+    setError("");
+    try {
+      const body = new FormData();
+      body.append("file", file);
+      body.append("tipo", tipoSubida);
+      const res = await fetch(`/api/empresas/${slug}/operaciones/multas/${multaId}/documentos`, { method: "POST", body });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "No se pudo subir el documento.");
+      await cargarDocumentos(multaId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo subir el documento.");
+    } finally {
+      setSubiendo(false);
+    }
+  }
+
+  async function eliminarDocumento(multaId: number, docId: number) {
+    try {
+      const res = await fetch(`/api/empresas/${slug}/operaciones/multas/documentos/${docId}`, {
+        method: "DELETE", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ motivo: "Eliminado desde el expediente" }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "No se pudo eliminar el documento.");
+      await cargarDocumentos(multaId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo eliminar el documento.");
+    }
+  }
+
+  function verDocumento(docId: number) {
+    window.open(`/api/empresas/${slug}/operaciones/multas/documentos/${docId}`, "_blank", "noopener,noreferrer");
+  }
+
   const anios = Array.from({ length: 5 }, (_, i) => hoy.getFullYear() - 2 + i);
+
+  const multasFiltradas = multas.filter((m) => {
+    if (fPlaca.trim() && !m.placa_actual.toLowerCase().includes(fPlaca.trim().toLowerCase())) return false;
+    if (fResponsable.trim()) {
+      const resp = (m.empleado_responsable_nombre ?? m.responsable_texto ?? "").toLowerCase();
+      if (!resp.includes(fResponsable.trim().toLowerCase())) return false;
+    }
+    if (fEstadoMulta && m.estado !== fEstadoMulta) return false;
+    if (fEstadoPago && m.estado_pago !== fEstadoPago) return false;
+    if (fEstadoRrhh && badgeRrhh(m).texto !== fEstadoRrhh) return false;
+    return true;
+  });
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">Multas y sanciones</h1>
-        <p className="text-sm text-[var(--muted)]">Revisión mensual por unidad, registro de multas y su resolución económica.</p>
+        <p className="text-sm text-[var(--muted)]">Expediente completo: revisión mensual, registro de multas, pago a la autoridad, documentos y recuperación al colaborador vía RRHH.</p>
       </div>
 
       <div className="flex flex-wrap items-end gap-3">
@@ -405,8 +715,105 @@ export default function MultasPage() {
         </div>
       ) : null}
 
+      {/* Sección 10: "Expedientes de multas" — bloque propio, visible sin
+          tener que desplazarse más allá de la tabla de unidades. */}
       <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-        <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">Unidades — {MESES[mes - 1]} {anio}</h2>
+        <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">Expedientes de multas — {MESES[mes - 1]} {anio}</h2>
+        <div className="mb-3 flex flex-wrap items-end gap-2 text-xs">
+          <label>Placa
+            <input className="mt-0.5 block rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1" value={fPlaca} onChange={(e) => setFPlaca(e.target.value)} />
+          </label>
+          <label>Responsable
+            <input className="mt-0.5 block rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1" value={fResponsable} onChange={(e) => setFResponsable(e.target.value)} />
+          </label>
+          <label>Estado multa
+            <select className="mt-0.5 block rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1" value={fEstadoMulta} onChange={(e) => setFEstadoMulta(e.target.value)}>
+              <option value="">Todos</option>
+              {["PENDIENTE", "EN_REVISION", "RESUELTA", "ANULADA"].map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+          </label>
+          <label>Estado pago
+            <select className="mt-0.5 block rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1" value={fEstadoPago} onChange={(e) => setFEstadoPago(e.target.value)}>
+              <option value="">Todos</option>
+              <option value="PENDIENTE">Pendiente pago</option>
+              <option value="PAGADA">Pagada</option>
+              <option value="NO_APLICA">No aplica</option>
+            </select>
+          </label>
+          <label>Estado RRHH
+            <select className="mt-0.5 block rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1" value={fEstadoRrhh} onChange={(e) => setFEstadoRrhh(e.target.value)}>
+              <option value="">Todos</option>
+              {["No aplica", "Pendiente RRHH", "Programado", "En curso", "Completado"].map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+          </label>
+        </div>
+        {!multasFiltradas.length ? <p className="text-sm text-[var(--muted)]">Sin expedientes que coincidan con los filtros.</p> : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-[var(--border)] text-left text-xs uppercase tracking-wide text-[var(--muted)]">
+                  <th className="py-2 pr-3">Fecha</th><th className="py-2 pr-3">Unidad</th><th className="py-2 pr-3">Boleta</th>
+                  <th className="py-2 pr-3">Tipo</th><th className="py-2 pr-3">Responsable</th><th className="py-2 pr-3">Monto</th>
+                  <th className="py-2 pr-3">Estado</th><th className="py-2 pr-3">Pago</th><th className="py-2 pr-3">RRHH</th><th className="py-2 pr-3">Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {multasFiltradas.map((m) => {
+                  const rrhh = badgeRrhh(m);
+                  const pago = badgePago(m);
+                  return (
+                    <>
+                      <tr key={m.id} className="border-t border-[var(--border)]">
+                        <td className="py-2 pr-3">{m.fecha_infraccion}</td>
+                        <td className="py-2 pr-3">{m.placa_actual}</td>
+                        <td className="py-2 pr-3">{m.referencia_boleta ?? "—"}</td>
+                        <td className="py-2 pr-3">{m.tipo_multa}</td>
+                        <td className="py-2 pr-3">{m.empleado_responsable_nombre ?? m.responsable_texto ?? "—"}</td>
+                        <td className="py-2 pr-3">{formatQ(m.monto_total)}</td>
+                        <td className="py-2 pr-3">
+                          <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${ESTADO_BADGE[m.estado] ?? "bg-[var(--input)] text-[var(--muted)]"}`}>{m.estado}</span>
+                        </td>
+                        <td className="py-2 pr-3"><span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${pago.clase}`}>{pago.texto}</span></td>
+                        <td className="py-2 pr-3"><span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${rrhh.clase}`}>{rrhh.texto}</span></td>
+                        <td className="py-2 pr-3">
+                          <button type="button" className="text-xs text-[var(--accent)] underline" onClick={() => abrirExpediente(m.id)}>
+                            {expedienteAbierto === m.id ? "Ocultar" : "Ver expediente"}
+                          </button>
+                        </td>
+                      </tr>
+                      {expedienteAbierto === m.id ? (
+                        <tr key={`${m.id}-exp`} className="border-t border-[var(--border)] bg-[var(--input)]/30">
+                          <td colSpan={10} className="py-3 pr-3">
+                            <ExpedienteDetalle
+                              m={m}
+                              puedeAnularConDescuento={puedeAnularConDescuento}
+                              puedeRegistrarPago={puedeRegistrarPago}
+                              motivoAnular={motivoAnular} setMotivoAnular={setMotivoAnular}
+                              anulando={anulando} onAnular={() => void anularMulta(m)}
+                              pagoForm={pagoForm} setPagoForm={setPagoForm}
+                              pagando={pagando} onRegistrarPago={() => void registrarPago(m)}
+                              documentos={documentosPorMulta[m.id] ?? []} cargandoDocumentos={cargandoDocumentos}
+                              tipoSubida={tipoSubida} setTipoSubida={setTipoSubida} subiendo={subiendo}
+                              onSubirDocumento={(file) => void subirDocumento(m.id, file)}
+                              onEliminarDocumento={(docId) => void eliminarDocumento(m.id, docId)}
+                              onVerDocumento={verDocumento}
+                            />
+                          </td>
+                        </tr>
+                      ) : null}
+                    </>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {/* Sección "Revisión mensual de unidades" — bloque propio, sin
+          cambios de lógica respecto a MULTAS-4. */}
+      <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+        <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">Revisión mensual de unidades — {MESES[mes - 1]} {anio}</h2>
         {cargando ? <p className="text-sm text-[var(--muted)]">Cargando…</p> : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -489,79 +896,6 @@ export default function MultasPage() {
                     ) : null}
                   </>
                 ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-        <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-[var(--muted)]">Multas — {MESES[mes - 1]} {anio}</h2>
-        {!multas.length ? <p className="text-sm text-[var(--muted)]">Sin multas en este período.</p> : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-[var(--border)] text-left text-xs uppercase tracking-wide text-[var(--muted)]">
-                  <th className="py-2 pr-3">Fecha</th><th className="py-2 pr-3">Unidad</th><th className="py-2 pr-3">Tipo</th>
-                  <th className="py-2 pr-3">Monto</th><th className="py-2 pr-3">Estado</th><th className="py-2 pr-3">RRHH</th><th className="py-2 pr-3">Detalle</th>
-                </tr>
-              </thead>
-              <tbody>
-                {multas.map((m) => {
-                  const badge = badgeRrhh(m);
-                  return (
-                    <>
-                      <tr key={m.id} className="border-t border-[var(--border)]">
-                        <td className="py-2 pr-3">{m.fecha_infraccion}</td>
-                        <td className="py-2 pr-3">{m.placa_actual}</td>
-                        <td className="py-2 pr-3">{m.tipo_multa}</td>
-                        <td className="py-2 pr-3">{formatQ(m.monto_total)}</td>
-                        <td className="py-2 pr-3">
-                          <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${ESTADO_BADGE[m.estado] ?? "bg-[var(--input)] text-[var(--muted)]"}`}>{m.estado}</span>
-                        </td>
-                        <td className="py-2 pr-3">{badge ? <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${badge.clase}`}>{badge.texto}</span> : "—"}</td>
-                        <td className="py-2 pr-3">
-                          <button type="button" className="text-xs text-[var(--accent)] underline" onClick={() => setDetalleAbierto(detalleAbierto === m.id ? null : m.id)}>
-                            {detalleAbierto === m.id ? "Ocultar" : "Ver"}
-                          </button>
-                        </td>
-                      </tr>
-                      {detalleAbierto === m.id ? (
-                        <tr key={`${m.id}-det`} className="border-t border-[var(--border)] bg-[var(--input)]/30">
-                          <td colSpan={7} className="py-3 pr-3 text-xs">
-                            <div className="grid gap-1 sm:grid-cols-2">
-                              <p><span className="text-[var(--muted)]">Descripción:</span> {m.descripcion}</p>
-                              <p><span className="text-[var(--muted)]">Lugar:</span> {m.lugar ?? "—"}</p>
-                              <p><span className="text-[var(--muted)]">Boleta:</span> {m.referencia_boleta ?? "—"}</p>
-                              <p><span className="text-[var(--muted)]">Responsable:</span> {m.empleado_responsable_nombre ?? m.responsable_texto ?? "—"}</p>
-                              <p><span className="text-[var(--muted)]">Resolución:</span> {m.resolucion_economica} (Empresa {formatQ(m.monto_empresa)} · Colaborador {formatQ(m.monto_colaborador)})</p>
-                              <p><span className="text-[var(--muted)]">Pago de la multa:</span> {m.estado_pago}</p>
-                              {m.descuentoRrhh ? (
-                                <p className="sm:col-span-2"><span className="text-[var(--muted)]">Descuento RRHH:</span> {m.descuentoRrhh.codigo} · {m.descuentoRrhh.cuotasAplicadas}/{m.descuentoRrhh.numeroCuotas} cuota(s) aplicada(s) · saldo {formatQ(m.descuentoRrhh.saldo)}</p>
-                              ) : null}
-                              {m.observaciones ? <p className="sm:col-span-2"><span className="text-[var(--muted)]">Observaciones:</span> {m.observaciones}</p> : null}
-                            </div>
-                            {m.estado !== "ANULADA" && (!m.rrhh_descuento_id || puedeAnularConDescuento) ? (
-                              <div className="mt-3 flex flex-wrap items-end gap-2 border-t border-[var(--border)] pt-3">
-                                <label className="min-w-[16rem] flex-1">
-                                  Motivo de anulación
-                                  <input className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1" value={motivoAnular} onChange={(e) => setMotivoAnular(e.target.value)} />
-                                </label>
-                                <button type="button" disabled={anulando} className="rounded-md bg-rose-800 px-3 py-1.5 font-medium text-white disabled:opacity-50" onClick={() => void anularMulta(m)}>
-                                  {anulando ? "Anulando…" : m.rrhh_descuento_id ? "Anular y cancelar descuento RRHH" : "Anular multa"}
-                                </button>
-                              </div>
-                            ) : m.estado !== "ANULADA" && m.rrhh_descuento_id ? (
-                              <p className="mt-3 border-t border-[var(--border)] pt-3 text-[var(--muted)]">
-                                Esta multa tiene un descuento RRHH vinculado — anularla requiere permiso de RRHH (editar descuentos).
-                              </p>
-                            ) : null}
-                          </td>
-                        </tr>
-                      ) : null}
-                    </>
-                  );
-                })}
               </tbody>
             </table>
           </div>

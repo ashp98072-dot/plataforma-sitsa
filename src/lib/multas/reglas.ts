@@ -63,7 +63,11 @@ export const patchSchema = z.discriminatedUnion("accion", [
     lugar: texto(300).nullable().optional(), observaciones: texto(4000).nullable().optional() }).strict(),
   z.object({ accion: z.literal("responsable"), ...responsabilidad }).strict(),
   z.object({ accion: z.literal("resolucion"), ...resolucion, observaciones: opcional(4000) }).strict(),
-  z.object({ accion: z.literal("pagar") }).strict(),
+  // MULTAS-5: la empresa paga el TOTAL a la autoridad (sección 4/27 del
+  // ticket) — monto_pagado nunca se recibe del cliente, se fija = monto_total
+  // en transicion() (sin pagos parciales en esta fase). referencia_pago/
+  // observaciones_pago sí son datos que aporta quien registra el pago.
+  z.object({ accion: z.literal("pagar"), referencia_pago: texto(120).optional(), observaciones_pago: texto(2000).optional() }).strict(),
   z.object({ accion: z.literal("estado"), estado: z.enum(["PENDIENTE", "EN_REVISION", "RESUELTA"]) }).strict(),
   z.object({ accion: z.literal("anular"), motivo_anulacion: texto(4000) }).strict(),
 ]);
@@ -77,6 +81,11 @@ export type Multa = Omit<z.infer<typeof crearMultaSchema>, "estado"> & {
   // en RRHH), nunca se persiste — ver enriquecerConDescuentoRrhh().
   estado_descuento: "NO_APLICA" | "PENDIENTE" | "DESCONTADO";
   pagada_en: Date | string | null; pagada_por_usuario_id: number | null;
+  // MULTAS-5: pago de la multa COMPLETA a la autoridad (no del colaborador
+  // — eso es rrhh_descuento_id/RRHH). monto_pagado siempre = monto_total
+  // cuando estado_pago='PAGADA' (sin pagos parciales); referencia/
+  // observaciones son libres, aportadas por quien registra el pago.
+  monto_pagado: string | null; referencia_pago: string | null; observaciones_pago: string | null;
   descontada_en: Date | string | null; descontada_por_usuario_id: number | null;
   motivo_anulacion: string | null; anulada_en: Date | string | null; anulada_por_usuario_id: number | null;
   // MULTAS-3.2: vínculo con rrhh_descuentos_maestro.id (mismo tenant) —
@@ -106,8 +115,12 @@ export function validarMulta(m: Multa): void {
   const descuentoAplica = (colaborador ?? 0) > 0;
   if (pagoAplica === (m.estado_pago === "NO_APLICA")) throw new ErrorMultas("Estado de pago incompatible con la obligación.");
   if (descuentoAplica === (m.estado_descuento === "NO_APLICA")) throw new ErrorMultas("Estado de descuento incompatible con la obligación.");
-  if (m.estado_pago === "PAGADA" ? !m.pagada_en || !m.pagada_por_usuario_id : m.pagada_en != null || m.pagada_por_usuario_id != null)
+  if (m.estado_pago === "PAGADA" ? !m.pagada_en || !m.pagada_por_usuario_id || m.monto_pagado == null : m.pagada_en != null || m.pagada_por_usuario_id != null || m.monto_pagado != null)
     throw new ErrorMultas("Metadatos de pago incompletos o incompatibles.");
+  // MULTAS-5: sin pagos parciales — si hay monto_pagado, debe coincidir
+  // exactamente con monto_total.
+  if (m.monto_pagado != null && centavos(m.monto_pagado) !== total)
+    throw new ErrorMultas("El monto pagado debe coincidir con el monto total de la multa (no se admiten pagos parciales en esta fase).");
   if (m.estado_descuento === "DESCONTADO" ? !m.descontada_en || !m.descontada_por_usuario_id : m.descontada_en != null || m.descontada_por_usuario_id != null)
     throw new ErrorMultas("Metadatos de descuento incompletos o incompatibles.");
   // MULTAS-3.2: RESUELTA es un estado ADMINISTRATIVO (Operaciones ya decidió
@@ -128,7 +141,8 @@ function obligaciones(m: Multa): void {
 }
 export function nuevaMulta(input: unknown): Multa {
   const m: Multa = { ...crearMultaSchema.parse(input), estado_pago: "PENDIENTE", estado_descuento: "NO_APLICA",
-    pagada_en: null, pagada_por_usuario_id: null, descontada_en: null, descontada_por_usuario_id: null,
+    pagada_en: null, pagada_por_usuario_id: null, monto_pagado: null, referencia_pago: null, observaciones_pago: null,
+    descontada_en: null, descontada_por_usuario_id: null,
     anulada_en: null, anulada_por_usuario_id: null, motivo_anulacion: null, rrhh_descuento_id: null };
   obligaciones(m);
   validarMulta(m);
@@ -167,6 +181,11 @@ export function transicion(m: Multa, input: unknown, usuarioId: number, ahora = 
     case "pagar":
       if (m.estado_pago !== "PENDIENTE") throw new ErrorMultas("No existe pago pendiente.", 409);
       next.estado_pago = "PAGADA"; next.pagada_en = ahora; next.pagada_por_usuario_id = usuarioId;
+      // Sin pagos parciales: monto_pagado siempre es el total de la multa,
+      // nunca un valor que envíe el cliente.
+      next.monto_pagado = m.monto_total;
+      next.referencia_pago = p.referencia_pago?.trim() || null;
+      next.observaciones_pago = p.observaciones_pago?.trim() || null;
       evento = "multa_pagada"; break;
     // MULTAS-3.1: "descontar" retirado — ver comentario sobre patchSchema.
     // estado_descuento solo se mueve a PENDIENTE/NO_APLICA (obligaciones(),

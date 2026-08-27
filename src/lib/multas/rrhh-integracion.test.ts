@@ -42,6 +42,13 @@ const empresaInput = { ...colaboradorInput, resolucion_economica: "EMPRESA", mon
 function filaMulta(input: typeof colaboradorInput, overrides: Record<string, unknown> = {}) {
   return { ...nuevaMulta(input), id: 9, empresa_id: 7, placa_historica: "TEST-001", referencia_boleta: "B-1", ...overrides };
 }
+/** MULTAS-5: crearDescuentoDesdeMulta() ahora exige estado_pago='PAGADA' (sección 27). */
+function filaMultaPagada(input: typeof colaboradorInput, overrides: Record<string, unknown> = {}) {
+  return filaMulta(input, {
+    estado_pago: "PAGADA", pagada_en: new Date(), pagada_por_usuario_id: 8, monto_pagado: input.monto_total,
+    ...overrides,
+  });
+}
 
 const config = { periodicidad: "CADA_QUINCENA", numeroCuotas: 4, fechaInicio: "2026-08-15" };
 
@@ -59,7 +66,7 @@ beforeEach(() => {
   conn.query.mockImplementation(async (sql: string) => {
     if (sql.includes("rrhh_descuento_cuotas")) return [[{ aplicadas: 0 }], []];
     if (sql.includes("empleados")) return [[{ id: 5 }], []];
-    if (sql.includes("ops_multas")) return [[filaMulta(colaboradorInput)], []];
+    if (sql.includes("ops_multas")) return [[filaMultaPagada(colaboradorInput)], []];
     throw new Error("Consulta inesperada");
   });
   conn.execute.mockResolvedValue([{ affectedRows: 1, insertId: 55 }, []]);
@@ -92,7 +99,7 @@ describe("MULTAS-3.2 — integración RRHH", () => {
 
   it("3) y 8) COMPARTIDO: el descuento RRHH se crea SOLO por monto_colaborador, nunca por el total ni por monto_empresa", async () => {
     conn.query.mockImplementation(async (sql: string) => {
-      if (sql.includes("ops_multas")) return [[filaMulta(compartidoInput)], []];
+      if (sql.includes("ops_multas")) return [[filaMultaPagada(compartidoInput)], []];
       throw new Error("Consulta inesperada");
     });
     const response = await postVincular(req(config), multaCtx);
@@ -158,6 +165,27 @@ describe("MULTAS-3.2 — integración RRHH", () => {
     expect(conn.commit).toHaveBeenCalledTimes(1);
   });
 
+  // MULTAS-5 (sección 27) — RRHH no puede crear el descuento antes de que
+  // la empresa registre el pago de la multa a la autoridad.
+  it("MULTAS-5.12) multa PENDIENTE de pago: RRHH no puede crear el descuento (409, sin tocar el motor)", async () => {
+    conn.query.mockImplementation(async (sql: string) => {
+      if (sql.includes("ops_multas")) return [[filaMulta(colaboradorInput)], []]; // estado_pago PENDIENTE (default de nuevaMulta)
+      throw new Error("Consulta inesperada");
+    });
+    const response = await postVincular(req(config), multaCtx);
+    expect(response.status).toBe(409);
+    const data = await response.json();
+    expect(data.error).toMatch(/pago.*autoridad/i);
+    expect(crearDescuentoInterno).not.toHaveBeenCalled();
+    expect(conn.rollback).toHaveBeenCalledTimes(1);
+  });
+  it("MULTAS-5.13) multa ya PAGADA: RRHH sí puede crear el descuento", async () => {
+    // beforeEach ya deja la multa PAGADA por defecto (filaMultaPagada).
+    const response = await postVincular(req(config), multaCtx);
+    expect(response.status).toBe(201);
+    expect(crearDescuentoInterno).toHaveBeenCalledTimes(1);
+  });
+
   it("6) doble solicitud concurrente: la segunda ve rrhh_descuento_id ya vinculado y falla con 409 sin crear nada", async () => {
     conn.query.mockImplementation(async (sql: string) => {
       if (sql.includes("ops_multas")) return [[filaMulta(colaboradorInput, { rrhh_descuento_id: 99 })], []];
@@ -213,7 +241,17 @@ describe("MULTAS-3.2 — integración RRHH", () => {
     expect(conn.execute).not.toHaveBeenCalled();
   });
 
-  it("13) anular una multa SIN descuento vinculado sigue permitido por el PATCH estándar", async () => {
+  it("13) anular una multa SIN descuento vinculado y SIN pago registrado sigue permitido por el PATCH estándar", async () => {
+    // Fixture propia (no pagada) — el default de beforeEach ahora está
+    // pagado (prerrequisito de crearDescuentoDesdeMulta) y un pago
+    // real también bloquea la anulación simple vía tieneMovimientos(),
+    // que es una regla previa a MULTAS-5, no algo que este test deba
+    // ejercitar.
+    conn.query.mockImplementation(async (sql: string) => {
+      if (sql.includes("empleados")) return [[{ id: 5 }], []];
+      if (sql.includes("ops_multas")) return [[filaMulta(colaboradorInput)], []];
+      throw new Error("Consulta inesperada");
+    });
     const response = await PATCH(req({ accion: "anular", motivo_anulacion: "Duplicada" }, "PATCH"), idCtx);
     expect(response.status).toBe(200);
   });

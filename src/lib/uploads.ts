@@ -71,7 +71,7 @@ type UploadLike = {
 
 export async function guardarUpload(
   empresaId: number,
-  subdir: "documentos" | "evidencias" | "flota",
+  subdir: "documentos" | "evidencias" | "flota" | "multas",
   prefix: string,
   file: UploadLike,
 ): Promise<{ relative: string; original: string; size: number }> {
