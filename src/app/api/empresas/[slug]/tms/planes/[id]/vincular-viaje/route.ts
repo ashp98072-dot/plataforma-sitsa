@@ -18,6 +18,11 @@ type Ctx = { params: Promise<{ slug: string; id: string }> };
 
 const bodySchema = z.object({ viajeId: z.number().int().positive() });
 
+/** P2 (revisión de integridad PR #107): entero positivo, no solo finito. */
+function esIdValido(n: number): boolean {
+  return Number.isInteger(n) && n > 0;
+}
+
 /** Lista viajes técnicos candidatos (mismo piloto/unidad/fecha, sin plan_id) para este plan. */
 export async function GET(_req: Request, ctx: Ctx) {
   const { slug, id } = await ctx.params;
@@ -25,7 +30,7 @@ export async function GET(_req: Request, ctx: Ctx) {
   if (guard.error) return guard.error;
 
   const planId = Number(id);
-  if (!Number.isFinite(planId)) {
+  if (!esIdValido(planId)) {
     return NextResponse.json({ error: "ID de plan inválido." }, { status: 400 });
   }
   const candidatos = await listarViajesCandidatosParaPlan(guard.empresa.id, planId);
@@ -41,7 +46,7 @@ export async function POST(req: Request, ctx: Ctx) {
   if (guard.error) return guard.error;
 
   const planId = Number(id);
-  if (!Number.isFinite(planId)) {
+  if (!esIdValido(planId)) {
     return NextResponse.json({ error: "ID de plan inválido." }, { status: 400 });
   }
   const body = await req.json().catch(() => null);
@@ -50,7 +55,20 @@ export async function POST(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: "Indica el viaje técnico a vincular." }, { status: 400 });
   }
 
-  const r = await vincularViajeAPlan(guard.empresa.id, planId, parsed.data.viajeId, guard.session.username);
+  // P0 (revisión de integridad PR #107): vincularViajeAPlan ya NO absorbe
+  // errores del backfill — puede rechazar la promesa (rollback completo).
+  // Aquí se convierte en un 500 explícito en vez de dejarlo como una
+  // excepción sin manejar.
+  let r;
+  try {
+    r = await vincularViajeAPlan(guard.empresa.id, planId, parsed.data.viajeId, guard.session.username);
+  } catch (err) {
+    console.error("vincularViajeAPlan", err);
+    return NextResponse.json(
+      { error: "No se pudo vincular el viaje. No se guardó ningún cambio." },
+      { status: 500 },
+    );
+  }
   if (!r.ok) {
     return NextResponse.json({ error: r.error }, { status: r.status });
   }

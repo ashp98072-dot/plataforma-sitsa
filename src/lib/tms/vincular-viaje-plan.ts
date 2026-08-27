@@ -37,6 +37,22 @@ export type ResultadoVincularViaje =
   | { ok: false; error: string; status: number };
 
 /**
+ * true SOLO si el error es específicamente "columna desconocida"
+ * (ER_BAD_FIELD_ERROR / errno 1054) — mismo criterio ya usado en
+ * src/lib/rrhh/empleados.ts (esColumnaDesconocida) para decidir cuándo es
+ * seguro degradar a un INSERT sin una columna aditiva que quizá no se
+ * haya migrado en este entorno todavía (p.ej. tms_evidencias.parada_id,
+ * que sql/schema.sql no define — ver comentario en el INSERT de abajo).
+ * Cualquier OTRO error (FK, constraint, conexión, dato inválido, etc.)
+ * NO debe camuflarse como "hay que degradar" — debe abortar toda la
+ * transacción (se relanza y el catch exterior hace rollback).
+ */
+function esColumnaDesconocida(e: unknown): boolean {
+  const err = e as { code?: string; errno?: number };
+  return err?.code === "ER_BAD_FIELD_ERROR" || err?.errno === 1054;
+}
+
+/**
  * Mapea el tipo de evidencia de flota_viaje_evidencias al vocabulario ya
  * usado en tms_evidencias.tipo (mismo mapeo que
  * api/portal/viajes/[id]/evidencias/route.ts) — incluye los tipos
@@ -68,7 +84,7 @@ export async function listarViajesCandidatosParaPlan(
   planId: number,
 ): Promise<ViajeCandidatoVinculo[]> {
   const planRows = await query<RowDataPacket[]>(
-    `SELECT p.fecha_plan, pil.id_empleado AS piloto_empleado_id, u.flota_vehiculo_id
+    `SELECT p.estado, p.fecha_plan, pil.id_empleado AS piloto_empleado_id, u.flota_vehiculo_id
      FROM tms_planes_viaje p
      INNER JOIN tms_personal pil ON pil.id = p.piloto_id
      LEFT JOIN tms_unidades u ON u.id = p.unidad_id
@@ -77,6 +93,11 @@ export async function listarViajesCandidatosParaPlan(
   );
   const plan = planRows[0];
   if (!plan || plan.piloto_empleado_id == null || plan.flota_vehiculo_id == null) return [];
+  // P2 (revisión de integridad PR #107): no ofrecer en la UI un vínculo
+  // que POST rechazaría de inmediato — mismo criterio de estado que
+  // vincularViajeAPlan (Cerrado/Cancelado/cualquier otro nunca son
+  // candidatos vinculables).
+  if (!ESTADOS_COMPATIBLES.includes(String(plan.estado))) return [];
   const fechaPlan = String(plan.fecha_plan).slice(0, 10);
   const rows = await query<RowDataPacket[]>(
     `SELECT v.id, v.hora_salida, ve.placa
@@ -160,16 +181,24 @@ export async function vincularViajeAPlan(
       return { ok: false, error: "La fecha del plan no coincide con la fecha del viaje.", status: 409 };
     }
 
-    // Un mismo plan no puede quedar "en ruta" simultáneamente vía dos
-    // viajes técnicos distintos.
+    // P1 (revisión de integridad PR #107): un plan administrativo
+    // corresponde a UN viaje técnico — sin filtrar por estado. Antes esto
+    // solo bloqueaba si el otro viaje seguía "abierto", lo que permitía
+    // que un plan ya vinculado a un viaje YA CERRADO se volviera a
+    // vincular a un viaje técnico distinto (dos flota_viajes apuntando al
+    // mismo plan a la vez, uno cerrado y otro nuevo). La fila del plan ya
+    // está bloqueada (FOR UPDATE, arriba) desde el inicio de esta
+    // transacción — dos solicitudes de vínculo concurrentes para el MISMO
+    // plan se serializan en ese lock, así que este SELECT siempre ve el
+    // estado real y consistente, sin necesitar su propio FOR UPDATE.
     const [otroViajeRows] = await conn.query<RowDataPacket[]>(
       `SELECT id FROM flota_viajes
-       WHERE plan_id = ? AND empresa_id = ? AND id <> ? AND estado = 'abierto' LIMIT 1`,
+       WHERE plan_id = ? AND empresa_id = ? AND id <> ? LIMIT 1`,
       [planId, empresaId, viajeId],
     );
     if (otroViajeRows[0]) {
       await conn.rollback();
-      return { ok: false, error: "Este plan ya está vinculado a otro viaje en curso.", status: 409 };
+      return { ok: false, error: "Este plan ya está vinculado a otro viaje técnico.", status: 409 };
     }
 
     const [upd] = await conn.execute<ResultSetHeader>(
@@ -193,12 +222,19 @@ export async function vincularViajeAPlan(
     // eliminarEvidenciaViaje/eliminarEvidenciaTms para saber que dos filas
     // son "la misma evidencia" entre ambas tablas — así que ejecutar esto
     // dos veces nunca duplica.
+    //
+    // P0 (revisión de integridad PR #107): esta lectura YA NO atrapa su
+    // propio error. El vínculo de plan_id y el backfill son UNA sola
+    // operación administrativa coherente — si esta consulta falla por
+    // cualquier motivo, NO se asume "cero evidencias" ni se continúa: el
+    // error se propaga al catch exterior, que hace rollback de TODA la
+    // transacción (incluido el UPDATE de plan_id ya ejecutado arriba).
     const [evidencias] = await conn.query<RowDataPacket[]>(
       `SELECT id, tipo, ruta_relativa, nombre_original, latitud, longitud,
               capturado_en, subido_por, parada_id
        FROM flota_viaje_evidencias WHERE viaje_id = ? AND empresa_id = ?`,
       [viajeId, empresaId],
-    ).catch(() => [[]] as unknown as [RowDataPacket[], unknown]);
+    );
 
     let sincronizadas = 0;
     for (const ev of evidencias) {
@@ -208,6 +244,15 @@ export async function vincularViajeAPlan(
       );
       if (yaExiste[0]) continue; // ya sincronizada — no duplicar
       const tmsTipo = mapearSyncTmsTipo(String(ev.tipo));
+      // P0/P1 (revisión de integridad PR #107): el INSERT completo ya no
+      // tiene un catch genérico que oculte cualquier error SQL (FK,
+      // constraint, conexión, dato inválido...) detrás de un segundo
+      // INSERT "reducido". Solo se degrada ante el error ESPECÍFICO y
+      // demostrable de columna inexistente (esColumnaDesconocida) —
+      // relevante porque sql/schema.sql no define tms_evidencias.parada_id
+      // (columna aditiva que puede no existir todavía en algún entorno,
+      // igual que otras columnas aditivas de este proyecto). Cualquier
+      // otro error se relanza tal cual, sin intentar un segundo INSERT.
       try {
         await conn.execute(
           `INSERT INTO tms_evidencias
@@ -220,7 +265,8 @@ export async function vincularViajeAPlan(
             ev.parada_id ?? null, ev.capturado_en ?? null,
           ],
         );
-      } catch {
+      } catch (err) {
+        if (!esColumnaDesconocida(err)) throw err;
         await conn.execute(
           `INSERT INTO tms_evidencias
             (empresa_id, plan_id, tipo, ruta_archivo, nombre_original, latitud, longitud, subido_por)

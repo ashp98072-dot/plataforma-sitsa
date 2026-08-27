@@ -78,4 +78,36 @@ describe("PORTAL-HARDENING-2 (corrección final) — endpoint administrativo de 
     expect(res.status).toBe(400);
     expect(vincularViajeAPlan).not.toHaveBeenCalled();
   });
+
+  it.each(["0", "-1", "1.5", "abc"])(
+    "[P2] GET rechaza un id de plan no entero-positivo (%s) antes de tocar la DB",
+    async (idInvalido) => {
+      const res = await GET(new Request("http://localhost/x"), { params: Promise.resolve({ slug: "prueba", id: idInvalido }) });
+      expect(res.status).toBe(400);
+      expect(listarViajesCandidatosParaPlan).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["0", "-1", "1.5", "abc"])(
+    "[P2] POST rechaza un id de plan no entero-positivo (%s) antes de tocar la DB",
+    async (idInvalido) => {
+      const res = await POST(
+        new Request("http://localhost/x", { method: "POST", body: JSON.stringify({ viajeId: 5 }) }),
+        { params: Promise.resolve({ slug: "prueba", id: idInvalido }) },
+      );
+      expect(res.status).toBe(400);
+      expect(vincularViajeAPlan).not.toHaveBeenCalled();
+    },
+  );
+
+  it("[P0] POST convierte una excepción de vincularViajeAPlan (backfill fallido) en 500, sin filtrar el error crudo", async () => {
+    vi.mocked(vincularViajeAPlan).mockRejectedValue(new Error("Conexión perdida"));
+    const res = await POST(
+      new Request("http://localhost/x", { method: "POST", body: JSON.stringify({ viajeId: 5 }) }),
+      ctx,
+    );
+    expect(res.status).toBe(500);
+    const data = await res.json();
+    expect(data.error).not.toContain("Conexión perdida");
+  });
 });

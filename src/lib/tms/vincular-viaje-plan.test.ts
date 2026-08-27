@@ -39,7 +39,7 @@ function mockConnQuery(overrides: {
     if (sql.includes("FROM flota_viajes v WHERE v.id = ?")) {
       return [overrides.viaje === undefined ? [VIAJE_BASE] : overrides.viaje ? [overrides.viaje] : []];
     }
-    if (sql.includes("id <> ?") && sql.includes("estado = 'abierto'")) {
+    if (sql.includes("id <> ?")) {
       return [overrides.otroViaje ? [overrides.otroViaje] : []];
     }
     if (sql.includes("FROM flota_viaje_evidencias WHERE viaje_id")) {
@@ -138,6 +138,39 @@ describe("PORTAL-HARDENING-2 (corrección final) — vincularViajeAPlan: solo v�
     expect(conn.execute).not.toHaveBeenCalled();
   });
 
+  it('6b) [P1] el plan ya tiene OTRO viaje técnico ABIERTO → 409 "ya está vinculado a otro viaje técnico"', async () => {
+    mockConnQuery({ otroViaje: { id: 100, estado: "abierto" } });
+    const r = await vincularViajeAPlan(7, 30, 5, "ops1");
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.status).toBe(409);
+      expect(r.error).toBe("Este plan ya está vinculado a otro viaje técnico.");
+    }
+    expect(conn.execute).not.toHaveBeenCalled();
+  });
+
+  it('6c) [P1] el plan ya tiene OTRO viaje técnico CERRADO (no solo abierto) → también 409', async () => {
+    // Antes de esta corrección, un viaje CERRADO no bloqueaba — permitía
+    // que el mismo plan quedara apuntado por dos flota_viajes distintos.
+    mockConnQuery({ otroViaje: { id: 100, estado: "cerrado" } });
+    const r = await vincularViajeAPlan(7, 30, 5, "ops1");
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.status).toBe(409);
+      expect(r.error).toBe("Este plan ya está vinculado a otro viaje técnico.");
+    }
+    expect(conn.execute).not.toHaveBeenCalled();
+    // La consulta de exclusividad ya NO filtra por estado = 'abierto'.
+    const otroViajeCall = conn.query.mock.calls.find((c) => String(c[0]).includes("id <> ?"));
+    expect(String(otroViajeCall?.[0])).not.toContain("estado = 'abierto'");
+  });
+
+  it("6d) [P1] ningún otro viaje vinculado al plan → permitido (no bloquea el vínculo)", async () => {
+    mockConnQuery({ otroViaje: null });
+    const r = await vincularViajeAPlan(7, 30, 5, "ops1");
+    expect(r.ok).toBe(true);
+  });
+
   it("7) doble envío concurrente: el segundo pierde la carrera (UPDATE afecta 0 filas) → 409, no duplica ni sincroniza", async () => {
     conn.execute.mockImplementation(async (sql: string) => {
       if (sql.includes("UPDATE flota_viajes SET plan_id")) return [{ affectedRows: 0 }, []];
@@ -193,12 +226,81 @@ describe("PORTAL-HARDENING-2 (corrección final) — vincularViajeAPlan: solo v�
       expect.arrayContaining(["flota/nueva.jpg"]),
     );
   });
+
+  it("11) [P0] si falla la lectura de flota_viaje_evidencias, NO se asume cero evidencias: se relanza y hace rollback completo (el UPDATE de plan_id ya se había intentado)", async () => {
+    conn.query.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM tms_planes_viaje p")) return [[PLAN_BASE]];
+      if (sql.includes("FROM flota_viajes v WHERE v.id = ?")) return [[VIAJE_BASE]];
+      if (sql.includes("id <> ?")) return [[]];
+      if (sql.includes("FROM flota_viaje_evidencias WHERE viaje_id")) {
+        throw new Error("Conexión perdida");
+      }
+      throw new Error(`Consulta inesperada: ${sql}`);
+    });
+    await expect(vincularViajeAPlan(7, 30, 5, "ops1")).rejects.toThrow("Conexión perdida");
+    // El UPDATE de plan_id ya se había ejecutado ANTES de leer evidencias
+    // — por eso el rollback es indispensable, no un simple "no hacer nada".
+    expect(conn.execute).toHaveBeenCalledWith(
+      expect.stringContaining("UPDATE flota_viajes SET plan_id"),
+      [30, 5, 7],
+    );
+    expect(conn.rollback).toHaveBeenCalledTimes(1);
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(registrarAuditoriaTx).not.toHaveBeenCalled();
+  });
+
+  it("12) [P0/P1] si el INSERT completo en tms_evidencias falla con un error QUE NO es 'columna desconocida', se relanza sin segundo INSERT — rollback completo, nada de vínculo parcial", async () => {
+    mockConnQuery({
+      evidencias: [{ id: 1, tipo: "tablero_salida", ruta_relativa: "flota/e1.jpg", nombre_original: "e1.jpg", latitud: 14.6, longitud: -90.5, capturado_en: "2026-08-27 07:05:00", subido_por: "portal:E001", parada_id: null }],
+    });
+    conn.execute.mockImplementation(async (sql: string) => {
+      if (sql.includes("UPDATE flota_viajes SET plan_id")) return [{ affectedRows: 1 }, []];
+      if (sql.includes("INSERT INTO tms_evidencias")) {
+        const err = new Error("Cannot add or update a child row: a foreign key constraint fails");
+        (err as { code?: string }).code = "ER_NO_REFERENCED_ROW_2";
+        throw err;
+      }
+      return [{ affectedRows: 1, insertId: 1 }, []];
+    });
+    await expect(vincularViajeAPlan(7, 30, 5, "ops1")).rejects.toThrow(/foreign key/);
+    const insertsTms = conn.execute.mock.calls.filter((c) => String(c[0]).includes("INSERT INTO tms_evidencias"));
+    expect(insertsTms).toHaveLength(1); // nunca un segundo INSERT "reducido" ocultando el error real
+    expect(conn.rollback).toHaveBeenCalledTimes(1);
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(registrarAuditoriaTx).not.toHaveBeenCalled();
+  });
+
+  it("13) [P0/P1] si el INSERT completo falla por columna desconocida (ER_BAD_FIELD_ERROR), SÍ degrada a un segundo INSERT reducido — único caso permitido", async () => {
+    mockConnQuery({
+      evidencias: [{ id: 1, tipo: "tablero_salida", ruta_relativa: "flota/e1.jpg", nombre_original: "e1.jpg", latitud: 14.6, longitud: -90.5, capturado_en: "2026-08-27 07:05:00", subido_por: "portal:E001", parada_id: null }],
+    });
+    let intentos = 0;
+    conn.execute.mockImplementation(async (sql: string) => {
+      if (sql.includes("UPDATE flota_viajes SET plan_id")) return [{ affectedRows: 1 }, []];
+      if (sql.includes("INSERT INTO tms_evidencias")) {
+        intentos++;
+        if (intentos === 1) {
+          const err = new Error("Unknown column 'parada_id' in 'field list'");
+          (err as { code?: string }).code = "ER_BAD_FIELD_ERROR";
+          throw err;
+        }
+        return [{ affectedRows: 1, insertId: 1 }, []];
+      }
+      return [{ affectedRows: 1, insertId: 1 }, []];
+    });
+    const r = await vincularViajeAPlan(7, 30, 5, "ops1");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.evidenciasSincronizadas).toBe(1);
+    const insertsTms = conn.execute.mock.calls.filter((c) => String(c[0]).includes("INSERT INTO tms_evidencias"));
+    expect(insertsTms).toHaveLength(2); // completo (falla) + reducido (éxito)
+    expect(conn.commit).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("PORTAL-HARDENING-2 (corrección final) — listarViajesCandidatosParaPlan: sin heurística de texto", () => {
   it("solo devuelve viajes sin plan_id que coinciden exactamente en piloto/unidad/fecha del plan", async () => {
     vi.mocked(query)
-      .mockResolvedValueOnce([{ fecha_plan: "2026-08-27", piloto_empleado_id: 501, flota_vehiculo_id: 15 }] as unknown as Awaited<ReturnType<typeof query>>)
+      .mockResolvedValueOnce([{ estado: "Programado", fecha_plan: "2026-08-27", piloto_empleado_id: 501, flota_vehiculo_id: 15 }] as unknown as Awaited<ReturnType<typeof query>>)
       .mockResolvedValueOnce([{ id: 5, hora_salida: "2026-08-27 07:00:00", placa: "C-034BXR" }] as unknown as Awaited<ReturnType<typeof query>>);
     const candidatos = await listarViajesCandidatosParaPlan(7, 30);
     expect(candidatos).toEqual([{ viajeId: 5, horaSalida: "2026-08-27 07:00:00", placa: "C-034BXR" }]);
@@ -212,10 +314,34 @@ describe("PORTAL-HARDENING-2 (corrección final) — listarViajesCandidatosParaP
 
   it("si el plan no tiene piloto/unidad resolubles, no devuelve candidatos (evita falsos positivos)", async () => {
     vi.mocked(query).mockResolvedValueOnce(
-      [{ fecha_plan: "2026-08-27", piloto_empleado_id: null, flota_vehiculo_id: null }] as unknown as Awaited<ReturnType<typeof query>>,
+      [{ estado: "Programado", fecha_plan: "2026-08-27", piloto_empleado_id: null, flota_vehiculo_id: null }] as unknown as Awaited<ReturnType<typeof query>>,
     );
     const candidatos = await listarViajesCandidatosParaPlan(7, 30);
     expect(candidatos).toEqual([]);
     expect(query).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["Cerrado", "Cancelado", "Descargado"])(
+    "[P2] plan en estado %s → [] (no ofrece en UI algo que POST rechazaría de inmediato)",
+    async (estado) => {
+      vi.mocked(query).mockResolvedValueOnce(
+        [{ estado, fecha_plan: "2026-08-27", piloto_empleado_id: 501, flota_vehiculo_id: 15 }] as unknown as Awaited<ReturnType<typeof query>>,
+      );
+      const candidatos = await listarViajesCandidatosParaPlan(7, 30);
+      expect(candidatos).toEqual([]);
+      // No debió ni intentar buscar viajes técnicos candidatos.
+      expect(query).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["Programado", "Cargado", "En ruta"])(
+    "[P2] plan en estado %s sí puede tener candidatos",
+    async (estado) => {
+      vi.mocked(query)
+        .mockResolvedValueOnce([{ estado, fecha_plan: "2026-08-27", piloto_empleado_id: 501, flota_vehiculo_id: 15 }] as unknown as Awaited<ReturnType<typeof query>>)
+        .mockResolvedValueOnce([{ id: 5, hora_salida: "2026-08-27 07:00:00", placa: "C-034BXR" }] as unknown as Awaited<ReturnType<typeof query>>);
+      const candidatos = await listarViajesCandidatosParaPlan(7, 30);
+      expect(candidatos).toHaveLength(1);
+    },
+  );
 });
