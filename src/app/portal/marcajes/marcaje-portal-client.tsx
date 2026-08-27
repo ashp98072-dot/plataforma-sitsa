@@ -1,32 +1,39 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { CamaraMarcaje } from "@/app/e/[slug]/rrhh/marcajes/camara-marcaje";
 
 export function MarcajePortalClient() {
   const router = useRouter();
   const [enviando, setEnviando] = useState(false);
   const [mensaje, setMensaje] = useState("");
   const [error, setError] = useState("");
+  const [foto, setFoto] = useState<Blob | null>(null);
+  const [camaraKey, setCamaraKey] = useState(0);
+  const ocupado = useRef(false);
 
   function marcar() {
+    if (ocupado.current) return;
+    if (!foto) { setError("Toma una fotografía antes de marcar."); return; }
     if (!navigator.geolocation) {
       setError("Este dispositivo o navegador no permite obtener la ubicación GPS.");
       return;
     }
+    ocupado.current = true;
     setEnviando(true);
     setMensaje("");
     setError("");
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
         try {
+          const form = new FormData();
+          form.set("foto", foto, "foto-marcaje.jpg");
+          form.set("latitud", String(pos.coords.latitude));
+          form.set("longitud", String(pos.coords.longitude));
           const res = await fetch("/api/portal/marcajes", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              latitud: pos.coords.latitude,
-              longitud: pos.coords.longitude,
-            }),
+            body: form,
           });
           const data = await res.json().catch(() => ({}));
           if (!res.ok) {
@@ -34,14 +41,18 @@ export function MarcajePortalClient() {
             return;
           }
           setMensaje(data.mensaje ?? "Marcaje registrado.");
+          setFoto(null);
+          setCamaraKey((key) => key + 1);
           router.refresh();
         } catch {
           setError("No se pudo conectar con el servidor.");
         } finally {
+          ocupado.current = false;
           setEnviando(false);
         }
       },
       (geoError) => {
+        ocupado.current = false;
         const detalle =
           geoError.code === geoError.PERMISSION_DENIED
             ? "Debes permitir el acceso a la ubicación para marcar."
@@ -60,9 +71,10 @@ export function MarcajePortalClient() {
         Debes estar dentro del radio de una ubicación activa registrada por RRHH.
         El sistema determinará automáticamente si corresponde entrada o salida.
       </p>
+      <CamaraMarcaje key={camaraKey} disabled={enviando} onCapture={setFoto} />
       <button
         type="button"
-        disabled={enviando}
+        disabled={enviando || !foto}
         onClick={marcar}
         className="mt-4 rounded-lg bg-[var(--accent)] px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
       >

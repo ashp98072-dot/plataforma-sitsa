@@ -6,6 +6,8 @@ import {
   registrarMarcajePortal,
 } from "@/lib/rrhh/marcajes";
 import { z } from "zod";
+import { borrarUpload, guardarUpload } from "@/lib/uploads";
+import { tipoFotoEmpleado } from "@/lib/rrhh/foto-empleado";
 
 const RANGO_MAX_DIAS = 90;
 
@@ -72,19 +74,34 @@ export async function POST(req: Request) {
   if (!session) {
     return NextResponse.json({ error: "No autenticado." }, { status: 401 });
   }
-  const parsed = marcarSchema.safeParse(await req.json().catch(() => null));
+  const form = await req.formData().catch(() => null);
+  const foto = form?.get("foto");
+  if (!(foto instanceof File) || !foto.size || foto.size > 10 * 1024 * 1024) {
+    return NextResponse.json({ error: "Toma una fotografía con la cámara (máximo 10 MB) para marcar." }, { status: 400 });
+  }
+  const bytes = await foto.arrayBuffer();
+  const mime = tipoFotoEmpleado(new Uint8Array(bytes));
+  if (mime !== "image/jpeg") {
+    return NextResponse.json({ error: "La fotografía debe ser una captura JPEG de la cámara." }, { status: 400 });
+  }
+  const parsed = marcarSchema.safeParse({
+    latitud: form?.get("latitud") ? Number(form.get("latitud")) : NaN,
+    longitud: form?.get("longitud") ? Number(form.get("longitud")) : NaN,
+  });
   if (!parsed.success) {
     return NextResponse.json(
       { error: "No se recibió una ubicación GPS válida." },
       { status: 400 },
     );
   }
-  const resultado = await registrarMarcajePortal(
-    session.empresaId,
-    session.empleadoId,
-    parsed.data,
-  );
+  let saved: Awaited<ReturnType<typeof guardarUpload>> | undefined;
+  try {
+  saved = await guardarUpload(session.empresaId, "evidencias", `marcaje_portal_${session.empleadoId}`, {
+    name: "foto-marcaje.jpg", size: bytes.byteLength, arrayBuffer: async () => bytes,
+  });
+  const resultado = await registrarMarcajePortal(session.empresaId, session.empleadoId, parsed.data, { ...saved, mime });
   if (!resultado.ok) {
+    borrarUpload(saved.relative);
     return NextResponse.json(
       { error: resultado.error, code: resultado.code },
       { status: resultado.code === "FUERA_GEOCERCA" ? 409 : 400 },
@@ -94,4 +111,9 @@ export async function POST(req: Request) {
     mensaje: `${resultado.tipo} registrada a las ${resultado.hora}.`,
     resultado,
   });
+  } catch (error) {
+    if (saved) borrarUpload(saved.relative);
+    console.error("POST marcaje portal con foto", error);
+    return NextResponse.json({ error: "No se pudo completar el marcaje con su fotografía. Actualiza el historial antes de reintentar." }, { status: 500 });
+  }
 }
