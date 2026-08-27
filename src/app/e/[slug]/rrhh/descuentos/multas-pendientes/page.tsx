@@ -47,6 +47,7 @@ type MultaPendiente = {
   monto_colaborador: string;
   referencia_boleta: string | null;
   creado_en: string;
+  estado_pago: "PENDIENTE" | "PAGADA" | "NO_APLICA";
 };
 
 function formatQ(valor: string | number): string {
@@ -54,6 +55,25 @@ function formatQ(valor: string | number): string {
 }
 
 const hoy = () => new Date().toISOString().slice(0, 10);
+
+/**
+ * MULTAS-5 (sección 19) — preview de reparto de cuotas ANTES de
+ * confirmar. Replica exactamente distribuirCuotas() de
+ * src/lib/rrhh/descuentos.ts (centavos enteros, la última cuota absorbe
+ * el residuo) para que el número mostrado coincida con lo que el backend
+ * va a generar — no es una aproximación aparte.
+ */
+function previsualizarCuotas(montoTotal: string, numeroCuotas: number): number[] {
+  const n = Math.max(1, Math.trunc(numeroCuotas));
+  const centavosTotal = Math.round(Number(montoTotal) * 100);
+  if (!Number.isFinite(centavosTotal)) return [];
+  const base = Math.floor(centavosTotal / n);
+  const montos: number[] = [];
+  let acumulado = 0;
+  for (let i = 0; i < n - 1; i++) { montos.push(base); acumulado += base; }
+  montos.push(centavosTotal - acumulado);
+  return montos.map((c) => c / 100);
+}
 
 export default function MultasPendientesDescuentoPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -157,6 +177,7 @@ export default function MultasPendientesDescuentoPage() {
                   <th className="py-2 pr-3">Monto total</th>
                   <th className="py-2 pr-3">A cargo del colaborador</th>
                   <th className="py-2 pr-3">Boleta</th>
+                  <th className="py-2 pr-3">Pago a la autoridad</th>
                   <th className="py-2 pr-3">Acciones</th>
                 </tr>
               </thead>
@@ -172,7 +193,14 @@ export default function MultasPendientesDescuentoPage() {
                       <td className="py-2 pr-3 font-medium">{formatQ(m.monto_colaborador)}</td>
                       <td className="py-2 pr-3">{m.referencia_boleta ?? "—"}</td>
                       <td className="py-2 pr-3">
-                        {puedeGenerarDescuento ? (
+                        <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${m.estado_pago === "PAGADA" ? "bg-emerald-900/50 text-emerald-200" : "bg-amber-900/50 text-amber-200"}`}>
+                          {m.estado_pago === "PAGADA" ? "Pagada" : "Pendiente pago"}
+                        </span>
+                      </td>
+                      <td className="py-2 pr-3">
+                        {m.estado_pago !== "PAGADA" ? (
+                          <span className="text-xs text-[var(--muted)]">Espera a que Operaciones registre el pago de la multa</span>
+                        ) : puedeGenerarDescuento ? (
                           <button
                             type="button"
                             className="rounded-md bg-[var(--accent)] px-3 py-1 text-xs font-medium text-white"
@@ -185,9 +213,9 @@ export default function MultasPendientesDescuentoPage() {
                         )}
                       </td>
                     </tr>
-                    {abierta === m.id && puedeGenerarDescuento ? (
+                    {abierta === m.id && puedeGenerarDescuento && m.estado_pago === "PAGADA" ? (
                       <tr key={`${m.id}-form`} className="border-t border-[var(--border)] bg-[var(--input)]/30">
-                        <td colSpan={8} className="py-3 pr-3">
+                        <td colSpan={9} className="py-3 pr-3">
                           <div className="flex flex-wrap items-end gap-3">
                             <label className="text-xs text-[var(--muted)]">
                               Periodicidad
@@ -244,6 +272,23 @@ export default function MultasPendientesDescuentoPage() {
                           <p className="mt-2 text-xs text-[var(--muted)]">
                             Concepto: “Multa de tránsito” · Monto: {formatQ(m.monto_colaborador)} · Responsable: {m.empleado_responsable_nombre ?? "—"}
                           </p>
+                          {/* Sección 18: aclarar qué significa realmente "fecha de inicio". */}
+                          <p className="mt-1 text-xs text-[var(--muted)]">
+                            Fecha desde la cual la primera cuota puede aplicarse en una planilla — no garantiza que se
+                            descuente exactamente ese día si no hay una planilla generada en esa fecha. Ejemplo: inicio
+                            01/09/2026 → primera planilla elegible desde esa fecha en adelante.
+                          </p>
+                          {/* Sección 19: preview del reparto exacto antes de confirmar. */}
+                          {form.periodicidad !== "UNA_VEZ" && form.periodicidad !== "MANUAL" ? (
+                            <div className="mt-2 text-xs text-[var(--muted)]">
+                              <p className="font-medium text-[var(--foreground)]">Vista previa de cuotas ({formatQ(m.monto_colaborador)} / {form.numeroCuotas}):</p>
+                              <ul className="mt-1 grid grid-cols-2 gap-x-4 sm:grid-cols-4">
+                                {previsualizarCuotas(m.monto_colaborador, form.numeroCuotas).map((monto, i) => (
+                                  <li key={i}>Cuota {i + 1}: {formatQ(monto)}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          ) : null}
                         </td>
                       </tr>
                     ) : null}
