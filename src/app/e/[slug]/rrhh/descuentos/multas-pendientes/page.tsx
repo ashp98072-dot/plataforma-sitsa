@@ -3,15 +3,24 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { useEmpresaSession } from "@/lib/empresa-session";
+import { tienePermiso } from "@/lib/permisos-shared";
 
 /**
  * MULTAS-3.2 (sección 28) — bandeja RRHH: multas resueltas a cargo del
  * colaborador (COLABORADOR/COMPARTIDO) que todavía no tienen un descuento
  * real de planilla. RRHH configura periodicidad/cuotas/fecha y, en un solo
  * paso, se crea + autoriza + vincula el descuento (mismo motor de
- * src/lib/rrhh/descuentos.ts, sin duplicar lógica). Protegida por
- * rrhh:descuentos:crear en el backend — esta pantalla vive dentro de la
- * navegación existente de RRHH > Descuentos, no es una UI paralela.
+ * src/lib/rrhh/descuentos.ts, sin duplicar lógica).
+ *
+ * Permiso: crearDescuentoDesdeMulta() ejecuta crear Y autorizar el
+ * descuento — el backend (POST .../rrhh/multas-pendientes/[multaId])
+ * exige rrhh:descuentos:crear Y rrhh:descuentos:editar en el mismo
+ * usuario (corrección de revisión del PR). El botón se oculta aquí si
+ * falta cualquiera de los dos — el backend sigue siendo la autoridad
+ * real, esto es solo para no ofrecer una acción que va a rebotar en 403.
+ * Vive dentro de la navegación existente de RRHH > Descuentos, no es una
+ * UI paralela.
  */
 
 const PERIODICIDADES = [
@@ -48,6 +57,10 @@ const hoy = () => new Date().toISOString().slice(0, 10);
 
 export default function MultasPendientesDescuentoPage() {
   const { slug } = useParams<{ slug: string }>();
+  const { rol, permisos } = useEmpresaSession();
+  const puedeGenerarDescuento =
+    rol === "Admin" ||
+    (tienePermiso(permisos, "descuentos", "crear") && tienePermiso(permisos, "descuentos", "editar"));
   const [multas, setMultas] = useState<MultaPendiente[]>([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
@@ -159,16 +172,20 @@ export default function MultasPendientesDescuentoPage() {
                       <td className="py-2 pr-3 font-medium">{formatQ(m.monto_colaborador)}</td>
                       <td className="py-2 pr-3">{m.referencia_boleta ?? "—"}</td>
                       <td className="py-2 pr-3">
-                        <button
-                          type="button"
-                          className="rounded-md bg-[var(--accent)] px-3 py-1 text-xs font-medium text-white"
-                          onClick={() => (abierta === m.id ? setAbierta(null) : abrirConfiguracion(m.id))}
-                        >
-                          {abierta === m.id ? "Cerrar" : "Configurar descuento"}
-                        </button>
+                        {puedeGenerarDescuento ? (
+                          <button
+                            type="button"
+                            className="rounded-md bg-[var(--accent)] px-3 py-1 text-xs font-medium text-white"
+                            onClick={() => (abierta === m.id ? setAbierta(null) : abrirConfiguracion(m.id))}
+                          >
+                            {abierta === m.id ? "Cerrar" : "Configurar descuento"}
+                          </button>
+                        ) : (
+                          <span className="text-xs text-[var(--muted)]">Requiere permiso de RRHH (crear y editar descuentos)</span>
+                        )}
                       </td>
                     </tr>
-                    {abierta === m.id ? (
+                    {abierta === m.id && puedeGenerarDescuento ? (
                       <tr key={`${m.id}-form`} className="border-t border-[var(--border)] bg-[var(--input)]/30">
                         <td colSpan={8} className="py-3 pr-3">
                           <div className="flex flex-wrap items-end gap-3">

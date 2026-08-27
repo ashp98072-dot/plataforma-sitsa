@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import { useEmpresaSession } from "@/lib/empresa-session";
+import { tienePermiso } from "@/lib/permisos-shared";
 
 /**
  * MULTAS-4 base (secciones 21-29) — primera UI funcional de Operaciones >
@@ -86,6 +88,14 @@ const formVacio = {
 
 export default function MultasPage() {
   const { slug } = useParams<{ slug: string }>();
+  const { rol, permisos } = useEmpresaSession();
+  // Anular una multa CON descuento RRHH vinculado cancela una obligación
+  // de RRHH (regla congelada: RRHH controla el descuento real) — exige
+  // además rrhh:descuentos:editar (el backend ya lo exige; esto solo
+  // evita ofrecer un botón que va a rebotar en 403).
+  const puedeAnularConDescuento = rol === "Admin" || tienePermiso(permisos, "descuentos", "editar");
+  const [motivoAnular, setMotivoAnular] = useState("");
+  const [anulando, setAnulando] = useState(false);
   const hoy = new Date();
   const [anio, setAnio] = useState(hoy.getFullYear());
   const [mes, setMes] = useState(hoy.getMonth() + 1);
@@ -219,6 +229,34 @@ export default function MultasPage() {
       setError(e instanceof Error ? e.message : "No se pudo registrar la multa.");
     } finally {
       setGuardando(false);
+    }
+  }
+
+  async function anularMulta(m: Multa) {
+    if (!motivoAnular.trim()) { setError("Indica un motivo de anulación."); return; }
+    setAnulando(true);
+    setError("");
+    try {
+      const url = m.rrhh_descuento_id
+        ? `/api/empresas/${slug}/operaciones/multas/${m.id}/anular-con-descuento`
+        : `/api/empresas/${slug}/operaciones/multas/${m.id}`;
+      const res = await fetch(url, {
+        method: m.rrhh_descuento_id ? "POST" : "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          m.rrhh_descuento_id ? { motivo_anulacion: motivoAnular.trim() } : { accion: "anular", motivo_anulacion: motivoAnular.trim() },
+        ),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "No se pudo anular la multa.");
+      setMsg(`Multa #${m.id} anulada.`);
+      setMotivoAnular("");
+      setDetalleAbierto(null);
+      await cargarPanel();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo anular la multa.");
+    } finally {
+      setAnulando(false);
     }
   }
 
@@ -454,6 +492,21 @@ export default function MultasPage() {
                               ) : null}
                               {m.observaciones ? <p className="sm:col-span-2"><span className="text-[var(--muted)]">Observaciones:</span> {m.observaciones}</p> : null}
                             </div>
+                            {m.estado !== "ANULADA" && (!m.rrhh_descuento_id || puedeAnularConDescuento) ? (
+                              <div className="mt-3 flex flex-wrap items-end gap-2 border-t border-[var(--border)] pt-3">
+                                <label className="min-w-[16rem] flex-1">
+                                  Motivo de anulación
+                                  <input className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1" value={motivoAnular} onChange={(e) => setMotivoAnular(e.target.value)} />
+                                </label>
+                                <button type="button" disabled={anulando} className="rounded-md bg-rose-800 px-3 py-1.5 font-medium text-white disabled:opacity-50" onClick={() => void anularMulta(m)}>
+                                  {anulando ? "Anulando…" : m.rrhh_descuento_id ? "Anular y cancelar descuento RRHH" : "Anular multa"}
+                                </button>
+                              </div>
+                            ) : m.estado !== "ANULADA" && m.rrhh_descuento_id ? (
+                              <p className="mt-3 border-t border-[var(--border)] pt-3 text-[var(--muted)]">
+                                Esta multa tiene un descuento RRHH vinculado — anularla requiere permiso de RRHH (editar descuentos).
+                              </p>
+                            ) : null}
                           </td>
                         </tr>
                       ) : null}

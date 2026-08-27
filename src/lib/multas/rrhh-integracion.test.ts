@@ -111,10 +111,42 @@ describe("MULTAS-3.2 — integración RRHH", () => {
     expect(crearDescuentoInterno).not.toHaveBeenCalled();
   });
 
-  it("5) y 7) RRHH autorizado crea+autoriza+vincula en una sola transacción y audita ambos módulos", async () => {
+  // Corrección P0 — crearDescuentoDesdeMulta() ejecuta crear Y autorizar
+  // (RRHH real: dos permisos distintos, ver crear vs "autorizar" en
+  // /rrhh/descuentos). El endpoint de vínculo debe exigir AMBOS.
+  function mockRrhhPor(crear: boolean, editar: boolean) {
+    vi.mocked(requireTenantRrhh).mockImplementation(async (_slug, _submodulo, accion) => {
+      const ok = accion === "editar" ? editar : crear;
+      return ok
+        ? ({ empresa: { id: 7 }, session: { id: 11, username: "rrhh1" } } as Awaited<ReturnType<typeof requireTenantRrhh>>)
+        : ({ error: new Response(null, { status: 403 }) } as Awaited<ReturnType<typeof requireTenantRrhh>>);
+    });
+  }
+  it("P0.1) rrhh:descuentos:crear=true / editar=false → 403, sin crear nada", async () => {
+    mockRrhhPor(true, false);
+    const response = await postVincular(req(config), multaCtx);
+    expect(response.status).toBe(403);
+    expect(crearDescuentoInterno).not.toHaveBeenCalled();
+    expect(getConnection).not.toHaveBeenCalled();
+  });
+  it("P0.2) rrhh:descuentos:crear=false / editar=true → 403, sin crear nada", async () => {
+    mockRrhhPor(false, true);
+    const response = await postVincular(req(config), multaCtx);
+    expect(response.status).toBe(403);
+    expect(crearDescuentoInterno).not.toHaveBeenCalled();
+    expect(getConnection).not.toHaveBeenCalled();
+  });
+  it("P0.4) Admin (permiso efectivo=true en ambas acciones vía el guard existente) sigue permitido — el bypass de Admin vive en requireTenantRrhh, sin cambios en este PR", async () => {
+    mockRrhhPor(true, true);
+    const response = await postVincular(req(config), multaCtx);
+    expect(response.status).toBe(201);
+  });
+
+  it("5) y 7) y P0.3) RRHH autorizado (crear Y editar) crea+autoriza+vincula en una sola transacción y audita ambos módulos", async () => {
     const response = await postVincular(req(config), multaCtx);
     expect(response.status).toBe(201);
     expect(requireTenantRrhh).toHaveBeenCalledWith("prueba", "descuentos", "crear");
+    expect(requireTenantRrhh).toHaveBeenCalledWith("prueba", "descuentos", "editar");
     expect(crearDescuentoInterno).toHaveBeenCalledTimes(1);
     expect(autorizarDescuentoInterno).toHaveBeenCalledTimes(1);
     const vinculo = conn.execute.mock.calls.find(([sql]) => sql.includes("SET rrhh_descuento_id"));
@@ -186,7 +218,31 @@ describe("MULTAS-3.2 — integración RRHH", () => {
     expect(response.status).toBe(200);
   });
 
-  it("14) anular con descuento vinculado y SIN cuotas aplicadas: cancelación controlada en una transacción", async () => {
+  // Corrección P1 — cancelarDescuentoInterno() es autoridad de RRHH:
+  // anular-con-descuento exige multas:editar Y rrhh:descuentos:editar.
+  it("P1.5) multas:editar=true / rrhh:descuentos:editar=false → 403, descuento no cancelado, multa no anulada", async () => {
+    conn.query.mockImplementation(async (sql: string) => {
+      if (sql.includes("rrhh_descuento_cuotas")) return [[{ aplicadas: 0 }], []];
+      if (sql.includes("ops_multas")) return [[filaMulta(colaboradorInput, { rrhh_descuento_id: 55 })], []];
+      throw new Error("Consulta inesperada");
+    });
+    vi.mocked(requireTenantRrhh).mockResolvedValue({ error: new Response(null, { status: 403 }) } as Awaited<ReturnType<typeof requireTenantRrhh>>);
+    const response = await postAnularConDescuento(req({ motivo_anulacion: "Boleta anulada" }), idCtx);
+    expect(response.status).toBe(403);
+    expect(requireTenantMultas).toHaveBeenCalledWith("prueba", "editar");
+    expect(requireTenantRrhh).toHaveBeenCalledWith("prueba", "descuentos", "editar");
+    expect(cancelarDescuentoInterno).not.toHaveBeenCalled();
+    expect(getConnection).not.toHaveBeenCalled();
+  });
+  it("P1.6) multas:editar=false / rrhh:descuentos:editar=true → 403", async () => {
+    vi.mocked(requireTenantMultas).mockResolvedValue({ error: new Response(null, { status: 403 }) } as Awaited<ReturnType<typeof requireTenantMultas>>);
+    const response = await postAnularConDescuento(req({ motivo_anulacion: "Boleta anulada" }), idCtx);
+    expect(response.status).toBe(403);
+    expect(cancelarDescuentoInterno).not.toHaveBeenCalled();
+    expect(getConnection).not.toHaveBeenCalled();
+  });
+
+  it("14) y P1.7) anular con descuento vinculado, AMBOS permisos, y SIN cuotas aplicadas: cancelación controlada en una transacción", async () => {
     conn.query.mockImplementation(async (sql: string) => {
       if (sql.includes("rrhh_descuento_cuotas")) return [[{ aplicadas: 0 }], []];
       if (sql.includes("ops_multas")) return [[filaMulta(colaboradorInput, { rrhh_descuento_id: 55 })], []];
@@ -200,7 +256,7 @@ describe("MULTAS-3.2 — integración RRHH", () => {
     expect(conn.commit).toHaveBeenCalledTimes(1);
   });
 
-  it("15) anular con al menos una cuota YA aplicada: 409, sin cancelar ni anular nada", async () => {
+  it("15) y P1.8) anular con AMBOS permisos pero al menos una cuota YA aplicada: 409, sin cancelar ni anular nada", async () => {
     conn.query.mockImplementation(async (sql: string) => {
       if (sql.includes("rrhh_descuento_cuotas")) return [[{ aplicadas: 1 }], []];
       if (sql.includes("ops_multas")) return [[filaMulta(colaboradorInput, { rrhh_descuento_id: 55 })], []];
