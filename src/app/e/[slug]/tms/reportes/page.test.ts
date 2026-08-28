@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resumenCierre } from "./page";
+import { pasosStepper, resumenCierre } from "./page";
 
 /**
  * CORRECCIÓN PR #112 (HALLAZGO 1): "Cerrar viaje" ya no ejecuta el POST al
@@ -50,5 +50,51 @@ describe("resumenCierre — datos mínimos exigidos por la confirmación", () =>
   it("tarifa null se muestra como 'Pendiente', nunca Q0.00", () => {
     const r = resumenCierre(plan({ tarifaComercial: null }));
     expect(r.tarifa).toBe("Pendiente");
+  });
+});
+
+/**
+ * CORRECCIÓN PR #112 (último detalle 1): el orden visual quedaba
+ * invertido — "Cargado (opcional)" aparecía ANTES de "Programado". El
+ * orden correcto es Programado → Cargado (opcional) → En ruta →
+ * Llegada registrada → Pendiente de cierre → Cerrado.
+ */
+describe("pasosStepper — orden correcto y semántica de 'Cargado (opcional)'", () => {
+  it("el orden de las etiquetas es exactamente Programado, Cargado (opcional), En ruta, Llegada registrada, Pendiente de cierre, Cerrado", () => {
+    const pasos = pasosStepper(plan({ estado: "Programado", horaSalida: null, horaLlegada: null, pendienteCierre: false }));
+    expect(pasos.map((p) => p.label)).toEqual([
+      "Programado",
+      "Cargado (opcional)",
+      "En ruta",
+      "Llegada registrada",
+      "Pendiente de cierre",
+      "Cerrado",
+    ]);
+  });
+
+  it("estado actual 'Cargado' → se marca hecho=true (dato real, no inferido)", () => {
+    const pasos = pasosStepper(plan({ estado: "Cargado", horaSalida: null, horaLlegada: null, pendienteCierre: false }));
+    const cargado = pasos.find((p) => p.label === "Cargado (opcional)")!;
+    expect(cargado.hecho).toBe(true);
+    expect(cargado.opcionalSinDato).toBeFalsy();
+  });
+
+  it("plan ya en 'En ruta' (o más adelante) → Cargado queda SIN DATO, nunca inferido como ocurrido", () => {
+    const pasos = pasosStepper(plan({ estado: "En ruta", horaSalida: "2026-08-27T07:00", horaLlegada: null, pendienteCierre: false }));
+    const cargado = pasos.find((p) => p.label === "Cargado (opcional)")!;
+    expect(cargado.hecho).toBe(false);
+    expect(cargado.opcionalSinDato).toBe(true);
+  });
+
+  it("Programado → En ruta directo (sin pasar por Cargado) sigue siendo un flujo válido: Cargado no bloquea ni se marca hecho", () => {
+    const pasos = pasosStepper(plan({ estado: "En ruta", horaSalida: "2026-08-27T07:00", horaLlegada: "2026-08-27T18:00", pendienteCierre: true }));
+    expect(pasos.find((p) => p.label === "Cargado (opcional)")!.hecho).toBe(false);
+    expect(pasos.find((p) => p.label === "Llegada registrada")!.hecho).toBe(true);
+    expect(pasos.find((p) => p.label === "Pendiente de cierre")!.hecho).toBe(true);
+  });
+
+  it("no crea ningún estado nuevo — los pasos derivan solo de estado/horaSalida/horaLlegada/pendienteCierre ya existentes", () => {
+    const pasos = pasosStepper(plan({ estado: "Cerrado", horaSalida: "2026-08-27T07:00", horaLlegada: "2026-08-27T18:00", pendienteCierre: false }));
+    expect(pasos.find((p) => p.label === "Cerrado")!.hecho).toBe(true);
   });
 });

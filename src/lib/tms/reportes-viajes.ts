@@ -488,24 +488,27 @@ async function auxiliaresDePlanesReporte(planIds: number[]): Promise<Map<number,
   const map = new Map<number, string[]>();
   const ids = [...new Set(planIds.map(Number).filter((id) => id > 0))];
   if (!ids.length) return map;
-  try {
-    const placeholders = ids.map(() => "?").join(",");
-    const rows = await query<RowDataPacket[]>(
-      `SELECT a.plan_id, per.nombre
-       FROM tms_plan_auxiliares a
-       INNER JOIN tms_personal per ON per.id = a.personal_id
-       WHERE a.plan_id IN (${placeholders})
-       ORDER BY a.plan_id, a.orden, a.id`,
-      ids,
-    );
-    for (const r of rows) {
-      const pid = Number(r.plan_id);
-      const list = map.get(pid) ?? [];
-      list.push(String(r.nombre));
-      map.set(pid, list);
-    }
-  } catch {
-    /* tabla aún no existe en este entorno */
+  // CORRECCIÓN PR #112 (último detalle): sin catch genérico. tms_plan_auxiliares
+  // ya es parte del esquema real usado en producción — si esta consulta
+  // falla (error SQL, conexión, timeout, columna incorrecta, permisos,
+  // regresión futura), NO se debe devolver silenciosamente un reporte con
+  // "Auxiliares: []" como si fuera información válida. El error se
+  // propaga y el reporte falla explícitamente (el caller, obtenerReporteViajes,
+  // no atrapa este Promise.all — se relanza tal cual).
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = await query<RowDataPacket[]>(
+    `SELECT a.plan_id, per.nombre
+     FROM tms_plan_auxiliares a
+     INNER JOIN tms_personal per ON per.id = a.personal_id
+     WHERE a.plan_id IN (${placeholders})
+     ORDER BY a.plan_id, a.orden, a.id`,
+    ids,
+  );
+  for (const r of rows) {
+    const pid = Number(r.plan_id);
+    const list = map.get(pid) ?? [];
+    list.push(String(r.nombre));
+    map.set(pid, list);
   }
   return map;
 }

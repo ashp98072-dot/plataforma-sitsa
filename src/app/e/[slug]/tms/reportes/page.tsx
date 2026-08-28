@@ -125,7 +125,42 @@ function KpiCard({ label, value, sub }: { label: string; value: string; sub?: st
   );
 }
 
-/** Stepper visual del proceso — "Llegada registrada" y "Pendiente de cierre" son PURAMENTE derivados, nunca un estado nuevo persistido (ver plan.pendiente_cierre / plan.horaLlegada). */
+export type PasoStepper = { label: string; hecho: boolean; opcionalSinDato?: boolean };
+
+/**
+ * CORRECCIÓN PR #112 (HALLAZGO 4, corrección de orden visual): pasos del
+ * proceso EN EL ORDEN REAL — Programado → Cargado (opcional) → En ruta →
+ * Llegada registrada → Pendiente de cierre → Cerrado. "Llegada
+ * registrada" y "Pendiente de cierre" son PURAMENTE derivados, nunca un
+ * estado nuevo persistido (ver plan.pendiente_cierre / plan.horaLlegada).
+ *
+ * "Cargado" sigue siendo OPCIONAL — el flujo válido permite
+ * Programado → En ruta directo, sin pasar por Cargado. Una vez que el
+ * plan avanza, no queda ningún dato que diga si Cargado realmente
+ * ocurrió — por eso NUNCA se marca "✓" solo porque el plan ya esté más
+ * adelante (eso sería inventar un hecho). Solo se marca conocido/hecho
+ * cuando el estado ACTUAL sigue siendo "Cargado"; en cualquier otro caso
+ * queda `opcionalSinDato: true` (sin dato, no inferido) — no se crea
+ * ningún estado nuevo persistido para rastrear esto.
+ *
+ * Función pura extraída para poder probar el orden/semántica sin
+ * renderizar el componente (este proyecto no tiene harness de pruebas
+ * de componentes React).
+ */
+export function pasosStepper(p: PlanReporte): PasoStepper[] {
+  const llegadaRegistrada = Boolean(p.horaLlegada);
+  const cargadoConocido = p.estado === "Cargado";
+  return [
+    { label: "Programado", hecho: true },
+    { label: "Cargado (opcional)", hecho: cargadoConocido, opcionalSinDato: !cargadoConocido },
+    { label: "En ruta", hecho: Boolean(p.horaSalida) },
+    { label: "Llegada registrada", hecho: llegadaRegistrada },
+    { label: "Pendiente de cierre", hecho: p.pendienteCierre || p.estado === "Cerrado" },
+    { label: "Cerrado", hecho: p.estado === "Cerrado" },
+  ];
+}
+
+/** Stepper visual del proceso. */
 function Stepper({ p }: { p: PlanReporte }) {
   if (p.estado === "Cancelado") {
     return (
@@ -134,34 +169,12 @@ function Stepper({ p }: { p: PlanReporte }) {
       </p>
     );
   }
-  const llegadaRegistrada = Boolean(p.horaLlegada);
-  // CORRECCIÓN PR #112 (HALLAZGO 4): "Cargado" es OPCIONAL — el flujo
-  // válido permite Programado → En ruta directo, sin pasar por Cargado.
-  // Una vez que el plan avanza, no queda ningún dato que diga si Cargado
-  // realmente ocurrió — por eso NUNCA se afirma "✓ Cargado" solo porque
-  // el plan ya esté más adelante (eso sería inventar un hecho). Solo se
-  // marca conocido cuando el estado ACTUAL sigue siendo "Cargado"; en
-  // cualquier otro caso se muestra como opcional, sin dato — no se crea
-  // ningún estado nuevo persistido para rastrear esto.
-  const cargadoConocido = p.estado === "Cargado";
-  const pasosPrincipales = [
-    { label: "Programado", hecho: true },
-    { label: "En ruta", hecho: Boolean(p.horaSalida) },
-    { label: "Llegada registrada", hecho: llegadaRegistrada },
-    { label: "Pendiente de cierre", hecho: p.pendienteCierre || p.estado === "Cerrado" },
-    { label: "Cerrado", hecho: p.estado === "Cerrado" },
-  ];
-  const actualIdx = [...pasosPrincipales].reverse().findIndex((s) => s.hecho);
-  const idxActual = actualIdx === -1 ? -1 : pasosPrincipales.length - 1 - actualIdx;
+  const pasos = pasosStepper(p);
+  const actualIdx = [...pasos].reverse().findIndex((s) => s.hecho);
+  const idxActual = actualIdx === -1 ? -1 : pasos.length - 1 - actualIdx;
   return (
     <ol className="flex flex-wrap gap-x-1 gap-y-2 text-[11px]">
-      <li className="flex items-center gap-1">
-        <span className={cargadoConocido ? "font-semibold text-[var(--accent)]" : "text-[var(--muted)]"}>
-          {cargadoConocido ? "✓" : "·"} Cargado (opcional)
-        </span>
-        <span className="text-[var(--muted)]">→</span>
-      </li>
-      {pasosPrincipales.map((s, i) => (
+      {pasos.map((s, i) => (
         <li key={s.label} className="flex items-center gap-1">
           <span
             className={
@@ -172,9 +185,9 @@ function Stepper({ p }: { p: PlanReporte }) {
                   : "text-[var(--muted)]"
             }
           >
-            {s.hecho ? "✓" : i === idxActual ? "←" : "○"} {s.label}
+            {s.hecho ? "✓" : s.opcionalSinDato ? "·" : i === idxActual ? "←" : "○"} {s.label}
           </span>
-          {i < pasosPrincipales.length - 1 ? <span className="text-[var(--muted)]">→</span> : null}
+          {i < pasos.length - 1 ? <span className="text-[var(--muted)]">→</span> : null}
         </li>
       ))}
     </ol>

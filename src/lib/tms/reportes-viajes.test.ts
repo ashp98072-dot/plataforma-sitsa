@@ -320,3 +320,42 @@ describe("[HALLAZGO 3 · 5] filtros del listado, KPI y exportador siguen siendo 
     }
   });
 });
+
+/**
+ * CORRECCIÓN PR #112 (último detalle 2): auxiliaresDePlanesReporte ya NO
+ * atrapa su propio error genéricamente. tms_plan_auxiliares es parte del
+ * esquema real de producción — si esa consulta falla (SQL, conexión,
+ * timeout, columna, permisos), el reporte debe fallar explícitamente, no
+ * devolver silenciosamente "Auxiliares: []" como si fuera un dato válido.
+ */
+describe("[último detalle] no silenciar errores de auxiliares", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("si la consulta de auxiliares falla, obtenerReporteViajes RECHAZA — nunca devuelve el plan con auxiliares=[] como si fuera válido", async () => {
+    vi.mocked(query).mockImplementation((async (sql: string) => {
+      if (sql.includes("tms_plan_auxiliares")) throw new Error("ER_NO_SUCH_TABLE: tms_plan_auxiliares");
+      if (sql.includes("FROM tms_planes_viaje p")) return [{ id: 1 }];
+      return [];
+    }) as typeof query);
+    await expect(obtenerReporteViajes(7, {})).rejects.toThrow("ER_NO_SUCH_TABLE");
+  });
+
+  it("con la tabla disponible, sigue funcionando exactamente igual (sin regresión)", async () => {
+    vi.mocked(query).mockImplementation((async (sql: string) => {
+      if (sql.includes("tms_plan_auxiliares")) return [{ plan_id: 1, nombre: "Carlos Ruiz" }];
+      if (sql.includes("FROM tms_planes_viaje p")) {
+        return [{
+          id: 1, codigo: "PLAN-1", fecha_plan: "2026-08-01", hora_carga: null, estado: "Programado",
+          cerrado_por: null, cerrado_en: null, pendiente_cierre: 0, cliente_id: null, cliente: null,
+          ruta_codigo: null, lugar_descarga_historico: null, referencia_cliente: null, tipo_traslado: null,
+          regreso_estimado: null, tarifa_comercial: null, placa: null, unidad_tipo: null, unidad_capacidad: null,
+          piloto_id: null, piloto: null, evidencias: 0, km_salida: null, km_llegada: null,
+          hora_salida: null, hora_llegada: null,
+        }];
+      }
+      return [];
+    }) as typeof query);
+    const [plan1] = await obtenerReporteViajes(7, {});
+    expect(plan1.auxiliares).toEqual(["Carlos Ruiz"]);
+  });
+});
