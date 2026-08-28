@@ -202,7 +202,6 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
     const codigoViaje = asignacionEnCurso?.codigo ?? `#${viajeAbierto?.id ?? ""}`;
     const etiqueta = etiquetaEvidencia(tipoEvidencia, paradaSeleccionada);
     const lineas = [
-      "SITSA",
       `${fechaTxt} ${horaTxt} · GPS: ${gps.latitud.toFixed(6)}, ${gps.longitud.toFixed(6)}`,
       `${codigoViaje} · ${etiqueta}`,
     ];
