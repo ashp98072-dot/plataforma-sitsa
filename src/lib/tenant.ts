@@ -394,6 +394,49 @@ export async function requireTenantViaticosPagar(
 }
 
 /**
+ * VIATICOS-FIRMA — liquidar (ENTREGADO -> LIQUIDADO) es un permiso propio,
+ * separado de autorizar/pagar y del genérico `viaticos` — mismo patrón
+ * exacto que requireTenantViaticosAutorizar/Pagar. Facturador lo trae por
+ * defecto (junto con viaticos_pagar); NUNCA por tener solo `viaticos:editar`
+ * ni por ser supervisor del empleado — un usuario que antes liquidaba solo
+ * con el permiso genérico necesita este permiso nuevo asignado
+ * explícitamente (sin fallback automático, ver reporte de entrega).
+ */
+export async function requireTenantViaticosLiquidar(
+  slug: string,
+  accion: AccionPermiso = "ver",
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length
+    ? empresa.modulos
+    : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("tms")) {
+    return {
+      error: NextResponse.json(
+        { error: "Esta empresa no tiene el módulo TMS." },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  if (!tienePermiso(perms, "viaticos_liquidar", accion)) {
+    return {
+      error: NextResponse.json(
+        { error: `Sin permiso para ${accion} la liquidación de viáticos.` },
+        { status: 403 },
+      ),
+    };
+  }
+  return { session, empresa };
+}
+
+/**
  * OPS-1 — cerrar administrativamente un viaje (Descargado -> Cerrado).
  * Permiso EXPLÍCITO e independiente del rol — JefeOperaciones/
  * GerenteOperaciones lo traen por defecto, pero cualquier rol puede
@@ -689,7 +732,11 @@ export async function requireTenantViaticosAny(
   }
 
   const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
-  const permisosViaticos = ["viaticos", "viaticos_autorizar", "viaticos_pagar"] as const;
+  // VIATICOS-FIRMA: viaticos_liquidar se agrega al OR por el mismo motivo
+  // que viaticos_pagar — un usuario con SOLO viaticos_liquidar (p.ej. un
+  // Facturador configurado a mano sin el "viaticos" general) debe poder
+  // ver este listado para ubicar sus ENTREGADOS pendientes de liquidar.
+  const permisosViaticos = ["viaticos", "viaticos_autorizar", "viaticos_pagar", "viaticos_liquidar"] as const;
   if (permisosViaticos.some((m) => tienePermiso(perms, m, accion))) {
     return { session, empresa };
   }

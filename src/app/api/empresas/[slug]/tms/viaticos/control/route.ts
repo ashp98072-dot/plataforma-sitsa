@@ -43,7 +43,11 @@ export async function GET(req: Request, ctx: Ctx) {
   const perms = await permisosEfectivos(guard.session.id, guard.session.rol as RolGlobal);
   const puedeAutorizar = tienePermiso(perms, "viaticos_autorizar", "editar");
   const puedePagar = tienePermiso(perms, "viaticos_pagar", "editar");
-  const puedeLiquidar = tienePermiso(perms, "viaticos", "editar");
+  // VIATICOS-FIRMA: liquidar ya NO depende del permiso genérico "viaticos"
+  // — es su propio permiso explícito, igual que autorizar/pagar. Un
+  // usuario que antes liquidaba solo con "viaticos:editar" necesita este
+  // permiso nuevo asignado explícitamente (ver reporte de entrega).
+  const puedeLiquidar = tienePermiso(perms, "viaticos_liquidar", "editar");
   const puedeVerBancario = tienePermiso(perms, "viaticos_pagar", "ver");
 
   const resultado = await listarViaticosControl(

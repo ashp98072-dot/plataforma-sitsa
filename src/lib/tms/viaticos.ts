@@ -1,7 +1,10 @@
 import type { RowDataPacket } from "mysql2";
 import type { PoolConnection, ResultSetHeader } from "mysql2/promise";
-import { execute, query, type SqlParams } from "@/lib/db";
-import { registrarAuditoria } from "@/lib/auditoria";
+import { execute, getPool, query, type SqlParams } from "@/lib/db";
+import { registrarAuditoria, registrarAuditoriaTx } from "@/lib/auditoria";
+import { verificarPasswordUsuarioActual } from "@/lib/auth";
+import { crearFirmaInterna, type ResultadoFirmaInterna } from "@/lib/firmas/firmas-internas";
+import { centavos, decimal } from "@/lib/multas/reglas";
 
 /**
  * VIAT-0 — viáticos operativos asociados a una programación/viaje (piloto y
@@ -355,35 +358,132 @@ export type ResultadoTransicionViatico =
   | { ok: false; error: string };
 
 /**
+ * VIATICOS-FIRMA — datos de reautenticación + identidad del firmante,
+ * comunes a autorizar y liquidar. `password` NUNCA se guarda ni se
+ * registra en ningún lado — se verifica contra el hash real
+ * (verificarPasswordUsuarioActual) y se descarta.
+ */
+export type DatosFirmaViatico = {
+  usuarioId: number;
+  nombreFirmante: string;
+  rolFirmante: string;
+  password: string;
+  ip?: string | null;
+  userAgent?: string | null;
+};
+
+export type ResultadoTransicionConFirma =
+  | { ok: true; firma: ResultadoFirmaInterna }
+  | { ok: false; error: string; status: number };
+
+/**
  * PROGRAMADO -> AUTORIZADO. Quién puede: exclusivamente usuarios con el
  * permiso explícito `viaticos_autorizar:editar` (VIAT-2 — "OPERACIONES
  * AUTORIZA"; ver requireTenantViaticosAutorizar en src/lib/tenant.ts) —
  * NUNCA por ser supervisor del empleado, y separado del permiso de
- * pagar/entregar (`viaticos_pagar`). El permiso lo verifica el endpoint
- * antes de llamar aquí; esta función solo aplica la transición atómica.
+ * pagar/entregar (`viaticos_pagar`) y de liquidar (`viaticos_liquidar`).
+ * El permiso lo verifica el endpoint antes de llamar aquí.
+ *
+ * VIATICOS-FIRMA: requiere firma electrónica interna (contraseña actual
+ * del usuario). La contraseña se verifica ANTES de abrir la transacción
+ * (un password incorrecto no debe ni intentar bloquear la fila); dentro de
+ * la MISMA transacción: bloquear el viático (FOR UPDATE), validar estado,
+ * aplicar la transición, insertar la firma y registrar auditoría — commit
+ * conjunto o rollback conjunto (regla dura del ticket, nunca "acción
+ * hecha pero firma falló" ni viceversa).
  */
 export async function autorizarViatico(
   empresaId: number,
   viaticoId: number,
   usuario: string,
-): Promise<ResultadoTransicionViatico> {
-  const r = await execute(
-    `UPDATE tms_viaticos
-     SET estado = 'AUTORIZADO', autorizado_por = ?, autorizado_en = NOW()
-     WHERE id = ? AND empresa_id = ? AND estado = 'PROGRAMADO'`,
-    [usuario, viaticoId, empresaId],
-  );
-  if (r.affectedRows !== 1) {
-    return await estadoActualComoError(empresaId, viaticoId, "autorizar");
+  firma: DatosFirmaViatico,
+): Promise<ResultadoTransicionConFirma> {
+  const passwordOk = await verificarPasswordUsuarioActual(firma.usuarioId, firma.password);
+  if (!passwordOk) {
+    return { ok: false, error: "Contraseña incorrecta.", status: 401 };
   }
-  await registrarAuditoria({
-    empresaId,
-    usuario,
-    accion: "autorizar_viatico",
-    modulo: "tms",
-    detalle: `Viático #${viaticoId} · PROGRAMADO → AUTORIZADO`,
-  });
-  return { ok: true };
+
+  const conn = await getPool().getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [rows] = await conn.query<RowDataPacket[]>(
+      `SELECT id, plan_id, personal_id, monto_asignado, estado
+       FROM tms_viaticos WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
+      [viaticoId, empresaId],
+    );
+    const v = rows[0];
+    if (!v) {
+      await conn.rollback();
+      return { ok: false, error: "Viático no encontrado.", status: 404 };
+    }
+    if (String(v.estado) !== "PROGRAMADO") {
+      await conn.rollback();
+      return {
+        ok: false,
+        error: `Este viático está ${String(v.estado)}; no se puede autorizar desde ese estado.`,
+        status: 409,
+      };
+    }
+
+    // Contexto de solo lectura para el payload firmado (viaje/beneficiario)
+    // — NO forma parte de lo que se bloquea/actualiza, no necesita FOR UPDATE.
+    const [ctxRows] = await conn.query<RowDataPacket[]>(
+      `SELECT pl.codigo AS plan_codigo, tp.nombre AS personal_nombre
+       FROM tms_planes_viaje pl, tms_personal tp
+       WHERE pl.id = ? AND tp.id = ?`,
+      [v.plan_id, v.personal_id],
+    );
+    const ctx = ctxRows[0];
+
+    const [upd] = await conn.execute<ResultSetHeader>(
+      `UPDATE tms_viaticos
+       SET estado = 'AUTORIZADO', autorizado_por = ?, autorizado_en = NOW()
+       WHERE id = ? AND empresa_id = ? AND estado = 'PROGRAMADO'`,
+      [usuario, viaticoId, empresaId],
+    );
+    if (upd.affectedRows !== 1) {
+      await conn.rollback();
+      return { ok: false, error: "El viático cambió de estado durante la operación.", status: 409 };
+    }
+
+    const resultadoFirma = await crearFirmaInterna(conn, {
+      empresaId,
+      usuarioId: firma.usuarioId,
+      empleadoId: null,
+      nombreFirmante: firma.nombreFirmante,
+      rolFirmante: firma.rolFirmante,
+      accion: "AUTORIZAR_VIATICO",
+      modulo: "VIATICOS",
+      entidadTipo: "VIATICO",
+      entidadId: viaticoId,
+      valoresRelevantes: {
+        viaticoId,
+        planId: Number(v.plan_id),
+        planCodigo: ctx?.plan_codigo != null ? String(ctx.plan_codigo) : null,
+        beneficiario: ctx?.personal_nombre != null ? String(ctx.personal_nombre) : null,
+        montoAsignado: Number(v.monto_asignado),
+      },
+      ip: firma.ip,
+      userAgent: firma.userAgent,
+    });
+
+    await registrarAuditoriaTx(conn, {
+      empresaId,
+      usuario,
+      accion: "autorizar_viatico",
+      modulo: "tms",
+      detalle: `Viático #${viaticoId} · PROGRAMADO → AUTORIZADO · firma ${resultadoFirma.codigoFirma}`,
+    });
+
+    await conn.commit();
+    return { ok: true, firma: resultadoFirma };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
 }
 
 export type DatosEntregaViatico = {
@@ -451,44 +551,151 @@ export async function registrarEntregaViatico(
   return { ok: true };
 }
 
+/**
+ * VIATICOS-FIRMA — liquidación estructurada (antes: solo observaciones
+ * libres). gastosComprobados/reintegro llegan como string decimal
+ * (mismo contrato que `dinero`/`centavos()` en src/lib/multas/reglas.ts —
+ * reutilizado tal cual, nunca aritmética en float JS para la decisión
+ * financiera de si se puede liquidar).
+ */
 export type DatosLiquidacionViatico = {
+  gastosComprobados: string;
+  reintegro: string;
   observaciones: string | null;
 };
 
 /**
- * ENTREGADO -> LIQUIDADO. Quién puede: usuarios con el permiso explícito
- * `viaticos:editar` (administración autorizada — VIAT-2 no le asignó un
- * permiso propio como a autorizar/pagar, es el único paso que queda bajo
- * el permiso general `viaticos`). En esta fase significa únicamente
- * "cerrado administrativamente" — NO implica devolución de sobrante ni
- * presentación de comprobantes (eso, si el negocio lo requiere, es una
- * ampliación posterior; el modelo queda preparado con
- * observaciones_liquidacion como texto libre para entonces).
+ * ENTREGADO -> LIQUIDADO. Quién puede: usuarios con el permiso EXPLÍCITO
+ * `viaticos_liquidar:editar` (Facturador lo trae por defecto) — YA NO el
+ * genérico `viaticos:editar` (VIATICOS-FIRMA lo reemplaza; ver reporte de
+ * entrega sobre usuarios con el permiso genérico antiguo).
+ *
+ * Regla crítica de conciliación: diferencia = monto_asignado -
+ * gastos_comprobados - reintegro, con aritmética EXACTA en centavos
+ * (centavos()/decimal() de multas/reglas.ts, nunca float). Solo se
+ * permite liquidar (y por tanto firmar) si diferencia === 0.00 exacto —
+ * > 0 significa "pendiente por comprobar o reintegrar" (rechaza, sigue
+ * ENTREGADO); < 0 significa que gastos+reintegro superan lo entregado
+ * (rechaza igual, sigue ENTREGADO) — ningún caso cambia el estado ni crea
+ * firma. VIATICOS-FIRMA: firma electrónica interna (contraseña actual) +
+ * transición + auditoría en la MISMA transacción, mismo patrón que
+ * autorizarViatico.
  */
 export async function liquidarViatico(
   empresaId: number,
   viaticoId: number,
   datos: DatosLiquidacionViatico,
   usuario: string,
-): Promise<ResultadoTransicionViatico> {
-  const r = await execute(
-    `UPDATE tms_viaticos
-     SET estado = 'LIQUIDADO', liquidado_por = ?, liquidado_en = NOW(),
-         observaciones_liquidacion = ?
-     WHERE id = ? AND empresa_id = ? AND estado = 'ENTREGADO'`,
-    [usuario, datos.observaciones?.trim() || null, viaticoId, empresaId],
-  );
-  if (r.affectedRows !== 1) {
-    return await estadoActualComoError(empresaId, viaticoId, "liquidar");
+  firma: DatosFirmaViatico,
+): Promise<ResultadoTransicionConFirma> {
+  let gastosCent: number;
+  let reintegroCent: number;
+  try {
+    gastosCent = centavos(datos.gastosComprobados || "0");
+    reintegroCent = centavos(datos.reintegro || "0");
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Monto inválido.", status: 400 };
   }
-  await registrarAuditoria({
-    empresaId,
-    usuario,
-    accion: "liquidar_viatico",
-    modulo: "tms",
-    detalle: `Viático #${viaticoId} · ENTREGADO → LIQUIDADO`,
-  });
-  return { ok: true };
+  if (gastosCent < 0 || reintegroCent < 0) {
+    return { ok: false, error: "Los montos no pueden ser negativos.", status: 400 };
+  }
+
+  const passwordOk = await verificarPasswordUsuarioActual(firma.usuarioId, firma.password);
+  if (!passwordOk) {
+    return { ok: false, error: "Contraseña incorrecta.", status: 401 };
+  }
+
+  const conn = await getPool().getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [rows] = await conn.query<RowDataPacket[]>(
+      `SELECT id, monto_asignado, estado FROM tms_viaticos WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
+      [viaticoId, empresaId],
+    );
+    const v = rows[0];
+    if (!v) {
+      await conn.rollback();
+      return { ok: false, error: "Viático no encontrado.", status: 404 };
+    }
+    if (String(v.estado) !== "ENTREGADO") {
+      await conn.rollback();
+      return {
+        ok: false,
+        error: `Este viático está ${String(v.estado)}; no se puede liquidar desde ese estado.`,
+        status: 409,
+      };
+    }
+
+    const montoEntregadoCent = centavos(String(v.monto_asignado));
+    const diferenciaCent = montoEntregadoCent - gastosCent - reintegroCent;
+    if (diferenciaCent > 0) {
+      await conn.rollback();
+      return {
+        ok: false,
+        error: `Pendiente por comprobar o reintegrar: Q${decimal(diferenciaCent)}`,
+        status: 409,
+      };
+    }
+    if (diferenciaCent < 0) {
+      await conn.rollback();
+      return {
+        ok: false,
+        error: "Los gastos y reintegros superan el monto entregado. Revisa la liquidación.",
+        status: 409,
+      };
+    }
+
+    const [upd] = await conn.execute<ResultSetHeader>(
+      `UPDATE tms_viaticos
+       SET estado = 'LIQUIDADO', liquidado_por = ?, liquidado_en = NOW(),
+           gastos_comprobados = ?, reintegro = ?, observaciones_liquidacion = ?
+       WHERE id = ? AND empresa_id = ? AND estado = 'ENTREGADO'`,
+      [usuario, decimal(gastosCent), decimal(reintegroCent), datos.observaciones?.trim() || null, viaticoId, empresaId],
+    );
+    if (upd.affectedRows !== 1) {
+      await conn.rollback();
+      return { ok: false, error: "El viático cambió de estado durante la operación.", status: 409 };
+    }
+
+    const resultadoFirma = await crearFirmaInterna(conn, {
+      empresaId,
+      usuarioId: firma.usuarioId,
+      empleadoId: null,
+      nombreFirmante: firma.nombreFirmante,
+      rolFirmante: firma.rolFirmante,
+      accion: "LIQUIDAR_VIATICO",
+      modulo: "VIATICOS",
+      entidadTipo: "VIATICO",
+      entidadId: viaticoId,
+      valoresRelevantes: {
+        viaticoId,
+        montoEntregado: decimal(montoEntregadoCent),
+        gastosComprobados: decimal(gastosCent),
+        reintegro: decimal(reintegroCent),
+        diferencia: decimal(diferenciaCent),
+        observaciones: datos.observaciones?.trim() || null,
+      },
+      ip: firma.ip,
+      userAgent: firma.userAgent,
+    });
+
+    await registrarAuditoriaTx(conn, {
+      empresaId,
+      usuario,
+      accion: "liquidar_viatico",
+      modulo: "tms",
+      detalle: `Viático #${viaticoId} · ENTREGADO → LIQUIDADO · gastos Q${decimal(gastosCent)} · reintegro Q${decimal(reintegroCent)} · firma ${resultadoFirma.codigoFirma}`,
+    });
+
+    await conn.commit();
+    return { ok: true, firma: resultadoFirma };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
 }
 
 /** Mensaje de error cuando una transición no aplicó — distingue "no existe" de "estado no permite". */
@@ -538,9 +745,26 @@ export type ViaticoDetalle = {
   liquidadoPor: string | null;
   liquidadoEn: string | null;
   observacionesLiquidacion: string | null;
+  // VIATICOS-FIRMA — liquidación estructurada.
+  gastosComprobados: number | null;
+  reintegro: number | null;
+  /** Derivada, nunca persistida: montoAsignado - gastosComprobados - reintegro. null mientras no está LIQUIDADO. */
+  diferencia: number | null;
 };
 
 function mapDetalle(r: RowDataPacket): ViaticoDetalle {
+  const gastosComprobados = r.gastos_comprobados != null ? Number(r.gastos_comprobados) : null;
+  const reintegro = r.reintegro != null ? Number(r.reintegro) : null;
+  // Diferencia mostrada: misma aritmética EXACTA en centavos que la
+  // decisión de liquidarViatico() (nunca resta directa de floats), aunque
+  // aquí sea solo lectura — un viático LIQUIDADO siempre debería dar 0.00
+  // exacto por construcción, esto evita cualquier artefacto de float al
+  // formatear.
+  const diferencia = gastosComprobados != null && reintegro != null
+    ? Number(decimal(
+        centavos(String(r.monto_asignado ?? 0)) - centavos(String(r.gastos_comprobados)) - centavos(String(r.reintegro)),
+      ))
+    : null;
   return {
     id: Number(r.id),
     planId: Number(r.plan_id),
@@ -571,6 +795,9 @@ function mapDetalle(r: RowDataPacket): ViaticoDetalle {
     liquidadoEn: r.liquidado_en != null ? String(r.liquidado_en) : null,
     observacionesLiquidacion:
       r.observaciones_liquidacion != null ? String(r.observaciones_liquidacion) : null,
+    gastosComprobados,
+    reintegro,
+    diferencia,
   };
 }
 
@@ -580,6 +807,7 @@ const DETALLE_SELECT = `
          v.autorizado_por, v.autorizado_en, v.entregado_por, v.entregado_en,
          v.referencia_pago, v.observaciones_entrega,
          v.liquidado_por, v.liquidado_en, v.observaciones_liquidacion,
+         v.gastos_comprobados, v.reintegro,
          pl.codigo AS plan_codigo, pl.fecha_plan,
          c.nombre AS cliente, u.placa AS unidad_placa,
          tp.nombre AS personal_nombre,
