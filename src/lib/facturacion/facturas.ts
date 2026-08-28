@@ -92,7 +92,10 @@ export type PagoFactura = {
   creadoEn: string;
 };
 
-function estadoFinancieroDe(montoTotal: number, totalPagado: number): EstadoFinancieroFactura {
+// FACT-1-TMS-REPORTES — exportada para que reportes-viajes.ts derive el
+// mismo "estado de cobro" (Sin pagos/Pago parcial/Cobrado) SIN duplicar
+// la regla aquí (nunca dos criterios que puedan divergir).
+export function estadoFinancieroDe(montoTotal: number, totalPagado: number): EstadoFinancieroFactura {
   if (totalPagado <= 0) return "Sin pagos";
   if (totalPagado >= montoTotal) return "Cobrado";
   return "Pago parcial";

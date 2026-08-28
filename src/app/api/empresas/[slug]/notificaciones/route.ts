@@ -388,14 +388,22 @@ export async function GET(_req: Request, ctx: Ctx) {
     }
   }
 
-  // OPS-1 (punto 17): todavía NO existe tabla de facturas — "facturable"
-  // en esta fase es únicamente estado = 'Cerrado'. Deliberadamente NO se
-  // llama "sin facturar" (eso implicaría saber si ya se facturó, lo cual
-  // requiere FACT-1 con su propia tabla y un NOT EXISTS contra ella).
+  // FACT-1-TMS-REPORTES (Fase L): ahora que FACT-1 existe, "listos para
+  // facturación" cuenta REALMENTE Cerrado + sin ninguna fila viva en
+  // fact_factura_viajes + con el bridge clientes.tms_cliente_id ya
+  // resuelto — la MISMA semántica que listarViajesPendientes/
+  // condicionesViajesPendientes en src/lib/facturacion/facturas.ts
+  // (nunca dos criterios que puedan divergir). Antes de FACT-1 esto solo
+  // contaba estado='Cerrado' sin saber si ya tenía factura.
   if (puede("facturacion", "ver")) {
     try {
       const rows = await query<RowDataPacket[]>(
-        `SELECT COUNT(*) AS c FROM tms_planes_viaje WHERE empresa_id = ? AND estado = 'Cerrado'`,
+        `SELECT COUNT(*) AS c
+         FROM tms_planes_viaje p
+         LEFT JOIN clientes cli ON cli.tms_cliente_id = p.cliente_id AND cli.empresa_id = p.empresa_id
+         WHERE p.empresa_id = ? AND p.estado = 'Cerrado'
+           AND cli.id IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM fact_factura_viajes ffv WHERE ffv.plan_id = p.id)`,
         [empresaId],
       );
       const c = Number(rows[0]?.c ?? 0);
@@ -404,8 +412,8 @@ export async function GET(_req: Request, ctx: Ctx) {
           id: "alerta-viajes-facturables",
           tipo: "alerta",
           titulo: "Viajes cerrados listos para facturación",
-          detalle: `${c} viaje(s) cerrado(s)`,
-          enlace: `/e/${slug}/tms`,
+          detalle: `${c} viaje(s) cerrado(s) pendiente(s) de facturación`,
+          enlace: `/e/${slug}/facturacion?vista=viajes-pendientes`,
           creadoAt: null,
         });
       }
