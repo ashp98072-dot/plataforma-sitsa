@@ -57,6 +57,8 @@ export default async function BoletasPage() {
           <h1 className="mt-1 text-2xl font-semibold">Mi historial</h1>
         </header>
 
+        <Link href="/portal/boletas/resumen" className="mt-4 inline-block rounded-lg border border-[var(--accent)] px-4 py-2">Ver resumen mensual de pagos</Link>
+
         {boletas.length === 0 ? (
           <p className="mt-8 text-sm text-[var(--muted)]">
             Todavía no tienes boletas de pago cerradas para mostrar. Aparecerán
