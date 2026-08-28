@@ -4,6 +4,15 @@ import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } 
 import { useParams } from "next/navigation";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
+import {
+  CATALOGO_TIPOS_MULTA,
+  debeMostrarDescripcionMulta,
+  debeMostrarDetalleAdicional,
+  labelDeTipoMulta,
+  requiereDetalleAdicional,
+  TIPO_MULTA_OTRA,
+  validarDetalleAdicional,
+} from "@/lib/multas/catalogo-tipos";
 
 /**
  * MULTAS-4/5 — UI de Operaciones > Multas y sanciones. Reutiliza el
@@ -107,10 +116,13 @@ const ESTADO_BADGE: Record<string, string> = {
 };
 
 const formVacio = {
-  fecha_infraccion: new Date().toISOString().slice(0, 10), referencia_boleta: "", tipo_multa: "", descripcion: "",
+  fecha_infraccion: new Date().toISOString().slice(0, 10), referencia_boleta: "", tipo_multa: "",
   lugar: "", monto_total: "", tipo_responsabilidad: "POR_DEFINIR" as Responsabilidad, empleado_responsable_id: "" as string | number,
   responsable_texto: "", resolucion_economica: "PENDIENTE" as Resolucion, monto_empresa: "", monto_colaborador: "",
-  observaciones: "",
+  // Reemplaza "Descripción" + "Observaciones" (redundantes) por UN solo
+  // campo — descripcion/observaciones del API se derivan de este en
+  // guardarMulta(), nunca se piden por separado en la UI.
+  detalleAdicional: "",
 };
 type FormMultaState = typeof formVacio;
 
@@ -135,25 +147,33 @@ function FormularioMulta({
   onGuardar: () => void;
   onCancelar: () => void;
 }) {
+  const detalleObligatorio = requiereDetalleAdicional(form.tipo_multa, form.resolucion_economica);
   return (
     <div className="rounded-lg border border-[var(--accent)] bg-[var(--card)] p-4">
       <h3 className="mb-2 text-sm font-semibold">Nueva multa — {placa}</h3>
-      <div className="grid gap-3 sm:grid-cols-2">
+      {/* Fila 1: Fecha | Referencia · Fila 2: Tipo | Lugar · Fila 3: Monto | Responsabilidad | Resolución · Fila 4: Detalle adicional (ancho completo) */}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <label className="text-xs text-[var(--muted)]">Fecha de infracción
           <input type="date" className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.fecha_infraccion} onChange={(e) => setForm((f) => ({ ...f, fecha_infraccion: e.target.value }))} />
         </label>
-        <label className="text-xs text-[var(--muted)]">Referencia de boleta
+        <label className="text-xs text-[var(--muted)]">Referencia de boleta (opcional)
           <input className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.referencia_boleta} onChange={(e) => setForm((f) => ({ ...f, referencia_boleta: e.target.value }))} />
         </label>
+
         <label className="text-xs text-[var(--muted)]">Tipo de multa
-          <input className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.tipo_multa} onChange={(e) => setForm((f) => ({ ...f, tipo_multa: e.target.value }))} />
+          <select className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.tipo_multa} onChange={(e) => setForm((f) => ({ ...f, tipo_multa: e.target.value }))}>
+            <option value="">— Seleccionar —</option>
+            {CATALOGO_TIPOS_MULTA.map((c) => (
+              <optgroup key={c.categoria} label={c.categoria}>
+                {c.opciones.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </optgroup>
+            ))}
+          </select>
         </label>
-        <label className="text-xs text-[var(--muted)]">Lugar
+        <label className="text-xs text-[var(--muted)]">Lugar (opcional)
           <input className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.lugar} onChange={(e) => setForm((f) => ({ ...f, lugar: e.target.value }))} />
         </label>
-        <label className="text-xs text-[var(--muted)] sm:col-span-2">Descripción
-          <textarea className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" rows={2} value={form.descripcion} onChange={(e) => setForm((f) => ({ ...f, descripcion: e.target.value }))} />
-        </label>
+
         <label className="text-xs text-[var(--muted)]">Monto (Q)
           <input inputMode="decimal" className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" value={form.monto_total} onChange={(e) => setForm((f) => ({ ...f, monto_total: e.target.value }))} placeholder="0.00" />
         </label>
@@ -191,8 +211,18 @@ function FormularioMulta({
             </label>
           </>
         ) : null}
-        <label className="text-xs text-[var(--muted)] sm:col-span-2">Observaciones (obligatorio si NO_APLICA)
-          <textarea className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm" rows={2} value={form.observaciones} onChange={(e) => setForm((f) => ({ ...f, observaciones: e.target.value }))} />
+
+        {/* Fila 4 — reemplaza "Descripción" + "Observaciones" (redundantes): un solo campo. */}
+        <label className="text-xs text-[var(--muted)] sm:col-span-2 lg:col-span-3">
+          Detalle adicional {detalleObligatorio ? null : <span className="text-[var(--muted)]">(opcional)</span>}
+          {form.tipo_multa === TIPO_MULTA_OTRA ? <span className="ml-1 text-amber-400">— describe el tipo de multa</span> : null}
+          <textarea
+            className="mt-0.5 block w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm"
+            rows={3}
+            placeholder="Información adicional de la infracción (opcional)"
+            value={form.detalleAdicional}
+            onChange={(e) => setForm((f) => ({ ...f, detalleAdicional: e.target.value }))}
+          />
         </label>
       </div>
       <div className="mt-3 flex gap-2">
@@ -237,9 +267,17 @@ function ExpedienteDetalle({
         <p><span className="text-[var(--muted)]">Unidad:</span> {m.placa_actual}</p>
         <p><span className="text-[var(--muted)]">Fecha:</span> {m.fecha_infraccion}</p>
         <p><span className="text-[var(--muted)]">Boleta:</span> {m.referencia_boleta ?? "—"}</p>
-        <p><span className="text-[var(--muted)]">Tipo:</span> {m.tipo_multa}</p>
+        <p><span className="text-[var(--muted)]">Tipo:</span> {labelDeTipoMulta(m.tipo_multa)}</p>
         <p><span className="text-[var(--muted)]">Lugar:</span> {m.lugar ?? "—"}</p>
-        <p className="sm:col-span-2"><span className="text-[var(--muted)]">Descripción:</span> {m.descripcion}</p>
+        {/* HOTFIX PRE-MERGE PR #122 (Hallazgo 2): en una multa nueva
+            descripcion === label del tipo elegido — mostrar ambas
+            líneas sería redundante. Solo se muestra si aporta algo
+            distinto (siempre el caso en multas históricas con texto
+            libre real). */}
+        {debeMostrarDescripcionMulta(m.tipo_multa, m.descripcion) ? (
+          <p className="sm:col-span-2"><span className="text-[var(--muted)]">Descripción:</span> {m.descripcion}</p>
+        ) : null}
+        {debeMostrarDetalleAdicional(m.observaciones) ? <p className="sm:col-span-2"><span className="text-[var(--muted)]">Detalle adicional:</span> {m.observaciones}</p> : null}
       </div>
 
       <div className="rounded-md border border-[var(--border)] p-3">
@@ -510,15 +548,25 @@ export default function MultasPage() {
 
   async function guardarMulta() {
     if (!multaFormPara) return;
+    if (!form.tipo_multa) { setError("Selecciona el tipo de multa."); return; }
+    const errorDetalle = validarDetalleAdicional(form.tipo_multa, form.resolucion_economica, form.detalleAdicional);
+    if (errorDetalle) { setError(errorDetalle); return; }
     setGuardando(true);
     setError("");
     try {
+      const detalle = form.detalleAdicional.trim();
       const body: Record<string, unknown> = {
         revision_id: multaFormPara.revisionId, vehiculo_id: multaFormPara.vehiculoId,
         fecha_infraccion: form.fecha_infraccion, referencia_boleta: form.referencia_boleta.trim() || undefined,
-        tipo_multa: form.tipo_multa.trim(), descripcion: form.descripcion.trim(), lugar: form.lugar.trim() || undefined,
+        // COMPATIBILIDAD CON BACKEND (ver reporte del ticket): tipo_multa
+        // guarda el VALUE estable del catálogo (nunca texto libre nuevo);
+        // descripcion sigue siendo el campo requerido por el backend
+        // (texto(4000), min 1) — se llena con el LABEL visible del tipo
+        // elegido, nunca queda vacío porque el <select> solo ofrece
+        // valores del catálogo. observaciones = detalle adicional o null.
+        tipo_multa: form.tipo_multa, descripcion: labelDeTipoMulta(form.tipo_multa), lugar: form.lugar.trim() || undefined,
         monto_total: form.monto_total, tipo_responsabilidad: form.tipo_responsabilidad,
-        resolucion_economica: form.resolucion_economica, observaciones: form.observaciones.trim() || undefined,
+        resolucion_economica: form.resolucion_economica, observaciones: detalle || undefined,
       };
       if (esPersonal) {
         if (empleados && form.empleado_responsable_id) body.empleado_responsable_id = Number(form.empleado_responsable_id);
@@ -767,7 +815,7 @@ export default function MultasPage() {
                         <td className="py-2 pr-3">{m.fecha_infraccion}</td>
                         <td className="py-2 pr-3">{m.placa_actual}</td>
                         <td className="py-2 pr-3">{m.referencia_boleta ?? "—"}</td>
-                        <td className="py-2 pr-3">{m.tipo_multa}</td>
+                        <td className="py-2 pr-3">{labelDeTipoMulta(m.tipo_multa)}</td>
                         <td className="py-2 pr-3">{m.empleado_responsable_nombre ?? m.responsable_texto ?? "—"}</td>
                         <td className="py-2 pr-3">{formatQ(m.monto_total)}</td>
                         <td className="py-2 pr-3">
