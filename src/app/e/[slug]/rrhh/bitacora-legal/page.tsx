@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import CasosLegales from "@/components/rrhh/casos-legales";
 import { EmpleadoPicker, type EmpOpt } from "@/components/rrhh/empleado-picker";
 
 type TipoBitacoraLegal =
@@ -65,7 +66,8 @@ export default function BitacoraLegalPage() {
   }, [slug, filtroTipo]);
 
   useEffect(() => {
-    void cargar();
+    const timer = setTimeout(() => void cargar(), 0);
+    return () => clearTimeout(timer);
   }, [cargar]);
 
   async function onSubmit(e: FormEvent) {
@@ -114,6 +116,8 @@ export default function BitacoraLegalPage() {
           </Link>
         </p>
       </div>
+
+      <CasosLegales slug={slug} />
 
       <form
         onSubmit={onSubmit}
