@@ -116,4 +116,35 @@ describe("limpieza por empresa y módulo", () => {
     await expect(limpiarViajesConjuntos(db, 7)).rejects.toThrow("transaccional");
     expect(conn.execute).not.toHaveBeenCalled();
   });
+  it("PRUEBAS permite viajes abiertos y viáticos entregados sin tocar vehículos", async () => {
+    filas.tms_planes_viaje[0].estado = "En ruta";
+    filas.flota_viajes[0].estado = "abierto";
+    filas.tms_viaticos[0].estado = "ENTREGADO";
+    await limpiarModuloEmpresa({ empresaId: 7, empresaCodigo: "TEST", modulo: "pruebas_operaciones", usuario: "admin", usuarioId: 2 });
+    expect(conn.commit).toHaveBeenCalledOnce();
+    expect(conn.query.mock.calls.some(([s]) => String(s).includes("DELETE FROM `flota_vehiculos`"))).toBe(false);
+    expect(registrarAuditoriaTx).toHaveBeenCalledWith(db, expect.objectContaining({ modulo: "pruebas_operaciones" }));
+  });
+  it.each(["AUTORIZADO", "ENTREGADO", "LIQUIDADO"])("PRUEBAS admite viático %s, pero conserva el guard externo", async (estado) => {
+    filas.tms_viaticos[0].estado = estado;
+    expect((await limpiarViaticos(db, 7, true)).tms_viaticos).toBe(1);
+    referenciaExterna = true;
+    await expect(limpiarViaticos(db, 7, true)).rejects.toThrow("facturas");
+  });
+  it("comprueba FK compuesta como tupla, sin confundir toda la empresa con un vínculo", async () => {
+    const normal = conn.query.getMockImplementation()!;
+    conn.query.mockImplementation(async (...args) => {
+      const sql = String(args[0]);
+      if (sql.includes("KEY_COLUMN_USAGE")) return [[
+        { tabla: "relacion", restriccion: "fk_compuesta", columna: "empresa_id", destino: "empresa_id", local: 1 },
+        { tabla: "relacion", restriccion: "fk_compuesta", columna: "viatico_id", destino: "id", local: 1 },
+      ]];
+      if (sql.includes("FROM `relacion`")) return [[]];
+      return normal(...args);
+    });
+    await limpiarViaticos(db, 7);
+    const consulta = conn.query.mock.calls.find(([s]) => String(s).includes("FROM `relacion`"))!;
+    expect(consulta[0]).toContain("`empresa_id` = ? AND `viatico_id` = ?");
+    expect(consulta[1]).toEqual([7, 50]);
+  });
 });

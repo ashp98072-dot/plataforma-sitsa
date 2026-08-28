@@ -2,6 +2,7 @@ import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/prom
 import { getPool } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { limpiarViajesConjuntos, limpiarViaticos, limpiarCuestionarios, desactivarCatalogo, anularMultas } from "@/lib/admin/limpiar-operaciones";
+import { limpiarMultasPrueba } from "@/lib/admin/limpiar-pruebas";
 import type { ModuloLimpieza } from "@/lib/admin/limpiar-modulo-shared";
 
 export type { ModuloLimpieza };
@@ -127,17 +128,21 @@ export async function contarModuloEmpresa(
           inv_equipo: await count("flota_inv_equipo"),
         };
       case "operaciones":
+      case "pruebas_operaciones":
         return {
           planes: await count("tms_planes_viaje"),
           viajes_asociados: await count("flota_viajes", "plan_id IN (SELECT id FROM tms_planes_viaje WHERE empresa_id = ?)"),
           viaticos: await count("tms_viaticos"),
         };
       case "operaciones_viaticos":
+      case "pruebas_viaticos":
         return { viaticos: await count("tms_viaticos") };
       case "operaciones_rutas":
         return { rutas_activas: await count("tms_cliente_rutas", "empresa_id = ? AND activo = 1") };
       case "operaciones_multas":
         return { multas_no_anuladas: await count("ops_multas", "empresa_id = ? AND estado <> 'ANULADA'") };
+      case "pruebas_multas":
+        return { multas: await count("ops_multas"), revisiones: await count("ops_multas_revisiones"), descuentos_vinculados: await count("rrhh_descuentos_maestro", "id IN (SELECT rrhh_descuento_id FROM ops_multas WHERE empresa_id = ?)") };
       case "operaciones_accesos":
         return { accesos_activos: await count("proveedor_portales", "empresa_id = ? AND activo = 1") };
       case "facturacion_clientes":
@@ -669,6 +674,15 @@ export async function limpiarModuloEmpresa(opts: {
         break;
       case "operaciones":
         afectados = await limpiarViajesConjuntos(conn, opts.empresaId);
+        break;
+      case "pruebas_operaciones":
+        afectados = await limpiarViajesConjuntos(conn, opts.empresaId, true);
+        break;
+      case "pruebas_viaticos":
+        afectados = await limpiarViaticos(conn, opts.empresaId, true);
+        break;
+      case "pruebas_multas":
+        afectados = await limpiarMultasPrueba(conn, opts.empresaId);
         break;
       case "operaciones_viaticos":
         afectados = await limpiarViaticos(conn, opts.empresaId);

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireTenantRrhh } from "@/lib/tenant";
+import { eliminarDescuentoPrueba } from "@/lib/admin/limpiar-pruebas";
+import { LimpiezaBloqueada } from "@/lib/admin/limpiar-operaciones";
 import {
   obtenerDescuento,
   listarCuotas,
@@ -34,7 +36,7 @@ export async function GET(_req: Request, ctx: Ctx) {
     listarAbonos(guard.empresa.id, descuentoId),
   ]);
   return NextResponse.json(
-    { descuento, cuotas, abonos },
+    { descuento, cuotas, abonos, puedeEliminarPrueba: guard.session.rol === "Admin" },
     { headers: { "Cache-Control": "private, no-store" } },
   );
 }
@@ -54,6 +56,26 @@ const patchSchema = z.object({
   monto: z.number().positive().optional(),
   fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
+
+/** Temporal, solo Admin; no se permite habilitarlo mediante permisos de RRHH. */
+export async function DELETE(req: Request, ctx: Ctx) {
+  const { slug, id } = await ctx.params;
+  const guard = await requireTenantRrhh(slug, "descuentos", "editar");
+  if (guard.error) return guard.error;
+  if (guard.session.rol !== "Admin") return NextResponse.json({ error: "Solo Admin puede eliminar descuentos de prueba." }, { status: 403 });
+  const descuentoId = Number(id);
+  if (!Number.isSafeInteger(descuentoId) || descuentoId <= 0) return NextResponse.json({ error: "ID inválido." }, { status: 400 });
+  const body = await req.json().catch(() => null);
+  if (body?.confirmacion !== `ELIMINAR DESCUENTO ${descuentoId}`) return NextResponse.json({ error: "Confirmación incorrecta." }, { status: 400 });
+  try {
+    const afectados = await eliminarDescuentoPrueba(guard.empresa.id, descuentoId, guard.session.username);
+    return NextResponse.json({ mensaje: "Descuento de prueba eliminado. No se modificaron planillas ni archivos físicos.", afectados });
+  } catch (error) {
+    if (error instanceof LimpiezaBloqueada) return NextResponse.json({ error: error.message }, { status: 409 });
+    console.error("Eliminar descuento de prueba", error);
+    return NextResponse.json({ error: "No se pudo eliminar. Se revirtieron los cambios; revisa el registro del servidor." }, { status: 500 });
+  }
+}
 
 /** Fase D1: una sola ruta de acciones (accion: string), mismo patrón ya
  * usado en rrhh/planillas/[id] y tms/planes — no se crean 6 endpoints. */
