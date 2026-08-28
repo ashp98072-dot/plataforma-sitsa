@@ -6,6 +6,8 @@ import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
 import {
   CATALOGO_TIPOS_MULTA,
+  debeMostrarDescripcionMulta,
+  debeMostrarDetalleAdicional,
   labelDeTipoMulta,
   requiereDetalleAdicional,
   TIPO_MULTA_OTRA,
@@ -267,8 +269,15 @@ function ExpedienteDetalle({
         <p><span className="text-[var(--muted)]">Boleta:</span> {m.referencia_boleta ?? "—"}</p>
         <p><span className="text-[var(--muted)]">Tipo:</span> {labelDeTipoMulta(m.tipo_multa)}</p>
         <p><span className="text-[var(--muted)]">Lugar:</span> {m.lugar ?? "—"}</p>
-        <p className="sm:col-span-2"><span className="text-[var(--muted)]">Descripción:</span> {m.descripcion}</p>
-        {m.observaciones ? <p className="sm:col-span-2"><span className="text-[var(--muted)]">Detalle adicional:</span> {m.observaciones}</p> : null}
+        {/* HOTFIX PRE-MERGE PR #122 (Hallazgo 2): en una multa nueva
+            descripcion === label del tipo elegido — mostrar ambas
+            líneas sería redundante. Solo se muestra si aporta algo
+            distinto (siempre el caso en multas históricas con texto
+            libre real). */}
+        {debeMostrarDescripcionMulta(m.tipo_multa, m.descripcion) ? (
+          <p className="sm:col-span-2"><span className="text-[var(--muted)]">Descripción:</span> {m.descripcion}</p>
+        ) : null}
+        {debeMostrarDetalleAdicional(m.observaciones) ? <p className="sm:col-span-2"><span className="text-[var(--muted)]">Detalle adicional:</span> {m.observaciones}</p> : null}
       </div>
 
       <div className="rounded-md border border-[var(--border)] p-3">

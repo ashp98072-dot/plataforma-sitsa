@@ -123,3 +123,26 @@ export function validarDetalleAdicional(
   if (resolucionEconomica === "NO_APLICA") return "Indica por qué no aplica resolución económica.";
   return null;
 }
+
+/**
+ * HOTFIX PRE-MERGE PR #122 (Hallazgo 2) — para una multa NUEVA,
+ * `descripcion` se guarda igual al label del tipo elegido (ver
+ * guardarMulta() en page.tsx), así que mostrar "Tipo" y "Descripción"
+ * por separado en el expediente es puro ruido visual. Para una multa
+ * HISTÓRICA, `descripcion` suele ser texto libre real y distinto —
+ * sigue aportando información y debe mostrarse.
+ *
+ * Regla: comparar `descripcion` contra el LABEL VISIBLE del tipo (nunca
+ * contra el código crudo) — cubre tanto el caso nuevo (tipo_multa es un
+ * código del catálogo, descripcion = su label) como el caso histórico
+ * donde tipo_multa YA es texto libre (labelDeTipoMulta hace fallback al
+ * mismo texto) y descripcion resulta ser una copia idéntica.
+ */
+export function debeMostrarDescripcionMulta(tipoMulta: string, descripcion: string): boolean {
+  return descripcion.trim() !== labelDeTipoMulta(tipoMulta).trim();
+}
+
+/** "Detalle adicional" (observaciones) se muestra siempre que exista contenido real, sin importar tipo/resolución. */
+export function debeMostrarDetalleAdicional(observaciones: string | null): boolean {
+  return Boolean(observaciones?.trim());
+}

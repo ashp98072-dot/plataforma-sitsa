@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   CATALOGO_TIPOS_MULTA,
+  debeMostrarDescripcionMulta,
+  debeMostrarDetalleAdicional,
   labelDeTipoMulta,
   OPCIONES_TIPO_MULTA,
   requiereDetalleAdicional,
@@ -103,3 +105,40 @@ describe("11) el select agrupado no puede exponer un 'value' de categoría como 
 // prueba automatizada (ver informe de entrega).
 // 12) no requiere SQL — confirmado: ningún archivo de esquema/migración
 // fue tocado por este ticket.
+
+describe("HOTFIX PRE-MERGE PR #122 — Hallazgo 1: labelDeTipoMulta también se usa en la bandeja RRHH", () => {
+  it("1) el mismo helper que usa src/app/e/[slug]/rrhh/descuentos/multas-pendientes/page.tsx convierte un código en su label humano (nunca expone el código crudo en pantalla)", () => {
+    expect(labelDeTipoMulta("EXCESO_VELOCIDAD")).toBe("Exceso de velocidad");
+    expect(labelDeTipoMulta("EXCESO_VELOCIDAD")).not.toBe("EXCESO_VELOCIDAD");
+  });
+});
+
+describe("HOTFIX PRE-MERGE PR #122 — Hallazgo 2: debeMostrarDescripcionMulta evita el duplicado Tipo/Descripción", () => {
+  it("2) multa NUEVA: tipo_multa (código) y descripcion (label) coinciden → NO mostrar Descripción (redundante)", () => {
+    expect(debeMostrarDescripcionMulta("EXCESO_VELOCIDAD", "Exceso de velocidad")).toBe(false);
+  });
+
+  it("3) multa HISTÓRICA: descripcion es texto libre real y distinto del label → SÍ mostrar Descripción (ejemplo del ticket)", () => {
+    expect(debeMostrarDescripcionMulta("VELOCIDAD", "Conducía a 95 km/h en zona de 60")).toBe(true);
+  });
+
+  it("4) fallback histórico sigue funcionando: si tipo_multa YA es texto libre y descripcion es una copia exacta, también se oculta (labelDeTipoMulta cae al mismo texto)", () => {
+    expect(debeMostrarDescripcionMulta("choque menor sin boleta", "choque menor sin boleta")).toBe(false);
+    // pero si difieren aunque sea en espacios/mayúsculas reales de contenido, se sigue mostrando
+    expect(debeMostrarDescripcionMulta("choque menor sin boleta", "Colisión leve, sin boleta de la PMT")).toBe(true);
+  });
+
+  it("una descripción vacía nunca debe considerarse 'igual' al label por accidente (edge case defensivo)", () => {
+    expect(debeMostrarDescripcionMulta("EXCESO_VELOCIDAD", "")).toBe(true);
+  });
+});
+
+describe("HOTFIX PRE-MERGE PR #122 — 5) Detalle adicional sigue visible cuando existe", () => {
+  it("con observaciones reales, se muestra", () => {
+    expect(debeMostrarDetalleAdicional("Boleta anulada por la PMT")).toBe(true);
+  });
+  it("sin observaciones (null o solo espacios), no se muestra", () => {
+    expect(debeMostrarDetalleAdicional(null)).toBe(false);
+    expect(debeMostrarDetalleAdicional("   ")).toBe(false);
+  });
+});
