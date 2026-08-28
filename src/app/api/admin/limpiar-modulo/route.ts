@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireSession } from "@/lib/api-guard";
 import { obtenerEmpresaPorId } from "@/lib/empresas";
 import { MODULOS_LIMPIEZA } from "@/lib/admin/limpiar-modulo-shared";
+import { LimpiezaBloqueada } from "@/lib/admin/limpiar-operaciones";
 import {
   contarModuloEmpresa,
   limpiarModuloEmpresa,
@@ -98,12 +99,16 @@ export async function POST(req: Request) {
       empresaCodigo: empresa.codigo,
       modulo: parsed.data.modulo as ModuloLimpieza,
       usuario: guard.user.username,
+      usuarioId: guard.user.id,
     });
     return NextResponse.json({
       mensaje: `Módulo ${parsed.data.modulo} limpiado en ${empresa.codigo}.`,
       ...result,
     });
   } catch (err) {
+    if (err instanceof LimpiezaBloqueada) {
+      return NextResponse.json({ error: err.message }, { status: 409 });
+    }
     console.error(err);
     return NextResponse.json(
       { error: "No se pudo limpiar el módulo. Revisa el log del servidor." },

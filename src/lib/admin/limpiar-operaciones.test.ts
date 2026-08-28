@@ -1,0 +1,119 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PoolConnection } from "mysql2/promise";
+vi.mock("@/lib/db", () => ({ getPool: vi.fn() }));
+vi.mock("@/lib/auditoria", () => ({ registrarAuditoriaTx: vi.fn() }));
+import { getPool } from "@/lib/db";
+import { registrarAuditoriaTx } from "@/lib/auditoria";
+import { limpiarModuloEmpresa } from "./limpiar-modulo";
+import { anularMultas, desactivarCatalogo, limpiarViajesConjuntos, limpiarViaticos, validarViaticos } from "./limpiar-operaciones";
+
+const conn = { query: vi.fn(), execute: vi.fn(), beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn() };
+const db = conn as unknown as PoolConnection;
+let filas: Record<string, Record<string, unknown>[]>;
+let referenciaExterna: boolean;
+beforeEach(() => {
+  vi.resetAllMocks();
+  referenciaExterna = false;
+  filas = {
+    tms_planes_viaje: [{ id: 10, empresa_id: 7, estado: "Cerrado" }],
+    flota_viajes: [{ id: 20, empresa_id: 7, plan_id: 10, estado: "cerrado" }],
+    tms_plan_paradas: [{ id: 30, plan_id: 10 }],
+    tms_plan_auxiliares: [{ id: 40, plan_id: 10 }],
+    tms_viaticos: [{ id: 50, empresa_id: 7, plan_id: 10, estado: "PROGRAMADO" }],
+    tms_evidencias: [{ id: 60, empresa_id: 7, plan_id: 10 }],
+    flota_viaje_evidencias: [{ id: 70, empresa_id: 7, viaje_id: 20 }],
+  };
+  conn.query.mockImplementation(async (sql: string) => {
+    if (sql.includes("information_schema.TABLES")) return [[{ ENGINE: "InnoDB" }]];
+    if (sql.includes("information_schema.tables")) return [[{ ok: 1 }]];
+    if (sql.includes("KEY_COLUMN_USAGE")) return [referenciaExterna ? [{ tabla: "facturas", columna: "plan_id", destino: "id" }] : []];
+    if (sql.includes("information_schema.COLUMNS")) return [[]];
+    if (sql.includes("FROM `facturas`")) return [[{ plan_id: 10 }]];
+    if (sql.startsWith("SELECT *")) return [filas[sql.match(/FROM `([^`]+)`/)![1]] ?? []];
+    if (sql.startsWith("SELECT COUNT")) return [[{ n: 0 }]];
+    if (sql.startsWith("DELETE")) return [{ affectedRows: 1 }];
+    throw new Error(`Consulta inesperada: ${sql}`);
+  });
+  conn.execute.mockResolvedValue([{ affectedRows: 1 }]);
+  vi.mocked(getPool).mockReturnValue({ getConnection: vi.fn().mockResolvedValue(db) } as unknown as ReturnType<typeof getPool>);
+});
+
+describe("limpieza por empresa y módulo", () => {
+  it("elimina los dos expedientes juntos, hijos primero, sin borrar catálogos", async () => {
+    const out = await limpiarViajesConjuntos(db, 7);
+    expect(Object.keys(out)).toEqual(["flota_viaje_evidencias", "tms_evidencias", "flota_lecturas", "tms_viaticos", "tms_plan_auxiliares", "tms_plan_paradas", "flota_viajes", "tms_planes_viaje"]);
+    const lecturas = conn.query.mock.calls.filter(([s]) => String(s).startsWith("SELECT *"));
+    expect(lecturas.every(([s, p]) => String(s).includes("FOR UPDATE") && JSON.stringify(p) === "[7]")).toBe(true);
+    const deletes = conn.query.mock.calls.filter(([s]) => String(s).startsWith("DELETE"));
+    expect(deletes.map(([, p]) => p)).toEqual([[[70]], [[60]], [[50]], [[40]], [[30]], [[20]], [[10]]]);
+  });
+  it.each(["En ruta", "Descargado"])("bloquea plan en estado %s", async (estado) => {
+    filas.tms_planes_viaje[0].estado = estado;
+    await expect(limpiarViajesConjuntos(db, 7)).rejects.toThrow("en proceso");
+    expect(conn.query.mock.calls.some(([s]) => String(s).startsWith("DELETE"))).toBe(false);
+  });
+  it("bloquea viaje abierto y vínculo entre empresas", async () => {
+    filas.flota_viajes[0].estado = "abierto";
+    await expect(limpiarViajesConjuntos(db, 7)).rejects.toThrow("abiertos");
+    filas.flota_viajes[0].empresa_id = 8;
+    await expect(limpiarViajesConjuntos(db, 7)).rejects.toThrow("entre empresas");
+  });
+  it.each(["AUTORIZADO", "ENTREGADO", "LIQUIDADO"])("no borra viáticos %s", async (estado) => {
+    filas.tms_viaticos[0].estado = estado;
+    await expect(limpiarViaticos(db, 7)).rejects.toThrow("movimientos");
+    expect(conn.query.mock.calls.some(([s]) => String(s).startsWith("DELETE"))).toBe(false);
+  });
+  it("detecta movimientos aun cuando el estado dice PROGRAMADO", () => {
+    expect(() => validarViaticos([{ estado: "PROGRAMADO", entregado_en: "2026-08-28" }])).toThrow();
+  });
+  it("bloquea referencias ajenas antes de cualquier DELETE", async () => {
+    referenciaExterna = true;
+    await expect(limpiarViajesConjuntos(db, 7)).rejects.toThrow("facturas");
+    expect(conn.query.mock.calls.some(([s]) => String(s).startsWith("DELETE"))).toBe(false);
+  });
+  it.each(["clientes", "operaciones_rutas", "operaciones_accesos"])("%s solo desactiva en la empresa elegida", async (modulo) => {
+    await desactivarCatalogo(db, 7, modulo);
+    expect(conn.execute.mock.calls.length).toBeGreaterThan(0);
+    for (const [sql, params] of conn.execute.mock.calls) {
+      expect(sql).toContain("WHERE empresa_id = ?");
+      expect(sql).toMatch(/^UPDATE/);
+      expect(params[1]).toBe(7);
+    }
+  });
+  it("no anula multas pagadas ni escribe parcialmente", async () => {
+    filas.ops_multas = [{ id: 1, empresa_id: 7, estado: "PENDIENTE", estado_pago: "PAGADA" }];
+    await expect(anularMultas(db, 7, 2, "admin")).rejects.toThrow("No se modificó ninguna");
+    expect(conn.execute).not.toHaveBeenCalled();
+  });
+  it("hace rollback completo si falla un DELETE intermedio", async () => {
+    const normal = conn.query.getMockImplementation()!;
+    conn.query.mockImplementation(async (...args) => {
+      if (String(args[0]).startsWith("DELETE FROM `tms_plan_paradas`")) throw new Error("fallo intermedio");
+      return normal(...args);
+    });
+    await expect(limpiarModuloEmpresa({ empresaId: 7, empresaCodigo: "TEST", modulo: "operaciones", usuario: "admin", usuarioId: 2 })).rejects.toThrow("fallo intermedio");
+    expect(conn.rollback).toHaveBeenCalledOnce();
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(conn.release).toHaveBeenCalledOnce();
+  });
+  it("auditoría obligatoria en la misma conexión, sin commit si falla", async () => {
+    vi.mocked(registrarAuditoriaTx).mockRejectedValueOnce(new Error("audit"));
+    await expect(limpiarModuloEmpresa({ empresaId: 7, empresaCodigo: "TEST", modulo: "operaciones", usuario: "admin", usuarioId: 2 })).rejects.toThrow("audit");
+    expect(registrarAuditoriaTx).toHaveBeenCalledWith(db, expect.objectContaining({ empresaId: 7 }));
+    expect(conn.rollback).toHaveBeenCalledOnce();
+    expect(conn.commit).not.toHaveBeenCalled();
+  });
+  it("confirma una sola transacción y consulta restantes antes del commit", async () => {
+    await limpiarModuloEmpresa({ empresaId: 7, empresaCodigo: "TEST", modulo: "operaciones", usuario: "admin", usuarioId: 2 });
+    expect(conn.beginTransaction).toHaveBeenCalledOnce();
+    expect(conn.commit).toHaveBeenCalledOnce();
+    expect(conn.rollback).not.toHaveBeenCalled();
+    expect(conn.release).toHaveBeenCalledOnce();
+    expect(Math.max(...conn.query.mock.invocationCallOrder)).toBeLessThan(conn.commit.mock.invocationCallOrder[0]);
+  });
+  it("falla cerrado si falta una tabla o no admite rollback", async () => {
+    conn.query.mockResolvedValueOnce([[{ ENGINE: "MyISAM" }]]);
+    await expect(limpiarViajesConjuntos(db, 7)).rejects.toThrow("transaccional");
+    expect(conn.execute).not.toHaveBeenCalled();
+  });
+});

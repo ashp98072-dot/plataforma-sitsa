@@ -1,6 +1,7 @@
-import type { ResultSetHeader, RowDataPacket } from "mysql2/promise";
+import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { getPool } from "@/lib/db";
-import { registrarAuditoria } from "@/lib/auditoria";
+import { registrarAuditoriaTx } from "@/lib/auditoria";
+import { limpiarViajesConjuntos, limpiarViaticos, limpiarCuestionarios, desactivarCatalogo, anularMultas } from "@/lib/admin/limpiar-operaciones";
 import type { ModuloLimpieza } from "@/lib/admin/limpiar-modulo-shared";
 
 export type { ModuloLimpieza };
@@ -46,9 +47,9 @@ async function delSiExiste(
 export async function contarModuloEmpresa(
   empresaId: number,
   modulo: ModuloLimpieza,
+  conexion?: PoolConnection,
 ): Promise<Record<string, number>> {
-  const pool = getPool();
-  const conn = await pool.getConnection();
+  const conn = conexion ?? await getPool().getConnection();
   try {
     const count = async (tabla: string, where = "empresa_id = ?") => {
       if (!(await tablaExiste(conn, tabla))) return 0;
@@ -128,10 +129,21 @@ export async function contarModuloEmpresa(
       case "operaciones":
         return {
           planes: await count("tms_planes_viaje"),
-          clientes: await count("tms_clientes"),
-          lugares: await count("tms_lugares"),
-          unidades: await count("tms_unidades"),
+          viajes_asociados: await count("flota_viajes", "plan_id IN (SELECT id FROM tms_planes_viaje WHERE empresa_id = ?)"),
+          viaticos: await count("tms_viaticos"),
         };
+      case "operaciones_viaticos":
+        return { viaticos: await count("tms_viaticos") };
+      case "operaciones_rutas":
+        return { rutas_activas: await count("tms_cliente_rutas", "empresa_id = ? AND activo = 1") };
+      case "operaciones_multas":
+        return { multas_no_anuladas: await count("ops_multas", "empresa_id = ? AND estado <> 'ANULADA'") };
+      case "operaciones_accesos":
+        return { accesos_activos: await count("proveedor_portales", "empresa_id = ? AND activo = 1") };
+      case "facturacion_clientes":
+        return { cuestionarios: await count("fact_cliente_perfil") };
+      case "clientes":
+        return { clientes_activos: await count("clientes", "empresa_id = ? AND estado = 'Activo'"), clientes_tms_activos: await count("tms_clientes", "empresa_id = ? AND estado = 'Activo'") };
       case "contabilidad":
         return {
           cuentas: await count("cont_cuentas"),
@@ -149,7 +161,7 @@ export async function contarModuloEmpresa(
         return {};
     }
   } finally {
-    conn.release();
+    if (!conexion) conn.release();
   }
 }
 
@@ -570,75 +582,6 @@ async function limpiarKilometrajeFlota(
   };
 }
 
-async function limpiarOperaciones(
-  conn: Awaited<ReturnType<ReturnType<typeof getPool>["getConnection"]>>,
-  empresaId: number,
-): Promise<Record<string, number>> {
-  const out: Record<string, number> = {};
-
-  // Desvincular viajes de flota (no se borran)
-  out.flota_viajes_plan_null = await delSiExiste(
-    conn,
-    "flota_viajes",
-    `UPDATE flota_viajes SET plan_id = NULL
-     WHERE empresa_id = ? AND plan_id IS NOT NULL`,
-    [empresaId],
-  );
-
-  out.evidencias = await delSiExiste(
-    conn,
-    "tms_evidencias",
-    "DELETE FROM tms_evidencias WHERE empresa_id = ?",
-    [empresaId],
-  );
-  out.plan_auxiliares = await delSiExiste(
-    conn,
-    "tms_plan_auxiliares",
-    `DELETE a FROM tms_plan_auxiliares a
-     INNER JOIN tms_planes_viaje p ON p.id = a.plan_id
-     WHERE p.empresa_id = ?`,
-    [empresaId],
-  );
-  out.plan_paradas = await delSiExiste(
-    conn,
-    "tms_plan_paradas",
-    `DELETE pp FROM tms_plan_paradas pp
-     INNER JOIN tms_planes_viaje p ON p.id = pp.plan_id
-     WHERE p.empresa_id = ?`,
-    [empresaId],
-  );
-  out.planes = await delSiExiste(
-    conn,
-    "tms_planes_viaje",
-    "DELETE FROM tms_planes_viaje WHERE empresa_id = ?",
-    [empresaId],
-  );
-  out.personal = await delSiExiste(
-    conn,
-    "tms_personal",
-    "DELETE FROM tms_personal WHERE empresa_id = ?",
-    [empresaId],
-  );
-  out.unidades = await delSiExiste(
-    conn,
-    "tms_unidades",
-    "DELETE FROM tms_unidades WHERE empresa_id = ?",
-    [empresaId],
-  );
-  out.lugares = await delSiExiste(
-    conn,
-    "tms_lugares",
-    "DELETE FROM tms_lugares WHERE empresa_id = ?",
-    [empresaId],
-  );
-  out.clientes = await delSiExiste(
-    conn,
-    "tms_clientes",
-    "DELETE FROM tms_clientes WHERE empresa_id = ?",
-    [empresaId],
-  );
-  return out;
-}
 
 async function limpiarContabilidad(
   conn: Awaited<ReturnType<ReturnType<typeof getPool>["getConnection"]>>,
@@ -685,10 +628,12 @@ export async function limpiarModuloEmpresa(opts: {
   empresaCodigo: string;
   modulo: ModuloLimpieza;
   usuario: string;
+  usuarioId: number;
 }): Promise<{ afectados: Record<string, number>; restantes: Record<string, number> }> {
   const pool = getPool();
   const conn = await pool.getConnection();
   let afectados: Record<string, number> = {};
+  let restantes: Record<string, number> = {};
   try {
     await conn.beginTransaction();
     switch (opts.modulo) {
@@ -723,7 +668,21 @@ export async function limpiarModuloEmpresa(opts: {
         afectados = await limpiarFlota(conn, opts.empresaId);
         break;
       case "operaciones":
-        afectados = await limpiarOperaciones(conn, opts.empresaId);
+        afectados = await limpiarViajesConjuntos(conn, opts.empresaId);
+        break;
+      case "operaciones_viaticos":
+        afectados = await limpiarViaticos(conn, opts.empresaId);
+        break;
+      case "operaciones_rutas":
+      case "operaciones_accesos":
+      case "clientes":
+        afectados = await desactivarCatalogo(conn, opts.empresaId, opts.modulo);
+        break;
+      case "facturacion_clientes":
+        afectados = await limpiarCuestionarios(conn, opts.empresaId);
+        break;
+      case "operaciones_multas":
+        afectados = await anularMultas(conn, opts.empresaId, opts.usuarioId, opts.usuario);
         break;
       case "contabilidad":
         afectados = await limpiarContabilidad(conn, opts.empresaId);
@@ -761,6 +720,12 @@ export async function limpiarModuloEmpresa(opts: {
       default:
         throw new Error("Módulo no soportado.");
     }
+    await registrarAuditoriaTx(conn, {
+      empresaId: opts.empresaId, usuario: opts.usuario, accion: "limpiar_modulo",
+      modulo: opts.modulo,
+      detalle: `Limpieza módulo ${opts.modulo} empresa ${opts.empresaCodigo}: ${JSON.stringify(afectados)}`,
+    });
+    restantes = await contarModuloEmpresa(opts.empresaId, opts.modulo, conn);
     await conn.commit();
   } catch (e) {
     await conn.rollback();
@@ -769,18 +734,5 @@ export async function limpiarModuloEmpresa(opts: {
     conn.release();
   }
 
-  try {
-    await registrarAuditoria({
-      empresaId: opts.empresaId,
-      usuario: opts.usuario,
-      accion: "limpiar_modulo",
-      modulo: opts.modulo,
-      detalle: `Limpieza módulo ${opts.modulo} empresa ${opts.empresaCodigo}`,
-    });
-  } catch {
-    /* bitácora opcional */
-  }
-
-  const restantes = await contarModuloEmpresa(opts.empresaId, opts.modulo);
   return { afectados, restantes };
 }
