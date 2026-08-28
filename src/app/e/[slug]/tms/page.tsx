@@ -471,7 +471,12 @@ export default function TmsPage() {
         <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
           <p className="text-xs text-[var(--muted)]">
             TMS es solo consulta. Las evidencias las registra el piloto o personal asignado desde su portal.
-            El avance de la ruta y la última ubicación reportada se actualizan cada 5 segundos.
+            El avance de la ruta y la última ubicación reportada se actualizan cada 5 segundos. Para filtros por
+            rango de fechas, indicadores del período, exportar Excel/PDF y cerrar viajes pendientes, usa{" "}
+            <Link href={`/e/${slug}/tms/reportes`} className="text-[var(--accent)] underline">
+              Reportes de viajes →
+            </Link>
+            .
           </p>
 
           <div className="mt-3 flex flex-wrap items-end gap-2">
@@ -544,7 +549,7 @@ export default function TmsPage() {
                         <div className="flex flex-wrap gap-2 text-xs">
                           <button
                             type="button"
-                            className="text-sky-300 hover:underline"
+                            className="text-[var(--accent)] hover:underline"
                             onClick={() => setExpandido((cur) => (cur === p.id ? null : p.id))}
                           >
                             {expandido === p.id ? "Cerrar" : "Detalle"}
@@ -602,7 +607,7 @@ export default function TmsPage() {
                             <div className="flex flex-wrap items-center justify-between gap-2">
                               <p className="text-xs font-semibold">Seguimiento operativo</p>
                               <div className="flex items-center gap-2">
-                                <span className="text-[11px] text-sky-300">
+                                <span className="text-[11px] text-[var(--accent)]">
                                   {paradasCompletadas.length}/{paradasRequeridas.length} paradas con evidencia
                                 </span>
                                 {p.pendiente_cierre && puedeCerrarViaje ? (
@@ -646,7 +651,7 @@ export default function TmsPage() {
                                 <p>Registrado por: {ultimaEvidencia.subidoPor || "Usuario operativo"}</p>
                                 {ultimaEvidencia.latitud != null && ultimaEvidencia.longitud != null ? (
                                   <a
-                                    className="text-sky-300 underline"
+                                    className="text-[var(--accent)] underline"
                                     href={`https://www.google.com/maps?q=${ultimaEvidencia.latitud},${ultimaEvidencia.longitud}`}
                                     target="_blank"
                                     rel="noreferrer"
@@ -668,13 +673,13 @@ export default function TmsPage() {
                                     key={evidencia.id}
                                     className="rounded border border-[var(--border)] p-2 text-[11px]"
                                   >
-                                    <a href={evidencia.url} target="_blank" rel="noreferrer" className="block font-medium text-sky-300 hover:underline">{evidencia.tipo}</a>
+                                    <a href={evidencia.url} target="_blank" rel="noreferrer" className="block font-medium text-[var(--accent)] hover:underline">{evidencia.tipo}</a>
                                     <span className="block">{evidencia.parada_nombre || "Evidencia general del viaje"}</span>
                                     <span className="block text-[var(--muted)]">{fechaHoraEvidencia(evidencia.capturadoEn)}</span>
                                     {evidencia.latitud != null && evidencia.longitud != null ? (
                                       <>
                                         <span className="block font-mono text-[var(--muted)]">GPS: {evidencia.latitud.toFixed(6)}, {evidencia.longitud.toFixed(6)}</span>
-                                        <a href={`https://www.google.com/maps?q=${evidencia.latitud},${evidencia.longitud}`} target="_blank" rel="noreferrer" className="block text-sky-300 underline">Ver ubicación en el mapa</a>
+                                        <a href={`https://www.google.com/maps?q=${evidencia.latitud},${evidencia.longitud}`} target="_blank" rel="noreferrer" className="block text-[var(--accent)] underline">Ver ubicación en el mapa</a>
                                       </>
                                     ) : <span className="block text-amber-300">Sin ubicación GPS</span>}
                                   </div>
@@ -682,7 +687,7 @@ export default function TmsPage() {
                               </div>
                             ) : null}
                           </div>
-                          <p className="mt-2 text-[10px] text-amber-200/80">
+                          <p className="mt-2 text-[10px] text-amber-700/90">
                             Información interna: los viáticos de este viaje NO se muestran aquí ni en ninguna vista de
                             cliente — se administran desde Programación.
                           </p>
@@ -733,9 +738,9 @@ export default function TmsPage() {
                 <tbody>
                   {bitacora.map((a) => (
                     <tr key={a.id} className="border-t border-[var(--border)] align-top">
-                      <td className="whitespace-nowrap px-2 py-1.5 font-mono text-[10px] text-sky-300">{a.creadoEn || "—"}</td>
+                      <td className="whitespace-nowrap px-2 py-1.5 font-mono text-[10px] text-[var(--accent)]">{a.creadoEn || "—"}</td>
                       <td className="px-2 py-1.5 font-medium">{a.usuario || "—"}</td>
-                      <td className="px-2 py-1.5 text-amber-200">{labelAccionAud(a.accion)}</td>
+                      <td className="px-2 py-1.5 text-amber-700">{labelAccionAud(a.accion)}</td>
                       <td className="px-2 py-1.5 text-[var(--muted)]">{a.detalle || "—"}</td>
                     </tr>
                   ))}
