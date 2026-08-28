@@ -149,6 +149,13 @@ export async function requireTenantModulo(
   }
 
   if (editar) {
+    // Contabilidad: una revocación explícita no se recupera por el rol.
+    // Mantiene el contrato legado crear O editar de este guard, sin afectar otros módulos.
+    if (modulo === "contabilidad" &&
+        !tienePermiso(perms, modulo, "crear") &&
+        !tienePermiso(perms, modulo, "editar")) {
+      return { error: NextResponse.json({ error: "Solo lectura." }, { status: 403 }) };
+    }
     const puedeEditar =
       puedeEditarModulo(session.rol, modulo) ||
       tienePermiso(perms, modulo, "editar") ||
