@@ -298,6 +298,16 @@ export function AppShell({
         key: "programacion",
       });
     }
+    // TMS-REPORTES-1: mismo criterio de audiencia que Programación arriba
+    // (es una vista de reportes sobre los mismos viajes, solo lectura) —
+    // no se crea un permiso nuevo.
+    if (puedeProgramacion) {
+      opsLinks.push({
+        href: `${base}/tms/reportes`,
+        label: "Reportes de viajes",
+        key: "tms-reportes",
+      });
+    }
     // Viáticos (VIAT-3): módulo propio, visible con CUALQUIERA de los tres
     // permisos de viáticos (viaticos/viaticos_autorizar/viaticos_pagar) —
     // "viaticos" no es un Modulo de empresa/rol (roles.ts), es un permiso
