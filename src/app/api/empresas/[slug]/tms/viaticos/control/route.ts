@@ -12,19 +12,22 @@ const ESTADOS: EstadoViatico[] = ["PROGRAMADO", "AUTORIZADO", "ENTREGADO", "LIQU
  * VIAT-3 — listado global para el módulo "Operaciones > Viáticos" (antes
  * "Control de Viáticos" de TMS, VIAT-1 punto 7 — misma función de backend
  * reutilizada, ver src/lib/tms/viaticos.ts). Permiso: CUALQUIERA de
- * viaticos/viaticos_autorizar/viaticos_pagar con `ver`
+ * viaticos/viaticos_autorizar/viaticos_pagar/viaticos_liquidar con `ver`
  * (requireTenantViaticosAny) — un facturador que solo tiene
- * `viaticos_pagar` también debe poder ver este listado para ubicar sus
- * AUTORIZADOS.
+ * `viaticos_pagar`/`viaticos_liquidar` también debe poder ver este
+ * listado para ubicar sus AUTORIZADOS/ENTREGADOS.
  *
  * Devuelve además flags de capacidad (puedeAutorizar/puedePagar/
  * puedeLiquidar/puedeVerBancario) para que la UI oculte botones que el
  * usuario no puede ejecutar — la seguridad real sigue en cada endpoint de
- * acción (requireTenantViaticosAutorizar/Pagar/Viaticos), nunca en estos
- * flags. `puedeVerBancario` controla si esta respuesta incluye
- * banco/cuenta (ver incluirBancario en listarViaticosControl) — un
- * usuario sin `viaticos_pagar:ver` JAMÁS recibe esos campos, ni siquiera
- * en la respuesta cruda (no es solo ocultarlos en la UI).
+ * acción (autorizar → requireTenantViaticosAutorizar, pagar/entregar →
+ * requireTenantViaticosPagar, liquidar → requireTenantViaticosLiquidar —
+ * cada uno con su propio permiso explícito, VIATICOS-FIRMA: liquidar YA
+ * NO usa el genérico `viaticos:editar`), nunca en estos flags.
+ * `puedeVerBancario` controla si esta respuesta incluye banco/cuenta (ver
+ * incluirBancario en listarViaticosControl) — un usuario sin
+ * `viaticos_pagar:ver` JAMÁS recibe esos campos, ni siquiera en la
+ * respuesta cruda (no es solo ocultarlos en la UI).
  */
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;

@@ -38,16 +38,32 @@ CREATE TABLE IF NOT EXISTS firmas_electronicas (
   CONSTRAINT fk_firma_empleado FOREIGN KEY (empleado_id) REFERENCES empleados(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Notas de uso previstas para Viáticos (aplicación, no DDL):
+-- Notas de uso REALES para Viáticos (aplicación, no DDL — ver
+-- src/lib/tms/viaticos.ts autorizarViatico/liquidarViatico y
+-- src/lib/firmas/firmas-internas.ts):
 --   accion         = 'AUTORIZAR_VIATICO' | 'LIQUIDAR_VIATICO'
 --   modulo         = 'VIATICOS'
 --   entidad_tipo   = 'VIATICO'
 --   entidad_id     = tms_viaticos.id
 --   metodo         = 'PASSWORD' (único método activado; 'PIN' queda
---                    contemplado por el tipo pero no se usa)
---   resultado      = 'FALLIDA' se registra también en un intento de
---                    contraseña incorrecta (control de fuerza bruta),
---                    pero NUNCA autoriza la transición de estado.
+--                    contemplado por la columna VARCHAR(20) del esquema,
+--                    pero ningún código de este proyecto lo escribe).
+--   resultado      = SIEMPRE 'EXITOSA' en la implementación activa: este
+--                    ticket solo persiste firmas EXITOSAS. Un intento con
+--                    contraseña incorrecta (verificarPasswordUsuarioActual
+--                    devuelve false) responde 401 ANTES de abrir la
+--                    transacción — NO inserta ninguna fila en
+--                    firmas_electronicas, NO cambia el estado del
+--                    viático, NO registra auditoría transaccional. El
+--                    valor 'FALLIDA' del ENUM queda reservado por el
+--                    esquema (mismo diseño original de
+--                    FIRMA-ELECTRONICA-DISENO.md §3, que sí contemplaba
+--                    registrar intentos fallidos como control de fuerza
+--                    bruta) pero NINGÚN código de este proyecto lo
+--                    escribe todavía — registrar intentos fallidos de
+--                    autenticación queda deliberadamente FUERA de
+--                    alcance de esta activación simbólica; implementarlo
+--                    requeriría su propio ticket.
 -- La tabla es de solo-inserción a nivel de aplicación (append-only): no
 -- se expone ningún UPDATE/DELETE de firmas desde la UI ni desde el
 -- backend de Viáticos.

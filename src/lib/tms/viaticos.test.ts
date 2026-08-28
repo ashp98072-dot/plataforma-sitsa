@@ -80,13 +80,16 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("autorizarViatico — PROGRAMADO -> AUTORIZADO con firma", () => {
-  it("5) contraseña incorrecta NO autoriza ni firma — nunca abre la transacción", async () => {
+  it("5) contraseña incorrecta: 401, NO crea firma, NO cambia estado (ningún UPDATE), NO registra auditoría transaccional — nunca abre la transacción", async () => {
     vi.mocked(verificarPasswordUsuarioActual).mockResolvedValue(false);
     const r = await autorizarViatico(7, 10, "jefe1", firma);
     expect(r.ok).toBe(false);
     if (!r.ok) { expect(r.status).toBe(401); expect(r.error).toContain("Contraseña incorrecta"); }
     expect(getConnection).not.toHaveBeenCalled();
     expect(crearFirmaInterna).not.toHaveBeenCalled();
+    expect(conn.execute).not.toHaveBeenCalled(); // ningún UPDATE de estado
+    expect(registrarAuditoriaTx).not.toHaveBeenCalled();
+    expect(conn.commit).not.toHaveBeenCalled();
   });
 
   it("6) autorización EXITOSA crea la firma con accion=AUTORIZAR_VIATICO/modulo=VIATICOS/entidad_tipo=VIATICO", async () => {
@@ -205,6 +208,18 @@ describe("liquidarViatico — ENTREGADO -> LIQUIDADO, regla crítica de diferenc
     if (!r.ok) expect(r.status).toBe(400);
     expect(verificarPasswordUsuarioActual).not.toHaveBeenCalled();
     expect(getConnection).not.toHaveBeenCalled();
+  });
+
+  it("5) contraseña incorrecta: 401, NO crea firma, NO cambia estado, NO registra auditoría transaccional — nunca abre la transacción", async () => {
+    vi.mocked(verificarPasswordUsuarioActual).mockResolvedValue(false);
+    const r = await liquidarViatico(7, 10, { gastosComprobados: "900.00", reintegro: "100.00", observaciones: null }, "fact1", firmaFacturador);
+    expect(r.ok).toBe(false);
+    if (!r.ok) { expect(r.status).toBe(401); expect(r.error).toContain("Contraseña incorrecta"); }
+    expect(getConnection).not.toHaveBeenCalled();
+    expect(crearFirmaInterna).not.toHaveBeenCalled();
+    expect(conn.execute).not.toHaveBeenCalled();
+    expect(registrarAuditoriaTx).not.toHaveBeenCalled();
+    expect(conn.commit).not.toHaveBeenCalled();
   });
 });
 

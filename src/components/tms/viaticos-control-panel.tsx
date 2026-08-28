@@ -77,11 +77,13 @@ const METODO_PAGO_LABEL: Record<string, string> = {
  * no se crea ningún motor nuevo, solo se agregan selección + botones que
  * llaman los endpoints atómicos ya existentes uno por uno.
  *
- * Autorizar (individual y masivo) requiere `viaticos_autorizar:editar`.
- * Liquidar requiere `viaticos:editar`. Pagar/entregar vive en su propio
- * panel separado (ViaticosPorPagarPanel) — este NO lo duplica. Banco/
- * cuenta solo se muestran si el backend los incluyó en la respuesta
- * (`puedeVerBancario`) — nunca se piden ni se muestran por el cliente.
+ * Autorizar (individual y masivo, con firma) requiere
+ * `viaticos_autorizar:editar`. Liquidar (con firma) requiere
+ * `viaticos_liquidar:editar` — VIATICOS-FIRMA: YA NO el genérico
+ * `viaticos:editar`. Pagar/entregar vive en su propio panel separado
+ * (ViaticosPorPagarPanel) — este NO lo duplica. Banco/cuenta solo se
+ * muestran si el backend los incluyó en la respuesta (`puedeVerBancario`)
+ * — nunca se piden ni se muestran por el cliente.
  */
 export default function ViaticosControlPanel({ slug }: { slug: string }) {
   const [items, setItems] = useState<ViaticoControlRow[]>([]);
