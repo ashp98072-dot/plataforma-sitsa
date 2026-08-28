@@ -4,12 +4,14 @@ import {
   badgeFinancieroClase,
   calcularTotalLineas,
   calcularTotalPaginas,
+  detalleCorrespondeAFactura,
   esBorrador,
   esEmitida,
   evaluarSeleccion,
   interpretarError,
   lineaDifiereDeTarifa,
   puedeOfrecerAnular,
+  puedeRegistrarOtroPago,
   validarEmision,
 } from "./ui-logica";
 
@@ -150,6 +152,34 @@ describe("15/16) calcularTotalPaginas — misma fórmula que ya usa TMS-REPORTES
     expect(calcularTotalPaginas(120, 50)).toBe(3);
     expect(calcularTotalPaginas(150, 50)).toBe(3);
     expect(calcularTotalPaginas(151, 50)).toBe(4);
+  });
+});
+
+describe("HOTFIX PRE-MERGE PR #114 — Hallazgo 2: el detalle nunca corresponde a otra factura", () => {
+  it("detalle==null nunca corresponde a nada (se sigue mostrando 'Cargando…', nunca contenido viejo)", () => {
+    expect(detalleCorrespondeAFactura(null, 5)).toBe(false);
+  });
+  it("detalle de la factura #5 corresponde cuando la fila expandida es la #5", () => {
+    expect(detalleCorrespondeAFactura({ factura: { id: 5 } }, 5)).toBe(true);
+  });
+  it("detalle de la factura #5 NO corresponde si la fila expandida es la #7 (fetch viejo que llegó tarde)", () => {
+    expect(detalleCorrespondeAFactura({ factura: { id: 5 } }, 7)).toBe(false);
+  });
+});
+
+describe("HOTFIX PRE-MERGE PR #114 — Hallazgo 3: no ofrecer pago con saldo 0", () => {
+  it("Emitida + saldo 0 → NO se puede registrar otro pago (factura ya cobrada)", () => {
+    expect(puedeRegistrarOtroPago("Emitida", 0)).toBe(false);
+  });
+  it("Emitida + saldo negativo (defensivo, no debería ocurrir) → tampoco se ofrece", () => {
+    expect(puedeRegistrarOtroPago("Emitida", -0.01)).toBe(false);
+  });
+  it("Emitida + saldo > 0 → SÍ se puede registrar pago", () => {
+    expect(puedeRegistrarOtroPago("Emitida", 100)).toBe(true);
+  });
+  it("Borrador o Anulada con saldo > 0 (no debería pasar, pero por si acaso) → nunca se ofrece pago fuera de Emitida", () => {
+    expect(puedeRegistrarOtroPago("Borrador", 100)).toBe(false);
+    expect(puedeRegistrarOtroPago("Anulada", 100)).toBe(false);
   });
 });
 

@@ -47,6 +47,21 @@ export function lineaDifiereDeTarifa(linea: { tarifaComercial: number | null; mo
   return linea.tarifaComercial != null && linea.montoAsignado !== linea.tarifaComercial;
 }
 
+/**
+ * HOTFIX PRE-MERGE PR #114 (Hallazgo 2) — segunda defensa contra mostrar
+ * el detalle de UNA factura bajo la fila de OTRA: incluso si `detalle`
+ * quedó en memoria por una carrera entre dos aperturas, esto exige que
+ * corresponda exactamente a la factura que está expandida en pantalla.
+ * La primera defensa (limpiar `detalle` a `null` ANTES del fetch) vive en
+ * facturas-panel.tsx (`cargarDetalle`).
+ */
+export function detalleCorrespondeAFactura(
+  detalle: { factura: { id: number } } | null,
+  facturaEsperadaId: number,
+): boolean {
+  return detalle != null && detalle.factura.id === facturaEsperadaId;
+}
+
 /** Fase H — Borrador editable; Emitida/Anulada congeladas. */
 export function esBorrador(estadoAdmin: EstadoAdmin): boolean {
   return estadoAdmin === "Borrador";
@@ -55,6 +70,17 @@ export function esBorrador(estadoAdmin: EstadoAdmin): boolean {
 /** Fase J — pagos solo contra una factura Emitida. */
 export function esEmitida(estadoAdmin: EstadoAdmin): boolean {
   return estadoAdmin === "Emitida";
+}
+
+/**
+ * HOTFIX PRE-MERGE PR #114 (Hallazgo 3) — no ofrecer "Registrar pago"
+ * cuando el saldo ya es 0: el backend rechaza correctamente el sobrepago,
+ * pero la UI no debe ofrecer una acción que ya sabe que es imposible.
+ * Autoridad final sigue siendo el backend (registrarPago en
+ * src/lib/facturacion/facturas.ts).
+ */
+export function puedeRegistrarOtroPago(estadoAdmin: EstadoAdmin, saldo: number): boolean {
+  return esEmitida(estadoAdmin) && saldo > 0;
 }
 
 /** Fase K — se puede pedir anular mientras no esté ya Anulada (el backend decide si hay pagos que lo bloqueen). */

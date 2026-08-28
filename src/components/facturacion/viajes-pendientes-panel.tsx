@@ -16,8 +16,11 @@ type ViajePendiente = {
   planId: number;
   codigo: string;
   fechaPlan: string;
-  clienteId: number | null;
-  cliente: string | null;
+  // HOTFIX PRE-MERGE PR #114 (Hallazgo 1): el backend garantiza
+  // cli.id IS NOT NULL para todo viaje que llega aquí (ver
+  // listarViajesPendientes/condicionesViajesPendientes) — nunca null.
+  clienteId: number;
+  cliente: string;
   placa: string | null;
   tarifaComercial: number | null;
   cerradoEn: string | null;
@@ -104,7 +107,7 @@ export function ViajesPendientesPanel({ slug, puedeCrear, onFacturaCreada }: Pro
   // y aun así debe seguir disponible para armar la factura.
   const [seleccion, setSeleccion] = useState<Map<number, ViajePendiente>>(new Map());
   const [avisoSeleccion, setAvisoSeleccion] = useState("");
-  const clienteSeleccionado = useMemo(() => {
+  const clienteSeleccionado = useMemo((): { id: number; nombre: string } | null => {
     const first = seleccion.values().next().value as ViajePendiente | undefined;
     return first ? { id: first.clienteId, nombre: first.cliente } : null;
   }, [seleccion]);
@@ -140,8 +143,8 @@ export function ViajesPendientesPanel({ slug, puedeCrear, onFacturaCreada }: Pro
     return (
       <FacturaBorradorForm
         slug={slug}
-        clienteId={clienteSeleccionado.id!}
-        clienteNombre={clienteSeleccionado.nombre ?? `Cliente #${clienteSeleccionado.id}`}
+        clienteId={clienteSeleccionado.id}
+        clienteNombre={clienteSeleccionado.nombre}
         lineasIniciales={lineas}
         onGuardado={(facturaId) => {
           setCreando(false);
@@ -191,7 +194,7 @@ export function ViajesPendientesPanel({ slug, puedeCrear, onFacturaCreada }: Pro
             Crear factura con seleccionados ({seleccion.size})
           </button>
           {clienteSeleccionado ? (
-            <span className="text-xs text-[var(--muted)]">Cliente: {clienteSeleccionado.nombre ?? `#${clienteSeleccionado.id}`}</span>
+            <span className="text-xs text-[var(--muted)]">Cliente: {clienteSeleccionado.nombre}</span>
           ) : null}
         </div>
       ) : null}
@@ -223,7 +226,7 @@ export function ViajesPendientesPanel({ slug, puedeCrear, onFacturaCreada }: Pro
                   ) : null}
                   <td className="whitespace-nowrap px-2 py-1.5 text-xs">{v.fechaPlan}</td>
                   <td className="px-2 py-1.5 font-mono text-xs">{v.codigo}</td>
-                  <td className="px-2 py-1.5 text-xs">{v.cliente ?? "—"}</td>
+                  <td className="px-2 py-1.5 text-xs">{v.cliente}</td>
                   <td className="px-2 py-1.5 text-xs">{v.placa ?? "—"}</td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-xs">{moneda(v.tarifaComercial)}</td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-xs">{v.cerradoEn ? v.cerradoEn.replace("T", " ") : "—"}</td>

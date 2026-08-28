@@ -6,10 +6,12 @@ import {
   badgeAdminClase,
   badgeFinancieroClase,
   calcularTotalPaginas,
+  detalleCorrespondeAFactura,
   esBorrador,
   esEmitida,
   interpretarError,
   puedeOfrecerAnular,
+  puedeRegistrarOtroPago,
   validarEmision,
   type EstadoAdmin,
   type EstadoFinanciero,
@@ -142,6 +144,36 @@ export function FacturasPanel({ slug, puedeCrear, puedeEditar, abrirFacturaId, o
   const [registrandoPago, setRegistrandoPago] = useState(false);
   const [errorPago, setErrorPago] = useState("");
 
+  // HOTFIX PRE-MERGE PR #114 (Hallazgo 2) — información financiera: el
+  // detalle de UNA factura nunca puede seguir en pantalla mientras se
+  // carga o falla la carga de OTRA. Doble defensa: (a) `setDetalle(null)`
+  // ANTES del fetch, para que un fetch lento nunca deje ver el detalle
+  // viejo bajo la fila nueva; (b) el render abajo vuelve a comprobar
+  // `detalle.factura.id === f.id` antes de mostrar contenido, por si
+  // dos aperturas se solapan en el tiempo.
+  const [errorDetalle, setErrorDetalle] = useState("");
+
+  const cargarDetalle = useCallback(async (facturaId: number) => {
+    setDetalle(null);
+    setErrorDetalle("");
+    setCargandoDetalle(true);
+    try {
+      const res = await fetch(`/api/empresas/${slug}/facturacion/facturas/${facturaId}`);
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.factura?.id === facturaId) {
+        setDetalle(data);
+      } else if (res.ok) {
+        setErrorDetalle("La respuesta del servidor no corresponde a esta factura. Reintenta.");
+      } else {
+        setErrorDetalle(interpretarError(data, "No se pudo cargar el detalle de la factura."));
+      }
+    } catch {
+      setErrorDetalle("Error de conexión al cargar el detalle.");
+    } finally {
+      setCargandoDetalle(false);
+    }
+  }, [slug]);
+
   const abrirDetalle = useCallback(async (facturaId: number) => {
     if (expandido === facturaId) { setExpandido(null); return; }
     setExpandido(facturaId);
@@ -150,15 +182,8 @@ export function FacturasPanel({ slug, puedeCrear, puedeEditar, abrirFacturaId, o
     setConfirmandoAnular(false);
     setMostrarPago(false);
     setErrorEmitir(""); setErrorAnular(""); setErrorPago("");
-    setCargandoDetalle(true);
-    try {
-      const res = await fetch(`/api/empresas/${slug}/facturacion/facturas/${facturaId}`);
-      const data = await res.json().catch(() => ({}));
-      if (res.ok) setDetalle(data);
-    } finally {
-      setCargandoDetalle(false);
-    }
-  }, [slug, expandido]);
+    await cargarDetalle(facturaId);
+  }, [expandido, cargarDetalle]);
 
   // Cruce desde Viajes pendientes: al crear una factura, el padre pide
   // abrirla aquí directamente.
@@ -166,16 +191,15 @@ export function FacturasPanel({ slug, puedeCrear, puedeEditar, abrirFacturaId, o
     if (abrirFacturaId == null) return;
     void (async () => {
       await cargar(1);
-      await abrirDetalle(abrirFacturaId);
+      setExpandido(abrirFacturaId);
+      await cargarDetalle(abrirFacturaId);
       onAbierta();
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [abrirFacturaId]);
 
   async function refrescarDetalle(facturaId: number) {
-    const res = await fetch(`/api/empresas/${slug}/facturacion/facturas/${facturaId}`);
-    const data = await res.json().catch(() => ({}));
-    if (res.ok) setDetalle(data);
+    await cargarDetalle(facturaId);
     await cargar(page);
     onCambio();
   }
@@ -314,7 +338,19 @@ export function FacturasPanel({ slug, puedeCrear, puedeEditar, abrirFacturaId, o
                 {expandido === f.id ? (
                   <tr className="border-t border-[var(--border)] bg-[var(--panel)]">
                     <td colSpan={9} className="px-3 py-3">
-                      {cargandoDetalle || !detalle ? (
+                      {cargandoDetalle ? (
+                        <p className="text-xs text-[var(--muted)]">Cargando…</p>
+                      ) : errorDetalle ? (
+                        <div className="space-y-1.5 text-xs">
+                          <p className="text-rose-500">{errorDetalle}</p>
+                          <button type="button" className="rounded border border-[var(--border)] px-2.5 py-1 text-[var(--text)]" onClick={() => void cargarDetalle(f.id)}>
+                            Reintentar
+                          </button>
+                        </div>
+                      ) : !detalle || !detalleCorrespondeAFactura(detalle, f.id) ? (
+                        // Segunda defensa: nunca mostrar contenido de OTRA
+                        // factura si, por lo que sea, `detalle` quedó
+                        // desalineado con la fila expandida.
                         <p className="text-xs text-[var(--muted)]">Cargando…</p>
                       ) : editandoBorrador ? (
                         <FacturaBorradorForm
@@ -406,30 +442,37 @@ export function FacturasPanel({ slug, puedeCrear, puedeEditar, abrirFacturaId, o
                             )
                           ) : null}
 
-                          {/* Fase J: pagos — solo Emitida */}
-                          {puedeCrear && esEmitida(detalle.factura.estadoAdmin) ? (
+                          {/* Fase J: pagos — solo Emitida. HOTFIX PR #114
+                              (Hallazgo 3): con saldo 0 no se ofrece registrar
+                              otro pago (acción imposible) — se informa
+                              "Factura cobrada" en su lugar. */}
+                          {esEmitida(detalle.factura.estadoAdmin) ? (
                             <div>
                               <p className="mb-1 text-xs text-[var(--muted)]">Saldo actual: <span className="font-medium text-[var(--text)]">{moneda(detalle.factura.saldo)}</span></p>
-                              {mostrarPago ? (
-                                <div className="space-y-1.5 rounded border border-[var(--border)] p-2 text-xs">
-                                  <div className="grid gap-2 sm:grid-cols-2">
-                                    <label className="flex flex-col gap-1">Fecha de pago<input className={inputCls} type="date" value={pagoFecha} onChange={(e) => setPagoFecha(e.target.value)} /></label>
-                                    <label className="flex flex-col gap-1">Monto<input className={inputCls} type="number" step="0.01" min={0} max={detalle.factura.saldo} value={pagoMonto} onChange={(e) => setPagoMonto(e.target.value)} /></label>
-                                    <label className="flex flex-col gap-1">Medio de pago<input className={inputCls} value={pagoMedio} onChange={(e) => setPagoMedio(e.target.value)} /></label>
-                                    <label className="flex flex-col gap-1">Referencia<input className={inputCls} value={pagoReferencia} onChange={(e) => setPagoReferencia(e.target.value)} /></label>
-                                    <label className="flex flex-col gap-1 sm:col-span-2">Observaciones<input className={inputCls} value={pagoObs} onChange={(e) => setPagoObs(e.target.value)} /></label>
+                              {puedeCrear && puedeRegistrarOtroPago(detalle.factura.estadoAdmin, detalle.factura.saldo) ? (
+                                mostrarPago ? (
+                                  <div className="space-y-1.5 rounded border border-[var(--border)] p-2 text-xs">
+                                    <div className="grid gap-2 sm:grid-cols-2">
+                                      <label className="flex flex-col gap-1">Fecha de pago<input className={inputCls} type="date" value={pagoFecha} onChange={(e) => setPagoFecha(e.target.value)} /></label>
+                                      <label className="flex flex-col gap-1">Monto<input className={inputCls} type="number" step="0.01" min={0} max={detalle.factura.saldo} value={pagoMonto} onChange={(e) => setPagoMonto(e.target.value)} /></label>
+                                      <label className="flex flex-col gap-1">Medio de pago<input className={inputCls} value={pagoMedio} onChange={(e) => setPagoMedio(e.target.value)} /></label>
+                                      <label className="flex flex-col gap-1">Referencia<input className={inputCls} value={pagoReferencia} onChange={(e) => setPagoReferencia(e.target.value)} /></label>
+                                      <label className="flex flex-col gap-1 sm:col-span-2">Observaciones<input className={inputCls} value={pagoObs} onChange={(e) => setPagoObs(e.target.value)} /></label>
+                                    </div>
+                                    {errorPago ? <p className="text-rose-500">{errorPago}</p> : null}
+                                    <div className="flex gap-2 pt-1">
+                                      <button type="button" disabled={registrandoPago} className="rounded bg-emerald-600 px-2.5 py-1 font-medium text-white disabled:opacity-50" onClick={() => void registrarPago(f.id)}>
+                                        {registrandoPago ? "Registrando…" : "Guardar pago"}
+                                      </button>
+                                      <button type="button" disabled={registrandoPago} className="rounded border border-[var(--border)] px-2.5 py-1 text-[var(--text)]" onClick={() => { setMostrarPago(false); setErrorPago(""); }}>Cancelar</button>
+                                    </div>
                                   </div>
-                                  {errorPago ? <p className="text-rose-500">{errorPago}</p> : null}
-                                  <div className="flex gap-2 pt-1">
-                                    <button type="button" disabled={registrandoPago} className="rounded bg-emerald-600 px-2.5 py-1 font-medium text-white disabled:opacity-50" onClick={() => void registrarPago(f.id)}>
-                                      {registrandoPago ? "Registrando…" : "Guardar pago"}
-                                    </button>
-                                    <button type="button" disabled={registrandoPago} className="rounded border border-[var(--border)] px-2.5 py-1 text-[var(--text)]" onClick={() => { setMostrarPago(false); setErrorPago(""); }}>Cancelar</button>
-                                  </div>
-                                </div>
-                              ) : (
-                                <button type="button" className="rounded bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white" onClick={() => setMostrarPago(true)}>Registrar pago</button>
-                              )}
+                                ) : (
+                                  <button type="button" className="rounded bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white" onClick={() => setMostrarPago(true)}>Registrar pago</button>
+                                )
+                              ) : detalle.factura.saldo <= 0 ? (
+                                <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-medium text-white">Factura cobrada</span>
+                              ) : null}
                             </div>
                           ) : null}
 

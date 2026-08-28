@@ -28,8 +28,10 @@ type ViajePendienteApi = {
   planId: number;
   codigo: string;
   fechaPlan: string;
-  clienteId: number | null;
-  cliente: string | null;
+  // HOTFIX PRE-MERGE PR #114 (Hallazgo 1): el backend garantiza
+  // cli.id IS NOT NULL — nunca null aquí.
+  clienteId: number;
+  cliente: string;
   placa: string | null;
   tarifaComercial: number | null;
   cerradoEn: string | null;

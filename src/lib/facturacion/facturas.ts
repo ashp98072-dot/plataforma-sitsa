@@ -48,8 +48,14 @@ export type ViajePendiente = {
   planId: number;
   codigo: string;
   fechaPlan: string;
-  clienteId: number | null;
-  cliente: string | null;
+  /**
+   * HOTFIX PRE-MERGE PR #114 (Hallazgo 1): NUNCA null aquí — la condición
+   * `cli.id IS NOT NULL` en `condicionesViajesPendientes` garantiza que
+   * todo viaje devuelto por listarViajesPendientes tiene un `clientes.id`
+   * real vinculado. Un viaje sin bridge simplemente no aparece.
+   */
+  clienteId: number;
+  cliente: string;
   placa: string | null;
   tarifaComercial: number | null;
   cerradoEn: string | null;
@@ -263,6 +269,13 @@ export async function obtenerFactura(
  * en fact_factura_viajes — como anular BORRA esa fila, "sin fila" es
  * siempre sinónimo de "nunca facturado o la factura que lo tenía se
  * anuló". Esta es la única fuente para armar una factura NUEVA.
+ *
+ * HOTFIX PRE-MERGE PR #114 (Hallazgo 1): `cli.id IS NOT NULL` se agrega
+ * AQUÍ (una sola vez, compartido por listado/COUNT/KPI — todos usan este
+ * mismo array de condiciones sobre el mismo `LEFT JOIN clientes cli`) —
+ * un viaje Cerrado sin bridge clientes.tms_cliente_id = tms_clientes.id
+ * NUNCA debe aparecer como facturable, aunque técnicamente esté Cerrado y
+ * sin factura viva: no hay ningún `clientes.id` al que asignárselo.
  */
 function condicionesViajesPendientes(
   empresaId: number,
@@ -272,6 +285,7 @@ function condicionesViajesPendientes(
     "p.empresa_id = ?",
     "p.estado = 'Cerrado'",
     "NOT EXISTS (SELECT 1 FROM fact_factura_viajes ffv WHERE ffv.plan_id = p.id)",
+    "cli.id IS NOT NULL",
   ];
   const params: (string | number)[] = [empresaId];
   // filtros.clienteId es un clientes.id (espacio de Facturación) — se
@@ -375,10 +389,14 @@ export async function listarViajesPendientes(
     query<RowDataPacket[]>(`SELECT COUNT(*) AS total ${from} WHERE ${where}`, params),
   ]);
   return {
+    // `cli.id IS NOT NULL` en el WHERE ya garantiza que cliente_id/cliente
+    // vienen siempre no nulos — Number()/String() aquí, nunca `??`/`| null`,
+    // para que un cambio futuro que rompa esa garantía falle ruidosamente
+    // (NaN/"null") en vez de colar silenciosamente un `null`.
     items: rows.map((r) => ({
       planId: Number(r.id), codigo: String(r.codigo), fechaPlan: String(r.fecha_plan),
-      clienteId: r.cliente_id != null ? Number(r.cliente_id) : null,
-      cliente: r.cliente != null ? String(r.cliente) : null,
+      clienteId: Number(r.cliente_id),
+      cliente: String(r.cliente),
       placa: r.placa != null ? String(r.placa) : null,
       tarifaComercial: r.tarifa_comercial != null ? Number(r.tarifa_comercial) : null,
       cerradoEn: r.cerrado_en != null ? String(r.cerrado_en) : null,
