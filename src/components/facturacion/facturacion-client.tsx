@@ -3,6 +3,10 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CuestionarioFields } from "@/components/clientes/cuestionario-fields";
+import { FacturasPanel } from "@/components/facturacion/facturas-panel";
+import { ViajesPendientesPanel } from "@/components/facturacion/viajes-pendientes-panel";
+import { useEmpresaSession } from "@/lib/empresa-session";
+import { tienePermiso } from "@/lib/permisos-shared";
 import type {
   RespuestasFacturacion,
   SeccionFacturacion,
@@ -15,8 +19,31 @@ type Props = {
   verClientes: boolean;
   editarClientes: boolean;
   /** Desde menú: Conta → empresa, Ops → clientes. */
-  vistaInicial?: "empresa" | "clientes" | "ayuda" | null;
+  vistaInicial?: "facturas" | "viajes-pendientes" | "empresa" | "clientes" | "ayuda" | null;
 };
+
+type KpisFacturacion = {
+  viajesPendientes: number;
+  valorPendiente: number;
+  facturasEmitidas: number;
+  valorFacturado: number;
+  pendienteCobro: number;
+  cobrado: number;
+};
+
+function moneda(v: number): string {
+  return `Q${v.toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function KpiCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2.5">
+      <p className="text-[10px] uppercase tracking-wide text-[var(--muted)]">{label}</p>
+      <p className="mt-0.5 text-lg font-semibold text-[var(--text)]">{value}</p>
+      {sub ? <p className="text-[10px] text-[var(--muted)]">{sub}</p> : null}
+    </div>
+  );
+}
 
 type ResumenCliente = {
   clienteId: number;
@@ -26,7 +53,7 @@ type ResumenCliente = {
   actualizadoAt: string | null;
 };
 
-type Tab = "empresa" | "clientes" | "ayuda";
+type Tab = "facturas" | "viajes-pendientes" | "empresa" | "clientes" | "ayuda";
 
 export function FacturacionClient({
   slug,
@@ -36,17 +63,30 @@ export function FacturacionClient({
   editarClientes,
   vistaInicial = null,
 }: Props) {
+  // FACT-1-UI (Fase L) — Facturas/Viajes pendientes se gatean por el
+  // permiso propio del módulo "facturacion" (el MISMO que exige
+  // requireTenantFacturacion en el backend), nunca por el alcance de rol
+  // del cuestionario (empresa/clientes) ni por "tms".
+  const { permisos } = useEmpresaSession();
+  const puedeVerFacturas = tienePermiso(permisos, "facturacion", "ver");
+  const puedeCrearFacturas = tienePermiso(permisos, "facturacion", "crear");
+  const puedeEditarFacturas = tienePermiso(permisos, "facturacion", "editar");
+
   const tabs = useMemo(() => {
     const list: { id: Tab; label: string }[] = [];
+    if (puedeVerFacturas) {
+      list.push({ id: "facturas", label: "Facturas" });
+      list.push({ id: "viajes-pendientes", label: "Viajes pendientes" });
+    }
     if (verEmpresa) {
-      list.push({ id: "empresa", label: "Facturación de la empresa" });
+      list.push({ id: "empresa", label: "Configuración empresa" });
     }
     if (verClientes) {
-      list.push({ id: "clientes", label: "Facturación por cliente" });
+      list.push({ id: "clientes", label: "Requisitos clientes" });
     }
     list.push({ id: "ayuda", label: "Cómo llenarlo" });
     return list;
-  }, [verEmpresa, verClientes]);
+  }, [puedeVerFacturas, verEmpresa, verClientes]);
 
   const tabInicial = useMemo((): Tab => {
     if (vistaInicial && tabs.some((t) => t.id === vistaInicial)) {
@@ -70,6 +110,25 @@ export function FacturacionClient({
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  // FACT-1-UI (Fase C) — KPI agregados SIEMPRE con SQL server-side sobre
+  // todo el universo de la empresa (GET .../facturas/kpi), nunca
+  // calculados aquí sobre una sola página del listado paginado.
+  const [kpi, setKpi] = useState<KpisFacturacion | null>(null);
+  const cargarKpi = useCallback(async () => {
+    if (!puedeVerFacturas) return;
+    const res = await fetch(`/api/empresas/${slug}/facturacion/facturas/kpi`);
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) setKpi((data.kpi ?? null) as KpisFacturacion | null);
+  }, [slug, puedeVerFacturas]);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void cargarKpi();
+  }, [cargarKpi]);
+
+  // Cruce Viajes pendientes → Facturas: al crear un Borrador se cambia de
+  // pestaña y se le pide a FacturasPanel que lo abra directamente.
+  const [facturaAAbrir, setFacturaAAbrir] = useState<number | null>(null);
 
   useEffect(() => {
     if (!tabs.some((t) => t.id === tab)) {
@@ -172,11 +231,15 @@ export function FacturacionClient({
     }
   }
 
-  const subtitulo = verEmpresa && !verClientes
-    ? "Contabilidad completa cómo factura esta empresa (FEL, cortes, crédito…)."
-    : verClientes && !verEmpresa
-      ? "Operaciones completa cómo se factura a cada cliente (NIT, OC, tarifa…)."
-      : "Contabilidad: empresa. Operaciones: por cliente. Cada uno llena su parte.";
+  const subtitulo = puedeVerFacturas
+    ? "Agrupa viajes Cerrados en facturas, emítelas y da seguimiento a sus pagos."
+    : verEmpresa && !verClientes
+      ? "Contabilidad completa cómo factura esta empresa (FEL, cortes, crédito…)."
+      : verClientes && !verEmpresa
+        ? "Operaciones completa cómo se factura a cada cliente (NIT, OC, tarifa…)."
+        : "Contabilidad: empresa. Operaciones: por cliente. Cada uno llena su parte.";
+
+  const mostrarKpi = (tab === "facturas" || tab === "viajes-pendientes") && kpi != null;
 
   return (
     <div className="space-y-5">
@@ -185,7 +248,7 @@ export function FacturacionClient({
           Facturación
         </p>
         <h1 className="mt-1 text-2xl font-semibold">
-          {verEmpresa && !verClientes
+          {puedeVerFacturas ? "Facturación clientes" : verEmpresa && !verClientes
             ? "Facturación de la empresa"
             : verClientes && !verEmpresa
               ? "Facturación por cliente"
@@ -216,6 +279,40 @@ export function FacturacionClient({
             </button>
           ))}
         </div>
+      ) : null}
+
+      {mostrarKpi && kpi ? (
+        <section className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+          <KpiCard label="Viajes pendientes de facturación" value={String(kpi.viajesPendientes)} />
+          <KpiCard label="Valor pendiente de facturación" value={moneda(kpi.valorPendiente)} />
+          <KpiCard label="Facturas emitidas" value={String(kpi.facturasEmitidas)} />
+          <KpiCard label="Valor facturado" value={moneda(kpi.valorFacturado)} />
+          <KpiCard label="Pendiente de cobro" value={moneda(kpi.pendienteCobro)} />
+          <KpiCard label="Cobrado" value={moneda(kpi.cobrado)} />
+        </section>
+      ) : null}
+
+      {tab === "facturas" && puedeVerFacturas ? (
+        <FacturasPanel
+          slug={slug}
+          puedeCrear={puedeCrearFacturas}
+          puedeEditar={puedeEditarFacturas}
+          abrirFacturaId={facturaAAbrir}
+          onAbierta={() => setFacturaAAbrir(null)}
+          onCambio={() => void cargarKpi()}
+        />
+      ) : null}
+
+      {tab === "viajes-pendientes" && puedeVerFacturas ? (
+        <ViajesPendientesPanel
+          slug={slug}
+          puedeCrear={puedeCrearFacturas}
+          onFacturaCreada={(facturaId) => {
+            setTab("facturas");
+            setFacturaAAbrir(facturaId);
+            void cargarKpi();
+          }}
+        />
       ) : null}
 
       {tab === "ayuda" ? (

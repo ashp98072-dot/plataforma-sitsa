@@ -46,6 +46,20 @@ export function alcanceFacturacion(rol: string): AlcanceFacturacion {
       editarClientes: false,
     };
   }
+  // FACT-1-UI — Facturador necesita llegar a "Facturación clientes" (ahí
+  // viven ahora las pestañas Facturas/Viajes pendientes, gateadas aparte
+  // por el permiso propio facturacion:ver/crear/editar, ver
+  // requireTenantFacturacion). Ve el cuestionario de requisitos por
+  // cliente en solo lectura (contexto útil al facturar) pero no lo edita
+  // — eso sigue siendo trabajo de Operaciones.
+  if (rol === "Facturador") {
+    return {
+      verEmpresa: false,
+      editarEmpresa: false,
+      verClientes: true,
+      editarClientes: false,
+    };
+  }
   return {
     verEmpresa: false,
     editarEmpresa: false,

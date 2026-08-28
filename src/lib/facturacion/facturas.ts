@@ -283,6 +283,61 @@ function condicionesViajesPendientes(
   return { condiciones, params };
 }
 
+export type KpisFacturacion = {
+  viajesPendientes: number;
+  valorPendiente: number;
+  facturasEmitidas: number;
+  valorFacturado: number;
+  pendienteCobro: number;
+  cobrado: number;
+};
+
+/**
+ * FACT-1-UI (Fase C) — KPI agregados con SQL (SUM/COUNT) sobre TODO el
+ * universo de la empresa, nunca sobre una página del listado paginado.
+ * Reutiliza EXACTAMENTE `condicionesViajesPendientes` (sin filtros) para
+ * "viajes pendientes" — la misma condición que decide si un viaje puede
+ * facturarse. Nunca se silencia el puente clientes↔TMS (mismo criterio
+ * que listarViajesPendientes).
+ */
+export async function obtenerKpisFacturacion(empresaId: number): Promise<KpisFacturacion> {
+  await asegurarSchemaClientes();
+  await asegurarVinculosTmsClientes(empresaId);
+
+  const { condiciones, params } = condicionesViajesPendientes(empresaId, {});
+  const where = condiciones.join(" AND ");
+  const [viajesRows, facturasRows] = await Promise.all([
+    query<RowDataPacket[]>(
+      `SELECT COUNT(*) AS total, COALESCE(SUM(p.tarifa_comercial), 0) AS valor
+       FROM tms_planes_viaje p
+       LEFT JOIN clientes cli ON cli.tms_cliente_id = p.cliente_id AND cli.empresa_id = p.empresa_id
+       WHERE ${where}`,
+      params,
+    ),
+    query<RowDataPacket[]>(
+      `SELECT COUNT(*) AS emitidas, COALESCE(SUM(f.monto_total), 0) AS valor_facturado,
+              COALESCE(SUM(pg.total_pagado), 0) AS cobrado
+       FROM fact_facturas f
+       LEFT JOIN (SELECT factura_id, SUM(monto) AS total_pagado FROM fact_pagos GROUP BY factura_id) pg
+         ON pg.factura_id = f.id
+       WHERE f.empresa_id = ? AND f.estado_admin = 'Emitida'`,
+      [empresaId],
+    ),
+  ]);
+  const v = viajesRows[0] ?? {};
+  const f = facturasRows[0] ?? {};
+  const valorFacturado = Number(f.valor_facturado ?? 0);
+  const cobrado = Number(f.cobrado ?? 0);
+  return {
+    viajesPendientes: Number(v.total ?? 0),
+    valorPendiente: Number(v.valor ?? 0),
+    facturasEmitidas: Number(f.emitidas ?? 0),
+    valorFacturado,
+    pendienteCobro: valorFacturado - cobrado,
+    cobrado,
+  };
+}
+
 export async function listarViajesPendientes(
   empresaId: number,
   filtros: { clienteId?: number; fechaDesde?: string; fechaHasta?: string } & Paginacion,

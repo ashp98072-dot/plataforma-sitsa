@@ -16,6 +16,7 @@ import {
   emitirFactura,
   listarFacturas,
   listarViajesPendientes,
+  obtenerKpisFacturacion,
   registrarPago,
   type ActorFacturacion,
 } from "./facturas";
@@ -390,6 +391,39 @@ describe("HOTFIX PRE-MERGE PR #113 — Hallazgo 1: el puente clientes↔TMS nunc
   it("asegurarSchemaClientes falla → listarViajesPendientes también rechaza (no solo el vínculo)", async () => {
     vi.mocked(asegurarSchemaClientes).mockRejectedValue(new Error("ER_BAD_DB_ERROR"));
     await expect(listarViajesPendientes(7, {})).rejects.toThrow("ER_BAD_DB_ERROR");
+  });
+});
+
+describe("FACT-1-UI — obtenerKpisFacturacion: agregado SQL sobre TODO el universo, nunca sobre una página", () => {
+  function mockKpiQuery(viajes: { total: number; valor: number }, facturas: { emitidas: number; valor_facturado: number; cobrado: number }) {
+    vi.mocked(query).mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM tms_planes_viaje")) return [{ total: viajes.total, valor: viajes.valor }] as unknown as Awaited<ReturnType<typeof query>>;
+      if (sql.includes("FROM fact_facturas")) return [facturas] as unknown as Awaited<ReturnType<typeof query>>;
+      throw new Error(`Consulta KPI inesperada: ${sql}`);
+    });
+  }
+
+  it("pendienteCobro = valorFacturado - cobrado (nunca guardado, siempre derivado)", async () => {
+    mockKpiQuery({ total: 3, valor: 1500 }, { emitidas: 2, valor_facturado: 5000, cobrado: 3800 });
+    const kpi = await obtenerKpisFacturacion(7);
+    expect(kpi).toEqual({
+      viajesPendientes: 3, valorPendiente: 1500, facturasEmitidas: 2,
+      valorFacturado: 5000, pendienteCobro: 1200, cobrado: 3800,
+    });
+  });
+
+  it("usa EXACTAMENTE la misma condición que listarViajesPendientes (Cerrado + NOT EXISTS fact_factura_viajes)", async () => {
+    mockKpiQuery({ total: 0, valor: 0 }, { emitidas: 0, valor_facturado: 0, cobrado: 0 });
+    await obtenerKpisFacturacion(7);
+    const [sqlViajes] = vi.mocked(query).mock.calls.find((c) => String(c[0]).includes("FROM tms_planes_viaje")) ?? [];
+    expect(sqlViajes).toContain("p.estado = 'Cerrado'");
+    expect(sqlViajes).toContain("NOT EXISTS (SELECT 1 FROM fact_factura_viajes ffv WHERE ffv.plan_id = p.id)");
+  });
+
+  it("puente clientes↔TMS roto → rechaza (mismo criterio de Hallazgo 1, nunca un KPI silenciosamente incompleto)", async () => {
+    vi.mocked(asegurarVinculosTmsClientes).mockRejectedValue(new Error("ER_LOCK_WAIT_TIMEOUT"));
+    await expect(obtenerKpisFacturacion(7)).rejects.toThrow("ER_LOCK_WAIT_TIMEOUT");
+    expect(query).not.toHaveBeenCalled();
   });
 });
 
