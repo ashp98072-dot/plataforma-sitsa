@@ -23,8 +23,13 @@ export type ResumenMensual = {
   mes: string;
   altas: number;
   bajas: number;
-  /** Suma de neto de todas las líneas de planilla cuyo periodo inicia en ese mes. */
+  /** Alias histórico del neto; se conserva para consumidores existentes. */
   costoNomina: number;
+  netoNomina: number | null;
+  costoRegistrado: number | null;
+  amonestaciones: number;
+  suspensiones: number;
+  despidos: number;
 };
 
 export async function obtenerEstadisticasDashboard(
@@ -179,14 +184,14 @@ export async function obtenerResumenGerencial(
   empresaId: number,
   meses = 6,
 ): Promise<ResumenMensual[]> {
-  const hoy = new Date();
+  const [anioActual, mesActual] = hoyLocal().split("-").map(Number);
   const rangos: { mes: string; desde: string; hasta: string }[] = [];
   for (let i = meses - 1; i >= 0; i--) {
-    const d = new Date(hoy.getFullYear(), hoy.getMonth() - i, 1);
-    const y = d.getFullYear();
-    const m = d.getMonth(); // 0-based
+    const d = new Date(Date.UTC(anioActual, mesActual - 1 - i, 1));
+    const y = d.getUTCFullYear();
+    const m = d.getUTCMonth(); // 0-based
     const desde = `${y}-${String(m + 1).padStart(2, "0")}-01`;
-    const ultimoDia = new Date(y, m + 1, 0).getDate();
+    const ultimoDia = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
     const hasta = `${y}-${String(m + 1).padStart(2, "0")}-${String(ultimoDia).padStart(2, "0")}`;
     rangos.push({ mes: `${y}-${String(m + 1).padStart(2, "0")}`, desde, hasta });
   }
@@ -219,10 +224,14 @@ export async function obtenerResumenGerencial(
         ),
         consultaSegura(
           "costoNomina",
-          `SELECT COALESCE(SUM(l.neto), 0) AS total
+          `SELECT COALESCE(SUM(l.neto), 0) AS total,
+                  COALESCE(SUM(COALESCE(l.sueldo_base, 0) + COALESCE(l.bono_incentivo, 0)
+                    + COALESCE(l.bono_herramientas, 0) + COALESCE(l.otros_ingresos, 0)
+                    + COALESCE(l.igss_patronal, 0)), 0) AS costo_registrado
            FROM rrhh_planilla_lineas l
            INNER JOIN rrhh_planilla_periodos p ON p.id = l.periodo_id
            WHERE l.empresa_id = ? AND p.empresa_id = ?
+             AND p.estado IN ('Cerrada', 'Pagada')
              AND p.fecha_inicio BETWEEN ? AND ?`,
           [empresaId, empresaId, desde, hasta],
         ),
@@ -243,6 +252,8 @@ export async function obtenerResumenGerencial(
         altas: Number(altasRows[0]?.total ?? 0),
         bajas: Number(bajasRows[0]?.total ?? 0),
         costoNomina: Number(costoRows[0]?.total ?? 0),
+        netoNomina: costoRows.length ? Number(costoRows[0].total) : null,
+        costoRegistrado: costoRows.length ? Number(costoRows[0].costo_registrado) : null,
         amonestaciones: bitacoraPorTipo.get("Amonestacion") ?? 0,
         suspensiones: bitacoraPorTipo.get("Suspension") ?? 0,
         despidos: bitacoraPorTipo.get("Despido") ?? 0,

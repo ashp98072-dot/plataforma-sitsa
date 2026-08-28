@@ -1,6 +1,8 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { execute, getPool, query } from "@/lib/db";
 import { toIsoDate } from "./dates";
+import { registrarAuditoriaTx } from "@/lib/auditoria";
+import { puedeSolicitarPorEmpleado } from "./vacaciones-equipo";
 import {
   calcularSaldoTotalDisponible,
   contarDiasHabiles,
@@ -66,7 +68,14 @@ export async function crearSolicitudVacaciones(input: {
   fechaFin: string;
   tipo?: string;
   comentario?: string | null;
+  /** Identidad del portal, nunca tomada del body. Omitido conserva autoservicio. */
+  solicitanteId?: number;
 }): Promise<{ ok: boolean; mensaje: string; id?: number }> {
+  const solicitanteId = input.solicitanteId ?? input.empleadoId;
+  const porEquipo = solicitanteId !== input.empleadoId;
+  if (porEquipo && !await puedeSolicitarPorEmpleado(input.empresaId, solicitanteId, input.empleadoId)) {
+    return { ok: false, mensaje: "No puedes solicitar vacaciones para este colaborador." };
+  }
   const tipo = input.tipo ?? "Vacaciones";
   if (input.fechaInicio > input.fechaFin) {
     return {
@@ -100,39 +109,68 @@ export async function crearSolicitudVacaciones(input: {
     }
   }
 
-  const pendienteExistente = await query<RowDataPacket[]>(
-    `SELECT id FROM solicitudes_vacaciones
-     WHERE empresa_id = ? AND id_empleado = ? AND estado = 'Pendiente'
-       AND fecha_inicio = ? AND fecha_fin = ? LIMIT 1`,
-    [input.empresaId, input.empleadoId, input.fechaInicio, input.fechaFin],
-  );
-  if (pendienteExistente[0]) {
-    return {
-      ok: false,
-      mensaje: "Ya tienes una solicitud pendiente para esas mismas fechas.",
-    };
-  }
+  const conn = await getPool().getConnection();
+  try {
+    await conn.beginTransaction();
+    // Serializa solicitudes simultáneas del colaborador y sus supervisores.
+    const [empleados] = await conn.query<RowDataPacket[]>(
+      "SELECT id, nombre FROM empleados WHERE empresa_id = ? AND id IN (?, ?) AND estado = 'Activo' ORDER BY id FOR UPDATE",
+      [input.empresaId, input.empleadoId, solicitanteId],
+    );
+    const solicitante = empleados.find((e) => Number(e.id) === solicitanteId);
+    if (!solicitante || !empleados.some((e) => Number(e.id) === input.empleadoId)
+      || (porEquipo && !await puedeSolicitarPorEmpleado(input.empresaId, solicitanteId, input.empleadoId, conn))) {
+      await conn.rollback();
+      return { ok: false, mensaje: "El colaborador o la asignación de supervisor ya no está disponible." };
+    }
+    const [pendienteExistente] = await conn.query<RowDataPacket[]>(
+      `SELECT id FROM solicitudes_vacaciones
+       WHERE empresa_id = ? AND id_empleado = ? AND estado = 'Pendiente'
+         AND fecha_inicio = ? AND fecha_fin = ? LIMIT 1 FOR UPDATE`,
+      [input.empresaId, input.empleadoId, input.fechaInicio, input.fechaFin],
+    );
+    if (pendienteExistente[0]) {
+      await conn.rollback();
+      return {
+        ok: false,
+        mensaje: "Ya tienes una solicitud pendiente para esas mismas fechas.",
+      };
+    }
 
-  const result = await execute(
-    `INSERT INTO solicitudes_vacaciones
-      (empresa_id, id_empleado, tipo, fecha_inicio, fecha_fin, dias_habiles,
-       estado, comentario_colaborador)
-     VALUES (?, ?, ?, ?, ?, ?, 'Pendiente', ?)`,
-    [
-      input.empresaId,
-      input.empleadoId,
-      tipo,
-      input.fechaInicio,
-      input.fechaFin,
-      dias,
-      input.comentario?.trim() || null,
-    ],
-  );
-  return {
-    ok: true,
-    mensaje: "Solicitud enviada. Queda pendiente de aprobación de RRHH.",
-    id: Number((result as ResultSetHeader).insertId),
-  };
+    const comentario = porEquipo
+      ? `Registrada por supervisor: ${String(solicitante.nombre)} (#${solicitanteId}).\n${input.comentario?.trim() || ""}`
+      : input.comentario?.trim() || null;
+    const [result] = await conn.execute<ResultSetHeader>(
+      `INSERT INTO solicitudes_vacaciones
+        (empresa_id, id_empleado, tipo, fecha_inicio, fecha_fin, dias_habiles,
+         estado, comentario_colaborador)
+       VALUES (?, ?, ?, ?, ?, ?, 'Pendiente', ?)`,
+      [
+        input.empresaId,
+        input.empleadoId,
+        tipo,
+        input.fechaInicio,
+        input.fechaFin,
+        dias,
+        comentario,
+      ],
+    );
+    await registrarAuditoriaTx(conn, {
+      empresaId: input.empresaId, usuario: `portal:${solicitanteId}`, modulo: "vacaciones",
+      accion: "solicitud_vacaciones", detalle: `Solicitud #${result.insertId}; solicitante empleado #${solicitanteId}; beneficiario #${input.empleadoId}; origen ${porEquipo ? "supervisor" : "colaborador"}.`,
+    });
+    await conn.commit();
+    return {
+      ok: true,
+      mensaje: "Solicitud enviada. Queda pendiente de aprobación de RRHH.",
+      id: Number(result.insertId),
+    };
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
 }
 
 /** Historial de solicitudes de UN empleado (portal de colaborador). */

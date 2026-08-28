@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEmpresaSession } from "@/lib/empresa-session";
+import type { ResumenMensual } from "@/lib/rrhh/dashboard";
 
 type Stats = {
   totalEmpleados: number;
@@ -21,15 +22,6 @@ type SituacionHoy = {
   detalle: string;
 };
 
-type ResumenMensual = {
-  mes: string;
-  altas: number;
-  bajas: number;
-  costoNomina: number;
-  amonestaciones: number;
-  suspensiones: number;
-  despidos: number;
-};
 
 function fmtMes(iso: string): string {
   const [y, m] = iso.split("-");
@@ -99,9 +91,9 @@ export default function DashboardRrhhPage() {
     resumenGerencial[resumenGerencial.length - 2] ?? null;
 
   const variacionCosto =
-    mesActual && mesAnterior && mesAnterior.costoNomina > 0
-      ? ((mesActual.costoNomina - mesAnterior.costoNomina) /
-          mesAnterior.costoNomina) *
+    mesActual?.netoNomina != null && mesAnterior?.netoNomina != null && mesAnterior.netoNomina > 0
+      ? ((mesActual.netoNomina - mesAnterior.netoNomina) /
+          mesAnterior.netoNomina) *
         100
       : null;
 
@@ -295,11 +287,11 @@ export default function DashboardRrhhPage() {
 
             <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
               <p className="text-xs text-[var(--muted)]">
-                Costo de nómina
+                Neto a pagar · planillas cerradas/pagadas
               </p>
 
               <p className="mt-1 text-2xl font-semibold">
-                {fmtQ(mesActual.costoNomina)}
+                {mesActual.netoNomina == null ? "No disponible" : fmtQ(mesActual.netoNomina)}
               </p>
 
               {variacionCosto !== null ? (
@@ -322,6 +314,19 @@ export default function DashboardRrhhPage() {
             </div>
           </div>
 
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+            <p className="text-sm font-medium">Costo registrado en planilla</p>
+            <p className="mt-1 text-2xl font-semibold">
+              {mesActual.costoRegistrado == null ? "No disponible" : fmtQ(mesActual.costoRegistrado)}
+            </p>
+            <p className="mt-2 text-xs text-[var(--muted)]">
+              Ingresos antes de descuentos más IGSS patronal registrado. No es el costo empresarial total:
+              excluye provisiones y gastos externos a planilla. Solo períodos Cerrados o Pagados,
+              agrupados por su fecha de inicio. Neto a pagar no significa dinero ya entregado.
+              El mes actual puede estar incompleto; la comparación es contra el mes anterior completo.
+            </p>
+          </div>
+
           <details className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
             <summary className="cursor-pointer text-sm font-medium">
               Últimos {resumenGerencial.length} meses
@@ -334,7 +339,8 @@ export default function DashboardRrhhPage() {
                     <th className="pb-2 pr-4">Mes</th>
                     <th className="pb-2 pr-4">Altas</th>
                     <th className="pb-2 pr-4">Bajas</th>
-                    <th className="pb-2 pr-4">Costo nómina</th>
+                    <th className="pb-2 pr-4">Neto a pagar</th>
+                    <th className="pb-2 pr-4">Costo registrado</th>
                     <th className="pb-2 pr-4">Amonest.</th>
                     <th className="pb-2 pr-4">Suspens.</th>
                     <th className="pb-2">Despidos</th>
@@ -357,7 +363,10 @@ export default function DashboardRrhhPage() {
                         -{r.bajas}
                       </td>
                       <td className="py-1.5 pr-4">
-                        {fmtQ(r.costoNomina)}
+                        {r.netoNomina == null ? "No disponible" : fmtQ(r.netoNomina)}
+                      </td>
+                      <td className="py-1.5 pr-4">
+                        {r.costoRegistrado == null ? "No disponible" : fmtQ(r.costoRegistrado)}
                       </td>
                       <td className="py-1.5 pr-4">
                         {r.amonestaciones}

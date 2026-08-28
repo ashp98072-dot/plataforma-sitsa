@@ -5,8 +5,10 @@ import { useRouter } from "next/navigation";
 
 export default function SolicitarVacacionesForm({
   saldoDisponible,
+  empleadoId,
 }: {
   saldoDisponible: number;
+  empleadoId?: number;
 }) {
   const router = useRouter();
   const [fechaInicio, setFechaInicio] = useState("");
@@ -28,7 +30,7 @@ export default function SolicitarVacacionesForm({
       const res = await fetch("/api/portal/vacaciones", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fechaInicio, fechaFin, tipo, comentario }),
+        body: JSON.stringify({ fechaInicio, fechaFin, tipo, comentario, empleadoId }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Error al enviar la solicitud.");
