@@ -1,5 +1,6 @@
 import PDFDocument from "pdfkit";
 import type { PlanReporte } from "@/lib/tms/reportes-viajes";
+import { ahoraLocal, formatearTimestampVisible } from "@/lib/rrhh/dates";
 
 function moneda(v: number | null): string {
   if (v == null) return "Pendiente";
@@ -117,7 +118,9 @@ export async function reporteViajePdf(
       .font("Helvetica")
       .fontSize(7.5)
       .fillColor("#94a3b8")
-      .text(`Documento generado el ${new Date().toLocaleString("es-GT")}`, marginL, doc.page.height - doc.page.margins.bottom + 6, {
+      // CORRECCIÓN PR #112 (HALLAZGO 2): hora de Guatemala explícita —
+      // nunca el timezone implícito del proceso del servidor.
+      .text(`Documento generado el ${formatearTimestampVisible(ahoraLocal())} (Guatemala)`, marginL, doc.page.height - doc.page.margins.bottom + 6, {
         width: pageWidth,
         align: "center",
         lineBreak: false,

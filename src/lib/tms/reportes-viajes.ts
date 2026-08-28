@@ -155,6 +155,14 @@ export type KpiReporteViajes = {
   promedioIngresoPorViaje: number; // valorProgramado / cantidad de viajes con tarifa capturada (no cancelados)
 };
 
+/**
+ * CORRECCIÓN PR #112 (HALLAZGO 3): calcularKpisReporte(planes) — sobre un
+ * arreglo en memoria — solo debe usarse con un arreglo YA COMPLETO (p.ej.
+ * el resultado de obtenerReporteViajesParaExportar, o en pruebas). Para
+ * la pantalla, el KPI real se calcula en SQL sobre TODO el filtro
+ * (obtenerKpisReporte) — nunca sobre una página — porque el listado
+ * paginado nunca trae todas las filas a memoria.
+ */
 export function calcularKpisReporte(planes: PlanReporte[]): KpiReporteViajes {
   const noCancelados = planes.filter((p) => p.estado !== "Cancelado");
   const conTarifa = noCancelados.filter((p) => p.tarifaComercial != null);
@@ -186,11 +194,16 @@ const SQL_PENDIENTE_CIERRE = `(
   )
 )`;
 
-/** Mismo mapeo que src/app/e/[slug]/tms/page.tsx (ESTADO_LABEL) — reutilizado aquí solo como referencia de estados válidos, sin importar ese archivo "use client". */
-export async function obtenerReporteViajes(
+/**
+ * CORRECCIÓN PR #112 (HALLAZGO 3, ítem 5): constructor ÚNICO de
+ * condiciones/params — usado por obtenerReporteViajes, contarReporteViajes
+ * y obtenerKpisReporte, para que listado, conteo, KPI y exportador
+ * apliquen SIEMPRE el mismo criterio (nunca dos WHERE que puedan divergir).
+ */
+function construirCondiciones(
   empresaId: number,
   filtros: FiltrosReporteViajes,
-): Promise<PlanReporte[]> {
+): { condiciones: string[]; params: (string | number)[] } {
   const condiciones = ["p.empresa_id = ?"];
   const params: (string | number)[] = [empresaId];
 
@@ -235,6 +248,104 @@ export async function obtenerReporteViajes(
   if (filtros.soloSinCerrar) {
     condiciones.push("p.estado <> 'Cerrado'");
   }
+  return { condiciones, params };
+}
+
+/** true si el filtro reduce razonablemente el volumen (nunca "todo el histórico sin acotar"). */
+function tieneRangoAcotado(filtros: FiltrosReporteViajes): boolean {
+  return Boolean(filtros.id || filtros.fechaDesde || filtros.fechaHasta || filtros.soloPendientesCierre);
+}
+
+export const LIMITE_PAGINA_DEFECTO = 200;
+export const LIMITE_PAGINA_MAXIMO = 500;
+/** CORRECCIÓN PR #112 (HALLAZGO 3): topes de exportación — nunca truncar en silencio. */
+export const LIMITE_EXPORTACION_SIN_RANGO = 5000;
+export const LIMITE_EXPORTACION_MAXIMO = 20000;
+
+/** COUNT(*) con el MISMO criterio que el listado — para KPI, paginación y validación de exportación. */
+export async function contarReporteViajes(
+  empresaId: number,
+  filtros: FiltrosReporteViajes,
+): Promise<number> {
+  const { condiciones, params } = construirCondiciones(empresaId, filtros);
+  const rows = await query<RowDataPacket[]>(
+    `SELECT COUNT(*) AS total FROM tms_planes_viaje p WHERE ${condiciones.join(" AND ")}`,
+    params,
+  );
+  return Number(rows[0]?.total ?? 0);
+}
+
+/**
+ * CORRECCIÓN PR #112 (HALLAZGO 3): KPI calculado en SQL sobre TODO el
+ * filtro (nunca sobre una página) — mismos JOINs que el listado para
+ * evidencias/km, mismas condiciones (construirCondiciones).
+ */
+export async function obtenerKpisReporte(
+  empresaId: number,
+  filtros: FiltrosReporteViajes,
+): Promise<KpiReporteViajes> {
+  const { condiciones, params } = construirCondiciones(empresaId, filtros);
+  const rows = await query<RowDataPacket[]>(
+    `SELECT
+       COUNT(*) AS total_viajes,
+       SUM(p.estado = 'Cerrado') AS cerrados,
+       SUM(${SQL_PENDIENTE_CIERRE}) AS pendientes_cierre,
+       SUM(p.estado IN ('En ruta', 'Cargado')) AS en_ruta,
+       SUM(p.estado = 'Cancelado') AS cancelados,
+       COALESCE(SUM(ev.cnt), 0) AS total_evidencias,
+       COALESCE(SUM(
+         CASE WHEN fviaje.km_salida IS NOT NULL AND fviaje.km_llegada IS NOT NULL
+                   AND fviaje.km_llegada >= fviaje.km_salida
+              THEN fviaje.km_llegada - fviaje.km_salida ELSE 0 END
+       ), 0) AS total_km_recorridos,
+       COALESCE(SUM(CASE WHEN p.estado <> 'Cancelado' THEN p.tarifa_comercial ELSE NULL END), 0) AS valor_programado,
+       COALESCE(SUM(CASE WHEN p.estado = 'Cerrado' THEN p.tarifa_comercial ELSE NULL END), 0) AS valor_cerrado,
+       SUM(CASE WHEN p.estado <> 'Cancelado' AND p.tarifa_comercial IS NOT NULL THEN 1 ELSE 0 END) AS viajes_con_tarifa
+     FROM tms_planes_viaje p
+     LEFT JOIN (
+       SELECT plan_id, COUNT(*) AS cnt FROM tms_evidencias GROUP BY plan_id
+     ) ev ON ev.plan_id = p.id
+     LEFT JOIN (
+       SELECT fv.plan_id, fv.km_salida, fv.km_llegada
+       FROM flota_viajes fv
+       WHERE fv.id = (
+         SELECT fv2.id FROM flota_viajes fv2
+         WHERE fv2.plan_id = fv.plan_id AND fv2.empresa_id = fv.empresa_id
+         ORDER BY (fv2.estado = 'cerrado') DESC, fv2.id DESC
+         LIMIT 1
+       )
+     ) fviaje ON fviaje.plan_id = p.id
+     WHERE ${condiciones.join(" AND ")}`,
+    params,
+  );
+  const r = rows[0];
+  const viajesConTarifa = Number(r?.viajes_con_tarifa ?? 0);
+  const valorProgramado = Number(r?.valor_programado ?? 0);
+  return {
+    totalViajes: Number(r?.total_viajes ?? 0),
+    cerrados: Number(r?.cerrados ?? 0),
+    pendientesCierre: Number(r?.pendientes_cierre ?? 0),
+    enRuta: Number(r?.en_ruta ?? 0),
+    cancelados: Number(r?.cancelados ?? 0),
+    totalEvidencias: Number(r?.total_evidencias ?? 0),
+    totalKmRecorridos: Number(r?.total_km_recorridos ?? 0),
+    valorProgramado,
+    valorCerrado: Number(r?.valor_cerrado ?? 0),
+    promedioIngresoPorViaje: viajesConTarifa ? valorProgramado / viajesConTarifa : 0,
+  };
+}
+
+export type PaginacionReporte = { limit: number; offset: number };
+
+/** Mismo mapeo que src/app/e/[slug]/tms/page.tsx (ESTADO_LABEL) — reutilizado aquí solo como referencia de estados válidos, sin importar ese archivo "use client". */
+export async function obtenerReporteViajes(
+  empresaId: number,
+  filtros: FiltrosReporteViajes,
+  paginacion?: PaginacionReporte,
+): Promise<PlanReporte[]> {
+  const { condiciones, params } = construirCondiciones(empresaId, filtros);
+  const limit = paginacion ? Math.min(Math.max(paginacion.limit, 1), LIMITE_EXPORTACION_MAXIMO) : LIMITE_PAGINA_DEFECTO;
+  const offset = paginacion ? Math.max(paginacion.offset, 0) : 0;
 
   const rows = await query<RowDataPacket[]>(
     `SELECT p.id, p.codigo, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan,
@@ -272,8 +383,8 @@ export async function obtenerReporteViajes(
      ) fviaje ON fviaje.plan_id = p.id
      WHERE ${condiciones.join(" AND ")}
      ORDER BY p.fecha_plan DESC, p.id DESC
-     LIMIT 2000`,
-    params,
+     LIMIT ? OFFSET ?`,
+    [...params, limit, offset],
   );
 
   const planIds = rows.map((r) => Number(r.id));
@@ -330,6 +441,41 @@ export async function obtenerReporteViajePorId(
 ): Promise<PlanReporte | null> {
   const rows = await obtenerReporteViajes(empresaId, { id: planId });
   return rows[0] ?? null;
+}
+
+export type ResultadoExportacionReporte =
+  | { ok: true; planes: PlanReporte[] }
+  | { ok: false; error: string };
+
+/**
+ * CORRECCIÓN PR #112 (HALLAZGO 3): la exportación (Excel/PDF) debe cubrir
+ * TODO el rango filtrado — nunca el LIMIT 2000 silencioso que traía
+ * obtenerReporteViajes por defecto. Antes de traer filas, cuenta con el
+ * MISMO criterio (contarReporteViajes) y rechaza explícitamente (nunca
+ * trunca en silencio) si:
+ *   - no hay un filtro que acote razonablemente el volumen (fecha/
+ *     pendientes) Y el total supera LIMITE_EXPORTACION_SIN_RANGO, o
+ *   - el total supera LIMITE_EXPORTACION_MAXIMO incluso con filtro.
+ */
+export async function obtenerReporteViajesParaExportar(
+  empresaId: number,
+  filtros: FiltrosReporteViajes,
+): Promise<ResultadoExportacionReporte> {
+  const total = await contarReporteViajes(empresaId, filtros);
+  if (!tieneRangoAcotado(filtros) && total > LIMITE_EXPORTACION_SIN_RANGO) {
+    return {
+      ok: false,
+      error: `Hay ${total} viaje(s) sin un filtro que acote el volumen (fecha o "solo pendientes de cierre"). Acota el rango de fechas para exportar (máximo ${LIMITE_EXPORTACION_SIN_RANGO} sin acotar).`,
+    };
+  }
+  if (total > LIMITE_EXPORTACION_MAXIMO) {
+    return {
+      ok: false,
+      error: `El filtro actual incluye ${total} viaje(s), por encima del máximo exportable (${LIMITE_EXPORTACION_MAXIMO}). Acota el rango de fechas u otros filtros.`,
+    };
+  }
+  const planes = await obtenerReporteViajes(empresaId, filtros, { limit: Math.max(total, 1), offset: 0 });
+  return { ok: true, planes };
 }
 
 /**

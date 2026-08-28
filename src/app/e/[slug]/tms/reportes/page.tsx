@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
+import { hoyLocal } from "@/lib/rrhh/dates";
 
 /**
  * TMS-REPORTES-1 — Operaciones → TMS / Logística → Reportes de viajes.
@@ -134,19 +135,33 @@ function Stepper({ p }: { p: PlanReporte }) {
     );
   }
   const llegadaRegistrada = Boolean(p.horaLlegada);
-  const pasos = [
+  // CORRECCIÓN PR #112 (HALLAZGO 4): "Cargado" es OPCIONAL — el flujo
+  // válido permite Programado → En ruta directo, sin pasar por Cargado.
+  // Una vez que el plan avanza, no queda ningún dato que diga si Cargado
+  // realmente ocurrió — por eso NUNCA se afirma "✓ Cargado" solo porque
+  // el plan ya esté más adelante (eso sería inventar un hecho). Solo se
+  // marca conocido cuando el estado ACTUAL sigue siendo "Cargado"; en
+  // cualquier otro caso se muestra como opcional, sin dato — no se crea
+  // ningún estado nuevo persistido para rastrear esto.
+  const cargadoConocido = p.estado === "Cargado";
+  const pasosPrincipales = [
     { label: "Programado", hecho: true },
-    { label: "Cargado", hecho: p.estado === "Cargado" || p.estado === "En ruta" || llegadaRegistrada || p.estado === "Cerrado" },
     { label: "En ruta", hecho: Boolean(p.horaSalida) },
     { label: "Llegada registrada", hecho: llegadaRegistrada },
     { label: "Pendiente de cierre", hecho: p.pendienteCierre || p.estado === "Cerrado" },
     { label: "Cerrado", hecho: p.estado === "Cerrado" },
   ];
-  const actualIdx = [...pasos].reverse().findIndex((s) => s.hecho);
-  const idxActual = actualIdx === -1 ? -1 : pasos.length - 1 - actualIdx;
+  const actualIdx = [...pasosPrincipales].reverse().findIndex((s) => s.hecho);
+  const idxActual = actualIdx === -1 ? -1 : pasosPrincipales.length - 1 - actualIdx;
   return (
     <ol className="flex flex-wrap gap-x-1 gap-y-2 text-[11px]">
-      {pasos.map((s, i) => (
+      <li className="flex items-center gap-1">
+        <span className={cargadoConocido ? "font-semibold text-[var(--accent)]" : "text-[var(--muted)]"}>
+          {cargadoConocido ? "✓" : "·"} Cargado (opcional)
+        </span>
+        <span className="text-[var(--muted)]">→</span>
+      </li>
+      {pasosPrincipales.map((s, i) => (
         <li key={s.label} className="flex items-center gap-1">
           <span
             className={
@@ -159,11 +174,43 @@ function Stepper({ p }: { p: PlanReporte }) {
           >
             {s.hecho ? "✓" : i === idxActual ? "←" : "○"} {s.label}
           </span>
-          {i < pasos.length - 1 ? <span className="text-[var(--muted)]">→</span> : null}
+          {i < pasosPrincipales.length - 1 ? <span className="text-[var(--muted)]">→</span> : null}
         </li>
       ))}
     </ol>
   );
+}
+
+/**
+ * CORRECCIÓN PR #112 (HALLAZGO 1): resumen del viaje a confirmar antes de
+ * cerrar — función PURA para poder probarla sin un harness de componentes
+ * (este proyecto no tiene uno para React; ver precedente de pruebas a
+ * nivel de rutas/lib en el resto del repo).
+ */
+export function resumenCierre(p: PlanReporte): {
+  codigo: string;
+  cliente: string;
+  placa: string;
+  piloto: string;
+  horaSalida: string;
+  horaLlegada: string;
+  kmSalida: string;
+  kmLlegada: string;
+  evidencias: number;
+  tarifa: string;
+} {
+  return {
+    codigo: p.codigo,
+    cliente: p.cliente ?? "—",
+    placa: p.placa ?? "—",
+    piloto: p.piloto ?? "—",
+    horaSalida: fh(p.horaSalida),
+    horaLlegada: fh(p.horaLlegada),
+    kmSalida: p.kmSalida != null ? String(p.kmSalida) : "—",
+    kmLlegada: p.kmLlegada != null ? String(p.kmLlegada) : "—",
+    evidencias: p.evidencias,
+    tarifa: moneda(p.tarifaComercial),
+  };
 }
 
 export default function ReportesViajesPage() {
@@ -171,7 +218,11 @@ export default function ReportesViajesPage() {
   const { permisos } = useEmpresaSession();
   const puedeCerrarViaje = tienePermiso(permisos, "viajes_cerrar", "editar");
 
-  const hoy = new Date().toISOString().slice(0, 10);
+  // CORRECCIÓN PR #112 (HALLAZGO 2): fecha de HOY en Guatemala explícita
+  // (hoyLocal, mismo helper que ya usa el resto del proyecto — no
+  // duplicado) — new Date().toISOString() usa UTC y después de las 18:00
+  // en Guatemala ya representa el día siguiente.
+  const hoy = hoyLocal();
   const primerDiaMes = `${hoy.slice(0, 7)}-01`;
 
   const [fDesde, setFDesde] = useState(primerDiaMes);
@@ -204,7 +255,16 @@ export default function ReportesViajesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const queryString = useCallback(() => {
+  // CORRECCIÓN PR #112 (HALLAZGO 3): paginación server-side real — la
+  // tabla ya no carga todo el histórico filtrado de una vez (antes: LIMIT
+  // 2000 fijo, silencioso). El KPI (abajo) lo calcula el backend con
+  // agregación SQL sobre TODO el filtro, independiente de esta página.
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(200);
+  const [totalReal, setTotalReal] = useState(0);
+
+  /** Filtros SIN paginación — comparten esta parte listado/exportador. */
+  const filtrosQueryString = useCallback(() => {
     const p = new URLSearchParams();
     if (!soloPendientes) {
       if (fDesde) p.set("fechaDesde", fDesde);
@@ -217,14 +277,20 @@ export default function ReportesViajesPage() {
     if (soloPendientes) p.set("soloPendientesCierre", "1");
     if (soloCerrados) p.set("soloCerrados", "1");
     if (soloSinCerrar) p.set("soloSinCerrar", "1");
-    return p.toString();
+    return p;
   }, [fDesde, fHasta, fCliente, fPiloto, fUnidad, fEstado, soloPendientes, soloCerrados, soloSinCerrar]);
 
-  const cargar = useCallback(async () => {
+  /** Para exportar: SIN page/pageSize — el exportador siempre trae todo el filtro. */
+  const exportQueryString = useCallback(() => filtrosQueryString().toString(), [filtrosQueryString]);
+
+  const cargar = useCallback(async (paginaSolicitada = page) => {
     setLoading(true);
     setError("");
     try {
-      const res = await fetch(`/api/empresas/${slug}/tms/reportes/viajes?${queryString()}`);
+      const p = filtrosQueryString();
+      p.set("page", String(paginaSolicitada));
+      p.set("pageSize", String(pageSize));
+      const res = await fetch(`/api/empresas/${slug}/tms/reportes/viajes?${p.toString()}`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(data.error ?? "No se pudo cargar el reporte.");
@@ -232,25 +298,42 @@ export default function ReportesViajesPage() {
       }
       setPlanes((data.planes ?? []) as PlanReporte[]);
       setKpi((data.kpi ?? null) as Kpi | null);
+      setTotalReal(Number(data.totalReal ?? 0));
+      setPage(paginaSolicitada);
     } catch {
       setError("Error de conexión.");
     } finally {
       setLoading(false);
     }
-  }, [slug, queryString]);
+  }, [slug, filtrosQueryString, page, pageSize]);
 
+  // `buscarTick` dispara la carga DESPUÉS de que los setState de filtros
+  // ya se aplicaron — llamar cargar() en el mismo manejador que los
+  // setState leería el estado VIEJO (closure obsoleto de React). El
+  // efecto sí ve el estado ya actualizado porque corre después del
+  // render que aplicó esos cambios.
+  const [buscarTick, setBuscarTick] = useState(0);
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    void cargar();
+    void cargar(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [buscarTick]);
+
+  function buscar() {
+    setBuscarTick((t) => t + 1); // nuevo filtro: siempre vuelve a la primera página
+  }
 
   function limpiarFiltros() {
     setFDesde(primerDiaMes);
     setFHasta(hoy);
     setFCliente(""); setFPiloto(""); setFUnidad(""); setFEstado("");
     setSoloPendientes(false); setSoloCerrados(false); setSoloSinCerrar(false);
+    setBuscarTick((t) => t + 1);
   }
+
+  const totalPaginas = Math.max(1, Math.ceil(totalReal / pageSize));
+  const desdeFila = totalReal === 0 ? 0 : (page - 1) * pageSize + 1;
+  const hastaFila = Math.min(page * pageSize, totalReal);
 
   const [expandido, setExpandido] = useState<number | null>(null);
   const [evidenciasPorPlan, setEvidenciasPorPlan] = useState<Record<number, EvidenciaTms[]>>({});
@@ -258,9 +341,15 @@ export default function ReportesViajesPage() {
   const [cargandoDetalle, setCargandoDetalle] = useState(false);
   const [cerrandoId, setCerrandoId] = useState<number | null>(null);
   const [errorCierre, setErrorCierre] = useState("");
+  // CORRECCIÓN PR #112 (HALLAZGO 1): "Cerrar viaje" ya NO ejecuta el POST
+  // al primer clic — solo abre esta confirmación explícita con el
+  // resumen del viaje; el POST solo ocurre al pulsar "Confirmar cierre"
+  // dentro de ella. Se usa el detalle expandible que la pantalla ya
+  // tiene (nunca un confirm() nativo).
+  const [confirmandoCierre, setConfirmandoCierre] = useState<number | null>(null);
 
   async function abrirDetalle(planId: number) {
-    if (expandido === planId) { setExpandido(null); return; }
+    if (expandido === planId) { setExpandido(null); setConfirmandoCierre(null); return; }
     setExpandido(planId);
     if (!evidenciasPorPlan[planId] || !bitacoraPorPlan[planId]) {
       setCargandoDetalle(true);
@@ -281,6 +370,14 @@ export default function ReportesViajesPage() {
     }
   }
 
+  /** Primer clic: solo abre la confirmación (nunca ejecuta el POST todavía). */
+  function pedirCierre(planId: number) {
+    if (expandido !== planId) void abrirDetalle(planId);
+    setConfirmandoCierre(planId);
+    setErrorCierre("");
+  }
+
+  /** Segundo clic (dentro de la confirmación): el ÚNICO que ejecuta el POST. */
   async function cerrarViaje(planId: number) {
     setCerrandoId(planId);
     setErrorCierre("");
@@ -291,6 +388,7 @@ export default function ReportesViajesPage() {
         setErrorCierre(data.error ?? "No se pudo cerrar el viaje.");
         return;
       }
+      setConfirmandoCierre(null);
       await cargar();
     } catch {
       setErrorCierre("Error de conexión.");
@@ -348,9 +446,9 @@ export default function ReportesViajesPage() {
               {ESTADOS.map((e) => <option key={e} value={e}>{e}</option>)}
             </select>
           </label>
-          <button type="button" className="rounded bg-[var(--accent)] px-3 py-1.5 text-xs font-medium text-white" onClick={() => void cargar()}>Buscar</button>
+          <button type="button" className="rounded bg-[var(--accent)] px-3 py-1.5 text-xs font-medium text-white" onClick={buscar}>Buscar</button>
           <button type="button" className="rounded border border-[var(--border)] px-3 py-1.5 text-xs text-[var(--text)]" onClick={limpiarFiltros}>Limpiar filtros</button>
-          <button type="button" className="rounded border border-[var(--border)] px-3 py-1.5 text-xs text-[var(--text)]" disabled={loading} onClick={() => void cargar()}>{loading ? "Actualizando…" : "Actualizar"}</button>
+          <button type="button" className="rounded border border-[var(--border)] px-3 py-1.5 text-xs text-[var(--text)]" disabled={loading} onClick={() => void cargar(page)}>{loading ? "Actualizando…" : "Actualizar"}</button>
         </div>
         <div className="mt-2 flex flex-wrap gap-3 text-xs">
           <label className="flex items-center gap-1 text-[var(--text)]">
@@ -367,8 +465,8 @@ export default function ReportesViajesPage() {
           </label>
         </div>
         <div className="mt-2 flex flex-wrap gap-2">
-          <a className="rounded bg-[#334155] px-3 py-1.5 text-xs text-white" href={`/api/empresas/${slug}/tms/reportes/viajes/export?formato=xlsx&${queryString()}`}>Exportar Excel</a>
-          <a className="rounded bg-[#334155] px-3 py-1.5 text-xs text-white" href={`/api/empresas/${slug}/tms/reportes/viajes/export?formato=pdf&${queryString()}`}>Exportar PDF</a>
+          <a className="rounded bg-[#334155] px-3 py-1.5 text-xs text-white" href={`/api/empresas/${slug}/tms/reportes/viajes/export?formato=xlsx&${exportQueryString()}`}>Exportar Excel (todo el filtro)</a>
+          <a className="rounded bg-[#334155] px-3 py-1.5 text-xs text-white" href={`/api/empresas/${slug}/tms/reportes/viajes/export?formato=pdf&${exportQueryString()}`}>Exportar PDF (todo el filtro)</a>
         </div>
       </section>
 
@@ -425,8 +523,8 @@ export default function ReportesViajesPage() {
                         <Link href={`/e/${slug}/programacion?plan=${p.id}`} className={linkCls}>Programación</Link>
                         <a className={linkCls} href={`/api/empresas/${slug}/tms/planes/${p.id}/reporte-pdf`}>PDF</a>
                         {p.pendienteCierre && puedeCerrarViaje ? (
-                          <button type="button" className="text-emerald-500 hover:underline disabled:opacity-50" disabled={cerrandoId === p.id} onClick={() => void cerrarViaje(p.id)}>
-                            {cerrandoId === p.id ? "Cerrando…" : "Cerrar viaje"}
+                          <button type="button" className="text-emerald-500 hover:underline" onClick={() => pedirCierre(p.id)}>
+                            Cerrar viaje
                           </button>
                         ) : null}
                       </div>
@@ -435,7 +533,6 @@ export default function ReportesViajesPage() {
                   {expandido === p.id ? (
                     <tr className="border-t border-[var(--border)] bg-[var(--panel)]">
                       <td colSpan={columnas.length} className="px-3 py-3">
-                        {errorCierre ? <p className="mb-2 text-xs text-rose-500">{errorCierre}</p> : null}
                         <div className="mb-3"><Stepper p={p} /></div>
                         <div className="grid gap-4 lg:grid-cols-3">
                           <div>
@@ -487,9 +584,45 @@ export default function ReportesViajesPage() {
                               <li>Cerrado en: {fh(p.cerradoEn)}</li>
                             </ul>
                             {p.pendienteCierre && puedeCerrarViaje ? (
-                              <button type="button" className="mt-2 rounded bg-amber-600 px-2.5 py-1 text-xs font-medium text-white disabled:opacity-50" disabled={cerrandoId === p.id} onClick={() => void cerrarViaje(p.id)}>
-                                {cerrandoId === p.id ? "Cerrando…" : "Cerrar viaje"}
-                              </button>
+                              confirmandoCierre === p.id ? (
+                                // CORRECCIÓN PR #112 (HALLAZGO 1): confirmación
+                                // explícita — el POST solo ocurre al pulsar
+                                // "Confirmar cierre" aquí abajo.
+                                (() => {
+                                  const r = resumenCierre(p);
+                                  return (
+                                    <div className="mt-2 space-y-1.5 rounded border border-amber-700/60 bg-amber-950/10 p-2 text-xs">
+                                      <p className="font-semibold text-amber-700">Confirmar cierre administrativo</p>
+                                      <ul className="grid gap-x-4 gap-y-0.5 text-[11px] text-[var(--text)] sm:grid-cols-2">
+                                        <li>Código: {r.codigo}</li>
+                                        <li>Cliente: {r.cliente}</li>
+                                        <li>Placa: {r.placa}</li>
+                                        <li>Piloto: {r.piloto}</li>
+                                        <li>Hora salida: {r.horaSalida}</li>
+                                        <li>Hora llegada: {r.horaLlegada}</li>
+                                        <li>Km salida: {r.kmSalida}</li>
+                                        <li>Km llegada: {r.kmLlegada}</li>
+                                        <li>Evidencias: {r.evidencias}</li>
+                                        <li>Tarifa: {r.tarifa}</li>
+                                      </ul>
+                                      <p className="text-[11px] text-[var(--muted)]">Las evidencias son respaldo y no determinan el cierre.</p>
+                                      {errorCierre ? <p className="text-rose-500">{errorCierre}</p> : null}
+                                      <div className="flex gap-2 pt-1">
+                                        <button type="button" className="rounded bg-amber-600 px-2.5 py-1 font-medium text-white disabled:opacity-50" disabled={cerrandoId === p.id} onClick={() => void cerrarViaje(p.id)}>
+                                          {cerrandoId === p.id ? "Cerrando…" : "Confirmar cierre"}
+                                        </button>
+                                        <button type="button" className="rounded border border-[var(--border)] px-2.5 py-1 text-[var(--text)]" disabled={cerrandoId === p.id} onClick={() => { setConfirmandoCierre(null); setErrorCierre(""); }}>
+                                          Cancelar
+                                        </button>
+                                      </div>
+                                    </div>
+                                  );
+                                })()
+                              ) : (
+                                <button type="button" className="mt-2 rounded bg-amber-600 px-2.5 py-1 text-xs font-medium text-white" onClick={() => pedirCierre(p.id)}>
+                                  Cerrar viaje
+                                </button>
+                              )
                             ) : null}
                           </div>
                         </div>
@@ -540,6 +673,18 @@ export default function ReportesViajesPage() {
           </tbody>
         </table>
       </section>
+
+      {/* CORRECCIÓN PR #112 (HALLAZGO 3): paginación server-side — el KPI
+          de arriba SIEMPRE refleja todo el filtro, esta barra solo pagina
+          las filas visibles de la tabla. */}
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--muted)]">
+        <span>{totalReal ? `Mostrando ${desdeFila}–${hastaFila} de ${totalReal} viaje(s)` : "Sin viajes con estos filtros."}</span>
+        <div className="flex gap-2">
+          <button type="button" className="rounded border border-[var(--border)] px-2.5 py-1 text-[var(--text)] disabled:opacity-40" disabled={loading || page <= 1} onClick={() => void cargar(page - 1)}>← Anterior</button>
+          <span className="px-1 py-1">Página {page} de {totalPaginas}</span>
+          <button type="button" className="rounded border border-[var(--border)] px-2.5 py-1 text-[var(--text)] disabled:opacity-40" disabled={loading || page >= totalPaginas} onClick={() => void cargar(page + 1)}>Siguiente →</button>
+        </div>
+      </div>
     </div>
   );
 }

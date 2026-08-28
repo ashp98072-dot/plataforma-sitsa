@@ -8,8 +8,14 @@ import {
   calcularDiasRuta,
   calcularKmRecorridos,
   calcularKpisReporte,
+  contarReporteViajes,
   filtrosReporteDesdeUrl,
+  LIMITE_EXPORTACION_MAXIMO,
+  LIMITE_EXPORTACION_SIN_RANGO,
+  LIMITE_PAGINA_DEFECTO,
+  obtenerKpisReporte,
   obtenerReporteViajes,
+  obtenerReporteViajesParaExportar,
   type PlanReporte,
 } from "./reportes-viajes";
 
@@ -178,5 +184,139 @@ describe("obtenerReporteViajes — construcción de filtros SQL", () => {
     const [sql, params] = vi.mocked(query).mock.calls[0];
     expect(sql).toContain("p.empresa_id = ?");
     expect(params?.[0]).toBe(7);
+  });
+
+  it("[HALLAZGO 3] sin paginación explícita usa LIMIT/OFFSET por defecto (no LIMIT 2000 fijo)", async () => {
+    await obtenerReporteViajes(7, {});
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("LIMIT ? OFFSET ?");
+    expect(sql).not.toContain("LIMIT 2000");
+    expect(params?.slice(-2)).toEqual([LIMITE_PAGINA_DEFECTO, 0]);
+  });
+
+  it("[HALLAZGO 3 · 1] listado paginado: respeta limit/offset explícitos", async () => {
+    await obtenerReporteViajes(7, {}, { limit: 50, offset: 100 });
+    const [, params] = vi.mocked(query).mock.calls[0];
+    expect(params?.slice(-2)).toEqual([50, 100]);
+  });
+});
+
+describe("[HALLAZGO 3] contarReporteViajes — mismo criterio de filtros que el listado", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("[2] totalReal puede ser mayor que el tamaño de una página — es un COUNT(*) independiente", async () => {
+    vi.mocked(query).mockResolvedValue([{ total: 350 }] as unknown as Awaited<ReturnType<typeof query>>);
+    const total = await contarReporteViajes(7, { estado: "Cerrado" });
+    expect(total).toBe(350);
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("COUNT(*) AS total");
+    expect(sql).toContain("p.estado = ?");
+    expect(params).toContain("Cerrado");
+  });
+});
+
+describe("[HALLAZGO 3 · 3] obtenerKpisReporte — agregación SQL sobre TODO el filtro, no una página", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("calcula KPI vía SUM/COUNT en una sola consulta, con las mismas condiciones que el listado", async () => {
+    vi.mocked(query).mockResolvedValue([{
+      total_viajes: 500, cerrados: 300, pendientes_cierre: 20, en_ruta: 50, cancelados: 10,
+      total_evidencias: 900, total_km_recorridos: 123456,
+      valor_programado: 500000, valor_cerrado: 300000, viajes_con_tarifa: 480,
+    }] as unknown as Awaited<ReturnType<typeof query>>);
+    const kpi = await obtenerKpisReporte(7, { fechaDesde: "2026-08-01" });
+    expect(kpi.totalViajes).toBe(500); // > que cualquier página de 200
+    expect(kpi.cerrados).toBe(300);
+    expect(kpi.pendientesCierre).toBe(20);
+    expect(kpi.valorProgramado).toBe(500000);
+    expect(kpi.valorCerrado).toBe(300000);
+    expect(kpi.promedioIngresoPorViaje).toBeCloseTo(500000 / 480);
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("SUM(p.estado = 'Cerrado')");
+    expect(sql).toContain("p.fecha_plan >= ?");
+    expect(params).toContain("2026-08-01");
+    // Agregación sobre TODO el filtro: sin límite de página (el único LIMIT
+    // que puede aparecer es el "LIMIT 1" interno del JOIN que elige un
+    // único flota_viajes por plan — no un LIMIT/OFFSET de paginación).
+    expect(sql).not.toContain("LIMIT ? OFFSET ?");
+    expect(sql).not.toContain("LIMIT 2000");
+  });
+
+  it("viajes_con_tarifa = 0 no produce división por cero", async () => {
+    vi.mocked(query).mockResolvedValue([{
+      total_viajes: 0, cerrados: 0, pendientes_cierre: 0, en_ruta: 0, cancelados: 0,
+      total_evidencias: 0, total_km_recorridos: 0, valor_programado: 0, valor_cerrado: 0, viajes_con_tarifa: 0,
+    }] as unknown as Awaited<ReturnType<typeof query>>);
+    const kpi = await obtenerKpisReporte(7, {});
+    expect(kpi.promedioIngresoPorViaje).toBe(0);
+  });
+});
+
+describe("[HALLAZGO 3] obtenerReporteViajesParaExportar — exporta TODO el filtro, nunca trunca en silencio", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("[4] con un rango de fechas, trae TODAS las filas del filtro sin el límite de página (LIMIT 2000 ya no existe)", async () => {
+    vi.mocked(query).mockImplementation((async (sql: string) => {
+      if (sql.includes("COUNT(*) AS total")) return [{ total: 3000 }];
+      return [];
+    }) as typeof query);
+    const r = await obtenerReporteViajesParaExportar(7, { fechaDesde: "2026-08-01", fechaHasta: "2026-08-31" });
+    expect(r.ok).toBe(true);
+    // La consulta de filas (no la de COUNT) debe pedir las 3000, no 200 ni 2000.
+    const filasCall = vi.mocked(query).mock.calls.find((c) => !String(c[0]).includes("COUNT(*) AS total"));
+    expect(filasCall?.[1]?.slice(-2)).toEqual([3000, 0]);
+  });
+
+  it('sin ningún filtro que acote (ni fecha ni "solo pendientes") y volumen alto → rechaza con mensaje claro, NUNCA trunca en silencio', async () => {
+    vi.mocked(query).mockResolvedValue([{ total: LIMITE_EXPORTACION_SIN_RANGO + 1 }] as unknown as Awaited<ReturnType<typeof query>>);
+    const r = await obtenerReporteViajesParaExportar(7, {});
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain(String(LIMITE_EXPORTACION_SIN_RANGO + 1));
+  });
+
+  it("sin filtro pero volumen bajo → exporta igual (no rechaza innecesariamente)", async () => {
+    vi.mocked(query).mockResolvedValue([{ total: 10 }] as unknown as Awaited<ReturnType<typeof query>>);
+    const r = await obtenerReporteViajesParaExportar(7, {});
+    expect(r.ok).toBe(true);
+  });
+
+  it('con "soloPendientesCierre" (naturalmente acotado) no exige rango de fechas', async () => {
+    vi.mocked(query).mockResolvedValue([{ total: 8 }] as unknown as Awaited<ReturnType<typeof query>>);
+    const r = await obtenerReporteViajesParaExportar(7, { soloPendientesCierre: true });
+    expect(r.ok).toBe(true);
+  });
+
+  it("incluso CON filtro de fecha, si el total supera el máximo absoluto exportable → rechaza", async () => {
+    vi.mocked(query).mockResolvedValue([{ total: LIMITE_EXPORTACION_MAXIMO + 1 }] as unknown as Awaited<ReturnType<typeof query>>);
+    const r = await obtenerReporteViajesParaExportar(7, { fechaDesde: "2020-01-01", fechaHasta: "2026-12-31" });
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe("[HALLAZGO 3 · 5] filtros del listado, KPI y exportador siguen siendo equivalentes", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("la MISMA condición de filtro (estado) aparece en obtenerReporteViajes, contarReporteViajes y obtenerKpisReporte", async () => {
+    vi.mocked(query).mockResolvedValue([]);
+    await obtenerReporteViajes(7, { estado: "Cerrado" });
+    const sqlListado = String(vi.mocked(query).mock.calls[0][0]);
+
+    vi.mocked(query).mockClear();
+    vi.mocked(query).mockResolvedValue([{ total: 0 }] as unknown as Awaited<ReturnType<typeof query>>);
+    await contarReporteViajes(7, { estado: "Cerrado" });
+    const sqlConteo = String(vi.mocked(query).mock.calls[0][0]);
+
+    vi.mocked(query).mockClear();
+    vi.mocked(query).mockResolvedValue([{
+      total_viajes: 0, cerrados: 0, pendientes_cierre: 0, en_ruta: 0, cancelados: 0,
+      total_evidencias: 0, total_km_recorridos: 0, valor_programado: 0, valor_cerrado: 0, viajes_con_tarifa: 0,
+    }] as unknown as Awaited<ReturnType<typeof query>>);
+    await obtenerKpisReporte(7, { estado: "Cerrado" });
+    const sqlKpi = String(vi.mocked(query).mock.calls[0][0]);
+
+    for (const sql of [sqlListado, sqlConteo, sqlKpi]) {
+      expect(sql).toContain("p.estado = ?");
+      expect(sql).toContain("p.empresa_id = ?");
+    }
   });
 });

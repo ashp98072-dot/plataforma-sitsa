@@ -3,10 +3,11 @@ import { requireTenantProgramacionOTms } from "@/lib/tenant";
 import {
   calcularKpisReporte,
   filtrosReporteDesdeUrl,
-  obtenerReporteViajes,
+  obtenerReporteViajesParaExportar,
   type PlanReporte,
 } from "@/lib/tms/reportes-viajes";
 import { tablaAExcel, tablaAPdf } from "@/lib/rrhh/export-files";
+import { ahoraLocal, formatearTimestampVisible, hoyLocal } from "@/lib/rrhh/dates";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -77,15 +78,26 @@ export async function GET(req: Request, ctx: Ctx) {
   const url = new URL(req.url);
   const formato = url.searchParams.get("formato") === "pdf" ? "pdf" : "xlsx";
   const filtros = filtrosReporteDesdeUrl(url);
-  const planes = await obtenerReporteViajes(guard.empresa.id, filtros);
-  const fecha = new Date().toISOString().slice(0, 10);
+
+  // CORRECCIÓN PR #112 (HALLAZGO 3): exporta TODO el rango filtrado — ya
+  // no el LIMIT 2000 silencioso. Si el volumen excede el máximo seguro
+  // sin un filtro que lo acote, se rechaza con un mensaje claro (nunca
+  // se trunca sin avisar).
+  const resultado = await obtenerReporteViajesParaExportar(guard.empresa.id, filtros);
+  if (!resultado.ok) {
+    return NextResponse.json({ error: resultado.error }, { status: 400 });
+  }
+  const planes = resultado.planes;
+  // CORRECCIÓN PR #112 (HALLAZGO 2): fecha/hora de Guatemala explícita —
+  // nunca el timezone implícito del proceso del servidor.
+  const fecha = hoyLocal();
 
   if (formato === "pdf") {
     const kpi = calcularKpisReporte(planes);
     const subtitulo =
       `${guard.empresa.nombre} · ` +
       `${filtros.fechaDesde ?? "Inicio"} a ${filtros.fechaHasta ?? "Hoy"} · ` +
-      `Generado ${new Date().toLocaleString("es-GT")} · ` +
+      `Generado ${formatearTimestampVisible(ahoraLocal())} (Guatemala) · ` +
       `${kpi.totalViajes} viaje(s) · ${kpi.cerrados} cerrado(s) · ${kpi.pendientesCierre} pendiente(s) de cierre · ` +
       `Valor programado ${moneda(kpi.valorProgramado)} · Valor cerrado ${moneda(kpi.valorCerrado)}`;
     const buffer = await tablaAPdf({
