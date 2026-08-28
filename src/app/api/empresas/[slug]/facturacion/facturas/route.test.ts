@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/tenant", () => ({ requireTenantFacturacion: vi.fn() }));
 vi.mock("@/lib/facturacion/facturas", () => ({
-  listarFacturas: vi.fn(() => Promise.resolve([])),
+  listarFacturas: vi.fn(() => Promise.resolve({ items: [], totalReal: 0, page: 1, pageSize: 50 })),
   crearFactura: vi.fn(),
 }));
 
@@ -33,6 +33,14 @@ describe("GET /facturacion/facturas — 26) permisos: facturacion:ver", () => {
     expect(res.status).toBe(200);
     expect(requireTenantFacturacion).toHaveBeenCalledWith("prueba", "ver");
     expect(listarFacturas).toHaveBeenCalledWith(7, expect.anything());
+  });
+
+  it("responde con totalReal/page/pageSize independientes del contenido de la página (paginación)", async () => {
+    vi.mocked(listarFacturas).mockResolvedValue({ items: [], totalReal: 734, page: 2, pageSize: 100 });
+    const res = await GET(new Request("http://localhost/x?page=2&pageSize=100"), ctx);
+    const body = await res.json();
+    expect(body).toEqual({ facturas: [], totalReal: 734, page: 2, pageSize: 100 });
+    expect(listarFacturas).toHaveBeenCalledWith(7, expect.objectContaining({ page: 2, pageSize: 100 }));
   });
 });
 

@@ -92,6 +92,19 @@ function estadoFinancieroDe(montoTotal: number, totalPagado: number): EstadoFina
   return "Pago parcial";
 }
 
+/** HOTFIX PRE-MERGE PR #113 (Hallazgo 2) — paginación server-side. */
+const PAGE_SIZE_DEFAULT = 50;
+const PAGE_SIZE_MAX = 200;
+
+export type Paginacion = { page?: number; pageSize?: number };
+export type ResultadoPaginado<T> = { items: T[]; totalReal: number; page: number; pageSize: number };
+
+function normalizarPaginacion(p: Paginacion): { page: number; pageSize: number; offset: number } {
+  const pageSize = Math.min(Math.max(Math.trunc(p.pageSize ?? PAGE_SIZE_DEFAULT) || PAGE_SIZE_DEFAULT, 1), PAGE_SIZE_MAX);
+  const page = Math.max(Math.trunc(p.page ?? 1) || 1, 1);
+  return { page, pageSize, offset: (page - 1) * pageSize };
+}
+
 /**
  * `fn` puede terminar de dos formas: lanzando (error inesperado, ver
  * catch abajo) o devolviendo `{ ok: false, ... }` (rechazo de validación
@@ -177,20 +190,31 @@ export type FiltrosFacturas = {
   estadoAdmin?: EstadoAdminFactura;
   fechaDesde?: string;
   fechaHasta?: string;
-};
+} & Paginacion;
 
-export async function listarFacturas(empresaId: number, filtros: FiltrosFacturas): Promise<Factura[]> {
+/** Condiciones+params compartidas EXACTAMENTE entre el listado paginado y el COUNT(*) independiente. */
+function condicionesFacturas(empresaId: number, filtros: FiltrosFacturas): { condiciones: string[]; params: (string | number)[] } {
   const condiciones = ["f.empresa_id = ?"];
   const params: (string | number)[] = [empresaId];
   if (filtros.clienteId) { condiciones.push("f.cliente_id = ?"); params.push(filtros.clienteId); }
   if (filtros.estadoAdmin) { condiciones.push("f.estado_admin = ?"); params.push(filtros.estadoAdmin); }
   if (filtros.fechaDesde) { condiciones.push("f.fecha_emision >= ?"); params.push(filtros.fechaDesde); }
   if (filtros.fechaHasta) { condiciones.push("f.fecha_emision <= ?"); params.push(filtros.fechaHasta); }
-  const rows = await query<RowDataPacket[]>(
-    `${FACTURA_SELECT} WHERE ${condiciones.join(" AND ")} ORDER BY f.creado_en DESC LIMIT 500`,
-    params,
-  );
-  return rows.map(mapFactura);
+  return { condiciones, params };
+}
+
+export async function listarFacturas(empresaId: number, filtros: FiltrosFacturas): Promise<ResultadoPaginado<Factura>> {
+  const { condiciones, params } = condicionesFacturas(empresaId, filtros);
+  const { page, pageSize, offset } = normalizarPaginacion(filtros);
+  const where = condiciones.join(" AND ");
+  const [rows, countRows] = await Promise.all([
+    query<RowDataPacket[]>(
+      `${FACTURA_SELECT} WHERE ${where} ORDER BY f.creado_en DESC LIMIT ? OFFSET ?`,
+      [...params, pageSize, offset],
+    ),
+    query<RowDataPacket[]>(`SELECT COUNT(*) AS total FROM fact_facturas f WHERE ${where}`, params),
+  ]);
+  return { items: rows.map(mapFactura), totalReal: Number(countRows[0]?.total ?? 0), page, pageSize };
 }
 
 export async function obtenerFactura(
@@ -240,21 +264,10 @@ export async function obtenerFactura(
  * siempre sinónimo de "nunca facturado o la factura que lo tenía se
  * anuló". Esta es la única fuente para armar una factura NUEVA.
  */
-export async function listarViajesPendientes(
+function condicionesViajesPendientes(
   empresaId: number,
   filtros: { clienteId?: number; fechaDesde?: string; fechaHasta?: string },
-): Promise<ViajePendiente[]> {
-  // Asegura el puente clientes.tms_cliente_id antes de leer — mismo
-  // criterio ya usado por la pantalla de Facturación existente
-  // (GET /facturacion/catalogos) para no depender de que alguien haya
-  // abierto Programación primero.
-  try {
-    await asegurarSchemaClientes();
-    await asegurarVinculosTmsClientes(empresaId);
-  } catch {
-    /* si el puente falla, la consulta simplemente no encontrará cliente_id — no bloquea la lectura */
-  }
-
+): { condiciones: string[]; params: (string | number)[] } {
   const condiciones = [
     "p.empresa_id = ?",
     "p.estado = 'Cerrado'",
@@ -267,28 +280,58 @@ export async function listarViajesPendientes(
   if (filtros.clienteId) { condiciones.push("cli.id = ?"); params.push(filtros.clienteId); }
   if (filtros.fechaDesde) { condiciones.push("p.fecha_plan >= ?"); params.push(filtros.fechaDesde); }
   if (filtros.fechaHasta) { condiciones.push("p.fecha_plan <= ?"); params.push(filtros.fechaHasta); }
+  return { condiciones, params };
+}
+
+export async function listarViajesPendientes(
+  empresaId: number,
+  filtros: { clienteId?: number; fechaDesde?: string; fechaHasta?: string } & Paginacion,
+): Promise<ResultadoPaginado<ViajePendiente>> {
+  // Asegura el puente clientes.tms_cliente_id antes de leer — mismo
+  // criterio ya usado por la pantalla de Facturación existente
+  // (GET /facturacion/catalogos) para no depender de que alguien haya
+  // abierto Programación primero. HOTFIX PRE-MERGE PR #113 (Hallazgo 1):
+  // esto NUNCA se silencia — es información financiera. Si el schema, el
+  // vínculo, la DB o los permisos fallan, la operación completa debe
+  // fallar explícitamente, nunca degradar a "cliente sin vínculo" ni a
+  // una lista incompleta de viajes.
+  await asegurarSchemaClientes();
+  await asegurarVinculosTmsClientes(empresaId);
+
+  const { condiciones, params } = condicionesViajesPendientes(empresaId, filtros);
+  const { page, pageSize, offset } = normalizarPaginacion(filtros);
+  const where = condiciones.join(" AND ");
+  const from = `FROM tms_planes_viaje p
+     LEFT JOIN clientes cli ON cli.tms_cliente_id = p.cliente_id AND cli.empresa_id = p.empresa_id`;
   // Deliberadamente NO se seleccionan piloto/auxiliares/evidencias/paradas/
   // GPS — Facturador no necesita ni debe ver esos datos operativos.
-  const rows = await query<RowDataPacket[]>(
-    `SELECT p.id, p.codigo, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan,
-            cli.id AS cliente_id, cli.nombre AS cliente, u.placa, p.tarifa_comercial,
-            DATE_FORMAT(p.cerrado_en, '%Y-%m-%dT%H:%i') AS cerrado_en
-     FROM tms_planes_viaje p
-     LEFT JOIN clientes cli ON cli.tms_cliente_id = p.cliente_id AND cli.empresa_id = p.empresa_id
-     LEFT JOIN tms_unidades u ON u.id = p.unidad_id
-     WHERE ${condiciones.join(" AND ")}
-     ORDER BY p.fecha_plan DESC, p.id DESC
-     LIMIT 500`,
-    params,
-  );
-  return rows.map((r) => ({
-    planId: Number(r.id), codigo: String(r.codigo), fechaPlan: String(r.fecha_plan),
-    clienteId: r.cliente_id != null ? Number(r.cliente_id) : null,
-    cliente: r.cliente != null ? String(r.cliente) : null,
-    placa: r.placa != null ? String(r.placa) : null,
-    tarifaComercial: r.tarifa_comercial != null ? Number(r.tarifa_comercial) : null,
-    cerradoEn: r.cerrado_en != null ? String(r.cerrado_en) : null,
-  }));
+  const [rows, countRows] = await Promise.all([
+    query<RowDataPacket[]>(
+      `SELECT p.id, p.codigo, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan,
+              cli.id AS cliente_id, cli.nombre AS cliente, u.placa, p.tarifa_comercial,
+              DATE_FORMAT(p.cerrado_en, '%Y-%m-%dT%H:%i') AS cerrado_en
+       ${from}
+       LEFT JOIN tms_unidades u ON u.id = p.unidad_id
+       WHERE ${where}
+       ORDER BY p.fecha_plan DESC, p.id DESC
+       LIMIT ? OFFSET ?`,
+      [...params, pageSize, offset],
+    ),
+    query<RowDataPacket[]>(`SELECT COUNT(*) AS total ${from} WHERE ${where}`, params),
+  ]);
+  return {
+    items: rows.map((r) => ({
+      planId: Number(r.id), codigo: String(r.codigo), fechaPlan: String(r.fecha_plan),
+      clienteId: r.cliente_id != null ? Number(r.cliente_id) : null,
+      cliente: r.cliente != null ? String(r.cliente) : null,
+      placa: r.placa != null ? String(r.placa) : null,
+      tarifaComercial: r.tarifa_comercial != null ? Number(r.tarifa_comercial) : null,
+      cerradoEn: r.cerrado_en != null ? String(r.cerrado_en) : null,
+    })),
+    totalReal: Number(countRows[0]?.total ?? 0),
+    page,
+    pageSize,
+  };
 }
 
 export type LineaFacturaInput = { planId: number; montoAsignado?: number };
@@ -380,12 +423,11 @@ function detalleAjustesMonto(
 }
 
 export async function crearFactura(actor: ActorFacturacion, datos: DatosFactura): Promise<ResultadoFactura> {
-  try {
-    await asegurarSchemaClientes();
-    await asegurarVinculosTmsClientes(actor.empresaId);
-  } catch {
-    /* si el puente falla, la validación de abajo lo detecta igual (tms_cliente_id NULL) */
-  }
+  // HOTFIX PRE-MERGE PR #113 (Hallazgo 1) — nunca silenciado: un fallo de
+  // schema/vínculo/DB/permisos aquí debe rechazar la operación completa,
+  // no dejar pasar una factura que "parece válida" con un puente roto.
+  await asegurarSchemaClientes();
+  await asegurarVinculosTmsClientes(actor.empresaId);
   return tx(async (conn) => {
     const [clienteRows] = await conn.query<RowDataPacket[]>(
       `SELECT id, nombre, tms_cliente_id FROM clientes WHERE id = ? AND empresa_id = ? LIMIT 1`,
@@ -451,12 +493,10 @@ export async function actualizarFacturaBorrador(
   facturaId: number,
   datos: DatosFactura,
 ): Promise<ResultadoFactura> {
-  try {
-    await asegurarSchemaClientes();
-    await asegurarVinculosTmsClientes(actor.empresaId);
-  } catch {
-    /* si el puente falla, la validación de abajo lo detecta igual (tms_cliente_id NULL) */
-  }
+  // HOTFIX PRE-MERGE PR #113 (Hallazgo 1) — igual que en crearFactura:
+  // nunca silenciado.
+  await asegurarSchemaClientes();
+  await asegurarVinculosTmsClientes(actor.empresaId);
   return tx(async (conn) => {
     const [facturaRows] = await conn.query<RowDataPacket[]>(
       `SELECT id, estado_admin, cliente_id FROM fact_facturas WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,

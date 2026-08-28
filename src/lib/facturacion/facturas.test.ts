@@ -7,11 +7,14 @@ vi.mock("@/lib/clientes/schema", () => ({ asegurarSchemaClientes: vi.fn() }));
 
 import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
+import { asegurarVinculosTmsClientes } from "@/lib/clientes/repository";
+import { asegurarSchemaClientes } from "@/lib/clientes/schema";
 import {
   actualizarFacturaBorrador,
   anularFactura,
   crearFactura,
   emitirFactura,
+  listarFacturas,
   listarViajesPendientes,
   registrarPago,
   type ActorFacturacion,
@@ -70,12 +73,25 @@ function mockConnQuery(o: Overrides = {}) {
   });
 }
 
+/**
+ * `query()` (fuera de una transacción) resuelve DIRECTAMENTE el arreglo de
+ * filas — a diferencia de `conn.query()`, que resuelve una tupla. Se
+ * distingue la consulta de COUNT(*) por su texto SQL, igual que el resto
+ * del archivo distingue por substring — nunca por orden de llamada.
+ */
+function mockQuery(rows: Record<string, unknown>[] = [], total = rows.length) {
+  vi.mocked(query).mockImplementation(async (sql: string) => {
+    if (sql.includes("COUNT(*)")) return [{ total }] as unknown as Awaited<ReturnType<typeof query>>;
+    return rows as unknown as Awaited<ReturnType<typeof query>>;
+  });
+}
+
 beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(getPool).mockReturnValue({ getConnection } as unknown as ReturnType<typeof getPool>);
   getConnection.mockResolvedValue(conn);
   conn.execute.mockResolvedValue([{ affectedRows: 1, insertId: 1 }, []]);
-  vi.mocked(query).mockResolvedValue([]);
+  mockQuery([]);
   mockConnQuery();
 });
 afterEach(() => vi.restoreAllMocks());
@@ -313,25 +329,26 @@ describe("[22/23/24] listarViajesPendientes — estado derivado del viaje", () =
   it("22) factura Anulada NUNCA cuenta como facturación activa: tras anular, el viaje reaparece como pendiente", async () => {
     // La condición NOT EXISTS(fact_factura_viajes) es exactamente lo que
     // garantiza esto, porque anularFactura BORRA esa fila.
-    vi.mocked(query).mockResolvedValue([{
+    mockQuery([{
       id: 1, codigo: "PLAN-1", fecha_plan: "2026-08-27", cliente_id: 20, cliente: "Cliente X",
       placa: "C-034BXR", tarifa_comercial: 1000, cerrado_en: "2026-08-27T18:00",
-    }] as unknown as Awaited<ReturnType<typeof query>>);
-    const viajes = await listarViajesPendientes(7, {});
+    }], 1);
+    const { items: viajes, totalReal } = await listarViajesPendientes(7, {});
     expect(viajes).toHaveLength(1);
+    expect(totalReal).toBe(1);
     const [sql] = vi.mocked(query).mock.calls[0];
     expect(sql).toContain("NOT EXISTS (SELECT 1 FROM fact_factura_viajes ffv WHERE ffv.plan_id = p.id)");
   });
 
   it("23) un viaje ya en un Borrador (fila viva en fact_factura_viajes) YA NO aparece como pendiente", async () => {
-    vi.mocked(query).mockResolvedValue([]); // NOT EXISTS excluye cualquier viaje con fila viva, sea Borrador o Emitida
-    const viajes = await listarViajesPendientes(7, {});
+    mockQuery([]); // NOT EXISTS excluye cualquier viaje con fila viva, sea Borrador o Emitida
+    const { items: viajes } = await listarViajesPendientes(7, {});
     expect(viajes).toEqual([]);
   });
 
   it("24) un viaje Emitido tampoco aparece como pendiente (mismo mecanismo que Borrador)", async () => {
-    vi.mocked(query).mockResolvedValue([]);
-    const viajes = await listarViajesPendientes(7, {});
+    mockQuery([]);
+    const { items: viajes } = await listarViajesPendientes(7, {});
     expect(viajes).toEqual([]);
   });
 
@@ -342,11 +359,73 @@ describe("[22/23/24] listarViajesPendientes — estado derivado del viaje", () =
   });
 
   it("filtra por clienteId vía el puente clientes.tms_cliente_id (nunca compara IDs de espacios distintos)", async () => {
-    vi.mocked(query).mockResolvedValue([]);
+    mockQuery([]);
     await listarViajesPendientes(7, { clienteId: 20 });
     const [sql, params] = vi.mocked(query).mock.calls[0];
     expect(sql).toContain("cli.id = ?");
     expect(sql).toContain("cli.tms_cliente_id = p.cliente_id");
     expect(params).toContain(20);
+  });
+});
+
+describe("HOTFIX PRE-MERGE PR #113 — Hallazgo 1: el puente clientes↔TMS nunca se silencia", () => {
+  it("1) asegurarVinculosTmsClientes falla → listarViajesPendientes rechaza (nunca degrada a lista incompleta)", async () => {
+    vi.mocked(asegurarVinculosTmsClientes).mockRejectedValue(new Error("ER_LOCK_WAIT_TIMEOUT"));
+    await expect(listarViajesPendientes(7, {})).rejects.toThrow("ER_LOCK_WAIT_TIMEOUT");
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("2) asegurarVinculosTmsClientes falla → crearFactura rechaza (nunca crea una factura con el puente roto)", async () => {
+    vi.mocked(asegurarVinculosTmsClientes).mockRejectedValue(new Error("ER_NO_SUCH_TABLE"));
+    await expect(crearFactura(actor, { clienteId: 20, planes: [{ planId: 1 }] })).rejects.toThrow("ER_NO_SUCH_TABLE");
+    expect(getConnection).not.toHaveBeenCalled();
+  });
+
+  it("3) asegurarVinculosTmsClientes falla → actualizarFacturaBorrador rechaza", async () => {
+    vi.mocked(asegurarVinculosTmsClientes).mockRejectedValue(new Error("ER_ACCESS_DENIED_ERROR"));
+    await expect(actualizarFacturaBorrador(actor, 1, { clienteId: 20, planes: [{ planId: 1 }] })).rejects.toThrow("ER_ACCESS_DENIED_ERROR");
+    expect(getConnection).not.toHaveBeenCalled();
+  });
+
+  it("asegurarSchemaClientes falla → listarViajesPendientes también rechaza (no solo el vínculo)", async () => {
+    vi.mocked(asegurarSchemaClientes).mockRejectedValue(new Error("ER_BAD_DB_ERROR"));
+    await expect(listarViajesPendientes(7, {})).rejects.toThrow("ER_BAD_DB_ERROR");
+  });
+});
+
+describe("HOTFIX PRE-MERGE PR #113 — Hallazgo 2: paginación server-side, nunca LIMIT fijo silencioso", () => {
+  it("listarFacturas: sin page/pageSize usa el default (page=1, pageSize=50) y devuelve totalReal vía COUNT(*) independiente", async () => {
+    mockQuery([{ id: 1, cliente_id: 20, cliente: "Cliente X", numero_factura: null, fecha_emision: null, monto_total: 1000, estado_admin: "Borrador", observaciones: null, creado_por: 3, creado_en: "2026-08-27", actualizado_por: null, actualizado_en: null, total_pagado: 0 }], 734);
+    const r = await listarFacturas(7, {});
+    expect(r.page).toBe(1);
+    expect(r.pageSize).toBe(50);
+    expect(r.totalReal).toBe(734); // 734 reales aunque solo llegó 1 fila de "página" — nunca se infiere el total del largo de items
+    const [sqlRows, paramsRows] = vi.mocked(query).mock.calls[0];
+    expect(sqlRows).toContain("LIMIT ? OFFSET ?");
+    expect(paramsRows).toEqual(expect.arrayContaining([50, 0]));
+    const [sqlCount] = vi.mocked(query).mock.calls[1];
+    expect(sqlCount).toContain("COUNT(*)");
+  });
+
+  it("listarViajesPendientes: pageSize solicitado por encima del máximo se recorta a 200", async () => {
+    mockQuery([], 900);
+    const r = await listarViajesPendientes(7, { pageSize: 999999 });
+    expect(r.pageSize).toBe(200);
+  });
+
+  it("listarFacturas: page/pageSize inválidos (<=0) caen al default en vez de romper la consulta", async () => {
+    mockQuery([], 0);
+    const r = await listarFacturas(7, { page: -3, pageSize: 0 });
+    expect(r.page).toBe(1);
+    expect(r.pageSize).toBe(50);
+  });
+
+  it("el COUNT(*) usa EXACTAMENTE los mismos parámetros de filtro que el listado (solo sin LIMIT/OFFSET)", async () => {
+    mockQuery([], 0);
+    await listarFacturas(7, { clienteId: 20, estadoAdmin: "Emitida" });
+    const paramsRows = vi.mocked(query).mock.calls[0]?.[1] ?? [];
+    const paramsCount = vi.mocked(query).mock.calls[1]?.[1] ?? [];
+    // filas = [...filtros, pageSize, offset]; count = [...filtros] — mismo prefijo
+    expect(paramsRows.slice(0, paramsCount.length)).toEqual(paramsCount);
   });
 });

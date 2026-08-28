@@ -29,13 +29,20 @@ export async function GET(req: Request, ctx: Ctx) {
   const p = new URL(req.url).searchParams;
   const clienteId = Number(p.get("clienteId"));
   const estadoAdmin = p.get("estadoAdmin");
-  const facturas = await listarFacturas(guard.empresa.id, {
+  const page = Number(p.get("page"));
+  const pageSize = Number(p.get("pageSize"));
+  const resultado = await listarFacturas(guard.empresa.id, {
     clienteId: Number.isInteger(clienteId) && clienteId > 0 ? clienteId : undefined,
     estadoAdmin: estadoAdmin && (ESTADOS as string[]).includes(estadoAdmin) ? (estadoAdmin as EstadoAdminFactura) : undefined,
     fechaDesde: p.get("fechaDesde") && FECHA_RE.test(p.get("fechaDesde")!) ? p.get("fechaDesde")! : undefined,
     fechaHasta: p.get("fechaHasta") && FECHA_RE.test(p.get("fechaHasta")!) ? p.get("fechaHasta")! : undefined,
+    page: Number.isInteger(page) && page > 0 ? page : undefined,
+    pageSize: Number.isInteger(pageSize) && pageSize > 0 ? pageSize : undefined,
   });
-  return NextResponse.json({ facturas }, { headers: { "Cache-Control": "private, no-store" } });
+  return NextResponse.json(
+    { facturas: resultado.items, totalReal: resultado.totalReal, page: resultado.page, pageSize: resultado.pageSize },
+    { headers: { "Cache-Control": "private, no-store" } },
+  );
 }
 
 /** Crea SIEMPRE como Borrador. facturacion:crear. */
