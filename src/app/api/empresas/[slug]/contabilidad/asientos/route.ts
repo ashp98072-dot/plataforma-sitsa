@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
-import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
-import { execute, query } from "@/lib/db";
+import { query } from "@/lib/db";
 import { requireTenantModulo } from "@/lib/tenant";
+import { AsientoInvalido, registrarAsiento } from "@/lib/contabilidad/asientos";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -18,56 +18,20 @@ export async function GET(_req: Request, ctx: Ctx) {
   return NextResponse.json({ asientos: rows });
 }
 
-const schema = z.object({
-  numero: z.string().min(1),
-  fecha: z.string().min(1),
-  glosa: z.string().optional(),
-  lineas: z
-    .array(
-      z.object({
-        cuentaId: z.number(),
-        debe: z.number().default(0),
-        haber: z.number().default(0),
-      }),
-    )
-    .min(2),
-});
-
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenantModulo(slug, "contabilidad", true);
   if (guard.error) return guard.error;
-  const parsed = schema.safeParse(await req.json());
-  if (!parsed.success) {
-    return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
+  const body = await req.json().catch(() => null);
+  try {
+    const id = await registrarAsiento(guard.empresa.id, guard.session.username, body);
+    return NextResponse.json({ id, mensaje: "Asiento registrado." });
+  } catch (error) {
+    if (error instanceof AsientoInvalido) return NextResponse.json({ error: error.message }, { status: 400 });
+    const code = (error as { code?: string })?.code;
+    if (code === "ER_DUP_ENTRY") return NextResponse.json({ error: "Ya existe un asiento con ese número en esta empresa." }, { status: 409 });
+    if (code === "ER_LOCK_DEADLOCK" || code === "ER_LOCK_WAIT_TIMEOUT") return NextResponse.json({ error: "Otra operación está modificando estas cuentas. Intenta nuevamente." }, { status: 409 });
+    console.error("Registro de asiento contable fallido", { code: code ?? "desconocido" });
+    return NextResponse.json({ error: "No se pudo confirmar el registro. Consulta los asientos antes de reintentar." }, { status: 500 });
   }
-  const d = parsed.data;
-  const totalDebe = d.lineas.reduce((s, l) => s + l.debe, 0);
-  const totalHaber = d.lineas.reduce((s, l) => s + l.haber, 0);
-  if (Math.abs(totalDebe - totalHaber) > 0.001) {
-    return NextResponse.json(
-      { error: "El asiento no cuadra (debe ≠ haber)." },
-      { status: 400 },
-    );
-  }
-  const asiento = await execute(
-    `INSERT INTO cont_asientos (empresa_id, fecha, numero, glosa, estado, creado_por)
-     VALUES (?, ?, ?, ?, 'Registrado', ?)`,
-    [
-      guard.empresa.id,
-      d.fecha,
-      d.numero,
-      d.glosa ?? null,
-      guard.session.username,
-    ],
-  );
-  const asientoId = Number(asiento.insertId);
-  for (const l of d.lineas) {
-    await execute(
-      `INSERT INTO cont_asiento_detalle (asiento_id, cuenta_id, debe, haber)
-       VALUES (?, ?, ?, ?)`,
-      [asientoId, l.cuentaId, l.debe, l.haber],
-    );
-  }
-  return NextResponse.json({ id: asientoId, mensaje: "Asiento registrado." });
 }
