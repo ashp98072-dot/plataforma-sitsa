@@ -48,8 +48,14 @@ export type ViajePendiente = {
   planId: number;
   codigo: string;
   fechaPlan: string;
-  clienteId: number | null;
-  cliente: string | null;
+  /**
+   * HOTFIX PRE-MERGE PR #114 (Hallazgo 1): NUNCA null aquí — la condición
+   * `cli.id IS NOT NULL` en `condicionesViajesPendientes` garantiza que
+   * todo viaje devuelto por listarViajesPendientes tiene un `clientes.id`
+   * real vinculado. Un viaje sin bridge simplemente no aparece.
+   */
+  clienteId: number;
+  cliente: string;
   placa: string | null;
   tarifaComercial: number | null;
   cerradoEn: string | null;
@@ -263,6 +269,13 @@ export async function obtenerFactura(
  * en fact_factura_viajes — como anular BORRA esa fila, "sin fila" es
  * siempre sinónimo de "nunca facturado o la factura que lo tenía se
  * anuló". Esta es la única fuente para armar una factura NUEVA.
+ *
+ * HOTFIX PRE-MERGE PR #114 (Hallazgo 1): `cli.id IS NOT NULL` se agrega
+ * AQUÍ (una sola vez, compartido por listado/COUNT/KPI — todos usan este
+ * mismo array de condiciones sobre el mismo `LEFT JOIN clientes cli`) —
+ * un viaje Cerrado sin bridge clientes.tms_cliente_id = tms_clientes.id
+ * NUNCA debe aparecer como facturable, aunque técnicamente esté Cerrado y
+ * sin factura viva: no hay ningún `clientes.id` al que asignárselo.
  */
 function condicionesViajesPendientes(
   empresaId: number,
@@ -272,6 +285,7 @@ function condicionesViajesPendientes(
     "p.empresa_id = ?",
     "p.estado = 'Cerrado'",
     "NOT EXISTS (SELECT 1 FROM fact_factura_viajes ffv WHERE ffv.plan_id = p.id)",
+    "cli.id IS NOT NULL",
   ];
   const params: (string | number)[] = [empresaId];
   // filtros.clienteId es un clientes.id (espacio de Facturación) — se
@@ -281,6 +295,61 @@ function condicionesViajesPendientes(
   if (filtros.fechaDesde) { condiciones.push("p.fecha_plan >= ?"); params.push(filtros.fechaDesde); }
   if (filtros.fechaHasta) { condiciones.push("p.fecha_plan <= ?"); params.push(filtros.fechaHasta); }
   return { condiciones, params };
+}
+
+export type KpisFacturacion = {
+  viajesPendientes: number;
+  valorPendiente: number;
+  facturasEmitidas: number;
+  valorFacturado: number;
+  pendienteCobro: number;
+  cobrado: number;
+};
+
+/**
+ * FACT-1-UI (Fase C) — KPI agregados con SQL (SUM/COUNT) sobre TODO el
+ * universo de la empresa, nunca sobre una página del listado paginado.
+ * Reutiliza EXACTAMENTE `condicionesViajesPendientes` (sin filtros) para
+ * "viajes pendientes" — la misma condición que decide si un viaje puede
+ * facturarse. Nunca se silencia el puente clientes↔TMS (mismo criterio
+ * que listarViajesPendientes).
+ */
+export async function obtenerKpisFacturacion(empresaId: number): Promise<KpisFacturacion> {
+  await asegurarSchemaClientes();
+  await asegurarVinculosTmsClientes(empresaId);
+
+  const { condiciones, params } = condicionesViajesPendientes(empresaId, {});
+  const where = condiciones.join(" AND ");
+  const [viajesRows, facturasRows] = await Promise.all([
+    query<RowDataPacket[]>(
+      `SELECT COUNT(*) AS total, COALESCE(SUM(p.tarifa_comercial), 0) AS valor
+       FROM tms_planes_viaje p
+       LEFT JOIN clientes cli ON cli.tms_cliente_id = p.cliente_id AND cli.empresa_id = p.empresa_id
+       WHERE ${where}`,
+      params,
+    ),
+    query<RowDataPacket[]>(
+      `SELECT COUNT(*) AS emitidas, COALESCE(SUM(f.monto_total), 0) AS valor_facturado,
+              COALESCE(SUM(pg.total_pagado), 0) AS cobrado
+       FROM fact_facturas f
+       LEFT JOIN (SELECT factura_id, SUM(monto) AS total_pagado FROM fact_pagos GROUP BY factura_id) pg
+         ON pg.factura_id = f.id
+       WHERE f.empresa_id = ? AND f.estado_admin = 'Emitida'`,
+      [empresaId],
+    ),
+  ]);
+  const v = viajesRows[0] ?? {};
+  const f = facturasRows[0] ?? {};
+  const valorFacturado = Number(f.valor_facturado ?? 0);
+  const cobrado = Number(f.cobrado ?? 0);
+  return {
+    viajesPendientes: Number(v.total ?? 0),
+    valorPendiente: Number(v.valor ?? 0),
+    facturasEmitidas: Number(f.emitidas ?? 0),
+    valorFacturado,
+    pendienteCobro: valorFacturado - cobrado,
+    cobrado,
+  };
 }
 
 export async function listarViajesPendientes(
@@ -320,10 +389,14 @@ export async function listarViajesPendientes(
     query<RowDataPacket[]>(`SELECT COUNT(*) AS total ${from} WHERE ${where}`, params),
   ]);
   return {
+    // `cli.id IS NOT NULL` en el WHERE ya garantiza que cliente_id/cliente
+    // vienen siempre no nulos — Number()/String() aquí, nunca `??`/`| null`,
+    // para que un cambio futuro que rompa esa garantía falle ruidosamente
+    // (NaN/"null") en vez de colar silenciosamente un `null`.
     items: rows.map((r) => ({
       planId: Number(r.id), codigo: String(r.codigo), fechaPlan: String(r.fecha_plan),
-      clienteId: r.cliente_id != null ? Number(r.cliente_id) : null,
-      cliente: r.cliente != null ? String(r.cliente) : null,
+      clienteId: Number(r.cliente_id),
+      cliente: String(r.cliente),
       placa: r.placa != null ? String(r.placa) : null,
       tarifaComercial: r.tarifa_comercial != null ? Number(r.tarifa_comercial) : null,
       cerradoEn: r.cerrado_en != null ? String(r.cerrado_en) : null,

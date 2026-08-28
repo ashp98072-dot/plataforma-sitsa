@@ -27,10 +27,10 @@ export default async function FacturacionPage({ params, searchParams }: Props) {
   }
   const alcance = alcanceFacturacion(session?.rol ?? "");
   const vistaRaw = (sp.vista ?? "").toLowerCase();
-  const vistaInicial =
-    vistaRaw === "clientes" || vistaRaw === "empresa" || vistaRaw === "ayuda"
-      ? (vistaRaw as "clientes" | "empresa" | "ayuda")
-      : null;
+  const VISTAS_VALIDAS = ["facturas", "viajes-pendientes", "clientes", "empresa", "ayuda"] as const;
+  const vistaInicial = (VISTAS_VALIDAS as readonly string[]).includes(vistaRaw)
+    ? (vistaRaw as (typeof VISTAS_VALIDAS)[number])
+    : null;
 
   return (
     <FacturacionClient
