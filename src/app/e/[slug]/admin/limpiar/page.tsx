@@ -59,17 +59,20 @@ export default function LimpiarModuloPage() {
     return () => window.clearTimeout(timer);
   }, [cargarEmpresas]);
 
-  const cargarConteos = useCallback(async () => {
+  const cargarConteos = useCallback(async (signal: AbortSignal) => {
     if (!empresaId) return;
     setLoading(true);
     setError("");
     setMsg("");
     setConfirmacion("");
+    setConfirmacionEsperada("");
     try {
       const res = await fetch(
         `/api/admin/limpiar-modulo?empresaId=${empresaId}&modulo=${modulo}`,
+        { signal },
       );
       const data = await res.json();
+      if (signal.aborted) return;
       if (!res.ok) {
         setError(data.error ?? "No se pudieron cargar conteos");
         setConteos(null);
@@ -77,19 +80,25 @@ export default function LimpiarModuloPage() {
       }
       setConteos(data.conteos ?? {});
       setConfirmacionEsperada(data.confirmacionEsperada ?? "");
+    } catch {
+      if (!signal.aborted) {
+        setError("No se pudieron cargar los datos. Vuelve a seleccionar el módulo.");
+        setConteos(null);
+      }
     } finally {
-      setLoading(false);
+      if (!signal.aborted) setLoading(false);
     }
   }, [empresaId, modulo]);
 
   useEffect(() => {
     if (!allowed || !empresaId) return;
-    const timer = window.setTimeout(() => void cargarConteos(), 0);
-    return () => window.clearTimeout(timer);
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => void cargarConteos(controller.signal), 0);
+    return () => { window.clearTimeout(timer); controller.abort(); };
   }, [allowed, empresaId, modulo, cargarConteos]);
 
   async function ejecutar() {
-    if (!empresaId || !confirmacion.trim()) return;
+    if (ejecutando || loading || !empresaSel || confirmacionEsperada !== `${empresaSel.codigo} LIMPIAR ${modulo.toUpperCase()}` || confirmacion.trim().toUpperCase() !== confirmacionEsperada.toUpperCase()) return;
     setEjecutando(true);
     setError("");
     setMsg("");
@@ -153,7 +162,8 @@ export default function LimpiarModuloPage() {
                 <button
                   key={e.id}
                   type="button"
-                  onClick={() => setEmpresaId(e.id)}
+                  disabled={ejecutando}
+                  onClick={() => { setConfirmacion(""); setEmpresaId(e.id); }}
                   className={[
                     "rounded-lg border px-3 py-2.5 text-left transition",
                     activa
@@ -185,7 +195,8 @@ export default function LimpiarModuloPage() {
                 <button
                   key={m}
                   type="button"
-                  onClick={() => setModulo(m)}
+                  disabled={ejecutando}
+                  onClick={() => { setConfirmacion(""); setModulo(m); }}
                   className={[
                     "rounded-lg border px-3 py-2 text-left text-xs font-medium transition",
                     activa
@@ -260,7 +271,9 @@ export default function LimpiarModuloPage() {
           type="button"
           disabled={
             ejecutando ||
+            loading ||
             !empresaSel ||
+            confirmacionEsperada !== `${empresaSel?.codigo} LIMPIAR ${modulo.toUpperCase()}` ||
             !confirmacion.trim() ||
             confirmacion.trim().toUpperCase() !==
               confirmacionEsperada.toUpperCase()
@@ -271,7 +284,7 @@ export default function LimpiarModuloPage() {
           {ejecutando
             ? "Limpiando…"
             : empresaSel
-              ? `Vaciar ${modulo.toUpperCase()} solo de ${empresaSel.codigo}`
+              ? `Aplicar limpieza solo en ${empresaSel.codigo}`
               : "Elige una empresa"}
         </button>
       </div>
