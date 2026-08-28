@@ -771,3 +771,48 @@ export async function requireTenantRrhhAny(
     ),
   };
 }
+
+/**
+ * FACT-1 — Facturación (facturas de cliente vinculadas a viajes TMS
+ * cerrados + pagos). Permiso PROPIO ("facturacion"), independiente de
+ * "tms": el rol Facturador debe poder crear/emitir facturas y registrar
+ * pagos SIN recibir "tms" (no debe editar viajes) — ver
+ * modulosPropiosDelRol("Facturador") en permisos-shared.ts, que ya lo
+ * deja así por diseño. Este guard NUNCA cae en el módulo "tms" como
+ * fallback (a diferencia de requireTenantRutas/Multas, que si aceptan
+ * "tms" como alternativa) — mantenerlos separados es precisamente lo que
+ * impide que dar acceso a TMS implique acceso a facturación, o viceversa.
+ */
+export async function requireTenantFacturacion(
+  slug: string,
+  accion: AccionPermiso = "ver",
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length
+    ? empresa.modulos
+    : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("facturacion")) {
+    return {
+      error: NextResponse.json(
+        { error: "Esta empresa no tiene el módulo Facturación." },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  if (tienePermiso(perms, "facturacion", accion)) {
+    return { session, empresa };
+  }
+  return {
+    error: NextResponse.json(
+      { error: `Sin permiso para ${accion} facturación.` },
+      { status: 403 },
+    ),
+  };
+}
