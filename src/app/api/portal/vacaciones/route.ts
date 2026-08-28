@@ -11,9 +11,9 @@ import {
 } from "@/lib/rrhh/solicitudes-vacaciones";
 
 /**
- * Igual que /api/portal/ficha: el empleadoId SIEMPRE sale de la sesión del
- * colaborador, nunca de query/body, para que no pueda ver ni solicitar a
- * nombre de otro empleado cambiando un id.
+ * La empresa y el solicitante SIEMPRE salen de la sesión del
+ * colaborador. POST admite beneficiario opcional, validado contra su equipo
+ * en servidor; GET sigue mostrando exclusivamente los datos propios.
  */
 export async function GET() {
   const session = await getColaboradorSession();
@@ -31,8 +31,9 @@ export async function GET() {
 }
 
 const schema = z.object({
-  fechaInicio: z.string().min(8),
-  fechaFin: z.string().min(8),
+  empleadoId: z.number().int().positive().optional(),
+  fechaInicio: z.iso.date(),
+  fechaFin: z.iso.date(),
   tipo: z.enum(["Vacaciones", "A cuenta de Vacaciones"]).default("Vacaciones"),
   comentario: z.string().max(500).optional(),
 });
@@ -51,7 +52,8 @@ export async function POST(req: Request) {
 
   const r = await crearSolicitudVacaciones({
     empresaId: session.empresaId,
-    empleadoId: session.empleadoId,
+    empleadoId: d.empleadoId ?? session.empleadoId,
+    solicitanteId: session.empleadoId,
     fechaInicio: d.fechaInicio,
     fechaFin: d.fechaFin,
     tipo: d.tipo,

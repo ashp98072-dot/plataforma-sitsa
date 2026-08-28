@@ -7,6 +7,7 @@ import {
 } from "@/lib/rrhh/vacaciones";
 import { listarSolicitudesPorEmpleado } from "@/lib/rrhh/solicitudes-vacaciones";
 import SolicitarVacacionesForm from "./solicitar-form";
+import { listarEquipoVacaciones } from "@/lib/rrhh/vacaciones-equipo";
 
 const ESTADO_COLOR: Record<string, string> = {
   Pendiente: "text-[#e8c468]",
@@ -20,10 +21,11 @@ export default async function VacacionesPage() {
     redirect("/portal/login");
   }
 
-  const [saldo, periodos, solicitudes] = await Promise.all([
+  const [saldo, periodos, solicitudes, equipo] = await Promise.all([
     calcularSaldoTotalDisponible(session!.empresaId, session!.empleadoId),
     obtenerPeriodosDisponibles(session!.empresaId, session!.empleadoId),
     listarSolicitudesPorEmpleado(session!.empresaId, session!.empleadoId),
+    listarEquipoVacaciones(session!.empresaId, session!.empleadoId),
   ]);
 
   return (
@@ -41,6 +43,12 @@ export default async function VacacionesPage() {
             {saldo.toFixed(2)} día(s) disponibles
           </h1>
         </header>
+
+        {equipo.length > 0 ? (
+          <Link href="/portal/vacaciones/equipo" className="mt-5 inline-block rounded-lg border border-[var(--accent)] px-4 py-2 text-sm">
+            Solicitar vacaciones para mi equipo
+          </Link>
+        ) : null}
 
         {periodos.length > 0 ? (
           <section className="mt-6 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6">
