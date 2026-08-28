@@ -18,12 +18,12 @@ export function validarViaticos(filas: Record<string, unknown>[]) {
   }
 }
 
-async function leer(conn: PoolConnection, tabla: string, where: string, empresaId: number): Promise<Grupo> {
+export async function leer(conn: PoolConnection, tabla: string, where: string, empresaId: number, adicionales: number[] = []): Promise<Grupo> {
   const [meta] = await conn.query<RowDataPacket[]>(
     "SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?", [tabla]);
   // Fallar cerrado si falta una migración: nunca limpiar parcialmente un esquema desconocido.
   if (meta[0]?.ENGINE !== "InnoDB") throw new LimpiezaBloqueada(`La tabla ${tabla} no está disponible con soporte transaccional.`);
-  const [filas] = await conn.query<RowDataPacket[]>(`SELECT * FROM ${identificador(tabla)} WHERE ${where} ORDER BY id FOR UPDATE`, [empresaId]);
+  const [filas] = await conn.query<RowDataPacket[]>(`SELECT * FROM ${identificador(tabla)} WHERE ${where} ORDER BY id FOR UPDATE`, [empresaId, ...adicionales]);
   for (const f of filas) {
     if (f.empresa_id != null && Number(f.empresa_id) !== empresaId) {
       throw new LimpiezaBloqueada("Se encontró un vínculo entre empresas. Requiere revisión; no se limpió ningún dato.");
@@ -37,7 +37,7 @@ async function validarReferencias(conn: PoolConnection, grupos: Grupo[]) {
   for (const padre of grupos) {
     if (!padre.filas.length) continue;
     const [refs] = await conn.query<RowDataPacket[]>(
-      `SELECT TABLE_SCHEMA AS esquema, TABLE_SCHEMA = DATABASE() AS local, TABLE_NAME AS tabla, COLUMN_NAME AS columna, REFERENCED_COLUMN_NAME AS destino
+      `SELECT CONSTRAINT_NAME AS restriccion, TABLE_SCHEMA AS esquema, TABLE_SCHEMA = DATABASE() AS local, TABLE_NAME AS tabla, COLUMN_NAME AS columna, REFERENCED_COLUMN_NAME AS destino
        FROM information_schema.KEY_COLUMN_USAGE
        WHERE REFERENCED_TABLE_SCHEMA = DATABASE() AND REFERENCED_TABLE_NAME = ?`, [padre.tabla]);
     // Algunas relaciones históricas no tienen FK: también comprobar los IDs conocidos.
@@ -47,21 +47,33 @@ async function validarReferencias(conn: PoolConnection, grupos: Grupo[]) {
         "SELECT TABLE_NAME AS tabla, COLUMN_NAME AS columna, 'id' AS destino FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND COLUMN_NAME = ?", [columna]);
       refs.push(...sinFk);
     }
+    const relaciones = new Map<string, RowDataPacket[]>();
     for (const ref of refs) {
       if (ref.local != null && !Number(ref.local)) throw new LimpiezaBloqueada("Hay referencias desde otra base de datos. No se limpió ningún dato.");
+      const key = `${ref.tabla}:${ref.restriccion ?? ref.columna}`;
+      relaciones.set(key, [...(relaciones.get(key) ?? []), ref]);
+    }
+    for (const columnas of relaciones.values()) {
+      const ref = columnas[0];
       const hijo = grupos.find((g) => g.tabla === ref.tabla);
-      const ids = padre.filas.map((f) => f[String(ref.destino)]);
       const excluidos = hijo?.filas.map((f) => f.id) ?? [];
-      const [externas] = await conn.query<RowDataPacket[]>(
-        `SELECT ${identificador(String(ref.columna))} FROM ${identificador(String(ref.tabla))}
-         WHERE ${identificador(String(ref.columna))} IN (?) ${excluidos.length ? "AND id NOT IN (?)" : ""} LIMIT 1 FOR UPDATE`,
-        excluidos.length ? [ids, excluidos] : [ids]);
-      if (externas.length) throw new LimpiezaBloqueada(`Hay registros vinculados en ${ref.tabla}. No se limpió ningún dato.`);
+      // Una FK compuesta relaciona la tupla completa, no cada columna por separado.
+      // Comparar solo empresa_id bloqueaba descuentos no relacionados de la misma empresa.
+      for (let i = 0; i < padre.filas.length; i += 250) {
+        const lote = padre.filas.slice(i, i + 250);
+        const condiciones = lote.map(() => `(${columnas.map((c) => `${identificador(String(c.columna))} = ?`).join(" AND ")})`).join(" OR ");
+        const valores = lote.flatMap((fila) => columnas.map((c) => fila[String(c.destino)]));
+        const [externas] = await conn.query<RowDataPacket[]>(
+          `SELECT ${identificador(String(ref.columna))} FROM ${identificador(String(ref.tabla))}
+           WHERE (${condiciones}) ${excluidos.length ? "AND id NOT IN (?)" : ""} LIMIT 1 FOR UPDATE`,
+          excluidos.length ? [...valores, excluidos] : valores);
+        if (externas.length) throw new LimpiezaBloqueada(`Hay registros vinculados en ${ref.tabla}. No se limpió ningún dato.`);
+      }
     }
   }
 }
 
-async function borrarGrupos(conn: PoolConnection, grupos: Grupo[]) {
+export async function borrarGrupos(conn: PoolConnection, grupos: Grupo[]) {
   await validarReferencias(conn, grupos);
   const out: Record<string, number> = {};
   // El caller ordena hijos antes de padres. No se desactivan FKs.
@@ -76,17 +88,17 @@ async function borrarGrupos(conn: PoolConnection, grupos: Grupo[]) {
   return out;
 }
 
-export async function limpiarViajesConjuntos(conn: PoolConnection, empresaId: number) {
+export async function limpiarViajesConjuntos(conn: PoolConnection, empresaId: number, pruebas = false) {
   const planes = await leer(conn, "tms_planes_viaje", "empresa_id = ?", empresaId);
-  if (planes.filas.some((p) => !["Programado", "Cancelado", "Cerrado"].includes(String(p.estado)))) {
+  if (!pruebas && planes.filas.some((p) => !["Programado", "Cancelado", "Cerrado"].includes(String(p.estado)))) {
     throw new LimpiezaBloqueada("Hay viajes en proceso. Finalízalos antes de limpiar Programación/TMS.");
   }
   const planWhere = "plan_id IN (SELECT id FROM tms_planes_viaje WHERE empresa_id = ?)";
   const viajes = await leer(conn, "flota_viajes", planWhere, empresaId);
-  if (viajes.filas.some((v) => v.estado !== "cerrado")) throw new LimpiezaBloqueada("Hay viajes de flota abiertos. No se limpió ningún dato.");
+  if (!pruebas && viajes.filas.some((v) => v.estado !== "cerrado")) throw new LimpiezaBloqueada("Hay viajes de flota abiertos. No se limpió ningún dato.");
   const paradas = await leer(conn, "tms_plan_paradas", planWhere, empresaId);
   const viaticos = await leer(conn, "tms_viaticos", planWhere, empresaId);
-  validarViaticos(viaticos.filas);
+  if (!pruebas) validarViaticos(viaticos.filas);
   const evidencias = await leer(conn, "tms_evidencias", planWhere, empresaId);
   const fotos = await leer(conn, "flota_viaje_evidencias", "viaje_id IN (SELECT v.id FROM flota_viajes v INNER JOIN tms_planes_viaje p ON p.id = v.plan_id WHERE p.empresa_id = ?)", empresaId);
   const lecturas = await leer(conn, "flota_lecturas", "viaje_id IN (SELECT v.id FROM flota_viajes v INNER JOIN tms_planes_viaje p ON p.id = v.plan_id WHERE p.empresa_id = ?)", empresaId);
@@ -94,9 +106,9 @@ export async function limpiarViajesConjuntos(conn: PoolConnection, empresaId: nu
   return borrarGrupos(conn, [fotos, evidencias, lecturas, viaticos, auxiliares, paradas, viajes, planes]);
 }
 
-export async function limpiarViaticos(conn: PoolConnection, empresaId: number) {
+export async function limpiarViaticos(conn: PoolConnection, empresaId: number, pruebas = false) {
   const grupo = await leer(conn, "tms_viaticos", "empresa_id = ?", empresaId);
-  validarViaticos(grupo.filas);
+  if (!pruebas) validarViaticos(grupo.filas);
   return borrarGrupos(conn, [grupo]);
 }
 

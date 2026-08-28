@@ -36,3 +36,10 @@ it("devuelve bloqueo seguro como 409", async () => {
   expect(res.status).toBe(409);
   expect(await res.json()).toEqual({ error: "Hay pagos vinculados." });
 });
+it.each(["pruebas_operaciones", "pruebas_viaticos", "pruebas_multas"])("%s exige confirmación distinta del módulo normal", async (modulo) => {
+  const construir = (confirmacion: string) => new Request("http://localhost/api", { method: "POST", body: JSON.stringify({ empresaId: 7, modulo, confirmacion }) });
+  expect((await POST(construir("TEST LIMPIAR OPERACIONES"))).status).toBe(400);
+  expect(limpiarModuloEmpresa).not.toHaveBeenCalled();
+  expect((await POST(construir(`TEST LIMPIAR ${modulo.toUpperCase()}`))).status).toBe(200);
+  expect(limpiarModuloEmpresa).toHaveBeenCalledWith(expect.objectContaining({ modulo, empresaId: 7, usuario: "admin" }));
+});

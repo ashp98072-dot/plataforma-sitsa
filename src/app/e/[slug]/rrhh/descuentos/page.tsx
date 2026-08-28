@@ -197,6 +197,8 @@ export default function DescuentosPage() {
   // Detalle
   const [detalleId, setDetalleId] = useState<number | null>(null);
   const [detalle, setDetalle] = useState<Descuento | null>(null);
+  const [puedeEliminarPrueba, setPuedeEliminarPrueba] = useState(false);
+  const [eliminando, setEliminando] = useState(false);
   const [cuotas, setCuotas] = useState<Cuota[]>([]);
   const [abonos, setAbonos] = useState<Abono[]>([]);
   const [abonoMonto, setAbonoMonto] = useState(0);
@@ -264,6 +266,7 @@ export default function DescuentosPage() {
       }
       setDetalleId(id);
       setDetalle(data.descuento);
+      setPuedeEliminarPrueba(data.puedeEliminarPrueba === true);
       setCuotas(data.cuotas ?? []);
       setAbonos(data.abonos ?? []);
       setNuevoNumCuotas(
@@ -272,6 +275,22 @@ export default function DescuentosPage() {
     },
     [slug],
   );
+
+  async function eliminarPrueba() {
+    if (!detalle || eliminando) return;
+    const esperado = `ELIMINAR DESCUENTO ${detalle.id}`;
+    const confirmacion = prompt(`SOLO PRUEBAS: eliminar ${detalle.codigo} de ${detalle.empleadoNombre}, sus cuotas y abonos. No se puede deshacer. Las entregas de inventario se conservan y quedan desvinculadas. Si está aplicado en planilla o vinculado a una multa, se bloqueará. Escribe: ${esperado}`);
+    if (confirmacion !== esperado) return;
+    setEliminando(true); setError(""); setMsg("");
+    try {
+      const res = await fetch(`/api/empresas/${slug}/rrhh/descuentos/${detalle.id}`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirmacion }) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "No se pudo eliminar.");
+      setDetalle(null); setDetalleId(null); setCuotas([]); setAbonos([]); setPuedeEliminarPrueba(false);
+      setMsg(data.mensaje); await cargar();
+    } catch (e) { setError(e instanceof Error ? e.message : "Error de red."); }
+    finally { setEliminando(false); }
+  }
 
   async function onCrear(e: FormEvent) {
     e.preventDefault();
@@ -784,6 +803,7 @@ export default function DescuentosPage() {
               <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
                 <div className="flex items-center justify-between">
                   <h2 className="text-lg font-medium">{detalle.codigo}</h2>
+                  {puedeEliminarPrueba && <button type="button" disabled={eliminando} onClick={() => void eliminarPrueba()} className="rounded bg-red-700 px-3 py-1 text-sm text-white">{eliminando ? "Eliminando…" : "Eliminar descuento (pruebas)"}</button>}
                   <span className={`text-sm font-medium ${COLOR_ESTADO[detalle.estado]}`}>
                     {ETIQUETA_ESTADO[detalle.estado]}
                   </span>
