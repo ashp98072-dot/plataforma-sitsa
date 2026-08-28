@@ -292,6 +292,32 @@ export async function GET(_req: Request, ctx: Ctx) {
     }
   }
 
+  // VIATICOS-FIRMA: liquidar ya no depende del permiso genérico
+  // "viaticos" — Facturador (que ya NO recibe notificación de
+  // autorización, arriba solo gatea por viaticos_autorizar) ve esta en
+  // vez de eso, con viaticos_liquidar:ver.
+  if (puede("viaticos_liquidar", "ver")) {
+    try {
+      const rows = await query<RowDataPacket[]>(
+        `SELECT COUNT(*) AS c FROM tms_viaticos WHERE empresa_id = ? AND estado = 'ENTREGADO'`,
+        [empresaId],
+      );
+      const c = Number(rows[0]?.c ?? 0);
+      if (c > 0) {
+        items.push({
+          id: "alerta-viaticos-liquidar",
+          tipo: "alerta",
+          titulo: "Viáticos pendientes de liquidación",
+          detalle: `${c} viático(s) entregado(s), pendiente de liquidar`,
+          enlace: `/e/${slug}/viaticos`,
+          creadoAt: null,
+        });
+      }
+    } catch (e) {
+      console.error("[notificaciones] viaticos_liquidar:", e);
+    }
+  }
+
   if (puede("viajes_cerrar", "ver")) {
     try {
       // OPS-1 (corregido): mismo criterio que el pendiente_cierre calculado
