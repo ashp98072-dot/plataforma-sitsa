@@ -137,6 +137,15 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   // notifica un booleano (tieneTrazo*) para habilitar el botón, y el
   // padre obtiene el PNG real llamando canvas*Ref.current.obtenerImagen()
   // UNA sola vez, al confirmar — ver src/components/tms/firma-canvas.tsx.
+  //
+  // CORRECCIÓN URGENTE (4ª vuelta) — `firmaSesion` es un contador que se
+  // incrementa cada vez que se abre CUALQUIER modal de firma; su valor se
+  // pasa como `sesionId` a FirmaCanvas para que, si el componente llegara
+  // a desmontarse/remontarse mientras el usuario dibuja, pueda recuperar
+  // el trazo desde el respaldo en memoria de firma-canvas.tsx — y para
+  // que ese respaldo NUNCA se reutilice entre una autorización y otra
+  // (cada apertura de modal obtiene un sesionId nuevo).
+  const [firmaSesion, setFirmaSesion] = useState(0);
   const [masivoAbierto, setMasivoAbierto] = useState(false);
   const canvasMasivoRef = useRef<FirmaCanvasHandle | null>(null);
   const [tieneTrazoMasivo, setTieneTrazoMasivo] = useState(false);
@@ -231,6 +240,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   // contraseña — solo exige un trazo dibujado (ver confirmarAutorizar).
   function abrirAutorizar(row: ViaticoControlRow) {
     setAutorizando(row);
+    setFirmaSesion((n) => n + 1);
     setTieneTrazoAutorizar(false);
     setErrorAutorizar("");
     setFirmaAutorizarOk(null);
@@ -275,6 +285,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   // la autoridad real de la comparación exacta).
   function abrirLiquidar(row: ViaticoControlRow) {
     setLiquidando(row);
+    setFirmaSesion((n) => n + 1);
     setGastosComprobados("");
     setReintegro("");
     setObsLiquidacion("");
@@ -329,6 +340,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
       setError("Selecciona al menos un viático PROGRAMADO para autorizar.");
       return;
     }
+    setFirmaSesion((n) => n + 1);
     setTieneTrazoMasivo(false);
     setErrorMasivo("");
     setMasivoAbierto(true);
@@ -644,7 +656,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
                 <label className="block text-xs text-[var(--muted)]">
                   Dibuja tu firma:
                   <div className="mt-0.5">
-                    <FirmaCanvas ref={canvasAutorizarRef} onCambiaTrazo={setTieneTrazoAutorizar} disabled={firmandoAutorizar} />
+                    <FirmaCanvas ref={canvasAutorizarRef} sesionId={`autorizar-${autorizando.id}-${firmaSesion}`} onCambiaTrazo={setTieneTrazoAutorizar} disabled={firmandoAutorizar} />
                   </div>
                 </label>
                 <p className="text-[10px] text-[var(--muted)]">{TEXTO_FIRMA_INTERNA} — no es una firma legal certificada.</p>
@@ -753,7 +765,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
                     <label className="block text-xs text-[var(--muted)]">
                       Dibuja tu firma:
                       <div className="mt-0.5">
-                        <FirmaCanvas ref={canvasLiquidarRef} onCambiaTrazo={setTieneTrazoLiquidar} disabled={firmandoLiquidar} />
+                        <FirmaCanvas ref={canvasLiquidarRef} sesionId={`liquidar-${liquidando.id}-${firmaSesion}`} onCambiaTrazo={setTieneTrazoLiquidar} disabled={firmandoLiquidar} />
                       </div>
                     </label>
                     <p className="text-[10px] text-[var(--muted)]">{TEXTO_FIRMA_INTERNA} — no es una firma legal certificada.</p>
@@ -809,7 +821,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
             <label className="block text-xs text-[var(--muted)]">
               Dibuja tu firma:
               <div className="mt-0.5">
-                <FirmaCanvas ref={canvasMasivoRef} onCambiaTrazo={setTieneTrazoMasivo} disabled={autorizandoMasivo} />
+                <FirmaCanvas ref={canvasMasivoRef} sesionId={`masivo-${firmaSesion}`} onCambiaTrazo={setTieneTrazoMasivo} disabled={autorizandoMasivo} />
               </div>
             </label>
             <p className="text-[10px] text-[var(--muted)]">{TEXTO_FIRMA_INTERNA} — no es una firma legal certificada.</p>
