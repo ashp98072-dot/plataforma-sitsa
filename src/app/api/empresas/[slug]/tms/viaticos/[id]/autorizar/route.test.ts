@@ -13,7 +13,11 @@ const ctx = { params: Promise.resolve({ slug: "prueba", id: "10" }) };
 const PNG_BYTES = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4]);
 const JPEG_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0]);
 
-function formData(fields: Record<string, string>, opts: { conFirma?: boolean; bytes?: Uint8Array; size?: number } = {}) {
+/**
+ * CORRECCIÓN URGENTE — autorizar YA NO acepta/exige `password` en el
+ * FormData. `fields` solo transporta `firmaLote` en estas pruebas.
+ */
+function formData(fields: Record<string, string> = {}, opts: { conFirma?: boolean; bytes?: Uint8Array; size?: number } = {}) {
   const fd = new FormData();
   for (const [k, v] of Object.entries(fields)) fd.set(k, v);
   if (opts.conFirma !== false) {
@@ -33,39 +37,33 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("POST /tms/viaticos/[id]/autorizar", () => {
-  it("exige viaticos_autorizar:editar ANTES de tocar la lib", async () => {
+  it("3) sin permiso viaticos_autorizar:editar -> rechazo (403) ANTES de tocar la lib — la ausencia de password NUNCA reemplaza el permiso", async () => {
     vi.mocked(requireTenantViaticosAutorizar).mockResolvedValue({ error: new Response(null, { status: 403 }) } as Awaited<ReturnType<typeof requireTenantViaticosAutorizar>>);
-    const res = await POST(new Request("http://localhost/x", { method: "POST", body: formData({ password: "x" }) }), ctx);
+    const res = await POST(new Request("http://localhost/x", { method: "POST", body: formData() }), ctx);
     expect(res.status).toBe(403);
     expect(autorizarViatico).not.toHaveBeenCalled();
   });
 
-  it("rechaza sin contraseña antes de llamar a la lib", async () => {
-    const res = await POST(new Request("http://localhost/x", { method: "POST", body: formData({}) }), ctx);
-    expect(res.status).toBe(400);
-    expect(autorizarViatico).not.toHaveBeenCalled();
-  });
-
-  it("1) sin firmaImagen (sin trazo) -> 400 'Dibuja tu firma antes de continuar.', sin llamar a la lib", async () => {
-    const res = await POST(new Request("http://localhost/x", { method: "POST", body: formData({ password: "clave123" }, { conFirma: false }) }), ctx);
+  it("4) sin firmaImagen (sin trazo) -> 400 'Dibuja tu firma antes de continuar.', sin llamar a la lib", async () => {
+    const res = await POST(new Request("http://localhost/x", { method: "POST", body: formData({}, { conFirma: false }) }), ctx);
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.error).toBe("Dibuja tu firma antes de continuar.");
     expect(autorizarViatico).not.toHaveBeenCalled();
   });
 
-  it("PNG supera el tamaño permitido -> 400, sin llamar a la lib", async () => {
+  it("6) PNG supera el tamaño permitido -> 400, sin llamar a la lib", async () => {
     const res = await POST(
-      new Request("http://localhost/x", { method: "POST", body: formData({ password: "clave123" }, { size: 2 * 1024 * 1024 }) }),
+      new Request("http://localhost/x", { method: "POST", body: formData({}, { size: 2 * 1024 * 1024 }) }),
       ctx,
     );
     expect(res.status).toBe(400);
     expect(autorizarViatico).not.toHaveBeenCalled();
   });
 
-  it("archivo con magic bytes de JPEG (no PNG real) -> 400, sin llamar a la lib", async () => {
+  it("5) archivo con magic bytes de JPEG (no PNG real) -> 400, sin llamar a la lib", async () => {
     const res = await POST(
-      new Request("http://localhost/x", { method: "POST", body: formData({ password: "clave123" }, { bytes: JPEG_BYTES }) }),
+      new Request("http://localhost/x", { method: "POST", body: formData({}, { bytes: JPEG_BYTES }) }),
       ctx,
     );
     expect(res.status).toBe(400);
@@ -74,15 +72,28 @@ describe("POST /tms/viaticos/[id]/autorizar", () => {
     expect(autorizarViatico).not.toHaveBeenCalled();
   });
 
-  it("delega en autorizarViatico con la identidad de la SESIÓN del servidor (nombre/rol nunca del cliente) e incluye la imagen validada", async () => {
+  it("CORRECCIÓN URGENTE: no lee ni exige `password` del FormData — un request con password vacío/ausente y firma válida SÍ delega a la lib", async () => {
     vi.mocked(autorizarViatico).mockResolvedValue({
       ok: true,
       firma: { id: 1, codigoFirma: "SIG-1", fechaHoraServidor: new Date("2026-08-28T15:00:00Z"), hashPayload: "h", nombreFirmante: "Ana López", rolFirmante: "JefeOperaciones", tieneImagen: true },
     });
-    const res = await POST(new Request("http://localhost/x", { method: "POST", body: formData({ password: "clave123" }) }), ctx);
+    const res = await POST(new Request("http://localhost/x", { method: "POST", body: formData() }), ctx);
+    expect(res.status).toBe(200);
+    expect(autorizarViatico).toHaveBeenCalledTimes(1);
+    // El objeto delegado a la lib NUNCA incluye la clave "password".
+    const args = vi.mocked(autorizarViatico).mock.calls[0][3];
+    expect(Object.prototype.hasOwnProperty.call(args, "password")).toBe(false);
+  });
+
+  it("delega en autorizarViatico con la identidad de la SESIÓN del servidor (nombre/rol nunca del cliente) e incluye la imagen validada, sin password", async () => {
+    vi.mocked(autorizarViatico).mockResolvedValue({
+      ok: true,
+      firma: { id: 1, codigoFirma: "SIG-1", fechaHoraServidor: new Date("2026-08-28T15:00:00Z"), hashPayload: "h", nombreFirmante: "Ana López", rolFirmante: "JefeOperaciones", tieneImagen: true },
+    });
+    const res = await POST(new Request("http://localhost/x", { method: "POST", body: formData() }), ctx);
     expect(res.status).toBe(200);
     expect(autorizarViatico).toHaveBeenCalledWith(7, 10, "jefe1", {
-      usuarioId: 3, nombreFirmante: "Ana López", rolFirmante: "JefeOperaciones", password: "clave123",
+      usuarioId: 3, nombreFirmante: "Ana López", rolFirmante: "JefeOperaciones",
       imagen: { bytes: expect.any(ArrayBuffer), original: "firma.png" },
       firmaLote: false,
       ip: null, userAgent: null,
@@ -101,14 +112,23 @@ describe("POST /tms/viaticos/[id]/autorizar", () => {
       ok: true,
       firma: { id: 1, codigoFirma: "SIG-1", fechaHoraServidor: new Date("2026-08-28T15:00:00Z"), hashPayload: "h", nombreFirmante: "Ana López", rolFirmante: "JefeOperaciones", tieneImagen: true },
     });
-    const res = await POST(new Request("http://localhost/x", { method: "POST", body: formData({ password: "clave123", firmaLote: "true" }) }), ctx);
+    const res = await POST(new Request("http://localhost/x", { method: "POST", body: formData({ firmaLote: "true" }) }), ctx);
     expect(res.status).toBe(200);
     expect(autorizarViatico).toHaveBeenCalledWith(7, 10, "jefe1", expect.objectContaining({ firmaLote: true }));
   });
 
-  it("propaga el status de error de la lib (p.ej. 401 contraseña incorrecta, 409 estado)", async () => {
-    vi.mocked(autorizarViatico).mockResolvedValue({ ok: false, error: "Contraseña incorrecta.", status: 401 });
-    const res = await POST(new Request("http://localhost/x", { method: "POST", body: formData({ password: "mala" }) }), ctx);
-    expect(res.status).toBe(401);
+  it("propaga el status de error de la lib (p.ej. 409 estado inválido)", async () => {
+    vi.mocked(autorizarViatico).mockResolvedValue({ ok: false, error: "Este viático ya fue autorizado.", status: 409 });
+    const res = await POST(new Request("http://localhost/x", { method: "POST", body: formData() }), ctx);
+    expect(res.status).toBe(409);
+  });
+
+  it("CORRECCIÓN URGENTE — 500 real: una excepción no controlada de autorizarViatico se captura y responde JSON {error}, nunca un 500 sin cuerpo", async () => {
+    vi.mocked(autorizarViatico).mockRejectedValue(new Error("fallo real de DB"));
+    const res = await POST(new Request("http://localhost/x", { method: "POST", body: formData() }), ctx);
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(typeof body.error).toBe("string");
+    expect(body.error.length).toBeGreaterThan(0);
   });
 });

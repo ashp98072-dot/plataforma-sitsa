@@ -126,14 +126,16 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   // dentro del payload firmado de CADA autorización del lote — nunca se
   // pretende una firma distinta por viático. Se dejó fuera loteFirmaId
   // (identificador de lote) por alcance: ver reporte de entrega.
+  // CORRECCIÓN URGENTE — autorizar (individual y masivo) YA NO pide
+  // contraseña: sesión autenticada + permiso + firma manuscrita bastan
+  // (ver JSDoc de autorizarViatico en src/lib/tms/viaticos.ts). Liquidar
+  // SIGUE exigiéndola sin cambios (pwdLiquidar más abajo, intacto).
   const [masivoAbierto, setMasivoAbierto] = useState(false);
-  const [pwdMasivo, setPwdMasivo] = useState("");
   const [firmaImagenMasivo, setFirmaImagenMasivo] = useState<File | null>(null);
   const [errorMasivo, setErrorMasivo] = useState("");
 
   // VIATICOS-FIRMA — modal "Firmar y autorizar".
   const [autorizando, setAutorizando] = useState<ViaticoControlRow | null>(null);
-  const [pwdAutorizar, setPwdAutorizar] = useState("");
   const [firmaImagenAutorizar, setFirmaImagenAutorizar] = useState<File | null>(null);
   const [errorAutorizar, setErrorAutorizar] = useState("");
   const [firmandoAutorizar, setFirmandoAutorizar] = useState(false);
@@ -214,11 +216,11 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   }
 
   // VIATICOS-FIRMA — "Firmar y autorizar": abre el modal (Viaje/
-  // Beneficiario/Monto + contraseña), el POST solo ocurre al confirmar
-  // dentro del modal, nunca al primer clic.
+  // Beneficiario/Monto), el POST solo ocurre al confirmar dentro del
+  // modal, nunca al primer clic. CORRECCIÓN URGENTE: ya no pide
+  // contraseña — solo exige un trazo dibujado (ver confirmarAutorizar).
   function abrirAutorizar(row: ViaticoControlRow) {
     setAutorizando(row);
-    setPwdAutorizar("");
     setFirmaImagenAutorizar(null);
     setErrorAutorizar("");
     setFirmaAutorizarOk(null);
@@ -230,27 +232,24 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
       setErrorAutorizar("Dibuja tu firma antes de continuar.");
       return;
     }
-    if (!pwdAutorizar) {
-      setErrorAutorizar("Ingresa tu contraseña actual.");
-      return;
-    }
     setFirmandoAutorizar(true);
     setErrorAutorizar("");
     try {
       const fd = new FormData();
-      fd.set("password", pwdAutorizar);
       fd.set("firmaImagen", firmaImagenAutorizar, "firma.png");
       const res = await fetch(`/api/empresas/${slug}/tms/viaticos/${autorizando.id}/autorizar`, {
         method: "POST",
         body: fd,
       });
-      const data = await res.json();
+      // CORRECCIÓN URGENTE — un 500 sin cuerpo JSON (p. ej. página de error
+      // de Hostinger) ya no se confunde con "Error de conexión.": se
+      // intenta parsear y, si falla, se cae a un mensaje con el status real.
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setErrorAutorizar(data.error ?? "No se pudo autorizar el viático.");
+        setErrorAutorizar(data.error ?? `No se pudo autorizar el viático (${res.status}).`);
         return;
       }
       setFirmaAutorizarOk(data.firma as FirmaInfo);
-      setPwdAutorizar("");
       await cargar();
     } catch {
       setErrorAutorizar("Error de conexión.");
@@ -297,9 +296,9 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
         method: "POST",
         body: fd,
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setErrorLiquidar(data.error ?? "No se pudo liquidar el viático.");
+        setErrorLiquidar(data.error ?? `No se pudo liquidar el viático (${res.status}).`);
         return;
       }
       setFirmaLiquidarOk(data.firma as FirmaInfo);
@@ -318,7 +317,6 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
       setError("Selecciona al menos un viático PROGRAMADO para autorizar.");
       return;
     }
-    setPwdMasivo("");
     setFirmaImagenMasivo(null);
     setErrorMasivo("");
     setMasivoAbierto(true);
@@ -327,24 +325,18 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   /**
    * "AUTORIZAR SELECCIONADOS" — llama el mismo endpoint atómico de a uno
    * por seleccionado (sin nuevo endpoint masivo en backend). Si alguno
-   * falla (p. ej. ya no está PROGRAMADO, o la contraseña es incorrecta —
-   * en ese caso TODOS fallan de una vez), se reporta con nombre/motivo —
-   * nunca se oculta un fallo parcial. VIATICOS-FIRMA: la firma exige
-   * contraseña — se pide UNA sola vez para todo el lote (misma
-   * reautenticación puntual, aplicada a cada autorización individual).
-   * VIATICOS-FIRMA-VISUAL: la misma imagen dibujada una vez en el modal
-   * (firmaImagenMasivo) se adjunta a cada llamada individual — cada una
-   * sigue generando su PROPIO archivo/fila de firma en el servidor
-   * (guardarUpload se ejecuta por cada POST), nunca se reutiliza una fila
-   * de firmas_electronicas ya creada.
+   * falla (p. ej. ya no está PROGRAMADO), se reporta con nombre/motivo —
+   * nunca se oculta un fallo parcial. CORRECCIÓN URGENTE: ya no pide
+   * contraseña (autorizar no la exige) — solo el trazo dibujado UNA vez
+   * para todo el lote. VIATICOS-FIRMA-VISUAL: la misma imagen dibujada
+   * una vez en el modal (firmaImagenMasivo) se adjunta a cada llamada
+   * individual — cada una sigue generando su PROPIO archivo/fila de
+   * firma en el servidor (guardarUpload se ejecuta por cada POST), nunca
+   * se reutiliza una fila de firmas_electronicas ya creada.
    */
   async function autorizarSeleccionados() {
     if (!firmaImagenMasivo) {
       setErrorMasivo("Dibuja tu firma antes de continuar.");
-      return;
-    }
-    if (!pwdMasivo) {
-      setErrorMasivo("Ingresa tu contraseña actual.");
       return;
     }
     setAutorizandoMasivo(true);
@@ -358,7 +350,6 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
     for (const id of ids) {
       try {
         const fd = new FormData();
-        fd.set("password", pwdMasivo);
         fd.set("firmaImagen", firmaImagenMasivo, "firma.png");
         // VIATICOS-FIRMA-VISUAL (hotfix PR #124) — deja explícito en el
         // payload firmado de CADA autorización que este trazo se reutilizó
@@ -368,10 +359,10 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
           method: "POST",
           body: fd,
         });
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           const nombre = porId.get(id)?.personalNombre ?? `#${id}`;
-          fallos.push(`${nombre}: ${data.error ?? "error desconocido"}`);
+          fallos.push(`${nombre}: ${data.error ?? `error ${res.status}`}`);
         } else {
           exitos++;
         }
@@ -643,16 +634,6 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
                   </div>
                 </label>
                 <p className="text-[10px] text-[var(--muted)]">{TEXTO_FIRMA_INTERNA} — no es una firma legal certificada.</p>
-                <label className="block text-xs text-[var(--muted)]">
-                  Contraseña
-                  <input
-                    type="password"
-                    className={`${inputCls} mt-0.5 block w-full`}
-                    value={pwdAutorizar}
-                    onChange={(e) => setPwdAutorizar(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter") void confirmarAutorizar(); }}
-                  />
-                </label>
                 {errorAutorizar ? <p className="text-xs text-red-300">{errorAutorizar}</p> : null}
                 <div className="flex gap-2 pt-1">
                   <button
@@ -818,16 +799,6 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
               </div>
             </label>
             <p className="text-[10px] text-[var(--muted)]">{TEXTO_FIRMA_INTERNA} — no es una firma legal certificada.</p>
-            <label className="block text-xs text-[var(--muted)]">
-              Contraseña
-              <input
-                type="password"
-                className={`${inputCls} mt-0.5 block w-full`}
-                value={pwdMasivo}
-                onChange={(e) => setPwdMasivo(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") void autorizarSeleccionados(); }}
-              />
-            </label>
             {errorMasivo ? <p className="text-xs text-red-300">{errorMasivo}</p> : null}
             <div className="flex gap-2 pt-1">
               <button

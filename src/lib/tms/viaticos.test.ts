@@ -27,12 +27,17 @@ import {
  * que sigue sin exigir contraseña.
  *
  * VIATICOS-FIRMA-VISUAL — se agregan pruebas de la imagen PNG manuscrita:
- * se guarda a disco SOLO después de verificar la contraseña y ANTES de
- * abrir la transacción (guardarUpload no es transaccional); si algo falla
- * después (estado inválido, diferencia != 0, error inesperado), se
- * compensa con borrarUpload (best-effort) para no dejar el archivo
- * huérfano; el SHA-256 de la imagen viaja al payload firmado vía
- * crearFirmaInterna(..., { imagen: {..., sha256} }).
+ * se guarda a disco ANTES de abrir la transacción (guardarUpload no es
+ * transaccional); si algo falla después (estado inválido, diferencia !=
+ * 0, error inesperado), se compensa con borrarUpload (best-effort) para
+ * no dejar el archivo huérfano; el SHA-256 de la imagen viaja al payload
+ * firmado vía crearFirmaInterna(..., { imagen: {..., sha256} }).
+ *
+ * CORRECCIÓN URGENTE (autorizar sin contraseña) — autorizarViatico YA NO
+ * llama a verificarPasswordUsuarioActual: sesión autenticada + permiso
+ * (verificado por el endpoint) + firma manuscrita bastan. La firma pasa
+ * a `crearFirmaInterna` con `metodo: 'FIRMA_MANUSCRITA'`. liquidarViatico
+ * SIGUE exigiendo contraseña sin cambios (`metodo: 'PASSWORD'`).
  */
 
 const conn = {
@@ -50,11 +55,11 @@ const getConnection = vi.fn();
 // del endpoint, no aquí: a esta capa el archivo ya llega validado).
 const IMAGEN_BYTES = new TextEncoder().encode("firma-de-prueba").buffer;
 
+// CORRECCIÓN URGENTE — sin `password`: autorizarViatico ya no lo exige.
 const firma: DatosFirmaViatico = {
   usuarioId: 3,
   nombreFirmante: "Ana López",
   rolFirmante: "JefeOperaciones",
-  password: "correcta123",
   imagen: { bytes: IMAGEN_BYTES, original: "firma.png" },
 };
 
@@ -97,18 +102,10 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("autorizarViatico — PROGRAMADO -> AUTORIZADO con firma", () => {
-  it("5) contraseña incorrecta: 401, NO crea firma, NO cambia estado (ningún UPDATE), NO registra auditoría transaccional — nunca abre la transacción ni guarda la imagen", async () => {
-    vi.mocked(verificarPasswordUsuarioActual).mockResolvedValue(false);
+  it("1/2) CORRECCIÓN URGENTE: autoriza SIN password (firma no lo trae) y NUNCA llama verificarPasswordUsuarioActual — la identidad ya la garantizó el permiso verificado por el endpoint", async () => {
     const r = await autorizarViatico(7, 10, "jefe1", firma);
-    expect(r.ok).toBe(false);
-    if (!r.ok) { expect(r.status).toBe(401); expect(r.error).toContain("Contraseña incorrecta"); }
-    expect(getConnection).not.toHaveBeenCalled();
-    expect(crearFirmaInterna).not.toHaveBeenCalled();
-    expect(conn.execute).not.toHaveBeenCalled(); // ningún UPDATE de estado
-    expect(registrarAuditoriaTx).not.toHaveBeenCalled();
-    expect(conn.commit).not.toHaveBeenCalled();
-    // VIATICOS-FIRMA-VISUAL: password incorrecta -> NUNCA se escribe la imagen a disco.
-    expect(guardarUpload).not.toHaveBeenCalled();
+    expect(r.ok).toBe(true);
+    expect(verificarPasswordUsuarioActual).not.toHaveBeenCalled();
   });
 
   it("6) autorización EXITOSA crea la firma con accion=AUTORIZAR_VIATICO/modulo=VIATICOS/entidad_tipo=VIATICO", async () => {
@@ -119,6 +116,11 @@ describe("autorizarViatico — PROGRAMADO -> AUTORIZADO con firma", () => {
       entidadTipo: "VIATICO", entidadId: 10,
       valoresRelevantes: expect.objectContaining({ viaticoId: 10, planId: 1, beneficiario: "Carlos Ruiz", montoAsignado: 500 }),
     }));
+  });
+
+  it("13) CORRECCIÓN URGENTE: crearFirmaInterna recibe metodo: 'FIRMA_MANUSCRITA' (nunca 'PASSWORD') al autorizar", async () => {
+    await autorizarViatico(7, 10, "jefe1", firma);
+    expect(crearFirmaInterna).toHaveBeenCalledWith(conn, expect.objectContaining({ metodo: "FIRMA_MANUSCRITA" }));
   });
 
   it("VIATICOS-FIRMA-VISUAL: guarda la imagen ANTES de abrir la transacción y la asocia a la firma con su SHA-256", async () => {
@@ -276,12 +278,12 @@ describe("liquidarViatico — ENTREGADO -> LIQUIDADO, regla crítica de diferenc
     expect(r.ok).toBe(true);
   });
 
-  it("16) liquidación EXITOSA crea la firma con accion=LIQUIDAR_VIATICO, el payload con montoEntregado/gastos/reintegro/diferencia, la imagen con su SHA-256, y NO compensa (commit exitoso)", async () => {
+  it("16/17) liquidación EXITOSA crea la firma con accion=LIQUIDAR_VIATICO, metodo='PASSWORD' (CORRECCIÓN URGENTE: liquidar SIGUE exigiendo contraseña, sin cambios), el payload con montoEntregado/gastos/reintegro/diferencia, la imagen con su SHA-256, y NO compensa (commit exitoso)", async () => {
     mockConnQuery({ viatico: VIATICO_ENTREGADO });
     await liquidarViatico(7, 10, { gastosComprobados: "900.00", reintegro: "100.00", observaciones: "ok" }, "fact1", firmaFacturador);
     expect(guardarUpload).toHaveBeenCalledWith(7, "firmas", "firma_viatico_liquidar_10", expect.anything());
     expect(crearFirmaInterna).toHaveBeenCalledWith(conn, expect.objectContaining({
-      accion: "LIQUIDAR_VIATICO", modulo: "VIATICOS", entidadTipo: "VIATICO", entidadId: 10,
+      accion: "LIQUIDAR_VIATICO", modulo: "VIATICOS", entidadTipo: "VIATICO", entidadId: 10, metodo: "PASSWORD",
       valoresRelevantes: expect.objectContaining({
         viaticoId: 10, montoEntregado: "1000.00", gastosComprobados: "900.00", reintegro: "100.00", diferencia: "0.00",
       }),
