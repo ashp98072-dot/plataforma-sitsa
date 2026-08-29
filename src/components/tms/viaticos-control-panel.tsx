@@ -653,12 +653,12 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
                   <p><span className="text-[var(--muted)]">Monto:</span> {q(autorizando.montoAsignado)}</p>
                 </div>
                 <p className="text-xs text-[var(--muted)]">Al firmar confirmas que autorizas este viático.</p>
-                <label className="block text-xs text-[var(--muted)]">
-                  Dibuja tu firma:
+                <div className="block text-xs text-[var(--muted)]">
+                  <p>Dibuja tu firma:</p>
                   <div className="mt-0.5">
                     <FirmaCanvas ref={canvasAutorizarRef} sesionId={`autorizar-${autorizando.id}-${firmaSesion}`} onCambiaTrazo={setTieneTrazoAutorizar} disabled={firmandoAutorizar} />
                   </div>
-                </label>
+                </div>
                 <p className="text-[10px] text-[var(--muted)]">{TEXTO_FIRMA_INTERNA} — no es una firma legal certificada.</p>
                 {errorAutorizar ? <p className="text-xs text-red-300">{errorAutorizar}</p> : null}
                 <div className="flex gap-2 pt-1">
@@ -762,12 +762,12 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
                       <input className={`${inputCls} mt-0.5 block w-full`} value={obsLiquidacion} onChange={(e) => setObsLiquidacion(e.target.value)} maxLength={300} />
                     </label>
                     <p className="text-xs text-[var(--muted)]">Al firmar confirmas que revisaste esta liquidación.</p>
-                    <label className="block text-xs text-[var(--muted)]">
-                      Dibuja tu firma:
+                    <div className="block text-xs text-[var(--muted)]">
+                      <p>Dibuja tu firma:</p>
                       <div className="mt-0.5">
                         <FirmaCanvas ref={canvasLiquidarRef} sesionId={`liquidar-${liquidando.id}-${firmaSesion}`} onCambiaTrazo={setTieneTrazoLiquidar} disabled={firmandoLiquidar} />
                       </div>
-                    </label>
+                    </div>
                     <p className="text-[10px] text-[var(--muted)]">{TEXTO_FIRMA_INTERNA} — no es una firma legal certificada.</p>
                     <label className="block text-xs text-[var(--muted)]">
                       Contraseña
@@ -818,12 +818,12 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
               Esta firma se aplicará a los {seleccionados.size} viáticos seleccionados: dibuja una sola vez, se usará
               para autorizar cada uno de ellos.
             </p>
-            <label className="block text-xs text-[var(--muted)]">
-              Dibuja tu firma:
+            <div className="block text-xs text-[var(--muted)]">
+              <p>Dibuja tu firma:</p>
               <div className="mt-0.5">
                 <FirmaCanvas ref={canvasMasivoRef} sesionId={`masivo-${firmaSesion}`} onCambiaTrazo={setTieneTrazoMasivo} disabled={autorizandoMasivo} />
               </div>
-            </label>
+            </div>
             <p className="text-[10px] text-[var(--muted)]">{TEXTO_FIRMA_INTERNA} — no es una firma legal certificada.</p>
             {errorMasivo ? <p className="text-xs text-red-300">{errorMasivo}</p> : null}
             <div className="flex gap-2 pt-1">
