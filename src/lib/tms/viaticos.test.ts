@@ -10,6 +10,7 @@ import { execute, getPool } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { verificarPasswordUsuarioActual } from "@/lib/auth";
 import { crearFirmaInterna } from "@/lib/firmas/firmas-internas";
+import { sha256Hex } from "@/lib/firmas/imagen-firma";
 import { borrarUpload, guardarUpload } from "@/lib/uploads";
 import {
   autorizarViatico,
@@ -217,6 +218,19 @@ describe("autorizarViatico — PROGRAMADO -> AUTORIZADO con firma", () => {
     expect(crearFirmaInterna).not.toHaveBeenCalled();
     expect(borrarUpload).toHaveBeenCalledWith("empresas/7/firmas/firma_x.png");
   });
+
+  it("MI-FIRMA-1 — 12/13) origenFirma:'GUARDADA' se propaga a crearFirmaInterna y guardarImagenFirma sigue calculando el SHA-256 real de los bytes recibidos (copia independiente, mismo hash del origen)", async () => {
+    await autorizarViatico(7, 10, "jefe1", { ...firma, origenFirma: "GUARDADA" });
+    expect(crearFirmaInterna).toHaveBeenCalledWith(conn, expect.objectContaining({
+      origenFirma: "GUARDADA",
+      imagen: expect.objectContaining({ sha256: sha256Hex(IMAGEN_BYTES) }),
+    }));
+  });
+
+  it("MI-FIRMA-1 — 17) origenFirma:'DIBUJADA' (o ausente) se propaga igual, sin afectar el resto del flujo", async () => {
+    await autorizarViatico(7, 10, "jefe1", { ...firma, origenFirma: "DIBUJADA" });
+    expect(crearFirmaInterna).toHaveBeenCalledWith(conn, expect.objectContaining({ origenFirma: "DIBUJADA" }));
+  });
 });
 
 describe("liquidarViatico — ENTREGADO -> LIQUIDADO, regla crítica de diferencia === 0 exacto", () => {
@@ -308,6 +322,24 @@ describe("liquidarViatico — ENTREGADO -> LIQUIDADO, regla crítica de diferenc
     await liquidarViatico(7, 10, { gastosComprobados: "950.00", reintegro: "0", observaciones: null }, "fact1", firmaFacturador);
     expect(conn.rollback).toHaveBeenCalled();
     expect(conn.commit).not.toHaveBeenCalled();
+  });
+
+  it("MI-FIRMA-1 — 22/23) origenFirma:'GUARDADA' se propaga a crearFirmaInterna SIN afectar que password/metodo:'PASSWORD' sigan obligatorios", async () => {
+    mockConnQuery({ viatico: VIATICO_ENTREGADO });
+    await liquidarViatico(7, 10, { gastosComprobados: "900.00", reintegro: "100.00", observaciones: null }, "fact1", { ...firmaFacturador, origenFirma: "GUARDADA" });
+    expect(crearFirmaInterna).toHaveBeenCalledWith(conn, expect.objectContaining({
+      origenFirma: "GUARDADA",
+      metodo: "PASSWORD",
+      imagen: expect.objectContaining({ sha256: sha256Hex(IMAGEN_BYTES) }),
+    }));
+  });
+
+  it("MI-FIRMA-1 — 24) usar firma guardada no exime la regla de diferencia exacta: si no cuadra, sigue rechazando (409) aun con origenFirma:'GUARDADA'", async () => {
+    mockConnQuery({ viatico: VIATICO_ENTREGADO });
+    const r = await liquidarViatico(7, 10, { gastosComprobados: "950.00", reintegro: "0", observaciones: null }, "fact1", { ...firmaFacturador, origenFirma: "GUARDADA" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.status).toBe(409);
+    expect(crearFirmaInterna).not.toHaveBeenCalled();
   });
 
   it("monto/formato inválido se rechaza ANTES de verificar contraseña, abrir conexión o guardar la imagen", async () => {

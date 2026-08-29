@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { TEXTO_FIRMA_INTERNA } from "@/lib/firmas/textos";
-import FirmaCanvas, { type FirmaCanvasHandle } from "@/components/tms/firma-canvas";
+import type { FirmaCanvasHandle } from "@/components/tms/firma-canvas";
+import SelectorFirma from "@/components/tms/selector-firma";
 
 type ViaticoControlRow = {
   id: number;
@@ -146,15 +147,25 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   // que ese respaldo NUNCA se reutilice entre una autorización y otra
   // (cada apertura de modal obtiene un sesionId nuevo).
   const [firmaSesion, setFirmaSesion] = useState(0);
+
+  // MI-FIRMA-1 — "¿tiene el usuario una firma guardada?" se consulta al
+  // abrir CADA modal (nunca se asume vigente entre aperturas — pudo
+  // cambiar/eliminarla desde "Mi firma"). `null` = cargando. Si tiene
+  // una, el radio arranca en "Usar mi firma guardada" (default pedido en
+  // el ticket); si no, se muestra directamente el canvas.
   const [masivoAbierto, setMasivoAbierto] = useState(false);
   const canvasMasivoRef = useRef<FirmaCanvasHandle | null>(null);
   const [tieneTrazoMasivo, setTieneTrazoMasivo] = useState(false);
+  const [tieneFirmaGuardadaMasivo, setTieneFirmaGuardadaMasivo] = useState<boolean | null>(null);
+  const [usarGuardadaMasivo, setUsarGuardadaMasivo] = useState(false);
   const [errorMasivo, setErrorMasivo] = useState("");
 
   // VIATICOS-FIRMA — modal "Firmar y autorizar".
   const [autorizando, setAutorizando] = useState<ViaticoControlRow | null>(null);
   const canvasAutorizarRef = useRef<FirmaCanvasHandle | null>(null);
   const [tieneTrazoAutorizar, setTieneTrazoAutorizar] = useState(false);
+  const [tieneFirmaGuardadaAutorizar, setTieneFirmaGuardadaAutorizar] = useState<boolean | null>(null);
+  const [usarGuardadaAutorizar, setUsarGuardadaAutorizar] = useState(false);
   const [errorAutorizar, setErrorAutorizar] = useState("");
   const [firmandoAutorizar, setFirmandoAutorizar] = useState(false);
   const [firmaAutorizarOk, setFirmaAutorizarOk] = useState<FirmaInfo | null>(null);
@@ -167,9 +178,22 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   const [pwdLiquidar, setPwdLiquidar] = useState("");
   const canvasLiquidarRef = useRef<FirmaCanvasHandle | null>(null);
   const [tieneTrazoLiquidar, setTieneTrazoLiquidar] = useState(false);
+  const [tieneFirmaGuardadaLiquidar, setTieneFirmaGuardadaLiquidar] = useState<boolean | null>(null);
+  const [usarGuardadaLiquidar, setUsarGuardadaLiquidar] = useState(false);
   const [errorLiquidar, setErrorLiquidar] = useState("");
   const [firmandoLiquidar, setFirmandoLiquidar] = useState(false);
   const [firmaLiquidarOk, setFirmaLiquidarOk] = useState<FirmaInfo | null>(null);
+
+  /** MI-FIRMA-1 — consulta si el usuario actual tiene una firma guardada. */
+  const consultarFirmaGuardada = useCallback(async (): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/empresas/${slug}/mi-firma`);
+      const data = await res.json().catch(() => ({}));
+      return res.ok ? Boolean(data.tieneFirma) : false;
+    } catch {
+      return false;
+    }
+  }, [slug]);
 
   const cargar = useCallback(async () => {
     setLoading(true);
@@ -238,26 +262,34 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   // Beneficiario/Monto), el POST solo ocurre al confirmar dentro del
   // modal, nunca al primer clic. CORRECCIÓN URGENTE: ya no pide
   // contraseña — solo exige un trazo dibujado (ver confirmarAutorizar).
-  function abrirAutorizar(row: ViaticoControlRow) {
+  async function abrirAutorizar(row: ViaticoControlRow) {
     setAutorizando(row);
     setFirmaSesion((n) => n + 1);
     setTieneTrazoAutorizar(false);
     setErrorAutorizar("");
     setFirmaAutorizarOk(null);
+    setTieneFirmaGuardadaAutorizar(null);
+    const tiene = await consultarFirmaGuardada();
+    setTieneFirmaGuardadaAutorizar(tiene);
+    setUsarGuardadaAutorizar(tiene);
   }
 
   async function confirmarAutorizar() {
     if (!autorizando) return;
-    const firmaImagen = await canvasAutorizarRef.current?.obtenerImagen();
-    if (!firmaImagen) {
-      setErrorAutorizar("Dibuja tu firma antes de continuar.");
-      return;
+    const fd = new FormData();
+    if (usarGuardadaAutorizar) {
+      fd.set("usarFirmaGuardada", "true");
+    } else {
+      const firmaImagen = await canvasAutorizarRef.current?.obtenerImagen();
+      if (!firmaImagen) {
+        setErrorAutorizar("Dibuja tu firma antes de continuar.");
+        return;
+      }
+      fd.set("firmaImagen", firmaImagen, "firma.png");
     }
     setFirmandoAutorizar(true);
     setErrorAutorizar("");
     try {
-      const fd = new FormData();
-      fd.set("firmaImagen", firmaImagen, "firma.png");
       const res = await fetch(`/api/empresas/${slug}/tms/viaticos/${autorizando.id}/autorizar`, {
         method: "POST",
         body: fd,
@@ -283,7 +315,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   // gastos/reintegro editables, diferencia calculada en el propio JSX
   // (solo para habilitar/deshabilitar el botón — el backend sigue siendo
   // la autoridad real de la comparación exacta).
-  function abrirLiquidar(row: ViaticoControlRow) {
+  async function abrirLiquidar(row: ViaticoControlRow) {
     setLiquidando(row);
     setFirmaSesion((n) => n + 1);
     setGastosComprobados("");
@@ -293,14 +325,24 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
     setTieneTrazoLiquidar(false);
     setErrorLiquidar("");
     setFirmaLiquidarOk(null);
+    setTieneFirmaGuardadaLiquidar(null);
+    const tiene = await consultarFirmaGuardada();
+    setTieneFirmaGuardadaLiquidar(tiene);
+    setUsarGuardadaLiquidar(tiene);
   }
 
   async function confirmarLiquidar() {
     if (!liquidando) return;
-    const firmaImagen = await canvasLiquidarRef.current?.obtenerImagen();
-    if (!firmaImagen) {
-      setErrorLiquidar("Dibuja tu firma antes de continuar.");
-      return;
+    const fd = new FormData();
+    if (usarGuardadaLiquidar) {
+      fd.set("usarFirmaGuardada", "true");
+    } else {
+      const firmaImagen = await canvasLiquidarRef.current?.obtenerImagen();
+      if (!firmaImagen) {
+        setErrorLiquidar("Dibuja tu firma antes de continuar.");
+        return;
+      }
+      fd.set("firmaImagen", firmaImagen, "firma.png");
     }
     if (!pwdLiquidar) {
       setErrorLiquidar("Ingresa tu contraseña actual.");
@@ -309,12 +351,10 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
     setFirmandoLiquidar(true);
     setErrorLiquidar("");
     try {
-      const fd = new FormData();
       fd.set("gastosComprobados", gastosComprobados || "0");
       fd.set("reintegro", reintegro || "0");
       if (obsLiquidacion.trim()) fd.set("observaciones", obsLiquidacion.trim());
       fd.set("password", pwdLiquidar);
-      fd.set("firmaImagen", firmaImagen, "firma.png");
       const res = await fetch(`/api/empresas/${slug}/tms/viaticos/${liquidando.id}/liquidar`, {
         method: "POST",
         body: fd,
@@ -335,7 +375,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   }
 
   /** VIATICOS-FIRMA-VISUAL — abre el modal de firma masiva (antes window.prompt). */
-  function abrirMasivo() {
+  async function abrirMasivo() {
     if (!seleccionados.size) {
       setError("Selecciona al menos un viático PROGRAMADO para autorizar.");
       return;
@@ -344,6 +384,10 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
     setTieneTrazoMasivo(false);
     setErrorMasivo("");
     setMasivoAbierto(true);
+    setTieneFirmaGuardadaMasivo(null);
+    const tiene = await consultarFirmaGuardada();
+    setTieneFirmaGuardadaMasivo(tiene);
+    setUsarGuardadaMasivo(tiene);
   }
 
   /**
@@ -360,10 +404,13 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
    * firmas_electronicas ya creada.
    */
   async function autorizarSeleccionados() {
-    const firmaImagen = await canvasMasivoRef.current?.obtenerImagen();
-    if (!firmaImagen) {
-      setErrorMasivo("Dibuja tu firma antes de continuar.");
-      return;
+    let firmaImagen: File | null = null;
+    if (!usarGuardadaMasivo) {
+      firmaImagen = (await canvasMasivoRef.current?.obtenerImagen()) ?? null;
+      if (!firmaImagen) {
+        setErrorMasivo("Dibuja tu firma antes de continuar.");
+        return;
+      }
     }
     setAutorizandoMasivo(true);
     setErrorMasivo("");
@@ -376,7 +423,11 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
     for (const id of ids) {
       try {
         const fd = new FormData();
-        fd.set("firmaImagen", firmaImagen, "firma.png");
+        if (usarGuardadaMasivo) {
+          fd.set("usarFirmaGuardada", "true");
+        } else {
+          fd.set("firmaImagen", firmaImagen!, "firma.png");
+        }
         // VIATICOS-FIRMA-VISUAL (hotfix PR #124) — deja explícito en el
         // payload firmado de CADA autorización que este trazo se reutilizó
         // para todo el lote (nunca se pretende una firma distinta por viático).
@@ -506,7 +557,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
             type="button"
             className="rounded bg-sky-700 px-3 py-1.5 text-xs text-white disabled:opacity-50"
             disabled={autorizandoMasivo || !seleccionados.size}
-            onClick={abrirMasivo}
+            onClick={() => void abrirMasivo()}
           >
             {autorizandoMasivo ? "Autorizando…" : `Autorizar seleccionados${seleccionados.size ? ` (${seleccionados.size})` : ""}`}
           </button>
@@ -580,7 +631,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
                   {puedeAutorizar && r.estado === "PROGRAMADO" ? (
                     <button
                       type="button"
-                      onClick={() => abrirAutorizar(r)}
+                      onClick={() => void abrirAutorizar(r)}
                       className="rounded bg-sky-700 px-2 py-1 text-xs text-white"
                     >
                       Firmar y autorizar
@@ -589,7 +640,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
                   {puedeLiquidar && r.estado === "ENTREGADO" ? (
                     <button
                       type="button"
-                      onClick={() => abrirLiquidar(r)}
+                      onClick={() => void abrirLiquidar(r)}
                       className="rounded bg-emerald-700 px-2 py-1 text-xs text-white"
                     >
                       Firmar liquidación
@@ -653,18 +704,22 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
                   <p><span className="text-[var(--muted)]">Monto:</span> {q(autorizando.montoAsignado)}</p>
                 </div>
                 <p className="text-xs text-[var(--muted)]">Al firmar confirmas que autorizas este viático.</p>
-                <div className="block text-xs text-[var(--muted)]">
-                  <p>Dibuja tu firma:</p>
-                  <div className="mt-0.5">
-                    <FirmaCanvas ref={canvasAutorizarRef} sesionId={`autorizar-${autorizando.id}-${firmaSesion}`} onCambiaTrazo={setTieneTrazoAutorizar} disabled={firmandoAutorizar} />
-                  </div>
-                </div>
+                <SelectorFirma
+                  slug={slug}
+                  tieneFirmaGuardada={tieneFirmaGuardadaAutorizar}
+                  usarGuardada={usarGuardadaAutorizar}
+                  onCambiaUsarGuardada={setUsarGuardadaAutorizar}
+                  canvasRef={canvasAutorizarRef}
+                  sesionId={`autorizar-${autorizando.id}-${firmaSesion}`}
+                  onCambiaTrazo={setTieneTrazoAutorizar}
+                  disabled={firmandoAutorizar}
+                />
                 <p className="text-[10px] text-[var(--muted)]">{TEXTO_FIRMA_INTERNA} — no es una firma legal certificada.</p>
                 {errorAutorizar ? <p className="text-xs text-red-300">{errorAutorizar}</p> : null}
                 <div className="flex gap-2 pt-1">
                   <button
                     type="button"
-                    disabled={firmandoAutorizar || !tieneTrazoAutorizar}
+                    disabled={firmandoAutorizar || (!usarGuardadaAutorizar && !tieneTrazoAutorizar)}
                     className="flex-1 rounded bg-sky-700 px-3 py-1.5 text-sm text-white disabled:opacity-50"
                     onClick={() => void confirmarAutorizar()}
                   >
@@ -762,12 +817,16 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
                       <input className={`${inputCls} mt-0.5 block w-full`} value={obsLiquidacion} onChange={(e) => setObsLiquidacion(e.target.value)} maxLength={300} />
                     </label>
                     <p className="text-xs text-[var(--muted)]">Al firmar confirmas que revisaste esta liquidación.</p>
-                    <div className="block text-xs text-[var(--muted)]">
-                      <p>Dibuja tu firma:</p>
-                      <div className="mt-0.5">
-                        <FirmaCanvas ref={canvasLiquidarRef} sesionId={`liquidar-${liquidando.id}-${firmaSesion}`} onCambiaTrazo={setTieneTrazoLiquidar} disabled={firmandoLiquidar} />
-                      </div>
-                    </div>
+                    <SelectorFirma
+                      slug={slug}
+                      tieneFirmaGuardada={tieneFirmaGuardadaLiquidar}
+                      usarGuardada={usarGuardadaLiquidar}
+                      onCambiaUsarGuardada={setUsarGuardadaLiquidar}
+                      canvasRef={canvasLiquidarRef}
+                      sesionId={`liquidar-${liquidando.id}-${firmaSesion}`}
+                      onCambiaTrazo={setTieneTrazoLiquidar}
+                      disabled={firmandoLiquidar}
+                    />
                     <p className="text-[10px] text-[var(--muted)]">{TEXTO_FIRMA_INTERNA} — no es una firma legal certificada.</p>
                     <label className="block text-xs text-[var(--muted)]">
                       Contraseña
@@ -776,14 +835,14 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
                         className={`${inputCls} mt-0.5 block w-full`}
                         value={pwdLiquidar}
                         onChange={(e) => setPwdLiquidar(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === "Enter" && puedeFirmar && tieneTrazoLiquidar) void confirmarLiquidar(); }}
+                        onKeyDown={(e) => { if (e.key === "Enter" && puedeFirmar && (usarGuardadaLiquidar || tieneTrazoLiquidar)) void confirmarLiquidar(); }}
                       />
                     </label>
                     {errorLiquidar ? <p className="text-xs text-red-300">{errorLiquidar}</p> : null}
                     <div className="flex gap-2 pt-1">
                       <button
                         type="button"
-                        disabled={firmandoLiquidar || !puedeFirmar || !tieneTrazoLiquidar}
+                        disabled={firmandoLiquidar || !puedeFirmar || (!usarGuardadaLiquidar && !tieneTrazoLiquidar)}
                         title={!puedeFirmar ? "La diferencia debe ser exactamente Q0.00 para poder firmar la liquidación." : undefined}
                         className="flex-1 rounded bg-emerald-700 px-3 py-1.5 text-sm text-white disabled:opacity-50"
                         onClick={() => void confirmarLiquidar()}
@@ -815,21 +874,25 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
           <div className="w-full max-w-md space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-xl">
             <h3 className="text-sm font-semibold">Firmar y autorizar seleccionados ({seleccionados.size})</h3>
             <p className="text-xs text-[var(--muted)]">
-              Esta firma se aplicará a los {seleccionados.size} viáticos seleccionados: dibuja una sola vez, se usará
-              para autorizar cada uno de ellos.
+              Esta firma se aplicará a los {seleccionados.size} viáticos seleccionados: se usará la misma para
+              autorizar cada uno de ellos.
             </p>
-            <div className="block text-xs text-[var(--muted)]">
-              <p>Dibuja tu firma:</p>
-              <div className="mt-0.5">
-                <FirmaCanvas ref={canvasMasivoRef} sesionId={`masivo-${firmaSesion}`} onCambiaTrazo={setTieneTrazoMasivo} disabled={autorizandoMasivo} />
-              </div>
-            </div>
+            <SelectorFirma
+              slug={slug}
+              tieneFirmaGuardada={tieneFirmaGuardadaMasivo}
+              usarGuardada={usarGuardadaMasivo}
+              onCambiaUsarGuardada={setUsarGuardadaMasivo}
+              canvasRef={canvasMasivoRef}
+              sesionId={`masivo-${firmaSesion}`}
+              onCambiaTrazo={setTieneTrazoMasivo}
+              disabled={autorizandoMasivo}
+            />
             <p className="text-[10px] text-[var(--muted)]">{TEXTO_FIRMA_INTERNA} — no es una firma legal certificada.</p>
             {errorMasivo ? <p className="text-xs text-red-300">{errorMasivo}</p> : null}
             <div className="flex gap-2 pt-1">
               <button
                 type="button"
-                disabled={autorizandoMasivo || !tieneTrazoMasivo}
+                disabled={autorizandoMasivo || (!usarGuardadaMasivo && !tieneTrazoMasivo)}
                 className="flex-1 rounded bg-sky-700 px-3 py-1.5 text-sm text-white disabled:opacity-50"
                 onClick={() => void autorizarSeleccionados()}
               >
