@@ -28,6 +28,25 @@ export { TEXTO_FIRMA_INTERNA } from "./textos";
  * migración adicional.
  */
 
+/**
+ * VIATICOS-FIRMA (firma visual) — referencia a la imagen PNG de la firma
+ * manuscrita YA guardada en disco (guardarUpload, subdir "firmas") antes
+ * de llamar aquí. Nunca se guarda el binario/base64 en esta tabla, solo la
+ * ruta relativa (mismo patrón que ops_multa_documentos/evidencias_
+ * incidencias) + metadata + su SHA-256 (que sí entra al payload_canonico
+ * firmado, ver más abajo). Opcional: no todas las firmas de esta tabla
+ * tienen imagen (p. ej. la firma técnica preexistente sin canvas, o el
+ * flujo masivo "Autorizar seleccionados" que sigue firmando solo con
+ * contraseña — ver reporte de entrega VIATICOS-FIRMA-VISUAL).
+ */
+export type ImagenFirmaInterna = {
+  relative: string;
+  original: string;
+  mime: string;
+  size: number;
+  sha256: string;
+};
+
 export type DatosFirmaInterna = {
   empresaId: number;
   usuarioId: number;
@@ -41,6 +60,7 @@ export type DatosFirmaInterna = {
   entidadId: number;
   /** Datos específicos de la acción firmada — lo que hace que el hash sea verificable contra lo que realmente ocurrió. */
   valoresRelevantes: Record<string, unknown>;
+  imagen?: ImagenFirmaInterna | null;
   ip?: string | null;
   userAgent?: string | null;
 };
@@ -52,6 +72,8 @@ export type ResultadoFirmaInterna = {
   hashPayload: string;
   nombreFirmante: string;
   rolFirmante: string;
+  /** VIATICOS-FIRMA (firma visual) — para que el llamador sepa si mostrar el <img> sin exponer imagen_ruta. */
+  tieneImagen: boolean;
 };
 
 /** JSON canónico: claves ordenadas alfabéticamente (recursivo), sin espacios — mismo criterio documentado en FIRMA-ELECTRONICA-DISENO.md §4. */
@@ -98,6 +120,11 @@ export async function crearFirmaInterna(
     entidadId: datos.entidadId,
     entidadTipo: datos.entidadTipo,
     fechaHoraServidor: fecha.toISOString(),
+    // VIATICOS-FIRMA (firma visual) — liga el hash técnico de la firma a
+    // los bytes EXACTOS de la imagen manuscrita usada (null si esta firma
+    // no lleva imagen). NUNCA se guarda la imagen/base64 en el payload,
+    // solo su SHA-256.
+    imagenSha256: datos.imagen?.sha256 ?? null,
     nombreFirmante: datos.nombreFirmante,
     rolFirmante: datos.rolFirmante,
     valoresRelevantes: datos.valoresRelevantes,
@@ -110,12 +137,15 @@ export async function crearFirmaInterna(
   const [r] = await conn.execute<ResultSetHeader>(
     `INSERT INTO firmas_electronicas
       (empresa_id, usuario_id, empleado_id, accion, modulo, entidad_tipo, entidad_id,
-       fecha_hora_servidor, hash_payload, payload_canonico, ip, user_agent, metodo, resultado, codigo_firma, version)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PASSWORD', 'EXITOSA', ?, '1')`,
+       fecha_hora_servidor, hash_payload, payload_canonico, ip, user_agent, metodo, resultado, codigo_firma, version,
+       imagen_ruta, imagen_nombre_original, imagen_mime, imagen_tamano)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PASSWORD', 'EXITOSA', ?, '1', ?, ?, ?, ?)`,
     [
       datos.empresaId, datos.usuarioId, datos.empleadoId, datos.accion, datos.modulo,
       datos.entidadTipo, datos.entidadId, fecha, hashPayload, payloadCanonico,
       datos.ip ?? null, datos.userAgent ?? null, codigoFirma,
+      datos.imagen?.relative ?? null, datos.imagen?.original ?? null,
+      datos.imagen?.mime ?? null, datos.imagen?.size ?? null,
     ],
   );
   return {
@@ -125,5 +155,6 @@ export async function crearFirmaInterna(
     hashPayload,
     nombreFirmante: datos.nombreFirmante,
     rolFirmante: datos.rolFirmante,
+    tieneImagen: datos.imagen != null,
   };
 }
