@@ -16,6 +16,7 @@ type FormState = {
   nombre: string;
   razonSocial: string;
   nit: string;
+  rtu: string;
   telefono: string;
   email: string;
   direccion: string;
@@ -31,6 +32,7 @@ const vacio: FormState = {
   nombre: "",
   razonSocial: "",
   nit: "",
+  rtu: "",
   telefono: "",
   email: "",
   direccion: "",
@@ -42,6 +44,7 @@ const vacio: FormState = {
 };
 
 export function ClientesClient({ slug, puedeEditar }: Props) {
+  const [vista, setVista] = useState<"listado" | "nuevo" | "importar">("listado");
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [q, setQ] = useState("");
   const [qDebounced, setQDebounced] = useState("");
@@ -86,6 +89,7 @@ export function ClientesClient({ slug, puedeEditar }: Props) {
       nombre: c.nombre,
       razonSocial: c.razonSocial ?? "",
       nit: c.nit ?? "",
+      rtu: c.rtu ?? "",
       telefono: c.telefono ?? "",
       email: c.email ?? "",
       direccion: c.direccion ?? "",
@@ -95,6 +99,7 @@ export function ClientesClient({ slug, puedeEditar }: Props) {
       estado: c.estado,
       notas: c.notas ?? "",
     });
+    setVista("nuevo");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -109,6 +114,7 @@ export function ClientesClient({ slug, puedeEditar }: Props) {
         nombre: form.nombre,
         razonSocial: form.razonSocial || null,
         nit: form.nit || null,
+        rtu: form.rtu || null,
         telefono: form.telefono || null,
         email: form.email || null,
         direccion: form.direccion || null,
@@ -134,28 +140,17 @@ export function ClientesClient({ slug, puedeEditar }: Props) {
         setForm(vacio);
         setEditId(null);
         await cargar();
+        setVista("listado");
       }
     } finally {
       setSaving(false);
     }
   }
 
-  async function importarTms() {
-    if (!puedeEditar || saving) return;
-    setSaving(true);
-    setMsg("");
-    try {
-      const res = await fetch(`/api/empresas/${slug}/clientes`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ importarTms: true }),
-      });
-      const data = await res.json();
-      setMsg(data.mensaje || data.error || "");
-      if (res.ok) await cargar();
-    } finally {
-      setSaving(false);
-    }
+  function exportHref(formato: "xlsx" | "pdf") {
+    const params = new URLSearchParams({ formato, estado });
+    if (q.trim()) params.set("q", q.trim());
+    return `/api/empresas/${slug}/clientes/export?${params.toString()}`;
   }
 
   return (
@@ -167,11 +162,43 @@ export function ClientesClient({ slug, puedeEditar }: Props) {
         <h1 className="mt-1 text-2xl font-semibold">Clientes</h1>
         <p className="mt-1 max-w-2xl text-sm text-[var(--muted)]">
           Misma fuente para Operaciones (KT / Mónaco), Facturación y Contabilidad.
-          Los clientes se sincronizan con TMS para planes de viaje.
+          Los clientes se sincronizan automáticamente con TMS para planes de viaje.
         </p>
       </div>
 
-      {puedeEditar ? (
+      <div className="flex flex-wrap gap-2 border-b border-[var(--border)] pb-3">
+        <button
+          type="button"
+          onClick={() => setVista("listado")}
+          className={`rounded-lg px-3 py-2 text-sm ${vista === "listado" ? "bg-[var(--accent)] text-white" : "border border-[var(--border)]"}`}
+        >
+          Ver clientes
+        </button>
+        {puedeEditar ? (
+          <>
+            <button
+              type="button"
+              onClick={() => {
+                setEditId(null);
+                setForm(vacio);
+                setVista("nuevo");
+              }}
+              className={`rounded-lg px-3 py-2 text-sm ${vista === "nuevo" ? "bg-[var(--accent)] text-white" : "border border-[var(--border)]"}`}
+            >
+              Crear cliente
+            </button>
+            <button
+              type="button"
+              onClick={() => setVista("importar")}
+              className={`rounded-lg px-3 py-2 text-sm ${vista === "importar" ? "bg-[var(--accent)] text-white" : "border border-[var(--border)]"}`}
+            >
+              Importar Excel
+            </button>
+          </>
+        ) : null}
+      </div>
+
+      {puedeEditar && vista === "nuevo" ? (
         <form
           onSubmit={onSubmit}
           className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4"
@@ -196,7 +223,7 @@ export function ClientesClient({ slug, puedeEditar }: Props) {
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             <input
               className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm"
-              placeholder="Código interno"
+              placeholder="Código interno (automático si se deja vacío)"
               value={form.codigo}
               onChange={(e) => setForm({ ...form, codigo: e.target.value })}
             />
@@ -220,6 +247,12 @@ export function ClientesClient({ slug, puedeEditar }: Props) {
               placeholder="NIT"
               value={form.nit}
               onChange={(e) => setForm({ ...form, nit: e.target.value })}
+            />
+            <input
+              className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm"
+              placeholder="Número de RTU"
+              value={form.rtu}
+              onChange={(e) => setForm({ ...form, rtu: e.target.value })}
             />
             <input
               className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm"
@@ -300,58 +333,71 @@ export function ClientesClient({ slug, puedeEditar }: Props) {
             >
               {saving ? "Guardando…" : editId ? "Actualizar" : "Crear cliente"}
             </button>
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() => void importarTms()}
-              className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm"
-            >
-              Importar desde TMS
-            </button>
           </div>
         </form>
       ) : null}
 
-      {puedeEditar ? <ClientesImportador slug={slug} onImported={cargar} /> : null}
+      {puedeEditar && vista === "importar" ? (
+        <ClientesImportador
+          slug={slug}
+          onImported={async () => {
+            await cargar();
+            setVista("listado");
+          }}
+        />
+      ) : null}
 
       {msg ? <p className="text-sm text-emerald-600 dark:text-emerald-300">{msg}</p> : null}
 
-      <div className="flex flex-wrap gap-2">
-        <input
-          className="min-w-[200px] flex-1 rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm"
-          placeholder="Buscar nombre, NIT, código…"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-        />
-        <select
-          className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm"
-          value={estado}
-          onChange={(e) => setEstado(e.target.value)}
-        >
-          <option value="Activo">Activos</option>
-          <option value="Inactivo">Inactivos</option>
-          <option value="todos">Todos</option>
-        </select>
-      </div>
+      {vista === "listado" ? (
+        <section className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="font-medium">Listado de clientes</h2>
+              <p className="text-xs text-[var(--muted)]">Consulta, filtra, edita o exporta el catálogo actual.</p>
+            </div>
+            <div className="flex gap-2">
+              <a href={exportHref("xlsx")} className="rounded border border-[var(--border)] px-3 py-1.5 text-xs">Exportar Excel</a>
+              <a href={exportHref("pdf")} className="rounded border border-[var(--border)] px-3 py-1.5 text-xs">Exportar PDF</a>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <input
+              className="min-w-[200px] flex-1 rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm"
+              placeholder="Buscar nombre, NIT, RTU o código…"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+            />
+            <select
+              className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm"
+              value={estado}
+              onChange={(e) => setEstado(e.target.value)}
+            >
+              <option value="Activo">Activos</option>
+              <option value="Inactivo">Inactivos</option>
+              <option value="todos">Todos</option>
+            </select>
+          </div>
 
-      {loading ? (
+          {loading ? (
         <p className="text-sm text-[var(--muted)]">Cargando clientes…</p>
       ) : (
         <div className="table-scroll rounded-xl border border-[var(--border)]">
           <table className="min-w-full text-left text-sm">
             <thead className="bg-[var(--thead)] text-xs uppercase text-[var(--muted)]">
               <tr>
+                <th className="px-3 py-2">Código</th>
                 <th className="px-3 py-2">Nombre</th>
-                <th className="px-3 py-2">NIT</th>
+                <th className="px-3 py-2">NIT / RTU</th>
                 <th className="px-3 py-2">Tipo</th>
                 <th className="px-3 py-2">Contacto</th>
-                <th className="px-3 py-2">TMS</th>
                 {puedeEditar ? <th className="px-3 py-2" /> : null}
               </tr>
             </thead>
             <tbody>
               {clientes.map((c) => (
                 <tr key={c.id} className="border-t border-[var(--border)]">
+                  <td className="px-3 py-2 font-mono text-xs">{c.codigo || "—"}</td>
                   <td className="px-3 py-2">
                     <div className="font-medium">{c.nombre}</div>
                     {c.razonSocial ? (
@@ -360,13 +406,13 @@ export function ClientesClient({ slug, puedeEditar }: Props) {
                       </div>
                     ) : null}
                   </td>
-                  <td className="px-3 py-2">{c.nit || "—"}</td>
+                  <td className="px-3 py-2 text-xs">
+                    <div>{c.nit ? `NIT: ${c.nit}` : "NIT: —"}</div>
+                    <div className="text-[var(--muted)]">{c.rtu ? `RTU: ${c.rtu}` : "RTU: —"}</div>
+                  </td>
                   <td className="px-3 py-2">{c.tipo}</td>
                   <td className="px-3 py-2 text-xs">
                     {c.telefono || c.email || "—"}
-                  </td>
-                  <td className="px-3 py-2 text-xs">
-                    {c.tmsClienteId ? `#${c.tmsClienteId}` : "—"}
                   </td>
                   {puedeEditar ? (
                     <td className="px-3 py-2">
@@ -387,14 +433,16 @@ export function ClientesClient({ slug, puedeEditar }: Props) {
                     colSpan={puedeEditar ? 6 : 5}
                     className="px-3 py-6 text-center text-[var(--muted)]"
                   >
-                    No hay clientes. Crea uno o importa desde TMS.
+                    No hay clientes con este filtro.
                   </td>
                 </tr>
               ) : null}
             </tbody>
           </table>
         </div>
-      )}
+          )}
+        </section>
+      ) : null}
     </div>
   );
 }

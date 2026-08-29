@@ -24,6 +24,7 @@ const schema = z.object({
   nombre: z.string().min(1),
   razonSocial: z.string().optional().nullable(),
   nit: z.string().optional().nullable(),
+  rtu: z.string().optional().nullable(),
   telefono: z.string().optional().nullable(),
   email: z.string().optional().nullable(),
   direccion: z.string().optional().nullable(),
