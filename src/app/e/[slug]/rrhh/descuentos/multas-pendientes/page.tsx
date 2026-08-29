@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
+import { labelDeTipoMulta } from "@/lib/multas/catalogo-tipos";
 
 /**
  * MULTAS-3.2 (sección 28) — bandeja RRHH: multas resueltas a cargo del
@@ -187,7 +188,7 @@ export default function MultasPendientesDescuentoPage() {
                     <tr key={m.id} className="border-t border-[var(--border)]">
                       <td className="py-2 pr-3">{m.fecha_infraccion}</td>
                       <td className="py-2 pr-3">{m.placa_historica}</td>
-                      <td className="py-2 pr-3">{m.tipo_multa}</td>
+                      <td className="py-2 pr-3">{labelDeTipoMulta(m.tipo_multa)}</td>
                       <td className="py-2 pr-3">{m.empleado_responsable_nombre ?? "—"}</td>
                       <td className="py-2 pr-3">{formatQ(m.monto_total)}</td>
                       <td className="py-2 pr-3 font-medium">{formatQ(m.monto_colaborador)}</td>
