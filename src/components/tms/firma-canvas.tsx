@@ -11,36 +11,36 @@ export type FirmaCanvasHandle = {
   obtenerImagen: () => Promise<File | null>;
 };
 
+type Punto = { x: number; y: number };
+
 /**
  * VIATICOS-FIRMA-VISUAL — canvas nativo reutilizable para capturar una
  * firma manuscrita con mouse/touch/stylus (Pointer Events unificados:
  * pointerdown/pointermove/pointerup/pointercancel — sin librería externa).
  * Genera un PNG transparente (nunca se rellena el fondo del canvas, solo
- * se dibuja el trazo) normalizado al buffer interno fijo 800x300 — el
- * tamaño VISUAL en pantalla lo escala el CSS, el buffer que se exporta
- * nunca cambia de tamaño.
+ * se dibuja el trazo) normalizado al buffer interno fijo 800x300.
  *
  * Esta imagen es un adjunto visual ADICIONAL a la firma electrónica
- * interna ya existente (usuario autenticado + permiso + hash + timestamp
- * servidor + auditoría, ver src/lib/firmas/firmas-internas.ts) — NUNCA la
- * sustituye ni es el único mecanismo de autenticación.
+ * interna ya existente — NUNCA la sustituye ni es el único mecanismo de
+ * autenticación.
  *
- * CORRECCIÓN URGENTE (2ª vuelta) — "la firma desaparece al soltar el
- * mouse", persistía tras el primer intento de arreglo (snapshot +
- * restauración en useLayoutEffect, que se mantiene aquí como defensa
- * adicional). La causa raíz real: antes se llamaba `onFirmaCambia` (con
- * el File completo) al terminar CADA trazo, lo que hacía re-renderizar al
- * padre mientras el usuario seguía usando el modal — y un re-render del
- * padre puede comprometer el bitmap del canvas hijo por razones que no
- * dependen de este componente. Ahora el componente NO empuja el File al
- * padre en absoluto durante el dibujo: expone `obtenerImagen()` vía `ref`
- * (React 19 — ref como prop normal, sin `forwardRef`) y el padre lo
- * invoca UNA sola vez, al confirmar. Durante el dibujo solo se notifica
- * `onCambiaTrazo(true)` (booleano, para habilitar el botón) la PRIMERA
- * vez que aparece un trazo en el gesto — nunca en cada punto/segmento —
- * así el padre re-renderiza como máximo una vez por gesto, nunca en medio
- * de un trazo activo. Además elimina los `toBlob` repetidos (antes uno
- * por trazo completado; ahora uno solo, al confirmar).
+ * CORRECCIÓN URGENTE (3ª vuelta) — "la firma desaparece al soltar el
+ * mouse" seguía ocurriendo pese a (1) snapshot+restauración y (2) evitar
+ * empujar el File al padre en cada trazo. Ninguna de esas dos defensas
+ * asumía CUÁNDO exactamente se pierde el bitmap del canvas — solo
+ * intentaban reponerlo después. Este rediseño elimina la dependencia del
+ * bitmap del canvas como fuente de verdad: los trazos se guardan como
+ * DATOS (arrays de puntos) en un ref, nunca en el propio `<canvas>`. El
+ * canvas se REPINTA POR COMPLETO desde esos datos:
+ *   1) de forma inmediata en cada pointermove (para feedback fluido), y
+ *   2) en un `useLayoutEffect` sin dependencias que corre después de
+ *      CADA render de este componente — así, sin importar qué re-render
+ *      del padre ocurra ni qué le pase al bitmap por el camino, el
+ *      siguiente commit siempre vuelve a dibujar el trazo completo desde
+ *      los datos guardados, ANTES de que el navegador pinte. El bitmap
+ *      del `<canvas>` deja de ser algo que haya que "preservar": es
+ *      simplemente una proyección desechable de los datos, recalculada
+ *      en cada oportunidad.
  */
 export default function FirmaCanvas({
   ref,
@@ -53,23 +53,45 @@ export default function FirmaCanvas({
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const dibujando = useRef(false);
-  const ultimoPunto = useRef<{ x: number; y: number } | null>(null);
-  const huboTrazoRef = useRef(false);
-  // Snapshot del bitmap tras cada trazo/punto — defensa adicional: si
-  // pese a la arquitectura sin-re-render-a-mitad-de-trazo el bitmap
-  // igual se perdiera por algún otro motivo, este useLayoutEffect lo
-  // repone ANTES de que el navegador pinte.
-  const snapshotRef = useRef<ImageData | null>(null);
+  // Fuente de verdad: cada trazo es un array de puntos. Un toque/clic sin
+  // arrastre queda como un trazo de UN solo punto (se dibuja como punto).
+  const trazosRef = useRef<Punto[][]>([]);
+  const trazoActualRef = useRef<Punto[]>([]);
 
-  useLayoutEffect(() => {
+  function redibujarTodo() {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
-    if (canvas && ctx && snapshotRef.current) {
-      ctx.putImageData(snapshotRef.current, 0, 0);
+    if (!canvas || !ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#1f2937";
+    ctx.strokeStyle = "#1f2937";
+    ctx.lineWidth = 2;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    const todos = trazoActualRef.current.length ? [...trazosRef.current, trazoActualRef.current] : trazosRef.current;
+    for (const trazo of todos) {
+      if (trazo.length === 0) continue;
+      if (trazo.length === 1) {
+        ctx.beginPath();
+        ctx.arc(trazo[0].x, trazo[0].y, 1.5, 0, Math.PI * 2);
+        ctx.fill();
+        continue;
+      }
+      ctx.beginPath();
+      ctx.moveTo(trazo[0].x, trazo[0].y);
+      for (let i = 1; i < trazo.length; i++) ctx.lineTo(trazo[i].x, trazo[i].y);
+      ctx.stroke();
     }
+  }
+
+  // Repinta desde los datos DESPUÉS de cada render (mount o update),
+  // antes de que el navegador pinte — nunca depende de que el bitmap
+  // anterior siga intacto.
+  useLayoutEffect(() => {
+    redibujarTodo();
   });
 
-  function posicion(e: ReactPointerEvent<HTMLCanvasElement>) {
+  function posicion(e: ReactPointerEvent<HTMLCanvasElement>): Punto {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
@@ -77,22 +99,6 @@ export default function FirmaCanvas({
       x: ((e.clientX - rect.left) / rect.width) * canvas.width,
       y: ((e.clientY - rect.top) / rect.height) * canvas.height,
     };
-  }
-
-  /** Un toque/clic corto sin arrastre también cuenta como firma real (un punto). */
-  function dibujarPunto(p: { x: number; y: number }) {
-    const ctx = canvasRef.current?.getContext("2d");
-    if (!ctx) return;
-    ctx.fillStyle = "#1f2937";
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 1.5, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  function tomarSnapshot() {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (canvas && ctx) snapshotRef.current = ctx.getImageData(0, 0, canvas.width, canvas.height);
   }
 
   function handlePointerDown(e: ReactPointerEvent<HTMLCanvasElement>) {
@@ -106,38 +112,27 @@ export default function FirmaCanvas({
       // igual seguimos dibujando con los eventos normales.
     }
     dibujando.current = true;
-    const p = posicion(e);
-    ultimoPunto.current = p;
-    dibujarPunto(p);
-    const eraNuevoTrazo = !huboTrazoRef.current;
-    huboTrazoRef.current = true;
-    tomarSnapshot();
-    // Solo la PRIMERA vez que aparece trazo en este gesto se notifica al
-    // padre (habilita el botón) — nunca en cada punto/segmento.
-    if (eraNuevoTrazo) onCambiaTrazo?.(true);
+    trazoActualRef.current = [posicion(e)];
+    const eraPrimerTrazo = trazosRef.current.length === 0;
+    redibujarTodo();
+    // Solo la PRIMERA vez que aparece trazo se notifica al padre (habilita
+    // el botón) — nunca en cada punto/segmento, para minimizar re-renders.
+    if (eraPrimerTrazo) onCambiaTrazo?.(true);
   }
 
   function handlePointerMove(e: ReactPointerEvent<HTMLCanvasElement>) {
     if (!dibujando.current || disabled) return;
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx || !ultimoPunto.current) return;
-    const punto = posicion(e);
-    ctx.strokeStyle = "#1f2937";
-    ctx.lineWidth = 2;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.beginPath();
-    ctx.moveTo(ultimoPunto.current.x, ultimoPunto.current.y);
-    ctx.lineTo(punto.x, punto.y);
-    ctx.stroke();
-    ultimoPunto.current = punto;
-    tomarSnapshot();
+    trazoActualRef.current.push(posicion(e));
+    redibujarTodo();
   }
 
   function terminarTrazo(e: ReactPointerEvent<HTMLCanvasElement>) {
+    if (dibujando.current && trazoActualRef.current.length > 0) {
+      trazosRef.current = [...trazosRef.current, trazoActualRef.current];
+    }
+    trazoActualRef.current = [];
     dibujando.current = false;
-    ultimoPunto.current = null;
+    redibujarTodo();
     try {
       canvasRef.current?.releasePointerCapture(e.pointerId);
     } catch {
@@ -146,11 +141,9 @@ export default function FirmaCanvas({
   }
 
   function limpiar() {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (canvas && ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
-    huboTrazoRef.current = false;
-    snapshotRef.current = null;
+    trazosRef.current = [];
+    trazoActualRef.current = [];
+    redibujarTodo();
     onCambiaTrazo?.(false);
   }
 
@@ -158,10 +151,11 @@ export default function FirmaCanvas({
     obtenerImagen: () =>
       new Promise<File | null>((resolve) => {
         const canvas = canvasRef.current;
-        if (!canvas || !huboTrazoRef.current) {
+        if (!canvas || trazosRef.current.length === 0) {
           resolve(null);
           return;
         }
+        redibujarTodo();
         canvas.toBlob((blob) => {
           resolve(blob ? new File([blob], "firma.png", { type: "image/png" }) : null);
         }, "image/png");
