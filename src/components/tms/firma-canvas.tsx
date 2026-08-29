@@ -155,6 +155,11 @@ export default function FirmaCanvas({
 
     function onDown(e: PointerEvent) {
       if (disabledRef.current) return;
+      // Defensivo (hotfix — clic derecho dibujaba sin querer): con mouse,
+      // solo el botón principal (izquierdo, button === 0) firma. No
+      // afecta touch/stylus (pointerType !== "mouse"), que no traen
+      // botón secundario en el mismo sentido.
+      if (e.pointerType === "mouse" && e.button !== 0) return;
       const c = canvasRef.current;
       if (!c) return;
       try {
