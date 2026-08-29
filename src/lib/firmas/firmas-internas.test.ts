@@ -93,3 +93,75 @@ describe("crearFirmaInterna — inserta la firma con hash/fecha/código", () => 
     expect(payload.empresaId).toBe(9);
   });
 });
+
+/**
+ * VIATICOS-FIRMA-VISUAL — la imagen manuscrita se inserta EN EL MISMO
+ * INSERT que crea la firma (nunca un UPDATE posterior, ver JSDoc de
+ * crearFirmaInterna) y su SHA-256 entra al payload_canonico como
+ * `imagenSha256` — nunca se guarda base64/binario en MySQL.
+ */
+describe("crearFirmaInterna — imagen manuscrita (VIATICOS-FIRMA-VISUAL)", () => {
+  const conn = { execute: vi.fn() };
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    conn.execute.mockResolvedValue([{ insertId: 55, affectedRows: 1 }, []]);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const imagen = {
+    relative: "empresas/7/firmas/firma_viatico_autorizar_10_x.png",
+    original: "firma.png",
+    mime: "image/png",
+    size: 4096,
+    sha256: "b".repeat(64),
+  };
+
+  it("inserta imagen_ruta/imagen_nombre_original/imagen_mime/imagen_tamano en el MISMO INSERT (no hay UPDATE posterior) y devuelve tieneImagen: true", async () => {
+    const r = await crearFirmaInterna(conn as never, {
+      empresaId: 7, usuarioId: 3, empleadoId: null,
+      nombreFirmante: "Ana López", rolFirmante: "JefeOperaciones",
+      accion: "AUTORIZAR_VIATICO", modulo: "VIATICOS", entidadTipo: "VIATICO", entidadId: 10,
+      valoresRelevantes: { viaticoId: 10 },
+      imagen,
+    });
+    expect(r.tieneImagen).toBe(true);
+    expect(conn.execute).toHaveBeenCalledTimes(1); // un solo INSERT, nunca un UPDATE aparte
+    const [sql, params] = conn.execute.mock.calls[0];
+    expect(String(sql)).toContain("imagen_ruta");
+    expect(String(sql)).toContain("imagen_nombre_original");
+    expect(String(sql)).toContain("imagen_mime");
+    expect(String(sql)).toContain("imagen_tamano");
+    expect(params).toEqual(expect.arrayContaining([imagen.relative, imagen.original, imagen.mime, imagen.size]));
+  });
+
+  it("el SHA-256 de la imagen queda dentro del payload_canonico como imagenSha256 (nunca base64/binario)", async () => {
+    await crearFirmaInterna(conn as never, {
+      empresaId: 7, usuarioId: 3, empleadoId: null,
+      nombreFirmante: "Ana López", rolFirmante: "JefeOperaciones",
+      accion: "AUTORIZAR_VIATICO", modulo: "VIATICOS", entidadTipo: "VIATICO", entidadId: 10,
+      valoresRelevantes: { viaticoId: 10 },
+      imagen,
+    });
+    const [, params] = conn.execute.mock.calls[0];
+    const payloadCanonico = params[9] as string;
+    const payload = JSON.parse(payloadCanonico);
+    expect(payload.imagenSha256).toBe(imagen.sha256);
+    expect(payloadCanonico).not.toContain("base64");
+    expect(payloadCanonico.length).toBeLessThan(1000); // nunca lleva el binario/base64 de la imagen
+  });
+
+  it("sin imagen (imagen: null/undefined): imagen_* quedan NULL, imagenSha256 es null, tieneImagen: false", async () => {
+    const r = await crearFirmaInterna(conn as never, {
+      empresaId: 7, usuarioId: 3, empleadoId: null,
+      nombreFirmante: "Ana López", rolFirmante: "JefeOperaciones",
+      accion: "AUTORIZAR_VIATICO", modulo: "VIATICOS", entidadTipo: "VIATICO", entidadId: 10,
+      valoresRelevantes: { viaticoId: 10 },
+    });
+    expect(r.tieneImagen).toBe(false);
+    const [, params] = conn.execute.mock.calls[0];
+    expect(params.slice(-4)).toEqual([null, null, null, null]);
+    const payload = JSON.parse(params[9] as string);
+    expect(payload.imagenSha256).toBeNull();
+  });
+});

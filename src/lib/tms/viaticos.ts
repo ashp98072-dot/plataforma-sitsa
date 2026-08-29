@@ -4,6 +4,8 @@ import { execute, getPool, query, type SqlParams } from "@/lib/db";
 import { registrarAuditoria, registrarAuditoriaTx } from "@/lib/auditoria";
 import { verificarPasswordUsuarioActual } from "@/lib/auth";
 import { crearFirmaInterna, type ResultadoFirmaInterna } from "@/lib/firmas/firmas-internas";
+import { sha256Hex } from "@/lib/firmas/imagen-firma";
+import { borrarUpload, guardarUpload } from "@/lib/uploads";
 import { centavos, decimal } from "@/lib/multas/reglas";
 
 /**
@@ -368,9 +370,77 @@ export type DatosFirmaViatico = {
   nombreFirmante: string;
   rolFirmante: string;
   password: string;
+  /**
+   * VIATICOS-FIRMA-VISUAL — PNG de la firma manuscrita, YA validado
+   * (magic bytes + tamaño) por el endpoint antes de llegar aquí.
+   * OBLIGATORIO: los modales "Firmar y autorizar"/"Firmar liquidación" y
+   * también la bandeja masiva "Autorizar seleccionados" (todos con canvas
+   * — ver ViaticosControlPanel) exigen un trazo antes de poder confirmar,
+   * y el endpoint (autorizar/liquidar route.ts) rechaza con 400 si falta
+   * — nunca se llega aquí sin imagen.
+   */
+  imagen: { bytes: ArrayBuffer; original: string };
+  /**
+   * VIATICOS-FIRMA-VISUAL (hotfix PR #124) — true SOLO cuando la firma
+   * viene de la bandeja masiva "Autorizar seleccionados" (un único trazo
+   * dibujado una vez, aplicado a N autorizaciones — ver
+   * ViaticosControlPanel). Únicamente lo usa autorizarViatico (no existe
+   * bandeja masiva de liquidación); cuando es `true`, `firmaLote: true`
+   * queda dentro del payload_canonico firmado de ESA autorización, para
+   * que el hash/payload nunca pretenda que el usuario dibujó una firma
+   * distinta para cada viático del lote. Ausente/false en el flujo
+   * individual (no se agrega la clave al payload).
+   */
+  firmaLote?: boolean;
   ip?: string | null;
   userAgent?: string | null;
 };
+
+/**
+ * VIATICOS-FIRMA-VISUAL — guarda a disco la imagen de la firma DESPUÉS de
+ * verificar la contraseña y ANTES de abrir la transacción (guardarUpload
+ * no participa en la transacción MySQL). Devuelve tanto la referencia
+ * física (para armar el registro de la firma) como su SHA-256 (para el
+ * payload_canonico).
+ */
+async function guardarImagenFirma(
+  empresaId: number,
+  viaticoId: number,
+  accionPrefix: "autorizar" | "liquidar",
+  imagen: { bytes: ArrayBuffer; original: string },
+): Promise<{ relative: string; original: string; mime: string; size: number; sha256: string }> {
+  const guardada = await guardarUpload(
+    empresaId,
+    "firmas",
+    `firma_viatico_${accionPrefix}_${viaticoId}`,
+    {
+      name: imagen.original || "firma.png",
+      size: imagen.bytes.byteLength,
+      arrayBuffer: async () => imagen.bytes,
+    },
+  );
+  return {
+    relative: guardada.relative,
+    original: guardada.original,
+    mime: "image/png",
+    size: guardada.size,
+    sha256: sha256Hex(imagen.bytes),
+  };
+}
+
+/**
+ * VIATICOS-FIRMA-VISUAL (hotfix PR #124) — compensación CENTRALIZADA: se
+ * invoca UNA sola vez, desde el `finally` de autorizarViatico/
+ * liquidarViatico, cubriendo CUALQUIER salida sin commit — getConnection()
+ * falla, beginTransaction falla, un SELECT/UPDATE falla, crearFirmaInterna
+ * falla, la auditoría falla, commit falla, o cualquiera de los `return`
+ * explícitos de estado inválido — nunca solo "dentro de la transacción".
+ * borrarUpload ya es best-effort internamente (nunca lanza) — nunca oculta
+ * el error o el resultado de rechazo real de la operación.
+ */
+function compensarImagenFirma(imagenGuardada: { relative: string }): void {
+  borrarUpload(imagenGuardada.relative);
+}
 
 export type ResultadoTransicionConFirma =
   | { ok: true; firma: ResultadoFirmaInterna }
@@ -403,8 +473,22 @@ export async function autorizarViatico(
     return { ok: false, error: "Contraseña incorrecta.", status: 401 };
   }
 
-  const conn = await getPool().getConnection();
+  // VIATICOS-FIRMA-VISUAL — SOLO después de verificar la contraseña, y
+  // ANTES de abrir la transacción (guardarUpload no es transaccional).
+  const imagenGuardada = await guardarImagenFirma(empresaId, viaticoId, "autorizar", firma.imagen);
+
+  // VIATICOS-FIRMA-VISUAL (hotfix PR #124) — `conn` se declara FUERA del
+  // try para que el `finally` pueda liberar/hacer rollback aunque
+  // getPool().getConnection() (o beginTransaction) sea lo que falle —
+  // antes, un error ahí dejaba el PNG ya guardado en disco sin ninguna
+  // fila que lo referencie. `committed` es la única señal de "ya no hay
+  // nada que compensar" — el `finally` corre en TODA salida (return
+  // normal, return anticipado, o excepción), así que la compensación
+  // queda en un único lugar en vez de repetida en cada `return`.
+  let conn: PoolConnection | null = null;
+  let committed = false;
   try {
+    conn = await getPool().getConnection();
     await conn.beginTransaction();
 
     const [rows] = await conn.query<RowDataPacket[]>(
@@ -414,11 +498,9 @@ export async function autorizarViatico(
     );
     const v = rows[0];
     if (!v) {
-      await conn.rollback();
       return { ok: false, error: "Viático no encontrado.", status: 404 };
     }
     if (String(v.estado) !== "PROGRAMADO") {
-      await conn.rollback();
       return {
         ok: false,
         error: `Este viático está ${String(v.estado)}; no se puede autorizar desde ese estado.`,
@@ -443,7 +525,6 @@ export async function autorizarViatico(
       [usuario, viaticoId, empresaId],
     );
     if (upd.affectedRows !== 1) {
-      await conn.rollback();
       return { ok: false, error: "El viático cambió de estado durante la operación.", status: 409 };
     }
 
@@ -463,7 +544,12 @@ export async function autorizarViatico(
         planCodigo: ctx?.plan_codigo != null ? String(ctx.plan_codigo) : null,
         beneficiario: ctx?.personal_nombre != null ? String(ctx.personal_nombre) : null,
         montoAsignado: Number(v.monto_asignado),
+        // VIATICOS-FIRMA-VISUAL (hotfix PR #124) — solo presente cuando
+        // viene de "Autorizar seleccionados": deja explícito en el payload
+        // firmado que este trazo se reutilizó para todo el lote.
+        ...(firma.firmaLote ? { firmaLote: true } : {}),
       },
+      imagen: imagenGuardada,
       ip: firma.ip,
       userAgent: firma.userAgent,
     });
@@ -477,12 +563,22 @@ export async function autorizarViatico(
     });
 
     await conn.commit();
+    committed = true;
     return { ok: true, firma: resultadoFirma };
-  } catch (err) {
-    await conn.rollback();
-    throw err;
   } finally {
-    conn.release();
+    if (conn) {
+      if (!committed) {
+        try {
+          await conn.rollback();
+        } catch {
+          // best-effort — nunca oculta el error/rechazo real que ya se está propagando.
+        }
+      }
+      conn.release();
+    }
+    if (!committed) {
+      compensarImagenFirma(imagenGuardada);
+    }
   }
 }
 
@@ -605,8 +701,19 @@ export async function liquidarViatico(
     return { ok: false, error: "Contraseña incorrecta.", status: 401 };
   }
 
-  const conn = await getPool().getConnection();
+  // VIATICOS-FIRMA-VISUAL — SOLO después de verificar la contraseña, y
+  // ANTES de abrir la transacción (guardarUpload no es transaccional).
+  const imagenGuardada = await guardarImagenFirma(empresaId, viaticoId, "liquidar", firma.imagen);
+
+  // VIATICOS-FIRMA-VISUAL (hotfix PR #124) — misma estrategia centralizada
+  // que autorizarViatico: `conn` fuera del try, `committed` como única
+  // señal de "ya no hay nada que compensar", compensación (y rollback) en
+  // UN solo `finally` que cubre cualquier salida sin commit — incluyendo
+  // que getPool().getConnection() falle antes de siquiera existir `conn`.
+  let conn: PoolConnection | null = null;
+  let committed = false;
   try {
+    conn = await getPool().getConnection();
     await conn.beginTransaction();
 
     const [rows] = await conn.query<RowDataPacket[]>(
@@ -615,11 +722,9 @@ export async function liquidarViatico(
     );
     const v = rows[0];
     if (!v) {
-      await conn.rollback();
       return { ok: false, error: "Viático no encontrado.", status: 404 };
     }
     if (String(v.estado) !== "ENTREGADO") {
-      await conn.rollback();
       return {
         ok: false,
         error: `Este viático está ${String(v.estado)}; no se puede liquidar desde ese estado.`,
@@ -630,7 +735,6 @@ export async function liquidarViatico(
     const montoEntregadoCent = centavos(String(v.monto_asignado));
     const diferenciaCent = montoEntregadoCent - gastosCent - reintegroCent;
     if (diferenciaCent > 0) {
-      await conn.rollback();
       return {
         ok: false,
         error: `Pendiente por comprobar o reintegrar: Q${decimal(diferenciaCent)}`,
@@ -638,7 +742,6 @@ export async function liquidarViatico(
       };
     }
     if (diferenciaCent < 0) {
-      await conn.rollback();
       return {
         ok: false,
         error: "Los gastos y reintegros superan el monto entregado. Revisa la liquidación.",
@@ -654,7 +757,6 @@ export async function liquidarViatico(
       [usuario, decimal(gastosCent), decimal(reintegroCent), datos.observaciones?.trim() || null, viaticoId, empresaId],
     );
     if (upd.affectedRows !== 1) {
-      await conn.rollback();
       return { ok: false, error: "El viático cambió de estado durante la operación.", status: 409 };
     }
 
@@ -676,6 +778,7 @@ export async function liquidarViatico(
         diferencia: decimal(diferenciaCent),
         observaciones: datos.observaciones?.trim() || null,
       },
+      imagen: imagenGuardada,
       ip: firma.ip,
       userAgent: firma.userAgent,
     });
@@ -689,12 +792,22 @@ export async function liquidarViatico(
     });
 
     await conn.commit();
+    committed = true;
     return { ok: true, firma: resultadoFirma };
-  } catch (err) {
-    await conn.rollback();
-    throw err;
   } finally {
-    conn.release();
+    if (conn) {
+      if (!committed) {
+        try {
+          await conn.rollback();
+        } catch {
+          // best-effort — nunca oculta el error/rechazo real que ya se está propagando.
+        }
+      }
+      conn.release();
+    }
+    if (!committed) {
+      compensarImagenFirma(imagenGuardada);
+    }
   }
 }
 

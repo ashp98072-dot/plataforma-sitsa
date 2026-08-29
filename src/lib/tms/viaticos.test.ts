@@ -4,11 +4,13 @@ vi.mock("@/lib/db", () => ({ execute: vi.fn(), query: vi.fn(), getPool: vi.fn() 
 vi.mock("@/lib/auditoria", () => ({ registrarAuditoria: vi.fn(), registrarAuditoriaTx: vi.fn() }));
 vi.mock("@/lib/auth", () => ({ verificarPasswordUsuarioActual: vi.fn() }));
 vi.mock("@/lib/firmas/firmas-internas", () => ({ crearFirmaInterna: vi.fn(), TEXTO_FIRMA_INTERNA: "Firma electrónica interna" }));
+vi.mock("@/lib/uploads", () => ({ guardarUpload: vi.fn(), borrarUpload: vi.fn() }));
 
 import { execute, getPool } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { verificarPasswordUsuarioActual } from "@/lib/auth";
 import { crearFirmaInterna } from "@/lib/firmas/firmas-internas";
+import { borrarUpload, guardarUpload } from "@/lib/uploads";
 import {
   autorizarViatico,
   liquidarViatico,
@@ -23,6 +25,14 @@ import {
  * firma — ver ticket, sección PAGO — y NO se modificó en este ticket; se
  * incluye una prueba de regresión mínima (23) para dejar constancia de
  * que sigue sin exigir contraseña.
+ *
+ * VIATICOS-FIRMA-VISUAL — se agregan pruebas de la imagen PNG manuscrita:
+ * se guarda a disco SOLO después de verificar la contraseña y ANTES de
+ * abrir la transacción (guardarUpload no es transaccional); si algo falla
+ * después (estado inválido, diferencia != 0, error inesperado), se
+ * compensa con borrarUpload (best-effort) para no dejar el archivo
+ * huérfano; el SHA-256 de la imagen viaja al payload firmado vía
+ * crearFirmaInterna(..., { imagen: {..., sha256} }).
  */
 
 const conn = {
@@ -35,11 +45,17 @@ const conn = {
 };
 const getConnection = vi.fn();
 
+// PNG mínimo (solo para pruebas de la lib — la validación real de magic
+// bytes vive en src/lib/firmas/imagen-firma.ts y se ejerce en las pruebas
+// del endpoint, no aquí: a esta capa el archivo ya llega validado).
+const IMAGEN_BYTES = new TextEncoder().encode("firma-de-prueba").buffer;
+
 const firma: DatosFirmaViatico = {
   usuarioId: 3,
   nombreFirmante: "Ana López",
   rolFirmante: "JefeOperaciones",
   password: "correcta123",
+  imagen: { bytes: IMAGEN_BYTES, original: "firma.png" },
 };
 
 const VIATICO_PROGRAMADO = { id: 10, plan_id: 1, personal_id: 5, monto_asignado: "500.00", estado: "PROGRAMADO" };
@@ -71,16 +87,17 @@ beforeEach(() => {
   getConnection.mockResolvedValue(conn);
   conn.execute.mockResolvedValue([{ affectedRows: 1 }, []]);
   vi.mocked(verificarPasswordUsuarioActual).mockResolvedValue(true);
+  vi.mocked(guardarUpload).mockResolvedValue({ relative: "empresas/7/firmas/firma_x.png", original: "firma.png", size: 15 });
   vi.mocked(crearFirmaInterna).mockResolvedValue({
     id: 1, codigoFirma: "SIG-20260828-ABCD1234", fechaHoraServidor: new Date("2026-08-28T15:00:00Z"),
-    hashPayload: "a".repeat(64), nombreFirmante: "Ana López", rolFirmante: "JefeOperaciones",
+    hashPayload: "a".repeat(64), nombreFirmante: "Ana López", rolFirmante: "JefeOperaciones", tieneImagen: true,
   });
   mockConnQuery();
 });
 afterEach(() => vi.restoreAllMocks());
 
 describe("autorizarViatico — PROGRAMADO -> AUTORIZADO con firma", () => {
-  it("5) contraseña incorrecta: 401, NO crea firma, NO cambia estado (ningún UPDATE), NO registra auditoría transaccional — nunca abre la transacción", async () => {
+  it("5) contraseña incorrecta: 401, NO crea firma, NO cambia estado (ningún UPDATE), NO registra auditoría transaccional — nunca abre la transacción ni guarda la imagen", async () => {
     vi.mocked(verificarPasswordUsuarioActual).mockResolvedValue(false);
     const r = await autorizarViatico(7, 10, "jefe1", firma);
     expect(r.ok).toBe(false);
@@ -90,6 +107,8 @@ describe("autorizarViatico — PROGRAMADO -> AUTORIZADO con firma", () => {
     expect(conn.execute).not.toHaveBeenCalled(); // ningún UPDATE de estado
     expect(registrarAuditoriaTx).not.toHaveBeenCalled();
     expect(conn.commit).not.toHaveBeenCalled();
+    // VIATICOS-FIRMA-VISUAL: password incorrecta -> NUNCA se escribe la imagen a disco.
+    expect(guardarUpload).not.toHaveBeenCalled();
   });
 
   it("6) autorización EXITOSA crea la firma con accion=AUTORIZAR_VIATICO/modulo=VIATICOS/entidad_tipo=VIATICO", async () => {
@@ -102,19 +121,80 @@ describe("autorizarViatico — PROGRAMADO -> AUTORIZADO con firma", () => {
     }));
   });
 
-  it("estado != PROGRAMADO rechaza (409) sin firmar", async () => {
+  it("VIATICOS-FIRMA-VISUAL: guarda la imagen ANTES de abrir la transacción y la asocia a la firma con su SHA-256", async () => {
+    const r = await autorizarViatico(7, 10, "jefe1", firma);
+    expect(r.ok).toBe(true);
+    expect(guardarUpload).toHaveBeenCalledWith(
+      7, "firmas", "firma_viatico_autorizar_10",
+      expect.objectContaining({ name: "firma.png", size: IMAGEN_BYTES.byteLength }),
+    );
+    // Orden: guardarUpload (fuera de transacción) antes de getConnection (abre la transacción).
+    expect(vi.mocked(guardarUpload).mock.invocationCallOrder[0]).toBeLessThan(getConnection.mock.invocationCallOrder[0]);
+    expect(crearFirmaInterna).toHaveBeenCalledWith(conn, expect.objectContaining({
+      imagen: {
+        relative: "empresas/7/firmas/firma_x.png",
+        original: "firma.png",
+        mime: "image/png",
+        size: 15,
+        sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+      },
+    }));
+  });
+
+  it("hotfix PR #124: firmaLote no viene (flujo individual) -> el payload NO incluye la clave firmaLote", async () => {
+    await autorizarViatico(7, 10, "jefe1", firma); // firma no trae firmaLote
+    expect(crearFirmaInterna).toHaveBeenCalledWith(conn, expect.objectContaining({
+      valoresRelevantes: expect.not.objectContaining({ firmaLote: expect.anything() }),
+    }));
+  });
+
+  it("hotfix PR #124: firmaLote: true (bandeja masiva) -> el payload firmado incluye firmaLote: true", async () => {
+    await autorizarViatico(7, 10, "jefe1", { ...firma, firmaLote: true });
+    expect(crearFirmaInterna).toHaveBeenCalledWith(conn, expect.objectContaining({
+      valoresRelevantes: expect.objectContaining({ viaticoId: 10, firmaLote: true }),
+    }));
+  });
+
+  it("hotfix PR #124: autorizarViatico — getConnection() falla -> compensa la imagen ya guardada, no crea firma ni auditoría, no cambia estado, propaga el error", async () => {
+    getConnection.mockRejectedValueOnce(new Error("pool exhausted"));
+    await expect(autorizarViatico(7, 10, "jefe1", firma)).rejects.toThrow("pool exhausted");
+    // La imagen SÍ se había guardado (password ya verificado ANTES de intentar la conexión).
+    expect(guardarUpload).toHaveBeenCalledTimes(1);
+    expect(borrarUpload).toHaveBeenCalledWith("empresas/7/firmas/firma_x.png");
+    expect(crearFirmaInterna).not.toHaveBeenCalled();
+    expect(registrarAuditoriaTx).not.toHaveBeenCalled();
+    expect(conn.execute).not.toHaveBeenCalled(); // ningún UPDATE de estado
+    // `conn` nunca llegó a obtenerse: no hay conexión sobre la que hacer rollback/release.
+    expect(conn.rollback).not.toHaveBeenCalled();
+    expect(conn.release).not.toHaveBeenCalled();
+  });
+
+  it("hotfix PR #124: beginTransaction() falla (conn SÍ se obtuvo) -> también compensa, intenta rollback y libera la conexión", async () => {
+    conn.beginTransaction.mockRejectedValueOnce(new Error("connection reset"));
+    await expect(autorizarViatico(7, 10, "jefe1", firma)).rejects.toThrow("connection reset");
+    expect(borrarUpload).toHaveBeenCalledWith("empresas/7/firmas/firma_x.png");
+    expect(crearFirmaInterna).not.toHaveBeenCalled();
+    // conn SÍ se obtuvo (a diferencia del caso getConnection() falla) -> se intenta rollback y SIEMPRE se libera.
+    expect(conn.rollback).toHaveBeenCalled();
+    expect(conn.release).toHaveBeenCalled();
+  });
+
+  it("estado != PROGRAMADO rechaza (409) sin firmar y COMPENSA borrando la imagen ya guardada", async () => {
     mockConnQuery({ viatico: { ...VIATICO_PROGRAMADO, estado: "AUTORIZADO" } });
     const r = await autorizarViatico(7, 10, "jefe1", firma);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.status).toBe(409);
     expect(crearFirmaInterna).not.toHaveBeenCalled();
     expect(conn.rollback).toHaveBeenCalled();
+    // VIATICOS-FIRMA-VISUAL: compensación — el archivo ya se había escrito, no debe quedar huérfano.
+    expect(borrarUpload).toHaveBeenCalledWith("empresas/7/firmas/firma_x.png");
   });
 
-  it("18) firma + transición + auditoría son atómicas: se hace commit UNA sola vez y solo tras firmar", async () => {
+  it("18) firma + transición + auditoría son atómicas: se hace commit UNA sola vez y solo tras firmar (sin compensación en el camino exitoso)", async () => {
     await autorizarViatico(7, 10, "jefe1", firma);
     expect(conn.commit).toHaveBeenCalledTimes(1);
     expect(conn.rollback).not.toHaveBeenCalled();
+    expect(borrarUpload).not.toHaveBeenCalled();
     // La auditoría se registra DENTRO de la misma conexión/transacción (registrarAuditoriaTx con conn), nunca aparte.
     expect(registrarAuditoriaTx).toHaveBeenCalledWith(conn, expect.objectContaining({
       empresaId: 7, accion: "autorizar_viatico", modulo: "tms",
@@ -127,17 +207,21 @@ describe("autorizarViatico — PROGRAMADO -> AUTORIZADO con firma", () => {
     expect(detalle).toContain("SIG-20260828-ABCD1234");
   });
 
-  it("viático inexistente -> 404, sin firmar", async () => {
+  it("viático inexistente -> 404, sin firmar, compensa la imagen", async () => {
     mockConnQuery({ viatico: null });
     const r = await autorizarViatico(7, 999, "jefe1", firma);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.status).toBe(404);
     expect(crearFirmaInterna).not.toHaveBeenCalled();
+    expect(borrarUpload).toHaveBeenCalledWith("empresas/7/firmas/firma_x.png");
   });
 });
 
 describe("liquidarViatico — ENTREGADO -> LIQUIDADO, regla crítica de diferencia === 0 exacto", () => {
-  const firmaFacturador: DatosFirmaViatico = { usuarioId: 8, nombreFirmante: "Marta Ruiz", rolFirmante: "Facturador", password: "clave456" };
+  const firmaFacturador: DatosFirmaViatico = {
+    usuarioId: 8, nombreFirmante: "Marta Ruiz", rolFirmante: "Facturador", password: "clave456",
+    imagen: { bytes: IMAGEN_BYTES, original: "firma.png" },
+  };
 
   it("11) gastos 900 + reintegro 100 sobre entregado 1000 -> diferencia 0, SÍ liquida", async () => {
     mockConnQuery({ viatico: VIATICO_ENTREGADO });
@@ -151,20 +235,36 @@ describe("liquidarViatico — ENTREGADO -> LIQUIDADO, regla crítica de diferenc
     expect(r.ok).toBe(true);
   });
 
-  it("13) gastos 950 + reintegro 0 sobre entregado 1000 -> diferencia 50 (pendiente), NO liquida, estado sigue ENTREGADO", async () => {
+  it("hotfix PR #124: liquidarViatico — getConnection() falla -> compensa la imagen ya guardada, no crea firma ni auditoría, no cambia estado, propaga el error", async () => {
+    getConnection.mockRejectedValueOnce(new Error("pool exhausted"));
+    await expect(
+      liquidarViatico(7, 10, { gastosComprobados: "900.00", reintegro: "100.00", observaciones: null }, "fact1", firmaFacturador),
+    ).rejects.toThrow("pool exhausted");
+    expect(guardarUpload).toHaveBeenCalledTimes(1);
+    expect(borrarUpload).toHaveBeenCalledWith("empresas/7/firmas/firma_x.png");
+    expect(crearFirmaInterna).not.toHaveBeenCalled();
+    expect(registrarAuditoriaTx).not.toHaveBeenCalled();
+    expect(conn.execute).not.toHaveBeenCalled();
+    expect(conn.rollback).not.toHaveBeenCalled();
+    expect(conn.release).not.toHaveBeenCalled();
+  });
+
+  it("13) gastos 950 + reintegro 0 sobre entregado 1000 -> diferencia 50 (pendiente), NO liquida, estado sigue ENTREGADO, COMPENSA la imagen", async () => {
     mockConnQuery({ viatico: VIATICO_ENTREGADO });
     const r = await liquidarViatico(7, 10, { gastosComprobados: "950.00", reintegro: "0", observaciones: null }, "fact1", firmaFacturador);
     expect(r.ok).toBe(false);
     if (!r.ok) { expect(r.status).toBe(409); expect(r.error).toContain("Pendiente por comprobar o reintegrar: Q50.00"); }
     expect(conn.execute).not.toHaveBeenCalled(); // ningún UPDATE se ejecutó
     expect(crearFirmaInterna).not.toHaveBeenCalled();
+    expect(borrarUpload).toHaveBeenCalledWith("empresas/7/firmas/firma_x.png");
   });
 
-  it("14) gastos 1000 + reintegro 100 sobre entregado 1000 -> diferencia -100, NO liquida (superan lo entregado)", async () => {
+  it("14) gastos 1000 + reintegro 100 sobre entregado 1000 -> diferencia -100, NO liquida (superan lo entregado), COMPENSA la imagen", async () => {
     mockConnQuery({ viatico: VIATICO_ENTREGADO });
     const r = await liquidarViatico(7, 10, { gastosComprobados: "1000.00", reintegro: "100.00", observaciones: null }, "fact1", firmaFacturador);
     expect(r.ok).toBe(false);
     if (!r.ok) { expect(r.status).toBe(409); expect(r.error).toContain("superan el monto entregado"); }
+    expect(borrarUpload).toHaveBeenCalledWith("empresas/7/firmas/firma_x.png");
   });
 
   it("15) decisión monetaria EXACTA, no float: 300.30 - 100.10 - 200.20 = 0.00 exacto (un float directo puede dar un residuo distinto de 0)", async () => {
@@ -176,23 +276,29 @@ describe("liquidarViatico — ENTREGADO -> LIQUIDADO, regla crítica de diferenc
     expect(r.ok).toBe(true);
   });
 
-  it("16) liquidación EXITOSA crea la firma con accion=LIQUIDAR_VIATICO y el payload con montoEntregado/gastos/reintegro/diferencia", async () => {
+  it("16) liquidación EXITOSA crea la firma con accion=LIQUIDAR_VIATICO, el payload con montoEntregado/gastos/reintegro/diferencia, la imagen con su SHA-256, y NO compensa (commit exitoso)", async () => {
     mockConnQuery({ viatico: VIATICO_ENTREGADO });
     await liquidarViatico(7, 10, { gastosComprobados: "900.00", reintegro: "100.00", observaciones: "ok" }, "fact1", firmaFacturador);
+    expect(guardarUpload).toHaveBeenCalledWith(7, "firmas", "firma_viatico_liquidar_10", expect.anything());
     expect(crearFirmaInterna).toHaveBeenCalledWith(conn, expect.objectContaining({
       accion: "LIQUIDAR_VIATICO", modulo: "VIATICOS", entidadTipo: "VIATICO", entidadId: 10,
       valoresRelevantes: expect.objectContaining({
         viaticoId: 10, montoEntregado: "1000.00", gastosComprobados: "900.00", reintegro: "100.00", diferencia: "0.00",
       }),
+      imagen: expect.objectContaining({ mime: "image/png", sha256: expect.stringMatching(/^[0-9a-f]{64}$/) }),
     }));
+    expect(conn.commit).toHaveBeenCalledTimes(1);
+    // hotfix PR #124: commit exitoso -> NUNCA se compensa/borra la imagen ya asociada.
+    expect(borrarUpload).not.toHaveBeenCalled();
   });
 
-  it("17) doble liquidación bloqueada: el segundo intento ya no encuentra ENTREGADO -> 409, sin nueva firma", async () => {
+  it("17) doble liquidación bloqueada: el segundo intento ya no encuentra ENTREGADO -> 409, sin nueva firma, compensa", async () => {
     mockConnQuery({ viatico: { ...VIATICO_ENTREGADO, estado: "LIQUIDADO" } });
     const r = await liquidarViatico(7, 10, { gastosComprobados: "1000.00", reintegro: "0", observaciones: null }, "fact1", firmaFacturador);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.status).toBe(409);
     expect(crearFirmaInterna).not.toHaveBeenCalled();
+    expect(borrarUpload).toHaveBeenCalledWith("empresas/7/firmas/firma_x.png");
   });
 
   it("18) atomicidad: commit único tras firmar, rollback si la diferencia no es 0", async () => {
@@ -202,15 +308,16 @@ describe("liquidarViatico — ENTREGADO -> LIQUIDADO, regla crítica de diferenc
     expect(conn.commit).not.toHaveBeenCalled();
   });
 
-  it("monto/formato inválido se rechaza ANTES de verificar contraseña o abrir conexión", async () => {
+  it("monto/formato inválido se rechaza ANTES de verificar contraseña, abrir conexión o guardar la imagen", async () => {
     const r = await liquidarViatico(7, 10, { gastosComprobados: "no-es-numero", reintegro: "0", observaciones: null }, "fact1", firmaFacturador);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.status).toBe(400);
     expect(verificarPasswordUsuarioActual).not.toHaveBeenCalled();
     expect(getConnection).not.toHaveBeenCalled();
+    expect(guardarUpload).not.toHaveBeenCalled();
   });
 
-  it("5) contraseña incorrecta: 401, NO crea firma, NO cambia estado, NO registra auditoría transaccional — nunca abre la transacción", async () => {
+  it("5) contraseña incorrecta: 401, NO crea firma, NO cambia estado, NO registra auditoría transaccional, NO guarda la imagen — nunca abre la transacción", async () => {
     vi.mocked(verificarPasswordUsuarioActual).mockResolvedValue(false);
     const r = await liquidarViatico(7, 10, { gastosComprobados: "900.00", reintegro: "100.00", observaciones: null }, "fact1", firmaFacturador);
     expect(r.ok).toBe(false);
@@ -220,10 +327,26 @@ describe("liquidarViatico — ENTREGADO -> LIQUIDADO, regla crítica de diferenc
     expect(conn.execute).not.toHaveBeenCalled();
     expect(registrarAuditoriaTx).not.toHaveBeenCalled();
     expect(conn.commit).not.toHaveBeenCalled();
+    expect(guardarUpload).not.toHaveBeenCalled();
+  });
+
+  it("VIATICOS-FIRMA-VISUAL: autorizar y liquidar generan prefijos de archivo independientes (nunca reutilizan la misma imagen entre acciones)", async () => {
+    mockConnQuery({ viatico: VIATICO_PROGRAMADO });
+    await autorizarViatico(7, 10, "jefe1", firma);
+    const prefijoAutorizar = vi.mocked(guardarUpload).mock.calls[0][2];
+
+    vi.mocked(guardarUpload).mockClear();
+    mockConnQuery({ viatico: VIATICO_ENTREGADO });
+    await liquidarViatico(7, 10, { gastosComprobados: "1000.00", reintegro: "0", observaciones: null }, "fact1", firmaFacturador);
+    const prefijoLiquidar = vi.mocked(guardarUpload).mock.calls[0][2];
+
+    expect(prefijoAutorizar).not.toBe(prefijoLiquidar);
+    expect(prefijoAutorizar).toContain("autorizar");
+    expect(prefijoLiquidar).toContain("liquidar");
   });
 });
 
-describe("23) registrarEntregaViatico (pago) — regresión: NUNCA exige firma/contraseña", () => {
+describe("23) registrarEntregaViatico (pago) — regresión: NUNCA exige firma/contraseña/imagen", () => {
   beforeEach(() => {
     vi.mocked(execute).mockResolvedValue({ affectedRows: 1 } as never);
   });
@@ -233,6 +356,7 @@ describe("23) registrarEntregaViatico (pago) — regresión: NUNCA exige firma/c
     expect(r.ok).toBe(true);
     expect(crearFirmaInterna).not.toHaveBeenCalled();
     expect(verificarPasswordUsuarioActual).not.toHaveBeenCalled();
+    expect(guardarUpload).not.toHaveBeenCalled();
     // No usa transacción propia (execute() directo) — mismo patrón preexistente, sin cambios de este ticket.
     expect(getConnection).not.toHaveBeenCalled();
   });
