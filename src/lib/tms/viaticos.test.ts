@@ -276,7 +276,7 @@ describe("liquidarViatico — ENTREGADO -> LIQUIDADO, regla crítica de diferenc
     expect(r.ok).toBe(true);
   });
 
-  it("16) liquidación EXITOSA crea la firma con accion=LIQUIDAR_VIATICO, el payload con montoEntregado/gastos/reintegro/diferencia, y la imagen con su SHA-256", async () => {
+  it("16) liquidación EXITOSA crea la firma con accion=LIQUIDAR_VIATICO, el payload con montoEntregado/gastos/reintegro/diferencia, la imagen con su SHA-256, y NO compensa (commit exitoso)", async () => {
     mockConnQuery({ viatico: VIATICO_ENTREGADO });
     await liquidarViatico(7, 10, { gastosComprobados: "900.00", reintegro: "100.00", observaciones: "ok" }, "fact1", firmaFacturador);
     expect(guardarUpload).toHaveBeenCalledWith(7, "firmas", "firma_viatico_liquidar_10", expect.anything());
@@ -287,6 +287,9 @@ describe("liquidarViatico — ENTREGADO -> LIQUIDADO, regla crítica de diferenc
       }),
       imagen: expect.objectContaining({ mime: "image/png", sha256: expect.stringMatching(/^[0-9a-f]{64}$/) }),
     }));
+    expect(conn.commit).toHaveBeenCalledTimes(1);
+    // hotfix PR #124: commit exitoso -> NUNCA se compensa/borra la imagen ya asociada.
+    expect(borrarUpload).not.toHaveBeenCalled();
   });
 
   it("17) doble liquidación bloqueada: el segundo intento ya no encuentra ENTREGADO -> 409, sin nueva firma, compensa", async () => {
