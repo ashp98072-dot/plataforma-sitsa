@@ -1,6 +1,6 @@
 "use client";
 
-import { useImperativeHandle, useLayoutEffect, useRef, type PointerEvent as ReactPointerEvent, type Ref } from "react";
+import { useEffect, useImperativeHandle, useLayoutEffect, useRef, type Ref } from "react";
 
 /** Dimensión final del PNG exportado — nunca se envía una captura de tamaño arbitrario. */
 const ANCHO_MAX = 800;
@@ -20,44 +20,46 @@ type Punto = { x: number; y: number };
  * del navegador) de los trazos de la sesión de firma ACTUALMENTE activa.
  * Vive fuera del ciclo de vida del componente para sobrevivir aunque
  * FirmaCanvas se desmonte y remonte por completo mientras el usuario
- * sigue dibujando (causa que no se pudo confirmar con certeza pese a 3
- * rondas de corrección — ver JSDoc del componente) — un simple `let` de
- * módulo no depende de refs ni de que la instancia de React sobreviva.
- * `sesionId` evita reusar el trazo de un viático/modal distinto: si el
- * padre abre una NUEVA sesión de firma (nuevo `sesionId`), el respaldo de
- * la sesión anterior se descarta, nunca se reutiliza entre autorizaciones.
+ * sigue dibujando — un simple `let` de módulo no depende de refs ni de
+ * que la instancia de React sobreviva. `sesionId` evita reusar el trazo
+ * de un viático/modal distinto: si el padre abre una NUEVA sesión de
+ * firma (nuevo `sesionId`), el respaldo de la sesión anterior se
+ * descarta, nunca se reutiliza entre autorizaciones.
  */
 let respaldoSesion: { sesionId: string; trazos: Punto[][] } | null = null;
 
 /**
  * VIATICOS-FIRMA-VISUAL — canvas nativo reutilizable para capturar una
- * firma manuscrita con mouse/touch/stylus (Pointer Events unificados:
- * pointerdown/pointermove/pointerup/pointercancel — sin librería externa).
- * Genera un PNG transparente (nunca se rellena el fondo del canvas, solo
- * se dibuja el trazo) normalizado al buffer interno fijo 800x300.
+ * firma manuscrita con mouse/touch/stylus. Genera un PNG transparente
+ * (nunca se rellena el fondo del canvas, solo se dibuja el trazo)
+ * normalizado al buffer interno fijo 800x300.
  *
  * Esta imagen es un adjunto visual ADICIONAL a la firma electrónica
  * interna ya existente — NUNCA la sustituye ni es el único mecanismo de
  * autenticación.
  *
- * CORRECCIÓN URGENTE (rondas 2-3) — "la firma desaparece al soltar el
- * mouse" seguía ocurriendo pese a (1) snapshot+restauración del bitmap y
- * (2) evitar empujar el File al padre en cada trazo (solo un booleano).
- * Ninguna reprodujo el fallo en local (dev, Chrome vía CDP, con
- * PointerEvents reales e inspección directa de píxeles) pero SÍ persistía
- * reportado en producción (Hostinger, tras redeploy + hard refresh
- * confirmados, sin errores de consola) — descartando caché de navegador.
- * Este archivo ya NO depende del bitmap del `<canvas>` como fuente de
- * verdad: los trazos se guardan como DATOS (arrays de puntos) en un ref,
- * y el canvas se REPINTA POR COMPLETO desde esos datos en cada
- * pointermove y en un `useLayoutEffect` sin dependencias que corre
- * después de CADA render. Ronda 4 (esta): además se respalda esa misma
- * lista de puntos en `respaldoSesion` (memoria de módulo, ver arriba) por
- * si la causa real es que el propio componente se desmonta/remonta por
- * completo (no solo que su bitmap se pierda) — algo que no se pudo
- * confirmar ni descartar con certeza sin acceso al entorno real. Si el
- * componente remonta, el primer render recupera `trazosRef` desde este
- * respaldo (mismo `sesionId`) antes de que el `useLayoutEffect` repinte.
+ * CORRECCIÓN URGENTE (rondas 2-4) — "la firma desaparece al soltar el
+ * mouse" seguía ocurriendo pese a: (1) snapshot+restauración del bitmap,
+ * (2) evitar empujar el File al padre en cada trazo (solo un booleano),
+ * (3) repintado completo desde datos en cada render, (4) respaldo en
+ * memoria de módulo por si el componente remonta. Ninguna reprodujo el
+ * fallo en local (dev, Chrome vía CDP, con PointerEvents reales e
+ * inspección directa de píxeles) pero el usuario lo reportó igual en
+ * producción (Hostinger, redeploy + hard refresh confirmados, sin
+ * errores de consola, mouse físico + Chrome — el mismo escenario ya
+ * probado).
+ *
+ * Ronda 5 (esta): los manejadores de puntero YA NO se registran como
+ * props JSX de React (`onPointerDown={...}`, que pasan por el sistema de
+ * eventos sintéticos/delegados de React, con un pipeline de despacho que
+ * SÍ puede diferir entre el build de desarrollo y el de producción). Se
+ * registran con `addEventListener` NATIVO directamente sobre el nodo
+ * `<canvas>` en un `useEffect`, fuera del sistema de eventos de React
+ * por completo — el dibujo (lectura de coordenadas + `ctx.stroke`/
+ * `ctx.arc`) ya no depende de NINGÚN mecanismo de React en absoluto,
+ * solo del DOM. `disabled` se lee de un ref sincronizado aparte para que
+ * los listeners se registren UNA sola vez por montaje (nunca se
+ * reasignan mientras el componente vive).
  */
 export default function FirmaCanvas({
   ref,
@@ -71,8 +73,7 @@ export default function FirmaCanvas({
    * `liquidar-45`, `masivo-<timestamp>`) — el padre debe pasar un valor
    * NUEVO cada vez que abre el modal, para que el respaldo nunca se
    * reutilice entre autorizaciones distintas ni entre reaperturas del
-   * mismo modal. Sin `sesionId`, no hay respaldo entre remontajes (se
-   * comporta como antes).
+   * mismo modal. Sin `sesionId`, no hay respaldo entre remontajes.
    */
   sesionId?: string;
   onCambiaTrazo?: (tieneTrazo: boolean) => void;
@@ -80,6 +81,7 @@ export default function FirmaCanvas({
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const dibujando = useRef(false);
+  const disabledRef = useRef(disabled);
   // Fuente de verdad: cada trazo es un array de puntos. Un toque/clic sin
   // arrastre queda como un trazo de UN solo punto (se dibuja como punto).
   // Se inicializa desde respaldoSesion si esta instancia arranca con el
@@ -88,6 +90,14 @@ export default function FirmaCanvas({
     sesionId && respaldoSesion?.sesionId === sesionId ? respaldoSesion.trazos : [],
   );
   const trazoActualRef = useRef<Punto[]>([]);
+  const onCambiaTrazoRef = useRef(onCambiaTrazo);
+
+  // Los refs "espejo" de props NUNCA se escriben durante el render (regla
+  // de hooks) — se sincronizan aquí, después de cada render.
+  useLayoutEffect(() => {
+    disabledRef.current = disabled;
+    onCambiaTrazoRef.current = onCambiaTrazo;
+  });
 
   function persistirRespaldo() {
     if (!sesionId) return;
@@ -129,59 +139,76 @@ export default function FirmaCanvas({
     redibujarTodo();
   });
 
-  function posicion(e: ReactPointerEvent<HTMLCanvasElement>): Punto {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
+  function posicion(canvas: HTMLCanvasElement, clientX: number, clientY: number): Punto {
     const rect = canvas.getBoundingClientRect();
     return {
-      x: ((e.clientX - rect.left) / rect.width) * canvas.width,
-      y: ((e.clientY - rect.top) / rect.height) * canvas.height,
+      x: ((clientX - rect.left) / rect.width) * canvas.width,
+      y: ((clientY - rect.top) / rect.height) * canvas.height,
     };
   }
 
-  function handlePointerDown(e: ReactPointerEvent<HTMLCanvasElement>) {
-    if (disabled) return;
+  // CORRECCIÓN URGENTE (ronda 5) — listeners NATIVOS (no props JSX de
+  // React) registrados UNA sola vez por montaje del canvas.
+  useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    try {
-      canvas.setPointerCapture(e.pointerId);
-    } catch {
-      // best-effort: si el navegador no soporta o rechaza la captura,
-      // igual seguimos dibujando con los eventos normales.
-    }
-    dibujando.current = true;
-    trazoActualRef.current = [posicion(e)];
-    const eraPrimerTrazo = trazosRef.current.length === 0;
-    redibujarTodo();
-    persistirRespaldo();
-    // Solo la PRIMERA vez que aparece trazo se notifica al padre (habilita
-    // el botón) — nunca en cada punto/segmento, para minimizar re-renders.
-    if (eraPrimerTrazo) onCambiaTrazo?.(true);
-  }
 
-  function handlePointerMove(e: ReactPointerEvent<HTMLCanvasElement>) {
-    if (!dibujando.current || disabled) return;
-    trazoActualRef.current.push(posicion(e));
-    redibujarTodo();
-    // Respaldo continuo durante el arrastre: si el remount ocurre A MITAD
-    // de un trazo (no solo entre trazos), igual hay algo que recuperar.
-    if (sesionId) respaldoSesion = { sesionId, trazos: [...trazosRef.current, trazoActualRef.current] };
-  }
+    function onDown(e: PointerEvent) {
+      if (disabledRef.current) return;
+      const c = canvasRef.current;
+      if (!c) return;
+      try {
+        c.setPointerCapture(e.pointerId);
+      } catch {
+        // best-effort: si el navegador no soporta o rechaza la captura,
+        // igual seguimos dibujando con los eventos normales.
+      }
+      dibujando.current = true;
+      trazoActualRef.current = [posicion(c, e.clientX, e.clientY)];
+      const eraPrimerTrazo = trazosRef.current.length === 0;
+      redibujarTodo();
+      persistirRespaldo();
+      if (eraPrimerTrazo) onCambiaTrazoRef.current?.(true);
+    }
 
-  function terminarTrazo(e: ReactPointerEvent<HTMLCanvasElement>) {
-    if (dibujando.current && trazoActualRef.current.length > 0) {
-      trazosRef.current = [...trazosRef.current, trazoActualRef.current];
+    function onMove(e: PointerEvent) {
+      if (!dibujando.current || disabledRef.current) return;
+      const c = canvasRef.current;
+      if (!c) return;
+      trazoActualRef.current.push(posicion(c, e.clientX, e.clientY));
+      redibujarTodo();
+      // Respaldo continuo durante el arrastre: si ocurriera un remount A
+      // MITAD de un trazo, igual hay algo que recuperar.
+      if (sesionId) respaldoSesion = { sesionId, trazos: [...trazosRef.current, trazoActualRef.current] };
     }
-    trazoActualRef.current = [];
-    dibujando.current = false;
-    redibujarTodo();
-    persistirRespaldo();
-    try {
-      canvasRef.current?.releasePointerCapture(e.pointerId);
-    } catch {
-      // best-effort — el navegador ya libera la captura automáticamente en pointerup/cancel.
+
+    function onUp(e: PointerEvent) {
+      if (dibujando.current && trazoActualRef.current.length > 0) {
+        trazosRef.current = [...trazosRef.current, trazoActualRef.current];
+      }
+      trazoActualRef.current = [];
+      dibujando.current = false;
+      redibujarTodo();
+      persistirRespaldo();
+      try {
+        canvasRef.current?.releasePointerCapture(e.pointerId);
+      } catch {
+        // best-effort — el navegador ya libera la captura automáticamente en pointerup/cancel.
+      }
     }
-  }
+
+    canvas.addEventListener("pointerdown", onDown);
+    canvas.addEventListener("pointermove", onMove);
+    canvas.addEventListener("pointerup", onUp);
+    canvas.addEventListener("pointercancel", onUp);
+    return () => {
+      canvas.removeEventListener("pointerdown", onDown);
+      canvas.removeEventListener("pointermove", onMove);
+      canvas.removeEventListener("pointerup", onUp);
+      canvas.removeEventListener("pointercancel", onUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- registra los listeners UNA vez por montaje; disabled/onCambiaTrazo se leen de refs sincronizados aparte, y sesionId no cambia mientras esta instancia vive.
+  }, []);
 
   function limpiar() {
     trazosRef.current = [];
@@ -214,10 +241,6 @@ export default function FirmaCanvas({
         height={ALTO_MAX}
         className="w-full touch-none rounded border border-[var(--border)] bg-white"
         style={{ aspectRatio: `${ANCHO_MAX} / ${ALTO_MAX}` }}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={terminarTrazo}
-        onPointerCancel={terminarTrazo}
       />
       <button
         type="button"
