@@ -12,11 +12,21 @@ export { TEXTO_FIRMA_INTERNA } from "./textos";
  *
  * Esto NO es Firma Electrónica Avanzada, ni un certificado, ni requiere un
  * Prestador de Servicios de Certificación — es prueba interna de que un
- * usuario autenticado, en un momento dado, reautenticado con su
- * contraseña, ejecutó una acción sensible, con un hash verificable del
- * payload relevante. Nunca usar los términos "Firma Electrónica Avanzada",
- * "certificado", "PSC" ni "firma legal" en ningún texto de UI — ver
- * `TEXTO_FIRMA_INTERNA`.
+ * usuario autenticado ejecutó una acción sensible, con un hash verificable
+ * del payload relevante. Nunca usar los términos "Firma Electrónica
+ * Avanzada", "certificado", "PSC" ni "firma legal" en ningún texto de UI —
+ * ver `TEXTO_FIRMA_INTERNA`.
+ *
+ * `metodo` (CORRECCIÓN URGENTE — autorizar sin contraseña): NO toda firma
+ * de este mecanismo reautentica con contraseña. `'PASSWORD'` (default) =
+ * reautenticación con contraseña actual (verificarPasswordUsuarioActual,
+ * ver src/lib/auth.ts) — usado por liquidarViatico, sin cambios.
+ * `'FIRMA_MANUSCRITA'` = sesión autenticada + permiso explícito + trazo
+ * manuscrito dibujado (imagen obligatoria) son la prueba de identidad —
+ * usado por autorizarViatico desde este hotfix. Ningún caso permite
+ * autorización anónima: el permiso (`viaticos_autorizar:editar`) sigue
+ * siendo obligatorio en AMBOS métodos, verificado por el endpoint antes
+ * de llegar aquí.
  *
  * `nombreFirmante`/`rolFirmante` (Fase "DATOS DE LA FIRMA") NO tienen
  * columna propia en `firmas_electronicas` (la tabla ya fue aplicada tal
@@ -61,6 +71,16 @@ export type DatosFirmaInterna = {
   /** Datos específicos de la acción firmada — lo que hace que el hash sea verificable contra lo que realmente ocurrió. */
   valoresRelevantes: Record<string, unknown>;
   imagen?: ImagenFirmaInterna | null;
+  /**
+   * CORRECCIÓN URGENTE (autorizar sin contraseña) — método real de
+   * reautenticación/prueba de identidad de ESTA firma. Antes se hardcodeaba
+   * `'PASSWORD'` para toda firma, aunque desde este hotfix AUTORIZAR ya no
+   * reverifica contraseña (sesión autenticada + permiso + firma manuscrita
+   * son suficientes). Default `'PASSWORD'` para no romper llamadores
+   * existentes (liquidarViatico sigue exigiendo contraseña, sin cambios).
+   * `metodo` ya es VARCHAR(20) en el esquema — no requiere SQL.
+   */
+  metodo?: "PASSWORD" | "FIRMA_MANUSCRITA";
   ip?: string | null;
   userAgent?: string | null;
 };
@@ -104,10 +124,14 @@ function generarCodigoFirma(fecha: Date): string {
 /**
  * Inserta la firma DENTRO de la transacción de negocio del caller (mismo
  * `conn` que hace el UPDATE de la entidad) — "Firma + transición +
- * auditoría: MISMA transacción" (regla dura del ticket). La contraseña YA
- * debe haberse verificado ANTES de llamar esta función (fuera de la
- * transacción — un password incorrecto no debe ni empezar a tocar la fila
- * de negocio, ver verificarPasswordUsuarioActual en src/lib/auth.ts).
+ * auditoría: MISMA transacción" (regla dura del ticket). Si `metodo` es
+ * `'PASSWORD'` (default), la contraseña YA debe haberse verificado ANTES
+ * de llamar esta función (fuera de la transacción — un password
+ * incorrecto no debe ni empezar a tocar la fila de negocio, ver
+ * verificarPasswordUsuarioActual en src/lib/auth.ts). Si es
+ * `'FIRMA_MANUSCRITA'`, la prueba de identidad es la sesión autenticada +
+ * el permiso ya verificado por el endpoint + el trazo manuscrito — no hay
+ * contraseña que verificar.
  */
 export async function crearFirmaInterna(
   conn: PoolConnection,
@@ -139,11 +163,11 @@ export async function crearFirmaInterna(
       (empresa_id, usuario_id, empleado_id, accion, modulo, entidad_tipo, entidad_id,
        fecha_hora_servidor, hash_payload, payload_canonico, ip, user_agent, metodo, resultado, codigo_firma, version,
        imagen_ruta, imagen_nombre_original, imagen_mime, imagen_tamano)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PASSWORD', 'EXITOSA', ?, '1', ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'EXITOSA', ?, '1', ?, ?, ?, ?)`,
     [
       datos.empresaId, datos.usuarioId, datos.empleadoId, datos.accion, datos.modulo,
       datos.entidadTipo, datos.entidadId, fecha, hashPayload, payloadCanonico,
-      datos.ip ?? null, datos.userAgent ?? null, codigoFirma,
+      datos.ip ?? null, datos.userAgent ?? null, datos.metodo ?? "PASSWORD", codigoFirma,
       datos.imagen?.relative ?? null, datos.imagen?.original ?? null,
       datos.imagen?.mime ?? null, datos.imagen?.size ?? null,
     ],

@@ -112,4 +112,16 @@ describe("POST /tms/viaticos/[id]/liquidar", () => {
     const body = await res.json();
     expect(body.error).toContain("Pendiente por comprobar");
   });
+
+  it("CORRECCIÓN URGENTE — 500 real: una excepción no controlada de liquidarViatico se captura y responde JSON {error}, nunca un 500 sin cuerpo", async () => {
+    vi.mocked(liquidarViatico).mockRejectedValue(new Error("fallo real de DB"));
+    const res = await POST(
+      new Request("http://localhost/x", { method: "POST", body: formData({ gastosComprobados: "900", reintegro: "100", password: "clave456" }) }),
+      ctx,
+    );
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(typeof body.error).toBe("string");
+    expect(body.error.length).toBeGreaterThan(0);
+  });
 });

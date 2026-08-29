@@ -360,16 +360,22 @@ export type ResultadoTransicionViatico =
   | { ok: false; error: string };
 
 /**
- * VIATICOS-FIRMA — datos de reautenticación + identidad del firmante,
- * comunes a autorizar y liquidar. `password` NUNCA se guarda ni se
- * registra en ningún lado — se verifica contra el hash real
- * (verificarPasswordUsuarioActual) y se descarta.
+ * VIATICOS-FIRMA — identidad del firmante, común a autorizar y liquidar.
+ *
+ * CORRECCIÓN URGENTE (autorizar sin contraseña) — `password` es OPCIONAL
+ * a nivel de tipo porque autorizarViatico YA NO la usa: sesión autenticada
+ * + permiso `viaticos_autorizar:editar` (verificado por el endpoint) +
+ * firma manuscrita (imagen obligatoria) son prueba suficiente para esta
+ * firma interna simbólica. liquidarViatico SIGUE exigiéndola sin cambios
+ * — cuando se envía, NUNCA se guarda ni se registra en ningún lado: se
+ * verifica contra el hash real (verificarPasswordUsuarioActual) y se
+ * descarta.
  */
 export type DatosFirmaViatico = {
   usuarioId: number;
   nombreFirmante: string;
   rolFirmante: string;
-  password: string;
+  password?: string;
   /**
    * VIATICOS-FIRMA-VISUAL — PNG de la firma manuscrita, YA validado
    * (magic bytes + tamaño) por el endpoint antes de llegar aquí.
@@ -454,13 +460,17 @@ export type ResultadoTransicionConFirma =
  * pagar/entregar (`viaticos_pagar`) y de liquidar (`viaticos_liquidar`).
  * El permiso lo verifica el endpoint antes de llamar aquí.
  *
- * VIATICOS-FIRMA: requiere firma electrónica interna (contraseña actual
- * del usuario). La contraseña se verifica ANTES de abrir la transacción
- * (un password incorrecto no debe ni intentar bloquear la fila); dentro de
- * la MISMA transacción: bloquear el viático (FOR UPDATE), validar estado,
- * aplicar la transición, insertar la firma y registrar auditoría — commit
- * conjunto o rollback conjunto (regla dura del ticket, nunca "acción
- * hecha pero firma falló" ni viceversa).
+ * CORRECCIÓN URGENTE — AUTORIZAR ya NO reautentica con contraseña. Prueba
+ * de identidad suficiente para esta firma interna simbólica: sesión
+ * autenticada + permiso EXPLÍCITO `viaticos_autorizar:editar` (verificado
+ * por el endpoint ANTES de llamar aquí, nunca se debilita) + firma
+ * manuscrita dibujada (imagen PNG obligatoria, ya validada por el
+ * endpoint). Dentro de la MISMA transacción: bloquear el viático (FOR
+ * UPDATE), validar estado, aplicar la transición, insertar la firma
+ * (`metodo: 'FIRMA_MANUSCRITA'`) y registrar auditoría — commit conjunto
+ * o rollback conjunto (regla dura del ticket, nunca "acción hecha pero
+ * firma falló" ni viceversa). liquidarViatico SIGUE exigiendo contraseña,
+ * sin cambios — ver su propio JSDoc más abajo.
  */
 export async function autorizarViatico(
   empresaId: number,
@@ -468,13 +478,10 @@ export async function autorizarViatico(
   usuario: string,
   firma: DatosFirmaViatico,
 ): Promise<ResultadoTransicionConFirma> {
-  const passwordOk = await verificarPasswordUsuarioActual(firma.usuarioId, firma.password);
-  if (!passwordOk) {
-    return { ok: false, error: "Contraseña incorrecta.", status: 401 };
-  }
-
-  // VIATICOS-FIRMA-VISUAL — SOLO después de verificar la contraseña, y
-  // ANTES de abrir la transacción (guardarUpload no es transaccional).
+  // VIATICOS-FIRMA-VISUAL — la imagen (ya validada por el endpoint) se
+  // guarda ANTES de abrir la transacción (guardarUpload no es
+  // transaccional). No hay contraseña que verificar antes de este paso —
+  // el permiso ya fue validado por el endpoint (requireTenantViaticosAutorizar).
   const imagenGuardada = await guardarImagenFirma(empresaId, viaticoId, "autorizar", firma.imagen);
 
   // VIATICOS-FIRMA-VISUAL (hotfix PR #124) — `conn` se declara FUERA del
@@ -550,6 +557,7 @@ export async function autorizarViatico(
         ...(firma.firmaLote ? { firmaLote: true } : {}),
       },
       imagen: imagenGuardada,
+      metodo: "FIRMA_MANUSCRITA",
       ip: firma.ip,
       userAgent: firma.userAgent,
     });
@@ -673,9 +681,14 @@ export type DatosLiquidacionViatico = {
  * > 0 significa "pendiente por comprobar o reintegrar" (rechaza, sigue
  * ENTREGADO); < 0 significa que gastos+reintegro superan lo entregado
  * (rechaza igual, sigue ENTREGADO) — ningún caso cambia el estado ni crea
- * firma. VIATICOS-FIRMA: firma electrónica interna (contraseña actual) +
- * transición + auditoría en la MISMA transacción, mismo patrón que
- * autorizarViatico.
+ * firma. VIATICOS-FIRMA: firma electrónica interna (contraseña actual,
+ * `metodo: 'PASSWORD'`) + transición + auditoría en la MISMA transacción,
+ * mismo patrón que autorizarViatico. CORRECCIÓN URGENTE (autorizar sin
+ * contraseña): esto es SOLO para autorizar — liquidarViatico SIGUE
+ * exigiendo contraseña sin cambios, `firma.password` sigue siendo
+ * obligatorio en la práctica aquí (el tipo lo dejó opcional para
+ * compartirse con autorizar, pero una contraseña vacía/ausente
+ * simplemente nunca verifica correctamente, ver abajo).
  */
 export async function liquidarViatico(
   empresaId: number,
@@ -696,7 +709,7 @@ export async function liquidarViatico(
     return { ok: false, error: "Los montos no pueden ser negativos.", status: 400 };
   }
 
-  const passwordOk = await verificarPasswordUsuarioActual(firma.usuarioId, firma.password);
+  const passwordOk = await verificarPasswordUsuarioActual(firma.usuarioId, firma.password ?? "");
   if (!passwordOk) {
     return { ok: false, error: "Contraseña incorrecta.", status: 401 };
   }
@@ -779,6 +792,7 @@ export async function liquidarViatico(
         observaciones: datos.observaciones?.trim() || null,
       },
       imagen: imagenGuardada,
+      metodo: "PASSWORD",
       ip: firma.ip,
       userAgent: firma.userAgent,
     });

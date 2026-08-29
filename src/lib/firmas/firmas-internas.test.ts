@@ -58,7 +58,7 @@ describe("crearFirmaInterna — inserta la firma con hash/fecha/código", () => 
     expect(r.fechaHoraServidor.getTime()).toBeLessThanOrEqual(despues);
   });
 
-  it("6/16) inserta metodo=PASSWORD, resultado=EXITOSA, y devuelve codigoFirma/hashPayload", async () => {
+  it("6/16) por defecto (sin `metodo` explícito) inserta metodo=PASSWORD, resultado=EXITOSA, y devuelve codigoFirma/hashPayload", async () => {
     const r = await crearFirmaInterna(conn as never, {
       empresaId: 7, usuarioId: 3, empleadoId: null,
       nombreFirmante: "Ana López", rolFirmante: "JefeOperaciones",
@@ -72,9 +72,21 @@ describe("crearFirmaInterna — inserta la firma con hash/fecha/código", () => 
 
     const [sql, params] = conn.execute.mock.calls[0];
     expect(String(sql)).toContain("INSERT INTO firmas_electronicas");
-    expect(String(sql)).toContain("'PASSWORD'");
     expect(String(sql)).toContain("'EXITOSA'");
-    expect(params).toEqual(expect.arrayContaining([7, 3, null, "AUTORIZAR_VIATICO", "VIATICOS", "VIATICO", 10]));
+    expect(params).toEqual(expect.arrayContaining([7, 3, null, "AUTORIZAR_VIATICO", "VIATICOS", "VIATICO", 10, "PASSWORD"]));
+  });
+
+  it("CORRECCIÓN URGENTE — metodo: 'FIRMA_MANUSCRITA' explícito se inserta tal cual (autorizarViatico lo usa desde este hotfix)", async () => {
+    await crearFirmaInterna(conn as never, {
+      empresaId: 7, usuarioId: 3, empleadoId: null,
+      nombreFirmante: "Ana López", rolFirmante: "JefeOperaciones",
+      accion: "AUTORIZAR_VIATICO", modulo: "VIATICOS", entidadTipo: "VIATICO", entidadId: 10,
+      valoresRelevantes: { viaticoId: 10 },
+      metodo: "FIRMA_MANUSCRITA",
+    });
+    const [, params] = conn.execute.mock.calls[0];
+    expect(params).toContain("FIRMA_MANUSCRITA");
+    expect(params).not.toContain("PASSWORD");
   });
 
   it("8) registra empresa/usuario/acción/entidad tal cual se le pasan (payload_canonico incluye nombreFirmante/rolFirmante como snapshot histórico)", async () => {
