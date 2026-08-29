@@ -307,7 +307,10 @@ export default function ImportarRutasPage() {
       </div>
 
       <div className="rounded-lg border border-[var(--border)] bg-[var(--panel)] p-3 text-xs text-[var(--muted)]">
-        <p>Columnas esperadas en &quot;CODIGOS DATA&quot;: Código · Cliente · Lugar de carga · Hora · Contacto · Destino.</p>
+        <p>
+          El formato incluye encabezados claros, una fila amarilla de ejemplo y una hoja AYUDA.
+          Debes llenar: Código de ruta · Cliente · Lugar de carga · Hora habitual · Contacto · Destino.
+        </p>
         <p className="mt-1">
           Los códigos que ya existen se omiten por defecto — puedes marcarlos individualmente para
           actualizar. Si un mismo cliente aparece en varias rutas, se resuelve UNA sola vez en
