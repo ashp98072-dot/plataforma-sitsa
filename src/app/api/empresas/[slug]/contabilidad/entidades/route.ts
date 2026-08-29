@@ -21,8 +21,9 @@ export async function GET(_req: Request, ctx: Ctx) {
   const admin = guard.session.rol === "Admin";
   try {
     const entidades = await listarEntidades(guard.empresa.id, guard.session.id, admin);
+    const escritura = await requireTenantModulo(slug, "contabilidad", true);
     const [usuarios, asignaciones] = admin ? await Promise.all([usuariosAsignables(guard.empresa.id), listarAsignaciones(guard.empresa.id)]) : [[], []];
-    return NextResponse.json({ entidades, usuarios, asignaciones, puedeAdministrar: admin }, { headers });
+    return NextResponse.json({ entidades, usuarios, asignaciones, puedeAdministrar: admin, puedeEscribir: !escritura.error }, { headers });
   } catch (error) { return fallo(error); }
 }
 
