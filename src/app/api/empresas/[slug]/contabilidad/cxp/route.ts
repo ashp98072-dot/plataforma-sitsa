@@ -1,23 +1,20 @@
 import { NextResponse } from "next/server";
-import type { RowDataPacket } from "mysql2";
-import { query } from "@/lib/db";
 import { requireTenantModulo } from "@/lib/tenant";
 import { crearRegistro, errorRegistro } from "@/lib/contabilidad/registros";
 
+import { ambitoDesdeRequest, consultarLibro, errorAmbito } from "@/lib/contabilidad/ambito";
+
 type Ctx = { params: Promise<{ slug: string }> };
 
-export async function GET(_req: Request, ctx: Ctx) {
+export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenantModulo(slug, "contabilidad");
   if (guard.error) return guard.error;
   try {
-    const rows = await query<RowDataPacket[]>(
-      "SELECT * FROM cont_cxp WHERE empresa_id = ? ORDER BY fecha DESC LIMIT 200",
-      [guard.empresa.id],
-    );
+    const rows = await consultarLibro("cxp", guard.empresa.id, ambitoDesdeRequest(req, guard.session));
     return NextResponse.json({ cxp: rows }, { headers: { "Cache-Control": "private, no-store" } });
-  } catch {
-    return NextResponse.json({ error: "No se pudo consultar el listado." }, { status: 500 });
+  } catch (error) {
+    return errorAmbito(error) ?? NextResponse.json({ error: "No se pudo consultar el libro." }, { status: 500 });
   }
 }
 
@@ -27,7 +24,7 @@ export async function POST(req: Request, ctx: Ctx) {
   if (guard.error) return guard.error;
   const body = await req.json().catch(() => null);
   try {
-    const id = await crearRegistro("cxp", guard.empresa.id, guard.session.username, body);
+    const id = await crearRegistro("cxp", guard.empresa.id, guard.session.username, body, ambitoDesdeRequest(req, guard.session));
     return NextResponse.json({ id, mensaje: "CxP registrada." });
   } catch (error) { return errorRegistro(error); }
 }

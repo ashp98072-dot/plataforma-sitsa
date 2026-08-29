@@ -66,9 +66,9 @@ export default function EntidadesContablesPage() {
     <Link href={`/e/${slug}/contabilidad`} className="text-sm underline">← Volver a Contabilidad</Link>
     <h1 className="text-2xl font-semibold">Entidades contables</h1>
     <p className="rounded border border-[var(--border)] p-3 text-sm">
-      Preparación de la separación KT/Mónaco. Crear entidades no mueve cuentas, partidas ni saldos.
-      Las pantallas contables existentes siguen trabajando por empresa operativa; los accesos definidos aquí solo afectan este catálogo por ahora.
-      No importar movimientos de ambas razones sociales hasta completar la siguiente fase.
+      Crear entidades no mueve cuentas, partidas ni saldos antiguos.
+      Los accesos definidos aquí controlan los libros de cada entidad, además del permiso de Contabilidad.
+      La importación de Milenium sigue pendiente de homologación y conciliación.
     </p>
     <button type="button" className={boton} disabled={ocupado} onClick={() => void cargar()}>Actualizar</button>
     {error && <p role="alert" className="text-red-500">{error}</p>}
@@ -89,7 +89,7 @@ export default function EntidadesContablesPage() {
         <label>Usuario <select className={campo} required value={usuarioId} onChange={(e) => setUsuarioId(e.target.value)}>
           <option value="">Seleccionar</option>{usuarios.map((u) => <option key={u.id} value={u.id}>{u.nombre ?? u.username} ({u.username})</option>)}
         </select></label>
-        <label>Acceso <select className={campo} value={acceso} onChange={(e) => setAcceso(e.target.value)}><option value="ver">Consulta</option><option value="editar">Consulta y edición (preparado para siguiente fase)</option></select></label>
+        <label>Acceso <select className={campo} value={acceso} onChange={(e) => setAcceso(e.target.value)}><option value="ver">Consulta</option><option value="editar">Consulta y edición</option></select></label>
         <button className={boton} disabled={ocupado}>Guardar acceso</button>
       </form>
     </>}

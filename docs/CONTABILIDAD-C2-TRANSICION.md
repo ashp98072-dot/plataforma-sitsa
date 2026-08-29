@@ -1,6 +1,6 @@
 # C2 — transición a libros separados de KT y Mónaco
 
-Estado: C2A prepara columnas/índices; transición funcional C2B pendiente.
+Estado: C2A aplicada manualmente por el usuario; C2B implementa la separación funcional.
 Base revisada: C1, merge ccf5ef1. No se consultó producción.
 
 ## Entrega C2A — preparación, no aislamiento
@@ -82,10 +82,12 @@ El catálogo cont_entidades y sus asignaciones no separan los movimientos.
 8. Cuando no queden ambiguos, imponer restricciones finales y cambiar unicidad.
    Reanudar operación solo después de comprobar la versión desplegada y reglas.
 
-La preparación nullable NO constituye aislamiento: no habilitar escritura de
-ambas entidades hasta completar el corte. Un despliegue parcial debe bloquear
-la operación nueva con mensaje de configuración pendiente, no usar un fallback
-que vuelva a mostrar datos de toda la empresa.
+La preparación nullable por sí sola NO constituye aislamiento. C2B exige escoger
+una entidad, valida acceso en servidor y filtra todas las consultas/escrituras por
+empresa y entidad. Un despliegue parcial bloquea escrituras con HTTP 503 hasta que
+se aplique manualmente `migrate-2026-08-contabilidad-entidad-integridad.sql`; no
+existe fallback al libro compartido. Los registros antiguos con entidad NULL se
+conservan, pero no aparecen ni se atribuyen silenciosamente a KT o Mónaco.
 
 ## Superficies a actualizar juntas
 
