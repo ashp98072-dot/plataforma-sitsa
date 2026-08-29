@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { TEXTO_FIRMA_INTERNA } from "@/lib/firmas/textos";
+import FirmaCanvas from "@/components/tms/firma-canvas";
 
 type ViaticoControlRow = {
   id: number;
@@ -23,10 +24,13 @@ type ViaticoControlRow = {
 
 /** VIATICOS-FIRMA — confirmación mostrada tras firmar (nunca "Firma Electrónica Avanzada"/certificado/PSC/legal). */
 type FirmaInfo = {
+  firmaId: number;
   codigoFirma: string;
   nombreFirmante: string;
   rolFirmante: string;
   fechaHoraServidor: string;
+  /** VIATICOS-FIRMA-VISUAL — si trae imagen manuscrita para mostrar (ver GET .../firmas/[firmaId]/imagen). */
+  tieneImagen: boolean;
 };
 
 type Resumen = {
@@ -111,9 +115,23 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   const [seleccionados, setSeleccionados] = useState<Set<number>>(new Set());
   const [autorizandoMasivo, setAutorizandoMasivo] = useState(false);
 
+  // VIATICOS-FIRMA-VISUAL — modal "Autorizar seleccionados" (antes
+  // window.prompt): la bandeja masiva firma con la MISMA imagen dibujada
+  // una vez para todo el lote (cada autorización individual igual guarda
+  // su propio archivo/fila de firma — ver guardarImagenFirmaSiViene en
+  // src/lib/tms/viaticos.ts — pero comparten el trazo de este único
+  // gesto). Decisión de alcance documentada en el reporte de entrega: el
+  // ticket original solo cubre los modales de autorizar/liquidar
+  // individuales, no la bandeja masiva.
+  const [masivoAbierto, setMasivoAbierto] = useState(false);
+  const [pwdMasivo, setPwdMasivo] = useState("");
+  const [firmaImagenMasivo, setFirmaImagenMasivo] = useState<File | null>(null);
+  const [errorMasivo, setErrorMasivo] = useState("");
+
   // VIATICOS-FIRMA — modal "Firmar y autorizar".
   const [autorizando, setAutorizando] = useState<ViaticoControlRow | null>(null);
   const [pwdAutorizar, setPwdAutorizar] = useState("");
+  const [firmaImagenAutorizar, setFirmaImagenAutorizar] = useState<File | null>(null);
   const [errorAutorizar, setErrorAutorizar] = useState("");
   const [firmandoAutorizar, setFirmandoAutorizar] = useState(false);
   const [firmaAutorizarOk, setFirmaAutorizarOk] = useState<FirmaInfo | null>(null);
@@ -124,6 +142,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   const [reintegro, setReintegro] = useState("");
   const [obsLiquidacion, setObsLiquidacion] = useState("");
   const [pwdLiquidar, setPwdLiquidar] = useState("");
+  const [firmaImagenLiquidar, setFirmaImagenLiquidar] = useState<File | null>(null);
   const [errorLiquidar, setErrorLiquidar] = useState("");
   const [firmandoLiquidar, setFirmandoLiquidar] = useState(false);
   const [firmaLiquidarOk, setFirmaLiquidarOk] = useState<FirmaInfo | null>(null);
@@ -197,12 +216,17 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   function abrirAutorizar(row: ViaticoControlRow) {
     setAutorizando(row);
     setPwdAutorizar("");
+    setFirmaImagenAutorizar(null);
     setErrorAutorizar("");
     setFirmaAutorizarOk(null);
   }
 
   async function confirmarAutorizar() {
     if (!autorizando) return;
+    if (!firmaImagenAutorizar) {
+      setErrorAutorizar("Dibuja tu firma antes de continuar.");
+      return;
+    }
     if (!pwdAutorizar) {
       setErrorAutorizar("Ingresa tu contraseña actual.");
       return;
@@ -210,10 +234,12 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
     setFirmandoAutorizar(true);
     setErrorAutorizar("");
     try {
+      const fd = new FormData();
+      fd.set("password", pwdAutorizar);
+      fd.set("firmaImagen", firmaImagenAutorizar, "firma.png");
       const res = await fetch(`/api/empresas/${slug}/tms/viaticos/${autorizando.id}/autorizar`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: pwdAutorizar }),
+        body: fd,
       });
       const data = await res.json();
       if (!res.ok) {
@@ -240,12 +266,17 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
     setReintegro("");
     setObsLiquidacion("");
     setPwdLiquidar("");
+    setFirmaImagenLiquidar(null);
     setErrorLiquidar("");
     setFirmaLiquidarOk(null);
   }
 
   async function confirmarLiquidar() {
     if (!liquidando) return;
+    if (!firmaImagenLiquidar) {
+      setErrorLiquidar("Dibuja tu firma antes de continuar.");
+      return;
+    }
     if (!pwdLiquidar) {
       setErrorLiquidar("Ingresa tu contraseña actual.");
       return;
@@ -253,15 +284,15 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
     setFirmandoLiquidar(true);
     setErrorLiquidar("");
     try {
+      const fd = new FormData();
+      fd.set("gastosComprobados", gastosComprobados || "0");
+      fd.set("reintegro", reintegro || "0");
+      if (obsLiquidacion.trim()) fd.set("observaciones", obsLiquidacion.trim());
+      fd.set("password", pwdLiquidar);
+      fd.set("firmaImagen", firmaImagenLiquidar, "firma.png");
       const res = await fetch(`/api/empresas/${slug}/tms/viaticos/${liquidando.id}/liquidar`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          gastosComprobados: gastosComprobados || "0",
-          reintegro: reintegro || "0",
-          observaciones: obsLiquidacion.trim() || undefined,
-          password: pwdLiquidar,
-        }),
+        body: fd,
       });
       const data = await res.json();
       if (!res.ok) {
@@ -278,6 +309,18 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
     }
   }
 
+  /** VIATICOS-FIRMA-VISUAL — abre el modal de firma masiva (antes window.prompt). */
+  function abrirMasivo() {
+    if (!seleccionados.size) {
+      setError("Selecciona al menos un viático PROGRAMADO para autorizar.");
+      return;
+    }
+    setPwdMasivo("");
+    setFirmaImagenMasivo(null);
+    setErrorMasivo("");
+    setMasivoAbierto(true);
+  }
+
   /**
    * "AUTORIZAR SELECCIONADOS" — llama el mismo endpoint atómico de a uno
    * por seleccionado (sin nuevo endpoint masivo en backend). Si alguno
@@ -286,15 +329,23 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
    * nunca se oculta un fallo parcial. VIATICOS-FIRMA: la firma exige
    * contraseña — se pide UNA sola vez para todo el lote (misma
    * reautenticación puntual, aplicada a cada autorización individual).
+   * VIATICOS-FIRMA-VISUAL: la misma imagen dibujada una vez en el modal
+   * (firmaImagenMasivo) se adjunta a cada llamada individual — cada una
+   * sigue generando su PROPIO archivo/fila de firma en el servidor
+   * (guardarUpload se ejecuta por cada POST), nunca se reutiliza una fila
+   * de firmas_electronicas ya creada.
    */
   async function autorizarSeleccionados() {
-    if (!seleccionados.size) {
-      setError("Selecciona al menos un viático PROGRAMADO para autorizar.");
+    if (!firmaImagenMasivo) {
+      setErrorMasivo("Dibuja tu firma antes de continuar.");
       return;
     }
-    const password = window.prompt("Ingresa tu contraseña actual para firmar y autorizar los seleccionados:");
-    if (!password) return;
+    if (!pwdMasivo) {
+      setErrorMasivo("Ingresa tu contraseña actual.");
+      return;
+    }
     setAutorizandoMasivo(true);
+    setErrorMasivo("");
     setError("");
     setMensaje("");
     const ids = [...seleccionados];
@@ -303,10 +354,12 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
     let exitos = 0;
     for (const id of ids) {
       try {
+        const fd = new FormData();
+        fd.set("password", pwdMasivo);
+        fd.set("firmaImagen", firmaImagenMasivo, "firma.png");
         const res = await fetch(`/api/empresas/${slug}/tms/viaticos/${id}/autorizar`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ password }),
+          body: fd,
         });
         const data = await res.json();
         if (!res.ok) {
@@ -325,6 +378,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
       setError(`No se pudieron autorizar ${fallos.length}: ${fallos.join(" · ")}`);
     }
     setAutorizandoMasivo(false);
+    setMasivoAbierto(false);
     await cargar();
   }
 
@@ -428,7 +482,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
             type="button"
             className="rounded bg-sky-700 px-3 py-1.5 text-xs text-white disabled:opacity-50"
             disabled={autorizandoMasivo || !seleccionados.size}
-            onClick={() => void autorizarSeleccionados()}
+            onClick={abrirMasivo}
           >
             {autorizandoMasivo ? "Autorizando…" : `Autorizar seleccionados${seleccionados.size ? ` (${seleccionados.size})` : ""}`}
           </button>
@@ -544,6 +598,14 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
               <>
                 <h3 className="text-sm font-semibold">Viático autorizado</h3>
                 <div className="rounded-lg border border-emerald-700/40 bg-emerald-950/20 p-3 text-xs">
+                  {firmaAutorizarOk.tieneImagen ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- imagen servida por endpoint autenticado propio, no un asset estático de Next.
+                    <img
+                      src={`/api/empresas/${slug}/tms/viaticos/firmas/${firmaAutorizarOk.firmaId}/imagen`}
+                      alt="Firma manuscrita"
+                      className="mb-2 h-20 w-full rounded border border-[var(--border)] bg-white object-contain"
+                    />
+                  ) : null}
                   <p className="font-medium">Firmado electrónicamente por:</p>
                   <p className="mt-1 text-sm font-semibold">{firmaAutorizarOk.nombreFirmante}</p>
                   <p className="mt-1"><span className="text-[var(--muted)]">Rol:</span> {firmaAutorizarOk.rolFirmante}</p>
@@ -567,6 +629,12 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
                   <p><span className="text-[var(--muted)]">Monto:</span> {q(autorizando.montoAsignado)}</p>
                 </div>
                 <p className="text-xs text-[var(--muted)]">Al firmar confirmas que autorizas este viático.</p>
+                <label className="block text-xs text-[var(--muted)]">
+                  Dibuja tu firma:
+                  <div className="mt-0.5">
+                    <FirmaCanvas onFirmaCambia={setFirmaImagenAutorizar} disabled={firmandoAutorizar} />
+                  </div>
+                </label>
                 <p className="text-[10px] text-[var(--muted)]">{TEXTO_FIRMA_INTERNA} — no es una firma legal certificada.</p>
                 <label className="block text-xs text-[var(--muted)]">
                   Contraseña
@@ -582,7 +650,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
                 <div className="flex gap-2 pt-1">
                   <button
                     type="button"
-                    disabled={firmandoAutorizar}
+                    disabled={firmandoAutorizar || !firmaImagenAutorizar}
                     className="flex-1 rounded bg-sky-700 px-3 py-1.5 text-sm text-white disabled:opacity-50"
                     onClick={() => void confirmarAutorizar()}
                   >
@@ -626,6 +694,14 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
                   <>
                     <h3 className="text-sm font-semibold">Viático liquidado</h3>
                     <div className="rounded-lg border border-emerald-700/40 bg-emerald-950/20 p-3 text-xs">
+                      {firmaLiquidarOk.tieneImagen ? (
+                        // eslint-disable-next-line @next/next/no-img-element -- imagen servida por endpoint autenticado propio, no un asset estático de Next.
+                        <img
+                          src={`/api/empresas/${slug}/tms/viaticos/firmas/${firmaLiquidarOk.firmaId}/imagen`}
+                          alt="Firma manuscrita"
+                          className="mb-2 h-20 w-full rounded border border-[var(--border)] bg-white object-contain"
+                        />
+                      ) : null}
                       <p className="font-medium">Firmado electrónicamente por:</p>
                       <p className="mt-1 text-sm font-semibold">{firmaLiquidarOk.nombreFirmante}</p>
                       <p className="mt-1"><span className="text-[var(--muted)]">Rol:</span> {firmaLiquidarOk.rolFirmante}</p>
@@ -672,6 +748,12 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
                       <input className={`${inputCls} mt-0.5 block w-full`} value={obsLiquidacion} onChange={(e) => setObsLiquidacion(e.target.value)} maxLength={300} />
                     </label>
                     <p className="text-xs text-[var(--muted)]">Al firmar confirmas que revisaste esta liquidación.</p>
+                    <label className="block text-xs text-[var(--muted)]">
+                      Dibuja tu firma:
+                      <div className="mt-0.5">
+                        <FirmaCanvas onFirmaCambia={setFirmaImagenLiquidar} disabled={firmandoLiquidar} />
+                      </div>
+                    </label>
                     <p className="text-[10px] text-[var(--muted)]">{TEXTO_FIRMA_INTERNA} — no es una firma legal certificada.</p>
                     <label className="block text-xs text-[var(--muted)]">
                       Contraseña
@@ -680,14 +762,14 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
                         className={`${inputCls} mt-0.5 block w-full`}
                         value={pwdLiquidar}
                         onChange={(e) => setPwdLiquidar(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === "Enter" && puedeFirmar) void confirmarLiquidar(); }}
+                        onKeyDown={(e) => { if (e.key === "Enter" && puedeFirmar && firmaImagenLiquidar) void confirmarLiquidar(); }}
                       />
                     </label>
                     {errorLiquidar ? <p className="text-xs text-red-300">{errorLiquidar}</p> : null}
                     <div className="flex gap-2 pt-1">
                       <button
                         type="button"
-                        disabled={firmandoLiquidar || !puedeFirmar}
+                        disabled={firmandoLiquidar || !puedeFirmar || !firmaImagenLiquidar}
                         title={!puedeFirmar ? "La diferencia debe ser exactamente Q0.00 para poder firmar la liquidación." : undefined}
                         className="flex-1 rounded bg-emerald-700 px-3 py-1.5 text-sm text-white disabled:opacity-50"
                         onClick={() => void confirmarLiquidar()}
@@ -709,6 +791,54 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
             </div>
           );
         })()
+      ) : null}
+
+      {/* VIATICOS-FIRMA-VISUAL — modal "Autorizar seleccionados" (antes
+          window.prompt sin canvas). Una sola firma dibujada para todo el
+          lote — ver decisión documentada en autorizarSeleccionados(). */}
+      {masivoAbierto ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-xl">
+            <h3 className="text-sm font-semibold">Firmar y autorizar seleccionados ({seleccionados.size})</h3>
+            <p className="text-xs text-[var(--muted)]">Al firmar confirmas que autorizas los {seleccionados.size} viáticos seleccionados.</p>
+            <label className="block text-xs text-[var(--muted)]">
+              Dibuja tu firma:
+              <div className="mt-0.5">
+                <FirmaCanvas onFirmaCambia={setFirmaImagenMasivo} disabled={autorizandoMasivo} />
+              </div>
+            </label>
+            <p className="text-[10px] text-[var(--muted)]">{TEXTO_FIRMA_INTERNA} — no es una firma legal certificada.</p>
+            <label className="block text-xs text-[var(--muted)]">
+              Contraseña
+              <input
+                type="password"
+                className={`${inputCls} mt-0.5 block w-full`}
+                value={pwdMasivo}
+                onChange={(e) => setPwdMasivo(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") void autorizarSeleccionados(); }}
+              />
+            </label>
+            {errorMasivo ? <p className="text-xs text-red-300">{errorMasivo}</p> : null}
+            <div className="flex gap-2 pt-1">
+              <button
+                type="button"
+                disabled={autorizandoMasivo || !firmaImagenMasivo}
+                className="flex-1 rounded bg-sky-700 px-3 py-1.5 text-sm text-white disabled:opacity-50"
+                onClick={() => void autorizarSeleccionados()}
+              >
+                {autorizandoMasivo ? "Firmando…" : `Firmar y autorizar (${seleccionados.size})`}
+              </button>
+              <button
+                type="button"
+                disabled={autorizandoMasivo}
+                className="rounded border border-[var(--border)] px-3 py-1.5 text-sm"
+                onClick={() => setMasivoAbierto(false)}
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </div>
   );

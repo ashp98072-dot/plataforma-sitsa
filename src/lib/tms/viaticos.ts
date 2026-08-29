@@ -4,6 +4,8 @@ import { execute, getPool, query, type SqlParams } from "@/lib/db";
 import { registrarAuditoria, registrarAuditoriaTx } from "@/lib/auditoria";
 import { verificarPasswordUsuarioActual } from "@/lib/auth";
 import { crearFirmaInterna, type ResultadoFirmaInterna } from "@/lib/firmas/firmas-internas";
+import { sha256Hex } from "@/lib/firmas/imagen-firma";
+import { borrarUpload, guardarUpload } from "@/lib/uploads";
 import { centavos, decimal } from "@/lib/multas/reglas";
 
 /**
@@ -368,9 +370,62 @@ export type DatosFirmaViatico = {
   nombreFirmante: string;
   rolFirmante: string;
   password: string;
+  /**
+   * VIATICOS-FIRMA-VISUAL — PNG de la firma manuscrita, YA validado
+   * (magic bytes + tamaño) por el endpoint antes de llegar aquí.
+   * OBLIGATORIO: los modales "Firmar y autorizar"/"Firmar liquidación" y
+   * también la bandeja masiva "Autorizar seleccionados" (todos con canvas
+   * — ver ViaticosControlPanel) exigen un trazo antes de poder confirmar,
+   * y el endpoint (autorizar/liquidar route.ts) rechaza con 400 si falta
+   * — nunca se llega aquí sin imagen.
+   */
+  imagen: { bytes: ArrayBuffer; original: string };
   ip?: string | null;
   userAgent?: string | null;
 };
+
+/**
+ * VIATICOS-FIRMA-VISUAL — guarda a disco la imagen de la firma DESPUÉS de
+ * verificar la contraseña y ANTES de abrir la transacción (guardarUpload
+ * no participa en la transacción MySQL). Devuelve tanto la referencia
+ * física (para armar el registro de la firma) como su SHA-256 (para el
+ * payload_canonico).
+ */
+async function guardarImagenFirma(
+  empresaId: number,
+  viaticoId: number,
+  accionPrefix: "autorizar" | "liquidar",
+  imagen: { bytes: ArrayBuffer; original: string },
+): Promise<{ relative: string; original: string; mime: string; size: number; sha256: string }> {
+  const guardada = await guardarUpload(
+    empresaId,
+    "firmas",
+    `firma_viatico_${accionPrefix}_${viaticoId}`,
+    {
+      name: imagen.original || "firma.png",
+      size: imagen.bytes.byteLength,
+      arrayBuffer: async () => imagen.bytes,
+    },
+  );
+  return {
+    relative: guardada.relative,
+    original: guardada.original,
+    mime: "image/png",
+    size: guardada.size,
+    sha256: sha256Hex(imagen.bytes),
+  };
+}
+
+/**
+ * VIATICOS-FIRMA-VISUAL — compensación: si algo falla DENTRO de la
+ * transacción después de haber guardado la imagen a disco, el archivo no
+ * debe quedar huérfano (sin ninguna fila que lo referencie). borrarUpload
+ * ya es best-effort internamente (nunca lanza) — nunca oculta el error o
+ * el resultado de rechazo real de la operación.
+ */
+function compensarImagenFirma(imagenGuardada: { relative: string }): void {
+  borrarUpload(imagenGuardada.relative);
+}
 
 export type ResultadoTransicionConFirma =
   | { ok: true; firma: ResultadoFirmaInterna }
@@ -403,6 +458,10 @@ export async function autorizarViatico(
     return { ok: false, error: "Contraseña incorrecta.", status: 401 };
   }
 
+  // VIATICOS-FIRMA-VISUAL — SOLO después de verificar la contraseña, y
+  // ANTES de abrir la transacción (guardarUpload no es transaccional).
+  const imagenGuardada = await guardarImagenFirma(empresaId, viaticoId, "autorizar", firma.imagen);
+
   const conn = await getPool().getConnection();
   try {
     await conn.beginTransaction();
@@ -415,10 +474,12 @@ export async function autorizarViatico(
     const v = rows[0];
     if (!v) {
       await conn.rollback();
+      compensarImagenFirma(imagenGuardada);
       return { ok: false, error: "Viático no encontrado.", status: 404 };
     }
     if (String(v.estado) !== "PROGRAMADO") {
       await conn.rollback();
+      compensarImagenFirma(imagenGuardada);
       return {
         ok: false,
         error: `Este viático está ${String(v.estado)}; no se puede autorizar desde ese estado.`,
@@ -444,6 +505,7 @@ export async function autorizarViatico(
     );
     if (upd.affectedRows !== 1) {
       await conn.rollback();
+      compensarImagenFirma(imagenGuardada);
       return { ok: false, error: "El viático cambió de estado durante la operación.", status: 409 };
     }
 
@@ -464,6 +526,7 @@ export async function autorizarViatico(
         beneficiario: ctx?.personal_nombre != null ? String(ctx.personal_nombre) : null,
         montoAsignado: Number(v.monto_asignado),
       },
+      imagen: imagenGuardada,
       ip: firma.ip,
       userAgent: firma.userAgent,
     });
@@ -480,6 +543,7 @@ export async function autorizarViatico(
     return { ok: true, firma: resultadoFirma };
   } catch (err) {
     await conn.rollback();
+    compensarImagenFirma(imagenGuardada);
     throw err;
   } finally {
     conn.release();
@@ -605,6 +669,10 @@ export async function liquidarViatico(
     return { ok: false, error: "Contraseña incorrecta.", status: 401 };
   }
 
+  // VIATICOS-FIRMA-VISUAL — SOLO después de verificar la contraseña, y
+  // ANTES de abrir la transacción (guardarUpload no es transaccional).
+  const imagenGuardada = await guardarImagenFirma(empresaId, viaticoId, "liquidar", firma.imagen);
+
   const conn = await getPool().getConnection();
   try {
     await conn.beginTransaction();
@@ -616,10 +684,12 @@ export async function liquidarViatico(
     const v = rows[0];
     if (!v) {
       await conn.rollback();
+      compensarImagenFirma(imagenGuardada);
       return { ok: false, error: "Viático no encontrado.", status: 404 };
     }
     if (String(v.estado) !== "ENTREGADO") {
       await conn.rollback();
+      compensarImagenFirma(imagenGuardada);
       return {
         ok: false,
         error: `Este viático está ${String(v.estado)}; no se puede liquidar desde ese estado.`,
@@ -631,6 +701,7 @@ export async function liquidarViatico(
     const diferenciaCent = montoEntregadoCent - gastosCent - reintegroCent;
     if (diferenciaCent > 0) {
       await conn.rollback();
+      compensarImagenFirma(imagenGuardada);
       return {
         ok: false,
         error: `Pendiente por comprobar o reintegrar: Q${decimal(diferenciaCent)}`,
@@ -639,6 +710,7 @@ export async function liquidarViatico(
     }
     if (diferenciaCent < 0) {
       await conn.rollback();
+      compensarImagenFirma(imagenGuardada);
       return {
         ok: false,
         error: "Los gastos y reintegros superan el monto entregado. Revisa la liquidación.",
@@ -655,6 +727,7 @@ export async function liquidarViatico(
     );
     if (upd.affectedRows !== 1) {
       await conn.rollback();
+      compensarImagenFirma(imagenGuardada);
       return { ok: false, error: "El viático cambió de estado durante la operación.", status: 409 };
     }
 
@@ -676,6 +749,7 @@ export async function liquidarViatico(
         diferencia: decimal(diferenciaCent),
         observaciones: datos.observaciones?.trim() || null,
       },
+      imagen: imagenGuardada,
       ip: firma.ip,
       userAgent: firma.userAgent,
     });
@@ -692,6 +766,7 @@ export async function liquidarViatico(
     return { ok: true, firma: resultadoFirma };
   } catch (err) {
     await conn.rollback();
+    compensarImagenFirma(imagenGuardada);
     throw err;
   } finally {
     conn.release();
