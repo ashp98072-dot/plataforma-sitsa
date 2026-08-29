@@ -84,6 +84,7 @@ describe("POST /tms/viaticos/[id]/autorizar", () => {
     expect(autorizarViatico).toHaveBeenCalledWith(7, 10, "jefe1", {
       usuarioId: 3, nombreFirmante: "Ana López", rolFirmante: "JefeOperaciones", password: "clave123",
       imagen: { bytes: expect.any(ArrayBuffer), original: "firma.png" },
+      firmaLote: false,
       ip: null, userAgent: null,
     });
     const body = await res.json();
@@ -93,6 +94,16 @@ describe("POST /tms/viaticos/[id]/autorizar", () => {
     // NO se devuelve la ruta física interna, solo firmaId/tieneImagen.
     expect(body.firma.imagenRuta).toBeUndefined();
     expect(body.firma.rutaImagen).toBeUndefined();
+  });
+
+  it("hotfix PR #124: firmaLote='true' en el FormData (bandeja masiva) -> se delega con firmaLote: true", async () => {
+    vi.mocked(autorizarViatico).mockResolvedValue({
+      ok: true,
+      firma: { id: 1, codigoFirma: "SIG-1", fechaHoraServidor: new Date("2026-08-28T15:00:00Z"), hashPayload: "h", nombreFirmante: "Ana López", rolFirmante: "JefeOperaciones", tieneImagen: true },
+    });
+    const res = await POST(new Request("http://localhost/x", { method: "POST", body: formData({ password: "clave123", firmaLote: "true" }) }), ctx);
+    expect(res.status).toBe(200);
+    expect(autorizarViatico).toHaveBeenCalledWith(7, 10, "jefe1", expect.objectContaining({ firmaLote: true }));
   });
 
   it("propaga el status de error de la lib (p.ej. 401 contraseña incorrecta, 409 estado)", async () => {

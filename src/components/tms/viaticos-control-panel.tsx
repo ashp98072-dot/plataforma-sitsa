@@ -118,11 +118,14 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   // VIATICOS-FIRMA-VISUAL — modal "Autorizar seleccionados" (antes
   // window.prompt): la bandeja masiva firma con la MISMA imagen dibujada
   // una vez para todo el lote (cada autorización individual igual guarda
-  // su propio archivo/fila de firma — ver guardarImagenFirmaSiViene en
+  // su propio archivo/fila de firma — ver guardarImagenFirma en
   // src/lib/tms/viaticos.ts — pero comparten el trazo de este único
-  // gesto). Decisión de alcance documentada en el reporte de entrega: el
-  // ticket original solo cubre los modales de autorizar/liquidar
-  // individuales, no la bandeja masiva.
+  // gesto). Hotfix PR #124: el texto del modal deja esto explícito
+  // ("Esta firma se aplicará a los N viáticos...") y cada POST envía
+  // firmaLote=true, que autorizarViatico agrega como `firmaLote: true`
+  // dentro del payload firmado de CADA autorización del lote — nunca se
+  // pretende una firma distinta por viático. Se dejó fuera loteFirmaId
+  // (identificador de lote) por alcance: ver reporte de entrega.
   const [masivoAbierto, setMasivoAbierto] = useState(false);
   const [pwdMasivo, setPwdMasivo] = useState("");
   const [firmaImagenMasivo, setFirmaImagenMasivo] = useState<File | null>(null);
@@ -357,6 +360,10 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
         const fd = new FormData();
         fd.set("password", pwdMasivo);
         fd.set("firmaImagen", firmaImagenMasivo, "firma.png");
+        // VIATICOS-FIRMA-VISUAL (hotfix PR #124) — deja explícito en el
+        // payload firmado de CADA autorización que este trazo se reutilizó
+        // para todo el lote (nunca se pretende una firma distinta por viático).
+        fd.set("firmaLote", "true");
         const res = await fetch(`/api/empresas/${slug}/tms/viaticos/${id}/autorizar`, {
           method: "POST",
           body: fd,
@@ -800,7 +807,10 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="w-full max-w-md space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-xl">
             <h3 className="text-sm font-semibold">Firmar y autorizar seleccionados ({seleccionados.size})</h3>
-            <p className="text-xs text-[var(--muted)]">Al firmar confirmas que autorizas los {seleccionados.size} viáticos seleccionados.</p>
+            <p className="text-xs text-[var(--muted)]">
+              Esta firma se aplicará a los {seleccionados.size} viáticos seleccionados: dibuja una sola vez, se usará
+              para autorizar cada uno de ellos.
+            </p>
             <label className="block text-xs text-[var(--muted)]">
               Dibuja tu firma:
               <div className="mt-0.5">

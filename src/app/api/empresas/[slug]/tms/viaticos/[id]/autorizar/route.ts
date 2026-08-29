@@ -28,6 +28,12 @@ type Ctx = { params: Promise<{ slug: string; id: string }> };
  * autorizarViatico(), en ese orden (password -> guardar archivo ->
  * transacción) — un password incorrecto nunca debe escribir la imagen a
  * disco.
+ *
+ * VIATICOS-FIRMA-VISUAL (hotfix PR #124) — `firmaLote` ("true"/ausente):
+ * lo envía la bandeja masiva "Autorizar seleccionados" (un único trazo
+ * reutilizado para todo el lote) para que quede explícito dentro del
+ * payload firmado de CADA autorización — nunca se pretende que el usuario
+ * dibujó una firma distinta por cada viático del lote.
  */
 export async function POST(req: Request, ctx: Ctx) {
   const { slug, id } = await ctx.params;
@@ -61,12 +67,15 @@ export async function POST(req: Request, ctx: Ctx) {
   }
   const imagen = { bytes, original: file.name || "firma.png" };
 
+  const firmaLote = form.get("firmaLote") === "true";
+
   const r = await autorizarViatico(guard.empresa.id, viaticoId, guard.session.username, {
     usuarioId: guard.session.id,
     nombreFirmante: guard.session.nombre || guard.session.username,
     rolFirmante: guard.session.rol,
     password,
     imagen,
+    firmaLote,
     ip: req.headers.get("x-forwarded-for"),
     userAgent: req.headers.get("user-agent"),
   });

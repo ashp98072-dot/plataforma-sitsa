@@ -141,6 +141,44 @@ describe("autorizarViatico — PROGRAMADO -> AUTORIZADO con firma", () => {
     }));
   });
 
+  it("hotfix PR #124: firmaLote no viene (flujo individual) -> el payload NO incluye la clave firmaLote", async () => {
+    await autorizarViatico(7, 10, "jefe1", firma); // firma no trae firmaLote
+    expect(crearFirmaInterna).toHaveBeenCalledWith(conn, expect.objectContaining({
+      valoresRelevantes: expect.not.objectContaining({ firmaLote: expect.anything() }),
+    }));
+  });
+
+  it("hotfix PR #124: firmaLote: true (bandeja masiva) -> el payload firmado incluye firmaLote: true", async () => {
+    await autorizarViatico(7, 10, "jefe1", { ...firma, firmaLote: true });
+    expect(crearFirmaInterna).toHaveBeenCalledWith(conn, expect.objectContaining({
+      valoresRelevantes: expect.objectContaining({ viaticoId: 10, firmaLote: true }),
+    }));
+  });
+
+  it("hotfix PR #124: autorizarViatico — getConnection() falla -> compensa la imagen ya guardada, no crea firma ni auditoría, no cambia estado, propaga el error", async () => {
+    getConnection.mockRejectedValueOnce(new Error("pool exhausted"));
+    await expect(autorizarViatico(7, 10, "jefe1", firma)).rejects.toThrow("pool exhausted");
+    // La imagen SÍ se había guardado (password ya verificado ANTES de intentar la conexión).
+    expect(guardarUpload).toHaveBeenCalledTimes(1);
+    expect(borrarUpload).toHaveBeenCalledWith("empresas/7/firmas/firma_x.png");
+    expect(crearFirmaInterna).not.toHaveBeenCalled();
+    expect(registrarAuditoriaTx).not.toHaveBeenCalled();
+    expect(conn.execute).not.toHaveBeenCalled(); // ningún UPDATE de estado
+    // `conn` nunca llegó a obtenerse: no hay conexión sobre la que hacer rollback/release.
+    expect(conn.rollback).not.toHaveBeenCalled();
+    expect(conn.release).not.toHaveBeenCalled();
+  });
+
+  it("hotfix PR #124: beginTransaction() falla (conn SÍ se obtuvo) -> también compensa, intenta rollback y libera la conexión", async () => {
+    conn.beginTransaction.mockRejectedValueOnce(new Error("connection reset"));
+    await expect(autorizarViatico(7, 10, "jefe1", firma)).rejects.toThrow("connection reset");
+    expect(borrarUpload).toHaveBeenCalledWith("empresas/7/firmas/firma_x.png");
+    expect(crearFirmaInterna).not.toHaveBeenCalled();
+    // conn SÍ se obtuvo (a diferencia del caso getConnection() falla) -> se intenta rollback y SIEMPRE se libera.
+    expect(conn.rollback).toHaveBeenCalled();
+    expect(conn.release).toHaveBeenCalled();
+  });
+
   it("estado != PROGRAMADO rechaza (409) sin firmar y COMPENSA borrando la imagen ya guardada", async () => {
     mockConnQuery({ viatico: { ...VIATICO_PROGRAMADO, estado: "AUTORIZADO" } });
     const r = await autorizarViatico(7, 10, "jefe1", firma);
@@ -195,6 +233,20 @@ describe("liquidarViatico — ENTREGADO -> LIQUIDADO, regla crítica de diferenc
     mockConnQuery({ viatico: VIATICO_ENTREGADO });
     const r = await liquidarViatico(7, 10, { gastosComprobados: "1000.00", reintegro: "0", observaciones: null }, "fact1", firmaFacturador);
     expect(r.ok).toBe(true);
+  });
+
+  it("hotfix PR #124: liquidarViatico — getConnection() falla -> compensa la imagen ya guardada, no crea firma ni auditoría, no cambia estado, propaga el error", async () => {
+    getConnection.mockRejectedValueOnce(new Error("pool exhausted"));
+    await expect(
+      liquidarViatico(7, 10, { gastosComprobados: "900.00", reintegro: "100.00", observaciones: null }, "fact1", firmaFacturador),
+    ).rejects.toThrow("pool exhausted");
+    expect(guardarUpload).toHaveBeenCalledTimes(1);
+    expect(borrarUpload).toHaveBeenCalledWith("empresas/7/firmas/firma_x.png");
+    expect(crearFirmaInterna).not.toHaveBeenCalled();
+    expect(registrarAuditoriaTx).not.toHaveBeenCalled();
+    expect(conn.execute).not.toHaveBeenCalled();
+    expect(conn.rollback).not.toHaveBeenCalled();
+    expect(conn.release).not.toHaveBeenCalled();
   });
 
   it("13) gastos 950 + reintegro 0 sobre entregado 1000 -> diferencia 50 (pendiente), NO liquida, estado sigue ENTREGADO, COMPENSA la imagen", async () => {
