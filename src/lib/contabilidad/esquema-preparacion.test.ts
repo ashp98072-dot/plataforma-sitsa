@@ -24,6 +24,6 @@ it.each(tablas)("prepara %s sin hacer obligatoria la entidad ni cambiar unicidad
     expect(alter).toContain("ADD COLUMN IF NOT EXISTS empresa_id INT NULL DEFAULT NULL");
     expect(ddl).toContain("empresa_id INT NULL DEFAULT NULL");
   }
-  if (tabla === "cont_cuentas") expect(ddl).toContain("UNIQUE KEY uq_cuenta (empresa_id, codigo)");
-  if (tabla === "cont_asientos") expect(ddl).toContain("UNIQUE KEY uq_asiento (empresa_id, numero)");
+  // El esquema final incorpora C2B; la migración histórica C2A no cambia unicidad.
+  expect(alter).not.toContain("UNIQUE");
 });

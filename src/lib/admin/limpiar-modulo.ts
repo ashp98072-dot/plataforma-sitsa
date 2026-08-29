@@ -592,6 +592,19 @@ async function limpiarContabilidad(
   conn: Awaited<ReturnType<ReturnType<typeof getPool>["getConnection"]>>,
   empresaId: number,
 ): Promise<Record<string, number>> {
+  // Se serializa con toda operación C2B. Nunca borrar ambos libros por tenant.
+  await conn.query("SELECT id FROM empresas WHERE id = ? FOR UPDATE", [empresaId]);
+  for (const tabla of ["cont_cuentas", "cont_asientos", "cont_cxc", "cont_cxp"]) {
+    if (!(await tablaExiste(conn, tabla))) continue;
+    const [columnas] = await conn.query<RowDataPacket[]>(
+      "SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = 'entidad_id'", [tabla],
+    );
+    if (!columnas.length) continue; // Esquema previo: solo limpieza de pruebas legadas.
+    const [filas] = await conn.query<RowDataPacket[]>(
+      `SELECT id FROM ${tabla} WHERE empresa_id = ? AND entidad_id IS NOT NULL LIMIT 1 FOR UPDATE`, [empresaId],
+    );
+    if (filas.length) throw new Error("Hay libros separados por entidad. La limpieza general de Contabilidad está bloqueada para proteger KT y Mónaco.");
+  }
   const out: Record<string, number> = {};
   out.detalle = await delSiExiste(
     conn,
