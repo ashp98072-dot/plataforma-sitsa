@@ -1,10 +1,15 @@
 "use client";
 
-import { useLayoutEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
+import { useImperativeHandle, useLayoutEffect, useRef, type PointerEvent as ReactPointerEvent, type Ref } from "react";
 
 /** Dimensión final del PNG exportado — nunca se envía una captura de tamaño arbitrario. */
 const ANCHO_MAX = 800;
 const ALTO_MAX = 300;
+
+export type FirmaCanvasHandle = {
+  /** PNG del trazo actual, o `null` si no hay trazo. El padre lo llama SOLO al confirmar (no en cada trazo). */
+  obtenerImagen: () => Promise<File | null>;
+};
 
 /**
  * VIATICOS-FIRMA-VISUAL — canvas nativo reutilizable para capturar una
@@ -20,42 +25,42 @@ const ALTO_MAX = 300;
  * servidor + auditoría, ver src/lib/firmas/firmas-internas.ts) — NUNCA la
  * sustituye ni es el único mecanismo de autenticación.
  *
- * Hotfix (corrección urgente) — "la firma desaparece al soltar el mouse":
- * cada trazo dispara `onFirmaCambia` hacia el padre, que guarda el File
- * en estado y por tanto RE-RENDERIZA. Un re-render del padre puede volver
- * a comprometer el bitmap del canvas (p. ej. si en algún punto se
- * reescribe `width`/`height`, algo que SIEMPRE limpia el canvas incluso
- * con el mismo valor). Para blindarnos ante eso — sin depender de
- * adivinar la causa exacta — se guarda un snapshot (`ImageData`) tras
- * cada trazo y se restaura en un `useLayoutEffect` que corre después de
- * CADA render, ANTES de que el navegador pinte: si el bitmap se perdió,
- * se repone antes de que el usuario llegue a verlo en blanco.
- *
- * Uso: el padre pasa `onFirmaCambia` y recibe el último File PNG (o
- * `null` si no hay trazo — tras "Limpiar firma" o antes de dibujar nada);
- * el padre debe bloquear el envío mientras el valor sea `null`.
+ * CORRECCIÓN URGENTE (2ª vuelta) — "la firma desaparece al soltar el
+ * mouse", persistía tras el primer intento de arreglo (snapshot +
+ * restauración en useLayoutEffect, que se mantiene aquí como defensa
+ * adicional). La causa raíz real: antes se llamaba `onFirmaCambia` (con
+ * el File completo) al terminar CADA trazo, lo que hacía re-renderizar al
+ * padre mientras el usuario seguía usando el modal — y un re-render del
+ * padre puede comprometer el bitmap del canvas hijo por razones que no
+ * dependen de este componente. Ahora el componente NO empuja el File al
+ * padre en absoluto durante el dibujo: expone `obtenerImagen()` vía `ref`
+ * (React 19 — ref como prop normal, sin `forwardRef`) y el padre lo
+ * invoca UNA sola vez, al confirmar. Durante el dibujo solo se notifica
+ * `onCambiaTrazo(true)` (booleano, para habilitar el botón) la PRIMERA
+ * vez que aparece un trazo en el gesto — nunca en cada punto/segmento —
+ * así el padre re-renderiza como máximo una vez por gesto, nunca en medio
+ * de un trazo activo. Además elimina los `toBlob` repetidos (antes uno
+ * por trazo completado; ahora uno solo, al confirmar).
  */
 export default function FirmaCanvas({
-  onFirmaCambia,
+  ref,
+  onCambiaTrazo,
   disabled,
 }: {
-  onFirmaCambia: (archivo: File | null) => void;
+  ref?: Ref<FirmaCanvasHandle>;
+  onCambiaTrazo?: (tieneTrazo: boolean) => void;
   disabled?: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const dibujando = useRef(false);
   const ultimoPunto = useRef<{ x: number; y: number } | null>(null);
-  // Ref (no state): esta pieza no necesita re-renderizar por sí misma — el
-  // padre ya recibe el resultado vía onFirmaCambia en cada trazo/limpieza.
   const huboTrazoRef = useRef(false);
-  // Snapshot del bitmap tras el último trazo completado — ver hotfix arriba.
+  // Snapshot del bitmap tras cada trazo/punto — defensa adicional: si
+  // pese a la arquitectura sin-re-render-a-mitad-de-trazo el bitmap
+  // igual se perdiera por algún otro motivo, este useLayoutEffect lo
+  // repone ANTES de que el navegador pinte.
   const snapshotRef = useRef<ImageData | null>(null);
 
-  // Restaura el snapshot DESPUÉS de cada render (mount o update), antes
-  // del pintado del navegador — si el bitmap del canvas se perdió por un
-  // re-render del padre, se repone aquí sin que el usuario llegue a verlo
-  // en blanco. No-op si aún no hay snapshot (nada dibujado) o si se acaba
-  // de limpiar (snapshotRef.current === null tras "Limpiar firma").
   useLayoutEffect(() => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
@@ -84,6 +89,12 @@ export default function FirmaCanvas({
     ctx.fill();
   }
 
+  function tomarSnapshot() {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (canvas && ctx) snapshotRef.current = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  }
+
   function handlePointerDown(e: ReactPointerEvent<HTMLCanvasElement>) {
     if (disabled) return;
     const canvas = canvasRef.current;
@@ -97,10 +108,13 @@ export default function FirmaCanvas({
     dibujando.current = true;
     const p = posicion(e);
     ultimoPunto.current = p;
-    // Punto inicial visible de inmediato (cubre el caso de un toque corto
-    // sin movimiento — nunca debe quedar como "sin trazo").
     dibujarPunto(p);
+    const eraNuevoTrazo = !huboTrazoRef.current;
     huboTrazoRef.current = true;
+    tomarSnapshot();
+    // Solo la PRIMERA vez que aparece trazo en este gesto se notifica al
+    // padre (habilita el botón) — nunca en cada punto/segmento.
+    if (eraNuevoTrazo) onCambiaTrazo?.(true);
   }
 
   function handlePointerMove(e: ReactPointerEvent<HTMLCanvasElement>) {
@@ -118,30 +132,14 @@ export default function FirmaCanvas({
     ctx.lineTo(punto.x, punto.y);
     ctx.stroke();
     ultimoPunto.current = punto;
-  }
-
-  function regenerarImagen() {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx || !huboTrazoRef.current) {
-      onFirmaCambia(null);
-      return;
-    }
-    // Snapshot ANTES de notificar al padre — el próximo re-render que esa
-    // notificación dispare ya tiene de dónde restaurar (ver useLayoutEffect).
-    snapshotRef.current = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    canvas.toBlob((blob) => {
-      onFirmaCambia(blob ? new File([blob], "firma.png", { type: "image/png" }) : null);
-    }, "image/png");
+    tomarSnapshot();
   }
 
   function terminarTrazo(e: ReactPointerEvent<HTMLCanvasElement>) {
-    if (dibujando.current) regenerarImagen();
     dibujando.current = false;
     ultimoPunto.current = null;
-    const canvas = canvasRef.current;
     try {
-      canvas?.releasePointerCapture(e.pointerId);
+      canvasRef.current?.releasePointerCapture(e.pointerId);
     } catch {
       // best-effort — el navegador ya libera la captura automáticamente en pointerup/cancel.
     }
@@ -153,8 +151,22 @@ export default function FirmaCanvas({
     if (canvas && ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
     huboTrazoRef.current = false;
     snapshotRef.current = null;
-    onFirmaCambia(null);
+    onCambiaTrazo?.(false);
   }
+
+  useImperativeHandle(ref, () => ({
+    obtenerImagen: () =>
+      new Promise<File | null>((resolve) => {
+        const canvas = canvasRef.current;
+        if (!canvas || !huboTrazoRef.current) {
+          resolve(null);
+          return;
+        }
+        canvas.toBlob((blob) => {
+          resolve(blob ? new File([blob], "firma.png", { type: "image/png" }) : null);
+        }, "image/png");
+      }),
+  }));
 
   return (
     <div className="space-y-1">
