@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/tenant", () => ({ requireTenantViaticosLiquidar: vi.fn() }));
 vi.mock("@/lib/tms/viaticos", () => ({ liquidarViatico: vi.fn() }));
+vi.mock("@/lib/firmas/usuario-firmas", () => ({ leerBytesFirmaGuardada: vi.fn() }));
 
 import { requireTenantViaticosLiquidar } from "@/lib/tenant";
 import { liquidarViatico } from "@/lib/tms/viaticos";
+import { leerBytesFirmaGuardada } from "@/lib/firmas/usuario-firmas";
 import { POST } from "./route";
 
 const ctx = { params: Promise.resolve({ slug: "prueba", id: "10" }) };
@@ -94,6 +96,7 @@ describe("POST /tms/viaticos/[id]/liquidar", () => {
       {
         usuarioId: 8, nombreFirmante: "Marta Ruiz", rolFirmante: "Facturador", password: "clave456",
         imagen: { bytes: expect.any(ArrayBuffer), original: "firma.png" },
+        origenFirma: "DIBUJADA",
         ip: null, userAgent: null,
       },
     );
@@ -123,5 +126,57 @@ describe("POST /tms/viaticos/[id]/liquidar", () => {
     const body = await res.json();
     expect(typeof body.error).toBe("string");
     expect(body.error.length).toBeGreaterThan(0);
+  });
+
+  describe("MI-FIRMA-1 — usarFirmaGuardada", () => {
+    it("22) usarFirmaGuardada=true -> lee la plantilla del usuario de la SESIÓN y delega con origenFirma: GUARDADA, password sigue viajando igual", async () => {
+      vi.mocked(leerBytesFirmaGuardada).mockResolvedValue({ bytes: PNG_BYTES.buffer as ArrayBuffer, original: "mi-firma.png" });
+      vi.mocked(liquidarViatico).mockResolvedValue({
+        ok: true,
+        firma: { id: 5, codigoFirma: "SIG-5", fechaHoraServidor: new Date("2026-08-29T10:00:00Z"), hashPayload: "h", nombreFirmante: "Marta Ruiz", rolFirmante: "Facturador", tieneImagen: true },
+      });
+      const res = await POST(
+        new Request("http://localhost/x", {
+          method: "POST",
+          body: formData({ gastosComprobados: "900.00", reintegro: "100.00", password: "clave456", usarFirmaGuardada: "true" }, { conFirma: false }),
+        }),
+        ctx,
+      );
+      expect(res.status).toBe(200);
+      expect(leerBytesFirmaGuardada).toHaveBeenCalledWith(8); // guard.session.id
+      expect(liquidarViatico).toHaveBeenCalledWith(7, 10, expect.anything(), "fact1", expect.objectContaining({
+        password: "clave456",
+        origenFirma: "GUARDADA",
+        imagen: { bytes: expect.any(ArrayBuffer), original: "mi-firma.png" },
+      }));
+    });
+
+    it("23) usarFirmaGuardada=true SIN password -> 400 igual que siempre, sin llamar a leerBytesFirmaGuardada ni a la lib (password se valida antes)", async () => {
+      const res = await POST(
+        new Request("http://localhost/x", {
+          method: "POST",
+          body: formData({ gastosComprobados: "900.00", reintegro: "100.00", usarFirmaGuardada: "true" }, { conFirma: false }),
+        }),
+        ctx,
+      );
+      expect(res.status).toBe(400);
+      expect(leerBytesFirmaGuardada).not.toHaveBeenCalled();
+      expect(liquidarViatico).not.toHaveBeenCalled();
+    });
+
+    it("si la firma guardada ya no está disponible -> 400, sin llamar a la lib", async () => {
+      vi.mocked(leerBytesFirmaGuardada).mockResolvedValue(null);
+      const res = await POST(
+        new Request("http://localhost/x", {
+          method: "POST",
+          body: formData({ gastosComprobados: "900.00", reintegro: "100.00", password: "clave456", usarFirmaGuardada: "true" }, { conFirma: false }),
+        }),
+        ctx,
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toContain("firma guardada");
+      expect(liquidarViatico).not.toHaveBeenCalled();
+    });
   });
 });

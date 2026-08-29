@@ -398,6 +398,15 @@ export type DatosFirmaViatico = {
    * individual (no se agrega la clave al payload).
    */
   firmaLote?: boolean;
+  /**
+   * MI-FIRMA-1 — de dónde viene `imagen`: `'DIBUJADA'` (canvas) o
+   * `'GUARDADA'` (plantilla personal de "Mi firma", copiada a un archivo
+   * nuevo por el endpoint ANTES de llegar aquí — ver DatosFirmaInterna
+   * .origenFirma en src/lib/firmas/firmas-internas.ts). Solo trazabilidad
+   * dentro del payload firmado — nunca cambia el flujo de guardado ni la
+   * regla de "siempre una copia física independiente".
+   */
+  origenFirma?: "GUARDADA" | "DIBUJADA";
   ip?: string | null;
   userAgent?: string | null;
 };
@@ -558,6 +567,7 @@ export async function autorizarViatico(
       },
       imagen: imagenGuardada,
       metodo: "FIRMA_MANUSCRITA",
+      origenFirma: firma.origenFirma,
       ip: firma.ip,
       userAgent: firma.userAgent,
     });
@@ -793,6 +803,7 @@ export async function liquidarViatico(
       },
       imagen: imagenGuardada,
       metodo: "PASSWORD",
+      origenFirma: firma.origenFirma,
       ip: firma.ip,
       userAgent: firma.userAgent,
     });

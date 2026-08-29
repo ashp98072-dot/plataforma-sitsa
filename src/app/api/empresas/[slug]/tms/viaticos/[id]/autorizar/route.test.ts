@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/tenant", () => ({ requireTenantViaticosAutorizar: vi.fn() }));
 vi.mock("@/lib/tms/viaticos", () => ({ autorizarViatico: vi.fn() }));
+vi.mock("@/lib/firmas/usuario-firmas", () => ({ leerBytesFirmaGuardada: vi.fn() }));
 
 import { requireTenantViaticosAutorizar } from "@/lib/tenant";
 import { autorizarViatico } from "@/lib/tms/viaticos";
+import { leerBytesFirmaGuardada } from "@/lib/firmas/usuario-firmas";
 import { POST } from "./route";
 
 const ctx = { params: Promise.resolve({ slug: "prueba", id: "10" }) };
@@ -96,6 +98,7 @@ describe("POST /tms/viaticos/[id]/autorizar", () => {
       usuarioId: 3, nombreFirmante: "Ana López", rolFirmante: "JefeOperaciones",
       imagen: { bytes: expect.any(ArrayBuffer), original: "firma.png" },
       firmaLote: false,
+      origenFirma: "DIBUJADA",
       ip: null, userAgent: null,
     });
     const body = await res.json();
@@ -130,5 +133,64 @@ describe("POST /tms/viaticos/[id]/autorizar", () => {
     const body = await res.json();
     expect(typeof body.error).toBe("string");
     expect(body.error.length).toBeGreaterThan(0);
+  });
+
+  describe("MI-FIRMA-1 — usarFirmaGuardada", () => {
+    it("11) usarFirmaGuardada=true -> lee la plantilla del usuario de la SESIÓN (nunca del cliente) y delega con origenFirma: GUARDADA", async () => {
+      vi.mocked(leerBytesFirmaGuardada).mockResolvedValue({ bytes: PNG_BYTES.buffer as ArrayBuffer, original: "mi-firma.png" });
+      vi.mocked(autorizarViatico).mockResolvedValue({
+        ok: true,
+        firma: { id: 2, codigoFirma: "SIG-2", fechaHoraServidor: new Date("2026-08-29T10:00:00Z"), hashPayload: "h", nombreFirmante: "Ana López", rolFirmante: "JefeOperaciones", tieneImagen: true },
+      });
+      const res = await POST(
+        new Request("http://localhost/x", { method: "POST", body: formData({ usarFirmaGuardada: "true" }, { conFirma: false }) }),
+        ctx,
+      );
+      expect(res.status).toBe(200);
+      expect(leerBytesFirmaGuardada).toHaveBeenCalledWith(3); // guard.session.id, no un valor del cliente
+      expect(autorizarViatico).toHaveBeenCalledWith(7, 10, "jefe1", expect.objectContaining({
+        origenFirma: "GUARDADA",
+        imagen: { bytes: expect.any(ArrayBuffer), original: "mi-firma.png" },
+      }));
+    });
+
+    it("si el usuario no tiene firma guardada (ya no disponible) -> 400, sin llamar a la lib de autorización", async () => {
+      vi.mocked(leerBytesFirmaGuardada).mockResolvedValue(null);
+      const res = await POST(
+        new Request("http://localhost/x", { method: "POST", body: formData({ usarFirmaGuardada: "true" }, { conFirma: false }) }),
+        ctx,
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toContain("firma guardada");
+      expect(autorizarViatico).not.toHaveBeenCalled();
+    });
+
+    it("17) sin usarFirmaGuardada (dibujar otra) sigue funcionando exactamente igual, con origenFirma: DIBUJADA", async () => {
+      vi.mocked(autorizarViatico).mockResolvedValue({
+        ok: true,
+        firma: { id: 3, codigoFirma: "SIG-3", fechaHoraServidor: new Date("2026-08-29T10:00:00Z"), hashPayload: "h", nombreFirmante: "Ana López", rolFirmante: "JefeOperaciones", tieneImagen: true },
+      });
+      const res = await POST(new Request("http://localhost/x", { method: "POST", body: formData() }), ctx);
+      expect(res.status).toBe(200);
+      expect(leerBytesFirmaGuardada).not.toHaveBeenCalled();
+      expect(autorizarViatico).toHaveBeenCalledWith(7, 10, "jefe1", expect.objectContaining({ origenFirma: "DIBUJADA" }));
+    });
+
+    it("18/19) firma masiva (firmaLote=true) con firma guardada -> se delega igual para cada viático (N llamadas independientes en N requests)", async () => {
+      vi.mocked(leerBytesFirmaGuardada).mockResolvedValue({ bytes: PNG_BYTES.buffer as ArrayBuffer, original: "mi-firma.png" });
+      vi.mocked(autorizarViatico).mockResolvedValue({
+        ok: true,
+        firma: { id: 4, codigoFirma: "SIG-4", fechaHoraServidor: new Date("2026-08-29T10:00:00Z"), hashPayload: "h", nombreFirmante: "Ana López", rolFirmante: "JefeOperaciones", tieneImagen: true },
+      });
+      const body = formData({ usarFirmaGuardada: "true", firmaLote: "true" }, { conFirma: false });
+      await POST(new Request("http://localhost/x", { method: "POST", body }), ctx);
+      await POST(new Request("http://localhost/x", { method: "POST", body: formData({ usarFirmaGuardada: "true", firmaLote: "true" }, { conFirma: false }) }), { params: Promise.resolve({ slug: "prueba", id: "11" }) });
+      // 21) cada llamada de autorizarViatico lleva firmaLote:true + origenFirma:GUARDADA de forma independiente.
+      expect(autorizarViatico).toHaveBeenCalledTimes(2);
+      for (const call of vi.mocked(autorizarViatico).mock.calls) {
+        expect(call[3]).toEqual(expect.objectContaining({ firmaLote: true, origenFirma: "GUARDADA" }));
+      }
+    });
   });
 });

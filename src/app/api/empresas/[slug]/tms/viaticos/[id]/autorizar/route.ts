@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireTenantViaticosAutorizar } from "@/lib/tenant";
 import { autorizarViatico } from "@/lib/tms/viaticos";
 import { esPngValido, MAX_FIRMA_IMAGEN_BYTES } from "@/lib/firmas/imagen-firma";
+import { leerBytesFirmaGuardada } from "@/lib/firmas/usuario-firmas";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
 
@@ -18,25 +19,36 @@ type Ctx = { params: Promise<{ slug: string; id: string }> };
  * CORRECCIÓN URGENTE — AUTORIZAR ya NO reautentica con contraseña. Prueba
  * de identidad suficiente para esta firma interna simbólica: sesión
  * autenticada (`guard.session`) + permiso EXPLÍCITO ya verificado arriba +
- * firma manuscrita dibujada (imagen PNG obligatoria). "nombre"/"rol" del
- * firmante se toman de la SESIÓN del servidor, nunca del cliente.
- * liquidarViatico (endpoint hermano) SIGUE exigiendo contraseña sin
- * cambios — ver su propio route.ts.
+ * firma manuscrita (imagen PNG obligatoria — dibujada o guardada, ver
+ * abajo). "nombre"/"rol" del firmante se toman de la SESIÓN del
+ * servidor, nunca del cliente. liquidarViatico (endpoint hermano) SIGUE
+ * exigiendo contraseña sin cambios — ver su propio route.ts.
  *
  * VIATICOS-FIRMA-VISUAL — multipart/form-data: `firmaImagen` (PNG del
- * canvas de firma manuscrita, OBLIGATORIO — ver ViaticosControlPanel:
- * tanto el modal individual como la bandeja masiva "Autorizar
- * seleccionados" exigen un trazo antes de poder confirmar) + `firmaLote`
- * opcional. El formato/tamaño se valida AQUÍ (magic bytes reales, nunca
- * el nombre/extensión/Content-Type declarado por el cliente) ANTES de
- * llamar a la lib; el guardado a disco de la imagen sigue viviendo DENTRO
- * de autorizarViatico(), ANTES de abrir la transacción.
+ * canvas de firma manuscrita) O `usarFirmaGuardada=true` (MI-FIRMA-1, ver
+ * abajo) — exactamente uno de los dos, siempre obligatorio uno de ellos
+ * — + `firmaLote` opcional. El formato/tamaño de `firmaImagen` se valida
+ * AQUÍ (magic bytes reales, nunca el nombre/extensión/Content-Type
+ * declarado por el cliente) ANTES de llamar a la lib; el guardado a
+ * disco de la imagen sigue viviendo DENTRO de autorizarViatico(), ANTES
+ * de abrir la transacción.
  *
  * VIATICOS-FIRMA-VISUAL (hotfix PR #124) — `firmaLote` ("true"/ausente):
  * lo envía la bandeja masiva "Autorizar seleccionados" (un único trazo
  * reutilizado para todo el lote) para que quede explícito dentro del
  * payload firmado de CADA autorización — nunca se pretende que el usuario
  * dibujó una firma distinta por cada viático del lote.
+ *
+ * MI-FIRMA-1 — `usarFirmaGuardada=true`: el servidor lee la plantilla
+ * personal del usuario (`leerBytesFirmaGuardada`, SIEMPRE por
+ * `guard.session.id` — nunca un usuario_id o ruta del cliente) y esos
+ * bytes se pasan como `imagen` al mismo flujo de siempre —
+ * autorizarViatico/guardarImagenFirma escriben SIEMPRE un archivo NUEVO
+ * (nunca reutilizan la ruta de la plantilla), así que cada autorización
+ * queda con su propia copia física/hash/código independiente aunque la
+ * plantilla personal cambie o se elimine después. `origenFirma`
+ * ('GUARDADA'/'DIBUJADA') viaja como trazabilidad dentro del payload
+ * firmado — ver DatosFirmaInterna.origenFirma.
  *
  * CORRECCIÓN URGENTE — try/catch explícito: antes, cualquier excepción no
  * controlada dentro de autorizarViatico() (p. ej. un fallo real de DB o
@@ -64,18 +76,31 @@ export async function POST(req: Request, ctx: Ctx) {
       return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
     }
 
-    const file = form.get("firmaImagen");
-    if (!(file instanceof File) || file.size <= 0) {
-      return NextResponse.json({ error: "Dibuja tu firma antes de continuar." }, { status: 400 });
+    const usarFirmaGuardada = form.get("usarFirmaGuardada") === "true";
+    let imagen: { bytes: ArrayBuffer; original: string };
+    if (usarFirmaGuardada) {
+      const guardada = await leerBytesFirmaGuardada(guard.session.id);
+      if (!guardada) {
+        return NextResponse.json(
+          { error: "Tu firma guardada ya no está disponible. Dibuja tu firma." },
+          { status: 400 },
+        );
+      }
+      imagen = guardada;
+    } else {
+      const file = form.get("firmaImagen");
+      if (!(file instanceof File) || file.size <= 0) {
+        return NextResponse.json({ error: "Dibuja tu firma antes de continuar." }, { status: 400 });
+      }
+      if (file.size > MAX_FIRMA_IMAGEN_BYTES) {
+        return NextResponse.json({ error: "La imagen de la firma supera el tamaño permitido." }, { status: 400 });
+      }
+      const bytes = await file.arrayBuffer();
+      if (!esPngValido(new Uint8Array(bytes))) {
+        return NextResponse.json({ error: "La imagen de la firma debe ser un PNG válido." }, { status: 400 });
+      }
+      imagen = { bytes, original: file.name || "firma.png" };
     }
-    if (file.size > MAX_FIRMA_IMAGEN_BYTES) {
-      return NextResponse.json({ error: "La imagen de la firma supera el tamaño permitido." }, { status: 400 });
-    }
-    const bytes = await file.arrayBuffer();
-    if (!esPngValido(new Uint8Array(bytes))) {
-      return NextResponse.json({ error: "La imagen de la firma debe ser un PNG válido." }, { status: 400 });
-    }
-    const imagen = { bytes, original: file.name || "firma.png" };
 
     const firmaLote = form.get("firmaLote") === "true";
 
@@ -85,6 +110,7 @@ export async function POST(req: Request, ctx: Ctx) {
       rolFirmante: guard.session.rol,
       imagen,
       firmaLote,
+      origenFirma: usarFirmaGuardada ? "GUARDADA" : "DIBUJADA",
       ip: req.headers.get("x-forwarded-for"),
       userAgent: req.headers.get("user-agent"),
     });

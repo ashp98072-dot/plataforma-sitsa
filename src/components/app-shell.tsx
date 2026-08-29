@@ -705,6 +705,18 @@ export function AppShell({
           </nav>
 
           <div className="shrink-0 space-y-2 border-t border-[var(--border)] p-3">
+            {/* MI-FIRMA-1 — siempre visible para cualquier usuario
+                corporativo autenticado (nunca dentro de "Administración",
+                que está gateada por isAdmin más arriba) — la firma es un
+                atributo personal, no un permiso de módulo. */}
+            <Link
+              href={`${base}/mi-firma`}
+              prefetch={false}
+              onClick={() => setMenuOpen(false)}
+              className="block rounded-lg bg-[var(--panel)] px-3 py-2 text-center text-sm"
+            >
+              Mi firma
+            </Link>
             {!dominioEmpresa ? (
               <Link
                 href="/select-empresa"

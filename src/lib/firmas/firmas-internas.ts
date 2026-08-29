@@ -81,6 +81,17 @@ export type DatosFirmaInterna = {
    * `metodo` ya es VARCHAR(20) en el esquema — no requiere SQL.
    */
   metodo?: "PASSWORD" | "FIRMA_MANUSCRITA";
+  /**
+   * MI-FIRMA-1 — trazabilidad de la FUENTE de la imagen manuscrita (no la
+   * fuente de identidad, eso lo cubre `metodo`): `'DIBUJADA'` si el
+   * usuario dibujó el trazo en ese momento, `'GUARDADA'` si reutilizó su
+   * plantilla personal de "Mi firma" (ver src/lib/firmas/usuario-firmas.ts
+   * — en ese caso igual se generó una copia física/hash/código
+   * INDEPENDIENTE para ESTA firma, nunca se referenció el archivo de la
+   * plantilla). Va DENTRO de payload_canonico (no columna nueva, no SQL)
+   * — `null`/ausente para firmas sin imagen o previas a este campo.
+   */
+  origenFirma?: "GUARDADA" | "DIBUJADA" | null;
   ip?: string | null;
   userAgent?: string | null;
 };
@@ -150,6 +161,8 @@ export async function crearFirmaInterna(
     // solo su SHA-256.
     imagenSha256: datos.imagen?.sha256 ?? null,
     nombreFirmante: datos.nombreFirmante,
+    // MI-FIRMA-1 — fuente de la imagen (no de la identidad): ver DatosFirmaInterna.origenFirma.
+    origenFirma: datos.origenFirma ?? null,
     rolFirmante: datos.rolFirmante,
     valoresRelevantes: datos.valoresRelevantes,
     version: "1",

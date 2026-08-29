@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireTenantViaticosLiquidar } from "@/lib/tenant";
 import { liquidarViatico } from "@/lib/tms/viaticos";
 import { esPngValido, MAX_FIRMA_IMAGEN_BYTES } from "@/lib/firmas/imagen-firma";
+import { leerBytesFirmaGuardada } from "@/lib/firmas/usuario-firmas";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
 
@@ -18,10 +19,12 @@ type Ctx = { params: Promise<{ slug: string; id: string }> };
  *
  * VIATICOS-FIRMA-VISUAL — multipart/form-data: `gastosComprobados` +
  * `reintegro` + `observaciones` (opcional) + `password` + `firmaImagen`
- * (PNG del canvas, OBLIGATORIO). Mismo criterio de validación/orden que
- * el endpoint de autorizar (ver su JSDoc): formato/tamaño de imagen se
+ * (PNG del canvas) O `usarFirmaGuardada=true` (MI-FIRMA-1 — mismo criterio
+ * que autorizar/route.ts, ver su JSDoc). Formato/tamaño de imagen se
  * valida aquí, password + guardado a disco viven dentro de
- * liquidarViatico().
+ * liquidarViatico(). Contraseña SIGUE obligatoria en ambos casos — usar
+ * la firma guardada solo cambia la FUENTE de la imagen, nunca el factor
+ * de reautenticación.
  *
  * CORRECCIÓN URGENTE — try/catch explícito (mismo motivo que
  * autorizar/route.ts): una excepción no controlada aquí escapaba sin
@@ -52,18 +55,31 @@ export async function POST(req: Request, ctx: Ctx) {
     const observacionesRaw = form.get("observaciones");
     const observaciones = observacionesRaw != null ? String(observacionesRaw).trim().slice(0, 300) || null : null;
 
-    const file = form.get("firmaImagen");
-    if (!(file instanceof File) || file.size <= 0) {
-      return NextResponse.json({ error: "Dibuja tu firma antes de continuar." }, { status: 400 });
+    const usarFirmaGuardada = form.get("usarFirmaGuardada") === "true";
+    let imagen: { bytes: ArrayBuffer; original: string };
+    if (usarFirmaGuardada) {
+      const guardada = await leerBytesFirmaGuardada(guard.session.id);
+      if (!guardada) {
+        return NextResponse.json(
+          { error: "Tu firma guardada ya no está disponible. Dibuja tu firma." },
+          { status: 400 },
+        );
+      }
+      imagen = guardada;
+    } else {
+      const file = form.get("firmaImagen");
+      if (!(file instanceof File) || file.size <= 0) {
+        return NextResponse.json({ error: "Dibuja tu firma antes de continuar." }, { status: 400 });
+      }
+      if (file.size > MAX_FIRMA_IMAGEN_BYTES) {
+        return NextResponse.json({ error: "La imagen de la firma supera el tamaño permitido." }, { status: 400 });
+      }
+      const bytes = await file.arrayBuffer();
+      if (!esPngValido(new Uint8Array(bytes))) {
+        return NextResponse.json({ error: "La imagen de la firma debe ser un PNG válido." }, { status: 400 });
+      }
+      imagen = { bytes, original: file.name || "firma.png" };
     }
-    if (file.size > MAX_FIRMA_IMAGEN_BYTES) {
-      return NextResponse.json({ error: "La imagen de la firma supera el tamaño permitido." }, { status: 400 });
-    }
-    const bytes = await file.arrayBuffer();
-    if (!esPngValido(new Uint8Array(bytes))) {
-      return NextResponse.json({ error: "La imagen de la firma debe ser un PNG válido." }, { status: 400 });
-    }
-    const imagen = { bytes, original: file.name || "firma.png" };
 
     const r = await liquidarViatico(
       guard.empresa.id,
@@ -76,6 +92,7 @@ export async function POST(req: Request, ctx: Ctx) {
         rolFirmante: guard.session.rol,
         password,
         imagen,
+        origenFirma: usarFirmaGuardada ? "GUARDADA" : "DIBUJADA",
         ip: req.headers.get("x-forwarded-for"),
         userAgent: req.headers.get("user-agent"),
       },
