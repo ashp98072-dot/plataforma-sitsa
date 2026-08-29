@@ -11,6 +11,7 @@ const HEADERS = [
   "nombre",
   "razon_social",
   "nit",
+  "rtu",
   "telefono",
   "email",
   "direccion",
@@ -81,6 +82,7 @@ export async function generarPlantillaClientes(): Promise<Buffer> {
     "Cliente de ejemplo",
     "Cliente de Ejemplo, S.A.",
     "1234567-8",
+    "RTU-1234567",
     "55550000",
     "contacto@ejemplo.com",
     "Ciudad de Guatemala",
@@ -91,24 +93,25 @@ export async function generarPlantillaClientes(): Promise<Buffer> {
     "Fila de ejemplo: reemplazar o eliminar antes de importar",
     "NO",
   ]);
-  ws.autoFilter = "A1:M1";
+  ws.autoFilter = "A1:N1";
   ws.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
   ws.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F4E78" } };
   ws.getRow(1).alignment = { vertical: "middle", horizontal: "center", wrapText: true };
   ws.getRow(1).height = 32;
-  ws.columns = [16, 30, 32, 18, 18, 30, 42, 26, 20, 22, 14, 42, 20].map((width) => ({ width }));
+  ws.columns = [20, 30, 32, 18, 20, 18, 30, 42, 26, 20, 22, 14, 42, 20].map((width) => ({ width }));
   ws.getColumn(1).numFmt = "@";
   ws.getColumn(4).numFmt = "@";
   ws.getColumn(5).numFmt = "@";
-  ws.getColumn(9).numFmt = "@";
+  ws.getColumn(6).numFmt = "@";
+  ws.getColumn(10).numFmt = "@";
   for (let row = 2; row <= 1001; row += 1) {
-    ws.getCell(`J${row}`).dataValidation = {
+    ws.getCell(`K${row}`).dataValidation = {
       type: "list",
       allowBlank: true,
       formulae: ['"Transporte,Reciclaje,Tarimas,Comercial,Mixto,Otro"'],
     };
-    ws.getCell(`K${row}`).dataValidation = { type: "list", allowBlank: true, formulae: ['"Activo,Inactivo"'] };
-    ws.getCell(`M${row}`).dataValidation = { type: "list", allowBlank: true, formulae: ['"SI,NO"'] };
+    ws.getCell(`L${row}`).dataValidation = { type: "list", allowBlank: true, formulae: ['"Activo,Inactivo"'] };
+    ws.getCell(`N${row}`).dataValidation = { type: "list", allowBlank: true, formulae: ['"SI,NO"'] };
   }
 
   const ayuda = wb.addWorksheet("AYUDA");
@@ -117,7 +120,8 @@ export async function generarPlantillaClientes(): Promise<Buffer> {
   ayuda.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F4E78" } };
   [
     ["nombre", "Obligatorio. Nombre operativo del cliente."],
-    ["codigo / nit", "Recomendados. El sistema los usa, junto con el nombre, para detectar clientes existentes."],
+    ["codigo", "Opcional. Si se deja vacío, el sistema genera un código automático al crear el cliente."],
+    ["nit / rtu", "Opcionales. Ayudan a identificar al cliente y detectar registros existentes."],
     ["tipo", CLIENTE_TIPOS.map((x) => x.label).join(", ") + ". Si se deja vacío se usa Comercial."],
     ["estado", "Activo o Inactivo. Si se deja vacío se usa Activo."],
     ["actualizar_si_existe", "SI actualiza el cliente encontrado por código, NIT o nombre. NO lo omite sin modificarlo."],
@@ -158,6 +162,7 @@ export async function parsearExcelClientes(buffer: Buffer): Promise<FilaClienteE
       nombre,
       razonSocial: texto(value("razon_social", "razon social")) || null,
       nit: nit || null,
+      rtu: texto(value("rtu", "numero_rtu", "numero de rtu")) || null,
       telefono: texto(value("telefono")) || null,
       email: texto(value("email", "correo")) || null,
       direccion: texto(value("direccion")) || null,

@@ -15,7 +15,7 @@ type PreviewCliente = FilaClienteExcel & {
 const MAX_FILAS = 1000;
 const MAX_BYTES = 10 * 1024 * 1024;
 
-function indice(clientes: Cliente[], campo: "codigo" | "nit" | "nombre"): Map<string, Cliente[]> {
+function indice(clientes: Cliente[], campo: "codigo" | "nit" | "rtu" | "nombre"): Map<string, Cliente[]> {
   const map = new Map<string, Cliente[]>();
   for (const cliente of clientes) {
     const raw = cliente[campo];
@@ -36,6 +36,7 @@ async function analizar(empresaId: number, filas: FilaClienteExcel[]): Promise<P
   const existentes = await listarClientes(empresaId, { estado: "todos" });
   const porCodigo = indice(existentes, "codigo");
   const porNit = indice(existentes, "nit");
+  const porRtu = indice(existentes, "rtu");
   const porNombre = indice(existentes, "nombre");
   const vistosArchivo = new Set<string>();
 
@@ -51,14 +52,17 @@ async function analizar(empresaId: number, filas: FilaClienteExcel[]): Promise<P
     for (const c of [
       ...candidatos(porCodigo, fila.codigo),
       ...candidatos(porNit, fila.nit),
+      ...candidatos(porRtu, fila.rtu),
       ...candidatos(porNombre, fila.nombre),
     ]) encontrados.set(c.id, c);
-    if (encontrados.size > 1) errores.push("código, NIT o nombre coinciden con clientes diferentes");
+    if (encontrados.size > 1) errores.push("código, NIT, RTU o nombre coinciden con clientes diferentes");
 
     const claveArchivo = fila.codigo
       ? `codigo:${normalizarIdentificadorCliente(fila.codigo)}`
       : fila.nit
         ? `nit:${normalizarIdentificadorCliente(fila.nit)}`
+        : fila.rtu
+          ? `rtu:${normalizarIdentificadorCliente(fila.rtu)}`
         : `nombre:${normalizarIdentificadorCliente(fila.nombre)}`;
     if (vistosArchivo.has(claveArchivo)) errores.push("cliente repetido dentro del archivo");
     vistosArchivo.add(claveArchivo);
@@ -68,7 +72,14 @@ async function analizar(empresaId: number, filas: FilaClienteExcel[]): Promise<P
     }
     const existente = [...encontrados.values()][0];
     if (!existente) {
-      return { ...fila, estadoValidacion: "NUEVO", detalle: "Se creará y se vinculará con TMS.", clienteId: null };
+      return {
+        ...fila,
+        estadoValidacion: "NUEVO",
+        detalle: fila.codigo
+          ? "Se creará y se vinculará con TMS."
+          : "Se creará con código automático y se vinculará con TMS.",
+        clienteId: null,
+      };
     }
     if (!fila.actualizar) {
       return { ...fila, estadoValidacion: "OMITIR", detalle: `Ya existe: ${existente.nombre}. No se modificará.`, clienteId: existente.id };
@@ -132,6 +143,7 @@ export async function POST(req: Request, ctx: Ctx) {
         nombre: fila.nombre,
         razonSocial: fila.razonSocial,
         nit: fila.nit,
+        rtu: fila.rtu,
         telefono: fila.telefono,
         email: fila.email,
         direccion: fila.direccion,

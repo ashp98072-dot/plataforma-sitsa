@@ -462,7 +462,7 @@ function piePaginas(
       .text(
         `Página ${i + 1} de ${range.count} · ${total} registro(s) · SITSA`,
         marginL,
-        doc.page.height - marginB + 10,
+        doc.page.height - marginB - 12,
         { width: pageWidth, align: "center", lineBreak: false },
       );
   }

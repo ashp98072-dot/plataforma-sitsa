@@ -7,6 +7,7 @@ type PreviewFila = {
   codigo: string | null;
   nombre: string;
   nit: string | null;
+  rtu: string | null;
   tipo?: string;
   estado?: string;
   estadoValidacion: "NUEVO" | "ACTUALIZAR" | "OMITIR" | "ERROR";
@@ -96,12 +97,12 @@ export function ClientesImportador({ slug, onImported }: { slug: string; onImpor
           <div className="max-h-80 overflow-auto rounded border border-[var(--border)]">
             <table className="min-w-full text-left text-xs">
               <thead className="sticky top-0 bg-[var(--thead)] text-[var(--muted)]">
-                <tr><th className="px-2 py-2">Fila</th><th className="px-2 py-2">Código</th><th className="px-2 py-2">Cliente</th><th className="px-2 py-2">NIT</th><th className="px-2 py-2">Resultado</th></tr>
+                <tr><th className="px-2 py-2">Fila</th><th className="px-2 py-2">Código</th><th className="px-2 py-2">Cliente</th><th className="px-2 py-2">NIT</th><th className="px-2 py-2">RTU</th><th className="px-2 py-2">Resultado</th></tr>
               </thead>
               <tbody>
                 {preview.filas.map((fila) => (
                   <tr key={fila.filaExcel} className="border-t border-[var(--border)]">
-                    <td className="px-2 py-2">{fila.filaExcel}</td><td className="px-2 py-2">{fila.codigo || "—"}</td><td className="px-2 py-2">{fila.nombre || "—"}</td><td className="px-2 py-2">{fila.nit || "—"}</td>
+                    <td className="px-2 py-2">{fila.filaExcel}</td><td className="px-2 py-2">{fila.codigo || "Automático"}</td><td className="px-2 py-2">{fila.nombre || "—"}</td><td className="px-2 py-2">{fila.nit || "—"}</td><td className="px-2 py-2">{fila.rtu || "—"}</td>
                     <td className={`px-2 py-2 ${fila.estadoValidacion === "ERROR" ? "text-red-300" : fila.estadoValidacion === "NUEVO" ? "text-emerald-300" : "text-amber-300"}`}><strong>{fila.estadoValidacion}</strong> · {fila.detalle}</td>
                   </tr>
                 ))}

@@ -15,6 +15,7 @@ export type Cliente = {
   nombre: string;
   razonSocial: string | null;
   nit: string | null;
+  rtu: string | null;
   telefono: string | null;
   email: string | null;
   direccion: string | null;
@@ -33,6 +34,7 @@ export type ClienteInput = {
   nombre: string;
   razonSocial?: string | null;
   nit?: string | null;
+  rtu?: string | null;
   telefono?: string | null;
   email?: string | null;
   direccion?: string | null;
