@@ -9,22 +9,24 @@ describe("Excel modelo de rutas", () => {
     expect(filas).toHaveLength(0);
   });
 
-  it("presenta encabezados claros sin cambiar las columnas operativas C a H", async () => {
+  it("conserva el formato 1 a 6 del archivo operativo y aclara las columnas C a H", async () => {
     const plantilla = await generarPlantillaRutas();
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(plantilla as unknown as ExcelJS.Buffer);
     const ws = wb.getWorksheet("CODIGOS DATA");
     expect(ws).toBeDefined();
-    expect([3, 4, 5, 6, 7, 8].map((col) => ws!.getCell(1, col).value)).toEqual([
+    expect([3, 4, 5, 6, 7, 8].map((col) => ws!.getCell(1, col).value)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect([3, 4, 5, 6, 7, 8].map((col) => ws!.getCell(2, col).value)).toEqual([
       "Código de ruta *", "Cliente *", "Lugar de carga", "Hora habitual", "Contacto", "Destino / lugar de descarga",
     ]);
-    expect(ws!.getColumn("C").width).toBeGreaterThanOrEqual(20);
-    expect(ws!.getColumn("H").width).toBeGreaterThanOrEqual(45);
+    expect(ws!.getColumn("C").width).toBeGreaterThanOrEqual(14);
+    expect(ws!.getColumn("H").width).toBeGreaterThanOrEqual(58);
     expect(ws!.getCell("F1").numFmt).not.toBe("h:mm");
+    expect(ws!.getCell("F2").numFmt).not.toBe("h:mm");
     expect(ws!.getColumn("F").numFmt).toBe("h:mm");
-    expect(ws!.getCell("C2").value).toBe("EJEMPLO-NO-IMPORTAR");
+    expect(ws!.getCell("C3").value).toBe("EJEMPLO-NO-IMPORTAR");
     expect(wb.getWorksheet("AYUDA")!.getCell("A1").value).toBe("CÓMO IMPORTAR RUTAS DE FORMA MASIVA");
-    expect(wb.getWorksheet("AYUDA")!.getCell("B12").value).toContain("Previsualizar");
+    expect(wb.getWorksheet("AYUDA")!.getCell("B14").value).toContain("Previsualizar");
   });
 
   it("lee filas llenadas debajo del encabezado oficial", async () => {
