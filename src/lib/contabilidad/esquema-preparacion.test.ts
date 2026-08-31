@@ -14,7 +14,7 @@ it("solo altera las cinco tablas contables, sin datos ni catálogos compartidos"
   expect(sql).not.toMatch(/\b(clientes|tms_clientes|facturas|empleados|cont_entidades|cont_entidad_usuarios)\b/);
 });
 it.each(tablas)("prepara %s sin hacer obligatoria la entidad ni cambiar unicidad", (tabla) => {
-  const alter = sql.split(";").find((s) => s.includes("ALTER TABLE " + tabla + "\n"))!;
+  const alter = sql.split(";").find((s) => new RegExp("ALTER TABLE " + tabla + "\\s").test(s))!;
   expect(alter).toContain("ADD COLUMN IF NOT EXISTS entidad_id INT NULL DEFAULT NULL");
   expect(alter).toContain("ADD INDEX IF NOT EXISTS " + indices[tablas.indexOf(tabla)] + " (empresa_id, entidad_id)");
   const ddl = schema.split("CREATE TABLE IF NOT EXISTS " + tabla + " (")[1].split(") ENGINE=")[0];
