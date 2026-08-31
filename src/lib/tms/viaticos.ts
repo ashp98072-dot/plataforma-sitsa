@@ -354,11 +354,24 @@ export async function actualizarMontoViatico(
 
 /**
  * VIATICOS-RECHAZADO-1 — RECHAZADO es una transición alternativa a
- * AUTORIZADO, únicamente desde PROGRAMADO, y es TERMINAL: no existe
- * RECHAZADO -> PROGRAMADO. Para volver a solicitar el viático se crea un
- * registro PROGRAMADO nuevo (ver sincronizarViaticosPlan, que ya
- * preserva cualquier fila que no esté en PROGRAMADO — RECHAZADO queda
- * protegido automáticamente por esa misma regla, sin cambios ahí).
+ * AUTORIZADO, únicamente desde PROGRAMADO, y es TERMINAL para ESE par
+ * (plan_id, personal_id): no existe RECHAZADO -> PROGRAMADO, y tampoco
+ * se crea una segunda fila para el mismo plan+persona — la tabla tiene
+ * `UNIQUE KEY uq_viatico_plan_personal (plan_id, personal_id)` (ver
+ * sql/migrate-2026-08-viat-0-viaticos.sql), y sincronizarViaticosPlan()
+ * además SALTA por completo cualquier persona cuya fila ya exista y no
+ * esté en PROGRAMADO (doble protección: esquema + código) — el rechazo
+ * queda histórico e intacto para ese viaje.
+ *
+ * "Volver a solicitar el viático" únicamente es posible para un
+ * `plan_id` (viaje) DISTINTO — ahí no hay conflicto de UNIQUE y
+ * sincronizarViaticosPlan() sí crea una fila PROGRAMADO nueva sin
+ * problema, porque busca filas existentes con `WHERE plan_id = ?` (el
+ * nuevo plan nunca tiene una fila previa para esa persona). Reasignar a
+ * la MISMA persona en el MISMO plan que ya tiene un viático RECHAZADO
+ * NO genera ni actualiza ninguna fila — queda como mejora futura
+ * (PROGRAMACION-RECHAZADO-AVISO-1) mostrar una advertencia visible en
+ * ese caso en vez de que la sincronización lo ignore en silencio.
  */
 export type EstadoViatico = "PROGRAMADO" | "AUTORIZADO" | "RECHAZADO" | "ENTREGADO" | "LIQUIDADO";
 export type MetodoPagoViatico = "EFECTIVO" | "TRANSFERENCIA" | "CHEQUE";
@@ -621,11 +634,14 @@ export type ResultadoRechazoViatico =
  * EXACTAMENTE el mismo permiso que autorizar (`viaticos_autorizar:editar`,
  * verificado por el endpoint ANTES de llamar aquí, requireTenantViaticosAutorizar)
  * — nunca se amplía a Facturador/AuxiliarOperaciones. RECHAZADO es
- * TERMINAL: solo alcanzable desde PROGRAMADO, nunca desde AUTORIZADO/
- * ENTREGADO/LIQUIDADO, y sin transición de regreso — para volver a
- * solicitar se crea un registro PROGRAMADO nuevo (ver
- * sincronizarViaticosPlan, que ya preserva cualquier fila fuera de
- * PROGRAMADO sin cambios adicionales).
+ * TERMINAL para ESE (plan_id, personal_id): solo alcanzable desde
+ * PROGRAMADO, nunca desde AUTORIZADO/ENTREGADO/LIQUIDADO, sin transición
+ * de regreso, y sin una segunda fila para el mismo plan+persona
+ * (`UNIQUE KEY uq_viatico_plan_personal`, ver EstadoViatico arriba para
+ * el detalle completo). "Solicitar de nuevo" solo es posible para un
+ * `plan_id` (viaje) DISTINTO — sincronizarViaticosPlan preserva la fila
+ * RECHAZADO intacta y sin tocarla para el plan original, sin cambios
+ * adicionales.
  *
  * Sin firma manuscrita ni contraseña (decisión de negocio aprobada,
  * VIATICOS-RECHAZADO-1 sección 4/6): sesión autenticada + permiso

@@ -670,7 +670,18 @@ describe("listarViaticosPorPagar — excluye RECHAZADO (24)", () => {
  * estados explícitamente — RECHAZADO queda protegido automáticamente,
  * sin cambios de código, y estas pruebas lo confirman.
  */
-describe("sincronizarViaticosPlan — preserva RECHAZADO (28/34)", () => {
+/**
+ * VIATICOS-RECHAZADO-1 — RECHAZADO es terminal para ESE (plan_id,
+ * personal_id): la tabla tiene `UNIQUE KEY uq_viatico_plan_personal
+ * (plan_id, personal_id)` (sql/migrate-2026-08-viat-0-viaticos.sql) —
+ * nunca puede existir una segunda fila para el mismo par. "Nueva
+ * solicitud = nuevo registro PROGRAMADO" únicamente es cierto para un
+ * plan_id DISTINTO (un viaje nuevo) — jamás reasignando a la misma
+ * persona en el MISMO plan. Estas pruebas demuestran ambos casos
+ * explícitamente: A) mismo plan -> sin segunda fila, histórico intacto;
+ * B) plan distinto -> sí crea un PROGRAMADO nuevo, sin tocar el anterior.
+ */
+describe("sincronizarViaticosPlan — RECHAZADO es terminal por (plan_id, personal_id) (28/34)", () => {
   const execConn = { query: vi.fn(), execute: vi.fn() };
 
   beforeEach(() => {
@@ -692,11 +703,29 @@ describe("sincronizarViaticosPlan — preserva RECHAZADO (28/34)", () => {
     // El DELETE está condicionado a PROGRAMADO — una fila RECHAZADO nunca lo cumple, se preserva.
   });
 
-  it("34) reasignar a la MISMA persona con una fila RECHAZADO existente no la reutiliza ni la modifica — no se re-inserta/actualiza esa fila", async () => {
+  it("34-A) MISMO plan: reasignar a la MISMA persona con una fila RECHAZADO existente en ESE plan NO crea una segunda fila ni la modifica — el histórico queda intacto", async () => {
+    // Plan 1 + Persona 9 ya tiene una fila RECHAZADO — sincronizar el
+    // MISMO plan (1) otra vez con esa misma persona en `objetivo`.
     execConn.query.mockResolvedValueOnce([[{ personal_id: 9, estado: "RECHAZADO", monto_asignado: "500" }], []]);
     await sincronizarViaticosPlan(7, 1, { piloto: 9, auxiliares: [] }, execConn as never);
     const insertCall = execConn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_viaticos"));
-    // Ninguna fila RECHAZADO se toca: al no estar en PROGRAMADO, el bucle la salta (continue) — nunca se ejecuta el INSERT...ON DUPLICATE KEY UPDATE para esa persona.
+    // Ninguna fila RECHAZADO se toca: al no estar en PROGRAMADO, el bucle la salta (continue) — nunca se ejecuta el INSERT...ON DUPLICATE KEY UPDATE para esa persona, en ESE plan.
     expect(insertCall).toBeUndefined();
+    // Ni siquiera se consulta el puesto/monto sugerido de esa persona — el `continue` ocurre antes.
+    expect(execConn.query).toHaveBeenCalledTimes(1);
+  });
+
+  it("34-B) PLAN DISTINTO: la MISMA persona (con un RECHAZADO en el plan 1) SÍ puede recibir un PROGRAMADO nuevo en un plan diferente (101) — 'nueva solicitud = nuevo viaje'", async () => {
+    // Plan 101 (distinto) + Persona 9: existentesRows se consulta con
+    // `WHERE plan_id = ?` (101) — nunca encuentra la fila RECHAZADO del
+    // plan 1, así que no hay `existente` para esta persona en este plan.
+    execConn.query.mockResolvedValueOnce([[], []]); // existentesRows del plan 101: vacío
+    execConn.query.mockResolvedValueOnce([[{ puesto: "Piloto" }], []]); // puestoDePersonal(9)
+    execConn.query.mockResolvedValueOnce([[{ monto_defecto: "500" }], []]); // montoSugeridoParaPuesto
+    await sincronizarViaticosPlan(7, 101, { piloto: 9, auxiliares: [] }, execConn as never);
+    const insertCall = execConn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_viaticos"));
+    expect(insertCall).toBeDefined();
+    expect(insertCall![1]).toEqual([7, 101, 9, "Piloto", 500, 500]);
+    // El plan_id del INSERT es el NUEVO (101), nunca el plan 1 donde está el RECHAZADO.
   });
 });
