@@ -665,6 +665,191 @@ export async function registrarEntregaViatico(
   return { ok: true };
 }
 
+// ---------------------------------------------------------------------------
+// VIATICOS-PAGO-MASIVO-1 — entrega/pago masiva (AUTORIZADO -> ENTREGADO de
+// varios viáticos en UNA sola operación backend, nunca N llamadas HTTP al
+// endpoint individual). Mismo permiso (`viaticos_pagar:editar`, sin
+// ampliarlo) y misma transición que registrarEntregaViatico — la única
+// diferencia es que el lote es TODO O NADA: si cualquier seleccionado no
+// califica, NINGUNO se procesa (rollback completo, nunca éxito parcial).
+// ---------------------------------------------------------------------------
+
+/** Límite razonable por lote — evita un UPDATE/SELECT desmedido y un bloqueo de filas prolongado. */
+export const LIMITE_LOTE_ENTREGA_MASIVA = 200;
+
+export type ItemEntregaMasiva = {
+  id: number;
+  /**
+   * TRANSFERENCIA: referencia/número de operación — puede ser la MISMA
+   * para todo el lote (representa el lote/operación bancaria, no se exige
+   * que sea distinta por persona — ver sección 4 del ticket). CHEQUE:
+   * número de cheque de ESTE viático, obligatorio y ÚNICO dentro del lote
+   * (cada persona recibe un cheque físico distinto — nunca se reutiliza
+   * una misma referencia para todo el lote, a diferencia de
+   * transferencia). EFECTIVO: `null` (no exige referencia, igual que el
+   * flujo individual).
+   */
+  referenciaPago: string | null;
+};
+
+export type DatosEntregaMasiva = {
+  metodoPago: MetodoPagoViatico;
+  items: ItemEntregaMasiva[];
+};
+
+export type ResultadoEntregaMasiva =
+  | { ok: true; procesados: number; total: number; metodoPago: MetodoPagoViatico }
+  | { ok: false; error: string; status: number; detalles?: string[] };
+
+/**
+ * Entrega/pago MASIVO — AUTORIZADO -> ENTREGADO de varios viáticos a la
+ * vez. Quién puede: exclusivamente `viaticos_pagar:editar` (idéntico al
+ * flujo individual, verificado por el endpoint ANTES de llamar aquí — este
+ * ticket NO amplía ningún permiso).
+ *
+ * ATOMICIDAD DEL LOTE (regla dura del ticket): BEGIN -> `SELECT ... FOR
+ * UPDATE` de TODOS los ids a la vez (bloquea las filas ANTES de validar,
+ * cerrando la ventana de concurrencia — ver sección 8/19 del ticket) ->
+ * se valida CADA condición de CADA item (pertenece a la empresa, está
+ * AUTORIZADO, monto > 0, cuenta bancaria si es TRANSFERENCIA, referencia
+ * obligatoria según método) ANTES de escribir un solo UPDATE -> si CUALQUIER
+ * item falla cualquier condición, se hace `return` sin haber ejecutado
+ * ningún UPDATE — el `finally` centralizado hace rollback (no hay nada que
+ * compensar en disco: este flujo no maneja imágenes/archivos, a diferencia
+ * de autorizarViatico/liquidarViatico) -> solo si TODOS pasan se ejecutan
+ * los N `UPDATE` + N `registrarAuditoriaTx` (uno por viático, misma
+ * transacción) -> UN solo `COMMIT` al final. Nunca éxito parcial: o se
+ * confirman los N, o no se confirma ninguno.
+ *
+ * Concurrencia (sección 8/19): el `FOR UPDATE` bloquea las filas desde el
+ * SELECT — si otro Facturador ya tiene una transacción en curso sobre
+ * alguno de estos ids, esta espera a que termine; si esa otra transacción
+ * ya confirmó (p. ej. ya lo entregó), el SELECT de ESTA transacción lee el
+ * estado YA ACTUALIZADO y la validación de "todos AUTORIZADO" lo detecta y
+ * rechaza el lote completo (409) — nunca hay doble entrega.
+ */
+export async function registrarEntregaViaticosMasiva(
+  empresaId: number,
+  datos: DatosEntregaMasiva,
+  usuario: string,
+): Promise<ResultadoEntregaMasiva> {
+  const ids = datos.items.map((i) => i.id);
+  if (!ids.length) {
+    return { ok: false, error: "Selecciona al menos un viático.", status: 400 };
+  }
+  if (new Set(ids).size !== ids.length) {
+    return { ok: false, error: "Hay viáticos repetidos en la selección.", status: 400 };
+  }
+  if (ids.length > LIMITE_LOTE_ENTREGA_MASIVA) {
+    return { ok: false, error: `El lote supera el límite de ${LIMITE_LOTE_ENTREGA_MASIVA} viáticos.`, status: 400 };
+  }
+
+  // Validaciones de FORMA del método (antes de tocar la conexión) — mismo
+  // criterio que registrarEntregaViatico: referencia obligatoria para
+  // TRANSFERENCIA/CHEQUE, opcional para EFECTIVO. CHEQUE además exige que
+  // cada referencia sea única dentro del lote (sección 5 del ticket).
+  if (datos.metodoPago === "TRANSFERENCIA" || datos.metodoPago === "CHEQUE") {
+    for (const it of datos.items) {
+      if (!it.referenciaPago?.trim()) {
+        return {
+          ok: false,
+          error:
+            datos.metodoPago === "CHEQUE"
+              ? `Falta el número de cheque para el viático #${it.id}.`
+              : "Indica la referencia/número de la transferencia.",
+          status: 400,
+        };
+      }
+    }
+  }
+  if (datos.metodoPago === "CHEQUE") {
+    const referencias = datos.items.map((i) => i.referenciaPago!.trim());
+    if (new Set(referencias).size !== referencias.length) {
+      return { ok: false, error: "Hay números de cheque repetidos dentro del lote.", status: 400 };
+    }
+  }
+
+  let conn: PoolConnection | null = null;
+  let committed = false;
+  try {
+    conn = await getPool().getConnection();
+    await conn.beginTransaction();
+
+    const placeholders = ids.map(() => "?").join(",");
+    const [rows] = await conn.query<RowDataPacket[]>(
+      `SELECT v.id, v.estado, v.monto_asignado, tp.nombre AS personal_nombre, e.cuenta_bancaria
+       FROM tms_viaticos v
+       INNER JOIN tms_personal tp ON tp.id = v.personal_id
+       LEFT JOIN empleados e ON e.id = tp.id_empleado AND e.empresa_id = tp.empresa_id
+       WHERE v.empresa_id = ? AND v.id IN (${placeholders})
+       FOR UPDATE`,
+      [empresaId, ...ids],
+    );
+
+    const filaPorId = new Map(rows.map((r) => [Number(r.id), r]));
+    const problemas: string[] = [];
+    for (const it of datos.items) {
+      const fila = filaPorId.get(it.id);
+      if (!fila) {
+        problemas.push(`El viático #${it.id} no existe en esta empresa.`);
+        continue;
+      }
+      if (String(fila.estado) !== "AUTORIZADO") {
+        problemas.push(`El viático #${it.id} ya no está autorizado (estado actual: ${String(fila.estado)}).`);
+        continue;
+      }
+      if (!(Number(fila.monto_asignado) > 0)) {
+        problemas.push(`El viático #${it.id} tiene un monto inválido.`);
+        continue;
+      }
+      if (datos.metodoPago === "TRANSFERENCIA" && !String(fila.cuenta_bancaria ?? "").trim()) {
+        problemas.push(`${fila.personal_nombre ?? `Viático #${it.id}`} no tiene cuenta bancaria registrada.`);
+      }
+    }
+    if (problemas.length) {
+      return { ok: false, error: "Hay viáticos que no se pueden procesar en este lote.", status: 409, detalles: problemas };
+    }
+
+    for (const it of datos.items) {
+      const [upd] = await conn.execute<ResultSetHeader>(
+        `UPDATE tms_viaticos
+         SET estado = 'ENTREGADO', entregado_por = ?, entregado_en = NOW(),
+             metodo_pago = ?, referencia_pago = ?
+         WHERE id = ? AND empresa_id = ? AND estado = 'AUTORIZADO'`,
+        [usuario, datos.metodoPago, it.referenciaPago, it.id, empresaId],
+      );
+      if (upd.affectedRows !== 1) {
+        return { ok: false, error: `El viático #${it.id} cambió de estado durante la operación.`, status: 409 };
+      }
+      await registrarAuditoriaTx(conn, {
+        empresaId,
+        usuario,
+        accion: "entregar_viatico",
+        modulo: "tms",
+        detalle: `Viático #${it.id} · AUTORIZADO → ENTREGADO (masivo) · ${datos.metodoPago}${
+          it.referenciaPago ? ` · ref. ${it.referenciaPago}` : ""
+        }`,
+      });
+    }
+
+    await conn.commit();
+    committed = true;
+    const total = datos.items.reduce((acc, it) => acc + Number(filaPorId.get(it.id)!.monto_asignado), 0);
+    return { ok: true, procesados: datos.items.length, total, metodoPago: datos.metodoPago };
+  } finally {
+    if (conn) {
+      if (!committed) {
+        try {
+          await conn.rollback();
+        } catch {
+          // best-effort — nunca oculta el error/rechazo real que ya se está propagando.
+        }
+      }
+      conn.release();
+    }
+  }
+}
+
 /**
  * VIATICOS-FIRMA — liquidación estructurada (antes: solo observaciones
  * libres). gastosComprobados/reintegro llegan como string decimal
