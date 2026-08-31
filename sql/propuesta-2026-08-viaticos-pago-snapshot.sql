@@ -1,15 +1,34 @@
--- VIATICOS-PAGO-SNAPSHOT-1
--- PROPUESTA / ejecución manual requerida.
--- Snapshot bancario usado únicamente para pagos por TRANSFERENCIA.
--- Se congela al pasar AUTORIZADO -> ENTREGADO.
--- Históricos anteriores quedan NULL; no existe fuente confiable para backfill.
+-- VIATICOS-PAGO-SNAPSHOT-1 — APLICADA MANUALMENTE POR EL USUARIO.
 --
--- Este archivo NO se ha ejecutado contra ninguna base de datos (ni local
--- ni de producción). Se entrega únicamente para revisión y ejecución
--- manual posterior, tras el reporte de descubrimiento del ticket
--- "TICKET DISCOVERY: VIATICOS-PAGO-SNAPSHOT-1" (mismo repo, misma
--- sesión) y la aprobación explícita de las siguientes decisiones de
--- negocio en "TICKET SQL — VIATICOS-PAGO-SNAPSHOT-1":
+-- SQL aplicado manualmente en producción el 31/08/2026 (vía phpMyAdmin,
+-- fuera de esta sesión de Claude, tras aprobación explícita) y
+-- verificado con:
+--
+--   SHOW COLUMNS FROM tms_viaticos
+--   WHERE Field IN ('pago_banco','pago_cuenta_bancaria','pago_tipo_cuenta');
+--
+-- Resultado confirmado:
+--   pago_banco             varchar(80) NULL
+--   pago_cuenta_bancaria   varchar(60) NULL
+--   pago_tipo_cuenta       varchar(40) NULL
+--
+-- Snapshot bancario usado únicamente para pagos por TRANSFERENCIA
+-- (CHEQUE y EFECTIVO no lo usan — ver punto 2 más abajo). Se congela al
+-- pasar AUTORIZADO -> ENTREGADO. Históricos anteriores a esta migración
+-- quedan NULL; no hubo backfill (no existe fuente confiable para
+-- reconstruirlo — ver punto 4 más abajo).
+--
+-- La aplicación NUNCA ejecuta migraciones automáticamente en runtime
+-- (mismo criterio que el resto de SITSA) — este archivo queda como
+-- TRAZABILIDAD del cambio ya aplicado, no como una propuesta pendiente.
+-- No volver a ejecutarlo como parte de un cambio de código; es
+-- aditivo/idempotente (`ADD COLUMN IF NOT EXISTS`) por si hiciera falta
+-- reaplicarlo en otro entorno (dev/staging), no porque deba correrse de
+-- nuevo en producción.
+--
+-- Documenta las decisiones de negocio aprobadas en el ticket de
+-- descubrimiento "TICKET DISCOVERY: VIATICOS-PAGO-SNAPSHOT-1" y
+-- confirmadas en "TICKET SQL — VIATICOS-PAGO-SNAPSHOT-1":
 --
 --   1. Riesgo histórico CONFIRMADO: hoy tms_viaticos no guarda ningún
 --      dato bancario — al consultar un viático ya pagado, Banco/Tipo
@@ -43,13 +62,13 @@
 --      copia la cuenta actual del empleado como si fuera la que se usó
 --      en un pago histórico — sería un dato inventado, no verificable.
 --
--- Alcance de ESTE archivo: únicamente las columnas de snapshot. NO
--- implementa la funcionalidad (lectura/escritura del snapshot en
--- registrarEntregaViatico/registrarEntregaViaticosMasiva, ajuste de
--- listarViaticosPorPagar/exportación para leer el snapshot cuando ya
--- está ENTREGADO/LIQUIDADO) — eso queda para un ticket de
--- implementación aparte, una vez este SQL se haya aplicado manualmente
--- y confirmado con DESCRIBE.
+-- Alcance de ESTE archivo: únicamente las columnas de snapshot, ya
+-- aplicadas. NO implementa la funcionalidad (lectura/escritura del
+-- snapshot en registrarEntregaViatico/registrarEntregaViaticosMasiva,
+-- ajuste de listarViaticosPorPagar/exportación para leer el snapshot
+-- cuando ya está ENTREGADO/LIQUIDADO) — eso queda para un ticket de
+-- implementación aparte. No se modificó ningún código funcional
+-- (lib/API/UI) al aplicar este SQL.
 --
 -- Mismos tipos exactos que las columnas equivalentes YA existentes en
 -- empleados (sql/migrate-2026-08-rrhh-ficha-monaco.sql) — snapshot,
@@ -78,7 +97,8 @@ ALTER TABLE tms_viaticos
   ADD COLUMN IF NOT EXISTS pago_cuenta_bancaria VARCHAR(60) NULL AFTER pago_banco,
   ADD COLUMN IF NOT EXISTS pago_tipo_cuenta VARCHAR(40) NULL AFTER pago_cuenta_bancaria;
 
--- Verificación posterior recomendada, tras ejecutar manualmente:
--- DESCRIBE tms_viaticos;
--- Debe listar pago_banco / pago_cuenta_bancaria / pago_tipo_cuenta al
--- final, justo después de motivo_rechazo.
+-- Verificación posterior — YA REALIZADA (ver encabezado): confirmado con
+-- SHOW COLUMNS FROM tms_viaticos WHERE Field IN ('pago_banco',
+-- 'pago_cuenta_bancaria','pago_tipo_cuenta'); las 3 columnas existen con
+-- el tipo esperado, al final de la tabla, justo después de
+-- motivo_rechazo.
