@@ -320,6 +320,47 @@ export async function listarViaticosRechazadosDelPlan(
   }));
 }
 
+/**
+ * PROGRAMACION-RECHAZADO-AVISO-1 — personalIds REALMENTE nuevos o
+ * cambiados en un PATCH de plan, comparando la asignación PREVIA
+ * (`antesAuxiliaresIds`) contra la SOLICITADA (`pilotoFinal`/
+ * `auxiliaresFinal`) — para consultar listarViaticosRechazadosDelPlan()
+ * SOLO por esas personas.
+ *
+ * Deliberadamente MÁS ESTRICTO que "personal que se está revalidando por
+ * disponibilidad" (`pilotoIdParaValidar`/`auxiliaresIdsParaValidar` en
+ * planes/route.ts): esos también incluyen al piloto/auxiliares YA
+ * asignados sin cambiar, cuando `fechaCambia` dispara su revalidación de
+ * disponibilidad en la nueva fecha — usar ESE conjunto para el aviso de
+ * rechazo repetiría el aviso en un PATCH que solo cambia la fecha, sin
+ * tocar personal (comportamiento no deseado). Esta función solo
+ * considera el piloto si REALMENTE cambió (`pilotoCambioReal`) y los
+ * auxiliares NUEVOS que no estaban antes — nunca personal sin tocar.
+ * `pilotoCambioReal`/`pilotoFinal`/`auxiliaresCambioReal`/
+ * `auxiliaresFinal`/`antesAuxiliaresIds` ya se calculan en el propio
+ * PATCH para otros fines (bloqueo de remoción, revalidación de
+ * disponibilidad) — se reutilizan tal cual, sin ninguna consulta nueva.
+ */
+export function personalRecienAsignadoDelPlan(input: {
+  pilotoCambioReal: boolean;
+  pilotoFinal: number | null;
+  auxiliaresCambioReal: boolean;
+  auxiliaresFinal: number[];
+  antesAuxiliaresIds: number[];
+}): number[] {
+  const ids: number[] = [];
+  if (input.pilotoCambioReal && input.pilotoFinal != null) {
+    ids.push(input.pilotoFinal);
+  }
+  if (input.auxiliaresCambioReal) {
+    const antesSet = new Set(input.antesAuxiliaresIds);
+    for (const id of input.auxiliaresFinal) {
+      if (!antesSet.has(id)) ids.push(id);
+    }
+  }
+  return ids;
+}
+
 export type ResultadoActualizarMonto =
   | { ok: true }
   | { ok: false; error: string };

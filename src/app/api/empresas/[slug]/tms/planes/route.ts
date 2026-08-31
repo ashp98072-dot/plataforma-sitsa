@@ -22,7 +22,7 @@ import { obtenerVehiculoAccesible } from "@/lib/flota/acceso";
 import { vehiculoPorPlaca } from "@/lib/flota/pilotos";
 import { listarDisponibilidadPersonal } from "@/lib/operaciones/disponibilidad-personal";
 import { ahoraLocal, hoyLocal, toIsoDate } from "@/lib/rrhh/dates";
-import { listarViaticosRechazadosDelPlan, sincronizarViaticosPlan } from "@/lib/tms/viaticos";
+import { listarViaticosRechazadosDelPlan, personalRecienAsignadoDelPlan, sincronizarViaticosPlan } from "@/lib/tms/viaticos";
 import {
   ESTADOS_QUE_RESERVAN_RECURSOS,
   finViajeDesdeInput,
@@ -1654,16 +1654,23 @@ export async function PATCH(req: Request, ctx: Ctx) {
     }
 
     // PROGRAMACION-RECHAZADO-AVISO-1 — informativo, NUNCA bloquea (RECHAZADO
-    // sigue siendo terminal por (plan_id, personal_id), sin cambios aquí —
-    // ver listarViaticosRechazadosDelPlan en src/lib/tms/viaticos.ts). Se
-    // consulta con el MISMO conjunto de personal que ya se está
-    // (re)validando arriba (`recursos`) — nunca dispara para gente que no
-    // se está tocando en esta operación, así una edición sin relación
-    // (p. ej. solo cambiar notas) nunca repite el aviso.
+    // sigue siendo terminal por (plan_id, personal_id), sin cambios aquí).
+    // `recursos` (arriba) NO es el conjunto correcto para este aviso:
+    // también incluye al piloto/auxiliares YA asignados sin cambiar, cuando
+    // `fechaCambia` dispara su revalidación de disponibilidad — usarlo tal
+    // cual repetiría el aviso en un PATCH que solo cambia la fecha, sin
+    // tocar personal. personalRecienAsignadoDelPlan() calcula el conjunto
+    // correcto: solo quien REALMENTE se (re)asigna en esta solicitud.
     const rechazados = await listarViaticosRechazadosDelPlan(
       empresaId,
       d.id,
-      recursos.map((r) => r.personalId),
+      personalRecienAsignadoDelPlan({
+        pilotoCambioReal,
+        pilotoFinal,
+        auxiliaresCambioReal,
+        auxiliaresFinal,
+        antesAuxiliaresIds,
+      }),
     );
     for (const rz of rechazados) {
       advertencias.push({

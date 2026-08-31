@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/db", () => ({ query: vi.fn(), execute: vi.fn() }));
 
 import { execute, query } from "@/lib/db";
-import { listarViaticosRechazadosDelPlan } from "./viaticos";
+import { listarViaticosRechazadosDelPlan, personalRecienAsignadoDelPlan } from "./viaticos";
 
 /**
  * PROGRAMACION-RECHAZADO-AVISO-1 — listarViaticosRechazadosDelPlan es
@@ -109,5 +109,102 @@ describe("listarViaticosRechazadosDelPlan", () => {
     expect(execute).not.toHaveBeenCalled();
     const [sql] = vi.mocked(query).mock.calls[0];
     expect(String(sql).trim().toUpperCase().startsWith("SELECT")).toBe(true);
+  });
+});
+
+/**
+ * PROGRAMACION-RECHAZADO-AVISO-1 (revisión final PR #151) —
+ * personalRecienAsignadoDelPlan(): el conjunto que SÍ debe disparar el
+ * aviso — solo personal REALMENTE (re)asignado en esta solicitud, nunca
+ * el que ya estaba asignado y solo se está revalidando por un cambio de
+ * fecha (ver JSDoc en viaticos.ts sobre por qué `recursos` de
+ * planes/route.ts no sirve directamente para esto).
+ */
+describe("personalRecienAsignadoDelPlan", () => {
+  it("1) piloto REALMENTE cambia a una persona -> esa persona entra al conjunto (dispararía el aviso si tiene RECHAZADO)", () => {
+    const ids = personalRecienAsignadoDelPlan({
+      pilotoCambioReal: true, pilotoFinal: 5, auxiliaresCambioReal: false, auxiliaresFinal: [], antesAuxiliaresIds: [],
+    });
+    expect(ids).toEqual([5]);
+  });
+
+  it("2) cambiar solo notas (piloto/auxiliares NO cambian) -> conjunto vacío, sin importar fechaCambia/recursos de disponibilidad", () => {
+    const ids = personalRecienAsignadoDelPlan({
+      pilotoCambioReal: false, pilotoFinal: 5, auxiliaresCambioReal: false, auxiliaresFinal: [9], antesAuxiliaresIds: [9],
+    });
+    expect(ids).toEqual([]);
+  });
+
+  it("3) cambiar solo la fecha del viaje (piloto/auxiliares YA asignados, sin cambiar) -> conjunto vacío, aunque se revaliden por disponibilidad", () => {
+    // Simula exactamente el caso que gatillaba pilotoIdParaValidar/
+    // auxiliaresIdsParaValidar en planes/route.ts (fechaCambia=true) sin
+    // que el personal realmente haya cambiado — pilotoCambioReal/
+    // auxiliaresCambioReal siguen en false.
+    const ids = personalRecienAsignadoDelPlan({
+      pilotoCambioReal: false, pilotoFinal: 5, auxiliaresCambioReal: false, auxiliaresFinal: [9, 10], antesAuxiliaresIds: [9, 10],
+    });
+    expect(ids).toEqual([]);
+  });
+
+  it("4) agregar un auxiliar NUEVO (los demás siguen igual) -> solo el nuevo entra al conjunto", () => {
+    const ids = personalRecienAsignadoDelPlan({
+      pilotoCambioReal: false, pilotoFinal: 5, auxiliaresCambioReal: true, auxiliaresFinal: [9, 11], antesAuxiliaresIds: [9],
+    });
+    expect(ids).toEqual([11]);
+  });
+
+  it("un auxiliar removido (sin agregar ninguno nuevo) no entra al conjunto — esto no es una (re)asignación nueva", () => {
+    const ids = personalRecienAsignadoDelPlan({
+      pilotoCambioReal: false, pilotoFinal: 5, auxiliaresCambioReal: true, auxiliaresFinal: [9], antesAuxiliaresIds: [9, 11],
+    });
+    expect(ids).toEqual([]);
+  });
+
+  it("piloto y auxiliar nuevo a la vez -> ambos entran al conjunto", () => {
+    const ids = personalRecienAsignadoDelPlan({
+      pilotoCambioReal: true, pilotoFinal: 7, auxiliaresCambioReal: true, auxiliaresFinal: [9, 12], antesAuxiliaresIds: [9],
+    });
+    expect(ids).toEqual([7, 12]);
+  });
+
+  it("pilotoFinal null (se quita el piloto) no se agrega al conjunto aunque pilotoCambioReal sea true", () => {
+    const ids = personalRecienAsignadoDelPlan({
+      pilotoCambioReal: true, pilotoFinal: null, auxiliaresCambioReal: false, auxiliaresFinal: [], antesAuxiliaresIds: [],
+    });
+    expect(ids).toEqual([]);
+  });
+});
+
+/**
+ * PROGRAMACION-RECHAZADO-AVISO-1 — extremo a extremo de los dos helpers
+ * juntos, tal como los usa planes/route.ts.
+ */
+describe("personalRecienAsignadoDelPlan + listarViaticosRechazadosDelPlan (flujo combinado)", () => {
+  it("1) reasignar a una persona RECHAZADA en el mismo plan -> el flujo combinado genera el aviso", async () => {
+    vi.mocked(query).mockResolvedValue([filaRechazada({ personal_id: 5 })] as never);
+    const ids = personalRecienAsignadoDelPlan({
+      pilotoCambioReal: true, pilotoFinal: 5, auxiliaresCambioReal: false, auxiliaresFinal: [], antesAuxiliaresIds: [],
+    });
+    const avisos = await listarViaticosRechazadosDelPlan(7, 1, ids);
+    expect(avisos).toHaveLength(1);
+    expect(avisos[0].personalId).toBe(5);
+  });
+
+  it("2/3) editar notas o fecha sin tocar personal -> el flujo combinado NUNCA consulta la base de datos ni genera aviso", async () => {
+    const ids = personalRecienAsignadoDelPlan({
+      pilotoCambioReal: false, pilotoFinal: 5, auxiliaresCambioReal: false, auxiliaresFinal: [9], antesAuxiliaresIds: [9],
+    });
+    const avisos = await listarViaticosRechazadosDelPlan(7, 1, ids);
+    expect(avisos).toEqual([]);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("5) persona (re)asignada SIN viático rechazado -> el flujo combinado no genera aviso", async () => {
+    vi.mocked(query).mockResolvedValue([] as never); // sin filas RECHAZADO para esa persona
+    const ids = personalRecienAsignadoDelPlan({
+      pilotoCambioReal: true, pilotoFinal: 8, auxiliaresCambioReal: false, auxiliaresFinal: [], antesAuxiliaresIds: [],
+    });
+    const avisos = await listarViaticosRechazadosDelPlan(7, 1, ids);
+    expect(avisos).toEqual([]);
   });
 });
