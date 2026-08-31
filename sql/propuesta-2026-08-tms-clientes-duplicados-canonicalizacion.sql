@@ -82,8 +82,10 @@
 -- ningún bridge). Corregido: el PASO 0 sigue siendo solo lectura y
 -- FUERA de la transacción (es diagnóstico, no escribe nada); todo lo
 -- demás que escribe — datos maestros Y bridges — vive dentro de UNA
--- sola transacción, con un único punto de decisión COMMIT/ROLLBACK al
--- final, después de revisar la verificación intermedia.
+-- sola transacción (Bloque A). El COMMIT/ROLLBACK, sin embargo, NO es
+-- automático (ver ajuste pre-ejecución más abajo, en el Bloque A): es
+-- una sentencia manual separada que el usuario decide y ejecuta después
+-- de revisar la verificación intermedia.
 
 -- ================================================================
 -- PASO 0 — RE-CONFIRMAR ANTES DE CONTINUAR (solo lectura, FUERA de
@@ -125,16 +127,22 @@ WHERE empresa_id = 1 AND tms_cliente_id IN (70,86,91,100,104,105);
 
 SELECT f.cliente_id, c.nombre, COUNT(*) AS facturas
 FROM fact_facturas f
-JOIN clientes c ON c.id = f.cliente_id
+JOIN clientes c ON c.id = f.cliente_id AND c.empresa_id = f.empresa_id
 WHERE f.empresa_id = 1 AND c.tms_cliente_id IN (70,86,91,100,104,105)
 GROUP BY f.cliente_id, c.nombre;
 
 -- ================================================================
--- TRANSACCIÓN ÚNICA — datos maestros + bridges (TODO-O-NADA)
+-- BLOQUE A — TRANSACCIÓN, SIN COMMIT (datos maestros + bridges,
+-- TODO-O-NADA)
 -- ================================================================
--- Ejecuta TODO este bloque (desde START TRANSACTION hasta el
--- COMMIT/ROLLBACK final) como una sola operación. NO ejecutes el COMMIT
--- del final hasta haber revisado la verificación intermedia (parte C).
+-- Ajuste pre-ejecución PR #157: este bloque NO contiene ningún COMMIT
+-- ni ROLLBACK activo — termina en la verificación intermedia (parte C)
+-- y se detiene ahí a propósito. El COMMIT/ROLLBACK real es una
+-- sentencia SEPARADA que el usuario ejecuta manualmente después de
+-- revisar los resultados de este bloque (ver el bloque de instrucciones
+-- justo después de la parte C, más abajo) — nunca automático, para que
+-- ejecutar "todo el archivo de una vez" en phpMyAdmin no confirme nada
+-- sin que el usuario lo haya decidido explícitamente.
 
 START TRANSACTION;
 
@@ -213,33 +221,47 @@ WHERE empresa_id = 1 AND id IN (70,86,91);
 -- Bridges — deben mostrar exactamente 54->70, 53->86, 49->91:
 SELECT id, empresa_id, nombre, tms_cliente_id
 FROM clientes
-WHERE id IN (49,53,54);
-
--- --- D) decisión final — UNA de las dos, nunca ambas:
---
--- Ejecuta COMMIT; SOLO SI:
---   - los 3 UPDATE de la parte B (bridges) afectaron EXACTAMENTE 1 fila
---     cada uno, Y
---   - la verificación intermedia (parte C) coincide con lo esperado
---     (nit/telefono/direccion de 70/86/91 sin pérdidas; bridges
---     49/53/54 apuntando ya a 91/86/70).
---
--- Ejecuta ROLLBACK; EN VEZ del COMMIT si CUALQUIERA de los 3 UPDATE de
--- bridges no afectó exactamente 1 fila, o si la verificación
--- intermedia no coincide — esto revierte TODO el bloque (datos
--- maestros incluidos), nunca deja una migración parcial.
-
-COMMIT;
--- (o ROLLBACK; — ver parte D. Ejecuta solo UNA de las dos.)
+WHERE empresa_id = 1 AND id IN (49,53,54);
 
 -- ================================================================
--- POST-CHECK (solo lectura, DESPUÉS del COMMIT)
+-- FIN DEL BLOQUE A — DETENTE AQUÍ. NO hay COMMIT ni ROLLBACK activos
+-- en este bloque a propósito (ajuste pre-ejecución PR #157): si el
+-- usuario corre TODO el archivo/bloque de una sola vez en phpMyAdmin,
+-- MariaDB NO debe confirmar nada automáticamente antes de que el
+-- usuario revise los resultados de arriba.
+--
+-- Revisa manualmente, ANTES de continuar:
+--   - los 3 UPDATE de la parte B (bridges) reportaron "1 row affected"
+--     cada uno (los 3 UPDATE de la parte A, datos maestros, pueden
+--     legítimamente reportar "0 rows affected" — eso es válido, no es
+--     motivo de ROLLBACK);
+--   - la verificación intermedia de arriba coincide con lo esperado:
+--     nit/telefono/direccion de 70/86/91 sin haber PERDIDO ningún valor
+--     que ya tenían (comparar contra el PASO 0), y los bridges
+--     49/53/54 ya muestran 91/86/70.
+--
+-- Solo entonces, ejecuta manualmente UNA sola sentencia (nunca ambas):
+--
+--   SI TODO ES CORRECTO, ejecutar DESPUÉS:
+--   COMMIT;
+--
+--   SI ALGO NO COINCIDE, ejecutar EN VEZ DE COMMIT:
+--   ROLLBACK;
+--
+-- El resto de este archivo (POST-CHECK y FACT-1, ambos solo lectura) se
+-- ejecuta DESPUÉS de haber corrido el COMMIT/ROLLBACK de arriba.
+
+-- ================================================================
+-- POST-CHECK (solo lectura — ejecutar DESPUÉS de haber hecho COMMIT;
+-- manualmente, ver arriba. Si se hizo ROLLBACK, este bloque mostrará
+-- los datos SIN cambiar: es normal y esperado, no reintentar nada sin
+-- diagnosticar primero por qué falló el Bloque A.)
 -- ================================================================
 
 -- Bridges movidos:
 SELECT id, empresa_id, nombre, tms_cliente_id
 FROM clientes
-WHERE id IN (49,53,54);
+WHERE empresa_id = 1 AND id IN (49,53,54);
 -- Esperado: 54->70, 53->86, 49->91.
 
 -- Canónicos (70/86/91) conservan sus referencias intactas — mismos
