@@ -1,0 +1,86 @@
+-- VIATICOS-RECHAZADO-1 — APLICADA MANUALMENTE POR EL USUARIO.
+--
+-- SQL aplicado manualmente en producción el 31/08/2026 (vía phpMyAdmin,
+-- fuera de esta sesión de Claude, tras aprobación explícita) y
+-- verificado con:
+--
+--   SHOW COLUMNS FROM tms_viaticos
+--   WHERE Field IN ('rechazado_por','rechazado_en','motivo_rechazo');
+--
+-- Resultado confirmado:
+--   rechazado_por    varchar(100) NULL
+--   rechazado_en     datetime     NULL
+--   motivo_rechazo   varchar(300) NULL
+--
+-- La aplicación NUNCA ejecuta migraciones automáticamente en runtime
+-- (mismo criterio que el resto de SITSA) — este archivo queda como
+-- TRAZABILIDAD del cambio ya aplicado, no como una propuesta pendiente.
+-- No volver a ejecutarlo como parte de un cambio de código; es
+-- aditivo/idempotente (`ADD COLUMN IF NOT EXISTS`) por si hiciera falta
+-- reaplicarlo en otro entorno (dev/staging), no porque deba correrse de
+-- nuevo en producción.
+--
+-- Documenta las decisiones de negocio aprobadas en el ticket de
+-- descubrimiento "TICKET DE DESCUBRIMIENTO — VIATICOS-RECHAZADO-1" y
+-- confirmadas en "TICKET SQL — VIATICOS-RECHAZADO-1":
+--
+--   1. Nuevo estado RECHAZADO — transición ÚNICAMENTE PROGRAMADO ->
+--      RECHAZADO. Terminal: NO existe RECHAZADO -> PROGRAMADO. Para
+--      solicitar de nuevo se crea un registro PROGRAMADO nuevo.
+--   2. Permiso para rechazar: viaticos_autorizar:editar (el mismo que
+--      autorizar) — GerenteOperaciones/JefeOperaciones sí,
+--      Facturador/AuxiliarOperaciones no. Ya encaja tal cual con los
+--      permisos por rol existentes (ver src/lib/permisos-shared.ts) —
+--      esta migración NO toca ninguna tabla/config de permisos.
+--   3. motivo_rechazo obligatorio (server-side: trim, mínimo 10 y máximo
+--      300 caracteres — no se valida aquí, se valida en la función de
+--      negocio que se implemente).
+--   4. Rechazar NO requiere firma manuscrita ni contraseña — sesión +
+--      permiso + motivo + fecha servidor + auditoría son suficientes.
+--      Por eso esta migración NO toca `firmas_electronicas` en absoluto.
+--   5. Portal piloto/auxiliar: debe poder ver que su viático fue
+--      rechazado (estado + fecha + motivo) como información histórica,
+--      pero un RECHAZADO NUNCA debe sumarse como dinero recibido/
+--      entregado/pagado en ningún resumen — es responsabilidad de la
+--      capa de aplicación (no de este esquema) excluir RECHAZADO de esas
+--      sumatorias.
+--   6. Facturador: RECHAZADO nunca debe aparecer en "Viáticos por
+--      pagar", ni siquiera con el filtro "Todos" — también
+--      responsabilidad de la capa de aplicación.
+--
+-- Alcance de ESTE archivo: únicamente las columnas de trazabilidad del
+-- rechazo, ya aplicadas. NO implementa la funcionalidad (rechazarViatico(),
+-- endpoint, UI) — eso queda para un ticket de implementación aparte. No
+-- se modificó ningún código funcional (lib/API/UI) al aplicar este SQL.
+--
+-- tms_viaticos.estado YA ES VARCHAR(30) (ver
+-- sql/migrate-2026-08-viat-0-viaticos.sql) — NUNCA fue ENUM. El valor
+-- 'RECHAZADO' (9 caracteres) cabe sin ningún ALTER de tipo/ancho — por
+-- eso este archivo NO incluye ningún ALTER sobre la columna `estado`.
+--
+-- Columnas nuevas — mismo tipo/tamaño que las columnas de trazabilidad
+-- ya existentes en esta misma tabla (mismo criterio, no arbitrario):
+--   rechazado_por    VARCHAR(100) — igual que autorizado_por/
+--                    entregado_por/liquidado_por.
+--   rechazado_en     DATETIME     — igual que autorizado_en/
+--                    entregado_en/liquidado_en.
+--   motivo_rechazo   VARCHAR(300) — igual que motivo_cambio/
+--                    observaciones_entrega/observaciones_liquidacion.
+-- Los tres NULL mientras el viático no está RECHAZADO — mismo criterio
+-- que el resto de columnas "_por"/"_en" de esta tabla (nunca un default
+-- distinto de NULL, para no confundir "no aplica" con un valor real).
+--
+-- Aditivo e idempotente (ADD COLUMN IF NOT EXISTS) — seguro de reaplicar
+-- si hiciera falta en otro entorno. NO borra ni transforma ningún dato
+-- existente. NO se toca ninguna otra tabla (firmas_electronicas,
+-- auditoria, usuario_firmas quedan intactas).
+
+ALTER TABLE tms_viaticos
+  ADD COLUMN IF NOT EXISTS rechazado_por VARCHAR(100) NULL AFTER reintegro,
+  ADD COLUMN IF NOT EXISTS rechazado_en DATETIME NULL AFTER rechazado_por,
+  ADD COLUMN IF NOT EXISTS motivo_rechazo VARCHAR(300) NULL AFTER rechazado_en;
+
+-- Verificación posterior — YA REALIZADA (ver encabezado): confirmado con
+-- SHOW COLUMNS FROM tms_viaticos WHERE Field IN ('rechazado_por',
+-- 'rechazado_en','motivo_rechazo'); las 3 columnas existen con el tipo
+-- esperado, al final de la tabla, justo después de reintegro.
