@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import {
   coincideCuentaBancaria,
   coincideMetodoPago,
+  itemsSeleccionadosVisibles,
+  puedeRegistrarPagoMasivo,
   totalSeleccionado,
   type FiltroCuentaBancaria,
   type FiltroMetodoPago,
@@ -95,6 +97,17 @@ export default function ViaticosPorPagarPanel({ slug }: { slug: string }) {
   // solo lectura de ViaticosControlPanel, reutilizado tal cual.
   const [verFirmasDe, setVerFirmasDe] = useState<ViaticoPorPagarRow | null>(null);
 
+  // VIATICOS-PAGO-MASIVO-1 — modal de confirmación de entrega/pago masivo,
+  // UNO por método (sección 9/10/11/12 del ticket: nunca se permite
+  // mezclar métodos en un mismo lote — el bloque de acción solo aparece
+  // con un método concreto elegido, ver puedeRegistrarPagoMasivo()).
+  const [pagoMasivoMetodo, setPagoMasivoMetodo] = useState<"TRANSFERENCIA" | "CHEQUE" | "EFECTIVO" | null>(null);
+  const [referenciaMasiva, setReferenciaMasiva] = useState("");
+  const [referenciasCheque, setReferenciasCheque] = useState<Record<number, string>>({});
+  const [procesandoMasivo, setProcesandoMasivo] = useState(false);
+  const [errorMasivo, setErrorMasivo] = useState("");
+  const [detallesMasivo, setDetallesMasivo] = useState<string[]>([]);
+
   // VIAT-2b — archivo Bi Banking: se genera vía fetch (no un <a href> plano)
   // porque el endpoint puede responder 400 con la lista de problemas en vez
   // del archivo — generar/descargar NUNCA cambia estado, solo valida y lee.
@@ -160,6 +173,11 @@ export default function ViaticosPorPagarPanel({ slug }: { slug: string }) {
   }, [fBusqueda, fMetodo, fCuenta]);
 
   const { cantidad: cantidadSeleccionada, monto: montoSeleccionado } = totalSeleccionado(filtrados, seleccionados);
+
+  // VIATICOS-PAGO-MASIVO-1 (item 22 — selección visible respetada) — el
+  // lote SIEMPRE se construye de la intersección filtrados+seleccionados,
+  // nunca de `seleccionados` en crudo (mismo criterio que totalSeleccionado()).
+  const itemsMasivo = itemsSeleccionadosVisibles(filtrados, seleccionados);
 
   // VIAT-4 (punto 11) — antes de exportar el archivo bancario: cuántos
   // AUTORIZADOS realmente calificarían (cuenta bancaria + monto > 0) y
@@ -261,6 +279,71 @@ export default function ViaticosPorPagarPanel({ slug }: { slug: string }) {
       setError("Error de conexión.");
     } finally {
       setPagandoId(null);
+    }
+  }
+
+  /**
+   * VIATICOS-PAGO-MASIVO-1 — abre el modal de confirmación del método
+   * ACTUALMENTE filtrado (fMetodo). Nunca se abre con método "Todos"
+   * (el botón que lo dispara ya está oculto en ese caso — ver
+   * puedeRegistrarPagoMasivo() en el render). Precarga `referenciasCheque`
+   * vacío por cada seleccionado visible, para que el modal de cheques
+   * arranque con un campo editable por fila.
+   */
+  function abrirPagoMasivo() {
+    if (!puedeRegistrarPagoMasivo(fMetodo)) return;
+    setPagoMasivoMetodo(fMetodo);
+    setReferenciaMasiva("");
+    setReferenciasCheque(Object.fromEntries(itemsMasivo.map((r) => [r.id, ""])));
+    setErrorMasivo("");
+    setDetallesMasivo([]);
+  }
+
+  /**
+   * Confirma la entrega/pago masivo — UNA sola llamada al endpoint
+   * atómico (nunca N llamadas al endpoint individual, ver
+   * registrarEntregaViaticosMasiva en src/lib/tms/viaticos.ts). Éxito:
+   * limpia la selección y recarga (sección 13 del ticket). Error: NUNCA
+   * limpia la selección (sección 14) — el facturador puede corregir
+   * (p. ej. completar un número de cheque faltante) sin tener que volver
+   * a marcar todo.
+   */
+  async function confirmarPagoMasivo() {
+    if (!pagoMasivoMetodo || !itemsMasivo.length) return;
+    const body =
+      pagoMasivoMetodo === "CHEQUE"
+        ? {
+            metodoPago: "CHEQUE",
+            items: itemsMasivo.map((r) => ({ id: r.id, referenciaPago: (referenciasCheque[r.id] ?? "").trim() })),
+          }
+        : {
+            metodoPago: pagoMasivoMetodo,
+            ids: itemsMasivo.map((r) => r.id),
+            ...(pagoMasivoMetodo === "TRANSFERENCIA" ? { referenciaPago: referenciaMasiva.trim() } : {}),
+          };
+    setProcesandoMasivo(true);
+    setErrorMasivo("");
+    setDetallesMasivo([]);
+    try {
+      const res = await fetch(`/api/empresas/${slug}/tms/viaticos/entrega-masiva`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setErrorMasivo(data.error ?? `No se pudo registrar la entrega masiva (${res.status}).`);
+        setDetallesMasivo(data.detalles ?? []);
+        return;
+      }
+      setMensaje(`Se registraron ${data.procesados} viático(s) como entregados.`);
+      setPagoMasivoMetodo(null);
+      setSeleccionados(new Set());
+      await cargar();
+    } catch {
+      setErrorMasivo("Error de conexión.");
+    } finally {
+      setProcesandoMasivo(false);
     }
   }
 
@@ -411,6 +494,38 @@ export default function ViaticosPorPagarPanel({ slug }: { slug: string }) {
         </span>
       </div>
 
+      {/* VIATICOS-PAGO-MASIVO-1 — SEPARADO VISUALMENTE de "Generar archivo
+          bancario" (sección 10 del ticket): esa acción de arriba NUNCA
+          cambia estado; esta SÍ cambia AUTORIZADO → ENTREGADO. Solo
+          aparece con al menos un seleccionado visible; con método
+          "Todos" se rechaza mezclar métodos en un mismo lote. */}
+      {cantidadSeleccionada ? (
+        <div className="rounded-lg border border-amber-700/40 bg-amber-950/10 p-2">
+          {puedeRegistrarPagoMasivo(fMetodo) ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={abrirPagoMasivo}
+                className="rounded bg-amber-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-600"
+              >
+                {fMetodo === "TRANSFERENCIA"
+                  ? `Registrar transferencia masiva (${cantidadSeleccionada})`
+                  : fMetodo === "CHEQUE"
+                    ? `Registrar cheques (${cantidadSeleccionada})`
+                    : `Registrar efectivo (${cantidadSeleccionada})`}
+              </button>
+              <span className="text-[10px] text-[var(--muted)]">
+                Cambia el estado de los seleccionados: AUTORIZADO → ENTREGADO.
+              </span>
+            </div>
+          ) : (
+            <p className="text-xs text-amber-300">
+              Selecciona un método de pago antes de registrar el lote.
+            </p>
+          )}
+        </div>
+      ) : null}
+
       {error ? <p className="text-xs text-red-300">{error}</p> : null}
       {problemasBanco.length ? (
         <div className="rounded border border-red-900/40 bg-red-950/10 p-2 text-xs text-red-300">
@@ -557,6 +672,128 @@ export default function ViaticosPorPagarPanel({ slug }: { slug: string }) {
           viatico={{ id: verFirmasDe.id, planCodigo: verFirmasDe.planCodigo, personalNombre: verFirmasDe.personalNombre }}
           onClose={() => setVerFirmasDe(null)}
         />
+      ) : null}
+
+      {/* VIATICOS-PAGO-MASIVO-1 — confirmación de TRANSFERENCIA/EFECTIVO
+          masivo: una sola referencia compartida (solo TRANSFERENCIA la
+          exige, sección 4/6 del ticket) y el total exacto antes de
+          confirmar. */}
+      {pagoMasivoMetodo === "TRANSFERENCIA" || pagoMasivoMetodo === "EFECTIVO" ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-xl">
+            <h3 className="text-sm font-semibold">
+              {pagoMasivoMetodo === "TRANSFERENCIA" ? "Registrar transferencia masiva" : "Registrar efectivo masivo"}
+            </h3>
+            <p className="text-xs text-[var(--muted)]">
+              Se marcarán {itemsMasivo.length} viático(s) como entregados por{" "}
+              {pagoMasivoMetodo === "TRANSFERENCIA" ? "transferencia" : "efectivo"} por un total de{" "}
+              <span className="font-medium text-[var(--text)]">{q(itemsMasivo.reduce((acc, r) => acc + r.montoAsignado, 0))}</span>.
+            </p>
+            {pagoMasivoMetodo === "TRANSFERENCIA" ? (
+              <label className="block text-xs text-[var(--muted)]">
+                Referencia / número de operación (aplica a todo el lote)
+                <input
+                  className={`${inputCls} mt-0.5 block w-full`}
+                  value={referenciaMasiva}
+                  onChange={(e) => setReferenciaMasiva(e.target.value)}
+                  placeholder="Ej. número de lote/operación bancaria"
+                />
+              </label>
+            ) : null}
+            {errorMasivo ? <p className="text-xs text-red-300">{errorMasivo}</p> : null}
+            {detallesMasivo.length ? (
+              <ul className="max-h-32 space-y-0.5 overflow-y-auto text-[11px] text-red-300">
+                {detallesMasivo.map((d, i) => (
+                  <li key={i}>{d}</li>
+                ))}
+              </ul>
+            ) : null}
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                disabled={procesandoMasivo}
+                onClick={() => setPagoMasivoMetodo(null)}
+                className="rounded border border-[var(--border)] px-3 py-1.5 text-sm"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={procesandoMasivo || (pagoMasivoMetodo === "TRANSFERENCIA" && !referenciaMasiva.trim())}
+                onClick={() => void confirmarPagoMasivo()}
+                className="rounded bg-amber-700 px-3 py-1.5 text-sm text-white disabled:opacity-50"
+              >
+                {procesandoMasivo ? "Registrando…" : `Registrar entrega de ${itemsMasivo.length} viático(s)`}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* VIATICOS-PAGO-MASIVO-1 (sección 5/11) — CHEQUE: cada persona
+          recibe un cheque distinto, nunca una referencia compartida. */}
+      {pagoMasivoMetodo === "CHEQUE" ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-lg space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-xl">
+            <h3 className="text-sm font-semibold">Registro masivo de cheques</h3>
+            <div className="max-h-[50vh] overflow-y-auto rounded border border-[var(--border)]">
+              <table className="min-w-full text-left text-xs">
+                <thead className="bg-[#1F6AA5] text-white">
+                  <tr>
+                    <th className="px-2 py-1.5">Beneficiario</th>
+                    <th className="px-2 py-1.5">Monto</th>
+                    <th className="px-2 py-1.5">Número de cheque</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {itemsMasivo.map((r) => (
+                    <tr key={r.id} className="border-t border-[var(--border)]">
+                      <td className="px-2 py-1.5">{r.personalNombre}</td>
+                      <td className="px-2 py-1.5">{q(r.montoAsignado)}</td>
+                      <td className="px-2 py-1.5">
+                        <input
+                          className={`${inputCls} w-28 py-1`}
+                          value={referenciasCheque[r.id] ?? ""}
+                          onChange={(e) => setReferenciasCheque((m) => ({ ...m, [r.id]: e.target.value }))}
+                          placeholder="Ej. 1001"
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-xs text-[var(--muted)]">
+              Total: <span className="font-medium text-[var(--text)]">{q(itemsMasivo.reduce((acc, r) => acc + r.montoAsignado, 0))}</span>
+            </p>
+            {errorMasivo ? <p className="text-xs text-red-300">{errorMasivo}</p> : null}
+            {detallesMasivo.length ? (
+              <ul className="max-h-32 space-y-0.5 overflow-y-auto text-[11px] text-red-300">
+                {detallesMasivo.map((d, i) => (
+                  <li key={i}>{d}</li>
+                ))}
+              </ul>
+            ) : null}
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                disabled={procesandoMasivo}
+                onClick={() => setPagoMasivoMetodo(null)}
+                className="rounded border border-[var(--border)] px-3 py-1.5 text-sm"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={procesandoMasivo || itemsMasivo.some((r) => !(referenciasCheque[r.id] ?? "").trim())}
+                onClick={() => void confirmarPagoMasivo()}
+                className="rounded bg-amber-700 px-3 py-1.5 text-sm text-white disabled:opacity-50"
+              >
+                {procesandoMasivo ? "Registrando…" : "Registrar cheques"}
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </div>
   );

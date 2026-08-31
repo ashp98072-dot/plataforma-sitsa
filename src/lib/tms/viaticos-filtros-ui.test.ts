@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   coincideCuentaBancaria,
   coincideMetodoPago,
+  itemsSeleccionadosVisibles,
+  puedeRegistrarPagoMasivo,
   tieneCuentaBancariaValida,
   totalSeleccionado,
 } from "./viaticos-filtros-ui";
@@ -104,5 +106,33 @@ describe("totalSeleccionado", () => {
 
   it("selección vacía si `filtrados` está vacío (todo fue filtrado)", () => {
     expect(totalSeleccionado([], new Set([1, 2, 3]))).toEqual({ cantidad: 0, monto: 0 });
+  });
+});
+
+describe("itemsSeleccionadosVisibles (VIATICOS-PAGO-MASIVO-1, item 22 — selección visible respetada)", () => {
+  const filas = [{ id: 1 }, { id: 2 }, { id: 3 }];
+
+  it("devuelve solo las filas de `filtrados` que están seleccionadas", () => {
+    expect(itemsSeleccionadosVisibles(filas, new Set([1, 3]))).toEqual([{ id: 1 }, { id: 3 }]);
+  });
+
+  it("un id seleccionado fuera de `filtrados` nunca aparece en el resultado", () => {
+    expect(itemsSeleccionadosVisibles(filas, new Set([1, 999]))).toEqual([{ id: 1 }]);
+  });
+
+  it("sin selección -> []", () => {
+    expect(itemsSeleccionadosVisibles(filas, new Set())).toEqual([]);
+  });
+});
+
+describe("puedeRegistrarPagoMasivo (VIATICOS-PAGO-MASIVO-1, item 21 — método 'Todos' no permite masivo)", () => {
+  it("'' (Todos) -> false", () => {
+    expect(puedeRegistrarPagoMasivo("")).toBe(false);
+  });
+
+  it("TRANSFERENCIA/CHEQUE/EFECTIVO -> true", () => {
+    expect(puedeRegistrarPagoMasivo("TRANSFERENCIA")).toBe(true);
+    expect(puedeRegistrarPagoMasivo("CHEQUE")).toBe(true);
+    expect(puedeRegistrarPagoMasivo("EFECTIVO")).toBe(true);
   });
 });

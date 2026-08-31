@@ -68,3 +68,32 @@ export function totalSeleccionado<T extends { id: number; montoAsignado: number 
   }
   return { cantidad, monto };
 }
+
+/**
+ * VIATICOS-PAGO-MASIVO-1 — filas realmente elegibles para una acción
+ * masiva (autorizar, o entrega/pago masivo): la intersección de
+ * `filtrados` (lo visible bajo el filtro actual) y `seleccionados`
+ * (checkboxes marcados), en el orden de `filtrados`. Nunca se construye
+ * el payload de una acción masiva a partir de `seleccionados` en crudo —
+ * mismo criterio que totalSeleccionado(), reutilizado aquí para que el
+ * lote enviado al backend sea EXACTAMENTE lo que el usuario ve marcado.
+ */
+export function itemsSeleccionadosVisibles<T extends { id: number }>(
+  filtrados: T[],
+  seleccionados: Set<number>,
+): T[] {
+  return filtrados.filter((r) => seleccionados.has(r.id));
+}
+
+/**
+ * VIATICOS-PAGO-MASIVO-1 (sección 9 del ticket) — el pago masivo exige
+ * elegir un método concreto ANTES de habilitar la acción: con el filtro
+ * "Todos" (fMetodo === "") nunca se permite mezclar métodos en un mismo
+ * lote (cada método tiene reglas de referencia distintas — ver
+ * DatosEntregaMasiva en src/lib/tms/viaticos.ts). Genera archivo
+ * bancario/Exportar Excel NO dependen de esto (siguen funcionando igual,
+ * sin cambios).
+ */
+export function puedeRegistrarPagoMasivo(fMetodo: FiltroMetodoPago): fMetodo is Exclude<FiltroMetodoPago, ""> {
+  return fMetodo !== "";
+}
