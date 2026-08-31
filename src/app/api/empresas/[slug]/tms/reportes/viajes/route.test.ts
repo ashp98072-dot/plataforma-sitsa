@@ -71,6 +71,8 @@ describe("[HALLAZGO 3] paginación server-side", () => {
     vi.mocked(obtenerKpisReporte).mockResolvedValue({
       totalViajes: 9000, cerrados: 8000, pendientesCierre: 100, enRuta: 500, cancelados: 400,
       totalEvidencias: 20000, totalKmRecorridos: 999999, valorProgramado: 1000000, valorCerrado: 900000, promedioIngresoPorViaje: 111,
+      viajesPendientesFacturacion: 50, valorPendienteFacturacion: 50000, viajesFacturados: 7000,
+      valorFacturado: 800000, facturasPendientesCobro: 20, valorPendienteCobro: 30000, cobrado: 700000,
     });
     vi.mocked(obtenerReporteViajes).mockResolvedValue([{ id: 1 }] as unknown as Awaited<ReturnType<typeof obtenerReporteViajes>>);
     const res = await GET(new Request("http://localhost/x"), ctx);

@@ -1,6 +1,11 @@
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
 import { listarParadasDePlanes, type PlanParada } from "@/lib/tms/paradas";
+import {
+  estadoFinancieroDe,
+  type EstadoAdminFactura,
+  type EstadoFinancieroFactura,
+} from "@/lib/facturacion/facturas";
 
 /**
  * TMS-REPORTES-1 — Fase A (auditoría de fuentes de datos, ver reporte
@@ -58,7 +63,73 @@ export type PlanReporte = {
   kmLlegada: number | null;
   kmRecorridos: number | null;
   diasRuta: number | null;
+
+  // FACT-1-TMS-REPORTES — información REAL de facturación (fact_facturas/
+  // fact_factura_viajes/fact_pagos), lectura pura vía LEFT JOIN 1:1
+  // (UNIQUE(plan_id) en fact_factura_viajes garantiza que este JOIN nunca
+  // duplica filas de viaje). `estadoFacturacion` es SIEMPRE derivado
+  // (ver `derivarEstadoFacturacion`), nunca un valor persistido.
+  estadoFacturacion: EstadoFacturacionViaje;
+  facturaId: number | null;
+  numeroFactura: string | null;
+  /** `estado_admin` de la factura activa vinculada (nunca 'Anulada' — ver comentario en JOIN_FACTURACION). */
+  estadoAdminFactura: EstadoAdminFactura | null;
+  /** Solo no-null cuando estadoAdminFactura === 'Emitida'. */
+  estadoFinancieroFactura: EstadoFinancieroFactura | null;
+  /** = fact_factura_viajes.monto_asignado, SOLO si la factura está Emitida — nunca de un Borrador. */
+  montoFacturadoViaje: number | null;
+  /** = fact_factura_viajes.monto_asignado cuando la factura está en Borrador — NUNCA se llama "facturado". */
+  montoBorradorViaje: number | null;
+  /** Monto total DE LA FACTURA COMPLETA (no de este viaje) — se repite en cada viaje de una factura multiviaje. */
+  totalFactura: number | null;
+  /** Total pagado DE LA FACTURA COMPLETA — NUNCA prorrateado por viaje. */
+  totalPagadoFactura: number | null;
+  /** Saldo DE LA FACTURA COMPLETA — NUNCA prorrateado por viaje. */
+  saldoFactura: number | null;
 };
+
+export type EstadoFacturacionViaje =
+  | "No aplica"
+  | "Pendiente de facturación"
+  | "En borrador de factura"
+  | "Facturado";
+
+/**
+ * Fase B — semántica ÚNICA de estadoFacturacion, derivada nunca
+ * persistida:
+ *   A) plan no Cerrado y sin factura activa           → "No aplica"
+ *   B) plan Cerrado y sin factura activa               → "Pendiente de facturación"
+ *   C) factura vinculada con estado_admin='Borrador'   → "En borrador de factura"
+ *   D) factura vinculada con estado_admin='Emitida'    → "Facturado"
+ * `estadoAdminFactura` llega SIEMPRE null cuando la única factura
+ * vinculada está Anulada (JOIN_FACTURACION la excluye a propósito) — por
+ * eso una relación inconsistente a una Anulada NUNCA se etiqueta
+ * "Facturado", cae a A o B según corresponda (defensivo, documentado).
+ */
+export function derivarEstadoFacturacion(
+  estadoPlan: string,
+  estadoAdminFactura: EstadoAdminFactura | null,
+): EstadoFacturacionViaje {
+  if (estadoAdminFactura === "Emitida") return "Facturado";
+  if (estadoAdminFactura === "Borrador") return "En borrador de factura";
+  return estadoPlan === "Cerrado" ? "Pendiente de facturación" : "No aplica";
+}
+
+/**
+ * "Estado de cobro" (columna de tabla/Excel) — SOLO tiene sentido para
+ * una factura Emitida; en cualquier otro caso se muestra "—" (nunca se
+ * inventa un estado de cobro para un Borrador o una factura inexistente).
+ * Reutiliza `estadoFinancieroDe` (src/lib/facturacion/facturas.ts) — la
+ * MISMA regla que ya usa la pantalla de Facturación, nunca una copia.
+ */
+export function derivarEstadoCobro(
+  estadoAdminFactura: EstadoAdminFactura | null,
+  totalFactura: number | null,
+  totalPagadoFactura: number | null,
+): EstadoFinancieroFactura | null {
+  if (estadoAdminFactura !== "Emitida" || totalFactura == null) return null;
+  return estadoFinancieroDe(totalFactura, totalPagadoFactura ?? 0);
+}
 
 export type FiltrosReporteViajes = {
   id?: number;
@@ -71,6 +142,10 @@ export type FiltrosReporteViajes = {
   soloPendientesCierre?: boolean;
   soloCerrados?: boolean;
   soloSinCerrar?: boolean;
+  /** Fase F — distinto de "pendiente de cierre" (operativo): esto es sobre FACT-1. */
+  estadoFacturacion?: EstadoFacturacionViaje;
+  /** Fase F — solo tiene efecto real combinado con facturas Emitidas. */
+  estadoCobro?: EstadoFinancieroFactura;
 };
 
 const FECHA_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -80,6 +155,11 @@ const FECHA_RE = /^\d{4}-\d{2}-\d{2}$/;
  * para que ambos apliquen EXACTAMENTE el mismo criterio de filtros —
  * nunca dos parseos que puedan divergir.
  */
+const ESTADOS_FACTURACION_VIAJE: EstadoFacturacionViaje[] = [
+  "No aplica", "Pendiente de facturación", "En borrador de factura", "Facturado",
+];
+const ESTADOS_COBRO: EstadoFinancieroFactura[] = ["Sin pagos", "Pago parcial", "Cobrado"];
+
 export function filtrosReporteDesdeUrl(url: URL): FiltrosReporteViajes {
   const p = url.searchParams;
   const fechaDesde = p.get("fechaDesde");
@@ -87,6 +167,8 @@ export function filtrosReporteDesdeUrl(url: URL): FiltrosReporteViajes {
   const clienteId = Number(p.get("clienteId"));
   const pilotoId = Number(p.get("pilotoId"));
   const unidadId = Number(p.get("unidadId"));
+  const estadoFacturacion = p.get("estadoFacturacion");
+  const estadoCobro = p.get("estadoCobro");
   return {
     fechaDesde: fechaDesde && FECHA_RE.test(fechaDesde) ? fechaDesde : undefined,
     fechaHasta: fechaHasta && FECHA_RE.test(fechaHasta) ? fechaHasta : undefined,
@@ -97,6 +179,10 @@ export function filtrosReporteDesdeUrl(url: URL): FiltrosReporteViajes {
     soloPendientesCierre: p.get("soloPendientesCierre") === "1",
     soloCerrados: p.get("soloCerrados") === "1",
     soloSinCerrar: p.get("soloSinCerrar") === "1",
+    estadoFacturacion: estadoFacturacion && (ESTADOS_FACTURACION_VIAJE as string[]).includes(estadoFacturacion)
+      ? (estadoFacturacion as EstadoFacturacionViaje) : undefined,
+    estadoCobro: estadoCobro && (ESTADOS_COBRO as string[]).includes(estadoCobro)
+      ? (estadoCobro as EstadoFinancieroFactura) : undefined,
   };
 }
 
@@ -153,6 +239,29 @@ export type KpiReporteViajes = {
   valorProgramado: number; // suma tarifa_comercial de TODOS los filtrados, excepto Cancelado
   valorCerrado: number; // suma tarifa_comercial SOLO de estado real "Cerrado"
   promedioIngresoPorViaje: number; // valorProgramado / cantidad de viajes con tarifa capturada (no cancelados)
+
+  // FACT-1-TMS-REPORTES (Fase E) — KPI financieros REALES de FACT-1.
+  /** COUNT de viajes con estadoFacturacion = "Pendiente de facturación" — seguro por fila (1 viaje = 1 fila). */
+  viajesPendientesFacturacion: number;
+  /** SUM(tarifa_comercial) de esos mismos viajes — seguro por fila. */
+  valorPendienteFacturacion: number;
+  /** COUNT de viajes con estadoFacturacion = "Facturado". */
+  viajesFacturados: number;
+  /** SUM(monto_asignado) de esos viajes — cada fila es SU PROPIO monto_asignado, nunca el total de la factura: seguro por fila incluso en facturas multiviaje. */
+  valorFacturado: number;
+  /**
+   * COUNT DISTINCT de FACTURAS Emitidas con saldo > 0 tocadas por el
+   * filtro actual — seguro por fila (COUNT DISTINCT dedupe multiviaje).
+   */
+  facturasPendientesCobro: number;
+  /**
+   * SUM(monto_total - pagos) por FACTURA (una sola vez por factura, NUNCA
+   * por fila de viaje) — ver `obtenerKpisReporte`/`calcularKpisReporte`
+   * para la protección explícita contra doble conteo en multiviaje.
+   */
+  valorPendienteCobro: number;
+  /** SUM(fact_pagos.monto) por FACTURA — misma protección contra doble conteo. */
+  cobrado: number;
 };
 
 /**
@@ -172,6 +281,31 @@ export function calcularKpisReporte(planes: PlanReporte[]): KpiReporteViajes {
   const valorProgramado = conTarifa.reduce((s, p) => s + Number(p.tarifaComercial), 0);
   const valorCerrado = cerradosConTarifa.reduce((s, p) => s + Number(p.tarifaComercial), 0);
 
+  const pendientesFacturacion = planes.filter((p) => p.estadoFacturacion === "Pendiente de facturación");
+  const facturados = planes.filter((p) => p.estadoFacturacion === "Facturado");
+  // Fase E "evitar doble conteo": valorFacturado suma monto_asignado POR
+  // VIAJE (cada fila es su propio monto, nunca el total de la factura) —
+  // seguro incluso si varios viajes comparten factura.
+  const valorFacturado = facturados.reduce((s, p) => s + (p.montoFacturadoViaje ?? 0), 0);
+
+  // Para "por FACTURA" (cobrado/pendiente de cobro/facturas pendientes),
+  // se deduplica por facturaId ANTES de sumar — nunca se suma
+  // totalFactura/totalPagadoFactura una vez por CADA viaje.
+  const facturasUnicasEmitidas = new Map<number, PlanReporte>();
+  for (const p of planes) {
+    if (p.facturaId != null && p.estadoAdminFactura === "Emitida" && !facturasUnicasEmitidas.has(p.facturaId)) {
+      facturasUnicasEmitidas.set(p.facturaId, p);
+    }
+  }
+  const facturasUnicas = [...facturasUnicasEmitidas.values()];
+  const cobrado = facturasUnicas.reduce((s, p) => s + (p.totalPagadoFactura ?? 0), 0);
+  const valorPendienteCobro = facturasUnicas.reduce(
+    (s, p) => s + ((p.totalFactura ?? 0) - (p.totalPagadoFactura ?? 0)), 0,
+  );
+  const facturasPendientesCobro = facturasUnicas.filter(
+    (p) => (p.totalFactura ?? 0) - (p.totalPagadoFactura ?? 0) > 0,
+  ).length;
+
   return {
     totalViajes: planes.length,
     cerrados: cerrados.length,
@@ -183,6 +317,13 @@ export function calcularKpisReporte(planes: PlanReporte[]): KpiReporteViajes {
     valorProgramado,
     valorCerrado,
     promedioIngresoPorViaje: conTarifa.length ? valorProgramado / conTarifa.length : 0,
+    viajesPendientesFacturacion: pendientesFacturacion.length,
+    valorPendienteFacturacion: pendientesFacturacion.reduce((s, p) => s + (p.tarifaComercial ?? 0), 0),
+    viajesFacturados: facturados.length,
+    valorFacturado,
+    facturasPendientesCobro,
+    valorPendienteCobro,
+    cobrado,
   };
 }
 
@@ -193,6 +334,25 @@ const SQL_PENDIENTE_CIERRE = `(
     WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
   )
 )`;
+
+/**
+ * FACT-1-TMS-REPORTES — JOIN 1:1 con FACT-1 (UNIQUE(plan_id) en
+ * fact_factura_viajes garantiza que esto NUNCA duplica una fila de
+ * viaje). `f.estado_admin <> 'Anulada'` es DELIBERADO (Fase B): anular
+ * BORRA la fila de fact_factura_viajes en el flujo normal, así que esto
+ * es una defensa extra — si por inconsistencia apareciera una relación
+ * viva apuntando a una factura Anulada, este JOIN la trata como "sin
+ * factura" (f queda NULL), nunca como "Facturado". Compartido por TODAS
+ * las consultas (listado/COUNT/KPI) para que el filtro por
+ * estadoFacturacion/estadoCobro sea válido en cualquiera de ellas.
+ */
+const JOIN_FACTURACION = `
+  LEFT JOIN fact_factura_viajes ffv ON ffv.plan_id = p.id
+  LEFT JOIN fact_facturas f ON f.id = ffv.factura_id AND f.empresa_id = p.empresa_id AND f.estado_admin <> 'Anulada'
+  LEFT JOIN (
+    SELECT factura_id, SUM(monto) AS total_pagado FROM fact_pagos GROUP BY factura_id
+  ) pg ON pg.factura_id = f.id
+`;
 
 /**
  * CORRECCIÓN PR #112 (HALLAZGO 3, ítem 5): constructor ÚNICO de
@@ -248,6 +408,30 @@ function construirCondiciones(
   if (filtros.soloSinCerrar) {
     condiciones.push("p.estado <> 'Cerrado'");
   }
+  // Fase F — DISTINTO de soloPendientesCierre (operativo, arriba): esto
+  // filtra por el estado de FACT-1, nunca se mezclan ambos criterios.
+  // Requiere JOIN_FACTURACION (alias f/ffv/pg) presente en el FROM del
+  // caller.
+  if (filtros.estadoFacturacion === "Pendiente de facturación") {
+    condiciones.push("p.estado = 'Cerrado'", "f.id IS NULL");
+  } else if (filtros.estadoFacturacion === "En borrador de factura") {
+    condiciones.push("f.estado_admin = 'Borrador'");
+  } else if (filtros.estadoFacturacion === "Facturado") {
+    condiciones.push("f.estado_admin = 'Emitida'");
+  } else if (filtros.estadoFacturacion === "No aplica") {
+    condiciones.push("p.estado <> 'Cerrado'", "f.id IS NULL");
+  }
+  if (filtros.estadoCobro) {
+    // El estado de cobro solo existe para una factura Emitida.
+    condiciones.push("f.estado_admin = 'Emitida'");
+    if (filtros.estadoCobro === "Sin pagos") {
+      condiciones.push("COALESCE(pg.total_pagado, 0) <= 0");
+    } else if (filtros.estadoCobro === "Pago parcial") {
+      condiciones.push("COALESCE(pg.total_pagado, 0) > 0 AND COALESCE(pg.total_pagado, 0) < f.monto_total");
+    } else if (filtros.estadoCobro === "Cobrado") {
+      condiciones.push("COALESCE(pg.total_pagado, 0) >= f.monto_total");
+    }
+  }
   return { condiciones, params };
 }
 
@@ -269,7 +453,7 @@ export async function contarReporteViajes(
 ): Promise<number> {
   const { condiciones, params } = construirCondiciones(empresaId, filtros);
   const rows = await query<RowDataPacket[]>(
-    `SELECT COUNT(*) AS total FROM tms_planes_viaje p WHERE ${condiciones.join(" AND ")}`,
+    `SELECT COUNT(*) AS total FROM tms_planes_viaje p ${JOIN_FACTURACION} WHERE ${condiciones.join(" AND ")}`,
     params,
   );
   return Number(rows[0]?.total ?? 0);
@@ -285,42 +469,78 @@ export async function obtenerKpisReporte(
   filtros: FiltrosReporteViajes,
 ): Promise<KpiReporteViajes> {
   const { condiciones, params } = construirCondiciones(empresaId, filtros);
-  const rows = await query<RowDataPacket[]>(
-    `SELECT
-       COUNT(*) AS total_viajes,
-       SUM(p.estado = 'Cerrado') AS cerrados,
-       SUM(${SQL_PENDIENTE_CIERRE}) AS pendientes_cierre,
-       SUM(p.estado IN ('En ruta', 'Cargado')) AS en_ruta,
-       SUM(p.estado = 'Cancelado') AS cancelados,
-       COALESCE(SUM(ev.cnt), 0) AS total_evidencias,
-       COALESCE(SUM(
-         CASE WHEN fviaje.km_salida IS NOT NULL AND fviaje.km_llegada IS NOT NULL
-                   AND fviaje.km_llegada >= fviaje.km_salida
-              THEN fviaje.km_llegada - fviaje.km_salida ELSE 0 END
-       ), 0) AS total_km_recorridos,
-       COALESCE(SUM(CASE WHEN p.estado <> 'Cancelado' THEN p.tarifa_comercial ELSE NULL END), 0) AS valor_programado,
-       COALESCE(SUM(CASE WHEN p.estado = 'Cerrado' THEN p.tarifa_comercial ELSE NULL END), 0) AS valor_cerrado,
-       SUM(CASE WHEN p.estado <> 'Cancelado' AND p.tarifa_comercial IS NOT NULL THEN 1 ELSE 0 END) AS viajes_con_tarifa
-     FROM tms_planes_viaje p
-     LEFT JOIN (
-       SELECT plan_id, COUNT(*) AS cnt FROM tms_evidencias GROUP BY plan_id
-     ) ev ON ev.plan_id = p.id
-     LEFT JOIN (
-       SELECT fv.plan_id, fv.km_salida, fv.km_llegada
-       FROM flota_viajes fv
-       WHERE fv.id = (
-         SELECT fv2.id FROM flota_viajes fv2
-         WHERE fv2.plan_id = fv.plan_id AND fv2.empresa_id = fv.empresa_id
-         ORDER BY (fv2.estado = 'cerrado') DESC, fv2.id DESC
-         LIMIT 1
-       )
-     ) fviaje ON fviaje.plan_id = p.id
-     WHERE ${condiciones.join(" AND ")}`,
-    params,
-  );
+  const where = condiciones.join(" AND ");
+  const [rows, rowsFactura] = await Promise.all([
+    // Agregados SEGUROS por FILA de viaje (1 fila = 1 viaje, JOIN_FACTURACION
+    // es 1:1 vía UNIQUE(plan_id)) — incluye viajesPendientesFacturacion/
+    // valorPendienteFacturacion/viajesFacturados/valorFacturado (cada uno
+    // es SU PROPIO monto_asignado, nunca el total de la factura) y
+    // facturasPendientesCobro (COUNT DISTINCT dedupe multiviaje).
+    query<RowDataPacket[]>(
+      `SELECT
+         COUNT(*) AS total_viajes,
+         SUM(p.estado = 'Cerrado') AS cerrados,
+         SUM(${SQL_PENDIENTE_CIERRE}) AS pendientes_cierre,
+         SUM(p.estado IN ('En ruta', 'Cargado')) AS en_ruta,
+         SUM(p.estado = 'Cancelado') AS cancelados,
+         COALESCE(SUM(ev.cnt), 0) AS total_evidencias,
+         COALESCE(SUM(
+           CASE WHEN fviaje.km_salida IS NOT NULL AND fviaje.km_llegada IS NOT NULL
+                     AND fviaje.km_llegada >= fviaje.km_salida
+                THEN fviaje.km_llegada - fviaje.km_salida ELSE 0 END
+         ), 0) AS total_km_recorridos,
+         COALESCE(SUM(CASE WHEN p.estado <> 'Cancelado' THEN p.tarifa_comercial ELSE NULL END), 0) AS valor_programado,
+         COALESCE(SUM(CASE WHEN p.estado = 'Cerrado' THEN p.tarifa_comercial ELSE NULL END), 0) AS valor_cerrado,
+         SUM(CASE WHEN p.estado <> 'Cancelado' AND p.tarifa_comercial IS NOT NULL THEN 1 ELSE 0 END) AS viajes_con_tarifa,
+         SUM(CASE WHEN p.estado = 'Cerrado' AND f.id IS NULL THEN 1 ELSE 0 END) AS viajes_pend_facturacion,
+         COALESCE(SUM(CASE WHEN p.estado = 'Cerrado' AND f.id IS NULL THEN p.tarifa_comercial ELSE NULL END), 0) AS valor_pend_facturacion,
+         SUM(CASE WHEN f.estado_admin = 'Emitida' THEN 1 ELSE 0 END) AS viajes_facturados,
+         COALESCE(SUM(CASE WHEN f.estado_admin = 'Emitida' THEN ffv.monto_asignado ELSE NULL END), 0) AS valor_facturado,
+         COUNT(DISTINCT CASE WHEN f.estado_admin = 'Emitida' AND (f.monto_total - COALESCE(pg.total_pagado, 0)) > 0 THEN f.id END) AS facturas_pend_cobro
+       FROM tms_planes_viaje p
+       LEFT JOIN (
+         SELECT plan_id, COUNT(*) AS cnt FROM tms_evidencias GROUP BY plan_id
+       ) ev ON ev.plan_id = p.id
+       LEFT JOIN (
+         SELECT fv.plan_id, fv.km_salida, fv.km_llegada
+         FROM flota_viajes fv
+         WHERE fv.id = (
+           SELECT fv2.id FROM flota_viajes fv2
+           WHERE fv2.plan_id = fv.plan_id AND fv2.empresa_id = fv.empresa_id
+           ORDER BY (fv2.estado = 'cerrado') DESC, fv2.id DESC
+           LIMIT 1
+         )
+       ) fviaje ON fviaje.plan_id = p.id
+       ${JOIN_FACTURACION}
+       WHERE ${where}`,
+      params,
+    ),
+    // Fase E "evitar doble conteo" (CRÍTICO): valorPendienteCobro/cobrado
+    // son valores DE LA FACTURA COMPLETA — se agregan aquí sobre
+    // fact_facturas directamente (una fila por factura), restringidos a
+    // las facturas efectivamente tocadas por el filtro actual (reutiliza
+    // EXACTAMENTE `where`/`params` en la subconsulta, mismos alias
+    // p/ffv/f/pg — nunca un JOIN por viaje que multiplicaría el saldo de
+    // una factura multiviaje N veces.
+    query<RowDataPacket[]>(
+      `SELECT COALESCE(SUM(fx.monto_total - COALESCE(pgx.total_pagado, 0)), 0) AS pendiente_cobro,
+              COALESCE(SUM(pgx.total_pagado), 0) AS cobrado
+       FROM fact_facturas fx
+       LEFT JOIN (
+         SELECT factura_id, SUM(monto) AS total_pagado FROM fact_pagos GROUP BY factura_id
+       ) pgx ON pgx.factura_id = fx.id
+       WHERE fx.empresa_id = ? AND fx.estado_admin = 'Emitida' AND fx.id IN (
+         SELECT f.id FROM tms_planes_viaje p
+         ${JOIN_FACTURACION}
+         WHERE ${where} AND f.id IS NOT NULL
+       )`,
+      [empresaId, ...params],
+    ),
+  ]);
   const r = rows[0];
   const viajesConTarifa = Number(r?.viajes_con_tarifa ?? 0);
   const valorProgramado = Number(r?.valor_programado ?? 0);
+  const rf = rowsFactura[0];
   return {
     totalViajes: Number(r?.total_viajes ?? 0),
     cerrados: Number(r?.cerrados ?? 0),
@@ -332,6 +552,13 @@ export async function obtenerKpisReporte(
     valorProgramado,
     valorCerrado: Number(r?.valor_cerrado ?? 0),
     promedioIngresoPorViaje: viajesConTarifa ? valorProgramado / viajesConTarifa : 0,
+    viajesPendientesFacturacion: Number(r?.viajes_pend_facturacion ?? 0),
+    valorPendienteFacturacion: Number(r?.valor_pend_facturacion ?? 0),
+    viajesFacturados: Number(r?.viajes_facturados ?? 0),
+    valorFacturado: Number(r?.valor_facturado ?? 0),
+    facturasPendientesCobro: Number(r?.facturas_pend_cobro ?? 0),
+    valorPendienteCobro: Number(rf?.pendiente_cobro ?? 0),
+    cobrado: Number(rf?.cobrado ?? 0),
   };
 }
 
@@ -362,7 +589,10 @@ export async function obtenerReporteViajes(
             COALESCE(ev.cnt, 0) AS evidencias,
             fviaje.km_salida, fviaje.km_llegada,
             DATE_FORMAT(fviaje.hora_salida, '%Y-%m-%dT%H:%i') AS hora_salida,
-            DATE_FORMAT(fviaje.hora_llegada, '%Y-%m-%dT%H:%i') AS hora_llegada
+            DATE_FORMAT(fviaje.hora_llegada, '%Y-%m-%dT%H:%i') AS hora_llegada,
+            f.id AS factura_id, f.numero_factura, f.estado_admin AS estado_admin_factura,
+            f.monto_total AS total_factura, COALESCE(pg.total_pagado, 0) AS total_pagado_factura,
+            ffv.monto_asignado AS monto_asignado_viaje
      FROM tms_planes_viaje p
      LEFT JOIN tms_clientes c ON c.id = p.cliente_id
      LEFT JOIN tms_unidades u ON u.id = p.unidad_id
@@ -381,6 +611,7 @@ export async function obtenerReporteViajes(
          LIMIT 1
        )
      ) fviaje ON fviaje.plan_id = p.id
+     ${JOIN_FACTURACION}
      WHERE ${condiciones.join(" AND ")}
      ORDER BY p.fecha_plan DESC, p.id DESC
      LIMIT ? OFFSET ?`,
@@ -430,8 +661,46 @@ export async function obtenerReporteViajes(
       kmLlegada,
       kmRecorridos: calcularKmRecorridos(kmSalida, kmLlegada),
       diasRuta: calcularDiasRuta(horaSalida, horaLlegada),
+      ...mapearFacturacionFila(r, String(r.estado)),
     };
   });
+}
+
+/**
+ * FACT-1-TMS-REPORTES — mapea las columnas de JOIN_FACTURACION (nunca
+ * null si no hay factura vinculada, o si la única vinculada está
+ * Anulada — JOIN_FACTURACION ya la excluyó) a los campos derivados de
+ * PlanReporte. Extraído para reutilizar el mismo mapeo en
+ * obtenerReporteViajes sin duplicar la lógica de derivación.
+ */
+function mapearFacturacionFila(
+  r: RowDataPacket,
+  estadoPlan: string,
+): Pick<
+  PlanReporte,
+  | "estadoFacturacion" | "facturaId" | "numeroFactura" | "estadoAdminFactura"
+  | "estadoFinancieroFactura" | "montoFacturadoViaje" | "montoBorradorViaje"
+  | "totalFactura" | "totalPagadoFactura" | "saldoFactura"
+> {
+  const estadoAdminFactura = r.estado_admin_factura != null ? (String(r.estado_admin_factura) as EstadoAdminFactura) : null;
+  const totalFactura = r.total_factura != null ? Number(r.total_factura) : null;
+  const totalPagadoFactura = r.total_pagado_factura != null ? Number(r.total_pagado_factura) : null;
+  const montoAsignado = r.monto_asignado_viaje != null ? Number(r.monto_asignado_viaje) : null;
+  return {
+    estadoFacturacion: derivarEstadoFacturacion(estadoPlan, estadoAdminFactura),
+    facturaId: r.factura_id != null ? Number(r.factura_id) : null,
+    numeroFactura: r.numero_factura != null ? String(r.numero_factura) : null,
+    estadoAdminFactura,
+    estadoFinancieroFactura: derivarEstadoCobro(estadoAdminFactura, totalFactura, totalPagadoFactura),
+    // (Fase C) montoFacturadoViaje SOLO si Emitida; montoBorradorViaje SOLO
+    // si Borrador — NUNCA se llama "facturado" a un monto todavía en Borrador.
+    montoFacturadoViaje: estadoAdminFactura === "Emitida" ? montoAsignado : null,
+    montoBorradorViaje: estadoAdminFactura === "Borrador" ? montoAsignado : null,
+    totalFactura: estadoAdminFactura != null ? totalFactura : null,
+    totalPagadoFactura: estadoAdminFactura != null ? totalPagadoFactura : null,
+    saldoFactura: estadoAdminFactura != null && totalFactura != null
+      ? totalFactura - (totalPagadoFactura ?? 0) : null,
+  };
 }
 
 /** Detalle de un único plan — mismos datos que la tabla, un solo registro. */

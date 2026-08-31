@@ -58,7 +58,22 @@ type PlanReporte = {
   kmLlegada: number | null;
   kmRecorridos: number | null;
   diasRuta: number | null;
+  // FACT-1-TMS-REPORTES — información REAL de FACT-1, solo lectura.
+  estadoFacturacion: EstadoFacturacionViaje;
+  facturaId: number | null;
+  numeroFactura: string | null;
+  estadoAdminFactura: "Borrador" | "Emitida" | "Anulada" | null;
+  estadoFinancieroFactura: "Sin pagos" | "Pago parcial" | "Cobrado" | null;
+  montoFacturadoViaje: number | null;
+  montoBorradorViaje: number | null;
+  totalFactura: number | null;
+  totalPagadoFactura: number | null;
+  saldoFactura: number | null;
 };
+
+type EstadoFacturacionViaje = "No aplica" | "Pendiente de facturación" | "En borrador de factura" | "Facturado";
+const ESTADOS_FACTURACION: EstadoFacturacionViaje[] = ["Pendiente de facturación", "En borrador de factura", "Facturado"];
+const ESTADOS_COBRO = ["Sin pagos", "Pago parcial", "Cobrado"] as const;
 
 type Kpi = {
   totalViajes: number;
@@ -71,6 +86,13 @@ type Kpi = {
   valorProgramado: number;
   valorCerrado: number;
   promedioIngresoPorViaje: number;
+  viajesPendientesFacturacion: number;
+  valorPendienteFacturacion: number;
+  viajesFacturados: number;
+  valorFacturado: number;
+  facturasPendientesCobro: number;
+  valorPendienteCobro: number;
+  cobrado: number;
 };
 
 type ClienteCat = { id: number; nombre: string };
@@ -106,6 +128,20 @@ function badgeEstado(p: PlanReporte): { texto: string; clase: string } {
   if (p.estado === "En ruta") return { texto: "En ruta", clase: "bg-sky-600" };
   if (p.estado === "Cargado") return { texto: "Cargado", clase: "bg-indigo-600" };
   return { texto: p.estado, clase: "bg-slate-600" };
+}
+
+/** Fase J — mismo criterio: relleno sólido + texto blanco, legible en claro y oscuro. */
+export function badgeFacturacion(estado: EstadoFacturacionViaje): { texto: string; clase: string } {
+  if (estado === "Facturado") return { texto: "Facturado", clase: "bg-emerald-600" };
+  if (estado === "En borrador de factura") return { texto: "En borrador de factura", clase: "bg-slate-600" };
+  if (estado === "Pendiente de facturación") return { texto: "Pendiente de facturación", clase: "bg-amber-600" };
+  return { texto: "No aplica", clase: "bg-slate-500" };
+}
+export function badgeCobro(estado: "Sin pagos" | "Pago parcial" | "Cobrado" | null): { texto: string; clase: string } {
+  if (estado === "Cobrado") return { texto: "Cobrado", clase: "bg-emerald-600" };
+  if (estado === "Pago parcial") return { texto: "Pago parcial", clase: "bg-amber-600" };
+  if (estado === "Sin pagos") return { texto: "Sin pagos", clase: "bg-slate-500" };
+  return { texto: "—", clase: "bg-slate-500" };
 }
 
 function fh(v: string | null): string {
@@ -244,6 +280,10 @@ export default function ReportesViajesPage() {
   const [fPiloto, setFPiloto] = useState("");
   const [fUnidad, setFUnidad] = useState("");
   const [fEstado, setFEstado] = useState("");
+  // Fase F — DISTINTO de "soloPendientes" (operativo, abajo): esto es
+  // sobre FACT-1, nunca se mezclan ambos criterios en la misma consulta.
+  const [fEstadoFacturacion, setFEstadoFacturacion] = useState("");
+  const [fEstadoCobro, setFEstadoCobro] = useState("");
   const [soloPendientes, setSoloPendientes] = useState(false);
   const [soloCerrados, setSoloCerrados] = useState(false);
   const [soloSinCerrar, setSoloSinCerrar] = useState(false);
@@ -287,11 +327,13 @@ export default function ReportesViajesPage() {
     if (fPiloto) p.set("pilotoId", fPiloto);
     if (fUnidad) p.set("unidadId", fUnidad);
     if (fEstado) p.set("estado", fEstado);
+    if (fEstadoFacturacion) p.set("estadoFacturacion", fEstadoFacturacion);
+    if (fEstadoCobro) p.set("estadoCobro", fEstadoCobro);
     if (soloPendientes) p.set("soloPendientesCierre", "1");
     if (soloCerrados) p.set("soloCerrados", "1");
     if (soloSinCerrar) p.set("soloSinCerrar", "1");
     return p;
-  }, [fDesde, fHasta, fCliente, fPiloto, fUnidad, fEstado, soloPendientes, soloCerrados, soloSinCerrar]);
+  }, [fDesde, fHasta, fCliente, fPiloto, fUnidad, fEstado, fEstadoFacturacion, fEstadoCobro, soloPendientes, soloCerrados, soloSinCerrar]);
 
   /** Para exportar: SIN page/pageSize — el exportador siempre trae todo el filtro. */
   const exportQueryString = useCallback(() => filtrosQueryString().toString(), [filtrosQueryString]);
@@ -340,6 +382,7 @@ export default function ReportesViajesPage() {
     setFDesde(primerDiaMes);
     setFHasta(hoy);
     setFCliente(""); setFPiloto(""); setFUnidad(""); setFEstado("");
+    setFEstadoFacturacion(""); setFEstadoCobro("");
     setSoloPendientes(false); setSoloCerrados(false); setSoloSinCerrar(false);
     setBuscarTick((t) => t + 1);
   }
@@ -413,7 +456,13 @@ export default function ReportesViajesPage() {
   const columnas = [
     "Código", "Fecha", "Cliente", "Ruta", "Placa", "Piloto", "Auxiliares",
     "H. salida", "H. llegada", "Km salida", "Km llegada", "Km rec.",
-    "Evid.", "Tarifa", "Estado", "Acción",
+    "Evid.", "Tarifa", "Estado",
+    // Fase D — Facturación (FACT-1). "Tarifa" (arriba) sigue siendo el
+    // valor comercial PROGRAMADO — "Monto fact." es el snapshot real
+    // usado en la factura; no siempre coinciden (ver th title).
+    "Estado factura", "No. factura", "Monto fact.", "Estado cobro",
+    "Total factura", "Cobrado factura", "Saldo factura",
+    "Acción",
   ];
 
   return (
@@ -459,6 +508,19 @@ export default function ReportesViajesPage() {
               {ESTADOS.map((e) => <option key={e} value={e}>{e}</option>)}
             </select>
           </label>
+          {/* Fase F — estado de FACTURACIÓN (FACT-1), distinto de "pendiente de cierre" (operativo, abajo). */}
+          <label className="text-xs text-[var(--muted)]">Estado facturación
+            <select className={`${inputCls} mt-0.5 block`} value={fEstadoFacturacion} onChange={(e) => setFEstadoFacturacion(e.target.value)}>
+              <option value="">Todos</option>
+              {ESTADOS_FACTURACION.map((e) => <option key={e} value={e}>{e}</option>)}
+            </select>
+          </label>
+          <label className="text-xs text-[var(--muted)]">Estado cobro
+            <select className={`${inputCls} mt-0.5 block`} value={fEstadoCobro} onChange={(e) => setFEstadoCobro(e.target.value)}>
+              <option value="">Todos</option>
+              {ESTADOS_COBRO.map((e) => <option key={e} value={e}>{e}</option>)}
+            </select>
+          </label>
           <button type="button" className="rounded bg-[var(--accent)] px-3 py-1.5 text-xs font-medium text-white" onClick={buscar}>Buscar</button>
           <button type="button" className="rounded border border-[var(--border)] px-3 py-1.5 text-xs text-[var(--text)]" onClick={limpiarFiltros}>Limpiar filtros</button>
           <button type="button" className="rounded border border-[var(--border)] px-3 py-1.5 text-xs text-[var(--text)]" disabled={loading} onClick={() => void cargar(page)}>{loading ? "Actualizando…" : "Actualizar"}</button>
@@ -499,13 +561,36 @@ export default function ReportesViajesPage() {
         </section>
       ) : null}
 
+      {/* KPI Facturación (Fase E) — agregado SQL sobre TODO el filtro; los
+          valores por factura (pendiente de cobro/cobrado) se cuentan UNA
+          sola vez por factura, nunca una vez por viaje (ver
+          obtenerKpisReporte, src/lib/tms/reportes-viajes.ts). */}
+      {kpi ? (
+        <section>
+          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">Facturación (FACT-1)</p>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+            <KpiCard label="Viajes pendientes de facturación" value={String(kpi.viajesPendientesFacturacion)} />
+            <KpiCard label="Valor pendiente de facturación" value={moneda(kpi.valorPendienteFacturacion)} />
+            <KpiCard label="Viajes facturados" value={String(kpi.viajesFacturados)} />
+            <KpiCard label="Valor facturado" value={moneda(kpi.valorFacturado)} sub="Suma monto_asignado, solo Emitida" />
+            <KpiCard label="Facturas pendientes de cobro" value={String(kpi.facturasPendientesCobro)} />
+            <KpiCard label="Valor pendiente de cobro" value={moneda(kpi.valorPendienteCobro)} sub="Por factura, no por viaje" />
+            <KpiCard label="Cobrado" value={moneda(kpi.cobrado)} sub="Por factura, no por viaje" />
+          </div>
+        </section>
+      ) : null}
+
       {error ? <p className="text-sm text-rose-500">{error}</p> : null}
 
       {/* Tabla */}
       <section className="overflow-x-auto rounded-xl border border-[var(--border)]">
         <table className="min-w-[1400px] w-full text-left text-sm">
           <thead className="sticky top-0 z-10 bg-[var(--thead)] text-[var(--text)]">
-            <tr>{columnas.map((c) => <th key={c} className="whitespace-nowrap px-2 py-2 text-xs font-semibold">{c}</th>)}</tr>
+            <tr>{columnas.map((c) => (
+              <th key={c} className="whitespace-nowrap px-2 py-2 text-xs font-semibold" title={c === "Tarifa" ? "Valor comercial PROGRAMADO del viaje." : c === "Monto fact." ? "Snapshot real usado en la factura — no siempre coincide con la tarifa comercial." : undefined}>
+                {c}
+              </th>
+            ))}</tr>
           </thead>
           <tbody>
             {planes.map((p) => {
@@ -530,6 +615,26 @@ export default function ReportesViajesPage() {
                     <td className="px-2 py-1.5 text-xs">
                       <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium text-white ${badge.clase}`}>{badge.texto}</span>
                     </td>
+                    {(() => {
+                      const bFact = badgeFacturacion(p.estadoFacturacion);
+                      const bCobro = badgeCobro(p.estadoFinancieroFactura);
+                      const montoFact = p.montoFacturadoViaje ?? p.montoBorradorViaje;
+                      return (
+                        <>
+                          <td className="px-2 py-1.5 text-xs">
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium text-white ${bFact.clase}`}>{bFact.texto}</span>
+                          </td>
+                          <td className="px-2 py-1.5 font-mono text-xs">{p.numeroFactura ?? "—"}</td>
+                          <td className="whitespace-nowrap px-2 py-1.5 text-xs">{montoFact != null ? moneda(montoFact) : "—"}</td>
+                          <td className="px-2 py-1.5 text-xs">
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium text-white ${bCobro.clase}`}>{bCobro.texto}</span>
+                          </td>
+                          <td className="whitespace-nowrap px-2 py-1.5 text-xs">{p.totalFactura != null ? moneda(p.totalFactura) : "—"}</td>
+                          <td className="whitespace-nowrap px-2 py-1.5 text-xs">{p.totalPagadoFactura != null ? moneda(p.totalPagadoFactura) : "—"}</td>
+                          <td className="whitespace-nowrap px-2 py-1.5 text-xs">{p.saldoFactura != null ? moneda(p.saldoFactura) : "—"}</td>
+                        </>
+                      );
+                    })()}
                     <td className="px-2 py-1.5 text-xs">
                       <div className="flex flex-wrap gap-1.5">
                         <button type="button" className={linkCls} onClick={() => void abrirDetalle(p.id)}>{expandido === p.id ? "Cerrar" : "Ver detalle"}</button>
@@ -638,6 +743,25 @@ export default function ReportesViajesPage() {
                               )
                             ) : null}
                           </div>
+                        </div>
+
+                        {/* Fase G/K — Facturación: SOLO lectura, sin
+                            botones de emitir/registrar pago/anular (eso
+                            vive exclusivamente en Facturación clientes). */}
+                        <div className="mt-3">
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">H. Facturación</p>
+                          <ul className="mt-1 grid gap-x-4 gap-y-0.5 text-xs text-[var(--text)] sm:grid-cols-2 lg:grid-cols-4">
+                            <li>Estado: {badgeFacturacion(p.estadoFacturacion).texto}</li>
+                            <li>No. factura: {p.numeroFactura ?? "—"}</li>
+                            <li>Monto asignado a este viaje: {(p.montoFacturadoViaje ?? p.montoBorradorViaje) != null ? moneda(p.montoFacturadoViaje ?? p.montoBorradorViaje) : "—"}</li>
+                            <li>Estado de cobro: {badgeCobro(p.estadoFinancieroFactura).texto}</li>
+                            <li>Total factura: {p.totalFactura != null ? moneda(p.totalFactura) : "—"}</li>
+                            <li>Total pagado: {p.totalPagadoFactura != null ? moneda(p.totalPagadoFactura) : "—"}</li>
+                            <li>Saldo: {p.saldoFactura != null ? moneda(p.saldoFactura) : "—"}</li>
+                          </ul>
+                          {p.facturaId != null ? (
+                            <p className="mt-1 text-[11px] text-[var(--muted)]">Los importes de pago y saldo corresponden a la factura completa (puede incluir otros viajes).</p>
+                          ) : null}
                         </div>
 
                         <div className="mt-3 grid gap-4 lg:grid-cols-2">

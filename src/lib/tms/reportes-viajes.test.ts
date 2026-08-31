@@ -9,6 +9,8 @@ import {
   calcularKmRecorridos,
   calcularKpisReporte,
   contarReporteViajes,
+  derivarEstadoCobro,
+  derivarEstadoFacturacion,
   filtrosReporteDesdeUrl,
   LIMITE_EXPORTACION_MAXIMO,
   LIMITE_EXPORTACION_SIN_RANGO,
@@ -27,6 +29,9 @@ function plan(overrides: Partial<PlanReporte>): PlanReporte {
     regresoEstimado: null, tarifaComercial: null, placa: null, unidadTipo: null, unidadCapacidad: null,
     pilotoId: null, piloto: null, auxiliares: [], paradas: [], evidencias: 0,
     horaSalida: null, horaLlegada: null, kmSalida: null, kmLlegada: null, kmRecorridos: null, diasRuta: null,
+    estadoFacturacion: "No aplica", facturaId: null, numeroFactura: null, estadoAdminFactura: null,
+    estadoFinancieroFactura: null, montoFacturadoViaje: null, montoBorradorViaje: null,
+    totalFactura: null, totalPagadoFactura: null, saldoFactura: null,
     ...overrides,
   };
 }
@@ -357,5 +362,305 @@ describe("[último detalle] no silenciar errores de auxiliares", () => {
     }) as typeof query);
     const [plan1] = await obtenerReporteViajes(7, {});
     expect(plan1.auxiliares).toEqual(["Carlos Ruiz"]);
+  });
+});
+
+describe("FACT-1-TMS-REPORTES — derivarEstadoFacturacion (Fase B)", () => {
+  it("1) Cerrado sin factura = Pendiente de facturación", () => {
+    expect(derivarEstadoFacturacion("Cerrado", null)).toBe("Pendiente de facturación");
+  });
+  it("2) factura Borrador = En borrador de factura", () => {
+    expect(derivarEstadoFacturacion("Cerrado", "Borrador")).toBe("En borrador de factura");
+  });
+  it("3) factura Emitida = Facturado", () => {
+    expect(derivarEstadoFacturacion("Cerrado", "Emitida")).toBe("Facturado");
+  });
+  it("4) una relación inconsistente a 'Anulada' NUNCA se etiqueta Facturado — cae a Pendiente/No aplica según el estado del plan", () => {
+    expect(derivarEstadoFacturacion("Cerrado", "Anulada")).toBe("Pendiente de facturación");
+    expect(derivarEstadoFacturacion("Programado", "Anulada")).toBe("No aplica");
+  });
+  it("23) viaje NO Cerrado y sin factura = No aplica", () => {
+    expect(derivarEstadoFacturacion("Programado", null)).toBe("No aplica");
+    expect(derivarEstadoFacturacion("En ruta", null)).toBe("No aplica");
+  });
+});
+
+describe("FACT-1-TMS-REPORTES — derivarEstadoCobro (Fase C)", () => {
+  it("7) factura Emitida sin pagos = Sin pagos", () => {
+    expect(derivarEstadoCobro("Emitida", 1000, 0)).toBe("Sin pagos");
+  });
+  it("8) pago parcial", () => {
+    expect(derivarEstadoCobro("Emitida", 1000, 400)).toBe("Pago parcial");
+  });
+  it("9) pagado en su totalidad = Cobrado", () => {
+    expect(derivarEstadoCobro("Emitida", 1000, 1000)).toBe("Cobrado");
+  });
+  it("solo tiene sentido para Emitida — Borrador/Anulada/sin factura devuelven null (la UI muestra '—')", () => {
+    expect(derivarEstadoCobro("Borrador", 1000, 0)).toBeNull();
+    expect(derivarEstadoCobro(null, null, null)).toBeNull();
+  });
+});
+
+describe("FACT-1-TMS-REPORTES — obtenerReporteViajes: mapeo de campos financieros por fila", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  function filaConFacturacion(overrides: Record<string, unknown>) {
+    return {
+      id: 1, codigo: "PLAN-1", fecha_plan: "2026-08-01", hora_carga: null, estado: "Cerrado",
+      cerrado_por: null, cerrado_en: null, pendiente_cierre: 0, cliente_id: null, cliente: null,
+      ruta_codigo: null, lugar_descarga_historico: null, referencia_cliente: null, tipo_traslado: null,
+      regreso_estimado: null, tarifa_comercial: 1000, placa: null, unidad_tipo: null, unidad_capacidad: null,
+      piloto_id: null, piloto: null, evidencias: 0, km_salida: null, km_llegada: null,
+      hora_salida: null, hora_llegada: null,
+      factura_id: null, numero_factura: null, estado_admin_factura: null,
+      total_factura: null, total_pagado_factura: null, monto_asignado_viaje: null,
+      ...overrides,
+    };
+  }
+  function mockFila(row: Record<string, unknown>) {
+    vi.mocked(query).mockImplementation((async (sql: string) => {
+      if (sql.includes("FROM tms_planes_viaje p")) return [row];
+      return [];
+    }) as typeof query);
+  }
+
+  it("5) montoFacturadoViaje = monto_asignado cuando la factura está Emitida", async () => {
+    mockFila(filaConFacturacion({
+      factura_id: 10, numero_factura: "F-001", estado_admin_factura: "Emitida",
+      total_factura: 1000, total_pagado_factura: 400, monto_asignado_viaje: 800,
+    }));
+    const [p] = await obtenerReporteViajes(7, {});
+    expect(p.estadoFacturacion).toBe("Facturado");
+    expect(p.montoFacturadoViaje).toBe(800);
+    expect(p.montoBorradorViaje).toBeNull(); // nunca ambos a la vez
+  });
+
+  it("6) tarifa comercial puede diferir del monto facturado — ambos se conservan por separado", async () => {
+    mockFila(filaConFacturacion({
+      tarifa_comercial: 1000,
+      factura_id: 10, estado_admin_factura: "Emitida", total_factura: 800,
+      total_pagado_factura: 0, monto_asignado_viaje: 800,
+    }));
+    const [p] = await obtenerReporteViajes(7, {});
+    expect(p.tarifaComercial).toBe(1000);
+    expect(p.montoFacturadoViaje).toBe(800);
+  });
+
+  it("un Borrador usa montoBorradorViaje — NUNCA se llama 'facturado' a un Borrador", async () => {
+    mockFila(filaConFacturacion({
+      factura_id: 11, estado_admin_factura: "Borrador",
+      total_factura: 500, total_pagado_factura: 0, monto_asignado_viaje: 500,
+    }));
+    const [p] = await obtenerReporteViajes(7, {});
+    expect(p.estadoFacturacion).toBe("En borrador de factura");
+    expect(p.montoBorradorViaje).toBe(500);
+    expect(p.montoFacturadoViaje).toBeNull();
+  });
+
+  it("10) saldoFactura se deriva de totalFactura - totalPagadoFactura", async () => {
+    mockFila(filaConFacturacion({
+      factura_id: 10, estado_admin_factura: "Emitida",
+      total_factura: 1000, total_pagado_factura: 400, monto_asignado_viaje: 1000,
+    }));
+    const [p] = await obtenerReporteViajes(7, {});
+    expect(p.saldoFactura).toBe(600);
+    expect(p.estadoFinancieroFactura).toBe("Pago parcial");
+  });
+
+  it("24) nunca existe un campo montoCobradoViaje prorrateado — totalPagadoFactura/saldoFactura son SIEMPRE de la factura completa", async () => {
+    mockFila(filaConFacturacion({
+      factura_id: 10, estado_admin_factura: "Emitida",
+      total_factura: 3000, total_pagado_factura: 1200, monto_asignado_viaje: 1000,
+    }));
+    const [p] = await obtenerReporteViajes(7, {});
+    expect(p).not.toHaveProperty("montoCobradoViaje");
+    // 1200 es el pago de TODA la factura (3 viajes posibles), no del viaje individual (1000 asignado):
+    expect(p.totalPagadoFactura).toBe(1200);
+    expect(p.montoFacturadoViaje).toBe(1000);
+  });
+});
+
+describe("FACT-1-TMS-REPORTES — Fase F: filtro por estadoFacturacion/estadoCobro (JOIN_FACTURACION)", () => {
+  beforeEach(() => vi.mocked(query).mockResolvedValue([]));
+  afterEach(() => vi.restoreAllMocks());
+
+  it("16) 'Pendiente de facturación' exige Cerrado + f.id IS NULL", async () => {
+    await obtenerReporteViajes(7, { estadoFacturacion: "Pendiente de facturación" });
+    const [sql] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("p.estado = 'Cerrado'");
+    expect(sql).toContain("f.id IS NULL");
+  });
+
+  it("16) 'En borrador de factura' exige f.estado_admin = 'Borrador'", async () => {
+    await obtenerReporteViajes(7, { estadoFacturacion: "En borrador de factura" });
+    const [sql] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("f.estado_admin = 'Borrador'");
+  });
+
+  it("16) 'Facturado' exige f.estado_admin = 'Emitida'", async () => {
+    await obtenerReporteViajes(7, { estadoFacturacion: "Facturado" });
+    const [sql] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("f.estado_admin = 'Emitida'");
+  });
+
+  it("16) 'No aplica' exige estado <> Cerrado y sin factura", async () => {
+    await obtenerReporteViajes(7, { estadoFacturacion: "No aplica" });
+    const [sql] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("p.estado <> 'Cerrado'");
+    expect(sql).toContain("f.id IS NULL");
+  });
+
+  it("16) estadoCobro filtra sobre Emitida + el saldo derivado (nunca se mezcla con soloPendientesCierre)", async () => {
+    await obtenerReporteViajes(7, { estadoCobro: "Pago parcial", soloPendientesCierre: true });
+    const [sql] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("f.estado_admin = 'Emitida'");
+    expect(sql).toContain("COALESCE(pg.total_pagado, 0) > 0 AND COALESCE(pg.total_pagado, 0) < f.monto_total");
+    expect(sql).toContain("p.estado NOT IN ('Cerrado', 'Cancelado')"); // soloPendientesCierre sigue intacto, criterio distinto
+  });
+
+  it("el mismo filtro estadoFacturacion está disponible también en contarReporteViajes (paginación/COUNT correcto)", async () => {
+    vi.mocked(query).mockResolvedValue([{ total: 0 }] as unknown as Awaited<ReturnType<typeof query>>);
+    await contarReporteViajes(7, { estadoFacturacion: "Facturado" });
+    const [sql] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("f.estado_admin = 'Emitida'");
+  });
+
+  it("17) la paginación (LIMIT ? OFFSET ?) sigue intacta tras agregar JOIN_FACTURACION", async () => {
+    await obtenerReporteViajes(7, {}, { limit: 25, offset: 50 });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("LIMIT ? OFFSET ?");
+    expect(params?.slice(-2)).toEqual([25, 50]);
+  });
+});
+
+describe("FACT-1-TMS-REPORTES — Fase E/18: obtenerKpisReporte financiero, universo completo (no una página)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("18) usa DOS consultas independientes (por-viaje seguro + por-factura, nunca un solo JOIN gigante con SUM directo)", async () => {
+    vi.mocked(query).mockImplementation((async (sql: string) => {
+      // OJO: la subconsulta de la consulta por-factura TAMBIÉN contiene
+      // "FROM tms_planes_viaje p" (reutiliza el mismo `where`) — hay que
+      // revisar primero la condición MÁS específica ("FROM fact_facturas
+      // fx", que solo aparece en la consulta exterior por-factura).
+      if (sql.includes("FROM fact_facturas fx")) {
+        return [{ pendiente_cobro: 600, cobrado: 400 }];
+      }
+      if (sql.includes("FROM tms_planes_viaje p")) {
+        return [{
+          total_viajes: 3, cerrados: 3, pendientes_cierre: 0, en_ruta: 0, cancelados: 0,
+          total_evidencias: 0, total_km_recorridos: 0, valor_programado: 3000, valor_cerrado: 3000,
+          viajes_con_tarifa: 3, viajes_pend_facturacion: 0, valor_pend_facturacion: 0,
+          viajes_facturados: 3, valor_facturado: 3000, facturas_pend_cobro: 1,
+        }];
+      }
+      return [];
+    }) as typeof query);
+    const kpi = await obtenerKpisReporte(7, {});
+    expect(kpi.viajesFacturados).toBe(3);
+    expect(kpi.valorFacturado).toBe(3000); // suma monto_asignado por viaje — seguro
+    expect(kpi.valorPendienteCobro).toBe(600); // viene de la consulta POR FACTURA, no multiplicado por viaje
+    expect(kpi.cobrado).toBe(400);
+    expect(vi.mocked(query).mock.calls.length).toBe(2);
+    // La consulta por-factura filtra por facturas TOCADAS por el filtro actual, nunca todo el universo de la empresa sin relación al filtro.
+    const [sqlFactura] = vi.mocked(query).mock.calls[1];
+    expect(sqlFactura).toContain("fx.id IN");
+  });
+
+  it("no hay LIMIT/OFFSET de paginación en ninguna de las dos consultas — siempre TODO el filtro", async () => {
+    vi.mocked(query).mockResolvedValue([]);
+    await obtenerKpisReporte(7, {});
+    for (const call of vi.mocked(query).mock.calls) {
+      expect(String(call[0])).not.toContain("LIMIT ? OFFSET ?");
+    }
+  });
+});
+
+describe("FACT-1-TMS-REPORTES — Fase E: calcularKpisReporte (en memoria) evita doble conteo en facturas multiviaje", () => {
+  function filaFacturada(overrides: Partial<PlanReporte>): PlanReporte {
+    return {
+      id: 1, codigo: "PLAN-1", fechaPlan: "2026-08-01", horaCarga: null, estado: "Cerrado",
+      pendienteCierre: false, cerradoPor: null, cerradoEn: null, clienteId: null, cliente: null,
+      rutaCodigo: null, lugarDescargaHistorico: null, referenciaCliente: null, tipoTraslado: null,
+      regresoEstimado: null, tarifaComercial: null, placa: null, unidadTipo: null, unidadCapacidad: null,
+      pilotoId: null, piloto: null, auxiliares: [], paradas: [], evidencias: 0,
+      horaSalida: null, horaLlegada: null, kmSalida: null, kmLlegada: null, kmRecorridos: null, diasRuta: null,
+      estadoFacturacion: "Facturado", facturaId: 1, numeroFactura: "F-001", estadoAdminFactura: "Emitida",
+      estadoFinancieroFactura: "Pago parcial", montoFacturadoViaje: 500, montoBorradorViaje: null,
+      totalFactura: 1000, totalPagadoFactura: 400, saldoFactura: 600,
+      ...overrides,
+    };
+  }
+
+  it("11) valorFacturado suma monto_asignado POR VIAJE — nunca duplica el total de la factura", () => {
+    const planes = [
+      filaFacturada({ id: 1, montoFacturadoViaje: 400 }),
+      filaFacturada({ id: 2, montoFacturadoViaje: 600 }),
+    ];
+    const kpi = calcularKpisReporte(planes);
+    expect(kpi.valorFacturado).toBe(1000); // 400 + 600, cada uno su propio monto — no 2000 (2x el total de la factura)
+  });
+
+  it("12) cobrado NO se duplica cuando 2 viajes comparten la MISMA factura", () => {
+    const planes = [
+      filaFacturada({ id: 1, facturaId: 7, totalFactura: 1000, totalPagadoFactura: 1000 }),
+      filaFacturada({ id: 2, facturaId: 7, totalFactura: 1000, totalPagadoFactura: 1000 }),
+    ];
+    const kpi = calcularKpisReporte(planes);
+    expect(kpi.cobrado).toBe(1000); // UNA sola vez, no 2000
+  });
+
+  it("13) valorPendienteCobro NO se duplica cuando 2 viajes comparten la MISMA factura", () => {
+    const planes = [
+      filaFacturada({ id: 1, facturaId: 7, totalFactura: 1000, totalPagadoFactura: 400 }),
+      filaFacturada({ id: 2, facturaId: 7, totalFactura: 1000, totalPagadoFactura: 400 }),
+    ];
+    const kpi = calcularKpisReporte(planes);
+    expect(kpi.valorPendienteCobro).toBe(600); // (1000-400) UNA sola vez, no 1200
+    expect(kpi.facturasPendientesCobro).toBe(1); // 1 factura, no 2
+  });
+
+  it("2 facturas distintas SÍ se suman ambas (la deduplicación es por facturaId, no anula facturas genuinamente distintas)", () => {
+    const planes = [
+      filaFacturada({ id: 1, facturaId: 7, totalFactura: 1000, totalPagadoFactura: 0 }),
+      filaFacturada({ id: 2, facturaId: 8, totalFactura: 500, totalPagadoFactura: 0 }),
+    ];
+    const kpi = calcularKpisReporte(planes);
+    expect(kpi.valorPendienteCobro).toBe(1500);
+    expect(kpi.facturasPendientesCobro).toBe(2);
+  });
+
+  it("21) un viaje en Borrador NO suma a valorFacturado (solo Emitida cuenta como facturado)", () => {
+    const planes = [
+      filaFacturada({
+        id: 1, estadoFacturacion: "En borrador de factura", estadoAdminFactura: "Borrador",
+        montoFacturadoViaje: null, montoBorradorViaje: 500,
+      }),
+    ];
+    const kpi = calcularKpisReporte(planes);
+    expect(kpi.valorFacturado).toBe(0);
+    expect(kpi.viajesFacturados).toBe(0);
+  });
+
+  it("22) un viaje cuya única relación fue a una factura Anulada (defensivo: estadoAdminFactura null) no suma a valorFacturado", () => {
+    const planes = [
+      filaFacturada({
+        id: 1, estadoFacturacion: "Pendiente de facturación", facturaId: null, estadoAdminFactura: null,
+        montoFacturadoViaje: null, montoBorradorViaje: null, totalFactura: null, totalPagadoFactura: null, saldoFactura: null,
+      }),
+    ];
+    const kpi = calcularKpisReporte(planes);
+    expect(kpi.valorFacturado).toBe(0);
+    expect(kpi.cobrado).toBe(0);
+    expect(kpi.valorPendienteCobro).toBe(0);
+  });
+
+  it("15) viajesPendientesFacturacion/valorPendienteFacturacion cuentan solo los realmente pendientes", () => {
+    const planes = [
+      filaFacturada({ id: 1, estadoFacturacion: "Pendiente de facturación", facturaId: null, estadoAdminFactura: null, tarifaComercial: 700, montoFacturadoViaje: null }),
+      filaFacturada({ id: 2, estadoFacturacion: "Facturado" }),
+    ];
+    const kpi = calcularKpisReporte(planes);
+    expect(kpi.viajesPendientesFacturacion).toBe(1);
+    expect(kpi.valorPendienteFacturacion).toBe(700);
   });
 });
