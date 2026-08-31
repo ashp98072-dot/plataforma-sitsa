@@ -1,6 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import {
+  coincideCuentaBancaria,
+  coincideMetodoPago,
+  totalSeleccionado,
+  type FiltroCuentaBancaria,
+  type FiltroMetodoPago,
+} from "@/lib/tms/viaticos-filtros-ui";
 
 type ViaticoPorPagarRow = {
   id: number;
@@ -68,6 +75,12 @@ export default function ViaticosPorPagarPanel({ slug }: { slug: string }) {
   const [fFechaHasta, setFFechaHasta] = useState("");
   const [fEmpleado, setFEmpleado] = useState("");
   const [fEstado, setFEstado] = useState("AUTORIZADO");
+  // VIATICOS-BANDEJAS-1 — filtros SOLO client-side (mismo criterio que
+  // fBusqueda ya existente: no viajan al servidor, listarViaticosPorPagar
+  // no los soporta — no se toca el backend). Valores REALES de
+  // metodo_pago (nunca "BANCO" como valor interno, ver ticket).
+  const [fMetodo, setFMetodo] = useState<FiltroMetodoPago>("");
+  const [fCuenta, setFCuenta] = useState<FiltroCuentaBancaria>("");
 
   const [seleccionados, setSeleccionados] = useState<Set<number>>(new Set());
   const [pagandoId, setPagandoId] = useState<number | null>(null);
@@ -117,9 +130,29 @@ export default function ViaticosPorPagarPanel({ slug }: { slug: string }) {
     void cargar();
   }, [cargar]);
 
-  const filtrados = fBusqueda.trim()
-    ? items.filter((r) => r.planCodigo.toLowerCase().includes(fBusqueda.trim().toLowerCase()))
-    : items;
+  // VIATICOS-BANDEJAS-1 — los 3 filtros client-side se combinan con AND
+  // (sección 5 del ticket: deben cumplir TODO, nunca OR).
+  const filtrados = items.filter((r) => {
+    if (fBusqueda.trim() && !r.planCodigo.toLowerCase().includes(fBusqueda.trim().toLowerCase())) return false;
+    if (!coincideMetodoPago(r.metodoPago, fMetodo)) return false;
+    if (!coincideCuentaBancaria(r.cuentaBancaria, fCuenta)) return false;
+    return true;
+  });
+
+  // VIATICOS-BANDEJAS-1 — igual que en ViaticosControlPanel: fBusqueda/
+  // fMetodo/fCuenta son client-side y no recargan (a diferencia de
+  // fEstado/fFechaDesde/fFechaHasta/fEmpleado, que sí recargan vía
+  // cargar() y ya limpian la selección ahí). generarArchivoBancario()/
+  // urlExportar() actúan sobre `seleccionados` en crudo — se limpia la
+  // selección completa al cambiar cualquiera de estos filtros para que
+  // nunca se genere un archivo bancario ni se exporte algo que dejó de
+  // estar a la vista.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSeleccionados(new Set());
+  }, [fBusqueda, fMetodo, fCuenta]);
+
+  const { cantidad: cantidadSeleccionada, monto: montoSeleccionado } = totalSeleccionado(filtrados, seleccionados);
 
   // VIAT-4 (punto 11) — antes de exportar el archivo bancario: cuántos
   // AUTORIZADOS realmente calificarían (cuenta bancaria + monto > 0) y
@@ -268,6 +301,47 @@ export default function ViaticosPorPagarPanel({ slug }: { slug: string }) {
         </button>
       </div>
 
+      {/* VIATICOS-BANDEJAS-1 — filtros de método/cuenta, client-side
+          (mismo criterio que "Viaje"), se combinan con los demás (Estado,
+          fechas, empleado) — sección 5 del ticket: deben cumplir TODO. */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-1 text-xs text-[var(--muted)]">
+          Método:
+          {([
+            ["", "Todos"],
+            ["TRANSFERENCIA", "Transferencia"],
+            ["CHEQUE", "Cheque"],
+            ["EFECTIVO", "Efectivo"],
+          ] as const).map(([valor, etiqueta]) => (
+            <button
+              key={valor || "todos-metodo"}
+              type="button"
+              onClick={() => setFMetodo(valor)}
+              className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${fMetodo === valor ? "border-sky-500 bg-sky-950/20 text-sky-200" : "border-[var(--border)] hover:bg-[var(--input)]"}`}
+            >
+              {etiqueta}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-1 text-xs text-[var(--muted)]">
+          Cuenta:
+          {([
+            ["", "Todos"],
+            ["CON", "Con cuenta"],
+            ["SIN", "Sin cuenta"],
+          ] as const).map(([valor, etiqueta]) => (
+            <button
+              key={valor || "todos-cuenta"}
+              type="button"
+              onClick={() => setFCuenta(valor)}
+              className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${fCuenta === valor ? "border-sky-500 bg-sky-950/20 text-sky-200" : "border-[var(--border)] hover:bg-[var(--input)]"}`}
+            >
+              {etiqueta}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {autorizadosVisibles.length ? (
         <p className="text-xs">
           <span className="text-emerald-300">{aptosBanco.length} apto(s) para archivo bancario</span>
@@ -279,6 +353,25 @@ export default function ViaticosPorPagarPanel({ slug }: { slug: string }) {
           ) : null}
         </p>
       ) : null}
+
+      {/* VIATICOS-BANDEJAS-1 — botón dedicado además del checkbox de
+          cabecera de la tabla (mismo toggleSeleccionTodos(), actúa SOLO
+          sobre `filtrados`) + totales de la selección visible/válida
+          (totalSeleccionado() — nunca cuenta un id fuera de `filtrados`). */}
+      <div className="flex flex-wrap items-center gap-3 text-xs">
+        <button
+          type="button"
+          onClick={toggleSeleccionTodos}
+          disabled={!filtrados.length}
+          className="rounded border border-[var(--border)] px-2.5 py-1 font-medium hover:bg-[var(--input)] disabled:opacity-50"
+        >
+          {seleccionados.size === filtrados.length && filtrados.length ? "Quitar selección" : "Seleccionar todos visibles"}
+        </button>
+        <span className="text-[var(--muted)]">
+          Seleccionados: <span className="font-medium text-[var(--text)]">{cantidadSeleccionada}</span>
+          {" · "}Total: <span className="font-medium text-[var(--text)]">{q(montoSeleccionado)}</span>
+        </span>
+      </div>
 
       <div className="flex flex-wrap items-center gap-2">
         <a
