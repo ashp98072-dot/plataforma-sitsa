@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState, useRef, type FormEvent } from "react";
 import { useParams } from "next/navigation";
 import { CapturaPartida } from "@/components/contabilidad/captura-partida";
+import { libroUnicoActivo } from "@/lib/contabilidad/seleccion-libro";
 import { ConsultaPartidas } from "@/components/contabilidad/consulta-partidas";
 
 type Entidad = { id: number; codigo: string; nombre: string; activa: number; puede_editar?: number };
@@ -21,12 +22,16 @@ function SeleccionContable({ slug }: { slug: string }) {
   const [admin, setAdmin] = useState(false);
   const [escritura, setEscritura] = useState(false);
   const [error, setError] = useState("");
+  const [empresa, setEmpresa] = useState("");
   useEffect(() => {
     const controller = new AbortController();
     fetch(`/api/empresas/${slug}/contabilidad/entidades`, { cache: "no-store", signal: controller.signal })
       .then(respuesta).then((data) => {
         if (controller.signal.aborted) return;
-        setEntidades(data.entidades.filter((e: Entidad) => Number(e.activa) === 1));
+        const activas = data.entidades.filter((e: Entidad) => Number(e.activa) === 1);
+        setEntidades(activas);
+        setSeleccion(libroUnicoActivo(activas));
+        setEmpresa(data.empresa?.nombre ?? "");
         setAdmin(data.puedeAdministrar === true);
         setEscritura(data.puedeEscribir === true);
       }).catch((e) => { if (!controller.signal.aborted) setError(e.message); });
@@ -34,16 +39,17 @@ function SeleccionContable({ slug }: { slug: string }) {
   }, [slug]);
   const entidad = entidades.find((e) => String(e.id) === seleccion);
   return <div className="space-y-4">
-    <h1 className="text-2xl font-semibold">Contabilidad por entidad</h1>
-    <p>Selecciona la razón social. Los clientes y la operación compartida no se modifican.</p>
-    <label>Entidad contable <select aria-label="Entidad contable" value={seleccion} onChange={(e) => setSeleccion(e.target.value)} className="rounded border border-[var(--border)] bg-[var(--input)] p-2">
-      <option value="">Seleccionar KT / Mónaco</option>
+    <h1 className="text-2xl font-semibold">Contabilidad{empresa ? ` — ${empresa}` : ""}</h1>
+    <p>Se usa la empresa donde ingresaste. Los permisos se administran en Administración → Usuarios.</p>
+    {entidades.length > 1 ? <label>Libro contable <select aria-label="Libro contable" value={seleccion} onChange={(e) => setSeleccion(e.target.value)} className="rounded border border-[var(--border)] bg-[var(--input)] p-2">
+      <option value="">Seleccionar libro</option>
       {entidades.map((e) => <option key={e.id} value={e.id}>{e.codigo} — {e.nombre}</option>)}
-    </select></label>
-    <p className="text-sm">Si no hay entidades, Admin debe crearlas y asignar accesos desde Configurar entidades contables. Los registros antiguos sin entidad no aparecen en estos libros; no se han movido ni eliminado.</p>
-    {admin && <a className="text-sm underline" href={`/e/${slug}/contabilidad/entidades`}>Configurar entidades contables</a>}
+    </select></label> : entidad && <p>Libro contable: {entidad.codigo} — {entidad.nombre}</p>}
+    {entidades.length > 1 && <p className="text-sm">Cada libro es independiente. KT y Mónaco no comparten cuentas ni partidas.</p>}
+    {!entidades.length && !error && <p className="text-sm">Si no hay libros disponibles, Admin debe configurarlos. No se crean ni reasignan datos automáticamente.</p>}
+    {admin && <a className="text-sm underline" href={`/e/${slug}/contabilidad/entidades`}>Configurar libros contables</a>}
     {error && <p role="alert" className="text-red-500">{error}</p>}
-    {entidad && <LibroContable key={entidad.id} slug={slug} entidadId={entidad.id} puedeEditar={escritura && (admin || Number(entidad.puede_editar) === 1)} />}
+    {entidad && <LibroContable key={entidad.id} slug={slug} entidadId={entidad.id} puedeEditar={escritura} />}
   </div>;
 }
 function LibroContable({ slug, entidadId, puedeEditar }: { slug: string; entidadId: number; puedeEditar: boolean }) {
