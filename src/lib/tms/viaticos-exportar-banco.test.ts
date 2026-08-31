@@ -39,6 +39,14 @@ function fila(overrides: Partial<ViaticoPorPagar> = {}): ViaticoPorPagar {
     banco: "Banco Industrial",
     tipoCuenta: "Monetaria",
     cuentaBancaria: "1234567890",
+    // VIATICOS-PAGO-SNAPSHOT-1 — sin snapshot (fila AUTORIZADA, mostrable = cuenta viva); irrelevante para este archivo, que no toca banco/generarArchivoBiBanking.
+    pagoBanco: null,
+    pagoCuentaBancaria: null,
+    pagoTipoCuenta: null,
+    bancoMostrar: "Banco Industrial",
+    cuentaBancariaMostrar: "1234567890",
+    tipoCuentaMostrar: "Monetaria",
+    cuentaHistoricaNoDisponible: false,
     ...overrides,
   };
 }

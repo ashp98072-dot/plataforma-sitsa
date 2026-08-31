@@ -33,7 +33,9 @@ function fila(id: number, overrides: Partial<Record<string, unknown>> = {}) {
     estado: "AUTORIZADO",
     monto_asignado: "150.00",
     personal_nombre: `Persona ${id}`,
-    cuenta_bancaria: "1234567890",
+    banco: `Banco ${id}`,
+    cuenta_bancaria: `CTA-${id}`,
+    tipo_cuenta: "Monetaria",
     ...overrides,
   };
 }
@@ -71,8 +73,9 @@ describe("registrarEntregaViaticosMasiva — casos válidos (1/2/3)", () => {
     const r = await registrarEntregaViaticosMasiva(7, datos, "fact1");
     expect(r.ok).toBe(true);
     // Cada UPDATE lleva su PROPIA referencia — nunca la misma para ambos.
-    expect(conn.execute).toHaveBeenCalledWith(expect.stringContaining("UPDATE tms_viaticos"), ["fact1", "CHEQUE", "CHQ-1001", 10, 7]);
-    expect(conn.execute).toHaveBeenCalledWith(expect.stringContaining("UPDATE tms_viaticos"), ["fact1", "CHEQUE", "CHQ-1002", 11, 7]);
+    // CHEQUE nunca congela snapshot bancario (pago_* siempre null aquí).
+    expect(conn.execute).toHaveBeenCalledWith(expect.stringContaining("UPDATE tms_viaticos"), ["fact1", "CHEQUE", "CHQ-1001", null, null, null, 10, 7]);
+    expect(conn.execute).toHaveBeenCalledWith(expect.stringContaining("UPDATE tms_viaticos"), ["fact1", "CHEQUE", "CHQ-1002", null, null, null, 11, 7]);
   });
 
   it("3) efectivo masivo válido", async () => {
@@ -323,5 +326,105 @@ describe("registrarEntregaViaticosMasiva — escritura/auditoría/commit (14/15/
     getConnection.mockRejectedValueOnce(new Error("pool exhausted"));
     await expect(registrarEntregaViaticosMasiva(7, datos, "fact1")).rejects.toThrow("pool exhausted");
     expect(registrarAuditoriaTx).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * VIATICOS-PAGO-SNAPSHOT-1 — snapshot bancario POR PERSONA dentro del
+ * lote: el mismo `SELECT ... FOR UPDATE` que ya bloqueaba los viáticos
+ * ahora también trae banco/cuenta_bancaria/tipo_cuenta (cero consultas
+ * adicionales) — cada UPDATE congela el snapshot de SU PROPIO
+ * beneficiario, aunque compartan una sola referencia de lote.
+ */
+describe("registrarEntregaViaticosMasiva — snapshot bancario (15-23)", () => {
+  it("15/16/17) TRANSFERENCIA: cada item congela SU PROPIO banco/cuenta/tipo — nunca el de otro item del lote", async () => {
+    const datos: DatosEntregaMasiva = {
+      metodoPago: "TRANSFERENCIA",
+      items: [{ id: 10, referenciaPago: "LOTE-001" }, { id: 11, referenciaPago: "LOTE-001" }],
+    };
+    const r = await registrarEntregaViaticosMasiva(7, datos, "fact1");
+    expect(r.ok).toBe(true);
+    expect(conn.execute).toHaveBeenCalledWith(
+      expect.stringContaining("UPDATE tms_viaticos"),
+      ["fact1", "TRANSFERENCIA", "LOTE-001", "Banco 10", "CTA-10", "Monetaria", 10, 7],
+    );
+    expect(conn.execute).toHaveBeenCalledWith(
+      expect.stringContaining("UPDATE tms_viaticos"),
+      ["fact1", "TRANSFERENCIA", "LOTE-001", "Banco 11", "CTA-11", "Monetaria", 11, 7],
+    );
+  });
+
+  it("18) sin N+1: el SELECT que trae banco/cuenta/tipo se ejecuta UNA sola vez para todo el lote", async () => {
+    const datos: DatosEntregaMasiva = {
+      metodoPago: "TRANSFERENCIA",
+      items: [{ id: 10, referenciaPago: "LOTE-001" }, { id: 11, referenciaPago: "LOTE-001" }],
+    };
+    await registrarEntregaViaticosMasiva(7, datos, "fact1");
+    expect(conn.query).toHaveBeenCalledTimes(1);
+    const [sql] = conn.query.mock.calls[0];
+    expect(String(sql)).toContain("e.banco");
+    expect(String(sql)).toContain("e.tipo_cuenta");
+  });
+
+  it("19) una cuenta faltante en el lote revierte TODO — ningún snapshot parcial", async () => {
+    conn.query.mockResolvedValue([[fila(10), fila(11, { cuenta_bancaria: null })], []]);
+    const datos: DatosEntregaMasiva = {
+      metodoPago: "TRANSFERENCIA",
+      items: [{ id: 10, referenciaPago: "LOTE-001" }, { id: 11, referenciaPago: "LOTE-001" }],
+    };
+    const r = await registrarEntregaViaticosMasiva(7, datos, "fact1");
+    expect(r.ok).toBe(false);
+    expect(conn.execute).not.toHaveBeenCalled();
+    expect(conn.commit).not.toHaveBeenCalled();
+  });
+
+  it("20) CHEQUE: todos los items quedan con snapshot NULL", async () => {
+    const datos: DatosEntregaMasiva = {
+      metodoPago: "CHEQUE",
+      items: [{ id: 10, referenciaPago: "CHQ-1" }, { id: 11, referenciaPago: "CHQ-2" }],
+    };
+    await registrarEntregaViaticosMasiva(7, datos, "fact1");
+    for (const call of conn.execute.mock.calls) {
+      const params = call[1] as unknown[];
+      // [usuario, metodoPago, referencia, pago_banco, pago_cuenta, pago_tipo, id, empresaId]
+      expect(params.slice(3, 6)).toEqual([null, null, null]);
+    }
+  });
+
+  it("21) EFECTIVO: todos los items quedan con snapshot NULL", async () => {
+    const datos: DatosEntregaMasiva = {
+      metodoPago: "EFECTIVO",
+      items: [{ id: 10, referenciaPago: null }, { id: 11, referenciaPago: null }],
+    };
+    await registrarEntregaViaticosMasiva(7, datos, "fact1");
+    for (const call of conn.execute.mock.calls) {
+      const params = call[1] as unknown[];
+      expect(params.slice(3, 6)).toEqual([null, null, null]);
+    }
+  });
+
+  it("22) auditorías en la MISMA transacción, una por viático", async () => {
+    const datos: DatosEntregaMasiva = {
+      metodoPago: "TRANSFERENCIA",
+      items: [{ id: 10, referenciaPago: "LOTE-001" }, { id: 11, referenciaPago: "LOTE-001" }],
+    };
+    await registrarEntregaViaticosMasiva(7, datos, "fact1");
+    expect(registrarAuditoriaTx).toHaveBeenCalledTimes(2);
+    expect(registrarAuditoriaTx).toHaveBeenNthCalledWith(1, conn, expect.objectContaining({ empresaId: 7 }));
+    expect(registrarAuditoriaTx).toHaveBeenNthCalledWith(2, conn, expect.objectContaining({ empresaId: 7 }));
+  });
+
+  it("23) rollback no deja snapshots parciales: si el segundo UPDATE falla, el primero tampoco queda confirmado", async () => {
+    conn.execute
+      .mockResolvedValueOnce([{ affectedRows: 1 }, []])
+      .mockResolvedValueOnce([{ affectedRows: 0 }, []]);
+    const datos: DatosEntregaMasiva = {
+      metodoPago: "TRANSFERENCIA",
+      items: [{ id: 10, referenciaPago: "LOTE-001" }, { id: 11, referenciaPago: "LOTE-001" }],
+    };
+    const r = await registrarEntregaViaticosMasiva(7, datos, "fact1");
+    expect(r.ok).toBe(false);
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(conn.rollback).toHaveBeenCalled();
   });
 });

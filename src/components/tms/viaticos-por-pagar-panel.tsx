@@ -27,6 +27,16 @@ type ViaticoPorPagarRow = {
   banco: string | null;
   tipoCuenta: string | null;
   cuentaBancaria: string | null;
+  // VIATICOS-PAGO-SNAPSHOT-1 — campos DERIVADOS (derivarCuentaMostrable
+  // en src/lib/tms/viaticos.ts): lo que la tabla debe mostrar — cuenta
+  // viva mientras AUTORIZADO (o CHEQUE/EFECTIVO en cualquier estado),
+  // snapshot congelado para ENTREGADO/LIQUIDADO por TRANSFERENCIA. Nunca
+  // usar banco/cuentaBancaria/tipoCuenta (arriba) para "qué cuenta se
+  // usó" en una fila ya pagada — esos son siempre la ficha VIVA.
+  bancoMostrar: string | null;
+  cuentaBancariaMostrar: string | null;
+  tipoCuentaMostrar: string | null;
+  cuentaHistoricaNoDisponible: boolean;
 };
 
 function q(n: number): string {
@@ -584,11 +594,17 @@ export default function ViaticosPorPagarPanel({ slug }: { slug: string }) {
                 <td className="px-3 py-2">{q(r.montoAsignado)}</td>
                 <td className="px-3 py-2">{r.metodoPago ? METODO_PAGO_LABEL[r.metodoPago] ?? r.metodoPago : "—"}</td>
                 <td className="px-3 py-2 text-[11px]">
-                  {r.banco || r.cuentaBancaria ? (
+                  {/* VIATICOS-PAGO-SNAPSHOT-1 — *Mostrar ya resuelve la
+                      regla completa (viva vs. snapshot); acá solo se
+                      distingue el caso "histórico sin snapshot" para
+                      mostrar el aviso explícito en vez de "—" genérico. */}
+                  {r.cuentaHistoricaNoDisponible ? (
+                    <span className="text-amber-300">Cuenta usada: no disponible</span>
+                  ) : r.bancoMostrar || r.cuentaBancariaMostrar ? (
                     <>
-                      {r.banco || "—"}
-                      {r.tipoCuenta ? ` · ${r.tipoCuenta}` : ""}
-                      {r.cuentaBancaria ? ` · ${r.cuentaBancaria}` : ""}
+                      {r.bancoMostrar || "—"}
+                      {r.tipoCuentaMostrar ? ` · ${r.tipoCuentaMostrar}` : ""}
+                      {r.cuentaBancariaMostrar ? ` · ${r.cuentaBancariaMostrar}` : ""}
                     </>
                   ) : (
                     <span className="text-[var(--muted)]">Sin datos bancarios en ficha</span>
