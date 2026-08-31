@@ -1,7 +1,7 @@
 import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { getPool } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
-import { limpiarViajesConjuntos, limpiarViaticos, limpiarCuestionarios, desactivarCatalogo, anularMultas } from "@/lib/admin/limpiar-operaciones";
+import { limpiarViajesConjuntos, limpiarViaticos, limpiarCuestionarios, desactivarCatalogo, anularMultas, eliminarRutas } from "@/lib/admin/limpiar-operaciones";
 import { limpiarMultasPrueba } from "@/lib/admin/limpiar-pruebas";
 import type { ModuloLimpieza } from "@/lib/admin/limpiar-modulo-shared";
 
@@ -137,8 +137,8 @@ export async function contarModuloEmpresa(
       case "operaciones_viaticos":
       case "pruebas_viaticos":
         return { viaticos: await count("tms_viaticos") };
-      case "operaciones_rutas":
-        return { rutas_activas: await count("tms_cliente_rutas", "empresa_id = ? AND activo = 1") };
+      case "operaciones_eliminar_rutas":
+        return { rutas: await count("tms_cliente_rutas"), paradas_maestras: await count("tms_cliente_ruta_paradas") };
       case "operaciones_multas":
         return { multas_no_anuladas: await count("ops_multas", "empresa_id = ? AND estado <> 'ANULADA'") };
       case "pruebas_multas":
@@ -700,7 +700,9 @@ export async function limpiarModuloEmpresa(opts: {
       case "operaciones_viaticos":
         afectados = await limpiarViaticos(conn, opts.empresaId);
         break;
-      case "operaciones_rutas":
+      case "operaciones_eliminar_rutas":
+        afectados = await eliminarRutas(conn, opts.empresaId);
+        break;
       case "operaciones_accesos":
       case "clientes":
         afectados = await desactivarCatalogo(conn, opts.empresaId, opts.modulo);

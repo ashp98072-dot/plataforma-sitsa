@@ -116,9 +116,23 @@ export async function limpiarCuestionarios(conn: PoolConnection, empresaId: numb
   return borrarGrupos(conn, [await leer(conn, "fact_cliente_perfil", "empresa_id = ?", empresaId)]);
 }
 
+/** Solo catálogo maestro. Los viajes conservan sus copias históricas y paradas. */
+export async function eliminarRutas(conn: PoolConnection, empresaId: number) {
+  const rutas = await leer(conn, "tms_cliente_rutas", "empresa_id = ?", empresaId);
+  const paradas = await leer(conn, "tms_cliente_ruta_paradas",
+    "empresa_id = ? OR ruta_id IN (SELECT id FROM tms_cliente_rutas WHERE empresa_id = ?)", empresaId, [empresaId]);
+  const ids = new Set(rutas.filas.map((r) => Number(r.id)));
+  if (paradas.filas.some((p) => !ids.has(Number(p.ruta_id)))) {
+    throw new LimpiezaBloqueada("Hay paradas maestras sin ruta de esta empresa. Requiere revisión; no se limpió ningún dato.");
+  }
+  // Valida FKs reales antes de borrar; no depende de CASCADE ni lo deshabilita.
+  // tms_planes_viaje.ruta_id es informativo sin FK por diseño del esquema:
+  // el viaje conserva ruta_codigo_historico y demás datos copiados.
+  return borrarGrupos(conn, [paradas, rutas]);
+}
+
 export async function desactivarCatalogo(conn: PoolConnection, empresaId: number, modulo: string) {
   const tablas = modulo === "clientes" ? ["clientes", "tms_clientes"]
-    : modulo === "operaciones_rutas" ? ["tms_cliente_rutas", "tms_cliente_ruta_paradas"]
     : modulo === "operaciones_accesos" ? ["proveedor_portales"] : [];
   if (!tablas.length) throw new LimpiezaBloqueada("Catálogo no soportado.");
   const out: Record<string, number> = {};
