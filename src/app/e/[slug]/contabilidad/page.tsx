@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, useRef, type FormEvent } from "react";
 import { useParams } from "next/navigation";
+import { CapturaPartida } from "@/components/contabilidad/captura-partida";
 
 type Entidad = { id: number; codigo: string; nombre: string; activa: number; puede_editar?: number };
 async function respuesta(res: Response) {
@@ -98,13 +99,6 @@ function LibroContable({ slug, entidadId, puedeEditar }: { slug: string; entidad
     e.preventDefault();
     if (await guardar("cuentas", { codigo, nombre, tipo })) { setCodigo(""); setNombre(""); }
   }
-  async function asientoDemo() {
-    const activas = cuentas.filter((c) => Number(c.activa) === 1);
-    if (activas.length < 2) { setMsg("Crea al menos 2 cuentas activas para un asiento demo."); return; }
-    if (!confirm("Esto registra una partida de prueba de Q100 en la entidad seleccionada. ¿Continuar?")) return;
-    await guardar("asientos", { numero: `A-${Date.now()}`, fecha: new Date().toLocaleDateString("en-CA", { timeZone: "America/Guatemala" }), glosa: "Asiento de prueba",
-      lineas: [{ cuentaId: Number(activas[0].id), debe: 100, haber: 0 }, { cuentaId: Number(activas[1].id), debe: 0, haber: 100 }] });
-  }
   async function crearCxc() {
     if (await guardar("cxc", { cliente, fecha: new Date().toLocaleDateString("en-CA", { timeZone: "America/Guatemala" }), monto })) setCliente("");
   }
@@ -118,7 +112,7 @@ function LibroContable({ slug, entidadId, puedeEditar }: { slug: string; entidad
         <h1 className="text-2xl font-semibold">Contabilidad</h1>
         <p className="text-sm text-[var(--muted)]">
           Plan de cuentas, asientos y CxC/CxP de la entidad seleccionada.
-          La captura completa y la importación desde Milenium corresponden a las siguientes fases.
+          Captura de partidas disponible. Períodos, reversos e importación desde Milenium siguen pendientes.
         </p>
       </div>
 
@@ -131,10 +125,9 @@ function LibroContable({ slug, entidadId, puedeEditar }: { slug: string; entidad
           ))}
         </select>
         <button className="rounded bg-[var(--accent)] px-3 py-1 text-sm">Crear cuenta</button>
-        <button type="button" onClick={() => void asientoDemo()} className="rounded bg-[#6A1B9A] px-3 py-1 text-sm">
-          Asiento demo
-        </button>
       </form>
+
+      {puedeEditar && <CapturaPartida cuentas={cuentas.filter((c) => Number(c.activa) === 1).map((c) => ({ id: Number(c.id), codigo: String(c.codigo), nombre: String(c.nombre) }))} ocupado={ocupado} guardar={(body) => guardar("asientos", body)} />}
 
       <div className="flex flex-wrap gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
         <input className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" placeholder="Cliente CxC" value={cliente} onChange={(e) => setCliente(e.target.value)} />
