@@ -1,0 +1,69 @@
+-- VIATICOS-RECHAZADO-1 — PROPUESTA DE DISEÑO, NO APLICAR.
+--
+-- Este archivo NO se ha ejecutado contra ninguna base de datos (ni local
+-- ni de producción). Se entrega únicamente para revisión y ejecución
+-- manual posterior, tras el reporte de descubrimiento del ticket
+-- "TICKET DE DESCUBRIMIENTO — VIATICOS-RECHAZADO-1" (mismo repo, misma
+-- sesión) y la aprobación explícita de las siguientes decisiones de
+-- negocio en "TICKET SQL — VIATICOS-RECHAZADO-1":
+--
+--   1. Nuevo estado RECHAZADO — transición ÚNICAMENTE PROGRAMADO ->
+--      RECHAZADO. Terminal: NO existe RECHAZADO -> PROGRAMADO. Para
+--      solicitar de nuevo se crea un registro PROGRAMADO nuevo.
+--   2. Permiso para rechazar: viaticos_autorizar:editar (el mismo que
+--      autorizar) — GerenteOperaciones/JefeOperaciones sí,
+--      Facturador/AuxiliarOperaciones no. Ya encaja tal cual con los
+--      permisos por rol existentes (ver src/lib/permisos-shared.ts) —
+--      esta migración NO toca ninguna tabla/config de permisos.
+--   3. motivo_rechazo obligatorio (server-side: trim, mínimo 10 y máximo
+--      300 caracteres — no se valida aquí, se valida en la función de
+--      negocio que se implemente).
+--   4. Rechazar NO requiere firma manuscrita ni contraseña — sesión +
+--      permiso + motivo + fecha servidor + auditoría son suficientes.
+--      Por eso esta migración NO toca `firmas_electronicas` en absoluto.
+--   5. Portal piloto/auxiliar: debe poder ver que su viático fue
+--      rechazado (estado + fecha + motivo) como información histórica,
+--      pero un RECHAZADO NUNCA debe sumarse como dinero recibido/
+--      entregado/pagado en ningún resumen — es responsabilidad de la
+--      capa de aplicación (no de este esquema) excluir RECHAZADO de esas
+--      sumatorias.
+--   6. Facturador: RECHAZADO nunca debe aparecer en "Viáticos por
+--      pagar", ni siquiera con el filtro "Todos" — también
+--      responsabilidad de la capa de aplicación.
+--
+-- Alcance de ESTE archivo: únicamente las columnas de trazabilidad del
+-- rechazo. NO implementa la funcionalidad (rechazarViatico(), endpoint,
+-- UI) — eso queda para un ticket de implementación aparte, una vez este
+-- SQL se haya aplicado manualmente y confirmado con DESCRIBE.
+--
+-- tms_viaticos.estado YA ES VARCHAR(30) (ver
+-- sql/migrate-2026-08-viat-0-viaticos.sql) — NUNCA fue ENUM. El valor
+-- 'RECHAZADO' (9 caracteres) cabe sin ningún ALTER de tipo/ancho — por
+-- eso este archivo NO incluye ningún ALTER sobre la columna `estado`.
+--
+-- Columnas nuevas — mismo tipo/tamaño que las columnas de trazabilidad
+-- ya existentes en esta misma tabla (mismo criterio, no arbitrario):
+--   rechazado_por    VARCHAR(100) — igual que autorizado_por/
+--                    entregado_por/liquidado_por.
+--   rechazado_en     DATETIME     — igual que autorizado_en/
+--                    entregado_en/liquidado_en.
+--   motivo_rechazo   VARCHAR(300) — igual que motivo_cambio/
+--                    observaciones_entrega/observaciones_liquidacion.
+-- Los tres NULL mientras el viático no está RECHAZADO — mismo criterio
+-- que el resto de columnas "_por"/"_en" de esta tabla (nunca un default
+-- distinto de NULL, para no confundir "no aplica" con un valor real).
+--
+-- Aditivo e idempotente (ADD COLUMN IF NOT EXISTS) — seguro de reaplicar
+-- si hiciera falta en otro entorno. NO borra ni transforma ningún dato
+-- existente. NO se toca ninguna otra tabla (firmas_electronicas,
+-- auditoria, usuario_firmas quedan intactas).
+
+ALTER TABLE tms_viaticos
+  ADD COLUMN IF NOT EXISTS rechazado_por VARCHAR(100) NULL AFTER reintegro,
+  ADD COLUMN IF NOT EXISTS rechazado_en DATETIME NULL AFTER rechazado_por,
+  ADD COLUMN IF NOT EXISTS motivo_rechazo VARCHAR(300) NULL AFTER rechazado_en;
+
+-- Verificación posterior recomendada, tras ejecutar manualmente:
+-- DESCRIBE tms_viaticos;
+-- Debe listar rechazado_por / rechazado_en / motivo_rechazo al final,
+-- justo después de reintegro.
