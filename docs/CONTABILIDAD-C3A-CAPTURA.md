@@ -31,7 +31,8 @@ No agrega dependencias, tablas, migraciones ni datos de Milenium al repositorio.
 
 ## Pendiente de C3, no presentar como terminado
 
-1. Consulta individual del detalle completo de una partida y totales del listado.
+1. Consulta individual del detalle completo de una partida y totales del listado:
+   resuelto en C3B, ver CONTABILIDAD-C3B-CONSULTA.md.
 2. Aprobar reglas de período/ejercicio, numeración, apertura/cierre y reapertura.
 3. Diseñar y aplicar manualmente la migración correspondiente; validar bloqueo
    transaccional para que un cierre y una escritura concurrente no se crucen.

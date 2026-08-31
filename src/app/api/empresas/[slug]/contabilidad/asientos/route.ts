@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireTenantModulo } from "@/lib/tenant";
 import { AsientoInvalido, registrarAsiento } from "@/lib/contabilidad/asientos";
+import { consultarPartida } from "@/lib/contabilidad/consulta-partida";
 
 import { ambitoDesdeRequest, consultarLibro, errorAmbito } from "@/lib/contabilidad/ambito";
 
@@ -11,6 +12,12 @@ export async function GET(req: Request, ctx: Ctx) {
   const guard = await requireTenantModulo(slug, "contabilidad");
   if (guard.error) return guard.error;
   try {
+    const ids = new URL(req.url).searchParams.getAll("id");
+    if (ids.length > 1) return NextResponse.json({ error: "Partida inválida." }, { status: 400 });
+    if (ids.length === 1) {
+      const detalle = await consultarPartida(guard.empresa.id, ambitoDesdeRequest(req, guard.session), ids[0]);
+      return NextResponse.json(detalle, { headers: { "Cache-Control": "private, no-store" } });
+    }
     const rows = await consultarLibro("asientos", guard.empresa.id, ambitoDesdeRequest(req, guard.session));
     return NextResponse.json({ asientos: rows }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {

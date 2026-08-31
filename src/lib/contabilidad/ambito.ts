@@ -36,7 +36,10 @@ export async function bloquearAmbito(conn: PoolConnection, empresaId: number, a:
 
 const consultas = {
   cuentas: "SELECT id, codigo, nombre, tipo, nivel, activa FROM cont_cuentas WHERE empresa_id = ? AND entidad_id = ? ORDER BY codigo",
-  asientos: "SELECT id, fecha, numero, glosa, estado, creado_por FROM cont_asientos WHERE empresa_id = ? AND entidad_id = ? ORDER BY fecha DESC, id DESC LIMIT 100",
+  asientos: `SELECT id, fecha, numero, glosa, estado, creado_por,
+    (SELECT COALESCE(SUM(d.debe), 0) FROM cont_asiento_detalle d WHERE d.empresa_id = cont_asientos.empresa_id AND d.entidad_id = cont_asientos.entidad_id AND d.asiento_id = cont_asientos.id) AS total_debe,
+    (SELECT COALESCE(SUM(d.haber), 0) FROM cont_asiento_detalle d WHERE d.empresa_id = cont_asientos.empresa_id AND d.entidad_id = cont_asientos.entidad_id AND d.asiento_id = cont_asientos.id) AS total_haber
+    FROM cont_asientos WHERE empresa_id = ? AND entidad_id = ? ORDER BY fecha DESC, id DESC LIMIT 100`,
   cxc: "SELECT id, cliente, documento, fecha, vencimiento, monto, saldo, estado FROM cont_cxc WHERE empresa_id = ? AND entidad_id = ? ORDER BY fecha DESC, id DESC LIMIT 200",
   cxp: "SELECT id, proveedor, documento, fecha, vencimiento, monto, saldo, estado FROM cont_cxp WHERE empresa_id = ? AND entidad_id = ? ORDER BY fecha DESC, id DESC LIMIT 200",
 };

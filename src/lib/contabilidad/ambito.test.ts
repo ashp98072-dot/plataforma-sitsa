@@ -71,6 +71,16 @@ it("fallo de autorización revierte antes de consultar el libro", async () => {
   expect(conn.rollback).toHaveBeenCalledOnce();
   expect(conn.release).toHaveBeenCalledOnce();
 });
+it("totales del listado se correlacionan por empresa, entidad y partida", async () => {
+  await consultarLibro("asientos", 7, a);
+  const sql = String(conn.query.mock.calls.at(-1)?.[0]);
+  expect(sql).toContain("SUM(d.debe)");
+  expect(sql).toContain("SUM(d.haber)");
+  for (const condicion of ["d.empresa_id = cont_asientos.empresa_id", "d.entidad_id = cont_asientos.entidad_id", "d.asiento_id = cont_asientos.id"]) {
+    expect(sql.split(condicion)).toHaveLength(3);
+  }
+  expect(sql).toContain("LIMIT 100");
+});
 it.each(["ER_NO_SUCH_TABLE", "ER_BAD_FIELD_ERROR"])("esquema incompleto %s devuelve 503 sin fallback al libro legado", async (code) => {
   const res = errorAmbito({ code, sql: "privado" })!;
   expect(res.status).toBe(503);

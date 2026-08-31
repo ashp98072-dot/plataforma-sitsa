@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState, useRef, type FormEvent } from "react";
 import { useParams } from "next/navigation";
 import { CapturaPartida } from "@/components/contabilidad/captura-partida";
+import { ConsultaPartidas } from "@/components/contabilidad/consulta-partidas";
 
 type Entidad = { id: number; codigo: string; nombre: string; activa: number; puede_editar?: number };
 async function respuesta(res: Response) {
@@ -107,7 +108,7 @@ function LibroContable({ slug, entidadId, puedeEditar }: { slug: string; entidad
   }
 
   return (
-    <fieldset disabled={!puedeEditar || ocupado} className="space-y-6">
+    <><fieldset disabled={!puedeEditar || ocupado} className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">Contabilidad</h1>
         <p className="text-sm text-[var(--muted)]">
@@ -152,16 +153,6 @@ function LibroContable({ slug, entidadId, puedeEditar }: { slug: string; entidad
           </ul>
         </div>
         <div className="rounded-xl border border-[var(--border)] p-4">
-          <h2 className="font-medium">Asientos recientes</h2>
-          <ul className="mt-2 space-y-1 text-sm">
-            {asientos.map((a) => (
-              <li key={String(a.id)}>
-                {String(a.numero)} · {String(a.fecha).slice(0, 10)} · {String(a.glosa ?? "")}
-              </li>
-            ))}
-          </ul>
-        </div>
-        <div className="rounded-xl border border-[var(--border)] p-4">
           <h2 className="font-medium">CxC ({cxc.length})</h2>
           <ul className="mt-2 space-y-1 text-sm">
             {cxc.map((r) => (
@@ -183,5 +174,7 @@ function LibroContable({ slug, entidadId, puedeEditar }: { slug: string; entidad
         </div>
       </div>
     </fieldset>
+      <ConsultaPartidas key={api("asientos")} url={api("asientos")} asientos={asientos} />
+    </>
   );
 }
