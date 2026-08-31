@@ -1,11 +1,28 @@
--- VIATICOS-RECHAZADO-1 — PROPUESTA DE DISEÑO, NO APLICAR.
+-- VIATICOS-RECHAZADO-1 — APLICADA MANUALMENTE POR EL USUARIO.
 --
--- Este archivo NO se ha ejecutado contra ninguna base de datos (ni local
--- ni de producción). Se entrega únicamente para revisión y ejecución
--- manual posterior, tras el reporte de descubrimiento del ticket
--- "TICKET DE DESCUBRIMIENTO — VIATICOS-RECHAZADO-1" (mismo repo, misma
--- sesión) y la aprobación explícita de las siguientes decisiones de
--- negocio en "TICKET SQL — VIATICOS-RECHAZADO-1":
+-- SQL aplicado manualmente en producción el 31/08/2026 (vía phpMyAdmin,
+-- fuera de esta sesión de Claude, tras aprobación explícita) y
+-- verificado con:
+--
+--   SHOW COLUMNS FROM tms_viaticos
+--   WHERE Field IN ('rechazado_por','rechazado_en','motivo_rechazo');
+--
+-- Resultado confirmado:
+--   rechazado_por    varchar(100) NULL
+--   rechazado_en     datetime     NULL
+--   motivo_rechazo   varchar(300) NULL
+--
+-- La aplicación NUNCA ejecuta migraciones automáticamente en runtime
+-- (mismo criterio que el resto de SITSA) — este archivo queda como
+-- TRAZABILIDAD del cambio ya aplicado, no como una propuesta pendiente.
+-- No volver a ejecutarlo como parte de un cambio de código; es
+-- aditivo/idempotente (`ADD COLUMN IF NOT EXISTS`) por si hiciera falta
+-- reaplicarlo en otro entorno (dev/staging), no porque deba correrse de
+-- nuevo en producción.
+--
+-- Documenta las decisiones de negocio aprobadas en el ticket de
+-- descubrimiento "TICKET DE DESCUBRIMIENTO — VIATICOS-RECHAZADO-1" y
+-- confirmadas en "TICKET SQL — VIATICOS-RECHAZADO-1":
 --
 --   1. Nuevo estado RECHAZADO — transición ÚNICAMENTE PROGRAMADO ->
 --      RECHAZADO. Terminal: NO existe RECHAZADO -> PROGRAMADO. Para
@@ -32,9 +49,9 @@
 --      responsabilidad de la capa de aplicación.
 --
 -- Alcance de ESTE archivo: únicamente las columnas de trazabilidad del
--- rechazo. NO implementa la funcionalidad (rechazarViatico(), endpoint,
--- UI) — eso queda para un ticket de implementación aparte, una vez este
--- SQL se haya aplicado manualmente y confirmado con DESCRIBE.
+-- rechazo, ya aplicadas. NO implementa la funcionalidad (rechazarViatico(),
+-- endpoint, UI) — eso queda para un ticket de implementación aparte. No
+-- se modificó ningún código funcional (lib/API/UI) al aplicar este SQL.
 --
 -- tms_viaticos.estado YA ES VARCHAR(30) (ver
 -- sql/migrate-2026-08-viat-0-viaticos.sql) — NUNCA fue ENUM. El valor
@@ -63,7 +80,7 @@ ALTER TABLE tms_viaticos
   ADD COLUMN IF NOT EXISTS rechazado_en DATETIME NULL AFTER rechazado_por,
   ADD COLUMN IF NOT EXISTS motivo_rechazo VARCHAR(300) NULL AFTER rechazado_en;
 
--- Verificación posterior recomendada, tras ejecutar manualmente:
--- DESCRIBE tms_viaticos;
--- Debe listar rechazado_por / rechazado_en / motivo_rechazo al final,
--- justo después de reintegro.
+-- Verificación posterior — YA REALIZADA (ver encabezado): confirmado con
+-- SHOW COLUMNS FROM tms_viaticos WHERE Field IN ('rechazado_por',
+-- 'rechazado_en','motivo_rechazo'); las 3 columnas existen con el tipo
+-- esperado, al final de la tabla, justo después de reintegro.
