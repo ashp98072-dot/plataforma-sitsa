@@ -22,6 +22,10 @@ type ViaticoControlRow = {
   banco?: string | null;
   tipoCuenta?: string | null;
   cuentaBancaria?: string | null;
+  // VIATICOS-RECHAZADO-1 — null mientras el viático no está RECHAZADO.
+  rechazadoPor: string | null;
+  rechazadoEn: string | null;
+  motivoRechazo: string | null;
 };
 
 /** VIATICOS-FIRMA — confirmación mostrada tras firmar (nunca "Firma Electrónica Avanzada"/certificado/PSC/legal). */
@@ -38,6 +42,7 @@ type FirmaInfo = {
 type Resumen = {
   pendientes: number;
   autorizados: number;
+  rechazados: number;
   entregados: number;
   liquidados: number;
 };
@@ -52,34 +57,37 @@ const inputCls =
 const ESTADO_BADGE_CLS: Record<string, string> = {
   PROGRAMADO: "bg-[var(--input)] text-[var(--muted)]",
   AUTORIZADO: "bg-sky-950/40 text-sky-300",
+  RECHAZADO: "bg-red-950/40 text-red-300",
   ENTREGADO: "bg-amber-950/40 text-amber-300",
   LIQUIDADO: "bg-emerald-950/40 text-emerald-300",
 };
 
 /**
- * Interpretación UI de los 4 estados REALES (no se inventan estados
- * nuevos — ver src/lib/tms/viaticos.ts, EstadoViatico): PROGRAMADO =
- * pendiente de autorización, AUTORIZADO = pendiente de pago, ENTREGADO =
- * pendiente de liquidación, LIQUIDADO = liquidado.
+ * Interpretación UI de los estados REALES (ver src/lib/tms/viaticos.ts,
+ * EstadoViatico): PROGRAMADO = pendiente de autorización, AUTORIZADO =
+ * pendiente de pago, RECHAZADO = terminal (VIATICOS-RECHAZADO-1, sin
+ * transición de regreso), ENTREGADO = pendiente de liquidación,
+ * LIQUIDADO = liquidado.
  */
 const ESTADO_LABEL_UI: Record<string, string> = {
   PROGRAMADO: "Pendiente de autorización",
   AUTORIZADO: "Pendiente de pago",
+  RECHAZADO: "Rechazado",
   ENTREGADO: "Pendiente de liquidación",
   LIQUIDADO: "Liquidado",
 };
 
 /**
- * VIATICOS-BANDEJAS-1 — pestañas visibles (antes dropdown "Estado"),
- * mismos 4 estados reales, SIN "Rechazados" (no existe ese estado — ver
- * ticket VIATICOS-BANDEJAS-1). El valor es exactamente EstadoViatico
- * (viaticos.ts) — la pestaña solo cambia `fEstado`, el filtrado real
- * sigue ocurriendo en el servidor (listarViaticosControl), sin backend
- * nuevo.
+ * VIATICOS-BANDEJAS-1 (extendido en VIATICOS-RECHAZADO-1) — pestañas
+ * visibles (antes dropdown "Estado"). El valor es exactamente
+ * EstadoViatico (viaticos.ts) — la pestaña solo cambia `fEstado`, el
+ * filtrado real sigue ocurriendo en el servidor (listarViaticosControl,
+ * que SÍ acepta `estado=RECHAZADO` — ver control/route.ts).
  */
 const PESTANAS_ESTADO: { estado: string; etiqueta: string }[] = [
   { estado: "PROGRAMADO", etiqueta: "Por autorizar" },
   { estado: "AUTORIZADO", etiqueta: "Autorizados" },
+  { estado: "RECHAZADO", etiqueta: "Rechazados" },
   { estado: "ENTREGADO", etiqueta: "Entregados" },
   { estado: "LIQUIDADO", etiqueta: "Liquidados" },
 ];
@@ -111,6 +119,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   const [resumen, setResumen] = useState<Resumen>({
     pendientes: 0,
     autorizados: 0,
+    rechazados: 0,
     entregados: 0,
     liquidados: 0,
   });
@@ -202,8 +211,17 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
 
   // VIATICOS-HISTORIAL-FIRMA-1 — "Ver firmas": modal de solo lectura,
   // reutilizado por cualquier fila que ya tenga al menos una firma
-  // (AUTORIZADO/ENTREGADO/LIQUIDADO). El componente hace su propio fetch.
+  // (AUTORIZADO/ENTREGADO/LIQUIDADO — NUNCA RECHAZADO, VIATICOS-RECHAZADO-1
+  // sección 11: rechazar nunca crea firma, ver gate en el render). El
+  // componente hace su propio fetch.
   const [verFirmasDe, setVerFirmasDe] = useState<ViaticoControlRow | null>(null);
+
+  // VIATICOS-RECHAZADO-1 — modal "Rechazar viático": SIN firma (ni
+  // canvas ni SelectorFirma), solo un motivo de texto obligatorio.
+  const [rechazando, setRechazando] = useState<ViaticoControlRow | null>(null);
+  const [motivoRechazo, setMotivoRechazo] = useState("");
+  const [errorRechazar, setErrorRechazar] = useState("");
+  const [rechazandoEnProceso, setRechazandoEnProceso] = useState(false);
 
   /** MI-FIRMA-1 — consulta si el usuario actual tiene una firma guardada. */
   const consultarFirmaGuardada = useCallback(async (): Promise<boolean> => {
@@ -345,6 +363,50 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
       setErrorAutorizar("Error de conexión.");
     } finally {
       setFirmandoAutorizar(false);
+    }
+  }
+
+  // VIATICOS-RECHAZADO-1 — "Rechazar": SIN firma, solo un motivo. Abre el
+  // modal (Beneficiario/Viaje/Monto + textarea) — el POST solo ocurre al
+  // confirmar dentro del modal, nunca al primer clic (mismo criterio que
+  // abrirAutorizar/abrirLiquidar).
+  function abrirRechazar(row: ViaticoControlRow) {
+    setRechazando(row);
+    setMotivoRechazo("");
+    setErrorRechazar("");
+  }
+
+  async function confirmarRechazar() {
+    if (!rechazando) return;
+    const motivo = motivoRechazo.trim();
+    if (motivo.length < 10) {
+      setErrorRechazar("El motivo debe tener al menos 10 caracteres.");
+      return;
+    }
+    if (motivo.length > 300) {
+      setErrorRechazar("El motivo no puede superar 300 caracteres.");
+      return;
+    }
+    setRechazandoEnProceso(true);
+    setErrorRechazar("");
+    try {
+      const res = await fetch(`/api/empresas/${slug}/tms/viaticos/${rechazando.id}/rechazar`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ motivoRechazo: motivo }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setErrorRechazar(data.error ?? `No se pudo rechazar el viático (${res.status}).`);
+        return;
+      }
+      setMensaje(`Viático rechazado: ${rechazando.personalNombre} (${rechazando.planCodigo}).`);
+      setRechazando(null);
+      await cargar();
+    } catch {
+      setErrorRechazar("Error de conexión.");
+    } finally {
+      setRechazandoEnProceso(false);
     }
   }
 
@@ -502,13 +564,13 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
         sección &quot;Viáticos por pagar&quot; más abajo.
       </p>
 
-      {/* VIATICOS-BANDEJAS-1 — pestañas por estado (reemplazan el dropdown
-          "Estado" que existía más abajo). Mismo mecanismo de siempre:
-          click alterna fEstado ("" = Todos, click de nuevo lo apaga) —
-          eso ya dispara cargar() (fEstado es dependencia de cargar) y el
-          propio cargar() limpia la selección al recargar. Sin
-          "Rechazados": ese estado no existe (ver ticket). */}
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" role="tablist" aria-label="Filtrar por estado">
+      {/* VIATICOS-BANDEJAS-1 (extendido en VIATICOS-RECHAZADO-1) — pestañas
+          por estado (reemplazan el dropdown "Estado" que existía más
+          abajo). Mismo mecanismo de siempre: click alterna fEstado ("" =
+          Todos, click de nuevo lo apaga) — eso ya dispara cargar()
+          (fEstado es dependencia de cargar) y el propio cargar() limpia
+          la selección al recargar. */}
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5" role="tablist" aria-label="Filtrar por estado">
         {PESTANAS_ESTADO.map(({ estado, etiqueta }) => {
           const activa = fEstado === estado;
           const contador =
@@ -516,9 +578,11 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
               ? resumen.pendientes
               : estado === "AUTORIZADO"
                 ? resumen.autorizados
-                : estado === "ENTREGADO"
-                  ? resumen.entregados
-                  : resumen.liquidados;
+                : estado === "RECHAZADO"
+                  ? resumen.rechazados
+                  : estado === "ENTREGADO"
+                    ? resumen.entregados
+                    : resumen.liquidados;
           return (
             <button
               key={estado}
@@ -652,43 +716,67 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
                   </>
                 ) : null}
                 <td className="px-3 py-2">
-                  {puedeAutorizar && r.estado === "PROGRAMADO" ? (
-                    <button
-                      type="button"
-                      onClick={() => void abrirAutorizar(r)}
-                      className="rounded bg-sky-700 px-2 py-1 text-xs text-white"
-                    >
-                      Firmar y autorizar
-                    </button>
-                  ) : null}
-                  {puedeLiquidar && r.estado === "ENTREGADO" ? (
-                    <button
-                      type="button"
-                      onClick={() => void abrirLiquidar(r)}
-                      className="rounded bg-emerald-700 px-2 py-1 text-xs text-white"
-                    >
-                      Firmar liquidación
-                    </button>
-                  ) : null}
-                  {/* VIATICOS-HISTORIAL-FIRMA-1 — visible en cuanto exista al
-                      menos una firma (AUTORIZADO/ENTREGADO/LIQUIDADO); un
-                      LIQUIDADO puede tener autorización + liquidación, de ahí
-                      "Ver firmas" en plural (sección 6 del ticket). */}
-                  {r.estado !== "PROGRAMADO" ? (
-                    <button
-                      type="button"
-                      onClick={() => setVerFirmasDe(r)}
-                      className="ml-1 rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--input)]"
-                    >
-                      Ver firmas
-                    </button>
-                  ) : null}
-                  {/* Único caso sin ningún botón: PROGRAMADO y sin permiso
-                      de autorizar — "Ver firmas" ya cubre todo lo demás
-                      (ENTREGADO/LIQUIDADO siempre tienen al menos una firma). */}
-                  {r.estado === "PROGRAMADO" && !puedeAutorizar ? (
-                    <span className="text-[11px] text-[var(--muted)]">—</span>
-                  ) : null}
+                  {r.estado === "RECHAZADO" ? (
+                    /* VIATICOS-RECHAZADO-1 (sección 10) — sin botones de
+                       pago/autorizar/liquidar/Ver firmas (rechazar nunca
+                       crea firma, sección 11). */
+                    <div className="text-[11px] text-[var(--muted)]">
+                      <p>Rechazado por: {r.rechazadoPor ?? "—"}</p>
+                      <p>Fecha: {r.rechazadoEn ?? "—"}</p>
+                      <p>Motivo: {r.motivoRechazo ?? "—"}</p>
+                    </div>
+                  ) : (
+                    <>
+                      {puedeAutorizar && r.estado === "PROGRAMADO" ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => void abrirAutorizar(r)}
+                            className="rounded bg-sky-700 px-2 py-1 text-xs text-white"
+                          >
+                            Firmar y autorizar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => abrirRechazar(r)}
+                            className="ml-1 rounded bg-red-800 px-2 py-1 text-xs text-white"
+                          >
+                            Rechazar
+                          </button>
+                        </>
+                      ) : null}
+                      {puedeLiquidar && r.estado === "ENTREGADO" ? (
+                        <button
+                          type="button"
+                          onClick={() => void abrirLiquidar(r)}
+                          className="rounded bg-emerald-700 px-2 py-1 text-xs text-white"
+                        >
+                          Firmar liquidación
+                        </button>
+                      ) : null}
+                      {/* VIATICOS-HISTORIAL-FIRMA-1 — visible en cuanto exista
+                          al menos una firma (AUTORIZADO/ENTREGADO/LIQUIDADO;
+                          NUNCA RECHAZADO — VIATICOS-RECHAZADO-1 sección 11,
+                          rechazar no crea firma). Un LIQUIDADO puede tener
+                          autorización + liquidación, de ahí "Ver firmas" en
+                          plural (sección 6 del ticket original). */}
+                      {r.estado !== "PROGRAMADO" && r.estado !== "RECHAZADO" ? (
+                        <button
+                          type="button"
+                          onClick={() => setVerFirmasDe(r)}
+                          className="ml-1 rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--input)]"
+                        >
+                          Ver firmas
+                        </button>
+                      ) : null}
+                      {/* Único caso sin ningún botón: PROGRAMADO y sin permiso
+                          de autorizar — "Ver firmas" ya cubre todo lo demás
+                          (ENTREGADO/LIQUIDADO siempre tienen al menos una firma). */}
+                      {r.estado === "PROGRAMADO" && !puedeAutorizar ? (
+                        <span className="text-[11px] text-[var(--muted)]">—</span>
+                      ) : null}
+                    </>
+                  )}
                 </td>
               </tr>
             ))}
@@ -957,6 +1045,54 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
           viatico={{ id: verFirmasDe.id, planCodigo: verFirmasDe.planCodigo, personalNombre: verFirmasDe.personalNombre }}
           onClose={() => setVerFirmasDe(null)}
         />
+      ) : null}
+
+      {/* VIATICOS-RECHAZADO-1 (sección 9) — modal "Rechazar viático": SIN
+          firma (nunca FirmaCanvas/SelectorFirma), solo motivo obligatorio. */}
+      {rechazando ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-xl">
+            <h3 className="text-sm font-semibold">Rechazar viático</h3>
+            <div className="rounded-lg border border-[var(--border)] p-3 text-xs">
+              <p><span className="text-[var(--muted)]">Beneficiario:</span> {rechazando.personalNombre}</p>
+              <p><span className="text-[var(--muted)]">Viaje:</span> {rechazando.planCodigo}</p>
+              <p><span className="text-[var(--muted)]">Monto:</span> {q(rechazando.montoAsignado)}</p>
+            </div>
+            <label className="block text-xs text-[var(--muted)]">
+              Motivo del rechazo
+              <textarea
+                className={`${inputCls} mt-0.5 block w-full`}
+                rows={3}
+                maxLength={300}
+                value={motivoRechazo}
+                onChange={(e) => setMotivoRechazo(e.target.value)}
+                placeholder="Ej. No corresponde viático porque el viaje fue cancelado."
+              />
+              <span className="mt-0.5 block text-[10px] text-[var(--muted)]">
+                {motivoRechazo.trim().length}/300 caracteres (mínimo 10)
+              </span>
+            </label>
+            {errorRechazar ? <p className="text-xs text-red-300">{errorRechazar}</p> : null}
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                disabled={rechazandoEnProceso}
+                onClick={() => setRechazando(null)}
+                className="rounded border border-[var(--border)] px-3 py-1.5 text-sm"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={rechazandoEnProceso || motivoRechazo.trim().length < 10}
+                onClick={() => void confirmarRechazar()}
+                className="rounded bg-red-800 px-3 py-1.5 text-sm text-white disabled:opacity-50"
+              >
+                {rechazandoEnProceso ? "Rechazando…" : "Confirmar rechazo"}
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </div>
   );

@@ -11,7 +11,7 @@ export default async function ResumenPage({ searchParams }: { searchParams: Prom
   if (!session) redirect("/portal/login");
   const mes = (await searchParams).mes ?? hoyLocal().slice(0, 7);
   try { rangoMes(mes); } catch { notFound(); }
-  const { nomina, viaticos } = await resumenMensualPropio(session.empresaId, session.empleadoId, mes);
+  const { nomina, viaticos, viaticosRechazados } = await resumenMensualPropio(session.empresaId, session.empleadoId, mes);
   const sum = (key: "neto", pagado: boolean) => nomina.filter((n) => (n.estado === "Pagado") === pagado).reduce((total, n) => total + Math.round(n[key] * 100), 0) / 100;
   const conceptos = [
     ["Salario del período", "salario"], ["Bono incentivo", "incentivo"], ["Bono herramientas", "herramientas"],
@@ -37,6 +37,9 @@ export default async function ResumenPage({ searchParams }: { searchParams: Prom
       <h2 className="font-semibold">Viáticos operativos — separados de nómina</h2>
       <p className="text-sm">Agrupados por fecha del viaje y estado actual, no por fecha de desembolso. No se suman al neto ni se clasifican como salario.</p>
       {viaticos === null ? <p>No disponible: no se pudo consultar el historial de viáticos.</p> : viaticos.length ? viaticos.map((v) => <p key={v.estado}>{estados[v.estado] ?? v.estado}: {q(v.monto)}</p>) : <p>Sin viáticos registrados para viajes de este mes.</p>}
+      {/* VIATICOS-RECHAZADO-1 (sección 16, CRÍTICO) — contador informativo,
+          NUNCA un monto: un rechazo no es dinero recibido/entregado/pagado. */}
+      {viaticosRechazados ? <p>Rechazados: {viaticosRechazados}</p> : null}
       <Link href="/portal/viaticos" className="underline">Ver historial de viáticos</Link>
     </section>
     <p className="text-xs">No se asignan automáticamente categorías fiscales a bonos, festivos o pagos adicionales. Los importes conservan la clasificación registrada por RRHH.</p>

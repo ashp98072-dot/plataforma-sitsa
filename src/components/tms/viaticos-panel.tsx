@@ -21,6 +21,10 @@ type ViaticoRow = {
   referenciaPago: string | null;
   liquidadoPor: string | null;
   liquidadoEn: string | null;
+  // VIATICOS-RECHAZADO-1 — null mientras el viático no está RECHAZADO.
+  rechazadoPor: string | null;
+  rechazadoEn: string | null;
+  motivoRechazo: string | null;
 };
 
 function q(n: number): string {
@@ -33,6 +37,7 @@ const inputCls =
 const ESTADO_BADGE_CLS: Record<string, string> = {
   PROGRAMADO: "bg-[var(--input)] text-[var(--muted)]",
   AUTORIZADO: "bg-sky-950/40 text-sky-300",
+  RECHAZADO: "bg-red-950/40 text-red-300",
   ENTREGADO: "bg-amber-950/40 text-amber-300",
   LIQUIDADO: "bg-emerald-950/40 text-emerald-300",
 };
@@ -232,6 +237,10 @@ export default function ViaticosPanel({
         ) : null}
         {r.estado !== "PROGRAMADO" ? (
           <span className="w-full text-[10px] text-[var(--muted)]">
+            {/* VIATICOS-RECHAZADO-1 — mutuamente excluyente con autorizado/
+                entregado/liquidado (un rechazo solo ocurre desde PROGRAMADO,
+                antes de cualquier autorización). */}
+            {r.rechazadoPor ? `Rechazado por ${r.rechazadoPor}${r.rechazadoEn ? ` · ${r.rechazadoEn}` : ""}${r.motivoRechazo ? ` · motivo: ${r.motivoRechazo}` : ""}` : null}
             {r.autorizadoPor ? `Autorizado por ${r.autorizadoPor}${r.autorizadoEn ? ` · ${r.autorizadoEn}` : ""}` : null}
             {r.entregadoPor ? ` · Entregado por ${r.entregadoPor}${r.metodoPago ? ` (${METODO_PAGO_LABEL[r.metodoPago] ?? r.metodoPago}${r.referenciaPago ? ` · ref. ${r.referenciaPago}` : ""})` : ""}` : ""}
             {r.liquidadoPor ? ` · Liquidado por ${r.liquidadoPor}` : ""}

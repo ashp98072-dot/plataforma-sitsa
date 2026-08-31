@@ -352,7 +352,15 @@ export async function actualizarMontoViatico(
 // dupliquen ni pisen una transición ya hecha por otra.
 // ---------------------------------------------------------------------------
 
-export type EstadoViatico = "PROGRAMADO" | "AUTORIZADO" | "ENTREGADO" | "LIQUIDADO";
+/**
+ * VIATICOS-RECHAZADO-1 — RECHAZADO es una transición alternativa a
+ * AUTORIZADO, únicamente desde PROGRAMADO, y es TERMINAL: no existe
+ * RECHAZADO -> PROGRAMADO. Para volver a solicitar el viático se crea un
+ * registro PROGRAMADO nuevo (ver sincronizarViaticosPlan, que ya
+ * preserva cualquier fila que no esté en PROGRAMADO — RECHAZADO queda
+ * protegido automáticamente por esa misma regla, sin cambios ahí).
+ */
+export type EstadoViatico = "PROGRAMADO" | "AUTORIZADO" | "RECHAZADO" | "ENTREGADO" | "LIQUIDADO";
 export type MetodoPagoViatico = "EFECTIVO" | "TRANSFERENCIA" | "CHEQUE";
 
 export type ResultadoTransicionViatico =
@@ -596,6 +604,108 @@ export async function autorizarViatico(
     }
     if (!committed) {
       compensarImagenFirma(imagenGuardada);
+    }
+  }
+}
+
+/** Longitud del motivo de rechazo — mismo criterio de tamaño que motivo_cambio/observaciones_* de esta misma tabla (VARCHAR(300)). */
+export const MOTIVO_RECHAZO_MIN = 10;
+export const MOTIVO_RECHAZO_MAX = 300;
+
+export type ResultadoRechazoViatico =
+  | { ok: true }
+  | { ok: false; error: string; status: number };
+
+/**
+ * VIATICOS-RECHAZADO-1 — PROGRAMADO -> RECHAZADO. Quién puede:
+ * EXACTAMENTE el mismo permiso que autorizar (`viaticos_autorizar:editar`,
+ * verificado por el endpoint ANTES de llamar aquí, requireTenantViaticosAutorizar)
+ * — nunca se amplía a Facturador/AuxiliarOperaciones. RECHAZADO es
+ * TERMINAL: solo alcanzable desde PROGRAMADO, nunca desde AUTORIZADO/
+ * ENTREGADO/LIQUIDADO, y sin transición de regreso — para volver a
+ * solicitar se crea un registro PROGRAMADO nuevo (ver
+ * sincronizarViaticosPlan, que ya preserva cualquier fila fuera de
+ * PROGRAMADO sin cambios adicionales).
+ *
+ * Sin firma manuscrita ni contraseña (decisión de negocio aprobada,
+ * VIATICOS-RECHAZADO-1 sección 4/6): sesión autenticada + permiso
+ * EXPLÍCITO + motivo + fecha servidor + auditoría son prueba suficiente
+ * — nunca se llama crearFirmaInterna/guardarImagenFirma/SelectorFirma
+ * aquí, y `firmas_electronicas` queda completamente intacta (mismo
+ * criterio que registrarEntregaViatico, que tampoco firma).
+ *
+ * Mismo esqueleto transaccional exacto que autorizarViatico/
+ * liquidarViatico (conn/committed fuera del try, único finally con
+ * rollback condicional + release incondicional) — sin compensación de
+ * archivos (este flujo no maneja imágenes).
+ */
+export async function rechazarViatico(
+  empresaId: number,
+  viaticoId: number,
+  motivoRechazo: string,
+  usuario: string,
+): Promise<ResultadoRechazoViatico> {
+  const motivo = motivoRechazo.trim();
+  if (motivo.length < MOTIVO_RECHAZO_MIN) {
+    return { ok: false, error: `El motivo debe tener al menos ${MOTIVO_RECHAZO_MIN} caracteres.`, status: 400 };
+  }
+  if (motivo.length > MOTIVO_RECHAZO_MAX) {
+    return { ok: false, error: `El motivo no puede superar ${MOTIVO_RECHAZO_MAX} caracteres.`, status: 400 };
+  }
+
+  let conn: PoolConnection | null = null;
+  let committed = false;
+  try {
+    conn = await getPool().getConnection();
+    await conn.beginTransaction();
+
+    const [rows] = await conn.query<RowDataPacket[]>(
+      `SELECT id, estado FROM tms_viaticos WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
+      [viaticoId, empresaId],
+    );
+    const v = rows[0];
+    if (!v) {
+      return { ok: false, error: "Viático no encontrado.", status: 404 };
+    }
+    if (String(v.estado) !== "PROGRAMADO") {
+      return {
+        ok: false,
+        error: `Este viático está ${String(v.estado)}; no se puede rechazar desde ese estado.`,
+        status: 409,
+      };
+    }
+
+    const [upd] = await conn.execute<ResultSetHeader>(
+      `UPDATE tms_viaticos
+       SET estado = 'RECHAZADO', rechazado_por = ?, rechazado_en = NOW(), motivo_rechazo = ?
+       WHERE id = ? AND empresa_id = ? AND estado = 'PROGRAMADO'`,
+      [usuario, motivo, viaticoId, empresaId],
+    );
+    if (upd.affectedRows !== 1) {
+      return { ok: false, error: "El viático cambió de estado durante la operación.", status: 409 };
+    }
+
+    await registrarAuditoriaTx(conn, {
+      empresaId,
+      usuario,
+      accion: "rechazar_viatico",
+      modulo: "tms",
+      detalle: `Viático #${viaticoId} · PROGRAMADO → RECHAZADO · motivo: ${motivo}`,
+    });
+
+    await conn.commit();
+    committed = true;
+    return { ok: true };
+  } finally {
+    if (conn) {
+      if (!committed) {
+        try {
+          await conn.rollback();
+        } catch {
+          // best-effort — nunca oculta el error/rechazo real que ya se está propagando.
+        }
+      }
+      conn.release();
     }
   }
 }
@@ -1073,6 +1183,10 @@ export type ViaticoDetalle = {
   reintegro: number | null;
   /** Derivada, nunca persistida: montoAsignado - gastosComprobados - reintegro. null mientras no está LIQUIDADO. */
   diferencia: number | null;
+  // VIATICOS-RECHAZADO-1 — null mientras el viático no está RECHAZADO.
+  rechazadoPor: string | null;
+  rechazadoEn: string | null;
+  motivoRechazo: string | null;
 };
 
 function mapDetalle(r: RowDataPacket): ViaticoDetalle {
@@ -1121,6 +1235,9 @@ function mapDetalle(r: RowDataPacket): ViaticoDetalle {
     gastosComprobados,
     reintegro,
     diferencia,
+    rechazadoPor: r.rechazado_por != null ? String(r.rechazado_por) : null,
+    rechazadoEn: r.rechazado_en != null ? String(r.rechazado_en) : null,
+    motivoRechazo: r.motivo_rechazo != null ? String(r.motivo_rechazo) : null,
   };
 }
 
@@ -1131,6 +1248,7 @@ const DETALLE_SELECT = `
          v.referencia_pago, v.observaciones_entrega,
          v.liquidado_por, v.liquidado_en, v.observaciones_liquidacion,
          v.gastos_comprobados, v.reintegro,
+         v.rechazado_por, v.rechazado_en, v.motivo_rechazo,
          pl.codigo AS plan_codigo, pl.fecha_plan,
          c.nombre AS cliente, u.placa AS unidad_placa,
          tp.nombre AS personal_nombre,
@@ -1166,6 +1284,7 @@ export type FiltrosControlViaticos = {
 export type ResumenControlViaticos = {
   pendientes: number;
   autorizados: number;
+  rechazados: number;
   entregados: number;
   liquidados: number;
 };
@@ -1232,6 +1351,7 @@ export async function listarViaticosControl(
   const resumen: ResumenControlViaticos = {
     pendientes: 0,
     autorizados: 0,
+    rechazados: 0,
     entregados: 0,
     liquidados: 0,
   };
@@ -1243,6 +1363,9 @@ export async function listarViaticosControl(
         break;
       case "AUTORIZADO":
         resumen.autorizados = total;
+        break;
+      case "RECHAZADO":
+        resumen.rechazados = total;
         break;
       case "ENTREGADO":
         resumen.entregados = total;
@@ -1396,7 +1519,14 @@ export async function listarViaticosPorPagar(
   empresaId: number,
   filtros: FiltrosViaticosPorPagar = {},
 ): Promise<ViaticoPorPagar[]> {
-  const condiciones: string[] = ["v.empresa_id = ?"];
+  // VIATICOS-RECHAZADO-1 (sección 12, "no confiar únicamente en UI") —
+  // RECHAZADO NUNCA debe aparecer en la bandeja del Facturador, ni
+  // siquiera con el filtro "Todos" (filtros.estado ausente). Exclusión
+  // INCONDICIONAL, no depende de `filtros.estado`: aunque alguien pasara
+  // `estado: "RECHAZADO"` explícitamente, la condición de abajo lo
+  // combina con AND y el resultado sigue siendo vacío — nunca se
+  // devuelve, nunca es seleccionable ni exportable.
+  const condiciones: string[] = ["v.empresa_id = ?", "v.estado != 'RECHAZADO'"];
   const params: SqlParams = [empresaId];
 
   if (filtros.planId != null) {

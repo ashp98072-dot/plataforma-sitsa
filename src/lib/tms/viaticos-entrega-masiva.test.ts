@@ -182,6 +182,21 @@ describe("registrarEntregaViaticosMasiva — TODO O NADA (6/7/8/9/10)", () => {
     expect(conn.execute).not.toHaveBeenCalled();
   });
 
+  it("VIATICOS-RECHAZADO-1 (26) — un viático RECHAZADO nunca es pagable en el lote (misma regla que cualquier estado != AUTORIZADO, rollback total)", async () => {
+    conn.query.mockResolvedValue([[fila(10, { estado: "RECHAZADO" })], []]);
+    const r = await registrarEntregaViaticosMasiva(
+      7,
+      { metodoPago: "EFECTIVO", items: [{ id: 10, referenciaPago: null }] },
+      "fact1",
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.status).toBe(409);
+      expect(r.detalles?.some((d) => d.includes("#10") && d.includes("RECHAZADO"))).toBe(true);
+    }
+    expect(conn.execute).not.toHaveBeenCalled();
+  });
+
   it("8) uno inexistente -> rollback total", async () => {
     conn.query.mockResolvedValue([[fila(10)], []]);
     const r = await registrarEntregaViaticosMasiva(

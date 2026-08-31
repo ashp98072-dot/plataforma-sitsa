@@ -6,7 +6,7 @@ vi.mock("@/lib/auth", () => ({ verificarPasswordUsuarioActual: vi.fn() }));
 vi.mock("@/lib/firmas/firmas-internas", () => ({ crearFirmaInterna: vi.fn(), TEXTO_FIRMA_INTERNA: "Firma electrónica interna" }));
 vi.mock("@/lib/uploads", () => ({ guardarUpload: vi.fn(), borrarUpload: vi.fn() }));
 
-import { execute, getPool } from "@/lib/db";
+import { execute, getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { verificarPasswordUsuarioActual } from "@/lib/auth";
 import { crearFirmaInterna } from "@/lib/firmas/firmas-internas";
@@ -15,7 +15,12 @@ import { borrarUpload, guardarUpload } from "@/lib/uploads";
 import {
   autorizarViatico,
   liquidarViatico,
+  listarViaticosControl,
+  listarViaticosDePlan,
+  listarViaticosPorPagar,
+  rechazarViatico,
   registrarEntregaViatico,
+  sincronizarViaticosPlan,
   type DatosFirmaViatico,
 } from "./viaticos";
 
@@ -317,6 +322,14 @@ describe("liquidarViatico — ENTREGADO -> LIQUIDADO, regla crítica de diferenc
     expect(borrarUpload).toHaveBeenCalledWith("empresas/7/firmas/firma_x.png");
   });
 
+  it("VIATICOS-RECHAZADO-1 (27) — un viático RECHAZADO nunca es liquidable (misma regla que cualquier estado != ENTREGADO)", async () => {
+    mockConnQuery({ viatico: { ...VIATICO_ENTREGADO, estado: "RECHAZADO" } });
+    const r = await liquidarViatico(7, 10, { gastosComprobados: "1000.00", reintegro: "0", observaciones: null }, "fact1", firmaFacturador);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.status).toBe(409);
+    expect(crearFirmaInterna).not.toHaveBeenCalled();
+  });
+
   it("18) atomicidad: commit único tras firmar, rollback si la diferencia no es 0", async () => {
     mockConnQuery({ viatico: VIATICO_ENTREGADO });
     await liquidarViatico(7, 10, { gastosComprobados: "950.00", reintegro: "0", observaciones: null }, "fact1", firmaFacturador);
@@ -398,5 +411,292 @@ describe("23) registrarEntregaViatico (pago) — regresión: NUNCA exige firma/c
   it('exige referencia para TRANSFERENCIA/CHEQUE (regla preexistente, sin cambios)', async () => {
     const r = await registrarEntregaViatico(7, 10, { metodoPago: "CHEQUE", referenciaPago: null, observaciones: null }, "fact1");
     expect(r.ok).toBe(false);
+  });
+});
+
+/**
+ * VIATICOS-RECHAZADO-1 — PROGRAMADO -> RECHAZADO, terminal, sin firma
+ * (mismo esqueleto transaccional que autorizarViatico/liquidarViatico,
+ * sin manejo de imágenes — reutiliza mockConnQuery() tal cual, el SELECT
+ * de rechazarViatico usa el mismo patrón "FROM tms_viaticos WHERE id = ?
+ * AND empresa_id = ?" que ya reconoce el helper).
+ */
+describe("rechazarViatico — PROGRAMADO -> RECHAZADO", () => {
+  const MOTIVO_VALIDO = "No corresponde: el viaje fue cancelado por el cliente.";
+
+  beforeEach(() => {
+    mockConnQuery({ viatico: VIATICO_PROGRAMADO });
+  });
+
+  it("1) PROGRAMADO puede rechazarse", async () => {
+    const r = await rechazarViatico(7, 10, MOTIVO_VALIDO, "jefe1");
+    expect(r.ok).toBe(true);
+    expect(conn.commit).toHaveBeenCalledTimes(1);
+  });
+
+  it("2) AUTORIZADO no puede rechazarse -> 409", async () => {
+    mockConnQuery({ viatico: { ...VIATICO_PROGRAMADO, estado: "AUTORIZADO" } });
+    const r = await rechazarViatico(7, 10, MOTIVO_VALIDO, "jefe1");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.status).toBe(409);
+    expect(conn.execute).not.toHaveBeenCalled();
+  });
+
+  it("3) ENTREGADO no puede rechazarse -> 409", async () => {
+    mockConnQuery({ viatico: VIATICO_ENTREGADO });
+    const r = await rechazarViatico(7, 10, MOTIVO_VALIDO, "jefe1");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.status).toBe(409);
+  });
+
+  it("4) LIQUIDADO no puede rechazarse -> 409", async () => {
+    mockConnQuery({ viatico: { ...VIATICO_ENTREGADO, estado: "LIQUIDADO" } });
+    const r = await rechazarViatico(7, 10, MOTIVO_VALIDO, "jefe1");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.status).toBe(409);
+  });
+
+  it("5) RECHAZADO no puede rechazarse otra vez -> 409 (terminal, sin RECHAZADO -> PROGRAMADO)", async () => {
+    mockConnQuery({ viatico: { ...VIATICO_PROGRAMADO, estado: "RECHAZADO" } });
+    const r = await rechazarViatico(7, 10, MOTIVO_VALIDO, "jefe1");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.status).toBe(409);
+  });
+
+  it("33) RECHAZADO es terminal: ninguna llamada de autorizarViatico sobre una fila ya RECHAZADO la mueve a AUTORIZADO", async () => {
+    mockConnQuery({ viatico: { ...VIATICO_PROGRAMADO, estado: "RECHAZADO" } });
+    const r = await autorizarViatico(7, 10, "jefe1", firma);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.status).toBe(409);
+    expect(crearFirmaInterna).not.toHaveBeenCalled();
+  });
+
+  it("6) motivo con menos de 10 caracteres -> 400, sin abrir conexión", async () => {
+    const r = await rechazarViatico(7, 10, "muy corto", "jefe1");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.status).toBe(400);
+    expect(getPool).not.toHaveBeenCalled();
+  });
+
+  it("7) motivo con más de 300 caracteres -> 400, sin abrir conexión", async () => {
+    const r = await rechazarViatico(7, 10, "x".repeat(301), "jefe1");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.status).toBe(400);
+    expect(getPool).not.toHaveBeenCalled();
+  });
+
+  it("motivo se recorta (trim) antes de validar longitud y de guardar", async () => {
+    const r = await rechazarViatico(7, 10, `   ${MOTIVO_VALIDO}   `, "jefe1");
+    expect(r.ok).toBe(true);
+    expect(conn.execute).toHaveBeenCalledWith(expect.any(String), ["jefe1", MOTIVO_VALIDO, 10, 7]);
+  });
+
+  it("8) otro tenant: empresaId siempre filtra el SELECT — un viático de otra empresa da 404, nunca lo rechaza", async () => {
+    mockConnQuery({ viatico: null });
+    const r = await rechazarViatico(999, 10, MOTIVO_VALIDO, "jefe1");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.status).toBe(404);
+    expect(conn.execute).not.toHaveBeenCalled();
+  });
+
+  it("12) el SELECT usa FOR UPDATE", async () => {
+    await rechazarViatico(7, 10, MOTIVO_VALIDO, "jefe1");
+    const [sql] = conn.query.mock.calls[0];
+    expect(String(sql)).toContain("FOR UPDATE");
+  });
+
+  it("13) el UPDATE está condicionado a estado = 'PROGRAMADO'", async () => {
+    await rechazarViatico(7, 10, MOTIVO_VALIDO, "jefe1");
+    const [sql] = conn.execute.mock.calls[0];
+    expect(String(sql)).toContain("estado = 'PROGRAMADO'");
+    expect(String(sql)).toContain("estado = 'RECHAZADO'");
+  });
+
+  it("14) affectedRows != 1 en el UPDATE -> 409, sin auditoría ni commit", async () => {
+    conn.execute.mockResolvedValue([{ affectedRows: 0 }, []]);
+    const r = await rechazarViatico(7, 10, MOTIVO_VALIDO, "jefe1");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.status).toBe(409);
+    expect(registrarAuditoriaTx).not.toHaveBeenCalled();
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(conn.rollback).toHaveBeenCalled();
+  });
+
+  it("15) registra auditoría accion=rechazar_viatico modulo=tms con el motivo en el detalle, en la MISMA conexión", async () => {
+    await rechazarViatico(7, 10, MOTIVO_VALIDO, "jefe1");
+    expect(registrarAuditoriaTx).toHaveBeenCalledWith(conn, expect.objectContaining({
+      empresaId: 7, usuario: "jefe1", accion: "rechazar_viatico", modulo: "tms",
+      detalle: expect.stringContaining(MOTIVO_VALIDO),
+    }));
+    expect(String(vi.mocked(registrarAuditoriaTx).mock.calls[0][1].detalle)).toContain("PROGRAMADO → RECHAZADO");
+  });
+
+  it("16) si la auditoría falla, se hace rollback total (nunca queda el UPDATE sin su auditoría)", async () => {
+    vi.mocked(registrarAuditoriaTx).mockRejectedValueOnce(new Error("fallo de auditoría"));
+    await expect(rechazarViatico(7, 10, MOTIVO_VALIDO, "jefe1")).rejects.toThrow("fallo de auditoría");
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(conn.rollback).toHaveBeenCalled();
+  });
+
+  it("17) rechazar NUNCA crea firma — no llama crearFirmaInterna/guardarUpload en ningún punto", async () => {
+    await rechazarViatico(7, 10, MOTIVO_VALIDO, "jefe1");
+    expect(crearFirmaInterna).not.toHaveBeenCalled();
+    expect(guardarUpload).not.toHaveBeenCalled();
+    expect(verificarPasswordUsuarioActual).not.toHaveBeenCalled();
+  });
+
+  it("18) commit se llama UNA sola vez, después del UPDATE y la auditoría (camino exitoso)", async () => {
+    await rechazarViatico(7, 10, MOTIVO_VALIDO, "jefe1");
+    expect(conn.commit).toHaveBeenCalledTimes(1);
+    expect(conn.rollback).not.toHaveBeenCalled();
+    expect(conn.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("viático inexistente -> 404, sin auditoría", async () => {
+    mockConnQuery({ viatico: null });
+    const r = await rechazarViatico(7, 999, MOTIVO_VALIDO, "jefe1");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.status).toBe(404);
+    expect(registrarAuditoriaTx).not.toHaveBeenCalled();
+  });
+
+  it("32) concurrencia: si otro proceso ya autorizó el viático antes de que llegue el rechazo (el SELECT lo lee ya AUTORIZADO), rechazar recibe 409 — nunca ambas transiciones", async () => {
+    mockConnQuery({ viatico: { ...VIATICO_PROGRAMADO, estado: "AUTORIZADO" } });
+    const rRechazo = await rechazarViatico(7, 10, MOTIVO_VALIDO, "jefe1");
+    expect(rRechazo.ok).toBe(false);
+    if (!rRechazo.ok) expect(rRechazo.status).toBe(409);
+
+    mockConnQuery({ viatico: { ...VIATICO_PROGRAMADO, estado: "RECHAZADO" } });
+    const rAutorizar = await autorizarViatico(7, 10, "jefe1", firma);
+    expect(rAutorizar.ok).toBe(false);
+    if (!rAutorizar.ok) expect(rAutorizar.status).toBe(409);
+  });
+
+  it("getConnection() falla -> propaga el error, sin auditoría ni commit", async () => {
+    getConnection.mockRejectedValueOnce(new Error("pool exhausted"));
+    await expect(rechazarViatico(7, 10, MOTIVO_VALIDO, "jefe1")).rejects.toThrow("pool exhausted");
+    expect(registrarAuditoriaTx).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * VIATICOS-RECHAZADO-1 — listarViaticosControl/mapDetalle deben conocer
+ * RECHAZADO igual que los demás estados: contador propio, filtro, y los
+ * 3 campos nuevos (rechazadoPor/rechazadoEn/motivoRechazo) en el detalle
+ * — mismo SELECT/mapeo existente (DETALLE_SELECT), sin N+1.
+ */
+describe("listarViaticosControl / mapDetalle — RECHAZADO", () => {
+  it("18) el resumen cuenta 'rechazados' igual que los demás estados", async () => {
+    vi.mocked(query)
+      .mockResolvedValueOnce([
+        { estado: "PROGRAMADO", total: 2 },
+        { estado: "RECHAZADO", total: 3 },
+        { estado: "AUTORIZADO", total: 1 },
+      ] as never)
+      .mockResolvedValueOnce([] as never);
+    const { resumen } = await listarViaticosControl(7);
+    expect(resumen).toEqual({ pendientes: 2, autorizados: 1, rechazados: 3, entregados: 0, liquidados: 0 });
+  });
+
+  it("19) filtro estado=RECHAZADO solo devuelve filas rechazadas", async () => {
+    vi.mocked(query)
+      .mockResolvedValueOnce([] as never)
+      .mockResolvedValueOnce([{
+        id: 10, plan_id: 1, personal_id: 5, rol: "Piloto", monto_sugerido: "500", monto_asignado: "500",
+        estado: "RECHAZADO", plan_codigo: "PLAN-1", fecha_plan: "2026-08-01", personal_nombre: "Carlos Ruiz",
+        puesto: "Piloto", rechazado_por: "jefe1", rechazado_en: "2026-08-31 09:00:00",
+        motivo_rechazo: "No corresponde: viaje cancelado.",
+      }] as never);
+    const { items } = await listarViaticosControl(7, { estado: "RECHAZADO" });
+    expect(items).toHaveLength(1);
+    expect(items[0].estado).toBe("RECHAZADO");
+    const [, params] = vi.mocked(query).mock.calls[1];
+    expect(params).toContain("RECHAZADO");
+  });
+
+  it("20/21/22) mapDetalle expone motivoRechazo/rechazadoPor/rechazadoEn desde el mismo SELECT (sin consulta adicional)", async () => {
+    vi.mocked(query).mockResolvedValueOnce([{
+      id: 10, plan_id: 1, personal_id: 5, rol: "Piloto", monto_sugerido: "500", monto_asignado: "500",
+      estado: "RECHAZADO", plan_codigo: "PLAN-1", fecha_plan: "2026-08-01", personal_nombre: "Carlos Ruiz",
+      puesto: "Piloto", rechazado_por: "jefe1", rechazado_en: "2026-08-31 09:00:00",
+      motivo_rechazo: "No corresponde: viaje cancelado.",
+    }] as never);
+    const items = await listarViaticosDePlan(7, 1);
+    expect(items[0]).toMatchObject({
+      rechazadoPor: "jefe1", rechazadoEn: "2026-08-31 09:00:00", motivoRechazo: "No corresponde: viaje cancelado.",
+    });
+    // Un solo SELECT — sin N+1 para traer los datos de rechazo.
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  it("un viático NO rechazado tiene los 3 campos en null", async () => {
+    vi.mocked(query).mockResolvedValueOnce([{
+      id: 10, plan_id: 1, personal_id: 5, rol: "Piloto", monto_sugerido: "500", monto_asignado: "500",
+      estado: "PROGRAMADO", plan_codigo: "PLAN-1", fecha_plan: "2026-08-01", personal_nombre: "Carlos Ruiz",
+      puesto: "Piloto",
+    }] as never);
+    const items = await listarViaticosDePlan(7, 1);
+    expect(items[0]).toMatchObject({ rechazadoPor: null, rechazadoEn: null, motivoRechazo: null });
+  });
+});
+
+/**
+ * VIATICOS-RECHAZADO-1 (sección 12) — RECHAZADO NUNCA debe aparecer en
+ * la bandeja del Facturador, ni siquiera con filtro "Todos". La
+ * exclusión vive en el backend (listarViaticosPorPagar), no solo en la
+ * UI.
+ */
+describe("listarViaticosPorPagar — excluye RECHAZADO (24)", () => {
+  it("sin filtro de estado (\"Todos\"): el WHERE excluye RECHAZADO de forma incondicional", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await listarViaticosPorPagar(7, {});
+    const [sql] = vi.mocked(query).mock.calls[0];
+    expect(String(sql)).toContain("v.estado != 'RECHAZADO'");
+  });
+
+  it("aunque se pida explícitamente estado='RECHAZADO', la exclusión incondicional sigue en el WHERE (AND contradictorio -> nunca resultados)", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await listarViaticosPorPagar(7, { estado: "RECHAZADO" });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(String(sql)).toContain("v.estado != 'RECHAZADO'");
+    expect(params).toContain("RECHAZADO");
+  });
+});
+
+/**
+ * VIATICOS-RECHAZADO-1 (sección 14) — Programación debe preservar la
+ * fila RECHAZADO igual que AUTORIZADO/ENTREGADO/LIQUIDADO: la protección
+ * de sincronizarViaticosPlan ya es "solo PROGRAMADO se toca", sin listar
+ * estados explícitamente — RECHAZADO queda protegido automáticamente,
+ * sin cambios de código, y estas pruebas lo confirman.
+ */
+describe("sincronizarViaticosPlan — preserva RECHAZADO (28/34)", () => {
+  const execConn = { query: vi.fn(), execute: vi.fn() };
+
+  beforeEach(() => {
+    execConn.query.mockReset();
+    execConn.execute.mockReset();
+    execConn.execute.mockResolvedValue([{ affectedRows: 1 }, []]);
+  });
+
+  it("28) una fila RECHAZADO no se borra aunque la persona ya no esté asignada al plan", async () => {
+    // El mismo personal_id (5) sigue en `existentesRows` con estado RECHAZADO
+    // pero ya NO está en `objetivo` (piloto:9 reemplaza al personal_id 5) —
+    // simula exactamente "la persona ya no está asignada al plan".
+    execConn.query.mockResolvedValueOnce([[{ personal_id: 5, estado: "RECHAZADO", monto_asignado: "500" }], []]);
+    execConn.query.mockResolvedValueOnce([[{ puesto: "Piloto" }], []]); // puestoDePersonal(9) — fila nueva, sin RECHAZADO previo
+    execConn.query.mockResolvedValueOnce([[{ monto_defecto: "500" }], []]); // montoSugeridoParaPuesto
+    await sincronizarViaticosPlan(7, 1, { piloto: 9, auxiliares: [] }, execConn as never);
+    const deleteCall = execConn.execute.mock.calls.find((c) => String(c[0]).includes("DELETE FROM tms_viaticos"));
+    expect(deleteCall![0]).toContain("estado = 'PROGRAMADO'");
+    // El DELETE está condicionado a PROGRAMADO — una fila RECHAZADO nunca lo cumple, se preserva.
+  });
+
+  it("34) reasignar a la MISMA persona con una fila RECHAZADO existente no la reutiliza ni la modifica — no se re-inserta/actualiza esa fila", async () => {
+    execConn.query.mockResolvedValueOnce([[{ personal_id: 9, estado: "RECHAZADO", monto_asignado: "500" }], []]);
+    await sincronizarViaticosPlan(7, 1, { piloto: 9, auxiliares: [] }, execConn as never);
+    const insertCall = execConn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_viaticos"));
+    // Ninguna fila RECHAZADO se toca: al no estar en PROGRAMADO, el bucle la salta (continue) — nunca se ejecuta el INSERT...ON DUPLICATE KEY UPDATE para esa persona.
+    expect(insertCall).toBeUndefined();
   });
 });

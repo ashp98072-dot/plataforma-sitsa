@@ -5,6 +5,9 @@ import { listarHistorialViaticosPropios } from "@/lib/rrhh/viaticos-portal";
 
 const estados: Record<string, string> = {
   PROGRAMADO: "Programado", AUTORIZADO: "Autorizado / pendiente de entrega",
+  // VIATICOS-RECHAZADO-1 (sección 15) — el colaborador SÍ debe ver que su
+  // viático fue rechazado, con fecha y motivo (ver render abajo).
+  RECHAZADO: "Rechazado",
   ENTREGADO: "Entregado", LIQUIDADO: "Liquidado",
 };
 
@@ -31,8 +34,18 @@ export default async function ViaticosPage({ searchParams }: { searchParams: Pro
             </div>
             <p className="mt-2 text-sm">Fecha del viaje: {v.fecha.split("-").reverse().join("/")}</p>
             <p className="mt-2 font-semibold">Viático asignado: {v.monto.toLocaleString("es-GT", { style: "currency", currency: "GTQ" })}</p>
-            <p className="mt-2 text-sm">Entregado: {v.entregado ?? "Pendiente"}</p>
-            {v.liquidado ? <p className="text-sm">Liquidado: {v.liquidado}</p> : null}
+            {v.estado === "RECHAZADO" ? (
+              <div className="mt-2 rounded-lg border border-red-900/40 bg-red-950/10 p-3 text-sm">
+                <p className="font-medium text-red-300">Este viático fue rechazado.</p>
+                {v.rechazado ? <p className="mt-1">Fecha: {v.rechazado}</p> : null}
+                {v.motivoRechazo ? <p className="mt-1">Motivo: {v.motivoRechazo}</p> : null}
+              </div>
+            ) : (
+              <>
+                <p className="mt-2 text-sm">Entregado: {v.entregado ?? "Pendiente"}</p>
+                {v.liquidado ? <p className="text-sm">Liquidado: {v.liquidado}</p> : null}
+              </>
+            )}
           </section>
         ))}
         <nav className="flex gap-4 text-sm">

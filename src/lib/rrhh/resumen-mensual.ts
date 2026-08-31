@@ -21,9 +21,14 @@ export async function resumenMensualPropio(empresaId: number, empleadoId: number
   );
   // La consulta de viáticos es independiente: su fallo nunca convierte el saldo en cero.
   let viaticos: { estado: string; monto: number }[] | null = null;
+  // VIATICOS-RECHAZADO-1 (sección 16, CRÍTICO) — un RECHAZADO nunca debe
+  // sumarse como dinero recibido/entregado/pagado. `viaticosRechazados` es
+  // solo un CONTADOR informativo (nunca un monto) — null si la consulta
+  // falla (mismo criterio "no disponible" que `viaticos`), 0/N si tuvo éxito.
+  let viaticosRechazados: number | null = null;
   try {
     const rows = await query<RowDataPacket[]>(
-      `SELECT v.estado, SUM(v.monto_asignado) AS monto
+      `SELECT v.estado, SUM(v.monto_asignado) AS monto, COUNT(*) AS cantidad
        FROM tms_viaticos v
        INNER JOIN tms_personal tp ON tp.id = v.personal_id AND tp.empresa_id = v.empresa_id
        INNER JOIN tms_planes_viaje p ON p.id = v.plan_id AND p.empresa_id = v.empresa_id
@@ -31,7 +36,12 @@ export async function resumenMensualPropio(empresaId: number, empleadoId: number
          AND p.fecha_plan >= ? AND p.fecha_plan < ? GROUP BY v.estado`,
       [empresaId, empleadoId, desde, hasta],
     );
-    viaticos = rows.map((r) => ({ estado: String(r.estado), monto: Number(r.monto) }));
+    const filas = rows.map((r) => ({ estado: String(r.estado), monto: Number(r.monto), cantidad: Number(r.cantidad) }));
+    const rechazado = filas.find((f) => f.estado === "RECHAZADO");
+    viaticosRechazados = rechazado ? rechazado.cantidad : 0;
+    // El monto RECHAZADO se excluye por completo del arreglo monetario —
+    // nunca contribuye a ningún total operativo mostrado como dinero.
+    viaticos = filas.filter((f) => f.estado !== "RECHAZADO").map((f) => ({ estado: f.estado, monto: f.monto }));
   } catch { /* mostrar no disponible, nunca inventar entrega */ }
   return {
     nomina: nomina.map((r) => ({
@@ -39,6 +49,6 @@ export async function resumenMensualPropio(empresaId: number, empleadoId: number
       salario: Number(r.sueldo_base), incentivo: Number(r.bono_incentivo),
       herramientas: Number(r.bono_herramientas), adicionales: Number(r.otros_ingresos),
       descuentos: Number(r.descuentos), igss: Number(r.igss_laboral), isr: Number(r.isr), neto: Number(r.neto),
-    })), viaticos,
+    })), viaticos, viaticosRechazados,
   };
 }

@@ -58,6 +58,12 @@ describe("validarParaBiBanking", () => {
     }
   });
 
+  it("VIATICOS-RECHAZADO-1 (25) — un viático RECHAZADO nunca es exportable al archivo bancario (misma regla que cualquier estado != AUTORIZADO, sin caso especial)", () => {
+    const r = validarParaBiBanking([fila({ estado: "RECHAZADO" })]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.problemas[0].motivo).toContain("AUTORIZADO");
+  });
+
   it("rechaza un viático AUTORIZADO sin cuenta bancaria", () => {
     const r = validarParaBiBanking([fila({ cuentaBancaria: "" })]);
     expect(r.ok).toBe(false);
