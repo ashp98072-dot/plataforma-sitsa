@@ -258,6 +258,12 @@ describe("registrarEntregaViaticosMasiva — concurrencia (13/19)", () => {
     expect(String(sql)).toContain("FOR UPDATE");
   });
 
+  it("VIATICOS-PAGO-MASIVO-TENANT-HARDENING-1 — el JOIN a tms_personal está tenant-scoped explícitamente (tp.empresa_id = v.empresa_id), no solo por tp.id = v.personal_id", async () => {
+    await registrarEntregaViaticosMasiva(7, { metodoPago: "EFECTIVO", items: [{ id: 10, referenciaPago: null }] }, "fact1");
+    const [sql] = conn.query.mock.calls[0];
+    expect(String(sql)).toContain("tp.empresa_id = v.empresa_id");
+  });
+
   it("19) UPDATE con affectedRows=0 (otra transacción lo cambió justo entre el lock y el UPDATE) -> rollback total, nunca doble entrega", async () => {
     conn.execute
       .mockResolvedValueOnce([{ affectedRows: 1 }, []])

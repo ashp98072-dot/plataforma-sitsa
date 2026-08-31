@@ -1082,7 +1082,7 @@ export async function registrarEntregaViaticosMasiva(
       `SELECT v.id, v.estado, v.monto_asignado, tp.nombre AS personal_nombre,
               e.banco, e.cuenta_bancaria, e.tipo_cuenta
        FROM tms_viaticos v
-       INNER JOIN tms_personal tp ON tp.id = v.personal_id
+       INNER JOIN tms_personal tp ON tp.id = v.personal_id AND tp.empresa_id = v.empresa_id
        LEFT JOIN empleados e ON e.id = tp.id_empleado AND e.empresa_id = tp.empresa_id
        WHERE v.empresa_id = ? AND v.id IN (${placeholders})
        FOR UPDATE`,
