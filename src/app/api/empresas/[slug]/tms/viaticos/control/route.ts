@@ -6,7 +6,12 @@ import type { RolGlobal } from "@/lib/roles";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
-const ESTADOS: EstadoViatico[] = ["PROGRAMADO", "AUTORIZADO", "ENTREGADO", "LIQUIDADO"];
+// VIATICOS-RECHAZADO-1 — Control de Viáticos SÍ debe poder filtrar por
+// RECHAZADO (sección 17 del ticket: "CONTROL: sí"). A diferencia de
+// por-pagar/route.ts y por-pagar/exportar/route.ts (que NUNCA deben
+// devolver/exportar RECHAZADO — ver listarViaticosPorPagar, que ya lo
+// excluye de forma incondicional en el backend).
+const ESTADOS: EstadoViatico[] = ["PROGRAMADO", "AUTORIZADO", "RECHAZADO", "ENTREGADO", "LIQUIDADO"];
 
 /**
  * VIAT-3 — listado global para el módulo "Operaciones > Viáticos" (antes
