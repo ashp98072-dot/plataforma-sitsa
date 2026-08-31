@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pasosStepper, resumenCierre } from "./page";
+import { badgeCobro, badgeFacturacion, pasosStepper, resumenCierre } from "./page";
 
 /**
  * CORRECCIÓN PR #112 (HALLAZGO 1): "Cerrar viaje" ya no ejecuta el POST al
@@ -8,7 +8,7 @@ import { pasosStepper, resumenCierre } from "./page";
  * se prueba la función PURA que arma el resumen (mismo criterio ya usado
  * en el resto del repo: probar la lógica extraíble, no el renderizado).
  */
-function plan(overrides: Partial<Parameters<typeof resumenCierre>[0]>) {
+function plan(overrides: Partial<Parameters<typeof resumenCierre>[0]>): Parameters<typeof resumenCierre>[0] {
   return {
     id: 1, codigo: "PLAN-20260827-001", fechaPlan: "2026-08-27", horaCarga: null, estado: "En ruta",
     pendienteCierre: true, cerradoPor: null, cerradoEn: null, clienteId: null, cliente: "Cliente X",
@@ -17,6 +17,9 @@ function plan(overrides: Partial<Parameters<typeof resumenCierre>[0]>) {
     pilotoId: null, piloto: "Juan Pérez", auxiliares: [], paradas: [], evidencias: 3,
     horaSalida: "2026-08-27T07:00", horaLlegada: "2026-08-27T18:00", kmSalida: 1000, kmLlegada: 1350,
     kmRecorridos: 350, diasRuta: 1,
+    estadoFacturacion: "No aplica", facturaId: null, numeroFactura: null, estadoAdminFactura: null,
+    estadoFinancieroFactura: null, montoFacturadoViaje: null, montoBorradorViaje: null,
+    totalFactura: null, totalPagadoFactura: null, saldoFactura: null,
     ...overrides,
   };
 }
@@ -96,5 +99,23 @@ describe("pasosStepper — orden correcto y semántica de 'Cargado (opcional)'",
   it("no crea ningún estado nuevo — los pasos derivan solo de estado/horaSalida/horaLlegada/pendienteCierre ya existentes", () => {
     const pasos = pasosStepper(plan({ estado: "Cerrado", horaSalida: "2026-08-27T07:00", horaLlegada: "2026-08-27T18:00", pendienteCierre: false }));
     expect(pasos.find((p) => p.label === "Cerrado")!.hecho).toBe(true);
+  });
+});
+
+describe("FACT-1-TMS-REPORTES (Fase M) — badges de facturación/cobro: color sólido, cada estado distinto", () => {
+  it("badgeFacturacion: Pendiente/Borrador/Facturado/No aplica nunca comparten clase", () => {
+    const clases = new Set([
+      badgeFacturacion("Pendiente de facturación").clase,
+      badgeFacturacion("En borrador de factura").clase,
+      badgeFacturacion("Facturado").clase,
+      badgeFacturacion("No aplica").clase,
+    ]);
+    expect(clases.size).toBe(4);
+  });
+
+  it("badgeCobro: Sin pagos/Pago parcial/Cobrado tienen colores distintos; null se muestra '—'", () => {
+    expect(badgeCobro("Sin pagos").clase).not.toBe(badgeCobro("Pago parcial").clase);
+    expect(badgeCobro("Pago parcial").clase).not.toBe(badgeCobro("Cobrado").clase);
+    expect(badgeCobro(null).texto).toBe("—");
   });
 });

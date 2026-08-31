@@ -50,6 +50,18 @@ function filaExcel(p: PlanReporte): string[] {
     p.referenciaCliente ?? "—",
     p.cerradoEn ? p.cerradoEn.replace("T", " ") : "—",
     p.cerradoPor ?? "—",
+    // FACT-1-TMS-REPORTES (Fase G) — puede repetirse totalFactura/
+    // totalPagadoFactura/saldoFactura entre varias filas cuando comparten
+    // factura (multiviaje): correcto para lectura visual, ver nota en
+    // el encabezado/subtítulo del archivo — NUNCA sumar esta columna
+    // directamente para totales (usar el KPI de la pantalla).
+    p.estadoFacturacion,
+    p.numeroFactura ?? "—",
+    (p.montoFacturadoViaje ?? p.montoBorradorViaje) != null ? String(p.montoFacturadoViaje ?? p.montoBorradorViaje) : "—",
+    p.estadoFinancieroFactura ?? "—",
+    p.totalFactura != null ? String(p.totalFactura) : "—",
+    p.totalPagadoFactura != null ? String(p.totalPagadoFactura) : "—",
+    p.saldoFactura != null ? String(p.saldoFactura) : "—",
   ];
 }
 
@@ -59,14 +71,33 @@ const HEADERS_EXCEL = [
   "Piloto", "Auxiliar 1", "Auxiliar 2", "Valor del viaje",
   "Código plan", "Estado", "Hora llegada", "Km salida", "Km llegada",
   "Evidencias", "Referencia cliente", "Fecha cierre", "Cerrado por",
+  // Fase G — "Total/Total pagado/Saldo factura" son valores DE LA FACTURA
+  // COMPLETA y se repiten en cada viaje que comparte esa factura
+  // (multiviaje) — información visual válida, NUNCA una base para sumar
+  // totales fila por fila (para eso está el KPI de la pantalla, que
+  // cuenta cada factura una sola vez). Nombres de columna explícitos en
+  // vez de una fila de nota — tablaAExcel (compartido con otros
+  // exportadores) no soporta un subtítulo, y una fila de nota rompería el
+  // invariante "exporta exactamente N filas" ya probado.
+  "Estado facturación", "Número factura", "Monto facturado viaje",
+  "Estado cobro factura", "Total factura", "Total pagado factura", "Saldo factura",
 ];
 
-const HEADERS_PDF = ["Fecha", "Código", "Cliente", "Unidad", "Piloto", "Km", "Evidencias", "Tarifa", "Estado"];
+// Fase H — compacto a propósito: NO se meten todas las columnas
+// financieras (eso vive en el Excel) para no romper legibilidad del PDF.
+const HEADERS_PDF = [
+  "Fecha", "Código", "Cliente", "Unidad", "Piloto", "Km", "Evidencias", "Tarifa", "Estado",
+  "Facturación", "No. factura", "Monto fact.", "Cobro",
+];
 function filaPdf(p: PlanReporte): string[] {
   return [
     p.fechaPlan, p.codigo, p.cliente ?? "—", p.placa ?? "—", p.piloto ?? "—",
     p.kmRecorridos != null ? String(p.kmRecorridos) : "—",
     String(p.evidencias), moneda(p.tarifaComercial), p.estado,
+    p.estadoFacturacion,
+    p.numeroFactura ?? "—",
+    (p.montoFacturadoViaje ?? p.montoBorradorViaje) != null ? moneda(p.montoFacturadoViaje ?? p.montoBorradorViaje) : "—",
+    p.estadoFinancieroFactura ?? "—",
   ];
 }
 
@@ -99,7 +130,8 @@ export async function GET(req: Request, ctx: Ctx) {
       `${filtros.fechaDesde ?? "Inicio"} a ${filtros.fechaHasta ?? "Hoy"} · ` +
       `Generado ${formatearTimestampVisible(ahoraLocal())} (Guatemala) · ` +
       `${kpi.totalViajes} viaje(s) · ${kpi.cerrados} cerrado(s) · ${kpi.pendientesCierre} pendiente(s) de cierre · ` +
-      `Valor programado ${moneda(kpi.valorProgramado)} · Valor cerrado ${moneda(kpi.valorCerrado)}`;
+      `Valor programado ${moneda(kpi.valorProgramado)} · Valor cerrado ${moneda(kpi.valorCerrado)} · ` +
+      `Valor facturado ${moneda(kpi.valorFacturado)} · Cobrado ${moneda(kpi.cobrado)}`;
     const buffer = await tablaAPdf({
       title: "Reporte de viajes",
       subtitle: subtitulo,

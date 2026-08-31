@@ -22,7 +22,7 @@ import { obtenerVehiculoAccesible } from "@/lib/flota/acceso";
 import { vehiculoPorPlaca } from "@/lib/flota/pilotos";
 import { listarDisponibilidadPersonal } from "@/lib/operaciones/disponibilidad-personal";
 import { ahoraLocal, hoyLocal, toIsoDate } from "@/lib/rrhh/dates";
-import { sincronizarViaticosPlan } from "@/lib/tms/viaticos";
+import { listarViaticosRechazadosDelPlan, personalRecienAsignadoDelPlan, sincronizarViaticosPlan } from "@/lib/tms/viaticos";
 import {
   ESTADOS_QUE_RESERVAN_RECURSOS,
   finViajeDesdeInput,
@@ -1652,6 +1652,35 @@ export async function PATCH(req: Request, ctx: Ctx) {
     for (const pid of auxiliaresIdsParaValidar) {
       recursos.push({ personalId: pid, rol: "auxiliar" });
     }
+
+    // PROGRAMACION-RECHAZADO-AVISO-1 — informativo, NUNCA bloquea (RECHAZADO
+    // sigue siendo terminal por (plan_id, personal_id), sin cambios aquí).
+    // `recursos` (arriba) NO es el conjunto correcto para este aviso:
+    // también incluye al piloto/auxiliares YA asignados sin cambiar, cuando
+    // `fechaCambia` dispara su revalidación de disponibilidad — usarlo tal
+    // cual repetiría el aviso en un PATCH que solo cambia la fecha, sin
+    // tocar personal. personalRecienAsignadoDelPlan() calcula el conjunto
+    // correcto: solo quien REALMENTE se (re)asigna en esta solicitud.
+    const rechazados = await listarViaticosRechazadosDelPlan(
+      empresaId,
+      d.id,
+      personalRecienAsignadoDelPlan({
+        pilotoCambioReal,
+        pilotoFinal,
+        auxiliaresCambioReal,
+        auxiliaresFinal,
+        antesAuxiliaresIds,
+      }),
+    );
+    for (const rz of rechazados) {
+      advertencias.push({
+        tipo: "viatico_rechazado_mismo_plan",
+        mensaje: `${rz.nombre || `Personal #${rz.personalId}`} ya tiene un viático rechazado para este viaje. No se generará una nueva solicitud de viático para este mismo plan.${
+          rz.motivoRechazo ? ` Motivo del rechazo: ${rz.motivoRechazo}` : ""
+        }`,
+      });
+    }
+
     for (const r of recursos) {
       const disp = personalDisp.find((p) => p.personalId === r.personalId);
       // No debería faltar (tms_personal ya se validó antes) — si por alguna

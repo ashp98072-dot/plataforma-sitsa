@@ -12,6 +12,7 @@ import type { Plan } from "./programacion-client";
 import NotificarPersonal from "./notificar-personal";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
+import { normalizarPlaca } from "@/lib/flota/placa";
 
 /**
  * Formulario propio de Programación para crear/editar un viaje — reutiliza
@@ -102,6 +103,151 @@ type ClienteCat = {
 // bloquea edición — Operaciones debe poder corregir antes de cerrar.
 const ESTADOS_SOLO_NOTAS = new Set(["En ruta"]);
 const ESTADOS_BLOQUEADOS = new Set(["Cerrado", "Cancelado"]);
+
+/**
+ * PROGRAMACION-CAMBIO-SENSIBLE-FALSO-POSITIVO-1 — identidad estable de un
+ * piloto/auxiliar para decidir si `cambioSensible` debe exigir motivo.
+ *
+ * Causa del falso positivo original: `auxOriginalTxt` comparaba los
+ * NOMBRES crudos guardados en `plan.auxiliares`, mientras que
+ * `auxActualesTxt` los reconstruía volviendo a buscar cada
+ * `auxiliarEmpleadoIds` en el catálogo RRHH (`auxiliares.find(...).nombre`)
+ * — dos fuentes de texto DISTINTAS para la misma persona. Si el nombre
+ * guardado en el plan difiere en mayúsculas/acentos/espacios del nombre
+ * actual en RRHH (algo común y sin relación con haber cambiado de
+ * auxiliar), o si el catálogo todavía no había terminado de cargar
+ * (precarga async), la comparación de texto fallaba aunque el usuario no
+ * hubiera tocado personal — bloqueando Guardar incluso al editar solo
+ * `tarifa_comercial`.
+ *
+ * Corrección: comparar por `empleadoId` (identidad real, estable, ajena al
+ * catálogo) cuando ambos lados lo tienen; solo cae a comparar nombre
+ * NORMALIZADO (trim + minúsculas + espacios colapsados) cuando alguno de
+ * los dos es un nombre libre/legado sin vínculo RRHH.
+ */
+export type IdentidadPersonal = { empleadoId: number | null; nombre: string };
+
+function normalizarNombrePersonal(nombre: string): string {
+  return nombre.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function personalVacio(p: IdentidadPersonal | null): boolean {
+  return !p || (p.empleadoId == null && !p.nombre.trim());
+}
+
+/** true SOLO si la identidad realmente cambió (piloto). */
+export function identidadPersonalCambio(
+  original: IdentidadPersonal | null,
+  actual: IdentidadPersonal | null,
+): boolean {
+  const origVacio = personalVacio(original);
+  const actVacio = personalVacio(actual);
+  if (origVacio && actVacio) return false;
+  if (origVacio !== actVacio) return true;
+  if (original!.empleadoId != null && actual!.empleadoId != null) {
+    return original!.empleadoId !== actual!.empleadoId;
+  }
+  return normalizarNombrePersonal(original!.nombre) !== normalizarNombrePersonal(actual!.nombre);
+}
+
+/**
+ * true SOLO si el CONJUNTO de auxiliares realmente cambió — el orden no
+ * importa (se compara como conjunto, no como lista). Cada auxiliar se
+ * identifica por `empleadoId` cuando existe; por nombre normalizado si es
+ * libre/legado. Soporta tamaños de lista distintos como cambio directo.
+ */
+export function auxiliaresCambio(
+  originales: IdentidadPersonal[],
+  actuales: IdentidadPersonal[],
+): boolean {
+  if (originales.length !== actuales.length) return true;
+  const clave = (p: IdentidadPersonal) =>
+    p.empleadoId != null ? `id:${p.empleadoId}` : `nombre:${normalizarNombrePersonal(p.nombre)}`;
+  const a = originales.map(clave).sort();
+  const b = actuales.map(clave).sort();
+  return a.some((v, i) => v !== b[i]);
+}
+
+/** Snapshot mínimo (piloto/unidad/auxiliares) que decide `cambioSensible` — original (plan) o actual (form), misma forma para poder comparar. */
+export type SnapshotPersonalUnidad = {
+  piloto: IdentidadPersonal;
+  placa: string;
+  auxiliares: IdentidadPersonal[];
+};
+
+/**
+ * Composición ÚNICA de la regla "cambioSensible": true solo si realmente
+ * cambió piloto, unidad (placa) o el conjunto de auxiliares — nunca por
+ * tarifa/referencia/paradas/notas/regreso_estimado/otros campos no
+ * sensibles (esos ni siquiera entran a esta función). Extraída como
+ * función pura para poder probarla directo, sin depender de renderizar el
+ * formulario completo.
+ */
+export function calcularCambioSensible(
+  original: SnapshotPersonalUnidad,
+  actual: SnapshotPersonalUnidad,
+): boolean {
+  return (
+    identidadPersonalCambio(original.piloto, actual.piloto) ||
+    normalizarPlaca(actual.placa) !== normalizarPlaca(original.placa) ||
+    auxiliaresCambio(original.auxiliares, actual.auxiliares)
+  );
+}
+
+/**
+ * PROGRAMACION-CAMBIO-SENSIBLE-FALSO-POSITIVO-1 (ajuste pre-merge) —
+ * campos "sensibles" (piloto/unidad/auxiliares) del PATCH a
+ * /tms/planes.
+ *
+ * El backend (planes/route.ts) NO se modifica ni se debilita: sigue
+ * exigiendo motivoCambio por PRESENCIA de pilotoNombre/placa/
+ * auxiliarEmpleadoIds/auxiliarNombres en el request (protección
+ * intencional, "nunca dejar pasar un cambio real sin motivo
+ * registrado"). El defecto de punta a punta estaba aquí, en el cliente:
+ * este formulario reenviaba esos 4 campos con su valor ACTUAL en
+ * CUALQUIER PATCH (aun sin haber cambiado), lo que disparaba esa
+ * protección del backend incluso al editar solo tarifa/notas/paradas.
+ *
+ * Corrección: solo se incluyen los 4 campos (+ motivoCambio) cuando
+ * `cambioSensible` es real. Si no hay cambio sensible real, los 4 se
+ * omiten (`undefined`, nunca se reenvía "el mismo valor de antes") y
+ * motivoCambio tampoco se envía — el backend entonces no ve ninguno de
+ * los campos y no exige motivo. Cuando SÍ hay un cambio sensible real,
+ * se mantiene el comportamiento actual: se reenvía el conjunto completo
+ * piloto/unidad/auxiliares junto con motivoCambio (no se intenta enviar
+ * solo el campo individual que cambió).
+ */
+export type CamposSensiblesPatch = {
+  pilotoNombre: string | undefined;
+  placa: string | undefined;
+  auxiliarEmpleadoIds: number[] | undefined;
+  auxiliarNombres: string[] | undefined;
+  motivoCambio: string | undefined;
+};
+
+export function camposSensiblesPatch(input: {
+  bloqueadoParaPreCierre: boolean;
+  cambioSensible: boolean;
+  pilotoNombre: string;
+  placa: string;
+  auxiliarEmpleadoIds: number[];
+  auxiliarNombres: string[];
+  motivoCambioFinal: string;
+}): CamposSensiblesPatch {
+  // Mismo criterio que ya regía piloto/placa/auxiliares: pre-cierre
+  // ("En ruta" sin llegada) sigue bloqueando estos campos por completo,
+  // sin importar cambioSensible.
+  const enviarCambioRecursos = !input.bloqueadoParaPreCierre && input.cambioSensible;
+  return {
+    pilotoNombre: enviarCambioRecursos ? input.pilotoNombre.trim() || undefined : undefined,
+    placa: enviarCambioRecursos ? input.placa.trim() || undefined : undefined,
+    auxiliarEmpleadoIds: enviarCambioRecursos ? input.auxiliarEmpleadoIds : undefined,
+    auxiliarNombres: enviarCambioRecursos ? input.auxiliarNombres : undefined,
+    // motivoCambio no depende de bloqueadoParaPreCierre (nunca lo hizo):
+    // si hay cambio sensible real, va motivo; si no, nunca se envía.
+    motivoCambio: input.cambioSensible ? input.motivoCambioFinal : undefined,
+  };
+}
 
 const inputCls =
   "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
@@ -282,6 +428,13 @@ export default function PlanForm({
   const [guardandoUbicacion, setGuardandoUbicacion] = useState(false);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
+  // PROGRAMACION-RECHAZADO-AVISO-1 — informativo, NUNCA bloquea: si al
+  // guardar se detecta que alguna persona (re)asignada ya tiene un
+  // viático RECHAZADO para ESTE MISMO plan, se muestra aparte (no dentro
+  // del banner verde de éxito, que confundiría "advertencia" con
+  // "resultado exitoso") — ver advertencias tipo "viatico_rechazado_
+  // mismo_plan" devueltas por PATCH /tms/planes.
+  const [avisosRechazoPlan, setAvisosRechazoPlan] = useState<string[]>([]);
 
   const cargarCatalogos = useCallback(async () => {
     const [resPlanes, cat, ops, viaticosCfg] = await Promise.all([
@@ -636,15 +789,46 @@ export default function PlanForm({
   // vacío)? Solo entonces se exige motivo — reenviar el mismo valor no
   // debe forzar al usuario a justificar nada. El backend vuelve a
   // validar esto por su cuenta (nunca confiar solo en el cliente).
-  const auxOriginalTxt = esEdicion ? [...(plan!.auxiliares ?? [])].sort().join(",") : "";
-  const auxActualesTxt = esEdicion
-    ? [...form.auxiliarNombres, ...form.auxiliarEmpleadoIds.map((id) => auxiliares.find((a) => a.id === id)?.nombre ?? `#${id}`)].sort().join(",")
-    : "";
+  //
+  // PROGRAMACION-CAMBIO-SENSIBLE-FALSO-POSITIVO-1: piloto y auxiliares se
+  // comparan por IDENTIDAD (empleadoId, ver identidadPersonalCambio/
+  // auxiliaresCambio arriba) en vez de por texto reconstruido desde el
+  // catálogo RRHH — evita el falso positivo cuando el nombre guardado en
+  // el plan difiere en formato del nombre actual en RRHH, o cuando el
+  // catálogo todavía no cargó. Auxiliares originales: prefiere
+  // `plan.auxiliaresDetalle` (ya trae empleadoId real, Fase P4.3); si un
+  // plan legado no lo trae, cae a `plan.auxiliares` (nombres) como
+  // identidad libre. Unidad sigue comparándose por placa (no hay id de
+  // unidad en el form) — reutiliza `normalizarPlaca` (misma normalización
+  // ya usada en Flota) en vez de solo `.toUpperCase()`.
+  const auxOriginalesIdentidad: IdentidadPersonal[] = esEdicion
+    ? plan!.auxiliaresDetalle?.length
+      ? plan!.auxiliaresDetalle.map((a) => ({ empleadoId: a.empleadoId, nombre: a.nombre }))
+      : (plan!.auxiliares ?? []).map((nombre) => ({ empleadoId: null, nombre }))
+    : [];
+  const auxActualesIdentidad: IdentidadPersonal[] = esEdicion
+    ? [
+        ...form.auxiliarEmpleadoIds.map((id) => ({
+          empleadoId: id,
+          nombre: auxiliares.find((a) => a.id === id)?.nombre ?? `#${id}`,
+        })),
+        ...form.auxiliarNombres.map((nombre) => ({ empleadoId: null, nombre })),
+      ]
+    : [];
   const cambioSensible =
     esEdicion &&
-    (form.pilotoNombre.trim() !== (plan!.piloto ?? "").trim() ||
-      form.placa.trim().toUpperCase() !== (plan!.placa ?? "").trim().toUpperCase() ||
-      auxActualesTxt !== auxOriginalTxt);
+    calcularCambioSensible(
+      {
+        piloto: { empleadoId: plan!.pilotoEmpleadoId ?? null, nombre: plan!.piloto ?? "" },
+        placa: plan!.placa ?? "",
+        auxiliares: auxOriginalesIdentidad,
+      },
+      {
+        piloto: { empleadoId: form.pilotoEmpleadoId || null, nombre: form.pilotoNombre },
+        placa: form.placa,
+        auxiliares: auxActualesIdentidad,
+      },
+    );
 
   // VIAT-2: el servidor exige regreso_estimado cuando el plan queda con
   // piloto, auxiliares o unidad asignados (lo necesita para poder validar
@@ -721,6 +905,7 @@ export default function PlanForm({
     if (saving || bloqueado) return;
     setError("");
     setMsg("");
+    setAvisosRechazoPlan([]);
     const paradas = paradasForm
       .filter((p) => p.lugarNombre.trim())
       .map((p) => ({
@@ -811,6 +996,21 @@ export default function PlanForm({
         return;
       }
 
+      // PROGRAMACION-CAMBIO-SENSIBLE-FALSO-POSITIVO-1 (ajuste pre-merge):
+      // piloto/placa/auxiliares/motivoCambio se calculan UNA vez aquí (ver
+      // camposSensiblesPatch arriba) — solo se incluyen en el PATCH si
+      // `cambioSensible` es real, para no disparar la protección del
+      // backend (tocaPiloto/tocaUnidad/tocaAuxiliares por presencia) al
+      // editar campos no sensibles (tarifa, notas, etc.).
+      const camposSensibles = camposSensiblesPatch({
+        bloqueadoParaPreCierre,
+        cambioSensible,
+        pilotoNombre: form.pilotoNombre,
+        placa: form.placa,
+        auxiliarEmpleadoIds: form.auxiliarEmpleadoIds,
+        auxiliarNombres: form.auxiliarNombres,
+        motivoCambioFinal,
+      });
       const res = await fetch(`/api/empresas/${slug}/tms/planes`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -822,17 +1022,18 @@ export default function PlanForm({
           horaCarga: soloNotas ? undefined : form.horaCarga || undefined,
           // OPS-3.2c: piloto/unidad/auxiliares pasan de `soloNotas` a
           // `bloqueadoParaPreCierre` — se liberan en pendiente de cierre,
-          // igual que los seis campos de OPS-3.2b de abajo.
-          pilotoNombre: bloqueadoParaPreCierre ? undefined : form.pilotoNombre.trim() || undefined,
-          placa: bloqueadoParaPreCierre ? undefined : form.placa.trim() || undefined,
+          // igual que los seis campos de OPS-3.2b de abajo. Además, ahora
+          // solo se reenvían si hubo un cambio sensible real (ver arriba).
+          pilotoNombre: camposSensibles.pilotoNombre,
+          placa: camposSensibles.placa,
           // OPS-AJUSTES (sección 7): "estado" ya NO se envía desde este
           // guardado general — Cargado/Cancelado ahora son acciones
           // dedicadas (marcarCargado()/cancelarViaje() más abajo), y
           // "En ruta"/"Cerrado" nunca fueron responsabilidad de este
           // formulario (Portal y /cerrar respectivamente).
-          motivoCambio: cambioSensible ? motivoCambioFinal : undefined,
-          auxiliarEmpleadoIds: bloqueadoParaPreCierre ? undefined : form.auxiliarEmpleadoIds,
-          auxiliarNombres: bloqueadoParaPreCierre ? undefined : form.auxiliarNombres,
+          motivoCambio: camposSensibles.motivoCambio,
+          auxiliarEmpleadoIds: camposSensibles.auxiliarEmpleadoIds,
+          auxiliarNombres: camposSensibles.auxiliarNombres,
           tipoTraslado: undefined,
           // OPS-3.2b: estos seis ya no dependen de `soloNotas` a secas —
           // `bloqueadoParaPreCierre` los libera cuando el plan está
@@ -869,9 +1070,17 @@ export default function PlanForm({
         return;
       }
       setMsg(data.mensaje ?? "Viaje actualizado.");
-      if (Array.isArray(data.advertencias) && data.advertencias.length) {
+      // PROGRAMACION-RECHAZADO-AVISO-1 — se separan del resto de
+      // advertencias (que siguen exactamente igual, sin tocar ese flujo)
+      // para no mezclar un aviso de viático rechazado con el banner verde
+      // de éxito.
+      const advertenciasArr: { tipo?: string; mensaje: string }[] = Array.isArray(data.advertencias) ? data.advertencias : [];
+      const avisosRechazo = advertenciasArr.filter((a) => a.tipo === "viatico_rechazado_mismo_plan");
+      const otrasAdvertencias = advertenciasArr.filter((a) => a.tipo !== "viatico_rechazado_mismo_plan");
+      setAvisosRechazoPlan(avisosRechazo.map((a) => a.mensaje));
+      if (otrasAdvertencias.length) {
         setMsg(
-          `${data.mensaje ?? "Viaje actualizado."} — ${data.advertencias.map((a: { mensaje: string }) => a.mensaje).join(" · ")}`,
+          `${data.mensaje ?? "Viaje actualizado."} — ${otrasAdvertencias.map((a) => a.mensaje).join(" · ")}`,
         );
       }
       // El servidor ya sincronizó tms_viaticos con el piloto/auxiliares
@@ -1568,6 +1777,27 @@ export default function PlanForm({
       </div>
 
       {esEdicion ? <NotificarPersonal plan={plan!} /> : null}
+
+      {/* PROGRAMACION-RECHAZADO-AVISO-1 — aviso NO bloqueante: alguna
+          persona (re)asignada ya tiene un viático RECHAZADO para ESTE
+          MISMO viaje/plan. RECHAZADO sigue siendo terminal — este aviso
+          solo explica por qué no se generó un viático nuevo para esa
+          persona; la asignación operativa del viaje sigue guardada
+          normalmente. Se agrupan todos los colaboradores en un solo
+          bloque (nunca uno por render). */}
+      {avisosRechazoPlan.length ? (
+        <div className="md:col-span-3 rounded-lg border border-amber-700/40 bg-amber-950/10 p-3 text-sm">
+          <p className="font-medium text-amber-300">Viático rechazado</p>
+          <ul className="mt-1 list-disc space-y-1 pl-5 text-[var(--muted)]">
+            {avisosRechazoPlan.map((m, i) => (
+              <li key={i}>{m}</li>
+            ))}
+          </ul>
+          <p className="mt-1 text-xs text-[var(--muted)]">
+            Si necesita un nuevo viático, debe corresponder a un viaje/plan distinto.
+          </p>
+        </div>
+      ) : null}
 
       {esEdicion ? (
         <div className="md:col-span-3">

@@ -6,6 +6,8 @@ vi.mock("@/lib/tms/reportes-viajes", () => ({
   calcularKpisReporte: vi.fn(() => ({
     totalViajes: 0, cerrados: 0, pendientesCierre: 0, enRuta: 0, cancelados: 0,
     totalEvidencias: 0, totalKmRecorridos: 0, valorProgramado: 0, valorCerrado: 0, promedioIngresoPorViaje: 0,
+    viajesPendientesFacturacion: 0, valorPendienteFacturacion: 0, viajesFacturados: 0,
+    valorFacturado: 0, facturasPendientesCobro: 0, valorPendienteCobro: 0, cobrado: 0,
   })),
   filtrosReporteDesdeUrl: vi.fn((url: URL) => ({
     fechaDesde: url.searchParams.get("fechaDesde") ?? undefined,
@@ -60,6 +62,21 @@ describe("GET /tms/reportes/viajes/export — 14) recibe y aplica los MISMOS fil
     expect(res.headers.get("Content-Type")).toContain("spreadsheetml");
   });
 
+  it("19) el Excel incluye las columnas nuevas de facturación (FACT-1-TMS-REPORTES)", async () => {
+    await GET(new Request("http://localhost/x?formato=xlsx"), ctx);
+    const headers = vi.mocked(tablaAExcel).mock.calls[0][0].headers;
+    for (const col of ["Estado facturación", "Número factura", "Monto facturado viaje", "Estado cobro factura", "Total factura", "Total pagado factura", "Saldo factura"]) {
+      expect(headers).toContain(col);
+    }
+    expect(headers).toContain("Valor del viaje"); // se mantiene la tarifa comercial (columna preexistente)
+  });
+
+  it("20) el PDF incluye Facturación/No. factura/Monto fact./Cobro sin romper el formato compacto existente", async () => {
+    await GET(new Request("http://localhost/x?formato=pdf"), ctx);
+    const headers = vi.mocked(tablaAPdf).mock.calls[0][0].headers;
+    expect(headers).toEqual(["Fecha", "Código", "Cliente", "Unidad", "Piloto", "Km", "Evidencias", "Tarifa", "Estado", "Facturación", "No. factura", "Monto fact.", "Cobro"]);
+  });
+
   it("formato=pdf genera PDF reutilizando tablaAPdf", async () => {
     const res = await GET(new Request("http://localhost/x?formato=pdf"), ctx);
     expect(tablaAPdf).toHaveBeenCalledTimes(1);
@@ -89,6 +106,9 @@ describe("[HALLAZGO 3 · 4] la exportación usa obtenerReporteViajesParaExportar
       regresoEstimado: null, tarifaComercial: null, placa: null, unidadTipo: null, unidadCapacidad: null,
       pilotoId: null, piloto: null, auxiliares: [] as string[], paradas: [], evidencias: 0,
       horaSalida: null, horaLlegada: null, kmSalida: null, kmLlegada: null, kmRecorridos: null, diasRuta: null,
+      estadoFacturacion: "No aplica" as const, facturaId: null, numeroFactura: null, estadoAdminFactura: null,
+      estadoFinancieroFactura: null, montoFacturadoViaje: null, montoBorradorViaje: null,
+      totalFactura: null, totalPagadoFactura: null, saldoFactura: null,
     };
     const filas = Array.from({ length: 3000 }, (_, i) => ({ ...filaBase, id: i + 1 }));
     vi.mocked(obtenerReporteViajesParaExportar).mockResolvedValue({ ok: true, planes: filas as never });

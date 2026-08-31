@@ -113,6 +113,24 @@ export async function reporteViajePdf(
     campo("Cerrado por", p.cerradoPor ?? "—");
     campo("Cerrado en", fechaHora(p.cerradoEn));
 
+    // G. Facturación (FACT-1-TMS-REPORTES) — solo lectura, mismos datos
+    // que la pantalla; NUNCA botones de acción (eso vive exclusivamente
+    // en Facturación clientes).
+    seccion("G. Facturación");
+    campo("Estado", p.estadoFacturacion);
+    campo("Número de factura", p.numeroFactura ?? "—");
+    const montoAsignado = p.montoFacturadoViaje ?? p.montoBorradorViaje;
+    campo("Monto asignado a este viaje", montoAsignado != null ? moneda(montoAsignado) : "—");
+    campo("Estado de cobro de la factura", p.estadoFinancieroFactura ?? "—");
+    campo("Total factura", p.totalFactura != null ? moneda(p.totalFactura) : "—");
+    campo("Total pagado", p.totalPagadoFactura != null ? moneda(p.totalPagadoFactura) : "—");
+    campo("Saldo factura", p.saldoFactura != null ? moneda(p.saldoFactura) : "—");
+    if (p.facturaId != null) {
+      doc.font("Helvetica-Oblique").fontSize(8).fillColor("#64748b")
+        .text("Los importes de pago y saldo corresponden a la factura completa.");
+      doc.moveDown(0.2);
+    }
+
     doc.moveDown(0.6);
     doc
       .font("Helvetica")
