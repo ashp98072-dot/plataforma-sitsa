@@ -39,6 +39,7 @@ async function analizar(empresaId: number, filas: FilaClienteExcel[]): Promise<P
   const porRtu = indice(existentes, "rtu");
   const porNombre = indice(existentes, "nombre");
   const vistosArchivo = new Set<string>();
+  const destinosArchivo = new Set<number>();
 
   return filas.map((fila) => {
     const errores: string[] = [];
@@ -53,24 +54,33 @@ async function analizar(empresaId: number, filas: FilaClienteExcel[]): Promise<P
       ...candidatos(porCodigo, fila.codigo),
       ...candidatos(porNit, fila.nit),
       ...candidatos(porRtu, fila.rtu),
-      ...candidatos(porNombre, fila.nombre),
     ]) encontrados.set(c.id, c);
-    if (encontrados.size > 1) errores.push("código, NIT, RTU o nombre coinciden con clientes diferentes");
+    // El nombre comercial no es identidad fiscal: distintas razones sociales
+    // pueden compartirlo. Solo se usa como respaldo sin identificadores.
+    if (!fila.codigo && !fila.nit && !fila.rtu) {
+      for (const c of candidatos(porNombre, fila.nombre)) encontrados.set(c.id, c);
+    }
+    if (encontrados.size > 1) errores.push("identificación ambigua: indica el código y NIT correctos; coinciden con clientes diferentes");
+    const existente = encontrados.size === 1 ? [...encontrados.values()][0] : undefined;
+    if (existente) {
+      for (const campo of ["nit", "rtu"] as const) {
+        if (fila[campo] && existente[campo] && normalizarIdentificadorCliente(fila[campo]!) !== normalizarIdentificadorCliente(existente[campo]!)) {
+          errores.push(`${campo.toUpperCase()} distinto al del cliente identificado; usa un registro separado para otra identidad fiscal`);
+        }
+      }
+      if (destinosArchivo.has(existente.id)) errores.push("varias filas apuntan al mismo cliente existente");
+    }
 
-    const claveArchivo = fila.codigo
-      ? `codigo:${normalizarIdentificadorCliente(fila.codigo)}`
-      : fila.nit
-        ? `nit:${normalizarIdentificadorCliente(fila.nit)}`
-        : fila.rtu
-          ? `rtu:${normalizarIdentificadorCliente(fila.rtu)}`
-        : `nombre:${normalizarIdentificadorCliente(fila.nombre)}`;
-    if (vistosArchivo.has(claveArchivo)) errores.push("cliente repetido dentro del archivo");
-    vistosArchivo.add(claveArchivo);
+    const clavesArchivo = (["codigo", "nit", "rtu"] as const)
+      .filter((campo) => fila[campo])
+      .map((campo) => `${campo}:${normalizarIdentificadorCliente(fila[campo]!)}`);
+    if (!clavesArchivo.length) clavesArchivo.push(`nombre:${normalizarIdentificadorCliente(fila.nombre)}`);
+    if (clavesArchivo.some((clave) => vistosArchivo.has(clave))) errores.push("cliente repetido dentro del archivo");
+    clavesArchivo.forEach((clave) => vistosArchivo.add(clave));
 
     if (errores.length) {
       return { ...fila, estadoValidacion: "ERROR", detalle: errores.join("; "), clienteId: null };
     }
-    const existente = [...encontrados.values()][0];
     if (!existente) {
       return {
         ...fila,
@@ -81,10 +91,11 @@ async function analizar(empresaId: number, filas: FilaClienteExcel[]): Promise<P
         clienteId: null,
       };
     }
+    destinosArchivo.add(existente.id);
     if (!fila.actualizar) {
       return { ...fila, estadoValidacion: "OMITIR", detalle: `Ya existe: ${existente.nombre}. No se modificará.`, clienteId: existente.id };
     }
-    return { ...fila, estadoValidacion: "ACTUALIZAR", detalle: `Actualizará: ${existente.nombre}.`, clienteId: existente.id };
+    return { ...fila, estadoValidacion: "ACTUALIZAR", detalle: `Actualizará: ${existente.nombre} · código ${existente.codigo ?? "—"} · NIT ${existente.nit ?? "—"}.`, clienteId: existente.id };
   });
 }
 
