@@ -25,14 +25,14 @@ export async function GET(_req: Request, ctx: Ctx) {
       [empresaId],
     ).catch(() => [] as RowDataPacket[]),
     query<RowDataPacket[]>(
-      `SELECT e.id, e.codigo, e.nombre, e.dpi,
+      `SELECT e.id, e.codigo, e.nombre, e.dpi, DATE_FORMAT(e.fecha_alta, '%Y-%m-%d') AS fecha_contratacion,
               ROUND(SUM(s.dias_disponibles), 2) AS dias_disponibles
        FROM saldos_vacaciones s
        INNER JOIN empleados e
          ON e.id = s.id_empleado AND e.empresa_id = s.empresa_id
        WHERE s.empresa_id = ? AND s.estado = 'Vigente'
          AND e.estado = 'Activo' AND s.dias_disponibles > 0
-       GROUP BY e.id, e.codigo, e.nombre, e.dpi
+       GROUP BY e.id, e.codigo, e.nombre, e.dpi, e.fecha_alta
        HAVING SUM(s.dias_disponibles) >= 15
        ORDER BY dias_disponibles DESC, e.nombre ASC`,
       [empresaId],
@@ -58,6 +58,7 @@ export async function GET(_req: Request, ctx: Ctx) {
       nombre: String(r.nombre ?? ""),
       dpi: r.dpi ? String(r.dpi) : null,
       diasDisponibles: Number(r.dias_disponibles),
+      fechaContratacion: r.fecha_contratacion ? String(r.fecha_contratacion) : null,
     })),
-  });
+  }, { headers: { "Cache-Control": "private, no-store" } });
 }
