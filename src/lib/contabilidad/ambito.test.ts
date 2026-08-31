@@ -27,13 +27,13 @@ it.each(["", "?entidad=0", "?entidad=-1", "?entidad=1.5", "?entidad=9&entidad=10
 it("solo toma entidad de la URL; actor y privilegio salen de sesión", () => {
   expect(ambitoDesdeRequest(new Request("https://local.test/?entidad=9&admin=true&usuarioId=1"), session)).toEqual(a);
 });
-it("bloquea empresa, entidad y acceso en orden, antes de leer/escribir", async () => {
+it("bloquea empresa y libro sin duplicar la matriz de permisos", async () => {
   await bloquearAmbito(connection, 7, a, true);
-  expect(conn.query.mock.calls.map((c) => c[1])).toEqual([[7], [7, 9], [7, 9, 4]]);
+  expect(conn.query.mock.calls.map((c) => c[1])).toEqual([[7], [7, 9]]);
   for (const [sql] of conn.query.mock.calls) expect(sql).toContain("FOR UPDATE");
   expect(conn.execute).not.toHaveBeenCalled();
 });
-it.each([0, 1, 2])("deniega empresa, entidad o asignación ausente (paso %s)", async (paso) => {
+it.each([0, 1])("deniega empresa o entidad ausente (paso %s)", async (paso) => {
   for (let n = 0; n < paso; n++) conn.query.mockResolvedValueOnce([[{ id: 7, activa: 1 }]]);
   conn.query.mockResolvedValueOnce([[]]);
   await expect(bloquearAmbito(connection, 7, a, true)).rejects.toMatchObject({ status: 403 });
@@ -46,9 +46,10 @@ it("Admin aún valida tenant/entidad; no requiere asignación", async () => {
   await bloquearAmbito(connection, 7, { ...a, admin: true }, true);
   expect(conn.query).toHaveBeenCalledTimes(2);
 });
-it.each([{ activo: 0, puede_editar: 1 }, { activo: 1, puede_editar: 0 }])("acceso revocado o de consulta no escribe: %o", async (acceso) => {
-  conn.query.mockResolvedValueOnce([[{ id: 7 }]]).mockResolvedValueOnce([[{ id: 9, activa: 1 }]]).mockResolvedValueOnce([[acceso]]);
-  await expect(bloquearAmbito(connection, 7, a, true)).rejects.toMatchObject({ status: 403 });
+it.each([true, false])("no consulta permisos duplicados; el guard central autoriza antes (editar=%s)", async (editar) => {
+  await bloquearAmbito(connection, 7, a, editar);
+  expect(conn.query).toHaveBeenCalledTimes(2);
+  expect(conn.query.mock.calls.some(([sql]) => String(sql).includes("cont_entidad_usuarios"))).toBe(false);
 });
 it("consulta permitida sin permiso de edición", async () => {
   conn.query.mockResolvedValueOnce([[{ id: 7 }]]).mockResolvedValueOnce([[{ id: 9, activa: 1 }]]).mockResolvedValueOnce([[{ activo: 1, puede_editar: 0 }]]);

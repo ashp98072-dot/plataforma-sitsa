@@ -5,7 +5,7 @@ vi.mock("@/lib/db", () => ({ getPool: vi.fn(), query: vi.fn() }));
 vi.mock("@/lib/auditoria", () => ({ registrarAuditoriaTx: vi.fn() }));
 import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
-import { configurarEntidad, listarEntidades, usuariosAsignables } from "./entidades";
+import { configurarEntidad, listarEntidades } from "./entidades";
 const conn = { beginTransaction: vi.fn(), query: vi.fn(), execute: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn() };
 beforeEach(() => {
   vi.resetAllMocks();
@@ -19,18 +19,12 @@ beforeEach(() => {
   conn.execute.mockResolvedValue([{ insertId: 10, affectedRows: 1 }]);
   vi.mocked(query).mockResolvedValue([]);
 });
-it("filtra entidades por tenant, usuario y vigencia sin conceder acceso a todos", async () => {
-  await listarEntidades(7, 20, false);
-  expect(query).toHaveBeenCalledWith(expect.stringContaining("a.usuario_id = ? AND a.activo = 1"), [7, 20]);
-  expect(vi.mocked(query).mock.calls[0][0]).toContain("e.activa = 1");
-  await listarEntidades(7, 20, true);
+it("filtra libros activos por empresa tras el guard central sin asignación duplicada", async () => {
+  await listarEntidades(7, false);
+  expect(query).toHaveBeenCalledWith(expect.stringContaining("empresa_id = ? AND activa = 1"), [7]);
+  expect(vi.mocked(query).mock.calls[0][0]).not.toContain("cont_entidad_usuarios");
+  await listarEntidades(7, true);
   expect(vi.mocked(query).mock.calls[1][1]).toEqual([7]);
-});
-it("candidatos no exponen credenciales y exigen acceso a empresa", async () => {
-  await usuariosAsignables(7);
-  const sql = vi.mocked(query).mock.calls[0][0];
-  expect(sql).toContain("u.activo = 1"); expect(sql).toContain("ue.empresa_id = ?");
-  expect(sql).not.toMatch(/password|salt|SELECT \*/i);
 });
 it("crea entidad con empresa/actor del servidor y auditoría transaccional", async () => {
   await configurarEntidad(7, "admin", { accion: "crear", codigo: "kt", nombre: "Entidad ficticia", empresaId: 99 });
@@ -38,12 +32,9 @@ it("crea entidad con empresa/actor del servidor y auditoría transaccional", asy
   expect(registrarAuditoriaTx).toHaveBeenCalledWith(conn, expect.objectContaining({ empresaId: 7, usuario: "admin" }));
   expect(conn.commit).toHaveBeenCalledOnce(); expect(conn.release).toHaveBeenCalledOnce();
 });
-it("asigna ver/editar mediante upsert sin crear usuarios", async () => {
-  await configurarEntidad(7, "admin", { accion: "acceso", entidadId: 10, usuarioId: 20, acceso: "ver" });
-  expect(conn.query).toHaveBeenCalledWith(expect.stringContaining("WHERE empresa_id = ? AND id = ? FOR UPDATE"), [7, 10]);
-  expect(conn.execute).toHaveBeenCalledWith(expect.stringContaining("ON DUPLICATE KEY UPDATE"), [7, 10, 20, 0]);
-  await configurarEntidad(7, "admin", { accion: "acceso", entidadId: 10, usuarioId: 20, acceso: "editar" });
-  expect(conn.execute).toHaveBeenLastCalledWith(expect.stringContaining("ON DUPLICATE KEY UPDATE"), [7, 10, 20, 1]);
+it.each(["ver", "editar", "revocar"])("rechaza la antigua acción de acceso %s sin escribir", async (acceso) => {
+  await expect(configurarEntidad(7, "admin", { accion: "acceso", entidadId: 10, usuarioId: 20, acceso })).rejects.toThrow();
+  expect(getPool).not.toHaveBeenCalled();
 });
 it("rechaza entidad de otro tenant o inexistente antes de escribir", async () => {
   conn.query.mockResolvedValueOnce([[]]);
@@ -56,11 +47,6 @@ it.each(["entidad", "usuario", "empresa"])("rechaza asignación inválida: %s", 
   if (caso === "empresa") conn.query.mockResolvedValueOnce([[{ id: 10, activa: 1 }]]).mockResolvedValueOnce([[{ id: 20, activo: 1, acceso_todas_empresas: 0 }]]).mockResolvedValueOnce([[]]);
   await expect(configurarEntidad(7, "admin", { accion: "acceso", entidadId: 10, usuarioId: 20, acceso: "ver" })).rejects.toThrow();
   expect(conn.execute).not.toHaveBeenCalled(); expect(conn.commit).not.toHaveBeenCalled();
-});
-it("revoca lógicamente aunque el usuario esté inactivo/sin empresa", async () => {
-  await configurarEntidad(7, "admin", { accion: "acceso", entidadId: 10, usuarioId: 20, acceso: "revocar" });
-  expect(conn.query).toHaveBeenCalledTimes(1);
-  expect(conn.execute).toHaveBeenCalledWith(expect.stringContaining("SET activo = 0, puede_editar = 0"), [7, 10, 20]);
 });
 it("desactiva sin borrar ni alterar cuentas", async () => {
   await configurarEntidad(7, "admin", { accion: "estado", entidadId: 10, activa: false });

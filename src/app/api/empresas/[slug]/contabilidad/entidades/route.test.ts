@@ -2,14 +2,14 @@ import { beforeEach, expect, it, vi } from "vitest";
 vi.mock("@/lib/tenant", () => ({ requireTenantModulo: vi.fn() }));
 vi.mock("@/lib/contabilidad/entidades", () => ({ configurarEntidad: vi.fn(), listarEntidades: vi.fn(), listarAsignaciones: vi.fn(), usuariosAsignables: vi.fn(), EntidadInvalida: class extends Error {} }));
 import { requireTenantModulo } from "@/lib/tenant";
-import { configurarEntidad, listarEntidades, listarAsignaciones, usuariosAsignables, EntidadInvalida } from "@/lib/contabilidad/entidades";
+import { configurarEntidad, listarEntidades, EntidadInvalida } from "@/lib/contabilidad/entidades";
 import { GET, POST } from "./route";
 const ctx = { params: Promise.resolve({ slug: "prueba" }) };
 const req = () => new Request("http://localhost/api", { method: "POST", body: JSON.stringify({ empresaId: 99, usuario: "falso" }) });
 beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(requireTenantModulo).mockResolvedValue({ empresa: { id: 7 }, session: { id: 1, username: "real", rol: "Admin" } } as never);
-  vi.mocked(listarEntidades).mockResolvedValue([]); vi.mocked(listarAsignaciones).mockResolvedValue([]); vi.mocked(usuariosAsignables).mockResolvedValue([]);
+  vi.mocked(listarEntidades).mockResolvedValue([]);
   vi.mocked(configurarEntidad).mockResolvedValue(10);
 });
 it.each([401, 403])("GET y POST respetan guard %s", async (status) => {
@@ -17,11 +17,13 @@ it.each([401, 403])("GET y POST respetan guard %s", async (status) => {
   expect((await GET(req(), ctx)).status).toBe(status); expect((await POST(req(), ctx)).status).toBe(status);
   expect(listarEntidades).not.toHaveBeenCalled(); expect(configurarEntidad).not.toHaveBeenCalled();
 });
-it("no Admin solo ve asignadas, sin nombres/asignaciones de otros usuarios", async () => {
+it("no Admin consulta libros con permiso central sin listar usuarios", async () => {
   vi.mocked(requireTenantModulo).mockResolvedValue({ empresa: { id: 7 }, session: { id: 2, username: "lector", rol: "Contabilidad" } } as never);
   const r = await GET(req(), ctx);
-  expect(listarEntidades).toHaveBeenCalledWith(7, 2, false);
-  expect(listarAsignaciones).not.toHaveBeenCalled(); expect(usuariosAsignables).not.toHaveBeenCalled();
+  expect(listarEntidades).toHaveBeenCalledWith(7, false);
+  const datos = await r.json();
+  expect(datos).not.toHaveProperty("usuarios");
+  expect(datos).not.toHaveProperty("asignaciones");
   expect(r.headers.get("Cache-Control")).toContain("no-store");
   expect((await POST(req(), ctx)).status).toBe(403);
   expect(configurarEntidad).not.toHaveBeenCalled();

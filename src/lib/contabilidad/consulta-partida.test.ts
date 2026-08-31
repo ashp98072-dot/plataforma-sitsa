@@ -25,7 +25,7 @@ beforeEach(() => {
 it("consulta con permiso de lectura y filtra cabecera, líneas y cuentas por ámbito", async () => {
   const out = await consultarPartida(7, a, "12");
   expect(out.totales).toEqual({ debe: "0.30", haber: "0.30", diferencia: "0.00" });
-  const consultas = conn.query.mock.calls.slice(3);
+  const consultas = conn.query.mock.calls.slice(2);
   expect(consultas[0][1]).toEqual([7, 9, 12]);
   expect(consultas[0][0]).toContain("empresa_id = ? AND entidad_id = ? AND id = ?");
   expect(consultas[1][1]).toEqual([7, 9, 12]);

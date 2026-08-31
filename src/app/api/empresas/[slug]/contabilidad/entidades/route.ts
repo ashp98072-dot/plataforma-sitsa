@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireTenantModulo } from "@/lib/tenant";
-import { configurarEntidad, EntidadInvalida, listarAsignaciones, listarEntidades, usuariosAsignables } from "@/lib/contabilidad/entidades";
+import { configurarEntidad, EntidadInvalida, listarEntidades } from "@/lib/contabilidad/entidades";
 
 type Ctx = { params: Promise<{ slug: string }> };
 const headers = { "Cache-Control": "private, no-store" };
@@ -20,10 +20,9 @@ export async function GET(_req: Request, ctx: Ctx) {
   if (guard.error) return guard.error;
   const admin = guard.session.rol === "Admin";
   try {
-    const entidades = await listarEntidades(guard.empresa.id, guard.session.id, admin);
+    const entidades = await listarEntidades(guard.empresa.id, admin);
     const escritura = await requireTenantModulo(slug, "contabilidad", true);
-    const [usuarios, asignaciones] = admin ? await Promise.all([usuariosAsignables(guard.empresa.id), listarAsignaciones(guard.empresa.id)]) : [[], []];
-    return NextResponse.json({ entidades, usuarios, asignaciones, puedeAdministrar: admin, puedeEscribir: !escritura.error }, { headers });
+    return NextResponse.json({ entidades, empresa: { id: guard.empresa.id, nombre: guard.empresa.nombre }, puedeAdministrar: admin, puedeEscribir: !escritura.error }, { headers });
   } catch (error) { return fallo(error); }
 }
 
@@ -31,7 +30,7 @@ export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenantModulo(slug, "contabilidad", true);
   if (guard.error) return guard.error;
-  if (guard.session.rol !== "Admin") return NextResponse.json({ error: "Solo Admin administra entidades y accesos contables." }, { status: 403, headers });
+  if (guard.session.rol !== "Admin") return NextResponse.json({ error: "Solo Admin configura los libros contables." }, { status: 403, headers });
   try {
     const id = await configurarEntidad(guard.empresa.id, guard.session.username, await req.json().catch(() => null));
     return NextResponse.json({ id, mensaje: "Configuración guardada. No se modificaron cuentas ni partidas." }, { headers });
