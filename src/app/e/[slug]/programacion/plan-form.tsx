@@ -12,6 +12,7 @@ import type { Plan } from "./programacion-client";
 import NotificarPersonal from "./notificar-personal";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
+import { normalizarPlaca } from "@/lib/flota/placa";
 
 /**
  * Formulario propio de Programación para crear/editar un viaje — reutiliza
@@ -102,6 +103,96 @@ type ClienteCat = {
 // bloquea edición — Operaciones debe poder corregir antes de cerrar.
 const ESTADOS_SOLO_NOTAS = new Set(["En ruta"]);
 const ESTADOS_BLOQUEADOS = new Set(["Cerrado", "Cancelado"]);
+
+/**
+ * PROGRAMACION-CAMBIO-SENSIBLE-FALSO-POSITIVO-1 — identidad estable de un
+ * piloto/auxiliar para decidir si `cambioSensible` debe exigir motivo.
+ *
+ * Causa del falso positivo original: `auxOriginalTxt` comparaba los
+ * NOMBRES crudos guardados en `plan.auxiliares`, mientras que
+ * `auxActualesTxt` los reconstruía volviendo a buscar cada
+ * `auxiliarEmpleadoIds` en el catálogo RRHH (`auxiliares.find(...).nombre`)
+ * — dos fuentes de texto DISTINTAS para la misma persona. Si el nombre
+ * guardado en el plan difiere en mayúsculas/acentos/espacios del nombre
+ * actual en RRHH (algo común y sin relación con haber cambiado de
+ * auxiliar), o si el catálogo todavía no había terminado de cargar
+ * (precarga async), la comparación de texto fallaba aunque el usuario no
+ * hubiera tocado personal — bloqueando Guardar incluso al editar solo
+ * `tarifa_comercial`.
+ *
+ * Corrección: comparar por `empleadoId` (identidad real, estable, ajena al
+ * catálogo) cuando ambos lados lo tienen; solo cae a comparar nombre
+ * NORMALIZADO (trim + minúsculas + espacios colapsados) cuando alguno de
+ * los dos es un nombre libre/legado sin vínculo RRHH.
+ */
+export type IdentidadPersonal = { empleadoId: number | null; nombre: string };
+
+function normalizarNombrePersonal(nombre: string): string {
+  return nombre.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function personalVacio(p: IdentidadPersonal | null): boolean {
+  return !p || (p.empleadoId == null && !p.nombre.trim());
+}
+
+/** true SOLO si la identidad realmente cambió (piloto). */
+export function identidadPersonalCambio(
+  original: IdentidadPersonal | null,
+  actual: IdentidadPersonal | null,
+): boolean {
+  const origVacio = personalVacio(original);
+  const actVacio = personalVacio(actual);
+  if (origVacio && actVacio) return false;
+  if (origVacio !== actVacio) return true;
+  if (original!.empleadoId != null && actual!.empleadoId != null) {
+    return original!.empleadoId !== actual!.empleadoId;
+  }
+  return normalizarNombrePersonal(original!.nombre) !== normalizarNombrePersonal(actual!.nombre);
+}
+
+/**
+ * true SOLO si el CONJUNTO de auxiliares realmente cambió — el orden no
+ * importa (se compara como conjunto, no como lista). Cada auxiliar se
+ * identifica por `empleadoId` cuando existe; por nombre normalizado si es
+ * libre/legado. Soporta tamaños de lista distintos como cambio directo.
+ */
+export function auxiliaresCambio(
+  originales: IdentidadPersonal[],
+  actuales: IdentidadPersonal[],
+): boolean {
+  if (originales.length !== actuales.length) return true;
+  const clave = (p: IdentidadPersonal) =>
+    p.empleadoId != null ? `id:${p.empleadoId}` : `nombre:${normalizarNombrePersonal(p.nombre)}`;
+  const a = originales.map(clave).sort();
+  const b = actuales.map(clave).sort();
+  return a.some((v, i) => v !== b[i]);
+}
+
+/** Snapshot mínimo (piloto/unidad/auxiliares) que decide `cambioSensible` — original (plan) o actual (form), misma forma para poder comparar. */
+export type SnapshotPersonalUnidad = {
+  piloto: IdentidadPersonal;
+  placa: string;
+  auxiliares: IdentidadPersonal[];
+};
+
+/**
+ * Composición ÚNICA de la regla "cambioSensible": true solo si realmente
+ * cambió piloto, unidad (placa) o el conjunto de auxiliares — nunca por
+ * tarifa/referencia/paradas/notas/regreso_estimado/otros campos no
+ * sensibles (esos ni siquiera entran a esta función). Extraída como
+ * función pura para poder probarla directo, sin depender de renderizar el
+ * formulario completo.
+ */
+export function calcularCambioSensible(
+  original: SnapshotPersonalUnidad,
+  actual: SnapshotPersonalUnidad,
+): boolean {
+  return (
+    identidadPersonalCambio(original.piloto, actual.piloto) ||
+    normalizarPlaca(actual.placa) !== normalizarPlaca(original.placa) ||
+    auxiliaresCambio(original.auxiliares, actual.auxiliares)
+  );
+}
 
 const inputCls =
   "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
@@ -643,15 +734,46 @@ export default function PlanForm({
   // vacío)? Solo entonces se exige motivo — reenviar el mismo valor no
   // debe forzar al usuario a justificar nada. El backend vuelve a
   // validar esto por su cuenta (nunca confiar solo en el cliente).
-  const auxOriginalTxt = esEdicion ? [...(plan!.auxiliares ?? [])].sort().join(",") : "";
-  const auxActualesTxt = esEdicion
-    ? [...form.auxiliarNombres, ...form.auxiliarEmpleadoIds.map((id) => auxiliares.find((a) => a.id === id)?.nombre ?? `#${id}`)].sort().join(",")
-    : "";
+  //
+  // PROGRAMACION-CAMBIO-SENSIBLE-FALSO-POSITIVO-1: piloto y auxiliares se
+  // comparan por IDENTIDAD (empleadoId, ver identidadPersonalCambio/
+  // auxiliaresCambio arriba) en vez de por texto reconstruido desde el
+  // catálogo RRHH — evita el falso positivo cuando el nombre guardado en
+  // el plan difiere en formato del nombre actual en RRHH, o cuando el
+  // catálogo todavía no cargó. Auxiliares originales: prefiere
+  // `plan.auxiliaresDetalle` (ya trae empleadoId real, Fase P4.3); si un
+  // plan legado no lo trae, cae a `plan.auxiliares` (nombres) como
+  // identidad libre. Unidad sigue comparándose por placa (no hay id de
+  // unidad en el form) — reutiliza `normalizarPlaca` (misma normalización
+  // ya usada en Flota) en vez de solo `.toUpperCase()`.
+  const auxOriginalesIdentidad: IdentidadPersonal[] = esEdicion
+    ? plan!.auxiliaresDetalle?.length
+      ? plan!.auxiliaresDetalle.map((a) => ({ empleadoId: a.empleadoId, nombre: a.nombre }))
+      : (plan!.auxiliares ?? []).map((nombre) => ({ empleadoId: null, nombre }))
+    : [];
+  const auxActualesIdentidad: IdentidadPersonal[] = esEdicion
+    ? [
+        ...form.auxiliarEmpleadoIds.map((id) => ({
+          empleadoId: id,
+          nombre: auxiliares.find((a) => a.id === id)?.nombre ?? `#${id}`,
+        })),
+        ...form.auxiliarNombres.map((nombre) => ({ empleadoId: null, nombre })),
+      ]
+    : [];
   const cambioSensible =
     esEdicion &&
-    (form.pilotoNombre.trim() !== (plan!.piloto ?? "").trim() ||
-      form.placa.trim().toUpperCase() !== (plan!.placa ?? "").trim().toUpperCase() ||
-      auxActualesTxt !== auxOriginalTxt);
+    calcularCambioSensible(
+      {
+        piloto: { empleadoId: plan!.pilotoEmpleadoId ?? null, nombre: plan!.piloto ?? "" },
+        placa: plan!.placa ?? "",
+        auxiliares: auxOriginalesIdentidad,
+      },
+      {
+        piloto: { empleadoId: form.pilotoEmpleadoId || null, nombre: form.pilotoNombre },
+        placa: form.placa,
+        auxiliares: auxActualesIdentidad,
+      },
+    );
 
   // VIAT-2: el servidor exige regreso_estimado cuando el plan queda con
   // piloto, auxiliares o unidad asignados (lo necesita para poder validar
