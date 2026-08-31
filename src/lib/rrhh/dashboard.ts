@@ -21,15 +21,15 @@ export type SituacionEmpleadoHoy = {
 export type ResumenMensual = {
   /** "YYYY-MM" */
   mes: string;
-  altas: number;
-  bajas: number;
+  altas: number | null;
+  bajas: number | null;
   /** Alias histórico del neto; se conserva para consumidores existentes. */
   costoNomina: number;
   netoNomina: number | null;
   costoRegistrado: number | null;
-  amonestaciones: number;
-  suspensiones: number;
-  despidos: number;
+  amonestaciones: number | null;
+  suspensiones: number | null;
+  despidos: number | null;
 };
 
 export async function obtenerEstadisticasDashboard(
@@ -43,8 +43,8 @@ export async function obtenerEstadisticasDashboard(
     params: SqlParams,
   ): Promise<RowDataPacket[]> =>
     query<RowDataPacket[]>(sql, params).catch((error) => {
-      console.error(`[dashboard-rrhh] Falló consulta "${nombre}":`, error);
-      return [] as RowDataPacket[];
+      console.error("[dashboard-rrhh] Consulta no disponible", { nombre, code: (error as { code?: string })?.code });
+      throw new Error("Estadísticas de hoy no disponibles.");
     });
 
   const [totalRows, presentesRows, ausentesRows, vacRows, otrasRows] = await Promise.all([
@@ -200,10 +200,10 @@ export async function obtenerResumenGerencial(
     nombre: string,
     sql: string,
     params: SqlParams,
-  ): Promise<RowDataPacket[]> =>
+  ): Promise<RowDataPacket[] | null> =>
     query<RowDataPacket[]>(sql, params).catch((error) => {
-      console.error(`[dashboard-gerencial] Falló consulta "${nombre}":`, error);
-      return [] as RowDataPacket[];
+      console.error("[dashboard-gerencial] Consulta no disponible", { nombre, code: (error as { code?: string })?.code });
+      return null;
     });
 
   const resultados = await Promise.all(
@@ -245,18 +245,18 @@ export async function obtenerResumenGerencial(
         ),
       ]);
       const bitacoraPorTipo = new Map<string, number>(
-        bitacoraRows.map((r) => [String(r.tipo), Number(r.total ?? 0)]),
+        (bitacoraRows ?? []).map((r) => [String(r.tipo), Number(r.total ?? 0)]),
       );
       return {
         mes,
-        altas: Number(altasRows[0]?.total ?? 0),
-        bajas: Number(bajasRows[0]?.total ?? 0),
-        costoNomina: Number(costoRows[0]?.total ?? 0),
-        netoNomina: costoRows.length ? Number(costoRows[0].total) : null,
-        costoRegistrado: costoRows.length ? Number(costoRows[0].costo_registrado) : null,
-        amonestaciones: bitacoraPorTipo.get("Amonestacion") ?? 0,
-        suspensiones: bitacoraPorTipo.get("Suspension") ?? 0,
-        despidos: bitacoraPorTipo.get("Despido") ?? 0,
+        altas: altasRows ? Number(altasRows[0]?.total ?? 0) : null,
+        bajas: bajasRows ? Number(bajasRows[0]?.total ?? 0) : null,
+        costoNomina: Number(costoRows?.[0]?.total ?? 0),
+        netoNomina: costoRows?.length ? Number(costoRows[0].total) : null,
+        costoRegistrado: costoRows?.length ? Number(costoRows[0].costo_registrado) : null,
+        amonestaciones: bitacoraRows ? bitacoraPorTipo.get("Amonestacion") ?? 0 : null,
+        suspensiones: bitacoraRows ? bitacoraPorTipo.get("Suspension") ?? 0 : null,
+        despidos: bitacoraRows ? bitacoraPorTipo.get("Despido") ?? 0 : null,
       };
     }),
   );

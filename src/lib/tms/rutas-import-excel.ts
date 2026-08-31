@@ -40,42 +40,117 @@ const FILA_INICIO_DATOS = 2;
 export async function generarPlantillaRutas(): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   wb.creator = "SITSA Plataforma";
-  const ws = wb.addWorksheet("CODIGOS DATA", { views: [{ state: "frozen", ySplit: 1 }] });
-  // Replica el formato operativo histórico: columnas C..H, numeradas 1..6
-  // en la primera fila. El importador lee por posición, no por el texto del
-  // encabezado, por lo que también sigue aceptando archivos anteriores.
+  wb.subject = "Modelo para importación masiva de rutas";
+  const ws = wb.addWorksheet("CODIGOS DATA", {
+    views: [{ state: "frozen", ySplit: 2, showGridLines: true, zoomScale: 85 }],
+    properties: { tabColor: { argb: "FF1F4E78" } },
+  });
+  // Replica la fila 1 del archivo operativo PROGRAMACION AGOSTO 2026
+  // ACTUALIZADA.xlsx: marcadores 1..6 en las columnas históricas C..H.
+  // La fila 2 agrega los nombres de campo que el archivo original no tenía,
+  // sin mover ni cambiar las columnas que consume el importador.
   [1, 2, 3, 4, 5, 6].forEach((value, index) => {
     ws.getCell(1, COL_CODIGO + index).value = value;
   });
   ws.getRow(1).font = { name: "Calibri", size: 12, bold: true };
   ws.getRow(1).alignment = { vertical: "middle", horizontal: "center" };
-  ws.getRow(1).height = 15.75;
-  ws.getColumn("C").width = 7.86;
-  ws.getColumn("D").width = 25.43;
-  ws.getColumn("E").width = 59.86;
-  ws.getColumn("F").width = 9;
-  ws.getColumn("G").width = 21.43;
-  ws.getColumn("H").width = 57.43;
+  ws.getRow(1).height = 20;
+
+  const encabezados = [
+    "Código de ruta *",
+    "Cliente *",
+    "Lugar de carga",
+    "Hora habitual",
+    "Contacto",
+    "Destino / lugar de descarga",
+  ];
+  encabezados.forEach((value, index) => {
+    ws.getCell(2, COL_CODIGO + index).value = value;
+  });
+  ws.getRow(2).font = { name: "Calibri", size: 11, bold: true, color: { argb: "FFFFFFFF" } };
+  ws.getRow(2).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F4E78" } };
+  ws.getRow(2).alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+  ws.getRow(2).height = 34;
+  ws.getColumn("A").width = 2;
+  ws.getColumn("B").width = 8;
+  ws.getColumn("C").width = 14;
+  ws.getColumn("D").width = 28;
+  ws.getColumn("E").width = 60;
+  ws.getColumn("F").width = 13;
+  ws.getColumn("G").width = 24;
+  ws.getColumn("H").width = 58;
   ws.getColumn("C").numFmt = "@";
   ws.getColumn("F").numFmt = "h:mm";
   ws.getCell("F1").numFmt = "General";
+  ws.getCell("F2").numFmt = "General";
+  ws.autoFilter = { from: "C2", to: "H2000" };
 
-  const ayuda = wb.addWorksheet("AYUDA");
-  ayuda.addRow(["Campo", "Descripción"]);
-  ayuda.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
-  ayuda.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F4E78" } };
+  // Ejemplo visible que el importador ignora expresamente. El usuario puede
+  // conservarlo: solo debe empezar sus rutas en las filas siguientes.
+  ws.getRow(3).values = [
+    null, null,
+    "EJEMPLO-NO-IMPORTAR",
+    "CALSA",
+    "BODEGAS CALSA, ZONA 12",
+    3 / 24,
+    "Herbert Santiso",
+    "BODEGAS DE CONRED, ZONA 13",
+  ];
+  ws.getRow(3).font = { name: "Calibri", size: 10, italic: true, color: { argb: "FF595959" } };
+  ws.getRow(3).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF2CC" } };
+  ws.getRow(3).alignment = { vertical: "middle", wrapText: true };
+  ws.getRow(3).height = 32;
+  ws.getCell("F3").numFmt = "h:mm";
+  ws.getCell("F3").alignment = { vertical: "middle", horizontal: "center" };
+  ws.getCell("F4").dataValidation = {
+    type: "decimal", operator: "between", allowBlank: true,
+    formulae: [0, 0.99999],
+    showInputMessage: true,
+    promptTitle: "Hora habitual",
+    prompt: "Escriba una hora válida, por ejemplo 03:00 o 14:30.",
+    showErrorMessage: true,
+    errorTitle: "Hora no válida",
+    error: "Use una hora válida entre 00:00 y 23:59.",
+  };
+  for (let fila = 5; fila <= 2000; fila++) {
+    ws.getCell(fila, COL_HORA).dataValidation = ws.getCell("F4").dataValidation;
+  }
+
+  const ayuda = wb.addWorksheet("AYUDA", {
+    views: [{ state: "frozen", ySplit: 3, showGridLines: false }],
+    properties: { tabColor: { argb: "FF70AD47" } },
+  });
+  ayuda.getCell("A1").value = "CÓMO IMPORTAR RUTAS DE FORMA MASIVA";
+  ayuda.getRow(1).font = { bold: true, size: 15, color: { argb: "FF1F1F1F" } };
+  ayuda.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9EAF7" } };
+  ayuda.getRow(1).alignment = { vertical: "middle" };
+  ayuda.getRow(1).height = 38;
+  ayuda.getCell("A2").value = "Llene una ruta por fila en la hoja CODIGOS DATA. Los campos con * son obligatorios.";
+  ayuda.getRow(2).alignment = { wrapText: true, vertical: "middle" };
+  ayuda.getRow(2).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9EAF7" } };
+  ayuda.getRow(3).values = ["Campo", "Qué debe escribir"];
+  ayuda.getRow(3).font = { bold: true, color: { argb: "FFFFFFFF" } };
+  ayuda.getRow(3).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
   [
-    ["1 · Código (columna C)", "Obligatorio y único dentro del archivo. Los códigos existentes se omiten por defecto en la previsualización."],
-    ["2 · Cliente (columna D)", "Obligatorio. Debe coincidir con el catálogo de Clientes o podrá resolverse antes de confirmar."],
-    ["3 · Lugar de carga (columna E)", "Dirección o descripción habitual del punto de carga."],
-    ["4 · Hora (columna F)", "Hora habitual como valor de hora de Excel; se muestra en formato h:mm."],
-    ["5 · Contacto (columna G)", "Nombre del contacto operativo, como en el archivo de Programación actual."],
-    ["6 · Destino (columna H)", "Descripción completa del destino o lugar de descarga."],
-    ["Ejemplo", "1 | Calsa | BODEGAS CALSA, ZONA 12 | 3:00 | Herbert Santiso | BODEGAS DE CONRED, ZONA 13"],
-    ["Importante", "No cambie el nombre de la hoja CODIGOS DATA ni mueva las columnas C a H."],
+    ["Código de ruta *", "Identificador único de la ruta, por ejemplo 1001 o RUTA-001. No repita un código dentro del archivo."],
+    ["Cliente *", "Nombre del cliente tal como aparece en el catálogo de Clientes. Si no coincide, podrá resolverlo durante la previsualización."],
+    ["Lugar de carga", "Dirección o descripción habitual donde se recoge la carga."],
+    ["Hora habitual", "Hora usual de salida o carga. Ejemplos: 03:00, 08:30 o 14:00."],
+    ["Contacto", "Nombre de la persona de contacto para coordinar la operación."],
+    ["Destino / lugar de descarga", "Dirección o descripción completa del destino habitual."],
+    ["Fila 1: números 1 a 6", "Conserva la estructura del archivo PROGRAMACION AGOSTO 2026 ACTUALIZADA.xlsx y la posición histórica de cada dato."],
+    ["Fila azul", "Muestra el nombre claro de cada campo. No la elimine ni mueva las columnas."],
+    ["Fila amarilla", "Es únicamente un ejemplo y NO se importará. Empiece a ingresar sus rutas debajo de esa fila."],
+    ["Antes de importar", "No cambie el nombre de la hoja CODIGOS DATA, no elimine columnas y no mueva los campos de las columnas C a H."],
+    ["Proceso", "1) Descargue este formato. 2) Llene una ruta por fila. 3) Guarde como .xlsx. 4) Cárguelo y pulse Previsualizar. 5) Revise los resultados antes de confirmar."],
   ].forEach((row) => ayuda.addRow(row));
-  ayuda.columns = [{ width: 24 }, { width: 105 }];
+  ayuda.columns = [{ width: 31 }, { width: 105 }];
   ayuda.eachRow((row) => { row.alignment = { vertical: "top", wrapText: true }; });
+  ayuda.getColumn(1).font = { bold: true };
+  ayuda.getRow(2).font = { bold: false };
+  ayuda.getRow(3).font = { bold: true, color: { argb: "FFFFFFFF" } };
+  ayuda.getRow(12).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF2CC" } };
+  ayuda.getRow(13).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFCE4D6" } };
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
@@ -91,7 +166,7 @@ function normalizarTexto(s: string): string {
 // ("Codigo"), antes se colaba como si fuera una ruta válida. Se descarta
 // por el valor exacto de la columna Código, sin depender de las demás
 // columnas (más robusto ante variaciones de esa fila repetida).
-const CODIGOS_ENCABEZADO = new Set(["codigo", "código"]);
+const CODIGOS_ENCABEZADO = new Set(["codigo", "código", "codigo de ruta *", "código de ruta *"]);
 const CODIGOS_EJEMPLO = new Set(["ejemplo-no-importar", "ejemplo_no_importar"]);
 
 function cellStr(value: unknown): string {

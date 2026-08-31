@@ -5,7 +5,7 @@ vi.mock("@/lib/auditoria", () => ({ registrarAuditoriaTx: vi.fn() }));
 import { getPool } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { limpiarModuloEmpresa } from "./limpiar-modulo";
-import { anularMultas, desactivarCatalogo, limpiarViajesConjuntos, limpiarViaticos, validarViaticos } from "./limpiar-operaciones";
+import { anularMultas, desactivarCatalogo, eliminarRutas, limpiarViajesConjuntos, limpiarViaticos, validarViaticos } from "./limpiar-operaciones";
 
 const conn = { query: vi.fn(), execute: vi.fn(), beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn() };
 const db = conn as unknown as PoolConnection;
@@ -71,7 +71,7 @@ describe("limpieza por empresa y módulo", () => {
     await expect(limpiarViajesConjuntos(db, 7)).rejects.toThrow("facturas");
     expect(conn.query.mock.calls.some(([s]) => String(s).startsWith("DELETE"))).toBe(false);
   });
-  it.each(["clientes", "operaciones_rutas", "operaciones_accesos"])("%s solo desactiva en la empresa elegida", async (modulo) => {
+  it.each(["clientes", "operaciones_accesos"])("%s solo desactiva en la empresa elegida", async (modulo) => {
     await desactivarCatalogo(db, 7, modulo);
     expect(conn.execute.mock.calls.length).toBeGreaterThan(0);
     for (const [sql, params] of conn.execute.mock.calls) {
@@ -79,6 +79,41 @@ describe("limpieza por empresa y módulo", () => {
       expect(sql).toMatch(/^UPDATE/);
       expect(params[1]).toBe(7);
     }
+  });
+  it("elimina rutas activas e inactivas y sus paradas, sin tocar viajes ni clientes", async () => {
+    filas.tms_cliente_rutas = [{ id: 90, empresa_id: 7, activo: 1 }, { id: 91, empresa_id: 7, activo: 0 }];
+    filas.tms_cliente_ruta_paradas = [{ id: 92, empresa_id: 7, ruta_id: 90 }];
+    await limpiarModuloEmpresa({ empresaId: 7, empresaCodigo: "TEST", modulo: "operaciones_eliminar_rutas", usuario: "admin", usuarioId: 2 });
+    const deletes = conn.query.mock.calls.filter(([s]) => String(s).startsWith("DELETE"));
+    expect(deletes.map(([s]) => s)).toEqual(["DELETE FROM `tms_cliente_ruta_paradas` WHERE id IN (?)", "DELETE FROM `tms_cliente_rutas` WHERE id IN (?)"]);
+    expect(deletes.map(([, p]) => p)).toEqual([[[92]], [[90, 91]]]);
+    expect(conn.commit).toHaveBeenCalledOnce();
+    expect(registrarAuditoriaTx).toHaveBeenCalledWith(db, expect.objectContaining({ modulo: "operaciones_eliminar_rutas", empresaId: 7 }));
+  });
+  it("rutas con vínculos externos bloquean todos los borrados", async () => {
+    filas.tms_cliente_rutas = [{ id: 90, empresa_id: 7 }];
+    referenciaExterna = true;
+    await expect(eliminarRutas(db, 7)).rejects.toThrow("vinculados");
+    expect(conn.query.mock.calls.some(([s]) => String(s).startsWith("DELETE"))).toBe(false);
+  });
+  it.each([
+    { id: 92, empresa_id: 8, ruta_id: 90 }, { id: 92, empresa_id: 7, ruta_id: 99 },
+  ])("bloquea paradas cruzadas o huérfanas %#", async (parada) => {
+    filas.tms_cliente_rutas = [{ id: 90, empresa_id: 7 }];
+    filas.tms_cliente_ruta_paradas = [parada];
+    await expect(eliminarRutas(db, 7)).rejects.toThrow();
+    expect(conn.query.mock.calls.some(([s]) => String(s).startsWith("DELETE"))).toBe(false);
+  });
+  it("revierte paradas borradas si falla el borrado de rutas", async () => {
+    filas.tms_cliente_rutas = [{ id: 90, empresa_id: 7 }];
+    filas.tms_cliente_ruta_paradas = [{ id: 92, empresa_id: 7, ruta_id: 90 }];
+    const normal = conn.query.getMockImplementation()!;
+    conn.query.mockImplementation(async (...args) => {
+      if (String(args[0]).startsWith("DELETE FROM `tms_cliente_rutas`")) throw new Error("fallo ruta");
+      return normal(...args);
+    });
+    await expect(limpiarModuloEmpresa({ empresaId: 7, empresaCodigo: "TEST", modulo: "operaciones_eliminar_rutas", usuario: "admin", usuarioId: 2 })).rejects.toThrow("fallo ruta");
+    expect(conn.rollback).toHaveBeenCalledOnce(); expect(conn.commit).not.toHaveBeenCalled();
   });
   it("no anula multas pagadas ni escribe parcialmente", async () => {
     filas.ops_multas = [{ id: 1, empresa_id: 7, estado: "PENDIENTE", estado_pago: "PAGADA" }];

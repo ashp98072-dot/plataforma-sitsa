@@ -62,6 +62,26 @@ export async function verificarCredenciales(
   };
 }
 
+/**
+ * VIATICOS-FIRMA — reautenticación puntual para firma electrónica interna:
+ * confirma la contraseña ACTUAL del usuario YA AUTENTICADO (por id de
+ * sesión, no por username como verificarCredenciales, que es para login).
+ * Reutiliza verifyPassword tal cual (mismo mecanismo timing-safe, nunca se
+ * envía ni se guarda la contraseña ni su hash fuera de esta consulta).
+ */
+export async function verificarPasswordUsuarioActual(
+  usuarioId: number,
+  password: string,
+): Promise<boolean> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT password_hash, salt FROM usuarios WHERE id = ? AND activo = 1 LIMIT 1`,
+    [usuarioId],
+  );
+  const r = rows[0];
+  if (!r) return false;
+  return verifyPassword(password, String(r.salt), String(r.password_hash));
+}
+
 export async function listarUsuarios(): Promise<
   (UsuarioRow & { empresas: number[]; permisos: PermisoModulo[] })[]
 > {

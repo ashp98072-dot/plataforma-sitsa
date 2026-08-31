@@ -1,6 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { TEXTO_FIRMA_INTERNA } from "@/lib/firmas/textos";
+import type { FirmaCanvasHandle } from "@/components/tms/firma-canvas";
+import SelectorFirma from "@/components/tms/selector-firma";
+import HistorialFirmasModal from "@/components/tms/historial-firmas-modal";
 
 type ViaticoControlRow = {
   id: number;
@@ -18,11 +22,27 @@ type ViaticoControlRow = {
   banco?: string | null;
   tipoCuenta?: string | null;
   cuentaBancaria?: string | null;
+  // VIATICOS-RECHAZADO-1 — null mientras el viático no está RECHAZADO.
+  rechazadoPor: string | null;
+  rechazadoEn: string | null;
+  motivoRechazo: string | null;
+};
+
+/** VIATICOS-FIRMA — confirmación mostrada tras firmar (nunca "Firma Electrónica Avanzada"/certificado/PSC/legal). */
+type FirmaInfo = {
+  firmaId: number;
+  codigoFirma: string;
+  nombreFirmante: string;
+  rolFirmante: string;
+  fechaHoraServidor: string;
+  /** VIATICOS-FIRMA-VISUAL — si trae imagen manuscrita para mostrar (ver GET .../firmas/[firmaId]/imagen). */
+  tieneImagen: boolean;
 };
 
 type Resumen = {
   pendientes: number;
   autorizados: number;
+  rechazados: number;
   entregados: number;
   liquidados: number;
 };
@@ -37,9 +57,40 @@ const inputCls =
 const ESTADO_BADGE_CLS: Record<string, string> = {
   PROGRAMADO: "bg-[var(--input)] text-[var(--muted)]",
   AUTORIZADO: "bg-sky-950/40 text-sky-300",
+  RECHAZADO: "bg-red-950/40 text-red-300",
   ENTREGADO: "bg-amber-950/40 text-amber-300",
   LIQUIDADO: "bg-emerald-950/40 text-emerald-300",
 };
+
+/**
+ * Interpretación UI de los estados REALES (ver src/lib/tms/viaticos.ts,
+ * EstadoViatico): PROGRAMADO = pendiente de autorización, AUTORIZADO =
+ * pendiente de pago, RECHAZADO = terminal (VIATICOS-RECHAZADO-1, sin
+ * transición de regreso), ENTREGADO = pendiente de liquidación,
+ * LIQUIDADO = liquidado.
+ */
+const ESTADO_LABEL_UI: Record<string, string> = {
+  PROGRAMADO: "Pendiente de autorización",
+  AUTORIZADO: "Pendiente de pago",
+  RECHAZADO: "Rechazado",
+  ENTREGADO: "Pendiente de liquidación",
+  LIQUIDADO: "Liquidado",
+};
+
+/**
+ * VIATICOS-BANDEJAS-1 (extendido en VIATICOS-RECHAZADO-1) — pestañas
+ * visibles (antes dropdown "Estado"). El valor es exactamente
+ * EstadoViatico (viaticos.ts) — la pestaña solo cambia `fEstado`, el
+ * filtrado real sigue ocurriendo en el servidor (listarViaticosControl,
+ * que SÍ acepta `estado=RECHAZADO` — ver control/route.ts).
+ */
+const PESTANAS_ESTADO: { estado: string; etiqueta: string }[] = [
+  { estado: "PROGRAMADO", etiqueta: "Por autorizar" },
+  { estado: "AUTORIZADO", etiqueta: "Autorizados" },
+  { estado: "RECHAZADO", etiqueta: "Rechazados" },
+  { estado: "ENTREGADO", etiqueta: "Entregados" },
+  { estado: "LIQUIDADO", etiqueta: "Liquidados" },
+];
 
 const METODO_PAGO_LABEL: Record<string, string> = {
   EFECTIVO: "Efectivo",
@@ -55,17 +106,20 @@ const METODO_PAGO_LABEL: Record<string, string> = {
  * no se crea ningún motor nuevo, solo se agregan selección + botones que
  * llaman los endpoints atómicos ya existentes uno por uno.
  *
- * Autorizar (individual y masivo) requiere `viaticos_autorizar:editar`.
- * Liquidar requiere `viaticos:editar`. Pagar/entregar vive en su propio
- * panel separado (ViaticosPorPagarPanel) — este NO lo duplica. Banco/
- * cuenta solo se muestran si el backend los incluyó en la respuesta
- * (`puedeVerBancario`) — nunca se piden ni se muestran por el cliente.
+ * Autorizar (individual y masivo, con firma) requiere
+ * `viaticos_autorizar:editar`. Liquidar (con firma) requiere
+ * `viaticos_liquidar:editar` — VIATICOS-FIRMA: YA NO el genérico
+ * `viaticos:editar`. Pagar/entregar vive en su propio panel separado
+ * (ViaticosPorPagarPanel) — este NO lo duplica. Banco/cuenta solo se
+ * muestran si el backend los incluyó en la respuesta (`puedeVerBancario`)
+ * — nunca se piden ni se muestran por el cliente.
  */
 export default function ViaticosControlPanel({ slug }: { slug: string }) {
   const [items, setItems] = useState<ViaticoControlRow[]>([]);
   const [resumen, setResumen] = useState<Resumen>({
     pendientes: 0,
     autorizados: 0,
+    rechazados: 0,
     entregados: 0,
     liquidados: 0,
   });
@@ -85,8 +139,100 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   const [fEstado, setFEstado] = useState("");
 
   const [seleccionados, setSeleccionados] = useState<Set<number>>(new Set());
-  const [accionandoId, setAccionandoId] = useState<number | null>(null);
   const [autorizandoMasivo, setAutorizandoMasivo] = useState(false);
+
+  // VIATICOS-FIRMA-VISUAL — modal "Autorizar seleccionados" (antes
+  // window.prompt): la bandeja masiva firma con la MISMA imagen dibujada
+  // una vez para todo el lote (cada autorización individual igual guarda
+  // su propio archivo/fila de firma — ver guardarImagenFirma en
+  // src/lib/tms/viaticos.ts — pero comparten el trazo de este único
+  // gesto). Hotfix PR #124: el texto del modal deja esto explícito
+  // ("Esta firma se aplicará a los N viáticos...") y cada POST envía
+  // firmaLote=true, que autorizarViatico agrega como `firmaLote: true`
+  // dentro del payload firmado de CADA autorización del lote — nunca se
+  // pretende una firma distinta por viático. Se dejó fuera loteFirmaId
+  // (identificador de lote) por alcance: ver reporte de entrega.
+  // CORRECCIÓN URGENTE — autorizar (individual y masivo) YA NO pide
+  // contraseña: sesión autenticada + permiso + firma manuscrita bastan
+  // (ver JSDoc de autorizarViatico en src/lib/tms/viaticos.ts). Liquidar
+  // SIGUE exigiéndola sin cambios (pwdLiquidar más abajo, intacto).
+  //
+  // CORRECCIÓN URGENTE (2ª vuelta) — "la firma desaparece al soltar el
+  // mouse": el canvas ya NO empuja el File al padre en cada trazo (eso
+  // causaba un re-render del padre en medio del dibujo). Ahora solo
+  // notifica un booleano (tieneTrazo*) para habilitar el botón, y el
+  // padre obtiene el PNG real llamando canvas*Ref.current.obtenerImagen()
+  // UNA sola vez, al confirmar — ver src/components/tms/firma-canvas.tsx.
+  //
+  // CORRECCIÓN URGENTE (4ª vuelta) — `firmaSesion` es un contador que se
+  // incrementa cada vez que se abre CUALQUIER modal de firma; su valor se
+  // pasa como `sesionId` a FirmaCanvas para que, si el componente llegara
+  // a desmontarse/remontarse mientras el usuario dibuja, pueda recuperar
+  // el trazo desde el respaldo en memoria de firma-canvas.tsx — y para
+  // que ese respaldo NUNCA se reutilice entre una autorización y otra
+  // (cada apertura de modal obtiene un sesionId nuevo).
+  const [firmaSesion, setFirmaSesion] = useState(0);
+
+  // MI-FIRMA-1 — "¿tiene el usuario una firma guardada?" se consulta al
+  // abrir CADA modal (nunca se asume vigente entre aperturas — pudo
+  // cambiar/eliminarla desde "Mi firma"). `null` = cargando. Si tiene
+  // una, el radio arranca en "Usar mi firma guardada" (default pedido en
+  // el ticket); si no, se muestra directamente el canvas.
+  const [masivoAbierto, setMasivoAbierto] = useState(false);
+  const canvasMasivoRef = useRef<FirmaCanvasHandle | null>(null);
+  const [tieneTrazoMasivo, setTieneTrazoMasivo] = useState(false);
+  const [tieneFirmaGuardadaMasivo, setTieneFirmaGuardadaMasivo] = useState<boolean | null>(null);
+  const [usarGuardadaMasivo, setUsarGuardadaMasivo] = useState(false);
+  const [errorMasivo, setErrorMasivo] = useState("");
+
+  // VIATICOS-FIRMA — modal "Firmar y autorizar".
+  const [autorizando, setAutorizando] = useState<ViaticoControlRow | null>(null);
+  const canvasAutorizarRef = useRef<FirmaCanvasHandle | null>(null);
+  const [tieneTrazoAutorizar, setTieneTrazoAutorizar] = useState(false);
+  const [tieneFirmaGuardadaAutorizar, setTieneFirmaGuardadaAutorizar] = useState<boolean | null>(null);
+  const [usarGuardadaAutorizar, setUsarGuardadaAutorizar] = useState(false);
+  const [errorAutorizar, setErrorAutorizar] = useState("");
+  const [firmandoAutorizar, setFirmandoAutorizar] = useState(false);
+  const [firmaAutorizarOk, setFirmaAutorizarOk] = useState<FirmaInfo | null>(null);
+
+  // VIATICOS-FIRMA — modal "Firmar liquidación".
+  const [liquidando, setLiquidando] = useState<ViaticoControlRow | null>(null);
+  const [gastosComprobados, setGastosComprobados] = useState("");
+  const [reintegro, setReintegro] = useState("");
+  const [obsLiquidacion, setObsLiquidacion] = useState("");
+  const [pwdLiquidar, setPwdLiquidar] = useState("");
+  const canvasLiquidarRef = useRef<FirmaCanvasHandle | null>(null);
+  const [tieneTrazoLiquidar, setTieneTrazoLiquidar] = useState(false);
+  const [tieneFirmaGuardadaLiquidar, setTieneFirmaGuardadaLiquidar] = useState<boolean | null>(null);
+  const [usarGuardadaLiquidar, setUsarGuardadaLiquidar] = useState(false);
+  const [errorLiquidar, setErrorLiquidar] = useState("");
+  const [firmandoLiquidar, setFirmandoLiquidar] = useState(false);
+  const [firmaLiquidarOk, setFirmaLiquidarOk] = useState<FirmaInfo | null>(null);
+
+  // VIATICOS-HISTORIAL-FIRMA-1 — "Ver firmas": modal de solo lectura,
+  // reutilizado por cualquier fila que ya tenga al menos una firma
+  // (AUTORIZADO/ENTREGADO/LIQUIDADO — NUNCA RECHAZADO, VIATICOS-RECHAZADO-1
+  // sección 11: rechazar nunca crea firma, ver gate en el render). El
+  // componente hace su propio fetch.
+  const [verFirmasDe, setVerFirmasDe] = useState<ViaticoControlRow | null>(null);
+
+  // VIATICOS-RECHAZADO-1 — modal "Rechazar viático": SIN firma (ni
+  // canvas ni SelectorFirma), solo un motivo de texto obligatorio.
+  const [rechazando, setRechazando] = useState<ViaticoControlRow | null>(null);
+  const [motivoRechazo, setMotivoRechazo] = useState("");
+  const [errorRechazar, setErrorRechazar] = useState("");
+  const [rechazandoEnProceso, setRechazandoEnProceso] = useState(false);
+
+  /** MI-FIRMA-1 — consulta si el usuario actual tiene una firma guardada. */
+  const consultarFirmaGuardada = useCallback(async (): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/empresas/${slug}/mi-firma`);
+      const data = await res.json().catch(() => ({}));
+      return res.ok ? Boolean(data.tieneFirma) : false;
+    } catch {
+      return false;
+    }
+  }, [slug]);
 
   const cargar = useCallback(async () => {
     setLoading(true);
@@ -122,6 +268,22 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
     void cargar();
   }, [cargar]);
 
+  // VIATICOS-BANDEJAS-1 — fBusqueda/fRol/fMetodo son filtros SOLO
+  // client-side (no viajan al servidor, no disparan cargar()): a
+  // diferencia de fEstado/fFechaDesde/fFechaHasta/fEmpleado (que sí
+  // recargan y ya limpian la selección dentro de cargar()), cambiar
+  // estos podía dejar seleccionados ids que quedan fuera de `filtrados`
+  // — y autorizarSeleccionados() actúa sobre `seleccionados` en crudo,
+  // no sobre la intersección con lo visible. Se limpia la selección
+  // completa al cambiar cualquiera de estos filtros (preferencia del
+  // ticket: "limpiar selección al cambiar filtros operativos para
+  // evitar acciones accidentales") — nunca se autoriza silenciosamente
+  // algo que dejó de estar a la vista.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSeleccionados(new Set());
+  }, [fBusqueda, fRol, fMetodo]);
+
   const filtrados = items.filter((r) => {
     if (fBusqueda.trim()) {
       const t = fBusqueda.trim().toLowerCase();
@@ -151,63 +313,206 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
     );
   }
 
-  async function autorizar(id: number) {
-    setAccionandoId(id);
-    setError("");
-    setMensaje("");
-    try {
-      const res = await fetch(`/api/empresas/${slug}/tms/viaticos/${id}/autorizar`, { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error ?? "No se pudo autorizar el viático.");
+  // VIATICOS-FIRMA — "Firmar y autorizar": abre el modal (Viaje/
+  // Beneficiario/Monto), el POST solo ocurre al confirmar dentro del
+  // modal, nunca al primer clic. CORRECCIÓN URGENTE: ya no pide
+  // contraseña — solo exige un trazo dibujado (ver confirmarAutorizar).
+  async function abrirAutorizar(row: ViaticoControlRow) {
+    setAutorizando(row);
+    setFirmaSesion((n) => n + 1);
+    setTieneTrazoAutorizar(false);
+    setErrorAutorizar("");
+    setFirmaAutorizarOk(null);
+    setTieneFirmaGuardadaAutorizar(null);
+    const tiene = await consultarFirmaGuardada();
+    setTieneFirmaGuardadaAutorizar(tiene);
+    setUsarGuardadaAutorizar(tiene);
+  }
+
+  async function confirmarAutorizar() {
+    if (!autorizando) return;
+    const fd = new FormData();
+    if (usarGuardadaAutorizar) {
+      fd.set("usarFirmaGuardada", "true");
+    } else {
+      const firmaImagen = await canvasAutorizarRef.current?.obtenerImagen();
+      if (!firmaImagen) {
+        setErrorAutorizar("Dibuja tu firma antes de continuar.");
         return;
       }
-      setMensaje("Viático autorizado.");
+      fd.set("firmaImagen", firmaImagen, "firma.png");
+    }
+    setFirmandoAutorizar(true);
+    setErrorAutorizar("");
+    try {
+      const res = await fetch(`/api/empresas/${slug}/tms/viaticos/${autorizando.id}/autorizar`, {
+        method: "POST",
+        body: fd,
+      });
+      // CORRECCIÓN URGENTE — un 500 sin cuerpo JSON (p. ej. página de error
+      // de Hostinger) ya no se confunde con "Error de conexión.": se
+      // intenta parsear y, si falla, se cae a un mensaje con el status real.
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setErrorAutorizar(data.error ?? `No se pudo autorizar el viático (${res.status}).`);
+        return;
+      }
+      setFirmaAutorizarOk(data.firma as FirmaInfo);
       await cargar();
     } catch {
-      setError("Error de conexión.");
+      setErrorAutorizar("Error de conexión.");
     } finally {
-      setAccionandoId(null);
+      setFirmandoAutorizar(false);
     }
   }
 
-  async function liquidar(id: number) {
-    const observaciones = window.prompt("Observaciones de liquidación (opcional):") ?? undefined;
-    setAccionandoId(id);
-    setError("");
-    setMensaje("");
+  // VIATICOS-RECHAZADO-1 — "Rechazar": SIN firma, solo un motivo. Abre el
+  // modal (Beneficiario/Viaje/Monto + textarea) — el POST solo ocurre al
+  // confirmar dentro del modal, nunca al primer clic (mismo criterio que
+  // abrirAutorizar/abrirLiquidar).
+  function abrirRechazar(row: ViaticoControlRow) {
+    setRechazando(row);
+    setMotivoRechazo("");
+    setErrorRechazar("");
+  }
+
+  async function confirmarRechazar() {
+    if (!rechazando) return;
+    const motivo = motivoRechazo.trim();
+    if (motivo.length < 10) {
+      setErrorRechazar("El motivo debe tener al menos 10 caracteres.");
+      return;
+    }
+    if (motivo.length > 300) {
+      setErrorRechazar("El motivo no puede superar 300 caracteres.");
+      return;
+    }
+    setRechazandoEnProceso(true);
+    setErrorRechazar("");
     try {
-      const res = await fetch(`/api/empresas/${slug}/tms/viaticos/${id}/liquidar`, {
+      const res = await fetch(`/api/empresas/${slug}/tms/viaticos/${rechazando.id}/rechazar`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ observaciones: observaciones?.trim() || undefined }),
+        body: JSON.stringify({ motivoRechazo: motivo }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(data.error ?? "No se pudo liquidar el viático.");
+        setErrorRechazar(data.error ?? `No se pudo rechazar el viático (${res.status}).`);
         return;
       }
-      setMensaje("Viático liquidado.");
+      setMensaje(`Viático rechazado: ${rechazando.personalNombre} (${rechazando.planCodigo}).`);
+      setRechazando(null);
       await cargar();
     } catch {
-      setError("Error de conexión.");
+      setErrorRechazar("Error de conexión.");
     } finally {
-      setAccionandoId(null);
+      setRechazandoEnProceso(false);
     }
+  }
+
+  // VIATICOS-FIRMA — "Firmar liquidación": monto entregado read-only,
+  // gastos/reintegro editables, diferencia calculada en el propio JSX
+  // (solo para habilitar/deshabilitar el botón — el backend sigue siendo
+  // la autoridad real de la comparación exacta).
+  async function abrirLiquidar(row: ViaticoControlRow) {
+    setLiquidando(row);
+    setFirmaSesion((n) => n + 1);
+    setGastosComprobados("");
+    setReintegro("");
+    setObsLiquidacion("");
+    setPwdLiquidar("");
+    setTieneTrazoLiquidar(false);
+    setErrorLiquidar("");
+    setFirmaLiquidarOk(null);
+    setTieneFirmaGuardadaLiquidar(null);
+    const tiene = await consultarFirmaGuardada();
+    setTieneFirmaGuardadaLiquidar(tiene);
+    setUsarGuardadaLiquidar(tiene);
+  }
+
+  async function confirmarLiquidar() {
+    if (!liquidando) return;
+    const fd = new FormData();
+    if (usarGuardadaLiquidar) {
+      fd.set("usarFirmaGuardada", "true");
+    } else {
+      const firmaImagen = await canvasLiquidarRef.current?.obtenerImagen();
+      if (!firmaImagen) {
+        setErrorLiquidar("Dibuja tu firma antes de continuar.");
+        return;
+      }
+      fd.set("firmaImagen", firmaImagen, "firma.png");
+    }
+    if (!pwdLiquidar) {
+      setErrorLiquidar("Ingresa tu contraseña actual.");
+      return;
+    }
+    setFirmandoLiquidar(true);
+    setErrorLiquidar("");
+    try {
+      fd.set("gastosComprobados", gastosComprobados || "0");
+      fd.set("reintegro", reintegro || "0");
+      if (obsLiquidacion.trim()) fd.set("observaciones", obsLiquidacion.trim());
+      fd.set("password", pwdLiquidar);
+      const res = await fetch(`/api/empresas/${slug}/tms/viaticos/${liquidando.id}/liquidar`, {
+        method: "POST",
+        body: fd,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setErrorLiquidar(data.error ?? `No se pudo liquidar el viático (${res.status}).`);
+        return;
+      }
+      setFirmaLiquidarOk(data.firma as FirmaInfo);
+      setPwdLiquidar("");
+      await cargar();
+    } catch {
+      setErrorLiquidar("Error de conexión.");
+    } finally {
+      setFirmandoLiquidar(false);
+    }
+  }
+
+  /** VIATICOS-FIRMA-VISUAL — abre el modal de firma masiva (antes window.prompt). */
+  async function abrirMasivo() {
+    if (!seleccionados.size) {
+      setError("Selecciona al menos un viático PROGRAMADO para autorizar.");
+      return;
+    }
+    setFirmaSesion((n) => n + 1);
+    setTieneTrazoMasivo(false);
+    setErrorMasivo("");
+    setMasivoAbierto(true);
+    setTieneFirmaGuardadaMasivo(null);
+    const tiene = await consultarFirmaGuardada();
+    setTieneFirmaGuardadaMasivo(tiene);
+    setUsarGuardadaMasivo(tiene);
   }
 
   /**
    * "AUTORIZAR SELECCIONADOS" — llama el mismo endpoint atómico de a uno
    * por seleccionado (sin nuevo endpoint masivo en backend). Si alguno
    * falla (p. ej. ya no está PROGRAMADO), se reporta con nombre/motivo —
-   * nunca se oculta un fallo parcial.
+   * nunca se oculta un fallo parcial. CORRECCIÓN URGENTE: ya no pide
+   * contraseña (autorizar no la exige) — solo el trazo dibujado UNA vez
+   * para todo el lote. VIATICOS-FIRMA-VISUAL: la misma imagen (obtenida
+   * UNA vez de canvasMasivoRef.obtenerImagen() antes del bucle) se
+   * adjunta a cada llamada individual — cada una sigue generando su
+   * PROPIO archivo/fila de firma en el servidor (guardarUpload se
+   * ejecuta por cada POST), nunca se reutiliza una fila de
+   * firmas_electronicas ya creada.
    */
   async function autorizarSeleccionados() {
-    if (!seleccionados.size) {
-      setError("Selecciona al menos un viático PROGRAMADO para autorizar.");
-      return;
+    let firmaImagen: File | null = null;
+    if (!usarGuardadaMasivo) {
+      firmaImagen = (await canvasMasivoRef.current?.obtenerImagen()) ?? null;
+      if (!firmaImagen) {
+        setErrorMasivo("Dibuja tu firma antes de continuar.");
+        return;
+      }
     }
     setAutorizandoMasivo(true);
+    setErrorMasivo("");
     setError("");
     setMensaje("");
     const ids = [...seleccionados];
@@ -216,11 +521,24 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
     let exitos = 0;
     for (const id of ids) {
       try {
-        const res = await fetch(`/api/empresas/${slug}/tms/viaticos/${id}/autorizar`, { method: "POST" });
-        const data = await res.json();
+        const fd = new FormData();
+        if (usarGuardadaMasivo) {
+          fd.set("usarFirmaGuardada", "true");
+        } else {
+          fd.set("firmaImagen", firmaImagen!, "firma.png");
+        }
+        // VIATICOS-FIRMA-VISUAL (hotfix PR #124) — deja explícito en el
+        // payload firmado de CADA autorización que este trazo se reutilizó
+        // para todo el lote (nunca se pretende una firma distinta por viático).
+        fd.set("firmaLote", "true");
+        const res = await fetch(`/api/empresas/${slug}/tms/viaticos/${id}/autorizar`, {
+          method: "POST",
+          body: fd,
+        });
+        const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           const nombre = porId.get(id)?.personalNombre ?? `#${id}`;
-          fallos.push(`${nombre}: ${data.error ?? "error desconocido"}`);
+          fallos.push(`${nombre}: ${data.error ?? `error ${res.status}`}`);
         } else {
           exitos++;
         }
@@ -229,11 +547,12 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
         fallos.push(`${nombre}: error de conexión.`);
       }
     }
-    if (exitos) setMensaje(`${exitos} viático(s) autorizado(s).`);
+    if (exitos) setMensaje(`${exitos} viático(s) autorizado(s) y firmado(s).`);
     if (fallos.length) {
       setError(`No se pudieron autorizar ${fallos.length}: ${fallos.join(" · ")}`);
     }
     setAutorizandoMasivo(false);
+    setMasivoAbierto(false);
     await cargar();
   }
 
@@ -245,39 +564,38 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
         sección &quot;Viáticos por pagar&quot; más abajo.
       </p>
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <button
-          type="button"
-          onClick={() => setFEstado(fEstado === "PROGRAMADO" ? "" : "PROGRAMADO")}
-          className={`rounded border p-2 text-center transition ${fEstado === "PROGRAMADO" ? "border-sky-500 bg-sky-950/20" : "border-[var(--border)]"}`}
-        >
-          <p className="text-lg font-semibold">{resumen.pendientes}</p>
-          <p className="text-[10px] text-[var(--muted)]">Programados</p>
-        </button>
-        <button
-          type="button"
-          onClick={() => setFEstado(fEstado === "AUTORIZADO" ? "" : "AUTORIZADO")}
-          className={`rounded border p-2 text-center transition ${fEstado === "AUTORIZADO" ? "border-sky-500 bg-sky-950/20" : "border-[var(--border)]"}`}
-        >
-          <p className="text-lg font-semibold text-sky-300">{resumen.autorizados}</p>
-          <p className="text-[10px] text-[var(--muted)]">Autorizados</p>
-        </button>
-        <button
-          type="button"
-          onClick={() => setFEstado(fEstado === "ENTREGADO" ? "" : "ENTREGADO")}
-          className={`rounded border p-2 text-center transition ${fEstado === "ENTREGADO" ? "border-sky-500 bg-sky-950/20" : "border-[var(--border)]"}`}
-        >
-          <p className="text-lg font-semibold text-amber-300">{resumen.entregados}</p>
-          <p className="text-[10px] text-[var(--muted)]">Entregados</p>
-        </button>
-        <button
-          type="button"
-          onClick={() => setFEstado(fEstado === "LIQUIDADO" ? "" : "LIQUIDADO")}
-          className={`rounded border p-2 text-center transition ${fEstado === "LIQUIDADO" ? "border-sky-500 bg-sky-950/20" : "border-[var(--border)]"}`}
-        >
-          <p className="text-lg font-semibold text-emerald-300">{resumen.liquidados}</p>
-          <p className="text-[10px] text-[var(--muted)]">Liquidados</p>
-        </button>
+      {/* VIATICOS-BANDEJAS-1 (extendido en VIATICOS-RECHAZADO-1) — pestañas
+          por estado (reemplazan el dropdown "Estado" que existía más
+          abajo). Mismo mecanismo de siempre: click alterna fEstado ("" =
+          Todos, click de nuevo lo apaga) — eso ya dispara cargar()
+          (fEstado es dependencia de cargar) y el propio cargar() limpia
+          la selección al recargar. */}
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5" role="tablist" aria-label="Filtrar por estado">
+        {PESTANAS_ESTADO.map(({ estado, etiqueta }) => {
+          const activa = fEstado === estado;
+          const contador =
+            estado === "PROGRAMADO"
+              ? resumen.pendientes
+              : estado === "AUTORIZADO"
+                ? resumen.autorizados
+                : estado === "RECHAZADO"
+                  ? resumen.rechazados
+                  : estado === "ENTREGADO"
+                    ? resumen.entregados
+                    : resumen.liquidados;
+          return (
+            <button
+              key={estado}
+              type="button"
+              role="tab"
+              aria-selected={activa}
+              onClick={() => setFEstado(activa ? "" : estado)}
+              className={`rounded border p-2 text-center text-sm font-medium transition ${activa ? "border-sky-500 bg-sky-950/20 text-sky-200" : "border-[var(--border)] hover:bg-[var(--input)]"}`}
+            >
+              {etiqueta} ({contador})
+            </button>
+          );
+        })}
       </div>
 
       <div className="flex flex-wrap items-end gap-2">
@@ -314,16 +632,6 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
           Hasta
           <input type="date" className={`${inputCls} mt-0.5 block`} value={fFechaHasta} onChange={(e) => setFFechaHasta(e.target.value)} />
         </label>
-        <label className="text-xs text-[var(--muted)]">
-          Estado
-          <select className={`${inputCls} mt-0.5 block`} value={fEstado} onChange={(e) => setFEstado(e.target.value)}>
-            <option value="">Todos</option>
-            <option value="PROGRAMADO">Programado</option>
-            <option value="AUTORIZADO">Autorizado</option>
-            <option value="ENTREGADO">Entregado</option>
-            <option value="LIQUIDADO">Liquidado</option>
-          </select>
-        </label>
         <button
           type="button"
           className="rounded bg-[#334155] px-3 py-1.5 text-xs text-white"
@@ -337,7 +645,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
             type="button"
             className="rounded bg-sky-700 px-3 py-1.5 text-xs text-white disabled:opacity-50"
             disabled={autorizandoMasivo || !seleccionados.size}
-            onClick={() => void autorizarSeleccionados()}
+            onClick={() => void abrirMasivo()}
           >
             {autorizandoMasivo ? "Autorizando…" : `Autorizar seleccionados${seleccionados.size ? ` (${seleccionados.size})` : ""}`}
           </button>
@@ -395,7 +703,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
                 <td className="px-3 py-2">{q(r.montoAsignado)}</td>
                 <td className="px-3 py-2">
                   <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${ESTADO_BADGE_CLS[r.estado] ?? ""}`}>
-                    {r.estado}
+                    {ESTADO_LABEL_UI[r.estado] ?? r.estado}
                   </span>
                 </td>
                 <td className="px-3 py-2">{r.metodoPago ? METODO_PAGO_LABEL[r.metodoPago] ?? r.metodoPago : "—"}</td>
@@ -408,29 +716,67 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
                   </>
                 ) : null}
                 <td className="px-3 py-2">
-                  {puedeAutorizar && r.estado === "PROGRAMADO" ? (
-                    <button
-                      type="button"
-                      disabled={accionandoId === r.id}
-                      onClick={() => void autorizar(r.id)}
-                      className="rounded bg-sky-700 px-2 py-1 text-xs text-white disabled:opacity-50"
-                    >
-                      {accionandoId === r.id ? "…" : "Autorizar"}
-                    </button>
-                  ) : null}
-                  {puedeLiquidar && r.estado === "ENTREGADO" ? (
-                    <button
-                      type="button"
-                      disabled={accionandoId === r.id}
-                      onClick={() => void liquidar(r.id)}
-                      className="rounded bg-emerald-700 px-2 py-1 text-xs text-white disabled:opacity-50"
-                    >
-                      {accionandoId === r.id ? "…" : "Liquidar"}
-                    </button>
-                  ) : null}
-                  {!(puedeAutorizar && r.estado === "PROGRAMADO") && !(puedeLiquidar && r.estado === "ENTREGADO") ? (
-                    <span className="text-[11px] text-[var(--muted)]">—</span>
-                  ) : null}
+                  {r.estado === "RECHAZADO" ? (
+                    /* VIATICOS-RECHAZADO-1 (sección 10) — sin botones de
+                       pago/autorizar/liquidar/Ver firmas (rechazar nunca
+                       crea firma, sección 11). */
+                    <div className="text-[11px] text-[var(--muted)]">
+                      <p>Rechazado por: {r.rechazadoPor ?? "—"}</p>
+                      <p>Fecha: {r.rechazadoEn ?? "—"}</p>
+                      <p>Motivo: {r.motivoRechazo ?? "—"}</p>
+                    </div>
+                  ) : (
+                    <>
+                      {puedeAutorizar && r.estado === "PROGRAMADO" ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => void abrirAutorizar(r)}
+                            className="rounded bg-sky-700 px-2 py-1 text-xs text-white"
+                          >
+                            Firmar y autorizar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => abrirRechazar(r)}
+                            className="ml-1 rounded bg-red-800 px-2 py-1 text-xs text-white"
+                          >
+                            Rechazar
+                          </button>
+                        </>
+                      ) : null}
+                      {puedeLiquidar && r.estado === "ENTREGADO" ? (
+                        <button
+                          type="button"
+                          onClick={() => void abrirLiquidar(r)}
+                          className="rounded bg-emerald-700 px-2 py-1 text-xs text-white"
+                        >
+                          Firmar liquidación
+                        </button>
+                      ) : null}
+                      {/* VIATICOS-HISTORIAL-FIRMA-1 — visible en cuanto exista
+                          al menos una firma (AUTORIZADO/ENTREGADO/LIQUIDADO;
+                          NUNCA RECHAZADO — VIATICOS-RECHAZADO-1 sección 11,
+                          rechazar no crea firma). Un LIQUIDADO puede tener
+                          autorización + liquidación, de ahí "Ver firmas" en
+                          plural (sección 6 del ticket original). */}
+                      {r.estado !== "PROGRAMADO" && r.estado !== "RECHAZADO" ? (
+                        <button
+                          type="button"
+                          onClick={() => setVerFirmasDe(r)}
+                          className="ml-1 rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--input)]"
+                        >
+                          Ver firmas
+                        </button>
+                      ) : null}
+                      {/* Único caso sin ningún botón: PROGRAMADO y sin permiso
+                          de autorizar — "Ver firmas" ya cubre todo lo demás
+                          (ENTREGADO/LIQUIDADO siempre tienen al menos una firma). */}
+                      {r.estado === "PROGRAMADO" && !puedeAutorizar ? (
+                        <span className="text-[11px] text-[var(--muted)]">—</span>
+                      ) : null}
+                    </>
+                  )}
                 </td>
               </tr>
             ))}
@@ -444,6 +790,310 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
           </tbody>
         </table>
       </div>
+
+      {/* VIATICOS-FIRMA — modal "Firma de autorización". Firma electrónica
+          INTERNA y SIMBÓLICA: nunca "Firma Electrónica Avanzada"/
+          certificado/PSC/legal. */}
+      {autorizando ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-xl">
+            {firmaAutorizarOk ? (
+              <>
+                <h3 className="text-sm font-semibold">Viático autorizado</h3>
+                <div className="rounded-lg border border-emerald-700/40 bg-emerald-950/20 p-3 text-xs">
+                  {firmaAutorizarOk.tieneImagen ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- imagen servida por endpoint autenticado propio, no un asset estático de Next.
+                    <img
+                      src={`/api/empresas/${slug}/tms/viaticos/firmas/${firmaAutorizarOk.firmaId}/imagen`}
+                      alt="Firma manuscrita"
+                      className="mb-2 h-20 w-full rounded border border-[var(--border)] bg-white object-contain"
+                    />
+                  ) : null}
+                  <p className="font-medium">Firmado electrónicamente por:</p>
+                  <p className="mt-1 text-sm font-semibold">{firmaAutorizarOk.nombreFirmante}</p>
+                  <p className="mt-1"><span className="text-[var(--muted)]">Rol:</span> {firmaAutorizarOk.rolFirmante}</p>
+                  <p><span className="text-[var(--muted)]">Fecha:</span> {new Date(firmaAutorizarOk.fechaHoraServidor).toLocaleString("es-GT")}</p>
+                  <p><span className="text-[var(--muted)]">Código de firma:</span> {firmaAutorizarOk.codigoFirma}</p>
+                </div>
+                <button
+                  type="button"
+                  className="w-full rounded bg-[var(--accent)] px-3 py-1.5 text-sm text-white"
+                  onClick={() => setAutorizando(null)}
+                >
+                  Cerrar
+                </button>
+              </>
+            ) : (
+              <>
+                <h3 className="text-sm font-semibold">Firma de autorización</h3>
+                <div className="space-y-1 text-xs">
+                  <p><span className="text-[var(--muted)]">Viaje:</span> {autorizando.planCodigo}{autorizando.cliente ? ` · ${autorizando.cliente}` : ""}</p>
+                  <p><span className="text-[var(--muted)]">Beneficiario:</span> {autorizando.personalNombre} ({autorizando.rol})</p>
+                  <p><span className="text-[var(--muted)]">Monto:</span> {q(autorizando.montoAsignado)}</p>
+                </div>
+                <p className="text-xs text-[var(--muted)]">Al firmar confirmas que autorizas este viático.</p>
+                <SelectorFirma
+                  slug={slug}
+                  tieneFirmaGuardada={tieneFirmaGuardadaAutorizar}
+                  usarGuardada={usarGuardadaAutorizar}
+                  onCambiaUsarGuardada={setUsarGuardadaAutorizar}
+                  canvasRef={canvasAutorizarRef}
+                  sesionId={`autorizar-${autorizando.id}-${firmaSesion}`}
+                  onCambiaTrazo={setTieneTrazoAutorizar}
+                  disabled={firmandoAutorizar}
+                />
+                <p className="text-[10px] text-[var(--muted)]">{TEXTO_FIRMA_INTERNA} — no es una firma legal certificada.</p>
+                {errorAutorizar ? <p className="text-xs text-red-300">{errorAutorizar}</p> : null}
+                <div className="flex gap-2 pt-1">
+                  <button
+                    type="button"
+                    disabled={firmandoAutorizar || (!usarGuardadaAutorizar && !tieneTrazoAutorizar)}
+                    className="flex-1 rounded bg-sky-700 px-3 py-1.5 text-sm text-white disabled:opacity-50"
+                    onClick={() => void confirmarAutorizar()}
+                  >
+                    {firmandoAutorizar ? "Firmando…" : "Firmar y autorizar"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={firmandoAutorizar}
+                    className="rounded border border-[var(--border)] px-3 py-1.5 text-sm"
+                    onClick={() => setAutorizando(null)}
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {/* VIATICOS-FIRMA — modal "Firma de liquidación". Diferencia calculada
+          en vivo SOLO para habilitar/deshabilitar el botón — el backend
+          sigue siendo la autoridad real de la comparación exacta (centavos,
+          nunca float). */}
+      {liquidando ? (
+        (() => {
+          const centavosUi = (v: string) => {
+            const n = Number(v || "0");
+            return Number.isFinite(n) ? Math.round(n * 100) : NaN;
+          };
+          const montoCent = Math.round(liquidando.montoAsignado * 100);
+          const gastosCent = centavosUi(gastosComprobados);
+          const reintegroCent = centavosUi(reintegro);
+          const valoresValidos = Number.isFinite(gastosCent) && Number.isFinite(reintegroCent) && gastosCent >= 0 && reintegroCent >= 0;
+          const diferenciaCent = valoresValidos ? montoCent - gastosCent - reintegroCent : NaN;
+          const puedeFirmar = valoresValidos && diferenciaCent === 0;
+          return (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+              <div className="w-full max-w-md space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-xl">
+                {firmaLiquidarOk ? (
+                  <>
+                    <h3 className="text-sm font-semibold">Viático liquidado</h3>
+                    <div className="rounded-lg border border-emerald-700/40 bg-emerald-950/20 p-3 text-xs">
+                      {firmaLiquidarOk.tieneImagen ? (
+                        // eslint-disable-next-line @next/next/no-img-element -- imagen servida por endpoint autenticado propio, no un asset estático de Next.
+                        <img
+                          src={`/api/empresas/${slug}/tms/viaticos/firmas/${firmaLiquidarOk.firmaId}/imagen`}
+                          alt="Firma manuscrita"
+                          className="mb-2 h-20 w-full rounded border border-[var(--border)] bg-white object-contain"
+                        />
+                      ) : null}
+                      <p className="font-medium">Firmado electrónicamente por:</p>
+                      <p className="mt-1 text-sm font-semibold">{firmaLiquidarOk.nombreFirmante}</p>
+                      <p className="mt-1"><span className="text-[var(--muted)]">Rol:</span> {firmaLiquidarOk.rolFirmante}</p>
+                      <p><span className="text-[var(--muted)]">Fecha:</span> {new Date(firmaLiquidarOk.fechaHoraServidor).toLocaleString("es-GT")}</p>
+                      <p><span className="text-[var(--muted)]">Código de firma:</span> {firmaLiquidarOk.codigoFirma}</p>
+                    </div>
+                    <button
+                      type="button"
+                      className="w-full rounded bg-[var(--accent)] px-3 py-1.5 text-sm text-white"
+                      onClick={() => setLiquidando(null)}
+                    >
+                      Cerrar
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <h3 className="text-sm font-semibold">Firma de liquidación</h3>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <label className="text-[var(--muted)]">
+                        Monto entregado
+                        <input className={`${inputCls} mt-0.5 block w-full bg-[var(--panel)]`} value={q(liquidando.montoAsignado)} disabled readOnly />
+                      </label>
+                      <label className="text-[var(--muted)]">
+                        Gastos comprobados
+                        <input inputMode="decimal" className={`${inputCls} mt-0.5 block w-full`} value={gastosComprobados} onChange={(e) => setGastosComprobados(e.target.value)} placeholder="0.00" />
+                      </label>
+                      <label className="text-[var(--muted)]">
+                        Reintegro
+                        <input inputMode="decimal" className={`${inputCls} mt-0.5 block w-full`} value={reintegro} onChange={(e) => setReintegro(e.target.value)} placeholder="0.00" />
+                      </label>
+                      <label className="text-[var(--muted)]">
+                        Diferencia
+                        <input className={`${inputCls} mt-0.5 block w-full bg-[var(--panel)]`} value={valoresValidos ? q(diferenciaCent / 100) : "—"} disabled readOnly />
+                      </label>
+                    </div>
+                    {valoresValidos && diferenciaCent > 0 ? (
+                      <p className="text-xs text-amber-300">Pendiente por comprobar o reintegrar: {q(diferenciaCent / 100)}</p>
+                    ) : null}
+                    {valoresValidos && diferenciaCent < 0 ? (
+                      <p className="text-xs text-red-300">Los gastos y reintegros superan el monto entregado. Revisa la liquidación.</p>
+                    ) : null}
+                    <label className="block text-xs text-[var(--muted)]">
+                      Observaciones (opcional)
+                      <input className={`${inputCls} mt-0.5 block w-full`} value={obsLiquidacion} onChange={(e) => setObsLiquidacion(e.target.value)} maxLength={300} />
+                    </label>
+                    <p className="text-xs text-[var(--muted)]">Al firmar confirmas que revisaste esta liquidación.</p>
+                    <SelectorFirma
+                      slug={slug}
+                      tieneFirmaGuardada={tieneFirmaGuardadaLiquidar}
+                      usarGuardada={usarGuardadaLiquidar}
+                      onCambiaUsarGuardada={setUsarGuardadaLiquidar}
+                      canvasRef={canvasLiquidarRef}
+                      sesionId={`liquidar-${liquidando.id}-${firmaSesion}`}
+                      onCambiaTrazo={setTieneTrazoLiquidar}
+                      disabled={firmandoLiquidar}
+                    />
+                    <p className="text-[10px] text-[var(--muted)]">{TEXTO_FIRMA_INTERNA} — no es una firma legal certificada.</p>
+                    <label className="block text-xs text-[var(--muted)]">
+                      Contraseña
+                      <input
+                        type="password"
+                        className={`${inputCls} mt-0.5 block w-full`}
+                        value={pwdLiquidar}
+                        onChange={(e) => setPwdLiquidar(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter" && puedeFirmar && (usarGuardadaLiquidar || tieneTrazoLiquidar)) void confirmarLiquidar(); }}
+                      />
+                    </label>
+                    {errorLiquidar ? <p className="text-xs text-red-300">{errorLiquidar}</p> : null}
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        type="button"
+                        disabled={firmandoLiquidar || !puedeFirmar || (!usarGuardadaLiquidar && !tieneTrazoLiquidar)}
+                        title={!puedeFirmar ? "La diferencia debe ser exactamente Q0.00 para poder firmar la liquidación." : undefined}
+                        className="flex-1 rounded bg-emerald-700 px-3 py-1.5 text-sm text-white disabled:opacity-50"
+                        onClick={() => void confirmarLiquidar()}
+                      >
+                        {firmandoLiquidar ? "Firmando…" : "Firmar liquidación"}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={firmandoLiquidar}
+                        className="rounded border border-[var(--border)] px-3 py-1.5 text-sm"
+                        onClick={() => setLiquidando(null)}
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          );
+        })()
+      ) : null}
+
+      {/* VIATICOS-FIRMA-VISUAL — modal "Autorizar seleccionados" (antes
+          window.prompt sin canvas). Una sola firma dibujada para todo el
+          lote — ver decisión documentada en autorizarSeleccionados(). */}
+      {masivoAbierto ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-xl">
+            <h3 className="text-sm font-semibold">Firmar y autorizar seleccionados ({seleccionados.size})</h3>
+            <p className="text-xs text-[var(--muted)]">
+              Esta firma se aplicará a los {seleccionados.size} viáticos seleccionados: se usará la misma para
+              autorizar cada uno de ellos.
+            </p>
+            <SelectorFirma
+              slug={slug}
+              tieneFirmaGuardada={tieneFirmaGuardadaMasivo}
+              usarGuardada={usarGuardadaMasivo}
+              onCambiaUsarGuardada={setUsarGuardadaMasivo}
+              canvasRef={canvasMasivoRef}
+              sesionId={`masivo-${firmaSesion}`}
+              onCambiaTrazo={setTieneTrazoMasivo}
+              disabled={autorizandoMasivo}
+            />
+            <p className="text-[10px] text-[var(--muted)]">{TEXTO_FIRMA_INTERNA} — no es una firma legal certificada.</p>
+            {errorMasivo ? <p className="text-xs text-red-300">{errorMasivo}</p> : null}
+            <div className="flex gap-2 pt-1">
+              <button
+                type="button"
+                disabled={autorizandoMasivo || (!usarGuardadaMasivo && !tieneTrazoMasivo)}
+                className="flex-1 rounded bg-sky-700 px-3 py-1.5 text-sm text-white disabled:opacity-50"
+                onClick={() => void autorizarSeleccionados()}
+              >
+                {autorizandoMasivo ? "Firmando…" : `Firmar y autorizar (${seleccionados.size})`}
+              </button>
+              <button
+                type="button"
+                disabled={autorizandoMasivo}
+                className="rounded border border-[var(--border)] px-3 py-1.5 text-sm"
+                onClick={() => setMasivoAbierto(false)}
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {verFirmasDe ? (
+        <HistorialFirmasModal
+          slug={slug}
+          viatico={{ id: verFirmasDe.id, planCodigo: verFirmasDe.planCodigo, personalNombre: verFirmasDe.personalNombre }}
+          onClose={() => setVerFirmasDe(null)}
+        />
+      ) : null}
+
+      {/* VIATICOS-RECHAZADO-1 (sección 9) — modal "Rechazar viático": SIN
+          firma (nunca FirmaCanvas/SelectorFirma), solo motivo obligatorio. */}
+      {rechazando ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-xl">
+            <h3 className="text-sm font-semibold">Rechazar viático</h3>
+            <div className="rounded-lg border border-[var(--border)] p-3 text-xs">
+              <p><span className="text-[var(--muted)]">Beneficiario:</span> {rechazando.personalNombre}</p>
+              <p><span className="text-[var(--muted)]">Viaje:</span> {rechazando.planCodigo}</p>
+              <p><span className="text-[var(--muted)]">Monto:</span> {q(rechazando.montoAsignado)}</p>
+            </div>
+            <label className="block text-xs text-[var(--muted)]">
+              Motivo del rechazo
+              <textarea
+                className={`${inputCls} mt-0.5 block w-full`}
+                rows={3}
+                maxLength={300}
+                value={motivoRechazo}
+                onChange={(e) => setMotivoRechazo(e.target.value)}
+                placeholder="Ej. No corresponde viático porque el viaje fue cancelado."
+              />
+              <span className="mt-0.5 block text-[10px] text-[var(--muted)]">
+                {motivoRechazo.trim().length}/300 caracteres (mínimo 10)
+              </span>
+            </label>
+            {errorRechazar ? <p className="text-xs text-red-300">{errorRechazar}</p> : null}
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                disabled={rechazandoEnProceso}
+                onClick={() => setRechazando(null)}
+                className="rounded border border-[var(--border)] px-3 py-1.5 text-sm"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={rechazandoEnProceso || motivoRechazo.trim().length < 10}
+                onClick={() => void confirmarRechazar()}
+                className="rounded bg-red-800 px-3 py-1.5 text-sm text-white disabled:opacity-50"
+              >
+                {rechazandoEnProceso ? "Rechazando…" : "Confirmar rechazo"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

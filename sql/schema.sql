@@ -946,37 +946,77 @@ CREATE TABLE IF NOT EXISTS flota_inv_equipo (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Contabilidad (esqueleto)
+-- Configuración de identidades contables. No implica asignación de cuentas existentes.
+CREATE TABLE IF NOT EXISTS cont_entidades (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  codigo VARCHAR(40) NOT NULL,
+  nombre VARCHAR(200) NOT NULL,
+  activa TINYINT(1) NOT NULL DEFAULT 1,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_cont_entidad_codigo (empresa_id, codigo),
+  UNIQUE KEY uq_cont_entidad_empresa_id (empresa_id, id),
+  CONSTRAINT fk_cont_entidad_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS cont_entidad_usuarios (
+  empresa_id INT NOT NULL,
+  entidad_id INT NOT NULL,
+  usuario_id INT NOT NULL,
+  activo TINYINT(1) NOT NULL DEFAULT 1,
+  puede_editar TINYINT(1) NOT NULL DEFAULT 0,
+  actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (empresa_id, entidad_id, usuario_id),
+  INDEX idx_cont_entidad_usuario (usuario_id, empresa_id, activo),
+  CONSTRAINT fk_cont_eu_entidad FOREIGN KEY (empresa_id, entidad_id) REFERENCES cont_entidades(empresa_id, id) ON DELETE RESTRICT,
+  CONSTRAINT fk_cont_eu_usuario FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS cont_cuentas (
   id INT AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,
+  entidad_id INT NULL DEFAULT NULL,
   codigo VARCHAR(40) NOT NULL,
   nombre VARCHAR(200) NOT NULL,
   tipo VARCHAR(40) NOT NULL,
   nivel INT NOT NULL DEFAULT 1,
   activa TINYINT(1) NOT NULL DEFAULT 1,
-  UNIQUE KEY uq_cuenta (empresa_id, codigo),
+  UNIQUE KEY uq_cuenta_entidad (empresa_id, entidad_id, codigo),
+  UNIQUE KEY uq_cont_cuenta_ambito (empresa_id, entidad_id, id),
+  CONSTRAINT fk_cont_cuenta_entidad FOREIGN KEY (empresa_id, entidad_id) REFERENCES cont_entidades(empresa_id, id) ON DELETE RESTRICT,
+  INDEX idx_cont_cuentas_entidad (empresa_id, entidad_id),
   CONSTRAINT fk_cuenta_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS cont_asientos (
   id INT AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,
+  entidad_id INT NULL DEFAULT NULL,
   fecha DATE NOT NULL,
   numero VARCHAR(40) NOT NULL,
   glosa VARCHAR(500) NULL,
   estado VARCHAR(20) NOT NULL DEFAULT 'Borrador',
   creado_por VARCHAR(100) NULL,
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_asiento (empresa_id, numero),
+  UNIQUE KEY uq_asiento_entidad (empresa_id, entidad_id, numero),
+  UNIQUE KEY uq_cont_asiento_ambito (empresa_id, entidad_id, id),
+  CONSTRAINT fk_cont_asiento_entidad FOREIGN KEY (empresa_id, entidad_id) REFERENCES cont_entidades(empresa_id, id) ON DELETE RESTRICT,
+  INDEX idx_cont_asientos_entidad (empresa_id, entidad_id),
   CONSTRAINT fk_asiento_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS cont_asiento_detalle (
   id INT AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NULL DEFAULT NULL,
+  entidad_id INT NULL DEFAULT NULL,
   asiento_id INT NOT NULL,
   cuenta_id INT NOT NULL,
   debe DECIMAL(14,2) NOT NULL DEFAULT 0,
   haber DECIMAL(14,2) NOT NULL DEFAULT 0,
+  INDEX idx_cont_detalle_entidad (empresa_id, entidad_id),
+  CONSTRAINT fk_cont_detalle_asiento_ambito FOREIGN KEY (empresa_id, entidad_id, asiento_id) REFERENCES cont_asientos(empresa_id, entidad_id, id) ON DELETE RESTRICT,
+  CONSTRAINT fk_cont_detalle_cuenta_ambito FOREIGN KEY (empresa_id, entidad_id, cuenta_id) REFERENCES cont_cuentas(empresa_id, entidad_id, id) ON DELETE RESTRICT,
   CONSTRAINT fk_adet_asiento FOREIGN KEY (asiento_id) REFERENCES cont_asientos(id) ON DELETE CASCADE,
   CONSTRAINT fk_adet_cuenta FOREIGN KEY (cuenta_id) REFERENCES cont_cuentas(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -984,6 +1024,7 @@ CREATE TABLE IF NOT EXISTS cont_asiento_detalle (
 CREATE TABLE IF NOT EXISTS cont_cxc (
   id INT AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,
+  entidad_id INT NULL DEFAULT NULL,
   cliente VARCHAR(200) NOT NULL,
   documento VARCHAR(80) NULL,
   fecha DATE NOT NULL,
@@ -991,12 +1032,15 @@ CREATE TABLE IF NOT EXISTS cont_cxc (
   monto DECIMAL(14,2) NOT NULL DEFAULT 0,
   saldo DECIMAL(14,2) NOT NULL DEFAULT 0,
   estado VARCHAR(40) NOT NULL DEFAULT 'Pendiente',
+  INDEX idx_cont_cxc_entidad (empresa_id, entidad_id),
+  CONSTRAINT fk_cont_cxc_entidad FOREIGN KEY (empresa_id, entidad_id) REFERENCES cont_entidades(empresa_id, id) ON DELETE RESTRICT,
   CONSTRAINT fk_cxc_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS cont_cxp (
   id INT AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,
+  entidad_id INT NULL DEFAULT NULL,
   proveedor VARCHAR(200) NOT NULL,
   documento VARCHAR(80) NULL,
   fecha DATE NOT NULL,
@@ -1004,6 +1048,8 @@ CREATE TABLE IF NOT EXISTS cont_cxp (
   monto DECIMAL(14,2) NOT NULL DEFAULT 0,
   saldo DECIMAL(14,2) NOT NULL DEFAULT 0,
   estado VARCHAR(40) NOT NULL DEFAULT 'Pendiente',
+  INDEX idx_cont_cxp_entidad (empresa_id, entidad_id),
+  CONSTRAINT fk_cont_cxp_entidad FOREIGN KEY (empresa_id, entidad_id) REFERENCES cont_entidades(empresa_id, id) ON DELETE RESTRICT,
   CONSTRAINT fk_cxp_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 

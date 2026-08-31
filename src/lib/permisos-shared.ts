@@ -116,6 +116,15 @@ export const PLATAFORMA_PERMISIBLES = [
   "viaticos",
   "viaticos_autorizar",
   "viaticos_pagar",
+  // VIATICOS-FIRMA: liquidar (ENTREGADO -> LIQUIDADO) deja de vivir bajo
+  // el permiso genérico "viaticos" y pasa a ser su propio permiso
+  // explícito — mismo patrón exacto que viaticos_autorizar/viaticos_pagar
+  // arriba. Facturador lo trae por defecto (junto con viaticos_pagar);
+  // ningún otro rol lo trae por defecto (ver modulosPropiosDelRol). "No
+  // mantener fallback permanente a viaticos:editar" — un usuario que hoy
+  // liquida solo por tener viaticos:editar manual necesita este permiso
+  // nuevo asignado explícitamente (ver reporte de entrega, riesgo #14).
+  "viaticos_liquidar",
   // OPS-1: cierre administrativo del viaje (Descargado -> Cerrado).
   // Mismo patrón que viaticos_autorizar/viaticos_pagar: permiso propio,
   // ningún rol lo trae salvo los explícitamente definidos abajo
@@ -227,6 +236,7 @@ export function moduloEmpresaDelPermiso(m: string): Modulo | null {
     m === "viaticos" ||
     m === "viaticos_autorizar" ||
     m === "viaticos_pagar" ||
+    m === "viaticos_liquidar" ||
     m === "viajes_cerrar" ||
     m === "programacion" ||
     // OPS-5.2a: "rutas" tampoco es un Modulo de navegación propio — igual
@@ -247,9 +257,10 @@ export function labelPermiso(modulo: string): string {
   // "viaticos"/"viaticos_autorizar"/"viaticos_pagar" no son un Modulo de
   // roles.ts (no tocan el gate de módulo por empresa/rol) — solo permisos
   // explícitos dentro de PLATAFORMA_PERMISIBLES.
-  if (modulo === "viaticos") return "Viáticos (liquidar / ver control general)";
+  if (modulo === "viaticos") return "Viáticos (ver control general)";
   if (modulo === "viaticos_autorizar") return "Viáticos: autorizar";
   if (modulo === "viaticos_pagar") return "Viáticos: registrar pago/entrega";
+  if (modulo === "viaticos_liquidar") return "Viáticos: liquidar";
   if (modulo === "viajes_cerrar") return "Viajes: cerrar administrativamente";
   if (modulo === "programacion") return "Programación";
   if (modulo === "rutas") return "Rutas";
@@ -316,6 +327,7 @@ export const GRUPOS_PERMISOS: {
       "viaticos",
       "viaticos_autorizar",
       "viaticos_pagar",
+      "viaticos_liquidar",
       "viajes_cerrar",
     ],
   },
@@ -414,12 +426,15 @@ export function modulosPropiosDelRol(rol: RolGlobal): string[] {
       return ["tms", "programacion", "rutas", "clientes", "multas"];
     case "Facturador":
       // Facturador NO recibe "tms" por defecto (no debe editar viajes en
-      // general) — su alcance es viaticos_pagar (que su propio guard,
-      // requireTenantViaticosPagar, exige aparte) y facturación. Ver
-      // "viajes cerrados listos para facturación" queda cubierto por la
-      // alerta de la campana (gateada por facturacion:ver), no por acceso
-      // a TMS.
-      return ["viaticos_pagar", "facturacion"];
+      // general) — su alcance es viaticos_pagar/viaticos_liquidar (cada
+      // uno con su propio guard, requireTenantViaticosPagar/Liquidar) y
+      // facturación. "viaticos" (control general) se otorga SOLO lectura
+      // — ver permisosDefaultPorRol, caso especial igual al de "multas"
+      // para GerenteOperaciones/JefeOperaciones — Facturador nunca recibe
+      // viaticos_autorizar ni viajes_cerrar. Ver "viajes cerrados listos
+      // para facturación" queda cubierto por la alerta de la campana
+      // (gateada por facturacion:ver), no por acceso a TMS.
+      return ["viaticos", "viaticos_pagar", "viaticos_liquidar", "facturacion"];
     case "CoordinadorPredios":
       // Predios = flota. TMS/Reciclaje/Tarimas van en otras áreas si se otorgan.
       return [...FLOTA_SUBMODULOS];
@@ -492,11 +507,23 @@ export function permisosDefaultPorRol(rol: RolGlobal): PermisoModulo[] {
     ];
   }
 
+  // VIATICOS-FIRMA: Facturador tiene su propio caso especial (igual que
+  // GerenteOperaciones/JefeOperaciones lo tienen para "multas" arriba) —
+  // "viaticos" (control general) queda SOLO LECTURA por defecto, nunca
+  // editar (eso ya NO significa "liquidar" — liquidar es
+  // viaticos_liquidar, propio y separado). viaticos_pagar/
+  // viaticos_liquidar/facturacion sí quedan con permiso completo.
+  if (rol === "Facturador") {
+    return [
+      ...propios.map((m) => (m === "viaticos" ? permisoSoloVer(m) : permisoFull(m))),
+      ...cruzados.map((m) => permisoVacio(m)),
+    ];
+  }
+
   if (
     rol === "RRHH" ||
     rol === "Contabilidad" ||
-    rol === "Operaciones" ||
-    rol === "Facturador"
+    rol === "Operaciones"
   ) {
     return [
       ...propios.map((m) => permisoFull(m)),
@@ -619,19 +646,20 @@ export function modulosPlataformaDesdePermisos(
       continue;
     }
     if (!tienePermiso(permisos, p.modulo, "ver")) continue;
-    // "viaticos"/"viaticos_autorizar"/"viaticos_pagar"/"viajes_cerrar"/
-    // "programacion"/"rutas" son permisos de acción dentro de TMS, no
-    // módulos de navegación propios (no hay un Modulo "viaticos*"/
-    // "viajes_cerrar"/"programacion"/"rutas" en roles.ts) — se excluyen
-    // aquí para no romper el tipo Modulo[] de esta función; siguen
-    // siendo PlataformaPermisible válidos para el resto del sistema
-    // (catálogo, editor de permisos, tienePermiso()).
+    // "viaticos"/"viaticos_autorizar"/"viaticos_pagar"/"viaticos_liquidar"/
+    // "viajes_cerrar"/"programacion"/"rutas" son permisos de acción dentro
+    // de TMS, no módulos de navegación propios (no hay un Modulo
+    // "viaticos*"/"viajes_cerrar"/"programacion"/"rutas" en roles.ts) — se
+    // excluyen aquí para no romper el tipo Modulo[] de esta función;
+    // siguen siendo PlataformaPermisible válidos para el resto del
+    // sistema (catálogo, editor de permisos, tienePermiso()).
     if (
       esPlataformaPermisible(p.modulo) &&
       p.modulo !== "multas" &&
       p.modulo !== "viaticos" &&
       p.modulo !== "viaticos_autorizar" &&
       p.modulo !== "viaticos_pagar" &&
+      p.modulo !== "viaticos_liquidar" &&
       p.modulo !== "viajes_cerrar" &&
       p.modulo !== "programacion" &&
       p.modulo !== "rutas"

@@ -24,6 +24,7 @@ async function asegurarInner(): Promise<void> {
       nombre VARCHAR(200) NOT NULL,
       razon_social VARCHAR(250) NULL,
       nit VARCHAR(40) NULL,
+      rtu VARCHAR(60) NULL,
       telefono VARCHAR(80) NULL,
       email VARCHAR(160) NULL,
       direccion VARCHAR(300) NULL,
@@ -48,6 +49,7 @@ async function asegurarInner(): Promise<void> {
   const needed: [string, string][] = [
     ["codigo", "codigo VARCHAR(40) NULL"],
     ["razon_social", "razon_social VARCHAR(250) NULL"],
+    ["rtu", "rtu VARCHAR(60) NULL"],
     ["email", "email VARCHAR(160) NULL"],
     ["contacto_nombre", "contacto_nombre VARCHAR(160) NULL"],
     ["contacto_telefono", "contacto_telefono VARCHAR(80) NULL"],

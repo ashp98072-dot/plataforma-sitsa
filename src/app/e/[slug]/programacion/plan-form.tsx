@@ -282,6 +282,13 @@ export default function PlanForm({
   const [guardandoUbicacion, setGuardandoUbicacion] = useState(false);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
+  // PROGRAMACION-RECHAZADO-AVISO-1 — informativo, NUNCA bloquea: si al
+  // guardar se detecta que alguna persona (re)asignada ya tiene un
+  // viático RECHAZADO para ESTE MISMO plan, se muestra aparte (no dentro
+  // del banner verde de éxito, que confundiría "advertencia" con
+  // "resultado exitoso") — ver advertencias tipo "viatico_rechazado_
+  // mismo_plan" devueltas por PATCH /tms/planes.
+  const [avisosRechazoPlan, setAvisosRechazoPlan] = useState<string[]>([]);
 
   const cargarCatalogos = useCallback(async () => {
     const [resPlanes, cat, ops, viaticosCfg] = await Promise.all([
@@ -721,6 +728,7 @@ export default function PlanForm({
     if (saving || bloqueado) return;
     setError("");
     setMsg("");
+    setAvisosRechazoPlan([]);
     const paradas = paradasForm
       .filter((p) => p.lugarNombre.trim())
       .map((p) => ({
@@ -869,9 +877,17 @@ export default function PlanForm({
         return;
       }
       setMsg(data.mensaje ?? "Viaje actualizado.");
-      if (Array.isArray(data.advertencias) && data.advertencias.length) {
+      // PROGRAMACION-RECHAZADO-AVISO-1 — se separan del resto de
+      // advertencias (que siguen exactamente igual, sin tocar ese flujo)
+      // para no mezclar un aviso de viático rechazado con el banner verde
+      // de éxito.
+      const advertenciasArr: { tipo?: string; mensaje: string }[] = Array.isArray(data.advertencias) ? data.advertencias : [];
+      const avisosRechazo = advertenciasArr.filter((a) => a.tipo === "viatico_rechazado_mismo_plan");
+      const otrasAdvertencias = advertenciasArr.filter((a) => a.tipo !== "viatico_rechazado_mismo_plan");
+      setAvisosRechazoPlan(avisosRechazo.map((a) => a.mensaje));
+      if (otrasAdvertencias.length) {
         setMsg(
-          `${data.mensaje ?? "Viaje actualizado."} — ${data.advertencias.map((a: { mensaje: string }) => a.mensaje).join(" · ")}`,
+          `${data.mensaje ?? "Viaje actualizado."} — ${otrasAdvertencias.map((a) => a.mensaje).join(" · ")}`,
         );
       }
       // El servidor ya sincronizó tms_viaticos con el piloto/auxiliares
@@ -1568,6 +1584,27 @@ export default function PlanForm({
       </div>
 
       {esEdicion ? <NotificarPersonal plan={plan!} /> : null}
+
+      {/* PROGRAMACION-RECHAZADO-AVISO-1 — aviso NO bloqueante: alguna
+          persona (re)asignada ya tiene un viático RECHAZADO para ESTE
+          MISMO viaje/plan. RECHAZADO sigue siendo terminal — este aviso
+          solo explica por qué no se generó un viático nuevo para esa
+          persona; la asignación operativa del viaje sigue guardada
+          normalmente. Se agrupan todos los colaboradores en un solo
+          bloque (nunca uno por render). */}
+      {avisosRechazoPlan.length ? (
+        <div className="md:col-span-3 rounded-lg border border-amber-700/40 bg-amber-950/10 p-3 text-sm">
+          <p className="font-medium text-amber-300">Viático rechazado</p>
+          <ul className="mt-1 list-disc space-y-1 pl-5 text-[var(--muted)]">
+            {avisosRechazoPlan.map((m, i) => (
+              <li key={i}>{m}</li>
+            ))}
+          </ul>
+          <p className="mt-1 text-xs text-[var(--muted)]">
+            Si necesita un nuevo viático, debe corresponder a un viaje/plan distinto.
+          </p>
+        </div>
+      ) : null}
 
       {esEdicion ? (
         <div className="md:col-span-3">

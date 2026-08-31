@@ -71,7 +71,9 @@ type UploadLike = {
 
 export async function guardarUpload(
   empresaId: number,
-  subdir: "documentos" | "evidencias" | "flota" | "multas",
+  // VIATICOS-FIRMA (firma visual) — "firmas": imágenes PNG de firma
+  // manuscrita (src/lib/tms/viaticos.ts autorizarViatico/liquidarViatico).
+  subdir: "documentos" | "evidencias" | "flota" | "multas" | "firmas",
   prefix: string,
   file: UploadLike,
 ): Promise<{ relative: string; original: string; size: number }> {

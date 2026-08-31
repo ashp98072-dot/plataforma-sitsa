@@ -1,7 +1,12 @@
 import type { RowDataPacket } from "mysql2";
 import type { PoolConnection, ResultSetHeader } from "mysql2/promise";
-import { execute, query, type SqlParams } from "@/lib/db";
-import { registrarAuditoria } from "@/lib/auditoria";
+import { execute, getPool, query, type SqlParams } from "@/lib/db";
+import { registrarAuditoria, registrarAuditoriaTx } from "@/lib/auditoria";
+import { verificarPasswordUsuarioActual } from "@/lib/auth";
+import { crearFirmaInterna, type ResultadoFirmaInterna } from "@/lib/firmas/firmas-internas";
+import { sha256Hex } from "@/lib/firmas/imagen-firma";
+import { borrarUpload, guardarUpload } from "@/lib/uploads";
+import { centavos, decimal } from "@/lib/multas/reglas";
 
 /**
  * VIAT-0 — viáticos operativos asociados a una programación/viaje (piloto y
@@ -270,6 +275,92 @@ export async function sincronizarViaticosPlan(
   }
 }
 
+export type AvisoViaticoRechazado = {
+  personalId: number;
+  nombre: string;
+  tipo: "RECHAZADO";
+  estadoViatico: "RECHAZADO";
+  motivoRechazo: string | null;
+};
+
+/**
+ * PROGRAMACION-RECHAZADO-AVISO-1 — lectura PURAMENTE INFORMATIVA (nunca
+ * bloquea, nunca modifica nada): ¿alguna de las personas que se están
+ * (re)asignando a ESTE plan ya tiene, en ESTE MISMO plan, un viático
+ * RECHAZADO? Existe para que quien edita Programación entienda por qué
+ * sincronizarViaticosPlan() NO genera un viático nuevo para esa persona
+ * — RECHAZADO es terminal por (plan_id, personal_id), protegido por
+ * `UNIQUE KEY uq_viatico_plan_personal` y por el propio
+ * sincronizarViaticosPlan (que salta esa fila sin tocarla, ver su
+ * JSDoc) — esta función NO cambia esa regla, NO la toca, solo la
+ * explica. `empresaId`/`planId` son SIEMPRE obligatorios en el WHERE
+ * (multiempresa-safe, nunca solo `personalId`).
+ */
+export async function listarViaticosRechazadosDelPlan(
+  empresaId: number,
+  planId: number,
+  personalIds: number[],
+): Promise<AvisoViaticoRechazado[]> {
+  const ids = [...new Set(personalIds)]; // sin duplicados -- nunca dos avisos para la misma persona.
+  if (!ids.length) return [];
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = await query<RowDataPacket[]>(
+    `SELECT v.personal_id, tp.nombre AS personal_nombre, v.motivo_rechazo
+     FROM tms_viaticos v
+     INNER JOIN tms_personal tp ON tp.id = v.personal_id AND tp.empresa_id = v.empresa_id
+     WHERE v.empresa_id = ? AND v.plan_id = ? AND v.personal_id IN (${placeholders}) AND v.estado = 'RECHAZADO'`,
+    [empresaId, planId, ...ids],
+  );
+  return rows.map((r) => ({
+    personalId: Number(r.personal_id),
+    nombre: String(r.personal_nombre ?? ""),
+    tipo: "RECHAZADO",
+    estadoViatico: "RECHAZADO",
+    motivoRechazo: r.motivo_rechazo != null ? String(r.motivo_rechazo) : null,
+  }));
+}
+
+/**
+ * PROGRAMACION-RECHAZADO-AVISO-1 — personalIds REALMENTE nuevos o
+ * cambiados en un PATCH de plan, comparando la asignación PREVIA
+ * (`antesAuxiliaresIds`) contra la SOLICITADA (`pilotoFinal`/
+ * `auxiliaresFinal`) — para consultar listarViaticosRechazadosDelPlan()
+ * SOLO por esas personas.
+ *
+ * Deliberadamente MÁS ESTRICTO que "personal que se está revalidando por
+ * disponibilidad" (`pilotoIdParaValidar`/`auxiliaresIdsParaValidar` en
+ * planes/route.ts): esos también incluyen al piloto/auxiliares YA
+ * asignados sin cambiar, cuando `fechaCambia` dispara su revalidación de
+ * disponibilidad en la nueva fecha — usar ESE conjunto para el aviso de
+ * rechazo repetiría el aviso en un PATCH que solo cambia la fecha, sin
+ * tocar personal (comportamiento no deseado). Esta función solo
+ * considera el piloto si REALMENTE cambió (`pilotoCambioReal`) y los
+ * auxiliares NUEVOS que no estaban antes — nunca personal sin tocar.
+ * `pilotoCambioReal`/`pilotoFinal`/`auxiliaresCambioReal`/
+ * `auxiliaresFinal`/`antesAuxiliaresIds` ya se calculan en el propio
+ * PATCH para otros fines (bloqueo de remoción, revalidación de
+ * disponibilidad) — se reutilizan tal cual, sin ninguna consulta nueva.
+ */
+export function personalRecienAsignadoDelPlan(input: {
+  pilotoCambioReal: boolean;
+  pilotoFinal: number | null;
+  auxiliaresCambioReal: boolean;
+  auxiliaresFinal: number[];
+  antesAuxiliaresIds: number[];
+}): number[] {
+  const ids: number[] = [];
+  if (input.pilotoCambioReal && input.pilotoFinal != null) {
+    ids.push(input.pilotoFinal);
+  }
+  if (input.auxiliaresCambioReal) {
+    const antesSet = new Set(input.antesAuxiliaresIds);
+    for (const id of input.auxiliaresFinal) {
+      if (!antesSet.has(id)) ids.push(id);
+    }
+  }
+  return ids;
+}
+
 export type ResultadoActualizarMonto =
   | { ok: true }
   | { ok: false; error: string };
@@ -347,43 +438,379 @@ export async function actualizarMontoViatico(
 // dupliquen ni pisen una transición ya hecha por otra.
 // ---------------------------------------------------------------------------
 
-export type EstadoViatico = "PROGRAMADO" | "AUTORIZADO" | "ENTREGADO" | "LIQUIDADO";
+/**
+ * VIATICOS-RECHAZADO-1 — RECHAZADO es una transición alternativa a
+ * AUTORIZADO, únicamente desde PROGRAMADO, y es TERMINAL para ESE par
+ * (plan_id, personal_id): no existe RECHAZADO -> PROGRAMADO, y tampoco
+ * se crea una segunda fila para el mismo plan+persona — la tabla tiene
+ * `UNIQUE KEY uq_viatico_plan_personal (plan_id, personal_id)` (ver
+ * sql/migrate-2026-08-viat-0-viaticos.sql), y sincronizarViaticosPlan()
+ * además SALTA por completo cualquier persona cuya fila ya exista y no
+ * esté en PROGRAMADO (doble protección: esquema + código) — el rechazo
+ * queda histórico e intacto para ese viaje.
+ *
+ * "Volver a solicitar el viático" únicamente es posible para un
+ * `plan_id` (viaje) DISTINTO — ahí no hay conflicto de UNIQUE y
+ * sincronizarViaticosPlan() sí crea una fila PROGRAMADO nueva sin
+ * problema, porque busca filas existentes con `WHERE plan_id = ?` (el
+ * nuevo plan nunca tiene una fila previa para esa persona). Reasignar a
+ * la MISMA persona en el MISMO plan que ya tiene un viático RECHAZADO
+ * NO genera ni actualiza ninguna fila — queda como mejora futura
+ * (PROGRAMACION-RECHAZADO-AVISO-1) mostrar una advertencia visible en
+ * ese caso en vez de que la sincronización lo ignore en silencio.
+ */
+export type EstadoViatico = "PROGRAMADO" | "AUTORIZADO" | "RECHAZADO" | "ENTREGADO" | "LIQUIDADO";
 export type MetodoPagoViatico = "EFECTIVO" | "TRANSFERENCIA" | "CHEQUE";
 
 export type ResultadoTransicionViatico =
   | { ok: true }
-  | { ok: false; error: string };
+  /** `status` opcional (VIATICOS-PAGO-SNAPSHOT-1): 404 no encontrado, 409 estado/concurrencia, 400 validación — el endpoint cae a 400 si no viene (compatibilidad con las validaciones de forma que no lo fijan). */
+  | { ok: false; error: string; status?: number };
+
+/**
+ * VIATICOS-FIRMA — identidad del firmante, común a autorizar y liquidar.
+ *
+ * CORRECCIÓN URGENTE (autorizar sin contraseña) — `password` es OPCIONAL
+ * a nivel de tipo porque autorizarViatico YA NO la usa: sesión autenticada
+ * + permiso `viaticos_autorizar:editar` (verificado por el endpoint) +
+ * firma manuscrita (imagen obligatoria) son prueba suficiente para esta
+ * firma interna simbólica. liquidarViatico SIGUE exigiéndola sin cambios
+ * — cuando se envía, NUNCA se guarda ni se registra en ningún lado: se
+ * verifica contra el hash real (verificarPasswordUsuarioActual) y se
+ * descarta.
+ */
+export type DatosFirmaViatico = {
+  usuarioId: number;
+  nombreFirmante: string;
+  rolFirmante: string;
+  password?: string;
+  /**
+   * VIATICOS-FIRMA-VISUAL — PNG de la firma manuscrita, YA validado
+   * (magic bytes + tamaño) por el endpoint antes de llegar aquí.
+   * OBLIGATORIO: los modales "Firmar y autorizar"/"Firmar liquidación" y
+   * también la bandeja masiva "Autorizar seleccionados" (todos con canvas
+   * — ver ViaticosControlPanel) exigen un trazo antes de poder confirmar,
+   * y el endpoint (autorizar/liquidar route.ts) rechaza con 400 si falta
+   * — nunca se llega aquí sin imagen.
+   */
+  imagen: { bytes: ArrayBuffer; original: string };
+  /**
+   * VIATICOS-FIRMA-VISUAL (hotfix PR #124) — true SOLO cuando la firma
+   * viene de la bandeja masiva "Autorizar seleccionados" (un único trazo
+   * dibujado una vez, aplicado a N autorizaciones — ver
+   * ViaticosControlPanel). Únicamente lo usa autorizarViatico (no existe
+   * bandeja masiva de liquidación); cuando es `true`, `firmaLote: true`
+   * queda dentro del payload_canonico firmado de ESA autorización, para
+   * que el hash/payload nunca pretenda que el usuario dibujó una firma
+   * distinta para cada viático del lote. Ausente/false en el flujo
+   * individual (no se agrega la clave al payload).
+   */
+  firmaLote?: boolean;
+  /**
+   * MI-FIRMA-1 — de dónde viene `imagen`: `'DIBUJADA'` (canvas) o
+   * `'GUARDADA'` (plantilla personal de "Mi firma", copiada a un archivo
+   * nuevo por el endpoint ANTES de llegar aquí — ver DatosFirmaInterna
+   * .origenFirma en src/lib/firmas/firmas-internas.ts). Solo trazabilidad
+   * dentro del payload firmado — nunca cambia el flujo de guardado ni la
+   * regla de "siempre una copia física independiente".
+   */
+  origenFirma?: "GUARDADA" | "DIBUJADA";
+  ip?: string | null;
+  userAgent?: string | null;
+};
+
+/**
+ * VIATICOS-FIRMA-VISUAL — guarda a disco la imagen de la firma DESPUÉS de
+ * verificar la contraseña y ANTES de abrir la transacción (guardarUpload
+ * no participa en la transacción MySQL). Devuelve tanto la referencia
+ * física (para armar el registro de la firma) como su SHA-256 (para el
+ * payload_canonico).
+ */
+async function guardarImagenFirma(
+  empresaId: number,
+  viaticoId: number,
+  accionPrefix: "autorizar" | "liquidar",
+  imagen: { bytes: ArrayBuffer; original: string },
+): Promise<{ relative: string; original: string; mime: string; size: number; sha256: string }> {
+  const guardada = await guardarUpload(
+    empresaId,
+    "firmas",
+    `firma_viatico_${accionPrefix}_${viaticoId}`,
+    {
+      name: imagen.original || "firma.png",
+      size: imagen.bytes.byteLength,
+      arrayBuffer: async () => imagen.bytes,
+    },
+  );
+  return {
+    relative: guardada.relative,
+    original: guardada.original,
+    mime: "image/png",
+    size: guardada.size,
+    sha256: sha256Hex(imagen.bytes),
+  };
+}
+
+/**
+ * VIATICOS-FIRMA-VISUAL (hotfix PR #124) — compensación CENTRALIZADA: se
+ * invoca UNA sola vez, desde el `finally` de autorizarViatico/
+ * liquidarViatico, cubriendo CUALQUIER salida sin commit — getConnection()
+ * falla, beginTransaction falla, un SELECT/UPDATE falla, crearFirmaInterna
+ * falla, la auditoría falla, commit falla, o cualquiera de los `return`
+ * explícitos de estado inválido — nunca solo "dentro de la transacción".
+ * borrarUpload ya es best-effort internamente (nunca lanza) — nunca oculta
+ * el error o el resultado de rechazo real de la operación.
+ */
+function compensarImagenFirma(imagenGuardada: { relative: string }): void {
+  borrarUpload(imagenGuardada.relative);
+}
+
+export type ResultadoTransicionConFirma =
+  | { ok: true; firma: ResultadoFirmaInterna }
+  | { ok: false; error: string; status: number };
 
 /**
  * PROGRAMADO -> AUTORIZADO. Quién puede: exclusivamente usuarios con el
  * permiso explícito `viaticos_autorizar:editar` (VIAT-2 — "OPERACIONES
  * AUTORIZA"; ver requireTenantViaticosAutorizar en src/lib/tenant.ts) —
  * NUNCA por ser supervisor del empleado, y separado del permiso de
- * pagar/entregar (`viaticos_pagar`). El permiso lo verifica el endpoint
- * antes de llamar aquí; esta función solo aplica la transición atómica.
+ * pagar/entregar (`viaticos_pagar`) y de liquidar (`viaticos_liquidar`).
+ * El permiso lo verifica el endpoint antes de llamar aquí.
+ *
+ * CORRECCIÓN URGENTE — AUTORIZAR ya NO reautentica con contraseña. Prueba
+ * de identidad suficiente para esta firma interna simbólica: sesión
+ * autenticada + permiso EXPLÍCITO `viaticos_autorizar:editar` (verificado
+ * por el endpoint ANTES de llamar aquí, nunca se debilita) + firma
+ * manuscrita dibujada (imagen PNG obligatoria, ya validada por el
+ * endpoint). Dentro de la MISMA transacción: bloquear el viático (FOR
+ * UPDATE), validar estado, aplicar la transición, insertar la firma
+ * (`metodo: 'FIRMA_MANUSCRITA'`) y registrar auditoría — commit conjunto
+ * o rollback conjunto (regla dura del ticket, nunca "acción hecha pero
+ * firma falló" ni viceversa). liquidarViatico SIGUE exigiendo contraseña,
+ * sin cambios — ver su propio JSDoc más abajo.
  */
 export async function autorizarViatico(
   empresaId: number,
   viaticoId: number,
   usuario: string,
-): Promise<ResultadoTransicionViatico> {
-  const r = await execute(
-    `UPDATE tms_viaticos
-     SET estado = 'AUTORIZADO', autorizado_por = ?, autorizado_en = NOW()
-     WHERE id = ? AND empresa_id = ? AND estado = 'PROGRAMADO'`,
-    [usuario, viaticoId, empresaId],
-  );
-  if (r.affectedRows !== 1) {
-    return await estadoActualComoError(empresaId, viaticoId, "autorizar");
+  firma: DatosFirmaViatico,
+): Promise<ResultadoTransicionConFirma> {
+  // VIATICOS-FIRMA-VISUAL — la imagen (ya validada por el endpoint) se
+  // guarda ANTES de abrir la transacción (guardarUpload no es
+  // transaccional). No hay contraseña que verificar antes de este paso —
+  // el permiso ya fue validado por el endpoint (requireTenantViaticosAutorizar).
+  const imagenGuardada = await guardarImagenFirma(empresaId, viaticoId, "autorizar", firma.imagen);
+
+  // VIATICOS-FIRMA-VISUAL (hotfix PR #124) — `conn` se declara FUERA del
+  // try para que el `finally` pueda liberar/hacer rollback aunque
+  // getPool().getConnection() (o beginTransaction) sea lo que falle —
+  // antes, un error ahí dejaba el PNG ya guardado en disco sin ninguna
+  // fila que lo referencie. `committed` es la única señal de "ya no hay
+  // nada que compensar" — el `finally` corre en TODA salida (return
+  // normal, return anticipado, o excepción), así que la compensación
+  // queda en un único lugar en vez de repetida en cada `return`.
+  let conn: PoolConnection | null = null;
+  let committed = false;
+  try {
+    conn = await getPool().getConnection();
+    await conn.beginTransaction();
+
+    const [rows] = await conn.query<RowDataPacket[]>(
+      `SELECT id, plan_id, personal_id, monto_asignado, estado
+       FROM tms_viaticos WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
+      [viaticoId, empresaId],
+    );
+    const v = rows[0];
+    if (!v) {
+      return { ok: false, error: "Viático no encontrado.", status: 404 };
+    }
+    if (String(v.estado) !== "PROGRAMADO") {
+      return {
+        ok: false,
+        error: `Este viático está ${String(v.estado)}; no se puede autorizar desde ese estado.`,
+        status: 409,
+      };
+    }
+
+    // Contexto de solo lectura para el payload firmado (viaje/beneficiario)
+    // — NO forma parte de lo que se bloquea/actualiza, no necesita FOR UPDATE.
+    const [ctxRows] = await conn.query<RowDataPacket[]>(
+      `SELECT pl.codigo AS plan_codigo, tp.nombre AS personal_nombre
+       FROM tms_planes_viaje pl, tms_personal tp
+       WHERE pl.id = ? AND tp.id = ?`,
+      [v.plan_id, v.personal_id],
+    );
+    const ctx = ctxRows[0];
+
+    const [upd] = await conn.execute<ResultSetHeader>(
+      `UPDATE tms_viaticos
+       SET estado = 'AUTORIZADO', autorizado_por = ?, autorizado_en = NOW()
+       WHERE id = ? AND empresa_id = ? AND estado = 'PROGRAMADO'`,
+      [usuario, viaticoId, empresaId],
+    );
+    if (upd.affectedRows !== 1) {
+      return { ok: false, error: "El viático cambió de estado durante la operación.", status: 409 };
+    }
+
+    const resultadoFirma = await crearFirmaInterna(conn, {
+      empresaId,
+      usuarioId: firma.usuarioId,
+      empleadoId: null,
+      nombreFirmante: firma.nombreFirmante,
+      rolFirmante: firma.rolFirmante,
+      accion: "AUTORIZAR_VIATICO",
+      modulo: "VIATICOS",
+      entidadTipo: "VIATICO",
+      entidadId: viaticoId,
+      valoresRelevantes: {
+        viaticoId,
+        planId: Number(v.plan_id),
+        planCodigo: ctx?.plan_codigo != null ? String(ctx.plan_codigo) : null,
+        beneficiario: ctx?.personal_nombre != null ? String(ctx.personal_nombre) : null,
+        montoAsignado: Number(v.monto_asignado),
+        // VIATICOS-FIRMA-VISUAL (hotfix PR #124) — solo presente cuando
+        // viene de "Autorizar seleccionados": deja explícito en el payload
+        // firmado que este trazo se reutilizó para todo el lote.
+        ...(firma.firmaLote ? { firmaLote: true } : {}),
+      },
+      imagen: imagenGuardada,
+      metodo: "FIRMA_MANUSCRITA",
+      origenFirma: firma.origenFirma,
+      ip: firma.ip,
+      userAgent: firma.userAgent,
+    });
+
+    await registrarAuditoriaTx(conn, {
+      empresaId,
+      usuario,
+      accion: "autorizar_viatico",
+      modulo: "tms",
+      detalle: `Viático #${viaticoId} · PROGRAMADO → AUTORIZADO · firma ${resultadoFirma.codigoFirma}`,
+    });
+
+    await conn.commit();
+    committed = true;
+    return { ok: true, firma: resultadoFirma };
+  } finally {
+    if (conn) {
+      if (!committed) {
+        try {
+          await conn.rollback();
+        } catch {
+          // best-effort — nunca oculta el error/rechazo real que ya se está propagando.
+        }
+      }
+      conn.release();
+    }
+    if (!committed) {
+      compensarImagenFirma(imagenGuardada);
+    }
   }
-  await registrarAuditoria({
-    empresaId,
-    usuario,
-    accion: "autorizar_viatico",
-    modulo: "tms",
-    detalle: `Viático #${viaticoId} · PROGRAMADO → AUTORIZADO`,
-  });
-  return { ok: true };
+}
+
+/** Longitud del motivo de rechazo — mismo criterio de tamaño que motivo_cambio/observaciones_* de esta misma tabla (VARCHAR(300)). */
+export const MOTIVO_RECHAZO_MIN = 10;
+export const MOTIVO_RECHAZO_MAX = 300;
+
+export type ResultadoRechazoViatico =
+  | { ok: true }
+  | { ok: false; error: string; status: number };
+
+/**
+ * VIATICOS-RECHAZADO-1 — PROGRAMADO -> RECHAZADO. Quién puede:
+ * EXACTAMENTE el mismo permiso que autorizar (`viaticos_autorizar:editar`,
+ * verificado por el endpoint ANTES de llamar aquí, requireTenantViaticosAutorizar)
+ * — nunca se amplía a Facturador/AuxiliarOperaciones. RECHAZADO es
+ * TERMINAL para ESE (plan_id, personal_id): solo alcanzable desde
+ * PROGRAMADO, nunca desde AUTORIZADO/ENTREGADO/LIQUIDADO, sin transición
+ * de regreso, y sin una segunda fila para el mismo plan+persona
+ * (`UNIQUE KEY uq_viatico_plan_personal`, ver EstadoViatico arriba para
+ * el detalle completo). "Solicitar de nuevo" solo es posible para un
+ * `plan_id` (viaje) DISTINTO — sincronizarViaticosPlan preserva la fila
+ * RECHAZADO intacta y sin tocarla para el plan original, sin cambios
+ * adicionales.
+ *
+ * Sin firma manuscrita ni contraseña (decisión de negocio aprobada,
+ * VIATICOS-RECHAZADO-1 sección 4/6): sesión autenticada + permiso
+ * EXPLÍCITO + motivo + fecha servidor + auditoría son prueba suficiente
+ * — nunca se llama crearFirmaInterna/guardarImagenFirma/SelectorFirma
+ * aquí, y `firmas_electronicas` queda completamente intacta (mismo
+ * criterio que registrarEntregaViatico, que tampoco firma).
+ *
+ * Mismo esqueleto transaccional exacto que autorizarViatico/
+ * liquidarViatico (conn/committed fuera del try, único finally con
+ * rollback condicional + release incondicional) — sin compensación de
+ * archivos (este flujo no maneja imágenes).
+ */
+export async function rechazarViatico(
+  empresaId: number,
+  viaticoId: number,
+  motivoRechazo: string,
+  usuario: string,
+): Promise<ResultadoRechazoViatico> {
+  const motivo = motivoRechazo.trim();
+  if (motivo.length < MOTIVO_RECHAZO_MIN) {
+    return { ok: false, error: `El motivo debe tener al menos ${MOTIVO_RECHAZO_MIN} caracteres.`, status: 400 };
+  }
+  if (motivo.length > MOTIVO_RECHAZO_MAX) {
+    return { ok: false, error: `El motivo no puede superar ${MOTIVO_RECHAZO_MAX} caracteres.`, status: 400 };
+  }
+
+  let conn: PoolConnection | null = null;
+  let committed = false;
+  try {
+    conn = await getPool().getConnection();
+    await conn.beginTransaction();
+
+    const [rows] = await conn.query<RowDataPacket[]>(
+      `SELECT id, estado FROM tms_viaticos WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
+      [viaticoId, empresaId],
+    );
+    const v = rows[0];
+    if (!v) {
+      return { ok: false, error: "Viático no encontrado.", status: 404 };
+    }
+    if (String(v.estado) !== "PROGRAMADO") {
+      return {
+        ok: false,
+        error: `Este viático está ${String(v.estado)}; no se puede rechazar desde ese estado.`,
+        status: 409,
+      };
+    }
+
+    const [upd] = await conn.execute<ResultSetHeader>(
+      `UPDATE tms_viaticos
+       SET estado = 'RECHAZADO', rechazado_por = ?, rechazado_en = NOW(), motivo_rechazo = ?
+       WHERE id = ? AND empresa_id = ? AND estado = 'PROGRAMADO'`,
+      [usuario, motivo, viaticoId, empresaId],
+    );
+    if (upd.affectedRows !== 1) {
+      return { ok: false, error: "El viático cambió de estado durante la operación.", status: 409 };
+    }
+
+    await registrarAuditoriaTx(conn, {
+      empresaId,
+      usuario,
+      accion: "rechazar_viatico",
+      modulo: "tms",
+      detalle: `Viático #${viaticoId} · PROGRAMADO → RECHAZADO · motivo: ${motivo}`,
+    });
+
+    await conn.commit();
+    committed = true;
+    return { ok: true };
+  } finally {
+    if (conn) {
+      if (!committed) {
+        try {
+          await conn.rollback();
+        } catch {
+          // best-effort — nunca oculta el error/rechazo real que ya se está propagando.
+        }
+      }
+      conn.release();
+    }
+  }
 }
 
 export type DatosEntregaViatico = {
@@ -392,6 +819,21 @@ export type DatosEntregaViatico = {
   observaciones: string | null;
 };
 
+/** Snapshot bancario derivado del método — VIATICOS-PAGO-SNAPSHOT-1: solo TRANSFERENCIA copia banco/cuenta_bancaria/tipo_cuenta de `empleados`; CHEQUE/EFECTIVO quedan siempre en null (nunca inventan un dato bancario que el método no usa). */
+function snapshotPagoDesdeFila(
+  metodoPago: MetodoPagoViatico,
+  fila: RowDataPacket,
+): { banco: string | null; cuentaBancaria: string | null; tipoCuenta: string | null } {
+  if (metodoPago !== "TRANSFERENCIA") {
+    return { banco: null, cuentaBancaria: null, tipoCuenta: null };
+  }
+  return {
+    banco: fila.banco != null ? String(fila.banco) : null,
+    cuentaBancaria: fila.cuenta_bancaria != null ? String(fila.cuenta_bancaria) : null,
+    tipoCuenta: fila.tipo_cuenta != null ? String(fila.tipo_cuenta) : null,
+  };
+}
+
 /**
  * AUTORIZADO -> ENTREGADO. Quién puede: exclusivamente usuarios con el
  * permiso explícito `viaticos_pagar:editar` (VIAT-2 — "FACTURADOR PAGA";
@@ -399,10 +841,26 @@ export type DatosEntregaViatico = {
  * `viaticos_autorizar`. Requiere método de pago; referencia obligatoria
  * para TRANSFERENCIA y CHEQUE (tienen un número de operación/cheque real
  * que registrar), opcional para EFECTIVO. No integra bancos ni APIs
- * externas — solo guarda el dato para trazabilidad. DatosEntregaViatico no
- * tiene campo de monto: quien entrega no puede tocar monto_sugerido ni
- * monto_asignado por este camino, y actualizarMontoViatico ya lo bloquea
- * de forma independiente fuera de PROGRAMADO.
+ * externas para el pago en sí — solo guarda el dato para trazabilidad.
+ * DatosEntregaViatico no tiene campo de monto: quien entrega no puede
+ * tocar monto_sugerido ni monto_asignado por este camino, y
+ * actualizarMontoViatico ya lo bloquea de forma independiente fuera de
+ * PROGRAMADO.
+ *
+ * VIATICOS-PAGO-SNAPSHOT-1 — REESTRUCTURADO de un `execute()` suelto a
+ * una transacción real (mismo esqueleto exacto que autorizarViatico/
+ * liquidarViatico/registrarEntregaViaticosMasiva: `conn`/`committed`
+ * fuera del try, único `finally` con rollback condicional + release
+ * incondicional) para poder leer el banco/cuenta_bancaria/tipo_cuenta
+ * ACTUAL del empleado dentro del MISMO `SELECT ... FOR UPDATE` que
+ * bloquea el viático, y congelarlo en `pago_banco`/`pago_cuenta_bancaria`/
+ * `pago_tipo_cuenta` en el mismo `UPDATE` que hace ENTREGADO — nunca en
+ * un paso separado, nunca desde una consulta posterior que ya podría ver
+ * una cuenta distinta. Solo TRANSFERENCIA congela algo (ver
+ * snapshotPagoDesdeFila) — CHEQUE/EFECTIVO guardan los 3 campos en NULL,
+ * igual que hoy no usan ningún dato bancario. Una vez escrito, estos 3
+ * campos NUNCA se vuelven a tocar (liquidarViatico no los toca, ver su
+ * propio JSDoc).
  */
 export async function registrarEntregaViatico(
   empresaId: number,
@@ -422,92 +880,458 @@ export async function registrarEntregaViatico(
           : "Indica la referencia/número de la transferencia.",
     };
   }
-  const r = await execute(
-    `UPDATE tms_viaticos
-     SET estado = 'ENTREGADO', entregado_por = ?, entregado_en = NOW(),
-         metodo_pago = ?, referencia_pago = ?, observaciones_entrega = ?
-     WHERE id = ? AND empresa_id = ? AND estado = 'AUTORIZADO'`,
-    [
-      usuario,
-      datos.metodoPago,
-      datos.referenciaPago?.trim() || null,
-      datos.observaciones?.trim() || null,
-      viaticoId,
+
+  let conn: PoolConnection | null = null;
+  let committed = false;
+  try {
+    conn = await getPool().getConnection();
+    await conn.beginTransaction();
+
+    const [rows] = await conn.query<RowDataPacket[]>(
+      `SELECT v.id, v.estado, v.monto_asignado, e.banco, e.cuenta_bancaria, e.tipo_cuenta
+       FROM tms_viaticos v
+       INNER JOIN tms_personal tp ON tp.id = v.personal_id AND tp.empresa_id = v.empresa_id
+       LEFT JOIN empleados e ON e.id = tp.id_empleado AND e.empresa_id = tp.empresa_id
+       WHERE v.id = ? AND v.empresa_id = ? LIMIT 1 FOR UPDATE`,
+      [viaticoId, empresaId],
+    );
+    const v = rows[0];
+    if (!v) {
+      return { ok: false, error: "Viático no encontrado.", status: 404 };
+    }
+    if (String(v.estado) !== "AUTORIZADO") {
+      return {
+        ok: false,
+        error: `Este viático está ${String(v.estado)}; no se puede registrar la entrega desde ese estado.`,
+        status: 409,
+      };
+    }
+    if (!(Number(v.monto_asignado) > 0)) {
+      return { ok: false, error: "El viático tiene un monto inválido.", status: 400 };
+    }
+    if (datos.metodoPago === "TRANSFERENCIA" && !String(v.cuenta_bancaria ?? "").trim()) {
+      return { ok: false, error: "El colaborador no tiene cuenta bancaria registrada.", status: 400 };
+    }
+
+    const snapshot = snapshotPagoDesdeFila(datos.metodoPago, v);
+
+    const [upd] = await conn.execute<ResultSetHeader>(
+      `UPDATE tms_viaticos
+       SET estado = 'ENTREGADO', entregado_por = ?, entregado_en = NOW(),
+           metodo_pago = ?, referencia_pago = ?, observaciones_entrega = ?,
+           pago_banco = ?, pago_cuenta_bancaria = ?, pago_tipo_cuenta = ?
+       WHERE id = ? AND empresa_id = ? AND estado = 'AUTORIZADO'`,
+      [
+        usuario,
+        datos.metodoPago,
+        datos.referenciaPago?.trim() || null,
+        datos.observaciones?.trim() || null,
+        snapshot.banco,
+        snapshot.cuentaBancaria,
+        snapshot.tipoCuenta,
+        viaticoId,
+        empresaId,
+      ],
+    );
+    if (upd.affectedRows !== 1) {
+      return { ok: false, error: "El viático cambió de estado durante la operación.", status: 409 };
+    }
+
+    await registrarAuditoriaTx(conn, {
       empresaId,
-    ],
-  );
-  if (r.affectedRows !== 1) {
-    return await estadoActualComoError(empresaId, viaticoId, "registrar la entrega de");
+      usuario,
+      accion: "entregar_viatico",
+      modulo: "tms",
+      detalle: `Viático #${viaticoId} · AUTORIZADO → ENTREGADO · ${datos.metodoPago}${
+        datos.referenciaPago?.trim() ? ` · ref. ${datos.referenciaPago.trim()}` : ""
+      }`,
+    });
+
+    await conn.commit();
+    committed = true;
+    return { ok: true };
+  } finally {
+    if (conn) {
+      if (!committed) {
+        try {
+          await conn.rollback();
+        } catch {
+          // best-effort — nunca oculta el error/rechazo real que ya se está propagando.
+        }
+      }
+      conn.release();
+    }
   }
-  await registrarAuditoria({
-    empresaId,
-    usuario,
-    accion: "entregar_viatico",
-    modulo: "tms",
-    detalle: `Viático #${viaticoId} · AUTORIZADO → ENTREGADO · ${datos.metodoPago}${
-      datos.referenciaPago?.trim() ? ` · ref. ${datos.referenciaPago.trim()}` : ""
-    }`,
-  });
-  return { ok: true };
 }
 
+// ---------------------------------------------------------------------------
+// VIATICOS-PAGO-MASIVO-1 — entrega/pago masiva (AUTORIZADO -> ENTREGADO de
+// varios viáticos en UNA sola operación backend, nunca N llamadas HTTP al
+// endpoint individual). Mismo permiso (`viaticos_pagar:editar`, sin
+// ampliarlo) y misma transición que registrarEntregaViatico — la única
+// diferencia es que el lote es TODO O NADA: si cualquier seleccionado no
+// califica, NINGUNO se procesa (rollback completo, nunca éxito parcial).
+// ---------------------------------------------------------------------------
+
+/** Límite razonable por lote — evita un UPDATE/SELECT desmedido y un bloqueo de filas prolongado. */
+export const LIMITE_LOTE_ENTREGA_MASIVA = 200;
+
+export type ItemEntregaMasiva = {
+  id: number;
+  /**
+   * TRANSFERENCIA: referencia/número de operación — puede ser la MISMA
+   * para todo el lote (representa el lote/operación bancaria, no se exige
+   * que sea distinta por persona — ver sección 4 del ticket). CHEQUE:
+   * número de cheque de ESTE viático, obligatorio y ÚNICO dentro del lote
+   * (cada persona recibe un cheque físico distinto — nunca se reutiliza
+   * una misma referencia para todo el lote, a diferencia de
+   * transferencia). EFECTIVO: `null` (no exige referencia, igual que el
+   * flujo individual).
+   */
+  referenciaPago: string | null;
+};
+
+export type DatosEntregaMasiva = {
+  metodoPago: MetodoPagoViatico;
+  items: ItemEntregaMasiva[];
+};
+
+export type ResultadoEntregaMasiva =
+  | { ok: true; procesados: number; total: number; metodoPago: MetodoPagoViatico }
+  | { ok: false; error: string; status: number; detalles?: string[] };
+
+/**
+ * Entrega/pago MASIVO — AUTORIZADO -> ENTREGADO de varios viáticos a la
+ * vez. Quién puede: exclusivamente `viaticos_pagar:editar` (idéntico al
+ * flujo individual, verificado por el endpoint ANTES de llamar aquí — este
+ * ticket NO amplía ningún permiso).
+ *
+ * ATOMICIDAD DEL LOTE (regla dura del ticket): BEGIN -> `SELECT ... FOR
+ * UPDATE` de TODOS los ids a la vez (bloquea las filas ANTES de validar,
+ * cerrando la ventana de concurrencia — ver sección 8/19 del ticket) ->
+ * se valida CADA condición de CADA item (pertenece a la empresa, está
+ * AUTORIZADO, monto > 0, cuenta bancaria si es TRANSFERENCIA, referencia
+ * obligatoria según método) ANTES de escribir un solo UPDATE -> si CUALQUIER
+ * item falla cualquier condición, se hace `return` sin haber ejecutado
+ * ningún UPDATE — el `finally` centralizado hace rollback (no hay nada que
+ * compensar en disco: este flujo no maneja imágenes/archivos, a diferencia
+ * de autorizarViatico/liquidarViatico) -> solo si TODOS pasan se ejecutan
+ * los N `UPDATE` + N `registrarAuditoriaTx` (uno por viático, misma
+ * transacción) -> UN solo `COMMIT` al final. Nunca éxito parcial: o se
+ * confirman los N, o no se confirma ninguno.
+ *
+ * Concurrencia (sección 8/19): el `FOR UPDATE` bloquea las filas desde el
+ * SELECT — si otro Facturador ya tiene una transacción en curso sobre
+ * alguno de estos ids, esta espera a que termine; si esa otra transacción
+ * ya confirmó (p. ej. ya lo entregó), el SELECT de ESTA transacción lee el
+ * estado YA ACTUALIZADO y la validación de "todos AUTORIZADO" lo detecta y
+ * rechaza el lote completo (409) — nunca hay doble entrega.
+ */
+export async function registrarEntregaViaticosMasiva(
+  empresaId: number,
+  datos: DatosEntregaMasiva,
+  usuario: string,
+): Promise<ResultadoEntregaMasiva> {
+  const ids = datos.items.map((i) => i.id);
+  if (!ids.length) {
+    return { ok: false, error: "Selecciona al menos un viático.", status: 400 };
+  }
+  if (new Set(ids).size !== ids.length) {
+    return { ok: false, error: "Hay viáticos repetidos en la selección.", status: 400 };
+  }
+  if (ids.length > LIMITE_LOTE_ENTREGA_MASIVA) {
+    return { ok: false, error: `El lote supera el límite de ${LIMITE_LOTE_ENTREGA_MASIVA} viáticos.`, status: 400 };
+  }
+
+  // Validaciones de FORMA del método (antes de tocar la conexión) — mismo
+  // criterio que registrarEntregaViatico: referencia obligatoria para
+  // TRANSFERENCIA/CHEQUE, opcional para EFECTIVO. CHEQUE además exige que
+  // cada referencia sea única dentro del lote (sección 5 del ticket).
+  if (datos.metodoPago === "TRANSFERENCIA" || datos.metodoPago === "CHEQUE") {
+    for (const it of datos.items) {
+      if (!it.referenciaPago?.trim()) {
+        return {
+          ok: false,
+          error:
+            datos.metodoPago === "CHEQUE"
+              ? `Falta el número de cheque para el viático #${it.id}.`
+              : "Indica la referencia/número de la transferencia.",
+          status: 400,
+        };
+      }
+    }
+  }
+  if (datos.metodoPago === "CHEQUE") {
+    const referencias = datos.items.map((i) => i.referenciaPago!.trim());
+    if (new Set(referencias).size !== referencias.length) {
+      return { ok: false, error: "Hay números de cheque repetidos dentro del lote.", status: 400 };
+    }
+  }
+
+  let conn: PoolConnection | null = null;
+  let committed = false;
+  try {
+    conn = await getPool().getConnection();
+    await conn.beginTransaction();
+
+    // VIATICOS-PAGO-SNAPSHOT-1 — e.banco/e.tipo_cuenta se agregan a este
+    // MISMO SELECT (e.cuenta_bancaria ya se traía para validar) — cero
+    // consultas adicionales, mismo bloqueo FOR UPDATE de siempre.
+    const placeholders = ids.map(() => "?").join(",");
+    const [rows] = await conn.query<RowDataPacket[]>(
+      `SELECT v.id, v.estado, v.monto_asignado, tp.nombre AS personal_nombre,
+              e.banco, e.cuenta_bancaria, e.tipo_cuenta
+       FROM tms_viaticos v
+       INNER JOIN tms_personal tp ON tp.id = v.personal_id AND tp.empresa_id = v.empresa_id
+       LEFT JOIN empleados e ON e.id = tp.id_empleado AND e.empresa_id = tp.empresa_id
+       WHERE v.empresa_id = ? AND v.id IN (${placeholders})
+       FOR UPDATE`,
+      [empresaId, ...ids],
+    );
+
+    const filaPorId = new Map(rows.map((r) => [Number(r.id), r]));
+    const problemas: string[] = [];
+    for (const it of datos.items) {
+      const fila = filaPorId.get(it.id);
+      if (!fila) {
+        problemas.push(`El viático #${it.id} no existe en esta empresa.`);
+        continue;
+      }
+      if (String(fila.estado) !== "AUTORIZADO") {
+        problemas.push(`El viático #${it.id} ya no está autorizado (estado actual: ${String(fila.estado)}).`);
+        continue;
+      }
+      if (!(Number(fila.monto_asignado) > 0)) {
+        problemas.push(`El viático #${it.id} tiene un monto inválido.`);
+        continue;
+      }
+      if (datos.metodoPago === "TRANSFERENCIA" && !String(fila.cuenta_bancaria ?? "").trim()) {
+        problemas.push(`${fila.personal_nombre ?? `Viático #${it.id}`} no tiene cuenta bancaria registrada.`);
+      }
+    }
+    if (problemas.length) {
+      return { ok: false, error: "Hay viáticos que no se pueden procesar en este lote.", status: 409, detalles: problemas };
+    }
+
+    for (const it of datos.items) {
+      // VIATICOS-PAGO-SNAPSHOT-1 — snapshot POR PERSONA: aunque
+      // TRANSFERENCIA comparta una sola referencia de lote, cada viático
+      // congela el banco/cuenta/tipo de cuenta de SU PROPIO beneficiario
+      // (nunca los de otro item del lote).
+      const snapshot = snapshotPagoDesdeFila(datos.metodoPago, filaPorId.get(it.id)!);
+      const [upd] = await conn.execute<ResultSetHeader>(
+        `UPDATE tms_viaticos
+         SET estado = 'ENTREGADO', entregado_por = ?, entregado_en = NOW(),
+             metodo_pago = ?, referencia_pago = ?,
+             pago_banco = ?, pago_cuenta_bancaria = ?, pago_tipo_cuenta = ?
+         WHERE id = ? AND empresa_id = ? AND estado = 'AUTORIZADO'`,
+        [
+          usuario, datos.metodoPago, it.referenciaPago,
+          snapshot.banco, snapshot.cuentaBancaria, snapshot.tipoCuenta,
+          it.id, empresaId,
+        ],
+      );
+      if (upd.affectedRows !== 1) {
+        return { ok: false, error: `El viático #${it.id} cambió de estado durante la operación.`, status: 409 };
+      }
+      await registrarAuditoriaTx(conn, {
+        empresaId,
+        usuario,
+        accion: "entregar_viatico",
+        modulo: "tms",
+        detalle: `Viático #${it.id} · AUTORIZADO → ENTREGADO (masivo) · ${datos.metodoPago}${
+          it.referenciaPago ? ` · ref. ${it.referenciaPago}` : ""
+        }`,
+      });
+    }
+
+    await conn.commit();
+    committed = true;
+    const total = datos.items.reduce((acc, it) => acc + Number(filaPorId.get(it.id)!.monto_asignado), 0);
+    return { ok: true, procesados: datos.items.length, total, metodoPago: datos.metodoPago };
+  } finally {
+    if (conn) {
+      if (!committed) {
+        try {
+          await conn.rollback();
+        } catch {
+          // best-effort — nunca oculta el error/rechazo real que ya se está propagando.
+        }
+      }
+      conn.release();
+    }
+  }
+}
+
+/**
+ * VIATICOS-FIRMA — liquidación estructurada (antes: solo observaciones
+ * libres). gastosComprobados/reintegro llegan como string decimal
+ * (mismo contrato que `dinero`/`centavos()` en src/lib/multas/reglas.ts —
+ * reutilizado tal cual, nunca aritmética en float JS para la decisión
+ * financiera de si se puede liquidar).
+ */
 export type DatosLiquidacionViatico = {
+  gastosComprobados: string;
+  reintegro: string;
   observaciones: string | null;
 };
 
 /**
- * ENTREGADO -> LIQUIDADO. Quién puede: usuarios con el permiso explícito
- * `viaticos:editar` (administración autorizada — VIAT-2 no le asignó un
- * permiso propio como a autorizar/pagar, es el único paso que queda bajo
- * el permiso general `viaticos`). En esta fase significa únicamente
- * "cerrado administrativamente" — NO implica devolución de sobrante ni
- * presentación de comprobantes (eso, si el negocio lo requiere, es una
- * ampliación posterior; el modelo queda preparado con
- * observaciones_liquidacion como texto libre para entonces).
+ * ENTREGADO -> LIQUIDADO. Quién puede: usuarios con el permiso EXPLÍCITO
+ * `viaticos_liquidar:editar` (Facturador lo trae por defecto) — YA NO el
+ * genérico `viaticos:editar` (VIATICOS-FIRMA lo reemplaza; ver reporte de
+ * entrega sobre usuarios con el permiso genérico antiguo).
+ *
+ * Regla crítica de conciliación: diferencia = monto_asignado -
+ * gastos_comprobados - reintegro, con aritmética EXACTA en centavos
+ * (centavos()/decimal() de multas/reglas.ts, nunca float). Solo se
+ * permite liquidar (y por tanto firmar) si diferencia === 0.00 exacto —
+ * > 0 significa "pendiente por comprobar o reintegrar" (rechaza, sigue
+ * ENTREGADO); < 0 significa que gastos+reintegro superan lo entregado
+ * (rechaza igual, sigue ENTREGADO) — ningún caso cambia el estado ni crea
+ * firma. VIATICOS-FIRMA: firma electrónica interna (contraseña actual,
+ * `metodo: 'PASSWORD'`) + transición + auditoría en la MISMA transacción,
+ * mismo patrón que autorizarViatico. CORRECCIÓN URGENTE (autorizar sin
+ * contraseña): esto es SOLO para autorizar — liquidarViatico SIGUE
+ * exigiendo contraseña sin cambios, `firma.password` sigue siendo
+ * obligatorio en la práctica aquí (el tipo lo dejó opcional para
+ * compartirse con autorizar, pero una contraseña vacía/ausente
+ * simplemente nunca verifica correctamente, ver abajo).
  */
 export async function liquidarViatico(
   empresaId: number,
   viaticoId: number,
   datos: DatosLiquidacionViatico,
   usuario: string,
-): Promise<ResultadoTransicionViatico> {
-  const r = await execute(
-    `UPDATE tms_viaticos
-     SET estado = 'LIQUIDADO', liquidado_por = ?, liquidado_en = NOW(),
-         observaciones_liquidacion = ?
-     WHERE id = ? AND empresa_id = ? AND estado = 'ENTREGADO'`,
-    [usuario, datos.observaciones?.trim() || null, viaticoId, empresaId],
-  );
-  if (r.affectedRows !== 1) {
-    return await estadoActualComoError(empresaId, viaticoId, "liquidar");
+  firma: DatosFirmaViatico,
+): Promise<ResultadoTransicionConFirma> {
+  let gastosCent: number;
+  let reintegroCent: number;
+  try {
+    gastosCent = centavos(datos.gastosComprobados || "0");
+    reintegroCent = centavos(datos.reintegro || "0");
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Monto inválido.", status: 400 };
   }
-  await registrarAuditoria({
-    empresaId,
-    usuario,
-    accion: "liquidar_viatico",
-    modulo: "tms",
-    detalle: `Viático #${viaticoId} · ENTREGADO → LIQUIDADO`,
-  });
-  return { ok: true };
-}
+  if (gastosCent < 0 || reintegroCent < 0) {
+    return { ok: false, error: "Los montos no pueden ser negativos.", status: 400 };
+  }
 
-/** Mensaje de error cuando una transición no aplicó — distingue "no existe" de "estado no permite". */
-async function estadoActualComoError(
-  empresaId: number,
-  viaticoId: number,
-  accionTexto: string,
-): Promise<{ ok: false; error: string }> {
-  const existe = await query<RowDataPacket[]>(
-    `SELECT estado FROM tms_viaticos WHERE id = ? AND empresa_id = ? LIMIT 1`,
-    [viaticoId, empresaId],
-  );
-  if (!existe[0]) {
-    return { ok: false, error: "Viático no encontrado." };
+  const passwordOk = await verificarPasswordUsuarioActual(firma.usuarioId, firma.password ?? "");
+  if (!passwordOk) {
+    return { ok: false, error: "Contraseña incorrecta.", status: 401 };
   }
-  return {
-    ok: false,
-    error: `Este viático está ${String(existe[0].estado)}; no se puede ${accionTexto} desde ese estado.`,
-  };
+
+  // VIATICOS-FIRMA-VISUAL — SOLO después de verificar la contraseña, y
+  // ANTES de abrir la transacción (guardarUpload no es transaccional).
+  const imagenGuardada = await guardarImagenFirma(empresaId, viaticoId, "liquidar", firma.imagen);
+
+  // VIATICOS-FIRMA-VISUAL (hotfix PR #124) — misma estrategia centralizada
+  // que autorizarViatico: `conn` fuera del try, `committed` como única
+  // señal de "ya no hay nada que compensar", compensación (y rollback) en
+  // UN solo `finally` que cubre cualquier salida sin commit — incluyendo
+  // que getPool().getConnection() falle antes de siquiera existir `conn`.
+  let conn: PoolConnection | null = null;
+  let committed = false;
+  try {
+    conn = await getPool().getConnection();
+    await conn.beginTransaction();
+
+    const [rows] = await conn.query<RowDataPacket[]>(
+      `SELECT id, monto_asignado, estado FROM tms_viaticos WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
+      [viaticoId, empresaId],
+    );
+    const v = rows[0];
+    if (!v) {
+      return { ok: false, error: "Viático no encontrado.", status: 404 };
+    }
+    if (String(v.estado) !== "ENTREGADO") {
+      return {
+        ok: false,
+        error: `Este viático está ${String(v.estado)}; no se puede liquidar desde ese estado.`,
+        status: 409,
+      };
+    }
+
+    const montoEntregadoCent = centavos(String(v.monto_asignado));
+    const diferenciaCent = montoEntregadoCent - gastosCent - reintegroCent;
+    if (diferenciaCent > 0) {
+      return {
+        ok: false,
+        error: `Pendiente por comprobar o reintegrar: Q${decimal(diferenciaCent)}`,
+        status: 409,
+      };
+    }
+    if (diferenciaCent < 0) {
+      return {
+        ok: false,
+        error: "Los gastos y reintegros superan el monto entregado. Revisa la liquidación.",
+        status: 409,
+      };
+    }
+
+    const [upd] = await conn.execute<ResultSetHeader>(
+      `UPDATE tms_viaticos
+       SET estado = 'LIQUIDADO', liquidado_por = ?, liquidado_en = NOW(),
+           gastos_comprobados = ?, reintegro = ?, observaciones_liquidacion = ?
+       WHERE id = ? AND empresa_id = ? AND estado = 'ENTREGADO'`,
+      [usuario, decimal(gastosCent), decimal(reintegroCent), datos.observaciones?.trim() || null, viaticoId, empresaId],
+    );
+    if (upd.affectedRows !== 1) {
+      return { ok: false, error: "El viático cambió de estado durante la operación.", status: 409 };
+    }
+
+    const resultadoFirma = await crearFirmaInterna(conn, {
+      empresaId,
+      usuarioId: firma.usuarioId,
+      empleadoId: null,
+      nombreFirmante: firma.nombreFirmante,
+      rolFirmante: firma.rolFirmante,
+      accion: "LIQUIDAR_VIATICO",
+      modulo: "VIATICOS",
+      entidadTipo: "VIATICO",
+      entidadId: viaticoId,
+      valoresRelevantes: {
+        viaticoId,
+        montoEntregado: decimal(montoEntregadoCent),
+        gastosComprobados: decimal(gastosCent),
+        reintegro: decimal(reintegroCent),
+        diferencia: decimal(diferenciaCent),
+        observaciones: datos.observaciones?.trim() || null,
+      },
+      imagen: imagenGuardada,
+      metodo: "PASSWORD",
+      origenFirma: firma.origenFirma,
+      ip: firma.ip,
+      userAgent: firma.userAgent,
+    });
+
+    await registrarAuditoriaTx(conn, {
+      empresaId,
+      usuario,
+      accion: "liquidar_viatico",
+      modulo: "tms",
+      detalle: `Viático #${viaticoId} · ENTREGADO → LIQUIDADO · gastos Q${decimal(gastosCent)} · reintegro Q${decimal(reintegroCent)} · firma ${resultadoFirma.codigoFirma}`,
+    });
+
+    await conn.commit();
+    committed = true;
+    return { ok: true, firma: resultadoFirma };
+  } finally {
+    if (conn) {
+      if (!committed) {
+        try {
+          await conn.rollback();
+        } catch {
+          // best-effort — nunca oculta el error/rechazo real que ya se está propagando.
+        }
+      }
+      conn.release();
+    }
+    if (!committed) {
+      compensarImagenFirma(imagenGuardada);
+    }
+  }
 }
 
 export type ViaticoDetalle = {
@@ -538,9 +1362,30 @@ export type ViaticoDetalle = {
   liquidadoPor: string | null;
   liquidadoEn: string | null;
   observacionesLiquidacion: string | null;
+  // VIATICOS-FIRMA — liquidación estructurada.
+  gastosComprobados: number | null;
+  reintegro: number | null;
+  /** Derivada, nunca persistida: montoAsignado - gastosComprobados - reintegro. null mientras no está LIQUIDADO. */
+  diferencia: number | null;
+  // VIATICOS-RECHAZADO-1 — null mientras el viático no está RECHAZADO.
+  rechazadoPor: string | null;
+  rechazadoEn: string | null;
+  motivoRechazo: string | null;
 };
 
 function mapDetalle(r: RowDataPacket): ViaticoDetalle {
+  const gastosComprobados = r.gastos_comprobados != null ? Number(r.gastos_comprobados) : null;
+  const reintegro = r.reintegro != null ? Number(r.reintegro) : null;
+  // Diferencia mostrada: misma aritmética EXACTA en centavos que la
+  // decisión de liquidarViatico() (nunca resta directa de floats), aunque
+  // aquí sea solo lectura — un viático LIQUIDADO siempre debería dar 0.00
+  // exacto por construcción, esto evita cualquier artefacto de float al
+  // formatear.
+  const diferencia = gastosComprobados != null && reintegro != null
+    ? Number(decimal(
+        centavos(String(r.monto_asignado ?? 0)) - centavos(String(r.gastos_comprobados)) - centavos(String(r.reintegro)),
+      ))
+    : null;
   return {
     id: Number(r.id),
     planId: Number(r.plan_id),
@@ -571,6 +1416,12 @@ function mapDetalle(r: RowDataPacket): ViaticoDetalle {
     liquidadoEn: r.liquidado_en != null ? String(r.liquidado_en) : null,
     observacionesLiquidacion:
       r.observaciones_liquidacion != null ? String(r.observaciones_liquidacion) : null,
+    gastosComprobados,
+    reintegro,
+    diferencia,
+    rechazadoPor: r.rechazado_por != null ? String(r.rechazado_por) : null,
+    rechazadoEn: r.rechazado_en != null ? String(r.rechazado_en) : null,
+    motivoRechazo: r.motivo_rechazo != null ? String(r.motivo_rechazo) : null,
   };
 }
 
@@ -580,6 +1431,8 @@ const DETALLE_SELECT = `
          v.autorizado_por, v.autorizado_en, v.entregado_por, v.entregado_en,
          v.referencia_pago, v.observaciones_entrega,
          v.liquidado_por, v.liquidado_en, v.observaciones_liquidacion,
+         v.gastos_comprobados, v.reintegro,
+         v.rechazado_por, v.rechazado_en, v.motivo_rechazo,
          pl.codigo AS plan_codigo, pl.fecha_plan,
          c.nombre AS cliente, u.placa AS unidad_placa,
          tp.nombre AS personal_nombre,
@@ -615,6 +1468,7 @@ export type FiltrosControlViaticos = {
 export type ResumenControlViaticos = {
   pendientes: number;
   autorizados: number;
+  rechazados: number;
   entregados: number;
   liquidados: number;
 };
@@ -681,6 +1535,7 @@ export async function listarViaticosControl(
   const resumen: ResumenControlViaticos = {
     pendientes: 0,
     autorizados: 0,
+    rechazados: 0,
     entregados: 0,
     liquidados: 0,
   };
@@ -692,6 +1547,9 @@ export async function listarViaticosControl(
         break;
       case "AUTORIZADO":
         resumen.autorizados = total;
+        break;
+      case "RECHAZADO":
+        resumen.rechazados = total;
         break;
       case "ENTREGADO":
         resumen.entregados = total;
@@ -801,9 +1659,28 @@ export type ViaticoPorPagar = {
   estado: EstadoViatico;
   metodoPago: string | null;
   referenciaPago: string | null;
+  /** Cuenta VIVA de la ficha del empleado — puede haber cambiado desde que se pagó. Nunca usar esto para mostrar "qué cuenta se usó" en un viático ya ENTREGADO/LIQUIDADO: usar los campos *Mostrar de abajo. */
   banco: string | null;
   tipoCuenta: string | null;
   cuentaBancaria: string | null;
+  // VIATICOS-PAGO-SNAPSHOT-1 — snapshot congelado en tms_viaticos al
+  // pasar AUTORIZADO -> ENTREGADO por TRANSFERENCIA (null para CHEQUE/
+  // EFECTIVO y para pagos anteriores a esta funcionalidad).
+  pagoBanco: string | null;
+  pagoCuentaBancaria: string | null;
+  pagoTipoCuenta: string | null;
+  /**
+   * Campos DERIVADOS (ver derivarCuentaMostrable) — lo que la UI/Excel
+   * deben mostrar: cuenta viva mientras AUTORIZADO (o para CHEQUE/
+   * EFECTIVO en cualquier estado), snapshot para ENTREGADO/LIQUIDADO por
+   * TRANSFERENCIA. Nunca null como fallback silencioso a la cuenta viva
+   * — ver `cuentaHistoricaNoDisponible`.
+   */
+  bancoMostrar: string | null;
+  cuentaBancariaMostrar: string | null;
+  tipoCuentaMostrar: string | null;
+  /** true SOLO cuando el viático ya se pagó por TRANSFERENCIA pero es anterior a esta funcionalidad (snapshot NULL) — la UI debe mostrar "no disponible", NUNCA la cuenta viva como sustituto. */
+  cuentaHistoricaNoDisponible: boolean;
 };
 
 export type FiltrosViaticosPorPagar = {
@@ -814,7 +1691,59 @@ export type FiltrosViaticosPorPagar = {
   estado?: EstadoViatico;
 };
 
+/**
+ * VIATICOS-PAGO-SNAPSHOT-1 — regla CENTRALIZADA y testeable de qué
+ * cuenta mostrar: mientras el viático sigue AUTORIZADO (o para CHEQUE/
+ * EFECTIVO en cualquier estado, que nunca usan snapshot), se muestra la
+ * cuenta VIVA de la ficha del empleado, igual que siempre. Una vez
+ * ENTREGADO/LIQUIDADO por TRANSFERENCIA, se muestra el snapshot
+ * congelado — NUNCA la cuenta viva (podría ya no ser la que se usó). Si
+ * el snapshot es null (pago anterior a esta funcionalidad), NUNCA cae a
+ * la cuenta viva como sustituto: se marca `cuentaHistoricaNoDisponible`
+ * y los 3 campos *Mostrar quedan en null.
+ */
+export function derivarCuentaMostrable(input: {
+  estado: string;
+  metodoPago: string | null;
+  banco: string | null;
+  cuentaBancaria: string | null;
+  tipoCuenta: string | null;
+  pagoBanco: string | null;
+  pagoCuentaBancaria: string | null;
+  pagoTipoCuenta: string | null;
+}): { bancoMostrar: string | null; cuentaBancariaMostrar: string | null; tipoCuentaMostrar: string | null; cuentaHistoricaNoDisponible: boolean } {
+  const yaPagado = input.estado === "ENTREGADO" || input.estado === "LIQUIDADO";
+  if (yaPagado && input.metodoPago === "TRANSFERENCIA") {
+    if (input.pagoCuentaBancaria != null) {
+      return {
+        bancoMostrar: input.pagoBanco,
+        cuentaBancariaMostrar: input.pagoCuentaBancaria,
+        tipoCuentaMostrar: input.pagoTipoCuenta,
+        cuentaHistoricaNoDisponible: false,
+      };
+    }
+    return { bancoMostrar: null, cuentaBancariaMostrar: null, tipoCuentaMostrar: null, cuentaHistoricaNoDisponible: true };
+  }
+  return {
+    bancoMostrar: input.banco,
+    cuentaBancariaMostrar: input.cuentaBancaria,
+    tipoCuentaMostrar: input.tipoCuenta,
+    cuentaHistoricaNoDisponible: false,
+  };
+}
+
 function mapPorPagar(r: RowDataPacket): ViaticoPorPagar {
+  const estado = String(r.estado ?? "PROGRAMADO") as EstadoViatico;
+  const metodoPago = r.metodo_pago != null ? String(r.metodo_pago) : null;
+  const banco = r.banco != null ? String(r.banco) : null;
+  const tipoCuenta = r.tipo_cuenta != null ? String(r.tipo_cuenta) : null;
+  const cuentaBancaria = r.cuenta_bancaria != null ? String(r.cuenta_bancaria) : null;
+  const pagoBanco = r.pago_banco != null ? String(r.pago_banco) : null;
+  const pagoCuentaBancaria = r.pago_cuenta_bancaria != null ? String(r.pago_cuenta_bancaria) : null;
+  const pagoTipoCuenta = r.pago_tipo_cuenta != null ? String(r.pago_tipo_cuenta) : null;
+  const mostrable = derivarCuentaMostrable({
+    estado, metodoPago, banco, cuentaBancaria, tipoCuenta, pagoBanco, pagoCuentaBancaria, pagoTipoCuenta,
+  });
   return {
     id: Number(r.id),
     planId: Number(r.plan_id),
@@ -824,12 +1753,16 @@ function mapPorPagar(r: RowDataPacket): ViaticoPorPagar {
     personalNombre: String(r.personal_nombre ?? ""),
     rol: String(r.rol),
     montoAsignado: Number(r.monto_asignado ?? 0),
-    estado: String(r.estado ?? "PROGRAMADO") as EstadoViatico,
-    metodoPago: r.metodo_pago != null ? String(r.metodo_pago) : null,
+    estado,
+    metodoPago,
     referenciaPago: r.referencia_pago != null ? String(r.referencia_pago) : null,
-    banco: r.banco != null ? String(r.banco) : null,
-    tipoCuenta: r.tipo_cuenta != null ? String(r.tipo_cuenta) : null,
-    cuentaBancaria: r.cuenta_bancaria != null ? String(r.cuenta_bancaria) : null,
+    banco,
+    tipoCuenta,
+    cuentaBancaria,
+    pagoBanco,
+    pagoCuentaBancaria,
+    pagoTipoCuenta,
+    ...mostrable,
   };
 }
 
@@ -845,7 +1778,14 @@ export async function listarViaticosPorPagar(
   empresaId: number,
   filtros: FiltrosViaticosPorPagar = {},
 ): Promise<ViaticoPorPagar[]> {
-  const condiciones: string[] = ["v.empresa_id = ?"];
+  // VIATICOS-RECHAZADO-1 (sección 12, "no confiar únicamente en UI") —
+  // RECHAZADO NUNCA debe aparecer en la bandeja del Facturador, ni
+  // siquiera con el filtro "Todos" (filtros.estado ausente). Exclusión
+  // INCONDICIONAL, no depende de `filtros.estado`: aunque alguien pasara
+  // `estado: "RECHAZADO"` explícitamente, la condición de abajo lo
+  // combina con AND y el resultado sigue siendo vacío — nunca se
+  // devuelve, nunca es seleccionable ni exportable.
+  const condiciones: string[] = ["v.empresa_id = ?", "v.estado != 'RECHAZADO'"];
   const params: SqlParams = [empresaId];
 
   if (filtros.planId != null) {
@@ -871,7 +1811,7 @@ export async function listarViaticosPorPagar(
 
   const rows = await query<RowDataPacket[]>(
     `SELECT v.id, v.plan_id, v.monto_asignado, v.estado, v.metodo_pago, v.referencia_pago,
-            v.rol,
+            v.rol, v.pago_banco, v.pago_cuenta_bancaria, v.pago_tipo_cuenta,
             pl.codigo AS plan_codigo, pl.fecha_plan,
             COALESCE(e.codigo, tp.codigo) AS personal_codigo,
             tp.nombre AS personal_nombre,

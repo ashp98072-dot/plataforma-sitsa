@@ -1,43 +1,30 @@
 import { NextResponse } from "next/server";
-import { z } from "zod";
-import type { RowDataPacket } from "mysql2";
-import { execute, query } from "@/lib/db";
 import { requireTenantModulo } from "@/lib/tenant";
+import { crearRegistro, errorRegistro } from "@/lib/contabilidad/registros";
+
+import { ambitoDesdeRequest, consultarLibro, errorAmbito } from "@/lib/contabilidad/ambito";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
-export async function GET(_req: Request, ctx: Ctx) {
+export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenantModulo(slug, "contabilidad");
   if (guard.error) return guard.error;
-  const rows = await query<RowDataPacket[]>(
-    `SELECT id, codigo, nombre, tipo, nivel, activa FROM cont_cuentas
-     WHERE empresa_id = ? ORDER BY codigo`,
-    [guard.empresa.id],
-  );
-  return NextResponse.json({ cuentas: rows });
+  try {
+    const rows = await consultarLibro("cuentas", guard.empresa.id, ambitoDesdeRequest(req, guard.session));
+    return NextResponse.json({ cuentas: rows }, { headers: { "Cache-Control": "private, no-store" } });
+  } catch (error) {
+    return errorAmbito(error) ?? NextResponse.json({ error: "No se pudo consultar el libro." }, { status: 500 });
+  }
 }
-
-const schema = z.object({
-  codigo: z.string().min(1),
-  nombre: z.string().min(1),
-  tipo: z.enum(["Activo", "Pasivo", "Capital", "Ingreso", "Gasto"]),
-  nivel: z.number().int().default(1),
-});
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenantModulo(slug, "contabilidad", true);
   if (guard.error) return guard.error;
-  const parsed = schema.safeParse(await req.json());
-  if (!parsed.success) {
-    return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
-  }
-  const d = parsed.data;
-  const result = await execute(
-    `INSERT INTO cont_cuentas (empresa_id, codigo, nombre, tipo, nivel)
-     VALUES (?, ?, ?, ?, ?)`,
-    [guard.empresa.id, d.codigo, d.nombre, d.tipo, d.nivel],
-  );
-  return NextResponse.json({ id: result.insertId, mensaje: "Cuenta creada." });
+  const body = await req.json().catch(() => null);
+  try {
+    const id = await crearRegistro("cuentas", guard.empresa.id, guard.session.username, body, ambitoDesdeRequest(req, guard.session));
+    return NextResponse.json({ id, mensaje: "Cuenta creada." });
+  } catch (error) { return errorRegistro(error); }
 }

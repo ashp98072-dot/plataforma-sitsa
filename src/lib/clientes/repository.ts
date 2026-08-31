@@ -7,6 +7,7 @@ import {
   type ClienteTipo,
 } from "@/lib/clientes/tipos";
 import { asegurarSchemaClientes } from "@/lib/clientes/schema";
+import { codigoAutomaticoCliente } from "@/lib/clientes/codigo";
 
 function mapRow(r: RowDataPacket): Cliente {
   return {
@@ -16,6 +17,7 @@ function mapRow(r: RowDataPacket): Cliente {
     nombre: String(r.nombre),
     razonSocial: r.razon_social != null ? String(r.razon_social) : null,
     nit: r.nit != null ? String(r.nit) : null,
+    rtu: r.rtu != null ? String(r.rtu) : null,
     telefono: r.telefono != null ? String(r.telefono) : null,
     email: r.email != null ? String(r.email) : null,
     direccion: r.direccion != null ? String(r.direccion) : null,
@@ -33,7 +35,7 @@ function mapRow(r: RowDataPacket): Cliente {
   };
 }
 
-const SELECT = `SELECT id, empresa_id, codigo, nombre, razon_social, nit, telefono,
+const SELECT = `SELECT id, empresa_id, codigo, nombre, razon_social, nit, rtu, telefono,
   email, direccion, contacto_nombre, contacto_telefono, tipo, estado, notas,
   tms_cliente_id, creado_at, actualizado_at FROM clientes`;
 
@@ -51,8 +53,8 @@ export async function listarClientes(
   if (opts?.q?.trim()) {
     const q = `%${opts.q.trim()}%`;
     sql +=
-      " AND (nombre LIKE ? OR nit LIKE ? OR codigo LIKE ? OR razon_social LIKE ?)";
-    params.push(q, q, q, q);
+      " AND (nombre LIKE ? OR nit LIKE ? OR rtu LIKE ? OR codigo LIKE ? OR razon_social LIKE ?)";
+    params.push(q, q, q, q, q);
   }
   sql += " ORDER BY nombre";
   const rows = await query<RowDataPacket[]>(sql, params);
@@ -119,17 +121,19 @@ export async function crearCliente(
 ): Promise<Cliente> {
   await asegurarSchemaClientes();
   const tmsId = await syncTmsCliente(empresaId, input, null);
+  const codigoSolicitado = input.codigo?.trim() || null;
   const r = await execute(
     `INSERT INTO clientes (
-       empresa_id, codigo, nombre, razon_social, nit, telefono, email,
+       empresa_id, codigo, nombre, razon_social, nit, rtu, telefono, email,
        direccion, contacto_nombre, contacto_telefono, tipo, estado, notas, tms_cliente_id
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       empresaId,
-      input.codigo ?? null,
+      codigoSolicitado,
       input.nombre,
       input.razonSocial ?? null,
       input.nit ?? null,
+      input.rtu ?? null,
       input.telefono ?? null,
       input.email ?? null,
       input.direccion ?? null,
@@ -141,7 +145,14 @@ export async function crearCliente(
       tmsId,
     ],
   );
-  const created = await obtenerCliente(empresaId, Number(r.insertId));
+  const id = Number(r.insertId);
+  if (!codigoSolicitado) {
+    await execute(
+      "UPDATE clientes SET codigo = ? WHERE id = ? AND empresa_id = ? AND codigo IS NULL",
+      [codigoAutomaticoCliente(id), id, empresaId],
+    );
+  }
+  const created = await obtenerCliente(empresaId, id);
   if (!created) throw new Error("No se pudo crear el cliente.");
   return created;
 }
@@ -155,17 +166,19 @@ export async function actualizarCliente(
   const actual = await obtenerCliente(empresaId, id);
   if (!actual) return null;
   const tmsId = await syncTmsCliente(empresaId, input, actual.tmsClienteId);
+  const codigo = input.codigo?.trim() || actual.codigo || codigoAutomaticoCliente(id);
   await execute(
     `UPDATE clientes SET
-       codigo = ?, nombre = ?, razon_social = ?, nit = ?, telefono = ?, email = ?,
+       codigo = ?, nombre = ?, razon_social = ?, nit = ?, rtu = ?, telefono = ?, email = ?,
        direccion = ?, contacto_nombre = ?, contacto_telefono = ?, tipo = ?,
        estado = ?, notas = ?, tms_cliente_id = ?
      WHERE id = ? AND empresa_id = ?`,
     [
-      input.codigo ?? null,
+      codigo,
       input.nombre,
       input.razonSocial ?? null,
       input.nit ?? null,
+      input.rtu ?? null,
       input.telefono ?? null,
       input.email ?? null,
       input.direccion ?? null,
@@ -180,71 +193,6 @@ export async function actualizarCliente(
     ],
   );
   return obtenerCliente(empresaId, id);
-}
-
-/** Trae clientes históricos de TMS al catálogo compartido (idempotente). */
-export async function importarClientesDesdeTms(
-  empresaId: number,
-): Promise<{ importados: number; existentes: number }> {
-  await asegurarSchemaClientes();
-  let importados = 0;
-  let existentes = 0;
-  const rows = await query<RowDataPacket[]>(
-    `SELECT id, nombre, nit, telefono, direccion, estado
-     FROM tms_clientes WHERE empresa_id = ? ORDER BY id`,
-    [empresaId],
-  );
-  for (const r of rows) {
-    const tmsId = Number(r.id);
-    const hit = await query<RowDataPacket[]>(
-      `SELECT id FROM clientes WHERE empresa_id = ? AND tms_cliente_id = ? LIMIT 1`,
-      [empresaId, tmsId],
-    );
-    if (hit[0]) {
-      existentes += 1;
-      continue;
-    }
-    const porNombre = await query<RowDataPacket[]>(
-      `SELECT id, tms_cliente_id FROM clientes
-       WHERE empresa_id = ? AND nombre = ? LIMIT 1`,
-      [empresaId, String(r.nombre)],
-    );
-    if (porNombre[0]) {
-      if (porNombre[0].tms_cliente_id == null) {
-        await execute(
-          `UPDATE clientes SET tms_cliente_id = ?, nit = COALESCE(nit, ?),
-             telefono = COALESCE(telefono, ?), direccion = COALESCE(direccion, ?)
-           WHERE id = ? AND empresa_id = ?`,
-          [
-            tmsId,
-            r.nit != null ? String(r.nit) : null,
-            r.telefono != null ? String(r.telefono) : null,
-            r.direccion != null ? String(r.direccion) : null,
-            Number(porNombre[0].id),
-            empresaId,
-          ],
-        );
-      }
-      existentes += 1;
-      continue;
-    }
-    await execute(
-      `INSERT INTO clientes (
-         empresa_id, nombre, nit, telefono, direccion, tipo, estado, tms_cliente_id
-       ) VALUES (?, ?, ?, ?, ?, 'transporte', ?, ?)`,
-      [
-        empresaId,
-        String(r.nombre),
-        r.nit != null ? String(r.nit) : null,
-        r.telefono != null ? String(r.telefono) : null,
-        r.direccion != null ? String(r.direccion) : null,
-        r.estado != null ? String(r.estado) : "Activo",
-        tmsId,
-      ],
-    );
-    importados += 1;
-  }
-  return { importados, existentes };
 }
 
 const vinculosReady = new Set<number>();
@@ -311,8 +259,13 @@ export async function crearClienteDesdeTms(
       tmsClienteId,
     ],
   );
+  const clienteId = Number(c.insertId);
+  await execute(
+    "UPDATE clientes SET codigo = ? WHERE id = ? AND empresa_id = ? AND codigo IS NULL",
+    [codigoAutomaticoCliente(clienteId), clienteId, empresaId],
+  );
   return {
     tmsClienteId,
-    clienteId: Number(c.insertId),
+    clienteId,
   };
 }
