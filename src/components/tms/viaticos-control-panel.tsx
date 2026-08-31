@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { TEXTO_FIRMA_INTERNA } from "@/lib/firmas/textos";
 import type { FirmaCanvasHandle } from "@/components/tms/firma-canvas";
 import SelectorFirma from "@/components/tms/selector-firma";
+import HistorialFirmasModal from "@/components/tms/historial-firmas-modal";
 
 type ViaticoControlRow = {
   id: number;
@@ -198,6 +199,11 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   const [errorLiquidar, setErrorLiquidar] = useState("");
   const [firmandoLiquidar, setFirmandoLiquidar] = useState(false);
   const [firmaLiquidarOk, setFirmaLiquidarOk] = useState<FirmaInfo | null>(null);
+
+  // VIATICOS-HISTORIAL-FIRMA-1 — "Ver firmas": modal de solo lectura,
+  // reutilizado por cualquier fila que ya tenga al menos una firma
+  // (AUTORIZADO/ENTREGADO/LIQUIDADO). El componente hace su propio fetch.
+  const [verFirmasDe, setVerFirmasDe] = useState<ViaticoControlRow | null>(null);
 
   /** MI-FIRMA-1 — consulta si el usuario actual tiene una firma guardada. */
   const consultarFirmaGuardada = useCallback(async (): Promise<boolean> => {
@@ -664,7 +670,23 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
                       Firmar liquidación
                     </button>
                   ) : null}
-                  {!(puedeAutorizar && r.estado === "PROGRAMADO") && !(puedeLiquidar && r.estado === "ENTREGADO") ? (
+                  {/* VIATICOS-HISTORIAL-FIRMA-1 — visible en cuanto exista al
+                      menos una firma (AUTORIZADO/ENTREGADO/LIQUIDADO); un
+                      LIQUIDADO puede tener autorización + liquidación, de ahí
+                      "Ver firmas" en plural (sección 6 del ticket). */}
+                  {r.estado !== "PROGRAMADO" ? (
+                    <button
+                      type="button"
+                      onClick={() => setVerFirmasDe(r)}
+                      className="ml-1 rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--input)]"
+                    >
+                      Ver firmas
+                    </button>
+                  ) : null}
+                  {/* Único caso sin ningún botón: PROGRAMADO y sin permiso
+                      de autorizar — "Ver firmas" ya cubre todo lo demás
+                      (ENTREGADO/LIQUIDADO siempre tienen al menos una firma). */}
+                  {r.estado === "PROGRAMADO" && !puedeAutorizar ? (
                     <span className="text-[11px] text-[var(--muted)]">—</span>
                   ) : null}
                 </td>
@@ -927,6 +949,14 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
             </div>
           </div>
         </div>
+      ) : null}
+
+      {verFirmasDe ? (
+        <HistorialFirmasModal
+          slug={slug}
+          viatico={{ id: verFirmasDe.id, planCodigo: verFirmasDe.planCodigo, personalNombre: verFirmasDe.personalNombre }}
+          onClose={() => setVerFirmasDe(null)}
+        />
       ) : null}
     </div>
   );

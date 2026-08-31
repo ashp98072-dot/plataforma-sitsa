@@ -8,6 +8,7 @@ import {
   type FiltroCuentaBancaria,
   type FiltroMetodoPago,
 } from "@/lib/tms/viaticos-filtros-ui";
+import HistorialFirmasModal from "@/components/tms/historial-firmas-modal";
 
 type ViaticoPorPagarRow = {
   id: number;
@@ -87,6 +88,12 @@ export default function ViaticosPorPagarPanel({ slug }: { slug: string }) {
   const [metodoPago, setMetodoPago] = useState<Record<number, string>>({});
   const [referenciaPago, setReferenciaPago] = useState<Record<number, string>>({});
   const [obsEntrega, setObsEntrega] = useState<Record<number, string>>({});
+
+  // VIATICOS-HISTORIAL-FIRMA-1 (sección 12) — permite al Facturador
+  // confirmar quién autorizó (nombre/fecha/firma visual) ANTES de pagar,
+  // sin darle ningún permiso de autorizar/liquidar: es el mismo modal de
+  // solo lectura de ViaticosControlPanel, reutilizado tal cual.
+  const [verFirmasDe, setVerFirmasDe] = useState<ViaticoPorPagarRow | null>(null);
 
   // VIAT-2b — archivo Bi Banking: se genera vía fetch (no un <a href> plano)
   // porque el endpoint puede responder 400 con la lista de problemas en vez
@@ -517,6 +524,19 @@ export default function ViaticosPorPagarPanel({ slug }: { slug: string }) {
                       {r.referenciaPago ? `Ref. ${r.referenciaPago}` : "—"}
                     </span>
                   )}
+                  {/* VIATICOS-HISTORIAL-FIRMA-1 (sección 12) — visible en
+                      cuanto ya exista firma de autorización (todo lo que no
+                      es PROGRAMADO); de solo lectura, no otorga permiso de
+                      autorizar/liquidar. */}
+                  {r.estado !== "PROGRAMADO" ? (
+                    <button
+                      type="button"
+                      onClick={() => setVerFirmasDe(r)}
+                      className="mt-1 block rounded border border-[var(--border)] px-2 py-1 text-[11px] hover:bg-[var(--input)]"
+                    >
+                      Ver firmas
+                    </button>
+                  ) : null}
                 </td>
               </tr>
             ))}
@@ -530,6 +550,14 @@ export default function ViaticosPorPagarPanel({ slug }: { slug: string }) {
           </tbody>
         </table>
       </div>
+
+      {verFirmasDe ? (
+        <HistorialFirmasModal
+          slug={slug}
+          viatico={{ id: verFirmasDe.id, planCodigo: verFirmasDe.planCodigo, personalNombre: verFirmasDe.personalNombre }}
+          onClose={() => setVerFirmasDe(null)}
+        />
+      ) : null}
     </div>
   );
 }
