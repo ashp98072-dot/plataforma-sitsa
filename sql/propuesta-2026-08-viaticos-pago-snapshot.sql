@@ -1,0 +1,84 @@
+-- VIATICOS-PAGO-SNAPSHOT-1
+-- PROPUESTA / ejecución manual requerida.
+-- Snapshot bancario usado únicamente para pagos por TRANSFERENCIA.
+-- Se congela al pasar AUTORIZADO -> ENTREGADO.
+-- Históricos anteriores quedan NULL; no existe fuente confiable para backfill.
+--
+-- Este archivo NO se ha ejecutado contra ninguna base de datos (ni local
+-- ni de producción). Se entrega únicamente para revisión y ejecución
+-- manual posterior, tras el reporte de descubrimiento del ticket
+-- "TICKET DISCOVERY: VIATICOS-PAGO-SNAPSHOT-1" (mismo repo, misma
+-- sesión) y la aprobación explícita de las siguientes decisiones de
+-- negocio en "TICKET SQL — VIATICOS-PAGO-SNAPSHOT-1":
+--
+--   1. Riesgo histórico CONFIRMADO: hoy tms_viaticos no guarda ningún
+--      dato bancario — al consultar un viático ya pagado, Banco/Tipo
+--      cuenta/Número cuenta se leen SIEMPRE en vivo desde empleados
+--      (LEFT JOIN, sin filtro temporal, ver listarViaticosPorPagar en
+--      src/lib/tms/viaticos.ts). Si la cuenta del empleado cambia
+--      después del pago, el histórico muestra la cuenta NUEVA, nunca la
+--      que realmente se usó.
+--   2. Método afectado: ÚNICAMENTE TRANSFERENCIA usa/valida dato
+--      bancario hoy (registrarEntregaViaticosMasiva exige cuenta
+--      bancaria para TRANSFERENCIA). CHEQUE (solo número de cheque,
+--      columna referencia_pago ya existente) y EFECTIVO (sin ningún
+--      dato bancario) NO requieren snapshot — ninguno de los dos toca
+--      `empleados` en el flujo actual.
+--   3. Momento del snapshot: al pasar AUTORIZADO -> ENTREGADO (dentro
+--      de registrarEntregaViatico/registrarEntregaViaticosMasiva) —
+--      NUNCA al autorizar (todavía no se conoce el método de pago) ni
+--      al generar el archivo bancario (operación de solo lectura,
+--      repetible, que NO cambia estado — ver
+--      por-pagar/exportar/route.ts?formato=banco — y que por diseño
+--      solo procesa viáticos AUTORIZADOS, así que siempre debe seguir
+--      leyendo la cuenta VIVA, nunca el snapshot, porque el snapshot
+--      todavía no existiría en ese momento).
+--   4. Históricos: los viáticos ya ENTREGADOS/LIQUIDADOS ANTES de este
+--      cambio quedan con las 3 columnas en NULL. NO se hace backfill —
+--      no existe ninguna fuente confiable para reconstruirlo:
+--      empleado_cambios (tabla de historial genérico de la ficha de
+--      empleados) NO audita cuenta_bancaria/banco/tipo_cuenta (ver
+--      campos auditados en
+--      src/app/api/empresas/[slug]/empleados/[id]/route.ts). Nunca se
+--      copia la cuenta actual del empleado como si fuera la que se usó
+--      en un pago histórico — sería un dato inventado, no verificable.
+--
+-- Alcance de ESTE archivo: únicamente las columnas de snapshot. NO
+-- implementa la funcionalidad (lectura/escritura del snapshot en
+-- registrarEntregaViatico/registrarEntregaViaticosMasiva, ajuste de
+-- listarViaticosPorPagar/exportación para leer el snapshot cuando ya
+-- está ENTREGADO/LIQUIDADO) — eso queda para un ticket de
+-- implementación aparte, una vez este SQL se haya aplicado manualmente
+-- y confirmado con DESCRIBE.
+--
+-- Mismos tipos exactos que las columnas equivalentes YA existentes en
+-- empleados (sql/migrate-2026-08-rrhh-ficha-monaco.sql) — snapshot,
+-- nunca referencia viva:
+--   pago_banco            VARCHAR(80) — igual que empleados.banco
+--   pago_cuenta_bancaria  VARCHAR(60) — igual que empleados.cuenta_bancaria
+--   pago_tipo_cuenta      VARCHAR(40) — igual que empleados.tipo_cuenta
+-- Deliberadamente NO se agrega pago_titular_cuenta: no existe una
+-- columna "titular" equivalente en empleados — el titular es
+-- implícitamente el propio colaborador (tms_viaticos.personal_id ->
+-- tms_personal -> empleados), sin necesidad de un campo nuevo.
+--
+-- Los tres NULL por defecto — nunca un valor distinto de NULL mientras
+-- el viático no pasó por AUTORIZADO -> ENTREGADO por TRANSFERENCIA
+-- (mismo criterio que el resto de columnas "_por"/"_en" de esta tabla:
+-- NULL significa "no aplica todavía", nunca se confunde con un valor
+-- real).
+--
+-- Aditivo e idempotente (ADD COLUMN IF NOT EXISTS) — seguro de reaplicar
+-- si hiciera falta en otro entorno. NO borra ni transforma ningún dato
+-- existente. NO se toca ninguna otra tabla (empleados, empleado_cambios,
+-- firmas_electronicas, auditoria, usuario_firmas quedan intactas).
+
+ALTER TABLE tms_viaticos
+  ADD COLUMN IF NOT EXISTS pago_banco VARCHAR(80) NULL AFTER motivo_rechazo,
+  ADD COLUMN IF NOT EXISTS pago_cuenta_bancaria VARCHAR(60) NULL AFTER pago_banco,
+  ADD COLUMN IF NOT EXISTS pago_tipo_cuenta VARCHAR(40) NULL AFTER pago_cuenta_bancaria;
+
+-- Verificación posterior recomendada, tras ejecutar manualmente:
+-- DESCRIBE tms_viaticos;
+-- Debe listar pago_banco / pago_cuenta_bancaria / pago_tipo_cuenta al
+-- final, justo después de motivo_rechazo.
