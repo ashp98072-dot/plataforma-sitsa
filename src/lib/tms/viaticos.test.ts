@@ -6,7 +6,7 @@ vi.mock("@/lib/auth", () => ({ verificarPasswordUsuarioActual: vi.fn() }));
 vi.mock("@/lib/firmas/firmas-internas", () => ({ crearFirmaInterna: vi.fn(), TEXTO_FIRMA_INTERNA: "Firma electrónica interna" }));
 vi.mock("@/lib/uploads", () => ({ guardarUpload: vi.fn(), borrarUpload: vi.fn() }));
 
-import { execute, getPool, query } from "@/lib/db";
+import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { verificarPasswordUsuarioActual } from "@/lib/auth";
 import { crearFirmaInterna } from "@/lib/firmas/firmas-internas";
@@ -393,24 +393,148 @@ describe("liquidarViatico — ENTREGADO -> LIQUIDADO, regla crítica de diferenc
   });
 });
 
-describe("23) registrarEntregaViatico (pago) — regresión: NUNCA exige firma/contraseña/imagen", () => {
+/**
+ * VIATICOS-PAGO-SNAPSHOT-1 — registrarEntregaViatico (individual)
+ * REESTRUCTURADO de un execute() suelto a una transacción real (mismo
+ * esqueleto que autorizarViatico/liquidarViatico/
+ * registrarEntregaViaticosMasiva). El SELECT ahora hace JOIN a
+ * empleados para poder congelar banco/cuenta_bancaria/tipo_cuenta —
+ * distinto del patrón de dos consultas de mockConnQuery(), así que este
+ * bloque usa su propio mock directo de `conn.query`.
+ */
+describe("registrarEntregaViatico (individual) — congela snapshot bancario, sin firma/contraseña/imagen", () => {
+  const FILA_AUTORIZADO_CON_CUENTA = {
+    id: 10, estado: "AUTORIZADO", monto_asignado: "500.00",
+    banco: "Banco Industrial", cuenta_bancaria: "1234567890", tipo_cuenta: "Monetaria",
+  };
+
   beforeEach(() => {
-    vi.mocked(execute).mockResolvedValue({ affectedRows: 1 } as never);
+    conn.query.mockResolvedValue([[FILA_AUTORIZADO_CON_CUENTA], []]);
   });
 
-  it("registra la entrega solo con método/referencia/observaciones — sin password ni firma en su firma de función", async () => {
+  it("registra la entrega sin password ni firma — sin firma/contraseña/imagen en su firma de función", async () => {
     const r = await registrarEntregaViatico(7, 10, { metodoPago: "EFECTIVO", referenciaPago: null, observaciones: null }, "fact1");
     expect(r.ok).toBe(true);
     expect(crearFirmaInterna).not.toHaveBeenCalled();
     expect(verificarPasswordUsuarioActual).not.toHaveBeenCalled();
     expect(guardarUpload).not.toHaveBeenCalled();
-    // No usa transacción propia (execute() directo) — mismo patrón preexistente, sin cambios de este ticket.
+  });
+
+  it("exige referencia para TRANSFERENCIA/CHEQUE (regla preexistente, sin cambios) — sin abrir conexión", async () => {
+    const r = await registrarEntregaViatico(7, 10, { metodoPago: "CHEQUE", referenciaPago: null, observaciones: null }, "fact1");
+    expect(r.ok).toBe(false);
     expect(getConnection).not.toHaveBeenCalled();
   });
 
-  it('exige referencia para TRANSFERENCIA/CHEQUE (regla preexistente, sin cambios)', async () => {
-    const r = await registrarEntregaViatico(7, 10, { metodoPago: "CHEQUE", referenciaPago: null, observaciones: null }, "fact1");
+  it("1/2/3) TRANSFERENCIA congela banco/cuenta/tipo de cuenta EXACTOS de la ficha del empleado", async () => {
+    const r = await registrarEntregaViatico(7, 10, { metodoPago: "TRANSFERENCIA", referenciaPago: "REF-1", observaciones: null }, "fact1");
+    expect(r.ok).toBe(true);
+    expect(conn.execute).toHaveBeenCalledWith(
+      expect.stringContaining("UPDATE tms_viaticos"),
+      ["fact1", "TRANSFERENCIA", "REF-1", null, "Banco Industrial", "1234567890", "Monetaria", 10, 7],
+    );
+  });
+
+  it("4) el snapshot se toma de la fila bloqueada DENTRO de la transacción, nunca de una consulta posterior (una sola lectura, un solo UPDATE)", async () => {
+    await registrarEntregaViatico(7, 10, { metodoPago: "TRANSFERENCIA", referenciaPago: "REF-1", observaciones: null }, "fact1");
+    expect(conn.query).toHaveBeenCalledTimes(1);
+  });
+
+  it("5) TRANSFERENCIA sin cuenta bancaria -> error, sin llegar al UPDATE", async () => {
+    conn.query.mockResolvedValue([[{ ...FILA_AUTORIZADO_CON_CUENTA, cuenta_bancaria: null }], []]);
+    const r = await registrarEntregaViatico(7, 10, { metodoPago: "TRANSFERENCIA", referenciaPago: "REF-1", observaciones: null }, "fact1");
     expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.status).toBe(400);
+    expect(conn.execute).not.toHaveBeenCalled();
+  });
+
+  it("6) CHEQUE guarda snapshot NULL aunque el empleado sí tenga cuenta bancaria registrada", async () => {
+    const r = await registrarEntregaViatico(7, 10, { metodoPago: "CHEQUE", referenciaPago: "CHQ-1", observaciones: null }, "fact1");
+    expect(r.ok).toBe(true);
+    expect(conn.execute).toHaveBeenCalledWith(
+      expect.stringContaining("UPDATE tms_viaticos"),
+      ["fact1", "CHEQUE", "CHQ-1", null, null, null, null, 10, 7],
+    );
+  });
+
+  it("7) EFECTIVO guarda snapshot NULL aunque el empleado sí tenga cuenta bancaria registrada", async () => {
+    const r = await registrarEntregaViatico(7, 10, { metodoPago: "EFECTIVO", referenciaPago: null, observaciones: null }, "fact1");
+    expect(r.ok).toBe(true);
+    expect(conn.execute).toHaveBeenCalledWith(
+      expect.stringContaining("UPDATE tms_viaticos"),
+      ["fact1", "EFECTIVO", null, null, null, null, null, 10, 7],
+    );
+  });
+
+  it("8) estado != AUTORIZADO -> 409, sin llegar al UPDATE", async () => {
+    conn.query.mockResolvedValue([[{ ...FILA_AUTORIZADO_CON_CUENTA, estado: "ENTREGADO" }], []]);
+    const r = await registrarEntregaViatico(7, 10, { metodoPago: "EFECTIVO", referenciaPago: null, observaciones: null }, "fact1");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.status).toBe(409);
+    expect(conn.execute).not.toHaveBeenCalled();
+  });
+
+  it("9) otro tenant: empresaId siempre filtra el SELECT — un viático de otra empresa da 404, nunca lo entrega", async () => {
+    conn.query.mockResolvedValue([[], []]);
+    const r = await registrarEntregaViatico(999, 10, { metodoPago: "EFECTIVO", referenciaPago: null, observaciones: null }, "fact1");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.status).toBe(404);
+    expect(conn.execute).not.toHaveBeenCalled();
+  });
+
+  it("10) el SELECT usa FOR UPDATE", async () => {
+    await registrarEntregaViatico(7, 10, { metodoPago: "EFECTIVO", referenciaPago: null, observaciones: null }, "fact1");
+    const [sql] = conn.query.mock.calls[0];
+    expect(String(sql)).toContain("FOR UPDATE");
+  });
+
+  it("11) affectedRows != 1 -> 409, sin auditoría ni commit", async () => {
+    conn.execute.mockResolvedValue([{ affectedRows: 0 }, []]);
+    const r = await registrarEntregaViatico(7, 10, { metodoPago: "EFECTIVO", referenciaPago: null, observaciones: null }, "fact1");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.status).toBe(409);
+    expect(registrarAuditoriaTx).not.toHaveBeenCalled();
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(conn.rollback).toHaveBeenCalled();
+  });
+
+  it("12) auditoría en la MISMA conexión/transacción", async () => {
+    await registrarEntregaViatico(7, 10, { metodoPago: "EFECTIVO", referenciaPago: null, observaciones: null }, "fact1");
+    expect(registrarAuditoriaTx).toHaveBeenCalledWith(conn, expect.objectContaining({
+      empresaId: 7, usuario: "fact1", accion: "entregar_viatico", modulo: "tms",
+    }));
+  });
+
+  it("13) si la auditoría falla, rollback total (nunca queda el UPDATE/snapshot sin su auditoría)", async () => {
+    vi.mocked(registrarAuditoriaTx).mockRejectedValueOnce(new Error("fallo de auditoría"));
+    await expect(
+      registrarEntregaViatico(7, 10, { metodoPago: "TRANSFERENCIA", referenciaPago: "REF-1", observaciones: null }, "fact1"),
+    ).rejects.toThrow("fallo de auditoría");
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(conn.rollback).toHaveBeenCalled();
+  });
+
+  it("14) concurrencia: si otro proceso ya cambió el estado justo entre el lock y el UPDATE (affectedRows=0), solo uno gana — nunca doble entrega ni snapshot sobrescrito", async () => {
+    conn.execute.mockResolvedValueOnce([{ affectedRows: 0 }, []]);
+    const r = await registrarEntregaViatico(7, 10, { metodoPago: "TRANSFERENCIA", referenciaPago: "REF-1", observaciones: null }, "fact1");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.status).toBe(409);
+    expect(conn.commit).not.toHaveBeenCalled();
+  });
+
+  it("commit se llama UNA sola vez, después del UPDATE y la auditoría (camino exitoso)", async () => {
+    await registrarEntregaViatico(7, 10, { metodoPago: "EFECTIVO", referenciaPago: null, observaciones: null }, "fact1");
+    expect(conn.commit).toHaveBeenCalledTimes(1);
+    expect(conn.rollback).not.toHaveBeenCalled();
+    expect(conn.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("getConnection() falla -> propaga el error, sin auditoría ni commit", async () => {
+    getConnection.mockRejectedValueOnce(new Error("pool exhausted"));
+    await expect(
+      registrarEntregaViatico(7, 10, { metodoPago: "EFECTIVO", referenciaPago: null, observaciones: null }, "fact1"),
+    ).rejects.toThrow("pool exhausted");
+    expect(registrarAuditoriaTx).not.toHaveBeenCalled();
   });
 });
 

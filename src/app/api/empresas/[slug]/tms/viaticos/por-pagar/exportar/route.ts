@@ -158,9 +158,14 @@ export async function GET(req: Request, ctx: Ctx) {
     r.montoAsignado.toFixed(2),
     r.metodoPago ? METODO_PAGO_LABEL[r.metodoPago] ?? r.metodoPago : "",
     r.estado,
-    r.banco ?? "",
-    r.tipoCuenta ?? "",
-    r.cuentaBancaria ?? "",
+    // VIATICOS-PAGO-SNAPSHOT-1 — columnas *Mostrar (derivarCuentaMostrable):
+    // cuenta viva mientras AUTORIZADO (o CHEQUE/EFECTIVO en cualquier
+    // estado), snapshot congelado para ENTREGADO/LIQUIDADO por
+    // TRANSFERENCIA. Histórico anterior a esta funcionalidad -> celdas
+    // vacías (nunca la cuenta viva como sustituto).
+    r.bancoMostrar ?? "",
+    r.tipoCuentaMostrar ?? "",
+    r.cuentaBancariaMostrar ?? "",
   ]);
   const buf = await tablaAExcel({
     sheetName: "Viaticos por pagar",

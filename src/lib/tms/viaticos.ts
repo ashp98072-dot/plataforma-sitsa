@@ -464,7 +464,8 @@ export type MetodoPagoViatico = "EFECTIVO" | "TRANSFERENCIA" | "CHEQUE";
 
 export type ResultadoTransicionViatico =
   | { ok: true }
-  | { ok: false; error: string };
+  /** `status` opcional (VIATICOS-PAGO-SNAPSHOT-1): 404 no encontrado, 409 estado/concurrencia, 400 validación — el endpoint cae a 400 si no viene (compatibilidad con las validaciones de forma que no lo fijan). */
+  | { ok: false; error: string; status?: number };
 
 /**
  * VIATICOS-FIRMA — identidad del firmante, común a autorizar y liquidar.
@@ -818,6 +819,21 @@ export type DatosEntregaViatico = {
   observaciones: string | null;
 };
 
+/** Snapshot bancario derivado del método — VIATICOS-PAGO-SNAPSHOT-1: solo TRANSFERENCIA copia banco/cuenta_bancaria/tipo_cuenta de `empleados`; CHEQUE/EFECTIVO quedan siempre en null (nunca inventan un dato bancario que el método no usa). */
+function snapshotPagoDesdeFila(
+  metodoPago: MetodoPagoViatico,
+  fila: RowDataPacket,
+): { banco: string | null; cuentaBancaria: string | null; tipoCuenta: string | null } {
+  if (metodoPago !== "TRANSFERENCIA") {
+    return { banco: null, cuentaBancaria: null, tipoCuenta: null };
+  }
+  return {
+    banco: fila.banco != null ? String(fila.banco) : null,
+    cuentaBancaria: fila.cuenta_bancaria != null ? String(fila.cuenta_bancaria) : null,
+    tipoCuenta: fila.tipo_cuenta != null ? String(fila.tipo_cuenta) : null,
+  };
+}
+
 /**
  * AUTORIZADO -> ENTREGADO. Quién puede: exclusivamente usuarios con el
  * permiso explícito `viaticos_pagar:editar` (VIAT-2 — "FACTURADOR PAGA";
@@ -825,10 +841,26 @@ export type DatosEntregaViatico = {
  * `viaticos_autorizar`. Requiere método de pago; referencia obligatoria
  * para TRANSFERENCIA y CHEQUE (tienen un número de operación/cheque real
  * que registrar), opcional para EFECTIVO. No integra bancos ni APIs
- * externas — solo guarda el dato para trazabilidad. DatosEntregaViatico no
- * tiene campo de monto: quien entrega no puede tocar monto_sugerido ni
- * monto_asignado por este camino, y actualizarMontoViatico ya lo bloquea
- * de forma independiente fuera de PROGRAMADO.
+ * externas para el pago en sí — solo guarda el dato para trazabilidad.
+ * DatosEntregaViatico no tiene campo de monto: quien entrega no puede
+ * tocar monto_sugerido ni monto_asignado por este camino, y
+ * actualizarMontoViatico ya lo bloquea de forma independiente fuera de
+ * PROGRAMADO.
+ *
+ * VIATICOS-PAGO-SNAPSHOT-1 — REESTRUCTURADO de un `execute()` suelto a
+ * una transacción real (mismo esqueleto exacto que autorizarViatico/
+ * liquidarViatico/registrarEntregaViaticosMasiva: `conn`/`committed`
+ * fuera del try, único `finally` con rollback condicional + release
+ * incondicional) para poder leer el banco/cuenta_bancaria/tipo_cuenta
+ * ACTUAL del empleado dentro del MISMO `SELECT ... FOR UPDATE` que
+ * bloquea el viático, y congelarlo en `pago_banco`/`pago_cuenta_bancaria`/
+ * `pago_tipo_cuenta` en el mismo `UPDATE` que hace ENTREGADO — nunca en
+ * un paso separado, nunca desde una consulta posterior que ya podría ver
+ * una cuenta distinta. Solo TRANSFERENCIA congela algo (ver
+ * snapshotPagoDesdeFila) — CHEQUE/EFECTIVO guardan los 3 campos en NULL,
+ * igual que hoy no usan ningún dato bancario. Una vez escrito, estos 3
+ * campos NUNCA se vuelven a tocar (liquidarViatico no los toca, ver su
+ * propio JSDoc).
  */
 export async function registrarEntregaViatico(
   empresaId: number,
@@ -848,33 +880,88 @@ export async function registrarEntregaViatico(
           : "Indica la referencia/número de la transferencia.",
     };
   }
-  const r = await execute(
-    `UPDATE tms_viaticos
-     SET estado = 'ENTREGADO', entregado_por = ?, entregado_en = NOW(),
-         metodo_pago = ?, referencia_pago = ?, observaciones_entrega = ?
-     WHERE id = ? AND empresa_id = ? AND estado = 'AUTORIZADO'`,
-    [
-      usuario,
-      datos.metodoPago,
-      datos.referenciaPago?.trim() || null,
-      datos.observaciones?.trim() || null,
-      viaticoId,
+
+  let conn: PoolConnection | null = null;
+  let committed = false;
+  try {
+    conn = await getPool().getConnection();
+    await conn.beginTransaction();
+
+    const [rows] = await conn.query<RowDataPacket[]>(
+      `SELECT v.id, v.estado, v.monto_asignado, e.banco, e.cuenta_bancaria, e.tipo_cuenta
+       FROM tms_viaticos v
+       INNER JOIN tms_personal tp ON tp.id = v.personal_id
+       LEFT JOIN empleados e ON e.id = tp.id_empleado AND e.empresa_id = tp.empresa_id
+       WHERE v.id = ? AND v.empresa_id = ? LIMIT 1 FOR UPDATE`,
+      [viaticoId, empresaId],
+    );
+    const v = rows[0];
+    if (!v) {
+      return { ok: false, error: "Viático no encontrado.", status: 404 };
+    }
+    if (String(v.estado) !== "AUTORIZADO") {
+      return {
+        ok: false,
+        error: `Este viático está ${String(v.estado)}; no se puede registrar la entrega de desde ese estado.`,
+        status: 409,
+      };
+    }
+    if (!(Number(v.monto_asignado) > 0)) {
+      return { ok: false, error: "El viático tiene un monto inválido.", status: 400 };
+    }
+    if (datos.metodoPago === "TRANSFERENCIA" && !String(v.cuenta_bancaria ?? "").trim()) {
+      return { ok: false, error: "El colaborador no tiene cuenta bancaria registrada.", status: 400 };
+    }
+
+    const snapshot = snapshotPagoDesdeFila(datos.metodoPago, v);
+
+    const [upd] = await conn.execute<ResultSetHeader>(
+      `UPDATE tms_viaticos
+       SET estado = 'ENTREGADO', entregado_por = ?, entregado_en = NOW(),
+           metodo_pago = ?, referencia_pago = ?, observaciones_entrega = ?,
+           pago_banco = ?, pago_cuenta_bancaria = ?, pago_tipo_cuenta = ?
+       WHERE id = ? AND empresa_id = ? AND estado = 'AUTORIZADO'`,
+      [
+        usuario,
+        datos.metodoPago,
+        datos.referenciaPago?.trim() || null,
+        datos.observaciones?.trim() || null,
+        snapshot.banco,
+        snapshot.cuentaBancaria,
+        snapshot.tipoCuenta,
+        viaticoId,
+        empresaId,
+      ],
+    );
+    if (upd.affectedRows !== 1) {
+      return { ok: false, error: "El viático cambió de estado durante la operación.", status: 409 };
+    }
+
+    await registrarAuditoriaTx(conn, {
       empresaId,
-    ],
-  );
-  if (r.affectedRows !== 1) {
-    return await estadoActualComoError(empresaId, viaticoId, "registrar la entrega de");
+      usuario,
+      accion: "entregar_viatico",
+      modulo: "tms",
+      detalle: `Viático #${viaticoId} · AUTORIZADO → ENTREGADO · ${datos.metodoPago}${
+        datos.referenciaPago?.trim() ? ` · ref. ${datos.referenciaPago.trim()}` : ""
+      }`,
+    });
+
+    await conn.commit();
+    committed = true;
+    return { ok: true };
+  } finally {
+    if (conn) {
+      if (!committed) {
+        try {
+          await conn.rollback();
+        } catch {
+          // best-effort — nunca oculta el error/rechazo real que ya se está propagando.
+        }
+      }
+      conn.release();
+    }
   }
-  await registrarAuditoria({
-    empresaId,
-    usuario,
-    accion: "entregar_viatico",
-    modulo: "tms",
-    detalle: `Viático #${viaticoId} · AUTORIZADO → ENTREGADO · ${datos.metodoPago}${
-      datos.referenciaPago?.trim() ? ` · ref. ${datos.referenciaPago.trim()}` : ""
-    }`,
-  });
-  return { ok: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -987,9 +1074,13 @@ export async function registrarEntregaViaticosMasiva(
     conn = await getPool().getConnection();
     await conn.beginTransaction();
 
+    // VIATICOS-PAGO-SNAPSHOT-1 — e.banco/e.tipo_cuenta se agregan a este
+    // MISMO SELECT (e.cuenta_bancaria ya se traía para validar) — cero
+    // consultas adicionales, mismo bloqueo FOR UPDATE de siempre.
     const placeholders = ids.map(() => "?").join(",");
     const [rows] = await conn.query<RowDataPacket[]>(
-      `SELECT v.id, v.estado, v.monto_asignado, tp.nombre AS personal_nombre, e.cuenta_bancaria
+      `SELECT v.id, v.estado, v.monto_asignado, tp.nombre AS personal_nombre,
+              e.banco, e.cuenta_bancaria, e.tipo_cuenta
        FROM tms_viaticos v
        INNER JOIN tms_personal tp ON tp.id = v.personal_id
        LEFT JOIN empleados e ON e.id = tp.id_empleado AND e.empresa_id = tp.empresa_id
@@ -1023,12 +1114,22 @@ export async function registrarEntregaViaticosMasiva(
     }
 
     for (const it of datos.items) {
+      // VIATICOS-PAGO-SNAPSHOT-1 — snapshot POR PERSONA: aunque
+      // TRANSFERENCIA comparta una sola referencia de lote, cada viático
+      // congela el banco/cuenta/tipo de cuenta de SU PROPIO beneficiario
+      // (nunca los de otro item del lote).
+      const snapshot = snapshotPagoDesdeFila(datos.metodoPago, filaPorId.get(it.id)!);
       const [upd] = await conn.execute<ResultSetHeader>(
         `UPDATE tms_viaticos
          SET estado = 'ENTREGADO', entregado_por = ?, entregado_en = NOW(),
-             metodo_pago = ?, referencia_pago = ?
+             metodo_pago = ?, referencia_pago = ?,
+             pago_banco = ?, pago_cuenta_bancaria = ?, pago_tipo_cuenta = ?
          WHERE id = ? AND empresa_id = ? AND estado = 'AUTORIZADO'`,
-        [usuario, datos.metodoPago, it.referenciaPago, it.id, empresaId],
+        [
+          usuario, datos.metodoPago, it.referenciaPago,
+          snapshot.banco, snapshot.cuentaBancaria, snapshot.tipoCuenta,
+          it.id, empresaId,
+        ],
       );
       if (upd.affectedRows !== 1) {
         return { ok: false, error: `El viático #${it.id} cambió de estado durante la operación.`, status: 409 };
@@ -1231,25 +1332,6 @@ export async function liquidarViatico(
       compensarImagenFirma(imagenGuardada);
     }
   }
-}
-
-/** Mensaje de error cuando una transición no aplicó — distingue "no existe" de "estado no permite". */
-async function estadoActualComoError(
-  empresaId: number,
-  viaticoId: number,
-  accionTexto: string,
-): Promise<{ ok: false; error: string }> {
-  const existe = await query<RowDataPacket[]>(
-    `SELECT estado FROM tms_viaticos WHERE id = ? AND empresa_id = ? LIMIT 1`,
-    [viaticoId, empresaId],
-  );
-  if (!existe[0]) {
-    return { ok: false, error: "Viático no encontrado." };
-  }
-  return {
-    ok: false,
-    error: `Este viático está ${String(existe[0].estado)}; no se puede ${accionTexto} desde ese estado.`,
-  };
 }
 
 export type ViaticoDetalle = {
@@ -1577,9 +1659,28 @@ export type ViaticoPorPagar = {
   estado: EstadoViatico;
   metodoPago: string | null;
   referenciaPago: string | null;
+  /** Cuenta VIVA de la ficha del empleado — puede haber cambiado desde que se pagó. Nunca usar esto para mostrar "qué cuenta se usó" en un viático ya ENTREGADO/LIQUIDADO: usar los campos *Mostrar de abajo. */
   banco: string | null;
   tipoCuenta: string | null;
   cuentaBancaria: string | null;
+  // VIATICOS-PAGO-SNAPSHOT-1 — snapshot congelado en tms_viaticos al
+  // pasar AUTORIZADO -> ENTREGADO por TRANSFERENCIA (null para CHEQUE/
+  // EFECTIVO y para pagos anteriores a esta funcionalidad).
+  pagoBanco: string | null;
+  pagoCuentaBancaria: string | null;
+  pagoTipoCuenta: string | null;
+  /**
+   * Campos DERIVADOS (ver derivarCuentaMostrable) — lo que la UI/Excel
+   * deben mostrar: cuenta viva mientras AUTORIZADO (o para CHEQUE/
+   * EFECTIVO en cualquier estado), snapshot para ENTREGADO/LIQUIDADO por
+   * TRANSFERENCIA. Nunca null como fallback silencioso a la cuenta viva
+   * — ver `cuentaHistoricaNoDisponible`.
+   */
+  bancoMostrar: string | null;
+  cuentaBancariaMostrar: string | null;
+  tipoCuentaMostrar: string | null;
+  /** true SOLO cuando el viático ya se pagó por TRANSFERENCIA pero es anterior a esta funcionalidad (snapshot NULL) — la UI debe mostrar "no disponible", NUNCA la cuenta viva como sustituto. */
+  cuentaHistoricaNoDisponible: boolean;
 };
 
 export type FiltrosViaticosPorPagar = {
@@ -1590,7 +1691,59 @@ export type FiltrosViaticosPorPagar = {
   estado?: EstadoViatico;
 };
 
+/**
+ * VIATICOS-PAGO-SNAPSHOT-1 — regla CENTRALIZADA y testeable de qué
+ * cuenta mostrar: mientras el viático sigue AUTORIZADO (o para CHEQUE/
+ * EFECTIVO en cualquier estado, que nunca usan snapshot), se muestra la
+ * cuenta VIVA de la ficha del empleado, igual que siempre. Una vez
+ * ENTREGADO/LIQUIDADO por TRANSFERENCIA, se muestra el snapshot
+ * congelado — NUNCA la cuenta viva (podría ya no ser la que se usó). Si
+ * el snapshot es null (pago anterior a esta funcionalidad), NUNCA cae a
+ * la cuenta viva como sustituto: se marca `cuentaHistoricaNoDisponible`
+ * y los 3 campos *Mostrar quedan en null.
+ */
+export function derivarCuentaMostrable(input: {
+  estado: string;
+  metodoPago: string | null;
+  banco: string | null;
+  cuentaBancaria: string | null;
+  tipoCuenta: string | null;
+  pagoBanco: string | null;
+  pagoCuentaBancaria: string | null;
+  pagoTipoCuenta: string | null;
+}): { bancoMostrar: string | null; cuentaBancariaMostrar: string | null; tipoCuentaMostrar: string | null; cuentaHistoricaNoDisponible: boolean } {
+  const yaPagado = input.estado === "ENTREGADO" || input.estado === "LIQUIDADO";
+  if (yaPagado && input.metodoPago === "TRANSFERENCIA") {
+    if (input.pagoCuentaBancaria != null) {
+      return {
+        bancoMostrar: input.pagoBanco,
+        cuentaBancariaMostrar: input.pagoCuentaBancaria,
+        tipoCuentaMostrar: input.pagoTipoCuenta,
+        cuentaHistoricaNoDisponible: false,
+      };
+    }
+    return { bancoMostrar: null, cuentaBancariaMostrar: null, tipoCuentaMostrar: null, cuentaHistoricaNoDisponible: true };
+  }
+  return {
+    bancoMostrar: input.banco,
+    cuentaBancariaMostrar: input.cuentaBancaria,
+    tipoCuentaMostrar: input.tipoCuenta,
+    cuentaHistoricaNoDisponible: false,
+  };
+}
+
 function mapPorPagar(r: RowDataPacket): ViaticoPorPagar {
+  const estado = String(r.estado ?? "PROGRAMADO") as EstadoViatico;
+  const metodoPago = r.metodo_pago != null ? String(r.metodo_pago) : null;
+  const banco = r.banco != null ? String(r.banco) : null;
+  const tipoCuenta = r.tipo_cuenta != null ? String(r.tipo_cuenta) : null;
+  const cuentaBancaria = r.cuenta_bancaria != null ? String(r.cuenta_bancaria) : null;
+  const pagoBanco = r.pago_banco != null ? String(r.pago_banco) : null;
+  const pagoCuentaBancaria = r.pago_cuenta_bancaria != null ? String(r.pago_cuenta_bancaria) : null;
+  const pagoTipoCuenta = r.pago_tipo_cuenta != null ? String(r.pago_tipo_cuenta) : null;
+  const mostrable = derivarCuentaMostrable({
+    estado, metodoPago, banco, cuentaBancaria, tipoCuenta, pagoBanco, pagoCuentaBancaria, pagoTipoCuenta,
+  });
   return {
     id: Number(r.id),
     planId: Number(r.plan_id),
@@ -1600,12 +1753,16 @@ function mapPorPagar(r: RowDataPacket): ViaticoPorPagar {
     personalNombre: String(r.personal_nombre ?? ""),
     rol: String(r.rol),
     montoAsignado: Number(r.monto_asignado ?? 0),
-    estado: String(r.estado ?? "PROGRAMADO") as EstadoViatico,
-    metodoPago: r.metodo_pago != null ? String(r.metodo_pago) : null,
+    estado,
+    metodoPago,
     referenciaPago: r.referencia_pago != null ? String(r.referencia_pago) : null,
-    banco: r.banco != null ? String(r.banco) : null,
-    tipoCuenta: r.tipo_cuenta != null ? String(r.tipo_cuenta) : null,
-    cuentaBancaria: r.cuenta_bancaria != null ? String(r.cuenta_bancaria) : null,
+    banco,
+    tipoCuenta,
+    cuentaBancaria,
+    pagoBanco,
+    pagoCuentaBancaria,
+    pagoTipoCuenta,
+    ...mostrable,
   };
 }
 
@@ -1654,7 +1811,7 @@ export async function listarViaticosPorPagar(
 
   const rows = await query<RowDataPacket[]>(
     `SELECT v.id, v.plan_id, v.monto_asignado, v.estado, v.metodo_pago, v.referencia_pago,
-            v.rol,
+            v.rol, v.pago_banco, v.pago_cuenta_bancaria, v.pago_tipo_cuenta,
             pl.codigo AS plan_codigo, pl.fecha_plan,
             COALESCE(e.codigo, tp.codigo) AS personal_codigo,
             tp.nombre AS personal_nombre,
