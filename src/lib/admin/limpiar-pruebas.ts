@@ -38,7 +38,29 @@ export async function limpiarClientesPrueba(conn: PoolConnection, empresaId: num
   if (perfiles.filas.some((f) => !clienteIds.has(Number(f.cliente_id)))) {
     throw new LimpiezaBloqueada("Hay cuestionarios sin cliente de esta empresa. No se limpió ningún dato.");
   }
-  return borrarGrupos(conn, [perfiles, clientes, tms]);
+  const dependencias = [];
+  for (const tabla of ["tms_cliente_contactos", "tms_cliente_ubicaciones"]) {
+    const grupo = await leer(conn, tabla,
+      "empresa_id = ? OR cliente_id IN (SELECT id FROM tms_clientes WHERE empresa_id = ?)", empresaId, [empresaId]);
+    if (grupo.filas.some((f) => !tmsIds.has(Number(f.cliente_id)))) {
+      throw new LimpiezaBloqueada(`Hay registros en ${tabla} sin cliente TMS de esta empresa. Revisa el vínculo; no se limpió ningún dato.`);
+    }
+    // Las rutas guardan estos vínculos sin FK; también proteger referencias cruzadas.
+    // Las paradas de viajes conservan su propia dirección histórica (sin FK).
+    const referencias = tabla === "tms_cliente_contactos"
+      ? [["tms_cliente_rutas", "contacto_cliente_id"]]
+      : [["tms_cliente_rutas", "ubicacion_carga_id"], ["tms_cliente_ruta_paradas", "cliente_ubicacion_id"]];
+    for (const [origen, columna] of referencias) {
+      for (let i = 0; i < grupo.filas.length; i += 250) {
+        const [usados] = await conn.query<RowDataPacket[]>(
+          `SELECT id FROM ${origen} WHERE ${columna} IN (?) LIMIT 1 FOR UPDATE`,
+          [grupo.filas.slice(i, i + 250).map((f) => f.id)]);
+        if (usados.length) throw new LimpiezaBloqueada(`Hay registros vinculados en ${origen}. Limpia primero las rutas; no se limpió ningún dato.`);
+      }
+    }
+    dependencias.push(grupo);
+  }
+  return borrarGrupos(conn, [perfiles, ...dependencias, clientes, tms]);
 }
 
 /** Solo desde módulos PRUEBAS, protegidos por Admin y confirmación del módulo. */
