@@ -194,6 +194,61 @@ export function calcularCambioSensible(
   );
 }
 
+/**
+ * PROGRAMACION-CAMBIO-SENSIBLE-FALSO-POSITIVO-1 (ajuste pre-merge) —
+ * campos "sensibles" (piloto/unidad/auxiliares) del PATCH a
+ * /tms/planes.
+ *
+ * El backend (planes/route.ts) NO se modifica ni se debilita: sigue
+ * exigiendo motivoCambio por PRESENCIA de pilotoNombre/placa/
+ * auxiliarEmpleadoIds/auxiliarNombres en el request (protección
+ * intencional, "nunca dejar pasar un cambio real sin motivo
+ * registrado"). El defecto de punta a punta estaba aquí, en el cliente:
+ * este formulario reenviaba esos 4 campos con su valor ACTUAL en
+ * CUALQUIER PATCH (aun sin haber cambiado), lo que disparaba esa
+ * protección del backend incluso al editar solo tarifa/notas/paradas.
+ *
+ * Corrección: solo se incluyen los 4 campos (+ motivoCambio) cuando
+ * `cambioSensible` es real. Si no hay cambio sensible real, los 4 se
+ * omiten (`undefined`, nunca se reenvía "el mismo valor de antes") y
+ * motivoCambio tampoco se envía — el backend entonces no ve ninguno de
+ * los campos y no exige motivo. Cuando SÍ hay un cambio sensible real,
+ * se mantiene el comportamiento actual: se reenvía el conjunto completo
+ * piloto/unidad/auxiliares junto con motivoCambio (no se intenta enviar
+ * solo el campo individual que cambió).
+ */
+export type CamposSensiblesPatch = {
+  pilotoNombre: string | undefined;
+  placa: string | undefined;
+  auxiliarEmpleadoIds: number[] | undefined;
+  auxiliarNombres: string[] | undefined;
+  motivoCambio: string | undefined;
+};
+
+export function camposSensiblesPatch(input: {
+  bloqueadoParaPreCierre: boolean;
+  cambioSensible: boolean;
+  pilotoNombre: string;
+  placa: string;
+  auxiliarEmpleadoIds: number[];
+  auxiliarNombres: string[];
+  motivoCambioFinal: string;
+}): CamposSensiblesPatch {
+  // Mismo criterio que ya regía piloto/placa/auxiliares: pre-cierre
+  // ("En ruta" sin llegada) sigue bloqueando estos campos por completo,
+  // sin importar cambioSensible.
+  const enviarCambioRecursos = !input.bloqueadoParaPreCierre && input.cambioSensible;
+  return {
+    pilotoNombre: enviarCambioRecursos ? input.pilotoNombre.trim() || undefined : undefined,
+    placa: enviarCambioRecursos ? input.placa.trim() || undefined : undefined,
+    auxiliarEmpleadoIds: enviarCambioRecursos ? input.auxiliarEmpleadoIds : undefined,
+    auxiliarNombres: enviarCambioRecursos ? input.auxiliarNombres : undefined,
+    // motivoCambio no depende de bloqueadoParaPreCierre (nunca lo hizo):
+    // si hay cambio sensible real, va motivo; si no, nunca se envía.
+    motivoCambio: input.cambioSensible ? input.motivoCambioFinal : undefined,
+  };
+}
+
 const inputCls =
   "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
 
@@ -941,6 +996,21 @@ export default function PlanForm({
         return;
       }
 
+      // PROGRAMACION-CAMBIO-SENSIBLE-FALSO-POSITIVO-1 (ajuste pre-merge):
+      // piloto/placa/auxiliares/motivoCambio se calculan UNA vez aquí (ver
+      // camposSensiblesPatch arriba) — solo se incluyen en el PATCH si
+      // `cambioSensible` es real, para no disparar la protección del
+      // backend (tocaPiloto/tocaUnidad/tocaAuxiliares por presencia) al
+      // editar campos no sensibles (tarifa, notas, etc.).
+      const camposSensibles = camposSensiblesPatch({
+        bloqueadoParaPreCierre,
+        cambioSensible,
+        pilotoNombre: form.pilotoNombre,
+        placa: form.placa,
+        auxiliarEmpleadoIds: form.auxiliarEmpleadoIds,
+        auxiliarNombres: form.auxiliarNombres,
+        motivoCambioFinal,
+      });
       const res = await fetch(`/api/empresas/${slug}/tms/planes`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -952,17 +1022,18 @@ export default function PlanForm({
           horaCarga: soloNotas ? undefined : form.horaCarga || undefined,
           // OPS-3.2c: piloto/unidad/auxiliares pasan de `soloNotas` a
           // `bloqueadoParaPreCierre` — se liberan en pendiente de cierre,
-          // igual que los seis campos de OPS-3.2b de abajo.
-          pilotoNombre: bloqueadoParaPreCierre ? undefined : form.pilotoNombre.trim() || undefined,
-          placa: bloqueadoParaPreCierre ? undefined : form.placa.trim() || undefined,
+          // igual que los seis campos de OPS-3.2b de abajo. Además, ahora
+          // solo se reenvían si hubo un cambio sensible real (ver arriba).
+          pilotoNombre: camposSensibles.pilotoNombre,
+          placa: camposSensibles.placa,
           // OPS-AJUSTES (sección 7): "estado" ya NO se envía desde este
           // guardado general — Cargado/Cancelado ahora son acciones
           // dedicadas (marcarCargado()/cancelarViaje() más abajo), y
           // "En ruta"/"Cerrado" nunca fueron responsabilidad de este
           // formulario (Portal y /cerrar respectivamente).
-          motivoCambio: cambioSensible ? motivoCambioFinal : undefined,
-          auxiliarEmpleadoIds: bloqueadoParaPreCierre ? undefined : form.auxiliarEmpleadoIds,
-          auxiliarNombres: bloqueadoParaPreCierre ? undefined : form.auxiliarNombres,
+          motivoCambio: camposSensibles.motivoCambio,
+          auxiliarEmpleadoIds: camposSensibles.auxiliarEmpleadoIds,
+          auxiliarNombres: camposSensibles.auxiliarNombres,
           tipoTraslado: undefined,
           // OPS-3.2b: estos seis ya no dependen de `soloNotas` a secas —
           // `bloqueadoParaPreCierre` los libera cuando el plan está

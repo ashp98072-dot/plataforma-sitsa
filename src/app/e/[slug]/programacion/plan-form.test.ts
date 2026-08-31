@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   auxiliaresCambio,
   calcularCambioSensible,
+  camposSensiblesPatch,
   identidadPersonalCambio,
   type IdentidadPersonal,
   type SnapshotPersonalUnidad,
@@ -183,3 +184,102 @@ describe("auxiliaresCambio — unitario", () => {
     expect(auxiliaresCambio(original, actual)).toBe(false);
   });
 });
+
+describe("camposSensiblesPatch — AJUSTE PRE-MERGE PR #156: el PATCH ya no reenvía piloto/placa/auxiliares sin un cambio sensible real", () => {
+  // Hallazgo confirmado: el backend (planes/route.ts, sin tocar en este
+  // ticket) exige motivoCambio por PRESENCIA de estos 4 campos en el
+  // request, no por comparación de valor — es una protección deliberada.
+  // El defecto de punta a punta era que el cliente los reenviaba SIEMPRE
+  // (con su valor actual, sin cambiar) en cualquier PATCH. Esta función
+  // es la única responsable de decidir qué se envía.
+  const base = {
+    bloqueadoParaPreCierre: false,
+    pilotoNombre: "Juan Pérez",
+    placa: "C-147CCT",
+    auxiliarEmpleadoIds: [20, 21],
+    auxiliarNombres: ["Pedro Legado"],
+    motivoCambioFinal: "Reasignación operativa",
+  };
+
+  it("1) solo tarifa (cambioSensible=false) -> los 4 campos sensibles y motivoCambio se OMITEN (undefined)", () => {
+    const r = camposSensiblesPatch({ ...base, cambioSensible: false });
+    expect(r).toEqual({
+      pilotoNombre: undefined,
+      placa: undefined,
+      auxiliarEmpleadoIds: undefined,
+      auxiliarNombres: undefined,
+      motivoCambio: undefined,
+    });
+  });
+
+  it("2) solo notas (mismo caso: cambioSensible=false) -> mismo comportamiento, los 4 campos se omiten", () => {
+    // "Notas" no es un input de esta función (no toca piloto/unidad/
+    // auxiliares) — el caso relevante es, otra vez, cambioSensible=false.
+    const r = camposSensiblesPatch({ ...base, cambioSensible: false });
+    expect(r.pilotoNombre).toBeUndefined();
+    expect(r.placa).toBeUndefined();
+    expect(r.auxiliarEmpleadoIds).toBeUndefined();
+    expect(r.auxiliarNombres).toBeUndefined();
+    expect(r.motivoCambio).toBeUndefined();
+  });
+
+  it("3) cambio real de piloto (cambioSensible=true) -> los 4 campos sensibles y motivoCambio se ENVÍAN", () => {
+    const r = camposSensiblesPatch({ ...base, cambioSensible: true });
+    expect(r).toEqual({
+      pilotoNombre: "Juan Pérez",
+      placa: "C-147CCT",
+      auxiliarEmpleadoIds: [20, 21],
+      auxiliarNombres: ["Pedro Legado"],
+      motivoCambio: "Reasignación operativa",
+    });
+  });
+
+  it("4) cambio real de unidad (mismo contrato: cambioSensible=true) -> campos sensibles + motivoCambio presentes", () => {
+    const r = camposSensiblesPatch({ ...base, placa: "C-999ZZZ", cambioSensible: true });
+    expect(r.placa).toBe("C-999ZZZ");
+    expect(r.motivoCambio).toBe("Reasignación operativa");
+  });
+
+  it("5) cambio real de auxiliar (mismo contrato: cambioSensible=true) -> campos sensibles + motivoCambio presentes", () => {
+    const r = camposSensiblesPatch({ ...base, auxiliarEmpleadoIds: [99], cambioSensible: true });
+    expect(r.auxiliarEmpleadoIds).toEqual([99]);
+    expect(r.motivoCambio).toBe("Reasignación operativa");
+  });
+
+  it("6) cambio real sin motivo -> el gate de envío (cambioSensible && !motivoCambioFinal) sigue bloqueando ANTES del fetch, camposSensiblesPatch nunca llega a llamarse", () => {
+    // Mismo gate ya probado en el describe "gate de envío" de arriba —
+    // aquí se confirma que, aunque motivoCambioFinal venga vacío,
+    // camposSensiblesPatch en sí NO inventa un motivo: lo devuelve tal
+    // cual (string vacío), la validación de bloqueo vive ANTES, en
+    // handleSubmit (línea `if (cambioSensible && !motivoCambioFinal)`).
+    const r = camposSensiblesPatch({ ...base, cambioSensible: true, motivoCambioFinal: "" });
+    expect(r.motivoCambio).toBe("");
+  });
+
+  it("7) bloqueadoParaPreCierre=true -> los 4 campos sensibles se OMITEN aunque cambioSensible sea true (regla preexistente sin cambios)", () => {
+    const r = camposSensiblesPatch({ ...base, bloqueadoParaPreCierre: true, cambioSensible: true });
+    expect(r.pilotoNombre).toBeUndefined();
+    expect(r.placa).toBeUndefined();
+    expect(r.auxiliarEmpleadoIds).toBeUndefined();
+    expect(r.auxiliarNombres).toBeUndefined();
+    // motivoCambio nunca dependió de bloqueadoParaPreCierre (tampoco antes de este ajuste).
+    expect(r.motivoCambio).toBe("Reasignación operativa");
+  });
+
+  it("nombres con espacios extra se recortan (trim) igual que antes de este ajuste", () => {
+    const r = camposSensiblesPatch({ ...base, pilotoNombre: "  Juan Pérez  ", cambioSensible: true });
+    expect(r.pilotoNombre).toBe("Juan Pérez");
+  });
+
+  it("pilotoNombre/placa vacíos tras trim -> undefined (igual que el comportamiento previo, nunca un string vacío)", () => {
+    const r = camposSensiblesPatch({ ...base, pilotoNombre: "   ", placa: "  ", cambioSensible: true });
+    expect(r.pilotoNombre).toBeUndefined();
+    expect(r.placa).toBeUndefined();
+  });
+});
+
+// 8) creación (POST /tms/planes): NO se modificó — el bloque de creación
+// nunca dependió de cambioSensible/camposSensiblesPatch (piloto/placa/
+// auxiliares siempre se enviaron ahí igual, es la primera asignación del
+// viaje, no una "reasignación"). Verificado por diff (sin cambios en esa
+// rama del handleSubmit), no hay lógica pura nueva que probar ahí.
