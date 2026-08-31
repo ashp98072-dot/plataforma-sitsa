@@ -68,6 +68,21 @@ const ESTADO_LABEL_UI: Record<string, string> = {
   LIQUIDADO: "Liquidado",
 };
 
+/**
+ * VIATICOS-BANDEJAS-1 — pestañas visibles (antes dropdown "Estado"),
+ * mismos 4 estados reales, SIN "Rechazados" (no existe ese estado — ver
+ * ticket VIATICOS-BANDEJAS-1). El valor es exactamente EstadoViatico
+ * (viaticos.ts) — la pestaña solo cambia `fEstado`, el filtrado real
+ * sigue ocurriendo en el servidor (listarViaticosControl), sin backend
+ * nuevo.
+ */
+const PESTANAS_ESTADO: { estado: string; etiqueta: string }[] = [
+  { estado: "PROGRAMADO", etiqueta: "Por autorizar" },
+  { estado: "AUTORIZADO", etiqueta: "Autorizados" },
+  { estado: "ENTREGADO", etiqueta: "Entregados" },
+  { estado: "LIQUIDADO", etiqueta: "Liquidados" },
+];
+
 const METODO_PAGO_LABEL: Record<string, string> = {
   EFECTIVO: "Efectivo",
   TRANSFERENCIA: "Transferencia",
@@ -228,6 +243,22 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void cargar();
   }, [cargar]);
+
+  // VIATICOS-BANDEJAS-1 — fBusqueda/fRol/fMetodo son filtros SOLO
+  // client-side (no viajan al servidor, no disparan cargar()): a
+  // diferencia de fEstado/fFechaDesde/fFechaHasta/fEmpleado (que sí
+  // recargan y ya limpian la selección dentro de cargar()), cambiar
+  // estos podía dejar seleccionados ids que quedan fuera de `filtrados`
+  // — y autorizarSeleccionados() actúa sobre `seleccionados` en crudo,
+  // no sobre la intersección con lo visible. Se limpia la selección
+  // completa al cambiar cualquiera de estos filtros (preferencia del
+  // ticket: "limpiar selección al cambiar filtros operativos para
+  // evitar acciones accidentales") — nunca se autoriza silenciosamente
+  // algo que dejó de estar a la vista.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSeleccionados(new Set());
+  }, [fBusqueda, fRol, fMetodo]);
 
   const filtrados = items.filter((r) => {
     if (fBusqueda.trim()) {
@@ -465,39 +496,36 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
         sección &quot;Viáticos por pagar&quot; más abajo.
       </p>
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <button
-          type="button"
-          onClick={() => setFEstado(fEstado === "PROGRAMADO" ? "" : "PROGRAMADO")}
-          className={`rounded border p-2 text-center transition ${fEstado === "PROGRAMADO" ? "border-sky-500 bg-sky-950/20" : "border-[var(--border)]"}`}
-        >
-          <p className="text-lg font-semibold">{resumen.pendientes}</p>
-          <p className="text-[10px] text-[var(--muted)]">Programados</p>
-        </button>
-        <button
-          type="button"
-          onClick={() => setFEstado(fEstado === "AUTORIZADO" ? "" : "AUTORIZADO")}
-          className={`rounded border p-2 text-center transition ${fEstado === "AUTORIZADO" ? "border-sky-500 bg-sky-950/20" : "border-[var(--border)]"}`}
-        >
-          <p className="text-lg font-semibold text-sky-300">{resumen.autorizados}</p>
-          <p className="text-[10px] text-[var(--muted)]">Autorizados</p>
-        </button>
-        <button
-          type="button"
-          onClick={() => setFEstado(fEstado === "ENTREGADO" ? "" : "ENTREGADO")}
-          className={`rounded border p-2 text-center transition ${fEstado === "ENTREGADO" ? "border-sky-500 bg-sky-950/20" : "border-[var(--border)]"}`}
-        >
-          <p className="text-lg font-semibold text-amber-300">{resumen.entregados}</p>
-          <p className="text-[10px] text-[var(--muted)]">Entregados</p>
-        </button>
-        <button
-          type="button"
-          onClick={() => setFEstado(fEstado === "LIQUIDADO" ? "" : "LIQUIDADO")}
-          className={`rounded border p-2 text-center transition ${fEstado === "LIQUIDADO" ? "border-sky-500 bg-sky-950/20" : "border-[var(--border)]"}`}
-        >
-          <p className="text-lg font-semibold text-emerald-300">{resumen.liquidados}</p>
-          <p className="text-[10px] text-[var(--muted)]">Liquidados</p>
-        </button>
+      {/* VIATICOS-BANDEJAS-1 — pestañas por estado (reemplazan el dropdown
+          "Estado" que existía más abajo). Mismo mecanismo de siempre:
+          click alterna fEstado ("" = Todos, click de nuevo lo apaga) —
+          eso ya dispara cargar() (fEstado es dependencia de cargar) y el
+          propio cargar() limpia la selección al recargar. Sin
+          "Rechazados": ese estado no existe (ver ticket). */}
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" role="tablist" aria-label="Filtrar por estado">
+        {PESTANAS_ESTADO.map(({ estado, etiqueta }) => {
+          const activa = fEstado === estado;
+          const contador =
+            estado === "PROGRAMADO"
+              ? resumen.pendientes
+              : estado === "AUTORIZADO"
+                ? resumen.autorizados
+                : estado === "ENTREGADO"
+                  ? resumen.entregados
+                  : resumen.liquidados;
+          return (
+            <button
+              key={estado}
+              type="button"
+              role="tab"
+              aria-selected={activa}
+              onClick={() => setFEstado(activa ? "" : estado)}
+              className={`rounded border p-2 text-center text-sm font-medium transition ${activa ? "border-sky-500 bg-sky-950/20 text-sky-200" : "border-[var(--border)] hover:bg-[var(--input)]"}`}
+            >
+              {etiqueta} ({contador})
+            </button>
+          );
+        })}
       </div>
 
       <div className="flex flex-wrap items-end gap-2">
@@ -533,16 +561,6 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
         <label className="text-xs text-[var(--muted)]">
           Hasta
           <input type="date" className={`${inputCls} mt-0.5 block`} value={fFechaHasta} onChange={(e) => setFFechaHasta(e.target.value)} />
-        </label>
-        <label className="text-xs text-[var(--muted)]">
-          Estado
-          <select className={`${inputCls} mt-0.5 block`} value={fEstado} onChange={(e) => setFEstado(e.target.value)}>
-            <option value="">Todos</option>
-            <option value="PROGRAMADO">Programado</option>
-            <option value="AUTORIZADO">Autorizado</option>
-            <option value="ENTREGADO">Entregado</option>
-            <option value="LIQUIDADO">Liquidado</option>
-          </select>
         </label>
         <button
           type="button"
