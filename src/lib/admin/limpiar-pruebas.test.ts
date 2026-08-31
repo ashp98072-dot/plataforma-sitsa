@@ -28,8 +28,41 @@ it.each(["clientes", "fact_cliente_perfil", "tms_clientes"])("rechaza vínculo c
 });
 it("no ignora un vínculo TMS sin FK hacia otra empresa", async () => {
   datosClientes(); filas.clientes[0].tms_cliente_id = 999;
-  await expect(limpiarClientes()).rejects.toThrow("fuera de esta empresa");
+  filas.vinculos_tms = [{ id: 999, empresa_id: 8 }];
+  await expect(limpiarClientes()).rejects.toThrow("otra empresa");
   expect(borradas()).toHaveLength(0);
+  expect(conn.rollback).toHaveBeenCalledOnce();
+  expect(conn.commit).not.toHaveBeenCalled();
+});
+it("permite limpiar un vínculo TMS inexistente sin modificar otras empresas", async () => {
+  datosClientes(); filas.clientes[0].tms_cliente_id = 999;
+  await limpiarClientes();
+  expect(conn.query).toHaveBeenCalledWith(
+    "SELECT id, empresa_id FROM tms_clientes WHERE id IN (?) ORDER BY id FOR UPDATE", [[999]]);
+  expect(borradas().map(([, params]) => params)).toEqual([[[300]], [[200]], [[100]]]);
+  expect(conn.commit).toHaveBeenCalledOnce();
+});
+it("permite limpiar clientes huérfanos aunque el catálogo TMS esté vacío", async () => {
+  datosClientes(); filas.tms_clientes = [];
+  await limpiarClientes();
+  expect(borradas().map(([, params]) => params)).toEqual([[[300]], [[200]]]);
+});
+it("un cambio del catálogo durante la limpieza obliga a reintentar", async () => {
+  datosClientes(); filas.clientes[0].tms_cliente_id = 999;
+  filas.vinculos_tms = [{ id: 999, empresa_id: 7 }];
+  await expect(limpiarClientes()).rejects.toThrow("cambió durante la limpieza");
+  expect(borradas()).toHaveLength(0);
+});
+it("un error al consultar vínculos TMS revierte sin borrar", async () => {
+  datosClientes(); filas.clientes[0].tms_cliente_id = 999;
+  const normal = conn.query.getMockImplementation()!;
+  conn.query.mockImplementation(async (...args) => {
+    if (String(args[0]).startsWith("SELECT id, empresa_id")) throw new Error("consulta fallida");
+    return normal(...args);
+  });
+  await expect(limpiarClientes()).rejects.toThrow("consulta fallida");
+  expect(borradas()).toHaveLength(0);
+  expect(conn.rollback).toHaveBeenCalledOnce();
 });
 it("revierte los cuestionarios si falla el borrado de clientes", async () => {
   datosClientes(); const normal = conn.query.getMockImplementation()!;
@@ -55,6 +88,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   filas = { rrhh_descuentos_maestro: [{ id: 10, empresa_id: 7, codigo: "TEST", monto_original: 20 }], rrhh_descuento_cuotas: [{ id: 11, empresa_id: 7, descuento_id: 10, planilla_periodo_id: null }], rrhh_descuento_abonos: [{ id: 12, empresa_id: 7, descuento_id: 10 }], inventario_rrhh_entregas: [{ id: 20, empresa_id: 7, descuento_id: 10 }] };
   conn.query.mockImplementation(async (sql: string) => {
+    if (sql.startsWith("SELECT id, empresa_id FROM tms_clientes")) return [filas.vinculos_tms ?? []];
     if (sql.includes("information_schema.TABLES")) return [[{ ENGINE: "InnoDB" }]];
     if (sql.includes("information_schema.tables")) return [[{ ok: 1 }]];
     if (sql.includes("KEY_COLUMN_USAGE") || sql.includes("information_schema.COLUMNS")) return [[]];
