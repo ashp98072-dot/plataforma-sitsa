@@ -66,7 +66,7 @@ describe("POST /tms/viaticos/[id]/entrega", () => {
   });
 
   it("propaga el status real de la lib (409 estado inválido)", async () => {
-    vi.mocked(registrarEntregaViatico).mockResolvedValue({ ok: false, error: "Este viático está ENTREGADO; no se puede registrar la entrega de desde ese estado.", status: 409 });
+    vi.mocked(registrarEntregaViatico).mockResolvedValue({ ok: false, error: "Este viático está ENTREGADO; no se puede registrar la entrega desde ese estado.", status: 409 });
     const res = await POST(req({ metodoPago: "EFECTIVO" }), ctx);
     expect(res.status).toBe(409);
   });

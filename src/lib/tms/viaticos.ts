@@ -890,7 +890,7 @@ export async function registrarEntregaViatico(
     const [rows] = await conn.query<RowDataPacket[]>(
       `SELECT v.id, v.estado, v.monto_asignado, e.banco, e.cuenta_bancaria, e.tipo_cuenta
        FROM tms_viaticos v
-       INNER JOIN tms_personal tp ON tp.id = v.personal_id
+       INNER JOIN tms_personal tp ON tp.id = v.personal_id AND tp.empresa_id = v.empresa_id
        LEFT JOIN empleados e ON e.id = tp.id_empleado AND e.empresa_id = tp.empresa_id
        WHERE v.id = ? AND v.empresa_id = ? LIMIT 1 FOR UPDATE`,
       [viaticoId, empresaId],
@@ -902,7 +902,7 @@ export async function registrarEntregaViatico(
     if (String(v.estado) !== "AUTORIZADO") {
       return {
         ok: false,
-        error: `Este viático está ${String(v.estado)}; no se puede registrar la entrega de desde ese estado.`,
+        error: `Este viático está ${String(v.estado)}; no se puede registrar la entrega desde ese estado.`,
         status: 409,
       };
     }

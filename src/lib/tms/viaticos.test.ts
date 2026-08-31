@@ -488,6 +488,12 @@ describe("registrarEntregaViatico (individual) — congela snapshot bancario, si
     expect(String(sql)).toContain("FOR UPDATE");
   });
 
+  it("REVISIÓN PR #154 — el JOIN a tms_personal está tenant-scoped explícitamente (tp.empresa_id = v.empresa_id), no solo por tp.id = v.personal_id", async () => {
+    await registrarEntregaViatico(7, 10, { metodoPago: "EFECTIVO", referenciaPago: null, observaciones: null }, "fact1");
+    const [sql] = conn.query.mock.calls[0];
+    expect(String(sql)).toContain("tp.empresa_id = v.empresa_id");
+  });
+
   it("11) affectedRows != 1 -> 409, sin auditoría ni commit", async () => {
     conn.execute.mockResolvedValue([{ affectedRows: 0 }, []]);
     const r = await registrarEntregaViatico(7, 10, { metodoPago: "EFECTIVO", referenciaPago: null, observaciones: null }, "fact1");
