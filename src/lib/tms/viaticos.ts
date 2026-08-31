@@ -275,6 +275,51 @@ export async function sincronizarViaticosPlan(
   }
 }
 
+export type AvisoViaticoRechazado = {
+  personalId: number;
+  nombre: string;
+  tipo: "RECHAZADO";
+  estadoViatico: "RECHAZADO";
+  motivoRechazo: string | null;
+};
+
+/**
+ * PROGRAMACION-RECHAZADO-AVISO-1 — lectura PURAMENTE INFORMATIVA (nunca
+ * bloquea, nunca modifica nada): ¿alguna de las personas que se están
+ * (re)asignando a ESTE plan ya tiene, en ESTE MISMO plan, un viático
+ * RECHAZADO? Existe para que quien edita Programación entienda por qué
+ * sincronizarViaticosPlan() NO genera un viático nuevo para esa persona
+ * — RECHAZADO es terminal por (plan_id, personal_id), protegido por
+ * `UNIQUE KEY uq_viatico_plan_personal` y por el propio
+ * sincronizarViaticosPlan (que salta esa fila sin tocarla, ver su
+ * JSDoc) — esta función NO cambia esa regla, NO la toca, solo la
+ * explica. `empresaId`/`planId` son SIEMPRE obligatorios en el WHERE
+ * (multiempresa-safe, nunca solo `personalId`).
+ */
+export async function listarViaticosRechazadosDelPlan(
+  empresaId: number,
+  planId: number,
+  personalIds: number[],
+): Promise<AvisoViaticoRechazado[]> {
+  const ids = [...new Set(personalIds)]; // sin duplicados -- nunca dos avisos para la misma persona.
+  if (!ids.length) return [];
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = await query<RowDataPacket[]>(
+    `SELECT v.personal_id, tp.nombre AS personal_nombre, v.motivo_rechazo
+     FROM tms_viaticos v
+     INNER JOIN tms_personal tp ON tp.id = v.personal_id AND tp.empresa_id = v.empresa_id
+     WHERE v.empresa_id = ? AND v.plan_id = ? AND v.personal_id IN (${placeholders}) AND v.estado = 'RECHAZADO'`,
+    [empresaId, planId, ...ids],
+  );
+  return rows.map((r) => ({
+    personalId: Number(r.personal_id),
+    nombre: String(r.personal_nombre ?? ""),
+    tipo: "RECHAZADO",
+    estadoViatico: "RECHAZADO",
+    motivoRechazo: r.motivo_rechazo != null ? String(r.motivo_rechazo) : null,
+  }));
+}
+
 export type ResultadoActualizarMonto =
   | { ok: true }
   | { ok: false; error: string };
