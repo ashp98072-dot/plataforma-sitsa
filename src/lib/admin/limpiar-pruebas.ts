@@ -9,6 +9,25 @@ export function protegerCuotasPlanilla(filas: Record<string, unknown>[]) {
   }
 }
 
+/** No borra movimientos ajenos al catálogo: referencias externas bloquean todo. */
+export async function limpiarClientesPrueba(conn: PoolConnection, empresaId: number) {
+  const tms = await leer(conn, "tms_clientes", "empresa_id = ?", empresaId);
+  // tms_cliente_id no tiene FK: validar también vínculos cruzados explícitamente.
+  const clientes = await leer(conn, "clientes",
+    "empresa_id = ? OR tms_cliente_id IN (SELECT id FROM tms_clientes WHERE empresa_id = ?)", empresaId, [empresaId]);
+  const tmsIds = new Set(tms.filas.map((f) => Number(f.id)));
+  if (clientes.filas.some((f) => f.tms_cliente_id != null && !tmsIds.has(Number(f.tms_cliente_id)))) {
+    throw new LimpiezaBloqueada("Hay un cliente vinculado a TMS fuera de esta empresa o inexistente. Revisa el vínculo antes de limpiar.");
+  }
+  const perfiles = await leer(conn, "fact_cliente_perfil",
+    "empresa_id = ? OR cliente_id IN (SELECT id FROM clientes WHERE empresa_id = ?)", empresaId, [empresaId]);
+  const clienteIds = new Set(clientes.filas.map((f) => Number(f.id)));
+  if (perfiles.filas.some((f) => !clienteIds.has(Number(f.cliente_id)))) {
+    throw new LimpiezaBloqueada("Hay cuestionarios sin cliente de esta empresa. No se limpió ningún dato.");
+  }
+  return borrarGrupos(conn, [perfiles, clientes, tms]);
+}
+
 /** Solo desde módulos PRUEBAS, protegidos por Admin y confirmación del módulo. */
 export async function limpiarMultasPrueba(conn: PoolConnection, empresaId: number) {
   const revisiones = await leer(conn, "ops_multas_revisiones", "empresa_id = ?", empresaId);
