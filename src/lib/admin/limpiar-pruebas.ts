@@ -1,4 +1,4 @@
-import type { PoolConnection } from "mysql2/promise";
+import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { getPool } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { borrarGrupos, leer, LimpiezaBloqueada } from "./limpiar-operaciones";
@@ -16,8 +16,21 @@ export async function limpiarClientesPrueba(conn: PoolConnection, empresaId: num
   const clientes = await leer(conn, "clientes",
     "empresa_id = ? OR tms_cliente_id IN (SELECT id FROM tms_clientes WHERE empresa_id = ?)", empresaId, [empresaId]);
   const tmsIds = new Set(tms.filas.map((f) => Number(f.id)));
-  if (clientes.filas.some((f) => f.tms_cliente_id != null && !tmsIds.has(Number(f.tms_cliente_id)))) {
-    throw new LimpiezaBloqueada("Hay un cliente vinculado a TMS fuera de esta empresa o inexistente. Revisa el vínculo antes de limpiar.");
+  const pendientes = [...new Set(clientes.filas
+    .filter((f) => f.tms_cliente_id != null && !tmsIds.has(Number(f.tms_cliente_id)))
+    .map((f) => Number(f.tms_cliente_id)))];
+  for (let i = 0; i < pendientes.length; i += 250) {
+    // Lectura actual en la misma transacción: ausencia no equivale a otra empresa.
+    // Estos registros solo se validan; nunca se incorporan al grupo a borrar.
+    const [vinculos] = await conn.query<RowDataPacket[]>(
+      "SELECT id, empresa_id FROM tms_clientes WHERE id IN (?) ORDER BY id FOR UPDATE",
+      [pendientes.slice(i, i + 250)]);
+    if (vinculos.some((f) => Number(f.empresa_id) !== empresaId)) {
+      throw new LimpiezaBloqueada("Hay un cliente vinculado a TMS de otra empresa. Revisa el vínculo antes de limpiar; no se borró ningún dato.");
+    }
+    if (vinculos.length) {
+      throw new LimpiezaBloqueada("El catálogo TMS cambió durante la limpieza. Intenta nuevamente; no se borró ningún dato.");
+    }
   }
   const perfiles = await leer(conn, "fact_cliente_perfil",
     "empresa_id = ? OR cliente_id IN (SELECT id FROM clientes WHERE empresa_id = ?)", empresaId, [empresaId]);
