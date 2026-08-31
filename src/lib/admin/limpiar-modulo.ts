@@ -2,7 +2,7 @@ import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/prom
 import { getPool } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { limpiarViajesConjuntos, limpiarViaticos, limpiarCuestionarios, desactivarCatalogo, anularMultas, eliminarRutas } from "@/lib/admin/limpiar-operaciones";
-import { limpiarMultasPrueba } from "@/lib/admin/limpiar-pruebas";
+import { limpiarMultasPrueba, limpiarClientesPrueba } from "@/lib/admin/limpiar-pruebas";
 import type { ModuloLimpieza } from "@/lib/admin/limpiar-modulo-shared";
 
 export type { ModuloLimpieza };
@@ -149,6 +149,8 @@ export async function contarModuloEmpresa(
         return { cuestionarios: await count("fact_cliente_perfil") };
       case "clientes":
         return { clientes_activos: await count("clientes", "empresa_id = ? AND estado = 'Activo'"), clientes_tms_activos: await count("tms_clientes", "empresa_id = ? AND estado = 'Activo'") };
+      case "pruebas_clientes":
+        return { clientes: await count("clientes"), clientes_tms: await count("tms_clientes"), cuestionarios: await count("fact_cliente_perfil") };
       case "contabilidad":
         return {
           cuentas: await count("cont_cuentas"),
@@ -706,6 +708,9 @@ export async function limpiarModuloEmpresa(opts: {
       case "operaciones_accesos":
       case "clientes":
         afectados = await desactivarCatalogo(conn, opts.empresaId, opts.modulo);
+        break;
+      case "pruebas_clientes":
+        afectados = await limpiarClientesPrueba(conn, opts.empresaId);
         break;
       case "facturacion_clientes":
         afectados = await limpiarCuestionarios(conn, opts.empresaId);
