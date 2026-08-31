@@ -150,7 +150,7 @@ export async function contarModuloEmpresa(
       case "clientes":
         return { clientes_activos: await count("clientes", "empresa_id = ? AND estado = 'Activo'"), clientes_tms_activos: await count("tms_clientes", "empresa_id = ? AND estado = 'Activo'") };
       case "pruebas_clientes":
-        return { clientes: await count("clientes"), clientes_tms: await count("tms_clientes"), cuestionarios: await count("fact_cliente_perfil") };
+        return { clientes: await count("clientes"), clientes_tms: await count("tms_clientes"), cuestionarios: await count("fact_cliente_perfil"), contactos: await count("tms_cliente_contactos"), ubicaciones: await count("tms_cliente_ubicaciones") };
       case "contabilidad":
         return {
           cuentas: await count("cont_cuentas"),

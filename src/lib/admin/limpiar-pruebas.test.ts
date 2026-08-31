@@ -21,6 +21,62 @@ it("elimina catálogo y cuestionarios, incluso inactivos, con auditoría transac
   expect(conn.commit).toHaveBeenCalledOnce();
   expect(registrarAuditoriaTx).toHaveBeenCalledWith(conn, expect.objectContaining({ modulo: "pruebas_clientes", empresaId: 7 }));
 });
+it("elimina contactos y ubicaciones propios antes del catálogo sin delegar en CASCADE", async () => {
+  datosClientes();
+  filas.tms_cliente_contactos = [{ id: 400, empresa_id: 7, cliente_id: 100, activo: 0 }];
+  filas.tms_cliente_ubicaciones = [{ id: 500, empresa_id: 7, cliente_id: 100, activo: 1 }];
+  const normal = conn.query.getMockImplementation()!;
+  conn.query.mockImplementation(async (...args) => {
+    if (String(args[0]).includes("KEY_COLUMN_USAGE") && (args[1] as string[])[0] === "tms_clientes") {
+      return [[{ tabla: "tms_cliente_contactos", columna: "cliente_id", destino: "id" },
+        { tabla: "tms_cliente_ubicaciones", columna: "cliente_id", destino: "id" }]];
+    }
+    if (String(args[0]).startsWith("SELECT `cliente_id`")) {
+      expect(args[0]).toContain("AND id NOT IN (?)");
+      return [[]];
+    }
+    return normal(...args);
+  });
+  const resultado = await limpiarClientes();
+  expect(borradas().map(([, params]) => params)).toEqual([[[300]], [[400]], [[500]], [[200]], [[100]]]);
+  expect(resultado).toBeDefined();
+  expect(conn.commit).toHaveBeenCalledOnce();
+});
+it.each(["tms_cliente_contactos", "tms_cliente_ubicaciones"])("protege otras empresas en %s", async (tabla) => {
+  datosClientes(); filas[tabla] = [{ id: 400, empresa_id: 8, cliente_id: 100 }];
+  await expect(limpiarClientes()).rejects.toThrow("entre empresas");
+  expect(borradas()).toHaveLength(0);
+});
+it.each(["tms_cliente_contactos", "tms_cliente_ubicaciones"])("rechaza dependencia de cliente ajeno en %s", async (tabla) => {
+  datosClientes(); filas[tabla] = [{ id: 400, empresa_id: 7, cliente_id: 999 }];
+  await expect(limpiarClientes()).rejects.toThrow("sin cliente TMS de esta empresa");
+  expect(borradas()).toHaveLength(0);
+});
+it.each(["contacto_cliente_id", "ubicacion_carga_id", "cliente_ubicacion_id"])("protege referencias de rutas sin FK: %s", async (columna) => {
+  datosClientes();
+  filas.tms_cliente_contactos = [{ id: 400, empresa_id: 7, cliente_id: 100 }];
+  filas.tms_cliente_ubicaciones = [{ id: 500, empresa_id: 7, cliente_id: 100 }];
+  const normal = conn.query.getMockImplementation()!;
+  conn.query.mockImplementation(async (...args) => {
+    if (String(args[0]).includes(`WHERE ${columna} IN`)) return [[{ id: 800 }]];
+    return normal(...args);
+  });
+  await expect(limpiarClientes()).rejects.toThrow("Limpia primero las rutas");
+  expect(borradas()).toHaveLength(0);
+});
+it("revierte contactos si falla el borrado de ubicaciones", async () => {
+  datosClientes();
+  filas.tms_cliente_contactos = [{ id: 400, empresa_id: 7, cliente_id: 100 }];
+  filas.tms_cliente_ubicaciones = [{ id: 500, empresa_id: 7, cliente_id: 100 }];
+  const normal = conn.query.getMockImplementation()!;
+  conn.query.mockImplementation(async (...args) => {
+    if (String(args[0]).startsWith("DELETE FROM `tms_cliente_ubicaciones`")) throw new Error("fallo ubicaciones");
+    return normal(...args);
+  });
+  await expect(limpiarClientes()).rejects.toThrow("fallo ubicaciones");
+  expect(conn.rollback).toHaveBeenCalledOnce();
+  expect(conn.commit).not.toHaveBeenCalled();
+});
 it.each(["clientes", "fact_cliente_perfil", "tms_clientes"])("rechaza vínculo cruzado en %s sin borrar", async (tabla) => {
   datosClientes(); filas[tabla][0].empresa_id = 8;
   await expect(limpiarClientes()).rejects.toThrow("entre empresas");
@@ -88,6 +144,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   filas = { rrhh_descuentos_maestro: [{ id: 10, empresa_id: 7, codigo: "TEST", monto_original: 20 }], rrhh_descuento_cuotas: [{ id: 11, empresa_id: 7, descuento_id: 10, planilla_periodo_id: null }], rrhh_descuento_abonos: [{ id: 12, empresa_id: 7, descuento_id: 10 }], inventario_rrhh_entregas: [{ id: 20, empresa_id: 7, descuento_id: 10 }] };
   conn.query.mockImplementation(async (sql: string) => {
+    if (sql.startsWith("SELECT id FROM tms_cliente_")) return [[]];
     if (sql.startsWith("SELECT id, empresa_id FROM tms_clientes")) return [filas.vinculos_tms ?? []];
     if (sql.includes("information_schema.TABLES")) return [[{ ENGINE: "InnoDB" }]];
     if (sql.includes("information_schema.tables")) return [[{ ok: 1 }]];

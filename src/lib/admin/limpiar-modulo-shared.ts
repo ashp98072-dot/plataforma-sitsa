@@ -78,7 +78,7 @@ export const MODULO_LIMPIEZA_NOTA: Record<ModuloLimpieza, string> = {
   operaciones_accesos: "Desactiva los accesos de proveedores de la empresa. Conserva usuarios y credenciales cifradas; se pueden reactivar.",
   facturacion_clientes: "Borra únicamente cuestionarios de clientes de esta empresa. Conserva clientes, perfil fiscal de la empresa, facturas y contabilidad.",
   clientes: "Desactiva clientes de esta empresa y su catálogo TMS. Conserva datos fiscales, rutas, viajes e historial; no elimina clientes de otras empresas.",
-  pruebas_clientes: "IRREVERSIBLE: borra clientes activos e inactivos, su catálogo TMS y cuestionarios de la empresa seleccionada. No borra facturas, pagos, rutas ni viajes: si existen vínculos, bloquea toda la operación e indica la tabla pendiente. Limpia primero los módulos relacionados. Conserva otras empresas y auditoría. Haz un respaldo y detén las capturas durante la limpieza.",
+  pruebas_clientes: "IRREVERSIBLE: borra clientes activos e inactivos, su catálogo TMS, contactos, ubicaciones y cuestionarios de la empresa seleccionada. No borra facturas, pagos, rutas ni viajes: si existen vínculos, bloquea toda la operación e indica la tabla pendiente. Limpia primero los módulos relacionados. Conserva otras empresas y auditoría. Haz un respaldo y detén las capturas durante la limpieza.",
   contabilidad: "No toca RRHH, Flota ni TMS.",
   cms: "Solo secciones del sitio web de esa empresa.",
   reciclaje: "Solo lotes de reciclaje de esa empresa.",
