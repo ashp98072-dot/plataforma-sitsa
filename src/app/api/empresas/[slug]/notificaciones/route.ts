@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { sincronizarVacacionesEmpleadosActivos } from "@/lib/rrhh/vacaciones";
+import { resumenNotificacionesVacaciones } from "@/lib/rrhh/vacaciones-alertas-ui";
 import { query } from "@/lib/db";
 import { requireTenant } from "@/lib/tenant";
 import { kmPendienteServicio } from "@/lib/flota/import-excel";
@@ -180,14 +181,11 @@ export async function GET(_req: Request, ctx: Ctx) {
     console.error("[notificaciones] recordatorios:", e);
   }
 
-  // Alertas de vacaciones para RRHH. Son derivadas y de solo lectura: el
-  // polling no crea recordatorios ni modifica saldos. Los IDs son estables,
-  // por lo que cada recarga reemplaza el feed y no duplica notificaciones.
+  // Alertas agrupadas de vacaciones. Se conserva la sincronización existente
+  // y los IDs de resumen son estables para no duplicar el feed.
   try {
     const puedeVacaciones =
-      rol === "Admin" ||
-      rol === "RRHH" ||
-      (perms && tienePermiso(perms, "vacaciones", "ver"));
+      puede("vacaciones", "ver");
 
     if (puedeVacaciones) {
       await sincronizarVacacionesEmpleadosActivos(guard.empresa.id);
@@ -202,16 +200,6 @@ export async function GET(_req: Request, ctx: Ctx) {
         [guard.empresa.id],
       ).catch(() => [] as RowDataPacket[]);
 
-      for (const solicitud of solicitudes) {
-        items.push({
-          id: `vacaciones-solicitud-${Number(solicitud.id)}`,
-          tipo: "aprobacion",
-          titulo: `Vacaciones pendientes — ${String(solicitud.empleado_nombre)}`,
-          detalle: `${Number(solicitud.dias_habiles)} día(s) · ${String(solicitud.fecha_inicio).slice(0, 10)} al ${String(solicitud.fecha_fin).slice(0, 10)}`,
-          enlace: `/e/${slug}/rrhh/vacaciones`,
-          creadoAt: solicitud.creado_en ? String(solicitud.creado_en) : null,
-        });
-      }
 
       const saldos = await query<RowDataPacket[]>(
         `SELECT e.id, e.nombre, ROUND(SUM(s.dias_disponibles), 2) AS dias_disponibles
@@ -226,17 +214,7 @@ export async function GET(_req: Request, ctx: Ctx) {
         [guard.empresa.id],
       ).catch(() => [] as RowDataPacket[]);
 
-      for (const saldo of saldos) {
-        const dias = Number(saldo.dias_disponibles);
-        items.push({
-          id: `vacaciones-saldo-15-${Number(saldo.id)}`,
-          tipo: "alerta",
-          titulo: `Vacaciones acumuladas — ${String(saldo.nombre)}`,
-          detalle: `${dias.toLocaleString("es-GT", { maximumFractionDigits: 2 })} días disponibles; alcanzó el umbral de 15 días.`,
-          enlace: `/e/${slug}/rrhh/vacaciones`,
-          creadoAt: null,
-        });
-      }
+      items.push(...resumenNotificacionesVacaciones(slug, solicitudes.length, saldos.length));
     }
   } catch (e) {
     console.error("[notificaciones] vacaciones:", e);

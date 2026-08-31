@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { filtrarSaldos, type SaldoAlerta } from "@/lib/rrhh/vacaciones-alertas-ui";
 
 type Solicitud = {
   id: number;
@@ -14,13 +15,7 @@ type Solicitud = {
   diasHabiles: number;
 };
 
-type Saldo = {
-  empleadoId: number;
-  codigo: string;
-  nombre: string;
-  dpi: string | null;
-  diasDisponibles: number;
-};
+type Saldo = SaldoAlerta;
 
 type Recordatorio = {
   id: number | null;
@@ -60,9 +55,18 @@ function fecha(value: string) {
 }
 
 export function VacacionesAlertasPanel({ slug }: { slug: string }) {
+  return <Panel key={slug} slug={slug} />;
+}
+function Panel({ slug }: { slug: string }) {
   const [data, setData] = useState<Alertas>(VACIO);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
+  const [nombre, setNombre] = useState("");
+  const [desde, setDesde] = useState("");
+  const [hasta, setHasta] = useState("");
+  const [orden, setOrden] = useState("saldo");
+  const fechasInvalidas = Boolean(desde && hasta && desde > hasta);
+  const saldosFiltrados = filtrarSaldos(data.colaboradoresConQuinceDias, { nombre, desde, hasta, orden });
 
   useEffect(() => {
     let activo = true;
@@ -166,15 +170,27 @@ export function VacacionesAlertasPanel({ slug }: { slug: string }) {
                 {data.colaboradoresConQuinceDias.length}
               </span>
             </div>
-            {data.colaboradoresConQuinceDias.length ? (
+            <div className="grid gap-2 border-b border-[var(--border)] p-3 text-sm sm:grid-cols-2">
+              <label>Nombre, código o DPI<input className="w-full rounded border border-[var(--border)] bg-[var(--input)] p-2" value={nombre} onChange={(e) => setNombre(e.target.value)} /></label>
+              <label>Ordenar<select className="w-full rounded border border-[var(--border)] bg-[var(--input)] p-2" value={orden} onChange={(e) => setOrden(e.target.value)}>
+                <option value="saldo">Mayor saldo</option><option value="nombre">Nombre</option><option value="antiguedad">Mayor antigüedad</option><option value="reciente">Contratación más reciente</option>
+              </select></label>
+              <label>Contratación desde<input type="date" className="w-full rounded border border-[var(--border)] bg-[var(--input)] p-2" value={desde} onChange={(e) => setDesde(e.target.value)} /></label>
+              <label>Contratación hasta<input type="date" className="w-full rounded border border-[var(--border)] bg-[var(--input)] p-2" value={hasta} onChange={(e) => setHasta(e.target.value)} /></label>
+              <p>{saldosFiltrados.length} de {data.colaboradoresConQuinceDias.length} colaboradores. Antigüedad basada en fecha de contratación, no entrada laboral.</p>
+              <button type="button" className="underline" onClick={() => { setNombre(""); setDesde(""); setHasta(""); setOrden("saldo"); }}>Limpiar filtros</button>
+              {fechasInvalidas && <p role="alert">La fecha desde no puede ser posterior a hasta.</p>}
+            </div>
+            {saldosFiltrados.length ? (
               <div className="max-h-80 divide-y divide-[var(--border)] overflow-y-auto">
-                {data.colaboradoresConQuinceDias.map((s) => (
+                {saldosFiltrados.map((s) => (
                   <div key={s.empleadoId} className="flex items-start justify-between gap-3 px-3 py-2 text-sm">
                     <div>
                       <p className="font-medium">{s.nombre}</p>
                       <p className="text-[var(--muted)]">
                         {s.codigo}{s.dpi ? ` · DPI ${s.dpi}` : ""}
                       </p>
+                      <p className="text-[var(--muted)]">Contratación: {s.fechaContratacion ? fecha(s.fechaContratacion) : "Sin fecha registrada"}</p>
                     </div>
                     <strong className="whitespace-nowrap text-red-200">
                       {s.diasDisponibles.toLocaleString("es-GT", { maximumFractionDigits: 2 })} días
@@ -184,7 +200,7 @@ export function VacacionesAlertasPanel({ slug }: { slug: string }) {
               </div>
             ) : (
               <p className="px-3 py-4 text-sm text-[var(--muted)]">
-                Ningún colaborador activo tiene 15 días acumulados.
+                {data.colaboradoresConQuinceDias.length ? "No hay colaboradores que coincidan con estos filtros." : "Ningún colaborador activo tiene 15 días acumulados."}
               </p>
             )}
           </div>
