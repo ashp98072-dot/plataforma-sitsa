@@ -52,43 +52,53 @@ function fmtQ(monto: number): string {
 
 export default function DashboardRrhhPage() {
   const slug = String(useParams().slug);
+  return <DashboardRrhh key={slug} slug={slug} />;
+}
+function DashboardRrhh({ slug }: { slug: string }) {
   const { empresaNombre } = useEmpresaSession();
 
   const [stats, setStats] = useState<Stats | null>(null);
   const [resumenGerencial, setResumenGerencial] = useState<
     ResumenMensual[]
   >([]);
-  const [situacionHoy, setSituacionHoy] = useState<SituacionHoy[]>([]);
+  const [situacionHoy, setSituacionHoy] = useState<SituacionHoy[] | null>(null);
   const [empresa, setEmpresa] = useState(empresaNombre);
+  const [error, setError] = useState("");
+  const [avisos, setAvisos] = useState<string[]>([]);
+  const [cargando, setCargando] = useState(true);
+  const [intento, setIntento] = useState(0);
+  const [mesSeleccionado, setMesSeleccionado] = useState("");
 
   useEffect(() => {
-    let cancelled = false;
-
+    const controller = new AbortController();
     void (async () => {
-      const res = await fetch(`/api/empresas/${slug}/rrhh/dashboard`);
-      const data = await res.json();
-
-      if (!res.ok || cancelled) return;
-
-      setStats(data.stats);
-      setResumenGerencial(data.resumenGerencial ?? []);
-      setSituacionHoy(data.situacionHoy ?? []);
-
-      if (data.empresa) {
-        setEmpresa(String(data.empresa));
+      try {
+        const res = await fetch(`/api/empresas/${slug}/rrhh/dashboard`, { cache: "no-store", signal: controller.signal });
+        const data = await res.json().catch(() => { throw new Error("Respuesta inválida del servidor al consultar indicadores."); });
+        if (!res.ok) throw new Error(data.error || "No se pudieron cargar los indicadores.");
+        if (controller.signal.aborted) return;
+        setStats(data.stats);
+        setResumenGerencial(data.resumenGerencial ?? []);
+        setSituacionHoy(data.situacionHoy ?? null);
+        setAvisos(data.avisos ?? []);
+        if (data.empresa) setEmpresa(String(data.empresa));
+      } catch (e) {
+        if (!controller.signal.aborted) {
+          setStats(null); setResumenGerencial([]); setSituacionHoy(null); setAvisos([]);
+          setError(e instanceof Error ? e.message : "Error de conexión.");
+        }
+      } finally {
+        if (!controller.signal.aborted) setCargando(false);
       }
     })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [slug]);
+    return () => controller.abort();
+  }, [slug, intento]);
 
   const mesActual =
-    resumenGerencial[resumenGerencial.length - 1] ?? null;
+    resumenGerencial.find((r) => r.mes === mesSeleccionado) ?? resumenGerencial[resumenGerencial.length - 1] ?? null;
 
   const mesAnterior =
-    resumenGerencial[resumenGerencial.length - 2] ?? null;
+    mesActual ? resumenGerencial[resumenGerencial.indexOf(mesActual) - 1] ?? null : null;
 
   const variacionCosto =
     mesActual?.netoNomina != null && mesAnterior?.netoNomina != null && mesAnterior.netoNomina > 0
@@ -182,9 +192,20 @@ export default function DashboardRrhhPage() {
         </h1>
 
         <p className="mt-1 text-sm text-[var(--muted)]">
-          Mismos módulos del sistema de escritorio / web KuiqTrans, por empresa.
+          Indicadores mensuales y situación del personal de esta empresa.
         </p>
       </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <button type="button" disabled={cargando} onClick={() => { setCargando(true); setError(""); setIntento((i) => i + 1); }} className="rounded border border-[var(--border)] px-3 py-2">
+          {cargando ? "Cargando indicadores…" : "Actualizar indicadores"}
+        </button>
+        {resumenGerencial.length > 0 && <label>Mes a consultar <select aria-label="Mes a consultar" className="rounded border border-[var(--border)] bg-[var(--input)] p-2" value={mesActual?.mes ?? ""} onChange={(e) => setMesSeleccionado(e.target.value)}>
+          {resumenGerencial.map((r) => <option key={r.mes} value={r.mes}>{fmtMes(r.mes)}</option>)}
+        </select></label>}
+      </div>
+      {error && <p role="alert">Indicadores no disponibles: {error} Los accesos a módulos siguen disponibles.</p>}
+      {avisos.map((aviso) => <p key={aviso} role="alert">{aviso}</p>)}
+      {!cargando && !error && !resumenGerencial.length && <p>Resumen mensual no disponible.</p>}
 
       {stats ? (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
@@ -206,7 +227,7 @@ export default function DashboardRrhhPage() {
         </div>
       ) : null}
 
-      {stats ? (
+      {situacionHoy !== null ? (
         <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
@@ -269,19 +290,19 @@ export default function DashboardRrhhPage() {
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
               <p className="text-xs text-[var(--muted)]">
-                Altas este mes
+                Contrataciones del mes seleccionado
               </p>
               <p className="mt-1 text-2xl font-semibold text-[#8fd4a0]">
-                +{mesActual.altas}
+                {mesActual.altas == null ? "No disponible" : `+${mesActual.altas}`}
               </p>
             </div>
 
             <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
               <p className="text-xs text-[var(--muted)]">
-                Bajas este mes
+                Bajas del mes seleccionado
               </p>
               <p className="mt-1 text-2xl font-semibold text-[#e08a8a]">
-                -{mesActual.bajas}
+                {mesActual.bajas == null ? "No disponible" : `-${mesActual.bajas}`}
               </p>
             </div>
 
@@ -327,7 +348,7 @@ export default function DashboardRrhhPage() {
             </p>
           </div>
 
-          <details className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+          <details open className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
             <summary className="cursor-pointer text-sm font-medium">
               Últimos {resumenGerencial.length} meses
             </summary>
@@ -357,10 +378,10 @@ export default function DashboardRrhhPage() {
                         {fmtMes(r.mes)}
                       </td>
                       <td className="py-1.5 pr-4 text-[#8fd4a0]">
-                        +{r.altas}
+                        {r.altas == null ? "No disponible" : `+${r.altas}`}
                       </td>
                       <td className="py-1.5 pr-4 text-[#e08a8a]">
-                        -{r.bajas}
+                        {r.bajas == null ? "No disponible" : `-${r.bajas}`}
                       </td>
                       <td className="py-1.5 pr-4">
                         {r.netoNomina == null ? "No disponible" : fmtQ(r.netoNomina)}
@@ -369,13 +390,13 @@ export default function DashboardRrhhPage() {
                         {r.costoRegistrado == null ? "No disponible" : fmtQ(r.costoRegistrado)}
                       </td>
                       <td className="py-1.5 pr-4">
-                        {r.amonestaciones}
+                        {r.amonestaciones ?? "No disponible"}
                       </td>
                       <td className="py-1.5 pr-4">
-                        {r.suspensiones}
+                        {r.suspensiones ?? "No disponible"}
                       </td>
                       <td className="py-1.5">
-                        {r.despidos}
+                        {r.despidos ?? "No disponible"}
                       </td>
                     </tr>
                   ))}

@@ -6,7 +6,7 @@ export default async function ContabilidadLayout({ children, params }: { childre
   return <>
     <nav aria-label="Contabilidad" className="flex flex-wrap gap-4 border-b border-[var(--border)] p-4 text-sm">
       <Link href={`/e/${slug}/contabilidad`}>Cuentas y asientos</Link>
-      <Link href={`/e/${slug}/contabilidad/entidades`} className="underline">Configurar entidades contables</Link>
+      <Link href={`/e/${slug}/contabilidad/entidades`} className="underline">Configurar libros contables</Link>
     </nav>
     {children}
   </>;

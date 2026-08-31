@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RowDataPacket } from "mysql2";
 vi.mock("@/lib/db", () => ({ query: vi.fn() }));
 import { query } from "@/lib/db";
-import { obtenerResumenGerencial } from "./dashboard";
+import { obtenerResumenGerencial, obtenerEstadisticasDashboard } from "./dashboard";
 const rows = (data: Record<string, unknown>[]) => data as RowDataPacket[];
 
 beforeEach(() => {
@@ -18,6 +18,18 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("dashboard mensual RRHH", () => {
+  it("consultas de altas y bitácora fallidas no aparentan cero registros", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(query).mockRejectedValue(new Error("fallo"));
+    const [r] = await obtenerResumenGerencial(7, 1);
+    expect(r.altas).toBeNull(); expect(r.bajas).toBeNull();
+    expect(r.amonestaciones).toBeNull(); expect(r.suspensiones).toBeNull(); expect(r.despidos).toBeNull();
+  });
+  it("estadísticas diarias fallidas no se convierten en ceros", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(query).mockRejectedValue(new Error("fallo"));
+    await expect(obtenerEstadisticasDashboard(7)).rejects.toThrow("no disponibles");
+  });
   it("separa neto y costo registrado conservando campos e indicadores anteriores", async () => {
     const [r] = await obtenerResumenGerencial(7, 1);
     expect(r).toEqual({ mes: "2026-08", altas: 2, bajas: 2, costoNomina: 1800.5,

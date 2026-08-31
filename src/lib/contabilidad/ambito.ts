@@ -15,8 +15,10 @@ export function ambitoDesdeRequest(req: Request, session: SessionPayload): Ambit
   return { entidadId: Number(valores[0]), usuarioId: session.id, admin: session.rol === "Admin" };
 }
 
-/** Después del guard de módulo. Mismo lock de empresa que la limpieza; entidad que la revocación. */
-export async function bloquearAmbito(conn: PoolConnection, empresaId: number, a: AmbitoContable, editar: boolean) {
+/** Requiere guard de módulo previo (lectura/escritura). Solo valida y bloquea el libro, no duplica permisos de Usuarios. */
+export async function bloquearAmbito(conn: PoolConnection, empresaId: number, a: AmbitoContable, _editar: boolean) {
+  // Compatibilidad con callers existentes: la acción ya fue validada por requireTenantModulo.
+  void _editar;
   if (!a || !Number.isInteger(a.entidadId) || a.entidadId <= 0) throw new AccesoContable("Entidad requerida.", 400);
   const [empresas] = await conn.query<RowDataPacket[]>("SELECT id FROM empresas WHERE id = ? FOR UPDATE", [empresaId]);
   if (!empresas.length) throw new AccesoContable("Empresa no disponible.");
@@ -24,14 +26,6 @@ export async function bloquearAmbito(conn: PoolConnection, empresaId: number, a:
     "SELECT id, activa FROM cont_entidades WHERE empresa_id = ? AND id = ? FOR UPDATE", [empresaId, a.entidadId],
   );
   if (!entidades.length || Number(entidades[0].activa) !== 1) throw new AccesoContable("Entidad no disponible.");
-  if (a.admin) return;
-  const [accesos] = await conn.query<RowDataPacket[]>(
-    "SELECT activo, puede_editar FROM cont_entidad_usuarios WHERE empresa_id = ? AND entidad_id = ? AND usuario_id = ? FOR UPDATE",
-    [empresaId, a.entidadId, a.usuarioId],
-  );
-  if (!accesos.length || Number(accesos[0].activo) !== 1 || (editar && Number(accesos[0].puede_editar) !== 1)) {
-    throw new AccesoContable("Sin acceso suficiente a esta entidad.");
-  }
 }
 
 const consultas = {
