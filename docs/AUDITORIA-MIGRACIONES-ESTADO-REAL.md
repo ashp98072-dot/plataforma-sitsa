@@ -313,7 +313,7 @@ Estos son los hallazgos de mayor valor de la auditoría — patrones repetidos
 de divergencia, no solo casos aislados:
 
 1. **Encabezados obsoletos que nunca se actualizaron tras la ejecución real**
-   (patrón repetido, 3 casos confirmados):
+   (patrón repetido, 4 casos confirmados):
    - `migrate-2026-08-viat-1-cliente-ubicaciones.sql`: dice "NO se ejecutó en
      este entorno", pero hay datos reales confirmados en esta sesión.
    - `migrate-2026-08-fase1-ubicaciones-marcaje.sql`: dice "todavía NO se usa
