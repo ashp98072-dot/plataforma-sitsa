@@ -25,13 +25,20 @@ clonar ese patrón (cookie distinta, JWT con secreto compartido, payload propio)
 para un **Portal del cliente**, en vez de inventar un mecanismo nuevo.
 
 También existe, y es directamente reutilizable sin duplicar lógica, el modelo de
-paradas de un viaje (`tms_plan_paradas` vía `src/lib/tms/paradas.ts`), que **ya
-representa origen, entregas intermedias y destino final con el mismo campo
-`tipo`** (`Carga` / `Entrega` / `Descarga`) — confirmado leyendo tanto el creador
-(`POST /api/empresas/[slug]/tms/planes`) como el consumidor (portal del piloto).
-Esto simplifica mucho el diseño de una futura "solicitud de cliente": su forma
-final (origen + N paradas + destino) es prácticamente la misma forma que ya usa
-`tms_plan_paradas` hoy.
+paradas de un viaje (`tms_plan_paradas` vía `src/lib/tms/paradas.ts`), cuya
+**estructura ya permite representar** origen, entregas intermedias y destino
+final mediante el campo `tipo` (`Carga` / `Entrega` / `Descarga`) — confirmado
+leyendo tanto el creador (`POST /api/empresas/[slug]/tms/planes`) como el
+consumidor (portal del piloto). **Importante — esto es una posibilidad
+estructural, no una garantía de datos:** `tipo` es un `VARCHAR(40)` libre, sin
+`ENUM`/`CHECK` en SQL que restrinja sus valores, y `guardarParadasPlan()` acepta
+tal cual el texto recibido (`"Entrega"` es solo el valor por defecto, no un
+valor forzado). Cualquier flujo nuevo del Portal del Cliente debe **validar
+estrictamente los tipos permitidos a nivel de aplicación** antes de confiar en
+lo que haya almacenado — nunca asumir que todo lo que hay en `tipo` es uno de
+los 3 valores esperados. Aun con esa salvedad, esto simplifica mucho el diseño
+de una futura "solicitud de cliente": su forma final (origen + N paradas +
+destino) es prácticamente la misma forma que ya usa `tms_plan_paradas` hoy.
 
 Por el lado del **Portal del piloto**, el flujo que el ticket pide para el futuro
 (salida obligatoria → paradas seleccionables → destino final bloqueado mientras
@@ -275,13 +282,25 @@ commit) — no hay que diseñar un mecanismo de concurrencia nuevo.
 
 ## 7. Representación de origen / entregas / destino final
 
-Confirmado con evidencia directa (§1, §4): **`tms_plan_paradas.tipo` ya distingue
-`Carga` (origen), `Entrega` (parada intermedia) y `Descarga` (destino final)
-dentro del mismo arreglo ordenado por `orden`.** No hace falta inventar una
-representación nueva para la solicitud del cliente — el mismo esquema de
-"paradas tipadas y ordenadas" que ya usa un plan real es la forma natural de
-capturar lo que pide el ticket (origen + N paradas + destino final) en la futura
-`tms_solicitud_paradas`.
+Confirmado con evidencia directa (§1, §4): la **estructura** de
+`tms_plan_paradas.tipo` ya permite distinguir `Carga` (origen), `Entrega`
+(parada intermedia) y `Descarga` (destino final) dentro del mismo arreglo
+ordenado por `orden`. No hace falta inventar una representación nueva para la
+solicitud del cliente — el mismo esquema de "paradas tipadas y ordenadas" que
+ya usa un plan real es la forma natural de capturar lo que pide el ticket
+(origen + N paradas + destino final) en la futura `tms_solicitud_paradas`.
+
+**Matiz importante (no es una garantía de datos, es una posibilidad
+estructural):** `tipo` es `VARCHAR(40)` libre — no existe `ENUM`/`CHECK` en SQL
+que obligue a que solo existan esos 3 valores, y `guardarParadasPlan()`
+(`src/lib/tms/paradas.ts`) acepta el texto que reciba tal cual (`"Entrega"` es
+solo el valor por defecto del código que arma la parada, no una restricción de
+la base de datos). Por lo tanto, cualquier lectura de `tipo` desde el Portal
+del Cliente (o desde la futura `tms_solicitud_paradas`, si copia el mismo
+patrón) debe **validar explícitamente a nivel de aplicación** que el valor sea
+uno de los 3 esperados antes de tratarlo como origen/entrega/destino — nunca
+asumir la exclusividad de esos 3 valores solo porque es lo único que el código
+actual escribe hoy.
 
 Esto también simplifica la conversión solicitud → plan: si la solicitud guarda
 sus paradas con la misma forma (`orden`, `lugar_nombre`/`lugar_id`, `tipo`), el
@@ -417,16 +436,63 @@ Técnicamente es implementable reutilizando las piezas ya existentes:
    no aparece como opción del desplegable de paradas. No requiere cambio de
    fondo, solo reforzar (si hiciera falta) que el tipo `Carga` nunca se ofrezca
    como opción de evidencia libre.
+   **Precisión necesaria — "salida obligatoria" puede significar dos cosas
+   distintas, y hoy solo una de ellas es cierta:**
+   - **(A) Iniciar el viaje (`accion: "salida"`) es obligatorio antes de que
+     exista un viaje abierto y, por tanto, antes de poder registrar cualquier
+     parada/entrega.** Esto **ya ocurre conceptualmente hoy** — no se puede
+     subir evidencia de una parada ni registrar llegada sin un `flota_viajes`
+     abierto, y ese registro nace únicamente de `accion: "salida"`.
+   - **(B) Exigir una evidencia fotográfica de "tablero de salida" antes de
+     poder continuar con las entregas.** Esto **NO es el comportamiento
+     actual** — PORTAL-HARDENING-2 (Fase C) retiró explícitamente el gating
+     por evidencia; el piloto puede subir la evidencia de tablero de salida en
+     cualquier momento, o nunca, sin que eso bloquee nada. Si el negocio quiere
+     (B), es una decisión de negocio nueva y separada de (A), no algo que ya
+     esté implementado.
+
+   El documento no debe afirmar que (B) ya ocurre — solo (A) es cierto hoy.
 2. **Paradas intermedias libremente seleccionables**: ya es el comportamiento
    actual tal cual (§11) — no requiere cambio.
 3. **Destino final bloqueado mientras pendientes > 0**: **requiere reintroducir
-   un bloqueo que Fase F retiró a propósito.** La función `paradasPendientesEvidencia(planId)`
-   (`src/lib/tms/paradas.ts`) ya calcula exactamente ese conteo — la pieza de
-   cálculo existe y es reutilizable; lo que falta es la decisión de negocio de
-   volver a usarla como **gate bloqueante** en vez de como aviso informativo, y
-   el cambio de UX correspondiente (deshabilitar la opción "Descarga"/destino
-   final en el desplegable de evidencia y el botón de llegada, o separar
-   "llegada física" de "cierre de entregas" como dos pasos distintos).
+   un bloqueo que Fase F retiró a propósito**, y además **requiere una pieza de
+   cálculo nueva, no la ya existente sin modificar.**
+
+   `paradasPendientesEvidencia(planId)` (`src/lib/tms/paradas.ts:445-450`) es:
+
+   ```ts
+   const all = await listarParadasDelPlan(planId);
+   return all.filter((p) => p.requiere_evidencia && p.evidencias < 1);
+   ```
+
+   **Esta función NO filtra por `tipo`.** Devuelve cualquier parada pendiente
+   de evidencia — `Carga` (origen), `Entrega` o **la propia `Descarga`
+   (destino final)** — indistintamente. Usarla tal cual como condición para
+   habilitar el destino final produce un **bloqueo circular**: (1) el destino
+   final está pendiente de evidencia; (2) `paradasPendientesEvidencia()`
+   incluye al propio destino final en su resultado; (3) por tanto "hay
+   pendientes" nunca llega a cero solo por culpa del destino final, que se
+   bloquea a sí mismo; (4) su evidencia no puede registrarse porque la parada
+   sigue bloqueada. **No es reutilizable directamente como gate del destino
+   final sin filtrar primero.**
+
+   El criterio correcto debe distinguir conceptualmente los 3 tipos y evaluar
+   **solo `Entrega`**: para habilitar destino final deben quedar **cero
+   entregas intermedias pendientes** (`tipo === "Entrega"`), **no** cero
+   paradas totales pendientes (que incluiría de forma incorrecta tanto la
+   carga/origen como el propio destino final). Conceptualmente, una función
+   futura equivalente a `entregasPendientesDelPlan(planId)` — o el mismo
+   `paradasPendientesEvidencia()` con un filtro adicional explícito
+   `p.tipo === "Entrega"` antes de aplicar el criterio de completitud que el
+   negocio finalmente apruebe (§12) — sería la pieza correcta. **Esta función
+   NO se implementa en este documento**, solo se deja señalado el diseño
+   correcto para cuando se decida construirla.
+
+   Además del cálculo, falta la decisión de negocio de usarlo como **gate
+   bloqueante** en vez de como aviso informativo, y el cambio de UX
+   correspondiente (deshabilitar la opción "Descarga"/destino final en el
+   desplegable de evidencia y el botón de llegada, o separar "llegada física"
+   de "cierre de entregas" como dos pasos distintos).
 4. **Kilometraje final**: ya se captura junto con la llegada (`kmLlegada` en el
    mismo formulario) — no requiere cambio de esquema, solo decidir si sigue
    siendo un solo paso o se separa en dos.
@@ -435,7 +501,10 @@ Técnicamente es implementable reutilizando las piezas ya existentes:
 punto 3 no es "agregar una validación que faltaba" — es **deshacer** una decisión
 de producto ya tomada y documentada en el propio código
 (PORTAL-HARDENING-2, Fase C/F: "las evidencias son respaldo — no bloquea salida,
-llegada ni cierre"). Debe presentarse al dueño de Operaciones como una pregunta
+llegada ni cierre"), y además requiere una función de cálculo nueva y
+correctamente filtrada (no la reutilización directa de
+`paradasPendientesEvidencia()`, que por sí sola produciría el bloqueo circular
+descrito arriba). Debe presentarse al dueño de Operaciones como una pregunta
 explícita, no implementarse como si fuera una corrección técnica neutral (ver
 §25).
 
