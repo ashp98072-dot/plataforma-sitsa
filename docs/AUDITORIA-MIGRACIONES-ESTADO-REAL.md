@@ -44,8 +44,8 @@ a una migración).
 
 | Categoría | Cantidad |
 | --- | --- |
-| APLICADO_CONFIRMADO | 51 |
-| PENDIENTE_EJECUCION | 5 |
+| APLICADO_CONFIRMADO | 52 |
+| PENDIENTE_EJECUCION | 4 |
 | TRAZABILIDAD_YA_APLICADO | 5 |
 | PROPUESTA_NO_APROBADA | 1 |
 | UTILIDAD_MANUAL | 0 (ver nota) |
@@ -116,7 +116,7 @@ otras no).
 | `migrate-2026-08-portales-proveedores.sql` | Portales/Proveedores | CREATE TABLE `proveedor_portales` | APLICADO_CONFIRMADO | SÍ | SÍ (auto-declarado idempotente) | Bajo (credenciales cifradas) | `proveedor_portales` en `schema.sql` | No reejecutar |
 | `migrate-2026-08-programacion-tms-p0.sql` | TMS/Programación | ALTER (`tarifa_comercial`, `referencia_cliente`, `regreso_estimado`) | APLICADO_CONFIRMADO | SÍ | SÍ (auto-declarado aditivo) | Bajo | `tarifa_comercial` en `schema.sql:586` (visto en revisión de FACT-1); usado extensivamente en Programación/Reportes/Facturación | No reejecutar |
 | `migrate-2026-08-rrhh-archivos.sql` | RRHH | CREATE TABLE `evidencias_incidencias` | APLICADO_CONFIRMADO | SÍ | SÍ | Bajo | `evidencias_incidencias` en `schema.sql:437` | No reejecutar |
-| `migrate-2026-08-rrhh-casos-legales.sql` | RRHH | CREATE TABLE `rrhh_casos_legales` | **PENDIENTE_EJECUCION** | **NO (confirmado)** | SÍ (auto-declarado aditivo) | Medio — el código (`src/lib/rrhh/casos-legales.ts`, ruta API completa) YA ASUME que la tabla existe, sin manejo `ER_NO_SUCH_TABLE`/503 visible | `docs/PLAN-RRHH-CIERRE-REQUISITOS.md:59`: "Migración manual: `sql/migrate-2026-08-rrhh-casos-legales.sql`, NO ejecutada" (explícito, caso solicitado por el ticket) | **Ejecutar antes de usar la pantalla de Casos Legales** — riesgo real #4 del ticket confirmado |
+| `migrate-2026-08-rrhh-casos-legales.sql` | RRHH | CREATE TABLE `rrhh_casos_legales`+`rrhh_casos_legales_seguimientos` | **APLICADO_CONFIRMADO** | **SÍ — verificado directamente el 2026-09-01** | SÍ (auto-declarado aditivo) | Bajo (ya verificado y estable) | Verificación real en producción (`SHOW TABLES`/`DESCRIBE`/FKs contra `information_schema.KEY_COLUMN_USAGE`, ver nota de cierre sección 3): ambas tablas existen, columnas/ENUM `estado`/`version`/`AUTO_INCREMENT` coinciden, índices (`uq_caso_empresa`, `idx_casos_estado`, `uq_caso_version`) y las 4 FK (`fk_caso_empleado`, `fk_caso_empresa`, `fk_caso_responsable`, `fk_seguimiento_caso`) coinciden exactamente con el archivo — `docs/PLAN-RRHH-CIERRE-REQUISITOS.md:59` queda desactualizado (decía "NO ejecutada", ver nota de cierre sección 3) | No reejecutar |
 | `migrate-2026-08-rrhh-centros-costo.sql` | RRHH | CREATE TABLE `centros_costo` | APLICADO_CONFIRMADO (indirecta) | SÍ (indirecta) | SÍ (auto-declarado) | Bajo | Código usa `centros_costo` en 2 archivos; ausente de `schema.sql` | No reejecutar; actualizar `schema.sql` |
 | `migrate-2026-08-rrhh-colaborador-auth.sql` | RRHH/Portal | CREATE TABLE `colaborador_credenciales` | APLICADO_CONFIRMADO (indirecta) | SÍ (indirecta) | SÍ (`IF NOT EXISTS`) | Bajo | Código usa `colaborador_credenciales`; **archivo duplicado casi exacto de `-auth2.sql`** (ver sección 8) | Consolidar con `-auth2.sql` en un ticket aparte, no reejecutar |
 | `migrate-2026-08-rrhh-colaborador-auth2.sql` | RRHH/Portal | CREATE TABLE `colaborador_credenciales` (idéntico) | APLICADO_CONFIRMADO (indirecta) | SÍ (indirecta) | SÍ (`IF NOT EXISTS`) | Bajo | Diff contra `-auth.sql`: solo difieren 3 bloques de comentarios, mismo DDL | Mismo que arriba — duplicado |
@@ -155,18 +155,16 @@ otras no).
 
 ## 3. Pendientes reales (requieren acción)
 
-Únicamente 4 archivos tienen evidencia clara y sin contradicción de que
+Únicamente 3 archivos tienen evidencia clara y sin contradicción de que
 **siguen sin ejecutarse**, y son los únicos que representan trabajo
-pendiente real de "aplicar SQL":
+pendiente real de "aplicar SQL" — las 3 migraciones de Multas, que
+dependen entre sí en este orden:
 
-1. **`migrate-2026-08-rrhh-casos-legales.sql`** — bloquea la pantalla de
-   Casos Legales (código ya desplegado que la usa). Confirmado explícitamente
-   en `docs/PLAN-RRHH-CIERRE-REQUISITOS.md`.
-2. **`migrate-2026-08-operaciones-multas.sql`** — base del módulo de Multas,
+1. **`migrate-2026-08-operaciones-multas.sql`** — base del módulo de Multas,
    sin ninguna otra pieza del módulo pudiendo avanzar sin esta primero.
-3. **`migrate-2026-08-operaciones-multas-rrhh.sql`** — depende de la
+2. **`migrate-2026-08-operaciones-multas-rrhh.sql`** — depende de la
    anterior + de `rrhh-descuentos-d1.sql` (esta última sí aplicada).
-4. **`migrate-2026-08-operaciones-multas-pago-documentos.sql`** — depende de
+3. **`migrate-2026-08-operaciones-multas-pago-documentos.sql`** — depende de
    las dos anteriores; además requiere una verificación manual
    (`SELECT COUNT(*) FROM ops_multa_documentos = 0`) antes de un `MODIFY` no
    aditivo.
@@ -177,9 +175,48 @@ auto-declarada como no ejecutada, pero con la particularidad de que
 (posible divergencia entre lo que asume `schema.sql` y lo que realmente
 tiene producción).
 
+### Cierre de hallazgo — `migrate-2026-08-rrhh-casos-legales.sql` (2026-09-01)
+
+**Ya NO está en la lista de arriba** — reclasificado de
+`PENDIENTE_EJECUCION` a `APLICADO_CONFIRMADO` (sección 2). Registro de la
+verificación:
+
+- **Verificación realizada**: 2026-09-01, por el usuario, manualmente en
+  phpMyAdmin de producción (todas las consultas de solo lectura — cero SQL
+  de escritura).
+- **Tablas**: `SHOW TABLES LIKE 'rrhh_casos_legales';` y `SHOW TABLES LIKE
+  'rrhh_casos_legales_seguimientos';` — ambas existen.
+- **Columnas**: `DESCRIBE rrhh_casos_legales;` confirma `id`, `empresa_id`,
+  `titulo`, `descripcion`, `empleado_id`, `empleado_nombre`,
+  `responsable_id`, `responsable_nombre`, `estado`
+  (`ENUM('Abierto','En seguimiento','Cerrado')`, default `Abierto`),
+  `version` (`INT NOT NULL DEFAULT 1`), `creado_por`, `creado_en`, con `id`
+  `AUTO_INCREMENT`. `DESCRIBE rrhh_casos_legales_seguimientos;` confirma
+  `id`, `empresa_id`, `caso_id`, `version`, `comentario`, `estado` (mismo
+  ENUM), `responsable_nombre`, `creado_por`, `creado_en`.
+- **Índices**: en `rrhh_casos_legales` — `PRIMARY(id)`,
+  `uq_caso_empresa (empresa_id, id)`, `idx_casos_estado (empresa_id,
+  estado, id)`, índices para `empleado_id` y `responsable_id`. En
+  `rrhh_casos_legales_seguimientos` — `PRIMARY(id)`,
+  `uq_caso_version (empresa_id, caso_id, version)`.
+- **FK** (verificadas contra `information_schema.KEY_COLUMN_USAGE` con
+  schema explícito `u611730801_Plataforma`): en `rrhh_casos_legales` —
+  `fk_caso_empleado` (`empleado_id` → `empleados.id`), `fk_caso_empresa`
+  (`empresa_id` → `empresas.id`), `fk_caso_responsable`
+  (`responsable_id` → `empleados.id`). En
+  `rrhh_casos_legales_seguimientos` — `fk_seguimiento_caso` (FK compuesta:
+  `empresa_id`/`caso_id` → `rrhh_casos_legales.empresa_id`/`.id`).
+- **Coincidencia**: la estructura real de producción coincide con
+  `sql/migrate-2026-08-rrhh-casos-legales.sql` en todos los elementos
+  relevantes verificados. No se afirma la fecha histórica exacta en que se
+  aplicó — solo que su efecto completo está actualmente presente y
+  verificado.
+- **Cero SQL de escritura ejecutado en este ticket. Cero producción
+  modificada.**
+
 ## 4. Aplicados / no volver a ejecutar
 
-Los 51 archivos `APLICADO_CONFIRMADO` de la tabla maestra (sección 2) — **no
+Los 52 archivos `APLICADO_CONFIRMADO` de la tabla maestra (sección 2) — **no
 reejecutar ninguno**. Los más críticos por su naturaleza no-idempotente o su
 efecto ya verificado en datos reales:
 
@@ -449,42 +486,46 @@ existen actualmente. Retirada de esta lista.
 necesidad operativa actual de ejecutarlos; considerados NO REEJECUTABLES
 sobre la información presente. Retirada de esta lista.
 
-**Siguientes dos frentes, en pie de igualdad — requieren decisión del
-negocio sobre cuál priorizar, no se ordena uno antes que el otro
-arbitrariamente:**
+~~Ejecutar `migrate-2026-08-rrhh-casos-legales.sql` antes de que alguien use
+la pantalla de Casos Legales~~ — **RESUELTA el 2026-09-01** (ver nota de
+cierre, sección 3): estructura completa (tablas, columnas, índices, FK)
+verificada y coincidente en producción. Ya NO aparece como pendiente de
+ejecución. Retirada de esta lista.
+
+**Siguiente frente pendiente confirmado — único, ya no hay dos en pie de
+igualdad tras el cierre de Casos Legales:**
 
 1. Ejecutar (si el negocio lo aprueba) las 3 migraciones de Multas en orden,
    si el módulo de Multas va a activarse — o descartarlas explícitamente si
-   ya no es prioridad.
-2. Ejecutar `migrate-2026-08-rrhh-casos-legales.sql` antes de que alguien
-   use la pantalla de Casos Legales (ya desplegada sin su tabla).
+   ya no es prioridad. Nueva prioridad #1 de la auditoría — NO ejecutada en
+   este ticket.
 
 **Resto de la lista, sin cambios de contenido respecto a la entrega
 anterior:**
 
-3. Actualizar `schema.sql` para reflejar las ~15 columnas/tablas confirmadas
+2. Actualizar `schema.sql` para reflejar las ~15 columnas/tablas confirmadas
    pero ausentes (sección 8, punto 2) — especialmente las 3 tablas de
    Facturación, el hueco más grave. Ticket documental/SQL aparte, sin tocar
    producción.
-4. Consolidar (o al menos anotar cuál es la versión "canónica" de)
+3. Consolidar (o al menos anotar cuál es la versión "canónica" de)
    `migrate-2026-08-rrhh-colaborador-auth.sql` vs. `-auth2.sql`.
-5. Verificar el estado real del índice único de `tms_cliente_rutas`
+4. Verificar el estado real del índice único de `tms_cliente_rutas`
    (`migrate-2026-08-viat-4b-rutas-correcciones.sql`) antes de decidir si
    falta ejecutarlo.
-6. Considerar retirar o marcar explícitamente como históricos los 3
+5. Considerar retirar o marcar explícitamente como históricos los 3
    `limpiar-*-empresa.sql`, dado que la app ya tiene un equivalente más
    seguro (Administración → Limpiar módulo).
-7. Verificar `correccion-de-vacaciones.sql` y
+6. Verificar `correccion-de-vacaciones.sql` y
    `migrate-2026-08-fase-a3-backfill-tms-unidades-flota.sql` (impacto bajo,
    pero sin ninguna evidencia de haberse corrido) — los 2 únicos archivos
    que siguen en `ESTADO_DESCONOCIDO_REQUIERE_VERIFICACION`.
-8. Adoptar, hacia adelante, el patrón ya existente pero subutilizado de
+7. Adoptar, hacia adelante, el patrón ya existente pero subutilizado de
    `sitsa_migrations` (o un mecanismo equivalente) para registrar
    CENTRALIZADAMENTE cada migración manual realmente aplicada — resolvería
    de raíz la mayoría de los hallazgos de esta auditoría.
 
 Ninguna de estas acciones se ejecutó en este ticket — quedan como
 recomendación para tickets separados, cada uno con su propia autorización
-explícita. No se ejecutó ningún `UPDATE` de Flota ni ningún otro SQL en
-este ticket — solo se registró la verificación de solo lectura ya
-realizada.
+explícita. No se ejecutó ningún SQL de escritura (`UPDATE`, `ALTER`,
+`CREATE`) en este ticket — solo se registraron verificaciones de solo
+lectura ya realizadas por el usuario en producción.
