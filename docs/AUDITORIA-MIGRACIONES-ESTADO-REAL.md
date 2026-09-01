@@ -46,11 +46,11 @@ a una migración).
 | --- | --- |
 | APLICADO_CONFIRMADO | 51 |
 | PENDIENTE_EJECUCION | 5 |
-| TRAZABILIDAD_YA_APLICADO | 4 |
+| TRAZABILIDAD_YA_APLICADO | 5 |
 | PROPUESTA_NO_APROBADA | 1 |
 | UTILIDAD_MANUAL | 0 (ver nota) |
 | LIMPIEZA_DESTRUCTIVA_NO_EJECUTAR_SIN_AUTORIZACION | 3 |
-| ESTADO_DESCONOCIDO_REQUIERE_VERIFICACION | 3 |
+| ESTADO_DESCONOCIDO_REQUIERE_VERIFICACION | 2 |
 | OBSOLETO_NO_REEJECUTAR | 0 (ver nota) |
 | No aplica (base/seed, no es "una migración") | 2 (`schema.sql`, `seed-usuarios.sql`) |
 | **Total** | **69** (67 migraciones/utilidades + 2 base/seed) |
@@ -144,7 +144,7 @@ otras no).
 | `migrate-2026-08-viat-1-cliente-ubicaciones.sql` | TMS/Programación | CREATE TABLE `tms_cliente_ubicaciones` | APLICADO_CONFIRMADO (header obsoleto) | SÍ | SÍ (auto-declarado) | Bajo | **Confirmado con datos reales en esta misma sesión**: el ticket TMS-CLIENTES-DUPLICADOS-CANONICALIZACION-1 (PR #157) reportó conteos reales de `tms_cliente_ubicaciones` (6, 6, 1 ubicaciones por cliente canónico) — el propio encabezado del archivo dice "NO se ejecutó en este entorno", **obsoleto** (ver sección 8) | No reejecutar |
 | `migrate-2026-08-viat-4-contactos-rutas.sql` | TMS/Programación | CREATE TABLE `tms_cliente_contactos`/`tms_cliente_rutas` | APLICADO_CONFIRMADO | SÍ | SÍ (auto-declarado) | Bajo | Confirmado con datos reales en esta sesión (mismo PR #157: conteos de "rutas"/"contactos"); referenciado como aplicado por el propio `viat-4b` | No reejecutar |
 | `migrate-2026-08-viat-4b-rutas-correcciones.sql` | TMS/Programación | ALTER (índice único global) + columna `destino_descripcion` | **PENDIENTE_EJECUCION** | **NO (confirmado)** | PARCIAL (B y C aditivas; A requiere verificación previa de duplicados antes del ALTER no aditivo) | Medio — cambia una restricción UNIQUE existente, requiere `SELECT ... HAVING COUNT(*) > 1` previo | Encabezado explícito: "NO se ejecuta en runtime ni se ejecutó en este entorno"; **PERO `schema.sql` YA refleja el estado post-migración** (`uq_tmsclirutas_codigo (empresa_id, codigo)`) — posible divergencia schema.sql vs. producción real | Verificar el índice único real de `tms_cliente_rutas` en producción antes de asumir cualquier estado |
-| `propuesta-2026-08-firma-electronica-viaticos-imagen.sql` | TMS/Viáticos (firma visual) | ALTER (`imagen_ruta`+3 columnas) | **ESTADO_DESCONOCIDO_REQUIERE_VERIFICACION — PRIORIDAD ALTA** | **CONTRADICTORIO** | SÍ (`IF NOT EXISTS`) | **ALTO — ver hallazgo detallado sección 4** | El propio archivo documenta un log real de error de producción (`Unknown column 'imagen_ruta' in 'INSERT INTO'`, 2026-08-29) que contradice la afirmación del usuario de haberlo ejecutado. Si las columnas no existen, cualquier flujo que llame `crearFirmaInterna()` fallará al intentar insertar la firma — confirmado por código, son exactamente 2: `autorizarViatico()` y `liquidarViatico()` (`src/lib/tms/viaticos.ts`); `rechazarViatico()` está explícitamente excluido (no llama `crearFirmaInterna`, PR #148) | **Verificar `DESCRIBE firmas_electronicas;` en producción cuanto antes** — riesgo #4 y #6 del ticket, el más urgente de toda la auditoría |
+| `propuesta-2026-08-firma-electronica-viaticos-imagen.sql` | TMS/Viáticos (firma visual) | ALTER (`imagen_ruta`+3 columnas) | **TRAZABILIDAD_YA_APLICADO** | **SÍ — verificado directamente el 2026-09-01** | SÍ (`IF NOT EXISTS`) | Bajo (existencia de columnas ya confirmada; ver nota de cierre sección 5) | Resultado real de `DESCRIBE firmas_electronicas;` ejecutado por el usuario en producción el 2026-09-01: las 4 columnas (`imagen_ruta` varchar(255), `imagen_nombre_original` varchar(255), `imagen_mime` varchar(50), `imagen_tamano` int(11), todas NULL permitido) existen actualmente. El error `Unknown column 'imagen_ruta'` del 2026-08-29 queda como antecedente histórico — no se determinó si se aplicó después de ese error, en otra base, o si hubo un despliegue intermedio | No reejecutar; no se afirma que `autorizarViatico()`/`liquidarViatico()` funcionan correctamente por esta prueba, solo que las columnas existen |
 | `propuesta-2026-08-firma-electronica-viaticos.sql` | Portal/TMS (firmas) | CREATE TABLE `firmas_electronicas` | APLICADO_CONFIRMADO | SÍ | SÍ (auto-declarado, ver también `propuesta-2026-08-firma-electronica.sql`) | Bajo | Encabezado explícito: "APLICADA MANUALMENTE POR EL USUARIO" | No reejecutar |
 | `propuesta-2026-08-firma-electronica.sql` | Portal (diseño general) | Propuesta de diseño completo | PROPUESTA_NO_APROBADA | NO (parcial — ver el archivo `-viaticos.sql` arriba que sí se aplicó, solo una parte) | N/A (diseño) | Bajo (no ejecutado) | Encabezado explícito: "PROPUESTA DE DISEÑO, NO APLICAR" | Mantener como referencia de diseño; NO ejecutar tal cual (el subconjunto real ya se aplicó vía el archivo específico de Viáticos) |
 | `propuesta-2026-08-tms-clientes-duplicados-canonicalizacion.sql` | TMS/Clientes | Transacción de datos (bridges + datos maestros) | **TRAZABILIDAD_YA_APLICADO (header obsoleto)** | SÍ (confirmado explícitamente por el usuario) | NO (procedimiento temporal de un solo uso, con guardas anti-doble-ejecución) | Bajo (ya aplicado y verificado con post-checks reales) | **Confirmación explícita del usuario** en el cierre de PR #157 (mismo hilo de esta sesión): bridges movidos, datos maestros de CALSA actualizados, FACT-1 confirmado funcionando — el propio encabezado del archivo sigue diciendo "PROPUESTA, NO EJECUTADA" (**obsoleto**, ver sección 8) | No reejecutar; el encabezado debería actualizarse en un ticket documental aparte |
@@ -188,7 +188,9 @@ efecto ya verificado en datos reales:
   aplica sola una vez, y el archivo completo desplaza -6h de nuevo si se
   reejecuta a ciegas).
 - Los 3 archivos de Viáticos con confirmación explícita de producción
-  (`rechazado`, `pago-snapshot`, `liquidacion-estructurada`).
+  (`rechazado`, `pago-snapshot`, `liquidacion-estructurada`), más
+  `propuesta-2026-08-firma-electronica-viaticos-imagen.sql` (confirmado el
+  2026-09-01 vía `DESCRIBE firmas_electronicas;`, ver sección 5).
 - `propuesta-2026-08-tms-clientes-duplicados-canonicalizacion.sql`
   (procedimiento temporal ya ejecutado y verificado con post-checks reales
   — reejecutarlo fallaría de todas formas por la precondición global, pero
@@ -206,38 +208,52 @@ pero mantener dos archivos para la misma migración es ruido documental.
 
 ## 5. Estado desconocido — qué verificar manualmente
 
-Estos son exactamente los 3 archivos clasificados
+Estos son exactamente los 2 archivos clasificados
 `ESTADO_DESCONOCIDO_REQUIERE_VERIFICACION` en la tabla maestra — evidencia
-insuficiente o contradictoria para afirmar con certeza si se aplicaron:
+insuficiente para afirmar con certeza si se aplicaron:
 
-1. **`propuesta-2026-08-firma-electronica-viaticos-imagen.sql` — PRIORIDAD
-   ALTA.** El propio archivo documenta que el usuario dijo haberlo
-   ejecutado, pero el log de error real de producción (2026-08-29) muestra
-   `Unknown column 'imagen_ruta'`. Si las columnas no existen, cualquier
-   flujo que llame `crearFirmaInterna()` fallará al intentar insertar la
-   firma (inserta las 4 columnas — `imagen_ruta`, `imagen_nombre_original`,
-   `imagen_mime`, `imagen_tamano` — siempre, aunque sea con valores `NULL`,
-   sin manejo de error para `ER_BAD_FIELD_ERROR`). **Los flujos realmente
-   confirmados por código** (`grep` de `crearFirmaInterna(` en todo
-   `src/`, dos únicos call sites reales, ambos en
-   `src/lib/tms/viaticos.ts`): `autorizarViatico()` (línea 655) y
-   `liquidarViatico()` (línea 1284). **`rechazarViatico()` está
-   explícitamente excluido** — no llama `crearFirmaInterna` (documentado en
-   PR #148: el rechazo es terminal, sin firma). El mismo `grep` exhaustivo
-   confirma que `registrarEntregaViatico()`/`registrarEntregaViaticosMasiva()`
-   tampoco lo llaman, así que también quedan excluidos. **Verificación
-   recomendada**:
-   `DESCRIBE firmas_electronicas;` en producción — si `imagen_ruta` no
-   aparece, **autorizar o liquidar un viático en producción fallaría al
-   intentar registrar la firma**, lo cual sería grave y debería reportarse
-   de inmediato al
-   usuario si se confirma.
-2. **`correccion-de-vacaciones.sql`** — sin ninguna referencia en
+1. **`correccion-de-vacaciones.sql`** — sin ninguna referencia en
    documentación ni código que confirme si ya se aplicó. Verificar corriendo
    primero el Paso 1 (solo lectura) del propio archivo.
-3. **`migrate-2026-08-fase-a3-backfill-tms-unidades-flota.sql`** — sin
+2. **`migrate-2026-08-fase-a3-backfill-tms-unidades-flota.sql`** — sin
    confirmación; usa el propio SELECT de verificación que el archivo incluye
    (`WHERE tu.id IN (7, 8, 9)`).
+
+### Cierre de hallazgo — `propuesta-2026-08-firma-electronica-viaticos-imagen.sql` (2026-09-01)
+
+**Ya NO está en la lista de arriba** — reclasificado de
+`ESTADO_DESCONOCIDO_REQUIERE_VERIFICACION` a `TRAZABILIDAD_YA_APLICADO`
+(sección 2). Registro de la verificación:
+
+- **Verificación realizada**: 2026-09-01, por el usuario, manualmente en
+  phpMyAdmin de producción.
+- **Consulta ejecutada**: `DESCRIBE firmas_electronicas;` (solo lectura —
+  ningún `ALTER` se ejecutó, ninguna otra escritura).
+- **Resultado**: las 4 columnas existen ACTUALMENTE en producción —
+  `imagen_ruta` (`varchar(255)`, NULL permitido), `imagen_nombre_original`
+  (`varchar(255)`, NULL permitido), `imagen_mime` (`varchar(50)`, NULL
+  permitido), `imagen_tamano` (`int(11)`, NULL permitido). También se
+  confirmaron visualmente el resto de columnas esperadas de
+  `firmas_electronicas` (`id`, `empresa_id`, `usuario_id`, `empleado_id`,
+  `accion`, `modulo`, `entidad_tipo`, `entidad_id`, `fecha_hora_servidor`,
+  `hash_payload`, `payload_canonico`, `metodo`, `resultado`, `codigo_firma`,
+  `version`, `creado_en`).
+- **El error `Unknown column 'imagen_ruta'` del 2026-08-29 queda como
+  antecedente histórico** — documenta que en ese momento/entorno la
+  columna no estaba disponible; no se determinó (ni se necesita determinar
+  para este cierre) si se aplicó después de ese error, en otra base, o si
+  hubo un despliegue intermedio.
+- **No se ejecutó ningún `ALTER`** en este ticket ni en el de verificación
+  — la tabla ya tenía las columnas antes de correr el `DESCRIBE`.
+  **No se modificó producción.**
+- **Conclusión permitida, y nada más que eso**: en el estado ACTUAL de la
+  base de datos, las 4 columnas que `crearFirmaInterna()` inserta siempre
+  existen — queda descartado el riesgo ACTUAL de que `autorizarViatico()` o
+  `liquidarViatico()` fallen específicamente por `Unknown column
+  'imagen_ruta'` o por ausencia de las otras 3 columnas. **Esto NO afirma
+  que esos flujos funcionan correctamente de punta a punta** — la prueba
+  solo confirma existencia de columnas, no comportamiento de la
+  aplicación ni contenido de filas existentes.
 
 Dos casos más quedaron con OTRA categoría principal (no
 `ESTADO_DESCONOCIDO`) pero merecen la misma cautela al leerlos, documentado
@@ -329,7 +345,7 @@ de divergencia, no solo casos aislados:
    migraciones confirmadas como aplicadas — no es un caso aislado, son al
    menos 12 columnas/tablas confirmadas en producción/código que NO aparecen
    en `schema.sql`: `rtu`, `numero_empleado`, `gastos_comprobados`/
-   `reintegro`, `imagen_ruta`+3 (esta última con estado incierto, sección 5),
+   `reintegro`, `imagen_ruta`+3 (confirmada aplicada el 2026-09-01, sección 5),
    `centros_costo`, `entrevista_documentos`, `entrevistas`,
    `entrevista_responsables`, `rrhh_recordatorios`, `solicitudes_vacaciones`,
    `ubicacion_entrada_id`, y **las 3 tablas completas de Facturación**
@@ -360,48 +376,52 @@ de divergencia, no solo casos aislados:
    de todo `sql/` que audita su propia aplicación en una tabla dedicada
    (`sitsa_migrations`), y ni así cubre completamente lo que el archivo
    hace.
-6. **`propuesta-2026-08-firma-electronica-viaticos-imagen.sql`**: el caso más
-   grave de la auditoría — evidencia CONTRADICTORIA explícita y documentada
-   dentro del propio archivo (usuario dice que sí, log de error de
-   producción dice que no). Ver sección 5, prioridad alta.
+6. **`propuesta-2026-08-firma-electronica-viaticos-imagen.sql`**: fue el caso
+   más grave de la auditoría — evidencia CONTRADICTORIA explícita y
+   documentada dentro del propio archivo (usuario dice que sí, log de error
+   de producción dice que no). **Cerrado el 2026-09-01**: verificación real
+   (`DESCRIBE firmas_electronicas;`) confirmó que las 4 columnas existen
+   actualmente — ver nota de cierre en sección 5. Se mantiene aquí como
+   registro de que la contradicción documental ocurrió y de cómo se
+   resolvió, no como riesgo abierto.
 
 ## 9. Recomendación final priorizada
 
-1. **URGENTE — verificar `DESCRIBE firmas_electronicas;` en producción**
-   (¿existe `imagen_ruta`?). Si NO existe, `autorizarViatico()` y
-   `liquidarViatico()` (los únicos dos flujos confirmados por código que
-   llaman `crearFirmaInterna()`) podrían estar fallando en producción ahora
-   mismo — es el hallazgo de mayor impacto operativo de toda esta auditoría
-   y merece un ticket propio
-   inmediato, antes que cualquier otra cosa de esta lista.
-2. Confirmar el estado real de los 4 `UPDATE` de Flota en
+~~Verificar `DESCRIBE firmas_electronicas;` en producción~~ — **RESUELTA el
+2026-09-01** (ver nota de cierre, sección 5): las 4 columnas de imagen
+existen actualmente. Retirada de esta lista.
+
+1. **Confirmar el estado real de los 4 `UPDATE` de Flota** en
    `migrate-2026-08-corregir-hora-guatemala.sql` (¿se corrieron alguna vez?
-   — sin equivalente en código, a diferencia de la parte de marcajes).
-3. Ejecutar (si el negocio lo aprueba) las 3 migraciones de Multas en orden,
+   — sin equivalente en código, a diferencia de la parte de marcajes). Pasa
+   a ser la nueva prioridad #1 de la auditoría.
+2. Ejecutar (si el negocio lo aprueba) las 3 migraciones de Multas en orden,
    si el módulo de Multas va a activarse — o descartarlas explícitamente si
    ya no es prioridad.
-4. Ejecutar `migrate-2026-08-rrhh-casos-legales.sql` antes de que alguien
+3. Ejecutar `migrate-2026-08-rrhh-casos-legales.sql` antes de que alguien
    use la pantalla de Casos Legales (ya desplegada sin su tabla).
-5. Actualizar `schema.sql` para reflejar las ~15 columnas/tablas confirmadas
+4. Actualizar `schema.sql` para reflejar las ~15 columnas/tablas confirmadas
    pero ausentes (sección 8, punto 2) — especialmente las 3 tablas de
    Facturación, el hueco más grave. Ticket documental/SQL aparte, sin tocar
    producción.
-6. Consolidar (o al menos anotar cuál es la versión "canónica" de)
+5. Consolidar (o al menos anotar cuál es la versión "canónica" de)
    `migrate-2026-08-rrhh-colaborador-auth.sql` vs. `-auth2.sql`.
-7. Verificar el estado real del índice único de `tms_cliente_rutas`
+6. Verificar el estado real del índice único de `tms_cliente_rutas`
    (`migrate-2026-08-viat-4b-rutas-correcciones.sql`) antes de decidir si
    falta ejecutarlo.
-8. Considerar retirar o marcar explícitamente como históricos los 3
+7. Considerar retirar o marcar explícitamente como históricos los 3
    `limpiar-*-empresa.sql`, dado que la app ya tiene un equivalente más
    seguro (Administración → Limpiar módulo).
-9. Verificar `correccion-de-vacaciones.sql` y
+8. Verificar `correccion-de-vacaciones.sql` y
    `migrate-2026-08-fase-a3-backfill-tms-unidades-flota.sql` (impacto bajo,
    pero sin ninguna evidencia de haberse corrido).
-10. Adoptar, hacia adelante, el patrón ya existente pero subutilizado de
-    `sitsa_migrations` (o un mecanismo equivalente) para registrar
-    CENTRALIZADAMENTE cada migración manual realmente aplicada — resolvería
-    de raíz la mayoría de los hallazgos de esta auditoría.
+9. Adoptar, hacia adelante, el patrón ya existente pero subutilizado de
+   `sitsa_migrations` (o un mecanismo equivalente) para registrar
+   CENTRALIZADAMENTE cada migración manual realmente aplicada — resolvería
+   de raíz la mayoría de los hallazgos de esta auditoría.
 
 Ninguna de estas acciones se ejecutó en este ticket — quedan como
 recomendación para tickets separados, cada uno con su propia autorización
-explícita.
+explícita. No se ejecutaron los 4 `UPDATE` de Flota (punto 1) ni ningún
+otro SQL en este ticket — solo se registró la verificación ya realizada del
+hallazgo de firmas.
