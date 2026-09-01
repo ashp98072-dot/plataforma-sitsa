@@ -60,22 +60,33 @@ a una migración; incorpora los 2 archivos de CLIENTE-PORTAL-1/1B añadidos el
 **Nota sobre `APLICADO_PARCIALMENTE_CON_DRIFT`**: ninguna de las 8 categorías
 originales de esta auditoría (fijadas el 2026-09-01 antes de CLIENTE-PORTAL-1)
 describe con honestidad el caso de
-`migrate-2026-09-tms-portal-clientes-base.sql`. Verificado directamente en
-producción el 2026-09-01 (ticket CLIENTE-PORTAL-1B-CORRECCION-SCHEMA-PRODUCCION):
-las 3 tablas que crea (`tms_cliente_usuarios`, `tms_solicitudes_cliente`,
-`tms_solicitud_paradas`) y los 2 índices que agrega sobre tablas existentes
-(`tms_clientes.uq_tmsclientes_empresa_id`,
-`tms_planes_viaje.uq_tmsplanes_empresa_id`) **ya existen en producción** — no
-es `PENDIENTE_EJECUCION`. Pero las FK/índices internos de las 3 tablas nuevas
-corresponden a la forma ANTERIOR al endurecimiento aprobado en el ajuste
-pre-merge del PR #167 (FKs simples en vez de compuestas) — tampoco es
-`APLICADO_CONFIRMADO` sin matiz, porque re-desplegar el código actual de
-`main` (que asume el esquema endurecido) sobre ese estado de producción sería
-inconsistente hasta aplicar la migración correctiva
-(`migrate-2026-09-tms-portal-clientes-hardening.sql`, ver sección 3). Se
-documenta con una etiqueta nueva y explícita en vez de forzar una de las 8
-categorías existentes, tal como pide el ticket que originó este hallazgo. No
-se afirma ningún timestamp histórico de cuándo se ejecutó la base — solo que
+`migrate-2026-09-tms-portal-clientes-base.sql`. Definición exacta de la
+categoría, para no sobre-afirmar: **el efecto actual de producción es
+parcialmente coincidente con el objetivo de este archivo, con drift respecto
+al esquema final** — NO es una prueba de que este archivo específico se
+ejecutó parcialmente, ni de cuándo/quién/cómo. Se separa explícitamente lo
+observable de lo que no lo es:
+
+- **Estado OBSERVABLE** (verificado directamente en producción el
+  2026-09-01, ticket CLIENTE-PORTAL-1B-CORRECCION-SCHEMA-PRODUCCION, vía
+  `SHOW`/`SELECT`): las 3 tablas (`tms_cliente_usuarios`,
+  `tms_solicitudes_cliente`, `tms_solicitud_paradas`) existen y están
+  vacías; los 2 índices que este archivo agrega sobre tablas existentes
+  (`tms_clientes.uq_tmsclientes_empresa_id`,
+  `tms_planes_viaje.uq_tmsplanes_empresa_id`) ya existen; la estructura
+  interna de las 3 tablas nuevas es consistente con la forma anterior al
+  endurecimiento del ajuste pre-merge del PR #167 (FKs simples en vez de
+  compuestas) — no con el esquema final que hoy tiene `schema.sql`.
+- **Historia NO observable** (no se afirma ni se puede afirmar desde este
+  repositorio): cuándo se llegó a ese estado, quién lo hizo, ni mediante
+  qué mecanismo exacto (el archivo completo tal como existía antes del
+  ajuste pre-merge, SQL manual equivalente, u otra vía).
+
+No es `PENDIENTE_EJECUCION` (el efecto principal — las 3 tablas — SÍ está
+presente). Tampoco es `APLICADO_CONFIRMADO` sin matiz (la forma interna no
+coincide con lo que el propio repositorio documenta hoy como objetivo final,
+y el código ya en `main` asume esa forma final) — de ahí la categoría nueva.
+No se afirma ningún timestamp histórico de cuándo se llegó a ese estado — solo que
 su efecto parcial está confirmado presente hoy.
 
 **Nota sobre `UTILIDAD_MANUAL`**: los 3 candidatos naturales
@@ -167,7 +178,7 @@ otras no).
 | `migrate-2026-08-viat-1-cliente-ubicaciones.sql` | TMS/Programación | CREATE TABLE `tms_cliente_ubicaciones` | APLICADO_CONFIRMADO (header obsoleto) | SÍ | SÍ (auto-declarado) | Bajo | **Confirmado con datos reales en esta misma sesión**: el ticket TMS-CLIENTES-DUPLICADOS-CANONICALIZACION-1 (PR #157) reportó conteos reales de `tms_cliente_ubicaciones` (6, 6, 1 ubicaciones por cliente canónico) — el propio encabezado del archivo dice "NO se ejecutó en este entorno", **obsoleto** (ver sección 8) | No reejecutar |
 | `migrate-2026-08-viat-4-contactos-rutas.sql` | TMS/Programación | CREATE TABLE `tms_cliente_contactos`/`tms_cliente_rutas` | APLICADO_CONFIRMADO | SÍ | SÍ (auto-declarado) | Bajo | Confirmado con datos reales en esta sesión (mismo PR #157: conteos de "rutas"/"contactos"); referenciado como aplicado por el propio `viat-4b` | No reejecutar |
 | `migrate-2026-08-viat-4b-rutas-correcciones.sql` | TMS/Programación | ALTER (índice único global) + columna `destino_descripcion` | **PENDIENTE_EJECUCION** | **NO (confirmado)** | PARCIAL (B y C aditivas; A requiere verificación previa de duplicados antes del ALTER no aditivo) | Medio — cambia una restricción UNIQUE existente, requiere `SELECT ... HAVING COUNT(*) > 1` previo | Encabezado explícito: "NO se ejecuta en runtime ni se ejecutó en este entorno"; **PERO `schema.sql` YA refleja el estado post-migración** (`uq_tmsclirutas_codigo (empresa_id, codigo)`) — posible divergencia schema.sql vs. producción real | Verificar el índice único real de `tms_cliente_rutas` en producción antes de asumir cualquier estado |
-| `migrate-2026-09-tms-portal-clientes-base.sql` | TMS/Portal del Cliente | CREATE TABLE `tms_cliente_usuarios`/`tms_solicitudes_cliente`/`tms_solicitud_paradas` + 2 `ALTER` aditivos (`uq_tmsclientes_empresa_id`, `uq_tmsplanes_empresa_id`) | **APLICADO_PARCIALMENTE_CON_DRIFT (categoría nueva, ver sección 1)** | **SÍ, efecto parcial — verificado directamente el 2026-09-01** | SÍ (`CREATE TABLE IF NOT EXISTS` + `information_schema`/`PREPARE` para los `ALTER`) | Medio — el código ya en `main` (CLIENTE-PORTAL-1, PR #167) asume el esquema ENDURECIDO (FKs compuestas); mientras no se aplique la correctiva, el login/alta de usuarios de cliente funciona sobre un esquema con menos garantías de integridad de las que el propio código y `schema.sql` documentan | Verificación directa en producción (`u611730801_Plataforma`, 2026-09-01, `SHOW`/`SELECT`): las 3 tablas existen y están vacías (0 filas cada una); los 2 índices sobre tablas existentes ya están; pero las FK/índices internos de las 3 tablas nuevas tienen la forma SIMPLE pre-hardening, no la compuesta de `schema.sql`/PR #167 — ver detalle completo en sección 3 | **No reejecutar este archivo tal cual** (recrearía las tablas con la forma vieja si alguna vez se borraran, y no corrige lo ya creado); aplicar `migrate-2026-09-tms-portal-clientes-hardening.sql` (ver fila siguiente) para cerrar el drift |
+| `migrate-2026-09-tms-portal-clientes-base.sql` | TMS/Portal del Cliente | CREATE TABLE `tms_cliente_usuarios`/`tms_solicitudes_cliente`/`tms_solicitud_paradas` + 2 `ALTER` aditivos (`uq_tmsclientes_empresa_id`, `uq_tmsplanes_empresa_id`) | **APLICADO_PARCIALMENTE_CON_DRIFT (categoría nueva, ver sección 1)** | **SÍ, efecto parcial — verificado directamente el 2026-09-01** | SÍ (`CREATE TABLE IF NOT EXISTS` + `information_schema`/`PREPARE` para los `ALTER`) | Medio — el código ya en `main` (CLIENTE-PORTAL-1, PR #167) asume el esquema ENDURECIDO (FKs compuestas); mientras no se aplique la correctiva, el login/alta de usuarios de cliente funciona sobre un esquema con menos garantías de integridad de las que el propio código y `schema.sql` documentan | Verificación directa en producción (`u611730801_Plataforma`, 2026-09-01, `SHOW`/`SELECT`): las 3 tablas existen y están vacías (0 filas cada una); los 2 índices sobre tablas existentes ya están; pero las FK/índices internos de las 3 tablas nuevas tienen la forma SIMPLE pre-hardening, no la compuesta de `schema.sql`/PR #167 — ver detalle completo en sección 3 | **Reejecutar este archivo (el que hoy vive en `main`, ya con el diseño final endurecido) NO corrige el drift**: sus 3 `CREATE TABLE IF NOT EXISTS` son no-ops porque las 3 tablas ya existen, y sus 2 `ALTER` sobre `tms_clientes`/`tms_planes_viaje` también son no-ops porque esos 2 índices ya existen — ninguna de esas sentencias toca ni reemplaza las FK/índices internos ya creados en las 3 tablas nuevas; aplicar `migrate-2026-09-tms-portal-clientes-hardening.sql` (ver fila siguiente), que sí hace los `DROP`/`ADD` explícitos necesarios |
 | `migrate-2026-09-tms-portal-clientes-hardening.sql` | TMS/Portal del Cliente | `ALTER` (reemplaza FKs/índices simples por compuestos, `DROP`+`ADD` guiado por composición) | **PENDIENTE_EJECUCION** | **NO (confirmado — creado y no ejecutado en este ticket)** | SÍ, con reservas (cada paso comprueba composición real vía `information_schema` antes de actuar — diseñado para ser seguro tanto sobre el esquema con drift como sobre el ya corregido; ver PRECHEQUEOS de solo lectura en el propio archivo) | Medio — reordena FKs/índices sobre tablas de producción reales (aunque hoy vacías); el propio archivo exige revisar a mano los PRECHEQUEOS antes de continuar | Creado en el ticket CLIENTE-PORTAL-1B-CORRECCION-SCHEMA-PRODUCCION específicamente para cerrar el drift de la fila anterior — ver sección 3 | Ejecutar manualmente en producción (con los PRECHEQUEOS revisados primero) ANTES de considerar el esquema de CLIENTE-PORTAL-1 completamente alineado con `main` |
 | `propuesta-2026-08-firma-electronica-viaticos-imagen.sql` | TMS/Viáticos (firma visual) | ALTER (`imagen_ruta`+3 columnas) | **TRAZABILIDAD_YA_APLICADO** | **SÍ — verificado directamente el 2026-09-01** | SÍ (`IF NOT EXISTS`) | Bajo (existencia de columnas ya confirmada; ver nota de cierre sección 5) | Resultado real de `DESCRIBE firmas_electronicas;` ejecutado por el usuario en producción el 2026-09-01: las 4 columnas (`imagen_ruta` varchar(255), `imagen_nombre_original` varchar(255), `imagen_mime` varchar(50), `imagen_tamano` int(11), todas NULL permitido) existen actualmente. El error `Unknown column 'imagen_ruta'` del 2026-08-29 queda como antecedente histórico — no se determinó si se aplicó después de ese error, en otra base, o si hubo un despliegue intermedio | No reejecutar; no se afirma que `autorizarViatico()`/`liquidarViatico()` funcionan correctamente por esta prueba, solo que las columnas existen |
 | `propuesta-2026-08-firma-electronica-viaticos.sql` | Portal/TMS (firmas) | CREATE TABLE `firmas_electronicas` | APLICADO_CONFIRMADO | SÍ | SÍ (auto-declarado, ver también `propuesta-2026-08-firma-electronica.sql`) | Bajo | Encabezado explícito: "APLICADA MANUALMENTE POR EL USUARIO" | No reejecutar |
@@ -238,16 +249,24 @@ como objetivo final, que es el esquema endurecido de `schema.sql`/PR #167).
     (`solicitud_id -> tms_solicitudes_cliente(id)`, sin `empresa_id`);
     `idx_tmssolpar_solicitud` es `(solicitud_id, orden)` en vez de
     `(empresa_id, solicitud_id, orden)`.
-- **Lectura correcta de este drift**: NO es un error de ejecución ni una
-  corrupción — es el efecto exacto y esperado de haber aplicado
-  `migrate-2026-09-tms-portal-clientes-base.sql` en su forma ORIGINAL, antes
-  de que el ajuste pre-merge del PR #167 (2026-09-01, mismo día, sesión
-  posterior) endureciera esas mismas 3 tablas con FKs/índices compuestos.
-  Producción, en otras palabras, quedó "congelada" en el estado intermedio
-  del PR, no en su estado final.
-- **No se afirma ningún timestamp histórico** de cuándo se ejecutó la base
-  original en producción — se desconoce, y no es necesario conocerlo para
-  este hallazgo.
+- **Lectura correcta de este drift — separando lo observable de lo que no lo
+  es**: NO es un error de ejecución ni una corrupción. Lo OBSERVABLE es que
+  la estructura real de producción es **consistente con** haber aplicado
+  `migrate-2026-09-tms-portal-clientes-base.sql` en una forma anterior al
+  ajuste pre-merge del PR #167 (2026-09-01, mismo día, sesión posterior) —
+  es la única forma documentada en este repositorio que produce exactamente
+  esta estructura. Lo que NO es observable, y por tanto no se afirma: si
+  fue realmente ese archivo completo el que se ejecutó, en qué momento, por
+  quién, ni mediante qué mecanismo exacto (podría haber sido SQL manual
+  equivalente, u otra vía). Dicho de otro modo: el ESQUEMA de producción
+  quedó consistente con el estado intermedio del PR, no con su estado
+  final — sin que este documento pueda ni deba afirmar una historia de
+  ejecución que no puede verificar.
+- **No se afirma ningún timestamp histórico, autor, ni mecanismo de
+  aplicación** de cómo se llegó a este estado en producción — se desconocen
+  los tres, y no son necesarios para actuar sobre este hallazgo (la
+  corrección solo depende del estado ACTUAL, verificado, no de su
+  historia).
 - **Corrección**: `migrate-2026-09-tms-portal-clientes-hardening.sql`
   (ticket CLIENTE-PORTAL-1B-CORRECCION-SCHEMA-PRODUCCION) — migración
   correctiva nueva, NO ejecutada, diseñada para transformar exactamente este
@@ -583,9 +602,10 @@ ejecución. Retirada de esta lista.
    ya no es prioridad. NO ejecutada en este ticket.
 2. **Nuevo, mismo día (ver hallazgo en sección 3)**: ejecutar
    `migrate-2026-09-tms-portal-clientes-hardening.sql` en producción para
-   cerrar el drift de CLIENTE-PORTAL-1 (`migrate-2026-09-tms-portal-clientes-base.sql`
-   quedó aplicada solo en su forma pre-hardening — ver sección 1,
-   `APLICADO_PARCIALMENTE_CON_DRIFT`). A diferencia de Multas, este frente no
+   cerrar el drift de CLIENTE-PORTAL-1 (el esquema real de producción es
+   consistente con la forma pre-hardening — ver sección 1,
+   `APLICADO_PARCIALMENTE_CON_DRIFT`, para la distinción exacta entre lo
+   observable y lo que no lo es). A diferencia de Multas, este frente no
    depende de una decisión de negocio de "activar el módulo": el código de
    `main` (PR #167) ya asume el esquema endurecido, así que cerrar este
    drift es una corrección técnica pendiente, no una decisión de producto.

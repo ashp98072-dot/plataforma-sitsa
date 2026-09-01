@@ -1,18 +1,41 @@
 -- CLIENTE-PORTAL-1B-CORRECCION-SCHEMA-PRODUCCION
 --
 -- CORRECTIVA. Lleva el esquema de producción del Portal del Cliente
--- desde el estado PARCIAL/PRE-HARDENING (efecto real de una ejecución
--- anterior, ya verificado en producción — ver docs/AUDITORIA-MIGRACIONES-ESTADO-REAL.md,
--- sección "CLIENTE-PORTAL-1") hasta el esquema final endurecido que ya
--- vive en sql/schema.sql y fue aprobado en el PR #167 (ajuste pre-merge,
--- merge commit 095c2b7e5e907436516968434f1ce354bfb13c52).
+-- desde el estado PARCIAL/PRE-HARDENING — verificado directamente en
+-- producción el 2026-09-01 (ver DRIFT VERIFICADO más abajo y
+-- docs/AUDITORIA-MIGRACIONES-ESTADO-REAL.md, sección "CLIENTE-PORTAL-1")
+-- hasta el esquema final endurecido que ya vive en sql/schema.sql y fue
+-- aprobado en el PR #167 (ajuste pre-merge, merge commit
+-- 095c2b7e5e907436516968434f1ce354bfb13c52).
+--
+-- IMPORTANTE — qué SÍ y qué NO afirma esta migración sobre el origen de
+-- ese estado: lo verificado es el ESTADO OBSERVABLE actual de producción
+-- (estructura real de las tablas, vía SHOW/SELECT) — es consistente con
+-- haber aplicado sql/migrate-2026-09-tms-portal-clientes-base.sql en una
+-- forma anterior al ajuste pre-merge del PR #167 (esa es la única forma
+-- documentada en este repositorio que produce exactamente esta
+-- estructura). NO se afirma, porque no es observable desde aquí, CUÁNDO
+-- se aplicó, QUIÉN lo hizo, ni mediante QUÉ mecanismo exacto (el archivo
+-- completo, SQL manual equivalente, u otra vía) — ver
+-- docs/AUDITORIA-MIGRACIONES-ESTADO-REAL.md para el registro completo de
+-- esta distinción.
 --
 -- NO modifica ni reemplaza sql/migrate-2026-09-tms-portal-clientes-base.sql
 -- — ese archivo queda tal cual, como historial del modelo objetivo que
 -- el repositorio documentó desde el inicio. Esta migración es la
--- correctiva para instalaciones (como la producción real de SITSA) que
--- ya ejecutaron esa base ANTES de que el PR #167 la endureciera con FKs
--- compuestas.
+-- correctiva para instalaciones (como la producción real de SITSA) cuyo
+-- esquema real hoy es consistente con la forma pre-hardening de ese
+-- archivo, sin importar cómo llegaron a ese estado.
+--
+-- Nota aparte, importante para no confundir "corrección" con
+-- "re-ejecución": volver a correr HOY sql/migrate-2026-09-tms-portal-clientes-base.sql
+-- (que en `main` ya contiene el diseño final endurecido) NO repararía
+-- este drift — sus `CREATE TABLE IF NOT EXISTS` son no-ops porque las 3
+-- tablas ya existen, y sus 2 `ALTER` sobre `tms_clientes`/
+-- `tms_planes_viaje` también son no-ops porque esos índices ya existen.
+-- Ninguna de esas sentencias toca ni reemplaza las FK/índices internos
+-- ya creados en las 3 tablas nuevas — por eso hace falta esta migración
+-- correctiva aparte, con `DROP`/`ADD` explícitos.
 --
 -- ESTADO: MANUAL. NO se ejecuta automáticamente en runtime. NO se ha
 -- ejecutado en ningún entorno (ni local ni producción) al momento de
@@ -34,10 +57,31 @@
 -- COMO SOBRE (B) el esquema final ya endurecido (por ejemplo, si esta
 -- migración se ejecutara por error una segunda vez, o en un entorno que
 -- ya se creó directamente con sql/schema.sql actual): cada ALTER de
--- abajo primero COMPRUEBA LA COMPOSICIÓN real del índice/FK existente
--- (no solo si el nombre existe) contra information_schema, y solo actúa
--- si esa composición no es ya la final esperada — "existe el nombre" NO
--- se asume nunca como "tiene las columnas correctas".
+-- abajo primero COMPRUEBA LA COMPOSICIÓN REAL del índice/FK existente
+-- (columnas exactas Y, cuando aplica, que sea realmente UNIQUE) contra
+-- information_schema, y solo actúa si esa composición NO es ya la final
+-- esperada — "existe un objeto con este nombre" NUNCA se acepta por sí
+-- solo como "ya tiene la forma correcta"; si el nombre existiera con
+-- otra composición, se elimina primero y se recrea, en vez de aceptarlo
+-- silenciosamente.
+--
+-- Límite honesto de esta garantía: 2 de las UNIQUE nuevas
+-- (uq_tmscliusr_empresa_cliente_id en tms_cliente_usuarios,
+-- uq_tmssolicli_empresa_id en tms_solicitudes_cliente) son el destino de
+-- una FK compuesta creada MÁS ADELANTE en este mismo script, en OTRA
+-- tabla. En una ejecución normal esto nunca es un problema (cada UNIQUE
+-- se deja en su forma correcta antes de que la FK que depende de ella
+-- se cree). Pero si esta migración se ejecutara una tercera vez o más,
+-- sobre un estado ya intervenido a mano de forma inconsistente, y el
+-- chequeo de composición de una de esas 2 UNIQUE detectara una
+-- composición incorrecta con la FK compuesta de la otra tabla ya
+-- creada, el `DROP INDEX` correspondiente fallaría con un error de
+-- InnoDB (índice requerido por una FK externa) — a propósito NO se
+-- construye aquí un DROP en cascada de FKs de otras tablas para cubrir
+-- ese caso extremo: es preferible que el script falle de forma visible
+-- y clara en phpMyAdmin, y que un humano revise el estado real con las
+-- consultas de la SECCIÓN 4, antes que automatizar una cascada de DROPs
+-- entre tablas dentro de un script ya de por sí complejo.
 --
 -- ORDEN DE DESPLIEGUE:
 --   1) Ejecutar la SECCIÓN 0 (prechequeos, solo lectura) y REVISAR A
@@ -125,11 +169,34 @@ WHERE pp.empresa_id <> s.empresa_id;
 -- ============================================================
 -- SECCIÓN 1 — tms_cliente_usuarios
 -- Falta: UNIQUE uq_tmscliusr_empresa_cliente_id (empresa_id, cliente_id, id).
--- Es puramente ADITIVA (no reemplaza ni renombra nada existente) — sus
--- FKs actuales (empresa_id -> empresas; (empresa_id,cliente_id) ->
--- tms_clientes) ya coinciden con el diseño final, confirmado en el
--- drift del ticket, así que no se tocan.
--- ============================================================
+-- Es ADITIVA en el caso esperado (no reemplaza ni renombra nada
+-- existente) — sus FKs actuales (empresa_id -> empresas;
+-- (empresa_id,cliente_id) -> tms_clientes) ya coinciden con el diseño
+-- final, confirmado en el drift del ticket, así que no se tocan.
+--
+-- AJUSTE PRE-MERGE PR #168 (punto 1): "existe un índice con este
+-- nombre" NUNCA se acepta por sí solo como "ya está correcto" — se
+-- comprueba la COMPOSICIÓN EXACTA (columnas Y que sea realmente UNIQUE,
+-- NON_UNIQUE=0) contra information_schema. Si existiera con este mismo
+-- nombre pero con otra composición (escenario no esperado hoy, pero
+-- este archivo no debe confiar en el nombre a ciegas — es justamente el
+-- destino de una FK compuesta en la SECCIÓN 2), se elimina primero y se
+-- recrea con la forma correcta, en vez de aceptarlo silenciosamente.
+SET @comp := (
+  SELECT CONCAT(
+    GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ','),
+    '|unique=', MAX(NON_UNIQUE)
+  )
+  FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'tms_cliente_usuarios'
+    AND INDEX_NAME = 'uq_tmscliusr_empresa_cliente_id'
+  GROUP BY INDEX_NAME
+);
+SET @sql := IF(@comp IS NOT NULL AND @comp <> 'empresa_id,cliente_id,id|unique=0',
+  'ALTER TABLE tms_cliente_usuarios DROP INDEX uq_tmscliusr_empresa_cliente_id',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 SET @idx_exists := (
   SELECT COUNT(*) FROM information_schema.STATISTICS
   WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'tms_cliente_usuarios'
@@ -198,14 +265,22 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 -- 2.3) uq_tmssolicli_plan: DROP solo si su composición es la vieja
 -- (plan_id a secas) — con las FKs ya fuera del camino (2.2), este
 -- índice queda libre para modificarse.
+--
+-- AJUSTE PRE-MERGE PR #168 (punto 1): además de las columnas, se
+-- comprueba que sea realmente UNIQUE (NON_UNIQUE=0) — un índice normal
+-- (no único) con este mismo nombre y estas mismas columnas NO debe
+-- aceptarse como si ya fuera la restricción correcta.
 SET @comp := (
-  SELECT GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ',')
+  SELECT CONCAT(
+    GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ','),
+    '|unique=', MAX(NON_UNIQUE)
+  )
   FROM information_schema.STATISTICS
   WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'tms_solicitudes_cliente'
     AND INDEX_NAME = 'uq_tmssolicli_plan'
   GROUP BY INDEX_NAME
 );
-SET @sql := IF(@comp IS NOT NULL AND @comp <> 'empresa_id,plan_id',
+SET @sql := IF(@comp IS NOT NULL AND @comp <> 'empresa_id,plan_id|unique=0',
   'ALTER TABLE tms_solicitudes_cliente DROP INDEX uq_tmssolicli_plan',
   'SELECT 1'
 );
@@ -249,8 +324,27 @@ SET @sql := IF(@idx_exists = 0,
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- 2.5) uq_tmssolicli_empresa_id (empresa_id, id): no existe en el
--- esquema pre-hardening — puramente aditiva. Es el destino que
--- necesitará la FK compuesta de tms_solicitud_paradas en la SECCIÓN 3.
+-- esquema pre-hardening — aditiva en el caso esperado. Es el destino
+-- que necesitará la FK compuesta de tms_solicitud_paradas en la
+-- SECCIÓN 3, así que (AJUSTE PRE-MERGE PR #168, punto 1) se verifica
+-- composición exacta (columnas + NON_UNIQUE=0), igual que en 2.3/1: si
+-- el nombre existiera con otra composición, se elimina y se recrea en
+-- vez de aceptarlo por nombre.
+SET @comp := (
+  SELECT CONCAT(
+    GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ','),
+    '|unique=', MAX(NON_UNIQUE)
+  )
+  FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'tms_solicitudes_cliente'
+    AND INDEX_NAME = 'uq_tmssolicli_empresa_id'
+  GROUP BY INDEX_NAME
+);
+SET @sql := IF(@comp IS NOT NULL AND @comp <> 'empresa_id,id|unique=0',
+  'ALTER TABLE tms_solicitudes_cliente DROP INDEX uq_tmssolicli_empresa_id',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 SET @idx_exists := (
   SELECT COUNT(*) FROM information_schema.STATISTICS
   WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'tms_solicitudes_cliente'
@@ -343,10 +437,33 @@ SET @sql := IF(@idx_exists = 0,
 );
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
--- 3.3) ADD fk_tmssolpar_empresa_solicitud (nombre NUEVO, no existía
--- antes bajo ningún nombre en esta forma compuesta) SOLO si no existe
--- ya. fk_tmssolpar_empresa (empresa_id -> empresas(id)) NO se toca —
--- ya es correcta.
+-- 3.3) fk_tmssolpar_empresa_solicitud (nombre NUEVO, no existía antes
+-- bajo ningún nombre en esta forma compuesta). fk_tmssolpar_empresa
+-- (empresa_id -> empresas(id)) NO se toca — ya es correcta.
+--
+-- AJUSTE PRE-MERGE PR #168 (punto 1): aunque el nombre es nuevo (no hay
+-- una forma "vieja" con este mismo nombre que reemplazar, a diferencia
+-- de fk_tmssolicli_usuario/fk_tmssolicli_plan), tampoco aquí se acepta
+-- "el nombre existe" como prueba de que la firma sea la correcta —
+-- mismo criterio de composición exacta que en 2.1/2.2, por si este
+-- nombre ya existiera con otra firma por cualquier motivo no previsto.
+SET @sig := (
+  SELECT CONCAT(
+    GROUP_CONCAT(COLUMN_NAME ORDER BY ORDINAL_POSITION SEPARATOR ','),
+    '->', MAX(REFERENCED_TABLE_NAME), '(',
+    GROUP_CONCAT(REFERENCED_COLUMN_NAME ORDER BY ORDINAL_POSITION SEPARATOR ','), ')'
+  )
+  FROM information_schema.KEY_COLUMN_USAGE
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'tms_solicitud_paradas'
+    AND CONSTRAINT_NAME = 'fk_tmssolpar_empresa_solicitud' AND REFERENCED_TABLE_NAME IS NOT NULL
+  GROUP BY CONSTRAINT_NAME
+);
+SET @sql := IF(@sig IS NOT NULL
+    AND @sig <> 'empresa_id,solicitud_id->tms_solicitudes_cliente(empresa_id,id)',
+  'ALTER TABLE tms_solicitud_paradas DROP FOREIGN KEY fk_tmssolpar_empresa_solicitud',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 SET @fk_exists := (
   SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS
   WHERE CONSTRAINT_SCHEMA = @db AND TABLE_NAME = 'tms_solicitud_paradas'
