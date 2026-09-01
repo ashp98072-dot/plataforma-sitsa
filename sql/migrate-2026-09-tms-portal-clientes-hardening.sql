@@ -58,12 +58,14 @@
 -- migración se ejecutara por error una segunda vez, o en un entorno que
 -- ya se creó directamente con sql/schema.sql actual): cada ALTER de
 -- abajo primero COMPRUEBA LA COMPOSICIÓN REAL del índice/FK existente
--- (columnas exactas Y, cuando aplica, que sea realmente UNIQUE) contra
--- information_schema, y solo actúa si esa composición NO es ya la final
--- esperada — "existe un objeto con este nombre" NUNCA se acepta por sí
--- solo como "ya tiene la forma correcta"; si el nombre existiera con
--- otra composición, se elimina primero y se recrea, en vez de aceptarlo
--- silenciosamente.
+-- contra information_schema — columnas exactas; para índices, también
+-- si es UNIQUE (NON_UNIQUE=0) o normal (NON_UNIQUE=1) según corresponda;
+-- para FKs, también su DELETE_RULE (información_schema.
+-- REFERENTIAL_CONSTRAINTS) — y solo actúa si esa composición NO es ya
+-- la final esperada. "Existe un objeto con este nombre" NUNCA se acepta
+-- por sí solo como "ya tiene la forma correcta"; si el nombre existiera
+-- con otra composición (columnas, unicidad o regla de borrado), se
+-- elimina primero y se recrea, en vez de aceptarlo silenciosamente.
 --
 -- Límite honesto de esta garantía: 2 de las UNIQUE nuevas
 -- (uq_tmscliusr_empresa_cliente_id en tms_cliente_usuarios,
@@ -221,9 +223,22 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 -- ============================================================
 
 -- 2.1) DROP fk_tmssolicli_usuario SOLO si su composición actual es la
--- vieja (simple, creado_por_usuario_cliente_id -> tms_cliente_usuarios(id)).
--- Si ya es la compuesta final, o si no existe, no hace nada.
-SET @sig := (
+-- vieja (simple, creado_por_usuario_cliente_id -> tms_cliente_usuarios(id))
+-- O si su DELETE_RULE no es la esperada. Si ya es la compuesta final
+-- con la regla correcta, o si no existe, no hace nada.
+--
+-- AJUSTE PRE-MERGE PR #168 (punto 1, última ronda): columnas correctas
+-- NO bastan — se compara también information_schema.REFERENTIAL_
+-- CONSTRAINTS.DELETE_RULE. Esta FK se diseñó ON DELETE RESTRICT (ver
+-- SECCIÓN 2.6). MariaDB/MySQL tratan RESTRICT y NO ACTION como el mismo
+-- comportamiento real (bloquear el DELETE), pero esta migración NO
+-- asume cuál de las dos cadenas exactas queda expuesta en
+-- REFERENTIAL_CONSTRAINTS sin haberlo verificado contra la instancia
+-- real — por eso se aceptan AMBAS como "correcta" (nunca se fuerza un
+-- DROP+recreate innecesario solo por una diferencia de representación
+-- textual entre motores/versiones); cualquier otra regla (CASCADE,
+-- SET NULL, SET DEFAULT) si se detectara, sí se trata como incorrecta.
+SET @cols := (
   SELECT CONCAT(
     GROUP_CONCAT(COLUMN_NAME ORDER BY ORDINAL_POSITION SEPARATOR ','),
     '->', MAX(REFERENCED_TABLE_NAME), '(',
@@ -234,17 +249,25 @@ SET @sig := (
     AND CONSTRAINT_NAME = 'fk_tmssolicli_usuario' AND REFERENCED_TABLE_NAME IS NOT NULL
   GROUP BY CONSTRAINT_NAME
 );
-SET @sql := IF(@sig IS NOT NULL
-    AND @sig <> 'empresa_id,cliente_id,creado_por_usuario_cliente_id->tms_cliente_usuarios(empresa_id,cliente_id,id)',
+SET @rule := (
+  SELECT DELETE_RULE FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = @db AND TABLE_NAME = 'tms_solicitudes_cliente'
+    AND CONSTRAINT_NAME = 'fk_tmssolicli_usuario'
+);
+SET @sql := IF(@cols IS NOT NULL
+    AND (@cols <> 'empresa_id,cliente_id,creado_por_usuario_cliente_id->tms_cliente_usuarios(empresa_id,cliente_id,id)'
+         OR @rule NOT IN ('RESTRICT', 'NO ACTION')),
   'ALTER TABLE tms_solicitudes_cliente DROP FOREIGN KEY fk_tmssolicli_usuario',
   'SELECT 1'
 );
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- 2.2) DROP fk_tmssolicli_plan SOLO si su composición actual es la vieja
--- (simple, plan_id -> tms_planes_viaje(id)). Si ya es la compuesta
--- final, o si no existe, no hace nada.
-SET @sig := (
+-- (simple, plan_id -> tms_planes_viaje(id)) O si su DELETE_RULE no es la
+-- esperada. Si ya es la compuesta final con la regla correcta, o si no
+-- existe, no hace nada. Mismo criterio RESTRICT/NO ACTION que 2.1 — ver
+-- ese comentario.
+SET @cols := (
   SELECT CONCAT(
     GROUP_CONCAT(COLUMN_NAME ORDER BY ORDINAL_POSITION SEPARATOR ','),
     '->', MAX(REFERENCED_TABLE_NAME), '(',
@@ -255,8 +278,14 @@ SET @sig := (
     AND CONSTRAINT_NAME = 'fk_tmssolicli_plan' AND REFERENCED_TABLE_NAME IS NOT NULL
   GROUP BY CONSTRAINT_NAME
 );
-SET @sql := IF(@sig IS NOT NULL
-    AND @sig <> 'empresa_id,plan_id->tms_planes_viaje(empresa_id,id)',
+SET @rule := (
+  SELECT DELETE_RULE FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = @db AND TABLE_NAME = 'tms_solicitudes_cliente'
+    AND CONSTRAINT_NAME = 'fk_tmssolicli_plan'
+);
+SET @sql := IF(@cols IS NOT NULL
+    AND (@cols <> 'empresa_id,plan_id->tms_planes_viaje(empresa_id,id)'
+         OR @rule NOT IN ('RESTRICT', 'NO ACTION')),
   'ALTER TABLE tms_solicitudes_cliente DROP FOREIGN KEY fk_tmssolicli_plan',
   'SELECT 1'
 );
@@ -299,15 +328,24 @@ SET @sql := IF(@idx_exists = 0,
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- 2.4) idx_tmssolicli_usuario: DROP solo si su composición es la vieja
--- (creado_por_usuario_cliente_id a secas).
+-- (creado_por_usuario_cliente_id a secas) o si dejó de ser un índice
+-- normal (NON_UNIQUE=1).
+--
+-- AJUSTE PRE-MERGE PR #168 (punto 2): además de las columnas, se
+-- comprueba NON_UNIQUE=1 — un UNIQUE accidental con este mismo nombre y
+-- estas mismas columnas NO es equivalente al índice normal que exige el
+-- esquema final, y no debe aceptarse como tal.
 SET @comp := (
-  SELECT GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ',')
+  SELECT CONCAT(
+    GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ','),
+    '|unique=', MAX(NON_UNIQUE)
+  )
   FROM information_schema.STATISTICS
   WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'tms_solicitudes_cliente'
     AND INDEX_NAME = 'idx_tmssolicli_usuario'
   GROUP BY INDEX_NAME
 );
-SET @sql := IF(@comp IS NOT NULL AND @comp <> 'empresa_id,cliente_id,creado_por_usuario_cliente_id',
+SET @sql := IF(@comp IS NOT NULL AND @comp <> 'empresa_id,cliente_id,creado_por_usuario_cliente_id|unique=1',
   'ALTER TABLE tms_solicitudes_cliente DROP INDEX idx_tmssolicli_usuario',
   'SELECT 1'
 );
@@ -413,15 +451,19 @@ SET @sql := IF(@fk_exists > 0,
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- 3.2) idx_tmssolpar_solicitud: DROP solo si su composición es la vieja
--- (solicitud_id, orden — sin empresa_id).
+-- (solicitud_id, orden — sin empresa_id) o si dejó de ser un índice
+-- normal (NON_UNIQUE=1) — mismo criterio del punto 2 que en 2.4.
 SET @comp := (
-  SELECT GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ',')
+  SELECT CONCAT(
+    GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ','),
+    '|unique=', MAX(NON_UNIQUE)
+  )
   FROM information_schema.STATISTICS
   WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'tms_solicitud_paradas'
     AND INDEX_NAME = 'idx_tmssolpar_solicitud'
   GROUP BY INDEX_NAME
 );
-SET @sql := IF(@comp IS NOT NULL AND @comp <> 'empresa_id,solicitud_id,orden',
+SET @sql := IF(@comp IS NOT NULL AND @comp <> 'empresa_id,solicitud_id,orden|unique=1',
   'ALTER TABLE tms_solicitud_paradas DROP INDEX idx_tmssolpar_solicitud',
   'SELECT 1'
 );
@@ -447,7 +489,12 @@ PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 -- "el nombre existe" como prueba de que la firma sea la correcta —
 -- mismo criterio de composición exacta que en 2.1/2.2, por si este
 -- nombre ya existiera con otra firma por cualquier motivo no previsto.
-SET @sig := (
+-- Incluye también DELETE_RULE: esta FK se diseñó ON DELETE CASCADE (ver
+-- SECCIÓN 3.3 más abajo) — a diferencia de las 2 FK RESTRICT de la
+-- SECCIÓN 2, CASCADE no tiene la ambigüedad RESTRICT/NO ACTION de
+-- motor/versión, así que aquí se exige el valor exacto 'CASCADE', sin
+-- alternativas aceptadas.
+SET @cols := (
   SELECT CONCAT(
     GROUP_CONCAT(COLUMN_NAME ORDER BY ORDINAL_POSITION SEPARATOR ','),
     '->', MAX(REFERENCED_TABLE_NAME), '(',
@@ -458,8 +505,14 @@ SET @sig := (
     AND CONSTRAINT_NAME = 'fk_tmssolpar_empresa_solicitud' AND REFERENCED_TABLE_NAME IS NOT NULL
   GROUP BY CONSTRAINT_NAME
 );
-SET @sql := IF(@sig IS NOT NULL
-    AND @sig <> 'empresa_id,solicitud_id->tms_solicitudes_cliente(empresa_id,id)',
+SET @rule := (
+  SELECT DELETE_RULE FROM information_schema.REFERENTIAL_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = @db AND TABLE_NAME = 'tms_solicitud_paradas'
+    AND CONSTRAINT_NAME = 'fk_tmssolpar_empresa_solicitud'
+);
+SET @sql := IF(@cols IS NOT NULL
+    AND (@cols <> 'empresa_id,solicitud_id->tms_solicitudes_cliente(empresa_id,id)'
+         OR @rule <> 'CASCADE'),
   'ALTER TABLE tms_solicitud_paradas DROP FOREIGN KEY fk_tmssolpar_empresa_solicitud',
   'SELECT 1'
 );
@@ -513,6 +566,32 @@ ORDER BY TABLE_NAME, CONSTRAINT_NAME, ORDINAL_POSITION;
 --                              -> tms_planes_viaje(empresa_id, id)
 --  fk_tmssolpar_empresa_solicitud -> empresa_id, solicitud_id
 --                              -> tms_solicitudes_cliente(empresa_id, id)
+
+-- 4d-bis) AJUSTE PRE-MERGE PR #168 (punto 3) — DELETE_RULE de las
+-- mismas 3 FK. No se afirma aquí una representación textual concreta de
+-- MariaDB/MySQL para RESTRICT (podría exponerse como 'RESTRICT' o como
+-- 'NO ACTION' según motor/versión — la migración acepta ambas, ver
+-- comentario de las SECCIONES 2.1/2.2) — este postcheck es justamente
+-- para que quien ejecute la migración VEA el valor real expuesto por su
+-- instancia y lo compare a mano contra lo esperado, en vez de que este
+-- documento lo de por sentado:
+SELECT TABLE_NAME, CONSTRAINT_NAME, DELETE_RULE
+FROM information_schema.REFERENTIAL_CONSTRAINTS
+WHERE CONSTRAINT_SCHEMA = @db
+  AND CONSTRAINT_NAME IN ('fk_tmssolicli_usuario', 'fk_tmssolicli_plan', 'fk_tmssolpar_empresa_solicitud')
+ORDER BY TABLE_NAME, CONSTRAINT_NAME;
+
+-- Esperado en 4d-bis:
+--  fk_tmssolicli_usuario           -> DELETE_RULE = RESTRICT (o NO ACTION
+--                                      — ambas representan el mismo
+--                                      comportamiento real de bloqueo;
+--                                      NUNCA debe ser CASCADE/SET NULL/
+--                                      SET DEFAULT)
+--  fk_tmssolicli_plan              -> igual que la anterior (RESTRICT o
+--                                      NO ACTION, nunca otra cosa)
+--  fk_tmssolpar_empresa_solicitud  -> DELETE_RULE = CASCADE exactamente
+--                                      (esta sí es inequívoca, sin
+--                                      alternativa aceptada)
 
 -- 4e) Confirmar que el nombre viejo ya no existe (debe devolver 0
 -- filas):
