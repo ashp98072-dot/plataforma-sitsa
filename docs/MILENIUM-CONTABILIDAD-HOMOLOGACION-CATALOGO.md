@@ -23,18 +23,18 @@ como los declara el propio archivo (no una suposición — es lo que exige
 | --- | --- | --- |
 | `CODIGO_CTA` | `C` (carácter) | Se valida contra el límite destino (40); se detectan duplicados por forma normalizada (mayúsculas, sin diacríticos, sin espacios extremos). |
 | `NOMBRE_CTA` | `C` | Decodificado Windows-1252 → Unicode; se valida contra el límite destino (200). |
-| `TIPO_CTA` | `N` (numérico, sin decimales) | Solo se cuenta su distribución de valores (`tipos_origen`); ningún significado asumido. |
-| `NIVEL_CTA` | `N` | Se valida que sea entero ≥ 1 (`incidencias.nivel_invalido`); se cuenta su distribución (`niveles_origen`). |
-| `LINACTIVA_` | `L` (lógico) | Se invierte a `activa` únicamente como booleano (`true`/`false`/`null` → `estado_desconocido`); el NOMBRE del campo sugiere "línea inactiva", pero esa lectura del nombre no ha sido confirmada por el responsable. |
-| `CTACOM_CTA` | `L` | Leído desde Fase 1, pero su distribución NUNCA se reportó hasta este ticket — ver sección 4. |
-| `MULTIP_CTA` | `N` | Igual que arriba — leído sin reportar distribución hasta este ticket. |
+| `TIPO_CTA` | `N` (numérico, sin decimales) | Se cuenta su distribución (`tipos_origen`); evidencia real (sección 4.1): exactamente {1,2,3,4,5} en las tres bases. Significado sin asumir. |
+| `NIVEL_CTA` | `N` | Se valida que sea entero ≥ 1 (`incidencias.nivel_invalido`); se cuenta su distribución (`niveles_origen`). Evidencia real: exactamente {1,2,3,4,5} en las tres bases. |
+| `LINACTIVA_` | `L` (lógico) | Se invierte a `activa` únicamente como booleano (`true`/`false`/`null` → `estado_desconocido`); el NOMBRE del campo sugiere "línea inactiva", pero esa lectura del nombre no ha sido confirmada por el responsable. Evidencia real: 0 cuentas inactivas y 0 `estado_desconocido` en las tres bases. |
+| `CTACOM_CTA` | `L` | Leído desde Fase 1; su distribución ya se reporta (`ctacom_origen`, PR #159). Evidencia real: `false` en el 100% de las cuentas de las tres bases (ver sección 4.1/4.2). |
+| `MULTIP_CTA` | `N` | Igual que arriba (`multip_origen`, PR #159). Evidencia real: exactamente {1,-1} en las tres bases. |
 
 No hay ningún otro campo de `co01.dbf` incorporado a la herramienta (no se ha
 inspeccionado, por ejemplo, un posible campo de cuenta padre/agrupadora — ver
 sección 5). El lector rechaza cualquier DBF que no sea VFP `0x30` / Windows-1252
-(marca `0x03`); no hay evidencia dentro de este repo de haber ejecutado la
-herramienta contra una copia real de Milenium ni de haber registrado su salida
-en ningún documento — ver sección 4.
+(marca `0x03`); la herramienta ya se ejecutó contra las tres bases reales y su
+salida (agregada, sin nombres/códigos de cuenta) está incorporada en este
+documento — ver sección 4.
 
 ## 2. Modelo destino (`cont_cuentas`, `sql/schema.sql`)
 
@@ -89,29 +89,65 @@ contable (`co02`–`co08`, bancos, cartera, etc. — ver
 
 ## 4. TIPO_CTA / CTACOM_CTA / MULTIP_CTA — qué sabemos y qué no
 
-**No hay ningún resultado real documentado en este repositorio.** Se revisó
-`docs/MILENIUM-CONTABILIDAD-FASE1.md`, `FASE2.md`, `FASE2B.md` y
-`MILENIUM-INVENTARIO-FUNCIONAL.md`: ninguno registra una salida real de
-`revisar-cuentas.mjs` (ni conteos, ni valores, ni un ejemplo). La única pista
-existente es una advertencia explícita en `FASE1.md`: *"TIPO_CTA ... Pendiente
-de homologación; NO asumir significado de 1–5"* — una nota de precaución
-sobre un posible rango observado, no un conteo ni una confirmación.
+**Actualización con evidencia real.** El usuario ejecutó `revisar-cuentas.mjs`
+(versión con `ctacom_origen`/`multip_origen`, PR #159 fusionado en
+`256f6e16b3bdb7acb411e7393e09ce187a3ede3f`) contra las tres bases reales y
+compartió el JSON completo de las tres corridas — nunca los DBF, nunca
+nombres/códigos de cuenta. Esto reemplaza la ausencia de evidencia que
+señalaba la versión anterior de este documento: ya HAY conteos reales, pero
+siguen siendo solo **distribuciones agregadas**, no una interpretación
+semántica confirmada.
 
-| Campo | Qué podemos afirmar TÉCNICAMENTE (por el código) | Qué NO podemos afirmar sin datos/responsable |
+### 4.1 Evidencia real — comparativa KT / Mónaco actual / Mónaco histórico
+
+| | KT (01, BASES001) | Mónaco actual (08, BASES008) | Mónaco histórico (00, BASES000) |
+| --- | --- | --- | --- |
+| Registros vigentes | 658 | 618 | 574 |
+| Marcados borrados | 0 | 0 | 0 |
+| Inactivos (`LINACTIVA_`) | 0 | 0 | 0 |
+| Incidencias (las 8 categorías) | todas 0 | todas 0 | todas 0 |
+| `TIPO_CTA=1` | 176 | 164 | 154 |
+| `TIPO_CTA=2` | 109 | 98 | 88 |
+| `TIPO_CTA=3` | 18 | 18 | 17 |
+| `TIPO_CTA=4` | 36 | 36 | 24 |
+| `TIPO_CTA=5` | 319 | 302 | 291 |
+| `NIVEL_CTA=1` | 8 | 8 | 7 |
+| `NIVEL_CTA=2` | 18 | 18 | 17 |
+| `NIVEL_CTA=3` | 47 | 46 | 43 |
+| `NIVEL_CTA=4` | 75 | 73 | 70 |
+| `NIVEL_CTA=5` | 510 | 473 | 437 |
+| `CTACOM_CTA=false` | 658 (100%) | 618 (100%) | 574 (100%) |
+| `CTACOM_CTA=true` | 0 | 0 | 0 |
+| `MULTIP_CTA=1` | 495 | 466 | 445 |
+| `MULTIP_CTA=-1` | 163 | 152 | 129 |
+| SHA-256 `co01.dbf` | `d091ec9c...ed4fb0` | `e1a1c0a0...447b4eb` | `ead94686...16ecace` |
+
+La huella SHA-256 de `s02.dbf` (catálogo de empresas) fue **idéntica en las
+tres ejecuciones** (`96d0b428...e2ade3bbd`) — consistente con que las tres
+corridas leyeron el mismo archivo de empresas compartido entre las tres
+carpetas, tal como espera `revisar-cuentas.mjs` (`s02.dbf` vive en la raíz,
+`co01.dbf` dentro de cada carpeta `BASES00X`).
+
+### 4.2 Qué podemos afirmar TÉCNICAMENTE ahora (con evidencia real)
+
+| Campo | Confirmado por esta evidencia | Sigue SIN poder afirmarse |
 | --- | --- | --- |
-| `TIPO_CTA` | Es numérico entero sin decimales en el DBF; la herramienta ya agrupa su distribución (`tipos_origen`) desde Fase 1. `FASE1.md` deja constancia de una posible observación informal de valores 1–5, sin confirmar. | Qué significa cada valor (¿Activo/Pasivo/Capital/Ingreso/Gasto? ¿algo más granular?), si el conjunto de valores es realmente 1–5 en las 3 bases, si es consistente entre KT/Mónaco/histórico, y cuál es la correspondencia 1:1 (o N:1) contra los 5 valores del `tipo` destino. |
-| `CTACOM_CTA` | Es lógico (booleano) en el DBF. Hasta este ticket, la herramienta lo LEÍA pero nunca reportaba su distribución — corregido en esta entrega (`ctacom_origen`, ver sección 7). El nombre sugiere "cuenta común" o "cuenta de agrupación", pero es una lectura del nombre del campo, no una confirmación. | Su significado real, si distingue cuenta de agrupación vs. cuenta de movimiento (el destino no tiene ese concepto hoy — ver sección 2), y qué proporción de `true`/`false` aparece en cada base real. |
-| `MULTIP_CTA` | Es numérico entero sin decimales en el DBF. Igual que `CTACOM_CTA`: se leía sin reportar distribución; corregido en esta entrega (`multip_origen`). El nombre sugiere "multiplicador", posiblemente signo (+1/-1) para naturaleza deudora/acreedora — pura hipótesis por el nombre. | Si es un multiplicador de signo, un factor de presentación, o algo sin relación con naturaleza contable; su rango real de valores; si determina el debe/haber esperado de la cuenta. |
+| `TIPO_CTA` | El conjunto de valores observados es **exactamente {1, 2, 3, 4, 5}** en las tres bases reales — sin valores fuera de ese rango, sin `sin_valor` (NULL). Las frecuencias varían por base pero la distribución relativa es similar (p. ej. el valor 5 es siempre el más frecuente en las tres). | Qué significa cada valor (¿Activo/Pasivo/Capital/Ingreso/Gasto en algún orden? ¿otra clasificación?); si el orden/mapeo es el mismo en las tres bases (los conteos por sí solos no lo prueban). |
+| `NIVEL_CTA` | El conjunto de valores observados es **exactamente {1, 2, 3, 4, 5}** en las tres bases, sin `sin_valor`. El nivel 5 concentra la mayoría de cuentas en las tres (510/658, 473/618, 437/574) — consistente con una estructura donde los niveles bajos son pocas cuentas "resumen" y el nivel más profundo es donde vive la mayoría del catálogo. | Si el nivel numérico corresponde a profundidad real de jerarquía o es solo una etiqueta; sigue sin existir un campo de cuenta padre observado (ver sección 5) — la distribución por sí sola no reconstruye el árbol. |
+| `CTACOM_CTA` | **Es `false` en el 100% de las cuentas de las tres bases** (658/658, 618/618, 574/574) — ni un solo `true`, ni un solo `sin_valor`. Con esta evidencia, `CTACOM_CTA` **NO sirve para discriminar cuentas dentro de estos tres catálogos** (no separa ningún subconjunto: todas comparten el mismo valor). | Por qué el campo existe si nunca varía en estas tres bases (¿es un campo heredado sin uso actual? ¿solo varía en otras tablas o versiones de Milenium que no se han inspeccionado?) — no asumir que "siempre false" significa "no importa" sin que el responsable lo confirme. |
+| `MULTIP_CTA` | El conjunto de valores observados es **exactamente {1, -1}** en las tres bases — sin ceros, sin otros valores, sin `sin_valor`. La proporción `1`/`-1` es similar en las tres (~75%/~25%). | Si `1`/`-1` representa naturaleza deudora/acreedora, signo de presentación en reportes, o alguna otra regla — la evidencia técnica (dos valores opuestos) es **consistente con** una hipótesis de signo, pero no la confirma; sigue siendo una hipótesis hasta que el responsable la valide. |
 
-**Ninguna fila de esta tabla puede convertirse en regla de importación sin que
-el responsable contable/Milenium la confirme con evidencia real (ejecutar la
-herramienta actualizada contra una copia estable y compartir — o describir —
-los conteos que arroje, más su interpretación del sistema origen).**
+**Ninguna fila de esta tabla pasa a `CONFIRMADO` en la matriz de homologación
+(sección 6) por tener ahora evidencia técnica real — la evidencia reduce la
+incertidumbre sobre el RANGO de valores, pero no resuelve su SIGNIFICADO
+contable, que sigue dependiendo del responsable.**
 
 ## 5. ¿`NIVEL_CTA` permite reconstruir jerarquía por sí solo?
 
-**No.** Es un entero de profundidad (o al menos eso sugiere su nombre), pero
-por sí solo NO identifica:
+**No — confirmado también con la evidencia real de la sección 4.1.** Los
+valores observados (exactamente {1,2,3,4,5} en las tres bases, concentrados
+mayoritariamente en el nivel 5) son consistentes con una estructura de
+profundidad, pero un entero de profundidad por sí solo NO identifica:
 
 - **Cuenta padre**: no existe en la selección de campos actual ningún
   `CTAPADRE_CTA`/`CTA_PADRE` ni columna equivalente de referencia a otra fila.
@@ -147,11 +183,11 @@ cuenta sea "de movimiento" en el sistema origen.**
 | `CODIGO_CTA` | `cont_cuentas.codigo` | **CONFIRMADO** | Mapeo directo de texto, conservando ceros iniciales; validado contra el límite VARCHAR(40) del destino; detección de duplicados normalizados ya implementada. |
 | `NOMBRE_CTA` | `cont_cuentas.nombre` | **CONFIRMADO** | Decodificación Windows-1252 → Unicode ya implementada y probada; validado contra VARCHAR(200). |
 | Empresa/base origen (01/08/00) | `cont_cuentas.entidad_id` | **CONFIRMADO** | Resuelto en C2 (ver `FASE1.md`): KT → entidad KT; Mónaco 08 y Mónaco 00 → LA MISMA entidad Mónaco (no dos entidades). |
-| `LINACTIVA_` | `cont_cuentas.activa` (invertido) | **PROPUESTO / REQUIERE VALIDACIÓN** | Técnicamente trivial invertir un booleano; lo que falta confirmar es que "línea inactiva" en Milenium equivale exactamente a "cuenta no utilizable" en destino, en las 3 bases por igual. |
-| `NIVEL_CTA` | `cont_cuentas.nivel` | **PROPUESTO / REQUIERE VALIDACIÓN** | Copiar el entero es trivial; su SIGNIFICADO (profundidad real, consistencia entre bases) no está confirmado, y por sí solo no reconstruye jerarquía (sección 5). |
-| `TIPO_CTA` | `cont_cuentas.tipo` (Activo/Pasivo/Capital/Ingreso/Gasto) | **SIN EQUIVALENCIA** | No existe diccionario de valores confirmado; no inferir del rango numérico observado informalmente. |
-| `CTACOM_CTA` | (sin columna destino hoy) | **SIN EQUIVALENCIA / NO IMPORTAR TODAVÍA** | El destino no distingue agrupación de movimiento; incluso si se confirma el significado origen, falta decidir cómo (o si) modelarlo en destino. |
-| `MULTIP_CTA` | (sin columna destino hoy, posible naturaleza) | **SIN EQUIVALENCIA** | Hipótesis de signo/naturaleza sin confirmar; el destino tampoco tiene columna de naturaleza deudora/acreedora hoy. |
+| `LINACTIVA_` | `cont_cuentas.activa` (invertido) | **PROPUESTO / REQUIERE VALIDACIÓN** | Técnicamente trivial invertir un booleano; evidencia real: 0 inactivas y 0 `estado_desconocido` en las 3 bases (sección 4.1) — sin casos reales todavía para confirmar que la inversión produce el resultado esperado. Falta confirmar con el responsable que "línea inactiva" equivale exactamente a "cuenta no utilizable" en destino. |
+| `NIVEL_CTA` | `cont_cuentas.nivel` | **PROPUESTO / REQUIERE VALIDACIÓN** | Copiar el entero es trivial; evidencia real confirma el rango {1..5} en las 3 bases (sección 4.2), pero su SIGNIFICADO (profundidad real, consistencia entre bases) sigue sin confirmar, y por sí solo no reconstruye jerarquía (sección 5). |
+| `TIPO_CTA` | `cont_cuentas.tipo` (Activo/Pasivo/Capital/Ingreso/Gasto) | **SIN EQUIVALENCIA** | Evidencia real confirma el rango exacto {1,2,3,4,5} en las 3 bases (sección 4.2) — coincide en CANTIDAD con los 5 valores destino, pero eso NO prueba una correspondencia 1:1; no existe diccionario de valores confirmado; no inferir del rango numérico observado. |
+| `CTACOM_CTA` | (sin columna destino hoy) | **SIN EQUIVALENCIA / NO IMPORTAR TODAVÍA** | Evidencia real: `false` en el 100% de las cuentas de las 3 bases (sección 4.2) — con este dato el campo NO discrimina nada dentro de estos catálogos. El destino tampoco distingue agrupación de movimiento; incluso si se confirma el significado origen, falta decidir cómo (o si) modelarlo en destino. |
+| `MULTIP_CTA` | (sin columna destino hoy, posible naturaleza) | **SIN EQUIVALENCIA** | Evidencia real confirma el rango exacto {1,-1} en las 3 bases (sección 4.2) — consistente con una hipótesis de signo, pero no la confirma. El destino tampoco tiene columna de naturaleza deudora/acreedora hoy. |
 | Cuenta padre / jerarquía real | (sin columna origen identificada, sin columna destino) | **NO IMPORTAR TODAVÍA** | Falta identificar el campo origen (si existe) antes de proponer cualquier destino. |
 | Cuenta de agrupación vs. movimiento | (sin columna destino hoy) | **NO IMPORTAR TODAVÍA** | Depende de resolver `CTACOM_CTA` (o el campo que corresponda) Y de decidir si se modela en destino antes de permitir escrituras de partidas importadas. |
 | Naturaleza deudora/acreedora | (sin columna origen confirmada, sin columna destino) | **NO IMPORTAR TODAVÍA** | Bloquea homologar `MULTIP_CTA`; sin esto, un importador no podría validar signo de saldos. |
@@ -171,45 +207,46 @@ leídos, sin red, sin escritura de archivos, sin SQL, sin importación. El
 informe sigue sin exponer códigos/nombres de cuentas reales (confirmado por
 test dedicado). `listo_para_importar` sigue fijo en `false`.
 
-Cuando el responsable ejecute `node scripts/milenium/revisar-cuentas.mjs
-<ruta> KT|MONACO|MONACO_HISTORICO` con esta versión, el JSON impreso ya
-incluirá las distribuciones de `TIPO_CTA`, `CTACOM_CTA` y `MULTIP_CTA` — eso
-es lo que falta para poder llenar la sección 4 con evidencia real.
+El usuario ya ejecutó `node scripts/milenium/revisar-cuentas.mjs <ruta>
+KT|MONACO|MONACO_HISTORICO` con esta versión contra las tres bases reales;
+el JSON de esas tres corridas es la evidencia incorporada en la sección 4.1.
 
 ## 8. Preguntas concretas para el responsable contable / Milenium
 
-1. ¿Qué significa cada valor de `TIPO_CTA`? ¿Corresponde 1:1 a
-   Activo/Pasivo/Capital/Ingreso/Gasto, o es más granular (requiriendo mapear
-   varios valores origen a un mismo `tipo` destino)?
-2. ¿`CTACOM_CTA` distingue cuenta de agrupación (no usable en partidas) de
-   cuenta de movimiento (sí usable)? Si no, ¿qué campo del sistema Milenium sí
-   lo distingue?
-3. ¿`MULTIP_CTA` determina la naturaleza deudora/acreedora (signo esperado del
-   saldo)? Si no, ¿qué representa realmente?
-4. ¿Existe en `co01.dbf` (u otro DBF relacionado) un campo de cuenta padre o
-   código de agrupación superior que hoy no se está leyendo? ¿Cómo se
-   reconstruye la jerarquía real en Milenium?
-5. ¿El significado de estos 3 campos es idéntico entre las bases KT (01),
-   Mónaco actual (08) y Mónaco histórico (00), o puede variar por base/época?
-6. Para las cuentas con `LINACTIVA_` en blanco/nulo (`estado_desconocido` en
-   el informe), ¿cuál es el tratamiento correcto — tratarlas como activas,
-   inactivas, o requieren revisión caso por caso?
-7. ¿Hay un catálogo de referencia (documento, capacitación interna, o el
-   propio manual de Milenium) que ya documente el significado de `TIPO_CTA`/
-   `CTACOM_CTA`/`MULTIP_CTA`, evitando tener que inferirlo solo de los datos?
+**Reducidas tras la evidencia real de la sección 4** — se retiran las
+preguntas que la evidencia ya respondió técnicamente (por ejemplo, el rango
+exacto de valores de cada campo, o si hay `LINACTIVA_` en blanco: no lo hay
+en ninguna de las 3 bases) y quedan únicamente las que siguen abiertas porque
+dependen de significado/negocio, no de datos:
+
+1. ¿Qué significa exactamente cada valor `TIPO_CTA` 1, 2, 3, 4, 5 en Milenium?
+2. ¿`MULTIP_CTA=1` y `MULTIP_CTA=-1` representan naturaleza deudora/acreedora,
+   signo de presentación, u otra regla?
+3. ¿Qué determina en Milenium si una cuenta es de movimiento o solo de
+   agrupación? (Con la evidencia real, `CTACOM_CTA` es `false` en el 100% de
+   las cuentas de las tres bases — no sirve para responder esto por sí solo.)
+4. ¿Existe en `co01.dbf` u otra tabla un campo que identifique cuenta padre o
+   jerarquía explícita?
+5. ¿`LINACTIVA_=true` significa exactamente que una cuenta no puede
+   utilizarse en partidas?
+6. ¿Estas reglas son iguales para KT, Mónaco actual y Mónaco histórico? (La
+   evidencia real muestra que las TRES bases usan el mismo rango de valores
+   en los 4 campos — {1..5}/{1..5}/{false}/{1,-1} — pero eso no prueba que el
+   SIGNIFICADO de cada valor sea idéntico entre bases.)
 
 ## 9. Criterio de aceptación antes de permitir una vista previa/importador
 
 Todo lo siguiente debe cumplirse — no basta con avanzar parcialmente:
 
-1. Las 3 preguntas de homologación (`TIPO_CTA`, `CTACOM_CTA`, `MULTIP_CTA`,
-   preguntas 1–3 de la sección 8) respondidas por el responsable contable,
-   con evidencia (conteos reales de la herramienta actualizada) que respalde
-   la interpretación acordada.
+1. Las preguntas de homologación semántica (`TIPO_CTA`, `MULTIP_CTA`,
+   `CTACOM_CTA`/agrupación-movimiento — preguntas 1–3 de la sección 8)
+   respondidas por el responsable contable. La evidencia real (sección 4) ya
+   fija el RANGO exacto de valores; falta su SIGNIFICADO.
 2. Regla explícita y aprobada para identificar cuentas de agrupación vs. de
    movimiento — y decisión de si/cómo se modela esa distinción en
    `cont_cuentas` (columna nueva, migración aditiva propuesta, nunca
-   ejecutada sin autorización).
+   ejecutada sin autorización). Con la evidencia real, `CTACOM_CTA` no puede
+   ser la respuesta (siempre `false` en las 3 bases) — hace falta otra fuente.
 3. Regla explícita para naturaleza deudora/acreedora, si se decide que hace
    falta antes de importar saldos.
 4. Confirmación de si existe (y dónde) un campo de cuenta padre real; si no
@@ -217,13 +254,15 @@ Todo lo siguiente debe cumplirse — no basta con avanzar parcialmente:
    verificable (¿se importa plano? ¿se reconstruye por segmentos de
    `CODIGO_CTA`, previa validación de que el código realmente sigue esa
    convención en TODAS las cuentas?).
-5. Ejecución real de la herramienta (actualizada, sección 7) contra las 3
-   bases (KT/Mónaco actual/Mónaco histórico) y registro de sus resultados
-   (aunque sea en un documento de seguimiento aparte, sin nombres/códigos de
-   cuenta) — hoy no existe ningún resultado real documentado.
+5. ~~Ejecución real de la herramienta contra las 3 bases y registro de sus
+   resultados~~ — **CUMPLIDO en esta entrega** (sección 4.1): las tres
+   corridas reales (KT/Mónaco actual/Mónaco histórico) están documentadas,
+   sin nombres/códigos de cuenta, con huella SHA-256 de cada `co01.dbf`.
 6. Todo lo anterior aprobado explícitamente por el responsable — no inferido
    ni asumido por esta sesión ni por ningún PR de código.
 
-Sin estos 6 puntos, diseñar una vista previa de importación repetiría el
-riesgo que Fase 1 ya advirtió: inventar equivalencias que no están
-confirmadas por quien conoce el sistema origen.
+El punto 5 ya está resuelto; los puntos 1–4 y 6 (significado semántico,
+decisión de modelo, aprobación del responsable) **siguen pendientes**. Sin
+ellos, diseñar una vista previa de importación repetiría el riesgo que Fase 1
+ya advirtió: inventar equivalencias que no están confirmadas por quien conoce
+el sistema origen — tener el RANGO de valores no es tener su SIGNIFICADO.
