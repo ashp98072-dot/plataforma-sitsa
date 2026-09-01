@@ -9,6 +9,16 @@ const COOKIE = "sitsa_session";
 const COLABORADOR_COOKIE = "sitsa_colab_session";
 const PORTAL_PUBLIC = ["/portal/login"];
 
+// CLIENTE-PORTAL-1: portal externo para clientes TMS. Namespace propio
+// "/cliente-portal" — a propósito NO "/portal-cliente" ni cualquier otro
+// prefijo que empiece con "/portal" (colisionaría con el bloque
+// `pathname.startsWith("/portal")` de abajo, que es del COLABORADOR) ni
+// "/clientes" a secas (ya usado por rewriteEmpresaPath para el módulo de
+// Facturación del staff en dominio de empresa). Cookie propia, totalmente
+// separada de sitsa_session (staff) y sitsa_colab_session (colaborador).
+const CLIENTE_COOKIE = "sitsa_cliente_session";
+const CLIENTE_PUBLIC = ["/cliente-portal/login"];
+
 function getSecret(): Uint8Array {
   return getAuthSecretBytes();
 }
@@ -48,6 +58,31 @@ async function readColaboradorSession(
     if (!empleadoId) return null;
     return {
       empleadoId,
+      debeCambiarPassword: Boolean(payload.debeCambiarPassword),
+    };
+  } catch {
+    return null;
+  }
+}
+
+type ClienteSessionLite = {
+  usuarioClienteId?: number;
+  debeCambiarPassword?: boolean;
+};
+
+/** Igual que readColaboradorSession pero para la cookie del Portal del Cliente. */
+async function readClienteSessionLite(
+  token: string | undefined,
+): Promise<ClienteSessionLite | null> {
+  if (!token) return null;
+  try {
+    const { payload } = await jwtVerify(token, getSecret());
+    const usuarioClienteId = payload.usuarioClienteId
+      ? Number(payload.usuarioClienteId)
+      : undefined;
+    if (!usuarioClienteId) return null;
+    return {
+      usuarioClienteId,
       debeCambiarPassword: Boolean(payload.debeCambiarPassword),
     };
   } catch {
@@ -146,6 +181,41 @@ export async function middleware(request: NextRequest) {
       // más hasta que cambie la contraseña.
       return NextResponse.redirect(
         new URL("/portal/cambiar-password", request.url),
+      );
+    }
+    return NextResponse.next();
+  }
+
+  // --- Portal del cliente: cookie y flujo totalmente separados del staff
+  // y del colaborador --- Mismo criterio que el bloque de /portal de
+  // arriba: se resuelve antes que nada para que jamás caiga en la lógica
+  // de abajo (que redirige a /login usando la cookie de staff).
+  if (pathname.startsWith("/cliente-portal")) {
+    const clienteToken = request.cookies.get(CLIENTE_COOKIE)?.value;
+    const clienteSession = await readClienteSessionLite(clienteToken);
+    const clienteValid = Boolean(clienteSession);
+    const isClientePublic = CLIENTE_PUBLIC.some(
+      (p) => pathname === p || pathname.startsWith(`${p}/`),
+    );
+
+    if (!clienteValid && !isClientePublic) {
+      return NextResponse.redirect(new URL("/cliente-portal/login", request.url));
+    }
+    if (clienteValid && pathname === "/cliente-portal/login") {
+      const dest = clienteSession!.debeCambiarPassword
+        ? "/cliente-portal/cambiar-password"
+        : "/cliente-portal";
+      return NextResponse.redirect(new URL(dest, request.url));
+    }
+    if (
+      clienteValid &&
+      clienteSession!.debeCambiarPassword &&
+      pathname !== "/cliente-portal/cambiar-password"
+    ) {
+      // Primer login o después de un reset: no lo dejamos navegar a nada
+      // más hasta que cambie la contraseña.
+      return NextResponse.redirect(
+        new URL("/cliente-portal/cambiar-password", request.url),
       );
     }
     return NextResponse.next();
