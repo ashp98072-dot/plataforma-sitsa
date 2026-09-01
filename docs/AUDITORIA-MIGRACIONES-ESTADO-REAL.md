@@ -95,7 +95,7 @@ otras no).
 | `migrate-2026-08-contabilidad-entidad-integridad.sql` | Contabilidad | ALTER (UNIQUE/FK compuestas) | APLICADO_CONFIRMADO | SÍ | NO (`ADD CONSTRAINT ... FOREIGN KEY IF NOT EXISTS` es re-ejecutable, pero el archivo lo advierte "sin escrituras concurrentes") | Medio si se reejecuta sin backup | `docs/CONTABILIDAD-C3A-CAPTURA.md`: "C2B ... cuyas migraciones el usuario confirmó aplicadas manualmente"; `exigirEsquemaC2b()` en `ambito.ts` exige exactamente estos índices/FK o falla con 503 | No reejecutar |
 | `migrate-2026-08-contabilidad-entidad-preparacion.sql` | Contabilidad | ALTER (columnas `entidad_id` nullable) | APLICADO_CONFIRMADO | SÍ | SÍ (`IF NOT EXISTS`) | Bajo | `docs/CONTABILIDAD-C2-TRANSICION.md`: "C2A aplicada manualmente por el usuario" (explícito) | No reejecutar |
 | `migrate-2026-08-contabilidad-entidades.sql` | Contabilidad | CREATE TABLE `cont_entidades`/`cont_entidad_usuarios` | APLICADO_CONFIRMADO | SÍ | SÍ (`IF NOT EXISTS`) | Bajo | `sql/schema.sql:950` idéntico; C3A/C3B (pantalla completa de entidades) no podrían funcionar sin esto | No reejecutar |
-| `migrate-2026-08-corregir-hora-guatemala.sql` | RRHH (marcajes) + Flota | UPDATE de timestamps -6h, una sola vez | TRAZABILIDAD_YA_APLICADO (parcial, ver hallazgo) | SÍ (parcial) | **NO** (auto-declarado: "No volver a ejecutar, doblaría el ajuste") | **ALTO** — ver hallazgo detallado sección 4 | La parte de `sesiones_trabajo` la aplica también la APP automáticamente (`src/lib/tz-guatemala-migrate.ts`, guardado en `sitsa_migrations`); la parte de `flota_*` (4 UPDATE) **NO tiene ningún equivalente en código** | Verificar manualmente si los 4 UPDATE de Flota de este archivo ya corrieron — ver hallazgo prioritario sección 4 |
+| `migrate-2026-08-corregir-hora-guatemala.sql` | RRHH (marcajes) + Flota | UPDATE de timestamps -6h, una sola vez | TRAZABILIDAD_YA_APLICADO (marcajes confirmado; Flota indeterminado — ver nota de cierre sección 4) | SÍ (marcajes) / INDETERMINADO (Flota) | **NO** (auto-declarado: "No volver a ejecutar, doblaría el ajuste"; para Flota, además, los datos actuales son posteriores y coherentes — reejecutar desplazaría -6h datos que no deben desplazarse) | Bajo (marcajes, confirmado y estable); Flota sin necesidad operativa actual de acción, ver nota de cierre | Marcajes: confirmado vía `sitsa_migrations` (`tz_guatemala_marcajes_v1`, `aplicado_at = 2026-08-06 15:45:48`) + auto-aplicación en código (`src/lib/tz-guatemala-migrate.ts`). Flota (4 `UPDATE`, sin equivalente en código): verificación real del 2026-09-01 — 0 filas con timestamp anterior a `2026-08-06 15:45:48` en las 4 tablas; su ejecución histórica NO puede demostrarse ni descartarse desde el repositorio | NO reejecutar ninguna de las dos partes — ver nota de cierre sección 4 |
 | `migrate-2026-08-fact-1-facturas-pagos.sql` | Facturación | CREATE TABLE `fact_facturas`/`fact_factura_viajes`/`fact_pagos` | APLICADO_CONFIRMADO (evidencia fuerte, header contradictorio) | SÍ | SÍ (`IF NOT EXISTS`) | Bajo (ya en uso estable) | Uso extensivo confirmado EN ESTA MISMA SESIÓN: consultas reales contra `fact_facturas`/`fact_pagos`/`fact_factura_viajes` en el ticket TMS-CLIENTES-DUPLICADOS-CANONICALIZACION-1 y en todo el trabajo de FACT-1-TMS-REPORTES (PR #119 fusionado) | **El encabezado del propio archivo ("PROPUESTA... NO EJECUTAR AQUÍ... NO se ha ejecutado") está obsoleto** — ver hallazgo sección 4 |
 | `migrate-2026-08-fase-a1-tms-unidades-flota-vinculo.sql` | TMS/Flota | ALTER (`flota_vehiculo_id`) | APLICADO_CONFIRMADO | SÍ | NO (auto-declarado: falla si se reejecuta tras aplicada) | Bajo | `flota_vehiculo_id` en `sql/schema.sql` (4 apariciones) y en código | No reejecutar |
 | `migrate-2026-08-fase-a3-backfill-tms-unidades-flota.sql` | TMS/Flota | UPDATE backfill, 3 filas hardcoded | ESTADO_DESCONOCIDO_REQUIERE_VERIFICACION | NO SE SABE | SÍ (auto-declarado, triple guarda id+empresa_id+placa+`IS NULL`) | Bajo (bien guardado) pero **IDs hardcoded** (`id IN (7,8,9)`, `empresa_id=1`) | Sin confirmación de ejecución en ningún doc | Verificar con el SELECT de verificación que el propio archivo incluye |
@@ -183,10 +183,12 @@ Los 51 archivos `APLICADO_CONFIRMADO` de la tabla maestra (sección 2) — **no
 reejecutar ninguno**. Los más críticos por su naturaleza no-idempotente o su
 efecto ya verificado en datos reales:
 
-- `migrate-2026-08-corregir-hora-guatemala.sql` (parcial — la parte de
-  `sesiones_trabajo`; **NO** volver a correr manualmente porque la app ya la
-  aplica sola una vez, y el archivo completo desplaza -6h de nuevo si se
-  reejecuta a ciegas).
+- `migrate-2026-08-corregir-hora-guatemala.sql` — **NO** volver a correr
+  ninguna de sus dos partes. Marcajes (`sesiones_trabajo`): la app ya la
+  aplica sola una vez (`sitsa_migrations`). Flota (4 `UPDATE`): ver nota de
+  cierre justo abajo — su historial no puede demostrarse, pero los datos
+  actuales son posteriores y coherentes, así que reejecutar desplazaría
+  -6h información que no debe desplazarse.
 - Los 3 archivos de Viáticos con confirmación explícita de producción
   (`rechazado`, `pago-snapshot`, `liquidacion-estructurada`), más
   `propuesta-2026-08-firma-electronica-viaticos-imagen.sql` (confirmado el
@@ -199,6 +201,51 @@ efecto ya verificado en datos reales:
   `entidad-integridad`) — el código (`exigirEsquemaC2b`) literalmente deja
   de funcionar (503) si su forma exacta no coincide, así que reejecutarlas
   con un esquema divergente sería peligroso.
+
+### Cierre de hallazgo — 4 `UPDATE` de Flota en `migrate-2026-08-corregir-hora-guatemala.sql` (2026-09-01)
+
+**Ya NO es la prioridad #1 de la auditoría** (ver sección 9) — verificado
+por el usuario en producción, con la conclusión más precisa que permite la
+evidencia disponible: **no puede demostrarse si se ejecutaron
+históricamente, pero no existe necesidad operativa actual de ejecutarlos y
+deben considerarse NO REEJECUTABLES sobre la información presente.**
+Registro de la verificación:
+
+- **Verificación realizada**: 2026-09-01, por el usuario, manualmente en
+  phpMyAdmin de producción (todas las consultas de solo lectura).
+- **Paso 1 — `sitsa_migrations`**: `SELECT * FROM sitsa_migrations ORDER BY
+  aplicado_at DESC;` — existe ÚNICAMENTE `tz_guatemala_marcajes_v1`
+  (`aplicado_at = 2026-08-06 15:45:48`). No existe ninguna marca específica
+  para los 4 `UPDATE` de Flota — este mecanismo solo cubre la parte de
+  marcajes que la app auto-aplica (`src/lib/tz-guatemala-migrate.ts`),
+  nunca la de Flota.
+- **Paso 2 — datos actuales**: `flota_viajes` tiene registros de fechas
+  posteriores (incluyendo 2026-08-27 y 2026-08-31); `flota_viaje_evidencias`
+  tiene registros posteriores y temporalmente coherentes con esos viajes;
+  `flota_lecturas` tiene registros visibles desde 2026-08-12 en adelante,
+  con secuencias operacionales internamente coherentes (p. ej. "Salida
+  viaje" → "Kilometraje en punto de carga" → "Llegada viaje" con timestamps
+  en el orden esperado); `flota_lectura_evidencias` no tiene registros en
+  la consulta realizada.
+- **Paso 3 — verificación clave** (las 4 consultas, una por tabla, mismo
+  patrón): `SELECT COUNT(*) AS filas_antes_migracion, MIN(...), MAX(...)
+  FROM <tabla> WHERE <columna_timestamp> < '2026-08-06 15:45:48';` sobre
+  `flota_viajes` (`hora_salida`), `flota_viaje_evidencias`,
+  `flota_lecturas` y `flota_lectura_evidencias` (las 3 últimas por
+  `capturado_en`). **Resultado en las 4: `filas_antes_migracion = 0`** —
+  ninguna fila con timestamp anterior al registro de la migración de
+  marcajes.
+- **Conclusión permitida, y nada más que eso**: no es posible demostrar
+  únicamente desde el repositorio si los 4 `UPDATE` de Flota fueron
+  ejecutados históricamente — tampoco se comprobó que nunca se ejecutaran.
+  Lo que SÍ se puede afirmar: en la base ACTUAL no existen timestamps
+  objetivo anteriores al registro de la migración de marcajes, los
+  registros actuales observados son posteriores, los timestamps actuales
+  son internamente coherentes, y no existe evidencia que justifique
+  ejecutar ahora los `UPDATE` de -6 horas — hacerlo podría desplazar
+  incorrectamente datos posteriores y actualmente coherentes.
+- **Cero `UPDATE` ejecutados en este ticket ni en el de verificación. Cero
+  producción modificada** — todas las consultas fueron de solo lectura.
 
 **Duplicado a resolver (no en este ticket)**: `migrate-2026-08-rrhh-
 colaborador-auth.sql` y `-auth2.sql` crean la MISMA tabla
@@ -375,7 +422,12 @@ de divergencia, no solo casos aislados:
    forma de confirmar eso desde el repositorio. Es además el único archivo
    de todo `sql/` que audita su propia aplicación en una tabla dedicada
    (`sitsa_migrations`), y ni así cubre completamente lo que el archivo
-   hace.
+   hace. **Cerrado operativamente el 2026-09-01** (ver nota de cierre en
+   sección 4): el historial de los 4 `UPDATE` de Flota sigue sin poder
+   demostrarse desde el repositorio, pero se confirmó contra datos reales
+   que no hay necesidad actual de ejecutarlos — la divergencia código-vs-
+   SQL en sí misma permanece como hallazgo documentado, ya no como riesgo
+   operativo abierto.
 6. **`propuesta-2026-08-firma-electronica-viaticos-imagen.sql`**: fue el caso
    más grave de la auditoría — evidencia CONTRADICTORIA explícita y
    documentada dentro del propio archivo (usuario dice que sí, log de error
@@ -391,37 +443,48 @@ de divergencia, no solo casos aislados:
 2026-09-01** (ver nota de cierre, sección 5): las 4 columnas de imagen
 existen actualmente. Retirada de esta lista.
 
-1. **Confirmar el estado real de los 4 `UPDATE` de Flota** en
-   `migrate-2026-08-corregir-hora-guatemala.sql` (¿se corrieron alguna vez?
-   — sin equivalente en código, a diferencia de la parte de marcajes). Pasa
-   a ser la nueva prioridad #1 de la auditoría.
-2. Ejecutar (si el negocio lo aprueba) las 3 migraciones de Multas en orden,
+~~Confirmar el estado real de los 4 `UPDATE` de Flota en
+`migrate-2026-08-corregir-hora-guatemala.sql`~~ — **RESUELTA el 2026-09-01**
+(ver nota de cierre, sección 4): historial indeterminable, pero sin
+necesidad operativa actual de ejecutarlos; considerados NO REEJECUTABLES
+sobre la información presente. Retirada de esta lista.
+
+**Siguientes dos frentes, en pie de igualdad — requieren decisión del
+negocio sobre cuál priorizar, no se ordena uno antes que el otro
+arbitrariamente:**
+
+1. Ejecutar (si el negocio lo aprueba) las 3 migraciones de Multas en orden,
    si el módulo de Multas va a activarse — o descartarlas explícitamente si
    ya no es prioridad.
-3. Ejecutar `migrate-2026-08-rrhh-casos-legales.sql` antes de que alguien
+2. Ejecutar `migrate-2026-08-rrhh-casos-legales.sql` antes de que alguien
    use la pantalla de Casos Legales (ya desplegada sin su tabla).
-4. Actualizar `schema.sql` para reflejar las ~15 columnas/tablas confirmadas
+
+**Resto de la lista, sin cambios de contenido respecto a la entrega
+anterior:**
+
+3. Actualizar `schema.sql` para reflejar las ~15 columnas/tablas confirmadas
    pero ausentes (sección 8, punto 2) — especialmente las 3 tablas de
    Facturación, el hueco más grave. Ticket documental/SQL aparte, sin tocar
    producción.
-5. Consolidar (o al menos anotar cuál es la versión "canónica" de)
+4. Consolidar (o al menos anotar cuál es la versión "canónica" de)
    `migrate-2026-08-rrhh-colaborador-auth.sql` vs. `-auth2.sql`.
-6. Verificar el estado real del índice único de `tms_cliente_rutas`
+5. Verificar el estado real del índice único de `tms_cliente_rutas`
    (`migrate-2026-08-viat-4b-rutas-correcciones.sql`) antes de decidir si
    falta ejecutarlo.
-7. Considerar retirar o marcar explícitamente como históricos los 3
+6. Considerar retirar o marcar explícitamente como históricos los 3
    `limpiar-*-empresa.sql`, dado que la app ya tiene un equivalente más
    seguro (Administración → Limpiar módulo).
-8. Verificar `correccion-de-vacaciones.sql` y
+7. Verificar `correccion-de-vacaciones.sql` y
    `migrate-2026-08-fase-a3-backfill-tms-unidades-flota.sql` (impacto bajo,
-   pero sin ninguna evidencia de haberse corrido).
-9. Adoptar, hacia adelante, el patrón ya existente pero subutilizado de
+   pero sin ninguna evidencia de haberse corrido) — los 2 únicos archivos
+   que siguen en `ESTADO_DESCONOCIDO_REQUIERE_VERIFICACION`.
+8. Adoptar, hacia adelante, el patrón ya existente pero subutilizado de
    `sitsa_migrations` (o un mecanismo equivalente) para registrar
    CENTRALIZADAMENTE cada migración manual realmente aplicada — resolvería
    de raíz la mayoría de los hallazgos de esta auditoría.
 
 Ninguna de estas acciones se ejecutó en este ticket — quedan como
 recomendación para tickets separados, cada uno con su propia autorización
-explícita. No se ejecutaron los 4 `UPDATE` de Flota (punto 1) ni ningún
-otro SQL en este ticket — solo se registró la verificación ya realizada del
-hallazgo de firmas.
+explícita. No se ejecutó ningún `UPDATE` de Flota ni ningún otro SQL en
+este ticket — solo se registró la verificación de solo lectura ya
+realizada.
