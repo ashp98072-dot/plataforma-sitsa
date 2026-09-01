@@ -144,7 +144,7 @@ otras no).
 | `migrate-2026-08-viat-1-cliente-ubicaciones.sql` | TMS/Programación | CREATE TABLE `tms_cliente_ubicaciones` | APLICADO_CONFIRMADO (header obsoleto) | SÍ | SÍ (auto-declarado) | Bajo | **Confirmado con datos reales en esta misma sesión**: el ticket TMS-CLIENTES-DUPLICADOS-CANONICALIZACION-1 (PR #157) reportó conteos reales de `tms_cliente_ubicaciones` (6, 6, 1 ubicaciones por cliente canónico) — el propio encabezado del archivo dice "NO se ejecutó en este entorno", **obsoleto** (ver sección 8) | No reejecutar |
 | `migrate-2026-08-viat-4-contactos-rutas.sql` | TMS/Programación | CREATE TABLE `tms_cliente_contactos`/`tms_cliente_rutas` | APLICADO_CONFIRMADO | SÍ | SÍ (auto-declarado) | Bajo | Confirmado con datos reales en esta sesión (mismo PR #157: conteos de "rutas"/"contactos"); referenciado como aplicado por el propio `viat-4b` | No reejecutar |
 | `migrate-2026-08-viat-4b-rutas-correcciones.sql` | TMS/Programación | ALTER (índice único global) + columna `destino_descripcion` | **PENDIENTE_EJECUCION** | **NO (confirmado)** | PARCIAL (B y C aditivas; A requiere verificación previa de duplicados antes del ALTER no aditivo) | Medio — cambia una restricción UNIQUE existente, requiere `SELECT ... HAVING COUNT(*) > 1` previo | Encabezado explícito: "NO se ejecuta en runtime ni se ejecutó en este entorno"; **PERO `schema.sql` YA refleja el estado post-migración** (`uq_tmsclirutas_codigo (empresa_id, codigo)`) — posible divergencia schema.sql vs. producción real | Verificar el índice único real de `tms_cliente_rutas` en producción antes de asumir cualquier estado |
-| `propuesta-2026-08-firma-electronica-viaticos-imagen.sql` | TMS/Viáticos (firma visual) | ALTER (`imagen_ruta`+3 columnas) | **ESTADO_DESCONOCIDO_REQUIERE_VERIFICACION — PRIORIDAD ALTA** | **CONTRADICTORIO** | SÍ (`IF NOT EXISTS`) | **ALTO — ver hallazgo detallado sección 4** | El propio archivo documenta un log real de error de producción (`Unknown column 'imagen_ruta' in 'INSERT INTO'`, 2026-08-29) que contradice la afirmación del usuario de haberlo ejecutado; el código (`crearFirmaInterna`, usado por TODO el ciclo de viáticos) inserta estas 4 columnas SIEMPRE, sin manejo de error | **Verificar `DESCRIBE firmas_electronicas;` en producción cuanto antes** — riesgo #4 y #6 del ticket, el más urgente de toda la auditoría |
+| `propuesta-2026-08-firma-electronica-viaticos-imagen.sql` | TMS/Viáticos (firma visual) | ALTER (`imagen_ruta`+3 columnas) | **ESTADO_DESCONOCIDO_REQUIERE_VERIFICACION — PRIORIDAD ALTA** | **CONTRADICTORIO** | SÍ (`IF NOT EXISTS`) | **ALTO — ver hallazgo detallado sección 4** | El propio archivo documenta un log real de error de producción (`Unknown column 'imagen_ruta' in 'INSERT INTO'`, 2026-08-29) que contradice la afirmación del usuario de haberlo ejecutado. Si las columnas no existen, cualquier flujo que llame `crearFirmaInterna()` fallará al intentar insertar la firma — confirmado por código, son exactamente 2: `autorizarViatico()` y `liquidarViatico()` (`src/lib/tms/viaticos.ts`); `rechazarViatico()` está explícitamente excluido (no llama `crearFirmaInterna`, PR #148) | **Verificar `DESCRIBE firmas_electronicas;` en producción cuanto antes** — riesgo #4 y #6 del ticket, el más urgente de toda la auditoría |
 | `propuesta-2026-08-firma-electronica-viaticos.sql` | Portal/TMS (firmas) | CREATE TABLE `firmas_electronicas` | APLICADO_CONFIRMADO | SÍ | SÍ (auto-declarado, ver también `propuesta-2026-08-firma-electronica.sql`) | Bajo | Encabezado explícito: "APLICADA MANUALMENTE POR EL USUARIO" | No reejecutar |
 | `propuesta-2026-08-firma-electronica.sql` | Portal (diseño general) | Propuesta de diseño completo | PROPUESTA_NO_APROBADA | NO (parcial — ver el archivo `-viaticos.sql` arriba que sí se aplicó, solo una parte) | N/A (diseño) | Bajo (no ejecutado) | Encabezado explícito: "PROPUESTA DE DISEÑO, NO APLICAR" | Mantener como referencia de diseño; NO ejecutar tal cual (el subconjunto real ya se aplicó vía el archivo específico de Viáticos) |
 | `propuesta-2026-08-tms-clientes-duplicados-canonicalizacion.sql` | TMS/Clientes | Transacción de datos (bridges + datos maestros) | **TRAZABILIDAD_YA_APLICADO (header obsoleto)** | SÍ (confirmado explícitamente por el usuario) | NO (procedimiento temporal de un solo uso, con guardas anti-doble-ejecución) | Bajo (ya aplicado y verificado con post-checks reales) | **Confirmación explícita del usuario** en el cierre de PR #157 (mismo hilo de esta sesión): bridges movidos, datos maestros de CALSA actualizados, FACT-1 confirmado funcionando — el propio encabezado del archivo sigue diciendo "PROPUESTA, NO EJECUTADA" (**obsoleto**, ver sección 8) | No reejecutar; el encabezado debería actualizarse en un ticket documental aparte |
@@ -179,7 +179,7 @@ tiene producción).
 
 ## 4. Aplicados / no volver a ejecutar
 
-Los 46 archivos `APLICADO_CONFIRMADO` de la tabla maestra (sección 2) — **no
+Los 51 archivos `APLICADO_CONFIRMADO` de la tabla maestra (sección 2) — **no
 reejecutar ninguno**. Los más críticos por su naturaleza no-idempotente o su
 efecto ya verificado en datos reales:
 
@@ -213,13 +213,24 @@ insuficiente o contradictoria para afirmar con certeza si se aplicaron:
 1. **`propuesta-2026-08-firma-electronica-viaticos-imagen.sql` — PRIORIDAD
    ALTA.** El propio archivo documenta que el usuario dijo haberlo
    ejecutado, pero el log de error real de producción (2026-08-29) muestra
-   `Unknown column 'imagen_ruta'`. El código (`crearFirmaInterna`, usado por
-   **todas** las transiciones de viáticos: autorizar/rechazar/entregar/
-   liquidar) inserta esas 4 columnas siempre, sin manejo de error para
-   `ER_BAD_FIELD_ERROR`. **Verificación recomendada**:
+   `Unknown column 'imagen_ruta'`. Si las columnas no existen, cualquier
+   flujo que llame `crearFirmaInterna()` fallará al intentar insertar la
+   firma (inserta las 4 columnas — `imagen_ruta`, `imagen_nombre_original`,
+   `imagen_mime`, `imagen_tamano` — siempre, aunque sea con valores `NULL`,
+   sin manejo de error para `ER_BAD_FIELD_ERROR`). **Los flujos realmente
+   confirmados por código** (`grep` de `crearFirmaInterna(` en todo
+   `src/`, dos únicos call sites reales, ambos en
+   `src/lib/tms/viaticos.ts`): `autorizarViatico()` (línea 655) y
+   `liquidarViatico()` (línea 1284). **`rechazarViatico()` está
+   explícitamente excluido** — no llama `crearFirmaInterna` (documentado en
+   PR #148: el rechazo es terminal, sin firma). El mismo `grep` exhaustivo
+   confirma que `registrarEntregaViatico()`/`registrarEntregaViaticosMasiva()`
+   tampoco lo llaman, así que también quedan excluidos. **Verificación
+   recomendada**:
    `DESCRIBE firmas_electronicas;` en producción — si `imagen_ruta` no
-   aparece, **cualquier firma interna en producción está fallando ahora
-   mismo**, lo cual sería grave y debería reportarse de inmediato al
+   aparece, **autorizar o liquidar un viático en producción fallaría al
+   intentar registrar la firma**, lo cual sería grave y debería reportarse
+   de inmediato al
    usuario si se confirma.
 2. **`correccion-de-vacaciones.sql`** — sin ninguna referencia en
    documentación ni código que confirme si ya se aplicó. Verificar corriendo
@@ -357,9 +368,11 @@ de divergencia, no solo casos aislados:
 ## 9. Recomendación final priorizada
 
 1. **URGENTE — verificar `DESCRIBE firmas_electronicas;` en producción**
-   (¿existe `imagen_ruta`?). Si NO existe, cada firma interna de Viáticos
-   podría estar fallando en producción ahora mismo — es el hallazgo de
-   mayor impacto operativo de toda esta auditoría y merece un ticket propio
+   (¿existe `imagen_ruta`?). Si NO existe, `autorizarViatico()` y
+   `liquidarViatico()` (los únicos dos flujos confirmados por código que
+   llaman `crearFirmaInterna()`) podrían estar fallando en producción ahora
+   mismo — es el hallazgo de mayor impacto operativo de toda esta auditoría
+   y merece un ticket propio
    inmediato, antes que cualquier otra cosa de esta lista.
 2. Confirmar el estado real de los 4 `UPDATE` de Flota en
    `migrate-2026-08-corregir-hora-guatemala.sql` (¿se corrieron alguna vez?
