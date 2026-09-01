@@ -550,6 +550,12 @@ CREATE TABLE IF NOT EXISTS tms_clientes (
   telefono VARCHAR(80) NULL,
   direccion VARCHAR(300) NULL,
   estado VARCHAR(20) NOT NULL DEFAULT 'Activo',
+  -- CLIENTE-PORTAL-1: UNIQUE (empresa_id, id) — destino de la FK compuesta
+  -- que usan tms_cliente_usuarios/tms_solicitudes_cliente para impedir a
+  -- nivel de base de datos que un cliente_id de la empresa B se asocie
+  -- por error a un empresa_id de la empresa A. Ver
+  -- sql/migrate-2026-09-tms-portal-clientes-base.sql (punto 0).
+  UNIQUE KEY uq_tmsclientes_empresa_id (empresa_id, id),
   CONSTRAINT fk_tmscli_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -804,6 +810,78 @@ CREATE TABLE IF NOT EXISTS tms_cliente_ruta_paradas (
   INDEX idx_tmscliparadas_ruta (ruta_id, activo, orden),
   CONSTRAINT fk_tmscliparadas_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
   CONSTRAINT fk_tmscliparadas_ruta FOREIGN KEY (ruta_id) REFERENCES tms_cliente_rutas(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- CLIENTE-PORTAL-1: modelo base del Portal del Cliente (usuarios de
+-- acceso por cliente TMS + solicitud previa al plan, aún sin flujo de
+-- creación/conversión). Ver
+-- sql/migrate-2026-09-tms-portal-clientes-base.sql para el detalle de
+-- diseño (por qué el UNIQUE del email es global, por qué la FK
+-- empresa_id+cliente_id es compuesta, por qué tipo/estado son VARCHAR
+-- validados en aplicación y no ENUM/CHECK) y
+-- docs/CLIENTE-PORTAL-0-DISCOVERY-SOLICITUDES-SEGUIMIENTO.md para el
+-- contexto funcional completo.
+CREATE TABLE IF NOT EXISTS tms_cliente_usuarios (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  cliente_id INT NOT NULL,
+  nombre VARCHAR(160) NOT NULL,
+  email VARCHAR(160) NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
+  salt VARCHAR(255) NOT NULL,
+  activo TINYINT(1) NOT NULL DEFAULT 1,
+  debe_cambiar_password TINYINT(1) NOT NULL DEFAULT 1,
+  ultimo_acceso DATETIME NULL,
+  creado_por VARCHAR(100) NULL,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_tmscliusr_email (email),
+  INDEX idx_tmscliusr_cliente (empresa_id, cliente_id, activo),
+  CONSTRAINT fk_tmscliusr_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
+  CONSTRAINT fk_tmscliusr_empresa_cliente FOREIGN KEY (empresa_id, cliente_id)
+    REFERENCES tms_clientes(empresa_id, id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS tms_solicitudes_cliente (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  cliente_id INT NOT NULL,
+  creado_por_usuario_cliente_id INT NOT NULL,
+  estado VARCHAR(20) NOT NULL DEFAULT 'SOLICITADA',
+  fecha_solicitada DATE NOT NULL,
+  hora_solicitada TIME NULL,
+  referencia_cliente VARCHAR(120) NULL,
+  observaciones VARCHAR(500) NULL,
+  motivo_rechazo VARCHAR(500) NULL,
+  plan_id INT NULL,
+  version INT NOT NULL DEFAULT 1,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_tmssolicli_plan (plan_id),
+  INDEX idx_tmssolicli_cliente (empresa_id, cliente_id, estado),
+  INDEX idx_tmssolicli_usuario (creado_por_usuario_cliente_id),
+  CONSTRAINT fk_tmssolicli_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
+  CONSTRAINT fk_tmssolicli_empresa_cliente FOREIGN KEY (empresa_id, cliente_id)
+    REFERENCES tms_clientes(empresa_id, id) ON DELETE CASCADE,
+  CONSTRAINT fk_tmssolicli_usuario FOREIGN KEY (creado_por_usuario_cliente_id)
+    REFERENCES tms_cliente_usuarios(id) ON DELETE RESTRICT,
+  CONSTRAINT fk_tmssolicli_plan FOREIGN KEY (plan_id)
+    REFERENCES tms_planes_viaje(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS tms_solicitud_paradas (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  solicitud_id INT NOT NULL,
+  orden TINYINT NOT NULL DEFAULT 1,
+  tipo VARCHAR(20) NOT NULL,
+  lugar_nombre VARCHAR(200) NOT NULL,
+  cliente_ubicacion_id INT NULL,
+  referencia VARCHAR(300) NULL,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_tmssolpar_solicitud (solicitud_id, orden),
+  CONSTRAINT fk_tmssolpar_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
+  CONSTRAINT fk_tmssolpar_solicitud FOREIGN KEY (solicitud_id) REFERENCES tms_solicitudes_cliente(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Flota / Predios
