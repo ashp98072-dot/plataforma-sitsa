@@ -76,6 +76,12 @@ export function analizarCuentas(empresa, empresasBuffer, cuentasBuffer) {
   const incidencias = { codigo_vacio: 0, nombre_vacio: 0, codigo_largo: 0, nombre_largo: 0, codigo_con_espacios: 0, duplicado_normalizado: 0, nivel_invalido: 0, estado_desconocido: 0 };
   const tipos = {};
   const niveles = {};
+  // FASE3-HOMOLOGACION-CATALOGO: mismo patrón de distribución que
+  // tipos/niveles, ahora también para CTACOM_CTA y MULTIP_CTA — se leían
+  // desde Fase 1 pero nunca se reportaba su distribución. Solo conteos por
+  // valor, nunca qué cuenta concreta tiene cada valor.
+  const ctacom = {};
+  const multip = {};
   let inactivas = 0;
   for (const fila of catalogo.filas) {
     const codigo = fila.CODIGO_CTA;
@@ -92,14 +98,18 @@ export function analizarCuentas(empresa, empresasBuffer, cuentasBuffer) {
     if (fila.LINACTIVA_ === true) inactivas++;
     const tipo = fila.TIPO_CTA === null ? "sin_valor" : String(fila.TIPO_CTA);
     const nivel = fila.NIVEL_CTA === null ? "sin_valor" : String(fila.NIVEL_CTA);
+    const ctacomValor = fila.CTACOM_CTA === null ? "sin_valor" : String(fila.CTACOM_CTA);
+    const multipValor = fila.MULTIP_CTA === null ? "sin_valor" : String(fila.MULTIP_CTA);
     tipos[tipo] = (tipos[tipo] ?? 0) + 1;
     niveles[nivel] = (niveles[nivel] ?? 0) + 1;
+    ctacom[ctacomValor] = (ctacom[ctacomValor] ?? 0) + 1;
+    multip[multipValor] = (multip[multipValor] ?? 0) + 1;
   }
   // No devuelve cuentas, nombres, movimientos ni rutas de archivos al informe.
   return {
     modo: "SOLO_LECTURA", origen: { empresa, codigo: fuente.codigo, carpeta: fuente.carpeta, uso: fuente.uso },
     registros: { declarados: catalogo.declaradas, vigentes: catalogo.filas.length, marcados_borrados: catalogo.eliminadas, inactivos: inactivas },
-    tipos_origen: tipos, niveles_origen: niveles, incidencias,
+    tipos_origen: tipos, niveles_origen: niveles, ctacom_origen: ctacom, multip_origen: multip, incidencias,
     listo_para_importar: false,
     // "Definir entidad contable destino" se retiró de esta lista: el modelo
     // (entidad_id por KT/Mónaco) ya se definió y aplicó en producción en

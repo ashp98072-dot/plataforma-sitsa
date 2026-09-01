@@ -57,6 +57,16 @@ test("separa Mónaco actual e histórico y rechaza identidad equivocada", () => 
   assert.throws(() => analizarCuentas("KT", empresas("08", "Mónaco ficticia"), b), /identidad/);
   assert.throws(() => analizarCuentas("toString", empresas(), b), /no admitida/);
 });
+test("FASE3-HOMOLOGACION: reporta distribución de CTACOM_CTA y MULTIP_CTA por valor, nunca por cuenta", () => {
+  const filas = [
+    { ...cuenta, CTACOM_CTA: "T", MULTIP_CTA: "1" },
+    { ...cuenta, CODIGO_CTA: "002", CTACOM_CTA: "T", MULTIP_CTA: "-1" },
+    { ...cuenta, CODIGO_CTA: "003", CTACOM_CTA: "F", MULTIP_CTA: "" },
+  ];
+  const r = analizarCuentas("KT", empresas(), dbf(camposCuenta, filas));
+  assert.deepEqual(r.ctacom_origen, { true: 2, false: 1 });
+  assert.deepEqual(r.multip_origen, { "1": 1, "-1": 1, sin_valor: 1 });
+});
 test("ningún informe contiene cuentas ni habilita una importación", () => {
   const r = analizarCuentas("KT", empresas(), dbf(camposCuenta, [cuenta]));
   assert.equal(r.listo_para_importar, false);
