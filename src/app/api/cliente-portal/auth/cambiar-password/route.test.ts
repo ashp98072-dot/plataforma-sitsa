@@ -55,7 +55,11 @@ describe("POST /api/cliente-portal/auth/cambiar-password", () => {
     vi.mocked(cambiarPasswordCliente).mockResolvedValue({ ok: true, mensaje: "Contraseña actualizada." });
     const res = await POST(req({ passwordActual: "actual123", passwordNueva: "nueva123" }));
     expect(res.status).toBe(200);
-    expect(cambiarPasswordCliente).toHaveBeenCalledWith(10, "actual123", "nueva123");
+    expect(cambiarPasswordCliente).toHaveBeenCalledWith(
+      { usuarioClienteId: 10, empresaId: 7, clienteId: 30 },
+      "actual123",
+      "nueva123",
+    );
     expect(createClienteSessionToken).toHaveBeenCalledWith(
       expect.objectContaining({ usuarioClienteId: 10, debeCambiarPassword: false }),
     );

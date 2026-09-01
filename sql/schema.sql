@@ -643,6 +643,10 @@ CREATE TABLE IF NOT EXISTS tms_planes_viaje (
   cerrado_en DATETIME NULL,
   notas TEXT NULL,
   UNIQUE KEY uq_plan (empresa_id, codigo),
+  -- CLIENTE-PORTAL-1 (AJUSTE PRE-MERGE PR #167): destino de la FK
+  -- compuesta (empresa_id, plan_id) de tms_solicitudes_cliente — ver
+  -- sql/migrate-2026-09-tms-portal-clientes-base.sql (punto 0b).
+  UNIQUE KEY uq_tmsplanes_empresa_id (empresa_id, id),
   CONSTRAINT fk_tmsplan_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
   CONSTRAINT fk_tmsplan_cli FOREIGN KEY (cliente_id) REFERENCES tms_clientes(id) ON DELETE SET NULL,
   CONSTRAINT fk_tmsplan_lc FOREIGN KEY (lugar_carga_id) REFERENCES tms_lugares(id) ON DELETE SET NULL,
@@ -816,9 +820,9 @@ CREATE TABLE IF NOT EXISTS tms_cliente_ruta_paradas (
 -- acceso por cliente TMS + solicitud previa al plan, aún sin flujo de
 -- creación/conversión). Ver
 -- sql/migrate-2026-09-tms-portal-clientes-base.sql para el detalle de
--- diseño (por qué el UNIQUE del email es global, por qué la FK
--- empresa_id+cliente_id es compuesta, por qué tipo/estado son VARCHAR
--- validados en aplicación y no ENUM/CHECK) y
+-- diseño (por qué el UNIQUE del email es global, por qué las FKs
+-- empresa_id+cliente_id/plan_id son compuestas, por qué tipo/estado son
+-- VARCHAR validados en aplicación y no ENUM/CHECK) y
 -- docs/CLIENTE-PORTAL-0-DISCOVERY-SOLICITUDES-SEGUIMIENTO.md para el
 -- contexto funcional completo.
 CREATE TABLE IF NOT EXISTS tms_cliente_usuarios (
@@ -836,6 +840,7 @@ CREATE TABLE IF NOT EXISTS tms_cliente_usuarios (
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY uq_tmscliusr_email (email),
+  UNIQUE KEY uq_tmscliusr_empresa_cliente_id (empresa_id, cliente_id, id),
   INDEX idx_tmscliusr_cliente (empresa_id, cliente_id, activo),
   CONSTRAINT fk_tmscliusr_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
   CONSTRAINT fk_tmscliusr_empresa_cliente FOREIGN KEY (empresa_id, cliente_id)
@@ -857,16 +862,21 @@ CREATE TABLE IF NOT EXISTS tms_solicitudes_cliente (
   version INT NOT NULL DEFAULT 1,
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_tmssolicli_plan (plan_id),
+  UNIQUE KEY uq_tmssolicli_empresa_id (empresa_id, id),
+  UNIQUE KEY uq_tmssolicli_plan (empresa_id, plan_id),
   INDEX idx_tmssolicli_cliente (empresa_id, cliente_id, estado),
-  INDEX idx_tmssolicli_usuario (creado_por_usuario_cliente_id),
+  INDEX idx_tmssolicli_usuario (empresa_id, cliente_id, creado_por_usuario_cliente_id),
   CONSTRAINT fk_tmssolicli_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
   CONSTRAINT fk_tmssolicli_empresa_cliente FOREIGN KEY (empresa_id, cliente_id)
     REFERENCES tms_clientes(empresa_id, id) ON DELETE CASCADE,
-  CONSTRAINT fk_tmssolicli_usuario FOREIGN KEY (creado_por_usuario_cliente_id)
-    REFERENCES tms_cliente_usuarios(id) ON DELETE RESTRICT,
-  CONSTRAINT fk_tmssolicli_plan FOREIGN KEY (plan_id)
-    REFERENCES tms_planes_viaje(id) ON DELETE SET NULL
+  CONSTRAINT fk_tmssolicli_usuario FOREIGN KEY (empresa_id, cliente_id, creado_por_usuario_cliente_id)
+    REFERENCES tms_cliente_usuarios(empresa_id, cliente_id, id) ON DELETE RESTRICT,
+  -- ON DELETE RESTRICT (no SET NULL): una FK compuesta que incluya
+  -- empresa_id (NOT NULL) no puede usar SET NULL — ver el comentario
+  -- extenso en la migración. RESTRICT es seguro porque tms_planes_viaje
+  -- nunca se borra físicamente en este proyecto.
+  CONSTRAINT fk_tmssolicli_plan FOREIGN KEY (empresa_id, plan_id)
+    REFERENCES tms_planes_viaje(empresa_id, id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS tms_solicitud_paradas (
@@ -879,9 +889,10 @@ CREATE TABLE IF NOT EXISTS tms_solicitud_paradas (
   cliente_ubicacion_id INT NULL,
   referencia VARCHAR(300) NULL,
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  INDEX idx_tmssolpar_solicitud (solicitud_id, orden),
+  INDEX idx_tmssolpar_solicitud (empresa_id, solicitud_id, orden),
   CONSTRAINT fk_tmssolpar_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
-  CONSTRAINT fk_tmssolpar_solicitud FOREIGN KEY (solicitud_id) REFERENCES tms_solicitudes_cliente(id) ON DELETE CASCADE
+  CONSTRAINT fk_tmssolpar_empresa_solicitud FOREIGN KEY (empresa_id, solicitud_id)
+    REFERENCES tms_solicitudes_cliente(empresa_id, id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Flota / Predios

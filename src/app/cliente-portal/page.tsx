@@ -1,18 +1,30 @@
 import { redirect } from "next/navigation";
 import { getClienteSession } from "@/lib/tms/cliente-portal-session";
 import { obtenerNombreCliente } from "@/lib/tms/cliente-portal-datos";
+import { validarClienteSessionActiva } from "@/lib/tms/cliente-usuarios";
 import ClientePortalLogoutButton from "./logout-button";
 
 /**
  * CLIENTE-PORTAL-1 — landing mínima, sin solicitudes todavía (alcance C
  * del ticket): solo confirma que la sesión quedó bien armada (nombre de
  * usuario, nombre del cliente) y ofrece cerrar sesión. El middleware ya
- * bloquea esta ruta sin sesión válida; este `redirect` es un respaldo
- * defensivo, no la única barrera.
+ * bloquea esta ruta sin sesión válida por JWT; el `redirect` de abajo es
+ * un respaldo defensivo, no la única barrera.
+ *
+ * AJUSTE PRE-MERGE PR #167 (punto 4) — esta página SÍ muestra datos del
+ * cliente (nombre de usuario, nombre del cliente), así que también pasa
+ * por la verificación DEFINITIVA contra base de datos
+ * (validarClienteSessionActiva), no solo por la firma del JWT: un token
+ * viejo de un usuario o cliente ya desactivado no debe poder ver ni
+ * seguir mostrando esos datos hasta que expire.
  */
 export default async function ClientePortalHomePage() {
   const session = await getClienteSession();
   if (!session) {
+    redirect("/cliente-portal/login");
+  }
+  const activa = await validarClienteSessionActiva(session!);
+  if (!activa) {
     redirect("/cliente-portal/login");
   }
 

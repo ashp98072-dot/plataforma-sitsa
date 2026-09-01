@@ -26,7 +26,11 @@ export async function POST(request: Request) {
   }
 
   const result = await cambiarPasswordCliente(
-    session.usuarioClienteId,
+    {
+      usuarioClienteId: session.usuarioClienteId,
+      empresaId: session.empresaId,
+      clienteId: session.clienteId,
+    },
     parsed.data.passwordActual,
     parsed.data.passwordNueva,
   );

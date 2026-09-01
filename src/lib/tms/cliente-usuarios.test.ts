@@ -11,6 +11,7 @@ import {
   cambiarPasswordCliente,
   crearUsuarioCliente,
   normalizarEmail,
+  validarClienteSessionActiva,
   verificarCredencialesCliente,
 } from "./cliente-usuarios";
 
@@ -168,9 +169,49 @@ describe("crearUsuarioCliente", () => {
     expect(r.ok).toBe(false);
     expect(execute).not.toHaveBeenCalled();
   });
+
+  it("7b) ER_DUP_ENTRY en el INSERT (carrera con otra alta simultánea del mismo email) → error funcional, NO una excepción/500", async () => {
+    // El SELECT optimista de "¿email libre?" no lo detecta (otra alta
+    // ganó la carrera justo después) — el UNIQUE KEY de la base de datos
+    // es quien realmente lo impide, en el INSERT.
+    vi.mocked(query)
+      .mockResolvedValueOnce([{ id: 30 }] as unknown as Awaited<ReturnType<typeof query>>) // cliente existe
+      .mockResolvedValueOnce([] as unknown as Awaited<ReturnType<typeof query>>); // "libre" según el SELECT
+    vi.mocked(execute).mockRejectedValueOnce({ code: "ER_DUP_ENTRY", errno: 1062 });
+
+    const r = await crearUsuarioCliente({
+      empresaId: 7,
+      clienteId: 30,
+      nombre: "Carrera",
+      email: "contacto@cliente.com",
+      passwordInicial: "temporal1",
+      creadoPor: "operaciones1",
+    });
+    expect(r).toEqual({ ok: false, mensaje: "Ese email ya está en uso." });
+  });
+
+  it("un error de base de datos distinto a ER_DUP_ENTRY SÍ se propaga (no se convierte en 'ya está en uso')", async () => {
+    vi.mocked(query)
+      .mockResolvedValueOnce([{ id: 30 }] as unknown as Awaited<ReturnType<typeof query>>)
+      .mockResolvedValueOnce([] as unknown as Awaited<ReturnType<typeof query>>);
+    vi.mocked(execute).mockRejectedValueOnce({ code: "ER_LOCK_DEADLOCK" });
+
+    await expect(
+      crearUsuarioCliente({
+        empresaId: 7,
+        clienteId: 30,
+        nombre: "Otro",
+        email: "otro2@cliente.com",
+        passwordInicial: "temporal1",
+        creadoPor: "operaciones1",
+      }),
+    ).rejects.toMatchObject({ code: "ER_LOCK_DEADLOCK" });
+  });
 });
 
 describe("cambiarPasswordCliente", () => {
+  const scope = { usuarioClienteId: 10, empresaId: 7, clienteId: 30 };
+
   it("9) cambio de password exitoso limpia debe_cambiar_password", async () => {
     const { salt, passwordHash } = hashPassword("actual123");
     vi.mocked(query).mockResolvedValueOnce(
@@ -178,7 +219,7 @@ describe("cambiarPasswordCliente", () => {
         ReturnType<typeof query>
       >,
     );
-    const r = await cambiarPasswordCliente(10, "actual123", "nueva123");
+    const r = await cambiarPasswordCliente(scope, "actual123", "nueva123");
     expect(r.ok).toBe(true);
     expect(execute).toHaveBeenCalledWith(
       expect.stringContaining("debe_cambiar_password = 0"),
@@ -193,8 +234,67 @@ describe("cambiarPasswordCliente", () => {
         ReturnType<typeof query>
       >,
     );
-    const r = await cambiarPasswordCliente(10, "incorrecta", "nueva123");
+    const r = await cambiarPasswordCliente(scope, "incorrecta", "nueva123");
     expect(r.ok).toBe(false);
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("6) scope inválido (empresaId/clienteId no coinciden con el usuario) → 'Usuario no encontrado', sin UPDATE — el SELECT filtra por los 3 identificadores, no solo por id", async () => {
+    // Simula lo que devolvería MySQL si el WHERE id=? AND empresa_id=? AND
+    // cliente_id=? no encuentra fila porque empresaId/clienteId no
+    // coinciden con la fila real del usuario 10 (que es de otra empresa).
+    vi.mocked(query).mockResolvedValueOnce([] as unknown as Awaited<ReturnType<typeof query>>);
+    const r = await cambiarPasswordCliente(
+      { usuarioClienteId: 10, empresaId: 999, clienteId: 999 },
+      "actual123",
+      "nueva123",
+    );
+    expect(r).toEqual({ ok: false, mensaje: "Usuario no encontrado." });
+    expect(execute).not.toHaveBeenCalled();
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("WHERE id = ? AND empresa_id = ? AND cliente_id = ?"),
+      [10, 999, 999],
+    );
+  });
+});
+
+describe("validarClienteSessionActiva", () => {
+  const scope = { usuarioClienteId: 10, empresaId: 7, clienteId: 30 };
+
+  it("1) usuario activo + cliente activo + identificadores correctos → true", async () => {
+    vi.mocked(query).mockResolvedValueOnce(
+      [{ id: 10 }] as unknown as Awaited<ReturnType<typeof query>>,
+    );
+    expect(await validarClienteSessionActiva(scope)).toBe(true);
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(String(sql)).toContain("u.activo = 1");
+    expect(String(sql)).toContain("c.estado = 'Activo'");
+    expect(params).toEqual([10, 7, 30, 30, 7]);
+  });
+
+  it("2) usuario desactivado después del login (WHERE u.activo=1 ya no encuentra la fila) → false", async () => {
+    vi.mocked(query).mockResolvedValueOnce([] as unknown as Awaited<ReturnType<typeof query>>);
+    expect(await validarClienteSessionActiva(scope)).toBe(false);
+  });
+
+  it("3) cliente desactivado después del login (WHERE c.estado='Activo' ya no encuentra la fila) → false", async () => {
+    vi.mocked(query).mockResolvedValueOnce([] as unknown as Awaited<ReturnType<typeof query>>);
+    expect(await validarClienteSessionActiva(scope)).toBe(false);
+  });
+
+  it("4) usuarioClienteId correcto pero empresaId incorrecto → false", async () => {
+    vi.mocked(query).mockResolvedValueOnce([] as unknown as Awaited<ReturnType<typeof query>>);
+    expect(
+      await validarClienteSessionActiva({ usuarioClienteId: 10, empresaId: 999, clienteId: 30 }),
+    ).toBe(false);
+    expect(query).toHaveBeenCalledWith(expect.any(String), [10, 999, 30, 30, 999]);
+  });
+
+  it("5) usuarioClienteId correcto pero clienteId incorrecto → false", async () => {
+    vi.mocked(query).mockResolvedValueOnce([] as unknown as Awaited<ReturnType<typeof query>>);
+    expect(
+      await validarClienteSessionActiva({ usuarioClienteId: 10, empresaId: 7, clienteId: 999 }),
+    ).toBe(false);
+    expect(query).toHaveBeenCalledWith(expect.any(String), [10, 7, 999, 999, 7]);
   });
 });

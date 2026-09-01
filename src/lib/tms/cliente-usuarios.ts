@@ -34,6 +34,23 @@ export function normalizarEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
+/**
+ * AJUSTE PRE-MERGE PR #167 (punto 6) — el SELECT de "¿email libre?" en
+ * crearUsuarioCliente es una comprobación optimista para dar un mensaje
+ * claro en el caso normal; entre ese SELECT y el INSERT sigue existiendo
+ * una ventana de carrera real (dos altas simultáneas con el mismo email).
+ * La AUTORIDAD definitiva sigue siendo el UNIQUE KEY de la base de datos
+ * (uq_tmscliusr_email) — este helper detecta esa violación específica
+ * (código MySQL/MariaDB ER_DUP_ENTRY / errno 1062) para poder convertirla
+ * en el mismo mensaje funcional, nunca en un 500. Mismo patrón ya usado
+ * en el proyecto (ver src/lib/facturacion/facturas.ts,
+ * esDuplicadoNumeroFactura).
+ */
+function esDuplicadoEmail(e: unknown): boolean {
+  const err = e as { code?: string; errno?: number };
+  return err?.code === "ER_DUP_ENTRY" || err?.errno === 1062;
+}
+
 export type ClienteUsuario = {
   id: number;
   empresaId: number;
@@ -131,14 +148,26 @@ export async function crearUsuarioCliente(input: {
   }
 
   const { salt, passwordHash } = hashPassword(input.passwordInicial);
-  const r = await execute(
-    `INSERT INTO tms_cliente_usuarios
-       (empresa_id, cliente_id, nombre, email, password_hash, salt, activo,
-        debe_cambiar_password, creado_por)
-     VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?)`,
-    [input.empresaId, input.clienteId, nombre, email, passwordHash, salt, input.creadoPor],
-  );
-  const rows = await query<RowDataPacket[]>(`${SELECT} WHERE id = ? LIMIT 1`, [Number(r.insertId)]);
+  let insertId: number;
+  try {
+    const r = await execute(
+      `INSERT INTO tms_cliente_usuarios
+         (empresa_id, cliente_id, nombre, email, password_hash, salt, activo,
+          debe_cambiar_password, creado_por)
+       VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?)`,
+      [input.empresaId, input.clienteId, nombre, email, passwordHash, salt, input.creadoPor],
+    );
+    insertId = Number(r.insertId);
+  } catch (err) {
+    // Carrera: otro alta con el mismo email ganó entre el SELECT de
+    // arriba y este INSERT — la base de datos (uq_tmscliusr_email) es
+    // quien realmente lo impidió. Mismo mensaje funcional, nunca un 500.
+    if (esDuplicadoEmail(err)) {
+      return { ok: false, mensaje: "Ese email ya está en uso." };
+    }
+    throw err;
+  }
+  const rows = await query<RowDataPacket[]>(`${SELECT} WHERE id = ? LIMIT 1`, [insertId]);
   return { ok: true, usuario: mapUsuario(rows[0]) };
 }
 
@@ -205,8 +234,71 @@ export async function verificarCredencialesCliente(
   };
 }
 
+/**
+ * AJUSTE PRE-MERGE PR #167 (punto 4) — verificación DEFINITIVA contra
+ * base de datos de que una sesión de cliente sigue siendo válida ahora
+ * mismo, no solo en el momento en que se firmó el JWT. Un JWT válido
+ * solo demuestra que ALGUNA VEZ el login fue exitoso — nunca demuestra
+ * que el usuario/cliente sigan activos 5 horas después. Debe llamarse
+ * desde todo guard/endpoint sensible (ver requireClienteSession en
+ * cliente-portal-guard.ts) antes de confiar en los 3 identificadores del
+ * payload.
+ *
+ * Comprueba con un solo JOIN que, EXACTAMENTE:
+ *  - el usuario (u.id) sigue existiendo con el mismo empresa_id/cliente_id
+ *    que trae la sesión (nunca se confía en que el JWT no fue alterado
+ *    de otra forma — se revalida contra la fila real);
+ *  - u.activo = 1;
+ *  - el cliente (c.id/c.empresa_id) coincide con clienteId/empresaId de
+ *    la sesión;
+ *  - c.estado = 'Activo'.
+ *
+ * Deliberadamente NO se llama desde el middleware Edge (ver
+ * cliente-portal-guard.ts): el middleware sigue haciendo solo la
+ * comprobación rápida de JWT por cookie, para UX (redirigir a login sin
+ * esperar una consulta a la base de datos en cada navegación); esta
+ * verificación definitiva vive en los guards/endpoints de servidor
+ * (Node runtime, con acceso a MySQL), que es donde de verdad importa
+ * bloquear una operación sensible.
+ */
+export async function validarClienteSessionActiva(session: {
+  usuarioClienteId: number;
+  empresaId: number;
+  clienteId: number;
+}): Promise<boolean> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT u.id
+     FROM tms_cliente_usuarios u
+     JOIN tms_clientes c ON c.id = u.cliente_id AND c.empresa_id = u.empresa_id
+     WHERE u.id = ? AND u.empresa_id = ? AND u.cliente_id = ?
+       AND u.activo = 1
+       AND c.id = ? AND c.empresa_id = ?
+       AND c.estado = 'Activo'
+     LIMIT 1`,
+    [
+      session.usuarioClienteId,
+      session.empresaId,
+      session.clienteId,
+      session.clienteId,
+      session.empresaId,
+    ],
+  );
+  return Boolean(rows[0]);
+}
+
+/**
+ * AJUSTE PRE-MERGE PR #167 (punto 5) — ya no basta con `usuarioClienteId`
+ * aislado como autoridad: la mutación exige también `empresaId`/
+ * `clienteId` de la sesión y los aplica en el propio WHERE de la
+ * consulta (SELECT y UPDATE), en vez de confiar únicamente en que el
+ * caller ya pasó por un guard validado. Defensa en profundidad: aunque
+ * requireClienteSession() (que llama a validarClienteSessionActiva())
+ * ya bloquea sesiones revocadas antes de llegar aquí, esta función nunca
+ * debe poder mutar la fila de un usuario que no coincida con los 3
+ * identificadores de sesión, la llame quien la llame.
+ */
 export async function cambiarPasswordCliente(
-  usuarioClienteId: number,
+  scope: { usuarioClienteId: number; empresaId: number; clienteId: number },
   passwordActual: string,
   passwordNueva: string,
 ): Promise<{ ok: boolean; mensaje: string }> {
@@ -214,8 +306,9 @@ export async function cambiarPasswordCliente(
     return { ok: false, mensaje: "La nueva contraseña debe tener al menos 6 caracteres." };
   }
   const rows = await query<RowDataPacket[]>(
-    `SELECT id, password_hash, salt FROM tms_cliente_usuarios WHERE id = ? LIMIT 1`,
-    [usuarioClienteId],
+    `SELECT id, password_hash, salt FROM tms_cliente_usuarios
+     WHERE id = ? AND empresa_id = ? AND cliente_id = ? LIMIT 1`,
+    [scope.usuarioClienteId, scope.empresaId, scope.clienteId],
   );
   const r = rows[0];
   if (!r) return { ok: false, mensaje: "Usuario no encontrado." };
@@ -225,8 +318,9 @@ export async function cambiarPasswordCliente(
   const { salt, passwordHash } = hashPassword(passwordNueva);
   await execute(
     `UPDATE tms_cliente_usuarios
-     SET password_hash = ?, salt = ?, debe_cambiar_password = 0 WHERE id = ?`,
-    [passwordHash, salt, r.id],
+     SET password_hash = ?, salt = ?, debe_cambiar_password = 0
+     WHERE id = ? AND empresa_id = ? AND cliente_id = ?`,
+    [passwordHash, salt, scope.usuarioClienteId, scope.empresaId, scope.clienteId],
   );
   return { ok: true, mensaje: "Contraseña actualizada." };
 }
