@@ -101,6 +101,11 @@ export function analizarCuentas(empresa, empresasBuffer, cuentasBuffer) {
     registros: { declarados: catalogo.declaradas, vigentes: catalogo.filas.length, marcados_borrados: catalogo.eliminadas, inactivos: inactivas },
     tipos_origen: tipos, niveles_origen: niveles, incidencias,
     listo_para_importar: false,
-    pendientes: ["Definir entidad contable destino separada de KT/Mónaco operativo.", "Homologar TIPO_CTA, MULTIP_CTA y CTACOM_CTA con Contabilidad; no inferir por número.", "Validar jerarquía, cuentas de movimiento y naturaleza de saldos.", "Comparar contra catálogo destino y conciliar antes de cualquier escritura."],
+    // "Definir entidad contable destino" se retiró de esta lista: el modelo
+    // (entidad_id por KT/Mónaco) ya se definió y aplicó en producción en
+    // trabajo posterior (ver docs/CONTABILIDAD-C2-TRANSICION.md y
+    // docs/CONTABILIDAD-C3A-CAPTURA.md) — repetirlo aquí como pendiente
+    // afirmaría como abierta una decisión ya resuelta.
+    pendientes: ["Asociar el catálogo importado a la entidad contable ya definida (KT/Mónaco vía entidad_id) — no crear un modelo de identidad nuevo.", "Homologar TIPO_CTA, MULTIP_CTA y CTACOM_CTA con Contabilidad; no inferir por número.", "Validar jerarquía, cuentas de movimiento y naturaleza de saldos.", "Diseñar la estrategia transaccional/idempotente del importador masivo (distinta de la transacción ya existente para un asiento manual).", "Comparar contra catálogo destino y conciliar antes de cualquier escritura."],
   };
 }

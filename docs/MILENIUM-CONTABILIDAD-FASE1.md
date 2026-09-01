@@ -1,5 +1,13 @@
 # Milenium → Contabilidad: fase 1, revisión en seco
 
+> **Nota de actualización (CONTABILIDAD-MILENIUM-FASE1-ACTUALIZACION-DOCUMENTAL)**:
+> este documento es histórico/diagnóstico — describe el estado en que se abrió
+> esta fase. Trabajo posterior en `main` (`docs/CONTABILIDAD-C2-TRANSICION.md`,
+> `docs/CONTABILIDAD-C3A-CAPTURA.md`, `docs/CONTABILIDAD-C3B-CONSULTA.md`) ya
+> resolvió parte de lo que aquí se listaba como bloqueo abierto. Las secciones
+> de abajo se anotaron con su estado real más reciente; el resto del documento
+> (herramienta, lector DBF, alcance de esta fase) sigue vigente sin cambios.
+
 ## Decisión confirmada por el usuario
 
 | Origen | Código empresa | Carpeta | Tratamiento |
@@ -13,6 +21,13 @@ número de cuenta o partida entre bases. Conservar siempre la identidad origen.
 La selección de carpeta se contrasta con código y nombre en s02.dbf. Esa
 comprobación no demuestra por sí sola que alguien no haya intercambiado carpetas:
 la copia y su correspondencia con el sistema origen requieren validación humana.
+
+**Actualización (C2, ver `docs/CONTABILIDAD-C2-TRANSICION.md`)**: 00 y 08
+corresponden a la MISMA entidad contable Mónaco (no a dos entidades distintas)
+— la separación real es KT vs. Mónaco. Lo que sigue pendiente entre 00 y 08 es
+preservar su procedencia/lote de origen por separado y conciliar el
+solapamiento temporal entre ambas bases antes de cualquier importación de
+saldos; no es una decisión de identidad todavía abierta.
 
 ## Herramienta local
 
@@ -48,7 +63,7 @@ entre archivos: una lectura exitosa no reemplaza un respaldo consistente.
 | LINACTIVA_ | activa | Invertir únicamente booleano conocido |
 | TIPO_CTA | tipo | Pendiente de homologación; NO asumir significado de 1–5 |
 | CTACOM_CTA, MULTIP_CTA | Sin equivalencia aprobada | Confirmar semántica contable |
-| Empresa/base origen | Identidad contable destino | Pendiente decisión de modelo |
+| Empresa/base origen | Identidad contable destino | Modelo definido posteriormente (entidad_id, C2) — ver bloqueo 1 abajo |
 
 Las equivalencias son propuestas, no una autorización de importación. No existe
 todavía salida de filas importables, botón web ni cambio de funcionalidad actual.
@@ -59,25 +74,56 @@ comparar contra collation y datos del servidor destino.
 
 ## Bloqueos previos a importar
 
-1. El tenant operativo kt-monaco agrupa dos empresas de origen. Actualmente
-   cont_cuentas tiene unicidad (empresa_id, codigo); asignar ambas al mismo tenant
-   mezclaría cuentas y asientos. Definir entidad/libro contable separado o tenants
-   separados sin alterar el uso compartido de Operaciones. No resolver con prefijos
-   improvisados ni modificar empresas existentes durante esta fase.
-2. Homologar tipos, naturaleza y cuentas de movimiento con el responsable contable.
-   No inferir debe/haber ni signos a partir de un código numérico.
-3. Fortalecer asientos antes de movimientos: el endpoint actual inserta cabecera y
-   líneas mediante llamadas separadas; necesita transacción y validación de que
-   todas las cuentas pertenecen a la entidad autorizada.
-4. Resolver límites temporales entre Mónaco histórico y actual con conciliación,
-   sin sumar dos veces el mismo período. Definir saldos iniciales vs histórico.
+1. ~~El tenant operativo kt-monaco agrupa dos empresas de origen... Definir
+   entidad/libro contable separado o tenants separados.~~ **RESUELTO
+   posteriormente.** `docs/CONTABILIDAD-C2-TRANSICION.md` definió el modelo
+   (identidad contable vía `entidad_id` en `cont_cuentas`/`cont_asientos`/
+   `cont_asiento_detalle`/`cont_cxc`/`cont_cxp`, guard de tenant + permiso +
+   entidad activa + asignación) y `docs/CONTABILIDAD-C3A-CAPTURA.md` confirma
+   que retoma "C2B (separación funcional KT/Mónaco), cuyas migraciones el
+   usuario confirmó aplicadas manualmente". KT y Mónaco permanecen dentro del
+   mismo tenant operativo compartido, pero ya se separan por entidad/libro —
+   ya NO es una decisión de diseño pendiente. Sigue sin existir, en cambio, el
+   paso que ligue un catálogo IMPORTADO de Milenium a esa entidad (ver
+   bloqueo 3).
+2. Homologar tipos, naturaleza y cuentas de movimiento con el responsable
+   contable. No inferir debe/haber ni signos a partir de un código numérico.
+   **Sigue pendiente** — TIPO_CTA, MULTIP_CTA, CTACOM_CTA, naturaleza y
+   jerarquía/cuentas de agrupación vs. movimiento no tienen equivalencia
+   aprobada; nada en el trabajo posterior de C2/C3A homologó estos campos
+   (esas entregas trataron identidad/transacción/captura, no el catálogo de
+   Milenium en sí).
+3. ~~Fortalecer asientos antes de movimientos: el endpoint actual inserta
+   cabecera y líneas mediante llamadas separadas...~~ **El flujo NORMAL
+   (manual) de asientos ya fue endurecido posteriormente** —
+   `docs/CONTABILIDAD-C2-TRANSICION.md`/`FASE2.md` documentan que el POST de
+   asientos pasó a una sola transacción/conexión (bloqueo de cuentas con
+   `FOR UPDATE`, cuadre exacto, cabecera+detalle+auditoría atómicos,
+   rollback ante fallo) — reutilizado tal cual por la captura real de C3A. Lo
+   que **sigue sin existir es un IMPORTADOR de Milenium**: la estrategia
+   transaccional/idempotente para una carga MASIVA de cuentas/partidas (lotes,
+   reintentos sin duplicar, procedencia/huella por fila) es un problema
+   distinto al de un asiento manual individual y no está definida en ningún
+   documento posterior — sigue siendo un bloqueo real para importar.
+4. Resolver límites temporales entre Mónaco histórico (00) y actual (08) con
+   conciliación, sin sumar dos veces el mismo período. Definir saldos
+   iniciales vs. histórico. **Matiz posterior (C2):** 00 y 08 son la MISMA
+   entidad contable Mónaco (ver nota arriba) — lo pendiente es preservar
+   procedencia/lote por separado y conciliar el solapamiento temporal, no
+   decidir si son o no la misma identidad.
 
 ## Etapas siguientes (PR separados)
 
-2. Modelo de identidad contable, reglas de cuentas/períodos y transacciones, con
-   migración aditiva propuesta si fuera necesaria; no ejecutar sin autorización.
-3. Vista previa de catálogo, homologaciones y comparación destino, seguida de
-   importación idempotente aprobada por empresa. Conservar ID/base de origen.
+2. ~~Modelo de identidad contable, reglas de cuentas/períodos y
+   transacciones...~~ **Identidad contable y transacción del asiento normal:
+   YA RESUELTAS** (ver bloqueos 1 y 3 arriba, C2/C3A). Reglas de
+   períodos/ejercicio/apertura/cierre siguen pendientes (`CONTABILIDAD-C3B-
+   CONSULTA.md` las deja explícitamente para la siguiente entrega).
+3. Vista previa de catálogo, homologaciones (bloqueo 2, sigue pendiente) y
+   comparación destino, seguida de importación idempotente aprobada por
+   empresa/entidad. Conservar ID/base de origen. Diseñar aquí la estrategia
+   transaccional de IMPORTACIÓN MASIVA (distinta de la transacción ya
+   existente para un asiento manual individual).
 4. Saldos/partidas y bancos por lotes controlados: conciliar debe/haber, saldos y
    reportes origen/destino. Registrar auditoría y rechazos, probar rollback/reintento.
 5. Cuentas por cobrar/pagar y reportes; coordinar con Facturación para reutilizar
