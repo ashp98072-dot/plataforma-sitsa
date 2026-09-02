@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import Link from "next/link";
 import {
   CLIENTE_TIPOS,
   type Cliente,
@@ -416,13 +417,21 @@ export function ClientesClient({ slug, puedeEditar }: Props) {
                   </td>
                   {puedeEditar ? (
                     <td className="px-3 py-2">
-                      <button
-                        type="button"
-                        className="text-xs text-[var(--accent)] underline"
-                        onClick={() => editar(c)}
-                      >
-                        Editar
-                      </button>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className="text-xs text-[var(--accent)] underline"
+                          onClick={() => editar(c)}
+                        >
+                          Editar
+                        </button>
+                        <Link
+                          href={`/e/${slug}/clientes/${c.id}/portal`}
+                          className="text-xs text-[var(--accent)] underline"
+                        >
+                          Portal
+                        </Link>
+                      </div>
                     </td>
                   ) : null}
                 </tr>

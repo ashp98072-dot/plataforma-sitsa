@@ -236,6 +236,47 @@ export async function asegurarVinculosTmsClientes(
   }
 }
 
+export type ResolucionTmsCliente =
+  | { ok: true; tmsClienteId: number; cliente: Cliente }
+  | { ok: false; mensaje: string };
+
+/**
+ * CLIENTE-PORTAL-1C — resolución técnica real "cliente del catálogo
+ * compartido (clientes.id) -> tms_clientes.id", para que la UI (y
+ * cualquier endpoint que administre el Portal del Cliente) nunca tenga
+ * que recibir ni adivinar un tms_clientes.id desde el navegador.
+ *
+ * Reutiliza el mismo puente ya existente (clientes.tms_cliente_id) y el
+ * mismo mecanismo de backfill ya usado en producción por
+ * /api/empresas/[slug]/tms/catalogos y por src/lib/facturacion/facturas.ts
+ * (asegurarVinculosTmsClientes) — no se inventa una relación nueva por
+ * nombre/NIT. Si el cliente no existe, o existe pero (tras el backfill)
+ * sigue sin tms_cliente_id — normalmente porque está Inactivo,
+ * asegurarVinculosTmsClientes solo vincula clientes Activos — se falla
+ * con un mensaje claro en vez de construir un resolver ambiguo.
+ */
+export async function resolverTmsClienteId(
+  empresaId: number,
+  clienteId: number,
+): Promise<ResolucionTmsCliente> {
+  const cliente = await obtenerCliente(empresaId, clienteId);
+  if (!cliente) {
+    return { ok: false, mensaje: "Cliente no encontrado." };
+  }
+  if (cliente.tmsClienteId) {
+    return { ok: true, tmsClienteId: cliente.tmsClienteId, cliente };
+  }
+  await asegurarVinculosTmsClientes(empresaId);
+  const actualizado = await obtenerCliente(empresaId, clienteId);
+  if (actualizado?.tmsClienteId) {
+    return { ok: true, tmsClienteId: actualizado.tmsClienteId, cliente: actualizado };
+  }
+  return {
+    ok: false,
+    mensaje: "Este cliente todavía no está sincronizado con TMS.",
+  };
+}
+
 /** Alta rápida usada por TMS (mantiene ids de tms_clientes para planes). */
 export async function crearClienteDesdeTms(
   empresaId: number,
