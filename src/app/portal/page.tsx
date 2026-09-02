@@ -4,6 +4,7 @@ import { getColaboradorSession } from "@/lib/rrhh/colaborador-session";
 import { obtenerPersonalOperativoDeEmpleado } from "@/lib/flota/pilotos";
 import { obtenerEmpleado } from "@/lib/rrhh/empleados";
 import { listarSubordinados } from "@/lib/rrhh/horas-extra";
+import { ThemeToggle } from "@/components/theme-toggle";
 import LogoutButton from "./logout-button";
 
 const PROXIMAMENTE: { titulo: string; detalle: string }[] = [];
@@ -102,7 +103,10 @@ export default async function PortalHomePage() {
               Hola, {session.nombre ?? "colaborador"}
             </h1>
           </div>
-          <LogoutButton />
+          <div className="flex items-center gap-2">
+            <ThemeToggle />
+            <LogoutButton />
+          </div>
         </header>
 
         <div className="mt-8 grid gap-4 sm:grid-cols-2">
