@@ -6,7 +6,7 @@ import {
   TIPOS_DOCUMENTO,
 } from "@/lib/rrhh/documentos";
 import { obtenerEmpleado } from "@/lib/rrhh/empleados";
-import { borrarUpload, guardarUpload } from "@/lib/uploads";
+import { borrarUpload, guardarUpload, UploadValidationError } from "@/lib/uploads";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
 
@@ -152,10 +152,20 @@ export async function POST(req: Request, ctx: Ctx) {
       duracionMs: Date.now() - inicio,
       tipoError: err instanceof Error ? err.constructor.name : typeof err,
     });
-    // Los errores de guardarUpload() (tamaño/formato, ver src/lib/uploads.ts)
-    // ya traen mensaje funcional propio — se propagan tal cual. Cualquier
-    // otro error (DB, etc.) cae al mensaje genérico.
-    const msg = err instanceof Error ? err.message : "No se pudo subir.";
-    return NextResponse.json({ error: msg }, { status: 500 });
+    // AJUSTE PRE-MERGE PR #176 (puntos 1-2) — solo los errores FUNCIONALES
+    // conocidos de validación de archivo (UploadValidationError: vacío,
+    // formato no permitido, tamaño excedido — ver src/lib/uploads.ts)
+    // conservan su mensaje y usan el status HTTP que les corresponde
+    // (400/413). Cualquier otro error (INSERT/DB, filesystem, lo que
+    // sea) NUNCA expone su mensaje interno al usuario de RRHH — el
+    // detalle técnico ya quedó en el log de arriba; la respuesta es
+    // siempre el mismo mensaje genérico.
+    if (err instanceof UploadValidationError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    return NextResponse.json(
+      { error: "No se pudo completar la carga del documento. Intenta nuevamente." },
+      { status: 500 },
+    );
   }
 }

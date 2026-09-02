@@ -66,6 +66,27 @@ type UploadLike = {
   arrayBuffer: () => Promise<ArrayBuffer>;
 };
 
+/**
+ * AJUSTE PRE-MERGE PR #176 (punto 2) — error FUNCIONAL conocido de
+ * validación de subida (nunca un fallo interno: archivo vacío, formato
+ * no permitido, tamaño excedido). Un caller puede distinguirlo con
+ * `instanceof UploadValidationError` en vez de comparar el texto del
+ * mensaje (frágil) para decidir si el mensaje es seguro de mostrar tal
+ * cual al usuario y qué status HTTP usar — sin necesidad de un refactor
+ * más amplio de manejo de errores. Sigue siendo un `Error` normal para
+ * cualquier caller existente que solo haga `err instanceof Error ?
+ * err.message : ...` (los otros 14 consumidores de guardarUpload) — no
+ * cambia su comportamiento.
+ */
+export class UploadValidationError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "UploadValidationError";
+    this.status = status;
+  }
+}
+
 export async function guardarUpload(
   empresaId: number,
   // VIATICOS-FIRMA (firma visual) — "firmas": imágenes PNG de firma
@@ -75,15 +96,18 @@ export async function guardarUpload(
   file: UploadLike,
 ): Promise<{ relative: string; original: string; size: number }> {
   if (!file || typeof file.arrayBuffer !== "function") {
-    throw new Error("Archivo requerido.");
+    throw new UploadValidationError("Archivo requerido.", 400);
   }
-  if (file.size <= 0) throw new Error("Archivo vacío.");
+  if (file.size <= 0) throw new UploadValidationError("Archivo vacío.", 400);
   if (file.size > MAX_UPLOAD_BYTES) {
-    throw new Error("El archivo supera el máximo de 50 MB.");
+    // 413 Payload Too Large — es el único de los 3 casos donde el
+    // tamaño en sí (no el contenido/formato) es la causa; el resto se
+    // documenta como 400 (ver AJUSTE PRE-MERGE PR #176, punto 2).
+    throw new UploadValidationError("El archivo supera el máximo de 50 MB.", 413);
   }
   const ext = extensionValida(file.name || "archivo.jpg");
   if (!ext) {
-    throw new Error("Formato no permitido. Usa: jpg, png, webp, bmp o pdf.");
+    throw new UploadValidationError("Formato no permitido. Usa: jpg, png, webp, bmp o pdf.", 400);
   }
 
   const root = getUploadsRoot();

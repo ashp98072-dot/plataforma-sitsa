@@ -2,7 +2,13 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { absPathFromRelative, borrarUpload, guardarUpload, MAX_UPLOAD_BYTES } from "./uploads";
+import {
+  absPathFromRelative,
+  borrarUpload,
+  guardarUpload,
+  MAX_UPLOAD_BYTES,
+  UploadValidationError,
+} from "./uploads";
 
 /**
  * RRHH-EXPEDIENTES-UPLOAD-STABILITY (secciones 4/5/10 del ticket) —
@@ -56,25 +62,42 @@ describe("guardarUpload — escritura real (async), validaciones ANTES de escrib
     expect(readFileSync(abs, "utf8")).toBe("abcde");
   });
 
-  it("Caso C: archivo > MAX_UPLOAD_BYTES → rechaza ANTES de escribir nada en disco", async () => {
+  it("Caso C / AJUSTE PRE-MERGE PR #176: archivo > MAX_UPLOAD_BYTES → UploadValidationError(413), rechaza ANTES de escribir nada en disco", async () => {
     await expect(
       guardarUpload(7, "documentos", "emp42", archivoFalso("grande.pdf", MAX_UPLOAD_BYTES + 1, "x")),
     ).rejects.toThrow(/supera el máximo/);
+    try {
+      await guardarUpload(7, "documentos", "emp42", archivoFalso("grande.pdf", MAX_UPLOAD_BYTES + 1, "x"));
+      expect.unreachable();
+    } catch (err) {
+      expect(err).toBeInstanceOf(UploadValidationError);
+      expect((err as UploadValidationError).status).toBe(413);
+    }
     // Nada se escribió: el directorio de la empresa ni siquiera se creó.
     expect(existsSync(join(dir, "empresas", "7"))).toBe(false);
   });
 
-  it("Caso E: extensión no permitida → rechaza ANTES de escribir nada en disco", async () => {
-    await expect(
-      guardarUpload(7, "documentos", "emp42", archivoFalso("contrato.docx", 10, "x")),
-    ).rejects.toThrow(/Formato no permitido/);
+  it("Caso E / AJUSTE PRE-MERGE PR #176: extensión no permitida → UploadValidationError(400), rechaza ANTES de escribir nada en disco", async () => {
+    try {
+      await guardarUpload(7, "documentos", "emp42", archivoFalso("contrato.docx", 10, "x"));
+      expect.unreachable();
+    } catch (err) {
+      expect(err).toBeInstanceOf(UploadValidationError);
+      expect((err as UploadValidationError).status).toBe(400);
+      expect((err as Error).message).toMatch(/Formato no permitido/);
+    }
     expect(existsSync(join(dir, "empresas", "7"))).toBe(false);
   });
 
-  it("archivo vacío (size 0) → rechaza sin escribir", async () => {
-    await expect(guardarUpload(7, "documentos", "emp42", archivoFalso("vacio.pdf", 0))).rejects.toThrow(
-      /vacío/,
-    );
+  it("archivo vacío (size 0) → UploadValidationError(400), rechaza sin escribir", async () => {
+    try {
+      await guardarUpload(7, "documentos", "emp42", archivoFalso("vacio.pdf", 0));
+      expect.unreachable();
+    } catch (err) {
+      expect(err).toBeInstanceOf(UploadValidationError);
+      expect((err as UploadValidationError).status).toBe(400);
+      expect((err as Error).message).toMatch(/vacío/);
+    }
     expect(existsSync(join(dir, "empresas", "7"))).toBe(false);
   });
 
