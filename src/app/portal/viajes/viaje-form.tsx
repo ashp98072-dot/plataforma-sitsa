@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Image from "next/image";
 import type { AsignacionOperativaPortal, ViajeAbiertoPiloto } from "@/lib/flota/viajes-piloto";
 import type { PlanParada } from "@/lib/tms/paradas";
-import { separarViajesPortal } from "@/lib/flota/viajes-portal-ui";
+import { paginarViajesPortal, separarViajesPortal } from "@/lib/flota/viajes-portal-ui";
 
 function fechaEnEspanol(fecha: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return fecha || "Fecha pendiente";
@@ -84,6 +84,11 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
     viajeDestacadoId && finalizados.some((a) => a.planId === viajeDestacadoId),
   );
   const [historialAbierto, setHistorialAbierto] = useState(viajeDestacadoFinalizado);
+  const paginaDestacada = viajeDestacadoId
+    ? Math.floor(finalizados.findIndex((a) => a.planId === viajeDestacadoId) / 8) + 1
+    : 1;
+  const [paginaHistorial, setPaginaHistorial] = useState(Math.max(1, paginaDestacada));
+  const historial = paginarViajesPortal(finalizados, paginaHistorial);
 
   // PORTAL-HARDENING-2 (Fase C): el piloto elige el tipo de evidencia y,
   // si es de parada, la dirección exacta — ya no se calcula "la
@@ -349,7 +354,15 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
         <span>Viajes finalizados <span className="ml-1 text-xs font-normal text-[var(--muted)]">(mostrar/ocultar · más recientes primero)</span></span>
         <span className="rounded-full bg-[var(--input)] px-3 py-1 text-xs font-normal">{finalizados.length}</span>
       </summary>
-      <div className="mt-4 space-y-3">{finalizados.map(tarjetaViaje)}</div>
+      <div className="mt-4 space-y-3">{historial.viajes.map(tarjetaViaje)}</div>
+      {historial.totalPaginas > 1 ? <nav className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border)] pt-4" aria-label="Páginas del historial de viajes">
+        <span className="text-xs text-[var(--muted)]">Mostrando {historial.desde}–{historial.hasta} de {finalizados.length}</span>
+        <div className="flex items-center gap-2">
+          <button type="button" className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm disabled:opacity-40" disabled={historial.pagina === 1} onClick={() => setPaginaHistorial(historial.pagina - 1)}>Anterior</button>
+          <span className="text-xs text-[var(--muted)]">Página {historial.pagina} de {historial.totalPaginas}</span>
+          <button type="button" className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm disabled:opacity-40" disabled={historial.pagina === historial.totalPaginas} onClick={() => setPaginaHistorial(historial.pagina + 1)}>Siguiente</button>
+        </div>
+      </nav> : null}
     </details> : null}
 
     {viajeAbierto ? <section className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">

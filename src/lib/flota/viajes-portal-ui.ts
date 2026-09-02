@@ -23,3 +23,20 @@ export function separarViajesPortal(asignaciones: AsignacionOperativaPortal[]) {
 
   return { pendientes, finalizados };
 }
+
+export function paginarViajesPortal(
+  viajes: AsignacionOperativaPortal[],
+  paginaSolicitada: number,
+  porPagina = 8,
+) {
+  const totalPaginas = Math.max(1, Math.ceil(viajes.length / porPagina));
+  const pagina = Math.min(Math.max(1, Math.trunc(paginaSolicitada) || 1), totalPaginas);
+  const inicio = (pagina - 1) * porPagina;
+  return {
+    viajes: viajes.slice(inicio, inicio + porPagina),
+    pagina,
+    totalPaginas,
+    desde: viajes.length ? inicio + 1 : 0,
+    hasta: Math.min(inicio + porPagina, viajes.length),
+  };
+}

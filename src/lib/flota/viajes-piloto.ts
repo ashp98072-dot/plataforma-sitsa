@@ -67,10 +67,10 @@ export async function listarAsignacionesOperativasEmpleado(
      LEFT JOIN flota_viajes fv ON fv.plan_id = p.id AND fv.empresa_id = p.empresa_id
      WHERE p.empresa_id = ?
        AND (pil.id_empleado = ? OR aux.id_empleado = ? OR aux_legacy.id_empleado = ?)
-       AND (p.fecha_plan >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+       AND (p.fecha_plan >= DATE_SUB(CURDATE(), INTERVAL 12 MONTH)
             OR fv.estado = 'abierto')
-     ORDER BY (fv.estado = 'abierto') DESC, p.fecha_plan ASC, p.hora_carga ASC
-     LIMIT 40`,
+     ORDER BY (fv.estado = 'abierto') DESC, p.fecha_plan DESC, p.hora_carga DESC
+     LIMIT 250`,
     [empresaId, empleadoId, empleadoId, empleadoId],
   ).catch(() => [] as RowDataPacket[]);
 
