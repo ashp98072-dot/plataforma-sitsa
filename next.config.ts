@@ -45,6 +45,19 @@ const nextConfig: NextConfig = {
         ],
       },
       {
+        // MISMO fix que /portal/:path* arriba, aplicado ahora también al
+        // Portal del Cliente: se había quedado fuera de esta lista (nunca
+        // se agregó cuando se construyó CLIENTE-PORTAL-1) y por eso el CDN
+        // de Hostinger reproducía el mismo incidente ya diagnosticado y
+        // corregido para /portal/*  — /cliente-portal/login servía el
+        // payload crudo de React Server Components ("404: This page could
+        // not be found" en texto plano) en vez de la página real.
+        source: "/cliente-portal/:path*",
+        headers: [
+          { key: "Cache-Control", value: "private, no-store, no-cache" },
+        ],
+      },
+      {
         // Assets con hash: cache largo (el nombre cambia en cada build).
         source: "/_next/static/:path*",
         headers: [
