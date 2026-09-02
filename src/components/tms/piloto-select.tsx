@@ -69,8 +69,16 @@ export function PilotoSelect({
     setOpen(false);
   }
 
+  // PLAN-FORM-SELECTS-DROPDOWN-STACKING: mismo ajuste que PlacaSelect —
+  // ver el comentario allí. El z-10 fijo hacía que un hermano más abajo
+  // en el DOM (AuxiliaresSelect) tapara la lista de este campo cuando se
+  // abría; z-30 solo mientras `open` es true resuelve el desempate sin
+  // afectar el resto del layout cuando está cerrado.
   return (
-    <div ref={rootRef} className="relative z-10 block text-xs text-[var(--muted)]">
+    <div
+      ref={rootRef}
+      className={`relative block text-xs text-[var(--muted)] ${open ? "z-30" : "z-10"}`}
+    >
       <label htmlFor={listId} className="block">
         Piloto (buscar en RRHH o escribir)
       </label>

@@ -68,8 +68,22 @@ export function PlacaSelect({
     setOpen(false);
   }
 
+  // PLAN-FORM-SELECTS-DROPDOWN-STACKING: la lista desplegable vive DENTRO
+  // de este div (z-50 relativo a él), pero ese z-50 solo importa dentro
+  // del stacking context que este mismo div crea (position:relative +
+  // z-index) — no "escapa" para competir con hermanos. Este componente
+  // se usa junto a otros iguales (PilotoSelect a su lado, AuxiliaresSelect
+  // debajo) que TODOS declaran z-10 fijo: con el mismo z-index, el
+  // desempate es por orden en el DOM, así que el campo de MÁS ABAJO
+  // (p. ej. Auxiliares) siempre gana y tapa una lista larga que se abre
+  // arriba (Unidad/Piloto) y se extiende hacia abajo. Se sube a z-30
+  // SOLO mientras `open` es true, para que el campo activo se pinte por
+  // encima de sus hermanos sin necesidad de tocar su propio z-index.
   return (
-    <div ref={rootRef} className="relative z-10 block text-xs text-[var(--muted)]">
+    <div
+      ref={rootRef}
+      className={`relative block text-xs text-[var(--muted)] ${open ? "z-30" : "z-10"}`}
+    >
       <label htmlFor={listId} className="block">
         Unidad (buscar placa/marca/modelo)
       </label>

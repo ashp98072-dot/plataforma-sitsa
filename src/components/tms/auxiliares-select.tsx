@@ -96,8 +96,17 @@ export function AuxiliaresSelect({ auxiliares, empleadoIds, nombresLibres, max, 
     return auxiliares.find((a) => a.id === id)?.nombre ?? `#${id}`;
   }
 
+  // PLAN-FORM-SELECTS-DROPDOWN-STACKING: mismo ajuste que PlacaSelect/
+  // PilotoSelect — ver el comentario en placa-select.tsx. Este campo
+  // también puede tapar (o ser tapado por) lo que venga después en el
+  // formulario (Motivo del cambio, Tipo de traslado, etc.) por el mismo
+  // empate de z-index fijo entre hermanos; z-30 solo mientras `open` es
+  // true resuelve el desempate sin afectar el layout cerrado.
   return (
-    <div ref={rootRef} className="relative z-10 text-xs text-[var(--muted)]">
+    <div
+      ref={rootRef}
+      className={`relative text-xs text-[var(--muted)] ${open ? "z-30" : "z-10"}`}
+    >
       <label htmlFor={listId} className="block">
         Auxiliares {total}/{max}
       </label>

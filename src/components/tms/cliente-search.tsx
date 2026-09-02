@@ -81,10 +81,16 @@ export function ClienteSearch({
     setOpen(false);
   }
 
+  // PLAN-FORM-SELECTS-DROPDOWN-STACKING: mismo ajuste que PlacaSelect/
+  // PilotoSelect/AuxiliaresSelect — ver el comentario en
+  // placa-select.tsx. Un z-index fijo igual entre campos hermanos hace
+  // que el desempate lo gane siempre el que está más abajo en el DOM,
+  // tapando la lista de un campo de más arriba que se abre hacia abajo;
+  // z-30 solo mientras `open` es true.
   return (
     <div
       ref={rootRef}
-      className="relative z-10 block text-xs text-[var(--muted)] md:col-span-1"
+      className={`relative block text-xs text-[var(--muted)] md:col-span-1 ${open ? "z-30" : "z-10"}`}
     >
       <label htmlFor={listId} className="block">
         Cliente (buscar en catálogo)
