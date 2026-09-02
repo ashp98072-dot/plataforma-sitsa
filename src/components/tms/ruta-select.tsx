@@ -105,8 +105,14 @@ export function RutaSelect({ slug, clienteId, value, inputClassName, onSeleccion
     setOpen(false);
   }
 
+  // PLAN-FORM-SELECTS-DROPDOWN-STACKING: mismo ajuste que ClienteSearch/
+  // PlacaSelect/PilotoSelect/AuxiliaresSelect — ver el comentario en
+  // placa-select.tsx. z-30 solo mientras `open` es true.
   return (
-    <div ref={rootRef} className="relative z-10 block text-xs text-[var(--muted)]">
+    <div
+      ref={rootRef}
+      className={`relative block text-xs text-[var(--muted)] ${open ? "z-30" : "z-10"}`}
+    >
       <label htmlFor={listId} className="block">
         Código / Ruta {clienteId ? "(rutas de este cliente)" : "(busca por código, cliente o nombre)"}
       </label>
