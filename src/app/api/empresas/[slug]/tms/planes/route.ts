@@ -225,6 +225,21 @@ export async function GET(req: Request, ctx: Ctx) {
   // suelto se ignora en vez de interpretarlo a medias.
   const usarRangoFecha = Boolean(fechaDesdeParam && fechaHastaParam);
   const pendienteCierreParam = url.searchParams.get("pendienteCierre") === "1";
+  // TMS-PROGRAMACION-NAVEGACION-DIRECTA-PLAN: ?id=<planId> — trae un plan
+  // puntual por su id, SIN depender del rango Hoy/Mañana/Semana (que solo
+  // cubre hoy en adelante) ni del filtro de pendientes de cierre. Nunca
+  // confía en el id a secas: se AND-ea con `p.empresa_id = ?` igual que
+  // cualquier otra condición de este mismo WHERE — un id de otra empresa
+  // simplemente no matchea ninguna fila (0 resultados, nunca la fila de
+  // otra empresa). Reutiliza EXACTAMENTE el mismo SELECT/enriquecimiento
+  // de abajo (paradas, auxiliares, disponibilidad) — no es un endpoint
+  // paralelo, es la misma consulta con una condición adicional.
+  const idParam = url.searchParams.get("id");
+  const idNum = idParam ? Number(idParam) : null;
+  const usarId = idNum != null && Number.isFinite(idNum) && idNum > 0;
+  if (idParam && !usarId) {
+    return NextResponse.json({ error: "id inválido." }, { status: 400 });
+  }
 
   try {
     await asegurarSchemaFlota();
@@ -246,12 +261,16 @@ export async function GET(req: Request, ctx: Ctx) {
   if (pendienteCierreParam) {
     condiciones.push(SQL_PENDIENTE_CIERRE);
   }
-  // LIMIT: "pendienteCierre=1" es justamente la vista que NUNCA debe poder
-  // perder un registro por límite — el volumen esperado es bajo (viajes ya
-  // finalizados, aún no cerrados), así que se deja sin límite. El GET sin
+  if (usarId) {
+    condiciones.push("p.id = ?");
+    paramsRows.push(idNum as number);
+  }
+  // LIMIT: "pendienteCierre=1" y "id=" son vistas puntuales que NUNCA deben
+  // poder perder un registro por límite (la primera por volumen bajo, la
+  // segunda porque es a lo sumo 1 fila) — se dejan sin límite. El GET sin
   // filtros (compat) y el filtro por rango de fecha conservan el límite de
   // seguridad de siempre.
-  const limitSql = pendienteCierreParam ? "" : "LIMIT 200";
+  const limitSql = pendienteCierreParam || usarId ? "" : "LIMIT 200";
 
   const [rows, disp] = await Promise.all([
     query<RowDataPacket[]>(

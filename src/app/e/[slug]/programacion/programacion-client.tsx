@@ -111,7 +111,7 @@ type EstadoVehiculo = {
   motivoNoDisponible: string | null;
 };
 
-type Rango = "hoy" | "manana" | "semana";
+export type Rango = "hoy" | "manana" | "semana";
 
 const ESTADO_LABEL: Record<string, string> = {
   Programado: "Programado",
@@ -327,6 +327,26 @@ function rangoFechas(hoy: string, rango: Rango): { desde: string; hasta: string 
   return { desde: hoy, hasta: sumarDias(hoy, 6) };
 }
 
+/**
+ * TMS-PROGRAMACION-NAVEGACION-DIRECTA-PLAN — dado "hoy" y la fecha_plan de
+ * un plan traído puntualmente por id (?plan=ID desde TMS), decide a qué
+ * período (Hoy/Mañana/Semana) debe cambiarse el filtro para que ese plan
+ * quede dentro del rango visible del tablero. `null` = ningún período lo
+ * contiene — rangoFechas() de arriba SIEMPRE cubre "hoy en adelante"
+ * (Hoy/Mañana/Semana nunca incluyen una fecha pasada), así que un plan de
+ * ayer (o antes) no tiene período al que cambiar: el llamador debe avisar
+ * en vez de fingir un ajuste de filtro que no existe. Función pura, sin
+ * estado de React — extraída así para poder probarse sin infraestructura
+ * de testing de componentes (no hay @testing-library/react en este
+ * proyecto).
+ */
+export function rangoQueContiene(hoy: string, fechaPlan: string): Rango | null {
+  if (fechaPlan === hoy) return "hoy";
+  if (fechaPlan === sumarDias(hoy, 1)) return "manana";
+  if (fechaPlan > hoy && fechaPlan <= sumarDias(hoy, 6)) return "semana";
+  return null;
+}
+
 /** Origen (primera parada tipo Carga) y destino (última Descarga/Entrega). */
 function origenDestino(paradas: ParadaPlan[]): {
   origen: string | null;
@@ -457,6 +477,13 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   const [mostrarCrear, setMostrarCrear] = useState(false);
   const [editandoId, setEditandoId] = useState<number | null>(planInicialId);
   const [avisoRango, setAvisoRango] = useState("");
+  // TMS-PROGRAMACION-NAVEGACION-DIRECTA-PLAN: plan traído por su id (enlace
+  // "Ver en Programación" desde TMS, ?plan=ID), independiente de Hoy/
+  // Mañana/Semana — ver el efecto de abajo. Solo se usa como fallback en
+  // `planEditando`: en cuanto `planes`/`pendientesCierre` también lo
+  // traigan (p. ej. porque el rango se ajustó para incluirlo), esas listas
+  // ya "vivas" tienen prioridad.
+  const [planDirecto, setPlanDirecto] = useState<Plan | null>(null);
 
   // VIAT-4 (puntos 8-10) — reporte tradicional de Programación (Excel/PDF).
   // Fecha específica: dejar "hasta" igual a "desde". Rango: ajustar ambos.
@@ -556,6 +583,53 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [slug, desde, hasta]);
+
+  // TMS-PROGRAMACION-NAVEGACION-DIRECTA-PLAN: si llegó ?plan=ID desde TMS
+  // ("Ver en Programación"), trae ESE plan puntual por id — sin depender
+  // de qué período (Hoy/Mañana/Semana) esté seleccionado — y, cuando es
+  // posible, ajusta el período al que sí lo contiene. `planInicialId` es
+  // un valor inicial que llega del servidor (prop, no cambia durante la
+  // vida del componente) — este efecto corre una sola vez al montar, sin
+  // interferir con cambios posteriores de Hoy/Mañana/Semana hechos por el
+  // usuario.
+  useEffect(() => {
+    if (!planInicialId) return;
+    let ignore = false;
+    (async () => {
+      let plan: Plan | undefined;
+      try {
+        const res = await fetch(`/api/empresas/${slug}/tms/planes?id=${planInicialId}`);
+        const data = await res.json().catch(() => ({}));
+        if (ignore) return;
+        plan = res.ok ? ((data.planes ?? [])[0] as Plan | undefined) : undefined;
+      } catch {
+        if (ignore) return;
+        setAvisoRango("No se pudo cargar el plan solicitado por enlace directo.");
+        return;
+      }
+      if (!plan) {
+        // No existe, o pertenece a otra empresa (el backend siempre filtra
+        // por empresa_id) — nunca se distingue cuál de las dos: mismo
+        // criterio de "no revelar existencia" ya usado en otros módulos.
+        setAvisoRango(
+          `No se encontró el plan solicitado (#${planInicialId}). Puede que ya no exista o pertenezca a otra empresa.`,
+        );
+        return;
+      }
+      setPlanDirecto(plan);
+      const contenedor = rangoQueContiene(hoy, plan.fecha_plan);
+      if (contenedor) {
+        setRango(contenedor);
+      } else {
+        setAvisoRango(
+          `Mostrando el plan ${plan.codigo} (fecha ${plan.fecha_plan}), fuera del rango visible Hoy/Mañana/Semana. Ajusta los filtros de fecha para verlo también en el tablero.`,
+        );
+      }
+    })();
+    return () => {
+      ignore = true;
+    };
+  }, [planInicialId, slug, hoy]);
 
   async function cargar() {
     setLoading(true);
@@ -711,14 +785,19 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   // OPS-2.1: también busca en `pendientesCierre` — un viaje pendiente de
   // cierre puede quedar fuera del rango de fechas visible (`planes`) y aun
   // así el usuario lo abre desde el filtro rápido "Pendiente de cierre".
+  // TMS-PROGRAMACION-NAVEGACION-DIRECTA-PLAN: `planDirecto` es el último
+  // fallback — el plan traído puntualmente por ?plan=ID cuando ni el
+  // rango visible ni pendientesCierre lo cubren (p. ej. una fecha pasada).
+  // En cuanto `planes`/`pendientesCierre` sí lo traigan (rango ajustado),
+  // esas dos tienen prioridad sobre esta copia fija del montaje.
   const planEditando = useMemo(
     () =>
       editandoId != null
         ? (planes.find((p) => p.id === editandoId) ??
           pendientesCierre.find((p) => p.id === editandoId) ??
-          null)
+          (planDirecto?.id === editandoId ? planDirecto : null))
         : null,
-    [planes, pendientesCierre, editandoId],
+    [planes, pendientesCierre, planDirecto, editandoId],
   );
 
   function cerrarFormulario() {
