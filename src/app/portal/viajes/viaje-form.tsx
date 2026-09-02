@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import type { AsignacionOperativaPortal, ViajeAbiertoPiloto } from "@/lib/flota/viajes-piloto";
 import type { PlanParada } from "@/lib/tms/paradas";
+import { separarViajesPortal } from "@/lib/flota/viajes-portal-ui";
 
 function fechaEnEspanol(fecha: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return fecha || "Fecha pendiente";
@@ -75,6 +76,14 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
   const [camaraActiva, setCamaraActiva] = useState(false);
   const [foto, setFoto] = useState<{ blob: Blob; url: string; etapa: string } | null>(null);
   const odometroFuncional = viajeAbierto?.odometroFuncional ?? planSeleccionado?.odometroFuncional ?? true;
+  const { pendientes, finalizados } = useMemo(
+    () => separarViajesPortal(asignaciones),
+    [asignaciones],
+  );
+  const viajeDestacadoFinalizado = Boolean(
+    viajeDestacadoId && finalizados.some((a) => a.planId === viajeDestacadoId),
+  );
+  const [historialAbierto, setHistorialAbierto] = useState(viajeDestacadoFinalizado);
 
   // PORTAL-HARDENING-2 (Fase C): el piloto elige el tipo de evidencia y,
   // si es de parada, la dirección exacta — ya no se calcula "la
@@ -303,25 +312,45 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
     finally { setLoading(false); }
   }
 
+  function tarjetaViaje(a: AsignacionOperativaPortal) {
+    return <article id={`viaje-${a.planId}`} key={a.planId} className={`rounded-xl border p-4 text-sm ${a.planId === viajeDestacadoId ? "border-sky-400 bg-sky-950/20 ring-1 ring-sky-500/40" : "border-[var(--border)]"}`}>
+      <div className="flex flex-wrap items-center justify-between gap-2"><strong>{a.codigo}</strong><span className="rounded-full bg-[var(--input)] px-2 py-1 text-xs">{a.viajeEstado === "abierto" ? "EN VIAJE" : a.estado}</span></div>
+      <p className="mt-2 text-[var(--muted)]"><span className="text-[var(--foreground)]">Fecha de salida:</span> {fechaEnEspanol(a.fecha)}{a.horaSalida ? ` a las ${a.horaSalida.slice(0, 5)}` : ""}</p>
+      <p className="mt-1 text-[var(--muted)]"><span className="text-[var(--foreground)]">Cliente:</span> {a.cliente ?? "Sin cliente"}</p>
+      <p className="mt-1 text-[var(--muted)]"><span className="text-[var(--foreground)]">Ruta:</span> {a.origen ?? "Origen pendiente"} → {a.destino ?? "Destino pendiente"}</p>
+      <p className="mt-1 text-[var(--muted)]"><span className="text-[var(--foreground)]">Regreso estimado:</span> {regresoEnEspanol(a.regresoEstimado)}</p>
+      <p className="mt-1 text-[var(--muted)]"><span className="text-[var(--foreground)]">Unidad:</span> {a.placa ?? "Pendiente"} · <span className="text-[var(--foreground)]">Piloto:</span> {a.piloto ?? "Pendiente"}</p>
+      {a.auxiliares.length ? <p className="mt-1 text-[var(--muted)]">Auxiliares: {a.auxiliares.join(", ")}</p> : null}
+      {a.viaticoAsignado != null ? <p className="mt-1 text-[var(--muted)]"><span className="text-[var(--foreground)]">Viático asignado:</span> Q{a.viaticoAsignado.toFixed(2)} · <span className="text-[var(--foreground)]">Estado:</span> {ESTADO_VIATICO_LABEL[a.viaticoEstado ?? "PROGRAMADO"] ?? a.viaticoEstado}</p> : null}
+    </article>;
+  }
+
   return <div className="mt-6 space-y-5">
     {error ? <p className="rounded-lg border border-red-900/40 bg-red-950/20 p-3 text-sm text-red-300" role="alert">{error}</p> : null}
     {mensaje ? <p className="rounded-lg border border-emerald-900/40 bg-emerald-950/10 p-3 text-sm text-[#8fd4a0]" role="status">{mensaje}</p> : null}
 
     <section className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
-      <h2 className="font-semibold">Asignaciones</h2>
-      {!asignaciones.length ? <p className="mt-2 text-sm text-[var(--muted)]">No tienes viajes recientes o próximos asignados.</p> : <div className="mt-3 space-y-3">
-        {asignaciones.map((a) => <article id={`viaje-${a.planId}`} key={a.planId} className={`rounded-xl border p-4 text-sm ${a.planId === viajeDestacadoId ? "border-sky-400 bg-sky-950/20 ring-1 ring-sky-500/40" : "border-[var(--border)]"}`}>
-          <div className="flex flex-wrap items-center justify-between gap-2"><strong>{a.codigo}</strong><span className="rounded-full bg-[var(--input)] px-2 py-1 text-xs">{a.viajeEstado === "abierto" ? "EN VIAJE" : a.estado}</span></div>
-          <p className="mt-2 text-[var(--muted)]"><span className="text-[var(--foreground)]">Fecha de salida:</span> {fechaEnEspanol(a.fecha)}{a.horaSalida ? ` a las ${a.horaSalida.slice(0, 5)}` : ""}</p>
-          <p className="mt-1 text-[var(--muted)]"><span className="text-[var(--foreground)]">Cliente:</span> {a.cliente ?? "Sin cliente"}</p>
-          <p className="mt-1 text-[var(--muted)]"><span className="text-[var(--foreground)]">Ruta:</span> {a.origen ?? "Origen pendiente"} → {a.destino ?? "Destino pendiente"}</p>
-          <p className="mt-1 text-[var(--muted)]"><span className="text-[var(--foreground)]">Regreso estimado:</span> {regresoEnEspanol(a.regresoEstimado)}</p>
-          <p className="mt-1 text-[var(--muted)]"><span className="text-[var(--foreground)]">Unidad:</span> {a.placa ?? "Pendiente"} · <span className="text-[var(--foreground)]">Piloto:</span> {a.piloto ?? "Pendiente"}</p>
-          {a.auxiliares.length ? <p className="mt-1 text-[var(--muted)]">Auxiliares: {a.auxiliares.join(", ")}</p> : null}
-          {a.viaticoAsignado != null ? <p className="mt-1 text-[var(--muted)]"><span className="text-[var(--foreground)]">Viático asignado:</span> Q{a.viaticoAsignado.toFixed(2)} · <span className="text-[var(--foreground)]">Estado:</span> {ESTADO_VIATICO_LABEL[a.viaticoEstado ?? "PROGRAMADO"] ?? a.viaticoEstado}</p> : null}
-        </article>)}
-      </div>}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="font-semibold">Pendientes y en curso</h2>
+          <p className="mt-1 text-xs text-[var(--muted)]">Primero aparecen los viajes que aún requieren atención.</p>
+        </div>
+        <span className="rounded-full bg-[var(--input)] px-3 py-1 text-xs">{pendientes.length}</span>
+      </div>
+      {!pendientes.length ? <p className="mt-3 text-sm text-[var(--muted)]">No tienes viajes pendientes o en curso.</p> : <div className="mt-3 space-y-3">{pendientes.map(tarjetaViaje)}</div>}
     </section>
+
+    {finalizados.length ? <details
+      className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5"
+      open={historialAbierto}
+      onToggle={(event) => setHistorialAbierto(event.currentTarget.open)}
+    >
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 font-semibold">
+        <span>Viajes finalizados <span className="ml-1 text-xs font-normal text-[var(--muted)]">(mostrar/ocultar · más recientes primero)</span></span>
+        <span className="rounded-full bg-[var(--input)] px-3 py-1 text-xs font-normal">{finalizados.length}</span>
+      </summary>
+      <div className="mt-4 space-y-3">{finalizados.map(tarjetaViaje)}</div>
+    </details> : null}
 
     {viajeAbierto ? <section className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
       <h2 className="font-semibold">Avance del viaje · {asignacionEnCurso?.codigo ?? `#${viajeAbierto.id}`}</h2>
