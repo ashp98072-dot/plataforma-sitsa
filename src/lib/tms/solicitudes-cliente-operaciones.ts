@@ -35,6 +35,22 @@ import {
  * piloto/unidad.
  */
 
+/**
+ * AJUSTE PRE-MERGE PR #173 (punto 1) — el `catch` del reintento de
+ * código de plan (ver programarSolicitud más abajo) solo debe capturar
+ * la violación real del UNIQUE KEY (empresa_id, codigo), NUNCA
+ * cualquier error (FK, dato inválido, timeout, error de esquema…). Un
+ * error genérico capturado ahí como si fuera "código duplicado"
+ * generaría otro código y reintentaría indefinidamente en vez de
+ * abortar con rollback — escondiendo el error real. Mismo patrón ya
+ * usado en el proyecto (ver src/lib/facturacion/facturas.ts,
+ * esDuplicadoNumeroFactura).
+ */
+function esDuplicadoCodigoPlan(e: unknown): boolean {
+  const err = e as { code?: string; errno?: number };
+  return err?.code === "ER_DUP_ENTRY" || err?.errno === 1062;
+}
+
 export type SolicitudClienteInternaFila = {
   id: number;
   clienteId: number;
@@ -415,7 +431,14 @@ export async function programarSolicitud(
         );
         planId = Number(insertResult.insertId);
         break;
-      } catch {
+      } catch (err) {
+        // AJUSTE PRE-MERGE PR #173 (punto 1): SOLO un choque real del
+        // UNIQUE KEY (empresa_id, codigo) reintenta con otro código. Un
+        // error de cualquier otro tipo (FK, dato inválido, timeout,
+        // esquema…) se propaga tal cual — el catch exterior de la
+        // función hace el rollback real y devuelve el error verdadero,
+        // en vez de esconderlo detrás de un falso "código duplicado".
+        if (!esDuplicadoCodigoPlan(err)) throw err;
         codigoFinal = await asegurarCodigoPlanUnico(empresaId, fechaPlan, null);
       }
     }
@@ -428,28 +451,31 @@ export async function programarSolicitud(
       };
     }
 
-    // Copia de paradas: MISMO orden, tipo y lugar_nombre que la
-    // solicitud (ya vienen ORDER BY orden). `referencia` (texto libre de
-    // la parada) NO tiene columna equivalente en tms_plan_paradas —
-    // confirmado al investigar el esquema real antes de implementar
-    // (ver comentario del módulo). En vez de inventar una columna nueva
-    // (fuera de alcance: "NO SQL" es la instrucción por defecto de este
-    // ticket), se conserva la información visible concatenándola al
-    // lugar_nombre copiado — la referencia original íntegra sigue
-    // disponible de todas formas en la propia solicitud
-    // (tms_solicitud_paradas no se borra ni se modifica al programar).
-    const paradasPlan: ParadaInput[] = paradasRows.map((p) => {
-      const lugarNombre = String(p.lugar_nombre);
-      const referencia = p.referencia != null ? String(p.referencia).trim() : "";
-      const lugarConReferencia = referencia
-        ? `${lugarNombre} — ${referencia}`.slice(0, 200)
-        : lugarNombre;
-      return {
-        lugarNombre: lugarConReferencia,
-        tipo: String(p.tipo) as TipoSolicitudParada,
-        clienteUbicacionId: p.cliente_ubicacion_id != null ? Number(p.cliente_ubicacion_id) : null,
-      };
-    });
+    // AJUSTE PRE-MERGE PR #173 (punto 2): copia EXACTA — lugar_nombre,
+    // tipo y cliente_ubicacion_id se copian sin modificar, en el MISMO
+    // orden (ya vienen ORDER BY orden). Ya NO se concatena `referencia`
+    // a `lugar_nombre`: eso alteraba el dato histórico exacto que el
+    // cliente solicitó, podía truncar cualquiera de los dos campos, y
+    // tms_plan_paradas no tiene (ni este ticket crea) una columna
+    // `referencia` propia. La referencia completa de cada parada sigue
+    // disponible tal cual en tms_solicitud_paradas — la solicitud nunca
+    // se borra ni se modifica al programar, y queda enlazada al plan
+    // via tms_solicitudes_cliente.plan_id, así que el dato fuente no se
+    // pierde, solo no se duplica en el modelo del plan.
+    //
+    // RIESGO PENDIENTE documentado explícitamente: si en una fase
+    // posterior el piloto necesita ver la referencia de una parada
+    // (dirección/nota) directamente en el Portal del Piloto sin tener
+    // que consultar la solicitud original, hace falta un ticket
+    // explícito de modelo (agregar una columna `referencia` a
+    // tms_plan_paradas, o algún mecanismo de propagación) — no se
+    // resuelve aquí, a propósito, para no inventar SQL fuera de
+    // alcance.
+    const paradasPlan: ParadaInput[] = paradasRows.map((p) => ({
+      lugarNombre: String(p.lugar_nombre),
+      tipo: String(p.tipo) as TipoSolicitudParada,
+      clienteUbicacionId: p.cliente_ubicacion_id != null ? Number(p.cliente_ubicacion_id) : null,
+    }));
     const rParadas = await guardarParadasPlan(empresaId, planId, paradasPlan, conn);
     if (!rParadas.ok) {
       await conn.rollback();

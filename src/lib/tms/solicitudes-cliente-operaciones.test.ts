@@ -217,13 +217,15 @@ describe("programarSolicitud — conversión a plan (transaccional)", () => {
     expect(insertPlan![1][2]).toBe(30); // cliente_id = solicitud.cliente_id
 
     // Copia de paradas: mismo orden relativo (Carga, Entrega, Entrega, Descarga),
-    // vía guardarParadasPlan (reutilizado, no reimplementado).
+    // vía guardarParadasPlan (reutilizado, no reimplementado). AJUSTE
+    // PRE-MERGE PR #173 (punto 2): lugar_nombre EXACTO, sin concatenar
+    // `referencia` — ver test dedicado más abajo para el caso explícito.
     expect(guardarParadasPlan).toHaveBeenCalledWith(
       EMPRESA_ID,
       900,
       [
         expect.objectContaining({ tipo: "Carga", lugarNombre: "Bodega PriceSmart" }),
-        expect.objectContaining({ tipo: "Entrega", lugarNombre: "Sucursal 1 — Portón azul", clienteUbicacionId: 5 }),
+        expect.objectContaining({ tipo: "Entrega", lugarNombre: "Sucursal 1", clienteUbicacionId: 5 }),
         expect.objectContaining({ tipo: "Entrega", lugarNombre: "Sucursal 2" }),
         expect.objectContaining({ tipo: "Descarga", lugarNombre: "Bodega central" }),
       ],
@@ -293,9 +295,93 @@ describe("programarSolicitud — conversión a plan (transaccional)", () => {
     expect(conn.rollback).toHaveBeenCalledOnce();
   });
 
-  it("fallo creando el plan (INSERT lanza en los 5 intentos) → rollback total, sin UPDATE de solicitud", async () => {
+  // AJUSTE PRE-MERGE PR #173 (punto 2) — copia EXACTA de lugar_nombre,
+  // sin concatenar `referencia`. Ejemplo literal del ajuste.
+  it("copia lugar_nombre EXACTO — la referencia NO se concatena ni se pierde (sigue en tms_solicitud_paradas)", async () => {
+    conn.query.mockImplementation(async (sql: string) => {
+      const s = String(sql);
+      if (s.includes("FOR UPDATE")) return [[filaSolicitud()]];
+      if (s.includes("FROM tms_clientes")) return [[{ id: 30 }]];
+      if (s.includes("FROM tms_solicitud_paradas")) {
+        return [[
+          { orden: 1, tipo: "Carga", lugar_nombre: "Origen", cliente_ubicacion_id: null, referencia: null },
+          {
+            orden: 2,
+            tipo: "Entrega",
+            lugar_nombre: "PriceSmart Zona 10",
+            cliente_ubicacion_id: null,
+            referencia: "Entrada por portón 3",
+          },
+          { orden: 3, tipo: "Descarga", lugar_nombre: "Destino", cliente_ubicacion_id: null, referencia: null },
+        ]];
+      }
+      return [[]];
+    });
+    await programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1");
+    const paradasEnviadas = vi.mocked(guardarParadasPlan).mock.calls[0][2];
+    const entrega = paradasEnviadas.find((p) => p.tipo === "Entrega")!;
+    expect(entrega.lugarNombre).toBe("PriceSmart Zona 10");
+    expect(entrega.lugarNombre).not.toContain("Entrada por portón 3");
+    expect(entrega.lugarNombre).not.toContain(" — ");
+    // La referencia NO viaja al plan de ninguna forma — ParadaInput no
+    // tiene siquiera un campo para ella.
+    expect(entrega).not.toHaveProperty("referencia");
+  });
+
+  // AJUSTE PRE-MERGE PR #173 (punto 1) — CASO A: ER_DUP_ENTRY/errno 1062
+  // → SÍ se trata como choque de código: genera otro código y reintenta.
+  it("CASO A — INSERT choca con ER_DUP_ENTRY (código repetido) → genera otro código y reintenta, termina en éxito", async () => {
+    let intentos = 0;
     conn.execute.mockImplementation(async (sql: string) => {
-      if (String(sql).includes("INSERT INTO tms_planes_viaje")) throw new Error("duplicado simulado");
+      if (String(sql).includes("INSERT INTO tms_planes_viaje")) {
+        intentos++;
+        if (intentos < 3) {
+          const err = new Error("Duplicate entry") as Error & { code: string; errno: number };
+          err.code = "ER_DUP_ENTRY";
+          err.errno = 1062;
+          throw err;
+        }
+        return [{ insertId: 900, affectedRows: 1 }];
+      }
+      return [{ affectedRows: 1 }];
+    });
+    const r = await programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1");
+    expect(r).toEqual({ ok: true, planId: 900, planCodigo: "PLAN-20990115-001" });
+    expect(intentos).toBe(3);
+    expect(asegurarCodigoPlanUnico).toHaveBeenCalledTimes(3); // 1 inicial + 2 reintentos
+    expect(conn.rollback).not.toHaveBeenCalled();
+  });
+
+  // CASO B: un error que NO es ER_DUP_ENTRY/1062 (ej. FK, dato inválido,
+  // timeout) NUNCA se trata como código duplicado — se propaga tal cual,
+  // sin reintentar, y dispara rollback real con el error verdadero (no
+  // un mensaje falso de "código duplicado").
+  it("CASO B — INSERT falla con un error genérico (no ER_DUP_ENTRY) → NO reintenta, propaga el error real, rollback", async () => {
+    conn.execute.mockImplementation(async (sql: string) => {
+      if (String(sql).includes("INSERT INTO tms_planes_viaje")) {
+        throw new Error("ER_NO_REFERENCED_ROW_2: cliente_id no existe");
+      }
+      return [{ affectedRows: 1 }];
+    });
+    await expect(programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1")).rejects.toThrow(
+      "ER_NO_REFERENCED_ROW_2",
+    );
+    // Un solo intento — nunca reintentó generando otro código.
+    expect(conn.execute.mock.calls.filter(([sql]) => String(sql).includes("INSERT INTO tms_planes_viaje"))).toHaveLength(1);
+    expect(conn.rollback).toHaveBeenCalledOnce();
+    expect(conn.commit).not.toHaveBeenCalled();
+  });
+
+  // CASO C: 5 colisiones REALES consecutivas (ER_DUP_ENTRY todas las
+  // veces) → se agotan los reintentos, rollback, respuesta funcional de
+  // conflicto (nunca una excepción sin manejar).
+  it("CASO C — 5 colisiones ER_DUP_ENTRY consecutivas → rollback, respuesta funcional de conflicto", async () => {
+    conn.execute.mockImplementation(async (sql: string) => {
+      if (String(sql).includes("INSERT INTO tms_planes_viaje")) {
+        const err = new Error("Duplicate entry") as Error & { code: string };
+        err.code = "ER_DUP_ENTRY";
+        throw err;
+      }
       return [{ affectedRows: 1 }];
     });
     const r = await programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1");
@@ -304,6 +390,7 @@ describe("programarSolicitud — conversión a plan (transaccional)", () => {
       status: 409,
       mensaje: "No se pudo generar un código de plan único. Intenta de nuevo.",
     });
+    expect(conn.execute.mock.calls.filter(([sql]) => String(sql).includes("INSERT INTO tms_planes_viaje"))).toHaveLength(5);
     expect(conn.rollback).toHaveBeenCalledOnce();
     expect(conn.commit).not.toHaveBeenCalled();
     expect(
