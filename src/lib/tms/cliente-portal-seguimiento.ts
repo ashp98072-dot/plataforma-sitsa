@@ -63,14 +63,24 @@ import {
  *        Es decir: FUENTE LEGACY/PARCIAL, pensada para reportes de
  *        staff por plan_id directo — NO se usa aquí como fuente de
  *        contenido (evitaría duplicar la misma foto dos veces si el
- *        espejo sí existe) — SÍ se reutiliza indirectamente para el
- *        CONTEO de "evidencias por parada" a través de
- *        listarParadasDelPlan (que ya suma ambas tablas por
- *        parada_id — ver src/lib/tms/paradas.ts), porque un conteo
- *        que sume de más nunca ocurre en la práctica (tms_evidencias
- *        nunca tiene una fila que flota_viaje_evidencias no tenga
- *        también, al ser siempre una copia posterior de esa misma
- *        fila) y es el helper YA EXISTENTE, reutilizado tal cual.
+ *        espejo sí existe).
+ *        AJUSTE PRE-MERGE PR #174 (punto 1): el CONTEO de "evidencias
+ *        por parada" mostrado al cliente YA NO reutiliza el campo
+ *        `evidencias` de listarParadasDelPlan() — ese campo suma
+ *        flota_viaje_evidencias + tms_evidencias para reportes
+ *        internos de staff, y por tanto PUEDE contar dos veces la
+ *        misma foto cuando el espejo en tms_evidencias también existe
+ *        (la afirmación original de que "un conteo que sume de más
+ *        nunca ocurre en la práctica" era INCORRECTA: tms_evidencias
+ *        es un espejo de flota_viaje_evidencias, no una fuente
+ *        independiente, así que sumar ambas SÍ duplica la misma foto
+ *        cuando el espejo existe). El conteo del Portal Cliente ahora
+ *        tiene su propia consulta batch
+ *        (conteoEvidenciasVigentesPorParada, más abajo) que cuenta
+ *        EXCLUSIVAMENTE flota_viaje_evidencias — una sola consulta
+ *        para todas las paradas del plan, sin N+1. listarParadasDelPlan
+ *        se sigue reutilizando tal cual, pero solo para id/orden/tipo/
+ *        lugar_nombre, nunca para `evidencias`.
  *      - Vínculo evidencia -> plan: SIEMPRE indirecto vía
  *        flota_viajes.plan_id (flota_viaje_evidencias solo tiene
  *        viaje_id, nunca plan_id directo). Si un flota_viajes nunca se
@@ -132,7 +142,13 @@ import {
 // Estado del viaje — mapeo documentado, sin inventar estados nuevos.
 // ============================================================
 
-export const ESTADO_VIAJE_PORTAL = ["PROGRAMADO", "EN_RUTA", "FINALIZADO", "CANCELADO"] as const;
+export const ESTADO_VIAJE_PORTAL = [
+  "PROGRAMADO",
+  "EN_RUTA",
+  "FINALIZADO",
+  "CANCELADO",
+  "DESCONOCIDO",
+] as const;
 export type EstadoViajePortal = (typeof ESTADO_VIAJE_PORTAL)[number];
 
 /**
@@ -144,6 +160,17 @@ export type EstadoViajePortal = (typeof ESTADO_VIAJE_PORTAL)[number];
  * distinción "Descargado vs. Cerrado" es puramente administrativa
  * interna (cierre de Operaciones, permiso viajes_cerrar) y no aporta
  * nada útil al cliente, que solo necesita saber si su carga ya llegó.
+ *
+ * AJUSTE PRE-MERGE PR #174 (punto 3): `tms_planes_viaje.estado` es
+ * VARCHAR libre, sin ENUM — un estado real futuro no documentado aquí
+ * ("En aduana", "Retenido", etc.) NO puede mostrarse engañosamente
+ * como "Programado" (mapear a PROGRAMADO por defecto sugeriría al
+ * cliente que su viaje simplemente aún no salió, cuando en realidad es
+ * un estado operativo que ni siquiera reconocemos). Un estado no
+ * reconocido se mapea a DESCONOCIDO explícito ("Estado por confirmar"
+ * en la UI) — el texto libre interno (`estadoReal`) se conserva aparte
+ * en el resultado para diagnóstico interno, pero NUNCA se expone tal
+ * cual al cliente sin pasar por este mapeo aprobado.
  */
 export function estadoViajePortal(estadoReal: string): EstadoViajePortal {
   switch (estadoReal) {
@@ -158,11 +185,7 @@ export function estadoViajePortal(estadoReal: string): EstadoViajePortal {
     case "Cancelado":
       return "CANCELADO";
     default:
-      // Estado real no documentado (no debería ocurrir — VARCHAR libre,
-      // ver comentario de la máquina de estados arriba): se muestra
-      // como PROGRAMADO por defecto en vez de fallar, y queda visible
-      // el estado real sin traducir en `estadoRealPlan` del resultado.
-      return "PROGRAMADO";
+      return "DESCONOCIDO";
   }
 }
 
@@ -221,11 +244,14 @@ export type ParadaSeguimiento = {
   lugarNombre: string;
   /**
    * Único criterio de "completada" disponible HOY en el modelo real:
-   * al menos 1 evidencia asociada a esta parada (ver discovery, sección
-   * 6 del ticket: no existe ningún estado explícito "completada" en
-   * tms_plan_paradas — investigado, no inventado).
+   * al menos 1 evidencia VIGENTE asociada a esta parada (ver discovery,
+   * sección 6 del ticket: no existe ningún estado explícito
+   * "completada" en tms_plan_paradas — investigado, no inventado).
    */
   completada: boolean;
+  /** Conteo VIGENTE (flota_viaje_evidencias únicamente) — ver
+   * conteoEvidenciasVigentesPorParada, AJUSTE PRE-MERGE PR #174. Nunca
+   * la suma legacy+vigente de listarParadasDelPlan(). */
   cantidadEvidencias: number;
 };
 
@@ -245,6 +271,35 @@ export type SeguimientoSolicitudCliente = {
   solicitud: SolicitudClienteDetalle;
   plan: PlanSeguimiento | null;
 };
+
+/**
+ * AJUSTE PRE-MERGE PR #174 (punto 1) — conteo VIGENTE (Portal Cliente)
+ * de evidencias por parada. A diferencia de listarParadasDelPlan()
+ * (paradas.ts, que suma flota_viaje_evidencias + tms_evidencias para
+ * reportes internos de staff), esto cuenta EXCLUSIVAMENTE
+ * flota_viaje_evidencias — evita contar dos veces la misma fotografía
+ * cuando el espejo en tms_evidencias también existe (ver discovery
+ * arriba). Una sola consulta batch para TODAS las paradas del plan
+ * (GROUP BY parada_id), nunca una consulta por parada (sin N+1).
+ */
+async function conteoEvidenciasVigentesPorParada(
+  empresaId: number,
+  planId: number,
+): Promise<Map<number, number>> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT e.parada_id, COUNT(*) AS n
+     FROM flota_viaje_evidencias e
+     JOIN flota_viajes v ON v.id = e.viaje_id
+     WHERE e.empresa_id = ? AND v.empresa_id = ? AND v.plan_id = ? AND e.parada_id IS NOT NULL
+     GROUP BY e.parada_id`,
+    [empresaId, empresaId, planId],
+  );
+  const map = new Map<number, number>();
+  for (const r of rows) {
+    map.set(Number(r.parada_id), Number(r.n));
+  }
+  return map;
+}
 
 /**
  * Punto de entrada ÚNICO de seguimiento — la cadena de autorización
@@ -286,15 +341,23 @@ export async function obtenerSeguimientoSolicitudCliente(
     return null;
   }
 
+  // listarParadasDelPlan() se reutiliza SOLO para id/orden/tipo/
+  // lugar_nombre — su campo `evidencias` (suma legacy+vigente, pensado
+  // para reportes internos de staff) NUNCA se usa como cantidad visible
+  // del Portal Cliente (ver AJUSTE PRE-MERGE PR #174, punto 1).
   const paradasPlan = await listarParadasDelPlan(Number(p.id));
-  const paradas: ParadaSeguimiento[] = paradasPlan.map((pp: PlanParada) => ({
-    id: pp.id,
-    orden: pp.orden,
-    tipo: pp.tipo,
-    lugarNombre: pp.lugar_nombre,
-    completada: pp.evidencias > 0,
-    cantidadEvidencias: pp.evidencias,
-  }));
+  const conteoVigente = await conteoEvidenciasVigentesPorParada(empresaId, Number(p.id));
+  const paradas: ParadaSeguimiento[] = paradasPlan.map((pp: PlanParada) => {
+    const cantidadEvidencias = conteoVigente.get(pp.id) ?? 0;
+    return {
+      id: pp.id,
+      orden: pp.orden,
+      tipo: pp.tipo,
+      lugarNombre: pp.lugar_nombre,
+      completada: cantidadEvidencias > 0,
+      cantidadEvidencias,
+    };
+  });
 
   const plan: PlanSeguimiento = {
     id: Number(p.id),
@@ -395,10 +458,19 @@ export async function listarViajesCliente(
   const planIds = [...new Set(solicitudes.map((s) => s.planId).filter((id): id is number => id != null))];
   const planPorId = new Map<number, { codigo: string; estado: string }>();
   if (planIds.length) {
+    // AJUSTE PRE-MERGE PR #174 (punto 2) — defensa en profundidad: el
+    // mismo criterio explícito empresaId+clienteId que
+    // obtenerSeguimientoSolicitudCliente() aplica al detalle, aplicado
+    // aquí también. Aunque los planIds provienen de solicitudes ya
+    // scoped por cliente, esto evita que un planId inconsistente (bug
+    // futuro, dato corrupto) enriquezca con código/estado del plan de
+    // OTRO cliente de la misma empresa — un plan que no matchea
+    // simplemente no aparece en `rows`, y esa solicitud queda con
+    // planCodigo/estadoViaje en null (ver el .map de abajo).
     const rows = await query<RowDataPacket[]>(
       `SELECT id, codigo, estado FROM tms_planes_viaje
-       WHERE empresa_id = ? AND id IN (${planIds.map(() => "?").join(",")})`,
-      [empresaId, ...planIds],
+       WHERE empresa_id = ? AND cliente_id = ? AND id IN (${planIds.map(() => "?").join(",")})`,
+      [empresaId, clienteId, ...planIds],
     );
     for (const r of rows) {
       planPorId.set(Number(r.id), { codigo: String(r.codigo), estado: String(r.estado) });
@@ -439,12 +511,17 @@ export type ResumenSeguimientoCliente = {
  * Números del dashboard basados en el estado LIVE del viaje (no solo el
  * estado de la solicitud) — construidos sobre listarViajesCliente()
  * (misma consulta que el historial), nunca una fuente aparte. Cada
- * solicitud PROGRAMADA cae en EXACTAMENTE un bucket de viaje (nunca se
- * cuenta dos veces): Programado, En ruta o Finalizado. Un plan
- * Cancelado por Operaciones DESPUÉS de programar se agrupa dentro de
- * "viajesFinalizados" por simplicidad del dashboard (ya no está
- * activo) — se documenta aquí explícitamente en vez de crear un sexto
- * contador para un caso extremo.
+ * solicitud PROGRAMADA cae en EXACTAMENTE un bucket (nunca se cuenta
+ * dos veces).
+ *
+ * AJUSTE PRE-MERGE PR #174 (punto 4): un plan Cancelado por Operaciones
+ * DESPUÉS de programar YA NO se agrupa dentro de "viajesFinalizados"
+ * (un viaje cancelado no es un viaje que llegó a su destino — agruparlo
+ * ahí inflaba esa tarjeta con viajes que en realidad no se completaron).
+ * En su lugar se agrupa junto con RECHAZADA/CANCELADA dentro de
+ * `rechazadasCanceladas` (mismo criterio: "esta solicitud/viaje ya no
+ * está activo, no requiere seguimiento"), preferido sobre agregar un
+ * sexto contador nuevo en el dashboard para un caso extremo.
  */
 export async function resumenSeguimientoCliente(
   empresaId: number,
@@ -464,8 +541,12 @@ export async function resumenSeguimientoCliente(
       rechazadasCanceladas++;
     } else if (v.estadoSolicitud === "PROGRAMADA") {
       if (v.estadoViaje === "EN_RUTA") viajesEnRuta++;
-      else if (v.estadoViaje === "FINALIZADO" || v.estadoViaje === "CANCELADO") viajesFinalizados++;
-      else viajesProgramados++; // PROGRAMADO, o nulo (no debería pasar si planId está seteado)
+      else if (v.estadoViaje === "FINALIZADO") viajesFinalizados++;
+      else if (v.estadoViaje === "CANCELADO") rechazadasCanceladas++;
+      // PROGRAMADO, DESCONOCIDO, o nulo (defensa en profundidad del
+      // punto 2 — un plan que no matchea empresa/cliente no enriquece
+      // y llega aquí como estadoViaje null): bucket seguro por defecto.
+      else viajesProgramados++;
     }
   }
 

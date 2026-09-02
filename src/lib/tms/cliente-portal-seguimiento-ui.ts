@@ -12,6 +12,7 @@ export const ESTADO_VIAJE_LABELS: Record<EstadoViajePortal, string> = {
   EN_RUTA: "En ruta",
   FINALIZADO: "Finalizado",
   CANCELADO: "Cancelado",
+  DESCONOCIDO: "Estado por confirmar",
 };
 
 export function etiquetaEstadoViaje(estado: string): string {
@@ -23,6 +24,7 @@ const ESTADO_VIAJE_CLASES: Record<EstadoViajePortal, string> = {
   EN_RUTA: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
   FINALIZADO: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
   CANCELADO: "bg-gray-500/15 text-gray-600 dark:text-gray-300",
+  DESCONOCIDO: "bg-gray-500/15 text-gray-600 dark:text-gray-300",
 };
 
 export function claseEstadoViaje(estado: string): string {

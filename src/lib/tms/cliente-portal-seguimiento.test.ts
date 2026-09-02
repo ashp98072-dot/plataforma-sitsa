@@ -75,9 +75,21 @@ function planParada(overrides: Partial<PlanParada> = {}): PlanParada {
     lugar_nombre: "Bodega PriceSmart",
     tipo: "Carga",
     requiere_evidencia: true,
-    evidencias: 0,
+    // AJUSTE PRE-MERGE PR #174 — este campo (suma legacy+vigente de
+    // paradas.ts) YA NO se usa como cantidad visible del portal; se deja
+    // deliberadamente distinto del conteo vigente esperado en los tests
+    // de abajo para demostrar que el módulo ya NO lo reutiliza.
+    evidencias: 99,
     ...overrides,
   };
+}
+
+/** Encadena los 2 mocks de query() que consume obtenerSeguimientoSolicitudCliente
+ * cuando la solicitud tiene plan: 1) fila del plan, 2) conteo vigente por parada. */
+function mockPlanYConteo(filaPlanRow: Record<string, unknown>, conteoRows: Record<string, unknown>[] = []) {
+  vi.mocked(query)
+    .mockResolvedValueOnce([filaPlanRow] as never) // plan
+    .mockResolvedValueOnce(conteoRows as never); // conteoEvidenciasVigentesPorParada
 }
 
 beforeEach(() => {
@@ -92,9 +104,14 @@ describe("estadoViajePortal — mapeo de estados reales, sin inventar estados nu
     ["Descargado", "FINALIZADO"],
     ["Cerrado", "FINALIZADO"],
     ["Cancelado", "CANCELADO"],
-    ["EstadoInventado", "PROGRAMADO"],
   ] as const)("%s → %s", (real, esperado) => {
     expect(estadoViajePortal(real)).toBe(esperado);
+  });
+
+  it("AJUSTE PRE-MERGE PR #174 (punto 3): estado real NO reconocido → DESCONOCIDO, nunca PROGRAMADO", () => {
+    expect(estadoViajePortal("En aduana")).toBe("DESCONOCIDO");
+    expect(estadoViajePortal("Retenido")).toBe("DESCONOCIDO");
+    expect(estadoViajePortal("")).toBe("DESCONOCIDO");
   });
 });
 
@@ -129,10 +146,10 @@ describe("obtenerSeguimientoSolicitudCliente — cadena de autorización complet
 
   it("caso feliz: plan propio, con paradas — mapea estado/paradas/completada correctamente", async () => {
     vi.mocked(obtenerSolicitudCliente).mockResolvedValue(solicitud());
-    vi.mocked(query).mockResolvedValueOnce([filaPlan({ estado: "En ruta" })] as never);
+    mockPlanYConteo(filaPlan({ estado: "En ruta" }), [{ parada_id: 1, n: 1 }]);
     vi.mocked(listarParadasDelPlan).mockResolvedValue([
-      planParada({ id: 1, orden: 1, tipo: "Carga", evidencias: 1 }),
-      planParada({ id: 2, orden: 2, tipo: "Entrega", evidencias: 0 }),
+      planParada({ id: 1, orden: 1, tipo: "Carga" }),
+      planParada({ id: 2, orden: 2, tipo: "Entrega" }),
     ]);
     const r = await obtenerSeguimientoSolicitudCliente(EMPRESA_ID, CLIENTE_ID, SOLICITUD_ID);
     expect(r?.plan?.estadoPortal).toBe("EN_RUTA");
@@ -142,13 +159,56 @@ describe("obtenerSeguimientoSolicitudCliente — cadena de autorización complet
     ]);
   });
 
+  it("AJUSTE PRE-MERGE PR #174 (punto 1): foto reflejada en flota_viaje_evidencias Y tms_evidencias → cantidadEvidencias = 1, NUNCA 2", async () => {
+    vi.mocked(obtenerSolicitudCliente).mockResolvedValue(solicitud());
+    // El conteo vigente (batch, solo flota_viaje_evidencias) devuelve n=1
+    // para la parada 1 — independientemente de que exista también un
+    // espejo en tms_evidencias (esa tabla ya NO se consulta aquí).
+    mockPlanYConteo(filaPlan(), [{ parada_id: 1, n: 1 }]);
+    vi.mocked(listarParadasDelPlan).mockResolvedValue([planParada({ id: 1, evidencias: 2 })]);
+    const r = await obtenerSeguimientoSolicitudCliente(EMPRESA_ID, CLIENTE_ID, SOLICITUD_ID);
+    expect(r?.plan?.paradas[0].cantidadEvidencias).toBe(1);
+    expect(r?.plan?.paradas[0].completada).toBe(true);
+    // La consulta de conteo es SOLO contra flota_viaje_evidencias.
+    const [sqlConteo] = vi.mocked(query).mock.calls[1];
+    expect(String(sqlConteo)).toContain("flota_viaje_evidencias");
+    expect(String(sqlConteo)).not.toContain("tms_evidencias");
+  });
+
+  it("conteo vigente batch: una sola consulta para TODAS las paradas del plan (sin N+1)", async () => {
+    vi.mocked(obtenerSolicitudCliente).mockResolvedValue(solicitud());
+    mockPlanYConteo(filaPlan(), [
+      { parada_id: 1, n: 3 },
+      { parada_id: 2, n: 0 },
+    ]);
+    vi.mocked(listarParadasDelPlan).mockResolvedValue([
+      planParada({ id: 1 }),
+      planParada({ id: 2 }),
+      planParada({ id: 3 }), // sin fila en el conteo → 0
+    ]);
+    const r = await obtenerSeguimientoSolicitudCliente(EMPRESA_ID, CLIENTE_ID, SOLICITUD_ID);
+    expect(r?.plan?.paradas.map((p) => p.cantidadEvidencias)).toEqual([3, 0, 0]);
+    // Exactamente 2 llamadas a query(): fila del plan + conteo batch —
+    // nunca una consulta adicional por parada.
+    expect(vi.mocked(query).mock.calls).toHaveLength(2);
+  });
+
   it("plan sin piloto ni unidad asignados → pilotoNombre/unidadPlaca null (no rompe)", async () => {
     vi.mocked(obtenerSolicitudCliente).mockResolvedValue(solicitud());
-    vi.mocked(query).mockResolvedValueOnce([filaPlan()] as never);
+    mockPlanYConteo(filaPlan());
     vi.mocked(listarParadasDelPlan).mockResolvedValue([]);
     const r = await obtenerSeguimientoSolicitudCliente(EMPRESA_ID, CLIENTE_ID, SOLICITUD_ID);
     expect(r?.plan?.pilotoNombre).toBeNull();
     expect(r?.plan?.unidadPlaca).toBeNull();
+  });
+
+  it("estado real no reconocido en el plan → estadoPortal DESCONOCIDO, estadoReal conserva el texto original", async () => {
+    vi.mocked(obtenerSolicitudCliente).mockResolvedValue(solicitud());
+    mockPlanYConteo(filaPlan({ estado: "En aduana" }));
+    vi.mocked(listarParadasDelPlan).mockResolvedValue([]);
+    const r = await obtenerSeguimientoSolicitudCliente(EMPRESA_ID, CLIENTE_ID, SOLICITUD_ID);
+    expect(r?.plan?.estadoPortal).toBe("DESCONOCIDO");
+    expect(r?.plan?.estadoReal).toBe("En aduana");
   });
 });
 
@@ -161,19 +221,19 @@ describe("obtenerEvidenciasParadaCliente — IDOR: nunca por paradaId suelto", (
 
   it("paradaId que NO pertenece al plan autorizado (de otro plan) → null, nunca consulta evidencias", async () => {
     vi.mocked(obtenerSolicitudCliente).mockResolvedValue(solicitud());
-    vi.mocked(query).mockResolvedValueOnce([filaPlan()] as never);
+    mockPlanYConteo(filaPlan());
     vi.mocked(listarParadasDelPlan).mockResolvedValue([planParada({ id: 1 })]);
     const r = await obtenerEvidenciasParadaCliente(EMPRESA_ID, CLIENTE_ID, SOLICITUD_ID, 999);
     expect(r).toBeNull();
-    // Solo la consulta del plan — nunca llegó a evidenciasDeParada.
-    expect(vi.mocked(query).mock.calls).toHaveLength(1);
+    // Solo las 2 consultas del seguimiento (plan + conteo) — nunca llegó
+    // a evidenciasDeParada.
+    expect(vi.mocked(query).mock.calls).toHaveLength(2);
   });
 
   it("parada sin viajes vinculados (flota_viajes vacío) → []", async () => {
     vi.mocked(obtenerSolicitudCliente).mockResolvedValue(solicitud());
-    vi.mocked(query)
-      .mockResolvedValueOnce([filaPlan()] as never) // plan
-      .mockResolvedValueOnce([] as never); // flota_viajes
+    mockPlanYConteo(filaPlan());
+    vi.mocked(query).mockResolvedValueOnce([] as never); // flota_viajes
     vi.mocked(listarParadasDelPlan).mockResolvedValue([planParada({ id: 1 })]);
     const r = await obtenerEvidenciasParadaCliente(EMPRESA_ID, CLIENTE_ID, SOLICITUD_ID, 1);
     expect(r).toEqual([]);
@@ -181,20 +241,20 @@ describe("obtenerEvidenciasParadaCliente — IDOR: nunca por paradaId suelto", (
 
   it("parada con N evidencias — resueltas vía flota_viajes.plan_id → flota_viaje_evidencias", async () => {
     vi.mocked(obtenerSolicitudCliente).mockResolvedValue(solicitud());
+    mockPlanYConteo(filaPlan(), [{ parada_id: 1, n: 2 }]);
     vi.mocked(query)
-      .mockResolvedValueOnce([filaPlan()] as never) // plan
       .mockResolvedValueOnce([{ id: 55 }] as never) // flota_viajes del plan
       .mockResolvedValueOnce([
         { id: 1, tipo: "producto", capturado_en: "2026-09-02 10:00:00", nombre_original: "foto1.jpg" },
         { id: 2, tipo: "producto", capturado_en: "2026-09-02 10:05:00", nombre_original: "foto2.jpg" },
       ] as never); // flota_viaje_evidencias
-    vi.mocked(listarParadasDelPlan).mockResolvedValue([planParada({ id: 1, evidencias: 2 })]);
+    vi.mocked(listarParadasDelPlan).mockResolvedValue([planParada({ id: 1 })]);
     const r = await obtenerEvidenciasParadaCliente(EMPRESA_ID, CLIENTE_ID, SOLICITUD_ID, 1);
     expect(r).toEqual([
       { id: 1, tipo: "producto", capturadoEn: "2026-09-02 10:00:00", nombreOriginal: "foto1.jpg" },
       { id: 2, tipo: "producto", capturadoEn: "2026-09-02 10:05:00", nombreOriginal: "foto2.jpg" },
     ]);
-    const [sql, params] = vi.mocked(query).mock.calls[2];
+    const [sql, params] = vi.mocked(query).mock.calls[3];
     expect(String(sql)).toContain("flota_viaje_evidencias");
     expect(params).toEqual([EMPRESA_ID, 1, 55]);
   });
@@ -203,8 +263,8 @@ describe("obtenerEvidenciasParadaCliente — IDOR: nunca por paradaId suelto", (
 describe("obtenerEvidenciaClienteParaArchivo — nunca sirve un archivo sin revalidar TODA la cadena", () => {
   it("evidenciaId que no pertenece a la parada autorizada (aunque exista en otro plan) → null", async () => {
     vi.mocked(obtenerSolicitudCliente).mockResolvedValue(solicitud());
+    mockPlanYConteo(filaPlan(), [{ parada_id: 1, n: 1 }]);
     vi.mocked(query)
-      .mockResolvedValueOnce([filaPlan()] as never)
       .mockResolvedValueOnce([{ id: 55 }] as never)
       .mockResolvedValueOnce([
         { id: 1, tipo: "producto", capturado_en: null, nombre_original: "foto1.jpg" },
@@ -213,13 +273,13 @@ describe("obtenerEvidenciaClienteParaArchivo — nunca sirve un archivo sin reva
     const r = await obtenerEvidenciaClienteParaArchivo(EMPRESA_ID, CLIENTE_ID, SOLICITUD_ID, 1, 999);
     expect(r).toBeNull();
     // Nunca llega a pedir la ruta del archivo para una evidencia no autorizada.
-    expect(vi.mocked(query).mock.calls).toHaveLength(3);
+    expect(vi.mocked(query).mock.calls).toHaveLength(4);
   });
 
   it("evidencia válida → devuelve ruta relativa (nunca ruta absoluta) + nombre + mime", async () => {
     vi.mocked(obtenerSolicitudCliente).mockResolvedValue(solicitud());
+    mockPlanYConteo(filaPlan(), [{ parada_id: 1, n: 1 }]);
     vi.mocked(query)
-      .mockResolvedValueOnce([filaPlan()] as never)
       .mockResolvedValueOnce([{ id: 55 }] as never)
       .mockResolvedValueOnce([
         { id: 1, tipo: "producto", capturado_en: null, nombre_original: "foto1.jpg" },
@@ -256,7 +316,7 @@ describe("listarViajesCliente — extiende listarSolicitudesCliente, NO es una s
     expect(query).not.toHaveBeenCalled();
   });
 
-  it("enriquece solicitudes PROGRAMADA con el estado/código LIVE del plan (una sola consulta batched)", async () => {
+  it("enriquece solicitudes PROGRAMADA con el estado/código LIVE del plan (una sola consulta batched, scoped por empresa+cliente)", async () => {
     vi.mocked(listarSolicitudesCliente).mockResolvedValue([
       {
         id: 1,
@@ -278,6 +338,29 @@ describe("listarViajesCliente — extiende listarSolicitudesCliente, NO es una s
       estadoViaje: "EN_RUTA",
     });
     expect(vi.mocked(query).mock.calls).toHaveLength(1);
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(String(sql)).toContain("cliente_id = ?");
+    expect(params).toEqual([EMPRESA_ID, CLIENTE_ID, PLAN_ID]);
+  });
+
+  it("AJUSTE PRE-MERGE PR #174 (punto 2): planId de una solicitud scoped del cliente A que (por dato inconsistente) apunta a un plan de OTRO cliente en la MISMA empresa → NO enriquece, planCodigo/estadoViaje quedan null", async () => {
+    vi.mocked(listarSolicitudesCliente).mockResolvedValue([
+      {
+        id: 1,
+        estado: "PROGRAMADA",
+        fechaSolicitada: "2099-01-15",
+        horaSolicitada: null,
+        referenciaCliente: null,
+        cantidadEntregas: 1,
+        planId: PLAN_ID,
+        creadoEn: "2026-09-02 08:00:00",
+      },
+    ]);
+    // Simula lo que MySQL devolvería con el filtro `cliente_id = ?` real:
+    // el plan #900 existe, pero es de otro cliente → 0 filas.
+    vi.mocked(query).mockResolvedValueOnce([] as never);
+    const r = await listarViajesCliente(EMPRESA_ID, CLIENTE_ID);
+    expect(r[0]).toMatchObject({ planId: PLAN_ID, planCodigo: null, estadoViaje: null });
   });
 });
 
@@ -305,5 +388,18 @@ describe("resumenSeguimientoCliente — bucketing sin doble conteo", () => {
       rechazadasCanceladas: 1,
       total: 6,
     });
+  });
+
+  it("AJUSTE PRE-MERGE PR #174 (punto 4): 1 plan CANCELADO → viajesFinalizados = 0, rechazadasCanceladas += 1", async () => {
+    vi.mocked(listarSolicitudesCliente).mockResolvedValue([
+      { id: 1, estado: "PROGRAMADA", fechaSolicitada: "2099-01-01", horaSolicitada: null, referenciaCliente: null, cantidadEntregas: 1, planId: 901, creadoEn: "x" },
+    ]);
+    vi.mocked(query).mockResolvedValueOnce([
+      { id: 901, codigo: "P1", estado: "Cancelado" },
+    ] as never);
+    const r = await resumenSeguimientoCliente(EMPRESA_ID, CLIENTE_ID);
+    expect(r.viajesFinalizados).toBe(0);
+    expect(r.rechazadasCanceladas).toBe(1);
+    expect(r.total).toBe(1);
   });
 });
