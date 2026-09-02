@@ -522,6 +522,18 @@ export type ResumenSeguimientoCliente = {
  * `rechazadasCanceladas` (mismo criterio: "esta solicitud/viaje ya no
  * está activo, no requiere seguimiento"), preferido sobre agregar un
  * sexto contador nuevo en el dashboard para un caso extremo.
+ *
+ * ÚLTIMO AJUSTE PRE-MERGE PR #174 (punto 1): un `estadoViaje`
+ * DESCONOCIDO o null (planId inconsistente, plan que no coincide
+ * empresa+cliente — ver defensa en profundidad del punto 2 anterior,
+ * dato corrupto, o simplemente un plan que la consulta batch no
+ * encontró) YA NO cae en el bucket "viajesProgramados" por defecto —
+ * eso sería mostrarle al cliente, indirectamente, un viaje cuyo estado
+ * real ni siquiera reconocemos como si fuera "programado normal", lo
+ * mismo que se corrigió para estadoViajePortal() en el punto 3 de la
+ * ronda anterior. Ninguno de los 4 contadores lo suma — `total` (el
+ * total real de solicitudes) sigue reflejándolo igual. No se agrega un
+ * sexto contador en este ticket.
  */
 export async function resumenSeguimientoCliente(
   empresaId: number,
@@ -540,13 +552,15 @@ export async function resumenSeguimientoCliente(
     } else if (v.estadoSolicitud === "RECHAZADA" || v.estadoSolicitud === "CANCELADA") {
       rechazadasCanceladas++;
     } else if (v.estadoSolicitud === "PROGRAMADA") {
-      if (v.estadoViaje === "EN_RUTA") viajesEnRuta++;
+      // Explícito por valor — nunca un `else` catch-all: DESCONOCIDO y
+      // null (defensa en profundidad del punto 2 — un plan que no
+      // matchea empresa/cliente no enriquece y llega aquí como
+      // estadoViaje null) NO se contabilizan en ningún bucket de viaje;
+      // `total` sigue reflejando la solicitud igual.
+      if (v.estadoViaje === "PROGRAMADO") viajesProgramados++;
+      else if (v.estadoViaje === "EN_RUTA") viajesEnRuta++;
       else if (v.estadoViaje === "FINALIZADO") viajesFinalizados++;
       else if (v.estadoViaje === "CANCELADO") rechazadasCanceladas++;
-      // PROGRAMADO, DESCONOCIDO, o nulo (defensa en profundidad del
-      // punto 2 — un plan que no matchea empresa/cliente no enriquece
-      // y llega aquí como estadoViaje null): bucket seguro por defecto.
-      else viajesProgramados++;
     }
   }
 

@@ -402,4 +402,35 @@ describe("resumenSeguimientoCliente — bucketing sin doble conteo", () => {
     expect(r.rechazadasCanceladas).toBe(1);
     expect(r.total).toBe(1);
   });
+
+  it("ÚLTIMO AJUSTE PRE-MERGE PR #174 (punto 1.A): 1 solicitud PROGRAMADA con estadoViaje DESCONOCIDO → viajesProgramados = 0, no cae en ningún bucket de viaje", async () => {
+    vi.mocked(listarSolicitudesCliente).mockResolvedValue([
+      { id: 1, estado: "PROGRAMADA", fechaSolicitada: "2099-01-01", horaSolicitada: null, referenciaCliente: null, cantidadEntregas: 1, planId: 901, creadoEn: "x" },
+    ]);
+    // Estado real no reconocido -> estadoViajePortal() lo mapea a DESCONOCIDO.
+    vi.mocked(query).mockResolvedValueOnce([
+      { id: 901, codigo: "P1", estado: "En aduana" },
+    ] as never);
+    const r = await resumenSeguimientoCliente(EMPRESA_ID, CLIENTE_ID);
+    expect(r.viajesProgramados).toBe(0);
+    expect(r.viajesEnRuta).toBe(0);
+    expect(r.viajesFinalizados).toBe(0);
+    expect(r.rechazadasCanceladas).toBe(0);
+    expect(r.total).toBe(1);
+  });
+
+  it("ÚLTIMO AJUSTE PRE-MERGE PR #174 (punto 1.B): 1 solicitud PROGRAMADA con estadoViaje null (planId no enriquecido) → viajesProgramados = 0", async () => {
+    vi.mocked(listarSolicitudesCliente).mockResolvedValue([
+      { id: 1, estado: "PROGRAMADA", fechaSolicitada: "2099-01-01", horaSolicitada: null, referenciaCliente: null, cantidadEntregas: 1, planId: 901, creadoEn: "x" },
+    ]);
+    // Simula la defensa en profundidad del punto 2 (planId inconsistente
+    // filtrado por cliente_id = ?): 0 filas -> estadoViaje queda null.
+    vi.mocked(query).mockResolvedValueOnce([] as never);
+    const r = await resumenSeguimientoCliente(EMPRESA_ID, CLIENTE_ID);
+    expect(r.viajesProgramados).toBe(0);
+    expect(r.viajesEnRuta).toBe(0);
+    expect(r.viajesFinalizados).toBe(0);
+    expect(r.rechazadasCanceladas).toBe(0);
+    expect(r.total).toBe(1);
+  });
 });
