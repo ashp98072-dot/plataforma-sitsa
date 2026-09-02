@@ -6,7 +6,7 @@ import {
   TIPOS_DOCUMENTO,
 } from "@/lib/rrhh/documentos";
 import { obtenerEmpleado } from "@/lib/rrhh/empleados";
-import { guardarUpload } from "@/lib/uploads";
+import { borrarUpload, guardarUpload } from "@/lib/uploads";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
 
@@ -50,13 +50,45 @@ export async function POST(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: "ID inválido." }, { status: 400 });
   }
 
+  const empresaId = guard.empresa.id;
+  const inicio = Date.now();
+
   try {
-    const emp = await obtenerEmpleado(guard.empresa.id, id);
+    const emp = await obtenerEmpleado(empresaId, id);
     if (!emp) {
       return NextResponse.json({ error: "Empleado no encontrado." }, { status: 404 });
     }
 
-    const form = await req.formData();
+    // RRHH-EXPEDIENTES-UPLOAD-STABILITY (sección 2 del ticket): req.formData()
+    // se separa del resto del flujo. Si el cuerpo llega incompleto/truncado
+    // (archivo grande, conexión interrumpida, proxy que cortó el request
+    // antes de que Next.js viera el body completo), lanza un error técnico
+    // de bajo nivel ("Failed to parse body as FormData.") que NUNCA debe
+    // llegar tal cual a RRHH — se registra SOLO en el log del servidor y se
+    // responde un mensaje funcional. No se afirma "archivo demasiado
+    // grande": el servidor no puede saberlo con certeza si un proxy
+    // intermedio (nginx/Passenger de Hostinger) ya truncó el request antes
+    // de llegar aquí.
+    let form: FormData;
+    try {
+      form = await req.formData();
+    } catch (err) {
+      console.error("POST documentos — fallo al parsear multipart", {
+        empresaId,
+        empleadoId: id,
+        etapa: "parse_formdata",
+        duracionMs: Date.now() - inicio,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return NextResponse.json(
+        {
+          error:
+            "No se pudo recibir el archivo completo. Puede ser demasiado grande o la conexión se interrumpió. Intenta nuevamente con un archivo más pequeño.",
+        },
+        { status: 400 },
+      );
+    }
+
     const file = form.get("file") as File | null;
     const tipoRaw = String(form.get("tipo") ?? "Otro");
     if (!file || typeof (file as File).arrayBuffer !== "function") {
@@ -67,32 +99,62 @@ export async function POST(req: Request, ctx: Ctx) {
       ? tipoRaw
       : "Otro";
 
-    const saved = await guardarUpload(
-      guard.empresa.id,
-      "documentos",
-      `emp${id}`,
-      file,
-    );
-    const docId = await registrarDocumento({
-      empresaId: guard.empresa.id,
-      idEmpleado: id,
-      tipoDocumento: tipo,
-      rutaArchivo: saved.relative,
-      nombreOriginal: saved.original,
-      subidoPor: guard.session.username,
-    });
-
-    return NextResponse.json({
-      mensaje: "Documento subido.",
-      id: docId,
-      documento: {
-        id: docId,
+    // RRHH-EXPEDIENTES-UPLOAD-STABILITY (sección 9 del ticket) — cleanup
+    // best-effort: si guardarUpload() ya escribió el archivo en disco pero
+    // registrarDocumento() (INSERT) falla después, el archivo NO debe
+    // quedar huérfano — se borra con borrarUpload() (ya existente) y se
+    // relanza el error tal cual para que lo maneje el catch general de
+    // abajo. Nunca se borra si el INSERT sí tuvo éxito. Mismo patrón ya
+    // usado y probado en Multas (operaciones/multas/[id]/documentos/
+    // route.ts, MULTAS-5) — no se inventa un mecanismo nuevo.
+    let saved: Awaited<ReturnType<typeof guardarUpload>> | undefined;
+    try {
+      saved = await guardarUpload(empresaId, "documentos", `emp${id}`, file);
+      const docId = await registrarDocumento({
+        empresaId,
+        idEmpleado: id,
         tipoDocumento: tipo,
+        rutaArchivo: saved.relative,
         nombreOriginal: saved.original,
-      },
-    });
+        subidoPor: guard.session.username,
+      });
+
+      // Observabilidad (sección 8 del ticket): sin datos sensibles — nunca
+      // contenido del documento, DPI, nombres, bytes crudos ni rutas
+      // absolutas. `saved.size` se registra SOLO aquí, ya con el archivo
+      // parseado y guardado.
+      console.log("POST documentos — subida completada", {
+        empresaId,
+        empleadoId: id,
+        etapa: "completado",
+        tamanoBytes: saved.size,
+        duracionMs: Date.now() - inicio,
+      });
+
+      return NextResponse.json({
+        mensaje: "Documento subido.",
+        id: docId,
+        documento: {
+          id: docId,
+          tipoDocumento: tipo,
+          nombreOriginal: saved.original,
+        },
+      });
+    } catch (err) {
+      if (saved?.relative) borrarUpload(saved.relative);
+      throw err;
+    }
   } catch (err) {
-    console.error("POST documentos", err);
+    console.error("POST documentos", {
+      empresaId,
+      empleadoId: id,
+      etapa: "guardado_o_registro",
+      duracionMs: Date.now() - inicio,
+      tipoError: err instanceof Error ? err.constructor.name : typeof err,
+    });
+    // Los errores de guardarUpload() (tamaño/formato, ver src/lib/uploads.ts)
+    // ya traen mensaje funcional propio — se propagan tal cual. Cualquier
+    // otro error (DB, etc.) cae al mensaje genérico.
     const msg = err instanceof Error ? err.message : "No se pudo subir.";
     return NextResponse.json({ error: msg }, { status: 500 });
   }

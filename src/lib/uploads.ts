@@ -2,21 +2,18 @@ import {
   existsSync,
   mkdirSync,
   unlinkSync,
-  writeFileSync,
 } from "fs";
+import { writeFile } from "fs/promises";
 import { dirname, extname, join, resolve, sep } from "path";
 import { randomBytes } from "crypto";
+import { EXT_PERMITIDAS, MAX_UPLOAD_BYTES } from "@/lib/uploads-constants";
 
-export const EXT_PERMITIDAS = new Set([
-  ".jpg",
-  ".jpeg",
-  ".png",
-  ".webp",
-  ".bmp",
-  ".pdf",
-]);
-
-export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+// RRHH-EXPEDIENTES-UPLOAD-STABILITY: re-exportadas tal cual desde
+// uploads-constants.ts (ver ese archivo) — sigue siendo válido
+// `import { MAX_UPLOAD_BYTES } from "@/lib/uploads"` en los 2
+// consumidores existentes que ya lo hacían (src/lib/firmas/imagen-firma.ts,
+// operaciones/multas/[id]/documentos/route.ts), sin ningún cambio en ellos.
+export { EXT_PERMITIDAS, MAX_UPLOAD_BYTES };
 
 /** Raíz persistente en Hostinger: .builds/uploads (fuera de versions/). */
 export function getUploadsRoot(): string {
@@ -109,7 +106,24 @@ export async function guardarUpload(
 
   const buffer = Buffer.from(await file.arrayBuffer());
   ensureDir(dirname(abs));
-  writeFileSync(abs, buffer);
+  // RRHH-EXPEDIENTES-UPLOAD-STABILITY (MEJORA A — sección 5 del ticket):
+  // writeFile (fs/promises) en vez de writeFileSync — evita bloquear el
+  // event loop de Node durante una escritura grande. guardarUpload()
+  // siempre se llama con `await` (verificado en los 15 call sites
+  // actuales: viáticos, marcajes de portal, evidencias de flota/lectura,
+  // firmas de usuario, foto de empleado, documentos de empleado,
+  // adjuntos/documentos de flota y servicios, documentos de multas,
+  // evidencias de vacaciones, marcajes de RRHH, documentos de
+  // entrevistas), así que el contrato "el archivo existe en disco cuando
+  // guardarUpload() resuelve" se mantiene exactamente igual — ningún
+  // caller depende de que la escritura sea síncrona, solo de que ya haya
+  // terminado cuando su propio `await` continúa. MEJORA B (streaming
+  // real, sin materializar el archivo completo en memoria) queda fuera
+  // de este ticket — requeriría cambiar cómo se lee el multipart
+  // (req.formData() ya materializa el archivo completo antes de llegar
+  // aquí) y no hay un patrón de streaming ya existente en el repo para
+  // reutilizar; ver el reporte final.
+  await writeFile(abs, buffer);
 
   return {
     relative,
