@@ -225,6 +225,25 @@ export async function GET(req: Request, ctx: Ctx) {
   // suelto se ignora en vez de interpretarlo a medias.
   const usarRangoFecha = Boolean(fechaDesdeParam && fechaHastaParam);
   const pendienteCierreParam = url.searchParams.get("pendienteCierre") === "1";
+  // TMS-PROGRAMACION-NAVEGACION-DIRECTA-PLAN: ?id=<planId> — trae un plan
+  // puntual por su id, SIN depender del rango Hoy/Mañana/Semana (que solo
+  // cubre hoy en adelante) ni del filtro de pendientes de cierre. Nunca
+  // confía en el id a secas: se AND-ea con `p.empresa_id = ?` igual que
+  // cualquier otra condición de este mismo WHERE — un id de otra empresa
+  // simplemente no matchea ninguna fila (0 resultados, nunca la fila de
+  // otra empresa). Reutiliza EXACTAMENTE el mismo SELECT/enriquecimiento
+  // de abajo (paradas, auxiliares, disponibilidad) — no es un endpoint
+  // paralelo, es la misma consulta con una condición adicional.
+  const idParam = url.searchParams.get("id");
+  const idNum = idParam ? Number(idParam) : null;
+  // AJUSTE PRE-MERGE PR #175 (punto 2): entero positivo estricto — 31.5,
+  // -1, 0 o cualquier valor no numérico ("abc") se rechazan por igual.
+  // Number.isFinite() por sí solo aceptaba decimales (31.5), que no tiene
+  // sentido como id de fila.
+  const usarId = idNum != null && Number.isInteger(idNum) && idNum > 0;
+  if (idParam && !usarId) {
+    return NextResponse.json({ error: "id inválido." }, { status: 400 });
+  }
 
   try {
     await asegurarSchemaFlota();
@@ -239,19 +258,36 @@ export async function GET(req: Request, ctx: Ctx) {
   // la query), así que su `?` debe ser el PRIMER parámetro posicional.
   const ahora = ahoraLocal();
   const paramsRows: SqlParams = [ahora, guard.empresa.id];
-  if (usarRangoFecha) {
-    condiciones.push("p.fecha_plan BETWEEN ? AND ?");
-    paramsRows.push(fechaDesdeParam as string, fechaHastaParam as string);
+  // AJUSTE PRE-MERGE PR #175 (punto 1) — `id=` tiene PRECEDENCIA
+  // ABSOLUTA: si viene, es el ÚNICO filtro adicional al WHERE (además de
+  // empresa_id), sin importar que fechaDesde/fechaHasta/pendienteCierre
+  // también vengan en la misma URL. El objetivo del ticket es que un
+  // plan puntual se resuelva SIEMPRE, independientemente de cualquier
+  // filtro operativo — mezclar `id=31` con un `fechaDesde/fechaHasta`
+  // que no coincida con la fecha real del plan #31 lo haría desaparecer
+  // otra vez (exactamente el bug original que este ticket corrige), y
+  // pendienteCierre=1 lo ocultaría si el plan no está pendiente de
+  // cierre. `usarRangoFecha`/`pendienteCierreParam` siguen calculándose
+  // arriba (siguen aplicando su propia validación de fecha), pero no
+  // participan del WHERE cuando usarId es true.
+  if (usarId) {
+    condiciones.push("p.id = ?");
+    paramsRows.push(idNum as number);
+  } else {
+    if (usarRangoFecha) {
+      condiciones.push("p.fecha_plan BETWEEN ? AND ?");
+      paramsRows.push(fechaDesdeParam as string, fechaHastaParam as string);
+    }
+    if (pendienteCierreParam) {
+      condiciones.push(SQL_PENDIENTE_CIERRE);
+    }
   }
-  if (pendienteCierreParam) {
-    condiciones.push(SQL_PENDIENTE_CIERRE);
-  }
-  // LIMIT: "pendienteCierre=1" es justamente la vista que NUNCA debe poder
-  // perder un registro por límite — el volumen esperado es bajo (viajes ya
-  // finalizados, aún no cerrados), así que se deja sin límite. El GET sin
+  // LIMIT: "pendienteCierre=1" y "id=" son vistas puntuales que NUNCA deben
+  // poder perder un registro por límite (la primera por volumen bajo, la
+  // segunda porque es a lo sumo 1 fila) — se dejan sin límite. El GET sin
   // filtros (compat) y el filtro por rango de fecha conservan el límite de
   // seguridad de siempre.
-  const limitSql = pendienteCierreParam ? "" : "LIMIT 200";
+  const limitSql = pendienteCierreParam || usarId ? "" : "LIMIT 200";
 
   const [rows, disp] = await Promise.all([
     query<RowDataPacket[]>(
