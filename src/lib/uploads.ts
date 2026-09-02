@@ -2,21 +2,18 @@ import {
   existsSync,
   mkdirSync,
   unlinkSync,
-  writeFileSync,
 } from "fs";
+import { writeFile } from "fs/promises";
 import { dirname, extname, join, resolve, sep } from "path";
 import { randomBytes } from "crypto";
+import { EXT_PERMITIDAS, MAX_UPLOAD_BYTES } from "@/lib/uploads-constants";
 
-export const EXT_PERMITIDAS = new Set([
-  ".jpg",
-  ".jpeg",
-  ".png",
-  ".webp",
-  ".bmp",
-  ".pdf",
-]);
-
-export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+// RRHH-EXPEDIENTES-UPLOAD-STABILITY: re-exportadas tal cual desde
+// uploads-constants.ts (ver ese archivo) — sigue siendo válido
+// `import { MAX_UPLOAD_BYTES } from "@/lib/uploads"` en los 2
+// consumidores existentes que ya lo hacían (src/lib/firmas/imagen-firma.ts,
+// operaciones/multas/[id]/documentos/route.ts), sin ningún cambio en ellos.
+export { EXT_PERMITIDAS, MAX_UPLOAD_BYTES };
 
 /** Raíz persistente en Hostinger: .builds/uploads (fuera de versions/). */
 export function getUploadsRoot(): string {
@@ -69,6 +66,27 @@ type UploadLike = {
   arrayBuffer: () => Promise<ArrayBuffer>;
 };
 
+/**
+ * AJUSTE PRE-MERGE PR #176 (punto 2) — error FUNCIONAL conocido de
+ * validación de subida (nunca un fallo interno: archivo vacío, formato
+ * no permitido, tamaño excedido). Un caller puede distinguirlo con
+ * `instanceof UploadValidationError` en vez de comparar el texto del
+ * mensaje (frágil) para decidir si el mensaje es seguro de mostrar tal
+ * cual al usuario y qué status HTTP usar — sin necesidad de un refactor
+ * más amplio de manejo de errores. Sigue siendo un `Error` normal para
+ * cualquier caller existente que solo haga `err instanceof Error ?
+ * err.message : ...` (los otros 14 consumidores de guardarUpload) — no
+ * cambia su comportamiento.
+ */
+export class UploadValidationError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "UploadValidationError";
+    this.status = status;
+  }
+}
+
 export async function guardarUpload(
   empresaId: number,
   // VIATICOS-FIRMA (firma visual) — "firmas": imágenes PNG de firma
@@ -78,15 +96,18 @@ export async function guardarUpload(
   file: UploadLike,
 ): Promise<{ relative: string; original: string; size: number }> {
   if (!file || typeof file.arrayBuffer !== "function") {
-    throw new Error("Archivo requerido.");
+    throw new UploadValidationError("Archivo requerido.", 400);
   }
-  if (file.size <= 0) throw new Error("Archivo vacío.");
+  if (file.size <= 0) throw new UploadValidationError("Archivo vacío.", 400);
   if (file.size > MAX_UPLOAD_BYTES) {
-    throw new Error("El archivo supera el máximo de 50 MB.");
+    // 413 Payload Too Large — es el único de los 3 casos donde el
+    // tamaño en sí (no el contenido/formato) es la causa; el resto se
+    // documenta como 400 (ver AJUSTE PRE-MERGE PR #176, punto 2).
+    throw new UploadValidationError("El archivo supera el máximo de 50 MB.", 413);
   }
   const ext = extensionValida(file.name || "archivo.jpg");
   if (!ext) {
-    throw new Error("Formato no permitido. Usa: jpg, png, webp, bmp o pdf.");
+    throw new UploadValidationError("Formato no permitido. Usa: jpg, png, webp, bmp o pdf.", 400);
   }
 
   const root = getUploadsRoot();
@@ -109,7 +130,24 @@ export async function guardarUpload(
 
   const buffer = Buffer.from(await file.arrayBuffer());
   ensureDir(dirname(abs));
-  writeFileSync(abs, buffer);
+  // RRHH-EXPEDIENTES-UPLOAD-STABILITY (MEJORA A — sección 5 del ticket):
+  // writeFile (fs/promises) en vez de writeFileSync — evita bloquear el
+  // event loop de Node durante una escritura grande. guardarUpload()
+  // siempre se llama con `await` (verificado en los 15 call sites
+  // actuales: viáticos, marcajes de portal, evidencias de flota/lectura,
+  // firmas de usuario, foto de empleado, documentos de empleado,
+  // adjuntos/documentos de flota y servicios, documentos de multas,
+  // evidencias de vacaciones, marcajes de RRHH, documentos de
+  // entrevistas), así que el contrato "el archivo existe en disco cuando
+  // guardarUpload() resuelve" se mantiene exactamente igual — ningún
+  // caller depende de que la escritura sea síncrona, solo de que ya haya
+  // terminado cuando su propio `await` continúa. MEJORA B (streaming
+  // real, sin materializar el archivo completo en memoria) queda fuera
+  // de este ticket — requeriría cambiar cómo se lee el multipart
+  // (req.formData() ya materializa el archivo completo antes de llegar
+  // aquí) y no hay un patrón de streaming ya existente en el repo para
+  // reutilizar; ver el reporte final.
+  await writeFile(abs, buffer);
 
   return {
     relative,
