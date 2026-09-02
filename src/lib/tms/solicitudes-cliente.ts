@@ -1,7 +1,37 @@
 import type { RowDataPacket, ResultSetHeader } from "mysql2";
 import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
-import { hoyLocal, normalizarHora, toIsoDate } from "@/lib/rrhh/dates";
+import { ahoraLocal, hoyLocal, normalizarHora, toIsoDate } from "@/lib/rrhh/dates";
+
+/**
+ * AJUSTE PRE-MERGE PR #172 (punto 2) — la validación anterior solo
+ * comprobaba el FORMATO (`\d{4}-\d{2}-\d{2}`), no que fuera una fecha
+ * calendario real: "2026-02-31" o "2026-13-01" pasaban el regex sin
+ * problema. Esta validación es puramente en JavaScript (no depende de
+ * SQL_MODE/STRICT_TRANS_TABLES de MariaDB, que además nunca se verificó
+ * contra la instancia real de producción — mismo criterio de no asumir
+ * comportamiento del motor que ya se aplicó en migraciones anteriores).
+ *
+ * Rechaza mes/día fuera de rango ANTES de construir el `Date` (evita
+ * confiar en el rollover de `Date` para el caso "mes 13", que
+ * `new Date(y, 12, d)` interpretaría como enero del año siguiente en
+ * vez de rechazarlo) y luego confirma que el `Date` construido
+ * (constructor de componentes locales, no parseo de string — sin
+ * ambigüedad de huso horario) devuelve EXACTAMENTE el año/mes/día
+ * pedidos: "2026-02-31" se normaliza a "2026-03-03", que no coincide,
+ * así que se rechaza. "2028-02-29" si coincide (2028 es bisiesto), así
+ * que se acepta.
+ */
+function esFechaCalendarioValida(fecha: string): boolean {
+  const m = fecha.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return false;
+  const anio = Number(m[1]);
+  const mes = Number(m[2]);
+  const dia = Number(m[3]);
+  if (mes < 1 || mes > 12 || dia < 1 || dia > 31) return false;
+  const d = new Date(anio, mes - 1, dia);
+  return d.getFullYear() === anio && d.getMonth() === mes - 1 && d.getDate() === dia;
+}
 
 /**
  * CLIENTE-PORTAL-2 — dominio de tms_solicitudes_cliente/tms_solicitud_paradas
@@ -170,9 +200,12 @@ export async function crearSolicitudCliente(
   scope: { empresaId: number; clienteId: number; usuarioClienteId: number },
   input: CrearSolicitudClienteInput,
 ): Promise<ResultadoCrearSolicitud> {
-  const fecha = input.fechaSolicitada?.trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha || "")) {
-    return { ok: false, mensaje: "La fecha solicitada es obligatoria (formato AAAA-MM-DD)." };
+  const fecha = input.fechaSolicitada?.trim() ?? "";
+  if (!esFechaCalendarioValida(fecha)) {
+    return {
+      ok: false,
+      mensaje: "La fecha solicitada es obligatoria y debe ser una fecha calendario válida (AAAA-MM-DD).",
+    };
   }
   if (fecha < hoyLocal()) {
     return { ok: false, mensaje: "La fecha solicitada no puede ser anterior a hoy." };
@@ -240,7 +273,21 @@ export async function crearSolicitudCliente(
     }
   }
 
+  // AJUSTE PRE-MERGE PR #172 (punto 1) — FASE TRANSACCIONAL, separada a
+  // propósito de cualquier lectura posterior. `solicitudId` y
+  // `paradasDetalle` se capturan aquí (de los propios INSERT, vía
+  // insertId) porque son los únicos datos que de verdad importa que
+  // hayan quedado escritos — nunca se relee de la base de datos después
+  // del commit: si esa relectura fallara por un error transitorio, el
+  // commit ya habría quedado en firme y el caller NO debe recibir un
+  // falso "no se creó" (eso invitaría a reintentar y crear un
+  // duplicado). Ver FASE POST-COMMIT más abajo, fuera de este
+  // try/catch/finally — construye la respuesta con datos YA conocidos,
+  // sin ninguna consulta que pueda fallar de forma independiente al
+  // commit.
   const conn = await getPool().getConnection();
+  let solicitudId: number;
+  const paradasDetalle: ParadaSolicitudDetalle[] = [];
   try {
     await conn.beginTransaction();
     const [ins] = await conn.execute<ResultSetHeader>(
@@ -258,14 +305,22 @@ export async function crearSolicitudCliente(
         observaciones,
       ],
     );
-    const solicitudId = Number(ins.insertId);
+    solicitudId = Number(ins.insertId);
     for (const p of paradas) {
-      await conn.execute(
+      const [insParada] = await conn.execute<ResultSetHeader>(
         `INSERT INTO tms_solicitud_paradas
           (empresa_id, solicitud_id, orden, tipo, lugar_nombre, cliente_ubicacion_id, referencia)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [scope.empresaId, solicitudId, p.orden, p.tipo, p.lugarNombre, p.clienteUbicacionId, p.referencia],
       );
+      paradasDetalle.push({
+        id: Number(insParada.insertId),
+        orden: p.orden,
+        tipo: p.tipo as TipoSolicitudParada,
+        lugarNombre: p.lugarNombre,
+        clienteUbicacionId: p.clienteUbicacionId,
+        referencia: p.referencia,
+      });
     }
     await registrarAuditoriaTx(conn, {
       empresaId: scope.empresaId,
@@ -275,16 +330,42 @@ export async function crearSolicitudCliente(
       detalle: `Solicitud #${solicitudId} creada por cliente #${scope.clienteId} · fecha solicitada ${fecha} · ${entregas.length} entrega(s).`,
     });
     await conn.commit();
-
-    const solicitud = await obtenerSolicitudCliente(scope.empresaId, scope.clienteId, solicitudId);
-    if (!solicitud) throw new Error("La solicitud se creó pero no se pudo releer.");
-    return { ok: true, solicitud };
   } catch (error) {
+    // Todavía dentro de la fase transaccional: cualquier error de aquí
+    // significa que el commit NUNCA ocurrió — rollback es correcto y
+    // seguro.
     await conn.rollback();
     throw error;
   } finally {
     conn.release();
   }
+
+  // FASE POST-COMMIT: la solicitud YA existe en la base de datos en
+  // este punto (el commit ya tuvo éxito, sin excepción). La respuesta
+  // se arma enteramente con datos ya conocidos — ninguna consulta
+  // adicional que, si fallara, pudiera hacer parecer que la creación no
+  // ocurrió.
+  const ahora = ahoraLocal();
+  const solicitud: SolicitudClienteDetalle = {
+    id: solicitudId,
+    empresaId: scope.empresaId,
+    clienteId: scope.clienteId,
+    creadoPorUsuarioClienteId: scope.usuarioClienteId,
+    creadoPorNombre: null,
+    estado: "SOLICITADA",
+    fechaSolicitada: fecha,
+    horaSolicitada,
+    referenciaCliente,
+    observaciones,
+    motivoRechazo: null,
+    planId: null,
+    version: 1,
+    creadoEn: ahora,
+    actualizadoEn: ahora,
+    paradas: paradasDetalle,
+    cantidadEntregas: contarEntregas(paradasDetalle),
+  };
+  return { ok: true, solicitud };
 }
 
 // ============================================================

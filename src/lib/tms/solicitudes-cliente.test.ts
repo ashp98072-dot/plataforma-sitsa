@@ -185,9 +185,13 @@ beforeEach(() => {
   vi.mocked(getPool).mockReturnValue({
     getConnection: async () => conn,
   } as unknown as ReturnType<typeof getPool>);
+  let siguienteIdParada = 1;
   conn.execute.mockImplementation(async (sql: string) => {
     if (String(sql).includes("INSERT INTO tms_solicitudes_cliente")) {
       return [{ insertId: 500, affectedRows: 1 }];
+    }
+    if (String(sql).includes("INSERT INTO tms_solicitud_paradas")) {
+      return [{ insertId: siguienteIdParada++, affectedRows: 1 }];
     }
     return [{ affectedRows: 1 }];
   });
@@ -243,6 +247,28 @@ describe("crearSolicitudCliente — validaciones (fallan ANTES de abrir conexió
     const r = await crearSolicitudCliente(SCOPE, inputValido({ fechaSolicitada: "15/01/2099" }));
     expect(r.ok).toBe(false);
     expect(getPool).not.toHaveBeenCalled();
+  });
+
+  // AJUSTE PRE-MERGE PR #172 (punto 2) — el regex de formato solo no
+  // detecta fechas de calendario imposibles; esFechaCalendarioValida()
+  // (interna) sí. Puramente en JS, sin depender de SQL_MODE de MariaDB.
+  it.each(["2026-02-30", "2026-02-31", "2026-13-01", "2026-00-10", "2026-01-32", "2026-04-31"])(
+    "fecha calendario imposible '%s' → rechazada",
+    async (fechaImposible) => {
+      const r = await crearSolicitudCliente(SCOPE, inputValido({ fechaSolicitada: fechaImposible }));
+      expect(r.ok).toBe(false);
+      expect(getPool).not.toHaveBeenCalled();
+    },
+  );
+
+  it("29 de febrero de un año bisiesto (2028) → aceptada", async () => {
+    const r = await crearSolicitudCliente(SCOPE, inputValido({ fechaSolicitada: "2028-02-29" }));
+    expect(r.ok).toBe(true);
+  });
+
+  it("29 de febrero de un año NO bisiesto (2026) → rechazada", async () => {
+    const r = await crearSolicitudCliente(SCOPE, inputValido({ fechaSolicitada: "2026-02-29" }));
+    expect(r.ok).toBe(false);
   });
 
   it("hora inválida → rechazada", async () => {
@@ -310,40 +336,6 @@ describe("crearSolicitudCliente — reconstrucción de orden server-side (CLIENT
 
 describe("crearSolicitudCliente — transacción", () => {
   it("éxito: INSERT cabecera + N paradas + auditoría, TODO en la misma conexión, luego commit (nunca rollback)", async () => {
-    vi.mocked(query).mockImplementation((async (sql: string) => {
-      const s = String(sql);
-      if (s.includes("FROM tms_solicitudes_cliente s") && s.includes("WHERE s.id")) {
-        return [
-          {
-            id: 500,
-            empresa_id: 7,
-            cliente_id: 30,
-            creado_por_usuario_cliente_id: 10,
-            estado: "SOLICITADA",
-            fecha_solicitada: "2099-01-15",
-            hora_solicitada: null,
-            referencia_cliente: null,
-            observaciones: null,
-            motivo_rechazo: null,
-            plan_id: null,
-            version: 1,
-            creado_en: "2026-09-02 08:00:00",
-            actualizado_en: "2026-09-02 08:00:00",
-            creado_por_nombre: "Contacto ACME",
-          },
-        ];
-      }
-      if (s.includes("FROM tms_solicitud_paradas")) {
-        return [
-          { id: 1, orden: 1, tipo: "Carga", lugar_nombre: "Bodega PriceSmart Zona 4", cliente_ubicacion_id: null, referencia: null },
-          { id: 2, orden: 2, tipo: "Entrega", lugar_nombre: "Sucursal 1", cliente_ubicacion_id: null, referencia: null },
-          { id: 3, orden: 3, tipo: "Entrega", lugar_nombre: "Sucursal 2", cliente_ubicacion_id: null, referencia: null },
-          { id: 4, orden: 4, tipo: "Descarga", lugar_nombre: "Bodega central de retorno", cliente_ubicacion_id: null, referencia: null },
-        ];
-      }
-      return [];
-    }) as never);
-
     const r = await crearSolicitudCliente(SCOPE, inputValido());
     expect(r.ok).toBe(true);
     if (r.ok) {
@@ -351,6 +343,12 @@ describe("crearSolicitudCliente — transacción", () => {
       expect(r.solicitud.estado).toBe("SOLICITADA");
       expect(r.solicitud.cantidadEntregas).toBe(2);
       expect(r.solicitud.paradas).toHaveLength(4);
+      expect(r.solicitud.paradas.map((p) => p.tipo)).toEqual([
+        "Carga",
+        "Entrega",
+        "Entrega",
+        "Descarga",
+      ]);
     }
     expect(conn.beginTransaction).toHaveBeenCalledOnce();
     expect(registrarAuditoriaTx).toHaveBeenCalledWith(
@@ -364,6 +362,47 @@ describe("crearSolicitudCliente — transacción", () => {
     expect(conn.commit).toHaveBeenCalledOnce();
     expect(conn.rollback).not.toHaveBeenCalled();
     expect(conn.release).toHaveBeenCalledOnce();
+  });
+
+  // AJUSTE PRE-MERGE PR #172 (punto 1) — CASO A: falla un INSERT ANTES
+  // del commit → rollback, error, ningún éxito. (Cubierto en detalle por
+  // el test "rollback total si falla la inserción de una parada" más
+  // abajo — este es el mismo caso, referenciado aquí explícitamente por
+  // el nombre que pide el ticket.)
+  it("CASO A — falla el INSERT de la cabecera (antes de cualquier parada) → rollback, error, sin éxito", async () => {
+    conn.execute.mockImplementation(async (sql: string) => {
+      if (String(sql).includes("INSERT INTO tms_solicitudes_cliente")) {
+        throw new Error("fallo simulado en la cabecera");
+      }
+      return [{ affectedRows: 1 }];
+    });
+    await expect(crearSolicitudCliente(SCOPE, inputValido())).rejects.toThrow("fallo simulado");
+    expect(conn.rollback).toHaveBeenCalledOnce();
+    expect(conn.commit).not.toHaveBeenCalled();
+  });
+
+  // AJUSTE PRE-MERGE PR #172 (punto 1) — CASO B: la vieja implementación
+  // releía la solicitud de la base de datos DESPUÉS del commit; si esa
+  // relectura fallaba, el catch disparaba un rollback ya sin efecto real
+  // (el commit ya había ocurrido) y el caller recibía una excepción como
+  // si la creación hubiera fallado — riesgo real de que el cliente
+  // reintentara y creara un duplicado. La implementación actual ELIMINA
+  // esa relectura: la respuesta se arma con datos ya conocidos de la
+  // propia transacción. Se prueba la ausencia total de esa relectura —
+  // ni siquiera se llama a `query()` una vez que la transacción
+  // determina que no hay ubicaciones que validar.
+  it("CASO B — NO hay relectura post-commit: query() nunca se invoca durante una creación exitosa sin ubicaciones", async () => {
+    const r = await crearSolicitudCliente(SCOPE, inputValido());
+    expect(r.ok).toBe(true);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("CASO B (variante) — aunque query() estuviera configurado para fallar, el resultado de una creación exitosa no se ve afectado (no hay ninguna llamada a query() que dependa de él)", async () => {
+    vi.mocked(query).mockRejectedValue(new Error("la base de datos estaría caída para cualquier lectura posterior"));
+    const r = await crearSolicitudCliente(SCOPE, inputValido());
+    expect(r.ok).toBe(true);
+    expect(conn.commit).toHaveBeenCalledOnce();
+    expect(conn.rollback).not.toHaveBeenCalled();
   });
 
   it("empresaId/clienteId/usuarioClienteId del INSERT vienen del scope, nunca de un campo del input (que ni siquiera los tiene)", async () => {
