@@ -1,6 +1,31 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { EXT_PERMITIDAS, MAX_UPLOAD_BYTES } from "@/lib/uploads-constants";
+
+const MAX_UPLOAD_MB = Math.round(MAX_UPLOAD_BYTES / (1024 * 1024));
+
+/**
+ * RRHH-EXPEDIENTES-UPLOAD-STABILITY (sección 3 del ticket) — valida
+ * tamaño y extensión ANTES de crear la petición; si no pasa, nunca se
+ * hace fetch. Usa el mismo límite que ya hace cumplir guardarUpload()
+ * server-side (src/lib/uploads.ts, vía uploads-constants.ts) — una sola
+ * fuente de verdad, no un número inventado aparte. Este límite es el de
+ * la APLICACIÓN; el límite real sostenible del proxy/hosting de
+ * Hostinger no está verificado (no hay config de nginx/Passenger en este
+ * repo) — ver el reporte del ticket.
+ */
+export function validarArchivo(file: File): string | null {
+  const ext = `.${file.name.split(".").pop()?.toLowerCase() ?? ""}`;
+  if (!EXT_PERMITIDAS.has(ext)) {
+    return "Formato no permitido. Usa: jpg, png, webp, bmp o pdf.";
+  }
+  if (file.size <= 0) return "El archivo está vacío.";
+  if (file.size > MAX_UPLOAD_BYTES) {
+    return `El archivo supera el máximo de ${MAX_UPLOAD_MB} MB.`;
+  }
+  return null;
+}
 
 const TIPOS_DOCUMENTO = [
   "DPI",
@@ -66,6 +91,13 @@ export function DocumentosModal({
     if (!puedeEditar || !file) return;
     setError("");
     setMensaje("");
+    // Gate obligatorio (sección 3/10-D del ticket): si no pasa, NUNCA se
+    // hace fetch — nunca depender solo de que el backend lo rechace.
+    const problema = validarArchivo(file);
+    if (problema) {
+      setError(problema);
+      return;
+    }
     setLoading(true);
     try {
       const fd = new FormData();
@@ -154,7 +186,20 @@ export function DocumentosModal({
             <input
               type="file"
               accept=".jpg,.jpeg,.png,.webp,.bmp,.pdf,image/*,application/pdf"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              onChange={(e) => {
+                const f = e.target.files?.[0] ?? null;
+                setError("");
+                if (f) {
+                  const problema = validarArchivo(f);
+                  if (problema) {
+                    setError(problema);
+                    setFile(null);
+                    e.target.value = "";
+                    return;
+                  }
+                }
+                setFile(f);
+              }}
               className="block w-full text-sm text-[var(--muted)]"
             />
             <button
@@ -166,7 +211,7 @@ export function DocumentosModal({
               Subir archivo
             </button>
             <p className="text-xs text-[var(--muted)]">
-              Formatos: jpg, png, webp, bmp, pdf · máx. 50 MB
+              Formatos: jpg, png, webp, bmp, pdf · máx. {MAX_UPLOAD_MB} MB
             </p>
           </div>
         ) : null}
