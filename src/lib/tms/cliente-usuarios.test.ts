@@ -8,9 +8,11 @@ vi.mock("@/lib/db", () => ({
 import { execute, query } from "@/lib/db";
 import { hashPassword } from "@/lib/password";
 import {
+  activarUsuarioCliente,
   cambiarPasswordCliente,
   crearUsuarioCliente,
   normalizarEmail,
+  resetearPasswordUsuarioCliente,
   validarClienteSessionActiva,
   verificarCredencialesCliente,
 } from "./cliente-usuarios";
@@ -296,5 +298,61 @@ describe("validarClienteSessionActiva", () => {
       await validarClienteSessionActiva({ usuarioClienteId: 10, empresaId: 7, clienteId: 999 }),
     ).toBe(false);
     expect(query).toHaveBeenCalledWith(expect.any(String), [10, 7, 999, 999, 7]);
+  });
+});
+
+// CLIENTE-PORTAL-1C — activarUsuarioCliente/resetearPasswordUsuarioCliente
+// ahora exigen también clienteId en el WHERE (alcance 7/8 del ticket: toda
+// mutación valida empresa + cliente + que el usuario pertenezca a ese
+// cliente), no solo empresaId.
+describe("activarUsuarioCliente", () => {
+  it("desactiva un usuario que sí pertenece a ese cliente", async () => {
+    vi.mocked(execute).mockResolvedValueOnce({
+      affectedRows: 1,
+    } as unknown as Awaited<ReturnType<typeof execute>>);
+    const r = await activarUsuarioCliente(7, 30, 10, false);
+    expect(r).toEqual({ ok: true, mensaje: "Acceso desactivado." });
+    expect(execute).toHaveBeenCalledWith(
+      expect.stringContaining("WHERE id = ? AND empresa_id = ? AND cliente_id = ?"),
+      [0, 10, 7, 30],
+    );
+  });
+
+  it("usuario existe pero pertenece a OTRO cliente → 0 filas afectadas, tratado como no encontrado", async () => {
+    // Simula lo que MySQL devolvería si el usuario #10 es real pero su
+    // cliente_id no coincide con el cliente_id pasado (999): el WHERE no
+    // encuentra fila, exactamente igual que si el id no existiera.
+    vi.mocked(execute).mockResolvedValueOnce({
+      affectedRows: 0,
+    } as unknown as Awaited<ReturnType<typeof execute>>);
+    const r = await activarUsuarioCliente(7, 999, 10, false);
+    expect(r).toEqual({ ok: false, mensaje: "Usuario no encontrado para este cliente." });
+  });
+});
+
+describe("resetearPasswordUsuarioCliente", () => {
+  it("reinicia la contraseña de un usuario que sí pertenece a ese cliente", async () => {
+    vi.mocked(execute).mockResolvedValueOnce({
+      affectedRows: 1,
+    } as unknown as Awaited<ReturnType<typeof execute>>);
+    const r = await resetearPasswordUsuarioCliente(7, 30, 10, "temporal1");
+    expect(r).toEqual({ ok: true, mensaje: "Contraseña reiniciada." });
+    const call = vi.mocked(execute).mock.calls[0];
+    expect(String(call[0])).toContain("WHERE id = ? AND empresa_id = ? AND cliente_id = ?");
+    expect(call[1]).toEqual([expect.any(String), expect.any(String), 10, 7, 30]);
+  });
+
+  it("usuario de OTRO cliente → rechazado, sin filtrar solo por empresa", async () => {
+    vi.mocked(execute).mockResolvedValueOnce({
+      affectedRows: 0,
+    } as unknown as Awaited<ReturnType<typeof execute>>);
+    const r = await resetearPasswordUsuarioCliente(7, 999, 10, "temporal1");
+    expect(r).toEqual({ ok: false, mensaje: "Usuario no encontrado para este cliente." });
+  });
+
+  it("contraseña nueva corta → rechazada antes de tocar la base de datos", async () => {
+    const r = await resetearPasswordUsuarioCliente(7, 30, 10, "abc");
+    expect(r.ok).toBe(false);
+    expect(execute).not.toHaveBeenCalled();
   });
 });

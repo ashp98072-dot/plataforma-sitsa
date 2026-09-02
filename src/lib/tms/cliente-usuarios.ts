@@ -325,9 +325,20 @@ export async function cambiarPasswordCliente(
   return { ok: true, mensaje: "Contraseña actualizada." };
 }
 
-/** Uso de staff: resetea la contraseña y obliga a cambiarla en el próximo login. */
+/**
+ * Uso de staff: resetea la contraseña y obliga a cambiarla en el
+ * próximo login.
+ *
+ * CLIENTE-PORTAL-1C — ahora exige también `clienteId` (alcance 7/8 del
+ * ticket: "validar empresa; validar cliente; validar usuario pertenece
+ * a ese cliente"). Antes de este ticket la función no tenía ningún
+ * caller real (PR #167 la dejó preparada pero sin endpoint); se agrega
+ * el parámetro aquí, al conectarla por primera vez a una ruta, en vez
+ * de dejar una función de mutación que solo aislaba por empresa.
+ */
 export async function resetearPasswordUsuarioCliente(
   empresaId: number,
+  clienteId: number,
   usuarioClienteId: number,
   passwordNueva: string,
 ): Promise<{ ok: boolean; mensaje: string }> {
@@ -338,27 +349,33 @@ export async function resetearPasswordUsuarioCliente(
   const result = await execute(
     `UPDATE tms_cliente_usuarios
      SET password_hash = ?, salt = ?, debe_cambiar_password = 1
-     WHERE id = ? AND empresa_id = ?`,
-    [passwordHash, salt, usuarioClienteId, empresaId],
+     WHERE id = ? AND empresa_id = ? AND cliente_id = ?`,
+    [passwordHash, salt, usuarioClienteId, empresaId, clienteId],
   );
   if (result.affectedRows === 0) {
-    return { ok: false, mensaje: "Usuario no encontrado en esta empresa." };
+    return { ok: false, mensaje: "Usuario no encontrado para este cliente." };
   }
   return { ok: true, mensaje: "Contraseña reiniciada." };
 }
 
-/** Uso de staff: activa/desactiva una cuenta puntual sin borrarla. */
+/**
+ * Uso de staff: activa/desactiva una cuenta puntual sin borrarla.
+ *
+ * CLIENTE-PORTAL-1C — mismo criterio que resetearPasswordUsuarioCliente:
+ * ahora exige también `clienteId` en el WHERE, no solo `empresaId`.
+ */
 export async function activarUsuarioCliente(
   empresaId: number,
+  clienteId: number,
   usuarioClienteId: number,
   activo: boolean,
 ): Promise<{ ok: boolean; mensaje: string }> {
   const result = await execute(
-    `UPDATE tms_cliente_usuarios SET activo = ? WHERE id = ? AND empresa_id = ?`,
-    [activo ? 1 : 0, usuarioClienteId, empresaId],
+    `UPDATE tms_cliente_usuarios SET activo = ? WHERE id = ? AND empresa_id = ? AND cliente_id = ?`,
+    [activo ? 1 : 0, usuarioClienteId, empresaId, clienteId],
   );
   if (result.affectedRows === 0) {
-    return { ok: false, mensaje: "Usuario no encontrado en esta empresa." };
+    return { ok: false, mensaje: "Usuario no encontrado para este cliente." };
   }
   return { ok: true, mensaje: activo ? "Acceso reactivado." : "Acceso desactivado." };
 }
