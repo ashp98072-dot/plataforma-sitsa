@@ -9,6 +9,7 @@ import {
   claseEstadoSolicitud,
   etiquetaEstadoSolicitud,
 } from "@/lib/tms/solicitudes-cliente-ui";
+import { ThemeToggle } from "@/components/theme-toggle";
 import ClientePortalLogoutButton from "./logout-button";
 
 /**
@@ -47,7 +48,10 @@ export default async function ClientePortalHomePage() {
             Usuario: <span className="font-medium">{session!.nombre ?? "—"}</span>
           </p>
         </div>
-        <ClientePortalLogoutButton />
+        <div className="flex items-center gap-2">
+          <ThemeToggle />
+          <ClientePortalLogoutButton />
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
