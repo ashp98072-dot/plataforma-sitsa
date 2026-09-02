@@ -165,4 +165,46 @@ describe("GET /api/empresas/[slug]/tms/planes?id=", () => {
     expect(String(sql)).not.toContain("p.id = ?");
     expect(params).toEqual([expect.any(String), EMPRESA_ID, "2026-09-02", "2026-09-02"]);
   });
+
+  it("AJUSTE PRE-MERGE PR #175 (punto 1): id= tiene precedencia ABSOLUTA sobre fechaDesde/fechaHasta/pendienteCierre, aunque vengan juntos en la misma URL", async () => {
+    vi.mocked(query).mockResolvedValueOnce([filaPlan()] as never);
+    // fechaDesde/fechaHasta deliberadamente INCOMPATIBLES con la fecha
+    // real del plan (2026-09-01) — y pendienteCierre=1, que también lo
+    // ocultaría si el plan no estuviera pendiente de cierre.
+    const res = await GET(
+      req(`?id=${PLAN_ID}&fechaDesde=2026-09-03&fechaHasta=2026-09-03&pendienteCierre=1`),
+      ctx,
+    );
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    // El plan SIGUE apareciendo — id= ganó, no lo excluyó el rango de
+    // fecha incompatible ni el filtro de pendiente de cierre.
+    expect(data.planes).toHaveLength(1);
+
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(String(sql)).toContain("p.empresa_id = ?");
+    expect(String(sql)).toContain("p.id = ?");
+    expect(String(sql)).not.toContain("fecha_plan BETWEEN");
+    expect(String(sql)).not.toContain("LIMIT 200");
+    // El SELECT SIEMPRE trae 2 EXISTS (columnas calculadas
+    // pendiente_cierre/atrasado, ver SQL_PENDIENTE_CIERRE/SQL_ATRASADO) —
+    // si pendienteCierre=1 hubiera agregado su propia condición al
+    // WHERE (SQL_PENDIENTE_CIERRE de nuevo), habría un 3er EXISTS. Exigir
+    // exactamente 2 prueba que NO se agregó.
+    const exists = (String(sql).match(/EXISTS \(/g) ?? []).length;
+    expect(exists).toBe(2);
+    expect(params).toEqual([expect.any(String), EMPRESA_ID, PLAN_ID]);
+  });
+
+  it("AJUSTE PRE-MERGE PR #175 (punto 2): id no entero (31.5) → 400, nunca consulta la DB", async () => {
+    const res = await GET(req("?id=31.5"), ctx);
+    expect(res.status).toBe(400);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it.each(["-1", "0", "abc"])("id inválido (%s) → 400, nunca consulta la DB", async (valor) => {
+    const res = await GET(req(`?id=${valor}`), ctx);
+    expect(res.status).toBe(400);
+    expect(query).not.toHaveBeenCalled();
+  });
 });
