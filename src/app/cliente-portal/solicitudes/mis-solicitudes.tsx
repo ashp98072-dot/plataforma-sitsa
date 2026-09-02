@@ -7,6 +7,7 @@ import {
   claseEstadoSolicitud,
   etiquetaEstadoSolicitud,
 } from "@/lib/tms/solicitudes-cliente-ui";
+import { claseEstadoViaje, etiquetaEstadoViaje } from "@/lib/tms/cliente-portal-seguimiento-ui";
 
 type SolicitudFila = {
   id: number;
@@ -17,6 +18,10 @@ type SolicitudFila = {
   cantidadEntregas: number;
   planId: number | null;
   creadoEn: string;
+  // CLIENTE-PORTAL-4 — aditivos, opcionales por compatibilidad con
+  // cualquier caché/versión previa de la respuesta.
+  planCodigo?: string | null;
+  estadoViaje?: string | null;
 };
 
 export function MisSolicitudes() {
@@ -102,6 +107,7 @@ export function MisSolicitudes() {
                 <th className="px-3 py-2">Referencia</th>
                 <th className="px-3 py-2">Entregas</th>
                 <th className="px-3 py-2">Estado</th>
+                <th className="px-3 py-2">Viaje</th>
                 <th className="px-3 py-2">Creada</th>
                 <th className="px-3 py-2" />
               </tr>
@@ -121,6 +127,20 @@ export function MisSolicitudes() {
                       {etiquetaEstadoSolicitud(s.estado)}
                     </span>
                   </td>
+                  <td className="px-3 py-2">
+                    {s.estadoViaje ? (
+                      <span
+                        className={`rounded-full px-2.5 py-1 text-xs font-medium ${claseEstadoViaje(s.estadoViaje)}`}
+                      >
+                        {etiquetaEstadoViaje(s.estadoViaje)}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-[var(--muted)]">—</span>
+                    )}
+                    {s.planCodigo ? (
+                      <p className="mt-0.5 text-[11px] text-[var(--muted)]">{s.planCodigo}</p>
+                    ) : null}
+                  </td>
                   <td className="px-3 py-2 text-xs text-[var(--muted)]">
                     {s.creadoEn.slice(0, 16).replace("T", " ")}
                   </td>
@@ -136,7 +156,7 @@ export function MisSolicitudes() {
               ))}
               {!solicitudes.length ? (
                 <tr>
-                  <td colSpan={8} className="px-3 py-6 text-center text-[var(--muted)]">
+                  <td colSpan={9} className="px-3 py-6 text-center text-[var(--muted)]">
                     No hay solicitudes con este filtro.
                   </td>
                 </tr>

@@ -1,13 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/tms/cliente-portal-guard", () => ({ requireClienteSession: vi.fn() }));
-vi.mock("@/lib/tms/solicitudes-cliente", () => ({
-  crearSolicitudCliente: vi.fn(),
-  listarSolicitudesCliente: vi.fn(),
-}));
+vi.mock("@/lib/tms/solicitudes-cliente", () => ({ crearSolicitudCliente: vi.fn() }));
+vi.mock("@/lib/tms/cliente-portal-seguimiento", () => ({ listarViajesCliente: vi.fn() }));
 
 import { requireClienteSession } from "@/lib/tms/cliente-portal-guard";
-import { crearSolicitudCliente, listarSolicitudesCliente } from "@/lib/tms/solicitudes-cliente";
+import { crearSolicitudCliente } from "@/lib/tms/solicitudes-cliente";
+import { listarViajesCliente } from "@/lib/tms/cliente-portal-seguimiento";
 import { GET, POST } from "./route";
 
 const SESSION_A = { usuarioClienteId: 10, empresaId: 7, clienteId: 30, nombre: "Contacto A" };
@@ -44,18 +43,49 @@ describe("GET /api/cliente-portal/solicitudes", () => {
     } as Awaited<ReturnType<typeof requireClienteSession>>);
     const res = await GET(reqGet());
     expect(res.status).toBe(401);
-    expect(listarSolicitudesCliente).not.toHaveBeenCalled();
+    expect(listarViajesCliente).not.toHaveBeenCalled();
   });
 
   it("lista únicamente con el empresaId+clienteId de LA SESIÓN, nunca de un query param", async () => {
-    vi.mocked(listarSolicitudesCliente).mockResolvedValue([]);
+    vi.mocked(listarViajesCliente).mockResolvedValue([]);
     // Un intento de inyectar empresaId/clienteId por querystring no tiene
     // ningún efecto: la ruta ni siquiera los lee.
     await GET(reqGet("?empresaId=999&clienteId=999&estado=PROGRAMADA"));
-    expect(listarSolicitudesCliente).toHaveBeenCalledWith(7, 30, {
+    expect(listarViajesCliente).toHaveBeenCalledWith(7, 30, {
       estado: "PROGRAMADA",
       fechaDesde: undefined,
       fechaHasta: undefined,
+    });
+  });
+
+  it("CLIENTE-PORTAL-4: la respuesta conserva el contrato original (id/estado/...) más planCodigo/estadoViaje aditivos", async () => {
+    vi.mocked(listarViajesCliente).mockResolvedValue([
+      {
+        solicitudId: 501,
+        estadoSolicitud: "PROGRAMADA",
+        fechaSolicitada: "2099-01-15",
+        horaSolicitada: null,
+        referenciaCliente: null,
+        cantidadEntregas: 2,
+        planId: 900,
+        planCodigo: "PLAN-20990115-001",
+        estadoViaje: "EN_RUTA",
+        creadoEn: "2026-09-02 08:00:00",
+      },
+    ]);
+    const res = await GET(reqGet());
+    const data = await res.json();
+    expect(data.solicitudes[0]).toEqual({
+      id: 501,
+      estado: "PROGRAMADA",
+      fechaSolicitada: "2099-01-15",
+      horaSolicitada: null,
+      referenciaCliente: null,
+      cantidadEntregas: 2,
+      planId: 900,
+      creadoEn: "2026-09-02 08:00:00",
+      planCodigo: "PLAN-20990115-001",
+      estadoViaje: "EN_RUTA",
     });
   });
 });

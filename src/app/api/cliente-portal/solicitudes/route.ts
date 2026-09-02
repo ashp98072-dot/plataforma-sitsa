@@ -1,10 +1,8 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireClienteSession } from "@/lib/tms/cliente-portal-guard";
-import {
-  crearSolicitudCliente,
-  listarSolicitudesCliente,
-} from "@/lib/tms/solicitudes-cliente";
+import { crearSolicitudCliente } from "@/lib/tms/solicitudes-cliente";
+import { listarViajesCliente } from "@/lib/tms/cliente-portal-seguimiento";
 
 /**
  * CLIENTE-PORTAL-2 — solicitudes del cliente autenticado. Todo el scope
@@ -42,11 +40,30 @@ export async function GET(req: Request) {
   const fechaDesde = url.searchParams.get("fechaDesde") || undefined;
   const fechaHasta = url.searchParams.get("fechaHasta") || undefined;
 
-  const solicitudes = await listarSolicitudesCliente(session.empresaId, session.clienteId, {
+  // CLIENTE-PORTAL-4 (sección 13): listarViajesCliente() reutiliza
+  // exactamente la misma consulta que listarSolicitudesCliente
+  // (CLIENTE-PORTAL-2) y solo AGREGA el estado LIVE del viaje cuando la
+  // solicitud ya tiene plan — no es una segunda fuente de verdad.
+  // Se remapea de vuelta a la forma original de esta respuesta
+  // (compatibilidad total con el frontend ya desplegado) más 2 campos
+  // nuevos aditivos: planCodigo/estadoViaje.
+  const viajes = await listarViajesCliente(session.empresaId, session.clienteId, {
     estado,
     fechaDesde,
     fechaHasta,
   });
+  const solicitudes = viajes.map((v) => ({
+    id: v.solicitudId,
+    estado: v.estadoSolicitud,
+    fechaSolicitada: v.fechaSolicitada,
+    horaSolicitada: v.horaSolicitada,
+    referenciaCliente: v.referenciaCliente,
+    cantidadEntregas: v.cantidadEntregas,
+    planId: v.planId,
+    creadoEn: v.creadoEn,
+    planCodigo: v.planCodigo,
+    estadoViaje: v.estadoViaje,
+  }));
   return NextResponse.json(
     { solicitudes },
     { headers: { "Cache-Control": "private, no-store" } },

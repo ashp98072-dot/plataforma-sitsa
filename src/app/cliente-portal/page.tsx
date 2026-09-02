@@ -4,6 +4,7 @@ import { getClienteSession } from "@/lib/tms/cliente-portal-session";
 import { obtenerNombreCliente } from "@/lib/tms/cliente-portal-datos";
 import { validarClienteSessionActiva } from "@/lib/tms/cliente-usuarios";
 import { resumenSolicitudesCliente } from "@/lib/tms/solicitudes-cliente";
+import { resumenSeguimientoCliente } from "@/lib/tms/cliente-portal-seguimiento";
 import {
   claseEstadoSolicitud,
   etiquetaEstadoSolicitud,
@@ -11,14 +12,14 @@ import {
 import ClientePortalLogoutButton from "./logout-button";
 
 /**
- * CLIENTE-PORTAL-2 (sección 7) — dashboard real del Portal del Cliente,
- * reemplaza la landing mínima de CLIENTE-PORTAL-1. Todos los números
- * salen de resumenSolicitudesCliente() (derivados en vivo de
- * tms_solicitudes_cliente) — nada hardcodeado.
- *
- * Misma verificación DEFINITIVA contra base de datos que la landing
- * anterior (validarClienteSessionActiva) antes de mostrar datos del
- * cliente — ver comentario original en CLIENTE-PORTAL-1.
+ * CLIENTE-PORTAL-2/4 (sección 7 / sección 14) — dashboard real del
+ * Portal del Cliente. "Actividad reciente" sigue en
+ * resumenSolicitudesCliente() (sin cambios, CLIENTE-PORTAL-2). Las
+ * tarjetas de arriba ahora usan resumenSeguimientoCliente() (CLIENTE-
+ * PORTAL-4) — mismo criterio "no segunda fuente de verdad": está
+ * construido sobre listarViajesCliente(), que a su vez reutiliza
+ * listarSolicitudesCliente(). Ningún viaje se cuenta dos veces (ver
+ * cliente-portal-seguimiento.ts).
  */
 export default async function ClientePortalHomePage() {
   const session = await getClienteSession();
@@ -26,9 +27,10 @@ export default async function ClientePortalHomePage() {
   const activa = await validarClienteSessionActiva(session!);
   if (!activa) redirect("/cliente-portal/login");
 
-  const [nombreCliente, resumen] = await Promise.all([
+  const [nombreCliente, resumen, resumenViajes] = await Promise.all([
     obtenerNombreCliente(session!.empresaId, session!.clienteId),
     resumenSolicitudesCliente(session!.empresaId, session!.clienteId),
+    resumenSeguimientoCliente(session!.empresaId, session!.clienteId),
   ]);
 
   return (
@@ -48,11 +50,13 @@ export default async function ClientePortalHomePage() {
         <ClientePortalLogoutButton />
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Tarjeta titulo="Solicitudes pendientes" valor={resumen.pendientes} />
-        <Tarjeta titulo="Viajes programados" valor={resumen.programadas} />
-        <Tarjeta titulo="Rechazadas / canceladas" valor={resumen.rechazadasCanceladas} />
-        <Tarjeta titulo="Total de solicitudes" valor={resumen.total} />
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <Tarjeta titulo="Solicitudes pendientes" valor={resumenViajes.pendientes} />
+        <Tarjeta titulo="Viajes programados" valor={resumenViajes.viajesProgramados} />
+        <Tarjeta titulo="Viajes en ruta" valor={resumenViajes.viajesEnRuta} />
+        <Tarjeta titulo="Viajes finalizados" valor={resumenViajes.viajesFinalizados} />
+        <Tarjeta titulo="Rechazadas / canceladas" valor={resumenViajes.rechazadasCanceladas} />
+        <Tarjeta titulo="Total de solicitudes" valor={resumenViajes.total} />
       </div>
 
       <div className="flex flex-wrap gap-3">
