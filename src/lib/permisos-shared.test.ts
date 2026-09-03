@@ -70,6 +70,26 @@ describe("permisos críticos por rol", () => {
     });
   });
 
+  describe("FLOTA-COMBUSTIBLE-1 (Fase 2) — flota_combustible", () => {
+    it("Jefe y Gerente de Operaciones lo traen por defecto (mismo criterio que viaticos_autorizar: 'los de operaciones son los que autorizan')", () => {
+      expect(tienePermiso(permisosDefaultPorRol("JefeOperaciones"), "flota_combustible", "editar")).toBe(true);
+      expect(tienePermiso(permisosDefaultPorRol("GerenteOperaciones"), "flota_combustible", "editar")).toBe(true);
+    });
+
+    it("Auxiliar de Operaciones NO lo trae por defecto", () => {
+      expect(tienePermiso(permisosDefaultPorRol("AuxiliarOperaciones"), "flota_combustible", "editar")).toBe(false);
+    });
+
+    it("ningún otro rol lo trae por defecto (incluye CoordinadorPredios/Operaciones legado/Visualizador, que reciben ...FLOTA_SUBMODULOS pero flota_combustible queda fuera de ese arreglo a propósito)", () => {
+      const otros = ROLES.filter(
+        (r) => r !== "Admin" && r !== "GerenteOperaciones" && r !== "JefeOperaciones",
+      );
+      for (const rol of otros) {
+        expect(tienePermiso(permisosDefaultPorRol(rol), "flota_combustible", "editar")).toBe(false);
+      }
+    });
+  });
+
   it("respeta un permiso explícitamente desmarcado", () => {
     const permisos = mergePermisosConCatalogo("RRHH", [
       {

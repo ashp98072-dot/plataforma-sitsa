@@ -15,6 +15,8 @@ import { contentTypeFor, guardarUpload } from "@/lib/uploads";
 
 export type TipoCombustible = "diesel" | "gasolina";
 
+export type EstadoCargaCombustible = "PENDIENTE" | "APROBADO" | "RECHAZADO";
+
 export type CargaCombustible = {
   id: number;
   viajeId: number;
@@ -24,10 +26,18 @@ export type CargaCombustible = {
   km: number | null;
   gasolinera: string | null;
   nombreArchivo: string;
-  estado: "PENDIENTE" | "APROBADO" | "RECHAZADO";
+  estado: EstadoCargaCombustible;
   motivoRechazo: string | null;
   creadoPor: string;
   creadoEn: string;
+};
+
+/** Fase 2 (revisión de Operaciones): incluye placa/piloto para la bandeja de staff. */
+export type CargaCombustibleRevision = CargaCombustible & {
+  placa: string;
+  pilotoNombre: string;
+  revisadoPor: string | null;
+  revisadoEn: string | null;
 };
 
 type UploadLike = {
@@ -144,4 +154,130 @@ export async function obtenerArchivoCargaCombustible(
     nombreOriginal: String(row.nombre_original),
     mime: row.mime ? String(row.mime) : null,
   };
+}
+
+/**
+ * FLOTA-COMBUSTIBLE-1 (Fase 2) — versión para Operaciones: acotada solo a
+ * empresa + id (no a un viaje específico, a diferencia de la del piloto
+ * arriba), porque quien revisa tiene autoridad sobre TODOS los viajes de
+ * la empresa, no solo el suyo.
+ */
+export async function obtenerArchivoCargaCombustiblePorEmpresa(
+  empresaId: number,
+  cargaId: number,
+): Promise<{ rutaRelativa: string; nombreOriginal: string; mime: string | null } | null> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT ruta_relativa, nombre_original, mime FROM flota_combustible_cargas
+     WHERE id = ? AND empresa_id = ? LIMIT 1`,
+    [cargaId, empresaId],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    rutaRelativa: String(row.ruta_relativa),
+    nombreOriginal: String(row.nombre_original),
+    mime: row.mime ? String(row.mime) : null,
+  };
+}
+
+function mapCargaRevision(r: RowDataPacket): CargaCombustibleRevision {
+  return {
+    ...mapCarga(r),
+    placa: String(r.placa ?? "—"),
+    pilotoNombre: String(r.piloto_nombre ?? "—"),
+    revisadoPor: r.revisado_por ? String(r.revisado_por) : null,
+    revisadoEn: r.revisado_en ? String(r.revisado_en) : null,
+  };
+}
+
+/**
+ * FLOTA-COMBUSTIBLE-1 (Fase 2) — bandeja de revisión de Operaciones.
+ * `estado` filtra Pendiente/Aprobado/Rechazado (sin filtro = todas);
+ * `desde`/`hasta` filtran por fecha de creación (YYYY-MM-DD), para el
+ * corte mensual. Reutiliza el mismo criterio de aislamiento por empresa
+ * que el resto del módulo — nunca cruza cargas de otra empresa aunque
+ * compartan vehiculo_id por coincidencia (flota_vehiculo_acceso no
+ * aplica aquí: la carga es propiedad de la empresa que la registró, no
+ * del vehículo compartido).
+ */
+export async function listarCargasCombustibleRevision(
+  empresaId: number,
+  filtros: { estado?: EstadoCargaCombustible; desde?: string; hasta?: string; vehiculoId?: number } = {},
+): Promise<{ items: CargaCombustibleRevision[]; resumen: Record<EstadoCargaCombustible, number> }> {
+  const condiciones = ["c.empresa_id = ?"];
+  const params: (string | number)[] = [empresaId];
+  if (filtros.estado) {
+    condiciones.push("c.estado = ?");
+    params.push(filtros.estado);
+  }
+  if (filtros.desde) {
+    condiciones.push("c.creado_at >= ?");
+    params.push(`${filtros.desde} 00:00:00`);
+  }
+  if (filtros.hasta) {
+    condiciones.push("c.creado_at <= ?");
+    params.push(`${filtros.hasta} 23:59:59`);
+  }
+  if (filtros.vehiculoId) {
+    condiciones.push("c.vehiculo_id = ?");
+    params.push(filtros.vehiculoId);
+  }
+  const where = condiciones.join(" AND ");
+  const rows = await query<RowDataPacket[]>(
+    `SELECT c.id, c.viaje_id, c.tipo_combustible, c.galones, c.monto, c.km, c.gasolinera,
+            c.nombre_original, c.estado, c.motivo_rechazo, c.creado_por, c.creado_at,
+            c.revisado_por, c.revisado_en, c.piloto_nombre, v.placa
+     FROM flota_combustible_cargas c
+     INNER JOIN flota_vehiculos v ON v.id = c.vehiculo_id
+     WHERE ${where}
+     ORDER BY c.id DESC
+     LIMIT 500`,
+    params,
+  );
+  const resumenRows = await query<RowDataPacket[]>(
+    `SELECT estado, COUNT(*) AS n FROM flota_combustible_cargas
+     WHERE empresa_id = ? GROUP BY estado`,
+    [empresaId],
+  );
+  const resumen: Record<EstadoCargaCombustible, number> = { PENDIENTE: 0, APROBADO: 0, RECHAZADO: 0 };
+  for (const r of resumenRows) {
+    const e = String(r.estado);
+    if (e === "PENDIENTE" || e === "APROBADO" || e === "RECHAZADO") resumen[e] = Number(r.n);
+  }
+  return { items: rows.map(mapCargaRevision), resumen };
+}
+
+/**
+ * FLOTA-COMBUSTIBLE-1 (Fase 2) — aprobar o rechazar una carga PENDIENTE.
+ * Solo transiciona desde PENDIENTE (el WHERE lo garantiza atómicamente) —
+ * una carga ya decidida no se puede "re-aprobar"/"re-rechazar" desde
+ * aquí, evita pisar una decisión anterior por una doble petición o dos
+ * revisores actuando a la vez.
+ */
+export async function revisarCargaCombustible(
+  empresaId: number,
+  cargaId: number,
+  accion: "aprobar" | "rechazar",
+  revisorUsername: string,
+  motivoRechazo?: string,
+): Promise<{ ok: true } | { ok: false; error: string; status: number }> {
+  if (accion === "rechazar" && !motivoRechazo?.trim()) {
+    return { ok: false, error: "Indica el motivo del rechazo.", status: 400 };
+  }
+  const nuevoEstado: EstadoCargaCombustible = accion === "aprobar" ? "APROBADO" : "RECHAZADO";
+  const ahora = ahoraLocal();
+  const r = await execute(
+    `UPDATE flota_combustible_cargas
+     SET estado = ?, revisado_por = ?, revisado_en = ?, motivo_rechazo = ?
+     WHERE id = ? AND empresa_id = ? AND estado = 'PENDIENTE'`,
+    [nuevoEstado, revisorUsername, ahora, accion === "rechazar" ? motivoRechazo!.trim() : null, cargaId, empresaId],
+  );
+  if (!r.affectedRows) {
+    return {
+      ok: false,
+      error: "Esta carga ya fue revisada o no existe. Actualiza la pantalla e inténtalo de nuevo.",
+      status: 409,
+    };
+  }
+  return { ok: true };
 }

@@ -159,6 +159,19 @@ export const PLATAFORMA_PERMISIBLES = [
   // endpoints de Rutas aceptan rutas:<acción> O tms:<acción> — ver
   // requireTenantRutas en src/lib/tenant.ts.
   "rutas",
+  // FLOTA-COMBUSTIBLE-1 (Fase 2): revisar/aprobar/rechazar las cargas de
+  // combustible que el piloto registra desde el Portal — permiso propio
+  // y explícito, NO agregado a FLOTA_SUBMODULOS a propósito: ese arreglo
+  // se reparte por completo ("...FLOTA_SUBMODULOS") a varios roles
+  // (Operaciones legado, CoordinadorPredios, Visualizador) que nunca
+  // pidieron autoridad de aprobación de gastos — meterlo ahí se lo habría
+  // dado sin que nadie lo decidiera. En cambio, sigue el mismo patrón que
+  // viaticos_autorizar: GerenteOperaciones y JefeOperaciones lo traen por
+  // defecto (ver modulosPropiosDelRol) porque el usuario confirmó "los de
+  // operaciones son los que autorizan"; ningún otro rol lo trae por
+  // defecto. Gatea sobre el módulo de empresa "flota" (ver
+  // moduloEmpresaDelPermiso), igual que el resto de Flota/Predios.
+  "flota_combustible",
 ] as const;
 
 export type PlataformaPermisible = (typeof PLATAFORMA_PERMISIBLES)[number];
@@ -243,6 +256,7 @@ export function esPlataformaPermisible(m: string): m is PlataformaPermisible {
  */
 export function moduloEmpresaDelPermiso(m: string): Modulo | null {
   if (m === "multas") return "tms";
+  if (m === "flota_combustible") return "flota";
   if (
     m === "viaticos" ||
     m === "viaticos_autorizar" ||
@@ -277,6 +291,7 @@ export function labelPermiso(modulo: string): string {
   if (modulo === "viajes_cerrar") return "Viajes: cerrar administrativamente";
   if (modulo === "programacion") return "Programación";
   if (modulo === "rutas") return "Rutas";
+  if (modulo === "flota_combustible") return "Flota: revisar/aprobar combustible";
   if (esPlataformaPermisible(modulo)) {
     return MODULO_LABEL[modulo as Modulo] ?? modulo;
   }
@@ -348,8 +363,13 @@ export const GRUPOS_PERMISOS: {
   {
     id: "flota",
     titulo: "Permisos Flota / Predios por módulos",
-    descripcion: "Vehículos, taller, lecturas, reportes y viajes.",
-    modulos: [...FLOTA_SUBMODULOS],
+    descripcion: "Vehículos, taller, lecturas, reportes, viajes y revisión de combustible.",
+    // "flota_combustible" se agrega aquí como literal (no dentro de
+    // FLOTA_SUBMODULOS) a propósito: sigue siendo visible/asignable en
+    // este grupo de Usuarios, pero sin heredar los "...FLOTA_SUBMODULOS"
+    // que se reparten completos a Operaciones (legado), CoordinadorPredios
+    // y Visualizador — ver el comentario en PLATAFORMA_PERMISIBLES.
+    modulos: [...FLOTA_SUBMODULOS, "flota_combustible"],
   },
   {
     id: "contabilidad",
@@ -435,7 +455,11 @@ export function modulosPropiosDelRol(rol: RolGlobal): string[] {
     // criterio que "programacion").
     case "GerenteOperaciones":
     case "JefeOperaciones":
-      return ["tms", "programacion", "rutas", "clientes", "viaticos", "viaticos_autorizar", "viajes_cerrar", "multas"];
+      // FLOTA-COMBUSTIBLE-1 (Fase 2): "los de operaciones son los que
+      // autorizan" (confirmado por el usuario) — mismo criterio que
+      // viaticos_autorizar arriba: estos dos roles sí lo traen por
+      // defecto, AuxiliarOperaciones/Facturador NO.
+      return ["tms", "programacion", "rutas", "clientes", "viaticos", "viaticos_autorizar", "viajes_cerrar", "multas", "flota_combustible"];
     case "AuxiliarOperaciones":
       return ["tms", "programacion", "rutas", "clientes", "multas"];
     case "Facturador":
@@ -677,7 +701,8 @@ export function modulosPlataformaDesdePermisos(
       p.modulo !== "viaticos_comprobantes" &&
       p.modulo !== "viajes_cerrar" &&
       p.modulo !== "programacion" &&
-      p.modulo !== "rutas"
+      p.modulo !== "rutas" &&
+      p.modulo !== "flota_combustible"
     ) {
       out.add(p.modulo);
     }
@@ -720,7 +745,11 @@ export const RRHH_NAV: {
 
 /** Navegación Predios / control-flota. */
 export const FLOTA_NAV: {
-  sub: FlotaSubmodulo;
+  // "flota_combustible" no es un FlotaSubmodulo (ver comentario en
+  // PLATAFORMA_PERMISIBLES) — el tipo se ensancha solo aquí para poder
+  // listarlo en esta navegación, sin agregarlo al arreglo FLOTA_SUBMODULOS
+  // que se reparte completo a varios roles por defecto.
+  sub: FlotaSubmodulo | "flota_combustible";
   label: string;
   path: string;
 }[] = [
@@ -733,4 +762,7 @@ export const FLOTA_NAV: {
   { sub: "flota_lecturas", label: "Lecturas", path: "lecturas" },
   { sub: "flota_reportes", label: "Reportes flota", path: "reportes" },
   { sub: "flota_piloto", label: "Registrar viaje", path: "piloto" },
+  // FLOTA-COMBUSTIBLE-1 (Fase 2): revisión/aprobación de cargas de
+  // combustible del piloto.
+  { sub: "flota_combustible", label: "Combustible", path: "combustible" },
 ];
