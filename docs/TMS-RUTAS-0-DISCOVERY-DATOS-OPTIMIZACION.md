@@ -377,7 +377,7 @@ ejecución
    nacido de un optimizador en vez de una asignación manual)
 ```
 
-**Resumen**: de las 10 etapas, **2 (asignación de recursos, ejecución)
+**Resumen**: de las 9 etapas, **2 (asignación de recursos, ejecución)
 se reutilizan tal cual sin ninguna salvedad**; **3 (persistencia/
 representación, revisión Operaciones, plan TMS) tienen candidatos
 fuertes de reutilización pero condicionados a resolver primero la
