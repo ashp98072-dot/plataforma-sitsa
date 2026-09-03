@@ -533,8 +533,14 @@ vez convertido a plan, aparecería ahí **exactamente igual** que uno
 creado a mano en el Portal, sin ningún cambio de UI. Lo único
 potencialmente nuevo sería:
 
-- Mostrar el `external_order_id` de PriceSmart junto al código interno
-  `PLAN-...` (si PriceSmart necesita reconciliar por su propio id).
+- **AJUSTE PRE-MERGE PR #180 (revisión final, punto 2)** — mostrar uno o
+  varios identificadores de pedido PriceSmart asociados al viaje/parada,
+  según la cardinalidad que confirme el contrato (§4/§16): si termina
+  siendo 1:1, un solo `external_order_id` junto al código interno
+  `PLAN-...` alcanza; si termina siendo N:1 (varios pedidos agrupados en
+  una ruta), habría que listar cada `external_order_id` junto a la
+  parada/entrega que le corresponde, no uno solo a nivel de plan. No se
+  asume aquí cuál de los dos aplica.
 - Un indicador de OTD — nivel A) viaje/ruta es el único calculable con
   la estructura actual; nivel B) por pedido/entrega (el que
   probablemente le interesa más al cliente) depende de que primero
@@ -735,9 +741,20 @@ proponerse en concreto):
   como una fase menor de esta integración.
 - **Seguridad de credenciales de integración**: un secreto de API mal
   guardado (texto plano, en logs, en query string) sería una fuga real
-  hacia un tercero — debe seguir el mismo estándar que ya usa el proyecto
-  para contraseñas (`scrypt`/hash, nunca texto plano, ver
-  `src/lib/password.ts`).
+  hacia un tercero. **AJUSTE PRE-MERGE PR #180 (revisión final, punto
+  3)** — el estándar correcto depende de la dirección de la integración,
+  no es uno solo para todo:
+  - **Inbound/verificación** (SITSA valida algo que PriceSmart le
+    manda): un hash irreversible es correcto y suficiente — mismo
+    estándar que ya usa el proyecto para contraseñas (`scrypt`/hash,
+    nunca texto plano, ver `src/lib/password.ts`).
+  - **Outbound** (SITSA consume la API de PriceSmart y necesita
+    presentarle una credencial): un hash irreversible NO sirve — hace
+    falta poder recuperar el secreto en texto para enviarlo, así que
+    requiere almacenamiento cifrado/reversible y seguro, si el
+    mecanismo que exija PriceSmart lo requiere. No se diseña aquí la
+    implementación ni el almacenamiento concreto — depende de qué
+    mecanismo de autenticación confirme PriceSmart (§13).
 - **Multiempresa**: si SITSA maneja más de una empresa dentro de la
   plataforma y PriceSmart eventualmente opera con más de una, cada
   credencial de integración debe quedar atada a `empresa_id +
