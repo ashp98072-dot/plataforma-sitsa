@@ -368,10 +368,14 @@ explícitamente a la espera de `PRICESMART-INTEGRACION-1-CONTRATO-API`
   recta, no sustituye esto). Es decir: `TMS-RUTAS-2` puede seguir siendo
   necesario aunque las coordenadas terminen siendo de captura manual —
   ver la condición corregida del siguiente ticket en §10.
-- **El alcance del optimizador (§3.A.1-3) determina si el problema es
-  TSP, VRP o CVRPTW** — sin esa decisión, cualquier trabajo de diseño de
-  esquema (coordenadas/capacidad/ventanas) corre el riesgo de construir
-  estructura que el MVP elegido finalmente no necesita.
+- **AJUSTE PRE-MERGE PR #182 (revisión final, punto 1)** — el alcance
+  del optimizador (§3.A.1-3) determina la complejidad y el tipo general
+  del problema — desde ordenamiento simple hasta agrupación multi-ruta
+  con capacidad, ventanas y restricciones adicionales — sin fijar
+  todavía la formulación matemática definitiva. Sin esa decisión de
+  alcance, cualquier trabajo de diseño de esquema (coordenadas/
+  capacidad/ventanas) corre el riesgo de construir estructura que el
+  MVP elegido finalmente no necesita.
 - **Dependencia externa real**: varias preguntas de impacto "Alto" (§7)
   no las puede resolver SITSA solo — el ticket de contrato con
   PriceSmart (`PRICESMART-INTEGRACION-1-CONTRATO-API`) sigue siendo un
