@@ -6,6 +6,7 @@ import Image from "next/image";
 import type { AsignacionOperativaPortal, ViajeAbiertoPiloto } from "@/lib/flota/viajes-piloto";
 import type { PlanParada } from "@/lib/tms/paradas";
 import { paginarViajesPortal, separarViajesPortal } from "@/lib/flota/viajes-portal-ui";
+import CombustibleForm from "./combustible-form";
 
 function fechaEnEspanol(fecha: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return fecha || "Fecha pendiente";
@@ -415,6 +416,8 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
       </div>
       <button className="mt-4 rounded-lg bg-[var(--accent)] px-4 py-2.5 font-medium text-white disabled:opacity-50" disabled={loading || !fotoActual || (tipoEvidencia === "producto" && !paradaSeleccionada)}>Guardar evidencia</button>
     </form> : null}
+
+    {viajeEnCursoId ? <CombustibleForm viajeId={viajeEnCursoId} /> : null}
 
     {tipo === "Piloto" && viajeAbierto ? <form onSubmit={onLlegada} className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
       {/* OPS-1 (corregido) + PORTAL-HARDENING-2 (Fase F): el piloto NUNCA
