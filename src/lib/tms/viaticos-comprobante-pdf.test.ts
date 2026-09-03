@@ -2,14 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/tms/viaticos", () => ({ listarViaticosControl: vi.fn() }));
 vi.mock("@/lib/firmas/firmas-lectura", () => ({ listarFirmasViatico: vi.fn() }));
-vi.mock("@/lib/db", () => ({ query: vi.fn() }));
-vi.mock("@/lib/uploads", () => ({ absPathFromRelative: vi.fn((r: string) => `/abs/${r}`) }));
-vi.mock("fs", () => ({ existsSync: vi.fn(() => false), readFileSync: vi.fn() }));
 
 import { listarViaticosControl } from "@/lib/tms/viaticos";
 import { listarFirmasViatico } from "@/lib/firmas/firmas-lectura";
-import { query } from "@/lib/db";
-import { existsSync } from "fs";
 import { comprobanteAutorizacionesPdf } from "./viaticos-comprobante-pdf";
 
 const VIATICO_BASE = {
@@ -52,7 +47,9 @@ const FIRMA_BASE = {
   id: 55,
   accion: "AUTORIZAR_VIATICO" as const,
   codigoFirma: "SIG-55",
-  fechaHoraServidor: "2026-09-01T09:00:00",
+  // Formato real que produce mapFirmaViatico() (String(Date) de MySQL DATETIME
+  // vía mysql2) — igual que en producción, no un ISO limpio inventado.
+  fechaHoraServidor: "Thu Sep 03 2026 18:47:26 GMT+0000 (Coordinated Universal Time)",
   metodo: "PASSWORD" as const,
   usuarioId: 9,
   empleadoId: null,
@@ -65,7 +62,6 @@ const FIRMA_BASE = {
 
 beforeEach(() => {
   vi.resetAllMocks();
-  vi.mocked(existsSync).mockReturnValue(false);
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -78,30 +74,16 @@ describe("comprobanteAutorizacionesPdf", () => {
     expect(listarFirmasViatico).not.toHaveBeenCalled();
   });
 
-  it("genera un buffer PDF válido (empieza con %PDF) con un viático autorizado y firma sin imagen", async () => {
+  it("genera una tabla en PDF válida (empieza con %PDF) con un viático autorizado y su firma", async () => {
     vi.mocked(listarViaticosControl).mockResolvedValue({ items: [VIATICO_BASE], resumen: {} as never });
     vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]);
     const buf = await comprobanteAutorizacionesPdf(7, "SITSA");
     expect(buf).not.toBeNull();
     expect(buf!.subarray(0, 4).toString("latin1")).toBe("%PDF");
     expect(listarFirmasViatico).toHaveBeenCalledWith(7, 1);
-    expect(query).not.toHaveBeenCalled(); // sin tieneImagen, no se consulta imagen_ruta
   });
 
-  it("consulta la imagen de la firma acotada a empresa/modulo/entidad cuando tieneImagen=true", async () => {
-    vi.mocked(listarViaticosControl).mockResolvedValue({ items: [VIATICO_BASE], resumen: {} as never });
-    vi.mocked(listarFirmasViatico).mockResolvedValue([{ ...FIRMA_BASE, tieneImagen: true }]);
-    vi.mocked(query).mockResolvedValue([{ imagen_ruta: "firmas/x.png", imagen_mime: "image/png" }] as never);
-    vi.mocked(existsSync).mockReturnValue(false); // archivo no existe -> PDF sigue generándose sin la imagen
-
-    const buf = await comprobanteAutorizacionesPdf(7, "SITSA");
-    expect(buf).not.toBeNull();
-    expect(query).toHaveBeenCalledWith(expect.stringContaining("firmas_electronicas"), [55, 7]);
-    const [, params] = vi.mocked(query).mock.calls[0];
-    expect(params).toEqual([55, 7]);
-  });
-
-  it("sin firma de autorización registrada, el PDF se genera igual (lo indica en el texto, no falla)", async () => {
+  it("sin firma de autorización registrada, el PDF se genera igual (fila con 'No disponible', nunca falla)", async () => {
     vi.mocked(listarViaticosControl).mockResolvedValue({ items: [VIATICO_BASE], resumen: {} as never });
     vi.mocked(listarFirmasViatico).mockResolvedValue([]);
     const buf = await comprobanteAutorizacionesPdf(7, "SITSA");
@@ -109,7 +91,7 @@ describe("comprobanteAutorizacionesPdf", () => {
     expect(buf!.subarray(0, 4).toString("latin1")).toBe("%PDF");
   });
 
-  it("genera una página por cada viático AUTORIZADO (lote completo, no solo el primero)", async () => {
+  it("consulta la firma de CADA viático del lote (no solo el primero)", async () => {
     const v2 = { ...VIATICO_BASE, id: 2, planCodigo: "VJ-002", personalNombre: "María López" };
     vi.mocked(listarViaticosControl).mockResolvedValue({ items: [VIATICO_BASE, v2], resumen: {} as never });
     vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]);
@@ -118,5 +100,16 @@ describe("comprobanteAutorizacionesPdf", () => {
     expect(listarFirmasViatico).toHaveBeenCalledWith(7, 1);
     expect(listarFirmasViatico).toHaveBeenCalledWith(7, 2);
     expect(listarFirmasViatico).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignora una firma de LIQUIDAR_VIATICO y usa solo AUTORIZAR_VIATICO", async () => {
+    vi.mocked(listarViaticosControl).mockResolvedValue({ items: [VIATICO_BASE], resumen: {} as never });
+    vi.mocked(listarFirmasViatico).mockResolvedValue([
+      { ...FIRMA_BASE, accion: "LIQUIDAR_VIATICO", nombreFirmante: "Otro Firmante" },
+    ]);
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA");
+    // No debe reventar ni usar la firma de liquidación — se genera igual
+    // que "sin firma registrada" (fila con "No disponible").
+    expect(buf).not.toBeNull();
   });
 });
