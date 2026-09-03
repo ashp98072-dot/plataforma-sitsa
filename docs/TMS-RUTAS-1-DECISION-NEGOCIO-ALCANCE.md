@@ -255,9 +255,12 @@ Operaciones confirma unidad y personal después.
 - **Requisitos mínimos**: coordenadas de todos los pedidos candidatos;
   algún criterio de agrupación (aunque sea simple, p. ej. por zona/
   cercanía) — depende de §4 preguntas 1-3, 33-36.
-- **Complejidad relativa**: media — es un VRP (Vehicle Routing Problem)
-  sin restricciones de capacidad ni ventanas, con múltiples vehículos
-  posibles pero sin la capa completa de restricciones operativas.
+- **Complejidad relativa**: media — **AJUSTE PRE-MERGE PR #182 (punto
+  2)**: problema tipo VRP / agrupación y ruteo multi-ruta, con múltiples
+  vehículos posibles pero sin la capa completa de restricciones
+  operativas. No se afirma todavía que la formulación matemática
+  definitiva sea un VRP clásico — eso depende de cómo se resuelvan las
+  preguntas de agrupación (§3.A.1-3) y objetivo (§3.F), no se fija aquí.
 
 ### MVP C — Optimización completa
 
@@ -273,9 +276,17 @@ unidad + personal + restricciones, todo junto.
   en TMS-RUTAS-0 (coordenadas, capacidad, ventanas, peso/volumen) deben
   existir y estar confiables — este MVP es el que menos tolera datos
   incompletos.
-- **Complejidad relativa**: alta — es un CVRPTW (Capacitated Vehicle
-  Routing Problem with Time Windows), la variante más completa de las
-  tres, la que más tiempo de desarrollo y más calidad de datos exige.
+- **Complejidad relativa**: alta — **AJUSTE PRE-MERGE PR #182 (punto
+  3)**: problema tipo VRP con capacidad, ventanas horarias y
+  restricciones adicionales de recursos (piloto, auxiliares,
+  disponibilidad de personas — no solo vehículos). CVRPTW (Capacitated
+  Vehicle Routing Problem with Time Windows) podría ser una formulación
+  base razonable para la parte vehículos/capacidad/ventanas, pero por sí
+  sola no describe necesariamente todo el problema (la capa de
+  disponibilidad/conflictos de personal ya existente en TMS-RUTAS-0, §4,
+  no es parte estándar de un CVRPTW) — no se elige ni se considera
+  suficiente todavía. Es, de las tres, la que más tiempo de desarrollo y
+  más calidad de datos exige.
 
 **No se recomienda ningún MVP todavía.** La elección depende
 directamente de cómo se respondan las preguntas 1-3 (alcance de
@@ -345,11 +356,18 @@ explícitamente a la espera de `PRICESMART-INTEGRACION-1-CONTRATO-API`
   están en `PENDIENTE`; sin al menos las de impacto "Alto" resueltas, no
   se puede elegir entre MVP A/B/C ni dimensionar ningún ticket técnico
   siguiente con precisión.
-- **Geocoding depende de una decisión que a su vez depende de otra**:
-  si Operaciones prefiere capturar coordenadas manualmente (§3.E.27),
-  TMS-RUTAS-2 (discovery de proveedor de geocoding) podría no ser
-  necesario en absoluto, o reducirse a un proveedor de rutas puro (sin
-  geocoding automático).
+- **AJUSTE PRE-MERGE PR #182 (puntos 1 y 4) — geocoding y routing son
+  problemas distintos, no uno solo**: geocoding (A, dirección → lat/lng)
+  y routing (B, lat/lng → distancia/tiempo real por carretera) dependen
+  de decisiones separadas. Si Operaciones prefiere capturar coordenadas
+  manualmente (§3.E.27), **podría no hacer falta investigar un
+  proveedor de geocoding** — pero **puede seguir haciendo falta**
+  investigar un proveedor/motor de **routing o matriz de distancias**,
+  porque tener lat/lng no resuelve por sí solo "cuánto tarda ir de A a
+  B por carretera" (TMS-RUTAS-0 ya documentó que Haversine es solo línea
+  recta, no sustituye esto). Es decir: `TMS-RUTAS-2` puede seguir siendo
+  necesario aunque las coordenadas terminen siendo de captura manual —
+  ver la condición corregida del siguiente ticket en §10.
 - **El alcance del optimizador (§3.A.1-3) determina si el problema es
   TSP, VRP o CVRPTW** — sin esa decisión, cualquier trabajo de diseño de
   esquema (coordenadas/capacidad/ventanas) corre el riesgo de construir
@@ -385,19 +403,43 @@ podría ser:
 
 **TMS-RUTAS-2-COORDENADAS-DISCOVERY-PROVEEDOR**
 
-pero **solo si** ya se decidió:
+**AJUSTE PRE-MERGE PR #182 (punto 1) — condición reformulada**: la
+versión anterior de este documento condicionaba `TMS-RUTAS-2` a que se
+decidiera usar geocoding automático, sugiriendo que la captura manual de
+coordenadas podría hacerlo innecesario por completo. Eso trataba
+geocoding y routing como si fueran el mismo problema — no lo son (ver
+§8):
 
-- que el sistema SÍ usará coordenadas/geocoding (no captura manual
-  exclusiva, §3.E.27-28), y
-- qué alcance tendrá el optimizador (MVP A, B o C, §5) — porque el tipo
-  de proveedor a investigar (uno de geocoding simple vs. uno con
-  routing/matriz de distancias real) depende de cuánto necesita
-  realmente el MVP elegido.
+- **A. Captura/geocoding** — dirección → lat/lng.
+- **B. Routing** — lat/lng → distancia/tiempo real por carretera.
 
-Si esas dos condiciones **no** están resueltas, `TMS-RUTAS-2` **no debe
-iniciarse todavía** — el paso siguiente sería, en cambio, cerrar la
-conversación de negocio pendiente (§8/§9) y/o el contrato con PriceSmart
-(§7) antes de continuar.
+`TMS-RUTAS-2` se inicia cuando:
+
+1. esté definido el MVP (A, B o C, §5), y
+2. esté definido cómo se obtendrán las coordenadas (captura manual por
+   Operaciones, vs. geocoding automático de una dirección, §3.E.27-28),
+   y
+3. se sepa, con base en 1) y 2), **qué capacidades externas necesita
+   realmente ese MVP**: geocoding, routing/matriz de distancias, o
+   ambas.
+
+Si las coordenadas terminan siendo de **captura manual**, la parte de
+**geocoding** de `TMS-RUTAS-2` podría no ser necesaria — pero la parte
+de **routing/matriz de distancias** puede seguir siendo necesaria si
+corresponde según el MVP elegido (ninguno de los tres MVP de §5 tiene
+hoy una fuente de distancia/tiempo real de carretera; Haversine es solo
+un proxy en línea recta, TMS-RUTAS-0 §3.4/§6). **No se elige proveedor
+todavía** en ningún caso.
+
+Si las 3 condiciones de arriba **no** están resueltas, `TMS-RUTAS-2`
+**no debe iniciarse todavía** — el paso siguiente sería, en cambio,
+cerrar la conversación de negocio pendiente (§8/§9) y/o el contrato con
+PriceSmart (§7) antes de continuar.
+
+Se mantienen sin cambios: las 54 preguntas siguen `PENDIENTE`, ningún
+MVP elegido, la cardinalidad pedido↔entrega↔ruta de PriceSmart sigue
+pendiente, las coordenadas siguen sin fuente/tabla canónica decidida, y
+cero implementación en cualquier caso.
 
 ---
 
