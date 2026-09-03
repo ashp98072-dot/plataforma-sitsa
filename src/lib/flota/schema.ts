@@ -468,6 +468,42 @@ async function asegurarSchemaFlotaInner(): Promise<void> {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 
+  // FLOTA-COMBUSTIBLE-1 — carga de combustible que el piloto registra
+  // desde su Portal (galones, monto, km, foto del vale), siempre ligada a
+  // un viaje (flota_viajes) — Operaciones la revisa después (estado
+  // PENDIENTE/APROBADO/RECHAZADO); solo APROBADO cuenta en los totales
+  // mensuales. `km` es NULL cuando la unidad no tiene odómetro funcional
+  // (mismo criterio que flota_viajes.km_salida/km_llegada).
+  await execute(`
+    CREATE TABLE IF NOT EXISTS flota_combustible_cargas (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      empresa_id INT NOT NULL,
+      vehiculo_id INT NOT NULL,
+      viaje_id INT NOT NULL,
+      empleado_id INT NOT NULL,
+      piloto_nombre VARCHAR(120) NOT NULL,
+      tipo_combustible VARCHAR(20) NOT NULL,
+      galones DECIMAL(10,2) NOT NULL,
+      monto DECIMAL(10,2) NOT NULL,
+      km INT NULL,
+      gasolinera VARCHAR(150) NULL,
+      ruta_relativa VARCHAR(400) NOT NULL,
+      nombre_original VARCHAR(255) NOT NULL,
+      mime VARCHAR(80) NULL,
+      tamano INT NOT NULL DEFAULT 0,
+      estado VARCHAR(20) NOT NULL DEFAULT 'PENDIENTE',
+      revisado_por VARCHAR(100) NULL,
+      revisado_en DATETIME NULL,
+      motivo_rechazo TEXT NULL,
+      creado_por VARCHAR(100) NOT NULL,
+      creado_at DATETIME NOT NULL,
+      INDEX idx_fcc_emp (empresa_id),
+      INDEX idx_fcc_veh (vehiculo_id),
+      INDEX idx_fcc_viaje (viaje_id),
+      INDEX idx_fcc_estado (empresa_id, estado)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
   // Inventario de equipo / herramientas (empresa vs propio del empleado)
   await execute(`
     CREATE TABLE IF NOT EXISTS flota_inv_categorias (
