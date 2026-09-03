@@ -126,6 +126,9 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   const [puedeAutorizar, setPuedeAutorizar] = useState(false);
   const [puedeLiquidar, setPuedeLiquidar] = useState(false);
   const [puedeVerBancario, setPuedeVerBancario] = useState(false);
+  // VIATICOS-COMPROBANTE-PDF — permiso propio y explícito, nunca por
+  // defecto (ver requireTenantViaticosComprobantes en tenant.ts).
+  const [puedeComprobantes, setPuedeComprobantes] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [mensaje, setMensaje] = useState("");
@@ -254,6 +257,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
       setPuedeAutorizar(Boolean(data.puedeAutorizar));
       setPuedeLiquidar(Boolean(data.puedeLiquidar));
       setPuedeVerBancario(Boolean(data.puedeVerBancario));
+      setPuedeComprobantes(Boolean(data.puedeComprobantes));
       setSeleccionados(new Set());
     } catch {
       setError("Error de conexión.");
@@ -597,6 +601,23 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
           );
         })}
       </div>
+
+      {/* VIATICOS-COMPROBANTE-PDF — descarga en lote (todos los AUTORIZADO
+          actuales) del comprobante de autorización con firma electrónica
+          interna. Permiso propio (viaticos_comprobantes), independiente de
+          autorizar/pagar/liquidar — nunca por defecto, un Admin lo otorga
+          desde Usuarios. Enlace simple: la respuesta ya trae
+          Content-Disposition: attachment, no hace falta manejo de blob. */}
+      {puedeComprobantes ? (
+        <div>
+          <a
+            href={`/api/empresas/${slug}/tms/viaticos/comprobante-autorizacion-pdf`}
+            className="inline-block rounded border border-[var(--border)] px-3 py-1.5 text-xs font-medium hover:bg-[var(--input)]"
+          >
+            Descargar comprobantes de autorización (PDF)
+          </a>
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap items-end gap-2">
         <label className="text-xs text-[var(--muted)]">

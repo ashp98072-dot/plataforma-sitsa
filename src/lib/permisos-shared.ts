@@ -125,6 +125,17 @@ export const PLATAFORMA_PERMISIBLES = [
   // liquida solo por tener viaticos:editar manual necesita este permiso
   // nuevo asignado explícitamente (ver reporte de entrega, riesgo #14).
   "viaticos_liquidar",
+  // VIATICOS-COMPROBANTE-PDF: descargar en PDF los comprobantes de
+  // autorización de viáticos (incluye la firma electrónica interna) —
+  // permiso propio y explícito, mismo patrón exacto que
+  // viaticos_autorizar/viaticos_pagar/viaticos_liquidar arriba. Ningún
+  // rol lo trae por defecto (ver modulosPropiosDelRol) — un Admin debe
+  // otorgarlo persona por persona desde Usuarios, igual que los otros
+  // tres. Deliberadamente NO se llama "viaticos_exportar" para no
+  // confundirse con la exportación Excel/banco ya existente de la
+  // bandeja "Viáticos por pagar" (esa sigue gateada por
+  // viaticos_pagar, sin cambios aquí).
+  "viaticos_comprobantes",
   // OPS-1: cierre administrativo del viaje (Descargado -> Cerrado).
   // Mismo patrón que viaticos_autorizar/viaticos_pagar: permiso propio,
   // ningún rol lo trae salvo los explícitamente definidos abajo
@@ -237,6 +248,7 @@ export function moduloEmpresaDelPermiso(m: string): Modulo | null {
     m === "viaticos_autorizar" ||
     m === "viaticos_pagar" ||
     m === "viaticos_liquidar" ||
+    m === "viaticos_comprobantes" ||
     m === "viajes_cerrar" ||
     m === "programacion" ||
     // OPS-5.2a: "rutas" tampoco es un Modulo de navegación propio — igual
@@ -261,6 +273,7 @@ export function labelPermiso(modulo: string): string {
   if (modulo === "viaticos_autorizar") return "Viáticos: autorizar";
   if (modulo === "viaticos_pagar") return "Viáticos: registrar pago/entrega";
   if (modulo === "viaticos_liquidar") return "Viáticos: liquidar";
+  if (modulo === "viaticos_comprobantes") return "Viáticos: descargar comprobantes de autorización";
   if (modulo === "viajes_cerrar") return "Viajes: cerrar administrativamente";
   if (modulo === "programacion") return "Programación";
   if (modulo === "rutas") return "Rutas";
@@ -328,6 +341,7 @@ export const GRUPOS_PERMISOS: {
       "viaticos_autorizar",
       "viaticos_pagar",
       "viaticos_liquidar",
+      "viaticos_comprobantes",
       "viajes_cerrar",
     ],
   },
@@ -660,6 +674,7 @@ export function modulosPlataformaDesdePermisos(
       p.modulo !== "viaticos_autorizar" &&
       p.modulo !== "viaticos_pagar" &&
       p.modulo !== "viaticos_liquidar" &&
+      p.modulo !== "viaticos_comprobantes" &&
       p.modulo !== "viajes_cerrar" &&
       p.modulo !== "programacion" &&
       p.modulo !== "rutas"
