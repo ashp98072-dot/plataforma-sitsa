@@ -23,12 +23,14 @@ const ESTADOS: EstadoViatico[] = ["PROGRAMADO", "AUTORIZADO", "RECHAZADO", "ENTR
  * listado para ubicar sus AUTORIZADOS/ENTREGADOS.
  *
  * Devuelve además flags de capacidad (puedeAutorizar/puedePagar/
- * puedeLiquidar/puedeVerBancario) para que la UI oculte botones que el
- * usuario no puede ejecutar — la seguridad real sigue en cada endpoint de
- * acción (autorizar → requireTenantViaticosAutorizar, pagar/entregar →
- * requireTenantViaticosPagar, liquidar → requireTenantViaticosLiquidar —
- * cada uno con su propio permiso explícito, VIATICOS-FIRMA: liquidar YA
- * NO usa el genérico `viaticos:editar`), nunca en estos flags.
+ * puedeLiquidar/puedeVerBancario/puedeComprobantes) para que la UI oculte
+ * botones que el usuario no puede ejecutar — la seguridad real sigue en
+ * cada endpoint de acción (autorizar → requireTenantViaticosAutorizar,
+ * pagar/entregar → requireTenantViaticosPagar, liquidar →
+ * requireTenantViaticosLiquidar, comprobante PDF en lote →
+ * requireTenantViaticosComprobantes — cada uno con su propio permiso
+ * explícito, VIATICOS-FIRMA: liquidar YA NO usa el genérico
+ * `viaticos:editar`), nunca en estos flags.
  * `puedeVerBancario` controla si esta respuesta incluye banco/cuenta (ver
  * incluirBancario en listarViaticosControl) — un usuario sin
  * `viaticos_pagar:ver` JAMÁS recibe esos campos, ni siquiera en la
@@ -57,6 +59,9 @@ export async function GET(req: Request, ctx: Ctx) {
   // permiso nuevo asignado explícitamente (ver reporte de entrega).
   const puedeLiquidar = tienePermiso(perms, "viaticos_liquidar", "editar");
   const puedeVerBancario = tienePermiso(perms, "viaticos_pagar", "ver");
+  // VIATICOS-COMPROBANTE-PDF — permiso propio y explícito, nunca por
+  // defecto (ver requireTenantViaticosComprobantes en tenant.ts).
+  const puedeComprobantes = tienePermiso(perms, "viaticos_comprobantes", "ver");
 
   const resultado = await listarViaticosControl(
     guard.empresa.id,
@@ -69,5 +74,6 @@ export async function GET(req: Request, ctx: Ctx) {
     puedePagar,
     puedeLiquidar,
     puedeVerBancario,
+    puedeComprobantes,
   });
 }

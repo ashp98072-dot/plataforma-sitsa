@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ROLES } from "./roles";
 import {
   mergePermisosConCatalogo,
   permisosDefaultPorRol,
@@ -54,6 +55,19 @@ describe("permisos críticos por rol", () => {
     // importan ni referencian esa tabla en ningún punto de este archivo ni
     // de src/lib/tenant.ts (requireTenantViaticosAutorizar/Pagar/Liquidar
     // solo consultan permisosEfectivos, nunca la jerarquía de supervisión).
+  });
+
+  describe("VIATICOS-COMPROBANTE-PDF — viaticos_comprobantes", () => {
+    it("ningún rol lo trae por defecto (opt-in exclusivo, un Admin lo otorga desde Usuarios)", () => {
+      // Admin excluido: su matriz default ya incluye todos los módulos (el
+      // acceso real de Admin en producción pasa por el bypass explícito de
+      // requireTenantViaticosComprobantes, no por esta matriz) — igual
+      // criterio que el resto de este archivo, que nunca prueba Admin
+      // contra permisos granulares por rol.
+      for (const rol of ROLES.filter((r) => r !== "Admin")) {
+        expect(tienePermiso(permisosDefaultPorRol(rol), "viaticos_comprobantes", "ver")).toBe(false);
+      }
+    });
   });
 
   it("respeta un permiso explícitamente desmarcado", () => {

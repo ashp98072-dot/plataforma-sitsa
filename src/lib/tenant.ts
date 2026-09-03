@@ -437,6 +437,51 @@ export async function requireTenantViaticosLiquidar(
 }
 
 /**
+ * VIATICOS-COMPROBANTE-PDF — descargar el comprobante en PDF de los
+ * viáticos ya autorizados (incluye firma electrónica interna). Permiso
+ * propio y explícito, mismo patrón exacto que
+ * requireTenantViaticosAutorizar/Pagar/Liquidar — ningún rol lo trae por
+ * defecto, un Admin debe otorgarlo persona por persona desde Usuarios.
+ * Deliberadamente NO se agrega a requireTenantViaticosAny: ese guard es
+ * para "ver el historial de firmas" (lectura puntual, ya compartida con
+ * Facturador); este es para "descargar en lote", una capacidad más
+ * sensible que se mantiene independiente a propósito.
+ */
+export async function requireTenantViaticosComprobantes(
+  slug: string,
+  accion: AccionPermiso = "ver",
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length
+    ? empresa.modulos
+    : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("tms")) {
+    return {
+      error: NextResponse.json(
+        { error: "Esta empresa no tiene el módulo TMS." },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  if (!tienePermiso(perms, "viaticos_comprobantes", accion)) {
+    return {
+      error: NextResponse.json(
+        { error: `Sin permiso para ${accion} los comprobantes de autorización de viáticos.` },
+        { status: 403 },
+      ),
+    };
+  }
+  return { session, empresa };
+}
+
+/**
  * OPS-1 — cerrar administrativamente un viaje (Descargado -> Cerrado).
  * Permiso EXPLÍCITO e independiente del rol — JefeOperaciones/
  * GerenteOperaciones lo traen por defecto, pero cualquier rol puede
