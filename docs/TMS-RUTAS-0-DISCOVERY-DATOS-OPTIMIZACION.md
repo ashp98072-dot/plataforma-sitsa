@@ -198,8 +198,11 @@ OPS-4.2a, OPS-4.2b), directamente reutilizable por un futuro optimizador:
   termina generando varios planes de una corrida.
 - **`programarSolicitud()`** (`src/lib/tms/solicitudes-cliente-operaciones.ts`)
   — conversión transaccional solicitud→plan, con `SELECT...FOR UPDATE` e
-  idempotencia real — la vía correcta para que una ruta propuesta se
-  convierta en plan real, sin inventar una segunda.
+  idempotencia real. **AJUSTE PRE-MERGE PR #181 (punto 1)** — candidato
+  fuerte para que una ruta propuesta se convierta en plan real sin
+  inventar una segunda vía, pero condicionado a que la cardinalidad
+  pedido↔entrega↔ruta (PRICESMART-INTEGRACION-0, §4/§16) resulte
+  compatible con la forma actual de `tms_solicitudes_cliente` — ver §7.
 - **`guardarParadasPlan()`** (`src/lib/tms/paradas.ts`) — ya soporta
   actualizar/agregar/eliminar paradas de un plan existente de forma
   idempotente (identity-based) — reutilizable si el optimizador necesita
@@ -241,7 +244,8 @@ de rutas, separado por obligatoriedad:
 
 | Dato | Clasificación | Estado actual |
 |---|---|---|
-| Inicio de ruta (base de salida) | **Obligatorio** | **No existe** una "base" de unidad — hoy el origen de cada viaje es la primera parada tipo Carga, no una ubicación fija de la unidad |
+| Punto de inicio operativo de la ruta | **Obligatorio** | Existe, parcialmente — hoy es la primera parada tipo Carga del viaje (p. ej. el CD de PriceSmart), no una propiedad de la unidad. **AJUSTE PRE-MERGE PR #181 (punto 3)**: si todas las rutas parten de un punto de carga fijo conocido (bodega/CD), esa parada Carga alcanza como nodo inicial del problema — no hace falta conocer dónde estaba la unidad antes |
+| Base/posición física previa de la unidad | **Condicional** — solo si el optimizador también decide el desplazamiento del vehículo hasta el punto de carga | **No existe** ningún concepto de "de dónde sale la unidad" separado del primer punto de carga del viaje. No se trata como obligatorio universal: depende del alcance que se confirme en §9 |
 | Fin de ruta | Deseable | Parcial — `regreso_estimado` es un estimado a nivel de viaje, no calculado desde una ruta real |
 | Horario laboral (jornada máxima) | Deseable | No confirmado que TMS lo consulte (§3.3) |
 | Máximo de entregas por viaje | Opcional | **No existe** ningún límite modelado |
@@ -251,7 +255,7 @@ de rutas, separado por obligatoriedad:
 
 | Dato | Existe | Dónde | Calidad | Falta |
 |---|---|---|---|---|
-| Latitud/longitud destino | No | — | — | Agregar columnas a `tms_lugares`/`tms_cliente_ubicaciones`/paradas + un proceso de geocoding (proveedor sin elegir) |
+| Latitud/longitud destino | No | — | — | Falta la estructura Y falta decidir dónde vive (ver AJUSTE PRE-MERGE PR #181, punto 2, abajo) + un proceso de geocoding (proveedor sin elegir) |
 | Latitud/longitud origen | No | — | — | Igual que destino |
 | Dirección en texto | Sí | `tms_*_paradas.lugar_nombre`, `tms_cliente_ubicaciones.direccion` | Parcial (texto libre, sin normalizar) | Confirmar si alcanza para geocoding automático o hace falta captura estructurada |
 | Múltiples entregas por viaje | Sí | `tms_plan_paradas`/`tms_solicitud_paradas`, `orden` | Completa | — |
@@ -263,16 +267,43 @@ de rutas, separado por obligatoriedad:
 | Disponibilidad de piloto/auxiliar | Sí | `disponibilidad-personal.ts` | Completa y robusta | — |
 | Conflictos de traslape (piloto/auxiliar/unidad) | Sí | `disponibilidad-traslapes.ts` | Completa, ya corregida varias veces en producción | — |
 | Mantenimiento/bloqueo de unidad | Sí | `flota_vehiculos.en_taller`, kilometraje | Completa | — |
-| Base/ubicación fija de unidad | No | — | — | No existe el concepto de "de dónde sale la unidad" separado del primer punto de carga del viaje |
+| Base/ubicación fija de unidad | No | — | — | **AJUSTE PRE-MERGE PR #181 (punto 3)**: no existe el concepto de "de dónde sale la unidad" separado del primer punto de carga del viaje — pero no se trata como obligatorio universal: si toda ruta parte de un punto de carga conocido (Carga inicial), ese nodo alcanza; la base física de la unidad solo hace falta si el optimizador también decide el desplazamiento previo del vehículo hasta la carga |
 | Distancia línea recta | Sí | `distanciaMetros()` (Haversine) | Completa mecánicamente, pero para otro dominio (geocercas), no probada/usada para rutas | Evaluar reutilizar como proxy inicial, documentando que NO es distancia real de carretera |
 | Distancia/tiempo por carretera | No | — | — | Requiere proveedor externo de ruteo, sin elegir |
 | Prioridad de pedido | No | — | — | Nueva columna si se confirma que el negocio la necesita |
 | Historial de rutas óptimas pasadas | No | — | — | No hay ningún registro de "esta secuencia de paradas fue la elegida por optimización" — todo el `orden` actual es el que decidió un humano al crear la solicitud/plan |
 
+**AJUSTE PRE-MERGE PR #181 (punto 2) — dónde vivirían las coordenadas: pendiente, no decidido en este documento.** La versión anterior de este
+documento proponía agregar lat/lng directamente a `tms_lugares` y
+`tms_cliente_ubicaciones`. Se retira esa recomendación por prematura —
+una coordenada podría corresponder a al menos 4 modelos distintos, y
+elegir uno ahora sería inventar arquitectura sin el contrato real:
+
+- **A)** ubicación permanente/catalogada del cliente (`tms_cliente_ubicaciones`) — tendría sentido si el cliente reutiliza las mismas direcciones una y otra vez.
+- **B)** destino puntual de un pedido — PriceSmart podría mandar una coordenada específica por pedido sin que ese destino deba convertirse en una ubicación permanente/catalogada.
+- **C)** parada normalizada (`tms_plan_paradas`/`tms_solicitud_paradas`) — coordenada resuelta en el momento, ligada a la parada, no a un catálogo de cliente.
+- **D)** otro modelo intermedio no identificado todavía (p. ej. una tabla propia de "direcciones geocodificadas", reutilizable entre catálogo y pedido puntual).
+
+El hallazgo que **sí** se mantiene firme es: **faltan coordenadas
+estructuradas para los destinos, en cualquiera de sus formas posibles**
+— la tabla/fuente canónica exacta queda pendiente de diseño (ver §10).
+
 ## 7. Arquitectura conceptual (sección 8 del ticket)
 
 Sin código — flujo propuesto, marcando qué se reutiliza y qué sería
-nuevo:
+nuevo.
+
+**AJUSTE PRE-MERGE PR #181 (punto 1)** — la versión anterior de este
+documento afirmaba que una "ruta propuesta" pasa a
+`tms_solicitudes_cliente` y reutiliza `programarSolicitud()`/la pantalla
+de revisión **tal cual**. Eso todavía no está confirmado: PRICESMART-
+INTEGRACION-0 dejó explícitamente pendiente la cardinalidad
+pedido↔entrega↔ruta (varios pedidos externos podrían agruparse en una
+sola ruta propuesta) — si eso se confirma, `tms_solicitudes_cliente`
+podría no tener hoy suficiente trazabilidad para representar "esta
+solicitud viene de estos N pedidos externos" sin alguna extensión. Se
+agrega una etapa nueva, explícitamente sin resolver, entre "rutas
+propuestas" y "revisión Operaciones":
 
 ```
 pedidos/entregas candidatos
@@ -288,13 +319,6 @@ normalización
    falta)
        │
        ▼
-validación
-  (REUTILIZABLE parcialmente: mismas validaciones ya usadas por
-   crearSolicitudCliente() — mínimo 1 entrega, fecha calendario real,
-   ubicaciones del cliente; NUEVO: validar que haya coordenadas
-   resueltas antes de pasar al optimizador)
-       │
-       ▼
 optimizador
   (100% NUEVO — no existe ningún algoritmo de ruteo en el repo hoy;
    consume: pedidos normalizados + disponibilidad de recursos vía
@@ -308,21 +332,40 @@ rutas propuestas
    de ruta" separada de una solicitud/plan ya confirmado)
        │
        ▼
+persistencia/representación — PENDIENTE DE DECISIÓN
+  (AJUSTE PRE-MERGE PR #181, punto 1: `tms_solicitudes_cliente` +
+   `programarSolicitud()` son CANDIDATOS FUERTES a reutilización — la
+   forma de la tabla, la validación de mínimo 1 entrega, la conversión
+   transaccional a plan, todo encaja conceptualmente — pero NO se afirma
+   aquí que sean reutilizables "tal cual" sin extensión. La decisión
+   depende de la cardinalidad real pedido↔entrega↔ruta y del contrato de
+   PriceSmart [PRICESMART-INTEGRACION-0, §4/§16] — si una ruta propuesta
+   siempre corresponde a una única solicitud, sí bastaría tal cual; si
+   puede agrupar varios pedidos externos, hace falta antes decidir cómo
+   se representa esa relación N:1, algo que ningún ticket ha diseñado
+   todavía.)
+       │
+       ▼
 revisión Operaciones
-  (REUTILIZABLE tal cual — pantalla ya existente
+  (REUTILIZABLE, con la misma salvedad de arriba — pantalla ya existente
    /e/[slug]/tms/solicitudes-clientes, CLIENTE-PORTAL-3 — Operaciones ya
    revisa/toma-en-revisión/rechaza/programa solicitudes; una "ruta
-   propuesta" se le mostraría con la misma mecánica, marcando su origen)
+   propuesta" se le mostraría con una mecánica equivalente, marcando su
+   origen, una vez resuelta la etapa anterior)
        │
        ▼
 plan TMS
-  (REUTILIZABLE tal cual — programarSolicitud(), conversión
-   transaccional solicitud→plan ya existente y probada)
+  (REUTILIZABLE, con la misma salvedad — `programarSolicitud()`,
+   conversión transaccional solicitud→plan ya existente y probada, ES
+   CANDIDATO FUERTE pero no confirmado "tal cual" hasta resolver la
+   cardinalidad)
        │
        ▼
 asignación piloto/unidad/auxiliar
-  (REUTILIZABLE tal cual — primerConflictoTraslape() +
-   GET_LOCK/RELEASE_LOCK ya validan y protegen esta asignación; el
+  (REUTILIZABLE tal cual — esta etapa SÍ es independiente de la
+   cardinalidad de arriba: `primerConflictoTraslape()` +
+   GET_LOCK/RELEASE_LOCK ya validan y protegen esta asignación sin
+   importar cuántos pedidos externos representó la solicitud; el
    optimizador puede PROPONER una asignación, pero la validación final
    de que no hay traslape sigue siendo la misma de siempre, nunca una
    paralela)
@@ -334,12 +377,17 @@ ejecución
    nacido de un optimizador en vez de una asignación manual)
 ```
 
-**Resumen**: de las 9 etapas, **4 ya existen y se reutilizan sin
-cambios** (validación parcial, revisión Operaciones, plan TMS, asignación
-de recursos, ejecución — en realidad 5 de las 9), **2 son completamente
-nuevas** (normalización con geocoding, el optimizador en sí), y 2 más
-(pedidos candidatos, rutas propuestas) son conceptos nuevos que se
-construyen sobre infraestructura parcialmente existente.
+**Resumen**: de las 10 etapas, **2 (asignación de recursos, ejecución)
+se reutilizan tal cual sin ninguna salvedad**; **3 (persistencia/
+representación, revisión Operaciones, plan TMS) tienen candidatos
+fuertes de reutilización pero condicionados a resolver primero la
+cardinalidad pedido↔entrega↔ruta**; **2 son completamente nuevas**
+(normalización con geocoding, el optimizador en sí); y **2 más**
+(pedidos candidatos, rutas propuestas) son conceptos nuevos construidos
+sobre infraestructura parcialmente existente. La etapa de "validación"
+de la versión anterior de este documento se fusionó dentro de
+"normalización" para evitar sugerir una secuencia más definida de la que
+realmente se puede afirmar hoy.
 
 ## 8. Riesgos (sección 9 del ticket)
 
@@ -432,12 +480,19 @@ hacen falta, en este orden:
    (costo, límites de uso, cobertura en Guatemala/región), sin
    integrarlo todavía — un discovery técnico enfocado, no una decisión
    de arquitectura completa.
-3. **TMS-RUTAS-3-EXTENSION-ESQUEMA-COORDENADAS** — solo después de 1) y
-   2) — migración idempotente (revisión SQL antes de ejecutar, mismo
-   patrón que CLIENTE-PORTAL-1B) agregando columnas de coordenadas a
-   `tms_lugares`/`tms_cliente_ubicaciones`, y ventana horaria/capacidad
-   si el negocio las confirmó en 1) — sin ningún optimizador todavía,
-   solo la base de datos lista.
+3. **TMS-RUTAS-3-DISEÑO-MODELO-DATOS-GEO-RESTRICCIONES** (renombrado en
+   AJUSTE PRE-MERGE PR #181, punto 2 — antes
+   `TMS-RUTAS-3-EXTENSION-ESQUEMA-COORDENADAS`) — solo después de 1) y
+   2). **No es un ticket de migración** — es un ticket de **diseño**:
+   decidir primero dónde viven conceptualmente coordenadas, ventanas
+   horarias, capacidad y restricciones (¿en `tms_cliente_ubicaciones`?
+   ¿en la parada misma? ¿en una tabla nueva de "direcciones
+   geocodificadas" reutilizable? — ver las 4 opciones de §6), con el
+   contrato real de PriceSmart (o de cualquier otra fuente externa) ya
+   confirmado. **Solo después** de ese diseño, un ticket técnico
+   separado y posterior propondría la migración idempotente concreta
+   (revisión SQL antes de ejecutar, mismo patrón que CLIENTE-PORTAL-1B)
+   — no se recomienda todavía ninguna migración específica aquí.
 4. **TMS-RUTAS-4-OPTIMIZADOR-MVP** — el primer algoritmo real, alcance
    mínimo (posiblemente sin ventanas ni capacidad si el negocio decidió
    en 1) que no las necesita todavía) — recién aquí se elige entre
