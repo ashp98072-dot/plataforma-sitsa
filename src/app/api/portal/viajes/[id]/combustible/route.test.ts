@@ -5,6 +5,10 @@ vi.mock("@/lib/auditoria", () => ({ registrarAuditoria: vi.fn() }));
 vi.mock("@/lib/rrhh/colaborador-session", () => ({ getColaboradorSession: vi.fn() }));
 vi.mock("@/lib/rrhh/empleados", () => ({ obtenerEmpleado: vi.fn() }));
 vi.mock("@/lib/flota/viajes-piloto", () => ({ colaboradorParticipaEnViaje: vi.fn() }));
+vi.mock("@/lib/flota/schema", () => ({
+  asegurarSchemaFlota: vi.fn(() => Promise.resolve()),
+  asegurarSchemaFlotaLectura: vi.fn(() => Promise.resolve()),
+}));
 vi.mock("@/lib/flota/combustible", () => ({
   registrarCargaCombustible: vi.fn(() => Promise.resolve(1)),
   listarCargasCombustibleViaje: vi.fn(() => Promise.resolve([])),

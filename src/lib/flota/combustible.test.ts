@@ -10,9 +10,12 @@ vi.mock("@/lib/uploads", () => ({
 import { execute, query } from "@/lib/db";
 import { guardarUpload } from "@/lib/uploads";
 import {
+  listarCargasCombustibleRevision,
   listarCargasCombustibleViaje,
   obtenerArchivoCargaCombustible,
+  obtenerArchivoCargaCombustiblePorEmpresa,
   registrarCargaCombustible,
+  revisarCargaCombustible,
 } from "./combustible";
 
 const FILE = {
@@ -107,5 +110,106 @@ describe("obtenerArchivoCargaCombustible", () => {
   it("regresa null cuando no hay fila (evita 200 con datos vacíos)", async () => {
     vi.mocked(query).mockResolvedValue([] as never);
     expect(await obtenerArchivoCargaCombustible(7, 5, 999)).toBeNull();
+  });
+});
+
+describe("obtenerArchivoCargaCombustiblePorEmpresa (Fase 2 — Operaciones)", () => {
+  it("acota la consulta a empresa + id, SIN viajeId (Operaciones tiene autoridad sobre todos los viajes)", async () => {
+    vi.mocked(query).mockResolvedValue([
+      { ruta_relativa: "empresas/7/flota/vale.jpg", nombre_original: "vale.jpg", mime: "image/jpeg" },
+    ] as never);
+    const out = await obtenerArchivoCargaCombustiblePorEmpresa(7, 1);
+    expect(out).toEqual({ rutaRelativa: "empresas/7/flota/vale.jpg", nombreOriginal: "vale.jpg", mime: "image/jpeg" });
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("WHERE id = ? AND empresa_id = ?"), [1, 7]);
+  });
+
+  it("regresa null cuando no hay fila", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    expect(await obtenerArchivoCargaCombustiblePorEmpresa(7, 999)).toBeNull();
+  });
+});
+
+describe("listarCargasCombustibleRevision (Fase 2)", () => {
+  it("sin filtros: consulta solo por empresa_id, y arma el resumen por estado", async () => {
+    vi.mocked(query)
+      .mockResolvedValueOnce([
+        {
+          id: 1, viaje_id: 5, tipo_combustible: "diesel", galones: 40, monto: 850.5, km: 12000,
+          gasolinera: "Shell Zona 10", nombre_original: "vale.jpg", estado: "PENDIENTE", motivo_rechazo: null,
+          creado_por: "portal:E001", creado_at: "2026-09-03 10:00:00", revisado_por: null, revisado_en: null,
+          piloto_nombre: "Juan Pérez", placa: "C-034BXR",
+        },
+      ] as never)
+      .mockResolvedValueOnce([
+        { estado: "PENDIENTE", n: 3 },
+        { estado: "APROBADO", n: 5 },
+      ] as never);
+
+    const { items, resumen } = await listarCargasCombustibleRevision(7);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ id: 1, placa: "C-034BXR", pilotoNombre: "Juan Pérez", estado: "PENDIENTE" });
+    expect(resumen).toEqual({ PENDIENTE: 3, APROBADO: 5, RECHAZADO: 0 });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(String(sql)).toContain("c.empresa_id = ?");
+    expect(String(sql)).not.toContain("c.estado = ?");
+    expect(params).toEqual([7]);
+  });
+
+  it("con filtro de estado: agrega la condición y el parámetro", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await listarCargasCombustibleRevision(7, { estado: "APROBADO" });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(String(sql)).toContain("c.estado = ?");
+    expect(params).toEqual([7, "APROBADO"]);
+  });
+
+  it("con desde/hasta: filtra por creado_at con el rango del día completo", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await listarCargasCombustibleRevision(7, { desde: "2026-09-01", hasta: "2026-09-30" });
+    const [, params] = vi.mocked(query).mock.calls[0];
+    expect(params).toEqual([7, "2026-09-01 00:00:00", "2026-09-30 23:59:59"]);
+  });
+
+  it("un estado desconocido en el resumen se ignora (nunca revienta)", async () => {
+    vi.mocked(query)
+      .mockResolvedValueOnce([] as never)
+      .mockResolvedValueOnce([{ estado: "ALGO_RARO", n: 1 }] as never);
+    const { resumen } = await listarCargasCombustibleRevision(7);
+    expect(resumen).toEqual({ PENDIENTE: 0, APROBADO: 0, RECHAZADO: 0 });
+  });
+});
+
+describe("revisarCargaCombustible (Fase 2)", () => {
+  it("aprobar: actualiza estado=APROBADO y motivo_rechazo=null", async () => {
+    vi.mocked(execute).mockResolvedValue({ affectedRows: 1 } as never);
+    const out = await revisarCargaCombustible(7, 1, "aprobar", "op1");
+    expect(out).toEqual({ ok: true });
+    expect(execute).toHaveBeenCalledWith(
+      expect.stringContaining("SET estado = ?"),
+      ["APROBADO", "op1", "2026-09-03 10:00:00", null, 1, 7],
+    );
+  });
+
+  it("rechazar SIN motivo -> 400, nunca llega a ejecutar el UPDATE", async () => {
+    const out = await revisarCargaCombustible(7, 1, "rechazar", "op1");
+    expect(out).toEqual({ ok: false, error: "Indica el motivo del rechazo.", status: 400 });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("rechazar CON motivo: actualiza estado=RECHAZADO y guarda el motivo (recortado)", async () => {
+    vi.mocked(execute).mockResolvedValue({ affectedRows: 1 } as never);
+    const out = await revisarCargaCombustible(7, 1, "rechazar", "op1", "  Vale ilegible  ");
+    expect(out).toEqual({ ok: true });
+    expect(execute).toHaveBeenCalledWith(
+      expect.stringContaining("SET estado = ?"),
+      ["RECHAZADO", "op1", "2026-09-03 10:00:00", "Vale ilegible", 1, 7],
+    );
+  });
+
+  it("carga ya revisada (0 filas afectadas por el WHERE estado='PENDIENTE') -> 409, no pisa la decisión anterior", async () => {
+    vi.mocked(execute).mockResolvedValue({ affectedRows: 0 } as never);
+    const out = await revisarCargaCombustible(7, 1, "aprobar", "op1");
+    expect(out.ok).toBe(false);
+    expect((out as { status: number }).status).toBe(409);
   });
 });

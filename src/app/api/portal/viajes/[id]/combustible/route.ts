@@ -6,6 +6,7 @@ import { registrarAuditoria } from "@/lib/auditoria";
 import { getColaboradorSession } from "@/lib/rrhh/colaborador-session";
 import { obtenerEmpleado } from "@/lib/rrhh/empleados";
 import { colaboradorParticipaEnViaje } from "@/lib/flota/viajes-piloto";
+import { asegurarSchemaFlota, asegurarSchemaFlotaLectura } from "@/lib/flota/schema";
 import {
   listarCargasCombustibleViaje,
   obtenerArchivoCargaCombustible,
@@ -44,6 +45,7 @@ export async function GET(req: Request, ctx: Ctx) {
   if (!participacion) {
     return NextResponse.json({ error: "No estás asignado a este viaje." }, { status: 403 });
   }
+  await asegurarSchemaFlotaLectura().catch(() => undefined);
   const adjuntoId = Number(new URL(req.url).searchParams.get("adjuntoId") ?? 0);
   if (adjuntoId) {
     const archivo = await obtenerArchivoCargaCombustible(session.empresaId, viajeId, adjuntoId);
@@ -83,6 +85,8 @@ export async function POST(req: Request, ctx: Ctx) {
   }
   const empleado = await obtenerEmpleado(session.empresaId, session.empleadoId);
   if (!empleado) return NextResponse.json({ error: "Colaborador no encontrado." }, { status: 404 });
+
+  await asegurarSchemaFlota().catch(() => undefined);
 
   const viaje = await query<RowDataPacket[]>(
     `SELECT v.vehiculo_id, v.piloto_nombre FROM flota_viajes v

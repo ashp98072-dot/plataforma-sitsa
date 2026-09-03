@@ -482,6 +482,53 @@ export async function requireTenantViaticosComprobantes(
 }
 
 /**
+ * FLOTA-COMBUSTIBLE-1 (Fase 2) — revisar/aprobar/rechazar las cargas de
+ * combustible que el piloto registra desde el Portal. Permiso propio y
+ * explícito ("flota_combustible") — no es un FlotaSubmodulo (no se
+ * reutiliza requireTenantFlota) a propósito: ese tipo se reparte por
+ * completo ("...FLOTA_SUBMODULOS") a varios roles que nunca pidieron
+ * autoridad de aprobación de gastos de combustible (ver comentario en
+ * PLATAFORMA_PERMISIBLES, permisos-shared.ts). GerenteOperaciones/
+ * JefeOperaciones lo traen por defecto ("los de operaciones son los que
+ * autorizan", confirmado por el usuario); cualquier otro rol puede
+ * recibirlo desde Usuarios. Gatea sobre el módulo de empresa "flota"
+ * (Flota/Predios), igual que el resto de este archivo para ese dominio.
+ */
+export async function requireTenantFlotaCombustible(
+  slug: string,
+  accion: AccionPermiso = "ver",
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length
+    ? empresa.modulos
+    : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("flota")) {
+    return {
+      error: NextResponse.json(
+        { error: "Esta empresa no tiene el módulo Flota / Predios." },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  if (!tienePermiso(perms, "flota_combustible", accion)) {
+    return {
+      error: NextResponse.json(
+        { error: `Sin permiso para ${accion} la revisión de combustible.` },
+        { status: 403 },
+      ),
+    };
+  }
+  return { session, empresa };
+}
+
+/**
  * OPS-1 — cerrar administrativamente un viaje (Descargado -> Cerrado).
  * Permiso EXPLÍCITO e independiente del rol — JefeOperaciones/
  * GerenteOperaciones lo traen por defecto, pero cualquier rol puede
