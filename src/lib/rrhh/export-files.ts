@@ -114,6 +114,141 @@ export async function tablaAPdf(opts: {
   return pdfTabla({ ...opts, headers, rows });
 }
 
+/**
+ * Dibuja SOLO la tabla (encabezado + filas, con salto de página
+ * automático cuando no cabe) en un PDFDocument YA ABIERTO, empezando en
+ * `doc.y` actual — no crea el documento ni lo cierra (eso lo sigue
+ * haciendo pdfTabla() más abajo, sin cambios de comportamiento). Se
+ * expone para que otros módulos puedan seguir agregando su propio
+ * contenido en el MISMO documento inmediatamente después de la tabla
+ * (por ejemplo, imágenes de firma — ver viaticos-comprobante-pdf.ts) sin
+ * duplicar esta lógica de dibujo. `doc.addPage()` sin argumentos
+ * reutiliza automáticamente el `size`/`layout`/`margins` con los que se
+ * creó el documento (comportamiento de pdfkit), por eso no hace falta
+ * repetirlos aquí. Deja `doc.x`/`doc.y` posicionados justo después de la
+ * última fila dibujada, listos para que el caller siga escribiendo con
+ * el flujo normal de pdfkit (`doc.moveDown()`/`doc.text()`).
+ */
+export function dibujarTablaEnDoc(
+  doc: PdfDoc,
+  opts: { headers: string[]; rows: string[][] },
+): void {
+  const cols = opts.headers.length;
+  const marginL = doc.page.margins.left;
+  const marginT = doc.page.margins.top;
+  const pageWidth = doc.page.width - marginL - doc.page.margins.right;
+  const pageBottom = () => doc.page.height - doc.page.margins.bottom - 12;
+
+  const fontSize = cols > 8 ? 7.5 : 8.5;
+  const padX = 4;
+  const padY = 5;
+  const lineH = fontSize + 2.5;
+  const maxLines = 3;
+
+  const weights = opts.headers.map((h, i) => {
+    let w = Math.max(4, h.length);
+    for (const r of opts.rows.slice(0, 60)) {
+      w = Math.max(w, Math.min(22, String(r[i] ?? "").length));
+    }
+    const hl = h.toLowerCase();
+    if (hl.includes("nombre") || hl.includes("descrip") || hl.includes("obs") || hl.includes("destino")) {
+      w += 6;
+    }
+    if (hl.includes("placa") || hl === "km" || hl.includes("estado")) {
+      w = Math.max(w, 7);
+    }
+    return w;
+  });
+  const sumW = weights.reduce((a, b) => a + b, 0) || 1;
+  const widths = weights.map((w) => (w / sumW) * pageWidth);
+
+  const linesOf = (text: string, col: number, bold = false) => {
+    const lines = wrapText(
+      doc,
+      text,
+      Math.max(12, widths[col] - padX * 2),
+      fontSize,
+      bold,
+    );
+    return lines.slice(0, maxLines);
+  };
+
+  const heightOf = (cells: string[], bold = false) => {
+    let n = 1;
+    cells.forEach((c, i) => {
+      n = Math.max(n, linesOf(c, i, bold).length);
+    });
+    return Math.max(18, n * lineH + padY * 2);
+  };
+
+  const drawHeader = (y: number) => {
+    const h = heightOf(opts.headers, true);
+    doc.save();
+    doc.rect(marginL, y, pageWidth, h).fill("#1e3a5f");
+    doc.restore();
+    let x = marginL;
+    opts.headers.forEach((cell, i) => {
+      const lines = linesOf(cell, i, true);
+      doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(fontSize);
+      lines.forEach((line, li) => {
+        doc.text(line, x + padX, y + padY + li * lineH, {
+          width: widths[i] - padX * 2,
+          lineBreak: false,
+        });
+      });
+      x += widths[i];
+    });
+    doc.strokeColor("#0f172a").lineWidth(0.5).rect(marginL, y, pageWidth, h).stroke();
+    return y + h;
+  };
+
+  const drawRow = (cells: string[], y: number, zebra: boolean) => {
+    const h = heightOf(cells);
+    if (zebra) {
+      doc.save();
+      doc.rect(marginL, y, pageWidth, h).fill("#f1f5f9");
+      doc.restore();
+    }
+    let x = marginL;
+    cells.forEach((cell, i) => {
+      const lines = linesOf(cell, i);
+      doc.fillColor("#0f172a").font("Helvetica").fontSize(fontSize);
+      lines.forEach((line, li) => {
+        doc.text(line, x + padX, y + padY + li * lineH, {
+          width: widths[i] - padX * 2,
+          lineBreak: false,
+        });
+      });
+      doc
+        .strokeColor("#e2e8f0")
+        .lineWidth(0.3)
+        .moveTo(x + widths[i], y)
+        .lineTo(x + widths[i], y + h)
+        .stroke();
+      x += widths[i];
+    });
+    doc.strokeColor("#94a3b8").lineWidth(0.4).rect(marginL, y, pageWidth, h).stroke();
+    return y + h;
+  };
+
+  let y = doc.y;
+  y = drawHeader(y);
+
+  opts.rows.forEach((row, idx) => {
+    const cells = opts.headers.map((_, i) => String(row[i] ?? ""));
+    const h = heightOf(cells);
+    if (y + h > pageBottom()) {
+      doc.addPage();
+      y = marginT;
+      y = drawHeader(y);
+    }
+    y = drawRow(cells, y, idx % 2 === 1);
+  });
+
+  doc.x = marginL;
+  doc.y = y;
+}
+
 async function pdfTabla(opts: {
   title: string;
   subtitle?: string;
@@ -142,123 +277,12 @@ async function pdfTabla(opts: {
     doc.on("error", reject);
 
     const marginL = doc.page.margins.left;
-    const marginR = doc.page.margins.right;
-    const marginT = doc.page.margins.top;
     const marginB = doc.page.margins.bottom;
-    const pageWidth = doc.page.width - marginL - marginR;
-    const pageBottom = doc.page.height - marginB - 12;
+    const pageWidth = doc.page.width - marginL - doc.page.margins.right;
 
     dibujarTitulo(doc, opts.title, opts.subtitle, pageWidth);
-
-    const fontSize = cols > 8 ? 7.5 : 8.5;
-    const padX = 4;
-    const padY = 5;
-    const lineH = fontSize + 2.5;
-    const maxLines = 3;
-
-    const weights = opts.headers.map((h, i) => {
-      let w = Math.max(4, h.length);
-      for (const r of opts.rows.slice(0, 60)) {
-        w = Math.max(w, Math.min(22, String(r[i] ?? "").length));
-      }
-      const hl = h.toLowerCase();
-      if (hl.includes("nombre") || hl.includes("descrip") || hl.includes("obs") || hl.includes("destino")) {
-        w += 6;
-      }
-      if (hl.includes("placa") || hl === "km" || hl.includes("estado")) {
-        w = Math.max(w, 7);
-      }
-      return w;
-    });
-    const sumW = weights.reduce((a, b) => a + b, 0) || 1;
-    const widths = weights.map((w) => (w / sumW) * pageWidth);
-
-    const linesOf = (text: string, col: number, bold = false) => {
-      const lines = wrapText(
-        doc,
-        text,
-        Math.max(12, widths[col] - padX * 2),
-        fontSize,
-        bold,
-      );
-      return lines.slice(0, maxLines);
-    };
-
-    const heightOf = (cells: string[], bold = false) => {
-      let n = 1;
-      cells.forEach((c, i) => {
-        n = Math.max(n, linesOf(c, i, bold).length);
-      });
-      return Math.max(18, n * lineH + padY * 2);
-    };
-
-    const drawHeader = (y: number) => {
-      const h = heightOf(opts.headers, true);
-      doc.save();
-      doc.rect(marginL, y, pageWidth, h).fill("#1e3a5f");
-      doc.restore();
-      let x = marginL;
-      opts.headers.forEach((cell, i) => {
-        const lines = linesOf(cell, i, true);
-        doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(fontSize);
-        lines.forEach((line, li) => {
-          doc.text(line, x + padX, y + padY + li * lineH, {
-            width: widths[i] - padX * 2,
-            lineBreak: false,
-          });
-        });
-        x += widths[i];
-      });
-      doc.strokeColor("#0f172a").lineWidth(0.5).rect(marginL, y, pageWidth, h).stroke();
-      return y + h;
-    };
-
-    const drawRow = (cells: string[], y: number, zebra: boolean) => {
-      const h = heightOf(cells);
-      if (zebra) {
-        doc.save();
-        doc.rect(marginL, y, pageWidth, h).fill("#f1f5f9");
-        doc.restore();
-      }
-      let x = marginL;
-      cells.forEach((cell, i) => {
-        const lines = linesOf(cell, i);
-        doc.fillColor("#0f172a").font("Helvetica").fontSize(fontSize);
-        lines.forEach((line, li) => {
-          doc.text(line, x + padX, y + padY + li * lineH, {
-            width: widths[i] - padX * 2,
-            lineBreak: false,
-          });
-        });
-        doc
-          .strokeColor("#e2e8f0")
-          .lineWidth(0.3)
-          .moveTo(x + widths[i], y)
-          .lineTo(x + widths[i], y + h)
-          .stroke();
-        x += widths[i];
-      });
-      doc.strokeColor("#94a3b8").lineWidth(0.4).rect(marginL, y, pageWidth, h).stroke();
-      return y + h;
-    };
-
-    let y = doc.y + 4;
-    y = drawHeader(y);
-
-    opts.rows.forEach((row, idx) => {
-      const cells = opts.headers.map((_, i) => String(row[i] ?? ""));
-      const h = heightOf(cells);
-      if (y + h > pageBottom) {
-        doc.addPage({
-          size: "LETTER",
-          layout,
-          margins: { top: marginT, bottom: marginB, left: marginL, right: marginR },
-        });
-        y = marginT;
-        y = drawHeader(y);
-      }
-      y = drawRow(cells, y, idx % 2 === 1);
-    });
+    doc.y += 4;
+    dibujarTablaEnDoc(doc, { headers: opts.headers, rows: opts.rows });
 
     piePaginas(doc, opts.rows.length, marginL, marginB, pageWidth);
     doc.end();
