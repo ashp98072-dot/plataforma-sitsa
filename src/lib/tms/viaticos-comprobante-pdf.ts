@@ -6,15 +6,19 @@ import { absPathFromRelative } from "@/lib/uploads";
 import { ahoraLocal, formatearTimestampVisible } from "@/lib/rrhh/dates";
 import { dibujarTablaEnDoc } from "@/lib/rrhh/export-files";
 import { listarViaticosControl } from "@/lib/tms/viaticos";
-import { listarFirmasViatico } from "@/lib/firmas/firmas-lectura";
+import { listarFirmasViatico, type FirmaViaticoResumen } from "@/lib/firmas/firmas-lectura";
 
 /**
  * VIATICOS-COMPROBANTE-PDF — comprobante en PDF, en lote, de todos los
  * viáticos actualmente AUTORIZADOS de una empresa: una tabla (no una
  * página por viático, ver dibujarTablaEnDoc) con los datos del
- * viaje/empleado/monto, y debajo un anexo con la imagen de la firma de
- * cada uno (si existe) — en la MISMA página si cabe, solo avanza a una
- * página nueva cuando ya no hay espacio.
+ * viaje/empleado/monto, y debajo UN bloque de firma por cada persona
+ * distinta que autorizó (no uno por viático — si la misma persona
+ * autorizó varios, aparece una sola vez) — en la MISMA página si cabe,
+ * solo avanza a una página nueva cuando ya no hay espacio. Cada bloque
+ * muestra el nombre real del firmante (nombreFirmante, nunca su usuario
+ * de acceso), su rol, la fecha, y su imagen de firma más reciente del
+ * lote si existe.
  *
  * Reutiliza TAL CUAL:
  * - listarViaticosControl() — misma consulta que ya usa el Control de
@@ -79,6 +83,37 @@ async function imagenFirma(
     // sin la imagen (nunca se rompe el PDF completo por una firma).
     return null;
   }
+}
+
+type FirmaConImagen = { firma: FirmaViaticoResumen; imagen: { buffer: Buffer; mime: string } | null };
+
+/**
+ * Reduce la lista de firmas de autorización (una por viático) a UNA
+ * entrada por firmante distinto — pedido explícito del usuario: "no por
+ * cada uno sino una firma en general". Se agrupa por usuarioId (o por
+ * nombreFirmante si la firma no tiene usuarioId) y, dentro de cada
+ * grupo, se queda con la firma MÁS RECIENTE (por fechaHoraServidor) —
+ * tanto para el nombre/rol/fecha mostrados como para la imagen. El orden
+ * de salida es el de primera aparición en `porViatico` (mismo orden que
+ * la tabla), no alfabético ni por fecha, para que sea predecible.
+ * Exportada (función pura) para poder probarla directamente con vitest —
+ * mismo criterio que tituloEmpresa().
+ */
+export function agruparPorFirmante(
+  porViatico: { firma: FirmaViaticoResumen | null; imagen: { buffer: Buffer; mime: string } | null }[],
+): FirmaConImagen[] {
+  const orden: string[] = [];
+  const porClave = new Map<string, FirmaConImagen>();
+  for (const { firma, imagen } of porViatico) {
+    if (!firma) continue;
+    const clave = firma.usuarioId != null ? `u:${firma.usuarioId}` : `n:${firma.nombreFirmante ?? firma.id}`;
+    const actual = porClave.get(clave);
+    const esMasReciente =
+      !actual || new Date(firma.fechaHoraServidor).getTime() > new Date(actual.firma.fechaHoraServidor).getTime();
+    if (esMasReciente) porClave.set(clave, { firma, imagen });
+    if (!orden.includes(clave)) orden.push(clave);
+  }
+  return orden.map((clave) => porClave.get(clave)!);
 }
 
 /**
@@ -150,46 +185,46 @@ export async function comprobanteAutorizacionesPdf(
 
     dibujarTablaEnDoc(doc, { headers, rows });
 
-    // Anexo de firmas — mismo orden que la tabla. Sigue en la MISMA
-    // página si cabe (doc.y ya quedó posicionado justo después de la
-    // tabla por dibujarTablaEnDoc); solo se agrega una página nueva
-    // cuando el siguiente bloque ya no cabe, nunca por adelantado.
-    let tituloAnexoDibujado = false;
-    porViatico.forEach(({ viatico: v, firma, imagen }) => {
-      const alturaEstimada = 26 + (imagen ? 76 : 0) + (tituloAnexoDibujado ? 0 : 22);
+    // Bloque de autorización — UNA firma por persona distinta (no una
+    // por viático: el detalle por viático ya está en la tabla de
+    // arriba). Sigue en la MISMA página si cabe (doc.y ya quedó
+    // posicionado justo después de la tabla por dibujarTablaEnDoc); solo
+    // se agrega una página nueva cuando el siguiente bloque ya no cabe.
+    const firmantes = agruparPorFirmante(porViatico);
+    let tituloDibujado = false;
+    firmantes.forEach(({ firma, imagen }) => {
+      const alturaEstimada = 40 + (imagen ? 76 : 0) + (tituloDibujado ? 0 : 22);
       if (doc.y + alturaEstimada > pageBottom()) {
         doc.addPage();
       }
-      if (!tituloAnexoDibujado) {
+      if (!tituloDibujado) {
         doc.moveDown(0.6);
-        doc.font("Helvetica-Bold").fontSize(11).fillColor("#0f172a").text("Firmas de autorización", { width: pageWidth });
+        doc.font("Helvetica-Bold").fontSize(11).fillColor("#0f172a").text("Autorización", { width: pageWidth });
         doc.moveDown(0.3);
-        tituloAnexoDibujado = true;
-      }
-      doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#334155")
-        .text(`${v.planCodigo} — ${v.personalNombre}`, { width: pageWidth });
-      if (firma) {
-        doc.font("Helvetica").fontSize(8.5).fillColor("#475569")
-          .text(`Autorizado por ${firma.nombreFirmante ?? "No disponible"} (${firma.rolFirmante ?? "—"}) · Código ${firma.codigoFirma}`, { width: pageWidth });
-      } else {
-        doc.font("Helvetica-Oblique").fontSize(8.5).fillColor("#94a3b8")
-          .text("Sin firma de autorización registrada.", { width: pageWidth });
+        tituloDibujado = true;
       }
       if (imagen) {
-        doc.moveDown(0.15);
         try {
           doc.image(imagen.buffer, { fit: [160, 70] });
-          doc.moveDown(0.3);
+          doc.moveDown(0.1);
         } catch {
           // Imagen corrupta/formato no soportado por pdfkit: el
-          // comprobante sigue siendo válido sin la imagen — el código de
-          // firma ya quedó arriba como referencia trazable.
+          // comprobante sigue siendo válido sin la imagen — nombre, rol
+          // y fecha del firmante quedan igual como constancia.
           doc.font("Helvetica-Oblique").fontSize(8).fillColor("#94a3b8")
             .text("(No fue posible incrustar la imagen de la firma.)");
-          doc.moveDown(0.2);
+          doc.moveDown(0.1);
         }
       }
-      doc.moveDown(0.45);
+      doc.moveTo(doc.x, doc.y).lineTo(doc.x + 180, doc.y).strokeColor("#94a3b8").lineWidth(0.6).stroke();
+      doc.moveDown(0.15);
+      // Nombre real del firmante (snapshot de payload_canonico al firmar)
+      // — NUNCA el usuario de acceso (username/login).
+      doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#0f172a")
+        .text(`Autorizado por: ${firma.nombreFirmante ?? "No disponible"}${firma.rolFirmante ? ` (${firma.rolFirmante})` : ""}`, { width: pageWidth });
+      doc.font("Helvetica").fontSize(8.5).fillColor("#475569")
+        .text(`Fecha: ${formatearTimestampVisible(firma.fechaHoraServidor)}`, { width: pageWidth });
+      doc.moveDown(0.5);
     });
 
     const range = doc.bufferedPageRange();

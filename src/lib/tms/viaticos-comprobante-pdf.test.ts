@@ -10,7 +10,7 @@ import { listarViaticosControl } from "@/lib/tms/viaticos";
 import { listarFirmasViatico } from "@/lib/firmas/firmas-lectura";
 import { query } from "@/lib/db";
 import { existsSync, readFileSync } from "fs";
-import { comprobanteAutorizacionesPdf, tituloEmpresa } from "./viaticos-comprobante-pdf";
+import { agruparPorFirmante, comprobanteAutorizacionesPdf, tituloEmpresa } from "./viaticos-comprobante-pdf";
 
 const VIATICO_BASE = {
   id: 1,
@@ -83,6 +83,56 @@ describe("tituloEmpresa", () => {
   it("nombre de empresa SIN '/' se devuelve sin cambios (no afecta a otras empresas)", () => {
     expect(tituloEmpresa("PriceSmart")).toBe("PriceSmart");
     expect(tituloEmpresa("SITSA")).toBe("SITSA");
+  });
+});
+
+describe("agruparPorFirmante", () => {
+  it("2 viáticos autorizados por la MISMA persona (mismo usuarioId) -> UNA sola entrada", () => {
+    const grupos = agruparPorFirmante([
+      { firma: FIRMA_BASE, imagen: null },
+      { firma: { ...FIRMA_BASE, id: 56, codigoFirma: "SIG-56" }, imagen: null },
+    ]);
+    expect(grupos).toHaveLength(1);
+    expect(grupos[0].firma.usuarioId).toBe(9);
+  });
+
+  it("2 viáticos autorizados por personas DISTINTAS -> una entrada por cada una, en orden de aparición", () => {
+    const otraFirma = { ...FIRMA_BASE, id: 60, usuarioId: 11, nombreFirmante: "Carlos Ruiz" };
+    const grupos = agruparPorFirmante([
+      { firma: FIRMA_BASE, imagen: null },
+      { firma: otraFirma, imagen: null },
+    ]);
+    expect(grupos).toHaveLength(2);
+    expect(grupos[0].firma.nombreFirmante).toBe("Ana Gómez");
+    expect(grupos[1].firma.nombreFirmante).toBe("Carlos Ruiz");
+  });
+
+  it("dentro de un mismo firmante, se queda con la firma MÁS RECIENTE (fecha e imagen)", () => {
+    const imagenVieja = { buffer: Buffer.from("vieja"), mime: "image/png" };
+    const imagenNueva = { buffer: Buffer.from("nueva"), mime: "image/png" };
+    const grupos = agruparPorFirmante([
+      { firma: { ...FIRMA_BASE, fechaHoraServidor: "2026-09-01 08:00:00" }, imagen: imagenVieja },
+      { firma: { ...FIRMA_BASE, id: 61, fechaHoraServidor: "2026-09-03 08:00:00" }, imagen: imagenNueva },
+    ]);
+    expect(grupos).toHaveLength(1);
+    expect(grupos[0].firma.id).toBe(61);
+    expect(grupos[0].imagen).toBe(imagenNueva);
+  });
+
+  it("viáticos sin firma (null) se ignoran, no revientan ni generan una entrada 'vacía'", () => {
+    const grupos = agruparPorFirmante([
+      { firma: null, imagen: null },
+      { firma: FIRMA_BASE, imagen: null },
+    ]);
+    expect(grupos).toHaveLength(1);
+  });
+
+  it("firma sin usuarioId (null) se agrupa por nombreFirmante", () => {
+    const grupos = agruparPorFirmante([
+      { firma: { ...FIRMA_BASE, usuarioId: null }, imagen: null },
+      { firma: { ...FIRMA_BASE, id: 62, usuarioId: null }, imagen: null },
+    ]);
+    expect(grupos).toHaveLength(1); // mismo nombreFirmante ("Ana Gómez")
   });
 });
 
@@ -160,5 +210,29 @@ describe("comprobanteAutorizacionesPdf", () => {
     ]);
     const buf = await comprobanteAutorizacionesPdf(7, "SITSA");
     expect(buf).not.toBeNull();
+  });
+
+  it("2 viáticos autorizados por la misma persona -> genera un PDF válido con UNA sola firma en el bloque de autorización", async () => {
+    const v2 = { ...VIATICO_BASE, id: 2, planCodigo: "VJ-002", personalNombre: "María López" };
+    vi.mocked(listarViaticosControl).mockResolvedValue({ items: [VIATICO_BASE, v2], resumen: {} as never });
+    vi.mocked(listarFirmasViatico).mockImplementation(async (_empresaId, viaticoId) => [
+      { ...FIRMA_BASE, id: 55 + viaticoId, codigoFirma: `SIG-${55 + viaticoId}` },
+    ]);
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA");
+    expect(buf).not.toBeNull();
+    expect(buf!.subarray(0, 4).toString("latin1")).toBe("%PDF");
+  });
+
+  it("2 viáticos autorizados por personas distintas -> genera un PDF válido con 2 bloques de firma", async () => {
+    const v2 = { ...VIATICO_BASE, id: 2, planCodigo: "VJ-002", personalNombre: "María López" };
+    vi.mocked(listarViaticosControl).mockResolvedValue({ items: [VIATICO_BASE, v2], resumen: {} as never });
+    vi.mocked(listarFirmasViatico).mockImplementation(async (_empresaId, viaticoId) =>
+      viaticoId === 1
+        ? [FIRMA_BASE]
+        : [{ ...FIRMA_BASE, id: 60, usuarioId: 11, nombreFirmante: "Carlos Ruiz", codigoFirma: "SIG-60" }],
+    );
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA");
+    expect(buf).not.toBeNull();
+    expect(buf!.subarray(0, 4).toString("latin1")).toBe("%PDF");
   });
 });
