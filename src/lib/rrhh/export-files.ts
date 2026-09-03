@@ -139,6 +139,16 @@ export function dibujarTablaEnDoc(
   const pageWidth = doc.page.width - marginL - doc.page.margins.right;
   const pageBottom = () => doc.page.height - doc.page.margins.bottom - 12;
 
+  // Normaliza cada celda con celdaPdf() (fechas ISO/MySQL/Date.toString()
+  // -> DD/MM/YYYY HH:mm, ver su JSDoc) — así CUALQUIER caller de esta
+  // función (no solo tablaAPdf(), que ya lo hacía antes de la extracción)
+  // recibe el mismo formateo de fechas sin tener que acordarse de
+  // llamarlo por su cuenta. Idempotente sobre una celda ya formateada
+  // (celdaPdf no reconoce "DD/MM/YYYY..." como fecha y la devuelve tal
+  // cual), así que no daña las filas que tablaAPdf() ya normalizó antes
+  // de llegar aquí.
+  const rows = opts.rows.map((r) => opts.headers.map((_, i) => celdaPdf(r[i])));
+
   const fontSize = cols > 8 ? 7.5 : 8.5;
   const padX = 4;
   const padY = 5;
@@ -147,7 +157,7 @@ export function dibujarTablaEnDoc(
 
   const weights = opts.headers.map((h, i) => {
     let w = Math.max(4, h.length);
-    for (const r of opts.rows.slice(0, 60)) {
+    for (const r of rows.slice(0, 60)) {
       w = Math.max(w, Math.min(22, String(r[i] ?? "").length));
     }
     const hl = h.toLowerCase();
@@ -234,8 +244,7 @@ export function dibujarTablaEnDoc(
   let y = doc.y;
   y = drawHeader(y);
 
-  opts.rows.forEach((row, idx) => {
-    const cells = opts.headers.map((_, i) => String(row[i] ?? ""));
+  rows.forEach((cells, idx) => {
     const h = heightOf(cells);
     if (y + h > pageBottom()) {
       doc.addPage();
