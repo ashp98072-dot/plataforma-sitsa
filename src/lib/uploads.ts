@@ -156,6 +156,89 @@ export async function guardarUpload(
   };
 }
 
+/**
+ * FLOTA-COMBUSTIBLE-3 — guarda exclusivamente reportes Excel .xlsx
+ * usados para conciliación de combustible.
+ *
+ * Se mantiene separado de guardarUpload() para NO ampliar los formatos
+ * permitidos en fotos, evidencias, documentos u otros módulos existentes.
+ */
+export async function guardarUploadExcel(
+  empresaId: number,
+  subdir: "flota",
+  prefix: string,
+  file: UploadLike,
+): Promise<{ relative: string; original: string; size: number }> {
+  if (!file || typeof file.arrayBuffer !== "function") {
+    throw new UploadValidationError("Archivo requerido.", 400);
+  }
+
+  if (file.size <= 0) {
+    throw new UploadValidationError("Archivo vacío.", 400);
+  }
+
+  if (file.size > MAX_UPLOAD_BYTES) {
+    throw new UploadValidationError(
+      "El archivo supera el máximo de 50 MB.",
+      413,
+    );
+  }
+
+  const ext = extname(file.name || "").toLowerCase();
+
+  if (ext !== ".xlsx") {
+    throw new UploadValidationError(
+      "Formato no permitido. Debes subir un archivo Excel .xlsx.",
+      400,
+    );
+  }
+
+  const root = getUploadsRoot();
+  const dir = join(
+    root,
+    "empresas",
+    String(empresaId),
+    subdir,
+  );
+
+  ensureDir(dir);
+
+  const stamp = new Date()
+    .toISOString()
+    .replace(/[-:TZ.]/g, "")
+    .slice(0, 14);
+
+  const rand = randomBytes(4).toString("hex");
+
+  const filename =
+    `${prefix}_${stamp}_${rand}.xlsx`;
+
+  const relative = join(
+    "empresas",
+    String(empresaId),
+    subdir,
+    filename,
+  ).replace(/\\/g, "/");
+
+  const abs = join(dir, filename);
+
+  const buffer = Buffer.from(
+    await file.arrayBuffer(),
+  );
+
+  ensureDir(dirname(abs));
+
+  await writeFile(abs, buffer);
+
+  return {
+    relative,
+    original: String(
+      file.name || filename,
+    ).slice(0, 255),
+    size: file.size,
+  };
+}
+
 export function borrarUpload(relative: string): void {
   try {
     const abs = absPathFromRelative(relative);
@@ -167,18 +250,27 @@ export function borrarUpload(relative: string): void {
 
 export function contentTypeFor(pathOrName: string): string {
   const ext = extname(pathOrName).toLowerCase();
+
   switch (ext) {
     case ".pdf":
       return "application/pdf";
+
     case ".png":
       return "image/png";
+
     case ".jpg":
     case ".jpeg":
       return "image/jpeg";
+
     case ".webp":
       return "image/webp";
+
     case ".bmp":
       return "image/bmp";
+
+    case ".xlsx":
+      return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
     default:
       return "application/octet-stream";
   }

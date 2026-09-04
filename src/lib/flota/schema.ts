@@ -554,6 +554,99 @@ async function asegurarSchemaFlotaInner(): Promise<void> {
     "galones DECIMAL(12,3) NOT NULL",
   );
 
+  // FLOTA-COMBUSTIBLE-3 — importación y conciliación del reporte que
+  // posteriormente envía la gasolinera para cobro.
+  //
+  // Una conciliación representa UN archivo subido por Operaciones.
+  // Las filas se conservan como snapshot: no se modifican las cargas
+  // originales del piloto ni sus estados.
+  //
+  // Los resultados posibles de una fila conciliable son:
+  // COINCIDE / DIFERENCIA / SOLO_GASOLINERA / SOLO_SISTEMA / AMBIGUO.
+  //
+  // También puede existir DESCARTADA para conservar una fila del Excel
+  // que no pudo participar en la conciliación por datos inválidos
+  // (vale vacío, fecha imposible, monto inválido, etc.).
+  await execute(`
+    CREATE TABLE IF NOT EXISTS flota_combustible_conciliaciones (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      empresa_id INT NOT NULL,
+
+      nombre_original VARCHAR(255) NOT NULL,
+      ruta_relativa VARCHAR(400) NOT NULL,
+      mime VARCHAR(100) NULL,
+      tamano INT NOT NULL DEFAULT 0,
+
+      hoja VARCHAR(150) NOT NULL,
+
+      subido_por VARCHAR(100) NOT NULL,
+      creado_at DATETIME NOT NULL,
+
+      INDEX idx_fccn_emp (empresa_id),
+      INDEX idx_fccn_fecha (empresa_id, creado_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await execute(`
+    CREATE TABLE IF NOT EXISTS flota_combustible_conciliacion_filas (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+
+      conciliacion_id INT NOT NULL,
+      empresa_id INT NOT NULL,
+
+      fila_excel INT NULL,
+
+      estado VARCHAR(30) NOT NULL,
+      motivo TEXT NULL,
+
+      carga_combustible_id INT NULL,
+      -- Estado operativo (PENDIENTE/APROBADO/RECHAZADO) de la carga del
+      -- sistema AL MOMENTO de conciliar — metadata histórica, nunca se
+      -- usa para clasificar COINCIDE/DIFERENCIA/SOLO_*/AMBIGUO. NULL
+      -- cuando la fila no tiene carga del sistema asociada (SOLO_GASOLINERA
+      -- o DESCARTADA).
+      estado_sistema VARCHAR(20) NULL,
+
+      vale_gasolinera VARCHAR(40) NULL,
+      fecha_gasolinera DATE NULL,
+      placa_gasolinera VARCHAR(40) NULL,
+      piloto_gasolinera VARCHAR(150) NULL,
+      producto_gasolinera VARCHAR(30) NULL,
+      galones_gasolinera DECIMAL(12,3) NULL,
+      precio_gasolinera DECIMAL(10,2) NULL,
+      monto_gasolinera DECIMAL(10,2) NULL,
+
+      vale_sistema VARCHAR(40) NULL,
+      fecha_sistema DATE NULL,
+      placa_sistema VARCHAR(40) NULL,
+      piloto_sistema VARCHAR(150) NULL,
+      producto_sistema VARCHAR(30) NULL,
+      galones_sistema DECIMAL(12,3) NULL,
+      precio_sistema DECIMAL(10,2) NULL,
+      monto_sistema DECIMAL(10,2) NULL,
+
+      diferencias TEXT NULL,
+
+      creado_at DATETIME NOT NULL,
+
+      INDEX idx_fccf_conciliacion (conciliacion_id),
+      INDEX idx_fccf_emp (empresa_id),
+      INDEX idx_fccf_estado (conciliacion_id, estado),
+      INDEX idx_fccf_vale_gas (empresa_id, vale_gasolinera),
+      INDEX idx_fccf_vale_sis (empresa_id, vale_sistema),
+      INDEX idx_fccf_carga (carga_combustible_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+  // Idempotente también para una instalación donde
+  // flota_combustible_conciliacion_filas ya se haya creado (p.ej. una
+  // corrida previa de este mismo branch antes de este ajuste) — mismo
+  // patrón ensureColumn() ya usado en todo este archivo.
+  await ensureColumn(
+    "flota_combustible_conciliacion_filas",
+    "estado_sistema",
+    "estado_sistema VARCHAR(20) NULL AFTER carga_combustible_id",
+  );
+
   // Inventario de equipo / herramientas (empresa vs propio del empleado)
   await execute(`
     CREATE TABLE IF NOT EXISTS flota_inv_categorias (

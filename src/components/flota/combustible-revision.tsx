@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { CombustibleConciliacionView } from "./combustible-conciliacion";
 
 /**
  * FLOTA-COMBUSTIBLE-1 (Fase 2) — bandeja de revisión de Operaciones:
@@ -15,6 +16,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * a esta tabla para que Operaciones ya pueda ver, a simple vista, con
  * qué confrontar cada carga más adelante — la importación del Excel en
  * sí no se implementa todavía.
+ *
+ * FLOTA-COMBUSTIBLE-3 — la conciliación en sí (subir el .xlsx, comparar
+ * contra las cargas del sistema, guardar el snapshot) vive en su propio
+ * componente (CombustibleConciliacionView, ./combustible-conciliacion.tsx)
+ * para no inflar este archivo — aquí solo se agrega la pestaña que lo
+ * muestra.
  */
 
 type Props = {
@@ -185,7 +192,7 @@ function ResumenMensualView({ slug }: { slug: string }) {
 }
 
 export function CombustibleRevisionPanel({ slug, can }: Props) {
-  const [vista, setVista] = useState<"bandeja" | "resumen">("bandeja");
+  const [vista, setVista] = useState<"bandeja" | "resumen" | "conciliacion">("bandeja");
   const [estado, setEstado] = useState<Estado>("PENDIENTE");
   const [desde, setDesde] = useState("");
   const [hasta, setHasta] = useState("");
@@ -262,7 +269,7 @@ export function CombustibleRevisionPanel({ slug, can }: Props) {
         Cargas de combustible registradas por los pilotos desde el Portal. Solo lo Aprobado cuenta para el control mensual.
       </p>
 
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-3 gap-2">
         <button
           type="button"
           onClick={() => setVista("bandeja")}
@@ -277,9 +284,18 @@ export function CombustibleRevisionPanel({ slug, can }: Props) {
         >
           Resumen mensual
         </button>
+        <button
+          type="button"
+          onClick={() => setVista("conciliacion")}
+          className={`rounded border p-2 text-center text-sm font-medium transition ${vista === "conciliacion" ? "border-sky-500 bg-sky-950/20 text-sky-200" : "border-[var(--border)] hover:bg-[var(--input)]"}`}
+        >
+          Conciliación
+        </button>
       </div>
 
       {vista === "resumen" ? <ResumenMensualView slug={slug} /> : null}
+
+      {vista === "conciliacion" ? <CombustibleConciliacionView slug={slug} puedeConciliar={puedeRevisar} /> : null}
 
       {vista === "bandeja" ? (
         <>
