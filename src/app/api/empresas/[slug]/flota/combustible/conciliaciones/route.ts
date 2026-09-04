@@ -6,6 +6,9 @@ import {
   type EstadoConciliacionCombustible,
 } from "@/lib/flota/combustible-conciliacion";
 import {
+  listarConciliacionesCombustible,
+} from "@/lib/flota/combustible-conciliacion-consultas";
+import {
   obtenerCargasSistemaParaConciliacion,
 } from "@/lib/flota/combustible-conciliacion-db";
 import {
@@ -74,6 +77,54 @@ function resumirEstados(
   }
 
   return resumen;
+}
+
+/**
+ * FLOTA-COMBUSTIBLE-4
+ *
+ * Historial de conciliaciones ya guardadas (más reciente primero). Solo
+ * lectura — usa "ver", no "editar". Ver
+ * src/lib/flota/combustible-conciliacion-consultas.ts para el detalle de
+ * la agregación (sin N+1) y el límite de 100 resultados.
+ */
+export async function GET(
+  _req: Request,
+  ctx: Ctx,
+) {
+  const { slug } = await ctx.params;
+
+  const guard =
+    await requireTenantFlotaCombustible(
+      slug,
+      "ver",
+    );
+
+  if (guard.error) {
+    return guard.error;
+  }
+
+  try {
+    const items = await listarConciliacionesCombustible(
+      guard.empresa.id,
+    );
+
+    return NextResponse.json({ items });
+  } catch (error) {
+    console.error(
+      "[combustible-conciliacion] listar historial",
+      error,
+    );
+
+    return NextResponse.json(
+      {
+        error:
+          "No se pudo obtener el historial de conciliaciones.",
+      },
+      {
+        status: 500,
+      },
+    );
+  }
 }
 
 /**
