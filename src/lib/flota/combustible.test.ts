@@ -178,6 +178,59 @@ describe("listarCargasCombustibleRevision (Fase 2)", () => {
     const { resumen } = await listarCargasCombustibleRevision(7);
     expect(resumen).toEqual({ PENDIENTE: 0, APROBADO: 0, RECHAZADO: 0 });
   });
+
+  // FLOTA-COMBUSTIBLE-HARDENING-1 (sección 3) — el resumen (conteo por
+  // estado de las 3 pestañas) debe reflejar los mismos filtros de
+  // fecha/vehículo activos en la pantalla, para que "Pendientes/
+  // Aprobados/Rechazados" describan el MISMO universo filtrado (p.ej.
+  // "septiembre + vehículo X") en vez de los totales históricos de toda
+  // la empresa.
+  describe("el resumen refleja desde/hasta/vehiculoId, pero NUNCA el filtro estado", () => {
+    it("con desde/hasta activos, la consulta del resumen también los aplica", async () => {
+      vi.mocked(query).mockResolvedValue([] as never);
+      await listarCargasCombustibleRevision(7, { desde: "2026-09-01", hasta: "2026-09-30" });
+      // Llamada 0 = listado, llamada 1 = resumen.
+      const [sqlResumen, paramsResumen] = vi.mocked(query).mock.calls[1];
+      expect(String(sqlResumen)).toContain("c.creado_at >= ?");
+      expect(String(sqlResumen)).toContain("c.creado_at <= ?");
+      expect(paramsResumen).toEqual([7, "2026-09-01 00:00:00", "2026-09-30 23:59:59"]);
+    });
+
+    it("con vehiculoId activo, la consulta del resumen también lo aplica", async () => {
+      vi.mocked(query).mockResolvedValue([] as never);
+      await listarCargasCombustibleRevision(7, { vehiculoId: 3 });
+      const [sqlResumen, paramsResumen] = vi.mocked(query).mock.calls[1];
+      expect(String(sqlResumen)).toContain("c.vehiculo_id = ?");
+      expect(paramsResumen).toEqual([7, 3]);
+    });
+
+    it("con estado=PENDIENTE activo, la consulta del resumen NUNCA filtra por estado (las 3 pestañas comparten universo)", async () => {
+      vi.mocked(query).mockResolvedValue([] as never);
+      await listarCargasCombustibleRevision(7, { estado: "PENDIENTE", desde: "2026-09-01" });
+      const [sqlListado, paramsListado] = vi.mocked(query).mock.calls[0];
+      const [sqlResumen, paramsResumen] = vi.mocked(query).mock.calls[1];
+      // El listado SÍ filtra por estado...
+      expect(String(sqlListado)).toContain("c.estado = ?");
+      expect(paramsListado).toEqual([7, "2026-09-01 00:00:00", "PENDIENTE"]);
+      // ...pero el resumen NO, aunque comparta el filtro de fecha.
+      expect(String(sqlResumen)).not.toContain("c.estado = ?");
+      expect(paramsResumen).toEqual([7, "2026-09-01 00:00:00"]);
+    });
+
+    it("septiembre + vehículo X: el resumen cuenta solo dentro de ese universo (ejemplo del ticket)", async () => {
+      vi.mocked(query)
+        .mockResolvedValueOnce([] as never) // listado (no importa para este caso)
+        .mockResolvedValueOnce([
+          { estado: "PENDIENTE", n: 3 },
+          { estado: "APROBADO", n: 12 },
+          { estado: "RECHAZADO", n: 1 },
+        ] as never);
+      const { resumen } = await listarCargasCombustibleRevision(7, {
+        desde: "2026-09-01", hasta: "2026-09-30", vehiculoId: 3,
+      });
+      expect(resumen).toEqual({ PENDIENTE: 3, APROBADO: 12, RECHAZADO: 1 });
+    });
+  });
 });
 
 describe("revisarCargaCombustible (Fase 2)", () => {
