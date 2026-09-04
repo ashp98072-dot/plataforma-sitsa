@@ -329,10 +329,11 @@ function totalVacio(): ResumenCombustibleMensual["total"] {
  *
  * DEUDA FUNCIONAL (FLOTA-COMBUSTIBLE-HARDENING-1, sección 4 — documentada
  * a propósito, NO resuelta aquí): el rango de mes se aplica sobre
- * `creado_at`, que es la fecha/hora en que el piloto REGISTRÓ la carga
- * en el sistema — no necesariamente la fecha física en que cargó
- * combustible (p.ej. si lo registra al día siguiente, o Operaciones
- * tarda varios días en aprobar). No existe hoy una columna de "fecha de
+ * `creado_at`, que representa la fecha/hora en que el piloto registró la
+ * carga en el sistema, que puede diferir de la fecha física de carga si
+ * el registro se hace después. La fecha de aprobación de Operaciones NO
+ * afecta el corte mensual actual (el filtro es solo por `creado_at`, sin
+ * importar cuándo se aprobó). No existe hoy una columna de "fecha de
  * carga" separada de la de registro; agregarla requiere una decisión de
  * negocio (¿el piloto la captura manualmente? ¿se usa la fecha del
  * viaje?) y su propia migración — fuera de alcance de este ticket, que
