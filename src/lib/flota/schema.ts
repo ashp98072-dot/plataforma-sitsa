@@ -51,6 +51,20 @@ async function ensureColumn(
   knownCols.add(key);
 }
 
+/**
+ * Amplía el TIPO de una columna existente (MODIFY COLUMN) — a
+ * diferencia de ensureColumn() (que AGREGA una columna nueva y puede
+ * chocar con una carrera "columna ya existe" entre instancias
+ * arrancando a la vez), MODIFY COLUMN a la MISMA definición es
+ * naturalmente idempotente: MySQL no falla si la columna ya tiene ese
+ * tipo, así que no necesita el manejo especial de errores de
+ * ensureColumn(). Úsese SOLO para ENSANCHAR un tipo (nunca para
+ * reducirlo) — ensanchar nunca pierde datos ya guardados.
+ */
+async function ensureColumnType(tabla: string, ddl: string): Promise<void> {
+  await execute(`ALTER TABLE ${tabla} MODIFY COLUMN ${ddl}`);
+}
+
 /** Asegura columnas/tablas de flota completa (idempotente). */
 let flotaSchemaReady: Promise<void> | null = null;
 let schemaResolved = false;
@@ -526,6 +540,18 @@ async function asegurarSchemaFlotaInner(): Promise<void> {
     "flota_combustible_cargas",
     "precio_por_galon",
     "precio_por_galon DECIMAL(10,2) NULL AFTER monto",
+  );
+  // AJUSTE PRE-MERGE (PR #192, revisión contra el Excel real "CONTROL DE
+  // VALES MONACO S.A.-196.xlsx") — la hoja real reporta GLS con 3
+  // decimales (ej. 5.098, 7.150, 13.248, 18.494, 20.579). La columna
+  // original `galones DECIMAL(10,2)` (de FLOTA-COMBUSTIBLE-1) pierde esa
+  // precisión y perjudicaría la conciliación futura contra ese reporte.
+  // MODIFY COLUMN a DECIMAL(12,3) es un ENSANCHE puro — todo valor ya
+  // guardado en 2 decimales sigue siendo exactamente representable en 3
+  // (250.50 -> 250.500), así que no se pierde ningún registro histórico.
+  await ensureColumnType(
+    "flota_combustible_cargas",
+    "galones DECIMAL(12,3) NOT NULL",
   );
 
   // Inventario de equipo / herramientas (empresa vs propio del empleado)

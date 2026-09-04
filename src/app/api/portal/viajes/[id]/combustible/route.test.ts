@@ -182,8 +182,38 @@ describe("POST /api/portal/viajes/[id]/combustible", () => {
       expect(registrarCargaCombustible).not.toHaveBeenCalled();
     });
 
-    it("con una fecha que no existe en el calendario -> 400", async () => {
+    it("con formato pero fuera de rango de mes/día ('2026-13-40') -> 400", async () => {
       const res = await POST(req(formData({ tipoCombustible: "diesel", galones: "40", monto: "850", fechaConsumo: "2026-13-40" })), ctx);
+      expect(res.status).toBe(400);
+      expect(registrarCargaCombustible).not.toHaveBeenCalled();
+    });
+
+    // AJUSTE PRE-MERGE (PR #192) — bug real: "2026-02-31" (mes válido,
+    // día imposible para febrero) pasaba el chequeo anterior
+    // (`!Number.isNaN(new Date("2026-02-31").getTime())`) porque el
+    // constructor de Date NORMALIZA el desbordamiento hacia el mes
+    // siguiente en vez de fallar. esFechaCalendarioValida() (route.ts)
+    // lo rechaza reconstruyendo la fecha y comparando año/mes/día.
+    it("día imposible para el mes ('2026-02-31', un año NO bisiesto) -> 400 (bug real corregido)", async () => {
+      const res = await POST(req(formData({ tipoCombustible: "diesel", galones: "40", monto: "850", fechaConsumo: "2026-02-31" })), ctx);
+      expect(res.status).toBe(400);
+      expect(registrarCargaCombustible).not.toHaveBeenCalled();
+    });
+
+    it("29 de febrero en un año NO bisiesto ('2026-02-29') -> 400", async () => {
+      const res = await POST(req(formData({ tipoCombustible: "diesel", galones: "40", monto: "850", fechaConsumo: "2026-02-29" })), ctx);
+      expect(res.status).toBe(400);
+      expect(registrarCargaCombustible).not.toHaveBeenCalled();
+    });
+
+    it("29 de febrero en un año SÍ bisiesto ('2028-02-29') -> 200 (válida)", async () => {
+      const res = await POST(req(formData({ tipoCombustible: "diesel", galones: "40", monto: "850", fechaConsumo: "2028-02-29" })), ctx);
+      expect(res.status).toBe(200);
+      expect(registrarCargaCombustible).toHaveBeenCalledWith(expect.objectContaining({ fechaConsumo: "2028-02-29" }));
+    });
+
+    it("día imposible para abril (30 días) ('2026-04-31') -> 400", async () => {
+      const res = await POST(req(formData({ tipoCombustible: "diesel", galones: "40", monto: "850", fechaConsumo: "2026-04-31" })), ctx);
       expect(res.status).toBe(400);
       expect(registrarCargaCombustible).not.toHaveBeenCalled();
     });

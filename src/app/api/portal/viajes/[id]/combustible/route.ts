@@ -14,6 +14,7 @@ import {
   type TipoCombustible,
 } from "@/lib/flota/combustible";
 import { UploadValidationError, absPathFromRelative, contentTypeFor } from "@/lib/uploads";
+import { esFechaCalendarioValida } from "@/lib/flota/combustible-form-ui";
 
 /**
  * FLOTA-COMBUSTIBLE-1 (Fase 1: captura del piloto) — registrar y listar
@@ -144,10 +145,12 @@ export async function POST(req: Request, ctx: Ctx) {
   // FLOTA-COMBUSTIBLE-2 (sección 3) — obligatoria; representa la fecha
   // FÍSICA de la carga (la que declara el piloto), nunca la fecha de
   // registro en el sistema (esa sigue siendo creado_at, independiente).
+  // AJUSTE PRE-MERGE (PR #192) — esFechaCalendarioValida() rechaza
+  // fechas imposibles ("2026-02-31") que `new Date(...).getTime()` por
+  // sí solo dejaba pasar (ver su JSDoc en combustible-form-ui.ts).
   const fechaConsumoRaw = form.get("fechaConsumo");
   const fechaConsumo = typeof fechaConsumoRaw === "string" ? fechaConsumoRaw.trim() : "";
-  const fechaConsumoValida = /^\d{4}-\d{2}-\d{2}$/.test(fechaConsumo) && !Number.isNaN(new Date(fechaConsumo).getTime());
-  if (!fechaConsumoValida) {
+  if (!esFechaCalendarioValida(fechaConsumo)) {
     return NextResponse.json({ error: "Indica la fecha en que se cargó el combustible." }, { status: 400 });
   }
   const galones = Number(form.get("galones"));

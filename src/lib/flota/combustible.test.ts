@@ -78,6 +78,21 @@ describe("registrarCargaCombustible", () => {
     expect(params[11]).toBeNull(); // km
     expect(params[12]).toBeNull(); // gasolinera
   });
+
+  // AJUSTE PRE-MERGE (PR #192, sección 1) — galones con 3 decimales
+  // (datos reales del reporte de la gasolinera: 5.098, 7.150, 13.248) se
+  // insertan tal cual, sin redondear a 2 decimales — la columna ya se
+  // amplió a DECIMAL(12,3) en schema.ts.
+  it.each([5.098, 7.15, 13.248])("galones=%s (3 decimales) se pasa al INSERT sin redondear", async (galonesReales) => {
+    await registrarCargaCombustible({
+      empresaId: 7, vehiculoId: 3, viajeId: 5, empleadoId: 42, pilotoNombre: "Juan Pérez",
+      tipoCombustible: "diesel", numeroVale: "A-1", fechaConsumo: "2026-09-02",
+      galones: galonesReales, monto: 200, precioGalon: 21.26, km: null, gasolinera: null,
+      file: FILE, username: "portal:E001",
+    });
+    const params = vi.mocked(execute).mock.calls[0][1] as unknown[];
+    expect(params[8]).toBe(galonesReales); // galones — índice 8 en el INSERT
+  });
 });
 
 describe("listarCargasCombustibleViaje", () => {
@@ -100,6 +115,24 @@ describe("listarCargasCombustibleViaje", () => {
       },
     ]);
     expect(query).toHaveBeenCalledWith(expect.stringContaining("WHERE empresa_id = ? AND viaje_id = ?"), [7, 5]);
+  });
+
+  // AJUSTE PRE-MERGE (PR #192, sección 1) — el mapeo de lectura tampoco
+  // debe redondear galones a 2 decimales; mysql2 suele devolver DECIMAL
+  // como string, así que se prueba con el mismo formato real
+  // ("13.248", no el número 13.248) para confirmar que Number() conserva
+  // los 3 decimales.
+  it("galones con 3 decimales (DECIMAL(12,3) devuelto como string) se mapean sin redondear", async () => {
+    vi.mocked(query).mockResolvedValue([
+      {
+        id: 1, viaje_id: 5, tipo_combustible: "diesel", numero_vale: "A-1", fecha_consumo: "2026-09-02",
+        galones: "13.248", monto: "281.65", precio_por_galon: "21.26",
+        km: null, gasolinera: null, nombre_original: "vale.jpg",
+        estado: "PENDIENTE", motivo_rechazo: null, creado_por: "portal:E001", creado_at: "2026-09-03 10:00:00",
+      },
+    ] as never);
+    const out = await listarCargasCombustibleViaje(7, 5);
+    expect(out[0].galones).toBe(13.248);
   });
 
   it("un estado desconocido en la BD nunca revienta el mapeo, cae a PENDIENTE", async () => {

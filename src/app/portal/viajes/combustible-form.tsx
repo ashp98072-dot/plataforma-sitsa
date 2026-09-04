@@ -304,7 +304,10 @@ export default function CombustibleForm({ viajeId }: { viajeId: number | null })
           </label>
 
           <label className="mt-3 block text-sm text-[var(--muted)]">Galones cargados
-            <input type="number" min={0.01} step={0.01} className={inputCls} value={galones} onChange={(e) => setGalones(e.target.value)} required />
+            {/* AJUSTE PRE-MERGE (PR #192) — el reporte real de la
+                gasolinera reporta GLS con 3 decimales (ej. 5.098,
+                13.248); step/min se ajustan a esa precisión. */}
+            <input type="number" min={0.001} step={0.001} className={inputCls} value={galones} onChange={(e) => setGalones(e.target.value)} required />
           </label>
 
           <label className="mt-3 block text-sm text-[var(--muted)]">Precio por galón (Q)
