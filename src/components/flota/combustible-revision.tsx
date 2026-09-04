@@ -9,6 +9,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * flota-client.tsx, que ya son 5600+ líneas) — mismo patrón de
  * dynamic import que InventarioEquipoPanel/VehiculoDocumentos en ese
  * mismo archivo.
+ *
+ * FLOTA-COMBUSTIBLE-2 (sección 7) — número de vale y fecha de consumo
+ * (las mismas columnas que el reporte real de la gasolinera) se agregan
+ * a esta tabla para que Operaciones ya pueda ver, a simple vista, con
+ * qué confrontar cada carga más adelante — la importación del Excel en
+ * sí no se implementa todavía.
  */
 
 type Props = {
@@ -24,8 +30,14 @@ type Carga = {
   placa: string;
   pilotoNombre: string;
   tipoCombustible: "diesel" | "gasolina";
+  /** `null` en cargas registradas antes de FLOTA-COMBUSTIBLE-2. */
+  numeroVale: string | null;
+  /** `null` en cargas registradas antes de FLOTA-COMBUSTIBLE-2. */
+  fechaConsumo: string | null;
   galones: number;
   monto: number;
+  /** `null` en cargas registradas antes de FLOTA-COMBUSTIBLE-2. */
+  precioGalon: number | null;
   km: number | null;
   gasolinera: string | null;
   estado: Estado;
@@ -299,18 +311,21 @@ export function CombustibleRevisionPanel({ slug, can }: Props) {
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[900px] text-left text-sm">
+        <table className="w-full min-w-[1250px] text-left text-sm">
           <thead>
             <tr className="border-b border-[var(--border)] text-xs text-[var(--muted)]">
-              <th className="px-2 py-2">Fecha</th>
+              <th className="px-2 py-2">Fecha registro</th>
+              <th className="px-2 py-2">No. vale</th>
+              <th className="px-2 py-2">Fecha consumo</th>
               <th className="px-2 py-2">Unidad</th>
               <th className="px-2 py-2">Piloto</th>
               <th className="px-2 py-2">Tipo</th>
               <th className="px-2 py-2">Galones</th>
+              <th className="px-2 py-2">Precio/gal</th>
               <th className="px-2 py-2">Monto</th>
               <th className="px-2 py-2">Km</th>
               <th className="px-2 py-2">Gasolinera</th>
-              <th className="px-2 py-2">Vale</th>
+              <th className="px-2 py-2">Foto</th>
               {estado === "RECHAZADO" ? <th className="px-2 py-2">Motivo</th> : null}
               {puedeRevisar && estado === "PENDIENTE" ? <th className="px-2 py-2">Acciones</th> : null}
             </tr>
@@ -319,10 +334,17 @@ export function CombustibleRevisionPanel({ slug, can }: Props) {
             {items.map((c) => (
               <tr key={c.id} className="border-b border-[var(--border)]">
                 <td className="px-2 py-2">{c.creadoEn}</td>
+                {/* FLOTA-COMBUSTIBLE-2 (sección 8) — un registro histórico
+                    anterior a este ticket no tiene numero_vale/fecha_consumo/
+                    precio_por_galon; se muestra "No disponible" en vez de
+                    inventar un valor o romper la tabla. */}
+                <td className="px-2 py-2">{c.numeroVale ?? "No disponible"}</td>
+                <td className="px-2 py-2">{c.fechaConsumo ?? "No disponible"}</td>
                 <td className="px-2 py-2">{c.placa}</td>
                 <td className="px-2 py-2">{c.pilotoNombre}</td>
                 <td className="px-2 py-2">{c.tipoCombustible === "diesel" ? "Diesel" : "Gasolina"}</td>
                 <td className="px-2 py-2">{c.galones}</td>
+                <td className="px-2 py-2">{c.precioGalon != null ? `Q${c.precioGalon.toFixed(2)}` : "No disponible"}</td>
                 <td className="px-2 py-2">Q{c.monto.toFixed(2)}</td>
                 <td className="px-2 py-2">{c.km != null ? c.km.toLocaleString("es-GT") : "—"}</td>
                 <td className="px-2 py-2">{c.gasolinera ?? "—"}</td>
@@ -363,7 +385,7 @@ export function CombustibleRevisionPanel({ slug, can }: Props) {
             {!loading && !items.length ? (
               <tr>
                 <td
-                  colSpan={9 + (estado === "RECHAZADO" ? 1 : 0) + (puedeRevisar && estado === "PENDIENTE" ? 1 : 0)}
+                  colSpan={12 + (estado === "RECHAZADO" ? 1 : 0) + (puedeRevisar && estado === "PENDIENTE" ? 1 : 0)}
                   className="px-2 py-4 text-[var(--muted)]"
                 >
                   Sin registros con este filtro.

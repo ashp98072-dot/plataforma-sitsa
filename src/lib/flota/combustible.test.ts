@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db", () => ({ execute: vi.fn(), query: vi.fn() }));
-vi.mock("@/lib/rrhh/dates", () => ({ ahoraLocal: vi.fn(() => "2026-09-03 10:00:00") }));
+vi.mock("@/lib/rrhh/dates", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/rrhh/dates")>("@/lib/rrhh/dates");
+  return { ...actual, ahoraLocal: vi.fn(() => "2026-09-03 10:00:00") };
+});
 vi.mock("@/lib/uploads", () => ({
   guardarUpload: vi.fn(() => Promise.resolve({ relative: "empresas/7/flota/vale.jpg", original: "vale.jpg", size: 123 })),
   contentTypeFor: vi.fn(() => "image/jpeg"),
@@ -42,8 +45,11 @@ describe("registrarCargaCombustible", () => {
       empleadoId: 42,
       pilotoNombre: "Juan Pérez",
       tipoCombustible: "diesel",
+      numeroVale: "A-12345",
+      fechaConsumo: "2026-09-02",
       galones: 40,
       monto: 850.5,
+      precioGalon: 21.26,
       km: 12000,
       gasolinera: "Shell Zona 10",
       file: FILE,
@@ -53,27 +59,48 @@ describe("registrarCargaCombustible", () => {
     expect(guardarUpload).toHaveBeenCalledWith(7, "flota", "combustible_5", FILE);
     expect(execute).toHaveBeenCalledWith(
       expect.stringContaining("INSERT INTO flota_combustible_cargas"),
-      [7, 3, 5, 42, "Juan Pérez", "diesel", 40, 850.5, 12000, "Shell Zona 10", "empresas/7/flota/vale.jpg", "vale.jpg", "image/jpeg", 123, "portal:E001", "2026-09-03 10:00:00"],
+      [
+        7, 3, 5, 42, "Juan Pérez", "diesel", "A-12345", "2026-09-02", 40, 850.5, 21.26, 12000,
+        "Shell Zona 10", "empresas/7/flota/vale.jpg", "vale.jpg", "image/jpeg", 123, "portal:E001",
+        "2026-09-03 10:00:00",
+      ],
     );
   });
 
   it("km null (unidad sin odómetro funcional) se guarda como NULL, no como 0", async () => {
     await registrarCargaCombustible({
       empresaId: 7, vehiculoId: 3, viajeId: 5, empleadoId: 42, pilotoNombre: "Juan Pérez",
-      tipoCombustible: "gasolina", galones: 10, monto: 200, km: null, gasolinera: null,
+      tipoCombustible: "gasolina", numeroVale: "B-1", fechaConsumo: "2026-09-02",
+      galones: 10, monto: 200, precioGalon: 20, km: null, gasolinera: null,
       file: FILE, username: "portal:E001",
     });
     const params = vi.mocked(execute).mock.calls[0][1] as unknown[];
-    expect(params[8]).toBeNull(); // km
-    expect(params[9]).toBeNull(); // gasolinera
+    expect(params[11]).toBeNull(); // km
+    expect(params[12]).toBeNull(); // gasolinera
+  });
+
+  // AJUSTE PRE-MERGE (PR #192, sección 1) — galones con 3 decimales
+  // (datos reales del reporte de la gasolinera: 5.098, 7.150, 13.248) se
+  // insertan tal cual, sin redondear a 2 decimales — la columna ya se
+  // amplió a DECIMAL(12,3) en schema.ts.
+  it.each([5.098, 7.15, 13.248])("galones=%s (3 decimales) se pasa al INSERT sin redondear", async (galonesReales) => {
+    await registrarCargaCombustible({
+      empresaId: 7, vehiculoId: 3, viajeId: 5, empleadoId: 42, pilotoNombre: "Juan Pérez",
+      tipoCombustible: "diesel", numeroVale: "A-1", fechaConsumo: "2026-09-02",
+      galones: galonesReales, monto: 200, precioGalon: 21.26, km: null, gasolinera: null,
+      file: FILE, username: "portal:E001",
+    });
+    const params = vi.mocked(execute).mock.calls[0][1] as unknown[];
+    expect(params[8]).toBe(galonesReales); // galones — índice 8 en el INSERT
   });
 });
 
 describe("listarCargasCombustibleViaje", () => {
-  it("mapea las filas de la BD al tipo CargaCombustible", async () => {
+  it("mapea las filas de la BD al tipo CargaCombustible, incluyendo vale/fecha de consumo/precio (FLOTA-COMBUSTIBLE-2)", async () => {
     vi.mocked(query).mockResolvedValue([
       {
-        id: 1, viaje_id: 5, tipo_combustible: "diesel", galones: "40.00", monto: "850.50",
+        id: 1, viaje_id: 5, tipo_combustible: "diesel", numero_vale: "A-12345", fecha_consumo: "2026-09-02",
+        galones: "40.00", monto: "850.50", precio_por_galon: "21.26",
         km: 12000, gasolinera: "Shell Zona 10", nombre_original: "vale.jpg",
         estado: "PENDIENTE", motivo_rechazo: null, creado_por: "portal:E001", creado_at: "2026-09-03 10:00:00",
       },
@@ -81,12 +108,31 @@ describe("listarCargasCombustibleViaje", () => {
     const out = await listarCargasCombustibleViaje(7, 5);
     expect(out).toEqual([
       {
-        id: 1, viajeId: 5, tipoCombustible: "diesel", galones: 40, monto: 850.5,
+        id: 1, viajeId: 5, tipoCombustible: "diesel", numeroVale: "A-12345", fechaConsumo: "2026-09-02",
+        galones: 40, monto: 850.5, precioGalon: 21.26,
         km: 12000, gasolinera: "Shell Zona 10", nombreArchivo: "vale.jpg",
         estado: "PENDIENTE", motivoRechazo: null, creadoPor: "portal:E001", creadoEn: "2026-09-03 10:00:00",
       },
     ]);
     expect(query).toHaveBeenCalledWith(expect.stringContaining("WHERE empresa_id = ? AND viaje_id = ?"), [7, 5]);
+  });
+
+  // AJUSTE PRE-MERGE (PR #192, sección 1) — el mapeo de lectura tampoco
+  // debe redondear galones a 2 decimales; mysql2 suele devolver DECIMAL
+  // como string, así que se prueba con el mismo formato real
+  // ("13.248", no el número 13.248) para confirmar que Number() conserva
+  // los 3 decimales.
+  it("galones con 3 decimales (DECIMAL(12,3) devuelto como string) se mapean sin redondear", async () => {
+    vi.mocked(query).mockResolvedValue([
+      {
+        id: 1, viaje_id: 5, tipo_combustible: "diesel", numero_vale: "A-1", fecha_consumo: "2026-09-02",
+        galones: "13.248", monto: "281.65", precio_por_galon: "21.26",
+        km: null, gasolinera: null, nombre_original: "vale.jpg",
+        estado: "PENDIENTE", motivo_rechazo: null, creado_por: "portal:E001", creado_at: "2026-09-03 10:00:00",
+      },
+    ] as never);
+    const out = await listarCargasCombustibleViaje(7, 5);
+    expect(out[0].galones).toBe(13.248);
   });
 
   it("un estado desconocido en la BD nunca revienta el mapeo, cae a PENDIENTE", async () => {
@@ -95,6 +141,28 @@ describe("listarCargasCombustibleViaje", () => {
     ] as never);
     const out = await listarCargasCombustibleViaje(7, 5);
     expect(out[0].estado).toBe("PENDIENTE");
+  });
+
+  // FLOTA-COMBUSTIBLE-2 (sección 8) — compatibilidad: un registro
+  // histórico anterior a este ticket no tiene numero_vale/fecha_consumo/
+  // precio_por_galon en la BD (columnas NULL) — el mapeo nunca debe
+  // reventar, y esos 3 campos deben salir explícitamente en null (nunca
+  // undefined, NaN, ni un valor inventado).
+  it("un registro histórico SIN numero_vale/fecha_consumo/precio_por_galon (columnas NULL) mapea esos 3 campos a null, sin romper el resto", async () => {
+    vi.mocked(query).mockResolvedValue([
+      {
+        id: 1, viaje_id: 5, tipo_combustible: "diesel", numero_vale: null, fecha_consumo: null,
+        galones: "40.00", monto: "850.50", precio_por_galon: null,
+        km: 12000, gasolinera: "Shell Zona 10", nombre_original: "vale.jpg",
+        estado: "APROBADO", motivo_rechazo: null, creado_por: "portal:E001", creado_at: "2026-08-01 09:00:00",
+      },
+    ] as never);
+    const out = await listarCargasCombustibleViaje(7, 5);
+    expect(out[0].numeroVale).toBeNull();
+    expect(out[0].fechaConsumo).toBeNull();
+    expect(out[0].precioGalon).toBeNull();
+    // El resto de la fila sigue mapeándose con normalidad.
+    expect(out[0]).toMatchObject({ id: 1, galones: 40, monto: 850.5, estado: "APROBADO" });
   });
 });
 
