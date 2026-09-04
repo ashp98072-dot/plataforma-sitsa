@@ -1,20 +1,25 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import Image from "next/image";
+import { normalizarFotoCamara } from "@/lib/flota/camera-file";
 
 /**
  * FLOTA-COMBUSTIBLE-1 (Fase 1: captura del piloto) — registrar la carga
  * de combustible del viaje en curso (galones, monto, km, gasolinera y
  * foto del vale) y ver el estado de lo ya registrado (Pendiente hasta
- * que Operaciones lo revise — la revisión es una fase aparte, todavía no
- * construida). Componente propio (no se agrega dentro de viaje-form.tsx,
- * que ya es grande) para mantener el cambio chico y reversible.
+ * que Operaciones lo revise). Componente propio (no se agrega dentro de
+ * viaje-form.tsx, que ya es grande) para mantener el cambio chico y
+ * reversible.
  *
- * A diferencia de "Adjuntar evidencia" (tablero/parada, con geoestampado
- * GPS en la foto para probar ubicación), la foto aquí es solo el
- * respaldo del vale físico que ya entregó la gasolinera — no necesita el
- * flujo de cámara en vivo con overlay; un input de cámara nativo del
- * dispositivo es suficiente y mucho más simple.
+ * CORRECCIÓN (pedido del usuario): la foto del vale debe abrirse igual
+ * que "Adjuntar evidencia" — cámara en vivo, sin permitir elegir un
+ * archivo de la galería/documentos. Se quitó el <input type="file"
+ * capture="environment"> original (ese `capture` es solo una sugerencia:
+ * varios navegadores/SO igual muestran la galería como opción) y se
+ * reemplazó por el mismo flujo getUserMedia + <video> + canvas que ya
+ * usa viaje-form.tsx para las evidencias — sin el geoestampado GPS de
+ * esas fotos (el vale no necesita probar ubicación, solo ser legible).
  */
 
 type EstadoCarga = "PENDIENTE" | "APROBADO" | "RECHAZADO";
@@ -52,10 +57,15 @@ export default function CombustibleForm({ viajeId }: { viajeId: number | null })
   const [monto, setMonto] = useState("");
   const [km, setKm] = useState("");
   const [gasolinera, setGasolinera] = useState("");
-  const [archivo, setArchivo] = useState<File | null>(null);
   const [error, setError] = useState("");
   const [mensaje, setMensaje] = useState("");
   const [loading, setLoading] = useState(false);
+
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const previewUrlRef = useRef<string | null>(null);
+  const [camaraActiva, setCamaraActiva] = useState(false);
+  const [foto, setFoto] = useState<{ blob: Blob; url: string } | null>(null);
 
   useEffect(() => {
     if (!viajeId) return;
@@ -67,6 +77,60 @@ export default function CombustibleForm({ viajeId }: { viajeId: number | null })
     return () => { cancelado = true; };
   }, [viajeId, mensaje]);
 
+  useEffect(() => {
+    return () => {
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    };
+  }, []);
+
+  function detenerCamara() {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    setCamaraActiva(false);
+  }
+
+  async function abrirCamara() {
+    setError("");
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError("Este dispositivo o navegador no permite abrir la cámara directamente.");
+      return;
+    }
+    try {
+      detenerCamara();
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+      setCamaraActiva(true);
+    } catch {
+      setError("No se pudo abrir la cámara. Autoriza el permiso de cámara e inténtalo nuevamente.");
+    }
+  }
+
+  async function tomarFoto() {
+    const video = videoRef.current;
+    if (!video || video.videoWidth < 1 || video.videoHeight < 1) {
+      setError("La cámara todavía no está lista.");
+      return;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return setError("No se pudo preparar la fotografía.");
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.9));
+    if (!blob) return setError("No se pudo capturar la fotografía.");
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    const url = URL.createObjectURL(blob);
+    previewUrlRef.current = url;
+    setFoto({ blob, url });
+    detenerCamara();
+  }
+
   async function enviar(e: FormEvent) {
     e.preventDefault();
     if (!viajeId) return;
@@ -74,7 +138,9 @@ export default function CombustibleForm({ viajeId }: { viajeId: number | null })
     const m = Number(monto);
     if (!Number.isFinite(g) || g <= 0) return setError("Indica los galones cargados.");
     if (!Number.isFinite(m) || m <= 0) return setError("Indica el valor pagado.");
-    if (!archivo) return setError("Adjunta la fotografía del vale.");
+    if (!foto) return setError("Toma la fotografía del vale antes de continuar.");
+    const archivo = await normalizarFotoCamara(foto.blob, "vale");
+    if (!archivo) return setError("No se pudo procesar la fotografía. Vuelve a tomarla.");
     setError(""); setMensaje(""); setLoading(true);
     try {
       const form = new FormData();
@@ -88,7 +154,10 @@ export default function CombustibleForm({ viajeId }: { viajeId: number | null })
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "No se pudo registrar la carga de combustible.");
       setMensaje(data.mensaje ?? "Registrado.");
-      setGalones(""); setMonto(""); setKm(""); setGasolinera(""); setArchivo(null);
+      setGalones(""); setMonto(""); setKm(""); setGasolinera("");
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = null;
+      setFoto(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo registrar la carga de combustible.");
     } finally {
@@ -135,18 +204,33 @@ export default function CombustibleForm({ viajeId }: { viajeId: number | null })
         <input className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={gasolinera} onChange={(e) => setGasolinera(e.target.value)} maxLength={150} placeholder="Ej. Shell Zona 10" />
       </label>
 
-      <label className="mt-3 block text-sm text-[var(--muted)]">Foto del vale
-        <input
-          type="file"
-          accept="image/*"
-          capture="environment"
-          className="mt-1 block w-full text-sm"
-          onChange={(e) => setArchivo(e.target.files?.[0] ?? null)}
-          required
-        />
-      </label>
+      <div className="mt-3">
+        <p className="text-sm text-[var(--muted)]">Foto del vale</p>
+        <p className="text-xs text-[var(--muted)]">Debe tomarse ahora con la cámara. No se permite seleccionar archivos de la galería.</p>
+        <video ref={videoRef} className={`mt-2 w-full rounded-xl bg-black ${camaraActiva ? "block" : "hidden"}`} playsInline muted />
+        {foto ? (
+          <Image src={foto.url} alt="Vista previa del vale" width={1280} height={720} unoptimized className="mt-2 h-auto w-full rounded-xl" />
+        ) : null}
+        <div className="mt-2 flex flex-wrap gap-2">
+          {!camaraActiva ? (
+            <button type="button" className="rounded-lg bg-[#334155] px-4 py-2.5 font-medium text-white" onClick={() => void abrirCamara()}>
+              {foto ? "Tomar otra foto" : "Abrir cámara"}
+            </button>
+          ) : null}
+          {camaraActiva ? (
+            <button type="button" className="rounded-lg bg-[var(--accent)] px-4 py-2.5 font-medium text-white" onClick={() => void tomarFoto()}>
+              Tomar foto
+            </button>
+          ) : null}
+          {camaraActiva ? (
+            <button type="button" className="rounded-lg border border-[var(--border)] px-4 py-2.5" onClick={detenerCamara}>
+              Cancelar cámara
+            </button>
+          ) : null}
+        </div>
+      </div>
 
-      <button className="mt-4 rounded-lg bg-[var(--accent)] px-4 py-2.5 font-medium text-white disabled:opacity-50" disabled={loading}>
+      <button className="mt-4 rounded-lg bg-[var(--accent)] px-4 py-2.5 font-medium text-white disabled:opacity-50" disabled={loading || !foto}>
         Guardar carga de combustible
       </button>
 
