@@ -292,6 +292,47 @@ export async function listarCargasCombustibleRevision(
 }
 
 /**
+ * FLOTA-COMBUSTIBLE-3 — listado específico para conciliación contra
+ * reportes de gasolinera.
+ *
+ * A diferencia de listarCargasCombustibleRevision():
+ * - NO tiene LIMIT 500.
+ * - NO filtra por creado_at.
+ * - incluye PENDIENTE/APROBADO/RECHAZADO.
+ * - exige que exista numero_vale, porque ese es el identificador
+ *   principal de matching de la conciliación.
+ *
+ * El aislamiento por empresa_id es obligatorio.
+ */
+export async function listarCargasCombustibleParaConciliacion(
+  empresaId: number,
+  desde: string,
+  hasta: string,
+): Promise<CargaCombustibleRevision[]> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT c.id, c.viaje_id, c.tipo_combustible, c.numero_vale,
+            c.fecha_consumo, c.galones, c.monto, c.precio_por_galon,
+            c.km, c.gasolinera, c.nombre_original, c.estado,
+            c.motivo_rechazo, c.creado_por, c.creado_at,
+            c.revisado_por, c.revisado_en, c.piloto_nombre, v.placa
+     FROM flota_combustible_cargas c
+     INNER JOIN flota_vehiculos v
+       ON v.id = c.vehiculo_id
+      AND v.empresa_id = c.empresa_id
+     WHERE c.empresa_id = ?
+       AND c.numero_vale IS NOT NULL
+       AND TRIM(c.numero_vale) <> ''
+       AND c.fecha_consumo IS NOT NULL
+       AND c.fecha_consumo >= ?
+       AND c.fecha_consumo <= ?
+     ORDER BY c.fecha_consumo ASC, c.id ASC`,
+    [empresaId, desde, hasta],
+  );
+
+  return rows.map(mapCargaRevision);
+}
+
+/**
  * FLOTA-COMBUSTIBLE-1 (Fase 2) — aprobar o rechazar una carga PENDIENTE.
  * Solo transiciona desde PENDIENTE (el WHERE lo garantiza atómicamente) —
  * una carga ya decidida no se puede "re-aprobar"/"re-rechazar" desde
