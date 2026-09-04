@@ -24,6 +24,7 @@ vi.mock("@/lib/uploads", async () => {
 });
 
 import { query } from "@/lib/db";
+import { registrarAuditoria } from "@/lib/auditoria";
 import { colaboradorParticipaEnViaje } from "@/lib/flota/viajes-piloto";
 import { registrarCargaCombustible } from "@/lib/flota/combustible";
 import { getColaboradorSession } from "@/lib/rrhh/colaborador-session";
@@ -53,7 +54,9 @@ beforeEach(() => {
     { nombre: "Juan Pérez", codigo: "E001" } as unknown as Awaited<ReturnType<typeof obtenerEmpleado>>,
   );
   vi.mocked(colaboradorParticipaEnViaje).mockResolvedValue({ viajeId: 5, planId: 30, estado: "abierto" });
-  vi.mocked(query).mockResolvedValue([{ vehiculo_id: 3, piloto_nombre: "Juan Pérez" }] as never);
+  // empleado_id: 42 === session.empleadoId -> la sesión de estos tests
+  // por defecto ES el piloto responsable (dueño real de flota_viajes).
+  vi.mocked(query).mockResolvedValue([{ vehiculo_id: 3, piloto_nombre: "Juan Pérez", empleado_id: 42 }] as never);
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -70,6 +73,40 @@ describe("POST /api/portal/viajes/[id]/combustible", () => {
     const res = await POST(req(formData({ tipoCombustible: "diesel", galones: "40", monto: "850" })), ctx);
     expect(res.status).toBe(409);
     expect(registrarCargaCombustible).not.toHaveBeenCalled();
+  });
+
+  // FLOTA-COMBUSTIBLE-HARDENING-1 (sección 1) — colaboradorParticipaEnViaje()
+  // por sí solo acepta piloto O auxiliar (confirmado en su propio código,
+  // ver JSDoc del route). El registro de combustible exige además que la
+  // sesión sea el dueño real de flota_viajes (empleado_id) — nunca un
+  // auxiliar, aunque esté legítimamente asignado al mismo viaje.
+  describe("solo el piloto responsable (flota_viajes.empleado_id) registra combustible", () => {
+    it("piloto asignado (empleado_id de la sesión) -> permitido (200)", async () => {
+      vi.mocked(query).mockResolvedValue([{ vehiculo_id: 3, piloto_nombre: "Juan Pérez", empleado_id: 42 }] as never);
+      const res = await POST(req(formData({ tipoCombustible: "diesel", galones: "40", monto: "850" })), ctx);
+      expect(res.status).toBe(200);
+      expect(registrarCargaCombustible).toHaveBeenCalled();
+    });
+
+    it("auxiliar asignado al mismo viaje (pasa colaboradorParticipaEnViaje, pero NO es el dueño) -> 403", async () => {
+      // colaboradorParticipaEnViaje() sí lo autoriza (está asignado como
+      // auxiliar), pero flota_viajes.empleado_id (99) es el PILOTO, no
+      // esta sesión (42) — debe rechazarse igual.
+      vi.mocked(colaboradorParticipaEnViaje).mockResolvedValue({ viajeId: 5, planId: 30, estado: "abierto" });
+      vi.mocked(query).mockResolvedValue([{ vehiculo_id: 3, piloto_nombre: "Piloto Titular", empleado_id: 99 }] as never);
+      const res = await POST(req(formData({ tipoCombustible: "diesel", galones: "40", monto: "850" })), ctx);
+      expect(res.status).toBe(403);
+      const body = await res.json();
+      expect(body.error).toContain("piloto responsable");
+      expect(registrarCargaCombustible).not.toHaveBeenCalled();
+    });
+
+    it("empleado ajeno (ni piloto ni auxiliar del viaje) -> 403 (colaboradorParticipaEnViaje ya lo rechaza)", async () => {
+      vi.mocked(colaboradorParticipaEnViaje).mockResolvedValue(null);
+      const res = await POST(req(formData({ tipoCombustible: "diesel", galones: "40", monto: "850" })), ctx);
+      expect(res.status).toBe(403);
+      expect(registrarCargaCombustible).not.toHaveBeenCalled();
+    });
   });
 
   it("tipo de combustible inválido -> 400", async () => {
@@ -108,6 +145,17 @@ describe("POST /api/portal/viajes/[id]/combustible", () => {
         tipoCombustible: "diesel", galones: 40, monto: 850.5, km: 12000, gasolinera: "Shell Zona 10",
         username: "portal:E001",
       }),
+    );
+  });
+
+  // FLOTA-COMBUSTIBLE-HARDENING-1 (sección 2) — antes quedaba "tms" por
+  // inconsistencia con aprobar/rechazar (que ya audita "flota"); todo el
+  // dominio de combustible debe quedar bajo el mismo módulo.
+  it("audita bajo modulo 'flota' (coherente con aprobar/rechazar), nunca 'tms'", async () => {
+    const res = await POST(req(formData({ tipoCombustible: "diesel", galones: "40", monto: "850" })), ctx);
+    expect(res.status).toBe(200);
+    expect(registrarAuditoria).toHaveBeenCalledWith(
+      expect.objectContaining({ accion: "registrar_combustible", modulo: "flota" }),
     );
   });
 

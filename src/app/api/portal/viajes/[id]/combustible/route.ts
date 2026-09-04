@@ -17,9 +17,27 @@ import { UploadValidationError, absPathFromRelative, contentTypeFor } from "@/li
 
 /**
  * FLOTA-COMBUSTIBLE-1 (Fase 1: captura del piloto) — registrar y listar
- * cargas de combustible del propio viaje. Mismo patrón de autorización
- * que .../viajes/[id]/evidencias/route.ts: colaboradorParticipaEnViaje()
- * (piloto o auxiliar realmente asignado a ESE viaje, nunca otro).
+ * cargas de combustible del propio viaje.
+ *
+ * GET (listar/ver el vale): mismo patrón que
+ * .../viajes/[id]/evidencias/route.ts — colaboradorParticipaEnViaje()
+ * (piloto O auxiliar realmente asignado a ESE viaje, nunca otro). Un
+ * auxiliar sí puede CONSULTAR lo ya registrado en el viaje que comparte.
+ *
+ * POST (registrar): FLOTA-COMBUSTIBLE-HARDENING-1 — colaboradorParticipa
+ * EnViaje() por sí solo NO basta aquí: acepta piloto O auxiliar (ver su
+ * WHERE en viajes-piloto.ts, condición `pil.id_empleado = ? OR
+ * aux.id_empleado = ? OR aux_legacy.id_empleado = ?`). El registro de
+ * combustible es responsabilidad exclusiva del PILOTO — se exige además
+ * que `flota_viajes.empleado_id` (el dueño real del viaje técnico)
+ * coincida con la sesión. Se reutiliza ese campo tal cual, sin una
+ * segunda autenticación: `empleado_id` SIEMPRE es el piloto que hizo la
+ * salida — la propia ruta de salida (api/portal/viajes/route.ts) exige
+ * `personal.tipo === "Piloto"` antes de insertar la fila, y usa ese
+ * mismo empleadoId para poblarlo; es también el mismo campo que ya
+ * exige la acción "llegada" de esa ruta (`v.empleado_id = ? AND
+ * v.empleado_id = session.empleadoId` en su UPDATE) — mismo criterio de
+ * "dueño del viaje", no uno nuevo.
  */
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -89,11 +107,21 @@ export async function POST(req: Request, ctx: Ctx) {
   await asegurarSchemaFlota().catch(() => undefined);
 
   const viaje = await query<RowDataPacket[]>(
-    `SELECT v.vehiculo_id, v.piloto_nombre FROM flota_viajes v
+    `SELECT v.vehiculo_id, v.piloto_nombre, v.empleado_id FROM flota_viajes v
      WHERE v.id = ? AND v.empresa_id = ? LIMIT 1`,
     [viajeId, session.empresaId],
   );
   if (!viaje[0]) return NextResponse.json({ error: "Viaje no encontrado." }, { status: 404 });
+  // FLOTA-COMBUSTIBLE-HARDENING-1 — solo el piloto responsable del viaje
+  // (dueño real de flota_viajes) registra combustible; un auxiliar
+  // asignado al mismo viaje pasa colaboradorParticipaEnViaje() pero NO
+  // debe poder registrar.
+  if (Number(viaje[0].empleado_id) !== session.empleadoId) {
+    return NextResponse.json(
+      { error: "Solo el piloto responsable del viaje puede registrar combustible." },
+      { status: 403 },
+    );
+  }
 
   const form = await req.formData();
   const tipoRaw = String(form.get("tipoCombustible") ?? "");
@@ -155,7 +183,11 @@ export async function POST(req: Request, ctx: Ctx) {
     empresaId: session.empresaId,
     usuario: `portal:${empleado.codigo}`,
     accion: "registrar_combustible",
-    modulo: "tms",
+    // FLOTA-COMBUSTIBLE-HARDENING-1 — todo el dominio de combustible se
+    // audita bajo "flota" (mismo módulo que aprobar/rechazar en
+    // .../flota/combustible/[id]/revisar/route.ts); antes quedaba "tms"
+    // aquí por inconsistencia, no por intención.
+    modulo: "flota",
     detalle: `Carga de combustible #${cargaId} en viaje #${viajeId} · ${tipoCombustible} · ${galones} gal · Q${monto.toFixed(2)} · ${empleado.nombre}`,
   });
 

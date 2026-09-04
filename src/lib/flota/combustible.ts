@@ -192,36 +192,49 @@ function mapCargaRevision(r: RowDataPacket): CargaCombustibleRevision {
 }
 
 /**
- * FLOTA-COMBUSTIBLE-1 (Fase 2) — bandeja de revisión de Operaciones.
- * `estado` filtra Pendiente/Aprobado/Rechazado (sin filtro = todas);
- * `desde`/`hasta` filtran por fecha de creación (YYYY-MM-DD), para el
- * corte mensual. Reutiliza el mismo criterio de aislamiento por empresa
- * que el resto del módulo — nunca cruza cargas de otra empresa aunque
- * compartan vehiculo_id por coincidencia (flota_vehiculo_acceso no
- * aplica aquí: la carga es propiedad de la empresa que la registró, no
- * del vehículo compartido).
+ * FLOTA-COMBUSTIBLE-1 (Fase 2, ajustado en FLOTA-COMBUSTIBLE-HARDENING-1)
+ * — bandeja de revisión de Operaciones. `estado` filtra Pendiente/
+ * Aprobado/Rechazado (sin filtro = todas); `desde`/`hasta` filtran por
+ * fecha de creación (YYYY-MM-DD), para el corte mensual; `vehiculoId`
+ * acota a una unidad. Reutiliza el mismo criterio de aislamiento por
+ * empresa que el resto del módulo — nunca cruza cargas de otra empresa
+ * aunque compartan vehiculo_id por coincidencia (flota_vehiculo_acceso
+ * no aplica aquí: la carga es propiedad de la empresa que la registró,
+ * no del vehículo compartido).
+ *
+ * `resumen` (conteo por estado, para las 3 pestañas de la bandeja) usa
+ * los MISMOS filtros de fecha/vehículo que el listado — pero NUNCA el
+ * filtro `estado` — para que Pendientes/Aprobados/Rechazados reflejen el
+ * mismo universo filtrado (p.ej. "septiembre + vehículo X") en vez de
+ * los totales históricos de toda la empresa sin importar qué filtro esté
+ * activo en la pantalla.
  */
 export async function listarCargasCombustibleRevision(
   empresaId: number,
   filtros: { estado?: EstadoCargaCombustible; desde?: string; hasta?: string; vehiculoId?: number } = {},
 ): Promise<{ items: CargaCombustibleRevision[]; resumen: Record<EstadoCargaCombustible, number> }> {
-  const condiciones = ["c.empresa_id = ?"];
-  const params: (string | number)[] = [empresaId];
+  // Condiciones base compartidas por el listado y el resumen — SIN
+  // `estado`, a propósito (ver JSDoc).
+  const condicionesBase = ["c.empresa_id = ?"];
+  const paramsBase: (string | number)[] = [empresaId];
+  if (filtros.desde) {
+    condicionesBase.push("c.creado_at >= ?");
+    paramsBase.push(`${filtros.desde} 00:00:00`);
+  }
+  if (filtros.hasta) {
+    condicionesBase.push("c.creado_at <= ?");
+    paramsBase.push(`${filtros.hasta} 23:59:59`);
+  }
+  if (filtros.vehiculoId) {
+    condicionesBase.push("c.vehiculo_id = ?");
+    paramsBase.push(filtros.vehiculoId);
+  }
+
+  const condiciones = [...condicionesBase];
+  const params = [...paramsBase];
   if (filtros.estado) {
     condiciones.push("c.estado = ?");
     params.push(filtros.estado);
-  }
-  if (filtros.desde) {
-    condiciones.push("c.creado_at >= ?");
-    params.push(`${filtros.desde} 00:00:00`);
-  }
-  if (filtros.hasta) {
-    condiciones.push("c.creado_at <= ?");
-    params.push(`${filtros.hasta} 23:59:59`);
-  }
-  if (filtros.vehiculoId) {
-    condiciones.push("c.vehiculo_id = ?");
-    params.push(filtros.vehiculoId);
   }
   const where = condiciones.join(" AND ");
   const rows = await query<RowDataPacket[]>(
@@ -236,9 +249,10 @@ export async function listarCargasCombustibleRevision(
     params,
   );
   const resumenRows = await query<RowDataPacket[]>(
-    `SELECT estado, COUNT(*) AS n FROM flota_combustible_cargas
-     WHERE empresa_id = ? GROUP BY estado`,
-    [empresaId],
+    `SELECT c.estado, COUNT(*) AS n FROM flota_combustible_cargas c
+     WHERE ${condicionesBase.join(" AND ")}
+     GROUP BY c.estado`,
+    paramsBase,
   );
   const resumen: Record<EstadoCargaCombustible, number> = { PENDIENTE: 0, APROBADO: 0, RECHAZADO: 0 };
   for (const r of resumenRows) {
@@ -312,6 +326,18 @@ function totalVacio(): ResumenCombustibleMensual["total"] {
  * VIATICOS-RECHAZADO-1 con los montos rechazados en resumen-mensual.ts.
  * `mes` es "YYYY-MM"; reutiliza rangoMes() (ya probado, valida formato
  * contra inyección) en vez de reimplementar el cálculo de rango de mes.
+ *
+ * DEUDA FUNCIONAL (FLOTA-COMBUSTIBLE-HARDENING-1, sección 4 — documentada
+ * a propósito, NO resuelta aquí): el rango de mes se aplica sobre
+ * `creado_at`, que representa la fecha/hora en que el piloto registró la
+ * carga en el sistema, que puede diferir de la fecha física de carga si
+ * el registro se hace después. La fecha de aprobación de Operaciones NO
+ * afecta el corte mensual actual (el filtro es solo por `creado_at`, sin
+ * importar cuándo se aprobó). No existe hoy una columna de "fecha de
+ * carga" separada de la de registro; agregarla requiere una decisión de
+ * negocio (¿el piloto la captura manualmente? ¿se usa la fecha del
+ * viaje?) y su propia migración — fuera de alcance de este ticket, que
+ * pidió explícitamente no tocar el esquema.
  */
 export async function resumenCombustibleMensual(
   empresaId: number,
