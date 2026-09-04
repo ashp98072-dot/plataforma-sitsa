@@ -15,6 +15,7 @@ import {
   obtenerArchivoCargaCombustible,
   obtenerArchivoCargaCombustiblePorEmpresa,
   registrarCargaCombustible,
+  resumenCombustibleMensual,
   revisarCargaCombustible,
 } from "./combustible";
 
@@ -211,5 +212,62 @@ describe("revisarCargaCombustible (Fase 2)", () => {
     const out = await revisarCargaCombustible(7, 1, "aprobar", "op1");
     expect(out.ok).toBe(false);
     expect((out as { status: number }).status).toBe(409);
+  });
+});
+
+describe("resumenCombustibleMensual (Fase 3)", () => {
+  it("usa el rango [YYYY-MM-01, mes_siguiente-01) y filtra por estado APROBADO", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await resumenCombustibleMensual(7, "2026-09");
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(String(sql)).toContain("c.estado = 'APROBADO'");
+    expect(params).toEqual([7, "2026-09-01", "2026-10-01"]);
+  });
+
+  it("rechaza un mes con formato inválido (delega en rangoMes, ya probado — no reimplementa la validación)", async () => {
+    await expect(resumenCombustibleMensual(7, "2026-13")).rejects.toThrow();
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("suma galones/monto por vehículo, separando diesel de gasolina", async () => {
+    vi.mocked(query).mockResolvedValue([
+      { vehiculo_id: 3, placa: "C-034BXR", tipo_combustible: "diesel", galones: "80.00", monto: "1700.00", n: 2 },
+      { vehiculo_id: 3, placa: "C-034BXR", tipo_combustible: "gasolina", galones: "10.00", monto: "220.00", n: 1 },
+      { vehiculo_id: 4, placa: "P-999ZZZ", tipo_combustible: "diesel", galones: "40.00", monto: "850.00", n: 1 },
+    ] as never);
+    const { porVehiculo, total } = await resumenCombustibleMensual(7, "2026-09");
+
+    expect(porVehiculo).toEqual([
+      {
+        vehiculoId: 3, placa: "C-034BXR",
+        dieselGalones: 80, dieselMonto: 1700,
+        gasolinaGalones: 10, gasolinaMonto: 220,
+        totalGalones: 90, totalMonto: 1920,
+        cargas: 3,
+      },
+      {
+        vehiculoId: 4, placa: "P-999ZZZ",
+        dieselGalones: 40, dieselMonto: 850,
+        gasolinaGalones: 0, gasolinaMonto: 0,
+        totalGalones: 40, totalMonto: 850,
+        cargas: 1,
+      },
+    ]);
+    expect(total).toEqual({
+      dieselGalones: 120, dieselMonto: 2550,
+      gasolinaGalones: 10, gasolinaMonto: 220,
+      totalGalones: 130, totalMonto: 2770,
+      cargas: 4,
+    });
+  });
+
+  it("sin cargas aprobadas en el mes: porVehiculo vacío y total en cero (nunca null/undefined)", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    const { porVehiculo, total } = await resumenCombustibleMensual(7, "2026-09");
+    expect(porVehiculo).toEqual([]);
+    expect(total).toEqual({
+      dieselGalones: 0, dieselMonto: 0, gasolinaGalones: 0, gasolinaMonto: 0,
+      totalGalones: 0, totalMonto: 0, cargas: 0,
+    });
   });
 });

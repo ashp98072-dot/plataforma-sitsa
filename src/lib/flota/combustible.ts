@@ -1,6 +1,7 @@
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
 import { ahoraLocal } from "@/lib/rrhh/dates";
+import { rangoMes } from "@/lib/rrhh/resumen-mensual";
 import { contentTypeFor, guardarUpload } from "@/lib/uploads";
 
 /**
@@ -280,4 +281,95 @@ export async function revisarCargaCombustible(
     };
   }
   return { ok: true };
+}
+
+export type ResumenCombustibleVehiculo = {
+  vehiculoId: number;
+  placa: string;
+  dieselGalones: number;
+  dieselMonto: number;
+  gasolinaGalones: number;
+  gasolinaMonto: number;
+  totalGalones: number;
+  totalMonto: number;
+  cargas: number;
+};
+
+export type ResumenCombustibleMensual = {
+  porVehiculo: ResumenCombustibleVehiculo[];
+  total: Omit<ResumenCombustibleVehiculo, "vehiculoId" | "placa">;
+};
+
+function totalVacio(): ResumenCombustibleMensual["total"] {
+  return { dieselGalones: 0, dieselMonto: 0, gasolinaGalones: 0, gasolinaMonto: 0, totalGalones: 0, totalMonto: 0, cargas: 0 };
+}
+
+/**
+ * FLOTA-COMBUSTIBLE-1 (Fase 3) — "un total de cuánto se echó de diesel o
+ * gasolina al mes" (pedido original del usuario). Totales por vehículo y
+ * consolidado, SOLO de cargas en estado APROBADO — una carga PENDIENTE o
+ * RECHAZADA nunca debe sumarse como consumo real, igual criterio que
+ * VIATICOS-RECHAZADO-1 con los montos rechazados en resumen-mensual.ts.
+ * `mes` es "YYYY-MM"; reutiliza rangoMes() (ya probado, valida formato
+ * contra inyección) en vez de reimplementar el cálculo de rango de mes.
+ */
+export async function resumenCombustibleMensual(
+  empresaId: number,
+  mes: string,
+): Promise<ResumenCombustibleMensual> {
+  const [desde, hasta] = rangoMes(mes);
+  const rows = await query<RowDataPacket[]>(
+    `SELECT c.vehiculo_id, v.placa, c.tipo_combustible,
+            SUM(c.galones) AS galones, SUM(c.monto) AS monto, COUNT(*) AS n
+     FROM flota_combustible_cargas c
+     INNER JOIN flota_vehiculos v ON v.id = c.vehiculo_id
+     WHERE c.empresa_id = ? AND c.estado = 'APROBADO'
+       AND c.creado_at >= ? AND c.creado_at < ?
+     GROUP BY c.vehiculo_id, v.placa, c.tipo_combustible
+     ORDER BY v.placa`,
+    [empresaId, desde, hasta],
+  );
+
+  const porVehiculoMap = new Map<number, ResumenCombustibleVehiculo>();
+  for (const r of rows) {
+    const vehiculoId = Number(r.vehiculo_id);
+    const fila = porVehiculoMap.get(vehiculoId) ?? {
+      vehiculoId,
+      placa: String(r.placa),
+      dieselGalones: 0,
+      dieselMonto: 0,
+      gasolinaGalones: 0,
+      gasolinaMonto: 0,
+      totalGalones: 0,
+      totalMonto: 0,
+      cargas: 0,
+    };
+    const galones = Number(r.galones);
+    const monto = Number(r.monto);
+    if (String(r.tipo_combustible) === "gasolina") {
+      fila.gasolinaGalones += galones;
+      fila.gasolinaMonto += monto;
+    } else {
+      fila.dieselGalones += galones;
+      fila.dieselMonto += monto;
+    }
+    fila.totalGalones += galones;
+    fila.totalMonto += monto;
+    fila.cargas += Number(r.n);
+    porVehiculoMap.set(vehiculoId, fila);
+  }
+
+  const porVehiculo = [...porVehiculoMap.values()];
+  const total = porVehiculo.reduce((acc, v) => {
+    acc.dieselGalones += v.dieselGalones;
+    acc.dieselMonto += v.dieselMonto;
+    acc.gasolinaGalones += v.gasolinaGalones;
+    acc.gasolinaMonto += v.gasolinaMonto;
+    acc.totalGalones += v.totalGalones;
+    acc.totalMonto += v.totalMonto;
+    acc.cargas += v.cargas;
+    return acc;
+  }, totalVacio());
+
+  return { porVehiculo, total };
 }
