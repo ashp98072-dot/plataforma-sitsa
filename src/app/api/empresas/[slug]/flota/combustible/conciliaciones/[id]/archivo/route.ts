@@ -5,7 +5,7 @@ import {
   obtenerArchivoConciliacionCombustible,
 } from "@/lib/flota/combustible-conciliacion-consultas";
 import { requireTenantFlotaCombustible } from "@/lib/tenant";
-import { absPathFromRelative, contentTypeFor } from "@/lib/uploads";
+import { absPathFromRelative } from "@/lib/uploads";
 
 type Ctx = {
   params: Promise<{
@@ -13,6 +13,18 @@ type Ctx = {
     id: string;
   }>;
 };
+
+/**
+ * AJUSTE PRE-MERGE PR #194 — este endpoint sirve EXCLUSIVAMENTE el Excel
+ * .xlsx original de una conciliación ya validada (FLOTA-COMBUSTIBLE-3),
+ * así que el Content-Type siempre es este, fijo. NUNCA usar
+ * `archivo.mime` aquí: ese valor histórico en DB pudo provenir
+ * originalmente de `file.type` del cliente (dato no confiable) — ver
+ * combustible-conciliacion/route.ts POST, `mime: file.type?.trim() ||
+ * MIME_XLSX`.
+ */
+const MIME_XLSX =
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
 /**
  * FLOTA-COMBUSTIBLE-4 — descarga protegida del Excel original de una
@@ -93,8 +105,7 @@ export async function GET(
 
     return new NextResponse(readFileSync(abs), {
       headers: {
-        "Content-Type":
-          archivo.mime || contentTypeFor(archivo.nombreOriginal),
+        "Content-Type": MIME_XLSX,
         "Content-Disposition":
           `attachment; filename="${encodeURIComponent(nombreSeguro)}"`,
         "Cache-Control": "private, max-age=60",

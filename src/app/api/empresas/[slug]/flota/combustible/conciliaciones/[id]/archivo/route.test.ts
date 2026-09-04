@@ -97,6 +97,21 @@ describe("GET /api/empresas/[slug]/flota/combustible/conciliaciones/[id]/archivo
     expect(res.headers.get("Content-Disposition")).toContain("reporte.xlsx");
   });
 
+  it("AJUSTE PRE-MERGE PR #194 — nunca confía en archivo.mime (pudo venir de file.type del cliente en FLOTA-COMBUSTIBLE-3): siempre responde el Content-Type fijo del .xlsx, incluso si la DB devuelve otro valor", async () => {
+    vi.mocked(obtenerArchivoConciliacionCombustible).mockResolvedValue({
+      rutaRelativa: "empresas/20/flota/conciliacion_combustible_x.xlsx",
+      nombreOriginal: "reporte.xlsx",
+      mime: "text/html",
+    });
+
+    const res = await GET(new Request("http://localhost/x"), ctx("5"));
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe(
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+  });
+
   it("un query param 'rutaRelativa' arbitrario del cliente se ignora — la ruta siempre sale de la DB", async () => {
     vi.mocked(obtenerArchivoConciliacionCombustible).mockResolvedValue({
       rutaRelativa: "empresas/20/flota/conciliacion_combustible_x.xlsx",
