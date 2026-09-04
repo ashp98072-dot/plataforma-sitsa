@@ -73,6 +73,7 @@ describe("guardarConciliacionCombustible", () => {
               galones: 7.15,
               precioGalon: 43.69,
               monto: 312.38,
+              estadoSistema: "APROBADO",
             },
             gasolinera: {
               fila: 10,
@@ -143,6 +144,10 @@ describe("guardarConciliacionCombustible", () => {
         312.38,
         "C-035BXR",
         "Piloto Sistema",
+        // Ajuste de PR #193 — estadoSistema se persiste como metadata
+        // histórica (estado_sistema), independiente del estado de la
+        // conciliación ("COINCIDE" arriba, ya cubierto).
+        "APROBADO",
       ]),
     );
   });
@@ -171,6 +176,7 @@ describe("guardarConciliacionCombustible", () => {
             galones: 10,
             precioGalon: 40,
             monto: 400,
+            estadoSistema: "PENDIENTE",
           },
           gasolinera: {
             fila: 8,
@@ -210,6 +216,11 @@ describe("guardarConciliacionCombustible", () => {
           ]),
       ),
     ).toBe(true);
+
+    // Ajuste de PR #193 — estado_sistema se persiste aunque la fila sea
+    // DIFERENCIA (metadata histórica independiente del estado de la
+    // conciliación).
+    expect(paramsFila).toContain("PENDIENTE");
   });
 
   it("guarda SOLO_GASOLINERA sin carga del sistema", async () => {
@@ -279,6 +290,7 @@ describe("guardarConciliacionCombustible", () => {
               galones: 12.5,
               precioGalon: 40,
               monto: 500,
+              estadoSistema: "APROBADO",
             },
             gasolinera: null,
             diferencias: [],
@@ -286,6 +298,11 @@ describe("guardarConciliacionCombustible", () => {
         ],
         descartadas: [],
       });
+
+      // Ajuste de PR #193 — estado_sistema se persiste también cuando la
+      // fila es SOLO_SISTEMA (sí hay carga del sistema asociada).
+      const paramsFilaSoloSistema = execute.mock.calls[1][1] as unknown[];
+      expect(paramsFilaSoloSistema).toContain("APROBADO");
 
     expect(resultado.filasGuardadas).toBe(1);
 
@@ -387,6 +404,7 @@ describe("guardarConciliacionCombustible", () => {
               galones: 7.15,
               precioGalon: 43.69,
               monto: 312.38,
+              estadoSistema: "APROBADO",
             },
             gasolinera: {
               fila: 2,

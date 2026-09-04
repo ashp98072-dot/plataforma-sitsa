@@ -24,6 +24,7 @@ const sistemaBase: CargaSistemaConciliacion = {
   galones: 7.15,
   precioGalon: 43.69,
   monto: 312.38,
+  estadoSistema: "PENDIENTE",
 };
 
 const gasolineraBase: CargaGasolineraConciliacion = {
@@ -320,6 +321,23 @@ describe("conciliarPorVale", () => {
     expect(out).toHaveLength(1);
     expect(out[0].estado).toBe("COINCIDE");
     expect(out[0].diferencias).toEqual([]);
+  });
+
+  // Ajuste de PR #193 — estadoSistema es metadata histórica pura: una
+  // carga RECHAZADA cuyos datos coinciden con el reporte de la
+  // gasolinera debe seguir clasificándose como COINCIDE. La
+  // clasificación nunca debe leer estadoSistema.
+  it("una carga RECHAZADA con datos coincidentes sigue clasificando COINCIDE (estadoSistema es solo metadata, nunca afecta la clasificación)", () => {
+    const out = conciliarPorVale(
+      [{ ...sistemaBase, estadoSistema: "RECHAZADO" }],
+      [gasolineraBase],
+    );
+
+    expect(out).toHaveLength(1);
+    expect(out[0].estado).toBe("COINCIDE");
+    // El snapshot conserva el estado real de la carga, aunque la
+    // clasificación de la conciliación no dependa de él.
+    expect(out[0].sistema?.estadoSistema).toBe("RECHAZADO");
   });
 
   it("clasifica DIFERENCIA cuando el mismo vale tiene monto distinto", () => {

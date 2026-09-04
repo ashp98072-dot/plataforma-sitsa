@@ -600,6 +600,12 @@ async function asegurarSchemaFlotaInner(): Promise<void> {
       motivo TEXT NULL,
 
       carga_combustible_id INT NULL,
+      -- Estado operativo (PENDIENTE/APROBADO/RECHAZADO) de la carga del
+      -- sistema AL MOMENTO de conciliar — metadata histórica, nunca se
+      -- usa para clasificar COINCIDE/DIFERENCIA/SOLO_*/AMBIGUO. NULL
+      -- cuando la fila no tiene carga del sistema asociada (SOLO_GASOLINERA
+      -- o DESCARTADA).
+      estado_sistema VARCHAR(20) NULL,
 
       vale_gasolinera VARCHAR(40) NULL,
       fecha_gasolinera DATE NULL,
@@ -631,6 +637,15 @@ async function asegurarSchemaFlotaInner(): Promise<void> {
       INDEX idx_fccf_carga (carga_combustible_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
+  // Idempotente también para una instalación donde
+  // flota_combustible_conciliacion_filas ya se haya creado (p.ej. una
+  // corrida previa de este mismo branch antes de este ajuste) — mismo
+  // patrón ensureColumn() ya usado en todo este archivo.
+  await ensureColumn(
+    "flota_combustible_conciliacion_filas",
+    "estado_sistema",
+    "estado_sistema VARCHAR(20) NULL AFTER carga_combustible_id",
+  );
 
   // Inventario de equipo / herramientas (empresa vs propio del empleado)
   await execute(`

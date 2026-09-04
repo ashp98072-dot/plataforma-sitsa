@@ -36,5 +36,8 @@ export async function obtenerCargasSistemaParaConciliacion(
     galones: carga.galones,
     precioGalon: carga.precioGalon,
     monto: carga.monto,
+    // Estado operativo AL MOMENTO de conciliar — metadata histórica, ver
+    // JSDoc de CargaSistemaConciliacion.estadoSistema.
+    estadoSistema: carga.estado,
   }));
 }

@@ -17,6 +17,16 @@ export type CargaSistemaConciliacion = {
   galones: number;
   precioGalon: number | null;
   monto: number;
+  /**
+   * Estado operativo (PENDIENTE/APROBADO/RECHAZADO) de la carga del
+   * sistema AL MOMENTO de realizar la conciliación — metadata histórica
+   * pura para el snapshot persistido. NUNCA se usa para decidir el
+   * estado de la conciliación (COINCIDE, DIFERENCIA, SOLO_GASOLINERA,
+   * SOLO_SISTEMA o AMBIGUO): una carga RECHAZADA cuyos datos coinciden
+   * con el reporte de la gasolinera sigue clasificándose como COINCIDE
+   * — este campo solo queda guardado para consulta posterior.
+   */
+  estadoSistema: "PENDIENTE" | "APROBADO" | "RECHAZADO";
 };
 
 export type CargaGasolineraConciliacion = {

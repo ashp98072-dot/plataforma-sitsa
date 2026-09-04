@@ -152,6 +152,7 @@ export async function guardarConciliacionCombustible(
             estado,
             motivo,
             carga_combustible_id,
+            estado_sistema,
 
             vale_gasolinera,
             fecha_gasolinera,
@@ -175,7 +176,7 @@ export async function guardarConciliacionCombustible(
             creado_at
           )
          VALUES (
-           ?, ?, ?, ?, ?, ?,
+           ?, ?, ?, ?, ?, ?, ?,
            ?, ?, ?, ?, ?, ?, ?, ?,
            ?, ?, ?, ?, ?, ?, ?, ?,
            ?, ?
@@ -187,6 +188,9 @@ export async function guardarConciliacionCombustible(
           resultado.estado,
           null,
           sistema?.id ?? null,
+          // Metadata histórica pura — nunca influye en resultado.estado
+          // (ver JSDoc de CargaSistemaConciliacion.estadoSistema).
+          sistema?.estadoSistema ?? null,
 
           gasolinera?.numeroVale ?? null,
           gasolinera?.fechaConsumo ?? null,
@@ -224,6 +228,7 @@ export async function guardarConciliacionCombustible(
             estado,
             motivo,
             carga_combustible_id,
+            estado_sistema,
 
             vale_gasolinera,
             fecha_gasolinera,
@@ -247,7 +252,7 @@ export async function guardarConciliacionCombustible(
             creado_at
           )
          VALUES (
-           ?, ?, ?, 'DESCARTADA', ?, NULL,
+           ?, ?, ?, 'DESCARTADA', ?, NULL, NULL,
            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
            NULL, ?
