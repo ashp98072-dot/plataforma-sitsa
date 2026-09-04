@@ -129,6 +129,27 @@ export async function POST(req: Request, ctx: Ctx) {
   if (!tipoCombustible) {
     return NextResponse.json({ error: "Selecciona el tipo de combustible." }, { status: 400 });
   }
+  // FLOTA-COMBUSTIBLE-2 (sección 2) — obligatorio. No se asume un
+  // formato numérico puro (el reporte real de la gasolinera no lo
+  // garantiza): solo se exige que no venga vacío y un largo razonable,
+  // sin restricción de caracteres.
+  const numeroValeRaw = form.get("numeroVale");
+  const numeroVale = typeof numeroValeRaw === "string" ? numeroValeRaw.trim() : "";
+  if (!numeroVale) {
+    return NextResponse.json({ error: "Indica el número de vale." }, { status: 400 });
+  }
+  if (numeroVale.length > 40) {
+    return NextResponse.json({ error: "El número de vale es demasiado largo (máximo 40 caracteres)." }, { status: 400 });
+  }
+  // FLOTA-COMBUSTIBLE-2 (sección 3) — obligatoria; representa la fecha
+  // FÍSICA de la carga (la que declara el piloto), nunca la fecha de
+  // registro en el sistema (esa sigue siendo creado_at, independiente).
+  const fechaConsumoRaw = form.get("fechaConsumo");
+  const fechaConsumo = typeof fechaConsumoRaw === "string" ? fechaConsumoRaw.trim() : "";
+  const fechaConsumoValida = /^\d{4}-\d{2}-\d{2}$/.test(fechaConsumo) && !Number.isNaN(new Date(fechaConsumo).getTime());
+  if (!fechaConsumoValida) {
+    return NextResponse.json({ error: "Indica la fecha en que se cargó el combustible." }, { status: 400 });
+  }
   const galones = Number(form.get("galones"));
   if (!Number.isFinite(galones) || galones <= 0) {
     return NextResponse.json({ error: "Indica los galones cargados." }, { status: 400 });
@@ -136,6 +157,15 @@ export async function POST(req: Request, ctx: Ctx) {
   const monto = Number(form.get("monto"));
   if (!Number.isFinite(monto) || monto <= 0) {
     return NextResponse.json({ error: "Indica el valor pagado." }, { status: 400 });
+  }
+  // FLOTA-COMBUSTIBLE-2 (sección 4) — obligatorio. El servidor NO
+  // recalcula ni rechaza por diferencia entre galones×precio y el monto
+  // ingresado (la advertencia visual es responsabilidad del formulario,
+  // ver combustible-form-ui.ts) — "no inventar reglas de rechazo
+  // automático sin autorización".
+  const precioGalon = Number(form.get("precioGalon"));
+  if (!Number.isFinite(precioGalon) || precioGalon <= 0) {
+    return NextResponse.json({ error: "Indica el precio por galón." }, { status: 400 });
   }
   const kmRaw = form.get("km");
   const km = typeof kmRaw === "string" && kmRaw.trim() !== "" ? Number(kmRaw) : null;
@@ -159,8 +189,11 @@ export async function POST(req: Request, ctx: Ctx) {
       empleadoId: session.empleadoId,
       pilotoNombre: String(viaje[0].piloto_nombre ?? empleado.nombre),
       tipoCombustible,
+      numeroVale,
+      fechaConsumo,
       galones,
       monto,
+      precioGalon,
       km,
       gasolinera,
       file: {
@@ -188,7 +221,7 @@ export async function POST(req: Request, ctx: Ctx) {
     // .../flota/combustible/[id]/revisar/route.ts); antes quedaba "tms"
     // aquí por inconsistencia, no por intención.
     modulo: "flota",
-    detalle: `Carga de combustible #${cargaId} en viaje #${viajeId} · ${tipoCombustible} · ${galones} gal · Q${monto.toFixed(2)} · ${empleado.nombre}`,
+    detalle: `Carga de combustible #${cargaId} en viaje #${viajeId} · vale ${numeroVale} · consumo ${fechaConsumo} · ${tipoCombustible} · ${galones} gal · Q${monto.toFixed(2)} · ${empleado.nombre}`,
   });
 
   return NextResponse.json({

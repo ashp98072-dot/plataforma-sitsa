@@ -504,6 +504,30 @@ async function asegurarSchemaFlotaInner(): Promise<void> {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 
+  // FLOTA-COMBUSTIBLE-2 — alinear la captura del piloto con el reporte
+  // real que envía la gasolinera (columnas VALE No./FECHA DE CONSUMO/
+  // PRECIO), para poder confrontar después ambos lados. Las 3 columnas
+  // son NULL a propósito: un registro histórico anterior a este ticket
+  // nunca tuvo estos datos y esta migración no hace backfill (no hay de
+  // dónde sacarlos) — igual criterio que `km` con odometro_funcional. La
+  // exigencia de "obligatorio" para cargas NUEVAS vive en la capa de API
+  // (route.ts), no en el esquema.
+  await ensureColumn(
+    "flota_combustible_cargas",
+    "numero_vale",
+    "numero_vale VARCHAR(40) NULL AFTER tipo_combustible",
+  );
+  await ensureColumn(
+    "flota_combustible_cargas",
+    "fecha_consumo",
+    "fecha_consumo DATE NULL AFTER numero_vale",
+  );
+  await ensureColumn(
+    "flota_combustible_cargas",
+    "precio_por_galon",
+    "precio_por_galon DECIMAL(10,2) NULL AFTER monto",
+  );
+
   // Inventario de equipo / herramientas (empresa vs propio del empleado)
   await execute(`
     CREATE TABLE IF NOT EXISTS flota_inv_categorias (

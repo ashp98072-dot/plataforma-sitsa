@@ -1,6 +1,6 @@
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
-import { ahoraLocal } from "@/lib/rrhh/dates";
+import { ahoraLocal, toIsoDate } from "@/lib/rrhh/dates";
 import { rangoMes } from "@/lib/rrhh/resumen-mensual";
 import { contentTypeFor, guardarUpload } from "@/lib/uploads";
 
@@ -12,6 +12,14 @@ import { contentTypeFor, guardarUpload } from "@/lib/uploads";
  * archivo que guardarEvidenciaViaje() (mismo guardarUpload(), mismo
  * subdir "flota"). Queda en estado PENDIENTE; la revisión/aprobación de
  * Operaciones es una fase aparte, todavía no construida.
+ *
+ * FLOTA-COMBUSTIBLE-2 — 3 campos nuevos (numeroVale/fechaConsumo/
+ * precioGalon) para poder confrontar la captura del piloto contra el
+ * reporte real que envía la gasolinera (columnas VALE No./FECHA DE
+ * CONSUMO/PRECIO de ese Excel). Son NULL a nivel de columna (ver
+ * schema.ts) porque los registros históricos anteriores a este ticket
+ * nunca los tuvieron — la exigencia de "obligatorio" para cargas NUEVAS
+ * vive en route.ts, no aquí ni en la base de datos.
  */
 
 export type TipoCombustible = "diesel" | "gasolina";
@@ -22,8 +30,14 @@ export type CargaCombustible = {
   id: number;
   viajeId: number;
   tipoCombustible: TipoCombustible;
+  /** Número de vale del reporte de la gasolinera. `null` = carga histórica anterior a FLOTA-COMBUSTIBLE-2. */
+  numeroVale: string | null;
+  /** Fecha física en que se cargó combustible (no la fecha de registro) — "YYYY-MM-DD". `null` en cargas históricas. */
+  fechaConsumo: string | null;
   galones: number;
   monto: number;
+  /** Precio por galón que declaró el piloto. `null` en cargas históricas. */
+  precioGalon: number | null;
   km: number | null;
   gasolinera: string | null;
   nombreArchivo: string;
@@ -53,8 +67,15 @@ function mapCarga(r: RowDataPacket): CargaCombustible {
     id: Number(r.id),
     viajeId: Number(r.viaje_id),
     tipoCombustible: String(r.tipo_combustible) === "gasolina" ? "gasolina" : "diesel",
+    numeroVale: r.numero_vale ? String(r.numero_vale) : null,
+    // fecha_consumo es DATE — mysql2 lo devuelve como Date; toIsoDate()
+    // normaliza Date|string a "YYYY-MM-DD" (mismo helper ya usado para
+    // fecha_plan en viajes-piloto.ts, evita el bug de Date.toString()
+    // crudo que ya se corrigió en VIATICOS-COMPROBANTE-PDF).
+    fechaConsumo: toIsoDate(r.fecha_consumo as string | Date | null),
     galones: Number(r.galones),
     monto: Number(r.monto),
+    precioGalon: r.precio_por_galon != null ? Number(r.precio_por_galon) : null,
     km: r.km != null ? Number(r.km) : null,
     gasolinera: r.gasolinera ? String(r.gasolinera) : null,
     nombreArchivo: String(r.nombre_original),
@@ -80,8 +101,11 @@ export async function registrarCargaCombustible(opts: {
   empleadoId: number;
   pilotoNombre: string;
   tipoCombustible: TipoCombustible;
+  numeroVale: string;
+  fechaConsumo: string;
   galones: number;
   monto: number;
+  precioGalon: number;
   km: number | null;
   gasolinera: string | null;
   file: UploadLike;
@@ -97,9 +121,9 @@ export async function registrarCargaCombustible(opts: {
   const r = await execute(
     `INSERT INTO flota_combustible_cargas
       (empresa_id, vehiculo_id, viaje_id, empleado_id, piloto_nombre, tipo_combustible,
-       galones, monto, km, gasolinera, ruta_relativa, nombre_original, mime, tamano,
-       estado, creado_por, creado_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDIENTE', ?, ?)`,
+       numero_vale, fecha_consumo, galones, monto, precio_por_galon, km, gasolinera,
+       ruta_relativa, nombre_original, mime, tamano, estado, creado_por, creado_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDIENTE', ?, ?)`,
     [
       opts.empresaId,
       opts.vehiculoId,
@@ -107,8 +131,11 @@ export async function registrarCargaCombustible(opts: {
       opts.empleadoId,
       opts.pilotoNombre,
       opts.tipoCombustible,
+      opts.numeroVale,
+      opts.fechaConsumo,
       opts.galones,
       opts.monto,
+      opts.precioGalon,
       opts.km,
       opts.gasolinera,
       saved.relative,
@@ -127,8 +154,9 @@ export async function listarCargasCombustibleViaje(
   viajeId: number,
 ): Promise<CargaCombustible[]> {
   const rows = await query<RowDataPacket[]>(
-    `SELECT id, viaje_id, tipo_combustible, galones, monto, km, gasolinera,
-            nombre_original, estado, motivo_rechazo, creado_por, creado_at
+    `SELECT id, viaje_id, tipo_combustible, numero_vale, fecha_consumo, galones, monto,
+            precio_por_galon, km, gasolinera, nombre_original, estado, motivo_rechazo,
+            creado_por, creado_at
      FROM flota_combustible_cargas
      WHERE empresa_id = ? AND viaje_id = ?
      ORDER BY id DESC`,
@@ -238,8 +266,9 @@ export async function listarCargasCombustibleRevision(
   }
   const where = condiciones.join(" AND ");
   const rows = await query<RowDataPacket[]>(
-    `SELECT c.id, c.viaje_id, c.tipo_combustible, c.galones, c.monto, c.km, c.gasolinera,
-            c.nombre_original, c.estado, c.motivo_rechazo, c.creado_por, c.creado_at,
+    `SELECT c.id, c.viaje_id, c.tipo_combustible, c.numero_vale, c.fecha_consumo, c.galones,
+            c.monto, c.precio_por_galon, c.km, c.gasolinera, c.nombre_original, c.estado,
+            c.motivo_rechazo, c.creado_por, c.creado_at,
             c.revisado_por, c.revisado_en, c.piloto_nombre, v.placa
      FROM flota_combustible_cargas c
      INNER JOIN flota_vehiculos v ON v.id = c.vehiculo_id
@@ -333,11 +362,26 @@ function totalVacio(): ResumenCombustibleMensual["total"] {
  * carga en el sistema, que puede diferir de la fecha física de carga si
  * el registro se hace después. La fecha de aprobación de Operaciones NO
  * afecta el corte mensual actual (el filtro es solo por `creado_at`, sin
- * importar cuándo se aprobó). No existe hoy una columna de "fecha de
- * carga" separada de la de registro; agregarla requiere una decisión de
- * negocio (¿el piloto la captura manualmente? ¿se usa la fecha del
- * viaje?) y su propia migración — fuera de alcance de este ticket, que
- * pidió explícitamente no tocar el esquema.
+ * importar cuándo se aprobó).
+ *
+ * ACTUALIZACIÓN (FLOTA-COMBUSTIBLE-2, sección 3): la columna
+ * `fecha_consumo` (fecha física de carga, capturada por el piloto) YA
+ * EXISTE desde este ticket — ver CargaCombustible.fechaConsumo. Esta
+ * función DELIBERADAMENTE sigue filtrando por `creado_at`, no por
+ * `fecha_consumo`, porque cambiarlo es una decisión de negocio aparte,
+ * no solo técnica: impacto de hacerlo — (1) los registros históricos
+ * anteriores a FLOTA-COMBUSTIBLE-2 tienen `fecha_consumo IS NULL` y
+ * desaparecerían del resumen mensual si el filtro cambiara hoy sin un
+ * plan de qué hacer con ellos (¿se excluyen? ¿se usa `creado_at` como
+ * respaldo?); (2) un piloto que registra a fin de mes una carga física
+ * de un mes anterior movería esa carga al mes de `fecha_consumo`,
+ * cambiando totales de un mes YA cerrado/reportado — hay que decidir si
+ * eso es deseable; (3) requiere confirmar con Operaciones/gerencia si el
+ * corte "real" para conciliar contra el reporte de la gasolinera debe
+ * ser por fecha de consumo (más preciso frente al reporte) o por fecha
+ * de registro (más simple, sin reaperturas de meses cerrados). Ninguna
+ * de estas decisiones se tomó aquí — se documenta el impacto, no se
+ * cambia el filtro.
  */
 export async function resumenCombustibleMensual(
   empresaId: number,
