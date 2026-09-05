@@ -15,6 +15,10 @@ import { FotoEmpleado } from "@/components/rrhh/foto-empleado";
 import { PortalAccesoModal } from "@/components/rrhh/portal-acceso-modal";
 import { BitacoraLegalEmpleado } from "@/components/rrhh/bitacora-legal-empleado";
 import { ImportErroresLista } from "@/components/import-errores-lista";
+import {
+  ImportAdvertenciasLista,
+  type AdvertenciaImportEmpleado,
+} from "@/components/import-advertencias-lista";
 import { formatearFechaVisible, hoyLocal } from "@/lib/rrhh/dates";
 import { CATEGORIAS_OPS, PUESTOS_MONACO } from "@/lib/rrhh/categorias-ops";
 import { faltantesAlta } from "@/lib/rrhh/empleado-validacion";
@@ -461,6 +465,9 @@ export default function EmpleadosPage() {
   const [error, setError] = useState("");
   const [mensaje, setMensaje] = useState("");
   const [erroresImport, setErroresImport] = useState<string[]>([]);
+  const [advertenciasImport, setAdvertenciasImport] = useState<
+    AdvertenciaImportEmpleado[]
+  >([]);
   const [importando, setImportando] = useState(false);
   const [docsEmp, setDocsEmp] = useState<Emp | null>(null);
   const [portalEmp, setPortalEmp] = useState<Emp | null>(null);
@@ -832,6 +839,7 @@ export default function EmpleadosPage() {
       {error ? <p className="text-sm text-red-400">{error}</p> : null}
       {mensaje ? <p className="text-sm text-emerald-600">{mensaje}</p> : null}
       <ImportErroresLista errores={erroresImport} />
+      <ImportAdvertenciasLista advertencias={advertenciasImport} />
 
       {vista === "ficha" ? (
       <form onSubmit={onSubmit} className="space-y-3">
@@ -1664,6 +1672,7 @@ export default function EmpleadosPage() {
             setError("");
             setMensaje("");
             setErroresImport([]);
+            setAdvertenciasImport([]);
             try {
               const fd = new FormData();
               fd.set("file", file);
@@ -1681,6 +1690,11 @@ export default function EmpleadosPage() {
                 Array.isArray(data.errores)
                   ? data.errores.map(String)
                   : [],
+              );
+              // Una nueva importación siempre reemplaza las advertencias
+              // de la anterior (nunca se acumulan entre corridas).
+              setAdvertenciasImport(
+                Array.isArray(data.advertencias) ? data.advertencias : [],
               );
               await cargar();
             } finally {
