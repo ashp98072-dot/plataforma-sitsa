@@ -18,7 +18,7 @@ export function validarViaticos(filas: Record<string, unknown>[]) {
   }
 }
 
-export async function leer(conn: PoolConnection, tabla: string, where: string, empresaId: number, adicionales: number[] = []): Promise<Grupo> {
+export async function leer(conn: PoolConnection, tabla: string, where: string, empresaId: number, adicionales: Array<number | number[]> = []): Promise<Grupo> {
   const [meta] = await conn.query<RowDataPacket[]>(
     "SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?", [tabla]);
   // Fallar cerrado si falta una migración: nunca limpiar parcialmente un esquema desconocido.
@@ -73,6 +73,63 @@ async function validarReferencias(conn: PoolConnection, grupos: Grupo[]) {
   }
 }
 
+/**
+ * ADMIN-LIMPIAR-ARCHIVOS-FISICOS — columnas conocidas que guardan una ruta
+ * relativa de archivo físico (ver
+ * docs/LIMPIEZA-TMS-OPERACIONES-REINICIO-2-STORAGE-DISCOVERY.md §1):
+ * `flota_viaje_evidencias.ruta_relativa`, `tms_evidencias.ruta_archivo`,
+ * `firmas_electronicas.imagen_ruta`. Recolectar en un Set porque una misma
+ * evidencia de viaje puede estar referenciada por dos filas/tablas a la
+ * vez (tms_evidencias copia la ruta de flota_viaje_evidencias al
+ * sincronizar el viaje con un plan) — nunca debe contarse ni borrarse dos
+ * veces.
+ */
+const COLUMNAS_RUTA_ARCHIVO = ["ruta_relativa", "ruta_archivo", "imagen_ruta"] as const;
+
+/** Debe llamarse con los grupos YA leídos (leer() hace SELECT * antes de borrar nada) — nunca borra archivos, solo recolecta las rutas en memoria. */
+export function recolectarRutasArchivo(grupos: Grupo[]): Set<string> {
+  const rutas = new Set<string>();
+  for (const grupo of grupos) {
+    for (const fila of grupo.filas) {
+      for (const columna of COLUMNAS_RUTA_ARCHIVO) {
+        const valor = fila[columna];
+        if (typeof valor === "string" && valor.trim()) rutas.add(valor.trim());
+      }
+    }
+  }
+  return rutas;
+}
+
+/**
+ * ADMIN-LIMPIAR-ARCHIVOS-FISICOS — firmas electrónicas internas
+ * (`firmas_electronicas`) de los viáticos indicados. Vínculo POLIMÓRFICO
+ * sin FK real (`entidad_tipo = 'VIATICO'` + `entidad_id = tms_viaticos.id`,
+ * ver docs/LIMPIEZA-TMS-OPERACIONES-REINICIO-2-STORAGE-DISCOVERY.md §2) —
+ * invisible para validarReferencias(), así que debe recolectarse y
+ * borrarse EXPLÍCITAMENTE aquí, antes de borrar los propios viáticos.
+ * `firmas_electronicas` sí tiene columna `empresa_id` propia (con FK real
+ * a `empresas`): leer() la valida igual que a cualquier otra tabla, como
+ * capa adicional de aislamiento sobre el filtro explícito por
+ * `entidadId IN (viaticoIds)` — nunca se confía en un solo campo.
+ * `viaticoIds` debe venir ya acotado a los viáticos de esta empresa
+ * (los que el caller acaba de leer con `empresa_id = ?`); un array vacío
+ * evita un `IN ()` inválido en SQL y simplemente no borra nada.
+ */
+export async function leerFirmasElectronicasViaticos(
+  conn: PoolConnection,
+  empresaId: number,
+  viaticoIds: number[],
+): Promise<Grupo> {
+  if (!viaticoIds.length) return { tabla: "firmas_electronicas", filas: [] };
+  return leer(
+    conn,
+    "firmas_electronicas",
+    "empresa_id = ? AND entidad_tipo = 'VIATICO' AND entidad_id IN (?)",
+    empresaId,
+    [viaticoIds],
+  );
+}
+
 export async function borrarGrupos(conn: PoolConnection, grupos: Grupo[]) {
   await validarReferencias(conn, grupos);
   const out: Record<string, number> = {};
@@ -88,7 +145,13 @@ export async function borrarGrupos(conn: PoolConnection, grupos: Grupo[]) {
   return out;
 }
 
-export async function limpiarViajesConjuntos(conn: PoolConnection, empresaId: number, pruebas = false) {
+export type ResultadoLimpiezaConArchivos = {
+  conteos: Record<string, number>;
+  /** Rutas relativas (empresas/<empresaId>/...) recolectadas ANTES de borrar — ningún archivo físico se toca aquí. */
+  archivos: Set<string>;
+};
+
+export async function limpiarViajesConjuntos(conn: PoolConnection, empresaId: number, pruebas = false): Promise<ResultadoLimpiezaConArchivos> {
   const planes = await leer(conn, "tms_planes_viaje", "empresa_id = ?", empresaId);
   if (!pruebas && planes.filas.some((p) => !["Programado", "Cancelado", "Cerrado"].includes(String(p.estado)))) {
     throw new LimpiezaBloqueada("Hay viajes en proceso. Finalízalos antes de limpiar Programación/TMS.");
@@ -103,17 +166,87 @@ export async function limpiarViajesConjuntos(conn: PoolConnection, empresaId: nu
   const fotos = await leer(conn, "flota_viaje_evidencias", "viaje_id IN (SELECT v.id FROM flota_viajes v INNER JOIN tms_planes_viaje p ON p.id = v.plan_id WHERE p.empresa_id = ?)", empresaId);
   const lecturas = await leer(conn, "flota_lecturas", "viaje_id IN (SELECT v.id FROM flota_viajes v INNER JOIN tms_planes_viaje p ON p.id = v.plan_id WHERE p.empresa_id = ?)", empresaId);
   const auxiliares = await leer(conn, "tms_plan_auxiliares", planWhere, empresaId);
-  return borrarGrupos(conn, [fotos, evidencias, lecturas, viaticos, auxiliares, paradas, viajes, planes]);
+  // ADMIN-LIMPIAR-ARCHIVOS-FISICOS: firmas de ESTOS viáticos (autorización/
+  // liquidación) — antes de borrar tms_viaticos, nunca después.
+  const viaticoIds = viaticos.filas.map((f) => Number(f.id));
+  const firmas = await leerFirmasElectronicasViaticos(conn, empresaId, viaticoIds);
+  const archivos = recolectarRutasArchivo([fotos, evidencias, firmas]);
+  const conteos = await borrarGrupos(conn, [fotos, evidencias, lecturas, firmas, viaticos, auxiliares, paradas, viajes, planes]);
+  return { conteos, archivos };
 }
 
-export async function limpiarViaticos(conn: PoolConnection, empresaId: number, pruebas = false) {
+export async function limpiarViaticos(conn: PoolConnection, empresaId: number, pruebas = false): Promise<ResultadoLimpiezaConArchivos> {
   const grupo = await leer(conn, "tms_viaticos", "empresa_id = ?", empresaId);
   if (!pruebas) validarViaticos(grupo.filas);
-  return borrarGrupos(conn, [grupo]);
+  const viaticoIds = grupo.filas.map((f) => Number(f.id));
+  const firmas = await leerFirmasElectronicasViaticos(conn, empresaId, viaticoIds);
+  const archivos = recolectarRutasArchivo([firmas]);
+  const conteos = await borrarGrupos(conn, [firmas, grupo]);
+  return { conteos, archivos };
 }
 
 export async function limpiarCuestionarios(conn: PoolConnection, empresaId: number) {
   return borrarGrupos(conn, [await leer(conn, "fact_cliente_perfil", "empresa_id = ?", empresaId)]);
+}
+
+/**
+ * LIMPIEZA-TMS-OPERACIONES-REINICIO-1 — facturación transaccional
+ * (fact_pagos -> fact_factura_viajes -> fact_facturas), en ese orden por
+ * sus propias FK: fact_pagos.factura_id y fact_factura_viajes.factura_id
+ * son ON DELETE CASCADE hacia fact_facturas, pero fact_factura_viajes.plan_id
+ * es ON DELETE RESTRICT hacia tms_planes_viaje y fact_facturas.cliente_id es
+ * ON DELETE RESTRICT hacia clientes — por eso este módulo debe correr ANTES
+ * de limpiarViajesConjuntos()/limpiarClientesPrueba() en cualquier flujo que
+ * los combine (ver reiniciarOperacionesCompleto() en limpiar-modulo.ts).
+ * fact_pagos SÍ tiene empresa_id propio; fact_factura_viajes no, se
+ * resuelve por subconsulta contra fact_facturas de esta empresa (mismo
+ * patrón ya usado por planWhere en limpiarViajesConjuntos).
+ */
+export async function limpiarFacturacion(conn: PoolConnection, empresaId: number) {
+  const pagos = await leer(conn, "fact_pagos", "empresa_id = ?", empresaId);
+  const facturaViajes = await leer(
+    conn,
+    "fact_factura_viajes",
+    "factura_id IN (SELECT id FROM fact_facturas WHERE empresa_id = ?)",
+    empresaId,
+  );
+  const facturas = await leer(conn, "fact_facturas", "empresa_id = ?", empresaId);
+  return borrarGrupos(conn, [pagos, facturaViajes, facturas]);
+}
+
+/**
+ * LIMPIEZA-TMS-OPERACIONES-REINICIO-1 — solicitudes del Portal del
+ * Cliente (tms_solicitud_paradas -> tms_solicitudes_cliente). Debe
+ * correr ANTES de limpiarViajesConjuntos() (tms_solicitudes_cliente.plan_id
+ * es RESTRICT hacia tms_planes_viaje) y ANTES de que se borre
+ * tms_cliente_usuarios (tms_solicitudes_cliente.creado_por_usuario_cliente_id
+ * es RESTRICT hacia esa tabla).
+ */
+export async function limpiarSolicitudesCliente(conn: PoolConnection, empresaId: number) {
+  const paradas = await leer(conn, "tms_solicitud_paradas", "empresa_id = ?", empresaId);
+  const solicitudes = await leer(conn, "tms_solicitudes_cliente", "empresa_id = ?", empresaId);
+  return borrarGrupos(conn, [paradas, solicitudes]);
+}
+
+/**
+ * LIMPIEZA-TMS-OPERACIONES-REINICIO-1 — catálogos PROPIOS de TMS
+ * (tms_personal, tms_unidades, tms_lugares). Confirmado en
+ * docs/LIMPIEZA-TMS-OPERACIONES-REINICIO-1-PROPUESTA-FINAL.md §6: sus
+ * únicos vínculos hacia RRHH/Flota (tms_personal.id_empleado->empleados,
+ * tms_unidades.flota_vehiculo_id->flota_vehiculos) son ON DELETE SET NULL
+ * en sentido RRHH/Flota->TMS — borrar estas filas NUNCA toca empleados
+ * ni flota_vehiculos (esa FK solo se dispara al borrar el LADO RRHH/
+ * Flota, algo que este módulo no hace). Debe correr DESPUÉS de
+ * limpiarViajesConjuntos() (que ya vació tms_planes_viaje, único lugar
+ * que referencia piloto_id/auxiliar_id/unidad_id/lugar_carga_id/
+ * lugar_descarga_id) para que validarReferencias() no encuentre nada
+ * pendiente.
+ */
+export async function limpiarCatalogosTms(conn: PoolConnection, empresaId: number) {
+  const personal = await leer(conn, "tms_personal", "empresa_id = ?", empresaId);
+  const unidades = await leer(conn, "tms_unidades", "empresa_id = ?", empresaId);
+  const lugares = await leer(conn, "tms_lugares", "empresa_id = ?", empresaId);
+  return borrarGrupos(conn, [personal, unidades, lugares]);
 }
 
 /** Solo catálogo maestro. Los viajes conservan sus copias históricas y paradas. */
