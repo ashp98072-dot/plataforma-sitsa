@@ -10,7 +10,11 @@ import {
   crearEmpleado,
   obtenerEmpleadoPorCodigo,
 } from "@/lib/rrhh/empleados";
-import { parsearPlantillaEmpleados } from "@/lib/rrhh/empleados-export";
+import { parsearPlantillaEmpleadosConAdvertencias } from "@/lib/rrhh/empleados-export";
+import {
+  codigoSospechosoImport,
+  fusionarEmpleadoImport,
+} from "@/lib/rrhh/empleados-import";
 import { obtenerParametros } from "@/lib/rrhh/config";
 import {
   formatoErrorImport,
@@ -18,6 +22,13 @@ import {
 } from "@/lib/import-errores";
 
 type Ctx = { params: Promise<{ slug: string }> };
+
+type AdvertenciaImportEmpleado = {
+  filaExcel: number;
+  codigo: string;
+  nombre: string;
+  motivo: string;
+};
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
@@ -41,8 +52,9 @@ export async function POST(req: Request, ctx: Ctx) {
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    const filas = await parsearPlantillaEmpleados(buffer);
-    if (filas.length === 0) {
+    const { filas, descartadas } =
+      await parsearPlantillaEmpleadosConAdvertencias(buffer);
+    if (filas.length === 0 && descartadas.length === 0) {
       return NextResponse.json(
         { error: "No se encontraron filas válidas." },
         { status: 400 },
@@ -55,7 +67,22 @@ export async function POST(req: Request, ctx: Ctx) {
 
     let creados = 0;
     let actualizados = 0;
+    let omitidos = 0;
     const errores: string[] = [];
+    const advertencias: AdvertenciaImportEmpleado[] = [];
+
+    // Filas descartadas por el parser ANTES de llegar aquí (sin código o
+    // sin nombre) — antes desaparecían en silencio; ahora se cuentan
+    // como omitidas y quedan visibles para revisión.
+    for (const d of descartadas) {
+      omitidos += 1;
+      advertencias.push({
+        filaExcel: d.filaExcel,
+        codigo: d.codigo,
+        nombre: d.nombre,
+        motivo: d.motivo,
+      });
+    }
 
     for (const fila of filas) {
       const identidad = identidadEmpleadoImport({
@@ -140,14 +167,49 @@ export async function POST(req: Request, ctx: Ctx) {
           observaciones: fila.observaciones || undefined,
         };
 
+        // Validación CONSERVADORA (ver codigoSospechosoImport): NO asume
+        // que todo código deba ser un DPI, solo señala casos claramente
+        // anómalos (un solo dígito, o que no coincide con un DPI válido
+        // de 13 dígitos presente en la misma fila). Un código sospechoso
+        // NUNCA crea ni actualiza automáticamente — la seguridad tiene
+        // prioridad, exista o no exista ya un empleado con ese código.
+        if (codigoSospechosoImport(fila.codigo, fila.dpi)) {
+          omitidos += 1;
+          advertencias.push({
+            filaExcel: fila.filaExcel,
+            codigo: fila.codigo,
+            nombre: fila.nombre,
+            motivo: `Código sospechoso: ${fila.codigo}. Requiere revisión manual.`,
+          });
+          continue;
+        }
+
         const existente = await obtenerEmpleadoPorCodigo(
           guard.empresa.id,
           fila.codigo,
         );
+
         if (existente) {
-          await actualizarEmpleado(guard.empresa.id, existente.id, payload);
+          // IMPORT-EMPLEADOS-SEGURA: una reimportación NUNCA sobreescribe
+          // datos reales existentes con celdas vacías, placeholders o
+          // defaults del parser (columna ausente/vacía) del Excel, y
+          // nunca toca supervisorIds/horasExtraHabilitado/fechaEgreso —
+          // ver fusionarEmpleadoImport().
+          const payloadActualizado = fusionarEmpleadoImport(
+            existente,
+            payload,
+            fila.camposConDefault,
+          );
+          await actualizarEmpleado(
+            guard.empresa.id,
+            existente.id,
+            payloadActualizado,
+          );
           actualizados += 1;
         } else {
+          // Empleado nuevo: comportamiento normal de creación, sin
+          // aplicar la protección de placeholders (no hay nada previo
+          // que preservar).
           await crearEmpleado(guard.empresa.id, payload);
           creados += 1;
         }
@@ -169,13 +231,16 @@ export async function POST(req: Request, ctx: Ctx) {
     }
 
     const totalErr = errores.length;
+    const sufijoOmitidos = omitidos > 0 ? `, ${omitidos} omitida(s)` : "";
     return NextResponse.json({
       mensaje:
         totalErr > 0
-          ? `Importación: ${creados} nuevos, ${actualizados} actualizados, ${totalErr} con error.`
-          : `Importación: ${creados} nuevos, ${actualizados} actualizados.`,
+          ? `Importación: ${creados} nuevos, ${actualizados} actualizados${sufijoOmitidos}, ${totalErr} con error.`
+          : `Importación: ${creados} nuevos, ${actualizados} actualizados${sufijoOmitidos}.`,
       creados,
       actualizados,
+      omitidos,
+      advertencias,
       errores,
     });
   } catch (err) {

@@ -228,6 +228,23 @@ export async function exportarEmpleadosPdf(
   });
 }
 
+/**
+ * Campos de FilaImportEmpleado cuyo valor final el parser puede haber
+ * generado por DEFAULT (columna ausente o celda vacía en el Excel), en
+ * vez de venir de un valor explícito. IMPORT-EMPLEADOS-SEGURA-2: una
+ * reimportación NUNCA debe sobreescribir el valor real ya guardado en
+ * la base con uno de estos defaults — ver
+ * FilaImportEmpleado.camposConDefault y
+ * empleados-import.ts#fusionarEmpleadoImport().
+ */
+export type CampoConDefaultImport =
+  | "tipoHorario"
+  | "estado"
+  | "tipoContrato"
+  | "formaPago"
+  | "horaEntradaTeorica"
+  | "horaSalidaTeorica";
+
 export type FilaImportEmpleado = {
   /** Número de fila en el Excel (1 = encabezado). */
   filaExcel: number;
@@ -274,6 +291,28 @@ export type FilaImportEmpleado = {
   banco: string;
   contactoEmergencia: string;
   observaciones: string;
+  /**
+   * Campos de ESTA fila cuyo valor de arriba viene de un DEFAULT del
+   * parser (columna ausente o celda vacía), no de un dato explícito del
+   * Excel. Ausencia de columna != valor default: por ejemplo, si el
+   * Excel no trae "tipo_horario", `tipoHorario` arriba vale "Fijo" para
+   * poder dar de ALTA a un empleado nuevo, pero `camposConDefault` lo
+   * marca para que una reimportación sepa que NO debe usar ese "Fijo"
+   * para sobreescribir el "Variable" real de un empleado existente.
+   */
+  camposConDefault: Set<CampoConDefaultImport>;
+};
+
+export type FilaDescartadaImportEmpleado = {
+  filaExcel: number;
+  codigo: string;
+  nombre: string;
+  motivo: string;
+};
+
+export type ResultadoParseoEmpleados = {
+  filas: FilaImportEmpleado[];
+  descartadas: FilaDescartadaImportEmpleado[];
 };
 
 function cellStr(v: ExcelJS.CellValue | undefined): string {
@@ -296,9 +335,22 @@ function cellNum(v: ExcelJS.CellValue | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-export async function parsearPlantillaEmpleados(
+/**
+ * Igual que parsearPlantillaEmpleados(), pero además de las filas
+ * válidas devuelve las filas descartadas por falta de identificador
+ * (sin código/DPI, o sin nombre) — antes esas filas simplemente
+ * desaparecían en silencio (`if (!codigo || !nombre) return;`) y el
+ * importador nunca se enteraba de que existieron. También es la única
+ * función que calcula `camposConDefault` por fila (ver
+ * FilaImportEmpleado.camposConDefault).
+ *
+ * parsearPlantillaEmpleados() (abajo) es un envoltorio de compatibilidad
+ * sobre esta función — mismo comportamiento exacto de antes para
+ * cualquier otro llamador que solo necesite el arreglo de filas.
+ */
+export async function parsearPlantillaEmpleadosConAdvertencias(
   buffer: Buffer,
-): Promise<FilaImportEmpleado[]> {
+): Promise<ResultadoParseoEmpleados> {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(buffer as unknown as ExcelJS.Buffer);
   const ws = wb.worksheets.find((s) => /empleado|personal/i.test(s.name))
@@ -339,6 +391,8 @@ export async function parsearPlantillaEmpleados(
   const col = (...names: string[]) => idx(...names);
 
   const filas: FilaImportEmpleado[] = [];
+  const descartadas: FilaDescartadaImportEmpleado[] = [];
+
   ws.eachRow((row, rowNumber) => {
     if (rowNumber === 1) return;
     const get = (i: number) => (i > 0 ? cellStr(row.getCell(i).value) : "");
@@ -356,12 +410,62 @@ export async function parsearPlantillaEmpleados(
       [primerNombre, segundoNombre, primerApellido, segundoApellido]
         .filter(Boolean)
         .join(" ");
-    if (!codigo && !nombre) return;
-    if (!codigo || !nombre) return;
 
-    const horarioRaw = get(col("tipo_horario", "horario")) || "Fijo";
-    const estadoRaw =
-      get(col("estado_laboral", "estado")) || "Activo";
+    // Fila realmente vacía (p.ej. separador en blanco): se ignora sin
+    // generar advertencia — no es una fila real de un empleado.
+    if (!codigo && !nombre) return;
+
+    if (!codigo) {
+      descartadas.push({
+        filaExcel: rowNumber,
+        codigo: "",
+        nombre,
+        motivo: "Fila sin código identificador.",
+      });
+      return;
+    }
+
+    if (!nombre) {
+      descartadas.push({
+        filaExcel: rowNumber,
+        codigo,
+        nombre: "",
+        motivo: "Fila sin nombre.",
+      });
+      return;
+    }
+
+    // IMPORT-EMPLEADOS-SEGURA-2 — "ausencia de columna != valor
+    // default": se registra ANTES de aplicar el `|| default`, porque una
+    // vez aplicado ya no se puede distinguir "el Excel decía X" de "el
+    // Excel no traía esta columna". camposConDefault es lo único que
+    // fusionarEmpleadoImport() usa para decidir si preservar el valor
+    // actual de un empleado existente en vez de este default.
+    const camposConDefault = new Set<CampoConDefaultImport>();
+
+    const horarioCelda = get(col("tipo_horario", "horario"));
+    if (!horarioCelda) camposConDefault.add("tipoHorario");
+    const horarioRaw = horarioCelda || "Fijo";
+
+    const estadoCelda = get(col("estado_laboral", "estado"));
+    if (!estadoCelda) camposConDefault.add("estado");
+    const estadoRaw = estadoCelda || "Activo";
+
+    const tipoContratoCelda = get(col("tipo_contrato", "tipo contrato"));
+    if (!tipoContratoCelda) camposConDefault.add("tipoContrato");
+
+    const formaPagoCelda = get(col("forma_pago", "forma pago"));
+    if (!formaPagoCelda) camposConDefault.add("formaPago");
+
+    const horaEntradaCelda = get(
+      col("hora_entrada_teorica", "hora_entrada", "hora entrada"),
+    );
+    if (!horaEntradaCelda) camposConDefault.add("horaEntradaTeorica");
+
+    const horaSalidaCelda = get(
+      col("hora_salida_teorica", "hora_salida", "hora salida"),
+    );
+    if (!horaSalidaCelda) camposConDefault.add("horaSalidaTeorica");
 
     filas.push({
       filaExcel: rowNumber,
@@ -381,20 +485,16 @@ export async function parsearPlantillaEmpleados(
       puesto: get(col("puesto")),
       categoriaOps: get(col("area", "categoria_ops", "categoría")),
       tipoHorario: /variable/i.test(horarioRaw) ? "Variable" : "Fijo",
-      tipoContrato: get(col("tipo_contrato", "tipo contrato")) || "fijo",
-      formaPago: get(col("forma_pago", "forma pago")) || "transferencia",
+      tipoContrato: tipoContratoCelda || "fijo",
+      formaPago: formaPagoCelda || "transferencia",
       profesion: get(col("profesion", "profesión")),
       fechaAlta:
         get(col("fecha_contratacion", "fecha contratacion", "fecha_alta")) ||
         get(col("fecha_ingreso", "fecha ingreso")),
       fechaInicioLaboral:
         get(col("fecha_ingreso", "fecha ingreso")) || null,
-      horaEntradaTeorica:
-        get(col("hora_entrada_teorica", "hora_entrada", "hora entrada")) ||
-        "07:00",
-      horaSalidaTeorica:
-        get(col("hora_salida_teorica", "hora_salida", "hora salida")) ||
-        "16:00",
+      horaEntradaTeorica: horaEntradaCelda || "07:00",
+      horaSalidaTeorica: horaSalidaCelda || "16:00",
       estado: /baja|inactivo/i.test(estadoRaw) ? "Baja" : "Activo",
       sueldoBase: getN(col("sueldo_base", "sueldo")),
       bonoIncentivo: getN(col("bono_incentivo", "bono incentivo")),
@@ -415,7 +515,23 @@ export async function parsearPlantillaEmpleados(
       banco: get(col("banco")),
       contactoEmergencia: get(col("contacto_emergencia", "emergencia")),
       observaciones: get(col("observaciones", "notas")),
+      camposConDefault,
     });
   });
+  return { filas, descartadas };
+}
+
+/**
+ * Compatibilidad: mismo comportamiento exacto de antes de
+ * IMPORT-EMPLEADOS-SEGURA-2 (filas sin código/nombre se descartan en
+ * silencio). Único consumidor real hoy es el importador de empleados,
+ * que ya usa parsearPlantillaEmpleadosConAdvertencias() para conocer
+ * también las filas descartadas — esta función se mantiene por si
+ * existiera algún otro llamador que solo necesite el arreglo de filas.
+ */
+export async function parsearPlantillaEmpleados(
+  buffer: Buffer,
+): Promise<FilaImportEmpleado[]> {
+  const { filas } = await parsearPlantillaEmpleadosConAdvertencias(buffer);
   return filas;
 }
