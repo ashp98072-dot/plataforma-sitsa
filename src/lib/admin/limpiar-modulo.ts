@@ -1,8 +1,19 @@
 import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { getPool } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
-import { limpiarViajesConjuntos, limpiarViaticos, limpiarCuestionarios, desactivarCatalogo, anularMultas, eliminarRutas } from "@/lib/admin/limpiar-operaciones";
+import {
+  limpiarViajesConjuntos,
+  limpiarViaticos,
+  limpiarCuestionarios,
+  desactivarCatalogo,
+  anularMultas,
+  eliminarRutas,
+  limpiarFacturacion,
+  limpiarSolicitudesCliente,
+  limpiarCatalogosTms,
+} from "@/lib/admin/limpiar-operaciones";
 import { limpiarMultasPrueba, limpiarClientesPrueba } from "@/lib/admin/limpiar-pruebas";
+import { borrarArchivosFisicos, type ResultadoArchivosFisicos } from "@/lib/admin/limpiar-archivos";
 import type { ModuloLimpieza } from "@/lib/admin/limpiar-modulo-shared";
 
 export type { ModuloLimpieza };
@@ -134,6 +145,60 @@ export async function contarModuloEmpresa(
           viajes_asociados: await count("flota_viajes", "plan_id IN (SELECT id FROM tms_planes_viaje WHERE empresa_id = ?)"),
           viaticos: await count("tms_viaticos"),
         };
+      case "pruebas_reinicio_completo": {
+        // ADMIN-LIMPIAR-ARCHIVOS-FISICOS — cantidad EXACTA de archivos
+        // físicos únicos que quedarían identificados para borrado (no solo
+        // aproximada): UNION (no UNION ALL) deduplica automáticamente la
+        // misma ruta cuando aparece en más de una tabla — ver
+        // docs/LIMPIEZA-TMS-OPERACIONES-REINICIO-2-STORAGE-DISCOVERY.md §1.B.
+        const archivosUnicos = async (): Promise<number> => {
+          const partes: string[] = [];
+          const params: number[] = [];
+          if (await tablaExiste(conn, "flota_viaje_evidencias")) {
+            partes.push("SELECT ruta_relativa AS ruta FROM flota_viaje_evidencias WHERE empresa_id = ? AND ruta_relativa IS NOT NULL AND ruta_relativa <> ''");
+            params.push(empresaId);
+          }
+          if (await tablaExiste(conn, "tms_evidencias")) {
+            partes.push("SELECT ruta_archivo AS ruta FROM tms_evidencias WHERE empresa_id = ? AND ruta_archivo IS NOT NULL AND ruta_archivo <> ''");
+            params.push(empresaId);
+          }
+          if (await tablaExiste(conn, "firmas_electronicas")) {
+            partes.push("SELECT imagen_ruta AS ruta FROM firmas_electronicas WHERE empresa_id = ? AND entidad_tipo = 'VIATICO' AND imagen_ruta IS NOT NULL AND imagen_ruta <> ''");
+            params.push(empresaId);
+          }
+          if (!partes.length) return 0;
+          const [rows] = await conn.query<RowDataPacket[]>(
+            `SELECT COUNT(*) AS n FROM (${partes.join(" UNION ")}) t`,
+            params,
+          );
+          return Number(rows[0]?.n ?? 0);
+        };
+        return {
+          fact_pagos: await count("fact_pagos"),
+          fact_factura_viajes: await count("fact_factura_viajes", "factura_id IN (SELECT id FROM fact_facturas WHERE empresa_id = ?)"),
+          fact_facturas: await count("fact_facturas"),
+          solicitudes_cliente: await count("tms_solicitudes_cliente"),
+          solicitud_paradas: await count("tms_solicitud_paradas"),
+          planes: await count("tms_planes_viaje"),
+          viajes_asociados: await count("flota_viajes", "plan_id IN (SELECT id FROM tms_planes_viaje WHERE empresa_id = ?)"),
+          viaticos: await count("tms_viaticos"),
+          rutas: await count("tms_cliente_rutas"),
+          clientes_tms: await count("tms_clientes"),
+          clientes: await count("clientes"),
+          usuarios_portal: await count("tms_cliente_usuarios"),
+          personal_tms: await count("tms_personal"),
+          unidades_tms: await count("tms_unidades"),
+          lugares_tms: await count("tms_lugares"),
+          // ADMIN-LIMPIAR-ARCHIVOS-FISICOS — evidencias/firmas y sus archivos.
+          evidencias_tms: await count("tms_evidencias"),
+          evidencias_flota: await count("flota_viaje_evidencias"),
+          firmas_viaticos: await count("firmas_electronicas", "empresa_id = ? AND entidad_tipo = 'VIATICO'"),
+          archivos_fisicos_unicos: await archivosUnicos(),
+          // Referencia: módulos compartidos que este modo NUNCA toca.
+          empleados_no_se_borran: await count("empleados"),
+          flota_vehiculos_no_se_borran: await count("flota_vehiculos"),
+        };
+      }
       case "operaciones_viaticos":
       case "pruebas_viaticos":
         return { viaticos: await count("tms_viaticos") };
@@ -643,17 +708,85 @@ async function limpiarContabilidad(
   return out;
 }
 
+/**
+ * LIMPIEZA-TMS-OPERACIONES-REINICIO-1 — compone, DENTRO DE LA MISMA
+ * transacción/conexión que abre limpiarModuloEmpresa(), todos los
+ * módulos de limpieza ya existentes/nuevos en el ÚNICO orden seguro
+ * (cada paso libera las FK RESTRICT que el siguiente necesita; ver
+ * docs/LIMPIEZA-TMS-OPERACIONES-REINICIO-1-PROPUESTA-FINAL.md §5):
+ *
+ *  1. Facturación (fact_pagos/fact_factura_viajes/fact_facturas) —
+ *     libera fact_factura_viajes.plan_id (RESTRICT hacia
+ *     tms_planes_viaje) y fact_facturas.cliente_id (RESTRICT hacia
+ *     clientes) antes de los pasos 3 y 5.
+ *  2. Solicitudes del Portal del Cliente — libera
+ *     tms_solicitudes_cliente.plan_id (RESTRICT hacia tms_planes_viaje,
+ *     paso 3) y .creado_por_usuario_cliente_id (RESTRICT hacia
+ *     tms_cliente_usuarios, dentro del paso 5).
+ *  3. Operaciones/TMS (planes, viajes de flota vinculados, paradas,
+ *     evidencias, lecturas, viáticos, auxiliares) — en modo `pruebas`
+ *     (permite viajes abiertos y viáticos con movimientos, igual que
+ *     "pruebas_operaciones").
+ *  4. Rutas (catálogo maestro + paradas maestras).
+ *  5. Clientes (TMS + facturación, con contactos/ubicaciones/usuarios
+ *     de portal/cuestionarios) — ya sin ninguna factura ni solicitud
+ *     pendiente que los bloquee.
+ *  6. Catálogos propios de TMS (tms_personal/tms_unidades/tms_lugares)
+ *     — ya sin ningún plan que los referencie.
+ *
+ * NUNCA toca empleados, flota_vehiculos, usuarios globales del sistema,
+ * roles/permisos ni configuración — ninguno de los pasos de arriba
+ * incluye esas tablas. No desactiva FOREIGN_KEY_CHECKS en ningún punto;
+ * cada paso reutiliza la validación de referencias externas ya probada
+ * (validarReferencias()/leer()/borrarGrupos() en limpiar-operaciones.ts)
+ * — si algo queda fuera de este orden (una tabla nueva con una FK que
+ * este comentario no previó), la limpieza se BLOQUEA en ese paso, nunca
+ * corrompe datos ni dispara CASCADE a ciegas.
+ */
+async function reiniciarOperacionesCompleto(
+  conn: Awaited<ReturnType<ReturnType<typeof getPool>["getConnection"]>>,
+  empresaId: number,
+): Promise<{ conteos: Record<string, number>; archivos: Set<string> }> {
+  const out: Record<string, number> = {};
+  Object.assign(out, await limpiarFacturacion(conn, empresaId));
+  Object.assign(out, await limpiarSolicitudesCliente(conn, empresaId));
+  // ADMIN-LIMPIAR-ARCHIVOS-FISICOS — único paso de este flujo que produce
+  // archivos físicos (evidencias de viaje/plan + firmas de viáticos); el
+  // resto (facturación, solicitudes, rutas, clientes, catálogos TMS) no
+  // tiene columnas de archivo, confirmado contra el esquema real en
+  // docs/LIMPIEZA-TMS-OPERACIONES-REINICIO-2-STORAGE-DISCOVERY.md §1.
+  const viajes = await limpiarViajesConjuntos(conn, empresaId, true);
+  Object.assign(out, viajes.conteos);
+  Object.assign(out, await eliminarRutas(conn, empresaId));
+  // limpiarClientesPrueba() ya incluye fact_cliente_perfil (cuestionarios)
+  // y, desde este mismo ticket, tms_cliente_usuarios (Portal del Cliente)
+  // — no se llama limpiarCuestionarios() aparte para no duplicar el
+  // mismo borrado dos veces.
+  Object.assign(out, await limpiarClientesPrueba(conn, empresaId));
+  Object.assign(out, await limpiarCatalogosTms(conn, empresaId));
+  return { conteos: out, archivos: viajes.archivos };
+}
+
 export async function limpiarModuloEmpresa(opts: {
   empresaId: number;
   empresaCodigo: string;
   modulo: ModuloLimpieza;
   usuario: string;
   usuarioId: number;
-}): Promise<{ afectados: Record<string, number>; restantes: Record<string, number> }> {
+}): Promise<{
+  afectados: Record<string, number>;
+  restantes: Record<string, number>;
+  /** ADMIN-LIMPIAR-ARCHIVOS-FISICOS — solo presente para "pruebas_reinicio_completo"; undefined en cualquier otro módulo (sin cambio de contrato para ellos). */
+  archivos?: ResultadoArchivosFisicos;
+}> {
   const pool = getPool();
   const conn = await pool.getConnection();
   let afectados: Record<string, number> = {};
   let restantes: Record<string, number> = {};
+  // ADMIN-LIMPIAR-ARCHIVOS-FISICOS — rutas recolectadas DENTRO de la
+  // transacción (nunca se borra nada aquí todavía); solo se usa después
+  // del commit, y solo para el módulo que hoy tiene UI/preview para ello.
+  let archivosDetectados: Set<string> = new Set();
   try {
     await conn.beginTransaction();
     switch (opts.modulo) {
@@ -688,19 +821,25 @@ export async function limpiarModuloEmpresa(opts: {
         afectados = await limpiarFlota(conn, opts.empresaId);
         break;
       case "operaciones":
-        afectados = await limpiarViajesConjuntos(conn, opts.empresaId);
+        afectados = (await limpiarViajesConjuntos(conn, opts.empresaId)).conteos;
         break;
       case "pruebas_operaciones":
-        afectados = await limpiarViajesConjuntos(conn, opts.empresaId, true);
+        afectados = (await limpiarViajesConjuntos(conn, opts.empresaId, true)).conteos;
         break;
+      case "pruebas_reinicio_completo": {
+        const r = await reiniciarOperacionesCompleto(conn, opts.empresaId);
+        afectados = r.conteos;
+        archivosDetectados = r.archivos;
+        break;
+      }
       case "pruebas_viaticos":
-        afectados = await limpiarViaticos(conn, opts.empresaId, true);
+        afectados = (await limpiarViaticos(conn, opts.empresaId, true)).conteos;
         break;
       case "pruebas_multas":
         afectados = await limpiarMultasPrueba(conn, opts.empresaId);
         break;
       case "operaciones_viaticos":
-        afectados = await limpiarViaticos(conn, opts.empresaId);
+        afectados = (await limpiarViaticos(conn, opts.empresaId)).conteos;
         break;
       case "operaciones_eliminar_rutas":
         afectados = await eliminarRutas(conn, opts.empresaId);
@@ -754,10 +893,13 @@ export async function limpiarModuloEmpresa(opts: {
       default:
         throw new Error("Módulo no soportado.");
     }
+    const detalleArchivos = archivosDetectados.size
+      ? ` archivos_fisicos_detectados: ${archivosDetectados.size};`
+      : "";
     await registrarAuditoriaTx(conn, {
       empresaId: opts.empresaId, usuario: opts.usuario, accion: "limpiar_modulo",
       modulo: opts.modulo,
-      detalle: `Limpieza módulo ${opts.modulo} empresa ${opts.empresaCodigo}: ${JSON.stringify(afectados)}`,
+      detalle: `Limpieza módulo ${opts.modulo} empresa ${opts.empresaCodigo}:${detalleArchivos} ${JSON.stringify(afectados)}`,
     });
     restantes = await contarModuloEmpresa(opts.empresaId, opts.modulo, conn);
     await conn.commit();
@@ -768,5 +910,18 @@ export async function limpiarModuloEmpresa(opts: {
     conn.release();
   }
 
-  return { afectados, restantes };
+  // ADMIN-LIMPIAR-ARCHIVOS-FISICOS — SOLO después de conn.commit() (y ya
+  // liberada la conexión de BD, que no participa en este paso): el
+  // filesystem no forma parte de la transacción MySQL, así que un archivo
+  // NUNCA se borra antes de que el commit sea definitivo. Si esta llamada
+  // falla parcialmente (permiso denegado, archivo bloqueado), NO se
+  // reintenta la BD ni se lanza — el resultado queda en `archivos` con sus
+  // advertencias para que el administrador lo resuelva manualmente; la
+  // limpieza de BD ya ocurrió y quedó comprometida.
+  let archivos: ResultadoArchivosFisicos | undefined;
+  if (opts.modulo === "pruebas_reinicio_completo") {
+    archivos = await borrarArchivosFisicos(opts.empresaId, archivosDetectados);
+  }
+
+  return { afectados, restantes, archivos };
 }

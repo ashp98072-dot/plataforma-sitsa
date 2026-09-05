@@ -60,7 +60,22 @@ export async function limpiarClientesPrueba(conn: PoolConnection, empresaId: num
     }
     dependencias.push(grupo);
   }
-  return borrarGrupos(conn, [perfiles, ...dependencias, clientes, tms]);
+  // LIMPIEZA-TMS-OPERACIONES-REINICIO-1 — usuarios del Portal del
+  // Cliente: acceso propio del cliente (email/password_hash/salt),
+  // NUNCA un usuario global de src/lib/tenant.ts (`usuarios`). Su FK
+  // compuesta (empresa_id, cliente_id) -> tms_clientes ES real (a
+  // diferencia de contactos/ubicaciones hacia rutas), así que
+  // borrarGrupos()/validarReferencias() ya la protege automáticamente
+  // sin necesidad de un chequeo manual adicional: si
+  // tms_solicitudes_cliente.creado_por_usuario_cliente_id (RESTRICT)
+  // todavía referencia a alguno de estos usuarios, la limpieza completa
+  // se bloquea aquí en vez de fallar a medias.
+  const usuariosPortal = await leer(conn, "tms_cliente_usuarios",
+    "empresa_id = ? OR cliente_id IN (SELECT id FROM tms_clientes WHERE empresa_id = ?)", empresaId, [empresaId]);
+  if (usuariosPortal.filas.some((f) => !tmsIds.has(Number(f.cliente_id)))) {
+    throw new LimpiezaBloqueada("Hay usuarios del Portal del Cliente sin cliente TMS de esta empresa. Revisa el vínculo; no se limpió ningún dato.");
+  }
+  return borrarGrupos(conn, [perfiles, ...dependencias, usuariosPortal, clientes, tms]);
 }
 
 /** Solo desde módulos PRUEBAS, protegidos por Admin y confirmación del módulo. */

@@ -12,6 +12,15 @@ import {
 
 type Empresa = { id: number; nombre: string; codigo: string; slug?: string };
 
+/** ADMIN-LIMPIAR-ARCHIVOS-FISICOS — solo viene presente para "pruebas_reinicio_completo" (ver limpiarModuloEmpresa en src/lib/admin/limpiar-modulo.ts). */
+type ResultadoArchivos = {
+  detectados: number;
+  eliminados: number;
+  noEncontrados: number;
+  conError: number;
+  advertencias: string[];
+};
+
 export default function LimpiarModuloPage() {
   const slug = String(useParams().slug);
   const router = useRouter();
@@ -26,6 +35,7 @@ export default function LimpiarModuloPage() {
   const [ejecutando, setEjecutando] = useState(false);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
+  const [archivosResultado, setArchivosResultado] = useState<ResultadoArchivos | null>(null);
 
   const empresaSel = useMemo(
     () => empresas.find((e) => e.id === empresaId) ?? null,
@@ -66,6 +76,7 @@ export default function LimpiarModuloPage() {
     setMsg("");
     setConfirmacion("");
     setConfirmacionEsperada("");
+    setArchivosResultado(null);
     try {
       const res = await fetch(
         `/api/admin/limpiar-modulo?empresaId=${empresaId}&modulo=${modulo}`,
@@ -102,6 +113,7 @@ export default function LimpiarModuloPage() {
     setEjecutando(true);
     setError("");
     setMsg("");
+    setArchivosResultado(null);
     try {
       const res = await fetch("/api/admin/limpiar-modulo", {
         method: "POST",
@@ -119,6 +131,9 @@ export default function LimpiarModuloPage() {
       );
       setConfirmacion("");
       setConteos(data.restantes ?? {});
+      // ADMIN-LIMPIAR-ARCHIVOS-FISICOS — solo viene en la respuesta para
+      // "pruebas_reinicio_completo"; para el resto de módulos es undefined.
+      setArchivosResultado(data.archivos ?? null);
     } catch {
       setError("Error de red.");
     } finally {
@@ -214,6 +229,31 @@ export default function LimpiarModuloPage() {
           </p>
         </div>
 
+        {modulo === "pruebas_reinicio_completo" ? (
+          <div className="rounded-lg border-2 border-rose-600 bg-rose-950/40 px-3 py-2.5 text-xs text-rose-100">
+            <p className="font-semibold uppercase tracking-wide text-rose-200">
+              ⚠ Reinicio completo — la opción más destructiva de esta pantalla
+            </p>
+            <p className="mt-1">
+              Borra, en una sola operación irreversible: facturación (pagos,
+              líneas de factura, facturas), solicitudes y paradas del Portal
+              del Cliente, viáticos, evidencias y lecturas de viajes,
+              planes/viajes TMS y de Flota vinculados, rutas y sus paradas,
+              clientes (TMS y facturación) con contactos/ubicaciones/usuarios
+              del portal, y los catálogos propios de TMS (pilotos/auxiliares,
+              unidades, lugares).
+            </p>
+            <p className="mt-1 font-medium">
+              Nunca toca empleados, vehículos de Flota, usuarios globales del
+              sistema ni configuración. Después de confirmar el borrado en
+              base de datos, también intenta eliminar los archivos físicos
+              asociados (evidencias, firmas de viáticos). Si algún archivo no
+              puede eliminarse, se muestra como advertencia — nunca como
+              éxito silencioso.
+            </p>
+          </div>
+        ) : null}
+
         {empresaSel ? (
           <div className="rounded-lg border border-emerald-800/40 bg-emerald-950/20 px-3 py-2 text-xs text-emerald-100">
             <p className="font-medium">
@@ -291,6 +331,39 @@ export default function LimpiarModuloPage() {
 
       {error ? <p className="text-sm text-rose-300">{error}</p> : null}
       {msg ? <p className="text-sm text-emerald-300">{msg}</p> : null}
+
+      {archivosResultado ? (
+        <div
+          className={[
+            "rounded-lg border px-3 py-2.5 text-xs",
+            archivosResultado.conError > 0
+              ? "border-amber-600 bg-amber-950/40 text-amber-100"
+              : "border-emerald-800/40 bg-emerald-950/20 text-emerald-100",
+          ].join(" ")}
+        >
+          <p className="font-medium">
+            Limpieza de base de datos completada. Archivos físicos:
+          </p>
+          <ul className="mt-1 grid grid-cols-2 gap-1 sm:grid-cols-4">
+            <li>Identificados: {archivosResultado.detectados}</li>
+            <li>Eliminados: {archivosResultado.eliminados}</li>
+            <li>No encontrados: {archivosResultado.noEncontrados}</li>
+            <li>Con error: {archivosResultado.conError}</li>
+          </ul>
+          {archivosResultado.conError > 0 ? (
+            <div className="mt-2 border-t border-amber-700/40 pt-2">
+              <p className="font-semibold uppercase tracking-wide text-amber-200">
+                ⚠ Quedaron archivos pendientes de eliminar manualmente
+              </p>
+              <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                {archivosResultado.advertencias.map((a, i) => (
+                  <li key={i}>{a}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

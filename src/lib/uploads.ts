@@ -1,6 +1,7 @@
 import {
   existsSync,
   mkdirSync,
+  realpathSync,
   unlinkSync,
 } from "fs";
 import { writeFile } from "fs/promises";
@@ -49,6 +50,125 @@ export function absPathFromRelative(relative: string): string {
     throw new Error("Ruta de archivo inválida.");
   }
   return abs;
+}
+
+/**
+ * ADMIN-LIMPIAR-ARCHIVOS-FISICOS — valida que una ruta relativa guardada en
+ * BD (columnas `ruta_relativa`/`ruta_archivo`/`imagen_ruta`) pertenezca
+ * EXCLUSIVAMENTE al directorio de la empresa indicada, antes de aceptarla
+ * para borrado físico en una limpieza/reinicio administrativo.
+ *
+ * `absPathFromRelative()` ya rechaza path traversal y cualquier resolución
+ * fuera de la raíz general de uploads, pero NO valida pertenencia a una
+ * empresa concreta — este helper añade esa capa adicional: nunca debe
+ * bastar con "está dentro de uploads/", debe estar dentro de
+ * "uploads/empresas/<empresaId>/". Necesario porque una limpieza borra
+ * archivos de UNA empresa a la vez y una ruta corrupta/manipulada (aunque
+ * hoy ninguna vía de escritura lo permite) no debe poder borrar algo fuera
+ * de ese árbol.
+ *
+ * Nunca lanza: devuelve la ruta absoluta segura, o `null` si debe
+ * rechazarse — así el caller puede descartar una ruta inválida y seguir
+ * procesando el resto sin abortar la limpieza de BD ya comprometida.
+ */
+export function validarRutaArchivoEmpresa(empresaId: number, ruta: unknown): string | null {
+  if (!Number.isInteger(empresaId) || empresaId <= 0) return null;
+  if (typeof ruta !== "string") return null;
+  const limpio = ruta.trim();
+  if (!limpio) return null;
+  // Nunca aceptar rutas absolutas (unix o windows), con esquema de URL, o con NUL.
+  if (
+    limpio.startsWith("/") ||
+    limpio.startsWith("\\") ||
+    /^[a-zA-Z]:[\\/]/.test(limpio) ||
+    /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(limpio) ||
+    limpio.includes("\0")
+  ) {
+    return null;
+  }
+  // Normaliza separadores ANTES de comparar — mismo criterio que
+  // guardarUpload() al construir `relative` (.replace(/\\/g, "/")).
+  const normalizado = limpio.replace(/\\/g, "/");
+  const prefijoEsperado = `empresas/${empresaId}/`;
+  if (!normalizado.startsWith(prefijoEsperado)) return null;
+  const resto = normalizado.slice(prefijoEsperado.length);
+  // Rechaza el directorio de la empresa "a secas" (root del árbol, sin
+  // archivo) y cualquier segmento "." o ".." aunque el prefijo calce
+  // superficialmente (p. ej. "empresas/12/../13/firmas/x.png").
+  if (!resto || resto.endsWith("/")) return null;
+  if (normalizado.split("/").some((seg) => seg === ".." || seg === ".")) return null;
+
+  let abs: string;
+  try {
+    abs = absPathFromRelative(normalizado);
+  } catch {
+    return null;
+  }
+  // Verificación final canónica sobre la ruta YA resuelta — cierra el caso
+  // de un symlink o una resolución de filesystem inesperada que hiciera
+  // que `abs` terminara fuera del árbol de esta empresa pese a los
+  // chequeos textuales de arriba.
+  const raizEmpresa = resolve(getUploadsRoot(), "empresas", String(empresaId));
+  const raizEmpresaNorm = raizEmpresa.endsWith(sep) ? raizEmpresa : raizEmpresa + sep;
+  if (!abs.startsWith(raizEmpresaNorm)) return null;
+  return abs;
+}
+
+export type VerificacionDirectorioPadre =
+  | { estado: "ok" }
+  | { estado: "no_existe" }
+  | { estado: "rechazado"; motivo: string };
+
+/**
+ * ADMIN-LIMPIAR-ARCHIVOS-FISICOS (hardening symlinks) — `validarRutaArchivoEmpresa()`
+ * es puramente LÉXICA (`path.resolve`, nunca toca el filesystem): si un
+ * directorio intermedio real (p. ej. `uploads/empresas/12`) fuera
+ * reemplazado por un symlink hacia fuera del storage, esa validación por sí
+ * sola no lo detectaría — `path.resolve()` no sigue symlinks.
+ *
+ * Esta función SÍ toca el filesystem: resuelve con `realpathSync()` tanto
+ * la raíz real de la empresa como el directorio PADRE real del archivo a
+ * borrar (realpath resuelve TODA la cadena de symlinks intermedios de una
+ * vez, no solo el último nivel) y exige que el padre real quede
+ * estrictamente dentro de la raíz real de la empresa, con límite de
+ * directorio (`raiz + path.sep`), nunca un `startsWith` vulnerable a
+ * prefijos parciales (mismo criterio que `validarRutaArchivoEmpresa`).
+ *
+ * Deliberadamente NO resuelve el componente FINAL (el propio archivo): si
+ * el archivo mismo es un symlink, este chequeo lo deja pasar sin problema
+ * — `unlink()` sobre un symlink borra el enlace, nunca su destino, así que
+ * seguirlo aquí solo serviría para (incorrectamente) bloquear un caso que
+ * ya es seguro por el comportamiento estándar de `unlink()`.
+ *
+ * `"no_existe"` cubre tanto "la empresa nunca subió nada" como "el
+ * directorio del archivo no existe" — en ambos casos no hay nada que
+ * borrar y no es un error crítico. Cualquier otro fallo de `realpathSync`
+ * (permiso denegado, etc.) se reporta como `"rechazado"`, igual que un
+ * symlink que escapa del árbol — nunca se asume que "no se pudo resolver"
+ * equivale a "no existe".
+ */
+export function verificarDirectorioPadreReal(empresaId: number, absPath: string): VerificacionDirectorioPadre {
+  const empresaRootLexico = resolve(getUploadsRoot(), "empresas", String(empresaId));
+  let realEmpresaRoot: string;
+  try {
+    realEmpresaRoot = realpathSync(empresaRootLexico);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return { estado: "no_existe" };
+    return { estado: "rechazado", motivo: "No se pudo resolver el directorio de la empresa en el filesystem." };
+  }
+  const parentLexico = dirname(absPath);
+  let realParent: string;
+  try {
+    realParent = realpathSync(parentLexico);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return { estado: "no_existe" };
+    return { estado: "rechazado", motivo: "No se pudo resolver el directorio padre en el filesystem." };
+  }
+  const raizNorm = realEmpresaRoot.endsWith(sep) ? realEmpresaRoot : realEmpresaRoot + sep;
+  if (realParent !== realEmpresaRoot && !realParent.startsWith(raizNorm)) {
+    return { estado: "rechazado", motivo: "El directorio padre resuelve (posible symlink) fuera del storage de esta empresa." };
+  }
+  return { estado: "ok" };
 }
 
 export function ensureDir(dir: string): void {
