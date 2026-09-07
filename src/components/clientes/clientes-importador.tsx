@@ -14,9 +14,21 @@ type PreviewFila = {
   detalle: string;
 };
 
+type PreviewContacto = {
+  filaExcel: number;
+  clienteCodigo: string | null;
+  clienteNombre: string | null;
+  nombre: string;
+  cargo: string | null;
+  estadoValidacion: "OK" | "SIN_CLIENTE";
+  detalle: string;
+};
+
 type Preview = {
   resumen: { total: number; nuevos: number; actualizar: number; omitidos: number; errores: number };
   filas: PreviewFila[];
+  resumenContactos: { total: number; ok: number; sinCliente: number } | null;
+  contactos: PreviewContacto[];
 };
 
 export function ClientesImportador({ slug, onImported }: { slug: string; onImported: () => Promise<void> }) {
@@ -70,6 +82,9 @@ export function ClientesImportador({ slug, onImported }: { slug: string; onImpor
         <div>
           <h2 className="font-medium">Importación masiva de clientes</h2>
           <p className="text-xs text-[var(--muted)]">Descarga el formato oficial, agrega los clientes y valida el archivo antes de guardarlo.</p>
+          <p className="text-xs text-[var(--muted)]">
+            El formato incluye una hoja opcional &quot;CONTACTOS&quot; para agregar varios contactos por cliente (vinculados por código o nombre); si no la usas, nada cambia.
+          </p>
         </div>
         <a
           href={`/api/empresas/${slug}/clientes/import`}
@@ -109,6 +124,31 @@ export function ClientesImportador({ slug, onImported }: { slug: string; onImpor
               </tbody>
             </table>
           </div>
+          {preview.resumenContactos ? (
+            <div className="space-y-2">
+              <p className="text-xs text-[var(--muted)]">
+                Contactos (hoja CONTACTOS) — Total {preview.resumenContactos.total} · Vinculados {preview.resumenContactos.ok} · Sin cliente {preview.resumenContactos.sinCliente}
+              </p>
+              <div className="max-h-60 overflow-auto rounded border border-[var(--border)]">
+                <table className="min-w-full text-left text-xs">
+                  <thead className="sticky top-0 bg-[var(--thead)] text-[var(--muted)]">
+                    <tr><th className="px-2 py-2">Fila</th><th className="px-2 py-2">Cliente</th><th className="px-2 py-2">Contacto</th><th className="px-2 py-2">Cargo</th><th className="px-2 py-2">Resultado</th></tr>
+                  </thead>
+                  <tbody>
+                    {preview.contactos.map((fila) => (
+                      <tr key={fila.filaExcel} className="border-t border-[var(--border)]">
+                        <td className="px-2 py-2">{fila.filaExcel}</td>
+                        <td className="px-2 py-2">{fila.clienteCodigo || fila.clienteNombre || "—"}</td>
+                        <td className="px-2 py-2">{fila.nombre}</td>
+                        <td className="px-2 py-2">{fila.cargo || "—"}</td>
+                        <td className={`px-2 py-2 ${fila.estadoValidacion === "SIN_CLIENTE" ? "text-red-300" : "text-emerald-300"}`}><strong>{fila.estadoValidacion}</strong> · {fila.detalle}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </section>

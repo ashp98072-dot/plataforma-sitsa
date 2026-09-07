@@ -6,7 +6,8 @@ const etiquetaTipo = new Map(CLIENTE_TIPOS.map((tipo) => [tipo.value, tipo.label
 
 const HEADERS = [
   "Código", "Nombre", "Razón social", "NIT", "Número de RTU", "Teléfono",
-  "Email", "Dirección", "Contacto", "Tel. contacto", "Tipo", "Estado", "Notas",
+  "Email", "Dirección", "Contacto", "Tel. contacto", "Tipo", "Estado",
+  "Condición de crédito", "Notas",
 ];
 
 function filas(clientes: Cliente[]): string[][] {
@@ -23,6 +24,7 @@ function filas(clientes: Cliente[]): string[][] {
     cliente.contactoTelefono ?? "",
     etiquetaTipo.get(cliente.tipo) ?? cliente.tipo,
     cliente.estado,
+    cliente.condicionCredito ?? "",
     cliente.notas ?? "",
   ]);
 }
@@ -37,13 +39,13 @@ export async function exportarClientesExcel(
   const ws = wb.addWorksheet("CLIENTES", {
     views: [{ state: "frozen", ySplit: 4, showGridLines: false }],
   });
-  ws.mergeCells("A1:M1");
+  ws.mergeCells("A1:N1");
   ws.getCell("A1").value = `CATÁLOGO DE CLIENTES - ${empresaNombre}`;
   ws.getCell("A1").font = { bold: true, size: 15, color: { argb: "FFFFFFFF" } };
   ws.getCell("A1").fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F4E78" } };
   ws.getCell("A1").alignment = { vertical: "middle", horizontal: "center" };
   ws.getRow(1).height = 30;
-  ws.mergeCells("A2:M2");
+  ws.mergeCells("A2:N2");
   ws.getCell("A2").value = `${clientes.length} cliente(s) exportado(s)`;
   ws.getCell("A2").alignment = { horizontal: "center" };
   ws.getCell("A2").font = { italic: true, color: { argb: "FF595959" } };
@@ -55,8 +57,8 @@ export async function exportarClientesExcel(
   header.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
   header.height = 28;
   for (const fila of filas(clientes)) ws.addRow(fila);
-  ws.autoFilter = { from: "A4", to: `M${Math.max(4, clientes.length + 4)}` };
-  ws.columns = [16, 28, 32, 17, 19, 16, 28, 38, 24, 18, 23, 13, 36].map((width) => ({ width }));
+  ws.autoFilter = { from: "A4", to: `N${Math.max(4, clientes.length + 4)}` };
+  ws.columns = [16, 28, 32, 17, 19, 16, 28, 38, 24, 18, 23, 13, 20, 36].map((width) => ({ width }));
   for (const column of [1, 4, 5, 6, 10]) ws.getColumn(column).numFmt = "@";
   ws.eachRow((row, rowNumber) => {
     if (rowNumber > 4) {

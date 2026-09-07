@@ -38,6 +38,7 @@ const schema = z.object({
     .enum(["transporte", "reciclaje", "tarimas", "comercial", "mixto", "otro"])
     .optional(),
   estado: z.enum(["Activo", "Inactivo"]).optional(),
+  condicionCredito: z.string().optional().nullable(),
   notas: z.string().optional().nullable(),
 });
 

@@ -23,6 +23,8 @@ export type Cliente = {
   contactoTelefono: string | null;
   tipo: ClienteTipo;
   estado: ClienteEstado;
+  /** Texto libre: "30 días", "100 días / Pronto Pago", "Sin Fecha Límite", "Pendiente"... nunca se normaliza a un número, la condición real varía por cliente. */
+  condicionCredito: string | null;
   notas: string | null;
   tmsClienteId: number | null;
   creadoAt: string | null;
@@ -42,6 +44,7 @@ export type ClienteInput = {
   contactoTelefono?: string | null;
   tipo?: ClienteTipo;
   estado?: ClienteEstado;
+  condicionCredito?: string | null;
   notas?: string | null;
 };
 
