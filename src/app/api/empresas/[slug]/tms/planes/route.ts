@@ -307,7 +307,7 @@ export async function GET(req: Request, ctx: Ctx) {
               ${SQL_ATRASADO} AS atrasado,
               p.tipo_traslado, p.notas,
               DATE_FORMAT(p.regreso_estimado, '%Y-%m-%dT%H:%i') AS regreso_estimado,
-              p.tarifa_comercial, p.referencia_cliente, p.ruta_id, p.ruta_codigo_historico,
+              p.tarifa_comercial, p.costo_operativo_referencia, p.referencia_cliente, p.ruta_id, p.ruta_codigo_historico,
               p.lugar_descarga_historico, p.contacto_nombre_historico, p.contacto_cargo_historico,
               p.contacto_telefono_historico,
               c.nombre AS cliente, u.placa, pil.nombre AS piloto, aux.nombre AS auxiliar,
@@ -447,6 +447,12 @@ const schema = z.object({
   tipoTraslado: z.string().optional(),
   regresoEstimado: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/).optional(),
   tarifaComercial: z.number().nonnegative().optional(),
+  // TMS-GASTOS-REPORTES-1 (bloqueo 2): fotografía histórica del costo
+  // operativo de referencia de la ruta usada, al momento de crear el
+  // plan — mismo criterio que tarifaComercial arriba. Cambios futuros en
+  // tms_cliente_rutas.costo_operativo NUNCA alteran este valor ya
+  // guardado (ver aplicarDefaultsRutaSinSobrescribir en ruta-defaults.ts).
+  costoOperativoReferencia: z.number().nonnegative().optional(),
   referenciaCliente: z.string().max(160).optional(),
   notas: z.string().optional(),
   clienteId: z.number().int().positive().optional(),
@@ -979,8 +985,8 @@ export async function POST(req: Request, ctx: Ctx) {
       try {
         const [result] = await conn.execute<ResultSetHeader>(
           `INSERT INTO tms_planes_viaje
-            (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado')`,
+            (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, costo_operativo_referencia, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado')`,
           [
             empresaId,
             codigoFinal,
@@ -995,6 +1001,7 @@ export async function POST(req: Request, ctx: Ctx) {
             d.tipoTraslado ?? null,
             d.regresoEstimado?.replace("T", " ") ?? null,
             d.tarifaComercial ?? null,
+            d.costoOperativoReferencia ?? null,
             d.referenciaCliente?.trim() || null,
             d.rutaId ?? null,
             d.rutaCodigo?.trim() || null,
@@ -1139,6 +1146,7 @@ const patchSchema = z.object({
   horaCarga: z.string().optional(),
   regresoEstimado: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/).nullable().optional(),
   tarifaComercial: z.number().nonnegative().nullable().optional(),
+  costoOperativoReferencia: z.number().nonnegative().nullable().optional(),
   referenciaCliente: z.string().max(160).nullable().optional(),
   // VIAT-4/VIAT-4b: igual que en el POST — fotografía histórica de la
   // ruta usada.
@@ -1210,7 +1218,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
   const plan = await query<RowDataPacket[]>(
     `SELECT p.id, p.codigo, p.estado, p.fecha_plan, p.hora_carga, p.notas,
             p.piloto_id, p.unidad_id, p.regreso_estimado,
-            p.tarifa_comercial, p.referencia_cliente,
+            p.tarifa_comercial, p.costo_operativo_referencia, p.referencia_cliente,
             u.placa, u.flota_vehiculo_id, pil.nombre AS piloto,
             ${SQL_PENDIENTE_CIERRE} AS pendiente_cierre
      FROM tms_planes_viaje p
@@ -1241,6 +1249,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
     // cambia ninguna regla de negocio existente sobre estos campos.
     tarifaComercial:
       plan[0].tarifa_comercial != null ? Number(plan[0].tarifa_comercial) : null,
+    costoOperativoReferencia:
+      plan[0].costo_operativo_referencia != null ? Number(plan[0].costo_operativo_referencia) : null,
     referenciaCliente:
       plan[0].referencia_cliente != null ? String(plan[0].referencia_cliente) : null,
     flotaVehiculoId:
@@ -1286,6 +1296,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
   const tocaComercial =
     d.regresoEstimado !== undefined ||
     d.tarifaComercial !== undefined ||
+    d.costoOperativoReferencia !== undefined ||
     d.referenciaCliente !== undefined;
 
   // OPS-AJUSTES (sección 3) — motivo obligatorio para cambios sensibles:
@@ -1975,6 +1986,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
         hora_carga = COALESCE(?, hora_carga),
         regreso_estimado = CASE WHEN ? THEN ? ELSE regreso_estimado END,
         tarifa_comercial = CASE WHEN ? THEN ? ELSE tarifa_comercial END,
+        costo_operativo_referencia = CASE WHEN ? THEN ? ELSE costo_operativo_referencia END,
         referencia_cliente = CASE WHEN ? THEN ? ELSE referencia_cliente END,
         ruta_id = COALESCE(?, ruta_id),
         ruta_codigo_historico = COALESCE(?, ruta_codigo_historico),
@@ -1995,6 +2007,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
         d.regresoEstimado?.replace("T", " ") ?? null,
         d.tarifaComercial !== undefined,
         d.tarifaComercial ?? null,
+        d.costoOperativoReferencia !== undefined,
+        d.costoOperativoReferencia ?? null,
         d.referenciaCliente !== undefined,
         d.referenciaCliente?.trim() || null,
         d.rutaId ?? null,
@@ -2172,6 +2186,9 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // resumen genérico existente, sin ampliar más de lo pedido.
   if (d.tarifaComercial !== undefined && d.tarifaComercial !== antes.tarifaComercial) {
     cambios.push(`tarifa Q${antes.tarifaComercial ?? "—"} → Q${d.tarifaComercial ?? "—"}`);
+  }
+  if (d.costoOperativoReferencia !== undefined && d.costoOperativoReferencia !== antes.costoOperativoReferencia) {
+    cambios.push(`costo operativo Q${antes.costoOperativoReferencia ?? "—"} → Q${d.costoOperativoReferencia ?? "—"}`);
   }
   if (d.regresoEstimado !== undefined || d.referenciaCliente !== undefined) {
     cambios.push("datos comerciales/regreso estimado actualizados");

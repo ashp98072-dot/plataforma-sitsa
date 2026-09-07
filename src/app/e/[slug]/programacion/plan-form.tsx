@@ -314,6 +314,10 @@ export default function PlanForm({
     tipoTraslado: plan?.tipo_traslado ?? "",
     regresoEstimado: plan?.regreso_estimado?.slice(0, 16) ?? "",
     tarifaComercial: plan?.tarifa_comercial != null ? String(plan.tarifa_comercial) : "",
+    // TMS-GASTOS-REPORTES-1 (bloqueo 2): snapshot editable, igual que
+    // tarifaComercial — se sugiere de la ruta al elegirla y queda fijo
+    // en el plan una vez guardado (nunca se recalcula desde la ruta viva).
+    costoOperativoReferencia: plan?.costo_operativo_referencia != null ? String(plan.costo_operativo_referencia) : "",
     referenciaCliente: plan?.referencia_cliente ?? "",
     // VIAT-4/VIAT-4b: fotografía histórica de qué ruta maestra se usó —
     // se recalcula al elegir otra ruta; no bloquea guardar el viaje sin
@@ -727,12 +731,13 @@ export default function PlanForm({
   function aplicarRuta(ruta: RutaOpt) {
     const defaults = aplicarDefaultsRutaSinSobrescribir({
       tarifaComercial: form.tarifaComercial,
+      costoOperativoReferencia: form.costoOperativoReferencia,
       pilotoEmpleadoId: form.pilotoEmpleadoId,
       pilotoNombre: form.pilotoNombre,
       auxiliarEmpleadoIds: form.auxiliarEmpleadoIds,
       auxiliarNombres: form.auxiliarNombres,
       viaticosMontos,
-    }, ruta.tarifaReferencia, ruta.personalPredeterminado);
+    }, ruta.tarifaReferencia, ruta.personalPredeterminado, ruta.costoOperativo);
     setViaticosMontos(defaults.viaticosMontos);
     setForm((f) => ({
       ...f,
@@ -740,6 +745,7 @@ export default function PlanForm({
       clienteNombre: ruta.clienteNombre,
       horaCarga: ruta.horaHabitual || f.horaCarga,
       tarifaComercial: defaults.tarifaComercial,
+      costoOperativoReferencia: defaults.costoOperativoReferencia,
       rutaId: ruta.id,
       rutaCodigo: ruta.codigo,
       lugarDescargaHistorico: ruta.destinoDescripcion ?? f.lugarDescargaHistorico,
@@ -980,6 +986,7 @@ export default function PlanForm({
             tipoTraslado: form.tipoTraslado || undefined,
             regresoEstimado: form.regresoEstimado || undefined,
             tarifaComercial: form.tarifaComercial === "" ? undefined : Number(form.tarifaComercial),
+            costoOperativoReferencia: form.costoOperativoReferencia === "" ? undefined : Number(form.costoOperativoReferencia),
             referenciaCliente: form.referenciaCliente.trim() || undefined,
             rutaId: form.rutaId || undefined,
             rutaCodigo: form.rutaCodigo.trim() || undefined,
@@ -1061,6 +1068,11 @@ export default function PlanForm({
             : form.tarifaComercial === ""
               ? null
               : Number(form.tarifaComercial),
+          costoOperativoReferencia: bloqueadoParaPreCierre
+            ? undefined
+            : form.costoOperativoReferencia === ""
+              ? null
+              : Number(form.costoOperativoReferencia),
           referenciaCliente: bloqueadoParaPreCierre ? undefined : form.referenciaCliente.trim() || null,
           rutaId: bloqueadoParaPreCierre ? undefined : form.rutaId || undefined,
           rutaCodigo: bloqueadoParaPreCierre ? undefined : form.rutaCodigo.trim() || undefined,
@@ -1338,6 +1350,7 @@ export default function PlanForm({
                 <li>Piloto: {form.pilotoNombre || "—"}</li>
                 <li>Auxiliares: {[...form.auxiliarNombres, ...form.auxiliarEmpleadoIds.map((id) => auxiliares.find((a) => a.id === id)?.nombre ?? `#${id}`)].join(", ") || "—"}</li>
                 <li>Tarifa comercial: {form.tarifaComercial ? `Q${form.tarifaComercial}` : "—"}</li>
+                <li>Costo operativo de referencia: {form.costoOperativoReferencia ? `Q${form.costoOperativoReferencia}` : "—"}</li>
                 <li>Referencia cliente: {form.referenciaCliente || "—"}</li>
                 <li>Paradas: {paradasForm.filter((p) => p.lugarNombre.trim()).length}</li>
                 <li>Observaciones: {form.notas || "—"}</li>
@@ -1581,6 +1594,18 @@ export default function PlanForm({
           value={form.tarifaComercial}
           onChange={(e) => setForm((f) => ({ ...f, tarifaComercial: e.target.value }))}
         />
+      </label>
+      <label className={`text-xs text-[var(--muted)] ${bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
+        Costo operativo de referencia (GTQ)
+        <input
+          type="number"
+          min="0"
+          step="0.01"
+          className={`${inputCls} mt-1 w-full`}
+          value={form.costoOperativoReferencia}
+          onChange={(e) => setForm((f) => ({ ...f, costoOperativoReferencia: e.target.value }))}
+        />
+        <span className="mt-0.5 block text-[10px]">Se sugiere al elegir una ruta; queda fijo en este viaje aunque la ruta cambie después.</span>
       </label>
 
       <label className={`md:col-span-2 text-xs text-[var(--muted)] ${bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
