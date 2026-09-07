@@ -3,12 +3,14 @@ import { getPool } from "@/lib/db";
 import type { EstadoCargaCombustible } from "@/lib/flota/combustible";
 
 /**
- * ADMIN-LIMPIAR-COMBUSTIBLE-PREVIEW — SOLO LECTURA (SELECT). Nunca
- * modifica `flota_combustible_cargas` ni
- * `flota_combustible_conciliacion_filas`, nunca borra archivos, nunca
- * ejecuta DELETE/UPDATE. Existe para que un administrador pueda revisar
- * MANUALMENTE, antes de decidir nada, las cargas de combustible que hoy
- * bloquean `pruebas_reinicio_completo` — ver
+ * ADMIN-LIMPIAR-COMBUSTIBLE-PREVIEW — SOLO LECTURA (SELECT) en este
+ * archivo; nunca modifica ni borra nada él mismo. Muestra, ANTES de
+ * ejecutar `pruebas_reinicio_completo`, las cargas de combustible que
+ * ese reinicio SÍ va a eliminar (decisión de negocio confirmada en
+ * BLOQUEO-COMBUSTIBLE-4 — ya no se conservan; el borrado real vive en
+ * `leerCargasCombustibleViajes()`/`leerConciliacionFilasCargas()` en
+ * limpiar-operaciones.ts, dentro de la misma transacción de
+ * `limpiarViajesConjuntos()`) — ver
  * docs/LIMPIEZA-TMS-OPERACIONES-REINICIO-3-BLOQUEO-COMBUSTIBLE-DISCOVERY.md.
  *
  * Aislamiento: TODO parte de los `flota_viajes` de la empresa indicada —

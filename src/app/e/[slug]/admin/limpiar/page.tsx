@@ -292,19 +292,20 @@ export default function LimpiarModuloPage() {
             <p className="mt-1">
               Borra, en una sola operación irreversible: facturación (pagos,
               líneas de factura, facturas), solicitudes y paradas del Portal
-              del Cliente, viáticos, evidencias y lecturas de viajes,
-              planes/viajes TMS y de Flota vinculados, rutas y sus paradas,
-              clientes (TMS y facturación) con contactos/ubicaciones/usuarios
-              del portal, y los catálogos propios de TMS (pilotos/auxiliares,
-              unidades, lugares).
+              del Cliente, viáticos, evidencias y lecturas de viajes, cargas
+              de combustible de esos viajes (incluso aprobadas) y sus filas
+              de conciliación, planes/viajes TMS y de Flota vinculados, rutas
+              y sus paradas, clientes (TMS y facturación) con
+              contactos/ubicaciones/usuarios del portal, y los catálogos
+              propios de TMS (pilotos/auxiliares, unidades, lugares).
             </p>
             <p className="mt-1 font-medium">
               Nunca toca empleados, vehículos de Flota, usuarios globales del
               sistema ni configuración. Después de confirmar el borrado en
               base de datos, también intenta eliminar los archivos físicos
-              asociados (evidencias, firmas de viáticos). Si algún archivo no
-              puede eliminarse, se muestra como advertencia — nunca como
-              éxito silencioso.
+              asociados (evidencias, firmas de viáticos, comprobantes de
+              combustible). Si algún archivo no puede eliminarse, se muestra
+              como advertencia — nunca como éxito silencioso.
             </p>
           </div>
         ) : null}
@@ -352,19 +353,19 @@ export default function LimpiarModuloPage() {
             ].join(" ")}
           >
             <p className="font-semibold uppercase tracking-wide">
-              ⚠ Hay cargas de combustible vinculadas a viajes que se intentarán eliminar.
-              El reinicio seguirá bloqueado hasta definir qué hacer con estos registros.
+              ⚠ Estas cargas de combustible también serán eliminadas.
+            </p>
+            <p className="mt-1">
+              Al confirmar el reinicio completo se borrarán, junto con los viajes,
+              las cargas de combustible listadas abajo y sus filas de conciliación —
+              esto ya NO es un bloqueo, es parte de lo que se eliminará.
             </p>
             {(conteos.cargas_combustible_aprobadas ?? 0) > 0 ? (
               <p className="mt-1 font-bold text-rose-200">
                 {conteos.cargas_combustible_aprobadas} de esas cargas ya están APROBADAS
-                (dinero reconocido) — revísalas con especial cuidado antes de decidir nada.
+                (dinero reconocido) — revísalas con especial cuidado antes de confirmar.
               </p>
             ) : null}
-            <p className="mt-1">
-              Esta lista es solo informativa. No autoriza el borrado ni indica que el
-              bloqueo se vaya a resolver automáticamente.
-            </p>
             <button
               type="button"
               onClick={() => void verDetalleCombustible()}

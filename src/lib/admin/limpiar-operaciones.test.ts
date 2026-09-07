@@ -9,6 +9,8 @@ import {
   anularMultas,
   desactivarCatalogo,
   eliminarRutas,
+  leerCargasCombustibleViajes,
+  leerConciliacionFilasCargas,
   leerFirmasElectronicasViaticos,
   limpiarViajesConjuntos,
   limpiarViaticos,
@@ -50,8 +52,8 @@ beforeEach(() => {
 describe("limpieza por empresa y módulo", () => {
   it("elimina los dos expedientes juntos, hijos primero, sin borrar catálogos", async () => {
     const { conteos: out } = await limpiarViajesConjuntos(db, 7);
-    expect(Object.keys(out)).toEqual(["flota_viaje_evidencias", "tms_evidencias", "flota_lecturas", "firmas_electronicas", "tms_viaticos", "tms_plan_auxiliares", "tms_plan_paradas", "flota_viajes", "tms_planes_viaje"]);
-    const lecturas = conn.query.mock.calls.filter(([s]) => String(s).startsWith("SELECT *") && !String(s).includes("firmas_electronicas"));
+    expect(Object.keys(out)).toEqual(["flota_viaje_evidencias", "tms_evidencias", "flota_lecturas", "firmas_electronicas", "tms_viaticos", "tms_plan_auxiliares", "tms_plan_paradas", "flota_combustible_conciliacion_filas", "flota_combustible_cargas", "flota_viajes", "tms_planes_viaje"]);
+    const lecturas = conn.query.mock.calls.filter(([s]) => String(s).startsWith("SELECT *") && !String(s).includes("firmas_electronicas") && !String(s).includes("flota_combustible_cargas") && !String(s).includes("flota_combustible_conciliacion_filas"));
     expect(lecturas.every(([s, p]) => String(s).includes("FOR UPDATE") && JSON.stringify(p) === "[7]")).toBe(true);
     const deletes = conn.query.mock.calls.filter(([s]) => String(s).startsWith("DELETE"));
     expect(deletes.map(([, p]) => p)).toEqual([[[70]], [[60]], [[50]], [[40]], [[30]], [[20]], [[10]]]);
@@ -284,5 +286,137 @@ describe("limpiarViajesConjuntos/limpiarViaticos — archivos recolectados ANTES
     const { archivos } = await limpiarViaticos(db, 7, true);
     expect(archivos.size).toBe(0);
     expect(conn.query.mock.calls.some(([s]) => String(s).includes("firmas_electronicas"))).toBe(false);
+  });
+});
+
+/**
+ * BLOQUEO-COMBUSTIBLE-4 — decisión de negocio confirmada: las cargas de
+ * combustible de los viajes que se reinician YA NO se conservan, ver
+ * docs/LIMPIEZA-TMS-OPERACIONES-REINICIO-3-BLOQUEO-COMBUSTIBLE-DISCOVERY.md.
+ */
+describe("leerCargasCombustibleViajes / leerConciliacionFilasCargas — aislamiento estricto", () => {
+  it("no consulta la BD si no hay viajes (evita un IN () inválido)", async () => {
+    const grupo = await leerCargasCombustibleViajes(db, 7, []);
+    expect(grupo).toEqual({ tabla: "flota_combustible_cargas", filas: [] });
+    expect(conn.query).not.toHaveBeenCalled();
+  });
+
+  it("1) filtra EXCLUSIVAMENTE por viaje_id IN (viajeIds) — nunca por empresa_id en el WHERE", async () => {
+    filas.flota_combustible_cargas = [{ id: 5000, empresa_id: 7, viaje_id: 20 }];
+    await leerCargasCombustibleViajes(db, 7, [20, 21]);
+    const [sql, params] = conn.query.mock.calls.find(([s]) => String(s).includes("flota_combustible_cargas") && String(s).startsWith("SELECT *"))!;
+    expect(String(sql)).toContain("viaje_id IN (?)");
+    expect(String(sql)).not.toMatch(/empresa_id\s*=/);
+    expect(params).toEqual([[20, 21]]);
+  });
+
+  it("10) una carga con empresa_id inconsistente respecto a su viaje BLOQUEA — nunca se excluye en silencio", async () => {
+    filas.flota_combustible_cargas = [{ id: 5000, empresa_id: 8, viaje_id: 20 }]; // viaje 20 es de la empresa 7
+    await expect(leerCargasCombustibleViajes(db, 7, [20])).rejects.toThrow("inconsistente");
+  });
+
+  it("10) una fila de conciliación con empresa_id inconsistente respecto a su carga BLOQUEA", async () => {
+    filas.flota_combustible_conciliacion_filas = [{ id: 6000, empresa_id: 9, carga_combustible_id: 5000 }];
+    await expect(leerConciliacionFilasCargas(db, 7, [5000])).rejects.toThrow("inconsistente");
+  });
+
+  it("no consulta conciliaciones si no hay cargas", async () => {
+    const grupo = await leerConciliacionFilasCargas(db, 7, []);
+    expect(grupo).toEqual({ tabla: "flota_combustible_conciliacion_filas", filas: [] });
+  });
+});
+
+describe("limpiarViajesConjuntos — combustible integrado en el reinicio (BLOQUEO-COMBUSTIBLE-4)", () => {
+  it("1) la carga de combustible del viaje que se está reiniciando SÍ se borra", async () => {
+    filas.flota_combustible_cargas = [{ id: 5000, empresa_id: 7, viaje_id: 20 }];
+    const { conteos } = await limpiarViajesConjuntos(db, 7, true);
+    expect(conteos.flota_combustible_cargas).toBe(1);
+    expect(conn.query.mock.calls.some(([s]) => String(s) === "DELETE FROM `flota_combustible_cargas` WHERE id IN (?)")).toBe(true);
+  });
+
+  it("2) una carga de OTRA empresa nunca puede colarse: el filtro solo usa viajeIds ya validados como de esta empresa", async () => {
+    await limpiarViajesConjuntos(db, 7, true);
+    const [, params] = conn.query.mock.calls.find(([s]) => String(s).includes("flota_combustible_cargas") && String(s).startsWith("SELECT *"))!;
+    // Único viaje real de este fixture es el #20 (empresa 7) — ningún id
+    // de otra empresa puede aparecer aquí porque viajeIds proviene de
+    // `viajes.filas`, ya filtrado y validado por leer().
+    expect(params).toEqual([[20]]);
+  });
+
+  it("3) una carga NO asociada a los viajes de ESTE reinicio (otro viaje, id fuera del conjunto) queda estructuralmente excluida del filtro", async () => {
+    // Un segundo viaje de flota (#21) que NO pertenece a ningún plan de
+    // esta empresa nunca aparece en `viajes.filas` (leer() lo filtra por
+    // planWhere), así que tampoco puede colarse en viajeIds ni en el
+    // WHERE de flota_combustible_cargas — la carga de ese viaje jamás se
+    // consulta ni se borra.
+    await limpiarViajesConjuntos(db, 7, true);
+    const [, params] = conn.query.mock.calls.find(([s]) => String(s).includes("flota_combustible_cargas") && String(s).startsWith("SELECT *"))!;
+    expect((params as unknown[][])[0]).not.toContain(99);
+    expect((params as unknown[][])[0]).not.toContain(21);
+  });
+
+  it("4/5) borra conciliación ANTES que la carga, y la carga ANTES que flota_viajes", async () => {
+    filas.flota_combustible_cargas = [{ id: 5000, empresa_id: 7, viaje_id: 20 }];
+    filas.flota_combustible_conciliacion_filas = [{ id: 6000, empresa_id: 7, carga_combustible_id: 5000 }];
+    await limpiarViajesConjuntos(db, 7, true);
+    const deletes = conn.query.mock.calls
+      .filter(([s]) => String(s).startsWith("DELETE"))
+      .map(([s]) => String(s).match(/FROM `([^`]+)`/)![1]);
+    const idxConciliacion = deletes.indexOf("flota_combustible_conciliacion_filas");
+    const idxCarga = deletes.indexOf("flota_combustible_cargas");
+    const idxViaje = deletes.indexOf("flota_viajes");
+    expect(idxConciliacion).toBeGreaterThanOrEqual(0);
+    expect(idxConciliacion).toBeLessThan(idxCarga);
+    expect(idxCarga).toBeLessThan(idxViaje);
+  });
+
+  it("6) el comprobante (ruta_relativa) de la carga se recolecta en `archivos` ANTES de cualquier DELETE", async () => {
+    filas.flota_combustible_cargas = [{ id: 5000, empresa_id: 7, viaje_id: 20, ruta_relativa: "empresas/7/flota/vale_5000.jpg" }];
+    const { archivos } = await limpiarViajesConjuntos(db, 7, true);
+    expect(archivos.has("empresas/7/flota/vale_5000.jpg")).toBe(true);
+  });
+
+  it("14) aislamiento: los IDs de viaje usados para leer combustible son EXCLUSIVAMENTE los de flota_viajes ya leídos de esta empresa", async () => {
+    filas.flota_viajes = [{ id: 20, empresa_id: 7, plan_id: 10, estado: "cerrado" }, { id: 21, empresa_id: 7, plan_id: 10, estado: "cerrado" }];
+    await limpiarViajesConjuntos(db, 7, true);
+    const [, params] = conn.query.mock.calls.find(([s]) => String(s).includes("flota_combustible_cargas") && String(s).startsWith("SELECT *"))!;
+    expect(params).toEqual([[20, 21]]);
+  });
+
+  it("12) validarReferencias() sigue bloqueando una referencia externa no contemplada hacia flota_combustible_cargas", async () => {
+    filas.flota_combustible_cargas = [{ id: 5000, empresa_id: 7, viaje_id: 20 }];
+    const normal = conn.query.getMockImplementation()!;
+    conn.query.mockImplementation(async (...args) => {
+      const sql = String(args[0]);
+      const params = args[1] as string[] | undefined;
+      // Simula una tabla ajena (no incluida en ningún grupo del reinicio)
+      // con una columna informal carga_combustible_id que aún referencia
+      // esta carga — el mismo caso que motivó agregar esta columna a
+      // validarReferencias() en limpiar-operaciones.ts.
+      if (sql.includes("information_schema.COLUMNS") && params?.[0] === "carga_combustible_id") {
+        return [[{ tabla: "reportes_combustible_legado", columna: "carga_combustible_id", destino: "id" }]];
+      }
+      if (sql.includes("FROM `reportes_combustible_legado`")) return [[{ carga_combustible_id: 5000 }]];
+      return normal(...args);
+    });
+    await expect(limpiarViajesConjuntos(db, 7, true)).rejects.toThrow("reportes_combustible_legado");
+    expect(conn.query.mock.calls.some(([s]) => String(s).startsWith("DELETE"))).toBe(false);
+  });
+
+  it("15) todo DELETE emitido por este flujo lleva WHERE (nunca un DELETE sin condición)", async () => {
+    filas.flota_combustible_cargas = [{ id: 5000, empresa_id: 7, viaje_id: 20 }];
+    filas.flota_combustible_conciliacion_filas = [{ id: 6000, empresa_id: 7, carga_combustible_id: 5000 }];
+    await limpiarViajesConjuntos(db, 7, true);
+    const deletes = conn.query.mock.calls.filter(([s]) => String(s).startsWith("DELETE"));
+    expect(deletes.length).toBeGreaterThan(0);
+    expect(deletes.every(([s]) => /WHERE/i.test(String(s)))).toBe(true);
+  });
+
+  it("16) nunca ejecuta TRUNCATE, DROP ni desactiva FOREIGN_KEY_CHECKS", async () => {
+    filas.flota_combustible_cargas = [{ id: 5000, empresa_id: 7, viaje_id: 20 }];
+    filas.flota_combustible_conciliacion_filas = [{ id: 6000, empresa_id: 7, carga_combustible_id: 5000 }];
+    await limpiarViajesConjuntos(db, 7, true);
+    const todasLasConsultas = conn.query.mock.calls.map(([s]) => String(s));
+    expect(todasLasConsultas.some((s) => /TRUNCATE|DROP\s+TABLE|FOREIGN_KEY_CHECKS/i.test(s))).toBe(false);
   });
 });

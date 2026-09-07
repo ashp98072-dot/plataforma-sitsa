@@ -167,6 +167,19 @@ export async function contarModuloEmpresa(
             partes.push("SELECT imagen_ruta AS ruta FROM firmas_electronicas WHERE empresa_id = ? AND entidad_tipo = 'VIATICO' AND imagen_ruta IS NOT NULL AND imagen_ruta <> ''");
             params.push(empresaId);
           }
+          // BLOQUEO-COMBUSTIBLE-4 — flota_combustible_cargas.ruta_relativa
+          // (comprobante de la carga) ahora SÍ se borra junto con el resto
+          // del reinicio: se suma al mismo total en vez de un contador
+          // aparte, porque recolectarRutasArchivo() ya lo incluye en el
+          // MISMO Set deduplicado que evidencias/firmas.
+          if (await tablaExiste(conn, "flota_combustible_cargas")) {
+            partes.push(
+              `SELECT ruta_relativa AS ruta FROM flota_combustible_cargas
+               WHERE viaje_id IN (SELECT v.id FROM flota_viajes v INNER JOIN tms_planes_viaje p ON p.id = v.plan_id WHERE p.empresa_id = ?)
+                 AND ruta_relativa IS NOT NULL AND ruta_relativa <> ''`,
+            );
+            params.push(empresaId);
+          }
           if (!partes.length) return 0;
           const [rows] = await conn.query<RowDataPacket[]>(
             `SELECT COUNT(*) AS n FROM (${partes.join(" UNION ")}) t`,
@@ -195,12 +208,13 @@ export async function contarModuloEmpresa(
           evidencias_flota: await count("flota_viaje_evidencias"),
           firmas_viaticos: await count("firmas_electronicas", "empresa_id = ? AND entidad_tipo = 'VIATICO'"),
           archivos_fisicos_unicos: await archivosUnicos(),
-          // BLOQUEO-COMBUSTIBLE — SOLO SELECT: flota_combustible_cargas no
-          // se borra todavía (ver docs/LIMPIEZA-TMS-OPERACIONES-REINICIO-3-
-          // BLOQUEO-COMBUSTIBLE-DISCOVERY.md). Estos conteos existen para
-          // que el administrador vea, ANTES de intentar el reinicio, qué lo
-          // bloqueará hoy — nunca implican que ya estén autorizadas a
-          // borrarse.
+          // BLOQUEO-COMBUSTIBLE-4 — flota_combustible_cargas y sus filas de
+          // conciliación AHORA SÍ forman parte del reinicio completo (ver
+          // docs/LIMPIEZA-TMS-OPERACIONES-REINICIO-3-BLOQUEO-COMBUSTIBLE-
+          // DISCOVERY.md — decisión de negocio: ya no se conservan). Estos
+          // conteos siguen siendo SOLO SELECT (el preview nunca borra
+          // nada) y ahora informan al administrador qué SE ELIMINARÁ, no
+          // qué bloquea.
           ...(await contarCargasCombustibleBloqueantes(conn, empresaId)),
           // Referencia: módulos compartidos que este modo NUNCA toca.
           empleados_no_se_borran: await count("empleados"),
@@ -732,7 +746,9 @@ async function limpiarContabilidad(
  *     paso 3) y .creado_por_usuario_cliente_id (RESTRICT hacia
  *     tms_cliente_usuarios, dentro del paso 5).
  *  3. Operaciones/TMS (planes, viajes de flota vinculados, paradas,
- *     evidencias, lecturas, viáticos, auxiliares) — en modo `pruebas`
+ *     evidencias, lecturas, viáticos, auxiliares, y desde
+ *     BLOQUEO-COMBUSTIBLE-4 también las cargas de combustible de esos
+ *     mismos viajes y sus filas de conciliación) — en modo `pruebas`
  *     (permite viajes abiertos y viáticos con movimientos, igual que
  *     "pruebas_operaciones").
  *  4. Rutas (catálogo maestro + paradas maestras).
