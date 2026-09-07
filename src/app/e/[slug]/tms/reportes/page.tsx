@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
 import { hoyLocal } from "@/lib/rrhh/dates";
+import { puedeCerrarManualmente } from "@/lib/tms/cierre-viaje";
 
 /**
  * TMS-REPORTES-1 — Operaciones → TMS / Logística → Reportes de viajes.
@@ -404,6 +405,52 @@ export default function ReportesViajesPage() {
   // tiene (nunca un confirm() nativo).
   const [confirmandoCierre, setConfirmandoCierre] = useState<number | null>(null);
 
+  // TMS-CIERRE-OPERACIONES-1 — cierre MANUAL/forzado: mismo permiso
+  // viajes_cerrar:editar, disponible aunque el piloto nunca haya
+  // completado el flujo. Deliberadamente separado de confirmandoCierre
+  // (el cierre normal) — nunca se fusionan ambos flujos.
+  const [cierreManualPlanId, setCierreManualPlanId] = useState<number | null>(null);
+  const [motivoManual, setMotivoManual] = useState("");
+  const [comentarioManual, setComentarioManual] = useState("");
+  const [enviandoManual, setEnviandoManual] = useState(false);
+  const [errorManual, setErrorManual] = useState("");
+
+  function abrirCierreManual(planId: number) {
+    if (expandido !== planId) void abrirDetalle(planId);
+    setCierreManualPlanId(planId);
+    setMotivoManual("");
+    setComentarioManual("");
+    setErrorManual("");
+  }
+
+  async function confirmarCierreManual(planId: number) {
+    const motivo = motivoManual.trim();
+    if (motivo.length < 5) {
+      setErrorManual("El motivo debe tener al menos 5 caracteres.");
+      return;
+    }
+    setEnviandoManual(true);
+    setErrorManual("");
+    try {
+      const res = await fetch(`/api/empresas/${slug}/tms/planes/${planId}/cerrar`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ manual: true, motivo, comentario: comentarioManual.trim() || undefined }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setErrorManual(data.error ?? "No se pudo cerrar el viaje.");
+        return;
+      }
+      setCierreManualPlanId(null);
+      await cargar();
+    } catch {
+      setErrorManual("Error de conexión.");
+    } finally {
+      setEnviandoManual(false);
+    }
+  }
+
   async function abrirDetalle(planId: number) {
     if (expandido === planId) { setExpandido(null); setConfirmandoCierre(null); return; }
     setExpandido(planId);
@@ -645,6 +692,11 @@ export default function ReportesViajesPage() {
                             Cerrar viaje
                           </button>
                         ) : null}
+                        {puedeCerrarViaje && puedeCerrarManualmente(p.estado) ? (
+                          <button type="button" className="text-rose-500 hover:underline" onClick={() => abrirCierreManual(p.id)}>
+                            Cierre manual
+                          </button>
+                        ) : null}
                       </div>
                     </td>
                   </tr>
@@ -739,6 +791,51 @@ export default function ReportesViajesPage() {
                               ) : (
                                 <button type="button" className="mt-2 rounded bg-amber-600 px-2.5 py-1 text-xs font-medium text-white" onClick={() => pedirCierre(p.id)}>
                                   Cerrar viaje
+                                </button>
+                              )
+                            ) : null}
+                            {puedeCerrarViaje && puedeCerrarManualmente(p.estado) ? (
+                              cierreManualPlanId === p.id ? (
+                                <div className="mt-2 space-y-1.5 rounded border-2 border-rose-600 bg-rose-950/20 p-2 text-xs">
+                                  <p className="font-semibold uppercase tracking-wide text-rose-500">⚠ Cierre manual por Operaciones</p>
+                                  <p className="text-[11px] text-[var(--text)]">
+                                    Este cierre permite finalizar administrativamente el plan aunque el
+                                    piloto no haya completado el flujo normal. No crea evidencias,
+                                    ubicaciones ni kilometrajes inexistentes.
+                                  </p>
+                                  <label className="block text-[11px] text-[var(--text)]">
+                                    Motivo (obligatorio)
+                                    <textarea
+                                      className="mt-1 block w-full rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-xs"
+                                      rows={2}
+                                      maxLength={500}
+                                      value={motivoManual}
+                                      onChange={(e) => setMotivoManual(e.target.value)}
+                                    />
+                                  </label>
+                                  <label className="block text-[11px] text-[var(--text)]">
+                                    Comentario adicional (opcional)
+                                    <textarea
+                                      className="mt-1 block w-full rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-xs"
+                                      rows={2}
+                                      maxLength={1000}
+                                      value={comentarioManual}
+                                      onChange={(e) => setComentarioManual(e.target.value)}
+                                    />
+                                  </label>
+                                  {errorManual ? <p className="text-rose-500">{errorManual}</p> : null}
+                                  <div className="flex gap-2 pt-1">
+                                    <button type="button" className="rounded bg-rose-700 px-2.5 py-1 font-medium text-white disabled:opacity-50" disabled={enviandoManual} onClick={() => void confirmarCierreManual(p.id)}>
+                                      {enviandoManual ? "Cerrando…" : "Confirmar cierre manual"}
+                                    </button>
+                                    <button type="button" className="rounded border border-[var(--border)] px-2.5 py-1 text-[var(--text)]" disabled={enviandoManual} onClick={() => setCierreManualPlanId(null)}>
+                                      Cancelar
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <button type="button" className="mt-2 rounded border border-rose-600 px-2.5 py-1 text-xs font-medium text-rose-500" onClick={() => abrirCierreManual(p.id)}>
+                                  Cierre manual
                                 </button>
                               )
                             ) : null}
