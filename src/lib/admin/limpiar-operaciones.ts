@@ -41,7 +41,18 @@ async function validarReferencias(conn: PoolConnection, grupos: Grupo[]) {
        FROM information_schema.KEY_COLUMN_USAGE
        WHERE REFERENCED_TABLE_SCHEMA = DATABASE() AND REFERENCED_TABLE_NAME = ?`, [padre.tabla]);
     // Algunas relaciones históricas no tienen FK: también comprobar los IDs conocidos.
-    const columna = padre.tabla === "tms_planes_viaje" ? "plan_id" : padre.tabla === "flota_viajes" ? "viaje_id" : padre.tabla === "tms_plan_paradas" ? "parada_id" : null;
+    // BLOQUEO-COMBUSTIBLE-4: flota_combustible_conciliacion_filas.carga_combustible_id
+    // referencia flota_combustible_cargas.id sin FK real (ver
+    // docs/LIMPIEZA-TMS-OPERACIONES-REINICIO-3-BLOQUEO-COMBUSTIBLE-DISCOVERY.md
+    // §"Relación adicional no contemplada") — agregado aquí, nunca ignorado:
+    // si algún día una conciliación queda fuera del grupo que se borra
+    // explícitamente en limpiarViajesConjuntos(), esta línea sigue
+    // bloqueando en vez de permitir un huérfano.
+    const columna = padre.tabla === "tms_planes_viaje" ? "plan_id"
+      : padre.tabla === "flota_viajes" ? "viaje_id"
+      : padre.tabla === "tms_plan_paradas" ? "parada_id"
+      : padre.tabla === "flota_combustible_cargas" ? "carga_combustible_id"
+      : null;
     if (columna) {
       const [sinFk] = await conn.query<RowDataPacket[]>(
         "SELECT TABLE_NAME AS tabla, COLUMN_NAME AS columna, 'id' AS destino FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND COLUMN_NAME = ?", [columna]);
@@ -130,6 +141,74 @@ export async function leerFirmasElectronicasViaticos(
   );
 }
 
+/**
+ * BLOQUEO-COMBUSTIBLE-4 — cargas de combustible de los `flota_viajes`
+ * indicados. `flota_combustible_cargas` no tiene FK real hacia
+ * `flota_viajes` (ver docs/LIMPIEZA-TMS-OPERACIONES-REINICIO-3-BLOQUEO-
+ * COMBUSTIBLE-DISCOVERY.md), así que se lee EXPLÍCITAMENTE por
+ * `viaje_id IN (viajeIds)` — nunca por `empresa_id`, a propósito: filtrar
+ * también por `empresa_id` en el WHERE excluiría en silencio una fila
+ * inconsistente (viaje de esta empresa, pero con `empresa_id` de otra)
+ * en vez de bloquear la limpieza, que es justo lo que se requiere aquí.
+ * Por eso la verificación de consistencia se hace DESPUÉS de leer, fila
+ * por fila, igual que hace `leer()` — pero sin usar `leer()` mismo,
+ * porque `leer()` siempre ata el primer `?` a `empresaId` y lo usaría
+ * para filtrar, no solo para validar.
+ *
+ * `viajeIds` debe venir ya acotado a los `flota_viajes` de esta empresa
+ * (los que `limpiarViajesConjuntos()` acaba de leer con `leer()`, que ya
+ * valida cada fila por `empresa_id`); un array vacío evita un `IN ()`
+ * inválido y simplemente no encuentra ninguna carga.
+ */
+export async function leerCargasCombustibleViajes(
+  conn: PoolConnection,
+  empresaId: number,
+  viajeIds: number[],
+): Promise<Grupo> {
+  const tabla = "flota_combustible_cargas";
+  if (!viajeIds.length) return { tabla, filas: [] };
+  const [meta] = await conn.query<RowDataPacket[]>(
+    "SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?", [tabla]);
+  if (meta[0]?.ENGINE !== "InnoDB") throw new LimpiezaBloqueada(`La tabla ${tabla} no está disponible con soporte transaccional.`);
+  const [filas] = await conn.query<RowDataPacket[]>(
+    `SELECT * FROM ${identificador(tabla)} WHERE viaje_id IN (?) ORDER BY id FOR UPDATE`, [viajeIds]);
+  for (const f of filas) {
+    if (Number(f.empresa_id) !== empresaId) {
+      throw new LimpiezaBloqueada("Hay una carga de combustible con empresa_id inconsistente respecto al viaje que la referencia. Requiere revisión; no se limpió ningún dato.");
+    }
+  }
+  return { tabla, filas };
+}
+
+/**
+ * BLOQUEO-COMBUSTIBLE-4 — filas de conciliación de las cargas indicadas.
+ * Mismo criterio que `leerCargasCombustibleViajes()`: se lee por
+ * `carga_combustible_id IN (cargaIds)` (nunca por `empresa_id`, que
+ * `flota_combustible_conciliacion_filas` también tiene) para que una fila
+ * inconsistente BLOQUEE en vez de quedar silenciosamente excluida.
+ * `cargaIds` debe venir ya acotado y validado por
+ * `leerCargasCombustibleViajes()`.
+ */
+export async function leerConciliacionFilasCargas(
+  conn: PoolConnection,
+  empresaId: number,
+  cargaIds: number[],
+): Promise<Grupo> {
+  const tabla = "flota_combustible_conciliacion_filas";
+  if (!cargaIds.length) return { tabla, filas: [] };
+  const [meta] = await conn.query<RowDataPacket[]>(
+    "SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?", [tabla]);
+  if (meta[0]?.ENGINE !== "InnoDB") throw new LimpiezaBloqueada(`La tabla ${tabla} no está disponible con soporte transaccional.`);
+  const [filas] = await conn.query<RowDataPacket[]>(
+    `SELECT * FROM ${identificador(tabla)} WHERE carga_combustible_id IN (?) ORDER BY id FOR UPDATE`, [cargaIds]);
+  for (const f of filas) {
+    if (f.empresa_id != null && Number(f.empresa_id) !== empresaId) {
+      throw new LimpiezaBloqueada("Hay una fila de conciliación de combustible con empresa_id inconsistente respecto a la carga que la referencia. Requiere revisión; no se limpió ningún dato.");
+    }
+  }
+  return { tabla, filas };
+}
+
 export async function borrarGrupos(conn: PoolConnection, grupos: Grupo[]) {
   await validarReferencias(conn, grupos);
   const out: Record<string, number> = {};
@@ -170,8 +249,21 @@ export async function limpiarViajesConjuntos(conn: PoolConnection, empresaId: nu
   // liquidación) — antes de borrar tms_viaticos, nunca después.
   const viaticoIds = viaticos.filas.map((f) => Number(f.id));
   const firmas = await leerFirmasElectronicasViaticos(conn, empresaId, viaticoIds);
-  const archivos = recolectarRutasArchivo([fotos, evidencias, firmas]);
-  const conteos = await borrarGrupos(conn, [fotos, evidencias, lecturas, firmas, viaticos, auxiliares, paradas, viajes, planes]);
+  // BLOQUEO-COMBUSTIBLE-4: cargas de combustible de ESTOS MISMOS viajes de
+  // flota, y las filas de conciliación de esas cargas — antes de borrar
+  // flota_viajes, nunca después. La conciliación se lee a partir de los
+  // IDs de carga YA validados por leerCargasCombustibleViajes() (nunca de
+  // un empresa_id suelto), y se borra ANTES que la carga (orden obligatorio).
+  const viajeIds = viajes.filas.map((f) => Number(f.id));
+  const cargasCombustible = await leerCargasCombustibleViajes(conn, empresaId, viajeIds);
+  const cargaIds = cargasCombustible.filas.map((f) => Number(f.id));
+  const conciliacionFilas = await leerConciliacionFilasCargas(conn, empresaId, cargaIds);
+  const archivos = recolectarRutasArchivo([fotos, evidencias, firmas, cargasCombustible]);
+  const conteos = await borrarGrupos(conn, [
+    fotos, evidencias, lecturas, firmas, viaticos, auxiliares, paradas,
+    conciliacionFilas, cargasCombustible,
+    viajes, planes,
+  ]);
   return { conteos, archivos };
 }
 

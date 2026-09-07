@@ -12,7 +12,7 @@ vi.mock("@/lib/admin/limpiar-archivos", () => ({ borrarArchivosFisicos: vi.fn() 
 import { getPool } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { borrarArchivosFisicos } from "./limpiar-archivos";
-import { limpiarModuloEmpresa } from "./limpiar-modulo";
+import { contarModuloEmpresa, limpiarModuloEmpresa } from "./limpiar-modulo";
 import {
   limpiarFacturacion,
   limpiarSolicitudesCliente,
@@ -60,6 +60,10 @@ function datosCompletos() {
     // ADMIN-LIMPIAR-ARCHIVOS-FISICOS — firma de autorización del viático
     // #50, vínculo polimórfico sin FK real (entidad_tipo/entidad_id).
     firmas_electronicas: [{ id: 950, empresa_id: 7, entidad_tipo: "VIATICO", entidad_id: 50, imagen_ruta: "empresas/7/firmas/firma_viatico_autorizar_50.png" }],
+    // BLOQUEO-COMBUSTIBLE-4 — carga del viaje #20 (con comprobante) y su
+    // fila de conciliación; vínculo informal sin FK real hacia flota_viajes.
+    flota_combustible_cargas: [{ id: 5000, empresa_id: 7, viaje_id: 20, ruta_relativa: "empresas/7/flota/combustible_vale_5000.jpg" }],
+    flota_combustible_conciliacion_filas: [{ id: 6000, empresa_id: 7, carga_combustible_id: 5000 }],
     tms_evidencias: [{ id: 60, empresa_id: 7, plan_id: 10 }],
     flota_viaje_evidencias: [{ id: 70, empresa_id: 7, viaje_id: 20 }],
     flota_lecturas: [{ id: 80, empresa_id: 7, viaje_id: 20 }],
@@ -90,6 +94,9 @@ beforeEach(() => {
     if (sql.startsWith("SELECT id, empresa_id FROM tms_clientes")) return [[]];
     if (sql.startsWith("SELECT id FROM tms_cliente_")) return [[]];
     if (sql.startsWith("SELECT *")) return [filas[tablaDe(sql)!] ?? []];
+    // BLOQUEO-COMBUSTIBLE-PREVIEW — sin cargas en el fixture de estos
+    // tests (no es su objeto de prueba); ver limpiar-combustible-preview.test.ts.
+    if (sql.includes("GROUP BY estado")) return [[]];
     if (sql.startsWith("SELECT COUNT")) return [[{ n: 0 }]];
     if (sql.startsWith("DELETE")) return [{ affectedRows: 1 }];
     throw new Error(`Consulta inesperada: ${sql}`);
@@ -118,6 +125,8 @@ describe("pruebas_reinicio_completo — orden y alcance", () => {
       "tms_viaticos",
       "tms_plan_auxiliares",
       "tms_plan_paradas",
+      "flota_combustible_conciliacion_filas",
+      "flota_combustible_cargas",
       "flota_viajes",
       "tms_planes_viaje",
       // Rutas
@@ -273,11 +282,14 @@ describe("pruebas_reinicio_completo — borrado físico post-commit", () => {
     );
   });
 
-  it("recolecta y pasa la ruta de la firma de viático detectada (deduplicada) a borrarArchivosFisicos", async () => {
+  it("recolecta y pasa las rutas de la firma de viático y del comprobante de combustible (deduplicadas) a borrarArchivosFisicos", async () => {
     await ejecutarReinicio();
     const [empresaId, rutas] = vi.mocked(borrarArchivosFisicos).mock.calls[0];
     expect(empresaId).toBe(7);
-    expect([...(rutas as Set<string>)]).toEqual(["empresas/7/firmas/firma_viatico_autorizar_50.png"]);
+    expect([...(rutas as Set<string>)].sort()).toEqual([
+      "empresas/7/firmas/firma_viatico_autorizar_50.png",
+      "empresas/7/flota/combustible_vale_5000.jpg",
+    ].sort());
   });
 
   it("10) si el rollback ocurre (fallo intermedio en BD), NINGÚN archivo físico se intenta eliminar", async () => {
@@ -362,5 +374,40 @@ describe("limpiarCatalogosTms — funciones nuevas en aislamiento", () => {
   it("nunca genera ninguna consulta hacia empleados ni flota_vehiculos", async () => {
     await limpiarCatalogosTms(db, 7);
     expect(conn.query.mock.calls.some(([s]) => String(s).includes("empleados") || String(s).includes("flota_vehiculos"))).toBe(false);
+  });
+});
+
+/**
+ * BLOQUEO-COMBUSTIBLE-4 — el preview de contarModuloEmpresa() sigue siendo
+ * SOLO SELECT; lo único que cambió es que estos conteos ahora describen lo
+ * que el reinicio SÍ va a borrar (antes describían un bloqueo pendiente).
+ */
+describe("contarModuloEmpresa('pruebas_reinicio_completo') — preview de combustible", () => {
+  it("11) los conteos de combustible (vinculadas/pendientes/aprobadas/conciliaciones) aparecen en el preview", async () => {
+    conn.query.mockImplementation(async (sql: string) => {
+      const s = String(sql);
+      if (s.includes("information_schema.tables")) return [[{ ok: 1 }]];
+      if (s.includes("GROUP BY estado")) {
+        return [[
+          { estado: "PENDIENTE", n: 2 },
+          { estado: "APROBADO", n: 1 },
+        ]];
+      }
+      if (s.includes("flota_combustible_conciliacion_filas") && s.startsWith("SELECT COUNT")) return [[{ n: 3 }]];
+      if (s.startsWith("SELECT COUNT")) return [[{ n: 0 }]];
+      throw new Error(`Consulta inesperada: ${s}`);
+    });
+    const conteos = await contarModuloEmpresa(7, "pruebas_reinicio_completo");
+    expect(conteos.cargas_combustible_vinculadas).toBe(3);
+    expect(conteos.cargas_combustible_pendientes).toBe(2);
+    expect(conteos.cargas_combustible_aprobadas).toBe(1);
+    expect(conteos.cargas_combustible_rechazadas).toBe(0);
+    expect(conteos.conciliaciones_combustible_vinculadas).toBe(3);
+  });
+
+  it("preview vacío (sin combustible vinculado) no rompe y devuelve todo en 0", async () => {
+    const conteos = await contarModuloEmpresa(7, "pruebas_reinicio_completo");
+    expect(conteos.cargas_combustible_vinculadas).toBe(0);
+    expect(conteos.conciliaciones_combustible_vinculadas).toBe(0);
   });
 });
