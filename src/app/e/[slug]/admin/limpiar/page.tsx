@@ -21,6 +21,28 @@ type ResultadoArchivos = {
   advertencias: string[];
 };
 
+/**
+ * BLOQUEO-COMBUSTIBLE — detalle SOLO LECTURA para revisión manual, ver
+ * src/lib/admin/limpiar-combustible-preview.ts. Nunca se descarga el
+ * comprobante ni se muestra su ruta física, solo si existe.
+ */
+type CargaCombustibleBloqueante = {
+  id: number;
+  viajeId: number;
+  fecha: string | null;
+  estado: string;
+  monto: number;
+  vehiculoId: number;
+  vehiculoPlaca: string | null;
+  empleadoId: number;
+  pilotoNombre: string;
+  tieneComprobante: boolean;
+  conciliada: boolean;
+  conciliacionId: number | null;
+  conciliacionArchivo: string | null;
+  conciliacionFecha: string | null;
+};
+
 export default function LimpiarModuloPage() {
   const slug = String(useParams().slug);
   const router = useRouter();
@@ -36,6 +58,10 @@ export default function LimpiarModuloPage() {
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
   const [archivosResultado, setArchivosResultado] = useState<ResultadoArchivos | null>(null);
+  const [detalleCombustibleAbierto, setDetalleCombustibleAbierto] = useState(false);
+  const [detalleCombustible, setDetalleCombustible] = useState<CargaCombustibleBloqueante[] | null>(null);
+  const [detalleCombustibleCargando, setDetalleCombustibleCargando] = useState(false);
+  const [detalleCombustibleError, setDetalleCombustibleError] = useState("");
 
   const empresaSel = useMemo(
     () => empresas.find((e) => e.id === empresaId) ?? null,
@@ -77,6 +103,11 @@ export default function LimpiarModuloPage() {
     setConfirmacion("");
     setConfirmacionEsperada("");
     setArchivosResultado(null);
+    // BLOQUEO-COMBUSTIBLE — el detalle es de otra empresa/módulo ahora; se
+    // vuelve a pedir explícitamente si el admin lo expande de nuevo.
+    setDetalleCombustibleAbierto(false);
+    setDetalleCombustible(null);
+    setDetalleCombustibleError("");
     try {
       const res = await fetch(
         `/api/admin/limpiar-modulo?empresaId=${empresaId}&modulo=${modulo}`,
@@ -138,6 +169,30 @@ export default function LimpiarModuloPage() {
       setError("Error de red.");
     } finally {
       setEjecutando(false);
+    }
+  }
+
+  // BLOQUEO-COMBUSTIBLE — SOLO LECTURA, bajo demanda (no se carga en cada
+  // preview automático). Nunca dispara la limpieza ni modifica nada.
+  async function verDetalleCombustible() {
+    if (!empresaId) return;
+    const abrir = !detalleCombustibleAbierto;
+    setDetalleCombustibleAbierto(abrir);
+    if (!abrir || detalleCombustible) return; // ya cargado, o se está cerrando
+    setDetalleCombustibleCargando(true);
+    setDetalleCombustibleError("");
+    try {
+      const res = await fetch(`/api/admin/limpiar-modulo/combustible-bloqueante?empresaId=${empresaId}`);
+      const data = await res.json();
+      if (!res.ok) {
+        setDetalleCombustibleError(data.error ?? "No se pudo cargar el detalle.");
+        return;
+      }
+      setDetalleCombustible(data.cargas ?? []);
+    } catch {
+      setDetalleCombustibleError("Error de red al cargar el detalle.");
+    } finally {
+      setDetalleCombustibleCargando(false);
     }
   }
 
@@ -286,6 +341,88 @@ export default function LimpiarModuloPage() {
             <p className="text-xs text-[var(--muted)]">Sin datos</p>
           )}
         </div>
+
+        {modulo === "pruebas_reinicio_completo" && conteos && (conteos.cargas_combustible_vinculadas ?? 0) > 0 ? (
+          <div
+            className={[
+              "rounded-lg border-2 px-3 py-2.5 text-xs",
+              (conteos.cargas_combustible_aprobadas ?? 0) > 0
+                ? "border-rose-600 bg-rose-950/50 text-rose-100"
+                : "border-amber-600 bg-amber-950/40 text-amber-100",
+            ].join(" ")}
+          >
+            <p className="font-semibold uppercase tracking-wide">
+              ⚠ Hay cargas de combustible vinculadas a viajes que se intentarán eliminar.
+              El reinicio seguirá bloqueado hasta definir qué hacer con estos registros.
+            </p>
+            {(conteos.cargas_combustible_aprobadas ?? 0) > 0 ? (
+              <p className="mt-1 font-bold text-rose-200">
+                {conteos.cargas_combustible_aprobadas} de esas cargas ya están APROBADAS
+                (dinero reconocido) — revísalas con especial cuidado antes de decidir nada.
+              </p>
+            ) : null}
+            <p className="mt-1">
+              Esta lista es solo informativa. No autoriza el borrado ni indica que el
+              bloqueo se vaya a resolver automáticamente.
+            </p>
+            <button
+              type="button"
+              onClick={() => void verDetalleCombustible()}
+              className="mt-2 rounded border border-current px-2 py-1 text-[11px] font-medium underline"
+            >
+              {detalleCombustibleAbierto ? "Ocultar detalle" : "Ver detalle de las cargas"}
+            </button>
+
+            {detalleCombustibleAbierto ? (
+              <div className="mt-2 border-t border-current/30 pt-2">
+                {detalleCombustibleCargando ? (
+                  <p>Cargando detalle…</p>
+                ) : detalleCombustibleError ? (
+                  <p className="text-rose-300">{detalleCombustibleError}</p>
+                ) : detalleCombustible && detalleCombustible.length ? (
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[640px] border-collapse text-left text-[11px]">
+                      <thead>
+                        <tr className="border-b border-current/30">
+                          <th className="py-1 pr-2">ID</th>
+                          <th className="py-1 pr-2">Viaje</th>
+                          <th className="py-1 pr-2">Fecha</th>
+                          <th className="py-1 pr-2">Estado</th>
+                          <th className="py-1 pr-2">Monto</th>
+                          <th className="py-1 pr-2">Unidad</th>
+                          <th className="py-1 pr-2">Piloto</th>
+                          <th className="py-1 pr-2">Comprobante</th>
+                          <th className="py-1 pr-2">Conciliada</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {detalleCombustible.map((c) => (
+                          <tr key={c.id} className="border-b border-current/10 align-top">
+                            <td className="py-1 pr-2">{c.id}</td>
+                            <td className="py-1 pr-2">{c.viajeId}</td>
+                            <td className="py-1 pr-2">{c.fecha ?? "—"}</td>
+                            <td className="py-1 pr-2 font-semibold">{c.estado}</td>
+                            <td className="py-1 pr-2">{c.monto.toFixed(2)}</td>
+                            <td className="py-1 pr-2">{c.vehiculoPlaca ?? `#${c.vehiculoId}`}</td>
+                            <td className="py-1 pr-2">{c.pilotoNombre}</td>
+                            <td className="py-1 pr-2">{c.tieneComprobante ? "Sí" : "No"}</td>
+                            <td className="py-1 pr-2">
+                              {c.conciliada
+                                ? `Sí — ${c.conciliacionArchivo ?? `conciliación #${c.conciliacionId}`}${c.conciliacionFecha ? ` (${c.conciliacionFecha})` : ""}`
+                                : "No"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p>Sin filas para mostrar.</p>
+                )}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         <label className="block text-sm text-[var(--muted)]">
           3. Confirmar — escribe exactamente:

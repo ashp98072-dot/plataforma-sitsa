@@ -14,6 +14,7 @@ import {
 } from "@/lib/admin/limpiar-operaciones";
 import { limpiarMultasPrueba, limpiarClientesPrueba } from "@/lib/admin/limpiar-pruebas";
 import { borrarArchivosFisicos, type ResultadoArchivosFisicos } from "@/lib/admin/limpiar-archivos";
+import { contarCargasCombustibleBloqueantes } from "@/lib/admin/limpiar-combustible-preview";
 import type { ModuloLimpieza } from "@/lib/admin/limpiar-modulo-shared";
 
 export type { ModuloLimpieza };
@@ -194,6 +195,13 @@ export async function contarModuloEmpresa(
           evidencias_flota: await count("flota_viaje_evidencias"),
           firmas_viaticos: await count("firmas_electronicas", "empresa_id = ? AND entidad_tipo = 'VIATICO'"),
           archivos_fisicos_unicos: await archivosUnicos(),
+          // BLOQUEO-COMBUSTIBLE — SOLO SELECT: flota_combustible_cargas no
+          // se borra todavía (ver docs/LIMPIEZA-TMS-OPERACIONES-REINICIO-3-
+          // BLOQUEO-COMBUSTIBLE-DISCOVERY.md). Estos conteos existen para
+          // que el administrador vea, ANTES de intentar el reinicio, qué lo
+          // bloqueará hoy — nunca implican que ya estén autorizadas a
+          // borrarse.
+          ...(await contarCargasCombustibleBloqueantes(conn, empresaId)),
           // Referencia: módulos compartidos que este modo NUNCA toca.
           empleados_no_se_borran: await count("empleados"),
           flota_vehiculos_no_se_borran: await count("flota_vehiculos"),

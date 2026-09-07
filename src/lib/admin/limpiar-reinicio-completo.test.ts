@@ -90,6 +90,9 @@ beforeEach(() => {
     if (sql.startsWith("SELECT id, empresa_id FROM tms_clientes")) return [[]];
     if (sql.startsWith("SELECT id FROM tms_cliente_")) return [[]];
     if (sql.startsWith("SELECT *")) return [filas[tablaDe(sql)!] ?? []];
+    // BLOQUEO-COMBUSTIBLE-PREVIEW — sin cargas en el fixture de estos
+    // tests (no es su objeto de prueba); ver limpiar-combustible-preview.test.ts.
+    if (sql.includes("GROUP BY estado")) return [[]];
     if (sql.startsWith("SELECT COUNT")) return [[{ n: 0 }]];
     if (sql.startsWith("DELETE")) return [{ affectedRows: 1 }];
     throw new Error(`Consulta inesperada: ${sql}`);
