@@ -1,6 +1,7 @@
 import type { RowDataPacket } from "mysql2";
-import { execute, query } from "@/lib/db";
-import { registrarAuditoria } from "@/lib/auditoria";
+import type { ResultSetHeader } from "mysql2/promise";
+import { execute, getPool, query } from "@/lib/db";
+import { registrarAuditoria, registrarAuditoriaTx } from "@/lib/auditoria";
 
 /**
  * OPS-1 (corregido) — cierre administrativo del viaje.
@@ -127,4 +128,151 @@ export async function cerrarViaje(
   });
 
   return { ok: true };
+}
+
+/**
+ * TMS-CIERRE-OPERACIONES-1 — cierre MANUAL/forzado del plan por
+ * Operaciones, sin depender de que el piloto haya completado el flujo del
+ * portal (evidencia, marcajes, llegada). Decisiones de negocio ya
+ * confirmadas (ver docs/TMS-CIERRE-OPERACIONES-1-DISCOVERY.md):
+ *
+ * - Mismo permiso `viajes_cerrar:editar` que el cierre normal — este
+ *   módulo NO vuelve a verificarlo (responsabilidad del endpoint, igual
+ *   que `cerrarViaje()`).
+ * - Solo permitido desde "Programado" | "Cargado" | "En ruta" — nunca
+ *   desde "Cerrado" ni "Cancelado".
+ * - Si NO existe ningún `flota_viajes` para este plan: se cierra
+ *   ÚNICAMENTE el plan. Nunca se crea una fila sintética en
+ *   `flota_viajes` — sus columnas NOT NULL (`vehiculo_id`, `hora_salida`)
+ *   representan un hecho físico real que aquí no existe, y fabricarlo
+ *   corrompería km/lecturas/mantenimiento reales del vehículo.
+ * - Si SÍ existe un `flota_viajes` "abierto" para este plan (el piloto
+ *   salió pero nunca registró llegada): se fuerza también a "cerrado",
+ *   para no dejar esa unidad bloqueada para su próxima salida — pero
+ *   `km_llegada`/`hora_llegada` quedan EXACTAMENTE como estaban (NULL o
+ *   lo último grabado, nunca inventados); solo se anota en
+ *   `observaciones` que fue un cierre administrativo sin llegada real.
+ * - Todo dentro de UNA transacción (a diferencia de `cerrarViaje()`, que
+ *   es un único UPDATE atómico): aquí hay hasta 2 escrituras dependientes
+ *   (flota_viajes + tms_planes_viaje) más la auditoría, y deben
+ *   comprometerse juntas o no comprometerse ninguna.
+ */
+
+export type ResultadoCierreManual =
+  | { ok: true; flotaViajeCerrado: boolean }
+  | { ok: false; error: string };
+
+/**
+ * Estados canónicos ya existentes en el modelo (tms_planes_viaje.estado)
+ * desde los que se admite cierre manual. Exportado para que la UI
+ * (src/app/e/[slug]/tms/page.tsx y .../tms/reportes/page.tsx) use
+ * EXACTAMENTE el mismo criterio que el backend al decidir si mostrar el
+ * botón — nunca una lista duplicada que pueda divergir.
+ */
+export const ESTADOS_CIERRE_MANUAL = ["Programado", "Cargado", "En ruta"] as const;
+
+/** Función PURA (mismo criterio que resumenCierre() en reportes/page.tsx) — testeable sin harness de componentes React. */
+export function puedeCerrarManualmente(estado: string): boolean {
+  return (ESTADOS_CIERRE_MANUAL as readonly string[]).includes(estado);
+}
+
+export async function cerrarViajeManual(opts: {
+  empresaId: number;
+  planId: number;
+  usuario: string;
+  motivo: string;
+  comentario?: string | null;
+}): Promise<ResultadoCierreManual> {
+  const motivo = (opts.motivo ?? "").trim();
+  if (motivo.length < 5) {
+    return { ok: false, error: "El motivo debe tener al menos 5 caracteres." };
+  }
+  if (motivo.length > 500) {
+    return { ok: false, error: "El motivo no puede superar 500 caracteres." };
+  }
+  const comentario = (opts.comentario ?? "")?.trim() || null;
+  if (comentario && comentario.length > 1000) {
+    return { ok: false, error: "El comentario no puede superar 1000 caracteres." };
+  }
+
+  const conn = await getPool().getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [planRows] = await conn.query<RowDataPacket[]>(
+      `SELECT id, estado FROM tms_planes_viaje WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
+      [opts.planId, opts.empresaId],
+    );
+    const plan = planRows[0];
+    if (!plan) {
+      await conn.rollback();
+      return { ok: false, error: "Viaje no encontrado." };
+    }
+    const estadoAnterior = String(plan.estado);
+    if (!ESTADOS_CIERRE_MANUAL.includes(estadoAnterior as (typeof ESTADOS_CIERRE_MANUAL)[number])) {
+      await conn.rollback();
+      if (estadoAnterior === "Cerrado") {
+        return { ok: false, error: "Este viaje ya fue cerrado." };
+      }
+      if (estadoAnterior === "Cancelado") {
+        return { ok: false, error: "Este viaje está cancelado; no admite cierre manual." };
+      }
+      return { ok: false, error: `Este viaje está "${estadoAnterior}"; no admite cierre manual.` };
+    }
+
+    // Buscar flota_viajes asociado — puede no existir (caso crítico del
+    // ticket) o existir ya cerrado (llegada real ya registrada, aunque el
+    // plan por alguna razón no se cerró todavía) o existir "abierto".
+    const [flotaRows] = await conn.query<RowDataPacket[]>(
+      `SELECT id, estado FROM flota_viajes WHERE plan_id = ? AND empresa_id = ? ORDER BY id DESC LIMIT 1 FOR UPDATE`,
+      [opts.planId, opts.empresaId],
+    );
+    const flotaViaje = flotaRows[0];
+    let flotaViajeCerrado = false;
+    if (flotaViaje && String(flotaViaje.estado) === "abierto") {
+      // Transición MÍNIMA: solo el estado + una anotación de texto. Nunca
+      // se tocan km_llegada/hora_llegada — quedan NULL, exactamente como
+      // ya estaban, para no fabricar un dato físico que nunca ocurrió.
+      await conn.execute<ResultSetHeader>(
+        `UPDATE flota_viajes
+         SET estado = 'cerrado',
+             observaciones = TRIM(CONCAT_WS(' ', observaciones, '[Cierre manual por Operaciones — sin llegada física registrada.]'))
+         WHERE id = ? AND empresa_id = ? AND estado = 'abierto'`,
+        [flotaViaje.id, opts.empresaId],
+      );
+      flotaViajeCerrado = true;
+    }
+
+    const [upd] = await conn.execute<ResultSetHeader>(
+      `UPDATE tms_planes_viaje
+       SET estado = 'Cerrado', cerrado_por = ?, cerrado_en = NOW(),
+           cierre_manual = 1, cierre_manual_motivo = ?, cierre_manual_comentario = ?
+       WHERE id = ? AND empresa_id = ? AND estado IN ('Programado', 'Cargado', 'En ruta')`,
+      [opts.usuario, motivo, comentario, opts.planId, opts.empresaId],
+    );
+    if (upd.affectedRows !== 1) {
+      await conn.rollback();
+      return { ok: false, error: "El viaje cambió de estado durante la operación. Vuelve a intentarlo." };
+    }
+
+    await registrarAuditoriaTx(conn, {
+      empresaId: opts.empresaId,
+      usuario: opts.usuario,
+      accion: "cerrar_viaje_manual",
+      modulo: "tms",
+      detalle: `Plan #${opts.planId} → Cerrado (CIERRE MANUAL POR OPERACIONES`
+        + `${flotaViaje ? "" : " — SIN VIAJE FÍSICO REGISTRADO"}). `
+        + `Estado anterior: ${estadoAnterior}. Motivo: ${motivo}.`
+        + `${comentario ? ` Comentario: ${comentario}.` : ""}`
+        + `${flotaViaje ? ` flota_viajes #${flotaViaje.id} ${flotaViajeCerrado ? "cerrado también (sin datos físicos)" : "ya estaba cerrado"}.` : ""}`,
+    });
+
+    await conn.commit();
+    return { ok: true, flotaViajeCerrado };
+  } catch (e) {
+    await conn.rollback();
+    throw e;
+  } finally {
+    conn.release();
+  }
 }

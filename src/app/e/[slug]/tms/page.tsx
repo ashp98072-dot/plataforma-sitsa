@@ -8,6 +8,7 @@ import ClienteUbicacionesAdmin from "@/components/tms/cliente-ubicaciones-admin"
 import ClienteContactosAdmin from "@/components/tms/cliente-contactos-admin";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
+import { puedeCerrarManualmente } from "@/lib/tms/cierre-viaje";
 
 /**
  * Operaciones → TMS / Logística — VIAT-1b/1c: centro de configuración/
@@ -126,6 +127,8 @@ function labelAccionAud(accion: string): string {
       return "Llegada registrada (piloto)";
     case "cerrar_viaje":
       return "Cerró viaje (Operaciones)";
+    case "cerrar_viaje_manual":
+      return "Cerró viaje manualmente (Operaciones)";
     case "eliminar_evidencia":
       return "Eliminó evidencia";
     case "config_viatico":
@@ -316,6 +319,52 @@ export default function TmsPage() {
       setErrorCierre("Error de conexión.");
     } finally {
       setCerrandoId(null);
+    }
+  }
+
+  // TMS-CIERRE-OPERACIONES-1 — cierre MANUAL/forzado: mismo permiso
+  // viajes_cerrar:editar, pero disponible aunque el piloto NUNCA haya
+  // completado el flujo (sin llegada, sin evidencias). Deliberadamente
+  // distinto de "Cerrar viaje" (que exige llegada real) — nunca se
+  // fusionan en el mismo botón para no confundir ambos flujos.
+  const [cierreManualPlanId, setCierreManualPlanId] = useState<number | null>(null);
+  const [motivoManual, setMotivoManual] = useState("");
+  const [comentarioManual, setComentarioManual] = useState("");
+  const [enviandoManual, setEnviandoManual] = useState(false);
+  const [errorManual, setErrorManual] = useState("");
+
+  function abrirCierreManual(planId: number) {
+    setCierreManualPlanId(planId);
+    setMotivoManual("");
+    setComentarioManual("");
+    setErrorManual("");
+  }
+
+  async function confirmarCierreManual(planId: number) {
+    const motivo = motivoManual.trim();
+    if (motivo.length < 5) {
+      setErrorManual("El motivo debe tener al menos 5 caracteres.");
+      return;
+    }
+    setEnviandoManual(true);
+    setErrorManual("");
+    try {
+      const res = await fetch(`/api/empresas/${slug}/tms/planes/${planId}/cerrar`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ manual: true, motivo, comentario: comentarioManual.trim() || undefined }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setErrorManual(data.error ?? "No se pudo cerrar el viaje.");
+        return;
+      }
+      setCierreManualPlanId(null);
+      await cargarPlanes(false);
+    } catch {
+      setErrorManual("Error de conexión.");
+    } finally {
+      setEnviandoManual(false);
     }
   }
 
@@ -620,10 +669,70 @@ export default function TmsPage() {
                                     {cerrandoId === p.id ? "Cerrando…" : "Cerrar viaje"}
                                   </button>
                                 ) : null}
+                                {puedeCerrarViaje && puedeCerrarManualmente(p.estado) ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => abrirCierreManual(p.id)}
+                                    className="rounded border border-rose-600 px-2 py-1 text-[11px] font-medium text-rose-300 hover:bg-rose-950/40"
+                                  >
+                                    Cierre manual
+                                  </button>
+                                ) : null}
                               </div>
                             </div>
                             {errorCierre && cerrandoId === null && p.pendiente_cierre ? (
                               <p className="mt-1 text-[11px] text-red-300">{errorCierre}</p>
+                            ) : null}
+                            {cierreManualPlanId === p.id ? (
+                              <div className="mt-2 rounded-lg border-2 border-rose-600 bg-rose-950/30 p-2.5 text-[11px]">
+                                <p className="font-semibold uppercase tracking-wide text-rose-200">
+                                  ⚠ Cierre manual por Operaciones
+                                </p>
+                                <p className="mt-1 text-rose-100">
+                                  Este cierre permite finalizar administrativamente el plan aunque el
+                                  piloto no haya completado el flujo normal. No crea evidencias,
+                                  ubicaciones ni kilometrajes inexistentes.
+                                </p>
+                                <label className="mt-2 block text-rose-100">
+                                  Motivo (obligatorio)
+                                  <textarea
+                                    className="mt-1 block w-full rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-[var(--text)]"
+                                    rows={2}
+                                    maxLength={500}
+                                    value={motivoManual}
+                                    onChange={(e) => setMotivoManual(e.target.value)}
+                                  />
+                                </label>
+                                <label className="mt-2 block text-rose-100">
+                                  Comentario adicional (opcional)
+                                  <textarea
+                                    className="mt-1 block w-full rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-[var(--text)]"
+                                    rows={2}
+                                    maxLength={1000}
+                                    value={comentarioManual}
+                                    onChange={(e) => setComentarioManual(e.target.value)}
+                                  />
+                                </label>
+                                {errorManual ? <p className="mt-1 text-red-300">{errorManual}</p> : null}
+                                <div className="mt-2 flex gap-2">
+                                  <button
+                                    type="button"
+                                    disabled={enviandoManual}
+                                    onClick={() => void confirmarCierreManual(p.id)}
+                                    className="rounded bg-rose-700 px-2.5 py-1 font-medium text-white disabled:opacity-50"
+                                  >
+                                    {enviandoManual ? "Cerrando…" : "Confirmar cierre manual"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={enviandoManual}
+                                    onClick={() => setCierreManualPlanId(null)}
+                                    className="rounded border border-[var(--border)] px-2.5 py-1 text-[var(--text)]"
+                                  >
+                                    Cancelar
+                                  </button>
+                                </div>
+                              </div>
                             ) : null}
                             <p className="mt-1 text-xs">
                               {p.estado === "Programado"
