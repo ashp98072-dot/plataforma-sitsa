@@ -34,6 +34,12 @@ const paradaSchema = z.object({
   clienteUbicacionId: z.number().int().positive().optional(),
 });
 
+const personalSchema = z.object({
+  empleadoId: z.number().int().positive(),
+  rol: z.enum(["Piloto", "Auxiliar"]),
+  viaticoMonto: z.number().min(0).max(9999999999.99).nullable().optional(),
+});
+
 const schema = z.object({
   codigo: z.string().min(1).max(40).optional(),
   nombre: z.string().max(200).nullable().optional(),
@@ -41,9 +47,12 @@ const schema = z.object({
   lugarCargaTexto: z.string().max(300).nullable().optional(),
   destinoDescripcion: z.string().max(300).nullable().optional(),
   horaHabitual: z.string().max(20).nullable().optional(),
+  tarifaReferencia: z.number().min(0).max(9999999999.99).nullable().optional(),
+  costoOperativo: z.number().min(0).max(9999999999.99).nullable().optional(),
   contactoClienteId: z.number().int().positive().nullable().optional(),
   observaciones: z.string().max(300).nullable().optional(),
   paradas: z.array(paradaSchema).max(20).optional(),
+  personalPredeterminado: z.array(personalSchema).max(9).optional(),
   activo: z.boolean().optional(),
 });
 

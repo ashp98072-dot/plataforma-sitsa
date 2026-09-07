@@ -27,6 +27,13 @@ export type FilaRutaExcel = {
   horaExcel: string | null;
   contactoExcel: string;
   destinoExcel: string;
+  costoOperativoExcel: number | null;
+  tarifaReferenciaExcel: number | null;
+  pilotoCodigoExcel: string;
+  pilotoViaticoExcel: number | null;
+  auxiliaresCodigosExcel: string[];
+  auxiliaresViaticosExcel: (number | null)[];
+  erroresCamposExcel: string[];
 };
 
 const COL_CODIGO = 3; // C
@@ -35,6 +42,12 @@ const COL_LUGAR_CARGA = 5; // E
 const COL_HORA = 6; // F
 const COL_CONTACTO = 7; // G
 const COL_DESTINO = 8; // H
+const COL_COSTO_OPERATIVO = 9; // I
+const COL_TARIFA = 10; // J
+const COL_PILOTO = 11; // K
+const COL_VIATICO_PILOTO = 12; // L
+const COL_AUXILIARES = 13; // M
+const COL_VIATICOS_AUXILIARES = 14; // N
 const FILA_INICIO_DATOS = 2;
 
 export async function generarPlantillaRutas(): Promise<Buffer> {
@@ -49,7 +62,7 @@ export async function generarPlantillaRutas(): Promise<Buffer> {
   // ACTUALIZADA.xlsx: marcadores 1..6 en las columnas históricas C..H.
   // La fila 2 agrega los nombres de campo que el archivo original no tenía,
   // sin mover ni cambiar las columnas que consume el importador.
-  [1, 2, 3, 4, 5, 6].forEach((value, index) => {
+  [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].forEach((value, index) => {
     ws.getCell(1, COL_CODIGO + index).value = value;
   });
   ws.getRow(1).font = { name: "Calibri", size: 12, bold: true };
@@ -63,6 +76,12 @@ export async function generarPlantillaRutas(): Promise<Buffer> {
     "Hora habitual",
     "Contacto",
     "Destino / lugar de descarga",
+    "Costo operativo (Q)",
+    "Tarifario (Q)",
+    "Código piloto habitual",
+    "Viático piloto (Q)",
+    "Códigos auxiliares",
+    "Viáticos auxiliares (Q)",
   ];
   encabezados.forEach((value, index) => {
     ws.getCell(2, COL_CODIGO + index).value = value;
@@ -79,11 +98,20 @@ export async function generarPlantillaRutas(): Promise<Buffer> {
   ws.getColumn("F").width = 13;
   ws.getColumn("G").width = 24;
   ws.getColumn("H").width = 58;
+  ws.getColumn("I").width = 20;
+  ws.getColumn("J").width = 23;
+  ws.getColumn("K").width = 20;
+  ws.getColumn("L").width = 28;
+  ws.getColumn("M").width = 28;
+  ws.getColumn("N").width = 28;
   ws.getColumn("C").numFmt = "@";
   ws.getColumn("F").numFmt = "h:mm";
   ws.getCell("F1").numFmt = "General";
   ws.getCell("F2").numFmt = "General";
-  ws.autoFilter = { from: "C2", to: "H2000" };
+  ws.getColumn("I").numFmt = "Q#,##0.00";
+  ws.getColumn("J").numFmt = "Q#,##0.00";
+  ws.getColumn("L").numFmt = "Q#,##0.00";
+  ws.autoFilter = { from: "C2", to: "N2000" };
 
   // Ejemplo visible que el importador ignora expresamente. El usuario puede
   // conservarlo: solo debe empezar sus rutas en las filas siguientes.
@@ -95,6 +123,12 @@ export async function generarPlantillaRutas(): Promise<Buffer> {
     3 / 24,
     "Herbert Santiso",
     "BODEGAS DE CONRED, ZONA 13",
+    900,
+    1250,
+    "2653895771220",
+    150,
+    "1857985511603;3062587490311",
+    "75;75",
   ];
   ws.getRow(3).font = { name: "Calibri", size: 10, italic: true, color: { argb: "FF595959" } };
   ws.getRow(3).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF2CC" } };
@@ -138,6 +172,13 @@ export async function generarPlantillaRutas(): Promise<Buffer> {
     ["Hora habitual", "Hora usual de salida o carga. Ejemplos: 03:00, 08:30 o 14:00."],
     ["Contacto", "Nombre de la persona de contacto para coordinar la operación."],
     ["Destino / lugar de descarga", "Dirección o descripción completa del destino habitual."],
+    ["Costo operativo (Q)", "Costo interno estimado de realizar la ruta. Es opcional y no sustituye el tarifario comercial."],
+    ["Tarifario (Q)", "Precio comercial promedio o de referencia de la ruta. Es opcional y puede ajustarse al programar cada viaje."],
+    ["Código piloto habitual", "Código RRHH del piloto que normalmente cubre la ruta. Opcional."],
+    ["Viático piloto (Q)", "Monto habitual del viático para el piloto de esta ruta. Opcional."],
+    ["Códigos auxiliares", "Códigos RRHH de los auxiliares habituales separados por punto y coma (;). Máximo 8."],
+    ["Viáticos auxiliares (Q)", "Montos en el mismo orden que los códigos de auxiliares, separados por punto y coma (;)."],
+    ["Reimportación", "En una ruta existente, dejar tarifa/personal vacío significa CONSERVAR los defaults actuales. Para reemplazar personal, informe los códigos y marque Actualizar."],
     ["Fila 1: números 1 a 6", "Conserva la estructura del archivo PROGRAMACION AGOSTO 2026 ACTUALIZADA.xlsx y la posición histórica de cada dato."],
     ["Fila azul", "Muestra el nombre claro de cada campo. No la elimine ni mueva las columnas."],
     ["Fila amarilla", "Es únicamente un ejemplo y NO se importará. Empiece a ingresar sus rutas debajo de esa fila."],
@@ -152,6 +193,37 @@ export async function generarPlantillaRutas(): Promise<Buffer> {
   ayuda.getRow(12).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF2CC" } };
   ayuda.getRow(13).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFCE4D6" } };
   return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+function numeroOpcional(value: unknown, campo: string): { valor: number | null; error: string | null } {
+  if (value == null || value === "" || cellStr(value).trim() === "") return { valor: null, error: null };
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value >= 0
+      ? { valor: value, error: null }
+      : { valor: null, error: `${campo}: usa un número mayor o igual a cero.` };
+  }
+  const raw = cellStr(value).replace(/[Q,$\s]/g, "").replace(/,/g, "");
+  if (!raw) return { valor: null, error: `${campo}: monto inválido.` };
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0
+    ? { valor: parsed, error: null }
+    : { valor: null, error: `${campo}: usa un número mayor o igual a cero.` };
+}
+
+function listaTexto(value: unknown): string[] {
+  return cellStr(value).split(";").map((v) => v.trim()).filter(Boolean);
+}
+
+function listaMontos(value: unknown): { valores: (number | null)[]; errores: string[] } {
+  const raw = cellStr(value);
+  if (!raw.trim()) return { valores: [], errores: [] };
+  const errores: string[] = [];
+  const valores = raw.split(";").map((v, index) => {
+    const parsed = numeroOpcional(v, `Viático auxiliar ${index + 1}`);
+    if (parsed.error) errores.push(parsed.error);
+    return parsed.valor;
+  });
+  return { valores, errores };
 }
 
 /** trim + colapsar espacios + minúsculas — solo para comparar contra encabezados conocidos. */
@@ -249,6 +321,21 @@ export async function parsearExcelRutas(buffer: Buffer): Promise<FilaRutaExcel[]
     const horaExcel = normalizarHora(row.getCell(COL_HORA).value);
     const contactoExcel = cellStr(row.getCell(COL_CONTACTO).value);
     const destinoExcel = cellStr(row.getCell(COL_DESTINO).value);
+    const costoOperativo = numeroOpcional(row.getCell(COL_COSTO_OPERATIVO).value, "Costo operativo");
+    const tarifa = numeroOpcional(row.getCell(COL_TARIFA).value, "Tarifario");
+    const pilotoCodigoExcel = cellStr(row.getCell(COL_PILOTO).value);
+    const pilotoViatico = numeroOpcional(row.getCell(COL_VIATICO_PILOTO).value, "Viático del piloto");
+    const auxiliaresCodigosExcel = listaTexto(row.getCell(COL_AUXILIARES).value);
+    const auxiliaresViaticos = listaMontos(row.getCell(COL_VIATICOS_AUXILIARES).value);
+    const erroresCamposExcel = [costoOperativo.error, tarifa.error, pilotoViatico.error, ...auxiliaresViaticos.errores].filter(
+      (error): error is string => Boolean(error),
+    );
+    if (pilotoViatico.valor != null && !pilotoCodigoExcel.trim()) {
+      erroresCamposExcel.push("No puede informar viático de piloto sin código de piloto habitual.");
+    }
+    if (auxiliaresViaticos.valores.length && auxiliaresViaticos.valores.length !== auxiliaresCodigosExcel.length) {
+      erroresCamposExcel.push("La cantidad de viáticos debe coincidir con la cantidad de auxiliares.");
+    }
 
     const codigoTrim = codigoExcel.trim();
     if (!codigoTrim) continue;
@@ -266,6 +353,13 @@ export async function parsearExcelRutas(buffer: Buffer): Promise<FilaRutaExcel[]
       // recorta, no se separa por guiones, no se altera ninguna
       // abreviatura (punto 6 de VIAT-5).
       destinoExcel,
+      costoOperativoExcel: costoOperativo.valor,
+      tarifaReferenciaExcel: tarifa.valor,
+      pilotoCodigoExcel: pilotoCodigoExcel.trim(),
+      pilotoViaticoExcel: pilotoViatico.valor,
+      auxiliaresCodigosExcel,
+      auxiliaresViaticosExcel: auxiliaresViaticos.valores,
+      erroresCamposExcel,
     });
   }
   return filas;

@@ -10,10 +10,9 @@ import type { FilaRutaExcel } from "./rutas-import-excel";
  * `confirmarImportacionRutas` (escribe dentro de una transacción). NO
  * modifica el modelo/arquitectura de Rutas (tms_cliente_rutas,
  * tms_cliente_ubicaciones, tms_cliente_contactos) ni sus funciones ya
- * existentes en src/lib/tms/cliente-rutas.ts — este módulo es aditivo y
- * autónomo, con sus propias consultas conn-aware para la escritura
- * transaccional (cliente-rutas.ts usa el pool global, no una conexión de
- * transacción, y no se le tocó la firma para no alterar su arquitectura).
+ * existentes en src/lib/tms/cliente-rutas.ts. La confirmación mantiene sus
+ * propias consultas conn-aware y comparte el mismo criterio transaccional
+ * que las altas y ediciones manuales de rutas.
  *
  * NUNCA convierte el Destino en paradas estructuradas — se guarda tal
  * cual en destino_descripcion (punto 2/6). Nunca acepta empresa_id desde
@@ -32,6 +31,11 @@ import type { FilaRutaExcel } from "./rutas-import-excel";
 /** trim + colapsa espacios + minúsculas — SOLO para comparar, nunca para guardar. */
 function normalizar(s: string): string {
   return s.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/** Los códigos RRHH usan comparación no sensible a mayúsculas en la BD. */
+function normalizarCodigoEmpleado(codigo: string): string {
+  return codigo.trim().toLocaleLowerCase("es-GT");
 }
 
 /** Los códigos operativos del catálogo real son numéricos (confirmado). No es una regla de esquema, es una validación defensiva contra filas ajenas (p. ej. encabezados repetidos) que no se detecten por otra vía. */
@@ -57,6 +61,12 @@ export type PreviewFilaRuta = {
   horaExcel: string | null;
   contactoExcel: string;
   destinoExcel: string;
+  costoOperativoExcel: number | null;
+  tarifaReferenciaExcel: number | null;
+  pilotoCodigoExcel: string;
+  pilotoViaticoExcel: number | null;
+  auxiliaresCodigosExcel: string[];
+  auxiliaresViaticosExcel: (number | null)[];
   estado: EstadoFilaRuta;
   detalle: string;
   /** Cliente ya resuelto (match exacto). Para cliente_ambiguo/cliente_nuevo queda null aquí -- la resolución vive en el grupo (ver GrupoClientePendiente), no por fila. */
@@ -120,7 +130,7 @@ export async function previsualizarImportacionRutas(
   clientesPorResolver: GrupoClientePendiente[];
   erroresDetalle: string[];
 }> {
-  const [clientes, ubicaciones, contactos, rutasExistentes] = await Promise.all([
+  const [clientes, ubicaciones, contactos, rutasExistentes, empleados] = await Promise.all([
     query<RowDataPacket[]>("SELECT id, nombre FROM tms_clientes WHERE empresa_id = ?", [empresaId]),
     query<RowDataPacket[]>(
       "SELECT id, cliente_id, nombre FROM tms_cliente_ubicaciones WHERE empresa_id = ? AND activo = 1",
@@ -131,7 +141,10 @@ export async function previsualizarImportacionRutas(
       [empresaId],
     ),
     query<RowDataPacket[]>("SELECT id, codigo, cliente_id FROM tms_cliente_rutas WHERE empresa_id = ?", [empresaId]),
+    query<RowDataPacket[]>("SELECT id, codigo, nombre, estado FROM empleados WHERE empresa_id = ?", [empresaId]),
   ]);
+
+  const empleadosPorCodigo = new Map(empleados.map((e) => [normalizarCodigoEmpleado(String(e.codigo)), e]));
 
   const clientesPorNombreExacto = new Map<string, CandidatoCliente>();
   const clientesLista: CandidatoCliente[] = clientes.map((c) => ({ id: Number(c.id), nombre: String(c.nombre) }));
@@ -166,6 +179,36 @@ export async function previsualizarImportacionRutas(
   for (const f of filas) {
     const identidad = identidadRutaImport({ codigo: f.codigoExcel, cliente: f.clienteExcel });
     const normClienteSiempre = f.clienteExcel ? normalizar(f.clienteExcel) : "";
+
+    if (f.erroresCamposExcel.length) {
+      const detalle = f.erroresCamposExcel.join(" ");
+      erroresDetalle.push(formatoErrorImport({ filaExcel: f.filaExcel, identidad, detalle }));
+      resultado.push(filaBase(f, normClienteSiempre, "error", detalle));
+      continue;
+    }
+    const codigosPersonal = [f.pilotoCodigoExcel, ...f.auxiliaresCodigosExcel]
+      .filter(Boolean)
+      .map(normalizarCodigoEmpleado);
+    const personalInvalido = codigosPersonal.find((codigo) => {
+      const empleado = empleadosPorCodigo.get(codigo);
+      return !empleado || String(empleado.estado).toLowerCase() !== "activo";
+    });
+    if (f.tarifaReferenciaExcel != null && f.tarifaReferenciaExcel < 0) {
+      const detalle = "La tarifa de referencia no puede ser negativa.";
+      erroresDetalle.push(formatoErrorImport({ filaExcel: f.filaExcel, identidad, detalle }));
+      resultado.push(filaBase(f, normClienteSiempre, "error", detalle));
+      continue;
+    }
+    if (f.auxiliaresCodigosExcel.length > 8 || new Set(codigosPersonal).size !== codigosPersonal.length || personalInvalido) {
+      const detalle = personalInvalido
+        ? `El empleado con código ${personalInvalido} no existe, está inactivo o pertenece a otra empresa.`
+        : f.auxiliaresCodigosExcel.length > 8
+          ? "Una ruta admite como máximo 8 auxiliares habituales."
+          : "Hay códigos de empleados repetidos en el personal habitual.";
+      erroresDetalle.push(formatoErrorImport({ filaExcel: f.filaExcel, identidad, detalle }));
+      resultado.push(filaBase(f, normClienteSiempre, "error", detalle));
+      continue;
+    }
 
     if (!f.codigoExcel) {
       const detalle = "Falta código — no se importará.";
@@ -285,6 +328,12 @@ export async function previsualizarImportacionRutas(
       horaExcel: f.horaExcel,
       contactoExcel: f.contactoExcel,
       destinoExcel: f.destinoExcel,
+      costoOperativoExcel: f.costoOperativoExcel,
+      tarifaReferenciaExcel: f.tarifaReferenciaExcel,
+      pilotoCodigoExcel: f.pilotoCodigoExcel,
+      pilotoViaticoExcel: f.pilotoViaticoExcel,
+      auxiliaresCodigosExcel: f.auxiliaresCodigosExcel,
+      auxiliaresViaticosExcel: f.auxiliaresViaticosExcel,
       estado,
       detalle,
       clienteId,
@@ -327,6 +376,12 @@ function filaBase(f: FilaRutaExcel, normCliente: string, estado: EstadoFilaRuta,
     horaExcel: f.horaExcel,
     contactoExcel: f.contactoExcel,
     destinoExcel: f.destinoExcel,
+    costoOperativoExcel: f.costoOperativoExcel,
+    tarifaReferenciaExcel: f.tarifaReferenciaExcel,
+    pilotoCodigoExcel: f.pilotoCodigoExcel,
+    pilotoViaticoExcel: f.pilotoViaticoExcel,
+    auxiliaresCodigosExcel: f.auxiliaresCodigosExcel,
+    auxiliaresViaticosExcel: f.auxiliaresViaticosExcel,
     estado,
     detalle,
     clienteId: null,
@@ -420,7 +475,7 @@ export async function confirmarImportacionRutas(
     // prometía limpias y terminaban en error. Los mapas se actualizan en
     // cada iteración tras un INSERT para no duplicar dentro del mismo
     // archivo cuando dos filas comparten cliente/ubicación/contacto nuevo.
-    const [clientesRows, ubicacionesRows, contactosRows, rutasExistentesRows] = await Promise.all([
+    const [clientesRows, ubicacionesRows, contactosRows, rutasExistentesRows, empleadosRows] = await Promise.all([
       conn.query<RowDataPacket[]>("SELECT id, nombre FROM tms_clientes WHERE empresa_id = ?", [empresaId]),
       conn.query<RowDataPacket[]>(
         "SELECT id, cliente_id, nombre FROM tms_cliente_ubicaciones WHERE empresa_id = ? AND activo = 1",
@@ -433,7 +488,14 @@ export async function confirmarImportacionRutas(
       conn.query<RowDataPacket[]>("SELECT id, codigo, cliente_id FROM tms_cliente_rutas WHERE empresa_id = ?", [
         empresaId,
       ]),
+      conn.query<RowDataPacket[]>("SELECT id, codigo, estado FROM empleados WHERE empresa_id = ?", [empresaId]),
     ]);
+
+    const empleadosPorCodigo = new Map(
+      empleadosRows[0]
+        .filter((e) => String(e.estado).toLowerCase() === "activo")
+        .map((e) => [normalizarCodigoEmpleado(String(e.codigo)), Number(e.id)]),
+    );
 
     // clientesPorEmpresa: única fuente de verdad de "qué cliente pertenece
     // a esta empresa" — un clienteIdElegido que no aparezca aquí (de otra
@@ -476,6 +538,37 @@ export async function confirmarImportacionRutas(
 
     for (const f of filas) {
       const identidad = identidadRutaImport({ codigo: f.codigoExcel, cliente: f.clienteExcel });
+
+      if (f.erroresCamposExcel.length) {
+        resultado.errores++;
+        resultado.erroresDetalle.push(formatoErrorImport({
+          filaExcel: f.filaExcel,
+          identidad,
+          detalle: f.erroresCamposExcel.join(" "),
+        }));
+        continue;
+      }
+      const codigosPersonal = [f.pilotoCodigoExcel, ...f.auxiliaresCodigosExcel]
+        .filter(Boolean)
+        .map(normalizarCodigoEmpleado);
+      const personalInvalido = codigosPersonal.find((codigo) => !empleadosPorCodigo.has(codigo));
+      if (
+        (f.tarifaReferenciaExcel != null && f.tarifaReferenciaExcel < 0) ||
+        (f.costoOperativoExcel != null && f.costoOperativoExcel < 0) ||
+        f.auxiliaresCodigosExcel.length > 8 ||
+        new Set(codigosPersonal).size !== codigosPersonal.length ||
+        personalInvalido
+      ) {
+        resultado.errores++;
+        resultado.erroresDetalle.push(formatoErrorImport({
+          filaExcel: f.filaExcel,
+          identidad,
+          detalle: personalInvalido
+            ? `El empleado con código ${personalInvalido} no está disponible en esta empresa.`
+            : "Tarifa o personal habitual inválido.",
+        }));
+        continue;
+      }
 
       if (!f.codigoExcel || !f.clienteExcel) {
         resultado.errores++;
@@ -560,6 +653,13 @@ export async function confirmarImportacionRutas(
       const rutaExistente = rutasPorCodigo.get(f.codigoExcel) ?? null;
       const rutaExistenteId = rutaExistente?.id ?? null;
 
+      // Idempotencia: una ruta existente sin decisión explícita de
+      // actualizar se omite ANTES de crear ubicaciones o contactos.
+      if (rutaExistenteId && !decision?.actualizarExistente) {
+        resultado.omitidas++;
+        continue;
+      }
+
       // Protección contra reasignación silenciosa: si el código ya existe
       // y el cliente resuelto difiere del dueño actual de la ruta, exigir
       // confirmación explícita ANTES de tocar cliente_id. Nunca se infiere.
@@ -622,14 +722,11 @@ export async function confirmarImportacionRutas(
       const destinoDescripcion = f.destinoExcel || null;
 
       if (rutaExistenteId) {
-        if (!decision?.actualizarExistente) {
-          resultado.omitidas++;
-          continue; // default: omitir (punto 8)
-        }
         await conn.execute(
           `UPDATE tms_cliente_rutas
            SET cliente_id = ?, ubicacion_carga_id = ?, lugar_carga_texto = ?, destino_descripcion = ?,
-               hora_habitual = ?, contacto_cliente_id = ?
+               hora_habitual = ?, contacto_cliente_id = ?, costo_operativo = COALESCE(?, costo_operativo),
+               tarifa_referencia = COALESCE(?, tarifa_referencia)
            WHERE id = ? AND empresa_id = ?`,
           [
             clienteId,
@@ -638,16 +735,40 @@ export async function confirmarImportacionRutas(
             destinoDescripcion,
             horaHabitual,
             contactoClienteId,
+            f.costoOperativoExcel,
+            f.tarifaReferenciaExcel,
             rutaExistenteId,
             empresaId,
           ],
         );
+        if (codigosPersonal.length) {
+          await conn.execute("DELETE FROM tms_cliente_ruta_personal WHERE empresa_id = ? AND ruta_id = ?", [
+            empresaId,
+            rutaExistenteId,
+          ]);
+          const personal = [
+            ...(f.pilotoCodigoExcel ? [{ codigo: f.pilotoCodigoExcel, rol: "Piloto", monto: f.pilotoViaticoExcel }] : []),
+            ...f.auxiliaresCodigosExcel.map((codigo, index) => ({
+              codigo,
+              rol: "Auxiliar",
+              monto: f.auxiliaresViaticosExcel[index] ?? null,
+            })),
+          ];
+          for (const [index, persona] of personal.entries()) {
+            await conn.execute(
+              `INSERT INTO tms_cliente_ruta_personal
+                (empresa_id, ruta_id, empleado_id, rol, orden, viatico_monto)
+               VALUES (?, ?, ?, ?, ?, ?)`,
+              [empresaId, rutaExistenteId, empleadosPorCodigo.get(normalizarCodigoEmpleado(persona.codigo))!, persona.rol, index + 1, persona.monto],
+            );
+          }
+        }
         resultado.actualizadas++;
       } else {
         const [rRuta] = await conn.execute<import("mysql2/promise").ResultSetHeader>(
           `INSERT INTO tms_cliente_rutas
-            (empresa_id, cliente_id, codigo, ubicacion_carga_id, lugar_carga_texto, destino_descripcion, hora_habitual, contacto_cliente_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            (empresa_id, cliente_id, codigo, ubicacion_carga_id, lugar_carga_texto, destino_descripcion, hora_habitual, contacto_cliente_id, costo_operativo, tarifa_referencia)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             empresaId,
             clienteId,
@@ -657,10 +778,31 @@ export async function confirmarImportacionRutas(
             destinoDescripcion,
             horaHabitual,
             contactoClienteId,
+            f.costoOperativoExcel,
+            f.tarifaReferenciaExcel,
           ],
         );
+        const rutaId = Number(rRuta.insertId);
+        if (codigosPersonal.length) {
+          const personal = [
+            ...(f.pilotoCodigoExcel ? [{ codigo: f.pilotoCodigoExcel, rol: "Piloto", monto: f.pilotoViaticoExcel }] : []),
+            ...f.auxiliaresCodigosExcel.map((codigo, index) => ({
+              codigo,
+              rol: "Auxiliar",
+              monto: f.auxiliaresViaticosExcel[index] ?? null,
+            })),
+          ];
+          for (const [index, persona] of personal.entries()) {
+            await conn.execute(
+              `INSERT INTO tms_cliente_ruta_personal
+                (empresa_id, ruta_id, empleado_id, rol, orden, viatico_monto)
+               VALUES (?, ?, ?, ?, ?, ?)`,
+              [empresaId, rutaId, empleadosPorCodigo.get(normalizarCodigoEmpleado(persona.codigo))!, persona.rol, index + 1, persona.monto],
+            );
+          }
+        }
         // evita reprocesar/duplicar el mismo código si se repitiera por error de datos
-        rutasPorCodigo.set(f.codigoExcel, { id: Number(rRuta.insertId), clienteId });
+        rutasPorCodigo.set(f.codigoExcel, { id: rutaId, clienteId });
         resultado.creadas++;
       }
     }

@@ -94,6 +94,7 @@ CREATE TABLE IF NOT EXISTS empleados (
   -- deriva de puesto/categoria_ops/rol.
   horas_extra_habilitado TINYINT(1) NOT NULL DEFAULT 0,
   UNIQUE KEY uq_emp_empresa_codigo (empresa_id, codigo),
+  UNIQUE KEY uq_ruta_personal_empresa_id (empresa_id, id),
   CONSTRAINT fk_emp_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -787,6 +788,8 @@ CREATE TABLE IF NOT EXISTS tms_cliente_rutas (
   -- estructuradas con orden, que se mantienen en paralelo).
   destino_descripcion VARCHAR(300) NULL,
   hora_habitual VARCHAR(20) NULL,
+  tarifa_referencia DECIMAL(12,2) NULL DEFAULT NULL,
+  costo_operativo DECIMAL(12,2) NULL DEFAULT NULL,
   contacto_cliente_id INT NULL,
   observaciones VARCHAR(300) NULL,
   activo TINYINT(1) NOT NULL DEFAULT 1,
@@ -796,10 +799,33 @@ CREATE TABLE IF NOT EXISTS tms_cliente_rutas (
   -- Excel real: 147 códigos, 147 únicos, funciona como identificador
   -- global del catálogo.
   UNIQUE KEY uq_tmsclirutas_codigo (empresa_id, codigo),
+  UNIQUE KEY uq_ruta_personal_empresa_id (empresa_id, id),
   INDEX idx_tmsclirutas_cliente (empresa_id, cliente_id, activo),
   INDEX idx_tmsclirutas_codigo (empresa_id, codigo),
   CONSTRAINT fk_tmsclirutas_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
   CONSTRAINT fk_tmsclirutas_cliente FOREIGN KEY (cliente_id) REFERENCES tms_clientes(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Personal y viáticos sugeridos por ruta. Programación copia estos
+-- valores al viaje; editar la plantilla no modifica viajes existentes.
+CREATE TABLE IF NOT EXISTS tms_cliente_ruta_personal (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  ruta_id INT NOT NULL,
+  empleado_id INT NOT NULL,
+  rol VARCHAR(20) NOT NULL,
+  orden TINYINT UNSIGNED NOT NULL DEFAULT 1,
+  viatico_monto DECIMAL(12,2) NULL DEFAULT NULL,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_ruta_personal_empleado (ruta_id, empleado_id),
+  UNIQUE KEY uq_ruta_personal_orden (ruta_id, rol, orden),
+  INDEX idx_ruta_personal_empresa (empresa_id, ruta_id, rol, orden),
+  INDEX idx_ruta_personal_empleado (empresa_id, empleado_id),
+  CONSTRAINT fk_ruta_personal_ruta_ambito FOREIGN KEY (empresa_id, ruta_id)
+    REFERENCES tms_cliente_rutas (empresa_id, id) ON DELETE CASCADE,
+  CONSTRAINT fk_ruta_personal_empleado_ambito FOREIGN KEY (empresa_id, empleado_id)
+    REFERENCES empleados (empresa_id, id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS tms_cliente_ruta_paradas (

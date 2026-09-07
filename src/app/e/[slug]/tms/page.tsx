@@ -601,7 +601,7 @@ export default function TmsPage() {
                             className="text-[var(--accent)] hover:underline"
                             onClick={() => setExpandido((cur) => (cur === p.id ? null : p.id))}
                           >
-                            {expandido === p.id ? "Cerrar" : "Detalle"}
+                            {expandido === p.id ? "Ocultar detalle" : "Ver detalle"}
                           </button>
                           <Link href={`/e/${slug}/programacion?plan=${p.id}`} className="text-[var(--accent)] hover:underline">
                             Ver en Programación

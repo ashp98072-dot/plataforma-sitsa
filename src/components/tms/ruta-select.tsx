@@ -20,11 +20,19 @@ export type RutaOpt = {
   lugarCargaTexto: string | null;
   destinoDescripcion: string | null;
   horaHabitual: string | null;
+  tarifaReferencia: number | null;
   contactoClienteId: number | null;
   contactoNombre: string | null;
   contactoCargo: string | null;
   contactoTelefono: string | null;
   paradas: RutaParadaOpt[];
+  personalPredeterminado: {
+    empleadoId: number;
+    empleadoNombre: string;
+    rol: "Piloto" | "Auxiliar";
+    orden: number;
+    viaticoMonto: number | null;
+  }[];
 };
 
 type Props = {
@@ -179,6 +187,7 @@ export function RutaSelect({ slug, clienteId, value, inputClassName, onSeleccion
                   {r.lugarCargaTexto || "Sin carga configurada"}
                   {r.horaHabitual ? ` · ${r.horaHabitual}` : ""}
                   {r.destinoDescripcion ? ` → ${r.destinoDescripcion}` : ""}
+                  {r.tarifaReferencia != null ? ` · tarifa Q${r.tarifaReferencia.toFixed(2)}` : ""}
                 </span>
               </button>
             </li>
