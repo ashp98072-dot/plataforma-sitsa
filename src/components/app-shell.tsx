@@ -352,6 +352,33 @@ export function AppShell({
         key: "rutas",
       });
     }
+    // Gastos operativos y solicitudes de fondo (TMS-GASTOS-REPORTES-1):
+    // mismo criterio que Rutas arriba — permiso propio "gastos:ver" O
+    // "tms:ver" (requireTenantGastos en tenant.ts), exige TMS habilitado.
+    const puedeGastos =
+      rol !== "Piloto" &&
+      (isAdmin ||
+        (opsMods.includes("tms") &&
+          (permisos.length === 0 ||
+            tienePermiso(permisos, "gastos", "ver") ||
+            tienePermiso(permisos, "tms", "ver"))));
+    if (puedeGastos) {
+      opsLinks.push({
+        href: `${base}/gastos`,
+        label: "Gastos operativos",
+        key: "gastos",
+      });
+      opsLinks.push({
+        href: `${base}/fondos`,
+        label: "Solicitudes de fondo",
+        key: "fondos",
+      });
+      opsLinks.push({
+        href: `${base}/reportes/gastos`,
+        label: "Reportes de gastos",
+        key: "reportes-gastos",
+      });
+    }
     // Multas y sanciones (MULTAS-2/3): permiso propio "multas", exige TMS
     // habilitado (requireTenantMultas). Mismo criterio que Rutas arriba —
     // SOLO permisos efectivos, nunca un bypass por rol (sección 21 del
