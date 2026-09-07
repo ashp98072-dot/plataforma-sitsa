@@ -194,13 +194,22 @@ it("fallo de auditoría revierte el borrado y la desvinculación", async () => {
 });
 it("multas de pruebas borra documentos, descuento y revisión en orden RESTRICT", async () => {
   filas.ops_multas = [{ id: 30, empresa_id: 7, estado_pago: "PAGADA", rrhh_descuento_id: 10 }];
-  filas.ops_multa_documentos = [{ id: 31, empresa_id: 7, multa_id: 30 }];
+  filas.ops_multa_documentos = [{ id: 31, empresa_id: 7, multa_id: 30, ruta_relativa: "empresas/7/multas/31/boleta.jpg" }];
   filas.ops_multas_revisiones = [{ id: 32, empresa_id: 7 }];
   const out = await limpiarMultasPrueba(conn as unknown as PoolConnection, 7);
-  expect(Object.keys(out)).toEqual(["ops_multa_documentos", "rrhh_descuento_cuotas", "rrhh_descuento_abonos", "ops_multas", "rrhh_descuentos_maestro", "ops_multas_revisiones"]);
+  expect(Object.keys(out.conteos)).toEqual(["ops_multa_documentos", "rrhh_descuento_cuotas", "rrhh_descuento_abonos", "ops_multas", "rrhh_descuentos_maestro", "ops_multas_revisiones"]);
   const cuotaRead = conn.query.mock.calls.find(([s]) => String(s).startsWith("SELECT * FROM `rrhh_descuento_cuotas`"))!;
   expect(cuotaRead[0]).toContain("descuento_id IN (SELECT rrhh_descuento_id FROM ops_multas WHERE empresa_id = ?)");
   expect(borradas().some(([s]) => String(s).includes("flota_vehiculos"))).toBe(false);
+  // ADMIN-LIMPIAR-ARCHIVOS-FISICOS: la ruta del documento se recolecta
+  // para borrarse DESPUÉS del commit (nunca aquí) — ver limpiarModuloEmpresa.
+  expect(out.archivos).toEqual(new Set(["empresas/7/multas/31/boleta.jpg"]));
+});
+
+it("multas de pruebas sin documentos con archivo -> archivos vacío (nunca se inventa una ruta)", async () => {
+  filas.ops_multas = [{ id: 30, empresa_id: 7, estado_pago: "PAGADA" }];
+  const out = await limpiarMultasPrueba(conn as unknown as PoolConnection, 7);
+  expect(out.archivos.size).toBe(0);
 });
 it("fallo al borrar multas revierte también documentos y cuotas anteriores", async () => {
   filas.ops_multas = [{ id: 30, empresa_id: 7 }];

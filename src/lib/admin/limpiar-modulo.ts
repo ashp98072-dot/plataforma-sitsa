@@ -228,8 +228,28 @@ export async function contarModuloEmpresa(
         return { rutas: await count("tms_cliente_rutas"), paradas_maestras: await count("tms_cliente_ruta_paradas") };
       case "operaciones_multas":
         return { multas_no_anuladas: await count("ops_multas", "empresa_id = ? AND estado <> 'ANULADA'") };
-      case "pruebas_multas":
-        return { multas: await count("ops_multas"), revisiones: await count("ops_multas_revisiones"), descuentos_vinculados: await count("rrhh_descuentos_maestro", "id IN (SELECT rrhh_descuento_id FROM ops_multas WHERE empresa_id = ?)") };
+      case "pruebas_multas": {
+        // ADMIN-LIMPIAR-ARCHIVOS-FISICOS — conteo completo por tabla
+        // (antes faltaban documentos/cuotas/abonos) + cantidad de
+        // archivos físicos únicos que quedarían identificados para
+        // borrado, mismo criterio que pruebas_reinicio_completo arriba.
+        const descuentoSub = "id IN (SELECT rrhh_descuento_id FROM ops_multas WHERE empresa_id = ?)";
+        const cuotasSub = "descuento_id IN (SELECT rrhh_descuento_id FROM ops_multas WHERE empresa_id = ?)";
+        return {
+          multas: await count("ops_multas"),
+          revisiones: await count("ops_multas_revisiones"),
+          documentos: await count("ops_multa_documentos", "multa_id IN (SELECT id FROM ops_multas WHERE empresa_id = ?)"),
+          descuentos_vinculados: await count("rrhh_descuentos_maestro", descuentoSub),
+          cuotas_vinculadas: await count("rrhh_descuento_cuotas", cuotasSub),
+          abonos_vinculados: await count("rrhh_descuento_abonos", cuotasSub),
+          archivos_fisicos_unicos: await count(
+            "ops_multa_documentos",
+            "multa_id IN (SELECT id FROM ops_multas WHERE empresa_id = ?) AND ruta_relativa IS NOT NULL AND ruta_relativa <> ''",
+          ),
+          // Referencia: módulos compartidos que este modo NUNCA toca.
+          empleados_no_se_borran: await count("empleados"),
+        };
+      }
       case "operaciones_accesos":
         return { accesos_activos: await count("proveedor_portales", "empresa_id = ? AND activo = 1") };
       case "facturacion_clientes":
@@ -800,7 +820,7 @@ export async function limpiarModuloEmpresa(opts: {
 }): Promise<{
   afectados: Record<string, number>;
   restantes: Record<string, number>;
-  /** ADMIN-LIMPIAR-ARCHIVOS-FISICOS — solo presente para "pruebas_reinicio_completo"; undefined en cualquier otro módulo (sin cambio de contrato para ellos). */
+  /** ADMIN-LIMPIAR-ARCHIVOS-FISICOS — presente para "pruebas_reinicio_completo" y "pruebas_multas" (documentos de multa); undefined en cualquier otro módulo (sin cambio de contrato para ellos). */
   archivos?: ResultadoArchivosFisicos;
 }> {
   const pool = getPool();
@@ -809,7 +829,8 @@ export async function limpiarModuloEmpresa(opts: {
   let restantes: Record<string, number> = {};
   // ADMIN-LIMPIAR-ARCHIVOS-FISICOS — rutas recolectadas DENTRO de la
   // transacción (nunca se borra nada aquí todavía); solo se usa después
-  // del commit, y solo para el módulo que hoy tiene UI/preview para ello.
+  // del commit, y solo para los módulos que hoy tienen archivos físicos
+  // propios (pruebas_reinicio_completo, pruebas_multas).
   let archivosDetectados: Set<string> = new Set();
   try {
     await conn.beginTransaction();
@@ -859,9 +880,12 @@ export async function limpiarModuloEmpresa(opts: {
       case "pruebas_viaticos":
         afectados = (await limpiarViaticos(conn, opts.empresaId, true)).conteos;
         break;
-      case "pruebas_multas":
-        afectados = await limpiarMultasPrueba(conn, opts.empresaId);
+      case "pruebas_multas": {
+        const r = await limpiarMultasPrueba(conn, opts.empresaId);
+        afectados = r.conteos;
+        archivosDetectados = r.archivos;
         break;
+      }
       case "operaciones_viaticos":
         afectados = (await limpiarViaticos(conn, opts.empresaId)).conteos;
         break;
@@ -943,7 +967,7 @@ export async function limpiarModuloEmpresa(opts: {
   // advertencias para que el administrador lo resuelva manualmente; la
   // limpieza de BD ya ocurrió y quedó comprometida.
   let archivos: ResultadoArchivosFisicos | undefined;
-  if (opts.modulo === "pruebas_reinicio_completo") {
+  if (opts.modulo === "pruebas_reinicio_completo" || opts.modulo === "pruebas_multas") {
     archivos = await borrarArchivosFisicos(opts.empresaId, archivosDetectados);
   }
 

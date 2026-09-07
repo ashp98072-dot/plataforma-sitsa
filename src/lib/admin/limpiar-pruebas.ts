@@ -1,7 +1,7 @@
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { getPool } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
-import { borrarGrupos, leer, LimpiezaBloqueada } from "./limpiar-operaciones";
+import { borrarGrupos, leer, LimpiezaBloqueada, recolectarRutasArchivo, type ResultadoLimpiezaConArchivos } from "./limpiar-operaciones";
 
 export function protegerCuotasPlanilla(filas: Record<string, unknown>[]) {
   if (filas.some((f) => f.planilla_periodo_id != null)) {
@@ -78,8 +78,20 @@ export async function limpiarClientesPrueba(conn: PoolConnection, empresaId: num
   return borrarGrupos(conn, [perfiles, ...dependencias, usuariosPortal, clientes, tms]);
 }
 
-/** Solo desde módulos PRUEBAS, protegidos por Admin y confirmación del módulo. */
-export async function limpiarMultasPrueba(conn: PoolConnection, empresaId: number) {
+/**
+ * Solo desde módulos PRUEBAS, protegidos por Admin y confirmación del
+ * módulo.
+ *
+ * ADMIN-LIMPIAR-ARCHIVOS-FISICOS (ajuste): antes esta limpieza dejaba los
+ * archivos físicos de ops_multa_documentos.ruta_relativa huérfanos en
+ * disco (se borraba solo el registro de BD). Ahora recolecta esas rutas
+ * ANTES de borrar (recolectarRutasArchivo, mismo criterio que
+ * limpiarViaticos()/limpiarViajesConjuntos() en limpiar-operaciones.ts) y
+ * las devuelve para que el caller (limpiarModuloEmpresa) las borre
+ * DESPUÉS del commit — nunca aquí, el filesystem no participa de la
+ * transacción MySQL.
+ */
+export async function limpiarMultasPrueba(conn: PoolConnection, empresaId: number): Promise<ResultadoLimpiezaConArchivos> {
   const revisiones = await leer(conn, "ops_multas_revisiones", "empresa_id = ?", empresaId);
   const multas = await leer(conn, "ops_multas", "empresa_id = ?", empresaId);
   const documentos = await leer(conn, "ops_multa_documentos", "multa_id IN (SELECT id FROM ops_multas WHERE empresa_id = ?)", empresaId);
@@ -89,8 +101,10 @@ export async function limpiarMultasPrueba(conn: PoolConnection, empresaId: numbe
   const cuotas = await leer(conn, "rrhh_descuento_cuotas", cuotasWhere, empresaId);
   const abonos = await leer(conn, "rrhh_descuento_abonos", cuotasWhere, empresaId);
   protegerCuotasPlanilla(cuotas.filas);
-  // Multas antes del maestro por FK RESTRICT. Se conservan auditoría y archivos físicos.
-  return borrarGrupos(conn, [documentos, cuotas, abonos, multas, descuentos, revisiones]);
+  const archivos = recolectarRutasArchivo([documentos]);
+  // Multas antes del maestro por FK RESTRICT. Se conserva auditoría.
+  const conteos = await borrarGrupos(conn, [documentos, cuotas, abonos, multas, descuentos, revisiones]);
+  return { conteos, archivos };
 }
 
 /** Borrado temporal individual: no toca planillas ni elimina la multa de origen. */

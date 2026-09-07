@@ -10,7 +10,7 @@ import { listarViaticosControl } from "@/lib/tms/viaticos";
 import { listarFirmasViatico } from "@/lib/firmas/firmas-lectura";
 import { query } from "@/lib/db";
 import { existsSync, readFileSync } from "fs";
-import { agruparPorFirmante, comprobanteAutorizacionesPdf, tituloEmpresa } from "./viaticos-comprobante-pdf";
+import { agruparPorFirmante, comprobanteAutorizacionesPdf, fechaLargaEsGt, tituloEmpresa } from "./viaticos-comprobante-pdf";
 
 const VIATICO_BASE = {
   id: 1,
@@ -68,6 +68,9 @@ const FIRMA_BASE = {
 beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(existsSync).mockReturnValue(false);
+  // Default seguro: ningún username/imagen encontrado. Los tests que
+  // necesitan una fila real (imagen_ruta o username) lo sobreescriben.
+  vi.mocked(query).mockResolvedValue([] as never);
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -83,6 +86,37 @@ describe("tituloEmpresa", () => {
   it("nombre de empresa SIN '/' se devuelve sin cambios (no afecta a otras empresas)", () => {
     expect(tituloEmpresa("PriceSmart")).toBe("PriceSmart");
     expect(tituloEmpresa("SITSA")).toBe("SITSA");
+  });
+});
+
+describe("fechaLargaEsGt", () => {
+  it("formatea en español, locale es-GT: 'D de mes de AAAA, H:MM'", () => {
+    expect(fechaLargaEsGt("2026-09-03 18:47:26")).toBe("3 de septiembre de 2026, 18:47");
+  });
+
+  it("hora de un solo dígito no se rellena con cero (8:05, no 08:05)", () => {
+    expect(fechaLargaEsGt("2026-01-05 08:05:00")).toBe("5 de enero de 2026, 8:05");
+  });
+
+  it("acepta el formato real de MySQL vía mysql2 (String(Date) con zona) — construido con Date real para no depender de la zona horaria de la máquina que corre el test", () => {
+    // mapFirmaViatico() guarda fechaHoraServidor como String(dateObj); acá
+    // se reproduce ese mismo round-trip (Date -> string -> fechaLargaEsGt)
+    // en vez de un string con offset fijo, que solo sería correcto en una
+    // máquina con esa misma zona horaria.
+    const dateObj = new Date(2026, 8, 3, 18, 47, 26);
+    expect(fechaLargaEsGt(String(dateObj))).toBe("3 de septiembre de 2026, 18:47");
+  });
+
+  it("nunca en inglés (Sep 03 2026) ni en formatos ambiguos (09/03/2026, 2026-09-03)", () => {
+    const resultado = fechaLargaEsGt("2026-09-03 18:47:26");
+    expect(resultado).not.toContain("Sep");
+    expect(resultado).not.toMatch(/^\d{2}\/\d{2}\/\d{4}/);
+    expect(resultado).not.toMatch(/^\d{4}-\d{2}-\d{2}/);
+  });
+
+  it("valor nulo/vacío -> '—' (nunca revienta)", () => {
+    expect(fechaLargaEsGt(null)).toBe("—");
+    expect(fechaLargaEsGt(undefined)).toBe("—");
   });
 });
 
@@ -148,11 +182,35 @@ describe("comprobanteAutorizacionesPdf", () => {
   it("genera un PDF válido (empieza con %PDF) con un viático autorizado y firma sin imagen", async () => {
     vi.mocked(listarViaticosControl).mockResolvedValue({ items: [VIATICO_BASE], resumen: {} as never });
     vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]);
+    vi.mocked(query).mockResolvedValue([{ id: 9, username: "hsitan" }] as never);
     const buf = await comprobanteAutorizacionesPdf(7, "Kuiqtrans / Logiservicios Mónaco");
     expect(buf).not.toBeNull();
     expect(buf!.subarray(0, 4).toString("latin1")).toBe("%PDF");
     expect(listarFirmasViatico).toHaveBeenCalledWith(7, 1);
-    expect(query).not.toHaveBeenCalled(); // sin tieneImagen, no se consulta imagen_ruta
+    // Sin tieneImagen no se consulta imagen_ruta — pero SÍ se consulta el
+    // username del firmante (ajuste de formato), en un único SELECT.
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query).not.toHaveBeenCalledWith(expect.stringContaining("imagen_ruta"), expect.anything());
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("FROM usuarios"), [9]);
+  });
+
+  it("sin ningún firmante con usuarioId, no consulta la tabla usuarios", async () => {
+    vi.mocked(listarViaticosControl).mockResolvedValue({ items: [VIATICO_BASE], resumen: {} as never });
+    vi.mocked(listarFirmasViatico).mockResolvedValue([{ ...FIRMA_BASE, usuarioId: null }]);
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA");
+    expect(buf).not.toBeNull();
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("username de 2 firmas del MISMO usuarioId se consulta en un solo SELECT (no uno por firma)", async () => {
+    const v2 = { ...VIATICO_BASE, id: 2, planCodigo: "VJ-002" };
+    vi.mocked(listarViaticosControl).mockResolvedValue({ items: [VIATICO_BASE, v2], resumen: {} as never });
+    vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]); // mismo usuarioId=9 para ambos viáticos
+    vi.mocked(query).mockResolvedValue([{ id: 9, username: "hsitan" }] as never);
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA");
+    expect(buf).not.toBeNull();
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("FROM usuarios"), [9]);
   });
 
   it("consulta la imagen de la firma acotada a empresa/modulo/entidad cuando tieneImagen=true", async () => {
