@@ -56,4 +56,34 @@ describe("Excel modelo de rutas", () => {
       auxiliaresViaticosExcel: [75, 80],
     });
   });
+
+  it.each([
+    ["-1", "Tarifa de referencia"],
+    ["texto", "Tarifa de referencia"],
+    ["Infinity", "Tarifa de referencia"],
+    ["NaN", "Tarifa de referencia"],
+  ])("rechaza monto inválido %s", async (monto, mensaje) => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("CODIGOS DATA");
+    ws.getRow(2).values = [null, null, "1001", "Acme", "", "08:00", "", "Destino", monto];
+    const [fila] = await parsearExcelRutas(Buffer.from(await wb.xlsx.writeBuffer()));
+    expect(fila.erroresCamposExcel.join(" ")).toContain(mensaje);
+  });
+
+  it("rechaza montos sobrantes o cantidad distinta de auxiliares", async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("CODIGOS DATA");
+    ws.getRow(2).values = [null, null, "1001", "Acme", "", "08:00", "", "Destino", "", "", "", "A1", "10;20"];
+    const [fila] = await parsearExcelRutas(Buffer.from(await wb.xlsx.writeBuffer()));
+    expect(fila.erroresCamposExcel).toContain("La cantidad de viáticos debe coincidir con la cantidad de auxiliares.");
+  });
+
+  it("permite NULL posicional solo con segmento realmente vacío", async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("CODIGOS DATA");
+    ws.getRow(2).values = [null, null, "1001", "Acme", "", "08:00", "", "Destino", "", "", "", "A1;A2", "10;"];
+    const [fila] = await parsearExcelRutas(Buffer.from(await wb.xlsx.writeBuffer()));
+    expect(fila.erroresCamposExcel).toEqual([]);
+    expect(fila.auxiliaresViaticosExcel).toEqual([10, null]);
+  });
 });

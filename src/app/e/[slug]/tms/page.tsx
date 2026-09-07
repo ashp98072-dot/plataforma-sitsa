@@ -603,27 +603,6 @@ export default function TmsPage() {
                           >
                             {expandido === p.id ? "Ocultar detalle" : "Ver detalle"}
                           </button>
-                          {p.pendiente_cierre && puedeCerrarViaje ? (
-                            <button
-                              type="button"
-                              disabled={cerrandoId === p.id}
-                              onClick={() => void cerrarViajeTms(p.id)}
-                              className="font-medium text-amber-300 hover:underline disabled:opacity-50"
-                            >
-                              {cerrandoId === p.id ? "Cerrando…" : "Cerrar viaje"}
-                            </button>
-                          ) : puedeCerrarViaje && puedeCerrarManualmente(p.estado) ? (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setExpandido(p.id);
-                                abrirCierreManual(p.id);
-                              }}
-                              className="font-medium text-rose-300 hover:underline"
-                            >
-                              Cerrar administrativamente
-                            </button>
-                          ) : null}
                           <Link href={`/e/${slug}/programacion?plan=${p.id}`} className="text-[var(--accent)] hover:underline">
                             Ver en Programación
                           </Link>

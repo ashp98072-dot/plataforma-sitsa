@@ -10,10 +10,9 @@ import type { FilaRutaExcel } from "./rutas-import-excel";
  * `confirmarImportacionRutas` (escribe dentro de una transacción). NO
  * modifica el modelo/arquitectura de Rutas (tms_cliente_rutas,
  * tms_cliente_ubicaciones, tms_cliente_contactos) ni sus funciones ya
- * existentes en src/lib/tms/cliente-rutas.ts — este módulo es aditivo y
- * autónomo, con sus propias consultas conn-aware para la escritura
- * transaccional (cliente-rutas.ts usa el pool global, no una conexión de
- * transacción, y no se le tocó la firma para no alterar su arquitectura).
+ * existentes en src/lib/tms/cliente-rutas.ts. La confirmación mantiene sus
+ * propias consultas conn-aware y comparte el mismo criterio transaccional
+ * que las altas y ediciones manuales de rutas.
  *
  * NUNCA convierte el Destino en paradas estructuradas — se guarda tal
  * cual en destino_descripcion (punto 2/6). Nunca acepta empresa_id desde
@@ -32,6 +31,11 @@ import type { FilaRutaExcel } from "./rutas-import-excel";
 /** trim + colapsa espacios + minúsculas — SOLO para comparar, nunca para guardar. */
 function normalizar(s: string): string {
   return s.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/** Los códigos RRHH usan comparación no sensible a mayúsculas en la BD. */
+function normalizarCodigoEmpleado(codigo: string): string {
+  return codigo.trim().toLocaleLowerCase("es-GT");
 }
 
 /** Los códigos operativos del catálogo real son numéricos (confirmado). No es una regla de esquema, es una validación defensiva contra filas ajenas (p. ej. encabezados repetidos) que no se detecten por otra vía. */
@@ -139,7 +143,7 @@ export async function previsualizarImportacionRutas(
     query<RowDataPacket[]>("SELECT id, codigo, nombre, estado FROM empleados WHERE empresa_id = ?", [empresaId]),
   ]);
 
-  const empleadosPorCodigo = new Map(empleados.map((e) => [String(e.codigo).trim(), e]));
+  const empleadosPorCodigo = new Map(empleados.map((e) => [normalizarCodigoEmpleado(String(e.codigo)), e]));
 
   const clientesPorNombreExacto = new Map<string, CandidatoCliente>();
   const clientesLista: CandidatoCliente[] = clientes.map((c) => ({ id: Number(c.id), nombre: String(c.nombre) }));
@@ -175,7 +179,15 @@ export async function previsualizarImportacionRutas(
     const identidad = identidadRutaImport({ codigo: f.codigoExcel, cliente: f.clienteExcel });
     const normClienteSiempre = f.clienteExcel ? normalizar(f.clienteExcel) : "";
 
-    const codigosPersonal = [f.pilotoCodigoExcel, ...f.auxiliaresCodigosExcel].filter(Boolean);
+    if (f.erroresCamposExcel.length) {
+      const detalle = f.erroresCamposExcel.join(" ");
+      erroresDetalle.push(formatoErrorImport({ filaExcel: f.filaExcel, identidad, detalle }));
+      resultado.push(filaBase(f, normClienteSiempre, "error", detalle));
+      continue;
+    }
+    const codigosPersonal = [f.pilotoCodigoExcel, ...f.auxiliaresCodigosExcel]
+      .filter(Boolean)
+      .map(normalizarCodigoEmpleado);
     const personalInvalido = codigosPersonal.find((codigo) => {
       const empleado = empleadosPorCodigo.get(codigo);
       return !empleado || String(empleado.estado).toLowerCase() !== "activo";
@@ -479,7 +491,7 @@ export async function confirmarImportacionRutas(
     const empleadosPorCodigo = new Map(
       empleadosRows[0]
         .filter((e) => String(e.estado).toLowerCase() === "activo")
-        .map((e) => [String(e.codigo).trim(), Number(e.id)]),
+        .map((e) => [normalizarCodigoEmpleado(String(e.codigo)), Number(e.id)]),
     );
 
     // clientesPorEmpresa: única fuente de verdad de "qué cliente pertenece
@@ -524,7 +536,18 @@ export async function confirmarImportacionRutas(
     for (const f of filas) {
       const identidad = identidadRutaImport({ codigo: f.codigoExcel, cliente: f.clienteExcel });
 
-      const codigosPersonal = [f.pilotoCodigoExcel, ...f.auxiliaresCodigosExcel].filter(Boolean);
+      if (f.erroresCamposExcel.length) {
+        resultado.errores++;
+        resultado.erroresDetalle.push(formatoErrorImport({
+          filaExcel: f.filaExcel,
+          identidad,
+          detalle: f.erroresCamposExcel.join(" "),
+        }));
+        continue;
+      }
+      const codigosPersonal = [f.pilotoCodigoExcel, ...f.auxiliaresCodigosExcel]
+        .filter(Boolean)
+        .map(normalizarCodigoEmpleado);
       const personalInvalido = codigosPersonal.find((codigo) => !empleadosPorCodigo.has(codigo));
       if (
         (f.tarifaReferenciaExcel != null && f.tarifaReferenciaExcel < 0) ||
@@ -626,6 +649,13 @@ export async function confirmarImportacionRutas(
       const rutaExistente = rutasPorCodigo.get(f.codigoExcel) ?? null;
       const rutaExistenteId = rutaExistente?.id ?? null;
 
+      // Idempotencia: una ruta existente sin decisión explícita de
+      // actualizar se omite ANTES de crear ubicaciones o contactos.
+      if (rutaExistenteId && !decision?.actualizarExistente) {
+        resultado.omitidas++;
+        continue;
+      }
+
       // Protección contra reasignación silenciosa: si el código ya existe
       // y el cliente resuelto difiere del dueño actual de la ruta, exigir
       // confirmación explícita ANTES de tocar cliente_id. Nunca se infiere.
@@ -688,10 +718,6 @@ export async function confirmarImportacionRutas(
       const destinoDescripcion = f.destinoExcel || null;
 
       if (rutaExistenteId) {
-        if (!decision?.actualizarExistente) {
-          resultado.omitidas++;
-          continue; // default: omitir (punto 8)
-        }
         await conn.execute(
           `UPDATE tms_cliente_rutas
            SET cliente_id = ?, ubicacion_carga_id = ?, lugar_carga_texto = ?, destino_descripcion = ?,
@@ -727,7 +753,7 @@ export async function confirmarImportacionRutas(
               `INSERT INTO tms_cliente_ruta_personal
                 (empresa_id, ruta_id, empleado_id, rol, orden, viatico_monto)
                VALUES (?, ?, ?, ?, ?, ?)`,
-              [empresaId, rutaExistenteId, empleadosPorCodigo.get(persona.codigo)!, persona.rol, index, persona.monto],
+              [empresaId, rutaExistenteId, empleadosPorCodigo.get(normalizarCodigoEmpleado(persona.codigo))!, persona.rol, index + 1, persona.monto],
             );
           }
         }
@@ -764,7 +790,7 @@ export async function confirmarImportacionRutas(
               `INSERT INTO tms_cliente_ruta_personal
                 (empresa_id, ruta_id, empleado_id, rol, orden, viatico_monto)
                VALUES (?, ?, ?, ?, ?, ?)`,
-              [empresaId, rutaId, empleadosPorCodigo.get(persona.codigo)!, persona.rol, index, persona.monto],
+              [empresaId, rutaId, empleadosPorCodigo.get(normalizarCodigoEmpleado(persona.codigo))!, persona.rol, index + 1, persona.monto],
             );
           }
         }

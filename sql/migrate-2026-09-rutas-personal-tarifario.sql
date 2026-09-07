@@ -2,19 +2,47 @@
 -- Aplicación MANUAL en MariaDB 11.8 antes de desplegar el código que usa
 -- estos campos. No modifica viajes existentes ni copia valores a planes.
 
-ALTER TABLE empleados
-  ADD UNIQUE INDEX IF NOT EXISTS uq_ruta_personal_empresa_id (empresa_id, id);
+-- Las migraciones de Multas ya pueden haber creado este índice con otro
+-- nombre. Se detecta por composición para no duplicarlo.
+SET @ruta_personal_ddl = IF(EXISTS (
+  SELECT 1 FROM (
+    SELECT index_name
+    FROM information_schema.statistics
+    WHERE table_schema = DATABASE() AND table_name = 'empleados'
+    GROUP BY index_name
+    HAVING MIN(non_unique) = 0
+       AND GROUP_CONCAT(column_name ORDER BY seq_in_index) = 'empresa_id,id'
+  ) AS indices_empleados
+), 'SELECT 1',
+  'ALTER TABLE empleados ADD UNIQUE KEY uq_ruta_personal_empresa_id (empresa_id, id)');
+PREPARE ruta_personal_stmt FROM @ruta_personal_ddl;
+EXECUTE ruta_personal_stmt;
+DEALLOCATE PREPARE ruta_personal_stmt;
 
 ALTER TABLE tms_cliente_rutas
-  ADD COLUMN IF NOT EXISTS tarifa_referencia DECIMAL(12,2) NULL DEFAULT NULL AFTER hora_habitual,
-  ADD UNIQUE INDEX IF NOT EXISTS uq_ruta_personal_empresa_id (empresa_id, id);
+  ADD COLUMN IF NOT EXISTS tarifa_referencia DECIMAL(12,2) NULL DEFAULT NULL AFTER hora_habitual;
+
+SET @ruta_personal_ddl = IF(EXISTS (
+  SELECT 1 FROM (
+    SELECT index_name
+    FROM information_schema.statistics
+    WHERE table_schema = DATABASE() AND table_name = 'tms_cliente_rutas'
+    GROUP BY index_name
+    HAVING MIN(non_unique) = 0
+       AND GROUP_CONCAT(column_name ORDER BY seq_in_index) = 'empresa_id,id'
+  ) AS indices_rutas
+), 'SELECT 1',
+  'ALTER TABLE tms_cliente_rutas ADD UNIQUE KEY uq_ruta_personal_empresa_id (empresa_id, id)');
+PREPARE ruta_personal_stmt FROM @ruta_personal_ddl;
+EXECUTE ruta_personal_stmt;
+DEALLOCATE PREPARE ruta_personal_stmt;
 
 CREATE TABLE IF NOT EXISTS tms_cliente_ruta_personal (
   id INT AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,
   ruta_id INT NOT NULL,
   empleado_id INT NOT NULL,
-  rol ENUM('Piloto', 'Auxiliar') NOT NULL,
+  rol VARCHAR(20) NOT NULL,
   orden TINYINT UNSIGNED NOT NULL DEFAULT 1,
   viatico_monto DECIMAL(12,2) NULL DEFAULT NULL,
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,

@@ -812,7 +812,7 @@ CREATE TABLE IF NOT EXISTS tms_cliente_ruta_personal (
   empresa_id INT NOT NULL,
   ruta_id INT NOT NULL,
   empleado_id INT NOT NULL,
-  rol ENUM('Piloto', 'Auxiliar') NOT NULL,
+  rol VARCHAR(20) NOT NULL,
   orden TINYINT UNSIGNED NOT NULL DEFAULT 1,
   viatico_monto DECIMAL(12,2) NULL DEFAULT NULL,
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,

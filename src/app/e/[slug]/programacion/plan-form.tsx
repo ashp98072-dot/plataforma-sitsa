@@ -13,6 +13,7 @@ import NotificarPersonal from "./notificar-personal";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
 import { normalizarPlaca } from "@/lib/flota/placa";
+import { aplicarDefaultsRutaSinSobrescribir } from "@/lib/tms/ruta-defaults";
 
 /**
  * Formulario propio de Programación para crear/editar un viaje — reutiliza
@@ -724,28 +725,32 @@ export default function PlanForm({
    * respaldo, siempre lee lugar_descarga_historico directamente.
    */
   function aplicarRuta(ruta: RutaOpt) {
+    const defaults = aplicarDefaultsRutaSinSobrescribir({
+      tarifaComercial: form.tarifaComercial,
+      pilotoEmpleadoId: form.pilotoEmpleadoId,
+      pilotoNombre: form.pilotoNombre,
+      auxiliarEmpleadoIds: form.auxiliarEmpleadoIds,
+      auxiliarNombres: form.auxiliarNombres,
+      viaticosMontos,
+    }, ruta.tarifaReferencia, ruta.personalPredeterminado);
+    setViaticosMontos(defaults.viaticosMontos);
     setForm((f) => ({
       ...f,
       clienteId: ruta.clienteId,
       clienteNombre: ruta.clienteNombre,
       horaCarga: ruta.horaHabitual || f.horaCarga,
-      tarifaComercial: ruta.tarifaReferencia != null ? String(ruta.tarifaReferencia) : f.tarifaComercial,
+      tarifaComercial: defaults.tarifaComercial,
       rutaId: ruta.id,
       rutaCodigo: ruta.codigo,
       lugarDescargaHistorico: ruta.destinoDescripcion ?? f.lugarDescargaHistorico,
       contactoNombreHistorico: ruta.contactoNombre ?? "",
       contactoCargoHistorico: ruta.contactoCargo ?? "",
       contactoTelefonoHistorico: ruta.contactoTelefono ?? "",
-      pilotoEmpleadoId: ruta.personalPredeterminado.find((p) => p.rol === "Piloto")?.empleadoId ?? f.pilotoEmpleadoId,
-      pilotoNombre: ruta.personalPredeterminado.find((p) => p.rol === "Piloto")?.empleadoNombre ?? f.pilotoNombre,
-      auxiliarEmpleadoIds: ruta.personalPredeterminado.filter((p) => p.rol === "Auxiliar").map((p) => p.empleadoId),
-      auxiliarNombres: [],
+      pilotoEmpleadoId: defaults.pilotoEmpleadoId,
+      pilotoNombre: defaults.pilotoNombre,
+      auxiliarEmpleadoIds: defaults.auxiliarEmpleadoIds,
+      auxiliarNombres: defaults.auxiliarNombres,
     }));
-    setViaticosMontos(Object.fromEntries(
-      ruta.personalPredeterminado
-        .filter((p) => p.viaticoMonto != null)
-        .map((p) => [p.rol === "Piloto" ? "piloto" : `aux-emp-${p.empleadoId}`, String(p.viaticoMonto)]),
-    ));
     setContactoClienteIdSeleccionado(ruta.contactoClienteId ?? null);
     const nuevasParadas: ParadaForm[] = [];
     if (ruta.lugarCargaTexto) {

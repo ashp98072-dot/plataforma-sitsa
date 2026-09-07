@@ -32,6 +32,7 @@ export type FilaRutaExcel = {
   pilotoViaticoExcel: number | null;
   auxiliaresCodigosExcel: string[];
   auxiliaresViaticosExcel: (number | null)[];
+  erroresCamposExcel: string[];
 };
 
 const COL_CODIGO = 3; // C
@@ -170,6 +171,7 @@ export async function generarPlantillaRutas(): Promise<Buffer> {
     ["Viático piloto (Q)", "Monto habitual del viático para el piloto de esta ruta. Opcional."],
     ["Códigos auxiliares", "Códigos RRHH de los auxiliares habituales separados por punto y coma (;). Máximo 8."],
     ["Viáticos auxiliares (Q)", "Montos en el mismo orden que los códigos de auxiliares, separados por punto y coma (;)."],
+    ["Reimportación", "En una ruta existente, dejar tarifa/personal vacío significa CONSERVAR los defaults actuales. Para reemplazar personal, informe los códigos y marque Actualizar."],
     ["Fila 1: números 1 a 6", "Conserva la estructura del archivo PROGRAMACION AGOSTO 2026 ACTUALIZADA.xlsx y la posición histórica de cada dato."],
     ["Fila azul", "Muestra el nombre claro de cada campo. No la elimine ni mueva las columnas."],
     ["Fila amarilla", "Es únicamente un ejemplo y NO se importará. Empiece a ingresar sus rutas debajo de esa fila."],
@@ -186,21 +188,35 @@ export async function generarPlantillaRutas(): Promise<Buffer> {
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
-function numeroOpcional(value: unknown): number | null {
-  if (value == null || value === "") return null;
-  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+function numeroOpcional(value: unknown, campo: string): { valor: number | null; error: string | null } {
+  if (value == null || value === "" || cellStr(value).trim() === "") return { valor: null, error: null };
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value >= 0
+      ? { valor: value, error: null }
+      : { valor: null, error: `${campo}: usa un número mayor o igual a cero.` };
+  }
   const raw = cellStr(value).replace(/[Q,$\s]/g, "").replace(/,/g, "");
-  if (!raw) return null;
+  if (!raw) return { valor: null, error: `${campo}: monto inválido.` };
   const parsed = Number(raw);
-  return Number.isFinite(parsed) ? parsed : null;
+  return Number.isFinite(parsed) && parsed >= 0
+    ? { valor: parsed, error: null }
+    : { valor: null, error: `${campo}: usa un número mayor o igual a cero.` };
 }
 
 function listaTexto(value: unknown): string[] {
   return cellStr(value).split(";").map((v) => v.trim()).filter(Boolean);
 }
 
-function listaMontos(value: unknown): (number | null)[] {
-  return cellStr(value).split(";").map((v) => numeroOpcional(v));
+function listaMontos(value: unknown): { valores: (number | null)[]; errores: string[] } {
+  const raw = cellStr(value);
+  if (!raw.trim()) return { valores: [], errores: [] };
+  const errores: string[] = [];
+  const valores = raw.split(";").map((v, index) => {
+    const parsed = numeroOpcional(v, `Viático auxiliar ${index + 1}`);
+    if (parsed.error) errores.push(parsed.error);
+    return parsed.valor;
+  });
+  return { valores, errores };
 }
 
 /** trim + colapsar espacios + minúsculas — solo para comparar contra encabezados conocidos. */
@@ -298,11 +314,20 @@ export async function parsearExcelRutas(buffer: Buffer): Promise<FilaRutaExcel[]
     const horaExcel = normalizarHora(row.getCell(COL_HORA).value);
     const contactoExcel = cellStr(row.getCell(COL_CONTACTO).value);
     const destinoExcel = cellStr(row.getCell(COL_DESTINO).value);
-    const tarifaReferenciaExcel = numeroOpcional(row.getCell(COL_TARIFA).value);
+    const tarifa = numeroOpcional(row.getCell(COL_TARIFA).value, "Tarifa de referencia");
     const pilotoCodigoExcel = cellStr(row.getCell(COL_PILOTO).value);
-    const pilotoViaticoExcel = numeroOpcional(row.getCell(COL_VIATICO_PILOTO).value);
+    const pilotoViatico = numeroOpcional(row.getCell(COL_VIATICO_PILOTO).value, "Viático del piloto");
     const auxiliaresCodigosExcel = listaTexto(row.getCell(COL_AUXILIARES).value);
-    const auxiliaresViaticosExcel = listaMontos(row.getCell(COL_VIATICOS_AUXILIARES).value);
+    const auxiliaresViaticos = listaMontos(row.getCell(COL_VIATICOS_AUXILIARES).value);
+    const erroresCamposExcel = [tarifa.error, pilotoViatico.error, ...auxiliaresViaticos.errores].filter(
+      (error): error is string => Boolean(error),
+    );
+    if (pilotoViatico.valor != null && !pilotoCodigoExcel.trim()) {
+      erroresCamposExcel.push("No puede informar viático de piloto sin código de piloto habitual.");
+    }
+    if (auxiliaresViaticos.valores.length && auxiliaresViaticos.valores.length !== auxiliaresCodigosExcel.length) {
+      erroresCamposExcel.push("La cantidad de viáticos debe coincidir con la cantidad de auxiliares.");
+    }
 
     const codigoTrim = codigoExcel.trim();
     if (!codigoTrim) continue;
@@ -320,11 +345,12 @@ export async function parsearExcelRutas(buffer: Buffer): Promise<FilaRutaExcel[]
       // recorta, no se separa por guiones, no se altera ninguna
       // abreviatura (punto 6 de VIAT-5).
       destinoExcel,
-      tarifaReferenciaExcel,
+      tarifaReferenciaExcel: tarifa.valor,
       pilotoCodigoExcel: pilotoCodigoExcel.trim(),
-      pilotoViaticoExcel,
+      pilotoViaticoExcel: pilotoViatico.valor,
       auxiliaresCodigosExcel,
-      auxiliaresViaticosExcel,
+      auxiliaresViaticosExcel: auxiliaresViaticos.valores,
+      erroresCamposExcel,
     });
   }
   return filas;

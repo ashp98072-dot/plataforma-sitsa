@@ -1,5 +1,16 @@
-import type { RowDataPacket } from "mysql2";
-import { execute, query } from "@/lib/db";
+import type { ResultSetHeader, RowDataPacket } from "mysql2";
+import type { PoolConnection } from "mysql2/promise";
+import { getPool, query, type SqlParams } from "@/lib/db";
+
+async function queryConn<T extends RowDataPacket[]>(conn: PoolConnection, sql: string, params: SqlParams = []): Promise<T> {
+  const [rows] = await conn.query<T>(sql, params);
+  return rows;
+}
+
+async function executeConn(conn: PoolConnection, sql: string, params: SqlParams = []): Promise<ResultSetHeader> {
+  const [result] = await conn.execute<ResultSetHeader>(sql, params);
+  return result;
+}
 
 /**
  * VIAT-4 (punto 2 — "Operaciones > Rutas") — catálogo maestro de rutas/
@@ -258,7 +269,7 @@ export type ClienteRutaInput = {
   personalPredeterminado?: RutaPersonalInput[];
 };
 
-async function validarPersonalRuta(empresaId: number, personal: RutaPersonalInput[]): Promise<void> {
+async function validarPersonalRuta(conn: PoolConnection, empresaId: number, personal: RutaPersonalInput[]): Promise<void> {
   if (personal.length > 9) throw new Error("Una ruta admite como máximo un piloto y ocho auxiliares.");
   if (personal.filter((p) => p.rol === "Piloto").length > 1) throw new Error("Solo puedes definir un piloto habitual por ruta.");
   const ids = personal.map((p) => p.empleadoId);
@@ -267,7 +278,7 @@ async function validarPersonalRuta(empresaId: number, personal: RutaPersonalInpu
     throw new Error("Personal o monto de viático inválido.");
   }
   if (!ids.length) return;
-  const rows = await query<RowDataPacket[]>(
+  const rows = await queryConn<RowDataPacket[]>(conn,
     `SELECT id FROM empleados WHERE empresa_id = ? AND estado = 'Activo'
      AND id IN (${ids.map(() => "?").join(",")})`,
     [empresaId, ...ids],
@@ -275,14 +286,14 @@ async function validarPersonalRuta(empresaId: number, personal: RutaPersonalInpu
   if (rows.length !== ids.length) throw new Error("Uno o más empleados no existen, están inactivos o pertenecen a otra empresa.");
 }
 
-async function guardarPersonalRuta(empresaId: number, rutaId: number, personal: RutaPersonalInput[]): Promise<void> {
-  await validarPersonalRuta(empresaId, personal);
-  await execute("DELETE FROM tms_cliente_ruta_personal WHERE empresa_id = ? AND ruta_id = ?", [empresaId, rutaId]);
+async function guardarPersonalRuta(conn: PoolConnection, empresaId: number, rutaId: number, personal: RutaPersonalInput[]): Promise<void> {
+  await validarPersonalRuta(conn, empresaId, personal);
+  await executeConn(conn, "DELETE FROM tms_cliente_ruta_personal WHERE empresa_id = ? AND ruta_id = ?", [empresaId, rutaId]);
   let pilotoOrden = 1;
   let auxiliarOrden = 1;
   for (const persona of personal) {
     const orden = persona.rol === "Piloto" ? pilotoOrden++ : auxiliarOrden++;
-    await execute(
+    await executeConn(conn,
       `INSERT INTO tms_cliente_ruta_personal
         (empresa_id, ruta_id, empleado_id, rol, orden, viatico_monto)
        VALUES (?, ?, ?, ?, ?, ?)`,
@@ -292,6 +303,7 @@ async function guardarPersonalRuta(empresaId: number, rutaId: number, personal: 
 }
 
 async function guardarParadasRuta(
+  conn: PoolConnection,
   empresaId: number,
   rutaId: number,
   paradas: RutaParadaInput[],
@@ -301,12 +313,12 @@ async function guardarParadasRuta(
   // ruta ni de viajes ya copiados — solo de las paradas de LA PLANTILLA.
   // Independiente de destino_descripcion: las paradas estructuradas
   // siguen existiendo aparte, esta función nunca las reemplaza por texto.
-  await execute("DELETE FROM tms_cliente_ruta_paradas WHERE ruta_id = ?", [rutaId]);
+  await executeConn(conn, "DELETE FROM tms_cliente_ruta_paradas WHERE empresa_id = ? AND ruta_id = ?", [empresaId, rutaId]);
   let orden = 1;
   for (const p of paradas) {
     const nombre = (p.lugarNombre || "").trim();
     if (!nombre) continue;
-    await execute(
+    await executeConn(conn,
       `INSERT INTO tms_cliente_ruta_paradas
         (empresa_id, ruta_id, cliente_ubicacion_id, orden, tipo, lugar_nombre)
        VALUES (?, ?, ?, ?, ?, ?)`,
@@ -323,6 +335,7 @@ async function guardarParadasRuta(
  * tenga que resolver ubicacion_carga_id por separado al copiar la ruta.
  */
 async function resolverLugarCargaTexto(
+  conn: PoolConnection,
   empresaId: number,
   ubicacionCargaId: number | null | undefined,
   lugarCargaTexto: string | null | undefined,
@@ -330,7 +343,7 @@ async function resolverLugarCargaTexto(
   const texto = lugarCargaTexto?.trim();
   if (texto) return texto;
   if (!ubicacionCargaId) return null;
-  const rows = await query<RowDataPacket[]>(
+  const rows = await queryConn<RowDataPacket[]>(conn,
     "SELECT nombre FROM tms_cliente_ubicaciones WHERE id = ? AND empresa_id = ? LIMIT 1",
     [ubicacionCargaId, empresaId],
   );
@@ -342,50 +355,39 @@ export async function crearRuta(
   empresaId: number,
   input: ClienteRutaInput,
 ): Promise<ClienteRuta> {
-  if (input.personalPredeterminado !== undefined) {
-    await validarPersonalRuta(empresaId, input.personalPredeterminado);
-  }
   const codigo = input.codigo.trim();
   if (!codigo) throw new Error("Código de ruta requerido.");
   if (!input.clienteId) throw new Error("Cliente requerido.");
-
-  const existente = await query<RowDataPacket[]>(
-    "SELECT id FROM tms_cliente_rutas WHERE empresa_id = ? AND codigo = ? LIMIT 1",
-    [empresaId, codigo],
-  );
-  if (existente[0]) {
-    throw new Error(`El código "${codigo}" ya existe en esta empresa (el código es único, no por cliente).`);
-  }
-
-  const lugarCargaTexto = await resolverLugarCargaTexto(
-    empresaId,
-    input.ubicacionCargaId,
-    input.lugarCargaTexto,
-  );
-  const r = await execute(
-    `INSERT INTO tms_cliente_rutas
-      (empresa_id, cliente_id, codigo, nombre, ubicacion_carga_id, lugar_carga_texto, destino_descripcion, hora_habitual, tarifa_referencia, contacto_cliente_id, observaciones)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      empresaId,
-      input.clienteId,
-      codigo,
-      input.nombre?.trim() || null,
-      input.ubicacionCargaId ?? null,
-      lugarCargaTexto,
-      input.destinoDescripcion?.trim() || null,
-      input.horaHabitual?.trim() || null,
-      input.tarifaReferencia ?? null,
-      input.contactoClienteId ?? null,
-      input.observaciones?.trim() || null,
-    ],
-  );
-  const rutaId = Number(r.insertId);
-  if (input.paradas?.length) {
-    await guardarParadasRuta(empresaId, rutaId, input.paradas);
-  }
-  if (input.personalPredeterminado?.length) {
-    await guardarPersonalRuta(empresaId, rutaId, input.personalPredeterminado);
+  const conn = await getPool().getConnection();
+  let rutaId = 0;
+  try {
+    await conn.beginTransaction();
+    if (input.personalPredeterminado !== undefined) {
+      await validarPersonalRuta(conn, empresaId, input.personalPredeterminado);
+    }
+    const existente = await queryConn<RowDataPacket[]>(conn,
+      "SELECT id FROM tms_cliente_rutas WHERE empresa_id = ? AND codigo = ? LIMIT 1 FOR UPDATE",
+      [empresaId, codigo],
+    );
+    if (existente[0]) throw new Error(`El código "${codigo}" ya existe en esta empresa (el código es único, no por cliente).`);
+    const lugarCargaTexto = await resolverLugarCargaTexto(conn, empresaId, input.ubicacionCargaId, input.lugarCargaTexto);
+    const r = await executeConn(conn,
+      `INSERT INTO tms_cliente_rutas
+        (empresa_id, cliente_id, codigo, nombre, ubicacion_carga_id, lugar_carga_texto, destino_descripcion, hora_habitual, tarifa_referencia, contacto_cliente_id, observaciones)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [empresaId, input.clienteId, codigo, input.nombre?.trim() || null, input.ubicacionCargaId ?? null,
+        lugarCargaTexto, input.destinoDescripcion?.trim() || null, input.horaHabitual?.trim() || null,
+        input.tarifaReferencia ?? null, input.contactoClienteId ?? null, input.observaciones?.trim() || null],
+    );
+    rutaId = Number(r.insertId);
+    if (input.paradas !== undefined) await guardarParadasRuta(conn, empresaId, rutaId, input.paradas);
+    if (input.personalPredeterminado !== undefined) await guardarPersonalRuta(conn, empresaId, rutaId, input.personalPredeterminado);
+    await conn.commit();
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
   }
   return (await obtenerRuta(empresaId, rutaId))!;
 }
@@ -399,16 +401,21 @@ export async function actualizarRuta(
   id: number,
   cambios: ClienteRutaUpdate,
 ): Promise<ClienteRuta | null> {
-  if (cambios.personalPredeterminado !== undefined) {
-    await validarPersonalRuta(empresaId, cambios.personalPredeterminado);
-  }
-  const actual = await obtenerRuta(empresaId, id);
-  if (!actual) return null;
+  const conn = await getPool().getConnection();
+  try {
+    await conn.beginTransaction();
+    if (cambios.personalPredeterminado !== undefined) await validarPersonalRuta(conn, empresaId, cambios.personalPredeterminado);
+    const actuales = await queryConn<RowDataPacket[]>(conn, `${SELECT_RUTA} WHERE r.id = ? AND r.empresa_id = ? LIMIT 1 FOR UPDATE`, [id, empresaId]);
+    if (!actuales[0]) {
+      await conn.rollback();
+      return null;
+    }
+    const actual = { ...mapRuta(actuales[0]), paradas: [], personalPredeterminado: [] };
 
   const codigo = cambios.codigo !== undefined ? cambios.codigo.trim() : actual.codigo;
   if (!codigo) throw new Error("Código de ruta requerido.");
   if (codigo !== actual.codigo) {
-    const existente = await query<RowDataPacket[]>(
+    const existente = await queryConn<RowDataPacket[]>(conn,
       "SELECT id FROM tms_cliente_rutas WHERE empresa_id = ? AND codigo = ? AND id <> ? LIMIT 1",
       [empresaId, codigo, id],
     );
@@ -421,10 +428,10 @@ export async function actualizarRuta(
     cambios.ubicacionCargaId !== undefined ? cambios.ubicacionCargaId ?? null : actual.ubicacionCargaId;
   const lugarCargaTextoEfectivo =
     cambios.lugarCargaTexto !== undefined || cambios.ubicacionCargaId !== undefined
-      ? await resolverLugarCargaTexto(empresaId, ubicacionCargaIdEfectiva, cambios.lugarCargaTexto)
+      ? await resolverLugarCargaTexto(conn, empresaId, ubicacionCargaIdEfectiva, cambios.lugarCargaTexto)
       : actual.lugarCargaTexto;
 
-  await execute(
+  await executeConn(conn,
     `UPDATE tms_cliente_rutas
      SET codigo = ?, nombre = ?, ubicacion_carga_id = ?, lugar_carga_texto = ?, destino_descripcion = ?,
          hora_habitual = ?, tarifa_referencia = ?, contacto_cliente_id = ?, observaciones = ?, activo = ?
@@ -449,10 +456,17 @@ export async function actualizarRuta(
     ],
   );
   if (cambios.paradas !== undefined) {
-    await guardarParadasRuta(empresaId, id, cambios.paradas);
+    await guardarParadasRuta(conn, empresaId, id, cambios.paradas);
   }
   if (cambios.personalPredeterminado !== undefined) {
-    await guardarPersonalRuta(empresaId, id, cambios.personalPredeterminado);
+    await guardarPersonalRuta(conn, empresaId, id, cambios.personalPredeterminado);
+  }
+    await conn.commit();
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
   }
   return obtenerRuta(empresaId, id);
 }
