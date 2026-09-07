@@ -19,9 +19,32 @@ const HEADERS = [
   "contacto_telefono",
   "tipo",
   "estado",
+  "condicion_credito",
   "notas",
   "actualizar_si_existe",
 ] as const;
+
+/** Hoja opcional "CONTACTOS" — varios contactos por cliente (tms_cliente_contactos ya soporta N por cliente). Si la hoja no existe, el comportamiento es idéntico al de antes. */
+const HEADERS_CONTACTOS = [
+  "cliente_codigo",
+  "cliente_nombre",
+  "nombre",
+  "cargo",
+  "telefono",
+  "email",
+  "observaciones",
+] as const;
+
+export type FilaContactoClienteExcel = {
+  filaExcel: number;
+  clienteCodigo: string | null;
+  clienteNombre: string | null;
+  nombre: string;
+  cargo: string | null;
+  telefono: string | null;
+  email: string | null;
+  observaciones: string | null;
+};
 
 function texto(value: unknown): string {
   if (value == null) return "";
@@ -90,15 +113,16 @@ export async function generarPlantillaClientes(): Promise<Buffer> {
     "55551111",
     "Transporte",
     "Activo",
+    "30 días",
     "Fila de ejemplo: reemplazar o eliminar antes de importar",
     "NO",
   ]);
-  ws.autoFilter = "A1:N1";
+  ws.autoFilter = "A1:O1";
   ws.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
   ws.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F4E78" } };
   ws.getRow(1).alignment = { vertical: "middle", horizontal: "center", wrapText: true };
   ws.getRow(1).height = 32;
-  ws.columns = [20, 30, 32, 18, 20, 18, 30, 42, 26, 20, 22, 14, 42, 20].map((width) => ({ width }));
+  ws.columns = [20, 30, 32, 18, 20, 18, 30, 42, 26, 20, 22, 14, 20, 42, 20].map((width) => ({ width }));
   ws.getColumn(1).numFmt = "@";
   ws.getColumn(4).numFmt = "@";
   ws.getColumn(5).numFmt = "@";
@@ -111,8 +135,28 @@ export async function generarPlantillaClientes(): Promise<Buffer> {
       formulae: ['"Transporte,Reciclaje,Tarimas,Comercial,Mixto,Otro"'],
     };
     ws.getCell(`L${row}`).dataValidation = { type: "list", allowBlank: true, formulae: ['"Activo,Inactivo"'] };
-    ws.getCell(`N${row}`).dataValidation = { type: "list", allowBlank: true, formulae: ['"SI,NO"'] };
+    ws.getCell(`O${row}`).dataValidation = { type: "list", allowBlank: true, formulae: ['"SI,NO"'] };
   }
+
+  const contactos = wb.addWorksheet("CONTACTOS");
+  contactos.addRow([...HEADERS_CONTACTOS]);
+  contactos.addRow([
+    "EJEMPLO-NO-IMPORTAR",
+    "Cliente de ejemplo",
+    "Ana Pérez",
+    "Gerente de Compras",
+    "55551111",
+    "ana.perez@ejemplo.com",
+    "Fila de ejemplo: reemplazar o eliminar antes de importar",
+  ]);
+  contactos.autoFilter = "A1:G1";
+  contactos.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+  contactos.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F4E78" } };
+  contactos.getRow(1).alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+  contactos.getRow(1).height = 32;
+  contactos.columns = [20, 30, 26, 26, 20, 30, 40].map((width) => ({ width }));
+  contactos.getColumn(1).numFmt = "@";
+  contactos.getColumn(5).numFmt = "@";
 
   const ayuda = wb.addWorksheet("AYUDA");
   ayuda.addRow(["Campo", "Descripción"]);
@@ -124,7 +168,9 @@ export async function generarPlantillaClientes(): Promise<Buffer> {
     ["nit / rtu", "Opcionales. Ayudan a identificar al cliente y detectar registros existentes."],
     ["tipo", CLIENTE_TIPOS.map((x) => x.label).join(", ") + ". Si se deja vacío se usa Comercial."],
     ["estado", "Activo o Inactivo. Si se deja vacío se usa Activo."],
+    ["condicion_credito", "Opcional, texto libre: '30 días', '100 días / Pronto Pago', 'Sin Fecha Límite', 'Pendiente', etc. No se interpreta como número."],
     ["actualizar_si_existe", "SI actualiza el cliente encontrado por código, NIT o nombre. NO lo omite sin modificarlo."],
+    ["Hoja CONTACTOS (opcional)", "Varios contactos por cliente (nombre/cargo/teléfono/email). Cada fila debe identificar el cliente por cliente_codigo (recomendado) o cliente_nombre — deben coincidir con una fila de la hoja CLIENTES (nueva o ya existente). Si la hoja no existe o está vacía, no cambia nada del comportamiento actual."],
     ["Seguridad", "Primero use Validar Excel. Las filas con identificadores contradictorios se bloquean."],
   ].forEach((row) => ayuda.addRow(row));
   ayuda.columns = [{ width: 28 }, { width: 100 }];
@@ -170,6 +216,7 @@ export async function parsearExcelClientes(buffer: Buffer): Promise<FilaClienteE
       contactoTelefono: texto(value("contacto_telefono", "telefono_contacto")) || null,
       tipo: tipoCliente(value("tipo")) ?? (texto(value("tipo")) ? undefined : "comercial"),
       estado: estadoCliente(value("estado")) ?? (texto(value("estado")) ? undefined : "Activo"),
+      condicionCredito: texto(value("condicion_credito", "limite_de_credito", "limite_credito", "dias_credito", "credito")) || null,
       notas: texto(value("notas", "observaciones")) || null,
       actualizar: esSi(value("actualizar_si_existe", "actualizar")),
     });
@@ -178,3 +225,47 @@ export async function parsearExcelClientes(buffer: Buffer): Promise<FilaClienteE
 }
 
 export const normalizarIdentificadorCliente = clave;
+
+/**
+ * TMS-CLIENTES-CREDITO-CONTACTOS-1 — hoja OPCIONAL "CONTACTOS": varios
+ * contactos por cliente (tms_cliente_contactos ya soporta N por cliente,
+ * ver src/lib/tms/cliente-contactos.ts). Si el archivo no trae esta hoja
+ * (o está vacía), devuelve `[]` — el comportamiento del resto del import
+ * queda idéntico al de antes de este cambio.
+ */
+export async function parsearContactosExcelClientes(buffer: Buffer): Promise<FilaContactoClienteExcel[]> {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buffer as unknown as ExcelJS.Buffer);
+  const ws = wb.getWorksheet("CONTACTOS");
+  if (!ws) return [];
+
+  const columnas = new Map<string, number>();
+  ws.getRow(1).eachCell((cell, col) => columnas.set(clave(texto(cell.value)), col));
+  if (!columnas.has("nombre")) return [];
+  const col = (...names: string[]) => names.map(clave).map((name) => columnas.get(name)).find(Boolean) ?? 0;
+  const filas: FilaContactoClienteExcel[] = [];
+  for (let i = 2; i <= ws.rowCount; i += 1) {
+    const row = ws.getRow(i);
+    const value = (...names: string[]) => {
+      const c = col(...names);
+      return c ? row.getCell(c).value : null;
+    };
+    const clienteCodigo = texto(value("cliente_codigo", "codigo_cliente", "codigo"));
+    const clienteNombre = texto(value("cliente_nombre", "nombre_cliente", "cliente"));
+    const nombre = texto(value("nombre", "nombre_contacto"));
+    if (!clienteCodigo && !clienteNombre && !nombre) continue;
+    if (clave(clienteCodigo) === "ejemplo_no_importar") continue;
+    if (!nombre) continue; // fila sin nombre de contacto: nada que crear.
+    filas.push({
+      filaExcel: i,
+      clienteCodigo: clienteCodigo || null,
+      clienteNombre: clienteNombre || null,
+      nombre,
+      cargo: texto(value("cargo", "puesto")) || null,
+      telefono: texto(value("telefono", "celular")) || null,
+      email: texto(value("email", "correo")) || null,
+      observaciones: texto(value("observaciones", "notas")) || null,
+    });
+  }
+  return filas;
+}

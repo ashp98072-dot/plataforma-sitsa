@@ -18,6 +18,7 @@ const cliente: Cliente = {
   contactoTelefono: "55551111",
   tipo: "transporte",
   estado: "Activo",
+  condicionCredito: "30 días",
   notas: null,
   tmsClienteId: 9,
   creadoAt: null,
@@ -34,7 +35,9 @@ describe("exportación de clientes", () => {
     expect(ws.getCell("E4").value).toBe("Número de RTU");
     expect(ws.getCell("A5").value).toBe("CLI-000007");
     expect(ws.getCell("E5").value).toBe("RTU-1234567");
-    expect(ws.getCell("M5").value).toBe("");
+    expect(ws.getCell("M4").value).toBe("Condición de crédito");
+    expect(ws.getCell("M5").value).toBe("30 días");
+    expect(ws.getCell("N5").value).toBe("");
   });
 
   it("genera un PDF válido", async () => {

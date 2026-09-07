@@ -25,6 +25,7 @@ type FormState = {
   contactoTelefono: string;
   tipo: ClienteTipo;
   estado: ClienteEstado;
+  condicionCredito: string;
   notas: string;
 };
 
@@ -41,6 +42,7 @@ const vacio: FormState = {
   contactoTelefono: "",
   tipo: "comercial",
   estado: "Activo",
+  condicionCredito: "",
   notas: "",
 };
 
@@ -98,6 +100,7 @@ export function ClientesClient({ slug, puedeEditar }: Props) {
       contactoTelefono: c.contactoTelefono ?? "",
       tipo: c.tipo,
       estado: c.estado,
+      condicionCredito: c.condicionCredito ?? "",
       notas: c.notas ?? "",
     });
     setVista("nuevo");
@@ -123,6 +126,7 @@ export function ClientesClient({ slug, puedeEditar }: Props) {
         contactoTelefono: form.contactoTelefono || null,
         tipo: form.tipo,
         estado: form.estado,
+        condicionCredito: form.condicionCredito || null,
         notas: form.notas || null,
       };
       const res = await fetch(
@@ -318,6 +322,14 @@ export function ClientesClient({ slug, puedeEditar }: Props) {
               <option value="Activo">Activo</option>
               <option value="Inactivo">Inactivo</option>
             </select>
+            <input
+              className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm"
+              placeholder="Condición de crédito (ej. 30 días)"
+              value={form.condicionCredito}
+              onChange={(e) =>
+                setForm({ ...form, condicionCredito: e.target.value })
+              }
+            />
             <textarea
               className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm sm:col-span-2 lg:col-span-3"
               rows={2}
@@ -411,7 +423,14 @@ export function ClientesClient({ slug, puedeEditar }: Props) {
                     <div>{c.nit ? `NIT: ${c.nit}` : "NIT: —"}</div>
                     <div className="text-[var(--muted)]">{c.rtu ? `RTU: ${c.rtu}` : "RTU: —"}</div>
                   </td>
-                  <td className="px-3 py-2">{c.tipo}</td>
+                  <td className="px-3 py-2">
+                    <div>{c.tipo}</div>
+                    {c.condicionCredito ? (
+                      <div className="text-xs text-[var(--muted)]">
+                        Crédito: {c.condicionCredito}
+                      </div>
+                    ) : null}
+                  </td>
                   <td className="px-3 py-2 text-xs">
                     {c.telefono || c.email || "—"}
                   </td>

@@ -27,6 +27,8 @@ function mapRow(r: RowDataPacket): Cliente {
       r.contacto_telefono != null ? String(r.contacto_telefono) : null,
     tipo: (String(r.tipo || "comercial") as ClienteTipo) || "comercial",
     estado: (String(r.estado || "Activo") as ClienteEstado) || "Activo",
+    condicionCredito:
+      r.condicion_credito != null ? String(r.condicion_credito) : null,
     notas: r.notas != null ? String(r.notas) : null,
     tmsClienteId:
       r.tms_cliente_id != null ? Number(r.tms_cliente_id) : null,
@@ -36,7 +38,7 @@ function mapRow(r: RowDataPacket): Cliente {
 }
 
 const SELECT = `SELECT id, empresa_id, codigo, nombre, razon_social, nit, rtu, telefono,
-  email, direccion, contacto_nombre, contacto_telefono, tipo, estado, notas,
+  email, direccion, contacto_nombre, contacto_telefono, tipo, estado, condicion_credito, notas,
   tms_cliente_id, creado_at, actualizado_at FROM clientes`;
 
 export async function listarClientes(
@@ -125,8 +127,8 @@ export async function crearCliente(
   const r = await execute(
     `INSERT INTO clientes (
        empresa_id, codigo, nombre, razon_social, nit, rtu, telefono, email,
-       direccion, contacto_nombre, contacto_telefono, tipo, estado, notas, tms_cliente_id
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       direccion, contacto_nombre, contacto_telefono, tipo, estado, condicion_credito, notas, tms_cliente_id
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       empresaId,
       codigoSolicitado,
@@ -141,6 +143,7 @@ export async function crearCliente(
       input.contactoTelefono ?? null,
       input.tipo ?? "comercial",
       input.estado ?? "Activo",
+      input.condicionCredito ?? null,
       input.notas ?? null,
       tmsId,
     ],
@@ -171,7 +174,7 @@ export async function actualizarCliente(
     `UPDATE clientes SET
        codigo = ?, nombre = ?, razon_social = ?, nit = ?, rtu = ?, telefono = ?, email = ?,
        direccion = ?, contacto_nombre = ?, contacto_telefono = ?, tipo = ?,
-       estado = ?, notas = ?, tms_cliente_id = ?
+       estado = ?, condicion_credito = ?, notas = ?, tms_cliente_id = ?
      WHERE id = ? AND empresa_id = ?`,
     [
       codigo,
@@ -186,6 +189,7 @@ export async function actualizarCliente(
       input.contactoTelefono ?? null,
       input.tipo ?? actual.tipo,
       input.estado ?? actual.estado,
+      input.condicionCredito ?? null,
       input.notas ?? null,
       tmsId,
       id,
