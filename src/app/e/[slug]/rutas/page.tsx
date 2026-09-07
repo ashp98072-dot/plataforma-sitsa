@@ -35,6 +35,16 @@ type RutaParada = {
   clienteUbicacionId: number | null;
 };
 
+type EmpleadoOpt = { id: number; codigo: string; nombre: string; categoriaOps: string };
+type RutaPersonal = {
+  empleadoId: number;
+  empleadoNombre: string;
+  rol: "Piloto" | "Auxiliar";
+  orden: number;
+  viaticoMonto: number | null;
+};
+type RutaPersonalForm = { empleadoId: number; rol: "Piloto" | "Auxiliar"; viaticoMonto: string };
+
 type ClienteRuta = {
   id: number;
   clienteId: number;
@@ -45,6 +55,7 @@ type ClienteRuta = {
   lugarCargaTexto: string | null;
   destinoDescripcion: string | null;
   horaHabitual: string | null;
+  tarifaReferencia: number | null;
   contactoClienteId: number | null;
   contactoNombre: string | null;
   contactoCargo: string | null;
@@ -52,6 +63,7 @@ type ClienteRuta = {
   observaciones: string | null;
   activo: boolean;
   paradas: RutaParada[];
+  personalPredeterminado: RutaPersonal[];
 };
 
 type ParadaForm = { tipo: string; lugarNombre: string; clienteUbicacionId: number | null };
@@ -66,6 +78,7 @@ const FORM_VACIO = {
   lugarCargaTexto: "",
   destinoDescripcion: "",
   horaHabitual: "",
+  tarifaReferencia: "",
   contactoClienteId: null as number | null,
   observaciones: "",
 };
@@ -88,6 +101,7 @@ export default function RutasPage() {
   const slug = String(useParams().slug);
 
   const [clientes, setClientes] = useState<ClienteOpt[]>([]);
+  const [personal, setPersonal] = useState<EmpleadoOpt[]>([]);
   const [rutas, setRutas] = useState<ClienteRuta[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -104,14 +118,22 @@ export default function RutasPage() {
   const [formClienteId, setFormClienteId] = useState(0);
   const [formClienteNombre, setFormClienteNombre] = useState("");
   const [paradasForm, setParadasForm] = useState<ParadaForm[]>([]);
+  const [personalForm, setPersonalForm] = useState<RutaPersonalForm[]>([]);
   const [ubicacionesForm, setUbicacionesForm] = useState<UbicacionCliente[]>([]);
   const [contactosForm, setContactosForm] = useState<ContactoCliente[]>([]);
   const [guardando, setGuardando] = useState(false);
 
   const cargarClientes = useCallback(async () => {
-    const res = await fetch(`/api/empresas/${slug}/tms/catalogos`);
-    const data = await res.json().catch(() => ({}));
-    if (res.ok) setClientes((data.clientes ?? []) as ClienteOpt[]);
+    const [resClientes, resPersonal] = await Promise.all([
+      fetch(`/api/empresas/${slug}/tms/catalogos`),
+      fetch(`/api/empresas/${slug}/rrhh/personal-ops?tipo=all`),
+    ]);
+    const [dataClientes, dataPersonal] = await Promise.all([
+      resClientes.json().catch(() => ({})),
+      resPersonal.json().catch(() => ({})),
+    ]);
+    if (resClientes.ok) setClientes((dataClientes.clientes ?? []) as ClienteOpt[]);
+    if (resPersonal.ok) setPersonal((dataPersonal.personal ?? []) as EmpleadoOpt[]);
   }, [slug]);
 
   const cargarRutas = useCallback(async () => {
@@ -176,6 +198,7 @@ export default function RutasPage() {
     setFormClienteId(fClienteId || 0);
     setFormClienteNombre(fClienteNombre || "");
     setParadasForm([{ tipo: "Entrega", lugarNombre: "", clienteUbicacionId: null }]);
+    setPersonalForm([]);
     setMostrarForm(true);
   }
 
@@ -188,6 +211,7 @@ export default function RutasPage() {
       lugarCargaTexto: r.lugarCargaTexto ?? "",
       destinoDescripcion: r.destinoDescripcion ?? "",
       horaHabitual: r.horaHabitual ?? "",
+      tarifaReferencia: r.tarifaReferencia != null ? String(r.tarifaReferencia) : "",
       contactoClienteId: r.contactoClienteId,
       observaciones: r.observaciones ?? "",
     });
@@ -198,6 +222,11 @@ export default function RutasPage() {
         ? r.paradas.map((p) => ({ tipo: p.tipo, lugarNombre: p.lugarNombre, clienteUbicacionId: p.clienteUbicacionId }))
         : [{ tipo: "Entrega", lugarNombre: "", clienteUbicacionId: null }],
     );
+    setPersonalForm(r.personalPredeterminado.map((p) => ({
+      empleadoId: p.empleadoId,
+      rol: p.rol,
+      viaticoMonto: p.viaticoMonto != null ? String(p.viaticoMonto) : "",
+    })));
     setMostrarForm(true);
   }
 
@@ -223,9 +252,15 @@ export default function RutasPage() {
         lugarCargaTexto: form.lugarCargaTexto.trim() || undefined,
         destinoDescripcion: form.destinoDescripcion.trim() || undefined,
         horaHabitual: form.horaHabitual.trim() || undefined,
+        tarifaReferencia: form.tarifaReferencia.trim() === "" ? null : Number(form.tarifaReferencia),
         contactoClienteId: form.contactoClienteId ?? undefined,
         observaciones: form.observaciones.trim() || undefined,
         paradas,
+        personalPredeterminado: personalForm.map((p) => ({
+          empleadoId: p.empleadoId,
+          rol: p.rol,
+          viaticoMonto: p.viaticoMonto.trim() === "" ? null : Number(p.viaticoMonto),
+        })),
       };
       if (!editandoId) body.clienteId = formClienteId;
       const res = editandoId
@@ -391,6 +426,18 @@ export default function RutasPage() {
                 onChange={(e) => setForm((f) => ({ ...f, horaHabitual: e.target.value }))}
               />
             </label>
+            <label className="text-xs text-[var(--muted)]">
+              Tarifa de referencia (GTQ)
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                className={`${inputCls} mt-0.5 w-full`}
+                value={form.tarifaReferencia}
+                onChange={(e) => setForm((f) => ({ ...f, tarifaReferencia: e.target.value }))}
+              />
+              <span className="mt-0.5 block text-[10px]">Se sugerirá al crear el viaje; podrá ajustarse.</span>
+            </label>
             <label className="text-xs text-[var(--muted)] sm:col-span-3">
               Destino (descripción operativa completa — como la usa Operaciones, ej. &quot;RUTA-A -
               punto1-punto2-punto3&quot;)
@@ -430,6 +477,53 @@ export default function RutasPage() {
               Observaciones
               <input className={`${inputCls} mt-0.5 w-full`} value={form.observaciones} onChange={(e) => setForm((f) => ({ ...f, observaciones: e.target.value }))} />
             </label>
+          </div>
+
+          <div className="space-y-2 rounded border border-[var(--border)] p-3">
+            <div>
+              <p className="text-xs font-medium">Personal y viáticos habituales (opcional)</p>
+              <p className="text-[10px] text-[var(--muted)]">Son sugerencias para Programación. Se permite un piloto y hasta ocho auxiliares; cada viaje puede ajustarse.</p>
+            </div>
+            {personalForm.map((fila, idx) => (
+              <div key={`${fila.empleadoId}-${idx}`} className="grid gap-2 sm:grid-cols-[120px_1fr_160px_auto]">
+                <select
+                  className={inputCls}
+                  value={fila.rol}
+                  onChange={(e) => setPersonalForm((list) => list.map((p, i) => i === idx ? { ...p, rol: e.target.value as RutaPersonalForm["rol"] } : p))}
+                >
+                  <option value="Piloto">Piloto</option>
+                  <option value="Auxiliar">Auxiliar</option>
+                </select>
+                <select
+                  className={inputCls}
+                  value={fila.empleadoId}
+                  onChange={(e) => setPersonalForm((list) => list.map((p, i) => i === idx ? { ...p, empleadoId: Number(e.target.value) } : p))}
+                >
+                  {personal.map((p) => <option key={p.id} value={p.id}>{p.codigo} · {p.nombre}</option>)}
+                </select>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="Viático (GTQ)"
+                  className={inputCls}
+                  value={fila.viaticoMonto}
+                  onChange={(e) => setPersonalForm((list) => list.map((p, i) => i === idx ? { ...p, viaticoMonto: e.target.value } : p))}
+                />
+                <button type="button" className="text-xs text-red-300" onClick={() => setPersonalForm((list) => list.filter((_, i) => i !== idx))}>Quitar</button>
+              </div>
+            ))}
+            <button
+              type="button"
+              className="rounded bg-[#334155] px-2 py-1 text-xs text-white disabled:opacity-50"
+              disabled={!personal.length || personalForm.length >= 9}
+              onClick={() => {
+                const disponible = personal.find((p) => !personalForm.some((actual) => actual.empleadoId === p.id));
+                if (disponible) setPersonalForm((list) => [...list, { empleadoId: disponible.id, rol: list.some((p) => p.rol === "Piloto") ? "Auxiliar" : "Piloto", viaticoMonto: "" }]);
+              }}
+            >
+              + Agregar personal habitual
+            </button>
           </div>
 
           <div className="space-y-2 rounded border border-[var(--border)] p-3">
@@ -506,6 +600,8 @@ export default function RutasPage() {
               <th className="px-3 py-2">Nombre</th>
               <th className="px-3 py-2">Carga</th>
               <th className="px-3 py-2">Hora</th>
+              <th className="px-3 py-2">Tarifa</th>
+              <th className="px-3 py-2">Personal habitual</th>
               <th className="px-3 py-2">Contacto</th>
               <th className="px-3 py-2">Destino (descripción)</th>
               <th className="px-3 py-2">Paradas estructuradas</th>
@@ -521,6 +617,12 @@ export default function RutasPage() {
                 <td className="px-3 py-2">{r.nombre || "—"}</td>
                 <td className="px-3 py-2 text-[11px]">{r.lugarCargaTexto || "—"}</td>
                 <td className="px-3 py-2">{r.horaHabitual || "—"}</td>
+                <td className="px-3 py-2">{r.tarifaReferencia != null ? `Q${r.tarifaReferencia.toLocaleString("es-GT", { minimumFractionDigits: 2 })}` : "—"}</td>
+                <td className="px-3 py-2 text-[11px]">
+                  {r.personalPredeterminado.length
+                    ? r.personalPredeterminado.map((p) => `${p.rol}: ${p.empleadoNombre}${p.viaticoMonto != null ? ` (Q${p.viaticoMonto.toFixed(2)})` : ""}`).join(" · ")
+                    : "—"}
+                </td>
                 <td className="px-3 py-2 text-[11px]">
                   {r.contactoNombre ? `${r.contactoNombre}${r.contactoTelefono ? ` · ${r.contactoTelefono}` : ""}` : "—"}
                 </td>
@@ -549,7 +651,7 @@ export default function RutasPage() {
             ))}
             {!rutasFiltradas.length && !loading ? (
               <tr>
-                <td colSpan={10} className="px-3 py-4 text-[var(--muted)]">Sin rutas con este filtro.</td>
+                <td colSpan={12} className="px-3 py-4 text-[var(--muted)]">Sin rutas con este filtro.</td>
               </tr>
             ) : null}
           </tbody>

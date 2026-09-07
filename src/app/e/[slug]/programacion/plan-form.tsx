@@ -729,13 +729,23 @@ export default function PlanForm({
       clienteId: ruta.clienteId,
       clienteNombre: ruta.clienteNombre,
       horaCarga: ruta.horaHabitual || f.horaCarga,
+      tarifaComercial: ruta.tarifaReferencia != null ? String(ruta.tarifaReferencia) : f.tarifaComercial,
       rutaId: ruta.id,
       rutaCodigo: ruta.codigo,
       lugarDescargaHistorico: ruta.destinoDescripcion ?? f.lugarDescargaHistorico,
       contactoNombreHistorico: ruta.contactoNombre ?? "",
       contactoCargoHistorico: ruta.contactoCargo ?? "",
       contactoTelefonoHistorico: ruta.contactoTelefono ?? "",
+      pilotoEmpleadoId: ruta.personalPredeterminado.find((p) => p.rol === "Piloto")?.empleadoId ?? f.pilotoEmpleadoId,
+      pilotoNombre: ruta.personalPredeterminado.find((p) => p.rol === "Piloto")?.empleadoNombre ?? f.pilotoNombre,
+      auxiliarEmpleadoIds: ruta.personalPredeterminado.filter((p) => p.rol === "Auxiliar").map((p) => p.empleadoId),
+      auxiliarNombres: [],
     }));
+    setViaticosMontos(Object.fromEntries(
+      ruta.personalPredeterminado
+        .filter((p) => p.viaticoMonto != null)
+        .map((p) => [p.rol === "Piloto" ? "piloto" : `aux-emp-${p.empleadoId}`, String(p.viaticoMonto)]),
+    ));
     setContactoClienteIdSeleccionado(ruta.contactoClienteId ?? null);
     const nuevasParadas: ParadaForm[] = [];
     if (ruta.lugarCargaTexto) {

@@ -40,6 +40,20 @@ export type RutaParadaInput = {
   clienteUbicacionId?: number | null;
 };
 
+export type RutaPersonal = {
+  empleadoId: number;
+  empleadoNombre: string;
+  rol: "Piloto" | "Auxiliar";
+  orden: number;
+  viaticoMonto: number | null;
+};
+
+export type RutaPersonalInput = {
+  empleadoId: number;
+  rol: "Piloto" | "Auxiliar";
+  viaticoMonto?: number | null;
+};
+
 export type ClienteRuta = {
   id: number;
   clienteId: number;
@@ -50,6 +64,7 @@ export type ClienteRuta = {
   lugarCargaTexto: string | null;
   destinoDescripcion: string | null;
   horaHabitual: string | null;
+  tarifaReferencia: number | null;
   contactoClienteId: number | null;
   contactoNombre: string | null;
   contactoCargo: string | null;
@@ -59,6 +74,7 @@ export type ClienteRuta = {
   creadoEn: string;
   actualizadoEn: string;
   paradas: RutaParada[];
+  personalPredeterminado: RutaPersonal[];
 };
 
 function mapRuta(r: RowDataPacket): Omit<ClienteRuta, "paradas"> {
@@ -72,6 +88,7 @@ function mapRuta(r: RowDataPacket): Omit<ClienteRuta, "paradas"> {
     lugarCargaTexto: r.lugar_carga_texto != null ? String(r.lugar_carga_texto) : null,
     destinoDescripcion: r.destino_descripcion != null ? String(r.destino_descripcion) : null,
     horaHabitual: r.hora_habitual != null ? String(r.hora_habitual) : null,
+    tarifaReferencia: r.tarifa_referencia != null ? Number(r.tarifa_referencia) : null,
     contactoClienteId: r.contacto_cliente_id != null ? Number(r.contacto_cliente_id) : null,
     contactoNombre: r.contacto_nombre != null ? String(r.contacto_nombre) : null,
     contactoCargo: r.contacto_cargo != null ? String(r.contacto_cargo) : null,
@@ -80,12 +97,14 @@ function mapRuta(r: RowDataPacket): Omit<ClienteRuta, "paradas"> {
     activo: Number(r.activo ?? 1) === 1,
     creadoEn: String(r.creado_en ?? ""),
     actualizadoEn: String(r.actualizado_en ?? ""),
+    personalPredeterminado: [],
   };
 }
 
 const SELECT_RUTA = `
   SELECT r.id, r.cliente_id, c.nombre AS cliente_nombre, r.codigo, r.nombre,
          r.ubicacion_carga_id, r.lugar_carga_texto, r.destino_descripcion, r.hora_habitual,
+         r.tarifa_referencia,
          r.contacto_cliente_id, ct.nombre AS contacto_nombre, ct.cargo AS contacto_cargo,
          ct.telefono AS contacto_telefono,
          r.observaciones, r.activo, r.creado_en, r.actualizado_en
@@ -116,6 +135,33 @@ async function paradasDeRutas(rutaIds: number[]): Promise<Map<number, RutaParada
       clienteUbicacionId: r.cliente_ubicacion_id != null ? Number(r.cliente_ubicacion_id) : null,
     });
     map.set(rid, list);
+  }
+  return map;
+}
+
+async function personalDeRutas(empresaId: number, rutaIds: number[]): Promise<Map<number, RutaPersonal[]>> {
+  const map = new Map<number, RutaPersonal[]>();
+  if (!rutaIds.length) return map;
+  const rows = await query<RowDataPacket[]>(
+    `SELECT rp.ruta_id, rp.empleado_id, e.nombre AS empleado_nombre,
+            rp.rol, rp.orden, rp.viatico_monto
+     FROM tms_cliente_ruta_personal rp
+     INNER JOIN empleados e ON e.id = rp.empleado_id AND e.empresa_id = rp.empresa_id
+     WHERE rp.empresa_id = ? AND rp.ruta_id IN (${rutaIds.map(() => "?").join(",")})
+     ORDER BY rp.ruta_id, (rp.rol = 'Piloto') DESC, rp.orden, rp.id`,
+    [empresaId, ...rutaIds],
+  );
+  for (const r of rows) {
+    const rutaId = Number(r.ruta_id);
+    const list = map.get(rutaId) ?? [];
+    list.push({
+      empleadoId: Number(r.empleado_id),
+      empleadoNombre: String(r.empleado_nombre),
+      rol: String(r.rol) === "Piloto" ? "Piloto" : "Auxiliar",
+      orden: Number(r.orden),
+      viaticoMonto: r.viatico_monto != null ? Number(r.viatico_monto) : null,
+    });
+    map.set(rutaId, list);
   }
   return map;
 }
@@ -173,8 +219,13 @@ export async function listarRutas(
     [...params, ...ordenParams],
   );
   const base = rows.map(mapRuta);
-  const paradasMap = await paradasDeRutas(base.map((r) => r.id));
-  return base.map((r) => ({ ...r, paradas: paradasMap.get(r.id) ?? [] }));
+  const ids = base.map((r) => r.id);
+  const [paradasMap, personalMap] = await Promise.all([paradasDeRutas(ids), personalDeRutas(empresaId, ids)]);
+  return base.map((r) => ({
+    ...r,
+    paradas: paradasMap.get(r.id) ?? [],
+    personalPredeterminado: personalMap.get(r.id) ?? [],
+  }));
 }
 
 export async function obtenerRuta(empresaId: number, id: number): Promise<ClienteRuta | null> {
@@ -184,8 +235,12 @@ export async function obtenerRuta(empresaId: number, id: number): Promise<Client
   ]);
   if (!rows[0]) return null;
   const base = mapRuta(rows[0]);
-  const paradasMap = await paradasDeRutas([base.id]);
-  return { ...base, paradas: paradasMap.get(base.id) ?? [] };
+  const [paradasMap, personalMap] = await Promise.all([paradasDeRutas([base.id]), personalDeRutas(empresaId, [base.id])]);
+  return {
+    ...base,
+    paradas: paradasMap.get(base.id) ?? [],
+    personalPredeterminado: personalMap.get(base.id) ?? [],
+  };
 }
 
 export type ClienteRutaInput = {
@@ -196,10 +251,45 @@ export type ClienteRutaInput = {
   lugarCargaTexto?: string | null;
   destinoDescripcion?: string | null;
   horaHabitual?: string | null;
+  tarifaReferencia?: number | null;
   contactoClienteId?: number | null;
   observaciones?: string | null;
   paradas?: RutaParadaInput[];
+  personalPredeterminado?: RutaPersonalInput[];
 };
+
+async function validarPersonalRuta(empresaId: number, personal: RutaPersonalInput[]): Promise<void> {
+  if (personal.length > 9) throw new Error("Una ruta admite como máximo un piloto y ocho auxiliares.");
+  if (personal.filter((p) => p.rol === "Piloto").length > 1) throw new Error("Solo puedes definir un piloto habitual por ruta.");
+  const ids = personal.map((p) => p.empleadoId);
+  if (new Set(ids).size !== ids.length) throw new Error("No repitas al mismo empleado en la ruta.");
+  if (personal.some((p) => !Number.isInteger(p.empleadoId) || p.empleadoId < 1 || (p.viaticoMonto != null && (!Number.isFinite(p.viaticoMonto) || p.viaticoMonto < 0)))) {
+    throw new Error("Personal o monto de viático inválido.");
+  }
+  if (!ids.length) return;
+  const rows = await query<RowDataPacket[]>(
+    `SELECT id FROM empleados WHERE empresa_id = ? AND estado = 'Activo'
+     AND id IN (${ids.map(() => "?").join(",")})`,
+    [empresaId, ...ids],
+  );
+  if (rows.length !== ids.length) throw new Error("Uno o más empleados no existen, están inactivos o pertenecen a otra empresa.");
+}
+
+async function guardarPersonalRuta(empresaId: number, rutaId: number, personal: RutaPersonalInput[]): Promise<void> {
+  await validarPersonalRuta(empresaId, personal);
+  await execute("DELETE FROM tms_cliente_ruta_personal WHERE empresa_id = ? AND ruta_id = ?", [empresaId, rutaId]);
+  let pilotoOrden = 1;
+  let auxiliarOrden = 1;
+  for (const persona of personal) {
+    const orden = persona.rol === "Piloto" ? pilotoOrden++ : auxiliarOrden++;
+    await execute(
+      `INSERT INTO tms_cliente_ruta_personal
+        (empresa_id, ruta_id, empleado_id, rol, orden, viatico_monto)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [empresaId, rutaId, persona.empleadoId, persona.rol, orden, persona.viaticoMonto ?? null],
+    );
+  }
+}
 
 async function guardarParadasRuta(
   empresaId: number,
@@ -252,6 +342,9 @@ export async function crearRuta(
   empresaId: number,
   input: ClienteRutaInput,
 ): Promise<ClienteRuta> {
+  if (input.personalPredeterminado !== undefined) {
+    await validarPersonalRuta(empresaId, input.personalPredeterminado);
+  }
   const codigo = input.codigo.trim();
   if (!codigo) throw new Error("Código de ruta requerido.");
   if (!input.clienteId) throw new Error("Cliente requerido.");
@@ -271,8 +364,8 @@ export async function crearRuta(
   );
   const r = await execute(
     `INSERT INTO tms_cliente_rutas
-      (empresa_id, cliente_id, codigo, nombre, ubicacion_carga_id, lugar_carga_texto, destino_descripcion, hora_habitual, contacto_cliente_id, observaciones)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (empresa_id, cliente_id, codigo, nombre, ubicacion_carga_id, lugar_carga_texto, destino_descripcion, hora_habitual, tarifa_referencia, contacto_cliente_id, observaciones)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       empresaId,
       input.clienteId,
@@ -282,6 +375,7 @@ export async function crearRuta(
       lugarCargaTexto,
       input.destinoDescripcion?.trim() || null,
       input.horaHabitual?.trim() || null,
+      input.tarifaReferencia ?? null,
       input.contactoClienteId ?? null,
       input.observaciones?.trim() || null,
     ],
@@ -289,6 +383,9 @@ export async function crearRuta(
   const rutaId = Number(r.insertId);
   if (input.paradas?.length) {
     await guardarParadasRuta(empresaId, rutaId, input.paradas);
+  }
+  if (input.personalPredeterminado?.length) {
+    await guardarPersonalRuta(empresaId, rutaId, input.personalPredeterminado);
   }
   return (await obtenerRuta(empresaId, rutaId))!;
 }
@@ -302,6 +399,9 @@ export async function actualizarRuta(
   id: number,
   cambios: ClienteRutaUpdate,
 ): Promise<ClienteRuta | null> {
+  if (cambios.personalPredeterminado !== undefined) {
+    await validarPersonalRuta(empresaId, cambios.personalPredeterminado);
+  }
   const actual = await obtenerRuta(empresaId, id);
   if (!actual) return null;
 
@@ -327,7 +427,7 @@ export async function actualizarRuta(
   await execute(
     `UPDATE tms_cliente_rutas
      SET codigo = ?, nombre = ?, ubicacion_carga_id = ?, lugar_carga_texto = ?, destino_descripcion = ?,
-         hora_habitual = ?, contacto_cliente_id = ?, observaciones = ?, activo = ?
+         hora_habitual = ?, tarifa_referencia = ?, contacto_cliente_id = ?, observaciones = ?, activo = ?
      WHERE id = ? AND empresa_id = ?`,
     [
       codigo,
@@ -338,6 +438,7 @@ export async function actualizarRuta(
         ? cambios.destinoDescripcion?.trim() || null
         : actual.destinoDescripcion,
       cambios.horaHabitual !== undefined ? cambios.horaHabitual?.trim() || null : actual.horaHabitual,
+      cambios.tarifaReferencia !== undefined ? cambios.tarifaReferencia ?? null : actual.tarifaReferencia,
       cambios.contactoClienteId !== undefined
         ? cambios.contactoClienteId ?? null
         : actual.contactoClienteId,
@@ -349,6 +450,9 @@ export async function actualizarRuta(
   );
   if (cambios.paradas !== undefined) {
     await guardarParadasRuta(empresaId, id, cambios.paradas);
+  }
+  if (cambios.personalPredeterminado !== undefined) {
+    await guardarPersonalRuta(empresaId, id, cambios.personalPredeterminado);
   }
   return obtenerRuta(empresaId, id);
 }

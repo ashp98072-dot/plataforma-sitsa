@@ -9,7 +9,7 @@ describe("Excel modelo de rutas", () => {
     expect(filas).toHaveLength(0);
   });
 
-  it("conserva el formato 1 a 6 del archivo operativo y aclara las columnas C a H", async () => {
+  it("conserva las columnas históricas y agrega tarifa/personal a la derecha", async () => {
     const plantilla = await generarPlantillaRutas();
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(plantilla as unknown as ExcelJS.Buffer);
@@ -21,12 +21,17 @@ describe("Excel modelo de rutas", () => {
     ]);
     expect(ws!.getColumn("C").width).toBeGreaterThanOrEqual(14);
     expect(ws!.getColumn("H").width).toBeGreaterThanOrEqual(58);
+    expect(ws!.getCell("I2").value).toBe("Tarifa referencia (Q)");
+    expect(ws!.getCell("J2").value).toBe("Código piloto habitual");
+    expect(ws!.getCell("L2").value).toBe("Códigos auxiliares");
     expect(ws!.getCell("F1").numFmt).not.toBe("h:mm");
     expect(ws!.getCell("F2").numFmt).not.toBe("h:mm");
     expect(ws!.getColumn("F").numFmt).toBe("h:mm");
     expect(ws!.getCell("C3").value).toBe("EJEMPLO-NO-IMPORTAR");
     expect(wb.getWorksheet("AYUDA")!.getCell("A1").value).toBe("CÓMO IMPORTAR RUTAS DE FORMA MASIVA");
-    expect(wb.getWorksheet("AYUDA")!.getCell("B14").value).toContain("Previsualizar");
+    const ayuda = wb.getWorksheet("AYUDA")!;
+    const proceso = ayuda.getColumn("A").values.findIndex((value) => value === "Proceso");
+    expect(ayuda.getCell(proceso, 2).value).toContain("Previsualizar");
   });
 
   it("lee filas llenadas debajo del encabezado oficial", async () => {
@@ -36,5 +41,19 @@ describe("Excel modelo de rutas", () => {
     ws.getRow(2).values = [null, null, "1001", "Acme", "Bodega", "08:00", "Ana", "Sucursal"];
     const filas = await parsearExcelRutas(Buffer.from(await wb.xlsx.writeBuffer()));
     expect(filas[0]).toMatchObject({ codigoExcel: "1001", clienteExcel: "Acme", horaExcel: "08:00" });
+  });
+
+  it("lee tarifa, piloto, auxiliares y viáticos opcionales", async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("CODIGOS DATA");
+    ws.getRow(2).values = [null, null, "1001", "Acme", "Bodega", "08:00", "Ana", "Sucursal", 1250, "P-1", 150, "A-1; A-2", "75;80"];
+    const [fila] = await parsearExcelRutas(Buffer.from(await wb.xlsx.writeBuffer()));
+    expect(fila).toMatchObject({
+      tarifaReferenciaExcel: 1250,
+      pilotoCodigoExcel: "P-1",
+      pilotoViaticoExcel: 150,
+      auxiliaresCodigosExcel: ["A-1", "A-2"],
+      auxiliaresViaticosExcel: [75, 80],
+    });
   });
 });
