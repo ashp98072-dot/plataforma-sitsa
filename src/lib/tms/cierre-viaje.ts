@@ -2,6 +2,9 @@ import type { RowDataPacket } from "mysql2";
 import type { ResultSetHeader } from "mysql2/promise";
 import { execute, getPool, query } from "@/lib/db";
 import { registrarAuditoria, registrarAuditoriaTx } from "@/lib/auditoria";
+import { ESTADOS_CIERRE_MANUAL } from "@/lib/tms/cierre-viaje-shared";
+
+export { puedeCerrarManualmente } from "@/lib/tms/cierre-viaje-shared";
 
 /**
  * OPS-1 (corregido) — cierre administrativo del viaje.
@@ -169,13 +172,6 @@ export type ResultadoCierreManual =
  * EXACTAMENTE el mismo criterio que el backend al decidir si mostrar el
  * botón — nunca una lista duplicada que pueda divergir.
  */
-export const ESTADOS_CIERRE_MANUAL = ["Programado", "Cargado", "En ruta"] as const;
-
-/** Función PURA (mismo criterio que resumenCierre() en reportes/page.tsx) — testeable sin harness de componentes React. */
-export function puedeCerrarManualmente(estado: string): boolean {
-  return (ESTADOS_CIERRE_MANUAL as readonly string[]).includes(estado);
-}
-
 export async function cerrarViajeManual(opts: {
   empresaId: number;
   planId: number;
