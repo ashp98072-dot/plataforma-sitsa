@@ -1,7 +1,18 @@
 import { NextResponse } from "next/server";
 import { requireClientesOFacturacion } from "@/lib/clientes/acceso";
-import { generarPlantillaClientes, normalizarIdentificadorCliente, parsearExcelClientes, type FilaClienteExcel } from "@/lib/clientes/import-excel";
+import {
+  generarPlantillaClientes,
+  normalizarIdentificadorCliente,
+  parsearContactosExcelClientes,
+  parsearExcelClientes,
+  type FilaClienteExcel,
+  type FilaContactoClienteExcel,
+} from "@/lib/clientes/import-excel";
 import { actualizarCliente, crearCliente, listarClientes } from "@/lib/clientes/repository";
+import {
+  crearContactoCliente,
+  listarContactosCliente,
+} from "@/lib/tms/cliente-contactos";
 import type { Cliente, ClienteInput } from "@/lib/clientes/tipos";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -10,6 +21,11 @@ type PreviewCliente = FilaClienteExcel & {
   estadoValidacion: EstadoValidacion;
   detalle: string;
   clienteId: number | null;
+};
+type EstadoValidacionContacto = "OK" | "SIN_CLIENTE";
+type PreviewContacto = FilaContactoClienteExcel & {
+  estadoValidacion: EstadoValidacionContacto;
+  detalle: string;
 };
 
 const MAX_FILAS = 1000;
@@ -32,8 +48,7 @@ function candidatos(map: Map<string, Cliente[]>, value: string | null | undefine
   return map.get(normalizarIdentificadorCliente(value)) ?? [];
 }
 
-async function analizar(empresaId: number, filas: FilaClienteExcel[]): Promise<PreviewCliente[]> {
-  const existentes = await listarClientes(empresaId, { estado: "todos" });
+function analizar(existentes: Cliente[], filas: FilaClienteExcel[]): PreviewCliente[] {
   const porCodigo = indice(existentes, "codigo");
   const porNit = indice(existentes, "nit");
   const porRtu = indice(existentes, "rtu");
@@ -99,6 +114,51 @@ async function analizar(empresaId: number, filas: FilaClienteExcel[]): Promise<P
   });
 }
 
+/**
+ * TMS-CLIENTES-CREDITO-CONTACTOS-1 — resuelve cada fila de la hoja
+ * CONTACTOS contra un cliente de la hoja CLIENTES (mismo archivo, por
+ * código o por nombre) o contra un cliente YA existente en la base
+ * (`existentes`, la misma lista que ya usa `analizar()`) — nunca inventa
+ * un cliente nuevo desde esta hoja. Una fila cuyo cliente identificado
+ * está en estado ERROR también queda SIN_CLIENTE (no tiene sentido
+ * agregarle un contacto a un cliente que no se va a crear/tocar).
+ */
+function resolverContactos(
+  filasContactos: FilaContactoClienteExcel[],
+  preview: PreviewCliente[],
+  existentes: Cliente[],
+): PreviewContacto[] {
+  const previewPorCodigo = new Map(preview.filter((p) => p.codigo).map((p) => [normalizarIdentificadorCliente(p.codigo!), p]));
+  const previewPorNombre = new Map(preview.filter((p) => p.nombre).map((p) => [normalizarIdentificadorCliente(p.nombre), p]));
+  const existentesPorCodigo = indice(existentes, "codigo");
+  const existentesPorNombre = indice(existentes, "nombre");
+
+  return filasContactos.map((fila) => {
+    const clavePorCodigo = fila.clienteCodigo ? normalizarIdentificadorCliente(fila.clienteCodigo) : null;
+    const clavePorNombre = fila.clienteNombre ? normalizarIdentificadorCliente(fila.clienteNombre) : null;
+    const enArchivo =
+      (clavePorCodigo && previewPorCodigo.get(clavePorCodigo)) ||
+      (clavePorNombre && previewPorNombre.get(clavePorNombre));
+    if (enArchivo) {
+      if (enArchivo.estadoValidacion === "ERROR") {
+        return { ...fila, estadoValidacion: "SIN_CLIENTE", detalle: `El cliente "${enArchivo.nombre}" tiene errores y no se creará/actualizará.` };
+      }
+      return { ...fila, estadoValidacion: "OK", detalle: `Se vinculará a: ${enArchivo.nombre}${enArchivo.codigo ? ` (${enArchivo.codigo})` : ""}.` };
+    }
+    const existente =
+      (clavePorCodigo && existentesPorCodigo.get(clavePorCodigo)?.[0]) ||
+      (clavePorNombre && existentesPorNombre.get(clavePorNombre)?.[0]);
+    if (existente) {
+      return { ...fila, estadoValidacion: "OK", detalle: `Se vinculará al cliente existente: ${existente.nombre}${existente.codigo ? ` (${existente.codigo})` : ""}.` };
+    }
+    return {
+      ...fila,
+      estadoValidacion: "SIN_CLIENTE",
+      detalle: `No se encontró un cliente con código "${fila.clienteCodigo ?? "—"}" ni nombre "${fila.clienteNombre ?? "—"}" en este archivo ni en el catálogo.`,
+    };
+  });
+}
+
 export async function GET(_req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireClientesOFacturacion(slug, "clientes");
@@ -125,16 +185,23 @@ export async function POST(req: Request, ctx: Ctx) {
   if (!/\.(xlsx|xlsm)$/i.test(archivo.name)) return NextResponse.json({ error: "El archivo debe ser .xlsx o .xlsm." }, { status: 400 });
   if (archivo.size > MAX_BYTES) return NextResponse.json({ error: "El archivo supera el límite de 10 MB." }, { status: 400 });
 
+  const buffer = Buffer.from(await archivo.arrayBuffer());
   let filas: FilaClienteExcel[];
+  let filasContactos: FilaContactoClienteExcel[];
   try {
-    filas = await parsearExcelClientes(Buffer.from(await archivo.arrayBuffer()));
+    filas = await parsearExcelClientes(buffer);
+    // Hoja opcional: si no existe o no se puede leer con el formato
+    // esperado, se ignora en vez de bloquear el import de clientes.
+    filasContactos = await parsearContactosExcelClientes(buffer).catch(() => []);
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "No se pudo leer el Excel." }, { status: 400 });
   }
   if (!filas.length) return NextResponse.json({ error: "El archivo no contiene clientes." }, { status: 400 });
   if (filas.length > MAX_FILAS) return NextResponse.json({ error: `Máximo ${MAX_FILAS} clientes por archivo.` }, { status: 400 });
 
-  const preview = await analizar(guard.empresa.id, filas);
+  const existentes = await listarClientes(guard.empresa.id, { estado: "todos" });
+  const preview = analizar(existentes, filas);
+  const previewContactos = resolverContactos(filasContactos, preview, existentes);
   const resumen = {
     total: preview.length,
     nuevos: preview.filter((f) => f.estadoValidacion === "NUEVO").length,
@@ -142,11 +209,28 @@ export async function POST(req: Request, ctx: Ctx) {
     omitidos: preview.filter((f) => f.estadoValidacion === "OMITIR").length,
     errores: preview.filter((f) => f.estadoValidacion === "ERROR").length,
   };
-  if (accion === "validar") return NextResponse.json({ accion, resumen, filas: preview });
+  const resumenContactos = previewContactos.length
+    ? {
+        total: previewContactos.length,
+        ok: previewContactos.filter((f) => f.estadoValidacion === "OK").length,
+        sinCliente: previewContactos.filter((f) => f.estadoValidacion === "SIN_CLIENTE").length,
+      }
+    : null;
+  if (accion === "validar") {
+    return NextResponse.json({ accion, resumen, filas: preview, resumenContactos, contactos: previewContactos });
+  }
 
   let creados = 0;
   let actualizados = 0;
   const errores: { filaExcel: number; detalle: string }[] = [];
+  // Clave normalizada (código o, en su defecto, nombre) -> identidad
+  // resuelta de ESTE import, para poder enlazar los contactos de la hoja
+  // CONTACTOS aunque el cliente se acabe de crear en este mismo request.
+  const resueltosPorClave = new Map<string, { clienteId: number; tmsClienteId: number | null }>();
+  const registrar = (fila: PreviewCliente, cliente: Cliente) => {
+    const clave = fila.codigo ? normalizarIdentificadorCliente(fila.codigo) : normalizarIdentificadorCliente(fila.nombre);
+    resueltosPorClave.set(clave, { clienteId: cliente.id, tmsClienteId: cliente.tmsClienteId });
+  };
   for (const fila of preview) {
     try {
       const input: ClienteInput = {
@@ -162,26 +246,84 @@ export async function POST(req: Request, ctx: Ctx) {
         contactoTelefono: fila.contactoTelefono,
         tipo: fila.tipo,
         estado: fila.estado,
+        condicionCredito: fila.condicionCredito,
         notas: fila.notas,
       };
       if (fila.estadoValidacion === "NUEVO") {
-        await crearCliente(guard.empresa.id, input);
+        const creado = await crearCliente(guard.empresa.id, input);
         creados += 1;
+        registrar(fila, creado);
       } else if (fila.estadoValidacion === "ACTUALIZAR" && fila.clienteId) {
         const actualizado = await actualizarCliente(guard.empresa.id, fila.clienteId, input);
         if (!actualizado) throw new Error("El cliente dejó de existir antes de confirmar.");
         actualizados += 1;
+        registrar(fila, actualizado);
+      } else if (fila.estadoValidacion === "OMITIR" && fila.clienteId) {
+        // No se modifica el cliente, pero sigue siendo un destino válido
+        // para contactos nuevos de la hoja CONTACTOS (agregar contactos no
+        // es "modificar" el cliente en el sentido de actualizar_si_existe).
+        const existente = existentes.find((c) => c.id === fila.clienteId);
+        if (existente) registrar(fila, existente);
       }
     } catch (error) {
       errores.push({ filaExcel: fila.filaExcel, detalle: error instanceof Error ? error.message : "No se pudo guardar." });
     }
   }
+
+  let contactosCreados = 0;
+  let contactosOmitidos = 0;
+  const erroresContactos: { filaExcel: number; detalle: string }[] = [];
+  const contactosExistentesCache = new Map<number, Set<string>>();
+  for (const filaContacto of previewContactos) {
+    if (filaContacto.estadoValidacion !== "OK") continue;
+    const clave = filaContacto.clienteCodigo
+      ? normalizarIdentificadorCliente(filaContacto.clienteCodigo)
+      : normalizarIdentificadorCliente(filaContacto.clienteNombre ?? "");
+    const destino = resueltosPorClave.get(clave);
+    if (!destino || !destino.tmsClienteId) {
+      erroresContactos.push({ filaExcel: filaContacto.filaExcel, detalle: "El cliente no se sincronizó con TMS; no se pudo guardar el contacto." });
+      continue;
+    }
+    try {
+      // Evita duplicar contactos si el mismo archivo se valida/importa más
+      // de una vez: nunca se hace UPDATE/DELETE aquí, solo se omite un
+      // nombre ya presente (activo o no) para ESTE cliente.
+      let nombresExistentes = contactosExistentesCache.get(destino.tmsClienteId);
+      if (!nombresExistentes) {
+        const actuales = await listarContactosCliente(guard.empresa.id, destino.tmsClienteId, { incluirInactivos: true });
+        nombresExistentes = new Set(actuales.map((c) => normalizarIdentificadorCliente(c.nombre)));
+        contactosExistentesCache.set(destino.tmsClienteId, nombresExistentes);
+      }
+      const claveNombre = normalizarIdentificadorCliente(filaContacto.nombre);
+      if (nombresExistentes.has(claveNombre)) {
+        contactosOmitidos += 1;
+        continue;
+      }
+      await crearContactoCliente(guard.empresa.id, destino.tmsClienteId, {
+        nombre: filaContacto.nombre,
+        cargo: filaContacto.cargo,
+        telefono: filaContacto.telefono,
+        email: filaContacto.email,
+        observaciones: filaContacto.observaciones,
+      });
+      nombresExistentes.add(claveNombre);
+      contactosCreados += 1;
+    } catch (error) {
+      erroresContactos.push({ filaExcel: filaContacto.filaExcel, detalle: error instanceof Error ? error.message : "No se pudo guardar el contacto." });
+    }
+  }
+
   return NextResponse.json({
     accion,
     resumen,
     creados,
     actualizados,
     errores,
-    mensaje: `Importación finalizada: ${creados} creado(s), ${actualizados} actualizado(s), ${resumen.omitidos} omitido(s).`,
+    resumenContactos,
+    contactosCreados,
+    contactosOmitidos,
+    erroresContactos,
+    mensaje: `Importación finalizada: ${creados} creado(s), ${actualizados} actualizado(s), ${resumen.omitidos} omitido(s)`
+      + (previewContactos.length ? `. Contactos: ${contactosCreados} creado(s), ${contactosOmitidos} ya existían.` : "."),
   });
 }
