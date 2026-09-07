@@ -7,6 +7,15 @@ export type PersonalDefaultRuta = {
 
 export type EstadoDefaultsViaje = {
   tarifaComercial: string;
+  /**
+   * TMS-GASTOS-REPORTES-1 (bloqueo 2) — fotografía histórica del costo
+   * operativo de referencia, mismo tratamiento que tarifaComercial: se
+   * sugiere/copia de la ruta SOLO si el usuario todavía no capturó nada,
+   * y queda editable para este viaje sin tocar la ruta maestra. Una vez
+   * guardado el plan, cambios futuros de tms_cliente_rutas.costo_operativo
+   * NUNCA alteran este valor ya persistido.
+   */
+  costoOperativoReferencia: string;
   pilotoEmpleadoId: number;
   pilotoNombre: string;
   auxiliarEmpleadoIds: number[];
@@ -19,6 +28,7 @@ export function aplicarDefaultsRutaSinSobrescribir(
   actual: EstadoDefaultsViaje,
   tarifaReferencia: number | null,
   personal: PersonalDefaultRuta[],
+  costoOperativoRuta?: number | null,
 ): EstadoDefaultsViaje {
   const piloto = personal.find((p) => p.rol === "Piloto");
   const auxiliares = personal.filter((p) => p.rol === "Auxiliar");
@@ -41,6 +51,10 @@ export function aplicarDefaultsRutaSinSobrescribir(
       actual.tarifaComercial === "" && tarifaReferencia != null
         ? String(tarifaReferencia)
         : actual.tarifaComercial,
+    costoOperativoReferencia:
+      actual.costoOperativoReferencia === "" && costoOperativoRuta != null
+        ? String(costoOperativoRuta)
+        : actual.costoOperativoReferencia,
     pilotoEmpleadoId: pilotoFinal?.empleadoId ?? actual.pilotoEmpleadoId,
     pilotoNombre: pilotoFinal?.empleadoNombre ?? actual.pilotoNombre,
     auxiliarEmpleadoIds: auxiliaresFinales.length

@@ -68,7 +68,7 @@ describe("reporteRentabilidadPorViaje", () => {
   it("calcula utilidad = tarifa - costoOperativo - gastos - viaticos", async () => {
     vi.mocked(query).mockResolvedValue([{
       plan_id: 1, plan_codigo: "PLAN-1", fecha_plan: "2026-09-01", cliente_nombre: "Acme",
-      tarifa_comercial: "1000.00", costo_operativo: "300.00", total_gastos: "150.00", total_viaticos: "100.00",
+      tarifa_comercial: "1000.00", costo_operativo_referencia: "300.00", total_gastos: "150.00", total_viaticos: "100.00",
     }] as never);
     const [f] = await reporteRentabilidadPorViaje(7);
     expect(f).toMatchObject({
@@ -76,13 +76,47 @@ describe("reporteRentabilidadPorViaje", () => {
     });
   });
 
-  it("costo operativo null (viaje sin ruta con costo capturado) no rompe el cálculo", async () => {
+  it("costo operativo null (nunca se capturó snapshot para este viaje) no rompe el cálculo", async () => {
     vi.mocked(query).mockResolvedValue([{
       plan_id: 1, plan_codigo: "PLAN-1", fecha_plan: "2026-09-01", cliente_nombre: null,
-      tarifa_comercial: "1000.00", costo_operativo: null, total_gastos: "0.00", total_viaticos: "0.00",
+      tarifa_comercial: "1000.00", costo_operativo_referencia: null, total_gastos: "0.00", total_viaticos: "0.00",
     }] as never);
     const [f] = await reporteRentabilidadPorViaje(7);
     expect(f.costoOperativo).toBeNull();
     expect(f.utilidad).toBe(1000);
+  });
+
+  it("lee el snapshot del plan (costo_operativo_referencia), nunca la ruta maestra en vivo", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await reporteRentabilidadPorViaje(7);
+    const sql = vi.mocked(query).mock.calls[0][0] as string;
+    expect(sql).toContain("p.costo_operativo_referencia");
+    expect(sql).not.toContain("tms_cliente_rutas");
+  });
+});
+
+describe("aislamiento multiempresa en los JOIN de reportes (bloqueo 1, revisión PR #204)", () => {
+  it("gastos por viaje/unidad/cliente exigen empresa_id igual en el JOIN, no solo el id", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await reporteGastosPorViaje(7);
+    expect(vi.mocked(query).mock.calls[0][0]).toContain("plan.empresa_id = g.empresa_id");
+    await reporteGastosPorUnidad(7);
+    expect(vi.mocked(query).mock.calls[1][0]).toContain("veh.empresa_id = g.empresa_id");
+    await reporteGastosPorCliente(7);
+    expect(vi.mocked(query).mock.calls[2][0]).toContain("cli.empresa_id = g.empresa_id");
+  });
+
+  it("viáticos por viaje/empleado exige empresa_id igual también para tms_personal", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await reporteViaticosPorViajeEmpleado(7);
+    const sql = vi.mocked(query).mock.calls[0][0] as string;
+    expect(sql).toContain("p.empresa_id = v.empresa_id");
+    expect(sql).toContain("per.empresa_id = v.empresa_id");
+  });
+
+  it("rentabilidad exige empresa_id igual para el JOIN de cliente", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await reporteRentabilidadPorViaje(7);
+    expect(vi.mocked(query).mock.calls[0][0]).toContain("cli.empresa_id = p.empresa_id");
   });
 });

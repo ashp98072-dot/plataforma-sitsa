@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db", () => ({ getPool: vi.fn(), query: vi.fn(), execute: vi.fn() }));
 import { getPool, query } from "@/lib/db";
-import { cambiarEstadoSolicitudFondo, crearSolicitudFondo } from "./fondos";
+import { cambiarEstadoSolicitudFondo, crearSolicitudFondo, listarSolicitudesFondo } from "./fondos";
 
 function filaSolicitud(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -14,12 +14,17 @@ function filaSolicitud(overrides: Partial<Record<string, unknown>> = {}) {
   };
 }
 
-function conexion(opts: { fallaEn?: string; estadoActual?: string } = {}) {
+function conexion(opts: { fallaEn?: string; estadoActual?: string; empleadoEnEmpresa?: boolean } = {}) {
+  const empleadoEnEmpresa = opts.empleadoEnEmpresa ?? true;
   const conn = {
     beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn(),
     query: vi.fn(async (sql: string) => {
       if (sql.includes("FROM tms_solicitudes_fondo WHERE id")) {
         return [[{ id: 1, estado: opts.estadoActual ?? "Pendiente" }]];
+      }
+      // AISLAMIENTO MULTIEMPRESA: SELECT id FROM empleados WHERE id = ? AND empresa_id = ?
+      if (sql.includes("FROM empleados")) {
+        return [empleadoEnEmpresa ? [{ id: 1 }] : []];
       }
       return [[]];
     }),
@@ -35,6 +40,16 @@ function conexion(opts: { fallaEn?: string; estadoActual?: string } = {}) {
 }
 
 beforeEach(() => vi.resetAllMocks());
+
+describe("aislamiento multiempresa en el SELECT de listado (bloqueo 1, revisión PR #204)", () => {
+  it("los JOIN a empleados (requirente/autorizante) exigen empresa_id igual, no solo el id", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await listarSolicitudesFondo(7);
+    const sql = vi.mocked(query).mock.calls[0][0] as string;
+    expect(sql).toContain("req.id = s.requirente_empleado_id AND req.empresa_id = s.empresa_id");
+    expect(sql).toContain("aut.id = s.autorizante_empleado_id AND aut.empresa_id = s.empresa_id");
+  });
+});
 
 describe("crearSolicitudFondo", () => {
   it("rechaza sin líneas", async () => {
@@ -86,6 +101,27 @@ describe("crearSolicitudFondo", () => {
     expect(conn.rollback).toHaveBeenCalledOnce();
     expect(conn.commit).not.toHaveBeenCalled();
   });
+
+  it("AISLAMIENTO MULTIEMPRESA: rechaza un requirenteEmpleadoId que no pertenece a esta empresa, sin insertar nada (bloqueo 1, revisión PR #204)", async () => {
+    const conn = conexion({ empleadoEnEmpresa: false });
+    await expect(crearSolicitudFondo(7, {
+      fechaRequerimiento: "2026-09-01", requirenteEmpleadoId: 999,
+      lineas: [{ categoria: "Combustible", monto: 100 }],
+    })).rejects.toThrow("El requirente indicado no pertenece a esta empresa.");
+    expect(conn.rollback).toHaveBeenCalledOnce();
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(conn.execute.mock.calls.some((c) => (c[0] as string).includes("INSERT"))).toBe(false);
+  });
+
+  it("con requirenteEmpleadoId de la MISMA empresa, sí crea (no bloquea referencias legítimas)", async () => {
+    const conn = conexion({ empleadoEnEmpresa: true });
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    await crearSolicitudFondo(7, {
+      fechaRequerimiento: "2026-09-01", requirenteEmpleadoId: 3,
+      lineas: [{ categoria: "Combustible", monto: 100 }],
+    });
+    expect(conn.commit).toHaveBeenCalledOnce();
+  });
 });
 
 describe("cambiarEstadoSolicitudFondo", () => {
@@ -117,5 +153,13 @@ describe("cambiarEstadoSolicitudFondo", () => {
     const conn = conexion();
     conn.query.mockResolvedValue([[]]);
     expect(await cambiarEstadoSolicitudFondo(7, 999, "autorizar")).toBeNull();
+  });
+
+  it("AISLAMIENTO MULTIEMPRESA: rechaza autorizar con un autorizanteEmpleadoId que no pertenece a esta empresa", async () => {
+    const conn = conexion({ estadoActual: "Pendiente", empleadoEnEmpresa: false });
+    await expect(cambiarEstadoSolicitudFondo(7, 1, "autorizar", { autorizanteEmpleadoId: 999 }))
+      .rejects.toThrow("El autorizante indicado no pertenece a esta empresa.");
+    expect(conn.rollback).toHaveBeenCalledOnce();
+    expect(conn.commit).not.toHaveBeenCalled();
   });
 });

@@ -50,6 +50,16 @@ describe("listarGastos", () => {
     });
   });
 
+  it("AISLAMIENTO MULTIEMPRESA: los JOIN de empleado/vehiculo/cliente/plan exigen empresa_id igual, no solo el id (bloqueo 1, revisión PR #204)", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await listarGastos(7);
+    const sql = vi.mocked(query).mock.calls[0][0] as string;
+    expect(sql).toContain("emp.id = g.empleado_id AND emp.empresa_id = g.empresa_id");
+    expect(sql).toContain("veh.id = g.vehiculo_id AND veh.empresa_id = g.empresa_id");
+    expect(sql).toContain("cli.id = g.cliente_id AND cli.empresa_id = g.empresa_id");
+    expect(sql).toContain("plan.id = g.plan_id AND plan.empresa_id = g.empresa_id");
+  });
+
   it("incluirInactivos evita el filtro de activo", async () => {
     vi.mocked(query).mockResolvedValue([] as never);
     await listarGastos(7, { incluirInactivos: true });
@@ -98,6 +108,52 @@ describe("crearGasto", () => {
     expect(g.id).toBe(55);
     expect(vi.mocked(execute).mock.calls[0][0]).toContain("INSERT INTO tms_gastos_operativos");
   });
+
+  describe("AISLAMIENTO MULTIEMPRESA: rechaza referencias que no pertenecen a la empresa actual (bloqueo 1, revisión PR #204)", () => {
+    it("empleado de otra empresa (id existe, pero no en esta empresa) se rechaza sin insertar", async () => {
+      vi.mocked(query).mockResolvedValue([] as never); // ninguna referencia encuentra fila -> no pertenece a esta empresa
+      await expect(crearGasto(7, {
+        fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, empleadoId: 999,
+      })).rejects.toThrow("El empleado indicado no pertenece a esta empresa.");
+      expect(execute).not.toHaveBeenCalled();
+    });
+
+    it("vehiculo de otra empresa se rechaza", async () => {
+      vi.mocked(query).mockResolvedValue([] as never);
+      await expect(crearGasto(7, {
+        fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, vehiculoId: 999,
+      })).rejects.toThrow("El vehículo indicado no pertenece a esta empresa.");
+      expect(execute).not.toHaveBeenCalled();
+    });
+
+    it("cliente de otra empresa se rechaza", async () => {
+      vi.mocked(query).mockResolvedValue([] as never);
+      await expect(crearGasto(7, {
+        fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, clienteId: 999,
+      })).rejects.toThrow("El cliente indicado no pertenece a esta empresa.");
+      expect(execute).not.toHaveBeenCalled();
+    });
+
+    it("plan/viaje de otra empresa se rechaza", async () => {
+      vi.mocked(query).mockResolvedValue([] as never);
+      await expect(crearGasto(7, {
+        fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, planId: 999,
+      })).rejects.toThrow("El viaje/plan indicado no pertenece a esta empresa.");
+      expect(execute).not.toHaveBeenCalled();
+    });
+
+    it("con id válido de la MISMA empresa, sí inserta (no bloquea referencias legítimas)", async () => {
+      vi.mocked(query)
+        .mockResolvedValueOnce([{ id: 3 }] as never) // valida empleado
+        .mockResolvedValueOnce([filaGasto({ id: 55 })] as never); // obtenerGasto tras crear
+      vi.mocked(execute).mockResolvedValue({ insertId: 55 } as never);
+      const g = await crearGasto(7, {
+        fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, empleadoId: 3,
+      });
+      expect(g.id).toBe(55);
+      expect(execute).toHaveBeenCalledOnce();
+    });
+  });
 });
 
 describe("actualizarGasto / desactivarGasto", () => {
@@ -122,5 +178,24 @@ describe("actualizarGasto / desactivarGasto", () => {
       .mockResolvedValueOnce([filaGasto({ activo: 0 })] as never);
     const g = await desactivarGasto(7, 1);
     expect(g?.activo).toBe(false);
+  });
+
+  it("AISLAMIENTO MULTIEMPRESA: rechaza reasignar el gasto a un vehiculo de otra empresa", async () => {
+    vi.mocked(query)
+      .mockResolvedValueOnce([filaGasto()] as never) // obtenerGasto (actual)
+      .mockResolvedValueOnce([] as never); // valida vehiculo -> no existe en esta empresa
+    await expect(actualizarGasto(7, 1, { vehiculoId: 999 })).rejects.toThrow("El vehículo indicado no pertenece a esta empresa.");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("no re-valida referencias que no cambiaron (solo valida lo que viene en `cambios`)", async () => {
+    vi.mocked(query)
+      .mockResolvedValueOnce([filaGasto()] as never) // obtenerGasto (actual): trae empleado/vehiculo/cliente/plan ya asignados
+      .mockResolvedValueOnce([filaGasto({ monto: "999.00" })] as never); // obtenerGasto (tras UPDATE)
+    // Solo se envía `monto` — ninguna referencia debería re-validarse, así
+    // que `query` solo debe llamarse 2 veces (antes y después del UPDATE).
+    const g = await actualizarGasto(7, 1, { monto: 999 });
+    expect(g?.monto).toBe(999);
+    expect(query).toHaveBeenCalledTimes(2);
   });
 });

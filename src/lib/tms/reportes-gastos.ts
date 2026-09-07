@@ -103,7 +103,7 @@ export async function reporteGastosPorViaje(empresaId: number, f: FiltrosReporte
     `SELECT CAST(g.plan_id AS CHAR) AS clave, COALESCE(plan.codigo, 'Sin viaje') AS etiqueta,
             COUNT(*) AS registros, SUM(g.cantidad * g.monto) AS total_monto
      FROM tms_gastos_operativos g
-     LEFT JOIN tms_planes_viaje plan ON plan.id = g.plan_id
+     LEFT JOIN tms_planes_viaje plan ON plan.id = g.plan_id AND plan.empresa_id = g.empresa_id
      WHERE ${where}
      GROUP BY g.plan_id, plan.codigo
      ORDER BY total_monto DESC`,
@@ -119,7 +119,7 @@ export async function reporteGastosPorUnidad(empresaId: number, f: FiltrosReport
     `SELECT CAST(g.vehiculo_id AS CHAR) AS clave, COALESCE(veh.placa, 'Sin unidad') AS etiqueta,
             COUNT(*) AS registros, SUM(g.cantidad * g.monto) AS total_monto
      FROM tms_gastos_operativos g
-     LEFT JOIN flota_vehiculos veh ON veh.id = g.vehiculo_id
+     LEFT JOIN flota_vehiculos veh ON veh.id = g.vehiculo_id AND veh.empresa_id = g.empresa_id
      WHERE ${where}
      GROUP BY g.vehiculo_id, veh.placa
      ORDER BY total_monto DESC`,
@@ -135,7 +135,7 @@ export async function reporteGastosPorCliente(empresaId: number, f: FiltrosRepor
     `SELECT CAST(g.cliente_id AS CHAR) AS clave, COALESCE(cli.nombre, 'Sin cliente') AS etiqueta,
             COUNT(*) AS registros, SUM(g.cantidad * g.monto) AS total_monto
      FROM tms_gastos_operativos g
-     LEFT JOIN tms_clientes cli ON cli.id = g.cliente_id
+     LEFT JOIN tms_clientes cli ON cli.id = g.cliente_id AND cli.empresa_id = g.empresa_id
      WHERE ${where}
      GROUP BY g.cliente_id, cli.nombre
      ORDER BY total_monto DESC`,
@@ -203,7 +203,7 @@ export async function reporteViaticosPorViajeEmpleado(
             v.personal_id, per.nombre AS personal_nombre, v.rol, v.monto_sugerido, v.monto_asignado, v.estado
      FROM tms_viaticos v
      INNER JOIN tms_planes_viaje p ON p.id = v.plan_id AND p.empresa_id = v.empresa_id
-     INNER JOIN tms_personal per ON per.id = v.personal_id
+     INNER JOIN tms_personal per ON per.id = v.personal_id AND per.empresa_id = v.empresa_id
      WHERE ${condiciones.join(" AND ")}
      ORDER BY p.fecha_plan DESC, v.id DESC`,
     params,
@@ -228,7 +228,14 @@ export type FilaRentabilidadViaje = {
   fechaPlan: string;
   clienteNombre: string | null;
   tarifaComercial: number;
-  /** De la ruta maestra usada (tms_cliente_rutas.costo_operativo vía ruta_id) — null si el viaje no usó una ruta con costo operativo capturado. */
+  /**
+   * Snapshot histórico (tms_planes_viaje.costo_operativo_referencia),
+   * copiado de la ruta al momento de programar el viaje — NUNCA el valor
+   * ACTUAL de tms_cliente_rutas.costo_operativo (bloqueo 2, revisión PR
+   * #204): si la ruta maestra cambia su costo operativo después, los
+   * viajes ya guardados no deben verse afectados, igual que
+   * tarifaComercial. null si nunca se capturó para este viaje.
+   */
   costoOperativo: number | null;
   gastos: number;
   viaticos: number;
@@ -237,11 +244,11 @@ export type FilaRentabilidadViaje = {
 
 /**
  * Rentabilidad por viaje: tarifa_comercial (capturada en el propio plan)
- * menos costo_operativo (de la ruta maestra usada, tms_cliente_rutas —
- * fase 1 no tiene un costo operativo propio por viaje, ver
- * RUTAS-PREDETERMINADOS-1) menos gastos operativos (tms_gastos_operativos)
- * menos viáticos (tms_viaticos, monto_asignado). Ninguno de los 4
- * componentes se duplica: cada uno se LEE de su propia tabla.
+ * menos costo_operativo_referencia (snapshot histórico en el propio plan,
+ * ver tipo arriba) menos gastos operativos (tms_gastos_operativos) menos
+ * viáticos (tms_viaticos, monto_asignado). Los 4 componentes se muestran
+ * SEPARADOS siempre — nunca se mezclan ni se ocultan, incluso cuando
+ * alguno es 0 o null.
  */
 export async function reporteRentabilidadPorViaje(
   empresaId: number,
@@ -256,12 +263,11 @@ export async function reporteRentabilidadPorViaje(
   const rows = await query<RowDataPacket[]>(
     `SELECT p.id AS plan_id, p.codigo AS plan_codigo, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan,
             cli.nombre AS cliente_nombre, p.tarifa_comercial,
-            ruta.costo_operativo,
+            p.costo_operativo_referencia,
             COALESCE(g.total_gastos, 0) AS total_gastos,
             COALESCE(v.total_viaticos, 0) AS total_viaticos
      FROM tms_planes_viaje p
-     LEFT JOIN tms_clientes cli ON cli.id = p.cliente_id
-     LEFT JOIN tms_cliente_rutas ruta ON ruta.id = p.ruta_id
+     LEFT JOIN tms_clientes cli ON cli.id = p.cliente_id AND cli.empresa_id = p.empresa_id
      LEFT JOIN (
        SELECT plan_id, SUM(cantidad * monto) AS total_gastos FROM tms_gastos_operativos
        WHERE empresa_id = ? AND activo = 1 GROUP BY plan_id
@@ -276,7 +282,7 @@ export async function reporteRentabilidadPorViaje(
   );
   return rows.map((r) => {
     const tarifa = Number(r.tarifa_comercial ?? 0);
-    const costoOperativo = r.costo_operativo != null ? Number(r.costo_operativo) : null;
+    const costoOperativo = r.costo_operativo_referencia != null ? Number(r.costo_operativo_referencia) : null;
     const gastos = Number(r.total_gastos ?? 0);
     const viaticos = Number(r.total_viaticos ?? 0);
     return {

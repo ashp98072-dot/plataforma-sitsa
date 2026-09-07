@@ -21,6 +21,8 @@ export type RutaOpt = {
   destinoDescripcion: string | null;
   horaHabitual: string | null;
   tarifaReferencia: number | null;
+  /** TMS-GASTOS-REPORTES-1: solo sugerido/copiado al plan (snapshot editable) — nunca leído en vivo después de guardar. */
+  costoOperativo: number | null;
   contactoClienteId: number | null;
   contactoNombre: string | null;
   contactoCargo: string | null;

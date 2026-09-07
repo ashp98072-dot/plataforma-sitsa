@@ -78,6 +78,8 @@ export type Plan = {
   tipo_traslado: string | null;
   regreso_estimado: string | null;
   tarifa_comercial: number | null;
+  /** TMS-GASTOS-REPORTES-1: snapshot editable del costo operativo de referencia, copiado de la ruta al guardar — nunca se recalcula desde la ruta viva. */
+  costo_operativo_referencia: number | null;
   referencia_cliente: string | null;
   /** VIAT-4/VIAT-4b: fotografía histórica de la ruta usada al armar el viaje. */
   ruta_id: number | null;

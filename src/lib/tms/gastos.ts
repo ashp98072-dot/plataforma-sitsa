@@ -106,10 +106,10 @@ const SELECT = `
          g.categoria, g.descripcion, g.cantidad, g.monto, g.metodo_pago, g.numero_cuenta_pago,
          g.tiene_factura, g.observaciones, g.activo, g.creado_por, g.creado_en, g.actualizado_en
   FROM tms_gastos_operativos g
-  LEFT JOIN empleados emp ON emp.id = g.empleado_id
-  LEFT JOIN flota_vehiculos veh ON veh.id = g.vehiculo_id
-  LEFT JOIN tms_clientes cli ON cli.id = g.cliente_id
-  LEFT JOIN tms_planes_viaje plan ON plan.id = g.plan_id
+  LEFT JOIN empleados emp ON emp.id = g.empleado_id AND emp.empresa_id = g.empresa_id
+  LEFT JOIN flota_vehiculos veh ON veh.id = g.vehiculo_id AND veh.empresa_id = g.empresa_id
+  LEFT JOIN tms_clientes cli ON cli.id = g.cliente_id AND cli.empresa_id = g.empresa_id
+  LEFT JOIN tms_planes_viaje plan ON plan.id = g.plan_id AND plan.empresa_id = g.empresa_id
 `;
 
 export type FiltrosGastos = {
@@ -166,6 +166,48 @@ export type GastoOperativoInput = {
   observaciones?: string | null;
 };
 
+/**
+ * AISLAMIENTO MULTIEMPRESA (corrección post-revisión PR #204) — valida
+ * ANTES de escribir que cada referencia opcional (empleado/vehículo/
+ * cliente/plan) pertenezca a la MISMA empresa, aunque el id exista en la
+ * tabla (de otra empresa). Esto da un mensaje claro; la FK compuesta
+ * (empresa_id, xxx_id) en la base (ver
+ * sql/migrate-2026-09-tms-gastos-reportes.sql) es la garantía real e
+ * incondicional — esta validación es la primera línea de defensa, no la
+ * única.
+ */
+async function validarReferenciasGasto(
+  empresaId: number,
+  input: Pick<GastoOperativoInput, "empleadoId" | "vehiculoId" | "clienteId" | "planId">,
+): Promise<void> {
+  const checks: Promise<void>[] = [];
+  if (input.empleadoId != null) {
+    checks.push(
+      query<RowDataPacket[]>("SELECT id FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1", [input.empleadoId, empresaId])
+        .then((rows) => { if (!rows[0]) throw new Error("El empleado indicado no pertenece a esta empresa."); }),
+    );
+  }
+  if (input.vehiculoId != null) {
+    checks.push(
+      query<RowDataPacket[]>("SELECT id FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1", [input.vehiculoId, empresaId])
+        .then((rows) => { if (!rows[0]) throw new Error("El vehículo indicado no pertenece a esta empresa."); }),
+    );
+  }
+  if (input.clienteId != null) {
+    checks.push(
+      query<RowDataPacket[]>("SELECT id FROM tms_clientes WHERE id = ? AND empresa_id = ? LIMIT 1", [input.clienteId, empresaId])
+        .then((rows) => { if (!rows[0]) throw new Error("El cliente indicado no pertenece a esta empresa."); }),
+    );
+  }
+  if (input.planId != null) {
+    checks.push(
+      query<RowDataPacket[]>("SELECT id FROM tms_planes_viaje WHERE id = ? AND empresa_id = ? LIMIT 1", [input.planId, empresaId])
+        .then((rows) => { if (!rows[0]) throw new Error("El viaje/plan indicado no pertenece a esta empresa."); }),
+    );
+  }
+  await Promise.all(checks);
+}
+
 export async function crearGasto(
   empresaId: number,
   input: GastoOperativoInput,
@@ -174,6 +216,7 @@ export async function crearGasto(
   if (!input.fechaSolicitud) throw new Error("Fecha de solicitud requerida.");
   if (!input.categoria) throw new Error("Categoría de gasto requerida.");
   if (!(input.monto > 0)) throw new Error("El monto debe ser mayor a cero.");
+  await validarReferenciasGasto(empresaId, input);
   const r = await execute(
     `INSERT INTO tms_gastos_operativos
        (empresa_id, fecha_solicitud, fecha_viaje, empleado_id, vehiculo_id, cliente_id, plan_id,
@@ -215,6 +258,14 @@ export async function actualizarGasto(
   if (!actual) return null;
   const monto = cambios.monto !== undefined ? cambios.monto : actual.monto;
   if (!(monto > 0)) throw new Error("El monto debe ser mayor a cero.");
+  const empleadoId = cambios.empleadoId !== undefined ? cambios.empleadoId : actual.empleadoId;
+  const vehiculoId = cambios.vehiculoId !== undefined ? cambios.vehiculoId : actual.vehiculoId;
+  const clienteId = cambios.clienteId !== undefined ? cambios.clienteId : actual.clienteId;
+  const planId = cambios.planId !== undefined ? cambios.planId : actual.planId;
+  // Solo valida lo que REALMENTE cambia — las referencias ya guardadas
+  // fueron validadas al crear el gasto (no se re-valida en cada edición
+  // no relacionada; cambios.x en undefined significa "no tocar este campo").
+  await validarReferenciasGasto(empresaId, cambios);
   await execute(
     `UPDATE tms_gastos_operativos SET
        fecha_solicitud = ?, fecha_viaje = ?, empleado_id = ?, vehiculo_id = ?, cliente_id = ?, plan_id = ?,
@@ -224,10 +275,10 @@ export async function actualizarGasto(
     [
       cambios.fechaSolicitud !== undefined ? cambios.fechaSolicitud : actual.fechaSolicitud,
       cambios.fechaViaje !== undefined ? cambios.fechaViaje : actual.fechaViaje,
-      cambios.empleadoId !== undefined ? cambios.empleadoId : actual.empleadoId,
-      cambios.vehiculoId !== undefined ? cambios.vehiculoId : actual.vehiculoId,
-      cambios.clienteId !== undefined ? cambios.clienteId : actual.clienteId,
-      cambios.planId !== undefined ? cambios.planId : actual.planId,
+      empleadoId,
+      vehiculoId,
+      clienteId,
+      planId,
       cambios.categoria !== undefined ? cambios.categoria : actual.categoria,
       cambios.descripcion !== undefined ? cambios.descripcion?.trim() || null : actual.descripcion,
       cambios.cantidad !== undefined ? cambios.cantidad : actual.cantidad,

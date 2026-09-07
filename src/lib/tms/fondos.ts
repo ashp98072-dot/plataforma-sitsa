@@ -27,6 +27,25 @@ async function executeConn(conn: PoolConnection, sql: string, params: SqlParams 
   return result;
 }
 
+/**
+ * AISLAMIENTO MULTIEMPRESA (corrección post-revisión PR #204) — mismo
+ * criterio que validarReferenciasGasto en gastos.ts: valida ANTES de
+ * escribir que el empleado (requirente/autorizante) pertenezca a la
+ * MISMA empresa, aunque el id exista en otra. La FK compuesta
+ * (empresa_id, xxx_empleado_id) en la base es la garantía real; esto es
+ * la primera línea de defensa, con un mensaje claro.
+ */
+async function validarEmpleadoDeEmpresaTx(
+  conn: PoolConnection,
+  empresaId: number,
+  empleadoId: number | null | undefined,
+  etiqueta: string,
+): Promise<void> {
+  if (empleadoId == null) return;
+  const rows = await queryConn<RowDataPacket[]>(conn, "SELECT id FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1", [empleadoId, empresaId]);
+  if (!rows[0]) throw new Error(`El ${etiqueta} indicado no pertenece a esta empresa.`);
+}
+
 export const ESTADOS_FONDO = ["Pendiente", "Autorizada", "Rechazada", "Liquidada"] as const;
 export type EstadoFondo = (typeof ESTADOS_FONDO)[number];
 
@@ -110,8 +129,8 @@ const SELECT_SOLICITUD = `
          s.estado, s.autorizado_en, s.rechazado_en, s.motivo_rechazo, s.liquidado_en,
          s.observaciones, s.creado_por, s.creado_en
   FROM tms_solicitudes_fondo s
-  LEFT JOIN empleados req ON req.id = s.requirente_empleado_id
-  LEFT JOIN empleados aut ON aut.id = s.autorizante_empleado_id
+  LEFT JOIN empleados req ON req.id = s.requirente_empleado_id AND req.empresa_id = s.empresa_id
+  LEFT JOIN empleados aut ON aut.id = s.autorizante_empleado_id AND aut.empresa_id = s.empresa_id
 `;
 
 export type FiltrosFondos = {
@@ -186,6 +205,7 @@ export async function crearSolicitudFondo(
   let solicitudId = 0;
   try {
     await conn.beginTransaction();
+    await validarEmpleadoDeEmpresaTx(conn, empresaId, input.requirenteEmpleadoId, "requirente");
     const r = await executeConn(conn,
       `INSERT INTO tms_solicitudes_fondo
         (empresa_id, codigo, requirente_empleado_id, requirente_nombre, fecha_requerimiento, total, observaciones, creado_por)
@@ -268,6 +288,7 @@ export async function cambiarEstadoSolicitudFondo(
       throw new Error(`No se puede pasar de "${estadoActual}" a "${destino}".`);
     }
     if (destino === "Autorizada") {
+      await validarEmpleadoDeEmpresaTx(conn, empresaId, opts.autorizanteEmpleadoId, "autorizante");
       await executeConn(conn,
         `UPDATE tms_solicitudes_fondo SET estado = ?, autorizante_empleado_id = ?, autorizante_nombre = ?, autorizado_en = NOW()
          WHERE id = ? AND empresa_id = ?`,
