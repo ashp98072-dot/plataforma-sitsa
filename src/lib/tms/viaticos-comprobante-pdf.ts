@@ -3,7 +3,7 @@ import PDFDocument from "pdfkit";
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
 import { absPathFromRelative } from "@/lib/uploads";
-import { ahoraLocal, formatearTimestampVisible } from "@/lib/rrhh/dates";
+import { ahoraLocal, fmtTs, formatearTimestampVisible } from "@/lib/rrhh/dates";
 import { dibujarTablaEnDoc } from "@/lib/rrhh/export-files";
 import { listarViaticosControl } from "@/lib/tms/viaticos";
 import { listarFirmasViatico, type FirmaViaticoResumen } from "@/lib/firmas/firmas-lectura";
@@ -57,6 +57,66 @@ function moneda(v: number): string {
 export function tituloEmpresa(nombre: string): string {
   const partes = nombre.split("/").map((p) => p.trim()).filter(Boolean);
   return partes.length > 1 ? partes[partes.length - 1] : nombre;
+}
+
+/**
+ * VIATICOS-COMPROBANTE-PDF (ajuste de formato) — fecha en español,
+ * locale es-GT: "3 de septiembre de 2026, 18:47". No se reutiliza
+ * formatearTimestampVisible (DD/MM/YYYY, usado en todo el resto de la
+ * app) para no cambiar su salida en ningún otro lugar — este formato es
+ * exclusivo del bloque de autorización de este comprobante.
+ *
+ * Reutiliza fmtTs() (src/lib/rrhh/dates.ts) para normalizar el valor
+ * crudo de MySQL (mismo criterio de zona horaria que el resto de la
+ * app) antes de formatear — nunca reinterpreta la hora con una zona
+ * distinta.
+ */
+export function fechaLargaEsGt(value: string | Date | null | undefined): string {
+  // fmtTs() reconoce "YYYY-MM-DD HH:MM:SS" y variantes ISO, pero
+  // mapFirmaViatico() guarda fechaHoraServidor como `String(Date)` cuando
+  // mysql2 devuelve un objeto Date (formato nativo de JS, tipo "Thu Sep 03
+  // 2026 18:47:26 GMT+0000 (...)") — fmtTs no lo reconoce como tal y lo
+  // trataría como texto plano. Se re-parsea a un Date real primero (mismo
+  // string que generó `String(date)`, JS lo reconstruye igual) para que
+  // fmtTs use su rama de Date, que sí extrae la hora de pared correcta.
+  let normalizado: string | Date | null | undefined = value;
+  if (typeof value === "string" && !/^\d{4}-\d{2}-\d{2}/.test(value.trim())) {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) normalizado = parsed;
+  }
+  const s = fmtTs(normalizado);
+  if (!s) return "—";
+  const [fecha, hora] = s.split(" ");
+  const [anio, mes, dia] = (fecha ?? "").split("-").map(Number);
+  if (!anio || !mes || !dia) return s;
+  const fechaFmt = new Intl.DateTimeFormat("es-GT", { day: "numeric", month: "long", year: "numeric" }).format(
+    new Date(anio, mes - 1, dia),
+  );
+  if (!hora) return fechaFmt;
+  const [hh, mm] = hora.split(":");
+  const horaNum = Number(hh);
+  if (Number.isNaN(horaNum) || !mm) return fechaFmt;
+  return `${fechaFmt}, ${horaNum}:${mm}`;
+}
+
+/**
+ * VIATICOS-COMPROBANTE-PDF (ajuste de formato) — nombre de usuario
+ * (login, `usuarios.username`) de cada firmante distinto, para mostrarlo
+ * entre paréntesis junto al nombre real ("Heber Sitan (hsitan)") en vez
+ * del rol. Consulta propia y acotada (mismo criterio que imagenFirma()
+ * arriba: no se toca firmas-lectura.ts, que deliberadamente no expone
+ * username) — un solo SELECT por lote, nunca uno por firma.
+ */
+async function usernamesPorUsuarioId(usuarioIds: number[]): Promise<Map<number, string>> {
+  const ids = [...new Set(usuarioIds)];
+  const mapa = new Map<number, string>();
+  if (!ids.length) return mapa;
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = await query<RowDataPacket[]>(`SELECT id, username FROM usuarios WHERE id IN (${placeholders})`, ids);
+  for (const r of rows) {
+    if (r.username != null) mapa.set(Number(r.id), String(r.username));
+  }
+  return mapa;
 }
 
 async function imagenFirma(
@@ -139,6 +199,14 @@ export async function comprobanteAutorizacionesPdf(
     }),
   );
 
+  // Usuario (login) de cada firmante distinto — para mostrarlo entre
+  // paréntesis junto al nombre real, en vez del rol (ver fechaLargaEsGt/
+  // usernamesPorUsuarioId arriba). Un solo SELECT por lote.
+  const usuarioIds = porViatico
+    .map(({ firma }) => firma?.usuarioId)
+    .filter((id): id is number => id != null);
+  const usernamesPorUsuario = await usernamesPorUsuarioId(usuarioIds);
+
   const headers = [
     "Viaje",
     "Fecha",
@@ -219,11 +287,17 @@ export async function comprobanteAutorizacionesPdf(
       doc.moveTo(doc.x, doc.y).lineTo(doc.x + 180, doc.y).strokeColor("#94a3b8").lineWidth(0.6).stroke();
       doc.moveDown(0.15);
       // Nombre real del firmante (snapshot de payload_canonico al firmar)
-      // — NUNCA el usuario de acceso (username/login).
+      // seguido del USUARIO (login) entre paréntesis — ajuste de formato:
+      // antes mostraba el rol ("Administrador General (Admin)"), ahora
+      // "Heber Sitan (hsitan)". Si no hay username (firma sin usuarioId o
+      // usuario ya no existe), cae al rol como respaldo — nunca deja el
+      // paréntesis vacío.
+      const usuarioFirmante = firma.usuarioId != null ? usernamesPorUsuario.get(firma.usuarioId) : undefined;
+      const parentesis = usuarioFirmante ?? firma.rolFirmante ?? null;
       doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#0f172a")
-        .text(`Autorizado por: ${firma.nombreFirmante ?? "No disponible"}${firma.rolFirmante ? ` (${firma.rolFirmante})` : ""}`, { width: pageWidth });
+        .text(`Autorizado por: ${firma.nombreFirmante ?? "No disponible"}${parentesis ? ` (${parentesis})` : ""}`, { width: pageWidth });
       doc.font("Helvetica").fontSize(8.5).fillColor("#475569")
-        .text(`Fecha: ${formatearTimestampVisible(firma.fechaHoraServidor)}`, { width: pageWidth });
+        .text(`Fecha: ${fechaLargaEsGt(firma.fechaHoraServidor)}`, { width: pageWidth });
       doc.moveDown(0.5);
     });
 
