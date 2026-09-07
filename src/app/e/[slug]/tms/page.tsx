@@ -8,7 +8,7 @@ import ClienteUbicacionesAdmin from "@/components/tms/cliente-ubicaciones-admin"
 import ClienteContactosAdmin from "@/components/tms/cliente-contactos-admin";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
-import { puedeCerrarManualmente } from "@/lib/tms/cierre-viaje";
+import { puedeCerrarManualmente } from "@/lib/tms/cierre-viaje-shared";
 
 /**
  * Operaciones → TMS / Logística — VIAT-1b/1c: centro de configuración/

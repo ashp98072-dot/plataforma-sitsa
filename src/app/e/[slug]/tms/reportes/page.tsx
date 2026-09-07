@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
 import { hoyLocal } from "@/lib/rrhh/dates";
-import { puedeCerrarManualmente } from "@/lib/tms/cierre-viaje";
+import { puedeCerrarManualmente } from "@/lib/tms/cierre-viaje-shared";
 
 /**
  * TMS-REPORTES-1 — Operaciones → TMS / Logística → Reportes de viajes.
