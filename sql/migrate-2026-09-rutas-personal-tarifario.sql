@@ -20,7 +20,8 @@ EXECUTE ruta_personal_stmt;
 DEALLOCATE PREPARE ruta_personal_stmt;
 
 ALTER TABLE tms_cliente_rutas
-  ADD COLUMN IF NOT EXISTS tarifa_referencia DECIMAL(12,2) NULL DEFAULT NULL AFTER hora_habitual;
+  ADD COLUMN IF NOT EXISTS tarifa_referencia DECIMAL(12,2) NULL DEFAULT NULL AFTER hora_habitual,
+  ADD COLUMN IF NOT EXISTS costo_operativo DECIMAL(12,2) NULL DEFAULT NULL AFTER tarifa_referencia;
 
 SET @ruta_personal_ddl = IF(EXISTS (
   SELECT 1 FROM (

@@ -789,6 +789,7 @@ CREATE TABLE IF NOT EXISTS tms_cliente_rutas (
   destino_descripcion VARCHAR(300) NULL,
   hora_habitual VARCHAR(20) NULL,
   tarifa_referencia DECIMAL(12,2) NULL DEFAULT NULL,
+  costo_operativo DECIMAL(12,2) NULL DEFAULT NULL,
   contacto_cliente_id INT NULL,
   observaciones VARCHAR(300) NULL,
   activo TINYINT(1) NOT NULL DEFAULT 1,

@@ -38,6 +38,7 @@ type PreviewFilaRuta = {
   horaExcel: string | null;
   contactoExcel: string;
   destinoExcel: string;
+  costoOperativoExcel: number | null;
   tarifaReferenciaExcel: number | null;
   pilotoCodigoExcel: string;
   pilotoViaticoExcel: number | null;
@@ -314,7 +315,7 @@ export default function ImportarRutasPage() {
       <div className="rounded-lg border border-[var(--border)] bg-[var(--panel)] p-3 text-xs text-[var(--muted)]">
         <p>
           El formato incluye encabezados claros, una fila amarilla de ejemplo y una hoja AYUDA.
-          Debes llenar: Código de ruta · Cliente · Lugar de carga · Hora habitual · Contacto · Destino. Opcionalmente puedes agregar tarifa, piloto, auxiliares y sus viáticos habituales.
+          Debes llenar: Código de ruta y Cliente. Opcionalmente puedes agregar costo operativo, tarifario, piloto, auxiliares y sus viáticos habituales.
         </p>
         <p className="mt-1">
           Los códigos que ya existen se omiten por defecto — puedes marcarlos individualmente para
@@ -388,7 +389,8 @@ export default function ImportarRutasPage() {
                     <th className="px-2 py-2">Hora</th>
                     <th className="px-2 py-2">Contacto</th>
                     <th className="px-2 py-2">Destino</th>
-                    <th className="px-2 py-2">Tarifa</th>
+                    <th className="px-2 py-2">Costo operativo</th>
+                    <th className="px-2 py-2">Tarifario</th>
                     <th className="px-2 py-2">Personal habitual</th>
                     <th className="px-2 py-2">Estado</th>
                     <th className="px-2 py-2">Decisión</th>
@@ -404,6 +406,7 @@ export default function ImportarRutasPage() {
                       <td className="px-2 py-2">{f.horaExcel || "—"}</td>
                       <td className="px-2 py-2">{f.contactoExcel || "—"}</td>
                       <td className="px-2 py-2">{f.destinoExcel || "—"}</td>
+                      <td className="px-2 py-2">{f.costoOperativoExcel == null ? "—" : `Q${f.costoOperativoExcel.toFixed(2)}`}</td>
                       <td className="px-2 py-2">{f.tarifaReferenciaExcel == null ? "—" : `Q${f.tarifaReferenciaExcel.toFixed(2)}`}</td>
                       <td className="px-2 py-2">
                         {f.pilotoCodigoExcel ? `Piloto ${f.pilotoCodigoExcel}` : "—"}

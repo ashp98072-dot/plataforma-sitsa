@@ -61,6 +61,7 @@ export type PreviewFilaRuta = {
   horaExcel: string | null;
   contactoExcel: string;
   destinoExcel: string;
+  costoOperativoExcel: number | null;
   tarifaReferenciaExcel: number | null;
   pilotoCodigoExcel: string;
   pilotoViaticoExcel: number | null;
@@ -327,6 +328,7 @@ export async function previsualizarImportacionRutas(
       horaExcel: f.horaExcel,
       contactoExcel: f.contactoExcel,
       destinoExcel: f.destinoExcel,
+      costoOperativoExcel: f.costoOperativoExcel,
       tarifaReferenciaExcel: f.tarifaReferenciaExcel,
       pilotoCodigoExcel: f.pilotoCodigoExcel,
       pilotoViaticoExcel: f.pilotoViaticoExcel,
@@ -374,6 +376,7 @@ function filaBase(f: FilaRutaExcel, normCliente: string, estado: EstadoFilaRuta,
     horaExcel: f.horaExcel,
     contactoExcel: f.contactoExcel,
     destinoExcel: f.destinoExcel,
+    costoOperativoExcel: f.costoOperativoExcel,
     tarifaReferenciaExcel: f.tarifaReferenciaExcel,
     pilotoCodigoExcel: f.pilotoCodigoExcel,
     pilotoViaticoExcel: f.pilotoViaticoExcel,
@@ -551,6 +554,7 @@ export async function confirmarImportacionRutas(
       const personalInvalido = codigosPersonal.find((codigo) => !empleadosPorCodigo.has(codigo));
       if (
         (f.tarifaReferenciaExcel != null && f.tarifaReferenciaExcel < 0) ||
+        (f.costoOperativoExcel != null && f.costoOperativoExcel < 0) ||
         f.auxiliaresCodigosExcel.length > 8 ||
         new Set(codigosPersonal).size !== codigosPersonal.length ||
         personalInvalido
@@ -721,7 +725,8 @@ export async function confirmarImportacionRutas(
         await conn.execute(
           `UPDATE tms_cliente_rutas
            SET cliente_id = ?, ubicacion_carga_id = ?, lugar_carga_texto = ?, destino_descripcion = ?,
-               hora_habitual = ?, contacto_cliente_id = ?, tarifa_referencia = COALESCE(?, tarifa_referencia)
+               hora_habitual = ?, contacto_cliente_id = ?, costo_operativo = COALESCE(?, costo_operativo),
+               tarifa_referencia = COALESCE(?, tarifa_referencia)
            WHERE id = ? AND empresa_id = ?`,
           [
             clienteId,
@@ -730,6 +735,7 @@ export async function confirmarImportacionRutas(
             destinoDescripcion,
             horaHabitual,
             contactoClienteId,
+            f.costoOperativoExcel,
             f.tarifaReferenciaExcel,
             rutaExistenteId,
             empresaId,
@@ -761,8 +767,8 @@ export async function confirmarImportacionRutas(
       } else {
         const [rRuta] = await conn.execute<import("mysql2/promise").ResultSetHeader>(
           `INSERT INTO tms_cliente_rutas
-            (empresa_id, cliente_id, codigo, ubicacion_carga_id, lugar_carga_texto, destino_descripcion, hora_habitual, contacto_cliente_id, tarifa_referencia)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            (empresa_id, cliente_id, codigo, ubicacion_carga_id, lugar_carga_texto, destino_descripcion, hora_habitual, contacto_cliente_id, costo_operativo, tarifa_referencia)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             empresaId,
             clienteId,
@@ -772,6 +778,7 @@ export async function confirmarImportacionRutas(
             destinoDescripcion,
             horaHabitual,
             contactoClienteId,
+            f.costoOperativoExcel,
             f.tarifaReferenciaExcel,
           ],
         );

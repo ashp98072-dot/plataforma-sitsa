@@ -53,6 +53,7 @@ export type RutaParadaInput = {
 
 export type RutaPersonal = {
   empleadoId: number;
+  empleadoCodigo: string;
   empleadoNombre: string;
   rol: "Piloto" | "Auxiliar";
   orden: number;
@@ -76,6 +77,7 @@ export type ClienteRuta = {
   destinoDescripcion: string | null;
   horaHabitual: string | null;
   tarifaReferencia: number | null;
+  costoOperativo: number | null;
   contactoClienteId: number | null;
   contactoNombre: string | null;
   contactoCargo: string | null;
@@ -100,6 +102,7 @@ function mapRuta(r: RowDataPacket): Omit<ClienteRuta, "paradas"> {
     destinoDescripcion: r.destino_descripcion != null ? String(r.destino_descripcion) : null,
     horaHabitual: r.hora_habitual != null ? String(r.hora_habitual) : null,
     tarifaReferencia: r.tarifa_referencia != null ? Number(r.tarifa_referencia) : null,
+    costoOperativo: r.costo_operativo != null ? Number(r.costo_operativo) : null,
     contactoClienteId: r.contacto_cliente_id != null ? Number(r.contacto_cliente_id) : null,
     contactoNombre: r.contacto_nombre != null ? String(r.contacto_nombre) : null,
     contactoCargo: r.contacto_cargo != null ? String(r.contacto_cargo) : null,
@@ -115,7 +118,7 @@ function mapRuta(r: RowDataPacket): Omit<ClienteRuta, "paradas"> {
 const SELECT_RUTA = `
   SELECT r.id, r.cliente_id, c.nombre AS cliente_nombre, r.codigo, r.nombre,
          r.ubicacion_carga_id, r.lugar_carga_texto, r.destino_descripcion, r.hora_habitual,
-         r.tarifa_referencia,
+         r.tarifa_referencia, r.costo_operativo,
          r.contacto_cliente_id, ct.nombre AS contacto_nombre, ct.cargo AS contacto_cargo,
          ct.telefono AS contacto_telefono,
          r.observaciones, r.activo, r.creado_en, r.actualizado_en
@@ -154,7 +157,7 @@ async function personalDeRutas(empresaId: number, rutaIds: number[]): Promise<Ma
   const map = new Map<number, RutaPersonal[]>();
   if (!rutaIds.length) return map;
   const rows = await query<RowDataPacket[]>(
-    `SELECT rp.ruta_id, rp.empleado_id, e.nombre AS empleado_nombre,
+    `SELECT rp.ruta_id, rp.empleado_id, e.codigo AS empleado_codigo, e.nombre AS empleado_nombre,
             rp.rol, rp.orden, rp.viatico_monto
      FROM tms_cliente_ruta_personal rp
      INNER JOIN empleados e ON e.id = rp.empleado_id AND e.empresa_id = rp.empresa_id
@@ -167,6 +170,7 @@ async function personalDeRutas(empresaId: number, rutaIds: number[]): Promise<Ma
     const list = map.get(rutaId) ?? [];
     list.push({
       empleadoId: Number(r.empleado_id),
+      empleadoCodigo: String(r.empleado_codigo),
       empleadoNombre: String(r.empleado_nombre),
       rol: String(r.rol) === "Piloto" ? "Piloto" : "Auxiliar",
       orden: Number(r.orden),
@@ -263,6 +267,7 @@ export type ClienteRutaInput = {
   destinoDescripcion?: string | null;
   horaHabitual?: string | null;
   tarifaReferencia?: number | null;
+  costoOperativo?: number | null;
   contactoClienteId?: number | null;
   observaciones?: string | null;
   paradas?: RutaParadaInput[];
@@ -373,11 +378,11 @@ export async function crearRuta(
     const lugarCargaTexto = await resolverLugarCargaTexto(conn, empresaId, input.ubicacionCargaId, input.lugarCargaTexto);
     const r = await executeConn(conn,
       `INSERT INTO tms_cliente_rutas
-        (empresa_id, cliente_id, codigo, nombre, ubicacion_carga_id, lugar_carga_texto, destino_descripcion, hora_habitual, tarifa_referencia, contacto_cliente_id, observaciones)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (empresa_id, cliente_id, codigo, nombre, ubicacion_carga_id, lugar_carga_texto, destino_descripcion, hora_habitual, tarifa_referencia, costo_operativo, contacto_cliente_id, observaciones)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [empresaId, input.clienteId, codigo, input.nombre?.trim() || null, input.ubicacionCargaId ?? null,
         lugarCargaTexto, input.destinoDescripcion?.trim() || null, input.horaHabitual?.trim() || null,
-        input.tarifaReferencia ?? null, input.contactoClienteId ?? null, input.observaciones?.trim() || null],
+        input.tarifaReferencia ?? null, input.costoOperativo ?? null, input.contactoClienteId ?? null, input.observaciones?.trim() || null],
     );
     rutaId = Number(r.insertId);
     if (input.paradas !== undefined) await guardarParadasRuta(conn, empresaId, rutaId, input.paradas);
@@ -434,7 +439,7 @@ export async function actualizarRuta(
   await executeConn(conn,
     `UPDATE tms_cliente_rutas
      SET codigo = ?, nombre = ?, ubicacion_carga_id = ?, lugar_carga_texto = ?, destino_descripcion = ?,
-         hora_habitual = ?, tarifa_referencia = ?, contacto_cliente_id = ?, observaciones = ?, activo = ?
+         hora_habitual = ?, tarifa_referencia = ?, costo_operativo = ?, contacto_cliente_id = ?, observaciones = ?, activo = ?
      WHERE id = ? AND empresa_id = ?`,
     [
       codigo,
@@ -446,6 +451,7 @@ export async function actualizarRuta(
         : actual.destinoDescripcion,
       cambios.horaHabitual !== undefined ? cambios.horaHabitual?.trim() || null : actual.horaHabitual,
       cambios.tarifaReferencia !== undefined ? cambios.tarifaReferencia ?? null : actual.tarifaReferencia,
+      cambios.costoOperativo !== undefined ? cambios.costoOperativo ?? null : actual.costoOperativo,
       cambios.contactoClienteId !== undefined
         ? cambios.contactoClienteId ?? null
         : actual.contactoClienteId,

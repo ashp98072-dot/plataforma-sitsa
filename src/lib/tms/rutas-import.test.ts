@@ -10,7 +10,7 @@ import type { FilaRutaExcel } from "./rutas-import-excel";
 function fila(overrides: Partial<FilaRutaExcel> = {}): FilaRutaExcel {
   return {
     filaExcel: 2, codigoExcel: "1001", clienteExcel: "Acme", lugarCargaExcel: "Bodega",
-    horaExcel: "08:00", contactoExcel: "Ana", destinoExcel: "Destino", tarifaReferenciaExcel: 100,
+    horaExcel: "08:00", contactoExcel: "Ana", destinoExcel: "Destino", costoOperativoExcel: 80, tarifaReferenciaExcel: 100,
     pilotoCodigoExcel: "P-1", pilotoViaticoExcel: 50, auxiliaresCodigosExcel: ["A-1", "A-2"],
     auxiliaresViaticosExcel: [25, 30], erroresCamposExcel: [], ...overrides,
   };

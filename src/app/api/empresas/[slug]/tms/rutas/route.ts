@@ -78,6 +78,7 @@ const schema = z.object({
   destinoDescripcion: z.string().max(300).optional(),
   horaHabitual: z.string().max(20).optional(),
   tarifaReferencia: z.number().min(0).max(9999999999.99).nullable().optional(),
+  costoOperativo: z.number().min(0).max(9999999999.99).nullable().optional(),
   contactoClienteId: z.number().int().positive().optional(),
   observaciones: z.string().max(300).optional(),
   paradas: z.array(paradaSchema).max(20).optional(),

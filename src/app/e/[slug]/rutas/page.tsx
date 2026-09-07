@@ -56,6 +56,7 @@ type ClienteRuta = {
   destinoDescripcion: string | null;
   horaHabitual: string | null;
   tarifaReferencia: number | null;
+  costoOperativo: number | null;
   contactoClienteId: number | null;
   contactoNombre: string | null;
   contactoCargo: string | null;
@@ -79,6 +80,7 @@ const FORM_VACIO = {
   destinoDescripcion: "",
   horaHabitual: "",
   tarifaReferencia: "",
+  costoOperativo: "",
   contactoClienteId: null as number | null,
   observaciones: "",
 };
@@ -212,6 +214,7 @@ export default function RutasPage() {
       destinoDescripcion: r.destinoDescripcion ?? "",
       horaHabitual: r.horaHabitual ?? "",
       tarifaReferencia: r.tarifaReferencia != null ? String(r.tarifaReferencia) : "",
+      costoOperativo: r.costoOperativo != null ? String(r.costoOperativo) : "",
       contactoClienteId: r.contactoClienteId,
       observaciones: r.observaciones ?? "",
     });
@@ -253,6 +256,7 @@ export default function RutasPage() {
         destinoDescripcion: form.destinoDescripcion.trim() || undefined,
         horaHabitual: form.horaHabitual.trim() || undefined,
         tarifaReferencia: form.tarifaReferencia.trim() === "" ? null : Number(form.tarifaReferencia),
+        costoOperativo: form.costoOperativo.trim() === "" ? null : Number(form.costoOperativo),
         contactoClienteId: form.contactoClienteId ?? undefined,
         observaciones: form.observaciones.trim() || undefined,
         paradas,
@@ -331,6 +335,9 @@ export default function RutasPage() {
         <div className="flex flex-wrap gap-2">
           <a href={`/api/empresas/${slug}/tms/rutas/importar`} className="rounded border border-[var(--border)] px-3 py-2 text-xs">
             Descargar formato Excel
+          </a>
+          <a href={`/api/empresas/${slug}/tms/rutas/exportar`} className="rounded border border-[var(--border)] px-3 py-2 text-xs">
+            Exportar rutas a Excel
           </a>
           <Link href={`/e/${slug}/rutas/importar`} className="rounded bg-[#37474F] px-3 py-2 text-xs text-white">
             Importar rutas masivamente
@@ -425,6 +432,18 @@ export default function RutasPage() {
                 value={form.horaHabitual}
                 onChange={(e) => setForm((f) => ({ ...f, horaHabitual: e.target.value }))}
               />
+            </label>
+            <label className="text-xs text-[var(--muted)]">
+              Costo operativo estimado (GTQ)
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                className={`${inputCls} mt-0.5 w-full`}
+                value={form.costoOperativo}
+                onChange={(e) => setForm((f) => ({ ...f, costoOperativo: e.target.value }))}
+              />
+              <span className="mt-0.5 block text-[10px]">Costo interno opcional de realizar la ruta.</span>
             </label>
             <label className="text-xs text-[var(--muted)]">
               Tarifa de referencia (GTQ)
@@ -600,7 +619,8 @@ export default function RutasPage() {
               <th className="px-3 py-2">Nombre</th>
               <th className="px-3 py-2">Carga</th>
               <th className="px-3 py-2">Hora</th>
-              <th className="px-3 py-2">Tarifa</th>
+              <th className="px-3 py-2">Costo operativo</th>
+              <th className="px-3 py-2">Tarifario</th>
               <th className="px-3 py-2">Personal habitual</th>
               <th className="px-3 py-2">Contacto</th>
               <th className="px-3 py-2">Destino (descripción)</th>
@@ -617,6 +637,7 @@ export default function RutasPage() {
                 <td className="px-3 py-2">{r.nombre || "—"}</td>
                 <td className="px-3 py-2 text-[11px]">{r.lugarCargaTexto || "—"}</td>
                 <td className="px-3 py-2">{r.horaHabitual || "—"}</td>
+                <td className="px-3 py-2">{r.costoOperativo != null ? `Q${r.costoOperativo.toLocaleString("es-GT", { minimumFractionDigits: 2 })}` : "—"}</td>
                 <td className="px-3 py-2">{r.tarifaReferencia != null ? `Q${r.tarifaReferencia.toLocaleString("es-GT", { minimumFractionDigits: 2 })}` : "—"}</td>
                 <td className="px-3 py-2 text-[11px]">
                   {r.personalPredeterminado.length
@@ -651,7 +672,7 @@ export default function RutasPage() {
             ))}
             {!rutasFiltradas.length && !loading ? (
               <tr>
-                <td colSpan={12} className="px-3 py-4 text-[var(--muted)]">Sin rutas con este filtro.</td>
+                <td colSpan={13} className="px-3 py-4 text-[var(--muted)]">Sin rutas con este filtro.</td>
               </tr>
             ) : null}
           </tbody>

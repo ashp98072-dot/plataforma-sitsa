@@ -9,6 +9,7 @@ describe("migración RUTAS-PREDETERMINADOS-1", () => {
     expect(sql.match(/information_schema\.statistics/g)?.length).toBe(2);
     expect(sql.match(/GROUP_CONCAT\(column_name ORDER BY seq_in_index\) = 'empresa_id,id'/g)?.length).toBe(2);
     expect(sql).toContain("ADD COLUMN IF NOT EXISTS tarifa_referencia");
+    expect(sql).toContain("ADD COLUMN IF NOT EXISTS costo_operativo");
     expect(sql).toContain("CREATE TABLE IF NOT EXISTS tms_cliente_ruta_personal");
   });
 
