@@ -1342,4 +1342,43 @@ CREATE TABLE IF NOT EXISTS tms_solicitud_fondo_lineas (
   CONSTRAINT fk_fondolin_solicitud_ambito FOREIGN KEY (empresa_id, solicitud_id) REFERENCES tms_solicitudes_fondo (empresa_id, id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- COTIZADOR-TMS-1 — ver sql/migrate-2026-09-cotizador-tms.sql para el
+-- detalle de diseño y qué catálogos existentes reutiliza.
+CREATE TABLE IF NOT EXISTS tms_cotizaciones (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  codigo VARCHAR(40) NOT NULL,
+  cliente_id INT NOT NULL,
+  cliente_nombre VARCHAR(200) NOT NULL,
+  ruta_id INT NULL,
+  ruta_codigo_historico VARCHAR(40) NULL,
+  origen_texto VARCHAR(300) NULL,
+  destino_texto VARCHAR(300) NULL,
+  tarifa_referencia DECIMAL(12,2) NULL,
+  costo_operativo_referencia DECIMAL(12,2) NULL,
+  tarifa_cotizada DECIMAL(12,2) NOT NULL,
+  incluye_iva TINYINT(1) NOT NULL DEFAULT 0,
+  moneda CHAR(3) NOT NULL DEFAULT 'GTQ',
+  fecha_emision DATE NOT NULL,
+  fecha_vencimiento DATE NULL,
+  estado ENUM('Borrador','Enviada','Aceptada','Rechazada','Vencida') NOT NULL DEFAULT 'Borrador',
+  piloto_incluido TINYINT(1) NOT NULL DEFAULT 1,
+  gps_incluido TINYINT(1) NOT NULL DEFAULT 0,
+  seguro_mercaderia_incluido TINYINT(1) NOT NULL DEFAULT 0,
+  seguro_terceros_incluido TINYINT(1) NOT NULL DEFAULT 0,
+  km_incluidos DECIMAL(10,2) NULL,
+  tarifa_km_adicional DECIMAL(12,2) NULL,
+  condiciones_adicionales TEXT NULL,
+  observaciones TEXT NULL,
+  creado_por VARCHAR(100) NULL,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_cotizacion_codigo (empresa_id, codigo),
+  INDEX idx_cotizacion_cliente (empresa_id, cliente_id),
+  INDEX idx_cotizacion_estado (empresa_id, estado),
+  INDEX idx_cotizacion_fecha (empresa_id, fecha_emision),
+  CONSTRAINT fk_cotizacion_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
+  CONSTRAINT fk_cotizacion_cliente_ambito FOREIGN KEY (empresa_id, cliente_id) REFERENCES tms_clientes (empresa_id, id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 SET FOREIGN_KEY_CHECKS = 1;

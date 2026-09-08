@@ -379,6 +379,23 @@ export function AppShell({
         key: "reportes-gastos",
       });
     }
+    // Cotizaciones comerciales (COTIZADOR-TMS-1): mismo criterio que
+    // Rutas/Gastos arriba — permiso propio "cotizaciones:ver" O "tms:ver"
+    // (requireTenantCotizaciones en tenant.ts), exige TMS habilitado.
+    const puedeCotizaciones =
+      rol !== "Piloto" &&
+      (isAdmin ||
+        (opsMods.includes("tms") &&
+          (permisos.length === 0 ||
+            tienePermiso(permisos, "cotizaciones", "ver") ||
+            tienePermiso(permisos, "tms", "ver"))));
+    if (puedeCotizaciones) {
+      opsLinks.push({
+        href: `${base}/cotizaciones`,
+        label: "Cotizaciones",
+        key: "cotizaciones",
+      });
+    }
     // Multas y sanciones (MULTAS-2/3): permiso propio "multas", exige TMS
     // habilitado (requireTenantMultas). Mismo criterio que Rutas arriba —
     // SOLO permisos efectivos, nunca un bypass por rol (sección 21 del

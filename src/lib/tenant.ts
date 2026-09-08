@@ -713,6 +713,52 @@ export async function requireTenantGastos(
 }
 
 /**
+ * COTIZADOR-TMS-1 — Cotizaciones comerciales de TMS. Mismo criterio que
+ * requireTenantRutas/requireTenantGastos: permiso propio
+ * (cotizaciones:<accion>) O tms:<accion> (compatibilidad — quien ya
+ * administra TMS no debe quedar fuera de un módulo nuevo dentro de TMS
+ * por no tener una fila explícita "cotizaciones" en su matriz). Sigue
+ * exigiendo que la empresa tenga "tms" habilitado — Cotizaciones vive
+ * dentro de TMS, no es una capacidad de empresa aparte.
+ */
+export async function requireTenantCotizaciones(
+  slug: string,
+  accion: AccionPermiso = "ver",
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length
+    ? empresa.modulos
+    : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("tms")) {
+    return {
+      error: NextResponse.json(
+        { error: "Esta empresa no tiene el módulo TMS." },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  if (
+    tienePermiso(perms, "cotizaciones", accion) ||
+    tienePermiso(perms, "tms", accion)
+  ) {
+    return { session, empresa };
+  }
+  return {
+    error: NextResponse.json(
+      { error: `Sin permiso para ${accion} en Cotizaciones.` },
+      { status: 403 },
+    ),
+  };
+}
+
+/**
  * Lectura/escritura de dependencias compartidas entre Programación y
  * TMS: acepta CUALQUIERA de los dos permisos para la MISMA acción
  * (programacion:<accion> O tms:<accion>), mismo patrón OR que
