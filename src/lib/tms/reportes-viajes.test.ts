@@ -137,6 +137,11 @@ describe("filtrosReporteDesdeUrl", () => {
   it("3) estado se pasa tal cual", () => {
     expect(filtrosReporteDesdeUrl(new URL("http://x?estado=Cerrado")).estado).toBe("Cerrado");
   });
+  it("PROGRAMACION-REPORTES-FILTROS-1: parsea ruta (texto libre)", () => {
+    expect(filtrosReporteDesdeUrl(new URL("http://x?ruta=Xela")).ruta).toBe("Xela");
+    expect(filtrosReporteDesdeUrl(new URL("http://x?ruta=+++")).ruta).toBeUndefined();
+    expect(filtrosReporteDesdeUrl(new URL("http://x")).ruta).toBeUndefined();
+  });
   it("14) el mismo parseo sirve tanto al listado como al exportador (una sola función, sin duplicar)", () => {
     const url = new URL("http://x?clienteId=5&pilotoId=9&unidadId=3");
     const f = filtrosReporteDesdeUrl(url);
@@ -174,6 +179,26 @@ describe("obtenerReporteViajes — construcción de filtros SQL", () => {
     const [sql, params] = vi.mocked(query).mock.calls[0];
     expect(sql).toContain("p.estado = ?");
     expect(params).toContain("Cerrado");
+  });
+
+  it("PROGRAMACION-REPORTES-FILTROS-1: filtra por ruta (código histórico O destino, LIKE)", async () => {
+    await obtenerReporteViajes(7, { ruta: "Xela" });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("p.ruta_codigo_historico LIKE ?");
+    expect(sql).toContain("p.lugar_descarga_historico LIKE ?");
+    expect(params).toContain("%Xela%");
+  });
+
+  it("PROGRAMACION-REPORTES-FILTROS-1: combina fecha + estado + ruta en una sola consulta (AND, no OR entre filtros)", async () => {
+    await obtenerReporteViajes(7, {
+      fechaDesde: "2026-09-01", fechaHasta: "2026-09-08", estado: "Cerrado", ruta: "Xela",
+    });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("p.fecha_plan >= ?");
+    expect(sql).toContain("p.fecha_plan <= ?");
+    expect(sql).toContain("p.estado = ?");
+    expect(sql).toContain("p.ruta_codigo_historico LIKE ?");
+    expect(params).toEqual([7, "2026-09-01", "2026-09-08", "Cerrado", "%Xela%", "%Xela%", 200, 0]);
   });
 
   it("13) pendiente_cierre se calcula EXISTS(flota_viajes...estado='cerrado') — mismo criterio que tms/planes/route.ts, nunca un valor de estado nuevo", async () => {
@@ -323,6 +348,44 @@ describe("[HALLAZGO 3 · 5] filtros del listado, KPI y exportador siguen siendo 
       expect(sql).toContain("p.estado = ?");
       expect(sql).toContain("p.empresa_id = ?");
     }
+  });
+
+  it("PROGRAMACION-REPORTES-FILTROS-1: el listado (obtenerReporteViajes) y el exportador (obtenerReporteViajesParaExportar → obtenerReporteViajes) aplican EXACTAMENTE el mismo WHERE para fecha+estado+ruta — nunca dos criterios distintos", async () => {
+    const filtros = { fechaDesde: "2026-09-01", fechaHasta: "2026-09-08", estado: "Cerrado", ruta: "Xela" };
+
+    vi.mocked(query).mockResolvedValue([]);
+    await obtenerReporteViajes(7, filtros);
+    const sqlListado = String(vi.mocked(query).mock.calls[0][0]);
+    const paramsListado = vi.mocked(query).mock.calls[0][1];
+
+    vi.mocked(query).mockClear();
+    vi.mocked(query).mockImplementation((async (sql: string) => {
+      if (sql.includes("COUNT(*) AS total")) return [{ total: 1 }];
+      return [];
+    }) as typeof query);
+    const resultado = await obtenerReporteViajesParaExportar(7, filtros);
+    expect(resultado.ok).toBe(true);
+    const filasCall = vi.mocked(query).mock.calls.find((c) => !String(c[0]).includes("COUNT(*) AS total"));
+    const sqlExport = String(filasCall?.[0]);
+    const paramsExport = filasCall?.[1];
+
+    expect(sqlExport).toBe(sqlListado);
+    // Los últimos dos parámetros son LIMIT/OFFSET (distintos a propósito:
+    // el listado usa la página por defecto, el exportador trae TODO el
+    // total) — el resto (empresa_id/fecha/estado/ruta) debe ser idéntico.
+    expect(paramsExport?.slice(0, -2)).toEqual(paramsListado?.slice(0, -2));
+  });
+});
+
+describe("PROGRAMACION-REPORTES-FILTROS-1 — aislamiento multiempresa con el filtro de ruta", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("el filtro por ruta nunca reemplaza la condición de empresa_id — siguen combinándose con AND", async () => {
+    vi.mocked(query).mockResolvedValue([]);
+    await obtenerReporteViajes(9, { ruta: "Xela" });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toMatch(/p\.empresa_id = \?[\s\S]*AND[\s\S]*p\.ruta_codigo_historico LIKE \?/);
+    expect(params?.[0]).toBe(9);
   });
 });
 

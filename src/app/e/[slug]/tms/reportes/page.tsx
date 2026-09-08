@@ -281,6 +281,9 @@ export default function ReportesViajesPage() {
   const [fPiloto, setFPiloto] = useState("");
   const [fUnidad, setFUnidad] = useState("");
   const [fEstado, setFEstado] = useState("");
+  // PROGRAMACION-REPORTES-FILTROS-1 — texto libre: código de ruta o
+  // destino (ver `ruta` en FiltrosReporteViajes/construirCondiciones).
+  const [fRuta, setFRuta] = useState("");
   // Fase F — DISTINTO de "soloPendientes" (operativo, abajo): esto es
   // sobre FACT-1, nunca se mezclan ambos criterios en la misma consulta.
   const [fEstadoFacturacion, setFEstadoFacturacion] = useState("");
@@ -328,13 +331,14 @@ export default function ReportesViajesPage() {
     if (fPiloto) p.set("pilotoId", fPiloto);
     if (fUnidad) p.set("unidadId", fUnidad);
     if (fEstado) p.set("estado", fEstado);
+    if (fRuta.trim()) p.set("ruta", fRuta.trim());
     if (fEstadoFacturacion) p.set("estadoFacturacion", fEstadoFacturacion);
     if (fEstadoCobro) p.set("estadoCobro", fEstadoCobro);
     if (soloPendientes) p.set("soloPendientesCierre", "1");
     if (soloCerrados) p.set("soloCerrados", "1");
     if (soloSinCerrar) p.set("soloSinCerrar", "1");
     return p;
-  }, [fDesde, fHasta, fCliente, fPiloto, fUnidad, fEstado, fEstadoFacturacion, fEstadoCobro, soloPendientes, soloCerrados, soloSinCerrar]);
+  }, [fDesde, fHasta, fCliente, fPiloto, fUnidad, fEstado, fRuta, fEstadoFacturacion, fEstadoCobro, soloPendientes, soloCerrados, soloSinCerrar]);
 
   /** Para exportar: SIN page/pageSize — el exportador siempre trae todo el filtro. */
   const exportQueryString = useCallback(() => filtrosQueryString().toString(), [filtrosQueryString]);
@@ -382,7 +386,7 @@ export default function ReportesViajesPage() {
   function limpiarFiltros() {
     setFDesde(primerDiaMes);
     setFHasta(hoy);
-    setFCliente(""); setFPiloto(""); setFUnidad(""); setFEstado("");
+    setFCliente(""); setFPiloto(""); setFUnidad(""); setFEstado(""); setFRuta("");
     setFEstadoFacturacion(""); setFEstadoCobro("");
     setSoloPendientes(false); setSoloCerrados(false); setSoloSinCerrar(false);
     setBuscarTick((t) => t + 1);
@@ -554,6 +558,15 @@ export default function ReportesViajesPage() {
               <option value="">Todos</option>
               {ESTADOS.map((e) => <option key={e} value={e}>{e}</option>)}
             </select>
+          </label>
+          {/* PROGRAMACION-REPORTES-FILTROS-1 — texto libre: código de ruta o destino (ej. "Xela"). */}
+          <label className="text-xs text-[var(--muted)]">Ruta
+            <input
+              className={`${inputCls} mt-0.5 block`}
+              placeholder="Código o destino"
+              value={fRuta}
+              onChange={(e) => setFRuta(e.target.value)}
+            />
           </label>
           {/* Fase F — estado de FACTURACIÓN (FACT-1), distinto de "pendiente de cierre" (operativo, abajo). */}
           <label className="text-xs text-[var(--muted)]">Estado facturación

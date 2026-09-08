@@ -40,7 +40,32 @@ type AuxiliarOrdenado = { plan_id: number; nombre: string; orden: number };
  * "Lugar de Carga" sí sigue viniendo de la parada tipo Carga
  * (tms_plan_paradas, texto congelado en el momento de guardar el viaje,
  * no un JOIN en vivo) — no tenía el mismo problema que Descarga.
+ *
+ * PROGRAMACION-REPORTES-FILTROS-1 — corrección: antes este endpoint SOLO
+ * aceptaba fecha/fechaDesde/fechaHasta, así que el Excel/PDF "traicionaba"
+ * cualquier otro filtro activo en el tablero de Programación (Estado,
+ * Piloto, Unidad, Cliente) — programacion-client.tsx solo enviaba las
+ * fechas del propio widget de reporte. Ahora acepta también estado/
+ * piloto/unidad/cliente, con EXACTAMENTE el mismo criterio que
+ * programacion-client.tsx usa para calcular `visibles` (el tablero) —
+ * mismos nombres de filtro rápido, mismo match exacto por nombre/placa —
+ * para que el archivo exportado sea siempre el mismo conjunto de viajes
+ * que el usuario tiene filtrado en pantalla. "PendienteCierre" replica el
+ * mismo criterio SQL que tms/planes?pendienteCierre=1 y
+ * src/lib/tms/reportes-viajes.ts (SQL_PENDIENTE_CIERRE) — y, como en
+ * ambos, ignora el rango de fechas a propósito (un pendiente antiguo
+ * nunca debe desaparecer del reporte por quedar fuera del rango elegido).
  */
+const ESTADOS_FILTRO_VALIDOS = new Set([
+  "Programado",
+  "En ruta",
+  "Cerrado",
+  "PendienteCierre",
+  "sin_piloto",
+  "sin_unidad",
+  "sin_auxiliares",
+]);
+
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenantModulo(slug, "tms");
@@ -52,11 +77,56 @@ export async function GET(req: Request, ctx: Ctx) {
   const fechaDesde = fechaExacta || url.searchParams.get("fechaDesde") || undefined;
   const fechaHasta = fechaExacta || url.searchParams.get("fechaHasta") || undefined;
 
-  if (!fechaDesde || !fechaHasta) {
+  const estadoRaw = url.searchParams.get("estado") || undefined;
+  const estado = estadoRaw && ESTADOS_FILTRO_VALIDOS.has(estadoRaw) ? estadoRaw : undefined;
+  const piloto = url.searchParams.get("piloto")?.trim() || undefined;
+  const unidad = url.searchParams.get("unidad")?.trim() || undefined;
+  const cliente = url.searchParams.get("cliente")?.trim() || undefined;
+
+  // "PendienteCierre" ignora el rango de fechas a propósito (mismo
+  // criterio que soloPendientesCierre en reportes-viajes.ts) — en
+  // cualquier otro caso, sigue siendo obligatorio indicar fecha o rango.
+  if (estado !== "PendienteCierre" && (!fechaDesde || !fechaHasta)) {
     return NextResponse.json(
       { error: "Indica una fecha específica o un rango (fechaDesde/fechaHasta)." },
       { status: 400 },
     );
+  }
+
+  const condiciones = ["p.empresa_id = ?"];
+  const params: (string | number)[] = [guard.empresa.id];
+  if (estado === "PendienteCierre") {
+    condiciones.push(
+      `(p.estado NOT IN ('Cerrado', 'Cancelado') AND EXISTS (
+         SELECT 1 FROM flota_viajes fv
+         WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
+       ))`,
+    );
+  } else if (fechaDesde && fechaHasta) {
+    condiciones.push("p.fecha_plan BETWEEN ? AND ?");
+    params.push(fechaDesde, fechaHasta);
+  }
+  if (estado === "Programado" || estado === "En ruta" || estado === "Cerrado") {
+    condiciones.push("p.estado = ?");
+    params.push(estado);
+  } else if (estado === "sin_piloto") {
+    condiciones.push("p.piloto_id IS NULL");
+  } else if (estado === "sin_unidad") {
+    condiciones.push("p.unidad_id IS NULL");
+  } else if (estado === "sin_auxiliares") {
+    condiciones.push("NOT EXISTS (SELECT 1 FROM tms_plan_auxiliares pa WHERE pa.plan_id = p.id)");
+  }
+  if (piloto) {
+    condiciones.push("pil.nombre = ?");
+    params.push(piloto);
+  }
+  if (unidad) {
+    condiciones.push("u.placa = ?");
+    params.push(unidad);
+  }
+  if (cliente) {
+    condiciones.push("c.nombre = ?");
+    params.push(cliente);
   }
 
   const rows = await query<RowDataPacket[]>(
@@ -67,9 +137,9 @@ export async function GET(req: Request, ctx: Ctx) {
      LEFT JOIN tms_clientes c ON c.id = p.cliente_id
      LEFT JOIN tms_unidades u ON u.id = p.unidad_id
      LEFT JOIN tms_personal pil ON pil.id = p.piloto_id
-     WHERE p.empresa_id = ? AND p.fecha_plan BETWEEN ? AND ?
+     WHERE ${condiciones.join(" AND ")}
      ORDER BY p.fecha_plan, p.hora_carga, p.id`,
-    [guard.empresa.id, fechaDesde, fechaHasta],
+    params,
   );
 
   const planIds = rows.map((r) => Number(r.id));
@@ -125,13 +195,26 @@ export async function GET(req: Request, ctx: Ctx) {
     ];
   });
 
-  const rango = fechaDesde === fechaHasta ? fechaDesde : `${fechaDesde} a ${fechaHasta}`;
+  const rango =
+    estado === "PendienteCierre"
+      ? "Pendientes de cierre (todas las fechas)"
+      : fechaDesde === fechaHasta
+        ? fechaDesde
+        : `${fechaDesde} a ${fechaHasta}`;
+  const filtrosAplicados = [
+    estado ? `Estado: ${estado === "PendienteCierre" ? "Pendiente de cierre" : estado}` : null,
+    piloto ? `Piloto: ${piloto}` : null,
+    unidad ? `Unidad: ${unidad}` : null,
+    cliente ? `Cliente: ${cliente}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   const fecha = new Date().toISOString().slice(0, 10);
 
   if (formato === "pdf") {
     const buf = await tablaAPdf({
       title: "PROGRAMACIÓN",
-      subtitle: `${guard.empresa.nombre} · ${rango} · Generado ${new Date().toLocaleString("es-GT")}`,
+      subtitle: `${guard.empresa.nombre} · ${rango}${filtrosAplicados ? ` · ${filtrosAplicados}` : ""} · Generado ${new Date().toLocaleString("es-GT")}`,
       headers,
       rows: dataRows,
       layout: "landscape",
