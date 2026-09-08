@@ -139,6 +139,15 @@ export type FiltrosReporteViajes = {
   pilotoId?: number;
   unidadId?: number;
   estado?: string;
+  /**
+   * PROGRAMACION-REPORTES-FILTROS-1 — búsqueda de texto libre por ruta:
+   * coincide contra el código histórico de ruta O el lugar de descarga
+   * histórico del viaje (ambos ya congelados en tms_planes_viaje, sin
+   * JOIN adicional a tms_cliente_rutas) — permite buscar tanto por código
+   * ("RUTA-01") como por destino ("Xela"), igual que ya hace la búsqueda
+   * de rutas en src/lib/tms/cliente-rutas.ts (codigo/nombre/destino LIKE).
+   */
+  ruta?: string;
   soloPendientesCierre?: boolean;
   soloCerrados?: boolean;
   soloSinCerrar?: boolean;
@@ -176,6 +185,7 @@ export function filtrosReporteDesdeUrl(url: URL): FiltrosReporteViajes {
     pilotoId: Number.isInteger(pilotoId) && pilotoId > 0 ? pilotoId : undefined,
     unidadId: Number.isInteger(unidadId) && unidadId > 0 ? unidadId : undefined,
     estado: p.get("estado")?.trim() || undefined,
+    ruta: p.get("ruta")?.trim() || undefined,
     soloPendientesCierre: p.get("soloPendientesCierre") === "1",
     soloCerrados: p.get("soloCerrados") === "1",
     soloSinCerrar: p.get("soloSinCerrar") === "1",
@@ -401,6 +411,10 @@ function construirCondiciones(
   if (filtros.estado) {
     condiciones.push("p.estado = ?");
     params.push(filtros.estado);
+  }
+  if (filtros.ruta) {
+    condiciones.push("(p.ruta_codigo_historico LIKE ? OR p.lugar_descarga_historico LIKE ?)");
+    params.push(`%${filtros.ruta}%`, `%${filtros.ruta}%`);
   }
   if (filtros.soloCerrados) {
     condiciones.push("p.estado = 'Cerrado'");

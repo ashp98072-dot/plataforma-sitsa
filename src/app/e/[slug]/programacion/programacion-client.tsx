@@ -78,7 +78,14 @@ export type Plan = {
   tipo_traslado: string | null;
   regreso_estimado: string | null;
   tarifa_comercial: number | null;
-  /** TMS-GASTOS-REPORTES-1: snapshot editable del costo operativo de referencia, copiado de la ruta al guardar — nunca se recalcula desde la ruta viva. */
+  /**
+   * PROGRAMACION-REPORTES-FILTROS-1: `costo_operativo_referencia`,
+   * `referencia_cliente` y `notas` ya no se muestran ni se capturan desde
+   * esta pantalla (Programación) — "ya no se utilizan en el proceso". Se
+   * conservan en el tipo únicamente porque el GET /tms/planes sigue
+   * devolviéndolos (dato histórico, sin DROP de columna ni migración) —
+   * ningún componente de esta carpeta los lee ya.
+   */
   costo_operativo_referencia: number | null;
   referencia_cliente: string | null;
   /** VIAT-4/VIAT-4b: fotografía histórica de la ruta usada al armar el viaje. */
@@ -491,6 +498,28 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   // Fecha específica: dejar "hasta" igual a "desde". Rango: ajustar ambos.
   const [exportDesde, setExportDesde] = useState(hoy);
   const [exportHasta, setExportHasta] = useState(hoy);
+
+  /**
+   * PROGRAMACION-REPORTES-FILTROS-1 — constructor ÚNICO de los query
+   * params del reporte tradicional (Excel y PDF comparten esta misma
+   * función, nunca dos armados de URL que puedan divergir). Además de la
+   * fecha propia del widget de reporte (exportDesde/exportHasta), viaja
+   * el filtro rápido de Estado y los selects de Piloto/Unidad/Cliente —
+   * el mismo estado "activo en pantalla" que ya decide qué tarjetas se
+   * ven en el tablero (`visibles`, más abajo) — para que el archivo
+   * exportado sea EXACTAMENTE el mismo conjunto de viajes, nunca solo el
+   * rango de fechas. `filtroRapido` viaja tal cual salvo "todos" (sin
+   * filtro de estado) — server (programacion/reporte/route.ts) valida
+   * contra la misma lista de valores soportados.
+   */
+  function reporteQueryString(formato: "xlsx" | "pdf"): string {
+    const p = new URLSearchParams({ formato, fechaDesde: exportDesde, fechaHasta: exportHasta });
+    if (filtroRapido !== "todos") p.set("estado", filtroRapido);
+    if (fPiloto) p.set("piloto", fPiloto);
+    if (fUnidad) p.set("unidad", fUnidad);
+    if (fCliente) p.set("cliente", fCliente);
+    return p.toString();
+  }
 
   // Carga inicial: función definida DENTRO del efecto (patrón oficial de
   // React para "Fetching data with Effects", con bandera `ignore` para
@@ -984,13 +1013,13 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
           />
         </label>
         <a
-          href={`/api/empresas/${slug}/tms/programacion/reporte?formato=xlsx&fechaDesde=${exportDesde}&fechaHasta=${exportHasta}`}
+          href={`/api/empresas/${slug}/tms/programacion/reporte?${reporteQueryString("xlsx")}`}
           className="rounded bg-emerald-700 px-3 py-1.5 text-xs text-white hover:bg-emerald-600"
         >
           Exportar Excel
         </a>
         <a
-          href={`/api/empresas/${slug}/tms/programacion/reporte?formato=pdf&fechaDesde=${exportDesde}&fechaHasta=${exportHasta}`}
+          href={`/api/empresas/${slug}/tms/programacion/reporte?${reporteQueryString("pdf")}`}
           className="rounded bg-[#334155] px-3 py-1.5 text-xs text-white hover:bg-[#3f4b5f]"
         >
           Exportar PDF
@@ -998,7 +1027,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
         <span className="text-[10px] text-[var(--muted)]">
           Reporte tradicional: Mes, Día, Placa, Piloto, Auxiliar 1, Auxiliar 2, Código, Cliente,
           Lugar de Carga, Hora, Lugar de Descarga. Usa la misma fecha en ambos campos para un día
-          específico.
+          específico. Respeta el Estado/Piloto/Unidad/Cliente que tengas filtrados abajo.
         </span>
       </div>
 
@@ -1209,10 +1238,6 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
                       ? `Q${Number(p.tarifa_comercial).toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
                       : "—"}
                   </p>
-                </div>
-                <div>
-                  <p className="text-[11px] text-[var(--muted)]">Referencia cliente</p>
-                  <p>{p.referencia_cliente || "—"}</p>
                 </div>
               </div>
 

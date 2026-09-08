@@ -314,11 +314,6 @@ export default function PlanForm({
     tipoTraslado: plan?.tipo_traslado ?? "",
     regresoEstimado: plan?.regreso_estimado?.slice(0, 16) ?? "",
     tarifaComercial: plan?.tarifa_comercial != null ? String(plan.tarifa_comercial) : "",
-    // TMS-GASTOS-REPORTES-1 (bloqueo 2): snapshot editable, igual que
-    // tarifaComercial — se sugiere de la ruta al elegirla y queda fijo
-    // en el plan una vez guardado (nunca se recalcula desde la ruta viva).
-    costoOperativoReferencia: plan?.costo_operativo_referencia != null ? String(plan.costo_operativo_referencia) : "",
-    referenciaCliente: plan?.referencia_cliente ?? "",
     // VIAT-4/VIAT-4b: fotografía histórica de qué ruta maestra se usó —
     // se recalcula al elegir otra ruta; no bloquea guardar el viaje sin
     // ruta (código/ruta sigue siendo opcional). lugarDescargaHistorico y
@@ -332,7 +327,6 @@ export default function PlanForm({
     contactoNombreHistorico: plan?.contacto_nombre_historico ?? "",
     contactoCargoHistorico: plan?.contacto_cargo_historico ?? "",
     contactoTelefonoHistorico: plan?.contacto_telefono_historico ?? "",
-    notas: plan?.notas ?? "",
     estado: plan?.estado ?? "Programado",
   });
   const [paradasForm, setParadasForm] = useState<ParadaForm[]>(
@@ -729,9 +723,14 @@ export default function PlanForm({
    * respaldo, siempre lee lugar_descarga_historico directamente.
    */
   function aplicarRuta(ruta: RutaOpt) {
+    // PROGRAMACION-REPORTES-FILTROS-1: "costo operativo de referencia" ya
+    // no se captura desde este formulario (ver form.tarifaComercial más
+    // abajo) — se pasa "" (sin snapshot) y se descarta el valor sugerido
+    // que devuelva `defaults`, sin tocar `aplicarDefaultsRutaSinSobrescribir`
+    // ni sus pruebas (el backend/lib siguen soportando el campo intacto).
     const defaults = aplicarDefaultsRutaSinSobrescribir({
       tarifaComercial: form.tarifaComercial,
-      costoOperativoReferencia: form.costoOperativoReferencia,
+      costoOperativoReferencia: "",
       pilotoEmpleadoId: form.pilotoEmpleadoId,
       pilotoNombre: form.pilotoNombre,
       auxiliarEmpleadoIds: form.auxiliarEmpleadoIds,
@@ -745,7 +744,6 @@ export default function PlanForm({
       clienteNombre: ruta.clienteNombre,
       horaCarga: ruta.horaHabitual || f.horaCarga,
       tarifaComercial: defaults.tarifaComercial,
-      costoOperativoReferencia: defaults.costoOperativoReferencia,
       rutaId: ruta.id,
       rutaCodigo: ruta.codigo,
       lugarDescargaHistorico: ruta.destinoDescripcion ?? f.lugarDescargaHistorico,
@@ -986,15 +984,18 @@ export default function PlanForm({
             tipoTraslado: form.tipoTraslado || undefined,
             regresoEstimado: form.regresoEstimado || undefined,
             tarifaComercial: form.tarifaComercial === "" ? undefined : Number(form.tarifaComercial),
-            costoOperativoReferencia: form.costoOperativoReferencia === "" ? undefined : Number(form.costoOperativoReferencia),
-            referenciaCliente: form.referenciaCliente.trim() || undefined,
+            // PROGRAMACION-REPORTES-FILTROS-1: costo operativo de referencia,
+            // referencia del cliente y observaciones ya no se capturan desde
+            // este formulario (ver comentario en Part A del ticket) — no se
+            // envían en el POST nuevo. El backend sigue aceptándolos
+            // opcionalmente (planes/route.ts) por compatibilidad con
+            // integraciones/datos antiguos, solo que esta UI ya no los usa.
             rutaId: form.rutaId || undefined,
             rutaCodigo: form.rutaCodigo.trim() || undefined,
             lugarDescargaHistorico: form.lugarDescargaHistorico.trim() || undefined,
             contactoNombreHistorico: form.contactoNombreHistorico.trim() || undefined,
             contactoCargoHistorico: form.contactoCargoHistorico.trim() || undefined,
             contactoTelefonoHistorico: form.contactoTelefonoHistorico.trim() || undefined,
-            notas: form.notas.trim() || undefined,
             clienteId: form.clienteId || undefined,
             clienteNombre: form.clienteNombre.trim() || undefined,
             placa: form.placa || undefined,
@@ -1068,19 +1069,16 @@ export default function PlanForm({
             : form.tarifaComercial === ""
               ? null
               : Number(form.tarifaComercial),
-          costoOperativoReferencia: bloqueadoParaPreCierre
-            ? undefined
-            : form.costoOperativoReferencia === ""
-              ? null
-              : Number(form.costoOperativoReferencia),
-          referenciaCliente: bloqueadoParaPreCierre ? undefined : form.referenciaCliente.trim() || null,
+          // PROGRAMACION-REPORTES-FILTROS-1: costo operativo de referencia y
+          // referencia del cliente ya no se editan desde este formulario —
+          // no se envían en el PATCH nuevo (backend sigue aceptándolos
+          // opcionalmente por compatibilidad, ver route.ts).
           rutaId: bloqueadoParaPreCierre ? undefined : form.rutaId || undefined,
           rutaCodigo: bloqueadoParaPreCierre ? undefined : form.rutaCodigo.trim() || undefined,
           lugarDescargaHistorico: bloqueadoParaPreCierre ? undefined : form.lugarDescargaHistorico.trim() || undefined,
           contactoNombreHistorico: bloqueadoParaPreCierre ? undefined : form.contactoNombreHistorico.trim() || undefined,
           contactoCargoHistorico: bloqueadoParaPreCierre ? undefined : form.contactoCargoHistorico.trim() || undefined,
           contactoTelefonoHistorico: bloqueadoParaPreCierre ? undefined : form.contactoTelefonoHistorico.trim() || undefined,
-          notas: form.notas.trim() || undefined,
           // CORRECCIÓN PR #80: NO usar `!paradas.length` para colapsar a
           // `undefined` — eso confundía "no tocar paradas" (undefined) con
           // "el usuario dejó la lista final vacía" ([]). Si las paradas
@@ -1298,7 +1296,7 @@ export default function PlanForm({
       ) : null}
       {soloNotas ? (
         <p className="md:col-span-3 rounded bg-sky-900/30 px-3 py-2 text-xs text-sky-200">
-          El viaje está &quot;En ruta&quot;: solo se pueden editar notas mientras dura el viaje.
+          El viaje está &quot;En ruta&quot;: no se puede modificar desde Programación mientras dura el viaje.
         </p>
       ) : null}
       {yaCerrado ? (
@@ -1350,10 +1348,7 @@ export default function PlanForm({
                 <li>Piloto: {form.pilotoNombre || "—"}</li>
                 <li>Auxiliares: {[...form.auxiliarNombres, ...form.auxiliarEmpleadoIds.map((id) => auxiliares.find((a) => a.id === id)?.nombre ?? `#${id}`)].join(", ") || "—"}</li>
                 <li>Tarifa comercial: {form.tarifaComercial ? `Q${form.tarifaComercial}` : "—"}</li>
-                <li>Costo operativo de referencia: {form.costoOperativoReferencia ? `Q${form.costoOperativoReferencia}` : "—"}</li>
-                <li>Referencia cliente: {form.referenciaCliente || "—"}</li>
                 <li>Paradas: {paradasForm.filter((p) => p.lugarNombre.trim()).length}</li>
-                <li>Observaciones: {form.notas || "—"}</li>
               </ul>
               <p className="text-[11px] text-[var(--muted)]">
                 Las evidencias del piloto quedan como respaldo — no bloquean este cierre.
@@ -1595,28 +1590,6 @@ export default function PlanForm({
           onChange={(e) => setForm((f) => ({ ...f, tarifaComercial: e.target.value }))}
         />
       </label>
-      <label className={`text-xs text-[var(--muted)] ${bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
-        Costo operativo de referencia (GTQ)
-        <input
-          type="number"
-          min="0"
-          step="0.01"
-          className={`${inputCls} mt-1 w-full`}
-          value={form.costoOperativoReferencia}
-          onChange={(e) => setForm((f) => ({ ...f, costoOperativoReferencia: e.target.value }))}
-        />
-        <span className="mt-0.5 block text-[10px]">Se sugiere al elegir una ruta; queda fijo en este viaje aunque la ruta cambie después.</span>
-      </label>
-
-      <label className={`md:col-span-2 text-xs text-[var(--muted)] ${bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
-        Referencia del cliente
-        <input
-          className={`${inputCls} mt-1 w-full`}
-          placeholder="OC, pedido o referencia"
-          value={form.referenciaCliente}
-          onChange={(e) => setForm((f) => ({ ...f, referenciaCliente: e.target.value }))}
-        />
-      </label>
       {esEdicion ? (
         <div className="md:col-span-3 space-y-1.5 text-xs text-[var(--muted)]">
           {/*
@@ -1677,16 +1650,6 @@ export default function PlanForm({
           ) : null}
         </div>
       ) : null}
-
-      <label className="md:col-span-3 text-xs text-[var(--muted)]">
-        Observaciones
-        <textarea
-          className={`${inputCls} mt-1 w-full`}
-          rows={2}
-          value={form.notas}
-          onChange={(e) => setForm((f) => ({ ...f, notas: e.target.value }))}
-        />
-      </label>
 
       {/* OPS-3.2d: paradas pasan de `soloNotas` a `bloqueadoParaPreCierre` —
           se habilitan en pendiente de cierre (backend las guarda por
