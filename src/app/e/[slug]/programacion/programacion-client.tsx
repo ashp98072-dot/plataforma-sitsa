@@ -494,26 +494,44 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   // ya "vivas" tienen prioridad.
   const [planDirecto, setPlanDirecto] = useState<Plan | null>(null);
 
-  // VIAT-4 (puntos 8-10) — reporte tradicional de Programación (Excel/PDF).
-  // Fecha específica: dejar "hasta" igual a "desde". Rango: ajustar ambos.
-  const [exportDesde, setExportDesde] = useState(hoy);
-  const [exportHasta, setExportHasta] = useState(hoy);
+  /**
+   * PROGRAMACION-EXPORT-PROGRAMADOS-FIX-1 — causa raíz del bug reportado
+   * ("pantalla mostraba 2 Programados, el Excel devolvió otro conjunto"):
+   * este widget tenía su PROPIO rango de fechas (exportDesde/exportHasta,
+   * un useState independiente inicializado siempre en `hoy`), separado
+   * del rango realmente visible en el tablero (`desde`/`hasta`, derivado
+   * de `rango` — que además NO abre en "Hoy" sino en "Mañana", VIAT-4
+   * punto 5). PROGRAMACION-REPORTES-FILTROS-1 le agregó a la exportación
+   * el Estado/Piloto/Unidad/Cliente activos del tablero, pero la FECHA
+   * seguía viniendo de ese eje independiente — así que un usuario que
+   * filtraba Estado=Programado y exportaba sin además ajustar a mano esas
+   * dos fechas obtenía un archivo con el estado correcto pero para un
+   * rango de días distinto al que tenía en pantalla (en el caso reportado,
+   * "Hoy" en el export vs. "Mañana" en el tablero) — un conjunto de
+   * viajes totalmente distinto, no un problema de datos mezclados entre
+   * planes.
+   *
+   * Corrección: se retira el eje de fechas independiente. La exportación
+   * ahora reutiliza SIEMPRE `desde`/`hasta` — el mismo rango que ya
+   * decide qué trae el GET de planes y qué se pinta en el tablero (ver
+   * el efecto de carga y el badge "{desde} → {hasta}" más abajo) — nunca
+   * puede quedar desincronizada porque ya no existe un segundo valor que
+   * mantener sincronizado a mano.
+   */
 
   /**
-   * PROGRAMACION-REPORTES-FILTROS-1 — constructor ÚNICO de los query
-   * params del reporte tradicional (Excel y PDF comparten esta misma
-   * función, nunca dos armados de URL que puedan divergir). Además de la
-   * fecha propia del widget de reporte (exportDesde/exportHasta), viaja
-   * el filtro rápido de Estado y los selects de Piloto/Unidad/Cliente —
-   * el mismo estado "activo en pantalla" que ya decide qué tarjetas se
-   * ven en el tablero (`visibles`, más abajo) — para que el archivo
-   * exportado sea EXACTAMENTE el mismo conjunto de viajes, nunca solo el
-   * rango de fechas. `filtroRapido` viaja tal cual salvo "todos" (sin
-   * filtro de estado) — server (programacion/reporte/route.ts) valida
-   * contra la misma lista de valores soportados.
+   * Constructor ÚNICO de los query params del reporte tradicional (Excel
+   * y PDF comparten esta misma función, nunca dos armados de URL que
+   * puedan divergir) — MISMOS valores que ya determinan qué se ve en el
+   * tablero: `desde`/`hasta` (el rango activo, Hoy/Mañana/Semana) y el
+   * filtro rápido de Estado + los selects de Piloto/Unidad/Cliente (el
+   * mismo estado "activo en pantalla" que decide `visibles`, más abajo).
+   * `filtroRapido` viaja tal cual salvo "todos" (sin filtro de estado) —
+   * server (programacion/reporte/route.ts) valida contra la misma lista
+   * de valores soportados.
    */
   function reporteQueryString(formato: "xlsx" | "pdf"): string {
-    const p = new URLSearchParams({ formato, fechaDesde: exportDesde, fechaHasta: exportHasta });
+    const p = new URLSearchParams({ formato, fechaDesde: desde, fechaHasta: hasta });
     if (filtroRapido !== "todos") p.set("estado", filtroRapido);
     if (fPiloto) p.set("piloto", fPiloto);
     if (fUnidad) p.set("unidad", fUnidad);
@@ -992,26 +1010,16 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
         </span>
       </div>
 
-      {/* VIAT-4 (puntos 8-10) — reporte tradicional de Programación */}
+      {/*
+        VIAT-4 (puntos 8-10) — reporte tradicional de Programación.
+        PROGRAMACION-EXPORT-PROGRAMADOS-FIX-1: ya no tiene campos de fecha
+        propios — exporta SIEMPRE el rango (Hoy/Mañana/Semana) y los
+        filtros de Estado/Piloto/Unidad/Cliente que están activos arriba,
+        para garantizar que el archivo sea EXACTAMENTE lo que se ve en el
+        tablero (antes, un eje de fecha independiente podía quedar
+        desincronizado del rango realmente visible).
+      */}
       <div className="flex flex-wrap items-end gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-3">
-        <label className="text-xs text-[var(--muted)]">
-          Reporte desde
-          <input
-            type="date"
-            className={`${input} mt-1 block`}
-            value={exportDesde}
-            onChange={(e) => setExportDesde(e.target.value)}
-          />
-        </label>
-        <label className="text-xs text-[var(--muted)]">
-          hasta
-          <input
-            type="date"
-            className={`${input} mt-1 block`}
-            value={exportHasta}
-            onChange={(e) => setExportHasta(e.target.value)}
-          />
-        </label>
         <a
           href={`/api/empresas/${slug}/tms/programacion/reporte?${reporteQueryString("xlsx")}`}
           className="rounded bg-emerald-700 px-3 py-1.5 text-xs text-white hover:bg-emerald-600"
@@ -1025,9 +1033,14 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
           Exportar PDF
         </a>
         <span className="text-[10px] text-[var(--muted)]">
-          Reporte tradicional: Mes, Día, Placa, Piloto, Auxiliar 1, Auxiliar 2, Código, Cliente,
-          Lugar de Carga, Hora, Lugar de Descarga. Usa la misma fecha en ambos campos para un día
-          específico. Respeta el Estado/Piloto/Unidad/Cliente que tengas filtrados abajo.
+          Reporte tradicional: Mes, Día, Placa, Piloto, Auxiliar 1, Auxiliar 2
+          {filtroRapido === "Programado" ? "" : ", Código"}, Cliente, Lugar de Carga, Hora, Lugar
+          de Descarga. Exporta exactamente el rango ({filtroRapido === "PendienteCierre"
+            ? "todas las fechas"
+            : desde === hasta
+              ? desde
+              : `${desde} → ${hasta}`}) y el Estado/Piloto/Unidad/Cliente que tengas filtrados
+          arriba — nunca una fecha distinta a la que ves en el tablero.
         </span>
       </div>
 
