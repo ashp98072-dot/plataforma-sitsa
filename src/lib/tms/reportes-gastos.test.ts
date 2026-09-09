@@ -126,10 +126,28 @@ describe("reporteViaticosPorViajeEmpleado", () => {
     vi.mocked(query).mockResolvedValue([] as never);
     await reporteViaticosPorViajeEmpleado(7, { placa: "P111AAA", empleadoNombre: "Juan", estadoViatico: "LIQUIDADO" });
     const [sql, params] = vi.mocked(query).mock.calls[0];
-    expect(sql).toContain("u.placa = ?");
+    expect(sql).toContain("COALESCE(fv.placa, u.placa) = ?");
     expect(sql).toContain("per.nombre LIKE ?");
     expect(sql).toContain("v.estado = ?");
     expect(params).toEqual([7, "P111AAA", "%Juan%", "LIQUIDADO"]);
+  });
+
+  it("la placa viene de flota_vehiculos (dato maestro) con fallback a tms_unidades.placa — nunca u.placa solo", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await reporteViaticosPorViajeEmpleado(7);
+    const sql = vi.mocked(query).mock.calls[0][0] as string;
+    // JOIN a flota_vehiculos vía tms_unidades.flota_vehiculo_id (mismo
+    // patrón que resolverVehiculoDeUnidadTms/unidad-flota.ts).
+    expect(sql).toContain("LEFT JOIN flota_vehiculos fv ON fv.id = u.flota_vehiculo_id");
+    // Selección: COALESCE(fv.placa, u.placa) — nunca u.placa solo, porque
+    // tms_unidades.flota_vehiculo_id es nullable a propósito (backfill
+    // progresivo) y no debe perderse la placa de unidades sin vincular.
+    expect(sql).toContain("COALESCE(fv.placa, u.placa) AS placa");
+    // Toda aparición de "u.placa" en el SQL vive dentro de un COALESCE(...) —
+    // nunca queda un "u.placa" suelto en el SELECT o en el filtro.
+    const usosDeUPlaca = sql.match(/u\.placa/g) ?? [];
+    const usosDentroDeCoalesce = sql.match(/COALESCE\(fv\.placa, u\.placa\)/g) ?? [];
+    expect(usosDeUPlaca.length).toBe(usosDentroDeCoalesce.length);
   });
 
   it("nunca depende de tms_cliente_rutas — usa el snapshot histórico del plan (ruta_codigo_historico/lugar_descarga_historico)", async () => {

@@ -243,6 +243,15 @@ export async function reporteGastosPorPeriodo(empresaId: number, f: FiltrosRepor
  * (nunca se reconstruyen) — mismo criterio ya aceptado en el resto de la
  * app (viaticos-panel.tsx ya muestra `autorizadoPor` tal cual, sin
  * resolverlo a un nombre "real" por firma electrónica).
+ *
+ * `placa` = COALESCE(flota_vehiculos.placa, tms_unidades.placa): el
+ * vínculo tms_unidades.flota_vehiculo_id es nullable a propósito
+ * (backfill progresivo, ver unidad-flota.ts / schema.sql), así que no
+ * toda unidad tiene todavía flota_vehiculo_id resuelto. tms_unidades.placa
+ * SIEMPRE existe (NOT NULL) y es el mismo fallback que ya usa
+ * resolverVehiculoDeUnidadTms — se prioriza flota_vehiculos.placa por ser
+ * el dato maestro de Flota, pero nunca a costa de perder la placa cuando
+ * el backfill todavía no llegó a esa unidad.
  */
 export type FilaViaticoReporte = {
   viaticoId: number;
@@ -276,7 +285,7 @@ function condicionesViaticos(empresaId: number, f: FiltrosReporteGastos): { wher
   if (f.fechaHasta) { condiciones.push("p.fecha_plan <= ?"); params.push(f.fechaHasta); }
   if (f.clienteId) { condiciones.push("p.cliente_id = ?"); params.push(f.clienteId); }
   if (f.planId) { condiciones.push("v.plan_id = ?"); params.push(f.planId); }
-  if (f.placa) { condiciones.push("u.placa = ?"); params.push(f.placa); }
+  if (f.placa) { condiciones.push("COALESCE(fv.placa, u.placa) = ?"); params.push(f.placa); }
   if (f.empleadoNombre) { condiciones.push("per.nombre LIKE ?"); params.push(`%${f.empleadoNombre}%`); }
   if (f.estadoViatico) { condiciones.push("v.estado = ?"); params.push(f.estadoViatico); }
   return { where: condiciones.join(" AND "), params };
@@ -294,7 +303,7 @@ export async function reporteViaticosPorViajeEmpleado(
             p.lugar_descarga_historico,
             v.personal_id, per.nombre AS personal_nombre,
             COALESCE(e.puesto, per.tipo) AS cargo, e.cuenta_bancaria,
-            u.placa,
+            COALESCE(fv.placa, u.placa) AS placa,
             p.cliente_id, cli.nombre AS cliente_nombre,
             v.rol, v.monto_sugerido, v.monto_asignado, v.estado,
             DATE_FORMAT(v.autorizado_en, '%Y-%m-%d') AS fecha_autorizacion, v.autorizado_por,
@@ -305,6 +314,7 @@ export async function reporteViaticosPorViajeEmpleado(
      INNER JOIN tms_personal per ON per.id = v.personal_id AND per.empresa_id = v.empresa_id
      LEFT JOIN empleados e ON e.id = per.id_empleado AND e.empresa_id = per.empresa_id
      LEFT JOIN tms_unidades u ON u.id = p.unidad_id AND u.empresa_id = p.empresa_id
+     LEFT JOIN flota_vehiculos fv ON fv.id = u.flota_vehiculo_id AND fv.empresa_id = p.empresa_id
      LEFT JOIN tms_clientes cli ON cli.id = p.cliente_id AND cli.empresa_id = p.empresa_id
      WHERE ${where}
      ORDER BY p.fecha_plan DESC, v.id DESC`,
