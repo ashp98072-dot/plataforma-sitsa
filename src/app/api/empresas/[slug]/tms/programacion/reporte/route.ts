@@ -55,6 +55,21 @@ type AuxiliarOrdenado = { plan_id: number; nombre: string; orden: number };
  * src/lib/tms/reportes-viajes.ts (SQL_PENDIENTE_CIERRE) — y, como en
  * ambos, ignora el rango de fechas a propósito (un pendiente antiguo
  * nunca debe desaparecer del reporte por quedar fuera del rango elegido).
+ *
+ * PROGRAMACION-EXPORT-PROGRAMADOS-FIX-1 — dos correcciones más:
+ *   1) El cliente (programacion-client.tsx) ya no calcula fechaDesde/
+ *      fechaHasta desde un eje de fecha propio del widget de exportación
+ *      (podía quedar desincronizado del rango Hoy/Mañana/Semana
+ *      realmente visible en el tablero — causa real del bug reportado:
+ *      "la pantalla mostraba 2 Programados, el Excel devolvió otro
+ *      conjunto"). Este endpoint no cambió su forma de recibir fecha/
+ *      estado/piloto/unidad/cliente — el fix fue en quién arma esos
+ *      query params, no en cómo se interpretan aquí.
+ *   2) Columna "Código" (ruta_codigo_historico): se omite POR COMPLETO
+ *      del Excel/PDF ÚNICAMENTE cuando estado=Programado — un viaje
+ *      recién programado normalmente aún no tiene ruta de catálogo
+ *      asociada. Para cualquier otro valor de estado (o sin estado) la
+ *      columna se conserva exactamente igual que siempre.
  */
 const ESTADOS_FILTRO_VALIDOS = new Set([
   "Programado",
@@ -165,10 +180,18 @@ export async function GET(req: Request, ctx: Ctx) {
     auxPorPlan.set(pid, list);
   }
 
-  const headers = [
-    "Mes", "Día", "Placa", "Piloto", "Auxiliar 1", "Auxiliar 2",
-    "Código", "Cliente", "Lugar de Carga", "Hora", "Lugar de Descarga",
-  ];
+  // PROGRAMACION-EXPORT-PROGRAMADOS-FIX-1 (punto 2): Operaciones pidió
+  // que, ÚNICAMENTE cuando estado=Programado, la columna "Código" (ruta_
+  // codigo_historico) se quite por completo del reporte — un viaje recién
+  // programado normalmente todavía no tiene ruta de catálogo asociada, así
+  // que esa columna casi siempre sale vacía y solo agrega ruido a esta
+  // vista puntual. Para cualquier otro estado (Cerrado/En ruta/Cargado/
+  // todos/etc.) la columna se conserva exactamente igual que antes — el
+  // recorte es ESTRICTAMENTE por valor de `estado`, nunca global.
+  const ocultarCodigo = estado === "Programado";
+  const headers = ocultarCodigo
+    ? ["Mes", "Día", "Placa", "Piloto", "Auxiliar 1", "Auxiliar 2", "Cliente", "Lugar de Carga", "Hora", "Lugar de Descarga"]
+    : ["Mes", "Día", "Placa", "Piloto", "Auxiliar 1", "Auxiliar 2", "Código", "Cliente", "Lugar de Carga", "Hora", "Lugar de Descarga"];
 
   const dataRows = rows.map((r) => {
     const id = Number(r.id);
@@ -180,19 +203,17 @@ export async function GET(req: Request, ctx: Ctx) {
     const lugarDescarga = r.lugar_descarga_historico ? String(r.lugar_descarga_historico) : "";
     const auxiliares = auxPorPlan.get(id) ?? [];
     const hora = r.hora_carga ? String(r.hora_carga).slice(0, 5) : "";
-    return [
+    const fila = [
       MESES[(mes ?? 1) - 1] ?? "",
       String(dia ?? ""),
       r.placa ? String(r.placa) : "",
       r.piloto ? String(r.piloto) : "",
       auxiliares[0]?.nombre ?? "",
       auxiliares[1]?.nombre ?? "",
-      r.ruta_codigo_historico ? String(r.ruta_codigo_historico) : "",
-      r.cliente ? String(r.cliente) : "",
-      lugarCarga,
-      hora,
-      lugarDescarga,
     ];
+    if (!ocultarCodigo) fila.push(r.ruta_codigo_historico ? String(r.ruta_codigo_historico) : "");
+    fila.push(r.cliente ? String(r.cliente) : "", lugarCarga, hora, lugarDescarga);
+    return fila;
   });
 
   const rango =
