@@ -184,8 +184,10 @@ async function resolverSnapshotLineaTx(
       [input.planId, empresaId],
     );
     if (!rows[0]) throw new Error("El viaje indicado no pertenece a esta empresa.");
-    clienteId = rows[0].cliente_id != null ? Number(rows[0].cliente_id) : null;
-    clienteNombre = rows[0].cliente_nombre != null ? String(rows[0].cliente_nombre) : null;
+    if (input.clienteId == null) {
+      clienteId = rows[0].cliente_id != null ? Number(rows[0].cliente_id) : null;
+      clienteNombre = rows[0].cliente_nombre != null ? String(rows[0].cliente_nombre) : null;
+    }
     if (fechaViaje == null) fechaViaje = String(rows[0].fecha_plan);
   }
   return { empleadoNombre, cargo, cuenta, placa, clienteId, clienteNombre, fechaViaje };

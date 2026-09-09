@@ -283,6 +283,19 @@ describe("crearSolicitudFondo — snapshot histórico por línea (empleado/vehí
     expect(insertLinea[1]).toContain("Cliente del plan");
   });
 
+  it("un cliente elegido después del plan se conserva y no modifica Programación", async () => {
+    const conn = conexion({ planFecha: "2026-09-10", clienteNombre: "Cliente elegido" });
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    await crearSolicitudFondo(7, {
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      lineas: [{ categoria: "Combustible", monto: 100, planId: 8, clienteId: 5 }],
+    });
+    const insert = conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_solicitud_fondo_lineas"))!;
+    expect(insert[1]).toEqual(expect.arrayContaining([5, "Cliente elegido", 8]));
+    expect(conn.execute.mock.calls.some((c) => String(c[0]).includes("UPDATE tms_planes_viaje"))).toBe(false);
+    expect(conn.execute.mock.calls.some((c) => String(c[0]).includes("UPDATE empleados"))).toBe(false);
+  });
+
   it.each([
     ["empleadoId", { empleadoId: 999 }, "empleadoEnEmpresa" as const, "El empleado indicado no pertenece a esta empresa."],
     ["vehiculoId", { vehiculoId: 999 }, "vehiculoEnEmpresa" as const, "El vehículo indicado no pertenece a esta empresa."],

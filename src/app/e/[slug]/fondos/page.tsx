@@ -39,7 +39,11 @@ type Catalogos = {
   empleados: { id: number; codigo: string; nombre: string; puesto: string | null; cuentaBancaria: string | null }[];
   vehiculos: { id: number; placa: string; marca: string | null; modelo: string | null }[];
   clientes: { id: number; codigo: string | null; nombre: string; nit: string | null }[];
-  planes: { id: number; codigo: string; clienteId: number | null; clienteNombre: string | null; fechaPlan: string }[];
+  planes: {
+    id: number; codigo: string; clienteId: number | null; clienteNombre: string | null; fechaPlan: string;
+    vehiculoId: number | null; placa: string | null; empleadoId: number | null; empleadoNombre: string | null;
+    empleadoPuesto: string | null; empleadoCuenta: string | null;
+  }[];
   /** SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§3) — usuarios reales con acceso a esta empresa, para el selector "Requirente (usuario)". */
   usuarios: { id: number; nombre: string }[];
   solicitantes: { id: number; nombre: string }[];
