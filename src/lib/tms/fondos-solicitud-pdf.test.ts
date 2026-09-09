@@ -141,6 +141,30 @@ describe("generarPdfSolicitudFondoAutorizada — tabla de detalle (§2 del ticke
     expect(textos).toContain("9988776655");
   });
 
+  it("dibuja placa y cuenta completas, sin puntos suspensivos", async () => {
+    vi.mocked(obtenerSolicitudFondo).mockResolvedValue(solicitud({ lineas: [linea({ placa: "C-130BQ", cuenta: "1980305722" })] }) as never);
+    const spy = espiarTexto();
+    await generarPdfSolicitudFondoAutorizada(7, 1, "SITSA");
+    const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
+    expect(textos).toContain("C-130BQ");
+    expect(textos).toContain("1980305722");
+    expect(textos.some((t) => /C-130|198030/.test(t) && /…|\.\.\./.test(t))).toBe(false);
+  });
+
+  it("conserva íntegros nombre, cargo, cliente y descripción largos mediante wrap", async () => {
+    const datos = {
+      empleadoNombre: "Carlos Abel Pineda Santos con nombre administrativo completo",
+      cargo: "Piloto profesional de transporte pesado",
+      clienteNombre: "Cliente con razón social extensa y departamento regional",
+      descripcion: "Descripción completa del requerimiento operativo sin pérdida de información",
+    };
+    vi.mocked(obtenerSolicitudFondo).mockResolvedValue(solicitud({ lineas: [linea(datos)] }) as never);
+    const spy = espiarTexto();
+    await generarPdfSolicitudFondoAutorizada(7, 1, "SITSA");
+    const unido = spy.mock.calls.map((c) => llamadaTexto(c).texto).join(" ");
+    for (const palabra of ["administrativo", "profesional", "departamento", "información"]) expect(unido).toContain(palabra);
+  });
+
   it("línea sin empleado/vehículo/cliente asociado muestra '—' en Cuenta (nunca revienta ni inventa un dato)", async () => {
     vi.mocked(obtenerSolicitudFondo).mockResolvedValue(solicitud({
       lineas: [linea({ empleadoId: null, empleadoNombre: null, cargo: null, cuenta: null, vehiculoId: null, placa: null, clienteId: null, clienteNombre: null, fechaViaje: null })],

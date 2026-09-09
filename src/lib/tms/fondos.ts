@@ -31,6 +31,14 @@ async function executeConn(conn: PoolConnection, sql: string, params: SqlParams 
   return result;
 }
 
+function limpiarOverride(valor: string | null | undefined, maximo: number): string | null {
+  if (valor == null) return null;
+  const limpio = valor.trim().replace(/\s+/g, " ");
+  if (!limpio) return null;
+  if (limpio.length > maximo) throw new Error(`El valor editado no puede exceder ${maximo} caracteres.`);
+  return limpio;
+}
+
 /**
  * AISLAMIENTO MULTIEMPRESA (corrección post-revisión PR #204) — mismo
  * criterio que validarReferenciasGasto en gastos.ts: valida ANTES de
@@ -123,8 +131,8 @@ async function guardarImagenFirmaFondo(
  * la fecha del viaje) SIEMPRE del lado del servidor, releyendo cada
  * catálogo por (id, empresa_id) dentro de la MISMA transacción — mismo
  * criterio de seguridad que resolverSnapshotRuta en cotizaciones.ts:
- * nunca se confía en un nombre/placa/cargo que el cliente HTTP pretenda
- * haber copiado. Si algún id no pertenece a esta empresa, se rechaza —
+ * nombre/cuenta/cargo parten del maestro; solo se aceptan los overrides
+ * explícitos, acotados y saneados de esta solicitud. Si algún id no pertenece a esta empresa, se rechaza —
  * nunca se acepta silenciosamente una referencia de otra empresa.
  *
  * `fechaViaje` explícita del caller SIEMPRE gana; si no vino pero sí hay
@@ -134,7 +142,7 @@ async function guardarImagenFirmaFondo(
 async function resolverSnapshotLineaTx(
   conn: PoolConnection,
   empresaId: number,
-  input: Pick<LineaFondoInput, "empleadoId" | "vehiculoId" | "clienteId" | "planId" | "fechaViaje">,
+  input: Pick<LineaFondoInput, "empleadoId" | "vehiculoId" | "clienteId" | "planId" | "fechaViaje" | "empleadoNombreOverride" | "cuentaOverride" | "cargoOverride">,
 ): Promise<{ empleadoNombre: string | null; cargo: string | null; cuenta: string | null; placa: string | null; clienteId: number | null; clienteNombre: string | null; fechaViaje: string | null }> {
   let empleadoNombre: string | null = null;
   let cargo: string | null = null;
@@ -149,6 +157,9 @@ async function resolverSnapshotLineaTx(
     empleadoNombre = String(rows[0].nombre);
     cargo = rows[0].puesto != null ? String(rows[0].puesto) : null;
     cuenta = rows[0].cuenta_bancaria != null ? String(rows[0].cuenta_bancaria) : null;
+    empleadoNombre = limpiarOverride(input.empleadoNombreOverride, 200) ?? empleadoNombre;
+    cuenta = limpiarOverride(input.cuentaOverride, 100) ?? cuenta;
+    cargo = limpiarOverride(input.cargoOverride, 150) ?? cargo;
   }
   let placa: string | null = null;
   if (input.vehiculoId != null) {
@@ -361,14 +372,18 @@ export type LineaFondoInput = {
    * corresponde a una persona/unidad/cliente/viaje concreto (mantener
    * relaciones internas cuando existan, pedido explícito del ticket). El
    * servidor resuelve y congela el snapshot legible (nombre/cargo/placa/
-   * cliente) a partir de estos ids — nunca se acepta un snapshot enviado
-   * directamente por el cliente HTTP, ver resolverSnapshotLineaTx.
+   * cliente) a partir de estos ids. Nombre/cuenta/cargo pueden llevar un
+   * override controlado que afecta únicamente el snapshot de esta línea.
    */
   fechaViaje?: string | null;
   empleadoId?: number | null;
   vehiculoId?: number | null;
   clienteId?: number | null;
   planId?: number | null;
+  /** Overrides del snapshot de esta solicitud; nunca actualizan el maestro de empleados. */
+  empleadoNombreOverride?: string | null;
+  cuentaOverride?: string | null;
+  cargoOverride?: string | null;
 };
 
 export type SolicitudFondoInput = {

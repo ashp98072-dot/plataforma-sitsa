@@ -102,12 +102,14 @@ export async function exportarReporteFondosExcel(filas: FilaSolicitudFondoReport
 export async function exportarSolicitudFondoExcel(solicitud: SolicitudFondo): Promise<Buffer> {
   return tablaAExcel({
     sheetName: `Solicitud ${solicitud.codigo}`.slice(0, 31),
-    headers: ["Categoria", "Descripcion", "Cantidad", "Monto (Q)", "Subtotal (Q)"],
+    headers: ["Fecha solicitud", "Fecha viaje", "Nombre", "Cuenta", "Cargo", "Placa", "Cliente", "Categoría", "Cantidad", "Descripción", "Valor", "Subtotal (Q)"],
     rows: [
       ...solicitud.lineas.map((l) => [
-        l.categoria, l.descripcion ?? "", String(l.cantidad), money(l.monto), money(l.cantidad * l.monto),
+        formatearFechaVisible(solicitud.fechaRequerimiento), l.fechaViaje ? formatearFechaVisible(l.fechaViaje) : "",
+        l.empleadoNombre ?? "", l.cuenta ?? "", l.cargo ?? "", l.placa ?? "", l.clienteNombre ?? "",
+        l.categoria, String(l.cantidad), l.descripcion ?? "", money(l.monto), money(l.cantidad * l.monto),
       ]),
-      ["", "", "", "TOTAL", money(solicitud.total)],
+      ["", "", "", "", "", "", "", "", "", "", "TOTAL", money(solicitud.total)],
     ],
   });
 }

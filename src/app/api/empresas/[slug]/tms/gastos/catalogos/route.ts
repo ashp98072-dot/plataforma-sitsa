@@ -21,7 +21,7 @@ export async function GET(_req: Request, ctx: Ctx) {
 
   const [empleados, vehiculos, clientes, planes, usuarios] = await Promise.all([
     query<RowDataPacket[]>(
-      "SELECT id, codigo, nombre, puesto FROM empleados WHERE empresa_id = ? AND estado = 'Activo' ORDER BY nombre LIMIT 1000",
+      "SELECT id, codigo, nombre, puesto, cuenta_bancaria FROM empleados WHERE empresa_id = ? AND estado = 'Activo' ORDER BY nombre LIMIT 1000",
       [eid],
     ),
     query<RowDataPacket[]>(
@@ -57,7 +57,7 @@ export async function GET(_req: Request, ctx: Ctx) {
 
   return NextResponse.json(
     {
-      empleados: empleados.map((r) => ({ id: Number(r.id), codigo: String(r.codigo), nombre: String(r.nombre), puesto: r.puesto != null ? String(r.puesto) : null })),
+      empleados: empleados.map((r) => ({ id: Number(r.id), codigo: String(r.codigo), nombre: String(r.nombre), puesto: r.puesto != null ? String(r.puesto) : null, cuentaBancaria: r.cuenta_bancaria != null ? String(r.cuenta_bancaria) : null })),
       vehiculos: vehiculos.map((r) => ({ id: Number(r.id), placa: String(r.placa), marca: r.marca != null ? String(r.marca) : null, modelo: r.modelo != null ? String(r.modelo) : null })),
       clientes: clientes.map((r) => ({ id: Number(r.id), codigo: r.codigo != null ? String(r.codigo) : null, nombre: String(r.nombre), nit: r.nit != null ? String(r.nit) : null })),
       planes: planes.map((r) => ({ id: Number(r.id), codigo: String(r.codigo), clienteId: r.cliente_id != null ? Number(r.cliente_id) : null, clienteNombre: r.cliente_nombre != null ? String(r.cliente_nombre) : null, fechaPlan: String(r.fecha_plan) })),
