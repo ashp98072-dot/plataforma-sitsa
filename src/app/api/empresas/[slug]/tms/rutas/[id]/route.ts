@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { z } from "zod";
 import { requireTenantRutas } from "@/lib/tenant";
 import { actualizarRuta, obtenerRuta } from "@/lib/tms/cliente-rutas";
+import { actualizarRutaSchema, etiquetaCampoRutaFactory } from "@/lib/tms/rutas-validacion";
+import { respuestaErrorValidacion } from "@/lib/validacion-http";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
 
@@ -28,40 +29,13 @@ export async function GET(_req: Request, ctx: Ctx) {
   return NextResponse.json({ ruta }, { headers: { "Cache-Control": "private, no-store" } });
 }
 
-const paradaSchema = z.object({
-  tipo: z.enum(["Carga", "Descarga", "Entrega"]).optional(),
-  lugarNombre: z.string().min(1),
-  clienteUbicacionId: z.number().int().positive().optional(),
-});
-
-const personalSchema = z.object({
-  empleadoId: z.number().int().positive(),
-  rol: z.enum(["Piloto", "Auxiliar"]),
-  viaticoMonto: z.number().min(0).max(9999999999.99).nullable().optional(),
-});
-
-const schema = z.object({
-  codigo: z.string().min(1).max(40).optional(),
-  nombre: z.string().max(200).nullable().optional(),
-  ubicacionCargaId: z.number().int().positive().nullable().optional(),
-  lugarCargaTexto: z.string().max(300).nullable().optional(),
-  destinoDescripcion: z.string().max(300).nullable().optional(),
-  horaHabitual: z.string().max(20).nullable().optional(),
-  tarifaReferencia: z.number().min(0).max(9999999999.99).nullable().optional(),
-  // TMS-SIN-COSTO-OPERATIVO-1: ver la misma nota en ../route.ts — aceptado
-  // solo por compatibilidad histórica, actualizarRuta ya no lo persiste.
-  costoOperativo: z.number().min(0).max(9999999999.99).nullable().optional(),
-  contactoClienteId: z.number().int().positive().nullable().optional(),
-  observaciones: z.string().max(300).nullable().optional(),
-  paradas: z.array(paradaSchema).max(20).optional(),
-  personalPredeterminado: z.array(personalSchema).max(9).optional(),
-  activo: z.boolean().optional(),
-});
-
 /**
  * VIAT-4 — edita una ruta (código/nombre/carga/hora/contacto/paradas) y/o
  * la activa/desactiva. Nunca hard-delete — desactivarla NO afecta viajes
  * ya creados a partir de ella (fotografía histórica en tms_planes_viaje).
+ *
+ * RUTAS-TARIFARIO-HISTORIAL-1 (§10/§11) — mismo criterio que el POST:
+ * error de validación por campo, nunca "Datos inválidos." genérico.
  */
 export async function PATCH(req: Request, ctx: Ctx) {
   const { slug, id } = await ctx.params;
@@ -73,13 +47,15 @@ export async function PATCH(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: "ID inválido." }, { status: 400 });
   }
 
-  const parsed = schema.safeParse(await req.json());
+  const body = await req.json().catch(() => ({}));
+  const parsed = actualizarRutaSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
+    return respuestaErrorValidacion(parsed.error, etiquetaCampoRutaFactory(body), "No se pudo actualizar la ruta");
   }
 
   try {
-    const ruta = await actualizarRuta(guard.empresa.id, rutaId, parsed.data);
+    const actor = { usuarioId: guard.session.id, nombre: guard.session.nombre || guard.session.username };
+    const ruta = await actualizarRuta(guard.empresa.id, rutaId, parsed.data, actor);
     if (!ruta) {
       return NextResponse.json({ error: "Ruta no encontrada." }, { status: 404 });
     }

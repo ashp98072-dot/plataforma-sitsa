@@ -85,6 +85,41 @@ export type ContactoClienteInput = {
   observaciones?: string | null;
 };
 
+/**
+ * RUTAS-TARIFARIO-HISTORIAL-1 (§8 del ticket) — "antes de crear
+ * contacto, validar razonablemente: mismo cliente, mismo email o mismo
+ * teléfono. Si parece duplicado, ADVERTIR al usuario. No bloquear por
+ * nombre únicamente." Función de SOLO LECTURA, separada de
+ * crearContactoCliente a propósito: NUNCA bloquea la creación por sí
+ * sola (eso lo decide el caller — la ruta interactiva pregunta al
+ * usuario; los importadores masivos, clientes/import/route.ts y
+ * rutas-import.ts, no la llaman en absoluto y siguen creando contactos
+ * exactamente igual que antes de este ticket).
+ *
+ * Compara solo contactos ACTIVOS del MISMO cliente — nunca cruza
+ * clientes ni empresas. Coincide por email (case-insensitive) o
+ * teléfono (comparación exacta tal como se guardó, sin normalizar
+ * formato) cuando el input trae ese dato; nunca por nombre solo.
+ */
+export async function buscarPosiblesDuplicadosContacto(
+  empresaId: number,
+  clienteId: number,
+  input: Pick<ContactoClienteInput, "email" | "telefono">,
+): Promise<ContactoCliente[]> {
+  const email = input.email?.trim().toLowerCase() || null;
+  const telefono = input.telefono?.trim() || null;
+  if (!email && !telefono) return [];
+  const condiciones: string[] = [];
+  const params: (string | number)[] = [empresaId, clienteId];
+  if (email) { condiciones.push("LOWER(email) = ?"); params.push(email); }
+  if (telefono) { condiciones.push("telefono = ?"); params.push(telefono); }
+  const rows = await query<RowDataPacket[]>(
+    `${SELECT} WHERE empresa_id = ? AND cliente_id = ? AND activo = 1 AND (${condiciones.join(" OR ")})`,
+    params,
+  );
+  return rows.map(mapRow);
+}
+
 export async function crearContactoCliente(
   empresaId: number,
   clienteId: number,
