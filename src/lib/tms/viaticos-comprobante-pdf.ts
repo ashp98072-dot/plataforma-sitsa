@@ -99,26 +99,6 @@ export function fechaLargaEsGt(value: string | Date | null | undefined): string 
   return `${fechaFmt}, ${horaNum}:${mm}`;
 }
 
-/**
- * VIATICOS-COMPROBANTE-PDF (ajuste de formato) — nombre de usuario
- * (login, `usuarios.username`) de cada firmante distinto, para mostrarlo
- * entre paréntesis junto al nombre real ("Heber Sitan (hsitan)") en vez
- * del rol. Consulta propia y acotada (mismo criterio que imagenFirma()
- * arriba: no se toca firmas-lectura.ts, que deliberadamente no expone
- * username) — un solo SELECT por lote, nunca uno por firma.
- */
-async function usernamesPorUsuarioId(usuarioIds: number[]): Promise<Map<number, string>> {
-  const ids = [...new Set(usuarioIds)];
-  const mapa = new Map<number, string>();
-  if (!ids.length) return mapa;
-  const placeholders = ids.map(() => "?").join(",");
-  const rows = await query<RowDataPacket[]>(`SELECT id, username FROM usuarios WHERE id IN (${placeholders})`, ids);
-  for (const r of rows) {
-    if (r.username != null) mapa.set(Number(r.id), String(r.username));
-  }
-  return mapa;
-}
-
 async function imagenFirma(
   empresaId: number,
   firmaId: number,
@@ -199,14 +179,6 @@ export async function comprobanteAutorizacionesPdf(
     }),
   );
 
-  // Usuario (login) de cada firmante distinto — para mostrarlo entre
-  // paréntesis junto al nombre real, en vez del rol (ver fechaLargaEsGt/
-  // usernamesPorUsuarioId arriba). Un solo SELECT por lote.
-  const usuarioIds = porViatico
-    .map(({ firma }) => firma?.usuarioId)
-    .filter((id): id is number => id != null);
-  const usernamesPorUsuario = await usernamesPorUsuarioId(usuarioIds);
-
   const headers = [
     "Viaje",
     "Fecha",
@@ -251,7 +223,17 @@ export async function comprobanteAutorizacionesPdf(
       .text(`Comprobante de autorización de viáticos — TMS / Logística · ${items.length} viático(s) autorizado(s)`, { width: pageWidth });
     doc.moveDown(0.35);
 
-    dibujarTablaEnDoc(doc, { headers, rows });
+    // VIATICOS-PDF-PRESENTACION-1: "Monto" (índice 5) quedaba demasiado
+    // angosta — el cálculo genérico de anchos por longitud de texto de
+    // dibujarTablaEnDoc() subestima el espacio real que necesita una
+    // columna de montos cuando las demás columnas (Cliente/Empleado/
+    // Código de firma) son largas, y terminaba truncándola con "…" (bug
+    // reproducido: "Q50.00" -> "Q50.0…"). `minWeight` le da un piso de
+    // ancho suficiente para montos normales en GTQ con miles ("Q1,250.00")
+    // sin tocar el cálculo para ningún otro reporte que use esta misma
+    // función compartida (parámetro opt-in). `align: "center"` centra
+    // encabezado y valores, igual que pidió el ticket.
+    dibujarTablaEnDoc(doc, { headers, rows, align: { 5: "center" }, minWeight: { 5: 14 } });
 
     // Bloque de autorización — UNA firma por persona distinta (no una
     // por viático: el detalle por viático ya está en la tabla de
@@ -286,21 +268,30 @@ export async function comprobanteAutorizacionesPdf(
       }
       doc.moveTo(doc.x, doc.y).lineTo(doc.x + 180, doc.y).strokeColor("#94a3b8").lineWidth(0.6).stroke();
       doc.moveDown(0.15);
-      // Nombre real del firmante (snapshot de payload_canonico al firmar)
-      // seguido del USUARIO (login) entre paréntesis — ajuste de formato:
-      // antes mostraba el rol ("Administrador General (Admin)"), ahora
-      // "Heber Sitan (hsitan)". Si no hay username (firma sin usuarioId o
-      // usuario ya no existe), cae al rol como respaldo — nunca deja el
-      // paréntesis vacío.
-      const usuarioFirmante = firma.usuarioId != null ? usernamesPorUsuario.get(firma.usuarioId) : undefined;
-      const parentesis = usuarioFirmante ?? firma.rolFirmante ?? null;
+      // VIATICOS-PDF-PRESENTACION-1: ÚNICAMENTE el nombre real del
+      // firmante (snapshot de payload_canonico al firmar) — nunca su
+      // username/login, ni "(admin)"/"(usuario)", ni su rol o tipo de
+      // usuario entre paréntesis. Ajuste anterior mostraba el rol
+      // ("Administrador General (Admin)") y luego el username
+      // ("Heber Sitan (hsitan)") — ambos formatos quedan retirados por
+      // pedido explícito: "Autorizado por: Heber Sitan", sin nada más.
       doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#0f172a")
-        .text(`Autorizado por: ${firma.nombreFirmante ?? "No disponible"}${parentesis ? ` (${parentesis})` : ""}`, { width: pageWidth });
+        .text(`Autorizado por: ${firma.nombreFirmante ?? "No disponible"}`, { width: pageWidth });
       doc.font("Helvetica").fontSize(8.5).fillColor("#475569")
         .text(`Fecha: ${fechaLargaEsGt(firma.fechaHoraServidor)}`, { width: pageWidth });
       doc.moveDown(0.5);
     });
 
+    // VIATICOS-PDF-PRESENTACION-1: causa de la página en blanco extra —
+    // el pie se dibujaba en `margins.bottom + 6`, es decir 6pt POR DEBAJO
+    // del límite inferior de contenido (`page.height - margins.bottom`).
+    // pdfkit trata esa posición como fuera del área imprimible y, al
+    // llamar `.text()` ahí, agrega automáticamente una página nueva ANTES
+    // de dibujar — el pie terminaba en esa página nueva (casi vacía) en
+    // vez de en la que le correspondía. Mismo patrón ya usado (y
+    // correcto) en piePaginas() — src/lib/rrhh/export-files.ts, el pie de
+    // tablaAPdf(): `margins.bottom - 12`, DENTRO del área imprimible,
+    // nunca dispara una página nueva.
     const range = doc.bufferedPageRange();
     for (let i = 0; i < range.count; i++) {
       doc.switchToPage(range.start + i);
@@ -308,7 +299,7 @@ export async function comprobanteAutorizacionesPdf(
         .text(
           `Página ${i + 1} de ${range.count} · Documento generado el ${formatearTimestampVisible(ahoraLocal())} (Guatemala)`,
           marginL,
-          doc.page.height - doc.page.margins.bottom + 6,
+          doc.page.height - doc.page.margins.bottom - 12,
           { width: pageWidth, align: "center", lineBreak: false },
         );
     }

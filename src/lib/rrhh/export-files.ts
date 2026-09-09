@@ -131,7 +131,28 @@ export async function tablaAPdf(opts: {
  */
 export function dibujarTablaEnDoc(
   doc: PdfDoc,
-  opts: { headers: string[]; rows: string[][] },
+  opts: {
+    headers: string[];
+    rows: string[][];
+    /**
+     * VIATICOS-PDF-PRESENTACION-1 — alineación horizontal por columna
+     * (índice 0-based en `headers`). Opt-in: una columna sin entrada aquí
+     * sigue alineada a la izquierda, EXACTAMENTE como antes de este
+     * parámetro — ningún caller existente que no lo pase cambia de
+     * comportamiento.
+     */
+    align?: Partial<Record<number, "left" | "center" | "right">>;
+    /**
+     * VIATICOS-PDF-PRESENTACION-1 — ancho mínimo (en "peso", mismas
+     * unidades que el cálculo interno por longitud de texto) para una
+     * columna puntual — para cuando el contenido típico es corto
+     * (ej. "Q50.00") pero necesita más espacio real del que su longitud
+     * de caracteres sugiere (montos con miles, "Q1,250.00"), o cuando las
+     * demás columnas son largas y le quitan espacio proporcional. Opt-in:
+     * una columna sin entrada aquí usa el mismo cálculo de siempre.
+     */
+    minWeight?: Partial<Record<number, number>>;
+  },
 ): void {
   const cols = opts.headers.length;
   const marginL = doc.page.margins.left;
@@ -166,6 +187,9 @@ export function dibujarTablaEnDoc(
     }
     if (hl.includes("placa") || hl === "km" || hl.includes("estado")) {
       w = Math.max(w, 7);
+    }
+    if (opts.minWeight?.[i] != null) {
+      w = Math.max(w, opts.minWeight[i]!);
     }
     return w;
   });
@@ -204,6 +228,7 @@ export function dibujarTablaEnDoc(
         doc.text(line, x + padX, y + padY + li * lineH, {
           width: widths[i] - padX * 2,
           lineBreak: false,
+          align: opts.align?.[i] ?? "left",
         });
       });
       x += widths[i];
@@ -227,6 +252,7 @@ export function dibujarTablaEnDoc(
         doc.text(line, x + padX, y + padY + li * lineH, {
           width: widths[i] - padX * 2,
           lineBreak: false,
+          align: opts.align?.[i] ?? "left",
         });
       });
       doc
