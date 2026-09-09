@@ -13,7 +13,7 @@ function datosCatalogos() {
   vi.mocked(query)
     .mockResolvedValueOnce([
       { id: 1, codigo: "EMP-1", nombre: "Carlos Abel Pineda", puesto: "Piloto", cuenta_bancaria: "123456" },
-      { id: 8, codigo: "EMP-8", nombre: "Andrés Norberto Taracena", puesto: "Contador", cuenta_bancaria: "001-002" },
+      { id: 8, codigo: "EMP-8", nombre: "Empleado con cuenta", puesto: "Contador", cuenta_bancaria: "00123456789" },
     ] as never)
     .mockResolvedValueOnce([{ id: 2, placa: "C-130BQ", marca: "Hino", modelo: "500" }] as never)
     .mockResolvedValueOnce([{ id: 3, nombre: "Cliente Uno", nit: "123-4" }] as never)
@@ -41,7 +41,7 @@ describe("GET catálogos de Gastos/Fondos", () => {
     const body = await response.json();
     expect(body.empleados).toEqual([
       { id: 1, codigo: "EMP-1", nombre: "Carlos Abel Pineda", puesto: "Piloto", cuentaBancaria: "123456" },
-      { id: 8, codigo: "EMP-8", nombre: "Andrés Norberto Taracena", puesto: "Contador", cuentaBancaria: "001-002" },
+      { id: 8, codigo: "EMP-8", nombre: "Empleado con cuenta", puesto: "Contador", cuentaBancaria: "00123456789" },
     ]);
     expect(body.vehiculos).toEqual([{ id: 2, placa: "C-130BQ", marca: "Hino", modelo: "500" }]);
     expect(body.clientes).toEqual([{ id: 3, codigo: null, nombre: "Cliente Uno", nit: "123-4" }]);
