@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import {
   requireTenantCatalogoOperativoCliente,
-  requireTenantProgramacionOTms,
 } from "@/lib/tenant";
 import {
   crearUbicacionCliente,
@@ -25,10 +24,13 @@ type Ctx = { params: Promise<{ slug: string; clienteId: string }> };
  * OPS-5.2c: GET ahora también acepta rutas:ver (ver
  * requireTenantCatalogoOperativoCliente en tenant.ts — corrige el 403
  * detectado en OPS-5.2c.1 para un usuario con SOLO rutas:ver). El POST
- * de creación NO cambia — sigue siendo requireTenantProgramacionOTms
- * (programacion:crear O tms:crear): el barrido de OPS-5.2c.1 confirmó
- * que rutas/page.tsx no crea ubicaciones desde su pantalla, así que no
- * se agrega rutas:crear.
+ * RUTAS-TARIFARIO-HISTORIAL-1 (seguimiento) — rutas/page.tsx ahora SÍ
+ * crea ubicaciones desde su propio formulario ("+ Agregar lugar de
+ * carga", mismo espíritu que "+ Cliente rápido"/"+ Agregar contacto").
+ * El POST pasa a usar requireTenantCatalogoOperativoCliente (el mismo
+ * guard ya usado por el GET de este archivo, que YA acepta rutas:<accion>
+ * en su OR) en vez de requireTenantProgramacionOTms — agrega rutas:crear
+ * a la alternativa sin quitarle nada a programacion:crear/tms:crear.
  *
  * El payload de GET se proyecta según `accesoCompleto`: quien NO tiene
  * tms:ver (Programación/Rutas) recibe solo {id, nombre, direccion,
@@ -95,7 +97,7 @@ const schema = z.object({
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug, clienteId } = await ctx.params;
-  const guard = await requireTenantProgramacionOTms(slug, "crear");
+  const guard = await requireTenantCatalogoOperativoCliente(slug, "crear");
   if (guard.error) return guard.error;
 
   const cid = Number(clienteId);

@@ -84,6 +84,8 @@ type TarifaHistorialEntry = {
 type ParadaForm = { tipo: string; lugarNombre: string; clienteUbicacionId: number | null };
 type NuevoContactoForm = { nombre: string; cargo: string; telefono: string; email: string; observaciones: string };
 const NUEVO_CONTACTO_VACIO: NuevoContactoForm = { nombre: "", cargo: "", telefono: "", email: "", observaciones: "" };
+type NuevaUbicacionForm = { nombre: string; direccion: string };
+const NUEVA_UBICACION_VACIA: NuevaUbicacionForm = { nombre: "", direccion: "" };
 
 const inputCls =
   "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
@@ -162,6 +164,14 @@ export default function RutasPage() {
   // §7/§8 — "+ Agregar contacto" inline, con confirmación de posible duplicado.
   const [mostrarNuevoContacto, setMostrarNuevoContacto] = useState(false);
   const [nuevoContacto, setNuevoContacto] = useState<NuevoContactoForm>({ ...NUEVO_CONTACTO_VACIO });
+  // Seguimiento a feedback del usuario — "+ Agregar lugar de carga" desde
+  // la misma captura de Ruta, mismo espíritu que "+ Agregar contacto" y
+  // que guardarNuevaUbicacion() en programacion/plan-form.tsx (sin aviso
+  // de duplicado: ese formulario tampoco lo tiene, se mantiene el mismo
+  // criterio ya establecido para alta rápida de ubicaciones).
+  const [mostrarNuevaUbicacion, setMostrarNuevaUbicacion] = useState(false);
+  const [nuevaUbicacion, setNuevaUbicacion] = useState<NuevaUbicacionForm>({ ...NUEVA_UBICACION_VACIA });
+  const [guardandoUbicacion, setGuardandoUbicacion] = useState(false);
   const [guardandoContacto, setGuardandoContacto] = useState(false);
   const [avisoDuplicadoContacto, setAvisoDuplicadoContacto] = useState<string | null>(null);
   // §10/§11 — errores de validación POR CAMPO (path -> mensaje) devueltos
@@ -291,6 +301,8 @@ export default function RutasPage() {
     setCamposError({});
     setMostrarNuevoContacto(false);
     setAvisoDuplicadoContacto(null);
+    setMostrarNuevaUbicacion(false);
+    setNuevaUbicacion({ ...NUEVA_UBICACION_VACIA });
     setMostrarForm(true);
   }
 
@@ -327,6 +339,8 @@ export default function RutasPage() {
     setCamposError({});
     setMostrarNuevoContacto(false);
     setAvisoDuplicadoContacto(null);
+    setMostrarNuevaUbicacion(false);
+    setNuevaUbicacion({ ...NUEVA_UBICACION_VACIA });
     setMostrarForm(true);
   }
 
@@ -506,6 +520,47 @@ export default function RutasPage() {
     }
   }
 
+  /**
+   * Seguimiento a feedback del usuario — "+ Agregar lugar de carga":
+   * antes, un lugar nuevo solo se podía escribir como texto libre de
+   * ESA ruta (campo aparte), sin quedar disponible para futuras rutas
+   * del mismo cliente. Ahora crea la ubicación real en el catálogo del
+   * cliente (mismo endpoint que ya usa "+ Agregar ubicación" en
+   * Programación, tms_cliente_ubicaciones) y la deja seleccionada.
+   */
+  async function guardarNuevaUbicacion() {
+    if (!formClienteId) return;
+    const nombre = nuevaUbicacion.nombre.trim();
+    if (!nombre) {
+      setError("Indica un nombre/alias para el lugar de carga (ej. Bodega Central).");
+      return;
+    }
+    setGuardandoUbicacion(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/empresas/${slug}/tms/clientes/${formClienteId}/ubicaciones`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nombre, direccion: nuevaUbicacion.direccion.trim() || undefined }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.error ?? "No se pudo guardar el lugar de carga.");
+        return;
+      }
+      const nueva = data.ubicacion as UbicacionCliente;
+      setUbicacionesForm((list) => [...list, nueva].sort((a, b) => a.nombre.localeCompare(b.nombre, "es")));
+      setForm((f) => ({ ...f, ubicacionCargaId: nueva.id }));
+      setMostrarNuevaUbicacion(false);
+      setNuevaUbicacion({ ...NUEVA_UBICACION_VACIA });
+      setMsg(`Lugar de carga "${nueva.nombre}" guardado — ya puedes elegirlo en cualquier ruta de este cliente.`);
+    } catch {
+      setError("Error de conexión.");
+    } finally {
+      setGuardandoUbicacion(false);
+    }
+  }
+
   const rutasFiltradas = rutas;
 
   return (
@@ -598,21 +653,43 @@ export default function RutasPage() {
               {mensajeCampo("nombre")}
             </label>
 
-            <label className="text-xs text-[var(--muted)]">
-              Lugar de carga (ubicación guardada)
-              <select
-                data-campo="ubicacionCargaId"
-                className={`${campoCls("ubicacionCargaId")} mt-0.5 w-full`}
-                value={form.ubicacionCargaId ?? ""}
-                onChange={(e) => setForm((f) => ({ ...f, ubicacionCargaId: Number(e.target.value) || null }))}
-              >
-                <option value="">— Ninguna —</option>
-                {ubicacionesForm.map((u) => (
-                  <option key={u.id} value={u.id}>{u.nombre}</option>
-                ))}
-              </select>
+            <div className="text-xs text-[var(--muted)]">
+              {/*
+                Seguimiento a feedback del usuario — antes era un <select>
+                plano (no dejaba escribir/filtrar) y no existía forma de
+                dar de alta un lugar de carga nuevo desde Rutas: quedaba
+                como texto suelto de esa ruta (campo de abajo), sin quedar
+                disponible para futuras rutas del mismo cliente. Mismo
+                buscador ya usado para piloto/auxiliar/contacto.
+              */}
+              <CatalogoSearchSelect
+                label="lugar de carga guardado"
+                placeholder="Buscar por nombre…"
+                value={form.ubicacionCargaId != null ? String(form.ubicacionCargaId) : ""}
+                options={ubicacionesForm.map((u) => ({ value: String(u.id), label: u.nombre, detail: u.direccion ?? undefined }))}
+                inputClassName={campoCls("ubicacionCargaId")}
+                onChange={(v) => setForm((f) => ({ ...f, ubicacionCargaId: v ? Number(v) : null }))}
+              />
               {mensajeCampo("ubicacionCargaId")}
-            </label>
+              {formClienteId ? (
+                <button
+                  type="button"
+                  className="mt-1 text-[11px] text-[var(--accent)] hover:underline"
+                  onClick={() => setMostrarNuevaUbicacion((v) => !v)}
+                >
+                  {mostrarNuevaUbicacion ? "Cancelar lugar nuevo" : "+ Agregar lugar de carga"}
+                </button>
+              ) : null}
+              {mostrarNuevaUbicacion ? (
+                <div className="mt-2 space-y-1.5 rounded border border-[var(--border)]/60 p-2">
+                  <input className={`${inputCls} w-full`} placeholder="Nombre / alias (ej. Bodega Central)" value={nuevaUbicacion.nombre} onChange={(e) => setNuevaUbicacion((u) => ({ ...u, nombre: e.target.value }))} />
+                  <input className={`${inputCls} w-full`} placeholder="Dirección (opcional)" value={nuevaUbicacion.direccion} onChange={(e) => setNuevaUbicacion((u) => ({ ...u, direccion: e.target.value }))} />
+                  <button type="button" disabled={guardandoUbicacion} className="rounded bg-[#334155] px-2 py-1 text-xs text-white disabled:opacity-50" onClick={() => void guardarNuevaUbicacion()}>
+                    {guardandoUbicacion ? "Guardando…" : "Guardar lugar de carga"}
+                  </button>
+                </div>
+              ) : null}
+            </div>
             <label className="text-xs text-[var(--muted)]">
               Lugar de carga (texto libre, si no está en el catálogo)
               <input
