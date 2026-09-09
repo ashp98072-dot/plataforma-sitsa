@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filtrarOpcionesBusqueda, textoInicialBusqueda } from "./catalogo-search-select";
+import { debeMostrarNombreManual, filtrarOpcionesBusqueda, textoInicialBusqueda } from "./catalogo-search-select";
 
 const opciones = [
   { value: "1", label: "Ana Pérez", detail: "EMP-01 · Piloto", searchText: "P123ABC Toyota Hilux CLI-01 NIT 123 Cliente Uno PLAN-001 09/09/2026" },
@@ -18,6 +18,11 @@ describe("filtrarOpcionesBusqueda", () => {
   it("limita resultados filtrados razonablemente", () => expect(filtrarOpcionesBusqueda(Array.from({ length: 40 }, (_, i) => ({ value: String(i), label: `Opción ${i}` })), "Opción", 20)).toHaveLength(20));
   it("precarga una selección existente al editar", () => expect(textoInicialBusqueda(opciones, "2")).toBe("Mario López"));
   it("Requirente conserva texto manual sin usuario", () => expect(textoInicialBusqueda(opciones, "", "Gestora manual")).toBe("Gestora manual"));
+  it("Requirente con usuario real no muestra input manual", () => expect(debeMostrarNombreManual("2", true, "Anterior")).toBe(false));
+  it("Requirente muestra input manual solo al elegir Nombre manual", () => {
+    expect(debeMostrarNombreManual("", false)).toBe(false);
+    expect(debeMostrarNombreManual("", true)).toBe(true);
+  });
 
   it("empleado encuentra coincidencia parcial por nombre y apellido", () => {
     const empleados = [

@@ -74,4 +74,9 @@ describe("autocompletado de Plan en Solicitud de Fondo", () => {
     const result = aplicarEmpleadoSeleccionado(linea(), empleado({ cuentaBancaria: "001-002-0003" }), "3");
     expect(result.cuenta).toBe("001-002-0003");
   });
+
+  it("Empleado con cuenta precarga exactamente la cuenta bancaria del catálogo", () => {
+    const result = aplicarEmpleadoSeleccionado(linea(), empleado({ nombre: "Empleado con cuenta", cuentaBancaria: "00123456789" }), "3");
+    expect(result).toMatchObject({ empleadoNombre: "Empleado con cuenta", cuenta: "00123456789" });
+  });
 });

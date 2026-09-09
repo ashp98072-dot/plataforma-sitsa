@@ -22,6 +22,12 @@ export function textoInicialBusqueda(opciones: CatalogoSearchOption[], value: st
   return opciones.find((o) => o.value === value)?.label ?? manualText;
 }
 
+export function debeMostrarNombreManual(value: string, modoManual: boolean, manualText = ""): boolean {
+  return !value && (modoManual || Boolean(manualText));
+}
+
+const VALOR_NOMBRE_MANUAL = "__nombre_manual__";
+
 type Props = {
   label: string;
   placeholder: string;
@@ -38,12 +44,13 @@ type Props = {
 export function CatalogoSearchSelect({ label, placeholder, value, options, inputClassName, onChange, manualText, onTextChange, onOptionSelected }: Props) {
   const id = useId();
   const [busqueda, setBusqueda] = useState("");
+  const [modoManual, setModoManual] = useState(false);
   const filtradas = filtrarOpcionesBusqueda(options, busqueda);
   const seleccion = options.find((o) => o.value === value);
   const opcionesVisibles = seleccion && !filtradas.some((o) => o.value === seleccion.value)
     ? [seleccion, ...filtradas]
     : filtradas;
-  const manual = Boolean(onTextChange) && !value;
+  const manual = Boolean(onTextChange) && debeMostrarNombreManual(value, modoManual, manualText);
 
   return (
     <div className="space-y-1 text-xs text-[var(--muted)]">
@@ -53,14 +60,22 @@ export function CatalogoSearchSelect({ label, placeholder, value, options, input
       <select
         id={`${id}-select`}
         className={`${inputClassName} w-full`}
-        value={value}
+        value={manual ? VALOR_NOMBRE_MANUAL : value}
         onChange={(e) => {
           const next = e.target.value;
+          if (next === VALOR_NOMBRE_MANUAL) {
+            setModoManual(true);
+            onChange("");
+            onOptionSelected?.(undefined);
+            return;
+          }
+          setModoManual(false);
           onChange(next);
           onOptionSelected?.(options.find((o) => o.value === next));
         }}
       >
-        <option value="">{onTextChange ? "Nombre manual" : `— Seleccionar ${label.toLocaleLowerCase("es")} —`}</option>
+        <option value="">— Seleccionar {label.toLocaleLowerCase("es")} —</option>
+        {onTextChange ? <option value={VALOR_NOMBRE_MANUAL}>Nombre manual</option> : null}
         {opcionesVisibles.map((o) => <option key={o.value} value={o.value}>{o.label}{o.detail ? ` · ${o.detail}` : ""}</option>)}
       </select>
       {busqueda.trim() && filtradas.length === 0 ? <p className="text-[11px]">Sin coincidencias.</p> : null}
