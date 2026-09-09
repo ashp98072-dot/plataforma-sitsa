@@ -9,6 +9,7 @@ function conexion(fallaEn: "cabecera" | "parada" | "personal") {
     beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn(),
     query: vi.fn(async (sql: string) => {
       if (sql.includes("FROM empleados")) return [[{ id: 10 }, { id: 20 }]];
+      if (sql.includes("FROM tms_clientes")) return [[{ id: 5 }]];
       return [[]];
     }),
     execute: vi.fn(async (sql: string) => {
