@@ -101,12 +101,16 @@ export default function FondosPage() {
   const [catalogos, setCatalogos] = useState<Catalogos>({ empleados: [], vehiculos: [], clientes: [], planes: [], usuarios: [], solicitantes: [] });
   useEffect(() => {
     fetch(`/api/empresas/${slug}/tms/gastos/catalogos`)
-      .then((r) => r.json())
+      .then(async (r) => {
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.error ?? "No se pudieron cargar los catálogos.");
+        return data;
+      })
       .then((data) => setCatalogos({
         empleados: data.empleados ?? [], vehiculos: data.vehiculos ?? [], clientes: data.clientes ?? [],
         planes: data.planes ?? [], usuarios: data.usuarios ?? [], solicitantes: data.solicitantes ?? [],
       }))
-      .catch(() => undefined);
+      .catch((e) => setError(e instanceof Error ? e.message : "No se pudieron cargar los catálogos."));
   }, [slug]);
 
   const cargar = useCallback(async () => {
@@ -308,7 +312,7 @@ export default function FondosPage() {
                     congela como snapshot al guardar (fondos.ts).
                   */}
                   <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
-                    <CatalogoSearchSelect label="Empleado" placeholder="Buscar nombre o código..." value={l.empleadoId} options={catalogos.empleados.map((e) => ({ value: String(e.id), label: e.nombre, detail: [e.codigo, e.puesto].filter(Boolean).join(" · ") }))} inputClassName={inputCls} onChange={(value) => {
+                    <CatalogoSearchSelect label="Empleado" placeholder="Buscar empleado por nombre..." value={l.empleadoId} options={catalogos.empleados.map((e) => ({ value: String(e.id), label: e.nombre, detail: [e.codigo, e.puesto].filter(Boolean).join(" · "), searchText: e.nombre }))} inputClassName={inputCls} onChange={(value) => {
                       const empleado = catalogos.empleados.find((e) => String(e.id) === value);
                       set({ empleadoId: value, empleadoNombre: empleado?.nombre ?? "", cuenta: empleado?.cuentaBancaria ?? "", cargo: empleado?.puesto ?? "" });
                     }} />
