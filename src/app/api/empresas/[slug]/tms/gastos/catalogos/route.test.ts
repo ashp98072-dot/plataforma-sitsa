@@ -11,7 +11,10 @@ const ctx = { params: Promise.resolve({ slug: "kt-monaco" }) };
 
 function datosCatalogos() {
   vi.mocked(query)
-    .mockResolvedValueOnce([{ id: 1, codigo: "EMP-1", nombre: "Carlos Abel Pineda", puesto: "Piloto", cuenta_bancaria: "123456" }] as never)
+    .mockResolvedValueOnce([
+      { id: 1, codigo: "EMP-1", nombre: "Carlos Abel Pineda", puesto: "Piloto", cuenta_bancaria: "123456" },
+      { id: 8, codigo: "EMP-8", nombre: "Andrés Norberto Taracena", puesto: "Contador", cuenta_bancaria: "001-002" },
+    ] as never)
     .mockResolvedValueOnce([{ id: 2, placa: "C-130BQ", marca: "Hino", modelo: "500" }] as never)
     .mockResolvedValueOnce([{ id: 3, nombre: "Cliente Uno", nit: "123-4" }] as never)
     .mockResolvedValueOnce([{
@@ -36,7 +39,10 @@ describe("GET catálogos de Gastos/Fondos", () => {
     const response = await GET(new Request("http://local"), ctx);
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body.empleados).toEqual([{ id: 1, codigo: "EMP-1", nombre: "Carlos Abel Pineda", puesto: "Piloto", cuentaBancaria: "123456" }]);
+    expect(body.empleados).toEqual([
+      { id: 1, codigo: "EMP-1", nombre: "Carlos Abel Pineda", puesto: "Piloto", cuentaBancaria: "123456" },
+      { id: 8, codigo: "EMP-8", nombre: "Andrés Norberto Taracena", puesto: "Contador", cuentaBancaria: "001-002" },
+    ]);
     expect(body.vehiculos).toEqual([{ id: 2, placa: "C-130BQ", marca: "Hino", modelo: "500" }]);
     expect(body.clientes).toEqual([{ id: 3, codigo: null, nombre: "Cliente Uno", nit: "123-4" }]);
     expect(body.planes).toEqual([{
@@ -46,6 +52,16 @@ describe("GET catálogos de Gastos/Fondos", () => {
     }]);
     expect(body.usuarios).toHaveLength(2);
     expect(body.solicitantes).toEqual([{ id: 5, nombre: "Operador Uno" }]);
+  });
+
+  it("incluye cualquier empleado activo de la empresa sin filtrar por puesto o vínculo TMS", async () => {
+    datosCatalogos();
+    const response = await GET(new Request("http://local"), ctx);
+    const body = await response.json();
+    expect(body.empleados.map((e: { puesto: string }) => e.puesto)).toEqual(["Piloto", "Contador"]);
+    const sql = String(vi.mocked(query).mock.calls[0][0]);
+    expect(sql).toContain("empresa_id = ? AND estado = 'Activo'");
+    expect(sql).not.toMatch(/puesto\s*(=|IN)|tms_personal/i);
   });
 
   it("mantiene empresa_id del tenant en las cinco consultas", async () => {

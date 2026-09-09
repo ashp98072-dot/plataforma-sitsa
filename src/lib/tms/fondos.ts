@@ -158,7 +158,13 @@ async function resolverSnapshotLineaTx(
     cargo = rows[0].puesto != null ? String(rows[0].puesto) : null;
     cuenta = rows[0].cuenta_bancaria != null ? String(rows[0].cuenta_bancaria) : null;
     empleadoNombre = limpiarOverride(input.empleadoNombreOverride, 200) ?? empleadoNombre;
-    cuenta = limpiarOverride(input.cuentaOverride, 100) ?? cuenta;
+    // Cuenta es el destino bancario de esta solicitud y se congela como
+    // snapshot. A diferencia de Nombre/Cargo, un override explícitamente
+    // vacío también es significativo (p. ej. conservar vacío al editar una
+    // solicitud aunque RRHH haya recibido una cuenta posteriormente).
+    if (input.cuentaOverride !== undefined && input.cuentaOverride !== null) {
+      cuenta = limpiarOverride(input.cuentaOverride, 100);
+    }
     cargo = limpiarOverride(input.cargoOverride, 150) ?? cargo;
   }
   let placa: string | null = null;
