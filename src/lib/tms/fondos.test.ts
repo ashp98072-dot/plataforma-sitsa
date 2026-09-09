@@ -1,8 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db", () => ({ getPool: vi.fn(), query: vi.fn(), execute: vi.fn() }));
+// SOLICITUD-FONDOS-PDF-AUTORIZADO-1 — mismo criterio que viaticos.test.ts:
+// crearFirmaInterna/guardarUpload/borrarUpload/leerBytesFirmaGuardada se
+// mockean por completo (nunca tocan disco/DB real en un test unitario).
+vi.mock("@/lib/firmas/firmas-internas", () => ({ crearFirmaInterna: vi.fn() }));
+vi.mock("@/lib/firmas/usuario-firmas", () => ({ leerBytesFirmaGuardada: vi.fn() }));
+vi.mock("@/lib/uploads", () => ({ guardarUpload: vi.fn(), borrarUpload: vi.fn() }));
 import { getPool, query } from "@/lib/db";
-import { actualizarSolicitudFondo, cambiarEstadoSolicitudFondo, crearSolicitudFondo, listarSolicitudesFondo } from "./fondos";
+import { crearFirmaInterna } from "@/lib/firmas/firmas-internas";
+import { leerBytesFirmaGuardada } from "@/lib/firmas/usuario-firmas";
+import { borrarUpload, guardarUpload } from "@/lib/uploads";
+import {
+  actualizarSolicitudFondo,
+  cambiarEstadoSolicitudFondo,
+  crearSolicitudFondo,
+  listarSolicitudesFondo,
+  type IdentidadFirmante,
+} from "./fondos";
+
+const AUTORIZANTE: IdentidadFirmante = { usuarioId: 9, nombre: "Heber Sitan", rol: "JefeOperaciones" };
+const IMAGEN_FIRMA = { bytes: new ArrayBuffer(4), original: "firma.png" };
 
 function filaSolicitud(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -24,14 +42,19 @@ function conexion(opts: {
   // actualizarSolicitudFondo relee FOR UPDATE antes de editar.
   actualRequirenteEmpleadoId?: number | null;
   actualRequirenteNombre?: string | null;
+  actualRequirenteUsuarioId?: number | null;
   actualFechaRequerimiento?: string;
   actualObservaciones?: string | null;
   actualTotal?: number;
+  // SOLICITUD-FONDOS-PDF-AUTORIZADO-1 — usuario requirente seleccionado
+  // del catálogo (resolverUsuarioDeEmpresaTx).
+  usuarioEnEmpresa?: boolean; usuarioNombre?: string; usuarioRol?: string | null;
 } = {}) {
   const empleadoEnEmpresa = opts.empleadoEnEmpresa ?? true;
   const vehiculoEnEmpresa = opts.vehiculoEnEmpresa ?? true;
   const clienteEnEmpresa = opts.clienteEnEmpresa ?? true;
   const planEnEmpresa = opts.planEnEmpresa ?? true;
+  const usuarioEnEmpresa = opts.usuarioEnEmpresa ?? true;
   const conn = {
     beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn(),
     query: vi.fn(async (sql: string) => {
@@ -40,6 +63,7 @@ function conexion(opts: {
           id: 1, estado: opts.estadoActual ?? "Pendiente",
           requirente_empleado_id: opts.actualRequirenteEmpleadoId ?? null,
           requirente_nombre: opts.actualRequirenteNombre ?? "Juan Perez",
+          requirente_usuario_id: opts.actualRequirenteUsuarioId ?? null,
           fecha_requerimiento: opts.actualFechaRequerimiento ?? "2026-09-01",
           observaciones: opts.actualObservaciones ?? null,
           total: opts.actualTotal ?? 500,
@@ -65,6 +89,10 @@ function conexion(opts: {
       if (sql.includes("FROM tms_planes_viaje")) {
         return [planEnEmpresa ? [{ fecha_plan: opts.planFecha ?? "2026-09-05" }] : []];
       }
+      // SOLICITUD-FONDOS-PDF-AUTORIZADO-1: resolverUsuarioDeEmpresaTx (requirente-usuario)
+      if (sql.includes("FROM usuarios u")) {
+        return [usuarioEnEmpresa ? [{ nombre: opts.usuarioNombre ?? "Mario Caal", rol_global: opts.usuarioRol ?? "Operaciones" }] : []];
+      }
       return [[]];
     }),
     execute: vi.fn(async (...args: [string, ...unknown[]]) => {
@@ -78,7 +106,17 @@ function conexion(opts: {
   return conn;
 }
 
-beforeEach(() => vi.resetAllMocks());
+beforeEach(() => {
+  vi.resetAllMocks();
+  // Default seguro: sin firma guardada en "Mi firma" (los tests de
+  // captura de firma la sobreescriben explícitamente) — nunca toca disco real.
+  vi.mocked(leerBytesFirmaGuardada).mockResolvedValue(null);
+  vi.mocked(guardarUpload).mockResolvedValue({ relative: "empresas/7/firmas/firma_x.png", original: "firma.png", size: 15 } as never);
+  vi.mocked(crearFirmaInterna).mockResolvedValue({
+    id: 1, codigoFirma: "SIG-1", fechaHoraServidor: new Date("2026-09-01T10:00:00Z"),
+    hashPayload: "hash", nombreFirmante: "Heber Sitan", rolFirmante: "JefeOperaciones", tieneImagen: true,
+  } as never);
+});
 
 describe("aislamiento multiempresa en el SELECT de listado (bloqueo 1, revisión PR #204)", () => {
   it("los JOIN a empleados (requirente/autorizante) exigen empresa_id igual, no solo el id", async () => {
@@ -248,17 +286,108 @@ describe("crearSolicitudFondo — snapshot histórico por línea (empleado/vehí
   });
 });
 
+/**
+ * SOLICITUD-FONDOS-PDF-AUTORIZADO-1 §1/§3 — firma del SOLICITANTE
+ * (siempre, best-effort) y del REQUIRIENTE (solo cuando se asocia un
+ * usuario real del catálogo, best-effort) — a diferencia de autorizar,
+ * NUNCA bloquean la creación por falta de firma.
+ */
+describe("crearSolicitudFondo — firma real de solicitante y requirente (§1/§3 del ticket)", () => {
+  const SOLICITANTE: IdentidadFirmante = { usuarioId: 5, nombre: "Mario Caal", rol: "Operaciones" };
+
+  it("guarda el snapshot del SOLICITANTE al crear (nombre real + firma de 'Mi firma')", async () => {
+    const conn = conexion();
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    vi.mocked(leerBytesFirmaGuardada).mockResolvedValue(IMAGEN_FIRMA as never);
+    await crearSolicitudFondo(7, {
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", lineas: [{ categoria: "Combustible", monto: 100 }],
+    }, "mcaal", SOLICITANTE);
+
+    const insertCabecera = conn.execute.mock.calls.find((c) => (c[0] as string).includes("INSERT INTO tms_solicitudes_fondo"));
+    expect(insertCabecera?.[1]).toContain(5); // solicitante_usuario_id
+    expect(insertCabecera?.[1]).toContain("Mario Caal"); // solicitante_nombre
+    expect(leerBytesFirmaGuardada).toHaveBeenCalledWith(5);
+    expect(crearFirmaInterna).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      usuarioId: 5, nombreFirmante: "Mario Caal", accion: "SOLICITAR_FONDO", modulo: "FONDOS", entidadTipo: "SOLICITUD_FONDO",
+      metodo: "FIRMA_MANUSCRITA", origenFirma: "GUARDADA",
+    }));
+  });
+
+  it("solicitante SIN firma guardada: la solicitud se crea igual, sin bloquear ni inventar una firma", async () => {
+    const conn = conexion();
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    vi.mocked(leerBytesFirmaGuardada).mockResolvedValue(null); // sin "Mi firma"
+    await crearSolicitudFondo(7, {
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", lineas: [{ categoria: "Combustible", monto: 100 }],
+    }, "mcaal", SOLICITANTE);
+    expect(conn.commit).toHaveBeenCalledOnce();
+    expect(crearFirmaInterna).not.toHaveBeenCalled();
+  });
+
+  it("requirente asociado a un usuario del catálogo: resuelve su nombre real y captura su firma", async () => {
+    const conn = conexion({ usuarioNombre: "Ana Gómez", usuarioRol: "Gerencia" });
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    vi.mocked(leerBytesFirmaGuardada).mockResolvedValue(IMAGEN_FIRMA as never);
+    await crearSolicitudFondo(7, {
+      fechaRequerimiento: "2026-09-01", requirenteUsuarioId: 30, lineas: [{ categoria: "Combustible", monto: 100 }],
+    }, "mcaal");
+    const insertCabecera = conn.execute.mock.calls.find((c) => (c[0] as string).includes("INSERT INTO tms_solicitudes_fondo"));
+    expect(insertCabecera?.[1]).toContain("Ana Gómez"); // nombre real, nunca el texto libre
+    expect(insertCabecera?.[1]).toContain(30); // requirente_usuario_id
+    expect(crearFirmaInterna).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      usuarioId: 30, nombreFirmante: "Ana Gómez", accion: "REQUERIR_FONDO",
+    }));
+    expect(conn.commit).toHaveBeenCalledOnce();
+  });
+
+  it("AISLAMIENTO MULTIEMPRESA: rechaza un requirenteUsuarioId que no tiene acceso a esta empresa, sin escribir nada", async () => {
+    const conn = conexion({ usuarioEnEmpresa: false });
+    await expect(crearSolicitudFondo(7, {
+      fechaRequerimiento: "2026-09-01", requirenteUsuarioId: 999, lineas: [{ categoria: "Combustible", monto: 100 }],
+    })).rejects.toThrow("El usuario requirente indicado no pertenece a esta empresa.");
+    expect(conn.rollback).toHaveBeenCalledOnce();
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(conn.execute.mock.calls.some((c) => (c[0] as string).includes("INSERT INTO tms_solicitudes_fondo"))).toBe(false);
+    expect(crearFirmaInterna).not.toHaveBeenCalled();
+  });
+
+  it("requirente SIN usuario asociado (texto libre): no intenta resolver ni capturar ninguna firma", async () => {
+    const conn = conexion();
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    await crearSolicitudFondo(7, {
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan Pérez (texto libre)", lineas: [{ categoria: "Combustible", monto: 100 }],
+    });
+    expect(leerBytesFirmaGuardada).not.toHaveBeenCalled();
+    expect(crearFirmaInterna).not.toHaveBeenCalled();
+    const insertCabecera = conn.execute.mock.calls.find((c) => (c[0] as string).includes("INSERT INTO tms_solicitudes_fondo"));
+    expect(insertCabecera?.[1]).toContain("Juan Pérez (texto libre)");
+  });
+
+  it("si falla la transacción después de guardar las firmas, se compensan (borran) los archivos escritos", async () => {
+    // Falla DESPUÉS de la captura de firmas (que ocurre luego de insertar
+    // las líneas), en la auditoría — así el archivo de firma ya se
+    // escribió a disco cuando el rollback ocurre.
+    conexion({ fallaEn: "INSERT INTO auditoria" });
+    vi.mocked(leerBytesFirmaGuardada).mockResolvedValue(IMAGEN_FIRMA as never);
+    await expect(crearSolicitudFondo(7, {
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", lineas: [{ categoria: "Combustible", monto: 100 }],
+    }, "mcaal", SOLICITANTE)).rejects.toThrow();
+    expect(borrarUpload).toHaveBeenCalledWith("empresas/7/firmas/firma_x.png");
+  });
+});
+
 describe("cambiarEstadoSolicitudFondo", () => {
-  it("permite Pendiente -> Autorizada", async () => {
+  it("permite Pendiente -> Autorizada, con firma real del autorizante", async () => {
     const conn = conexion({ estadoActual: "Pendiente" });
     vi.mocked(query).mockResolvedValue([filaSolicitud({ estado: "Autorizada" })] as never);
-    await cambiarEstadoSolicitudFondo(7, 1, "autorizar", { autorizanteNombre: "Jefe" });
+    await cambiarEstadoSolicitudFondo(7, 1, "autorizar", { autorizante: { ...AUTORIZANTE, imagen: IMAGEN_FIRMA } });
     expect(conn.commit).toHaveBeenCalledOnce();
   });
 
   it("rechaza autorizar -> pendiente (transición hacia atrás) sin escribir nada", async () => {
     const conn = conexion({ estadoActual: "Rechazada" });
-    await expect(cambiarEstadoSolicitudFondo(7, 1, "autorizar")).rejects.toThrow('No se puede pasar de "Rechazada" a "Autorizada"');
+    await expect(cambiarEstadoSolicitudFondo(7, 1, "autorizar", { autorizante: { ...AUTORIZANTE, imagen: IMAGEN_FIRMA } }))
+      .rejects.toThrow('No se puede pasar de "Rechazada" a "Autorizada"');
     expect(conn.rollback).toHaveBeenCalledOnce();
     expect(conn.commit).not.toHaveBeenCalled();
   });
@@ -270,21 +399,84 @@ describe("cambiarEstadoSolicitudFondo", () => {
 
   it("Liquidada no admite ninguna transición más", async () => {
     conexion({ estadoActual: "Liquidada" });
-    await expect(cambiarEstadoSolicitudFondo(7, 1, "autorizar")).rejects.toThrow();
+    await expect(cambiarEstadoSolicitudFondo(7, 1, "autorizar", { autorizante: { ...AUTORIZANTE, imagen: IMAGEN_FIRMA } })).rejects.toThrow();
   });
 
   it("devuelve null si la solicitud no existe", async () => {
     const conn = conexion();
     conn.query.mockResolvedValue([[]]);
-    expect(await cambiarEstadoSolicitudFondo(7, 999, "autorizar")).toBeNull();
+    expect(await cambiarEstadoSolicitudFondo(7, 999, "autorizar", { autorizante: { ...AUTORIZANTE, imagen: IMAGEN_FIRMA } })).toBeNull();
   });
 
   it("AISLAMIENTO MULTIEMPRESA: rechaza autorizar con un autorizanteEmpleadoId que no pertenece a esta empresa", async () => {
     const conn = conexion({ estadoActual: "Pendiente", empleadoEnEmpresa: false });
-    await expect(cambiarEstadoSolicitudFondo(7, 1, "autorizar", { autorizanteEmpleadoId: 999 }))
-      .rejects.toThrow("El autorizante indicado no pertenece a esta empresa.");
+    await expect(cambiarEstadoSolicitudFondo(7, 1, "autorizar", {
+      autorizanteEmpleadoId: 999, autorizante: { ...AUTORIZANTE, imagen: IMAGEN_FIRMA },
+    })).rejects.toThrow("El autorizante indicado no pertenece a esta empresa.");
     expect(conn.rollback).toHaveBeenCalledOnce();
     expect(conn.commit).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * SOLICITUD-FONDOS-PDF-AUTORIZADO-1 §2/§4/§6/§7/§11 — "No permitir una
+ * Solicitud Autorizada sin firma del autorizante": bloquea ANTES de
+ * tocar la base de datos si falta `opts.autorizante`, y captura un
+ * snapshot INMUTABLE (firmas_electronicas) de la firma real usada en
+ * ESE momento — nunca vuelve a resolver "la firma actual" del usuario.
+ */
+describe("cambiarEstadoSolicitudFondo — firma real del autorizante (§2 del ticket)", () => {
+  it("autorizante SIN firma (opts.autorizante ausente) -> rechaza con el mensaje fijo, sin tocar la base de datos", async () => {
+    const conn = conexion({ estadoActual: "Pendiente" });
+    await expect(cambiarEstadoSolicitudFondo(7, 1, "autorizar")).rejects.toThrow(
+      "Debes registrar tu firma en Mi firma antes de autorizar la solicitud.",
+    );
+    expect(conn.beginTransaction).not.toHaveBeenCalled();
+    expect(crearFirmaInterna).not.toHaveBeenCalled();
+  });
+
+  it("autorización guarda un snapshot REAL: crearFirmaInterna recibe la imagen, el nombre real y accion='AUTORIZAR_FONDO'", async () => {
+    const conn = conexion({ estadoActual: "Pendiente" });
+    vi.mocked(query).mockResolvedValue([filaSolicitud({ estado: "Autorizada" })] as never);
+    await cambiarEstadoSolicitudFondo(7, 1, "autorizar", { autorizante: { ...AUTORIZANTE, imagen: IMAGEN_FIRMA } });
+    expect(crearFirmaInterna).toHaveBeenCalledWith(conn, expect.objectContaining({
+      empresaId: 7, usuarioId: 9, nombreFirmante: "Heber Sitan",
+      accion: "AUTORIZAR_FONDO", modulo: "FONDOS", entidadTipo: "SOLICITUD_FONDO", entidadId: 1,
+      metodo: "FIRMA_MANUSCRITA", origenFirma: "GUARDADA",
+      imagen: expect.objectContaining({ relative: "empresas/7/firmas/firma_x.png" }),
+    }));
+    // La copia física se escribe ANTES de abrir la transacción de negocio.
+    expect(vi.mocked(guardarUpload).mock.invocationCallOrder[0]).toBeLessThan(conn.beginTransaction.mock.invocationCallOrder[0]);
+    const update = conn.execute.mock.calls.find((c) => (c[0] as string).includes("autorizante_usuario_id"));
+    expect(update?.[1]).toEqual(["Autorizada", null, "Heber Sitan", 9, 1, 7]);
+  });
+
+  it("el nombre guardado es SIEMPRE el real de la identidad de sesión — nunca un autorizanteNombre inventado por el caller", async () => {
+    conexion({ estadoActual: "Pendiente" });
+    vi.mocked(query).mockResolvedValue([filaSolicitud({ estado: "Autorizada" })] as never);
+    // El tipo ya no acepta autorizanteNombre — solo opts.autorizante.nombre define el nombre persistido.
+    await cambiarEstadoSolicitudFondo(7, 1, "autorizar", { autorizante: { usuarioId: 20, nombre: "Ana Gómez", rol: null, imagen: IMAGEN_FIRMA } });
+    expect(crearFirmaInterna).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ nombreFirmante: "Ana Gómez" }));
+  });
+
+  it("si falla la transacción después de guardar la imagen, se compensa (borra) el archivo — nunca queda huérfano", async () => {
+    conexion({ estadoActual: "Pendiente", fallaEn: "UPDATE tms_solicitudes_fondo" });
+    await expect(cambiarEstadoSolicitudFondo(7, 1, "autorizar", { autorizante: { ...AUTORIZANTE, imagen: IMAGEN_FIRMA } })).rejects.toThrow();
+    expect(borrarUpload).toHaveBeenCalledWith("empresas/7/firmas/firma_x.png");
+  });
+
+  it("commit exitoso NUNCA borra el archivo de la firma recién guardada", async () => {
+    conexion({ estadoActual: "Pendiente" });
+    vi.mocked(query).mockResolvedValue([filaSolicitud({ estado: "Autorizada" })] as never);
+    await cambiarEstadoSolicitudFondo(7, 1, "autorizar", { autorizante: { ...AUTORIZANTE, imagen: IMAGEN_FIRMA } });
+    expect(borrarUpload).not.toHaveBeenCalled();
+  });
+
+  it("AISLAMIENTO MULTIEMPRESA: la firma se registra con el empresaId del caller, nunca uno distinto", async () => {
+    conexion({ estadoActual: "Pendiente" });
+    vi.mocked(query).mockResolvedValue([filaSolicitud({ estado: "Autorizada" })] as never);
+    await cambiarEstadoSolicitudFondo(9, 1, "autorizar", { autorizante: { ...AUTORIZANTE, imagen: IMAGEN_FIRMA } });
+    expect(crearFirmaInterna).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ empresaId: 9 }));
   });
 });
 
@@ -308,7 +500,7 @@ describe("actualizarSolicitudFondo", () => {
       ],
     }, "admin");
     const updateHeader = conn.execute.mock.calls.find((c) => (c[0] as string).includes("UPDATE tms_solicitudes_fondo"))!;
-    expect(updateHeader[1]).toEqual([null, "Maria Lopez", "2026-09-05", 600, "Actualizada", 1, 7]);
+    expect(updateHeader[1]).toEqual([null, "Maria Lopez", null, "2026-09-05", 600, "Actualizada", 1, 7]);
     const deleteLineas = conn.execute.mock.calls.find((c) => (c[0] as string).includes("DELETE FROM tms_solicitud_fondo_lineas"));
     expect(deleteLineas?.[1]).toEqual([7, 1]);
     const insertsLinea = conn.execute.mock.calls.filter((c) => (c[0] as string).includes("INSERT INTO tms_solicitud_fondo_lineas"));
@@ -322,7 +514,7 @@ describe("actualizarSolicitudFondo", () => {
     // Solo se envían las líneas — ningún campo de encabezado.
     await actualizarSolicitudFondo(7, 1, { lineas: [{ categoria: "Combustible", monto: 100 }] });
     const updateHeader = conn.execute.mock.calls.find((c) => (c[0] as string).includes("UPDATE tms_solicitudes_fondo"))!;
-    expect(updateHeader[1]).toEqual([9, "Nombre Original", "2026-08-20", 100, "Nota original", 1, 7]);
+    expect(updateHeader[1]).toEqual([9, "Nombre Original", null, "2026-08-20", 100, "Nota original", 1, 7]);
   });
 
   it("sin lineas en el input: NO se tocan las líneas existentes ni el total", async () => {
@@ -332,7 +524,7 @@ describe("actualizarSolicitudFondo", () => {
     expect(conn.execute.mock.calls.some((c) => (c[0] as string).includes("DELETE FROM tms_solicitud_fondo_lineas"))).toBe(false);
     expect(conn.execute.mock.calls.some((c) => (c[0] as string).includes("INSERT INTO tms_solicitud_fondo_lineas"))).toBe(false);
     const updateHeader = conn.execute.mock.calls.find((c) => (c[0] as string).includes("UPDATE tms_solicitudes_fondo"))!;
-    expect((updateHeader[1] as unknown[])?.[3]).toBe(500); // total sin cambios (releído de la fila actual)
+    expect((updateHeader[1] as unknown[])?.[4]).toBe(500); // total sin cambios (releído de la fila actual)
   });
 
   it.each(["Autorizada", "Rechazada", "Liquidada"] as const)(

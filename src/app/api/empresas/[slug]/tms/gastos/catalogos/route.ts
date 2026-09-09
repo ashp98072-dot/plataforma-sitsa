@@ -19,7 +19,7 @@ export async function GET(_req: Request, ctx: Ctx) {
   if (guard.error) return guard.error;
   const eid = guard.empresa.id;
 
-  const [empleados, vehiculos, clientes, planes] = await Promise.all([
+  const [empleados, vehiculos, clientes, planes, usuarios] = await Promise.all([
     query<RowDataPacket[]>(
       "SELECT id, codigo, nombre, puesto FROM empleados WHERE empresa_id = ? AND estado = 'Activo' ORDER BY nombre",
       [eid],
@@ -36,6 +36,20 @@ export async function GET(_req: Request, ctx: Ctx) {
       "SELECT id, codigo FROM tms_planes_viaje WHERE empresa_id = ? ORDER BY id DESC LIMIT 300",
       [eid],
     ),
+    // SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§3) — usuarios reales con acceso
+    // a esta empresa (usuario_empresa o acceso_todas_empresas), para el
+    // selector opcional "Requirente (usuario)" — solo un usuario real
+    // puede tener firma en "Mi firma" (usuario_firmas está keyed por
+    // usuario_id, NUNCA por empleado_id, ver src/lib/firmas/usuario-firmas.ts),
+    // mismo criterio inverso que empresasParaUsuario() en src/lib/empresas.ts.
+    query<RowDataPacket[]>(
+      `SELECT DISTINCT u.id, u.nombre
+       FROM usuarios u
+       LEFT JOIN usuario_empresa ue ON ue.usuario_id = u.id AND ue.empresa_id = ?
+       WHERE u.activo = 1 AND (ue.usuario_id IS NOT NULL OR u.acceso_todas_empresas = 1)
+       ORDER BY u.nombre`,
+      [eid],
+    ),
   ]);
 
   return NextResponse.json(
@@ -44,6 +58,7 @@ export async function GET(_req: Request, ctx: Ctx) {
       vehiculos: vehiculos.map((r) => ({ id: Number(r.id), placa: String(r.placa) })),
       clientes: clientes.map((r) => ({ id: Number(r.id), nombre: String(r.nombre) })),
       planes: planes.map((r) => ({ id: Number(r.id), codigo: String(r.codigo) })),
+      usuarios: usuarios.map((r) => ({ id: Number(r.id), nombre: String(r.nombre) })),
     },
     { headers: { "Cache-Control": "private, no-store" } },
   );

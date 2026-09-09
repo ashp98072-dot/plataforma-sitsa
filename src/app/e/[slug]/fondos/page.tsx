@@ -12,6 +12,7 @@ type SolicitudFondo = {
   id: number;
   codigo: string;
   requirenteNombre: string | null;
+  requirenteUsuarioId: number | null;
   fechaRequerimiento: string;
   total: number;
   autorizanteNombre: string | null;
@@ -35,6 +36,8 @@ type Catalogos = {
   vehiculos: { id: number; placa: string }[];
   clientes: { id: number; nombre: string }[];
   planes: { id: number; codigo: string }[];
+  /** SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§3) — usuarios reales con acceso a esta empresa, para el selector "Requirente (usuario)". */
+  usuarios: { id: number; nombre: string }[];
 };
 
 type LineaForm = {
@@ -70,6 +73,14 @@ export default function FondosPage() {
   // que el botón esté oculto.
   const [editandoId, setEditandoId] = useState<number | null>(null);
   const [requirenteNombre, setRequirenteNombre] = useState("");
+  // SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§3 del ticket) — requirente
+  // OPCIONAL seleccionado desde el catálogo de usuarios reales: cuando
+  // se elige uno, su nombre real manda sobre el texto libre y el PDF
+  // autorizado sale con su firma real (si tiene "Mi firma" guardada) —
+  // ver crearSolicitudFondo/actualizarSolicitudFondo en fondos.ts. Sin
+  // esta selección, el requirente sigue siendo solo texto libre/empleado
+  // RRHH, sin firma (nunca se inventa una).
+  const [requirenteUsuarioId, setRequirenteUsuarioId] = useState("");
   const [fechaRequerimiento, setFechaRequerimiento] = useState(new Date().toISOString().slice(0, 10));
   const [observaciones, setObservaciones] = useState("");
   const [lineas, setLineas] = useState<LineaForm[]>([{ ...LINEA_VACIA }]);
@@ -77,12 +88,13 @@ export default function FondosPage() {
   const [expandido, setExpandido] = useState<number | null>(null);
   const [motivoRechazo, setMotivoRechazo] = useState<Record<number, string>>({});
 
-  const [catalogos, setCatalogos] = useState<Catalogos>({ empleados: [], vehiculos: [], clientes: [], planes: [] });
+  const [catalogos, setCatalogos] = useState<Catalogos>({ empleados: [], vehiculos: [], clientes: [], planes: [], usuarios: [] });
   useEffect(() => {
     fetch(`/api/empresas/${slug}/tms/gastos/catalogos`)
       .then((r) => r.json())
       .then((data) => setCatalogos({
-        empleados: data.empleados ?? [], vehiculos: data.vehiculos ?? [], clientes: data.clientes ?? [], planes: data.planes ?? [],
+        empleados: data.empleados ?? [], vehiculos: data.vehiculos ?? [], clientes: data.clientes ?? [],
+        planes: data.planes ?? [], usuarios: data.usuarios ?? [],
       }))
       .catch(() => undefined);
   }, [slug]);
@@ -115,7 +127,7 @@ export default function FondosPage() {
   function cerrarFormulario() {
     setMostrarForm(false);
     setEditandoId(null);
-    setRequirenteNombre(""); setObservaciones(""); setLineas([{ ...LINEA_VACIA }]);
+    setRequirenteNombre(""); setRequirenteUsuarioId(""); setObservaciones(""); setLineas([{ ...LINEA_VACIA }]);
   }
 
   /**
@@ -133,6 +145,7 @@ export default function FondosPage() {
     const completa = data.solicitud as SolicitudFondo;
     setEditandoId(completa.id);
     setRequirenteNombre(completa.requirenteNombre ?? "");
+    setRequirenteUsuarioId(completa.requirenteUsuarioId != null ? String(completa.requirenteUsuarioId) : "");
     setFechaRequerimiento(completa.fechaRequerimiento);
     setObservaciones(completa.observaciones ?? "");
     setLineas(completa.lineas.length
@@ -168,6 +181,7 @@ export default function FondosPage() {
           body: JSON.stringify({
             accion: "editar",
             requirenteNombre: requirenteNombre.trim(),
+            requirenteUsuarioId: requirenteUsuarioId ? Number(requirenteUsuarioId) : null,
             fechaRequerimiento,
             observaciones: observaciones.trim() || null,
             lineas: lineasPayload,
@@ -178,6 +192,7 @@ export default function FondosPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             requirenteNombre: requirenteNombre.trim(),
+            requirenteUsuarioId: requirenteUsuarioId ? Number(requirenteUsuarioId) : undefined,
             fechaRequerimiento,
             observaciones: observaciones.trim() || null,
             lineas: lineasPayload,
@@ -224,15 +239,37 @@ export default function FondosPage() {
         {["Pendiente", "Autorizada", "Rechazada", "Liquidada"].map((e) => <option key={e} value={e}>{e}</option>)}
       </select>
 
-      {error ? <p className="text-sm text-red-300">{error}</p> : null}
+      {error ? (
+        <p className="text-sm text-red-300">
+          {error}
+          {/* SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§2 del ticket) — el mensaje fijo de MENSAJE_FIRMA_REQUERIDA_AUTORIZAR (fondos.ts) lleva directo a "Mi firma". */}
+          {error.includes("registrar tu firma en Mi firma") ? (
+            <> <a href={`/e/${slug}/mi-firma`} className="underline">Ir a Mi firma</a></>
+          ) : null}
+        </p>
+      ) : null}
       {msg ? <p className="text-sm text-emerald-300">{msg}</p> : null}
 
       {mostrarForm ? (
         <div className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--panel)] p-3">
           <p className="text-sm font-medium">{editandoId ? "Editar solicitud (Pendiente)" : "Nueva solicitud"}</p>
-          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
             <label className="text-xs text-[var(--muted)]">Requirente
-              <input className={`${inputCls} mt-0.5 w-full`} value={requirenteNombre} onChange={(e) => setRequirenteNombre(e.target.value)} />
+              <input className={`${inputCls} mt-0.5 w-full`} value={requirenteNombre} onChange={(e) => setRequirenteNombre(e.target.value)} disabled={!!requirenteUsuarioId} />
+            </label>
+            {/*
+              SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§3 del ticket) — al elegir
+              un usuario real, SU nombre manda sobre el texto libre de
+              arriba (el servidor lo resuelve igual, esto solo evita
+              confusión visual) y el PDF autorizado sale con su firma real
+              si tiene "Mi firma" guardada.
+            */}
+            <label className="text-xs text-[var(--muted)]">Requirente (usuario, opcional)
+              <select className={`${inputCls} mt-0.5 w-full`} value={requirenteUsuarioId} onChange={(e) => setRequirenteUsuarioId(e.target.value)}>
+                <option value="">Sin usuario (solo texto libre)…</option>
+                {catalogos.usuarios.map((u) => <option key={u.id} value={u.id}>{u.nombre}</option>)}
+              </select>
+              <span className="mt-0.5 block text-[10px]">Si eliges uno, el PDF autorizado sale con su nombre real y su firma de &quot;Mi firma&quot;, si la tiene guardada.</span>
             </label>
             <label className="text-xs text-[var(--muted)]">Fecha de requerimiento
               <input type="date" className={`${inputCls} mt-0.5 w-full`} value={fechaRequerimiento} onChange={(e) => setFechaRequerimiento(e.target.value)} />

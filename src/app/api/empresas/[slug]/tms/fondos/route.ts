@@ -42,6 +42,13 @@ const lineaSchema = z.object({
 const schema = z.object({
   requirenteEmpleadoId: z.number().int().positive().nullable().optional(),
   requirenteNombre: z.string().max(200).nullable().optional(),
+  // SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§3 del ticket) — requirente
+  // OPCIONAL asociado a un usuario real del sistema (seleccionable desde
+  // el catálogo, ver /tms/gastos/catalogos): permite que el PDF muestre
+  // su nombre real + firma manuscrita. Se valida contra esta empresa y
+  // se resuelve del lado del servidor en crearSolicitudFondo — nunca se
+  // confía en el nombre/firma que el cliente pretenda asociarle.
+  requirenteUsuarioId: z.number().int().positive().nullable().optional(),
   fechaRequerimiento: z.string().min(1),
   observaciones: z.string().max(300).nullable().optional(),
   lineas: z.array(lineaSchema).min(1).max(40),
@@ -57,7 +64,17 @@ export async function POST(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
   }
   try {
-    const solicitud = await crearSolicitudFondo(guard.empresa.id, parsed.data, guard.session.username);
+    // SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§1 del ticket) — identidad real
+    // de sesión (nunca del cliente): nombre real primero, username solo
+    // si el usuario no tiene nombre real cargado, mismo criterio que
+    // autorizarViatico. crearSolicitudFondo captura su firma de "Mi
+        // "Mi firma" si existe (best-effort, no bloquea la creación si no la tiene).
+    const solicitante = {
+      usuarioId: guard.session.id,
+      nombre: guard.session.nombre || guard.session.username,
+      rol: guard.session.rol ?? null,
+    };
+    const solicitud = await crearSolicitudFondo(guard.empresa.id, parsed.data, guard.session.username, solicitante);
     return NextResponse.json({ mensaje: "Solicitud de fondo creada.", solicitud });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "No se pudo crear la solicitud." }, { status: 400 });

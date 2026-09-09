@@ -50,32 +50,16 @@ const LEMA_PIE =
 
 /**
  * §5 del ticket: "no mostrar username, rol ni '(admin)', solo nombre
- * real". `tms_solicitudes_fondo.creado_por` SIEMPRE guarda el username
- * de acceso (ver crearSolicitudFondo/POST .../tms/fondos), nunca un
- * nombre real — así que "Solicitante" se resuelve aquí contra
- * `usuarios.nombre` (mismo campo que ya usa la sesión para
- * nombreFirmante en autorizar viáticos, ver auth.ts:UsuarioRow).
- *
- * También se usa defensivamente sobre `autorizanteNombre`: antes de esta
- * corrección, el endpoint PATCH de Fondos guardaba el USERNAME ahí si el
- * caller no mandaba un nombre explícito (bug corregido en
- * .../tms/fondos/[id]/route.ts). Las solicitudes YA autorizadas antes de
- * esa corrección quedaron con un username guardado en esa columna — este
- * resolver, al no encontrar cambios de esquema disponibles (no se
- * ejecuta SQL, no hay columna de snapshot para esto), intenta primero
- * interpretar el valor guardado como username y solo si no calza con
- * ningún usuario lo trata como el nombre real que ya era.
- *
- * LIMITACIÓN CONOCIDA (documentada, no inventada): esto resuelve
- * `usuarios.nombre` EN VIVO al generar el PDF, no es un snapshot
- * congelado como empleado/placa/cliente/cuenta — si esa persona cambia
- * su nombre en el sistema después, un PDF regenerado más tarde
- * mostraría el nombre nuevo. No se agregó columna de snapshot para esto
- * porque el ticket no la pidió explícitamente para Solicitante/
- * Autorizante y `usuarios` no tiene hoy un mecanismo de historial en el
- * proyecto.
+ * real". FALLBACK únicamente para solicitudes ANTERIORES a esta
+ * corrección (sin fila en firmas_electronicas ni columna
+ * solicitante_nombre/autorizante_usuario_id poblada): interpreta el
+ * valor guardado como un posible username y lo resuelve contra
+ * `usuarios.nombre` si calza; si no, lo deja tal cual (ya era un nombre
+ * real). Nunca se usa para solicitudes creadas/autorizadas DESPUÉS de
+ * este ticket — esas ya tienen su nombre real congelado en columna o en
+ * el snapshot de firmas_electronicas (ver firmaHistorica más abajo).
  */
-async function resolverNombreVisible(valorGuardado: string | null): Promise<string | null> {
+async function resolverNombreVisibleLegado(valorGuardado: string | null): Promise<string | null> {
   if (!valorGuardado?.trim()) return null;
   const rows = await query<RowDataPacket[]>("SELECT nombre FROM usuarios WHERE username = ? LIMIT 1", [valorGuardado.trim()]);
   const nombreReal = rows[0]?.nombre;
@@ -83,34 +67,30 @@ async function resolverNombreVisible(valorGuardado: string | null): Promise<stri
   return valorGuardado;
 }
 
-type FirmaAutorizante = { nombre: string | null; imagen: { buffer: Buffer; mime: string } | null };
+type FirmaSnapshot = { nombre: string | null; imagen: { buffer: Buffer; mime: string } | null };
 
 /**
- * Firma histórica de AUTORIZACIÓN de esta solicitud, si existe — MISMA
- * infraestructura de `firmas_electronicas` ya usada por viáticos (ver
- * firmas-internas.ts/firmas-lectura.ts), acotada a
- * modulo='FONDOS' + entidad_tipo='SOLICITUD_FONDO' + accion='AUTORIZAR_FONDO'.
+ * §4 del ticket — snapshot HISTÓRICO e INMUTABLE de una de las 3 firmas
+ * de Fondos, leído de `firmas_electronicas` (MISMA infraestructura que
+ * Viáticos, ver firmas-internas.ts/firmas-lectura.ts), acotado a
+ * modulo='FONDOS' + entidad_tipo='SOLICITUD_FONDO' + accion. Nunca
+ * vuelve a resolver "la firma actual" del usuario en `usuario_firmas`
+ * ("Mi firma") — esa fila, una vez insertada al solicitar/asociar
+ * requirente/autorizar (ver fondos.ts), no se modifica jamás; leerla
+ * aquí, cualquier cantidad de veces y en cualquier momento, es leer
+ * exactamente lo que existía en ese instante — cambiar o borrar la
+ * plantilla personal después nunca la altera (§6 del ticket:
+ * "Liquidada conserva exactamente las mismas firmas históricas").
  *
- * HOY esto SIEMPRE devuelve null: a diferencia de autorizarViatico(),
- * cambiarEstadoSolicitudFondo() (fondos.ts) todavía NO captura firma
- * manuscrita al autorizar una Solicitud de Fondo — no existe ese flujo
- * (no hay canvas de firma en fondos/page.tsx, ni multipart/imagen en su
- * PATCH). Implementar ese flujo es una ampliación de alcance que este
- * ticket no pidió construir (§5: "si todavía no existe flujo de firma
- * para alguno, NO inventar una firma: mostrar el espacio y nombre
- * correspondiente y documentar qué falta" — esto ES ese caso). Se deja
- * esta lectura ya conectada, EXACTO mismo patrón que imagenFirma() en
- * viaticos-comprobante-pdf.ts, para que el día que se agregue ese flujo
- * a Fondos, este PDF empiece a mostrar la firma real sin ningún cambio
- * adicional aquí.
+ * `accion`: 'SOLICITAR_FONDO' | 'REQUERIR_FONDO' | 'AUTORIZAR_FONDO'.
  */
-async function firmaAutorizanteHistorica(empresaId: number, solicitudId: number): Promise<FirmaAutorizante | null> {
+async function firmaHistorica(empresaId: number, solicitudId: number, accion: string): Promise<FirmaSnapshot | null> {
   const rows = await query<RowDataPacket[]>(
     `SELECT payload_canonico, imagen_ruta, imagen_mime
      FROM firmas_electronicas
-     WHERE empresa_id = ? AND modulo = 'FONDOS' AND entidad_tipo = 'SOLICITUD_FONDO' AND entidad_id = ? AND accion = 'AUTORIZAR_FONDO'
+     WHERE empresa_id = ? AND modulo = 'FONDOS' AND entidad_tipo = 'SOLICITUD_FONDO' AND entidad_id = ? AND accion = ?
      ORDER BY fecha_hora_servidor DESC, id DESC LIMIT 1`,
-    [empresaId, solicitudId],
+    [empresaId, solicitudId, accion],
   );
   const row = rows[0];
   if (!row) return null;
@@ -169,29 +149,51 @@ export async function generarPdfSolicitudFondoAutorizada(
   // real de sus líneas, aunque ese valor llegara a desalinearse).
   const total = solicitud.lineas.reduce((acc, l) => acc + l.cantidad * l.monto, 0);
 
-  const [nombreSolicitante, nombreAutorizanteGuardado, firmaAutorizante] = await Promise.all([
-    resolverNombreVisible(solicitud.creadoPor),
-    resolverNombreVisible(solicitud.autorizanteNombre),
-    firmaAutorizanteHistorica(empresaId, solicitud.id),
+  const [firmaSolicitante, firmaRequirente, firmaAutorizante] = await Promise.all([
+    firmaHistorica(empresaId, solicitud.id, "SOLICITAR_FONDO"),
+    firmaHistorica(empresaId, solicitud.id, "REQUERIR_FONDO"),
+    firmaHistorica(empresaId, solicitud.id, "AUTORIZAR_FONDO"),
   ]);
-  // "usar la firma/snapshot almacenada al autorizar" (§5): si existe una
-  // firma histórica de autorización, SU nombre (snapshot congelado en
-  // payload_canonico al momento exacto de firmar) manda sobre
-  // autorizanteNombre — hoy nunca ocurre (ver firmaAutorizanteHistorica),
-  // pero deja el orden de precedencia correcto para cuando exista.
-  const nombreAutorizante = firmaAutorizante?.nombre ?? nombreAutorizanteGuardado;
 
-  const buffer = await construirPdf(solicitud, empresaNombre, total, nombreSolicitante, nombreAutorizante, firmaAutorizante);
+  // §1/§2/§3/§4 del ticket — el snapshot INMUTABLE de firmas_electronicas
+  // manda sobre cualquier otra fuente cuando existe (es la firma REAL
+  // usada en ese momento); si no existe (solicitud creada/autorizada
+  // antes de esta corrección, o requirente sin usuario asociado), se cae
+  // a la columna ya guardada — y para Solicitante/Autorizante, con el
+  // mismo resuelve-si-es-username defensivo de antes, solo para datos
+  // legados (nunca para lo que se cree/autorice de aquí en adelante,
+  // donde solicitante_nombre/autorizante_usuario_id ya quedan bien
+  // guardados desde el origen).
+  const nombreSolicitante = firmaSolicitante?.nombre
+    ?? solicitud.solicitanteNombre
+    ?? (await resolverNombreVisibleLegado(solicitud.creadoPor));
+  const nombreRequirente = firmaRequirente?.nombre ?? solicitud.requirenteNombre;
+  const nombreAutorizante = firmaAutorizante?.nombre
+    ?? (await resolverNombreVisibleLegado(solicitud.autorizanteNombre));
+
+  const buffer = await construirPdf(solicitud, empresaNombre, total, {
+    nombreSolicitante, nombreRequirente, nombreAutorizante,
+    imagenSolicitante: firmaSolicitante?.imagen ?? null,
+    imagenRequirente: firmaRequirente?.imagen ?? null,
+    imagenAutorizante: firmaAutorizante?.imagen ?? null,
+  });
   return { ok: true, buffer, nombreArchivo: `solicitud-fondo-${solicitud.codigo}.pdf` };
 }
+
+type DatosFirmasPdf = {
+  nombreSolicitante: string | null;
+  nombreRequirente: string | null;
+  nombreAutorizante: string | null;
+  imagenSolicitante: { buffer: Buffer; mime: string } | null;
+  imagenRequirente: { buffer: Buffer; mime: string } | null;
+  imagenAutorizante: { buffer: Buffer; mime: string } | null;
+};
 
 function construirPdf(
   solicitud: SolicitudFondo,
   empresaNombre: string,
   total: number,
-  nombreSolicitante: string | null,
-  nombreAutorizante: string | null,
-  firmaAutorizante: FirmaAutorizante | null,
+  firmas: DatosFirmasPdf,
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
@@ -249,10 +251,12 @@ function construirPdf(
 
     // §4/§5 Firmas — SIEMPRE al final del documento completo (nunca entre líneas).
     dibujarFirmas(doc, pageWidth, marginL, pageBottom, {
-      requirente: solicitud.requirenteNombre,
-      solicitante: nombreSolicitante,
-      autorizante: nombreAutorizante,
-      imagenAutorizante: firmaAutorizante?.imagen ?? null,
+      requirente: firmas.nombreRequirente,
+      solicitante: firmas.nombreSolicitante,
+      autorizante: firmas.nombreAutorizante,
+      imagenRequirente: firmas.imagenRequirente,
+      imagenSolicitante: firmas.imagenSolicitante,
+      imagenAutorizante: firmas.imagenAutorizante,
     });
 
     // §7 Notas al pie
@@ -274,29 +278,36 @@ function construirPdf(
 }
 
 /**
- * §4 Firmas — tres bloques (Requiriente/Solicitante/Autorizante) en una
- * fila de 3 columnas iguales. Solo el bloque de Autorizante puede traer
- * imagen (firmaAutorizanteHistorica, ver arriba) — Requiriente y
- * Solicitante siempre muestran el espacio en blanco + su nombre real: no
- * existe hoy un flujo de firma manuscrita para esos dos roles en Fondos
- * (§5 del ticket, documentado también en firmaAutorizanteHistorica()).
+ * §4/§5 Firmas — tres bloques (Requiriente/Solicitante/Autorizante) en
+ * una fila de 3 columnas iguales, cada uno con su imagen (proporcionada
+ * y centrada, `fit` preserva el aspect ratio) cuando existe un snapshot
+ * real en firmas_electronicas (ver firmaHistorica) — si no existe para
+ * alguno (§3/§5 del ticket: "si todavía no existe flujo de firma para
+ * alguno, no inventar una firma"), ese bloque muestra únicamente el
+ * espacio en blanco + el nombre real, nunca una imagen inventada.
  */
 function dibujarFirmas(
   doc: PdfDoc,
   pageWidth: number,
   marginL: number,
   pageBottom: () => number,
-  datos: { requirente: string | null; solicitante: string | null; autorizante: string | null; imagenAutorizante: { buffer: Buffer; mime: string } | null },
+  datos: {
+    requirente: string | null; solicitante: string | null; autorizante: string | null;
+    imagenRequirente: { buffer: Buffer; mime: string } | null;
+    imagenSolicitante: { buffer: Buffer; mime: string } | null;
+    imagenAutorizante: { buffer: Buffer; mime: string } | null;
+  },
 ): void {
-  const alturaEstimada = 95 + (datos.imagenAutorizante ? 50 : 0);
+  const hayImagen = datos.imagenRequirente || datos.imagenSolicitante || datos.imagenAutorizante;
+  const alturaEstimada = 95 + (hayImagen ? 50 : 0);
   if (doc.y + alturaEstimada > pageBottom()) doc.addPage();
   doc.moveDown(1.2);
 
   const colW = pageWidth / 3;
   const yInicio = doc.y;
   const bloques: { titulo: string; nombre: string | null; imagen: { buffer: Buffer; mime: string } | null }[] = [
-    { titulo: "FIRMA DEL REQUIRIENTE", nombre: datos.requirente, imagen: null },
-    { titulo: "FIRMA DEL SOLICITANTE", nombre: datos.solicitante, imagen: null },
+    { titulo: "FIRMA DEL REQUIRIENTE", nombre: datos.requirente, imagen: datos.imagenRequirente },
+    { titulo: "FIRMA DEL SOLICITANTE", nombre: datos.solicitante, imagen: datos.imagenSolicitante },
     { titulo: "FIRMA DEL AUTORIZANTE", nombre: datos.autorizante, imagen: datos.imagenAutorizante },
   ];
 
@@ -305,6 +316,9 @@ function dibujarFirmas(
     const yLinea = yInicio + 54;
     if (b.imagen) {
       try {
+        // Centrada: el punto de anclaje es colW/2 menos la mitad del
+        // ancho máximo (120) de la caja `fit` — proporcionada: `fit`
+        // conserva el aspect ratio real de la imagen, nunca la deforma.
         doc.image(b.imagen.buffer, x + colW / 2 - 60, yInicio, { fit: [120, 50] });
       } catch {
         // Imagen corrupta/formato no soportado: el documento sigue siendo

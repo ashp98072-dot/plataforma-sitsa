@@ -41,13 +41,39 @@ function linea(overrides: Partial<Record<string, unknown>> = {}) {
 
 function solicitud(overrides: Partial<Record<string, unknown>> = {}) {
   return {
-    id: 1, empresaId: 7, codigo: "FONDO-000001", requirenteEmpleadoId: null, requirenteNombre: "Mario Caal",
-    fechaRequerimiento: "2026-09-04", total: 200, autorizanteEmpleadoId: null, autorizanteNombre: "Heber Sitan",
+    id: 1, empresaId: 7, codigo: "FONDO-000001", requirenteEmpleadoId: null, requirenteNombre: "Mario Caal", requirenteUsuarioId: null,
+    fechaRequerimiento: "2026-09-04", total: 200, autorizanteEmpleadoId: null, autorizanteNombre: "Heber Sitan", autorizanteUsuarioId: 9,
     estado: "Autorizada", autorizadoEn: "2026-09-04 10:00:00", rechazadoEn: null, motivoRechazo: null, liquidadoEn: null,
-    observaciones: null, creadoPor: "mcaal", creadoEn: "2026-09-04 09:00:00",
+    observaciones: null, creadoPor: "mcaal", solicitanteUsuarioId: 5, solicitanteNombre: "Mario Caal", creadoEn: "2026-09-04 09:00:00",
     lineas: [linea()],
     ...overrides,
   };
+}
+
+const PNG_1X1 = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  "base64",
+);
+
+/**
+ * Mock de firmas_electronicas por `accion` ('SOLICITAR_FONDO' |
+ * 'REQUERIR_FONDO' | 'AUTORIZAR_FONDO') — cada llamada real de
+ * firmaHistorica() manda [empresaId, solicitudId, accion]; este helper
+ * responde SOLO a la accion indicada (las otras 2 devuelven vacío, como
+ * ocurre de verdad cuando ese rol todavía no tiene firma capturada).
+ */
+function mockFirmas(porAccion: Record<string, { nombre: string; conImagen?: boolean }>) {
+  vi.mocked(query).mockImplementation((async (sql: string, params?: unknown[]) => {
+    if (!sql.includes("firmas_electronicas")) return [];
+    const accion = (params as unknown[])?.[2] as string;
+    const cfg = porAccion[accion];
+    if (!cfg) return [];
+    return [{
+      payload_canonico: JSON.stringify({ nombreFirmante: cfg.nombre }),
+      imagen_ruta: cfg.conImagen ? `firmas/${accion}.png` : null,
+      imagen_mime: "image/png",
+    }];
+  }) as typeof query);
 }
 
 beforeEach(() => {
@@ -189,8 +215,8 @@ describe("generarPdfSolicitudFondoAutorizada — firmas (§4/§5 del ticket)", (
     expect(textos).not.toContain("hsitan");
   });
 
-  it("resuelve el nombre real del SOLICITANTE (creadoPor guarda username) — nunca muestra el username", async () => {
-    vi.mocked(obtenerSolicitudFondo).mockResolvedValue(solicitud({ creadoPor: "mcaal" }) as never);
+  it("LEGADO (sin solicitanteNombre ni firma, solicitud previa a esta corrección): resuelve el nombre real vía creadoPor -> usuarios, nunca el username", async () => {
+    vi.mocked(obtenerSolicitudFondo).mockResolvedValue(solicitud({ creadoPor: "mcaal", solicitanteUsuarioId: null, solicitanteNombre: null }) as never);
     vi.mocked(query).mockImplementation((async (sql: string, params?: unknown[]) => {
       if (sql.includes("FROM usuarios") && (params as unknown[])?.[0] === "mcaal") return [{ nombre: "Mario Caal Jr." }];
       return [];
@@ -224,7 +250,9 @@ describe("generarPdfSolicitudFondoAutorizada — firmas (§4/§5 del ticket)", (
       if (sql.includes("firmas_electronicas")) {
         expect(sql).toContain("modulo = 'FONDOS'");
         expect(sql).toContain("entidad_tipo = 'SOLICITUD_FONDO'");
-        expect(params).toEqual([7, 1]);
+        expect((params as unknown[])?.[0]).toBe(7);
+        expect((params as unknown[])?.[1]).toBe(1);
+        if ((params as unknown[])?.[2] !== "AUTORIZAR_FONDO") return [];
         return [{ payload_canonico: JSON.stringify({ nombreFirmante: "Ana Gómez" }), imagen_ruta: "firmas/x.png", imagen_mime: "image/png" }];
       }
       return [];
@@ -260,7 +288,7 @@ describe("generarPdfSolicitudFondoAutorizada — multiempresa (§11 del ticket)"
     vi.mocked(obtenerSolicitudFondo).mockResolvedValue(solicitud({ id: 42 }) as never);
     await generarPdfSolicitudFondoAutorizada(9, 42, "SITSA");
     const llamadaFirma = vi.mocked(query).mock.calls.find((c) => String(c[0]).includes("firmas_electronicas"));
-    expect(llamadaFirma?.[1]).toEqual([9, 42]);
+    expect((llamadaFirma?.[1] as unknown[])?.slice(0, 2)).toEqual([9, 42]);
   });
 
   it("solicitud inexistente para esta empresa (obtenerSolicitudFondo ya filtra por empresa_id) -> 404, nunca datos de otra empresa", async () => {
@@ -328,5 +356,82 @@ describe("generarPdfSolicitudFondoAutorizada — encabezado (§1 del ticket)", (
     expect(textos).toContain("FECHA DEL REQUERIMIENTO: 04/09/2026");
     expect(textos).toContain("EMPRESA REQUIRIENTE: TRANSPORTES SITSA KUIQ TRANS");
     expect(textos).toContain("PERSONA QUE REQUIERE: MARIO CAAL");
+  });
+});
+
+/**
+ * PR #212 (corrección) — el PDF autorizado debe salir con las 3 firmas
+ * REALES (snapshots inmutables de firmas_electronicas), no solo nombre +
+ * espacio en blanco cuando ese snapshot sí existe.
+ */
+describe("generarPdfSolicitudFondoAutorizada — las 3 firmas reales (corrección PR #212)", () => {
+  it("PDF contiene las imágenes de firma de LAS 3 (requirente/solicitante/autorizante) cuando existen", async () => {
+    vi.mocked(obtenerSolicitudFondo).mockResolvedValue(solicitud({ requirenteUsuarioId: 30 }) as never);
+    mockFirmas({
+      SOLICITAR_FONDO: { nombre: "Mario Caal", conImagen: true },
+      REQUERIR_FONDO: { nombre: "Ana Gómez", conImagen: true },
+      AUTORIZAR_FONDO: { nombre: "Heber Sitan", conImagen: true },
+    });
+    vi.mocked(existsSync).mockReturnValue(true);
+    vi.mocked(readFileSync).mockReturnValue(PNG_1X1 as never);
+    const imageSpy = vi.spyOn(PDFDocument.prototype, "image");
+    const spy = espiarTexto();
+    const r = await generarPdfSolicitudFondoAutorizada(7, 1, "SITSA");
+    expect(r.ok).toBe(true);
+    expect(imageSpy).toHaveBeenCalledTimes(3); // una por cada firma real
+    const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
+    expect(textos).toContain("Mario Caal");
+    expect(textos).toContain("Ana Gómez");
+    expect(textos).toContain("Heber Sitan");
+  });
+
+  it("requirente asociado a un usuario del catálogo: el PDF muestra SU nombre real y firma, no requirenteNombre", async () => {
+    vi.mocked(obtenerSolicitudFondo).mockResolvedValue(solicitud({ requirenteNombre: "Ana Gómez (texto de respaldo)", requirenteUsuarioId: 30 }) as never);
+    mockFirmas({ REQUERIR_FONDO: { nombre: "Ana Gómez", conImagen: true } });
+    vi.mocked(existsSync).mockReturnValue(true);
+    vi.mocked(readFileSync).mockReturnValue(PNG_1X1 as never);
+    const imageSpy = vi.spyOn(PDFDocument.prototype, "image");
+    const r = await generarPdfSolicitudFondoAutorizada(7, 1, "SITSA");
+    expect(r.ok).toBe(true);
+    expect(imageSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("Liquidada conserva EXACTAMENTE las mismas firmas históricas de cuando fue Autorizada", async () => {
+    vi.mocked(obtenerSolicitudFondo).mockResolvedValue(solicitud({ estado: "Liquidada", liquidadoEn: "2026-09-05 08:00:00" }) as never);
+    mockFirmas({ AUTORIZAR_FONDO: { nombre: "Heber Sitan", conImagen: true } });
+    vi.mocked(existsSync).mockReturnValue(true);
+    vi.mocked(readFileSync).mockReturnValue(PNG_1X1 as never);
+    const imageSpy = vi.spyOn(PDFDocument.prototype, "image");
+    const r = await generarPdfSolicitudFondoAutorizada(7, 1, "SITSA");
+    expect(r.ok).toBe(true);
+    expect(imageSpy).toHaveBeenCalledTimes(1); // la MISMA firma de autorización, no una nueva de liquidar
+  });
+
+  it("firma posterior modificada en 'Mi firma' NO altera el PDF histórico: solo se lee firmas_electronicas, nunca usuario_firmas", async () => {
+    vi.mocked(obtenerSolicitudFondo).mockResolvedValue(solicitud() as never);
+    mockFirmas({ AUTORIZAR_FONDO: { nombre: "Heber Sitan", conImagen: true } });
+    vi.mocked(existsSync).mockReturnValue(true);
+    vi.mocked(readFileSync).mockReturnValue(PNG_1X1 as never);
+    await generarPdfSolicitudFondoAutorizada(7, 1, "SITSA");
+    const sqlsConsultados = vi.mocked(query).mock.calls.map((c) => String(c[0]));
+    for (const sql of sqlsConsultados) {
+      expect(sql).not.toContain("usuario_firmas");
+    }
+  });
+
+  it("AISLAMIENTO: la firma de una accion nunca se confunde con la de otra (REQUERIR_FONDO no usa la imagen de AUTORIZAR_FONDO)", async () => {
+    vi.mocked(obtenerSolicitudFondo).mockResolvedValue(solicitud({ requirenteUsuarioId: 30 }) as never);
+    // Solo el autorizante tiene firma; requirente/solicitante no.
+    mockFirmas({ AUTORIZAR_FONDO: { nombre: "Heber Sitan", conImagen: true } });
+    vi.mocked(existsSync).mockReturnValue(true);
+    vi.mocked(readFileSync).mockReturnValue(PNG_1X1 as never);
+    const imageSpy = vi.spyOn(PDFDocument.prototype, "image");
+    const spy = espiarTexto();
+    await generarPdfSolicitudFondoAutorizada(7, 1, "SITSA");
+    expect(imageSpy).toHaveBeenCalledTimes(1); // únicamente el autorizante
+    const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
+    // El requirente sin firma propia muestra su nombre de columna (Mario Caal), no el del autorizante.
+    expect(textos).toContain("Mario Caal");
+    expect(textos).toContain("Heber Sitan");
   });
 });

@@ -2,6 +2,10 @@ import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import type { PoolConnection } from "mysql2/promise";
 import { getPool, query, type SqlParams } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
+import { crearFirmaInterna } from "@/lib/firmas/firmas-internas";
+import { leerBytesFirmaGuardada } from "@/lib/firmas/usuario-firmas";
+import { sha256Hex } from "@/lib/firmas/imagen-firma";
+import { borrarUpload, guardarUpload } from "@/lib/uploads";
 
 /**
  * TMS-GASTOS-REPORTES-1 (fase 1) — solicitudes de fondo (anticipo/caja
@@ -44,6 +48,66 @@ async function validarEmpleadoDeEmpresaTx(
   if (empleadoId == null) return;
   const rows = await queryConn<RowDataPacket[]>(conn, "SELECT id FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1", [empleadoId, empresaId]);
   if (!rows[0]) throw new Error(`El ${etiqueta} indicado no pertenece a esta empresa.`);
+}
+
+/**
+ * SOLICITUD-FONDOS-PDF-AUTORIZADO-1 — `usuarios` es GLOBAL (sin
+ * empresa_id, ver usuario_firmas/MI-FIRMA-1), así que "pertenece a esta
+ * empresa" para un usuario significa: tiene acceso a ella
+ * (usuario_empresa) o tiene acceso a todas (acceso_todas_empresas) —
+ * MISMO criterio que empresasParaUsuario() en src/lib/empresas.ts, en
+ * sentido inverso. Devuelve {nombre, rol} para snapshot (nunca username,
+ * ver §5 del ticket) — null si el id no existe o no tiene acceso a esta
+ * empresa, nunca lanza para dejar que el caller decida el mensaje.
+ */
+async function resolverUsuarioDeEmpresaTx(
+  conn: PoolConnection,
+  empresaId: number,
+  usuarioId: number | null | undefined,
+): Promise<{ nombre: string; rol: string | null } | null> {
+  if (usuarioId == null) return null;
+  const rows = await queryConn<RowDataPacket[]>(conn,
+    `SELECT u.nombre, u.rol_global
+     FROM usuarios u
+     LEFT JOIN usuario_empresa ue ON ue.usuario_id = u.id AND ue.empresa_id = ?
+     WHERE u.id = ? AND u.activo = 1 AND (ue.usuario_id IS NOT NULL OR u.acceso_todas_empresas = 1)
+     LIMIT 1`,
+    [empresaId, usuarioId],
+  );
+  const row = rows[0];
+  if (!row || !row.nombre) return null;
+  return { nombre: String(row.nombre), rol: row.rol_global != null ? String(row.rol_global) : null };
+}
+
+/** Identidad real de sesión (nunca username) para una firma de Fondos — ver crearSolicitudFondo/cambiarEstadoSolicitudFondo. */
+export type IdentidadFirmante = { usuarioId: number; nombre: string; rol?: string | null };
+
+/**
+ * SOLICITUD-FONDOS-PDF-AUTORIZADO-1 — mismo patrón EXACTO que
+ * guardarImagenFirma() en src/lib/tms/viaticos.ts: cada USO de la
+ * plantilla personal ("Mi firma") genera una COPIA física INDEPENDIENTE
+ * (nunca se referencia el archivo de usuario_firmas directamente) — así,
+ * cambiar o borrar la plantilla después nunca altera una firma histórica
+ * ya guardada en firmas_electronicas.
+ */
+async function guardarImagenFirmaFondo(
+  empresaId: number,
+  solicitudId: number,
+  accionPrefix: "solicitar" | "requerir" | "autorizar",
+  imagen: { bytes: ArrayBuffer; original: string },
+): Promise<{ relative: string; original: string; mime: string; size: number; sha256: string }> {
+  const guardada = await guardarUpload(empresaId, "firmas", `firma_fondo_${accionPrefix}_${solicitudId}`, {
+    name: imagen.original || "firma.png",
+    size: imagen.bytes.byteLength,
+    arrayBuffer: async () => imagen.bytes,
+  });
+  return {
+    relative: guardada.relative,
+    original: guardada.original,
+    mime: "image/png",
+    size: guardada.size,
+    sha256: sha256Hex(imagen.bytes),
+  };
 }
 
 /**
@@ -150,10 +214,14 @@ export type SolicitudFondo = {
   codigo: string;
   requirenteEmpleadoId: number | null;
   requirenteNombre: string | null;
+  /** SOLICITUD-FONDOS-PDF-AUTORIZADO-1 — usuarios.id del requirente SOLO cuando se seleccionó del catálogo (ver §3 del ticket); su firma histórica vive en firmas_electronicas (accion='REQUERIR_FONDO'). */
+  requirenteUsuarioId: number | null;
   fechaRequerimiento: string;
   total: number;
   autorizanteEmpleadoId: number | null;
   autorizanteNombre: string | null;
+  /** usuarios.id de quien autorizó (sesión, nunca del cliente) — su firma histórica vive en firmas_electronicas (accion='AUTORIZAR_FONDO'). */
+  autorizanteUsuarioId: number | null;
   estado: EstadoFondo;
   autorizadoEn: string | null;
   rechazadoEn: string | null;
@@ -161,6 +229,10 @@ export type SolicitudFondo = {
   liquidadoEn: string | null;
   observaciones: string | null;
   creadoPor: string | null;
+  /** usuarios.id de quien creó la solicitud — su firma histórica vive en firmas_electronicas (accion='SOLICITAR_FONDO'). */
+  solicitanteUsuarioId: number | null;
+  /** Nombre real (usuarios.nombre) snapshot al crear — nunca el username de creadoPor. */
+  solicitanteNombre: string | null;
   creadoEn: string | null;
   lineas: LineaFondo[];
 };
@@ -193,10 +265,12 @@ function mapSolicitud(r: RowDataPacket): Omit<SolicitudFondo, "lineas"> {
     codigo: String(r.codigo),
     requirenteEmpleadoId: r.requirente_empleado_id != null ? Number(r.requirente_empleado_id) : null,
     requirenteNombre: r.requirente_nombre != null ? String(r.requirente_nombre) : null,
+    requirenteUsuarioId: r.requirente_usuario_id != null ? Number(r.requirente_usuario_id) : null,
     fechaRequerimiento: String(r.fecha_requerimiento),
     total: Number(r.total ?? 0),
     autorizanteEmpleadoId: r.autorizante_empleado_id != null ? Number(r.autorizante_empleado_id) : null,
     autorizanteNombre: r.autorizante_nombre != null ? String(r.autorizante_nombre) : null,
+    autorizanteUsuarioId: r.autorizante_usuario_id != null ? Number(r.autorizante_usuario_id) : null,
     estado: String(r.estado) as EstadoFondo,
     autorizadoEn: r.autorizado_en != null ? String(r.autorizado_en) : null,
     rechazadoEn: r.rechazado_en != null ? String(r.rechazado_en) : null,
@@ -204,6 +278,8 @@ function mapSolicitud(r: RowDataPacket): Omit<SolicitudFondo, "lineas"> {
     liquidadoEn: r.liquidado_en != null ? String(r.liquidado_en) : null,
     observaciones: r.observaciones != null ? String(r.observaciones) : null,
     creadoPor: r.creado_por != null ? String(r.creado_por) : null,
+    solicitanteUsuarioId: r.solicitante_usuario_id != null ? Number(r.solicitante_usuario_id) : null,
+    solicitanteNombre: r.solicitante_nombre != null ? String(r.solicitante_nombre) : null,
     creadoEn: r.creado_en != null ? String(r.creado_en) : null,
   };
 }
@@ -211,11 +287,13 @@ function mapSolicitud(r: RowDataPacket): Omit<SolicitudFondo, "lineas"> {
 const SELECT_SOLICITUD = `
   SELECT s.id, s.empresa_id, s.codigo, s.requirente_empleado_id,
          COALESCE(s.requirente_nombre, req.nombre) AS requirente_nombre,
+         s.requirente_usuario_id,
          DATE_FORMAT(s.fecha_requerimiento, '%Y-%m-%d') AS fecha_requerimiento,
          s.total, s.autorizante_empleado_id,
          COALESCE(s.autorizante_nombre, aut.nombre) AS autorizante_nombre,
+         s.autorizante_usuario_id,
          s.estado, s.autorizado_en, s.rechazado_en, s.motivo_rechazo, s.liquidado_en,
-         s.observaciones, s.creado_por, s.creado_en
+         s.observaciones, s.creado_por, s.solicitante_usuario_id, s.solicitante_nombre, s.creado_en
   FROM tms_solicitudes_fondo s
   LEFT JOIN empleados req ON req.id = s.requirente_empleado_id AND req.empresa_id = s.empresa_id
   LEFT JOIN empleados aut ON aut.id = s.autorizante_empleado_id AND aut.empresa_id = s.empresa_id
@@ -283,6 +361,16 @@ export type LineaFondoInput = {
 export type SolicitudFondoInput = {
   requirenteEmpleadoId?: number | null;
   requirenteNombre?: string | null;
+  /**
+   * SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§3 del ticket) — OPCIONAL: cuando
+   * el requirente corresponde a un usuario real del sistema (no solo un
+   * empleado RRHH sin login), seleccionable desde el catálogo. Permite
+   * que el PDF autorizado muestre su nombre real + firma manuscrita
+   * (snapshot capturado aquí, ver crearSolicitudFondo). Sin este campo,
+   * el requirente sigue siendo únicamente texto libre/empleado — nunca
+   * se inventa una firma para ese caso.
+   */
+  requirenteUsuarioId?: number | null;
   fechaRequerimiento: string;
   observaciones?: string | null;
   lineas: LineaFondoInput[];
@@ -292,14 +380,24 @@ function calcularTotal(lineas: LineaFondoInput[]): number {
   return lineas.reduce((s, l) => s + (l.cantidad ?? 1) * l.monto, 0);
 }
 
+/**
+ * `solicitante` (§1 del ticket) — identidad REAL de sesión (nunca
+ * derivada del cliente): resuelta por el endpoint desde `guard.session`,
+ * nunca opcional en producción (el POST siempre está autenticado), pero
+ * se deja opcional en la firma de la función para no romper llamadores
+ * existentes que todavía no la pasan (tests) — sin ella, la solicitud se
+ * crea igual, simplemente sin snapshot de firma del solicitante (§1: "si
+ * todavía no existe flujo de firma para alguno, no inventar una firma").
+ */
 export async function crearSolicitudFondo(
   empresaId: number,
   input: SolicitudFondoInput,
   creadoPor?: string | null,
+  solicitante?: IdentidadFirmante | null,
 ): Promise<SolicitudFondo> {
   if (!input.fechaRequerimiento) throw new Error("Fecha de requerimiento requerida.");
-  if (!input.requirenteEmpleadoId && !input.requirenteNombre?.trim()) {
-    throw new Error("Requirente requerido (empleado o nombre).");
+  if (!input.requirenteEmpleadoId && !input.requirenteUsuarioId && !input.requirenteNombre?.trim()) {
+    throw new Error("Requirente requerido (empleado, usuario o nombre).");
   }
   if (!input.lineas.length) throw new Error("La solicitud necesita al menos una línea de gasto.");
   for (const l of input.lineas) {
@@ -310,22 +408,42 @@ export async function crearSolicitudFondo(
 
   const conn = await getPool().getConnection();
   let solicitudId = 0;
+  // SOLICITUD-FONDOS-PDF-AUTORIZADO-1 — copias físicas de firma escritas
+  // dentro de este intento; si algo falla y se hace rollback, se borran
+  // (best-effort) para no dejar archivos huérfanos sin fila que los
+  // referencie — mismo principio que compensarImagenFirma() en viaticos.ts.
+  const archivosFirmaEscritos: string[] = [];
   try {
     await conn.beginTransaction();
     await validarEmpleadoDeEmpresaTx(conn, empresaId, input.requirenteEmpleadoId, "requirente");
+
+    // §3 del ticket — requirente-usuario OPCIONAL: si viene, DEBE
+    // pertenecer a esta empresa (nunca se acepta un usuario de otro
+    // tenant aunque el id exista) y su nombre real resuelto por el
+    // servidor manda sobre cualquier texto libre enviado.
+    let requirenteUsuario: { nombre: string; rol: string | null } | null = null;
+    if (input.requirenteUsuarioId != null) {
+      requirenteUsuario = await resolverUsuarioDeEmpresaTx(conn, empresaId, input.requirenteUsuarioId);
+      if (!requirenteUsuario) throw new Error("El usuario requirente indicado no pertenece a esta empresa.");
+    }
+
     const r = await executeConn(conn,
       `INSERT INTO tms_solicitudes_fondo
-        (empresa_id, codigo, requirente_empleado_id, requirente_nombre, fecha_requerimiento, total, observaciones, creado_por)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        (empresa_id, codigo, requirente_empleado_id, requirente_nombre, requirente_usuario_id,
+         fecha_requerimiento, total, observaciones, creado_por, solicitante_usuario_id, solicitante_nombre)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         empresaId,
         "", // se completa abajo con un código estable derivado del id, mismo criterio que clientes.codigo
         input.requirenteEmpleadoId ?? null,
-        input.requirenteNombre?.trim() || null,
+        requirenteUsuario ? requirenteUsuario.nombre : (input.requirenteNombre?.trim() || null),
+        input.requirenteUsuarioId ?? null,
         input.fechaRequerimiento,
         total,
         input.observaciones?.trim() || null,
         creadoPor ?? null,
+        solicitante?.usuarioId ?? null,
+        solicitante?.nombre ?? null,
       ],
     );
     solicitudId = Number(r.insertId);
@@ -347,6 +465,41 @@ export async function crearSolicitudFondo(
       );
       orden += 1;
     }
+
+    // §1/§3 del ticket — firma del SOLICITANTE (siempre que tenga "Mi
+    // firma" guardada) y del REQUIRIENTE (solo si se asoció un usuario
+    // real) — BEST-EFFORT: a diferencia de autorizar, NUNCA bloquea la
+    // creación por falta de firma; sin ella, el PDF muestra el nombre +
+    // espacio en blanco (§3/§5: "no inventar una firma").
+    if (solicitante?.usuarioId) {
+      const bytes = await leerBytesFirmaGuardada(solicitante.usuarioId);
+      if (bytes) {
+        const imagen = await guardarImagenFirmaFondo(empresaId, solicitudId, "solicitar", bytes);
+        archivosFirmaEscritos.push(imagen.relative);
+        await crearFirmaInterna(conn, {
+          empresaId, usuarioId: solicitante.usuarioId, empleadoId: null,
+          nombreFirmante: solicitante.nombre, rolFirmante: solicitante.rol ?? "",
+          accion: "SOLICITAR_FONDO", modulo: "FONDOS", entidadTipo: "SOLICITUD_FONDO", entidadId: solicitudId,
+          valoresRelevantes: { solicitudId, codigo, total },
+          imagen, metodo: "FIRMA_MANUSCRITA", origenFirma: "GUARDADA",
+        });
+      }
+    }
+    if (input.requirenteUsuarioId != null && requirenteUsuario) {
+      const bytes = await leerBytesFirmaGuardada(input.requirenteUsuarioId);
+      if (bytes) {
+        const imagen = await guardarImagenFirmaFondo(empresaId, solicitudId, "requerir", bytes);
+        archivosFirmaEscritos.push(imagen.relative);
+        await crearFirmaInterna(conn, {
+          empresaId, usuarioId: input.requirenteUsuarioId, empleadoId: null,
+          nombreFirmante: requirenteUsuario.nombre, rolFirmante: requirenteUsuario.rol ?? "",
+          accion: "REQUERIR_FONDO", modulo: "FONDOS", entidadTipo: "SOLICITUD_FONDO", entidadId: solicitudId,
+          valoresRelevantes: { solicitudId, codigo, total },
+          imagen, metodo: "FIRMA_MANUSCRITA", origenFirma: "GUARDADA",
+        });
+      }
+    }
+
     await registrarAuditoriaTx(conn, {
       empresaId,
       usuario: creadoPor ?? null,
@@ -357,6 +510,7 @@ export async function crearSolicitudFondo(
     await conn.commit();
   } catch (error) {
     await conn.rollback();
+    for (const relative of archivosFirmaEscritos) borrarUpload(relative);
     throw error;
   } finally {
     conn.release();
@@ -370,6 +524,8 @@ export type SolicitudFondoUpdate = {
   fechaRequerimiento?: string;
   requirenteEmpleadoId?: number | null;
   requirenteNombre?: string | null;
+  /** SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§3) — mismo criterio que en crearSolicitudFondo: opcional, resuelto/validado contra esta empresa, y captura una nueva firma snapshot (REQUERIR_FONDO) si el usuario seleccionado tiene "Mi firma" guardada. */
+  requirenteUsuarioId?: number | null;
   observaciones?: string | null;
   /**
    * SOLICITUD-FONDOS-REPORTE-1 (pendiente 1 del PR #211) — si viene,
@@ -411,10 +567,11 @@ export async function actualizarSolicitudFondo(
     }
   }
   const conn = await getPool().getConnection();
+  const archivosFirmaEscritos: string[] = [];
   try {
     await conn.beginTransaction();
     const rows = await queryConn<RowDataPacket[]>(conn,
-      `SELECT id, estado, requirente_empleado_id, requirente_nombre,
+      `SELECT id, estado, requirente_empleado_id, requirente_nombre, requirente_usuario_id,
               DATE_FORMAT(fecha_requerimiento, '%Y-%m-%d') AS fecha_requerimiento, observaciones, total
        FROM tms_solicitudes_fondo WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
       [id, empresaId],
@@ -428,15 +585,30 @@ export async function actualizarSolicitudFondo(
     if (input.requirenteEmpleadoId !== undefined) {
       await validarEmpleadoDeEmpresaTx(conn, empresaId, input.requirenteEmpleadoId, "requirente");
     }
+    // §3 del ticket — mismo criterio que crearSolicitudFondo: si cambia
+    // el requirente-usuario, se revalida contra esta empresa y se
+    // resuelve su nombre real; una nueva firma snapshot (REQUERIR_FONDO)
+    // se captura solo si de verdad cambió (nunca se re-firma sin razón
+    // en cada edición).
+    let requirenteUsuario: { nombre: string; rol: string | null } | null = null;
+    const requirenteUsuarioCambio = input.requirenteUsuarioId !== undefined
+      && input.requirenteUsuarioId !== (actual.requirente_usuario_id != null ? Number(actual.requirente_usuario_id) : null);
+    if (input.requirenteUsuarioId != null) {
+      requirenteUsuario = await resolverUsuarioDeEmpresaTx(conn, empresaId, input.requirenteUsuarioId);
+      if (!requirenteUsuario) throw new Error("El usuario requirente indicado no pertenece a esta empresa.");
+    }
     const total = input.lineas !== undefined ? calcularTotal(input.lineas) : Number(actual.total ?? 0);
 
     await executeConn(conn,
       `UPDATE tms_solicitudes_fondo
-       SET requirente_empleado_id = ?, requirente_nombre = ?, fecha_requerimiento = ?, total = ?, observaciones = ?
+       SET requirente_empleado_id = ?, requirente_nombre = ?, requirente_usuario_id = ?, fecha_requerimiento = ?, total = ?, observaciones = ?
        WHERE id = ? AND empresa_id = ?`,
       [
         input.requirenteEmpleadoId !== undefined ? input.requirenteEmpleadoId ?? null : actual.requirente_empleado_id,
-        input.requirenteNombre !== undefined ? input.requirenteNombre?.trim() || null : actual.requirente_nombre,
+        requirenteUsuario
+          ? requirenteUsuario.nombre
+          : (input.requirenteNombre !== undefined ? input.requirenteNombre?.trim() || null : actual.requirente_nombre),
+        input.requirenteUsuarioId !== undefined ? input.requirenteUsuarioId ?? null : actual.requirente_usuario_id,
         input.fechaRequerimiento ?? actual.fecha_requerimiento,
         total,
         input.observaciones !== undefined ? input.observaciones?.trim() || null : actual.observaciones,
@@ -444,6 +616,21 @@ export async function actualizarSolicitudFondo(
         empresaId,
       ],
     );
+
+    if (requirenteUsuarioCambio && input.requirenteUsuarioId != null && requirenteUsuario) {
+      const bytes = await leerBytesFirmaGuardada(input.requirenteUsuarioId);
+      if (bytes) {
+        const imagen = await guardarImagenFirmaFondo(empresaId, id, "requerir", bytes);
+        archivosFirmaEscritos.push(imagen.relative);
+        await crearFirmaInterna(conn, {
+          empresaId, usuarioId: input.requirenteUsuarioId, empleadoId: null,
+          nombreFirmante: requirenteUsuario.nombre, rolFirmante: requirenteUsuario.rol ?? "",
+          accion: "REQUERIR_FONDO", modulo: "FONDOS", entidadTipo: "SOLICITUD_FONDO", entidadId: id,
+          valoresRelevantes: { solicitudId: id, total },
+          imagen, metodo: "FIRMA_MANUSCRITA", origenFirma: "GUARDADA",
+        });
+      }
+    }
 
     if (input.lineas !== undefined) {
       await executeConn(conn, "DELETE FROM tms_solicitud_fondo_lineas WHERE empresa_id = ? AND solicitud_id = ?", [empresaId, id]);
@@ -475,6 +662,7 @@ export async function actualizarSolicitudFondo(
     await conn.commit();
   } catch (error) {
     await conn.rollback();
+    for (const relative of archivosFirmaEscritos) borrarUpload(relative);
     throw error;
   } finally {
     conn.release();
@@ -490,20 +678,47 @@ const ACCION_A_ESTADO: Record<AccionFondo, EstadoFondo> = {
   liquidar: "Liquidada",
 };
 
+/** §2 del ticket — mensaje FIJO cuando el autorizante no tiene firma registrada en "Mi firma". Exportado para que el endpoint devuelva EXACTAMENTE este texto. */
+export const MENSAJE_FIRMA_REQUERIDA_AUTORIZAR = "Debes registrar tu firma en Mi firma antes de autorizar la solicitud.";
+
 /**
  * Transición de estado — SIEMPRE valida contra TRANSICIONES_FONDO (nunca
  * salta de Pendiente a Liquidada, nunca reabre una Rechazada/Liquidada).
  * Deja rastro en `auditoria` (mismo mecanismo que el resto de la app).
+ *
+ * SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§2 del ticket) — autorizar EXIGE
+ * `opts.autorizante` (identidad real de sesión + bytes de su "Mi firma",
+ * ya leídos por el endpoint vía leerBytesFirmaGuardada): sin ella se
+ * rechaza con MENSAJE_FIRMA_REQUERIDA_AUTORIZAR, ANTES de tocar la base
+ * de datos — "no permitir una Solicitud Autorizada sin firma del
+ * autorizante". La copia física de esa firma se escribe ANTES de abrir
+ * la transacción (guardarUpload no es transaccional, mismo criterio que
+ * guardarImagenFirma() en viaticos.ts) y se compensa (se borra) si el
+ * commit no llega a completarse, por cualquier motivo.
  */
 export async function cambiarEstadoSolicitudFondo(
   empresaId: number,
   id: number,
   accion: AccionFondo,
-  opts: { usuario?: string | null; autorizanteEmpleadoId?: number | null; autorizanteNombre?: string | null; motivoRechazo?: string | null } = {},
+  opts: {
+    usuario?: string | null;
+    autorizanteEmpleadoId?: number | null;
+    motivoRechazo?: string | null;
+    autorizante?: (IdentidadFirmante & { imagen: { bytes: ArrayBuffer; original: string } }) | null;
+  } = {},
 ): Promise<SolicitudFondo | null> {
   if (accion === "rechazar" && !opts.motivoRechazo?.trim()) {
     throw new Error("El rechazo requiere un motivo.");
   }
+  if (accion === "autorizar" && !opts.autorizante) {
+    throw new Error(MENSAJE_FIRMA_REQUERIDA_AUTORIZAR);
+  }
+
+  const imagenGuardada = accion === "autorizar" && opts.autorizante
+    ? await guardarImagenFirmaFondo(empresaId, id, "autorizar", opts.autorizante.imagen)
+    : null;
+
+  let committed = false;
   const conn = await getPool().getConnection();
   try {
     await conn.beginTransaction();
@@ -519,11 +734,24 @@ export async function cambiarEstadoSolicitudFondo(
     }
     if (destino === "Autorizada") {
       await validarEmpleadoDeEmpresaTx(conn, empresaId, opts.autorizanteEmpleadoId, "autorizante");
+      const autorizante = opts.autorizante!; // ya se rechazó arriba si faltaba
       await executeConn(conn,
-        `UPDATE tms_solicitudes_fondo SET estado = ?, autorizante_empleado_id = ?, autorizante_nombre = ?, autorizado_en = NOW()
+        `UPDATE tms_solicitudes_fondo
+         SET estado = ?, autorizante_empleado_id = ?, autorizante_nombre = ?, autorizante_usuario_id = ?, autorizado_en = NOW()
          WHERE id = ? AND empresa_id = ?`,
-        [destino, opts.autorizanteEmpleadoId ?? null, opts.autorizanteNombre?.trim() || null, id, empresaId],
+        [destino, opts.autorizanteEmpleadoId ?? null, autorizante.nombre, autorizante.usuarioId, id, empresaId],
       );
+      // §2/§4 del ticket — snapshot INMUTABLE de la firma real usada AL
+      // AUTORIZAR (mismo patrón que autorizarViatico): el PDF (leído
+      // después, cualquier cantidad de veces) usa esta fila, nunca
+      // vuelve a resolver "la firma actual" del usuario.
+      await crearFirmaInterna(conn, {
+        empresaId, usuarioId: autorizante.usuarioId, empleadoId: opts.autorizanteEmpleadoId ?? null,
+        nombreFirmante: autorizante.nombre, rolFirmante: autorizante.rol ?? "",
+        accion: "AUTORIZAR_FONDO", modulo: "FONDOS", entidadTipo: "SOLICITUD_FONDO", entidadId: id,
+        valoresRelevantes: { solicitudId: id },
+        imagen: imagenGuardada!, metodo: "FIRMA_MANUSCRITA", origenFirma: "GUARDADA",
+      });
     } else if (destino === "Rechazada") {
       await executeConn(conn,
         `UPDATE tms_solicitudes_fondo SET estado = ?, rechazado_en = NOW(), motivo_rechazo = ? WHERE id = ? AND empresa_id = ?`,
@@ -543,11 +771,15 @@ export async function cambiarEstadoSolicitudFondo(
       detalle: `Solicitud de fondo #${id}: ${estadoActual} -> ${destino}.${opts.motivoRechazo ? ` Motivo: ${opts.motivoRechazo}` : ""}`,
     });
     await conn.commit();
+    committed = true;
   } catch (error) {
     await conn.rollback();
     throw error;
   } finally {
     conn.release();
+    if (imagenGuardada && !committed) {
+      borrarUpload(imagenGuardada.relative);
+    }
   }
   return obtenerSolicitudFondo(empresaId, id);
 }
