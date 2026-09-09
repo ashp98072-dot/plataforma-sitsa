@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { ROLES } from "./roles";
 import {
+  GRUPOS_PERMISOS,
+  esPlataformaPermisible,
+  labelPermiso,
   mergePermisosConCatalogo,
+  moduloEmpresaDelPermiso,
+  permisoFull,
+  permisoSoloVer,
   permisosDefaultPorRol,
   tienePermiso,
 } from "./permisos-shared";
@@ -87,6 +93,69 @@ describe("permisos críticos por rol", () => {
       for (const rol of otros) {
         expect(tienePermiso(permisosDefaultPorRol(rol), "flota_combustible", "editar")).toBe(false);
       }
+    });
+  });
+
+  describe("PERMISOS-GASTOS-FONDOS-UI-1 — fila 'Gastos operativos / Solicitudes de fondo'", () => {
+    it("'gastos' es un módulo asignable en el catálogo (aparece en Administración > Usuarios)", () => {
+      expect(esPlataformaPermisible("gastos")).toBe(true);
+    });
+
+    it("tiene una etiqueta propia (no cae al genérico MODULO_LABEL, que no tiene 'gastos')", () => {
+      expect(labelPermiso("gastos")).toBe("Gastos operativos / Solicitudes de fondo");
+    });
+
+    it("depende del módulo de empresa 'tms' (igual que programacion/rutas) — no es una fila de TMS/Logística sustituta", () => {
+      expect(moduloEmpresaDelPermiso("gastos")).toBe("tms");
+    });
+
+    it("aparece en el grupo 'Permisos Operaciones por módulos', no dentro de TMS/Logística ni duplicando esa fila", () => {
+      const operaciones = GRUPOS_PERMISOS.find((g) => g.id === "operaciones");
+      expect(operaciones?.modulos).toContain("gastos");
+      // Fila propia e independiente de "tms" — ambas conviven en la matriz.
+      expect(operaciones?.modulos).toContain("tms");
+    });
+
+    it("ningún rol lo trae marcado por defecto salvo Admin (mantener matriz actual — la fila nace vacía)", () => {
+      for (const rol of ROLES.filter((r) => r !== "Admin")) {
+        expect(tienePermiso(permisosDefaultPorRol(rol), "gastos", "ver")).toBe(false);
+      }
+      expect(tienePermiso(permisosDefaultPorRol("Admin"), "gastos", "ver")).toBe(true);
+    });
+
+    it("al fusionar con el catálogo, un usuario existente sin 'gastos' guardado lo recibe vacío (no se pierde ni se autoconcede al recargar)", () => {
+      const permisos = mergePermisosConCatalogo("JefeOperaciones", [
+        { modulo: "tms", puedeVer: true, puedeCrear: true, puedeEditar: true, puedeEliminar: true },
+      ]);
+      expect(tienePermiso(permisos, "gastos", "ver")).toBe(false);
+      expect(tienePermiso(permisos, "gastos", "crear")).toBe(false);
+    });
+
+    it("al fusionar con el catálogo, un 'gastos' ya guardado se conserva tal cual (persiste al recargar)", () => {
+      const permisos = mergePermisosConCatalogo("JefeOperaciones", [
+        permisoFull("gastos"),
+      ]);
+      expect(tienePermiso(permisos, "gastos", "ver")).toBe(true);
+      expect(tienePermiso(permisos, "gastos", "crear")).toBe(true);
+      expect(tienePermiso(permisos, "gastos", "editar")).toBe(true);
+      expect(tienePermiso(permisos, "gastos", "eliminar")).toBe(true);
+    });
+
+    it("usuario con solo gastos:ver puede entrar pero NO puede crear, y no obtiene tms:crear de regalo", () => {
+      const permisos = mergePermisosConCatalogo("Visualizador", [
+        permisoSoloVer("gastos"),
+      ]);
+      expect(tienePermiso(permisos, "gastos", "ver")).toBe(true);
+      expect(tienePermiso(permisos, "gastos", "crear")).toBe(false);
+      expect(tienePermiso(permisos, "tms", "crear")).toBe(false);
+    });
+
+    it("usuario con gastos:crear puede crear sin necesitar tms:crear", () => {
+      const permisos = mergePermisosConCatalogo("Visualizador", [
+        permisoFull("gastos"),
+      ]);
+      expect(tienePermiso(permisos, "gastos", "crear")).toBe(true);
+      expect(tienePermiso(permisos, "tms", "crear")).toBe(false);
     });
   });
 

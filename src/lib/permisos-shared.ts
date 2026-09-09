@@ -159,6 +159,23 @@ export const PLATAFORMA_PERMISIBLES = [
   // endpoints de Rutas aceptan rutas:<acción> O tms:<acción> — ver
   // requireTenantRutas en src/lib/tenant.ts.
   "rutas",
+  // PERMISOS-GASTOS-FONDOS-UI-1: Gastos operativos / Solicitudes de fondo
+  // (TMS-GASTOS-REPORTES-1) tenía backend con permiso granular propio
+  // (gastos:ver/crear/editar/eliminar, ver requireTenantGastos en
+  // tenant.ts) pero nunca se agregó a la matriz de Usuarios — mismo
+  // patrón exacto que "programacion"/"rutas": permiso propio
+  // (ver/crear/editar/eliminar), sigue exigiendo que la empresa tenga
+  // "tms" habilitado (Gastos vive dentro de TMS, no es una capacidad de
+  // empresa aparte — NO se agrega "gastos" a MODULOS/roles.ts). Los
+  // endpoints de Gastos siguen aceptando gastos:<acción> O tms:<acción>
+  // (compatibilidad histórica, sin cambios en tenant.ts) — un usuario con
+  // gastos:ver puede entrar a Gastos/Solicitudes de Fondo sin necesitar
+  // ningún permiso de tms; a la inversa, quien ya tenía tms:crear sigue
+  // pudiendo crear sin que se le otorgue nada nuevo por este cambio (no
+  // se agregó "gastos" a modulosPropiosDelRol de ningún rol — la matriz
+  // por defecto de cada rol queda igual, la fila nueva nace sin marcar
+  // salvo para Admin).
+  "gastos",
   // FLOTA-COMBUSTIBLE-1 (Fase 2): revisar/aprobar/rechazar las cargas de
   // combustible que el piloto registra desde el Portal — permiso propio
   // y explícito, NO agregado a FLOTA_SUBMODULOS a propósito: ese arreglo
@@ -267,7 +284,10 @@ export function moduloEmpresaDelPermiso(m: string): Modulo | null {
     m === "programacion" ||
     // OPS-5.2a: "rutas" tampoco es un Modulo de navegación propio — igual
     // que "programacion", su disponibilidad por empresa depende de "tms".
-    m === "rutas"
+    m === "rutas" ||
+    // PERMISOS-GASTOS-FONDOS-UI-1: "gastos" tampoco es un Modulo de
+    // navegación propio — mismo criterio que "rutas"/"programacion".
+    m === "gastos"
   ) {
     return "tms";
   }
@@ -291,6 +311,7 @@ export function labelPermiso(modulo: string): string {
   if (modulo === "viajes_cerrar") return "Viajes: cerrar administrativamente";
   if (modulo === "programacion") return "Programación";
   if (modulo === "rutas") return "Rutas";
+  if (modulo === "gastos") return "Gastos operativos / Solicitudes de fondo";
   if (modulo === "flota_combustible") return "Flota: revisar/aprobar combustible";
   if (esPlataformaPermisible(modulo)) {
     return MODULO_LABEL[modulo as Modulo] ?? modulo;
@@ -342,11 +363,12 @@ export const GRUPOS_PERMISOS: {
     id: "operaciones",
     titulo: "Permisos Operaciones por módulos",
     descripcion:
-      "Programación, TMS / logística, clientes, facturación de clientes, reciclaje, tarimas, viáticos (control, autorizar, pagar) y cierre administrativo de viajes.",
+      "Programación, TMS / logística, clientes, facturación de clientes, reciclaje, tarimas, viáticos (control, autorizar, pagar), gastos operativos / solicitudes de fondo y cierre administrativo de viajes.",
     modulos: [
       "programacion",
       "multas",
       "rutas",
+      "gastos",
       "tms",
       "clientes",
       "facturacion",
@@ -702,6 +724,7 @@ export function modulosPlataformaDesdePermisos(
       p.modulo !== "viajes_cerrar" &&
       p.modulo !== "programacion" &&
       p.modulo !== "rutas" &&
+      p.modulo !== "gastos" &&
       p.modulo !== "flota_combustible"
     ) {
       out.add(p.modulo);
