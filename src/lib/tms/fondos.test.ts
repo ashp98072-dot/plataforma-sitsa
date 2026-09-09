@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db", () => ({ getPool: vi.fn(), query: vi.fn(), execute: vi.fn() }));
 import { getPool, query } from "@/lib/db";
-import { cambiarEstadoSolicitudFondo, crearSolicitudFondo, listarSolicitudesFondo } from "./fondos";
+import { actualizarSolicitudFondo, cambiarEstadoSolicitudFondo, crearSolicitudFondo, listarSolicitudesFondo } from "./fondos";
 
 function filaSolicitud(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -20,6 +20,13 @@ function conexion(opts: {
   // resolverSnapshotLineaTx relee dentro de la transacción.
   vehiculoEnEmpresa?: boolean; clienteEnEmpresa?: boolean; planEnEmpresa?: boolean;
   empleadoNombre?: string; empleadoPuesto?: string | null; vehiculoPlaca?: string; clienteNombre?: string; planFecha?: string;
+  // SOLICITUD-FONDOS-REPORTE-1 (pendiente 1 del PR #211) — fila RAW que
+  // actualizarSolicitudFondo relee FOR UPDATE antes de editar.
+  actualRequirenteEmpleadoId?: number | null;
+  actualRequirenteNombre?: string | null;
+  actualFechaRequerimiento?: string;
+  actualObservaciones?: string | null;
+  actualTotal?: number;
 } = {}) {
   const empleadoEnEmpresa = opts.empleadoEnEmpresa ?? true;
   const vehiculoEnEmpresa = opts.vehiculoEnEmpresa ?? true;
@@ -29,7 +36,14 @@ function conexion(opts: {
     beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn(),
     query: vi.fn(async (sql: string) => {
       if (sql.includes("FROM tms_solicitudes_fondo WHERE id")) {
-        return [[{ id: 1, estado: opts.estadoActual ?? "Pendiente" }]];
+        return [[{
+          id: 1, estado: opts.estadoActual ?? "Pendiente",
+          requirente_empleado_id: opts.actualRequirenteEmpleadoId ?? null,
+          requirente_nombre: opts.actualRequirenteNombre ?? "Juan Perez",
+          fecha_requerimiento: opts.actualFechaRequerimiento ?? "2026-09-01",
+          observaciones: opts.actualObservaciones ?? null,
+          total: opts.actualTotal ?? 500,
+        }]];
       }
       // SOLICITUD-FONDOS-REPORTE-1: resolverSnapshotLineaTx — cada catálogo
       // relecto por (id, empresa_id) dentro de la MISMA transacción.
@@ -269,5 +283,109 @@ describe("cambiarEstadoSolicitudFondo", () => {
       .rejects.toThrow("El autorizante indicado no pertenece a esta empresa.");
     expect(conn.rollback).toHaveBeenCalledOnce();
     expect(conn.commit).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * SOLICITUD-FONDOS-REPORTE-1 (pendiente 1 del PR #211) — edición de una
+ * solicitud existente MIENTRAS está Pendiente: encabezado + reemplazo de
+ * líneas en UNA transacción, total recalculado, snapshot regenerado por
+ * resolverSnapshotLineaTx (mismo criterio de seguridad que al crear).
+ */
+describe("actualizarSolicitudFondo", () => {
+  it("edita Pendiente: encabezado y líneas se reemplazan, el total se recalcula", async () => {
+    const conn = conexion({ estadoActual: "Pendiente" });
+    vi.mocked(query).mockResolvedValue([filaSolicitud({ total: "600.00" })] as never);
+    await actualizarSolicitudFondo(7, 1, {
+      fechaRequerimiento: "2026-09-05",
+      requirenteNombre: "Maria Lopez",
+      observaciones: "Actualizada",
+      lineas: [
+        { categoria: "Combustible", monto: 200, cantidad: 2 }, // 400
+        { categoria: "Hospedaje", monto: 200 }, // 200
+      ],
+    }, "admin");
+    const updateHeader = conn.execute.mock.calls.find((c) => (c[0] as string).includes("UPDATE tms_solicitudes_fondo"))!;
+    expect(updateHeader[1]).toEqual([null, "Maria Lopez", "2026-09-05", 600, "Actualizada", 1, 7]);
+    const deleteLineas = conn.execute.mock.calls.find((c) => (c[0] as string).includes("DELETE FROM tms_solicitud_fondo_lineas"));
+    expect(deleteLineas?.[1]).toEqual([7, 1]);
+    const insertsLinea = conn.execute.mock.calls.filter((c) => (c[0] as string).includes("INSERT INTO tms_solicitud_fondo_lineas"));
+    expect(insertsLinea).toHaveLength(2);
+    expect(conn.commit).toHaveBeenCalledOnce();
+  });
+
+  it("campos no enviados conservan su valor RAW actual (nunca el nombre derivado del JOIN de SELECT_SOLICITUD)", async () => {
+    const conn = conexion({ estadoActual: "Pendiente", actualRequirenteEmpleadoId: 9, actualRequirenteNombre: "Nombre Original", actualFechaRequerimiento: "2026-08-20", actualObservaciones: "Nota original" });
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    // Solo se envían las líneas — ningún campo de encabezado.
+    await actualizarSolicitudFondo(7, 1, { lineas: [{ categoria: "Combustible", monto: 100 }] });
+    const updateHeader = conn.execute.mock.calls.find((c) => (c[0] as string).includes("UPDATE tms_solicitudes_fondo"))!;
+    expect(updateHeader[1]).toEqual([9, "Nombre Original", "2026-08-20", 100, "Nota original", 1, 7]);
+  });
+
+  it("sin lineas en el input: NO se tocan las líneas existentes ni el total", async () => {
+    const conn = conexion({ estadoActual: "Pendiente" });
+    vi.mocked(query).mockResolvedValue([filaSolicitud({ total: "500.00" })] as never);
+    await actualizarSolicitudFondo(7, 1, { observaciones: "Solo cambio observaciones" });
+    expect(conn.execute.mock.calls.some((c) => (c[0] as string).includes("DELETE FROM tms_solicitud_fondo_lineas"))).toBe(false);
+    expect(conn.execute.mock.calls.some((c) => (c[0] as string).includes("INSERT INTO tms_solicitud_fondo_lineas"))).toBe(false);
+    const updateHeader = conn.execute.mock.calls.find((c) => (c[0] as string).includes("UPDATE tms_solicitudes_fondo"))!;
+    expect((updateHeader[1] as unknown[])?.[3]).toBe(500); // total sin cambios (releído de la fila actual)
+  });
+
+  it.each(["Autorizada", "Rechazada", "Liquidada"] as const)(
+    "NO permite editar una solicitud en estado %s",
+    async (estado) => {
+      const conn = conexion({ estadoActual: estado });
+      await expect(actualizarSolicitudFondo(7, 1, { observaciones: "Intento de edición" }))
+        .rejects.toThrow(`No se puede editar una solicitud en estado "${estado}"`);
+      expect(conn.rollback).toHaveBeenCalledOnce();
+      expect(conn.commit).not.toHaveBeenCalled();
+      expect(conn.execute.mock.calls.some((c) => (c[0] as string).includes("UPDATE") || (c[0] as string).includes("DELETE") || (c[0] as string).includes("INSERT"))).toBe(false);
+    },
+  );
+
+  it("hace ROLLBACK de TODO (encabezado incluido) si falla la inserción de una línea", async () => {
+    const conn = conexion({ estadoActual: "Pendiente", fallaEn: "INSERT INTO tms_solicitud_fondo_lineas" });
+    await expect(actualizarSolicitudFondo(7, 1, {
+      observaciones: "No debe persistir",
+      lineas: [{ categoria: "Combustible", monto: 100 }],
+    })).rejects.toThrow();
+    expect(conn.rollback).toHaveBeenCalledOnce();
+    expect(conn.commit).not.toHaveBeenCalled();
+  });
+
+  it("devuelve null si la solicitud no existe", async () => {
+    const conn = conexion({ estadoActual: "Pendiente" });
+    conn.query.mockImplementation(async () => [[]]);
+    expect(await actualizarSolicitudFondo(7, 999, { observaciones: "x" })).toBeNull();
+  });
+
+  it("rechaza sin líneas cuando `lineas` viene vacío", async () => {
+    conexion({ estadoActual: "Pendiente" });
+    await expect(actualizarSolicitudFondo(7, 1, { lineas: [] })).rejects.toThrow("al menos una línea");
+  });
+
+  it("AISLAMIENTO MULTIEMPRESA: rechaza reasignar a un requirenteEmpleadoId de otra empresa, sin escribir nada", async () => {
+    const conn = conexion({ estadoActual: "Pendiente", empleadoEnEmpresa: false });
+    await expect(actualizarSolicitudFondo(7, 1, { requirenteEmpleadoId: 999 }))
+      .rejects.toThrow("El requirente indicado no pertenece a esta empresa.");
+    expect(conn.rollback).toHaveBeenCalledOnce();
+    expect(conn.commit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["empleadoId", { empleadoId: 999 }, "empleadoEnEmpresa" as const, "El empleado indicado no pertenece a esta empresa."],
+    ["vehiculoId", { vehiculoId: 999 }, "vehiculoEnEmpresa" as const, "El vehículo indicado no pertenece a esta empresa."],
+    ["clienteId", { clienteId: 999 }, "clienteEnEmpresa" as const, "El cliente indicado no pertenece a esta empresa."],
+    ["planId", { planId: 999 }, "planEnEmpresa" as const, "El viaje indicado no pertenece a esta empresa."],
+  ])("AISLAMIENTO MULTIEMPRESA: rechaza editar con %s de otra empresa, con rollback y sin insertar nada", async (_campo, extra, flag, mensaje) => {
+    const conn = conexion({ estadoActual: "Pendiente", [flag]: false });
+    await expect(actualizarSolicitudFondo(7, 1, {
+      lineas: [{ categoria: "Combustible", monto: 100, ...extra }],
+    })).rejects.toThrow(mensaje);
+    expect(conn.rollback).toHaveBeenCalledOnce();
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(conn.execute.mock.calls.some((c) => (c[0] as string).includes("INSERT INTO tms_solicitud_fondo_lineas"))).toBe(false);
   });
 });

@@ -357,6 +357,122 @@ export async function crearSolicitudFondo(
   return creada;
 }
 
+export type SolicitudFondoUpdate = {
+  fechaRequerimiento?: string;
+  requirenteEmpleadoId?: number | null;
+  requirenteNombre?: string | null;
+  observaciones?: string | null;
+  /**
+   * SOLICITUD-FONDOS-REPORTE-1 (pendiente 1 del PR #211) — si viene,
+   * REEMPLAZA por completo las líneas actuales (se borran y se insertan
+   * de nuevo, cada una con su propio snapshot resuelto por
+   * resolverSnapshotLineaTx — mismo criterio de seguridad que al crear:
+   * nunca se acepta un snapshot enviado por el cliente HTTP) y el total
+   * se recalcula. Si NO viene, ni las líneas ni el total se tocan.
+   */
+  lineas?: LineaFondoInput[];
+};
+
+/**
+ * Edita una solicitud de fondo MIENTRAS esté en "Pendiente" — mismo
+ * criterio ya usado en cotizaciones.ts ("solo editable mientras está en
+ * Borrador"): una vez Autorizada/Rechazada/Liquidada el contenido queda
+ * fijo, solo cambia de estado (cambiarEstadoSolicitudFondo). Encabezado
+ * + reemplazo de líneas en UNA sola transacción — si falla la inserción
+ * de cualquier línea, se revierte TODO (encabezado incluido), nunca deja
+ * la solicitud a medio actualizar.
+ *
+ * Los campos NO enviados (`undefined`) conservan su valor RAW actual
+ * (releído aquí dentro de la transacción, no el valor ya COALESCEado con
+ * el nombre del empleado que expone SELECT_SOLICITUD) — evita que editar
+ * un campo cualquiera "hornee" por accidente un nombre derivado del JOIN
+ * dentro de la columna de texto libre.
+ */
+export async function actualizarSolicitudFondo(
+  empresaId: number,
+  id: number,
+  input: SolicitudFondoUpdate,
+  usuario?: string | null,
+): Promise<SolicitudFondo | null> {
+  if (input.lineas !== undefined) {
+    if (!input.lineas.length) throw new Error("La solicitud necesita al menos una línea de gasto.");
+    for (const l of input.lineas) {
+      if (!l.categoria) throw new Error("Cada línea necesita una categoría.");
+      if (!(l.monto > 0)) throw new Error("Cada línea necesita un monto mayor a cero.");
+    }
+  }
+  const conn = await getPool().getConnection();
+  try {
+    await conn.beginTransaction();
+    const rows = await queryConn<RowDataPacket[]>(conn,
+      `SELECT id, estado, requirente_empleado_id, requirente_nombre,
+              DATE_FORMAT(fecha_requerimiento, '%Y-%m-%d') AS fecha_requerimiento, observaciones, total
+       FROM tms_solicitudes_fondo WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
+      [id, empresaId],
+    );
+    if (!rows[0]) { await conn.rollback(); return null; }
+    const actual = rows[0];
+    const estadoActual = String(actual.estado) as EstadoFondo;
+    if (estadoActual !== "Pendiente") {
+      throw new Error(`No se puede editar una solicitud en estado "${estadoActual}" — solo mientras está Pendiente.`);
+    }
+    if (input.requirenteEmpleadoId !== undefined) {
+      await validarEmpleadoDeEmpresaTx(conn, empresaId, input.requirenteEmpleadoId, "requirente");
+    }
+    const total = input.lineas !== undefined ? calcularTotal(input.lineas) : Number(actual.total ?? 0);
+
+    await executeConn(conn,
+      `UPDATE tms_solicitudes_fondo
+       SET requirente_empleado_id = ?, requirente_nombre = ?, fecha_requerimiento = ?, total = ?, observaciones = ?
+       WHERE id = ? AND empresa_id = ?`,
+      [
+        input.requirenteEmpleadoId !== undefined ? input.requirenteEmpleadoId ?? null : actual.requirente_empleado_id,
+        input.requirenteNombre !== undefined ? input.requirenteNombre?.trim() || null : actual.requirente_nombre,
+        input.fechaRequerimiento ?? actual.fecha_requerimiento,
+        total,
+        input.observaciones !== undefined ? input.observaciones?.trim() || null : actual.observaciones,
+        id,
+        empresaId,
+      ],
+    );
+
+    if (input.lineas !== undefined) {
+      await executeConn(conn, "DELETE FROM tms_solicitud_fondo_lineas WHERE empresa_id = ? AND solicitud_id = ?", [empresaId, id]);
+      let orden = 0;
+      for (const l of input.lineas) {
+        const snapshot = await resolverSnapshotLineaTx(conn, empresaId, l);
+        await executeConn(conn,
+          `INSERT INTO tms_solicitud_fondo_lineas
+            (empresa_id, solicitud_id, categoria, descripcion, cantidad, monto, orden,
+             fecha_viaje, empleado_id, empleado_nombre, cargo, vehiculo_id, placa, cliente_id, cliente_nombre, plan_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            empresaId, id, l.categoria, l.descripcion?.trim() || null, l.cantidad ?? 1, l.monto, orden,
+            snapshot.fechaViaje, l.empleadoId ?? null, snapshot.empleadoNombre, snapshot.cargo,
+            l.vehiculoId ?? null, snapshot.placa, l.clienteId ?? null, snapshot.clienteNombre, l.planId ?? null,
+          ],
+        );
+        orden += 1;
+      }
+    }
+
+    await registrarAuditoriaTx(conn, {
+      empresaId,
+      usuario: usuario ?? null,
+      accion: "editar",
+      modulo: "tms_fondos",
+      detalle: `Solicitud de fondo #${id} editada.${input.lineas !== undefined ? ` Líneas reemplazadas, nuevo total Q${total.toFixed(2)}.` : ""}`,
+    });
+    await conn.commit();
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
+  return obtenerSolicitudFondo(empresaId, id);
+}
+
 export type AccionFondo = "autorizar" | "rechazar" | "liquidar";
 
 const ACCION_A_ESTADO: Record<AccionFondo, EstadoFondo> = {
