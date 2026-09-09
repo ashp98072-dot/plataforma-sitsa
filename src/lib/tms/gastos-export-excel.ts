@@ -1,7 +1,7 @@
 import ExcelJS from "exceljs";
 import { tablaAExcel } from "@/lib/rrhh/export-files";
 import { formatearFechaVisible } from "@/lib/rrhh/dates";
-import type { FilaAgregadaGasto, FilaRentabilidadViaje, FilaSolicitudFondoReporte, FilaViaticoReporte } from "@/lib/tms/reportes-gastos";
+import { resumirViaticosPorEstado, type FilaAgregadaGasto, type FilaGastoDetalle, type FilaRentabilidadViaje, type FilaSolicitudFondoReporte, type FilaViaticoReporte } from "@/lib/tms/reportes-gastos";
 import type { SolicitudFondo } from "@/lib/tms/fondos";
 
 /**
@@ -24,14 +24,119 @@ export async function exportarAgregadoGastosExcel(
   });
 }
 
+/**
+ * REPORTES-VIATICOS-GASTOS-DETALLE-1 (§1/§5 del ticket) — detalle
+ * completo, una fila por viático (nunca solo un resumen agregado).
+ * ExcelJS directo (no tablaAExcel, que solo escribe texto plano) para
+ * fechas como fecha visible, montos con formato Q, encabezado congelado
+ * y autofiltro — mismo estilo ya usado en exportarReporteFondosExcel.
+ * Al final: fila en blanco, TOTAL GENERAL (cantidad + suma de monto
+ * asignado) y un total por cada estado presente en el resultado.
+ */
 export async function exportarViaticosReporteExcel(filas: FilaViaticoReporte[]): Promise<Buffer> {
-  return tablaAExcel({
-    sheetName: "Viaticos por viaje",
-    headers: ["Viaje", "Fecha", "Persona", "Rol", "Monto sugerido (Q)", "Monto asignado (Q)", "Estado"],
-    rows: filas.map((f) => [
-      f.planCodigo, f.fechaPlan, f.personalNombre, f.rol, money(f.montoSugerido), money(f.montoAsignado), f.estado,
-    ]),
-  });
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "Plataforma corporativa";
+  const ws = wb.addWorksheet("Viaticos", { views: [{ state: "frozen", ySplit: 1, showGridLines: false }] });
+
+  const headers = [
+    "Fecha registro", "Fecha viaje", "Código viaje", "Ruta / destino",
+    "Nombre", "Cargo", "Cuenta bancaria", "Placa", "Cliente", "Concepto",
+    "Monto sugerido", "Monto asignado", "Estado",
+    "Fecha autorización", "Autorizado por", "Fecha entrega", "Entregado por", "Observaciones",
+  ];
+  ws.addRow(headers);
+  const header = ws.getRow(1);
+  header.font = { bold: true, color: { argb: "FFFFFFFF" } };
+  header.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F4E78" } };
+  header.alignment = { horizontal: "center", vertical: "middle" };
+
+  for (const f of filas) {
+    ws.addRow([
+      formatearFechaVisible(f.fechaRegistro) || "—", formatearFechaVisible(f.fechaViaje) || "—",
+      f.planCodigo, f.rutaDestino ?? "—",
+      f.personalNombre, f.cargo ?? "—", f.cuentaBancaria ?? "—", f.placa ?? "—", f.clienteNombre ?? "—", f.rol,
+      f.montoSugerido, f.montoAsignado, f.estado,
+      f.fechaAutorizacion ? formatearFechaVisible(f.fechaAutorizacion) : "—", f.autorizadoPor ?? "—",
+      f.fechaEntrega ? formatearFechaVisible(f.fechaEntrega) : "—", f.entregadoPor ?? "—",
+      f.observaciones ?? "—",
+    ]);
+  }
+
+  const ultimaFilaDatos = filas.length + 1;
+  ws.autoFilter = { from: "A1", to: `R${Math.max(1, ultimaFilaDatos)}` };
+  ws.columns = [14, 14, 16, 26, 24, 18, 18, 12, 22, 12, 16, 16, 14, 16, 20, 14, 20, 30].map((width) => ({ width }));
+  for (const col of [11, 12]) ws.getColumn(col).numFmt = '"Q"#,##0.00';
+  ws.getColumn(18).alignment = { vertical: "top", wrapText: true };
+  for (let i = 2; i <= ultimaFilaDatos; i++) {
+    for (let col = 1; col <= headers.length; col++) ws.getRow(i).getCell(col).alignment = { vertical: "top" };
+  }
+
+  // §1 del ticket: total general + totales por estado + cantidad de registros.
+  ws.addRow([]);
+  const totalGeneral = filas.reduce((s, f) => s + f.montoAsignado, 0);
+  const filaTotal = ws.addRow(["", "", "", "", "", "", "", "", "", "TOTAL GENERAL", "", totalGeneral, `${filas.length} registro(s)`]);
+  filaTotal.font = { bold: true };
+  filaTotal.getCell(12).numFmt = '"Q"#,##0.00';
+  const resumen = resumirViaticosPorEstado(filas);
+  for (const [estado, { cantidad, total }] of Object.entries(resumen)) {
+    const fila = ws.addRow(["", "", "", "", "", "", "", "", "", `Total ${estado}`, "", total, `${cantidad} registro(s)`]);
+    fila.getCell(12).numFmt = '"Q"#,##0.00';
+  }
+
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+/**
+ * REPORTES-VIATICOS-GASTOS-DETALLE-1 (§2/§5 del ticket) — detalle de
+ * Gastos Operativos, una fila por gasto (nunca agrupado). Mismo estilo
+ * ExcelJS que exportarViaticosReporteExcel: fechas visibles, montos con
+ * formato Q, encabezado congelado, autofiltro, y al final TOTAL GENERAL
+ * (cantidad + suma de `total`).
+ */
+export async function exportarGastosDetalleExcel(filas: FilaGastoDetalle[]): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "Plataforma corporativa";
+  const ws = wb.addWorksheet("Gastos", { views: [{ state: "frozen", ySplit: 1, showGridLines: false }] });
+
+  const headers = [
+    "Fecha", "Fecha de viaje", "Código viaje", "Empleado / beneficiario", "Cargo", "Placa", "Cliente",
+    "Categoría", "Descripción", "Cantidad", "Monto unitario", "Total", "Estado", "Registrado por", "Observaciones",
+  ];
+  ws.addRow(headers);
+  const header = ws.getRow(1);
+  header.font = { bold: true, color: { argb: "FFFFFFFF" } };
+  header.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F4E78" } };
+  header.alignment = { horizontal: "center", vertical: "middle" };
+
+  for (const f of filas) {
+    ws.addRow([
+      formatearFechaVisible(f.fechaSolicitud) || "—", f.fechaViaje ? formatearFechaVisible(f.fechaViaje) : "—",
+      f.planCodigo ?? "—", f.empleadoNombre ?? "—", f.cargo ?? "—", f.placa ?? "—", f.clienteNombre ?? "—",
+      f.categoria, f.descripcion ?? "—", f.cantidad, f.monto, f.total,
+      f.activo ? "Activo" : "Anulado", f.registradoPor ?? "—", f.observaciones ?? "—",
+    ]);
+  }
+
+  const ultimaFilaDatos = filas.length + 1;
+  ws.autoFilter = { from: "A1", to: `O${Math.max(1, ultimaFilaDatos)}` };
+  ws.columns = [14, 14, 16, 26, 18, 12, 24, 16, 40, 12, 16, 16, 12, 20, 30].map((width) => ({ width }));
+  ws.getColumn(10).numFmt = "0.00";
+  for (const col of [11, 12]) ws.getColumn(col).numFmt = '"Q"#,##0.00';
+  ws.getColumn(9).alignment = { vertical: "top", wrapText: true };
+  ws.getColumn(15).alignment = { vertical: "top", wrapText: true };
+  for (let i = 2; i <= ultimaFilaDatos; i++) {
+    for (let col = 1; col <= headers.length; col++) {
+      if (col !== 9 && col !== 15) ws.getRow(i).getCell(col).alignment = { vertical: "top" };
+    }
+  }
+
+  ws.addRow([]);
+  const totalGeneral = filas.reduce((s, f) => s + f.total, 0);
+  const filaTotal = ws.addRow(["", "", "", "", "", "", "", "", "TOTAL GENERAL", "", "", totalGeneral, `${filas.length} registro(s)`]);
+  filaTotal.font = { bold: true };
+  filaTotal.getCell(12).numFmt = '"Q"#,##0.00';
+
+  return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
 // TMS-SIN-COSTO-OPERATIVO-1: "Costo operativo" ya no se exporta — negocio
