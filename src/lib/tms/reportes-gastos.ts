@@ -16,35 +16,68 @@ export type FiltrosReporteGastos = {
   vehiculoId?: number;
   categoria?: string;
   planId?: number;
+  /**
+   * SOLICITUD-FONDOS-REPORTE-1 — filtros propios del reporte "fondos"
+   * (tipo === "fondos"), sin efecto en ningún otro tipo de reporte de
+   * este mismo archivo (mismo criterio que categoria/vehiculoId/planId
+   * arriba: cada tipo usa solo el subconjunto de filtros que le aplica).
+   * "fechaSolicitud" y "fechaViaje" van SEPARADOS (a diferencia de
+   * fechaDesde/fechaHasta de arriba, que en gastos es un solo rango
+   * combinado) porque una solicitud de fondo puede cubrir viajes con
+   * fecha distinta a la fecha en que se pidió el fondo.
+   */
+  fechaSolicitudDesde?: string;
+  fechaSolicitudHasta?: string;
+  fechaViajeDesde?: string;
+  fechaViajeHasta?: string;
+  /** Placa SNAPSHOT de la línea (tms_solicitud_fondo_lineas.placa) — texto exacto, mismo criterio que "unidad" en Programación. */
+  placa?: string;
+  /** Nombre SNAPSHOT del empleado de la línea — texto exacto. */
+  empleadoNombre?: string;
+  /** Cargo SNAPSHOT de la línea — texto exacto. */
+  cargo?: string;
+  /** Estado de la SOLICITUD (tms_solicitudes_fondo.estado) — no confundir con ningún estado de viaje. */
+  estadoFondo?: string;
+  /** Búsqueda LIKE por descripción de línea — mismo patrón ya usado en listarRutas()/cliente-rutas.ts (q LIKE). */
+  descripcion?: string;
 };
 
 const FECHA_RE = /^\d{4}-\d{2}-\d{2}$/;
+const fechaValida = (v: string | null): string | undefined => (v && FECHA_RE.test(v) ? v : undefined);
 
 /** Compartido por el endpoint de listado y el de exportación — mismo criterio que filtrosReporteDesdeUrl en reportes-viajes.ts. */
 export function filtrosReporteGastosDesdeUrl(url: URL): FiltrosReporteGastos {
   const p = url.searchParams;
-  const fechaDesde = p.get("fechaDesde");
-  const fechaHasta = p.get("fechaHasta");
   const clienteId = Number(p.get("clienteId"));
   const vehiculoId = Number(p.get("vehiculoId"));
   const planId = Number(p.get("planId"));
   return {
-    fechaDesde: fechaDesde && FECHA_RE.test(fechaDesde) ? fechaDesde : undefined,
-    fechaHasta: fechaHasta && FECHA_RE.test(fechaHasta) ? fechaHasta : undefined,
+    fechaDesde: fechaValida(p.get("fechaDesde")),
+    fechaHasta: fechaValida(p.get("fechaHasta")),
     clienteId: Number.isInteger(clienteId) && clienteId > 0 ? clienteId : undefined,
     vehiculoId: Number.isInteger(vehiculoId) && vehiculoId > 0 ? vehiculoId : undefined,
     planId: Number.isInteger(planId) && planId > 0 ? planId : undefined,
     categoria: p.get("categoria") || undefined,
+    fechaSolicitudDesde: fechaValida(p.get("fechaSolicitudDesde")),
+    fechaSolicitudHasta: fechaValida(p.get("fechaSolicitudHasta")),
+    fechaViajeDesde: fechaValida(p.get("fechaViajeDesde")),
+    fechaViajeHasta: fechaValida(p.get("fechaViajeHasta")),
+    placa: p.get("placa")?.trim() || undefined,
+    empleadoNombre: p.get("empleadoNombre")?.trim() || undefined,
+    cargo: p.get("cargo")?.trim() || undefined,
+    estadoFondo: p.get("estadoFondo")?.trim() || undefined,
+    descripcion: p.get("descripcion")?.trim() || undefined,
   };
 }
 
-export const TIPOS_REPORTE_GASTOS = ["viaje", "unidad", "cliente", "categoria", "periodo", "viaticos", "rentabilidad"] as const;
+export const TIPOS_REPORTE_GASTOS = ["viaje", "unidad", "cliente", "categoria", "periodo", "viaticos", "rentabilidad", "fondos"] as const;
 export type TipoReporteGastos = (typeof TIPOS_REPORTE_GASTOS)[number];
 
 export type ResultadoReporteGastos =
   | { tipo: "viaje" | "unidad" | "cliente" | "categoria" | "periodo"; etiqueta: string; filas: FilaAgregadaGasto[] }
   | { tipo: "viaticos"; filas: FilaViaticoReporte[] }
-  | { tipo: "rentabilidad"; filas: FilaRentabilidadViaje[] };
+  | { tipo: "rentabilidad"; filas: FilaRentabilidadViaje[] }
+  | { tipo: "fondos"; filas: FilaSolicitudFondoReporte[] };
 
 /**
  * Único punto que decide qué consulta corre para cada `tipo` — reutilizado
@@ -65,6 +98,7 @@ export async function obtenerReporteGastosPorTipo(
     case "periodo": return { tipo, etiqueta: "Período", filas: await reporteGastosPorPeriodo(empresaId, filtros) };
     case "viaticos": return { tipo, filas: await reporteViaticosPorViajeEmpleado(empresaId, filtros) };
     case "rentabilidad": return { tipo, filas: await reporteRentabilidadPorViaje(empresaId, filtros) };
+    case "fondos": return { tipo, filas: await reporteSolicitudesFondo(empresaId, filtros) };
   }
 }
 
@@ -289,6 +323,113 @@ export async function reporteRentabilidadPorViaje(
       gastos,
       viaticos,
       utilidad: tarifa - gastos - viaticos,
+    };
+  });
+}
+
+/**
+ * SOLICITUD-FONDOS-REPORTE-1 — una fila por LÍNEA de solicitud de fondo
+ * (no por solicitud completa): "Fecha solicitud" | "Fecha viaje" |
+ * "Nombre" | "Cargo" | "Placa" | "Cliente" | "Cantidad" | "Descripción" |
+ * "Total" — formato pedido explícitamente por Operaciones/Contabilidad.
+ *
+ * Reutiliza tms_solicitud_fondo_lineas/tms_solicitudes_fondo TAL CUAL
+ * (mismas tablas que src/lib/tms/fondos.ts, sin duplicar ningún modelo) —
+ * este archivo es de SOLO LECTURA, igual que el resto de reportes-gastos.ts.
+ *
+ * "Fecha solicitud" viene del ENCABEZADO (s.fecha_requerimiento) — una
+ * solicitud tiene una única fecha de requerimiento para todas sus líneas,
+ * así que no se duplica esa fecha como columna propia de la línea (ver
+ * comentario de diseño en sql/migrate-2026-09-solicitud-fondos-reporte.sql).
+ * "Nombre"/"Cargo"/"Placa"/"Cliente" salen de las columnas SNAPSHOT de la
+ * línea (empleado_nombre/cargo/placa/cliente_nombre) — NUNCA de un JOIN en
+ * vivo a empleados/flota_vehiculos/tms_clientes — para que el reporte
+ * histórico no cambie si esos catálogos cambian después (mismo pedido
+ * explícito del ticket que ya se resolvió al guardar la línea, ver
+ * resolverSnapshotLineaTx en fondos.ts). "Total" = cantidad × monto de
+ * la línea (el total de la SOLICITUD completa, tms_solicitudes_fondo.total,
+ * es la suma de sus líneas — no es lo que pide esta vista por fila).
+ */
+export type FilaSolicitudFondoReporte = {
+  lineaId: number;
+  solicitudId: number;
+  solicitudCodigo: string;
+  fechaSolicitud: string;
+  fechaViaje: string | null;
+  empleadoId: number | null;
+  empleadoNombre: string | null;
+  cargo: string | null;
+  vehiculoId: number | null;
+  placa: string | null;
+  clienteId: number | null;
+  clienteNombre: string | null;
+  planId: number | null;
+  cantidad: number;
+  descripcion: string | null;
+  monto: number;
+  total: number;
+  estadoFondo: string;
+};
+
+function condicionesFondos(empresaId: number, f: FiltrosReporteGastos): { where: string; params: (string | number)[] } {
+  const condiciones = ["l.empresa_id = ?"];
+  const params: (string | number)[] = [empresaId];
+  if (f.fechaSolicitudDesde) { condiciones.push("s.fecha_requerimiento >= ?"); params.push(f.fechaSolicitudDesde); }
+  if (f.fechaSolicitudHasta) { condiciones.push("s.fecha_requerimiento <= ?"); params.push(f.fechaSolicitudHasta); }
+  if (f.fechaViajeDesde) { condiciones.push("l.fecha_viaje >= ?"); params.push(f.fechaViajeDesde); }
+  if (f.fechaViajeHasta) { condiciones.push("l.fecha_viaje <= ?"); params.push(f.fechaViajeHasta); }
+  if (f.clienteId) { condiciones.push("l.cliente_id = ?"); params.push(f.clienteId); }
+  if (f.vehiculoId) { condiciones.push("l.vehiculo_id = ?"); params.push(f.vehiculoId); }
+  if (f.placa) { condiciones.push("l.placa = ?"); params.push(f.placa); }
+  if (f.empleadoNombre) { condiciones.push("l.empleado_nombre = ?"); params.push(f.empleadoNombre); }
+  if (f.cargo) { condiciones.push("l.cargo = ?"); params.push(f.cargo); }
+  if (f.estadoFondo) { condiciones.push("s.estado = ?"); params.push(f.estadoFondo); }
+  if (f.descripcion) { condiciones.push("l.descripcion LIKE ?"); params.push(`%${f.descripcion}%`); }
+  return { where: condiciones.join(" AND "), params };
+}
+
+export async function reporteSolicitudesFondo(
+  empresaId: number,
+  f: FiltrosReporteGastos = {},
+): Promise<FilaSolicitudFondoReporte[]> {
+  const { where, params } = condicionesFondos(empresaId, f);
+  const rows = await query<RowDataPacket[]>(
+    `SELECT l.id AS linea_id, l.solicitud_id, s.codigo AS solicitud_codigo,
+            DATE_FORMAT(s.fecha_requerimiento, '%Y-%m-%d') AS fecha_solicitud,
+            DATE_FORMAT(l.fecha_viaje, '%Y-%m-%d') AS fecha_viaje,
+            l.empleado_id, l.empleado_nombre, l.cargo,
+            l.vehiculo_id, l.placa,
+            l.cliente_id, l.cliente_nombre,
+            l.plan_id, l.cantidad, l.descripcion, l.monto,
+            s.estado
+     FROM tms_solicitud_fondo_lineas l
+     INNER JOIN tms_solicitudes_fondo s ON s.id = l.solicitud_id AND s.empresa_id = l.empresa_id
+     WHERE ${where}
+     ORDER BY s.fecha_requerimiento DESC, l.solicitud_id DESC, l.orden, l.id`,
+    params,
+  );
+  return rows.map((r) => {
+    const cantidad = Number(r.cantidad ?? 1);
+    const monto = Number(r.monto ?? 0);
+    return {
+      lineaId: Number(r.linea_id),
+      solicitudId: Number(r.solicitud_id),
+      solicitudCodigo: String(r.solicitud_codigo),
+      fechaSolicitud: String(r.fecha_solicitud),
+      fechaViaje: r.fecha_viaje != null ? String(r.fecha_viaje) : null,
+      empleadoId: r.empleado_id != null ? Number(r.empleado_id) : null,
+      empleadoNombre: r.empleado_nombre != null ? String(r.empleado_nombre) : null,
+      cargo: r.cargo != null ? String(r.cargo) : null,
+      vehiculoId: r.vehiculo_id != null ? Number(r.vehiculo_id) : null,
+      placa: r.placa != null ? String(r.placa) : null,
+      clienteId: r.cliente_id != null ? Number(r.cliente_id) : null,
+      clienteNombre: r.cliente_nombre != null ? String(r.cliente_nombre) : null,
+      planId: r.plan_id != null ? Number(r.plan_id) : null,
+      cantidad,
+      descripcion: r.descripcion != null ? String(r.descripcion) : null,
+      monto,
+      total: cantidad * monto,
+      estadoFondo: String(r.estado),
     };
   });
 }

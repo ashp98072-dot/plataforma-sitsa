@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 
-type TipoReporte = "viaje" | "unidad" | "cliente" | "categoria" | "periodo" | "viaticos" | "rentabilidad";
+type TipoReporte = "viaje" | "unidad" | "cliente" | "categoria" | "periodo" | "viaticos" | "rentabilidad" | "fondos";
 
 const TIPOS: { value: TipoReporte; label: string }[] = [
   { value: "viaje", label: "Gastos por viaje" },
@@ -13,12 +13,20 @@ const TIPOS: { value: TipoReporte; label: string }[] = [
   { value: "periodo", label: "Gastos por período" },
   { value: "viaticos", label: "Viáticos por viaje/empleado" },
   { value: "rentabilidad", label: "Rentabilidad por viaje" },
+  { value: "fondos", label: "Solicitudes de fondo" },
 ];
 
 type FilaAgregada = { clave: string; etiqueta: string; registros: number; totalMonto: number };
 type FilaViatico = { planCodigo: string; fechaPlan: string; personalNombre: string; rol: string; montoSugerido: number; montoAsignado: number; estado: string };
 // TMS-SIN-COSTO-OPERATIVO-1: sin costoOperativo — negocio confirmó que ya no se utiliza.
 type FilaRentabilidad = { planCodigo: string; fechaPlan: string; clienteNombre: string | null; tarifaComercial: number; gastos: number; viaticos: number; utilidad: number };
+// SOLICITUD-FONDOS-REPORTE-1 — una fila por línea de solicitud de fondo (ver reporteSolicitudesFondo en reportes-gastos.ts).
+type FilaSolicitudFondo = {
+  lineaId: number; solicitudCodigo: string; fechaSolicitud: string; fechaViaje: string | null;
+  empleadoNombre: string | null; cargo: string | null; placa: string | null; clienteNombre: string | null;
+  cantidad: number; descripcion: string | null; monto: number; total: number; estadoFondo: string;
+};
+type ClienteCat = { id: number; nombre: string };
 
 const inputCls = "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
 const money = (n: number) => `Q${n.toLocaleString("es-GT", { minimumFractionDigits: 2 })}`;
@@ -28,6 +36,11 @@ const money = (n: number) => `Q${n.toLocaleString("es-GT", { minimumFractionDigi
  * rentabilidad. Solo lectura + exportación a Excel; cada tipo reutiliza el
  * endpoint único /tms/reportes/gastos?tipo=... (mismo criterio de
  * filtros que el exportador, nunca dos parseos que puedan divergir).
+ *
+ * SOLICITUD-FONDOS-REPORTE-1 — se agrega el tipo "fondos" con sus propios
+ * filtros (fecha solicitud/viaje por separado, cliente, placa, empleado,
+ * cargo, estado, descripción) — mismo endpoint compartido, nunca un
+ * segundo parser de filtros.
  */
 export default function ReportesGastosPage() {
   const slug = String(useParams().slug);
@@ -39,12 +52,51 @@ export default function ReportesGastosPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  // Filtros propios de "fondos" — no afectan a ningún otro tipo.
+  const [fSolicitudDesde, setFSolicitudDesde] = useState("");
+  const [fSolicitudHasta, setFSolicitudHasta] = useState("");
+  const [fViajeDesde, setFViajeDesde] = useState("");
+  const [fViajeHasta, setFViajeHasta] = useState("");
+  const [fClienteId, setFClienteId] = useState("");
+  const [fPlaca, setFPlaca] = useState("");
+  const [fEmpleadoNombre, setFEmpleadoNombre] = useState("");
+  const [fCargo, setFCargo] = useState("");
+  const [fEstadoFondo, setFEstadoFondo] = useState("");
+  const [fDescripcion, setFDescripcion] = useState("");
+  const [clientesCat, setClientesCat] = useState<ClienteCat[]>([]);
+
+  useEffect(() => {
+    if (tipo !== "fondos" || clientesCat.length) return;
+    fetch(`/api/empresas/${slug}/tms/gastos/catalogos`)
+      .then((r) => r.json())
+      .then((data) => setClientesCat((data.clientes ?? []) as ClienteCat[]))
+      .catch(() => undefined);
+  }, [slug, tipo, clientesCat.length]);
+
+  /** Filtros de "fondos" — únicos, compartidos por el listado y el export (nunca dos armados que puedan divergir). */
+  const paramsFondos = useCallback((p: URLSearchParams) => {
+    if (fSolicitudDesde) p.set("fechaSolicitudDesde", fSolicitudDesde);
+    if (fSolicitudHasta) p.set("fechaSolicitudHasta", fSolicitudHasta);
+    if (fViajeDesde) p.set("fechaViajeDesde", fViajeDesde);
+    if (fViajeHasta) p.set("fechaViajeHasta", fViajeHasta);
+    if (fClienteId) p.set("clienteId", fClienteId);
+    if (fPlaca) p.set("placa", fPlaca);
+    if (fEmpleadoNombre) p.set("empleadoNombre", fEmpleadoNombre);
+    if (fCargo) p.set("cargo", fCargo);
+    if (fEstadoFondo) p.set("estadoFondo", fEstadoFondo);
+    if (fDescripcion) p.set("descripcion", fDescripcion);
+  }, [fSolicitudDesde, fSolicitudHasta, fViajeDesde, fViajeHasta, fClienteId, fPlaca, fEmpleadoNombre, fCargo, fEstadoFondo, fDescripcion]);
+
   const cargar = useCallback(async () => {
     setLoading(true); setError("");
     try {
       const params = new URLSearchParams({ tipo });
-      if (fechaDesde) params.set("fechaDesde", fechaDesde);
-      if (fechaHasta) params.set("fechaHasta", fechaHasta);
+      if (tipo === "fondos") {
+        paramsFondos(params);
+      } else {
+        if (fechaDesde) params.set("fechaDesde", fechaDesde);
+        if (fechaHasta) params.set("fechaHasta", fechaHasta);
+      }
       const res = await fetch(`/api/empresas/${slug}/tms/reportes/gastos?${params.toString()}`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "No se pudo cargar el reporte.");
@@ -55,7 +107,7 @@ export default function ReportesGastosPage() {
     } finally {
       setLoading(false);
     }
-  }, [slug, tipo, fechaDesde, fechaHasta]);
+  }, [slug, tipo, fechaDesde, fechaHasta, paramsFondos]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -64,12 +116,16 @@ export default function ReportesGastosPage() {
 
   function exportarUrl() {
     const params = new URLSearchParams({ tipo });
-    if (fechaDesde) params.set("fechaDesde", fechaDesde);
-    if (fechaHasta) params.set("fechaHasta", fechaHasta);
+    if (tipo === "fondos") {
+      paramsFondos(params);
+    } else {
+      if (fechaDesde) params.set("fechaDesde", fechaDesde);
+      if (fechaHasta) params.set("fechaHasta", fechaHasta);
+    }
     return `/api/empresas/${slug}/tms/reportes/gastos/exportar?${params.toString()}`;
   }
 
-  const esAgregado = tipo !== "viaticos" && tipo !== "rentabilidad";
+  const esAgregado = tipo !== "viaticos" && tipo !== "rentabilidad" && tipo !== "fondos";
 
   return (
     <div className="space-y-4 p-4">
@@ -82,9 +138,55 @@ export default function ReportesGastosPage() {
         <select className={inputCls} value={tipo} onChange={(e) => setTipo(e.target.value as TipoReporte)}>
           {TIPOS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
         </select>
-        <input type="date" className={inputCls} value={fechaDesde} onChange={(e) => setFechaDesde(e.target.value)} />
-        <input type="date" className={inputCls} value={fechaHasta} onChange={(e) => setFechaHasta(e.target.value)} />
+        {tipo !== "fondos" ? (
+          <>
+            <input type="date" className={inputCls} value={fechaDesde} onChange={(e) => setFechaDesde(e.target.value)} />
+            <input type="date" className={inputCls} value={fechaHasta} onChange={(e) => setFechaHasta(e.target.value)} />
+          </>
+        ) : null}
       </div>
+
+      {tipo === "fondos" ? (
+        <div className="flex flex-wrap items-end gap-2 rounded-lg border border-[var(--border)] bg-[var(--panel)] p-2">
+          <label className="text-xs text-[var(--muted)]">Fecha solicitud desde
+            <input type="date" className={`${inputCls} mt-0.5 block`} value={fSolicitudDesde} onChange={(e) => setFSolicitudDesde(e.target.value)} />
+          </label>
+          <label className="text-xs text-[var(--muted)]">hasta
+            <input type="date" className={`${inputCls} mt-0.5 block`} value={fSolicitudHasta} onChange={(e) => setFSolicitudHasta(e.target.value)} />
+          </label>
+          <label className="text-xs text-[var(--muted)]">Fecha viaje desde
+            <input type="date" className={`${inputCls} mt-0.5 block`} value={fViajeDesde} onChange={(e) => setFViajeDesde(e.target.value)} />
+          </label>
+          <label className="text-xs text-[var(--muted)]">hasta
+            <input type="date" className={`${inputCls} mt-0.5 block`} value={fViajeHasta} onChange={(e) => setFViajeHasta(e.target.value)} />
+          </label>
+          <label className="text-xs text-[var(--muted)]">Cliente
+            <select className={`${inputCls} mt-0.5 block`} value={fClienteId} onChange={(e) => setFClienteId(e.target.value)}>
+              <option value="">Todos</option>
+              {clientesCat.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+            </select>
+          </label>
+          <label className="text-xs text-[var(--muted)]">Placa
+            <input className={`${inputCls} mt-0.5 block`} value={fPlaca} onChange={(e) => setFPlaca(e.target.value)} />
+          </label>
+          <label className="text-xs text-[var(--muted)]">Empleado
+            <input className={`${inputCls} mt-0.5 block`} placeholder="Nombre exacto" value={fEmpleadoNombre} onChange={(e) => setFEmpleadoNombre(e.target.value)} />
+          </label>
+          <label className="text-xs text-[var(--muted)]">Cargo
+            <input className={`${inputCls} mt-0.5 block`} value={fCargo} onChange={(e) => setFCargo(e.target.value)} />
+          </label>
+          <label className="text-xs text-[var(--muted)]">Estado
+            <select className={`${inputCls} mt-0.5 block`} value={fEstadoFondo} onChange={(e) => setFEstadoFondo(e.target.value)}>
+              <option value="">Todos</option>
+              {["Pendiente", "Autorizada", "Rechazada", "Liquidada"].map((e) => <option key={e} value={e}>{e}</option>)}
+            </select>
+          </label>
+          <label className="text-xs text-[var(--muted)]">Descripción
+            <input className={`${inputCls} mt-0.5 block`} placeholder="Búsqueda libre" value={fDescripcion} onChange={(e) => setFDescripcion(e.target.value)} />
+          </label>
+          <button type="button" className="rounded bg-[var(--accent)] px-3 py-1.5 text-xs font-medium text-white" onClick={() => void cargar()}>Buscar</button>
+        </div>
+      ) : null}
 
       {error ? <p className="text-sm text-red-300">{error}</p> : null}
       {loading ? <p className="text-sm text-[var(--muted)]">Cargando…</p> : null}
@@ -126,6 +228,30 @@ export default function ReportesGastosPage() {
                 <td className="px-2 py-1">{money(f.tarifaComercial)}</td>
                 <td className="px-2 py-1">{money(f.gastos)}</td><td className="px-2 py-1">{money(f.viaticos)}</td>
                 <td className={`px-2 py-1 ${f.utilidad < 0 ? "text-red-400" : "text-emerald-400"}`}>{money(f.utilidad)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+
+      {!loading && tipo === "fondos" ? (
+        <table className="w-full text-left text-sm">
+          <thead className="text-[var(--muted)]">
+            <tr>
+              <th className="px-2 py-1">Fecha solicitud</th><th className="px-2 py-1">Fecha viaje</th><th className="px-2 py-1">Nombre</th>
+              <th className="px-2 py-1">Cargo</th><th className="px-2 py-1">Placa</th><th className="px-2 py-1">Cliente</th>
+              <th className="px-2 py-1">Cantidad</th><th className="px-2 py-1">Descripción</th><th className="px-2 py-1">Total</th>
+              <th className="px-2 py-1">Estado</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(filas as FilaSolicitudFondo[]).map((f) => (
+              <tr key={f.lineaId} className="border-t border-[var(--border)]">
+                <td className="px-2 py-1">{f.fechaSolicitud}</td><td className="px-2 py-1">{f.fechaViaje ?? "—"}</td>
+                <td className="px-2 py-1">{f.empleadoNombre ?? "—"}</td><td className="px-2 py-1">{f.cargo ?? "—"}</td>
+                <td className="px-2 py-1">{f.placa ?? "—"}</td><td className="px-2 py-1">{f.clienteNombre ?? "—"}</td>
+                <td className="px-2 py-1">{f.cantidad}</td><td className="px-2 py-1">{f.descripcion ?? "—"}</td>
+                <td className="px-2 py-1">{money(f.total)}</td><td className="px-2 py-1">{f.estadoFondo}</td>
               </tr>
             ))}
           </tbody>

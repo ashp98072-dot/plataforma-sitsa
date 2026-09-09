@@ -3,7 +3,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 
-type LineaFondo = { id: number; categoria: string; descripcion: string | null; cantidad: number; monto: number; orden: number };
+type LineaFondo = {
+  id: number; categoria: string; descripcion: string | null; cantidad: number; monto: number; orden: number;
+  fechaViaje: string | null; empleadoNombre: string | null; cargo: string | null; placa: string | null; clienteNombre: string | null;
+};
 type SolicitudFondo = {
   id: number;
   codigo: string;
@@ -20,8 +23,27 @@ type SolicitudFondo = {
 const inputCls = "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
 const CATEGORIAS = ["Combustible", "Hospedaje", "Parqueo", "Cuadrilla", "Auxiliar extra", "Mantenimiento", "Arbitrios", "Transporte", "Otros"];
 
-type LineaForm = { categoria: string; descripcion: string; cantidad: string; monto: string };
-const LINEA_VACIA: LineaForm = { categoria: "", descripcion: "", cantidad: "1", monto: "" };
+/**
+ * SOLICITUD-FONDOS-REPORTE-1 — catálogos livianos ya existentes,
+ * compartidos con Gastos (/tms/gastos/catalogos, pensado desde su propio
+ * comentario para "los formularios de Gastos/Fondos") — no se duplica
+ * ningún catálogo nuevo.
+ */
+type Catalogos = {
+  empleados: { id: number; codigo: string; nombre: string; puesto: string | null }[];
+  vehiculos: { id: number; placa: string }[];
+  clientes: { id: number; nombre: string }[];
+  planes: { id: number; codigo: string }[];
+};
+
+type LineaForm = {
+  categoria: string; descripcion: string; cantidad: string; monto: string;
+  fechaViaje: string; empleadoId: string; vehiculoId: string; clienteId: string; planId: string;
+};
+const LINEA_VACIA: LineaForm = {
+  categoria: "", descripcion: "", cantidad: "1", monto: "",
+  fechaViaje: "", empleadoId: "", vehiculoId: "", clienteId: "", planId: "",
+};
 
 /**
  * TMS-GASTOS-REPORTES-1 (fase 1) — solicitudes de fondo (anticipo) con
@@ -46,6 +68,16 @@ export default function FondosPage() {
 
   const [expandido, setExpandido] = useState<number | null>(null);
   const [motivoRechazo, setMotivoRechazo] = useState<Record<number, string>>({});
+
+  const [catalogos, setCatalogos] = useState<Catalogos>({ empleados: [], vehiculos: [], clientes: [], planes: [] });
+  useEffect(() => {
+    fetch(`/api/empresas/${slug}/tms/gastos/catalogos`)
+      .then((r) => r.json())
+      .then((data) => setCatalogos({
+        empleados: data.empleados ?? [], vehiculos: data.vehiculos ?? [], clientes: data.clientes ?? [], planes: data.planes ?? [],
+      }))
+      .catch(() => undefined);
+  }, [slug]);
 
   const cargar = useCallback(async () => {
     setLoading(true); setError("");
@@ -84,7 +116,14 @@ export default function FondosPage() {
         requirenteNombre: requirenteNombre.trim(),
         fechaRequerimiento,
         observaciones: observaciones.trim() || null,
-        lineas: lineasValidas.map((l) => ({ categoria: l.categoria, descripcion: l.descripcion.trim() || null, cantidad: Number(l.cantidad) || 1, monto: Number(l.monto) })),
+        lineas: lineasValidas.map((l) => ({
+          categoria: l.categoria, descripcion: l.descripcion.trim() || null, cantidad: Number(l.cantidad) || 1, monto: Number(l.monto),
+          fechaViaje: l.fechaViaje || undefined,
+          empleadoId: l.empleadoId ? Number(l.empleadoId) : undefined,
+          vehiculoId: l.vehiculoId ? Number(l.vehiculoId) : undefined,
+          clienteId: l.clienteId ? Number(l.clienteId) : undefined,
+          planId: l.planId ? Number(l.planId) : undefined,
+        })),
       }),
     });
     const data = await res.json().catch(() => ({}));
@@ -140,18 +179,49 @@ export default function FondosPage() {
           </div>
           <div className="space-y-2">
             <p className="text-xs font-medium text-[var(--muted)]">Líneas de gasto</p>
-            {lineas.map((l, i) => (
-              <div key={i} className="grid grid-cols-2 gap-2 md:grid-cols-5">
-                <select className={inputCls} value={l.categoria} onChange={(e) => setLineas((ls) => ls.map((x, j) => j === i ? { ...x, categoria: e.target.value } : x))}>
-                  <option value="">Categoría…</option>
-                  {CATEGORIAS.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
-                <input className={inputCls} placeholder="Descripción" value={l.descripcion} onChange={(e) => setLineas((ls) => ls.map((x, j) => j === i ? { ...x, descripcion: e.target.value } : x))} />
-                <input type="number" min="0.01" step="0.01" className={inputCls} placeholder="Cantidad" value={l.cantidad} onChange={(e) => setLineas((ls) => ls.map((x, j) => j === i ? { ...x, cantidad: e.target.value } : x))} />
-                <input type="number" min="0.01" step="0.01" className={inputCls} placeholder="Monto (Q)" value={l.monto} onChange={(e) => setLineas((ls) => ls.map((x, j) => j === i ? { ...x, monto: e.target.value } : x))} />
-                <button type="button" onClick={() => setLineas((ls) => ls.filter((_, j) => j !== i))} className="text-red-400">Quitar</button>
-              </div>
-            ))}
+            {lineas.map((l, i) => {
+              const set = (patch: Partial<LineaForm>) => setLineas((ls) => ls.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+              const totalLinea = (Number(l.cantidad) || 1) * (Number(l.monto) || 0);
+              return (
+                <div key={i} className="space-y-1 rounded border border-[var(--border)]/60 p-2">
+                  <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+                    <select className={inputCls} value={l.categoria} onChange={(e) => set({ categoria: e.target.value })}>
+                      <option value="">Categoría…</option>
+                      {CATEGORIAS.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                    <input className={inputCls} placeholder="Descripción" value={l.descripcion} onChange={(e) => set({ descripcion: e.target.value })} />
+                    <input type="number" min="0.01" step="0.01" className={inputCls} placeholder="Cantidad" value={l.cantidad} onChange={(e) => set({ cantidad: e.target.value })} />
+                    <input type="number" min="0.01" step="0.01" className={inputCls} placeholder="Monto (Q)" value={l.monto} onChange={(e) => set({ monto: e.target.value })} />
+                    <button type="button" onClick={() => setLineas((ls) => ls.filter((_, j) => j !== i))} className="text-red-400">Quitar</button>
+                  </div>
+                  {/*
+                    SOLICITUD-FONDOS-REPORTE-1 — relaciones OPCIONALES por
+                    línea (empleado/unidad/cliente/viaje). Reutiliza los
+                    MISMOS catálogos que ya usa Gastos (sin duplicar) — el
+                    servidor resuelve nombre/cargo/placa/cliente y los
+                    congela como snapshot al guardar (fondos.ts).
+                  */}
+                  <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                    <select className={inputCls} value={l.empleadoId} onChange={(e) => set({ empleadoId: e.target.value })}>
+                      <option value="">Empleado (opcional)…</option>
+                      {catalogos.empleados.map((e) => <option key={e.id} value={e.id}>{e.nombre}{e.puesto ? ` (${e.puesto})` : ""}</option>)}
+                    </select>
+                    <select className={inputCls} value={l.vehiculoId} onChange={(e) => set({ vehiculoId: e.target.value })}>
+                      <option value="">Unidad (opcional)…</option>
+                      {catalogos.vehiculos.map((v) => <option key={v.id} value={v.id}>{v.placa}</option>)}
+                    </select>
+                    <select className={inputCls} value={l.clienteId} onChange={(e) => set({ clienteId: e.target.value })}>
+                      <option value="">Cliente (opcional)…</option>
+                      {catalogos.clientes.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                    </select>
+                    <label className="text-xs text-[var(--muted)]">Fecha de viaje
+                      <input type="date" className={`${inputCls} mt-0.5 w-full`} value={l.fechaViaje} onChange={(e) => set({ fechaViaje: e.target.value })} />
+                    </label>
+                  </div>
+                  <p className="text-right text-xs text-[var(--muted)]">Total de la línea: Q{totalLinea.toLocaleString("es-GT", { minimumFractionDigits: 2 })}</p>
+                </div>
+              );
+            })}
             <button type="button" onClick={() => setLineas((ls) => [...ls, { ...LINEA_VACIA }])} className="rounded border border-[var(--border)] px-2 py-1 text-xs">
               + Agregar línea
             </button>
@@ -195,10 +265,21 @@ export default function FondosPage() {
             {s.motivoRechazo ? <p className="mt-1 text-xs text-red-300">Motivo de rechazo: {s.motivoRechazo}</p> : null}
             {expandido === s.id ? (
               <table className="mt-2 w-full text-left text-xs">
-                <thead className="text-[var(--muted)]"><tr><th>Categoría</th><th>Descripción</th><th>Cantidad</th><th>Monto</th></tr></thead>
+                <thead className="text-[var(--muted)]">
+                  <tr>
+                    <th>Categoría</th><th>Descripción</th><th>Empleado</th><th>Cargo</th><th>Placa</th><th>Cliente</th>
+                    <th>Fecha viaje</th><th>Cantidad</th><th>Monto</th><th>Total línea</th>
+                  </tr>
+                </thead>
                 <tbody>
                   {s.lineas.map((l) => (
-                    <tr key={l.id}><td>{l.categoria}</td><td>{l.descripcion ?? "—"}</td><td>{l.cantidad}</td><td>Q{l.monto.toLocaleString("es-GT", { minimumFractionDigits: 2 })}</td></tr>
+                    <tr key={l.id}>
+                      <td>{l.categoria}</td><td>{l.descripcion ?? "—"}</td>
+                      <td>{l.empleadoNombre ?? "—"}</td><td>{l.cargo ?? "—"}</td><td>{l.placa ?? "—"}</td><td>{l.clienteNombre ?? "—"}</td>
+                      <td>{l.fechaViaje ?? "—"}</td><td>{l.cantidad}</td>
+                      <td>Q{l.monto.toLocaleString("es-GT", { minimumFractionDigits: 2 })}</td>
+                      <td>Q{(l.cantidad * l.monto).toLocaleString("es-GT", { minimumFractionDigits: 2 })}</td>
+                    </tr>
                   ))}
                 </tbody>
               </table>

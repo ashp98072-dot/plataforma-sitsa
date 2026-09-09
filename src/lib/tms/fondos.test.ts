@@ -14,17 +14,40 @@ function filaSolicitud(overrides: Partial<Record<string, unknown>> = {}) {
   };
 }
 
-function conexion(opts: { fallaEn?: string; estadoActual?: string; empleadoEnEmpresa?: boolean } = {}) {
+function conexion(opts: {
+  fallaEn?: string; estadoActual?: string; empleadoEnEmpresa?: boolean;
+  // SOLICITUD-FONDOS-REPORTE-1 — snapshot de línea: catálogos que
+  // resolverSnapshotLineaTx relee dentro de la transacción.
+  vehiculoEnEmpresa?: boolean; clienteEnEmpresa?: boolean; planEnEmpresa?: boolean;
+  empleadoNombre?: string; empleadoPuesto?: string | null; vehiculoPlaca?: string; clienteNombre?: string; planFecha?: string;
+} = {}) {
   const empleadoEnEmpresa = opts.empleadoEnEmpresa ?? true;
+  const vehiculoEnEmpresa = opts.vehiculoEnEmpresa ?? true;
+  const clienteEnEmpresa = opts.clienteEnEmpresa ?? true;
+  const planEnEmpresa = opts.planEnEmpresa ?? true;
   const conn = {
     beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn(),
     query: vi.fn(async (sql: string) => {
       if (sql.includes("FROM tms_solicitudes_fondo WHERE id")) {
         return [[{ id: 1, estado: opts.estadoActual ?? "Pendiente" }]];
       }
-      // AISLAMIENTO MULTIEMPRESA: SELECT id FROM empleados WHERE id = ? AND empresa_id = ?
+      // SOLICITUD-FONDOS-REPORTE-1: resolverSnapshotLineaTx — cada catálogo
+      // relecto por (id, empresa_id) dentro de la MISMA transacción.
+      if (sql.includes("nombre, puesto FROM empleados")) {
+        return [empleadoEnEmpresa ? [{ nombre: opts.empleadoNombre ?? "Juan Pérez", puesto: opts.empleadoPuesto ?? "Piloto" }] : []];
+      }
+      // AISLAMIENTO MULTIEMPRESA: SELECT id FROM empleados WHERE id = ? AND empresa_id = ? (requirente/autorizante)
       if (sql.includes("FROM empleados")) {
         return [empleadoEnEmpresa ? [{ id: 1 }] : []];
+      }
+      if (sql.includes("FROM flota_vehiculos")) {
+        return [vehiculoEnEmpresa ? [{ placa: opts.vehiculoPlaca ?? "P123ABC" }] : []];
+      }
+      if (sql.includes("FROM tms_clientes")) {
+        return [clienteEnEmpresa ? [{ nombre: opts.clienteNombre ?? "Acme" }] : []];
+      }
+      if (sql.includes("FROM tms_planes_viaje")) {
+        return [planEnEmpresa ? [{ fecha_plan: opts.planFecha ?? "2026-09-05" }] : []];
       }
       return [[]];
     }),
@@ -121,6 +144,91 @@ describe("crearSolicitudFondo", () => {
       lineas: [{ categoria: "Combustible", monto: 100 }],
     });
     expect(conn.commit).toHaveBeenCalledOnce();
+  });
+});
+
+/**
+ * SOLICITUD-FONDOS-REPORTE-1 — snapshot histórico por línea: cada línea
+ * puede relacionarse con empleado/vehículo/cliente/viaje; el servidor
+ * resuelve y CONGELA el nombre/cargo/placa/cliente real al momento de
+ * crear (nunca confía en texto enviado por el cliente HTTP), y valida
+ * aislamiento multiempresa en cada catálogo por separado.
+ */
+describe("crearSolicitudFondo — snapshot histórico por línea (empleado/vehículo/cliente/viaje)", () => {
+  it("varias líneas, cada una con sus propios datos de empleado/vehículo/cliente/viaje", async () => {
+    const conn = conexion({
+      empleadoNombre: "Heber Sitan", empleadoPuesto: "Piloto", vehiculoPlaca: "P111AAA", clienteNombre: "Cliente A",
+    });
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    await crearSolicitudFondo(7, {
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      lineas: [
+        { categoria: "Combustible", monto: 100, cantidad: 2, empleadoId: 4, vehiculoId: 9, clienteId: 5, fechaViaje: "2026-09-02" },
+        { categoria: "Hospedaje", monto: 150 }, // línea sin relaciones — sigue siendo válida
+      ],
+    }, "admin");
+    const insertsLinea = conn.execute.mock.calls.filter((c) => (c[0] as string).includes("INSERT INTO tms_solicitud_fondo_lineas"));
+    expect(insertsLinea).toHaveLength(2);
+    // empresa_id, solicitud_id, categoria, descripcion, cantidad, monto, orden,
+    // fecha_viaje, empleado_id, empleado_nombre, cargo, vehiculo_id, placa, cliente_id, cliente_nombre, plan_id
+    expect(insertsLinea[0][1]).toEqual([
+      7, 1, "Combustible", null, 2, 100, 0,
+      "2026-09-02", 4, "Heber Sitan", "Piloto", 9, "P111AAA", 5, "Cliente A", null,
+    ]);
+    expect(insertsLinea[1][1]).toEqual([
+      7, 1, "Hospedaje", null, 1, 150, 1,
+      null, null, null, null, null, null, null, null, null,
+    ]);
+    expect(conn.commit).toHaveBeenCalledOnce();
+  });
+
+  it("el snapshot SIEMPRE se resuelve del lado del servidor — nunca confía en nombre/placa/cliente enviados por el cliente HTTP (el tipo LineaFondoInput ni siquiera los acepta)", async () => {
+    const conn = conexion({ empleadoNombre: "Nombre Real En BD", empleadoPuesto: "Auxiliar" });
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    await crearSolicitudFondo(7, {
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      lineas: [{ categoria: "Combustible", monto: 100, empleadoId: 4 }],
+    });
+    const insertLinea = conn.execute.mock.calls.find((c) => (c[0] as string).includes("INSERT INTO tms_solicitud_fondo_lineas"))!;
+    expect(insertLinea[1]).toContain("Nombre Real En BD"); // releído de BD, no un valor inventado por el caller
+  });
+
+  it("fechaViaje explícita del caller SIEMPRE gana sobre la fecha del plan", async () => {
+    const conn = conexion({ planFecha: "2026-09-10" });
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    await crearSolicitudFondo(7, {
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      lineas: [{ categoria: "Combustible", monto: 100, planId: 8, fechaViaje: "2026-09-03" }],
+    });
+    const insertLinea = conn.execute.mock.calls.find((c) => (c[0] as string).includes("INSERT INTO tms_solicitud_fondo_lineas"))!;
+    expect(insertLinea[1]).toContain("2026-09-03"); // la fecha escrita a mano, NO la del plan (2026-09-10)
+  });
+
+  it("sin fechaViaje explícita, se completa con la fecha real del plan indicado (planId)", async () => {
+    const conn = conexion({ planFecha: "2026-09-10" });
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    await crearSolicitudFondo(7, {
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      lineas: [{ categoria: "Combustible", monto: 100, planId: 8 }],
+    });
+    const insertLinea = conn.execute.mock.calls.find((c) => (c[0] as string).includes("INSERT INTO tms_solicitud_fondo_lineas"))!;
+    expect(insertLinea[1]).toContain("2026-09-10");
+  });
+
+  it.each([
+    ["empleadoId", { empleadoId: 999 }, "empleadoEnEmpresa" as const, "El empleado indicado no pertenece a esta empresa."],
+    ["vehiculoId", { vehiculoId: 999 }, "vehiculoEnEmpresa" as const, "El vehículo indicado no pertenece a esta empresa."],
+    ["clienteId", { clienteId: 999 }, "clienteEnEmpresa" as const, "El cliente indicado no pertenece a esta empresa."],
+    ["planId", { planId: 999 }, "planEnEmpresa" as const, "El viaje indicado no pertenece a esta empresa."],
+  ])("AISLAMIENTO MULTIEMPRESA: rechaza una línea con %s de otra empresa, sin insertar nada", async (_campo, extra, flag, mensaje) => {
+    const conn = conexion({ [flag]: false });
+    await expect(crearSolicitudFondo(7, {
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      lineas: [{ categoria: "Combustible", monto: 100, ...extra }],
+    })).rejects.toThrow(mensaje);
+    expect(conn.rollback).toHaveBeenCalledOnce();
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(conn.execute.mock.calls.some((c) => (c[0] as string).includes("INSERT INTO tms_solicitud_fondo_lineas"))).toBe(false);
   });
 });
 

@@ -1328,6 +1328,12 @@ CREATE TABLE IF NOT EXISTS tms_solicitudes_fondo (
   CONSTRAINT fk_fondo_autorizante_ambito FOREIGN KEY (empresa_id, autorizante_empleado_id) REFERENCES empleados (empresa_id, id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- SOLICITUD-FONDOS-REPORTE-1 — ver sql/migrate-2026-09-solicitud-fondos-reporte.sql
+-- para el detalle de diseño: fecha_viaje/empleado_id/vehiculo_id/
+-- cliente_id/plan_id reutilizan el MISMO patrón de relación ya usado en
+-- tms_gastos_operativos; empleado_nombre/cargo/placa/cliente_nombre son
+-- SNAPSHOT de texto (no solo el id con JOIN en vivo) para que el reporte
+-- histórico no cambie si luego cambian nombres/placas en los catálogos.
 CREATE TABLE IF NOT EXISTS tms_solicitud_fondo_lineas (
   id INT AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,
@@ -1336,10 +1342,28 @@ CREATE TABLE IF NOT EXISTS tms_solicitud_fondo_lineas (
   descripcion VARCHAR(300) NULL,
   cantidad DECIMAL(10,2) NOT NULL DEFAULT 1,
   monto DECIMAL(12,2) NOT NULL,
+  fecha_viaje DATE NULL DEFAULT NULL,
+  empleado_id INT NULL DEFAULT NULL,
+  empleado_nombre VARCHAR(200) NULL DEFAULT NULL,
+  cargo VARCHAR(100) NULL DEFAULT NULL,
+  vehiculo_id INT NULL DEFAULT NULL,
+  placa VARCHAR(20) NULL DEFAULT NULL,
+  cliente_id INT NULL DEFAULT NULL,
+  cliente_nombre VARCHAR(200) NULL DEFAULT NULL,
+  plan_id INT NULL DEFAULT NULL,
   orden INT NOT NULL DEFAULT 0,
   INDEX idx_fondolin_solicitud (empresa_id, solicitud_id),
+  INDEX idx_fondolin_fviaje (empresa_id, fecha_viaje),
+  INDEX idx_fondolin_empleado (empresa_id, empleado_id),
+  INDEX idx_fondolin_vehiculo (empresa_id, vehiculo_id),
+  INDEX idx_fondolin_cliente (empresa_id, cliente_id),
+  INDEX idx_fondolin_plan (empresa_id, plan_id),
   CONSTRAINT fk_fondolin_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
-  CONSTRAINT fk_fondolin_solicitud_ambito FOREIGN KEY (empresa_id, solicitud_id) REFERENCES tms_solicitudes_fondo (empresa_id, id) ON DELETE CASCADE
+  CONSTRAINT fk_fondolin_solicitud_ambito FOREIGN KEY (empresa_id, solicitud_id) REFERENCES tms_solicitudes_fondo (empresa_id, id) ON DELETE CASCADE,
+  CONSTRAINT fk_fondolin_empleado_ambito FOREIGN KEY (empresa_id, empleado_id) REFERENCES empleados (empresa_id, id) ON DELETE RESTRICT,
+  CONSTRAINT fk_fondolin_vehiculo_ambito FOREIGN KEY (empresa_id, vehiculo_id) REFERENCES flota_vehiculos (empresa_id, id) ON DELETE RESTRICT,
+  CONSTRAINT fk_fondolin_cliente_ambito FOREIGN KEY (empresa_id, cliente_id) REFERENCES tms_clientes (empresa_id, id) ON DELETE RESTRICT,
+  CONSTRAINT fk_fondolin_plan_ambito FOREIGN KEY (empresa_id, plan_id) REFERENCES tms_planes_viaje (empresa_id, id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- COTIZADOR-TMS-1 — ver sql/migrate-2026-09-cotizador-tms.sql para el

@@ -28,6 +28,15 @@ const lineaSchema = z.object({
   descripcion: z.string().max(300).nullable().optional(),
   cantidad: z.number().positive().max(999999).optional(),
   monto: z.number().positive().max(9999999999.99),
+  // SOLICITUD-FONDOS-REPORTE-1: relaciones OPCIONALES — el servidor
+  // resuelve y congela el snapshot legible (nombre/cargo/placa/cliente),
+  // nunca se acepta uno enviado por el cliente HTTP (ver
+  // resolverSnapshotLineaTx en fondos.ts).
+  fechaViaje: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  empleadoId: z.number().int().positive().nullable().optional(),
+  vehiculoId: z.number().int().positive().nullable().optional(),
+  clienteId: z.number().int().positive().nullable().optional(),
+  planId: z.number().int().positive().nullable().optional(),
 });
 
 const schema = z.object({
