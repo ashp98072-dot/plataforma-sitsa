@@ -79,6 +79,13 @@ async function resolverUsuarioDeEmpresaTx(
   return { nombre: String(row.nombre), rol: row.rol_global != null ? String(row.rol_global) : null };
 }
 
+const ROLES_SOLICITANTE_OPERACIONES = new Set(["Operaciones", "GerenteOperaciones", "JefeOperaciones", "AuxiliarOperaciones"]);
+
+async function resolverSolicitanteOperacionesTx(conn: PoolConnection, empresaId: number, usuarioId: number | null): Promise<{ nombre: string; rol: string | null } | null> {
+  const usuario = await resolverUsuarioDeEmpresaTx(conn, empresaId, usuarioId);
+  return usuario && usuario.rol && ROLES_SOLICITANTE_OPERACIONES.has(usuario.rol) ? usuario : null;
+}
+
 /** Identidad real de sesión (nunca username) para una firma de Fondos — ver crearSolicitudFondo/cambiarEstadoSolicitudFondo. */
 export type IdentidadFirmante = { usuarioId: number; nombre: string; rol?: string | null };
 
@@ -128,7 +135,7 @@ async function resolverSnapshotLineaTx(
   conn: PoolConnection,
   empresaId: number,
   input: Pick<LineaFondoInput, "empleadoId" | "vehiculoId" | "clienteId" | "planId" | "fechaViaje">,
-): Promise<{ empleadoNombre: string | null; cargo: string | null; cuenta: string | null; placa: string | null; clienteNombre: string | null; fechaViaje: string | null }> {
+): Promise<{ empleadoNombre: string | null; cargo: string | null; cuenta: string | null; placa: string | null; clienteId: number | null; clienteNombre: string | null; fechaViaje: string | null }> {
   let empleadoNombre: string | null = null;
   let cargo: string | null = null;
   // SOLICITUD-FONDOS-PDF-AUTORIZADO-1 — `cuenta` es empleados.cuenta_bancaria
@@ -149,6 +156,7 @@ async function resolverSnapshotLineaTx(
     if (!rows[0]) throw new Error("El vehículo indicado no pertenece a esta empresa.");
     placa = String(rows[0].placa);
   }
+  let clienteId = input.clienteId ?? null;
   let clienteNombre: string | null = null;
   if (input.clienteId != null) {
     const rows = await queryConn<RowDataPacket[]>(conn, "SELECT nombre FROM tms_clientes WHERE id = ? AND empresa_id = ? LIMIT 1", [input.clienteId, empresaId]);
@@ -158,13 +166,18 @@ async function resolverSnapshotLineaTx(
   let fechaViaje = input.fechaViaje ?? null;
   if (input.planId != null) {
     const rows = await queryConn<RowDataPacket[]>(conn,
-      "SELECT DATE_FORMAT(fecha_plan, '%Y-%m-%d') AS fecha_plan FROM tms_planes_viaje WHERE id = ? AND empresa_id = ? LIMIT 1",
+      `SELECT p.cliente_id, c.nombre AS cliente_nombre, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan
+       FROM tms_planes_viaje p
+       LEFT JOIN tms_clientes c ON c.id = p.cliente_id AND c.empresa_id = p.empresa_id
+       WHERE p.id = ? AND p.empresa_id = ? LIMIT 1`,
       [input.planId, empresaId],
     );
     if (!rows[0]) throw new Error("El viaje indicado no pertenece a esta empresa.");
+    clienteId = rows[0].cliente_id != null ? Number(rows[0].cliente_id) : null;
+    clienteNombre = rows[0].cliente_nombre != null ? String(rows[0].cliente_nombre) : null;
     if (fechaViaje == null) fechaViaje = String(rows[0].fecha_plan);
   }
-  return { empleadoNombre, cargo, cuenta, placa, clienteNombre, fechaViaje };
+  return { empleadoNombre, cargo, cuenta, placa, clienteId, clienteNombre, fechaViaje };
 }
 
 export const ESTADOS_FONDO = ["Pendiente", "Autorizada", "Rechazada", "Liquidada"] as const;
@@ -371,6 +384,8 @@ export type SolicitudFondoInput = {
    * se inventa una firma para ese caso.
    */
   requirenteUsuarioId?: number | null;
+  /** Usuario de Operaciones que solicita el fondo; se elige explícitamente y nunca se infiere de la sesión. */
+  solicitanteUsuarioId?: number | null;
   fechaRequerimiento: string;
   observaciones?: string | null;
   lineas: LineaFondoInput[];
@@ -393,7 +408,7 @@ export async function crearSolicitudFondo(
   empresaId: number,
   input: SolicitudFondoInput,
   creadoPor?: string | null,
-  solicitante?: IdentidadFirmante | null,
+  solicitanteLegado?: IdentidadFirmante | null,
 ): Promise<SolicitudFondo> {
   if (!input.fechaRequerimiento) throw new Error("Fecha de requerimiento requerida.");
   if (!input.requirenteEmpleadoId && !input.requirenteUsuarioId && !input.requirenteNombre?.trim()) {
@@ -426,6 +441,12 @@ export async function crearSolicitudFondo(
       requirenteUsuario = await resolverUsuarioDeEmpresaTx(conn, empresaId, input.requirenteUsuarioId);
       if (!requirenteUsuario) throw new Error("El usuario requirente indicado no pertenece a esta empresa.");
     }
+    const solicitanteId = input.solicitanteUsuarioId ?? solicitanteLegado?.usuarioId ?? null;
+    const solicitanteUsuario = solicitanteId == null ? null
+      : input.solicitanteUsuarioId != null
+        ? await resolverSolicitanteOperacionesTx(conn, empresaId, solicitanteId)
+        : await resolverUsuarioDeEmpresaTx(conn, empresaId, solicitanteId);
+    if (solicitanteId != null && !solicitanteUsuario) throw new Error("El usuario solicitante indicado no pertenece a esta empresa.");
 
     const r = await executeConn(conn,
       `INSERT INTO tms_solicitudes_fondo
@@ -442,8 +463,8 @@ export async function crearSolicitudFondo(
         total,
         input.observaciones?.trim() || null,
         creadoPor ?? null,
-        solicitante?.usuarioId ?? null,
-        solicitante?.nombre ?? null,
+        solicitanteId,
+        solicitanteUsuario?.nombre ?? solicitanteLegado?.nombre ?? null,
       ],
     );
     solicitudId = Number(r.insertId);
@@ -460,7 +481,7 @@ export async function crearSolicitudFondo(
         [
           empresaId, solicitudId, l.categoria, l.descripcion?.trim() || null, l.cantidad ?? 1, l.monto, orden,
           snapshot.fechaViaje, l.empleadoId ?? null, snapshot.empleadoNombre, snapshot.cargo, snapshot.cuenta,
-          l.vehiculoId ?? null, snapshot.placa, l.clienteId ?? null, snapshot.clienteNombre, l.planId ?? null,
+          l.vehiculoId ?? null, snapshot.placa, snapshot.clienteId, snapshot.clienteNombre, l.planId ?? null,
         ],
       );
       orden += 1;
@@ -471,14 +492,14 @@ export async function crearSolicitudFondo(
     // real) — BEST-EFFORT: a diferencia de autorizar, NUNCA bloquea la
     // creación por falta de firma; sin ella, el PDF muestra el nombre +
     // espacio en blanco (§3/§5: "no inventar una firma").
-    if (solicitante?.usuarioId) {
-      const bytes = await leerBytesFirmaGuardada(solicitante.usuarioId);
+    if (solicitanteId) {
+      const bytes = await leerBytesFirmaGuardada(solicitanteId);
       if (bytes) {
         const imagen = await guardarImagenFirmaFondo(empresaId, solicitudId, "solicitar", bytes);
         archivosFirmaEscritos.push(imagen.relative);
         await crearFirmaInterna(conn, {
-          empresaId, usuarioId: solicitante.usuarioId, empleadoId: null,
-          nombreFirmante: solicitante.nombre, rolFirmante: solicitante.rol ?? "",
+          empresaId, usuarioId: solicitanteId, empleadoId: null,
+          nombreFirmante: solicitanteUsuario?.nombre ?? solicitanteLegado?.nombre ?? "", rolFirmante: solicitanteUsuario?.rol ?? solicitanteLegado?.rol ?? "",
           accion: "SOLICITAR_FONDO", modulo: "FONDOS", entidadTipo: "SOLICITUD_FONDO", entidadId: solicitudId,
           valoresRelevantes: { solicitudId, codigo, total },
           imagen, metodo: "FIRMA_MANUSCRITA", origenFirma: "GUARDADA",
@@ -526,6 +547,7 @@ export type SolicitudFondoUpdate = {
   requirenteNombre?: string | null;
   /** SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§3) — mismo criterio que en crearSolicitudFondo: opcional, resuelto/validado contra esta empresa, y captura una nueva firma snapshot (REQUERIR_FONDO) si el usuario seleccionado tiene "Mi firma" guardada. */
   requirenteUsuarioId?: number | null;
+  solicitanteUsuarioId?: number | null;
   observaciones?: string | null;
   /**
    * SOLICITUD-FONDOS-REPORTE-1 (pendiente 1 del PR #211) — si viene,
@@ -571,7 +593,7 @@ export async function actualizarSolicitudFondo(
   try {
     await conn.beginTransaction();
     const rows = await queryConn<RowDataPacket[]>(conn,
-      `SELECT id, estado, requirente_empleado_id, requirente_nombre, requirente_usuario_id,
+      `SELECT id, estado, requirente_empleado_id, requirente_nombre, requirente_usuario_id, solicitante_usuario_id, solicitante_nombre,
               DATE_FORMAT(fecha_requerimiento, '%Y-%m-%d') AS fecha_requerimiento, observaciones, total
        FROM tms_solicitudes_fondo WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
       [id, empresaId],
@@ -597,11 +619,22 @@ export async function actualizarSolicitudFondo(
       requirenteUsuario = await resolverUsuarioDeEmpresaTx(conn, empresaId, input.requirenteUsuarioId);
       if (!requirenteUsuario) throw new Error("El usuario requirente indicado no pertenece a esta empresa.");
     }
+    let solicitanteUsuario: { nombre: string; rol: string | null } | null = null;
+    const solicitanteUsuarioCambio = input.solicitanteUsuarioId !== undefined
+      && input.solicitanteUsuarioId !== (actual.solicitante_usuario_id != null ? Number(actual.solicitante_usuario_id) : null);
+    if (input.solicitanteUsuarioId != null) {
+      solicitanteUsuario = await resolverSolicitanteOperacionesTx(conn, empresaId, input.solicitanteUsuarioId);
+      if (!solicitanteUsuario) throw new Error("El usuario solicitante indicado no pertenece a esta empresa.");
+    }
     const total = input.lineas !== undefined ? calcularTotal(input.lineas) : Number(actual.total ?? 0);
 
+    const actualizarSolicitanteSql = input.solicitanteUsuarioId !== undefined ? ", solicitante_usuario_id = ?, solicitante_nombre = ?" : "";
+    const actualizarSolicitanteParams = input.solicitanteUsuarioId !== undefined
+      ? [input.solicitanteUsuarioId ?? null, solicitanteUsuario?.nombre ?? null]
+      : [];
     await executeConn(conn,
       `UPDATE tms_solicitudes_fondo
-       SET requirente_empleado_id = ?, requirente_nombre = ?, requirente_usuario_id = ?, fecha_requerimiento = ?, total = ?, observaciones = ?
+       SET requirente_empleado_id = ?, requirente_nombre = ?, requirente_usuario_id = ?${actualizarSolicitanteSql}, fecha_requerimiento = ?, total = ?, observaciones = ?
        WHERE id = ? AND empresa_id = ?`,
       [
         input.requirenteEmpleadoId !== undefined ? input.requirenteEmpleadoId ?? null : actual.requirente_empleado_id,
@@ -609,6 +642,7 @@ export async function actualizarSolicitudFondo(
           ? requirenteUsuario.nombre
           : (input.requirenteNombre !== undefined ? input.requirenteNombre?.trim() || null : actual.requirente_nombre),
         input.requirenteUsuarioId !== undefined ? input.requirenteUsuarioId ?? null : actual.requirente_usuario_id,
+        ...actualizarSolicitanteParams,
         input.fechaRequerimiento ?? actual.fecha_requerimiento,
         total,
         input.observaciones !== undefined ? input.observaciones?.trim() || null : actual.observaciones,
@@ -616,6 +650,20 @@ export async function actualizarSolicitudFondo(
         empresaId,
       ],
     );
+
+    if (solicitanteUsuarioCambio && input.solicitanteUsuarioId != null && solicitanteUsuario) {
+      const bytes = await leerBytesFirmaGuardada(input.solicitanteUsuarioId);
+      if (bytes) {
+        const imagen = await guardarImagenFirmaFondo(empresaId, id, "solicitar", bytes);
+        archivosFirmaEscritos.push(imagen.relative);
+        await crearFirmaInterna(conn, {
+          empresaId, usuarioId: input.solicitanteUsuarioId, empleadoId: null,
+          nombreFirmante: solicitanteUsuario.nombre, rolFirmante: solicitanteUsuario.rol ?? "",
+          accion: "SOLICITAR_FONDO", modulo: "FONDOS", entidadTipo: "SOLICITUD_FONDO", entidadId: id,
+          valoresRelevantes: { solicitudId: id, total }, imagen, metodo: "FIRMA_MANUSCRITA", origenFirma: "GUARDADA",
+        });
+      }
+    }
 
     if (requirenteUsuarioCambio && input.requirenteUsuarioId != null && requirenteUsuario) {
       const bytes = await leerBytesFirmaGuardada(input.requirenteUsuarioId);
@@ -645,7 +693,7 @@ export async function actualizarSolicitudFondo(
           [
             empresaId, id, l.categoria, l.descripcion?.trim() || null, l.cantidad ?? 1, l.monto, orden,
             snapshot.fechaViaje, l.empleadoId ?? null, snapshot.empleadoNombre, snapshot.cargo, snapshot.cuenta,
-            l.vehiculoId ?? null, snapshot.placa, l.clienteId ?? null, snapshot.clienteNombre, l.planId ?? null,
+            l.vehiculoId ?? null, snapshot.placa, snapshot.clienteId, snapshot.clienteNombre, l.planId ?? null,
           ],
         );
         orden += 1;

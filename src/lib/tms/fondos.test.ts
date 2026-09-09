@@ -87,7 +87,7 @@ function conexion(opts: {
         return [clienteEnEmpresa ? [{ nombre: opts.clienteNombre ?? "Acme" }] : []];
       }
       if (sql.includes("FROM tms_planes_viaje")) {
-        return [planEnEmpresa ? [{ fecha_plan: opts.planFecha ?? "2026-09-05" }] : []];
+        return [planEnEmpresa ? [{ fecha_plan: opts.planFecha ?? "2026-09-05", cliente_id: 12, cliente_nombre: "Cliente del plan" }] : []];
       }
       // SOLICITUD-FONDOS-PDF-AUTORIZADO-1: resolverUsuarioDeEmpresaTx (requirente-usuario)
       if (sql.includes("FROM usuarios u")) {
@@ -267,6 +267,8 @@ describe("crearSolicitudFondo — snapshot histórico por línea (empleado/vehí
     });
     const insertLinea = conn.execute.mock.calls.find((c) => (c[0] as string).includes("INSERT INTO tms_solicitud_fondo_lineas"))!;
     expect(insertLinea[1]).toContain("2026-09-10");
+    expect(insertLinea[1]).toContain(12);
+    expect(insertLinea[1]).toContain("Cliente del plan");
   });
 
   it.each([
@@ -294,6 +296,19 @@ describe("crearSolicitudFondo — snapshot histórico por línea (empleado/vehí
  */
 describe("crearSolicitudFondo — firma real de solicitante y requirente (§1/§3 del ticket)", () => {
   const SOLICITANTE: IdentidadFirmante = { usuarioId: 5, nombre: "Mario Caal", rol: "Operaciones" };
+
+  it("selecciona solicitante explícito distinto del requirente y guarda ambos snapshots", async () => {
+    const conn = conexion({ usuarioNombre: "Persona de Operaciones", usuarioRol: "JefeOperaciones" });
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    await crearSolicitudFondo(7, {
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Gestora administrativa", solicitanteUsuarioId: 55,
+      lineas: [{ categoria: "Combustible", monto: 100 }],
+    }, "admin");
+    const insert = conn.execute.mock.calls.find((c) => (c[0] as string).includes("INSERT INTO tms_solicitudes_fondo"));
+    expect(insert?.[1]).toContain("Gestora administrativa");
+    expect(insert?.[1]).toContain(55);
+    expect(insert?.[1]).toContain("Persona de Operaciones");
+  });
 
   it("guarda el snapshot del SOLICITANTE al crear (nombre real + firma de 'Mi firma')", async () => {
     const conn = conexion();

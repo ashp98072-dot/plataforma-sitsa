@@ -11,8 +11,22 @@ import {
   reporteGastosPorViaje,
   reporteRentabilidadPorViaje,
   reporteSolicitudesFondo,
+  resumirSolicitudesFondo,
   reporteViaticosPorViajeEmpleado,
 } from "./reportes-gastos";
+
+describe("resumen de solicitudes de fondo", () => {
+  it("cuenta y suma cada solicitud una sola vez aunque tenga varias líneas", () => {
+    const base = { solicitudCodigo: "F", fechaSolicitud: "2026-09-01", fechaViaje: null, empleadoId: null, empleadoNombre: null, cargo: null, vehiculoId: null, placa: null, clienteId: null, clienteNombre: null, planId: null, cantidad: 1, descripcion: null, monto: 100, total: 100 };
+    const resumen = resumirSolicitudesFondo([
+      { ...base, lineaId: 1, solicitudId: 10, estadoFondo: "Autorizada", totalSolicitud: 1000 },
+      { ...base, lineaId: 2, solicitudId: 10, estadoFondo: "Autorizada", totalSolicitud: 1000 },
+      { ...base, lineaId: 3, solicitudId: 11, estadoFondo: "Liquidada", totalSolicitud: 500 },
+      { ...base, lineaId: 4, solicitudId: 12, estadoFondo: "Rechazada", totalSolicitud: 200 },
+    ]);
+    expect(resumen).toEqual({ cantidad: 3, totalSolicitado: 1700, totalAutorizado: 1500, totalLiquidado: 500, totalRechazado: 200 });
+  });
+});
 
 beforeEach(() => vi.resetAllMocks());
 

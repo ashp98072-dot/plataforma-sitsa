@@ -88,6 +88,8 @@ describe("exportarReporteFondosExcel (SOLICITUD-FONDOS-REPORTE-1)", () => {
       empleadoId: 4, empleadoNombre: "Heber Sitan", cargo: "Piloto",
       vehiculoId: 9, placa: "P111AAA", clienteId: 5, clienteNombre: "Cliente A",
       planId: 8, cantidad: 2, descripcion: "Viáticos de ruta", monto: 100, total: 200,
+      cuenta: "123-456", requirenteNombre: "Requirente", solicitanteNombre: "Solicitante", autorizanteNombre: "Autorizante",
+      fechaAutorizacion: "2026-09-03", totalSolicitud: 200,
       estadoFondo: "Autorizada",
       ...overrides,
     };
@@ -97,7 +99,7 @@ describe("exportarReporteFondosExcel (SOLICITUD-FONDOS-REPORTE-1)", () => {
     const buf = await exportarReporteFondosExcel([fila()]);
     const ws = await primeraHoja(buf);
     expect(ws.getRow(1).values).toEqual([
-      undefined, "Fecha solicitud", "Fecha viaje", "Nombre", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Total",
+      undefined, "Código solicitud", "Estado", "Fecha solicitud", "Fecha viaje", "Nombre", "Cuenta", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Monto unitario", "Total línea", "Requirente", "Solicitante", "Autorizante", "Fecha autorización", "Total solicitud",
     ]);
   });
 
@@ -105,17 +107,17 @@ describe("exportarReporteFondosExcel (SOLICITUD-FONDOS-REPORTE-1)", () => {
     const buf = await exportarReporteFondosExcel([fila()]);
     const ws = await primeraHoja(buf);
     expect(ws.getRow(2).values).toEqual([
-      undefined, "01/09/2026", "02/09/2026", "Heber Sitan", "Piloto", "P111AAA", "Cliente A", 2, "Viáticos de ruta", 200,
+      undefined, "FONDO-000010", "Autorizada", "01/09/2026", "02/09/2026", "Heber Sitan", "123-456", "Piloto", "P111AAA", "Cliente A", 2, "Viáticos de ruta", 100, 200, "Requirente", "Solicitante", "Autorizante", "03/09/2026", 200,
     ]);
-    expect(ws.getColumn(9).numFmt).toBe("Q#,##0.00"); // Total
-    expect(ws.getColumn(7).numFmt).toBe("0.00"); // Cantidad
+    expect(ws.getColumn(13).numFmt).toContain("Q");
+    expect(ws.getColumn(10).numFmt).toBe("0.00");
   });
 
   it("línea sin fecha de viaje (nunca ligada a un viaje) muestra '—', no revienta ni inventa una fecha", async () => {
     const buf = await exportarReporteFondosExcel([fila({ fechaViaje: null, empleadoNombre: null, cargo: null, placa: null, clienteNombre: null })]);
     const ws = await primeraHoja(buf);
     expect(ws.getRow(2).values).toEqual([
-      undefined, "01/09/2026", "—", "—", "—", "—", "—", 2, "Viáticos de ruta", 200,
+      undefined, "FONDO-000010", "Autorizada", "01/09/2026", "—", "—", "123-456", "—", "—", "—", 2, "Viáticos de ruta", 100, 200, "Requirente", "Solicitante", "Autorizante", "03/09/2026", 200,
     ]);
   });
 
@@ -124,13 +126,13 @@ describe("exportarReporteFondosExcel (SOLICITUD-FONDOS-REPORTE-1)", () => {
     const buf = await exportarReporteFondosExcel(filas);
     const ws = await primeraHoja(buf);
     expect(ws.rowCount).toBe(3); // encabezado + 2 filas, ni una fila extra ni una de menos
-    expect(ws.getRow(3).getCell(3).value).toBe("Otra Persona");
+    expect(ws.getRow(3).getCell(5).value).toBe("Otra Persona");
   });
 
   it("incluye autofiltro cubriendo encabezado y todas las filas", async () => {
     const buf = await exportarReporteFondosExcel([fila(), fila({ lineaId: 2 })]);
     const ws = await primeraHoja(buf);
-    expect(ws.autoFilter).toEqual("A1:I3");
+    expect(ws.autoFilter).toEqual("A1:R3");
   });
 
   it("nunca incluye columnas de ids internos (lineaId/solicitudId/empleadoId/vehiculoId/clienteId/planId)", async () => {

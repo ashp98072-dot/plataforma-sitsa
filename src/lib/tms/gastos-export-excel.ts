@@ -68,7 +68,7 @@ export async function exportarReporteFondosExcel(filas: FilaSolicitudFondoReport
   wb.creator = "Plataforma corporativa";
   const ws = wb.addWorksheet("Solicitudes de fondo", { views: [{ state: "frozen", ySplit: 1, showGridLines: false }] });
 
-  const headers = ["Fecha solicitud", "Fecha viaje", "Nombre", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Total"];
+  const headers = ["Código solicitud", "Estado", "Fecha solicitud", "Fecha viaje", "Nombre", "Cuenta", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Monto unitario", "Total línea", "Requirente", "Solicitante", "Autorizante", "Fecha autorización", "Total solicitud"];
   ws.addRow(headers);
   const header = ws.getRow(1);
   header.font = { bold: true, color: { argb: "FFFFFFFF" } };
@@ -77,27 +77,23 @@ export async function exportarReporteFondosExcel(filas: FilaSolicitudFondoReport
 
   for (const f of filas) {
     ws.addRow([
-      formatearFechaVisible(f.fechaSolicitud) || "—",
-      f.fechaViaje ? formatearFechaVisible(f.fechaViaje) : "—",
+      f.solicitudCodigo, f.estadoFondo,
+      formatearFechaVisible(f.fechaSolicitud) || "—", f.fechaViaje ? formatearFechaVisible(f.fechaViaje) : "—",
       f.empleadoNombre ?? "—",
-      f.cargo ?? "—",
-      f.placa ?? "—",
-      f.clienteNombre ?? "—",
-      f.cantidad,
-      f.descripcion ?? "—",
-      f.total,
+      f.cuenta ?? "—", f.cargo ?? "—", f.placa ?? "—", f.clienteNombre ?? "—",
+      f.cantidad, f.descripcion ?? "—", f.monto, f.total,
+      f.requirenteNombre ?? "—", f.solicitanteNombre ?? "—", f.autorizanteNombre ?? "—",
+      f.fechaAutorizacion ? formatearFechaVisible(f.fechaAutorizacion) : "—", f.totalSolicitud,
     ]);
   }
 
-  ws.autoFilter = { from: "A1", to: `I${Math.max(1, filas.length + 1)}` };
-  ws.columns = [14, 14, 26, 20, 14, 26, 12, 40, 16].map((width) => ({ width }));
-  ws.getColumn(7).numFmt = "0.00"; // Cantidad — numérica, admite fracciones (DECIMAL(10,2))
-  ws.getColumn(7).alignment = { horizontal: "center", vertical: "top" };
-  ws.getColumn(9).numFmt = "Q#,##0.00"; // Total — formato monetario GTQ
-  ws.getColumn(9).alignment = { horizontal: "right", vertical: "top" };
-  ws.getColumn(8).alignment = { vertical: "top", wrapText: true }; // Descripción — puede ser texto largo
+  ws.autoFilter = { from: "A1", to: `R${Math.max(1, filas.length + 1)}` };
+  ws.columns = [18,14,14,14,26,20,20,14,26,12,40,16,16,24,24,24,18,18].map((width) => ({ width }));
+  ws.getColumn(10).numFmt = "0.00";
+  for (const col of [12, 13, 18]) ws.getColumn(col).numFmt = '"Q"#,##0.00';
+  ws.getColumn(11).alignment = { vertical: "top", wrapText: true };
   for (let i = 2; i <= filas.length + 1; i++) {
-    for (const col of [1, 2, 3, 4, 5, 6]) ws.getRow(i).getCell(col).alignment = { vertical: "top" };
+    for (let col = 1; col <= 18; col++) ws.getRow(i).getCell(col).alignment = { vertical: "top" };
   }
 
   return Buffer.from(await wb.xlsx.writeBuffer());

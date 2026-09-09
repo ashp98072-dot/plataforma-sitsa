@@ -33,7 +33,8 @@ export async function GET(_req: Request, ctx: Ctx) {
       [eid],
     ),
     query<RowDataPacket[]>(
-      "SELECT id, codigo FROM tms_planes_viaje WHERE empresa_id = ? ORDER BY id DESC LIMIT 300",
+      `SELECT p.id, p.codigo, p.cliente_id, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan
+       FROM tms_planes_viaje p WHERE p.empresa_id = ? ORDER BY p.id DESC LIMIT 300`,
       [eid],
     ),
     // SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§3) — usuarios reales con acceso
@@ -43,7 +44,7 @@ export async function GET(_req: Request, ctx: Ctx) {
     // usuario_id, NUNCA por empleado_id, ver src/lib/firmas/usuario-firmas.ts),
     // mismo criterio inverso que empresasParaUsuario() en src/lib/empresas.ts.
     query<RowDataPacket[]>(
-      `SELECT DISTINCT u.id, u.nombre
+      `SELECT DISTINCT u.id, u.nombre, u.rol_global
        FROM usuarios u
        LEFT JOIN usuario_empresa ue ON ue.usuario_id = u.id AND ue.empresa_id = ?
        WHERE u.activo = 1 AND (ue.usuario_id IS NOT NULL OR u.acceso_todas_empresas = 1)
@@ -57,8 +58,9 @@ export async function GET(_req: Request, ctx: Ctx) {
       empleados: empleados.map((r) => ({ id: Number(r.id), codigo: String(r.codigo), nombre: String(r.nombre), puesto: r.puesto != null ? String(r.puesto) : null })),
       vehiculos: vehiculos.map((r) => ({ id: Number(r.id), placa: String(r.placa) })),
       clientes: clientes.map((r) => ({ id: Number(r.id), nombre: String(r.nombre) })),
-      planes: planes.map((r) => ({ id: Number(r.id), codigo: String(r.codigo) })),
+      planes: planes.map((r) => ({ id: Number(r.id), codigo: String(r.codigo), clienteId: r.cliente_id != null ? Number(r.cliente_id) : null, fechaPlan: String(r.fecha_plan) })),
       usuarios: usuarios.map((r) => ({ id: Number(r.id), nombre: String(r.nombre) })),
+      solicitantes: usuarios.filter((r) => ["Operaciones", "GerenteOperaciones", "JefeOperaciones", "AuxiliarOperaciones"].includes(String(r.rol_global ?? ""))).map((r) => ({ id: Number(r.id), nombre: String(r.nombre) })),
     },
     { headers: { "Cache-Control": "private, no-store" } },
   );

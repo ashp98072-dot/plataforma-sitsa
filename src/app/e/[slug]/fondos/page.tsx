@@ -13,6 +13,8 @@ type SolicitudFondo = {
   codigo: string;
   requirenteNombre: string | null;
   requirenteUsuarioId: number | null;
+  solicitanteUsuarioId: number | null;
+  solicitanteNombre: string | null;
   fechaRequerimiento: string;
   total: number;
   autorizanteNombre: string | null;
@@ -35,9 +37,10 @@ type Catalogos = {
   empleados: { id: number; codigo: string; nombre: string; puesto: string | null }[];
   vehiculos: { id: number; placa: string }[];
   clientes: { id: number; nombre: string }[];
-  planes: { id: number; codigo: string }[];
+  planes: { id: number; codigo: string; clienteId: number | null; fechaPlan: string }[];
   /** SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§3) — usuarios reales con acceso a esta empresa, para el selector "Requirente (usuario)". */
   usuarios: { id: number; nombre: string }[];
+  solicitantes: { id: number; nombre: string }[];
 };
 
 type LineaForm = {
@@ -81,6 +84,7 @@ export default function FondosPage() {
   // esta selección, el requirente sigue siendo solo texto libre/empleado
   // RRHH, sin firma (nunca se inventa una).
   const [requirenteUsuarioId, setRequirenteUsuarioId] = useState("");
+  const [solicitanteUsuarioId, setSolicitanteUsuarioId] = useState("");
   const [fechaRequerimiento, setFechaRequerimiento] = useState(new Date().toISOString().slice(0, 10));
   const [observaciones, setObservaciones] = useState("");
   const [lineas, setLineas] = useState<LineaForm[]>([{ ...LINEA_VACIA }]);
@@ -88,13 +92,13 @@ export default function FondosPage() {
   const [expandido, setExpandido] = useState<number | null>(null);
   const [motivoRechazo, setMotivoRechazo] = useState<Record<number, string>>({});
 
-  const [catalogos, setCatalogos] = useState<Catalogos>({ empleados: [], vehiculos: [], clientes: [], planes: [], usuarios: [] });
+  const [catalogos, setCatalogos] = useState<Catalogos>({ empleados: [], vehiculos: [], clientes: [], planes: [], usuarios: [], solicitantes: [] });
   useEffect(() => {
     fetch(`/api/empresas/${slug}/tms/gastos/catalogos`)
       .then((r) => r.json())
       .then((data) => setCatalogos({
         empleados: data.empleados ?? [], vehiculos: data.vehiculos ?? [], clientes: data.clientes ?? [],
-        planes: data.planes ?? [], usuarios: data.usuarios ?? [],
+        planes: data.planes ?? [], usuarios: data.usuarios ?? [], solicitantes: data.solicitantes ?? [],
       }))
       .catch(() => undefined);
   }, [slug]);
@@ -127,7 +131,7 @@ export default function FondosPage() {
   function cerrarFormulario() {
     setMostrarForm(false);
     setEditandoId(null);
-    setRequirenteNombre(""); setRequirenteUsuarioId(""); setObservaciones(""); setLineas([{ ...LINEA_VACIA }]);
+    setRequirenteNombre(""); setRequirenteUsuarioId(""); setSolicitanteUsuarioId(""); setObservaciones(""); setLineas([{ ...LINEA_VACIA }]);
   }
 
   /**
@@ -146,6 +150,7 @@ export default function FondosPage() {
     setEditandoId(completa.id);
     setRequirenteNombre(completa.requirenteNombre ?? "");
     setRequirenteUsuarioId(completa.requirenteUsuarioId != null ? String(completa.requirenteUsuarioId) : "");
+    setSolicitanteUsuarioId(completa.solicitanteUsuarioId != null ? String(completa.solicitanteUsuarioId) : "");
     setFechaRequerimiento(completa.fechaRequerimiento);
     setObservaciones(completa.observaciones ?? "");
     setLineas(completa.lineas.length
@@ -163,7 +168,8 @@ export default function FondosPage() {
 
   async function guardar() {
     setError(""); setMsg("");
-    if (!requirenteNombre.trim()) { setError("Indica el requirente."); return; }
+    if (!requirenteNombre.trim() && !requirenteUsuarioId) { setError("Indica el requirente."); return; }
+    if (!solicitanteUsuarioId) { setError("Selecciona el solicitante de Operaciones."); return; }
     const lineasValidas = lineas.filter((l) => l.categoria && Number(l.monto) > 0);
     if (!lineasValidas.length) { setError("Agrega al menos una línea de gasto válida."); return; }
     const lineasPayload = lineasValidas.map((l) => ({
@@ -182,6 +188,7 @@ export default function FondosPage() {
             accion: "editar",
             requirenteNombre: requirenteNombre.trim(),
             requirenteUsuarioId: requirenteUsuarioId ? Number(requirenteUsuarioId) : null,
+            solicitanteUsuarioId: Number(solicitanteUsuarioId),
             fechaRequerimiento,
             observaciones: observaciones.trim() || null,
             lineas: lineasPayload,
@@ -193,6 +200,7 @@ export default function FondosPage() {
           body: JSON.stringify({
             requirenteNombre: requirenteNombre.trim(),
             requirenteUsuarioId: requirenteUsuarioId ? Number(requirenteUsuarioId) : undefined,
+            solicitanteUsuarioId: Number(solicitanteUsuarioId),
             fechaRequerimiento,
             observaciones: observaciones.trim() || null,
             lineas: lineasPayload,
@@ -255,21 +263,17 @@ export default function FondosPage() {
           <p className="text-sm font-medium">{editandoId ? "Editar solicitud (Pendiente)" : "Nueva solicitud"}</p>
           <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
             <label className="text-xs text-[var(--muted)]">Requirente
-              <input className={`${inputCls} mt-0.5 w-full`} value={requirenteNombre} onChange={(e) => setRequirenteNombre(e.target.value)} disabled={!!requirenteUsuarioId} />
-            </label>
-            {/*
-              SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§3 del ticket) — al elegir
-              un usuario real, SU nombre manda sobre el texto libre de
-              arriba (el servidor lo resuelve igual, esto solo evita
-              confusión visual) y el PDF autorizado sale con su firma real
-              si tiene "Mi firma" guardada.
-            */}
-            <label className="text-xs text-[var(--muted)]">Requirente (usuario, opcional)
               <select className={`${inputCls} mt-0.5 w-full`} value={requirenteUsuarioId} onChange={(e) => setRequirenteUsuarioId(e.target.value)}>
-                <option value="">Sin usuario (solo texto libre)…</option>
+                <option value="">Ingresar nombre manualmente…</option>
                 {catalogos.usuarios.map((u) => <option key={u.id} value={u.id}>{u.nombre}</option>)}
               </select>
-              <span className="mt-0.5 block text-[10px]">Si eliges uno, el PDF autorizado sale con su nombre real y su firma de &quot;Mi firma&quot;, si la tiene guardada.</span>
+              {!requirenteUsuarioId ? <input aria-label="Nombre manual del requirente" className={`${inputCls} mt-1 w-full`} placeholder="Nombre del requirente" value={requirenteNombre} onChange={(e) => setRequirenteNombre(e.target.value)} /> : null}
+            </label>
+            <label className="text-xs text-[var(--muted)]">Solicitante
+              <select className={`${inputCls} mt-0.5 w-full`} value={solicitanteUsuarioId} onChange={(e) => setSolicitanteUsuarioId(e.target.value)}>
+                <option value="">Seleccionar usuario de Operaciones…</option>
+                {catalogos.solicitantes.map((u) => <option key={u.id} value={u.id}>{u.nombre}</option>)}
+              </select>
             </label>
             <label className="text-xs text-[var(--muted)]">Fecha de requerimiento
               <input type="date" className={`${inputCls} mt-0.5 w-full`} value={fechaRequerimiento} onChange={(e) => setFechaRequerimiento(e.target.value)} />
@@ -321,7 +325,10 @@ export default function FondosPage() {
                       sobrescribe aquí en el cliente una fecha que el usuario
                       ya haya escrito a mano.
                     */}
-                    <select className={inputCls} value={l.planId} onChange={(e) => set({ planId: e.target.value })}>
+                    <select className={inputCls} value={l.planId} onChange={(e) => {
+                      const plan = catalogos.planes.find((p) => String(p.id) === e.target.value);
+                      set({ planId: e.target.value, ...(plan?.clienteId ? { clienteId: String(plan.clienteId) } : {}), ...(!l.fechaViaje && plan?.fechaPlan ? { fechaViaje: plan.fechaPlan } : {}) });
+                    }}>
                       <option value="">Viaje (opcional)…</option>
                       {catalogos.planes.map((p) => <option key={p.id} value={p.id}>{p.codigo}</option>)}
                     </select>

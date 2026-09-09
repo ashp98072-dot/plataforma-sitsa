@@ -26,6 +26,7 @@ type FilaSolicitudFondo = {
   empleadoNombre: string | null; cargo: string | null; placa: string | null; clienteNombre: string | null;
   cantidad: number; descripcion: string | null; monto: number; total: number; estadoFondo: string;
 };
+type ResumenFondos = { cantidad: number; totalSolicitado: number; totalAutorizado: number; totalLiquidado: number; totalRechazado: number };
 type ClienteCat = { id: number; nombre: string };
 
 const inputCls = "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
@@ -51,6 +52,7 @@ export default function ReportesGastosPage() {
   const [etiqueta, setEtiqueta] = useState("Clave");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [resumenFondos, setResumenFondos] = useState<ResumenFondos | null>(null);
 
   // Filtros propios de "fondos" — no afectan a ningún otro tipo.
   const [fSolicitudDesde, setFSolicitudDesde] = useState("");
@@ -101,6 +103,7 @@ export default function ReportesGastosPage() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "No se pudo cargar el reporte.");
       setFilas(data.filas ?? []);
+      setResumenFondos(tipo === "fondos" ? data.resumen ?? null : null);
       setEtiqueta(data.etiqueta ?? "Clave");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error al cargar.");
@@ -190,6 +193,14 @@ export default function ReportesGastosPage() {
 
       {error ? <p className="text-sm text-red-300">{error}</p> : null}
       {loading ? <p className="text-sm text-[var(--muted)]">Cargando…</p> : null}
+
+      {!loading && tipo === "fondos" && resumenFondos ? (
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+          {[["Solicitudes", String(resumenFondos.cantidad)], ["Total solicitado", money(resumenFondos.totalSolicitado)], ["Total autorizado", money(resumenFondos.totalAutorizado)], ["Total liquidado", money(resumenFondos.totalLiquidado)], ["Total rechazado", money(resumenFondos.totalRechazado)]].map(([label, value]) => (
+            <div key={label} className="rounded-lg border border-[var(--border)] bg-[var(--panel)] p-3"><p className="text-xs text-[var(--muted)]">{label}</p><p className="font-semibold">{value}</p></div>
+          ))}
+        </div>
+      ) : null}
 
       {!loading && esAgregado ? (
         <table className="w-full text-left text-sm">
