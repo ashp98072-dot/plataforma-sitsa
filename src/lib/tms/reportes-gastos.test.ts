@@ -4,6 +4,7 @@ vi.mock("@/lib/db", () => ({ query: vi.fn() }));
 import { query } from "@/lib/db";
 import {
   filtrosReporteGastosDesdeUrl,
+  reporteGastosDetalle,
   reporteGastosPorCategoria,
   reporteGastosPorCliente,
   reporteGastosPorPeriodo,
@@ -12,6 +13,7 @@ import {
   reporteRentabilidadPorViaje,
   reporteSolicitudesFondo,
   resumirSolicitudesFondo,
+  resumirViaticosPorEstado,
   reporteViaticosPorViajeEmpleado,
 } from "./reportes-gastos";
 
@@ -64,19 +66,177 @@ describe("reportes agregados de gastos", () => {
   });
 });
 
+/**
+ * REPORTES-VIATICOS-GASTOS-DETALLE-1 (§1 del ticket) — detalle completo
+ * por viático: fecha de registro, fecha de viaje, código, ruta/destino
+ * (snapshot histórico del plan), nombre/cargo/cuenta bancaria (vía
+ * tms_personal.id_empleado -> empleados, § 6: no hay snapshot propio en
+ * tms_viaticos, el JOIN en vivo es la única fuente posible), placa,
+ * cliente, concepto (rol), montos, estado, autorización y entrega.
+ */
 describe("reporteViaticosPorViajeEmpleado", () => {
-  it("mapea filas del join tms_viaticos + tms_planes_viaje + tms_personal", async () => {
-    vi.mocked(query).mockResolvedValue([{
-      viatico_id: 1, plan_id: 2, plan_codigo: "PLAN-1", fecha_plan: "2026-09-01",
-      personal_id: 3, personal_nombre: "Juan Perez", rol: "Piloto",
-      monto_sugerido: "150.00", monto_asignado: "150.00", estado: "PROGRAMADO",
-    }] as never);
+  function filaCruda(overrides: Record<string, unknown> = {}) {
+    return {
+      viatico_id: 1, fecha_registro: "2026-09-01", plan_id: 2, plan_codigo: "PLAN-1", fecha_plan: "2026-09-02",
+      lugar_descarga_historico: "Escuintla",
+      personal_id: 3, personal_nombre: "Juan Perez", cargo: "Piloto", cuenta_bancaria: "1234567890",
+      placa: "P111AAA", cliente_id: 5, cliente_nombre: "Cliente A",
+      rol: "Piloto", monto_sugerido: "150.00", monto_asignado: "150.00", estado: "AUTORIZADO",
+      fecha_autorizacion: "2026-09-02", autorizado_por: "hsitan",
+      fecha_entrega: null, entregado_por: null,
+      observaciones_entrega: null, observaciones_liquidacion: null,
+      ...overrides,
+    };
+  }
+
+  it("mapea el detalle completo (§1 del ticket) del join tms_viaticos + plan + personal + empleados + unidad + cliente", async () => {
+    vi.mocked(query).mockResolvedValue([filaCruda()] as never);
     const [f] = await reporteViaticosPorViajeEmpleado(7);
     expect(f).toEqual({
-      viaticoId: 1, planId: 2, planCodigo: "PLAN-1", fechaPlan: "2026-09-01",
-      personalId: 3, personalNombre: "Juan Perez", rol: "Piloto",
-      montoSugerido: 150, montoAsignado: 150, estado: "PROGRAMADO",
+      viaticoId: 1, fechaRegistro: "2026-09-01", fechaViaje: "2026-09-02",
+      planId: 2, planCodigo: "PLAN-1", rutaDestino: "Escuintla",
+      personalId: 3, personalNombre: "Juan Perez", cargo: "Piloto", cuentaBancaria: "1234567890",
+      placa: "P111AAA", clienteId: 5, clienteNombre: "Cliente A", rol: "Piloto",
+      montoSugerido: 150, montoAsignado: 150, estado: "AUTORIZADO",
+      fechaAutorizacion: "2026-09-02", autorizadoPor: "hsitan",
+      fechaEntrega: null, entregadoPor: null, observaciones: null,
     });
+  });
+
+  it("observaciones: prefiere la de liquidación sobre la de entrega cuando ambas existen", async () => {
+    vi.mocked(query).mockResolvedValue([filaCruda({ observaciones_entrega: "Entrega ok", observaciones_liquidacion: "Liquidado sin novedad" })] as never);
+    const [f] = await reporteViaticosPorViajeEmpleado(7);
+    expect(f.observaciones).toBe("Liquidado sin novedad");
+  });
+
+  it("sin liquidación, usa la observación de entrega", async () => {
+    vi.mocked(query).mockResolvedValue([filaCruda({ observaciones_entrega: "Entrega ok", observaciones_liquidacion: null })] as never);
+    const [f] = await reporteViaticosPorViajeEmpleado(7);
+    expect(f.observaciones).toBe("Entrega ok");
+  });
+
+  it("sin empleado vinculado (tms_personal.id_empleado NULL): cargo cae a tp.tipo, cuenta bancaria queda null", async () => {
+    vi.mocked(query).mockResolvedValue([filaCruda({ cargo: "Piloto", cuenta_bancaria: null })] as never);
+    const [f] = await reporteViaticosPorViajeEmpleado(7);
+    expect(f.cargo).toBe("Piloto");
+    expect(f.cuentaBancaria).toBeNull();
+  });
+
+  it("§3 del ticket — filtra por placa, empleado (nombre parcial) y estado", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await reporteViaticosPorViajeEmpleado(7, { placa: "P111AAA", empleadoNombre: "Juan", estadoViatico: "LIQUIDADO" });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("COALESCE(fv.placa, u.placa) = ?");
+    expect(sql).toContain("per.nombre LIKE ?");
+    expect(sql).toContain("v.estado = ?");
+    expect(params).toEqual([7, "P111AAA", "%Juan%", "LIQUIDADO"]);
+  });
+
+  it("la placa viene de flota_vehiculos (dato maestro) con fallback a tms_unidades.placa — nunca u.placa solo", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await reporteViaticosPorViajeEmpleado(7);
+    const sql = vi.mocked(query).mock.calls[0][0] as string;
+    // JOIN a flota_vehiculos vía tms_unidades.flota_vehiculo_id (mismo
+    // patrón que resolverVehiculoDeUnidadTms/unidad-flota.ts).
+    expect(sql).toContain("LEFT JOIN flota_vehiculos fv ON fv.id = u.flota_vehiculo_id");
+    // Selección: COALESCE(fv.placa, u.placa) — nunca u.placa solo, porque
+    // tms_unidades.flota_vehiculo_id es nullable a propósito (backfill
+    // progresivo) y no debe perderse la placa de unidades sin vincular.
+    expect(sql).toContain("COALESCE(fv.placa, u.placa) AS placa");
+    // Toda aparición de "u.placa" en el SQL vive dentro de un COALESCE(...) —
+    // nunca queda un "u.placa" suelto en el SELECT o en el filtro.
+    const usosDeUPlaca = sql.match(/u\.placa/g) ?? [];
+    const usosDentroDeCoalesce = sql.match(/COALESCE\(fv\.placa, u\.placa\)/g) ?? [];
+    expect(usosDeUPlaca.length).toBe(usosDentroDeCoalesce.length);
+  });
+
+  it("nunca depende de tms_cliente_rutas — usa el snapshot histórico del plan (ruta_codigo_historico/lugar_descarga_historico)", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await reporteViaticosPorViajeEmpleado(7);
+    const sql = vi.mocked(query).mock.calls[0][0] as string;
+    expect(sql).not.toContain("tms_cliente_rutas");
+    expect(sql).toContain("lugar_descarga_historico");
+  });
+});
+
+describe("resumirViaticosPorEstado (§1 del ticket — totales por estado)", () => {
+  it("agrupa cantidad y suma de monto asignado por estado", () => {
+    const base = { viaticoId: 1, fechaRegistro: "2026-09-01", fechaViaje: "2026-09-01", planId: 1, planCodigo: "P", rutaDestino: null, personalId: 1, personalNombre: "X", cargo: null, cuentaBancaria: null, placa: null, clienteId: null, clienteNombre: null, rol: "Piloto", montoSugerido: 0, fechaAutorizacion: null, autorizadoPor: null, fechaEntrega: null, entregadoPor: null, observaciones: null };
+    const resumen = resumirViaticosPorEstado([
+      { ...base, viaticoId: 1, montoAsignado: 150, estado: "AUTORIZADO" },
+      { ...base, viaticoId: 2, montoAsignado: 100, estado: "AUTORIZADO" },
+      { ...base, viaticoId: 3, montoAsignado: 200, estado: "LIQUIDADO" },
+    ]);
+    expect(resumen).toEqual({
+      AUTORIZADO: { cantidad: 2, total: 250 },
+      LIQUIDADO: { cantidad: 1, total: 200 },
+    });
+  });
+
+  it("sin filas, devuelve un objeto vacío (nunca revienta)", () => {
+    expect(resumirViaticosPorEstado([])).toEqual({});
+  });
+});
+
+/**
+ * REPORTES-VIATICOS-GASTOS-DETALLE-1 (§2 del ticket) — detalle completo
+ * de Gastos Operativos, una fila por gasto (nunca agrupado).
+ */
+describe("reporteGastosDetalle", () => {
+  function filaCruda(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 1, fecha_solicitud: "2026-09-01", fecha_viaje: "2026-09-02",
+      plan_id: 2, plan_codigo: "PLAN-1",
+      empleado_id: 4, empleado_nombre: "Heber Sitan", cargo: "Piloto",
+      vehiculo_id: 9, placa: "P111AAA", cliente_id: 5, cliente_nombre: "Cliente A",
+      categoria: "Combustible", descripcion: "Diesel", cantidad: "2.00", monto: "100.00",
+      activo: 1, creado_por: "admin", observaciones: null,
+      ...overrides,
+    };
+  }
+
+  it("mapea el detalle completo y calcula total = cantidad × monto", async () => {
+    vi.mocked(query).mockResolvedValue([filaCruda()] as never);
+    const [f] = await reporteGastosDetalle(7);
+    expect(f).toEqual({
+      id: 1, fechaSolicitud: "2026-09-01", fechaViaje: "2026-09-02",
+      planId: 2, planCodigo: "PLAN-1", empleadoId: 4, empleadoNombre: "Heber Sitan", cargo: "Piloto",
+      vehiculoId: 9, placa: "P111AAA", clienteId: 5, clienteNombre: "Cliente A",
+      categoria: "Combustible", descripcion: "Diesel", cantidad: 2, monto: 100, total: 200,
+      activo: true, registradoPor: "admin", observaciones: null,
+    });
+  });
+
+  it("activo=0 se mapea a false (gasto anulado)", async () => {
+    vi.mocked(query).mockResolvedValue([filaCruda({ activo: 0 })] as never);
+    const [f] = await reporteGastosDetalle(7);
+    expect(f.activo).toBe(false);
+  });
+
+  it("§3 del ticket — filtra por empleadoId y estado (activo)", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await reporteGastosDetalle(7, { empleadoId: 4, activo: false });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("g.empleado_id = ?");
+    expect(sql).toContain("g.activo = ?");
+    expect(params).toEqual([7, 0, 4]);
+  });
+
+  it("activo=undefined (sin filtro de estado): incluye activos e inactivos, nunca fuerza activo=1", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await reporteGastosDetalle(7, {});
+    const sql = vi.mocked(query).mock.calls[0][0] as string;
+    expect(sql).not.toContain("g.activo = ?");
+  });
+
+  it("multiempresa: todos los JOIN exigen empresa_id igual, no solo el id", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await reporteGastosDetalle(7);
+    const sql = vi.mocked(query).mock.calls[0][0] as string;
+    expect(sql).toContain("p.empresa_id = g.empresa_id");
+    expect(sql).toContain("emp.empresa_id = g.empresa_id");
+    expect(sql).toContain("veh.empresa_id = g.empresa_id");
+    expect(sql).toContain("cli.empresa_id = g.empresa_id");
   });
 });
 
@@ -163,6 +323,13 @@ describe("SOLICITUD-FONDOS-REPORTE-1 — filtrosReporteGastosDesdeUrl (filtros p
       "http://x?placa=P123ABC&empleadoNombre=Heber+Sitan&cargo=Piloto&estadoFondo=Autorizada&descripcion=viaticos",
     ));
     expect(f).toMatchObject({ placa: "P123ABC", empleadoNombre: "Heber Sitan", cargo: "Piloto", estadoFondo: "Autorizada", descripcion: "viaticos" });
+  });
+
+  it("REPORTES-VIATICOS-GASTOS-DETALLE-1 — parsea empleadoId, estadoViatico y activo (1/0)", () => {
+    expect(filtrosReporteGastosDesdeUrl(new URL("http://x?empleadoId=4&estadoViatico=LIQUIDADO&activo=1")))
+      .toMatchObject({ empleadoId: 4, estadoViatico: "LIQUIDADO", activo: true });
+    expect(filtrosReporteGastosDesdeUrl(new URL("http://x?activo=0")).activo).toBe(false);
+    expect(filtrosReporteGastosDesdeUrl(new URL("http://x")).activo).toBeUndefined();
   });
 
   it("fecha con formato inválido para fondos se ignora, igual que fechaDesde/fechaHasta de gastos", () => {

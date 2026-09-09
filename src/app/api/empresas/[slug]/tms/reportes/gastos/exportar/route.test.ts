@@ -1,0 +1,150 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/lib/tenant", () => ({ requireTenantGastos: vi.fn() }));
+vi.mock("@/lib/tms/reportes-gastos", () => ({
+  TIPOS_REPORTE_GASTOS: ["viaje", "unidad", "cliente", "categoria", "periodo", "viaticos", "rentabilidad", "fondos", "gastosDetalle"],
+  filtrosReporteGastosDesdeUrl: vi.fn((url: URL) => ({
+    fechaDesde: url.searchParams.get("fechaDesde") ?? undefined,
+    fechaHasta: url.searchParams.get("fechaHasta") ?? undefined,
+  })),
+  obtenerReporteGastosPorTipo: vi.fn(),
+  resumirViaticosPorEstado: vi.fn(() => ({})),
+}));
+vi.mock("@/lib/tms/gastos-export-excel", () => ({
+  exportarAgregadoGastosExcel: vi.fn(() => Promise.resolve(Buffer.from("xlsx-agregado"))),
+  exportarGastosDetalleExcel: vi.fn(() => Promise.resolve(Buffer.from("xlsx-gastos"))),
+  exportarRentabilidadExcel: vi.fn(() => Promise.resolve(Buffer.from("xlsx-rentabilidad"))),
+  exportarReporteFondosExcel: vi.fn(() => Promise.resolve(Buffer.from("xlsx-fondos"))),
+  exportarViaticosReporteExcel: vi.fn(() => Promise.resolve(Buffer.from("xlsx-viaticos"))),
+}));
+vi.mock("@/lib/rrhh/export-files", () => ({
+  tablaAPdf: vi.fn(() => Promise.resolve(Buffer.from("pdf"))),
+}));
+vi.mock("@/lib/rrhh/dates", () => ({
+  hoyLocal: vi.fn(() => "2026-09-09"),
+  ahoraLocal: vi.fn(() => "2026-09-09 10:00:00"),
+  formatearTimestampVisible: vi.fn((v: string) => v),
+  formatearFechaVisible: vi.fn((v: string | null) => (v ? v.split("-").reverse().join("/") : "")),
+}));
+
+import { requireTenantGastos } from "@/lib/tenant";
+import { obtenerReporteGastosPorTipo } from "@/lib/tms/reportes-gastos";
+import { exportarAgregadoGastosExcel, exportarGastosDetalleExcel, exportarViaticosReporteExcel } from "@/lib/tms/gastos-export-excel";
+import { tablaAPdf } from "@/lib/rrhh/export-files";
+import { GET } from "./route";
+
+const ctx = { params: Promise.resolve({ slug: "prueba" }) };
+
+/**
+ * REPORTES-VIATICOS-GASTOS-DETALLE-1 — el export de "Reportes de gastos"
+ * ahora acepta `formato=pdf` SOLO para los dos reportes de detalle
+ * (viaticos/gastosDetalle); el resto de tipos (agregados/rentabilidad/
+ * fondos) sigue siendo Excel únicamente, sin cambios de comportamiento.
+ */
+beforeEach(() => {
+  vi.resetAllMocks();
+  vi.mocked(requireTenantGastos).mockResolvedValue(
+    { empresa: { id: 7, nombre: "SITSA" }, session: { id: 8, username: "ops1" } } as Awaited<ReturnType<typeof requireTenantGastos>>,
+  );
+});
+afterEach(() => vi.restoreAllMocks());
+
+describe("GET /tms/reportes/gastos/exportar", () => {
+  it("exige permiso antes de generar el archivo", async () => {
+    vi.mocked(requireTenantGastos).mockResolvedValue({ error: new Response(null, { status: 403 }) } as Awaited<ReturnType<typeof requireTenantGastos>>);
+    const res = await GET(new Request("http://localhost/x?tipo=viaticos"), ctx);
+    expect(res.status).toBe(403);
+    expect(obtenerReporteGastosPorTipo).not.toHaveBeenCalled();
+  });
+
+  it("tipo inválido -> 400, nunca genera nada", async () => {
+    const res = await GET(new Request("http://localhost/x?tipo=inventado"), ctx);
+    expect(res.status).toBe(400);
+    expect(obtenerReporteGastosPorTipo).not.toHaveBeenCalled();
+  });
+
+  it("tipo=categoria (agregado) sigue exportando SOLO Excel, incluso si se pide formato=pdf", async () => {
+    vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({ tipo: "categoria", etiqueta: "Categoría", filas: [] } as never);
+    const res = await GET(new Request("http://localhost/x?tipo=categoria&formato=pdf"), ctx);
+    expect(res.headers.get("Content-Type")).toContain("spreadsheetml");
+    expect(exportarAgregadoGastosExcel).toHaveBeenCalledTimes(1);
+    expect(tablaAPdf).not.toHaveBeenCalled();
+  });
+
+  describe("tipo=viaticos (§1/§4 del ticket)", () => {
+    const filaViatico = {
+      viaticoId: 1, fechaRegistro: "2026-09-01", fechaViaje: "2026-09-02", planId: 2, planCodigo: "PLAN-1",
+      rutaDestino: "Escuintla", personalId: 3, personalNombre: "Juan Perez", cargo: "Piloto",
+      cuentaBancaria: "1234567890", placa: "P111AAA", clienteId: 5, clienteNombre: "Cliente A",
+      rol: "Piloto", montoSugerido: 150, montoAsignado: 150, estado: "AUTORIZADO",
+      fechaAutorizacion: "2026-09-02", autorizadoPor: "hsitan", fechaEntrega: null, entregadoPor: null, observaciones: null,
+    };
+
+    it("formato=xlsx (default) reutiliza exportarViaticosReporteExcel", async () => {
+      vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({ tipo: "viaticos", filas: [filaViatico] } as never);
+      const res = await GET(new Request("http://localhost/x?tipo=viaticos"), ctx);
+      expect(res.headers.get("Content-Type")).toContain("spreadsheetml");
+      expect(exportarViaticosReporteExcel).toHaveBeenCalledWith([filaViatico]);
+      expect(tablaAPdf).not.toHaveBeenCalled();
+    });
+
+    it("formato=pdf genera PDF (tablaAPdf, landscape, modo tabla) con las columnas de detalle", async () => {
+      vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({ tipo: "viaticos", filas: [filaViatico] } as never);
+      const res = await GET(new Request("http://localhost/x?tipo=viaticos&formato=pdf"), ctx);
+      expect(res.headers.get("Content-Type")).toBe("application/pdf");
+      expect(tablaAPdf).toHaveBeenCalledTimes(1);
+      const llamada = vi.mocked(tablaAPdf).mock.calls[0][0];
+      expect(llamada.layout).toBe("landscape");
+      expect(llamada.modo).toBe("tabla");
+      expect(llamada.headers).toEqual(["Fecha viaje", "Código", "Nombre", "Cargo", "Cuenta", "Placa", "Cliente", "Concepto", "Monto", "Estado", "Autorizado por"]);
+    });
+
+    it("§1 del ticket — el PDF incluye una fila TOTAL GENERAL al final, con la cantidad de registros", async () => {
+      vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({
+        tipo: "viaticos",
+        filas: [filaViatico, { ...filaViatico, viaticoId: 2, montoAsignado: 100 }],
+      } as never);
+      await GET(new Request("http://localhost/x?tipo=viaticos&formato=pdf"), ctx);
+      const rows = vi.mocked(tablaAPdf).mock.calls[0][0].rows;
+      const filaTotal = rows.find((r) => r.includes("TOTAL GENERAL"));
+      expect(filaTotal).toBeDefined();
+      expect(filaTotal).toContain("2 reg.");
+    });
+
+    it("el subtítulo del PDF incluye el nombre de la empresa y el período filtrado", async () => {
+      vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({ tipo: "viaticos", filas: [] } as never);
+      await GET(new Request("http://localhost/x?tipo=viaticos&formato=pdf&fechaDesde=2026-09-01&fechaHasta=2026-09-08"), ctx);
+      const subtitulo = vi.mocked(tablaAPdf).mock.calls[0][0].subtitle;
+      expect(subtitulo).toContain("SITSA");
+      expect(subtitulo).toContain("01/09/2026");
+      expect(subtitulo).toContain("08/09/2026");
+    });
+  });
+
+  describe("tipo=gastosDetalle (§2/§4 del ticket)", () => {
+    const filaGasto = {
+      id: 1, fechaSolicitud: "2026-09-01", fechaViaje: "2026-09-02", planId: 2, planCodigo: "PLAN-1",
+      empleadoId: 4, empleadoNombre: "Heber Sitan", cargo: "Piloto", vehiculoId: 9, placa: "P111AAA",
+      clienteId: 5, clienteNombre: "Cliente A", categoria: "Combustible", descripcion: "Diesel",
+      cantidad: 2, monto: 100, total: 200, activo: true, registradoPor: "admin", observaciones: null,
+    };
+
+    it("formato=xlsx reutiliza exportarGastosDetalleExcel (nunca el agregado)", async () => {
+      vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({ tipo: "gastosDetalle", filas: [filaGasto] } as never);
+      const res = await GET(new Request("http://localhost/x?tipo=gastosDetalle"), ctx);
+      expect(res.headers.get("Content-Type")).toContain("spreadsheetml");
+      expect(exportarGastosDetalleExcel).toHaveBeenCalledWith([filaGasto]);
+      expect(exportarAgregadoGastosExcel).not.toHaveBeenCalled();
+    });
+
+    it("formato=pdf genera PDF de detalle, una fila por gasto (nunca agrupado)", async () => {
+      vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({ tipo: "gastosDetalle", filas: [filaGasto, { ...filaGasto, id: 2 }] } as never);
+      const res = await GET(new Request("http://localhost/x?tipo=gastosDetalle&formato=pdf"), ctx);
+      expect(res.headers.get("Content-Type")).toBe("application/pdf");
+      const rows = vi.mocked(tablaAPdf).mock.calls[0][0].rows;
+      // 2 filas de datos + 1 fila de total = 3
+      expect(rows).toHaveLength(3);
+      expect(rows[rows.length - 1]).toContain("TOTAL GENERAL");
+    });
+  });
+});

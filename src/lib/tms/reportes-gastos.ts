@@ -16,6 +16,12 @@ export type FiltrosReporteGastos = {
   vehiculoId?: number;
   categoria?: string;
   planId?: number;
+  /** REPORTES-VIATICOS-GASTOS-DETALLE-1 (§3 del ticket) — filtro "empleado" por id real (gastos: tms_gastos_operativos.empleado_id). Distinto de `empleadoNombre` (texto exacto, usado por el reporte de fondos sobre un snapshot). */
+  empleadoId?: number;
+  /** REPORTES-VIATICOS-GASTOS-DETALLE-1 — filtro "estado" del reporte de viáticos (tms_viaticos.estado: PROGRAMADO/AUTORIZADO/RECHAZADO/ENTREGADO/LIQUIDADO). Distinto de `estadoFondo` (estado de tms_solicitudes_fondo) y del "activo" de gastos operativos (ver `activo` abajo). */
+  estadoViatico?: string;
+  /** REPORTES-VIATICOS-GASTOS-DETALLE-1 — filtro "estado" del detalle de gastos operativos: true=solo activos, false=solo anulados, undefined=todos. */
+  activo?: boolean;
   /**
    * SOLICITUD-FONDOS-REPORTE-1 — filtros propios del reporte "fondos"
    * (tipo === "fondos"), sin efecto en ningún otro tipo de reporte de
@@ -51,13 +57,18 @@ export function filtrosReporteGastosDesdeUrl(url: URL): FiltrosReporteGastos {
   const clienteId = Number(p.get("clienteId"));
   const vehiculoId = Number(p.get("vehiculoId"));
   const planId = Number(p.get("planId"));
+  const empleadoId = Number(p.get("empleadoId"));
+  const activoRaw = p.get("activo");
   return {
     fechaDesde: fechaValida(p.get("fechaDesde")),
     fechaHasta: fechaValida(p.get("fechaHasta")),
     clienteId: Number.isInteger(clienteId) && clienteId > 0 ? clienteId : undefined,
     vehiculoId: Number.isInteger(vehiculoId) && vehiculoId > 0 ? vehiculoId : undefined,
     planId: Number.isInteger(planId) && planId > 0 ? planId : undefined,
+    empleadoId: Number.isInteger(empleadoId) && empleadoId > 0 ? empleadoId : undefined,
     categoria: p.get("categoria") || undefined,
+    estadoViatico: p.get("estadoViatico")?.trim() || undefined,
+    activo: activoRaw === "1" ? true : activoRaw === "0" ? false : undefined,
     fechaSolicitudDesde: fechaValida(p.get("fechaSolicitudDesde")),
     fechaSolicitudHasta: fechaValida(p.get("fechaSolicitudHasta")),
     fechaViajeDesde: fechaValida(p.get("fechaViajeDesde")),
@@ -70,14 +81,15 @@ export function filtrosReporteGastosDesdeUrl(url: URL): FiltrosReporteGastos {
   };
 }
 
-export const TIPOS_REPORTE_GASTOS = ["viaje", "unidad", "cliente", "categoria", "periodo", "viaticos", "rentabilidad", "fondos"] as const;
+export const TIPOS_REPORTE_GASTOS = ["viaje", "unidad", "cliente", "categoria", "periodo", "viaticos", "rentabilidad", "fondos", "gastosDetalle"] as const;
 export type TipoReporteGastos = (typeof TIPOS_REPORTE_GASTOS)[number];
 
 export type ResultadoReporteGastos =
   | { tipo: "viaje" | "unidad" | "cliente" | "categoria" | "periodo"; etiqueta: string; filas: FilaAgregadaGasto[] }
   | { tipo: "viaticos"; filas: FilaViaticoReporte[] }
   | { tipo: "rentabilidad"; filas: FilaRentabilidadViaje[] }
-  | { tipo: "fondos"; filas: FilaSolicitudFondoReporte[]; resumen: ResumenSolicitudesFondo };
+  | { tipo: "fondos"; filas: FilaSolicitudFondoReporte[]; resumen: ResumenSolicitudesFondo }
+  | { tipo: "gastosDetalle"; filas: FilaGastoDetalle[] };
 
 /**
  * Único punto que decide qué consulta corre para cada `tipo` — reutilizado
@@ -102,6 +114,7 @@ export async function obtenerReporteGastosPorTipo(
       const filas = await reporteSolicitudesFondo(empresaId, filtros);
       return { tipo, filas, resumen: resumirSolicitudesFondo(filas) };
     }
+    case "gastosDetalle": return { tipo, filas: await reporteGastosDetalle(empresaId, filtros) };
   }
 }
 
@@ -211,52 +224,220 @@ export async function reporteGastosPorPeriodo(empresaId: number, f: FiltrosRepor
   return rows.map(mapAgregada);
 }
 
+/**
+ * REPORTES-VIATICOS-GASTOS-DETALLE-1 — una fila por viático (persona +
+ * viaje), con el detalle completo pedido por el ticket: fecha de
+ * registro, fecha de viaje, código de viaje, ruta/destino (snapshot
+ * histórico del plan — ruta_codigo_historico/lugar_descarga_historico,
+ * NUNCA releídos de tms_cliente_rutas, que puede cambiar/desactivarse
+ * después), nombre/cargo/cuenta bancaria del colaborador, placa,
+ * cliente, concepto (rol Piloto/Auxiliar), monto, estado, autorización y
+ * entrega, observaciones.
+ *
+ * `cuentaBancaria`/`cargo` se resuelven vía tms_personal.id_empleado ->
+ * empleados (MISMO patrón ya usado repetidas veces en viaticos.ts,
+ * p. ej. DETALLE_SELECT) — no existe un snapshot propio para esto en
+ * tms_viaticos, así que esto no es "reconstruir un histórico que ya
+ * existía" (§6 del ticket): simplemente no hay otra fuente. `estado`,
+ * `autorizadoPor`/`entregadoPor` SÍ son columnas propias de tms_viaticos
+ * (nunca se reconstruyen) — mismo criterio ya aceptado en el resto de la
+ * app (viaticos-panel.tsx ya muestra `autorizadoPor` tal cual, sin
+ * resolverlo a un nombre "real" por firma electrónica).
+ *
+ * `placa` = COALESCE(flota_vehiculos.placa, tms_unidades.placa): el
+ * vínculo tms_unidades.flota_vehiculo_id es nullable a propósito
+ * (backfill progresivo, ver unidad-flota.ts / schema.sql), así que no
+ * toda unidad tiene todavía flota_vehiculo_id resuelto. tms_unidades.placa
+ * SIEMPRE existe (NOT NULL) y es el mismo fallback que ya usa
+ * resolverVehiculoDeUnidadTms — se prioriza flota_vehiculos.placa por ser
+ * el dato maestro de Flota, pero nunca a costa de perder la placa cuando
+ * el backfill todavía no llegó a esa unidad.
+ */
 export type FilaViaticoReporte = {
   viaticoId: number;
+  fechaRegistro: string;
+  fechaViaje: string;
   planId: number;
   planCodigo: string;
-  fechaPlan: string;
+  rutaDestino: string | null;
   personalId: number;
   personalNombre: string;
+  cargo: string | null;
+  cuentaBancaria: string | null;
+  placa: string | null;
+  clienteId: number | null;
+  clienteNombre: string | null;
   rol: string;
   montoSugerido: number;
   montoAsignado: number;
   estado: string;
+  fechaAutorizacion: string | null;
+  autorizadoPor: string | null;
+  fechaEntrega: string | null;
+  entregadoPor: string | null;
+  observaciones: string | null;
 };
 
-/** Viáticos por viaje/empleado — detalle (una fila por viático), listo para agrupar en la UI/Excel por viaje o por persona. */
-export async function reporteViaticosPorViajeEmpleado(
-  empresaId: number,
-  f: Pick<FiltrosReporteGastos, "fechaDesde" | "fechaHasta" | "clienteId" | "planId">= {},
-): Promise<FilaViaticoReporte[]> {
+function condicionesViaticos(empresaId: number, f: FiltrosReporteGastos): { where: string; params: (string | number)[] } {
   const condiciones = ["v.empresa_id = ?"];
   const params: (string | number)[] = [empresaId];
   if (f.fechaDesde) { condiciones.push("p.fecha_plan >= ?"); params.push(f.fechaDesde); }
   if (f.fechaHasta) { condiciones.push("p.fecha_plan <= ?"); params.push(f.fechaHasta); }
   if (f.clienteId) { condiciones.push("p.cliente_id = ?"); params.push(f.clienteId); }
   if (f.planId) { condiciones.push("v.plan_id = ?"); params.push(f.planId); }
+  if (f.placa) { condiciones.push("COALESCE(fv.placa, u.placa) = ?"); params.push(f.placa); }
+  if (f.empleadoNombre) { condiciones.push("per.nombre LIKE ?"); params.push(`%${f.empleadoNombre}%`); }
+  if (f.estadoViatico) { condiciones.push("v.estado = ?"); params.push(f.estadoViatico); }
+  return { where: condiciones.join(" AND "), params };
+}
+
+/** Viáticos — detalle (§1 del ticket): una fila por viático (persona/viaje), lista para Excel/PDF y para agrupar en la UI. */
+export async function reporteViaticosPorViajeEmpleado(
+  empresaId: number,
+  f: Pick<FiltrosReporteGastos, "fechaDesde" | "fechaHasta" | "clienteId" | "planId" | "placa" | "empleadoNombre" | "estadoViatico"> = {},
+): Promise<FilaViaticoReporte[]> {
+  const { where, params } = condicionesViaticos(empresaId, f);
   const rows = await query<RowDataPacket[]>(
-    `SELECT v.id AS viatico_id, v.plan_id, p.codigo AS plan_codigo, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan,
-            v.personal_id, per.nombre AS personal_nombre, v.rol, v.monto_sugerido, v.monto_asignado, v.estado
+    `SELECT v.id AS viatico_id, DATE_FORMAT(v.creado_en, '%Y-%m-%d') AS fecha_registro,
+            v.plan_id, p.codigo AS plan_codigo, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan,
+            p.lugar_descarga_historico,
+            v.personal_id, per.nombre AS personal_nombre,
+            COALESCE(e.puesto, per.tipo) AS cargo, e.cuenta_bancaria,
+            COALESCE(fv.placa, u.placa) AS placa,
+            p.cliente_id, cli.nombre AS cliente_nombre,
+            v.rol, v.monto_sugerido, v.monto_asignado, v.estado,
+            DATE_FORMAT(v.autorizado_en, '%Y-%m-%d') AS fecha_autorizacion, v.autorizado_por,
+            DATE_FORMAT(v.entregado_en, '%Y-%m-%d') AS fecha_entrega, v.entregado_por,
+            v.observaciones_entrega, v.observaciones_liquidacion
      FROM tms_viaticos v
      INNER JOIN tms_planes_viaje p ON p.id = v.plan_id AND p.empresa_id = v.empresa_id
      INNER JOIN tms_personal per ON per.id = v.personal_id AND per.empresa_id = v.empresa_id
-     WHERE ${condiciones.join(" AND ")}
+     LEFT JOIN empleados e ON e.id = per.id_empleado AND e.empresa_id = per.empresa_id
+     LEFT JOIN tms_unidades u ON u.id = p.unidad_id AND u.empresa_id = p.empresa_id
+     LEFT JOIN flota_vehiculos fv ON fv.id = u.flota_vehiculo_id AND fv.empresa_id = p.empresa_id
+     LEFT JOIN tms_clientes cli ON cli.id = p.cliente_id AND cli.empresa_id = p.empresa_id
+     WHERE ${where}
      ORDER BY p.fecha_plan DESC, v.id DESC`,
     params,
   );
   return rows.map((r) => ({
     viaticoId: Number(r.viatico_id),
+    fechaRegistro: String(r.fecha_registro),
+    fechaViaje: String(r.fecha_plan),
     planId: Number(r.plan_id),
     planCodigo: String(r.plan_codigo),
-    fechaPlan: String(r.fecha_plan),
+    rutaDestino: r.lugar_descarga_historico != null ? String(r.lugar_descarga_historico) : null,
     personalId: Number(r.personal_id),
     personalNombre: String(r.personal_nombre),
+    cargo: r.cargo != null ? String(r.cargo) : null,
+    cuentaBancaria: r.cuenta_bancaria != null ? String(r.cuenta_bancaria) : null,
+    placa: r.placa != null ? String(r.placa) : null,
+    clienteId: r.cliente_id != null ? Number(r.cliente_id) : null,
+    clienteNombre: r.cliente_nombre != null ? String(r.cliente_nombre) : null,
     rol: String(r.rol),
     montoSugerido: Number(r.monto_sugerido ?? 0),
     montoAsignado: Number(r.monto_asignado ?? 0),
     estado: String(r.estado),
+    fechaAutorizacion: r.fecha_autorizacion != null ? String(r.fecha_autorizacion) : null,
+    autorizadoPor: r.autorizado_por != null ? String(r.autorizado_por) : null,
+    fechaEntrega: r.fecha_entrega != null ? String(r.fecha_entrega) : null,
+    entregadoPor: r.entregado_por != null ? String(r.entregado_por) : null,
+    observaciones: r.observaciones_liquidacion != null ? String(r.observaciones_liquidacion) : (r.observaciones_entrega != null ? String(r.observaciones_entrega) : null),
   }));
+}
+
+/**
+ * REPORTES-VIATICOS-GASTOS-DETALLE-1 (§2 del ticket) — detalle de Gastos
+ * Operativos: una fila por gasto, nunca agrupado. `tms_gastos_operativos`
+ * no tiene snapshot propio de empleado/vehículo/cliente (a diferencia de
+ * tms_solicitud_fondo_lineas) — el JOIN en vivo es la ÚNICA fuente
+ * posible, no hay histórico que "reconstruir" (§6 del ticket).
+ * `numero_cuenta_pago` (columna propia del gasto, capturada al
+ * registrarlo) NO se agrega aquí — el ticket no la pide para este
+ * reporte (solo para Viáticos).
+ */
+export type FilaGastoDetalle = {
+  id: number;
+  fechaSolicitud: string;
+  fechaViaje: string | null;
+  planId: number | null;
+  planCodigo: string | null;
+  empleadoId: number | null;
+  empleadoNombre: string | null;
+  cargo: string | null;
+  vehiculoId: number | null;
+  placa: string | null;
+  clienteId: number | null;
+  clienteNombre: string | null;
+  categoria: string;
+  descripcion: string | null;
+  cantidad: number;
+  monto: number;
+  total: number;
+  activo: boolean;
+  registradoPor: string | null;
+  observaciones: string | null;
+};
+
+function condicionesGastosDetalle(empresaId: number, f: FiltrosReporteGastos): { where: string; params: (string | number)[] } {
+  const condiciones = ["g.empresa_id = ?"];
+  const params: (string | number)[] = [empresaId];
+  if (f.activo !== undefined) { condiciones.push("g.activo = ?"); params.push(f.activo ? 1 : 0); }
+  if (f.fechaDesde) { condiciones.push("COALESCE(g.fecha_viaje, g.fecha_solicitud) >= ?"); params.push(f.fechaDesde); }
+  if (f.fechaHasta) { condiciones.push("COALESCE(g.fecha_viaje, g.fecha_solicitud) <= ?"); params.push(f.fechaHasta); }
+  if (f.clienteId) { condiciones.push("g.cliente_id = ?"); params.push(f.clienteId); }
+  if (f.vehiculoId) { condiciones.push("g.vehiculo_id = ?"); params.push(f.vehiculoId); }
+  if (f.empleadoId) { condiciones.push("g.empleado_id = ?"); params.push(f.empleadoId); }
+  if (f.categoria) { condiciones.push("g.categoria = ?"); params.push(f.categoria); }
+  if (f.planId) { condiciones.push("g.plan_id = ?"); params.push(f.planId); }
+  return { where: condiciones.join(" AND "), params };
+}
+
+export async function reporteGastosDetalle(empresaId: number, f: FiltrosReporteGastos = {}): Promise<FilaGastoDetalle[]> {
+  const { where, params } = condicionesGastosDetalle(empresaId, f);
+  const rows = await query<RowDataPacket[]>(
+    `SELECT g.id, DATE_FORMAT(g.fecha_solicitud, '%Y-%m-%d') AS fecha_solicitud,
+            DATE_FORMAT(g.fecha_viaje, '%Y-%m-%d') AS fecha_viaje,
+            g.plan_id, COALESCE(p.ruta_codigo_historico, p.codigo) AS plan_codigo,
+            g.empleado_id, emp.nombre AS empleado_nombre, emp.puesto AS cargo,
+            g.vehiculo_id, veh.placa,
+            g.cliente_id, cli.nombre AS cliente_nombre,
+            g.categoria, g.descripcion, g.cantidad, g.monto, g.activo, g.creado_por, g.observaciones
+     FROM tms_gastos_operativos g
+     LEFT JOIN tms_planes_viaje p ON p.id = g.plan_id AND p.empresa_id = g.empresa_id
+     LEFT JOIN empleados emp ON emp.id = g.empleado_id AND emp.empresa_id = g.empresa_id
+     LEFT JOIN flota_vehiculos veh ON veh.id = g.vehiculo_id AND veh.empresa_id = g.empresa_id
+     LEFT JOIN tms_clientes cli ON cli.id = g.cliente_id AND cli.empresa_id = g.empresa_id
+     WHERE ${where}
+     ORDER BY COALESCE(g.fecha_viaje, g.fecha_solicitud) DESC, g.id DESC`,
+    params,
+  );
+  return rows.map((r) => {
+    const cantidad = Number(r.cantidad ?? 1);
+    const monto = Number(r.monto ?? 0);
+    return {
+      id: Number(r.id),
+      fechaSolicitud: String(r.fecha_solicitud),
+      fechaViaje: r.fecha_viaje != null ? String(r.fecha_viaje) : null,
+      planId: r.plan_id != null ? Number(r.plan_id) : null,
+      planCodigo: r.plan_codigo != null ? String(r.plan_codigo) : null,
+      empleadoId: r.empleado_id != null ? Number(r.empleado_id) : null,
+      empleadoNombre: r.empleado_nombre != null ? String(r.empleado_nombre) : null,
+      cargo: r.cargo != null ? String(r.cargo) : null,
+      vehiculoId: r.vehiculo_id != null ? Number(r.vehiculo_id) : null,
+      placa: r.placa != null ? String(r.placa) : null,
+      clienteId: r.cliente_id != null ? Number(r.cliente_id) : null,
+      clienteNombre: r.cliente_nombre != null ? String(r.cliente_nombre) : null,
+      categoria: String(r.categoria),
+      descripcion: r.descripcion != null ? String(r.descripcion) : null,
+      cantidad,
+      monto,
+      total: cantidad * monto,
+      activo: Number(r.activo ?? 1) === 1,
+      registradoPor: r.creado_por != null ? String(r.creado_por) : null,
+      observaciones: r.observaciones != null ? String(r.observaciones) : null,
+    };
+  });
 }
 
 export type FilaRentabilidadViaje = {
@@ -379,6 +560,19 @@ export type FilaSolicitudFondoReporte = {
   totalSolicitud?: number;
   estadoFondo: string;
 };
+
+/** REPORTES-VIATICOS-GASTOS-DETALLE-1 (§1 del ticket) — "totales por estado si ya existen": se calculan aquí, en JS puro, sobre las filas YA filtradas (nunca una segunda consulta) — mismo criterio ligero que resumirSolicitudesFondo() más abajo. */
+export type ResumenPorEstado = Record<string, { cantidad: number; total: number }>;
+export function resumirViaticosPorEstado(filas: FilaViaticoReporte[]): ResumenPorEstado {
+  const resumen: ResumenPorEstado = {};
+  for (const f of filas) {
+    const actual = resumen[f.estado] ?? { cantidad: 0, total: 0 };
+    actual.cantidad += 1;
+    actual.total += f.montoAsignado;
+    resumen[f.estado] = actual;
+  }
+  return resumen;
+}
 
 export type ResumenSolicitudesFondo = { cantidad: number; totalSolicitado: number; totalAutorizado: number; totalLiquidado: number; totalRechazado: number };
 
