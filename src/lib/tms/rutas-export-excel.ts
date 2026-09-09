@@ -10,11 +10,17 @@ export async function exportarRutasExcel(rutas: ClienteRuta[], empresaNombre: st
   // negocio confirmó que este dato ya no se utiliza (ver ruta.costoOperativo
   // en cliente-rutas.ts, que se conserva sin usar por compatibilidad
   // histórica, sin DROP de columna).
+  // RUTAS-TARIFARIO-HISTORIAL-1 (§6 del ticket) — se AMPLÍA el export
+  // existente (nunca se duplica) con 3 columnas nuevas al final
+  // (Vigente desde / Último cambio / Modificado por), derivadas del
+  // historial de tarifas (tms_cliente_ruta_tarifas) — así ningún índice
+  // de columna existente se corre y el resto del archivo queda intacto.
   const headers = [
     "Código", "Cliente", "Nombre / descripción", "Lugar de carga", "Hora habitual", "Contacto",
     "Destino", "Tarifario (Q)", "Piloto código", "Piloto nombre",
     "Viático piloto (Q)", "Auxiliares códigos", "Auxiliares nombres", "Viáticos auxiliares (Q)",
     "Paradas estructuradas", "Estado", "Observaciones",
+    "Vigente desde", "Último cambio de tarifa", "Modificado por",
   ];
   ws.mergeCells(1, 1, 1, headers.length);
   ws.getCell(1, 1).value = `CATÁLOGO DE RUTAS - ${empresaNombre}`;
@@ -40,10 +46,11 @@ export async function exportarRutasExcel(rutas: ClienteRuta[], empresaNombre: st
       auxiliares.map((persona) => persona.viaticoMonto ?? "").join(";"),
       ruta.paradas.map((parada) => `${parada.tipo}: ${parada.lugarNombre}`).join(" → "),
       ruta.activo ? "Activa" : "Inactiva", ruta.observaciones ?? "",
+      ruta.tarifaVigenteDesde ?? "", ruta.tarifaUltimoCambioEn ?? "", ruta.tarifaModificadoPor ?? "",
     ]);
   }
-  ws.autoFilter = { from: "A3", to: `Q${Math.max(3, rutas.length + 3)}` };
-  ws.columns = [14, 26, 25, 35, 14, 24, 40, 18, 18, 26, 19, 28, 35, 28, 40, 12, 35].map((width) => ({ width }));
+  ws.autoFilter = { from: "A3", to: `T${Math.max(3, rutas.length + 3)}` };
+  ws.columns = [14, 26, 25, 35, 14, 24, 40, 18, 18, 26, 19, 28, 35, 28, 40, 12, 35, 14, 22, 22].map((width) => ({ width }));
   [8, 11].forEach((column) => { ws.getColumn(column).numFmt = "Q#,##0.00"; });
   ws.eachRow((row, rowNumber) => {
     if (rowNumber > 3) row.alignment = { vertical: "top", wrapText: true };

@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { z } from "zod";
 import { requireTenantProgramacionOTms, requireTenantRutas } from "@/lib/tenant";
 import { crearRuta, listarRutas } from "@/lib/tms/cliente-rutas";
+import { crearRutaSchema, etiquetaCampoRutaFactory } from "@/lib/tms/rutas-validacion";
+import { respuestaErrorValidacion } from "@/lib/validacion-http";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -57,50 +58,29 @@ export async function GET(req: Request, ctx: Ctx) {
   }
 }
 
-const paradaSchema = z.object({
-  tipo: z.enum(["Carga", "Descarga", "Entrega"]).optional(),
-  lugarNombre: z.string().min(1),
-  clienteUbicacionId: z.number().int().positive().optional(),
-});
-
-const personalSchema = z.object({
-  empleadoId: z.number().int().positive(),
-  rol: z.enum(["Piloto", "Auxiliar"]),
-  viaticoMonto: z.number().min(0).max(9999999999.99).nullable().optional(),
-});
-
-const schema = z.object({
-  clienteId: z.number().int().positive(),
-  codigo: z.string().min(1).max(40),
-  nombre: z.string().max(200).optional(),
-  ubicacionCargaId: z.number().int().positive().optional(),
-  lugarCargaTexto: z.string().max(300).optional(),
-  destinoDescripcion: z.string().max(300).optional(),
-  horaHabitual: z.string().max(20).optional(),
-  tarifaReferencia: z.number().min(0).max(9999999999.99).nullable().optional(),
-  // TMS-SIN-COSTO-OPERATIVO-1: negocio confirmó que ya no se utiliza — se
-  // deja aceptado aquí SOLO por compatibilidad con clientes/integraciones
-  // antiguas que aún lo envíen (nunca exigido); crearRuta (cliente-rutas.ts)
-  // ya no lo lee ni lo persiste. La UI nueva (rutas/page.tsx) no lo envía.
-  costoOperativo: z.number().min(0).max(9999999999.99).nullable().optional(),
-  contactoClienteId: z.number().int().positive().optional(),
-  observaciones: z.string().max(300).optional(),
-  paradas: z.array(paradaSchema).max(20).optional(),
-  personalPredeterminado: z.array(personalSchema).max(9).optional(),
-});
-
+/**
+ * RUTAS-TARIFARIO-HISTORIAL-1 (§10/§11 del ticket) — "dato inválido" sin
+ * decir qué campo era un problema real: ahora la validación fallida
+ * devuelve un mensaje POR CAMPO ("No se pudo guardar la ruta:\n• Campo:
+ * motivo.") + un mapa `campos` para que el frontend resalte el input
+ * exacto (respuestaErrorValidacion, @/lib/validacion-http).
+ */
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenantRutas(slug, "crear");
   if (guard.error) return guard.error;
 
-  const parsed = schema.safeParse(await req.json());
+  const body = await req.json().catch(() => ({}));
+  const parsed = crearRutaSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
+    return respuestaErrorValidacion(parsed.error, etiquetaCampoRutaFactory(body), "No se pudo guardar la ruta");
   }
 
   try {
-    const ruta = await crearRuta(guard.empresa.id, parsed.data);
+    // §1 del ticket — identidad real de sesión (nunca username) para el
+    // snapshot del historial de tarifa cuando la ruta nace con tarifa.
+    const actor = { usuarioId: guard.session.id, nombre: guard.session.nombre || guard.session.username };
+    const ruta = await crearRuta(guard.empresa.id, parsed.data, actor);
     return NextResponse.json({ ruta, mensaje: "Ruta guardada." });
   } catch (e) {
     console.error("POST tms/rutas", e);

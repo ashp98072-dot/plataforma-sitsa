@@ -5,10 +5,12 @@ import {
   requireTenantModulo,
 } from "@/lib/tenant";
 import {
+  buscarPosiblesDuplicadosContacto,
   crearContactoCliente,
   listarContactosCliente,
   type ContactoCliente,
 } from "@/lib/tms/cliente-contactos";
+import { respuestaErrorValidacion } from "@/lib/validacion-http";
 
 type Ctx = { params: Promise<{ slug: string; clienteId: string }> };
 
@@ -77,14 +79,29 @@ export async function GET(req: Request, ctx: Ctx) {
   }
 }
 
+const ETIQUETAS: Record<string, string> = {
+  nombre: "Nombre", cargo: "Cargo / área", telefono: "Teléfono", email: "Email", observaciones: "Observaciones",
+};
+
 const schema = z.object({
-  nombre: z.string().min(1).max(160),
-  cargo: z.string().max(120).optional(),
-  telefono: z.string().max(80).optional(),
-  email: z.string().max(160).optional(),
-  observaciones: z.string().max(300).optional(),
+  nombre: z.string().min(1, "es obligatorio.").max(160, "máximo 160 caracteres."),
+  cargo: z.string().max(120, "máximo 120 caracteres.").optional(),
+  telefono: z.string().max(80, "máximo 80 caracteres.").optional(),
+  email: z.string().max(160, "máximo 160 caracteres.").optional(),
+  observaciones: z.string().max(300, "máximo 300 caracteres.").optional(),
+  // RUTAS-TARIFARIO-HISTORIAL-1 (§8 del ticket) — el usuario ya vio la
+  // advertencia de posible duplicado (409 más abajo) y decidió continuar.
+  forzar: z.boolean().optional(),
 });
 
+/**
+ * RUTAS-TARIFARIO-HISTORIAL-1 (§7/§8 del ticket) — "+ Agregar contacto"
+ * desde la captura de Ruta usa ESTE MISMO endpoint (nunca guarda el
+ * contacto solo dentro de la ruta): antes de insertar, advierte
+ * (409 + `posibleDuplicado`) si ya existe un contacto activo de este
+ * cliente con el mismo email o teléfono — nunca bloquea por nombre
+ * solo, y el caller puede confirmar reenviando `forzar: true`.
+ */
 export async function POST(req: Request, ctx: Ctx) {
   const { slug, clienteId } = await ctx.params;
   const guard = await requireTenantModulo(slug, "tms", true);
@@ -95,12 +112,26 @@ export async function POST(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: "Cliente inválido." }, { status: 400 });
   }
 
-  const parsed = schema.safeParse(await req.json());
+  const body = await req.json().catch(() => ({}));
+  const parsed = schema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
+    return respuestaErrorValidacion(parsed.error, (path) => ETIQUETAS[String(path[0])] ?? String(path[0] || "Valor"), "No se pudo guardar el contacto");
   }
 
   try {
+    if (!parsed.data.forzar) {
+      const posibles = await buscarPosiblesDuplicadosContacto(guard.empresa.id, cid, parsed.data);
+      if (posibles.length) {
+        return NextResponse.json(
+          {
+            error: `Ya existe un contacto de este cliente con el mismo ${posibles[0].email && parsed.data.email?.trim().toLowerCase() === posibles[0].email.toLowerCase() ? "email" : "teléfono"} (${posibles[0].nombre}). ¿Deseas guardarlo de todas formas?`,
+            posibleDuplicado: true,
+            coincidencias: posibles,
+          },
+          { status: 409 },
+        );
+      }
+    }
     const contacto = await crearContactoCliente(guard.empresa.id, cid, parsed.data);
     return NextResponse.json({ contacto, mensaje: "Contacto guardado." });
   } catch (e) {

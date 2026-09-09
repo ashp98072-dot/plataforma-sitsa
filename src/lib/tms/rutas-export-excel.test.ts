@@ -11,6 +11,7 @@ describe("exportación Excel de rutas", () => {
       horaHabitual: "08:00", tarifaReferencia: 1250,
       contactoClienteId: null, contactoNombre: null, contactoCargo: null, contactoTelefono: null,
       observaciones: null, activo: true, creadoEn: "", actualizadoEn: "", paradas: [],
+      tarifaVigenteDesde: null, tarifaUltimoCambioEn: null, tarifaModificadoPor: null,
       personalPredeterminado: [
         { empleadoId: 1, empleadoCodigo: "P-1", empleadoNombre: "Piloto", rol: "Piloto", orden: 1, viaticoMonto: 150 },
         { empleadoId: 2, empleadoCodigo: "A-1", empleadoNombre: "Auxiliar", rol: "Auxiliar", orden: 1, viaticoMonto: 75 },

@@ -2,6 +2,7 @@ import type { RowDataPacket } from "mysql2";
 import { getPool, query } from "@/lib/db";
 import { registrarAuditoria } from "@/lib/auditoria";
 import { formatoErrorImport, identidadRutaImport } from "@/lib/import-errores";
+import { registrarCambioTarifaTx } from "./cliente-rutas";
 import type { FilaRutaExcel } from "./rutas-import-excel";
 
 /**
@@ -482,7 +483,7 @@ export async function confirmarImportacionRutas(
         "SELECT id, cliente_id, nombre FROM tms_cliente_contactos WHERE empresa_id = ? AND activo = 1",
         [empresaId],
       ),
-      conn.query<RowDataPacket[]>("SELECT id, codigo, cliente_id FROM tms_cliente_rutas WHERE empresa_id = ?", [
+      conn.query<RowDataPacket[]>("SELECT id, codigo, cliente_id, tarifa_referencia FROM tms_cliente_rutas WHERE empresa_id = ?", [
         empresaId,
       ]),
       conn.query<RowDataPacket[]>("SELECT id, codigo, estado FROM empleados WHERE empresa_id = ?", [empresaId]),
@@ -522,9 +523,12 @@ export async function confirmarImportacionRutas(
       contactosPorCliente.set(cid, list);
     }
 
-    const rutasPorCodigo = new Map<string, { id: number; clienteId: number }>();
+    const rutasPorCodigo = new Map<string, { id: number; clienteId: number; tarifaReferencia: number | null }>();
     for (const r of rutasExistentesRows[0]) {
-      rutasPorCodigo.set(String(r.codigo), { id: Number(r.id), clienteId: Number(r.cliente_id) });
+      rutasPorCodigo.set(String(r.codigo), {
+        id: Number(r.id), clienteId: Number(r.cliente_id),
+        tarifaReferencia: r.tarifa_referencia != null ? Number(r.tarifa_referencia) : null,
+      });
     }
 
     const codigosVistos = new Set<string>();
@@ -736,6 +740,17 @@ export async function confirmarImportacionRutas(
             empresaId,
           ],
         );
+        // RUTAS-TARIFARIO-HISTORIAL-1 (§2/§3 del ticket) — "no perder
+        // histórico": el UPDATE de arriba puede cambiar tarifa_referencia
+        // (COALESCE la deja intacta si el Excel no trae valor para esta
+        // fila) — se registra el cambio real aquí, con la MISMA regla que
+        // el alta/edición manual: no duplica si no cambió. Motivo fijo,
+        // sin bloquear el import (no hay UI de motivo en el importador
+        // masivo, ver rutas-import-excel.ts).
+        await registrarCambioTarifaTx(conn, {
+          empresaId, rutaId: rutaExistenteId, tarifaAnterior: rutaExistente!.tarifaReferencia,
+          tarifaNueva: f.tarifaReferenciaExcel, motivo: "Importación de rutas (Excel)", usuarioNombre: usuario,
+        });
         if (codigosPersonal.length) {
           await conn.execute("DELETE FROM tms_cliente_ruta_personal WHERE empresa_id = ? AND ruta_id = ?", [
             empresaId,
@@ -777,6 +792,10 @@ export async function confirmarImportacionRutas(
           ],
         );
         const rutaId = Number(rRuta.insertId);
+        await registrarCambioTarifaTx(conn, {
+          empresaId, rutaId, tarifaAnterior: null, tarifaNueva: f.tarifaReferenciaExcel,
+          motivo: "Tarifa inicial (importación de rutas)", usuarioNombre: usuario,
+        });
         if (codigosPersonal.length) {
           const personal = [
             ...(f.pilotoCodigoExcel ? [{ codigo: f.pilotoCodigoExcel, rol: "Piloto", monto: f.pilotoViaticoExcel }] : []),
@@ -796,7 +815,7 @@ export async function confirmarImportacionRutas(
           }
         }
         // evita reprocesar/duplicar el mismo código si se repitiera por error de datos
-        rutasPorCodigo.set(f.codigoExcel, { id: rutaId, clienteId });
+        rutasPorCodigo.set(f.codigoExcel, { id: rutaId, clienteId, tarifaReferencia: f.tarifaReferenciaExcel });
         resultado.creadas++;
       }
     }
