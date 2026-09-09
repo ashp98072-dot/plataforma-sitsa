@@ -36,7 +36,7 @@ const CATEGORIAS = ["Combustible", "Hospedaje", "Parqueo", "Cuadrilla", "Auxilia
  * ningún catálogo nuevo.
  */
 type Catalogos = {
-  empleados: { id: number; codigo: string; nombre: string; puesto: string | null }[];
+  empleados: { id: number; codigo: string; nombre: string; puesto: string | null; cuentaBancaria: string | null }[];
   vehiculos: { id: number; placa: string; marca: string | null; modelo: string | null }[];
   clientes: { id: number; codigo: string | null; nombre: string; nit: string | null }[];
   planes: { id: number; codigo: string; clienteId: number | null; clienteNombre: string | null; fechaPlan: string }[];
@@ -48,10 +48,12 @@ type Catalogos = {
 type LineaForm = {
   categoria: string; descripcion: string; cantidad: string; monto: string;
   fechaViaje: string; empleadoId: string; vehiculoId: string; clienteId: string; planId: string;
+  empleadoNombre: string; cuenta: string; cargo: string;
 };
 const LINEA_VACIA: LineaForm = {
   categoria: "", descripcion: "", cantidad: "1", monto: "",
   fechaViaje: "", empleadoId: "", vehiculoId: "", clienteId: "", planId: "",
+  empleadoNombre: "", cuenta: "", cargo: "",
 };
 
 /**
@@ -165,6 +167,9 @@ export default function FondosPage() {
           vehiculoId: l.vehiculoId != null ? String(l.vehiculoId) : "",
           clienteId: l.clienteId != null ? String(l.clienteId) : "",
           planId: l.planId != null ? String(l.planId) : "",
+          empleadoNombre: l.empleadoNombre ?? "",
+          cuenta: l.cuenta ?? "",
+          cargo: l.cargo ?? "",
         }))
       : [{ ...LINEA_VACIA }]);
     setMostrarForm(true);
@@ -176,14 +181,20 @@ export default function FondosPage() {
     if (!solicitanteUsuarioId) { setError("Selecciona el solicitante de Operaciones."); return; }
     const lineasValidas = lineas.filter((l) => l.categoria && Number(l.monto) > 0);
     if (!lineasValidas.length) { setError("Agrega al menos una línea de gasto válida."); return; }
-    const lineasPayload = lineasValidas.map((l) => ({
-      categoria: l.categoria, descripcion: l.descripcion.trim() || null, cantidad: Number(l.cantidad) || 1, monto: Number(l.monto),
-      fechaViaje: l.fechaViaje || undefined,
-      empleadoId: l.empleadoId ? Number(l.empleadoId) : undefined,
-      vehiculoId: l.vehiculoId ? Number(l.vehiculoId) : undefined,
-      clienteId: l.clienteId ? Number(l.clienteId) : undefined,
-      planId: l.planId ? Number(l.planId) : undefined,
-    }));
+    const lineasPayload = lineasValidas.map((l) => {
+      const empleado = catalogos.empleados.find((e) => String(e.id) === l.empleadoId);
+      return {
+        categoria: l.categoria, descripcion: l.descripcion.trim() || null, cantidad: Number(l.cantidad) || 1, monto: Number(l.monto),
+        fechaViaje: l.fechaViaje || undefined,
+        empleadoId: l.empleadoId ? Number(l.empleadoId) : undefined,
+        vehiculoId: l.vehiculoId ? Number(l.vehiculoId) : undefined,
+        clienteId: l.clienteId ? Number(l.clienteId) : undefined,
+        planId: l.planId ? Number(l.planId) : undefined,
+        empleadoNombreOverride: empleado && l.empleadoNombre.trim() !== empleado.nombre.trim() ? l.empleadoNombre.trim() : undefined,
+        cuentaOverride: empleado && l.cuenta.trim() !== (empleado.cuentaBancaria ?? "").trim() ? l.cuenta.trim() : undefined,
+        cargoOverride: empleado && l.cargo.trim() !== (empleado.puesto ?? "").trim() ? l.cargo.trim() : undefined,
+      };
+    });
     const res = editandoId
       ? await fetch(`/api/empresas/${slug}/tms/fondos/${editandoId}`, {
           method: "PATCH",
@@ -297,7 +308,10 @@ export default function FondosPage() {
                     congela como snapshot al guardar (fondos.ts).
                   */}
                   <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
-                    <CatalogoSearchSelect label="Empleado" placeholder="Buscar nombre o código..." value={l.empleadoId} options={catalogos.empleados.map((e) => ({ value: String(e.id), label: e.nombre, detail: [e.codigo, e.puesto].filter(Boolean).join(" · ") }))} inputClassName={inputCls} onChange={(value) => set({ empleadoId: value })} />
+                    <CatalogoSearchSelect label="Empleado" placeholder="Buscar nombre o código..." value={l.empleadoId} options={catalogos.empleados.map((e) => ({ value: String(e.id), label: e.nombre, detail: [e.codigo, e.puesto].filter(Boolean).join(" · ") }))} inputClassName={inputCls} onChange={(value) => {
+                      const empleado = catalogos.empleados.find((e) => String(e.id) === value);
+                      set({ empleadoId: value, empleadoNombre: empleado?.nombre ?? "", cuenta: empleado?.cuentaBancaria ?? "", cargo: empleado?.puesto ?? "" });
+                    }} />
                     <CatalogoSearchSelect label="Unidad" placeholder="Buscar placa..." value={l.vehiculoId} options={catalogos.vehiculos.map((v) => ({ value: String(v.id), label: v.placa, detail: [v.marca, v.modelo].filter(Boolean).join(" ") }))} inputClassName={inputCls} onChange={(value) => set({ vehiculoId: value })} />
                     <CatalogoSearchSelect label="Cliente" placeholder="Buscar cliente..." value={l.clienteId} options={catalogos.clientes.map((c) => ({ value: String(c.id), label: c.nombre, detail: [c.codigo, c.nit ? `NIT ${c.nit}` : null].filter(Boolean).join(" · ") }))} inputClassName={inputCls} onChange={(value) => set({ clienteId: value })} />
                     {/*
@@ -316,6 +330,17 @@ export default function FondosPage() {
                     <label className="text-xs text-[var(--muted)]">Fecha de viaje
                       <input type="date" className={`${inputCls} mt-0.5 w-full`} value={l.fechaViaje} onChange={(e) => set({ fechaViaje: e.target.value })} />
                       <span className="mt-0.5 block text-[10px]">Si la dejas vacía y eliges un viaje, se completa con su fecha.</span>
+                    </label>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+                    <label className="text-xs text-[var(--muted)]">Nombre
+                      <input className={`${inputCls} mt-0.5 w-full`} value={l.empleadoNombre} onChange={(e) => set({ empleadoNombre: e.target.value })} maxLength={200} />
+                    </label>
+                    <label className="text-xs text-[var(--muted)]">Cuenta
+                      <input className={`${inputCls} mt-0.5 w-full`} value={l.cuenta} onChange={(e) => set({ cuenta: e.target.value })} maxLength={100} />
+                    </label>
+                    <label className="text-xs text-[var(--muted)]">Cargo
+                      <input className={`${inputCls} mt-0.5 w-full`} value={l.cargo} onChange={(e) => set({ cargo: e.target.value })} maxLength={150} />
                     </label>
                   </div>
                   <p className="text-right text-xs text-[var(--muted)]">Total de la línea: Q{totalLinea.toLocaleString("es-GT", { minimumFractionDigits: 2 })}</p>

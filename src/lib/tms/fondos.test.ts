@@ -247,6 +247,18 @@ describe("crearSolicitudFondo — snapshot histórico por línea (empleado/vehí
     expect(insertLinea[1]).toContain("Nombre Real En BD"); // releído de BD, no un valor inventado por el caller
   });
 
+  it("permite editar nombre/cuenta/cargo como snapshot sin actualizar el maestro de empleados", async () => {
+    const conn = conexion({ empleadoNombre: "Nombre Maestro", empleadoPuesto: "Piloto", empleadoCuenta: "111" });
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    await crearSolicitudFondo(7, {
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      lineas: [{ categoria: "Combustible", monto: 100, empleadoId: 4, empleadoNombreOverride: "  Nombre Administrativo  ", cuentaOverride: "  9988 7766 ", cargoOverride: " Piloto especial " }],
+    });
+    const insert = conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_solicitud_fondo_lineas"))!;
+    expect(insert[1]).toEqual(expect.arrayContaining(["Nombre Administrativo", "9988 7766", "Piloto especial"]));
+    expect(conn.execute.mock.calls.some((c) => String(c[0]).includes("UPDATE empleados"))).toBe(false);
+  });
+
   it("fechaViaje explícita del caller SIEMPRE gana sobre la fecha del plan", async () => {
     const conn = conexion({ planFecha: "2026-09-10" });
     vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);

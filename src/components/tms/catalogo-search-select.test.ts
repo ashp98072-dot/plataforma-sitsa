@@ -15,7 +15,8 @@ describe("filtrarOpcionesBusqueda", () => {
     ["plan por código", "PLAN-002"], ["plan por cliente", "Cliente Dos"], ["plan por fecha", "09/09/2026"],
   ])("encuentra %s", (_caso, q) => expect(filtrarOpcionesBusqueda(opciones, q).length).toBeGreaterThan(0));
 
-  it("limita resultados razonablemente", () => expect(filtrarOpcionesBusqueda(Array.from({ length: 40 }, (_, i) => ({ value: String(i), label: `Opción ${i}` })), "")).toHaveLength(20));
+  it("con búsqueda vacía conserva visible el catálogo completo", () => expect(filtrarOpcionesBusqueda(opciones, "")).toEqual(opciones));
+  it("limita resultados filtrados razonablemente", () => expect(filtrarOpcionesBusqueda(Array.from({ length: 40 }, (_, i) => ({ value: String(i), label: `Opción ${i}` })), "Opción", 20)).toHaveLength(20));
   it("precarga una selección existente al editar", () => expect(textoInicialBusqueda(opciones, "2")).toBe("Mario López"));
   it("Requirente conserva texto manual sin usuario", () => expect(textoInicialBusqueda(opciones, "", "Gestora manual")).toBe("Gestora manual"));
 });

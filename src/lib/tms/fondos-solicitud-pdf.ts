@@ -240,7 +240,9 @@ function construirPdf(
       headers,
       rows,
       align: { 7: "center", 9: "right" },
-      minWeight: { 3: 10, 9: 12 },
+      minWeight: { 0: 12, 1: 12, 2: 18, 3: 16, 4: 14, 5: 10, 6: 16, 7: 8, 8: 20, 9: 14 },
+      maxLines: 8,
+      preserveSingleLine: [3, 5, 7, 9],
     });
 
     // §3 Total — pegado a la tabla, nunca a mitad de las líneas.

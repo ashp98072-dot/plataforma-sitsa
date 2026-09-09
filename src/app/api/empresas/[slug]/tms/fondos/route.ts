@@ -37,6 +37,9 @@ const lineaSchema = z.object({
   vehiculoId: z.number().int().positive().nullable().optional(),
   clienteId: z.number().int().positive().nullable().optional(),
   planId: z.number().int().positive().nullable().optional(),
+  empleadoNombreOverride: z.string().trim().max(200).nullable().optional(),
+  cuentaOverride: z.string().trim().max(100).nullable().optional(),
+  cargoOverride: z.string().trim().max(150).nullable().optional(),
 });
 
 const schema = z.object({

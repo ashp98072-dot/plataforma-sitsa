@@ -69,8 +69,9 @@ describe("exportación Excel de reportes de gastos", () => {
     };
     const buf = await exportarSolicitudFondoExcel(solicitud);
     const ws = await primeraHoja(buf);
-    expect(ws.getRow(2).values).toEqual([undefined, "Combustible", "Diesel", "2", "100.00", "200.00"]);
-    expect(ws.getRow(4).values).toEqual([undefined, "", "", "", "TOTAL", "350.00"]);
+    expect(ws.getRow(1).values).toEqual([undefined, "Fecha solicitud", "Fecha viaje", "Nombre", "Cuenta", "Cargo", "Placa", "Cliente", "Categoría", "Cantidad", "Descripción", "Valor", "Subtotal (Q)"]);
+    expect(ws.getRow(2).values).toEqual([undefined, "01/09/2026", "", "", "", "", "", "", "Combustible", "2", "Diesel", "100.00", "200.00"]);
+    expect(ws.getRow(4).values).toEqual([undefined, "", "", "", "", "", "", "", "", "", "", "TOTAL", "350.00"]);
   });
 });
 

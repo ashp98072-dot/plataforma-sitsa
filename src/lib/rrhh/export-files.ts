@@ -152,6 +152,10 @@ export function dibujarTablaEnDoc(
      * una columna sin entrada aquí usa el mismo cálculo de siempre.
      */
     minWeight?: Partial<Record<number, number>>;
+    /** Máximo de líneas por celda; el valor histórico es 3. */
+    maxLines?: number;
+    /** Columnas críticas que deben conservar el texto completo en una sola línea. */
+    preserveSingleLine?: number[];
   },
 ): void {
   const cols = opts.headers.length;
@@ -174,7 +178,7 @@ export function dibujarTablaEnDoc(
   const padX = 4;
   const padY = 5;
   const lineH = fontSize + 2.5;
-  const maxLines = 3;
+  const maxLines = opts.maxLines ?? 3;
 
   const weights = opts.headers.map((h, i) => {
     let w = Math.max(4, h.length);
@@ -197,6 +201,7 @@ export function dibujarTablaEnDoc(
   const widths = weights.map((w) => (w / sumW) * pageWidth);
 
   const linesOf = (text: string, col: number, bold = false) => {
+    if (opts.preserveSingleLine?.includes(col)) return [text];
     const lines = wrapText(
       doc,
       text,
