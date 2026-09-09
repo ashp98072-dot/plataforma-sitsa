@@ -1,0 +1,21 @@
+import { describe, expect, it } from "vitest";
+import { filtrarOpcionesBusqueda, textoInicialBusqueda } from "./catalogo-search-select";
+
+const opciones = [
+  { value: "1", label: "Ana Pérez", detail: "EMP-01 · Piloto", searchText: "P123ABC Toyota Hilux CLI-01 NIT 123 Cliente Uno PLAN-001 09/09/2026" },
+  { value: "2", label: "Mario López", detail: "EMP-02 · Auxiliar", searchText: "C456DEF Cliente Dos PLAN-002 10/09/2026" },
+];
+
+describe("filtrarOpcionesBusqueda", () => {
+  it.each([
+    ["requirente por nombre", "Ana"], ["solicitante por nombre", "Mario"],
+    ["empleado por código", "EMP-01"], ["empleado por cargo", "Piloto"],
+    ["unidad por placa", "P123ABC"], ["unidad por marca/modelo", "Toyota Hilux"],
+    ["cliente por nombre", "Cliente Uno"], ["cliente por código/NIT", "NIT 123"],
+    ["plan por código", "PLAN-002"], ["plan por cliente", "Cliente Dos"], ["plan por fecha", "09/09/2026"],
+  ])("encuentra %s", (_caso, q) => expect(filtrarOpcionesBusqueda(opciones, q).length).toBeGreaterThan(0));
+
+  it("limita resultados razonablemente", () => expect(filtrarOpcionesBusqueda(Array.from({ length: 40 }, (_, i) => ({ value: String(i), label: `Opción ${i}` })), "")).toHaveLength(20));
+  it("precarga una selección existente al editar", () => expect(textoInicialBusqueda(opciones, "2")).toBe("Mario López"));
+  it("Requirente conserva texto manual sin usuario", () => expect(textoInicialBusqueda(opciones, "", "Gestora manual")).toBe("Gestora manual"));
+});

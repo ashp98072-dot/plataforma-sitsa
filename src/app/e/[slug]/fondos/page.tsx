@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import { CatalogoSearchSelect, type CatalogoSearchOption } from "@/components/tms/catalogo-search-select";
+import { aplicarPlanSeleccionado } from "@/lib/tms/fondos-selectores";
 
 type LineaFondo = {
   id: number; categoria: string; descripcion: string | null; cantidad: number; monto: number; orden: number;
@@ -35,9 +37,9 @@ const CATEGORIAS = ["Combustible", "Hospedaje", "Parqueo", "Cuadrilla", "Auxilia
  */
 type Catalogos = {
   empleados: { id: number; codigo: string; nombre: string; puesto: string | null }[];
-  vehiculos: { id: number; placa: string }[];
-  clientes: { id: number; nombre: string }[];
-  planes: { id: number; codigo: string; clienteId: number | null; fechaPlan: string }[];
+  vehiculos: { id: number; placa: string; marca: string | null; modelo: string | null }[];
+  clientes: { id: number; codigo: string | null; nombre: string; nit: string | null }[];
+  planes: { id: number; codigo: string; clienteId: number | null; clienteNombre: string | null; fechaPlan: string }[];
   /** SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§3) — usuarios reales con acceso a esta empresa, para el selector "Requirente (usuario)". */
   usuarios: { id: number; nombre: string }[];
   solicitantes: { id: number; nombre: string }[];
@@ -91,6 +93,8 @@ export default function FondosPage() {
 
   const [expandido, setExpandido] = useState<number | null>(null);
   const [motivoRechazo, setMotivoRechazo] = useState<Record<number, string>>({});
+
+  const opcionesUsuarios = (usuarios: { id: number; nombre: string }[]): CatalogoSearchOption[] => usuarios.map((u) => ({ value: String(u.id), label: u.nombre }));
 
   const [catalogos, setCatalogos] = useState<Catalogos>({ empleados: [], vehiculos: [], clientes: [], planes: [], usuarios: [], solicitantes: [] });
   useEffect(() => {
@@ -262,19 +266,8 @@ export default function FondosPage() {
         <div className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--panel)] p-3">
           <p className="text-sm font-medium">{editandoId ? "Editar solicitud (Pendiente)" : "Nueva solicitud"}</p>
           <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
-            <label className="text-xs text-[var(--muted)]">Requirente
-              <select className={`${inputCls} mt-0.5 w-full`} value={requirenteUsuarioId} onChange={(e) => setRequirenteUsuarioId(e.target.value)}>
-                <option value="">Ingresar nombre manualmente…</option>
-                {catalogos.usuarios.map((u) => <option key={u.id} value={u.id}>{u.nombre}</option>)}
-              </select>
-              {!requirenteUsuarioId ? <input aria-label="Nombre manual del requirente" className={`${inputCls} mt-1 w-full`} placeholder="Nombre del requirente" value={requirenteNombre} onChange={(e) => setRequirenteNombre(e.target.value)} /> : null}
-            </label>
-            <label className="text-xs text-[var(--muted)]">Solicitante
-              <select className={`${inputCls} mt-0.5 w-full`} value={solicitanteUsuarioId} onChange={(e) => setSolicitanteUsuarioId(e.target.value)}>
-                <option value="">Seleccionar usuario de Operaciones…</option>
-                {catalogos.solicitantes.map((u) => <option key={u.id} value={u.id}>{u.nombre}</option>)}
-              </select>
-            </label>
+            <CatalogoSearchSelect label="Requirente" placeholder="Buscar requirente..." value={requirenteUsuarioId} manualText={requirenteNombre} options={opcionesUsuarios(catalogos.usuarios)} inputClassName={inputCls} onTextChange={setRequirenteNombre} onChange={(value) => { setRequirenteUsuarioId(value); if (value) setRequirenteNombre(""); }} />
+            <CatalogoSearchSelect label="Solicitante" placeholder="Buscar solicitante de Operaciones..." value={solicitanteUsuarioId} options={opcionesUsuarios(catalogos.solicitantes)} inputClassName={inputCls} onChange={setSolicitanteUsuarioId} />
             <label className="text-xs text-[var(--muted)]">Fecha de requerimiento
               <input type="date" className={`${inputCls} mt-0.5 w-full`} value={fechaRequerimiento} onChange={(e) => setFechaRequerimiento(e.target.value)} />
             </label>
@@ -304,18 +297,9 @@ export default function FondosPage() {
                     congela como snapshot al guardar (fondos.ts).
                   */}
                   <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
-                    <select className={inputCls} value={l.empleadoId} onChange={(e) => set({ empleadoId: e.target.value })}>
-                      <option value="">Empleado (opcional)…</option>
-                      {catalogos.empleados.map((e) => <option key={e.id} value={e.id}>{e.nombre}{e.puesto ? ` (${e.puesto})` : ""}</option>)}
-                    </select>
-                    <select className={inputCls} value={l.vehiculoId} onChange={(e) => set({ vehiculoId: e.target.value })}>
-                      <option value="">Unidad (opcional)…</option>
-                      {catalogos.vehiculos.map((v) => <option key={v.id} value={v.id}>{v.placa}</option>)}
-                    </select>
-                    <select className={inputCls} value={l.clienteId} onChange={(e) => set({ clienteId: e.target.value })}>
-                      <option value="">Cliente (opcional)…</option>
-                      {catalogos.clientes.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-                    </select>
+                    <CatalogoSearchSelect label="Empleado" placeholder="Buscar nombre o código..." value={l.empleadoId} options={catalogos.empleados.map((e) => ({ value: String(e.id), label: e.nombre, detail: [e.codigo, e.puesto].filter(Boolean).join(" · ") }))} inputClassName={inputCls} onChange={(value) => set({ empleadoId: value })} />
+                    <CatalogoSearchSelect label="Unidad" placeholder="Buscar placa..." value={l.vehiculoId} options={catalogos.vehiculos.map((v) => ({ value: String(v.id), label: v.placa, detail: [v.marca, v.modelo].filter(Boolean).join(" ") }))} inputClassName={inputCls} onChange={(value) => set({ vehiculoId: value })} />
+                    <CatalogoSearchSelect label="Cliente" placeholder="Buscar cliente..." value={l.clienteId} options={catalogos.clientes.map((c) => ({ value: String(c.id), label: c.nombre, detail: [c.codigo, c.nit ? `NIT ${c.nit}` : null].filter(Boolean).join(" · ") }))} inputClassName={inputCls} onChange={(value) => set({ clienteId: value })} />
                     {/*
                       SOLICITUD-FONDOS-REPORTE-1 (pendiente 2 del PR #211) —
                       selector opcional de Viaje/Plan: al elegir uno se envía
@@ -325,13 +309,10 @@ export default function FondosPage() {
                       sobrescribe aquí en el cliente una fecha que el usuario
                       ya haya escrito a mano.
                     */}
-                    <select className={inputCls} value={l.planId} onChange={(e) => {
-                      const plan = catalogos.planes.find((p) => String(p.id) === e.target.value);
-                      set({ planId: e.target.value, ...(plan?.clienteId ? { clienteId: String(plan.clienteId) } : {}), ...(!l.fechaViaje && plan?.fechaPlan ? { fechaViaje: plan.fechaPlan } : {}) });
-                    }}>
-                      <option value="">Viaje (opcional)…</option>
-                      {catalogos.planes.map((p) => <option key={p.id} value={p.id}>{p.codigo}</option>)}
-                    </select>
+                    <CatalogoSearchSelect label="Viaje / Plan" placeholder="Buscar código, cliente o fecha..." value={l.planId} options={catalogos.planes.map((p) => ({ value: String(p.id), label: p.codigo, detail: [p.clienteNombre, p.fechaPlan ? p.fechaPlan.split("-").reverse().join("/") : null].filter(Boolean).join(" · ") }))} inputClassName={inputCls} onChange={(value) => {
+                      const plan = catalogos.planes.find((p) => String(p.id) === value);
+                      set(aplicarPlanSeleccionado(l, plan, value));
+                    }} />
                     <label className="text-xs text-[var(--muted)]">Fecha de viaje
                       <input type="date" className={`${inputCls} mt-0.5 w-full`} value={l.fechaViaje} onChange={(e) => set({ fechaViaje: e.target.value })} />
                       <span className="mt-0.5 block text-[10px]">Si la dejas vacía y eliges un viaje, se completa con su fecha.</span>

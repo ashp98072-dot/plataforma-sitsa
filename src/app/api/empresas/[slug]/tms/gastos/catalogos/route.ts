@@ -21,20 +21,22 @@ export async function GET(_req: Request, ctx: Ctx) {
 
   const [empleados, vehiculos, clientes, planes, usuarios] = await Promise.all([
     query<RowDataPacket[]>(
-      "SELECT id, codigo, nombre, puesto FROM empleados WHERE empresa_id = ? AND estado = 'Activo' ORDER BY nombre",
+      "SELECT id, codigo, nombre, puesto FROM empleados WHERE empresa_id = ? AND estado = 'Activo' ORDER BY nombre LIMIT 1000",
       [eid],
     ),
     query<RowDataPacket[]>(
-      "SELECT id, placa FROM flota_vehiculos WHERE empresa_id = ? AND activo = 1 ORDER BY placa",
+      "SELECT id, placa, marca, modelo FROM flota_vehiculos WHERE empresa_id = ? AND activo = 1 ORDER BY placa LIMIT 1000",
       [eid],
     ),
     query<RowDataPacket[]>(
-      "SELECT id, nombre FROM tms_clientes WHERE empresa_id = ? AND estado = 'Activo' ORDER BY nombre",
+      "SELECT id, codigo, nombre, nit FROM tms_clientes WHERE empresa_id = ? AND estado = 'Activo' ORDER BY nombre LIMIT 1000",
       [eid],
     ),
     query<RowDataPacket[]>(
-      `SELECT p.id, p.codigo, p.cliente_id, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan
-       FROM tms_planes_viaje p WHERE p.empresa_id = ? ORDER BY p.id DESC LIMIT 300`,
+      `SELECT p.id, p.codigo, p.cliente_id, c.nombre AS cliente_nombre, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan
+       FROM tms_planes_viaje p
+       LEFT JOIN tms_clientes c ON c.id = p.cliente_id AND c.empresa_id = p.empresa_id
+       WHERE p.empresa_id = ? ORDER BY p.id DESC LIMIT 500`,
       [eid],
     ),
     // SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§3) — usuarios reales con acceso
@@ -48,7 +50,7 @@ export async function GET(_req: Request, ctx: Ctx) {
        FROM usuarios u
        LEFT JOIN usuario_empresa ue ON ue.usuario_id = u.id AND ue.empresa_id = ?
        WHERE u.activo = 1 AND (ue.usuario_id IS NOT NULL OR u.acceso_todas_empresas = 1)
-       ORDER BY u.nombre`,
+       ORDER BY u.nombre LIMIT 1000`,
       [eid],
     ),
   ]);
@@ -56,9 +58,9 @@ export async function GET(_req: Request, ctx: Ctx) {
   return NextResponse.json(
     {
       empleados: empleados.map((r) => ({ id: Number(r.id), codigo: String(r.codigo), nombre: String(r.nombre), puesto: r.puesto != null ? String(r.puesto) : null })),
-      vehiculos: vehiculos.map((r) => ({ id: Number(r.id), placa: String(r.placa) })),
-      clientes: clientes.map((r) => ({ id: Number(r.id), nombre: String(r.nombre) })),
-      planes: planes.map((r) => ({ id: Number(r.id), codigo: String(r.codigo), clienteId: r.cliente_id != null ? Number(r.cliente_id) : null, fechaPlan: String(r.fecha_plan) })),
+      vehiculos: vehiculos.map((r) => ({ id: Number(r.id), placa: String(r.placa), marca: r.marca != null ? String(r.marca) : null, modelo: r.modelo != null ? String(r.modelo) : null })),
+      clientes: clientes.map((r) => ({ id: Number(r.id), codigo: r.codigo != null ? String(r.codigo) : null, nombre: String(r.nombre), nit: r.nit != null ? String(r.nit) : null })),
+      planes: planes.map((r) => ({ id: Number(r.id), codigo: String(r.codigo), clienteId: r.cliente_id != null ? Number(r.cliente_id) : null, clienteNombre: r.cliente_nombre != null ? String(r.cliente_nombre) : null, fechaPlan: String(r.fecha_plan) })),
       usuarios: usuarios.map((r) => ({ id: Number(r.id), nombre: String(r.nombre) })),
       solicitantes: usuarios.filter((r) => ["Operaciones", "GerenteOperaciones", "JefeOperaciones", "AuxiliarOperaciones"].includes(String(r.rol_global ?? ""))).map((r) => ({ id: Number(r.id), nombre: String(r.nombre) })),
     },
