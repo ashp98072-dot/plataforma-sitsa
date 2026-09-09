@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
-import { query } from "@/lib/db";
+import { query, type SqlParams } from "@/lib/db";
 import { requireTenantGastos } from "@/lib/tenant";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -19,20 +19,30 @@ export async function GET(_req: Request, ctx: Ctx) {
   if (guard.error) return guard.error;
   const eid = guard.empresa.id;
 
-  const [empleados, vehiculos, clientes, planes, usuarios] = await Promise.all([
-    query<RowDataPacket[]>(
+  const consultar = async (catalogo: string, sql: string, params: SqlParams) => {
+    try {
+      return await query<RowDataPacket[]>(sql, params);
+    } catch (error) {
+      console.error(`[tms/gastos/catalogos] Falló catálogo ${catalogo}`, error);
+      throw new Error(`No se pudo cargar el catálogo de ${catalogo}.`);
+    }
+  };
+
+  try {
+    const [empleados, vehiculos, clientes, planes, usuarios] = await Promise.all([
+    consultar("empleados",
       "SELECT id, codigo, nombre, puesto, cuenta_bancaria FROM empleados WHERE empresa_id = ? AND estado = 'Activo' ORDER BY nombre LIMIT 1000",
       [eid],
     ),
-    query<RowDataPacket[]>(
+    consultar("vehículos",
       "SELECT id, placa, marca, modelo FROM flota_vehiculos WHERE empresa_id = ? AND activo = 1 ORDER BY placa LIMIT 1000",
       [eid],
     ),
-    query<RowDataPacket[]>(
-      "SELECT id, codigo, nombre, nit FROM tms_clientes WHERE empresa_id = ? AND estado = 'Activo' ORDER BY nombre LIMIT 1000",
+    consultar("clientes",
+      "SELECT id, nombre, nit FROM tms_clientes WHERE empresa_id = ? AND estado = 'Activo' ORDER BY nombre LIMIT 1000",
       [eid],
     ),
-    query<RowDataPacket[]>(
+    consultar("planes",
       `SELECT p.id, p.codigo, p.cliente_id, c.nombre AS cliente_nombre, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan
        FROM tms_planes_viaje p
        LEFT JOIN tms_clientes c ON c.id = p.cliente_id AND c.empresa_id = p.empresa_id
@@ -45,7 +55,7 @@ export async function GET(_req: Request, ctx: Ctx) {
     // puede tener firma en "Mi firma" (usuario_firmas está keyed por
     // usuario_id, NUNCA por empleado_id, ver src/lib/firmas/usuario-firmas.ts),
     // mismo criterio inverso que empresasParaUsuario() en src/lib/empresas.ts.
-    query<RowDataPacket[]>(
+    consultar("usuarios",
       `SELECT DISTINCT u.id, u.nombre, u.rol_global
        FROM usuarios u
        LEFT JOIN usuario_empresa ue ON ue.usuario_id = u.id AND ue.empresa_id = ?
@@ -53,17 +63,21 @@ export async function GET(_req: Request, ctx: Ctx) {
        ORDER BY u.nombre LIMIT 1000`,
       [eid],
     ),
-  ]);
+    ]);
 
-  return NextResponse.json(
+    return NextResponse.json(
     {
       empleados: empleados.map((r) => ({ id: Number(r.id), codigo: String(r.codigo), nombre: String(r.nombre), puesto: r.puesto != null ? String(r.puesto) : null, cuentaBancaria: r.cuenta_bancaria != null ? String(r.cuenta_bancaria) : null })),
       vehiculos: vehiculos.map((r) => ({ id: Number(r.id), placa: String(r.placa), marca: r.marca != null ? String(r.marca) : null, modelo: r.modelo != null ? String(r.modelo) : null })),
-      clientes: clientes.map((r) => ({ id: Number(r.id), codigo: r.codigo != null ? String(r.codigo) : null, nombre: String(r.nombre), nit: r.nit != null ? String(r.nit) : null })),
+      clientes: clientes.map((r) => ({ id: Number(r.id), codigo: null, nombre: String(r.nombre), nit: r.nit != null ? String(r.nit) : null })),
       planes: planes.map((r) => ({ id: Number(r.id), codigo: String(r.codigo), clienteId: r.cliente_id != null ? Number(r.cliente_id) : null, clienteNombre: r.cliente_nombre != null ? String(r.cliente_nombre) : null, fechaPlan: String(r.fecha_plan) })),
       usuarios: usuarios.map((r) => ({ id: Number(r.id), nombre: String(r.nombre) })),
       solicitantes: usuarios.filter((r) => ["Operaciones", "GerenteOperaciones", "JefeOperaciones", "AuxiliarOperaciones"].includes(String(r.rol_global ?? ""))).map((r) => ({ id: Number(r.id), nombre: String(r.nombre) })),
     },
     { headers: { "Cache-Control": "private, no-store" } },
-  );
+    );
+  } catch (error) {
+    const mensaje = error instanceof Error ? error.message : "No se pudieron cargar los catálogos.";
+    return NextResponse.json({ error: mensaje }, { status: 500, headers: { "Cache-Control": "private, no-store" } });
+  }
 }

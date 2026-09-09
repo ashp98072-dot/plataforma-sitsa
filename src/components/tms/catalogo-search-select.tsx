@@ -8,7 +8,13 @@ export function filtrarOpcionesBusqueda(opciones: CatalogoSearchOption[], texto:
   const q = texto.trim().toLocaleLowerCase("es");
   if (!q) return opciones;
   return opciones
-    .filter((o) => `${o.label} ${o.detail ?? ""} ${o.searchText ?? ""}`.toLocaleLowerCase("es").includes(q))
+    .filter((o) => `${o.label} ${o.searchText ?? o.detail ?? ""}`.toLocaleLowerCase("es").includes(q))
+    .sort((a, b) => {
+      const nombreA = a.label.toLocaleLowerCase("es");
+      const nombreB = b.label.toLocaleLowerCase("es");
+      const rango = (nombre: string) => nombre.startsWith(q) ? 0 : nombre.includes(q) ? 1 : 2;
+      return rango(nombreA) - rango(nombreB);
+    })
     .slice(0, limite);
 }
 
