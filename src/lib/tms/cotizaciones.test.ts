@@ -16,7 +16,7 @@ function filaCotizacion(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     id: 1, empresa_id: 7, codigo: "COT-000001", cliente_id: 3, cliente_nombre: "Cliente Acme",
     ruta_id: 5, ruta_codigo_historico: "RUTA-1", origen_texto: "Bodega Zona 12", destino_texto: "PriceSmart Miraflores",
-    tarifa_referencia: "1250.00", costo_operativo_referencia: "900.00", tarifa_cotizada: "1400.00",
+    tarifa_referencia: "1250.00", tarifa_cotizada: "1400.00",
     incluye_iva: 0, moneda: "GTQ", fecha_emision: "2026-09-08", fecha_vencimiento: "2026-09-22",
     estado: "Borrador", piloto_incluido: 1, gps_incluido: 0, seguro_mercaderia_incluido: 0, seguro_terceros_incluido: 0,
     km_incluidos: null, tarifa_km_adicional: null, condiciones_adicionales: null, observaciones: null,
@@ -42,7 +42,7 @@ function conexion(opts: ConnOpts = {}) {
       if (sql.includes("FROM tms_clientes")) return [clienteExiste ? [{ nombre: "Cliente Acme" }] : []];
       if (sql.includes("FROM tms_cliente_rutas")) {
         return [rutaExiste ? [opts.rutaFila ?? {
-          codigo: "RUTA-1", tarifa_referencia: "1250.00", costo_operativo: "900.00",
+          codigo: "RUTA-1", tarifa_referencia: "1250.00",
           lugar_carga_texto: "Bodega Zona 12", destino_descripcion: "PriceSmart Miraflores",
         }] : []];
       }
@@ -93,14 +93,13 @@ describe("cálculo de IVA (Guatemala, tasa fija)", () => {
 });
 
 describe("crearCotizacion — snapshot histórico (COTIZADOR-TMS-1)", () => {
-  it("captura tarifa_referencia/costo_operativo/origen/destino de la ruta AL MOMENTO de crear", async () => {
+  it("captura tarifa_referencia/origen/destino de la ruta AL MOMENTO de crear", async () => {
     conexion();
     vi.mocked(query).mockResolvedValue([filaCotizacion()] as never);
     const c = await crearCotizacion(7, {
       clienteId: 3, rutaId: 5, tarifaCotizada: 1400, fechaEmision: "2026-09-08",
     }, "admin");
     expect(c.tarifaReferencia).toBe(1250);
-    expect(c.costoOperativoReferencia).toBe(900);
     expect(c.origenTexto).toBe("Bodega Zona 12");
     expect(c.destinoTexto).toBe("PriceSmart Miraflores");
   });
@@ -108,7 +107,7 @@ describe("crearCotizacion — snapshot histórico (COTIZADOR-TMS-1)", () => {
   it("nunca confía en un tarifaReferencia enviado por el cliente HTTP — siempre relee la ruta real", async () => {
     // El tipo CotizacionInput ni siquiera acepta tarifaReferencia — esta
     // prueba confirma que el INSERT usa el valor releído del servidor
-    // (900/1250 de la ruta mockeada), no algo que un caller malicioso
+    // (1250 de la ruta mockeada), no algo que un caller malicioso
     // pudiera inyectar por otra vía.
     const conn = conexion();
     vi.mocked(query).mockResolvedValue([filaCotizacion()] as never);
@@ -116,13 +115,12 @@ describe("crearCotizacion — snapshot histórico (COTIZADOR-TMS-1)", () => {
     const insertCall = conn.execute.mock.calls.find((c) => (c[0] as string).includes("INSERT INTO tms_cotizaciones"))!;
     const params = insertCall[1] as unknown[];
     expect(params).toContain(1250); // tarifa_referencia
-    expect(params).toContain(900); // costo_operativo_referencia
   });
 
   it("una vez guardada, cambios posteriores en la ruta maestra NO se reflejan (el snapshot ya quedó fijo en la fila)", async () => {
     conexion();
-    // Primera lectura (creación): ruta con tarifa 1250/costo 900.
-    vi.mocked(query).mockResolvedValue([filaCotizacion({ tarifa_referencia: "1250.00", costo_operativo_referencia: "900.00" })] as never);
+    // Primera lectura (creación): ruta con tarifa 1250.
+    vi.mocked(query).mockResolvedValue([filaCotizacion({ tarifa_referencia: "1250.00" })] as never);
     const c = await crearCotizacion(7, { clienteId: 3, rutaId: 5, tarifaCotizada: 1400, fechaEmision: "2026-09-08" });
     expect(c.tarifaReferencia).toBe(1250);
     // obtenerCotizacion (lectura posterior) NUNCA vuelve a tocar
@@ -134,10 +132,29 @@ describe("crearCotizacion — snapshot histórico (COTIZADOR-TMS-1)", () => {
 
   it("sin rutaId: no consulta tms_cliente_rutas, snapshot queda null", async () => {
     conexion();
-    vi.mocked(query).mockResolvedValue([filaCotizacion({ ruta_id: null, ruta_codigo_historico: null, tarifa_referencia: null, costo_operativo_referencia: null })] as never);
+    vi.mocked(query).mockResolvedValue([filaCotizacion({ ruta_id: null, ruta_codigo_historico: null, tarifa_referencia: null })] as never);
     const c = await crearCotizacion(7, { clienteId: 3, tarifaCotizada: 1400, fechaEmision: "2026-09-08" });
     expect(c.rutaId).toBeNull();
     expect(c.tarifaReferencia).toBeNull();
+  });
+
+  /**
+   * TMS-SIN-COSTO-OPERATIVO-1 — negocio confirmó que "costo operativo"
+   * ya no se utiliza en el cotizador: no se copia de la ruta, no se
+   * muestra y no entra en ningún cálculo. La columna
+   * tms_cotizaciones.costo_operativo_referencia NO se eliminó (sin DROP,
+   * sin migración destructiva) — esta prueba confirma que la capa de
+   * aplicación ya no la lee ni la escribe.
+   */
+  it("ya no copia costo_operativo de la ruta ni lo incluye en la cotización creada", async () => {
+    const conn = conexion();
+    vi.mocked(query).mockResolvedValue([filaCotizacion()] as never);
+    const c = await crearCotizacion(7, { clienteId: 3, rutaId: 5, tarifaCotizada: 1400, fechaEmision: "2026-09-08" });
+    expect(c).not.toHaveProperty("costoOperativoReferencia");
+    const rutaQueryCall = conn.query.mock.calls.find((c) => String(c[0]).includes("FROM tms_cliente_rutas"))!;
+    expect(String(rutaQueryCall[0])).not.toContain("costo_operativo");
+    const insertCall = conn.execute.mock.calls.find((c) => (c[0] as string).includes("INSERT INTO tms_cotizaciones"))!;
+    expect(String(insertCall[0])).not.toContain("costo_operativo_referencia");
   });
 
   it("genera código COT-###### derivado del id, sin condición de carrera", async () => {

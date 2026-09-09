@@ -9,7 +9,6 @@ const personal = [
 
 const vacio = {
   tarifaComercial: "",
-  costoOperativoReferencia: "",
   pilotoEmpleadoId: 0,
   pilotoNombre: "",
   auxiliarEmpleadoIds: [] as number[],
@@ -21,7 +20,6 @@ describe("defaults de ruta en Programación", () => {
   it("precarga tarifa, piloto, varios auxiliares y viáticos en campos vacíos", () => {
     expect(aplicarDefaultsRutaSinSobrescribir(vacio, 1250, personal)).toEqual({
       tarifaComercial: "1250",
-      costoOperativoReferencia: "",
       pilotoEmpleadoId: 10,
       pilotoNombre: "Piloto",
       auxiliarEmpleadoIds: [20, 21],
@@ -33,14 +31,13 @@ describe("defaults de ruta en Programación", () => {
   it("no pisa tarifa, piloto, auxiliares ni viáticos manuales", () => {
     const actual = {
       tarifaComercial: "999",
-      costoOperativoReferencia: "500",
       pilotoEmpleadoId: 99,
       pilotoNombre: "Manual",
       auxiliarEmpleadoIds: [98],
       auxiliarNombres: [],
       viaticosMontos: { piloto: "33", "aux-emp-98": "44" },
     };
-    expect(aplicarDefaultsRutaSinSobrescribir(actual, 1250, personal, 900)).toEqual(actual);
+    expect(aplicarDefaultsRutaSinSobrescribir(actual, 1250, personal)).toEqual(actual);
   });
 
   it("preserva auxiliares libres y completa solo el piloto vacío", () => {
@@ -52,19 +49,15 @@ describe("defaults de ruta en Programación", () => {
     expect(result.viaticosMontos.piloto).toBe("25");
   });
 
-  it("precarga el costo operativo de referencia de la ruta solo si viene vacío (snapshot editable, TMS-GASTOS-REPORTES-1)", () => {
-    const result = aplicarDefaultsRutaSinSobrescribir(vacio, 1250, personal, 900);
-    expect(result.costoOperativoReferencia).toBe("900");
-  });
-
-  it("no pisa un costo operativo ya capturado manualmente aunque la ruta traiga uno distinto", () => {
-    const actual = { ...vacio, costoOperativoReferencia: "111" };
-    const result = aplicarDefaultsRutaSinSobrescribir(actual, 1250, personal, 900);
-    expect(result.costoOperativoReferencia).toBe("111");
-  });
-
-  it("sin costo operativo en la ruta, deja el campo vacío tal cual (nunca inventa un valor)", () => {
-    const result = aplicarDefaultsRutaSinSobrescribir(vacio, 1250, personal, null);
-    expect(result.costoOperativoReferencia).toBe("");
+  /**
+   * TMS-SIN-COSTO-OPERATIVO-1 — negocio confirmó que "costo operativo"
+   * ya no se utiliza: aplicarDefaultsRutaSinSobrescribir ya NO acepta ni
+   * devuelve costoOperativoReferencia (antes lo sugería/copiaba de la
+   * ruta igual que tarifaComercial). Esta prueba es la guarda de
+   * regresión: el resultado nunca debe traer esa clave.
+   */
+  it("el resultado nunca incluye costoOperativoReferencia (campo retirado)", () => {
+    const result = aplicarDefaultsRutaSinSobrescribir(vacio, 1250, personal);
+    expect(result).not.toHaveProperty("costoOperativoReferencia");
   });
 });

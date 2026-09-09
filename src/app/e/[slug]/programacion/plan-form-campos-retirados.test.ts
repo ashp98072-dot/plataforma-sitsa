@@ -34,17 +34,14 @@ const programacionClient = readFileSync(
 );
 
 describe("plan-form.tsx ya no captura los 3 campos retirados", () => {
-  it("no queda ningún estado de formulario (form.costoOperativoReferencia), input ni payload que lo use", () => {
-    // Única mención restante permitida: el "" inerte que se pasa a
-    // aplicarDefaultsRutaSinSobrescribir (src/lib/tms/ruta-defaults.ts,
-    // función/tipo/pruebas SIN TOCAR, fuera de alcance de este ticket) —
-    // el valor de retorno de esa función para este campo se descarta
-    // (nunca se vuelve a asignar a `form`). Lo que importa para "ya no se
-    // captura desde la UI" es que `form.costoOperativoReferencia` no
-    // exista en ningún lado.
-    expect(planForm).not.toMatch(/form\.costoOperativoReferencia/);
-    expect(planForm).not.toMatch(/costoOperativoReferencia:\s*form\./);
-    expect(planForm).not.toMatch(/costoOperativoReferencia:\s*plan\?\./);
+  it("no queda ningún estado de formulario, input ni payload para costoOperativoReferencia", () => {
+    // TMS-SIN-COSTO-OPERATIVO-1: desde este ticket ya no queda NINGUNA
+    // mención de costoOperativo* en plan-form.tsx — ni siquiera el ""
+    // inerte que antes se pasaba a aplicarDefaultsRutaSinSobrescribir
+    // (esa función ya no acepta el parámetro en absoluto, ver
+    // src/lib/tms/ruta-defaults.ts).
+    expect(planForm).not.toMatch(/costoOperativoReferencia/);
+    expect(planForm).not.toMatch(/costoOperativo/i);
   });
 
   it("no queda ningún estado de formulario, input ni payload para referenciaCliente", () => {

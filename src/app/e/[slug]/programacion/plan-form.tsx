@@ -723,20 +723,17 @@ export default function PlanForm({
    * respaldo, siempre lee lugar_descarga_historico directamente.
    */
   function aplicarRuta(ruta: RutaOpt) {
-    // PROGRAMACION-REPORTES-FILTROS-1: "costo operativo de referencia" ya
-    // no se captura desde este formulario (ver form.tarifaComercial más
-    // abajo) — se pasa "" (sin snapshot) y se descarta el valor sugerido
-    // que devuelva `defaults`, sin tocar `aplicarDefaultsRutaSinSobrescribir`
-    // ni sus pruebas (el backend/lib siguen soportando el campo intacto).
+    // TMS-SIN-COSTO-OPERATIVO-1: "costo operativo" ya no se captura ni se
+    // copia desde la ruta (ver ruta-defaults.ts — el helper ya no acepta
+    // ese parámetro en absoluto).
     const defaults = aplicarDefaultsRutaSinSobrescribir({
       tarifaComercial: form.tarifaComercial,
-      costoOperativoReferencia: "",
       pilotoEmpleadoId: form.pilotoEmpleadoId,
       pilotoNombre: form.pilotoNombre,
       auxiliarEmpleadoIds: form.auxiliarEmpleadoIds,
       auxiliarNombres: form.auxiliarNombres,
       viaticosMontos,
-    }, ruta.tarifaReferencia, ruta.personalPredeterminado, ruta.costoOperativo);
+    }, ruta.tarifaReferencia, ruta.personalPredeterminado);
     setViaticosMontos(defaults.viaticosMontos);
     setForm((f) => ({
       ...f,

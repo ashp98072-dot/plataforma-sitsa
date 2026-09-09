@@ -20,7 +20,6 @@ type Cotizacion = {
   origenTexto: string | null;
   destinoTexto: string | null;
   tarifaReferencia: number | null;
-  costoOperativoReferencia: number | null;
   tarifaCotizada: number;
   incluyeIva: boolean;
   moneda: string;
@@ -166,7 +165,7 @@ export default function CotizacionesPage() {
   function aplicarRuta(ruta: RutaOpt) {
     const defaults = aplicarDefaultsRutaCotizacion(
       { tarifaCotizada: form.tarifaCotizada, origenTexto: form.origenTexto, destinoTexto: form.destinoTexto },
-      { tarifaReferencia: ruta.tarifaReferencia, costoOperativo: ruta.costoOperativo, origenTexto: ruta.lugarCargaTexto, destinoTexto: ruta.destinoDescripcion },
+      { tarifaReferencia: ruta.tarifaReferencia, origenTexto: ruta.lugarCargaTexto, destinoTexto: ruta.destinoDescripcion },
     );
     setForm((f) => ({
       ...f,
@@ -358,7 +357,6 @@ export default function CotizacionesPage() {
                 <div><span className="text-[var(--muted)]">Destino:</span> {c.destinoTexto ?? "—"}</div>
                 <div><span className="text-[var(--muted)]">Ruta:</span> {c.rutaCodigoHistorico ?? "—"}</div>
                 <div><span className="text-[var(--muted)]">Tarifa referencia:</span> {money(c.tarifaReferencia)}</div>
-                <div><span className="text-[var(--muted)]">Costo operativo ref.:</span> {money(c.costoOperativoReferencia)}</div>
                 <div><span className="text-[var(--muted)]">Vigencia:</span> {c.fechaVencimiento ?? "—"}</div>
                 <div><span className="text-[var(--muted)]">Piloto incluido:</span> {c.pilotoIncluido ? "Sí" : "No"}</div>
                 <div><span className="text-[var(--muted)]">GPS:</span> {c.gpsIncluido ? "Sí" : "No"}</div>

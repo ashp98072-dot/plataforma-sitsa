@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { aplicarDefaultsRutaCotizacion } from "./cotizacion-defaults";
 
 const vacio = { tarifaCotizada: "", origenTexto: "", destinoTexto: "" };
-const ruta = { tarifaReferencia: 1250, costoOperativo: 900, origenTexto: "Bodega Zona 12", destinoTexto: "PriceSmart Miraflores" };
+const ruta = { tarifaReferencia: 1250, origenTexto: "Bodega Zona 12", destinoTexto: "PriceSmart Miraflores" };
 
 describe("defaults de ruta en el cotizador (COTIZADOR-TMS-1)", () => {
   it("precarga tarifa, origen y destino en campos vacíos", () => {
@@ -26,7 +26,7 @@ describe("defaults de ruta en el cotizador (COTIZADOR-TMS-1)", () => {
   });
 
   it("ruta sin tarifa/origen/destino capturados no inventa valores", () => {
-    const rutaVacia = { tarifaReferencia: null, costoOperativo: null, origenTexto: null, destinoTexto: null };
+    const rutaVacia = { tarifaReferencia: null, origenTexto: null, destinoTexto: null };
     expect(aplicarDefaultsRutaCotizacion(vacio, rutaVacia)).toEqual(vacio);
   });
 
@@ -34,5 +34,10 @@ describe("defaults de ruta en el cotizador (COTIZADOR-TMS-1)", () => {
     const actual = { tarifaCotizada: "500", origenTexto: "", destinoTexto: "Destino ya puesto" };
     const r = aplicarDefaultsRutaCotizacion(actual, ruta);
     expect(r).toEqual({ tarifaCotizada: "500", origenTexto: "Bodega Zona 12", destinoTexto: "Destino ya puesto" });
+  });
+
+  it("TMS-SIN-COSTO-OPERATIVO-1: RutaDefaultCotizacion ya no acepta/usa costoOperativo (campo retirado)", () => {
+    const r = aplicarDefaultsRutaCotizacion(vacio, ruta);
+    expect(r).not.toHaveProperty("costoOperativo");
   });
 });

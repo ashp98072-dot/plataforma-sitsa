@@ -17,7 +17,8 @@ const TIPOS: { value: TipoReporte; label: string }[] = [
 
 type FilaAgregada = { clave: string; etiqueta: string; registros: number; totalMonto: number };
 type FilaViatico = { planCodigo: string; fechaPlan: string; personalNombre: string; rol: string; montoSugerido: number; montoAsignado: number; estado: string };
-type FilaRentabilidad = { planCodigo: string; fechaPlan: string; clienteNombre: string | null; tarifaComercial: number; costoOperativo: number | null; gastos: number; viaticos: number; utilidad: number };
+// TMS-SIN-COSTO-OPERATIVO-1: sin costoOperativo — negocio confirmó que ya no se utiliza.
+type FilaRentabilidad = { planCodigo: string; fechaPlan: string; clienteNombre: string | null; tarifaComercial: number; gastos: number; viaticos: number; utilidad: number };
 
 const inputCls = "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
 const money = (n: number) => `Q${n.toLocaleString("es-GT", { minimumFractionDigits: 2 })}`;
@@ -117,12 +118,12 @@ export default function ReportesGastosPage() {
 
       {!loading && tipo === "rentabilidad" ? (
         <table className="w-full text-left text-sm">
-          <thead className="text-[var(--muted)]"><tr><th className="px-2 py-1">Viaje</th><th className="px-2 py-1">Fecha</th><th className="px-2 py-1">Cliente</th><th className="px-2 py-1">Tarifario</th><th className="px-2 py-1">Costo operativo</th><th className="px-2 py-1">Gastos</th><th className="px-2 py-1">Viáticos</th><th className="px-2 py-1">Utilidad</th></tr></thead>
+          <thead className="text-[var(--muted)]"><tr><th className="px-2 py-1">Viaje</th><th className="px-2 py-1">Fecha</th><th className="px-2 py-1">Cliente</th><th className="px-2 py-1">Tarifa comercial</th><th className="px-2 py-1">Gastos</th><th className="px-2 py-1">Viáticos</th><th className="px-2 py-1">Utilidad</th></tr></thead>
           <tbody>
             {(filas as FilaRentabilidad[]).map((f, i) => (
               <tr key={i} className="border-t border-[var(--border)]">
                 <td className="px-2 py-1">{f.planCodigo}</td><td className="px-2 py-1">{f.fechaPlan}</td><td className="px-2 py-1">{f.clienteNombre ?? "—"}</td>
-                <td className="px-2 py-1">{money(f.tarifaComercial)}</td><td className="px-2 py-1">{f.costoOperativo != null ? money(f.costoOperativo) : "—"}</td>
+                <td className="px-2 py-1">{money(f.tarifaComercial)}</td>
                 <td className="px-2 py-1">{money(f.gastos)}</td><td className="px-2 py-1">{money(f.viaticos)}</td>
                 <td className={`px-2 py-1 ${f.utilidad < 0 ? "text-red-400" : "text-emerald-400"}`}>{money(f.utilidad)}</td>
               </tr>

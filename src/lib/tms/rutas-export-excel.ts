@@ -6,9 +6,13 @@ export async function exportarRutasExcel(rutas: ClienteRuta[], empresaNombre: st
   wb.creator = "Plataforma corporativa";
   wb.subject = `Catálogo de rutas - ${empresaNombre}`;
   const ws = wb.addWorksheet("RUTAS", { views: [{ state: "frozen", ySplit: 3, showGridLines: false }] });
+  // TMS-SIN-COSTO-OPERATIVO-1: "Costo operativo" ya no se exporta — el
+  // negocio confirmó que este dato ya no se utiliza (ver ruta.costoOperativo
+  // en cliente-rutas.ts, que se conserva sin usar por compatibilidad
+  // histórica, sin DROP de columna).
   const headers = [
     "Código", "Cliente", "Nombre / descripción", "Lugar de carga", "Hora habitual", "Contacto",
-    "Destino", "Costo operativo (Q)", "Tarifario (Q)", "Piloto código", "Piloto nombre",
+    "Destino", "Tarifario (Q)", "Piloto código", "Piloto nombre",
     "Viático piloto (Q)", "Auxiliares códigos", "Auxiliares nombres", "Viáticos auxiliares (Q)",
     "Paradas estructuradas", "Estado", "Observaciones",
   ];
@@ -29,7 +33,7 @@ export async function exportarRutasExcel(rutas: ClienteRuta[], empresaNombre: st
     const auxiliares = ruta.personalPredeterminado.filter((persona) => persona.rol === "Auxiliar");
     ws.addRow([
       ruta.codigo, ruta.clienteNombre, ruta.nombre ?? "", ruta.lugarCargaTexto ?? "", ruta.horaHabitual ?? "",
-      ruta.contactoNombre ?? "", ruta.destinoDescripcion ?? "", ruta.costoOperativo, ruta.tarifaReferencia,
+      ruta.contactoNombre ?? "", ruta.destinoDescripcion ?? "", ruta.tarifaReferencia,
       piloto?.empleadoCodigo ?? "", piloto?.empleadoNombre ?? "", piloto?.viaticoMonto ?? null,
       auxiliares.map((persona) => persona.empleadoCodigo).join(";"),
       auxiliares.map((persona) => persona.empleadoNombre).join(";"),
@@ -38,9 +42,9 @@ export async function exportarRutasExcel(rutas: ClienteRuta[], empresaNombre: st
       ruta.activo ? "Activa" : "Inactiva", ruta.observaciones ?? "",
     ]);
   }
-  ws.autoFilter = { from: "A3", to: `R${Math.max(3, rutas.length + 3)}` };
-  ws.columns = [14, 26, 25, 35, 14, 24, 40, 20, 18, 18, 26, 19, 28, 35, 28, 40, 12, 35].map((width) => ({ width }));
-  [8, 9, 12].forEach((column) => { ws.getColumn(column).numFmt = "Q#,##0.00"; });
+  ws.autoFilter = { from: "A3", to: `Q${Math.max(3, rutas.length + 3)}` };
+  ws.columns = [14, 26, 25, 35, 14, 24, 40, 18, 18, 26, 19, 28, 35, 28, 40, 12, 35].map((width) => ({ width }));
+  [8, 11].forEach((column) => { ws.getColumn(column).numFmt = "Q#,##0.00"; });
   ws.eachRow((row, rowNumber) => {
     if (rowNumber > 3) row.alignment = { vertical: "top", wrapText: true };
   });

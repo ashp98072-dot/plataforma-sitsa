@@ -21,10 +21,11 @@ describe("Excel modelo de rutas", () => {
     ]);
     expect(ws!.getColumn("C").width).toBeGreaterThanOrEqual(14);
     expect(ws!.getColumn("H").width).toBeGreaterThanOrEqual(58);
-    expect(ws!.getCell("I2").value).toBe("Costo operativo (Q)");
-    expect(ws!.getCell("J2").value).toBe("Tarifario (Q)");
-    expect(ws!.getCell("K2").value).toBe("Código piloto habitual");
-    expect(ws!.getCell("M2").value).toBe("Códigos auxiliares");
+    // TMS-SIN-COSTO-OPERATIVO-1: "Costo operativo" se retiró de la
+    // plantilla — I..M corren una posición (antes I..N con costo en I).
+    expect(ws!.getCell("I2").value).toBe("Tarifario (Q)");
+    expect(ws!.getCell("J2").value).toBe("Código piloto habitual");
+    expect(ws!.getCell("L2").value).toBe("Códigos auxiliares");
     expect(ws!.getCell("F1").numFmt).not.toBe("h:mm");
     expect(ws!.getCell("F2").numFmt).not.toBe("h:mm");
     expect(ws!.getColumn("F").numFmt).toBe("h:mm");
@@ -47,16 +48,24 @@ describe("Excel modelo de rutas", () => {
   it("lee tarifa, piloto, auxiliares y viáticos opcionales", async () => {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("CODIGOS DATA");
-    ws.getRow(2).values = [null, null, "1001", "Acme", "Bodega", "08:00", "Ana", "Sucursal", 900, 1250, "P-1", 150, "A-1; A-2", "75;80"];
+    ws.getRow(2).values = [null, null, "1001", "Acme", "Bodega", "08:00", "Ana", "Sucursal", 1250, "P-1", 150, "A-1; A-2", "75;80"];
     const [fila] = await parsearExcelRutas(Buffer.from(await wb.xlsx.writeBuffer()));
     expect(fila).toMatchObject({
-      costoOperativoExcel: 900,
       tarifaReferenciaExcel: 1250,
       pilotoCodigoExcel: "P-1",
       pilotoViaticoExcel: 150,
       auxiliaresCodigosExcel: ["A-1", "A-2"],
       auxiliaresViaticosExcel: [75, 80],
     });
+  });
+
+  /** TMS-SIN-COSTO-OPERATIVO-1: la columna "Costo operativo" se retiró — el resultado nunca incluye ese campo. */
+  it("ya no expone costoOperativoExcel (columna retirada de la plantilla)", async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("CODIGOS DATA");
+    ws.getRow(2).values = [null, null, "1001", "Acme", "Bodega", "08:00", "Ana", "Sucursal", 1250, "P-1", 150, "A-1; A-2", "75;80"];
+    const [fila] = await parsearExcelRutas(Buffer.from(await wb.xlsx.writeBuffer()));
+    expect(fila).not.toHaveProperty("costoOperativoExcel");
   });
 
   it.each([
@@ -67,23 +76,15 @@ describe("Excel modelo de rutas", () => {
   ])("rechaza monto inválido %s", async (monto, mensaje) => {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("CODIGOS DATA");
-    ws.getRow(2).values = [null, null, "1001", "Acme", "", "08:00", "", "Destino", "", monto];
+    ws.getRow(2).values = [null, null, "1001", "Acme", "", "08:00", "", "Destino", monto];
     const [fila] = await parsearExcelRutas(Buffer.from(await wb.xlsx.writeBuffer()));
     expect(fila.erroresCamposExcel.join(" ")).toContain(mensaje);
-  });
-
-  it("rechaza costo operativo negativo", async () => {
-    const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet("CODIGOS DATA");
-    ws.getRow(2).values = [null, null, "1001", "Acme", "", "08:00", "", "Destino", -1];
-    const [fila] = await parsearExcelRutas(Buffer.from(await wb.xlsx.writeBuffer()));
-    expect(fila.erroresCamposExcel.join(" ")).toContain("Costo operativo");
   });
 
   it("rechaza montos sobrantes o cantidad distinta de auxiliares", async () => {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("CODIGOS DATA");
-    ws.getRow(2).values = [null, null, "1001", "Acme", "", "08:00", "", "Destino", "", "", "", "", "A1", "10;20"];
+    ws.getRow(2).values = [null, null, "1001", "Acme", "", "08:00", "", "Destino", "", "", "", "A1", "10;20"];
     const [fila] = await parsearExcelRutas(Buffer.from(await wb.xlsx.writeBuffer()));
     expect(fila.erroresCamposExcel).toContain("La cantidad de viáticos debe coincidir con la cantidad de auxiliares.");
   });
@@ -91,7 +92,7 @@ describe("Excel modelo de rutas", () => {
   it("permite NULL posicional solo con segmento realmente vacío", async () => {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("CODIGOS DATA");
-    ws.getRow(2).values = [null, null, "1001", "Acme", "", "08:00", "", "Destino", "", "", "", "", "A1;A2", "10;"];
+    ws.getRow(2).values = [null, null, "1001", "Acme", "", "08:00", "", "Destino", "", "", "", "A1;A2", "10;"];
     const [fila] = await parsearExcelRutas(Buffer.from(await wb.xlsx.writeBuffer()));
     expect(fila.erroresCamposExcel).toEqual([]);
     expect(fila.auxiliaresViaticosExcel).toEqual([10, null]);

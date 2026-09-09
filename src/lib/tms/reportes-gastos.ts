@@ -228,15 +228,6 @@ export type FilaRentabilidadViaje = {
   fechaPlan: string;
   clienteNombre: string | null;
   tarifaComercial: number;
-  /**
-   * Snapshot histórico (tms_planes_viaje.costo_operativo_referencia),
-   * copiado de la ruta al momento de programar el viaje — NUNCA el valor
-   * ACTUAL de tms_cliente_rutas.costo_operativo (bloqueo 2, revisión PR
-   * #204): si la ruta maestra cambia su costo operativo después, los
-   * viajes ya guardados no deben verse afectados, igual que
-   * tarifaComercial. null si nunca se capturó para este viaje.
-   */
-  costoOperativo: number | null;
   gastos: number;
   viaticos: number;
   utilidad: number;
@@ -244,11 +235,17 @@ export type FilaRentabilidadViaje = {
 
 /**
  * Rentabilidad por viaje: tarifa_comercial (capturada en el propio plan)
- * menos costo_operativo_referencia (snapshot histórico en el propio plan,
- * ver tipo arriba) menos gastos operativos (tms_gastos_operativos) menos
- * viáticos (tms_viaticos, monto_asignado). Los 4 componentes se muestran
- * SEPARADOS siempre — nunca se mezclan ni se ocultan, incluso cuando
- * alguno es 0 o null.
+ * menos gastos operativos (tms_gastos_operativos) menos viáticos
+ * (tms_viaticos, monto_asignado). Los 4 componentes (tarifa/gastos/
+ * viáticos/utilidad) se muestran SEPARADOS siempre — nunca se mezclan ni
+ * se ocultan, incluso cuando alguno es 0.
+ *
+ * TMS-SIN-COSTO-OPERATIVO-1 — negocio confirmó que "costo operativo" ya
+ * no se utiliza: se retiró de la fórmula de utilidad (antes restaba
+ * costo_operativo_referencia) y de esta fila — ya no se selecciona
+ * p.costo_operativo_referencia. La columna sigue existiendo en
+ * tms_planes_viaje (sin DROP, sin migración destructiva) con los datos
+ * históricos intactos, simplemente este reporte ya no la usa.
  */
 export async function reporteRentabilidadPorViaje(
   empresaId: number,
@@ -263,7 +260,6 @@ export async function reporteRentabilidadPorViaje(
   const rows = await query<RowDataPacket[]>(
     `SELECT p.id AS plan_id, p.codigo AS plan_codigo, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan,
             cli.nombre AS cliente_nombre, p.tarifa_comercial,
-            p.costo_operativo_referencia,
             COALESCE(g.total_gastos, 0) AS total_gastos,
             COALESCE(v.total_viaticos, 0) AS total_viaticos
      FROM tms_planes_viaje p
@@ -282,7 +278,6 @@ export async function reporteRentabilidadPorViaje(
   );
   return rows.map((r) => {
     const tarifa = Number(r.tarifa_comercial ?? 0);
-    const costoOperativo = r.costo_operativo_referencia != null ? Number(r.costo_operativo_referencia) : null;
     const gastos = Number(r.total_gastos ?? 0);
     const viaticos = Number(r.total_viaticos ?? 0);
     return {
@@ -291,10 +286,9 @@ export async function reporteRentabilidadPorViaje(
       fechaPlan: String(r.fecha_plan),
       clienteNombre: r.cliente_nombre != null ? String(r.cliente_nombre) : null,
       tarifaComercial: tarifa,
-      costoOperativo,
       gastos,
       viaticos,
-      utilidad: tarifa - (costoOperativo ?? 0) - gastos - viaticos,
+      utilidad: tarifa - gastos - viaticos,
     };
   });
 }
