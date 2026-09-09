@@ -7,15 +7,6 @@ export type PersonalDefaultRuta = {
 
 export type EstadoDefaultsViaje = {
   tarifaComercial: string;
-  /**
-   * TMS-GASTOS-REPORTES-1 (bloqueo 2) — fotografía histórica del costo
-   * operativo de referencia, mismo tratamiento que tarifaComercial: se
-   * sugiere/copia de la ruta SOLO si el usuario todavía no capturó nada,
-   * y queda editable para este viaje sin tocar la ruta maestra. Una vez
-   * guardado el plan, cambios futuros de tms_cliente_rutas.costo_operativo
-   * NUNCA alteran este valor ya persistido.
-   */
-  costoOperativoReferencia: string;
   pilotoEmpleadoId: number;
   pilotoNombre: string;
   auxiliarEmpleadoIds: number[];
@@ -23,12 +14,21 @@ export type EstadoDefaultsViaje = {
   viaticosMontos: Record<string, string>;
 };
 
+/**
+ * TMS-SIN-COSTO-OPERATIVO-1 — negocio confirmó que "costo operativo" ya
+ * no se utiliza: este helper ya NO sugiere/copia costo_operativo_referencia
+ * (antes lo hacía, igual que tarifaComercial — ver TMS-GASTOS-REPORTES-1
+ * en el historial de este archivo). Programación sigue aceptando
+ * `costoOperativoReferencia` en su POST/PATCH por compatibilidad
+ * histórica (planes/route.ts, sin cambios ahí), pero ya no hay ningún
+ * flujo activo que lo capture ni lo copie desde la ruta.
+ */
+
 /** Aplica sugerencias de ruta únicamente donde el usuario aún no capturó un valor. */
 export function aplicarDefaultsRutaSinSobrescribir(
   actual: EstadoDefaultsViaje,
   tarifaReferencia: number | null,
   personal: PersonalDefaultRuta[],
-  costoOperativoRuta?: number | null,
 ): EstadoDefaultsViaje {
   const piloto = personal.find((p) => p.rol === "Piloto");
   const auxiliares = personal.filter((p) => p.rol === "Auxiliar");
@@ -51,10 +51,6 @@ export function aplicarDefaultsRutaSinSobrescribir(
       actual.tarifaComercial === "" && tarifaReferencia != null
         ? String(tarifaReferencia)
         : actual.tarifaComercial,
-    costoOperativoReferencia:
-      actual.costoOperativoReferencia === "" && costoOperativoRuta != null
-        ? String(costoOperativoRuta)
-        : actual.costoOperativoReferencia,
     pilotoEmpleadoId: pilotoFinal?.empleadoId ?? actual.pilotoEmpleadoId,
     pilotoNombre: pilotoFinal?.empleadoNombre ?? actual.pilotoNombre,
     auxiliarEmpleadoIds: auxiliaresFinales.length

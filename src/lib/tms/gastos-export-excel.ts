@@ -32,14 +32,16 @@ export async function exportarViaticosReporteExcel(filas: FilaViaticoReporte[]):
   });
 }
 
+// TMS-SIN-COSTO-OPERATIVO-1: "Costo operativo" ya no se exporta — negocio
+// confirmó que ya no se utiliza (fórmula de utilidad = tarifa - gastos -
+// viáticos, ver reportes-gastos.ts).
 export async function exportarRentabilidadExcel(filas: FilaRentabilidadViaje[]): Promise<Buffer> {
   return tablaAExcel({
     sheetName: "Rentabilidad por viaje",
-    headers: ["Viaje", "Fecha", "Cliente", "Tarifario (Q)", "Costo operativo (Q)", "Gastos (Q)", "Viaticos (Q)", "Utilidad (Q)"],
+    headers: ["Viaje", "Fecha", "Cliente", "Tarifario (Q)", "Gastos (Q)", "Viaticos (Q)", "Utilidad (Q)"],
     rows: filas.map((f) => [
       f.planCodigo, f.fechaPlan, f.clienteNombre ?? "—",
-      money(f.tarifaComercial), f.costoOperativo != null ? money(f.costoOperativo) : "—",
-      money(f.gastos), money(f.viaticos), money(f.utilidad),
+      money(f.tarifaComercial), money(f.gastos), money(f.viaticos), money(f.utilidad),
     ]),
   });
 }

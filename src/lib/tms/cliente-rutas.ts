@@ -35,6 +35,14 @@ async function executeConn(conn: PoolConnection, sql: string, params: SqlParams 
  * completa del destino (texto libre, formato tipo "RUTA-X -
  * punto1-punto2-punto3"), SEPARADA de las paradas estructuradas
  * (tms_cliente_ruta_paradas), que se mantienen intactas en paralelo.
+ *
+ * TMS-SIN-COSTO-OPERATIVO-1 — negocio confirmó que "costo operativo" ya
+ * no se utiliza: se retiró de este tipo/CRUD (formulario, listado,
+ * import/export de Excel, y de todo lo que copiaba su valor — ver
+ * ruta-defaults.ts, cotizacion-defaults.ts, cotizaciones.ts). La columna
+ * `tms_cliente_rutas.costo_operativo` NO se eliminó (sin DROP, sin
+ * migración destructiva) — queda en BD sin uso, con datos históricos
+ * intactos; simplemente esta capa ya no la selecciona ni la escribe.
  */
 
 export type RutaParada = {
@@ -77,7 +85,6 @@ export type ClienteRuta = {
   destinoDescripcion: string | null;
   horaHabitual: string | null;
   tarifaReferencia: number | null;
-  costoOperativo: number | null;
   contactoClienteId: number | null;
   contactoNombre: string | null;
   contactoCargo: string | null;
@@ -102,7 +109,6 @@ function mapRuta(r: RowDataPacket): Omit<ClienteRuta, "paradas"> {
     destinoDescripcion: r.destino_descripcion != null ? String(r.destino_descripcion) : null,
     horaHabitual: r.hora_habitual != null ? String(r.hora_habitual) : null,
     tarifaReferencia: r.tarifa_referencia != null ? Number(r.tarifa_referencia) : null,
-    costoOperativo: r.costo_operativo != null ? Number(r.costo_operativo) : null,
     contactoClienteId: r.contacto_cliente_id != null ? Number(r.contacto_cliente_id) : null,
     contactoNombre: r.contacto_nombre != null ? String(r.contacto_nombre) : null,
     contactoCargo: r.contacto_cargo != null ? String(r.contacto_cargo) : null,
@@ -118,7 +124,7 @@ function mapRuta(r: RowDataPacket): Omit<ClienteRuta, "paradas"> {
 const SELECT_RUTA = `
   SELECT r.id, r.cliente_id, c.nombre AS cliente_nombre, r.codigo, r.nombre,
          r.ubicacion_carga_id, r.lugar_carga_texto, r.destino_descripcion, r.hora_habitual,
-         r.tarifa_referencia, r.costo_operativo,
+         r.tarifa_referencia,
          r.contacto_cliente_id, ct.nombre AS contacto_nombre, ct.cargo AS contacto_cargo,
          ct.telefono AS contacto_telefono,
          r.observaciones, r.activo, r.creado_en, r.actualizado_en
@@ -267,7 +273,6 @@ export type ClienteRutaInput = {
   destinoDescripcion?: string | null;
   horaHabitual?: string | null;
   tarifaReferencia?: number | null;
-  costoOperativo?: number | null;
   contactoClienteId?: number | null;
   observaciones?: string | null;
   paradas?: RutaParadaInput[];
@@ -378,11 +383,11 @@ export async function crearRuta(
     const lugarCargaTexto = await resolverLugarCargaTexto(conn, empresaId, input.ubicacionCargaId, input.lugarCargaTexto);
     const r = await executeConn(conn,
       `INSERT INTO tms_cliente_rutas
-        (empresa_id, cliente_id, codigo, nombre, ubicacion_carga_id, lugar_carga_texto, destino_descripcion, hora_habitual, tarifa_referencia, costo_operativo, contacto_cliente_id, observaciones)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (empresa_id, cliente_id, codigo, nombre, ubicacion_carga_id, lugar_carga_texto, destino_descripcion, hora_habitual, tarifa_referencia, contacto_cliente_id, observaciones)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [empresaId, input.clienteId, codigo, input.nombre?.trim() || null, input.ubicacionCargaId ?? null,
         lugarCargaTexto, input.destinoDescripcion?.trim() || null, input.horaHabitual?.trim() || null,
-        input.tarifaReferencia ?? null, input.costoOperativo ?? null, input.contactoClienteId ?? null, input.observaciones?.trim() || null],
+        input.tarifaReferencia ?? null, input.contactoClienteId ?? null, input.observaciones?.trim() || null],
     );
     rutaId = Number(r.insertId);
     if (input.paradas !== undefined) await guardarParadasRuta(conn, empresaId, rutaId, input.paradas);
@@ -439,7 +444,7 @@ export async function actualizarRuta(
   await executeConn(conn,
     `UPDATE tms_cliente_rutas
      SET codigo = ?, nombre = ?, ubicacion_carga_id = ?, lugar_carga_texto = ?, destino_descripcion = ?,
-         hora_habitual = ?, tarifa_referencia = ?, costo_operativo = ?, contacto_cliente_id = ?, observaciones = ?, activo = ?
+         hora_habitual = ?, tarifa_referencia = ?, contacto_cliente_id = ?, observaciones = ?, activo = ?
      WHERE id = ? AND empresa_id = ?`,
     [
       codigo,
@@ -451,7 +456,6 @@ export async function actualizarRuta(
         : actual.destinoDescripcion,
       cambios.horaHabitual !== undefined ? cambios.horaHabitual?.trim() || null : actual.horaHabitual,
       cambios.tarifaReferencia !== undefined ? cambios.tarifaReferencia ?? null : actual.tarifaReferencia,
-      cambios.costoOperativo !== undefined ? cambios.costoOperativo ?? null : actual.costoOperativo,
       cambios.contactoClienteId !== undefined
         ? cambios.contactoClienteId ?? null
         : actual.contactoClienteId,

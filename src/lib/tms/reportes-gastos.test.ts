@@ -65,32 +65,42 @@ describe("reporteViaticosPorViajeEmpleado", () => {
 });
 
 describe("reporteRentabilidadPorViaje", () => {
-  it("calcula utilidad = tarifa - costoOperativo - gastos - viaticos", async () => {
+  it("calcula utilidad = tarifa - gastos - viaticos", async () => {
     vi.mocked(query).mockResolvedValue([{
       plan_id: 1, plan_codigo: "PLAN-1", fecha_plan: "2026-09-01", cliente_nombre: "Acme",
-      tarifa_comercial: "1000.00", costo_operativo_referencia: "300.00", total_gastos: "150.00", total_viaticos: "100.00",
+      tarifa_comercial: "1000.00", total_gastos: "150.00", total_viaticos: "100.00",
     }] as never);
     const [f] = await reporteRentabilidadPorViaje(7);
     expect(f).toMatchObject({
-      tarifaComercial: 1000, costoOperativo: 300, gastos: 150, viaticos: 100, utilidad: 450,
+      tarifaComercial: 1000, gastos: 150, viaticos: 100, utilidad: 750,
     });
   });
 
-  it("costo operativo null (nunca se capturó snapshot para este viaje) no rompe el cálculo", async () => {
+  it("tarifa sin gastos ni viáticos: utilidad = tarifa completa", async () => {
     vi.mocked(query).mockResolvedValue([{
       plan_id: 1, plan_codigo: "PLAN-1", fecha_plan: "2026-09-01", cliente_nombre: null,
-      tarifa_comercial: "1000.00", costo_operativo_referencia: null, total_gastos: "0.00", total_viaticos: "0.00",
+      tarifa_comercial: "1000.00", total_gastos: "0.00", total_viaticos: "0.00",
     }] as never);
     const [f] = await reporteRentabilidadPorViaje(7);
-    expect(f.costoOperativo).toBeNull();
     expect(f.utilidad).toBe(1000);
   });
 
-  it("lee el snapshot del plan (costo_operativo_referencia), nunca la ruta maestra en vivo", async () => {
-    vi.mocked(query).mockResolvedValue([] as never);
-    await reporteRentabilidadPorViaje(7);
+  /**
+   * TMS-SIN-COSTO-OPERATIVO-1 — negocio confirmó que "costo operativo"
+   * ya no se utiliza: la fórmula de utilidad y esta consulta ya NO restan
+   * ni seleccionan costo_operativo_referencia. La columna sigue existiendo
+   * en tms_planes_viaje (sin DROP, sin migración destructiva) — esta
+   * prueba confirma que la capa de aplicación ya no la lee.
+   */
+  it("ya no selecciona ni usa costo_operativo_referencia (campo retirado, TMS-SIN-COSTO-OPERATIVO-1)", async () => {
+    vi.mocked(query).mockResolvedValue([{
+      plan_id: 1, plan_codigo: "PLAN-1", fecha_plan: "2026-09-01", cliente_nombre: "Acme",
+      tarifa_comercial: "1000.00", total_gastos: "150.00", total_viaticos: "100.00",
+    }] as never);
+    const [f] = await reporteRentabilidadPorViaje(7);
+    expect(f).not.toHaveProperty("costoOperativo");
     const sql = vi.mocked(query).mock.calls[0][0] as string;
-    expect(sql).toContain("p.costo_operativo_referencia");
+    expect(sql).not.toContain("costo_operativo");
     expect(sql).not.toContain("tms_cliente_rutas");
   });
 });

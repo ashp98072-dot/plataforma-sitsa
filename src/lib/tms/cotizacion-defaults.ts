@@ -1,17 +1,21 @@
 /**
  * COTIZADOR-TMS-1 — al elegir una ruta del catálogo (tms_cliente_rutas)
- * en el formulario de cotización, se SUGIERE tarifa de referencia, costo
- * operativo y origen/destino — nunca se sobrescribe un campo que el
- * usuario ya haya editado a mano. Mismo criterio exacto que
- * aplicarDefaultsRutaSinSobrescribir (src/lib/tms/ruta-defaults.ts, usado
- * por Programación) — módulo separado porque los campos del formulario
- * de cotización no son los mismos que los de un viaje (aquí hay
- * origen/destino de texto libre, allá hora/piloto/auxiliares).
+ * en el formulario de cotización, se SUGIERE tarifa de referencia y
+ * origen/destino — nunca se sobrescribe un campo que el usuario ya haya
+ * editado a mano. Mismo criterio exacto que aplicarDefaultsRutaSinSobrescribir
+ * (src/lib/tms/ruta-defaults.ts, usado por Programación) — módulo
+ * separado porque los campos del formulario de cotización no son los
+ * mismos que los de un viaje (aquí hay origen/destino de texto libre,
+ * allá hora/piloto/auxiliares).
+ *
+ * TMS-SIN-COSTO-OPERATIVO-1 — negocio confirmó que "costo operativo" ya
+ * no se utiliza: se retiró de RutaDefaultCotizacion (antes se recibía
+ * pero nunca se usaba en el resultado — dead field desde el inicio de
+ * este helper).
  */
 
 export type RutaDefaultCotizacion = {
   tarifaReferencia: number | null;
-  costoOperativo: number | null;
   origenTexto: string | null;
   destinoTexto: string | null;
 };

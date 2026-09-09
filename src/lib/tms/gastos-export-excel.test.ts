@@ -33,13 +33,17 @@ describe("exportación Excel de reportes de gastos", () => {
     expect(ws.getRow(2).values).toEqual([undefined, "PLAN-1", "2026-09-01", "Juan Perez", "Piloto", "150.00", "150.00", "PROGRAMADO"]);
   });
 
-  it("rentabilidad por viaje muestra '—' cuando no hay costo operativo capturado", async () => {
+  it("rentabilidad por viaje: tarifa, gastos, viáticos y utilidad separados (sin costo operativo, TMS-SIN-COSTO-OPERATIVO-1)", async () => {
     const buf = await exportarRentabilidadExcel([{
       planId: 1, planCodigo: "PLAN-1", fechaPlan: "2026-09-01", clienteNombre: null,
-      tarifaComercial: 1000, costoOperativo: null, gastos: 0, viaticos: 0, utilidad: 1000,
+      tarifaComercial: 1000, gastos: 0, viaticos: 0, utilidad: 1000,
     }]);
     const ws = await primeraHoja(buf);
-    expect(ws.getRow(2).values).toEqual([undefined, "PLAN-1", "2026-09-01", "—", "1000.00", "—", "0.00", "0.00", "1000.00"]);
+    expect(ws.getRow(1).values).toEqual([
+      undefined, "Viaje", "Fecha", "Cliente", "Tarifario (Q)", "Gastos (Q)", "Viaticos (Q)", "Utilidad (Q)",
+    ]);
+    expect(ws.getRow(1).values).not.toContain("Costo operativo (Q)");
+    expect(ws.getRow(2).values).toEqual([undefined, "PLAN-1", "2026-09-01", "—", "1000.00", "0.00", "0.00", "1000.00"]);
   });
 
   it("solicitud de fondo incluye líneas y fila de total", async () => {

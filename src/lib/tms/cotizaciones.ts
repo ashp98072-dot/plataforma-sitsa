@@ -11,15 +11,22 @@ import { registrarAuditoriaTx } from "@/lib/auditoria";
  *   - tms_cliente_rutas -> rutaId opcional (SNAPSHOT, sin FK — mismo
  *                          criterio que tms_planes_viaje.ruta_id: al
  *                          elegir una ruta se COPIA tarifa_referencia/
- *                          costo_operativo/origen/destino a la cotización;
- *                          cambios futuros de la ruta maestra NUNCA
- *                          alteran una cotización ya guardada)
+ *                          origen/destino a la cotización; cambios
+ *                          futuros de la ruta maestra NUNCA alteran una
+ *                          cotización ya guardada)
  *   - auditoria         -> registrarAuditoria/registrarAuditoriaTx, sin
  *                          bitácora paralela de cambios de estado.
  *
  * Esquema: NO se crea/altera desde este módulo — asume que
  * sql/migrate-2026-09-cotizador-tms.sql ya se aplicó manualmente (mismo
  * criterio que cliente-rutas.ts/gastos.ts/fondos.ts).
+ *
+ * TMS-SIN-COSTO-OPERATIVO-1 — negocio confirmó que "costo operativo" ya
+ * no se utiliza: ya no se copia de la ruta, no se muestra y no entra en
+ * ningún cálculo. `tms_cotizaciones.costo_operativo_referencia` NO se
+ * eliminó (sin DROP, sin migración destructiva) — queda en BD con los
+ * datos históricos de cotizaciones previas, simplemente esta capa ya no
+ * la selecciona ni la escribe para cotizaciones nuevas.
  */
 
 async function queryConn<T extends RowDataPacket[]>(conn: PoolConnection, sql: string, params: SqlParams = []): Promise<T> {
@@ -84,7 +91,6 @@ export type Cotizacion = {
   origenTexto: string | null;
   destinoTexto: string | null;
   tarifaReferencia: number | null;
-  costoOperativoReferencia: number | null;
   tarifaCotizada: number;
   incluyeIva: boolean;
   moneda: string;
@@ -116,7 +122,6 @@ function mapRow(r: RowDataPacket): Cotizacion {
     origenTexto: r.origen_texto != null ? String(r.origen_texto) : null,
     destinoTexto: r.destino_texto != null ? String(r.destino_texto) : null,
     tarifaReferencia: r.tarifa_referencia != null ? Number(r.tarifa_referencia) : null,
-    costoOperativoReferencia: r.costo_operativo_referencia != null ? Number(r.costo_operativo_referencia) : null,
     tarifaCotizada: Number(r.tarifa_cotizada ?? 0),
     incluyeIva: Number(r.incluye_iva ?? 0) === 1,
     moneda: String(r.moneda ?? "GTQ"),
@@ -139,7 +144,7 @@ function mapRow(r: RowDataPacket): Cotizacion {
 
 const SELECT = `
   SELECT id, empresa_id, codigo, cliente_id, cliente_nombre, ruta_id, ruta_codigo_historico,
-         origen_texto, destino_texto, tarifa_referencia, costo_operativo_referencia, tarifa_cotizada,
+         origen_texto, destino_texto, tarifa_referencia, tarifa_cotizada,
          incluye_iva, moneda, DATE_FORMAT(fecha_emision, '%Y-%m-%d') AS fecha_emision,
          DATE_FORMAT(fecha_vencimiento, '%Y-%m-%d') AS fecha_vencimiento, estado,
          piloto_incluido, gps_incluido, seguro_mercaderia_incluido, seguro_terceros_incluido,
@@ -196,7 +201,6 @@ export type CotizacionInput = {
 type SnapshotRuta = {
   rutaCodigoHistorico: string;
   tarifaReferencia: number | null;
-  costoOperativoReferencia: number | null;
   origenDefault: string | null;
   destinoDefault: string | null;
 };
@@ -204,9 +208,12 @@ type SnapshotRuta = {
 /**
  * AISLAMIENTO MULTIEMPRESA — el snapshot SIEMPRE se resuelve del lado del
  * servidor, releyendo tms_cliente_rutas por (id, empresa_id); nunca se
- * confía en un tarifaReferencia/costoOperativo que el cliente pretenda
- * haber copiado de una ruta. Si el id no existe en esta empresa, se
- * rechaza — nunca se acepta silenciosamente una ruta de otra empresa.
+ * confía en un tarifaReferencia que el cliente pretenda haber copiado de
+ * una ruta. Si el id no existe en esta empresa, se rechaza — nunca se
+ * acepta silenciosamente una ruta de otra empresa.
+ *
+ * TMS-SIN-COSTO-OPERATIVO-1 — ya no se lee/copia costo_operativo de la
+ * ruta (negocio confirmó que ya no se utiliza).
  */
 async function resolverSnapshotRuta(
   conn: PoolConnection,
@@ -215,7 +222,7 @@ async function resolverSnapshotRuta(
 ): Promise<SnapshotRuta | null> {
   if (rutaId == null) return null;
   const rows = await queryConn<RowDataPacket[]>(conn,
-    `SELECT codigo, tarifa_referencia, costo_operativo, lugar_carga_texto, destino_descripcion
+    `SELECT codigo, tarifa_referencia, lugar_carga_texto, destino_descripcion
      FROM tms_cliente_rutas WHERE id = ? AND empresa_id = ? LIMIT 1`,
     [rutaId, empresaId],
   );
@@ -224,7 +231,6 @@ async function resolverSnapshotRuta(
   return {
     rutaCodigoHistorico: String(r.codigo),
     tarifaReferencia: r.tarifa_referencia != null ? Number(r.tarifa_referencia) : null,
-    costoOperativoReferencia: r.costo_operativo != null ? Number(r.costo_operativo) : null,
     origenDefault: r.lugar_carga_texto != null ? String(r.lugar_carga_texto) : null,
     destinoDefault: r.destino_descripcion != null ? String(r.destino_descripcion) : null,
   };
@@ -261,10 +267,10 @@ export async function crearCotizacion(
     const r = await executeConn(conn,
       `INSERT INTO tms_cotizaciones
         (empresa_id, codigo, cliente_id, cliente_nombre, ruta_id, ruta_codigo_historico, origen_texto, destino_texto,
-         tarifa_referencia, costo_operativo_referencia, tarifa_cotizada, incluye_iva, fecha_emision, fecha_vencimiento,
+         tarifa_referencia, tarifa_cotizada, incluye_iva, fecha_emision, fecha_vencimiento,
          piloto_incluido, gps_incluido, seguro_mercaderia_incluido, seguro_terceros_incluido,
          km_incluidos, tarifa_km_adicional, condiciones_adicionales, observaciones, creado_por)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         empresaId,
         "", // se completa abajo, mismo criterio que fondos.ts (código derivado del id, sin condición de carrera)
@@ -275,7 +281,6 @@ export async function crearCotizacion(
         origenTexto,
         destinoTexto,
         snapshot?.tarifaReferencia ?? null,
-        snapshot?.costoOperativoReferencia ?? null,
         input.tarifaCotizada,
         input.incluyeIva ? 1 : 0,
         input.fechaEmision,
@@ -347,7 +352,7 @@ export async function actualizarCotizacion(
     await executeConn(conn,
       `UPDATE tms_cotizaciones SET
          cliente_id = ?, cliente_nombre = ?, ruta_id = ?, ruta_codigo_historico = ?, origen_texto = ?, destino_texto = ?,
-         tarifa_referencia = ?, costo_operativo_referencia = ?, tarifa_cotizada = ?, incluye_iva = ?,
+         tarifa_referencia = ?, tarifa_cotizada = ?, incluye_iva = ?,
          fecha_emision = ?, fecha_vencimiento = ?, piloto_incluido = ?, gps_incluido = ?,
          seguro_mercaderia_incluido = ?, seguro_terceros_incluido = ?, km_incluidos = ?, tarifa_km_adicional = ?,
          condiciones_adicionales = ?, observaciones = ?
@@ -360,7 +365,6 @@ export async function actualizarCotizacion(
         origenTexto,
         destinoTexto,
         cambios.rutaId !== undefined ? (snapshot?.tarifaReferencia ?? null) : actual.tarifaReferencia,
-        cambios.rutaId !== undefined ? (snapshot?.costoOperativoReferencia ?? null) : actual.costoOperativoReferencia,
         tarifaCotizada,
         cambios.incluyeIva !== undefined ? (cambios.incluyeIva ? 1 : 0) : actual.incluyeIva ? 1 : 0,
         cambios.fechaEmision ?? actual.fechaEmision,

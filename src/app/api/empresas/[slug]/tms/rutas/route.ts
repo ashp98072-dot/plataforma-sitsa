@@ -78,6 +78,10 @@ const schema = z.object({
   destinoDescripcion: z.string().max(300).optional(),
   horaHabitual: z.string().max(20).optional(),
   tarifaReferencia: z.number().min(0).max(9999999999.99).nullable().optional(),
+  // TMS-SIN-COSTO-OPERATIVO-1: negocio confirmó que ya no se utiliza — se
+  // deja aceptado aquí SOLO por compatibilidad con clientes/integraciones
+  // antiguas que aún lo envíen (nunca exigido); crearRuta (cliente-rutas.ts)
+  // ya no lo lee ni lo persiste. La UI nueva (rutas/page.tsx) no lo envía.
   costoOperativo: z.number().min(0).max(9999999999.99).nullable().optional(),
   contactoClienteId: z.number().int().positive().optional(),
   observaciones: z.string().max(300).optional(),
