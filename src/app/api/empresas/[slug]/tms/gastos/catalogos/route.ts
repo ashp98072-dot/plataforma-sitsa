@@ -43,9 +43,16 @@ export async function GET(_req: Request, ctx: Ctx) {
       [eid],
     ),
     consultar("planes",
-      `SELECT p.id, p.codigo, p.cliente_id, c.nombre AS cliente_nombre, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan
+      `SELECT p.id, p.codigo, p.cliente_id, c.nombre AS cliente_nombre, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan,
+              u.flota_vehiculo_id AS vehiculo_id, fv.placa,
+              pil.id_empleado AS empleado_id, e.nombre AS empleado_nombre,
+              e.puesto AS empleado_puesto, e.cuenta_bancaria AS empleado_cuenta
        FROM tms_planes_viaje p
        LEFT JOIN tms_clientes c ON c.id = p.cliente_id AND c.empresa_id = p.empresa_id
+       LEFT JOIN tms_unidades u ON u.id = p.unidad_id AND u.empresa_id = p.empresa_id
+       LEFT JOIN flota_vehiculos fv ON fv.id = u.flota_vehiculo_id AND fv.empresa_id = p.empresa_id
+       LEFT JOIN tms_personal pil ON pil.id = p.piloto_id AND pil.empresa_id = p.empresa_id
+       LEFT JOIN empleados e ON e.id = pil.id_empleado AND e.empresa_id = p.empresa_id
        WHERE p.empresa_id = ? ORDER BY p.id DESC LIMIT 500`,
       [eid],
     ),
@@ -70,7 +77,18 @@ export async function GET(_req: Request, ctx: Ctx) {
       empleados: empleados.map((r) => ({ id: Number(r.id), codigo: String(r.codigo), nombre: String(r.nombre), puesto: r.puesto != null ? String(r.puesto) : null, cuentaBancaria: r.cuenta_bancaria != null ? String(r.cuenta_bancaria) : null })),
       vehiculos: vehiculos.map((r) => ({ id: Number(r.id), placa: String(r.placa), marca: r.marca != null ? String(r.marca) : null, modelo: r.modelo != null ? String(r.modelo) : null })),
       clientes: clientes.map((r) => ({ id: Number(r.id), codigo: null, nombre: String(r.nombre), nit: r.nit != null ? String(r.nit) : null })),
-      planes: planes.map((r) => ({ id: Number(r.id), codigo: String(r.codigo), clienteId: r.cliente_id != null ? Number(r.cliente_id) : null, clienteNombre: r.cliente_nombre != null ? String(r.cliente_nombre) : null, fechaPlan: String(r.fecha_plan) })),
+      planes: planes.map((r) => ({
+        id: Number(r.id), codigo: String(r.codigo),
+        clienteId: r.cliente_id != null ? Number(r.cliente_id) : null,
+        clienteNombre: r.cliente_nombre != null ? String(r.cliente_nombre) : null,
+        fechaPlan: String(r.fecha_plan),
+        vehiculoId: r.vehiculo_id != null ? Number(r.vehiculo_id) : null,
+        placa: r.placa != null ? String(r.placa) : null,
+        empleadoId: r.empleado_id != null ? Number(r.empleado_id) : null,
+        empleadoNombre: r.empleado_nombre != null ? String(r.empleado_nombre) : null,
+        empleadoPuesto: r.empleado_puesto != null ? String(r.empleado_puesto) : null,
+        empleadoCuenta: r.empleado_cuenta != null ? String(r.empleado_cuenta) : null,
+      })),
       usuarios: usuarios.map((r) => ({ id: Number(r.id), nombre: String(r.nombre) })),
       solicitantes: usuarios.filter((r) => ["Operaciones", "GerenteOperaciones", "JefeOperaciones", "AuxiliarOperaciones"].includes(String(r.rol_global ?? ""))).map((r) => ({ id: Number(r.id), nombre: String(r.nombre) })),
     },
