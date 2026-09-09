@@ -259,6 +259,19 @@ describe("crearSolicitudFondo — snapshot histórico por línea (empleado/vehí
     expect(conn.execute.mock.calls.some((c) => String(c[0]).includes("UPDATE empleados"))).toBe(false);
   });
 
+  it("conserva un snapshot de Cuenta vacío aunque RRHH tenga una cuenta vigente", async () => {
+    const conn = conexion({ empleadoCuenta: "001122" });
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    await crearSolicitudFondo(7, {
+      requirenteNombre: "Prueba", solicitanteUsuarioId: 9,
+      fechaRequerimiento: "2026-09-09",
+      lineas: [{ categoria: "Otros", monto: 25, empleadoId: 4, cuentaOverride: "" }],
+    }, "admin");
+    const insertLinea = conn.execute.mock.calls.find(([sql]) => String(sql).includes("INSERT INTO tms_solicitud_fondo_lineas"))!;
+    expect((insertLinea[1] as unknown[])[11]).toBeNull();
+    expect(conn.execute.mock.calls.some(([sql]) => /UPDATE\s+empleados/i.test(String(sql)))).toBe(false);
+  });
+
   it("fechaViaje explícita del caller SIEMPRE gana sobre la fecha del plan", async () => {
     const conn = conexion({ planFecha: "2026-09-10" });
     vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);

@@ -69,4 +69,9 @@ describe("autocompletado de Plan en Solicitud de Fondo", () => {
     expect(editada.cuenta).toBe("override manual");
     expect(registroRrhh.cuentaBancaria).toBe("123456");
   });
+
+  it("conserva ceros iniciales y guiones porque Cuenta siempre es string", () => {
+    const result = aplicarEmpleadoSeleccionado(linea(), empleado({ cuentaBancaria: "001-002-0003" }), "3");
+    expect(result.cuenta).toBe("001-002-0003");
+  });
 });

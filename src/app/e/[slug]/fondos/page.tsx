@@ -346,7 +346,7 @@ export default function FondosPage() {
                       <input className={`${inputCls} mt-0.5 w-full`} value={l.empleadoNombre} onChange={(e) => set({ empleadoNombre: e.target.value })} maxLength={200} />
                     </label>
                     <label className="text-xs text-[var(--muted)]">Cuenta
-                      <input className={`${inputCls} mt-0.5 w-full`} value={l.cuenta} onChange={(e) => set({ cuenta: e.target.value })} maxLength={100} />
+                      <input className={`${inputCls} mt-0.5 w-full`} placeholder="Número de cuenta para depósito" value={l.cuenta} onChange={(e) => set({ cuenta: e.target.value })} maxLength={100} />
                     </label>
                     <label className="text-xs text-[var(--muted)]">Cargo
                       <input className={`${inputCls} mt-0.5 w-full`} value={l.cargo} onChange={(e) => set({ cargo: e.target.value })} maxLength={150} />
