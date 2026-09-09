@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { CatalogoSearchSelect, type CatalogoSearchOption } from "@/components/tms/catalogo-search-select";
-import { aplicarPlanSeleccionado } from "@/lib/tms/fondos-selectores";
+import { aplicarEmpleadoSeleccionado, aplicarPlanSeleccionado } from "@/lib/tms/fondos-selectores";
 
 type LineaFondo = {
   id: number; categoria: string; descripcion: string | null; cantidad: number; monto: number; orden: number;
@@ -318,7 +318,7 @@ export default function FondosPage() {
                   <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
                     <CatalogoSearchSelect label="Empleado" placeholder="Buscar empleado por nombre..." value={l.empleadoId} options={catalogos.empleados.map((e) => ({ value: String(e.id), label: e.nombre, detail: [e.codigo, e.puesto].filter(Boolean).join(" · "), searchText: e.nombre }))} inputClassName={inputCls} onChange={(value) => {
                       const empleado = catalogos.empleados.find((e) => String(e.id) === value);
-                      set({ empleadoId: value, empleadoNombre: empleado?.nombre ?? "", cuenta: empleado?.cuentaBancaria ?? "", cargo: empleado?.puesto ?? "" });
+                      set(aplicarEmpleadoSeleccionado(l, empleado, value));
                     }} />
                     <CatalogoSearchSelect label="Unidad" placeholder="Buscar placa..." value={l.vehiculoId} options={catalogos.vehiculos.map((v) => ({ value: String(v.id), label: v.placa, detail: [v.marca, v.modelo].filter(Boolean).join(" ") }))} inputClassName={inputCls} onChange={(value) => set({ vehiculoId: value })} />
                     <CatalogoSearchSelect label="Cliente" placeholder="Buscar cliente..." value={l.clienteId} options={catalogos.clientes.map((c) => ({ value: String(c.id), label: c.nombre, detail: [c.codigo, c.nit ? `NIT ${c.nit}` : null].filter(Boolean).join(" · ") }))} inputClassName={inputCls} onChange={(value) => set({ clienteId: value })} />
@@ -333,7 +333,8 @@ export default function FondosPage() {
                     */}
                     <CatalogoSearchSelect label="Viaje / Plan" placeholder="Buscar código, cliente o fecha..." value={l.planId} options={catalogos.planes.map((p) => ({ value: String(p.id), label: p.codigo, detail: [p.clienteNombre, p.fechaPlan ? p.fechaPlan.split("-").reverse().join("/") : null].filter(Boolean).join(" · ") }))} inputClassName={inputCls} onChange={(value) => {
                       const plan = catalogos.planes.find((p) => String(p.id) === value);
-                      set(aplicarPlanSeleccionado(l, plan, value));
+                      const empleado = catalogos.empleados.find((e) => e.id === plan?.empleadoId);
+                      set(aplicarPlanSeleccionado(l, plan, value, empleado));
                     }} />
                     <label className="text-xs text-[var(--muted)]">Fecha de viaje
                       <input type="date" className={`${inputCls} mt-0.5 w-full`} value={l.fechaViaje} onChange={(e) => set({ fechaViaje: e.target.value })} />
