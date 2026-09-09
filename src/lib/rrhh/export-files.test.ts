@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import PDFDocument from "pdfkit";
 import { celdaPdf, dibujarTablaEnDoc } from "./export-files";
 
@@ -62,5 +62,93 @@ describe("dibujarTablaEnDoc", () => {
       doc.end();
     });
     expect(buffer.subarray(0, 4).toString("latin1")).toBe("%PDF");
+  });
+
+  /**
+   * VIATICOS-PDF-PRESENTACION-1 — `align`/`minWeight` son parámetros
+   * OPT-IN nuevos (para centrar/ensanchar una columna de montos sin
+   * truncarla, ver viaticos-comprobante-pdf.ts). Estas pruebas confirman
+   * que (a) funcionan cuando se pasan y (b) un caller que NO los pasa
+   * (todos los demás reportes existentes) conserva EXACTAMENTE el mismo
+   * comportamiento de siempre — alineado a la izquierda, mismo ancho.
+   */
+  describe("align/minWeight (opt-in, VIATICOS-PDF-PRESENTACION-1)", () => {
+    function doc() {
+      return new PDFDocument({ size: "LETTER", layout: "landscape", margins: { top: 36, bottom: 40, left: 32, right: 32 }, bufferPages: true });
+    }
+    function espiarTexto(d: InstanceType<typeof PDFDocument>) {
+      const llamadas: { texto: string; opciones: Record<string, unknown> | undefined }[] = [];
+      const original = d.text.bind(d);
+      vi.spyOn(d, "text").mockImplementation((texto: unknown, ...args: unknown[]) => {
+        const opciones = args.find((a): a is Record<string, unknown> => typeof a === "object" && a !== null && !Array.isArray(a));
+        llamadas.push({ texto: String(texto), opciones });
+        return original(texto as string, ...(args as []));
+      });
+      return llamadas;
+    }
+
+    it("una columna sin align se sigue dibujando a la izquierda (comportamiento por defecto, sin cambios)", () => {
+      const d = doc();
+      const llamadas = espiarTexto(d);
+      dibujarTablaEnDoc(d, { headers: ["Monto"], rows: [["Q50.00"]] });
+      d.end();
+      const celda = llamadas.find((l) => l.texto === "Q50.00");
+      expect(celda?.opciones?.align).toBe("left");
+    });
+
+    it("align:{i:'center'} centra encabezado y valores de esa columna, sin afectar las demás", () => {
+      const d = doc();
+      const llamadas = espiarTexto(d);
+      dibujarTablaEnDoc(d, {
+        headers: ["Viaje", "Monto"],
+        rows: [["VJ-001", "Q50.00"]],
+        align: { 1: "center" },
+      });
+      d.end();
+      expect(llamadas.find((l) => l.texto === "Monto")?.opciones?.align).toBe("center");
+      expect(llamadas.find((l) => l.texto === "Q50.00")?.opciones?.align).toBe("center");
+      expect(llamadas.find((l) => l.texto === "VJ-001")?.opciones?.align).toBe("left");
+    });
+
+    it("minWeight evita que una columna corta quede tan angosta que trunque su contenido con '…'", () => {
+      // Mismo escenario (9 columnas, igual que viaticos-comprobante-pdf.ts)
+      // que reprodujo el bug real: con muchas columnas de texto largo,
+      // "Monto" (índice 5) quedaba tan angosta que "Q50.00" se truncaba a
+      // "Q50.0…" — un monto CORTO es el caso que más fácil se rompe,
+      // porque su propio peso (por longitud de texto) es el más pequeño.
+      const headers = ["Viaje", "Fecha", "Cliente", "Empleado", "Rol", "Monto", "Autorizado por", "Fecha autorización", "Código de firma"];
+      const filaBase = (monto: string) => [
+        "VJ-20260901-00123456",
+        "01/09/2026",
+        "Distribuidora Guatemalteca de Alimentos S.A.",
+        "Juan Carlos Perez Lopez Gonzalez",
+        "Piloto",
+        monto,
+        "Heber Alexander Sitan Ramirez",
+        "09/09/2026 14:12:33",
+        "SIG-20260909-a1b2c3d4",
+      ];
+
+      const sinMinWeight = doc();
+      const llamadasSinFix = espiarTexto(sinMinWeight);
+      dibujarTablaEnDoc(sinMinWeight, { headers, rows: [filaBase("Q50.00")] });
+      sinMinWeight.end();
+      expect(llamadasSinFix.some((l) => l.texto.includes("…"))).toBe(true); // reproduce el bug real sin el fix
+
+      const conMinWeight = doc();
+      const llamadasConFix = espiarTexto(conMinWeight);
+      // Además, con el fix, un monto con miles ("Q1,250.00") en la MISMA
+      // tabla también debe caber completo — no solo el caso corto.
+      dibujarTablaEnDoc(conMinWeight, {
+        headers,
+        rows: [filaBase("Q50.00"), filaBase("Q1,250.00")],
+        align: { 5: "center" },
+        minWeight: { 5: 14 },
+      });
+      conMinWeight.end();
+      expect(llamadasConFix.find((l) => l.texto === "Q50.00")).toBeDefined();
+      expect(llamadasConFix.find((l) => l.texto === "Q1,250.00")).toBeDefined();
+      expect(llamadasConFix.some((l) => l.texto.includes("…"))).toBe(false);
+    });
   });
 });
