@@ -42,13 +42,22 @@
 -- catálogo". Si un empleado cambia de nombre, una unidad cambia de placa,
 -- o un cliente se renombra, las solicitudes YA emitidas deben seguir
 -- mostrando el dato tal como era cuando se generó la solicitud.
+--
+-- SOLICITUD-FONDOS-PDF-AUTORIZADO-1 — agrega `cuenta` (mismo criterio
+-- SNAPSHOT que las columnas de arriba): NO es un dato nuevo, es
+-- empleados.cuenta_bancaria (ya existe, usada hoy por
+-- viaticos-exportar-banco.ts) copiado y congelado al resolver la línea
+-- (resolverSnapshotLineaTx en fondos.ts) para que el PDF formal de una
+-- solicitud ya autorizada no cambie si la cuenta bancaria del empleado
+-- se actualiza después.
 
 ALTER TABLE tms_solicitud_fondo_lineas
   ADD COLUMN IF NOT EXISTS fecha_viaje DATE NULL DEFAULT NULL AFTER monto,
   ADD COLUMN IF NOT EXISTS empleado_id INT NULL DEFAULT NULL AFTER fecha_viaje,
   ADD COLUMN IF NOT EXISTS empleado_nombre VARCHAR(200) NULL DEFAULT NULL AFTER empleado_id,
   ADD COLUMN IF NOT EXISTS cargo VARCHAR(100) NULL DEFAULT NULL AFTER empleado_nombre,
-  ADD COLUMN IF NOT EXISTS vehiculo_id INT NULL DEFAULT NULL AFTER cargo,
+  ADD COLUMN IF NOT EXISTS cuenta VARCHAR(30) NULL DEFAULT NULL AFTER cargo,
+  ADD COLUMN IF NOT EXISTS vehiculo_id INT NULL DEFAULT NULL AFTER cuenta,
   ADD COLUMN IF NOT EXISTS placa VARCHAR(20) NULL DEFAULT NULL AFTER vehiculo_id,
   ADD COLUMN IF NOT EXISTS cliente_id INT NULL DEFAULT NULL AFTER placa,
   ADD COLUMN IF NOT EXISTS cliente_nombre VARCHAR(200) NULL DEFAULT NULL AFTER cliente_id,

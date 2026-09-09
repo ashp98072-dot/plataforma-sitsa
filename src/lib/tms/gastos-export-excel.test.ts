@@ -50,19 +50,19 @@ describe("exportación Excel de reportes de gastos", () => {
 
   it("solicitud de fondo incluye líneas y fila de total", async () => {
     const solicitud: SolicitudFondo = {
-      id: 1, empresaId: 7, codigo: "FONDO-000001", requirenteEmpleadoId: null, requirenteNombre: "Juan Perez",
-      fechaRequerimiento: "2026-09-01", total: 350, autorizanteEmpleadoId: null, autorizanteNombre: null,
+      id: 1, empresaId: 7, codigo: "FONDO-000001", requirenteEmpleadoId: null, requirenteNombre: "Juan Perez", requirenteUsuarioId: null,
+      fechaRequerimiento: "2026-09-01", total: 350, autorizanteEmpleadoId: null, autorizanteNombre: null, autorizanteUsuarioId: null,
       estado: "Pendiente", autorizadoEn: null, rechazadoEn: null, motivoRechazo: null, liquidadoEn: null,
-      observaciones: null, creadoPor: "admin", creadoEn: "2026-09-01 10:00:00",
+      observaciones: null, creadoPor: "admin", solicitanteUsuarioId: null, solicitanteNombre: null, creadoEn: "2026-09-01 10:00:00",
       lineas: [
         {
           id: 1, categoria: "Combustible", descripcion: "Diesel", cantidad: 2, monto: 100, orden: 0,
-          fechaViaje: null, empleadoId: null, empleadoNombre: null, cargo: null,
+          fechaViaje: null, empleadoId: null, empleadoNombre: null, cargo: null, cuenta: null,
           vehiculoId: null, placa: null, clienteId: null, clienteNombre: null, planId: null,
         },
         {
           id: 2, categoria: "Hospedaje", descripcion: null, cantidad: 1, monto: 150, orden: 1,
-          fechaViaje: null, empleadoId: null, empleadoNombre: null, cargo: null,
+          fechaViaje: null, empleadoId: null, empleadoNombre: null, cargo: null, cuenta: null,
           vehiculoId: null, placa: null, clienteId: null, clienteNombre: null, planId: null,
         },
       ],

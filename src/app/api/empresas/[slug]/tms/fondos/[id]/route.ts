@@ -2,7 +2,13 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireTenantGastos } from "@/lib/tenant";
 import { CATEGORIAS_GASTO } from "@/lib/tms/gastos";
-import { actualizarSolicitudFondo, cambiarEstadoSolicitudFondo, obtenerSolicitudFondo } from "@/lib/tms/fondos";
+import {
+  actualizarSolicitudFondo,
+  cambiarEstadoSolicitudFondo,
+  MENSAJE_FIRMA_REQUERIDA_AUTORIZAR,
+  obtenerSolicitudFondo,
+} from "@/lib/tms/fondos";
+import { leerBytesFirmaGuardada } from "@/lib/firmas/usuario-firmas";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
 
@@ -29,15 +35,17 @@ const lineaSchema = z.object({
 
 const schema = z.object({
   accion: z.enum(["autorizar", "rechazar", "liquidar", "editar"]),
-  // autorizar/rechazar
+  // autorizar (legado, solo el vínculo RRHH opcional — el nombre/firma
+  // real ya NUNCA viene del cliente, ver más abajo) / rechazar
   autorizanteEmpleadoId: z.number().int().positive().nullable().optional(),
-  autorizanteNombre: z.string().max(200).nullable().optional(),
   motivoRechazo: z.string().max(300).nullable().optional(),
   // SOLICITUD-FONDOS-REPORTE-1 (pendiente 1 del PR #211) — solo para
   // accion:"editar". Mismas líneas que el POST de creación (fondos/route.ts).
   fechaRequerimiento: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   requirenteEmpleadoId: z.number().int().positive().nullable().optional(),
   requirenteNombre: z.string().max(200).nullable().optional(),
+  // SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§3) — ver POST de creación (fondos/route.ts).
+  requirenteUsuarioId: z.number().int().positive().nullable().optional(),
   observaciones: z.string().max(300).nullable().optional(),
   lineas: z.array(lineaSchema).min(1).max(40).optional(),
 });
@@ -61,18 +69,39 @@ export async function PATCH(req: Request, ctx: Ctx) {
 
   try {
     if (parsed.data.accion === "editar") {
-      const { fechaRequerimiento, requirenteEmpleadoId, requirenteNombre, observaciones, lineas } = parsed.data;
+      const { fechaRequerimiento, requirenteEmpleadoId, requirenteNombre, requirenteUsuarioId, observaciones, lineas } = parsed.data;
       const solicitud = await actualizarSolicitudFondo(guard.empresa.id, Number(id), {
-        fechaRequerimiento, requirenteEmpleadoId, requirenteNombre, observaciones, lineas,
+        fechaRequerimiento, requirenteEmpleadoId, requirenteNombre, requirenteUsuarioId, observaciones, lineas,
       }, guard.session.username);
       if (!solicitud) return NextResponse.json({ error: "Solicitud no encontrada." }, { status: 404 });
       return NextResponse.json({ mensaje: "Solicitud actualizada.", solicitud });
     }
 
+    // SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§2 del ticket) — autorizar EXIGE
+    // la firma manuscrita real de "Mi firma" del usuario de sesión (nunca
+    // un nombre/firma que el cliente HTTP pretenda mandar). Se verifica
+    // ANTES de llamar a cambiarEstadoSolicitudFondo (falla rápido, sin
+    // tocar la base de datos si no hay firma) — mismo criterio que
+    // autorizarViatico valida su imagen ANTES de la lib (ver
+    // .../viaticos/[id]/autorizar/route.ts).
+    let autorizante: { usuarioId: number; nombre: string; rol: string | null; imagen: { bytes: ArrayBuffer; original: string } } | null = null;
+    if (parsed.data.accion === "autorizar") {
+      const bytes = await leerBytesFirmaGuardada(guard.session.id);
+      if (!bytes) {
+        return NextResponse.json({ error: MENSAJE_FIRMA_REQUERIDA_AUTORIZAR }, { status: 400 });
+      }
+      autorizante = {
+        usuarioId: guard.session.id,
+        nombre: guard.session.nombre || guard.session.username,
+        rol: guard.session.rol ?? null,
+        imagen: bytes,
+      };
+    }
+
     const solicitud = await cambiarEstadoSolicitudFondo(guard.empresa.id, Number(id), parsed.data.accion, {
       usuario: guard.session.username,
       autorizanteEmpleadoId: parsed.data.autorizanteEmpleadoId,
-      autorizanteNombre: parsed.data.autorizanteNombre ?? guard.session.username,
+      autorizante,
       motivoRechazo: parsed.data.motivoRechazo,
     });
     if (!solicitud) return NextResponse.json({ error: "Solicitud no encontrada." }, { status: 404 });
