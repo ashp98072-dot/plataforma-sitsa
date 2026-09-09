@@ -19,7 +19,7 @@ function conexion(opts: {
   // SOLICITUD-FONDOS-REPORTE-1 — snapshot de línea: catálogos que
   // resolverSnapshotLineaTx relee dentro de la transacción.
   vehiculoEnEmpresa?: boolean; clienteEnEmpresa?: boolean; planEnEmpresa?: boolean;
-  empleadoNombre?: string; empleadoPuesto?: string | null; vehiculoPlaca?: string; clienteNombre?: string; planFecha?: string;
+  empleadoNombre?: string; empleadoPuesto?: string | null; empleadoCuenta?: string | null; vehiculoPlaca?: string; clienteNombre?: string; planFecha?: string;
   // SOLICITUD-FONDOS-REPORTE-1 (pendiente 1 del PR #211) — fila RAW que
   // actualizarSolicitudFondo relee FOR UPDATE antes de editar.
   actualRequirenteEmpleadoId?: number | null;
@@ -47,8 +47,10 @@ function conexion(opts: {
       }
       // SOLICITUD-FONDOS-REPORTE-1: resolverSnapshotLineaTx — cada catálogo
       // relecto por (id, empresa_id) dentro de la MISMA transacción.
-      if (sql.includes("nombre, puesto FROM empleados")) {
-        return [empleadoEnEmpresa ? [{ nombre: opts.empleadoNombre ?? "Juan Pérez", puesto: opts.empleadoPuesto ?? "Piloto" }] : []];
+      if (sql.includes("nombre, puesto, cuenta_bancaria FROM empleados")) {
+        return [empleadoEnEmpresa
+          ? [{ nombre: opts.empleadoNombre ?? "Juan Pérez", puesto: opts.empleadoPuesto ?? "Piloto", cuenta_bancaria: opts.empleadoCuenta ?? "1234567890" }]
+          : []];
       }
       // AISLAMIENTO MULTIEMPRESA: SELECT id FROM empleados WHERE id = ? AND empresa_id = ? (requirente/autorizante)
       if (sql.includes("FROM empleados")) {
@@ -184,14 +186,14 @@ describe("crearSolicitudFondo — snapshot histórico por línea (empleado/vehí
     const insertsLinea = conn.execute.mock.calls.filter((c) => (c[0] as string).includes("INSERT INTO tms_solicitud_fondo_lineas"));
     expect(insertsLinea).toHaveLength(2);
     // empresa_id, solicitud_id, categoria, descripcion, cantidad, monto, orden,
-    // fecha_viaje, empleado_id, empleado_nombre, cargo, vehiculo_id, placa, cliente_id, cliente_nombre, plan_id
+    // fecha_viaje, empleado_id, empleado_nombre, cargo, cuenta, vehiculo_id, placa, cliente_id, cliente_nombre, plan_id
     expect(insertsLinea[0][1]).toEqual([
       7, 1, "Combustible", null, 2, 100, 0,
-      "2026-09-02", 4, "Heber Sitan", "Piloto", 9, "P111AAA", 5, "Cliente A", null,
+      "2026-09-02", 4, "Heber Sitan", "Piloto", "1234567890", 9, "P111AAA", 5, "Cliente A", null,
     ]);
     expect(insertsLinea[1][1]).toEqual([
       7, 1, "Hospedaje", null, 1, 150, 1,
-      null, null, null, null, null, null, null, null, null,
+      null, null, null, null, null, null, null, null, null, null,
     ]);
     expect(conn.commit).toHaveBeenCalledOnce();
   });

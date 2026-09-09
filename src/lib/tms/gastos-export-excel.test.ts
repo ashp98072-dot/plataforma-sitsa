@@ -57,12 +57,12 @@ describe("exportación Excel de reportes de gastos", () => {
       lineas: [
         {
           id: 1, categoria: "Combustible", descripcion: "Diesel", cantidad: 2, monto: 100, orden: 0,
-          fechaViaje: null, empleadoId: null, empleadoNombre: null, cargo: null,
+          fechaViaje: null, empleadoId: null, empleadoNombre: null, cargo: null, cuenta: null,
           vehiculoId: null, placa: null, clienteId: null, clienteNombre: null, planId: null,
         },
         {
           id: 2, categoria: "Hospedaje", descripcion: null, cantidad: 1, monto: 150, orden: 1,
-          fechaViaje: null, empleadoId: null, empleadoNombre: null, cargo: null,
+          fechaViaje: null, empleadoId: null, empleadoNombre: null, cargo: null, cuenta: null,
           vehiculoId: null, placa: null, clienteId: null, clienteNombre: null, planId: null,
         },
       ],

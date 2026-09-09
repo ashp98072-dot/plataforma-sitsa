@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 
 type LineaFondo = {
   id: number; categoria: string; descripcion: string | null; cantidad: number; monto: number; orden: number;
-  fechaViaje: string | null; empleadoNombre: string | null; cargo: string | null; placa: string | null; clienteNombre: string | null;
+  fechaViaje: string | null; empleadoNombre: string | null; cargo: string | null; cuenta: string | null; placa: string | null; clienteNombre: string | null;
   empleadoId: number | null; vehiculoId: number | null; clienteId: number | null; planId: number | null;
 };
 type SolicitudFondo = {
@@ -327,6 +327,17 @@ export default function FondosPage() {
                   {expandido === s.id ? "Ocultar líneas" : "Ver líneas"}
                 </button>
                 <a href={`/api/empresas/${slug}/tms/fondos/${s.id}/exportar`} className="rounded border border-[var(--border)] px-2 py-1">Exportar Excel</a>
+                {/*
+                  SOLICITUD-FONDOS-PDF-AUTORIZADO-1 — PDF formal (con
+                  firmas) solo tiene sentido una vez que la solicitud fue
+                  autorizada; Liquidada conserva acceso al MISMO PDF
+                  histórico (§6/§9 del ticket). El endpoint vuelve a
+                  validar el estado del lado del servidor — este botón
+                  oculto no es la única defensa.
+                */}
+                {s.estado === "Autorizada" || s.estado === "Liquidada" ? (
+                  <a href={`/api/empresas/${slug}/tms/fondos/${s.id}/pdf`} className="rounded border border-[var(--border)] px-2 py-1">Descargar PDF</a>
+                ) : null}
                 {s.estado === "Pendiente" ? (
                   <>
                     <button type="button" onClick={() => void abrirEditar(s)} className="rounded border border-[var(--border)] px-2 py-1">Editar</button>
@@ -345,7 +356,7 @@ export default function FondosPage() {
               <table className="mt-2 w-full text-left text-xs">
                 <thead className="text-[var(--muted)]">
                   <tr>
-                    <th>Categoría</th><th>Descripción</th><th>Empleado</th><th>Cargo</th><th>Placa</th><th>Cliente</th>
+                    <th>Categoría</th><th>Descripción</th><th>Empleado</th><th>Cargo</th><th>Cuenta</th><th>Placa</th><th>Cliente</th>
                     <th>Fecha viaje</th><th>Cantidad</th><th>Monto</th><th>Total línea</th>
                   </tr>
                 </thead>
@@ -353,7 +364,7 @@ export default function FondosPage() {
                   {s.lineas.map((l) => (
                     <tr key={l.id}>
                       <td>{l.categoria}</td><td>{l.descripcion ?? "—"}</td>
-                      <td>{l.empleadoNombre ?? "—"}</td><td>{l.cargo ?? "—"}</td><td>{l.placa ?? "—"}</td><td>{l.clienteNombre ?? "—"}</td>
+                      <td>{l.empleadoNombre ?? "—"}</td><td>{l.cargo ?? "—"}</td><td>{l.cuenta ?? "—"}</td><td>{l.placa ?? "—"}</td><td>{l.clienteNombre ?? "—"}</td>
                       <td>{l.fechaViaje ?? "—"}</td><td>{l.cantidad}</td>
                       <td>Q{l.monto.toLocaleString("es-GT", { minimumFractionDigits: 2 })}</td>
                       <td>Q{(l.cantidad * l.monto).toLocaleString("es-GT", { minimumFractionDigits: 2 })}</td>

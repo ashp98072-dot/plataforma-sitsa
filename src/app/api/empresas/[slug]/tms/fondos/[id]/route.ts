@@ -72,7 +72,15 @@ export async function PATCH(req: Request, ctx: Ctx) {
     const solicitud = await cambiarEstadoSolicitudFondo(guard.empresa.id, Number(id), parsed.data.accion, {
       usuario: guard.session.username,
       autorizanteEmpleadoId: parsed.data.autorizanteEmpleadoId,
-      autorizanteNombre: parsed.data.autorizanteNombre ?? guard.session.username,
+      // SOLICITUD-FONDOS-PDF-AUTORIZADO-1 — corrección: si el caller no
+      // envía autorizanteNombre explícito (el formulario de Fondos hoy
+      // nunca lo envía, ver fondos/page.tsx), NUNCA caer al username de
+      // acceso — el PDF formal (§5 del ticket) exige "nombre real, nunca
+      // username". Mismo criterio que ya usa autorizarViatico (ver
+      // .../viaticos/[id]/autorizar/route.ts): nombre real de sesión
+      // primero, username solo como último recurso si ni siquiera hay
+      // nombre real cargado en el usuario.
+      autorizanteNombre: parsed.data.autorizanteNombre ?? guard.session.nombre ?? guard.session.username,
       motivoRechazo: parsed.data.motivoRechazo,
     });
     if (!solicitud) return NextResponse.json({ error: "Solicitud no encontrada." }, { status: 404 });

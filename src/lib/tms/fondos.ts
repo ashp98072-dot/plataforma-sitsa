@@ -64,14 +64,20 @@ async function resolverSnapshotLineaTx(
   conn: PoolConnection,
   empresaId: number,
   input: Pick<LineaFondoInput, "empleadoId" | "vehiculoId" | "clienteId" | "planId" | "fechaViaje">,
-): Promise<{ empleadoNombre: string | null; cargo: string | null; placa: string | null; clienteNombre: string | null; fechaViaje: string | null }> {
+): Promise<{ empleadoNombre: string | null; cargo: string | null; cuenta: string | null; placa: string | null; clienteNombre: string | null; fechaViaje: string | null }> {
   let empleadoNombre: string | null = null;
   let cargo: string | null = null;
+  // SOLICITUD-FONDOS-PDF-AUTORIZADO-1 — `cuenta` es empleados.cuenta_bancaria
+  // (fuente oficial YA existente, ver src/lib/rrhh/empleados.ts y
+  // viaticos-exportar-banco.ts), congelada aquí como snapshot igual que
+  // nombre/puesto — nunca un valor enviado por el cliente HTTP.
+  let cuenta: string | null = null;
   if (input.empleadoId != null) {
-    const rows = await queryConn<RowDataPacket[]>(conn, "SELECT nombre, puesto FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1", [input.empleadoId, empresaId]);
+    const rows = await queryConn<RowDataPacket[]>(conn, "SELECT nombre, puesto, cuenta_bancaria FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1", [input.empleadoId, empresaId]);
     if (!rows[0]) throw new Error("El empleado indicado no pertenece a esta empresa.");
     empleadoNombre = String(rows[0].nombre);
     cargo = rows[0].puesto != null ? String(rows[0].puesto) : null;
+    cuenta = rows[0].cuenta_bancaria != null ? String(rows[0].cuenta_bancaria) : null;
   }
   let placa: string | null = null;
   if (input.vehiculoId != null) {
@@ -94,7 +100,7 @@ async function resolverSnapshotLineaTx(
     if (!rows[0]) throw new Error("El viaje indicado no pertenece a esta empresa.");
     if (fechaViaje == null) fechaViaje = String(rows[0].fecha_plan);
   }
-  return { empleadoNombre, cargo, placa, clienteNombre, fechaViaje };
+  return { empleadoNombre, cargo, cuenta, placa, clienteNombre, fechaViaje };
 }
 
 export const ESTADOS_FONDO = ["Pendiente", "Autorizada", "Rechazada", "Liquidada"] as const;
@@ -129,6 +135,8 @@ export type LineaFondo = {
   empleadoId: number | null;
   empleadoNombre: string | null;
   cargo: string | null;
+  /** SOLICITUD-FONDOS-PDF-AUTORIZADO-1 — snapshot de empleados.cuenta_bancaria, ver resolverSnapshotLineaTx. */
+  cuenta: string | null;
   vehiculoId: number | null;
   placa: string | null;
   clienteId: number | null;
@@ -169,6 +177,7 @@ function mapLinea(r: RowDataPacket): LineaFondo {
     empleadoId: r.empleado_id != null ? Number(r.empleado_id) : null,
     empleadoNombre: r.empleado_nombre != null ? String(r.empleado_nombre) : null,
     cargo: r.cargo != null ? String(r.cargo) : null,
+    cuenta: r.cuenta != null ? String(r.cuenta) : null,
     vehiculoId: r.vehiculo_id != null ? Number(r.vehiculo_id) : null,
     placa: r.placa != null ? String(r.placa) : null,
     clienteId: r.cliente_id != null ? Number(r.cliente_id) : null,
@@ -240,7 +249,7 @@ export async function obtenerSolicitudFondo(empresaId: number, id: number): Prom
   const lineas = await query<RowDataPacket[]>(
     `SELECT id, categoria, descripcion, cantidad, monto, orden,
             DATE_FORMAT(fecha_viaje, '%Y-%m-%d') AS fecha_viaje,
-            empleado_id, empleado_nombre, cargo,
+            empleado_id, empleado_nombre, cargo, cuenta,
             vehiculo_id, placa,
             cliente_id, cliente_nombre,
             plan_id
@@ -328,11 +337,11 @@ export async function crearSolicitudFondo(
       await executeConn(conn,
         `INSERT INTO tms_solicitud_fondo_lineas
           (empresa_id, solicitud_id, categoria, descripcion, cantidad, monto, orden,
-           fecha_viaje, empleado_id, empleado_nombre, cargo, vehiculo_id, placa, cliente_id, cliente_nombre, plan_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           fecha_viaje, empleado_id, empleado_nombre, cargo, cuenta, vehiculo_id, placa, cliente_id, cliente_nombre, plan_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           empresaId, solicitudId, l.categoria, l.descripcion?.trim() || null, l.cantidad ?? 1, l.monto, orden,
-          snapshot.fechaViaje, l.empleadoId ?? null, snapshot.empleadoNombre, snapshot.cargo,
+          snapshot.fechaViaje, l.empleadoId ?? null, snapshot.empleadoNombre, snapshot.cargo, snapshot.cuenta,
           l.vehiculoId ?? null, snapshot.placa, l.clienteId ?? null, snapshot.clienteNombre, l.planId ?? null,
         ],
       );
@@ -444,11 +453,11 @@ export async function actualizarSolicitudFondo(
         await executeConn(conn,
           `INSERT INTO tms_solicitud_fondo_lineas
             (empresa_id, solicitud_id, categoria, descripcion, cantidad, monto, orden,
-             fecha_viaje, empleado_id, empleado_nombre, cargo, vehiculo_id, placa, cliente_id, cliente_nombre, plan_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             fecha_viaje, empleado_id, empleado_nombre, cargo, cuenta, vehiculo_id, placa, cliente_id, cliente_nombre, plan_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             empresaId, id, l.categoria, l.descripcion?.trim() || null, l.cantidad ?? 1, l.monto, orden,
-            snapshot.fechaViaje, l.empleadoId ?? null, snapshot.empleadoNombre, snapshot.cargo,
+            snapshot.fechaViaje, l.empleadoId ?? null, snapshot.empleadoNombre, snapshot.cargo, snapshot.cuenta,
             l.vehiculoId ?? null, snapshot.placa, l.clienteId ?? null, snapshot.clienteNombre, l.planId ?? null,
           ],
         );
