@@ -46,6 +46,7 @@ const schema = z.object({
   requirenteNombre: z.string().max(200).nullable().optional(),
   // SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§3) — ver POST de creación (fondos/route.ts).
   requirenteUsuarioId: z.number().int().positive().nullable().optional(),
+  solicitanteUsuarioId: z.number().int().positive().optional(),
   observaciones: z.string().max(300).nullable().optional(),
   lineas: z.array(lineaSchema).min(1).max(40).optional(),
 });
@@ -69,9 +70,9 @@ export async function PATCH(req: Request, ctx: Ctx) {
 
   try {
     if (parsed.data.accion === "editar") {
-      const { fechaRequerimiento, requirenteEmpleadoId, requirenteNombre, requirenteUsuarioId, observaciones, lineas } = parsed.data;
+      const { fechaRequerimiento, requirenteEmpleadoId, requirenteNombre, requirenteUsuarioId, solicitanteUsuarioId, observaciones, lineas } = parsed.data;
       const solicitud = await actualizarSolicitudFondo(guard.empresa.id, Number(id), {
-        fechaRequerimiento, requirenteEmpleadoId, requirenteNombre, requirenteUsuarioId, observaciones, lineas,
+        fechaRequerimiento, requirenteEmpleadoId, requirenteNombre, requirenteUsuarioId, solicitanteUsuarioId, observaciones, lineas,
       }, guard.session.username);
       if (!solicitud) return NextResponse.json({ error: "Solicitud no encontrada." }, { status: 404 });
       return NextResponse.json({ mensaje: "Solicitud actualizada.", solicitud });

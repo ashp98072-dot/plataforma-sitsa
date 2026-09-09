@@ -77,7 +77,7 @@ export type ResultadoReporteGastos =
   | { tipo: "viaje" | "unidad" | "cliente" | "categoria" | "periodo"; etiqueta: string; filas: FilaAgregadaGasto[] }
   | { tipo: "viaticos"; filas: FilaViaticoReporte[] }
   | { tipo: "rentabilidad"; filas: FilaRentabilidadViaje[] }
-  | { tipo: "fondos"; filas: FilaSolicitudFondoReporte[] };
+  | { tipo: "fondos"; filas: FilaSolicitudFondoReporte[]; resumen: ResumenSolicitudesFondo };
 
 /**
  * Único punto que decide qué consulta corre para cada `tipo` — reutilizado
@@ -98,7 +98,10 @@ export async function obtenerReporteGastosPorTipo(
     case "periodo": return { tipo, etiqueta: "Período", filas: await reporteGastosPorPeriodo(empresaId, filtros) };
     case "viaticos": return { tipo, filas: await reporteViaticosPorViajeEmpleado(empresaId, filtros) };
     case "rentabilidad": return { tipo, filas: await reporteRentabilidadPorViaje(empresaId, filtros) };
-    case "fondos": return { tipo, filas: await reporteSolicitudesFondo(empresaId, filtros) };
+    case "fondos": {
+      const filas = await reporteSolicitudesFondo(empresaId, filtros);
+      return { tipo, filas, resumen: resumirSolicitudesFondo(filas) };
+    }
   }
 }
 
@@ -368,8 +371,30 @@ export type FilaSolicitudFondoReporte = {
   descripcion: string | null;
   monto: number;
   total: number;
+  cuenta?: string | null;
+  requirenteNombre?: string | null;
+  solicitanteNombre?: string | null;
+  autorizanteNombre?: string | null;
+  fechaAutorizacion?: string | null;
+  totalSolicitud?: number;
   estadoFondo: string;
 };
+
+export type ResumenSolicitudesFondo = { cantidad: number; totalSolicitado: number; totalAutorizado: number; totalLiquidado: number; totalRechazado: number };
+
+/** Resume encabezados únicos aunque el reporte tenga varias líneas por solicitud. */
+export function resumirSolicitudesFondo(filas: FilaSolicitudFondoReporte[]): ResumenSolicitudesFondo {
+  const solicitudes = new Map<number, { total: number; estado: string }>();
+  for (const f of filas) solicitudes.set(f.solicitudId, { total: f.totalSolicitud ?? f.total, estado: f.estadoFondo });
+  const valores = [...solicitudes.values()];
+  return {
+    cantidad: valores.length,
+    totalSolicitado: valores.reduce((s, v) => s + v.total, 0),
+    totalAutorizado: valores.filter((v) => v.estado === "Autorizada" || v.estado === "Liquidada").reduce((s, v) => s + v.total, 0),
+    totalLiquidado: valores.filter((v) => v.estado === "Liquidada").reduce((s, v) => s + v.total, 0),
+    totalRechazado: valores.filter((v) => v.estado === "Rechazada").reduce((s, v) => s + v.total, 0),
+  };
+}
 
 function condicionesFondos(empresaId: number, f: FiltrosReporteGastos): { where: string; params: (string | number)[] } {
   const condiciones = ["l.empresa_id = ?"];
@@ -397,11 +422,13 @@ export async function reporteSolicitudesFondo(
     `SELECT l.id AS linea_id, l.solicitud_id, s.codigo AS solicitud_codigo,
             DATE_FORMAT(s.fecha_requerimiento, '%Y-%m-%d') AS fecha_solicitud,
             DATE_FORMAT(l.fecha_viaje, '%Y-%m-%d') AS fecha_viaje,
-            l.empleado_id, l.empleado_nombre, l.cargo,
+            l.empleado_id, l.empleado_nombre, l.cuenta, l.cargo,
             l.vehiculo_id, l.placa,
             l.cliente_id, l.cliente_nombre,
             l.plan_id, l.cantidad, l.descripcion, l.monto,
-            s.estado
+            s.requirente_nombre, s.solicitante_nombre, s.autorizante_nombre,
+            DATE_FORMAT(s.autorizado_en, '%Y-%m-%d') AS fecha_autorizacion,
+            s.total AS total_solicitud, s.estado
      FROM tms_solicitud_fondo_lineas l
      INNER JOIN tms_solicitudes_fondo s ON s.id = l.solicitud_id AND s.empresa_id = l.empresa_id
      WHERE ${where}
@@ -420,6 +447,7 @@ export async function reporteSolicitudesFondo(
       empleadoId: r.empleado_id != null ? Number(r.empleado_id) : null,
       empleadoNombre: r.empleado_nombre != null ? String(r.empleado_nombre) : null,
       cargo: r.cargo != null ? String(r.cargo) : null,
+      cuenta: r.cuenta != null ? String(r.cuenta) : null,
       vehiculoId: r.vehiculo_id != null ? Number(r.vehiculo_id) : null,
       placa: r.placa != null ? String(r.placa) : null,
       clienteId: r.cliente_id != null ? Number(r.cliente_id) : null,
@@ -429,6 +457,11 @@ export async function reporteSolicitudesFondo(
       descripcion: r.descripcion != null ? String(r.descripcion) : null,
       monto,
       total: cantidad * monto,
+      requirenteNombre: r.requirente_nombre != null ? String(r.requirente_nombre) : null,
+      solicitanteNombre: r.solicitante_nombre != null ? String(r.solicitante_nombre) : null,
+      autorizanteNombre: r.autorizante_nombre != null ? String(r.autorizante_nombre) : null,
+      fechaAutorizacion: r.fecha_autorizacion != null ? String(r.fecha_autorizacion) : null,
+      totalSolicitud: Number(r.total_solicitud ?? 0),
       estadoFondo: String(r.estado),
     };
   });
