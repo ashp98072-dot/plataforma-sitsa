@@ -9,6 +9,7 @@ import {
 import {
   exportarAgregadoGastosExcel,
   exportarRentabilidadExcel,
+  exportarReporteFondosExcel,
   exportarViaticosReporteExcel,
 } from "@/lib/tms/gastos-export-excel";
 
@@ -31,7 +32,9 @@ export async function GET(req: Request, ctx: Ctx) {
     ? exportarViaticosReporteExcel(resultado.filas)
     : resultado.tipo === "rentabilidad"
       ? exportarRentabilidadExcel(resultado.filas)
-      : exportarAgregadoGastosExcel(`Gastos por ${resultado.tipo}`, resultado.etiqueta, resultado.filas));
+      : resultado.tipo === "fondos"
+        ? exportarReporteFondosExcel(resultado.filas)
+        : exportarAgregadoGastosExcel(`Gastos por ${resultado.tipo}`, resultado.etiqueta, resultado.filas));
 
   return new NextResponse(new Uint8Array(buffer), {
     headers: {

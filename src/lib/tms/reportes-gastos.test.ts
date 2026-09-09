@@ -1,14 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db", () => ({ query: vi.fn() }));
 import { query } from "@/lib/db";
 import {
+  filtrosReporteGastosDesdeUrl,
   reporteGastosPorCategoria,
   reporteGastosPorCliente,
   reporteGastosPorPeriodo,
   reporteGastosPorUnidad,
   reporteGastosPorViaje,
   reporteRentabilidadPorViaje,
+  reporteSolicitudesFondo,
   reporteViaticosPorViajeEmpleado,
 } from "./reportes-gastos";
 
@@ -128,5 +130,158 @@ describe("aislamiento multiempresa en los JOIN de reportes (bloqueo 1, revisión
     vi.mocked(query).mockResolvedValue([] as never);
     await reporteRentabilidadPorViaje(7);
     expect(vi.mocked(query).mock.calls[0][0]).toContain("cli.empresa_id = p.empresa_id");
+  });
+});
+
+describe("SOLICITUD-FONDOS-REPORTE-1 — filtrosReporteGastosDesdeUrl (filtros propios de 'fondos')", () => {
+  it("parsea fechaSolicitudDesde/Hasta y fechaViajeDesde/Hasta por separado", () => {
+    const f = filtrosReporteGastosDesdeUrl(new URL(
+      "http://x?fechaSolicitudDesde=2026-09-01&fechaSolicitudHasta=2026-09-08&fechaViajeDesde=2026-09-02&fechaViajeHasta=2026-09-10",
+    ));
+    expect(f.fechaSolicitudDesde).toBe("2026-09-01");
+    expect(f.fechaSolicitudHasta).toBe("2026-09-08");
+    expect(f.fechaViajeDesde).toBe("2026-09-02");
+    expect(f.fechaViajeHasta).toBe("2026-09-10");
+  });
+
+  it("parsea placa/empleadoNombre/cargo/estadoFondo/descripcion", () => {
+    const f = filtrosReporteGastosDesdeUrl(new URL(
+      "http://x?placa=P123ABC&empleadoNombre=Heber+Sitan&cargo=Piloto&estadoFondo=Autorizada&descripcion=viaticos",
+    ));
+    expect(f).toMatchObject({ placa: "P123ABC", empleadoNombre: "Heber Sitan", cargo: "Piloto", estadoFondo: "Autorizada", descripcion: "viaticos" });
+  });
+
+  it("fecha con formato inválido para fondos se ignora, igual que fechaDesde/fechaHasta de gastos", () => {
+    const f = filtrosReporteGastosDesdeUrl(new URL("http://x?fechaSolicitudDesde=01/09/2026"));
+    expect(f.fechaSolicitudDesde).toBeUndefined();
+  });
+
+  it("el mismo parseo sirve para listado y exportador — una sola función, sin duplicar (mismo criterio que reportes-viajes.ts)", () => {
+    const url = new URL("http://x?fechaSolicitudDesde=2026-09-01&clienteId=5&placa=P1");
+    expect(filtrosReporteGastosDesdeUrl(url)).toEqual(filtrosReporteGastosDesdeUrl(url));
+  });
+});
+
+describe("SOLICITUD-FONDOS-REPORTE-1 — reporteSolicitudesFondo", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  function filaFondo(overrides: Record<string, unknown> = {}) {
+    return {
+      linea_id: 1, solicitud_id: 10, solicitud_codigo: "FONDO-000010",
+      fecha_solicitud: "2026-09-01", fecha_viaje: "2026-09-02",
+      empleado_id: 4, empleado_nombre: "Heber Sitan", cargo: "Piloto",
+      vehiculo_id: 9, placa: "P111AAA", cliente_id: 5, cliente_nombre: "Cliente A",
+      plan_id: 8, cantidad: "2.00", descripcion: "Viáticos de ruta", monto: "100.00",
+      estado: "Autorizada",
+      ...overrides,
+    };
+  }
+
+  it("una fila por LÍNEA, con 'Total' = cantidad × monto (nunca el total de la solicitud completa)", async () => {
+    vi.mocked(query).mockResolvedValue([filaFondo()] as never);
+    const [f] = await reporteSolicitudesFondo(7);
+    expect(f).toMatchObject({
+      fechaSolicitud: "2026-09-01", fechaViaje: "2026-09-02",
+      empleadoNombre: "Heber Sitan", cargo: "Piloto", placa: "P111AAA", clienteNombre: "Cliente A",
+      cantidad: 2, descripcion: "Viáticos de ruta", monto: 100, total: 200, estadoFondo: "Autorizada",
+    });
+  });
+
+  it("respeta fechaSolicitudDesde/Hasta (sobre el ENCABEZADO s.fecha_requerimiento)", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await reporteSolicitudesFondo(7, { fechaSolicitudDesde: "2026-09-01", fechaSolicitudHasta: "2026-09-08" });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("s.fecha_requerimiento >= ?");
+    expect(sql).toContain("s.fecha_requerimiento <= ?");
+    expect(params).toContain("2026-09-01");
+    expect(params).toContain("2026-09-08");
+  });
+
+  it("respeta fechaViajeDesde/Hasta (sobre la LÍNEA l.fecha_viaje, distinto del encabezado)", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await reporteSolicitudesFondo(7, { fechaViajeDesde: "2026-09-02", fechaViajeHasta: "2026-09-10" });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("l.fecha_viaje >= ?");
+    expect(sql).toContain("l.fecha_viaje <= ?");
+    expect(params).toContain("2026-09-02");
+    expect(params).toContain("2026-09-10");
+  });
+
+  it("respeta clienteId", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await reporteSolicitudesFondo(7, { clienteId: 5 });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("l.cliente_id = ?");
+    expect(params).toContain(5);
+  });
+
+  it("respeta placa (snapshot exacto)", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await reporteSolicitudesFondo(7, { placa: "P111AAA" });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("l.placa = ?");
+    expect(params).toContain("P111AAA");
+  });
+
+  it("respeta empleadoNombre (snapshot exacto)", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await reporteSolicitudesFondo(7, { empleadoNombre: "Heber Sitan" });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("l.empleado_nombre = ?");
+    expect(params).toContain("Heber Sitan");
+  });
+
+  it("respeta cargo y estadoFondo (sobre el ENCABEZADO s.estado)", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await reporteSolicitudesFondo(7, { cargo: "Piloto", estadoFondo: "Liquidada" });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("l.cargo = ?");
+    expect(sql).toContain("s.estado = ?");
+    expect(params).toContain("Piloto");
+    expect(params).toContain("Liquidada");
+  });
+
+  it("respeta descripcion (búsqueda LIKE, mismo patrón que listarRutas())", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await reporteSolicitudesFondo(7, { descripcion: "viaticos" });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("l.descripcion LIKE ?");
+    expect(params).toContain("%viaticos%");
+  });
+
+  it("combina fecha solicitud + fecha viaje + cliente + placa + empleado en una sola consulta (AND)", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await reporteSolicitudesFondo(7, {
+      fechaSolicitudDesde: "2026-09-01", fechaSolicitudHasta: "2026-09-08",
+      fechaViajeDesde: "2026-09-02", fechaViajeHasta: "2026-09-09",
+      clienteId: 5, placa: "P111AAA", empleadoNombre: "Heber Sitan",
+    });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("s.fecha_requerimiento >= ?");
+    expect(sql).toContain("l.fecha_viaje >= ?");
+    expect(sql).toContain("l.cliente_id = ?");
+    expect(sql).toContain("l.placa = ?");
+    expect(sql).toContain("l.empleado_nombre = ?");
+    expect(params).toEqual([7, "2026-09-01", "2026-09-08", "2026-09-02", "2026-09-09", 5, "P111AAA", "Heber Sitan"]);
+  });
+
+  it("multiempresa: siempre filtra por l.empresa_id, nunca por uno enviado por el caller", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await reporteSolicitudesFondo(42, {});
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("l.empresa_id = ?");
+    expect(params?.[0]).toBe(42);
+  });
+
+  it("nunca depende de un JOIN en vivo a empleados/flota_vehiculos/tms_clientes — lee el SNAPSHOT de la línea (histórico)", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await reporteSolicitudesFondo(7, {});
+    const sql = vi.mocked(query).mock.calls[0][0] as string;
+    expect(sql).not.toContain("JOIN empleados");
+    expect(sql).not.toContain("JOIN flota_vehiculos");
+    expect(sql).not.toContain("JOIN tms_clientes");
+    expect(sql).toContain("l.empleado_nombre");
+    expect(sql).toContain("l.placa");
+    expect(sql).toContain("l.cliente_nombre");
   });
 });

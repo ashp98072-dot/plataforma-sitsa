@@ -1,5 +1,7 @@
+import ExcelJS from "exceljs";
 import { tablaAExcel } from "@/lib/rrhh/export-files";
-import type { FilaAgregadaGasto, FilaRentabilidadViaje, FilaViaticoReporte } from "@/lib/tms/reportes-gastos";
+import { formatearFechaVisible } from "@/lib/rrhh/dates";
+import type { FilaAgregadaGasto, FilaRentabilidadViaje, FilaSolicitudFondoReporte, FilaViaticoReporte } from "@/lib/tms/reportes-gastos";
 import type { SolicitudFondo } from "@/lib/tms/fondos";
 
 /**
@@ -44,6 +46,61 @@ export async function exportarRentabilidadExcel(filas: FilaRentabilidadViaje[]):
       money(f.tarifaComercial), money(f.gastos), money(f.viaticos), money(f.utilidad),
     ]),
   });
+}
+
+/**
+ * SOLICITUD-FONDOS-REPORTE-1 — Excel del REPORTE de solicitudes de fondo
+ * (filtrable: fecha solicitud/viaje, cliente, placa, empleado, cargo,
+ * estado, descripción — ver reporteSolicitudesFondo en reportes-gastos.ts),
+ * exactamente las filas que ya trae `filas` (mismo filtro que la
+ * pantalla, nunca uno distinto) y EXACTAMENTE estas 9 columnas — nunca
+ * ids internos:
+ *   Fecha solicitud | Fecha viaje | Nombre | Cargo | Placa | Cliente |
+ *   Cantidad | Descripción | Total
+ *
+ * Usa ExcelJS directamente (no el tablaAExcel genérico, que solo escribe
+ * texto plano) para poder dar formato real: fechas dd/mm/yyyy, Total con
+ * formato monetario GTQ, Cantidad numérica, autofiltro y anchos de
+ * columna legibles — mismo estilo ya usado en rutas-export-excel.ts.
+ */
+export async function exportarReporteFondosExcel(filas: FilaSolicitudFondoReporte[]): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "Plataforma corporativa";
+  const ws = wb.addWorksheet("Solicitudes de fondo", { views: [{ state: "frozen", ySplit: 1, showGridLines: false }] });
+
+  const headers = ["Fecha solicitud", "Fecha viaje", "Nombre", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Total"];
+  ws.addRow(headers);
+  const header = ws.getRow(1);
+  header.font = { bold: true, color: { argb: "FFFFFFFF" } };
+  header.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F4E78" } };
+  header.alignment = { horizontal: "center", vertical: "middle" };
+
+  for (const f of filas) {
+    ws.addRow([
+      formatearFechaVisible(f.fechaSolicitud) || "—",
+      f.fechaViaje ? formatearFechaVisible(f.fechaViaje) : "—",
+      f.empleadoNombre ?? "—",
+      f.cargo ?? "—",
+      f.placa ?? "—",
+      f.clienteNombre ?? "—",
+      f.cantidad,
+      f.descripcion ?? "—",
+      f.total,
+    ]);
+  }
+
+  ws.autoFilter = { from: "A1", to: `I${Math.max(1, filas.length + 1)}` };
+  ws.columns = [14, 14, 26, 20, 14, 26, 12, 40, 16].map((width) => ({ width }));
+  ws.getColumn(7).numFmt = "0.00"; // Cantidad — numérica, admite fracciones (DECIMAL(10,2))
+  ws.getColumn(7).alignment = { horizontal: "center", vertical: "top" };
+  ws.getColumn(9).numFmt = "Q#,##0.00"; // Total — formato monetario GTQ
+  ws.getColumn(9).alignment = { horizontal: "right", vertical: "top" };
+  ws.getColumn(8).alignment = { vertical: "top", wrapText: true }; // Descripción — puede ser texto largo
+  for (let i = 2; i <= filas.length + 1; i++) {
+    for (const col of [1, 2, 3, 4, 5, 6]) ws.getRow(i).getCell(col).alignment = { vertical: "top" };
+  }
+
+  return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
 export async function exportarSolicitudFondoExcel(solicitud: SolicitudFondo): Promise<Buffer> {
