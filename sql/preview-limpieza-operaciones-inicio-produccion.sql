@@ -61,8 +61,8 @@ UNION ALL SELECT 'usuario_firmas (global; control de no modificación)', COUNT(*
 
 -- DUDOSO / NO TOCAR: no existe relación inequívoca con un plan de viaje.
 SELECT 'ops_multas' tabla, COUNT(*) cantidad, 'PRESERVAR: sin FK inequívoca a viaje' razon FROM ops_multas WHERE @empresa_confirmada=1 AND empresa_id=@empresa_id_objetivo
-UNION ALL SELECT 'ops_multas_revisiones', COUNT(*), 'PRESERVAR con su multa' FROM ops_multas_revisiones r JOIN ops_multas m ON m.id=r.multa_id WHERE @empresa_confirmada=1 AND m.empresa_id=@empresa_id_objetivo
-UNION ALL SELECT 'ops_multa_documentos', COUNT(*), 'PRESERVAR con su multa' FROM ops_multa_documentos d JOIN ops_multas m ON m.id=d.multa_id WHERE @empresa_confirmada=1 AND m.empresa_id=@empresa_id_objetivo
+UNION ALL SELECT 'ops_multas_revisiones', COUNT(*), 'PRESERVAR: revisiones mensuales de la empresa' FROM ops_multas_revisiones r WHERE @empresa_confirmada=1 AND r.empresa_id=@empresa_id_objetivo
+UNION ALL SELECT 'ops_multa_documentos', COUNT(*), 'PRESERVAR con su multa' FROM ops_multa_documentos d WHERE @empresa_confirmada=1 AND d.empresa_id=@empresa_id_objetivo
 UNION ALL SELECT 'fact_factura_viajes', COUNT(*), 'BLOQUEA toda la limpieza; facturación no autorizada' FROM fact_factura_viajes ffv JOIN tms_planes_viaje p ON p.id=ffv.plan_id WHERE @empresa_confirmada=1 AND p.empresa_id=@empresa_id_objetivo
 UNION ALL SELECT 'flota_combustible_conciliaciones', COUNT(*), 'PRESERVAR cabecera; solo se quitan filas ligadas' FROM flota_combustible_conciliaciones WHERE @empresa_confirmada=1 AND empresa_id=@empresa_id_objetivo;
 
@@ -110,8 +110,8 @@ UNION ALL SELECT 'flota_combustible_conciliacion_filas ligadas', 'ELIMINAR', COU
 UNION ALL SELECT 'firmas_electronicas fondos/viáticos', 'ELIMINAR', COUNT(*), 0, 'Solo firmas transaccionales de padres eliminados' FROM firmas_electronicas f WHERE @empresa_confirmada=1 AND f.empresa_id=@empresa_id_objetivo AND ((f.modulo='VIATICOS' AND f.entidad_tipo='VIATICO' AND EXISTS (SELECT 1 FROM tms_viaticos v WHERE v.id=f.entidad_id AND v.empresa_id=@empresa_id_objetivo)) OR (f.modulo='FONDOS' AND f.entidad_tipo='SOLICITUD_FONDO' AND EXISTS (SELECT 1 FROM tms_solicitudes_fondo s WHERE s.id=f.entidad_id AND s.empresa_id=@empresa_id_objetivo)))
 
 UNION ALL SELECT 'ops_multas', 'DUDOSO / REQUIERE DECISIÓN', COUNT(*), COUNT(*), 'Sin FK inequívoca a viaje; NO DELETE' FROM ops_multas WHERE @empresa_confirmada=1 AND empresa_id=@empresa_id_objetivo
-UNION ALL SELECT 'ops_multas_revisiones', 'DUDOSO / REQUIERE DECISIÓN', COUNT(*), COUNT(*), 'Historial ligado a multas preservadas; NO DELETE' FROM ops_multas_revisiones r JOIN ops_multas m ON m.id=r.multa_id WHERE @empresa_confirmada=1 AND m.empresa_id=@empresa_id_objetivo
-UNION ALL SELECT 'ops_multa_documentos', 'DUDOSO / REQUIERE DECISIÓN', COUNT(*), COUNT(*), 'Documentos ligados a multas preservadas; NO DELETE' FROM ops_multa_documentos d JOIN ops_multas m ON m.id=d.multa_id WHERE @empresa_confirmada=1 AND m.empresa_id=@empresa_id_objetivo
+UNION ALL SELECT 'ops_multas_revisiones', 'DUDOSO / REQUIERE DECISIÓN', COUNT(*), COUNT(*), 'Revisiones mensuales preservadas; NO DELETE' FROM ops_multas_revisiones r WHERE @empresa_confirmada=1 AND r.empresa_id=@empresa_id_objetivo
+UNION ALL SELECT 'ops_multa_documentos', 'DUDOSO / REQUIERE DECISIÓN', COUNT(*), COUNT(*), 'Documentos ligados a multas preservadas; NO DELETE' FROM ops_multa_documentos d WHERE @empresa_confirmada=1 AND d.empresa_id=@empresa_id_objetivo
 UNION ALL SELECT 'proveedor_portales', 'DUDOSO / REQUIERE DECISIÓN', COUNT(*), COUNT(*), 'Credenciales/accesos; podrían ser maestros reales o pruebas; NO DELETE' FROM proveedor_portales WHERE @empresa_confirmada=1 AND empresa_id=@empresa_id_objetivo
 UNION ALL SELECT 'fact_facturas', 'DUDOSO / REQUIERE DECISIÓN', COUNT(*), COUNT(*), 'Documento financiero; política actual no autoriza borrarlo' FROM fact_facturas WHERE @empresa_confirmada=1 AND empresa_id=@empresa_id_objetivo
 UNION ALL SELECT 'fact_pagos', 'DUDOSO / REQUIERE DECISIÓN', COUNT(*), COUNT(*), 'Movimiento financiero; política actual no autoriza borrarlo' FROM fact_pagos WHERE @empresa_confirmada=1 AND empresa_id=@empresa_id_objetivo
