@@ -101,11 +101,10 @@ export async function exportarGastosDetalleExcel(filas: FilaGastoDetalle[]): Pro
   // GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — primero las 9 columnas exigidas
   // por el ticket en ese orden (Fecha solicitud, Fecha viaje, Nombre,
   // Cargo, Placa, Cliente, Cantidad, Descripción, Total) y luego el resto
-  // del detalle operativo. "Descuento personal" es un indicador operativo,
-  // sin efecto en planilla/nómina.
+  // del detalle operativo.
   const headers = [
     "Fecha solicitud", "Fecha de viaje", "Nombre", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Total",
-    "Código viaje", "Categoría", "Monto unitario", "Estado", "Descuento personal", "Registrado por", "Observaciones",
+    "Código viaje", "Categoría", "Monto unitario", "Estado", "Registrado por", "Observaciones",
   ];
   ws.addRow(headers);
   const header = ws.getRow(1);
@@ -119,20 +118,20 @@ export async function exportarGastosDetalleExcel(filas: FilaGastoDetalle[]): Pro
       f.empleadoNombre ?? "—", f.cargo ?? "—", f.placa ?? "—", f.clienteNombre ?? "—",
       f.cantidad, f.descripcion ?? "—", f.total,
       f.planCodigo ?? "—", f.categoria, f.monto,
-      f.activo ? "Activo" : "Anulado", f.descuentoPersonal ? "Sí" : "No", f.registradoPor ?? "—", f.observaciones ?? "—",
+      f.activo ? "Activo" : "Anulado", f.registradoPor ?? "—", f.observaciones ?? "—",
     ]);
   }
 
   const ultimaFilaDatos = filas.length + 1;
-  ws.autoFilter = { from: "A1", to: `P${Math.max(1, ultimaFilaDatos)}` };
-  ws.columns = [14, 14, 26, 18, 12, 24, 12, 40, 16, 16, 16, 16, 12, 16, 20, 30].map((width) => ({ width }));
+  ws.autoFilter = { from: "A1", to: `O${Math.max(1, ultimaFilaDatos)}` };
+  ws.columns = [14, 14, 26, 18, 12, 24, 12, 40, 16, 16, 16, 16, 12, 20, 30].map((width) => ({ width }));
   ws.getColumn(7).numFmt = "0.00";
   for (const col of [9, 12]) ws.getColumn(col).numFmt = '"Q"#,##0.00';
   ws.getColumn(8).alignment = { vertical: "top", wrapText: true };
-  ws.getColumn(16).alignment = { vertical: "top", wrapText: true };
+  ws.getColumn(15).alignment = { vertical: "top", wrapText: true };
   for (let i = 2; i <= ultimaFilaDatos; i++) {
     for (let col = 1; col <= headers.length; col++) {
-      if (col !== 8 && col !== 16) ws.getRow(i).getCell(col).alignment = { vertical: "top" };
+      if (col !== 8 && col !== 15) ws.getRow(i).getCell(col).alignment = { vertical: "top" };
     }
   }
 

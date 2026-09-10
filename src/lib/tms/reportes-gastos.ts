@@ -46,15 +46,6 @@ export type FiltrosReporteGastos = {
   estadoFondo?: string;
   /** Búsqueda LIKE por descripción de línea — mismo patrón ya usado en listarRutas()/cliente-rutas.ts (q LIKE). */
   descripcion?: string;
-  /**
-   * GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — filtro del detalle de gastos
-   * operativos por el indicador OPERATIVO "Descuento al personal"
-   * (tms_gastos_operativos.descuento_personal). true=solo marcados,
-   * false=solo no marcados, undefined=todos. Solo aplica a
-   * tipo === "gastosDetalle"; es un flag informativo, sin efecto en
-   * planilla/nómina/RRHH.
-   */
-  descuentoPersonal?: boolean;
 };
 
 const FECHA_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -87,8 +78,6 @@ export function filtrosReporteGastosDesdeUrl(url: URL): FiltrosReporteGastos {
     cargo: p.get("cargo")?.trim() || undefined,
     estadoFondo: p.get("estadoFondo")?.trim() || undefined,
     descripcion: p.get("descripcion")?.trim() || undefined,
-    descuentoPersonal:
-      p.get("descuentoPersonal") === "1" ? true : p.get("descuentoPersonal") === "0" ? false : undefined,
   };
 }
 
@@ -388,8 +377,6 @@ export type FilaGastoDetalle = {
   activo: boolean;
   registradoPor: string | null;
   observaciones: string | null;
-  /** GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — indicador operativo, sin efecto en planilla/nómina. */
-  descuentoPersonal: boolean;
 };
 
 function condicionesGastosDetalle(empresaId: number, f: FiltrosReporteGastos): { where: string; params: (string | number)[] } {
@@ -410,7 +397,6 @@ function condicionesGastosDetalle(empresaId: number, f: FiltrosReporteGastos): {
   if (f.empleadoId) { condiciones.push("g.empleado_id = ?"); params.push(f.empleadoId); }
   if (f.categoria) { condiciones.push("g.categoria = ?"); params.push(f.categoria); }
   if (f.planId) { condiciones.push("g.plan_id = ?"); params.push(f.planId); }
-  if (f.descuentoPersonal !== undefined) { condiciones.push("g.descuento_personal = ?"); params.push(f.descuentoPersonal ? 1 : 0); }
   return { where: condiciones.join(" AND "), params };
 }
 
@@ -423,8 +409,7 @@ export async function reporteGastosDetalle(empresaId: number, f: FiltrosReporteG
             g.empleado_id, emp.nombre AS empleado_nombre, emp.puesto AS cargo,
             g.vehiculo_id, veh.placa,
             g.cliente_id, cli.nombre AS cliente_nombre,
-            g.categoria, g.descripcion, g.cantidad, g.monto, g.activo, g.creado_por, g.observaciones,
-            g.descuento_personal
+            g.categoria, g.descripcion, g.cantidad, g.monto, g.activo, g.creado_por, g.observaciones
      FROM tms_gastos_operativos g
      LEFT JOIN tms_planes_viaje p ON p.id = g.plan_id AND p.empresa_id = g.empresa_id
      LEFT JOIN empleados emp ON emp.id = g.empleado_id AND emp.empresa_id = g.empresa_id
@@ -458,7 +443,6 @@ export async function reporteGastosDetalle(empresaId: number, f: FiltrosReporteG
       activo: Number(r.activo ?? 1) === 1,
       registradoPor: r.creado_por != null ? String(r.creado_por) : null,
       observaciones: r.observaciones != null ? String(r.observaciones) : null,
-      descuentoPersonal: Number(r.descuento_personal ?? 0) === 1,
     };
   });
 }

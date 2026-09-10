@@ -30,7 +30,7 @@ function filaGasto(overrides: Partial<FilaGastoDetalle> = {}): FilaGastoDetalle 
     planId: 2, planCodigo: "PLAN-1", empleadoId: 4, empleadoNombre: "Heber Sitan", cargo: "Piloto",
     vehiculoId: 9, placa: "P111AAA", clienteId: 5, clienteNombre: "Cliente A",
     categoria: "Combustible", descripcion: "Diesel", cantidad: 2, monto: 100, total: 200,
-    activo: true, registradoPor: "admin", observaciones: null, descuentoPersonal: false,
+    activo: true, registradoPor: "admin", observaciones: null,
     ...overrides,
   };
 }
@@ -84,19 +84,18 @@ describe("exportación Excel de reportes de gastos", () => {
   it("gastos operativos — detalle por registro, nunca agrupado; primero las 9 columnas del ticket, luego el resto", async () => {
     const buf = await exportarGastosDetalleExcel([
       filaGasto(),
-      filaGasto({ id: 2, activo: false, descuentoPersonal: true }),
+      filaGasto({ id: 2, activo: false }),
     ]);
     const ws = await primeraHoja(buf);
     expect(ws.getRow(1).values).toEqual([
       undefined, "Fecha solicitud", "Fecha de viaje", "Nombre", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Total",
-      "Código viaje", "Categoría", "Monto unitario", "Estado", "Descuento personal", "Registrado por", "Observaciones",
+      "Código viaje", "Categoría", "Monto unitario", "Estado", "Registrado por", "Observaciones",
     ]);
     expect(ws.getRow(2).values).toEqual([
       undefined, "01/09/2026", "02/09/2026", "Heber Sitan", "Piloto", "P111AAA", "Cliente A", 2, "Diesel", 200,
-      "PLAN-1", "Combustible", 100, "Activo", "No", "admin", "—",
+      "PLAN-1", "Combustible", 100, "Activo", "admin", "—",
     ]);
     expect(ws.getRow(3).getCell(13).value).toBe("Anulado");
-    expect(ws.getRow(3).getCell(14).value).toBe("Sí");
     // fila 4 = blank, fila 5 = TOTAL GENERAL
     expect(ws.getRow(5).getCell(8).value).toBe("TOTAL GENERAL");
     expect(ws.getRow(5).getCell(9).value).toBe(400);

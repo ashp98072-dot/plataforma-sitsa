@@ -127,7 +127,6 @@ describe("GET /tms/reportes/gastos/exportar", () => {
       empleadoId: 4, empleadoNombre: "Heber Sitan", cargo: "Piloto", vehiculoId: 9, placa: "P111AAA",
       clienteId: 5, clienteNombre: "Cliente A", categoria: "Combustible", descripcion: "Diesel",
       cantidad: 2, monto: 100, total: 200, activo: true, registradoPor: "admin", observaciones: null,
-      descuentoPersonal: false,
     };
 
     it("formato=xlsx reutiliza exportarGastosDetalleExcel (nunca el agregado)", async () => {
@@ -146,15 +145,14 @@ describe("GET /tms/reportes/gastos/exportar", () => {
       // GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — primero las 9 columnas del ticket, luego el resto compacto.
       expect(llamada.headers).toEqual([
         "Fecha solicitud", "Fecha viaje", "Nombre", "Cargo", "Placa", "Cliente", "Cant.", "Descripción", "Total",
-        "Código", "Categoría", "Estado", "Desc. personal",
+        "Código", "Categoría", "Estado",
       ]);
       const rows = llamada.rows;
       // 2 filas de datos + 1 fila de total = 3
       expect(rows).toHaveLength(3);
       expect(rows[rows.length - 1]).toContain("TOTAL GENERAL");
-      // orden de campos de la fila: fecha solicitud primero, cargo/nombre desde el gasto, indicador operativo al final.
+      // orden de campos de la fila: fecha solicitud primero, cargo/nombre desde el gasto.
       expect(rows[0].slice(0, 8)).toEqual(["01/09/2026", "02/09/2026", "Heber Sitan", "Piloto", "P111AAA", "Cliente A", "2", "Diesel"]);
-      expect(rows[0][rows[0].length - 1]).toBe("No");
     });
   });
 });

@@ -47,14 +47,13 @@ function filaPdfViatico(f: FilaViaticoReporte): string[] {
 // GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — primero las 9 columnas exigidas
 // por el ticket en ese orden (Fecha solicitud, Fecha viaje, Nombre, Cargo,
 // Placa, Cliente, Cant., Descripción, Total) y luego el resto compacto.
-// "Desc. personal" es un indicador operativo, sin efecto en planilla/nómina.
-const HEADERS_PDF_GASTOS = ["Fecha solicitud", "Fecha viaje", "Nombre", "Cargo", "Placa", "Cliente", "Cant.", "Descripción", "Total", "Código", "Categoría", "Estado", "Desc. personal"];
+const HEADERS_PDF_GASTOS = ["Fecha solicitud", "Fecha viaje", "Nombre", "Cargo", "Placa", "Cliente", "Cant.", "Descripción", "Total", "Código", "Categoría", "Estado"];
 function filaPdfGasto(f: FilaGastoDetalle): string[] {
   return [
     formatearFechaVisible(f.fechaSolicitud) || "—", f.fechaViaje ? formatearFechaVisible(f.fechaViaje) : "—",
     f.empleadoNombre ?? "—", f.cargo ?? "—", f.placa ?? "—", f.clienteNombre ?? "—",
     String(f.cantidad), f.descripcion ?? "—", moneda(f.total),
-    f.planCodigo ?? "—", f.categoria, f.activo ? "Activo" : "Anulado", f.descuentoPersonal ? "Sí" : "No",
+    f.planCodigo ?? "—", f.categoria, f.activo ? "Activo" : "Anulado",
   ];
 }
 
@@ -109,7 +108,7 @@ export async function GET(req: Request, ctx: Ctx) {
     }
 
     const totalGeneral = resultado.filas.reduce((s, f) => s + f.total, 0);
-    const filaTotal = ["", "", "", "", "", "", "", "TOTAL GENERAL", moneda(totalGeneral), `${resultado.filas.length} reg.`, "", "", ""];
+    const filaTotal = ["", "", "", "", "", "", "", "TOTAL GENERAL", moneda(totalGeneral), `${resultado.filas.length} reg.`, "", ""];
     const buffer = await tablaAPdf({
       title: "Reporte de gastos operativos — detalle",
       subtitle: subtitulo,

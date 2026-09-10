@@ -24,8 +24,6 @@ type Gasto = {
   numeroCuentaPago: string | null;
   tieneFactura: boolean;
   observaciones: string | null;
-  // GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — indicador operativo, sin efecto en planilla/nómina.
-  descuentoPersonal: boolean;
   activo: boolean;
 };
 
@@ -66,7 +64,6 @@ const FORM_VACIO = {
   numeroCuentaPago: "",
   tieneFactura: false,
   observaciones: "",
-  descuentoPersonal: false,
 };
 
 /**
@@ -147,7 +144,6 @@ export default function GastosPage() {
       numeroCuentaPago: g.numeroCuentaPago ?? "",
       tieneFactura: g.tieneFactura,
       observaciones: g.observaciones ?? "",
-      descuentoPersonal: g.descuentoPersonal,
     });
     setMostrarForm(true);
   }
@@ -193,7 +189,6 @@ export default function GastosPage() {
       numeroCuentaPago: form.numeroCuentaPago.trim() || null,
       tieneFactura: form.tieneFactura,
       observaciones: form.observaciones.trim() || null,
-      descuentoPersonal: form.descuentoPersonal,
     };
     const url = editandoId ? `/api/empresas/${slug}/tms/gastos/${editandoId}` : `/api/empresas/${slug}/tms/gastos`;
     const res = await fetch(url, { method: editandoId ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
@@ -288,13 +283,6 @@ export default function GastosPage() {
             <label className="mt-4 flex items-center gap-2 text-xs text-[var(--muted)]">
               <input type="checkbox" checked={form.tieneFactura} onChange={(e) => setForm((f) => ({ ...f, tieneFactura: e.target.checked }))} />
               Tiene factura
-            </label>
-            {/* GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — indicador OPERATIVO. Solo marca que
-                este gasto debería recuperarse del personal; NO genera descuento de
-                nómina ni toca planilla/RRHH. */}
-            <label className="mt-4 flex items-center gap-2 text-xs text-[var(--muted)]">
-              <input type="checkbox" checked={form.descuentoPersonal} onChange={(e) => setForm((f) => ({ ...f, descuentoPersonal: e.target.checked }))} />
-              Descuento al personal
             </label>
           </div>
           <label className="block text-xs text-[var(--muted)]">Descripción

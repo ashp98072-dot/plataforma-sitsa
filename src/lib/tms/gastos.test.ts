@@ -21,7 +21,7 @@ function filaGasto(overrides: Partial<Record<string, unknown>> = {}) {
     plan_id: 11, plan_codigo: "PLAN-20260901-001",
     categoria: "Combustible", descripcion: "Diesel", cantidad: "1.00", monto: "450.00",
     metodo_pago: "Efectivo", numero_cuenta_pago: null, tiene_factura: 1,
-    observaciones: null, descuento_personal: 0, activo: 1, creado_por: "admin", creado_en: "2026-09-01 10:00:00",
+    observaciones: null, activo: 1, creado_por: "admin", creado_en: "2026-09-01 10:00:00",
     actualizado_en: "2026-09-01 10:00:00",
     ...overrides,
   };
@@ -111,25 +111,6 @@ describe("crearGasto", () => {
     expect(vi.mocked(execute).mock.calls[0][0]).toContain("INSERT INTO tms_gastos_operativos");
   });
 
-  it("GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — persiste el indicador operativo descuentoPersonal (1/0), default 0", async () => {
-    vi.mocked(execute).mockResolvedValue({ insertId: 55 } as never);
-    vi.mocked(query).mockResolvedValue([filaGasto({ id: 55, descuento_personal: 1 })] as never);
-    const g = await crearGasto(7, {
-      fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 450, descuentoPersonal: true,
-    }, "admin");
-    const [sql, params] = vi.mocked(execute).mock.calls[0] as [string, unknown[]];
-    expect(sql).toContain("descuento_personal");
-    // orden INSERT: …, observaciones(14), descuento_personal(15), creado_por(16)
-    expect(params[15]).toBe(1);
-    expect(g.descuentoPersonal).toBe(true);
-
-    vi.mocked(execute).mockClear();
-    vi.mocked(query).mockResolvedValue([filaGasto({ id: 56 })] as never);
-    await crearGasto(7, { fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 10 });
-    const params2 = vi.mocked(execute).mock.calls[0][1] as unknown[];
-    expect(params2[15]).toBe(0); // sin enviar el flag -> 0
-  });
-
   describe("AISLAMIENTO MULTIEMPRESA: rechaza referencias que no pertenecen a la empresa actual (bloqueo 1, revisión PR #204)", () => {
     it("empleado de otra empresa (id existe, pero no en esta empresa) se rechaza sin insertar", async () => {
       vi.mocked(query).mockResolvedValue([] as never); // ninguna referencia encuentra fila -> no pertenece a esta empresa
@@ -191,27 +172,6 @@ describe("actualizarGasto / desactivarGasto", () => {
     expect(g?.monto).toBe(999);
     const params = vi.mocked(execute).mock.calls[0][1] as unknown[];
     expect(params).toContain("Combustible"); // categoría preservada del actual
-  });
-
-  it("GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — actualiza descuentoPersonal cuando viene, lo preserva cuando no", async () => {
-    vi.mocked(query)
-      .mockResolvedValueOnce([filaGasto({ descuento_personal: 1 })] as never) // actual: ya marcado
-      .mockResolvedValueOnce([filaGasto({ descuento_personal: 1 })] as never); // tras UPDATE
-    await actualizarGasto(7, 1, { monto: 999 }); // no envía el flag
-    const sql = vi.mocked(execute).mock.calls[0][0] as string;
-    const params = vi.mocked(execute).mock.calls[0][1] as unknown[];
-    expect(sql).toContain("descuento_personal = ?");
-    // orden UPDATE: …, observaciones(13), descuento_personal(14), activo(15), id(16), empresaId(17)
-    expect(params[14]).toBe(1); // preservado del actual
-
-    vi.mocked(execute).mockClear();
-    vi.mocked(query)
-      .mockResolvedValueOnce([filaGasto({ descuento_personal: 1 })] as never)
-      .mockResolvedValueOnce([filaGasto({ descuento_personal: 0 })] as never);
-    const g = await actualizarGasto(7, 1, { descuentoPersonal: false }); // lo desmarca
-    const params2 = vi.mocked(execute).mock.calls[0][1] as unknown[];
-    expect(params2[14]).toBe(0);
-    expect(g?.descuentoPersonal).toBe(false);
   });
 
   it("desactivarGasto pone activo=false sin tocar el resto", async () => {

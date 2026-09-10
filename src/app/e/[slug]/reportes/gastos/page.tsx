@@ -37,8 +37,6 @@ type FilaGastoDetalle = {
   empleadoNombre: string | null; cargo: string | null; placa: string | null; clienteNombre: string | null;
   categoria: string; descripcion: string | null; cantidad: number; monto: number; total: number;
   activo: boolean; registradoPor: string | null; observaciones: string | null;
-  // GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — indicador operativo, sin efecto en planilla/nómina.
-  descuentoPersonal: boolean;
 };
 // TMS-SIN-COSTO-OPERATIVO-1: sin costoOperativo — negocio confirmó que ya no se utiliza.
 type FilaRentabilidad = { planCodigo: string; fechaPlan: string; clienteNombre: string | null; tarifaComercial: number; gastos: number; viaticos: number; utilidad: number };
@@ -112,13 +110,11 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
   const [fPlanId, setFPlanId] = useState("");
   // GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — filtros propios de "gastosDetalle":
   // fecha solicitud / fecha viaje por SEPARADO (llaves fechaSolicitud*/
-  // fechaViaje*, ya soportadas por el backend) y el indicador operativo
-  // "Descuento al personal" ("" = todos, "1" = marcados, "0" = no marcados).
+  // fechaViaje*, ya soportadas por el backend).
   const [fGSolicitudDesde, setFGSolicitudDesde] = useState("");
   const [fGSolicitudHasta, setFGSolicitudHasta] = useState("");
   const [fGViajeDesde, setFGViajeDesde] = useState("");
   const [fGViajeHasta, setFGViajeHasta] = useState("");
-  const [fGDescuentoPersonal, setFGDescuentoPersonal] = useState("");
 
   const necesitaCatalogos = tipo === "fondos" || tipo === "viaticos" || tipo === "gastosDetalle";
   useEffect(() => {
@@ -174,14 +170,13 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
       if (fEmpleadoIdGasto) p.set("empleadoId", fEmpleadoIdGasto);
       if (fCategoria) p.set("categoria", fCategoria);
       if (fActivoGasto) p.set("activo", fActivoGasto);
-      // GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — fecha solicitud/viaje por separado + descuento al personal.
+      // GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — fecha solicitud/viaje por separado.
       if (fGSolicitudDesde) p.set("fechaSolicitudDesde", fGSolicitudDesde);
       if (fGSolicitudHasta) p.set("fechaSolicitudHasta", fGSolicitudHasta);
       if (fGViajeDesde) p.set("fechaViajeDesde", fGViajeDesde);
       if (fGViajeHasta) p.set("fechaViajeHasta", fGViajeHasta);
-      if (fGDescuentoPersonal) p.set("descuentoPersonal", fGDescuentoPersonal);
     }
-  }, [fechaDesde, fechaHasta, fClienteId2, fPlanId, fVehiculoId, vehiculosCat, fEmpleadoNombreViatico, fEstadoViatico, fEmpleadoIdGasto, fCategoria, fActivoGasto, fGSolicitudDesde, fGSolicitudHasta, fGViajeDesde, fGViajeHasta, fGDescuentoPersonal]);
+  }, [fechaDesde, fechaHasta, fClienteId2, fPlanId, fVehiculoId, vehiculosCat, fEmpleadoNombreViatico, fEstadoViatico, fEmpleadoIdGasto, fCategoria, fActivoGasto, fGSolicitudDesde, fGSolicitudHasta, fGViajeDesde, fGViajeHasta]);
 
   const cargar = useCallback(async () => {
     setLoading(true); setError("");
@@ -362,13 +357,6 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
               <label className="text-xs text-[var(--muted)]">hasta
                 <input type="date" className={`${inputCls} mt-0.5 block`} value={fGViajeHasta} onChange={(e) => setFGViajeHasta(e.target.value)} />
               </label>
-              <label className="text-xs text-[var(--muted)]">Descuento al personal
-                <select className={`${inputCls} mt-0.5 block`} value={fGDescuentoPersonal} onChange={(e) => setFGDescuentoPersonal(e.target.value)}>
-                  <option value="">Todos</option>
-                  <option value="1">Marcados</option>
-                  <option value="0">No marcados</option>
-                </select>
-              </label>
             </>
           )}
           <label className="text-xs text-[var(--muted)]">Viaje / plan
@@ -443,7 +431,7 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
                 <th className="px-2 py-1">Cargo</th><th className="px-2 py-1">Placa</th><th className="px-2 py-1">Cliente</th>
                 <th className="px-2 py-1">Cantidad</th><th className="px-2 py-1">Descripción</th><th className="px-2 py-1">Total</th>
                 <th className="px-2 py-1">Viaje</th><th className="px-2 py-1">Categoría</th><th className="px-2 py-1">Monto unitario</th>
-                <th className="px-2 py-1">Estado</th><th className="px-2 py-1">Descuento personal</th><th className="px-2 py-1">Registrado por</th>
+                <th className="px-2 py-1">Estado</th><th className="px-2 py-1">Registrado por</th>
               </tr>
             </thead>
             <tbody>
@@ -454,7 +442,6 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
                   <td className="px-2 py-1">{f.cantidad}</td><td className="px-2 py-1">{f.descripcion ?? "—"}</td><td className="px-2 py-1">{money(f.total)}</td>
                   <td className="px-2 py-1">{f.planCodigo ?? "—"}</td><td className="px-2 py-1">{f.categoria}</td><td className="px-2 py-1">{money(f.monto)}</td>
                   <td className={`px-2 py-1 ${f.activo ? "" : "text-red-400"}`}>{f.activo ? "Activo" : "Anulado"}</td>
-                  <td className="px-2 py-1">{f.descuentoPersonal ? "Sí" : "No"}</td>
                   <td className="px-2 py-1">{f.registradoPor ?? "—"}</td>
                 </tr>
               ))}
