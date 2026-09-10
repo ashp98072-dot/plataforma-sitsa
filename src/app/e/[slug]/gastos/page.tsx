@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import { CatalogoSearchSelect } from "@/components/tms/catalogo-search-select";
+import { MAX_UPLOAD_BYTES } from "@/lib/uploads-constants";
 
 type Gasto = {
   id: number;
@@ -23,6 +25,8 @@ type Gasto = {
   metodoPago: string | null;
   numeroCuentaPago: string | null;
   tieneFactura: boolean;
+  facturaNombreOriginal: string | null;
+  facturaTamano: number | null;
   observaciones: string | null;
   activo: boolean;
 };
@@ -42,8 +46,8 @@ type PlanCatalogo = {
 
 type Catalogos = {
   empleados: { id: number; codigo: string; nombre: string; puesto: string | null }[];
-  vehiculos: { id: number; placa: string }[];
-  clientes: { id: number; nombre: string }[];
+  vehiculos: { id: number; placa: string; marca?: string | null; modelo?: string | null }[];
+  clientes: { id: number; codigo?: string | null; nombre: string; nit?: string | null }[];
   planes: PlanCatalogo[];
 };
 
@@ -89,6 +93,7 @@ export default function GastosPage() {
   const [mostrarForm, setMostrarForm] = useState(false);
   const [editandoId, setEditandoId] = useState<number | null>(null);
   const [form, setForm] = useState(FORM_VACIO);
+  const [comprobante, setComprobante] = useState<File | null>(null);
 
   const cargar = useCallback(async () => {
     setLoading(true);
@@ -124,6 +129,7 @@ export default function GastosPage() {
   function nuevo() {
     setEditandoId(null);
     setForm(FORM_VACIO);
+    setComprobante(null);
     setMostrarForm(true);
   }
 
@@ -145,6 +151,7 @@ export default function GastosPage() {
       tieneFactura: g.tieneFactura,
       observaciones: g.observaciones ?? "",
     });
+    setComprobante(null);
     setMostrarForm(true);
   }
 
@@ -190,13 +197,32 @@ export default function GastosPage() {
       tieneFactura: form.tieneFactura,
       observaciones: form.observaciones.trim() || null,
     };
+    if (comprobante && (!/\.(pdf|jpe?g|png)$/i.test(comprobante.name) || !["application/pdf", "image/jpeg", "image/png"].includes(comprobante.type))) {
+      setError("El comprobante debe ser PDF, JPG, JPEG o PNG."); return;
+    }
+    if (comprobante && comprobante.size > MAX_UPLOAD_BYTES) { setError("El comprobante supera el máximo de 50 MB."); return; }
     const url = editandoId ? `/api/empresas/${slug}/tms/gastos/${editandoId}` : `/api/empresas/${slug}/tms/gastos`;
     const res = await fetch(url, { method: editandoId ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) { setError(data.error ?? "No se pudo guardar."); return; }
-    setMsg(data.mensaje ?? "Guardado.");
+    const gastoId = editandoId ?? data.gasto?.id;
+    if (comprobante && gastoId) {
+      const archivos = new FormData(); archivos.set("file", comprobante);
+      const subida = await fetch(`/api/empresas/${slug}/tms/gastos/${gastoId}/comprobante`, { method: "POST", body: archivos });
+      const subidaData = await subida.json().catch(() => ({}));
+      if (!subida.ok) { setError(`${data.mensaje ?? "Gasto guardado."} ${subidaData.error ?? "No se pudo adjuntar el comprobante."}`); await cargar(); return; }
+    }
+    setMsg(comprobante ? "Gasto y comprobante guardados." : (data.mensaje ?? "Guardado."));
     setMostrarForm(false);
     await cargar();
+  }
+
+  async function eliminarComprobante(id: number) {
+    if (!confirm("¿Eliminar el comprobante adjunto?")) return;
+    const res = await fetch(`/api/empresas/${slug}/tms/gastos/${id}/comprobante`, { method: "DELETE" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { setError(data.error ?? "No se pudo eliminar el comprobante."); return; }
+    setMsg(data.mensaje); await cargar();
   }
 
   async function desactivar(id: number) {
@@ -247,24 +273,9 @@ export default function GastosPage() {
                 {metodosPago.map((m) => <option key={m} value={m}>{m}</option>)}
               </select>
             </label>
-            <label className="text-xs text-[var(--muted)]">Empleado / persona
-              <select className={`${inputCls} mt-0.5 w-full`} value={form.empleadoId} onChange={(e) => setForm((f) => ({ ...f, empleadoId: Number(e.target.value) }))}>
-                <option value={0}>—</option>
-                {catalogos.empleados.map((e) => <option key={e.id} value={e.id}>{e.codigo} · {e.nombre}{e.puesto ? ` (${e.puesto})` : ""}</option>)}
-              </select>
-            </label>
-            <label className="text-xs text-[var(--muted)]">Placa / unidad
-              <select className={`${inputCls} mt-0.5 w-full`} value={form.vehiculoId} onChange={(e) => setForm((f) => ({ ...f, vehiculoId: Number(e.target.value) }))}>
-                <option value={0}>—</option>
-                {catalogos.vehiculos.map((v) => <option key={v.id} value={v.id}>{v.placa}</option>)}
-              </select>
-            </label>
-            <label className="text-xs text-[var(--muted)]">Cliente
-              <select className={`${inputCls} mt-0.5 w-full`} value={form.clienteId} onChange={(e) => setForm((f) => ({ ...f, clienteId: Number(e.target.value) }))}>
-                <option value={0}>—</option>
-                {catalogos.clientes.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-              </select>
-            </label>
+            <CatalogoSearchSelect label="Empleado / persona" placeholder="Buscar empleado..." value={String(form.empleadoId || "")} inputClassName={inputCls} emptyLabel="— Sin empleado —" options={catalogos.empleados.map((e) => ({ value: String(e.id), label: e.nombre, detail: [e.codigo, e.puesto].filter(Boolean).join(" · ") }))} onChange={(value) => setForm((f) => ({ ...f, empleadoId: Number(value) || 0 }))} />
+            <CatalogoSearchSelect label="Placa / unidad" placeholder="Buscar placa..." value={String(form.vehiculoId || "")} inputClassName={inputCls} emptyLabel="— Sin unidad —" options={catalogos.vehiculos.map((v) => ({ value: String(v.id), label: v.placa, detail: [v.marca, v.modelo].filter(Boolean).join(" ") }))} onChange={(value) => setForm((f) => ({ ...f, vehiculoId: Number(value) || 0 }))} />
+            <CatalogoSearchSelect label="Cliente" placeholder="Buscar cliente..." value={String(form.clienteId || "")} inputClassName={inputCls} emptyLabel="— Sin cliente —" options={catalogos.clientes.map((c) => ({ value: String(c.id), label: c.nombre, detail: [c.codigo, c.nit ? `NIT ${c.nit}` : null].filter(Boolean).join(" · ") }))} onChange={(value) => setForm((f) => ({ ...f, clienteId: Number(value) || 0 }))} />
             <label className="text-xs text-[var(--muted)]">Viaje / plan
               <select className={`${inputCls} mt-0.5 w-full`} value={form.planId} onChange={(e) => seleccionarPlan(Number(e.target.value))}>
                 <option value={0}>—</option>
@@ -283,6 +294,11 @@ export default function GastosPage() {
             <label className="mt-4 flex items-center gap-2 text-xs text-[var(--muted)]">
               <input type="checkbox" checked={form.tieneFactura} onChange={(e) => setForm((f) => ({ ...f, tieneFactura: e.target.checked }))} />
               Tiene factura
+            </label>
+            <label className="text-xs text-[var(--muted)]">Factura / comprobante (PDF, JPG o PNG; máx. 50 MB)
+              <input type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" className={`${inputCls} mt-0.5 w-full`} onChange={(e) => { const file = e.target.files?.[0] ?? null; setComprobante(file); if (file) setForm((f) => ({ ...f, tieneFactura: true })); }} />
+              {comprobante ? <span className="mt-1 block">Nuevo archivo: {comprobante.name}</span> : null}
+              {editandoId && gastos.find((g) => g.id === editandoId)?.facturaNombreOriginal ? <span className="mt-1 block">Actual: {gastos.find((g) => g.id === editandoId)?.facturaNombreOriginal}</span> : null}
             </label>
           </div>
           <label className="block text-xs text-[var(--muted)]">Descripción
@@ -310,6 +326,7 @@ export default function GastosPage() {
               <th className="px-2 py-2">Cliente</th>
               <th className="px-2 py-2">Viaje</th>
               <th className="px-2 py-2">Monto</th>
+              <th className="px-2 py-2">Comprobante</th>
               <th className="px-2 py-2" />
             </tr>
           </thead>
@@ -324,6 +341,7 @@ export default function GastosPage() {
                 <td className="px-2 py-2">{g.clienteNombre ?? "—"}</td>
                 <td className="px-2 py-2">{g.planCodigo ?? "—"}</td>
                 <td className="px-2 py-2">Q{(g.cantidad * g.monto).toLocaleString("es-GT", { minimumFractionDigits: 2 })}</td>
+                <td className="px-2 py-2">{g.facturaNombreOriginal ? <span><a className="text-[var(--accent)]" href={`/api/empresas/${slug}/tms/gastos/${g.id}/comprobante`} target="_blank" rel="noreferrer">{g.facturaNombreOriginal}</a><button type="button" onClick={() => void eliminarComprobante(g.id)} className="ml-2 text-red-400">Quitar</button></span> : "—"}</td>
                 <td className="px-2 py-2 whitespace-nowrap">
                   <button type="button" onClick={() => editar(g)} className="mr-2 text-[var(--accent)]">Editar</button>
                   <button type="button" onClick={() => void desactivar(g.id)} className="text-red-400">Desactivar</button>
@@ -331,7 +349,7 @@ export default function GastosPage() {
               </tr>
             ))}
             {!gastos.length && !loading ? (
-              <tr><td colSpan={9} className="px-3 py-4 text-[var(--muted)]">Sin gastos con este filtro.</td></tr>
+              <tr><td colSpan={10} className="px-3 py-4 text-[var(--muted)]">Sin gastos con este filtro.</td></tr>
             ) : null}
           </tbody>
         </table>

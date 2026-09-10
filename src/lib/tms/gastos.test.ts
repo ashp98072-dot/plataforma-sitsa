@@ -4,6 +4,7 @@ vi.mock("@/lib/db", () => ({ query: vi.fn(), execute: vi.fn() }));
 import { execute, query } from "@/lib/db";
 import {
   CATEGORIAS_GASTO,
+  METODOS_PAGO_GASTO,
   actualizarGasto,
   crearGasto,
   desactivarGasto,
@@ -37,6 +38,13 @@ describe("catálogo de categorías", () => {
       "Comida", "Aceite", "Medicamento", "Bonificación",
       "Otros",
     ]);
+  });
+});
+
+describe("métodos de pago", () => {
+  it("incluye Transferencia móvil sin retirar los métodos existentes", () => {
+    expect(METODOS_PAGO_GASTO).toContain("Transferencia móvil");
+    expect(METODOS_PAGO_GASTO).toEqual(expect.arrayContaining(["Efectivo", "Transferencia", "Tarjeta", "Cheque", "Otro"]));
   });
 });
 
