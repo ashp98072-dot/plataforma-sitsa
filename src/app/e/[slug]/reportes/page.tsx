@@ -4,7 +4,7 @@ type Props = { params: Promise<{ slug: string }> };
 
 const REPORTES = [
   { ruta: "diario", nombre: "Reporte diario de viajes", descripcion: "Viajes por fecha con unidad, personal, ruta, estado y tarifa comercial histórica." },
-  { ruta: "viajes", nombre: "Reporte de viajes / historial", descripcion: "Historial completo, seguimiento, estados, expediente, facturación y cierre." },
+  { ruta: "viajes", nombre: "Reporte de viajes / historial", descripcion: "Histórico de viajes con filtros completos, indicadores, facturación agregada y exportación Excel / PDF." },
   { ruta: "viaticos", nombre: "Reporte de viáticos", descripcion: "Detalle de viáticos con filtros propios y exportación." },
   { ruta: "gastos", nombre: "Reporte de gastos operativos", descripcion: "Detalle de gastos operativos con sus filtros y totales." },
   { ruta: "fondos", nombre: "Reporte de solicitudes de fondo", descripcion: "Solicitudes y líneas de fondo por fechas, empleado, cliente y estado." },

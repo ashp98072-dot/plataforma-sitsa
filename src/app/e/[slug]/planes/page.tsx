@@ -13,7 +13,7 @@ export default function PlanesPage() {
     <Suspense
       fallback={<p className="text-sm text-[var(--muted)]">Cargando planes…</p>}
     >
-      <PlanesViajesClient />
+      <PlanesViajesClient modo="operativo" />
     </Suspense>
   );
 }

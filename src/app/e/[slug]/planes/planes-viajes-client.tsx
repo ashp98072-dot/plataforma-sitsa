@@ -36,6 +36,41 @@ export function esExpedienteHistorico(estado: string): boolean {
 }
 
 /**
+ * OPERACIONES-UX-PLANES-REPORTES-1 — el MISMO componente sirve a dos
+ * pantallas sobre los MISMOS viajes / mismo backend:
+ *  - `"operativo"` (/e/[slug]/planes): gestión de viajes existentes —
+ *    cierre, cierre manual, salto a Programación. Sin KPIs/exportación.
+ *  - `"reporte"` (/e/[slug]/reportes/viajes): consulta y análisis —
+ *    indicadores, bloque de facturación y exportación Excel/PDF; la tabla
+ *    es de SOLO consulta (Ver expediente + PDF), sin acciones operativas.
+ * No se duplica lógica ni consultas: solo cambia qué se renderiza.
+ */
+export type ModoPlanesViajes = "operativo" | "reporte";
+
+/**
+ * Qué acciones expone cada fila de la tabla según el modo. Función pura
+ * (mismo criterio que el resto del repo: la lógica se prueba sin
+ * renderizar el componente). En modo "reporte" nunca aparece una acción
+ * que modifique el viaje — el cierre/edición sigue viviendo solo en
+ * Planes / Viajes y Programación.
+ */
+export function accionesViaje(
+  modo: ModoPlanesViajes,
+  p: { estado: string; pendienteCierre: boolean },
+  puedeCerrarViaje: boolean,
+): { verDetalle: boolean; pdf: boolean; irProgramacion: boolean; cerrar: boolean; cierreManual: boolean } {
+  const consulta = modo === "reporte";
+  const historico = esExpedienteHistorico(p.estado);
+  return {
+    verDetalle: true,
+    pdf: true,
+    irProgramacion: !consulta && !historico,
+    cerrar: !consulta && p.pendienteCierre && puedeCerrarViaje,
+    cierreManual: !consulta && puedeCerrarViaje && puedeCerrarManualmente(p.estado),
+  };
+}
+
+/**
  * Operaciones → Planes / Viajes (OPERACIONES-UX-PLANES-SIMPLIFICADO-1).
  * Antes vivía en Operaciones → TMS / Logística → "Reportes de viajes"
  * (TMS-REPORTES-1); se movió a /e/[slug]/planes y se retituló para que el
@@ -303,11 +338,12 @@ export function resumenCierre(p: PlanReporte): {
   };
 }
 
-export default function PlanesViajesClient() {
+export default function PlanesViajesClient({ modo = "operativo" }: { modo?: ModoPlanesViajes } = {}) {
   const slug = String(useParams().slug);
   const searchParams = useSearchParams();
   const { permisos } = useEmpresaSession();
   const puedeCerrarViaje = tienePermiso(permisos, "viajes_cerrar", "editar");
+  const esReporte = modo === "reporte";
 
   // OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — deep-link desde Programación
   // tras cerrar un viaje: se enfoca ese plan concreto (independiente de
@@ -594,12 +630,20 @@ export default function PlanesViajesClient() {
   return (
     <div className="space-y-4">
       <div>
-        <p className="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">Operaciones</p>
-        <h1 className="mt-1 text-2xl font-semibold text-[var(--text)]">Planes / Viajes</h1>
-        <p className="text-sm text-[var(--muted)]">
-          Seguimiento e historial de planes: estados, expediente, cierre y búsqueda histórica (Cerrados, Cancelados). Consulta con filtros, indicadores y exportación. Para crear o reprogramar un viaje usa{" "}
-          <Link href={`/e/${slug}/programacion`} className={linkCls}>Operaciones → Programación</Link>.
-        </p>
+        <p className="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">{esReporte ? "Operaciones · Reportes" : "Operaciones"}</p>
+        <h1 className="mt-1 text-2xl font-semibold text-[var(--text)]">{esReporte ? "Reporte de viajes / historial" : "Planes / Viajes"}</h1>
+        {esReporte ? (
+          <p className="text-sm text-[var(--muted)]">
+            Vista de consulta y análisis: indicadores, facturación agregada e histórico exportable (Excel / PDF) sobre el filtro aplicado. La tabla es de solo consulta — para cerrar un viaje o ver su expediente operativo usa{" "}
+            <Link href={`/e/${slug}/planes`} className={linkCls}>Operaciones → Planes / Viajes</Link>.
+          </p>
+        ) : (
+          <p className="text-sm text-[var(--muted)]">
+            Gestión de viajes existentes: estados, expediente y cierre. Para indicadores, facturación agregada y exportaciones usa{" "}
+            <Link href={`/e/${slug}/reportes/viajes`} className={linkCls}>Reportes → Reporte de viajes / historial</Link>. Para crear o reprogramar un viaje usa{" "}
+            <Link href={`/e/${slug}/programacion`} className={linkCls}>Programación</Link>.
+          </p>
+        )}
       </div>
 
       {bannerCierre ? (
@@ -689,14 +733,20 @@ export default function PlanesViajesClient() {
             Solo sin cerrar
           </label>
         </div>
-        <div className="mt-2 flex flex-wrap gap-2">
-          <a className="rounded bg-[#334155] px-3 py-1.5 text-xs text-white" href={`/api/empresas/${slug}/tms/reportes/viajes/export?formato=xlsx&${exportQueryString()}`}>Exportar Excel (todo el filtro)</a>
-          <a className="rounded bg-[#334155] px-3 py-1.5 text-xs text-white" href={`/api/empresas/${slug}/tms/reportes/viajes/export?formato=pdf&${exportQueryString()}`}>Exportar PDF (todo el filtro)</a>
-        </div>
+        {/* OPERACIONES-UX-PLANES-REPORTES-1 — exportación solo en la vista
+            de Reportes (Reportes = análisis + exportaciones). */}
+        {esReporte ? (
+          <div className="mt-2 flex flex-wrap gap-2">
+            <a className="rounded bg-[#334155] px-3 py-1.5 text-xs text-white" href={`/api/empresas/${slug}/tms/reportes/viajes/export?formato=xlsx&${exportQueryString()}`}>Exportar Excel (todo el filtro)</a>
+            <a className="rounded bg-[#334155] px-3 py-1.5 text-xs text-white" href={`/api/empresas/${slug}/tms/reportes/viajes/export?formato=pdf&${exportQueryString()}`}>Exportar PDF (todo el filtro)</a>
+          </div>
+        ) : null}
       </section>
 
-      {/* KPI */}
-      {kpi ? (
+      {/* KPI — OPERACIONES-UX-PLANES-REPORTES-1: los indicadores y el bloque
+          de facturación viven en la vista de Reportes, no en la gestión
+          operativa de Planes / Viajes. */}
+      {esReporte && kpi ? (
         <section className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
           <KpiCard label="Total de viajes" value={String(kpi.totalViajes)} />
           <KpiCard label="Cerrados" value={String(kpi.cerrados)} />
@@ -715,7 +765,7 @@ export default function PlanesViajesClient() {
           valores por factura (pendiente de cobro/cobrado) se cuentan UNA
           sola vez por factura, nunca una vez por viaje (ver
           obtenerKpisReporte, src/lib/tms/reportes-viajes.ts). */}
-      {kpi ? (
+      {esReporte && kpi ? (
         <section>
           <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">Facturación (FACT-1)</p>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
@@ -745,6 +795,7 @@ export default function PlanesViajesClient() {
           <tbody>
             {planes.map((p) => {
               const badge = badgeEstado(p);
+              const acc = accionesViaje(modo, p, puedeCerrarViaje);
               return (
                 <Fragment key={p.id}>
                   <tr className="border-t border-[var(--border)] bg-[var(--card)] align-top">
@@ -791,16 +842,18 @@ export default function PlanesViajesClient() {
                         <button type="button" className={linkCls} onClick={() => void abrirDetalle(p.id)}>
                           {expandido === p.id ? "Cerrar" : esExpedienteHistorico(p.estado) ? "Ver expediente" : "Ver detalle"}
                         </button>
-                        {!esExpedienteHistorico(p.estado) ? (
+                        {acc.irProgramacion ? (
                           <Link href={`/e/${slug}/programacion?plan=${p.id}`} className={linkCls}>Programación</Link>
                         ) : null}
-                        <a className={linkCls} href={`/api/empresas/${slug}/tms/planes/${p.id}/reporte-pdf`}>PDF</a>
-                        {p.pendienteCierre && puedeCerrarViaje ? (
+                        {acc.pdf ? (
+                          <a className={linkCls} href={`/api/empresas/${slug}/tms/planes/${p.id}/reporte-pdf`}>PDF</a>
+                        ) : null}
+                        {acc.cerrar ? (
                           <button type="button" className="text-emerald-500 hover:underline" onClick={() => pedirCierre(p.id)}>
                             Cerrar viaje
                           </button>
                         ) : null}
-                        {puedeCerrarViaje && puedeCerrarManualmente(p.estado) ? (
+                        {acc.cierreManual ? (
                           <button type="button" className="text-rose-500 hover:underline" onClick={() => abrirCierreManual(p.id)}>
                             Cierre manual
                           </button>
@@ -867,7 +920,7 @@ export default function PlanesViajesClient() {
                               <li>Cerrado por: {p.cerradoPor ?? "—"}</li>
                               <li>Cerrado en: {fh(p.cerradoEn)}</li>
                             </ul>
-                            {p.pendienteCierre && puedeCerrarViaje ? (
+                            {acc.cerrar ? (
                               confirmandoCierre === p.id ? (
                                 // CORRECCIÓN PR #112 (HALLAZGO 1): confirmación
                                 // explícita — el POST solo ocurre al pulsar
@@ -908,7 +961,7 @@ export default function PlanesViajesClient() {
                                 </button>
                               )
                             ) : null}
-                            {puedeCerrarViaje && puedeCerrarManualmente(p.estado) ? (
+                            {acc.cierreManual ? (
                               cierreManualPlanId === p.id ? (
                                 <div className="mt-2 space-y-1.5 rounded border-2 border-rose-600 bg-rose-950/20 p-2 text-xs">
                                   <p className="font-semibold uppercase tracking-wide text-rose-500">⚠ Cierre manual por Operaciones</p>
