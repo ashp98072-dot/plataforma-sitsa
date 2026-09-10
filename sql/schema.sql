@@ -808,8 +808,9 @@ CREATE TABLE IF NOT EXISTS tms_cliente_rutas (
   tarifa_referencia DECIMAL(12,2) NULL DEFAULT NULL,
   costo_operativo DECIMAL(12,2) NULL DEFAULT NULL,
   -- RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1: unidad habitual de la
-  -- ruta (opcional), referida a flota_vehiculos de la MISMA empresa (FK
-  -- compuesta más abajo). Programación la precarga como sugerencia;
+  -- ruta (opcional). FK simple a flota_vehiculos(id) más abajo; el
+  -- aislamiento por empresa lo valida la aplicación
+  -- (validarUnidadRecurrenteTx). Programación la precarga como sugerencia;
   -- cambiar la unidad de un viaje NO altera esta configuración.
   unidad_recurrente_id INT NULL DEFAULT NULL,
   contacto_cliente_id INT NULL,
@@ -992,11 +993,16 @@ ALTER TABLE tms_unidades
 -- RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1: la FK de
 -- tms_cliente_rutas.unidad_recurrente_id se declara aquí (no inline
 -- arriba) porque flota_vehiculos recién queda definida en este punto.
--- Compuesta (empresa_id, unidad_recurrente_id) para impedir a nivel de
--- base de datos relacionar una unidad de otra empresa.
+-- FK SIMPLE a flota_vehiculos(id), IGUAL que fk_tmsuni_flota arriba
+-- (tms_unidades.flota_vehiculo_id): una FK compuesta
+-- (empresa_id, unidad_recurrente_id) acopla tms_cliente_rutas.empresa_id
+-- al tipo de flota_vehiculos.empresa_id y provoca errno 150 en entornos
+-- donde esos tipos difieren (flota puede venir de control-flota). El
+-- aislamiento por empresa se valida en la aplicación
+-- (validarUnidadRecurrenteTx en src/lib/tms/cliente-rutas.ts).
 ALTER TABLE tms_cliente_rutas
   ADD CONSTRAINT fk_tmsclirutas_unidad_recurrente
-  FOREIGN KEY (empresa_id, unidad_recurrente_id) REFERENCES flota_vehiculos(empresa_id, id)
+  FOREIGN KEY (unidad_recurrente_id) REFERENCES flota_vehiculos(id)
   ON DELETE SET NULL;
 
 -- RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1: catálogo de opciones de

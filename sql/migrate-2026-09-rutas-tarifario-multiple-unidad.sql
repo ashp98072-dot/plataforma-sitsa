@@ -35,10 +35,19 @@
 --      `actualizado_por`/`actualizado_en` en la propia fila.
 --
 --   2. `tms_cliente_rutas.unidad_recurrente_id` — unidad habitual de la
---      ruta, OPCIONAL, referida a `flota_vehiculos` de la MISMA empresa
---      (FK compuesta (empresa_id, id), ON DELETE SET NULL). Programación
---      la precarga como sugerencia; cambiar la unidad de un viaje NO
---      cambia esta configuración.
+--      ruta, OPCIONAL, referida a `flota_vehiculos`. FK SIMPLE a
+--      flota_vehiculos(id) ON DELETE SET NULL — EXACTAMENTE el mismo
+--      patrón ya probado en producción para tms_unidades.flota_vehiculo_id
+--      (fk_tmsuni_flota). NO se usa una FK compuesta (empresa_id, ...):
+--      acoplar tms_cliente_rutas.empresa_id (columna antigua) al tipo de
+--      flota_vehiculos.empresa_id (que en producción puede diferir por
+--      venir de control-flota) provoca errno 150. El aislamiento por
+--      empresa se garantiza en la capa de aplicación
+--      (validarUnidadRecurrenteTx: `WHERE id = ? AND empresa_id = ?`),
+--      mismo criterio ya documentado para tms_unidades.flota_vehiculo_id
+--      ("Tener flota_vehiculo_id NUNCA autoriza acceso por sí mismo:
+--      siempre se verifica"). Programación la precarga como sugerencia;
+--      cambiar la unidad de un viaje NO cambia esta configuración.
 --
 --   3. `tms_planes_viaje` — snapshot de la tarifa usada en el viaje:
 --      `tarifa_id` (informativo, SIN FK — mismo criterio que `ruta_id`,
@@ -52,24 +61,6 @@
 --      tenga ninguna fila en `tms_ruta_tarifas`, se inserta una "Tarifa
 --      base" (predeterminada = 1, activa = 1) — así las rutas existentes
 --      quedan listas para el multi-tarifario sin captura manual.
-
--- flota_vehiculos ya tiene UNIQUE (empresa_id, id) (uq_flota_vehiculos_empresa_id,
--- ver schema.sql) — destino de la FK compuesta de abajo. Se detecta por
--- composición para no fallar si el nombre difiere en algún entorno.
-SET @fv_uq_ddl = IF(EXISTS (
-  SELECT 1 FROM (
-    SELECT index_name
-    FROM information_schema.statistics
-    WHERE table_schema = DATABASE() AND table_name = 'flota_vehiculos'
-    GROUP BY index_name
-    HAVING MIN(non_unique) = 0
-       AND GROUP_CONCAT(column_name ORDER BY seq_in_index) = 'empresa_id,id'
-  ) AS ix
-), 'SELECT 1',
-  'ALTER TABLE flota_vehiculos ADD UNIQUE KEY uq_flota_vehiculos_empresa_id (empresa_id, id)');
-PREPARE fv_uq_stmt FROM @fv_uq_ddl;
-EXECUTE fv_uq_stmt;
-DEALLOCATE PREPARE fv_uq_stmt;
 
 -- 1. Catálogo de opciones de tarifa por ruta.
 CREATE TABLE IF NOT EXISTS tms_ruta_tarifas (
@@ -106,6 +97,12 @@ CREATE TABLE IF NOT EXISTS tms_ruta_tarifas (
 ALTER TABLE tms_cliente_rutas
   ADD COLUMN IF NOT EXISTS unidad_recurrente_id INT NULL DEFAULT NULL AFTER costo_operativo;
 
+-- FK SIMPLE a flota_vehiculos(id) — mismo patrón que fk_tmsuni_flota
+-- (tms_unidades.flota_vehiculo_id), YA probado en producción. NO
+-- compuesta: evita el errno 150 por desajuste de tipo entre
+-- tms_cliente_rutas.empresa_id y flota_vehiculos.empresa_id. Se detecta
+-- por nombre de constraint para ser reejecutable (la migración ya corrió
+-- parcialmente: la columna existe, la FK no).
 SET @ur_fk_ddl = IF(EXISTS (
   SELECT 1 FROM information_schema.table_constraints
   WHERE table_schema = DATABASE() AND table_name = 'tms_cliente_rutas'
@@ -113,8 +110,8 @@ SET @ur_fk_ddl = IF(EXISTS (
 ), 'SELECT 1',
   'ALTER TABLE tms_cliente_rutas
      ADD CONSTRAINT fk_tmsclirutas_unidad_recurrente
-     FOREIGN KEY (empresa_id, unidad_recurrente_id)
-     REFERENCES flota_vehiculos (empresa_id, id) ON DELETE SET NULL');
+     FOREIGN KEY (unidad_recurrente_id)
+     REFERENCES flota_vehiculos (id) ON DELETE SET NULL');
 PREPARE ur_fk_stmt FROM @ur_fk_ddl;
 EXECUTE ur_fk_stmt;
 DEALLOCATE PREPARE ur_fk_stmt;
