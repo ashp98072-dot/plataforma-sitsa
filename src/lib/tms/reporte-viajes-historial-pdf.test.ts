@@ -69,9 +69,11 @@ describe("reporteViajesHistorialPdf", () => {
     });
     const paginas = (buffer.toString("latin1").match(/\/Type\s*\/Page(?!s)\b/g) ?? []).length;
     expect(paginas).toBeGreaterThan(2);
-    expect(textos.filter((t) => t === "Fecha").length).toBeGreaterThan(1);
-    expect(textos.filter((t) => t === "Código").length).toBeGreaterThan(2);
-    expect(textos).toContain("1. Detalle operativo");
-    expect(textos).toContain("2. Facturación / cobro");
+    expect(textos.filter((t) => t === "FECHA").length).toBe(80);
+    expect(textos.filter((t) => t === "CÓDIGO").length).toBe(80);
+    expect(textos.filter((t) => t === "Datos operativos").length).toBe(80);
+    expect(textos.filter((t) => t === "Facturación / cobro").length).toBe(80);
+    expect(textos).toContain("Cliente con un nombre suficientemente largo para comprobar el ajuste multilínea");
+    expect(textos.some((t) => t.includes("…"))).toBe(false);
   });
 });
