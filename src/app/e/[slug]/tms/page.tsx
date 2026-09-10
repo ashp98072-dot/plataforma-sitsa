@@ -522,8 +522,8 @@ export default function TmsPage() {
             TMS es solo consulta. Las evidencias las registra el piloto o personal asignado desde su portal.
             El avance de la ruta y la última ubicación reportada se actualizan cada 5 segundos. Para filtros por
             rango de fechas, indicadores del período, exportar Excel/PDF y cerrar viajes pendientes, usa{" "}
-            <Link href={`/e/${slug}/tms/reportes`} className="text-[var(--accent)] underline">
-              Reportes de viajes →
+            <Link href={`/e/${slug}/planes`} className="text-[var(--accent)] underline">
+              Operaciones → Planes / Viajes →
             </Link>
             .
           </p>

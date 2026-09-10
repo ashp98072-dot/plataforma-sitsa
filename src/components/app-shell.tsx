@@ -279,6 +279,36 @@ export function AppShell({
         key: "disp-flota",
       });
     }
+    // OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — orden del flujo operativo:
+    // Rutas → Programación → Planes / Viajes → (Viáticos / Gastos) →
+    // Reportes. Solo se reordenaron/retitularon enlaces; ningún cambio de
+    // gating ni de permisos.
+
+    // Rutas (VIAT-4 / OPS-5.2a): catálogo maestro de rutas/servicios por
+    // cliente. Ya NO depende únicamente de la audiencia gruesa de TMS —
+    // si el usuario tiene una matriz de permisos configurada, exige
+    // "rutas:ver" O "tms:ver" explícito (compatibilidad histórica: quien
+    // hoy edita rutas vía tms:editar sigue viendo el link, ver
+    // requireTenantRutas en tenant.ts). Sin matriz configurada
+    // (permisos.length === 0, legado) se mantiene el criterio anterior.
+    // A diferencia de Programación abajo, NO se conserva el bypass
+    // incondicional `rol === "Operaciones"` — si la matriz de un usuario
+    // Operaciones niega explícitamente rutas Y tms, el link se oculta:
+    // la matriz fina es la autoridad real, nunca el rol por sí solo.
+    const puedeRutas =
+      rol !== "Piloto" &&
+      (isAdmin ||
+        (opsMods.includes("tms") &&
+          (permisos.length === 0 ||
+            tienePermiso(permisos, "rutas", "ver") ||
+            tienePermiso(permisos, "tms", "ver"))));
+    if (puedeRutas) {
+      opsLinks.push({
+        href: `${base}/rutas`,
+        label: "Rutas",
+        key: "rutas",
+      });
+    }
     // Corrección de matriz de permisos: Programación ya NO depende
     // exclusivamente de "tms" — si el usuario tiene una matriz de
     // permisos configurada, además exige "programacion:ver" explícito
@@ -298,14 +328,18 @@ export function AppShell({
         key: "programacion",
       });
     }
-    // TMS-REPORTES-1: mismo criterio de audiencia que Programación arriba
-    // (es una vista de reportes sobre los mismos viajes, solo lectura) —
-    // no se crea un permiso nuevo.
+    // OPERACIONES-UX-PLANES-SIMPLIFICADO-1: "Planes / Viajes" — antes
+    // "Reportes de viajes" en /e/[slug]/tms/reportes (TMS-REPORTES-1); se
+    // movió a /e/[slug]/planes y es el paso siguiente a Programación
+    // (seguimiento, historial, estados, expediente y cierre
+    // administrativo). MISMO criterio de audiencia que Programación (misma
+    // vista sobre los mismos viajes, solo lectura) — no se crea ni cambia
+    // ningún permiso. La ruta anterior /tms/reportes redirige aquí.
     if (puedeProgramacion) {
       opsLinks.push({
-        href: `${base}/tms/reportes`,
-        label: "Reportes de viajes",
-        key: "tms-reportes",
+        href: `${base}/planes`,
+        label: "Planes / Viajes",
+        key: "planes",
       });
     }
     // Viáticos (VIAT-3): módulo propio, visible con CUALQUIERA de los tres
@@ -325,31 +359,6 @@ export function AppShell({
         href: `${base}/viaticos`,
         label: "Viáticos",
         key: "viaticos",
-      });
-    }
-    // Rutas (VIAT-4 / OPS-5.2a): catálogo maestro de rutas/servicios por
-    // cliente. Ya NO depende únicamente de la audiencia gruesa de TMS —
-    // si el usuario tiene una matriz de permisos configurada, exige
-    // "rutas:ver" O "tms:ver" explícito (compatibilidad histórica: quien
-    // hoy edita rutas vía tms:editar sigue viendo el link, ver
-    // requireTenantRutas en tenant.ts). Sin matriz configurada
-    // (permisos.length === 0, legado) se mantiene el criterio anterior.
-    // A diferencia de Programación arriba, NO se conserva el bypass
-    // incondicional `rol === "Operaciones"` — si la matriz de un usuario
-    // Operaciones niega explícitamente rutas Y tms, el link se oculta:
-    // la matriz fina es la autoridad real, nunca el rol por sí solo.
-    const puedeRutas =
-      rol !== "Piloto" &&
-      (isAdmin ||
-        (opsMods.includes("tms") &&
-          (permisos.length === 0 ||
-            tienePermiso(permisos, "rutas", "ver") ||
-            tienePermiso(permisos, "tms", "ver"))));
-    if (puedeRutas) {
-      opsLinks.push({
-        href: `${base}/rutas`,
-        label: "Rutas",
-        key: "rutas",
       });
     }
     // Gastos operativos y solicitudes de fondo (TMS-GASTOS-REPORTES-1):
@@ -373,9 +382,14 @@ export function AppShell({
         label: "Solicitudes de fondo",
         key: "fondos",
       });
+      // OPERACIONES-UX-PLANES-SIMPLIFICADO-1: paso "Reportes" del flujo —
+      // misma pantalla de siempre (/e/[slug]/reportes/gastos: gastos,
+      // viáticos, fondos, rentabilidad, análisis por cliente/ruta/
+      // período), solo se retituló el enlace de "Reportes de gastos" a
+      // "Reportes". Sin cambios de backend ni de ruta.
       opsLinks.push({
         href: `${base}/reportes/gastos`,
-        label: "Reportes de gastos",
+        label: "Reportes",
         key: "reportes-gastos",
       });
     }
@@ -436,6 +450,14 @@ export function AppShell({
       });
     }
     for (const m of opsMods) {
+      // OPERACIONES-UX-PLANES-SIMPLIFICADO-1: "TMS / Logística" (m === "tms")
+      // es un centro técnico/de configuración cuyo contenido operativo ya
+      // vive en pantallas propias (Programación, Planes / Viajes, Rutas,
+      // Viáticos, Gastos…). Se oculta del menú para el usuario operativo
+      // normal — Admin lo conserva para la configuración. La ruta
+      // /e/[slug]/tms y todos los endpoints TMS siguen intactos y
+      // accesibles por URL directa; solo desaparece el enlace del menú.
+      if (m === "tms" && !isAdmin) continue;
       opsLinks.push({
         href: `${base}/${m}`,
         label: MODULO_LABEL[m] ?? m,
