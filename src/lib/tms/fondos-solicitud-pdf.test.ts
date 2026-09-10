@@ -120,6 +120,100 @@ describe("generarPdfSolicitudFondoAutorizada — estado (§6 del ticket)", () =>
   });
 });
 
+/**
+ * FONDOS-PDF-LANDSCAPE-ANCHOS-1 — el PDF de Solicitud de fondo debe salir
+ * en horizontal (landscape) y repartir el ancho de la tabla de forma que
+ * TODOS los datos se vean completos: nada truncado con "…", nada partido
+ * absurdamente ("C-087CB" + "N"), encabezados cortos ("Cantidad") en una
+ * sola línea.
+ */
+describe("generarPdfSolicitudFondoAutorizada — orientación y anchos (FONDOS-PDF-LANDSCAPE-ANCHOS-1)", () => {
+  function mediaBox(buf: Buffer): { w: number; h: number } | null {
+    const m = buf.toString("latin1").match(/\/MediaBox\s*\[\s*0\s+0\s+([\d.]+)\s+([\d.]+)\s*\]/);
+    return m ? { w: Number(m[1]), h: Number(m[2]) } : null;
+  }
+
+  it("se genera en orientación HORIZONTAL (landscape LETTER: 792 × 612 pt)", async () => {
+    vi.mocked(obtenerSolicitudFondo).mockResolvedValue(solicitud() as never);
+    const r = await generarPdfSolicitudFondoAutorizada(7, 1, "SITSA");
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const box = mediaBox(r.buffer);
+      expect(box).not.toBeNull();
+      expect(box!.w).toBeGreaterThan(box!.h); // horizontal
+      expect(Math.round(box!.w)).toBe(792);
+      expect(Math.round(box!.h)).toBe(612);
+    }
+  });
+
+  it("todas las páginas (aunque haya varias) quedan en landscape", async () => {
+    const muchasLineas = Array.from({ length: 40 }, (_, i) => linea({ id: i + 1 }));
+    vi.mocked(obtenerSolicitudFondo).mockResolvedValue(solicitud({ lineas: muchasLineas }) as never);
+    const r = await generarPdfSolicitudFondoAutorizada(7, 1, "SITSA");
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const boxes = [...r.buffer.toString("latin1").matchAll(/\/MediaBox\s*\[\s*0\s+0\s+([\d.]+)\s+([\d.]+)\s*\]/g)];
+      expect(boxes.length).toBeGreaterThan(1);
+      for (const b of boxes) expect(Number(b[1])).toBeGreaterThan(Number(b[2]));
+    }
+  });
+
+  it("las 10 columnas siguen presentes, en orden, tras el ajuste de anchos", async () => {
+    vi.mocked(obtenerSolicitudFondo).mockResolvedValue(solicitud() as never);
+    const spy = espiarTexto();
+    await generarPdfSolicitudFondoAutorizada(7, 1, "SITSA");
+    const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
+    const i = textos.indexOf("Fecha de solicitud");
+    expect(textos.slice(i, i + 10)).toEqual([
+      "Fecha de solicitud", "Fecha de viaje", "Nombre", "Cuenta", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Valor",
+    ]);
+  });
+
+  it("el encabezado 'Cantidad' se dibuja en UNA sola línea (nunca 'Cantid' + 'ad')", async () => {
+    vi.mocked(obtenerSolicitudFondo).mockResolvedValue(solicitud() as never);
+    const spy = espiarTexto();
+    await generarPdfSolicitudFondoAutorizada(7, 1, "SITSA");
+    const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
+    expect(textos).toContain("Cantidad");
+    expect(textos).not.toContain("Cantid");
+    expect(textos.filter((t) => t === "ad")).toHaveLength(0);
+  });
+
+  it("una placa larga se mantiene en una sola línea, sin partirse ni truncarse", async () => {
+    vi.mocked(obtenerSolicitudFondo).mockResolvedValue(solicitud({ lineas: [linea({ placa: "C-087CBN" })] }) as never);
+    const spy = espiarTexto();
+    await generarPdfSolicitudFondoAutorizada(7, 1, "SITSA");
+    const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
+    expect(textos).toContain("C-087CBN");
+    expect(textos.some((t) => /C-087|CBN/.test(t) && /…|\.\.\./.test(t))).toBe(false);
+  });
+
+  it("una cuenta larga se ve completa (sin '…'): la columna Cuenta tiene ancho suficiente / permite envolver", async () => {
+    vi.mocked(obtenerSolicitudFondo).mockResolvedValue(
+      solicitud({ lineas: [linea({ cuenta: "3-100-004567-8 BANRURAL" })] }) as never,
+    );
+    const spy = espiarTexto();
+    await generarPdfSolicitudFondoAutorizada(7, 1, "SITSA");
+    const unido = spy.mock.calls.map((c) => llamadaTexto(c).texto).join(" ");
+    expect(unido).toContain("BANRURAL");
+    expect(unido).toContain("3-100-004567-8");
+    expect(spy.mock.calls.map((c) => llamadaTexto(c).texto).some((t) => t.includes("…"))).toBe(false);
+  });
+
+  it("Valor conserva alineación derecha y formato 'Q 1,000.00'; el TOTAL sigue visible y alineado", async () => {
+    vi.mocked(obtenerSolicitudFondo).mockResolvedValue(
+      solicitud({ lineas: [linea({ cantidad: 1, monto: 1000 })] }) as never,
+    );
+    const spy = espiarTexto();
+    await generarPdfSolicitudFondoAutorizada(7, 1, "SITSA");
+    const llamadas = spy.mock.calls.map(llamadaTexto);
+    const valor = llamadas.find((c) => c.texto === "Q 1,000.00");
+    expect(valor?.opciones?.align).toBe("right");
+    const total = llamadas.find((c) => c.texto === "TOTAL: Q 1,000.00");
+    expect(total?.opciones?.align).toBe("right");
+  });
+});
+
 describe("generarPdfSolicitudFondoAutorizada — tabla de detalle (§2 del ticket)", () => {
   it("dibuja EXACTAMENTE las 10 columnas pedidas, en este orden", async () => {
     vi.mocked(obtenerSolicitudFondo).mockResolvedValue(solicitud() as never);
