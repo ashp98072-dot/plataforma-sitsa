@@ -40,7 +40,7 @@ export const CATEGORIAS_GASTO = [
 ] as const;
 export type CategoriaGasto = (typeof CATEGORIAS_GASTO)[number];
 
-export const METODOS_PAGO_GASTO = ["Efectivo", "Transferencia", "Tarjeta", "Cheque", "Otro"] as const;
+export const METODOS_PAGO_GASTO = ["Efectivo", "Transferencia", "Transferencia móvil", "Tarjeta", "Cheque", "Otro"] as const;
 export type MetodoPagoGasto = (typeof METODOS_PAGO_GASTO)[number];
 
 export type GastoOperativo = {
@@ -65,6 +65,8 @@ export type GastoOperativo = {
   metodoPago: string | null;
   numeroCuentaPago: string | null;
   tieneFactura: boolean;
+  facturaNombreOriginal: string | null;
+  facturaTamano: number | null;
   observaciones: string | null;
   activo: boolean;
   creadoPor: string | null;
@@ -95,6 +97,8 @@ function mapRow(r: RowDataPacket): GastoOperativo {
     metodoPago: r.metodo_pago != null ? String(r.metodo_pago) : null,
     numeroCuentaPago: r.numero_cuenta_pago != null ? String(r.numero_cuenta_pago) : null,
     tieneFactura: Number(r.tiene_factura ?? 0) === 1,
+    facturaNombreOriginal: r.factura_nombre_original != null ? String(r.factura_nombre_original) : null,
+    facturaTamano: r.factura_tamano != null ? Number(r.factura_tamano) : null,
     observaciones: r.observaciones != null ? String(r.observaciones) : null,
     activo: Number(r.activo ?? 1) === 1,
     creadoPor: r.creado_por != null ? String(r.creado_por) : null,
@@ -111,7 +115,8 @@ const SELECT = `
          g.cliente_id, cli.nombre AS cliente_nombre,
          g.plan_id, plan.codigo AS plan_codigo,
          g.categoria, g.descripcion, g.cantidad, g.monto, g.metodo_pago, g.numero_cuenta_pago,
-         g.tiene_factura, g.observaciones, g.activo, g.creado_por, g.creado_en, g.actualizado_en
+         g.tiene_factura, g.factura_nombre_original, g.factura_tamano,
+         g.observaciones, g.activo, g.creado_por, g.creado_en, g.actualizado_en
   FROM tms_gastos_operativos g
   LEFT JOIN empleados emp ON emp.id = g.empleado_id AND emp.empresa_id = g.empresa_id
   LEFT JOIN flota_vehiculos veh ON veh.id = g.vehiculo_id AND veh.empresa_id = g.empresa_id
@@ -292,7 +297,14 @@ export async function actualizarGasto(
       monto,
       cambios.metodoPago !== undefined ? cambios.metodoPago : actual.metodoPago,
       cambios.numeroCuentaPago !== undefined ? cambios.numeroCuentaPago?.trim() || null : actual.numeroCuentaPago,
-      cambios.tieneFactura !== undefined ? (cambios.tieneFactura ? 1 : 0) : actual.tieneFactura ? 1 : 0,
+      // Un comprobante almacenado es evidencia suficiente y prevalece
+      // sobre un false enviado por cualquier cliente. Para pasar a 0 se
+      // debe eliminar primero el archivo mediante su endpoint dedicado.
+      actual.facturaNombreOriginal
+        ? 1
+        : cambios.tieneFactura !== undefined
+          ? (cambios.tieneFactura ? 1 : 0)
+          : actual.tieneFactura ? 1 : 0,
       cambios.observaciones !== undefined ? cambios.observaciones?.trim() || null : actual.observaciones,
       cambios.activo !== undefined ? (cambios.activo ? 1 : 0) : actual.activo ? 1 : 0,
       id,

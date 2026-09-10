@@ -4,6 +4,7 @@ vi.mock("@/lib/db", () => ({ query: vi.fn(), execute: vi.fn() }));
 import { execute, query } from "@/lib/db";
 import {
   CATEGORIAS_GASTO,
+  METODOS_PAGO_GASTO,
   actualizarGasto,
   crearGasto,
   desactivarGasto,
@@ -37,6 +38,13 @@ describe("catálogo de categorías", () => {
       "Comida", "Aceite", "Medicamento", "Bonificación",
       "Otros",
     ]);
+  });
+});
+
+describe("métodos de pago", () => {
+  it("incluye Transferencia móvil sin retirar los métodos existentes", () => {
+    expect(METODOS_PAGO_GASTO).toContain("Transferencia móvil");
+    expect(METODOS_PAGO_GASTO).toEqual(expect.arrayContaining(["Efectivo", "Transferencia", "Tarjeta", "Cheque", "Otro"]));
   });
 });
 
@@ -172,6 +180,15 @@ describe("actualizarGasto / desactivarGasto", () => {
     expect(g?.monto).toBe(999);
     const params = vi.mocked(execute).mock.calls[0][1] as unknown[];
     expect(params).toContain("Combustible"); // categoría preservada del actual
+  });
+
+  it("no permite guardar tiene_factura=0 mientras existe comprobante almacenado", async () => {
+    vi.mocked(query)
+      .mockResolvedValueOnce([filaGasto({ factura_nombre_original: "factura.pdf", factura_tamano: 100 })] as never)
+      .mockResolvedValueOnce([filaGasto({ factura_nombre_original: "factura.pdf", factura_tamano: 100, tiene_factura: 1 })] as never);
+    await actualizarGasto(7, 1, { tieneFactura: false });
+    const params = vi.mocked(execute).mock.calls[0][1] as unknown[];
+    expect(params[12]).toBe(1);
   });
 
   it("desactivarGasto pone activo=false sin tocar el resto", async () => {
