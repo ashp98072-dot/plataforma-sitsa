@@ -182,6 +182,15 @@ describe("actualizarGasto / desactivarGasto", () => {
     expect(params).toContain("Combustible"); // categoría preservada del actual
   });
 
+  it("no permite guardar tiene_factura=0 mientras existe comprobante almacenado", async () => {
+    vi.mocked(query)
+      .mockResolvedValueOnce([filaGasto({ factura_nombre_original: "factura.pdf", factura_tamano: 100 })] as never)
+      .mockResolvedValueOnce([filaGasto({ factura_nombre_original: "factura.pdf", factura_tamano: 100, tiene_factura: 1 })] as never);
+    await actualizarGasto(7, 1, { tieneFactura: false });
+    const params = vi.mocked(execute).mock.calls[0][1] as unknown[];
+    expect(params[12]).toBe(1);
+  });
+
   it("desactivarGasto pone activo=false sin tocar el resto", async () => {
     vi.mocked(query)
       .mockResolvedValueOnce([filaGasto()] as never)

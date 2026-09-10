@@ -94,6 +94,8 @@ export default function GastosPage() {
   const [editandoId, setEditandoId] = useState<number | null>(null);
   const [form, setForm] = useState(FORM_VACIO);
   const [comprobante, setComprobante] = useState<File | null>(null);
+  const comprobanteActual = editandoId ? gastos.find((g) => g.id === editandoId) : null;
+  const tieneComprobanteAlmacenado = Boolean(comprobanteActual?.facturaNombreOriginal);
 
   const cargar = useCallback(async () => {
     setLoading(true);
@@ -292,13 +294,14 @@ export default function GastosPage() {
               <input className={`${inputCls} mt-0.5 w-full`} value={form.numeroCuentaPago} onChange={(e) => setForm((f) => ({ ...f, numeroCuentaPago: e.target.value }))} />
             </label>
             <label className="mt-4 flex items-center gap-2 text-xs text-[var(--muted)]">
-              <input type="checkbox" checked={form.tieneFactura} onChange={(e) => setForm((f) => ({ ...f, tieneFactura: e.target.checked }))} />
+              <input type="checkbox" checked={tieneComprobanteAlmacenado || form.tieneFactura} disabled={tieneComprobanteAlmacenado} onChange={(e) => setForm((f) => ({ ...f, tieneFactura: e.target.checked }))} />
               Tiene factura
+              {tieneComprobanteAlmacenado ? <span>(elimina primero el comprobante para desmarcarla)</span> : null}
             </label>
             <label className="text-xs text-[var(--muted)]">Factura / comprobante (PDF, JPG o PNG; máx. 50 MB)
               <input type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" className={`${inputCls} mt-0.5 w-full`} onChange={(e) => { const file = e.target.files?.[0] ?? null; setComprobante(file); if (file) setForm((f) => ({ ...f, tieneFactura: true })); }} />
               {comprobante ? <span className="mt-1 block">Nuevo archivo: {comprobante.name}</span> : null}
-              {editandoId && gastos.find((g) => g.id === editandoId)?.facturaNombreOriginal ? <span className="mt-1 block">Actual: {gastos.find((g) => g.id === editandoId)?.facturaNombreOriginal}</span> : null}
+              {comprobanteActual?.facturaNombreOriginal ? <span className="mt-1 block">Actual: {comprobanteActual.facturaNombreOriginal}</span> : null}
             </label>
           </div>
           <label className="block text-xs text-[var(--muted)]">Descripción

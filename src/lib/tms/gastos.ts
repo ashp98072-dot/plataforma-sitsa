@@ -297,7 +297,14 @@ export async function actualizarGasto(
       monto,
       cambios.metodoPago !== undefined ? cambios.metodoPago : actual.metodoPago,
       cambios.numeroCuentaPago !== undefined ? cambios.numeroCuentaPago?.trim() || null : actual.numeroCuentaPago,
-      cambios.tieneFactura !== undefined ? (cambios.tieneFactura ? 1 : 0) : actual.tieneFactura ? 1 : 0,
+      // Un comprobante almacenado es evidencia suficiente y prevalece
+      // sobre un false enviado por cualquier cliente. Para pasar a 0 se
+      // debe eliminar primero el archivo mediante su endpoint dedicado.
+      actual.facturaNombreOriginal
+        ? 1
+        : cambios.tieneFactura !== undefined
+          ? (cambios.tieneFactura ? 1 : 0)
+          : actual.tieneFactura ? 1 : 0,
       cambios.observaciones !== undefined ? cambios.observaciones?.trim() || null : actual.observaciones,
       cambios.activo !== undefined ? (cambios.activo ? 1 : 0) : actual.activo ? 1 : 0,
       id,
