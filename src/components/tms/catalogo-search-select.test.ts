@@ -16,6 +16,16 @@ describe("filtrarOpcionesBusqueda", () => {
 
   it("con búsqueda vacía conserva visible el catálogo completo", () => expect(filtrarOpcionesBusqueda(opciones, "")).toEqual(opciones));
   it("limita resultados filtrados razonablemente", () => expect(filtrarOpcionesBusqueda(Array.from({ length: 40 }, (_, i) => ({ value: String(i), label: `Opción ${i}` })), "Opción", 20)).toHaveLength(20));
+
+  it("filtra unidades por placa, marca o modelo visible", () => {
+    const unidades = [
+      { value: "1", label: "C-001ABC", detail: "Hino 500" },
+      { value: "2", label: "C-002XYZ", detail: "Isuzu NPR" },
+    ];
+    expect(filtrarOpcionesBusqueda(unidades, "001ABC").map((o) => o.value)).toEqual(["1"]);
+    expect(filtrarOpcionesBusqueda(unidades, "isuzu").map((o) => o.value)).toEqual(["2"]);
+    expect(filtrarOpcionesBusqueda(unidades, "NPR").map((o) => o.value)).toEqual(["2"]);
+  });
   it("precarga una selección existente al editar", () => expect(textoInicialBusqueda(opciones, "2")).toBe("Mario López"));
   it("Requirente conserva texto manual sin usuario", () => expect(textoInicialBusqueda(opciones, "", "Gestora manual")).toBe("Gestora manual"));
   it("Requirente con usuario real no muestra input manual", () => expect(debeMostrarNombreManual("2", true, "Anterior")).toBe(false));

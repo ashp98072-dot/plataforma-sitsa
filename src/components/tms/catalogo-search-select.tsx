@@ -38,10 +38,12 @@ type Props = {
   manualText?: string;
   onTextChange?: (text: string) => void;
   onOptionSelected?: (option: CatalogoSearchOption | undefined) => void;
+  emptyLabel?: string;
+  selectDataCampo?: string;
 };
 
 /** Buscador auxiliar + select nativo visible. El input solo filtra; la selección siempre ocurre en el desplegable. */
-export function CatalogoSearchSelect({ label, placeholder, value, options, inputClassName, onChange, manualText, onTextChange, onOptionSelected }: Props) {
+export function CatalogoSearchSelect({ label, placeholder, value, options, inputClassName, onChange, manualText, onTextChange, onOptionSelected, emptyLabel, selectDataCampo }: Props) {
   const id = useId();
   const [busqueda, setBusqueda] = useState("");
   const [modoManual, setModoManual] = useState(false);
@@ -59,6 +61,7 @@ export function CatalogoSearchSelect({ label, placeholder, value, options, input
       <label htmlFor={`${id}-select`} className="block">{label}</label>
       <select
         id={`${id}-select`}
+        data-campo={selectDataCampo}
         className={`${inputClassName} w-full`}
         value={manual ? VALOR_NOMBRE_MANUAL : value}
         onChange={(e) => {
@@ -74,7 +77,7 @@ export function CatalogoSearchSelect({ label, placeholder, value, options, input
           onOptionSelected?.(options.find((o) => o.value === next));
         }}
       >
-        <option value="">— Seleccionar {label.toLocaleLowerCase("es")} —</option>
+        <option value="">{emptyLabel ?? `— Seleccionar ${label.toLocaleLowerCase("es")} —`}</option>
         {onTextChange ? <option value={VALOR_NOMBRE_MANUAL}>Nombre manual</option> : null}
         {opcionesVisibles.map((o) => <option key={o.value} value={o.value}>{o.label}{o.detail ? ` · ${o.detail}` : ""}</option>)}
       </select>

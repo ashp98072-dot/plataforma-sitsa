@@ -753,25 +753,24 @@ export default function RutasPage() {
                 habitual de la ruta (flota de esta empresa). Opcional.
                 Programación la precarga; el usuario puede cambiarla por
                 viaje sin tocar esta configuración. */}
-            <label className="text-xs text-[var(--muted)]">
-              Unidad recurrente (opcional)
-              <select
-                data-campo="unidadRecurrenteId"
-                className={`${campoCls("unidadRecurrenteId")} mt-0.5 w-full`}
+            <div className="text-xs text-[var(--muted)]">
+              <CatalogoSearchSelect
+                label="Unidad recurrente"
+                placeholder="Buscar unidad recurrente"
                 value={form.unidadRecurrenteId}
-                onChange={(e) => setForm((f) => ({ ...f, unidadRecurrenteId: e.target.value }))}
-              >
-                <option value="">— Sin unidad recurrente —</option>
-                {flotaVehiculos.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.placa}
-                    {v.marca || v.modelo ? ` · ${[v.marca, v.modelo].filter(Boolean).join(" ")}` : ""}
-                  </option>
-                ))}
-              </select>
+                options={flotaVehiculos.map((v) => ({
+                  value: String(v.id),
+                  label: v.placa,
+                  detail: [v.marca, v.modelo].filter(Boolean).join(" ") || undefined,
+                }))}
+                inputClassName={campoCls("unidadRecurrenteId")}
+                emptyLabel="— Sin unidad recurrente —"
+                selectDataCampo="unidadRecurrenteId"
+                onChange={(value) => setForm((f) => ({ ...f, unidadRecurrenteId: value }))}
+              />
               <span className="mt-0.5 block text-[10px]">Se precarga al elegir esta ruta en Programación.</span>
               {mensajeCampo("unidadRecurrenteId")}
-            </label>
+            </div>
             {/*
               RUTAS-TARIFARIO-HISTORIAL-1 (§1/§2/§5 del ticket) — cada
               cambio de tarifa queda en el historial (nunca sobrescribe
