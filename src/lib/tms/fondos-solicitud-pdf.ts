@@ -5,6 +5,7 @@ import { query } from "@/lib/db";
 import { absPathFromRelative } from "@/lib/uploads";
 import { ahoraLocal, formatearFechaVisible, formatearTimestampVisible } from "@/lib/rrhh/dates";
 import { dibujarTablaEnDoc } from "@/lib/rrhh/export-files";
+import { reforzarFirmaParaPdf } from "@/lib/firmas/reforzar-firma-pdf";
 import { tituloEmpresa } from "@/lib/tms/viaticos-comprobante-pdf";
 import { obtenerSolicitudFondo, type SolicitudFondo } from "@/lib/tms/fondos";
 
@@ -348,10 +349,14 @@ export function dibujarFirmas(
     const yLinea = yInicio + 54;
     if (b.imagen) {
       try {
+        // FIRMAS-PDF-TINTA-1 — refuerzo VISUAL (trazo más oscuro y
+        // levemente engrosado) SOLO al incrustar en el PDF; el archivo
+        // histórico en disco no se toca. Ante cualquier problema
+        // reforzarFirmaParaPdf devuelve los bytes originales.
         // Centrada: el punto de anclaje es colW/2 menos la mitad del
         // ancho máximo (120) de la caja `fit` — proporcionada: `fit`
         // conserva el aspect ratio real de la imagen, nunca la deforma.
-        doc.image(b.imagen.buffer, x + colW / 2 - 60, yInicio, { fit: [120, 50] });
+        doc.image(reforzarFirmaParaPdf(b.imagen.buffer), x + colW / 2 - 60, yInicio, { fit: [120, 50] });
       } catch {
         // Imagen corrupta/formato no soportado: el documento sigue siendo
         // válido, solo sin imagen — nombre y espacio de firma quedan igual.

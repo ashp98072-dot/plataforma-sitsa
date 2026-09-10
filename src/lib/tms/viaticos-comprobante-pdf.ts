@@ -5,6 +5,7 @@ import { query } from "@/lib/db";
 import { absPathFromRelative } from "@/lib/uploads";
 import { ahoraLocal, fmtTs, formatearTimestampVisible } from "@/lib/rrhh/dates";
 import { dibujarTablaEnDoc } from "@/lib/rrhh/export-files";
+import { reforzarFirmaParaPdf } from "@/lib/firmas/reforzar-firma-pdf";
 import { listarViaticosControl } from "@/lib/tms/viaticos";
 import { listarFirmasViatico, type FirmaViaticoResumen } from "@/lib/firmas/firmas-lectura";
 
@@ -255,7 +256,10 @@ export async function comprobanteAutorizacionesPdf(
       }
       if (imagen) {
         try {
-          doc.image(imagen.buffer, { fit: [160, 70] });
+          // FIRMAS-PDF-TINTA-1 — mismo refuerzo visual que en los PDFs de
+          // Solicitud de fondo: trazo más oscuro y levemente engrosado
+          // SOLO al incrustar; el archivo histórico no se toca.
+          doc.image(reforzarFirmaParaPdf(imagen.buffer), { fit: [160, 70] });
           doc.moveDown(0.1);
         } catch {
           // Imagen corrupta/formato no soportado por pdfkit: el
