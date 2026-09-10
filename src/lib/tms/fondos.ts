@@ -794,7 +794,8 @@ export async function cambiarEstadoSolicitudFondo(
   try {
     await conn.beginTransaction();
     const rows = await queryConn<RowDataPacket[]>(conn,
-      `SELECT id, estado FROM tms_solicitudes_fondo WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
+      `SELECT id, estado, requirente_usuario_id, solicitante_usuario_id, creado_por
+       FROM tms_solicitudes_fondo WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
       [id, empresaId],
     );
     if (!rows[0]) { await conn.rollback(); return null; }
@@ -806,6 +807,20 @@ export async function cambiarEstadoSolicitudFondo(
     if (destino === "Autorizada") {
       await validarEmpleadoDeEmpresaTx(conn, empresaId, opts.autorizanteEmpleadoId, "autorizante");
       const autorizante = opts.autorizante!; // ya se rechazó arriba si faltaba
+      // FONDOS-AUTORIZAR-PERMISO-1 — nadie autoriza su propia solicitud,
+      // aunque tenga el permiso: se bloquea si el autorizante es el
+      // requirente (beneficiario), el solicitante (quien la registró en
+      // Operaciones) o quien creó el registro.
+      const reqUsuarioId = rows[0].requirente_usuario_id != null ? Number(rows[0].requirente_usuario_id) : null;
+      const solUsuarioId = rows[0].solicitante_usuario_id != null ? Number(rows[0].solicitante_usuario_id) : null;
+      const creadoPor = rows[0].creado_por != null ? String(rows[0].creado_por) : null;
+      const esPropia =
+        (reqUsuarioId != null && reqUsuarioId === autorizante.usuarioId) ||
+        (solUsuarioId != null && solUsuarioId === autorizante.usuarioId) ||
+        (creadoPor != null && opts.usuario != null && creadoPor === opts.usuario);
+      if (esPropia) {
+        throw new Error("No puede autorizar su propia solicitud.");
+      }
       await executeConn(conn,
         `UPDATE tms_solicitudes_fondo
          SET estado = ?, autorizante_empleado_id = ?, autorizante_nombre = ?, autorizante_usuario_id = ?, autorizado_en = NOW()

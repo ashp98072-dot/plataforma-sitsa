@@ -159,6 +159,52 @@ describe("permisos críticos por rol", () => {
     });
   });
 
+  describe("FONDOS-AUTORIZAR-PERMISO-1 — acción 'Autorizar' independiente ('gastos_autorizar')", () => {
+    it("es un módulo asignable propio, con etiqueta clara y bajo el módulo de empresa 'tms'", () => {
+      expect(esPlataformaPermisible("gastos_autorizar")).toBe(true);
+      expect(labelPermiso("gastos_autorizar")).toBe("Gastos operativos / Solicitudes de fondo: autorizar");
+      expect(moduloEmpresaDelPermiso("gastos_autorizar")).toBe("tms");
+    });
+
+    it("aparece en el grupo 'Operaciones' de la matriz de Usuarios, junto a (no dentro de) 'gastos'", () => {
+      const operaciones = GRUPOS_PERMISOS.find((g) => g.id === "operaciones");
+      expect(operaciones?.modulos).toContain("gastos_autorizar");
+      expect(operaciones?.modulos).toContain("gastos");
+    });
+
+    it("Jefe y Gerente de Operaciones lo traen por defecto (mismo criterio que viaticos_autorizar); ningún otro rol salvo Admin", () => {
+      expect(tienePermiso(permisosDefaultPorRol("JefeOperaciones"), "gastos_autorizar", "editar")).toBe(true);
+      expect(tienePermiso(permisosDefaultPorRol("GerenteOperaciones"), "gastos_autorizar", "editar")).toBe(true);
+      expect(tienePermiso(permisosDefaultPorRol("Admin"), "gastos_autorizar", "editar")).toBe(true);
+      for (const rol of ROLES.filter((r) => r !== "Admin" && r !== "JefeOperaciones" && r !== "GerenteOperaciones")) {
+        expect(tienePermiso(permisosDefaultPorRol(rol), "gastos_autorizar", "editar")).toBe(false);
+      }
+    });
+
+    it("AuxiliarOperaciones y Facturador NO lo traen (mismo criterio que viaticos_autorizar)", () => {
+      expect(tienePermiso(permisosDefaultPorRol("AuxiliarOperaciones"), "gastos_autorizar", "editar")).toBe(false);
+      expect(tienePermiso(permisosDefaultPorRol("Facturador"), "gastos_autorizar", "editar")).toBe(false);
+    });
+
+    it("no cambia el permiso 'gastos' base: tener 'gastos' full NO otorga 'gastos_autorizar'", () => {
+      const permisos = mergePermisosConCatalogo("Visualizador", [permisoFull("gastos")]);
+      expect(tienePermiso(permisos, "gastos", "editar")).toBe(true);
+      expect(tienePermiso(permisos, "gastos_autorizar", "editar")).toBe(false);
+    });
+
+    it("un usuario existente sin 'gastos_autorizar' guardado lo recibe vacío al recargar (secure by default)", () => {
+      const permisos = mergePermisosConCatalogo("Contabilidad", [
+        { modulo: "gastos", puedeVer: true, puedeCrear: true, puedeEditar: true, puedeEliminar: true },
+      ]);
+      expect(tienePermiso(permisos, "gastos_autorizar", "editar")).toBe(false);
+    });
+
+    it("un 'gastos_autorizar' otorgado explícitamente se conserva al recargar", () => {
+      const permisos = mergePermisosConCatalogo("Visualizador", [permisoFull("gastos_autorizar")]);
+      expect(tienePermiso(permisos, "gastos_autorizar", "editar")).toBe(true);
+    });
+  });
+
   it("respeta un permiso explícitamente desmarcado", () => {
     const permisos = mergePermisosConCatalogo("RRHH", [
       {

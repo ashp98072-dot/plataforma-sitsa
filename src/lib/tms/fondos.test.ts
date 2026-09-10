@@ -49,6 +49,12 @@ function conexion(opts: {
   // SOLICITUD-FONDOS-PDF-AUTORIZADO-1 — usuario requirente seleccionado
   // del catálogo (resolverUsuarioDeEmpresaTx).
   usuarioEnEmpresa?: boolean; usuarioNombre?: string; usuarioRol?: string | null;
+  // FONDOS-AUTORIZAR-PERMISO-1 — dueños de la solicitud, para la regla
+  // "nadie autoriza su propia solicitud" (fila RAW que cambiarEstado relee
+  // FOR UPDATE).
+  cambiarRequirenteUsuarioId?: number | null;
+  cambiarSolicitanteUsuarioId?: number | null;
+  cambiarCreadoPor?: string | null;
 } = {}) {
   const empleadoEnEmpresa = opts.empleadoEnEmpresa ?? true;
   const vehiculoEnEmpresa = opts.vehiculoEnEmpresa ?? true;
@@ -63,7 +69,9 @@ function conexion(opts: {
           id: 1, estado: opts.estadoActual ?? "Pendiente",
           requirente_empleado_id: opts.actualRequirenteEmpleadoId ?? null,
           requirente_nombre: opts.actualRequirenteNombre ?? "Juan Perez",
-          requirente_usuario_id: opts.actualRequirenteUsuarioId ?? null,
+          requirente_usuario_id: opts.cambiarRequirenteUsuarioId ?? opts.actualRequirenteUsuarioId ?? null,
+          solicitante_usuario_id: opts.cambiarSolicitanteUsuarioId ?? null,
+          creado_por: opts.cambiarCreadoPor ?? "admin",
           fecha_requerimiento: opts.actualFechaRequerimiento ?? "2026-09-01",
           observaciones: opts.actualObservaciones ?? null,
           total: opts.actualTotal ?? 500,
@@ -468,6 +476,49 @@ describe("cambiarEstadoSolicitudFondo", () => {
     })).rejects.toThrow("El autorizante indicado no pertenece a esta empresa.");
     expect(conn.rollback).toHaveBeenCalledOnce();
     expect(conn.commit).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * FONDOS-AUTORIZAR-PERMISO-1 §7/§8 — nadie autoriza su propia solicitud,
+ * aunque tenga el permiso 'gastos_autorizar'. "Propia" = el autorizante es
+ * el requirente (beneficiario), el solicitante (quien la registró) o quien
+ * creó el registro.
+ */
+describe("cambiarEstadoSolicitudFondo — nadie autoriza su propia solicitud (§7/§8)", () => {
+  const MSG = "No puede autorizar su propia solicitud.";
+
+  it("el autorizante ES el REQUIRENTE de la solicitud -> rechazo con el mensaje exacto, sin commit", async () => {
+    const conn = conexion({ estadoActual: "Pendiente", cambiarRequirenteUsuarioId: 9 });
+    await expect(cambiarEstadoSolicitudFondo(7, 1, "autorizar", { autorizante: { ...AUTORIZANTE, imagen: IMAGEN_FIRMA } }))
+      .rejects.toThrow(MSG);
+    expect(conn.rollback).toHaveBeenCalledOnce();
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(crearFirmaInterna).not.toHaveBeenCalled();
+    // la copia de la firma se compensa (nunca queda huérfana)
+    expect(borrarUpload).toHaveBeenCalledWith("empresas/7/firmas/firma_x.png");
+  });
+
+  it("el autorizante ES el SOLICITANTE de la solicitud -> rechazo", async () => {
+    const conn = conexion({ estadoActual: "Pendiente", cambiarSolicitanteUsuarioId: 9 });
+    await expect(cambiarEstadoSolicitudFondo(7, 1, "autorizar", { autorizante: { ...AUTORIZANTE, imagen: IMAGEN_FIRMA } }))
+      .rejects.toThrow(MSG);
+    expect(conn.commit).not.toHaveBeenCalled();
+  });
+
+  it("el autorizante CREÓ el registro (creado_por == su username) -> rechazo", async () => {
+    const conn = conexion({ estadoActual: "Pendiente", cambiarCreadoPor: "hsitan" });
+    await expect(cambiarEstadoSolicitudFondo(7, 1, "autorizar", { usuario: "hsitan", autorizante: { ...AUTORIZANTE, imagen: IMAGEN_FIRMA } }))
+      .rejects.toThrow(MSG);
+    expect(conn.commit).not.toHaveBeenCalled();
+  });
+
+  it("autorizante distinto del requirente/solicitante/creador -> autoriza normalmente", async () => {
+    const conn = conexion({ estadoActual: "Pendiente", cambiarRequirenteUsuarioId: 100, cambiarSolicitanteUsuarioId: 200, cambiarCreadoPor: "otro" });
+    vi.mocked(query).mockResolvedValue([filaSolicitud({ estado: "Autorizada" })] as never);
+    await cambiarEstadoSolicitudFondo(7, 1, "autorizar", { usuario: "hsitan", autorizante: { ...AUTORIZANTE, imagen: IMAGEN_FIRMA } });
+    expect(conn.commit).toHaveBeenCalledOnce();
+    expect(crearFirmaInterna).toHaveBeenCalled();
   });
 });
 
