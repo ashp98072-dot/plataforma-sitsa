@@ -388,9 +388,9 @@ export function AppShell({
       // período), solo se retituló el enlace de "Reportes de gastos" a
       // "Reportes". Sin cambios de backend ni de ruta.
       opsLinks.push({
-        href: `${base}/reportes/gastos`,
+        href: `${base}/reportes`,
         label: "Reportes",
-        key: "reportes-gastos",
+        key: "reportes",
       });
     }
     // Cotizaciones comerciales (COTIZADOR-TMS-1): mismo criterio que
