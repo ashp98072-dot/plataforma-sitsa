@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/db", () => ({ query: vi.fn() }));
 import { query } from "@/lib/db";
 import {
+  agruparSolicitudesFondo,
   filtrosReporteGastosDesdeUrl,
   reporteGastosDetalle,
   reporteGastosPorCategoria,
@@ -12,9 +13,11 @@ import {
   reporteGastosPorViaje,
   reporteRentabilidadPorViaje,
   reporteSolicitudesFondo,
+  resumenMensualFondos,
   resumirSolicitudesFondo,
   resumirViaticosPorEstado,
   reporteViaticosPorViajeEmpleado,
+  type FilaSolicitudFondoReporte,
 } from "./reportes-gastos";
 
 describe("resumen de solicitudes de fondo", () => {
@@ -355,6 +358,13 @@ describe("SOLICITUD-FONDOS-REPORTE-1 — filtrosReporteGastosDesdeUrl (filtros p
     const url = new URL("http://x?fechaSolicitudDesde=2026-09-01&clienteId=5&placa=P1");
     expect(filtrosReporteGastosDesdeUrl(url)).toEqual(filtrosReporteGastosDesdeUrl(url));
   });
+
+  it("REPORTES-MENSUALES-CONSOLIDADOS-1 — parsea requirenteUsuarioId (>0), ignora inválidos", () => {
+    expect(filtrosReporteGastosDesdeUrl(new URL("http://x?requirenteUsuarioId=30")).requirenteUsuarioId).toBe(30);
+    expect(filtrosReporteGastosDesdeUrl(new URL("http://x?requirenteUsuarioId=0")).requirenteUsuarioId).toBeUndefined();
+    expect(filtrosReporteGastosDesdeUrl(new URL("http://x?requirenteUsuarioId=abc")).requirenteUsuarioId).toBeUndefined();
+    expect(filtrosReporteGastosDesdeUrl(new URL("http://x")).requirenteUsuarioId).toBeUndefined();
+  });
 });
 
 describe("SOLICITUD-FONDOS-REPORTE-1 — reporteSolicitudesFondo", () => {
@@ -478,5 +488,82 @@ describe("SOLICITUD-FONDOS-REPORTE-1 — reporteSolicitudesFondo", () => {
     expect(sql).toContain("l.empleado_nombre");
     expect(sql).toContain("l.placa");
     expect(sql).toContain("l.cliente_nombre");
+  });
+
+  it("REPORTES-MENSUALES-CONSOLIDADOS-1 — filtra por requirenteUsuarioId contra s.requirente_usuario_id", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await reporteSolicitudesFondo(7, { requirenteUsuarioId: 30 });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("s.requirente_usuario_id = ?");
+    expect(params).toEqual([7, 30]);
+  });
+});
+
+/**
+ * REPORTES-MENSUALES-CONSOLIDADOS-1 — el PDF mensual consolidado agrupa
+ * las líneas por solicitud (cada solicitud = un bloque). Se arma en JS
+ * puro sobre las filas de `reporteSolicitudesFondo` — sin segunda consulta.
+ */
+describe("agruparSolicitudesFondo / resumenMensualFondos", () => {
+  function fila(over: Partial<FilaSolicitudFondoReporte> = {}): FilaSolicitudFondoReporte {
+    return {
+      lineaId: 1, solicitudId: 10, solicitudCodigo: "FONDO-000010",
+      fechaSolicitud: "2026-09-03", fechaViaje: "2026-09-04",
+      empleadoId: 4, empleadoNombre: "Heber Sitan", cargo: "Piloto", cuenta: "123",
+      vehiculoId: 9, placa: "P111AAA", clienteId: 5, clienteNombre: "Cliente A", planId: null,
+      cantidad: 2, descripcion: "Combustible", monto: 100, total: 200,
+      requirenteNombre: "Mario Caal", solicitanteNombre: "Ana Gómez", autorizanteNombre: "Heber Sitan",
+      fechaAutorizacion: "2026-09-04", totalSolicitud: 600, estadoFondo: "Autorizada",
+      ...over,
+    };
+  }
+
+  it("agrupa varias líneas de la misma solicitud en UN bloque, conservando encabezado y firmas", () => {
+    const grupos = agruparSolicitudesFondo([
+      fila({ lineaId: 1, solicitudId: 10 }),
+      fila({ lineaId: 2, solicitudId: 10, descripcion: "Peaje" }),
+      fila({ lineaId: 3, solicitudId: 11, solicitudCodigo: "FONDO-000011", estadoFondo: "Liquidada", totalSolicitud: 300 }),
+    ]);
+    expect(grupos).toHaveLength(2);
+    expect(grupos[0].solicitudId).toBe(10);
+    expect(grupos[0].lineas).toHaveLength(2);
+    expect(grupos[0].requirenteNombre).toBe("Mario Caal");
+    expect(grupos[0].solicitanteNombre).toBe("Ana Gómez");
+    expect(grupos[0].autorizanteNombre).toBe("Heber Sitan");
+    expect(grupos[0].totalSolicitud).toBe(600);
+    expect(grupos[1].solicitudId).toBe(11);
+    expect(grupos[1].estadoFondo).toBe("Liquidada");
+  });
+
+  it("preserva el orden de llegada (reporteSolicitudesFondo ya ordena por fecha desc)", () => {
+    const grupos = agruparSolicitudesFondo([
+      fila({ solicitudId: 20, fechaSolicitud: "2026-09-30" }),
+      fila({ solicitudId: 10, fechaSolicitud: "2026-09-01" }),
+    ]);
+    expect(grupos.map((g) => g.solicitudId)).toEqual([20, 10]);
+  });
+
+  it("RESUMEN DEL MES — conteos por estado ACTUAL; TOTAL GENERAL = Autorizada + Liquidada (excluye Rechazada y Pendiente), cada solicitud una vez", () => {
+    const grupos = agruparSolicitudesFondo([
+      fila({ solicitudId: 1, estadoFondo: "Autorizada", totalSolicitud: 1000 }),
+      fila({ solicitudId: 1, estadoFondo: "Autorizada", totalSolicitud: 1000 }), // misma solicitud, no duplica
+      fila({ solicitudId: 2, estadoFondo: "Liquidada", totalSolicitud: 500 }),
+      fila({ solicitudId: 3, estadoFondo: "Rechazada", totalSolicitud: 999 }),
+      fila({ solicitudId: 4, estadoFondo: "Pendiente", totalSolicitud: 777 }),
+    ]);
+    expect(resumenMensualFondos(grupos)).toEqual({
+      totalSolicitudes: 4,
+      autorizadas: 1,
+      liquidadas: 1,
+      rechazadas: 1,
+      pendientes: 1,
+      totalGeneral: 1500, // 1000 (Autorizada) + 500 (Liquidada); NO 999 ni 777
+    });
+  });
+
+  it("sin solicitudes -> resumen en cero, nunca revienta", () => {
+    expect(resumenMensualFondos([])).toEqual({
+      totalSolicitudes: 0, autorizadas: 0, liquidadas: 0, rechazadas: 0, pendientes: 0, totalGeneral: 0,
+    });
   });
 });

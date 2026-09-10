@@ -46,6 +46,13 @@ export type FiltrosReporteGastos = {
   estadoFondo?: string;
   /** Búsqueda LIKE por descripción de línea — mismo patrón ya usado en listarRutas()/cliente-rutas.ts (q LIKE). */
   descripcion?: string;
+  /**
+   * REPORTES-MENSUALES-CONSOLIDADOS-1 — filtro "Requirente" del reporte de
+   * fondos por el usuario requirente real (tms_solicitudes_fondo.
+   * requirente_usuario_id). El catálogo ya existe (usuarios con acceso a
+   * la empresa, `usuarios` en /tms/gastos/catalogos).
+   */
+  requirenteUsuarioId?: number;
 };
 
 const FECHA_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -58,6 +65,7 @@ export function filtrosReporteGastosDesdeUrl(url: URL): FiltrosReporteGastos {
   const vehiculoId = Number(p.get("vehiculoId"));
   const planId = Number(p.get("planId"));
   const empleadoId = Number(p.get("empleadoId"));
+  const requirenteUsuarioId = Number(p.get("requirenteUsuarioId"));
   const activoRaw = p.get("activo");
   return {
     fechaDesde: fechaValida(p.get("fechaDesde")),
@@ -78,6 +86,7 @@ export function filtrosReporteGastosDesdeUrl(url: URL): FiltrosReporteGastos {
     cargo: p.get("cargo")?.trim() || undefined,
     estadoFondo: p.get("estadoFondo")?.trim() || undefined,
     descripcion: p.get("descripcion")?.trim() || undefined,
+    requirenteUsuarioId: Number.isInteger(requirenteUsuarioId) && requirenteUsuarioId > 0 ? requirenteUsuarioId : undefined,
   };
 }
 
@@ -611,6 +620,7 @@ function condicionesFondos(empresaId: number, f: FiltrosReporteGastos): { where:
   if (f.cargo) { condiciones.push("l.cargo = ?"); params.push(f.cargo); }
   if (f.estadoFondo) { condiciones.push("s.estado = ?"); params.push(f.estadoFondo); }
   if (f.descripcion) { condiciones.push("l.descripcion LIKE ?"); params.push(`%${f.descripcion}%`); }
+  if (f.requirenteUsuarioId) { condiciones.push("s.requirente_usuario_id = ?"); params.push(f.requirenteUsuarioId); }
   return { where: condiciones.join(" AND "), params };
 }
 
@@ -666,4 +676,81 @@ export async function reporteSolicitudesFondo(
       estadoFondo: String(r.estado),
     };
   });
+}
+
+/**
+ * REPORTES-MENSUALES-CONSOLIDADOS-1 — una solicitud de fondo con TODAS sus
+ * líneas juntas, para el PDF mensual consolidado (cada solicitud es un
+ * bloque independiente con su encabezado, su tabla de líneas, su total y
+ * sus 3 firmas). Se arma en JS PURO sobre las filas que ya devolvió
+ * `reporteSolicitudesFondo` (una fila por línea) — nunca una segunda
+ * consulta.
+ */
+export type SolicitudFondoAgrupada = {
+  solicitudId: number;
+  solicitudCodigo: string;
+  fechaSolicitud: string;
+  estadoFondo: string;
+  requirenteNombre: string | null;
+  solicitanteNombre: string | null;
+  autorizanteNombre: string | null;
+  /** tms_solicitudes_fondo.total (suma server-side de sus líneas). */
+  totalSolicitud: number;
+  lineas: FilaSolicitudFondoReporte[];
+};
+
+export function agruparSolicitudesFondo(filas: FilaSolicitudFondoReporte[]): SolicitudFondoAgrupada[] {
+  const mapa = new Map<number, SolicitudFondoAgrupada>();
+  for (const f of filas) {
+    let g = mapa.get(f.solicitudId);
+    if (!g) {
+      g = {
+        solicitudId: f.solicitudId,
+        solicitudCodigo: f.solicitudCodigo,
+        fechaSolicitud: f.fechaSolicitud,
+        estadoFondo: f.estadoFondo,
+        requirenteNombre: f.requirenteNombre ?? null,
+        solicitanteNombre: f.solicitanteNombre ?? null,
+        autorizanteNombre: f.autorizanteNombre ?? null,
+        totalSolicitud: f.totalSolicitud ?? 0,
+        lineas: [],
+      };
+      mapa.set(f.solicitudId, g);
+    }
+    g.lineas.push(f);
+  }
+  // `reporteSolicitudesFondo` ya ordena por fecha desc, solicitud desc,
+  // orden, id — el Map preserva ese orden de inserción.
+  return [...mapa.values()];
+}
+
+/**
+ * REPORTES-MENSUALES-CONSOLIDADOS-1 — resumen del mes para el pie del PDF
+ * consolidado. Los CONTEOS son por estado ACTUAL de la solicitud. El
+ * TOTAL GENERAL DEL MES suma `total_solicitud` UNA sola vez por solicitud
+ * y SOLO de los estados Autorizada + Liquidada (una solicitud liquidada
+ * ya pasó por autorizada, pero solo se cuenta una vez porque cada
+ * solicitud aparece una sola vez aquí). Rechazada y Pendiente se excluyen.
+ */
+export type ResumenMensualFondos = {
+  totalSolicitudes: number;
+  autorizadas: number;
+  liquidadas: number;
+  rechazadas: number;
+  pendientes: number;
+  totalGeneral: number;
+};
+
+export function resumenMensualFondos(grupos: SolicitudFondoAgrupada[]): ResumenMensualFondos {
+  const cuenta = (estado: string) => grupos.filter((g) => g.estadoFondo === estado).length;
+  return {
+    totalSolicitudes: grupos.length,
+    autorizadas: cuenta("Autorizada"),
+    liquidadas: cuenta("Liquidada"),
+    rechazadas: cuenta("Rechazada"),
+    pendientes: cuenta("Pendiente"),
+    totalGeneral: grupos
+      .filter((g) => g.estadoFondo === "Autorizada" || g.estadoFondo === "Liquidada")
+      .reduce((suma, g) => suma + (g.totalSolicitud ?? 0), 0),
+  };
 }
