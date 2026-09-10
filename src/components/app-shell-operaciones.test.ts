@@ -27,8 +27,7 @@ describe("menú Operaciones — nombres y orden", () => {
     expect(src).not.toMatch(/`\$\{base\}\/tms\/reportes`/);
   });
 
-  it("'Reportes de gastos' se retituló a 'Reportes' (misma ruta /reportes/gastos)", () => {
-    expect(src).toMatch(/href: `\$\{base\}\/reportes\/gastos`/); // ruta intacta
+  it("existe el enlace 'Reportes' (hub de reportes de Operaciones)", () => {
     expect(src).toMatch(/label: "Reportes",/); // nombre entendible
     expect(src).not.toMatch(/label: "Reportes de gastos"/);
   });
