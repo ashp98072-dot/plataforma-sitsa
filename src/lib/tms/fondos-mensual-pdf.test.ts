@@ -143,6 +143,30 @@ describe("generarPdfMensualSolicitudesFondo", () => {
     expect(imageSpy).toHaveBeenCalledTimes(1); // solo la firma real del autorizante
   });
 
+  it("FONDOS-AUTORIZAR-PERMISO-1 §9 — el bloque FIRMA DEL AUTORIZANTE NO muestra a nadie si la solicitud no está Autorizada/Liquidada", async () => {
+    const spy = espiarTexto();
+    await generar([
+      // Pendiente con un autorizante_nombre residual: el PDF NO debe usarlo.
+      linea({ solicitudId: 10, solicitudCodigo: "FONDO-000010", estadoFondo: "Pendiente", autorizanteNombre: "Nombre Residual" }),
+      linea({ solicitudId: 11, solicitudCodigo: "FONDO-000011", estadoFondo: "Rechazada", autorizanteNombre: "Otro Residual" }),
+    ]);
+    const t = textos(spy);
+    expect(t).toContain("FIRMA DEL AUTORIZANTE"); // el bloque existe...
+    expect(t).not.toContain("Nombre Residual"); // ...pero sin autorizante
+    expect(t).not.toContain("Otro Residual");
+  });
+
+  it("FONDOS-AUTORIZAR-PERMISO-1 §9 — después de autorizada, el bloque muestra al autorizante real", async () => {
+    const spy = espiarTexto();
+    await generar([
+      linea({ solicitudId: 10, solicitudCodigo: "FONDO-000010", estadoFondo: "Autorizada", autorizanteNombre: "Heber Sitan" }),
+      linea({ solicitudId: 11, solicitudCodigo: "FONDO-000011", estadoFondo: "Liquidada", autorizanteNombre: "Ana Gómez" }),
+    ]);
+    const t = textos(spy);
+    expect(t).toContain("Heber Sitan");
+    expect(t).toContain("Ana Gómez");
+  });
+
   it("sin solicitudes en el período: PDF válido con solo el RESUMEN DEL MES en cero", async () => {
     const spy = espiarTexto();
     const buf = await generar([]);

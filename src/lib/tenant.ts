@@ -713,6 +713,48 @@ export async function requireTenantGastos(
 }
 
 /**
+ * FONDOS-AUTORIZAR-PERMISO-1 — autorizar una solicitud de fondo
+ * (Pendiente -> Autorizada) es una acción INDEPENDIENTE. Mismo patrón que
+ * requireTenantViaticosAutorizar: exige el permiso propio
+ * "gastos_autorizar" y NUNCA acepta un fallback a gastos:editar /
+ * tms:editar — un usuario sin "gastos_autorizar" no puede autorizar por
+ * más que administre TMS/Gastos. Admin pasa siempre.
+ */
+export async function requireTenantGastosAutorizar(
+  slug: string,
+  accion: AccionPermiso = "ver",
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length
+    ? empresa.modulos
+    : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("tms")) {
+    return {
+      error: NextResponse.json(
+        { error: "Esta empresa no tiene el módulo TMS." },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  if (!tienePermiso(perms, "gastos_autorizar", accion)) {
+    return {
+      error: NextResponse.json(
+        { error: "Sin permiso para autorizar solicitudes de fondo." },
+        { status: 403 },
+      ),
+    };
+  }
+  return { session, empresa };
+}
+
+/**
  * COTIZADOR-TMS-1 — Cotizaciones comerciales de TMS. Mismo criterio que
  * requireTenantRutas/requireTenantGastos: permiso propio
  * (cotizaciones:<accion>) O tms:<accion> (compatibilidad — quien ya

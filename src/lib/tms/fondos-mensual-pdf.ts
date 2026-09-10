@@ -102,13 +102,19 @@ function dibujarBloqueSolicitud(
   doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a")
     .text(`TOTAL SOLICITUD: ${moneda(g.totalSolicitud)}`, { width: pageWidth, align: "right" });
 
+  // FONDOS-AUTORIZAR-PERMISO-1 — el bloque FIRMA DEL AUTORIZANTE SOLO usa
+  // al usuario que realizó una autorización VÁLIDA: si la solicitud no
+  // está Autorizada/Liquidada, no hay autorizante (nombre ni firma).
+  // autorizante_nombre / firmas_electronicas(AUTORIZAR_FONDO) ya solo se
+  // escriben al autorizar; este gate es una segunda defensa explícita.
+  const autorizada = g.estadoFondo === "Autorizada" || g.estadoFondo === "Liquidada";
   dibujarFirmas(doc, pageWidth, marginL, pageBottom, {
     requirente: firmas.requirente?.nombre ?? g.requirenteNombre ?? null,
     solicitante: firmas.solicitante?.nombre ?? g.solicitanteNombre ?? null,
-    autorizante: firmas.autorizante?.nombre ?? g.autorizanteNombre ?? null,
+    autorizante: autorizada ? (firmas.autorizante?.nombre ?? g.autorizanteNombre ?? null) : null,
     imagenRequirente: firmas.requirente?.imagen ?? null,
     imagenSolicitante: firmas.solicitante?.imagen ?? null,
-    imagenAutorizante: firmas.autorizante?.imagen ?? null,
+    imagenAutorizante: autorizada ? (firmas.autorizante?.imagen ?? null) : null,
   });
 }
 

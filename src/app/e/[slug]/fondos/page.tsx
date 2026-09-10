@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { CatalogoSearchSelect, type CatalogoSearchOption } from "@/components/tms/catalogo-search-select";
 import { aplicarEmpleadoSeleccionado, aplicarPlanSeleccionado } from "@/lib/tms/fondos-selectores";
+import { useEmpresaSession } from "@/lib/empresa-session";
+import { tienePermiso } from "@/lib/permisos-shared";
 
 type LineaFondo = {
   id: number; categoria: string; descripcion: string | null; cantidad: number; monto: number; orden: number;
@@ -68,6 +70,12 @@ const LINEA_VACIA: LineaForm = {
  */
 export default function FondosPage() {
   const slug = String(useParams().slug);
+  // FONDOS-AUTORIZAR-PERMISO-1 — "Autorizar" es una acción independiente:
+  // el botón solo se muestra a quien tiene el permiso propio
+  // "gastos_autorizar" (editar). El endpoint vuelve a validarlo en el
+  // servidor — ocultar el botón NO es la única defensa.
+  const { permisos } = useEmpresaSession();
+  const puedeAutorizar = tienePermiso(permisos, "gastos_autorizar", "editar");
 
   const [solicitudes, setSolicitudes] = useState<SolicitudFondo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -400,7 +408,9 @@ export default function FondosPage() {
                 {s.estado === "Pendiente" ? (
                   <>
                     <button type="button" onClick={() => void abrirEditar(s)} className="rounded border border-[var(--border)] px-2 py-1">Editar</button>
-                    <button type="button" onClick={() => void cambiarEstado(s.id, "autorizar")} className="rounded bg-emerald-600 px-2 py-1 text-white">Autorizar</button>
+                    {puedeAutorizar ? (
+                      <button type="button" onClick={() => void cambiarEstado(s.id, "autorizar")} className="rounded bg-emerald-600 px-2 py-1 text-white">Autorizar</button>
+                    ) : null}
                     <input className={`${inputCls} w-40`} placeholder="Motivo de rechazo" value={motivoRechazo[s.id] ?? ""} onChange={(e) => setMotivoRechazo((m) => ({ ...m, [s.id]: e.target.value }))} />
                     <button type="button" onClick={() => void cambiarEstado(s.id, "rechazar")} className="rounded bg-red-600 px-2 py-1 text-white">Rechazar</button>
                   </>

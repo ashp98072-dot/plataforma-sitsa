@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireTenantGastos } from "@/lib/tenant";
+import { requireTenantGastos, requireTenantGastosAutorizar } from "@/lib/tenant";
 import { CATEGORIAS_GASTO } from "@/lib/tms/gastos";
 import {
   actualizarSolicitudFondo,
@@ -67,8 +67,13 @@ export async function PATCH(req: Request, ctx: Ctx) {
   if (!parsed.success) {
     return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
   }
-  // Cualquier escritura de este endpoint (cambiar estado o editar) exige "editar".
-  const guard = await requireTenantGastos(slug, "editar");
+  // FONDOS-AUTORIZAR-PERMISO-1 — "autorizar" es una acción independiente:
+  // exige el permiso propio "gastos_autorizar" (requireTenantGastosAutorizar,
+  // SIN fallback a gastos:editar / tms:editar). El resto de escrituras de
+  // este endpoint (rechazar / liquidar / editar) siguen bajo "gastos:editar".
+  const guard = parsed.data.accion === "autorizar"
+    ? await requireTenantGastosAutorizar(slug, "editar")
+    : await requireTenantGastos(slug, "editar");
   if (guard.error) return guard.error;
 
   try {
