@@ -8,6 +8,7 @@ import {
 } from "@/lib/tms/reportes-viajes";
 import { tablaAExcel, tablaAPdf } from "@/lib/rrhh/export-files";
 import { ahoraLocal, formatearTimestampVisible, hoyLocal } from "@/lib/rrhh/dates";
+import { filaReporteDiario, HEADERS_REPORTE_DIARIO, totalValorViajes } from "@/lib/tms/reporte-diario-viajes";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -108,6 +109,7 @@ export async function GET(req: Request, ctx: Ctx) {
 
   const url = new URL(req.url);
   const formato = url.searchParams.get("formato") === "pdf" ? "pdf" : "xlsx";
+  const vistaDiario = url.searchParams.get("vista") === "diario";
   const filtros = filtrosReporteDesdeUrl(url);
 
   // CORRECCIÓN PR #112 (HALLAZGO 3): exporta TODO el rango filtrado — ya
@@ -124,6 +126,20 @@ export async function GET(req: Request, ctx: Ctx) {
   const fecha = hoyLocal();
 
   if (formato === "pdf") {
+    if (vistaDiario) {
+      const total = totalValorViajes(planes);
+      const buffer = await tablaAPdf({
+        title: "Reporte diario de viajes",
+        subtitle: `${guard.empresa.nombre} · ${filtros.fechaDesde ?? "Inicio"} a ${filtros.fechaHasta ?? "Hoy"} · ${planes.length} viaje(s) · Total ${moneda(total)}`,
+        headers: HEADERS_REPORTE_DIARIO,
+        rows: planes.map(filaReporteDiario),
+        layout: "landscape",
+        modo: "tabla",
+      });
+      return new NextResponse(new Uint8Array(buffer), {
+        headers: { "Content-Type": "application/pdf", "Content-Disposition": `attachment; filename="reporte-diario-viajes-${fecha}.pdf"`, "Cache-Control": "private, no-store" },
+      });
+    }
     const kpi = calcularKpisReporte(planes);
     const subtitulo =
       `${guard.empresa.nombre} · ` +
@@ -146,6 +162,13 @@ export async function GET(req: Request, ctx: Ctx) {
         "Content-Disposition": `attachment; filename="reporte-viajes-${fecha}.pdf"`,
         "Cache-Control": "private, no-store",
       },
+    });
+  }
+
+  if (vistaDiario) {
+    const buffer = await tablaAExcel({ sheetName: "Reporte diario", headers: HEADERS_REPORTE_DIARIO, rows: planes.map(filaReporteDiario) });
+    return new NextResponse(new Uint8Array(buffer), {
+      headers: { "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "Content-Disposition": `attachment; filename="reporte-diario-viajes-${fecha}.xlsx"`, "Cache-Control": "private, no-store" },
     });
   }
 

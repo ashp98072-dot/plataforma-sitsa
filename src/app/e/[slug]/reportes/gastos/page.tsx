@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 
-type TipoReporte = "viaje" | "unidad" | "cliente" | "categoria" | "periodo" | "viaticos" | "rentabilidad" | "fondos" | "gastosDetalle";
+export type TipoReporte = "viaje" | "unidad" | "cliente" | "categoria" | "periodo" | "viaticos" | "rentabilidad" | "fondos" | "gastosDetalle";
 
 const TIPOS: { value: TipoReporte; label: string }[] = [
   { value: "viaje", label: "Gastos por viaje" },
@@ -66,9 +66,11 @@ const money = (n: number) => `Q${n.toLocaleString("es-GT", { minimumFractionDigi
  * cargo, estado, descripción) — mismo endpoint compartido, nunca un
  * segundo parser de filtros.
  */
-export default function ReportesGastosPage() {
+type Props = { tipoFijo?: TipoReporte; titulo?: string };
+
+export function ReportesGastosView({ tipoFijo, titulo }: Props) {
   const slug = String(useParams().slug);
-  const [tipo, setTipo] = useState<TipoReporte>("viaje");
+  const [tipo, setTipo] = useState<TipoReporte>(tipoFijo ?? "viaje");
   const [fechaDesde, setFechaDesde] = useState("");
   const [fechaHasta, setFechaHasta] = useState("");
   const [filas, setFilas] = useState<unknown[]>([]);
@@ -213,7 +215,7 @@ export default function ReportesGastosPage() {
   return (
     <div className="space-y-4 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-lg font-semibold">Reportes de gastos</h1>
+        <h1 className="text-lg font-semibold">{titulo ?? "Reportes de gastos"}</h1>
         <div className="flex gap-2">
           <a href={exportarUrl()} className="rounded bg-[var(--accent)] px-3 py-2 text-sm text-white">Exportar a Excel</a>
           {/* REPORTES-VIATICOS-GASTOS-DETALLE-1 (§4 del ticket) — PDF solo para los reportes de detalle (viáticos/gastos operativos). */}
@@ -224,9 +226,11 @@ export default function ReportesGastosPage() {
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <select className={inputCls} value={tipo} onChange={(e) => setTipo(e.target.value as TipoReporte)}>
-          {TIPOS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-        </select>
+        {!tipoFijo ? (
+          <select className={inputCls} value={tipo} onChange={(e) => setTipo(e.target.value as TipoReporte)}>
+            {TIPOS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+          </select>
+        ) : null}
         {tipo !== "fondos" ? (
           <>
             <input type="date" className={inputCls} value={fechaDesde} onChange={(e) => setFechaDesde(e.target.value)} />
@@ -471,4 +475,8 @@ export default function ReportesGastosPage() {
       {!loading && !filas.length ? <p className="text-[var(--muted)]">Sin datos para este filtro.</p> : null}
     </div>
   );
+}
+
+export default function ReportesGastosPage() {
+  return <ReportesGastosView tipoFijo="gastosDetalle" titulo="Reporte de gastos operativos" />;
 }
