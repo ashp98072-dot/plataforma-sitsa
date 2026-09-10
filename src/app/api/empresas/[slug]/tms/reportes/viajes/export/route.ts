@@ -9,6 +9,7 @@ import {
 import { tablaAExcel, tablaAPdf } from "@/lib/rrhh/export-files";
 import { ahoraLocal, formatearTimestampVisible, hoyLocal } from "@/lib/rrhh/dates";
 import { filaReporteDiario, HEADERS_REPORTE_DIARIO, totalValorViajes } from "@/lib/tms/reporte-diario-viajes";
+import { reporteViajesHistorialPdf } from "@/lib/tms/reporte-viajes-historial-pdf";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -90,27 +91,6 @@ const HEADERS_EXCEL = [
   "Estado cobro factura", "Total factura", "Total pagado factura", "Saldo factura",
 ];
 
-// Fase H — compacto a propósito: NO se meten todas las columnas
-// financieras (eso vive en el Excel) para no romper legibilidad del PDF.
-const HEADERS_PDF = [
-  "Fecha", "Código", "Cliente", "Ruta", "Unidad", "Piloto", "Km", "Evidencias", "Tarifa usada", "Monto", "Estado",
-  "Facturación", "No. factura", "Monto fact.", "Cobro",
-];
-function filaPdf(p: PlanReporte): string[] {
-  return [
-    p.fechaPlan, p.codigo, p.cliente ?? "—", p.rutaCodigo ?? "—", p.placa ?? "—", p.piloto ?? "—",
-    p.kmRecorridos != null ? String(p.kmRecorridos) : "—",
-    // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§3) — "Tarifa usada" es
-    // el nombre snapshot; "Monto" es tarifa_comercial (el valor de
-    // ingresos, ya congelado por viaje).
-    String(p.evidencias), p.tarifaNombre ?? "—", moneda(p.tarifaComercial), p.estado,
-    p.estadoFacturacion,
-    p.numeroFactura ?? "—",
-    (p.montoFacturadoViaje ?? p.montoBorradorViaje) != null ? moneda(p.montoFacturadoViaje ?? p.montoBorradorViaje) : "—",
-    p.estadoFinancieroFactura ?? "—",
-  ];
-}
-
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenantProgramacionOTms(slug, "ver");
@@ -150,20 +130,12 @@ export async function GET(req: Request, ctx: Ctx) {
       });
     }
     const kpi = calcularKpisReporte(planes);
-    const subtitulo =
-      `${guard.empresa.nombre} · ` +
-      `${filtros.fechaDesde ?? "Inicio"} a ${filtros.fechaHasta ?? "Hoy"} · ` +
-      `Generado ${formatearTimestampVisible(ahoraLocal())} (Guatemala) · ` +
-      `${kpi.totalViajes} viaje(s) · ${kpi.cerrados} cerrado(s) · ${kpi.pendientesCierre} pendiente(s) de cierre · ` +
-      `Valor programado ${moneda(kpi.valorProgramado)} · Valor cerrado ${moneda(kpi.valorCerrado)} · ` +
-      `Valor facturado ${moneda(kpi.valorFacturado)} · Cobrado ${moneda(kpi.cobrado)}`;
-    const buffer = await tablaAPdf({
-      title: "Reporte de viajes",
-      subtitle: subtitulo,
-      headers: HEADERS_PDF,
-      rows: planes.map(filaPdf),
-      layout: "landscape",
-      modo: "tabla",
+    const buffer = await reporteViajesHistorialPdf({
+      empresaNombre: guard.empresa.nombre,
+      generadoEn: formatearTimestampVisible(ahoraLocal()),
+      filtros,
+      kpis: kpi,
+      planes,
     });
     return new NextResponse(new Uint8Array(buffer), {
       headers: {

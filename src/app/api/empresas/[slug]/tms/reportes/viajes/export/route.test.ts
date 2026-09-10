@@ -18,6 +18,9 @@ vi.mock("@/lib/rrhh/export-files", () => ({
   tablaAExcel: vi.fn(() => Promise.resolve(Buffer.from("xlsx"))),
   tablaAPdf: vi.fn(() => Promise.resolve(Buffer.from("pdf"))),
 }));
+vi.mock("@/lib/tms/reporte-viajes-historial-pdf", () => ({
+  reporteViajesHistorialPdf: vi.fn(() => Promise.resolve(Buffer.from("pdf-viajes"))),
+}));
 vi.mock("@/lib/rrhh/dates", () => ({
   hoyLocal: vi.fn(() => "2026-08-27"),
   ahoraLocal: vi.fn(() => "2026-08-27 14:35:00"),
@@ -27,6 +30,7 @@ vi.mock("@/lib/rrhh/dates", () => ({
 import { requireTenantProgramacionOTms } from "@/lib/tenant";
 import { filtrosReporteDesdeUrl, obtenerReporteViajesParaExportar } from "@/lib/tms/reportes-viajes";
 import { tablaAExcel, tablaAPdf } from "@/lib/rrhh/export-files";
+import { reporteViajesHistorialPdf } from "@/lib/tms/reporte-viajes-historial-pdf";
 import { GET } from "./route";
 
 const ctx = { params: Promise.resolve({ slug: "prueba" }) };
@@ -71,15 +75,15 @@ describe("GET /tms/reportes/viajes/export — 14) recibe y aplica los MISMOS fil
     expect(headers).toContain("Valor del viaje"); // se mantiene la tarifa comercial (columna preexistente)
   });
 
-  it("20) el PDF incluye Facturación/No. factura/Monto fact./Cobro sin romper el formato compacto existente", async () => {
+  it("20) el PDF de historial usa el generador legible de dos bloques", async () => {
     await GET(new Request("http://localhost/x?formato=pdf"), ctx);
-    const headers = vi.mocked(tablaAPdf).mock.calls[0][0].headers;
-    expect(headers).toEqual(["Fecha", "Código", "Cliente", "Ruta", "Unidad", "Piloto", "Km", "Evidencias", "Tarifa usada", "Monto", "Estado", "Facturación", "No. factura", "Monto fact.", "Cobro"]);
+    expect(reporteViajesHistorialPdf).toHaveBeenCalledTimes(1);
+    expect(tablaAPdf).not.toHaveBeenCalled();
   });
 
-  it("formato=pdf genera PDF reutilizando tablaAPdf", async () => {
+  it("formato=pdf genera el PDF específico sin afectar Excel", async () => {
     const res = await GET(new Request("http://localhost/x?formato=pdf"), ctx);
-    expect(tablaAPdf).toHaveBeenCalledTimes(1);
+    expect(reporteViajesHistorialPdf).toHaveBeenCalledTimes(1);
     expect(tablaAExcel).not.toHaveBeenCalled();
     expect(res.headers.get("Content-Type")).toBe("application/pdf");
   });
@@ -127,8 +131,7 @@ describe("[HALLAZGO 2] fecha/hora de Guatemala explícita en la exportación", (
 
   it("el subtítulo del PDF incluye la hora de Guatemala formateada, no toLocaleString del proceso", async () => {
     await GET(new Request("http://localhost/x?formato=pdf"), ctx);
-    const llamada = vi.mocked(tablaAPdf).mock.calls[0][0];
-    expect(llamada.subtitle).toContain("2026-08-27 14:35:00");
-    expect(llamada.subtitle).toContain("Guatemala");
+    const llamada = vi.mocked(reporteViajesHistorialPdf).mock.calls[0][0];
+    expect(llamada.generadoEn).toContain("2026-08-27 14:35:00");
   });
 });
