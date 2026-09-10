@@ -279,7 +279,12 @@ export default function PlanForm({
    */
   fechaSugerida?: string;
   plan?: Plan | null;
-  onSaved: (info: { id: number; fechaPlan: string }) => void;
+  /**
+   * OPERACIONES-UX-PLANES-SIMPLIFICADO-1: `cerrado` = true SOLO cuando el
+   * guardado fue un cierre de viaje (confirmarCierre) — Programación lo usa
+   * para redirigir a Planes / Viajes en vez de quedarse en el plan cerrado.
+   */
+  onSaved: (info: { id: number; fechaPlan: string; cerrado?: boolean }) => void;
   onCancel?: () => void;
 }) {
   const esEdicion = plan != null;
@@ -1140,7 +1145,7 @@ export default function PlanForm({
       }
       setMsg(data.mensaje ?? "Viaje cerrado.");
       setConfirmandoCierre(false);
-      onSaved({ id: plan!.id, fechaPlan: form.fechaPlan });
+      onSaved({ id: plan!.id, fechaPlan: form.fechaPlan, cerrado: true });
     } catch {
       setErrorCierre("Error de conexión.");
     } finally {

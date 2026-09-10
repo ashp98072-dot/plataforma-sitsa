@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { badgeCobro, badgeFacturacion, pasosStepper, resumenCierre } from "./page";
+import {
+  badgeCobro,
+  badgeFacturacion,
+  esExpedienteHistorico,
+  pasosStepper,
+  resaltadoDesdeParams,
+  resumenCierre,
+} from "./planes-viajes-client";
 
 /**
  * CORRECCIÓN PR #112 (HALLAZGO 1): "Cerrar viaje" ya no ejecuta el POST al
@@ -117,5 +124,46 @@ describe("FACT-1-TMS-REPORTES (Fase M) — badges de facturación/cobro: color s
     expect(badgeCobro("Sin pagos").clase).not.toBe(badgeCobro("Pago parcial").clase);
     expect(badgeCobro("Pago parcial").clase).not.toBe(badgeCobro("Cobrado").clase);
     expect(badgeCobro(null).texto).toBe("—");
+  });
+});
+
+/**
+ * OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — Planes / Viajes es el destino
+ * tras cerrar un viaje en Programación (?plan=<id>&cerrado=1) y el lugar
+ * oficial del historial/expediente.
+ */
+describe("resaltadoDesdeParams — deep-link ?plan / ?cerrado", () => {
+  const sp = (q: string) => new URLSearchParams(q);
+
+  it("?plan=42&cerrado=1 → enfoca el plan 42 y muestra el aviso de cierre", () => {
+    expect(resaltadoDesdeParams(sp("plan=42&cerrado=1"))).toEqual({ planId: 42, bannerCierre: true });
+  });
+
+  it("?plan=42 sin cerrado → enfoca el plan pero sin aviso de cierre", () => {
+    expect(resaltadoDesdeParams(sp("plan=42"))).toEqual({ planId: 42, bannerCierre: false });
+  });
+
+  it("sin ?plan → no enfoca nada y nunca muestra el aviso (aunque venga cerrado=1)", () => {
+    expect(resaltadoDesdeParams(sp(""))).toEqual({ planId: null, bannerCierre: false });
+    expect(resaltadoDesdeParams(sp("cerrado=1"))).toEqual({ planId: null, bannerCierre: false });
+  });
+
+  it("?plan inválido (0, negativo, texto) se ignora", () => {
+    for (const q of ["plan=0", "plan=-3", "plan=abc"]) {
+      expect(resaltadoDesdeParams(sp(q))).toEqual({ planId: null, bannerCierre: false });
+    }
+  });
+});
+
+describe("esExpedienteHistorico — plan Cerrado/Cancelado = expediente, no 'editar programación'", () => {
+  it("Cerrado y Cancelado son expediente histórico", () => {
+    expect(esExpedienteHistorico("Cerrado")).toBe(true);
+    expect(esExpedienteHistorico("Cancelado")).toBe(true);
+  });
+
+  it("un plan todavía operativo NO es expediente (se sigue editando en Programación)", () => {
+    for (const e of ["Programado", "Cargado", "En ruta", "Descargado"]) {
+      expect(esExpedienteHistorico(e)).toBe(false);
+    }
   });
 });

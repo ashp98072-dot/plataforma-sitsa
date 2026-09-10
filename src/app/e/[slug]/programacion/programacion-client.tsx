@@ -1,11 +1,34 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
 import type {
   DisponibilidadPersonal,
   EstadoDisponibilidad,
 } from "@/lib/operaciones/disponibilidad-personal";
 import PlanForm from "./plan-form";
+
+/**
+ * OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — tras CERRAR un viaje, Programación
+ * ya NO se queda mostrando el plan cerrado: redirige a Planes / Viajes
+ * (historial oficial), enfocando el plan recién cerrado y con el aviso
+ * "Plan cerrado correctamente." (?cerrado=1). Helper puro para probar el
+ * destino sin renderizar (mismo criterio que rangoQueContiene).
+ */
+export function destinoTrasCerrarPlan(slug: string, planId: number): string {
+  return `/e/${slug}/planes?plan=${planId}&cerrado=1`;
+}
+
+/**
+ * OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — Programación es trabajo activo y
+ * próximo, no historial: los planes Cerrados dejan de ser parte del
+ * tablero (se consultan en Planes / Viajes). No se elimina ningún dato ni
+ * el estado "Cerrado" del backend — solo deja de pintarse aquí.
+ */
+export function perteneceAlTableroProgramacion(estado: string): boolean {
+  return estado !== "Cerrado";
+}
 
 /**
  * Operaciones → Programación — pantalla operativa principal para crear y
@@ -381,8 +404,9 @@ type FiltroRapido =
   | "En ruta"
   // OPS-1 (corregido): valor virtual, no un estado real — filtra por
   // Plan.pendiente_cierre, no por p.estado === "Descargado".
-  | "PendienteCierre"
-  | "Cerrado";
+  | "PendienteCierre";
+// OPERACIONES-UX-PLANES-SIMPLIFICADO-1: se retiró "Cerrado" de los filtros
+// rápidos de Programación — el historial de cerrados vive en Planes / Viajes.
 
 type DatosProgramacion = {
   planes: Plan[];
@@ -448,6 +472,7 @@ type Props = { slug: string; hoy: string; planInicialId?: number | null };
 const POLLING_MS = 30_000;
 
 export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
+  const router = useRouter();
   const [planes, setPlanes] = useState<Plan[]>([]);
   // OPS-2.1: lista completa e independiente del rango de fechas — ver
   // DatosProgramacion.pendientesCierre.
@@ -734,8 +759,17 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   // este filtro queda como respaldo defensivo (por ejemplo, si `planes`
   // trae datos de un fetch anterior a un cambio de rango que aún no
   // resolvió), no como el mecanismo principal de acotar por fecha.
+  // OPERACIONES-UX-PLANES-SIMPLIFICADO-1: además del rango de fechas, el
+  // tablero de Programación ya NO lista planes Cerrados (historial → Planes
+  // / Viajes). El estado "Cerrado" sigue existiendo en el backend intacto.
   const enRango = useMemo(
-    () => planes.filter((p) => p.fecha_plan >= desde && p.fecha_plan <= hasta),
+    () =>
+      planes.filter(
+        (p) =>
+          p.fecha_plan >= desde &&
+          p.fecha_plan <= hasta &&
+          perteneceAlTableroProgramacion(p.estado),
+      ),
     [planes, desde, hasta],
   );
 
@@ -805,7 +839,6 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
       if (filtroRapido === "Programado" && p.estado !== "Programado") return false;
       if (filtroRapido === "En ruta" && p.estado !== "En ruta") return false;
       // PendienteCierre: baseFiltroRapido ya ES la lista de pendientes.
-      if (filtroRapido === "Cerrado" && p.estado !== "Cerrado") return false;
       if (fPiloto && p.piloto !== fPiloto) return false;
       if (fUnidad && p.placa !== fUnidad) return false;
       if (fCliente && p.cliente !== fCliente) return false;
@@ -863,8 +896,20 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
    * (Hoy/Mañana/Semana), cambia a "Semana" cuando entra en esos 7 días, o
    * deja un aviso claro cuando quedó más adelante — así el viaje nunca
    * "desaparece" solo porque el filtro no lo cubre.
+   *
+   * OPERACIONES-UX-PLANES-SIMPLIFICADO-1: si lo que ocurrió fue un CIERRE
+   * (info.cerrado), Programación NO se queda mostrando el plan cerrado —
+   * redirige a Planes / Viajes (historial oficial), enfocando ese plan y
+   * con el aviso "Plan cerrado correctamente.". El resto de guardados
+   * (crear/editar/cargar/cancelar) mantienen el comportamiento de antes.
    */
-  async function alGuardar(info: { id: number; fechaPlan: string }) {
+  async function alGuardar(info: { id: number; fechaPlan: string; cerrado?: boolean }) {
+    if (info.cerrado) {
+      setMostrarCrear(false);
+      setEditandoId(null);
+      router.push(destinoTrasCerrarPlan(slug, info.id));
+      return;
+    }
     setMostrarCrear(false);
     await cargar();
     setEditandoId(info.id);
@@ -894,7 +939,11 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
           <p className="mt-1 max-w-2xl text-sm text-[var(--muted)]">
             Pantalla operativa diaria: crea viajes, asigna piloto/auxiliares/
             unidad, reprograma y gestiona viáticos. Clic en un viaje para
-            editarlo.
+            editarlo. Los viajes ya cerrados y el historial se consultan en{" "}
+            <Link href={`/e/${slug}/planes`} className="text-[var(--accent)] hover:underline">
+              Planes / Viajes
+            </Link>
+            .
           </p>
         </div>
         <div className="flex gap-2">
@@ -1053,8 +1102,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
             value={
               filtroRapido === "Programado" ||
               filtroRapido === "En ruta" ||
-              filtroRapido === "PendienteCierre" ||
-              filtroRapido === "Cerrado"
+              filtroRapido === "PendienteCierre"
                 ? filtroRapido
                 : "todos"
             }
@@ -1064,7 +1112,6 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
             <option value="Programado">Programado</option>
             <option value="En ruta">En ruta</option>
             <option value="PendienteCierre">Pendiente de cierre</option>
-            <option value="Cerrado">Cerrado</option>
           </select>
         </label>
         <label className="text-xs text-[var(--muted)]">
