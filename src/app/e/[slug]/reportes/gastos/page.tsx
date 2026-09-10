@@ -263,6 +263,8 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
   }
 
   const esAgregado = tipo !== "viaticos" && tipo !== "rentabilidad" && tipo !== "fondos" && tipo !== "gastosDetalle";
+  // REPORTES-MENSUALES-CONSOLIDADOS-1 — Mes + Año seleccionados = filtro mensual activo.
+  const esFiltroMensual = Boolean(fMes && fAnio);
 
   // REPORTES-MENSUALES-CONSOLIDADOS-1 — filtro "Mes + Año" (mismo bloque en
   // "fondos" y "gastosDetalle"). Solo cuando AMBOS están puestos se aplica
@@ -289,15 +291,29 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-lg font-semibold">{titulo ?? "Reportes de gastos"}</h1>
         <div className="flex gap-2">
+          {/* REPORTES-MENSUALES-CONSOLIDADOS-1 — la etiqueta "mensual" solo
+              aparece cuando Mes + Año están seleccionados; si no, etiqueta
+              genérica y (en fondos) el botón de PDF queda deshabilitado. */}
           <a href={exportarUrl()} className="rounded bg-[var(--accent)] px-3 py-2 text-sm text-white">
-            {tipo === "fondos" || tipo === "gastosDetalle" ? "Exportar Excel mensual" : "Exportar a Excel"}
+            {(tipo === "fondos" || tipo === "gastosDetalle") && esFiltroMensual ? "Exportar Excel mensual" : "Exportar a Excel"}
           </a>
-          {/* REPORTES-VIATICOS-GASTOS-DETALLE-1 (§4) — PDF para viáticos y gastos.
-              REPORTES-MENSUALES-CONSOLIDADOS-1 — "fondos": PDF mensual consolidado. */}
           {TIPOS_CON_PDF.includes(tipo) ? (
-            <a href={exportarUrl("pdf")} className="rounded border border-[var(--border)] px-3 py-2 text-sm">
-              {tipo === "fondos" ? "Descargar PDF mensual consolidado" : tipo === "gastosDetalle" ? "Exportar PDF mensual" : "Exportar a PDF"}
-            </a>
+            tipo === "fondos" ? (
+              esFiltroMensual ? (
+                <a href={exportarUrl("pdf")} className="rounded border border-[var(--border)] px-3 py-2 text-sm">Descargar PDF mensual consolidado</a>
+              ) : (
+                <span
+                  className="cursor-not-allowed rounded border border-[var(--border)] px-3 py-2 text-sm text-[var(--muted)] opacity-50"
+                  title="Selecciona Mes y Año para generar el PDF mensual consolidado."
+                >
+                  Descargar PDF mensual consolidado
+                </span>
+              )
+            ) : (
+              <a href={exportarUrl("pdf")} className="rounded border border-[var(--border)] px-3 py-2 text-sm">
+                {tipo === "gastosDetalle" && esFiltroMensual ? "Exportar PDF mensual" : "Exportar a PDF"}
+              </a>
+            )
           ) : null}
         </div>
       </div>

@@ -12,6 +12,7 @@ import {
   type TipoReporteGastos,
 } from "@/lib/tms/reportes-gastos";
 import { generarPdfMensualSolicitudesFondo } from "@/lib/tms/fondos-mensual-pdf";
+import { mesCompletoDeRango } from "@/lib/tms/reportes-mes";
 import {
   exportarAgregadoGastosExcel,
   exportarGastosDetalleExcel,
@@ -77,6 +78,22 @@ export async function GET(req: Request, ctx: Ctx) {
   const formato = url.searchParams.get("formato") === "pdf" ? "pdf" : "xlsx";
   // Mismo criterio de filtros/consulta que el GET de solo lectura — nunca dos parseos que puedan divergir.
   const filtros = filtrosReporteGastosDesdeUrl(url);
+
+  // REPORTES-MENSUALES-CONSOLIDADOS-1 — el PDF de solicitudes de fondo es
+  // SIEMPRE mensual consolidado: exige que fechaSolicitudDesde/Hasta sean
+  // exactamente un mes calendario completo (2026-09-01 a 2026-09-30).
+  // Nunca se infiere el mes desde una sola fecha ni se acepta un rango
+  // parcial o que cruce meses. Se valida ANTES de correr el reporte.
+  const periodoMensualFondos = tipo === "fondos" && formato === "pdf"
+    ? mesCompletoDeRango(filtros.fechaSolicitudDesde, filtros.fechaSolicitudHasta)
+    : null;
+  if (tipo === "fondos" && formato === "pdf" && !periodoMensualFondos) {
+    return NextResponse.json(
+      { error: "Selecciona un mes y año para generar el PDF mensual consolidado." },
+      { status: 400 },
+    );
+  }
+
   const resultado = await obtenerReporteGastosPorTipo(guard.empresa.id, tipo as TipoReporteGastos, filtros);
   const fecha = hoyLocal();
 
@@ -135,22 +152,21 @@ export async function GET(req: Request, ctx: Ctx) {
   // DEL MES al final. Reutiliza el MISMO reporte/filtros ya cargados
   // (obtenerReporteGastosPorTipo). NO reemplaza el PDF individual de
   // solicitud de fondo (fondos/[id]/pdf) ni el Excel de este reporte.
-  if (formato === "pdf" && resultado.tipo === "fondos") {
+  if (formato === "pdf" && resultado.tipo === "fondos" && periodoMensualFondos) {
     const grupos = agruparSolicitudesFondo(resultado.filas);
     const resumenMes = resumenMensualFondos(grupos);
-    const base = filtros.fechaSolicitudDesde ?? filtros.fechaSolicitudHasta ?? fecha;
-    const [anio, mes] = base.split("-");
+    const { anio, mes } = periodoMensualFondos;
     const buffer = await generarPdfMensualSolicitudesFondo(
       guard.empresa.id,
       guard.empresa.nombre,
       grupos,
       resumenMes,
-      { anio: Number(anio), mes: Number(mes) },
+      periodoMensualFondos,
     );
     return new NextResponse(new Uint8Array(buffer), {
       headers: {
         "Content-Type": "application/pdf",
-        "Content-Disposition": `attachment; filename="solicitudes-fondo-mensual-${base.slice(0, 7)}.pdf"`,
+        "Content-Disposition": `attachment; filename="solicitudes-fondo-mensual-${anio}-${String(mes).padStart(2, "0")}.pdf"`,
         "Cache-Control": "private, no-store",
       },
     });
