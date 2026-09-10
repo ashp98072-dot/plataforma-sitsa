@@ -27,8 +27,11 @@ Este paquete prepara una sola empresa para iniciar Operaciones desde cero. Es de
 | DEPENDIENTE | viajes/lecturas/evidencias/combustible de flota ligados a los planes objetivo | Eliminar con su plan |
 | DEPENDIENTE | `firmas_electronicas` de módulos `VIATICOS` y `FONDOS` ligadas a registros objetivo | Eliminar solo esas firmas |
 | DUDOSO | `ops_multas`, `ops_multas_revisiones`, `ops_multa_documentos` | No tocar: el esquema no contiene una relación inequívoca con el viaje |
+| DUDOSO | `proveedor_portales` | No tocar: puede contener credenciales maestras reales o accesos de prueba; requiere decisión expresa |
 | DUDOSO | `fact_factura_viajes` y facturación relacionada | No tocar y bloquear toda la operación si existe vínculo |
+| DUDOSO | `fact_facturas`, `fact_pagos` | No tocar: son documentos/movimientos financieros y requieren decisión expresa |
 | DUDOSO | cabecera `flota_combustible_conciliaciones` | Preservar; solo se eliminan filas ligadas a cargas objetivo |
+| MAESTRO | `fact_empresa_perfil`, `fact_cliente_perfil` | Preservar configuración/cuestionarios de facturación |
 | AUDITORÍA | `auditoria` y demás historial no exclusivamente transaccional | Preservar |
 
 ## Alcance y controles
@@ -39,6 +42,8 @@ Este paquete prepara una sola empresa para iniciar Operaciones desde cero. Es de
 - Un vínculo con `fact_factura_viajes` bloquea todos los `DELETE` para evitar una limpieza parcial.
 - Los archivos se manifiestan antes, la base se confirma primero y el borrado físico ocurre después.
 - No se elimina ninguna multa porque hoy no puede demostrarse por FK que sea exclusivamente de un viaje de prueba.
+- El PREVIEW incluye una sección única titulada **DATOS DE OPERACIONES QUE QUEDARÁN DESPUÉS DE LA LIMPIEZA**, con cantidad actual, estimada y clasificación. Allí se muestran explícitamente multas, accesos de proveedores, facturación y cualquier cabecera ambigua detectada en los submódulos visibles de Operaciones.
+- Accesos de proveedores, facturas y pagos quedan intactos hasta recibir una decisión manual específica. Los perfiles de facturación por empresa/cliente son configuración maestra y se preservan.
 - No se modifica `src/lib/rrhh/catalogos-nomina.ts`.
 
 **CLIENTES Y RUTAS NO SE TOCAN.** Sus contactos, ubicaciones, paradas predeterminadas, personal habitual y tarifarios también se conservan.
