@@ -20,6 +20,7 @@ import {
 } from "@/lib/tms/paradas";
 import { obtenerVehiculoAccesible } from "@/lib/flota/acceso";
 import { vehiculoPorPlaca } from "@/lib/flota/pilotos";
+import { tarifaParaSnapshot } from "@/lib/tms/ruta-tarifas";
 import { listarDisponibilidadPersonal } from "@/lib/operaciones/disponibilidad-personal";
 import { ahoraLocal, hoyLocal, toIsoDate } from "@/lib/rrhh/dates";
 import { listarViaticosRechazadosDelPlan, personalRecienAsignadoDelPlan, sincronizarViaticosPlan } from "@/lib/tms/viaticos";
@@ -307,7 +308,8 @@ export async function GET(req: Request, ctx: Ctx) {
               ${SQL_ATRASADO} AS atrasado,
               p.tipo_traslado, p.notas,
               DATE_FORMAT(p.regreso_estimado, '%Y-%m-%dT%H:%i') AS regreso_estimado,
-              p.tarifa_comercial, p.costo_operativo_referencia, p.referencia_cliente, p.ruta_id, p.ruta_codigo_historico,
+              p.tarifa_comercial, p.tarifa_id, p.tarifa_nombre_historico, p.tarifa_monto_historico, p.tarifa_moneda_historico,
+              p.costo_operativo_referencia, p.referencia_cliente, p.ruta_id, p.ruta_codigo_historico,
               p.lugar_descarga_historico, p.contacto_nombre_historico, p.contacto_cargo_historico,
               p.contacto_telefono_historico,
               c.nombre AS cliente, u.placa, pil.nombre AS piloto, aux.nombre AS auxiliar,
@@ -447,6 +449,11 @@ const schema = z.object({
   tipoTraslado: z.string().optional(),
   regresoEstimado: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/).optional(),
   tarifaComercial: z.number().nonnegative().optional(),
+  // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§2) — id de la opción de
+  // tarifa del catálogo (tms_ruta_tarifas) elegida para este viaje; se
+  // valida contra la ruta y la empresa y se snapshotea (nombre/monto/
+  // moneda) en tms_planes_viaje.
+  tarifaId: z.number().int().positive().optional(),
   // TMS-GASTOS-REPORTES-1 (bloqueo 2): fotografía histórica del costo
   // operativo de referencia de la ruta usada, al momento de crear el
   // plan — mismo criterio que tarifaComercial arriba. Cambios futuros en
@@ -658,6 +665,22 @@ export async function POST(req: Request, ctx: Ctx) {
       { status: 400 },
     );
   }
+  // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§2/§5) — snapshot de la
+  // tarifa elegida: se valida contra ESTA empresa y la ruta del viaje, y
+  // se congela nombre/monto/moneda. Si cambia la tarifa maestra después,
+  // este viaje NO cambia (el snapshot es la fuente para los reportes de
+  // "qué tarifa se usó"; el monto de ingresos sigue en tarifa_comercial).
+  const snapshotTarifa =
+    d.tarifaId && d.rutaId ? await tarifaParaSnapshot(empresaId, d.rutaId, d.tarifaId) : null;
+  if (d.tarifaId && !snapshotTarifa) {
+    return NextResponse.json(
+      { error: "La tarifa seleccionada no pertenece a esa ruta de esta empresa o no está activa." },
+      { status: 400 },
+    );
+  }
+  // El monto del viaje se DERIVA de la tarifa elegida, pero sigue siendo
+  // editable como override manual (si el usuario mandó tarifaComercial).
+  const tarifaComercialFinal = d.tarifaComercial ?? snapshotTarifa?.monto ?? null;
   let clienteId: number | null = null;
   let unidadId: number | null = null;
   let pilotoId: number | null = null;
@@ -985,8 +1008,8 @@ export async function POST(req: Request, ctx: Ctx) {
       try {
         const [result] = await conn.execute<ResultSetHeader>(
           `INSERT INTO tms_planes_viaje
-            (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, costo_operativo_referencia, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado')`,
+            (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, tarifa_id, tarifa_nombre_historico, tarifa_monto_historico, tarifa_moneda_historico, costo_operativo_referencia, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado')`,
           [
             empresaId,
             codigoFinal,
@@ -1000,7 +1023,11 @@ export async function POST(req: Request, ctx: Ctx) {
             d.horaCarga ?? null,
             d.tipoTraslado ?? null,
             d.regresoEstimado?.replace("T", " ") ?? null,
-            d.tarifaComercial ?? null,
+            tarifaComercialFinal,
+            snapshotTarifa?.id ?? null,
+            snapshotTarifa?.nombre ?? null,
+            snapshotTarifa?.monto ?? null,
+            snapshotTarifa?.moneda ?? null,
             d.costoOperativoReferencia ?? null,
             d.referenciaCliente?.trim() || null,
             d.rutaId ?? null,
@@ -1148,6 +1175,9 @@ const patchSchema = z.object({
   tarifaComercial: z.number().nonnegative().nullable().optional(),
   costoOperativoReferencia: z.number().nonnegative().nullable().optional(),
   referenciaCliente: z.string().max(160).nullable().optional(),
+  // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§2) — cambiar la tarifa
+  // del viaje re-snapshotea nombre/monto/moneda; `null` la quita.
+  tarifaId: z.number().int().positive().nullable().optional(),
   // VIAT-4/VIAT-4b: igual que en el POST — fotografía histórica de la
   // ruta usada.
   rutaId: z.number().int().positive().optional(),
@@ -1217,8 +1247,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // asignados que esta solicitud no toca) al validar traslapes.
   const plan = await query<RowDataPacket[]>(
     `SELECT p.id, p.codigo, p.estado, p.fecha_plan, p.hora_carga, p.notas,
-            p.piloto_id, p.unidad_id, p.regreso_estimado,
-            p.tarifa_comercial, p.costo_operativo_referencia, p.referencia_cliente,
+            p.piloto_id, p.unidad_id, p.regreso_estimado, p.ruta_id,
+            p.tarifa_comercial, p.tarifa_id, p.costo_operativo_referencia, p.referencia_cliente,
             u.placa, u.flota_vehiculo_id, pil.nombre AS piloto,
             ${SQL_PENDIENTE_CIERRE} AS pendiente_cierre
      FROM tms_planes_viaje p
@@ -1263,7 +1293,27 @@ export async function PATCH(req: Request, ctx: Ctx) {
     // (solo notas, sin cambios) de "En ruta con llegada / pendiente de
     // cierre" (reconciliación administrativa habilitada más abajo).
     pendienteCierre: Number(plan[0].pendiente_cierre) === 1,
+    rutaId: plan[0].ruta_id != null ? Number(plan[0].ruta_id) : null,
+    tarifaId: plan[0].tarifa_id != null ? Number(plan[0].tarifa_id) : null,
   };
+
+  // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§2/§5) — re-snapshot de
+  // la tarifa si el PATCH cambia `tarifaId`. La ruta efectiva es la que
+  // trae el PATCH o, si no, la que ya tiene el viaje. `tarifaId: null`
+  // limpia el snapshot. Un id que no pertenezca a esa ruta/empresa o que
+  // no esté activo => 400 (nunca se guarda una tarifa ajena).
+  const rutaEfectivaPatch = d.rutaId ?? antes.rutaId ?? null;
+  const snapshotTarifaPatch =
+    d.tarifaId != null && rutaEfectivaPatch != null
+      ? await tarifaParaSnapshot(empresaId, rutaEfectivaPatch, d.tarifaId)
+      : null;
+  if (d.tarifaId != null && !snapshotTarifaPatch) {
+    return NextResponse.json(
+      { error: "La tarifa seleccionada no pertenece a la ruta del viaje en esta empresa o no está activa." },
+      { status: 400 },
+    );
+  }
+
   // Auxiliares y paradas actuales del plan (antes de cualquier cambio) —
   // reutiliza los mismos helpers que ya usa GET, sin duplicar SQL. Sirven
   // para: (a) el detalle "antes → después" de la auditoría, y (b) revalidar
@@ -1296,6 +1346,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
   const tocaComercial =
     d.regresoEstimado !== undefined ||
     d.tarifaComercial !== undefined ||
+    d.tarifaId !== undefined ||
     d.costoOperativoReferencia !== undefined ||
     d.referenciaCliente !== undefined;
 
@@ -1986,6 +2037,10 @@ export async function PATCH(req: Request, ctx: Ctx) {
         hora_carga = COALESCE(?, hora_carga),
         regreso_estimado = CASE WHEN ? THEN ? ELSE regreso_estimado END,
         tarifa_comercial = CASE WHEN ? THEN ? ELSE tarifa_comercial END,
+        tarifa_id = CASE WHEN ? THEN ? ELSE tarifa_id END,
+        tarifa_nombre_historico = CASE WHEN ? THEN ? ELSE tarifa_nombre_historico END,
+        tarifa_monto_historico = CASE WHEN ? THEN ? ELSE tarifa_monto_historico END,
+        tarifa_moneda_historico = CASE WHEN ? THEN ? ELSE tarifa_moneda_historico END,
         costo_operativo_referencia = CASE WHEN ? THEN ? ELSE costo_operativo_referencia END,
         referencia_cliente = CASE WHEN ? THEN ? ELSE referencia_cliente END,
         ruta_id = COALESCE(?, ruta_id),
@@ -2005,8 +2060,21 @@ export async function PATCH(req: Request, ctx: Ctx) {
         d.horaCarga ?? null,
         d.regresoEstimado !== undefined,
         d.regresoEstimado?.replace("T", " ") ?? null,
-        d.tarifaComercial !== undefined,
-        d.tarifaComercial ?? null,
+        // tarifa_comercial: override manual explícito, o derivado del
+        // nuevo snapshot de tarifa cuando el PATCH cambió tarifaId sin
+        // mandar monto.
+        d.tarifaComercial !== undefined || snapshotTarifaPatch != null,
+        d.tarifaComercial !== undefined ? (d.tarifaComercial ?? null) : (snapshotTarifaPatch?.monto ?? null),
+        // Snapshot de la tarifa: se toca solo si el PATCH trae tarifaId
+        // (positivo = nueva tarifa; null = quitar la tarifa del viaje).
+        d.tarifaId !== undefined,
+        snapshotTarifaPatch?.id ?? null,
+        d.tarifaId !== undefined,
+        snapshotTarifaPatch?.nombre ?? null,
+        d.tarifaId !== undefined,
+        snapshotTarifaPatch?.monto ?? null,
+        d.tarifaId !== undefined,
+        snapshotTarifaPatch?.moneda ?? null,
         d.costoOperativoReferencia !== undefined,
         d.costoOperativoReferencia ?? null,
         d.referenciaCliente !== undefined,

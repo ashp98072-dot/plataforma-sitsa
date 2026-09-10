@@ -40,6 +40,11 @@ function filaExcel(p: PlanReporte): string[] {
     p.auxiliares[0] ?? "—",
     p.auxiliares[1] ?? "—",
     p.tarifaComercial != null ? String(p.tarifaComercial) : "Pendiente",
+    // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§3) — ruta y tarifa
+    // realmente usada (snapshot del viaje, no la tarifa vigente hoy).
+    p.rutaCodigo ?? "—",
+    p.tarifaNombre ?? "—",
+    p.tarifaMontoSnapshot != null ? String(p.tarifaMontoSnapshot) : "—",
     // Adicionales
     p.codigo,
     p.estado,
@@ -69,6 +74,7 @@ const HEADERS_EXCEL = [
   "Fecha", "Cliente", "Equipo asignado", "Identificación vehículo", "Tipo viaje",
   "Días ruta", "Hora salida", "Km recorridos", "Consumo combustible",
   "Piloto", "Auxiliar 1", "Auxiliar 2", "Valor del viaje",
+  "Ruta", "Tarifa (nombre)", "Monto tarifa usado",
   "Código plan", "Estado", "Hora llegada", "Km salida", "Km llegada",
   "Evidencias", "Referencia cliente", "Fecha cierre", "Cerrado por",
   // Fase G — "Total/Total pagado/Saldo factura" son valores DE LA FACTURA
@@ -86,14 +92,17 @@ const HEADERS_EXCEL = [
 // Fase H — compacto a propósito: NO se meten todas las columnas
 // financieras (eso vive en el Excel) para no romper legibilidad del PDF.
 const HEADERS_PDF = [
-  "Fecha", "Código", "Cliente", "Unidad", "Piloto", "Km", "Evidencias", "Tarifa", "Estado",
+  "Fecha", "Código", "Cliente", "Ruta", "Unidad", "Piloto", "Km", "Evidencias", "Tarifa usada", "Monto", "Estado",
   "Facturación", "No. factura", "Monto fact.", "Cobro",
 ];
 function filaPdf(p: PlanReporte): string[] {
   return [
-    p.fechaPlan, p.codigo, p.cliente ?? "—", p.placa ?? "—", p.piloto ?? "—",
+    p.fechaPlan, p.codigo, p.cliente ?? "—", p.rutaCodigo ?? "—", p.placa ?? "—", p.piloto ?? "—",
     p.kmRecorridos != null ? String(p.kmRecorridos) : "—",
-    String(p.evidencias), moneda(p.tarifaComercial), p.estado,
+    // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§3) — "Tarifa usada" es
+    // el nombre snapshot; "Monto" es tarifa_comercial (el valor de
+    // ingresos, ya congelado por viaje).
+    String(p.evidencias), p.tarifaNombre ?? "—", moneda(p.tarifaComercial), p.estado,
     p.estadoFacturacion,
     p.numeroFactura ?? "—",
     (p.montoFacturadoViaje ?? p.montoBorradorViaje) != null ? moneda(p.montoFacturadoViaje ?? p.montoBorradorViaje) : "—",
