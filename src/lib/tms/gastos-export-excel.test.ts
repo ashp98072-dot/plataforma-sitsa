@@ -81,22 +81,25 @@ describe("exportación Excel de reportes de gastos", () => {
     expect(filasEstado).toEqual(expect.arrayContaining(["Total AUTORIZADO", "Total LIQUIDADO"]));
   });
 
-  it("gastos operativos — detalle por registro, nunca agrupado", async () => {
-    const buf = await exportarGastosDetalleExcel([filaGasto(), filaGasto({ id: 2, activo: false })]);
+  it("gastos operativos — detalle por registro, nunca agrupado; primero las 9 columnas del ticket, luego el resto", async () => {
+    const buf = await exportarGastosDetalleExcel([
+      filaGasto(),
+      filaGasto({ id: 2, activo: false }),
+    ]);
     const ws = await primeraHoja(buf);
     expect(ws.getRow(1).values).toEqual([
-      undefined, "Fecha", "Fecha de viaje", "Código viaje", "Empleado / beneficiario", "Cargo", "Placa", "Cliente",
-      "Categoría", "Descripción", "Cantidad", "Monto unitario", "Total", "Estado", "Registrado por", "Observaciones",
+      undefined, "Fecha solicitud", "Fecha de viaje", "Nombre", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Total",
+      "Código viaje", "Categoría", "Monto unitario", "Estado", "Registrado por", "Observaciones",
     ]);
     expect(ws.getRow(2).values).toEqual([
-      undefined, "01/09/2026", "02/09/2026", "PLAN-1", "Heber Sitan", "Piloto", "P111AAA", "Cliente A",
-      "Combustible", "Diesel", 2, 100, 200, "Activo", "admin", "—",
+      undefined, "01/09/2026", "02/09/2026", "Heber Sitan", "Piloto", "P111AAA", "Cliente A", 2, "Diesel", 200,
+      "PLAN-1", "Combustible", 100, "Activo", "admin", "—",
     ]);
     expect(ws.getRow(3).getCell(13).value).toBe("Anulado");
     // fila 4 = blank, fila 5 = TOTAL GENERAL
-    expect(ws.getRow(5).getCell(9).value).toBe("TOTAL GENERAL");
-    expect(ws.getRow(5).getCell(12).value).toBe(400);
-    expect(ws.getRow(5).getCell(13).value).toBe("2 registro(s)");
+    expect(ws.getRow(5).getCell(8).value).toBe("TOTAL GENERAL");
+    expect(ws.getRow(5).getCell(9).value).toBe(400);
+    expect(ws.getRow(5).getCell(10).value).toBe("2 registro(s)");
   });
 
   it("rentabilidad por viaje: tarifa, gastos, viáticos y utilidad separados (sin costo operativo, TMS-SIN-COSTO-OPERATIVO-1)", async () => {

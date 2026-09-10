@@ -207,6 +207,20 @@ describe("reporteGastosDetalle", () => {
     });
   });
 
+  it("GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — filtra por fecha solicitud y fecha viaje POR SEPARADO (columnas propias, no el COALESCE combinado)", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await reporteGastosDetalle(7, {
+      fechaSolicitudDesde: "2026-09-01", fechaSolicitudHasta: "2026-09-30",
+      fechaViajeDesde: "2026-09-05", fechaViajeHasta: "2026-09-10",
+    });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("g.fecha_solicitud >= ?");
+    expect(sql).toContain("g.fecha_solicitud <= ?");
+    expect(sql).toContain("g.fecha_viaje >= ?");
+    expect(sql).toContain("g.fecha_viaje <= ?");
+    expect(params).toEqual([7, "2026-09-01", "2026-09-30", "2026-09-05", "2026-09-10"]);
+  });
+
   it("activo=0 se mapea a false (gasto anulado)", async () => {
     vi.mocked(query).mockResolvedValue([filaCruda({ activo: 0 })] as never);
     const [f] = await reporteGastosDetalle(7);

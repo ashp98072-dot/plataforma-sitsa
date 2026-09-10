@@ -27,11 +27,24 @@ type Gasto = {
   activo: boolean;
 };
 
+type PlanCatalogo = {
+  id: number;
+  codigo: string;
+  fechaPlan: string | null;
+  empleadoId: number | null;
+  empleadoNombre: string | null;
+  empleadoPuesto: string | null;
+  vehiculoId: number | null;
+  placa: string | null;
+  clienteId: number | null;
+  clienteNombre: string | null;
+};
+
 type Catalogos = {
   empleados: { id: number; codigo: string; nombre: string; puesto: string | null }[];
   vehiculos: { id: number; placa: string }[];
   clientes: { id: number; nombre: string }[];
-  planes: { id: number; codigo: string }[];
+  planes: PlanCatalogo[];
 };
 
 const inputCls = "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
@@ -135,6 +148,28 @@ export default function GastosPage() {
     setMostrarForm(true);
   }
 
+  /**
+   * GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — al asociar el gasto a un
+   * Viaje/Plan se precargan desde el plan los datos que YA existen
+   * (fecha del viaje, piloto/persona, unidad/placa, cliente). No se
+   * inventa nada: si el plan no trae alguno de esos datos, el campo
+   * respectivo se deja como está para que el usuario lo complete.
+   * El usuario siempre puede editar los campos precargados. La categoría,
+   * cantidad, descripción, monto y observaciones NO se tocan aquí — son
+   * propios del gasto.
+   */
+  function seleccionarPlan(planId: number) {
+    const plan = catalogos.planes.find((p) => p.id === planId);
+    setForm((f) => ({
+      ...f,
+      planId,
+      fechaViaje: plan?.fechaPlan ?? f.fechaViaje,
+      empleadoId: plan?.empleadoId ?? f.empleadoId,
+      vehiculoId: plan?.vehiculoId ?? f.vehiculoId,
+      clienteId: plan?.clienteId ?? f.clienteId,
+    }));
+  }
+
   async function guardar() {
     setError(""); setMsg("");
     if (!form.categoria) { setError("Selecciona una categoría."); return; }
@@ -231,7 +266,7 @@ export default function GastosPage() {
               </select>
             </label>
             <label className="text-xs text-[var(--muted)]">Viaje / plan
-              <select className={`${inputCls} mt-0.5 w-full`} value={form.planId} onChange={(e) => setForm((f) => ({ ...f, planId: Number(e.target.value) }))}>
+              <select className={`${inputCls} mt-0.5 w-full`} value={form.planId} onChange={(e) => seleccionarPlan(Number(e.target.value))}>
                 <option value={0}>—</option>
                 {catalogos.planes.map((p) => <option key={p.id} value={p.id}>{p.codigo}</option>)}
               </select>

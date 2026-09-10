@@ -141,10 +141,18 @@ describe("GET /tms/reportes/gastos/exportar", () => {
       vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({ tipo: "gastosDetalle", filas: [filaGasto, { ...filaGasto, id: 2 }] } as never);
       const res = await GET(new Request("http://localhost/x?tipo=gastosDetalle&formato=pdf"), ctx);
       expect(res.headers.get("Content-Type")).toBe("application/pdf");
-      const rows = vi.mocked(tablaAPdf).mock.calls[0][0].rows;
+      const llamada = vi.mocked(tablaAPdf).mock.calls[0][0];
+      // GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — primero las 9 columnas del ticket, luego el resto compacto.
+      expect(llamada.headers).toEqual([
+        "Fecha solicitud", "Fecha viaje", "Nombre", "Cargo", "Placa", "Cliente", "Cant.", "Descripción", "Total",
+        "Código", "Categoría", "Estado",
+      ]);
+      const rows = llamada.rows;
       // 2 filas de datos + 1 fila de total = 3
       expect(rows).toHaveLength(3);
       expect(rows[rows.length - 1]).toContain("TOTAL GENERAL");
+      // orden de campos de la fila: fecha solicitud primero, cargo/nombre desde el gasto.
+      expect(rows[0].slice(0, 8)).toEqual(["01/09/2026", "02/09/2026", "Heber Sitan", "Piloto", "P111AAA", "Cliente A", "2", "Diesel"]);
     });
   });
 });

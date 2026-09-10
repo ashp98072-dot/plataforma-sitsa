@@ -30,10 +30,12 @@ function filaGasto(overrides: Partial<Record<string, unknown>> = {}) {
 beforeEach(() => vi.resetAllMocks());
 
 describe("catálogo de categorías", () => {
-  it("tiene exactamente las 9 categorías del ticket", () => {
+  it("incluye las categorías originales más las del Excel operativo real (GASTOS-OPERATIVOS-DETALLE-FORMATO-1); 'Otros' siempre al final", () => {
     expect(CATEGORIAS_GASTO).toEqual([
       "Combustible", "Hospedaje", "Parqueo", "Cuadrilla", "Auxiliar extra",
-      "Mantenimiento", "Arbitrios", "Transporte", "Otros",
+      "Mantenimiento", "Arbitrios", "Transporte",
+      "Comida", "Aceite", "Medicamento", "Bonificación",
+      "Otros",
     ]);
   });
 });

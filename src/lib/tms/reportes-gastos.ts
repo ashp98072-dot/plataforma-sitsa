@@ -385,6 +385,13 @@ function condicionesGastosDetalle(empresaId: number, f: FiltrosReporteGastos): {
   if (f.activo !== undefined) { condiciones.push("g.activo = ?"); params.push(f.activo ? 1 : 0); }
   if (f.fechaDesde) { condiciones.push("COALESCE(g.fecha_viaje, g.fecha_solicitud) >= ?"); params.push(f.fechaDesde); }
   if (f.fechaHasta) { condiciones.push("COALESCE(g.fecha_viaje, g.fecha_solicitud) <= ?"); params.push(f.fechaHasta); }
+  // GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — filtros SEPARADOS por fecha
+  // solicitud y fecha viaje (además del rango combinado de arriba). Cada
+  // uno pega contra su propia columna; no se solapan con fechaDesde/Hasta.
+  if (f.fechaSolicitudDesde) { condiciones.push("g.fecha_solicitud >= ?"); params.push(f.fechaSolicitudDesde); }
+  if (f.fechaSolicitudHasta) { condiciones.push("g.fecha_solicitud <= ?"); params.push(f.fechaSolicitudHasta); }
+  if (f.fechaViajeDesde) { condiciones.push("g.fecha_viaje >= ?"); params.push(f.fechaViajeDesde); }
+  if (f.fechaViajeHasta) { condiciones.push("g.fecha_viaje <= ?"); params.push(f.fechaViajeHasta); }
   if (f.clienteId) { condiciones.push("g.cliente_id = ?"); params.push(f.clienteId); }
   if (f.vehiculoId) { condiciones.push("g.vehiculo_id = ?"); params.push(f.vehiculoId); }
   if (f.empleadoId) { condiciones.push("g.empleado_id = ?"); params.push(f.empleadoId); }

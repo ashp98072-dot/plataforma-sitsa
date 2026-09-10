@@ -108,6 +108,13 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
   const [fEstadoViatico, setFEstadoViatico] = useState("");
   const [fActivoGasto, setFActivoGasto] = useState(""); // "" = todos, "1" = activos, "0" = anulados
   const [fPlanId, setFPlanId] = useState("");
+  // GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — filtros propios de "gastosDetalle":
+  // fecha solicitud / fecha viaje por SEPARADO (llaves fechaSolicitud*/
+  // fechaViaje*, ya soportadas por el backend).
+  const [fGSolicitudDesde, setFGSolicitudDesde] = useState("");
+  const [fGSolicitudHasta, setFGSolicitudHasta] = useState("");
+  const [fGViajeDesde, setFGViajeDesde] = useState("");
+  const [fGViajeHasta, setFGViajeHasta] = useState("");
 
   const necesitaCatalogos = tipo === "fondos" || tipo === "viaticos" || tipo === "gastosDetalle";
   useEffect(() => {
@@ -163,8 +170,13 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
       if (fEmpleadoIdGasto) p.set("empleadoId", fEmpleadoIdGasto);
       if (fCategoria) p.set("categoria", fCategoria);
       if (fActivoGasto) p.set("activo", fActivoGasto);
+      // GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — fecha solicitud/viaje por separado.
+      if (fGSolicitudDesde) p.set("fechaSolicitudDesde", fGSolicitudDesde);
+      if (fGSolicitudHasta) p.set("fechaSolicitudHasta", fGSolicitudHasta);
+      if (fGViajeDesde) p.set("fechaViajeDesde", fGViajeDesde);
+      if (fGViajeHasta) p.set("fechaViajeHasta", fGViajeHasta);
     }
-  }, [fechaDesde, fechaHasta, fClienteId2, fPlanId, fVehiculoId, vehiculosCat, fEmpleadoNombreViatico, fEstadoViatico, fEmpleadoIdGasto, fCategoria, fActivoGasto]);
+  }, [fechaDesde, fechaHasta, fClienteId2, fPlanId, fVehiculoId, vehiculosCat, fEmpleadoNombreViatico, fEstadoViatico, fEmpleadoIdGasto, fCategoria, fActivoGasto, fGSolicitudDesde, fGSolicitudHasta, fGViajeDesde, fGViajeHasta]);
 
   const cargar = useCallback(async () => {
     setLoading(true); setError("");
@@ -322,7 +334,7 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
                   {empleadosCat.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}
                 </select>
               </label>
-              <label className="text-xs text-[var(--muted)]">Categoría
+              <label className="text-xs text-[var(--muted)]">Categoría / descripción
                 <input className={`${inputCls} mt-0.5 block`} value={fCategoria} onChange={(e) => setFCategoria(e.target.value)} />
               </label>
               <label className="text-xs text-[var(--muted)]">Estado
@@ -331,6 +343,19 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
                   <option value="1">Activo</option>
                   <option value="0">Anulado</option>
                 </select>
+              </label>
+              {/* GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — fecha solicitud / fecha viaje por SEPARADO (además del rango genérico de arriba). */}
+              <label className="text-xs text-[var(--muted)]">Fecha solicitud desde
+                <input type="date" className={`${inputCls} mt-0.5 block`} value={fGSolicitudDesde} onChange={(e) => setFGSolicitudDesde(e.target.value)} />
+              </label>
+              <label className="text-xs text-[var(--muted)]">hasta
+                <input type="date" className={`${inputCls} mt-0.5 block`} value={fGSolicitudHasta} onChange={(e) => setFGSolicitudHasta(e.target.value)} />
+              </label>
+              <label className="text-xs text-[var(--muted)]">Fecha viaje desde
+                <input type="date" className={`${inputCls} mt-0.5 block`} value={fGViajeDesde} onChange={(e) => setFGViajeDesde(e.target.value)} />
+              </label>
+              <label className="text-xs text-[var(--muted)]">hasta
+                <input type="date" className={`${inputCls} mt-0.5 block`} value={fGViajeHasta} onChange={(e) => setFGViajeHasta(e.target.value)} />
               </label>
             </>
           )}
@@ -399,22 +424,23 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
       {!loading && tipo === "gastosDetalle" ? (
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
+            {/* GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — primero las 9 columnas exigidas por el ticket en ese orden, luego el resto del detalle operativo. */}
             <thead className="text-[var(--muted)]">
               <tr>
-                <th className="px-2 py-1">Fecha</th><th className="px-2 py-1">Fecha viaje</th><th className="px-2 py-1">Viaje</th>
-                <th className="px-2 py-1">Empleado</th><th className="px-2 py-1">Cargo</th><th className="px-2 py-1">Placa</th>
-                <th className="px-2 py-1">Cliente</th><th className="px-2 py-1">Categoría</th><th className="px-2 py-1">Descripción</th>
-                <th className="px-2 py-1">Cantidad</th><th className="px-2 py-1">Monto</th><th className="px-2 py-1">Total</th>
+                <th className="px-2 py-1">Fecha solicitud</th><th className="px-2 py-1">Fecha viaje</th><th className="px-2 py-1">Nombre</th>
+                <th className="px-2 py-1">Cargo</th><th className="px-2 py-1">Placa</th><th className="px-2 py-1">Cliente</th>
+                <th className="px-2 py-1">Cantidad</th><th className="px-2 py-1">Descripción</th><th className="px-2 py-1">Total</th>
+                <th className="px-2 py-1">Viaje</th><th className="px-2 py-1">Categoría</th><th className="px-2 py-1">Monto unitario</th>
                 <th className="px-2 py-1">Estado</th><th className="px-2 py-1">Registrado por</th>
               </tr>
             </thead>
             <tbody>
               {(filas as FilaGastoDetalle[]).map((f) => (
                 <tr key={f.id} className="border-t border-[var(--border)]">
-                  <td className="px-2 py-1">{f.fechaSolicitud}</td><td className="px-2 py-1">{f.fechaViaje ?? "—"}</td><td className="px-2 py-1">{f.planCodigo ?? "—"}</td>
-                  <td className="px-2 py-1">{f.empleadoNombre ?? "—"}</td><td className="px-2 py-1">{f.cargo ?? "—"}</td><td className="px-2 py-1">{f.placa ?? "—"}</td>
-                  <td className="px-2 py-1">{f.clienteNombre ?? "—"}</td><td className="px-2 py-1">{f.categoria}</td><td className="px-2 py-1">{f.descripcion ?? "—"}</td>
-                  <td className="px-2 py-1">{f.cantidad}</td><td className="px-2 py-1">{money(f.monto)}</td><td className="px-2 py-1">{money(f.total)}</td>
+                  <td className="px-2 py-1">{f.fechaSolicitud}</td><td className="px-2 py-1">{f.fechaViaje ?? "—"}</td><td className="px-2 py-1">{f.empleadoNombre ?? "—"}</td>
+                  <td className="px-2 py-1">{f.cargo ?? "—"}</td><td className="px-2 py-1">{f.placa ?? "—"}</td><td className="px-2 py-1">{f.clienteNombre ?? "—"}</td>
+                  <td className="px-2 py-1">{f.cantidad}</td><td className="px-2 py-1">{f.descripcion ?? "—"}</td><td className="px-2 py-1">{money(f.total)}</td>
+                  <td className="px-2 py-1">{f.planCodigo ?? "—"}</td><td className="px-2 py-1">{f.categoria}</td><td className="px-2 py-1">{money(f.monto)}</td>
                   <td className={`px-2 py-1 ${f.activo ? "" : "text-red-400"}`}>{f.activo ? "Activo" : "Anulado"}</td>
                   <td className="px-2 py-1">{f.registradoPor ?? "—"}</td>
                 </tr>

@@ -29,6 +29,13 @@ export const CATEGORIAS_GASTO = [
   "Mantenimiento",
   "Arbitrios",
   "Transporte",
+  // GASTOS-OPERATIVOS-DETALLE-FORMATO-1: categorías del Excel operativo
+  // real que faltaban. La clasificación por categoría es INTERNA — la
+  // descripción sigue siendo texto libre y no se sustituye por ésta.
+  "Comida",
+  "Aceite",
+  "Medicamento",
+  "Bonificación",
   "Otros",
 ] as const;
 export type CategoriaGasto = (typeof CATEGORIAS_GASTO)[number];
