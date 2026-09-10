@@ -6,6 +6,8 @@ import { CatalogoSearchSelect, type CatalogoSearchOption } from "@/components/tm
 import { aplicarEmpleadoSeleccionado, aplicarPlanSeleccionado } from "@/lib/tms/fondos-selectores";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
+import { MESES_ES } from "@/lib/tms/reportes-mes";
+import { paramsExportarFondos, paramsListadoFondos } from "@/lib/tms/exportacion-operativa-filtros";
 
 type LineaFondo = {
   id: number; categoria: string; descripcion: string | null; cantidad: number; monto: number; orden: number;
@@ -82,6 +84,11 @@ export default function FondosPage() {
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
   const [fEstado, setFEstado] = useState("");
+  const [fFechaDesde, setFFechaDesde] = useState("");
+  const [fFechaHasta, setFFechaHasta] = useState("");
+  const [fMes, setFMes] = useState("");
+  const [fAnio, setFAnio] = useState("");
+  const [fRequirenteId, setFRequirenteId] = useState("");
 
   const [mostrarForm, setMostrarForm] = useState(false);
   // SOLICITUD-FONDOS-REPORTE-1 (pendiente 1 del PR #211) — mismo formulario
@@ -128,8 +135,7 @@ export default function FondosPage() {
   const cargar = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      const params = new URLSearchParams();
-      if (fEstado) params.set("estado", fEstado);
+      const params = paramsListadoFondos({ fechaDesde: fFechaDesde, fechaHasta: fFechaHasta, mes: fMes, anio: fAnio, estado: fEstado, requirenteUsuarioId: fRequirenteId });
       const res = await fetch(`/api/empresas/${slug}/tms/fondos?${params.toString()}`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "No se pudieron cargar las solicitudes.");
@@ -139,7 +145,7 @@ export default function FondosPage() {
     } finally {
       setLoading(false);
     }
-  }, [slug, fEstado]);
+  }, [slug, fEstado, fFechaDesde, fFechaHasta, fMes, fAnio, fRequirenteId]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -260,6 +266,12 @@ export default function FondosPage() {
     await cargar();
   }
 
+  const filtroMensual = Boolean(fMes && fAnio);
+  const filtros = { fechaDesde: fFechaDesde, fechaHasta: fFechaHasta, mes: fMes, anio: fAnio, estado: fEstado, requirenteUsuarioId: fRequirenteId };
+  const exportarUrl = (formato?: "pdf") => `/api/empresas/${slug}/tms/reportes/gastos/exportar?${paramsExportarFondos(filtros, formato).toString()}`;
+  const solicitudesFiltradas = fRequirenteId ? solicitudes.filter((s) => String(s.requirenteUsuarioId ?? "") === fRequirenteId) : solicitudes;
+  const limpiarFiltros = () => { setFFechaDesde(""); setFFechaHasta(""); setFMes(""); setFAnio(""); setFEstado(""); setFRequirenteId(""); };
+
   return (
     <div className="space-y-4 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -273,10 +285,22 @@ export default function FondosPage() {
         </button>
       </div>
 
-      <select className={inputCls} value={fEstado} onChange={(e) => setFEstado(e.target.value)}>
-        <option value="">Todos los estados</option>
-        {["Pendiente", "Autorizada", "Rechazada", "Liquidada"].map((e) => <option key={e} value={e}>{e}</option>)}
-      </select>
+      <div className="space-y-2 rounded-lg border border-[var(--border)] bg-[var(--panel)] p-3">
+        <p className="text-sm font-medium">Filtros y exportación</p>
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="text-xs text-[var(--muted)]">Fecha solicitud desde<input type="date" className={`${inputCls} mt-0.5 block`} value={fFechaDesde} onChange={(e) => setFFechaDesde(e.target.value)} disabled={filtroMensual} /></label>
+          <label className="text-xs text-[var(--muted)]">Fecha solicitud hasta<input type="date" className={`${inputCls} mt-0.5 block`} value={fFechaHasta} onChange={(e) => setFFechaHasta(e.target.value)} disabled={filtroMensual} /></label>
+          <label className="text-xs text-[var(--muted)]">Mes<select className={`${inputCls} mt-0.5 block`} value={fMes} onChange={(e) => setFMes(e.target.value)}><option value="">—</option>{MESES_ES.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}</select></label>
+          <label className="text-xs text-[var(--muted)]">Año<input type="number" min="1900" max="9999" className={`${inputCls} mt-0.5 block w-24`} value={fAnio} onChange={(e) => setFAnio(e.target.value)} placeholder="2026" /></label>
+          <label className="text-xs text-[var(--muted)]">Estado<select className={`${inputCls} mt-0.5 block`} value={fEstado} onChange={(e) => setFEstado(e.target.value)}><option value="">Todos los estados</option>{["Pendiente", "Autorizada", "Rechazada", "Liquidada"].map((e) => <option key={e} value={e}>{e}</option>)}</select></label>
+          <CatalogoSearchSelect label="Requirente" placeholder="Buscar requirente..." value={fRequirenteId} options={opcionesUsuarios(catalogos.usuarios)} inputClassName={inputCls} emptyLabel="Todos" onChange={setFRequirenteId} />
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <a href={exportarUrl()} className="rounded bg-[var(--accent)] px-3 py-2 text-sm text-white">{filtroMensual ? "Exportar Excel mensual" : "Exportar Excel"}</a>
+          {filtroMensual ? <a href={exportarUrl("pdf")} className="rounded border border-[var(--border)] px-3 py-2 text-sm">Descargar PDF mensual consolidado</a> : <span className="cursor-not-allowed rounded border border-[var(--border)] px-3 py-2 text-sm text-[var(--muted)] opacity-50" title="Selecciona Mes y Año para generar el PDF mensual consolidado.">Descargar PDF mensual consolidado</span>}
+          <button type="button" onClick={limpiarFiltros} className="rounded border border-[var(--border)] px-3 py-2 text-sm">Limpiar filtros</button>
+        </div>
+      </div>
 
       {error ? (
         <p className="text-sm text-red-300">
@@ -379,7 +403,7 @@ export default function FondosPage() {
       ) : null}
 
       <div className="space-y-2">
-        {solicitudes.map((s) => (
+        {solicitudesFiltradas.map((s) => (
           <div key={s.id} className="rounded-lg border border-[var(--border)] p-3 text-sm">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
@@ -444,7 +468,7 @@ export default function FondosPage() {
             ) : null}
           </div>
         ))}
-        {!solicitudes.length && !loading ? <p className="text-[var(--muted)]">Sin solicitudes con este filtro.</p> : null}
+        {!solicitudesFiltradas.length && !loading ? <p className="text-[var(--muted)]">Sin solicitudes con este filtro.</p> : null}
       </div>
     </div>
   );

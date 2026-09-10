@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { CatalogoSearchSelect } from "@/components/tms/catalogo-search-select";
 import { MAX_UPLOAD_BYTES } from "@/lib/uploads-constants";
+import { MESES_ES } from "@/lib/tms/reportes-mes";
+import { paramsExportarGastos, paramsListadoGastos } from "@/lib/tms/exportacion-operativa-filtros";
 
 type Gasto = {
   id: number;
@@ -89,6 +91,11 @@ export default function GastosPage() {
   const [fFechaDesde, setFFechaDesde] = useState("");
   const [fFechaHasta, setFFechaHasta] = useState("");
   const [fCategoria, setFCategoria] = useState("");
+  const [fMes, setFMes] = useState("");
+  const [fAnio, setFAnio] = useState("");
+  const [fEmpleadoId, setFEmpleadoId] = useState("");
+  const [fVehiculoId, setFVehiculoId] = useState("");
+  const [fClienteId, setFClienteId] = useState("");
 
   const [mostrarForm, setMostrarForm] = useState(false);
   const [editandoId, setEditandoId] = useState<number | null>(null);
@@ -101,10 +108,7 @@ export default function GastosPage() {
     setLoading(true);
     setError("");
     try {
-      const params = new URLSearchParams();
-      if (fFechaDesde) params.set("fechaDesde", fFechaDesde);
-      if (fFechaHasta) params.set("fechaHasta", fFechaHasta);
-      if (fCategoria) params.set("categoria", fCategoria);
+      const params = paramsListadoGastos({ fechaDesde: fFechaDesde, fechaHasta: fFechaHasta, mes: fMes, anio: fAnio, categoria: fCategoria, empleadoId: fEmpleadoId, vehiculoId: fVehiculoId, clienteId: fClienteId });
       const [rGastos, rCat] = await Promise.all([
         fetch(`/api/empresas/${slug}/tms/gastos?${params.toString()}`),
         fetch(`/api/empresas/${slug}/tms/gastos/catalogos`),
@@ -121,7 +125,7 @@ export default function GastosPage() {
     } finally {
       setLoading(false);
     }
-  }, [slug, fFechaDesde, fFechaHasta, fCategoria]);
+  }, [slug, fFechaDesde, fFechaHasta, fMes, fAnio, fCategoria, fEmpleadoId, fVehiculoId, fClienteId]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -233,6 +237,11 @@ export default function GastosPage() {
     if (res.ok) await cargar();
   }
 
+  const filtroMensual = Boolean(fMes && fAnio);
+  const filtros = { fechaDesde: fFechaDesde, fechaHasta: fFechaHasta, mes: fMes, anio: fAnio, categoria: fCategoria, empleadoId: fEmpleadoId, vehiculoId: fVehiculoId, clienteId: fClienteId };
+  const exportarUrl = (formato?: "pdf") => `/api/empresas/${slug}/tms/reportes/gastos/exportar?${paramsExportarGastos(filtros, formato).toString()}`;
+  const limpiarFiltros = () => { setFFechaDesde(""); setFFechaHasta(""); setFMes(""); setFAnio(""); setFCategoria(""); setFEmpleadoId(""); setFVehiculoId(""); setFClienteId(""); };
+
   return (
     <div className="space-y-4 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -242,13 +251,26 @@ export default function GastosPage() {
         </button>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <input type="date" className={inputCls} value={fFechaDesde} onChange={(e) => setFFechaDesde(e.target.value)} />
-        <input type="date" className={inputCls} value={fFechaHasta} onChange={(e) => setFFechaHasta(e.target.value)} />
-        <select className={inputCls} value={fCategoria} onChange={(e) => setFCategoria(e.target.value)}>
+      <div className="space-y-2 rounded-lg border border-[var(--border)] bg-[var(--panel)] p-3">
+        <p className="text-sm font-medium">Filtros y exportación</p>
+        <div className="flex flex-wrap items-end gap-2">
+        <label className="text-xs text-[var(--muted)]">Fecha desde<input type="date" className={`${inputCls} mt-0.5 block`} value={fFechaDesde} onChange={(e) => setFFechaDesde(e.target.value)} disabled={filtroMensual} /></label>
+        <label className="text-xs text-[var(--muted)]">Fecha hasta<input type="date" className={`${inputCls} mt-0.5 block`} value={fFechaHasta} onChange={(e) => setFFechaHasta(e.target.value)} disabled={filtroMensual} /></label>
+        <label className="text-xs text-[var(--muted)]">Mes<select className={`${inputCls} mt-0.5 block`} value={fMes} onChange={(e) => setFMes(e.target.value)}><option value="">—</option>{MESES_ES.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}</select></label>
+        <label className="text-xs text-[var(--muted)]">Año<input type="number" min="1900" max="9999" className={`${inputCls} mt-0.5 w-24 block`} value={fAnio} onChange={(e) => setFAnio(e.target.value)} placeholder="2026" /></label>
+        <label className="text-xs text-[var(--muted)]">Categoría<select className={`${inputCls} mt-0.5 block`} value={fCategoria} onChange={(e) => setFCategoria(e.target.value)}>
           <option value="">Todas las categorías</option>
           {categorias.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
+        </select></label>
+        <CatalogoSearchSelect label="Empleado / persona" placeholder="Buscar empleado..." value={fEmpleadoId} inputClassName={inputCls} emptyLabel="Todos" options={catalogos.empleados.map((e) => ({ value: String(e.id), label: e.nombre, detail: [e.codigo, e.puesto].filter(Boolean).join(" · ") }))} onChange={setFEmpleadoId} />
+        <CatalogoSearchSelect label="Unidad" placeholder="Buscar placa..." value={fVehiculoId} inputClassName={inputCls} emptyLabel="Todas" options={catalogos.vehiculos.map((v) => ({ value: String(v.id), label: v.placa, detail: [v.marca, v.modelo].filter(Boolean).join(" ") }))} onChange={setFVehiculoId} />
+        <CatalogoSearchSelect label="Cliente" placeholder="Buscar cliente..." value={fClienteId} inputClassName={inputCls} emptyLabel="Todos" options={catalogos.clientes.map((c) => ({ value: String(c.id), label: c.nombre }))} onChange={setFClienteId} />
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <a href={exportarUrl()} className="rounded bg-[var(--accent)] px-3 py-2 text-sm text-white">{filtroMensual ? "Exportar Excel mensual" : "Exportar Excel"}</a>
+          <a href={exportarUrl("pdf")} className="rounded border border-[var(--border)] px-3 py-2 text-sm">{filtroMensual ? "Exportar PDF mensual" : "Exportar PDF"}</a>
+          <button type="button" onClick={limpiarFiltros} className="rounded border border-[var(--border)] px-3 py-2 text-sm">Limpiar filtros</button>
+        </div>
       </div>
 
       {error ? <p className="text-sm text-red-300">{error}</p> : null}
