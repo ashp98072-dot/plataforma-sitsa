@@ -98,9 +98,14 @@ export async function exportarGastosDetalleExcel(filas: FilaGastoDetalle[]): Pro
   wb.creator = "Plataforma corporativa";
   const ws = wb.addWorksheet("Gastos", { views: [{ state: "frozen", ySplit: 1, showGridLines: false }] });
 
+  // GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — primero las 9 columnas exigidas
+  // por el ticket en ese orden (Fecha solicitud, Fecha viaje, Nombre,
+  // Cargo, Placa, Cliente, Cantidad, Descripción, Total) y luego el resto
+  // del detalle operativo. "Descuento personal" es un indicador operativo,
+  // sin efecto en planilla/nómina.
   const headers = [
-    "Fecha", "Fecha de viaje", "Código viaje", "Empleado / beneficiario", "Cargo", "Placa", "Cliente",
-    "Categoría", "Descripción", "Cantidad", "Monto unitario", "Total", "Estado", "Registrado por", "Observaciones",
+    "Fecha solicitud", "Fecha de viaje", "Nombre", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Total",
+    "Código viaje", "Categoría", "Monto unitario", "Estado", "Descuento personal", "Registrado por", "Observaciones",
   ];
   ws.addRow(headers);
   const header = ws.getRow(1);
@@ -111,30 +116,31 @@ export async function exportarGastosDetalleExcel(filas: FilaGastoDetalle[]): Pro
   for (const f of filas) {
     ws.addRow([
       formatearFechaVisible(f.fechaSolicitud) || "—", f.fechaViaje ? formatearFechaVisible(f.fechaViaje) : "—",
-      f.planCodigo ?? "—", f.empleadoNombre ?? "—", f.cargo ?? "—", f.placa ?? "—", f.clienteNombre ?? "—",
-      f.categoria, f.descripcion ?? "—", f.cantidad, f.monto, f.total,
-      f.activo ? "Activo" : "Anulado", f.registradoPor ?? "—", f.observaciones ?? "—",
+      f.empleadoNombre ?? "—", f.cargo ?? "—", f.placa ?? "—", f.clienteNombre ?? "—",
+      f.cantidad, f.descripcion ?? "—", f.total,
+      f.planCodigo ?? "—", f.categoria, f.monto,
+      f.activo ? "Activo" : "Anulado", f.descuentoPersonal ? "Sí" : "No", f.registradoPor ?? "—", f.observaciones ?? "—",
     ]);
   }
 
   const ultimaFilaDatos = filas.length + 1;
-  ws.autoFilter = { from: "A1", to: `O${Math.max(1, ultimaFilaDatos)}` };
-  ws.columns = [14, 14, 16, 26, 18, 12, 24, 16, 40, 12, 16, 16, 12, 20, 30].map((width) => ({ width }));
-  ws.getColumn(10).numFmt = "0.00";
-  for (const col of [11, 12]) ws.getColumn(col).numFmt = '"Q"#,##0.00';
-  ws.getColumn(9).alignment = { vertical: "top", wrapText: true };
-  ws.getColumn(15).alignment = { vertical: "top", wrapText: true };
+  ws.autoFilter = { from: "A1", to: `P${Math.max(1, ultimaFilaDatos)}` };
+  ws.columns = [14, 14, 26, 18, 12, 24, 12, 40, 16, 16, 16, 16, 12, 16, 20, 30].map((width) => ({ width }));
+  ws.getColumn(7).numFmt = "0.00";
+  for (const col of [9, 12]) ws.getColumn(col).numFmt = '"Q"#,##0.00';
+  ws.getColumn(8).alignment = { vertical: "top", wrapText: true };
+  ws.getColumn(16).alignment = { vertical: "top", wrapText: true };
   for (let i = 2; i <= ultimaFilaDatos; i++) {
     for (let col = 1; col <= headers.length; col++) {
-      if (col !== 9 && col !== 15) ws.getRow(i).getCell(col).alignment = { vertical: "top" };
+      if (col !== 8 && col !== 16) ws.getRow(i).getCell(col).alignment = { vertical: "top" };
     }
   }
 
   ws.addRow([]);
   const totalGeneral = filas.reduce((s, f) => s + f.total, 0);
-  const filaTotal = ws.addRow(["", "", "", "", "", "", "", "", "TOTAL GENERAL", "", "", totalGeneral, `${filas.length} registro(s)`]);
+  const filaTotal = ws.addRow(["", "", "", "", "", "", "", "TOTAL GENERAL", totalGeneral, `${filas.length} registro(s)`]);
   filaTotal.font = { bold: true };
-  filaTotal.getCell(12).numFmt = '"Q"#,##0.00';
+  filaTotal.getCell(9).numFmt = '"Q"#,##0.00';
 
   return Buffer.from(await wb.xlsx.writeBuffer());
 }

@@ -1354,6 +1354,11 @@ CREATE TABLE IF NOT EXISTS tms_gastos_operativos (
   numero_cuenta_pago VARCHAR(80) NULL,
   tiene_factura TINYINT(1) NOT NULL DEFAULT 0,
   observaciones VARCHAR(300) NULL,
+  -- GASTOS-OPERATIVOS-DETALLE-FORMATO-1: indicador OPERATIVO opcional
+  -- "Descuento al personal" — solo informativo para el reporte de
+  -- Gastos. NUNCA genera descuento de nómina, planilla, prestaciones ni
+  -- IGSS (ver sql/migrate-2026-09-gastos-descuento-personal.sql).
+  descuento_personal TINYINT(1) NOT NULL DEFAULT 0,
   activo TINYINT(1) NOT NULL DEFAULT 1,
   creado_por VARCHAR(100) NULL,
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,

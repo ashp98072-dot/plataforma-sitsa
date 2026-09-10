@@ -190,7 +190,7 @@ describe("reporteGastosDetalle", () => {
       empleado_id: 4, empleado_nombre: "Heber Sitan", cargo: "Piloto",
       vehiculo_id: 9, placa: "P111AAA", cliente_id: 5, cliente_nombre: "Cliente A",
       categoria: "Combustible", descripcion: "Diesel", cantidad: "2.00", monto: "100.00",
-      activo: 1, creado_por: "admin", observaciones: null,
+      activo: 1, creado_por: "admin", observaciones: null, descuento_personal: 0,
       ...overrides,
     };
   }
@@ -203,8 +203,36 @@ describe("reporteGastosDetalle", () => {
       planId: 2, planCodigo: "PLAN-1", empleadoId: 4, empleadoNombre: "Heber Sitan", cargo: "Piloto",
       vehiculoId: 9, placa: "P111AAA", clienteId: 5, clienteNombre: "Cliente A",
       categoria: "Combustible", descripcion: "Diesel", cantidad: 2, monto: 100, total: 200,
-      activo: true, registradoPor: "admin", observaciones: null,
+      activo: true, registradoPor: "admin", observaciones: null, descuentoPersonal: false,
     });
+  });
+
+  it("GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — descuento_personal=1 se mapea a descuentoPersonal=true", async () => {
+    vi.mocked(query).mockResolvedValue([filaCruda({ descuento_personal: 1 })] as never);
+    const [f] = await reporteGastosDetalle(7);
+    expect(f.descuentoPersonal).toBe(true);
+  });
+
+  it("GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — filtra por fecha solicitud y fecha viaje POR SEPARADO (columnas propias, no el COALESCE combinado)", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await reporteGastosDetalle(7, {
+      fechaSolicitudDesde: "2026-09-01", fechaSolicitudHasta: "2026-09-30",
+      fechaViajeDesde: "2026-09-05", fechaViajeHasta: "2026-09-10",
+    });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("g.fecha_solicitud >= ?");
+    expect(sql).toContain("g.fecha_solicitud <= ?");
+    expect(sql).toContain("g.fecha_viaje >= ?");
+    expect(sql).toContain("g.fecha_viaje <= ?");
+    expect(params).toEqual([7, "2026-09-01", "2026-09-30", "2026-09-05", "2026-09-10"]);
+  });
+
+  it("GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — filtra por el indicador operativo descuentoPersonal", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await reporteGastosDetalle(7, { descuentoPersonal: true });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("g.descuento_personal = ?");
+    expect(params).toEqual([7, 1]);
   });
 
   it("activo=0 se mapea a false (gasto anulado)", async () => {

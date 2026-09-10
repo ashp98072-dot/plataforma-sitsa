@@ -24,14 +24,29 @@ type Gasto = {
   numeroCuentaPago: string | null;
   tieneFactura: boolean;
   observaciones: string | null;
+  // GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — indicador operativo, sin efecto en planilla/nómina.
+  descuentoPersonal: boolean;
   activo: boolean;
+};
+
+type PlanCatalogo = {
+  id: number;
+  codigo: string;
+  fechaPlan: string | null;
+  empleadoId: number | null;
+  empleadoNombre: string | null;
+  empleadoPuesto: string | null;
+  vehiculoId: number | null;
+  placa: string | null;
+  clienteId: number | null;
+  clienteNombre: string | null;
 };
 
 type Catalogos = {
   empleados: { id: number; codigo: string; nombre: string; puesto: string | null }[];
   vehiculos: { id: number; placa: string }[];
   clientes: { id: number; nombre: string }[];
-  planes: { id: number; codigo: string }[];
+  planes: PlanCatalogo[];
 };
 
 const inputCls = "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
@@ -51,6 +66,7 @@ const FORM_VACIO = {
   numeroCuentaPago: "",
   tieneFactura: false,
   observaciones: "",
+  descuentoPersonal: false,
 };
 
 /**
@@ -131,8 +147,31 @@ export default function GastosPage() {
       numeroCuentaPago: g.numeroCuentaPago ?? "",
       tieneFactura: g.tieneFactura,
       observaciones: g.observaciones ?? "",
+      descuentoPersonal: g.descuentoPersonal,
     });
     setMostrarForm(true);
+  }
+
+  /**
+   * GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — al asociar el gasto a un
+   * Viaje/Plan se precargan desde el plan los datos que YA existen
+   * (fecha del viaje, piloto/persona, unidad/placa, cliente). No se
+   * inventa nada: si el plan no trae alguno de esos datos, el campo
+   * respectivo se deja como está para que el usuario lo complete.
+   * El usuario siempre puede editar los campos precargados. La categoría,
+   * cantidad, descripción, monto y observaciones NO se tocan aquí — son
+   * propios del gasto.
+   */
+  function seleccionarPlan(planId: number) {
+    const plan = catalogos.planes.find((p) => p.id === planId);
+    setForm((f) => ({
+      ...f,
+      planId,
+      fechaViaje: plan?.fechaPlan ?? f.fechaViaje,
+      empleadoId: plan?.empleadoId ?? f.empleadoId,
+      vehiculoId: plan?.vehiculoId ?? f.vehiculoId,
+      clienteId: plan?.clienteId ?? f.clienteId,
+    }));
   }
 
   async function guardar() {
@@ -154,6 +193,7 @@ export default function GastosPage() {
       numeroCuentaPago: form.numeroCuentaPago.trim() || null,
       tieneFactura: form.tieneFactura,
       observaciones: form.observaciones.trim() || null,
+      descuentoPersonal: form.descuentoPersonal,
     };
     const url = editandoId ? `/api/empresas/${slug}/tms/gastos/${editandoId}` : `/api/empresas/${slug}/tms/gastos`;
     const res = await fetch(url, { method: editandoId ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
@@ -231,7 +271,7 @@ export default function GastosPage() {
               </select>
             </label>
             <label className="text-xs text-[var(--muted)]">Viaje / plan
-              <select className={`${inputCls} mt-0.5 w-full`} value={form.planId} onChange={(e) => setForm((f) => ({ ...f, planId: Number(e.target.value) }))}>
+              <select className={`${inputCls} mt-0.5 w-full`} value={form.planId} onChange={(e) => seleccionarPlan(Number(e.target.value))}>
                 <option value={0}>—</option>
                 {catalogos.planes.map((p) => <option key={p.id} value={p.id}>{p.codigo}</option>)}
               </select>
@@ -248,6 +288,13 @@ export default function GastosPage() {
             <label className="mt-4 flex items-center gap-2 text-xs text-[var(--muted)]">
               <input type="checkbox" checked={form.tieneFactura} onChange={(e) => setForm((f) => ({ ...f, tieneFactura: e.target.checked }))} />
               Tiene factura
+            </label>
+            {/* GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — indicador OPERATIVO. Solo marca que
+                este gasto debería recuperarse del personal; NO genera descuento de
+                nómina ni toca planilla/RRHH. */}
+            <label className="mt-4 flex items-center gap-2 text-xs text-[var(--muted)]">
+              <input type="checkbox" checked={form.descuentoPersonal} onChange={(e) => setForm((f) => ({ ...f, descuentoPersonal: e.target.checked }))} />
+              Descuento al personal
             </label>
           </div>
           <label className="block text-xs text-[var(--muted)]">Descripción

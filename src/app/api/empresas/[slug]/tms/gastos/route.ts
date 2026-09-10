@@ -47,6 +47,7 @@ const schema = z.object({
   numeroCuentaPago: z.string().max(80).nullable().optional(),
   tieneFactura: z.boolean().optional(),
   observaciones: z.string().max(300).nullable().optional(),
+  descuentoPersonal: z.boolean().optional(),
 });
 
 export async function POST(req: Request, ctx: Ctx) {

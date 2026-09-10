@@ -29,6 +29,13 @@ export const CATEGORIAS_GASTO = [
   "Mantenimiento",
   "Arbitrios",
   "Transporte",
+  // GASTOS-OPERATIVOS-DETALLE-FORMATO-1: categorías del Excel operativo
+  // real que faltaban. La clasificación por categoría es INTERNA — la
+  // descripción sigue siendo texto libre y no se sustituye por ésta.
+  "Comida",
+  "Aceite",
+  "Medicamento",
+  "Bonificación",
   "Otros",
 ] as const;
 export type CategoriaGasto = (typeof CATEGORIAS_GASTO)[number];
@@ -59,6 +66,8 @@ export type GastoOperativo = {
   numeroCuentaPago: string | null;
   tieneFactura: boolean;
   observaciones: string | null;
+  /** GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — indicador operativo, sin efecto en planilla/nómina. */
+  descuentoPersonal: boolean;
   activo: boolean;
   creadoPor: string | null;
   creadoEn: string | null;
@@ -89,6 +98,7 @@ function mapRow(r: RowDataPacket): GastoOperativo {
     numeroCuentaPago: r.numero_cuenta_pago != null ? String(r.numero_cuenta_pago) : null,
     tieneFactura: Number(r.tiene_factura ?? 0) === 1,
     observaciones: r.observaciones != null ? String(r.observaciones) : null,
+    descuentoPersonal: Number(r.descuento_personal ?? 0) === 1,
     activo: Number(r.activo ?? 1) === 1,
     creadoPor: r.creado_por != null ? String(r.creado_por) : null,
     creadoEn: r.creado_en != null ? String(r.creado_en) : null,
@@ -104,7 +114,7 @@ const SELECT = `
          g.cliente_id, cli.nombre AS cliente_nombre,
          g.plan_id, plan.codigo AS plan_codigo,
          g.categoria, g.descripcion, g.cantidad, g.monto, g.metodo_pago, g.numero_cuenta_pago,
-         g.tiene_factura, g.observaciones, g.activo, g.creado_por, g.creado_en, g.actualizado_en
+         g.tiene_factura, g.observaciones, g.descuento_personal, g.activo, g.creado_por, g.creado_en, g.actualizado_en
   FROM tms_gastos_operativos g
   LEFT JOIN empleados emp ON emp.id = g.empleado_id AND emp.empresa_id = g.empresa_id
   LEFT JOIN flota_vehiculos veh ON veh.id = g.vehiculo_id AND veh.empresa_id = g.empresa_id
@@ -164,6 +174,8 @@ export type GastoOperativoInput = {
   numeroCuentaPago?: string | null;
   tieneFactura?: boolean;
   observaciones?: string | null;
+  /** GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — indicador operativo (no toca planilla). */
+  descuentoPersonal?: boolean;
 };
 
 /**
@@ -221,8 +233,8 @@ export async function crearGasto(
     `INSERT INTO tms_gastos_operativos
        (empresa_id, fecha_solicitud, fecha_viaje, empleado_id, vehiculo_id, cliente_id, plan_id,
         categoria, descripcion, cantidad, monto, metodo_pago, numero_cuenta_pago, tiene_factura,
-        observaciones, creado_por)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        observaciones, descuento_personal, creado_por)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       empresaId,
       input.fechaSolicitud,
@@ -239,6 +251,7 @@ export async function crearGasto(
       input.numeroCuentaPago?.trim() || null,
       input.tieneFactura ? 1 : 0,
       input.observaciones?.trim() || null,
+      input.descuentoPersonal ? 1 : 0,
       creadoPor ?? null,
     ],
   );
@@ -270,7 +283,7 @@ export async function actualizarGasto(
     `UPDATE tms_gastos_operativos SET
        fecha_solicitud = ?, fecha_viaje = ?, empleado_id = ?, vehiculo_id = ?, cliente_id = ?, plan_id = ?,
        categoria = ?, descripcion = ?, cantidad = ?, monto = ?, metodo_pago = ?, numero_cuenta_pago = ?,
-       tiene_factura = ?, observaciones = ?, activo = ?
+       tiene_factura = ?, observaciones = ?, descuento_personal = ?, activo = ?
      WHERE id = ? AND empresa_id = ?`,
     [
       cambios.fechaSolicitud !== undefined ? cambios.fechaSolicitud : actual.fechaSolicitud,
@@ -287,6 +300,7 @@ export async function actualizarGasto(
       cambios.numeroCuentaPago !== undefined ? cambios.numeroCuentaPago?.trim() || null : actual.numeroCuentaPago,
       cambios.tieneFactura !== undefined ? (cambios.tieneFactura ? 1 : 0) : actual.tieneFactura ? 1 : 0,
       cambios.observaciones !== undefined ? cambios.observaciones?.trim() || null : actual.observaciones,
+      cambios.descuentoPersonal !== undefined ? (cambios.descuentoPersonal ? 1 : 0) : actual.descuentoPersonal ? 1 : 0,
       cambios.activo !== undefined ? (cambios.activo ? 1 : 0) : actual.activo ? 1 : 0,
       id,
       empresaId,
