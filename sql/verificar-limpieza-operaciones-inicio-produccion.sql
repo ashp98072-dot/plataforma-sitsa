@@ -14,7 +14,8 @@ UNION ALL SELECT 'flota_viajes ligados', COUNT(*) FROM flota_viajes v JOIN tms_p
 UNION ALL SELECT 'tms_gastos_operativos', COUNT(*) FROM tms_gastos_operativos WHERE @empresa_confirmada=1 AND empresa_id=@empresa_id_objetivo
 UNION ALL SELECT 'tms_solicitudes_fondo', COUNT(*) FROM tms_solicitudes_fondo WHERE @empresa_confirmada=1 AND empresa_id=@empresa_id_objetivo
 UNION ALL SELECT 'tms_solicitudes_cliente', COUNT(*) FROM tms_solicitudes_cliente WHERE @empresa_confirmada=1 AND empresa_id=@empresa_id_objetivo
-UNION ALL SELECT 'tms_cotizaciones', COUNT(*) FROM tms_cotizaciones WHERE @empresa_confirmada=1 AND empresa_id=@empresa_id_objetivo;
+UNION ALL SELECT 'tms_cotizaciones', COUNT(*) FROM tms_cotizaciones WHERE @empresa_confirmada=1 AND empresa_id=@empresa_id_objetivo
+UNION ALL SELECT 'fact_factura_viajes ligados a planes de la empresa', COUNT(*) FROM fact_factura_viajes ffv JOIN tms_planes_viaje p ON p.id=ffv.plan_id WHERE @empresa_confirmada=1 AND p.empresa_id=@empresa_id_objetivo;
 
 -- Repetir los conteos maestros y compararlos exactamente con el resultado guardado del PREVIEW.
 SELECT 'tms_clientes' tabla, COUNT(*) cantidad FROM tms_clientes WHERE @empresa_confirmada=1 AND empresa_id=@empresa_id_objetivo

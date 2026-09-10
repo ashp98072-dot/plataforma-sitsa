@@ -14,15 +14,49 @@ SELECT
   @codigo_empresa_objetivo AS codigo_confirmado,
   IF(@empresa_confirmada = 1, 'OK: empresa confirmada', 'DETENER: id/codigo no coinciden') AS control_destino;
 
--- Bloqueo deliberado: la limpieza no está autorizada para borrar facturación.
+-- Solo son eliminables los vínculos de facturas todavía en Borrador y sin pagos.
+-- Emitida, Anulada o cualquier factura con pagos se considera real/no inequívoca y bloquea TODO.
+SELECT COUNT(*) INTO @vinculos_facturacion_eliminables
+FROM fact_factura_viajes ffv
+JOIN tms_planes_viaje p ON p.id = ffv.plan_id
+JOIN fact_facturas f ON f.id = ffv.factura_id
+WHERE @empresa_confirmada = 1
+  AND p.empresa_id = @empresa_id_objetivo
+  AND f.empresa_id = @empresa_id_objetivo
+  AND f.estado_admin = 'Borrador'
+  AND NOT EXISTS (SELECT 1 FROM fact_pagos pg WHERE pg.factura_id = f.id);
+
 SELECT COUNT(*) INTO @bloqueos_facturacion
 FROM fact_factura_viajes ffv
 JOIN tms_planes_viaje p ON p.id = ffv.plan_id
+JOIN fact_facturas f ON f.id = ffv.factura_id
 WHERE @empresa_confirmada = 1
-  AND p.empresa_id = @empresa_id_objetivo;
+  AND p.empresa_id = @empresa_id_objetivo
+  AND (f.empresa_id <> @empresa_id_objetivo
+    OR f.estado_admin <> 'Borrador'
+    OR EXISTS (SELECT 1 FROM fact_pagos pg WHERE pg.factura_id = f.id));
 
-SELECT @bloqueos_facturacion AS viajes_vinculados_a_facturacion,
-       IF(@bloqueos_facturacion = 0, 'OK', 'DETENER: resolver facturación antes de limpiar') AS estado;
+SELECT @vinculos_facturacion_eliminables AS vinculos_borrador_sin_pagos_a_eliminar,
+       @bloqueos_facturacion AS vinculos_facturacion_que_bloquean,
+       IF(@bloqueos_facturacion = 0, 'OK', 'DETENER: existe factura emitida, pagada, anulada o fuera de la empresa') AS estado;
+
+-- Detalle obligatorio de cada vínculo de la empresa objetivo.
+SELECT ffv.factura_id, ffv.plan_id, p.codigo AS codigo_plan,
+       f.estado_admin AS estado_factura, ffv.monto_asignado AS monto_vinculo,
+       f.monto_total AS monto_factura,
+       COALESCE((SELECT SUM(pg.monto) FROM fact_pagos pg WHERE pg.factura_id=f.id), 0) AS monto_pagado,
+       CASE
+         WHEN f.empresa_id <> @empresa_id_objetivo THEN 'BLOQUEAR: factura pertenece a otra empresa'
+         WHEN f.estado_admin = 'Borrador'
+              AND NOT EXISTS (SELECT 1 FROM fact_pagos pg WHERE pg.factura_id=f.id)
+           THEN 'ELIMINAR SOLO VÍNCULO: borrador sin pagos'
+         ELSE 'BLOQUEAR: factura emitida/anulada o con pagos'
+       END AS decision
+FROM fact_factura_viajes ffv
+JOIN tms_planes_viaje p ON p.id=ffv.plan_id
+JOIN fact_facturas f ON f.id=ffv.factura_id
+WHERE @empresa_confirmada=1 AND p.empresa_id=@empresa_id_objetivo
+ORDER BY ffv.factura_id, ffv.plan_id;
 
 -- TRANSACCIONAL / DEPENDIENTE: registros que eliminará el script de limpieza.
 SELECT 'tms_planes_viaje' tabla, COUNT(*) cantidad FROM tms_planes_viaje WHERE @empresa_confirmada=1 AND empresa_id=@empresa_id_objetivo
@@ -63,7 +97,8 @@ UNION ALL SELECT 'usuario_firmas (global; control de no modificación)', COUNT(*
 SELECT 'ops_multas' tabla, COUNT(*) cantidad, 'PRESERVAR: sin FK inequívoca a viaje' razon FROM ops_multas WHERE @empresa_confirmada=1 AND empresa_id=@empresa_id_objetivo
 UNION ALL SELECT 'ops_multas_revisiones', COUNT(*), 'PRESERVAR: revisiones mensuales de la empresa' FROM ops_multas_revisiones r WHERE @empresa_confirmada=1 AND r.empresa_id=@empresa_id_objetivo
 UNION ALL SELECT 'ops_multa_documentos', COUNT(*), 'PRESERVAR con su multa' FROM ops_multa_documentos d WHERE @empresa_confirmada=1 AND d.empresa_id=@empresa_id_objetivo
-UNION ALL SELECT 'fact_factura_viajes', COUNT(*), 'BLOQUEA toda la limpieza; facturación no autorizada' FROM fact_factura_viajes ffv JOIN tms_planes_viaje p ON p.id=ffv.plan_id WHERE @empresa_confirmada=1 AND p.empresa_id=@empresa_id_objetivo
+UNION ALL SELECT 'fact_factura_viajes eliminables', @vinculos_facturacion_eliminables, 'Borrador sin pagos: se elimina solo el vínculo'
+UNION ALL SELECT 'fact_factura_viajes bloqueantes', @bloqueos_facturacion, 'Emitida/anulada/con pagos/fuera de empresa: bloquea todo'
 UNION ALL SELECT 'flota_combustible_conciliaciones', COUNT(*), 'PRESERVAR cabecera; solo se quitan filas ligadas' FROM flota_combustible_conciliaciones WHERE @empresa_confirmada=1 AND empresa_id=@empresa_id_objetivo;
 
 -- ============================================================================
@@ -115,7 +150,8 @@ UNION ALL SELECT 'ops_multa_documentos', 'DUDOSO / REQUIERE DECISIÓN', COUNT(*)
 UNION ALL SELECT 'proveedor_portales', 'DUDOSO / REQUIERE DECISIÓN', COUNT(*), COUNT(*), 'Credenciales/accesos; podrían ser maestros reales o pruebas; NO DELETE' FROM proveedor_portales WHERE @empresa_confirmada=1 AND empresa_id=@empresa_id_objetivo
 UNION ALL SELECT 'fact_facturas', 'DUDOSO / REQUIERE DECISIÓN', COUNT(*), COUNT(*), 'Documento financiero; política actual no autoriza borrarlo' FROM fact_facturas WHERE @empresa_confirmada=1 AND empresa_id=@empresa_id_objetivo
 UNION ALL SELECT 'fact_pagos', 'DUDOSO / REQUIERE DECISIÓN', COUNT(*), COUNT(*), 'Movimiento financiero; política actual no autoriza borrarlo' FROM fact_pagos WHERE @empresa_confirmada=1 AND empresa_id=@empresa_id_objetivo
-UNION ALL SELECT 'fact_factura_viajes', 'DUDOSO / REQUIERE DECISIÓN', COUNT(*), COUNT(*), 'Los ligados a planes objetivo BLOQUEAN toda la limpieza' FROM fact_factura_viajes ffv JOIN fact_facturas f ON f.id=ffv.factura_id WHERE @empresa_confirmada=1 AND f.empresa_id=@empresa_id_objetivo
+UNION ALL SELECT 'fact_factura_viajes eliminables', 'ELIMINAR', @vinculos_facturacion_eliminables, 0, 'Solo vínculos de Borrador sin pagos; factura y pagos se preservan'
+UNION ALL SELECT 'fact_factura_viajes bloqueantes', 'DUDOSO / REQUIERE DECISIÓN', @bloqueos_facturacion, @bloqueos_facturacion, 'Impiden ejecutar toda la limpieza'
 UNION ALL SELECT 'flota_combustible_conciliaciones', 'DUDOSO / REQUIERE DECISIÓN', COUNT(*), COUNT(*), 'Cabecera histórica sin dependencia exclusiva; NO DELETE' FROM flota_combustible_conciliaciones WHERE @empresa_confirmada=1 AND empresa_id=@empresa_id_objetivo
 ORDER BY clasificacion, tabla;
 
