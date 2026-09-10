@@ -591,12 +591,29 @@ CREATE TABLE IF NOT EXISTS tms_unidades (
 CREATE TABLE IF NOT EXISTS tms_personal (
   id INT AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,
+  -- migrate-2026-08-fase0-tms-personal-empleado.sql: vínculo a RRHH.
+  -- Nullable: un tms_personal puede NO tener empleado (externo) o
+  -- apuntar a un empleado de OTRA empresa (compartido) — la FK es de una
+  -- sola columna, ON DELETE SET NULL, nunca compuesta con empresa_id.
+  id_empleado INT NULL,
   codigo VARCHAR(80) NULL,
   nombre VARCHAR(200) NOT NULL,
   tipo VARCHAR(40) NOT NULL DEFAULT 'Piloto',
+  -- PERSONAL-OPERATIVO-COMPARTIDO-EXTERNO-1:
+  --   propio     = empleado RRHH de esta empresa (id_empleado -> empleados de la misma empresa).
+  --   compartido = empleado RRHH de OTRA empresa del grupo (id_empleado -> empleados de otra empresa);
+  --                NO entra a la planilla de esta empresa. empresa_origen_id = su empresa real.
+  --   externo    = persona que no existe en RRHH (id_empleado NULL); registro solo operativo.
+  --                empresa_origen_texto / licencia opcionales.
+  tipo_vinculo VARCHAR(20) NOT NULL DEFAULT 'propio',
+  empresa_origen_id INT NULL DEFAULT NULL,
+  empresa_origen_texto VARCHAR(200) NULL DEFAULT NULL,
+  licencia VARCHAR(80) NULL DEFAULT NULL,
   telefono VARCHAR(80) NULL,
   estado VARCHAR(20) NOT NULL DEFAULT 'Activo',
-  CONSTRAINT fk_tmspers_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE
+  CONSTRAINT fk_tmspers_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
+  CONSTRAINT fk_tmspers_empleado FOREIGN KEY (id_empleado) REFERENCES empleados(id) ON DELETE SET NULL,
+  CONSTRAINT fk_tmspers_empresa_origen FOREIGN KEY (empresa_origen_id) REFERENCES empresas(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS tms_planes_viaje (
@@ -650,6 +667,13 @@ CREATE TABLE IF NOT EXISTS tms_planes_viaje (
   contacto_nombre_historico VARCHAR(160) NULL,
   contacto_cargo_historico VARCHAR(120) NULL,
   contacto_telefono_historico VARCHAR(80) NULL,
+  -- PERSONAL-OPERATIVO-COMPARTIDO-EXTERNO-1: snapshot del piloto que
+  -- realizó el viaje (nombre + tipo propio/compartido/externo + empresa/
+  -- origen), para que el reporte histórico lo muestre correctamente
+  -- aunque el tms_personal se desactive o cambie de empresa de origen.
+  piloto_nombre_historico VARCHAR(200) NULL,
+  piloto_tipo_historico VARCHAR(20) NULL,
+  piloto_origen_historico VARCHAR(200) NULL,
   estado VARCHAR(40) NOT NULL DEFAULT 'Programado',
   -- OPS-1: Programado -> En ruta -> Descargado (operación finalizada por
   -- el piloto, pendiente de cierre) -> Cerrado (cierre administrativo,
@@ -716,6 +740,13 @@ CREATE TABLE IF NOT EXISTS tms_viaticos (
   -- tms_personal.id_empleado).
   personal_id INT NOT NULL,
   rol VARCHAR(20) NOT NULL, -- 'Piloto' | 'Auxiliar'
+  -- PERSONAL-OPERATIVO-COMPARTIDO-EXTERNO-1: snapshot de quién recibió el
+  -- viático (nombre + tipo propio/compartido/externo + empresa/origen) —
+  -- el PDF/Excel/reportes de viáticos lo usan aunque el tms_personal
+  -- cambie después. Otorgar un viático NUNCA genera planilla/IGSS/etc.
+  personal_nombre_historico VARCHAR(200) NULL,
+  personal_tipo_historico VARCHAR(20) NULL,
+  personal_origen_historico VARCHAR(200) NULL,
   monto_sugerido DECIMAL(12,2) NOT NULL DEFAULT 0,
   monto_asignado DECIMAL(12,2) NOT NULL DEFAULT 0,
   motivo_cambio VARCHAR(300) NULL,

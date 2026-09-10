@@ -6,17 +6,23 @@ export type AuxiliarOpt = {
   id: number;
   codigo: string;
   nombre: string;
+  /** PERSONAL-OPERATIVO-COMPARTIDO-EXTERNO-1 — tms_personal.id (compartido/externo). */
+  personalId?: number | null;
+  fuente?: string;
+  sub?: string;
 };
 
 type Props = {
   auxiliares: AuxiliarOpt[];
-  /** ids de RRHH ya elegidos. */
+  /** ids de RRHH ya elegidos (personal propio). */
   empleadoIds: number[];
-  /** nombres libres ya elegidos (personal fuera de RRHH). */
+  /** ids de tms_personal ya elegidos (personal compartido/externo). */
+  personalIds: number[];
+  /** nombres libres ya elegidos (personal fuera de RRHH sin registro). */
   nombresLibres: string[];
   max: number;
   inputClassName: string;
-  onChange: (next: { empleadoIds: number[]; nombresLibres: string[] }) => void;
+  onChange: (next: { empleadoIds: number[]; personalIds: number[]; nombresLibres: string[] }) => void;
 };
 
 /**
@@ -27,20 +33,25 @@ type Props = {
  * duplicados; al quitar un chip, ese auxiliar vuelve a estar disponible
  * en la búsqueda.
  */
-export function AuxiliaresSelect({ auxiliares, empleadoIds, nombresLibres, max, inputClassName, onChange }: Props) {
+export function AuxiliaresSelect({ auxiliares, empleadoIds, personalIds, nombresLibres, max, inputClassName, onChange }: Props) {
   const listId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [texto, setTexto] = useState("");
 
-  const total = empleadoIds.length + nombresLibres.length;
+  const total = empleadoIds.length + personalIds.length + nombresLibres.length;
   const lleno = total >= max;
+
+  const yaElegido = (a: AuxiliarOpt) =>
+    (a.id > 0 && empleadoIds.includes(a.id)) ||
+    (a.personalId != null && personalIds.includes(a.personalId));
 
   const q = texto.trim().toLowerCase();
   const filtered = auxiliares
-    .filter((a) => !empleadoIds.includes(a.id))
-    .filter((a) => (q ? `${a.nombre} ${a.codigo}`.toLowerCase().includes(q) : true))
-    .slice(0, 20);
+    .filter((a) => !yaElegido(a))
+    .filter((a) => (q ? `${a.nombre} ${a.codigo} ${a.sub ?? ""}`.toLowerCase().includes(q) : true))
+    .slice(0, 25);
+  const opKey = (a: AuxiliarOpt) => (a.id > 0 ? `emp:${a.id}` : `per:${a.personalId ?? 0}`);
 
   useEffect(() => {
     if (!open) return;
@@ -59,25 +70,33 @@ export function AuxiliaresSelect({ auxiliares, empleadoIds, nombresLibres, max, 
   }, [open]);
 
   function agregarId(a: AuxiliarOpt) {
-    if (lleno || empleadoIds.includes(a.id)) return;
-    onChange({ empleadoIds: [...empleadoIds, a.id], nombresLibres });
+    if (lleno || yaElegido(a)) return;
+    if (a.id > 0) {
+      onChange({ empleadoIds: [...empleadoIds, a.id], personalIds, nombresLibres });
+    } else if (a.personalId != null) {
+      onChange({ empleadoIds, personalIds: [...personalIds, a.personalId], nombresLibres });
+    }
     setTexto("");
     setOpen(false);
   }
 
   function quitarId(id: number) {
-    onChange({ empleadoIds: empleadoIds.filter((x) => x !== id), nombresLibres });
+    onChange({ empleadoIds: empleadoIds.filter((x) => x !== id), personalIds, nombresLibres });
+  }
+
+  function quitarPersonal(id: number) {
+    onChange({ empleadoIds, personalIds: personalIds.filter((x) => x !== id), nombresLibres });
   }
 
   function quitarLibre(n: string) {
-    onChange({ empleadoIds, nombresLibres: nombresLibres.filter((x) => x !== n) });
+    onChange({ empleadoIds, personalIds, nombresLibres: nombresLibres.filter((x) => x !== n) });
   }
 
   /** Enter: si hay match exacto por nombre o solo un resultado filtrado, lo agrega; si no, lo guarda como nombre libre (personal fuera de RRHH). */
   function agregarLibre() {
     const t = texto.trim();
     if (t.length < 2 || lleno) return;
-    const matchExact = auxiliares.find((a) => a.nombre.toLowerCase() === t.toLowerCase() && !empleadoIds.includes(a.id));
+    const matchExact = auxiliares.find((a) => a.nombre.toLowerCase() === t.toLowerCase() && !yaElegido(a));
     if (matchExact) {
       agregarId(matchExact);
       return;
@@ -87,13 +106,17 @@ export function AuxiliaresSelect({ auxiliares, empleadoIds, nombresLibres, max, 
       return;
     }
     if (nombresLibres.some((n) => n.toLowerCase() === t.toLowerCase())) return;
-    onChange({ empleadoIds, nombresLibres: [...nombresLibres, t] });
+    onChange({ empleadoIds, personalIds, nombresLibres: [...nombresLibres, t] });
     setTexto("");
     setOpen(false);
   }
 
-  function nombrePorId(id: number): string {
+  function nombrePorEmpleado(id: number): string {
     return auxiliares.find((a) => a.id === id)?.nombre ?? `#${id}`;
+  }
+  function nombrePorPersonal(id: number): string {
+    const a = auxiliares.find((x) => x.personalId === id);
+    return a ? `${a.nombre}${a.sub ? ` · ${a.sub}` : ""}` : `#${id}`;
   }
 
   // PLAN-FORM-SELECTS-DROPDOWN-STACKING: mismo ajuste que PlacaSelect/
@@ -144,15 +167,26 @@ export function AuxiliaresSelect({ auxiliares, empleadoIds, nombresLibres, max, 
         }}
       />
 
-      {empleadoIds.length || nombresLibres.length ? (
+      {empleadoIds.length || personalIds.length || nombresLibres.length ? (
         <div className="mt-2 flex flex-wrap gap-2">
           {empleadoIds.map((id) => (
             <span
               key={`e-${id}`}
               className="flex items-center gap-1 rounded border border-sky-700 bg-sky-950/30 px-2 py-1 text-xs text-[var(--text)]"
             >
-              {nombrePorId(id)}
+              {nombrePorEmpleado(id)}
               <button type="button" className="text-red-300" onClick={() => quitarId(id)}>
+                ×
+              </button>
+            </span>
+          ))}
+          {personalIds.map((id) => (
+            <span
+              key={`p-${id}`}
+              className="flex items-center gap-1 rounded border border-violet-700 bg-violet-950/30 px-2 py-1 text-xs text-[var(--text)]"
+            >
+              {nombrePorPersonal(id)}
+              <button type="button" className="text-red-300" onClick={() => quitarPersonal(id)}>
                 ×
               </button>
             </span>
@@ -178,7 +212,7 @@ export function AuxiliaresSelect({ auxiliares, empleadoIds, nombresLibres, max, 
           className="absolute left-0 right-0 top-full z-50 mt-1 max-h-52 overflow-auto rounded-lg border border-[var(--border)] bg-[var(--card)] py-1 shadow-lg"
         >
           {filtered.map((a) => (
-            <li key={a.id} role="option" aria-selected={false}>
+            <li key={opKey(a)} role="option" aria-selected={false}>
               <button
                 type="button"
                 className="flex w-full items-center justify-between px-2.5 py-1.5 text-left text-sm hover:bg-[var(--nav-hover)]"
@@ -186,7 +220,7 @@ export function AuxiliaresSelect({ auxiliares, empleadoIds, nombresLibres, max, 
                 onClick={() => agregarId(a)}
               >
                 <span className="text-[var(--text)]">{a.nombre}</span>
-                <span className="text-[10px] text-[var(--muted)]">{a.codigo}</span>
+                <span className="text-[10px] text-[var(--muted)]">{a.sub || a.codigo}</span>
               </button>
             </li>
           ))}

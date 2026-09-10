@@ -64,6 +64,9 @@ export type PlanReporte = {
   unidadCapacidad: string | null;
   pilotoId: number | null;
   piloto: string | null;
+  /** PERSONAL-OPERATIVO-COMPARTIDO-EXTERNO-1 — snapshot: propio | compartido | externo, y empresa/origen. */
+  pilotoTipo: string | null;
+  pilotoOrigen: string | null;
   auxiliares: string[];
   paradas: PlanParada[];
   evidencias: number;
@@ -617,7 +620,8 @@ export async function obtenerReporteViajes(
             p.tarifa_comercial,
             p.tarifa_id, p.tarifa_nombre_historico, p.tarifa_monto_historico, p.tarifa_moneda_historico,
             u.placa, u.tipo AS unidad_tipo, ve.capacidad AS unidad_capacidad,
-            p.piloto_id, pil.nombre AS piloto,
+            p.piloto_id, COALESCE(pil.nombre, p.piloto_nombre_historico) AS piloto,
+            p.piloto_tipo_historico, p.piloto_origen_historico,
             COALESCE(ev.cnt, 0) AS evidencias,
             fviaje.km_salida, fviaje.km_llegada,
             DATE_FORMAT(fviaje.hora_salida, '%Y-%m-%dT%H:%i') AS hora_salida,
@@ -688,6 +692,8 @@ export async function obtenerReporteViajes(
       unidadCapacidad: r.unidad_capacidad ? String(r.unidad_capacidad) : null,
       pilotoId: r.piloto_id != null ? Number(r.piloto_id) : null,
       piloto: r.piloto ? String(r.piloto) : null,
+      pilotoTipo: r.piloto_tipo_historico ? String(r.piloto_tipo_historico) : null,
+      pilotoOrigen: r.piloto_origen_historico ? String(r.piloto_origen_historico) : null,
       auxiliares: auxMap.get(id) ?? [],
       paradas: paradasMap.get(id) ?? [],
       evidencias: Number(r.evidencias ?? 0),
@@ -801,10 +807,16 @@ async function auxiliaresDePlanesReporte(planIds: number[]): Promise<Map<number,
   // propaga y el reporte falla explícitamente (el caller, obtenerReporteViajes,
   // no atrapa este Promise.all — se relanza tal cual).
   const placeholders = ids.map(() => "?").join(",");
+  // PERSONAL-OPERATIVO-COMPARTIDO-EXTERNO-1 — nombre desde el SNAPSHOT del
+  // viaje (a.nombre_historico) con fallback al registro vivo; así un
+  // auxiliar compartido/externo que se desactive después sigue apareciendo
+  // bien en el reporte histórico. LEFT JOIN (no INNER) por lo mismo.
   const rows = await query<RowDataPacket[]>(
-    `SELECT a.plan_id, per.nombre
+    `SELECT a.plan_id,
+            COALESCE(a.nombre_historico, per.nombre) AS nombre,
+            a.tipo_historico, a.origen_historico
      FROM tms_plan_auxiliares a
-     INNER JOIN tms_personal per ON per.id = a.personal_id
+     LEFT JOIN tms_personal per ON per.id = a.personal_id
      WHERE a.plan_id IN (${placeholders})
      ORDER BY a.plan_id, a.orden, a.id`,
     ids,
@@ -812,7 +824,12 @@ async function auxiliaresDePlanesReporte(planIds: number[]): Promise<Map<number,
   for (const r of rows) {
     const pid = Number(r.plan_id);
     const list = map.get(pid) ?? [];
-    list.push(String(r.nombre));
+    const tipo = r.tipo_historico ? String(r.tipo_historico) : null;
+    const origen = r.origen_historico ? String(r.origen_historico) : null;
+    const etiqueta = tipo && tipo !== "propio"
+      ? `${String(r.nombre)} · ${tipo}${origen ? ` · ${origen}` : ""}`
+      : String(r.nombre);
+    list.push(etiqueta);
     map.set(pid, list);
   }
   return map;

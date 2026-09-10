@@ -21,6 +21,7 @@ import {
 import { obtenerVehiculoAccesible } from "@/lib/flota/acceso";
 import { vehiculoPorPlaca } from "@/lib/flota/pilotos";
 import { debeLimpiarTarifaPorCambioDeRuta, tarifaParaSnapshot } from "@/lib/tms/ruta-tarifas";
+import { snapshotsPersonal, type SnapshotPersonal } from "@/lib/tms/personal-operativo";
 import { listarDisponibilidadPersonal } from "@/lib/operaciones/disponibilidad-personal";
 import { ahoraLocal, hoyLocal, toIsoDate } from "@/lib/rrhh/dates";
 import { listarViaticosRechazadosDelPlan, personalRecienAsignadoDelPlan, sincronizarViaticosPlan } from "@/lib/tms/viaticos";
@@ -471,6 +472,12 @@ const schema = z.object({
   pilotoEmpleadoId: z.number().int().positive().optional(),
   auxiliarEmpleadoId: z.number().int().positive().optional(),
   auxiliarEmpleadoIds: z.array(z.number().int().positive()).max(8).optional(),
+  // PERSONAL-OPERATIVO-COMPARTIDO-EXTERNO-1 — piloto/auxiliares elegidos
+  // como personal COMPARTIDO o EXTERNO: llegan como tms_personal.id
+  // (ya existe la fila, creada en "Personal operativo"). Se validan sin
+  // auto-crear (validarPersonalId). Convive con pilotoEmpleadoId (propio).
+  pilotoPersonalId: z.number().int().positive().optional(),
+  auxiliarPersonalIds: z.array(z.number().int().positive()).max(8).optional(),
   lugarCarga: z.string().optional(),
   lugarDescarga: z.string().optional(),
   // VIAT-4/VIAT-4b: de qué ruta maestra (tms_cliente_rutas) salió la
@@ -613,6 +620,8 @@ async function guardarAuxiliaresPlan(
   planId: number,
   personalIds: number[],
   conn?: PoolConnection,
+  /** PERSONAL-OPERATIVO-COMPARTIDO-EXTERNO-1 — snapshot por personalId (nombre/tipo/origen). */
+  snaps?: Map<number, SnapshotPersonal>,
 ): Promise<void> {
   async function escribir(): Promise<void> {
     await runExecute(conn, "DELETE FROM tms_plan_auxiliares WHERE plan_id = ?", [
@@ -620,11 +629,12 @@ async function guardarAuxiliaresPlan(
     ]);
     let orden = 1;
     for (const pid of personalIds.slice(0, 8)) {
+      const s = snaps?.get(pid) ?? null;
       await runExecute(
         conn,
-        `INSERT INTO tms_plan_auxiliares (plan_id, personal_id, orden)
-         VALUES (?, ?, ?)`,
-        [planId, pid, orden++],
+        `INSERT INTO tms_plan_auxiliares (plan_id, personal_id, orden, nombre_historico, tipo_historico, origen_historico)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [planId, pid, orden++, s?.nombre ?? null, s?.tipo ?? null, s?.origen || null],
       );
     }
   }
@@ -765,11 +775,19 @@ export async function POST(req: Request, ctx: Ctx) {
   // personalId real que espera sincronizarViaticosPlan.
   const empleadoIdAPersonalId = new Map<number, number>();
 
-  pilotoId = await personalDesdeEmpleado(
-    empresaId,
-    d.pilotoEmpleadoId,
-    "Piloto",
-  );
+  // PERSONAL-OPERATIVO-COMPARTIDO-EXTERNO-1 — personal compartido/externo
+  // primero (llega como tms_personal.id, se valida sin auto-crear).
+  if (d.pilotoPersonalId) {
+    const p = await validarPersonalId(empresaId, d.pilotoPersonalId, "Piloto");
+    pilotoId = p?.id ?? null;
+  }
+  if (!pilotoId) {
+    pilotoId = await personalDesdeEmpleado(
+      empresaId,
+      d.pilotoEmpleadoId,
+      "Piloto",
+    );
+  }
   if (!pilotoId && d.pilotoNombre?.trim()) {
     const r = await execute(
       "INSERT INTO tms_personal (empresa_id, nombre, tipo) VALUES (?, ?, 'Piloto')",
@@ -786,6 +804,10 @@ export async function POST(req: Request, ctx: Ctx) {
         ? [d.auxiliarEmpleadoId]
         : [];
   const auxPersonalIds: number[] = [];
+  for (const pid of (d.auxiliarPersonalIds ?? []).slice(0, 8)) {
+    const p = await validarPersonalId(empresaId, pid, "Auxiliar");
+    if (p && !auxPersonalIds.includes(p.id)) auxPersonalIds.push(p.id);
+  }
   for (const eid of auxIdsRaw.slice(0, 8)) {
     const pid = await personalDesdeEmpleado(empresaId, eid, "Auxiliar");
     if (pid) {
@@ -818,6 +840,16 @@ export async function POST(req: Request, ctx: Ctx) {
     auxPersonalIds.push(Number(r.insertId));
   }
   const auxiliarId = auxPersonalIds[0] ?? null;
+
+  // PERSONAL-OPERATIVO-COMPARTIDO-EXTERNO-1 — snapshot de quién participa
+  // (nombre + tipo propio/compartido/externo + empresa/origen) para
+  // congelarlo en el viaje: si el personal se desactiva o cambia de
+  // empresa de origen, el reporte histórico sigue mostrándolo bien.
+  const snapsPersonal = await snapshotsPersonal(
+    empresaId,
+    [pilotoId, ...auxPersonalIds].filter((x): x is number => typeof x === "number" && x > 0),
+  );
+  const snapPiloto: SnapshotPersonal | null = pilotoId ? snapsPersonal.get(pilotoId) ?? null : null;
 
   // Mejora Programación (Opción A) — validar viaticosAsignados ANTES de
   // escribir absolutamente nada: cada empleadoId debe corresponder
@@ -1008,8 +1040,8 @@ export async function POST(req: Request, ctx: Ctx) {
       try {
         const [result] = await conn.execute<ResultSetHeader>(
           `INSERT INTO tms_planes_viaje
-            (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, tarifa_id, tarifa_nombre_historico, tarifa_monto_historico, tarifa_moneda_historico, costo_operativo_referencia, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado')`,
+            (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, piloto_nombre_historico, piloto_tipo_historico, piloto_origen_historico, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, tarifa_id, tarifa_nombre_historico, tarifa_monto_historico, tarifa_moneda_historico, costo_operativo_referencia, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado')`,
           [
             empresaId,
             codigoFinal,
@@ -1019,6 +1051,9 @@ export async function POST(req: Request, ctx: Ctx) {
             unidadId,
             pilotoId,
             auxiliarId,
+            snapPiloto?.nombre ?? d.pilotoNombre?.trim() ?? null,
+            snapPiloto?.tipo ?? null,
+            snapPiloto?.origen || null,
             d.fechaPlan,
             d.horaCarga ?? null,
             d.tipoTraslado ?? null,
@@ -1056,7 +1091,7 @@ export async function POST(req: Request, ctx: Ctx) {
         { status: 409 },
       );
     }
-    await guardarAuxiliaresPlan(planId, auxPersonalIds, conn);
+    await guardarAuxiliaresPlan(planId, auxPersonalIds, conn, snapsPersonal);
     if (paradasInput.length) {
       // OPS-3.2d: plan recién creado — guardarParadasPlan nunca puede
       // rechazar aquí (no hay paradas previas ni evidencia posible), pero
@@ -1598,6 +1633,14 @@ export async function PATCH(req: Request, ctx: Ctx) {
   const pilotoFinal = pilotoId !== undefined ? pilotoId : antes.pilotoId;
   const pilotoCambioReal = pilotoFinal !== antes.pilotoId;
   const auxiliaresFinal = auxPersonalIdsNuevo ?? auxPersonalIdsLegado ?? antesAuxiliaresIds;
+
+  // PERSONAL-OPERATIVO-COMPARTIDO-EXTERNO-1 — snapshots del personal
+  // resuelto (piloto + auxiliares), para congelarlos en el viaje.
+  const snapsPersonalPatch = await snapshotsPersonal(
+    empresaId,
+    [pilotoFinal, ...auxiliaresFinal].filter((x): x is number => typeof x === "number" && x > 0),
+  );
+  const snapPilotoPatch = pilotoFinal ? snapsPersonalPatch.get(pilotoFinal) ?? null : null;
   // Comparación como CONJUNTOS — el orden en que el formulario mande los
   // auxiliares no representa una diferencia de asignación real.
   const auxiliaresCambioReal = (() => {
@@ -2077,7 +2120,10 @@ export async function PATCH(req: Request, ctx: Ctx) {
         lugar_descarga_historico = COALESCE(?, lugar_descarga_historico),
         contacto_nombre_historico = COALESCE(?, contacto_nombre_historico),
         contacto_cargo_historico = COALESCE(?, contacto_cargo_historico),
-        contacto_telefono_historico = COALESCE(?, contacto_telefono_historico)
+        contacto_telefono_historico = COALESCE(?, contacto_telefono_historico),
+        piloto_nombre_historico = CASE WHEN ? THEN ? ELSE piloto_nombre_historico END,
+        piloto_tipo_historico = CASE WHEN ? THEN ? ELSE piloto_tipo_historico END,
+        piloto_origen_historico = CASE WHEN ? THEN ? ELSE piloto_origen_historico END
        WHERE id = ? AND empresa_id = ? AND estado = ?`,
       [
         d.fechaPlan ?? null,
@@ -2118,6 +2164,13 @@ export async function PATCH(req: Request, ctx: Ctx) {
         d.contactoNombreHistorico?.trim() || null,
         d.contactoCargoHistorico?.trim() || null,
         d.contactoTelefonoHistorico?.trim() || null,
+        // Snapshot del piloto: se re-congela solo si el PATCH tocó piloto.
+        pilotoId !== undefined,
+        snapPilotoPatch?.nombre ?? null,
+        pilotoId !== undefined,
+        snapPilotoPatch?.tipo ?? null,
+        pilotoId !== undefined,
+        snapPilotoPatch?.origen || null,
         d.id,
         empresaId,
         antes.estado,
@@ -2168,10 +2221,10 @@ export async function PATCH(req: Request, ctx: Ctx) {
     }
 
     if (auxPersonalIdsLegado != null) {
-      await guardarAuxiliaresPlan(d.id, auxPersonalIdsLegado, conn);
+      await guardarAuxiliaresPlan(d.id, auxPersonalIdsLegado, conn, snapsPersonalPatch);
     }
     if (auxPersonalIdsNuevo != null) {
-      await guardarAuxiliaresPlan(d.id, auxPersonalIdsNuevo, conn);
+      await guardarAuxiliaresPlan(d.id, auxPersonalIdsNuevo, conn, snapsPersonalPatch);
     }
 
     // VIAT-0 (punto 12): solo si esta solicitud realmente tocó piloto y/o

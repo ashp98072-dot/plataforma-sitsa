@@ -15,7 +15,7 @@ describe("snapshot de defaults de ruta al crear un plan", () => {
 
   it("persiste auxiliares y viáticos dentro de la transacción del plan", () => {
     const begin = planes.indexOf("await conn.beginTransaction()");
-    const auxiliares = planes.indexOf("await guardarAuxiliaresPlan(planId, auxPersonalIds, conn)", begin);
+    const auxiliares = planes.indexOf("await guardarAuxiliaresPlan(planId, auxPersonalIds, conn", begin);
     const viaticos = planes.indexOf("await sincronizarViaticosPlan(", begin);
     const commit = planes.indexOf("await conn.commit()", begin);
     expect(begin).toBeGreaterThan(-1);

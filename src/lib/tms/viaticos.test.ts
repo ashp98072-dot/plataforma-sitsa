@@ -827,6 +827,7 @@ describe("sincronizarViaticosPlan — RECHAZADO es terminal por (plan_id, person
     execConn.query.mockResolvedValueOnce([[{ personal_id: 5, estado: "RECHAZADO", monto_asignado: "500" }], []]);
     execConn.query.mockResolvedValueOnce([[{ puesto: "Piloto" }], []]); // puestoDePersonal(9) — fila nueva, sin RECHAZADO previo
     execConn.query.mockResolvedValueOnce([[{ monto_defecto: "500" }], []]); // montoSugeridoParaPuesto
+    execConn.query.mockResolvedValueOnce([[], []]); // PERSONAL-OPERATIVO-COMPARTIDO-EXTERNO-1: snapshot del personal (lazy, antes del INSERT)
     await sincronizarViaticosPlan(7, 1, { piloto: 9, auxiliares: [] }, execConn as never);
     const deleteCall = execConn.execute.mock.calls.find((c) => String(c[0]).includes("DELETE FROM tms_viaticos"));
     expect(deleteCall![0]).toContain("estado = 'PROGRAMADO'");
@@ -852,10 +853,17 @@ describe("sincronizarViaticosPlan — RECHAZADO es terminal por (plan_id, person
     execConn.query.mockResolvedValueOnce([[], []]); // existentesRows del plan 101: vacío
     execConn.query.mockResolvedValueOnce([[{ puesto: "Piloto" }], []]); // puestoDePersonal(9)
     execConn.query.mockResolvedValueOnce([[{ monto_defecto: "500" }], []]); // montoSugeridoParaPuesto
+    execConn.query.mockResolvedValueOnce([
+      [{ id: 9, nombre: "Juan Pérez", tipo: "Piloto", tipo_vinculo: "compartido", estado: "Activo",
+         telefono: null, licencia: null, codigo: null, id_empleado: 55, empresa_origen_id: 3,
+         empresa_origen_texto: null, empresa_origen_nombre: "Transportes B" }],
+      [],
+    ]); // PERSONAL-OPERATIVO-COMPARTIDO-EXTERNO-1: snapshot del personal (compartido)
     await sincronizarViaticosPlan(7, 101, { piloto: 9, auxiliares: [] }, execConn as never);
     const insertCall = execConn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_viaticos"));
     expect(insertCall).toBeDefined();
-    expect(insertCall![1]).toEqual([7, 101, 9, "Piloto", 500, 500]);
+    // + snapshot de personal: nombre / tipo_vinculo / origen ("Transportes B" para compartido).
+    expect(insertCall![1]).toEqual([7, 101, 9, "Piloto", 500, 500, "Juan Pérez", "compartido", "Transportes B"]);
     // El plan_id del INSERT es el NUEVO (101), nunca el plan 1 donde está el RECHAZADO.
   });
 });

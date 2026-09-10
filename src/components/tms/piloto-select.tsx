@@ -6,6 +6,12 @@ export type PilotoOpt = {
   id: number;
   codigo: string;
   nombre: string;
+  /** PERSONAL-OPERATIVO-COMPARTIDO-EXTERNO-1 — tms_personal.id (compartido/externo). */
+  personalId?: number | null;
+  /** "propio" | "compartido" | "externo" */
+  fuente?: string;
+  /** Etiqueta de origen/tipo para mostrar junto al nombre. */
+  sub?: string;
 };
 
 type Props = {
@@ -13,7 +19,7 @@ type Props = {
   empleadoId: number;
   nombre: string;
   inputClassName: string;
-  onChange: (next: { empleadoId: number; nombre: string }) => void;
+  onChange: (next: { empleadoId: number; nombre: string; personalId?: number | null; fuente?: string }) => void;
 };
 
 /**
@@ -42,11 +48,12 @@ export function PilotoSelect({
 
   const filtered = (
     q.length < 1
-      ? pilotos.slice(0, 12)
+      ? pilotos.slice(0, 15)
       : pilotos
-          .filter((p) => `${p.nombre} ${p.codigo}`.toLowerCase().includes(q))
-          .slice(0, 20)
+          .filter((p) => `${p.nombre} ${p.codigo} ${p.sub ?? ""}`.toLowerCase().includes(q))
+          .slice(0, 25)
   );
+  const opKey = (p: PilotoOpt) => (p.id > 0 ? `emp:${p.id}` : `per:${p.personalId ?? 0}`);
 
   useEffect(() => {
     if (!open) return;
@@ -65,7 +72,7 @@ export function PilotoSelect({
   }, [open]);
 
   function elegir(p: PilotoOpt) {
-    onChange({ empleadoId: p.id, nombre: p.nombre });
+    onChange({ empleadoId: p.id, nombre: p.nombre, personalId: p.personalId ?? null, fuente: p.fuente });
     setOpen(false);
   }
 
@@ -96,7 +103,12 @@ export function PilotoSelect({
         onChange={(e) => {
           const val = e.target.value;
           const match = pilotos.find((p) => p.nombre.toLowerCase() === val.trim().toLowerCase());
-          onChange({ empleadoId: match ? match.id : 0, nombre: val });
+          onChange({
+            empleadoId: match ? match.id : 0,
+            nombre: val,
+            personalId: match?.personalId ?? null,
+            fuente: match?.fuente,
+          });
           setOpen(true);
         }}
         onKeyDown={(e) => {
@@ -131,18 +143,18 @@ export function PilotoSelect({
           className="absolute left-0 right-0 top-full z-50 mt-1 max-h-44 overflow-auto rounded-lg border border-[var(--border)] bg-[var(--card)] py-1 shadow-lg"
         >
           {filtered.map((p) => (
-            <li key={p.id} role="option" aria-selected={empleadoId === p.id}>
+            <li key={opKey(p)} role="option" aria-selected={empleadoId === p.id && p.id > 0}>
               <button
                 type="button"
                 className={[
                   "flex w-full items-center justify-between px-2.5 py-1.5 text-left text-sm hover:bg-[var(--nav-hover)]",
-                  empleadoId === p.id ? "bg-[var(--nav-active)]" : "",
+                  empleadoId === p.id && p.id > 0 ? "bg-[var(--nav-active)]" : "",
                 ].join(" ")}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => elegir(p)}
               >
                 <span className="text-[var(--text)]">{p.nombre}</span>
-                <span className="text-[10px] text-[var(--muted)]">{p.codigo}</span>
+                <span className="text-[10px] text-[var(--muted)]">{p.sub || p.codigo}</span>
               </button>
             </li>
           ))}

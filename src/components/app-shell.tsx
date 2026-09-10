@@ -341,6 +341,15 @@ export function AppShell({
         label: "Planes / Viajes",
         key: "planes",
       });
+      // PERSONAL-OPERATIVO-COMPARTIDO-EXTERNO-1 — gestión de pilotos/
+      // auxiliares utilizables en Programación (propios / compartidos /
+      // externos). Mismo criterio de audiencia que Programación; nunca es
+      // administración de RRHH.
+      opsLinks.push({
+        href: `${base}/operaciones/personal`,
+        label: "Personal operativo",
+        key: "personal-operativo",
+      });
     }
     // Viáticos (VIAT-3): módulo propio, visible con CUALQUIERA de los tres
     // permisos de viáticos (viaticos/viaticos_autorizar/viaticos_pagar) —

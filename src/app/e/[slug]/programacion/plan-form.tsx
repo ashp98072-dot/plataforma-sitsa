@@ -63,6 +63,11 @@ type EmpOps = {
   nombre: string;
   puesto?: string;
   categoriaOps: string;
+  // PERSONAL-OPERATIVO-COMPARTIDO-EXTERNO-1 — id = empleados.id para
+  // propios; personalId = tms_personal.id para compartido/externo.
+  personalId?: number | null;
+  fuente?: "propio" | "compartido" | "externo";
+  sub?: string;
 };
 
 /** Mejora Programación (contacto) — mismo shape que devuelve GET /tms/clientes/[clienteId]/contactos. */
@@ -320,8 +325,12 @@ export default function PlanForm({
     clienteNombre: plan?.cliente ?? "",
     placa: plan?.placa ?? "",
     pilotoEmpleadoId: 0,
+    // PERSONAL-OPERATIVO-COMPARTIDO-EXTERNO-1 — tms_personal.id cuando el
+    // piloto es compartido/externo (sin empleado propio en esta empresa).
+    pilotoPersonalId: plan && plan.pilotoEmpleadoId == null ? (plan.pilotoId ?? 0) : 0,
     pilotoNombre: plan?.piloto ?? "",
     auxiliarEmpleadoIds: [] as number[],
+    auxiliarPersonalIds: [] as number[],
     auxiliarNombres: [] as string[],
     tipoTraslado: plan?.tipo_traslado ?? "",
     regresoEstimado: plan?.regreso_estimado?.slice(0, 16) ?? "",
@@ -451,10 +460,13 @@ export default function PlanForm({
   const [avisosRechazoPlan, setAvisosRechazoPlan] = useState<string[]>([]);
 
   const cargarCatalogos = useCallback(async () => {
-    const [resPlanes, cat, ops, viaticosCfg] = await Promise.all([
+    const [resPlanes, cat, selPil, selAux, viaticosCfg] = await Promise.all([
       fetch(`/api/empresas/${slug}/tms/planes`),
       fetch(`/api/empresas/${slug}/tms/catalogos`),
-      fetch(`/api/empresas/${slug}/rrhh/personal-ops?tipo=all`),
+      // PERSONAL-OPERATIVO-COMPARTIDO-EXTERNO-1 — selector unificado
+      // (propios + compartidos + externos habilitados para esta empresa).
+      fetch(`/api/empresas/${slug}/tms/personal-operativo/seleccionables?tipo=Piloto`),
+      fetch(`/api/empresas/${slug}/tms/personal-operativo/seleccionables?tipo=Auxiliar`),
       fetch(`/api/empresas/${slug}/tms/viaticos-config`),
     ]);
     if (resPlanes.ok) {
@@ -474,20 +486,35 @@ export default function PlanForm({
       const c = await cat.json();
       setClientesCat((c.clientes ?? []) as ClienteCat[]);
     }
-    if (ops.ok) {
-      const o = await ops.json();
-      const list = (o.personal ?? []) as EmpOps[];
-      const match = (p: EmpOps, kind: "piloto" | "auxiliar") => {
-        const catOps = (p.categoriaOps || "").toLowerCase();
-        const puesto = (p.puesto || "").toLowerCase();
-        return kind === "piloto"
-          ? p.categoriaOps === "Piloto" || catOps.includes("piloto") || puesto.includes("piloto")
-          : p.categoriaOps === "Auxiliar" || catOps.includes("auxiliar") || puesto.includes("auxiliar");
-      };
-      const pilotosFil = list.filter((p) => match(p, "piloto"));
-      const auxFil = list.filter((p) => match(p, "auxiliar"));
-      setPilotos(pilotosFil.length ? pilotosFil : list);
-      setAuxiliares(auxFil.length ? auxFil : list);
+    type Seleccionable = {
+      fuente: "propio" | "compartido" | "externo";
+      empleadoId: number | null;
+      personalId: number | null;
+      nombre: string;
+      origen: string;
+      tipo: string;
+    };
+    const aEmpOps = (s: Seleccionable): EmpOps => ({
+      id: s.fuente === "propio" ? Number(s.empleadoId ?? 0) : 0,
+      codigo: "",
+      nombre: s.nombre,
+      categoriaOps: s.tipo,
+      personalId: s.personalId,
+      fuente: s.fuente,
+      sub:
+        s.fuente === "propio"
+          ? "Propio"
+          : s.fuente === "compartido"
+            ? `Compartido${s.origen ? ` · ${s.origen}` : ""}`
+            : `Externo${s.origen ? ` · ${s.origen}` : ""}`,
+    });
+    if (selPil.ok) {
+      const d = await selPil.json();
+      setPilotos(((d.seleccionables ?? []) as Seleccionable[]).map(aEmpOps));
+    }
+    if (selAux.ok) {
+      const d = await selAux.json();
+      setAuxiliares(((d.seleccionables ?? []) as Seleccionable[]).map(aEmpOps));
     }
     if (viaticosCfg.ok) {
       const vc = await viaticosCfg.json();
@@ -531,9 +558,30 @@ export default function PlanForm({
   }, [slug, rutaIdInicial]);
 
   // Cuando el roster de auxiliares ya cargó, precarga los auxiliares
-  // actuales del plan (edición) por nombre — una sola vez por plan.
+  // actuales del plan (edición) — una sola vez por plan.
   useEffect(() => {
     if (!plan || !auxiliares.length) return;
+    // PERSONAL-OPERATIVO-COMPARTIDO-EXTERNO-1 — fuente fiable:
+    // auxiliaresDetalle (trae personalId + empleadoId reales). Propio ->
+    // auxiliarEmpleadoIds; compartido/externo (sin empleadoId) ->
+    // auxiliarPersonalIds. Fallback a nombres cuando no hay detalle.
+    const detalle = plan.auxiliaresDetalle ?? [];
+    if (detalle.length) {
+      const emps: number[] = [];
+      const pers: number[] = [];
+      for (const d of detalle) {
+        if (d.empleadoId) emps.push(d.empleadoId);
+        else if (d.personalId) pers.push(d.personalId);
+      }
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setForm((f) => ({
+        ...f,
+        auxiliarEmpleadoIds: emps.slice(0, 8),
+        auxiliarPersonalIds: pers.slice(0, 8),
+        auxiliarNombres: [],
+      }));
+      return;
+    }
     const nombres = plan.auxiliares?.length
       ? plan.auxiliares
       : plan.auxiliar
@@ -541,20 +589,19 @@ export default function PlanForm({
         : [];
     if (!nombres.length) return;
     const ids: number[] = [];
+    const pers: number[] = [];
     const libres: string[] = [];
     for (const n of nombres) {
       const m = auxiliares.find((a) => a.nombre.toLowerCase() === n.toLowerCase());
-      if (m) ids.push(m.id);
+      if (m && m.id > 0) ids.push(m.id);
+      else if (m && m.personalId) pers.push(m.personalId);
       else libres.push(n);
     }
-    // Precarga best-effort, una sola vez por plan al cargar el roster — no
-    // es un fetch async por lo que no aplica el patrón IIFE; mismo criterio
-    // ya usado en tms/page.tsx (ver su useEffect de cargar()).
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setForm((f) => ({
       ...f,
       auxiliarEmpleadoIds: ids.slice(0, 8),
-      auxiliarNombres: libres.slice(0, 8 - ids.length),
+      auxiliarPersonalIds: pers.slice(0, 8),
+      auxiliarNombres: libres.slice(0, 8 - ids.length - pers.length),
     }));
     // Solo al cargar auxiliares por primera vez para este plan — no se quiere
     // repisar una edición del usuario en cada recarga de catálogos.
@@ -564,12 +611,16 @@ export default function PlanForm({
   // Precarga best-effort del id del piloto ya asignado (edición), igual
   // que con auxiliares — solo una vez por plan.
   useEffect(() => {
-    if (!plan || !pilotos.length || form.pilotoEmpleadoId) return;
+    if (!plan || !pilotos.length || form.pilotoEmpleadoId || form.pilotoPersonalId) return;
+    // PERSONAL-OPERATIVO-COMPARTIDO-EXTERNO-1 — prioriza el id real del
+    // viaje: pilotoEmpleadoId (propio) o pilotoId=tms_personal (compartido/
+    // externo); si no, empareja por nombre contra el roster unificado.
     const m = pilotos.find((p) => p.nombre.toLowerCase() === (plan.piloto ?? "").toLowerCase());
-    if (m) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setForm((f) => ({ ...f, pilotoEmpleadoId: m.id }));
-    }
+    const empId = plan.pilotoEmpleadoId || (m && m.id > 0 ? m.id : 0);
+    const perId = empId ? 0 : (m?.personalId ?? plan.pilotoId ?? 0);
+    if (!empId && !perId) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- precarga una sola vez por plan (edición)
+    setForm((f) => ({ ...f, pilotoEmpleadoId: empId, pilotoPersonalId: perId }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plan?.id, pilotos.length]);
 
@@ -882,6 +933,14 @@ export default function PlanForm({
           empleadoId: id,
           nombre: auxiliares.find((a) => a.id === id)?.nombre ?? `#${id}`,
         })),
+        // PERSONAL-OPERATIVO-COMPARTIDO-EXTERNO-1 — compartido/externo: sin
+        // empleadoId, se comparan por nombre igual que un "nombre libre"
+        // (así el conjunto matchea con auxOriginalesIdentidad, que ya
+        // trae empleadoId=null para ellos vía auxiliaresDetalle).
+        ...form.auxiliarPersonalIds.map((pid) => ({
+          empleadoId: null,
+          nombre: auxiliares.find((a) => a.personalId === pid)?.nombre ?? `#p${pid}`,
+        })),
         ...form.auxiliarNombres.map((nombre) => ({ empleadoId: null, nombre })),
       ]
     : [];
@@ -906,8 +965,10 @@ export default function PlanForm({
   // planes/route.ts.
   const requiereRegreso = Boolean(
     form.pilotoEmpleadoId ||
+      form.pilotoPersonalId ||
       form.pilotoNombre.trim() ||
       form.auxiliarEmpleadoIds.length ||
+      form.auxiliarPersonalIds.length ||
       form.auxiliarNombres.length ||
       form.placa.trim(),
   );
@@ -1056,7 +1117,12 @@ export default function PlanForm({
             placa: form.placa || undefined,
             pilotoEmpleadoId: form.pilotoEmpleadoId || undefined,
             pilotoNombre: form.pilotoNombre.trim() || undefined,
+            // PERSONAL-OPERATIVO-COMPARTIDO-EXTERNO-1 — piloto/auxiliares
+            // compartidos/externos: tms_personal.id (el backend valida sin
+            // auto-crear y snapshotea nombre/tipo/origen en el viaje).
+            pilotoPersonalId: form.pilotoPersonalId || undefined,
             auxiliarEmpleadoIds: form.auxiliarEmpleadoIds.length ? form.auxiliarEmpleadoIds : undefined,
+            auxiliarPersonalIds: form.auxiliarPersonalIds.length ? form.auxiliarPersonalIds : undefined,
             auxiliarNombres: form.auxiliarNombres.length ? form.auxiliarNombres : undefined,
             paradas,
             lugarCarga: paradas.find((p) => p.tipo === "Carga")?.lugarNombre,
@@ -1112,6 +1178,17 @@ export default function PlanForm({
           motivoCambio: camposSensibles.motivoCambio,
           auxiliarEmpleadoIds: camposSensibles.auxiliarEmpleadoIds,
           auxiliarNombres: camposSensibles.auxiliarNombres,
+          // PERSONAL-OPERATIVO-COMPARTIDO-EXTERNO-1 — mismo gate que el
+          // resto de recursos (solo si hubo cambio sensible real, señalado
+          // por camposSensibles.auxiliarEmpleadoIds !== undefined).
+          pilotoPersonalId:
+            camposSensibles.auxiliarEmpleadoIds !== undefined && form.pilotoPersonalId
+              ? form.pilotoPersonalId
+              : undefined,
+          auxiliarPersonalIds:
+            camposSensibles.auxiliarEmpleadoIds !== undefined && form.auxiliarPersonalIds.length
+              ? form.auxiliarPersonalIds
+              : undefined,
           tipoTraslado: undefined,
           // OPS-3.2b: estos seis ya no dependen de `soloNotas` a secas —
           // `bloqueadoParaPreCierre` los libera cuando el plan está
@@ -1573,7 +1650,15 @@ export default function PlanForm({
           empleadoId={form.pilotoEmpleadoId}
           nombre={form.pilotoNombre}
           inputClassName={inputCls}
-          onChange={({ empleadoId, nombre }) => setForm((f) => ({ ...f, pilotoEmpleadoId: empleadoId, pilotoNombre: nombre }))}
+          onChange={({ empleadoId, nombre, personalId, fuente }) =>
+            setForm((f) => ({
+              ...f,
+              pilotoEmpleadoId: empleadoId,
+              pilotoNombre: nombre,
+              // compartido/externo -> guardar tms_personal.id; propio o texto libre -> 0.
+              pilotoPersonalId: fuente && fuente !== "propio" && personalId ? personalId : 0,
+            }))
+          }
         />
       </div>
 
@@ -1585,11 +1670,17 @@ export default function PlanForm({
         <AuxiliaresSelect
           auxiliares={auxiliares}
           empleadoIds={form.auxiliarEmpleadoIds}
+          personalIds={form.auxiliarPersonalIds}
           nombresLibres={form.auxiliarNombres}
           max={8}
           inputClassName={inputCls}
-          onChange={({ empleadoIds, nombresLibres }) =>
-            setForm((f) => ({ ...f, auxiliarEmpleadoIds: empleadoIds, auxiliarNombres: nombresLibres }))
+          onChange={({ empleadoIds, personalIds, nombresLibres }) =>
+            setForm((f) => ({
+              ...f,
+              auxiliarEmpleadoIds: empleadoIds,
+              auxiliarPersonalIds: personalIds,
+              auxiliarNombres: nombresLibres,
+            }))
           }
         />
       </div>

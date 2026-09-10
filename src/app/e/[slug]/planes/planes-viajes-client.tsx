@@ -90,6 +90,9 @@ type PlanReporte = {
   unidadCapacidad: string | null;
   pilotoId: number | null;
   piloto: string | null;
+  /** PERSONAL-OPERATIVO-COMPARTIDO-EXTERNO-1 — snapshot del tipo/origen del piloto. */
+  pilotoTipo: string | null;
+  pilotoOrigen: string | null;
   auxiliares: string[];
   paradas: Parada[];
   evidencias: number;
@@ -833,7 +836,12 @@ export default function PlanesViajesClient() {
                             </ul>
                             <p className="mt-3 text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">B. Personal / unidad</p>
                             <ul className="mt-1 space-y-0.5 text-xs text-[var(--text)]">
-                              <li>Piloto: {p.piloto ?? "—"}</li>
+                              <li>
+                                Piloto: {p.piloto ?? "—"}
+                                {p.pilotoTipo && p.pilotoTipo !== "propio"
+                                  ? ` · ${p.pilotoTipo}${p.pilotoOrigen ? ` · ${p.pilotoOrigen}` : ""}`
+                                  : ""}
+                              </li>
                               <li>Auxiliares: {p.auxiliares.join(", ") || "—"}</li>
                               <li>Unidad: {p.placa ?? "—"}</li>
                               <li>Equipo asignado: {p.unidadTipo ? `${p.unidadTipo}${p.unidadCapacidad ? ` · ${p.unidadCapacidad}` : ""}` : "—"}</li>

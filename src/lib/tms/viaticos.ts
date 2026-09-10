@@ -7,6 +7,7 @@ import { crearFirmaInterna, type ResultadoFirmaInterna } from "@/lib/firmas/firm
 import { sha256Hex } from "@/lib/firmas/imagen-firma";
 import { borrarUpload, guardarUpload } from "@/lib/uploads";
 import { centavos, decimal } from "@/lib/multas/reglas";
+import { snapshotsPersonal } from "@/lib/tms/personal-operativo";
 
 /**
  * VIAT-0 — viáticos operativos asociados a una programación/viaje (piloto y
@@ -216,6 +217,20 @@ export async function sincronizarViaticosPlan(
     (overrides ?? []).map((o) => [o.personalId, o.montoAsignado]),
   );
 
+  // PERSONAL-OPERATIVO-COMPARTIDO-EXTERNO-1 — snapshot de quién recibe el
+  // viático (nombre + tipo propio/compartido/externo + empresa/origen).
+  // El PDF/Excel/reportes lo usan aunque el tms_personal cambie después.
+  // Lazy + cacheado: solo se consulta para filas que realmente se
+  // insertan/actualizan (nunca para una fila RECHAZADO que el bucle salta).
+  const snapCache = new Map<number, { nombre: string; tipo: string; origen: string } | null>();
+  async function snapDe(personalId: number) {
+    if (snapCache.has(personalId)) return snapCache.get(personalId) ?? null;
+    const m = await snapshotsPersonal(empresaId, [personalId], conn);
+    const s = m.get(personalId) ?? null;
+    snapCache.set(personalId, s);
+    return s;
+  }
+
   // Solo estado PROGRAMADO se toca automáticamente -- ver protección arriba.
   if (objetivo.length) {
     const placeholders = objetivo.map(() => "?").join(",");
@@ -262,15 +277,24 @@ export async function sincronizarViaticosPlan(
         ? existente.montoAsignado
         : sugerido;
 
+    const s = await snapDe(o.personalId);
     await runExecute(
       conn,
-      `INSERT INTO tms_viaticos (empresa_id, plan_id, personal_id, rol, monto_sugerido, monto_asignado)
-       VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO tms_viaticos
+         (empresa_id, plan_id, personal_id, rol, monto_sugerido, monto_asignado,
+          personal_nombre_historico, personal_tipo_historico, personal_origen_historico)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          rol = VALUES(rol),
          monto_sugerido = VALUES(monto_sugerido),
-         monto_asignado = VALUES(monto_asignado)`,
-      [empresaId, planId, o.personalId, o.rol, sugerido, asignado],
+         monto_asignado = VALUES(monto_asignado),
+         personal_nombre_historico = VALUES(personal_nombre_historico),
+         personal_tipo_historico = VALUES(personal_tipo_historico),
+         personal_origen_historico = VALUES(personal_origen_historico)`,
+      [
+        empresaId, planId, o.personalId, o.rol, sugerido, asignado,
+        s?.nombre ?? null, s?.tipo ?? null, (s?.origen || null),
+      ],
     );
   }
 }

@@ -707,10 +707,32 @@ async function asegurarSchemaFlotaInner(): Promise<void> {
       plan_id INT NOT NULL,
       personal_id INT NOT NULL,
       orden TINYINT NOT NULL DEFAULT 1,
+      -- PERSONAL-OPERATIVO-COMPARTIDO-EXTERNO-1: snapshot del auxiliar
+      -- (nombre + tipo propio/compartido/externo + empresa/origen).
+      nombre_historico VARCHAR(200) NULL,
+      tipo_historico VARCHAR(20) NULL,
+      origen_historico VARCHAR(200) NULL,
       UNIQUE KEY uq_tpa (plan_id, personal_id),
       INDEX idx_tpa_plan (plan_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
+  // PERSONAL-OPERATIVO-COMPARTIDO-EXTERNO-1 — columnas nuevas también vía
+  // ensureColumn (idempotente) para bases que ya tenían la tabla. Reflejan
+  // sql/migrate-2026-09-personal-operativo-compartido-externo.sql.
+  await ensureColumn("tms_plan_auxiliares", "nombre_historico", "nombre_historico VARCHAR(200) NULL");
+  await ensureColumn("tms_plan_auxiliares", "tipo_historico", "tipo_historico VARCHAR(20) NULL");
+  await ensureColumn("tms_plan_auxiliares", "origen_historico", "origen_historico VARCHAR(200) NULL");
+  await ensureColumn("tms_personal", "id_empleado", "id_empleado INT NULL AFTER empresa_id");
+  await ensureColumn("tms_personal", "tipo_vinculo", "tipo_vinculo VARCHAR(20) NOT NULL DEFAULT 'propio' AFTER tipo");
+  await ensureColumn("tms_personal", "empresa_origen_id", "empresa_origen_id INT NULL DEFAULT NULL AFTER tipo_vinculo");
+  await ensureColumn("tms_personal", "empresa_origen_texto", "empresa_origen_texto VARCHAR(200) NULL DEFAULT NULL AFTER empresa_origen_id");
+  await ensureColumn("tms_personal", "licencia", "licencia VARCHAR(80) NULL DEFAULT NULL AFTER empresa_origen_texto");
+  await ensureColumn("tms_planes_viaje", "piloto_nombre_historico", "piloto_nombre_historico VARCHAR(200) NULL");
+  await ensureColumn("tms_planes_viaje", "piloto_tipo_historico", "piloto_tipo_historico VARCHAR(20) NULL");
+  await ensureColumn("tms_planes_viaje", "piloto_origen_historico", "piloto_origen_historico VARCHAR(200) NULL");
+  await ensureColumn("tms_viaticos", "personal_nombre_historico", "personal_nombre_historico VARCHAR(200) NULL");
+  await ensureColumn("tms_viaticos", "personal_tipo_historico", "personal_tipo_historico VARCHAR(20) NULL");
+  await ensureColumn("tms_viaticos", "personal_origen_historico", "personal_origen_historico VARCHAR(200) NULL");
 
   // Paradas / lugares de un plan (N puntos con evidencia de producto)
   await execute(`

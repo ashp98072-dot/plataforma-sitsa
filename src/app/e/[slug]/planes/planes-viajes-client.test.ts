@@ -21,7 +21,7 @@ function plan(overrides: Partial<Parameters<typeof resumenCierre>[0]>): Paramete
     pendienteCierre: true, cerradoPor: null, cerradoEn: null, clienteId: null, cliente: "Cliente X",
     rutaCodigo: null, lugarDescargaHistorico: null, referenciaCliente: null, tipoTraslado: null,
     regresoEstimado: null, tarifaComercial: 1500, tarifaId: null, tarifaNombre: null, tarifaMontoSnapshot: null, tarifaMoneda: null, placa: "C-034BXR", unidadTipo: null, unidadCapacidad: null,
-    pilotoId: null, piloto: "Juan Pérez", auxiliares: [], paradas: [], evidencias: 3,
+    pilotoId: null, piloto: "Juan Pérez", pilotoTipo: null, pilotoOrigen: null, auxiliares: [], paradas: [], evidencias: 3,
     horaSalida: "2026-08-27T07:00", horaLlegada: "2026-08-27T18:00", kmSalida: 1000, kmLlegada: 1350,
     kmRecorridos: 350, diasRuta: 1,
     estadoFacturacion: "No aplica", facturaId: null, numeroFactura: null, estadoAdminFactura: null,
