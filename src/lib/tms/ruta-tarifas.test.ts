@@ -9,6 +9,7 @@ import {
   actualizarTarifaRuta,
   cambiarEstadoTarifa,
   crearTarifaRuta,
+  debeLimpiarTarifaPorCambioDeRuta,
   marcarPredeterminada,
   tarifaParaSnapshot,
   type ActorTarifa,
@@ -156,6 +157,35 @@ describe("actualizarTarifaRuta — NUNCA toca tms_planes_viaje (§2/§3: los via
       expect(e.sql).not.toMatch(/tms_planes_viaje/);
     }
     expect(ejecutadas.some((e) => e.sql.includes("UPDATE tms_ruta_tarifas"))).toBe(true);
+  });
+});
+
+describe("debeLimpiarTarifaPorCambioDeRuta — PATCH cambia rutaId sin tarifaId (§2/§3)", () => {
+  const base = {
+    patchTraeTarifaId: false,
+    rutaCambio: true,
+    antesTarifaId: 5 as number | null,
+    tarifaActualSigueEnRutaNueva: false,
+  };
+
+  it("cambió la ruta, no vino tarifaId, y la tarifa actual NO pertenece a la nueva ruta -> LIMPIAR", () => {
+    expect(debeLimpiarTarifaPorCambioDeRuta(base)).toBe(true);
+  });
+
+  it("cambió la ruta pero la tarifa actual SÍ pertenece a la nueva ruta -> conservar (no limpiar)", () => {
+    expect(debeLimpiarTarifaPorCambioDeRuta({ ...base, tarifaActualSigueEnRutaNueva: true })).toBe(false);
+  });
+
+  it("el PATCH trae tarifaId -> esa rama valida/snapshotea aparte, aquí nunca se limpia", () => {
+    expect(debeLimpiarTarifaPorCambioDeRuta({ ...base, patchTraeTarifaId: true })).toBe(false);
+  });
+
+  it("la ruta no cambió -> no se toca el snapshot aunque la tarifa no 'perteneciera'", () => {
+    expect(debeLimpiarTarifaPorCambioDeRuta({ ...base, rutaCambio: false })).toBe(false);
+  });
+
+  it("el viaje no tenía tarifa del catálogo (antesTarifaId null) -> nada que limpiar", () => {
+    expect(debeLimpiarTarifaPorCambioDeRuta({ ...base, antesTarifaId: null })).toBe(false);
   });
 });
 

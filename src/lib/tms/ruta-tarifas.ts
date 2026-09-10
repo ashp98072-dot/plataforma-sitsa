@@ -196,6 +196,34 @@ export async function tarifaParaSnapshot(
   return { id: Number(r.id), nombre: String(r.nombre), monto: Number(r.monto), moneda: String(r.moneda ?? "GTQ") };
 }
 
+/**
+ * RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§2/§3) — PATCH de planes:
+ * decide si hay que LIMPIAR el snapshot de tarifa del viaje (tarifa_id +
+ * tarifa_*_historico) porque el PATCH cambió la ruta y NO envió tarifaId,
+ * y la tarifa que traía el viaje ya no pertenece a la nueva ruta. Función
+ * PURA para poder probar la regla sin la ruta ni la base de datos.
+ *
+ * Nunca debe quedar "ruta X + tarifa_id de ruta Y": si el PATCH trae
+ * tarifaId, esa rama valida y snapshotea por separado (no pasa por aquí).
+ */
+export function debeLimpiarTarifaPorCambioDeRuta(input: {
+  /** d.tarifaId !== undefined (el PATCH trae un id o un null explícito). */
+  patchTraeTarifaId: boolean;
+  /** El PATCH cambió la ruta del viaje respecto a la guardada. */
+  rutaCambio: boolean;
+  /** tarifa_id que YA tenía el viaje (null si no tenía). */
+  antesTarifaId: number | null;
+  /** La tarifa actual sigue existiendo/activa en la NUEVA ruta (misma empresa). */
+  tarifaActualSigueEnRutaNueva: boolean;
+}): boolean {
+  return (
+    !input.patchTraeTarifaId &&
+    input.rutaCambio &&
+    input.antesTarifaId != null &&
+    !input.tarifaActualSigueEnRutaNueva
+  );
+}
+
 /** Verifica pertenencia de la ruta a la empresa dentro de la transacción. */
 async function rutaDeEmpresaTx(conn: PoolConnection, empresaId: number, rutaId: number): Promise<void> {
   const rows = await q(conn, "SELECT id FROM tms_cliente_rutas WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE", [rutaId, empresaId]);

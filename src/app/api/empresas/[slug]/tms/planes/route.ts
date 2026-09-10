@@ -20,7 +20,7 @@ import {
 } from "@/lib/tms/paradas";
 import { obtenerVehiculoAccesible } from "@/lib/flota/acceso";
 import { vehiculoPorPlaca } from "@/lib/flota/pilotos";
-import { tarifaParaSnapshot } from "@/lib/tms/ruta-tarifas";
+import { debeLimpiarTarifaPorCambioDeRuta, tarifaParaSnapshot } from "@/lib/tms/ruta-tarifas";
 import { listarDisponibilidadPersonal } from "@/lib/operaciones/disponibilidad-personal";
 import { ahoraLocal, hoyLocal, toIsoDate } from "@/lib/rrhh/dates";
 import { listarViaticosRechazadosDelPlan, personalRecienAsignadoDelPlan, sincronizarViaticosPlan } from "@/lib/tms/viaticos";
@@ -1297,12 +1297,16 @@ export async function PATCH(req: Request, ctx: Ctx) {
     tarifaId: plan[0].tarifa_id != null ? Number(plan[0].tarifa_id) : null,
   };
 
-  // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§2/§5) — re-snapshot de
-  // la tarifa si el PATCH cambia `tarifaId`. La ruta efectiva es la que
-  // trae el PATCH o, si no, la que ya tiene el viaje. `tarifaId: null`
+  // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§2/§5) — consistencia
+  // tarifa↔ruta del viaje. `d.rutaId` (zod) es undefined o un id positivo,
+  // nunca null; `antes.rutaId`/`antes.tarifaId` pueden ser null.
+  const rutaEfectivaPatch = d.rutaId ?? antes.rutaId ?? null;
+  const rutaCambio = d.rutaId !== undefined && d.rutaId !== antes.rutaId;
+
+  // Caso 1 — el PATCH trae `tarifaId`: se valida contra la ruta EFECTIVA
+  // (la nueva si cambió) + empresa y se snapshotea. `tarifaId: null`
   // limpia el snapshot. Un id que no pertenezca a esa ruta/empresa o que
   // no esté activo => 400 (nunca se guarda una tarifa ajena).
-  const rutaEfectivaPatch = d.rutaId ?? antes.rutaId ?? null;
   const snapshotTarifaPatch =
     d.tarifaId != null && rutaEfectivaPatch != null
       ? await tarifaParaSnapshot(empresaId, rutaEfectivaPatch, d.tarifaId)
@@ -1313,6 +1317,31 @@ export async function PATCH(req: Request, ctx: Ctx) {
       { status: 400 },
     );
   }
+
+  // Caso 2 — el PATCH cambia `rutaId` pero NO trae `tarifaId`: NUNCA
+  // conservar en silencio una tarifa de la ruta anterior. Se revalida la
+  // tarifa ACTUAL del viaje contra la nueva ruta; si ya no pertenece, se
+  // limpian tarifa_id + los 3 snapshots históricos (regla §2/§3 del
+  // ticket). `tarifa_comercial` se conserva como monto manual/override —
+  // ver el flag de abajo — para no perder el valor económico del viaje.
+  let limpiarTarifaPorCambioRuta = false;
+  if (d.tarifaId === undefined && rutaCambio && antes.tarifaId != null) {
+    const sigueEnLaRuta =
+      rutaEfectivaPatch != null
+        ? await tarifaParaSnapshot(empresaId, rutaEfectivaPatch, antes.tarifaId)
+        : null;
+    limpiarTarifaPorCambioRuta = debeLimpiarTarifaPorCambioDeRuta({
+      patchTraeTarifaId: d.tarifaId !== undefined,
+      rutaCambio,
+      antesTarifaId: antes.tarifaId,
+      tarifaActualSigueEnRutaNueva: sigueEnLaRuta != null,
+    });
+  }
+  // §2/§3 — se escribe el bloque de snapshot de tarifa si: el PATCH lo
+  // trae explícito (id o null), o hay que limpiarlo por cambio de ruta.
+  // En ambos casos de "limpiar" el valor efectivo es null (snapshotTarifa
+  // Patch ya es null salvo cuando d.tarifaId trajo un id válido).
+  const tarifaSnapshotTocado = d.tarifaId !== undefined || limpiarTarifaPorCambioRuta;
 
   // Auxiliares y paradas actuales del plan (antes de cualquier cambio) —
   // reutiliza los mismos helpers que ya usa GET, sin duplicar SQL. Sirven
@@ -2065,15 +2094,19 @@ export async function PATCH(req: Request, ctx: Ctx) {
         // mandar monto.
         d.tarifaComercial !== undefined || snapshotTarifaPatch != null,
         d.tarifaComercial !== undefined ? (d.tarifaComercial ?? null) : (snapshotTarifaPatch?.monto ?? null),
-        // Snapshot de la tarifa: se toca solo si el PATCH trae tarifaId
-        // (positivo = nueva tarifa; null = quitar la tarifa del viaje).
-        d.tarifaId !== undefined,
+        // Snapshot de la tarifa: se toca si el PATCH trae tarifaId
+        // (positivo = nueva tarifa; null = quitar la tarifa del viaje) O
+        // si cambió la ruta y la tarifa actual ya no pertenece a la nueva
+        // (limpiarTarifaPorCambioRuta) — nunca queda ruta X + tarifa de
+        // ruta Y. snapshotTarifaPatch es null salvo cuando d.tarifaId
+        // trajo un id válido, así que el "limpiar" escribe null.
+        tarifaSnapshotTocado,
         snapshotTarifaPatch?.id ?? null,
-        d.tarifaId !== undefined,
+        tarifaSnapshotTocado,
         snapshotTarifaPatch?.nombre ?? null,
-        d.tarifaId !== undefined,
+        tarifaSnapshotTocado,
         snapshotTarifaPatch?.monto ?? null,
-        d.tarifaId !== undefined,
+        tarifaSnapshotTocado,
         snapshotTarifaPatch?.moneda ?? null,
         d.costoOperativoReferencia !== undefined,
         d.costoOperativoReferencia ?? null,
@@ -2254,6 +2287,13 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // resumen genérico existente, sin ampliar más de lo pedido.
   if (d.tarifaComercial !== undefined && d.tarifaComercial !== antes.tarifaComercial) {
     cambios.push(`tarifa Q${antes.tarifaComercial ?? "—"} → Q${d.tarifaComercial ?? "—"}`);
+  }
+  // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§2/§3) — deja rastro de
+  // por qué el viaje quedó sin tarifa del catálogo tras cambiar de ruta.
+  if (limpiarTarifaPorCambioRuta) {
+    cambios.push("tarifa del catálogo desvinculada (no pertenece a la nueva ruta; monto conservado como override)");
+  } else if (d.tarifaId !== undefined && d.tarifaId !== antes.tarifaId) {
+    cambios.push(`tarifa del catálogo ${antes.tarifaId ?? "—"} → ${d.tarifaId ?? "—"}`);
   }
   if (d.costoOperativoReferencia !== undefined && d.costoOperativoReferencia !== antes.costoOperativoReferencia) {
     cambios.push(`costo operativo Q${antes.costoOperativoReferencia ?? "—"} → Q${d.costoOperativoReferencia ?? "—"}`);
