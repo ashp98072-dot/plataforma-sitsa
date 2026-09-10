@@ -494,7 +494,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   // vista inicial de Programación abre en "Mañana", no "Hoy". Botones Hoy/
   // Mañana/Semana siguen disponibles para cambiarlo.
   const [rango, setRango] = useState<Rango>("manana");
-  const [filtroRapido, setFiltroRapido] = useState<FiltroRapido>("todos");
+  const [filtroRapido, setFiltroRapido] = useState<FiltroRapido>("Programado");
   const [fPiloto, setFPiloto] = useState("");
   const [fUnidad, setFUnidad] = useState("");
   const [fCliente, setFCliente] = useState("");
