@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  accionesViaje,
   badgeCobro,
   badgeFacturacion,
   esExpedienteHistorico,
@@ -165,5 +166,51 @@ describe("esExpedienteHistorico — plan Cerrado/Cancelado = expediente, no 'edi
     for (const e of ["Programado", "Cargado", "En ruta", "Descargado"]) {
       expect(esExpedienteHistorico(e)).toBe(false);
     }
+  });
+});
+
+/**
+ * OPERACIONES-UX-PLANES-REPORTES-1 — el mismo componente sirve a
+ * /e/[slug]/planes (modo "operativo") y /e/[slug]/reportes/viajes
+ * (modo "reporte", solo consulta). `accionesViaje` es la función pura que
+ * decide qué acciones expone cada fila.
+ */
+describe("accionesViaje — acciones por fila según el modo", () => {
+  it("modo 'reporte' NUNCA expone acciones que modifican el viaje (cierre, cierre manual, ir a Programación)", () => {
+    const pendiente = accionesViaje("reporte", { estado: "En ruta", pendienteCierre: true }, true);
+    expect(pendiente).toEqual({ verDetalle: true, pdf: true, irProgramacion: false, cerrar: false, cierreManual: false });
+
+    const enCurso = accionesViaje("reporte", { estado: "Programado", pendienteCierre: false }, true);
+    expect(enCurso.cerrar).toBe(false);
+    expect(enCurso.cierreManual).toBe(false);
+    expect(enCurso.irProgramacion).toBe(false);
+
+    // Consulta siempre disponible en ambos modos.
+    expect(pendiente.verDetalle).toBe(true);
+    expect(pendiente.pdf).toBe(true);
+  });
+
+  it("modo 'operativo': un viaje pendiente de cierre con permiso muestra 'Cerrar viaje'", () => {
+    const a = accionesViaje("operativo", { estado: "En ruta", pendienteCierre: true }, true);
+    expect(a.cerrar).toBe(true);
+  });
+
+  it("modo 'operativo' sin permiso viajes_cerrar:editar: no muestra cierre ni cierre manual", () => {
+    const a = accionesViaje("operativo", { estado: "En ruta", pendienteCierre: true }, false);
+    expect(a.cerrar).toBe(false);
+    expect(a.cierreManual).toBe(false);
+  });
+
+  it("modo 'operativo': cierre manual disponible desde Programado/Cargado/En ruta (mismo criterio puro que el backend)", () => {
+    for (const estado of ["Programado", "Cargado", "En ruta"]) {
+      expect(accionesViaje("operativo", { estado, pendienteCierre: false }, true).cierreManual).toBe(true);
+    }
+    expect(accionesViaje("operativo", { estado: "Cerrado", pendienteCierre: false }, true).cierreManual).toBe(false);
+  });
+
+  it("modo 'operativo': un expediente histórico (Cerrado/Cancelado) no ofrece el salto a Programación", () => {
+    expect(accionesViaje("operativo", { estado: "Cerrado", pendienteCierre: false }, true).irProgramacion).toBe(false);
+    expect(accionesViaje("operativo", { estado: "Cancelado", pendienteCierre: false }, true).irProgramacion).toBe(false);
+    expect(accionesViaje("operativo", { estado: "En ruta", pendienteCierre: false }, true).irProgramacion).toBe(true);
   });
 });
