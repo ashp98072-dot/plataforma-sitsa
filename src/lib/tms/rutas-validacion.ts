@@ -52,6 +52,8 @@ export const crearRutaSchema = z.object({
   // antiguas que aún lo envíen (nunca exigido); crearRuta (cliente-rutas.ts)
   // ya no lo lee ni lo persiste. La UI nueva (rutas/page.tsx) no lo envía.
   costoOperativo: z.number().min(0).max(9999999999.99).nullable().optional(),
+  // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§4) — flota_vehiculos.id de la misma empresa (validado en cliente-rutas.ts); null lo quita.
+  unidadRecurrenteId: z.number().int().positive("unidad no válida.").nullable().optional(),
   contactoClienteId: z.number().int().positive("contacto no válido.").optional(),
   observaciones: z.string().max(300, "máximo 300 caracteres.").optional(),
   paradas: z.array(paradaSchema).max(20, "máximo 20 paradas.").optional(),
@@ -69,6 +71,7 @@ export const actualizarRutaSchema = z.object({
   tarifaVigenteDesde: z.string().regex(FECHA_REGEX, "fecha inválida (usa AAAA-MM-DD).").optional(),
   tarifaMotivo: z.string().max(300, "máximo 300 caracteres.").optional(),
   costoOperativo: z.number().min(0).max(9999999999.99).nullable().optional(),
+  unidadRecurrenteId: z.number().int().positive("unidad no válida.").nullable().optional(),
   contactoClienteId: z.number().int().positive("contacto no válido.").nullable().optional(),
   observaciones: z.string().max(300, "máximo 300 caracteres.").nullable().optional(),
   paradas: z.array(paradaSchema).max(20, "máximo 20 paradas.").optional(),
@@ -82,6 +85,7 @@ const ETIQUETAS: Record<string, string> = {
   destinoDescripcion: "Destino", horaHabitual: "Hora habitual",
   tarifaReferencia: "Tarifa de referencia", tarifaVigenteDesde: "Vigente desde",
   tarifaMotivo: "Motivo del cambio de tarifa", costoOperativo: "Costo operativo",
+  unidadRecurrenteId: "Unidad recurrente",
   contactoClienteId: "Contacto del cliente", observaciones: "Observaciones", activo: "Estado",
   paradas: "Paradas",
 };

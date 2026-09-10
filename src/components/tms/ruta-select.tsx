@@ -21,6 +21,11 @@ export type RutaOpt = {
   destinoDescripcion: string | null;
   horaHabitual: string | null;
   tarifaReferencia: number | null;
+  /** RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 — opciones de tarifa activas del catálogo (predeterminada primero) + unidad habitual. */
+  tarifasActivas?: { id: number; nombre: string; monto: number; moneda: string; predeterminada: boolean }[];
+  tarifaPredeterminadaId?: number | null;
+  unidadRecurrenteId?: number | null;
+  unidadRecurrentePlaca?: string | null;
   contactoClienteId: number | null;
   contactoNombre: string | null;
   contactoCargo: string | null;

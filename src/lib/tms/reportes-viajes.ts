@@ -48,6 +48,17 @@ export type PlanReporte = {
   tipoTraslado: string | null;
   regresoEstimado: string | null;
   tarifaComercial: number | null;
+  /**
+   * RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§3) — snapshot de la
+   * tarifa del catálogo usada en el viaje. Los reportes de INGRESOS siguen
+   * sumando `tarifaComercial` (ya congelado por viaje); estos campos son
+   * para SABER qué tarifa se usó (nombre/monto/moneda), sin depender de la
+   * tarifa maestra vigente hoy.
+   */
+  tarifaId: number | null;
+  tarifaNombre: string | null;
+  tarifaMontoSnapshot: number | null;
+  tarifaMoneda: string | null;
   placa: string | null;
   unidadTipo: string | null;
   unidadCapacidad: string | null;
@@ -604,6 +615,7 @@ export async function obtenerReporteViajes(
             p.lugar_descarga_historico, p.referencia_cliente, p.tipo_traslado,
             DATE_FORMAT(p.regreso_estimado, '%Y-%m-%dT%H:%i') AS regreso_estimado,
             p.tarifa_comercial,
+            p.tarifa_id, p.tarifa_nombre_historico, p.tarifa_monto_historico, p.tarifa_moneda_historico,
             u.placa, u.tipo AS unidad_tipo, ve.capacidad AS unidad_capacidad,
             p.piloto_id, pil.nombre AS piloto,
             COALESCE(ev.cnt, 0) AS evidencias,
@@ -667,6 +679,10 @@ export async function obtenerReporteViajes(
       tipoTraslado: r.tipo_traslado ? String(r.tipo_traslado) : null,
       regresoEstimado: r.regreso_estimado ? String(r.regreso_estimado) : null,
       tarifaComercial: r.tarifa_comercial != null ? Number(r.tarifa_comercial) : null,
+      tarifaId: r.tarifa_id != null ? Number(r.tarifa_id) : null,
+      tarifaNombre: r.tarifa_nombre_historico != null ? String(r.tarifa_nombre_historico) : null,
+      tarifaMontoSnapshot: r.tarifa_monto_historico != null ? Number(r.tarifa_monto_historico) : null,
+      tarifaMoneda: r.tarifa_moneda_historico != null ? String(r.tarifa_moneda_historico) : null,
       placa: r.placa ? String(r.placa) : null,
       unidadTipo: r.unidad_tipo ? String(r.unidad_tipo) : null,
       unidadCapacidad: r.unidad_capacidad ? String(r.unidad_capacidad) : null,

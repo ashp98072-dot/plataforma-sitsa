@@ -80,6 +80,11 @@ type PlanReporte = {
   tipoTraslado: string | null;
   regresoEstimado: string | null;
   tarifaComercial: number | null;
+  /** RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§3) — tarifa del catálogo usada en el viaje (snapshot). */
+  tarifaId: number | null;
+  tarifaNombre: string | null;
+  tarifaMontoSnapshot: number | null;
+  tarifaMoneda: string | null;
   placa: string | null;
   unidadTipo: string | null;
   unidadCapacidad: string | null;
@@ -577,7 +582,7 @@ export default function PlanesViajesClient() {
   const columnas = [
     "Código", "Fecha", "Cliente", "Ruta", "Placa", "Piloto", "Auxiliares",
     "H. salida", "H. llegada", "Km salida", "Km llegada", "Km rec.",
-    "Evid.", "Tarifa", "Estado",
+    "Evid.", "Tarifa usada", "Tarifa", "Estado",
     // Fase D — Facturación (FACT-1). "Tarifa" (arriba) sigue siendo el
     // valor comercial PROGRAMADO — "Monto fact." es el snapshot real
     // usado en la factura; no siempre coinciden (ver th title).
@@ -756,6 +761,7 @@ export default function PlanesViajesClient() {
                     <td className="px-2 py-1.5 text-xs">{p.kmLlegada ?? "—"}</td>
                     <td className="px-2 py-1.5 text-xs">{p.kmRecorridos ?? "—"}</td>
                     <td className="px-2 py-1.5 text-xs">{p.evidencias}</td>
+                    <td className="px-2 py-1.5 text-xs" title={p.tarifaMontoSnapshot != null ? `Monto de la tarifa al armar el viaje: ${moneda(p.tarifaMontoSnapshot)}` : undefined}>{p.tarifaNombre ?? "—"}</td>
                     <td className="whitespace-nowrap px-2 py-1.5 text-xs">{moneda(p.tarifaComercial)}</td>
                     <td className="px-2 py-1.5 text-xs">
                       <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium text-white ${badge.clase}`}>{badge.texto}</span>
@@ -816,7 +822,13 @@ export default function PlanesViajesClient() {
                               <li>Ruta: {p.rutaCodigo ?? "—"}</li>
                               <li>Referencia: {p.referenciaCliente ?? "—"}</li>
                               <li>Tipo traslado: {p.tipoTraslado ?? "—"}</li>
-                              <li>Tarifa comercial: {moneda(p.tarifaComercial)}</li>
+                              <li>
+                                Tarifa usada: {p.tarifaNombre ?? "—"}
+                                {p.tarifaMontoSnapshot != null
+                                  ? ` · ${p.tarifaMoneda ?? "GTQ"} ${p.tarifaMontoSnapshot.toLocaleString("es-GT", { minimumFractionDigits: 2 })} (snapshot)`
+                                  : ""}
+                              </li>
+                              <li>Monto del viaje (ingresos): {moneda(p.tarifaComercial)}</li>
                               <li>Estado: {p.estado}</li>
                             </ul>
                             <p className="mt-3 text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">B. Personal / unidad</p>

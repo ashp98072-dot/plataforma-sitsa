@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { ClienteSearch } from "@/components/tms/cliente-search";
 import { CatalogoSearchSelect, type CatalogoSearchOption } from "@/components/tms/catalogo-search-select";
+import { RutaTarifasPanel } from "@/components/tms/ruta-tarifas-panel";
 
 type ClienteOpt = {
   id: number;
@@ -60,6 +61,10 @@ type ClienteRuta = {
   tarifaVigenteDesde: string | null;
   tarifaUltimoCambioEn: string | null;
   tarifaModificadoPor: string | null;
+  // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1
+  unidadRecurrenteId: number | null;
+  unidadRecurrentePlaca: string | null;
+  tarifasActivas?: { id: number; nombre: string; monto: number; moneda: string; predeterminada: boolean }[];
   contactoClienteId: number | null;
   contactoNombre: string | null;
   contactoCargo: string | null;
@@ -107,6 +112,9 @@ const FORM_VACIO = {
   // ruta ya tenía una tarifa anterior (ver tarifaAnteriorExiste).
   tarifaVigenteDesde: hoyIso(),
   tarifaMotivo: "",
+  // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§4) — unidad recurrente
+  // (flota_vehiculos.id como string; "" = sin unidad recurrente).
+  unidadRecurrenteId: "",
   contactoClienteId: null as number | null,
   observaciones: "",
 };
@@ -130,6 +138,9 @@ export default function RutasPage() {
 
   const [clientes, setClientes] = useState<ClienteOpt[]>([]);
   const [personal, setPersonal] = useState<EmpleadoOpt[]>([]);
+  // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§4) — flota de esta
+  // empresa para el selector de "unidad recurrente" de la ruta.
+  const [flotaVehiculos, setFlotaVehiculos] = useState<{ id: number; placa: string; marca: string | null; modelo: string | null }[]>([]);
   const [rutas, setRutas] = useState<ClienteRuta[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -161,6 +172,9 @@ export default function RutasPage() {
   const [historialRutaId, setHistorialRutaId] = useState<number | null>(null);
   const [historial, setHistorial] = useState<TarifaHistorialEntry[]>([]);
   const [historialCargando, setHistorialCargando] = useState(false);
+  // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§1) — id de la ruta con
+  // el panel "Tarifas de la ruta" abierto (null = cerrado).
+  const [tarifasRutaId, setTarifasRutaId] = useState<number | null>(null);
   // §7/§8 — "+ Agregar contacto" inline, con confirmación de posible duplicado.
   const [mostrarNuevoContacto, setMostrarNuevoContacto] = useState(false);
   const [nuevoContacto, setNuevoContacto] = useState<NuevoContactoForm>({ ...NUEVO_CONTACTO_VACIO });
@@ -230,7 +244,10 @@ export default function RutasPage() {
       resClientes.json().catch(() => ({})),
       resPersonal.json().catch(() => ({})),
     ]);
-    if (resClientes.ok) setClientes((dataClientes.clientes ?? []) as ClienteOpt[]);
+    if (resClientes.ok) {
+      setClientes((dataClientes.clientes ?? []) as ClienteOpt[]);
+      setFlotaVehiculos((dataClientes.flotaVehiculos ?? []) as typeof flotaVehiculos);
+    }
     if (resPersonal.ok) setPersonal((dataPersonal.personal ?? []) as EmpleadoOpt[]);
   }, [slug]);
 
@@ -318,6 +335,7 @@ export default function RutasPage() {
       tarifaReferencia: r.tarifaReferencia != null ? String(r.tarifaReferencia) : "",
       tarifaVigenteDesde: hoyIso(),
       tarifaMotivo: "",
+      unidadRecurrenteId: r.unidadRecurrenteId != null ? String(r.unidadRecurrenteId) : "",
       contactoClienteId: r.contactoClienteId,
       observaciones: r.observaciones ?? "",
     });
@@ -384,6 +402,10 @@ export default function RutasPage() {
         // tarifa realmente viene/cambió (ver actualizarRuta/crearRuta).
         tarifaVigenteDesde: form.tarifaVigenteDesde || undefined,
         tarifaMotivo: form.tarifaMotivo.trim() || undefined,
+        // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§4) — "" limpia la
+        // unidad recurrente (null); un id la fija (validado por empresa en
+        // el backend).
+        unidadRecurrenteId: form.unidadRecurrenteId === "" ? null : Number(form.unidadRecurrenteId),
         contactoClienteId: form.contactoClienteId ?? undefined,
         observaciones: form.observaciones.trim() || undefined,
         paradas,
@@ -722,8 +744,33 @@ export default function RutasPage() {
                 value={form.tarifaReferencia}
                 onChange={(e) => setForm((f) => ({ ...f, tarifaReferencia: e.target.value }))}
               />
-              <span className="mt-0.5 block text-[10px]">Se sugerirá al crear el viaje; podrá ajustarse.</span>
+              <span className="mt-0.5 block text-[10px]">
+                Valor rápido de compatibilidad. Cuando la ruta tiene varias tarifas, se sincroniza con la <strong>tarifa predeterminada</strong> (ver &quot;Tarifas de la ruta&quot; en cada fila del listado).
+              </span>
               {mensajeCampo("tarifaReferencia")}
+            </label>
+            {/* RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§4) — unidad
+                habitual de la ruta (flota de esta empresa). Opcional.
+                Programación la precarga; el usuario puede cambiarla por
+                viaje sin tocar esta configuración. */}
+            <label className="text-xs text-[var(--muted)]">
+              Unidad recurrente (opcional)
+              <select
+                data-campo="unidadRecurrenteId"
+                className={`${campoCls("unidadRecurrenteId")} mt-0.5 w-full`}
+                value={form.unidadRecurrenteId}
+                onChange={(e) => setForm((f) => ({ ...f, unidadRecurrenteId: e.target.value }))}
+              >
+                <option value="">— Sin unidad recurrente —</option>
+                {flotaVehiculos.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.placa}
+                    {v.marca || v.modelo ? ` · ${[v.marca, v.modelo].filter(Boolean).join(" ")}` : ""}
+                  </option>
+                ))}
+              </select>
+              <span className="mt-0.5 block text-[10px]">Se precarga al elegir esta ruta en Programación.</span>
+              {mensajeCampo("unidadRecurrenteId")}
             </label>
             {/*
               RUTAS-TARIFARIO-HISTORIAL-1 (§1/§2/§5 del ticket) — cada
@@ -1012,6 +1059,14 @@ export default function RutasPage() {
                       >
                         {r.activo ? "Desactivar" : "Activar"}
                       </button>
+                      {/* RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§1) — opciones de tarifa (varias activas a la vez). */}
+                      <button
+                        type="button"
+                        className="text-slate-100 hover:underline"
+                        onClick={() => setTarifasRutaId((id) => (id === r.id ? null : r.id))}
+                      >
+                        {tarifasRutaId === r.id ? "Ocultar tarifas" : "Tarifas de la ruta"}
+                      </button>
                       {/* RUTAS-TARIFARIO-HISTORIAL-1 (§4 del ticket) — "Historial de tarifas" por ruta. */}
                       <button type="button" className="text-slate-300 hover:underline" onClick={() => void abrirHistorial(r.id)}>
                         {historialRutaId === r.id ? "Ocultar historial" : "Historial de tarifas"}
@@ -1019,6 +1074,18 @@ export default function RutasPage() {
                     </div>
                   </td>
                 </tr>
+                {tarifasRutaId === r.id ? (
+                  <tr key={`${r.id}-tarifas`} className="border-t border-[var(--border)] bg-[var(--input)]/40">
+                    <td colSpan={13} className="px-3 py-3">
+                      <RutaTarifasPanel
+                        slug={slug}
+                        rutaId={r.id}
+                        rutaCodigo={r.codigo}
+                        onCambio={() => void cargarRutas()}
+                      />
+                    </td>
+                  </tr>
+                ) : null}
                 {historialRutaId === r.id ? (
                   <tr key={`${r.id}-historial`} className="border-t border-[var(--border)] bg-[var(--input)]/40">
                     <td colSpan={12} className="px-3 py-3">

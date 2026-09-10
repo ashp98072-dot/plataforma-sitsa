@@ -74,7 +74,7 @@ describe("GET /tms/reportes/viajes/export — 14) recibe y aplica los MISMOS fil
   it("20) el PDF incluye Facturación/No. factura/Monto fact./Cobro sin romper el formato compacto existente", async () => {
     await GET(new Request("http://localhost/x?formato=pdf"), ctx);
     const headers = vi.mocked(tablaAPdf).mock.calls[0][0].headers;
-    expect(headers).toEqual(["Fecha", "Código", "Cliente", "Unidad", "Piloto", "Km", "Evidencias", "Tarifa", "Estado", "Facturación", "No. factura", "Monto fact.", "Cobro"]);
+    expect(headers).toEqual(["Fecha", "Código", "Cliente", "Ruta", "Unidad", "Piloto", "Km", "Evidencias", "Tarifa usada", "Monto", "Estado", "Facturación", "No. factura", "Monto fact.", "Cobro"]);
   });
 
   it("formato=pdf genera PDF reutilizando tablaAPdf", async () => {

@@ -38,7 +38,7 @@ export async function GET(_req: Request, ctx: Ctx) {
     /* TMS sigue aunque clientes aún no esté migrado */
   }
 
-  const [shared, tmsClientes, lugares, unidades, personal] = await Promise.all([
+  const [shared, tmsClientes, lugares, unidades, personal, flotaVehiculos] = await Promise.all([
     listarClientes(eid).catch(() => []),
     query<RowDataPacket[]>(
       "SELECT id, nombre, nit, telefono, estado FROM tms_clientes WHERE empresa_id = ? ORDER BY nombre",
@@ -56,6 +56,12 @@ export async function GET(_req: Request, ctx: Ctx) {
       "SELECT id, id_empleado, codigo, nombre, tipo, telefono, estado FROM tms_personal WHERE empresa_id = ? ORDER BY nombre",
       [eid],
     ),
+    // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§4) — flota de ESTA
+    // empresa para el selector de "unidad recurrente" de las rutas.
+    query<RowDataPacket[]>(
+      "SELECT id, placa, marca, modelo FROM flota_vehiculos WHERE empresa_id = ? AND activo = 1 ORDER BY placa",
+      [eid],
+    ).catch(() => [] as RowDataPacket[]),
   ]);
 
   // Preferir datos del módulo Clientes cuando hay vínculo TMS.
@@ -81,7 +87,18 @@ export async function GET(_req: Request, ctx: Ctx) {
   });
 
   return NextResponse.json(
-    { clientes, lugares, unidades, personal },
+    {
+      clientes,
+      lugares,
+      unidades,
+      personal,
+      flotaVehiculos: flotaVehiculos.map((v) => ({
+        id: Number(v.id),
+        placa: String(v.placa),
+        marca: v.marca != null ? String(v.marca) : null,
+        modelo: v.modelo != null ? String(v.modelo) : null,
+      })),
+    },
     { headers: { "Cache-Control": "private, no-store" } },
   );
 }

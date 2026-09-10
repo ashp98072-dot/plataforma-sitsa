@@ -1,6 +1,7 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import type { PoolConnection } from "mysql2/promise";
 import { getPool, query, type SqlParams } from "@/lib/db";
+import { tarifasActivasDeRuta, tarifasActivasDeVariasRutas } from "@/lib/tms/ruta-tarifas";
 import { hoyLocal } from "@/lib/rrhh/dates";
 
 async function queryConn<T extends RowDataPacket[]>(conn: PoolConnection, sql: string, params: SqlParams = []): Promise<T> {
@@ -75,6 +76,17 @@ async function validarUbicacionDeEmpresaTx(conn: PoolConnection, empresaId: numb
   if (ubicacionId == null) return;
   const rows = await queryConn<RowDataPacket[]>(conn, "SELECT id FROM tms_cliente_ubicaciones WHERE id = ? AND empresa_id = ? LIMIT 1", [ubicacionId, empresaId]);
   if (!rows[0]) throw new Error("La ubicación de carga indicada no pertenece a esta empresa.");
+}
+
+/**
+ * RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§5) — la unidad recurrente
+ * DEBE ser un vehículo de flota_vehiculos de ESTA empresa. `null`/`undefined`
+ * la quita sin validar (se permite dejar la ruta sin unidad recurrente).
+ */
+async function validarUnidadRecurrenteTx(conn: PoolConnection, empresaId: number, vehiculoId: number | null | undefined): Promise<void> {
+  if (vehiculoId == null) return;
+  const rows = await queryConn<RowDataPacket[]>(conn, "SELECT id FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1", [vehiculoId, empresaId]);
+  if (!rows[0]) throw new Error("La unidad recurrente indicada no pertenece a la flota de esta empresa.");
 }
 
 /**
@@ -239,8 +251,14 @@ export type ClienteRuta = {
   activo: boolean;
   creadoEn: string;
   actualizadoEn: string;
+  /** RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§4) — unidad habitual de la ruta (flota_vehiculos, misma empresa). Opcional; Programación la precarga como sugerencia. */
+  unidadRecurrenteId: number | null;
+  unidadRecurrentePlaca: string | null;
   paradas: RutaParada[];
   personalPredeterminado: RutaPersonal[];
+  /** RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§1/§2) — opciones de tarifa ACTIVAS del catálogo, solo en obtenerRuta (detalle). La predeterminada va primero. `undefined` en listarRutas (no se cargan ahí por costo). */
+  tarifasActivas?: { id: number; nombre: string; monto: number; moneda: string; predeterminada: boolean }[];
+  tarifaPredeterminadaId?: number | null;
 };
 
 function mapRuta(r: RowDataPacket): Omit<ClienteRuta, "paradas"> {
@@ -263,6 +281,8 @@ function mapRuta(r: RowDataPacket): Omit<ClienteRuta, "paradas"> {
     activo: Number(r.activo ?? 1) === 1,
     creadoEn: String(r.creado_en ?? ""),
     actualizadoEn: String(r.actualizado_en ?? ""),
+    unidadRecurrenteId: r.unidad_recurrente_id != null ? Number(r.unidad_recurrente_id) : null,
+    unidadRecurrentePlaca: r.unidad_recurrente_placa != null ? String(r.unidad_recurrente_placa) : null,
     tarifaVigenteDesde: null,
     tarifaUltimoCambioEn: null,
     tarifaModificadoPor: null,
@@ -274,12 +294,14 @@ const SELECT_RUTA = `
   SELECT r.id, r.cliente_id, c.nombre AS cliente_nombre, r.codigo, r.nombre,
          r.ubicacion_carga_id, r.lugar_carga_texto, r.destino_descripcion, r.hora_habitual,
          r.tarifa_referencia,
+         r.unidad_recurrente_id, fvr.placa AS unidad_recurrente_placa,
          r.contacto_cliente_id, ct.nombre AS contacto_nombre, ct.cargo AS contacto_cargo,
          ct.telefono AS contacto_telefono,
          r.observaciones, r.activo, r.creado_en, r.actualizado_en
   FROM tms_cliente_rutas r
   INNER JOIN tms_clientes c ON c.id = r.cliente_id
   LEFT JOIN tms_cliente_contactos ct ON ct.id = r.contacto_cliente_id
+  LEFT JOIN flota_vehiculos fvr ON fvr.id = r.unidad_recurrente_id AND fvr.empresa_id = r.empresa_id
 `;
 
 async function paradasDeRutas(rutaIds: number[]): Promise<Map<number, RutaParada[]>> {
@@ -397,11 +419,13 @@ export async function listarRutas(
   );
   const base = rows.map(mapRuta);
   const ids = base.map((r) => r.id);
-  const [paradasMap, personalMap, tarifaMap] = await Promise.all([
+  const [paradasMap, personalMap, tarifaMap, opcionesMap] = await Promise.all([
     paradasDeRutas(ids), personalDeRutas(empresaId, ids), ultimaTarifaDeRutas(empresaId, ids),
+    tarifasActivasDeVariasRutas(empresaId, ids),
   ]);
   return base.map((r) => {
     const ultima = tarifaMap.get(r.id);
+    const opciones = opcionesMap.get(r.id);
     return {
       ...r,
       paradas: paradasMap.get(r.id) ?? [],
@@ -409,6 +433,8 @@ export async function listarRutas(
       tarifaVigenteDesde: ultima?.vigenteDesde ?? null,
       tarifaUltimoCambioEn: ultima?.creadoEn ?? null,
       tarifaModificadoPor: ultima?.usuarioNombre ?? null,
+      tarifasActivas: opciones?.tarifas ?? [],
+      tarifaPredeterminadaId: opciones?.predeterminadaId ?? null,
     };
   });
 }
@@ -420,8 +446,9 @@ export async function obtenerRuta(empresaId: number, id: number): Promise<Client
   ]);
   if (!rows[0]) return null;
   const base = mapRuta(rows[0]);
-  const [paradasMap, personalMap, tarifaMap] = await Promise.all([
+  const [paradasMap, personalMap, tarifaMap, opcionesTarifa] = await Promise.all([
     paradasDeRutas([base.id]), personalDeRutas(empresaId, [base.id]), ultimaTarifaDeRutas(empresaId, [base.id]),
+    tarifasActivasDeRuta(empresaId, base.id),
   ]);
   const ultima = tarifaMap.get(base.id);
   return {
@@ -431,6 +458,8 @@ export async function obtenerRuta(empresaId: number, id: number): Promise<Client
     tarifaVigenteDesde: ultima?.vigenteDesde ?? null,
     tarifaUltimoCambioEn: ultima?.creadoEn ?? null,
     tarifaModificadoPor: ultima?.usuarioNombre ?? null,
+    tarifasActivas: opcionesTarifa.tarifas,
+    tarifaPredeterminadaId: opcionesTarifa.predeterminadaId,
   };
 }
 
@@ -446,6 +475,8 @@ export type ClienteRutaInput = {
   /** RUTAS-TARIFARIO-HISTORIAL-1 (§5 del ticket) — SOLO metadatos del cambio de tarifa; nunca se guardan como columna de tms_cliente_rutas, alimentan tms_cliente_ruta_tarifas (registrarCambioTarifaTx). Ignorados si tarifaReferencia no viene o no cambió. */
   tarifaVigenteDesde?: string | null;
   tarifaMotivo?: string | null;
+  /** RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§4/§5) — flota_vehiculos.id de la MISMA empresa; null la quita. Validado antes de escribir. */
+  unidadRecurrenteId?: number | null;
   contactoClienteId?: number | null;
   observaciones?: string | null;
   paradas?: RutaParadaInput[];
@@ -572,6 +603,7 @@ export async function crearRuta(
     await validarClienteDeEmpresaTx(conn, empresaId, input.clienteId);
     await validarContactoDeClienteTx(conn, empresaId, input.clienteId, input.contactoClienteId);
     await validarUbicacionDeEmpresaTx(conn, empresaId, input.ubicacionCargaId);
+    await validarUnidadRecurrenteTx(conn, empresaId, input.unidadRecurrenteId);
     const existente = await queryConn<RowDataPacket[]>(conn,
       "SELECT id FROM tms_cliente_rutas WHERE empresa_id = ? AND codigo = ? LIMIT 1 FOR UPDATE",
       [empresaId, codigo],
@@ -580,11 +612,11 @@ export async function crearRuta(
     const lugarCargaTexto = await resolverLugarCargaTexto(conn, empresaId, input.ubicacionCargaId, input.lugarCargaTexto);
     const r = await executeConn(conn,
       `INSERT INTO tms_cliente_rutas
-        (empresa_id, cliente_id, codigo, nombre, ubicacion_carga_id, lugar_carga_texto, destino_descripcion, hora_habitual, tarifa_referencia, contacto_cliente_id, observaciones)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (empresa_id, cliente_id, codigo, nombre, ubicacion_carga_id, lugar_carga_texto, destino_descripcion, hora_habitual, tarifa_referencia, unidad_recurrente_id, contacto_cliente_id, observaciones)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [empresaId, input.clienteId, codigo, input.nombre?.trim() || null, input.ubicacionCargaId ?? null,
         lugarCargaTexto, input.destinoDescripcion?.trim() || null, input.horaHabitual?.trim() || null,
-        input.tarifaReferencia ?? null, input.contactoClienteId ?? null, input.observaciones?.trim() || null],
+        input.tarifaReferencia ?? null, input.unidadRecurrenteId ?? null, input.contactoClienteId ?? null, input.observaciones?.trim() || null],
     );
     rutaId = Number(r.insertId);
     if (input.paradas !== undefined) await guardarParadasRuta(conn, empresaId, rutaId, input.paradas);
@@ -646,6 +678,9 @@ export async function actualizarRuta(
 
   await validarContactoDeClienteTx(conn, empresaId, actual.clienteId, cambios.contactoClienteId !== undefined ? cambios.contactoClienteId : actual.contactoClienteId);
   await validarUbicacionDeEmpresaTx(conn, empresaId, cambios.ubicacionCargaId !== undefined ? cambios.ubicacionCargaId : actual.ubicacionCargaId);
+  if (cambios.unidadRecurrenteId !== undefined) {
+    await validarUnidadRecurrenteTx(conn, empresaId, cambios.unidadRecurrenteId);
+  }
 
   // §5 del ticket: "Motivo obligatorio cuando exista una tarifa anterior."
   const tarifaNueva = cambios.tarifaReferencia !== undefined ? cambios.tarifaReferencia ?? null : actual.tarifaReferencia;
@@ -666,7 +701,7 @@ export async function actualizarRuta(
   await executeConn(conn,
     `UPDATE tms_cliente_rutas
      SET codigo = ?, nombre = ?, ubicacion_carga_id = ?, lugar_carga_texto = ?, destino_descripcion = ?,
-         hora_habitual = ?, tarifa_referencia = ?, contacto_cliente_id = ?, observaciones = ?, activo = ?
+         hora_habitual = ?, tarifa_referencia = ?, unidad_recurrente_id = ?, contacto_cliente_id = ?, observaciones = ?, activo = ?
      WHERE id = ? AND empresa_id = ?`,
     [
       codigo,
@@ -678,6 +713,7 @@ export async function actualizarRuta(
         : actual.destinoDescripcion,
       cambios.horaHabitual !== undefined ? cambios.horaHabitual?.trim() || null : actual.horaHabitual,
       tarifaNueva,
+      cambios.unidadRecurrenteId !== undefined ? cambios.unidadRecurrenteId ?? null : actual.unidadRecurrenteId,
       cambios.contactoClienteId !== undefined
         ? cambios.contactoClienteId ?? null
         : actual.contactoClienteId,
