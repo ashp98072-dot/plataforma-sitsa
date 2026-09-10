@@ -196,6 +196,10 @@ function construirPdf(
   firmas: DatosFirmasPdf,
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
+    // FONDOS-PDF-LANDSCAPE-ANCHOS-1 — SIEMPRE horizontal (landscape): la
+    // tabla de detalle tiene 10 columnas y en vertical los datos largos
+    // (nombre, cuenta, cargo, cliente, descripción) quedaban comprimidos o
+    // partidos. LETTER landscape = 792 × 612 pt (~728 pt útiles de ancho).
     const doc = new PDFDocument({
       size: "LETTER",
       layout: "landscape",
@@ -236,13 +240,27 @@ function construirPdf(
       l.descripcion ?? "—",
       moneda(l.cantidad * l.monto),
     ]);
+    // FONDOS-PDF-LANDSCAPE-ANCHOS-1 — anchos EXPLÍCITOS por columna (en
+    // "peso" ≈ puntos; suman ~728 = ancho útil de LETTER landscape):
+    //   - MENOS espacio para datos cortos: Fecha de solicitud (0),
+    //     Fecha de viaje (1), Placa (5), Cantidad (7), Valor (9).
+    //   - MÁS espacio para texto largo que debe verse completo:
+    //     Nombre (2), Cuenta (3), Cargo (4), Cliente (6), Descripción (8).
+    // `weight` reemplaza el cálculo automático por longitud de encabezado:
+    // sin él, "Fecha de solicitud" (18 caracteres) inflaría su columna
+    // aunque el dato sea "04/09/2026". Los pesos de 0/1/5/7/9 son los
+    // mínimos que dejan su encabezado/dato en UNA sola línea.
     dibujarTablaEnDoc(doc, {
       headers,
       rows,
       align: { 7: "center", 9: "right" },
-      minWeight: { 0: 12, 1: 12, 2: 18, 3: 16, 4: 14, 5: 10, 6: 16, 7: 8, 8: 20, 9: 14 },
+      weight: { 0: 76, 1: 62, 2: 95, 3: 80, 4: 78, 5: 48, 6: 92, 7: 44, 8: 92, 9: 61 },
+      // Encabezados/datos cortos que NUNCA deben partirse en dos líneas
+      // ("Cantid" + "ad", "C-087CB" + "N"): las dos fechas, Placa, Cantidad
+      // y Valor. Cuenta NO va aquí: un número de cuenta largo debe poder
+      // envolver y ocupar el ancho ampliado, nunca recortarse con "…".
+      preserveSingleLine: [0, 1, 5, 7, 9],
       maxLines: 8,
-      preserveSingleLine: [3, 5, 7, 9],
     });
 
     // §3 Total — pegado a la tabla, nunca a mitad de las líneas.

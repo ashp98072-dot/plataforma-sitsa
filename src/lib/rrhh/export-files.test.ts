@@ -151,4 +151,58 @@ describe("dibujarTablaEnDoc", () => {
       expect(llamadasConFix.some((l) => l.texto.includes("…"))).toBe(false);
     });
   });
+
+  /**
+   * FONDOS-PDF-LANDSCAPE-ANCHOS-1 — `weight` (opt-in) reemplaza por
+   * completo el cálculo automático de ancho para las columnas indicadas.
+   * A diferencia de `minWeight` (que solo sube), permite REDUCIR el ancho
+   * de una columna cuyo encabezado es largo pero su contenido corto.
+   */
+  describe("weight (opt-in, FONDOS-PDF-LANDSCAPE-ANCHOS-1)", () => {
+    function doc() {
+      return new PDFDocument({ size: "LETTER", layout: "landscape", margins: { top: 36, bottom: 40, left: 32, right: 32 }, bufferPages: true });
+    }
+    function espiarTexto(d: InstanceType<typeof PDFDocument>) {
+      const llamadas: { texto: string; opciones: Record<string, unknown> | undefined }[] = [];
+      const original = d.text.bind(d);
+      vi.spyOn(d, "text").mockImplementation((texto: unknown, ...args: unknown[]) => {
+        const opciones = args.find((a): a is Record<string, unknown> => typeof a === "object" && a !== null && !Array.isArray(a));
+        llamadas.push({ texto: String(texto), opciones });
+        return original(texto as string, ...(args as []));
+      });
+      return llamadas;
+    }
+
+    it("`weight` reduce el ancho de una columna de encabezado largo y se lo cede a otra (a diferencia de minWeight, que solo sube)", () => {
+      const headers = ["Fecha de solicitud", "Descripción"];
+
+      const sinWeight = doc();
+      const llamadasSin = espiarTexto(sinWeight);
+      dibujarTablaEnDoc(sinWeight, { headers, rows: [["04/09/2026", "texto de descripción"]] });
+      sinWeight.end();
+      const anchoDescSin = llamadasSin.find((l) => l.texto === "Descripción")?.opciones?.width as number;
+
+      const conWeight = doc();
+      const llamadasCon = espiarTexto(conWeight);
+      // Peso explícito: columna 0 estrecha (dato corto), columna 1 ancha.
+      dibujarTablaEnDoc(conWeight, { headers, rows: [["04/09/2026", "texto de descripción"]], weight: { 0: 4, 1: 30 } });
+      conWeight.end();
+      const anchoDescCon = llamadasCon.find((l) => l.texto === "Descripción")?.opciones?.width as number;
+
+      expect(anchoDescCon).toBeGreaterThan(anchoDescSin);
+    });
+
+    it("una columna SIN entrada en `weight` conserva el cálculo automático de siempre", () => {
+      const d = doc();
+      const llamadas = espiarTexto(d);
+      dibujarTablaEnDoc(d, {
+        headers: ["Viaje", "Monto"],
+        rows: [["VJ-001", "Q50.00"]],
+        weight: { 0: 20 }, // solo la columna 0 se fija explícitamente
+      });
+      d.end();
+      // La columna 1 ("Monto") sigue dibujándose con su contenido íntegro.
+      expect(llamadas.find((l) => l.texto === "Q50.00")).toBeDefined();
+    });
+  });
 });

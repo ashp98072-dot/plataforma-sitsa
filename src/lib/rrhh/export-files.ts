@@ -152,6 +152,18 @@ export function dibujarTablaEnDoc(
      * una columna sin entrada aquí usa el mismo cálculo de siempre.
      */
     minWeight?: Partial<Record<number, number>>;
+    /**
+     * Peso EXPLÍCITO por columna (índice 0-based). Cuando se define para
+     * una columna, REEMPLAZA por completo el cálculo automático (longitud
+     * de encabezado + contenido + reglas + minWeight) para ESA columna;
+     * las demás siguen igual. Opt-in y retrocompatible: ningún caller que
+     * no lo pase cambia de comportamiento.
+     *
+     * Necesario cuando un encabezado largo ("Fecha de solicitud", 18
+     * caracteres) infla su columna aunque el dato sea corto ("04/09/2026")
+     * — algo que `minWeight`, que solo puede SUBIR el peso, no corrige.
+     */
+    weight?: Partial<Record<number, number>>;
     /** Máximo de líneas por celda; el valor histórico es 3. */
     maxLines?: number;
     /** Columnas críticas que deben conservar el texto completo en una sola línea. */
@@ -181,6 +193,7 @@ export function dibujarTablaEnDoc(
   const maxLines = opts.maxLines ?? 3;
 
   const weights = opts.headers.map((h, i) => {
+    if (opts.weight?.[i] != null) return Math.max(1, opts.weight[i]!);
     let w = Math.max(4, h.length);
     for (const r of rows.slice(0, 60)) {
       w = Math.max(w, Math.min(22, String(r[i] ?? "").length));
