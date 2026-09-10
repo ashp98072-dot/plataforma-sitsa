@@ -3,13 +3,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { hoyLocal } from "@/lib/rrhh/dates";
-import { filaReporteDiario, type ViajeDiario } from "@/lib/tms/reporte-diario-viajes";
+import { cantidadPaginasReporte, filaReporteDiario, totalValorViajes, type ViajeDiario } from "@/lib/tms/reporte-diario-viajes";
 
 type Catalogo = { id: number; nombre?: string; placa?: string; tipo?: string };
-type Respuesta = { planes?: ViajeDiario[]; kpi?: { valorProgramado?: number }; totalReal?: number };
+type Respuesta = { planes?: ViajeDiario[]; totalReal?: number };
 const inputCls = "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
 const estados = ["Programado", "Cargado", "En ruta", "Descargado", "Cerrado", "Cancelado"];
 const moneda = (valor: number) => `Q${valor.toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const PAGE_SIZE = 200;
 
 export default function ReporteDiarioViajesClient() {
   const slug = String(useParams().slug);
@@ -49,13 +50,28 @@ export default function ReporteDiarioViajesClient() {
   const cargar = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      const p = params(); p.set("pageSize", "200");
-      const res = await fetch(`/api/empresas/${slug}/tms/reportes/viajes?${p}`);
-      const data = await res.json() as Respuesta;
-      if (!res.ok) throw new Error("No se pudo cargar el reporte diario.");
-      setViajes(data.planes ?? []);
-      setTotal(Number(data.kpi?.valorProgramado ?? 0));
-      setTotalReal(Number(data.totalReal ?? 0));
+      const base = params();
+      base.set("page", "1");
+      base.set("pageSize", String(PAGE_SIZE));
+      const primeraRespuesta = await fetch(`/api/empresas/${slug}/tms/reportes/viajes?${base}`);
+      const primera = await primeraRespuesta.json() as Respuesta;
+      if (!primeraRespuesta.ok) throw new Error("No se pudo cargar el reporte diario.");
+
+      const totalEsperado = Number(primera.totalReal ?? 0);
+      const paginasRestantes = Math.max(0, cantidadPaginasReporte(totalEsperado, PAGE_SIZE) - 1);
+      const respuestasRestantes = await Promise.all(Array.from({ length: paginasRestantes }, async (_, indice) => {
+        const p = params();
+        p.set("page", String(indice + 2));
+        p.set("pageSize", String(PAGE_SIZE));
+        const respuesta = await fetch(`/api/empresas/${slug}/tms/reportes/viajes?${p}`);
+        const data = await respuesta.json() as Respuesta;
+        if (!respuesta.ok) throw new Error("No se pudo cargar el rango completo del reporte diario.");
+        return data.planes ?? [];
+      }));
+      const todosLosViajes = [...(primera.planes ?? []), ...respuestasRestantes.flat()];
+      setViajes(todosLosViajes);
+      setTotal(totalValorViajes(todosLosViajes));
+      setTotalReal(todosLosViajes.length);
     } catch (e) { setError(e instanceof Error ? e.message : "Error de conexión."); }
     finally { setLoading(false); }
   }, [slug, params]);

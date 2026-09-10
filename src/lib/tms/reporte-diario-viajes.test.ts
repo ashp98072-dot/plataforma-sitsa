@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filaReporteDiario, totalValorViajes, type ViajeDiario } from "./reporte-diario-viajes";
+import { cantidadPaginasReporte, filaReporteDiario, totalValorViajes, type ViajeDiario } from "./reporte-diario-viajes";
 
 const base: ViajeDiario = {
   fechaPlan: "2026-09-10", cliente: "Cliente A", unidadTipo: "Camión", placa: "C-001ABC",
@@ -23,5 +23,11 @@ describe("reporte diario de viajes", () => {
 
   it("totaliza la tarifa histórica sin sumar viajes cancelados", () => {
     expect(totalValorViajes([base, { ...base, tarifaComercial: 250 }, { ...base, estado: "Cancelado", tarifaComercial: 999 }])).toBe(1500);
+  });
+
+  it("calcula todas las páginas necesarias cuando el rango supera 200 filas", () => {
+    expect(cantidadPaginasReporte(200, 200)).toBe(1);
+    expect(cantidadPaginasReporte(201, 200)).toBe(2);
+    expect(cantidadPaginasReporte(1_001, 200)).toBe(6);
   });
 });

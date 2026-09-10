@@ -38,3 +38,8 @@ export function totalValorViajes(viajes: ViajeDiario[]): number {
   return viajes.reduce((total, viaje) =>
     viaje.estado === "Cancelado" ? total : total + (viaje.tarifaComercial ?? 0), 0);
 }
+
+export function cantidadPaginasReporte(total: number, pageSize: number): number {
+  if (!Number.isFinite(total) || !Number.isInteger(pageSize) || pageSize <= 0 || total <= 0) return 0;
+  return Math.ceil(total / pageSize);
+}
