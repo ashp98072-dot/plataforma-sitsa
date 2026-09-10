@@ -142,11 +142,19 @@ describe("filtrosReporteDesdeUrl", () => {
     expect(filtrosReporteDesdeUrl(new URL("http://x?ruta=+++")).ruta).toBeUndefined();
     expect(filtrosReporteDesdeUrl(new URL("http://x")).ruta).toBeUndefined();
   });
+  it("OPERACIONES-UX-PLANES-SIMPLIFICADO-1: parsea planId → filtro id (deep-link a un plan)", () => {
+    expect(filtrosReporteDesdeUrl(new URL("http://x?planId=42")).id).toBe(42);
+    // inválidos se ignoran (nunca id=0/NaN/negativo que rompa la consulta)
+    expect(filtrosReporteDesdeUrl(new URL("http://x?planId=0")).id).toBeUndefined();
+    expect(filtrosReporteDesdeUrl(new URL("http://x?planId=-1")).id).toBeUndefined();
+    expect(filtrosReporteDesdeUrl(new URL("http://x?planId=abc")).id).toBeUndefined();
+    expect(filtrosReporteDesdeUrl(new URL("http://x")).id).toBeUndefined();
+  });
   it("14) el mismo parseo sirve tanto al listado como al exportador (una sola función, sin duplicar)", () => {
     const url = new URL("http://x?clienteId=5&pilotoId=9&unidadId=3");
     const f = filtrosReporteDesdeUrl(url);
     expect(f).toEqual({
-      fechaDesde: undefined, fechaHasta: undefined, clienteId: 5, pilotoId: 9, unidadId: 3,
+      id: undefined, fechaDesde: undefined, fechaHasta: undefined, clienteId: 5, pilotoId: 9, unidadId: 3,
       estado: undefined, soloPendientesCierre: false, soloCerrados: false, soloSinCerrar: false,
     });
   });

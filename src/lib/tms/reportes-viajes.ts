@@ -176,9 +176,15 @@ export function filtrosReporteDesdeUrl(url: URL): FiltrosReporteViajes {
   const clienteId = Number(p.get("clienteId"));
   const pilotoId = Number(p.get("pilotoId"));
   const unidadId = Number(p.get("unidadId"));
+  // OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — deep-link a UN plan concreto
+  // (Planes / Viajes tras cerrar un viaje en Programación). Reutiliza el
+  // filtro `id` que construirCondiciones ya aplica con empresa_id — solo
+  // faltaba exponerlo por query string; sin SQL ni modelo nuevo.
+  const planId = Number(p.get("planId"));
   const estadoFacturacion = p.get("estadoFacturacion");
   const estadoCobro = p.get("estadoCobro");
   return {
+    id: Number.isInteger(planId) && planId > 0 ? planId : undefined,
     fechaDesde: fechaDesde && FECHA_RE.test(fechaDesde) ? fechaDesde : undefined,
     fechaHasta: fechaHasta && FECHA_RE.test(fechaHasta) ? fechaHasta : undefined,
     clienteId: Number.isInteger(clienteId) && clienteId > 0 ? clienteId : undefined,
