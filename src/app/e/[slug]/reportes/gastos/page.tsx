@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import { MESES_ES, rangoDelMes } from "@/lib/tms/reportes-mes";
 
 export type TipoReporte = "viaje" | "unidad" | "cliente" | "categoria" | "periodo" | "viaticos" | "rentabilidad" | "fondos" | "gastosDetalle";
 
@@ -17,8 +18,17 @@ const TIPOS: { value: TipoReporte; label: string }[] = [
   { value: "fondos", label: "Solicitudes de fondo" },
 ];
 
-/** Tipos que además de Excel también pueden exportarse en PDF (REPORTES-VIATICOS-GASTOS-DETALLE-1, §4). */
-const TIPOS_CON_PDF: TipoReporte[] = ["viaticos", "gastosDetalle"];
+/**
+ * Tipos que además de Excel también pueden exportarse en PDF
+ * (REPORTES-VIATICOS-GASTOS-DETALLE-1, §4). "fondos" se agrega en
+ * REPORTES-MENSUALES-CONSOLIDADOS-1: PDF mensual consolidado con cada
+ * solicitud como bloque independiente y sus firmas.
+ */
+const TIPOS_CON_PDF: TipoReporte[] = ["viaticos", "gastosDetalle", "fondos"];
+
+/** REPORTES-MENSUALES-CONSOLIDADOS-1 — años seleccionables: actual y 4 atrás. */
+const ANIO_ACTUAL = new Date().getFullYear();
+const ANIOS = Array.from({ length: 5 }, (_, i) => ANIO_ACTUAL - i);
 
 const ESTADOS_VIATICO = ["PROGRAMADO", "AUTORIZADO", "RECHAZADO", "ENTREGADO", "LIQUIDADO"];
 
@@ -51,6 +61,7 @@ type ClienteCat = { id: number; nombre: string };
 type EmpleadoCat = { id: number; nombre: string };
 type VehiculoCat = { id: number; placa: string };
 type PlanCat = { id: number; codigo: string };
+type UsuarioCat = { id: number; nombre: string };
 
 const inputCls = "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
 const money = (n: number) => `Q${n.toLocaleString("es-GT", { minimumFractionDigits: 2 })}`;
@@ -79,6 +90,13 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
   const [error, setError] = useState("");
   const [resumenFondos, setResumenFondos] = useState<ResumenFondos | null>(null);
 
+  // REPORTES-MENSUALES-CONSOLIDADOS-1 — filtro "Mes + Año" (aplica a
+  // "gastosDetalle" y "fondos"). Cuando ambos están puestos, se traduce a
+  // fechaDesde/fechaHasta (gastos) o fechaSolicitudDesde/Hasta (fondos) —
+  // el backend NO recibe ningún filtro nuevo por esto.
+  const [fMes, setFMes] = useState("");
+  const [fAnio, setFAnio] = useState("");
+
   // Filtros propios de "fondos" — no afectan a ningún otro tipo.
   const [fSolicitudDesde, setFSolicitudDesde] = useState("");
   const [fSolicitudHasta, setFSolicitudHasta] = useState("");
@@ -89,11 +107,13 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
   const [fEmpleadoNombre, setFEmpleadoNombre] = useState("");
   const [fCargo, setFCargo] = useState("");
   const [fEstadoFondo, setFEstadoFondo] = useState("");
+  const [fRequirenteId, setFRequirenteId] = useState("");
   const [fDescripcion, setFDescripcion] = useState("");
   const [clientesCat, setClientesCat] = useState<ClienteCat[]>([]);
   const [empleadosCat, setEmpleadosCat] = useState<EmpleadoCat[]>([]);
   const [vehiculosCat, setVehiculosCat] = useState<VehiculoCat[]>([]);
   const [planesCat, setPlanesCat] = useState<PlanCat[]>([]);
+  const [usuariosCat, setUsuariosCat] = useState<UsuarioCat[]>([]);
 
   // REPORTES-VIATICOS-GASTOS-DETALLE-1 (§3 del ticket) — "mantener los
   // filtros de pantalla en la exportación": cliente/placa(unidad)/
@@ -126,14 +146,24 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
         setEmpleadosCat((data.empleados ?? []) as EmpleadoCat[]);
         setVehiculosCat((data.vehiculos ?? []) as VehiculoCat[]);
         setPlanesCat((data.planes ?? []) as PlanCat[]);
+        setUsuariosCat((data.usuarios ?? []) as UsuarioCat[]);
       })
       .catch(() => undefined);
   }, [slug, necesitaCatalogos, clientesCat.length]);
 
   /** Filtros de "fondos" — únicos, compartidos por el listado y el export (nunca dos armados que puedan divergir). */
   const paramsFondos = useCallback((p: URLSearchParams) => {
-    if (fSolicitudDesde) p.set("fechaSolicitudDesde", fSolicitudDesde);
-    if (fSolicitudHasta) p.set("fechaSolicitudHasta", fSolicitudHasta);
+    // REPORTES-MENSUALES-CONSOLIDADOS-1 — Mes + Año manda sobre el rango de
+    // fecha solicitud manual (se traduce al MISMO fechaSolicitudDesde/Hasta
+    // que el backend ya acepta).
+    if (fMes && fAnio) {
+      const { desde, hasta } = rangoDelMes(Number(fAnio), Number(fMes));
+      p.set("fechaSolicitudDesde", desde);
+      p.set("fechaSolicitudHasta", hasta);
+    } else {
+      if (fSolicitudDesde) p.set("fechaSolicitudDesde", fSolicitudDesde);
+      if (fSolicitudHasta) p.set("fechaSolicitudHasta", fSolicitudHasta);
+    }
     if (fViajeDesde) p.set("fechaViajeDesde", fViajeDesde);
     if (fViajeHasta) p.set("fechaViajeHasta", fViajeHasta);
     if (fClienteId) p.set("clienteId", fClienteId);
@@ -141,8 +171,9 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
     if (fEmpleadoNombre) p.set("empleadoNombre", fEmpleadoNombre);
     if (fCargo) p.set("cargo", fCargo);
     if (fEstadoFondo) p.set("estadoFondo", fEstadoFondo);
+    if (fRequirenteId) p.set("requirenteUsuarioId", fRequirenteId);
     if (fDescripcion) p.set("descripcion", fDescripcion);
-  }, [fSolicitudDesde, fSolicitudHasta, fViajeDesde, fViajeHasta, fClienteId, fPlaca, fEmpleadoNombre, fCargo, fEstadoFondo, fDescripcion]);
+  }, [fMes, fAnio, fSolicitudDesde, fSolicitudHasta, fViajeDesde, fViajeHasta, fClienteId, fPlaca, fEmpleadoNombre, fCargo, fEstadoFondo, fRequirenteId, fDescripcion]);
 
   /**
    * REPORTES-VIATICOS-GASTOS-DETALLE-1 (§3 del ticket) — filtros de
@@ -154,8 +185,17 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
    * el filtro equivocado al tipo equivocado.
    */
   const paramsDetalle = useCallback((p: URLSearchParams, t: TipoReporte) => {
-    if (fechaDesde) p.set("fechaDesde", fechaDesde);
-    if (fechaHasta) p.set("fechaHasta", fechaHasta);
+    // REPORTES-MENSUALES-CONSOLIDADOS-1 — para "gastosDetalle", Mes + Año
+    // manda sobre el rango genérico manual (se traduce a fechaDesde/Hasta,
+    // que el backend ya usa sobre COALESCE(fecha_viaje, fecha_solicitud)).
+    if (t === "gastosDetalle" && fMes && fAnio) {
+      const { desde, hasta } = rangoDelMes(Number(fAnio), Number(fMes));
+      p.set("fechaDesde", desde);
+      p.set("fechaHasta", hasta);
+    } else {
+      if (fechaDesde) p.set("fechaDesde", fechaDesde);
+      if (fechaHasta) p.set("fechaHasta", fechaHasta);
+    }
     if (fClienteId2) p.set("clienteId", fClienteId2);
     if (fPlanId) p.set("planId", fPlanId);
     if (t === "viaticos") {
@@ -176,7 +216,7 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
       if (fGViajeDesde) p.set("fechaViajeDesde", fGViajeDesde);
       if (fGViajeHasta) p.set("fechaViajeHasta", fGViajeHasta);
     }
-  }, [fechaDesde, fechaHasta, fClienteId2, fPlanId, fVehiculoId, vehiculosCat, fEmpleadoNombreViatico, fEstadoViatico, fEmpleadoIdGasto, fCategoria, fActivoGasto, fGSolicitudDesde, fGSolicitudHasta, fGViajeDesde, fGViajeHasta]);
+  }, [fMes, fAnio, fechaDesde, fechaHasta, fClienteId2, fPlanId, fVehiculoId, vehiculosCat, fEmpleadoNombreViatico, fEstadoViatico, fEmpleadoIdGasto, fCategoria, fActivoGasto, fGSolicitudDesde, fGSolicitudHasta, fGViajeDesde, fGViajeHasta]);
 
   const cargar = useCallback(async () => {
     setLoading(true); setError("");
@@ -224,15 +264,40 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
 
   const esAgregado = tipo !== "viaticos" && tipo !== "rentabilidad" && tipo !== "fondos" && tipo !== "gastosDetalle";
 
+  // REPORTES-MENSUALES-CONSOLIDADOS-1 — filtro "Mes + Año" (mismo bloque en
+  // "fondos" y "gastosDetalle"). Solo cuando AMBOS están puestos se aplica
+  // (traducido a rango de fechas en paramsFondos/paramsDetalle).
+  const mesAnioFiltro = (
+    <>
+      <label className="text-xs text-[var(--muted)]">Mes
+        <select className={`${inputCls} mt-0.5 block`} value={fMes} onChange={(e) => setFMes(e.target.value)}>
+          <option value="">—</option>
+          {MESES_ES.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
+        </select>
+      </label>
+      <label className="text-xs text-[var(--muted)]">Año
+        <select className={`${inputCls} mt-0.5 block`} value={fAnio} onChange={(e) => setFAnio(e.target.value)}>
+          <option value="">—</option>
+          {ANIOS.map((a) => <option key={a} value={a}>{a}</option>)}
+        </select>
+      </label>
+    </>
+  );
+
   return (
     <div className="space-y-4 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-lg font-semibold">{titulo ?? "Reportes de gastos"}</h1>
         <div className="flex gap-2">
-          <a href={exportarUrl()} className="rounded bg-[var(--accent)] px-3 py-2 text-sm text-white">Exportar a Excel</a>
-          {/* REPORTES-VIATICOS-GASTOS-DETALLE-1 (§4 del ticket) — PDF solo para los reportes de detalle (viáticos/gastos operativos). */}
+          <a href={exportarUrl()} className="rounded bg-[var(--accent)] px-3 py-2 text-sm text-white">
+            {tipo === "fondos" || tipo === "gastosDetalle" ? "Exportar Excel mensual" : "Exportar a Excel"}
+          </a>
+          {/* REPORTES-VIATICOS-GASTOS-DETALLE-1 (§4) — PDF para viáticos y gastos.
+              REPORTES-MENSUALES-CONSOLIDADOS-1 — "fondos": PDF mensual consolidado. */}
           {TIPOS_CON_PDF.includes(tipo) ? (
-            <a href={exportarUrl("pdf")} className="rounded border border-[var(--border)] px-3 py-2 text-sm">Exportar a PDF</a>
+            <a href={exportarUrl("pdf")} className="rounded border border-[var(--border)] px-3 py-2 text-sm">
+              {tipo === "fondos" ? "Descargar PDF mensual consolidado" : tipo === "gastosDetalle" ? "Exportar PDF mensual" : "Exportar a PDF"}
+            </a>
           ) : null}
         </div>
       </div>
@@ -245,19 +310,20 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
         ) : null}
         {tipo !== "fondos" ? (
           <>
-            <input type="date" className={inputCls} value={fechaDesde} onChange={(e) => setFechaDesde(e.target.value)} />
-            <input type="date" className={inputCls} value={fechaHasta} onChange={(e) => setFechaHasta(e.target.value)} />
+            <input type="date" className={inputCls} value={fechaDesde} onChange={(e) => setFechaDesde(e.target.value)} disabled={tipo === "gastosDetalle" && Boolean(fMes && fAnio)} />
+            <input type="date" className={inputCls} value={fechaHasta} onChange={(e) => setFechaHasta(e.target.value)} disabled={tipo === "gastosDetalle" && Boolean(fMes && fAnio)} />
           </>
         ) : null}
       </div>
 
       {tipo === "fondos" ? (
         <div className="flex flex-wrap items-end gap-2 rounded-lg border border-[var(--border)] bg-[var(--panel)] p-2">
+          {mesAnioFiltro}
           <label className="text-xs text-[var(--muted)]">Fecha solicitud desde
-            <input type="date" className={`${inputCls} mt-0.5 block`} value={fSolicitudDesde} onChange={(e) => setFSolicitudDesde(e.target.value)} />
+            <input type="date" className={`${inputCls} mt-0.5 block`} value={fSolicitudDesde} onChange={(e) => setFSolicitudDesde(e.target.value)} disabled={Boolean(fMes && fAnio)} />
           </label>
           <label className="text-xs text-[var(--muted)]">hasta
-            <input type="date" className={`${inputCls} mt-0.5 block`} value={fSolicitudHasta} onChange={(e) => setFSolicitudHasta(e.target.value)} />
+            <input type="date" className={`${inputCls} mt-0.5 block`} value={fSolicitudHasta} onChange={(e) => setFSolicitudHasta(e.target.value)} disabled={Boolean(fMes && fAnio)} />
           </label>
           <label className="text-xs text-[var(--muted)]">Fecha viaje desde
             <input type="date" className={`${inputCls} mt-0.5 block`} value={fViajeDesde} onChange={(e) => setFViajeDesde(e.target.value)} />
@@ -286,6 +352,13 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
               {["Pendiente", "Autorizada", "Rechazada", "Liquidada"].map((e) => <option key={e} value={e}>{e}</option>)}
             </select>
           </label>
+          {/* REPORTES-MENSUALES-CONSOLIDADOS-1 — Requirente (usuario requirente real de la solicitud). */}
+          <label className="text-xs text-[var(--muted)]">Requirente
+            <select className={`${inputCls} mt-0.5 block`} value={fRequirenteId} onChange={(e) => setFRequirenteId(e.target.value)}>
+              <option value="">Todos</option>
+              {usuariosCat.map((u) => <option key={u.id} value={u.id}>{u.nombre}</option>)}
+            </select>
+          </label>
           <label className="text-xs text-[var(--muted)]">Descripción
             <input className={`${inputCls} mt-0.5 block`} placeholder="Búsqueda libre" value={fDescripcion} onChange={(e) => setFDescripcion(e.target.value)} />
           </label>
@@ -302,6 +375,8 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
       */}
       {tipo === "viaticos" || tipo === "gastosDetalle" ? (
         <div className="flex flex-wrap items-end gap-2 rounded-lg border border-[var(--border)] bg-[var(--panel)] p-2">
+          {/* REPORTES-MENSUALES-CONSOLIDADOS-1 — Mes/Año solo para gastos operativos (no viáticos). */}
+          {tipo === "gastosDetalle" ? mesAnioFiltro : null}
           <label className="text-xs text-[var(--muted)]">Cliente
             <select className={`${inputCls} mt-0.5 block`} value={fClienteId2} onChange={(e) => setFClienteId2(e.target.value)}>
               <option value="">Todos</option>

@@ -31,9 +31,14 @@ import { obtenerSolicitudFondo, type SolicitudFondo } from "@/lib/tms/fondos";
  * SOLO LECTURA — nunca escribe ni modifica la solicitud al generar el PDF.
  */
 
-type PdfDoc = InstanceType<typeof PDFDocument>;
+export type PdfDoc = InstanceType<typeof PDFDocument>;
 
-function moneda(v: number): string {
+/**
+ * REPORTES-MENSUALES-CONSOLIDADOS-1 — se exporta para reutilizarlo tal
+ * cual en el PDF mensual consolidado (fondos-mensual-pdf.ts); mismo
+ * formato "Q 1,000.00" que ya se usa en el PDF individual.
+ */
+export function moneda(v: number): string {
   return `Q ${v.toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
@@ -67,7 +72,7 @@ async function resolverNombreVisibleLegado(valorGuardado: string | null): Promis
   return valorGuardado;
 }
 
-type FirmaSnapshot = { nombre: string | null; imagen: { buffer: Buffer; mime: string } | null };
+export type FirmaSnapshot = { nombre: string | null; imagen: { buffer: Buffer; mime: string } | null };
 
 /**
  * §4 del ticket — snapshot HISTÓRICO e INMUTABLE de una de las 3 firmas
@@ -83,8 +88,12 @@ type FirmaSnapshot = { nombre: string | null; imagen: { buffer: Buffer; mime: st
  * "Liquidada conserva exactamente las mismas firmas históricas").
  *
  * `accion`: 'SOLICITAR_FONDO' | 'REQUERIR_FONDO' | 'AUTORIZAR_FONDO'.
+ *
+ * REPORTES-MENSUALES-CONSOLIDADOS-1 — se exporta para que el PDF mensual
+ * consolidado resuelva las firmas EXACTAMENTE con el mismo criterio (solo
+ * snapshots inmutables de firmas_electronicas; nunca usuario_firmas).
  */
-async function firmaHistorica(empresaId: number, solicitudId: number, accion: string): Promise<FirmaSnapshot | null> {
+export async function firmaHistorica(empresaId: number, solicitudId: number, accion: string): Promise<FirmaSnapshot | null> {
   const rows = await query<RowDataPacket[]>(
     `SELECT payload_canonico, imagen_ruta, imagen_mime
      FROM firmas_electronicas
@@ -305,8 +314,11 @@ function construirPdf(
  * alguno (§3/§5 del ticket: "si todavía no existe flujo de firma para
  * alguno, no inventar una firma"), ese bloque muestra únicamente el
  * espacio en blanco + el nombre real, nunca una imagen inventada.
+ *
+ * REPORTES-MENSUALES-CONSOLIDADOS-1 — exportada para dibujar el mismo
+ * bloque de 3 firmas al final de CADA solicitud del PDF mensual.
  */
-function dibujarFirmas(
+export function dibujarFirmas(
   doc: PdfDoc,
   pageWidth: number,
   marginL: number,

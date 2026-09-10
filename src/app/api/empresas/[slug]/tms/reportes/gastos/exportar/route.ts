@@ -2,13 +2,16 @@ import { NextResponse } from "next/server";
 import { requireTenantGastos } from "@/lib/tenant";
 import {
   TIPOS_REPORTE_GASTOS,
+  agruparSolicitudesFondo,
   filtrosReporteGastosDesdeUrl,
   obtenerReporteGastosPorTipo,
+  resumenMensualFondos,
   resumirViaticosPorEstado,
   type FilaGastoDetalle,
   type FilaViaticoReporte,
   type TipoReporteGastos,
 } from "@/lib/tms/reportes-gastos";
+import { generarPdfMensualSolicitudesFondo } from "@/lib/tms/fondos-mensual-pdf";
 import {
   exportarAgregadoGastosExcel,
   exportarGastosDetalleExcel,
@@ -121,6 +124,33 @@ export async function GET(req: Request, ctx: Ctx) {
       headers: {
         "Content-Type": "application/pdf",
         "Content-Disposition": `attachment; filename="reporte-gastos-detalle-${fecha}.pdf"`,
+        "Cache-Control": "private, no-store",
+      },
+    });
+  }
+
+  // REPORTES-MENSUALES-CONSOLIDADOS-1 — PDF mensual consolidado de
+  // Solicitudes de fondo: cada solicitud como bloque independiente (tabla
+  // de sus líneas + TOTAL SOLICITUD + 3 firmas históricas) y un RESUMEN
+  // DEL MES al final. Reutiliza el MISMO reporte/filtros ya cargados
+  // (obtenerReporteGastosPorTipo). NO reemplaza el PDF individual de
+  // solicitud de fondo (fondos/[id]/pdf) ni el Excel de este reporte.
+  if (formato === "pdf" && resultado.tipo === "fondos") {
+    const grupos = agruparSolicitudesFondo(resultado.filas);
+    const resumenMes = resumenMensualFondos(grupos);
+    const base = filtros.fechaSolicitudDesde ?? filtros.fechaSolicitudHasta ?? fecha;
+    const [anio, mes] = base.split("-");
+    const buffer = await generarPdfMensualSolicitudesFondo(
+      guard.empresa.id,
+      guard.empresa.nombre,
+      grupos,
+      resumenMes,
+      { anio: Number(anio), mes: Number(mes) },
+    );
+    return new NextResponse(new Uint8Array(buffer), {
+      headers: {
+        "Content-Type": "application/pdf",
+        "Content-Disposition": `attachment; filename="solicitudes-fondo-mensual-${base.slice(0, 7)}.pdf"`,
         "Cache-Control": "private, no-store",
       },
     });

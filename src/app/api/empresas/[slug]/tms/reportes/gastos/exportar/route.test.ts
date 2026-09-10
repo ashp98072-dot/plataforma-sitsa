@@ -6,9 +6,16 @@ vi.mock("@/lib/tms/reportes-gastos", () => ({
   filtrosReporteGastosDesdeUrl: vi.fn((url: URL) => ({
     fechaDesde: url.searchParams.get("fechaDesde") ?? undefined,
     fechaHasta: url.searchParams.get("fechaHasta") ?? undefined,
+    fechaSolicitudDesde: url.searchParams.get("fechaSolicitudDesde") ?? undefined,
+    fechaSolicitudHasta: url.searchParams.get("fechaSolicitudHasta") ?? undefined,
   })),
   obtenerReporteGastosPorTipo: vi.fn(),
   resumirViaticosPorEstado: vi.fn(() => ({})),
+  agruparSolicitudesFondo: vi.fn((filas: unknown[]) => filas),
+  resumenMensualFondos: vi.fn(() => ({ totalSolicitudes: 0, autorizadas: 0, liquidadas: 0, rechazadas: 0, pendientes: 0, totalGeneral: 0 })),
+}));
+vi.mock("@/lib/tms/fondos-mensual-pdf", () => ({
+  generarPdfMensualSolicitudesFondo: vi.fn(() => Promise.resolve(Buffer.from("pdf-fondos-mensual"))),
 }));
 vi.mock("@/lib/tms/gastos-export-excel", () => ({
   exportarAgregadoGastosExcel: vi.fn(() => Promise.resolve(Buffer.from("xlsx-agregado"))),
@@ -29,7 +36,8 @@ vi.mock("@/lib/rrhh/dates", () => ({
 
 import { requireTenantGastos } from "@/lib/tenant";
 import { obtenerReporteGastosPorTipo } from "@/lib/tms/reportes-gastos";
-import { exportarAgregadoGastosExcel, exportarGastosDetalleExcel, exportarViaticosReporteExcel } from "@/lib/tms/gastos-export-excel";
+import { exportarAgregadoGastosExcel, exportarGastosDetalleExcel, exportarReporteFondosExcel, exportarViaticosReporteExcel } from "@/lib/tms/gastos-export-excel";
+import { generarPdfMensualSolicitudesFondo } from "@/lib/tms/fondos-mensual-pdf";
 import { tablaAPdf } from "@/lib/rrhh/export-files";
 import { GET } from "./route";
 
@@ -153,6 +161,30 @@ describe("GET /tms/reportes/gastos/exportar", () => {
       expect(rows[rows.length - 1]).toContain("TOTAL GENERAL");
       // orden de campos de la fila: fecha solicitud primero, cargo/nombre desde el gasto.
       expect(rows[0].slice(0, 8)).toEqual(["01/09/2026", "02/09/2026", "Heber Sitan", "Piloto", "P111AAA", "Cliente A", "2", "Diesel"]);
+    });
+  });
+
+  describe("tipo=fondos (REPORTES-MENSUALES-CONSOLIDADOS-1)", () => {
+    const filaFondo = { lineaId: 1, solicitudId: 10, solicitudCodigo: "FONDO-000010", estadoFondo: "Autorizada", totalSolicitud: 600 };
+
+    it("formato=xlsx (default) sigue reutilizando exportarReporteFondosExcel — sin cambios", async () => {
+      vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({ tipo: "fondos", filas: [filaFondo], resumen: {} } as never);
+      const res = await GET(new Request("http://localhost/x?tipo=fondos"), ctx);
+      expect(res.headers.get("Content-Type")).toContain("spreadsheetml");
+      expect(exportarReporteFondosExcel).toHaveBeenCalledWith([filaFondo]);
+      expect(generarPdfMensualSolicitudesFondo).not.toHaveBeenCalled();
+    });
+
+    it("formato=pdf genera el PDF mensual consolidado (nunca el Excel), con el período derivado de fechaSolicitudDesde", async () => {
+      vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({ tipo: "fondos", filas: [filaFondo], resumen: {} } as never);
+      const res = await GET(new Request("http://localhost/x?tipo=fondos&formato=pdf&fechaSolicitudDesde=2026-09-01&fechaSolicitudHasta=2026-09-30"), ctx);
+      expect(res.headers.get("Content-Type")).toBe("application/pdf");
+      expect(res.headers.get("Content-Disposition")).toContain("solicitudes-fondo-mensual-2026-09.pdf");
+      expect(exportarReporteFondosExcel).not.toHaveBeenCalled();
+      const [empresaId, empresaNombre, , , periodo] = vi.mocked(generarPdfMensualSolicitudesFondo).mock.calls[0];
+      expect(empresaId).toBe(7);
+      expect(empresaNombre).toBe("SITSA");
+      expect(periodo).toEqual({ anio: 2026, mes: 9 });
     });
   });
 });
