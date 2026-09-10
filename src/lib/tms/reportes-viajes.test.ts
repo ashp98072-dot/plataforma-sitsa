@@ -26,7 +26,7 @@ function plan(overrides: Partial<PlanReporte>): PlanReporte {
     id: 1, codigo: "PLAN-1", fechaPlan: "2026-08-01", horaCarga: null, estado: "Programado",
     pendienteCierre: false, cerradoPor: null, cerradoEn: null, clienteId: null, cliente: null,
     rutaCodigo: null, lugarDescargaHistorico: null, referenciaCliente: null, tipoTraslado: null,
-    regresoEstimado: null, tarifaComercial: null, placa: null, unidadTipo: null, unidadCapacidad: null,
+    regresoEstimado: null, tarifaComercial: null, tarifaId: null, tarifaNombre: null, tarifaMontoSnapshot: null, tarifaMoneda: null, placa: null, unidadTipo: null, unidadCapacidad: null,
     pilotoId: null, piloto: null, auxiliares: [], paradas: [], evidencias: 0,
     horaSalida: null, horaLlegada: null, kmSalida: null, kmLlegada: null, kmRecorridos: null, diasRuta: null,
     estadoFacturacion: "No aplica", facturaId: null, numeroFactura: null, estadoAdminFactura: null,
@@ -517,6 +517,26 @@ describe("FACT-1-TMS-REPORTES — obtenerReporteViajes: mapeo de campos financie
     expect(p.montoFacturadoViaje).toBe(800);
   });
 
+  it("RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§3) — expone el snapshot de la tarifa usada (nombre/monto/moneda), independiente de la tarifa vigente hoy", async () => {
+    mockFila(filaConFacturacion({
+      tarifa_comercial: 1650,
+      tarifa_id: 5, tarifa_nombre_historico: "Tarifa lluvia",
+      tarifa_monto_historico: 1650, tarifa_moneda_historico: "GTQ",
+    }));
+    const [p] = await obtenerReporteViajes(7, {});
+    expect(p.tarifaId).toBe(5);
+    expect(p.tarifaNombre).toBe("Tarifa lluvia");
+    expect(p.tarifaMontoSnapshot).toBe(1650);
+    expect(p.tarifaMoneda).toBe("GTQ");
+  });
+
+  it("viaje sin tarifa del catálogo — los campos de snapshot quedan null (no rompe el reporte)", async () => {
+    mockFila(filaConFacturacion({ tarifa_id: null }));
+    const [p] = await obtenerReporteViajes(7, {});
+    expect(p.tarifaId).toBeNull();
+    expect(p.tarifaNombre).toBeNull();
+  });
+
   it("un Borrador usa montoBorradorViaje — NUNCA se llama 'facturado' a un Borrador", async () => {
     mockFila(filaConFacturacion({
       factura_id: 11, estado_admin_factura: "Borrador",
@@ -652,7 +672,7 @@ describe("FACT-1-TMS-REPORTES — Fase E: calcularKpisReporte (en memoria) evita
       id: 1, codigo: "PLAN-1", fechaPlan: "2026-08-01", horaCarga: null, estado: "Cerrado",
       pendienteCierre: false, cerradoPor: null, cerradoEn: null, clienteId: null, cliente: null,
       rutaCodigo: null, lugarDescargaHistorico: null, referenciaCliente: null, tipoTraslado: null,
-      regresoEstimado: null, tarifaComercial: null, placa: null, unidadTipo: null, unidadCapacidad: null,
+      regresoEstimado: null, tarifaComercial: null, tarifaId: null, tarifaNombre: null, tarifaMontoSnapshot: null, tarifaMoneda: null, placa: null, unidadTipo: null, unidadCapacidad: null,
       pilotoId: null, piloto: null, auxiliares: [], paradas: [], evidencias: 0,
       horaSalida: null, horaLlegada: null, kmSalida: null, kmLlegada: null, kmRecorridos: null, diasRuta: null,
       estadoFacturacion: "Facturado", facturaId: 1, numeroFactura: "F-001", estadoAdminFactura: "Emitida",

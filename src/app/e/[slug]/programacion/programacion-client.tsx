@@ -102,6 +102,16 @@ export type Plan = {
   regreso_estimado: string | null;
   tarifa_comercial: number | null;
   /**
+   * RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 — snapshot de la tarifa
+   * del catálogo usada en este viaje. `tarifa_id` es informativo; los
+   * `tarifa_*_historico` son la fotografía del nombre/monto/moneda al
+   * armar el viaje (no cambian si la tarifa maestra cambia después).
+   */
+  tarifa_id: number | null;
+  tarifa_nombre_historico: string | null;
+  tarifa_monto_historico: number | null;
+  tarifa_moneda_historico: string | null;
+  /**
    * PROGRAMACION-REPORTES-FILTROS-1: `costo_operativo_referencia`,
    * `referencia_cliente` y `notas` ya no se muestran ni se capturan desde
    * esta pantalla (Programación) — "ya no se utilizan en el proceso". Se

@@ -142,6 +142,27 @@ describe("actualizarRuta — cambio de tarifa (§2/§3/§5 del ticket)", () => {
   });
 });
 
+describe("RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§5) — unidad recurrente por empresa", () => {
+  it("crearRuta rechaza una unidad recurrente que no es de la flota de esta empresa", async () => {
+    // El mock de conexion() devuelve [] para "FROM flota_vehiculos" -> no pertenece.
+    const conn = conexion();
+    await expect(
+      crearRuta(7, { clienteId: 5, codigo: "1001", unidadRecurrenteId: 999, paradas: [] } as never, ACTOR),
+    ).rejects.toThrow(/flota de esta empresa/i);
+    expect(conn.rollback).toHaveBeenCalledOnce();
+    expect(conn.execute.mock.calls.some((c) => (c[0] as string).includes("INSERT INTO tms_cliente_rutas"))).toBe(false);
+  });
+
+  it("actualizarRuta con unidadRecurrenteId = null la quita sin validar", async () => {
+    const conn = conexion({ rutaActual: { tarifa_referencia: null } });
+    vi.mocked(query).mockResolvedValue([filaRutaActual()] as never);
+    await actualizarRuta(7, 44, { unidadRecurrenteId: null }, ACTOR);
+    const update = conn.execute.mock.calls.find((c) => (c[0] as string).includes("UPDATE tms_cliente_rutas"));
+    expect(update).toBeDefined();
+    expect(conn.commit).toHaveBeenCalledOnce();
+  });
+});
+
 describe("listarHistorialTarifas — orden descendente (§4 del ticket)", () => {
   it("pide el historial ordenado por vigente_desde DESC, id DESC", async () => {
     vi.mocked(query).mockResolvedValue([

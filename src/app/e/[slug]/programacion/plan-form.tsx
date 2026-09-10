@@ -301,6 +301,13 @@ export default function PlanForm({
   const [viaticosMontos, setViaticosMontos] = useState<Record<string, string>>({});
   const [vehiculosDisponibles, setVehiculosDisponibles] = useState<VehiculoOpt[]>([]);
   const [resumenFlota, setResumenFlota] = useState({ disponibles: 0, enTaller: 0, enRuta: 0 });
+  // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§2) — tarifas ACTIVAS de
+  // la ruta elegida (del catálogo tms_ruta_tarifas). Se cargan al elegir
+  // la ruta y al montar el formulario en edición (si el viaje ya tiene
+  // ruta). Al guardar solo se manda el id; el backend snapshotea.
+  const [tarifasRuta, setTarifasRuta] = useState<
+    { id: number; nombre: string; monto: number; moneda: string; predeterminada: boolean }[]
+  >([]);
 
   // Precarga de piloto/auxiliares del plan (edición): se resuelve por
   // NOMBRE contra el roster de RRHH ya cargado — mismo criterio ya
@@ -319,6 +326,9 @@ export default function PlanForm({
     tipoTraslado: plan?.tipo_traslado ?? "",
     regresoEstimado: plan?.regreso_estimado?.slice(0, 16) ?? "",
     tarifaComercial: plan?.tarifa_comercial != null ? String(plan.tarifa_comercial) : "",
+    // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§2) — opción de tarifa
+    // del catálogo elegida para este viaje (0 = ninguna / monto manual).
+    tarifaId: plan?.tarifa_id ?? 0,
     // VIAT-4/VIAT-4b: fotografía histórica de qué ruta maestra se usó —
     // se recalcula al elegir otra ruta; no bloquea guardar el viaje sin
     // ruta (código/ruta sigue siendo opcional). lugarDescargaHistorico y
@@ -495,6 +505,30 @@ export default function PlanForm({
       ignore = true;
     };
   }, [cargarCatalogos]);
+
+  // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§2) — en EDICIÓN, si el
+  // viaje ya tiene una ruta, carga las tarifas activas de esa ruta para
+  // poblar el selector (sin re-aplicar defaults: no se toca el snapshot ya
+  // guardado del viaje).
+  const rutaIdInicial = plan?.ruta_id ?? 0;
+  useEffect(() => {
+    if (!rutaIdInicial) return;
+    let ignore = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/empresas/${slug}/tms/rutas/${rutaIdInicial}`);
+        const data = await res.json().catch(() => ({}));
+        if (!ignore && res.ok && data.ruta) {
+          setTarifasRuta((data.ruta.tarifasActivas ?? []) as typeof tarifasRuta);
+        }
+      } catch {
+        /* selector queda vacío; el monto manual sigue funcionando */
+      }
+    })();
+    return () => {
+      ignore = true;
+    };
+  }, [slug, rutaIdInicial]);
 
   // Cuando el roster de auxiliares ya cargó, precarga los auxiliares
   // actuales del plan (edición) por nombre — una sola vez por plan.
@@ -740,12 +774,27 @@ export default function PlanForm({
       viaticosMontos,
     }, ruta.tarifaReferencia, ruta.personalPredeterminado);
     setViaticosMontos(defaults.viaticosMontos);
+
+    // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§2) — tarifas activas
+    // del catálogo de la ruta: se preselecciona la predeterminada y el
+    // monto del viaje se DERIVA de ella (sigue editable como override).
+    const tarifasActivas = ruta.tarifasActivas ?? [];
+    setTarifasRuta(tarifasActivas);
+    const tarifaSel =
+      tarifasActivas.find((t) => t.id === ruta.tarifaPredeterminadaId) ?? tarifasActivas[0] ?? null;
+    // §4 — unidad recurrente de la ruta: se precarga como sugerencia; al
+    // CAMBIAR de ruta se vuelve a aplicar (el usuario puede editarla luego
+    // para este viaje sin tocar la ruta maestra).
+    const placaSugerida = ruta.unidadRecurrentePlaca ?? "";
+
     setForm((f) => ({
       ...f,
       clienteId: ruta.clienteId,
       clienteNombre: ruta.clienteNombre,
       horaCarga: ruta.horaHabitual || f.horaCarga,
-      tarifaComercial: defaults.tarifaComercial,
+      tarifaId: tarifaSel?.id ?? 0,
+      tarifaComercial: tarifaSel ? String(tarifaSel.monto) : defaults.tarifaComercial,
+      placa: placaSugerida || f.placa,
       rutaId: ruta.id,
       rutaCodigo: ruta.codigo,
       lugarDescargaHistorico: ruta.destinoDescripcion ?? f.lugarDescargaHistorico,
@@ -986,6 +1035,10 @@ export default function PlanForm({
             tipoTraslado: form.tipoTraslado || undefined,
             regresoEstimado: form.regresoEstimado || undefined,
             tarifaComercial: form.tarifaComercial === "" ? undefined : Number(form.tarifaComercial),
+            // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§2) — id de la
+            // tarifa del catálogo elegida; el backend snapshotea nombre/
+            // monto/moneda en el viaje.
+            tarifaId: form.tarifaId > 0 ? form.tarifaId : undefined,
             // PROGRAMACION-REPORTES-FILTROS-1: costo operativo de referencia,
             // referencia del cliente y observaciones ya no se capturan desde
             // este formulario (ver comentario en Part A del ticket) — no se
@@ -1071,6 +1124,16 @@ export default function PlanForm({
             : form.tarifaComercial === ""
               ? null
               : Number(form.tarifaComercial),
+          // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§2) — solo se
+          // envía si cambió respecto al viaje guardado: cambiarla
+          // re-snapshotea; 0 -> null quita la tarifa. Mismo gate
+          // pre-cierre que el monto.
+          tarifaId:
+            bloqueadoParaPreCierre || form.tarifaId === (plan?.tarifa_id ?? 0)
+              ? undefined
+              : form.tarifaId > 0
+                ? form.tarifaId
+                : null,
           // PROGRAMACION-REPORTES-FILTROS-1: costo operativo de referencia y
           // referencia del cliente ya no se editan desde este formulario —
           // no se envían en el PATCH nuevo (backend sigue aceptándolos
@@ -1581,8 +1644,37 @@ export default function PlanForm({
           </span>
         ) : null}
       </label>
+      {tarifasRuta.length ? (
+        <label className={`text-xs text-[var(--muted)] ${bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
+          Tarifa de la ruta
+          <select
+            className={`${inputCls} mt-1 w-full`}
+            value={form.tarifaId}
+            onChange={(e) => {
+              const id = Number(e.target.value);
+              const t = tarifasRuta.find((x) => x.id === id);
+              setForm((f) => ({
+                ...f,
+                tarifaId: id,
+                tarifaComercial: t ? String(t.monto) : f.tarifaComercial,
+              }));
+            }}
+          >
+            <option value={0}>— Sin tarifa del catálogo (monto manual) —</option>
+            {tarifasRuta.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.nombre} · {t.moneda} {t.monto.toLocaleString("es-GT", { minimumFractionDigits: 2 })}
+                {t.predeterminada ? " (predeterminada)" : ""}
+              </option>
+            ))}
+          </select>
+          <span className="mt-0.5 block text-[10px]">
+            El monto de abajo se toma de la tarifa elegida — puedes ajustarlo para este viaje sin cambiar la tarifa maestra.
+          </span>
+        </label>
+      ) : null}
       <label className={`text-xs text-[var(--muted)] ${bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
-        Tarifa comercial (GTQ)
+        {tarifasRuta.length ? "Monto del viaje (GTQ) — override" : "Tarifa comercial (GTQ)"}
         <input
           type="number"
           min="0"

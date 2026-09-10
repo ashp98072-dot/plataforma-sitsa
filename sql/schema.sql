@@ -614,6 +614,19 @@ CREATE TABLE IF NOT EXISTS tms_planes_viaje (
   tipo_traslado VARCHAR(80) NULL,
   regreso_estimado DATETIME NULL,
   tarifa_comercial DECIMAL(12,2) NULL,
+  -- RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1: snapshot de la tarifa
+  -- del catálogo (tms_ruta_tarifas) usada en este viaje. tarifa_id es
+  -- SOLO informativo (sin FK, mismo criterio que ruta_id) — la fila
+  -- maestra puede cambiar o desactivarse después. tarifa_*_historico son
+  -- la fotografía del nombre/monto/moneda en el momento de armar el
+  -- viaje; si mañana cambia la tarifa maestra, este viaje NO cambia de
+  -- monto. `tarifa_comercial` (arriba) sigue siendo el monto realmente
+  -- cobrado (editable como override) y el que usan los reportes de
+  -- ingresos.
+  tarifa_id INT NULL DEFAULT NULL,
+  tarifa_nombre_historico VARCHAR(120) NULL DEFAULT NULL,
+  tarifa_monto_historico DECIMAL(12,2) NULL DEFAULT NULL,
+  tarifa_moneda_historico VARCHAR(10) NULL DEFAULT NULL,
   -- TMS-GASTOS-REPORTES-1: snapshot editable del costo operativo de
   -- referencia (copiado de tms_cliente_rutas.costo_operativo al elegir la
   -- ruta) — ver sql/migrate-2026-09-tms-gastos-reportes.sql.
@@ -794,6 +807,12 @@ CREATE TABLE IF NOT EXISTS tms_cliente_rutas (
   hora_habitual VARCHAR(20) NULL,
   tarifa_referencia DECIMAL(12,2) NULL DEFAULT NULL,
   costo_operativo DECIMAL(12,2) NULL DEFAULT NULL,
+  -- RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1: unidad habitual de la
+  -- ruta (opcional). FK simple a flota_vehiculos(id) más abajo; el
+  -- aislamiento por empresa lo valida la aplicación
+  -- (validarUnidadRecurrenteTx). Programación la precarga como sugerencia;
+  -- cambiar la unidad de un viaje NO altera esta configuración.
+  unidad_recurrente_id INT NULL DEFAULT NULL,
   contacto_cliente_id INT NULL,
   observaciones VARCHAR(300) NULL,
   activo TINYINT(1) NOT NULL DEFAULT 1,
@@ -970,6 +989,58 @@ ALTER TABLE tms_unidades
   ADD CONSTRAINT fk_tmsuni_flota
   FOREIGN KEY (flota_vehiculo_id) REFERENCES flota_vehiculos(id)
   ON DELETE SET NULL;
+
+-- RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1: la FK de
+-- tms_cliente_rutas.unidad_recurrente_id se declara aquí (no inline
+-- arriba) porque flota_vehiculos recién queda definida en este punto.
+-- FK SIMPLE a flota_vehiculos(id), IGUAL que fk_tmsuni_flota arriba
+-- (tms_unidades.flota_vehiculo_id): una FK compuesta
+-- (empresa_id, unidad_recurrente_id) acopla tms_cliente_rutas.empresa_id
+-- al tipo de flota_vehiculos.empresa_id y provoca errno 150 en entornos
+-- donde esos tipos difieren (flota puede venir de control-flota). El
+-- aislamiento por empresa se valida en la aplicación
+-- (validarUnidadRecurrenteTx en src/lib/tms/cliente-rutas.ts).
+ALTER TABLE tms_cliente_rutas
+  ADD CONSTRAINT fk_tmsclirutas_unidad_recurrente
+  FOREIGN KEY (unidad_recurrente_id) REFERENCES flota_vehiculos(id)
+  ON DELETE SET NULL;
+
+-- RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1: catálogo de opciones de
+-- tarifa por ruta (varias activas a la vez). Cada viaje elige una y
+-- guarda su snapshot en tms_planes_viaje (tarifa_nombre/monto/moneda_
+-- historico) — cambiar la tarifa maestra NUNCA cambia viajes anteriores.
+-- "Solo una predeterminada activa por ruta" se garantiza en la capa de
+-- aplicación (ruta-tarifas.ts) dentro de la transacción; la auditoría de
+-- cambios va a la tabla `auditoria` genérica.
+CREATE TABLE IF NOT EXISTS tms_ruta_tarifas (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  ruta_id INT NOT NULL,
+  nombre VARCHAR(120) NOT NULL,
+  descripcion VARCHAR(300) NULL,
+  monto DECIMAL(12,2) NOT NULL,
+  moneda VARCHAR(10) NOT NULL DEFAULT 'GTQ',
+  vigente_desde DATE NOT NULL,
+  vigente_hasta DATE NULL DEFAULT NULL,
+  activa TINYINT(1) NOT NULL DEFAULT 1,
+  predeterminada TINYINT(1) NOT NULL DEFAULT 0,
+  observacion VARCHAR(300) NULL,
+  creado_por INT NULL,
+  creado_por_nombre VARCHAR(200) NULL,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actualizado_por INT NULL,
+  actualizado_por_nombre VARCHAR(200) NULL,
+  actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_tmsrutatarifas_ruta (empresa_id, ruta_id, activa, predeterminada),
+  CONSTRAINT fk_tmsrutatarifas_empresa
+    FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
+  CONSTRAINT fk_tmsrutatarifas_ruta_ambito
+    FOREIGN KEY (empresa_id, ruta_id) REFERENCES tms_cliente_rutas (empresa_id, id) ON DELETE CASCADE,
+  CONSTRAINT fk_tmsrutatarifas_creador
+    FOREIGN KEY (creado_por) REFERENCES usuarios (id) ON DELETE SET NULL,
+  CONSTRAINT fk_tmsrutatarifas_editor
+    FOREIGN KEY (actualizado_por) REFERENCES usuarios (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS flota_lecturas (
   id INT AUTO_INCREMENT PRIMARY KEY,
