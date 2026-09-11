@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { query, type SqlParams } from "@/lib/db";
 import { requireTenantGastos } from "@/lib/tenant";
+import { METODOS_PAGO_GASTO } from "@/lib/tms/gastos";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -91,6 +92,11 @@ export async function GET(_req: Request, ctx: Ctx) {
       })),
       usuarios: usuarios.map((r) => ({ id: Number(r.id), nombre: String(r.nombre) })),
       solicitantes: usuarios.filter((r) => ["Operaciones", "GerenteOperaciones", "JefeOperaciones", "AuxiliarOperaciones"].includes(String(r.rol_global ?? ""))).map((r) => ({ id: Number(r.id), nombre: String(r.nombre) })),
+      // FONDOS-GASTOS-METODO-PAGO-1 — catálogo compartido: Fondos ya
+      // reutiliza este endpoint para empleados/vehículos/clientes/planes,
+      // ahora también para el selector de método de pago (mismo catálogo
+      // que ya usa Gastos, sin duplicarlo).
+      metodosPago: METODOS_PAGO_GASTO,
     },
     { headers: { "Cache-Control": "private, no-store" } },
     );

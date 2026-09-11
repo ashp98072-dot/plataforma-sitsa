@@ -43,6 +43,36 @@ export type CategoriaGasto = (typeof CATEGORIAS_GASTO)[number];
 export const METODOS_PAGO_GASTO = ["Efectivo", "Transferencia", "Transferencia móvil", "Tarjeta", "Cheque", "Otro"] as const;
 export type MetodoPagoGasto = (typeof METODOS_PAGO_GASTO)[number];
 
+/**
+ * FONDOS-GASTOS-METODO-PAGO-1 — el destino de pago vive en UN solo campo
+ * físico por módulo (numero_cuenta_pago aquí, `cuenta` en fondos.ts); solo
+ * cambia su ETIQUETA visible según el método ("Cuenta" o "Número"), nunca
+ * se duplica en dos columnas. Esta función es la única puerta de
+ * normalización/validación de ese campo y la reutilizan tanto Gastos como
+ * Fondos (fondos.ts) para no duplicar la regla.
+ *
+ * - Métodos distintos a "Transferencia móvil": el campo sigue siendo
+ *   opcional, mismo comportamiento que antes de este cambio (solo trim).
+ * - "Transferencia móvil": obligatorio; acepta espacios/guiones en la
+ *   entrada pero los normaliza (los quita) antes de guardar; el "+" solo
+ *   se acepta al inicio; exige 8-15 dígitos reales, sin contar el "+".
+ */
+const REGEX_TRANSFERENCIA_MOVIL = /^\+?\d{8,15}$/;
+
+export function normalizarDestinoPago(
+  metodoPago: string | null | undefined,
+  valor: string | null | undefined,
+): string | null {
+  const limpio = valor?.trim() || null;
+  if (metodoPago !== "Transferencia móvil") return limpio;
+  if (!limpio) throw new Error("Ingresa el número de transferencia móvil.");
+  const normalizado = limpio.replace(/[\s-]/g, "");
+  if (!REGEX_TRANSFERENCIA_MOVIL.test(normalizado)) {
+    throw new Error('El número de transferencia móvil debe tener entre 8 y 15 dígitos (puede iniciar con "+").');
+  }
+  return normalizado;
+}
+
 export type GastoOperativo = {
   id: number;
   empresaId: number;
@@ -228,6 +258,7 @@ export async function crearGasto(
   if (!input.fechaSolicitud) throw new Error("Fecha de solicitud requerida.");
   if (!input.categoria) throw new Error("Categoría de gasto requerida.");
   if (!(input.monto > 0)) throw new Error("El monto debe ser mayor a cero.");
+  const numeroCuentaPago = normalizarDestinoPago(input.metodoPago ?? null, input.numeroCuentaPago);
   await validarReferenciasGasto(empresaId, input);
   const r = await execute(
     `INSERT INTO tms_gastos_operativos
@@ -248,7 +279,7 @@ export async function crearGasto(
       input.cantidad ?? 1,
       input.monto,
       input.metodoPago ?? null,
-      input.numeroCuentaPago?.trim() || null,
+      numeroCuentaPago,
       input.tieneFactura ? 1 : 0,
       input.observaciones?.trim() || null,
       creadoPor ?? null,
@@ -270,6 +301,11 @@ export async function actualizarGasto(
   if (!actual) return null;
   const monto = cambios.monto !== undefined ? cambios.monto : actual.monto;
   if (!(monto > 0)) throw new Error("El monto debe ser mayor a cero.");
+  const metodoPago = cambios.metodoPago !== undefined ? cambios.metodoPago : actual.metodoPago;
+  const numeroCuentaPago = normalizarDestinoPago(
+    metodoPago,
+    cambios.numeroCuentaPago !== undefined ? cambios.numeroCuentaPago : actual.numeroCuentaPago,
+  );
   const empleadoId = cambios.empleadoId !== undefined ? cambios.empleadoId : actual.empleadoId;
   const vehiculoId = cambios.vehiculoId !== undefined ? cambios.vehiculoId : actual.vehiculoId;
   const clienteId = cambios.clienteId !== undefined ? cambios.clienteId : actual.clienteId;
@@ -295,8 +331,8 @@ export async function actualizarGasto(
       cambios.descripcion !== undefined ? cambios.descripcion?.trim() || null : actual.descripcion,
       cambios.cantidad !== undefined ? cambios.cantidad : actual.cantidad,
       monto,
-      cambios.metodoPago !== undefined ? cambios.metodoPago : actual.metodoPago,
-      cambios.numeroCuentaPago !== undefined ? cambios.numeroCuentaPago?.trim() || null : actual.numeroCuentaPago,
+      metodoPago,
+      numeroCuentaPago,
       // Un comprobante almacenado es evidencia suficiente y prevalece
       // sobre un false enviado por cualquier cliente. Para pasar a 0 se
       // debe eliminar primero el archivo mediante su endpoint dedicado.

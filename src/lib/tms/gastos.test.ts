@@ -9,6 +9,7 @@ import {
   crearGasto,
   desactivarGasto,
   listarGastos,
+  normalizarDestinoPago,
   obtenerGasto,
   type GastoOperativo,
 } from "./gastos";
@@ -45,6 +46,47 @@ describe("métodos de pago", () => {
   it("incluye Transferencia móvil sin retirar los métodos existentes", () => {
     expect(METODOS_PAGO_GASTO).toContain("Transferencia móvil");
     expect(METODOS_PAGO_GASTO).toEqual(expect.arrayContaining(["Efectivo", "Transferencia", "Tarjeta", "Cheque", "Otro"]));
+  });
+});
+
+/**
+ * FONDOS-GASTOS-METODO-PAGO-1 — normalizarDestinoPago es la ÚNICA puerta
+ * de validación/normalización del destino de pago, reutilizada por
+ * Gastos y Fondos (fondos.ts la importa de aquí).
+ */
+describe("normalizarDestinoPago", () => {
+  it("métodos distintos a Transferencia móvil: opcional, solo trim (sin cambio de comportamiento previo)", () => {
+    expect(normalizarDestinoPago("Efectivo", "  Caja chica  ")).toBe("Caja chica");
+    expect(normalizarDestinoPago("Efectivo", "")).toBeNull();
+    expect(normalizarDestinoPago(null, null)).toBeNull();
+    expect(normalizarDestinoPago(undefined, undefined)).toBeNull();
+  });
+
+  it("Transferencia móvil: vacío se rechaza", () => {
+    expect(() => normalizarDestinoPago("Transferencia móvil", "")).toThrow("Ingresa el número");
+    expect(() => normalizarDestinoPago("Transferencia móvil", null)).toThrow("Ingresa el número");
+  });
+
+  it("Transferencia móvil: acepta espacios/guiones y los normaliza (los quita) antes de guardar", () => {
+    expect(normalizarDestinoPago("Transferencia móvil", "5555 1234")).toBe("55551234");
+    expect(normalizarDestinoPago("Transferencia móvil", "5555-1234")).toBe("55551234");
+    expect(normalizarDestinoPago("Transferencia móvil", "+502 5555-1234")).toBe("+50255551234");
+  });
+
+  it("Transferencia móvil: el '+' solo se acepta al inicio", () => {
+    expect(() => normalizarDestinoPago("Transferencia móvil", "5555+1234")).toThrow("8 y 15 dígitos");
+    expect(() => normalizarDestinoPago("Transferencia móvil", "5555123+")).toThrow("8 y 15 dígitos");
+  });
+
+  it("Transferencia móvil: exige 8-15 dígitos reales, sin contar el '+'", () => {
+    expect(() => normalizarDestinoPago("Transferencia móvil", "1234567")).toThrow("8 y 15 dígitos"); // 7 dígitos
+    expect(normalizarDestinoPago("Transferencia móvil", "12345678")).toBe("12345678"); // 8 dígitos, límite inferior
+    expect(normalizarDestinoPago("Transferencia móvil", "+123456789012345")).toBe("+123456789012345"); // 15 dígitos + "+", límite superior
+    expect(() => normalizarDestinoPago("Transferencia móvil", "+1234567890123456")).toThrow("8 y 15 dígitos"); // 16 dígitos
+  });
+
+  it("Transferencia móvil: rechaza letras u otros caracteres no numéricos", () => {
+    expect(() => normalizarDestinoPago("Transferencia móvil", "5555abc4")).toThrow("8 y 15 dígitos");
   });
 });
 
@@ -117,6 +159,26 @@ describe("crearGasto", () => {
     }, "admin");
     expect(g.id).toBe(55);
     expect(vi.mocked(execute).mock.calls[0][0]).toContain("INSERT INTO tms_gastos_operativos");
+  });
+
+  describe("FONDOS-GASTOS-METODO-PAGO-1: Transferencia móvil", () => {
+    it("rechaza crear sin número cuando el método es Transferencia móvil", async () => {
+      await expect(crearGasto(7, {
+        fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, metodoPago: "Transferencia móvil",
+      })).rejects.toThrow("Ingresa el número");
+      expect(execute).not.toHaveBeenCalled();
+    });
+
+    it("normaliza el número (quita espacios/guiones) antes de insertar", async () => {
+      vi.mocked(execute).mockResolvedValue({ insertId: 55 } as never);
+      vi.mocked(query).mockResolvedValue([filaGasto({ id: 55, metodo_pago: "Transferencia móvil", numero_cuenta_pago: "55551234" })] as never);
+      await crearGasto(7, {
+        fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100,
+        metodoPago: "Transferencia móvil", numeroCuentaPago: "5555-1234",
+      });
+      const params = vi.mocked(execute).mock.calls[0][1] as unknown[];
+      expect(params).toContain("55551234");
+    });
   });
 
   describe("AISLAMIENTO MULTIEMPRESA: rechaza referencias que no pertenecen a la empresa actual (bloqueo 1, revisión PR #204)", () => {
@@ -205,6 +267,23 @@ describe("actualizarGasto / desactivarGasto", () => {
       .mockResolvedValueOnce([] as never); // valida vehiculo -> no existe en esta empresa
     await expect(actualizarGasto(7, 1, { vehiculoId: 999 })).rejects.toThrow("El vehículo indicado no pertenece a esta empresa.");
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  describe("FONDOS-GASTOS-METODO-PAGO-1: valida sobre el valor FUSIONADO (actual + cambios)", () => {
+    it("rechaza cambiar el método a Transferencia móvil si no queda un número (ni en cambios ni en el registro actual)", async () => {
+      vi.mocked(query).mockResolvedValueOnce([filaGasto({ metodo_pago: "Efectivo", numero_cuenta_pago: null })] as never);
+      await expect(actualizarGasto(7, 1, { metodoPago: "Transferencia móvil" })).rejects.toThrow("Ingresa el número");
+      expect(execute).not.toHaveBeenCalled();
+    });
+
+    it("acepta si el número ya existía en el registro actual y solo cambia el método", async () => {
+      vi.mocked(query)
+        .mockResolvedValueOnce([filaGasto({ metodo_pago: "Efectivo", numero_cuenta_pago: "5555-1234" })] as never)
+        .mockResolvedValueOnce([filaGasto({ metodo_pago: "Transferencia móvil", numero_cuenta_pago: "55551234" })] as never);
+      await actualizarGasto(7, 1, { metodoPago: "Transferencia móvil" });
+      const params = vi.mocked(execute).mock.calls[0][1] as unknown[];
+      expect(params).toContain("55551234");
+    });
   });
 
   it("no re-valida referencias que no cambiaron (solo valida lo que viene en `cambios`)", async () => {

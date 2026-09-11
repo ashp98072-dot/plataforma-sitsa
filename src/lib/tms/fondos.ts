@@ -6,6 +6,7 @@ import { crearFirmaInterna } from "@/lib/firmas/firmas-internas";
 import { leerBytesFirmaGuardada } from "@/lib/firmas/usuario-firmas";
 import { sha256Hex } from "@/lib/firmas/imagen-firma";
 import { borrarUpload, guardarUpload } from "@/lib/uploads";
+import { normalizarDestinoPago } from "@/lib/tms/gastos";
 
 /**
  * TMS-GASTOS-REPORTES-1 (fase 1) — solicitudes de fondo (anticipo/caja
@@ -233,6 +234,16 @@ export type LineaFondo = {
   cargo: string | null;
   /** SOLICITUD-FONDOS-PDF-AUTORIZADO-1 — snapshot de empleados.cuenta_bancaria, ver resolverSnapshotLineaTx. */
   cuenta: string | null;
+  /**
+   * FONDOS-GASTOS-METODO-PAGO-1 — método de pago de ESTA línea (mismo
+   * catálogo que Gastos, METODOS_PAGO_GASTO en gastos.ts). No es un
+   * snapshot derivado de otro catálogo: se elige directamente por línea,
+   * igual que categoria/descripcion. Determina si `cuenta` se interpreta
+   * como cuenta bancaria o como número de transferencia móvil — la
+   * ETIQUETA (Cuenta/Número) es solo de presentación (ver export-files/
+   * fondos-solicitud-pdf/page.tsx), el dato vive únicamente aquí.
+   */
+  metodoPago: string | null;
   vehiculoId: number | null;
   placa: string | null;
   clienteId: number | null;
@@ -282,6 +293,7 @@ function mapLinea(r: RowDataPacket): LineaFondo {
     empleadoNombre: r.empleado_nombre != null ? String(r.empleado_nombre) : null,
     cargo: r.cargo != null ? String(r.cargo) : null,
     cuenta: r.cuenta != null ? String(r.cuenta) : null,
+    metodoPago: r.metodo_pago != null ? String(r.metodo_pago) : null,
     vehiculoId: r.vehiculo_id != null ? Number(r.vehiculo_id) : null,
     placa: r.placa != null ? String(r.placa) : null,
     clienteId: r.cliente_id != null ? Number(r.cliente_id) : null,
@@ -369,7 +381,7 @@ export async function obtenerSolicitudFondo(empresaId: number, id: number): Prom
   const lineas = await query<RowDataPacket[]>(
     `SELECT id, categoria, descripcion, cantidad, monto, orden,
             DATE_FORMAT(fecha_viaje, '%Y-%m-%d') AS fecha_viaje,
-            empleado_id, empleado_nombre, cargo, cuenta,
+            empleado_id, empleado_nombre, cargo, cuenta, metodo_pago,
             vehiculo_id, placa,
             cliente_id, cliente_nombre,
             plan_id
@@ -402,6 +414,8 @@ export type LineaFondoInput = {
   empleadoNombreOverride?: string | null;
   cuentaOverride?: string | null;
   cargoOverride?: string | null;
+  /** FONDOS-GASTOS-METODO-PAGO-1 — ver LineaFondo.metodoPago. */
+  metodoPago?: string | null;
 };
 
 export type SolicitudFondoInput = {
@@ -506,14 +520,15 @@ export async function crearSolicitudFondo(
     let orden = 0;
     for (const l of input.lineas) {
       const snapshot = await resolverSnapshotLineaTx(conn, empresaId, l);
+      const cuenta = normalizarDestinoPago(l.metodoPago ?? null, snapshot.cuenta);
       await executeConn(conn,
         `INSERT INTO tms_solicitud_fondo_lineas
           (empresa_id, solicitud_id, categoria, descripcion, cantidad, monto, orden,
-           fecha_viaje, empleado_id, empleado_nombre, cargo, cuenta, vehiculo_id, placa, cliente_id, cliente_nombre, plan_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           fecha_viaje, empleado_id, empleado_nombre, cargo, cuenta, metodo_pago, vehiculo_id, placa, cliente_id, cliente_nombre, plan_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           empresaId, solicitudId, l.categoria, l.descripcion?.trim() || null, l.cantidad ?? 1, l.monto, orden,
-          snapshot.fechaViaje, l.empleadoId ?? null, snapshot.empleadoNombre, snapshot.cargo, snapshot.cuenta,
+          snapshot.fechaViaje, l.empleadoId ?? null, snapshot.empleadoNombre, snapshot.cargo, cuenta, l.metodoPago ?? null,
           l.vehiculoId ?? null, snapshot.placa, snapshot.clienteId, snapshot.clienteNombre, l.planId ?? null,
         ],
       );
@@ -718,14 +733,15 @@ export async function actualizarSolicitudFondo(
       let orden = 0;
       for (const l of input.lineas) {
         const snapshot = await resolverSnapshotLineaTx(conn, empresaId, l);
+        const cuenta = normalizarDestinoPago(l.metodoPago ?? null, snapshot.cuenta);
         await executeConn(conn,
           `INSERT INTO tms_solicitud_fondo_lineas
             (empresa_id, solicitud_id, categoria, descripcion, cantidad, monto, orden,
-             fecha_viaje, empleado_id, empleado_nombre, cargo, cuenta, vehiculo_id, placa, cliente_id, cliente_nombre, plan_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             fecha_viaje, empleado_id, empleado_nombre, cargo, cuenta, metodo_pago, vehiculo_id, placa, cliente_id, cliente_nombre, plan_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             empresaId, id, l.categoria, l.descripcion?.trim() || null, l.cantidad ?? 1, l.monto, orden,
-            snapshot.fechaViaje, l.empleadoId ?? null, snapshot.empleadoNombre, snapshot.cargo, snapshot.cuenta,
+            snapshot.fechaViaje, l.empleadoId ?? null, snapshot.empleadoNombre, snapshot.cargo, cuenta, l.metodoPago ?? null,
             l.vehiculoId ?? null, snapshot.placa, snapshot.clienteId, snapshot.clienteNombre, l.planId ?? null,
           ],
         );

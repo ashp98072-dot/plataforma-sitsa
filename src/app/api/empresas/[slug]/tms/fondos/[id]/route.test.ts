@@ -4,7 +4,11 @@ vi.mock("@/lib/tenant", () => ({
   requireTenantGastos: vi.fn(),
   requireTenantGastosAutorizar: vi.fn(),
 }));
-vi.mock("@/lib/tms/gastos", () => ({ CATEGORIAS_GASTO: ["Combustible", "Otros"] }));
+vi.mock("@/lib/tms/gastos", () => ({
+  CATEGORIAS_GASTO: ["Combustible", "Otros"],
+  // FONDOS-GASTOS-METODO-PAGO-1 — la ruta hace z.enum(METODOS_PAGO_GASTO) al cargar el módulo; sin este mock, undefined revienta el schema.
+  METODOS_PAGO_GASTO: ["Efectivo", "Transferencia", "Transferencia móvil", "Tarjeta", "Cheque", "Otro"],
+}));
 vi.mock("@/lib/tms/fondos", () => ({
   actualizarSolicitudFondo: vi.fn(),
   cambiarEstadoSolicitudFondo: vi.fn(),
@@ -14,7 +18,7 @@ vi.mock("@/lib/tms/fondos", () => ({
 vi.mock("@/lib/firmas/usuario-firmas", () => ({ leerBytesFirmaGuardada: vi.fn() }));
 
 import { requireTenantGastos, requireTenantGastosAutorizar } from "@/lib/tenant";
-import { cambiarEstadoSolicitudFondo } from "@/lib/tms/fondos";
+import { actualizarSolicitudFondo, cambiarEstadoSolicitudFondo } from "@/lib/tms/fondos";
 import { leerBytesFirmaGuardada } from "@/lib/firmas/usuario-firmas";
 import { PATCH } from "./route";
 
@@ -82,6 +86,23 @@ describe("PATCH /tms/fondos/[id] — permiso de autorización", () => {
     const res = await PATCH(req({ accion: "autorizar" }), ctx);
     expect(res.status).toBe(400);
     expect((await res.json()).error).toBe("No puede autorizar su propia solicitud.");
+  });
+
+  /** FONDOS-GASTOS-METODO-PAGO-1 — mismo schema de metodoPago que el POST de creación (fondos/route.ts). */
+  describe("accion: editar — schema de metodoPago por línea", () => {
+    beforeEach(() => vi.mocked(actualizarSolicitudFondo).mockResolvedValue({ id: 1 } as never));
+
+    it("acepta un método del catálogo existente", async () => {
+      const res = await PATCH(req({ accion: "editar", lineas: [{ categoria: "Combustible", monto: 100, metodoPago: "Transferencia móvil" }] }), ctx);
+      expect(res.status).toBe(200);
+      expect(actualizarSolicitudFondo).toHaveBeenCalled();
+    });
+
+    it("rechaza un método fuera del catálogo, sin llegar a actualizarSolicitudFondo", async () => {
+      const res = await PATCH(req({ accion: "editar", lineas: [{ categoria: "Combustible", monto: 100, metodoPago: "Bitcoin" }] }), ctx);
+      expect(res.status).toBe(400);
+      expect(actualizarSolicitudFondo).not.toHaveBeenCalled();
+    });
   });
 
   it("accion 'rechazar' usa el guard genérico 'gastos:editar', NO el de autorización", async () => {

@@ -11,7 +11,7 @@ import { paramsExportarFondos, paramsListadoFondos } from "@/lib/tms/exportacion
 
 type LineaFondo = {
   id: number; categoria: string; descripcion: string | null; cantidad: number; monto: number; orden: number;
-  fechaViaje: string | null; empleadoNombre: string | null; cargo: string | null; cuenta: string | null; placa: string | null; clienteNombre: string | null;
+  fechaViaje: string | null; empleadoNombre: string | null; cargo: string | null; cuenta: string | null; metodoPago: string | null; placa: string | null; clienteNombre: string | null;
   empleadoId: number | null; vehiculoId: number | null; clienteId: number | null; planId: number | null;
 };
 type SolicitudFondo = {
@@ -51,17 +51,19 @@ type Catalogos = {
   /** SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§3) — usuarios reales con acceso a esta empresa, para el selector "Requirente (usuario)". */
   usuarios: { id: number; nombre: string }[];
   solicitantes: { id: number; nombre: string }[];
+  /** FONDOS-GASTOS-METODO-PAGO-1 — mismo catálogo que ya usa Gastos, servido por este mismo endpoint compartido. */
+  metodosPago: string[];
 };
 
 type LineaForm = {
   categoria: string; descripcion: string; cantidad: string; monto: string;
   fechaViaje: string; empleadoId: string; vehiculoId: string; clienteId: string; planId: string;
-  empleadoNombre: string; cuenta: string; cargo: string;
+  empleadoNombre: string; cuenta: string; cargo: string; metodoPago: string;
 };
 const LINEA_VACIA: LineaForm = {
   categoria: "", descripcion: "", cantidad: "1", monto: "",
   fechaViaje: "", empleadoId: "", vehiculoId: "", clienteId: "", planId: "",
-  empleadoNombre: "", cuenta: "", cargo: "",
+  empleadoNombre: "", cuenta: "", cargo: "", metodoPago: "",
 };
 
 /**
@@ -117,7 +119,7 @@ export default function FondosPage() {
 
   const opcionesUsuarios = (usuarios: { id: number; nombre: string }[]): CatalogoSearchOption[] => usuarios.map((u) => ({ value: String(u.id), label: u.nombre }));
 
-  const [catalogos, setCatalogos] = useState<Catalogos>({ empleados: [], vehiculos: [], clientes: [], planes: [], usuarios: [], solicitantes: [] });
+  const [catalogos, setCatalogos] = useState<Catalogos>({ empleados: [], vehiculos: [], clientes: [], planes: [], usuarios: [], solicitantes: [], metodosPago: [] });
   useEffect(() => {
     fetch(`/api/empresas/${slug}/tms/gastos/catalogos`)
       .then(async (r) => {
@@ -128,6 +130,7 @@ export default function FondosPage() {
       .then((data) => setCatalogos({
         empleados: data.empleados ?? [], vehiculos: data.vehiculos ?? [], clientes: data.clientes ?? [],
         planes: data.planes ?? [], usuarios: data.usuarios ?? [], solicitantes: data.solicitantes ?? [],
+        metodosPago: data.metodosPago ?? [],
       }))
       .catch((e) => setError(e instanceof Error ? e.message : "No se pudieron cargar los catálogos."));
   }, [slug]);
@@ -192,6 +195,7 @@ export default function FondosPage() {
           empleadoNombre: l.empleadoNombre ?? "",
           cuenta: l.cuenta ?? "",
           cargo: l.cargo ?? "",
+          metodoPago: l.metodoPago ?? "",
         }))
       : [{ ...LINEA_VACIA }]);
     setMostrarForm(true);
@@ -215,6 +219,11 @@ export default function FondosPage() {
         empleadoNombreOverride: empleado && l.empleadoNombre.trim() !== empleado.nombre.trim() ? l.empleadoNombre.trim() : undefined,
         cuentaOverride: empleado && l.cuenta.trim() !== (empleado.cuentaBancaria ?? "").trim() ? l.cuenta.trim() : undefined,
         cargoOverride: empleado && l.cargo.trim() !== (empleado.puesto ?? "").trim() ? l.cargo.trim() : undefined,
+        // FONDOS-GASTOS-METODO-PAGO-1 — elegido directamente por línea,
+        // no es un override de snapshot (ver LineaFondo.metodoPago en
+        // fondos.ts). El servidor exige/normaliza el destino de pago
+        // cuando es "Transferencia móvil".
+        metodoPago: l.metodoPago || null,
       };
     });
     const res = editandoId
@@ -381,12 +390,26 @@ export default function FondosPage() {
                       <span className="mt-0.5 block text-[10px]">Si la dejas vacía y eliges un viaje, se completa con su fecha.</span>
                     </label>
                   </div>
-                  <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+                  <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
                     <label className="text-xs text-[var(--muted)]">Nombre
                       <input className={`${inputCls} mt-0.5 w-full`} value={l.empleadoNombre} onChange={(e) => set({ empleadoNombre: e.target.value })} maxLength={200} />
                     </label>
-                    <label className="text-xs text-[var(--muted)]">Cuenta
-                      <input className={`${inputCls} mt-0.5 w-full`} placeholder="Número de cuenta para depósito" value={l.cuenta} onChange={(e) => set({ cuenta: e.target.value })} maxLength={100} />
+                    {/*
+                      FONDOS-GASTOS-METODO-PAGO-1 — método de pago POR
+                      LÍNEA (mismo catálogo que Gastos); la etiqueta de
+                      "Cuenta" solo se vuelve dinámica aquí porque se
+                      edita UNA línea a la vez — en tablas multi-fila
+                      (Ver líneas, PDFs) el encabezado se mantiene fijo
+                      "Cuenta / Número".
+                    */}
+                    <label className="text-xs text-[var(--muted)]">Método de pago
+                      <select className={`${inputCls} mt-0.5 w-full`} value={l.metodoPago} onChange={(e) => set({ metodoPago: e.target.value })}>
+                        <option value="">—</option>
+                        {catalogos.metodosPago.map((m) => <option key={m} value={m}>{m}</option>)}
+                      </select>
+                    </label>
+                    <label className="text-xs text-[var(--muted)]">{l.metodoPago === "Transferencia móvil" ? "Número" : "Cuenta"}
+                      <input className={`${inputCls} mt-0.5 w-full`} placeholder={l.metodoPago === "Transferencia móvil" ? "Número de transferencia móvil" : "Número de cuenta para depósito"} value={l.cuenta} onChange={(e) => set({ cuenta: e.target.value })} maxLength={100} />
                     </label>
                     <label className="text-xs text-[var(--muted)]">Cargo
                       <input className={`${inputCls} mt-0.5 w-full`} value={l.cargo} onChange={(e) => set({ cargo: e.target.value })} maxLength={150} />
@@ -457,7 +480,7 @@ export default function FondosPage() {
               <table className="mt-2 w-full text-left text-xs">
                 <thead className="text-[var(--muted)]">
                   <tr>
-                    <th>Categoría</th><th>Descripción</th><th>Empleado</th><th>Cargo</th><th>Cuenta</th><th>Placa</th><th>Cliente</th>
+                    <th>Categoría</th><th>Descripción</th><th>Empleado</th><th>Cargo</th><th>Cuenta / Número</th><th>Placa</th><th>Cliente</th>
                     <th>Fecha viaje</th><th>Cantidad</th><th>Monto</th><th>Total línea</th>
                   </tr>
                 </thead>

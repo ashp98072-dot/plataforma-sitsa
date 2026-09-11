@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireTenantGastos, requireTenantGastosAutorizar } from "@/lib/tenant";
-import { CATEGORIAS_GASTO } from "@/lib/tms/gastos";
+import { CATEGORIAS_GASTO, METODOS_PAGO_GASTO } from "@/lib/tms/gastos";
 import {
   actualizarSolicitudFondo,
   cambiarEstadoSolicitudFondo,
@@ -34,6 +34,8 @@ const lineaSchema = z.object({
   empleadoNombreOverride: z.string().trim().max(200).nullable().optional(),
   cuentaOverride: z.string().trim().max(100).nullable().optional(),
   cargoOverride: z.string().trim().max(150).nullable().optional(),
+  // FONDOS-GASTOS-METODO-PAGO-1 — ver fondos/route.ts.
+  metodoPago: z.enum(METODOS_PAGO_GASTO).nullable().optional(),
 });
 
 const schema = z.object({

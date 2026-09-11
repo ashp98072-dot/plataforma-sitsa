@@ -49,25 +49,30 @@ function filaPdfViatico(f: FilaViaticoReporte): string[] {
   ];
 }
 
-// GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — primero las 9 columnas exigidas
-// por el ticket en ese orden (Fecha solicitud, Fecha viaje, Nombre, Cargo,
-// Placa, Cliente, Cant., Descripción, Total) y luego el resto compacto.
-const HEADERS_PDF_GASTOS = ["Fecha solicitud", "Fecha viaje", "Nombre", "Cargo", "Placa", "Cliente", "Cant.", "Descripción", "Total", "Código", "Categoría", "Estado"];
 /**
- * REPORTES-GASTOS-FONDOS-PDF-PRESENTACION-1 — peso EXPLÍCITO por columna
- * (mismo mecanismo ya usado en fondos-mensual-pdf.ts): sin esto, el
- * cálculo automático de dibujarTablaEnDoc (por longitud de encabezado)
- * dejaba "Cant."/"Código" tan angostos que su propio encabezado se
- * truncaba con "…" ("Cant…", "Códig…"). Solo cambia presentación — mismas
- * 12 columnas, mismos datos, mismo orden.
+ * FONDOS-GASTOS-METODO-PAGO-1 — PDF tabular simplificado, EXACTAMENTE
+ * estas 10 columnas en este orden para Gastos operativos y Solicitudes de
+ * fondo (mismo layout en ambos, ver mapeo aprobado del ticket). Reemplaza
+ * el formato anterior de 12 columnas (Código/Categoría/Estado en Gastos;
+ * Código/Estado/Requirente en Fondos) — esos datos siguen existiendo
+ * internamente y en otros reportes, pero no en este PDF operativo.
+ *
+ * "Cuenta / Número" es un encabezado FIJO (nunca dinámico) porque una
+ * misma tabla puede mezclar líneas/registros con distintos métodos de
+ * pago — el valor de la celda es el mismo campo de siempre
+ * (numero_cuenta_pago en Gastos, cuenta en Fondos), solo cambia su
+ * interpretación según el método de esa fila. Pesos reutilizados tal
+ * cual de fondos-solicitud-pdf.ts (ya tunados para este mismo layout en
+ * LETTER landscape, ~728pt útiles).
  */
-const WEIGHT_PDF_GASTOS = { 0: 9, 1: 9, 2: 14, 3: 11, 4: 8, 5: 13, 6: 7, 7: 20, 8: 10, 9: 9, 10: 11, 11: 8 };
+const HEADERS_PDF_TABULAR = ["Fecha de solicitud", "Fecha de viaje", "Nombre", "Cuenta / Número", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Valor"];
+const WEIGHT_PDF_TABULAR = { 0: 76, 1: 62, 2: 95, 3: 80, 4: 78, 5: 48, 6: 92, 7: 44, 8: 92, 9: 61 };
+
 function filaPdfGasto(f: FilaGastoDetalle): string[] {
   return [
     formatearFechaVisible(f.fechaSolicitud) || "—", f.fechaViaje ? formatearFechaVisible(f.fechaViaje) : "—",
-    f.empleadoNombre ?? "—", f.cargo ?? "—", f.placa ?? "—", f.clienteNombre ?? "—",
+    f.empleadoNombre ?? "—", f.numeroCuentaPago ?? "—", f.cargo ?? "—", f.placa ?? "—", f.clienteNombre ?? "—",
     String(f.cantidad), f.descripcion ?? "—", moneda(f.total),
-    f.planCodigo ?? "—", f.categoria, f.activo ? "Activo" : "Anulado",
   ];
 }
 
@@ -79,15 +84,30 @@ function filaPdfGasto(f: FilaGastoDetalle): string[] {
  * calendario completo, NO agrupa por solicitud ni dibuja firmas — es solo
  * la vista compacta equivalente al PDF de Gastos operativos.
  */
-const HEADERS_PDF_FONDOS = ["Código", "Fecha solicitud", "Fecha viaje", "Estado", "Requirente", "Nombre", "Cargo", "Placa", "Cliente", "Cant.", "Descripción", "Total"];
-const WEIGHT_PDF_FONDOS = { 0: 9, 1: 9, 2: 9, 3: 8, 4: 14, 5: 14, 6: 11, 7: 8, 8: 13, 9: 7, 10: 20, 11: 10 };
 function filaPdfFondo(f: FilaSolicitudFondoReporte): string[] {
   return [
-    f.solicitudCodigo, formatearFechaVisible(f.fechaSolicitud) || "—", f.fechaViaje ? formatearFechaVisible(f.fechaViaje) : "—",
-    f.estadoFondo, f.requirenteNombre ?? "—",
-    f.empleadoNombre ?? "—", f.cargo ?? "—", f.placa ?? "—", f.clienteNombre ?? "—",
+    formatearFechaVisible(f.fechaSolicitud) || "—", f.fechaViaje ? formatearFechaVisible(f.fechaViaje) : "—",
+    f.empleadoNombre ?? "—", f.cuenta ?? "—", f.cargo ?? "—", f.placa ?? "—", f.clienteNombre ?? "—",
     String(f.cantidad), f.descripcion ?? "—", moneda(f.total),
   ];
+}
+
+/**
+ * FONDOS-GASTOS-METODO-PAGO-1 — nombre del/de la requirente para el
+ * encabezado del PDF tabular de Fondos: si TODAS las filas ya filtradas
+ * comparten el mismo requirente, se muestra su nombre; si hay más de uno
+ * (o ninguno), "VARIOS REQUIRIENTES". Se deriva de los datos YA
+ * filtrados (nunca del parámetro de filtro en crudo) para que sea
+ * correcto incluso si el usuario no filtró por requirente pero el rango
+ * de fechas resultó en uno solo.
+ */
+function personaQueRequiereTexto(filas: FilaSolicitudFondoReporte[]): string {
+  const nombres = new Set(filas.map((f) => f.requirenteNombre?.trim() || null));
+  if (nombres.size === 1) {
+    const [unico] = nombres;
+    if (unico) return unico.toUpperCase();
+  }
+  return "VARIOS REQUIRIENTES";
 }
 
 function periodoTexto(fechaDesde?: string, fechaHasta?: string): string {
@@ -165,16 +185,22 @@ export async function GET(req: Request, ctx: Ctx) {
       });
     }
 
+    // FONDOS-GASTOS-METODO-PAGO-1 — PDF operativo simplificado: 10
+    // columnas fijas + encabezado EMPRESA REQUIRIENTE (Gastos no tiene
+    // concepto de requirente en su modelo — se omite PERSONA QUE
+    // REQUIERE, aprobado explícitamente). subtitulo multilínea: pdfkit
+    // respeta "\n" en dibujarTitulo/tablaAPdf sin tocar export-files.ts.
+    const subtituloGastos = `${subtitulo}\nEMPRESA REQUIRIENTE: ${guard.empresa.nombre.toUpperCase()}`;
     const totalGeneral = resultado.filas.reduce((s, f) => s + f.total, 0);
-    const filaTotal = ["", "", "", "", "", "", "", "TOTAL GENERAL", moneda(totalGeneral), `${resultado.filas.length} reg.`, "", ""];
+    const filaTotal = ["", "", "", "", "", "", "", "", "TOTAL:", moneda(totalGeneral)];
     const buffer = await tablaAPdf({
       title: "Reporte de gastos operativos — detalle",
-      subtitle: subtitulo,
-      headers: HEADERS_PDF_GASTOS,
+      subtitle: subtituloGastos,
+      headers: HEADERS_PDF_TABULAR,
       rows: [...resultado.filas.map(filaPdfGasto), filaTotal],
       layout: "landscape",
       modo: "tabla",
-      weight: WEIGHT_PDF_GASTOS,
+      weight: WEIGHT_PDF_TABULAR,
     });
     return new NextResponse(new Uint8Array(buffer), {
       headers: {
@@ -191,17 +217,22 @@ export async function GET(req: Request, ctx: Ctx) {
   // PDF mensual consolidado (con firmas) ni el PDF individual de una
   // solicitud — es una tercera vista, de solo consulta/impresión.
   if (formato === "pdf" && resultado.tipo === "fondos" && variante === "tabular") {
-    const subtitulo = `${guard.empresa.nombre} · Período: ${periodoTexto(filtros.fechaSolicitudDesde, filtros.fechaSolicitudHasta)} · Generado ${formatearTimestampVisible(ahoraLocal())} (Guatemala) · ${resultado.filas.length} registro(s)`;
+    // FONDOS-GASTOS-METODO-PAGO-1 — mismas 10 columnas que Gastos, más
+    // PERSONA QUE REQUIERE (Fondos sí tiene ese concepto): nombre único si
+    // todas las filas filtradas comparten requirente, "VARIOS
+    // REQUIRIENTES" si no (ver personaQueRequiereTexto).
+    const subtitulo = `${guard.empresa.nombre} · Período: ${periodoTexto(filtros.fechaSolicitudDesde, filtros.fechaSolicitudHasta)} · Generado ${formatearTimestampVisible(ahoraLocal())} (Guatemala) · ${resultado.filas.length} registro(s)`
+      + `\nEMPRESA REQUIRIENTE: ${guard.empresa.nombre.toUpperCase()}\nPERSONA QUE REQUIERE: ${personaQueRequiereTexto(resultado.filas)}`;
     const totalGeneral = resultado.filas.reduce((s, f) => s + f.total, 0);
-    const filaTotal = ["", "", "", "", "", "", "", "", "", `${resultado.filas.length} reg.`, "TOTAL GENERAL", moneda(totalGeneral)];
+    const filaTotal = ["", "", "", "", "", "", "", "", "TOTAL:", moneda(totalGeneral)];
     const buffer = await tablaAPdf({
       title: "Reporte de solicitudes de fondo — detalle",
       subtitle: subtitulo,
-      headers: HEADERS_PDF_FONDOS,
+      headers: HEADERS_PDF_TABULAR,
       rows: [...resultado.filas.map(filaPdfFondo), filaTotal],
       layout: "landscape",
       modo: "tabla",
-      weight: WEIGHT_PDF_FONDOS,
+      weight: WEIGHT_PDF_TABULAR,
     });
     return new NextResponse(new Uint8Array(buffer), {
       headers: {

@@ -30,6 +30,7 @@ function filaGasto(overrides: Partial<FilaGastoDetalle> = {}): FilaGastoDetalle 
     planId: 2, planCodigo: "PLAN-1", empleadoId: 4, empleadoNombre: "Heber Sitan", cargo: "Piloto",
     vehiculoId: 9, placa: "P111AAA", clienteId: 5, clienteNombre: "Cliente A",
     categoria: "Combustible", descripcion: "Diesel", cantidad: 2, monto: 100, total: 200,
+    metodoPago: null, numeroCuentaPago: null,
     activo: true, registradoPor: "admin", observaciones: null,
     ...overrides,
   };
@@ -124,12 +125,12 @@ describe("exportación Excel de reportes de gastos", () => {
       lineas: [
         {
           id: 1, categoria: "Combustible", descripcion: "Diesel", cantidad: 2, monto: 100, orden: 0,
-          fechaViaje: null, empleadoId: null, empleadoNombre: null, cargo: null, cuenta: null,
+          fechaViaje: null, empleadoId: null, empleadoNombre: null, cargo: null, cuenta: null, metodoPago: null,
           vehiculoId: null, placa: null, clienteId: null, clienteNombre: null, planId: null,
         },
         {
           id: 2, categoria: "Hospedaje", descripcion: null, cantidad: 1, monto: 150, orden: 1,
-          fechaViaje: null, empleadoId: null, empleadoNombre: null, cargo: null, cuenta: null,
+          fechaViaje: null, empleadoId: null, empleadoNombre: null, cargo: null, cuenta: null, metodoPago: null,
           vehiculoId: null, placa: null, clienteId: null, clienteNombre: null, planId: null,
         },
       ],

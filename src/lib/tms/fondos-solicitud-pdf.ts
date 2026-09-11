@@ -236,7 +236,12 @@ function construirPdf(
     doc.moveDown(0.6);
 
     // §2 Tabla de detalle — EXACTAMENTE estas 10 columnas, en este orden.
-    const headers = ["Fecha de solicitud", "Fecha de viaje", "Nombre", "Cuenta", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Valor"];
+    // FONDOS-GASTOS-METODO-PAGO-1 — "Cuenta / Número" (antes "Cuenta"):
+    // una misma solicitud puede tener líneas con distintos métodos de
+    // pago (cada línea elige el suyo), así que el encabezado se mantiene
+    // FIJO — nunca dinámico por línea — mismo criterio que el PDF tabular
+    // (exportar/route.ts).
+    const headers = ["Fecha de solicitud", "Fecha de viaje", "Nombre", "Cuenta / Número", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Valor"];
     const fechaSolicitudVisible = formatearFechaVisible(solicitud.fechaRequerimiento);
     const rows = solicitud.lineas.map((l) => [
       fechaSolicitudVisible,

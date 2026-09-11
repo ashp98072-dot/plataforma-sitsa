@@ -165,7 +165,7 @@ describe("generarPdfSolicitudFondoAutorizada — orientación y anchos (FONDOS-P
     const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
     const i = textos.indexOf("Fecha de solicitud");
     expect(textos.slice(i, i + 10)).toEqual([
-      "Fecha de solicitud", "Fecha de viaje", "Nombre", "Cuenta", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Valor",
+      "Fecha de solicitud", "Fecha de viaje", "Nombre", "Cuenta / Número", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Valor",
     ]);
   });
 
@@ -223,7 +223,7 @@ describe("generarPdfSolicitudFondoAutorizada — tabla de detalle (§2 del ticke
     const idxFecha = textos.indexOf("Fecha de solicitud");
     expect(idxFecha).toBeGreaterThanOrEqual(0);
     expect(textos.slice(idxFecha, idxFecha + 10)).toEqual([
-      "Fecha de solicitud", "Fecha de viaje", "Nombre", "Cuenta", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Valor",
+      "Fecha de solicitud", "Fecha de viaje", "Nombre", "Cuenta / Número", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Valor",
     ]);
   });
 
