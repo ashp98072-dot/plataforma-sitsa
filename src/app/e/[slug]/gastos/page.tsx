@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { CatalogoSearchSelect } from "@/components/tms/catalogo-search-select";
+import { CatalogoSearchSelect, type CatalogoSearchOption } from "@/components/tms/catalogo-search-select";
 import { MAX_UPLOAD_BYTES } from "@/lib/uploads-constants";
 import { MESES_ES } from "@/lib/tms/reportes-mes";
 import { paramsExportarGastos, paramsListadoGastos } from "@/lib/tms/exportacion-operativa-filtros";
@@ -35,6 +35,19 @@ type Gasto = {
   activo: boolean;
   estado: string | null;
   motivoRechazo: string | null;
+  /**
+   * GASTOS-ADMINISTRATIVO-1 (Fase 4) — mismo patrón visual/funcional que
+   * Solicitudes de fondo (fondos/page.tsx) para empresa requirente/
+   * requirente/solicitante. `entidadRequirenteId`/nombre y
+   * requirente/solicitante ya los devuelve la API desde la Fase 1; aquí
+   * solo se leen para precargar el formulario de edición.
+   */
+  entidadRequirenteId: number | null;
+  entidadRequirenteNombre: string | null;
+  requirenteUsuarioId: number | null;
+  requirenteNombre: string | null;
+  solicitanteUsuarioId: number | null;
+  solicitanteNombre: string | null;
 };
 
 type PlanCatalogo = {
@@ -50,11 +63,21 @@ type PlanCatalogo = {
   clienteNombre: string | null;
 };
 
+/**
+ * GASTOS-ADMINISTRATIVO-1 (Fase 4) — `usuarios`/`solicitantes`/
+ * `entidadesRequirentes` ya los devuelve HOY el mismo endpoint compartido
+ * `/tms/gastos/catalogos` (Fondos ya los consume desde su propia Fase 1);
+ * Gastos solo no los estaba leyendo todavía. No se agrega ningún
+ * endpoint ni campo nuevo al catálogo.
+ */
 type Catalogos = {
   empleados: { id: number; codigo: string; nombre: string; puesto: string | null }[];
   vehiculos: { id: number; placa: string; marca?: string | null; modelo?: string | null }[];
   clientes: { id: number; codigo?: string | null; nombre: string; nit?: string | null }[];
   planes: PlanCatalogo[];
+  usuarios: { id: number; nombre: string }[];
+  solicitantes: { id: number; nombre: string }[];
+  entidadesRequirentes: { id: number; codigo: string; nombre: string }[];
 };
 
 const inputCls = "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
@@ -74,6 +97,10 @@ const FORM_VACIO = {
   numeroCuentaPago: "",
   tieneFactura: false,
   observaciones: "",
+  entidadRequirenteId: 0,
+  requirenteUsuarioId: 0,
+  requirenteNombre: "",
+  solicitanteUsuarioId: 0,
 };
 
 /**
@@ -89,7 +116,8 @@ export default function GastosPage() {
   const [gastos, setGastos] = useState<Gasto[]>([]);
   const [categorias, setCategorias] = useState<string[]>([]);
   const [metodosPago, setMetodosPago] = useState<string[]>([]);
-  const [catalogos, setCatalogos] = useState<Catalogos>({ empleados: [], vehiculos: [], clientes: [], planes: [] });
+  const [catalogos, setCatalogos] = useState<Catalogos>({ empleados: [], vehiculos: [], clientes: [], planes: [], usuarios: [], solicitantes: [], entidadesRequirentes: [] });
+  const opcionesUsuarios = (usuarios: { id: number; nombre: string }[]): CatalogoSearchOption[] => usuarios.map((u) => ({ value: String(u.id), label: u.nombre }));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
@@ -109,6 +137,8 @@ export default function GastosPage() {
   const [comprobante, setComprobante] = useState<File | null>(null);
   const comprobanteActual = editandoId ? gastos.find((g) => g.id === editandoId) : null;
   const tieneComprobanteAlmacenado = Boolean(comprobanteActual?.facturaNombreOriginal);
+  /** GASTOS-ADMINISTRATIVO-1 (Fase 4) — mismo patrón que motivoRechazo en fondos/page.tsx: un input por fila, por id. */
+  const [motivoRechazo, setMotivoRechazo] = useState<Record<number, string>>({});
 
   const cargar = useCallback(async () => {
     setLoading(true);
@@ -125,7 +155,10 @@ export default function GastosPage() {
       setGastos(dGastos.gastos ?? []);
       setCategorias(dGastos.categorias ?? []);
       setMetodosPago(dGastos.metodosPago ?? []);
-      if (rCat.ok) setCatalogos(dCat);
+      if (rCat.ok) setCatalogos({
+        empleados: dCat.empleados ?? [], vehiculos: dCat.vehiculos ?? [], clientes: dCat.clientes ?? [], planes: dCat.planes ?? [],
+        usuarios: dCat.usuarios ?? [], solicitantes: dCat.solicitantes ?? [], entidadesRequirentes: dCat.entidadesRequirentes ?? [],
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error al cargar.");
     } finally {
@@ -162,6 +195,10 @@ export default function GastosPage() {
       numeroCuentaPago: g.numeroCuentaPago ?? "",
       tieneFactura: g.tieneFactura,
       observaciones: g.observaciones ?? "",
+      entidadRequirenteId: g.entidadRequirenteId ?? 0,
+      requirenteUsuarioId: g.requirenteUsuarioId ?? 0,
+      requirenteNombre: g.requirenteNombre ?? "",
+      solicitanteUsuarioId: g.solicitanteUsuarioId ?? 0,
     });
     setComprobante(null);
     setMostrarForm(true);
@@ -208,6 +245,15 @@ export default function GastosPage() {
       numeroCuentaPago: form.numeroCuentaPago.trim() || null,
       tieneFactura: form.tieneFactura,
       observaciones: form.observaciones.trim() || null,
+      // GASTOS-ADMINISTRATIVO-1 (Fase 4) — los 5 campos administrativos
+      // son OPCIONALES (Fase 2/3 aprobadas): omitirlos guarda el gasto
+      // exactamente igual que antes de esta fase. `entidadRequirenteId`
+      // NO acepta `null` (mismo contrato que SolicitudFondoInput en
+      // Fondos) — se manda `undefined` para "no seleccionada", nunca `null`.
+      entidadRequirenteId: form.entidadRequirenteId || undefined,
+      requirenteUsuarioId: form.requirenteUsuarioId || null,
+      requirenteNombre: form.requirenteNombre.trim() || null,
+      solicitanteUsuarioId: form.solicitanteUsuarioId || null,
     };
     if (comprobante && (!/\.(pdf|jpe?g|png)$/i.test(comprobante.name) || !["application/pdf", "image/jpeg", "image/png"].includes(comprobante.type))) {
       setError("El comprobante debe ser PDF, JPG, JPEG o PNG."); return;
@@ -243,18 +289,27 @@ export default function GastosPage() {
     if (res.ok) await cargar();
   }
 
-  async function decidir(id: number, accion: "autorizar" | "rechazar") {
-    const motivoRechazo = accion === "rechazar" ? prompt("Motivo del rechazo:")?.trim() : undefined;
-    if (accion === "rechazar" && !motivoRechazo) return;
+  /**
+   * GASTOS-ADMINISTRATIVO-1 (Fase 4) — mismo patrón EXACTO que
+   * cambiarEstado() en fondos/page.tsx: input "Motivo de rechazo" siempre
+   * visible junto al botón (sin modal, sin `window.prompt`). Única
+   * adaptación real: Fondos manda todo a un único PATCH con `accion`;
+   * Gastos tiene dos endpoints POST dedicados desde la Fase 3.
+   */
+  async function cambiarEstado(id: number, accion: "autorizar" | "rechazar") {
+    const body: Record<string, unknown> = {};
+    if (accion === "rechazar") {
+      const motivo = motivoRechazo[id]?.trim();
+      if (!motivo) { setError("Indica el motivo del rechazo."); return; }
+      body.motivoRechazo = motivo;
+    }
     setError(""); setMsg("");
     const res = await fetch(`/api/empresas/${slug}/tms/gastos/${id}/${accion}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(accion === "rechazar" ? { motivoRechazo } : {}),
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) { setError(data.error ?? `No se pudo ${accion} el gasto.`); return; }
-    setMsg(data.mensaje ?? "Gasto actualizado.");
+    if (!res.ok) { setError(data.error ?? "No se pudo actualizar."); return; }
+    setMsg(data.mensaje ?? "Actualizado.");
     await cargar();
   }
 
@@ -299,6 +354,24 @@ export default function GastosPage() {
 
       {mostrarForm ? (
         <div className="space-y-2 rounded-lg border border-[var(--border)] bg-[var(--panel)] p-3">
+          {/*
+            GASTOS-ADMINISTRATIVO-1 (Fase 4) — mismo patrón EXACTO que el
+            bloque de encabezado de fondos/page.tsx (Empresa requirente,
+            Requirente, Solicitante): mismos componentes, mismos
+            catálogos, mismo layout. Única adaptación real: en Gastos los
+            3 campos son OPCIONALES (Fase 2/3 aprobadas) — sin `*`, sin
+            validación bloqueante en guardar().
+          */}
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+            <label className="text-xs text-[var(--muted)]">Empresa requirente
+              <select className={`${inputCls} mt-0.5 w-full`} value={form.entidadRequirenteId} onChange={(e) => setForm((f) => ({ ...f, entidadRequirenteId: Number(e.target.value) || 0 }))}>
+                <option value={0}>—</option>
+                {catalogos.entidadesRequirentes.map((entidad) => <option key={entidad.id} value={entidad.id}>{entidad.nombre}</option>)}
+              </select>
+            </label>
+            <CatalogoSearchSelect label="Requirente" placeholder="Buscar requirente..." value={String(form.requirenteUsuarioId || "")} manualText={form.requirenteNombre} options={opcionesUsuarios(catalogos.usuarios)} inputClassName={inputCls} onTextChange={(text) => setForm((f) => ({ ...f, requirenteNombre: text }))} onChange={(value) => setForm((f) => ({ ...f, requirenteUsuarioId: Number(value) || 0, requirenteNombre: value ? "" : f.requirenteNombre }))} />
+            <CatalogoSearchSelect label="Solicitante" placeholder="Buscar solicitante de Operaciones..." value={String(form.solicitanteUsuarioId || "")} options={opcionesUsuarios(catalogos.solicitantes)} inputClassName={inputCls} onChange={(value) => setForm((f) => ({ ...f, solicitanteUsuarioId: Number(value) || 0 }))} />
+          </div>
           <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
             <label className="text-xs text-[var(--muted)]">Fecha solicitud
               <input type="date" className={`${inputCls} mt-0.5 w-full`} value={form.fechaSolicitud} onChange={(e) => setForm((f) => ({ ...f, fechaSolicitud: e.target.value }))} />
@@ -395,17 +468,48 @@ export default function GastosPage() {
                 <td className="px-2 py-2">{g.clienteNombre ?? "—"}</td>
                 <td className="px-2 py-2">{g.planCodigo ?? "—"}</td>
                 <td className="px-2 py-2">Q{(g.cantidad * g.monto).toLocaleString("es-GT", { minimumFractionDigits: 2 })}</td>
-                <td className="px-2 py-2">{g.estado ?? "Histórico"}{g.motivoRechazo ? <span className="block text-red-400">{g.motivoRechazo}</span> : null}</td>
+                {/*
+                  GASTOS-ADMINISTRATIVO-1 (Fase 4) — mismo ternario de
+                  color por estado que fondos/page.tsx (sin "Liquidada",
+                  que no existe en Gastos; `estado === null` -> Histórico,
+                  color neutro). Texto plano, nunca una píldora/badge —
+                  Fondos tampoco usa eso.
+                */}
+                <td className="px-2 py-2">
+                  <span className={g.estado === "Rechazada" ? "text-red-400" : g.estado === "Autorizada" ? "text-emerald-400" : g.estado === "Pendiente" ? "text-amber-400" : "text-[var(--muted)]"}>
+                    {g.estado ?? "Histórico"}
+                  </span>
+                  {g.motivoRechazo ? <span className="block text-red-400">Motivo de rechazo: {g.motivoRechazo}</span> : null}
+                </td>
                 <td className="px-2 py-2">{g.facturaNombreOriginal ? <span><a className="text-[var(--accent)]" href={`/api/empresas/${slug}/tms/gastos/${g.id}/comprobante`} target="_blank" rel="noreferrer">{g.facturaNombreOriginal}</a><button type="button" onClick={() => void eliminarComprobante(g.id)} className="ml-2 text-red-400">Quitar</button></span> : "—"}</td>
-                <td className="px-2 py-2 whitespace-nowrap">
-                  {puedeAutorizar && g.estado === "Pendiente" ? (
-                    <>
-                      <button type="button" onClick={() => void decidir(g.id, "autorizar")} className="mr-2 text-emerald-400">Autorizar</button>
-                      <button type="button" onClick={() => void decidir(g.id, "rechazar")} className="mr-2 text-red-400">Rechazar</button>
-                    </>
-                  ) : null}
-                  <button type="button" onClick={() => editar(g)} className="mr-2 text-[var(--accent)]">Editar</button>
-                  <button type="button" onClick={() => void desactivar(g.id)} className="text-red-400">Desactivar</button>
+                {/*
+                  GASTOS-ADMINISTRATIVO-1 (Fase 4) — Autorizar/Rechazar:
+                  mismos botones sólidos (bg-emerald-600/bg-red-600) e
+                  input "Motivo de rechazo" siempre visible que ya usa
+                  Fondos, gateados por `puedeAutorizar` (gastos_operativos_autorizar)
+                  Y por `estado === "Pendiente"` — un histórico o un gasto
+                  ya Autorizada/Rechazada nunca los muestra. "Editar"
+                  también se oculta en Autorizada/Rechazada (bloqueo de
+                  contenido ya exigido por el backend desde la Fase 2) —
+                  un histórico (`estado === null`) sigue editable sin
+                  restricción, igual que siempre. "Desactivar" queda SIN
+                  condición alguna: es la excepción administrativa
+                  aprobada, independiente del flujo de autorización.
+                */}
+                <td className="px-2 py-2">
+                  <div className="flex flex-wrap items-center gap-1">
+                    {puedeAutorizar && g.estado === "Pendiente" ? (
+                      <>
+                        <button type="button" onClick={() => void cambiarEstado(g.id, "autorizar")} className="rounded bg-emerald-600 px-2 py-1 text-white">Autorizar</button>
+                        <input className={`${inputCls} w-32`} placeholder="Motivo de rechazo" value={motivoRechazo[g.id] ?? ""} onChange={(e) => setMotivoRechazo((m) => ({ ...m, [g.id]: e.target.value }))} />
+                        <button type="button" onClick={() => void cambiarEstado(g.id, "rechazar")} className="rounded bg-red-600 px-2 py-1 text-white">Rechazar</button>
+                      </>
+                    ) : null}
+                    {g.estado === "Pendiente" || g.estado === null ? (
+                      <button type="button" onClick={() => editar(g)} className="text-[var(--accent)]">Editar</button>
+                    ) : null}
+                    <button type="button" onClick={() => void desactivar(g.id)} className="text-red-400">Desactivar</button>
+                  </div>
                 </td>
               </tr>
             ))}
