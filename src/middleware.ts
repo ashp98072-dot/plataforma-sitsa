@@ -2,6 +2,11 @@ import { NextResponse, type NextRequest } from "next/server";
 import { jwtVerify } from "jose";
 import { homePorRol, slugPorHost } from "@/lib/dominios";
 import { getAuthSecretBytes } from "@/lib/auth-secret";
+import {
+  currentServerSeconds,
+  isSessionTimeValid,
+  resolveSessionTimes,
+} from "@/lib/session-lifetime";
 
 const PUBLIC = ["/login", "/site"];
 const COOKIE = "sitsa_session";
@@ -31,6 +36,8 @@ async function readSession(
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, getSecret());
+    const times = resolveSessionTimes(payload);
+    if (!times || !isSessionTimeValid(times, currentServerSeconds())) return null;
     return {
       rol: payload.rol ? String(payload.rol) : undefined,
       empresaSlug: payload.empresaSlug
@@ -54,6 +61,8 @@ async function readColaboradorSession(
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, getSecret());
+    const times = resolveSessionTimes(payload);
+    if (!times || !isSessionTimeValid(times, currentServerSeconds())) return null;
     const empleadoId = payload.empleadoId ? Number(payload.empleadoId) : undefined;
     if (!empleadoId) return null;
     return {
@@ -77,6 +86,8 @@ async function readClienteSessionLite(
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, getSecret());
+    const times = resolveSessionTimes(payload);
+    if (!times || !isSessionTimeValid(times, currentServerSeconds())) return null;
     const usuarioClienteId = payload.usuarioClienteId
       ? Number(payload.usuarioClienteId)
       : undefined;

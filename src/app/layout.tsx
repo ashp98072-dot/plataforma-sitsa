@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { SessionInactivityGuard } from "@/components/session-inactivity-guard";
 
 export const metadata: Metadata = {
   title: "SITSA Plataforma Corporativa",
@@ -26,7 +27,10 @@ export default function RootLayout({
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeBoot }} />
       </head>
-      <body>{children}</body>
+      <body>
+        <SessionInactivityGuard />
+        {children}
+      </body>
     </html>
   );
 }

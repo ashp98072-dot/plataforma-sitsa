@@ -2,6 +2,13 @@ import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { cache } from "react";
 import { getAuthSecretBytes } from "@/lib/auth-secret";
+import {
+  currentServerSeconds,
+  isSessionTimeValid,
+  resolveSessionTimes,
+  sessionAbsoluteExpiresAt,
+  type SessionTimes,
+} from "@/lib/session-lifetime";
 
 /**
  * Cookie DISTINTA de `sitsa_session` (staff). Un mismo navegador puede así
@@ -11,7 +18,7 @@ import { getAuthSecretBytes } from "@/lib/auth-secret";
 export const COLABORADOR_SESSION_COOKIE = "sitsa_colab_session";
 const SESSION_HOURS = 12;
 
-export type ColaboradorSessionPayload = {
+export type ColaboradorSessionPayload = Partial<SessionTimes> & {
   empleadoId: number;
   empresaId: number;
   empresaSlug?: string | null;
@@ -29,11 +36,17 @@ function getSecret(): Uint8Array {
 
 export async function createColaboradorSessionToken(
   payload: ColaboradorSessionPayload,
+  options: { renewActivity?: boolean; nowSeconds?: number } = {},
 ): Promise<string> {
-  return new SignJWT({ ...payload })
+  const now = options.nowSeconds ?? currentServerSeconds();
+  const authAt = payload.authAt ?? now;
+  const lastActivityAt = options.renewActivity
+    ? now
+    : (payload.lastActivityAt ?? now);
+  return new SignJWT({ ...payload, authAt, lastActivityAt })
     .setProtectedHeader({ alg: "HS256" })
-    .setIssuedAt()
-    .setExpirationTime(`${SESSION_HOURS}h`)
+    .setIssuedAt(now)
+    .setExpirationTime(sessionAbsoluteExpiresAt(authAt))
     .sign(getSecret());
 }
 
@@ -42,11 +55,14 @@ export async function verifyColaboradorSessionToken(
 ): Promise<ColaboradorSessionPayload | null> {
   try {
     const { payload } = await jwtVerify(token, getSecret());
+    const times = resolveSessionTimes(payload);
+    if (!times || !isSessionTimeValid(times, currentServerSeconds())) return null;
     const empleadoId = Number(payload.empleadoId);
     const empresaId = Number(payload.empresaId);
     if (!empleadoId || !empresaId) return null;
     return {
       empleadoId,
+      ...times,
       empresaId,
       empresaSlug: payload.empresaSlug ? String(payload.empresaSlug) : null,
       nombre: payload.nombre ? String(payload.nombre) : undefined,
