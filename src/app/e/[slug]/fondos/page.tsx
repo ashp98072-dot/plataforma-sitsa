@@ -17,6 +17,8 @@ type LineaFondo = {
 type SolicitudFondo = {
   id: number;
   codigo: string;
+  entidadRequirenteId: number | null;
+  entidadRequirenteNombre: string | null;
   requirenteNombre: string | null;
   requirenteUsuarioId: number | null;
   solicitanteUsuarioId: number | null;
@@ -51,6 +53,7 @@ type Catalogos = {
   /** SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§3) — usuarios reales con acceso a esta empresa, para el selector "Requirente (usuario)". */
   usuarios: { id: number; nombre: string }[];
   solicitantes: { id: number; nombre: string }[];
+  entidadesRequirentes: { id: number; codigo: string; nombre: string }[];
   /** FONDOS-GASTOS-METODO-PAGO-1 — mismo catálogo que ya usa Gastos, servido por este mismo endpoint compartido. */
   metodosPago: string[];
 };
@@ -100,6 +103,7 @@ export default function FondosPage() {
   // vuelve a validarlo del lado del servidor, nunca se confía solo en
   // que el botón esté oculto.
   const [editandoId, setEditandoId] = useState<number | null>(null);
+  const [entidadRequirenteId, setEntidadRequirenteId] = useState("");
   const [requirenteNombre, setRequirenteNombre] = useState("");
   // SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§3 del ticket) — requirente
   // OPCIONAL seleccionado desde el catálogo de usuarios reales: cuando
@@ -119,7 +123,7 @@ export default function FondosPage() {
 
   const opcionesUsuarios = (usuarios: { id: number; nombre: string }[]): CatalogoSearchOption[] => usuarios.map((u) => ({ value: String(u.id), label: u.nombre }));
 
-  const [catalogos, setCatalogos] = useState<Catalogos>({ empleados: [], vehiculos: [], clientes: [], planes: [], usuarios: [], solicitantes: [], metodosPago: [] });
+  const [catalogos, setCatalogos] = useState<Catalogos>({ empleados: [], vehiculos: [], clientes: [], planes: [], usuarios: [], solicitantes: [], entidadesRequirentes: [], metodosPago: [] });
   useEffect(() => {
     fetch(`/api/empresas/${slug}/tms/gastos/catalogos`)
       .then(async (r) => {
@@ -130,6 +134,7 @@ export default function FondosPage() {
       .then((data) => setCatalogos({
         empleados: data.empleados ?? [], vehiculos: data.vehiculos ?? [], clientes: data.clientes ?? [],
         planes: data.planes ?? [], usuarios: data.usuarios ?? [], solicitantes: data.solicitantes ?? [],
+        entidadesRequirentes: data.entidadesRequirentes ?? [],
         metodosPago: data.metodosPago ?? [],
       }))
       .catch((e) => setError(e instanceof Error ? e.message : "No se pudieron cargar los catálogos."));
@@ -162,7 +167,7 @@ export default function FondosPage() {
   function cerrarFormulario() {
     setMostrarForm(false);
     setEditandoId(null);
-    setRequirenteNombre(""); setRequirenteUsuarioId(""); setSolicitanteUsuarioId(""); setObservaciones(""); setLineas([{ ...LINEA_VACIA }]);
+    setEntidadRequirenteId(""); setRequirenteNombre(""); setRequirenteUsuarioId(""); setSolicitanteUsuarioId(""); setObservaciones(""); setLineas([{ ...LINEA_VACIA }]);
   }
 
   /**
@@ -179,6 +184,7 @@ export default function FondosPage() {
     if (!res.ok) { setError(data.error ?? "No se pudo cargar la solicitud para editarla."); return; }
     const completa = data.solicitud as SolicitudFondo;
     setEditandoId(completa.id);
+    setEntidadRequirenteId(completa.entidadRequirenteId != null ? String(completa.entidadRequirenteId) : "");
     setRequirenteNombre(completa.requirenteNombre ?? "");
     setRequirenteUsuarioId(completa.requirenteUsuarioId != null ? String(completa.requirenteUsuarioId) : "");
     setSolicitanteUsuarioId(completa.solicitanteUsuarioId != null ? String(completa.solicitanteUsuarioId) : "");
@@ -203,6 +209,7 @@ export default function FondosPage() {
 
   async function guardar() {
     setError(""); setMsg("");
+    if (!entidadRequirenteId) { setError("Selecciona la empresa requirente."); return; }
     if (!requirenteNombre.trim() && !requirenteUsuarioId) { setError("Indica el requirente."); return; }
     if (!solicitanteUsuarioId) { setError("Selecciona el solicitante de Operaciones."); return; }
     const lineasValidas = lineas.filter((l) => l.categoria && Number(l.monto) > 0);
@@ -232,6 +239,7 @@ export default function FondosPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             accion: "editar",
+            entidadRequirenteId: Number(entidadRequirenteId),
             requirenteNombre: requirenteNombre.trim(),
             requirenteUsuarioId: requirenteUsuarioId ? Number(requirenteUsuarioId) : null,
             solicitanteUsuarioId: Number(solicitanteUsuarioId),
@@ -244,6 +252,7 @@ export default function FondosPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            entidadRequirenteId: Number(entidadRequirenteId),
             requirenteNombre: requirenteNombre.trim(),
             requirenteUsuarioId: requirenteUsuarioId ? Number(requirenteUsuarioId) : undefined,
             solicitanteUsuarioId: Number(solicitanteUsuarioId),
@@ -333,7 +342,13 @@ export default function FondosPage() {
       {mostrarForm ? (
         <div className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--panel)] p-3">
           <p className="text-sm font-medium">{editandoId ? "Editar solicitud (Pendiente)" : "Nueva solicitud"}</p>
-          <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
+            <label className="text-xs text-[var(--muted)]">Empresa requirente *
+              <select className={`${inputCls} mt-0.5 w-full`} value={entidadRequirenteId} onChange={(e) => setEntidadRequirenteId(e.target.value)} required>
+                <option value="">Seleccionar empresa requirente…</option>
+                {catalogos.entidadesRequirentes.map((entidad) => <option key={entidad.id} value={entidad.id}>{entidad.nombre}</option>)}
+              </select>
+            </label>
             <CatalogoSearchSelect label="Requirente" placeholder="Buscar requirente..." value={requirenteUsuarioId} manualText={requirenteNombre} options={opcionesUsuarios(catalogos.usuarios)} inputClassName={inputCls} onTextChange={setRequirenteNombre} onChange={(value) => { setRequirenteUsuarioId(value); if (value) setRequirenteNombre(""); }} />
             <CatalogoSearchSelect label="Solicitante" placeholder="Buscar solicitante de Operaciones..." value={solicitanteUsuarioId} options={opcionesUsuarios(catalogos.solicitantes)} inputClassName={inputCls} onChange={setSolicitanteUsuarioId} />
             <label className="text-xs text-[var(--muted)]">Fecha de requerimiento

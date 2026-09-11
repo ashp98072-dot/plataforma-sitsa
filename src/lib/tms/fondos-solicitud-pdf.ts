@@ -6,7 +6,6 @@ import { absPathFromRelative } from "@/lib/uploads";
 import { ahoraLocal, formatearFechaVisible, formatearTimestampVisible } from "@/lib/rrhh/dates";
 import { dibujarTablaEnDoc } from "@/lib/rrhh/export-files";
 import { reforzarFirmaParaPdf } from "@/lib/firmas/reforzar-firma-pdf";
-import { tituloEmpresa } from "@/lib/tms/viaticos-comprobante-pdf";
 import { obtenerSolicitudFondo, type SolicitudFondo } from "@/lib/tms/fondos";
 
 /**
@@ -23,8 +22,8 @@ import { obtenerSolicitudFondo, type SolicitudFondo } from "@/lib/tms/fondos";
  *   de tabla que reportes de RRHH y el comprobante de viáticos: repite
  *   encabezado en cada página nueva y nunca deja páginas vacías (§8 del
  *   ticket ya resuelto por esa función, sin tocarla).
- * - tituloEmpresa() (viaticos-comprobante-pdf.ts) — misma reducción de
- *   nombre de empresa compuesto ya usada en el comprobante de viáticos.
+ * - snapshot de la entidad requirente; en históricos sin snapshot se
+ *   conserva el nombre completo y neutral del tenant.
  *
  * §11 Seguridad: `empresaId` viene SIEMPRE del guard del endpoint (nunca
  * del cliente); obtenerSolicitudFondo ya filtra por empresa_id, así que
@@ -231,7 +230,7 @@ function construirPdf(
     doc.moveDown(0.5);
     doc.font("Helvetica").fontSize(9.5).fillColor("#0f172a");
     doc.text(`FECHA DEL REQUERIMIENTO: ${formatearFechaVisible(solicitud.fechaRequerimiento)}`, { width: pageWidth });
-    doc.text(`EMPRESA REQUIRIENTE: ${tituloEmpresa(empresaNombre).toUpperCase()}`, { width: pageWidth });
+    doc.text(`EMPRESA REQUIRIENTE: ${(solicitud.entidadRequirenteNombre ?? empresaNombre).toUpperCase()}`, { width: pageWidth });
     doc.text(`PERSONA QUE REQUIERE: ${(solicitud.requirenteNombre ?? "—").toUpperCase()}`, { width: pageWidth });
     doc.moveDown(0.6);
 

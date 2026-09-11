@@ -47,6 +47,7 @@ const schema = z.object({
   // SOLICITUD-FONDOS-REPORTE-1 (pendiente 1 del PR #211) — solo para
   // accion:"editar". Mismas líneas que el POST de creación (fondos/route.ts).
   fechaRequerimiento: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  entidadRequirenteId: z.number().int().positive().optional(),
   requirenteEmpleadoId: z.number().int().positive().nullable().optional(),
   requirenteNombre: z.string().max(200).nullable().optional(),
   // SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§3) — ver POST de creación (fondos/route.ts).
@@ -80,9 +81,10 @@ export async function PATCH(req: Request, ctx: Ctx) {
 
   try {
     if (parsed.data.accion === "editar") {
-      const { fechaRequerimiento, requirenteEmpleadoId, requirenteNombre, requirenteUsuarioId, solicitanteUsuarioId, observaciones, lineas } = parsed.data;
+      const { fechaRequerimiento, entidadRequirenteId, requirenteEmpleadoId, requirenteNombre, requirenteUsuarioId, solicitanteUsuarioId, observaciones, lineas } = parsed.data;
+      if (!entidadRequirenteId) return NextResponse.json({ error: "Empresa requirente requerida." }, { status: 400 });
       const solicitud = await actualizarSolicitudFondo(guard.empresa.id, Number(id), {
-        fechaRequerimiento, requirenteEmpleadoId, requirenteNombre, requirenteUsuarioId, solicitanteUsuarioId, observaciones, lineas,
+        fechaRequerimiento, entidadRequirenteId, requirenteEmpleadoId, requirenteNombre, requirenteUsuarioId, solicitanteUsuarioId, observaciones, lineas,
       }, guard.session.username);
       if (!solicitud) return NextResponse.json({ error: "Solicitud no encontrada." }, { status: 404 });
       return NextResponse.json({ mensaje: "Solicitud actualizada.", solicitud });

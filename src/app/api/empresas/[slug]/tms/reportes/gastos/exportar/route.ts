@@ -110,6 +110,13 @@ function personaQueRequiereTexto(filas: FilaSolicitudFondoReporte[]): string {
   return "VARIOS REQUIRIENTES";
 }
 
+function empresaRequirenteTexto(filas: FilaSolicitudFondoReporte[], empresaNombre: string): string {
+  const nombres = new Set(filas.map((f) => f.entidadRequirenteNombre?.trim()).filter((nombre): nombre is string => Boolean(nombre)));
+  if (nombres.size === 1) return [...nombres][0].toUpperCase();
+  if (nombres.size > 1) return "VARIAS EMPRESAS REQUIRIENTES";
+  return empresaNombre.toUpperCase();
+}
+
 function periodoTexto(fechaDesde?: string, fechaHasta?: string): string {
   return `${fechaDesde ? formatearFechaVisible(fechaDesde) : "Inicio"} a ${fechaHasta ? formatearFechaVisible(fechaHasta) : "Hoy"}`;
 }
@@ -222,7 +229,7 @@ export async function GET(req: Request, ctx: Ctx) {
     // todas las filas filtradas comparten requirente, "VARIOS
     // REQUIRIENTES" si no (ver personaQueRequiereTexto).
     const subtitulo = `${guard.empresa.nombre} · Período: ${periodoTexto(filtros.fechaSolicitudDesde, filtros.fechaSolicitudHasta)} · Generado ${formatearTimestampVisible(ahoraLocal())} (Guatemala) · ${resultado.filas.length} registro(s)`
-      + `\nEMPRESA REQUIRIENTE: ${guard.empresa.nombre.toUpperCase()}\nPERSONA QUE REQUIERE: ${personaQueRequiereTexto(resultado.filas)}`;
+      + `\nEMPRESA REQUIRIENTE: ${empresaRequirenteTexto(resultado.filas, guard.empresa.nombre)}\nPERSONA QUE REQUIERE: ${personaQueRequiereTexto(resultado.filas)}`;
     const totalGeneral = resultado.filas.reduce((s, f) => s + f.total, 0);
     const filaTotal = ["", "", "", "", "", "", "", "", "TOTAL:", moneda(totalGeneral)];
     const buffer = await tablaAPdf({

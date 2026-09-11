@@ -1,7 +1,6 @@
 import PDFDocument from "pdfkit";
 import { ahoraLocal, formatearFechaVisible, formatearTimestampVisible } from "@/lib/rrhh/dates";
 import { dibujarTablaEnDoc } from "@/lib/rrhh/export-files";
-import { tituloEmpresa } from "@/lib/tms/viaticos-comprobante-pdf";
 import { dibujarFirmas, firmaHistorica, moneda, type FirmaSnapshot, type PdfDoc } from "@/lib/tms/fondos-solicitud-pdf";
 import { etiquetaMes } from "@/lib/tms/reportes-mes";
 import type { ResumenMensualFondos, SolicitudFondoAgrupada } from "@/lib/tms/reportes-gastos";
@@ -72,7 +71,7 @@ function dibujarBloqueSolicitud(
   doc.moveDown(0.35);
   doc.font("Helvetica").fontSize(9.5).fillColor("#0f172a");
   doc.text(`Fecha: ${formatearFechaVisible(g.fechaSolicitud)}`, { width: pageWidth });
-  doc.text(`Empresa requirente: ${tituloEmpresa(empresaNombre).toUpperCase()}`, { width: pageWidth });
+  doc.text(`Empresa requirente: ${(g.entidadRequirenteNombre ?? empresaNombre).toUpperCase()}`, { width: pageWidth });
   doc.text(`Persona que requiere: ${(g.requirenteNombre ?? "—").toUpperCase()}`, { width: pageWidth });
   doc.text(`Estado: ${g.estadoFondo}`, { width: pageWidth });
   doc.moveDown(0.55);
@@ -179,7 +178,7 @@ export async function generarPdfMensualSolicitudesFondo(
       .text("SOLICITUDES DE FONDO — REPORTE MENSUAL CONSOLIDADO", { width: pageWidth, align: "center" });
     doc.moveDown(0.3);
     doc.font("Helvetica").fontSize(10).fillColor("#0f172a")
-      .text(`${tituloEmpresa(empresaNombre).toUpperCase()} · Período: ${etiqueta}`, { width: pageWidth, align: "center" });
+      .text(`${empresaNombre.toUpperCase()} · Período: ${etiqueta}`, { width: pageWidth, align: "center" });
     doc.moveDown(0.7);
 
     grupos.forEach((g, i) => {

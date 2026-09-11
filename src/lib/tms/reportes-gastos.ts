@@ -577,6 +577,7 @@ export type FilaSolicitudFondoReporte = {
   total: number;
   cuenta?: string | null;
   requirenteNombre?: string | null;
+  entidadRequirenteNombre?: string | null;
   solicitanteNombre?: string | null;
   autorizanteNombre?: string | null;
   fechaAutorizacion?: string | null;
@@ -644,7 +645,7 @@ export async function reporteSolicitudesFondo(
             l.vehiculo_id, l.placa,
             l.cliente_id, l.cliente_nombre,
             l.plan_id, l.cantidad, l.descripcion, l.monto,
-            s.requirente_nombre, s.solicitante_nombre, s.autorizante_nombre,
+            s.entidad_requirente_nombre, s.requirente_nombre, s.solicitante_nombre, s.autorizante_nombre,
             DATE_FORMAT(s.autorizado_en, '%Y-%m-%d') AS fecha_autorizacion,
             s.total AS total_solicitud, s.estado
      FROM tms_solicitud_fondo_lineas l
@@ -676,6 +677,7 @@ export async function reporteSolicitudesFondo(
       monto,
       total: cantidad * monto,
       requirenteNombre: r.requirente_nombre != null ? String(r.requirente_nombre) : null,
+      entidadRequirenteNombre: r.entidad_requirente_nombre != null ? String(r.entidad_requirente_nombre) : null,
       solicitanteNombre: r.solicitante_nombre != null ? String(r.solicitante_nombre) : null,
       autorizanteNombre: r.autorizante_nombre != null ? String(r.autorizante_nombre) : null,
       fechaAutorizacion: r.fecha_autorizacion != null ? String(r.fecha_autorizacion) : null,
@@ -699,6 +701,7 @@ export type SolicitudFondoAgrupada = {
   fechaSolicitud: string;
   estadoFondo: string;
   requirenteNombre: string | null;
+  entidadRequirenteNombre: string | null;
   solicitanteNombre: string | null;
   autorizanteNombre: string | null;
   /** tms_solicitudes_fondo.total (suma server-side de sus líneas). */
@@ -717,6 +720,7 @@ export function agruparSolicitudesFondo(filas: FilaSolicitudFondoReporte[]): Sol
         fechaSolicitud: f.fechaSolicitud,
         estadoFondo: f.estadoFondo,
         requirenteNombre: f.requirenteNombre ?? null,
+        entidadRequirenteNombre: f.entidadRequirenteNombre ?? null,
         solicitanteNombre: f.solicitanteNombre ?? null,
         autorizanteNombre: f.autorizanteNombre ?? null,
         totalSolicitud: f.totalSolicitud ?? 0,

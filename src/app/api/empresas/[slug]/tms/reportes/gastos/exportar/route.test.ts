@@ -254,7 +254,7 @@ describe("GET /tms/reportes/gastos/exportar", () => {
       const filaDetalle = {
         lineaId: 1, solicitudId: 10, solicitudCodigo: "FONDO-000010", estadoFondo: "Pendiente",
         fechaSolicitud: "2026-09-05", fechaViaje: "2026-09-06",
-        requirenteNombre: "Wilter Flores", empleadoNombre: "Heber Sitan", cargo: "Piloto", cuenta: "1234567890",
+        entidadRequirenteNombre: "Kuiqtrans", requirenteNombre: "Wilter Flores", empleadoNombre: "Heber Sitan", cargo: "Piloto", cuenta: "1234567890",
         placa: "P111AAA", clienteNombre: "Cliente A", cantidad: 2, descripcion: "Combustible ruta",
         monto: 100, total: 200,
       };
@@ -316,7 +316,7 @@ describe("GET /tms/reportes/gastos/exportar", () => {
           } as never);
           await GET(new Request("http://localhost/x?tipo=fondos&formato=pdf&variante=tabular"), ctx);
           const subtitulo = vi.mocked(tablaAPdf).mock.calls[0][0].subtitle;
-          expect(subtitulo).toContain("EMPRESA REQUIRIENTE: SITSA");
+          expect(subtitulo).toContain("EMPRESA REQUIRIENTE: KUIQTRANS");
           expect(subtitulo).toContain("PERSONA QUE REQUIERE: WILTER FLORES");
         });
 
@@ -329,6 +329,17 @@ describe("GET /tms/reportes/gastos/exportar", () => {
           await GET(new Request("http://localhost/x?tipo=fondos&formato=pdf&variante=tabular"), ctx);
           const subtitulo = vi.mocked(tablaAPdf).mock.calls[0][0].subtitle;
           expect(subtitulo).toContain("PERSONA QUE REQUIERE: VARIOS REQUIRIENTES");
+        });
+
+        it("muestra VARIAS EMPRESAS REQUIRIENTES cuando el rango contiene entidades distintas", async () => {
+          vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({
+            tipo: "fondos",
+            filas: [filaDetalle, { ...filaDetalle, lineaId: 2, entidadRequirenteNombre: "Logiservicios Mónaco" }],
+            resumen: {},
+          } as never);
+          await GET(new Request("http://localhost/x?tipo=fondos&formato=pdf&variante=tabular"), ctx);
+          const subtitulo = vi.mocked(tablaAPdf).mock.calls[0][0].subtitle;
+          expect(subtitulo).toContain("EMPRESA REQUIRIENTE: VARIAS EMPRESAS REQUIRIENTES");
         });
 
         it("muestra VARIOS REQUIRIENTES cuando ninguna fila tiene requirente (sin inventar un nombre)", async () => {
