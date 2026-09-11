@@ -23,7 +23,7 @@ describe("generarPdfSolicitudGastos", () => {
   it("genera LETTER horizontal con título centrado, encabezado administrativo y las 10 columnas exactas", async () => {
     const textSpy = vi.spyOn(PDFDocument.prototype, "text");
     const resultado = await generarPdfSolicitudGastos({
-      empresaNombre: "Transportes SITSA",
+      empresaNombre: "Kuiqtrans / Logiservicios Mónaco",
       fechaDesde: "2026-09-01",
       fechaHasta: "2026-09-30",
       filas: [gasto()],
@@ -37,7 +37,7 @@ describe("generarPdfSolicitudGastos", () => {
     expect(opcionesTitulo?.align).toBe("center");
     const textos = llamadas.map((call) => String(call[0]));
     expect(textos).toContain("PERÍODO: 01/09/2026 a 30/09/2026");
-    expect(textos).toContain("EMPRESA REQUIRIENTE: TRANSPORTES SITSA");
+    expect(textos).toContain("EMPRESA REQUIRIENTE: KUIQTRANS / LOGISERVICIOS MÓNACO");
     expect(HEADERS_PDF_GASTOS).toEqual([
       "Fecha de solicitud", "Fecha de viaje", "Nombre", "Cuenta / Número", "Cargo",
       "Placa", "Cliente", "Cantidad", "Descripción", "Valor",

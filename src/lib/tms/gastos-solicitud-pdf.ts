@@ -2,7 +2,6 @@ import PDFDocument from "pdfkit";
 import { ahoraLocal, formatearFechaVisible, formatearTimestampVisible } from "@/lib/rrhh/dates";
 import { dibujarTablaEnDoc } from "@/lib/rrhh/export-files";
 import type { FilaGastoDetalle } from "@/lib/tms/reportes-gastos";
-import { tituloEmpresa } from "@/lib/tms/viaticos-comprobante-pdf";
 
 export const HEADERS_PDF_GASTOS = [
   "Fecha de solicitud", "Fecha de viaje", "Nombre", "Cuenta / Número", "Cargo",
@@ -57,7 +56,7 @@ export function generarPdfSolicitudGastos(opts: {
     doc.moveDown(0.5);
     doc.font("Helvetica").fontSize(9.5).fillColor("#0f172a");
     doc.text(`PERÍODO: ${periodo}`, { width: pageWidth });
-    doc.text(`EMPRESA REQUIRIENTE: ${tituloEmpresa(opts.empresaNombre).toUpperCase()}`, { width: pageWidth });
+    doc.text(`EMPRESA REQUIRIENTE: ${opts.empresaNombre.toUpperCase()}`, { width: pageWidth });
     doc.text(`FECHA DE GENERACIÓN: ${formatearTimestampVisible(ahoraLocal())} (Guatemala)`, { width: pageWidth });
     doc.text(`REGISTROS: ${opts.filas.length}`, { width: pageWidth });
     doc.moveDown(0.6);
