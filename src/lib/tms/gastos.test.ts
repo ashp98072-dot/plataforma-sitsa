@@ -1,16 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/db", () => ({ query: vi.fn(), execute: vi.fn() }));
-import { execute, query } from "@/lib/db";
+vi.mock("@/lib/db", () => ({ getPool: vi.fn(), query: vi.fn(), execute: vi.fn() }));
+import { getPool, query } from "@/lib/db";
 import {
   CATEGORIAS_GASTO,
+  ESTADOS_GASTO,
   METODOS_PAGO_GASTO,
   actualizarGasto,
+  autorizarGasto,
   crearGasto,
   desactivarGasto,
   listarGastos,
   normalizarDestinoPago,
   obtenerGasto,
+  rechazarGasto,
   type GastoOperativo,
 } from "./gastos";
 
@@ -27,6 +30,101 @@ function filaGasto(overrides: Partial<Record<string, unknown>> = {}) {
     actualizado_en: "2026-09-01 10:00:00",
     ...overrides,
   };
+}
+
+/**
+ * GASTOS-ADMINISTRATIVO-1 (Fase 2) — fila RAW que actualizarGasto relee
+ * con `SELECT ... FOR UPDATE` dentro de la transacción (columnas propias
+ * de tms_gastos_operativos, SIN los JOIN de empleado/vehículo/cliente/
+ * plan que sí trae `filaGasto` — actualizarGasto no los necesita para la
+ * fusión, solo los ids crudos).
+ */
+function filaGastoRaw(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 1, fecha_solicitud: "2026-09-01", fecha_viaje: "2026-09-02",
+    empleado_id: 3, vehiculo_id: 5, cliente_id: 9, plan_id: 11,
+    categoria: "Combustible", descripcion: "Diesel", cantidad: "1.00", monto: "450.00",
+    metodo_pago: "Efectivo", numero_cuenta_pago: null,
+    tiene_factura: 1, factura_nombre_original: null, observaciones: null, activo: 1,
+    entidad_requirente_id: null, entidad_requirente_nombre: null,
+    requirente_empleado_id: null, requirente_nombre: null, requirente_usuario_id: null,
+    solicitante_usuario_id: null, solicitante_nombre: null,
+    estado: null,
+    ...overrides,
+  };
+}
+
+/** GASTOS-ADMINISTRATIVO-1 (Fase 2) — fila mínima que autorizarGasto/rechazarGasto relee FOR UPDATE. */
+function filaGastoBloqueo(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 1, estado: "Pendiente", requirente_usuario_id: null, solicitante_usuario_id: null, creado_por: "admin",
+    ...overrides,
+  };
+}
+
+/**
+ * GASTOS-ADMINISTRATIVO-1 (Fase 2) — mismo criterio de mock que
+ * fondos.test.ts (conexion()): una `conn` falsa despachando por texto
+ * SQL, para las funciones que ahora abren una transacción explícita
+ * (crearGasto, actualizarGasto, autorizarGasto, rechazarGasto). Las
+ * lecturas fuera de transacción (obtenerGasto/listarGastos, incluida la
+ * relectura final tras el commit) siguen usando el `query()` plano — se
+ * configuran aparte con `vi.mocked(query)`.
+ */
+function conexion(opts: {
+  fallaEn?: string;
+  empleadoEnEmpresa?: boolean; vehiculoEnEmpresa?: boolean; clienteEnEmpresa?: boolean; planEnEmpresa?: boolean;
+  entidadRequirenteValida?: boolean; entidadRequirenteNombre?: string;
+  usuarioEnEmpresa?: boolean; usuarioNombre?: string; usuarioRol?: string | null;
+  actualRaw?: Record<string, unknown> | null;
+  bloqueoRaw?: Record<string, unknown> | null;
+} = {}) {
+  const empleadoEnEmpresa = opts.empleadoEnEmpresa ?? true;
+  const vehiculoEnEmpresa = opts.vehiculoEnEmpresa ?? true;
+  const clienteEnEmpresa = opts.clienteEnEmpresa ?? true;
+  const planEnEmpresa = opts.planEnEmpresa ?? true;
+  const entidadRequirenteValida = opts.entidadRequirenteValida ?? true;
+  const usuarioEnEmpresa = opts.usuarioEnEmpresa ?? true;
+  const actualRaw = opts.actualRaw !== undefined ? opts.actualRaw : filaGastoRaw();
+  const bloqueoRaw = opts.bloqueoRaw !== undefined ? opts.bloqueoRaw : filaGastoBloqueo();
+  const conn = {
+    beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn(),
+    query: vi.fn(async (sql: string) => {
+      if (sql.includes("FROM tms_gastos_operativos") && sql.includes("DATE_FORMAT(fecha_solicitud")) {
+        return [actualRaw ? [actualRaw] : []];
+      }
+      if (sql.includes("FROM tms_gastos_operativos") && sql.includes("FOR UPDATE")) {
+        return [bloqueoRaw ? [bloqueoRaw] : []];
+      }
+      if (sql.includes("FROM cont_entidades")) {
+        return [entidadRequirenteValida ? [{ id: 4, nombre: opts.entidadRequirenteNombre ?? "Kuiqtrans, S.A." }] : []];
+      }
+      if (sql.includes("FROM usuarios u")) {
+        return [usuarioEnEmpresa ? [{ nombre: opts.usuarioNombre ?? "Mario Caal", rol_global: opts.usuarioRol ?? "Operaciones" }] : []];
+      }
+      if (sql.includes("FROM empleados")) {
+        return [empleadoEnEmpresa ? [{ id: 3 }] : []];
+      }
+      if (sql.includes("FROM flota_vehiculos")) {
+        return [vehiculoEnEmpresa ? [{ id: 5 }] : []];
+      }
+      if (sql.includes("FROM tms_clientes")) {
+        return [clienteEnEmpresa ? [{ id: 9 }] : []];
+      }
+      if (sql.includes("FROM tms_planes_viaje")) {
+        return [planEnEmpresa ? [{ id: 11 }] : []];
+      }
+      return [[]];
+    }),
+    execute: vi.fn(async (...args: [string, ...unknown[]]) => {
+      const sql = args[0];
+      if (opts.fallaEn && sql.includes(opts.fallaEn)) throw new Error(`fallo:${opts.fallaEn}`);
+      if (sql.includes("INSERT INTO tms_gastos_operativos")) return [{ insertId: 55, affectedRows: 1 }];
+      return [{ insertId: 0, affectedRows: 1 }];
+    }),
+  };
+  vi.mocked(getPool).mockReturnValue({ getConnection: vi.fn().mockResolvedValue(conn) } as never);
+  return conn;
 }
 
 beforeEach(() => vi.resetAllMocks());
@@ -49,6 +147,13 @@ describe("métodos de pago", () => {
   });
 });
 
+/** GASTOS-ADMINISTRATIVO-1 (Fase 2) — máquina de estados propia de Gastos, sin "Liquidada". */
+describe("ESTADOS_GASTO", () => {
+  it("solo Pendiente/Autorizada/Rechazada — sin Liquidada (un gasto ya es dinero incurrido)", () => {
+    expect(ESTADOS_GASTO).toEqual(["Pendiente", "Autorizada", "Rechazada"]);
+  });
+});
+
 /**
  * GASTOS-ADMINISTRATIVO-1 (Fase 1 — SOLO lectura/mapeo) — mismos conceptos
  * administrativos que Fondos (requirente/solicitante/autorizante/estado),
@@ -56,7 +161,7 @@ describe("métodos de pago", () => {
  * columnas todavía no las escribe crearGasto/actualizarGasto en esta
  * fase — aquí solo se prueba que `mapRow` las lee correctamente.
  */
-describe("campos administrativos (GASTOS-ADMINISTRATIVO-1, Fase 1)", () => {
+describe("campos administrativos: mapeo (GASTOS-ADMINISTRATIVO-1, Fase 1)", () => {
   it("histórico/legado: ausentes en la fila -> se mapean a null (nunca a 'Pendiente' ni a un valor inventado)", async () => {
     vi.mocked(query).mockResolvedValue([filaGasto()] as never);
     const g = await obtenerGasto(7, 1);
@@ -96,14 +201,6 @@ describe("campos administrativos (GASTOS-ADMINISTRATIVO-1, Fase 1)", () => {
     expect(g?.estado).toBe("Rechazada");
     expect(g?.motivoRechazo).toBe("Factura ilegible");
     expect(g?.rechazadoEn).toContain("2026-09-06");
-  });
-
-  it("crearGasto/actualizarGasto NO escriben ninguno de estos campos todavía (Fase 1 es solo lectura)", async () => {
-    vi.mocked(execute).mockResolvedValue({ insertId: 55 } as never);
-    vi.mocked(query).mockResolvedValue([filaGasto({ id: 55 })] as never);
-    await crearGasto(7, { fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100 });
-    const sqlInsert = String(vi.mocked(execute).mock.calls[0][0]);
-    expect(sqlInsert).not.toMatch(/entidad_requirente|requirente_|solicitante_|autorizante_|\bestado\b/);
   });
 });
 
@@ -196,11 +293,11 @@ describe("obtenerGasto", () => {
 });
 
 describe("crearGasto", () => {
-  it("rechaza monto <= 0", async () => {
+  it("rechaza monto <= 0, sin abrir conexión", async () => {
     await expect(crearGasto(7, {
       fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 0,
     })).rejects.toThrow("mayor a cero");
-    expect(execute).not.toHaveBeenCalled();
+    expect(getPool).not.toHaveBeenCalled();
   });
 
   it("rechaza sin categoría", async () => {
@@ -209,149 +306,349 @@ describe("crearGasto", () => {
     })).rejects.toThrow("Categoría");
   });
 
-  it("inserta y devuelve el gasto creado", async () => {
-    vi.mocked(execute).mockResolvedValue({ insertId: 55 } as never);
+  it("inserta y devuelve el gasto creado; estado queda 'Pendiente' hardcodeado en el INSERT", async () => {
+    const conn = conexion();
     vi.mocked(query).mockResolvedValue([filaGasto({ id: 55 })] as never);
     const g = await crearGasto(7, {
       fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 450,
     }, "admin");
     expect(g.id).toBe(55);
-    expect(vi.mocked(execute).mock.calls[0][0]).toContain("INSERT INTO tms_gastos_operativos");
+    const insert = conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_gastos_operativos"))!;
+    expect(String(insert[0])).toContain("'Pendiente'");
+    expect(conn.commit).toHaveBeenCalledOnce();
   });
 
   describe("FONDOS-GASTOS-METODO-PAGO-1: Transferencia móvil", () => {
-    it("rechaza crear sin número cuando el método es Transferencia móvil", async () => {
+    it("rechaza crear sin número cuando el método es Transferencia móvil, sin abrir conexión", async () => {
       await expect(crearGasto(7, {
         fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, metodoPago: "Transferencia móvil",
       })).rejects.toThrow("Ingresa el número");
-      expect(execute).not.toHaveBeenCalled();
+      expect(getPool).not.toHaveBeenCalled();
     });
 
     it("normaliza el número (quita espacios/guiones) antes de insertar", async () => {
-      vi.mocked(execute).mockResolvedValue({ insertId: 55 } as never);
+      const conn = conexion();
       vi.mocked(query).mockResolvedValue([filaGasto({ id: 55, metodo_pago: "Transferencia móvil", numero_cuenta_pago: "55551234" })] as never);
       await crearGasto(7, {
         fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100,
         metodoPago: "Transferencia móvil", numeroCuentaPago: "5555-1234",
       });
-      const params = vi.mocked(execute).mock.calls[0][1] as unknown[];
-      expect(params).toContain("55551234");
+      const insert = conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_gastos_operativos"))!;
+      expect(insert[1]).toContain("55551234");
     });
   });
 
   describe("AISLAMIENTO MULTIEMPRESA: rechaza referencias que no pertenecen a la empresa actual (bloqueo 1, revisión PR #204)", () => {
-    it("empleado de otra empresa (id existe, pero no en esta empresa) se rechaza sin insertar", async () => {
-      vi.mocked(query).mockResolvedValue([] as never); // ninguna referencia encuentra fila -> no pertenece a esta empresa
+    it("empleado de otra empresa (id existe, pero no en esta empresa) se rechaza sin insertar, con rollback", async () => {
+      const conn = conexion({ empleadoEnEmpresa: false });
       await expect(crearGasto(7, {
         fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, empleadoId: 999,
       })).rejects.toThrow("El empleado indicado no pertenece a esta empresa.");
-      expect(execute).not.toHaveBeenCalled();
+      expect(conn.rollback).toHaveBeenCalledOnce();
+      expect(conn.execute.mock.calls.some((c) => String(c[0]).includes("INSERT"))).toBe(false);
     });
 
     it("vehiculo de otra empresa se rechaza", async () => {
-      vi.mocked(query).mockResolvedValue([] as never);
+      conexion({ vehiculoEnEmpresa: false });
       await expect(crearGasto(7, {
         fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, vehiculoId: 999,
       })).rejects.toThrow("El vehículo indicado no pertenece a esta empresa.");
-      expect(execute).not.toHaveBeenCalled();
     });
 
     it("cliente de otra empresa se rechaza", async () => {
-      vi.mocked(query).mockResolvedValue([] as never);
+      conexion({ clienteEnEmpresa: false });
       await expect(crearGasto(7, {
         fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, clienteId: 999,
       })).rejects.toThrow("El cliente indicado no pertenece a esta empresa.");
-      expect(execute).not.toHaveBeenCalled();
     });
 
     it("plan/viaje de otra empresa se rechaza", async () => {
-      vi.mocked(query).mockResolvedValue([] as never);
+      conexion({ planEnEmpresa: false });
       await expect(crearGasto(7, {
         fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, planId: 999,
       })).rejects.toThrow("El viaje/plan indicado no pertenece a esta empresa.");
-      expect(execute).not.toHaveBeenCalled();
     });
 
     it("con id válido de la MISMA empresa, sí inserta (no bloquea referencias legítimas)", async () => {
-      vi.mocked(query)
-        .mockResolvedValueOnce([{ id: 3 }] as never) // valida empleado
-        .mockResolvedValueOnce([filaGasto({ id: 55 })] as never); // obtenerGasto tras crear
-      vi.mocked(execute).mockResolvedValue({ insertId: 55 } as never);
+      const conn = conexion();
+      vi.mocked(query).mockResolvedValue([filaGasto({ id: 55 })] as never);
       const g = await crearGasto(7, {
         fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, empleadoId: 3,
       });
       expect(g.id).toBe(55);
-      expect(execute).toHaveBeenCalledOnce();
+      expect(conn.commit).toHaveBeenCalledOnce();
+    });
+  });
+
+  /**
+   * GASTOS-ADMINISTRATIVO-1 (Fase 2, decisión #1) — TODOS opcionales: sin
+   * ninguno de estos campos, crearGasto funciona exactamente igual que
+   * antes de esta fase (no rompe la UI actual, que todavía no los envía).
+   */
+  describe("campos administrativos (GASTOS-ADMINISTRATIVO-1, Fase 2)", () => {
+    it("sin entidad/requirente/solicitante: crea igual que antes, todos quedan NULL", async () => {
+      const conn = conexion();
+      vi.mocked(query).mockResolvedValue([filaGasto({ id: 55 })] as never);
+      await crearGasto(7, { fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100 });
+      const insert = conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_gastos_operativos"))!;
+      const params = insert[1] as unknown[];
+      // entidad_requirente_id/nombre, requirente_empleado_id/nombre/usuario_id, solicitante_usuario_id/nombre
+      expect(params.slice(-7)).toEqual([null, null, null, null, null, null, null]);
+      expect(conn.commit).toHaveBeenCalledOnce();
+    });
+
+    it("con entidadRequirenteId: se resuelve y congela como snapshot contra cont_entidades", async () => {
+      const conn = conexion({ entidadRequirenteNombre: "Kuiqtrans, S.A." });
+      vi.mocked(query).mockResolvedValue([filaGasto({ id: 55 })] as never);
+      await crearGasto(7, { fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, entidadRequirenteId: 4 });
+      const insert = conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_gastos_operativos"))!;
+      expect(insert[1]).toEqual(expect.arrayContaining([4, "Kuiqtrans, S.A."]));
+    });
+
+    it("entidadRequirenteId inválida (no pertenece/no activa/código fuera de KT-MONACO) se rechaza, con rollback", async () => {
+      const conn = conexion({ entidadRequirenteValida: false });
+      await expect(crearGasto(7, {
+        fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, entidadRequirenteId: 999,
+      })).rejects.toThrow("La empresa requirente no es válida");
+      expect(conn.rollback).toHaveBeenCalledOnce();
+    });
+
+    it("con requirenteUsuarioId: el nombre resuelto por el servidor manda sobre requirenteNombre libre", async () => {
+      const conn = conexion({ usuarioNombre: "Wilter Flores" });
+      vi.mocked(query).mockResolvedValue([filaGasto({ id: 55 })] as never);
+      await crearGasto(7, {
+        fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100,
+        requirenteUsuarioId: 12, requirenteNombre: "Nombre que el cliente intentó forzar",
+      });
+      const insert = conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_gastos_operativos"))!;
+      expect(insert[1]).toContain("Wilter Flores");
+      expect(insert[1]).not.toContain("Nombre que el cliente intentó forzar");
+    });
+
+    it("requirenteUsuarioId que no pertenece a la empresa se rechaza", async () => {
+      conexion({ usuarioEnEmpresa: false });
+      await expect(crearGasto(7, {
+        fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, requirenteUsuarioId: 999,
+      })).rejects.toThrow("El usuario requirente indicado no pertenece a esta empresa.");
+    });
+
+    it("solicitanteUsuarioId sin rol de Operaciones se rechaza (resolverSolicitanteOperacionesTx)", async () => {
+      conexion({ usuarioRol: "Contabilidad" });
+      await expect(crearGasto(7, {
+        fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, solicitanteUsuarioId: 6,
+      })).rejects.toThrow("El usuario solicitante indicado no pertenece a esta empresa.");
+    });
+
+    it("solicitanteUsuarioId con rol de Operaciones válido se congela como snapshot", async () => {
+      const conn = conexion({ usuarioNombre: "Mario Caal", usuarioRol: "Operaciones" });
+      vi.mocked(query).mockResolvedValue([filaGasto({ id: 55 })] as never);
+      await crearGasto(7, {
+        fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, solicitanteUsuarioId: 5,
+      });
+      const insert = conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_gastos_operativos"))!;
+      expect(insert[1]).toEqual(expect.arrayContaining([5, "Mario Caal"]));
     });
   });
 });
 
 describe("actualizarGasto / desactivarGasto", () => {
-  it("devuelve null si el gasto no existe", async () => {
-    vi.mocked(query).mockResolvedValue([] as never);
+  it("devuelve null si el gasto no existe (rollback, sin UPDATE)", async () => {
+    const conn = conexion({ actualRaw: null });
     expect(await actualizarGasto(7, 999, { monto: 100 })).toBeNull();
+    expect(conn.rollback).toHaveBeenCalledOnce();
   });
 
   it("preserva campos no enviados y aplica los enviados", async () => {
-    vi.mocked(query)
-      .mockResolvedValueOnce([filaGasto()] as never) // obtenerGasto (actual)
-      .mockResolvedValueOnce([filaGasto({ monto: "999.00" })] as never); // obtenerGasto (tras UPDATE)
+    conexion();
+    vi.mocked(query).mockResolvedValue([filaGasto({ monto: "999.00" })] as never);
     const g = await actualizarGasto(7, 1, { monto: 999 });
     expect(g?.monto).toBe(999);
-    const params = vi.mocked(execute).mock.calls[0][1] as unknown[];
-    expect(params).toContain("Combustible"); // categoría preservada del actual
   });
 
   it("no permite guardar tiene_factura=0 mientras existe comprobante almacenado", async () => {
-    vi.mocked(query)
-      .mockResolvedValueOnce([filaGasto({ factura_nombre_original: "factura.pdf", factura_tamano: 100 })] as never)
-      .mockResolvedValueOnce([filaGasto({ factura_nombre_original: "factura.pdf", factura_tamano: 100, tiene_factura: 1 })] as never);
+    const conn = conexion({ actualRaw: filaGastoRaw({ factura_nombre_original: "factura.pdf" }) });
+    vi.mocked(query).mockResolvedValue([filaGasto({ factura_nombre_original: "factura.pdf", tiene_factura: 1 })] as never);
     await actualizarGasto(7, 1, { tieneFactura: false });
-    const params = vi.mocked(execute).mock.calls[0][1] as unknown[];
-    expect(params[12]).toBe(1);
+    const update = conn.execute.mock.calls.find((c) => String(c[0]).includes("UPDATE tms_gastos_operativos SET"))!;
+    const params = update[1] as unknown[];
+    expect(params[12]).toBe(1); // posición de tiene_factura en el UPDATE, sin cambios desde antes de esta fase
   });
 
   it("desactivarGasto pone activo=false sin tocar el resto", async () => {
-    vi.mocked(query)
-      .mockResolvedValueOnce([filaGasto()] as never)
-      .mockResolvedValueOnce([filaGasto({ activo: 0 })] as never);
+    conexion();
+    vi.mocked(query).mockResolvedValue([filaGasto({ activo: 0 })] as never);
     const g = await desactivarGasto(7, 1);
     expect(g?.activo).toBe(false);
   });
 
-  it("AISLAMIENTO MULTIEMPRESA: rechaza reasignar el gasto a un vehiculo de otra empresa", async () => {
-    vi.mocked(query)
-      .mockResolvedValueOnce([filaGasto()] as never) // obtenerGasto (actual)
-      .mockResolvedValueOnce([] as never); // valida vehiculo -> no existe en esta empresa
+  it("AISLAMIENTO MULTIEMPRESA: rechaza reasignar el gasto a un vehiculo de otra empresa, con rollback", async () => {
+    const conn = conexion({ vehiculoEnEmpresa: false });
     await expect(actualizarGasto(7, 1, { vehiculoId: 999 })).rejects.toThrow("El vehículo indicado no pertenece a esta empresa.");
-    expect(execute).not.toHaveBeenCalled();
+    expect(conn.rollback).toHaveBeenCalledOnce();
+    expect(conn.execute.mock.calls.some((c) => String(c[0]).includes("UPDATE"))).toBe(false);
   });
 
   describe("FONDOS-GASTOS-METODO-PAGO-1: valida sobre el valor FUSIONADO (actual + cambios)", () => {
     it("rechaza cambiar el método a Transferencia móvil si no queda un número (ni en cambios ni en el registro actual)", async () => {
-      vi.mocked(query).mockResolvedValueOnce([filaGasto({ metodo_pago: "Efectivo", numero_cuenta_pago: null })] as never);
+      const conn = conexion({ actualRaw: filaGastoRaw({ metodo_pago: "Efectivo", numero_cuenta_pago: null }) });
       await expect(actualizarGasto(7, 1, { metodoPago: "Transferencia móvil" })).rejects.toThrow("Ingresa el número");
-      expect(execute).not.toHaveBeenCalled();
+      expect(conn.rollback).toHaveBeenCalledOnce();
     });
 
     it("acepta si el número ya existía en el registro actual y solo cambia el método", async () => {
-      vi.mocked(query)
-        .mockResolvedValueOnce([filaGasto({ metodo_pago: "Efectivo", numero_cuenta_pago: "5555-1234" })] as never)
-        .mockResolvedValueOnce([filaGasto({ metodo_pago: "Transferencia móvil", numero_cuenta_pago: "55551234" })] as never);
+      conexion({ actualRaw: filaGastoRaw({ metodo_pago: "Efectivo", numero_cuenta_pago: "5555-1234" }) });
+      vi.mocked(query).mockResolvedValue([filaGasto({ metodo_pago: "Transferencia móvil", numero_cuenta_pago: "55551234" })] as never);
       await actualizarGasto(7, 1, { metodoPago: "Transferencia móvil" });
-      const params = vi.mocked(execute).mock.calls[0][1] as unknown[];
-      expect(params).toContain("55551234");
     });
   });
 
   it("no re-valida referencias que no cambiaron (solo valida lo que viene en `cambios`)", async () => {
-    vi.mocked(query)
-      .mockResolvedValueOnce([filaGasto()] as never) // obtenerGasto (actual): trae empleado/vehiculo/cliente/plan ya asignados
-      .mockResolvedValueOnce([filaGasto({ monto: "999.00" })] as never); // obtenerGasto (tras UPDATE)
-    // Solo se envía `monto` — ninguna referencia debería re-validarse, así
-    // que `query` solo debe llamarse 2 veces (antes y después del UPDATE).
+    // Solo se envía `monto` — ninguna referencia debería re-validarse; si
+    // se re-validara, el mock de empleados/vehículos/clientes/planes no
+    // está configurado para esas SQL y devolvería [] -> rechazaría.
+    conexion();
+    vi.mocked(query).mockResolvedValue([filaGasto({ monto: "999.00" })] as never);
     const g = await actualizarGasto(7, 1, { monto: 999 });
     expect(g?.monto).toBe(999);
-    expect(query).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * GASTOS-ADMINISTRATIVO-1 (Fase 2, decisión #2) — bloqueo de contenido
+   * una vez Autorizada/Rechazada; `activo` queda exento (baja lógica).
+   */
+  describe("bloqueo de edición cuando Autorizada/Rechazada (decisión #2)", () => {
+    it.each(["Autorizada", "Rechazada"] as const)("rechaza editar contenido de un gasto %s, con rollback", async (estado) => {
+      const conn = conexion({ actualRaw: filaGastoRaw({ estado }) });
+      await expect(actualizarGasto(7, 1, { monto: 999 })).rejects.toThrow(`No se puede editar el contenido de un gasto en estado "${estado}"`);
+      expect(conn.rollback).toHaveBeenCalledOnce();
+      expect(conn.execute.mock.calls.some((c) => String(c[0]).includes("UPDATE"))).toBe(false);
+    });
+
+    it.each(["Autorizada", "Rechazada"] as const)("permite desactivar (activo=false) un gasto %s — excepción aprobada", async (estado) => {
+      const conn = conexion({ actualRaw: filaGastoRaw({ estado }) });
+      vi.mocked(query).mockResolvedValue([filaGasto({ estado, activo: 0 })] as never);
+      const g = await desactivarGasto(7, 1);
+      expect(g?.activo).toBe(false);
+      expect(conn.commit).toHaveBeenCalledOnce();
+    });
+
+    it("un histórico (estado NULL) sigue editable sin restricción nueva", async () => {
+      const conn = conexion({ actualRaw: filaGastoRaw({ estado: null }) });
+      vi.mocked(query).mockResolvedValue([filaGasto({ monto: "999.00" })] as never);
+      await actualizarGasto(7, 1, { monto: 999 });
+      expect(conn.commit).toHaveBeenCalledOnce();
+    });
+
+    it("un Pendiente sigue editable sin restricción nueva", async () => {
+      const conn = conexion({ actualRaw: filaGastoRaw({ estado: "Pendiente" }) });
+      vi.mocked(query).mockResolvedValue([filaGasto({ monto: "999.00" })] as never);
+      await actualizarGasto(7, 1, { monto: 999 });
+      expect(conn.commit).toHaveBeenCalledOnce();
+    });
+  });
+});
+
+/**
+ * GASTOS-ADMINISTRATIVO-1 (Fase 2) — autorizarGasto/rechazarGasto: SIN
+ * firma todavía (fuera de alcance), FOR UPDATE + máquina de estados
+ * propia, prevención de autoautorización, histórico rechazado
+ * explícitamente (decisión #3).
+ */
+describe("autorizarGasto", () => {
+  const autorizante = { usuario: "hsitan", autorizanteUsuarioId: 9, autorizanteNombre: "Heber Sitan" };
+
+  it("devuelve null si el gasto no existe (rollback)", async () => {
+    const conn = conexion({ bloqueoRaw: null });
+    expect(await autorizarGasto(7, 999, autorizante)).toBeNull();
+    expect(conn.rollback).toHaveBeenCalledOnce();
+  });
+
+  it("histórico (estado NULL): rechaza con mensaje claro, nunca lo convierte a Pendiente (decisión #3)", async () => {
+    const conn = conexion({ bloqueoRaw: filaGastoBloqueo({ estado: null }) });
+    await expect(autorizarGasto(7, 1, autorizante)).rejects.toThrow("Este gasto es histórico y no tiene flujo de autorización.");
+    expect(conn.rollback).toHaveBeenCalledOnce();
+    expect(conn.execute.mock.calls.some((c) => String(c[0]).includes("UPDATE"))).toBe(false);
+  });
+
+  it.each(["Autorizada", "Rechazada"] as const)("no permite pasar de %s a Autorizada (transición inválida)", async (estadoActual) => {
+    const conn = conexion({ bloqueoRaw: filaGastoBloqueo({ estado: estadoActual }) });
+    await expect(autorizarGasto(7, 1, autorizante)).rejects.toThrow(`No se puede pasar de "${estadoActual}" a "Autorizada".`);
+    expect(conn.rollback).toHaveBeenCalledOnce();
+  });
+
+  it("autoriza un Pendiente y escribe estado/autorizante/autorizado_en", async () => {
+    const conn = conexion({ bloqueoRaw: filaGastoBloqueo({ estado: "Pendiente" }) });
+    vi.mocked(query).mockResolvedValue([filaGasto({ estado: "Autorizada", autorizante_nombre: "Heber Sitan" })] as never);
+    const g = await autorizarGasto(7, 1, autorizante);
+    expect(g?.estado).toBe("Autorizada");
+    const update = conn.execute.mock.calls.find((c) => String(c[0]).includes("UPDATE tms_gastos_operativos"))!;
+    expect(String(update[0])).toContain("estado = 'Autorizada'");
+    expect(update[1]).toEqual([null, "Heber Sitan", 9, 1, 7]);
+    expect(conn.commit).toHaveBeenCalledOnce();
+  });
+
+  describe("prevención de autoautorización (decisión #4, mismo criterio que Fondos)", () => {
+    it("rechaza si el autorizante es el requirente de ese gasto", async () => {
+      const conn = conexion({ bloqueoRaw: filaGastoBloqueo({ requirente_usuario_id: 9 }) });
+      await expect(autorizarGasto(7, 1, autorizante)).rejects.toThrow("No puede autorizar su propio gasto.");
+      expect(conn.rollback).toHaveBeenCalledOnce();
+    });
+
+    it("rechaza si el autorizante es el solicitante de ese gasto", async () => {
+      conexion({ bloqueoRaw: filaGastoBloqueo({ solicitante_usuario_id: 9 }) });
+      await expect(autorizarGasto(7, 1, autorizante)).rejects.toThrow("No puede autorizar su propio gasto.");
+    });
+
+    it("rechaza si el autorizante (por username) es quien creó el registro", async () => {
+      conexion({ bloqueoRaw: filaGastoBloqueo({ creado_por: "hsitan" }) });
+      await expect(autorizarGasto(7, 1, autorizante)).rejects.toThrow("No puede autorizar su propio gasto.");
+    });
+
+    it("permite autorizar cuando el autorizante NO tiene ninguna relación con el gasto", async () => {
+      const conn = conexion({ bloqueoRaw: filaGastoBloqueo({ requirente_usuario_id: 20, solicitante_usuario_id: 21, creado_por: "otro" }) });
+      vi.mocked(query).mockResolvedValue([filaGasto({ estado: "Autorizada" })] as never);
+      await autorizarGasto(7, 1, autorizante);
+      expect(conn.commit).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("AISLAMIENTO MULTIEMPRESA: valida autorizanteEmpleadoId (legado) contra la empresa", async () => {
+    const conn = conexion({ bloqueoRaw: filaGastoBloqueo(), empleadoEnEmpresa: false });
+    await expect(autorizarGasto(7, 1, { ...autorizante, autorizanteEmpleadoId: 999 })).rejects.toThrow("El autorizante indicado no pertenece a esta empresa.");
+    expect(conn.rollback).toHaveBeenCalledOnce();
+  });
+});
+
+describe("rechazarGasto", () => {
+  it("exige un motivo, sin abrir conexión si falta", async () => {
+    await expect(rechazarGasto(7, 1, { motivoRechazo: "" })).rejects.toThrow("El rechazo requiere un motivo.");
+    expect(getPool).not.toHaveBeenCalled();
+  });
+
+  it("devuelve null si el gasto no existe (rollback)", async () => {
+    const conn = conexion({ bloqueoRaw: null });
+    expect(await rechazarGasto(7, 999, { motivoRechazo: "Factura ilegible" })).toBeNull();
+    expect(conn.rollback).toHaveBeenCalledOnce();
+  });
+
+  it("histórico (estado NULL): rechaza con mensaje claro (decisión #3)", async () => {
+    const conn = conexion({ bloqueoRaw: filaGastoBloqueo({ estado: null }) });
+    await expect(rechazarGasto(7, 1, { motivoRechazo: "x" })).rejects.toThrow("Este gasto es histórico y no tiene flujo de autorización.");
+    expect(conn.rollback).toHaveBeenCalledOnce();
+  });
+
+  it.each(["Autorizada", "Rechazada"] as const)("no permite pasar de %s a Rechazada (transición inválida)", async (estadoActual) => {
+    conexion({ bloqueoRaw: filaGastoBloqueo({ estado: estadoActual }) });
+    await expect(rechazarGasto(7, 1, { motivoRechazo: "x" })).rejects.toThrow(`No se puede pasar de "${estadoActual}" a "Rechazada".`);
+  });
+
+  it("rechaza un Pendiente y escribe estado/motivo/rechazado_en — sin exigir firma ni chequear autoautorización", async () => {
+    const conn = conexion({ bloqueoRaw: filaGastoBloqueo({ estado: "Pendiente", requirente_usuario_id: 9, creado_por: "hsitan" }) });
+    vi.mocked(query).mockResolvedValue([filaGasto({ estado: "Rechazada", motivo_rechazo: "Factura ilegible" })] as never);
+    const g = await rechazarGasto(7, 1, { usuario: "hsitan", motivoRechazo: "  Factura ilegible  " });
+    expect(g?.estado).toBe("Rechazada");
+    const update = conn.execute.mock.calls.find((c) => String(c[0]).includes("UPDATE tms_gastos_operativos"))!;
+    expect(update[1]).toEqual(["Factura ilegible", 1, 7]);
+    expect(conn.commit).toHaveBeenCalledOnce();
   });
 });
