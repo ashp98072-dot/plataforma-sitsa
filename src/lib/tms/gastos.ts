@@ -27,6 +27,20 @@ import {
  * (mismo criterio que cliente-rutas.ts / cliente-contactos.ts).
  */
 
+/**
+ * GASTOS-ADMINISTRATIVO-1 (Fase 3) — mismo patrón EXACTO que `ErrorMultas`
+ * (src/lib/multas/reglas.ts): errores de negocio que necesitan un código
+ * HTTP explícito y estable, para que la API los mapee por `instanceof` —
+ * nunca clasificando por texto del mensaje (frágil ante un reordenamiento
+ * de palabras). Solo se usa donde el status NO es el 400 por defecto de
+ * un error de validación plano (ver bloquearGastoParaTransicionTx/
+ * autorizarGasto) — el resto de errores de este archivo siguen siendo
+ * `Error` simples, y la API los trata como 400, sin cambios.
+ */
+export class ErrorGasto extends Error {
+  constructor(message: string, public status = 400) { super(message); }
+}
+
 /** Catálogo FIJO en código — no una tabla nueva (mismo criterio que empleados.categoria_ops / tms_personal.tipo). */
 export const CATEGORIAS_GASTO = [
   "Combustible",
@@ -625,11 +639,11 @@ async function bloquearGastoParaTransicionTx(
   );
   if (!rows[0]) return null;
   if (rows[0].estado == null) {
-    throw new Error("Este gasto es histórico y no tiene flujo de autorización.");
+    throw new ErrorGasto("Este gasto es histórico y no tiene flujo de autorización.", 409);
   }
   const estadoActual = String(rows[0].estado) as EstadoGasto;
   if (!TRANSICIONES_GASTO[estadoActual].includes(destino)) {
-    throw new Error(`No se puede pasar de "${estadoActual}" a "${destino}".`);
+    throw new ErrorGasto(`No se puede pasar de "${estadoActual}" a "${destino}".`, 409);
   }
   return {
     estadoActual,
@@ -676,7 +690,7 @@ export async function autorizarGasto(
       (bloqueo.solicitanteUsuarioId != null && bloqueo.solicitanteUsuarioId === opts.autorizanteUsuarioId) ||
       (bloqueo.creadoPor != null && opts.usuario != null && bloqueo.creadoPor === opts.usuario);
     if (esPropia) {
-      throw new Error("No puede autorizar su propio gasto.");
+      throw new ErrorGasto("No puede autorizar su propio gasto.", 403);
     }
     await executeConn(conn,
       `UPDATE tms_gastos_operativos
