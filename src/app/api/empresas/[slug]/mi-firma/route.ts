@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireTenant } from "@/lib/tenant";
-import { eliminarFirmaUsuario, guardarFirmaUsuario, obtenerFirmaUsuario } from "@/lib/firmas/usuario-firmas";
+import { guardarFirmaUsuario, obtenerFirmaUsuario } from "@/lib/firmas/usuario-firmas";
 import { esPngValido, MAX_FIRMA_IMAGEN_BYTES } from "@/lib/firmas/imagen-firma";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -67,20 +67,12 @@ export async function POST(req: Request, ctx: Ctx) {
   }
 }
 
-/** DELETE — elimina la firma guardada (nunca toca firmas_electronicas). */
-export async function DELETE(_req: Request, ctx: Ctx) {
-  try {
-    const { slug } = await ctx.params;
-    const guard = await requireTenant(slug);
-    if (guard.error) return guard.error;
-
-    const r = await eliminarFirmaUsuario(guard.session.id);
-    if (!r.ok) {
-      return NextResponse.json({ error: "No tienes una firma guardada." }, { status: 404 });
-    }
-    return NextResponse.json({ mensaje: "Firma eliminada." });
-  } catch (error) {
-    console.error("DELETE mi-firma", error);
-    return NextResponse.json({ error: "No se pudo eliminar tu firma." }, { status: 500 });
-  }
+/** DELETE queda bloqueado deliberadamente: una firma solo puede reemplazarse. */
+export async function DELETE(_req: Request, _ctx: Ctx) {
+  void _req;
+  void _ctx;
+  return NextResponse.json(
+    { error: "La eliminación de firmas está deshabilitada. Puedes reemplazar tu firma." },
+    { status: 405, headers: { Allow: "GET, POST" } },
+  );
 }
