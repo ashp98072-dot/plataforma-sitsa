@@ -3,11 +3,15 @@ import {
   ACTIVITY_PING_THROTTLE_MS,
   SESSION_ENDPOINTS,
   activityLockStorageKey,
+  activityConfirmationStorageKey,
   activityPingStorageKey,
   sessionKindForPath,
   shouldSendActivityPing,
   isTrustedHumanActivity,
   tryAcquireActivityLock,
+  confirmedClockAfterResponse,
+  confirmedClockFromServer,
+  isConfirmedSessionExpired,
 } from "./session-activity-client";
 
 describe("session inactivity client policy", () => {
@@ -56,9 +60,62 @@ describe("session inactivity client policy", () => {
     expect(tryAcquireActivityLock(storage, "staff", "tab-b", 25_000)).toBe(true);
   });
 
+  it("normaliza clock skew distinto por pestaña al mismo tiempo del servidor", () => {
+    const response = {
+      serverNow: 1_000,
+      lastActivityAt: 900,
+      idleExpiresAt: 2_700,
+      absoluteExpiresAt: 40_000,
+    };
+    const tabAdelantada = confirmedClockFromServer(response, 9_000_000)!;
+    const tabAtrasada = confirmedClockFromServer(response, 100_000)!;
+    expect(isConfirmedSessionExpired(tabAdelantada, 9_000_000)).toBe(false);
+    expect(isConfirmedSessionExpired(tabAtrasada, 100_000)).toBe(false);
+    expect(isConfirmedSessionExpired(tabAdelantada, 10_700_000)).toBe(true);
+    expect(isConfirmedSessionExpired(tabAtrasada, 1_800_000)).toBe(true);
+  });
+
+  it("storage confirmado no mezcla el reloj de la pestaña emisora", () => {
+    const fromStorage = {
+      serverNow: 5_000,
+      lastActivityAt: 4_900,
+      idleExpiresAt: 6_700,
+      absoluteExpiresAt: 20_000,
+    };
+    const receiver = confirmedClockFromServer(fromStorage, 50_000_000)!;
+    expect(receiver.idleExpiresAtMs).toBe(6_700_000);
+    expect(receiver.serverOffsetMs).toBe(5_000_000 - 50_000_000);
+    expect(isConfirmedSessionExpired(receiver, 50_000_000)).toBe(false);
+  });
+
+  it("POST fallido conserva expiración; respuesta válida sí la actualiza", () => {
+    const previous = {
+      serverOffsetMs: 0,
+      lastActivityAtMs: 1_000_000,
+      idleExpiresAtMs: 2_800_000,
+      absoluteExpiresAtMs: 40_000_000,
+    };
+    expect(confirmedClockAfterResponse(previous, null, 1_500_000)).toBe(previous);
+    const successful = confirmedClockAfterResponse(
+      previous,
+      {
+        serverNow: 1_500,
+        lastActivityAt: 1_500,
+        idleExpiresAt: 3_300,
+        absoluteExpiresAt: 40_000,
+      },
+      1_500_000,
+    )!;
+    expect(successful.lastActivityAtMs).toBe(1_500_000);
+    expect(successful.idleExpiresAtMs).toBe(3_300_000);
+  });
+
   it("usa llaves compartidas por tipo para coordinar pestañas", () => {
     expect(activityPingStorageKey("staff")).toBe(activityPingStorageKey("staff"));
     expect(activityLockStorageKey("staff")).toBe(activityLockStorageKey("staff"));
     expect(activityLockStorageKey("staff")).not.toBe(activityLockStorageKey("cliente"));
+    expect(activityConfirmationStorageKey("staff")).not.toBe(
+      activityConfirmationStorageKey("cliente"),
+    );
   });
 });

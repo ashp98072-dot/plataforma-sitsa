@@ -4,6 +4,20 @@ export const ACTIVITY_PING_THROTTLE_MS = 60_000;
 export const ACTIVITY_LOCK_MS = 15_000;
 export const HUMAN_ACTIVITY_EVENTS = ["pointerdown", "keydown", "touchstart"] as const;
 
+export type ActivityResponse = {
+  serverNow: number;
+  lastActivityAt: number;
+  idleExpiresAt: number;
+  absoluteExpiresAt: number;
+};
+
+export type ConfirmedSessionClock = {
+  serverOffsetMs: number;
+  lastActivityAtMs: number;
+  idleExpiresAtMs: number;
+  absoluteExpiresAtMs: number;
+};
+
 type MinimalStorage = Pick<Storage, "getItem" | "setItem">;
 
 export const SESSION_ENDPOINTS: Record<
@@ -58,6 +72,10 @@ export function activityLockStorageKey(kind: SessionKind): string {
   return `sitsa:${kind}:activity-lock`;
 }
 
+export function activityConfirmationStorageKey(kind: SessionKind): string {
+  return `sitsa:${kind}:activity-confirmed`;
+}
+
 export function shouldSendActivityPing(
   lastPingMs: number,
   nowMs: number,
@@ -91,4 +109,51 @@ export function tryAcquireActivityLock(
     | { owner?: string }
     | null;
   return current?.owner === owner;
+}
+
+function positiveFinite(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+/** Convierte una confirmación del servidor al reloj local de ESTA pestaña. */
+export function confirmedClockFromServer(
+  response: ActivityResponse,
+  localReceivedAtMs: number,
+): ConfirmedSessionClock | null {
+  if (
+    !positiveFinite(response.serverNow) ||
+    !positiveFinite(response.lastActivityAt) ||
+    !positiveFinite(response.idleExpiresAt) ||
+    !positiveFinite(response.absoluteExpiresAt)
+  ) {
+    return null;
+  }
+  return {
+    serverOffsetMs: response.serverNow * 1000 - localReceivedAtMs,
+    lastActivityAtMs: response.lastActivityAt * 1000,
+    idleExpiresAtMs: response.idleExpiresAt * 1000,
+    absoluteExpiresAtMs: response.absoluteExpiresAt * 1000,
+  };
+}
+
+/** Una respuesta ausente/inválida nunca extiende el estado confirmado anterior. */
+export function confirmedClockAfterResponse(
+  current: ConfirmedSessionClock | null,
+  response: ActivityResponse | null,
+  localReceivedAtMs: number,
+): ConfirmedSessionClock | null {
+  return response
+    ? (confirmedClockFromServer(response, localReceivedAtMs) ?? current)
+    : current;
+}
+
+export function isConfirmedSessionExpired(
+  clock: ConfirmedSessionClock,
+  localNowMs: number,
+): boolean {
+  const approximateServerNow = localNowMs + clock.serverOffsetMs;
+  return (
+    approximateServerNow >= clock.idleExpiresAtMs ||
+    approximateServerNow >= clock.absoluteExpiresAtMs
+  );
 }

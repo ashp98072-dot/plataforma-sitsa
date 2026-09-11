@@ -4,6 +4,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef } from "react";
 import {
   SESSION_ENDPOINTS,
+  activityConfirmationStorageKey,
   activityLockStorageKey,
   activityPingStorageKey,
   activityStorageKey,
@@ -11,16 +12,12 @@ import {
   shouldSendActivityPing,
   isTrustedHumanActivity,
   tryAcquireActivityLock,
+  confirmedClockAfterResponse,
+  isConfirmedSessionExpired,
+  type ActivityResponse,
+  type ConfirmedSessionClock,
   type SessionKind,
 } from "@/lib/session-activity-client";
-import { SESSION_IDLE_SECONDS } from "@/lib/session-lifetime";
-
-type ActivityResponse = {
-  serverNow: number;
-  lastActivityAt: number;
-  idleExpiresAt: number;
-  absoluteExpiresAt: number;
-};
 
 function numberFromStorage(key: string): number {
   const value = Number(localStorage.getItem(key));
@@ -42,8 +39,7 @@ export function SessionInactivityGuard() {
   const loggingOut = useRef(false);
   const requestInFlight = useRef(false);
   const owner = useRef("");
-  const serverOffsetMs = useRef(0);
-  const idleExpiresAtMs = useRef(0);
+  const confirmedClock = useRef<ConfirmedSessionClock | null>(null);
 
   useEffect(() => {
     if (!kind) return;
@@ -55,6 +51,7 @@ export function SessionInactivityGuard() {
     const endpoints = SESSION_ENDPOINTS[activeKind];
     const humanKey = activityStorageKey(activeKind);
     const pingKey = activityPingStorageKey(activeKind);
+    const confirmationKey = activityConfirmationStorageKey(activeKind);
 
     async function logout() {
       if (loggingOut.current) return;
@@ -68,11 +65,16 @@ export function SessionInactivityGuard() {
       router.refresh();
     }
 
-    function applyServerTime(data: ActivityResponse) {
-      const receivedAt = Date.now();
-      serverOffsetMs.current = data.serverNow * 1000 - receivedAt;
-      idleExpiresAtMs.current = data.idleExpiresAt * 1000;
-      localStorage.setItem(humanKey, String(data.lastActivityAt * 1000));
+    function applyServerTime(data: ActivityResponse, broadcast = true): boolean {
+      const next = confirmedClockAfterResponse(
+        confirmedClock.current,
+        data,
+        Date.now(),
+      );
+      if (!next || next === confirmedClock.current) return false;
+      confirmedClock.current = next;
+      if (broadcast) localStorage.setItem(confirmationKey, JSON.stringify(data));
+      return true;
     }
 
     async function validateOnly() {
@@ -86,6 +88,8 @@ export function SessionInactivityGuard() {
         });
         if (response.status === 401) return void logout();
         if (response.ok) applyServerTime((await response.json()) as ActivityResponse);
+      } catch {
+        // Mantener el último estado confirmado; validar no renueva la sesión.
       } finally {
         requestInFlight.current = false;
       }
@@ -94,15 +98,14 @@ export function SessionInactivityGuard() {
     async function registerHumanActivity() {
       const now = Date.now();
       localStorage.setItem(humanKey, String(now));
-      idleExpiresAtMs.current =
-        now + serverOffsetMs.current + SESSION_IDLE_SECONDS * 1000;
+      if (requestInFlight.current || loggingOut.current) return;
       const lastPing = numberFromStorage(pingKey);
       if (!shouldSendActivityPing(lastPing, now)) return;
       if (!acquireCrossTabLock(activeKind, owner.current, now)) return;
       // Se reserva la ventana antes del fetch para agrupar eventos y pestañas.
       localStorage.setItem(pingKey, String(now));
-      if (requestInFlight.current || loggingOut.current) return;
       requestInFlight.current = true;
+      let confirmed = false;
       try {
         const response = await fetch(endpoints.activity, {
           method: "POST",
@@ -110,10 +113,17 @@ export function SessionInactivityGuard() {
           cache: "no-store",
         });
         if (response.status === 401) return void logout();
-        if (response.ok) applyServerTime((await response.json()) as ActivityResponse);
+        if (response.ok) {
+          confirmed = applyServerTime((await response.json()) as ActivityResponse);
+        }
+      } catch {
+        // Una falla de red no equivale a actividad aceptada por el servidor.
       } finally {
         requestInFlight.current = false;
         try {
+          if (!confirmed && numberFromStorage(pingKey) === now) {
+            localStorage.removeItem(pingKey);
+          }
           const lockKey = activityLockStorageKey(activeKind);
           const current = JSON.parse(localStorage.getItem(lockKey) ?? "null") as
             | { owner?: string }
@@ -138,17 +148,17 @@ export function SessionInactivityGuard() {
     }
 
     function onStorage(event: StorageEvent) {
-      if (event.key !== humanKey || !event.newValue) return;
-      const humanAt = Number(event.newValue);
-      if (Number.isFinite(humanAt)) {
-        idleExpiresAtMs.current = humanAt + SESSION_IDLE_SECONDS * 1000;
+      if (event.key !== confirmationKey || !event.newValue) return;
+      try {
+        applyServerTime(JSON.parse(event.newValue) as ActivityResponse, false);
+      } catch {
+        // Ignorar storage corrupto; conservar la última expiración confirmada.
       }
     }
 
     const timer = window.setInterval(() => {
-      if (!idleExpiresAtMs.current) return;
-      const authoritativeApproxNow = Date.now() + serverOffsetMs.current;
-      if (authoritativeApproxNow >= idleExpiresAtMs.current) void logout();
+      const clock = confirmedClock.current;
+      if (clock && isConfirmedSessionExpired(clock, Date.now())) void logout();
     }, 1_000);
 
     window.addEventListener("pointerdown", onHumanEvent, { passive: true });
