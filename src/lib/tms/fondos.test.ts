@@ -136,6 +136,43 @@ describe("aislamiento multiempresa en el SELECT de listado (bloqueo 1, revisión
   });
 });
 
+/**
+ * REPORTES-FONDOS-PDF-TABULAR-1 — el listado en pantalla (GET /tms/fondos)
+ * ahora respeta el filtro Requirente, mismo criterio que ya usaban las
+ * exportaciones (condicionesFondos en reportes-gastos.ts, sobre
+ * s.requirente_usuario_id) — nunca un segundo mecanismo de filtrado.
+ */
+describe("listarSolicitudesFondo — filtro Requirente", () => {
+  it("con requirenteUsuarioId, agrega la condición y el parámetro", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await listarSolicitudesFondo(7, { requirenteUsuarioId: 9 });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("s.requirente_usuario_id = ?");
+    expect(params).toEqual([7, 9]);
+  });
+
+  it("sin requirenteUsuarioId, no agrega la condición (todos los requirentes)", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await listarSolicitudesFondo(7);
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    // SELECT_SOLICITUD ya trae s.requirente_usuario_id como columna (para
+    // otros usos) — lo que NO debe aparecer es la CONDICIÓN del filtro.
+    expect(sql).not.toContain("s.requirente_usuario_id = ?");
+    expect(params).toEqual([7]);
+  });
+
+  it("combina con estado y fechas (filtros existentes) sin pisarlos", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await listarSolicitudesFondo(7, { estado: "Autorizada", fechaDesde: "2026-09-01", fechaHasta: "2026-09-30", requirenteUsuarioId: 9 });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("s.estado = ?");
+    expect(sql).toContain("s.fecha_requerimiento >= ?");
+    expect(sql).toContain("s.fecha_requerimiento <= ?");
+    expect(sql).toContain("s.requirente_usuario_id = ?");
+    expect(params).toEqual([7, "Autorizada", "2026-09-01", "2026-09-30", 9]);
+  });
+});
+
 describe("crearSolicitudFondo", () => {
   it("rechaza sin líneas", async () => {
     conexion();

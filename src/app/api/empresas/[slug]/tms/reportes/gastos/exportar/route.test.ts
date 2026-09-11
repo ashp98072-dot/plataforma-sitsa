@@ -218,5 +218,93 @@ describe("GET /tms/reportes/gastos/exportar", () => {
       const res = await GET(new Request("http://localhost/x?tipo=fondos&formato=pdf&fechaSolicitudDesde=2024-02-01&fechaSolicitudHasta=2024-02-29"), ctx);
       expect(res.status).toBe(200);
     });
+
+    /**
+     * REPORTES-FONDOS-PDF-TABULAR-1 — `variante=tabular` es un PDF
+     * DISTINTO al mensual consolidado: mismo tipo/endpoint, mismos
+     * filtros/consulta ya cargados, pero SIN exigir mes completo, SIN
+     * firmas ni RESUMEN DEL MES — el equivalente compacto al PDF de
+     * Gastos operativos.
+     */
+    describe("variante=tabular (REPORTES-FONDOS-PDF-TABULAR-1)", () => {
+      const filaDetalle = {
+        lineaId: 1, solicitudId: 10, solicitudCodigo: "FONDO-000010", estadoFondo: "Pendiente",
+        fechaSolicitud: "2026-09-05", fechaViaje: "2026-09-06",
+        requirenteNombre: "Wilter Flores", empleadoNombre: "Heber Sitan", cargo: "Piloto",
+        placa: "P111AAA", clienteNombre: "Cliente A", cantidad: 2, descripcion: "Combustible ruta",
+        monto: 100, total: 200,
+      };
+
+      it("con un RANGO LIBRE (sin mes completo) -> 200, PDF tabular (nunca 400, nunca exige mes)", async () => {
+        vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({ tipo: "fondos", filas: [filaDetalle], resumen: {} } as never);
+        const res = await GET(new Request("http://localhost/x?tipo=fondos&formato=pdf&variante=tabular&fechaSolicitudDesde=2026-09-10&fechaSolicitudHasta=2026-09-15"), ctx);
+        expect(res.status).toBe(200);
+        expect(res.headers.get("Content-Type")).toBe("application/pdf");
+        expect(res.headers.get("Content-Disposition")).toContain("reporte-solicitudes-fondo-2026-09-09.pdf");
+        expect(generarPdfMensualSolicitudesFondo).not.toHaveBeenCalled();
+      });
+
+      it("SIN ningún filtro de fecha -> también 200 (nunca exige mes, a diferencia del mensual)", async () => {
+        vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({ tipo: "fondos", filas: [filaDetalle], resumen: {} } as never);
+        const res = await GET(new Request("http://localhost/x?tipo=fondos&formato=pdf&variante=tabular"), ctx);
+        expect(res.status).toBe(200);
+      });
+
+      it("las columnas son la vista tabular compacta (código, fechas, estado, requirente, nombre, cargo, placa, cliente, cantidad, descripción, total)", async () => {
+        vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({ tipo: "fondos", filas: [filaDetalle], resumen: {} } as never);
+        await GET(new Request("http://localhost/x?tipo=fondos&formato=pdf&variante=tabular"), ctx);
+        const llamada = vi.mocked(tablaAPdf).mock.calls[0][0];
+        expect(llamada.headers).toEqual(["Código", "Fecha solicitud", "Fecha viaje", "Estado", "Requirente", "Nombre", "Cargo", "Placa", "Cliente", "Cant.", "Descripción", "Total"]);
+        expect(llamada.layout).toBe("landscape");
+        expect(llamada.modo).toBe("tabla");
+        expect(llamada.weight).toBeDefined();
+        const filaDatos = llamada.rows[0]!;
+        expect(filaDatos.slice(0, 9)).toEqual(["FONDO-000010", "05/09/2026", "06/09/2026", "Pendiente", "Wilter Flores", "Heber Sitan", "Piloto", "P111AAA", "Cliente A"]);
+      });
+
+      it("incluye TOTAL GENERAL con la suma de todas las líneas del filtro (nunca solo Excel)", async () => {
+        vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({
+          tipo: "fondos",
+          filas: [filaDetalle, { ...filaDetalle, lineaId: 2, solicitudId: 11, solicitudCodigo: "FONDO-000011", total: 350 }],
+          resumen: {},
+        } as never);
+        await GET(new Request("http://localhost/x?tipo=fondos&formato=pdf&variante=tabular"), ctx);
+        const rows = vi.mocked(tablaAPdf).mock.calls[0][0].rows;
+        expect(rows).toHaveLength(3); // 2 líneas + total
+        const filaTotal = rows[rows.length - 1]!;
+        expect(filaTotal).toContain("TOTAL GENERAL");
+        expect(filaTotal).toContain("Q550.00");
+      });
+
+      it("respeta el filtro Requirente/Estado ya calculado por el mismo reporte (nunca un segundo parseo)", async () => {
+        vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({ tipo: "fondos", filas: [filaDetalle], resumen: {} } as never);
+        await GET(new Request("http://localhost/x?tipo=fondos&formato=pdf&variante=tabular&estadoFondo=Pendiente&requirenteUsuarioId=9"), ctx);
+        // obtenerReporteGastosPorTipo ya recibe filtrosReporteGastosDesdeUrl(url) — mismo objeto que el Excel/mensual, sin bifurcar.
+        expect(obtenerReporteGastosPorTipo).toHaveBeenCalledTimes(1);
+        expect(exportarReporteFondosExcel).not.toHaveBeenCalled();
+      });
+
+      it("nunca usa Excel ni el generador mensual con firmas para esta variante", async () => {
+        vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({ tipo: "fondos", filas: [filaDetalle], resumen: {} } as never);
+        await GET(new Request("http://localhost/x?tipo=fondos&formato=pdf&variante=tabular"), ctx);
+        expect(exportarReporteFondosExcel).not.toHaveBeenCalled();
+        expect(generarPdfMensualSolicitudesFondo).not.toHaveBeenCalled();
+      });
+
+      it("cualquier otro valor de `variante` (o su ausencia) conserva el PDF mensual consolidado sin cambios", async () => {
+        vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({ tipo: "fondos", filas: [filaFondo], resumen: {} } as never);
+        const res = await GET(new Request("http://localhost/x?tipo=fondos&formato=pdf&variante=otra-cosa&fechaSolicitudDesde=2026-09-01&fechaSolicitudHasta=2026-09-30"), ctx);
+        expect(res.status).toBe(200);
+        expect(generarPdfMensualSolicitudesFondo).toHaveBeenCalledTimes(1);
+      });
+
+      it("variante=tabular con un rango PARCIAL sigue funcionando (nunca el 400 del mensual)", async () => {
+        vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({ tipo: "fondos", filas: [filaDetalle], resumen: {} } as never);
+        const res = await GET(new Request("http://localhost/x?tipo=fondos&formato=pdf&variante=tabular&fechaSolicitudDesde=2026-09-10&fechaSolicitudHasta=2026-09-15"), ctx);
+        expect(res.status).toBe(200);
+        const body = res.status === 400 ? await res.json() : null;
+        expect(body).toBeNull();
+      });
+    });
   });
 });

@@ -335,6 +335,15 @@ export type FiltrosFondos = {
   estado?: EstadoFondo;
   fechaDesde?: string;
   fechaHasta?: string;
+  /**
+   * REPORTES-FONDOS-PDF-TABULAR-1 — filtro "Requirente" del listado en
+   * pantalla. Antes solo lo aplicaban las exportaciones (condicionesFondos
+   * en reportes-gastos.ts, sobre s.requirente_usuario_id); el listado lo
+   * ignoraba en silencio y la pantalla lo simulaba filtrando en el
+   * cliente. Misma columna, mismo criterio — sin duplicar esa lógica, solo
+   * se replica la MISMA condición aquí para que ambos caminos coincidan.
+   */
+  requirenteUsuarioId?: number;
 };
 
 export async function listarSolicitudesFondo(
@@ -346,6 +355,7 @@ export async function listarSolicitudesFondo(
   if (filtros.estado) { condiciones.push("s.estado = ?"); params.push(filtros.estado); }
   if (filtros.fechaDesde) { condiciones.push("s.fecha_requerimiento >= ?"); params.push(filtros.fechaDesde); }
   if (filtros.fechaHasta) { condiciones.push("s.fecha_requerimiento <= ?"); params.push(filtros.fechaHasta); }
+  if (filtros.requirenteUsuarioId) { condiciones.push("s.requirente_usuario_id = ?"); params.push(filtros.requirenteUsuarioId); }
   const rows = await query<RowDataPacket[]>(
     `${SELECT_SOLICITUD} WHERE ${condiciones.join(" AND ")} ORDER BY s.fecha_requerimiento DESC, s.id DESC`,
     params,

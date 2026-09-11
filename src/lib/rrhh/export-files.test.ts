@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import PDFDocument from "pdfkit";
-import { celdaPdf, dibujarTablaEnDoc } from "./export-files";
+import { celdaPdf, dibujarTablaEnDoc, tablaAPdf } from "./export-files";
 
 /**
  * Regresión del bug real encontrado en VIATICOS-COMPROBANTE-PDF: una
@@ -203,6 +203,59 @@ describe("dibujarTablaEnDoc", () => {
       d.end();
       // La columna 1 ("Monto") sigue dibujándose con su contenido íntegro.
       expect(llamadas.find((l) => l.texto === "Q50.00")).toBeDefined();
+    });
+  });
+
+  /**
+   * REPORTES-GASTOS-FONDOS-PDF-PRESENTACION-1 — `tablaAPdf` (usado por
+   * gastos/fondos/viáticos) antes NO reenviaba `weight`/`align`/
+   * `preserveSingleLine`/`maxLines` a dibujarTablaEnDoc: un encabezado
+   * corto ("Cant.") en una tabla de muchas columnas podía quedar tan
+   * angosto que se truncaba con "…". Estos parámetros ya existían en
+   * dibujarTablaEnDoc (ver "weight" arriba) — aquí solo se prueba que
+   * `tablaAPdf` los reenvía, sin duplicar esa lógica de ancho/wrap.
+   */
+  describe("tablaAPdf — reenvía weight/align a dibujarTablaEnDoc (REPORTES-GASTOS-FONDOS-PDF-PRESENTACION-1)", () => {
+    it("un caller que NO pasa weight/align conserva el comportamiento de siempre (PDF válido)", async () => {
+      const buf = await tablaAPdf({
+        title: "Reporte de prueba",
+        headers: ["Viaje", "Monto"],
+        rows: [["VJ-001", "Q50.00"]],
+        layout: "landscape",
+        modo: "tabla",
+      });
+      expect(buf.subarray(0, 4).toString("latin1")).toBe("%PDF");
+    });
+
+    it("un caller que SÍ pasa weight/align genera un PDF válido usando esos anchos (sin romper nada)", async () => {
+      const buf = await tablaAPdf({
+        title: "Reporte de prueba",
+        headers: ["Fecha solicitud", "Fecha viaje", "Nombre", "Cant.", "Descripción", "Total"],
+        rows: [["04/09/2026", "05/09/2026", "Heber Sitan", "2", "Combustible ruta Xela", "Q200.00"]],
+        layout: "landscape",
+        modo: "tabla",
+        weight: { 0: 9, 1: 9, 2: 14, 3: 7, 4: 20, 5: 10 },
+        align: { 3: "center", 5: "right" },
+      });
+      expect(buf.subarray(0, 4).toString("latin1")).toBe("%PDF");
+    });
+
+    it("con `weight` suficiente, un encabezado corto como 'Cant.' se dibuja completo en una sola llamada (nunca partido con '…')", async () => {
+      const spy = vi.spyOn(PDFDocument.prototype, "text");
+      await tablaAPdf({
+        title: "Reporte de prueba",
+        // Muchas columnas (como el PDF de Gastos/Fondos): sin weight, el
+        // cálculo automático deja "Cant." tan angosto que se trunca.
+        headers: ["Fecha solicitud", "Fecha viaje", "Nombre", "Cargo", "Placa", "Cliente", "Cant.", "Descripción", "Total", "Código", "Categoría", "Estado"],
+        rows: [["04/09/2026", "05/09/2026", "Heber Sitan", "Piloto", "P111AAA", "Cliente A", "2", "Combustible ruta Xela con descripción larga", "Q200.00", "PLAN-1", "Combustible", "Activo"]],
+        layout: "landscape",
+        modo: "tabla",
+        weight: { 0: 9, 1: 9, 2: 14, 3: 11, 4: 8, 5: 13, 6: 7, 7: 20, 8: 10, 9: 9, 10: 11, 11: 8 },
+      });
+      const textos = spy.mock.calls.map((c) => String(c[0]));
+      expect(textos).toContain("Cant.");
+      expect(textos.some((t) => t.includes("…"))).toBe(false);
+      spy.mockRestore();
     });
   });
 });
