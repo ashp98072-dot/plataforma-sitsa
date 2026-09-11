@@ -7,6 +7,12 @@ import { leerBytesFirmaGuardada } from "@/lib/firmas/usuario-firmas";
 import { sha256Hex } from "@/lib/firmas/imagen-firma";
 import { borrarUpload, guardarUpload } from "@/lib/uploads";
 import { normalizarDestinoPago } from "@/lib/tms/gastos";
+import {
+  resolverEntidadRequirenteTx,
+  resolverSolicitanteOperacionesTx,
+  resolverUsuarioDeEmpresaTx,
+  validarEmpleadoDeEmpresaTx,
+} from "@/lib/tms/identidad-administrativa";
 
 /**
  * TMS-GASTOS-REPORTES-1 (fase 1) — solicitudes de fondo (anticipo/caja
@@ -38,79 +44,6 @@ function limpiarOverride(valor: string | null | undefined, maximo: number): stri
   if (!limpio) return null;
   if (limpio.length > maximo) throw new Error(`El valor editado no puede exceder ${maximo} caracteres.`);
   return limpio;
-}
-
-/**
- * AISLAMIENTO MULTIEMPRESA (corrección post-revisión PR #204) — mismo
- * criterio que validarReferenciasGasto en gastos.ts: valida ANTES de
- * escribir que el empleado (requirente/autorizante) pertenezca a la
- * MISMA empresa, aunque el id exista en otra. La FK compuesta
- * (empresa_id, xxx_empleado_id) en la base es la garantía real; esto es
- * la primera línea de defensa, con un mensaje claro.
- */
-async function validarEmpleadoDeEmpresaTx(
-  conn: PoolConnection,
-  empresaId: number,
-  empleadoId: number | null | undefined,
-  etiqueta: string,
-): Promise<void> {
-  if (empleadoId == null) return;
-  const rows = await queryConn<RowDataPacket[]>(conn, "SELECT id FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1", [empleadoId, empresaId]);
-  if (!rows[0]) throw new Error(`El ${etiqueta} indicado no pertenece a esta empresa.`);
-}
-
-const CODIGOS_ENTIDAD_REQUIRIENTE = ["KT", "MONACO"] as const;
-
-async function resolverEntidadRequirenteTx(
-  conn: PoolConnection,
-  empresaId: number,
-  entidadId: number,
-): Promise<{ id: number; nombre: string }> {
-  const rows = await queryConn<RowDataPacket[]>(conn,
-    `SELECT id, nombre
-     FROM cont_entidades
-     WHERE id = ? AND empresa_id = ? AND activa = 1 AND codigo IN (?, ?)
-     LIMIT 1`,
-    [entidadId, empresaId, ...CODIGOS_ENTIDAD_REQUIRIENTE],
-  );
-  if (!rows[0]) throw new Error("La empresa requirente no es válida, no está activa o no pertenece a esta empresa.");
-  return { id: Number(rows[0].id), nombre: String(rows[0].nombre) };
-}
-
-/**
- * SOLICITUD-FONDOS-PDF-AUTORIZADO-1 — `usuarios` es GLOBAL (sin
- * empresa_id, ver usuario_firmas/MI-FIRMA-1), así que "pertenece a esta
- * empresa" para un usuario significa: tiene acceso a ella
- * (usuario_empresa) o tiene acceso a todas (acceso_todas_empresas) —
- * MISMO criterio que empresasParaUsuario() en src/lib/empresas.ts, en
- * sentido inverso. Devuelve {nombre, rol} para snapshot (nunca username,
- * ver §5 del ticket) — null si el id no existe o no tiene acceso a esta
- * empresa, nunca lanza para dejar que el caller decida el mensaje.
- */
-async function resolverUsuarioDeEmpresaTx(
-  conn: PoolConnection,
-  empresaId: number,
-  usuarioId: number | null | undefined,
-): Promise<{ nombre: string; rol: string | null } | null> {
-  if (usuarioId == null) return null;
-  const rows = await queryConn<RowDataPacket[]>(conn,
-    `SELECT u.nombre, u.rol_global
-     FROM usuarios u
-     LEFT JOIN usuario_empresa ue ON ue.usuario_id = u.id AND ue.empresa_id = ?
-     WHERE u.id = ? AND u.activo = 1 AND (ue.usuario_id IS NOT NULL OR u.acceso_todas_empresas = 1)
-     LIMIT 1`,
-    [empresaId, usuarioId],
-  );
-  const row = rows[0];
-  if (!row || !row.nombre) return null;
-  return { nombre: String(row.nombre), rol: row.rol_global != null ? String(row.rol_global) : null };
-}
-
-const ROLES_SOLICITANTE_OPERACIONES = new Set(["Operaciones", "GerenteOperaciones", "JefeOperaciones", "AuxiliarOperaciones"]);
-
-async function resolverSolicitanteOperacionesTx(conn: PoolConnection, empresaId: number, usuarioId: number | null): Promise<{ nombre: string; rol: string | null } | null> {
-  const usuario = await resolverUsuarioDeEmpresaTx(conn, empresaId, usuarioId);
-  return usuario && usuario.rol && ROLES_SOLICITANTE_OPERACIONES.has(usuario.rol) ? usuario : null;
 }
 
 /** Identidad real de sesión (nunca username) para una firma de Fondos — ver crearSolicitudFondo/cambiarEstadoSolicitudFondo. */

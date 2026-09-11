@@ -50,6 +50,64 @@ describe("métodos de pago", () => {
 });
 
 /**
+ * GASTOS-ADMINISTRATIVO-1 (Fase 1 — SOLO lectura/mapeo) — mismos conceptos
+ * administrativos que Fondos (requirente/solicitante/autorizante/estado),
+ * pero cada gasto es su propia unidad (sin encabezado/líneas). Estas
+ * columnas todavía no las escribe crearGasto/actualizarGasto en esta
+ * fase — aquí solo se prueba que `mapRow` las lee correctamente.
+ */
+describe("campos administrativos (GASTOS-ADMINISTRATIVO-1, Fase 1)", () => {
+  it("histórico/legado: ausentes en la fila -> se mapean a null (nunca a 'Pendiente' ni a un valor inventado)", async () => {
+    vi.mocked(query).mockResolvedValue([filaGasto()] as never);
+    const g = await obtenerGasto(7, 1);
+    expect(g).toMatchObject<Partial<GastoOperativo>>({
+      entidadRequirenteId: null, entidadRequirenteNombre: null,
+      requirenteEmpleadoId: null, requirenteNombre: null, requirenteUsuarioId: null,
+      solicitanteUsuarioId: null, solicitanteNombre: null,
+      autorizanteEmpleadoId: null, autorizanteNombre: null, autorizanteUsuarioId: null,
+      estado: null, autorizadoEn: null, rechazadoEn: null, motivoRechazo: null,
+    });
+  });
+
+  it("mapea correctamente cuando la fila SÍ trae los 14 campos administrativos", async () => {
+    vi.mocked(query).mockResolvedValue([filaGasto({
+      entidad_requirente_id: 4, entidad_requirente_nombre: "Kuiqtrans, S.A.",
+      requirente_empleado_id: 3, requirente_nombre: "Juan Perez", requirente_usuario_id: 12,
+      solicitante_usuario_id: 5, solicitante_nombre: "Mario Caal",
+      autorizante_empleado_id: 8, autorizante_nombre: "Heber Sitan", autorizante_usuario_id: 9,
+      estado: "Autorizada", autorizado_en: "2026-09-05 10:00:00", rechazado_en: null, motivo_rechazo: null,
+    })] as never);
+    const g = await obtenerGasto(7, 1);
+    expect(g).toMatchObject<Partial<GastoOperativo>>({
+      entidadRequirenteId: 4, entidadRequirenteNombre: "Kuiqtrans, S.A.",
+      requirenteEmpleadoId: 3, requirenteNombre: "Juan Perez", requirenteUsuarioId: 12,
+      solicitanteUsuarioId: 5, solicitanteNombre: "Mario Caal",
+      autorizanteEmpleadoId: 8, autorizanteNombre: "Heber Sitan", autorizanteUsuarioId: 9,
+      estado: "Autorizada",
+    });
+    expect(g?.autorizadoEn).toContain("2026-09-05");
+  });
+
+  it("rechazado: motivo_rechazo y rechazado_en se mapean cuando el estado es Rechazada", async () => {
+    vi.mocked(query).mockResolvedValue([filaGasto({
+      estado: "Rechazada", rechazado_en: "2026-09-06 08:00:00", motivo_rechazo: "Factura ilegible",
+    })] as never);
+    const g = await obtenerGasto(7, 1);
+    expect(g?.estado).toBe("Rechazada");
+    expect(g?.motivoRechazo).toBe("Factura ilegible");
+    expect(g?.rechazadoEn).toContain("2026-09-06");
+  });
+
+  it("crearGasto/actualizarGasto NO escriben ninguno de estos campos todavía (Fase 1 es solo lectura)", async () => {
+    vi.mocked(execute).mockResolvedValue({ insertId: 55 } as never);
+    vi.mocked(query).mockResolvedValue([filaGasto({ id: 55 })] as never);
+    await crearGasto(7, { fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100 });
+    const sqlInsert = String(vi.mocked(execute).mock.calls[0][0]);
+    expect(sqlInsert).not.toMatch(/entidad_requirente|requirente_|solicitante_|autorizante_|\bestado\b/);
+  });
+});
+
+/**
  * FONDOS-GASTOS-METODO-PAGO-1 — normalizarDestinoPago es la ÚNICA puerta
  * de validación/normalización del destino de pago, reutilizada por
  * Gastos y Fondos (fondos.ts la importa de aquí).

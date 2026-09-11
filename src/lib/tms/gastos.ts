@@ -102,6 +102,31 @@ export type GastoOperativo = {
   creadoPor: string | null;
   creadoEn: string | null;
   actualizadoEn: string | null;
+  /**
+   * GASTOS-ADMINISTRATIVO-1 (Fase 1 — SOLO lectura/mapeo, sin escritura
+   * todavía) — mismos conceptos administrativos que ya tiene Fondos
+   * (tms_solicitudes_fondo), pero cada gasto es su propia unidad
+   * administrativa (opción B: sin encabezado/lote nuevo, sin líneas).
+   * `estado === null` significa histórico/legado ya aceptado — NUNCA
+   * "pendiente de autorizar" — porque la migración (ver
+   * sql/migrate-2026-09-gastos-administrativo.sql) agrega estas columnas
+   * sin backfill y sin DEFAULT. `crearGasto`/`actualizarGasto` todavía NO
+   * escriben ninguno de estos campos en esta fase.
+   */
+  entidadRequirenteId: number | null;
+  entidadRequirenteNombre: string | null;
+  requirenteEmpleadoId: number | null;
+  requirenteNombre: string | null;
+  requirenteUsuarioId: number | null;
+  solicitanteUsuarioId: number | null;
+  solicitanteNombre: string | null;
+  autorizanteEmpleadoId: number | null;
+  autorizanteNombre: string | null;
+  autorizanteUsuarioId: number | null;
+  estado: string | null;
+  autorizadoEn: string | null;
+  rechazadoEn: string | null;
+  motivoRechazo: string | null;
 };
 
 function mapRow(r: RowDataPacket): GastoOperativo {
@@ -134,6 +159,20 @@ function mapRow(r: RowDataPacket): GastoOperativo {
     creadoPor: r.creado_por != null ? String(r.creado_por) : null,
     creadoEn: r.creado_en != null ? String(r.creado_en) : null,
     actualizadoEn: r.actualizado_en != null ? String(r.actualizado_en) : null,
+    entidadRequirenteId: r.entidad_requirente_id != null ? Number(r.entidad_requirente_id) : null,
+    entidadRequirenteNombre: r.entidad_requirente_nombre != null ? String(r.entidad_requirente_nombre) : null,
+    requirenteEmpleadoId: r.requirente_empleado_id != null ? Number(r.requirente_empleado_id) : null,
+    requirenteNombre: r.requirente_nombre != null ? String(r.requirente_nombre) : null,
+    requirenteUsuarioId: r.requirente_usuario_id != null ? Number(r.requirente_usuario_id) : null,
+    solicitanteUsuarioId: r.solicitante_usuario_id != null ? Number(r.solicitante_usuario_id) : null,
+    solicitanteNombre: r.solicitante_nombre != null ? String(r.solicitante_nombre) : null,
+    autorizanteEmpleadoId: r.autorizante_empleado_id != null ? Number(r.autorizante_empleado_id) : null,
+    autorizanteNombre: r.autorizante_nombre != null ? String(r.autorizante_nombre) : null,
+    autorizanteUsuarioId: r.autorizante_usuario_id != null ? Number(r.autorizante_usuario_id) : null,
+    estado: r.estado != null ? String(r.estado) : null,
+    autorizadoEn: r.autorizado_en != null ? String(r.autorizado_en) : null,
+    rechazadoEn: r.rechazado_en != null ? String(r.rechazado_en) : null,
+    motivoRechazo: r.motivo_rechazo != null ? String(r.motivo_rechazo) : null,
   };
 }
 
@@ -146,7 +185,12 @@ const SELECT = `
          g.plan_id, plan.codigo AS plan_codigo,
          g.categoria, g.descripcion, g.cantidad, g.monto, g.metodo_pago, g.numero_cuenta_pago,
          g.tiene_factura, g.factura_nombre_original, g.factura_tamano,
-         g.observaciones, g.activo, g.creado_por, g.creado_en, g.actualizado_en
+         g.observaciones, g.activo, g.creado_por, g.creado_en, g.actualizado_en,
+         g.entidad_requirente_id, g.entidad_requirente_nombre,
+         g.requirente_empleado_id, g.requirente_nombre, g.requirente_usuario_id,
+         g.solicitante_usuario_id, g.solicitante_nombre,
+         g.autorizante_empleado_id, g.autorizante_nombre, g.autorizante_usuario_id,
+         g.estado, g.autorizado_en, g.rechazado_en, g.motivo_rechazo
   FROM tms_gastos_operativos g
   LEFT JOIN empleados emp ON emp.id = g.empleado_id AND emp.empresa_id = g.empresa_id
   LEFT JOIN flota_vehiculos veh ON veh.id = g.vehiculo_id AND veh.empresa_id = g.empresa_id
