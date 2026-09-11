@@ -754,6 +754,34 @@ export async function requireTenantGastosAutorizar(
   return { session, empresa };
 }
 
+/** Autorizar o rechazar Gastos operativos, sin fallback al permiso general. */
+export async function requireTenantGastosOperativosAutorizar(
+  slug: string,
+  accion: AccionPermiso = "ver",
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length ? empresa.modulos : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("tms")) {
+    return { error: NextResponse.json({ error: "Esta empresa no tiene el módulo TMS." }, { status: 403 }) };
+  }
+
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  if (!tienePermiso(perms, "gastos_operativos_autorizar", accion)) {
+    return {
+      error: NextResponse.json(
+        { error: "Sin permiso para autorizar o rechazar gastos operativos." },
+        { status: 403 },
+      ),
+    };
+  }
+  return { session, empresa };
+}
+
 /**
  * COTIZADOR-TMS-1 — Cotizaciones comerciales de TMS. Mismo criterio que
  * requireTenantRutas/requireTenantGastos: permiso propio

@@ -188,6 +188,10 @@ export const PLATAFORMA_PERMISIBLES = [
   // autorización lo exige SIN fallback a gastos:editar/tms:editar (ver
   // requireTenantGastosAutorizar en tenant.ts).
   "gastos_autorizar",
+  // Gastos operativos tiene su propia decisión administrativa. Se usa
+  // un permiso nuevo para no convertir el permiso histórico de Fondos
+  // en autoridad sobre gastos para usuarios ya existentes.
+  "gastos_operativos_autorizar",
   // FLOTA-COMBUSTIBLE-1 (Fase 2): revisar/aprobar/rechazar las cargas de
   // combustible que el piloto registra desde el Portal — permiso propio
   // y explícito, NO agregado a FLOTA_SUBMODULOS a propósito: ese arreglo
@@ -302,7 +306,8 @@ export function moduloEmpresaDelPermiso(m: string): Modulo | null {
     m === "gastos" ||
     // FONDOS-AUTORIZAR-PERMISO-1: "gastos_autorizar" vive dentro de TMS,
     // igual que "gastos" — se filtra por la misma capacidad de empresa.
-    m === "gastos_autorizar"
+    m === "gastos_autorizar" ||
+    m === "gastos_operativos_autorizar"
   ) {
     return "tms";
   }
@@ -319,7 +324,7 @@ export function labelPermiso(modulo: string): string {
   // roles.ts (no tocan el gate de módulo por empresa/rol) — solo permisos
   // explícitos dentro de PLATAFORMA_PERMISIBLES.
   if (modulo === "viaticos") return "Viáticos (ver control general)";
-  if (modulo === "viaticos_autorizar") return "Viáticos: autorizar";
+  if (modulo === "viaticos_autorizar") return "Viáticos: autorizar y rechazar";
   if (modulo === "viaticos_pagar") return "Viáticos: registrar pago/entrega";
   if (modulo === "viaticos_liquidar") return "Viáticos: liquidar";
   if (modulo === "viaticos_comprobantes") return "Viáticos: descargar comprobantes de autorización";
@@ -327,7 +332,8 @@ export function labelPermiso(modulo: string): string {
   if (modulo === "programacion") return "Programación";
   if (modulo === "rutas") return "Rutas";
   if (modulo === "gastos") return "Gastos operativos / Solicitudes de fondo";
-  if (modulo === "gastos_autorizar") return "Gastos operativos / Solicitudes de fondo: autorizar";
+  if (modulo === "gastos_autorizar") return "Solicitudes de fondo: autorizar y rechazar";
+  if (modulo === "gastos_operativos_autorizar") return "Gastos operativos: autorizar y rechazar";
   if (modulo === "flota_combustible") return "Flota: revisar/aprobar combustible";
   if (esPlataformaPermisible(modulo)) {
     return MODULO_LABEL[modulo as Modulo] ?? modulo;
@@ -386,6 +392,7 @@ export const GRUPOS_PERMISOS: {
       "rutas",
       "gastos",
       "gastos_autorizar",
+      "gastos_operativos_autorizar",
       "tms",
       "clientes",
       "facturacion",
@@ -501,7 +508,7 @@ export function modulosPropiosDelRol(rol: RolGlobal): string[] {
       // FONDOS-AUTORIZAR-PERMISO-1: "gastos_autorizar" sigue exactamente el
       // mismo criterio — estos dos roles operativos lo traen por defecto
       // (ya autorizan viáticos), ningún otro rol lo trae.
-      return ["tms", "programacion", "rutas", "clientes", "viaticos", "viaticos_autorizar", "viajes_cerrar", "multas", "flota_combustible", "gastos_autorizar"];
+      return ["tms", "programacion", "rutas", "clientes", "viaticos", "viaticos_autorizar", "viajes_cerrar", "multas", "flota_combustible", "gastos_autorizar", "gastos_operativos_autorizar"];
     case "AuxiliarOperaciones":
       return ["tms", "programacion", "rutas", "clientes", "multas"];
     case "Facturador":
@@ -746,6 +753,7 @@ export function modulosPlataformaDesdePermisos(
       p.modulo !== "rutas" &&
       p.modulo !== "gastos" &&
       p.modulo !== "gastos_autorizar" &&
+      p.modulo !== "gastos_operativos_autorizar" &&
       p.modulo !== "flota_combustible"
     ) {
       out.add(p.modulo);

@@ -49,7 +49,7 @@ afterEach(() => vi.restoreAllMocks());
  * FONDOS-AUTORIZAR-PERMISO-1 — "autorizar" es una acción independiente: el
  * endpoint la gatea con requireTenantGastosAutorizar (permiso propio
  * 'gastos_autorizar', sin fallback a gastos:editar / tms:editar). El resto
- * de acciones sigue bajo requireTenantGastos("editar").
+ * Rechazar usa el mismo permiso; liquidar/editar siguen bajo el general.
  */
 describe("PATCH /tms/fondos/[id] — permiso de autorización", () => {
   it("sin permiso 'gastos_autorizar' -> 403, NUNCA llama a cambiarEstadoSolicitudFondo", async () => {
@@ -105,11 +105,18 @@ describe("PATCH /tms/fondos/[id] — permiso de autorización", () => {
     });
   });
 
-  it("accion 'rechazar' usa el guard genérico 'gastos:editar', NO el de autorización", async () => {
+  it("accion 'rechazar' exige el mismo permiso propio que autorizar", async () => {
     const res = await PATCH(req({ accion: "rechazar", motivoRechazo: "Falta soporte" }), ctx);
     expect(res.status).toBe(200);
-    expect(requireTenantGastos).toHaveBeenCalledWith("prueba", "editar");
-    expect(requireTenantGastosAutorizar).not.toHaveBeenCalled();
+    expect(requireTenantGastosAutorizar).toHaveBeenCalledWith("prueba", "editar");
+    expect(requireTenantGastos).not.toHaveBeenCalled();
+  });
+
+  it("sin permiso propio tampoco permite rechazar", async () => {
+    vi.mocked(requireTenantGastosAutorizar).mockResolvedValue({ error: new Response(null, { status: 403 }) } as never);
+    const res = await PATCH(req({ accion: "rechazar", motivoRechazo: "Falta soporte" }), ctx);
+    expect(res.status).toBe(403);
+    expect(cambiarEstadoSolicitudFondo).not.toHaveBeenCalled();
   });
 
   it("accion 'liquidar' usa el guard genérico, NO el de autorización", async () => {

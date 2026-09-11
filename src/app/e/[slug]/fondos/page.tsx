@@ -481,8 +481,12 @@ export default function FondosPage() {
                     {puedeAutorizar ? (
                       <button type="button" onClick={() => void cambiarEstado(s.id, "autorizar")} className="rounded bg-emerald-600 px-2 py-1 text-white">Autorizar</button>
                     ) : null}
-                    <input className={`${inputCls} w-40`} placeholder="Motivo de rechazo" value={motivoRechazo[s.id] ?? ""} onChange={(e) => setMotivoRechazo((m) => ({ ...m, [s.id]: e.target.value }))} />
-                    <button type="button" onClick={() => void cambiarEstado(s.id, "rechazar")} className="rounded bg-red-600 px-2 py-1 text-white">Rechazar</button>
+                    {puedeAutorizar ? (
+                      <>
+                        <input className={`${inputCls} w-40`} placeholder="Motivo de rechazo" value={motivoRechazo[s.id] ?? ""} onChange={(e) => setMotivoRechazo((m) => ({ ...m, [s.id]: e.target.value }))} />
+                        <button type="button" onClick={() => void cambiarEstado(s.id, "rechazar")} className="rounded bg-red-600 px-2 py-1 text-white">Rechazar</button>
+                      </>
+                    ) : null}
                   </>
                 ) : null}
                 {s.estado === "Autorizada" ? (
