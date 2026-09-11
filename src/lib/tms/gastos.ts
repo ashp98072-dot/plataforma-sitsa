@@ -1,5 +1,13 @@
-import type { RowDataPacket } from "mysql2";
-import { execute, query } from "@/lib/db";
+import type { ResultSetHeader, RowDataPacket } from "mysql2";
+import type { PoolConnection } from "mysql2/promise";
+import { getPool, query, type SqlParams } from "@/lib/db";
+import { registrarAuditoriaTx } from "@/lib/auditoria";
+import {
+  resolverEntidadRequirenteTx,
+  resolverSolicitanteOperacionesTx,
+  resolverUsuarioDeEmpresaTx,
+  validarEmpleadoDeEmpresaTx,
+} from "@/lib/tms/identidad-administrativa";
 
 /**
  * TMS-GASTOS-REPORTES-1 (fase 1) — gastos operativos asociados
@@ -72,6 +80,40 @@ export function normalizarDestinoPago(
   }
   return normalizado;
 }
+
+/**
+ * GASTOS-ADMINISTRATIVO-1 (Fase 2) — mismo helper mínimo que ya usa
+ * fondos.ts para leer dentro de una transacción (los 4 helpers de
+ * identidad-administrativa.ts exigen una PoolConnection). No se importa
+ * de fondos.ts para no crear una dependencia cruzada entre módulos
+ * hermanos — es la misma utilidad de 3 líneas, sin lógica de negocio.
+ */
+async function queryConn<T extends RowDataPacket[]>(conn: PoolConnection, sql: string, params: SqlParams = []): Promise<T> {
+  const [rows] = await conn.query<T>(sql, params);
+  return rows;
+}
+async function executeConn(conn: PoolConnection, sql: string, params: SqlParams = []): Promise<ResultSetHeader> {
+  const [result] = await conn.execute<ResultSetHeader>(sql, params);
+  return result;
+}
+
+/**
+ * GASTOS-ADMINISTRATIVO-1 (Fase 2) — flujo de autorización propio de
+ * Gastos, separado del de Fondos (ESTADOS_FONDO en fondos.ts) porque sus
+ * estados NO son idénticos: un gasto operativo es dinero YA incurrido,
+ * nunca un anticipo por liquidar, así que no existe "Liquidada" aquí.
+ * `estado === null` (histórico/legado, ver GastoOperativo.estado) NO es
+ * un estado de esta máquina — no tiene transiciones válidas, nunca se
+ * autoriza/rechaza silenciosamente (ver autorizarGasto/rechazarGasto).
+ */
+export const ESTADOS_GASTO = ["Pendiente", "Autorizada", "Rechazada"] as const;
+export type EstadoGasto = (typeof ESTADOS_GASTO)[number];
+
+const TRANSICIONES_GASTO: Record<EstadoGasto, EstadoGasto[]> = {
+  Pendiente: ["Autorizada", "Rechazada"],
+  Autorizada: [],
+  Rechazada: [],
+};
 
 export type GastoOperativo = {
   id: number;
@@ -250,6 +292,24 @@ export type GastoOperativoInput = {
   numeroCuentaPago?: string | null;
   tieneFactura?: boolean;
   observaciones?: string | null;
+  /**
+   * GASTOS-ADMINISTRATIVO-1 (Fase 2) — TODOS opcionales por ahora: la UI
+   * actual (Fase 4, todavía no implementada) no los envía, así que
+   * "Crear gasto" debe seguir funcionando exactamente igual sin ellos. Se
+   * vuelven obligatorios recién cuando la API/formulario los conecten. Si
+   * vienen informados, se resuelven/validan server-side contra los
+   * mismos helpers que ya usa Fondos (identidad-administrativa.ts) —
+   * nunca se confía en un nombre libre enviado por el cliente.
+   *
+   * `entidadRequirenteId` NO es nullable (igual que en
+   * SolicitudFondoInput): se omite (no se toca) o se manda un id válido,
+   * sin una vía explícita para "limpiarla" en esta fase.
+   */
+  entidadRequirenteId?: number;
+  requirenteEmpleadoId?: number | null;
+  requirenteNombre?: string | null;
+  requirenteUsuarioId?: number | null;
+  solicitanteUsuarioId?: number | null;
 };
 
 /**
@@ -261,39 +321,80 @@ export type GastoOperativoInput = {
  * sql/migrate-2026-09-tms-gastos-reportes.sql) es la garantía real e
  * incondicional — esta validación es la primera línea de defensa, no la
  * única.
+ *
+ * GASTOS-ADMINISTRATIVO-1 (Fase 2) — pasa a ejecutarse DENTRO de la
+ * transacción de crearGasto/actualizarGasto (antes usaba el pool
+ * directamente), mismo criterio que Fondos: todas las validaciones y la
+ * escritura final quedan atómicas. Mismas 4 consultas, mismos mensajes —
+ * comportamiento idéntico, solo cambia que ahora usa `conn`.
  */
-async function validarReferenciasGasto(
+async function validarReferenciasGastoTx(
+  conn: PoolConnection,
   empresaId: number,
   input: Pick<GastoOperativoInput, "empleadoId" | "vehiculoId" | "clienteId" | "planId">,
 ): Promise<void> {
-  const checks: Promise<void>[] = [];
   if (input.empleadoId != null) {
-    checks.push(
-      query<RowDataPacket[]>("SELECT id FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1", [input.empleadoId, empresaId])
-        .then((rows) => { if (!rows[0]) throw new Error("El empleado indicado no pertenece a esta empresa."); }),
-    );
+    const rows = await queryConn<RowDataPacket[]>(conn, "SELECT id FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1", [input.empleadoId, empresaId]);
+    if (!rows[0]) throw new Error("El empleado indicado no pertenece a esta empresa.");
   }
   if (input.vehiculoId != null) {
-    checks.push(
-      query<RowDataPacket[]>("SELECT id FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1", [input.vehiculoId, empresaId])
-        .then((rows) => { if (!rows[0]) throw new Error("El vehículo indicado no pertenece a esta empresa."); }),
-    );
+    const rows = await queryConn<RowDataPacket[]>(conn, "SELECT id FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1", [input.vehiculoId, empresaId]);
+    if (!rows[0]) throw new Error("El vehículo indicado no pertenece a esta empresa.");
   }
   if (input.clienteId != null) {
-    checks.push(
-      query<RowDataPacket[]>("SELECT id FROM tms_clientes WHERE id = ? AND empresa_id = ? LIMIT 1", [input.clienteId, empresaId])
-        .then((rows) => { if (!rows[0]) throw new Error("El cliente indicado no pertenece a esta empresa."); }),
-    );
+    const rows = await queryConn<RowDataPacket[]>(conn, "SELECT id FROM tms_clientes WHERE id = ? AND empresa_id = ? LIMIT 1", [input.clienteId, empresaId]);
+    if (!rows[0]) throw new Error("El cliente indicado no pertenece a esta empresa.");
   }
   if (input.planId != null) {
-    checks.push(
-      query<RowDataPacket[]>("SELECT id FROM tms_planes_viaje WHERE id = ? AND empresa_id = ? LIMIT 1", [input.planId, empresaId])
-        .then((rows) => { if (!rows[0]) throw new Error("El viaje/plan indicado no pertenece a esta empresa."); }),
-    );
+    const rows = await queryConn<RowDataPacket[]>(conn, "SELECT id FROM tms_planes_viaje WHERE id = ? AND empresa_id = ? LIMIT 1", [input.planId, empresaId]);
+    if (!rows[0]) throw new Error("El viaje/plan indicado no pertenece a esta empresa.");
   }
-  await Promise.all(checks);
 }
 
+/**
+ * GASTOS-ADMINISTRATIVO-1 (Fase 2) — resuelve entidad requirente,
+ * requirente y solicitante DENTRO de la transacción, reutilizando
+ * EXACTAMENTE los mismos helpers que ya usa Fondos
+ * (identidad-administrativa.ts) — nunca se confía en un nombre/rol que
+ * mande el cliente HTTP; el nombre resuelto por el servidor manda sobre
+ * cualquier texto libre enviado. Todos los campos son opcionales aquí
+ * (ver GastoOperativoInput): si no vienen, simplemente no se resuelve
+ * nada y los valores quedan `null`.
+ */
+async function resolverIdentidadAdministrativaGastoTx(
+  conn: PoolConnection,
+  empresaId: number,
+  input: Pick<GastoOperativoInput, "entidadRequirenteId" | "requirenteEmpleadoId" | "requirenteUsuarioId" | "solicitanteUsuarioId">,
+): Promise<{
+  entidadRequirente: { id: number; nombre: string } | null;
+  requirenteUsuario: { nombre: string; rol: string | null } | null;
+  solicitanteUsuario: { nombre: string; rol: string | null } | null;
+}> {
+  const entidadRequirente = input.entidadRequirenteId == null
+    ? null
+    : await resolverEntidadRequirenteTx(conn, empresaId, input.entidadRequirenteId);
+  await validarEmpleadoDeEmpresaTx(conn, empresaId, input.requirenteEmpleadoId, "requirente");
+  let requirenteUsuario: { nombre: string; rol: string | null } | null = null;
+  if (input.requirenteUsuarioId != null) {
+    requirenteUsuario = await resolverUsuarioDeEmpresaTx(conn, empresaId, input.requirenteUsuarioId);
+    if (!requirenteUsuario) throw new Error("El usuario requirente indicado no pertenece a esta empresa.");
+  }
+  let solicitanteUsuario: { nombre: string; rol: string | null } | null = null;
+  if (input.solicitanteUsuarioId != null) {
+    solicitanteUsuario = await resolverSolicitanteOperacionesTx(conn, empresaId, input.solicitanteUsuarioId);
+    if (!solicitanteUsuario) throw new Error("El usuario solicitante indicado no pertenece a esta empresa.");
+  }
+  return { entidadRequirente, requirenteUsuario, solicitanteUsuario };
+}
+
+/**
+ * GASTOS-ADMINISTRATIVO-1 (Fase 2) — pasa a una transacción explícita
+ * (antes usaba `execute()` del pool directamente) porque
+ * resolverIdentidadAdministrativaGastoTx/validarReferenciasGastoTx
+ * exigen una PoolConnection — mismo requisito que ya tiene Fondos para
+ * reutilizar esos helpers sin duplicarlos. `estado` queda hardcodeado
+ * `'Pendiente'` en el INSERT, nunca aceptado desde `input`.
+ */
 export async function crearGasto(
   empresaId: number,
   input: GastoOperativoInput,
@@ -303,98 +404,332 @@ export async function crearGasto(
   if (!input.categoria) throw new Error("Categoría de gasto requerida.");
   if (!(input.monto > 0)) throw new Error("El monto debe ser mayor a cero.");
   const numeroCuentaPago = normalizarDestinoPago(input.metodoPago ?? null, input.numeroCuentaPago);
-  await validarReferenciasGasto(empresaId, input);
-  const r = await execute(
-    `INSERT INTO tms_gastos_operativos
-       (empresa_id, fecha_solicitud, fecha_viaje, empleado_id, vehiculo_id, cliente_id, plan_id,
-        categoria, descripcion, cantidad, monto, metodo_pago, numero_cuenta_pago, tiene_factura,
-        observaciones, creado_por)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      empresaId,
-      input.fechaSolicitud,
-      input.fechaViaje ?? null,
-      input.empleadoId ?? null,
-      input.vehiculoId ?? null,
-      input.clienteId ?? null,
-      input.planId ?? null,
-      input.categoria,
-      input.descripcion?.trim() || null,
-      input.cantidad ?? 1,
-      input.monto,
-      input.metodoPago ?? null,
-      numeroCuentaPago,
-      input.tieneFactura ? 1 : 0,
-      input.observaciones?.trim() || null,
-      creadoPor ?? null,
-    ],
-  );
-  const creado = await obtenerGasto(empresaId, Number(r.insertId));
+
+  const conn = await getPool().getConnection();
+  let insertId = 0;
+  try {
+    await conn.beginTransaction();
+    await validarReferenciasGastoTx(conn, empresaId, input);
+    const { entidadRequirente, requirenteUsuario, solicitanteUsuario } = await resolverIdentidadAdministrativaGastoTx(conn, empresaId, input);
+
+    const r = await executeConn(conn,
+      `INSERT INTO tms_gastos_operativos
+         (empresa_id, fecha_solicitud, fecha_viaje, empleado_id, vehiculo_id, cliente_id, plan_id,
+          categoria, descripcion, cantidad, monto, metodo_pago, numero_cuenta_pago, tiene_factura,
+          observaciones, creado_por,
+          entidad_requirente_id, entidad_requirente_nombre,
+          requirente_empleado_id, requirente_nombre, requirente_usuario_id,
+          solicitante_usuario_id, solicitante_nombre, estado)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pendiente')`,
+      [
+        empresaId,
+        input.fechaSolicitud,
+        input.fechaViaje ?? null,
+        input.empleadoId ?? null,
+        input.vehiculoId ?? null,
+        input.clienteId ?? null,
+        input.planId ?? null,
+        input.categoria,
+        input.descripcion?.trim() || null,
+        input.cantidad ?? 1,
+        input.monto,
+        input.metodoPago ?? null,
+        numeroCuentaPago,
+        input.tieneFactura ? 1 : 0,
+        input.observaciones?.trim() || null,
+        creadoPor ?? null,
+        entidadRequirente?.id ?? null,
+        entidadRequirente?.nombre ?? null,
+        input.requirenteEmpleadoId ?? null,
+        requirenteUsuario ? requirenteUsuario.nombre : (input.requirenteNombre?.trim() || null),
+        input.requirenteUsuarioId ?? null,
+        input.solicitanteUsuarioId ?? null,
+        solicitanteUsuario?.nombre ?? null,
+      ],
+    );
+    insertId = Number(r.insertId);
+    await registrarAuditoriaTx(conn, {
+      empresaId, usuario: creadoPor ?? null, accion: "crear", modulo: "tms_gastos",
+      detalle: `Gasto operativo #${insertId} creado por Q${input.monto.toFixed(2)}.`,
+    });
+    await conn.commit();
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
+  const creado = await obtenerGasto(empresaId, insertId);
   if (!creado) throw new Error("No se pudo crear el gasto.");
   return creado;
 }
 
 export type GastoOperativoUpdate = Partial<GastoOperativoInput> & { activo?: boolean };
 
+/**
+ * GASTOS-ADMINISTRATIVO-1 (Fase 2) — mismo cambio estructural que
+ * crearGasto: transacción explícita con `SELECT ... FOR UPDATE` (bloquea
+ * la fila mientras se decide si el contenido puede editarse, evitando
+ * una carrera con autorizarGasto/rechazarGasto sobre el mismo id).
+ *
+ * Bloqueo de contenido (aprobado): si el gasto está `Autorizada` o
+ * `Rechazada`, se rechaza cualquier cambio que NO sea exclusivamente
+ * `activo` — un histórico (`estado IS NULL`) o uno `Pendiente` siguen
+ * editables sin restricción nueva, exactamente como hoy. `activo` (baja
+ * lógica) queda SIEMPRE permitido, sea cual sea el estado — es una
+ * operación administrativa distinta, no revierte una autorización.
+ */
 export async function actualizarGasto(
   empresaId: number,
   id: number,
   cambios: GastoOperativoUpdate,
 ): Promise<GastoOperativo | null> {
-  const actual = await obtenerGasto(empresaId, id);
-  if (!actual) return null;
-  const monto = cambios.monto !== undefined ? cambios.monto : actual.monto;
-  if (!(monto > 0)) throw new Error("El monto debe ser mayor a cero.");
-  const metodoPago = cambios.metodoPago !== undefined ? cambios.metodoPago : actual.metodoPago;
-  const numeroCuentaPago = normalizarDestinoPago(
-    metodoPago,
-    cambios.numeroCuentaPago !== undefined ? cambios.numeroCuentaPago : actual.numeroCuentaPago,
-  );
-  const empleadoId = cambios.empleadoId !== undefined ? cambios.empleadoId : actual.empleadoId;
-  const vehiculoId = cambios.vehiculoId !== undefined ? cambios.vehiculoId : actual.vehiculoId;
-  const clienteId = cambios.clienteId !== undefined ? cambios.clienteId : actual.clienteId;
-  const planId = cambios.planId !== undefined ? cambios.planId : actual.planId;
-  // Solo valida lo que REALMENTE cambia — las referencias ya guardadas
-  // fueron validadas al crear el gasto (no se re-valida en cada edición
-  // no relacionada; cambios.x en undefined significa "no tocar este campo").
-  await validarReferenciasGasto(empresaId, cambios);
-  await execute(
-    `UPDATE tms_gastos_operativos SET
-       fecha_solicitud = ?, fecha_viaje = ?, empleado_id = ?, vehiculo_id = ?, cliente_id = ?, plan_id = ?,
-       categoria = ?, descripcion = ?, cantidad = ?, monto = ?, metodo_pago = ?, numero_cuenta_pago = ?,
-       tiene_factura = ?, observaciones = ?, activo = ?
-     WHERE id = ? AND empresa_id = ?`,
-    [
-      cambios.fechaSolicitud !== undefined ? cambios.fechaSolicitud : actual.fechaSolicitud,
-      cambios.fechaViaje !== undefined ? cambios.fechaViaje : actual.fechaViaje,
-      empleadoId,
-      vehiculoId,
-      clienteId,
-      planId,
-      cambios.categoria !== undefined ? cambios.categoria : actual.categoria,
-      cambios.descripcion !== undefined ? cambios.descripcion?.trim() || null : actual.descripcion,
-      cambios.cantidad !== undefined ? cambios.cantidad : actual.cantidad,
-      monto,
+  const conn = await getPool().getConnection();
+  try {
+    await conn.beginTransaction();
+    const rows = await queryConn<RowDataPacket[]>(conn,
+      `SELECT id, DATE_FORMAT(fecha_solicitud, '%Y-%m-%d') AS fecha_solicitud,
+              DATE_FORMAT(fecha_viaje, '%Y-%m-%d') AS fecha_viaje,
+              empleado_id, vehiculo_id, cliente_id, plan_id,
+              categoria, descripcion, cantidad, monto, metodo_pago, numero_cuenta_pago,
+              tiene_factura, factura_nombre_original, observaciones, activo,
+              entidad_requirente_id, entidad_requirente_nombre,
+              requirente_empleado_id, requirente_nombre, requirente_usuario_id,
+              solicitante_usuario_id, solicitante_nombre, estado
+       FROM tms_gastos_operativos WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
+      [id, empresaId],
+    );
+    const actual = rows[0];
+    if (!actual) { await conn.rollback(); return null; }
+
+    const estadoActual: EstadoGasto | null = actual.estado != null ? (String(actual.estado) as EstadoGasto) : null;
+    const camposEnviados = Object.keys(cambios) as (keyof GastoOperativoUpdate)[];
+    const soloActivo = camposEnviados.length > 0 && camposEnviados.every((k) => k === "activo");
+    if (!soloActivo && (estadoActual === "Autorizada" || estadoActual === "Rechazada")) {
+      throw new Error(`No se puede editar el contenido de un gasto en estado "${estadoActual}" — solo mientras está Pendiente o es histórico.`);
+    }
+
+    const monto = cambios.monto !== undefined ? cambios.monto : Number(actual.monto ?? 0);
+    if (!(monto > 0)) throw new Error("El monto debe ser mayor a cero.");
+    const metodoPagoActual = actual.metodo_pago != null ? String(actual.metodo_pago) : null;
+    const numeroCuentaPagoActual = actual.numero_cuenta_pago != null ? String(actual.numero_cuenta_pago) : null;
+    const metodoPago = cambios.metodoPago !== undefined ? cambios.metodoPago : metodoPagoActual;
+    const numeroCuentaPago = normalizarDestinoPago(
       metodoPago,
-      numeroCuentaPago,
-      // Un comprobante almacenado es evidencia suficiente y prevalece
-      // sobre un false enviado por cualquier cliente. Para pasar a 0 se
-      // debe eliminar primero el archivo mediante su endpoint dedicado.
-      actual.facturaNombreOriginal
-        ? 1
-        : cambios.tieneFactura !== undefined
-          ? (cambios.tieneFactura ? 1 : 0)
-          : actual.tieneFactura ? 1 : 0,
-      cambios.observaciones !== undefined ? cambios.observaciones?.trim() || null : actual.observaciones,
-      cambios.activo !== undefined ? (cambios.activo ? 1 : 0) : actual.activo ? 1 : 0,
-      id,
-      empresaId,
-    ],
-  );
+      cambios.numeroCuentaPago !== undefined ? cambios.numeroCuentaPago : numeroCuentaPagoActual,
+    );
+    const empleadoId = cambios.empleadoId !== undefined ? cambios.empleadoId : (actual.empleado_id != null ? Number(actual.empleado_id) : null);
+    const vehiculoId = cambios.vehiculoId !== undefined ? cambios.vehiculoId : (actual.vehiculo_id != null ? Number(actual.vehiculo_id) : null);
+    const clienteId = cambios.clienteId !== undefined ? cambios.clienteId : (actual.cliente_id != null ? Number(actual.cliente_id) : null);
+    const planId = cambios.planId !== undefined ? cambios.planId : (actual.plan_id != null ? Number(actual.plan_id) : null);
+    // Solo valida lo que REALMENTE cambia — las referencias ya guardadas
+    // fueron validadas al crear el gasto (no se re-valida en cada edición
+    // no relacionada; cambios.x en undefined significa "no tocar este campo").
+    await validarReferenciasGastoTx(conn, empresaId, cambios);
+    const { entidadRequirente, requirenteUsuario, solicitanteUsuario } = await resolverIdentidadAdministrativaGastoTx(conn, empresaId, cambios);
+
+    const entidadRequirenteId = entidadRequirente?.id ?? (actual.entidad_requirente_id != null ? Number(actual.entidad_requirente_id) : null);
+    const entidadRequirenteNombre = entidadRequirente?.nombre ?? (actual.entidad_requirente_nombre != null ? String(actual.entidad_requirente_nombre) : null);
+    const requirenteEmpleadoId = cambios.requirenteEmpleadoId !== undefined ? cambios.requirenteEmpleadoId ?? null : (actual.requirente_empleado_id != null ? Number(actual.requirente_empleado_id) : null);
+    const requirenteNombre = requirenteUsuario
+      ? requirenteUsuario.nombre
+      : (cambios.requirenteNombre !== undefined ? cambios.requirenteNombre?.trim() || null : (actual.requirente_nombre != null ? String(actual.requirente_nombre) : null));
+    const requirenteUsuarioId = cambios.requirenteUsuarioId !== undefined ? cambios.requirenteUsuarioId ?? null : (actual.requirente_usuario_id != null ? Number(actual.requirente_usuario_id) : null);
+    const solicitanteUsuarioId = cambios.solicitanteUsuarioId !== undefined ? cambios.solicitanteUsuarioId ?? null : (actual.solicitante_usuario_id != null ? Number(actual.solicitante_usuario_id) : null);
+    const solicitanteNombre = cambios.solicitanteUsuarioId !== undefined
+      ? (solicitanteUsuario ? solicitanteUsuario.nombre : null)
+      : (actual.solicitante_nombre != null ? String(actual.solicitante_nombre) : null);
+
+    await executeConn(conn,
+      `UPDATE tms_gastos_operativos SET
+         fecha_solicitud = ?, fecha_viaje = ?, empleado_id = ?, vehiculo_id = ?, cliente_id = ?, plan_id = ?,
+         categoria = ?, descripcion = ?, cantidad = ?, monto = ?, metodo_pago = ?, numero_cuenta_pago = ?,
+         tiene_factura = ?, observaciones = ?, activo = ?,
+         entidad_requirente_id = ?, entidad_requirente_nombre = ?,
+         requirente_empleado_id = ?, requirente_nombre = ?, requirente_usuario_id = ?,
+         solicitante_usuario_id = ?, solicitante_nombre = ?
+       WHERE id = ? AND empresa_id = ?`,
+      [
+        cambios.fechaSolicitud !== undefined ? cambios.fechaSolicitud : String(actual.fecha_solicitud),
+        cambios.fechaViaje !== undefined ? cambios.fechaViaje : (actual.fecha_viaje != null ? String(actual.fecha_viaje) : null),
+        empleadoId,
+        vehiculoId,
+        clienteId,
+        planId,
+        cambios.categoria !== undefined ? cambios.categoria : String(actual.categoria),
+        cambios.descripcion !== undefined ? cambios.descripcion?.trim() || null : (actual.descripcion != null ? String(actual.descripcion) : null),
+        cambios.cantidad !== undefined ? cambios.cantidad : Number(actual.cantidad ?? 1),
+        monto,
+        metodoPago,
+        numeroCuentaPago,
+        // Un comprobante almacenado es evidencia suficiente y prevalece
+        // sobre un false enviado por cualquier cliente. Para pasar a 0 se
+        // debe eliminar primero el archivo mediante su endpoint dedicado.
+        actual.factura_nombre_original
+          ? 1
+          : cambios.tieneFactura !== undefined
+            ? (cambios.tieneFactura ? 1 : 0)
+            : Number(actual.tiene_factura ?? 0),
+        cambios.observaciones !== undefined ? cambios.observaciones?.trim() || null : (actual.observaciones != null ? String(actual.observaciones) : null),
+        cambios.activo !== undefined ? (cambios.activo ? 1 : 0) : Number(actual.activo ?? 1),
+        entidadRequirenteId,
+        entidadRequirenteNombre,
+        requirenteEmpleadoId,
+        requirenteNombre,
+        requirenteUsuarioId,
+        solicitanteUsuarioId,
+        solicitanteNombre,
+        id,
+        empresaId,
+      ],
+    );
+    await registrarAuditoriaTx(conn, {
+      empresaId, usuario: null, accion: "editar", modulo: "tms_gastos",
+      detalle: `Gasto operativo #${id} editado.`,
+    });
+    await conn.commit();
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
   return obtenerGasto(empresaId, id);
 }
 
-/** Nunca DELETE físico — "eliminar" es desactivar (activo = 0), igual que contactos/rutas. */
+/** Nunca DELETE físico — "eliminar" es desactivar (activo = 0), igual que contactos/rutas. Exento del bloqueo de contenido (ver actualizarGasto). */
 export async function desactivarGasto(empresaId: number, id: number): Promise<GastoOperativo | null> {
   return actualizarGasto(empresaId, id, { activo: false });
+}
+
+/**
+ * GASTOS-ADMINISTRATIVO-1 (Fase 2) — bloquea la fila (`FOR UPDATE`) y
+ * valida la transición contra TRANSICIONES_GASTO, máquina de estados
+ * PROPIA de Gastos (separada de TRANSICIONES_FONDO en fondos.ts, porque
+ * sus estados no son idénticos — sin "Liquidada" aquí). Un histórico
+ * (`estado IS NULL`) se rechaza explícitamente: nunca se convierte
+ * silenciosamente a "Pendiente" (eso sería un backfill implícito, fuera
+ * de alcance). Compartido por autorizarGasto/rechazarGasto para no
+ * duplicar el bloqueo/validación de transición.
+ */
+async function bloquearGastoParaTransicionTx(
+  conn: PoolConnection,
+  empresaId: number,
+  id: number,
+  destino: EstadoGasto,
+): Promise<{ estadoActual: EstadoGasto; requirenteUsuarioId: number | null; solicitanteUsuarioId: number | null; creadoPor: string | null } | null> {
+  const rows = await queryConn<RowDataPacket[]>(conn,
+    `SELECT id, estado, requirente_usuario_id, solicitante_usuario_id, creado_por
+     FROM tms_gastos_operativos WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
+    [id, empresaId],
+  );
+  if (!rows[0]) return null;
+  if (rows[0].estado == null) {
+    throw new Error("Este gasto es histórico y no tiene flujo de autorización.");
+  }
+  const estadoActual = String(rows[0].estado) as EstadoGasto;
+  if (!TRANSICIONES_GASTO[estadoActual].includes(destino)) {
+    throw new Error(`No se puede pasar de "${estadoActual}" a "${destino}".`);
+  }
+  return {
+    estadoActual,
+    requirenteUsuarioId: rows[0].requirente_usuario_id != null ? Number(rows[0].requirente_usuario_id) : null,
+    solicitanteUsuarioId: rows[0].solicitante_usuario_id != null ? Number(rows[0].solicitante_usuario_id) : null,
+    creadoPor: rows[0].creado_por != null ? String(rows[0].creado_por) : null,
+  };
+}
+
+/**
+ * GASTOS-ADMINISTRATIVO-1 (Fase 2) — autoriza un gasto Pendiente. SIN
+ * firma todavía (fuera de alcance de esta fase, ver diseño aprobado): a
+ * diferencia de cambiarEstadoSolicitudFondo, no exige "Mi firma" ni
+ * escribe en firmas_electronicas — eso se agrega en la fase de firmas,
+ * sin tener que reescribir esta función (mismo `opts.autorizanteUsuarioId`/
+ * `autorizanteNombre` que ya recibe aquí es lo que esa fase reutilizará).
+ *
+ * `autorizanteUsuarioId`/`autorizanteNombre` deben venir de la identidad
+ * de sesión real (`guard.session`) del futuro endpoint — esta función
+ * nunca los deriva del body, los recibe ya resueltos por el caller.
+ *
+ * Prevención de autoautorización: mismo criterio que Fondos — se
+ * rechaza si el autorizante es el requirente, el solicitante, o quien
+ * creó el registro (comparando `opts.usuario` contra `creado_por`).
+ */
+export async function autorizarGasto(
+  empresaId: number,
+  id: number,
+  opts: {
+    usuario?: string | null;
+    autorizanteUsuarioId: number;
+    autorizanteNombre: string;
+    autorizanteEmpleadoId?: number | null;
+  },
+): Promise<GastoOperativo | null> {
+  const conn = await getPool().getConnection();
+  try {
+    await conn.beginTransaction();
+    const bloqueo = await bloquearGastoParaTransicionTx(conn, empresaId, id, "Autorizada");
+    if (!bloqueo) { await conn.rollback(); return null; }
+    await validarEmpleadoDeEmpresaTx(conn, empresaId, opts.autorizanteEmpleadoId, "autorizante");
+    const esPropia =
+      (bloqueo.requirenteUsuarioId != null && bloqueo.requirenteUsuarioId === opts.autorizanteUsuarioId) ||
+      (bloqueo.solicitanteUsuarioId != null && bloqueo.solicitanteUsuarioId === opts.autorizanteUsuarioId) ||
+      (bloqueo.creadoPor != null && opts.usuario != null && bloqueo.creadoPor === opts.usuario);
+    if (esPropia) {
+      throw new Error("No puede autorizar su propio gasto.");
+    }
+    await executeConn(conn,
+      `UPDATE tms_gastos_operativos
+       SET estado = 'Autorizada', autorizante_empleado_id = ?, autorizante_nombre = ?, autorizante_usuario_id = ?, autorizado_en = NOW()
+       WHERE id = ? AND empresa_id = ?`,
+      [opts.autorizanteEmpleadoId ?? null, opts.autorizanteNombre, opts.autorizanteUsuarioId, id, empresaId],
+    );
+    await registrarAuditoriaTx(conn, {
+      empresaId, usuario: opts.usuario ?? null, accion: "autorizar", modulo: "tms_gastos",
+      detalle: `Gasto operativo #${id}: ${bloqueo.estadoActual} -> Autorizada.`,
+    });
+    await conn.commit();
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
+  return obtenerGasto(empresaId, id);
+}
+
+/**
+ * GASTOS-ADMINISTRATIVO-1 (Fase 2) — rechaza un gasto Pendiente. Mismo
+ * criterio que Fondos: exige un motivo, nunca se autoautoriza el
+ * chequeo (rechazar la propia solicitud no es un conflicto de interés
+ * en el mismo sentido que autorizarla — mismo criterio que
+ * cambiarEstadoSolicitudFondo, que tampoco lo exige para "Rechazada").
+ */
+export async function rechazarGasto(
+  empresaId: number,
+  id: number,
+  opts: { usuario?: string | null; motivoRechazo: string },
+): Promise<GastoOperativo | null> {
+  if (!opts.motivoRechazo?.trim()) throw new Error("El rechazo requiere un motivo.");
+  const conn = await getPool().getConnection();
+  try {
+    await conn.beginTransaction();
+    const bloqueo = await bloquearGastoParaTransicionTx(conn, empresaId, id, "Rechazada");
+    if (!bloqueo) { await conn.rollback(); return null; }
+    await executeConn(conn,
+      `UPDATE tms_gastos_operativos SET estado = 'Rechazada', rechazado_en = NOW(), motivo_rechazo = ? WHERE id = ? AND empresa_id = ?`,
+      [opts.motivoRechazo.trim(), id, empresaId],
+    );
+    await registrarAuditoriaTx(conn, {
+      empresaId, usuario: opts.usuario ?? null, accion: "rechazar", modulo: "tms_gastos",
+      detalle: `Gasto operativo #${id}: ${bloqueo.estadoActual} -> Rechazada. Motivo: ${opts.motivoRechazo.trim()}`,
+    });
+    await conn.commit();
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
+  return obtenerGasto(empresaId, id);
 }
