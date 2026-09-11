@@ -30,7 +30,7 @@ export async function GET(_req: Request, ctx: Ctx) {
   };
 
   try {
-    const [empleados, vehiculos, clientes, planes, usuarios] = await Promise.all([
+    const [empleados, vehiculos, clientes, planes, usuarios, entidadesRequirentes] = await Promise.all([
     consultar("empleados",
       "SELECT id, codigo, nombre, puesto, cuenta_bancaria FROM empleados WHERE empresa_id = ? AND estado = 'Activo' ORDER BY nombre LIMIT 1000",
       [eid],
@@ -71,6 +71,13 @@ export async function GET(_req: Request, ctx: Ctx) {
        ORDER BY u.nombre LIMIT 1000`,
       [eid],
     ),
+    consultar("entidades requirentes",
+      `SELECT id, codigo, nombre
+       FROM cont_entidades
+       WHERE empresa_id = ? AND activa = 1 AND codigo IN ('KT', 'MONACO')
+       ORDER BY codigo`,
+      [eid],
+    ),
     ]);
 
     return NextResponse.json(
@@ -92,6 +99,7 @@ export async function GET(_req: Request, ctx: Ctx) {
       })),
       usuarios: usuarios.map((r) => ({ id: Number(r.id), nombre: String(r.nombre) })),
       solicitantes: usuarios.filter((r) => ["Operaciones", "GerenteOperaciones", "JefeOperaciones", "AuxiliarOperaciones"].includes(String(r.rol_global ?? ""))).map((r) => ({ id: Number(r.id), nombre: String(r.nombre) })),
+      entidadesRequirentes: entidadesRequirentes.map((r) => ({ id: Number(r.id), codigo: String(r.codigo), nombre: String(r.nombre) })),
       // FONDOS-GASTOS-METODO-PAGO-1 — catálogo compartido: Fondos ya
       // reutiliza este endpoint para empleados/vehículos/clientes/planes,
       // ahora también para el selector de método de pago (mismo catálogo

@@ -25,6 +25,10 @@ function datosCatalogos() {
     .mockResolvedValueOnce([
       { id: 5, nombre: "Operador Uno", rol_global: "Operaciones" },
       { id: 6, nombre: "Contadora", rol_global: "Contabilidad" },
+    ] as never)
+    .mockResolvedValueOnce([
+      { id: 10, codigo: "KT", nombre: "Kuiqtrans" },
+      { id: 11, codigo: "MONACO", nombre: "Logiservicios Mónaco" },
     ] as never);
 }
 
@@ -52,6 +56,10 @@ describe("GET catálogos de Gastos/Fondos", () => {
     }]);
     expect(body.usuarios).toHaveLength(2);
     expect(body.solicitantes).toEqual([{ id: 5, nombre: "Operador Uno" }]);
+    expect(body.entidadesRequirentes).toEqual([
+      { id: 10, codigo: "KT", nombre: "Kuiqtrans" },
+      { id: 11, codigo: "MONACO", nombre: "Logiservicios Mónaco" },
+    ]);
   });
 
   /**
@@ -76,7 +84,7 @@ describe("GET catálogos de Gastos/Fondos", () => {
     expect(sql).not.toMatch(/puesto\s*(=|IN)|tms_personal/i);
   });
 
-  it("mantiene empresa_id del tenant en las cinco consultas", async () => {
+  it("mantiene empresa_id del tenant en todas las consultas", async () => {
     datosCatalogos();
     await GET(new Request("http://local"), ctx);
     expect(requireTenantGastos).toHaveBeenCalledWith("kt-monaco", "ver");

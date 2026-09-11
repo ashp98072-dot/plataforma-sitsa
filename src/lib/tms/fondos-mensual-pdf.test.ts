@@ -44,7 +44,7 @@ function linea(over: Partial<FilaSolicitudFondoReporte> = {}): FilaSolicitudFond
     empleadoId: 4, empleadoNombre: "Heber Sitan", cargo: "Piloto", cuenta: "1980305722",
     vehiculoId: 9, placa: "C-130BQ", clienteId: 5, clienteNombre: "Cliente A", planId: null,
     cantidad: 2, descripcion: "Combustible diesel", monto: 100, total: 200,
-    requirenteNombre: "Mario Caal", solicitanteNombre: "Ana Gómez", autorizanteNombre: "Heber Sitan",
+    entidadRequirenteNombre: "Kuiqtrans", requirenteNombre: "Mario Caal", solicitanteNombre: "Ana Gómez", autorizanteNombre: "Heber Sitan",
     fechaAutorizacion: "2026-09-04", totalSolicitud: 600, estadoFondo: "Autorizada",
     ...over,
   };
@@ -83,6 +83,7 @@ describe("generarPdfMensualSolicitudesFondo", () => {
     expect(t).toContain("SOLICITUD FONDO-000010");
     expect(t).toContain("SOLICITUD FONDO-000011");
     expect(t).toContain("Persona que requiere: MARIO CAAL");
+    expect(t).toContain("Empresa requirente: KUIQTRANS");
     expect(t).toContain("Estado: Autorizada");
     expect(t).toContain("Estado: Liquidada");
     expect(t).toContain("TOTAL SOLICITUD: Q 600.00");

@@ -71,7 +71,13 @@ function postReq(body: Record<string, unknown>) {
 }
 
 const lineaBase = { categoria: "Combustible", monto: 100 };
-const bodyBase = { solicitanteUsuarioId: 9, fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan" };
+const bodyBase = { entidadRequirenteId: 10, solicitanteUsuarioId: 9, fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan" };
+
+it("exige empresa requirente al crear", async () => {
+  const res = await POST(postReq({ solicitanteUsuarioId: 9, fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", lineas: [lineaBase] }), ctx);
+  expect(res.status).toBe(400);
+  expect(crearSolicitudFondo).not.toHaveBeenCalled();
+});
 
 /** FONDOS-GASTOS-METODO-PAGO-1 — el schema acepta/rechaza metodoPago por línea con el mismo catálogo que Gastos. */
 describe("POST /tms/fondos — schema de metodoPago por línea", () => {

@@ -53,6 +53,7 @@ const lineaSchema = z.object({
 });
 
 const schema = z.object({
+  entidadRequirenteId: z.number().int().positive(),
   requirenteEmpleadoId: z.number().int().positive().nullable().optional(),
   requirenteNombre: z.string().max(200).nullable().optional(),
   // SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§3 del ticket) — requirente
