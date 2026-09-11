@@ -6,6 +6,8 @@ import { CatalogoSearchSelect } from "@/components/tms/catalogo-search-select";
 import { MAX_UPLOAD_BYTES } from "@/lib/uploads-constants";
 import { MESES_ES } from "@/lib/tms/reportes-mes";
 import { paramsExportarGastos, paramsListadoGastos } from "@/lib/tms/exportacion-operativa-filtros";
+import { useEmpresaSession } from "@/lib/empresa-session";
+import { tienePermiso } from "@/lib/permisos-shared";
 
 type Gasto = {
   id: number;
@@ -31,6 +33,8 @@ type Gasto = {
   facturaTamano: number | null;
   observaciones: string | null;
   activo: boolean;
+  estado: string | null;
+  motivoRechazo: string | null;
 };
 
 type PlanCatalogo = {
@@ -79,6 +83,8 @@ const FORM_VACIO = {
  */
 export default function GastosPage() {
   const slug = String(useParams().slug);
+  const { permisos } = useEmpresaSession();
+  const puedeAutorizar = tienePermiso(permisos, "gastos_operativos_autorizar", "editar");
 
   const [gastos, setGastos] = useState<Gasto[]>([]);
   const [categorias, setCategorias] = useState<string[]>([]);
@@ -237,6 +243,21 @@ export default function GastosPage() {
     if (res.ok) await cargar();
   }
 
+  async function decidir(id: number, accion: "autorizar" | "rechazar") {
+    const motivoRechazo = accion === "rechazar" ? prompt("Motivo del rechazo:")?.trim() : undefined;
+    if (accion === "rechazar" && !motivoRechazo) return;
+    setError(""); setMsg("");
+    const res = await fetch(`/api/empresas/${slug}/tms/gastos/${id}/${accion}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(accion === "rechazar" ? { motivoRechazo } : {}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { setError(data.error ?? `No se pudo ${accion} el gasto.`); return; }
+    setMsg(data.mensaje ?? "Gasto actualizado.");
+    await cargar();
+  }
+
   const filtroMensual = Boolean(fMes && fAnio);
   const filtros = { fechaDesde: fFechaDesde, fechaHasta: fFechaHasta, mes: fMes, anio: fAnio, categoria: fCategoria, empleadoId: fEmpleadoId, vehiculoId: fVehiculoId, clienteId: fClienteId };
   const exportarUrl = (formato?: "pdf") => `/api/empresas/${slug}/tms/reportes/gastos/exportar?${paramsExportarGastos(filtros, formato).toString()}`;
@@ -358,6 +379,7 @@ export default function GastosPage() {
               <th className="px-2 py-2">Cliente</th>
               <th className="px-2 py-2">Viaje</th>
               <th className="px-2 py-2">Monto</th>
+              <th className="px-2 py-2">Estado</th>
               <th className="px-2 py-2">Comprobante</th>
               <th className="px-2 py-2" />
             </tr>
@@ -373,15 +395,22 @@ export default function GastosPage() {
                 <td className="px-2 py-2">{g.clienteNombre ?? "—"}</td>
                 <td className="px-2 py-2">{g.planCodigo ?? "—"}</td>
                 <td className="px-2 py-2">Q{(g.cantidad * g.monto).toLocaleString("es-GT", { minimumFractionDigits: 2 })}</td>
+                <td className="px-2 py-2">{g.estado ?? "Histórico"}{g.motivoRechazo ? <span className="block text-red-400">{g.motivoRechazo}</span> : null}</td>
                 <td className="px-2 py-2">{g.facturaNombreOriginal ? <span><a className="text-[var(--accent)]" href={`/api/empresas/${slug}/tms/gastos/${g.id}/comprobante`} target="_blank" rel="noreferrer">{g.facturaNombreOriginal}</a><button type="button" onClick={() => void eliminarComprobante(g.id)} className="ml-2 text-red-400">Quitar</button></span> : "—"}</td>
                 <td className="px-2 py-2 whitespace-nowrap">
+                  {puedeAutorizar && g.estado === "Pendiente" ? (
+                    <>
+                      <button type="button" onClick={() => void decidir(g.id, "autorizar")} className="mr-2 text-emerald-400">Autorizar</button>
+                      <button type="button" onClick={() => void decidir(g.id, "rechazar")} className="mr-2 text-red-400">Rechazar</button>
+                    </>
+                  ) : null}
                   <button type="button" onClick={() => editar(g)} className="mr-2 text-[var(--accent)]">Editar</button>
                   <button type="button" onClick={() => void desactivar(g.id)} className="text-red-400">Desactivar</button>
                 </td>
               </tr>
             ))}
             {!gastos.length && !loading ? (
-              <tr><td colSpan={10} className="px-3 py-4 text-[var(--muted)]">Sin gastos con este filtro.</td></tr>
+              <tr><td colSpan={11} className="px-3 py-4 text-[var(--muted)]">Sin gastos con este filtro.</td></tr>
             ) : null}
           </tbody>
         </table>

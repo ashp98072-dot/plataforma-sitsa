@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/tenant", () => ({ requireTenantGastosAutorizar: vi.fn() }));
+vi.mock("@/lib/tenant", () => ({ requireTenantGastosOperativosAutorizar: vi.fn() }));
 vi.mock("@/lib/tms/gastos", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/tms/gastos")>();
   return { ...actual, rechazarGasto: vi.fn() };
 });
 
-import { requireTenantGastosAutorizar } from "@/lib/tenant";
+import { requireTenantGastosOperativosAutorizar } from "@/lib/tenant";
 import { ErrorGasto, rechazarGasto } from "@/lib/tms/gastos";
 import { POST } from "./route";
 
@@ -23,23 +23,23 @@ function req(body: unknown) {
 const sesionOk = {
   empresa: { id: 7 },
   session: { id: 9, username: "hsitan", nombre: "Heber Sitan", rol: "JefeOperaciones" },
-} as Awaited<ReturnType<typeof requireTenantGastosAutorizar>>;
+} as Awaited<ReturnType<typeof requireTenantGastosOperativosAutorizar>>;
 
 beforeEach(() => {
   vi.resetAllMocks();
-  vi.mocked(requireTenantGastosAutorizar).mockResolvedValue(sesionOk);
+  vi.mocked(requireTenantGastosOperativosAutorizar).mockResolvedValue(sesionOk);
   vi.mocked(rechazarGasto).mockResolvedValue({ id: 10, estado: "Rechazada" } as never);
 });
 afterEach(() => vi.restoreAllMocks());
 
 describe("POST /tms/gastos/[id]/rechazar", () => {
-  it("exige EXACTAMENTE gastos_autorizar:editar (mismo permiso que autorizar) ANTES de tocar el body", async () => {
+  it("exige EXACTAMENTE gastos_operativos_autorizar:editar antes de tocar el body", async () => {
     await POST(req({ motivoRechazo: "Factura ilegible." }), ctx);
-    expect(requireTenantGastosAutorizar).toHaveBeenCalledWith("prueba", "editar");
+    expect(requireTenantGastosOperativosAutorizar).toHaveBeenCalledWith("prueba", "editar");
   });
 
-  it("sin permiso 'gastos_autorizar' -> 403, nunca llama a la lib", async () => {
-    vi.mocked(requireTenantGastosAutorizar).mockResolvedValue({ error: new Response(null, { status: 403 }) } as never);
+  it("sin permiso propio -> 403, nunca llama a la lib", async () => {
+    vi.mocked(requireTenantGastosOperativosAutorizar).mockResolvedValue({ error: new Response(null, { status: 403 }) } as never);
     const res = await POST(req({ motivoRechazo: "Factura ilegible." }), ctx);
     expect(res.status).toBe(403);
     expect(rechazarGasto).not.toHaveBeenCalled();

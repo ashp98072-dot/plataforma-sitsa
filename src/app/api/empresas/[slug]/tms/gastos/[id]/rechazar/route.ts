@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireTenantGastosAutorizar } from "@/lib/tenant";
+import { requireTenantGastosOperativosAutorizar } from "@/lib/tenant";
 import { ErrorGasto, rechazarGasto } from "@/lib/tms/gastos";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
 
 /**
  * GASTOS-ADMINISTRATIVO-1 (Fase 3) — Pendiente -> Rechazada. Mismo
- * permiso EXACTO que autorizar (`gastos_autorizar:editar`, ver
+ * permiso EXACTO que autorizar (`gastos_operativos_autorizar:editar`, ver
  * autorizar/route.ts) — ambas son decisiones de aprobación.
  *
  * Body JSON simple `{ motivoRechazo: string }` — sin multipart, sin
@@ -23,7 +23,7 @@ const schema = z.object({
 export async function POST(req: Request, ctx: Ctx) {
   try {
     const { slug, id } = await ctx.params;
-    const guard = await requireTenantGastosAutorizar(slug, "editar");
+    const guard = await requireTenantGastosOperativosAutorizar(slug, "editar");
     if (guard.error) return guard.error;
 
     const gastoId = Number(id);

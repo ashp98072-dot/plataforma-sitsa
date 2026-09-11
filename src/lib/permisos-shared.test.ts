@@ -159,16 +159,21 @@ describe("permisos críticos por rol", () => {
     });
   });
 
-  describe("FONDOS-AUTORIZAR-PERMISO-1 — acción 'Autorizar' independiente ('gastos_autorizar')", () => {
+  describe("permisos independientes para autorizar y rechazar Fondos/Gastos", () => {
     it("es un módulo asignable propio, con etiqueta clara y bajo el módulo de empresa 'tms'", () => {
       expect(esPlataformaPermisible("gastos_autorizar")).toBe(true);
-      expect(labelPermiso("gastos_autorizar")).toBe("Gastos operativos / Solicitudes de fondo: autorizar");
+      expect(labelPermiso("gastos_autorizar")).toBe("Solicitudes de fondo: autorizar y rechazar");
       expect(moduloEmpresaDelPermiso("gastos_autorizar")).toBe("tms");
+      expect(esPlataformaPermisible("gastos_operativos_autorizar")).toBe(true);
+      expect(labelPermiso("gastos_operativos_autorizar")).toBe("Gastos operativos: autorizar y rechazar");
+      expect(moduloEmpresaDelPermiso("gastos_operativos_autorizar")).toBe("tms");
+      expect(labelPermiso("viaticos_autorizar")).toBe("Viáticos: autorizar y rechazar");
     });
 
     it("aparece en el grupo 'Operaciones' de la matriz de Usuarios, junto a (no dentro de) 'gastos'", () => {
       const operaciones = GRUPOS_PERMISOS.find((g) => g.id === "operaciones");
       expect(operaciones?.modulos).toContain("gastos_autorizar");
+      expect(operaciones?.modulos).toContain("gastos_operativos_autorizar");
       expect(operaciones?.modulos).toContain("gastos");
     });
 
@@ -190,6 +195,7 @@ describe("permisos críticos por rol", () => {
       const permisos = mergePermisosConCatalogo("Visualizador", [permisoFull("gastos")]);
       expect(tienePermiso(permisos, "gastos", "editar")).toBe(true);
       expect(tienePermiso(permisos, "gastos_autorizar", "editar")).toBe(false);
+      expect(tienePermiso(permisos, "gastos_operativos_autorizar", "editar")).toBe(false);
     });
 
     it("un usuario existente sin 'gastos_autorizar' guardado lo recibe vacío al recargar (secure by default)", () => {
@@ -197,11 +203,19 @@ describe("permisos críticos por rol", () => {
         { modulo: "gastos", puedeVer: true, puedeCrear: true, puedeEditar: true, puedeEliminar: true },
       ]);
       expect(tienePermiso(permisos, "gastos_autorizar", "editar")).toBe(false);
+      expect(tienePermiso(permisos, "gastos_operativos_autorizar", "editar")).toBe(false);
     });
 
     it("un 'gastos_autorizar' otorgado explícitamente se conserva al recargar", () => {
       const permisos = mergePermisosConCatalogo("Visualizador", [permisoFull("gastos_autorizar")]);
       expect(tienePermiso(permisos, "gastos_autorizar", "editar")).toBe(true);
+    });
+
+    it("los permisos de Fondos y Gastos son independientes", () => {
+      const soloFondos = mergePermisosConCatalogo("Visualizador", [permisoFull("gastos_autorizar")]);
+      const soloGastos = mergePermisosConCatalogo("Visualizador", [permisoFull("gastos_operativos_autorizar")]);
+      expect(tienePermiso(soloFondos, "gastos_operativos_autorizar", "editar")).toBe(false);
+      expect(tienePermiso(soloGastos, "gastos_autorizar", "editar")).toBe(false);
     });
   });
 

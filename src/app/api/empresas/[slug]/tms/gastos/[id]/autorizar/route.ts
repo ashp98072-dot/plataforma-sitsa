@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireTenantGastosAutorizar } from "@/lib/tenant";
+import { requireTenantGastosOperativosAutorizar } from "@/lib/tenant";
 import { ErrorGasto, autorizarGasto } from "@/lib/tms/gastos";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
 
 /**
  * GASTOS-ADMINISTRATIVO-1 (Fase 3) — Pendiente -> Autorizada. Permiso
- * EXACTAMENTE `gastos_autorizar:editar` (requireTenantGastosAutorizar),
+ * EXACTAMENTE `gastos_operativos_autorizar:editar`,
  * el mismo que exige `rechazar/route.ts` — ambas son decisiones de
  * aprobación, mismo criterio que ya usa Viáticos
  * (viaticos/[id]/autorizar|rechazar) para su propio par de acciones.
@@ -29,7 +29,7 @@ const schema = z.object({
 export async function POST(req: Request, ctx: Ctx) {
   try {
     const { slug, id } = await ctx.params;
-    const guard = await requireTenantGastosAutorizar(slug, "editar");
+    const guard = await requireTenantGastosOperativosAutorizar(slug, "editar");
     if (guard.error) return guard.error;
 
     const gastoId = Number(id);

@@ -70,11 +70,10 @@ export async function PATCH(req: Request, ctx: Ctx) {
   if (!parsed.success) {
     return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
   }
-  // FONDOS-AUTORIZAR-PERMISO-1 — "autorizar" es una acción independiente:
-  // exige el permiso propio "gastos_autorizar" (requireTenantGastosAutorizar,
-  // SIN fallback a gastos:editar / tms:editar). El resto de escrituras de
-  // este endpoint (rechazar / liquidar / editar) siguen bajo "gastos:editar".
-  const guard = parsed.data.accion === "autorizar"
+  // Autorizar y rechazar son decisiones independientes de la edición:
+  // ambas exigen "gastos_autorizar", sin fallback a gastos/tms. Liquidar
+  // y editar conservan el permiso general existente.
+  const guard = parsed.data.accion === "autorizar" || parsed.data.accion === "rechazar"
     ? await requireTenantGastosAutorizar(slug, "editar")
     : await requireTenantGastos(slug, "editar");
   if (guard.error) return guard.error;
