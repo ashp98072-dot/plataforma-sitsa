@@ -8,6 +8,10 @@ import {
   resolverUsuarioDeEmpresaTx,
   validarEmpleadoDeEmpresaTx,
 } from "@/lib/tms/identidad-administrativa";
+import { crearFirmaInterna } from "@/lib/firmas/firmas-internas";
+import { leerBytesFirmaGuardada } from "@/lib/firmas/usuario-firmas";
+import { sha256Hex } from "@/lib/firmas/imagen-firma";
+import { borrarUpload, guardarUpload } from "@/lib/uploads";
 
 /**
  * TMS-GASTOS-REPORTES-1 (fase 1) — gastos operativos asociados
@@ -39,6 +43,40 @@ import {
  */
 export class ErrorGasto extends Error {
   constructor(message: string, public status = 400) { super(message); }
+}
+
+/** Identidad real de sesión (nunca username) para una firma de Gasto — mismo tipo que IdentidadFirmante en fondos.ts. */
+export type IdentidadFirmanteGasto = { usuarioId: number; nombre: string; rol?: string | null };
+
+/** GASTOS-ADMINISTRATIVO-1 (Fase 5) — mensaje FIJO cuando el autorizante no tiene firma registrada en "Mi firma". Exportado para que el endpoint devuelva EXACTAMENTE este texto. */
+export const MENSAJE_FIRMA_REQUERIDA_AUTORIZAR = "Debes registrar tu firma en Mi firma antes de autorizar el gasto.";
+
+/**
+ * GASTOS-ADMINISTRATIVO-1 (Fase 5) — mismo patrón EXACTO que
+ * guardarImagenFirmaFondo() en fondos.ts: cada USO de la plantilla
+ * personal ("Mi firma") genera una COPIA física INDEPENDIENTE (nunca se
+ * referencia el archivo de usuario_firmas directamente) — así, cambiar o
+ * borrar la plantilla después nunca altera una firma histórica ya
+ * guardada en firmas_electronicas.
+ */
+async function guardarImagenFirmaGasto(
+  empresaId: number,
+  gastoId: number,
+  accionPrefix: "solicitar" | "requerir" | "autorizar",
+  imagen: { bytes: ArrayBuffer; original: string },
+): Promise<{ relative: string; original: string; mime: string; size: number; sha256: string }> {
+  const guardada = await guardarUpload(empresaId, "firmas", `firma_gasto_${accionPrefix}_${gastoId}`, {
+    name: imagen.original || "firma.png",
+    size: imagen.bytes.byteLength,
+    arrayBuffer: async () => imagen.bytes,
+  });
+  return {
+    relative: guardada.relative,
+    original: guardada.original,
+    mime: "image/png",
+    size: guardada.size,
+    sha256: sha256Hex(imagen.bytes),
+  };
 }
 
 /** Catálogo FIJO en código — no una tabla nueva (mismo criterio que empleados.categoria_ops / tms_personal.tipo). */
@@ -420,6 +458,7 @@ export async function crearGasto(
   const numeroCuentaPago = normalizarDestinoPago(input.metodoPago ?? null, input.numeroCuentaPago);
 
   const conn = await getPool().getConnection();
+  const archivosFirmaEscritos: string[] = [];
   let insertId = 0;
   try {
     await conn.beginTransaction();
@@ -462,6 +501,41 @@ export async function crearGasto(
       ],
     );
     insertId = Number(r.insertId);
+
+    // GASTOS-ADMINISTRATIVO-1 (Fase 5) — firma del SOLICITANTE y del
+    // REQUIRIENTE (solo si se asoció un usuario real), BEST-EFFORT: mismo
+    // criterio que Fondos — nunca bloquea la creación por falta de "Mi
+    // firma"; sin ella, el PDF individual muestra el nombre + espacio en
+    // blanco (nunca se inventa una firma).
+    if (input.solicitanteUsuarioId != null && solicitanteUsuario) {
+      const bytes = await leerBytesFirmaGuardada(input.solicitanteUsuarioId);
+      if (bytes) {
+        const imagen = await guardarImagenFirmaGasto(empresaId, insertId, "solicitar", bytes);
+        archivosFirmaEscritos.push(imagen.relative);
+        await crearFirmaInterna(conn, {
+          empresaId, usuarioId: input.solicitanteUsuarioId, empleadoId: null,
+          nombreFirmante: solicitanteUsuario.nombre, rolFirmante: solicitanteUsuario.rol ?? "",
+          accion: "SOLICITAR_GASTO", modulo: "GASTOS", entidadTipo: "GASTO_OPERATIVO", entidadId: insertId,
+          valoresRelevantes: { gastoId: insertId, monto: input.monto },
+          imagen, metodo: "FIRMA_MANUSCRITA", origenFirma: "GUARDADA",
+        });
+      }
+    }
+    if (input.requirenteUsuarioId != null && requirenteUsuario) {
+      const bytes = await leerBytesFirmaGuardada(input.requirenteUsuarioId);
+      if (bytes) {
+        const imagen = await guardarImagenFirmaGasto(empresaId, insertId, "requerir", bytes);
+        archivosFirmaEscritos.push(imagen.relative);
+        await crearFirmaInterna(conn, {
+          empresaId, usuarioId: input.requirenteUsuarioId, empleadoId: null,
+          nombreFirmante: requirenteUsuario.nombre, rolFirmante: requirenteUsuario.rol ?? "",
+          accion: "REQUERIR_GASTO", modulo: "GASTOS", entidadTipo: "GASTO_OPERATIVO", entidadId: insertId,
+          valoresRelevantes: { gastoId: insertId, monto: input.monto },
+          imagen, metodo: "FIRMA_MANUSCRITA", origenFirma: "GUARDADA",
+        });
+      }
+    }
+
     await registrarAuditoriaTx(conn, {
       empresaId, usuario: creadoPor ?? null, accion: "crear", modulo: "tms_gastos",
       detalle: `Gasto operativo #${insertId} creado por Q${input.monto.toFixed(2)}.`,
@@ -469,6 +543,7 @@ export async function crearGasto(
     await conn.commit();
   } catch (error) {
     await conn.rollback();
+    for (const relative of archivosFirmaEscritos) borrarUpload(relative);
     throw error;
   } finally {
     conn.release();
@@ -499,6 +574,7 @@ export async function actualizarGasto(
   cambios: GastoOperativoUpdate,
 ): Promise<GastoOperativo | null> {
   const conn = await getPool().getConnection();
+  const archivosFirmaEscritos: string[] = [];
   try {
     await conn.beginTransaction();
     const rows = await queryConn<RowDataPacket[]>(conn,
@@ -541,6 +617,15 @@ export async function actualizarGasto(
     // no relacionada; cambios.x en undefined significa "no tocar este campo").
     await validarReferenciasGastoTx(conn, empresaId, cambios);
     const { entidadRequirente, requirenteUsuario, solicitanteUsuario } = await resolverIdentidadAdministrativaGastoTx(conn, empresaId, cambios);
+
+    // GASTOS-ADMINISTRATIVO-1 (Fase 5) — mismo criterio que
+    // actualizarSolicitudFondo: una nueva firma snapshot se captura solo
+    // si el usuario requirente/solicitante REALMENTE cambió (nunca se
+    // re-firma sin razón en cada edición no relacionada).
+    const requirenteUsuarioCambio = cambios.requirenteUsuarioId !== undefined
+      && cambios.requirenteUsuarioId !== (actual.requirente_usuario_id != null ? Number(actual.requirente_usuario_id) : null);
+    const solicitanteUsuarioCambio = cambios.solicitanteUsuarioId !== undefined
+      && cambios.solicitanteUsuarioId !== (actual.solicitante_usuario_id != null ? Number(actual.solicitante_usuario_id) : null);
 
     const entidadRequirenteId = entidadRequirente?.id ?? (actual.entidad_requirente_id != null ? Number(actual.entidad_requirente_id) : null);
     const entidadRequirenteNombre = entidadRequirente?.nombre ?? (actual.entidad_requirente_nombre != null ? String(actual.entidad_requirente_nombre) : null);
@@ -597,6 +682,39 @@ export async function actualizarGasto(
         empresaId,
       ],
     );
+
+    // GASTOS-ADMINISTRATIVO-1 (Fase 5) — firma BEST-EFFORT del
+    // SOLICITANTE/REQUIRIENTE cuando el usuario asociado cambió en esta
+    // edición (ver requirenteUsuarioCambio/solicitanteUsuarioCambio).
+    if (solicitanteUsuarioCambio && cambios.solicitanteUsuarioId != null && solicitanteUsuario) {
+      const bytes = await leerBytesFirmaGuardada(cambios.solicitanteUsuarioId);
+      if (bytes) {
+        const imagen = await guardarImagenFirmaGasto(empresaId, id, "solicitar", bytes);
+        archivosFirmaEscritos.push(imagen.relative);
+        await crearFirmaInterna(conn, {
+          empresaId, usuarioId: cambios.solicitanteUsuarioId, empleadoId: null,
+          nombreFirmante: solicitanteUsuario.nombre, rolFirmante: solicitanteUsuario.rol ?? "",
+          accion: "SOLICITAR_GASTO", modulo: "GASTOS", entidadTipo: "GASTO_OPERATIVO", entidadId: id,
+          valoresRelevantes: { gastoId: id, monto },
+          imagen, metodo: "FIRMA_MANUSCRITA", origenFirma: "GUARDADA",
+        });
+      }
+    }
+    if (requirenteUsuarioCambio && cambios.requirenteUsuarioId != null && requirenteUsuario) {
+      const bytes = await leerBytesFirmaGuardada(cambios.requirenteUsuarioId);
+      if (bytes) {
+        const imagen = await guardarImagenFirmaGasto(empresaId, id, "requerir", bytes);
+        archivosFirmaEscritos.push(imagen.relative);
+        await crearFirmaInterna(conn, {
+          empresaId, usuarioId: cambios.requirenteUsuarioId, empleadoId: null,
+          nombreFirmante: requirenteUsuario.nombre, rolFirmante: requirenteUsuario.rol ?? "",
+          accion: "REQUERIR_GASTO", modulo: "GASTOS", entidadTipo: "GASTO_OPERATIVO", entidadId: id,
+          valoresRelevantes: { gastoId: id, monto },
+          imagen, metodo: "FIRMA_MANUSCRITA", origenFirma: "GUARDADA",
+        });
+      }
+    }
+
     await registrarAuditoriaTx(conn, {
       empresaId, usuario: null, accion: "editar", modulo: "tms_gastos",
       detalle: `Gasto operativo #${id} editado.`,
@@ -604,6 +722,7 @@ export async function actualizarGasto(
     await conn.commit();
   } catch (error) {
     await conn.rollback();
+    for (const relative of archivosFirmaEscritos) borrarUpload(relative);
     throw error;
   } finally {
     conn.release();
@@ -654,16 +773,22 @@ async function bloquearGastoParaTransicionTx(
 }
 
 /**
- * GASTOS-ADMINISTRATIVO-1 (Fase 2) — autoriza un gasto Pendiente. SIN
- * firma todavía (fuera de alcance de esta fase, ver diseño aprobado): a
- * diferencia de cambiarEstadoSolicitudFondo, no exige "Mi firma" ni
- * escribe en firmas_electronicas — eso se agrega en la fase de firmas,
- * sin tener que reescribir esta función (mismo `opts.autorizanteUsuarioId`/
- * `autorizanteNombre` que ya recibe aquí es lo que esa fase reutilizará).
+ * GASTOS-ADMINISTRATIVO-1 (Fase 5) — autoriza un gasto Pendiente. Mismo
+ * criterio EXACTO que cambiarEstadoSolicitudFondo en fondos.ts: exige la
+ * firma manuscrita real de "Mi firma" del autorizante (`opts.firmaImagen`,
+ * ya leída por el endpoint vía leerBytesFirmaGuardada — nunca deriva la
+ * imagen del body) — sin ella se rechaza con
+ * MENSAJE_FIRMA_REQUERIDA_AUTORIZAR, ANTES de tocar la base de datos. La
+ * copia física de esa firma se escribe ANTES de abrir la transacción
+ * (guardarUpload no es transaccional, mismo criterio que
+ * guardarImagenFirmaFondo) y se compensa (se borra) si el commit no llega
+ * a completarse, por cualquier motivo — mismo mecanismo `committed` que
+ * cambiarEstadoSolicitudFondo.
  *
- * `autorizanteUsuarioId`/`autorizanteNombre` deben venir de la identidad
- * de sesión real (`guard.session`) del futuro endpoint — esta función
- * nunca los deriva del body, los recibe ya resueltos por el caller.
+ * `autorizanteUsuarioId`/`autorizanteNombre`/`autorizanteRol` deben venir
+ * de la identidad de sesión real (`guard.session`) del endpoint — esta
+ * función nunca los deriva del body, los recibe ya resueltos por el
+ * caller.
  *
  * Prevención de autoautorización: mismo criterio que Fondos — se
  * rechaza si el autorizante es el requirente, el solicitante, o quien
@@ -676,9 +801,17 @@ export async function autorizarGasto(
     usuario?: string | null;
     autorizanteUsuarioId: number;
     autorizanteNombre: string;
+    autorizanteRol?: string | null;
     autorizanteEmpleadoId?: number | null;
+    firmaImagen: { bytes: ArrayBuffer; original: string } | null;
   },
 ): Promise<GastoOperativo | null> {
+  if (!opts.firmaImagen) {
+    throw new ErrorGasto(MENSAJE_FIRMA_REQUERIDA_AUTORIZAR, 400);
+  }
+  const imagenGuardada = await guardarImagenFirmaGasto(empresaId, id, "autorizar", opts.firmaImagen);
+
+  let committed = false;
   const conn = await getPool().getConnection();
   try {
     await conn.beginTransaction();
@@ -698,16 +831,29 @@ export async function autorizarGasto(
        WHERE id = ? AND empresa_id = ?`,
       [opts.autorizanteEmpleadoId ?? null, opts.autorizanteNombre, opts.autorizanteUsuarioId, id, empresaId],
     );
+    // GASTOS-ADMINISTRATIVO-1 (Fase 5) — snapshot INMUTABLE de la firma
+    // real usada AL AUTORIZAR (mismo patrón que AUTORIZAR_FONDO): el PDF
+    // individual (leído después, cualquier cantidad de veces) usa esta
+    // fila, nunca vuelve a resolver "la firma actual" del usuario.
+    await crearFirmaInterna(conn, {
+      empresaId, usuarioId: opts.autorizanteUsuarioId, empleadoId: opts.autorizanteEmpleadoId ?? null,
+      nombreFirmante: opts.autorizanteNombre, rolFirmante: opts.autorizanteRol ?? "",
+      accion: "AUTORIZAR_GASTO", modulo: "GASTOS", entidadTipo: "GASTO_OPERATIVO", entidadId: id,
+      valoresRelevantes: { gastoId: id },
+      imagen: imagenGuardada, metodo: "FIRMA_MANUSCRITA", origenFirma: "GUARDADA",
+    });
     await registrarAuditoriaTx(conn, {
       empresaId, usuario: opts.usuario ?? null, accion: "autorizar", modulo: "tms_gastos",
       detalle: `Gasto operativo #${id}: ${bloqueo.estadoActual} -> Autorizada.`,
     });
     await conn.commit();
+    committed = true;
   } catch (error) {
     await conn.rollback();
     throw error;
   } finally {
     conn.release();
+    if (!committed) borrarUpload(imagenGuardada.relative);
   }
   return obtenerGasto(empresaId, id);
 }

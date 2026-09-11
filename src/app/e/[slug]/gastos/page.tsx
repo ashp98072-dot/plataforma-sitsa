@@ -508,6 +508,16 @@ export default function GastosPage() {
                     {g.estado === "Pendiente" || g.estado === null ? (
                       <button type="button" onClick={() => editar(g)} className="text-[var(--accent)]">Editar</button>
                     ) : null}
+                    {/*
+                      GASTOS-ADMINISTRATIVO-1 (Fase 5) — PDF individual
+                      (con firmas) solo tiene sentido una vez autorizado,
+                      mismo criterio que fondos/page.tsx. El endpoint
+                      vuelve a validar el estado del lado del servidor —
+                      este enlace oculto no es la única defensa.
+                    */}
+                    {g.estado === "Autorizada" ? (
+                      <a href={`/api/empresas/${slug}/tms/gastos/${g.id}/pdf`} className="rounded border border-[var(--border)] px-2 py-1">Ver PDF</a>
+                    ) : null}
                     <button type="button" onClick={() => void desactivar(g.id)} className="text-red-400">Desactivar</button>
                   </div>
                 </td>

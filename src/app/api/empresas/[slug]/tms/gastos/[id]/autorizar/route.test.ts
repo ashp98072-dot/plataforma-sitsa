@@ -5,12 +5,17 @@ vi.mock("@/lib/tms/gastos", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/tms/gastos")>();
   return { ...actual, autorizarGasto: vi.fn() };
 });
+// GASTOS-ADMINISTRATIVO-1 (Fase 5) — leerBytesFirmaGuardada se mockea por
+// completo (nunca toca disco/DB real en un test unitario).
+vi.mock("@/lib/firmas/usuario-firmas", () => ({ leerBytesFirmaGuardada: vi.fn() }));
 
 import { requireTenantGastosOperativosAutorizar } from "@/lib/tenant";
-import { ErrorGasto, autorizarGasto } from "@/lib/tms/gastos";
+import { ErrorGasto, MENSAJE_FIRMA_REQUERIDA_AUTORIZAR, autorizarGasto } from "@/lib/tms/gastos";
+import { leerBytesFirmaGuardada } from "@/lib/firmas/usuario-firmas";
 import { POST } from "./route";
 
 const ctx = { params: Promise.resolve({ slug: "prueba", id: "10" }) };
+const IMAGEN_FIRMA = { bytes: new ArrayBuffer(4), original: "firma.png" };
 
 function req(body: unknown) {
   return new Request("http://localhost/x", {
@@ -29,6 +34,9 @@ beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(requireTenantGastosOperativosAutorizar).mockResolvedValue(sesionOk);
   vi.mocked(autorizarGasto).mockResolvedValue({ id: 10, estado: "Autorizada" } as never);
+  // Default seguro: SÍ tiene "Mi firma" guardada — los tests de la
+  // Fase 5 sobreescriben explícitamente el caso "sin firma".
+  vi.mocked(leerBytesFirmaGuardada).mockResolvedValue(IMAGEN_FIRMA as never);
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -38,11 +46,12 @@ describe("POST /tms/gastos/[id]/autorizar", () => {
     expect(requireTenantGastosOperativosAutorizar).toHaveBeenCalledWith("prueba", "editar");
   });
 
-  it("sin permiso propio -> 403, nunca llama a la lib", async () => {
+  it("sin permiso propio -> 403, nunca llama a la lib ni a leerBytesFirmaGuardada", async () => {
     vi.mocked(requireTenantGastosOperativosAutorizar).mockResolvedValue({ error: new Response(null, { status: 403 }) } as never);
     const res = await POST(req({}), ctx);
     expect(res.status).toBe(403);
     expect(autorizarGasto).not.toHaveBeenCalled();
+    expect(leerBytesFirmaGuardada).not.toHaveBeenCalled();
   });
 
   it("ID inválido -> 400, nunca llama a la lib", async () => {
@@ -61,7 +70,9 @@ describe("POST /tms/gastos/[id]/autorizar", () => {
       usuario: "hsitan",
       autorizanteUsuarioId: 9,
       autorizanteNombre: "Heber Sitan",
+      autorizanteRol: "JefeOperaciones",
       autorizanteEmpleadoId: undefined,
+      firmaImagen: IMAGEN_FIRMA,
     });
   });
 
@@ -90,6 +101,28 @@ describe("POST /tms/gastos/[id]/autorizar", () => {
     const body = await res.json();
     expect(body.mensaje).toBe("Gasto autorizado.");
     expect(body.gasto.estado).toBe("Autorizada");
+  });
+
+  /**
+   * GASTOS-ADMINISTRATIVO-1 (Fase 5) — mismo patrón EXACTO que
+   * fondos/[id]/route.test.ts: leerBytesFirmaGuardada(guard.session.id)
+   * se valida ANTES de llamar a la lib; sin firma, 400 con el mensaje fijo,
+   * sin tocar la base de datos.
+   */
+  describe("firma obligatoria del autorizante (Fase 5)", () => {
+    it("con permiso pero SIN firma en 'Mi firma' -> 400 con el mensaje fijo, sin tocar la lib", async () => {
+      vi.mocked(leerBytesFirmaGuardada).mockResolvedValue(null);
+      const res = await POST(req({}), ctx);
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe(MENSAJE_FIRMA_REQUERIDA_AUTORIZAR);
+      expect(autorizarGasto).not.toHaveBeenCalled();
+    });
+
+    it("con firma guardada -> consulta leerBytesFirmaGuardada con el id de sesión y pasa la imagen a la lib", async () => {
+      await POST(req({}), ctx);
+      expect(leerBytesFirmaGuardada).toHaveBeenCalledWith(9);
+      expect(autorizarGasto).toHaveBeenCalledWith(7, 10, expect.objectContaining({ firmaImagen: IMAGEN_FIRMA }));
+    });
   });
 
   /** GASTOS-ADMINISTRATIVO-1 (Fase 3) — mapeo de errores por instanceof, NUNCA por texto. */

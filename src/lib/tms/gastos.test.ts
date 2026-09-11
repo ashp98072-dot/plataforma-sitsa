@@ -1,11 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db", () => ({ getPool: vi.fn(), query: vi.fn(), execute: vi.fn() }));
+// GASTOS-ADMINISTRATIVO-1 (Fase 5) — mismo criterio que fondos.test.ts:
+// crearFirmaInterna/guardarUpload/borrarUpload/leerBytesFirmaGuardada se
+// mockean por completo (nunca tocan disco/DB real en un test unitario).
+vi.mock("@/lib/firmas/firmas-internas", () => ({ crearFirmaInterna: vi.fn() }));
+vi.mock("@/lib/firmas/usuario-firmas", () => ({ leerBytesFirmaGuardada: vi.fn() }));
+vi.mock("@/lib/firmas/imagen-firma", () => ({ sha256Hex: vi.fn(() => "hash") }));
+vi.mock("@/lib/uploads", () => ({ guardarUpload: vi.fn(), borrarUpload: vi.fn() }));
 import { getPool, query } from "@/lib/db";
+import { crearFirmaInterna } from "@/lib/firmas/firmas-internas";
+import { leerBytesFirmaGuardada } from "@/lib/firmas/usuario-firmas";
+import { borrarUpload, guardarUpload } from "@/lib/uploads";
 import {
   CATEGORIAS_GASTO,
   ErrorGasto,
   ESTADOS_GASTO,
+  MENSAJE_FIRMA_REQUERIDA_AUTORIZAR,
   METODOS_PAGO_GASTO,
   actualizarGasto,
   autorizarGasto,
@@ -17,6 +28,8 @@ import {
   rechazarGasto,
   type GastoOperativo,
 } from "./gastos";
+
+const IMAGEN_FIRMA = { bytes: new ArrayBuffer(4), original: "firma.png" };
 
 /**
  * GASTOS-ADMINISTRATIVO-1 (Fase 3) — verifica que un rechazo sea
@@ -145,7 +158,17 @@ function conexion(opts: {
   return conn;
 }
 
-beforeEach(() => vi.resetAllMocks());
+beforeEach(() => {
+  vi.resetAllMocks();
+  // Default seguro: sin firma guardada en "Mi firma" (los tests de
+  // captura de firma la sobreescriben explícitamente) — nunca toca disco real.
+  vi.mocked(leerBytesFirmaGuardada).mockResolvedValue(null);
+  vi.mocked(guardarUpload).mockResolvedValue({ relative: "empresas/7/firmas/firma_x.png", original: "firma.png", size: 15 } as never);
+  vi.mocked(crearFirmaInterna).mockResolvedValue({
+    id: 1, codigoFirma: "SIG-1", fechaHoraServidor: new Date("2026-09-01T10:00:00Z"),
+    hashPayload: "hash", nombreFirmante: "Heber Sitan", rolFirmante: "JefeOperaciones", tieneImagen: true,
+  } as never);
+});
 
 describe("catálogo de categorías", () => {
   it("incluye las categorías originales más las del Excel operativo real (GASTOS-OPERATIVOS-DETALLE-FORMATO-1); 'Otros' siempre al final", () => {
@@ -467,6 +490,76 @@ describe("crearGasto", () => {
       expect(insert[1]).toEqual(expect.arrayContaining([5, "Mario Caal"]));
     });
   });
+
+  /**
+   * GASTOS-ADMINISTRATIVO-1 (Fase 5) — mismo criterio EXACTO que
+   * crearSolicitudFondo en fondos.test.ts: firma BEST-EFFORT del
+   * solicitante/requirente (nunca bloquea la creación por falta de "Mi
+   * firma"), modulo='GASTOS'/entidadTipo='GASTO_OPERATIVO'.
+   */
+  describe("captura de firma del solicitante/requirente (Fase 5, best-effort)", () => {
+    it("guarda el snapshot del SOLICITANTE al crear (nombre real + firma de 'Mi firma')", async () => {
+      const conn = conexion({ usuarioNombre: "Mario Caal", usuarioRol: "Operaciones" });
+      vi.mocked(query).mockResolvedValue([filaGasto({ id: 55 })] as never);
+      vi.mocked(leerBytesFirmaGuardada).mockResolvedValue(IMAGEN_FIRMA as never);
+      await crearGasto(7, {
+        fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, solicitanteUsuarioId: 5,
+      });
+      expect(leerBytesFirmaGuardada).toHaveBeenCalledWith(5);
+      expect(crearFirmaInterna).toHaveBeenCalledWith(conn, expect.objectContaining({
+        empresaId: 7, usuarioId: 5, nombreFirmante: "Mario Caal",
+        accion: "SOLICITAR_GASTO", modulo: "GASTOS", entidadTipo: "GASTO_OPERATIVO", entidadId: 55,
+        metodo: "FIRMA_MANUSCRITA", origenFirma: "GUARDADA",
+      }));
+    });
+
+    it("solicitante SIN firma guardada: el gasto se crea igual, sin bloquear ni inventar una firma", async () => {
+      const conn = conexion({ usuarioNombre: "Mario Caal", usuarioRol: "Operaciones" });
+      vi.mocked(query).mockResolvedValue([filaGasto({ id: 55 })] as never);
+      vi.mocked(leerBytesFirmaGuardada).mockResolvedValue(null);
+      await crearGasto(7, {
+        fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, solicitanteUsuarioId: 5,
+      });
+      expect(conn.commit).toHaveBeenCalledOnce();
+      expect(crearFirmaInterna).not.toHaveBeenCalled();
+    });
+
+    it("requirente asociado a un usuario del catálogo: resuelve su nombre real y captura su firma", async () => {
+      conexion({ usuarioNombre: "Ana Gómez", usuarioRol: "Gerencia" });
+      vi.mocked(query).mockResolvedValue([filaGasto({ id: 55 })] as never);
+      vi.mocked(leerBytesFirmaGuardada).mockResolvedValue(IMAGEN_FIRMA as never);
+      await crearGasto(7, {
+        fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, requirenteUsuarioId: 30,
+      });
+      expect(crearFirmaInterna).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        usuarioId: 30, nombreFirmante: "Ana Gómez", accion: "REQUERIR_GASTO", modulo: "GASTOS", entidadTipo: "GASTO_OPERATIVO",
+      }));
+    });
+
+    it("requirente SIN usuario asociado (texto libre): no intenta resolver ni capturar ninguna firma", async () => {
+      const conn = conexion();
+      vi.mocked(query).mockResolvedValue([filaGasto({ id: 55 })] as never);
+      await crearGasto(7, {
+        fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, requirenteNombre: "Juan Pérez (texto libre)",
+      });
+      expect(leerBytesFirmaGuardada).not.toHaveBeenCalled();
+      expect(crearFirmaInterna).not.toHaveBeenCalled();
+      const insert = conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_gastos_operativos"))!;
+      expect(insert[1]).toContain("Juan Pérez (texto libre)");
+    });
+
+    it("si falla la transacción después de guardar las firmas, se compensan (borran) los archivos escritos", async () => {
+      // Falla DESPUÉS de la captura de firmas (que ocurre luego del
+      // INSERT principal), en la auditoría — así el archivo de firma ya
+      // se escribió a disco cuando el rollback ocurre.
+      conexion({ usuarioNombre: "Mario Caal", usuarioRol: "Operaciones", fallaEn: "INSERT INTO auditoria" });
+      vi.mocked(leerBytesFirmaGuardada).mockResolvedValue(IMAGEN_FIRMA as never);
+      await expect(crearGasto(7, {
+        fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, solicitanteUsuarioId: 5,
+      })).rejects.toThrow();
+      expect(borrarUpload).toHaveBeenCalledWith("empresas/7/firmas/firma_x.png");
+    });
+  });
 });
 
 describe("actualizarGasto / desactivarGasto", () => {
@@ -564,16 +657,94 @@ describe("actualizarGasto / desactivarGasto", () => {
       expect(conn.commit).toHaveBeenCalledOnce();
     });
   });
+
+  /**
+   * GASTOS-ADMINISTRATIVO-1 (Fase 5) — mismo criterio EXACTO que
+   * actualizarSolicitudFondo en fondos.test.ts: una nueva firma snapshot
+   * se captura SOLO si el usuario requirente/solicitante REALMENTE
+   * cambió en esta edición (nunca se re-firma en cada edición no
+   * relacionada); best-effort, nunca bloquea.
+   */
+  describe("captura de firma al cambiar requirente/solicitante (Fase 5, best-effort)", () => {
+    it("cambia solicitanteUsuarioId -> captura snapshot SOLICITAR_GASTO si tiene 'Mi firma'", async () => {
+      const conn = conexion({
+        actualRaw: filaGastoRaw({ estado: "Pendiente", solicitante_usuario_id: null }),
+        usuarioNombre: "Mario Caal", usuarioRol: "Operaciones",
+      });
+      vi.mocked(query).mockResolvedValue([filaGasto({ estado: "Pendiente" })] as never);
+      vi.mocked(leerBytesFirmaGuardada).mockResolvedValue(IMAGEN_FIRMA as never);
+      await actualizarGasto(7, 1, { solicitanteUsuarioId: 5 });
+      expect(leerBytesFirmaGuardada).toHaveBeenCalledWith(5);
+      expect(crearFirmaInterna).toHaveBeenCalledWith(conn, expect.objectContaining({
+        empresaId: 7, usuarioId: 5, nombreFirmante: "Mario Caal",
+        accion: "SOLICITAR_GASTO", modulo: "GASTOS", entidadTipo: "GASTO_OPERATIVO", entidadId: 1,
+      }));
+    });
+
+    it("cambia requirenteUsuarioId -> captura snapshot REQUERIR_GASTO si tiene 'Mi firma'", async () => {
+      const conn = conexion({
+        actualRaw: filaGastoRaw({ estado: "Pendiente", requirente_usuario_id: null }),
+        usuarioNombre: "Ana Gómez", usuarioRol: "Gerencia",
+      });
+      vi.mocked(query).mockResolvedValue([filaGasto({ estado: "Pendiente" })] as never);
+      vi.mocked(leerBytesFirmaGuardada).mockResolvedValue(IMAGEN_FIRMA as never);
+      await actualizarGasto(7, 1, { requirenteUsuarioId: 30 });
+      expect(crearFirmaInterna).toHaveBeenCalledWith(conn, expect.objectContaining({
+        usuarioId: 30, nombreFirmante: "Ana Gómez", accion: "REQUERIR_GASTO", modulo: "GASTOS", entidadTipo: "GASTO_OPERATIVO",
+      }));
+    });
+
+    it("mismo solicitanteUsuarioId ya guardado (sin cambio real): NO vuelve a firmar", async () => {
+      conexion({ actualRaw: filaGastoRaw({ estado: "Pendiente", solicitante_usuario_id: 5 }), usuarioNombre: "Mario Caal", usuarioRol: "Operaciones" });
+      vi.mocked(query).mockResolvedValue([filaGasto({ estado: "Pendiente" })] as never);
+      vi.mocked(leerBytesFirmaGuardada).mockResolvedValue(IMAGEN_FIRMA as never);
+      await actualizarGasto(7, 1, { solicitanteUsuarioId: 5 });
+      expect(crearFirmaInterna).not.toHaveBeenCalled();
+    });
+
+    it("edita otro campo sin tocar requirente/solicitante: no dispara ninguna firma", async () => {
+      conexion({ actualRaw: filaGastoRaw({ estado: "Pendiente" }) });
+      vi.mocked(query).mockResolvedValue([filaGasto({ monto: "999.00" })] as never);
+      await actualizarGasto(7, 1, { monto: 999 });
+      expect(leerBytesFirmaGuardada).not.toHaveBeenCalled();
+      expect(crearFirmaInterna).not.toHaveBeenCalled();
+    });
+
+    it("solicitante SIN 'Mi firma': la edición se guarda igual, sin bloquear ni inventar una firma", async () => {
+      const conn = conexion({
+        actualRaw: filaGastoRaw({ estado: "Pendiente", solicitante_usuario_id: null }),
+        usuarioNombre: "Mario Caal", usuarioRol: "Operaciones",
+      });
+      vi.mocked(query).mockResolvedValue([filaGasto({ estado: "Pendiente" })] as never);
+      vi.mocked(leerBytesFirmaGuardada).mockResolvedValue(null);
+      await actualizarGasto(7, 1, { solicitanteUsuarioId: 5 });
+      expect(conn.commit).toHaveBeenCalledOnce();
+      expect(crearFirmaInterna).not.toHaveBeenCalled();
+    });
+
+    it("si falla la transacción después de guardar la firma, se compensa (borra) el archivo escrito", async () => {
+      conexion({
+        actualRaw: filaGastoRaw({ estado: "Pendiente", solicitante_usuario_id: null }),
+        usuarioNombre: "Mario Caal", usuarioRol: "Operaciones",
+        fallaEn: "INSERT INTO auditoria",
+      });
+      vi.mocked(leerBytesFirmaGuardada).mockResolvedValue(IMAGEN_FIRMA as never);
+      await expect(actualizarGasto(7, 1, { solicitanteUsuarioId: 5 })).rejects.toThrow();
+      expect(borrarUpload).toHaveBeenCalledWith("empresas/7/firmas/firma_x.png");
+    });
+  });
 });
 
 /**
- * GASTOS-ADMINISTRATIVO-1 (Fase 2) — autorizarGasto/rechazarGasto: SIN
- * firma todavía (fuera de alcance), FOR UPDATE + máquina de estados
- * propia, prevención de autoautorización, histórico rechazado
- * explícitamente (decisión #3).
+ * GASTOS-ADMINISTRATIVO-1 (Fase 2/Fase 5) — autorizarGasto/rechazarGasto:
+ * FOR UPDATE + máquina de estados propia, prevención de autoautorización,
+ * histórico rechazado explícitamente (decisión #3). Desde la Fase 5,
+ * autorizarGasto exige `opts.firmaImagen` (ver describe "firma real del
+ * autorizante" más abajo) — el `autorizante` compartido de este describe
+ * ya la incluye por defecto.
  */
 describe("autorizarGasto", () => {
-  const autorizante = { usuario: "hsitan", autorizanteUsuarioId: 9, autorizanteNombre: "Heber Sitan" };
+  const autorizante = { usuario: "hsitan", autorizanteUsuarioId: 9, autorizanteNombre: "Heber Sitan", firmaImagen: IMAGEN_FIRMA };
 
   it("devuelve null si el gasto no existe (rollback)", async () => {
     const conn = conexion({ bloqueoRaw: null });
@@ -634,6 +805,61 @@ describe("autorizarGasto", () => {
     const conn = conexion({ bloqueoRaw: filaGastoBloqueo(), empleadoEnEmpresa: false });
     await expect(autorizarGasto(7, 1, { ...autorizante, autorizanteEmpleadoId: 999 })).rejects.toThrow("El autorizante indicado no pertenece a esta empresa.");
     expect(conn.rollback).toHaveBeenCalledOnce();
+  });
+});
+
+/**
+ * GASTOS-ADMINISTRATIVO-1 (Fase 5) — mismo criterio EXACTO que
+ * "cambiarEstadoSolicitudFondo — firma real del autorizante" en
+ * fondos.test.ts: firma obligatoria, snapshot inmutable en
+ * firmas_electronicas, copia física ANTES de abrir la transacción, y
+ * limpieza (borrarUpload) si el commit no llega a completarse.
+ */
+describe("autorizarGasto — firma real del autorizante (Fase 5)", () => {
+  const autorizante = { usuario: "hsitan", autorizanteUsuarioId: 9, autorizanteNombre: "Heber Sitan", firmaImagen: IMAGEN_FIRMA };
+
+  it("autorizante SIN firma (opts.firmaImagen ausente) -> rechaza con el mensaje fijo, sin tocar la base de datos", async () => {
+    const conn = conexion({ bloqueoRaw: filaGastoBloqueo() });
+    await esperarErrorGasto(
+      autorizarGasto(7, 1, { ...autorizante, firmaImagen: null }),
+      MENSAJE_FIRMA_REQUERIDA_AUTORIZAR,
+      400,
+    );
+    expect(conn.beginTransaction).not.toHaveBeenCalled();
+    expect(crearFirmaInterna).not.toHaveBeenCalled();
+  });
+
+  it("autorización guarda un snapshot REAL: crearFirmaInterna recibe la imagen, el nombre real y accion='AUTORIZAR_GASTO'", async () => {
+    const conn = conexion({ bloqueoRaw: filaGastoBloqueo({ estado: "Pendiente" }) });
+    vi.mocked(query).mockResolvedValue([filaGasto({ estado: "Autorizada", autorizante_nombre: "Heber Sitan" })] as never);
+    await autorizarGasto(7, 1, autorizante);
+    expect(crearFirmaInterna).toHaveBeenCalledWith(conn, expect.objectContaining({
+      empresaId: 7, usuarioId: 9, nombreFirmante: "Heber Sitan",
+      accion: "AUTORIZAR_GASTO", modulo: "GASTOS", entidadTipo: "GASTO_OPERATIVO", entidadId: 1,
+      metodo: "FIRMA_MANUSCRITA", origenFirma: "GUARDADA",
+      imagen: expect.objectContaining({ relative: "empresas/7/firmas/firma_x.png" }),
+    }));
+    // La copia física se escribe ANTES de abrir la transacción de negocio.
+    expect(vi.mocked(guardarUpload).mock.invocationCallOrder[0]).toBeLessThan(conn.beginTransaction.mock.invocationCallOrder[0]);
+  });
+
+  it("si falla la transacción después de guardar la imagen, se compensa (borra) el archivo — nunca queda huérfano", async () => {
+    conexion({ bloqueoRaw: filaGastoBloqueo({ estado: "Pendiente" }), fallaEn: "UPDATE tms_gastos_operativos" });
+    await expect(autorizarGasto(7, 1, autorizante)).rejects.toThrow();
+    expect(borrarUpload).toHaveBeenCalledWith("empresas/7/firmas/firma_x.png");
+  });
+
+  it("commit exitoso NUNCA borra el archivo de la firma recién guardada", async () => {
+    conexion({ bloqueoRaw: filaGastoBloqueo({ estado: "Pendiente" }) });
+    vi.mocked(query).mockResolvedValue([filaGasto({ estado: "Autorizada" })] as never);
+    await autorizarGasto(7, 1, autorizante);
+    expect(borrarUpload).not.toHaveBeenCalled();
+  });
+
+  it("si el gasto no existe, también compensa (borra) el archivo ya escrito — nunca queda huérfano", async () => {
+    conexion({ bloqueoRaw: null });
+    await autorizarGasto(7, 999, autorizante);
+    expect(borrarUpload).toHaveBeenCalledWith("empresas/7/firmas/firma_x.png");
   });
 });
 
