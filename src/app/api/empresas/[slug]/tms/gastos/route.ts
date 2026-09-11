@@ -47,6 +47,19 @@ const schema = z.object({
   numeroCuentaPago: z.string().max(80).nullable().optional(),
   tieneFactura: z.boolean().optional(),
   observaciones: z.string().max(300).nullable().optional(),
+  /**
+   * GASTOS-ADMINISTRATIVO-1 (Fase 3) — TODOS opcionales, mismo criterio
+   * que crearGasto (Fase 2): la UI actual (Fase 4, todavía no
+   * implementada) no los envía, así que "Crear gasto" sigue funcionando
+   * igual sin ellos. `estado`/`autorizante*` NO están aquí a propósito —
+   * nunca se aceptan en creación/edición, solo los escriben
+   * autorizarGasto/rechazarGasto vía sus propios endpoints.
+   */
+  entidadRequirenteId: z.number().int().positive().optional(),
+  requirenteEmpleadoId: z.number().int().positive().nullable().optional(),
+  requirenteNombre: z.string().max(200).nullable().optional(),
+  requirenteUsuarioId: z.number().int().positive().nullable().optional(),
+  solicitanteUsuarioId: z.number().int().positive().nullable().optional(),
 });
 
 export async function POST(req: Request, ctx: Ctx) {

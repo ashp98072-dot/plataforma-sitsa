@@ -4,6 +4,7 @@ vi.mock("@/lib/db", () => ({ getPool: vi.fn(), query: vi.fn(), execute: vi.fn() 
 import { getPool, query } from "@/lib/db";
 import {
   CATEGORIAS_GASTO,
+  ErrorGasto,
   ESTADOS_GASTO,
   METODOS_PAGO_GASTO,
   actualizarGasto,
@@ -16,6 +17,23 @@ import {
   rechazarGasto,
   type GastoOperativo,
 } from "./gastos";
+
+/**
+ * GASTOS-ADMINISTRATIVO-1 (Fase 3) — verifica que un rechazo sea
+ * EXACTAMENTE un `ErrorGasto` con el status HTTP esperado (nunca se
+ * clasifica por texto del mensaje en la API, ver route.ts de autorizar/
+ * rechazar) además del mensaje.
+ */
+async function esperarErrorGasto(promesa: Promise<unknown>, mensaje: string, status: number) {
+  await promesa.then(
+    () => { throw new Error("Se esperaba que la promesa rechazara."); },
+    (error: unknown) => {
+      expect(error).toBeInstanceOf(ErrorGasto);
+      expect((error as ErrorGasto).message).toBe(mensaje);
+      expect((error as ErrorGasto).status).toBe(status);
+    },
+  );
+}
 
 function filaGasto(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -563,16 +581,16 @@ describe("autorizarGasto", () => {
     expect(conn.rollback).toHaveBeenCalledOnce();
   });
 
-  it("histórico (estado NULL): rechaza con mensaje claro, nunca lo convierte a Pendiente (decisión #3)", async () => {
+  it("histórico (estado NULL): rechaza con ErrorGasto 409 y mensaje claro, nunca lo convierte a Pendiente (decisión #3)", async () => {
     const conn = conexion({ bloqueoRaw: filaGastoBloqueo({ estado: null }) });
-    await expect(autorizarGasto(7, 1, autorizante)).rejects.toThrow("Este gasto es histórico y no tiene flujo de autorización.");
+    await esperarErrorGasto(autorizarGasto(7, 1, autorizante), "Este gasto es histórico y no tiene flujo de autorización.", 409);
     expect(conn.rollback).toHaveBeenCalledOnce();
     expect(conn.execute.mock.calls.some((c) => String(c[0]).includes("UPDATE"))).toBe(false);
   });
 
-  it.each(["Autorizada", "Rechazada"] as const)("no permite pasar de %s a Autorizada (transición inválida)", async (estadoActual) => {
+  it.each(["Autorizada", "Rechazada"] as const)("no permite pasar de %s a Autorizada (transición inválida) — ErrorGasto 409", async (estadoActual) => {
     const conn = conexion({ bloqueoRaw: filaGastoBloqueo({ estado: estadoActual }) });
-    await expect(autorizarGasto(7, 1, autorizante)).rejects.toThrow(`No se puede pasar de "${estadoActual}" a "Autorizada".`);
+    await esperarErrorGasto(autorizarGasto(7, 1, autorizante), `No se puede pasar de "${estadoActual}" a "Autorizada".`, 409);
     expect(conn.rollback).toHaveBeenCalledOnce();
   });
 
@@ -588,20 +606,20 @@ describe("autorizarGasto", () => {
   });
 
   describe("prevención de autoautorización (decisión #4, mismo criterio que Fondos)", () => {
-    it("rechaza si el autorizante es el requirente de ese gasto", async () => {
+    it("rechaza si el autorizante es el requirente de ese gasto — ErrorGasto 403", async () => {
       const conn = conexion({ bloqueoRaw: filaGastoBloqueo({ requirente_usuario_id: 9 }) });
-      await expect(autorizarGasto(7, 1, autorizante)).rejects.toThrow("No puede autorizar su propio gasto.");
+      await esperarErrorGasto(autorizarGasto(7, 1, autorizante), "No puede autorizar su propio gasto.", 403);
       expect(conn.rollback).toHaveBeenCalledOnce();
     });
 
-    it("rechaza si el autorizante es el solicitante de ese gasto", async () => {
+    it("rechaza si el autorizante es el solicitante de ese gasto — ErrorGasto 403", async () => {
       conexion({ bloqueoRaw: filaGastoBloqueo({ solicitante_usuario_id: 9 }) });
-      await expect(autorizarGasto(7, 1, autorizante)).rejects.toThrow("No puede autorizar su propio gasto.");
+      await esperarErrorGasto(autorizarGasto(7, 1, autorizante), "No puede autorizar su propio gasto.", 403);
     });
 
-    it("rechaza si el autorizante (por username) es quien creó el registro", async () => {
+    it("rechaza si el autorizante (por username) es quien creó el registro — ErrorGasto 403", async () => {
       conexion({ bloqueoRaw: filaGastoBloqueo({ creado_por: "hsitan" }) });
-      await expect(autorizarGasto(7, 1, autorizante)).rejects.toThrow("No puede autorizar su propio gasto.");
+      await esperarErrorGasto(autorizarGasto(7, 1, autorizante), "No puede autorizar su propio gasto.", 403);
     });
 
     it("permite autorizar cuando el autorizante NO tiene ninguna relación con el gasto", async () => {
@@ -631,15 +649,15 @@ describe("rechazarGasto", () => {
     expect(conn.rollback).toHaveBeenCalledOnce();
   });
 
-  it("histórico (estado NULL): rechaza con mensaje claro (decisión #3)", async () => {
+  it("histórico (estado NULL): rechaza con ErrorGasto 409 y mensaje claro (decisión #3)", async () => {
     const conn = conexion({ bloqueoRaw: filaGastoBloqueo({ estado: null }) });
-    await expect(rechazarGasto(7, 1, { motivoRechazo: "x" })).rejects.toThrow("Este gasto es histórico y no tiene flujo de autorización.");
+    await esperarErrorGasto(rechazarGasto(7, 1, { motivoRechazo: "x" }), "Este gasto es histórico y no tiene flujo de autorización.", 409);
     expect(conn.rollback).toHaveBeenCalledOnce();
   });
 
-  it.each(["Autorizada", "Rechazada"] as const)("no permite pasar de %s a Rechazada (transición inválida)", async (estadoActual) => {
+  it.each(["Autorizada", "Rechazada"] as const)("no permite pasar de %s a Rechazada (transición inválida) — ErrorGasto 409", async (estadoActual) => {
     conexion({ bloqueoRaw: filaGastoBloqueo({ estado: estadoActual }) });
-    await expect(rechazarGasto(7, 1, { motivoRechazo: "x" })).rejects.toThrow(`No se puede pasar de "${estadoActual}" a "Rechazada".`);
+    await esperarErrorGasto(rechazarGasto(7, 1, { motivoRechazo: "x" }), `No se puede pasar de "${estadoActual}" a "Rechazada".`, 409);
   });
 
   it("rechaza un Pendiente y escribe estado/motivo/rechazado_en — sin exigir firma ni chequear autoautorización", async () => {

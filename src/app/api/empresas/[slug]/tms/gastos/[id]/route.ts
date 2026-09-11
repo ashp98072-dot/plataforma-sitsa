@@ -30,6 +30,12 @@ const schema = z.object({
   tieneFactura: z.boolean().optional(),
   observaciones: z.string().max(300).nullable().optional(),
   activo: z.boolean().optional(),
+  /** GASTOS-ADMINISTRATIVO-1 (Fase 3) — ver POST de creación (gastos/route.ts). */
+  entidadRequirenteId: z.number().int().positive().optional(),
+  requirenteEmpleadoId: z.number().int().positive().nullable().optional(),
+  requirenteNombre: z.string().max(200).nullable().optional(),
+  requirenteUsuarioId: z.number().int().positive().nullable().optional(),
+  solicitanteUsuarioId: z.number().int().positive().nullable().optional(),
 });
 
 export async function PATCH(req: Request, ctx: Ctx) {
