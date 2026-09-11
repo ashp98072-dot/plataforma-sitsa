@@ -59,6 +59,24 @@ async function validarEmpleadoDeEmpresaTx(
   if (!rows[0]) throw new Error(`El ${etiqueta} indicado no pertenece a esta empresa.`);
 }
 
+const CODIGOS_ENTIDAD_REQUIRIENTE = ["KT", "MONACO"] as const;
+
+async function resolverEntidadRequirenteTx(
+  conn: PoolConnection,
+  empresaId: number,
+  entidadId: number,
+): Promise<{ id: number; nombre: string }> {
+  const rows = await queryConn<RowDataPacket[]>(conn,
+    `SELECT id, nombre
+     FROM cont_entidades
+     WHERE id = ? AND empresa_id = ? AND activa = 1 AND codigo IN (?, ?)
+     LIMIT 1`,
+    [entidadId, empresaId, ...CODIGOS_ENTIDAD_REQUIRIENTE],
+  );
+  if (!rows[0]) throw new Error("La empresa requirente no es válida, no está activa o no pertenece a esta empresa.");
+  return { id: Number(rows[0].id), nombre: String(rows[0].nombre) };
+}
+
 /**
  * SOLICITUD-FONDOS-PDF-AUTORIZADO-1 — `usuarios` es GLOBAL (sin
  * empresa_id, ver usuario_firmas/MI-FIRMA-1), así que "pertenece a esta
@@ -255,6 +273,8 @@ export type SolicitudFondo = {
   id: number;
   empresaId: number;
   codigo: string;
+  entidadRequirenteId?: number | null;
+  entidadRequirenteNombre?: string | null;
   requirenteEmpleadoId: number | null;
   requirenteNombre: string | null;
   /** SOLICITUD-FONDOS-PDF-AUTORIZADO-1 — usuarios.id del requirente SOLO cuando se seleccionó del catálogo (ver §3 del ticket); su firma histórica vive en firmas_electronicas (accion='REQUERIR_FONDO'). */
@@ -307,6 +327,8 @@ function mapSolicitud(r: RowDataPacket): Omit<SolicitudFondo, "lineas"> {
     id: Number(r.id),
     empresaId: Number(r.empresa_id),
     codigo: String(r.codigo),
+    entidadRequirenteId: r.entidad_requirente_id != null ? Number(r.entidad_requirente_id) : null,
+    entidadRequirenteNombre: r.entidad_requirente_nombre != null ? String(r.entidad_requirente_nombre) : null,
     requirenteEmpleadoId: r.requirente_empleado_id != null ? Number(r.requirente_empleado_id) : null,
     requirenteNombre: r.requirente_nombre != null ? String(r.requirente_nombre) : null,
     requirenteUsuarioId: r.requirente_usuario_id != null ? Number(r.requirente_usuario_id) : null,
@@ -329,7 +351,7 @@ function mapSolicitud(r: RowDataPacket): Omit<SolicitudFondo, "lineas"> {
 }
 
 const SELECT_SOLICITUD = `
-  SELECT s.id, s.empresa_id, s.codigo, s.requirente_empleado_id,
+  SELECT s.id, s.empresa_id, s.codigo, s.entidad_requirente_id, s.entidad_requirente_nombre, s.requirente_empleado_id,
          COALESCE(s.requirente_nombre, req.nombre) AS requirente_nombre,
          s.requirente_usuario_id,
          DATE_FORMAT(s.fecha_requerimiento, '%Y-%m-%d') AS fecha_requerimiento,
@@ -419,6 +441,7 @@ export type LineaFondoInput = {
 };
 
 export type SolicitudFondoInput = {
+  entidadRequirenteId?: number;
   requirenteEmpleadoId?: number | null;
   requirenteNombre?: string | null;
   /**
@@ -477,6 +500,9 @@ export async function crearSolicitudFondo(
   const archivosFirmaEscritos: string[] = [];
   try {
     await conn.beginTransaction();
+    const entidadRequirente = input.entidadRequirenteId == null
+      ? null
+      : await resolverEntidadRequirenteTx(conn, empresaId, input.entidadRequirenteId);
     await validarEmpleadoDeEmpresaTx(conn, empresaId, input.requirenteEmpleadoId, "requirente");
 
     // §3 del ticket — requirente-usuario OPCIONAL: si viene, DEBE
@@ -497,12 +523,14 @@ export async function crearSolicitudFondo(
 
     const r = await executeConn(conn,
       `INSERT INTO tms_solicitudes_fondo
-        (empresa_id, codigo, requirente_empleado_id, requirente_nombre, requirente_usuario_id,
+        (empresa_id, codigo, entidad_requirente_id, entidad_requirente_nombre, requirente_empleado_id, requirente_nombre, requirente_usuario_id,
          fecha_requerimiento, total, observaciones, creado_por, solicitante_usuario_id, solicitante_nombre)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         empresaId,
         "", // se completa abajo con un código estable derivado del id, mismo criterio que clientes.codigo
+        entidadRequirente?.id ?? null,
+        entidadRequirente?.nombre ?? null,
         input.requirenteEmpleadoId ?? null,
         requirenteUsuario ? requirenteUsuario.nombre : (input.requirenteNombre?.trim() || null),
         input.requirenteUsuarioId ?? null,
@@ -590,6 +618,7 @@ export async function crearSolicitudFondo(
 }
 
 export type SolicitudFondoUpdate = {
+  entidadRequirenteId?: number;
   fechaRequerimiento?: string;
   requirenteEmpleadoId?: number | null;
   requirenteNombre?: string | null;
@@ -641,7 +670,7 @@ export async function actualizarSolicitudFondo(
   try {
     await conn.beginTransaction();
     const rows = await queryConn<RowDataPacket[]>(conn,
-      `SELECT id, estado, requirente_empleado_id, requirente_nombre, requirente_usuario_id, solicitante_usuario_id, solicitante_nombre,
+      `SELECT id, estado, entidad_requirente_id, entidad_requirente_nombre, requirente_empleado_id, requirente_nombre, requirente_usuario_id, solicitante_usuario_id, solicitante_nombre,
               DATE_FORMAT(fecha_requerimiento, '%Y-%m-%d') AS fecha_requerimiento, observaciones, total
        FROM tms_solicitudes_fondo WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
       [id, empresaId],
@@ -652,6 +681,9 @@ export async function actualizarSolicitudFondo(
     if (estadoActual !== "Pendiente") {
       throw new Error(`No se puede editar una solicitud en estado "${estadoActual}" — solo mientras está Pendiente.`);
     }
+    const entidadRequirente = input.entidadRequirenteId == null
+      ? null
+      : await resolverEntidadRequirenteTx(conn, empresaId, input.entidadRequirenteId);
     if (input.requirenteEmpleadoId !== undefined) {
       await validarEmpleadoDeEmpresaTx(conn, empresaId, input.requirenteEmpleadoId, "requirente");
     }
@@ -682,9 +714,11 @@ export async function actualizarSolicitudFondo(
       : [];
     await executeConn(conn,
       `UPDATE tms_solicitudes_fondo
-       SET requirente_empleado_id = ?, requirente_nombre = ?, requirente_usuario_id = ?${actualizarSolicitanteSql}, fecha_requerimiento = ?, total = ?, observaciones = ?
+       SET entidad_requirente_id = ?, entidad_requirente_nombre = ?, requirente_empleado_id = ?, requirente_nombre = ?, requirente_usuario_id = ?${actualizarSolicitanteSql}, fecha_requerimiento = ?, total = ?, observaciones = ?
        WHERE id = ? AND empresa_id = ?`,
       [
+        entidadRequirente?.id ?? actual.entidad_requirente_id,
+        entidadRequirente?.nombre ?? actual.entidad_requirente_nombre,
         input.requirenteEmpleadoId !== undefined ? input.requirenteEmpleadoId ?? null : actual.requirente_empleado_id,
         requirenteUsuario
           ? requirenteUsuario.nombre

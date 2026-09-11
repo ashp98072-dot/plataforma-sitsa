@@ -41,7 +41,7 @@ function linea(overrides: Partial<Record<string, unknown>> = {}) {
 
 function solicitud(overrides: Partial<Record<string, unknown>> = {}) {
   return {
-    id: 1, empresaId: 7, codigo: "FONDO-000001", requirenteEmpleadoId: null, requirenteNombre: "Mario Caal", requirenteUsuarioId: null,
+    id: 1, empresaId: 7, codigo: "FONDO-000001", entidadRequirenteId: 10, entidadRequirenteNombre: "Kuiqtrans", requirenteEmpleadoId: null, requirenteNombre: "Mario Caal", requirenteUsuarioId: null,
     fechaRequerimiento: "2026-09-04", total: 200, autorizanteEmpleadoId: null, autorizanteNombre: "Heber Sitan", autorizanteUsuarioId: 9,
     estado: "Autorizada", autorizadoEn: "2026-09-04 10:00:00", rechazadoEn: null, motivoRechazo: null, liquidadoEn: null,
     observaciones: null, creadoPor: "mcaal", solicitanteUsuarioId: 5, solicitanteNombre: "Mario Caal", creadoEn: "2026-09-04 09:00:00",
@@ -472,8 +472,15 @@ describe("generarPdfSolicitudFondoAutorizada — encabezado (§1 del ticket)", (
     expect(titulo?.opciones?.align).toBe("center");
     const textos = llamadas.map((c) => c.texto);
     expect(textos).toContain("FECHA DEL REQUERIMIENTO: 04/09/2026");
-    expect(textos).toContain("EMPRESA REQUIRIENTE: TRANSPORTES SITSA KUIQ TRANS");
+    expect(textos).toContain("EMPRESA REQUIRIENTE: KUIQTRANS");
     expect(textos).toContain("PERSONA QUE REQUIERE: MARIO CAAL");
+  });
+
+  it("histórico sin snapshot conserva el nombre completo neutral del tenant", async () => {
+    vi.mocked(obtenerSolicitudFondo).mockResolvedValue(solicitud({ entidadRequirenteId: null, entidadRequirenteNombre: null }) as never);
+    const spy = espiarTexto();
+    await generarPdfSolicitudFondoAutorizada(7, 1, "Kuiqtrans / Logiservicios Mónaco");
+    expect(spy.mock.calls.map((c) => llamadaTexto(c).texto)).toContain("EMPRESA REQUIRIENTE: KUIQTRANS / LOGISERVICIOS MÓNACO");
   });
 });
 

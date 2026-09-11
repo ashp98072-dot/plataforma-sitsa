@@ -1379,6 +1379,8 @@ CREATE TABLE IF NOT EXISTS tms_solicitudes_fondo (
   id INT AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,
   codigo VARCHAR(40) NOT NULL,
+  entidad_requirente_id INT NULL,
+  entidad_requirente_nombre VARCHAR(200) NULL,
   requirente_empleado_id INT NULL,
   requirente_nombre VARCHAR(200) NULL,
   fecha_requerimiento DATE NOT NULL,
@@ -1399,6 +1401,7 @@ CREATE TABLE IF NOT EXISTS tms_solicitudes_fondo (
   INDEX idx_fondo_estado (empresa_id, estado),
   INDEX idx_fondo_fecha (empresa_id, fecha_requerimiento),
   CONSTRAINT fk_fondo_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
+  CONSTRAINT fk_fondo_entidad_requirente_ambito FOREIGN KEY (empresa_id, entidad_requirente_id) REFERENCES cont_entidades (empresa_id, id) ON DELETE RESTRICT,
   CONSTRAINT fk_fondo_requirente_ambito FOREIGN KEY (empresa_id, requirente_empleado_id) REFERENCES empleados (empresa_id, id) ON DELETE RESTRICT,
   CONSTRAINT fk_fondo_autorizante_ambito FOREIGN KEY (empresa_id, autorizante_empleado_id) REFERENCES empleados (empresa_id, id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -55,6 +55,7 @@ function conexion(opts: {
   cambiarRequirenteUsuarioId?: number | null;
   cambiarSolicitanteUsuarioId?: number | null;
   cambiarCreadoPor?: string | null;
+  entidadRequirenteValida?: boolean;
 } = {}) {
   const empleadoEnEmpresa = opts.empleadoEnEmpresa ?? true;
   const vehiculoEnEmpresa = opts.vehiculoEnEmpresa ?? true;
@@ -63,7 +64,11 @@ function conexion(opts: {
   const usuarioEnEmpresa = opts.usuarioEnEmpresa ?? true;
   const conn = {
     beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn(),
-    query: vi.fn(async (sql: string) => {
+    query: vi.fn(async (sql: string, _params?: unknown[]) => {
+      void _params;
+      if (sql.includes("FROM cont_entidades")) {
+        return [opts.entidadRequirenteValida === false ? [] : [{ id: 10, nombre: "Kuiqtrans" }]];
+      }
       if (sql.includes("FROM tms_solicitudes_fondo WHERE id")) {
         return [[{
           id: 1, estado: opts.estadoActual ?? "Pendiente",
@@ -174,6 +179,27 @@ describe("listarSolicitudesFondo — filtro Requirente", () => {
 });
 
 describe("crearSolicitudFondo", () => {
+  it("valida la entidad requirente por empresa, activa y código permitido, y guarda nombre resuelto", async () => {
+    const conn = conexion();
+    vi.mocked(query).mockResolvedValue([filaSolicitud({ entidad_requirente_id: 10, entidad_requirente_nombre: "Kuiqtrans" })] as never);
+    await crearSolicitudFondo(7, {
+      entidadRequirenteId: 10, fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      lineas: [{ categoria: "Combustible", monto: 100 }],
+    });
+    const consulta = conn.query.mock.calls.find((c) => String(c[0]).includes("FROM cont_entidades"));
+    expect(String(consulta?.[0])).toContain("empresa_id = ? AND activa = 1 AND codigo IN (?, ?)");
+    expect(consulta?.[1]).toEqual([10, 7, "KT", "MONACO"]);
+    const insert = conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_solicitudes_fondo"));
+    expect(insert?.[1]).toEqual(expect.arrayContaining([10, "Kuiqtrans"]));
+  });
+
+  it("rechaza una entidad requirente ajena, inactiva o con código no permitido", async () => {
+    conexion({ entidadRequirenteValida: false });
+    await expect(crearSolicitudFondo(7, {
+      entidadRequirenteId: 99, fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      lineas: [{ categoria: "Combustible", monto: 100 }],
+    })).rejects.toThrow("empresa requirente no es válida");
+  });
   it("rechaza sin líneas", async () => {
     conexion();
     await expect(crearSolicitudFondo(7, {
@@ -696,7 +722,7 @@ describe("actualizarSolicitudFondo", () => {
       ],
     }, "admin");
     const updateHeader = conn.execute.mock.calls.find((c) => (c[0] as string).includes("UPDATE tms_solicitudes_fondo"))!;
-    expect(updateHeader[1]).toEqual([null, "Maria Lopez", null, "2026-09-05", 600, "Actualizada", 1, 7]);
+    expect(updateHeader[1]).toEqual([undefined, undefined, null, "Maria Lopez", null, "2026-09-05", 600, "Actualizada", 1, 7]);
     const deleteLineas = conn.execute.mock.calls.find((c) => (c[0] as string).includes("DELETE FROM tms_solicitud_fondo_lineas"));
     expect(deleteLineas?.[1]).toEqual([7, 1]);
     const insertsLinea = conn.execute.mock.calls.filter((c) => (c[0] as string).includes("INSERT INTO tms_solicitud_fondo_lineas"));
@@ -710,7 +736,7 @@ describe("actualizarSolicitudFondo", () => {
     // Solo se envían las líneas — ningún campo de encabezado.
     await actualizarSolicitudFondo(7, 1, { lineas: [{ categoria: "Combustible", monto: 100 }] });
     const updateHeader = conn.execute.mock.calls.find((c) => (c[0] as string).includes("UPDATE tms_solicitudes_fondo"))!;
-    expect(updateHeader[1]).toEqual([9, "Nombre Original", null, "2026-08-20", 100, "Nota original", 1, 7]);
+    expect(updateHeader[1]).toEqual([undefined, undefined, 9, "Nombre Original", null, "2026-08-20", 100, "Nota original", 1, 7]);
   });
 
   it("sin lineas en el input: NO se tocan las líneas existentes ni el total", async () => {
@@ -720,7 +746,7 @@ describe("actualizarSolicitudFondo", () => {
     expect(conn.execute.mock.calls.some((c) => (c[0] as string).includes("DELETE FROM tms_solicitud_fondo_lineas"))).toBe(false);
     expect(conn.execute.mock.calls.some((c) => (c[0] as string).includes("INSERT INTO tms_solicitud_fondo_lineas"))).toBe(false);
     const updateHeader = conn.execute.mock.calls.find((c) => (c[0] as string).includes("UPDATE tms_solicitudes_fondo"))!;
-    expect((updateHeader[1] as unknown[])?.[4]).toBe(500); // total sin cambios (releído de la fila actual)
+    expect((updateHeader[1] as unknown[])?.[6]).toBe(500); // total sin cambios (releído de la fila actual)
   });
 
   it.each(["Autorizada", "Rechazada", "Liquidada"] as const)(
