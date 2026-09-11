@@ -95,6 +95,17 @@ export async function tablaAPdf(opts: {
   layout?: "portrait" | "landscape" | "auto";
   /** Forzar fichas (recomendado en reportes anchos). */
   modo?: "auto" | "tabla" | "fichas";
+  /**
+   * REPORTES-GASTOS-FONDOS-PDF-PRESENTACION-1 — mismos parámetros opt-in
+   * que ya soporta dibujarTablaEnDoc (peso explícito por columna, evita
+   * que un encabezado corto como "Cant." quede tan angosto que se
+   * trunque). Solo aplican en `modo: "tabla"` (pdfFichas no los usa);
+   * ignorados sin efecto en cualquier caller que no los pase.
+   */
+  weight?: Partial<Record<number, number>>;
+  align?: Partial<Record<number, "left" | "center" | "right">>;
+  preserveSingleLine?: number[];
+  maxLines?: number;
 }): Promise<Buffer> {
   const headers = opts.headers.map((h) => String(h ?? ""));
   const rows = opts.rows.map((r) =>
@@ -308,6 +319,10 @@ async function pdfTabla(opts: {
   headers: string[];
   rows: string[][];
   layout?: "portrait" | "landscape" | "auto";
+  weight?: Partial<Record<number, number>>;
+  align?: Partial<Record<number, "left" | "center" | "right">>;
+  preserveSingleLine?: number[];
+  maxLines?: number;
 }): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const cols = opts.headers.length;
@@ -335,7 +350,14 @@ async function pdfTabla(opts: {
 
     dibujarTitulo(doc, opts.title, opts.subtitle, pageWidth);
     doc.y += 4;
-    dibujarTablaEnDoc(doc, { headers: opts.headers, rows: opts.rows });
+    dibujarTablaEnDoc(doc, {
+      headers: opts.headers,
+      rows: opts.rows,
+      weight: opts.weight,
+      align: opts.align,
+      preserveSingleLine: opts.preserveSingleLine,
+      maxLines: opts.maxLines,
+    });
 
     piePaginas(doc, opts.rows.length, marginL, marginB, pageWidth);
     doc.end();

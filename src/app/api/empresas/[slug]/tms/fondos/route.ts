@@ -12,10 +12,15 @@ export async function GET(req: Request, ctx: Ctx) {
   if (guard.error) return guard.error;
   const p = new URL(req.url).searchParams;
   const estado = p.get("estado");
+  const requirenteUsuarioId = Number(p.get("requirenteUsuarioId"));
   const solicitudes = await listarSolicitudesFondo(guard.empresa.id, {
     estado: estado && (ESTADOS_FONDO as readonly string[]).includes(estado) ? (estado as (typeof ESTADOS_FONDO)[number]) : undefined,
     fechaDesde: p.get("fechaDesde") || undefined,
     fechaHasta: p.get("fechaHasta") || undefined,
+    // REPORTES-FONDOS-PDF-TABULAR-1 — mismo filtro que ya usan las
+    // exportaciones (ver filtrosReporteGastosDesdeUrl), ahora también en
+    // el listado en pantalla.
+    requirenteUsuarioId: Number.isInteger(requirenteUsuarioId) && requirenteUsuarioId > 0 ? requirenteUsuarioId : undefined,
   });
   return NextResponse.json(
     { solicitudes, estados: ESTADOS_FONDO },

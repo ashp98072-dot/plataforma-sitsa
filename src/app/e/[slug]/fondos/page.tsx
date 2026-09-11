@@ -268,7 +268,7 @@ export default function FondosPage() {
 
   const filtroMensual = Boolean(fMes && fAnio);
   const filtros = { fechaDesde: fFechaDesde, fechaHasta: fFechaHasta, mes: fMes, anio: fAnio, estado: fEstado, requirenteUsuarioId: fRequirenteId };
-  const exportarUrl = (formato?: "pdf") => `/api/empresas/${slug}/tms/reportes/gastos/exportar?${paramsExportarFondos(filtros, formato).toString()}`;
+  const exportarUrl = (formato?: "pdf", variante?: "tabular") => `/api/empresas/${slug}/tms/reportes/gastos/exportar?${paramsExportarFondos(filtros, formato, variante).toString()}`;
   const solicitudesFiltradas = fRequirenteId ? solicitudes.filter((s) => String(s.requirenteUsuarioId ?? "") === fRequirenteId) : solicitudes;
   const limpiarFiltros = () => { setFFechaDesde(""); setFFechaHasta(""); setFMes(""); setFAnio(""); setFEstado(""); setFRequirenteId(""); };
 
@@ -297,6 +297,14 @@ export default function FondosPage() {
         </div>
         <div className="flex flex-wrap gap-2">
           <a href={exportarUrl()} className="rounded bg-[var(--accent)] px-3 py-2 text-sm text-white">{filtroMensual ? "Exportar Excel mensual" : "Exportar Excel"}</a>
+          {/*
+            REPORTES-FONDOS-PDF-TABULAR-1 — reporte PDF tabular, equivalente
+            a "Exportar PDF" en Gastos: respeta el filtro actual (rango o
+            Mes/Año, Estado, Requirente) SIN exigir mes completo. Distinto
+            del botón de abajo (mensual consolidado con firmas), que se deja
+            intacto con su misma restricción.
+          */}
+          <a href={exportarUrl("pdf", "tabular")} className="rounded border border-[var(--border)] px-3 py-2 text-sm">Exportar PDF</a>
           {filtroMensual ? <a href={exportarUrl("pdf")} className="rounded border border-[var(--border)] px-3 py-2 text-sm">Descargar PDF mensual consolidado</a> : <span className="cursor-not-allowed rounded border border-[var(--border)] px-3 py-2 text-sm text-[var(--muted)] opacity-50" title="Selecciona Mes y Año para generar el PDF mensual consolidado.">Descargar PDF mensual consolidado</span>}
           <button type="button" onClick={limpiarFiltros} className="rounded border border-[var(--border)] px-3 py-2 text-sm">Limpiar filtros</button>
         </div>
