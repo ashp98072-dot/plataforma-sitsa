@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/tenant", () => ({ requireTenantGastos: vi.fn() }));
-vi.mock("@/lib/tms/gastos", () => ({ CATEGORIAS_GASTO: ["Combustible", "Otros"] }));
+vi.mock("@/lib/tms/gastos", () => ({
+  CATEGORIAS_GASTO: ["Combustible", "Otros"],
+  // FONDOS-GASTOS-METODO-PAGO-1 — la ruta hace z.enum(METODOS_PAGO_GASTO) al cargar el módulo; sin este mock, undefined revienta el schema.
+  METODOS_PAGO_GASTO: ["Efectivo", "Transferencia", "Transferencia móvil", "Tarjeta", "Cheque", "Otro"],
+}));
 vi.mock("@/lib/tms/fondos", () => ({
   ESTADOS_FONDO: ["Pendiente", "Autorizada", "Rechazada", "Liquidada"],
   crearSolicitudFondo: vi.fn(),
@@ -9,8 +13,8 @@ vi.mock("@/lib/tms/fondos", () => ({
 }));
 
 import { requireTenantGastos } from "@/lib/tenant";
-import { listarSolicitudesFondo } from "@/lib/tms/fondos";
-import { GET } from "./route";
+import { crearSolicitudFondo, listarSolicitudesFondo } from "@/lib/tms/fondos";
+import { GET, POST } from "./route";
 
 const ctx = { params: Promise.resolve({ slug: "prueba" }) };
 
@@ -55,5 +59,38 @@ describe("GET /tms/fondos — filtro Requirente", () => {
     const res = await GET(new Request("http://localhost/x"), ctx);
     expect(res.status).toBe(403);
     expect(listarSolicitudesFondo).not.toHaveBeenCalled();
+  });
+});
+
+function postReq(body: Record<string, unknown>) {
+  return new Request("http://localhost/x", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+const lineaBase = { categoria: "Combustible", monto: 100 };
+const bodyBase = { solicitanteUsuarioId: 9, fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan" };
+
+/** FONDOS-GASTOS-METODO-PAGO-1 — el schema acepta/rechaza metodoPago por línea con el mismo catálogo que Gastos. */
+describe("POST /tms/fondos — schema de metodoPago por línea", () => {
+  it("acepta un método del catálogo existente", async () => {
+    vi.mocked(crearSolicitudFondo).mockResolvedValue({ id: 1 } as never);
+    const res = await POST(postReq({ ...bodyBase, lineas: [{ ...lineaBase, metodoPago: "Transferencia móvil" }] }), ctx);
+    expect(res.status).toBe(200);
+    expect(crearSolicitudFondo).toHaveBeenCalled();
+  });
+
+  it("acepta metodoPago ausente/null (comportamiento tradicional, sin romper históricos)", async () => {
+    vi.mocked(crearSolicitudFondo).mockResolvedValue({ id: 1 } as never);
+    const res = await POST(postReq({ ...bodyBase, lineas: [{ ...lineaBase }] }), ctx);
+    expect(res.status).toBe(200);
+  });
+
+  it("rechaza un método fuera del catálogo, sin llegar a crearSolicitudFondo", async () => {
+    const res = await POST(postReq({ ...bodyBase, lineas: [{ ...lineaBase, metodoPago: "Bitcoin" }] }), ctx);
+    expect(res.status).toBe(400);
+    expect(crearSolicitudFondo).not.toHaveBeenCalled();
   });
 });

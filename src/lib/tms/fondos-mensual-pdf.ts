@@ -37,8 +37,10 @@ import type { ResumenMensualFondos, SolicitudFondoAgrupada } from "@/lib/tms/rep
  */
 
 // Mismas 10 columnas / anchos / reglas que el PDF individual
-// (FONDOS-PDF-LANDSCAPE-ANCHOS-1).
-const HEADERS_LINEAS = ["Fecha de solicitud", "Fecha de viaje", "Nombre", "Cuenta", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Valor"];
+// (FONDOS-PDF-LANDSCAPE-ANCHOS-1). FONDOS-GASTOS-METODO-PAGO-1 —
+// "Cuenta / Número" fijo, mismo criterio que fondos-solicitud-pdf.ts:
+// cada bloque de solicitud puede tener líneas con distintos métodos.
+const HEADERS_LINEAS = ["Fecha de solicitud", "Fecha de viaje", "Nombre", "Cuenta / Número", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Valor"];
 const WEIGHTS_LINEAS = { 0: 76, 1: 62, 2: 95, 3: 80, 4: 78, 5: 48, 6: 92, 7: 44, 8: 92, 9: 61 };
 
 type FirmasSolicitud = {

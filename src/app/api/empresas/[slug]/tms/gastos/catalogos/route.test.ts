@@ -54,6 +54,18 @@ describe("GET catálogos de Gastos/Fondos", () => {
     expect(body.solicitantes).toEqual([{ id: 5, nombre: "Operador Uno" }]);
   });
 
+  /**
+   * FONDOS-GASTOS-METODO-PAGO-1 — Fondos reutiliza este MISMO catálogo
+   * compartido (ya usado para empleados/vehículos/clientes/planes) para
+   * el selector de método de pago, sin duplicar el catálogo de Gastos.
+   */
+  it("incluye el catálogo de métodos de pago (mismo que ya usa Gastos)", async () => {
+    datosCatalogos();
+    const response = await GET(new Request("http://local"), ctx);
+    const body = await response.json();
+    expect(body.metodosPago).toEqual(["Efectivo", "Transferencia", "Transferencia móvil", "Tarjeta", "Cheque", "Otro"]);
+  });
+
   it("incluye cualquier empleado activo de la empresa sin filtrar por puesto o vínculo TMS", async () => {
     datosCatalogos();
     const response = await GET(new Request("http://local"), ctx);

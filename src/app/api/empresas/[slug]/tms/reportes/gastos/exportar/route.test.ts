@@ -129,15 +129,16 @@ describe("GET /tms/reportes/gastos/exportar", () => {
     });
   });
 
-  describe("tipo=gastosDetalle (§2/§4 del ticket)", () => {
+  describe("tipo=gastosDetalle (§2/§4 del ticket; FONDOS-GASTOS-METODO-PAGO-1)", () => {
     const filaGasto = {
       id: 1, fechaSolicitud: "2026-09-01", fechaViaje: "2026-09-02", planId: 2, planCodigo: "PLAN-1",
       empleadoId: 4, empleadoNombre: "Heber Sitan", cargo: "Piloto", vehiculoId: 9, placa: "P111AAA",
       clienteId: 5, clienteNombre: "Cliente A", categoria: "Combustible", descripcion: "Diesel",
-      cantidad: 2, monto: 100, total: 200, activo: true, registradoPor: "admin", observaciones: null,
+      cantidad: 2, monto: 100, total: 200, metodoPago: "Transferencia móvil", numeroCuentaPago: "55551234",
+      activo: true, registradoPor: "admin", observaciones: null,
     };
 
-    it("formato=xlsx reutiliza exportarGastosDetalleExcel (nunca el agregado)", async () => {
+    it("formato=xlsx reutiliza exportarGastosDetalleExcel (nunca el agregado) — sin cambios", async () => {
       vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({ tipo: "gastosDetalle", filas: [filaGasto] } as never);
       const res = await GET(new Request("http://localhost/x?tipo=gastosDetalle"), ctx);
       expect(res.headers.get("Content-Type")).toContain("spreadsheetml");
@@ -145,22 +146,45 @@ describe("GET /tms/reportes/gastos/exportar", () => {
       expect(exportarAgregadoGastosExcel).not.toHaveBeenCalled();
     });
 
-    it("formato=pdf genera PDF de detalle, una fila por gasto (nunca agrupado)", async () => {
+    /**
+     * FONDOS-GASTOS-METODO-PAGO-1 — reemplaza el formato de 12 columnas
+     * (que incluía Código/Categoría/Estado) por las 10 EXACTAS acordadas,
+     * con "Cuenta / Número" como encabezado FIJO (nunca dinámico, porque
+     * el reporte puede mezclar registros con distintos métodos de pago).
+     */
+    it("formato=pdf genera el PDF tabular simplificado (10 columnas), una fila por gasto (nunca agrupado)", async () => {
       vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({ tipo: "gastosDetalle", filas: [filaGasto, { ...filaGasto, id: 2 }] } as never);
       const res = await GET(new Request("http://localhost/x?tipo=gastosDetalle&formato=pdf"), ctx);
       expect(res.headers.get("Content-Type")).toBe("application/pdf");
       const llamada = vi.mocked(tablaAPdf).mock.calls[0][0];
-      // GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — primero las 9 columnas del ticket, luego el resto compacto.
       expect(llamada.headers).toEqual([
-        "Fecha solicitud", "Fecha viaje", "Nombre", "Cargo", "Placa", "Cliente", "Cant.", "Descripción", "Total",
-        "Código", "Categoría", "Estado",
+        "Fecha de solicitud", "Fecha de viaje", "Nombre", "Cuenta / Número", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Valor",
       ]);
       const rows = llamada.rows;
       // 2 filas de datos + 1 fila de total = 3
       expect(rows).toHaveLength(3);
-      expect(rows[rows.length - 1]).toContain("TOTAL GENERAL");
-      // orden de campos de la fila: fecha solicitud primero, cargo/nombre desde el gasto.
-      expect(rows[0].slice(0, 8)).toEqual(["01/09/2026", "02/09/2026", "Heber Sitan", "Piloto", "P111AAA", "Cliente A", "2", "Diesel"]);
+      expect(rows[rows.length - 1]).toContain("TOTAL:");
+      expect(rows[rows.length - 1]).toContain("Q400.00"); // 200 + 200
+      // orden de campos de la fila: fecha solicitud, fecha viaje, nombre, Cuenta/Número (numeroCuentaPago), cargo...
+      expect(rows[0]).toEqual(["01/09/2026", "02/09/2026", "Heber Sitan", "55551234", "Piloto", "P111AAA", "Cliente A", "2", "Diesel", "Q200.00"]);
+    });
+
+    it("el PDF muestra EMPRESA REQUIRIENTE (sin PERSONA QUE REQUIERE — Gastos no tiene ese concepto)", async () => {
+      vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({ tipo: "gastosDetalle", filas: [filaGasto] } as never);
+      await GET(new Request("http://localhost/x?tipo=gastosDetalle&formato=pdf"), ctx);
+      const subtitulo = vi.mocked(tablaAPdf).mock.calls[0][0].subtitle;
+      expect(subtitulo).toContain("EMPRESA REQUIRIENTE: SITSA");
+      expect(subtitulo).not.toContain("PERSONA QUE REQUIERE");
+    });
+
+    it("un registro con Cuenta bancaria normal (no Transferencia móvil) también cae en la misma columna", async () => {
+      vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({
+        tipo: "gastosDetalle",
+        filas: [{ ...filaGasto, metodoPago: "Efectivo", numeroCuentaPago: null }],
+      } as never);
+      await GET(new Request("http://localhost/x?tipo=gastosDetalle&formato=pdf"), ctx);
+      const fila = vi.mocked(tablaAPdf).mock.calls[0][0].rows[0]!;
+      expect(fila[3]).toBe("—"); // sin cuenta/número -> "—", mismo criterio que el resto de columnas opcionales
     });
   });
 
@@ -230,7 +254,7 @@ describe("GET /tms/reportes/gastos/exportar", () => {
       const filaDetalle = {
         lineaId: 1, solicitudId: 10, solicitudCodigo: "FONDO-000010", estadoFondo: "Pendiente",
         fechaSolicitud: "2026-09-05", fechaViaje: "2026-09-06",
-        requirenteNombre: "Wilter Flores", empleadoNombre: "Heber Sitan", cargo: "Piloto",
+        requirenteNombre: "Wilter Flores", empleadoNombre: "Heber Sitan", cargo: "Piloto", cuenta: "1234567890",
         placa: "P111AAA", clienteNombre: "Cliente A", cantidad: 2, descripcion: "Combustible ruta",
         monto: 100, total: 200,
       };
@@ -250,19 +274,26 @@ describe("GET /tms/reportes/gastos/exportar", () => {
         expect(res.status).toBe(200);
       });
 
-      it("las columnas son la vista tabular compacta (código, fechas, estado, requirente, nombre, cargo, placa, cliente, cantidad, descripción, total)", async () => {
+      /**
+       * FONDOS-GASTOS-METODO-PAGO-1 — reemplaza el formato de 12 columnas
+       * (Código/Estado/Requirente) por las 10 EXACTAS acordadas; "Cuenta /
+       * Número" es un encabezado FIJO (nunca dinámico).
+       */
+      it("las columnas son las 10 EXACTAS acordadas (fecha solicitud, fecha viaje, nombre, Cuenta/Número, cargo, placa, cliente, cantidad, descripción, valor)", async () => {
         vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({ tipo: "fondos", filas: [filaDetalle], resumen: {} } as never);
         await GET(new Request("http://localhost/x?tipo=fondos&formato=pdf&variante=tabular"), ctx);
         const llamada = vi.mocked(tablaAPdf).mock.calls[0][0];
-        expect(llamada.headers).toEqual(["Código", "Fecha solicitud", "Fecha viaje", "Estado", "Requirente", "Nombre", "Cargo", "Placa", "Cliente", "Cant.", "Descripción", "Total"]);
+        expect(llamada.headers).toEqual([
+          "Fecha de solicitud", "Fecha de viaje", "Nombre", "Cuenta / Número", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Valor",
+        ]);
         expect(llamada.layout).toBe("landscape");
         expect(llamada.modo).toBe("tabla");
         expect(llamada.weight).toBeDefined();
         const filaDatos = llamada.rows[0]!;
-        expect(filaDatos.slice(0, 9)).toEqual(["FONDO-000010", "05/09/2026", "06/09/2026", "Pendiente", "Wilter Flores", "Heber Sitan", "Piloto", "P111AAA", "Cliente A"]);
+        expect(filaDatos).toEqual(["05/09/2026", "06/09/2026", "Heber Sitan", "1234567890", "Piloto", "P111AAA", "Cliente A", "2", "Combustible ruta", "Q200.00"]);
       });
 
-      it("incluye TOTAL GENERAL con la suma de todas las líneas del filtro (nunca solo Excel)", async () => {
+      it("incluye una fila final TOTAL: con la suma de todas las líneas del filtro (nunca solo Excel)", async () => {
         vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({
           tipo: "fondos",
           filas: [filaDetalle, { ...filaDetalle, lineaId: 2, solicitudId: 11, solicitudCodigo: "FONDO-000011", total: 350 }],
@@ -272,8 +303,44 @@ describe("GET /tms/reportes/gastos/exportar", () => {
         const rows = vi.mocked(tablaAPdf).mock.calls[0][0].rows;
         expect(rows).toHaveLength(3); // 2 líneas + total
         const filaTotal = rows[rows.length - 1]!;
-        expect(filaTotal).toContain("TOTAL GENERAL");
+        expect(filaTotal).toContain("TOTAL:");
         expect(filaTotal).toContain("Q550.00");
+      });
+
+      describe("encabezado EMPRESA REQUIRIENTE / PERSONA QUE REQUIERE", () => {
+        it("muestra el nombre de la empresa y, si todas las filas comparten requirente, su nombre", async () => {
+          vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({
+            tipo: "fondos",
+            filas: [filaDetalle, { ...filaDetalle, lineaId: 2 }], // mismo requirenteNombre
+            resumen: {},
+          } as never);
+          await GET(new Request("http://localhost/x?tipo=fondos&formato=pdf&variante=tabular"), ctx);
+          const subtitulo = vi.mocked(tablaAPdf).mock.calls[0][0].subtitle;
+          expect(subtitulo).toContain("EMPRESA REQUIRIENTE: SITSA");
+          expect(subtitulo).toContain("PERSONA QUE REQUIERE: WILTER FLORES");
+        });
+
+        it("muestra VARIOS REQUIRIENTES cuando las filas filtradas tienen requirentes distintos", async () => {
+          vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({
+            tipo: "fondos",
+            filas: [filaDetalle, { ...filaDetalle, lineaId: 2, requirenteNombre: "Otro Requirente" }],
+            resumen: {},
+          } as never);
+          await GET(new Request("http://localhost/x?tipo=fondos&formato=pdf&variante=tabular"), ctx);
+          const subtitulo = vi.mocked(tablaAPdf).mock.calls[0][0].subtitle;
+          expect(subtitulo).toContain("PERSONA QUE REQUIERE: VARIOS REQUIRIENTES");
+        });
+
+        it("muestra VARIOS REQUIRIENTES cuando ninguna fila tiene requirente (sin inventar un nombre)", async () => {
+          vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({
+            tipo: "fondos",
+            filas: [{ ...filaDetalle, requirenteNombre: null }],
+            resumen: {},
+          } as never);
+          await GET(new Request("http://localhost/x?tipo=fondos&formato=pdf&variante=tabular"), ctx);
+          const subtitulo = vi.mocked(tablaAPdf).mock.calls[0][0].subtitle;
+          expect(subtitulo).toContain("PERSONA QUE REQUIERE: VARIOS REQUIRIENTES");
+        });
       });
 
       it("respeta el filtro Requirente/Estado ya calculado por el mismo reporte (nunca un segundo parseo)", async () => {

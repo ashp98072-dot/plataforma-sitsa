@@ -269,14 +269,15 @@ describe("crearSolicitudFondo — snapshot histórico por línea (empleado/vehí
     const insertsLinea = conn.execute.mock.calls.filter((c) => (c[0] as string).includes("INSERT INTO tms_solicitud_fondo_lineas"));
     expect(insertsLinea).toHaveLength(2);
     // empresa_id, solicitud_id, categoria, descripcion, cantidad, monto, orden,
-    // fecha_viaje, empleado_id, empleado_nombre, cargo, cuenta, vehiculo_id, placa, cliente_id, cliente_nombre, plan_id
+    // fecha_viaje, empleado_id, empleado_nombre, cargo, cuenta, metodo_pago,
+    // vehiculo_id, placa, cliente_id, cliente_nombre, plan_id
     expect(insertsLinea[0][1]).toEqual([
       7, 1, "Combustible", null, 2, 100, 0,
-      "2026-09-02", 4, "Heber Sitan", "Piloto", "1234567890", 9, "P111AAA", 5, "Cliente A", null,
+      "2026-09-02", 4, "Heber Sitan", "Piloto", "1234567890", null, 9, "P111AAA", 5, "Cliente A", null,
     ]);
     expect(insertsLinea[1][1]).toEqual([
       7, 1, "Hospedaje", null, 1, 150, 1,
-      null, null, null, null, null, null, null, null, null, null,
+      null, null, null, null, null, null, null, null, null, null, null,
     ]);
     expect(conn.commit).toHaveBeenCalledOnce();
   });
@@ -368,6 +369,60 @@ describe("crearSolicitudFondo — snapshot histórico por línea (empleado/vehí
     expect(conn.rollback).toHaveBeenCalledOnce();
     expect(conn.commit).not.toHaveBeenCalled();
     expect(conn.execute.mock.calls.some((c) => (c[0] as string).includes("INSERT INTO tms_solicitud_fondo_lineas"))).toBe(false);
+  });
+});
+
+/**
+ * FONDOS-GASTOS-METODO-PAGO-1 — `metodoPago` es POR LÍNEA (mismo
+ * catálogo que Gastos, METODOS_PAGO_GASTO) y NO forma parte del
+ * snapshot de empleado: se guarda tal cual viene, mientras que el
+ * destino de pago (`cuenta`) pasa por normalizarDestinoPago (gastos.ts)
+ * ANTES de insertarse — reutilizando exactamente la misma validación que
+ * ya cubre gastos.test.ts.
+ */
+describe("crearSolicitudFondo — método de pago por línea (FONDOS-GASTOS-METODO-PAGO-1)", () => {
+  it("rechaza Transferencia móvil sin cuenta/override resuelto, con rollback y sin insertar nada", async () => {
+    const conn = conexion({ empleadoCuenta: "" }); // sin cuenta bancaria en el maestro
+    await expect(crearSolicitudFondo(7, {
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      lineas: [{ categoria: "Combustible", monto: 100, empleadoId: 4, metodoPago: "Transferencia móvil" }],
+    })).rejects.toThrow("Ingresa el número");
+    expect(conn.rollback).toHaveBeenCalledOnce();
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(conn.execute.mock.calls.some((c) => (c[0] as string).includes("INSERT INTO tms_solicitud_fondo_lineas"))).toBe(false);
+  });
+
+  it("Transferencia móvil con número override: normaliza (quita espacios/guiones) antes de guardar", async () => {
+    const conn = conexion({ empleadoCuenta: "1234567890" });
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    await crearSolicitudFondo(7, {
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      lineas: [{ categoria: "Combustible", monto: 100, empleadoId: 4, cuentaOverride: "5555-1234", metodoPago: "Transferencia móvil" }],
+    });
+    const insertLinea = conn.execute.mock.calls.find((c) => (c[0] as string).includes("INSERT INTO tms_solicitud_fondo_lineas"))!;
+    expect(insertLinea[1]).toEqual(expect.arrayContaining(["55551234", "Transferencia móvil"]));
+    expect(conn.commit).toHaveBeenCalledOnce();
+  });
+
+  it("otros métodos (o sin método): la cuenta sigue siendo opcional, mismo comportamiento previo", async () => {
+    const conn = conexion();
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    await crearSolicitudFondo(7, {
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      lineas: [{ categoria: "Hospedaje", monto: 100 }], // sin empleado -> sin cuenta -> sin metodoPago tampoco es un problema
+    });
+    expect(conn.commit).toHaveBeenCalledOnce();
+  });
+
+  it("históricos: metodo_pago queda NULL cuando no se envía, sin romper la línea", async () => {
+    const conn = conexion({ empleadoCuenta: "1234567890" });
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    await crearSolicitudFondo(7, {
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      lineas: [{ categoria: "Combustible", monto: 100, empleadoId: 4 }],
+    });
+    const insertLinea = conn.execute.mock.calls.find((c) => (c[0] as string).includes("INSERT INTO tms_solicitud_fondo_lineas"))!;
+    expect(insertLinea[1]).toContain(null); // metodo_pago no enviado -> null (comportamiento "Cuenta" tradicional)
   });
 });
 

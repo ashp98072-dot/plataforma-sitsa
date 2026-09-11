@@ -312,8 +312,15 @@ export default function GastosPage() {
             <label className="text-xs text-[var(--muted)]">Monto (Q)
               <input type="number" min="0.01" step="0.01" className={`${inputCls} mt-0.5 w-full`} value={form.monto} onChange={(e) => setForm((f) => ({ ...f, monto: e.target.value }))} />
             </label>
-            <label className="text-xs text-[var(--muted)]">No. cuenta / referencia de pago
-              <input className={`${inputCls} mt-0.5 w-full`} value={form.numeroCuentaPago} onChange={(e) => setForm((f) => ({ ...f, numeroCuentaPago: e.target.value }))} />
+            {/*
+              FONDOS-GASTOS-METODO-PAGO-1 — etiqueta dinámica: un solo
+              registro a la vez (nunca una tabla multi-fila), así que sí
+              tiene sentido reflejar el método elegido. "Transferencia
+              móvil" guarda el número de teléfono en el MISMO campo
+              (numeroCuentaPago) — nunca un campo separado.
+            */}
+            <label className="text-xs text-[var(--muted)]">{form.metodoPago === "Transferencia móvil" ? "Número" : "Cuenta"}
+              <input className={`${inputCls} mt-0.5 w-full`} placeholder={form.metodoPago === "Transferencia móvil" ? "Número de transferencia móvil" : "No. cuenta / referencia de pago"} value={form.numeroCuentaPago} onChange={(e) => setForm((f) => ({ ...f, numeroCuentaPago: e.target.value }))} />
             </label>
             <label className="mt-4 flex items-center gap-2 text-xs text-[var(--muted)]">
               <input type="checkbox" checked={tieneComprobanteAlmacenado || form.tieneFactura} disabled={tieneComprobanteAlmacenado} onChange={(e) => setForm((f) => ({ ...f, tieneFactura: e.target.checked }))} />

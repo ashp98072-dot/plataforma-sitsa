@@ -361,9 +361,11 @@ export async function reporteViaticosPorViajeEmpleado(
  * no tiene snapshot propio de empleado/vehículo/cliente (a diferencia de
  * tms_solicitud_fondo_lineas) — el JOIN en vivo es la ÚNICA fuente
  * posible, no hay histórico que "reconstruir" (§6 del ticket).
- * `numero_cuenta_pago` (columna propia del gasto, capturada al
- * registrarlo) NO se agrega aquí — el ticket no la pide para este
- * reporte (solo para Viáticos).
+ *
+ * FONDOS-GASTOS-METODO-PAGO-1 — `metodoPago`/`numeroCuentaPago` sí se
+ * agregan aquí: el PDF tabular simplificado de Gastos necesita mostrar la
+ * columna "Cuenta / Número" (mismo criterio que Viáticos), leyendo el
+ * mismo campo que ya usa el CRUD (gastos.ts) — nunca un segundo dato.
  */
 export type FilaGastoDetalle = {
   id: number;
@@ -383,6 +385,8 @@ export type FilaGastoDetalle = {
   cantidad: number;
   monto: number;
   total: number;
+  metodoPago: string | null;
+  numeroCuentaPago: string | null;
   activo: boolean;
   registradoPor: string | null;
   observaciones: string | null;
@@ -418,7 +422,8 @@ export async function reporteGastosDetalle(empresaId: number, f: FiltrosReporteG
             g.empleado_id, emp.nombre AS empleado_nombre, emp.puesto AS cargo,
             g.vehiculo_id, veh.placa,
             g.cliente_id, cli.nombre AS cliente_nombre,
-            g.categoria, g.descripcion, g.cantidad, g.monto, g.activo, g.creado_por, g.observaciones
+            g.categoria, g.descripcion, g.cantidad, g.monto, g.metodo_pago, g.numero_cuenta_pago,
+            g.activo, g.creado_por, g.observaciones
      FROM tms_gastos_operativos g
      LEFT JOIN tms_planes_viaje p ON p.id = g.plan_id AND p.empresa_id = g.empresa_id
      LEFT JOIN empleados emp ON emp.id = g.empleado_id AND emp.empresa_id = g.empresa_id
@@ -449,6 +454,8 @@ export async function reporteGastosDetalle(empresaId: number, f: FiltrosReporteG
       cantidad,
       monto,
       total: cantidad * monto,
+      metodoPago: r.metodo_pago != null ? String(r.metodo_pago) : null,
+      numeroCuentaPago: r.numero_cuenta_pago != null ? String(r.numero_cuenta_pago) : null,
       activo: Number(r.activo ?? 1) === 1,
       registradoPor: r.creado_por != null ? String(r.creado_por) : null,
       observaciones: r.observaciones != null ? String(r.observaciones) : null,

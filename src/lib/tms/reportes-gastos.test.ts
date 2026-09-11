@@ -193,6 +193,7 @@ describe("reporteGastosDetalle", () => {
       empleado_id: 4, empleado_nombre: "Heber Sitan", cargo: "Piloto",
       vehiculo_id: 9, placa: "P111AAA", cliente_id: 5, cliente_nombre: "Cliente A",
       categoria: "Combustible", descripcion: "Diesel", cantidad: "2.00", monto: "100.00",
+      metodo_pago: null, numero_cuenta_pago: null,
       activo: 1, creado_por: "admin", observaciones: null,
       ...overrides,
     };
@@ -206,8 +207,21 @@ describe("reporteGastosDetalle", () => {
       planId: 2, planCodigo: "PLAN-1", empleadoId: 4, empleadoNombre: "Heber Sitan", cargo: "Piloto",
       vehiculoId: 9, placa: "P111AAA", clienteId: 5, clienteNombre: "Cliente A",
       categoria: "Combustible", descripcion: "Diesel", cantidad: 2, monto: 100, total: 200,
+      metodoPago: null, numeroCuentaPago: null,
       activo: true, registradoPor: "admin", observaciones: null,
     });
+  });
+
+  /**
+   * FONDOS-GASTOS-METODO-PAGO-1 — el PDF tabular simplificado necesita
+   * mostrar "Cuenta / Número"; este reporte antes NO exponía estos dos
+   * campos aunque el CRUD (gastos.ts) ya los tuviera.
+   */
+  it("FONDOS-GASTOS-METODO-PAGO-1 — expone metodoPago/numeroCuentaPago (mismo campo que ya usa el CRUD)", async () => {
+    vi.mocked(query).mockResolvedValue([filaCruda({ metodo_pago: "Transferencia móvil", numero_cuenta_pago: "55551234" })] as never);
+    const [f] = await reporteGastosDetalle(7);
+    expect(f.metodoPago).toBe("Transferencia móvil");
+    expect(f.numeroCuentaPago).toBe("55551234");
   });
 
   it("GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — filtra por fecha solicitud y fecha viaje POR SEPARADO (columnas propias, no el COALESCE combinado)", async () => {

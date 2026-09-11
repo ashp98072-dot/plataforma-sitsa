@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireTenantGastos } from "@/lib/tenant";
-import { CATEGORIAS_GASTO } from "@/lib/tms/gastos";
+import { CATEGORIAS_GASTO, METODOS_PAGO_GASTO } from "@/lib/tms/gastos";
 import { ESTADOS_FONDO, crearSolicitudFondo, listarSolicitudesFondo } from "@/lib/tms/fondos";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -45,6 +45,11 @@ const lineaSchema = z.object({
   empleadoNombreOverride: z.string().trim().max(200).nullable().optional(),
   cuentaOverride: z.string().trim().max(100).nullable().optional(),
   cargoOverride: z.string().trim().max(150).nullable().optional(),
+  // FONDOS-GASTOS-METODO-PAGO-1 — mismo catálogo que Gastos, elegido
+  // directamente por línea (no es un override de snapshot). La
+  // validación de "Transferencia móvil" (obligatorio, 8-15 dígitos) vive
+  // en normalizarDestinoPago (gastos.ts), reutilizada por fondos.ts.
+  metodoPago: z.enum(METODOS_PAGO_GASTO).nullable().optional(),
 });
 
 const schema = z.object({
