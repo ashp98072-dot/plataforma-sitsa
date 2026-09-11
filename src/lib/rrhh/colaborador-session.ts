@@ -2,6 +2,12 @@ import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { cache } from "react";
 import { getAuthSecretBytes } from "@/lib/auth-secret";
+import {
+  absoluteExpirySeconds,
+  isSessionLifetimeExpired,
+  nowSeconds,
+  resolveSessionLifetime,
+} from "@/lib/session-lifetime";
 
 /**
  * Cookie DISTINTA de `sitsa_session` (staff). Un mismo navegador puede así
@@ -17,6 +23,14 @@ export type ColaboradorSessionPayload = {
   empresaSlug?: string | null;
   nombre?: string;
   debeCambiarPassword?: boolean;
+  /**
+   * SEGURIDAD-SESION-AUTOREFRESCO (Fase 1) — mismo criterio que
+   * SessionPayload en session.ts: opcionales en el TIPO (para no romper
+   * mocks existentes), siempre poblados en tiempo de ejecución para una
+   * sesión real (ver verifyColaboradorSessionToken).
+   */
+  authAt?: number;
+  lastActivityAt?: number;
 };
 
 // Mismo secreto (AUTH_SECRET) que usa la sesión de staff: es el mismo
@@ -27,16 +41,20 @@ function getSecret(): Uint8Array {
   return getAuthSecretBytes();
 }
 
+/** SEGURIDAD-SESION-AUTOREFRESCO (Fase 1) — mismo criterio que createSessionToken (session.ts): ver ese comentario para el porqué de authAt/lastActivityAt/exp. */
 export async function createColaboradorSessionToken(
   payload: ColaboradorSessionPayload,
 ): Promise<string> {
-  return new SignJWT({ ...payload })
+  const authAt = payload.authAt ?? nowSeconds();
+  const lastActivityAt = payload.lastActivityAt ?? nowSeconds();
+  return new SignJWT({ ...payload, authAt, lastActivityAt })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
-    .setExpirationTime(`${SESSION_HOURS}h`)
+    .setExpirationTime(absoluteExpirySeconds(authAt))
     .sign(getSecret());
 }
 
+/** SEGURIDAD-SESION-AUTOREFRESCO (Fase 1) — mismo criterio que verifySessionToken (session.ts): ver ese comentario para el porqué del chequeo de inactividad además de la firma/exp. */
 export async function verifyColaboradorSessionToken(
   token: string,
 ): Promise<ColaboradorSessionPayload | null> {
@@ -45,12 +63,20 @@ export async function verifyColaboradorSessionToken(
     const empleadoId = Number(payload.empleadoId);
     const empresaId = Number(payload.empresaId);
     if (!empleadoId || !empresaId) return null;
+
+    const lifetime = resolveSessionLifetime(payload);
+    if (!lifetime || isSessionLifetimeExpired(lifetime, nowSeconds())) {
+      return null;
+    }
+
     return {
       empleadoId,
       empresaId,
       empresaSlug: payload.empresaSlug ? String(payload.empresaSlug) : null,
       nombre: payload.nombre ? String(payload.nombre) : undefined,
       debeCambiarPassword: Boolean(payload.debeCambiarPassword),
+      authAt: lifetime.authAt,
+      lastActivityAt: lifetime.lastActivityAt,
     };
   } catch {
     return null;
@@ -67,14 +93,18 @@ async function readColaboradorSession(): Promise<ColaboradorSessionPayload | nul
 /** Deduplica dentro del mismo request RSC (layout + page del portal). */
 export const getColaboradorSession = cache(readColaboradorSession);
 
-export async function setColaboradorSessionCookie(token: string): Promise<void> {
+/** `maxAgeSeconds`: ver el comentario de setSessionCookie en session.ts (mismo criterio). */
+export async function setColaboradorSessionCookie(
+  token: string,
+  maxAgeSeconds: number = SESSION_HOURS * 60 * 60,
+): Promise<void> {
   const jar = await cookies();
   jar.set(COLABORADOR_SESSION_COOKIE, token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     path: "/",
-    maxAge: SESSION_HOURS * 60 * 60,
+    maxAge: maxAgeSeconds,
   });
 }
 

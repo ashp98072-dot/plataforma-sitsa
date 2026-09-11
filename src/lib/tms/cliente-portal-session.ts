@@ -2,6 +2,12 @@ import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { cache } from "react";
 import { getAuthSecretBytes } from "@/lib/auth-secret";
+import {
+  absoluteExpirySeconds,
+  isSessionLifetimeExpired,
+  nowSeconds,
+  resolveSessionLifetime,
+} from "@/lib/session-lifetime";
 
 /**
  * CLIENTE-PORTAL-1 — sesión del Portal del Cliente (empresas externas que
@@ -20,6 +26,14 @@ export type ClientePortalSessionPayload = {
   clienteId: number;
   nombre?: string;
   debeCambiarPassword?: boolean;
+  /**
+   * SEGURIDAD-SESION-AUTOREFRESCO (Fase 1) — mismo criterio que
+   * SessionPayload en session.ts: opcionales en el TIPO (para no romper
+   * mocks existentes), siempre poblados en tiempo de ejecución para una
+   * sesión real (ver verifyClienteSessionToken).
+   */
+  authAt?: number;
+  lastActivityAt?: number;
 };
 
 // Mismo secreto (AUTH_SECRET) que staff/colaborador: es el mismo
@@ -30,16 +44,20 @@ function getSecret(): Uint8Array {
   return getAuthSecretBytes();
 }
 
+/** SEGURIDAD-SESION-AUTOREFRESCO (Fase 1) — mismo criterio que createSessionToken (session.ts): ver ese comentario para el porqué de authAt/lastActivityAt/exp. */
 export async function createClienteSessionToken(
   payload: ClientePortalSessionPayload,
 ): Promise<string> {
-  return new SignJWT({ ...payload })
+  const authAt = payload.authAt ?? nowSeconds();
+  const lastActivityAt = payload.lastActivityAt ?? nowSeconds();
+  return new SignJWT({ ...payload, authAt, lastActivityAt })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
-    .setExpirationTime(`${SESSION_HOURS}h`)
+    .setExpirationTime(absoluteExpirySeconds(authAt))
     .sign(getSecret());
 }
 
+/** SEGURIDAD-SESION-AUTOREFRESCO (Fase 1) — mismo criterio que verifySessionToken (session.ts): ver ese comentario para el porqué del chequeo de inactividad además de la firma/exp. */
 export async function verifyClienteSessionToken(
   token: string,
 ): Promise<ClientePortalSessionPayload | null> {
@@ -52,12 +70,20 @@ export async function verifyClienteSessionToken(
     // los traiga los tres no es una sesión de cliente válida (nunca se
     // "completa" con datos de otra fuente).
     if (!usuarioClienteId || !empresaId || !clienteId) return null;
+
+    const lifetime = resolveSessionLifetime(payload);
+    if (!lifetime || isSessionLifetimeExpired(lifetime, nowSeconds())) {
+      return null;
+    }
+
     return {
       usuarioClienteId,
       empresaId,
       clienteId,
       nombre: payload.nombre ? String(payload.nombre) : undefined,
       debeCambiarPassword: Boolean(payload.debeCambiarPassword),
+      authAt: lifetime.authAt,
+      lastActivityAt: lifetime.lastActivityAt,
     };
   } catch {
     return null;
@@ -74,14 +100,18 @@ async function readClienteSession(): Promise<ClientePortalSessionPayload | null>
 /** Deduplica dentro del mismo request RSC (layout + page del portal del cliente). */
 export const getClienteSession = cache(readClienteSession);
 
-export async function setClienteSessionCookie(token: string): Promise<void> {
+/** `maxAgeSeconds`: ver el comentario de setSessionCookie en session.ts (mismo criterio). */
+export async function setClienteSessionCookie(
+  token: string,
+  maxAgeSeconds: number = SESSION_HOURS * 60 * 60,
+): Promise<void> {
   const jar = await cookies();
   jar.set(CLIENTE_SESSION_COOKIE, token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     path: "/",
-    maxAge: SESSION_HOURS * 60 * 60,
+    maxAge: maxAgeSeconds,
   });
 }
 

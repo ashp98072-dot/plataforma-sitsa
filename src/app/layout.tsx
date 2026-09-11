@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { SessionInactivityGuard } from "@/components/session-inactivity-guard";
 
 export const metadata: Metadata = {
   title: "SITSA Plataforma Corporativa",
@@ -26,7 +27,17 @@ export default function RootLayout({
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeBoot }} />
       </head>
-      <body>{children}</body>
+      <body>
+        {/*
+          SEGURIDAD-SESION-AUTOREFRESCO (Fase 1) — una sola instancia para
+          las 3 sesiones (staff/colaborador/cliente); se autoconfigura
+          según el prefijo de la ruta actual y no hace nada en rutas
+          públicas (login de cualquiera de los 3 dominios, /site) — ver
+          resolverConfiguracionGuard en session-inactivity-guard.tsx.
+        */}
+        <SessionInactivityGuard />
+        {children}
+      </body>
     </html>
   );
 }

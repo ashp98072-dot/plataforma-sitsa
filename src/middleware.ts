@@ -2,6 +2,11 @@ import { NextResponse, type NextRequest } from "next/server";
 import { jwtVerify } from "jose";
 import { homePorRol, slugPorHost } from "@/lib/dominios";
 import { getAuthSecretBytes } from "@/lib/auth-secret";
+import {
+  isSessionLifetimeExpired,
+  nowSeconds,
+  resolveSessionLifetime,
+} from "@/lib/session-lifetime";
 
 const PUBLIC = ["/login", "/site"];
 const COOKIE = "sitsa_session";
@@ -25,12 +30,24 @@ function getSecret(): Uint8Array {
 
 type SessionLite = { rol?: string; empresaSlug?: string | null };
 
+/**
+ * SEGURIDAD-SESION-AUTOREFRESCO (Fase 1) — mismo cálculo de vigencia
+ * EXACTO que session.ts/colaborador-session.ts/cliente-portal-session.ts
+ * (compartido vía session-lifetime.ts, nunca reimplementado aquí): 30 min
+ * de inactividad o 12h absolutas desde `authAt` → sesión inválida, con
+ * compatibilidad para tokens heredados (sin authAt/lastActivityAt
+ * propios, vía `iat`).
+ */
 async function readSession(
   token: string | undefined,
 ): Promise<SessionLite | null> {
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, getSecret());
+    const lifetime = resolveSessionLifetime(payload);
+    if (!lifetime || isSessionLifetimeExpired(lifetime, nowSeconds())) {
+      return null;
+    }
     return {
       rol: payload.rol ? String(payload.rol) : undefined,
       empresaSlug: payload.empresaSlug
@@ -47,7 +64,7 @@ type ColaboradorSessionLite = {
   debeCambiarPassword?: boolean;
 };
 
-/** Igual que readSession pero para la cookie separada del portal de colaborador. */
+/** Igual que readSession pero para la cookie separada del portal de colaborador — mismo cálculo de vigencia compartido (ver comentario de readSession). */
 async function readColaboradorSession(
   token: string | undefined,
 ): Promise<ColaboradorSessionLite | null> {
@@ -56,6 +73,10 @@ async function readColaboradorSession(
     const { payload } = await jwtVerify(token, getSecret());
     const empleadoId = payload.empleadoId ? Number(payload.empleadoId) : undefined;
     if (!empleadoId) return null;
+    const lifetime = resolveSessionLifetime(payload);
+    if (!lifetime || isSessionLifetimeExpired(lifetime, nowSeconds())) {
+      return null;
+    }
     return {
       empleadoId,
       debeCambiarPassword: Boolean(payload.debeCambiarPassword),
@@ -70,7 +91,7 @@ type ClienteSessionLite = {
   debeCambiarPassword?: boolean;
 };
 
-/** Igual que readColaboradorSession pero para la cookie del Portal del Cliente. */
+/** Igual que readColaboradorSession pero para la cookie del Portal del Cliente — mismo cálculo de vigencia compartido (ver comentario de readSession). */
 async function readClienteSessionLite(
   token: string | undefined,
 ): Promise<ClienteSessionLite | null> {
@@ -81,6 +102,10 @@ async function readClienteSessionLite(
       ? Number(payload.usuarioClienteId)
       : undefined;
     if (!usuarioClienteId) return null;
+    const lifetime = resolveSessionLifetime(payload);
+    if (!lifetime || isSessionLifetimeExpired(lifetime, nowSeconds())) {
+      return null;
+    }
     return {
       usuarioClienteId,
       debeCambiarPassword: Boolean(payload.debeCambiarPassword),
