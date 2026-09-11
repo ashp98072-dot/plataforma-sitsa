@@ -10,7 +10,7 @@ type EstadoFirma = { tieneFirma: boolean; actualizadoEn: string | null };
  * MI-FIRMA-1 — "Mi firma": plantilla personal reutilizable, GLOBAL por
  * usuario (no depende de la empresa activa, aunque el endpoint vive bajo
  * /e/[slug]/... por conveniencia de sesión — ver
- * src/lib/firmas/usuario-firmas.ts). Registrar/reemplazar/eliminar
+ * src/lib/firmas/usuario-firmas.ts). Registrar o reemplazar
  * SOLO afecta esta plantilla — nunca toca firmas_electronicas: cada
  * autorización/liquidación que use "mi firma guardada" genera su propia
  * copia física independiente en el servidor.
@@ -21,7 +21,6 @@ export default function MiFirmaPanel({ slug }: { slug: string }) {
   const [tieneTrazo, setTieneTrazo] = useState(false);
   const [reemplazando, setReemplazando] = useState(false);
   const [guardando, setGuardando] = useState(false);
-  const [eliminando, setEliminando] = useState(false);
   const [error, setError] = useState("");
   const [mensaje, setMensaje] = useState("");
   const [sesion, setSesion] = useState(0);
@@ -74,26 +73,6 @@ export default function MiFirmaPanel({ slug }: { slug: string }) {
     }
   }
 
-  async function eliminar() {
-    setEliminando(true);
-    setError("");
-    setMensaje("");
-    try {
-      const res = await fetch(`/api/empresas/${slug}/mi-firma`, { method: "DELETE" });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setError(data.error ?? `No se pudo eliminar tu firma (${res.status}).`);
-        return;
-      }
-      setMensaje("Firma eliminada.");
-      await cargar();
-    } catch {
-      setError("Error de conexión.");
-    } finally {
-      setEliminando(false);
-    }
-  }
-
   if (!estado) {
     return <p className="text-sm text-[var(--muted)]">Cargando…</p>;
   }
@@ -120,7 +99,7 @@ export default function MiFirmaPanel({ slug }: { slug: string }) {
           </p>
           <p className="text-[10px] text-[var(--muted)]">
             {TEXTO_FIRMA_INTERNA} — se usa como plantilla visual al autorizar/liquidar; cada uso genera su propia
-            copia independiente, cambiarla o eliminarla nunca modifica autorizaciones ya firmadas.
+            copia independiente; cambiarla nunca modifica autorizaciones ya firmadas.
           </p>
           <div className="flex gap-2">
             <button
@@ -133,14 +112,6 @@ export default function MiFirmaPanel({ slug }: { slug: string }) {
               className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm text-white"
             >
               Cambiar firma
-            </button>
-            <button
-              type="button"
-              disabled={eliminando}
-              onClick={() => void eliminar()}
-              className="rounded border border-[var(--border)] px-3 py-1.5 text-sm disabled:opacity-50"
-            >
-              {eliminando ? "Eliminando…" : "Eliminar firma"}
             </button>
           </div>
         </>

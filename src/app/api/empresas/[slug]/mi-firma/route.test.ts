@@ -113,23 +113,11 @@ describe("POST /mi-firma", () => {
 });
 
 describe("DELETE /mi-firma", () => {
-  it("8) elimina la firma existente", async () => {
-    vi.mocked(eliminarFirmaUsuario).mockResolvedValue({ ok: true });
+  it("bloquea la eliminación aunque exista una firma", async () => {
     const res = await DELETE(new Request("http://localhost/x"), ctx);
-    expect(res.status).toBe(200);
-    expect(eliminarFirmaUsuario).toHaveBeenCalledWith(3);
-  });
-
-  it("404 si no tiene firma guardada", async () => {
-    vi.mocked(eliminarFirmaUsuario).mockResolvedValue({ ok: false });
-    const res = await DELETE(new Request("http://localhost/x"), ctx);
-    expect(res.status).toBe(404);
-  });
-
-  it("exige sesión antes de eliminar", async () => {
-    vi.mocked(requireTenant).mockResolvedValue({ error: new Response(null, { status: 401 }) } as Awaited<ReturnType<typeof requireTenant>>);
-    const res = await DELETE(new Request("http://localhost/x"), ctx);
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(405);
+    expect(res.headers.get("Allow")).toBe("GET, POST");
+    expect((await res.json()).error).toContain("deshabilitada");
     expect(eliminarFirmaUsuario).not.toHaveBeenCalled();
   });
 });
