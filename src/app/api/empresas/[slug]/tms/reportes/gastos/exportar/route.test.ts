@@ -17,6 +17,9 @@ vi.mock("@/lib/tms/reportes-gastos", () => ({
 vi.mock("@/lib/tms/fondos-mensual-pdf", () => ({
   generarPdfMensualSolicitudesFondo: vi.fn(() => Promise.resolve(Buffer.from("pdf-fondos-mensual"))),
 }));
+vi.mock("@/lib/tms/gastos-solicitud-pdf", () => ({
+  generarPdfSolicitudGastos: vi.fn(() => Promise.resolve(Buffer.from("pdf-gastos"))),
+}));
 vi.mock("@/lib/tms/gastos-export-excel", () => ({
   exportarAgregadoGastosExcel: vi.fn(() => Promise.resolve(Buffer.from("xlsx-agregado"))),
   exportarGastosDetalleExcel: vi.fn(() => Promise.resolve(Buffer.from("xlsx-gastos"))),
@@ -38,6 +41,7 @@ import { requireTenantGastos } from "@/lib/tenant";
 import { obtenerReporteGastosPorTipo } from "@/lib/tms/reportes-gastos";
 import { exportarAgregadoGastosExcel, exportarGastosDetalleExcel, exportarReporteFondosExcel, exportarViaticosReporteExcel } from "@/lib/tms/gastos-export-excel";
 import { generarPdfMensualSolicitudesFondo } from "@/lib/tms/fondos-mensual-pdf";
+import { generarPdfSolicitudGastos } from "@/lib/tms/gastos-solicitud-pdf";
 import { tablaAPdf } from "@/lib/rrhh/export-files";
 import { GET } from "./route";
 
@@ -152,29 +156,24 @@ describe("GET /tms/reportes/gastos/exportar", () => {
      * con "Cuenta / Número" como encabezado FIJO (nunca dinámico, porque
      * el reporte puede mezclar registros con distintos métodos de pago).
      */
-    it("formato=pdf genera el PDF tabular simplificado (10 columnas), una fila por gasto (nunca agrupado)", async () => {
+    it("formato=pdf usa el generador visual de Gastos con las filas completas (nunca agrupado)", async () => {
       vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({ tipo: "gastosDetalle", filas: [filaGasto, { ...filaGasto, id: 2 }] } as never);
       const res = await GET(new Request("http://localhost/x?tipo=gastosDetalle&formato=pdf"), ctx);
       expect(res.headers.get("Content-Type")).toBe("application/pdf");
-      const llamada = vi.mocked(tablaAPdf).mock.calls[0][0];
-      expect(llamada.headers).toEqual([
-        "Fecha de solicitud", "Fecha de viaje", "Nombre", "Cuenta / Número", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Valor",
-      ]);
-      const rows = llamada.rows;
-      // 2 filas de datos + 1 fila de total = 3
-      expect(rows).toHaveLength(3);
-      expect(rows[rows.length - 1]).toContain("TOTAL:");
-      expect(rows[rows.length - 1]).toContain("Q400.00"); // 200 + 200
-      // orden de campos de la fila: fecha solicitud, fecha viaje, nombre, Cuenta/Número (numeroCuentaPago), cargo...
-      expect(rows[0]).toEqual(["01/09/2026", "02/09/2026", "Heber Sitan", "55551234", "Piloto", "P111AAA", "Cliente A", "2", "Diesel", "Q200.00"]);
+      expect(generarPdfSolicitudGastos).toHaveBeenCalledWith({
+        empresaNombre: "SITSA",
+        fechaDesde: undefined,
+        fechaHasta: undefined,
+        filas: [filaGasto, { ...filaGasto, id: 2 }],
+      });
+      expect(tablaAPdf).not.toHaveBeenCalled();
     });
 
     it("el PDF muestra EMPRESA REQUIRIENTE (sin PERSONA QUE REQUIERE — Gastos no tiene ese concepto)", async () => {
       vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({ tipo: "gastosDetalle", filas: [filaGasto] } as never);
       await GET(new Request("http://localhost/x?tipo=gastosDetalle&formato=pdf"), ctx);
-      const subtitulo = vi.mocked(tablaAPdf).mock.calls[0][0].subtitle;
-      expect(subtitulo).toContain("EMPRESA REQUIRIENTE: SITSA");
-      expect(subtitulo).not.toContain("PERSONA QUE REQUIERE");
+      const llamada = vi.mocked(generarPdfSolicitudGastos).mock.calls[0][0];
+      expect(llamada.empresaNombre).toBe("SITSA");
     });
 
     it("un registro con Cuenta bancaria normal (no Transferencia móvil) también cae en la misma columna", async () => {
@@ -183,8 +182,8 @@ describe("GET /tms/reportes/gastos/exportar", () => {
         filas: [{ ...filaGasto, metodoPago: "Efectivo", numeroCuentaPago: null }],
       } as never);
       await GET(new Request("http://localhost/x?tipo=gastosDetalle&formato=pdf"), ctx);
-      const fila = vi.mocked(tablaAPdf).mock.calls[0][0].rows[0]!;
-      expect(fila[3]).toBe("—"); // sin cuenta/número -> "—", mismo criterio que el resto de columnas opcionales
+      const llamada = vi.mocked(generarPdfSolicitudGastos).mock.calls[0][0];
+      expect(llamada.filas[0]?.numeroCuentaPago).toBeNull();
     });
   });
 

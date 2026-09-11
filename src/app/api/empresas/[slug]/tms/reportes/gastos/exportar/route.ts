@@ -7,7 +7,6 @@ import {
   obtenerReporteGastosPorTipo,
   resumenMensualFondos,
   resumirViaticosPorEstado,
-  type FilaGastoDetalle,
   type FilaSolicitudFondoReporte,
   type FilaViaticoReporte,
   type TipoReporteGastos,
@@ -22,6 +21,7 @@ import {
   exportarViaticosReporteExcel,
 } from "@/lib/tms/gastos-export-excel";
 import { tablaAPdf } from "@/lib/rrhh/export-files";
+import { generarPdfSolicitudGastos } from "@/lib/tms/gastos-solicitud-pdf";
 import { ahoraLocal, formatearFechaVisible, formatearTimestampVisible, hoyLocal } from "@/lib/rrhh/dates";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -67,14 +67,6 @@ function filaPdfViatico(f: FilaViaticoReporte): string[] {
  */
 const HEADERS_PDF_TABULAR = ["Fecha de solicitud", "Fecha de viaje", "Nombre", "Cuenta / Número", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Valor"];
 const WEIGHT_PDF_TABULAR = { 0: 76, 1: 62, 2: 95, 3: 80, 4: 78, 5: 48, 6: 92, 7: 44, 8: 92, 9: 61 };
-
-function filaPdfGasto(f: FilaGastoDetalle): string[] {
-  return [
-    formatearFechaVisible(f.fechaSolicitud) || "—", f.fechaViaje ? formatearFechaVisible(f.fechaViaje) : "—",
-    f.empleadoNombre ?? "—", f.numeroCuentaPago ?? "—", f.cargo ?? "—", f.placa ?? "—", f.clienteNombre ?? "—",
-    String(f.cantidad), f.descripcion ?? "—", moneda(f.total),
-  ];
-}
 
 /**
  * REPORTES-FONDOS-PDF-TABULAR-1 — reporte PDF tabular de Solicitudes de
@@ -185,22 +177,14 @@ export async function GET(req: Request, ctx: Ctx) {
       });
     }
 
-    // FONDOS-GASTOS-METODO-PAGO-1 — PDF operativo simplificado: 10
-    // columnas fijas + encabezado EMPRESA REQUIRIENTE (Gastos no tiene
-    // concepto de requirente en su modelo — se omite PERSONA QUE
-    // REQUIERE, aprobado explícitamente). subtitulo multilínea: pdfkit
-    // respeta "\n" en dibujarTitulo/tablaAPdf sin tocar export-files.ts.
-    const subtituloGastos = `${subtitulo}\nEMPRESA REQUIRIENTE: ${guard.empresa.nombre.toUpperCase()}`;
-    const totalGeneral = resultado.filas.reduce((s, f) => s + f.total, 0);
-    const filaTotal = ["", "", "", "", "", "", "", "", "TOTAL:", moneda(totalGeneral)];
-    const buffer = await tablaAPdf({
-      title: "Reporte de gastos operativos — detalle",
-      subtitle: subtituloGastos,
-      headers: HEADERS_PDF_TABULAR,
-      rows: [...resultado.filas.map(filaPdfGasto), filaTotal],
-      layout: "landscape",
-      modo: "tabla",
-      weight: WEIGHT_PDF_TABULAR,
+    // PDF formal de Gastos: usa las mismas 10 columnas y el mismo patrón
+    // visual del PDF individual de Fondos, pero solo con datos propios de
+    // Gastos. No consulta de nuevo, no agrega firmas ni altera el Excel.
+    const buffer = await generarPdfSolicitudGastos({
+      empresaNombre: guard.empresa.nombre,
+      fechaDesde: filtros.fechaDesde,
+      fechaHasta: filtros.fechaHasta,
+      filas: resultado.filas,
     });
     return new NextResponse(new Uint8Array(buffer), {
       headers: {
