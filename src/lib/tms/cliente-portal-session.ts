@@ -2,6 +2,13 @@ import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { cache } from "react";
 import { getAuthSecretBytes } from "@/lib/auth-secret";
+import {
+  currentServerSeconds,
+  isSessionTimeValid,
+  resolveSessionTimes,
+  sessionAbsoluteExpiresAt,
+  type SessionTimes,
+} from "@/lib/session-lifetime";
 
 /**
  * CLIENTE-PORTAL-1 — sesión del Portal del Cliente (empresas externas que
@@ -14,7 +21,7 @@ import { getAuthSecretBytes } from "@/lib/auth-secret";
 export const CLIENTE_SESSION_COOKIE = "sitsa_cliente_session";
 const SESSION_HOURS = 12;
 
-export type ClientePortalSessionPayload = {
+export type ClientePortalSessionPayload = Partial<SessionTimes> & {
   usuarioClienteId: number;
   empresaId: number;
   clienteId: number;
@@ -32,11 +39,17 @@ function getSecret(): Uint8Array {
 
 export async function createClienteSessionToken(
   payload: ClientePortalSessionPayload,
+  options: { renewActivity?: boolean; nowSeconds?: number } = {},
 ): Promise<string> {
-  return new SignJWT({ ...payload })
+  const now = options.nowSeconds ?? currentServerSeconds();
+  const authAt = payload.authAt ?? now;
+  const lastActivityAt = options.renewActivity
+    ? now
+    : (payload.lastActivityAt ?? now);
+  return new SignJWT({ ...payload, authAt, lastActivityAt })
     .setProtectedHeader({ alg: "HS256" })
-    .setIssuedAt()
-    .setExpirationTime(`${SESSION_HOURS}h`)
+    .setIssuedAt(now)
+    .setExpirationTime(sessionAbsoluteExpiresAt(authAt))
     .sign(getSecret());
 }
 
@@ -45,6 +58,8 @@ export async function verifyClienteSessionToken(
 ): Promise<ClientePortalSessionPayload | null> {
   try {
     const { payload } = await jwtVerify(token, getSecret());
+    const times = resolveSessionTimes(payload);
+    if (!times || !isSessionTimeValid(times, currentServerSeconds())) return null;
     const usuarioClienteId = Number(payload.usuarioClienteId);
     const empresaId = Number(payload.empresaId);
     const clienteId = Number(payload.clienteId);
@@ -54,6 +69,7 @@ export async function verifyClienteSessionToken(
     if (!usuarioClienteId || !empresaId || !clienteId) return null;
     return {
       usuarioClienteId,
+      ...times,
       empresaId,
       clienteId,
       nombre: payload.nombre ? String(payload.nombre) : undefined,

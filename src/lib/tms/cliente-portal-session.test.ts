@@ -28,13 +28,15 @@ describe("CLIENTE-PORTAL-1 — token de sesión del cliente", () => {
       debeCambiarPassword: false,
     });
     const payload = await verifyClienteSessionToken(token);
-    expect(payload).toEqual({
+    expect(payload).toEqual(expect.objectContaining({
       usuarioClienteId: 10,
       empresaId: 7,
       clienteId: 30,
       nombre: "Contacto ACME",
       debeCambiarPassword: false,
-    });
+    }));
+    expect(payload?.authAt).toEqual(expect.any(Number));
+    expect(payload?.lastActivityAt).toBe(payload?.authAt);
   });
 
   it("token sin usuarioClienteId/empresaId/clienteId → inválido", async () => {

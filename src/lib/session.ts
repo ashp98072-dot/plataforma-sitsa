@@ -5,11 +5,18 @@ import type { RolGlobal } from "./roles";
 import { getAuthSecretBytes } from "./auth-secret";
 import type { RowDataPacket } from "mysql2";
 import { query } from "./db";
+import {
+  currentServerSeconds,
+  isSessionTimeValid,
+  resolveSessionTimes,
+  sessionAbsoluteExpiresAt,
+  type SessionTimes,
+} from "./session-lifetime";
 
 export const SESSION_COOKIE = "sitsa_session";
 const SESSION_HOURS = 12;
 
-export type SessionPayload = {
+export type SessionPayload = Partial<SessionTimes> & {
   id: number;
   username: string;
   rol: RolGlobal;
@@ -26,11 +33,17 @@ function getSecret(): Uint8Array {
 
 export async function createSessionToken(
   user: SessionPayload,
+  options: { renewActivity?: boolean; nowSeconds?: number } = {},
 ): Promise<string> {
-  return new SignJWT({ ...user })
+  const now = options.nowSeconds ?? currentServerSeconds();
+  const authAt = user.authAt ?? now;
+  const lastActivityAt = options.renewActivity
+    ? now
+    : (user.lastActivityAt ?? now);
+  return new SignJWT({ ...user, authAt, lastActivityAt })
     .setProtectedHeader({ alg: "HS256" })
-    .setIssuedAt()
-    .setExpirationTime(`${SESSION_HOURS}h`)
+    .setIssuedAt(now)
+    .setExpirationTime(sessionAbsoluteExpiresAt(authAt))
     .sign(getSecret());
 }
 
@@ -39,12 +52,15 @@ export async function verifySessionToken(
 ): Promise<SessionPayload | null> {
   try {
     const { payload } = await jwtVerify(token, getSecret());
+    const times = resolveSessionTimes(payload);
+    if (!times || !isSessionTimeValid(times, currentServerSeconds())) return null;
     const id = Number(payload.id);
     const username = String(payload.username ?? "");
     const rol = String(payload.rol ?? "") as RolGlobal;
     if (!id || !username || !rol) return null;
     return {
       id,
+      ...times,
       username,
       rol,
       nombre: payload.nombre ? String(payload.nombre) : undefined,
