@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/tenant", () => ({ requireTenant: vi.fn() }));
 vi.mock("@/lib/firmas/usuario-firmas", () => ({ obtenerFirmaUsuario: vi.fn() }));
-vi.mock("@/lib/uploads", () => ({ absPathFromRelative: vi.fn(), contentTypeFor: vi.fn() }));
+vi.mock("@/lib/uploads", () => ({
+  absPathFromRelative: vi.fn(),
+  contentTypeFor: vi.fn(),
+  getUploadsRoot: vi.fn(() => "/hbuilds/uploads"),
+}));
 vi.mock("fs", () => ({ createReadStream: vi.fn(), existsSync: vi.fn(), statSync: vi.fn() }));
 
 import { requireTenant } from "@/lib/tenant";
@@ -50,6 +54,7 @@ describe("GET /mi-firma/imagen", () => {
   });
 
   it("404 si el registro existe pero el archivo ya no está en disco", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     vi.mocked(obtenerFirmaUsuario).mockResolvedValue({
       id: 1, usuarioId: 3, imagenRuta: "empresas/7/firmas/x.png", imagenNombreOriginal: "firma.png",
       imagenMime: "image/png", imagenTamano: 15, imagenSha256: "a".repeat(64), creadoEn: "x", actualizadoEn: "x",
@@ -57,6 +62,18 @@ describe("GET /mi-firma/imagen", () => {
     vi.mocked(existsSync).mockReturnValue(false);
     const res = await GET(new Request("http://localhost/x"), ctx);
     expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "Archivo no encontrado en disco." });
+    expect(consoleError).toHaveBeenCalledWith(
+      "[mi-firma] 404 en disco — diagnóstico temporal",
+      {
+        uploadsRoot: "/hbuilds/uploads",
+        imagenRuta: "empresas/7/firmas/x.png",
+        rutaAbsolutaCalculada: "/abs/empresas/7/firmas/x.png",
+        existsSync: false,
+        cwd: process.cwd(),
+        uploadDirDefinida: Boolean(process.env.UPLOAD_DIR?.trim()),
+      },
+    );
   });
 
   it("sirve el PNG con el Content-Type de la firma y nunca expone la ruta física", async () => {
