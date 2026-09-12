@@ -769,6 +769,7 @@ export async function cambiarEstadoSolicitudFondo(
     autorizanteEmpleadoId?: number | null;
     motivoRechazo?: string | null;
     autorizante?: (IdentidadFirmante & { imagen: { bytes: ArrayBuffer; original: string } }) | null;
+    permitirAutoautorizacion?: boolean;
   } = {},
 ): Promise<SolicitudFondo | null> {
   if (accion === "rechazar" && !opts.motivoRechazo?.trim()) {
@@ -811,7 +812,7 @@ export async function cambiarEstadoSolicitudFondo(
         (reqUsuarioId != null && reqUsuarioId === autorizante.usuarioId) ||
         (solUsuarioId != null && solUsuarioId === autorizante.usuarioId) ||
         (creadoPor != null && opts.usuario != null && creadoPor === opts.usuario);
-      if (esPropia) {
+      if (esPropia && !opts.permitirAutoautorizacion) {
         throw new Error("No puede autorizar su propia solicitud.");
       }
       await executeConn(conn,

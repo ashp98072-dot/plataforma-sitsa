@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { CatalogoSearchSelect, type CatalogoSearchOption } from "@/components/tms/catalogo-search-select";
 import { MAX_UPLOAD_BYTES } from "@/lib/uploads-constants";
@@ -8,6 +8,8 @@ import { MESES_ES } from "@/lib/tms/reportes-mes";
 import { paramsExportarGastos, paramsListadoGastos } from "@/lib/tms/exportacion-operativa-filtros";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
+import { AutorizacionConfirmacionModal } from "@/components/tms/autorizacion-confirmacion-modal";
+import { procesarConfirmacionAutorizacion } from "@/lib/tms/autorizacion-confirmacion";
 
 type Gasto = {
   id: number;
@@ -139,6 +141,9 @@ export default function GastosPage() {
   const tieneComprobanteAlmacenado = Boolean(comprobanteActual?.facturaNombreOriginal);
   /** GASTOS-ADMINISTRATIVO-1 (Fase 4) — mismo patrón que motivoRechazo en fondos/page.tsx: un input por fila, por id. */
   const [motivoRechazo, setMotivoRechazo] = useState<Record<number, string>>({});
+  const [confirmandoAutorizacionId, setConfirmandoAutorizacionId] = useState<number | null>(null);
+  const [autorizandoId, setAutorizandoId] = useState<number | null>(null);
+  const bloqueoAutorizacion = useRef<number | null>(null);
 
   const cargar = useCallback(async () => {
     setLoading(true);
@@ -311,6 +316,22 @@ export default function GastosPage() {
     if (!res.ok) { setError(data.error ?? "No se pudo actualizar."); return; }
     setMsg(data.mensaje ?? "Actualizado.");
     await cargar();
+  }
+
+  async function confirmarAutorizacion() {
+    const id = confirmandoAutorizacionId;
+    if (id == null) return;
+    try {
+      await procesarConfirmacionAutorizacion({
+        confirmada: true,
+        id,
+        bloqueo: bloqueoAutorizacion,
+        alCambiar: setAutorizandoId,
+        autorizar: () => cambiarEstado(id, "autorizar"),
+      });
+    } finally {
+      setConfirmandoAutorizacionId(null);
+    }
   }
 
   const filtroMensual = Boolean(fMes && fAnio);
@@ -500,7 +521,7 @@ export default function GastosPage() {
                   <div className="flex flex-wrap items-center gap-1">
                     {puedeAutorizar && g.estado === "Pendiente" ? (
                       <>
-                        <button type="button" onClick={() => void cambiarEstado(g.id, "autorizar")} className="rounded bg-emerald-600 px-2 py-1 text-white">Autorizar</button>
+                        <button type="button" onClick={() => setConfirmandoAutorizacionId(g.id)} disabled={autorizandoId !== null} className="rounded bg-emerald-600 px-2 py-1 text-white disabled:opacity-50">Autorizar</button>
                         <input className={`${inputCls} w-32`} placeholder="Motivo de rechazo" value={motivoRechazo[g.id] ?? ""} onChange={(e) => setMotivoRechazo((m) => ({ ...m, [g.id]: e.target.value }))} />
                         <button type="button" onClick={() => void cambiarEstado(g.id, "rechazar")} className="rounded bg-red-600 px-2 py-1 text-white">Rechazar</button>
                       </>
@@ -529,6 +550,13 @@ export default function GastosPage() {
           </tbody>
         </table>
       </div>
+      <AutorizacionConfirmacionModal
+        abierto={confirmandoAutorizacionId !== null}
+        mensaje="¿Está seguro de que desea autorizar este gasto operativo?"
+        procesando={autorizandoId !== null}
+        onCancelar={() => setConfirmandoAutorizacionId(null)}
+        onConfirmar={() => void confirmarAutorizacion()}
+      />
     </div>
   );
 }

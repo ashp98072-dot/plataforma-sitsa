@@ -73,6 +73,7 @@ describe("POST /tms/gastos/[id]/autorizar", () => {
       autorizanteRol: "JefeOperaciones",
       autorizanteEmpleadoId: undefined,
       firmaImagen: IMAGEN_FIRMA,
+      permitirAutoautorizacion: true,
     });
   });
 
@@ -135,7 +136,7 @@ describe("POST /tms/gastos/[id]/autorizar", () => {
       expect(body.error).toBe("Este gasto es histórico y no tiene flujo de autorización.");
     });
 
-    it("ErrorGasto 403 (autoautorización) se propaga tal cual", async () => {
+    it("ErrorGasto 403 de la librería se propaga tal cual", async () => {
       vi.mocked(autorizarGasto).mockRejectedValue(new ErrorGasto("No puede autorizar su propio gasto.", 403));
       const res = await POST(req({}), ctx);
       expect(res.status).toBe(403);

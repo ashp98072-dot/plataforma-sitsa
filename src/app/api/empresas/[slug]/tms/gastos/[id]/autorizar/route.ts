@@ -57,6 +57,10 @@ export async function POST(req: Request, ctx: Ctx) {
       autorizanteRol: guard.session.rol ?? null,
       autorizanteEmpleadoId: parsed.data.autorizanteEmpleadoId,
       firmaImagen,
+      // El guard anterior ya confirmó el permiso específico
+      // gastos_operativos_autorizar:editar. Ser creador por sí solo nunca
+      // concede esta capacidad.
+      permitirAutoautorizacion: true,
     });
     if (!gasto) return NextResponse.json({ error: "Gasto no encontrado." }, { status: 404 });
     return NextResponse.json({ mensaje: "Gasto autorizado.", gasto });
