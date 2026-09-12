@@ -6,6 +6,7 @@ export const AUTO_REFRESH_INTERVAL_MS = 30_000;
 
 export type AutoRefreshOptions = {
   refresh: () => void | Promise<void>;
+  beforeForegroundRefresh?: () => boolean | Promise<boolean>;
   paused?: boolean;
   intervalMs?: number;
   refreshOnFocus?: boolean;
@@ -33,6 +34,7 @@ type AutoRefreshControllerOptions = AutoRefreshOptions & {
  */
 export function createAutoRefreshController({
   refresh,
+  beforeForegroundRefresh,
   paused = false,
   intervalMs = AUTO_REFRESH_INTERVAL_MS,
   refreshOnFocus = true,
@@ -45,10 +47,12 @@ export function createAutoRefreshController({
   let intervalId: number | undefined;
   let foregroundTimeoutId: number | undefined;
 
-  async function execute() {
+  async function execute(beforeRefresh?: () => boolean | Promise<boolean>) {
     if (disposed || inFlight || !environment.isVisible()) return;
     inFlight = true;
     try {
+      if (beforeRefresh && !(await beforeRefresh())) return;
+      if (disposed || !environment.isVisible()) return;
       await refresh();
     } catch {
       // El refresco es silencioso: la pantalla conserva su último estado válido.
@@ -70,7 +74,7 @@ export function createAutoRefreshController({
     // recargas consecutivas sin retrasar perceptiblemente la actualización.
     foregroundTimeoutId = environment.setTimeout(() => {
       foregroundTimeoutId = undefined;
-      void execute();
+      void execute(beforeForegroundRefresh);
     }, 0);
   }
 
@@ -107,19 +111,26 @@ function browserEnvironment(): AutoRefreshEnvironment {
 
 export function useAutoRefresh({
   refresh,
+  beforeForegroundRefresh,
   paused = false,
   intervalMs = AUTO_REFRESH_INTERVAL_MS,
   refreshOnFocus = true,
 }: AutoRefreshOptions): void {
   const refreshRef = useRef(refresh);
+  const beforeForegroundRefreshRef = useRef(beforeForegroundRefresh);
 
   useEffect(() => {
     refreshRef.current = refresh;
   }, [refresh]);
 
   useEffect(() => {
+    beforeForegroundRefreshRef.current = beforeForegroundRefresh;
+  }, [beforeForegroundRefresh]);
+
+  useEffect(() => {
     return createAutoRefreshController({
       refresh: () => refreshRef.current(),
+      beforeForegroundRefresh: () => beforeForegroundRefreshRef.current?.() ?? true,
       paused,
       intervalMs,
       refreshOnFocus,

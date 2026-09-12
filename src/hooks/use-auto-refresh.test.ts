@@ -42,6 +42,7 @@ function start(options: Partial<AutoRefreshOptions> = {}) {
   const refresh = options.refresh ?? vi.fn();
   const dispose = createAutoRefreshController({
     refresh,
+    beforeForegroundRefresh: options.beforeForegroundRefresh,
     paused: options.paused,
     intervalMs: options.intervalMs,
     refreshOnFocus: options.refreshOnFocus,
@@ -95,6 +96,37 @@ describe("useAutoRefresh controller", () => {
     state.dispose();
   });
 
+  it("foreground con validación exitosa refresca", async () => {
+    const beforeForegroundRefresh = vi.fn().mockResolvedValue(true);
+    const state = start({ beforeForegroundRefresh });
+    state.setVisible(false);
+    state.setVisible(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(beforeForegroundRefresh).toHaveBeenCalledOnce();
+    expect(state.refresh).toHaveBeenCalledOnce();
+    state.dispose();
+  });
+
+  it("foreground con validación fallida no refresca", async () => {
+    const beforeForegroundRefresh = vi.fn().mockResolvedValue(false);
+    const state = start({ beforeForegroundRefresh });
+    state.setVisible(false);
+    state.setVisible(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(beforeForegroundRefresh).toHaveBeenCalledOnce();
+    expect(state.refresh).not.toHaveBeenCalled();
+    state.dispose();
+  });
+
+  it("el intervalo activo no ejecuta la validación de foreground", async () => {
+    const beforeForegroundRefresh = vi.fn().mockResolvedValue(false);
+    const state = start({ beforeForegroundRefresh });
+    await vi.advanceTimersByTimeAsync(AUTO_REFRESH_INTERVAL_MS);
+    expect(beforeForegroundRefresh).not.toHaveBeenCalled();
+    expect(state.refresh).toHaveBeenCalledOnce();
+    state.dispose();
+  });
+
   it("evita ejecuciones concurrentes", async () => {
     let resolveRefresh!: () => void;
     const refresh = vi.fn(() => new Promise<void>((resolve) => { resolveRefresh = resolve; }));
@@ -107,6 +139,23 @@ describe("useAutoRefresh controller", () => {
     await Promise.resolve();
     await vi.advanceTimersByTimeAsync(100);
     expect(refresh).toHaveBeenCalledTimes(2);
+    state.dispose();
+  });
+
+  it("validación de foreground y refresh comparten el candado", async () => {
+    let resolveValidation!: (valid: boolean) => void;
+    const beforeForegroundRefresh = vi.fn(
+      () => new Promise<boolean>((resolve) => { resolveValidation = resolve; }),
+    );
+    const state = start({ beforeForegroundRefresh, intervalMs: 100 });
+    state.focus();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(beforeForegroundRefresh).toHaveBeenCalledOnce();
+    expect(state.refresh).not.toHaveBeenCalled();
+    resolveValidation(true);
+    await Promise.resolve();
+    expect(state.refresh).toHaveBeenCalledOnce();
     state.dispose();
   });
 
