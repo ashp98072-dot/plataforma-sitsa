@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   absPathFromRelative,
   borrarUpload,
@@ -267,7 +267,7 @@ describe("verificarDirectorioPadreReal — ADMIN-LIMPIAR-ARCHIVOS-FISICOS (harde
  * árbol de directorios temporal que imita la estructura real de
  * Hostinger, y los restauran siempre en `afterEach`.
  */
-describe("getUploadsRoot — estructura real de despliegue de Hostinger (GASTOS-COMPROBANTE-404-1)", () => {
+describe("getUploadsRoot — estructura real de despliegue de Hostinger (GASTOS-COMPROBANTE-404-1/2)", () => {
   const cwdOriginal = process.cwd();
   let raizTemp: string;
 
@@ -278,6 +278,7 @@ describe("getUploadsRoot — estructura real de despliegue de Hostinger (GASTOS-
 
   afterEach(() => {
     process.chdir(cwdOriginal);
+    vi.unstubAllEnvs(); // restaura NODE_ENV (stubeado con vi.stubEnv en los tests que lo necesitan).
     rmSync(raizTemp, { recursive: true, force: true });
   });
 
@@ -297,6 +298,20 @@ describe("getUploadsRoot — estructura real de despliegue de Hostinger (GASTOS-
     process.chdir(cwdFalso);
     const esperado = join(raizTemp, ".builds", "uploads");
     expect(getUploadsRoot()).toBe(esperado);
+  });
+
+  /**
+   * GASTOS-COMPROBANTE-404-2 — el límite artificial de 8 niveles se
+   * eliminó; camina hasta la raíz REAL del filesystem. 15 niveles es
+   * bastante más que cualquier profundidad real de Hostinger observada
+   * hasta ahora (2-4), para probar que de verdad no hay ningún tope.
+   */
+  it("cwd bajo .builds a profundidad ARBITRARIA (15 niveles) -> sigue encontrando .builds/uploads, sin ningún límite artificial", () => {
+    const segmentosProfundos = Array.from({ length: 15 }, (_, i) => `nivel-${i}`);
+    const cwdFalso = join(raizTemp, ".builds", ...segmentosProfundos);
+    mkdirSync(cwdFalso, { recursive: true });
+    process.chdir(cwdFalso);
+    expect(getUploadsRoot()).toBe(join(raizTemp, ".builds", "uploads"));
   });
 
   it("escritura y lectura resuelven la MISMA raíz aunque el cwd cambie de profundidad entre una petición y otra (simulación de redeploy)", () => {
@@ -324,11 +339,47 @@ describe("getUploadsRoot — estructura real de despliegue de Hostinger (GASTOS-
     expect(raiz).toBe(join(raizTemp, ".builds", "uploads"));
   });
 
-  it("sin ningún ancestro '.builds' (entorno local de desarrollo) -> <cwd>/uploads, igual que siempre", () => {
+  it("sin ningún ancestro '.builds' EN DESARROLLO (NODE_ENV != production) -> <cwd>/uploads, igual que siempre", () => {
+    vi.stubEnv("NODE_ENV", "development");
     const cwdLocal = join(raizTemp, "proyecto-local");
     mkdirSync(cwdLocal, { recursive: true });
     process.chdir(cwdLocal);
     expect(getUploadsRoot()).toBe(join(cwdLocal, "uploads"));
+  });
+
+  /**
+   * GASTOS-COMPROBANTE-404-2 — núcleo del endurecimiento: en producción,
+   * sin UPLOAD_DIR y sin ningún ancestro ".builds", NUNCA se cae
+   * silenciosamente a "cwd/uploads" (que ahí sí podría ser efímera) —
+   * falla de forma explícita y diagnosticable (el mensaje incluye el cwd
+   * real, nunca datos de otra empresa ni contenido de archivos).
+   */
+  it("PRODUCCIÓN sin UPLOAD_DIR y sin ningún ancestro '.builds' -> lanza un error explícito, nunca usa cwd/uploads en silencio", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const cwdSinBuilds = join(raizTemp, "ruta-inesperada", "sin-builds");
+    mkdirSync(cwdSinBuilds, { recursive: true });
+    process.chdir(cwdSinBuilds);
+    expect(() => getUploadsRoot()).toThrow(/UPLOAD_DIR/);
+    expect(() => getUploadsRoot()).toThrow(cwdSinBuilds);
+    // Nunca crea ninguna carpeta "uploads" como efecto secundario del fallo.
+    expect(existsSync(join(cwdSinBuilds, "uploads"))).toBe(false);
+  });
+
+  it("PRODUCCIÓN con .builds SÍ presente entre los ancestros -> resuelve normal, sin lanzar (el endurecimiento no afecta el caso sano)", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const cwdFalso = join(raizTemp, ".builds", "current");
+    mkdirSync(cwdFalso, { recursive: true });
+    process.chdir(cwdFalso);
+    expect(getUploadsRoot()).toBe(join(raizTemp, ".builds", "uploads"));
+  });
+
+  it("PRODUCCIÓN con UPLOAD_DIR definido -> nunca evalúa la búsqueda de .builds ni puede lanzar, aunque no exista ningún ancestro .builds", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    process.env.UPLOAD_DIR = raizTemp;
+    const cwdSinBuilds = join(raizTemp, "cualquier-ruta");
+    mkdirSync(cwdSinBuilds, { recursive: true });
+    process.chdir(cwdSinBuilds);
+    expect(getUploadsRoot()).toBe(resolve(raizTemp));
   });
 
   it("REGRESIÓN GASTOS-COMPROBANTE-404-1: un comprobante subido en un deploy se sigue leyendo tras un redeploy con OTRA profundidad de cwd", async () => {
