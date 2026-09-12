@@ -115,6 +115,9 @@ export async function PATCH(req: Request, ctx: Ctx) {
       autorizanteEmpleadoId: parsed.data.autorizanteEmpleadoId,
       autorizante,
       motivoRechazo: parsed.data.motivoRechazo,
+      // Solo llega aquí tras requireTenantGastosAutorizar: el permiso
+      // específico habilita autorizar una solicitud propia.
+      permitirAutoautorizacion: parsed.data.accion === "autorizar",
     });
     if (!solicitud) return NextResponse.json({ error: "Solicitud no encontrada." }, { status: 404 });
     return NextResponse.json({ mensaje: "Solicitud actualizada.", solicitud });

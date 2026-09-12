@@ -744,7 +744,7 @@ describe("actualizarGasto / desactivarGasto", () => {
 
 /**
  * GASTOS-ADMINISTRATIVO-1 (Fase 2/Fase 5) — autorizarGasto/rechazarGasto:
- * FOR UPDATE + máquina de estados propia, prevención de autoautorización,
+ * FOR UPDATE + máquina de estados propia, defensa de autoautorización,
  * histórico rechazado explícitamente (decisión #3). Desde la Fase 5,
  * autorizarGasto exige `opts.firmaImagen` (ver describe "firma real del
  * autorizante" más abajo) — el `autorizante` compartido de este describe
@@ -783,7 +783,7 @@ describe("autorizarGasto", () => {
     expect(conn.commit).toHaveBeenCalledOnce();
   });
 
-  describe("prevención de autoautorización (decisión #4, mismo criterio que Fondos)", () => {
+  describe("autoautorización controlada por permiso validado en la ruta", () => {
     it("rechaza si el autorizante es el requirente de ese gasto — ErrorGasto 403", async () => {
       const conn = conexion({ bloqueoRaw: filaGastoBloqueo({ requirente_usuario_id: 9 }) });
       await esperarErrorGasto(autorizarGasto(7, 1, autorizante), "No puede autorizar su propio gasto.", 403);
@@ -798,6 +798,14 @@ describe("autorizarGasto", () => {
     it("rechaza si el autorizante (por username) es quien creó el registro — ErrorGasto 403", async () => {
       conexion({ bloqueoRaw: filaGastoBloqueo({ creado_por: "hsitan" }) });
       await esperarErrorGasto(autorizarGasto(7, 1, autorizante), "No puede autorizar su propio gasto.", 403);
+    });
+
+    it("permite al creador autorizar cuando la ruta habilita explícitamente la autoautorización", async () => {
+      const conn = conexion({ bloqueoRaw: filaGastoBloqueo({ requirente_usuario_id: 9, creado_por: "hsitan" }) });
+      vi.mocked(query).mockResolvedValue([filaGasto({ estado: "Autorizada" })] as never);
+      await autorizarGasto(7, 1, { ...autorizante, permitirAutoautorizacion: true });
+      expect(conn.commit).toHaveBeenCalledOnce();
+      expect(crearFirmaInterna).toHaveBeenCalled();
     });
 
     it("permite autorizar cuando el autorizante NO tiene ninguna relación con el gasto", async () => {

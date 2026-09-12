@@ -796,9 +796,9 @@ async function bloquearGastoParaTransicionTx(
  * función nunca los deriva del body, los recibe ya resueltos por el
  * caller.
  *
- * Prevención de autoautorización: mismo criterio que Fondos — se
- * rechaza si el autorizante es el requirente, el solicitante, o quien
- * creó el registro (comparando `opts.usuario` contra `creado_por`).
+ * Defensa de autoautorización: por defecto se rechaza si el autorizante
+ * es el requirente, el solicitante o quien creó el registro. Únicamente
+ * la ruta que validó el permiso específico puede habilitar la excepción.
  */
 export async function autorizarGasto(
   empresaId: number,
@@ -810,6 +810,7 @@ export async function autorizarGasto(
     autorizanteRol?: string | null;
     autorizanteEmpleadoId?: number | null;
     firmaImagen: { bytes: ArrayBuffer; original: string } | null;
+    permitirAutoautorizacion?: boolean;
   },
 ): Promise<GastoOperativo | null> {
   if (!opts.firmaImagen) {
@@ -828,7 +829,7 @@ export async function autorizarGasto(
       (bloqueo.requirenteUsuarioId != null && bloqueo.requirenteUsuarioId === opts.autorizanteUsuarioId) ||
       (bloqueo.solicitanteUsuarioId != null && bloqueo.solicitanteUsuarioId === opts.autorizanteUsuarioId) ||
       (bloqueo.creadoPor != null && opts.usuario != null && bloqueo.creadoPor === opts.usuario);
-    if (esPropia) {
+    if (esPropia && !opts.permitirAutoautorizacion) {
       throw new ErrorGasto("No puede autorizar su propio gasto.", 403);
     }
     await executeConn(conn,

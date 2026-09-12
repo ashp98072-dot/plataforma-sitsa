@@ -49,9 +49,8 @@ function conexion(opts: {
   // SOLICITUD-FONDOS-PDF-AUTORIZADO-1 — usuario requirente seleccionado
   // del catálogo (resolverUsuarioDeEmpresaTx).
   usuarioEnEmpresa?: boolean; usuarioNombre?: string; usuarioRol?: string | null;
-  // FONDOS-AUTORIZAR-PERMISO-1 — dueños de la solicitud, para la regla
-  // "nadie autoriza su propia solicitud" (fila RAW que cambiarEstado relee
-  // FOR UPDATE).
+  // Dueños de la solicitud: defensa interna de autoautorización cuando la
+  // ruta no ha confirmado el permiso específico (fila RAW FOR UPDATE).
   cambiarRequirenteUsuarioId?: number | null;
   cambiarSolicitanteUsuarioId?: number | null;
   cambiarCreadoPor?: string | null;
@@ -598,12 +597,10 @@ describe("cambiarEstadoSolicitudFondo", () => {
 });
 
 /**
- * FONDOS-AUTORIZAR-PERMISO-1 §7/§8 — nadie autoriza su propia solicitud,
- * aunque tenga el permiso 'gastos_autorizar'. "Propia" = el autorizante es
- * el requirente (beneficiario), el solicitante (quien la registró) o quien
- * creó el registro.
+ * La librería rechaza por defecto una solicitud propia. Solo la ruta que ya
+ * validó `gastos_autorizar:editar` puede activar la excepción explícita.
  */
-describe("cambiarEstadoSolicitudFondo — nadie autoriza su propia solicitud (§7/§8)", () => {
+describe("cambiarEstadoSolicitudFondo — autoautorización controlada por permiso", () => {
   const MSG = "No puede autorizar su propia solicitud.";
 
   it("el autorizante ES el REQUIRENTE de la solicitud -> rechazo con el mensaje exacto, sin commit", async () => {
@@ -629,6 +626,18 @@ describe("cambiarEstadoSolicitudFondo — nadie autoriza su propia solicitud (§
     await expect(cambiarEstadoSolicitudFondo(7, 1, "autorizar", { usuario: "hsitan", autorizante: { ...AUTORIZANTE, imagen: IMAGEN_FIRMA } }))
       .rejects.toThrow(MSG);
     expect(conn.commit).not.toHaveBeenCalled();
+  });
+
+  it("permite al creador autorizar cuando la ruta habilita explícitamente la autoautorización", async () => {
+    const conn = conexion({ estadoActual: "Pendiente", cambiarRequirenteUsuarioId: 9, cambiarCreadoPor: "hsitan" });
+    vi.mocked(query).mockResolvedValue([filaSolicitud({ estado: "Autorizada" })] as never);
+    await cambiarEstadoSolicitudFondo(7, 1, "autorizar", {
+      usuario: "hsitan",
+      autorizante: { ...AUTORIZANTE, imagen: IMAGEN_FIRMA },
+      permitirAutoautorizacion: true,
+    });
+    expect(conn.commit).toHaveBeenCalledOnce();
+    expect(crearFirmaInterna).toHaveBeenCalled();
   });
 
   it("autorizante distinto del requirente/solicitante/creador -> autoriza normalmente", async () => {

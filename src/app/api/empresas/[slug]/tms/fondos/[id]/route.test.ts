@@ -72,6 +72,7 @@ describe("PATCH /tms/fondos/[id] — permiso de autorización", () => {
     expect(cambiarEstadoSolicitudFondo).toHaveBeenCalledWith(7, 1, "autorizar", expect.objectContaining({
       usuario: "hsitan",
       autorizante: expect.objectContaining({ usuarioId: 9, nombre: "Heber Sitan" }),
+      permitirAutoautorizacion: true,
     }));
   });
 
@@ -83,11 +84,12 @@ describe("PATCH /tms/fondos/[id] — permiso de autorización", () => {
     expect(cambiarEstadoSolicitudFondo).not.toHaveBeenCalled();
   });
 
-  it("intenta autorizar su propia solicitud -> 400 con 'No puede autorizar su propia solicitud.'", async () => {
-    vi.mocked(cambiarEstadoSolicitudFondo).mockRejectedValue(new Error("No puede autorizar su propia solicitud."));
-    const res = await PATCH(req({ accion: "autorizar" }), ctx);
-    expect(res.status).toBe(400);
-    expect((await res.json()).error).toBe("No puede autorizar su propia solicitud.");
+  it("habilita autoautorización únicamente después de validar el permiso específico", async () => {
+    await PATCH(req({ accion: "autorizar" }), ctx);
+    expect(requireTenantGastosAutorizar).toHaveBeenCalledWith("prueba", "editar");
+    expect(cambiarEstadoSolicitudFondo).toHaveBeenCalledWith(7, 1, "autorizar", expect.objectContaining({
+      permitirAutoautorizacion: true,
+    }));
   });
 
   /** FONDOS-GASTOS-METODO-PAGO-1 — mismo schema de metodoPago que el POST de creación (fondos/route.ts). */

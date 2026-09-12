@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { CatalogoSearchSelect, type CatalogoSearchOption } from "@/components/tms/catalogo-search-select";
 import { aplicarEmpleadoSeleccionado, aplicarPlanSeleccionado } from "@/lib/tms/fondos-selectores";
@@ -8,6 +8,8 @@ import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
 import { MESES_ES } from "@/lib/tms/reportes-mes";
 import { paramsExportarFondos, paramsListadoFondos } from "@/lib/tms/exportacion-operativa-filtros";
+import { AutorizacionConfirmacionModal } from "@/components/tms/autorizacion-confirmacion-modal";
+import { procesarConfirmacionAutorizacion } from "@/lib/tms/autorizacion-confirmacion";
 
 type LineaFondo = {
   id: number; categoria: string; descripcion: string | null; cantidad: number; monto: number; orden: number;
@@ -84,6 +86,9 @@ export default function FondosPage() {
   // servidor — ocultar el botón NO es la única defensa.
   const { permisos } = useEmpresaSession();
   const puedeAutorizar = tienePermiso(permisos, "gastos_autorizar", "editar");
+  const [confirmandoAutorizacionId, setConfirmandoAutorizacionId] = useState<number | null>(null);
+  const [autorizandoId, setAutorizandoId] = useState<number | null>(null);
+  const bloqueoAutorizacion = useRef<number | null>(null);
 
   const [solicitudes, setSolicitudes] = useState<SolicitudFondo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -286,6 +291,22 @@ export default function FondosPage() {
     await cargar();
   }
 
+  async function confirmarAutorizacion() {
+    const id = confirmandoAutorizacionId;
+    if (id == null) return;
+    try {
+      await procesarConfirmacionAutorizacion({
+        confirmada: true,
+        id,
+        bloqueo: bloqueoAutorizacion,
+        alCambiar: setAutorizandoId,
+        autorizar: () => cambiarEstado(id, "autorizar"),
+      });
+    } finally {
+      setConfirmandoAutorizacionId(null);
+    }
+  }
+
   const filtroMensual = Boolean(fMes && fAnio);
   const filtros = { fechaDesde: fFechaDesde, fechaHasta: fFechaHasta, mes: fMes, anio: fAnio, estado: fEstado, requirenteUsuarioId: fRequirenteId };
   const exportarUrl = (formato?: "pdf", variante?: "tabular") => `/api/empresas/${slug}/tms/reportes/gastos/exportar?${paramsExportarFondos(filtros, formato, variante).toString()}`;
@@ -481,7 +502,7 @@ export default function FondosPage() {
                   <>
                     <button type="button" onClick={() => void abrirEditar(s)} className="rounded border border-[var(--border)] px-2 py-1">Editar</button>
                     {puedeAutorizar ? (
-                      <button type="button" onClick={() => void cambiarEstado(s.id, "autorizar")} className="rounded bg-emerald-600 px-2 py-1 text-white">Autorizar</button>
+                      <button type="button" onClick={() => setConfirmandoAutorizacionId(s.id)} disabled={autorizandoId !== null} className="rounded bg-emerald-600 px-2 py-1 text-white disabled:opacity-50">Autorizar</button>
                     ) : null}
                     {puedeAutorizar ? (
                       <>
@@ -522,6 +543,13 @@ export default function FondosPage() {
         ))}
         {!solicitudesFiltradas.length && !loading ? <p className="text-[var(--muted)]">Sin solicitudes con este filtro.</p> : null}
       </div>
+      <AutorizacionConfirmacionModal
+        abierto={confirmandoAutorizacionId !== null}
+        mensaje="¿Está seguro de que desea autorizar esta solicitud de fondo?"
+        procesando={autorizandoId !== null}
+        onCancelar={() => setConfirmandoAutorizacionId(null)}
+        onConfirmar={() => void confirmarAutorizacion()}
+      />
     </div>
   );
 }
