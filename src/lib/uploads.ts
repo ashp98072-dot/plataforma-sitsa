@@ -5,7 +5,7 @@ import {
   unlinkSync,
 } from "fs";
 import { writeFile } from "fs/promises";
-import { dirname, extname, join, resolve, sep } from "path";
+import { basename, dirname, extname, join, resolve, sep } from "path";
 import { randomBytes } from "crypto";
 import { EXT_PERMITIDAS, MAX_UPLOAD_BYTES } from "@/lib/uploads-constants";
 
@@ -16,29 +16,87 @@ import { EXT_PERMITIDAS, MAX_UPLOAD_BYTES } from "@/lib/uploads-constants";
 // operaciones/multas/[id]/documentos/route.ts), sin ningún cambio en ellos.
 export { EXT_PERMITIDAS, MAX_UPLOAD_BYTES };
 
-/** Raíz persistente en Hostinger: .builds/uploads (fuera de versions/). */
+/**
+ * Raíz persistente en Hostinger: `.builds/uploads` (fuera de `versions/`,
+ * así que sobrevive a cada deploy).
+ *
+ * GASTOS-COMPROBANTE-404-1 — causa raíz del bug donde un comprobante
+ * subido dejaba de encontrarse (404 "no encontrado en disco") después de
+ * un redeploy: la versión ORIGINAL de esta función probaba 4 candidatos
+ * a profundidad FIJA (1, 2 o 3 niveles arriba del cwd) y se quedaba con
+ * el PRIMERO que "ya existiera" en disco — incluida la carpeta `uploads`
+ * efímera DENTRO de `.builds/versions/<id>/...` que ella misma pudo haber
+ * creado en una petición anterior. Esa carpeta vive DENTRO del directorio
+ * de esa versión del deploy: el siguiente despliegue de Hostinger la
+ * reemplaza por una copia limpia del código fuente, sin ningún
+ * `uploads/` — el archivo físico queda huérfano para siempre, aunque la
+ * fila en MySQL (que vive fuera del árbol de archivos, intacta) lo siga
+ * referenciando.
+ *
+ * GASTOS-COMPROBANTE-404-2 (endurecido) — dos huecos que seguían
+ * dependiendo de una heurística silenciosa, cerrados aquí:
+ *   1. El primer arreglo caminaba hacia arriba buscando un directorio
+ *      llamado `.builds`, pero con un límite artificial de 8 niveles —
+ *      ahora camina hasta la raíz REAL del filesystem (`dirname(dir) ===
+ *      dir`), sin ningún límite arbitrario.
+ *   2. Si NO se encuentra ningún ancestro `.builds` (p. ej. Hostinger
+ *      cambiara su estructura de despliegue, o el proceso arrancara desde
+ *      una ruta inesperada) y tampoco está definida `UPLOAD_DIR`, la
+ *      versión anterior caía silenciosamente a `cwd/uploads` — que en
+ *      producción podría, otra vez, ser una carpeta efímera dentro del
+ *      directorio de una versión del deploy. Ahora, en producción
+ *      (`NODE_ENV === "production"`), ese caso lanza un error explícito
+ *      en vez de guardar nada ahí — más vale un 500 diagnosticable que un
+ *      comprobante que se pierde en silencio en el próximo redeploy. El
+ *      mensaje incluye el propio `cwd` (nunca rutas de otra empresa ni
+ *      contenido de archivos) para que el log de Hostinger diga
+ *      exactamente qué directorio hay que usar como `.builds` o como
+ *      `UPLOAD_DIR`. Fuera de producción (dev/local, sin `.builds` en la
+ *      ruta) se conserva el fallback a `cwd/uploads` — necesario para
+ *      poder desarrollar sin la estructura de Hostinger.
+ *
+ * Orden de resolución:
+ *   1. `UPLOAD_DIR` (variable de entorno) — prioridad ABSOLUTA, siempre
+ *      gana si está definida, sea cual sea el entorno. Ver
+ *      `env.hostinger.example` para cómo obtener la ruta absoluta real
+ *      de Hostinger (esta función NUNCA asume ni inventa un valor).
+ *   2. Sin `UPLOAD_DIR`: busca un ancestro `.builds` del cwd (a
+ *      CUALQUIER profundidad) y usa `<.builds>/uploads` — determinista,
+ *      exista o no la carpeta todavía (se crea sola al primer upload).
+ *      Esto es compatibilidad hacia atrás mientras no se configure
+ *      `UPLOAD_DIR`, no la vía recomendada.
+ *   3. Sin `UPLOAD_DIR` y sin ningún ancestro `.builds`:
+ *      - en producción: lanza `Error` (falla explícita, nunca escribe en
+ *        una carpeta potencialmente efímera).
+ *      - fuera de producción: `cwd/uploads` (desarrollo local).
+ */
 export function getUploadsRoot(): string {
   if (process.env.UPLOAD_DIR?.trim()) {
     return resolve(process.env.UPLOAD_DIR.trim());
   }
-  const cwd = process.cwd();
-  const candidates = [
-    // .builds/current → .builds/uploads
-    join(cwd, "..", "uploads"),
-    // .builds/versions/<id> → .builds/uploads
-    join(cwd, "..", "..", "uploads"),
-    // .builds/versions/<id>/nodejs → .builds/uploads
-    join(cwd, "..", "..", "..", "uploads"),
-    join(cwd, "uploads"),
-  ];
-  for (const dir of candidates) {
-    const abs = resolve(dir);
-    const siblingConfig = join(dirname(abs), "config");
-    if (existsSync(siblingConfig) || existsSync(abs)) {
-      return abs;
+  const cwd = resolve(process.cwd());
+  let dir = cwd;
+  for (;;) {
+    if (basename(dir) === ".builds") {
+      return join(dir, "uploads");
     }
+    const padre = dirname(dir);
+    if (padre === dir) break; // llegamos a la raíz real del filesystem sin encontrar ".builds"
+    dir = padre;
   }
-  // Crear uploads junto al cwd si no hay estructura Hostinger
+  if (process.env.NODE_ENV === "production") {
+    const mensaje =
+      `No se pudo determinar un directorio de almacenamiento persistente: ` +
+      `no está definida la variable de entorno UPLOAD_DIR y no se encontró ` +
+      `ningún directorio ".builds" entre los ancestros de cwd="${cwd}". ` +
+      `Define UPLOAD_DIR con la ruta ABSOLUTA real de almacenamiento en ` +
+      `Hostinger (ver env.hostinger.example) — nunca se usa "cwd/uploads" ` +
+      `en producción, porque esa carpeta puede vivir dentro del directorio ` +
+      `de una versión del deploy y perderse en el próximo redeploy.`;
+    console.error(`[uploads] ${mensaje}`);
+    throw new Error(mensaje);
+  }
+  // Sin estructura ".builds" en la ruta y fuera de producción (entorno local/dev): uploads junto al cwd.
   return resolve(join(cwd, "uploads"));
 }
 

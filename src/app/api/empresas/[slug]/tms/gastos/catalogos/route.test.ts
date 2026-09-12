@@ -74,6 +74,21 @@ describe("GET catálogos de Gastos/Fondos", () => {
     expect(body.metodosPago).toEqual(["Efectivo", "Transferencia", "Transferencia móvil", "Tarjeta", "Cheque", "Otro"]);
   });
 
+  /**
+   * GASTOS-COMPROBANTE-404-1 — Fondos reutiliza este MISMO catálogo
+   * compartido para el selector de categoría (antes tenía un arreglo
+   * propio hardcodeado y desactualizado en fondos/page.tsx) — incluye
+   * "Bonificación" y "Reintegro de gastos", requeridas también en Fondos.
+   */
+  it("incluye el catálogo de categorías (mismo que ya usa Gastos, con Bonificación y Reintegro de gastos)", async () => {
+    datosCatalogos();
+    const response = await GET(new Request("http://local"), ctx);
+    const body = await response.json();
+    expect(body.categorias).toContain("Bonificación");
+    expect(body.categorias).toContain("Reintegro de gastos");
+    expect(body.categorias[body.categorias.length - 1]).toBe("Otros");
+  });
+
   it("incluye cualquier empleado activo de la empresa sin filtrar por puesto o vínculo TMS", async () => {
     datosCatalogos();
     const response = await GET(new Request("http://local"), ctx);

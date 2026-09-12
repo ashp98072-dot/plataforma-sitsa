@@ -176,8 +176,15 @@ describe("catálogo de categorías", () => {
       "Combustible", "Hospedaje", "Parqueo", "Cuadrilla", "Auxiliar extra",
       "Mantenimiento", "Arbitrios", "Transporte",
       "Comida", "Aceite", "Medicamento", "Bonificación",
+      "Reintegro de gastos",
       "Otros",
     ]);
+  });
+
+  /** GASTOS-COMPROBANTE-404-1 — catálogo COMPARTIDO con Fondos (ver fondos.test.ts y catalogos/route.ts). */
+  it("incluye 'Bonificación' y 'Reintegro de gastos', requeridas también para Fondos", () => {
+    expect(CATEGORIAS_GASTO).toContain("Bonificación");
+    expect(CATEGORIAS_GASTO).toContain("Reintegro de gastos");
   });
 });
 

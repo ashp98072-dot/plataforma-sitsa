@@ -96,6 +96,12 @@ export const CATEGORIAS_GASTO = [
   "Aceite",
   "Medicamento",
   "Bonificación",
+  // GASTOS-COMPROBANTE-404-1 — catálogo COMPARTIDO con Fondos (ver
+  // fondos/route.ts, fondos/[id]/route.ts y catalogos/route.ts, que lo
+  // reexpone para el formulario de Fondos): agregar aquí basta para que
+  // ambos módulos acepten/muestren "Reintegro de gastos", sin duplicar
+  // el catálogo en ningún otro lugar.
+  "Reintegro de gastos",
   "Otros",
 ] as const;
 export type CategoriaGasto = (typeof CATEGORIAS_GASTO)[number];

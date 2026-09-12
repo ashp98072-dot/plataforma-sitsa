@@ -1,10 +1,11 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { join, resolve } from "path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   absPathFromRelative,
   borrarUpload,
+  getUploadsRoot,
   guardarUpload,
   MAX_UPLOAD_BYTES,
   UploadValidationError,
@@ -246,5 +247,160 @@ describe("verificarDirectorioPadreReal — ADMIN-LIMPIAR-ARCHIVOS-FISICOS (harde
     await guardarUpload(7, "firmas", "x", archivoFalso("f.png", 3, "abc"));
     const abs = absPathFromRelative("empresas/7/firmas/cualquier-nombre-no-creado.png");
     expect(verificarDirectorioPadreReal(7, abs)).toEqual({ estado: "ok" });
+  });
+});
+
+/**
+ * GASTOS-COMPROBANTE-404-1 — causa raíz del 404 "Comprobante no encontrado
+ * en disco": getUploadsRoot() ya NO adivina la profundidad del cwd
+ * respecto a `.builds` (candidatos a 1/2/3 niveles fijos, que podían
+ * "ganar" según qué carpeta ya existiera en disco en ese momento — y
+ * crear una `uploads/` efímera DENTRO de `.builds/versions/<id>/...` que
+ * el siguiente deploy de Hostinger borra). Ahora camina hacia arriba
+ * buscando el directorio `.builds` por NOMBRE, sin importar a cuántos
+ * niveles esté — determinista en cualquier profundidad, en escritura y
+ * en lectura, en cualquier deploy.
+ *
+ * Estos tests SÍ ejercitan la heurística real (a diferencia del resto del
+ * archivo, que usa UPLOAD_DIR para no depender del cwd) — por eso
+ * manipulan `process.cwd()`/`process.env.UPLOAD_DIR` directamente, en un
+ * árbol de directorios temporal que imita la estructura real de
+ * Hostinger, y los restauran siempre en `afterEach`.
+ */
+describe("getUploadsRoot — estructura real de despliegue de Hostinger (GASTOS-COMPROBANTE-404-1/2)", () => {
+  const cwdOriginal = process.cwd();
+  let raizTemp: string;
+
+  beforeEach(() => {
+    delete process.env.UPLOAD_DIR; // el beforeEach global de este archivo lo fija; estos tests prueban justo el caso SIN override.
+    raizTemp = mkdtempSync(join(tmpdir(), "sitsa-hostinger-fake-"));
+  });
+
+  afterEach(() => {
+    process.chdir(cwdOriginal);
+    vi.unstubAllEnvs(); // restaura NODE_ENV (stubeado con vi.stubEnv en los tests que lo necesitan).
+    rmSync(raizTemp, { recursive: true, force: true });
+  });
+
+  it("UPLOAD_DIR, cuando está definido, sigue ganando sobre cualquier heurística (sin cambios)", () => {
+    process.env.UPLOAD_DIR = raizTemp;
+    expect(getUploadsRoot()).toBe(resolve(raizTemp));
+  });
+
+  it.each([
+    ["current", [".builds", "current"]],
+    ["versions/<id>", [".builds", "versions", "20260912-abc"]],
+    ["versions/<id>/nodejs", [".builds", "versions", "20260912-abc", "nodejs"]],
+    ["una profundidad nunca antes vista (5 niveles)", [".builds", "versions", "20260912-abc", "nodejs", "server", "chunks"]],
+  ])("cwd bajo .builds/%s -> SIEMPRE resuelve a <.builds>/uploads, exista o no de antemano", (_caso, segmentos) => {
+    const cwdFalso = join(raizTemp, ...segmentos);
+    mkdirSync(cwdFalso, { recursive: true });
+    process.chdir(cwdFalso);
+    const esperado = join(raizTemp, ".builds", "uploads");
+    expect(getUploadsRoot()).toBe(esperado);
+  });
+
+  /**
+   * GASTOS-COMPROBANTE-404-2 — el límite artificial de 8 niveles se
+   * eliminó; camina hasta la raíz REAL del filesystem. 15 niveles es
+   * bastante más que cualquier profundidad real de Hostinger observada
+   * hasta ahora (2-4), para probar que de verdad no hay ningún tope.
+   */
+  it("cwd bajo .builds a profundidad ARBITRARIA (15 niveles) -> sigue encontrando .builds/uploads, sin ningún límite artificial", () => {
+    const segmentosProfundos = Array.from({ length: 15 }, (_, i) => `nivel-${i}`);
+    const cwdFalso = join(raizTemp, ".builds", ...segmentosProfundos);
+    mkdirSync(cwdFalso, { recursive: true });
+    process.chdir(cwdFalso);
+    expect(getUploadsRoot()).toBe(join(raizTemp, ".builds", "uploads"));
+  });
+
+  it("escritura y lectura resuelven la MISMA raíz aunque el cwd cambie de profundidad entre una petición y otra (simulación de redeploy)", () => {
+    const cwdDeployViejo = join(raizTemp, ".builds", "versions", "id-viejo", "nodejs");
+    const cwdDeployNuevo = join(raizTemp, ".builds", "versions", "id-nuevo"); // profundidad DISTINTA a propósito
+    mkdirSync(cwdDeployViejo, { recursive: true });
+    mkdirSync(cwdDeployNuevo, { recursive: true });
+
+    process.chdir(cwdDeployViejo);
+    const raizEscritura = getUploadsRoot(); // "escritura" del comprobante, deploy viejo
+
+    process.chdir(cwdDeployNuevo);
+    const raizLectura = getUploadsRoot(); // "lectura" del comprobante, tras un redeploy con OTRA profundidad de cwd
+
+    expect(raizLectura).toBe(raizEscritura);
+    expect(raizEscritura).toBe(join(raizTemp, ".builds", "uploads"));
+  });
+
+  it("nunca crea/usa una carpeta 'uploads' efímera DENTRO de .builds/versions/<id> — la causa raíz original del bug", () => {
+    const cwdFalso = join(raizTemp, ".builds", "versions", "id-1", "nodejs");
+    mkdirSync(cwdFalso, { recursive: true });
+    process.chdir(cwdFalso);
+    const raiz = getUploadsRoot();
+    expect(raiz.startsWith(join(raizTemp, ".builds", "versions"))).toBe(false);
+    expect(raiz).toBe(join(raizTemp, ".builds", "uploads"));
+  });
+
+  it("sin ningún ancestro '.builds' EN DESARROLLO (NODE_ENV != production) -> <cwd>/uploads, igual que siempre", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const cwdLocal = join(raizTemp, "proyecto-local");
+    mkdirSync(cwdLocal, { recursive: true });
+    process.chdir(cwdLocal);
+    expect(getUploadsRoot()).toBe(join(cwdLocal, "uploads"));
+  });
+
+  /**
+   * GASTOS-COMPROBANTE-404-2 — núcleo del endurecimiento: en producción,
+   * sin UPLOAD_DIR y sin ningún ancestro ".builds", NUNCA se cae
+   * silenciosamente a "cwd/uploads" (que ahí sí podría ser efímera) —
+   * falla de forma explícita y diagnosticable (el mensaje incluye el cwd
+   * real, nunca datos de otra empresa ni contenido de archivos).
+   */
+  it("PRODUCCIÓN sin UPLOAD_DIR y sin ningún ancestro '.builds' -> lanza un error explícito, nunca usa cwd/uploads en silencio", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const cwdSinBuilds = join(raizTemp, "ruta-inesperada", "sin-builds");
+    mkdirSync(cwdSinBuilds, { recursive: true });
+    process.chdir(cwdSinBuilds);
+    expect(() => getUploadsRoot()).toThrow(/UPLOAD_DIR/);
+    expect(() => getUploadsRoot()).toThrow(cwdSinBuilds);
+    // Nunca crea ninguna carpeta "uploads" como efecto secundario del fallo.
+    expect(existsSync(join(cwdSinBuilds, "uploads"))).toBe(false);
+  });
+
+  it("PRODUCCIÓN con .builds SÍ presente entre los ancestros -> resuelve normal, sin lanzar (el endurecimiento no afecta el caso sano)", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const cwdFalso = join(raizTemp, ".builds", "current");
+    mkdirSync(cwdFalso, { recursive: true });
+    process.chdir(cwdFalso);
+    expect(getUploadsRoot()).toBe(join(raizTemp, ".builds", "uploads"));
+  });
+
+  it("PRODUCCIÓN con UPLOAD_DIR definido -> nunca evalúa la búsqueda de .builds ni puede lanzar, aunque no exista ningún ancestro .builds", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    process.env.UPLOAD_DIR = raizTemp;
+    const cwdSinBuilds = join(raizTemp, "cualquier-ruta");
+    mkdirSync(cwdSinBuilds, { recursive: true });
+    process.chdir(cwdSinBuilds);
+    expect(getUploadsRoot()).toBe(resolve(raizTemp));
+  });
+
+  it("REGRESIÓN GASTOS-COMPROBANTE-404-1: un comprobante subido en un deploy se sigue leyendo tras un redeploy con OTRA profundidad de cwd", async () => {
+    // "Escritura" del comprobante — profundidad típica de .builds/versions/<id>/nodejs.
+    const cwdDeployViejo = join(raizTemp, ".builds", "versions", "id-viejo", "nodejs");
+    mkdirSync(cwdDeployViejo, { recursive: true });
+    process.chdir(cwdDeployViejo);
+    const subido = await guardarUpload(7, "documentos", "gasto9-factura", archivoFalso("captura.png", 5, "abcde"));
+    expect(existsSync(absPathFromRelative(subido.relative))).toBe(true);
+
+    // "Redeploy": el directorio de la versión vieja podría incluso ya no
+    // existir (Hostinger lo reemplaza) — el nuevo cwd tiene una
+    // profundidad DISTINTA a propósito.
+    const cwdDeployNuevo = join(raizTemp, ".builds", "current");
+    mkdirSync(cwdDeployNuevo, { recursive: true });
+    process.chdir(cwdDeployNuevo);
+
+    // "Lectura" del comprobante (GET /comprobante) en el nuevo deploy.
+    const abs = validarRutaArchivoEmpresa(7, subido.relative);
+    expect(abs).not.toBeNull();
+    expect(existsSync(abs!)).toBe(true);
+    expect(readFileSync(abs!, "utf8")).toBe("abcde");
   });
 });
