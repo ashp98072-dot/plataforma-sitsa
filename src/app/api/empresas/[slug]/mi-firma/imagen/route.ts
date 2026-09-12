@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { Readable } from "stream";
 import { requireTenant } from "@/lib/tenant";
 import { obtenerFirmaUsuario } from "@/lib/firmas/usuario-firmas";
-import { absPathFromRelative, contentTypeFor } from "@/lib/uploads";
+import { absPathFromRelative, contentTypeFor, getUploadsRoot } from "@/lib/uploads";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -26,6 +26,17 @@ export async function GET(_req: Request, ctx: Ctx) {
 
     const abs = absPathFromRelative(firma.imagenRuta);
     if (!existsSync(abs)) {
+      // Instrumentación temporal de diagnóstico: la respuesta pública no
+      // cambia y no se registra contenido, identidad, sesión ni secretos.
+      // Retirar una vez confirmada la raíz efectiva usada en producción.
+      console.error("[mi-firma] 404 en disco — diagnóstico temporal", {
+        uploadsRoot: getUploadsRoot(),
+        imagenRuta: firma.imagenRuta,
+        rutaAbsolutaCalculada: abs,
+        existsSync: false,
+        cwd: process.cwd(),
+        uploadDirDefinida: Boolean(process.env.UPLOAD_DIR?.trim()),
+      });
       return NextResponse.json({ error: "Archivo no encontrado en disco." }, { status: 404 });
     }
     const stat = statSync(abs);
