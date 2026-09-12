@@ -1,3 +1,4 @@
+import { existsSync } from "fs";
 import { readFile } from "fs/promises";
 import { extname } from "path";
 import { NextResponse } from "next/server";
@@ -8,6 +9,7 @@ import {
   borrarUpload,
   contentTypeFor,
   guardarUpload,
+  getUploadsRoot,
   UploadValidationError,
   validarRutaArchivoEmpresa,
 } from "@/lib/uploads";
@@ -62,7 +64,31 @@ export async function GET(_req: Request, ctx: Ctx) {
       "Content-Disposition": `inline; filename="${nombre}"`,
       "Cache-Control": "private, no-store",
     } });
-  } catch {
+  } catch (error) {
+    // GASTOS-COMPROBANTE-404-3 (instrumentación TEMPORAL de diagnóstico,
+    // aprobada explícitamente — retirar una vez confirmada la causa raíz
+    // real del 404 en producción, ver PR correspondiente).
+    //
+    // Solo registra: raíz de uploads resuelta, ruta relativa guardada en
+    // BD, ruta absoluta calculada, si existe en disco, y el código de
+    // error del filesystem (ENOENT/EACCES/etc.) — nunca contenido del
+    // archivo, nunca sesión/cookies/secretos, nunca otros campos de BD.
+    // La respuesta al cliente NO cambia: sigue siendo exactamente el
+    // mismo 404 de siempre.
+    let uploadsRoot: string;
+    try {
+      uploadsRoot = getUploadsRoot();
+    } catch (rootError) {
+      uploadsRoot = `ERROR: ${rootError instanceof Error ? rootError.message : String(rootError)}`;
+    }
+    const rutaAbsolutaCalculada = validarRutaArchivoEmpresa(guard.empresa.id, gasto.factura_ruta_relativa);
+    console.error("[comprobante] 404 en disco — diagnóstico temporal", {
+      uploadsRoot,
+      rutaRelativa: gasto.factura_ruta_relativa,
+      rutaAbsolutaCalculada,
+      existe: rutaAbsolutaCalculada ? existsSync(rutaAbsolutaCalculada) : null,
+      codigoError: (error as NodeJS.ErrnoException)?.code ?? "desconocido",
+    });
     return NextResponse.json({ error: "Comprobante no encontrado en disco." }, { status: 404 });
   }
 }
