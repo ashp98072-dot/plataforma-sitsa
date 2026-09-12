@@ -33,7 +33,6 @@ type SolicitudFondo = {
 };
 
 const inputCls = "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
-const CATEGORIAS = ["Combustible", "Hospedaje", "Parqueo", "Cuadrilla", "Auxiliar extra", "Mantenimiento", "Arbitrios", "Transporte", "Otros"];
 
 /**
  * SOLICITUD-FONDOS-REPORTE-1 — catálogos livianos ya existentes,
@@ -56,6 +55,8 @@ type Catalogos = {
   entidadesRequirentes: { id: number; codigo: string; nombre: string }[];
   /** FONDOS-GASTOS-METODO-PAGO-1 — mismo catálogo que ya usa Gastos, servido por este mismo endpoint compartido. */
   metodosPago: string[];
+  /** GASTOS-COMPROBANTE-404-1 — mismo catálogo que ya usa Gastos (CATEGORIAS_GASTO), servido por este mismo endpoint compartido; ya no se duplica localmente. */
+  categorias: string[];
 };
 
 type LineaForm = {
@@ -123,7 +124,7 @@ export default function FondosPage() {
 
   const opcionesUsuarios = (usuarios: { id: number; nombre: string }[]): CatalogoSearchOption[] => usuarios.map((u) => ({ value: String(u.id), label: u.nombre }));
 
-  const [catalogos, setCatalogos] = useState<Catalogos>({ empleados: [], vehiculos: [], clientes: [], planes: [], usuarios: [], solicitantes: [], entidadesRequirentes: [], metodosPago: [] });
+  const [catalogos, setCatalogos] = useState<Catalogos>({ empleados: [], vehiculos: [], clientes: [], planes: [], usuarios: [], solicitantes: [], entidadesRequirentes: [], metodosPago: [], categorias: [] });
   useEffect(() => {
     fetch(`/api/empresas/${slug}/tms/gastos/catalogos`)
       .then(async (r) => {
@@ -136,6 +137,7 @@ export default function FondosPage() {
         planes: data.planes ?? [], usuarios: data.usuarios ?? [], solicitantes: data.solicitantes ?? [],
         entidadesRequirentes: data.entidadesRequirentes ?? [],
         metodosPago: data.metodosPago ?? [],
+        categorias: data.categorias ?? [],
       }))
       .catch((e) => setError(e instanceof Error ? e.message : "No se pudieron cargar los catálogos."));
   }, [slug]);
@@ -365,7 +367,7 @@ export default function FondosPage() {
                   <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
                     <select className={inputCls} value={l.categoria} onChange={(e) => set({ categoria: e.target.value })}>
                       <option value="">Categoría…</option>
-                      {CATEGORIAS.map((c) => <option key={c} value={c}>{c}</option>)}
+                      {catalogos.categorias.map((c) => <option key={c} value={c}>{c}</option>)}
                     </select>
                     <input className={inputCls} placeholder="Descripción" value={l.descripcion} onChange={(e) => set({ descripcion: e.target.value })} />
                     <input type="number" min="0.01" step="0.01" className={inputCls} placeholder="Cantidad" value={l.cantidad} onChange={(e) => set({ cantidad: e.target.value })} />

@@ -85,3 +85,19 @@ describe("PATCH /tms/gastos/[id] — schema administrativo (GASTOS-ADMINISTRATIV
     expect(res.status).toBe(404);
   });
 });
+
+/** GASTOS-COMPROBANTE-404-1 — categoría nueva del catálogo compartido, también al EDITAR un gasto existente. */
+describe("PATCH /tms/gastos/[id] — acepta la categoría 'Reintegro de gastos' (GASTOS-COMPROBANTE-404-1)", () => {
+  it("categoría 'Reintegro de gastos' -> 200, se guarda", async () => {
+    const res = await PATCH(patchReq({ categoria: "Reintegro de gastos" }), ctx);
+    expect(res.status).toBe(200);
+    const [, , cambios] = vi.mocked(actualizarGasto).mock.calls[0]!;
+    expect(cambios).toHaveProperty("categoria", "Reintegro de gastos");
+  });
+
+  it("categoría fuera del catálogo sigue rechazándose", async () => {
+    const res = await PATCH(patchReq({ categoria: "Categoría inventada" }), ctx);
+    expect(res.status).toBe(400);
+    expect(actualizarGasto).not.toHaveBeenCalled();
+  });
+});

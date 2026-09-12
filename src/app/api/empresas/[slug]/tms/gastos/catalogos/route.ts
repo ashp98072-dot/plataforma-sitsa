@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { query, type SqlParams } from "@/lib/db";
 import { requireTenantGastos } from "@/lib/tenant";
-import { METODOS_PAGO_GASTO } from "@/lib/tms/gastos";
+import { CATEGORIAS_GASTO, METODOS_PAGO_GASTO } from "@/lib/tms/gastos";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -105,6 +105,14 @@ export async function GET(_req: Request, ctx: Ctx) {
       // ahora también para el selector de método de pago (mismo catálogo
       // que ya usa Gastos, sin duplicarlo).
       metodosPago: METODOS_PAGO_GASTO,
+      // GASTOS-COMPROBANTE-404-1 — mismo criterio: Fondos tenía un
+      // arreglo de categorías propio, hardcodeado y desactualizado
+      // (nunca recibió "Comida"/"Aceite"/"Medicamento"/"Bonificación" ni
+      // ahora "Reintegro de gastos", aunque el backend ya las acepta —
+      // ver categoria: z.enum(CATEGORIAS_GASTO) en fondos/route.ts). Se
+      // expone aquí, la MISMA fuente que ya usa Gastos, para que
+      // fondos/page.tsx deje de duplicarlo.
+      categorias: CATEGORIAS_GASTO,
     },
     { headers: { "Cache-Control": "private, no-store" } },
     );

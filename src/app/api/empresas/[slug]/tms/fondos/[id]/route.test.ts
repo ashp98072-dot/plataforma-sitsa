@@ -5,7 +5,9 @@ vi.mock("@/lib/tenant", () => ({
   requireTenantGastosAutorizar: vi.fn(),
 }));
 vi.mock("@/lib/tms/gastos", () => ({
-  CATEGORIAS_GASTO: ["Combustible", "Otros"],
+  // GASTOS-COMPROBANTE-404-1 — incluye "Bonificación" y "Reintegro de
+  // gastos" (catálogo COMPARTIDO real con Gastos, ver gastos.ts).
+  CATEGORIAS_GASTO: ["Combustible", "Bonificación", "Reintegro de gastos", "Otros"],
   // FONDOS-GASTOS-METODO-PAGO-1 — la ruta hace z.enum(METODOS_PAGO_GASTO) al cargar el módulo; sin este mock, undefined revienta el schema.
   METODOS_PAGO_GASTO: ["Efectivo", "Transferencia", "Transferencia móvil", "Tarjeta", "Cheque", "Otro"],
 }));
@@ -102,6 +104,13 @@ describe("PATCH /tms/fondos/[id] — permiso de autorización", () => {
       const res = await PATCH(req({ accion: "editar", lineas: [{ categoria: "Combustible", monto: 100, metodoPago: "Bitcoin" }] }), ctx);
       expect(res.status).toBe(400);
       expect(actualizarSolicitudFondo).not.toHaveBeenCalled();
+    });
+
+    /** GASTOS-COMPROBANTE-404-1 — categorías compartidas nuevas, también al EDITAR una solicitud existente. */
+    it.each(["Bonificación", "Reintegro de gastos"])("acepta la categoría '%s' al editar", async (categoria) => {
+      const res = await PATCH(req({ accion: "editar", entidadRequirenteId: 10, lineas: [{ categoria, monto: 100 }] }), ctx);
+      expect(res.status).toBe(200);
+      expect(actualizarSolicitudFondo).toHaveBeenCalled();
     });
   });
 

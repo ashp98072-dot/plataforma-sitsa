@@ -89,3 +89,18 @@ describe("POST /tms/gastos — schema administrativo (GASTOS-ADMINISTRATIVO-1, F
     expect(input).not.toHaveProperty("autorizadoEn");
   });
 });
+
+/** GASTOS-COMPROBANTE-404-1 — categoría nueva del catálogo compartido, también al CREAR un gasto. */
+describe("POST /tms/gastos — acepta la categoría 'Reintegro de gastos' (GASTOS-COMPROBANTE-404-1)", () => {
+  it("categoría 'Reintegro de gastos' -> 200, se guarda", async () => {
+    const res = await POST(postReq({ ...bodyBase, categoria: "Reintegro de gastos" }), ctx);
+    expect(res.status).toBe(200);
+    expect(crearGasto).toHaveBeenCalledWith(7, expect.objectContaining({ categoria: "Reintegro de gastos" }), "ops1");
+  });
+
+  it("categoría fuera del catálogo sigue rechazándose", async () => {
+    const res = await POST(postReq({ ...bodyBase, categoria: "Categoría inventada" }), ctx);
+    expect(res.status).toBe(400);
+    expect(crearGasto).not.toHaveBeenCalled();
+  });
+});
