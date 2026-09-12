@@ -52,4 +52,3 @@ export function isSessionTimeValid(
 export function currentServerSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
-

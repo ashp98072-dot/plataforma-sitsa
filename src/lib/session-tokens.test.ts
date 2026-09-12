@@ -70,4 +70,3 @@ describe("session tokens with idle and absolute lifetime", () => {
     expect(await verifyClienteSessionToken(await createClienteSessionToken({ usuarioClienteId: 3, empresaId: 1, clienteId: 4, authAt: NOW - 3600, lastActivityAt: oldActivity }, { nowSeconds: NOW }))).toBeNull();
   });
 });
-

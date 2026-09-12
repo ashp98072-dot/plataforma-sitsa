@@ -50,4 +50,3 @@ describe("staff activity endpoint", () => {
     expect(createSessionToken).not.toHaveBeenCalled();
   });
 });
-

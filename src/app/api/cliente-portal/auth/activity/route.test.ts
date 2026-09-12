@@ -42,4 +42,3 @@ describe("customer activity endpoint", () => {
     expect(setClienteSessionCookie).toHaveBeenCalledWith("cliente-token");
   });
 });
-

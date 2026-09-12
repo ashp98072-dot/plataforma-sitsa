@@ -31,4 +31,3 @@ describe("collaborator activity endpoint", () => {
     );
   });
 });
-

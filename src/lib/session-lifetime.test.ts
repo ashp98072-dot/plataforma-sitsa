@@ -41,4 +41,3 @@ describe("session lifetime", () => {
     expect(sessionAbsoluteExpiresAt(authAt)).toBe(authAt + SESSION_ABSOLUTE_SECONDS);
   });
 });
-
