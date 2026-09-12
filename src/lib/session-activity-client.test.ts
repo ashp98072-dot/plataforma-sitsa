@@ -12,6 +12,7 @@ import {
   confirmedClockAfterResponse,
   confirmedClockFromServer,
   isConfirmedSessionExpired,
+  canStartHumanActivityRequest,
 } from "./session-activity-client";
 
 describe("session inactivity client policy", () => {
@@ -37,6 +38,21 @@ describe("session inactivity client policy", () => {
     expect(shouldSendActivityPing(0, now)).toBe(true);
     expect(shouldSendActivityPing(now, now + ACTIVITY_PING_THROTTLE_MS - 1)).toBe(false);
     expect(shouldSendActivityPing(now, now + ACTIVITY_PING_THROTTLE_MS)).toBe(true);
+  });
+
+  it("GET en curso no pierde actividad humana y solo admite un POST", () => {
+    expect(
+      canStartHumanActivityRequest({
+        validationInFlight: true,
+        activityInFlight: false,
+      }),
+    ).toBe(true);
+    expect(
+      canStartHumanActivityRequest({
+        validationInFlight: true,
+        activityInFlight: true,
+      }),
+    ).toBe(false);
   });
 
   it("solo acepta pointer, teclado o touch confiables como actividad humana", () => {
@@ -108,6 +124,90 @@ describe("session inactivity client policy", () => {
     )!;
     expect(successful.lastActivityAtMs).toBe(1_500_000);
     expect(successful.idleExpiresAtMs).toBe(3_300_000);
+  });
+
+  it("una respuesta más nueva reemplaza la confirmación anterior", () => {
+    const previous = confirmedClockFromServer(
+      {
+        serverNow: 2_000,
+        lastActivityAt: 2_000,
+        idleExpiresAt: 3_800,
+        absoluteExpiresAt: 40_000,
+      },
+      2_000_000,
+    )!;
+    const next = confirmedClockAfterResponse(
+      previous,
+      {
+        serverNow: 2_100,
+        lastActivityAt: 2_100,
+        idleExpiresAt: 3_900,
+        absoluteExpiresAt: 40_000,
+      },
+      2_100_000,
+    )!;
+    expect(next.lastActivityAtMs).toBe(2_100_000);
+    expect(next.idleExpiresAtMs).toBe(3_900_000);
+  });
+
+  it("una respuesta vieja o con absoluto extendido se ignora", () => {
+    const current = confirmedClockFromServer(
+      {
+        serverNow: 2_000,
+        lastActivityAt: 2_000,
+        idleExpiresAt: 3_800,
+        absoluteExpiresAt: 40_000,
+      },
+      2_000_000,
+    )!;
+    const stale = confirmedClockAfterResponse(
+      current,
+      {
+        serverNow: 2_100,
+        lastActivityAt: 1_950,
+        idleExpiresAt: 3_750,
+        absoluteExpiresAt: 40_000,
+      },
+      2_100_000,
+    );
+    expect(stale).toBe(current);
+
+    const extended = confirmedClockAfterResponse(
+      current,
+      {
+        serverNow: 2_100,
+        lastActivityAt: 2_100,
+        idleExpiresAt: 3_900,
+        absoluteExpiresAt: 40_100,
+      },
+      2_100_000,
+    );
+    expect(extended).toBe(current);
+  });
+
+  it("storage fuera de orden no reduce actividad ni vencimiento idle", () => {
+    const current = confirmedClockFromServer(
+      {
+        serverNow: 2_000,
+        lastActivityAt: 2_000,
+        idleExpiresAt: 3_800,
+        absoluteExpiresAt: 40_000,
+      },
+      20_000_000,
+    )!;
+    const afterStorage = confirmedClockAfterResponse(
+      current,
+      {
+        serverNow: 2_050,
+        lastActivityAt: 1_900,
+        idleExpiresAt: 3_700,
+        absoluteExpiresAt: 40_000,
+      },
+      50_000,
+    )!;
+    expect(afterStorage).toBe(current);
+    expect(afterStorage.lastActivityAtMs).toBe(2_000_000);
+    expect(afterStorage.idleExpiresAtMs).toBe(3_800_000);
   });
 
   it("usa llaves compartidas por tipo para coordinar pestañas", () => {

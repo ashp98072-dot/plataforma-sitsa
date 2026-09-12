@@ -13,6 +13,7 @@ import {
   isTrustedHumanActivity,
   tryAcquireActivityLock,
   confirmedClockAfterResponse,
+  canStartHumanActivityRequest,
   isConfirmedSessionExpired,
   type ActivityResponse,
   type ConfirmedSessionClock,
@@ -37,7 +38,8 @@ export function SessionInactivityGuard() {
   const router = useRouter();
   const kind = sessionKindForPath(pathname);
   const loggingOut = useRef(false);
-  const requestInFlight = useRef(false);
+  const validationInFlight = useRef(false);
+  const activityInFlight = useRef(false);
   const owner = useRef("");
   const confirmedClock = useRef<ConfirmedSessionClock | null>(null);
 
@@ -46,7 +48,9 @@ export function SessionInactivityGuard() {
     const activeKind = kind;
     owner.current ||= globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
     loggingOut.current = false;
-    requestInFlight.current = false;
+    validationInFlight.current = false;
+    activityInFlight.current = false;
+    confirmedClock.current = null;
 
     const endpoints = SESSION_ENDPOINTS[activeKind];
     const humanKey = activityStorageKey(activeKind);
@@ -78,8 +82,8 @@ export function SessionInactivityGuard() {
     }
 
     async function validateOnly() {
-      if (requestInFlight.current || loggingOut.current) return;
-      requestInFlight.current = true;
+      if (validationInFlight.current || loggingOut.current) return;
+      validationInFlight.current = true;
       try {
         const response = await fetch(endpoints.activity, {
           method: "GET",
@@ -91,20 +95,28 @@ export function SessionInactivityGuard() {
       } catch {
         // Mantener el último estado confirmado; validar no renueva la sesión.
       } finally {
-        requestInFlight.current = false;
+        validationInFlight.current = false;
       }
     }
 
     async function registerHumanActivity() {
       const now = Date.now();
       localStorage.setItem(humanKey, String(now));
-      if (requestInFlight.current || loggingOut.current) return;
+      if (
+        loggingOut.current ||
+        !canStartHumanActivityRequest({
+          validationInFlight: validationInFlight.current,
+          activityInFlight: activityInFlight.current,
+        })
+      ) {
+        return;
+      }
       const lastPing = numberFromStorage(pingKey);
       if (!shouldSendActivityPing(lastPing, now)) return;
       if (!acquireCrossTabLock(activeKind, owner.current, now)) return;
       // Se reserva la ventana antes del fetch para agrupar eventos y pestañas.
       localStorage.setItem(pingKey, String(now));
-      requestInFlight.current = true;
+      activityInFlight.current = true;
       let confirmed = false;
       try {
         const response = await fetch(endpoints.activity, {
@@ -119,7 +131,7 @@ export function SessionInactivityGuard() {
       } catch {
         // Una falla de red no equivale a actividad aceptada por el servidor.
       } finally {
-        requestInFlight.current = false;
+        activityInFlight.current = false;
         try {
           if (!confirmed && numberFromStorage(pingKey) === now) {
             localStorage.removeItem(pingKey);
@@ -177,6 +189,7 @@ export function SessionInactivityGuard() {
       window.removeEventListener("storage", onStorage);
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("focus", onFocus);
+      confirmedClock.current = null;
     };
   }, [kind, router]);
 

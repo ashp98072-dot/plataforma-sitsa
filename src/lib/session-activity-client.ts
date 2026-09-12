@@ -83,6 +83,14 @@ export function shouldSendActivityPing(
   return !Number.isFinite(lastPingMs) || nowMs - lastPingMs >= ACTIVITY_PING_THROTTLE_MS;
 }
 
+/** Una validación GET en curso no debe bloquear una actividad humana POST. */
+export function canStartHumanActivityRequest(state: {
+  validationInFlight: boolean;
+  activityInFlight: boolean;
+}): boolean {
+  return !state.activityInFlight;
+}
+
 export function isTrustedHumanActivity(event: Pick<Event, "isTrusted" | "type">): boolean {
   return Boolean(
     event.isTrusted &&
@@ -142,9 +150,21 @@ export function confirmedClockAfterResponse(
   response: ActivityResponse | null,
   localReceivedAtMs: number,
 ): ConfirmedSessionClock | null {
-  return response
-    ? (confirmedClockFromServer(response, localReceivedAtMs) ?? current)
-    : current;
+  if (!response) return current;
+  const candidate = confirmedClockFromServer(response, localReceivedAtMs);
+  if (!candidate) return current;
+  if (!current) return candidate;
+
+  // Respuestas entre pestañas pueden llegar fuera de orden. Nunca retroceder
+  // actividad/idle ni aceptar que el mismo login cambie su límite absoluto.
+  if (
+    candidate.lastActivityAtMs < current.lastActivityAtMs ||
+    candidate.idleExpiresAtMs < current.idleExpiresAtMs ||
+    candidate.absoluteExpiresAtMs !== current.absoluteExpiresAtMs
+  ) {
+    return current;
+  }
+  return candidate;
 }
 
 export function isConfirmedSessionExpired(
