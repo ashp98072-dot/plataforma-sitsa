@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
+import { formatearHora12 } from "@/lib/tms/hora-formato";
 
 export type RutaParadaOpt = {
   id: number;
@@ -190,7 +191,7 @@ export function RutaSelect({ slug, clienteId, value, inputClassName, onSeleccion
                 </span>
                 <span className="text-[10px] text-[var(--muted)]">
                   {r.lugarCargaTexto || "Sin carga configurada"}
-                  {r.horaHabitual ? ` · ${r.horaHabitual}` : ""}
+                  {r.horaHabitual ? ` · ${formatearHora12(r.horaHabitual)}` : ""}
                   {r.destinoDescripcion ? ` → ${r.destinoDescripcion}` : ""}
                   {r.tarifaReferencia != null ? ` · tarifa Q${r.tarifaReferencia.toFixed(2)}` : ""}
                 </span>

@@ -7,6 +7,7 @@ import {
   claseEstadoSolicitud,
   etiquetaEstadoSolicitud,
 } from "@/lib/tms/solicitudes-cliente-ui";
+import { formatearHora12 } from "@/lib/tms/hora-formato";
 
 type SolicitudFila = {
   id: number;
@@ -128,7 +129,7 @@ export function SolicitudesClientesBandeja({ slug }: { slug: string }) {
                   <td className="px-3 py-2 font-mono text-xs">#{s.id}</td>
                   <td className="px-3 py-2">{s.clienteNombre}</td>
                   <td className="px-3 py-2">{s.fechaSolicitada}</td>
-                  <td className="px-3 py-2 text-xs">{s.horaSolicitada?.slice(0, 5) || "—"}</td>
+                  <td className="px-3 py-2 text-xs">{formatearHora12(s.horaSolicitada)}</td>
                   <td className="px-3 py-2 text-xs">{s.referenciaCliente || "—"}</td>
                   <td className="px-3 py-2 text-xs">{s.cantidadEntregas}</td>
                   <td className="px-3 py-2">

@@ -7,6 +7,7 @@ import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
 import { hoyLocal } from "@/lib/rrhh/dates";
 import { puedeCerrarManualmente } from "@/lib/tms/cierre-viaje-shared";
+import { formatearHora12 } from "@/lib/tms/hora-formato";
 
 /**
  * OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — deep-link a un plan puntual.
@@ -895,7 +896,7 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                           <div>
                             <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">C. Operación</p>
                             <ul className="mt-1 space-y-0.5 text-xs text-[var(--text)]">
-                              <li>Hora programada: {p.horaCarga ?? "—"}</li>
+                              <li>Hora programada: {formatearHora12(p.horaCarga)}</li>
                               <li>Hora salida real: {fh(p.horaSalida)}</li>
                               <li>Hora llegada real: {fh(p.horaLlegada)}</li>
                               <li>Km salida: {p.kmSalida ?? "—"}</li>

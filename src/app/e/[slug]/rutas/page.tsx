@@ -6,6 +6,8 @@ import Link from "next/link";
 import { ClienteSearch } from "@/components/tms/cliente-search";
 import { CatalogoSearchSelect, type CatalogoSearchOption } from "@/components/tms/catalogo-search-select";
 import { RutaTarifasPanel } from "@/components/tms/ruta-tarifas-panel";
+import { Hora12Input } from "@/components/tms/hora-input-12h";
+import { formatearHora12 } from "@/lib/tms/hora-formato";
 
 type ClienteOpt = {
   id: number;
@@ -722,17 +724,20 @@ export default function RutasPage() {
               />
               {mensajeCampo("lugarCargaTexto")}
             </label>
-            <label className="text-xs text-[var(--muted)]">
-              Hora habitual
-              <input
-                data-campo="horaHabitual"
-                type="time"
-                className={`${campoCls("horaHabitual")} mt-0.5 w-full`}
+            <div>
+              {/* OPERACIONES-HORA-12H-1 — UI en formato 12h con AM/PM;
+                  internamente sigue siendo `HH:mm` (24h) en
+                  `form.horaHabitual` (u "" si la ruta no tiene hora
+                  habitual — campo opcional, sin cambios). */}
+              <Hora12Input
+                label="Hora habitual"
+                dataCampo="horaHabitual"
+                inputClassName={campoCls("horaHabitual")}
                 value={form.horaHabitual}
-                onChange={(e) => setForm((f) => ({ ...f, horaHabitual: e.target.value }))}
+                onChange={(hora24) => setForm((f) => ({ ...f, horaHabitual: hora24 }))}
               />
               {mensajeCampo("horaHabitual")}
-            </label>
+            </div>
             <label className="text-xs text-[var(--muted)]">
               Tarifa de referencia (GTQ)
               <input
@@ -1029,7 +1034,7 @@ export default function RutasPage() {
                   <td className="px-3 py-2">{r.clienteNombre}</td>
                   <td className="px-3 py-2">{r.nombre || "—"}</td>
                   <td className="px-3 py-2 text-[11px]">{r.lugarCargaTexto || "—"}</td>
-                  <td className="px-3 py-2">{r.horaHabitual || "—"}</td>
+                  <td className="px-3 py-2">{formatearHora12(r.horaHabitual)}</td>
                   <td className="px-3 py-2">{r.tarifaReferencia != null ? `Q${r.tarifaReferencia.toLocaleString("es-GT", { minimumFractionDigits: 2 })}` : "—"}</td>
                   <td className="px-3 py-2 text-[11px]">
                     {r.personalPredeterminado.length

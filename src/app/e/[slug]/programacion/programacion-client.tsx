@@ -8,6 +8,7 @@ import type {
   EstadoDisponibilidad,
 } from "@/lib/operaciones/disponibilidad-personal";
 import PlanForm from "./plan-form";
+import { formatearHora12 } from "@/lib/tms/hora-formato";
 
 /**
  * OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — tras CERRAR un viaje, Programación
@@ -329,7 +330,7 @@ function PersonaEstado({
           title={otrosPlanes
             .map(
               (pl) =>
-                `${pl.planCodigo} · ${pl.horaCarga ?? "—"}${pl.placa ? ` · ${pl.placa}` : ""}${
+                `${pl.planCodigo} · ${formatearHora12(pl.horaCarga)}${pl.placa ? ` · ${pl.placa}` : ""}${
                   pl.origen || pl.destino ? ` · ${pl.origen ?? "—"} → ${pl.destino ?? "—"}` : ""
                 }`,
             )
@@ -1211,7 +1212,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
                   </span>
                   <span className="ml-2 text-xs text-[var(--muted)]">
                     {p.fecha_plan}
-                    {p.hora_carga ? ` · ${p.hora_carga.slice(0, 5)}` : ""}
+                    {p.hora_carga ? ` · ${formatearHora12(p.hora_carga)}` : ""}
                   </span>
                 </div>
                 <div className="flex flex-wrap items-center gap-1.5">
