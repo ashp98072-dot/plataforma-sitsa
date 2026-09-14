@@ -8,6 +8,8 @@ import { PilotoSelect } from "@/components/tms/piloto-select";
 import { RutaSelect, type RutaOpt } from "@/components/tms/ruta-select";
 import { AuxiliaresSelect } from "@/components/tms/auxiliares-select";
 import { Hora12Input } from "@/components/tms/hora-input-12h";
+import { formatearHora12 } from "@/lib/tms/hora-formato";
+import { horaCorta } from "@/lib/rrhh/dates";
 import ViaticosPanel from "@/components/tms/viaticos-panel";
 import type { Plan } from "./programacion-client";
 import NotificarPersonal from "./notificar-personal";
@@ -1996,7 +1998,18 @@ export default function PlanForm({
                 <ul className="mt-2 space-y-2">
                   {candidatosVinculo.map((c) => (
                     <li key={c.viajeId} className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border)] pt-2 first:border-t-0 first:pt-0">
-                      <span>Viaje técnico #{c.viajeId} · {c.placa} · salida {String(c.horaSalida).replace("T", " ").slice(0, 16)}</span>
+                      {/* OPERACIONES-HORA-12H-1 (Grupo C, corrección
+                          post-revisión PR #264) — c.horaSalida es un
+                          DATETIME real de flota_viajes; la consulta que
+                          arma estos candidatos ya filtra por
+                          DATE(v.hora_salida) = fecha del plan (mismo
+                          día siempre), así que solo se muestra la HORA
+                          (horaCorta de rrhh/dates.ts ya normaliza
+                          Date/string/ISO antes de convertir a 12h) —
+                          repetir la fecha aquí sería redundante con la
+                          fecha del plan que ya se ve en el resto del
+                          formulario. */}
+                      <span>Viaje técnico #{c.viajeId} · {c.placa} · salida {formatearHora12(horaCorta(c.horaSalida))}</span>
                       {confirmandoVinculo === c.viajeId ? (
                         <span className="flex items-center gap-2">
                           <span>Vincular el viaje técnico #{c.viajeId} con {plan?.codigo}. Esta acción no cambia el estado del plan.</span>

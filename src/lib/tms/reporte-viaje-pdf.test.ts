@@ -62,10 +62,26 @@ describe("reporteViajePdf — hora real en formato 12h (Grupo C)", () => {
     expect(textos).toContain("Hora llegada real: ");
   });
 
-  it("NO afecta 'Hora programada' (HH:mm plano, Grupo B — fuera de este ticket)", async () => {
+  /**
+   * Corrección post-revisión PR #264 — "Hora programada" (HH:mm plano,
+   * tms_planes_viaje.hora_carga, NUNCA un DATETIME) también se convierte,
+   * pero con formatearHora12 (no formatearFechaHora12, que asume
+   * fecha+hora completa).
+   */
+  it("'Hora programada' (HH:mm plano) también se convierte a 12h, con formatearHora12", async () => {
     const spy = espiarTexto();
     await reporteViajePdf("SITSA", plan({ horaCarga: "08:00:00" }));
     const textos = spy.mock.calls.map((c) => String(c[0]));
-    expect(textos).toContain("08:00:00");
+    expect(textos).toContain("08:00 AM");
+    expect(textos).not.toContain("08:00:00");
+  });
+
+  it("'Hora programada' null -> '—'", async () => {
+    const spy = espiarTexto();
+    await reporteViajePdf("SITSA", plan({ horaCarga: null }));
+    const textos = spy.mock.calls.map((c) => String(c[0]));
+    const i = textos.indexOf("Hora programada: ");
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(textos[i + 1]).toBe("—"); // "campo()" dibuja label (continued) y luego el valor en la siguiente llamada
   });
 });
