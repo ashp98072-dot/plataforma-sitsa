@@ -1,6 +1,7 @@
 import PDFDocument from "pdfkit";
 import type { PlanReporte } from "@/lib/tms/reportes-viajes";
 import { ahoraLocal, formatearTimestampVisible } from "@/lib/rrhh/dates";
+import { formatearFechaHora12 } from "@/lib/tms/hora-formato";
 
 function moneda(v: number | null): string {
   if (v == null) return "Pendiente";
@@ -78,9 +79,12 @@ export async function reporteViajePdf(
 
     // C. Operación
     seccion("C. Operación");
+    // OPERACIONES-HORA-12H-1 (Grupo C) — hora REAL en formato 12h con
+    // AM/PM; regreso_estimado/cerrado_en (fuera de este ticket) siguen
+    // con fechaHora() sin cambios más abajo.
     campo("Hora programada", p.horaCarga ?? "—");
-    campo("Hora salida real", fechaHora(p.horaSalida));
-    campo("Hora llegada real", fechaHora(p.horaLlegada));
+    campo("Hora salida real", formatearFechaHora12(p.horaSalida));
+    campo("Hora llegada real", formatearFechaHora12(p.horaLlegada));
     campo("Km salida", p.kmSalida != null ? String(p.kmSalida) : "—");
     campo("Km llegada", p.kmLlegada != null ? String(p.kmLlegada) : "—");
     campo("Km recorridos", p.kmRecorridos != null ? String(p.kmRecorridos) : "—");

@@ -7,7 +7,7 @@ import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
 import { hoyLocal } from "@/lib/rrhh/dates";
 import { puedeCerrarManualmente } from "@/lib/tms/cierre-viaje-shared";
-import { formatearHora12 } from "@/lib/tms/hora-formato";
+import { formatearFechaHora12, formatearHora12 } from "@/lib/tms/hora-formato";
 
 /**
  * OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — deep-link a un plan puntual.
@@ -330,8 +330,11 @@ export function resumenCierre(p: PlanReporte): {
     cliente: p.cliente ?? "—",
     placa: p.placa ?? "—",
     piloto: p.piloto ?? "—",
-    horaSalida: fh(p.horaSalida),
-    horaLlegada: fh(p.horaLlegada),
+    // OPERACIONES-HORA-12H-1 (Grupo C) — hora REAL de salida/llegada en
+    // formato 12h con AM/PM; regresoEstimado/cerradoEn (fuera de este
+    // ticket) siguen usando fh() sin cambios más abajo en este archivo.
+    horaSalida: formatearFechaHora12(p.horaSalida),
+    horaLlegada: formatearFechaHora12(p.horaLlegada),
     kmSalida: p.kmSalida != null ? String(p.kmSalida) : "—",
     kmLlegada: p.kmLlegada != null ? String(p.kmLlegada) : "—",
     evidencias: p.evidencias,
@@ -807,8 +810,8 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                     <td className="px-2 py-1.5 text-xs">{p.placa ?? "—"}</td>
                     <td className="px-2 py-1.5 text-xs">{p.piloto ?? "—"}</td>
                     <td className="px-2 py-1.5 text-xs">{p.auxiliares.join(", ") || "—"}</td>
-                    <td className="whitespace-nowrap px-2 py-1.5 text-xs">{fh(p.horaSalida)}</td>
-                    <td className="whitespace-nowrap px-2 py-1.5 text-xs">{fh(p.horaLlegada)}</td>
+                    <td className="whitespace-nowrap px-2 py-1.5 text-xs">{formatearFechaHora12(p.horaSalida)}</td>
+                    <td className="whitespace-nowrap px-2 py-1.5 text-xs">{formatearFechaHora12(p.horaLlegada)}</td>
                     <td className="px-2 py-1.5 text-xs">{p.kmSalida ?? "—"}</td>
                     <td className="px-2 py-1.5 text-xs">{p.kmLlegada ?? "—"}</td>
                     <td className="px-2 py-1.5 text-xs">{p.kmRecorridos ?? "—"}</td>
@@ -897,8 +900,8 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                             <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">C. Operación</p>
                             <ul className="mt-1 space-y-0.5 text-xs text-[var(--text)]">
                               <li>Hora programada: {formatearHora12(p.horaCarga)}</li>
-                              <li>Hora salida real: {fh(p.horaSalida)}</li>
-                              <li>Hora llegada real: {fh(p.horaLlegada)}</li>
+                              <li>Hora salida real: {formatearFechaHora12(p.horaSalida)}</li>
+                              <li>Hora llegada real: {formatearFechaHora12(p.horaLlegada)}</li>
                               <li>Km salida: {p.kmSalida ?? "—"}</li>
                               <li>Km llegada: {p.kmLlegada ?? "—"}</li>
                               <li>Km recorridos: {p.kmRecorridos ?? "—"}</li>

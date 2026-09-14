@@ -39,8 +39,9 @@ describe("resumenCierre — datos mínimos exigidos por la confirmación", () =>
     expect(r.cliente).toBe("Cliente X");
     expect(r.placa).toBe("C-034BXR");
     expect(r.piloto).toBe("Juan Pérez");
-    expect(r.horaSalida).toBe("2026-08-27 07:00");
-    expect(r.horaLlegada).toBe("2026-08-27 18:00");
+    // OPERACIONES-HORA-12H-1 (Grupo C) — formato 12h con AM/PM (antes: "2026-08-27 07:00"/"2026-08-27 18:00").
+    expect(r.horaSalida).toBe("2026-08-27 07:00 AM");
+    expect(r.horaLlegada).toBe("2026-08-27 06:00 PM");
     expect(r.kmSalida).toBe("1000");
     expect(r.kmLlegada).toBe("1350");
     expect(r.evidencias).toBe(3);

@@ -55,6 +55,34 @@ describe("reporteViajesHistorialPdf", () => {
     expect(filaFacturacion(p)).toHaveLength(HEADERS_FACTURACION.length);
   });
 
+  /**
+   * OPERACIONES-HORA-12H-1 (Grupo C) — columnas "H. salida"/"H. llegada"
+   * (índices 7-8 de filaOperativa) en formato 12h con AM/PM. La
+   * conversión en sí ya está probada exhaustivamente en
+   * hora-formato.test.ts (formatearFechaHora12); aquí se prueba que
+   * filaOperativa() realmente la use en las columnas correctas.
+   */
+  describe("filaOperativa — hora real en formato 12h (Grupo C)", () => {
+    it("salida AM / llegada PM", () => {
+      const p = plan(1);
+      const fila = filaOperativa({ ...p, horaSalida: "2026-09-10T08:00:00", horaLlegada: "2026-09-10T17:00:00" });
+      expect(fila[7]).toBe("2026-09-10 08:00 AM");
+      expect(fila[8]).toBe("2026-09-10 05:00 PM");
+    });
+
+    it("12:00 AM (medianoche) y 12:00 PM (mediodía)", () => {
+      const fila = filaOperativa({ ...plan(1), horaSalida: "2026-09-10T00:00:00", horaLlegada: "2026-09-10T12:00:00" });
+      expect(fila[7]).toBe("2026-09-10 12:00 AM");
+      expect(fila[8]).toBe("2026-09-10 12:00 PM");
+    });
+
+    it("horaSalida/horaLlegada null -> '—', nunca revienta", () => {
+      const fila = filaOperativa({ ...plan(1), horaSalida: null, horaLlegada: null });
+      expect(fila[7]).toBe("—");
+      expect(fila[8]).toBe("—");
+    });
+  });
+
   it("pagina rangos extensos y repite los encabezados en páginas nuevas", async () => {
     const textos: string[] = [];
     const original = PDFDocument.prototype.text;

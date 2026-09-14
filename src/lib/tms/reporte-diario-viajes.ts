@@ -1,3 +1,5 @@
+import { formatearFechaHora12, formatearHora12 } from "@/lib/tms/hora-formato";
+
 export type ViajeDiario = {
   fechaPlan: string;
   cliente: string | null;
@@ -18,6 +20,21 @@ export const HEADERS_REPORTE_DIARIO = [
   "Piloto", "Auxiliar 1", "Auxiliar 2", "Estado", "Tarifa comercial / valor del viaje",
 ];
 
+/**
+ * OPERACIONES-HORA-12H-1 (Grupo C) — `horaSalida` (real, cuando ya
+ * existe) y `horaCarga` (programada, fallback) tienen formas DISTINTAS:
+ * la primera es fecha+hora completa (`YYYY-MM-DDTHH:mm`, misma consulta
+ * que reportes-viajes.ts), la segunda es `HH:mm[:ss]` plano sin fecha —
+ * por eso cada una usa el helper compartido que le corresponde
+ * (formatearFechaHora12 / formatearHora12) en vez de una sola conversión
+ * genérica que asumiría una sola forma para las dos.
+ */
+function horaMostrada(horaSalidaReal: string | null, horaProgramada: string | null): string {
+  if (horaSalidaReal) return formatearFechaHora12(horaSalidaReal);
+  if (horaProgramada) return formatearHora12(horaProgramada);
+  return "—";
+}
+
 export function filaReporteDiario(v: ViajeDiario): string[] {
   return [
     v.fechaPlan,
@@ -25,7 +42,7 @@ export function filaReporteDiario(v: ViajeDiario): string[] {
     v.unidadTipo ?? "—",
     v.placa ?? "—",
     v.rutaCodigo ?? v.lugarDescargaHistorico ?? "—",
-    (v.horaSalida ?? v.horaCarga ?? "—").replace("T", " "),
+    horaMostrada(v.horaSalida, v.horaCarga),
     v.piloto ?? "—",
     v.auxiliares[0] ?? "—",
     v.auxiliares[1] ?? "—",

@@ -1,3 +1,5 @@
+import { fmtTs } from "@/lib/rrhh/dates";
+
 /**
  * OPERACIONES-HORA-12H-1 — helpers de PRESENTACIÓN para que el módulo de
  * Operaciones muestre/edite horas en formato 12h con AM/PM, sin cambiar
@@ -11,13 +13,17 @@
  * mismo criterio defensivo que ya usa plan-form.tsx con `.slice(0, 5)`
  * sobre `tms_planes_viaje.hora_carga`.
  *
- * Fase 1 (Grupo A + B, PR 1): solo horas "programadas" (`HH:mm` plano,
- * sin componente de fecha) — `hora_carga`, `hora_habitual`,
- * `hora_solicitada`. Las horas "reales" derivadas de un `DATETIME`
- * completo (`flota_viajes.hora_salida`/`hora_llegada`) quedan para un PR
- * separado (Grupo C), que reutilizará la normalización ya existente en
- * `src/lib/rrhh/dates.ts` (`fmtTs`/`horaCorta`) para extraer primero el
- * `HH:mm` antes de pasarlo por `formatearHora12`.
+ * Grupo A + B (PR 1, ya en producción): `formatearHora12`/`parsearHora12`/
+ * `combinarHora12` — solo horas "programadas" (`HH:mm` plano, sin
+ * componente de fecha): `hora_carga`, `hora_habitual`, `hora_solicitada`.
+ *
+ * Grupo C (este PR): `formatearFechaHora12` — horas "reales" derivadas de
+ * un `DATETIME` completo (`flota_viajes.hora_salida`/`hora_llegada`, y
+ * campos equivalentes como `regreso_estimado`/`cerrado_en` que ya se
+ * formatean igual en las mismas consultas SQL). Reutiliza `fmtTs`
+ * (rrhh/dates.ts) para la normalización — Date/string MySQL/ISO con
+ * Z/offset, hora de pared de Guatemala, sin conversión de zona — en vez
+ * de reinventar esa lógica o usar `.replace("T", " ")`/slicing frágil.
  */
 
 const PATRON_HORA_24 = /^([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?$/;
@@ -78,4 +84,30 @@ export function combinarHora12(hora: number, minuto: number, ampm: "AM" | "PM"):
   const m = Math.min(59, Math.max(0, Math.round(minuto)));
   const hora24 = (h % 12) + (ampm === "PM" ? 12 : 0);
   return `${String(hora24).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+/**
+ * OPERACIONES-HORA-12H-1 (Grupo C) — un valor de fecha+hora COMPLETO
+ * (Date, string DATETIME de MySQL, ISO con `Z`/offset) -> `"YYYY-MM-DD
+ * hh:mm AM/PM"`. Reutiliza `fmtTs` (rrhh/dates.ts) para la normalización
+ * — NUNCA reimplementa el manejo de Date/string/ISO, y nunca usa
+ * `.replace("T", " ")` ni slicing frágil sobre el valor crudo.
+ *
+ * A propósito CONSERVA la fecha (nunca la descarta): un viaje puede
+ * abarcar varios días (ver `diasRuta` en reportes-viajes.ts), así que
+ * mostrar solo la hora perdería en qué día ocurrió la salida/llegada
+ * real. Esto NO es un cambio de lógica de negocio — es exactamente el
+ * mismo valor que ya mostraban `fh()`/`fechaHora()` en cada pantalla
+ * (`.replace("T", " ")`), solo con la hora en formato 12h en vez de 24h.
+ *
+ * `null`/vacío/inválido -> `"—"` (mismo criterio que el resto de este
+ * archivo: nunca revienta, nunca inventa un valor).
+ */
+export function formatearFechaHora12(value: string | Date | null | undefined): string {
+  const normalizado = fmtTs(value);
+  if (!normalizado) return "—";
+  const [fecha, horaCompleta] = normalizado.split(" ");
+  if (!fecha) return "—";
+  const hora12 = formatearHora12(horaCompleta ? horaCompleta.slice(0, 5) : null);
+  return hora12 === "—" ? fecha : `${fecha} ${hora12}`;
 }

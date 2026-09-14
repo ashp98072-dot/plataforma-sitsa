@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { combinarHora12, formatearHora12, parsearHora12 } from "./hora-formato";
+import { combinarHora12, formatearFechaHora12, formatearHora12, parsearHora12 } from "./hora-formato";
 
 /**
  * OPERACIONES-HORA-12H-1 — los 5 casos exactos pedidos, probados en AMBAS
@@ -105,4 +105,60 @@ describe("round-trip 24h -> selector 12h -> 24h", () => {
       expect(combinarHora12(partes.hora, partes.minuto, partes.ampm)).toBe(hora24);
     },
   );
+});
+
+/**
+ * OPERACIONES-HORA-12H-1 (Grupo C) — `formatearFechaHora12` reutiliza
+ * `fmtTs` (rrhh/dates.ts) para la normalización, así que se prueba contra
+ * las 4 formas reales en que puede llegar un valor de fecha+hora:
+ * el string `YYYY-MM-DDTHH:mm` que ya devuelve
+ * `DATE_FORMAT(..., '%Y-%m-%dT%H:%i')` en reportes-viajes.ts (salida/
+ * llegada/regreso/cierre, todas la MISMA consulta), un string MySQL con
+ * espacio y segundos, un objeto `Date`, e ISO con `Z`/offset — validando
+ * que TODAS conserven la hora de pared de Guatemala (sin conversión de
+ * zona en el caso "sin Z/offset", con conversión correcta cuando sí la
+ * llevan).
+ */
+describe("formatearFechaHora12 (fecha+hora completa -> 'YYYY-MM-DD hh:mm AM/PM')", () => {
+  it("salida real en AM", () => {
+    expect(formatearFechaHora12("2026-09-14T08:00")).toBe("2026-09-14 08:00 AM");
+  });
+
+  it("llegada real en PM", () => {
+    expect(formatearFechaHora12("2026-09-14T15:30")).toBe("2026-09-14 03:30 PM");
+  });
+
+  it("12:00 AM (medianoche)", () => {
+    expect(formatearFechaHora12("2026-09-14T00:00")).toBe("2026-09-14 12:00 AM");
+  });
+
+  it("12:00 PM (mediodía)", () => {
+    expect(formatearFechaHora12("2026-09-14T12:00")).toBe("2026-09-14 12:00 PM");
+  });
+
+  it("conserva la FECHA cuando llegada real cae al día siguiente (viaje de varios días) — nunca se descarta", () => {
+    expect(formatearFechaHora12("2026-09-16T15:30")).toBe("2026-09-16 03:30 PM");
+  });
+
+  it("null/undefined/vacío -> '—', nunca revienta", () => {
+    expect(formatearFechaHora12(null)).toBe("—");
+    expect(formatearFechaHora12(undefined)).toBe("—");
+    expect(formatearFechaHora12("")).toBe("—");
+  });
+
+  it("acepta un string MySQL con espacio y segundos (mismo criterio defensivo que fmtTs)", () => {
+    expect(formatearFechaHora12("2026-09-14 08:05:30")).toBe("2026-09-14 08:05 AM");
+  });
+
+  it("acepta un objeto Date (mysql2 sin dateStrings) — vía fmtTs, sin reimplementar el manejo de Date", () => {
+    expect(formatearFechaHora12(new Date(2026, 8, 14, 8, 0, 0))).toBe("2026-09-14 08:00 AM"); // mes 8 = septiembre (0-indexado)
+  });
+
+  it("acepta ISO con 'Z' (UTC), convirtiendo a la hora de pared de Guatemala (UTC-6, sin horario de verano)", () => {
+    expect(formatearFechaHora12("2026-09-14T14:00:00Z")).toBe("2026-09-14 08:00 AM"); // 14:00 UTC -> 08:00 Guatemala
+  });
+
+  it("acepta ISO con offset explícito, respetándolo al convertir a Guatemala", () => {
+    expect(formatearFechaHora12("2026-09-14T08:00:00-06:00")).toBe("2026-09-14 08:00 AM"); // ya es el offset de Guatemala
+  });
 });
