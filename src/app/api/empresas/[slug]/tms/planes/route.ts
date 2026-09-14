@@ -32,6 +32,7 @@ import {
   primerConflictoTraslape,
   type RecursoAValidar,
 } from "@/lib/tms/disponibilidad-traslapes";
+import { personalDesdeEmpleado, validarPersonalId } from "@/lib/tms/personal-resolucion";
 import type { PoolConnection, ResultSetHeader } from "mysql2/promise";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -523,63 +524,11 @@ const schema = z.object({
     }),
 });
 
-async function personalDesdeEmpleado(
-  empresaId: number,
-  empleadoId: number | undefined,
-  tipo: "Piloto" | "Auxiliar",
-): Promise<number | null> {
-  if (!empleadoId) return null;
-  const emp = await query<RowDataPacket[]>(
-    `SELECT id, codigo, nombre FROM empleados
-     WHERE id = ? AND empresa_id = ? AND estado = 'Activo' LIMIT 1`,
-    [empleadoId, empresaId],
-  );
-  if (!emp[0]) return null;
-  const codigo = String(emp[0].codigo);
-  const nombre = String(emp[0].nombre);
-  const existing = await query<RowDataPacket[]>(
-    `SELECT id FROM tms_personal
-     WHERE empresa_id = ? AND codigo = ? AND tipo = ? LIMIT 1`,
-    [empresaId, codigo, tipo],
-  );
-  if (existing[0]) {
-    await execute(
-      `UPDATE tms_personal SET id_empleado = ?, nombre = ?
-       WHERE id = ? AND empresa_id = ?
-         AND (id_empleado IS NULL OR id_empleado = ?)`,
-      [empleadoId, nombre, existing[0].id, empresaId, empleadoId],
-    );
-    return Number(existing[0].id);
-  }
-  const r = await execute(
-    `INSERT INTO tms_personal
-      (empresa_id, codigo, nombre, tipo, estado, id_empleado)
-     VALUES (?, ?, ?, ?, 'Activo', ?)`,
-    [empresaId, codigo, nombre, tipo, empleadoId],
-  );
-  return Number(r.insertId);
-}
-
-/**
- * Fase P5.1a: valida un personal_id EXACTO (sin resolver/auto-crear por
- * nombre o id_empleado) — existe, pertenece a la empresa, es del tipo
- * esperado y está activo. Usado exclusivamente por los campos nuevos
- * pilotoPersonalId/auxiliarPersonalIds de Programación.
- */
-async function validarPersonalId(
-  empresaId: number,
-  personalId: number,
-  tipoEsperado: "Piloto" | "Auxiliar",
-): Promise<{ id: number; nombre: string } | null> {
-  const rows = await query<RowDataPacket[]>(
-    `SELECT id, nombre FROM tms_personal
-     WHERE id = ? AND empresa_id = ? AND tipo = ? AND estado = 'Activo' LIMIT 1`,
-    [personalId, empresaId, tipoEsperado],
-  );
-  return rows[0]
-    ? { id: Number(rows[0].id), nombre: String(rows[0].nombre) }
-    : null;
-}
+// TMS-IMPORTACION-PROGRAMACION-EXCEL (PR 1): `personalDesdeEmpleado` y
+// `validarPersonalId` se extrajeron a `@/lib/tms/personal-resolucion`
+// (mismo código, sin cambios de comportamiento) para que la futura
+// importación masiva de Programación pueda reutilizarlas sin duplicar
+// lógica — ver import arriba.
 
 async function upsertLugar(
   empresaId: number,
