@@ -8,7 +8,7 @@ import type {
   EstadoDisponibilidad,
 } from "@/lib/operaciones/disponibilidad-personal";
 import PlanForm from "./plan-form";
-import { formatearHora12 } from "@/lib/tms/hora-formato";
+import { formatearFechaHora12, formatearHora12 } from "@/lib/tms/hora-formato";
 
 /**
  * OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — tras CERRAR un viaje, Programación
@@ -1300,7 +1300,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
                 </div>
                 <div>
                   <p className="text-[11px] text-[var(--muted)]">Regreso estimado</p>
-                  <p>{p.regreso_estimado ? p.regreso_estimado.replace("T", " · ") : "—"}</p>
+                  <p>{formatearFechaHora12(p.regreso_estimado)}</p>
                 </div>
                 <div>
                   <p className="text-[11px] text-[var(--muted)]">Tarifa comercial</p>
