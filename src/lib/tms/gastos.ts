@@ -707,6 +707,27 @@ async function insertarLineasGastoTx(
 }
 
 /**
+ * GASTOS-MULTIPLES-LINEAS-1 (corrección post-revisión PR #262) — lee (y
+ * BLOQUEA, `FOR UPDATE`) las líneas YA GUARDADAS de un gasto, dentro de la
+ * MISMA transacción de actualizarGasto, para decidir si la cabecera debe
+ * seguir tratándose como "con líneas" cuando un PATCH no envía `lineas`.
+ * Nunca se confía en `actual.monto`/`actual.cantidad` (la fila releída al
+ * inicio de actualizarGasto) para esa decisión ni para el total — se
+ * relee y se RECALCULA aquí mismo, dentro de la transacción, el total
+ * real de las líneas existentes. El `FOR UPDATE` evita que otra
+ * transacción concurrente inserte/borre líneas de este mismo gasto entre
+ * esta lectura y el UPDATE de cabecera de abajo.
+ */
+async function sumaLineasGastoTx(conn: PoolConnection, empresaId: number, gastoId: number): Promise<{ tieneLineas: boolean; total: number }> {
+  const rows = await queryConn<RowDataPacket[]>(conn,
+    `SELECT COUNT(*) AS n, COALESCE(SUM(cantidad * monto), 0) AS total
+     FROM tms_gasto_operativo_lineas WHERE empresa_id = ? AND gasto_id = ? FOR UPDATE`,
+    [empresaId, gastoId],
+  );
+  return { tieneLineas: Number(rows[0]?.n ?? 0) > 0, total: Number(rows[0]?.total ?? 0) };
+}
+
+/**
  * GASTOS-ADMINISTRATIVO-1 (Fase 2) — pasa a una transacción explícita
  * (antes usaba `execute()` del pool directamente) porque
  * resolverIdentidadAdministrativaGastoTx/validarReferenciasGastoTx
@@ -883,17 +904,35 @@ export async function actualizarGasto(
       throw new Error(`No se puede editar el contenido de un gasto en estado "${estadoActual}" — solo mientras está Pendiente o es histórico.`);
     }
 
-    // GASTOS-MULTIPLES-LINEAS-1 (decisión #1/#2) — `cambios.lineas`
-    // ausente: no se toca la tabla de líneas ni la caché de cabecera más
-    // allá de lo que ya hacía `cambios.monto`/`cambios.cantidad` (cero
-    // cambio de comportamiento). Con elementos: replace-all transaccional
-    // más abajo, y `cantidad`/`monto` de cabecera se DERIVAN de las
-    // líneas nuevas, ignorando `cambios.monto`/`cambios.cantidad` si
-    // vinieran. Un array vacío es un error de validación explícito — ver
-    // validarLineasGasto.
+    // GASTOS-MULTIPLES-LINEAS-1 (decisión #1/#2) — `cambios.lineas` con
+    // elementos: replace-all transaccional más abajo, y `cantidad`/`monto`
+    // de cabecera se DERIVAN de las líneas nuevas, ignorando
+    // `cambios.monto`/`cambios.cantidad` si vinieran. Un array vacío es un
+    // error de validación explícito — ver validarLineasGasto.
     const usaLineas = cambios.lineas !== undefined;
     if (usaLineas) validarLineasGasto(cambios.lineas!);
-    const monto = usaLineas ? calcularTotalLineasGasto(cambios.lineas!) : (cambios.monto !== undefined ? cambios.monto : Number(actual.monto ?? 0));
+
+    // GASTOS-MULTIPLES-LINEAS-1 (corrección post-revisión PR #262) —
+    // `cambios.lineas` AUSENTE pero el gasto YA TIENE líneas guardadas:
+    // cantidad/monto de cabecera son una CACHÉ DERIVADA que nunca puede
+    // desincronizarse de las líneas reales. Protección de DOMINIO (no de
+    // la ruta/UI): se ignoran `cambios.monto`/`cambios.cantidad` si
+    // vinieran — nunca se confía en un monto/cantidad de cabecera
+    // enviado explícitamente cuando el gasto es multi-línea — y se
+    // RECALCULA el total real de las líneas existentes dentro de esta
+    // misma transacción (sumaLineasGastoTx), nunca desde `actual.monto`
+    // cacheado. Un gasto SIN líneas (ni nuevas ni existentes) conserva el
+    // comportamiento de siempre: `cantidad`/`monto` editables desde
+    // `cambios`.
+    const lineasExistentes = usaLineas ? null : await sumaLineasGastoTx(conn, empresaId, id);
+    const cantidadCabecera = usaLineas || lineasExistentes?.tieneLineas
+      ? 1
+      : (cambios.cantidad !== undefined ? cambios.cantidad : Number(actual.cantidad ?? 1));
+    const monto = usaLineas
+      ? calcularTotalLineasGasto(cambios.lineas!)
+      : lineasExistentes?.tieneLineas
+        ? lineasExistentes.total
+        : (cambios.monto !== undefined ? cambios.monto : Number(actual.monto ?? 0));
     if (!(monto > 0)) throw new Error("El monto debe ser mayor a cero.");
     const metodoPagoActual = actual.metodo_pago != null ? String(actual.metodo_pago) : null;
     const numeroCuentaPagoActual = actual.numero_cuenta_pago != null ? String(actual.numero_cuenta_pago) : null;
@@ -951,7 +990,7 @@ export async function actualizarGasto(
         planId,
         cambios.categoria !== undefined ? cambios.categoria : String(actual.categoria),
         cambios.descripcion !== undefined ? cambios.descripcion?.trim() || null : (actual.descripcion != null ? String(actual.descripcion) : null),
-        usaLineas ? 1 : (cambios.cantidad !== undefined ? cambios.cantidad : Number(actual.cantidad ?? 1)),
+        cantidadCabecera,
         monto,
         metodoPago,
         numeroCuentaPago,
