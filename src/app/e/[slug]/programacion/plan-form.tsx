@@ -8,6 +8,7 @@ import { PilotoSelect } from "@/components/tms/piloto-select";
 import { RutaSelect, type RutaOpt } from "@/components/tms/ruta-select";
 import { AuxiliaresSelect } from "@/components/tms/auxiliares-select";
 import { Hora12Input } from "@/components/tms/hora-input-12h";
+import { FechaHora12Input } from "@/components/tms/fecha-hora-12h-input";
 import { formatearHora12 } from "@/lib/tms/hora-formato";
 import { horaCorta } from "@/lib/rrhh/dates";
 import ViaticosPanel from "@/components/tms/viaticos-panel";
@@ -1632,21 +1633,27 @@ export default function PlanForm({
           onChange={(e) => setForm((f) => ({ ...f, tipoTraslado: e.target.value }))}
         />
       </label>
-      <label className={`text-xs text-[var(--muted)] ${bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
-        Regreso estimado{requiereRegreso ? " (obligatorio)" : ""}
-        <input
-          type="datetime-local"
+      <div className={bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}>
+        {/* OPERACIONES-HORA-12H-1 ("Regreso estimado") — UI en fecha +
+            hora 12h con AM/PM (reutiliza Hora12Input tal cual);
+            internamente `form.regresoEstimado` sigue siendo EXACTAMENTE
+            "YYYY-MM-DDTHH:mm" — mismo contrato que valida la API (regex
+            en .../tms/planes/route.ts) y que usa la comparación
+            lexicográfica de más abajo (salidaProgramada). Sin cambios en
+            esos dos puntos. */}
+        <FechaHora12Input
+          label={`Regreso estimado${requiereRegreso ? " (obligatorio)" : ""}`}
           required={requiereRegreso}
-          className={`${inputCls} mt-1 w-full`}
+          inputClassName={inputCls}
           value={form.regresoEstimado}
-          onChange={(e) => setForm((f) => ({ ...f, regresoEstimado: e.target.value }))}
+          onChange={(value) => setForm((f) => ({ ...f, regresoEstimado: value }))}
         />
         {requiereRegreso ? (
           <span className="mt-0.5 block text-[10px] text-amber-300/90">
             Necesario para validar que piloto/auxiliares/unidad no queden asignados a dos viajes a la vez.
           </span>
         ) : null}
-      </label>
+      </div>
       {tarifasRuta.length ? (
         <label className={`text-xs text-[var(--muted)] ${bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
           Tarifa de la ruta
