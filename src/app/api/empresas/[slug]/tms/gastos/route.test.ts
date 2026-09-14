@@ -104,3 +104,46 @@ describe("POST /tms/gastos — acepta la categoría 'Reintegro de gastos' (GASTO
     expect(crearGasto).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * GASTOS-MULTIPLES-LINEAS-1 — schema del POST: `monto` de cabecera pasa a
+ * ser opcional cuando hay `lineas` (superRefine lo exige solo sin ellas);
+ * `lineas` en sí acepta un array de líneas, y `.min(1)` rechaza aquí mismo
+ * un array vacío (decisión #2, aprobada) antes de llegar a crearGasto.
+ */
+describe("POST /tms/gastos — schema de líneas (GASTOS-MULTIPLES-LINEAS-1)", () => {
+  it("sin `monto` de cabecera pero CON líneas: válido, se pasa tal cual a crearGasto", async () => {
+    const res = await POST(postReq({
+      fechaSolicitud: bodyBase.fechaSolicitud, categoria: bodyBase.categoria,
+      lineas: [{ categoria: "Combustible", monto: 300 }, { categoria: "Parqueo", monto: 50 }],
+    }), ctx);
+    expect(res.status).toBe(200);
+    expect(crearGasto).toHaveBeenCalledWith(7, expect.objectContaining({
+      lineas: [{ categoria: "Combustible", monto: 300 }, { categoria: "Parqueo", monto: 50 }],
+    }), "ops1");
+  });
+
+  it("sin `monto` de cabecera y SIN líneas: sigue siendo inválido (400), como antes de este ticket", async () => {
+    const res = await POST(postReq({ fechaSolicitud: bodyBase.fechaSolicitud, categoria: bodyBase.categoria }), ctx);
+    expect(res.status).toBe(400);
+    expect(crearGasto).not.toHaveBeenCalled();
+  });
+
+  it("`lineas: []` (array vacío) se rechaza en el propio schema (decisión #2) — 400, nunca llega a crearGasto", async () => {
+    const res = await POST(postReq({ ...bodyBase, lineas: [] }), ctx);
+    expect(res.status).toBe(400);
+    expect(crearGasto).not.toHaveBeenCalled();
+  });
+
+  it("una línea con categoría fuera del catálogo se rechaza (mismo enum que la cabecera)", async () => {
+    const res = await POST(postReq({ ...bodyBase, lineas: [{ categoria: "Categoría inventada", monto: 100 }] }), ctx);
+    expect(res.status).toBe(400);
+    expect(crearGasto).not.toHaveBeenCalled();
+  });
+
+  it("una línea con monto <= 0 se rechaza", async () => {
+    const res = await POST(postReq({ ...bodyBase, lineas: [{ categoria: "Combustible", monto: 0 }] }), ctx);
+    expect(res.status).toBe(400);
+    expect(crearGasto).not.toHaveBeenCalled();
+  });
+});

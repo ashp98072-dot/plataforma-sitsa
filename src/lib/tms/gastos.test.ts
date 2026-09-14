@@ -109,6 +109,26 @@ function conexion(opts: {
   usuarioEnEmpresa?: boolean; usuarioNombre?: string; usuarioRol?: string | null;
   actualRaw?: Record<string, unknown> | null;
   bloqueoRaw?: Record<string, unknown> | null;
+  // GASTOS-MULTIPLES-LINEAS-1 — snapshot que devuelve resolverSnapshotLineaGastoTx
+  // al resolver una línea (SELECT nombre/puesto/placa/cliente distintos a
+  // los de validarReferenciasGastoTx, que solo pide `id`) — ADITIVO: las 4
+  // condiciones de arriba (`FROM empleados` etc.) ya devolvían `{ id }`
+  // solamente; ahora también devuelven estos campos, sin afectar ningún
+  // test existente (ninguno inspecciona el contenido de esas filas, solo
+  // si existen).
+  lineaEmpleadoNombre?: string; lineaEmpleadoPuesto?: string | null;
+  lineaVehiculoPlaca?: string;
+  lineaClienteNombre?: string;
+  lineaPlanClienteId?: number; lineaPlanClienteNombre?: string; lineaPlanFecha?: string;
+  /**
+   * GASTOS-MULTIPLES-LINEAS-1 (corrección post-revisión PR #262) — total
+   * REAL de las líneas YA GUARDADAS de este gasto, tal como lo relee
+   * sumaLineasGastoTx dentro de la transacción de actualizarGasto.
+   * `undefined` (default) = el gasto NO tiene líneas existentes (0 filas
+   * en tms_gasto_operativo_lineas) — mismo comportamiento que todos los
+   * tests existentes, que nunca configuran líneas.
+   */
+  lineasExistentesTotal?: number;
 } = {}) {
   const empleadoEnEmpresa = opts.empleadoEnEmpresa ?? true;
   const vehiculoEnEmpresa = opts.vehiculoEnEmpresa ?? true;
@@ -134,16 +154,21 @@ function conexion(opts: {
         return [usuarioEnEmpresa ? [{ nombre: opts.usuarioNombre ?? "Mario Caal", rol_global: opts.usuarioRol ?? "Operaciones" }] : []];
       }
       if (sql.includes("FROM empleados")) {
-        return [empleadoEnEmpresa ? [{ id: 3 }] : []];
+        return [empleadoEnEmpresa ? [{ id: 3, nombre: opts.lineaEmpleadoNombre ?? "Juan Perez", puesto: opts.lineaEmpleadoPuesto ?? "Piloto" }] : []];
       }
       if (sql.includes("FROM flota_vehiculos")) {
-        return [vehiculoEnEmpresa ? [{ id: 5 }] : []];
+        return [vehiculoEnEmpresa ? [{ id: 5, placa: opts.lineaVehiculoPlaca ?? "P-123ABC" }] : []];
       }
       if (sql.includes("FROM tms_clientes")) {
-        return [clienteEnEmpresa ? [{ id: 9 }] : []];
+        return [clienteEnEmpresa ? [{ id: 9, nombre: opts.lineaClienteNombre ?? "Cliente Acme" }] : []];
       }
       if (sql.includes("FROM tms_planes_viaje")) {
-        return [planEnEmpresa ? [{ id: 11 }] : []];
+        return [planEnEmpresa ? [{ id: 11, cliente_id: opts.lineaPlanClienteId ?? 9, cliente_nombre: opts.lineaPlanClienteNombre ?? "Cliente Acme", fecha_plan: opts.lineaPlanFecha ?? "2026-09-02" }] : []];
+      }
+      if (sql.includes("FROM tms_gasto_operativo_lineas") && sql.includes("COUNT(*)")) {
+        return opts.lineasExistentesTotal !== undefined
+          ? [[{ n: 1, total: opts.lineasExistentesTotal }]]
+          : [[{ n: 0, total: 0 }]];
       }
       return [[]];
     }),
@@ -569,6 +594,116 @@ describe("crearGasto", () => {
   });
 });
 
+/**
+ * GASTOS-MULTIPLES-LINEAS-1 — decisión #1 (caché cantidad=1/monto=SUM en
+ * cabecera) + decisión #2 (array vacío = error de validación) + decisión
+ * #3 (sin overrides de texto, diferidos).
+ */
+describe("GASTOS-MULTIPLES-LINEAS-1 — crearGasto con líneas", () => {
+  it("lineas: [] se rechaza como error de validación, sin abrir conexión (decisión #2)", async () => {
+    await expect(crearGasto(7, {
+      fechaSolicitud: "2026-09-01", categoria: "Combustible", lineas: [],
+    })).rejects.toThrow("al menos una");
+    expect(getPool).not.toHaveBeenCalled();
+  });
+
+  it("una línea sin categoría se rechaza, sin abrir conexión", async () => {
+    await expect(crearGasto(7, {
+      fechaSolicitud: "2026-09-01", categoria: "Combustible",
+      lineas: [{ categoria: "", monto: 100 }],
+    })).rejects.toThrow("Cada línea necesita una categoría.");
+    expect(getPool).not.toHaveBeenCalled();
+  });
+
+  it("una línea con monto <= 0 se rechaza, sin abrir conexión", async () => {
+    await expect(crearGasto(7, {
+      fechaSolicitud: "2026-09-01", categoria: "Combustible",
+      lineas: [{ categoria: "Peaje", monto: 0 }],
+    })).rejects.toThrow("Cada línea necesita un monto mayor a cero.");
+    expect(getPool).not.toHaveBeenCalled();
+  });
+
+  it("categoría de cabecera sigue siendo requerida aunque haya líneas (decisión #1: solo cantidad/monto se derivan)", async () => {
+    await expect(crearGasto(7, {
+      fechaSolicitud: "2026-09-01", categoria: "",
+      lineas: [{ categoria: "Peaje", monto: 100 }],
+    })).rejects.toThrow("Categoría");
+    expect(getPool).not.toHaveBeenCalled();
+  });
+
+  it("NO exige `monto` de cabecera cuando hay líneas (a diferencia del modo sin líneas)", async () => {
+    const conn = conexion();
+    vi.mocked(query).mockResolvedValue([filaGasto({ id: 55 })] as never);
+    await crearGasto(7, {
+      fechaSolicitud: "2026-09-01", categoria: "Combustible",
+      lineas: [{ categoria: "Peaje", monto: 100 }],
+    });
+    expect(conn.commit).toHaveBeenCalledOnce();
+  });
+
+  it("inserta la cabecera con cantidad=1 y monto=SUM(líneas) — caché sincronizada (decisión #1)", async () => {
+    const conn = conexion();
+    vi.mocked(query).mockResolvedValue([filaGasto({ id: 55 })] as never);
+    await crearGasto(7, {
+      fechaSolicitud: "2026-09-01", categoria: "Combustible",
+      lineas: [
+        { categoria: "Combustible", monto: 300 },
+        { categoria: "Peaje", cantidad: 2, monto: 25 },
+      ],
+    });
+    const insert = conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_gastos_operativos"))!;
+    const params = insert[1] as unknown[];
+    expect(params[9]).toBe(1); // cantidad de cabecera
+    expect(params[10]).toBe(350); // monto de cabecera = 300 + (2 * 25)
+  });
+
+  it("inserta cada línea con orden incremental y su propio snapshot (empleado/vehículo/cliente resueltos en servidor)", async () => {
+    const conn = conexion({ lineaEmpleadoNombre: "Ana Gómez", lineaEmpleadoPuesto: "Auxiliar", lineaVehiculoPlaca: "P-999ZZZ", lineaClienteNombre: "Cliente Beta" });
+    vi.mocked(query).mockResolvedValue([filaGasto({ id: 55 })] as never);
+    await crearGasto(7, {
+      fechaSolicitud: "2026-09-01", categoria: "Combustible",
+      lineas: [
+        { categoria: "Combustible", monto: 300, empleadoId: 3 },
+        { categoria: "Peaje", monto: 25, vehiculoId: 5, clienteId: 9 },
+      ],
+    });
+    const inserts = conn.execute.mock.calls.filter((c) => String(c[0]).includes("INSERT INTO tms_gasto_operativo_lineas"));
+    expect(inserts).toHaveLength(2);
+    const [primera, segunda] = inserts.map((c) => c[1] as unknown[]);
+    // [empresaId, gastoId, categoria, descripcion, cantidad, monto, metodoPago, numeroCuentaPago, orden, fechaViaje, empleadoId, empleadoNombre, cargo, vehiculoId, placa, clienteId, clienteNombre, planId]
+    expect(primera[0]).toBe(7); expect(primera[1]).toBe(55);
+    expect(primera[2]).toBe("Combustible"); expect(primera[5]).toBe(300); expect(primera[8]).toBe(0);
+    expect(primera[10]).toBe(3); expect(primera[11]).toBe("Ana Gómez"); expect(primera[12]).toBe("Auxiliar");
+    expect(segunda[2]).toBe("Peaje"); expect(segunda[5]).toBe(25); expect(segunda[8]).toBe(1);
+    expect(segunda[14]).toBe("P-999ZZZ"); expect(segunda[15]).toBe(9); expect(segunda[16]).toBe("Cliente Beta");
+  });
+
+  it("línea con empleado de otra empresa se rechaza, con rollback (mismo criterio que la cabecera)", async () => {
+    const conn = conexion({ empleadoEnEmpresa: false });
+    await expect(crearGasto(7, {
+      fechaSolicitud: "2026-09-01", categoria: "Combustible",
+      lineas: [{ categoria: "Combustible", monto: 100, empleadoId: 999 }],
+    })).rejects.toThrow("El empleado indicado no pertenece a esta empresa.");
+    expect(conn.rollback).toHaveBeenCalledOnce();
+  });
+
+  it("si falla la inserción de una línea, se revierte también la cabecera (transacción atómica)", async () => {
+    const conn = conexion({ fallaEn: "INSERT INTO tms_gasto_operativo_lineas" });
+    await expect(crearGasto(7, {
+      fechaSolicitud: "2026-09-01", categoria: "Combustible",
+      lineas: [{ categoria: "Combustible", monto: 100 }],
+    })).rejects.toThrow();
+    expect(conn.rollback).toHaveBeenCalledOnce();
+  });
+
+  it("sin líneas (undefined): comportamiento idéntico al de antes de este ticket, sin filas nuevas en tms_gasto_operativo_lineas", async () => {
+    const conn = conexion();
+    vi.mocked(query).mockResolvedValue([filaGasto({ id: 55 })] as never);
+    await crearGasto(7, { fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 450 });
+    expect(conn.execute.mock.calls.some((c) => String(c[0]).includes("INSERT INTO tms_gasto_operativo_lineas"))).toBe(false);
+  });
+});
+
 describe("actualizarGasto / desactivarGasto", () => {
   it("devuelve null si el gasto no existe (rollback, sin UPDATE)", async () => {
     const conn = conexion({ actualRaw: null });
@@ -738,6 +873,181 @@ describe("actualizarGasto / desactivarGasto", () => {
       vi.mocked(leerBytesFirmaGuardada).mockResolvedValue(IMAGEN_FIRMA as never);
       await expect(actualizarGasto(7, 1, { solicitanteUsuarioId: 5 })).rejects.toThrow();
       expect(borrarUpload).toHaveBeenCalledWith("empresas/7/firmas/firma_x.png");
+    });
+  });
+});
+
+/**
+ * GASTOS-MULTIPLES-LINEAS-1 — semántica de PATCH (decisión #2, aprobada):
+ * `lineas` ausente = no modificar líneas; con elementos = reemplazo total
+ * transaccional; `lineas: []` = error de validación (nunca "borrar
+ * silenciosamente"). El bloqueo de contenido existente (Autorizada/
+ * Rechazada) se extiende automáticamente a `lineas` — es "otro campo de
+ * contenido" para `soloActivo` en actualizarGasto, sin código nuevo.
+ */
+describe("GASTOS-MULTIPLES-LINEAS-1 — actualizarGasto con líneas", () => {
+  it("lineas: [] se rechaza como error de validación, con rollback (decisión #2 — nunca borra silenciosamente)", async () => {
+    const conn = conexion();
+    await expect(actualizarGasto(7, 1, { lineas: [] })).rejects.toThrow("al menos una");
+    expect(conn.rollback).toHaveBeenCalledOnce();
+    expect(conn.execute.mock.calls.some((c) => String(c[0]).includes("DELETE FROM tms_gasto_operativo_lineas"))).toBe(false);
+  });
+
+  it("lineas undefined: no toca la tabla de líneas (comportamiento idéntico al de antes de este ticket)", async () => {
+    const conn = conexion();
+    vi.mocked(query).mockResolvedValue([filaGasto({ monto: "999.00" })] as never);
+    const g = await actualizarGasto(7, 1, { monto: 999 });
+    expect(g?.monto).toBe(999);
+    expect(conn.execute.mock.calls.some((c) => String(c[0]).includes("tms_gasto_operativo_lineas"))).toBe(false);
+  });
+
+  it("reemplaza TODAS las líneas: DELETE + INSERT con snapshot nuevo, cantidad=1/monto=SUM recalculado", async () => {
+    const conn = conexion({ lineaEmpleadoNombre: "Ana Gómez", lineaEmpleadoPuesto: "Auxiliar" });
+    vi.mocked(query).mockResolvedValue([filaGasto({ monto: "375.00" })] as never);
+    await actualizarGasto(7, 1, {
+      lineas: [
+        { categoria: "Combustible", monto: 350 },
+        { categoria: "Peaje", monto: 25, empleadoId: 3 },
+      ],
+    });
+    const del = conn.execute.mock.calls.find((c) => String(c[0]).includes("DELETE FROM tms_gasto_operativo_lineas"))!;
+    expect(del[1]).toEqual([7, 1]);
+    const inserts = conn.execute.mock.calls.filter((c) => String(c[0]).includes("INSERT INTO tms_gasto_operativo_lineas"));
+    expect(inserts).toHaveLength(2);
+    const update = conn.execute.mock.calls.find((c) => String(c[0]).includes("UPDATE tms_gastos_operativos SET"))!;
+    const params = update[1] as unknown[];
+    expect(params[8]).toBe(1); // cantidad de cabecera (posición del UPDATE, ver actualizarGasto)
+    expect(params[9]).toBe(375); // monto de cabecera = 350 + 25
+    expect(conn.commit).toHaveBeenCalledOnce();
+  });
+
+  it("el DELETE se ejecuta ANTES de los INSERT nuevos (reemplazo total, nunca una mezcla de líneas viejas y nuevas)", async () => {
+    const conn = conexion();
+    vi.mocked(query).mockResolvedValue([filaGasto({ monto: "100.00" })] as never);
+    await actualizarGasto(7, 1, { lineas: [{ categoria: "Combustible", monto: 100 }] });
+    const orden = conn.execute.mock.calls
+      .map((c) => String(c[0]))
+      .filter((sql) => sql.includes("tms_gasto_operativo_lineas"));
+    expect(orden[0]).toContain("DELETE FROM");
+    expect(orden[1]).toContain("INSERT INTO");
+  });
+
+  it.each(["Autorizada", "Rechazada"] as const)("rechaza reemplazar líneas de un gasto %s — mismo bloqueo de contenido que cualquier otro campo", async (estado) => {
+    const conn = conexion({ actualRaw: filaGastoRaw({ estado }) });
+    await expect(actualizarGasto(7, 1, { lineas: [{ categoria: "Combustible", monto: 100 }] }))
+      .rejects.toThrow(`No se puede editar el contenido de un gasto en estado "${estado}"`);
+    expect(conn.rollback).toHaveBeenCalledOnce();
+    expect(conn.execute.mock.calls.some((c) => String(c[0]).includes("DELETE FROM tms_gasto_operativo_lineas") || String(c[0]).includes("INSERT INTO tms_gasto_operativo_lineas"))).toBe(false);
+  });
+
+  it("una línea inválida en el reemplazo (sin categoría) se rechaza, con rollback, sin tocar la tabla de líneas", async () => {
+    const conn = conexion();
+    await expect(actualizarGasto(7, 1, { lineas: [{ categoria: "", monto: 100 }] })).rejects.toThrow("Cada línea necesita una categoría.");
+    expect(conn.rollback).toHaveBeenCalledOnce();
+    expect(conn.execute.mock.calls.some((c) => String(c[0]).includes("tms_gasto_operativo_lineas"))).toBe(false);
+  });
+
+  it("línea con vehículo de otra empresa en el reemplazo se rechaza, con rollback", async () => {
+    const conn = conexion({ vehiculoEnEmpresa: false });
+    await expect(actualizarGasto(7, 1, { lineas: [{ categoria: "Combustible", monto: 100, vehiculoId: 999 }] }))
+      .rejects.toThrow("El vehículo indicado no pertenece a esta empresa.");
+    expect(conn.rollback).toHaveBeenCalledOnce();
+  });
+
+  /**
+   * GASTOS-MULTIPLES-LINEAS-1 (corrección post-revisión PR #262) —
+   * `cantidad`/`monto` de cabecera son una CACHÉ DERIVADA cuando el gasto
+   * YA TIENE líneas guardadas: un PATCH que no envía `lineas` NUNCA puede
+   * desincronizarla, ni siquiera si envía `monto`/`cantidad` explícitos
+   * (protección de DOMINIO en gastos.ts, no de la ruta/UI — la ruta sigue
+   * aceptando esos campos en el schema, pero gastos.ts los ignora aquí).
+   * El total real se RELEE (`sumaLineasGastoTx`, `FOR UPDATE`) dentro de
+   * la misma transacción — nunca se confía en `actual.monto` cacheado.
+   */
+  describe("protección de la caché derivada — gasto multi-línea existente (corrección post-revisión PR #262)", () => {
+    it("PATCH { monto } sobre un gasto multi-línea existente: se IGNORA, se conserva el total real de las líneas", async () => {
+      const conn = conexion({ lineasExistentesTotal: 350 });
+      vi.mocked(query).mockResolvedValue([filaGasto({ cantidad: "1.00", monto: "350.00" })] as never);
+      await actualizarGasto(7, 1, { monto: 999999 });
+      const update = conn.execute.mock.calls.find((c) => String(c[0]).includes("UPDATE tms_gastos_operativos SET"))!;
+      const params = update[1] as unknown[];
+      expect(params[8]).toBe(1); // cantidad — nunca se toca
+      expect(params[9]).toBe(350); // monto — el total REAL de las líneas, nunca 999999
+      expect(conn.commit).toHaveBeenCalledOnce();
+    });
+
+    it("PATCH { cantidad } sobre un gasto multi-línea existente: se IGNORA, cantidad de cabecera sigue en 1", async () => {
+      const conn = conexion({ lineasExistentesTotal: 350 });
+      vi.mocked(query).mockResolvedValue([filaGasto({ cantidad: "1.00", monto: "350.00" })] as never);
+      await actualizarGasto(7, 1, { cantidad: 50 });
+      const update = conn.execute.mock.calls.find((c) => String(c[0]).includes("UPDATE tms_gastos_operativos SET"))!;
+      const params = update[1] as unknown[];
+      expect(params[8]).toBe(1); // nunca 50
+      expect(params[9]).toBe(350); // el monto tampoco se ve afectado
+    });
+
+    it("PATCH { monto, cantidad } juntos sobre un gasto multi-línea existente: AMBOS se ignoran", async () => {
+      const conn = conexion({ lineasExistentesTotal: 500 });
+      vi.mocked(query).mockResolvedValue([filaGasto({ cantidad: "1.00", monto: "500.00" })] as never);
+      await actualizarGasto(7, 1, { monto: 1, cantidad: 1000 });
+      const update = conn.execute.mock.calls.find((c) => String(c[0]).includes("UPDATE tms_gastos_operativos SET"))!;
+      const params = update[1] as unknown[];
+      expect(params[8]).toBe(1);
+      expect(params[9]).toBe(500);
+    });
+
+    it("editar OTRO campo (descripción) sin `lineas`: conserva el total real de las líneas, sin tocarlas", async () => {
+      const conn = conexion({ lineasExistentesTotal: 350 });
+      vi.mocked(query).mockResolvedValue([filaGasto({ cantidad: "1.00", monto: "350.00", descripcion: "Nueva descripción" })] as never);
+      await actualizarGasto(7, 1, { descripcion: "Nueva descripción" });
+      const update = conn.execute.mock.calls.find((c) => String(c[0]).includes("UPDATE tms_gastos_operativos SET"))!;
+      const params = update[1] as unknown[];
+      expect(params[7]).toBe("Nueva descripción"); // descripción sí se aplica
+      expect(params[8]).toBe(1);
+      expect(params[9]).toBe(350); // total intacto
+      expect(conn.execute.mock.calls.some((c) => String(c[0]).includes("tms_gasto_operativo_lineas"))).toBe(false); // nunca se tocan las filas de línea
+    });
+
+    it("reemplazar `lineas` en un gasto que YA tenía líneas SÍ recalcula el total (con el de las líneas NUEVAS, no el viejo)", async () => {
+      const conn = conexion({ lineasExistentesTotal: 350 }); // total viejo, antes del reemplazo
+      vi.mocked(query).mockResolvedValue([filaGasto({ cantidad: "1.00", monto: "120.00" })] as never);
+      await actualizarGasto(7, 1, { lineas: [{ categoria: "Parqueo", monto: 120 }] });
+      const update = conn.execute.mock.calls.find((c) => String(c[0]).includes("UPDATE tms_gastos_operativos SET"))!;
+      const params = update[1] as unknown[];
+      expect(params[8]).toBe(1);
+      expect(params[9]).toBe(120); // el NUEVO total, nunca el 350 anterior
+    });
+
+    it("`sumaLineasGastoTx` relee y BLOQUEA (FOR UPDATE) las líneas existentes, acotado a empresa_id + gasto_id — nunca confía en `actual.monto` cacheado", async () => {
+      const conn = conexion({ lineasExistentesTotal: 350 });
+      vi.mocked(query).mockResolvedValue([filaGasto({ monto: "350.00" })] as never);
+      await actualizarGasto(7, 1, { monto: 1 });
+      const suma = conn.query.mock.calls.find((c) => String(c[0]).includes("FROM tms_gasto_operativo_lineas") && String(c[0]).includes("COUNT(*)"))!;
+      const sql = String(suma[0]);
+      expect(sql).toContain("FOR UPDATE");
+      expect(sql).toContain("WHERE empresa_id = ? AND gasto_id = ?");
+    });
+
+    it("gasto SIN líneas existentes sigue permitiendo editar monto/cantidad directamente (sin cambio de comportamiento)", async () => {
+      const conn = conexion(); // sin lineasExistentesTotal -> el gasto no tiene líneas
+      vi.mocked(query).mockResolvedValue([filaGasto({ monto: "777.00" })] as never);
+      await actualizarGasto(7, 1, { monto: 777, cantidad: 3 });
+      const update = conn.execute.mock.calls.find((c) => String(c[0]).includes("UPDATE tms_gastos_operativos SET"))!;
+      const params = update[1] as unknown[];
+      expect(params[8]).toBe(3); // cantidad enviada, sí se aplica
+      expect(params[9]).toBe(777); // monto enviado, sí se aplica
+    });
+
+    it("gasto simple (sin líneas) que recibe `lineas` por primera vez: pasa a modo líneas, caché derivada de las NUEVAS líneas", async () => {
+      const conn = conexion(); // sin líneas existentes
+      vi.mocked(query).mockResolvedValue([filaGasto({ cantidad: "1.00", monto: "200.00" })] as never);
+      await actualizarGasto(7, 1, { lineas: [{ categoria: "Combustible", monto: 200 }] });
+      const inserts = conn.execute.mock.calls.filter((c) => String(c[0]).includes("INSERT INTO tms_gasto_operativo_lineas"));
+      expect(inserts).toHaveLength(1);
+      const update = conn.execute.mock.calls.find((c) => String(c[0]).includes("UPDATE tms_gastos_operativos SET"))!;
+      const params = update[1] as unknown[];
+      expect(params[8]).toBe(1);
+      expect(params[9]).toBe(200);
     });
   });
 });

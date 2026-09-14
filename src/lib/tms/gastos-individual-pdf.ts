@@ -175,22 +175,42 @@ function construirPdf(
     doc.text(`SOLICITANTE: ${(gasto.solicitanteNombre ?? "—").toUpperCase()}`, { width: pageWidth });
     doc.moveDown(0.6);
 
-    // Tabla — MISMAS 10 columnas que el PDF tabular de Gastos, una sola fila.
-    const fila = [
-      formatearFechaVisible(gasto.fechaSolicitud) || "—",
-      gasto.fechaViaje ? formatearFechaVisible(gasto.fechaViaje) : "—",
-      gasto.empleadoNombre ?? "—",
-      gasto.numeroCuentaPago ?? "—",
-      gasto.empleadoCargo ?? "—",
-      gasto.vehiculoPlaca ?? "—",
-      gasto.clienteNombre ?? "—",
-      String(gasto.cantidad),
-      gasto.descripcion ?? "—",
-      moneda(total),
-    ];
+    // GASTOS-MULTIPLES-LINEAS-1 — MISMAS 10 columnas que el PDF tabular de
+    // Gastos; una fila POR LÍNEA cuando el gasto tiene líneas (cada una
+    // con su propio snapshot — nunca el de la cabecera), o la fila única
+    // de siempre cuando no las tiene (histórico o gasto simple). El
+    // "TOTAL:" de abajo NO cambia en ningún caso: sigue siendo
+    // `gasto.cantidad * gasto.monto`, que ya es la suma correcta gracias
+    // a la caché de cabecera (ver GastoOperativo.cantidad/monto en
+    // gastos.ts) — nunca se sube sumando las filas por separado.
+    const filas = gasto.lineas && gasto.lineas.length > 0
+      ? gasto.lineas.map((l) => [
+          formatearFechaVisible(gasto.fechaSolicitud) || "—",
+          l.fechaViaje ? formatearFechaVisible(l.fechaViaje) : "—",
+          l.empleadoNombre ?? "—",
+          l.numeroCuentaPago ?? "—",
+          l.cargo ?? "—",
+          l.placa ?? "—",
+          l.clienteNombre ?? "—",
+          String(l.cantidad),
+          l.descripcion ?? "—",
+          moneda(l.cantidad * l.monto),
+        ])
+      : [[
+          formatearFechaVisible(gasto.fechaSolicitud) || "—",
+          gasto.fechaViaje ? formatearFechaVisible(gasto.fechaViaje) : "—",
+          gasto.empleadoNombre ?? "—",
+          gasto.numeroCuentaPago ?? "—",
+          gasto.empleadoCargo ?? "—",
+          gasto.vehiculoPlaca ?? "—",
+          gasto.clienteNombre ?? "—",
+          String(gasto.cantidad),
+          gasto.descripcion ?? "—",
+          moneda(total),
+        ]];
     dibujarTablaEnDoc(doc, {
       headers: HEADERS_PDF_GASTOS,
-      rows: [fila],
+      rows: filas,
       align: { 7: "center", 9: "right" },
       weight: WEIGHT_PDF_GASTOS,
       preserveSingleLine: [0, 1, 5, 7, 9],

@@ -164,6 +164,60 @@ describe("generarPdfGastoAutorizado — tabla de una sola fila", () => {
   });
 });
 
+/**
+ * GASTOS-MULTIPLES-LINEAS-1 — cuando el gasto tiene líneas, la tabla
+ * dibuja una fila POR LÍNEA (nunca la fila única de cabecera), pero el
+ * TOTAL sigue siendo `gasto.cantidad * gasto.monto` sin cambios: la caché
+ * de cabecera (gastos.ts) ya es la suma correcta, así que nunca se sube
+ * sumando las filas por separado (ver §8 del diseño).
+ */
+describe("generarPdfGastoAutorizado — con líneas", () => {
+  function gastoConLineas(overrides: Partial<Record<string, unknown>> = {}) {
+    return gasto({
+      cantidad: 1, monto: 350, // caché de cabecera = SUM(líneas) = 300 + 50
+      lineas: [
+        { id: 101, categoria: "Combustible", descripcion: "Diesel", cantidad: 1, monto: 300, metodoPago: "Efectivo", numeroCuentaPago: null, fechaViaje: "2026-09-02", empleadoId: 4, empleadoNombre: "Heber Sitan", cargo: "Piloto", vehiculoId: 9, placa: "P111AAA", clienteId: 5, clienteNombre: "Cliente A", planId: null },
+        { id: 102, categoria: "Peaje", descripcion: "Peaje CA-9", cantidad: 1, monto: 50, metodoPago: null, numeroCuentaPago: null, fechaViaje: "2026-09-03", empleadoId: null, empleadoNombre: null, cargo: null, vehiculoId: null, placa: null, clienteId: null, clienteNombre: null, planId: null },
+      ],
+      ...overrides,
+    });
+  }
+
+  it("dibuja UNA FILA POR LÍNEA, nunca la fila única de cabecera", async () => {
+    vi.mocked(obtenerGasto).mockResolvedValue(gastoConLineas() as never);
+    const spy = espiarTexto();
+    await generarPdfGastoAutorizado(7, 1, "SITSA");
+    const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
+    expect(textos).toContain("Diesel");
+    expect(textos).toContain("Peaje CA-9");
+    expect(textos).toContain("Q 300.00");
+    expect(textos).toContain("Q 50.00");
+  });
+
+  it("el TOTAL sigue siendo cantidad×monto de CABECERA (caché), nunca la suma de las filas calculada de nuevo aquí", async () => {
+    vi.mocked(obtenerGasto).mockResolvedValue(gastoConLineas() as never);
+    const spy = espiarTexto();
+    await generarPdfGastoAutorizado(7, 1, "SITSA");
+    const llamadas = spy.mock.calls.map(llamadaTexto);
+    const total = llamadas.find((c) => c.texto === "TOTAL: Q 350.00");
+    expect(total?.opciones?.align).toBe("right");
+  });
+
+  it("una línea sin empleado/vehículo/cliente propios muestra '—' en esa fila, sin heredar los de la cabecera", async () => {
+    vi.mocked(obtenerGasto).mockResolvedValue(gastoConLineas() as never);
+    const r = await generarPdfGastoAutorizado(7, 1, "SITSA");
+    expect(r.ok).toBe(true); // la segunda línea (Peaje) no tiene empleado/vehículo/cliente — no debe reventar
+  });
+
+  it("gasto SIN líneas (lineas: []) sigue dibujando la fila única de cabecera, comportamiento idéntico al de antes de este ticket", async () => {
+    vi.mocked(obtenerGasto).mockResolvedValue(gasto({ lineas: [], cantidad: 3, monto: 150 }) as never);
+    const spy = espiarTexto();
+    await generarPdfGastoAutorizado(7, 1, "SITSA");
+    const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
+    expect(textos).toContain("Q 450.00");
+  });
+});
+
 describe("generarPdfGastoAutorizado — total", () => {
   it("el TOTAL mostrado es cantidad × monto, alineado a la derecha", async () => {
     vi.mocked(obtenerGasto).mockResolvedValue(gasto({ cantidad: 2, monto: 500 }) as never);

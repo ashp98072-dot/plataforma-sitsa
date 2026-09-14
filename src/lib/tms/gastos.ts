@@ -173,6 +173,37 @@ const TRANSICIONES_GASTO: Record<EstadoGasto, EstadoGasto[]> = {
   Rechazada: [],
 };
 
+/**
+ * GASTOS-MULTIPLES-LINEAS-1 — detalle opcional de un gasto (ver
+ * tms_gasto_operativo_lineas, sql/propuesta-2026-09-gastos-multiples-lineas.sql).
+ * Mismo criterio de SNAPSHOT que LineaFondo en fondos.ts:
+ * empleadoNombre/cargo/placa/clienteNombre se resuelven y congelan al
+ * escribir la línea (resolverSnapshotLineaGastoTx), nunca se leen por JOIN
+ * en vivo en reportes — para que un cambio posterior en RRHH/Flota/
+ * Clientes no altere un gasto ya reportado. Autorización, firma,
+ * comprobante y factura NO viven aquí — permanecen exclusivamente en la
+ * cabecera (GastoOperativo), por requisito explícito del ticket.
+ */
+export type LineaGastoOperativo = {
+  id: number;
+  categoria: string;
+  descripcion: string | null;
+  cantidad: number;
+  monto: number;
+  metodoPago: string | null;
+  numeroCuentaPago: string | null;
+  orden: number;
+  fechaViaje: string | null;
+  empleadoId: number | null;
+  empleadoNombre: string | null;
+  cargo: string | null;
+  vehiculoId: number | null;
+  placa: string | null;
+  clienteId: number | null;
+  clienteNombre: string | null;
+  planId: number | null;
+};
+
 export type GastoOperativo = {
   id: number;
   empresaId: number;
@@ -190,6 +221,19 @@ export type GastoOperativo = {
   planCodigo: string | null;
   categoria: string;
   descripcion: string | null;
+  /**
+   * GASTOS-MULTIPLES-LINEAS-1 (decisión #1, aprobada) — cuando el gasto
+   * TIENE líneas, `cantidad`/`monto` dejan de ser valores editados
+   * directamente y pasan a ser una CACHÉ sincronizada en servidor:
+   * `cantidad = 1`, `monto = SUM(lineas.cantidad * lineas.monto)`,
+   * actualizada SIEMPRE dentro de la MISMA transacción que escribe las
+   * líneas (ver insertarLineasGastoTx/crearGasto/actualizarGasto). Esto
+   * es intencional: todo reporte/PDF que ya lee `cantidad * monto` de la
+   * cabecera (reportes-gastos.ts, gastos-individual-pdf.ts) sigue
+   * obteniendo el total correcto SIN cambios, tenga o no líneas el gasto.
+   * Cuando el gasto NO tiene líneas (histórico o simple), estos dos
+   * campos se comportan exactamente igual que antes de este ticket.
+   */
   cantidad: number;
   monto: number;
   metodoPago: string | null;
@@ -202,6 +246,16 @@ export type GastoOperativo = {
   creadoPor: string | null;
   creadoEn: string | null;
   actualizadoEn: string | null;
+  /**
+   * GASTOS-MULTIPLES-LINEAS-1 — `undefined` = no se cargaron líneas para
+   * esta fila (listarGastos, listado — evita N+1 en una consulta que hoy
+   * es rápida); `[]` = se cargaron y el gasto NO tiene líneas (histórico
+   * o gasto simple, fallback total a los campos de cabecera de arriba);
+   * un array con elementos = el gasto usa el modelo de líneas. Solo
+   * `obtenerGasto` (un id, usado por editar y por el PDF individual) las
+   * carga — ver gastoTieneLineas() para el chequeo seguro.
+   */
+  lineas?: LineaGastoOperativo[];
   /**
    * GASTOS-ADMINISTRATIVO-1 (Fase 1 — SOLO lectura/mapeo, sin escritura
    * todavía) — mismos conceptos administrativos que ya tiene Fondos
@@ -330,10 +384,88 @@ export async function listarGastos(
   return rows.map(mapRow);
 }
 
+/**
+ * GASTOS-MULTIPLES-LINEAS-1 — `[]` cuando el gasto no tiene líneas
+ * (histórico o gasto simple, ver LineaGastoOperativo/GastoOperativo.lineas
+ * arriba), nunca `null`/`undefined` una vez llamada. Mismo orden
+ * (`orden, id`) que ya usa Fondos para sus líneas.
+ */
+function mapLineaRow(r: RowDataPacket): LineaGastoOperativo {
+  return {
+    id: Number(r.id),
+    categoria: String(r.categoria),
+    descripcion: r.descripcion != null ? String(r.descripcion) : null,
+    cantidad: Number(r.cantidad ?? 1),
+    monto: Number(r.monto ?? 0),
+    metodoPago: r.metodo_pago != null ? String(r.metodo_pago) : null,
+    numeroCuentaPago: r.numero_cuenta_pago != null ? String(r.numero_cuenta_pago) : null,
+    orden: Number(r.orden ?? 0),
+    fechaViaje: r.fecha_viaje != null ? String(r.fecha_viaje) : null,
+    empleadoId: r.empleado_id != null ? Number(r.empleado_id) : null,
+    empleadoNombre: r.empleado_nombre != null ? String(r.empleado_nombre) : null,
+    cargo: r.cargo != null ? String(r.cargo) : null,
+    vehiculoId: r.vehiculo_id != null ? Number(r.vehiculo_id) : null,
+    placa: r.placa != null ? String(r.placa) : null,
+    clienteId: r.cliente_id != null ? Number(r.cliente_id) : null,
+    clienteNombre: r.cliente_nombre != null ? String(r.cliente_nombre) : null,
+    planId: r.plan_id != null ? Number(r.plan_id) : null,
+  };
+}
+
+const SELECT_LINEAS = `
+  SELECT id, categoria, descripcion, cantidad, monto, metodo_pago, numero_cuenta_pago, orden,
+         DATE_FORMAT(fecha_viaje, '%Y-%m-%d') AS fecha_viaje,
+         empleado_id, empleado_nombre, cargo, vehiculo_id, placa, cliente_id, cliente_nombre, plan_id
+  FROM tms_gasto_operativo_lineas
+  WHERE empresa_id = ? AND gasto_id = ?
+  ORDER BY orden, id
+`;
+
+async function obtenerLineasGasto(empresaId: number, gastoId: number): Promise<LineaGastoOperativo[]> {
+  const rows = await query<RowDataPacket[]>(SELECT_LINEAS, [empresaId, gastoId]);
+  return rows.map(mapLineaRow);
+}
+
+/**
+ * GASTOS-MULTIPLES-LINEAS-1 — chequeo seguro de "modo líneas": a
+ * diferencia de leer `gasto.lineas.length` directamente, no falla si
+ * `lineas` todavía no se cargó (p. ej. una fila de listarGastos, que
+ * nunca las carga — ver el comentario de `lineas` en GastoOperativo).
+ */
+export function gastoTieneLineas(gasto: Pick<GastoOperativo, "lineas">): boolean {
+  return (gasto.lineas?.length ?? 0) > 0;
+}
+
 export async function obtenerGasto(empresaId: number, id: number): Promise<GastoOperativo | null> {
   const rows = await query<RowDataPacket[]>(`${SELECT} WHERE g.id = ? AND g.empresa_id = ? LIMIT 1`, [id, empresaId]);
-  return rows[0] ? mapRow(rows[0]) : null;
+  if (!rows[0]) return null;
+  const gasto = mapRow(rows[0]);
+  gasto.lineas = await obtenerLineasGasto(empresaId, gasto.id);
+  return gasto;
 }
+
+/**
+ * GASTOS-MULTIPLES-LINEAS-1 — input de una línea (crear/reemplazar).
+ * SIN overrides de texto (decisión #3, aprobada: diferidos a una fase
+ * posterior) — a diferencia de LineaFondoInput, no hay
+ * `empleadoNombreOverride`/`cuentaOverride`/`cargoOverride`; el snapshot
+ * sale SIEMPRE del catálogo resuelto por resolverSnapshotLineaGastoTx.
+ * SIN campos de firma/comprobante/factura/requirente/solicitante — esos
+ * permanecen exclusivamente en GastoOperativoInput (cabecera).
+ */
+export type LineaGastoInput = {
+  categoria: string;
+  descripcion?: string | null;
+  cantidad?: number;
+  monto: number;
+  metodoPago?: string | null;
+  numeroCuentaPago?: string | null;
+  fechaViaje?: string | null;
+  empleadoId?: number | null;
+  vehiculoId?: number | null;
+  clienteId?: number | null;
+  planId?: number | null;
+};
 
 export type GastoOperativoInput = {
   fechaSolicitud: string;
@@ -345,7 +477,16 @@ export type GastoOperativoInput = {
   categoria: string;
   descripcion?: string | null;
   cantidad?: number;
-  monto: number;
+  /**
+   * GASTOS-MULTIPLES-LINEAS-1 (decisión #1) — requerido SOLO cuando el
+   * gasto NO usa líneas (`lineas` ausente); cuando `lineas` viene con
+   * elementos, `monto` se ignora si se envía y se deriva en servidor como
+   * `SUM(lineas.cantidad * lineas.monto)` — ver crearGasto/actualizarGasto.
+   * `categoria` de cabecera, en cambio, SIGUE siendo siempre requerida
+   * (columna NOT NULL, decisión #1 no la toca): con o sin líneas, el
+   * llamador debe indicarla.
+   */
+  monto?: number;
   metodoPago?: string | null;
   numeroCuentaPago?: string | null;
   tieneFactura?: boolean;
@@ -368,6 +509,15 @@ export type GastoOperativoInput = {
   requirenteNombre?: string | null;
   requirenteUsuarioId?: number | null;
   solicitanteUsuarioId?: number | null;
+  /**
+   * GASTOS-MULTIPLES-LINEAS-1 — `undefined` = modo cabecera (comportamiento
+   * idéntico al actual, sin filas en tms_gasto_operativo_lineas); un
+   * array con ≥1 elementos = modo líneas (replace-all transaccional en
+   * actualizarGasto). Un array VACÍO es un error de validación explícito
+   * (decisión #2, aprobada) — nunca se interpreta como "borrar las líneas
+   * silenciosamente"; esa conversión no se implementa en esta fase.
+   */
+  lineas?: LineaGastoInput[];
 };
 
 /**
@@ -446,6 +596,138 @@ async function resolverIdentidadAdministrativaGastoTx(
 }
 
 /**
+ * GASTOS-MULTIPLES-LINEAS-1 — puerto casi literal de resolverSnapshotLineaTx
+ * (fondos.ts), SIN los overrides de texto (diferidos, decisión #3): resuelve
+ * el SNAPSHOT de una línea (nombre/cargo del empleado, placa del vehículo,
+ * nombre del cliente, y la fecha del viaje) SIEMPRE del lado del servidor,
+ * releyendo cada catálogo por (id, empresa_id) DENTRO de la MISMA
+ * transacción — si algún id no pertenece a esta empresa, se rechaza, mismos
+ * mensajes que validarReferenciasGastoTx (arriba) para consistencia.
+ *
+ * `fechaViaje` explícita del caller SIEMPRE gana; si no vino pero sí hay
+ * `planId`, se completa con la fecha real de ese plan (nunca al revés).
+ */
+async function resolverSnapshotLineaGastoTx(
+  conn: PoolConnection,
+  empresaId: number,
+  input: Pick<LineaGastoInput, "empleadoId" | "vehiculoId" | "clienteId" | "planId" | "fechaViaje">,
+): Promise<{ empleadoNombre: string | null; cargo: string | null; placa: string | null; clienteId: number | null; clienteNombre: string | null; fechaViaje: string | null }> {
+  let empleadoNombre: string | null = null;
+  let cargo: string | null = null;
+  if (input.empleadoId != null) {
+    const rows = await queryConn<RowDataPacket[]>(conn, "SELECT nombre, puesto FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1", [input.empleadoId, empresaId]);
+    if (!rows[0]) throw new Error("El empleado indicado no pertenece a esta empresa.");
+    empleadoNombre = String(rows[0].nombre);
+    cargo = rows[0].puesto != null ? String(rows[0].puesto) : null;
+  }
+  let placa: string | null = null;
+  if (input.vehiculoId != null) {
+    const rows = await queryConn<RowDataPacket[]>(conn, "SELECT placa FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1", [input.vehiculoId, empresaId]);
+    if (!rows[0]) throw new Error("El vehículo indicado no pertenece a esta empresa.");
+    placa = String(rows[0].placa);
+  }
+  let clienteId = input.clienteId ?? null;
+  let clienteNombre: string | null = null;
+  if (input.clienteId != null) {
+    const rows = await queryConn<RowDataPacket[]>(conn, "SELECT nombre FROM tms_clientes WHERE id = ? AND empresa_id = ? LIMIT 1", [input.clienteId, empresaId]);
+    if (!rows[0]) throw new Error("El cliente indicado no pertenece a esta empresa.");
+    clienteNombre = String(rows[0].nombre);
+  }
+  let fechaViaje = input.fechaViaje ?? null;
+  if (input.planId != null) {
+    const rows = await queryConn<RowDataPacket[]>(conn,
+      `SELECT p.cliente_id, c.nombre AS cliente_nombre, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan
+       FROM tms_planes_viaje p
+       LEFT JOIN tms_clientes c ON c.id = p.cliente_id AND c.empresa_id = p.empresa_id
+       WHERE p.id = ? AND p.empresa_id = ? LIMIT 1`,
+      [input.planId, empresaId],
+    );
+    if (!rows[0]) throw new Error("El viaje/plan indicado no pertenece a esta empresa.");
+    if (input.clienteId == null) {
+      clienteId = rows[0].cliente_id != null ? Number(rows[0].cliente_id) : null;
+      clienteNombre = rows[0].cliente_nombre != null ? String(rows[0].cliente_nombre) : null;
+    }
+    if (fechaViaje == null) fechaViaje = String(rows[0].fecha_plan);
+  }
+  return { empleadoNombre, cargo, placa, clienteId, clienteNombre, fechaViaje };
+}
+
+/**
+ * GASTOS-MULTIPLES-LINEAS-1 — validación compartida por crearGasto/
+ * actualizarGasto: mismo criterio que Fondos (categoría y monto>0 por
+ * línea), MÁS la decisión explícita #2 (aprobada): un array vacío es un
+ * error de validación — nunca se interpreta como "borrar todas las líneas
+ * silenciosamente" (esa conversión NO se implementa en esta fase). Se
+ * aplica igual en creación y edición, por simetría con esa decisión.
+ */
+function validarLineasGasto(lineas: LineaGastoInput[]): void {
+  if (!lineas.length) throw new Error("Si envías líneas, debes incluir al menos una.");
+  for (const l of lineas) {
+    if (!l.categoria) throw new Error("Cada línea necesita una categoría.");
+    if (!(l.monto > 0)) throw new Error("Cada línea necesita un monto mayor a cero.");
+  }
+}
+
+/** GASTOS-MULTIPLES-LINEAS-1 (decisión #1) — caché de cabecera: `monto` = esta suma, `cantidad` = 1. Calculado en servidor, nunca confiado del cliente. */
+function calcularTotalLineasGasto(lineas: LineaGastoInput[]): number {
+  return lineas.reduce((s, l) => s + (l.cantidad ?? 1) * l.monto, 0);
+}
+
+/**
+ * GASTOS-MULTIPLES-LINEAS-1 — inserta TODAS las líneas de un gasto dentro
+ * de la transacción del caller, cada una con su propio snapshot resuelto
+ * (resolverSnapshotLineaGastoTx) y `orden` incremental desde 0. Compartida
+ * por crearGasto (líneas nuevas) y actualizarGasto (reemplazo total: el
+ * caller ya hizo el DELETE antes de llamar esta función).
+ */
+async function insertarLineasGastoTx(
+  conn: PoolConnection,
+  empresaId: number,
+  gastoId: number,
+  lineas: LineaGastoInput[],
+): Promise<void> {
+  let orden = 0;
+  for (const l of lineas) {
+    const snapshot = await resolverSnapshotLineaGastoTx(conn, empresaId, l);
+    const numeroCuentaPago = normalizarDestinoPago(l.metodoPago ?? null, l.numeroCuentaPago);
+    await executeConn(conn,
+      `INSERT INTO tms_gasto_operativo_lineas
+        (empresa_id, gasto_id, categoria, descripcion, cantidad, monto, metodo_pago, numero_cuenta_pago, orden,
+         fecha_viaje, empleado_id, empleado_nombre, cargo, vehiculo_id, placa, cliente_id, cliente_nombre, plan_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        empresaId, gastoId, l.categoria, l.descripcion?.trim() || null, l.cantidad ?? 1, l.monto,
+        l.metodoPago ?? null, numeroCuentaPago, orden,
+        snapshot.fechaViaje, l.empleadoId ?? null, snapshot.empleadoNombre, snapshot.cargo,
+        l.vehiculoId ?? null, snapshot.placa, snapshot.clienteId, snapshot.clienteNombre, l.planId ?? null,
+      ],
+    );
+    orden += 1;
+  }
+}
+
+/**
+ * GASTOS-MULTIPLES-LINEAS-1 (corrección post-revisión PR #262) — lee (y
+ * BLOQUEA, `FOR UPDATE`) las líneas YA GUARDADAS de un gasto, dentro de la
+ * MISMA transacción de actualizarGasto, para decidir si la cabecera debe
+ * seguir tratándose como "con líneas" cuando un PATCH no envía `lineas`.
+ * Nunca se confía en `actual.monto`/`actual.cantidad` (la fila releída al
+ * inicio de actualizarGasto) para esa decisión ni para el total — se
+ * relee y se RECALCULA aquí mismo, dentro de la transacción, el total
+ * real de las líneas existentes. El `FOR UPDATE` evita que otra
+ * transacción concurrente inserte/borre líneas de este mismo gasto entre
+ * esta lectura y el UPDATE de cabecera de abajo.
+ */
+async function sumaLineasGastoTx(conn: PoolConnection, empresaId: number, gastoId: number): Promise<{ tieneLineas: boolean; total: number }> {
+  const rows = await queryConn<RowDataPacket[]>(conn,
+    `SELECT COUNT(*) AS n, COALESCE(SUM(cantidad * monto), 0) AS total
+     FROM tms_gasto_operativo_lineas WHERE empresa_id = ? AND gasto_id = ? FOR UPDATE`,
+    [empresaId, gastoId],
+  );
+  return { tieneLineas: Number(rows[0]?.n ?? 0) > 0, total: Number(rows[0]?.total ?? 0) };
+}
+
+/**
  * GASTOS-ADMINISTRATIVO-1 (Fase 2) — pasa a una transacción explícita
  * (antes usaba `execute()` del pool directamente) porque
  * resolverIdentidadAdministrativaGastoTx/validarReferenciasGastoTx
@@ -460,7 +742,17 @@ export async function crearGasto(
 ): Promise<GastoOperativo> {
   if (!input.fechaSolicitud) throw new Error("Fecha de solicitud requerida.");
   if (!input.categoria) throw new Error("Categoría de gasto requerida.");
-  if (!(input.monto > 0)) throw new Error("El monto debe ser mayor a cero.");
+  // GASTOS-MULTIPLES-LINEAS-1 (decisión #1) — con líneas, `monto`/`cantidad`
+  // de cabecera se DERIVAN de ellas (nunca del `input.monto` del caller);
+  // sin líneas, el requisito "monto > 0" de siempre sigue exactamente igual.
+  const usaLineas = input.lineas !== undefined;
+  if (input.lineas !== undefined) {
+    validarLineasGasto(input.lineas);
+  } else if (!(input.monto! > 0)) {
+    throw new Error("El monto debe ser mayor a cero.");
+  }
+  const cantidadCabecera = usaLineas ? 1 : (input.cantidad ?? 1);
+  const montoCabecera = usaLineas ? calcularTotalLineasGasto(input.lineas!) : input.monto!;
   const numeroCuentaPago = normalizarDestinoPago(input.metodoPago ?? null, input.numeroCuentaPago);
 
   const conn = await getPool().getConnection();
@@ -490,8 +782,8 @@ export async function crearGasto(
         input.planId ?? null,
         input.categoria,
         input.descripcion?.trim() || null,
-        input.cantidad ?? 1,
-        input.monto,
+        cantidadCabecera,
+        montoCabecera,
         input.metodoPago ?? null,
         numeroCuentaPago,
         input.tieneFactura ? 1 : 0,
@@ -508,6 +800,13 @@ export async function crearGasto(
     );
     insertId = Number(r.insertId);
 
+    // GASTOS-MULTIPLES-LINEAS-1 — líneas nuevas, dentro de la MISMA
+    // transacción que el INSERT de cabecera: si falla cualquier línea, se
+    // revierte también la cabecera (nunca un gasto "a medias").
+    if (usaLineas) {
+      await insertarLineasGastoTx(conn, empresaId, insertId, input.lineas!);
+    }
+
     // GASTOS-ADMINISTRATIVO-1 (Fase 5) — firma del SOLICITANTE y del
     // REQUIRIENTE (solo si se asoció un usuario real), BEST-EFFORT: mismo
     // criterio que Fondos — nunca bloquea la creación por falta de "Mi
@@ -522,7 +821,7 @@ export async function crearGasto(
           empresaId, usuarioId: input.solicitanteUsuarioId, empleadoId: null,
           nombreFirmante: solicitanteUsuario.nombre, rolFirmante: solicitanteUsuario.rol ?? "",
           accion: "SOLICITAR_GASTO", modulo: "GASTOS", entidadTipo: "GASTO_OPERATIVO", entidadId: insertId,
-          valoresRelevantes: { gastoId: insertId, monto: input.monto },
+          valoresRelevantes: { gastoId: insertId, monto: montoCabecera },
           imagen, metodo: "FIRMA_MANUSCRITA", origenFirma: "GUARDADA",
         });
       }
@@ -536,7 +835,7 @@ export async function crearGasto(
           empresaId, usuarioId: input.requirenteUsuarioId, empleadoId: null,
           nombreFirmante: requirenteUsuario.nombre, rolFirmante: requirenteUsuario.rol ?? "",
           accion: "REQUERIR_GASTO", modulo: "GASTOS", entidadTipo: "GASTO_OPERATIVO", entidadId: insertId,
-          valoresRelevantes: { gastoId: insertId, monto: input.monto },
+          valoresRelevantes: { gastoId: insertId, monto: montoCabecera },
           imagen, metodo: "FIRMA_MANUSCRITA", origenFirma: "GUARDADA",
         });
       }
@@ -544,7 +843,7 @@ export async function crearGasto(
 
     await registrarAuditoriaTx(conn, {
       empresaId, usuario: creadoPor ?? null, accion: "crear", modulo: "tms_gastos",
-      detalle: `Gasto operativo #${insertId} creado por Q${input.monto.toFixed(2)}.`,
+      detalle: `Gasto operativo #${insertId} creado por Q${montoCabecera.toFixed(2)}.`,
     });
     await conn.commit();
   } catch (error) {
@@ -605,7 +904,35 @@ export async function actualizarGasto(
       throw new Error(`No se puede editar el contenido de un gasto en estado "${estadoActual}" — solo mientras está Pendiente o es histórico.`);
     }
 
-    const monto = cambios.monto !== undefined ? cambios.monto : Number(actual.monto ?? 0);
+    // GASTOS-MULTIPLES-LINEAS-1 (decisión #1/#2) — `cambios.lineas` con
+    // elementos: replace-all transaccional más abajo, y `cantidad`/`monto`
+    // de cabecera se DERIVAN de las líneas nuevas, ignorando
+    // `cambios.monto`/`cambios.cantidad` si vinieran. Un array vacío es un
+    // error de validación explícito — ver validarLineasGasto.
+    const usaLineas = cambios.lineas !== undefined;
+    if (usaLineas) validarLineasGasto(cambios.lineas!);
+
+    // GASTOS-MULTIPLES-LINEAS-1 (corrección post-revisión PR #262) —
+    // `cambios.lineas` AUSENTE pero el gasto YA TIENE líneas guardadas:
+    // cantidad/monto de cabecera son una CACHÉ DERIVADA que nunca puede
+    // desincronizarse de las líneas reales. Protección de DOMINIO (no de
+    // la ruta/UI): se ignoran `cambios.monto`/`cambios.cantidad` si
+    // vinieran — nunca se confía en un monto/cantidad de cabecera
+    // enviado explícitamente cuando el gasto es multi-línea — y se
+    // RECALCULA el total real de las líneas existentes dentro de esta
+    // misma transacción (sumaLineasGastoTx), nunca desde `actual.monto`
+    // cacheado. Un gasto SIN líneas (ni nuevas ni existentes) conserva el
+    // comportamiento de siempre: `cantidad`/`monto` editables desde
+    // `cambios`.
+    const lineasExistentes = usaLineas ? null : await sumaLineasGastoTx(conn, empresaId, id);
+    const cantidadCabecera = usaLineas || lineasExistentes?.tieneLineas
+      ? 1
+      : (cambios.cantidad !== undefined ? cambios.cantidad : Number(actual.cantidad ?? 1));
+    const monto = usaLineas
+      ? calcularTotalLineasGasto(cambios.lineas!)
+      : lineasExistentes?.tieneLineas
+        ? lineasExistentes.total
+        : (cambios.monto !== undefined ? cambios.monto : Number(actual.monto ?? 0));
     if (!(monto > 0)) throw new Error("El monto debe ser mayor a cero.");
     const metodoPagoActual = actual.metodo_pago != null ? String(actual.metodo_pago) : null;
     const numeroCuentaPagoActual = actual.numero_cuenta_pago != null ? String(actual.numero_cuenta_pago) : null;
@@ -663,7 +990,7 @@ export async function actualizarGasto(
         planId,
         cambios.categoria !== undefined ? cambios.categoria : String(actual.categoria),
         cambios.descripcion !== undefined ? cambios.descripcion?.trim() || null : (actual.descripcion != null ? String(actual.descripcion) : null),
-        cambios.cantidad !== undefined ? cambios.cantidad : Number(actual.cantidad ?? 1),
+        cantidadCabecera,
         monto,
         metodoPago,
         numeroCuentaPago,
@@ -721,9 +1048,19 @@ export async function actualizarGasto(
       }
     }
 
+    // GASTOS-MULTIPLES-LINEAS-1 — reemplazo TOTAL de líneas (se borran y
+    // se insertan de nuevo, cada una con su propio snapshot resuelto por
+    // resolverSnapshotLineaGastoTx — mismo criterio de seguridad que al
+    // crear: nunca se acepta un snapshot enviado por el cliente HTTP).
+    // Mismo patrón EXACTO que actualizarSolicitudFondo en fondos.ts.
+    if (usaLineas) {
+      await executeConn(conn, "DELETE FROM tms_gasto_operativo_lineas WHERE empresa_id = ? AND gasto_id = ?", [empresaId, id]);
+      await insertarLineasGastoTx(conn, empresaId, id, cambios.lineas!);
+    }
+
     await registrarAuditoriaTx(conn, {
       empresaId, usuario: null, accion: "editar", modulo: "tms_gastos",
-      detalle: `Gasto operativo #${id} editado.`,
+      detalle: `Gasto operativo #${id} editado.${usaLineas ? ` Líneas reemplazadas, nuevo total Q${monto.toFixed(2)}.` : ""}`,
     });
     await conn.commit();
   } catch (error) {

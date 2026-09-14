@@ -4,7 +4,7 @@ import { generarPdfSolicitudGastos, HEADERS_PDF_GASTOS } from "./gastos-solicitu
 
 function gasto(overrides: Record<string, unknown> = {}) {
   return {
-    id: 1, fechaSolicitud: "2026-09-01", fechaViaje: "2026-09-02", planId: 2, planCodigo: "PLAN-1",
+    id: 1, lineaId: null, fechaSolicitud: "2026-09-01", fechaViaje: "2026-09-02", planId: 2, planCodigo: "PLAN-1",
     empleadoId: 4, empleadoNombre: "Heber Sitan", cargo: "Piloto", vehiculoId: 9, placa: "P111AAA",
     clienteId: 5, clienteNombre: "Cliente A", categoria: "Combustible", descripcion: "Diesel",
     cantidad: 2, monto: 100, total: 200, metodoPago: "Transferencia móvil", numeroCuentaPago: "00123456789",

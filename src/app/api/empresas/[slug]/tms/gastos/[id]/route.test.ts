@@ -101,3 +101,40 @@ describe("PATCH /tms/gastos/[id] — acepta la categoría 'Reintegro de gastos' 
     expect(actualizarGasto).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * GASTOS-MULTIPLES-LINEAS-1 — semántica de PATCH (decisión #2, aprobada):
+ * `lineas` ausente = no se envía a actualizarGasto (no modifica líneas);
+ * con elementos = se pasa tal cual (reemplazo total en actualizarGasto);
+ * `lineas: []` se rechaza aquí mismo en el schema, con `.min(1)` — nunca
+ * llega a actualizarGasto como "borrar todas las líneas silenciosamente".
+ */
+describe("PATCH /tms/gastos/[id] — schema de líneas (GASTOS-MULTIPLES-LINEAS-1)", () => {
+  it("sin `lineas` en el body: no se envía la clave a actualizarGasto (no modifica líneas)", async () => {
+    await PATCH(patchReq({ monto: 100 }), ctx);
+    const [, , cambios] = vi.mocked(actualizarGasto).mock.calls[0]!;
+    expect(cambios).not.toHaveProperty("lineas");
+  });
+
+  it("con líneas: se pasan tal cual a actualizarGasto (reemplazo total)", async () => {
+    const res = await PATCH(patchReq({
+      lineas: [{ categoria: "Combustible", monto: 300 }, { categoria: "Parqueo", monto: 50 }],
+    }), ctx);
+    expect(res.status).toBe(200);
+    expect(actualizarGasto).toHaveBeenCalledWith(7, 10, expect.objectContaining({
+      lineas: [{ categoria: "Combustible", monto: 300 }, { categoria: "Parqueo", monto: 50 }],
+    }));
+  });
+
+  it("`lineas: []` (array vacío) se rechaza en el propio schema (decisión #2) — 400, nunca llega a actualizarGasto", async () => {
+    const res = await PATCH(patchReq({ lineas: [] }), ctx);
+    expect(res.status).toBe(400);
+    expect(actualizarGasto).not.toHaveBeenCalled();
+  });
+
+  it("una línea con categoría fuera del catálogo se rechaza", async () => {
+    const res = await PATCH(patchReq({ lineas: [{ categoria: "Categoría inventada", monto: 100 }] }), ctx);
+    expect(res.status).toBe(400);
+    expect(actualizarGasto).not.toHaveBeenCalled();
+  });
+});

@@ -14,6 +14,21 @@ export async function GET(_req: Request, ctx: Ctx) {
   return NextResponse.json({ gasto });
 }
 
+/** GASTOS-MULTIPLES-LINEAS-1 — mismo schema de línea que el POST de creación (gastos/route.ts). */
+const lineaSchema = z.object({
+  categoria: z.enum(CATEGORIAS_GASTO),
+  descripcion: z.string().max(300).nullable().optional(),
+  cantidad: z.number().positive().max(999999).optional(),
+  monto: z.number().positive().max(9999999999.99),
+  metodoPago: z.enum(METODOS_PAGO_GASTO).nullable().optional(),
+  numeroCuentaPago: z.string().max(80).nullable().optional(),
+  fechaViaje: z.string().nullable().optional(),
+  empleadoId: z.number().int().positive().nullable().optional(),
+  vehiculoId: z.number().int().positive().nullable().optional(),
+  clienteId: z.number().int().positive().nullable().optional(),
+  planId: z.number().int().positive().nullable().optional(),
+});
+
 const schema = z.object({
   fechaSolicitud: z.string().min(1).optional(),
   fechaViaje: z.string().nullable().optional(),
@@ -36,6 +51,15 @@ const schema = z.object({
   requirenteNombre: z.string().max(200).nullable().optional(),
   requirenteUsuarioId: z.number().int().positive().nullable().optional(),
   solicitanteUsuarioId: z.number().int().positive().nullable().optional(),
+  /**
+   * GASTOS-MULTIPLES-LINEAS-1 — semántica de PATCH (decisión #2,
+   * aprobada): ausente = no modificar líneas; con elementos = reemplazo
+   * total transaccional (actualizarGasto); `.min(1)` rechaza aquí mismo
+   * un array vacío como error de validación — NUNCA se interpreta como
+   * "borrar todas las líneas silenciosamente" (esa conversión no se
+   * implementa en esta fase).
+   */
+  lineas: z.array(lineaSchema).min(1).optional(),
 });
 
 export async function PATCH(req: Request, ctx: Ctx) {
