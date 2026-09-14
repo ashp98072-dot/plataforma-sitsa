@@ -32,6 +32,25 @@ export async function GET(req: Request, ctx: Ctx) {
   );
 }
 
+/**
+ * GASTOS-MULTIPLES-LINEAS-1 — schema de UNA línea. Sin overrides de texto
+ * (decisión #3, diferidos) ni campos de firma/comprobante/factura/
+ * requirente/solicitante (permanecen exclusivamente en la cabecera).
+ */
+const lineaSchema = z.object({
+  categoria: z.enum(CATEGORIAS_GASTO),
+  descripcion: z.string().max(300).nullable().optional(),
+  cantidad: z.number().positive().max(999999).optional(),
+  monto: z.number().positive().max(9999999999.99),
+  metodoPago: z.enum(METODOS_PAGO_GASTO).nullable().optional(),
+  numeroCuentaPago: z.string().max(80).nullable().optional(),
+  fechaViaje: z.string().nullable().optional(),
+  empleadoId: z.number().int().positive().nullable().optional(),
+  vehiculoId: z.number().int().positive().nullable().optional(),
+  clienteId: z.number().int().positive().nullable().optional(),
+  planId: z.number().int().positive().nullable().optional(),
+});
+
 const schema = z.object({
   fechaSolicitud: z.string().min(1),
   fechaViaje: z.string().nullable().optional(),
@@ -42,7 +61,10 @@ const schema = z.object({
   categoria: z.enum(CATEGORIAS_GASTO),
   descripcion: z.string().max(300).nullable().optional(),
   cantidad: z.number().positive().max(999999).optional(),
-  monto: z.number().positive().max(9999999999.99),
+  // GASTOS-MULTIPLES-LINEAS-1 (decisión #1) — requerido SOLO cuando NO se
+  // envían líneas (ver .superRefine abajo); con líneas, se ignora y se
+  // deriva en servidor (crearGasto) como SUM(lineas.cantidad * lineas.monto).
+  monto: z.number().positive().max(9999999999.99).optional(),
   metodoPago: z.enum(METODOS_PAGO_GASTO).nullable().optional(),
   numeroCuentaPago: z.string().max(80).nullable().optional(),
   tieneFactura: z.boolean().optional(),
@@ -60,6 +82,18 @@ const schema = z.object({
   requirenteNombre: z.string().max(200).nullable().optional(),
   requirenteUsuarioId: z.number().int().positive().nullable().optional(),
   solicitanteUsuarioId: z.number().int().positive().nullable().optional(),
+  /**
+   * GASTOS-MULTIPLES-LINEAS-1 — ausente: modo cabecera (comportamiento
+   * idéntico al actual). `.min(1)`: un array vacío se rechaza aquí mismo
+   * (decisión #2, aprobada) — nunca llega a crearGasto como "borrar
+   * líneas silenciosamente" porque en creación no hay nada que borrar,
+   * pero se mantiene el mismo criterio de validación por simetría con PATCH.
+   */
+  lineas: z.array(lineaSchema).min(1).optional(),
+}).superRefine((data, ctx) => {
+  if (!data.lineas && data.monto === undefined) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Monto requerido.", path: ["monto"] });
+  }
 });
 
 export async function POST(req: Request, ctx: Ctx) {

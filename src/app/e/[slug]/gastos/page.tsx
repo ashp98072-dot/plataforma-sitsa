@@ -50,6 +50,30 @@ type Gasto = {
   requirenteNombre: string | null;
   solicitanteUsuarioId: number | null;
   solicitanteNombre: string | null;
+  /**
+   * GASTOS-MULTIPLES-LINEAS-1 — `undefined` en las filas del LISTADO
+   * (nunca las incluye, evita N+1 — ver comentario de `lineas` en
+   * gastos.ts); un array (posiblemente `[]`) cuando el gasto se pidió
+   * puntual (GET de un id, usado por editar()/el PDF individual). `[]` =
+   * el gasto no usa líneas (fallback total a los campos de arriba).
+   */
+  lineas?: LineaGasto[];
+};
+
+/** GASTOS-MULTIPLES-LINEAS-1 — espejo de LineaGastoOperativo (gastos.ts). */
+type LineaGasto = {
+  id: number;
+  categoria: string;
+  descripcion: string | null;
+  cantidad: number;
+  monto: number;
+  metodoPago: string | null;
+  numeroCuentaPago: string | null;
+  fechaViaje: string | null;
+  empleadoId: number | null;
+  vehiculoId: number | null;
+  clienteId: number | null;
+  planId: number | null;
 };
 
 type PlanCatalogo = {
@@ -106,6 +130,42 @@ const FORM_VACIO = {
 };
 
 /**
+ * GASTOS-MULTIPLES-LINEAS-1 — forma de UNA línea adicional en el
+ * formulario. Los campos de arriba (`form`) siguen siendo "Línea 1" — sin
+ * líneas adicionales, el formulario se ve y se comporta EXACTAMENTE igual
+ * que antes de este ticket. Sin overrides de texto (decisión #3,
+ * diferidos): el nombre/cargo/placa/cliente de cada línea los resuelve
+ * SIEMPRE el servidor a partir de los ids elegidos aquí.
+ */
+type LineaGastoForm = {
+  categoria: string; descripcion: string; cantidad: string; monto: string;
+  metodoPago: string; numeroCuentaPago: string; fechaViaje: string;
+  empleadoId: number; vehiculoId: number; clienteId: number; planId: number;
+};
+const LINEA_GASTO_VACIA: LineaGastoForm = {
+  categoria: "", descripcion: "", cantidad: "1", monto: "",
+  metodoPago: "", numeroCuentaPago: "", fechaViaje: "",
+  empleadoId: 0, vehiculoId: 0, clienteId: 0, planId: 0,
+};
+
+/** GASTOS-MULTIPLES-LINEAS-1 — payload de UNA línea (mismos campos que LineaGastoInput en gastos.ts), reutilizada para "Línea 1" (`form`) y para cada línea adicional. */
+function construirLineaPayload(l: LineaGastoForm) {
+  return {
+    categoria: l.categoria,
+    descripcion: l.descripcion.trim() || null,
+    cantidad: Number(l.cantidad) || 1,
+    monto: Number(l.monto),
+    metodoPago: l.metodoPago || null,
+    numeroCuentaPago: l.numeroCuentaPago.trim() || null,
+    fechaViaje: l.fechaViaje || undefined,
+    empleadoId: l.empleadoId || undefined,
+    vehiculoId: l.vehiculoId || undefined,
+    clienteId: l.clienteId || undefined,
+    planId: l.planId || undefined,
+  };
+}
+
+/**
  * TMS-GASTOS-REPORTES-1 (fase 1) — gastos operativos asociados
  * opcionalmente a un viaje/plan. "Eliminar" desactiva (activo=0), nunca
  * borra — mismo criterio que Rutas/Contactos.
@@ -136,6 +196,8 @@ export default function GastosPage() {
   const [mostrarForm, setMostrarForm] = useState(false);
   const [editandoId, setEditandoId] = useState<number | null>(null);
   const [form, setForm] = useState(FORM_VACIO);
+  /** GASTOS-MULTIPLES-LINEAS-1 — líneas ADICIONALES a "Línea 1" (los campos de `form`); `[]` = gasto simple, comportamiento idéntico al actual. */
+  const [lineasAdicionales, setLineasAdicionales] = useState<LineaGastoForm[]>([]);
   const [comprobante, setComprobante] = useState<File | null>(null);
   const comprobanteActual = editandoId ? gastos.find((g) => g.id === editandoId) : null;
   const tieneComprobanteAlmacenado = Boolean(comprobanteActual?.facturaNombreOriginal);
@@ -179,25 +241,43 @@ export default function GastosPage() {
   function nuevo() {
     setEditandoId(null);
     setForm(FORM_VACIO);
+    setLineasAdicionales([]);
     setComprobante(null);
     setMostrarForm(true);
   }
 
-  function editar(g: Gasto) {
+  /**
+   * GASTOS-MULTIPLES-LINEAS-1 — el LISTADO nunca trae `lineas` (evita N+1,
+   * ver comentario de `lineas` en gastos.ts); para editar se pide el
+   * gasto COMPLETO por id, igual que ya hace fondos/page.tsx con sus
+   * solicitudes. Con líneas: "Línea 1" (`form`) se precarga desde
+   * `g.lineas[0]` (nunca desde los campos de cabecera, que son solo la
+   * caché sincronizada — ver GastoOperativo.cantidad/monto en gastos.ts)
+   * y el resto va a `lineasAdicionales`. Sin líneas: comportamiento
+   * IDÉNTICO al de antes de este ticket.
+   */
+  async function editar(gResumen: Gasto) {
+    setError("");
+    const res = await fetch(`/api/empresas/${slug}/tms/gastos/${gResumen.id}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { setError(data.error ?? "No se pudo cargar el gasto para editarlo."); return; }
+    const g = data.gasto as Gasto;
     setEditandoId(g.id);
+    const lineasGuardadas = g.lineas ?? [];
+    const primeraLinea = lineasGuardadas[0];
     setForm({
       fechaSolicitud: g.fechaSolicitud,
-      fechaViaje: g.fechaViaje ?? "",
-      empleadoId: g.empleadoId ?? 0,
-      vehiculoId: g.vehiculoId ?? 0,
-      clienteId: g.clienteId ?? 0,
-      planId: g.planId ?? 0,
-      categoria: g.categoria,
-      descripcion: g.descripcion ?? "",
-      cantidad: String(g.cantidad),
-      monto: String(g.monto),
-      metodoPago: g.metodoPago ?? "",
-      numeroCuentaPago: g.numeroCuentaPago ?? "",
+      fechaViaje: (primeraLinea ? primeraLinea.fechaViaje : g.fechaViaje) ?? "",
+      empleadoId: (primeraLinea ? primeraLinea.empleadoId : g.empleadoId) ?? 0,
+      vehiculoId: (primeraLinea ? primeraLinea.vehiculoId : g.vehiculoId) ?? 0,
+      clienteId: (primeraLinea ? primeraLinea.clienteId : g.clienteId) ?? 0,
+      planId: (primeraLinea ? primeraLinea.planId : g.planId) ?? 0,
+      categoria: primeraLinea ? primeraLinea.categoria : g.categoria,
+      descripcion: (primeraLinea ? primeraLinea.descripcion : g.descripcion) ?? "",
+      cantidad: String(primeraLinea ? primeraLinea.cantidad : g.cantidad),
+      monto: String(primeraLinea ? primeraLinea.monto : g.monto),
+      metodoPago: (primeraLinea ? primeraLinea.metodoPago : g.metodoPago) ?? "",
+      numeroCuentaPago: (primeraLinea ? primeraLinea.numeroCuentaPago : g.numeroCuentaPago) ?? "",
       tieneFactura: g.tieneFactura,
       observaciones: g.observaciones ?? "",
       entidadRequirenteId: g.entidadRequirenteId ?? 0,
@@ -205,6 +285,11 @@ export default function GastosPage() {
       requirenteNombre: g.requirenteNombre ?? "",
       solicitanteUsuarioId: g.solicitanteUsuarioId ?? 0,
     });
+    setLineasAdicionales(lineasGuardadas.slice(1).map((l) => ({
+      categoria: l.categoria, descripcion: l.descripcion ?? "", cantidad: String(l.cantidad), monto: String(l.monto),
+      metodoPago: l.metodoPago ?? "", numeroCuentaPago: l.numeroCuentaPago ?? "", fechaViaje: l.fechaViaje ?? "",
+      empleadoId: l.empleadoId ?? 0, vehiculoId: l.vehiculoId ?? 0, clienteId: l.clienteId ?? 0, planId: l.planId ?? 0,
+    })));
     setComprobante(null);
     setMostrarForm(true);
   }
@@ -235,6 +320,14 @@ export default function GastosPage() {
     setError(""); setMsg("");
     if (!form.categoria) { setError("Selecciona una categoría."); return; }
     if (!(Number(form.monto) > 0)) { setError("El monto debe ser mayor a cero."); return; }
+    // GASTOS-MULTIPLES-LINEAS-1 — validación cliente de las líneas
+    // ADICIONALES (mismo criterio que valida el servidor,
+    // validarLineasGasto en gastos.ts: categoría + monto > 0). "Línea 1"
+    // (`form`) ya se validó arriba, igual que siempre.
+    if (lineasAdicionales.some((l) => !l.categoria || !(Number(l.monto) > 0))) {
+      setError("Cada línea adicional necesita categoría y un monto mayor a cero.");
+      return;
+    }
     const payload = {
       fechaSolicitud: form.fechaSolicitud,
       fechaViaje: form.fechaViaje || null,
@@ -259,6 +352,15 @@ export default function GastosPage() {
       requirenteUsuarioId: form.requirenteUsuarioId || null,
       requirenteNombre: form.requirenteNombre.trim() || null,
       solicitanteUsuarioId: form.solicitanteUsuarioId || null,
+      // GASTOS-MULTIPLES-LINEAS-1 — SIN líneas adicionales, se omite
+      // `lineas` por completo: el gasto se crea/edita EXACTAMENTE igual
+      // que antes de este ticket ("Línea 1" son simplemente los campos de
+      // cabecera de siempre). Con líneas adicionales, "Línea 1" ENTRA
+      // como la primera línea del array — el servidor deriva
+      // cantidad/monto de cabecera a partir de la suma de todas (ver
+      // decisión #1 en gastos.ts), así que `cantidad`/`monto` de arriba
+      // se ignoran en ese caso.
+      ...(lineasAdicionales.length > 0 ? { lineas: [form, ...lineasAdicionales].map(construirLineaPayload) } : {}),
     };
     if (comprobante && (!/\.(pdf|jpe?g|png)$/i.test(comprobante.name) || !["application/pdf", "image/jpeg", "image/png"].includes(comprobante.type))) {
       setError("El comprobante debe ser PDF, JPG, JPEG o PNG."); return;
@@ -332,6 +434,13 @@ export default function GastosPage() {
     } finally {
       setConfirmandoAutorizacionId(null);
     }
+  }
+
+  /** GASTOS-MULTIPLES-LINEAS-1 — total en vivo del formulario (Línea 1 + adicionales), solo para mostrar mientras se edita — el servidor recalcula el mismo total al guardar. */
+  function totalFormulario(): number {
+    const base = (Number(form.cantidad) || 1) * (Number(form.monto) || 0);
+    const extra = lineasAdicionales.reduce((s, l) => s + (Number(l.cantidad) || 1) * (Number(l.monto) || 0), 0);
+    return base + extra;
   }
 
   const filtroMensual = Boolean(fMes && fAnio);
@@ -454,6 +563,68 @@ export default function GastosPage() {
           <label className="block text-xs text-[var(--muted)]">Observaciones
             <textarea className={`${inputCls} mt-0.5 w-full`} value={form.observaciones} onChange={(e) => setForm((f) => ({ ...f, observaciones: e.target.value }))} />
           </label>
+          {/*
+            GASTOS-MULTIPLES-LINEAS-1 — OPCIONAL: sin líneas adicionales
+            (el caso de siempre), este bloque solo muestra el botón
+            "+ Agregar línea" y nada cambia en el envío. Con líneas
+            adicionales, los campos de arriba pasan a ser "Línea 1" y el
+            gasto se guarda en modo líneas (replace-all transaccional en
+            cada edición, ver actualizarGasto en gastos.ts). Mismo patrón
+            de UI que fondos/page.tsx, sin overrides de texto (decisión
+            #3, diferidos) — el nombre/cargo/placa/cliente de cada línea
+            los resuelve siempre el servidor a partir del id elegido.
+          */}
+          <div className="space-y-2">
+            <p className="text-xs font-medium text-[var(--muted)]">Líneas adicionales {lineasAdicionales.length ? `(además de "Línea 1" de arriba)` : ""}</p>
+            {lineasAdicionales.map((l, i) => {
+              const set = (patch: Partial<LineaGastoForm>) => setLineasAdicionales((ls) => ls.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+              const totalLinea = (Number(l.cantidad) || 1) * (Number(l.monto) || 0);
+              return (
+                <div key={i} className="space-y-1 rounded border border-[var(--border)]/60 p-2">
+                  <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+                    <select className={inputCls} value={l.categoria} onChange={(e) => set({ categoria: e.target.value })}>
+                      <option value="">Categoría…</option>
+                      {categorias.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                    <input className={inputCls} placeholder="Descripción" value={l.descripcion} onChange={(e) => set({ descripcion: e.target.value })} />
+                    <input type="number" min="0.01" step="0.01" className={inputCls} placeholder="Cantidad" value={l.cantidad} onChange={(e) => set({ cantidad: e.target.value })} />
+                    <input type="number" min="0.01" step="0.01" className={inputCls} placeholder="Monto (Q)" value={l.monto} onChange={(e) => set({ monto: e.target.value })} />
+                    <button type="button" onClick={() => setLineasAdicionales((ls) => ls.filter((_, j) => j !== i))} className="text-red-400">Quitar</button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+                    <CatalogoSearchSelect label="Empleado" placeholder="Buscar empleado..." value={String(l.empleadoId || "")} inputClassName={inputCls} emptyLabel="— Sin empleado —" options={catalogos.empleados.map((e) => ({ value: String(e.id), label: e.nombre, detail: [e.codigo, e.puesto].filter(Boolean).join(" · ") }))} onChange={(value) => set({ empleadoId: Number(value) || 0 })} />
+                    <CatalogoSearchSelect label="Unidad" placeholder="Buscar placa..." value={String(l.vehiculoId || "")} inputClassName={inputCls} emptyLabel="— Sin unidad —" options={catalogos.vehiculos.map((v) => ({ value: String(v.id), label: v.placa, detail: [v.marca, v.modelo].filter(Boolean).join(" ") }))} onChange={(value) => set({ vehiculoId: Number(value) || 0 })} />
+                    <CatalogoSearchSelect label="Cliente" placeholder="Buscar cliente..." value={String(l.clienteId || "")} inputClassName={inputCls} emptyLabel="— Sin cliente —" options={catalogos.clientes.map((c) => ({ value: String(c.id), label: c.nombre, detail: [c.codigo, c.nit ? `NIT ${c.nit}` : null].filter(Boolean).join(" · ") }))} onChange={(value) => set({ clienteId: Number(value) || 0 })} />
+                    <label className="text-xs text-[var(--muted)]">Viaje / plan
+                      <select className={`${inputCls} mt-0.5 w-full`} value={l.planId} onChange={(e) => set({ planId: Number(e.target.value) || 0 })}>
+                        <option value={0}>—</option>
+                        {catalogos.planes.map((p) => <option key={p.id} value={p.id}>{p.codigo}</option>)}
+                      </select>
+                    </label>
+                    <label className="text-xs text-[var(--muted)]">Fecha de viaje
+                      <input type="date" className={`${inputCls} mt-0.5 w-full`} value={l.fechaViaje} onChange={(e) => set({ fechaViaje: e.target.value })} />
+                    </label>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                    <label className="text-xs text-[var(--muted)]">Método de pago
+                      <select className={`${inputCls} mt-0.5 w-full`} value={l.metodoPago} onChange={(e) => set({ metodoPago: e.target.value })}>
+                        <option value="">—</option>
+                        {metodosPago.map((m) => <option key={m} value={m}>{m}</option>)}
+                      </select>
+                    </label>
+                    <label className="text-xs text-[var(--muted)]">{l.metodoPago === "Transferencia móvil" ? "Número" : "Cuenta"}
+                      <input className={`${inputCls} mt-0.5 w-full`} placeholder={l.metodoPago === "Transferencia móvil" ? "Número de transferencia móvil" : "No. cuenta / referencia de pago"} value={l.numeroCuentaPago} onChange={(e) => set({ numeroCuentaPago: e.target.value })} />
+                    </label>
+                  </div>
+                  <p className="text-right text-xs text-[var(--muted)]">Total de la línea: Q{totalLinea.toLocaleString("es-GT", { minimumFractionDigits: 2 })}</p>
+                </div>
+              );
+            })}
+            <button type="button" onClick={() => setLineasAdicionales((ls) => [...ls, { ...LINEA_GASTO_VACIA }])} className="rounded border border-[var(--border)] px-2 py-1 text-xs">
+              + Agregar línea
+            </button>
+            {lineasAdicionales.length ? <p className="text-sm font-medium">Total del gasto: Q{totalFormulario().toLocaleString("es-GT", { minimumFractionDigits: 2 })}</p> : null}
+          </div>
           <div className="flex gap-2">
             <button type="button" onClick={() => void guardar()} className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm text-white">Guardar</button>
             <button type="button" onClick={() => setMostrarForm(false)} className="rounded border border-[var(--border)] px-3 py-1.5 text-sm">Cancelar</button>
@@ -527,7 +698,7 @@ export default function GastosPage() {
                       </>
                     ) : null}
                     {g.estado === "Pendiente" || g.estado === null ? (
-                      <button type="button" onClick={() => editar(g)} className="text-[var(--accent)]">Editar</button>
+                      <button type="button" onClick={() => void editar(g)} className="text-[var(--accent)]">Editar</button>
                     ) : null}
                     {/*
                       GASTOS-ADMINISTRATIVO-1 (Fase 5) — PDF individual

@@ -369,6 +369,15 @@ export async function reporteViaticosPorViajeEmpleado(
  */
 export type FilaGastoDetalle = {
   id: number;
+  /**
+   * GASTOS-MULTIPLES-LINEAS-1 — `null` para un gasto SIN líneas (fila de
+   * cabecera, comportamiento idéntico al de antes de este ticket); el id
+   * de la línea de tms_gasto_operativo_lineas para un gasto CON líneas
+   * (una fila por línea). No lo usan los consumidores existentes
+   * (gastos-solicitud-pdf.ts/gastos-export-excel.ts son agnósticos a este
+   * campo) — se expone solo para trazabilidad.
+   */
+  lineaId: number | null;
   fechaSolicitud: string;
   fechaViaje: string | null;
   planId: number | null;
@@ -392,17 +401,25 @@ export type FilaGastoDetalle = {
   observaciones: string | null;
 };
 
-function condicionesGastosDetalle(empresaId: number, f: FiltrosReporteGastos): { where: string; params: (string | number)[] } {
-  const condiciones = ["g.empresa_id = ?"];
-  const params: (string | number)[] = [empresaId];
+/** Filtros que aplican contra la CABECERA (g.*) — compartidos por ambas ramas del UNION ALL de abajo. */
+function condicionesGastosDetalleCabecera(f: FiltrosReporteGastos): { where: string[]; params: (string | number)[] } {
+  const condiciones: string[] = [];
+  const params: (string | number)[] = [];
   if (f.activo !== undefined) { condiciones.push("g.activo = ?"); params.push(f.activo ? 1 : 0); }
-  if (f.fechaDesde) { condiciones.push("COALESCE(g.fecha_viaje, g.fecha_solicitud) >= ?"); params.push(f.fechaDesde); }
-  if (f.fechaHasta) { condiciones.push("COALESCE(g.fecha_viaje, g.fecha_solicitud) <= ?"); params.push(f.fechaHasta); }
-  // GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — filtros SEPARADOS por fecha
-  // solicitud y fecha viaje (además del rango combinado de arriba). Cada
-  // uno pega contra su propia columna; no se solapan con fechaDesde/Hasta.
+  // GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — "fecha de solicitud" es SIEMPRE
+  // de cabecera (un gasto tiene una única fecha_solicitud, con o sin
+  // líneas) — nunca se duplica por línea.
   if (f.fechaSolicitudDesde) { condiciones.push("g.fecha_solicitud >= ?"); params.push(f.fechaSolicitudDesde); }
   if (f.fechaSolicitudHasta) { condiciones.push("g.fecha_solicitud <= ?"); params.push(f.fechaSolicitudHasta); }
+  return { where: condiciones, params };
+}
+
+/** Filtros SIN líneas (rama A del UNION ALL): "fecha de viaje"/categoría/cliente/vehículo/empleado/plan pegan contra la CABECERA — comportamiento idéntico al de antes de este ticket. */
+function condicionesGastosDetalleFlat(f: FiltrosReporteGastos): { where: string; params: (string | number)[] } {
+  const { where: comunes, params } = condicionesGastosDetalleCabecera(f);
+  const condiciones = [...comunes];
+  if (f.fechaDesde) { condiciones.push("COALESCE(g.fecha_viaje, g.fecha_solicitud) >= ?"); params.push(f.fechaDesde); }
+  if (f.fechaHasta) { condiciones.push("COALESCE(g.fecha_viaje, g.fecha_solicitud) <= ?"); params.push(f.fechaHasta); }
   if (f.fechaViajeDesde) { condiciones.push("g.fecha_viaje >= ?"); params.push(f.fechaViajeDesde); }
   if (f.fechaViajeHasta) { condiciones.push("g.fecha_viaje <= ?"); params.push(f.fechaViajeHasta); }
   if (f.clienteId) { condiciones.push("g.cliente_id = ?"); params.push(f.clienteId); }
@@ -413,31 +430,88 @@ function condicionesGastosDetalle(empresaId: number, f: FiltrosReporteGastos): {
   return { where: condiciones.join(" AND "), params };
 }
 
+/**
+ * GASTOS-MULTIPLES-LINEAS-1 — filtros CON líneas (rama B del UNION ALL):
+ * "fecha de viaje"/categoría/cliente/vehículo/empleado/plan pegan contra
+ * la LÍNEA (l.*), no contra la cabecera — cada línea es su propia fila del
+ * detalle, mismo criterio que condicionesFondos() para
+ * tms_solicitud_fondo_lineas más abajo en este archivo.
+ */
+function condicionesGastosDetalleLineas(f: FiltrosReporteGastos): { where: string; params: (string | number)[] } {
+  const { where: comunes, params } = condicionesGastosDetalleCabecera(f);
+  const condiciones = [...comunes];
+  if (f.fechaDesde) { condiciones.push("COALESCE(l.fecha_viaje, g.fecha_solicitud) >= ?"); params.push(f.fechaDesde); }
+  if (f.fechaHasta) { condiciones.push("COALESCE(l.fecha_viaje, g.fecha_solicitud) <= ?"); params.push(f.fechaHasta); }
+  if (f.fechaViajeDesde) { condiciones.push("l.fecha_viaje >= ?"); params.push(f.fechaViajeDesde); }
+  if (f.fechaViajeHasta) { condiciones.push("l.fecha_viaje <= ?"); params.push(f.fechaViajeHasta); }
+  if (f.clienteId) { condiciones.push("l.cliente_id = ?"); params.push(f.clienteId); }
+  if (f.vehiculoId) { condiciones.push("l.vehiculo_id = ?"); params.push(f.vehiculoId); }
+  if (f.empleadoId) { condiciones.push("l.empleado_id = ?"); params.push(f.empleadoId); }
+  if (f.categoria) { condiciones.push("l.categoria = ?"); params.push(f.categoria); }
+  if (f.planId) { condiciones.push("l.plan_id = ?"); params.push(f.planId); }
+  return { where: condiciones.join(" AND "), params };
+}
+
+/**
+ * GASTOS-MULTIPLES-LINEAS-1 — reescrito como UNION ALL de dos conjuntos
+ * DISJUNTOS por diseño (nunca el mismo gasto en ambas ramas, ver §8 del
+ * diseño en docs/GASTOS-MULTIPLES-LINEAS-1-DISCOVERY.md): rama A, gastos
+ * SIN filas en tms_gasto_operativo_lineas -> 1 fila de cabecera
+ * (comportamiento IDÉNTICO al de antes de este ticket); rama B, gastos CON
+ * líneas -> una fila POR LÍNEA, usando el snapshot propio de cada línea
+ * (nunca un JOIN en vivo a empleados/flota_vehiculos/tms_clientes — mismo
+ * criterio que reporteSolicitudesFondo). UNION ALL en vez de LEFT JOIN +
+ * CASE a propósito: un SELECT * sobre un LEFT JOIN podría arrastrar por
+ * error las columnas de monto de cabecera como valores extra sumables;
+ * con dos SELECT disjuntos eso no puede pasar — cada gasto aporta
+ * exactamente sus filas de UNA rama, nunca de las dos.
+ */
 export async function reporteGastosDetalle(empresaId: number, f: FiltrosReporteGastos = {}): Promise<FilaGastoDetalle[]> {
-  const { where, params } = condicionesGastosDetalle(empresaId, f);
+  const flat = condicionesGastosDetalleFlat(f);
+  const conLineas = condicionesGastosDetalleLineas(f);
+  const whereFlat = ["g.empresa_id = ?", "NOT EXISTS (SELECT 1 FROM tms_gasto_operativo_lineas gl WHERE gl.empresa_id = g.empresa_id AND gl.gasto_id = g.id)", ...(flat.where ? [flat.where] : [])].join(" AND ");
+  const whereLineas = ["g.empresa_id = ?", ...(conLineas.where ? [conLineas.where] : [])].join(" AND ");
   const rows = await query<RowDataPacket[]>(
-    `SELECT g.id, DATE_FORMAT(g.fecha_solicitud, '%Y-%m-%d') AS fecha_solicitud,
-            DATE_FORMAT(g.fecha_viaje, '%Y-%m-%d') AS fecha_viaje,
-            g.plan_id, COALESCE(p.ruta_codigo_historico, p.codigo) AS plan_codigo,
-            g.empleado_id, emp.nombre AS empleado_nombre, emp.puesto AS cargo,
-            g.vehiculo_id, veh.placa,
-            g.cliente_id, cli.nombre AS cliente_nombre,
-            g.categoria, g.descripcion, g.cantidad, g.monto, g.metodo_pago, g.numero_cuenta_pago,
-            g.activo, g.creado_por, g.observaciones
-     FROM tms_gastos_operativos g
-     LEFT JOIN tms_planes_viaje p ON p.id = g.plan_id AND p.empresa_id = g.empresa_id
-     LEFT JOIN empleados emp ON emp.id = g.empleado_id AND emp.empresa_id = g.empresa_id
-     LEFT JOIN flota_vehiculos veh ON veh.id = g.vehiculo_id AND veh.empresa_id = g.empresa_id
-     LEFT JOIN tms_clientes cli ON cli.id = g.cliente_id AND cli.empresa_id = g.empresa_id
-     WHERE ${where}
-     ORDER BY COALESCE(g.fecha_viaje, g.fecha_solicitud) DESC, g.id DESC`,
-    params,
+    `SELECT * FROM (
+      SELECT g.id, NULL AS linea_id,
+             DATE_FORMAT(g.fecha_solicitud, '%Y-%m-%d') AS fecha_solicitud,
+             DATE_FORMAT(g.fecha_viaje, '%Y-%m-%d') AS fecha_viaje,
+             g.plan_id, COALESCE(p.ruta_codigo_historico, p.codigo) AS plan_codigo,
+             g.empleado_id, emp.nombre AS empleado_nombre, emp.puesto AS cargo,
+             g.vehiculo_id, veh.placa,
+             g.cliente_id, cli.nombre AS cliente_nombre,
+             g.categoria, g.descripcion, g.cantidad, g.monto, g.metodo_pago, g.numero_cuenta_pago,
+             g.activo, g.creado_por, g.observaciones
+      FROM tms_gastos_operativos g
+      LEFT JOIN tms_planes_viaje p ON p.id = g.plan_id AND p.empresa_id = g.empresa_id
+      LEFT JOIN empleados emp ON emp.id = g.empleado_id AND emp.empresa_id = g.empresa_id
+      LEFT JOIN flota_vehiculos veh ON veh.id = g.vehiculo_id AND veh.empresa_id = g.empresa_id
+      LEFT JOIN tms_clientes cli ON cli.id = g.cliente_id AND cli.empresa_id = g.empresa_id
+      WHERE ${whereFlat}
+      UNION ALL
+      SELECT g.id, l.id AS linea_id,
+             DATE_FORMAT(g.fecha_solicitud, '%Y-%m-%d') AS fecha_solicitud,
+             DATE_FORMAT(l.fecha_viaje, '%Y-%m-%d') AS fecha_viaje,
+             l.plan_id, COALESCE(p.ruta_codigo_historico, p.codigo) AS plan_codigo,
+             l.empleado_id, l.empleado_nombre, l.cargo,
+             l.vehiculo_id, l.placa,
+             l.cliente_id, l.cliente_nombre,
+             l.categoria, l.descripcion, l.cantidad, l.monto, l.metodo_pago, l.numero_cuenta_pago,
+             g.activo, g.creado_por, g.observaciones
+      FROM tms_gastos_operativos g
+      INNER JOIN tms_gasto_operativo_lineas l ON l.empresa_id = g.empresa_id AND l.gasto_id = g.id
+      LEFT JOIN tms_planes_viaje p ON p.id = l.plan_id AND p.empresa_id = l.empresa_id
+      WHERE ${whereLineas}
+    ) combinado
+    ORDER BY COALESCE(fecha_viaje, fecha_solicitud) DESC, id DESC, linea_id`,
+    [empresaId, ...flat.params, empresaId, ...conLineas.params],
   );
   return rows.map((r) => {
     const cantidad = Number(r.cantidad ?? 1);
     const monto = Number(r.monto ?? 0);
     return {
       id: Number(r.id),
+      lineaId: r.linea_id != null ? Number(r.linea_id) : null,
       fechaSolicitud: String(r.fecha_solicitud),
       fechaViaje: r.fecha_viaje != null ? String(r.fecha_viaje) : null,
       planId: r.plan_id != null ? Number(r.plan_id) : null,

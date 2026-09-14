@@ -203,7 +203,7 @@ describe("reporteGastosDetalle", () => {
     vi.mocked(query).mockResolvedValue([filaCruda()] as never);
     const [f] = await reporteGastosDetalle(7);
     expect(f).toEqual({
-      id: 1, fechaSolicitud: "2026-09-01", fechaViaje: "2026-09-02",
+      id: 1, lineaId: null, fechaSolicitud: "2026-09-01", fechaViaje: "2026-09-02",
       planId: 2, planCodigo: "PLAN-1", empleadoId: 4, empleadoNombre: "Heber Sitan", cargo: "Piloto",
       vehiculoId: 9, placa: "P111AAA", clienteId: 5, clienteNombre: "Cliente A",
       categoria: "Combustible", descripcion: "Diesel", cantidad: 2, monto: 100, total: 200,
@@ -235,7 +235,15 @@ describe("reporteGastosDetalle", () => {
     expect(sql).toContain("g.fecha_solicitud <= ?");
     expect(sql).toContain("g.fecha_viaje >= ?");
     expect(sql).toContain("g.fecha_viaje <= ?");
-    expect(params).toEqual([7, "2026-09-01", "2026-09-30", "2026-09-05", "2026-09-10"]);
+    // GASTOS-MULTIPLES-LINEAS-1 — UNION ALL de 2 ramas (gastos sin líneas
+    // -> cabecera / gastos con líneas -> l.fecha_viaje): mismos filtros
+    // aplicados dos veces, una por rama, con sus propios `?`.
+    expect(sql).toContain("l.fecha_viaje >= ?");
+    expect(sql).toContain("l.fecha_viaje <= ?");
+    expect(params).toEqual([
+      7, "2026-09-01", "2026-09-30", "2026-09-05", "2026-09-10",
+      7, "2026-09-01", "2026-09-30", "2026-09-05", "2026-09-10",
+    ]);
   });
 
   it("activo=0 se mapea a false (gasto anulado)", async () => {
@@ -250,7 +258,11 @@ describe("reporteGastosDetalle", () => {
     const [sql, params] = vi.mocked(query).mock.calls[0];
     expect(sql).toContain("g.empleado_id = ?");
     expect(sql).toContain("g.activo = ?");
-    expect(params).toEqual([7, 0, 4]);
+    // GASTOS-MULTIPLES-LINEAS-1 — misma condición de `activo` en ambas
+    // ramas (es de cabecera siempre); `empleadoId` se repite como
+    // `l.empleado_id = ?` en la rama de líneas.
+    expect(sql).toContain("l.empleado_id = ?");
+    expect(params).toEqual([7, 0, 4, 7, 0, 4]);
   });
 
   it("activo=undefined (sin filtro de estado): incluye activos e inactivos, nunca fuerza activo=1", async () => {
@@ -268,6 +280,55 @@ describe("reporteGastosDetalle", () => {
     expect(sql).toContain("emp.empresa_id = g.empresa_id");
     expect(sql).toContain("veh.empresa_id = g.empresa_id");
     expect(sql).toContain("cli.empresa_id = g.empresa_id");
+  });
+
+  /**
+   * GASTOS-MULTIPLES-LINEAS-1 (§8 del diseño) — UNION ALL de dos
+   * conjuntos DISJUNTOS: nunca la fila de cabecera Y las líneas del mismo
+   * gasto a la vez. `NOT EXISTS` en la rama de cabecera es el mecanismo
+   * exacto que garantiza la exclusión mutua — se verifica en el SQL
+   * mismo, no solo en el mapeo de filas.
+   */
+  describe("GASTOS-MULTIPLES-LINEAS-1 — gastos con líneas", () => {
+    it("usa UNION ALL con NOT EXISTS para nunca traer cabecera Y líneas del mismo gasto a la vez", async () => {
+      vi.mocked(query).mockResolvedValue([] as never);
+      await reporteGastosDetalle(7);
+      const sql = vi.mocked(query).mock.calls[0][0] as string;
+      expect(sql).toContain("UNION ALL");
+      expect(sql).toContain("NOT EXISTS (SELECT 1 FROM tms_gasto_operativo_lineas");
+      expect(sql).toContain("INNER JOIN tms_gasto_operativo_lineas l");
+    });
+
+    it("un gasto con 2 líneas produce 2 filas con su propio lineaId; la suma NUNCA incluye el monto de cabecera por separado", async () => {
+      // Simula lo que devolvería el UNION ALL para un gasto (#9) CON
+      // líneas: nunca aparece también como fila de cabecera (rama A) —
+      // exactamente la garantía de exclusión mutua verificada arriba.
+      vi.mocked(query).mockResolvedValue([
+        { id: 9, linea_id: 101, fecha_solicitud: "2026-09-01", fecha_viaje: "2026-09-02",
+          plan_id: null, plan_codigo: null, empleado_id: null, empleado_nombre: null, cargo: null,
+          vehiculo_id: null, placa: null, cliente_id: null, cliente_nombre: null,
+          categoria: "Combustible", descripcion: "Diesel", cantidad: "1.00", monto: "300.00",
+          metodo_pago: null, numero_cuenta_pago: null, activo: 1, creado_por: "admin", observaciones: null },
+        { id: 9, linea_id: 102, fecha_solicitud: "2026-09-01", fecha_viaje: "2026-09-03",
+          plan_id: null, plan_codigo: null, empleado_id: null, empleado_nombre: null, cargo: null,
+          vehiculo_id: null, placa: null, cliente_id: null, cliente_nombre: null,
+          categoria: "Peaje", descripcion: "Peaje CA-9", cantidad: "1.00", monto: "50.00",
+          metodo_pago: null, numero_cuenta_pago: null, activo: 1, creado_por: "admin", observaciones: null },
+      ] as never);
+      const filas = await reporteGastosDetalle(7);
+      expect(filas).toHaveLength(2);
+      expect(filas.map((f) => f.id)).toEqual([9, 9]);
+      expect(filas.map((f) => f.lineaId)).toEqual([101, 102]);
+      const sumaFilas = filas.reduce((s, f) => s + f.total, 0);
+      expect(sumaFilas).toBe(350);
+    });
+
+    it("un gasto SIN líneas sigue produciendo 1 fila con lineaId null (comportamiento idéntico al de antes de este ticket)", async () => {
+      vi.mocked(query).mockResolvedValue([filaCruda()] as never);
+      const filas = await reporteGastosDetalle(7);
+      expect(filas).toHaveLength(1);
+      expect(filas[0].lineaId).toBeNull();
+    });
   });
 });
 
