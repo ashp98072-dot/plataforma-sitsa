@@ -6,6 +6,7 @@ import {
   claseEstadoSolicitud,
   etiquetaEstadoSolicitud,
 } from "@/lib/tms/solicitudes-cliente-ui";
+import { formatearHora12 } from "@/lib/tms/hora-formato";
 
 type ParadaDetalle = {
   id: number;
@@ -171,7 +172,7 @@ export function SolicitudClienteDetalleInterno({
         <Dato titulo="Cliente" valor={solicitud.clienteNombre} />
         <Dato titulo="Usuario que creó la solicitud" valor={solicitud.creadoPorNombre || "—"} />
         <Dato titulo="Fecha solicitada" valor={solicitud.fechaSolicitada} />
-        <Dato titulo="Hora solicitada" valor={solicitud.horaSolicitada?.slice(0, 5) || "—"} />
+        <Dato titulo="Hora solicitada" valor={formatearHora12(solicitud.horaSolicitada)} />
         <Dato titulo="Referencia" valor={solicitud.referenciaCliente || "—"} />
         <Dato titulo="Cantidad de entregas" valor={String(solicitud.cantidadEntregas)} />
         <Dato titulo="Fecha de creación" valor={solicitud.creadoEn.slice(0, 16).replace("T", " ")} />

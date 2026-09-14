@@ -7,6 +7,7 @@ import { PlacaSelect, type VehiculoOpt } from "@/components/tms/placa-select";
 import { PilotoSelect } from "@/components/tms/piloto-select";
 import { RutaSelect, type RutaOpt } from "@/components/tms/ruta-select";
 import { AuxiliaresSelect } from "@/components/tms/auxiliares-select";
+import { Hora12Input } from "@/components/tms/hora-input-12h";
 import ViaticosPanel from "@/components/tms/viaticos-panel";
 import type { Plan } from "./programacion-client";
 import NotificarPersonal from "./notificar-personal";
@@ -1460,16 +1461,16 @@ export default function PlanForm({
           onChange={(e) => setForm((f) => ({ ...f, fechaPlan: e.target.value }))}
         />
       </label>
-      <label className="text-xs text-[var(--muted)]">
-        Hora programada de salida/carga
-        <input
-          type="time"
-          className={`${inputCls} mt-1 w-full`}
-          value={form.horaCarga}
-          disabled={soloNotas || bloqueado}
-          onChange={(e) => setForm((f) => ({ ...f, horaCarga: e.target.value }))}
-        />
-      </label>
+      {/* OPERACIONES-HORA-12H-1 — UI en formato 12h con AM/PM; internamente
+          sigue siendo `HH:mm` (24h) en `form.horaCarga`, sin cambios en el
+          payload que se envía al servidor. */}
+      <Hora12Input
+        label="Hora programada de salida/carga"
+        inputClassName={inputCls}
+        value={form.horaCarga}
+        disabled={soloNotas || bloqueado}
+        onChange={(hora24) => setForm((f) => ({ ...f, horaCarga: hora24 }))}
+      />
 
       <div className={soloNotas || bloqueado ? "pointer-events-none opacity-50" : ""}>
         <ClienteSearch

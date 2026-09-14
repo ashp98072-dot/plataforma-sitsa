@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState, type ChangeEvent, type ReactNode } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { formatearHora12 } from "@/lib/tms/hora-formato";
 
 /**
  * VIAT-5 — Operaciones > Rutas > Importar Excel.
@@ -401,7 +402,7 @@ export default function ImportarRutasPage() {
                       <td className="px-2 py-2 font-mono">{f.codigo || "—"}</td>
                       <td className="px-2 py-2">{f.clienteExcel || "—"}</td>
                       <td className="px-2 py-2">{f.lugarCargaExcel || "—"}</td>
-                      <td className="px-2 py-2">{f.horaExcel || "—"}</td>
+                      <td className="px-2 py-2">{formatearHora12(f.horaExcel)}</td>
                       <td className="px-2 py-2">{f.contactoExcel || "—"}</td>
                       <td className="px-2 py-2">{f.destinoExcel || "—"}</td>
                       <td className="px-2 py-2">{f.tarifaReferenciaExcel == null ? "—" : `Q${f.tarifaReferenciaExcel.toFixed(2)}`}</td>
