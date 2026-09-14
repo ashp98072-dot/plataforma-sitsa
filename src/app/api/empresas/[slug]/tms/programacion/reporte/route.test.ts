@@ -257,8 +257,9 @@ describe("GET /tms/programacion/reporte — Programado: exporta EXACTAMENTE lo q
     // Placa/piloto/lugar de descarga de CADA fila deben corresponder a SU
     // PROPIO plan — nunca al del otro (placa index 2, piloto index 3, lugar
     // de descarga la última posición del arreglo, ver dataRows en route.ts).
-    expect(filas[0]).toEqual(["SEP", "10", "P111AAA", "Piloto Uno", "", "", "Cliente A", "", "07:00", "Xela"]);
-    expect(filas[1]).toEqual(["SEP", "10", "P222BBB", "Piloto Dos", "", "", "Cliente B", "", "09:30", "Retalhuleu"]);
+    // OPERACIONES-HORA-12H-1 — columna "Hora" en formato 12h con AM/PM (antes: "07:00"/"09:30").
+    expect(filas[0]).toEqual(["SEP", "10", "P111AAA", "Piloto Uno", "", "", "Cliente A", "", "07:00 AM", "Xela"]);
+    expect(filas[1]).toEqual(["SEP", "10", "P222BBB", "Piloto Dos", "", "", "Cliente B", "", "09:30 AM", "Retalhuleu"]);
   });
 
   it("respeta fechaDesde/fechaHasta también combinado con estado=Programado (no solo estado por separado)", async () => {
@@ -325,5 +326,74 @@ describe("GET /tms/programacion/reporte — Programado: exporta EXACTAMENTE lo q
     expect(sql).toContain("p.empresa_id = ?");
     expect(sql).toContain("p.estado = ?");
     expect(params).toEqual([42, "2026-09-10", "2026-09-10", "Programado"]);
+  });
+});
+
+/**
+ * OPERACIONES-HORA-12H-1 — columna "Hora" del reporte tradicional de
+ * Programación, ahora en formato 12h con AM/PM (reutiliza
+ * formatearHora12, ya usado en el resto de Operaciones). PDF y Excel
+ * comparten EXACTAMENTE el mismo `dataRows` (ver route.ts) — se prueban
+ * ambos formatos para confirmar que la corrección cubre a los dos.
+ */
+describe("GET /tms/programacion/reporte — columna 'Hora' en formato 12h (OPERACIONES-HORA-12H-1)", () => {
+  function unPlan(hora_carga: string | null) {
+    return [{
+      id: 1, fecha_plan: "2026-09-10", hora_carga, ruta_codigo_historico: null,
+      lugar_descarga_historico: "Xela", cliente: "Cliente A", placa: "P111AAA", piloto: "Piloto Uno",
+    }];
+  }
+
+  it("hora AM (Excel)", async () => {
+    vi.mocked(query).mockImplementation((async (sql: string) => {
+      if (sql.includes("FROM tms_plan_auxiliares")) return [];
+      if (sql.includes("FROM tms_planes_viaje p")) return unPlan("04:00:00");
+      return [];
+    }) as typeof query);
+    await GET(new Request("http://localhost/x?formato=xlsx&fechaDesde=2026-09-10&fechaHasta=2026-09-10"), ctx);
+    const fila = vi.mocked(tablaAExcel).mock.calls[0][0].rows[0];
+    expect(fila[fila.length - 2]).toBe("04:00 AM"); // "Hora" es la penúltima columna (ver headers en route.ts)
+  });
+
+  it("hora PM (PDF) — mismo dataRows que Excel", async () => {
+    vi.mocked(query).mockImplementation((async (sql: string) => {
+      if (sql.includes("FROM tms_plan_auxiliares")) return [];
+      if (sql.includes("FROM tms_planes_viaje p")) return unPlan("15:00:00");
+      return [];
+    }) as typeof query);
+    await GET(new Request("http://localhost/x?formato=pdf&fechaDesde=2026-09-10&fechaHasta=2026-09-10"), ctx);
+    const fila = vi.mocked(tablaAPdf).mock.calls[0][0].rows[0];
+    expect(fila[fila.length - 2]).toBe("03:00 PM");
+  });
+
+  it("12:00 AM (medianoche) y 12:00 PM (mediodía)", async () => {
+    vi.mocked(query).mockImplementation((async (sql: string) => {
+      if (sql.includes("FROM tms_plan_auxiliares")) return [];
+      if (sql.includes("FROM tms_planes_viaje p")) return unPlan("00:00:00");
+      return [];
+    }) as typeof query);
+    await GET(new Request("http://localhost/x?formato=xlsx&fechaDesde=2026-09-10&fechaHasta=2026-09-10"), ctx);
+    let fila = vi.mocked(tablaAExcel).mock.calls[0][0].rows[0];
+    expect(fila[fila.length - 2]).toBe("12:00 AM");
+
+    vi.mocked(query).mockImplementation((async (sql: string) => {
+      if (sql.includes("FROM tms_plan_auxiliares")) return [];
+      if (sql.includes("FROM tms_planes_viaje p")) return unPlan("12:00:00");
+      return [];
+    }) as typeof query);
+    await GET(new Request("http://localhost/x?formato=xlsx&fechaDesde=2026-09-10&fechaHasta=2026-09-10"), ctx);
+    fila = vi.mocked(tablaAExcel).mock.calls[1][0].rows[0];
+    expect(fila[fila.length - 2]).toBe("12:00 PM");
+  });
+
+  it("sin hora_carga (viaje sin hora programada) -> '—', nunca revienta", async () => {
+    vi.mocked(query).mockImplementation((async (sql: string) => {
+      if (sql.includes("FROM tms_plan_auxiliares")) return [];
+      if (sql.includes("FROM tms_planes_viaje p")) return unPlan(null);
+      return [];
+    }) as typeof query);
+    await GET(new Request("http://localhost/x?formato=xlsx&fechaDesde=2026-09-10&fechaHasta=2026-09-10"), ctx);
+    const fila = vi.mocked(tablaAExcel).mock.calls[0][0].rows[0];
+    expect(fila[fila.length - 2]).toBe("—");
   });
 });

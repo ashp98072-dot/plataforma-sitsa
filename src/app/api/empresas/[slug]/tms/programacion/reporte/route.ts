@@ -4,6 +4,7 @@ import { query } from "@/lib/db";
 import { requireTenantModulo } from "@/lib/tenant";
 import { listarParadasDePlanes } from "@/lib/tms/paradas";
 import { tablaAExcel, tablaAPdf } from "@/lib/rrhh/export-files";
+import { formatearHora12 } from "@/lib/tms/hora-formato";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -202,7 +203,11 @@ export async function GET(req: Request, ctx: Ctx) {
     // VIAT-4b: NUNCA "primera parada" — siempre el histórico congelado del viaje.
     const lugarDescarga = r.lugar_descarga_historico ? String(r.lugar_descarga_historico) : "";
     const auxiliares = auxPorPlan.get(id) ?? [];
-    const hora = r.hora_carga ? String(r.hora_carga).slice(0, 5) : "";
+    // OPERACIONES-HORA-12H-1 — misma columna "Hora" del PDF/Excel
+    // tradicional de Programación, ahora en 12h con AM/PM (reutiliza
+    // formatearHora12, ya usado en el resto de Operaciones). Sin cambios
+    // en `hora_carga` ni en el resto de la fila — solo esta celda.
+    const hora = formatearHora12(r.hora_carga ? String(r.hora_carga) : null);
     const fila = [
       MESES[(mes ?? 1) - 1] ?? "",
       String(dia ?? ""),
