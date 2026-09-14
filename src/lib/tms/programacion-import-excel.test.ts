@@ -260,11 +260,21 @@ describe("parsearExcelProgramacion — campos obligatorios", () => {
     expect(fila.erroresSintacticos).toContain("Placa es obligatoria.");
   });
 
-  it("cliente vacío: NO es error en este PR (solo se valida formato/obligatoriedad de catálogo en fases posteriores)", async () => {
+  // Ajuste post-revisión PR 2: Cliente es obligatorio en V1 — dato de
+  // contraste declarado por el usuario (nunca resuelve el cliente, eso
+  // sigue siendo exclusivo de la ruta), pero sin él no hay nada contra
+  // qué contrastar más adelante.
+  it("cliente vacío: error 'obligatorio'", async () => {
     const buf = await construirHoja([filaBase({ cliente: "" })]);
     const [fila] = await parsearExcelProgramacion(buf);
     expect(fila.clienteExcel).toBe("");
-    expect(fila.erroresSintacticos).toEqual([]);
+    expect(fila.erroresSintacticos).toContain("Cliente es obligatorio.");
+  });
+
+  it("cliente presente: sin ese error", async () => {
+    const buf = await construirHoja([filaBase({ cliente: "Acme S.A." })]);
+    const [fila] = await parsearExcelProgramacion(buf);
+    expect(fila.erroresSintacticos).not.toContain("Cliente es obligatorio.");
   });
 
   it("auxiliares vacíos: ambos opcionales, sin error", async () => {
@@ -317,10 +327,28 @@ describe("parsearExcelProgramacion — tarifa", () => {
     expect(fila.erroresSintacticos.some((e) => e.includes("Tarifa GTQ"))).toBe(true);
   });
 
-  it("tarifa vacía: no es error en este PR (se contrasta contra catálogo en una fase posterior)", async () => {
+  // Ajuste post-revisión PR 2: Tarifa GTQ es obligatoria en V1 — dato de
+  // contraste declarado por el usuario; la comparación contra la tarifa
+  // vigente del sistema sigue siendo una validación de BD en una fase
+  // posterior, pero necesita que el Excel traiga un valor con el que
+  // contrastar.
+  it("tarifa vacía: error 'obligatoria'", async () => {
     const buf = await construirHoja([filaBase({ tarifa: "" })]);
     const [fila] = await parsearExcelProgramacion(buf);
     expect(fila.tarifaExcel).toBeNull();
+    expect(fila.erroresSintacticos).toContain("Tarifa GTQ es obligatoria.");
+  });
+
+  it("tarifa presente: sin ese error", async () => {
+    const buf = await construirHoja([filaBase({ tarifa: 1500 })]);
+    const [fila] = await parsearExcelProgramacion(buf);
+    expect(fila.erroresSintacticos).not.toContain("Tarifa GTQ es obligatoria.");
+  });
+
+  it("tarifa en 0: número válido, NO se rechaza solo por ser cero", async () => {
+    const buf = await construirHoja([filaBase({ tarifa: 0 })]);
+    const [fila] = await parsearExcelProgramacion(buf);
+    expect(fila.tarifaExcel).toBe(0);
     expect(fila.erroresSintacticos).toEqual([]);
   });
 });

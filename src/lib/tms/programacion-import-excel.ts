@@ -219,11 +219,14 @@ function normalizarHora(value: unknown): string | null {
 
 function normalizarTarifa(value: unknown): { valor: number | null; error: string | null } {
   const raw = cellStr(value).trim();
-  // Tarifa vacía: NO es un error sintáctico en este PR — la comparación
-  // "diferencia contra la tarifa vigente = error bloqueante" (decisión ya
-  // aprobada) es una validación de CATÁLOGO/BD, fuera de alcance de este
-  // parser puro (PR 3/4). Aquí solo se valida el FORMATO si vino algo.
-  if (!raw) return { valor: null, error: null };
+  // Ajuste post-revisión PR 2: Tarifa GTQ es obligatoria en V1 (dato de
+  // contraste declarado por el usuario — la comparación "diferencia
+  // contra la tarifa vigente = error bloqueante" sigue siendo una
+  // validación de CATÁLOGO/BD en una fase posterior, pero para poder
+  // hacer esa comparación el Excel debe traer un valor). `0` es un
+  // número válido igual que cualquier otro — no se rechaza solo por ser
+  // cero, solo por venir vacío o no ser un número >= 0.
+  if (!raw) return { valor: null, error: "Tarifa GTQ es obligatoria." };
   if (typeof value === "number") {
     return Number.isFinite(value) && value >= 0
       ? { valor: value, error: null }
@@ -279,7 +282,12 @@ function parsearFila(
   const codigoRutaExcel = normalizarEspacios(cellStr(row.getCell(COL_CODIGO_RUTA).value));
   if (!codigoRutaExcel) errores.push("Código ruta es obligatorio.");
 
+  // Ajuste post-revisión PR 2: Cliente es obligatorio en V1 — dato de
+  // CONTRASTE que el usuario debe declarar (nunca resuelve el cliente:
+  // eso sigue siendo exclusivo de la ruta), pero sin él no hay nada
+  // contra qué contrastar en la fase de validación de catálogo/BD.
   const clienteExcel = normalizarEspacios(cellStr(row.getCell(COL_CLIENTE).value));
+  if (!clienteExcel) errores.push("Cliente es obligatorio.");
 
   const pilotoCodigoExcel = normalizarEspacios(cellStr(row.getCell(COL_PILOTO).value));
   if (!pilotoCodigoExcel) errores.push("Código piloto es obligatorio.");
@@ -647,12 +655,12 @@ function construirHojaInstrucciones(wb: ExcelJS.Workbook): void {
     ["Fecha salida *", 'Fecha del viaje. Formato "AAAA-MM-DD" (ej. 2026-09-20) o el que use su Excel — también acepta fecha escrita como 20/09/2026.'],
     ["Hora salida", 'Hora de salida. Puede escribir 24h ("14:30") o 12h con AM/PM ("02:30 PM"). Puede dejarla en blanco.'],
     ["Código ruta *", 'Código exacto de la ruta, tal como aparece en la hoja "Rutas" de este mismo archivo. Debe existir y estar activa en el sistema.'],
-    ["Cliente", 'Solo de contraste: escriba el NIT del cliente si lo tiene registrado (ver hoja "Clientes"), o su nombre si no. El cliente real del viaje lo determina el Código de ruta, no este campo.'],
+    ["Cliente *", 'Obligatorio, pero SOLO de contraste: escriba el NIT del cliente si lo tiene registrado (ver hoja "Clientes"), o su nombre si no. El cliente real del viaje lo determina el Código de ruta, no este campo — se usa para detectar discrepancias.'],
     ["Código piloto *", 'Código de empleado (RRHH) del piloto, tal como aparece en la hoja "Empleados". Debe existir y estar activo/habilitado.'],
     ["Placa *", 'Placa exacta de la unidad, tal como aparece en la hoja "Vehiculos".'],
     ["Código auxiliar 1 / 2", "Códigos de empleado de los auxiliares, si aplica. Ambos son opcionales."],
     ["Tipo traslado", "Texto libre, por ejemplo: Carga completa, Paquetería."],
-    ["Tarifa GTQ", "Monto en quetzales. Se contrastará contra la tarifa vigente del sistema para esa ruta al momento de importar."],
+    ["Tarifa GTQ *", "Obligatoria. Monto en quetzales (puede ser 0). Se contrastará contra la tarifa vigente del sistema para esa ruta al momento de importar."],
     ["Fecha/Hora regreso estimado", "Ambas juntas u ambas vacías — no se acepta solo una de las dos. Debe ser posterior a la fecha/hora de salida."],
     ["Observaciones", "Texto libre, opcional."],
     ["Código de plan", "NO existe esta columna — el sistema genera el código de cada viaje automáticamente al importar."],
