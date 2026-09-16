@@ -32,7 +32,7 @@ export async function GET(_req: Request, ctx: Ctx) {
   try {
     const [empleados, vehiculos, clientes, planes, usuarios, entidadesRequirentes] = await Promise.all([
     consultar("empleados",
-      "SELECT id, codigo, nombre, puesto, cuenta_bancaria FROM empleados WHERE empresa_id = ? AND estado = 'Activo' ORDER BY nombre LIMIT 1000",
+      "SELECT id, codigo, nombre, puesto, cuenta_bancaria, telefono FROM empleados WHERE empresa_id = ? AND estado = 'Activo' ORDER BY nombre LIMIT 1000",
       [eid],
     ),
     consultar("vehículos",
@@ -47,7 +47,7 @@ export async function GET(_req: Request, ctx: Ctx) {
       `SELECT p.id, p.codigo, p.cliente_id, c.nombre AS cliente_nombre, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan,
               u.flota_vehiculo_id AS vehiculo_id, fv.placa,
               pil.id_empleado AS empleado_id, e.nombre AS empleado_nombre,
-              e.puesto AS empleado_puesto, e.cuenta_bancaria AS empleado_cuenta
+              e.puesto AS empleado_puesto, e.cuenta_bancaria AS empleado_cuenta, e.telefono AS empleado_telefono
        FROM tms_planes_viaje p
        LEFT JOIN tms_clientes c ON c.id = p.cliente_id AND c.empresa_id = p.empresa_id
        LEFT JOIN tms_unidades u ON u.id = p.unidad_id AND u.empresa_id = p.empresa_id
@@ -82,7 +82,7 @@ export async function GET(_req: Request, ctx: Ctx) {
 
     return NextResponse.json(
     {
-      empleados: empleados.map((r) => ({ id: Number(r.id), codigo: String(r.codigo), nombre: String(r.nombre), puesto: r.puesto != null ? String(r.puesto) : null, cuentaBancaria: r.cuenta_bancaria != null ? String(r.cuenta_bancaria) : null })),
+      empleados: empleados.map((r) => ({ id: Number(r.id), codigo: String(r.codigo), nombre: String(r.nombre), puesto: r.puesto != null ? String(r.puesto) : null, cuentaBancaria: r.cuenta_bancaria != null ? String(r.cuenta_bancaria) : null, telefono: r.telefono != null ? String(r.telefono) : null })),
       vehiculos: vehiculos.map((r) => ({ id: Number(r.id), placa: String(r.placa), marca: r.marca != null ? String(r.marca) : null, modelo: r.modelo != null ? String(r.modelo) : null })),
       clientes: clientes.map((r) => ({ id: Number(r.id), codigo: null, nombre: String(r.nombre), nit: r.nit != null ? String(r.nit) : null })),
       planes: planes.map((r) => ({
@@ -96,6 +96,7 @@ export async function GET(_req: Request, ctx: Ctx) {
         empleadoNombre: r.empleado_nombre != null ? String(r.empleado_nombre) : null,
         empleadoPuesto: r.empleado_puesto != null ? String(r.empleado_puesto) : null,
         empleadoCuenta: r.empleado_cuenta != null ? String(r.empleado_cuenta) : null,
+        empleadoTelefono: r.empleado_telefono != null ? String(r.empleado_telefono) : null,
       })),
       usuarios: usuarios.map((r) => ({ id: Number(r.id), nombre: String(r.nombre) })),
       solicitantes: usuarios.filter((r) => ["Operaciones", "GerenteOperaciones", "JefeOperaciones", "AuxiliarOperaciones"].includes(String(r.rol_global ?? ""))).map((r) => ({ id: Number(r.id), nombre: String(r.nombre) })),

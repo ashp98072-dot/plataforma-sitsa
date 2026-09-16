@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { CatalogoSearchSelect, type CatalogoSearchOption } from "@/components/tms/catalogo-search-select";
+import { destinoPagoEmpleado } from "@/lib/tms/destino-pago-empleado";
 import { MAX_UPLOAD_BYTES } from "@/lib/uploads-constants";
 import { MESES_ES } from "@/lib/tms/reportes-mes";
 import { paramsExportarGastos, paramsListadoGastos } from "@/lib/tms/exportacion-operativa-filtros";
@@ -97,7 +98,7 @@ type PlanCatalogo = {
  * endpoint ni campo nuevo al catálogo.
  */
 type Catalogos = {
-  empleados: { id: number; codigo: string; nombre: string; puesto: string | null }[];
+  empleados: { id: number; codigo: string; nombre: string; puesto: string | null; cuentaBancaria?: string | null; telefono?: string | null }[];
   vehiculos: { id: number; placa: string; marca?: string | null; modelo?: string | null }[];
   clientes: { id: number; codigo?: string | null; nombre: string; nit?: string | null }[];
   planes: PlanCatalogo[];
@@ -311,6 +312,7 @@ export default function GastosPage() {
       planId,
       fechaViaje: plan?.fechaPlan ?? f.fechaViaje,
       empleadoId: plan?.empleadoId ?? f.empleadoId,
+      numeroCuentaPago: destinoPagoEmpleado(f.metodoPago, catalogos.empleados.find((x) => x.id === (plan?.empleadoId ?? f.empleadoId))),
       vehiculoId: plan?.vehiculoId ?? f.vehiculoId,
       clienteId: plan?.clienteId ?? f.clienteId,
     }));
@@ -492,7 +494,7 @@ export default function GastosPage() {
             3 campos son OPCIONALES (Fase 2/3 aprobadas) — sin `*`, sin
             validación bloqueante en guardar().
           */}
-          <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
             <label className="text-xs text-[var(--muted)]">Empresa requirente
               <select className={`${inputCls} mt-0.5 w-full`} value={form.entidadRequirenteId} onChange={(e) => setForm((f) => ({ ...f, entidadRequirenteId: Number(e.target.value) || 0 }))}>
                 <option value={0}>—</option>
@@ -501,27 +503,29 @@ export default function GastosPage() {
             </label>
             <CatalogoSearchSelect label="Requirente" placeholder="Buscar requirente..." value={String(form.requirenteUsuarioId || "")} manualText={form.requirenteNombre} options={opcionesUsuarios(catalogos.usuarios)} inputClassName={inputCls} onTextChange={(text) => setForm((f) => ({ ...f, requirenteNombre: text }))} onChange={(value) => setForm((f) => ({ ...f, requirenteUsuarioId: Number(value) || 0, requirenteNombre: value ? "" : f.requirenteNombre }))} />
             <CatalogoSearchSelect label="Solicitante" placeholder="Buscar solicitante de Operaciones..." value={String(form.solicitanteUsuarioId || "")} options={opcionesUsuarios(catalogos.solicitantes)} inputClassName={inputCls} onChange={(value) => setForm((f) => ({ ...f, solicitanteUsuarioId: Number(value) || 0 }))} />
-          </div>
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
             <label className="text-xs text-[var(--muted)]">Fecha solicitud
               <input type="date" className={`${inputCls} mt-0.5 w-full`} value={form.fechaSolicitud} onChange={(e) => setForm((f) => ({ ...f, fechaSolicitud: e.target.value }))} />
             </label>
-            <label className="text-xs text-[var(--muted)]">Fecha viaje
-              <input type="date" className={`${inputCls} mt-0.5 w-full`} value={form.fechaViaje} onChange={(e) => setForm((f) => ({ ...f, fechaViaje: e.target.value }))} />
-            </label>
+          </div>
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
             <label className="text-xs text-[var(--muted)]">Categoría
               <select className={`${inputCls} mt-0.5 w-full`} value={form.categoria} onChange={(e) => setForm((f) => ({ ...f, categoria: e.target.value }))}>
                 <option value="">Selecciona…</option>
                 {categorias.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
             </label>
-            <label className="text-xs text-[var(--muted)]">Método de pago
-              <select className={`${inputCls} mt-0.5 w-full`} value={form.metodoPago} onChange={(e) => setForm((f) => ({ ...f, metodoPago: e.target.value }))}>
-                <option value="">—</option>
-                {metodosPago.map((m) => <option key={m} value={m}>{m}</option>)}
-              </select>
+            <label className="text-xs text-[var(--muted)]">Descripción
+              <input className={`${inputCls} mt-0.5 w-full`} value={form.descripcion} onChange={(e) => setForm((f) => ({ ...f, descripcion: e.target.value }))} />
             </label>
-            <CatalogoSearchSelect label="Empleado / persona" placeholder="Buscar empleado..." value={String(form.empleadoId || "")} inputClassName={inputCls} emptyLabel="— Sin empleado —" options={catalogos.empleados.map((e) => ({ value: String(e.id), label: e.nombre, detail: [e.codigo, e.puesto].filter(Boolean).join(" · ") }))} onChange={(value) => setForm((f) => ({ ...f, empleadoId: Number(value) || 0 }))} />
+            <label className="text-xs text-[var(--muted)]">Cantidad
+              <input type="number" min="0.01" step="0.01" className={`${inputCls} mt-0.5 w-full`} value={form.cantidad} onChange={(e) => setForm((f) => ({ ...f, cantidad: e.target.value }))} />
+            </label>
+            <label className="text-xs text-[var(--muted)]">Monto (Q)
+              <input type="number" min="0.01" step="0.01" className={`${inputCls} mt-0.5 w-full`} value={form.monto} onChange={(e) => setForm((f) => ({ ...f, monto: e.target.value }))} />
+            </label>
+          </div>
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-5">
+            <CatalogoSearchSelect label="Empleado / persona" placeholder="Buscar empleado..." value={String(form.empleadoId || "")} inputClassName={inputCls} emptyLabel="— Sin empleado —" options={catalogos.empleados.map((e) => ({ value: String(e.id), label: e.nombre, detail: [e.codigo, e.puesto].filter(Boolean).join(" · ") }))} onChange={(value) => setForm((f) => ({ ...f, empleadoId: Number(value) || 0, numeroCuentaPago: destinoPagoEmpleado(f.metodoPago, catalogos.empleados.find((x) => String(x.id) === value)) }))} />
             <CatalogoSearchSelect label="Placa / unidad" placeholder="Buscar placa..." value={String(form.vehiculoId || "")} inputClassName={inputCls} emptyLabel="— Sin unidad —" options={catalogos.vehiculos.map((v) => ({ value: String(v.id), label: v.placa, detail: [v.marca, v.modelo].filter(Boolean).join(" ") }))} onChange={(value) => setForm((f) => ({ ...f, vehiculoId: Number(value) || 0 }))} />
             <CatalogoSearchSelect label="Cliente" placeholder="Buscar cliente..." value={String(form.clienteId || "")} inputClassName={inputCls} emptyLabel="— Sin cliente —" options={catalogos.clientes.map((c) => ({ value: String(c.id), label: c.nombre, detail: [c.codigo, c.nit ? `NIT ${c.nit}` : null].filter(Boolean).join(" · ") }))} onChange={(value) => setForm((f) => ({ ...f, clienteId: Number(value) || 0 }))} />
             <label className="text-xs text-[var(--muted)]">Viaje / plan
@@ -530,11 +534,19 @@ export default function GastosPage() {
                 {catalogos.planes.map((p) => <option key={p.id} value={p.id}>{p.codigo}</option>)}
               </select>
             </label>
-            <label className="text-xs text-[var(--muted)]">Cantidad
-              <input type="number" min="0.01" step="0.01" className={`${inputCls} mt-0.5 w-full`} value={form.cantidad} onChange={(e) => setForm((f) => ({ ...f, cantidad: e.target.value }))} />
+            <label className="text-xs text-[var(--muted)]">Fecha viaje
+              <input type="date" className={`${inputCls} mt-0.5 w-full`} value={form.fechaViaje} onChange={(e) => setForm((f) => ({ ...f, fechaViaje: e.target.value }))} />
             </label>
-            <label className="text-xs text-[var(--muted)]">Monto (Q)
-              <input type="number" min="0.01" step="0.01" className={`${inputCls} mt-0.5 w-full`} value={form.monto} onChange={(e) => setForm((f) => ({ ...f, monto: e.target.value }))} />
+          </div>
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
+            <label className="text-xs text-[var(--muted)]">Nombre
+              <input className={`${inputCls} mt-0.5 w-full`} readOnly value={catalogos.empleados.find((x) => x.id === form.empleadoId)?.nombre ?? ""} />
+            </label>
+            <label className="text-xs text-[var(--muted)]">Método de pago
+              <select className={`${inputCls} mt-0.5 w-full`} value={form.metodoPago} onChange={(e) => setForm((f) => ({ ...f, metodoPago: e.target.value, numeroCuentaPago: destinoPagoEmpleado(e.target.value, catalogos.empleados.find((x) => x.id === f.empleadoId)) }))}>
+                <option value="">—</option>
+                {metodosPago.map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
             </label>
             {/*
               FONDOS-GASTOS-METODO-PAGO-1 — etiqueta dinámica: un solo
@@ -543,9 +555,15 @@ export default function GastosPage() {
               móvil" guarda el número de teléfono en el MISMO campo
               (numeroCuentaPago) — nunca un campo separado.
             */}
-            <label className="text-xs text-[var(--muted)]">{form.metodoPago === "Transferencia móvil" ? "Número" : "Cuenta"}
+            <label className="text-xs text-[var(--muted)]">{form.metodoPago === "Transferencia móvil" ? "Número de teléfono" : "Cuenta"}
               <input className={`${inputCls} mt-0.5 w-full`} placeholder={form.metodoPago === "Transferencia móvil" ? "Número de transferencia móvil" : "No. cuenta / referencia de pago"} value={form.numeroCuentaPago} onChange={(e) => setForm((f) => ({ ...f, numeroCuentaPago: e.target.value }))} />
+              {form.empleadoId && form.metodoPago === "Transferencia móvil" && !catalogos.empleados.find((x) => x.id === form.empleadoId)?.telefono?.trim() ? <span className="block">El empleado no tiene teléfono registrado en RRHH.</span> : null}
             </label>
+            <label className="text-xs text-[var(--muted)]">Cargo
+              <input className={`${inputCls} mt-0.5 w-full`} readOnly value={catalogos.empleados.find((x) => x.id === form.empleadoId)?.puesto ?? ""} />
+            </label>
+          </div>
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
             <label className="mt-4 flex items-center gap-2 text-xs text-[var(--muted)]">
               <input type="checkbox" checked={tieneComprobanteAlmacenado || form.tieneFactura} disabled={tieneComprobanteAlmacenado} onChange={(e) => setForm((f) => ({ ...f, tieneFactura: e.target.checked }))} />
               Tiene factura
@@ -557,9 +575,6 @@ export default function GastosPage() {
               {comprobanteActual?.facturaNombreOriginal ? <span className="mt-1 block">Actual: {comprobanteActual.facturaNombreOriginal}</span> : null}
             </label>
           </div>
-          <label className="block text-xs text-[var(--muted)]">Descripción
-            <input className={`${inputCls} mt-0.5 w-full`} value={form.descripcion} onChange={(e) => setForm((f) => ({ ...f, descripcion: e.target.value }))} />
-          </label>
           <label className="block text-xs text-[var(--muted)]">Observaciones
             <textarea className={`${inputCls} mt-0.5 w-full`} value={form.observaciones} onChange={(e) => setForm((f) => ({ ...f, observaciones: e.target.value }))} />
           </label>
@@ -592,7 +607,7 @@ export default function GastosPage() {
                     <button type="button" onClick={() => setLineasAdicionales((ls) => ls.filter((_, j) => j !== i))} className="text-red-400">Quitar</button>
                   </div>
                   <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
-                    <CatalogoSearchSelect label="Empleado" placeholder="Buscar empleado..." value={String(l.empleadoId || "")} inputClassName={inputCls} emptyLabel="— Sin empleado —" options={catalogos.empleados.map((e) => ({ value: String(e.id), label: e.nombre, detail: [e.codigo, e.puesto].filter(Boolean).join(" · ") }))} onChange={(value) => set({ empleadoId: Number(value) || 0 })} />
+                    <CatalogoSearchSelect label="Empleado" placeholder="Buscar empleado..." value={String(l.empleadoId || "")} inputClassName={inputCls} emptyLabel="— Sin empleado —" options={catalogos.empleados.map((e) => ({ value: String(e.id), label: e.nombre, detail: [e.codigo, e.puesto].filter(Boolean).join(" · ") }))} onChange={(value) => set({ empleadoId: Number(value) || 0, numeroCuentaPago: destinoPagoEmpleado(l.metodoPago, catalogos.empleados.find((x) => String(x.id) === value)) })} />
                     <CatalogoSearchSelect label="Unidad" placeholder="Buscar placa..." value={String(l.vehiculoId || "")} inputClassName={inputCls} emptyLabel="— Sin unidad —" options={catalogos.vehiculos.map((v) => ({ value: String(v.id), label: v.placa, detail: [v.marca, v.modelo].filter(Boolean).join(" ") }))} onChange={(value) => set({ vehiculoId: Number(value) || 0 })} />
                     <CatalogoSearchSelect label="Cliente" placeholder="Buscar cliente..." value={String(l.clienteId || "")} inputClassName={inputCls} emptyLabel="— Sin cliente —" options={catalogos.clientes.map((c) => ({ value: String(c.id), label: c.nombre, detail: [c.codigo, c.nit ? `NIT ${c.nit}` : null].filter(Boolean).join(" · ") }))} onChange={(value) => set({ clienteId: Number(value) || 0 })} />
                     <label className="text-xs text-[var(--muted)]">Viaje / plan
@@ -607,13 +622,14 @@ export default function GastosPage() {
                   </div>
                   <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                     <label className="text-xs text-[var(--muted)]">Método de pago
-                      <select className={`${inputCls} mt-0.5 w-full`} value={l.metodoPago} onChange={(e) => set({ metodoPago: e.target.value })}>
+                      <select className={`${inputCls} mt-0.5 w-full`} value={l.metodoPago} onChange={(e) => set({ metodoPago: e.target.value, numeroCuentaPago: destinoPagoEmpleado(e.target.value, catalogos.empleados.find((x) => x.id === l.empleadoId)) })}>
                         <option value="">—</option>
                         {metodosPago.map((m) => <option key={m} value={m}>{m}</option>)}
                       </select>
                     </label>
-                    <label className="text-xs text-[var(--muted)]">{l.metodoPago === "Transferencia móvil" ? "Número" : "Cuenta"}
+                    <label className="text-xs text-[var(--muted)]">{l.metodoPago === "Transferencia móvil" ? "Número de teléfono" : "Cuenta"}
                       <input className={`${inputCls} mt-0.5 w-full`} placeholder={l.metodoPago === "Transferencia móvil" ? "Número de transferencia móvil" : "No. cuenta / referencia de pago"} value={l.numeroCuentaPago} onChange={(e) => set({ numeroCuentaPago: e.target.value })} />
+                      {l.empleadoId && l.metodoPago === "Transferencia móvil" && !catalogos.empleados.find((x) => x.id === l.empleadoId)?.telefono?.trim() ? <span className="block">El empleado no tiene teléfono registrado en RRHH.</span> : null}
                     </label>
                   </div>
                   <p className="text-right text-xs text-[var(--muted)]">Total de la línea: Q{totalLinea.toLocaleString("es-GT", { minimumFractionDigits: 2 })}</p>

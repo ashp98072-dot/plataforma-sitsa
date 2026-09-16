@@ -7,6 +7,7 @@ import { leerBytesFirmaGuardada } from "@/lib/firmas/usuario-firmas";
 import { sha256Hex } from "@/lib/firmas/imagen-firma";
 import { borrarUpload, guardarUpload } from "@/lib/uploads";
 import { normalizarDestinoPago } from "@/lib/tms/gastos";
+import { destinoPagoEmpleado } from "./destino-pago-empleado";
 import {
   resolverEntidadRequirenteTx,
   resolverSolicitanteOperacionesTx,
@@ -94,7 +95,7 @@ async function guardarImagenFirmaFondo(
 async function resolverSnapshotLineaTx(
   conn: PoolConnection,
   empresaId: number,
-  input: Pick<LineaFondoInput, "empleadoId" | "vehiculoId" | "clienteId" | "planId" | "fechaViaje" | "empleadoNombreOverride" | "cuentaOverride" | "cargoOverride">,
+  input: Pick<LineaFondoInput, "empleadoId" | "vehiculoId" | "clienteId" | "planId" | "fechaViaje" | "empleadoNombreOverride" | "cuentaOverride" | "cargoOverride" | "metodoPago">,
 ): Promise<{ empleadoNombre: string | null; cargo: string | null; cuenta: string | null; placa: string | null; clienteId: number | null; clienteNombre: string | null; fechaViaje: string | null }> {
   let empleadoNombre: string | null = null;
   let cargo: string | null = null;
@@ -104,11 +105,14 @@ async function resolverSnapshotLineaTx(
   // nombre/puesto — nunca un valor enviado por el cliente HTTP.
   let cuenta: string | null = null;
   if (input.empleadoId != null) {
-    const rows = await queryConn<RowDataPacket[]>(conn, "SELECT nombre, puesto, cuenta_bancaria FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1", [input.empleadoId, empresaId]);
+    const rows = await queryConn<RowDataPacket[]>(conn, "SELECT nombre, puesto, cuenta_bancaria, telefono FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1", [input.empleadoId, empresaId]);
     if (!rows[0]) throw new Error("El empleado indicado no pertenece a esta empresa.");
     empleadoNombre = String(rows[0].nombre);
     cargo = rows[0].puesto != null ? String(rows[0].puesto) : null;
-    cuenta = rows[0].cuenta_bancaria != null ? String(rows[0].cuenta_bancaria) : null;
+    cuenta = input.metodoPago == null ? (rows[0].cuenta_bancaria != null ? String(rows[0].cuenta_bancaria) : null) : destinoPagoEmpleado(input.metodoPago, {
+      cuentaBancaria: rows[0].cuenta_bancaria != null ? String(rows[0].cuenta_bancaria) : null,
+      telefono: rows[0].telefono != null ? String(rows[0].telefono) : null,
+    }) || null;
     empleadoNombre = limpiarOverride(input.empleadoNombreOverride, 200) ?? empleadoNombre;
     // Cuenta es el destino bancario de esta solicitud y se congela como
     // snapshot. A diferencia de Nombre/Cargo, un override explícitamente

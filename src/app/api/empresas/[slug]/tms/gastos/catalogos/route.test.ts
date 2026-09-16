@@ -12,7 +12,7 @@ const ctx = { params: Promise.resolve({ slug: "kt-monaco" }) };
 function datosCatalogos() {
   vi.mocked(query)
     .mockResolvedValueOnce([
-      { id: 1, codigo: "EMP-1", nombre: "Carlos Abel Pineda", puesto: "Piloto", cuenta_bancaria: "123456" },
+      { id: 1, codigo: "EMP-1", nombre: "Carlos Abel Pineda", puesto: "Piloto", cuenta_bancaria: "123456", telefono: "55551234" },
       { id: 8, codigo: "EMP-8", nombre: "Empleado con cuenta", puesto: "Contador", cuenta_bancaria: "00123456789" },
     ] as never)
     .mockResolvedValueOnce([{ id: 2, placa: "C-130BQ", marca: "Hino", modelo: "500" }] as never)
@@ -44,15 +44,15 @@ describe("GET catálogos de Gastos/Fondos", () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.empleados).toEqual([
-      { id: 1, codigo: "EMP-1", nombre: "Carlos Abel Pineda", puesto: "Piloto", cuentaBancaria: "123456" },
-      { id: 8, codigo: "EMP-8", nombre: "Empleado con cuenta", puesto: "Contador", cuentaBancaria: "00123456789" },
+      { id: 1, codigo: "EMP-1", nombre: "Carlos Abel Pineda", puesto: "Piloto", cuentaBancaria: "123456", telefono: "55551234" },
+      { id: 8, codigo: "EMP-8", nombre: "Empleado con cuenta", puesto: "Contador", cuentaBancaria: "00123456789", telefono: null },
     ]);
     expect(body.vehiculos).toEqual([{ id: 2, placa: "C-130BQ", marca: "Hino", modelo: "500" }]);
     expect(body.clientes).toEqual([{ id: 3, codigo: null, nombre: "Cliente Uno", nit: "123-4" }]);
     expect(body.planes).toEqual([{
       id: 4, codigo: "PLAN-1", clienteId: 3, clienteNombre: "Cliente Uno", fechaPlan: "2026-09-09",
       vehiculoId: 2, placa: "C-130BQ", empleadoId: 1, empleadoNombre: "Carlos Abel Pineda",
-      empleadoPuesto: "Piloto", empleadoCuenta: "123456",
+      empleadoPuesto: "Piloto", empleadoCuenta: "123456", empleadoTelefono: null,
     }]);
     expect(body.usuarios).toHaveLength(2);
     expect(body.solicitantes).toEqual([{ id: 5, nombre: "Operador Uno" }]);

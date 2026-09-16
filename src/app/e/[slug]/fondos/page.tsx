@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { CatalogoSearchSelect, type CatalogoSearchOption } from "@/components/tms/catalogo-search-select";
 import { aplicarEmpleadoSeleccionado, aplicarPlanSeleccionado } from "@/lib/tms/fondos-selectores";
+import { destinoPagoEmpleado } from "@/lib/tms/destino-pago-empleado";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
 import { MESES_ES } from "@/lib/tms/reportes-mes";
@@ -43,13 +44,14 @@ const inputCls = "rounded border border-[var(--border)] bg-[var(--input)] px-2 p
  * ningún catálogo nuevo.
  */
 type Catalogos = {
-  empleados: { id: number; codigo: string; nombre: string; puesto: string | null; cuentaBancaria: string | null }[];
+  empleados: { id: number; codigo: string; nombre: string; puesto: string | null; cuentaBancaria: string | null; telefono?: string | null }[];
   vehiculos: { id: number; placa: string; marca: string | null; modelo: string | null }[];
   clientes: { id: number; codigo: string | null; nombre: string; nit: string | null }[];
   planes: {
     id: number; codigo: string; clienteId: number | null; clienteNombre: string | null; fechaPlan: string;
     vehiculoId: number | null; placa: string | null; empleadoId: number | null; empleadoNombre: string | null;
     empleadoPuesto: string | null; empleadoCuenta: string | null;
+    empleadoTelefono?: string | null;
   }[];
   /** SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§3) — usuarios reales con acceso a esta empresa, para el selector "Requirente (usuario)". */
   usuarios: { id: number; nombre: string }[];
@@ -441,13 +443,14 @@ export default function FondosPage() {
                       "Cuenta / Número".
                     */}
                     <label className="text-xs text-[var(--muted)]">Método de pago
-                      <select className={`${inputCls} mt-0.5 w-full`} value={l.metodoPago} onChange={(e) => set({ metodoPago: e.target.value })}>
+                      <select className={`${inputCls} mt-0.5 w-full`} value={l.metodoPago} onChange={(e) => set({ metodoPago: e.target.value, cuenta: destinoPagoEmpleado(e.target.value, catalogos.empleados.find((x) => String(x.id) === l.empleadoId)) })}>
                         <option value="">—</option>
                         {catalogos.metodosPago.map((m) => <option key={m} value={m}>{m}</option>)}
                       </select>
                     </label>
-                    <label className="text-xs text-[var(--muted)]">{l.metodoPago === "Transferencia móvil" ? "Número" : "Cuenta"}
+                    <label className="text-xs text-[var(--muted)]">{l.metodoPago === "Transferencia móvil" ? "Número de teléfono" : "Cuenta"}
                       <input className={`${inputCls} mt-0.5 w-full`} placeholder={l.metodoPago === "Transferencia móvil" ? "Número de transferencia móvil" : "Número de cuenta para depósito"} value={l.cuenta} onChange={(e) => set({ cuenta: e.target.value })} maxLength={100} />
+                      {l.empleadoId && l.metodoPago === "Transferencia móvil" && !catalogos.empleados.find((x) => String(x.id) === l.empleadoId)?.telefono?.trim() ? <span className="block">El empleado no tiene teléfono registrado en RRHH.</span> : null}
                     </label>
                     <label className="text-xs text-[var(--muted)]">Cargo
                       <input className={`${inputCls} mt-0.5 w-full`} value={l.cargo} onChange={(e) => set({ cargo: e.target.value })} maxLength={150} />

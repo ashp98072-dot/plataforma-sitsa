@@ -2,6 +2,7 @@ import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import type { PoolConnection } from "mysql2/promise";
 import { getPool, query, type SqlParams } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
+import { destinoPagoEmpleado } from "./destino-pago-empleado";
 import {
   resolverEntidadRequirenteTx,
   resolverSolicitanteOperacionesTx,
@@ -149,6 +150,17 @@ export function normalizarDestinoPago(
 async function queryConn<T extends RowDataPacket[]>(conn: PoolConnection, sql: string, params: SqlParams = []): Promise<T> {
   const [rows] = await conn.query<T>(sql, params);
   return rows;
+}
+
+async function resolverDestinoEmpleadoTx(conn: PoolConnection, empresaId: number, empleadoId: number | null | undefined, metodo: string | null | undefined, override: string | null | undefined): Promise<string | null> {
+  if (override !== undefined) return normalizarDestinoPago(metodo, override);
+  if (empleadoId == null) return normalizarDestinoPago(metodo, null);
+  const rows = await queryConn<RowDataPacket[]>(conn, "SELECT cuenta_bancaria, telefono FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1", [empleadoId, empresaId]);
+  if (!rows[0]) throw new Error("El empleado indicado no pertenece a esta empresa.");
+  return normalizarDestinoPago(metodo, destinoPagoEmpleado(metodo, {
+    cuentaBancaria: rows[0].cuenta_bancaria != null ? String(rows[0].cuenta_bancaria) : null,
+    telefono: rows[0].telefono != null ? String(rows[0].telefono) : null,
+  }));
 }
 async function executeConn(conn: PoolConnection, sql: string, params: SqlParams = []): Promise<ResultSetHeader> {
   const [result] = await conn.execute<ResultSetHeader>(sql, params);
@@ -689,7 +701,7 @@ async function insertarLineasGastoTx(
   let orden = 0;
   for (const l of lineas) {
     const snapshot = await resolverSnapshotLineaGastoTx(conn, empresaId, l);
-    const numeroCuentaPago = normalizarDestinoPago(l.metodoPago ?? null, l.numeroCuentaPago);
+    const numeroCuentaPago = await resolverDestinoEmpleadoTx(conn, empresaId, l.empleadoId, l.metodoPago, l.numeroCuentaPago);
     await executeConn(conn,
       `INSERT INTO tms_gasto_operativo_lineas
         (empresa_id, gasto_id, categoria, descripcion, cantidad, monto, metodo_pago, numero_cuenta_pago, orden,
@@ -753,7 +765,10 @@ export async function crearGasto(
   }
   const cantidadCabecera = usaLineas ? 1 : (input.cantidad ?? 1);
   const montoCabecera = usaLineas ? calcularTotalLineasGasto(input.lineas!) : input.monto!;
-  const numeroCuentaPago = normalizarDestinoPago(input.metodoPago ?? null, input.numeroCuentaPago);
+  let numeroCuentaPago: string | null;
+  if (input.numeroCuentaPago !== undefined || input.empleadoId == null) {
+    normalizarDestinoPago(input.metodoPago, input.numeroCuentaPago);
+  }
 
   const conn = await getPool().getConnection();
   const archivosFirmaEscritos: string[] = [];
@@ -761,6 +776,7 @@ export async function crearGasto(
   try {
     await conn.beginTransaction();
     await validarReferenciasGastoTx(conn, empresaId, input);
+    numeroCuentaPago = await resolverDestinoEmpleadoTx(conn, empresaId, input.empleadoId, input.metodoPago, input.numeroCuentaPago);
     const { entidadRequirente, requirenteUsuario, solicitanteUsuario } = await resolverIdentidadAdministrativaGastoTx(conn, empresaId, input);
 
     const r = await executeConn(conn,
@@ -937,11 +953,10 @@ export async function actualizarGasto(
     const metodoPagoActual = actual.metodo_pago != null ? String(actual.metodo_pago) : null;
     const numeroCuentaPagoActual = actual.numero_cuenta_pago != null ? String(actual.numero_cuenta_pago) : null;
     const metodoPago = cambios.metodoPago !== undefined ? cambios.metodoPago : metodoPagoActual;
-    const numeroCuentaPago = normalizarDestinoPago(
-      metodoPago,
-      cambios.numeroCuentaPago !== undefined ? cambios.numeroCuentaPago : numeroCuentaPagoActual,
-    );
     const empleadoId = cambios.empleadoId !== undefined ? cambios.empleadoId : (actual.empleado_id != null ? Number(actual.empleado_id) : null);
+    const cambioDestino = cambios.empleadoId !== undefined && cambios.empleadoId !== actual.empleado_id || cambios.metodoPago !== undefined && cambios.metodoPago !== metodoPagoActual;
+    const numeroCuentaPago = await resolverDestinoEmpleadoTx(conn, empresaId, empleadoId, metodoPago,
+      cambios.numeroCuentaPago !== undefined ? cambios.numeroCuentaPago : cambioDestino ? undefined : numeroCuentaPagoActual);
     const vehiculoId = cambios.vehiculoId !== undefined ? cambios.vehiculoId : (actual.vehiculo_id != null ? Number(actual.vehiculo_id) : null);
     const clienteId = cambios.clienteId !== undefined ? cambios.clienteId : (actual.cliente_id != null ? Number(actual.cliente_id) : null);
     const planId = cambios.planId !== undefined ? cambios.planId : (actual.plan_id != null ? Number(actual.plan_id) : null);
