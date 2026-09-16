@@ -1295,6 +1295,17 @@ export async function autorizarPeriodoPlanilla(empresaId: number, periodoId: num
     }
     const empleados = new Set(snapshots.map((s) => s.empleadoId));
     if (empleados.size !== snapshots.length) throw new Error("La planilla contiene empleados duplicados.");
+    const [salarios] = await conn.query<RowDataPacket[]>(
+      `SELECT id, sueldo_base FROM empleados WHERE empresa_id = ? AND id IN (${snapshots.map(() => "?").join(",")}) ORDER BY id FOR UPDATE`,
+      [empresaId, ...snapshots.map((s) => s.empleadoId)],
+    );
+    const sueldoActualPorEmpleado = new Map(salarios.map((e) => [Number(e.id), Number(e.sueldo_base ?? 0) || 0]));
+    for (const s of snapshots) {
+      const sueldoActual = sueldoActualPorEmpleado.get(s.empleadoId);
+      if (sueldoActual == null || !Number.isFinite(sueldoActual) || redondearQ(sueldoActual) !== redondearQ(s.sueldoMensual)) {
+        throw new Error("La información salarial cambió. Debe regenerarse la planilla antes de autorizar.");
+      }
+    }
     for (const s of snapshots) await aplicarConceptosSnapshot(conn, s, usuario);
     const [r] = await conn.execute<ResultSetHeader>(`UPDATE rrhh_planilla_periodos SET estado = 'Cerrada', autorizado_por = ?, autorizado_en = NOW()
       WHERE empresa_id = ? AND id = ? AND estado = 'Generada' AND autorizado_en IS NULL`, [usuario, empresaId, periodoId]);

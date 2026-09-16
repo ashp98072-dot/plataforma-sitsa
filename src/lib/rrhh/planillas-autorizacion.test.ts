@@ -42,6 +42,7 @@ beforeEach(() => {
     return [] as never;
   });
   conn.query.mockImplementation(async (sql: string, params: unknown[]) => {
+    if (sql.includes("FROM empleados")) return [Number(params[0]) === 3 && params.slice(1).includes(7) ? [{ id: 7, sueldo_base: sueldo }] : [], []];
     if (sql.includes("SELECT id, estado FROM")) return [Number(params[0]) === 3 ? [periodo] : [], []];
     if (sql.includes("SELECT q2.id")) return [[], []];
     if (sql.includes("SELECT autorizado_en") || sql.includes("SELECT * FROM rrhh_planilla_periodos")) return [[periodo], []];
@@ -149,6 +150,14 @@ describe("generar / regenerar / autorizar con fuentes reales simuladas", () => {
     await expect(actualizarLinea(3, 1, 100, { estadoPago: "Pagado" })).rejects.toThrow("no está autorizada");
     expect(lineas[0].estado_pago).toBe("Pendiente");
     await autorizar(); await marcarPagos(3, 1, { estadoPago: "Pagado" }); expect(lineas[0].estado_pago).toBe("Pagado");
+  });
+  it("cambio salarial antes de autorizar exige regenerar sin aplicar cuota ni HE", async () => {
+    await generar(); sueldo = 5000; conn.execute.mockClear(); conn.commit.mockClear();
+    await expect(autorizar()).rejects.toThrow(/información salarial cambió.*regenerarse/);
+    expect(cuotas[0].estado).toBe("PENDIENTE"); expect(horas[0].estado).toBe("APROBADA");
+    expect(periodo).toMatchObject({ estado: "Generada", autorizado_en: null });
+    expect(conn.execute).not.toHaveBeenCalled(); expect(conn.commit).not.toHaveBeenCalled();
+    expect(conn.query.mock.calls.find(([sql]) => sql.includes("FROM empleados"))?.[1]).toEqual([3, 7]);
   });
   it("sueldo mensual aprobado no cambia si RRHH cambia el salario después", async () => {
     await generar(); await autorizar(); sueldo = 5000;
