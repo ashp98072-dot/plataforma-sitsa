@@ -1092,6 +1092,13 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
         >
           Exportar PDF
         </a>
+        {/* TMS-IMPORTACION-PROGRAMACION-EXCEL (PR 6/6) — importación masiva desde Excel, página aparte (mismo criterio que Rutas > Importar Excel). */}
+        <Link
+          href={`/e/${slug}/programacion/importar`}
+          className="rounded bg-[#37474F] px-3 py-1.5 text-xs text-white hover:bg-[#455A64]"
+        >
+          Importar Excel
+        </Link>
         <span className="text-[10px] text-[var(--muted)]">
           Reporte tradicional: Mes, Día, Placa, Piloto, Auxiliar 1, Auxiliar 2
           {filtroRapido === "Programado" ? "" : ", Código"}, Cliente, Lugar de Carga, Hora, Lugar
