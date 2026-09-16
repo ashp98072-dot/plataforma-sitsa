@@ -33,7 +33,8 @@ import {
   type RecursoAValidar,
 } from "@/lib/tms/disponibilidad-traslapes";
 import { personalDesdeEmpleado, validarPersonalId } from "@/lib/tms/personal-resolucion";
-import type { PoolConnection, ResultSetHeader } from "mysql2/promise";
+import { upsertLugar, guardarAuxiliaresPlan } from "@/lib/tms/plan-comunes";
+import type { ResultSetHeader } from "mysql2/promise";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -119,24 +120,6 @@ const SQL_ATRASADO = `(
                   WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
                 )
               )`;
-
-/**
- * Fase P5.1b: helper conn-aware para escrituras. Si se pasa `conn` (dentro
- * de una transacción de Programación), usa esa misma conexión; si no,
- * mantiene exactamente el comportamiento actual (pool global vía @/lib/db).
- * Mismo patrón que runExecute en src/lib/tms/paradas.ts.
- */
-async function runExecute(
-  conn: PoolConnection | undefined,
-  sql: string,
-  params: SqlParams = [],
-): Promise<ResultSetHeader> {
-  if (conn) {
-    const [result] = await conn.execute<ResultSetHeader>(sql, params);
-    return result;
-  }
-  return execute(sql, params);
-}
 
 /** Auxiliar de un plan con su id real de tms_personal (Fase P4.3). */
 type AuxiliarPlan = {
@@ -530,63 +513,11 @@ const schema = z.object({
 // importación masiva de Programación pueda reutilizarlas sin duplicar
 // lógica — ver import arriba.
 
-async function upsertLugar(
-  empresaId: number,
-  nombre: string | undefined,
-  tipo: string,
-): Promise<number | null> {
-  if (!nombre?.trim()) return null;
-  const existing = await query<RowDataPacket[]>(
-    "SELECT id FROM tms_lugares WHERE empresa_id = ? AND nombre = ? LIMIT 1",
-    [empresaId, nombre.trim()],
-  );
-  if (existing[0]) return Number(existing[0].id);
-  const r = await execute(
-    "INSERT INTO tms_lugares (empresa_id, nombre, tipo) VALUES (?, ?, ?)",
-    [empresaId, nombre.trim(), tipo],
-  );
-  return Number(r.insertId);
-}
-
-/**
- * Fase P5.1b: `conn` opcional — si viene (dentro de una transacción de
- * Programación), el DELETE + INSERTs usan esa misma conexión y los errores
- * SE PROPAGAN (para que el caller pueda hacer ROLLBACK) en vez de
- * silenciarse. Sin `conn`, comportamiento IDÉNTICO al actual: pool global
- * y errores silenciados (tolerancia histórica a "tabla aún no existe") —
- * compatibilidad total con el POST y con el resto del PATCH legado, que
- * siguen llamándola sin `conn`. No se duplica la función: una sola función,
- * dos ramas de manejo de errores según haya o no transacción activa.
- */
-async function guardarAuxiliaresPlan(
-  planId: number,
-  personalIds: number[],
-  conn?: PoolConnection,
-): Promise<void> {
-  async function escribir(): Promise<void> {
-    await runExecute(conn, "DELETE FROM tms_plan_auxiliares WHERE plan_id = ?", [
-      planId,
-    ]);
-    let orden = 1;
-    for (const pid of personalIds.slice(0, 8)) {
-      await runExecute(
-        conn,
-        `INSERT INTO tms_plan_auxiliares (plan_id, personal_id, orden)
-         VALUES (?, ?, ?)`,
-        [planId, pid, orden++],
-      );
-    }
-  }
-  if (conn) {
-    await escribir();
-    return;
-  }
-  try {
-    await escribir();
-  } catch {
-    /* tabla aún no existe (comportamiento legado, sin conn) */
-  }
-}
+// TMS-IMPORTACION-PROGRAMACION-EXCEL (PR 5): `upsertLugar` y
+// `guardarAuxiliaresPlan` se extrajeron a `@/lib/tms/plan-comunes`
+// (mismo código, sin cambios de comportamiento) para que
+// confirmarImportacionProgramacion pueda reutilizarlas sin duplicar
+// lógica — ver import arriba.
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
