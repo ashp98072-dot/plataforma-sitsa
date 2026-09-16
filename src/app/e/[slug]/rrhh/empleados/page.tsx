@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useRef,
   useState,
   type FormEvent,
@@ -696,6 +697,30 @@ export default function EmpleadosPage() {
     }
     setForm(empToForm(e, horaDef));
   }
+
+  const abrirFichaDesdeDashboard = useEffectEvent((empleado: Emp, historial: EmpleadoCambio[], supervisores: SupervisorInfo[]) => {
+    setEditId(empleado.id);
+    setVista("ficha");
+    mergeSupervisorLabels(supervisores);
+    setForm(empToForm(empleado, horaDef, supervisores.map((s) => s.id)));
+    setHistorial(historial);
+    setSecciones({ identidad: true, laboral: true, salarios: true, contacto: true, licencia: true, otros: true });
+  });
+  const empleadoEnlace = searchParams.get("empleado");
+  useEffect(() => {
+    const id = Number(empleadoEnlace);
+    if (!Number.isSafeInteger(id) || id <= 0) return;
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const res = await fetch(`/api/empresas/${slug}/empleados/${id}?historial=1`, { signal: controller.signal });
+        const data = await res.json();
+        if (!res.ok || !data.empleado) throw new Error(data.error || "No se pudo abrir la ficha del empleado.");
+        if (!controller.signal.aborted) abrirFichaDesdeDashboard(data.empleado, data.historial ?? [], data.supervisores ?? []);
+      } catch (e) { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "No se pudo abrir la ficha."); }
+    })();
+    return () => controller.abort();
+  }, [slug, empleadoEnlace]);
 
   async function onSubmit(ev: FormEvent) {
     ev.preventDefault();
