@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import type { ResumenMensual } from "@/lib/rrhh/dashboard";
+import { DetalleMovimientosPanel } from "@/components/rrhh/detalle-movimientos-mensual";
 
 type Stats = {
   totalEmpleados: number;
@@ -68,6 +69,7 @@ function DashboardRrhh({ slug }: { slug: string }) {
   const [cargando, setCargando] = useState(true);
   const [intento, setIntento] = useState(0);
   const [mesSeleccionado, setMesSeleccionado] = useState("");
+  const [mesDetalle, setMesDetalle] = useState("");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -375,7 +377,7 @@ function DashboardRrhh({ slug }: { slug: string }) {
                       className="border-b border-[var(--border)]/50"
                     >
                       <td className="py-1.5 pr-4">
-                        {fmtMes(r.mes)}
+                        <button type="button" aria-controls="detalle-movimientos" aria-expanded={mesDetalle === r.mes} onClick={() => { setMesSeleccionado(r.mes); setMesDetalle(r.mes); }} className="text-[var(--accent)] underline">{fmtMes(r.mes)}</button>
                       </td>
                       <td className="py-1.5 pr-4 text-[#8fd4a0]">
                         {r.altas == null ? "No disponible" : `+${r.altas}`}
@@ -404,6 +406,7 @@ function DashboardRrhh({ slug }: { slug: string }) {
               </table>
             </div>
           </details>
+          {mesDetalle && <DetalleMovimientosPanel key={`${slug}-${mesDetalle}`} slug={slug} mes={mesDetalle} cerrar={() => setMesDetalle("")} />}
         </div>
       ) : null}
 

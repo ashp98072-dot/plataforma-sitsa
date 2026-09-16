@@ -4,14 +4,25 @@ import {
   obtenerEstadisticasDashboard,
   obtenerResumenGerencial,
   obtenerSituacionEmpleadosHoy,
+  obtenerDetalleMovimientosMensual,
 } from "@/lib/rrhh/dashboard";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
-export async function GET(_req: Request, ctx: Ctx) {
+export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenantRrhh(slug, "empleados", "ver");
   if (guard.error) return guard.error;
+  const mes = new URL(req.url).searchParams.get("detalleMes");
+  if (mes !== null) {
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mes) || Number(mes.slice(0, 4)) < 1000) return NextResponse.json({ error: "Mes inválido." }, { status: 400 });
+    try {
+      return NextResponse.json(await obtenerDetalleMovimientosMensual(guard.empresa.id, mes), { headers: { "Cache-Control": "private, no-store" } });
+    } catch (error) {
+      console.error("[dashboard-rrhh] Detalle mensual no disponible", error);
+      return NextResponse.json({ error: "No se pudo cargar el detalle mensual." }, { status: 500 });
+    }
+  }
   const resultados = await Promise.allSettled([
     obtenerEstadisticasDashboard(guard.empresa.id),
     obtenerResumenGerencial(guard.empresa.id),
