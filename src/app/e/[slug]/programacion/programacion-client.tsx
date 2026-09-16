@@ -1095,6 +1095,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
         {/* TMS-IMPORTACION-PROGRAMACION-EXCEL (PR 6/6) — importación masiva desde Excel, página aparte (mismo criterio que Rutas > Importar Excel). */}
         <Link
           href={`/e/${slug}/programacion/importar`}
+          hidden
           className="rounded bg-[#37474F] px-3 py-1.5 text-xs text-white hover:bg-[#455A64]"
         >
           Importar Excel
