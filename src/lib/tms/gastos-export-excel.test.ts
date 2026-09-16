@@ -3,12 +3,14 @@ import { describe, expect, it } from "vitest";
 import {
   exportarAgregadoGastosExcel,
   exportarGastosDetalleExcel,
+  exportarGastoOperativoExcel,
   exportarRentabilidadExcel,
   exportarReporteFondosExcel,
   exportarSolicitudFondoExcel,
   exportarViaticosReporteExcel,
 } from "./gastos-export-excel";
 import type { SolicitudFondo } from "./fondos";
+import type { GastoOperativo } from "./gastos";
 import type { FilaGastoDetalle, FilaSolicitudFondoReporte, FilaViaticoReporte } from "./reportes-gastos";
 
 function filaViatico(overrides: Partial<FilaViaticoReporte> = {}): FilaViaticoReporte {
@@ -137,9 +139,62 @@ describe("exportación Excel de reportes de gastos", () => {
     };
     const buf = await exportarSolicitudFondoExcel(solicitud);
     const ws = await primeraHoja(buf);
-    expect(ws.getRow(1).values).toEqual([undefined, "Fecha solicitud", "Fecha viaje", "Nombre", "Cuenta", "Cargo", "Placa", "Cliente", "Categoría", "Cantidad", "Descripción", "Valor", "Subtotal (Q)"]);
-    expect(ws.getRow(2).values).toEqual([undefined, "01/09/2026", "", "", "", "", "", "", "Combustible", "2", "Diesel", "100.00", "200.00"]);
-    expect(ws.getRow(4).values).toEqual([undefined, "", "", "", "", "", "", "", "", "", "", "TOTAL", "350.00"]);
+    expect(ws.getCell("A1").value).toBe("EMPRESA REQUIRENTE NO REGISTRADA");
+    expect(ws.getCell("A2").value).toBe("SOLICITUD DE FONDO FONDO-000001");
+    expect(ws.getRow(4).values).toEqual([undefined, "Fecha solicitud", "Fecha viaje", "Nombre", "Cuenta", "Cargo", "Placa", "Cliente", "Categoría", "Cantidad", "Descripción", "Valor", "Subtotal (Q)"]);
+    expect(ws.getRow(5).values).toEqual([undefined, "01/09/2026", "", "", "", "", "", "", "Combustible", "2", "Diesel", "100.00", "200.00"]);
+    expect(ws.getRow(7).values).toEqual([undefined, "", "", "", "", "", "", "", "", "", "", "TOTAL", "350.00"]);
+    for (const nombre of ["Empresa requirente A", "Empresa requirente B"]) {
+      const otra = await primeraHoja(await exportarSolicitudFondoExcel({ ...solicitud, entidadRequirenteNombre: nombre }));
+      expect(otra.getCell("A1").value).toBe(nombre);
+      expect(otra.getColumn(1).width).toBe(ws.getColumn(1).width);
+      expect(otra.getCell("L1").isMerged).toBe(true);
+      expect(otra.getRow(7).values).toEqual(ws.getRow(7).values);
+    }
+  });
+
+  it("gasto individual usa snapshot requirente, conserva tabla, total, anchos y filtro", async () => {
+    const gasto = {
+      id: 10, empresaId: 7, entidadRequirenteNombre: "Empresa distinta del tenant",
+      fechaSolicitud: "2026-09-01", fechaViaje: null, categoria: "Combustible",
+      descripcion: "Diesel", cantidad: 2, monto: 100, activo: true,
+      empleadoId: null, empleadoNombre: null, empleadoCargo: null, vehiculoId: null,
+      vehiculoPlaca: null, clienteId: null, clienteNombre: null, planId: null, planCodigo: null,
+      metodoPago: null, numeroCuentaPago: null, creadoPor: "admin", observaciones: null,
+    } as GastoOperativo;
+    const ws = await primeraHoja(await exportarGastoOperativoExcel(gasto));
+    expect(ws.getCell("A1").value).toBe(gasto.entidadRequirenteNombre);
+    expect(ws.getCell("A2").value).toBe("GASTO OPERATIVO");
+    expect(ws.getCell("O1").isMerged).toBe(true);
+    expect(ws.getCell("A1").font).toMatchObject({ bold: true, size: 16 });
+    expect(ws.getCell("A1").alignment.horizontal).toBe("center");
+    expect(ws.getRow(4).values).toEqual([undefined, "Fecha solicitud", "Fecha de viaje", "Nombre", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Total", "Código viaje", "Categoría", "Monto unitario", "Estado", "Registrado por", "Observaciones"]);
+    expect(ws.getCell("I5").value).toBe(200);
+    expect(ws.getCell("H7").value).toBe("TOTAL GENERAL");
+    expect(ws.getCell("I7").value).toBe(200);
+    expect(ws.getCell("I5").numFmt).toBe('"Q"#,##0.00');
+    expect(ws.getColumn(8).width).toBe(40);
+    expect(ws.autoFilter).toBe("A4:O5");
+    expect(ws.views[0]).toMatchObject({ state: "frozen", ySplit: 4 });
+    const linea = {
+      id: 1, orden: 0, categoria: "Combustible", descripcion: "Diesel", cantidad: 2, monto: 100,
+      fechaViaje: null, empleadoId: null, empleadoNombre: null, cargo: null, vehiculoId: null,
+      placa: null, clienteId: null, clienteNombre: null, planId: null, metodoPago: null, numeroCuentaPago: null,
+    };
+    const varias = await primeraHoja(await exportarGastoOperativoExcel({
+      ...gasto, cantidad: 1, monto: 350,
+      lineas: [linea, { ...linea, id: 2, orden: 1, categoria: "Hospedaje", cantidad: 1, monto: 150 }],
+    }));
+    expect(varias.getCell("I5").value).toBe(200);
+    expect(varias.getCell("I6").value).toBe(150);
+    expect(varias.getCell("I8").value).toBe(350);
+    expect(varias.autoFilter).toBe("A4:O6");
+    for (const nombre of [null, "Otra empresa"]) {
+      const otra = await primeraHoja(await exportarGastoOperativoExcel({ ...gasto, entidadRequirenteNombre: nombre }));
+      expect(otra.getCell("A1").value).toBe(nombre ?? "EMPRESA REQUIRENTE NO REGISTRADA");
+      expect(otra.getRow(5).values).toEqual(ws.getRow(5).values);
+      expect(otra.getCell("I7").value).toBe(200);
+    }
   });
 });
 

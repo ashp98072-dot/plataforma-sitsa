@@ -726,6 +726,7 @@ export default function GastosPage() {
                     {g.estado === "Autorizada" ? (
                       <a href={`/api/empresas/${slug}/tms/gastos/${g.id}/pdf`} className="rounded border border-[var(--border)] px-2 py-1">Ver PDF</a>
                     ) : null}
+                    <a href={`/api/empresas/${slug}/tms/gastos/${g.id}/exportar`} className="rounded border border-[var(--border)] px-2 py-1">Exportar Excel</a>
                     <button type="button" onClick={() => void desactivar(g.id)} className="text-red-400">Desactivar</button>
                   </div>
                 </td>
