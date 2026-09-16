@@ -5,14 +5,19 @@ vi.mock("@/lib/tenant", () => ({ requireTenantGastos: vi.fn() }));
 vi.mock("@/lib/uploads", () => ({
   guardarUpload: vi.fn(), borrarUpload: vi.fn(), contentTypeFor: vi.fn(() => "application/pdf"),
   validarRutaArchivoEmpresa: vi.fn(() => "C:/safe/file.pdf"),
+  getUploadsRoot: vi.fn(() => "/hbuilds/uploads"),
   UploadValidationError: class UploadValidationError extends Error { constructor(message: string, public status: number) { super(message); } },
 }));
 vi.mock("fs/promises", () => ({ readFile: vi.fn(async () => Buffer.from("pdf")) }));
+vi.mock("fs", () => ({ existsSync: vi.fn(() => true) }));
 
 import { execute, query } from "@/lib/db";
 import { requireTenantGastos } from "@/lib/tenant";
 import { borrarUpload, guardarUpload } from "@/lib/uploads";
 import { DELETE, GET, POST } from "./route";
+import { readFile } from "fs/promises";
+import { existsSync } from "fs";
+import { getUploadsRoot, validarRutaArchivoEmpresa } from "@/lib/uploads";
 
 const ctx = { params: Promise.resolve({ slug: "kt", id: "8" }) };
 const fila = { activo: 1, factura_ruta_relativa: null, factura_nombre_original: null, factura_mime: null, factura_tamano: null };
@@ -23,6 +28,26 @@ beforeEach(() => {
 });
 
 describe("comprobante de gasto", () => {
+  it.each(["ENOENT", "EACCES"])("registra diagnóstico seguro para %s sin cambiar respuesta", async (code) => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      vi.mocked(query).mockResolvedValue([{ ...fila, factura_ruta_relativa: "empresas/7/documentos/a.pdf", factura_nombre_original: "a.pdf" }] as never);
+      vi.mocked(getUploadsRoot).mockReturnValue("/hbuilds/uploads");
+      vi.mocked(validarRutaArchivoEmpresa).mockReturnValue("/hbuilds/uploads/empresas/7/documentos/a.pdf");
+      vi.mocked(existsSync).mockReturnValue(code === "EACCES");
+      vi.mocked(readFile).mockRejectedValueOnce(Object.assign(new Error("no registrar mensaje"), { code }));
+      const res = await GET(new Request("http://x"), ctx);
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual({ error: "Comprobante no encontrado en disco." });
+      expect(log).toHaveBeenCalledWith("[gastos-comprobante-diagnostico]", {
+        uploadsRoot: "/hbuilds/uploads", imagenRuta: "empresas/7/documentos/a.pdf",
+        rutaAbsolutaCalculada: "/hbuilds/uploads/empresas/7/documentos/a.pdf",
+        existsSync: code === "EACCES", cwd: process.cwd(),
+        uploadDirDefinida: Boolean(process.env.UPLOAD_DIR?.trim()), codigoError: code,
+      });
+      expect(execute).not.toHaveBeenCalled();
+    } finally { log.mockRestore(); }
+  });
   it("sube PDF válido en el ámbito de la empresa y marca tiene_factura", async () => {
     vi.mocked(query).mockResolvedValue([fila] as never);
     vi.mocked(guardarUpload).mockResolvedValue({ relative: "empresas/7/documentos/gasto8.pdf", original: "factura.pdf", size: 3 });
