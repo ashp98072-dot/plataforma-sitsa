@@ -1,0 +1,114 @@
+import type { PoolConnection, RowDataPacket, ResultSetHeader } from "mysql2/promise";
+import { z } from "zod";
+import { redondearQ } from "./contratos-pago";
+import { toIsoDate } from "./dates";
+import { finalizarSiCorresponde } from "./descuentos";
+
+const id = z.number().int().positive();
+const monto = z.number().finite().nonnegative();
+const item = z.object({ id, monto, concepto: z.string(), fecha: z.string(), notas: z.string() }).strict();
+const cuota = item.extend({ descuentoId: id, saldoDescuento: monto }).strict();
+const hora = item.extend({ horas: monto }).strict();
+const pendientesSchema = z.object({ cuotas: z.array(cuota), manuales: z.array(item), horasExtra: z.array(hora),
+  descuentosLegado: z.array(item), prestacionesLegado: z.array(item) }).strict();
+export const snapshotSchema = pendientesSchema.extend({ version: z.literal(1), empresaId: id, periodoId: id, empleadoId: id, sueldoMensual: monto }).strict();
+export type PendientesPlanilla = z.infer<typeof pendientesSchema>;
+export type ConceptosSnapshot = z.infer<typeof snapshotSchema>;
+export const pendientesVacios = (): PendientesPlanilla => ({ cuotas: [], manuales: [], horasExtra: [], descuentosLegado: [], prestacionesLegado: [] });
+const cambió = () => new Error("Los conceptos de la vista previa cambiaron o el snapshot es inválido. Regenera la planilla antes de autorizar.");
+
+export function leerConceptosSnapshot(value: unknown): ConceptosSnapshot | null {
+  if (value == null) return null;
+  try { return snapshotSchema.parse(typeof value === "string" ? JSON.parse(value) : value); }
+  catch { throw cambió(); }
+}
+
+/** Current reads bajo los bloqueos de períodos. No aplica, reserva ni crea conceptos. */
+export async function obtenerConceptosPendientes(conn: PoolConnection, empresaId: number,
+  periodo: { id: number; fechaInicio: string; fechaFin: string }): Promise<Map<number, PendientesPlanilla>> {
+  const [maestros] = await conn.query<RowDataPacket[]>("SELECT * FROM rrhh_descuentos_maestro WHERE empresa_id = ? ORDER BY id FOR UPDATE", [empresaId]);
+  const [cuotas] = await conn.query<RowDataPacket[]>("SELECT * FROM rrhh_descuento_cuotas WHERE empresa_id = ? ORDER BY descuento_id, numero_cuota, id FOR UPDATE", [empresaId]);
+  const [abonos] = await conn.query<RowDataPacket[]>("SELECT * FROM rrhh_descuento_abonos WHERE empresa_id = ? ORDER BY id FOR UPDATE", [empresaId]);
+  const [horas] = await conn.query<RowDataPacket[]>("SELECT * FROM horas_extra_registros WHERE empresa_id = ? ORDER BY id FOR UPDATE", [empresaId]);
+  if (cuotas.some((c) => Number(c.planilla_periodo_id) === periodo.id) || horas.some((h) => Number(h.planilla_periodo_id) === periodo.id)) {
+    throw new Error("Este período tiene conceptos históricos ya aplicados. Requiere revisión explícita; no se liberaron ni modificaron.");
+  }
+  const resultado = new Map<number, PendientesPlanilla>();
+  const de = (empleadoId: number) => {
+    if (!resultado.has(empleadoId)) resultado.set(empleadoId, pendientesVacios());
+    return resultado.get(empleadoId)!;
+  };
+  for (const d of maestros) {
+    if (d.estado !== "ACTIVO") continue;
+    const propias = cuotas.filter((c) => Number(c.descuento_id) === Number(d.id));
+    const saldoDescuento = redondearQ(Number(d.monto_original) - propias.filter((c) => c.estado === "APLICADA").reduce((sum, c) => sum + Number(c.monto_aplicado ?? 0), 0)
+      - abonos.filter((a) => Number(a.descuento_id) === Number(d.id)).reduce((sum, a) => sum + Number(a.monto), 0));
+    const siguiente = propias.find((c) => c.estado === "PENDIENTE" && c.planilla_periodo_id == null);
+    if (siguiente && (toIsoDate(siguiente.fecha_programada) ?? "") <= periodo.fechaFin) {
+      if (Number(siguiente.monto_programado) > saldoDescuento) throw new Error("Una cuota supera el saldo del descuento. Revisa sus cuotas antes de generar o autorizar.");
+      de(Number(d.empleado_id)).cuotas.push({ id: Number(siguiente.id), descuentoId: Number(d.id), saldoDescuento, monto: Number(siguiente.monto_programado),
+        concepto: String(d.concepto), fecha: toIsoDate(siguiente.fecha_programada) ?? "", notas: String(d.motivo ?? "") });
+    } else if (!propias.length && d.periodicidad === "MANUAL" && (toIsoDate(d.fecha_inicio) ?? "") <= periodo.fechaFin) {
+      const saldo = redondearQ(Number(d.monto_original) - abonos.filter((a) => Number(a.descuento_id) === Number(d.id)).reduce((sum, a) => sum + Number(a.monto), 0));
+      if (saldo > 0.004) de(Number(d.empleado_id)).manuales.push({ id: Number(d.id), monto: saldo, concepto: String(d.concepto), fecha: toIsoDate(d.fecha_inicio) ?? "", notas: String(d.motivo ?? "") });
+    }
+  }
+  for (const h of horas) {
+    const fecha = toIsoDate(h.fecha) ?? "";
+    if (h.estado === "APROBADA" && h.planilla_periodo_id == null && fecha >= periodo.fechaInicio && fecha <= periodo.fechaFin) {
+      de(Number(h.id_empleado)).horasExtra.push({ id: Number(h.id), monto: Number(h.monto), horas: Number(h.horas), concepto: "Horas extra", fecha, notas: String(h.motivo ?? "") });
+    }
+  }
+  for (const [tabla, campo] of [["rrhh_descuentos", "descuentosLegado"], ["rrhh_prestaciones", "prestacionesLegado"]] as const) {
+    const [rows] = await conn.query<RowDataPacket[]>(`SELECT * FROM ${tabla} WHERE empresa_id = ? AND fecha BETWEEN ? AND ? ORDER BY id FOR UPDATE`, [empresaId, periodo.fechaInicio, periodo.fechaFin]);
+    for (const row of rows) de(Number(row.id_empleado))[campo].push({ id: Number(row.id), monto: Number(row.monto), concepto: String(row.concepto ?? row.tipo ?? ""), fecha: toIsoDate(row.fecha) ?? "", notas: String(row.notas ?? "") });
+  }
+  for (const conceptos of resultado.values()) pendientesSchema.parse(conceptos);
+  return resultado;
+}
+
+export function totalesConceptos(p: PendientesPlanilla) {
+  const suma = (items: { monto: number }[]) => redondearQ(items.reduce((sum, i) => sum + i.monto, 0));
+  return { descuentos: suma([...p.cuotas, ...p.manuales, ...p.descuentosLegado]), otrosIngresos: suma([...p.horasExtra, ...p.prestacionesLegado]) };
+}
+
+export function validarSnapshotContraPendientes(snapshot: unknown, actual: PendientesPlanilla,
+  contexto: { empresaId: number; periodoId: number; empleadoId: number; descuentos: number; otrosIngresos: number }): ConceptosSnapshot {
+  const s = leerConceptosSnapshot(snapshot);
+  if (!s || s.empresaId !== contexto.empresaId || s.periodoId !== contexto.periodoId || s.empleadoId !== contexto.empleadoId) throw cambió();
+  // Normalizar también las filas actuales: JSON puede reordenar las claves en MariaDB.
+  const validacionActual = pendientesSchema.safeParse(actual);
+  if (!validacionActual.success) throw cambió();
+  const normalizado = validacionActual.data;
+  for (const campo of ["cuotas", "manuales", "horasExtra", "descuentosLegado", "prestacionesLegado"] as const) {
+    if (JSON.stringify(s[campo]) !== JSON.stringify(normalizado[campo])) throw cambió();
+    if (new Set(s[campo].map((i) => i.id)).size !== s[campo].length) throw cambió();
+  }
+  const totales = totalesConceptos(s);
+  if (totales.descuentos !== contexto.descuentos || totales.otrosIngresos !== contexto.otrosIngresos) throw cambió();
+  return s;
+}
+
+/** Solo después de revalidar TODOS los snapshots. La transacción es del caller. */
+export async function aplicarConceptosSnapshot(conn: PoolConnection, s: ConceptosSnapshot, usuario: string) {
+  const maestros = new Set<number>();
+  for (const c of s.cuotas) {
+    const [r] = await conn.execute<ResultSetHeader>(`UPDATE rrhh_descuento_cuotas SET estado = 'APLICADA', planilla_periodo_id = ?, monto_aplicado = ?, aplicado_en = NOW(), aplicado_por = ?
+      WHERE empresa_id = ? AND id = ? AND descuento_id = ? AND estado = 'PENDIENTE' AND planilla_periodo_id IS NULL AND monto_programado = ?`,
+    [s.periodoId, c.monto, usuario, s.empresaId, c.id, c.descuentoId, c.monto]);
+    if (r.affectedRows !== 1) throw cambió();
+    maestros.add(c.descuentoId);
+  }
+  for (const d of s.manuales) {
+    // Caso legado MANUAL sin cuota: crearla únicamente al autorizar, nunca en la vista previa.
+    await conn.execute(`INSERT INTO rrhh_descuento_cuotas (empresa_id, descuento_id, numero_cuota, fecha_programada, monto_programado, estado, planilla_periodo_id, monto_aplicado, aplicado_en, aplicado_por)
+      VALUES (?, ?, 1, ?, ?, 'APLICADA', ?, ?, NOW(), ?)`, [s.empresaId, d.id, d.fecha, d.monto, s.periodoId, d.monto, usuario]);
+    maestros.add(d.id);
+  }
+  for (const h of s.horasExtra) {
+    const [r] = await conn.execute<ResultSetHeader>(`UPDATE horas_extra_registros SET estado = 'APLICADA_EN_PLANILLA', planilla_periodo_id = ?, aplicado_en = NOW()
+      WHERE empresa_id = ? AND id = ? AND id_empleado = ? AND estado = 'APROBADA' AND planilla_periodo_id IS NULL AND monto = ? AND horas = ?`, [s.periodoId, s.empresaId, h.id, s.empleadoId, h.monto, h.horas]);
+    if (r.affectedRows !== 1) throw cambió();
+  }
+  for (const d of maestros) await finalizarSiCorresponde(conn, s.empresaId, d);
+}

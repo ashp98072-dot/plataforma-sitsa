@@ -11,14 +11,8 @@ import {
 } from "@/lib/rrhh/contratos-pago";
 import { calcularISRMensual } from "@/lib/rrhh/isr";
 import { obtenerRangoPeriodo } from "@/lib/rrhh/periodos";
-import {
-  aplicarCuotasElegibles,
-  sumaCuotasAplicadasPorPeriodo,
-} from "@/lib/rrhh/descuentos";
-import {
-  aplicarHorasExtraElegibles,
-  sumaHorasExtraAplicadasPorPeriodo,
-} from "@/lib/rrhh/horas-extra";
+import { aplicarConceptosSnapshot, leerConceptosSnapshot, obtenerConceptosPendientes, pendientesVacios, totalesConceptos, validarSnapshotContraPendientes, type ConceptosSnapshot } from "./planilla-conceptos";
+import type { PoolConnection } from "mysql2/promise";
 import { registrarAuditoria, registrarAuditoriaTx } from "@/lib/auditoria";
 import { bloquearPeriodosPlanilla, conPeriodoBloqueado, exigirPrimeraQuincenaSinDependientes } from "./planilla-control";
 import { liberarReservasPeriodo } from "./planilla-reversion";
@@ -39,6 +33,8 @@ export type PlanillaPeriodo = {
   fechaInicio: string;
   fechaFin: string;
   estado: string;
+  autorizadoPor?: string | null;
+  autorizadoEn?: string | null;
   notas: string | null;
   // Fase P0: aditivos, NULL en periodos históricos.
   tipoPeriodo: TipoPeriodo | null;
@@ -79,6 +75,7 @@ export type PlanillaLinea = {
   estadoPago: string;
   refPago: string;
   notas: string;
+  conceptosSnapshot?: ConceptosSnapshot | null;
 };
 
 export type CuadrePlanilla = {
@@ -129,6 +126,8 @@ async function asegurarInner(): Promise<void> {
       fecha_inicio DATE NOT NULL,
       fecha_fin DATE NOT NULL,
       estado VARCHAR(40) NOT NULL DEFAULT 'Borrador',
+      autorizado_por VARCHAR(100) NULL,
+      autorizado_en DATETIME NULL,
       notas TEXT NULL,
       creado_por VARCHAR(100) NULL,
       creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -150,6 +149,7 @@ async function asegurarInner(): Promise<void> {
       empresa_id INT NOT NULL,
       periodo_id INT NOT NULL,
       id_empleado INT NOT NULL,
+      conceptos_snapshot JSON NULL,
       codigo_empleado VARCHAR(40) NOT NULL,
       nombre_empleado VARCHAR(200) NOT NULL,
       dpi VARCHAR(20) NULL,
@@ -183,6 +183,8 @@ function mapPeriodo(r: RowDataPacket): PlanillaPeriodo {
     fechaInicio: fechaSql(r.fecha_inicio),
     fechaFin: fechaSql(r.fecha_fin),
     estado: String(r.estado),
+    autorizadoPor: r.autorizado_por != null ? String(r.autorizado_por) : null,
+    autorizadoEn: r.autorizado_en != null ? (r.autorizado_en instanceof Date ? r.autorizado_en.toISOString() : String(r.autorizado_en)) : null,
     notas: r.notas != null ? String(r.notas) : null,
     tipoPeriodo: (TIPOS_PERIODO as readonly string[]).includes(tipo ?? "")
       ? (tipo as TipoPeriodo)
@@ -204,6 +206,7 @@ function fechaSql(value: unknown): string {
 }
 
 function mapLinea(r: RowDataPacket): PlanillaLinea {
+  const snapshot = leerConceptosSnapshot(r.conceptos_snapshot);
   return {
     id: Number(r.id),
     periodoId: Number(r.periodo_id),
@@ -213,7 +216,8 @@ function mapLinea(r: RowDataPacket): PlanillaLinea {
     dpi: r.dpi ? String(r.dpi) : "",
     tipoContrato: String(r.tipo_contrato ?? "fijo"),
     formaPago: normalizarFormaPago(String(r.forma_pago ?? "transferencia")),
-    sueldoMensual: Number(r.sueldo_mensual ?? r.sueldo_base ?? 0),
+    sueldoMensual: snapshot?.sueldoMensual ?? Number(r.sueldo_mensual ?? r.sueldo_base ?? 0),
+    conceptosSnapshot: snapshot,
     sueldoBase: Number(r.sueldo_base ?? 0),
     bonoIncentivo: Number(r.bono_incentivo ?? 0),
     bonoHerramientas: Number(r.bono_herramientas ?? 0),
@@ -529,6 +533,7 @@ export async function cancelarPeriodo(
     return { ok: false, motivo: "no_encontrado", mensaje: "Periodo no encontrado." };
   }
   return conPeriodoBloqueado<ResultadoCancelarPeriodo>(empresaId, periodoId, async (conn, estado) => {
+  if (await tieneAutorizacion(conn, empresaId, periodoId)) throw new Error("La planilla autorizada no puede cancelarse; requiere una reversión explícita no disponible en este flujo.");
   if (estado !== "Borrador" && estado !== "Generada") {
     return {
       ok: false,
@@ -635,47 +640,6 @@ export function calcularCuadre(lineas: PlanillaLinea[]): CuadrePlanilla {
   return { porFormaPago, totales };
 }
 
-async function sumasPorEmpleado(
-  empresaId: number,
-  desde: string,
-  hasta: string,
-): Promise<{
-  descuentos: Map<number, number>;
-  prestaciones: Map<number, number>;
-}> {
-  const descuentos = new Map<number, number>();
-  const prestaciones = new Map<number, number>();
-  try {
-    const dRows = await query<RowDataPacket[]>(
-      `SELECT id_empleado, SUM(monto) AS total
-       FROM rrhh_descuentos
-       WHERE empresa_id = ? AND fecha BETWEEN ? AND ?
-       GROUP BY id_empleado`,
-      [empresaId, desde, hasta],
-    );
-    for (const r of dRows) {
-      descuentos.set(Number(r.id_empleado), Number(r.total ?? 0));
-    }
-  } catch {
-    /* tabla ausente */
-  }
-  try {
-    const pRows = await query<RowDataPacket[]>(
-      `SELECT id_empleado, SUM(monto) AS total
-       FROM rrhh_prestaciones
-       WHERE empresa_id = ? AND fecha BETWEEN ? AND ?
-       GROUP BY id_empleado`,
-      [empresaId, desde, hasta],
-    );
-    for (const r of pRows) {
-      prestaciones.set(Number(r.id_empleado), Number(r.total ?? 0));
-    }
-  } catch {
-    /* tabla ausente */
-  }
-  return { descuentos, prestaciones };
-}
-
 export type ItemDetalle = {
   concepto: string;
   monto: number;
@@ -741,26 +705,10 @@ export async function listarPrestacionesDetalle(
  * Rechaza regenerar si hay pagos registrados. conservarPagos se acepta por
  * compatibilidad, pero ya no permite descartar datos persistidos.
  *
- * Fase D2: además de los descuentos legado (rrhh_descuentos, sin cambios),
- * aplica dentro de la MISMA transacción las cuotas D1 (rrhh_descuento_cuotas)
- * elegibles para este periodo — transición PENDIENTE→APLICADA atómica y
- * verificada (ver aplicarCuotasElegibles en descuentos.ts) — y las suma al
- * campo agregado `descuentos` de cada línea junto con el legado, sin doblar
- * ninguna de las dos fuentes. Al regenerar, las cuotas ya APLICADA de este
- * mismo periodo no se vuelven a tocar (ya no son PENDIENTE) pero SÍ se
- * vuelven a sumar en el total (sumaCuotasAplicadasPorPeriodo cubre ambas).
- * Todo — aplicar cuotas, calcular líneas, escribir rrhh_planilla_lineas,
- * marcar el periodo Generada — ocurre en una única transacción: si algo
- * falla, se revierte todo (nunca queda una cuota APLICADA sin su línea).
- *
- * Fase H2 — horas extra APROBADA se aplican dentro de la MISMA transacción
- * (mismo patrón exacto que D2 para cuotas D1 — ver aplicarHorasExtraElegibles
- * en horas-extra.ts): transición APROBADA→APLICADA_EN_PLANILLA atómica y
- * verificada, sumadas a `otros_ingresos` de cada línea junto con las
- * prestaciones legado (fuente distinta, sin solape — H1/H2 ya no escriben en
- * rrhh_prestaciones). Al regenerar, las horas ya APLICADA_EN_PLANILLA de este
- * mismo periodo no se vuelven a tocar pero sí se vuelven a sumar (mismo
- * criterio que las cuotas D1).
+ * Solo calcula y captura conceptos pendientes. Nunca aplica cuotas ni horas
+ * extra: esa transición pertenece exclusivamente a autorizarPeriodoPlanilla.
+ * Los conceptos legados mantienen su semántica existente y se capturan por ID.
+ * Un período histórico con aplicaciones existentes requiere revisión explícita.
  *
  * Fase D3 / Fase P1 — reparto quincenal. `sueldo`/`bonoInc`/`bonoHerr` leídos
  * de `empleados` siguen siendo los valores CONTRACTUALES MENSUALES completos
@@ -814,7 +762,7 @@ export async function generarLineasPeriodo(
   const periodo = await obtenerPeriodo(empresaId, periodoId);
   if (!periodo) throw new Error("Periodo no encontrado.");
   if (
-    periodo.estado === "Cerrada" ||
+    periodo.autorizadoEn != null || periodo.estado === "Cerrada" ||
     periodo.estado === "Pagada" ||
     periodo.estado === "Cancelado"
   ) {
@@ -834,12 +782,6 @@ export async function generarLineasPeriodo(
     [empresaId],
   );
 
-  const { descuentos: descuentosLegado, prestaciones } = await sumasPorEmpleado(
-    empresaId,
-    periodo.fechaInicio,
-    periodo.fechaFin,
-  );
-
   // Fase D3: solo relevante para QUINCENA_2 — IGSS ya retenido en QUINCENA_1
   // del mismo empresa/mes/año, por empleado. Se consulta DENTRO de la misma
   // conexión/transacción (más abajo) para no congelar un valor viejo si Q1
@@ -850,12 +792,12 @@ export async function generarLineasPeriodo(
 
   const conn = await getPool().getConnection();
   let generadas = 0;
-  let cuotasAplicadas = 0;
-  let totalCuotasAplicado = 0;
+  const cuotasAplicadas = 0;
+  const totalCuotasAplicado = 0;
   let empleadosSinIgssQ1 = 0;
-  let horasExtraAplicadas = 0;
-  let totalHorasExtraHoras = 0;
-  let totalHorasExtraMonto = 0;
+  const horasExtraAplicadas = 0;
+  const totalHorasExtraHoras = 0;
+  const totalHorasExtraMonto = 0;
   try {
     await conn.beginTransaction();
 
@@ -864,6 +806,7 @@ export async function generarLineasPeriodo(
     if (!periodoBloqueado || !["Borrador", "Generada"].includes(String(periodoBloqueado.estado))) {
       throw new Error("El periodo ya no está abierto para generar. Actualiza la pantalla.");
     }
+    if (await tieneAutorizacion(conn, empresaId, periodoId)) throw new Error("La planilla ya está autorizada; no se puede regenerar.");
     await exigirPrimeraQuincenaSinDependientes(conn, empresaId, periodoId);
     const [prevRows] = await conn.query<RowDataPacket[]>(
       `SELECT * FROM rrhh_planilla_lineas WHERE empresa_id = ? AND periodo_id = ? FOR UPDATE`,
@@ -881,40 +824,8 @@ export async function generarLineasPeriodo(
     // cliente antiguo envía conservarPagos=false.
     const prevMap = new Map(prev.map((l) => [l.empleadoId, l]));
 
-    const aplicado = await aplicarCuotasElegibles(
-      conn,
-      empresaId,
-      { id: periodo.id, fechaInicio: periodo.fechaInicio, fechaFin: periodo.fechaFin },
-      opts.usuario,
-    );
-    cuotasAplicadas = aplicado.aplicadas;
-    totalCuotasAplicado = aplicado.totalAplicado;
-
-    // Incluye tanto las recién aplicadas arriba como las que ya estaban
-    // APLICADA de una generación anterior de este mismo periodo — ambas
-    // comparten planilla_periodo_id = periodo.id en este punto.
-    const descuentosD1 = await sumaCuotasAplicadasPorPeriodo(conn, empresaId, periodoId);
-    if ([...descuentosD1.keys()].some((id) => !empleadosIncluidos.has(id))) {
-      throw new Error("Una cuota corresponde a un empleado no incluido. La generación se revirtió sin modificar los descuentos.");
-    }
-
-    // Fase H2: mismo patrón exacto que las cuotas D1 justo arriba.
-    const aplicadoHoras = await aplicarHorasExtraElegibles(conn, empresaId, {
-      id: periodo.id,
-      fechaInicio: periodo.fechaInicio,
-      fechaFin: periodo.fechaFin,
-    });
-    horasExtraAplicadas = aplicadoHoras.aplicadas;
-    totalHorasExtraHoras = aplicadoHoras.totalHoras;
-    totalHorasExtraMonto = aplicadoHoras.totalMonto;
-    const horasExtraPorEmpleado = await sumaHorasExtraAplicadasPorPeriodo(
-      conn,
-      empresaId,
-      periodoId,
-    );
-    if ([...horasExtraPorEmpleado.keys()].some((id) => !empleadosIncluidos.has(id))) {
-      throw new Error("Hay horas extra de un empleado no incluido. La generación se revirtió sin dejar registros aplicados sin línea de pago.");
-    }
+    const pendientes = await obtenerConceptosPendientes(conn, empresaId, periodo);
+    if ([...pendientes.keys()].some((id) => !empleadosIncluidos.has(id))) throw new Error("Hay conceptos pendientes de un empleado no incluido. No se modificó ningún concepto; revisa sus movimientos antes de generar.");
 
     // Fase P1: se amplía de "solo igss_laboral" a los 6 conceptos que ahora
     // se reparten entre Q1/Q2 (sueldo, bono incentivo, bono herramientas,
@@ -969,17 +880,10 @@ export async function generarLineasPeriodo(
             ? 0
             : 250;
       const bonoHerr = Number(e.bono_herramientas ?? 0) || 0;
-      // Fase H2: prestaciones legado (incluye horas extra históricas
-      // pre-H1, ya insertadas ahí bajo el modelo anterior) + horas extra
-      // H2 aplicadas a este periodo (fuente nueva y separada — H1/H2 ya no
-      // escriben en rrhh_prestaciones, así que no hay solape/doble conteo
-      // entre ambas fuentes).
-      const otros = redondearQ(
-        Number(prestaciones.get(empId) ?? 0) + Number(horasExtraPorEmpleado.get(empId) ?? 0),
-      );
-      const desc = redondearQ(
-        Number(descuentosLegado.get(empId) ?? 0) + Number(descuentosD1.get(empId) ?? 0),
-      );
+      // Vista previa: fuentes independientes capturadas sin consumirlas.
+      const conceptosEmpleado = pendientes.get(empId) ?? pendientesVacios();
+      const { otrosIngresos: otros, descuentos: desc } = totalesConceptos(conceptosEmpleado);
+      const snapshot: ConceptosSnapshot = { version: 1, empresaId, periodoId, empleadoId: empId, sueldoMensual: sueldo, ...conceptosEmpleado };
 
       // Fase D3 / P1: valores mensuales esperados — siempre sobre los
       // campos CONTRACTUALES completos del empleado (nunca se sobreescriben
@@ -1077,15 +981,15 @@ export async function generarLineasPeriodo(
           (empresa_id, periodo_id, id_empleado, codigo_empleado, nombre_empleado,
            dpi, tipo_contrato, forma_pago, sueldo_base, bono_incentivo, bono_herramientas,
            otros_ingresos, igss_laboral, igss_patronal, descuentos, isr, neto,
-           estado_pago, ref_pago)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           estado_pago, ref_pago, conceptos_snapshot)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
            codigo_empleado = VALUES(codigo_empleado), nombre_empleado = VALUES(nombre_empleado),
            dpi = VALUES(dpi), tipo_contrato = VALUES(tipo_contrato),
            sueldo_base = VALUES(sueldo_base), bono_incentivo = VALUES(bono_incentivo),
            bono_herramientas = VALUES(bono_herramientas), otros_ingresos = VALUES(otros_ingresos),
            igss_laboral = VALUES(igss_laboral), igss_patronal = VALUES(igss_patronal),
-           descuentos = VALUES(descuentos), neto = VALUES(neto)`,
+           descuentos = VALUES(descuentos), neto = VALUES(neto), conceptos_snapshot = VALUES(conceptos_snapshot)`,
         [
           empresaId,
           periodoId,
@@ -1106,6 +1010,7 @@ export async function generarLineasPeriodo(
           neto,
           estadoPago,
           refPago || null,
+          JSON.stringify(snapshot),
         ],
       );
       generadas += 1;
@@ -1124,15 +1029,6 @@ export async function generarLineasPeriodo(
     conn.release();
   }
 
-  if (cuotasAplicadas > 0) {
-    await registrarAuditoria({
-      empresaId,
-      usuario: opts.usuario,
-      accion: "aplicar_descuentos_planilla",
-      modulo: "rrhh",
-      detalle: `Periodo #${periodoId} ${periodo.codigo} · ${cuotasAplicadas} cuota(s) nueva(s) aplicada(s) · Q${totalCuotasAplicado.toFixed(2)}`,
-    });
-  }
   // Fase D3: un solo resumen por periodo, no una entrada por empleado.
   if (empleadosSinIgssQ1 > 0) {
     await registrarAuditoria({
@@ -1141,16 +1037,6 @@ export async function generarLineasPeriodo(
       accion: "igss_quincena2_sin_q1",
       modulo: "rrhh",
       detalle: `Periodo #${periodoId} ${periodo.codigo} (Q2) · ${empleadosSinIgssQ1} empleado(s) sin Q1 válida · se aplicó la mitad mensual (sueldo, bonos, IGSS e ISR).`,
-    });
-  }
-  // Fase H2: un solo resumen por periodo, no una entrada por registro.
-  if (horasExtraAplicadas > 0) {
-    await registrarAuditoria({
-      empresaId,
-      usuario: opts.usuario,
-      accion: "aplicar_horas_extra_planilla",
-      modulo: "rrhh",
-      detalle: `Periodo #${periodoId} ${periodo.codigo} · ${horasExtraAplicadas} registro(s) de horas extra aplicado(s) · ${totalHorasExtraHoras.toFixed(2)}h · Q${totalHorasExtraMonto.toFixed(2)}`,
     });
   }
 
@@ -1293,6 +1179,7 @@ export async function actualizarLinea(
   await asegurarSchemaPlanillas();
   return conPeriodoBloqueado(empresaId, periodoId, async (conn, estadoPeriodo) => {
   if (!["Generada", "Cerrada"].includes(estadoPeriodo)) throw new Error("El periodo no permite cambios de líneas.");
+  const autorizada = await tieneAutorizacion(conn, empresaId, periodoId);
   const [rows] = await conn.query<RowDataPacket[]>(
     `SELECT * FROM rrhh_planilla_lineas WHERE empresa_id = ? AND periodo_id = ? AND id = ? FOR UPDATE`,
     [empresaId, periodoId, lineaId],
@@ -1303,12 +1190,13 @@ export async function actualizarLinea(
   const cambiaImporte = patch.isr != null && redondearQ(patch.isr) !== cur.isr;
   if (cambiaImporte) await exigirPrimeraQuincenaSinDependientes(conn, empresaId, periodoId);
   const cambiaForma = patch.formaPago != null && normalizarFormaPago(patch.formaPago) !== cur.formaPago;
-  if ((estadoPeriodo === "Cerrada" || cur.estadoPago === "Pagado") && (cambiaImporte || cambiaForma)) {
+  if ((autorizada || estadoPeriodo === "Cerrada" || cur.estadoPago === "Pagado") && (cambiaImporte || cambiaForma)) {
     throw new Error("No se pueden cambiar importes ni forma de pago de una planilla cerrada o una línea pagada.");
   }
   if (cur.estadoPago === "Pagado" && patch.estadoPago === "Pendiente") {
     throw new Error("Un pago registrado requiere una reversión explícita; no puede volver a pendiente desde esta edición.");
   }
+  if (patch.estadoPago === "Pagado" && cur.estadoPago !== "Pagado" && !autorizada) throw new Error("La planilla no está autorizada; no se pueden registrar pagos.");
   const forma = patch.formaPago
     ? normalizarFormaPago(patch.formaPago)
     : cur.formaPago;
@@ -1363,6 +1251,7 @@ export async function marcarPagos(
   return conPeriodoBloqueado(empresaId, periodoId, async (conn, estado) => {
   if (!["Generada", "Cerrada"].includes(estado)) throw new Error("El periodo no permite registrar pagos.");
   if (opts.estadoPago === "Pendiente") throw new Error("Los pagos requieren una reversión explícita; no se pueden desmarcar en lote.");
+  if (!await tieneAutorizacion(conn, empresaId, periodoId)) throw new Error("La planilla no está autorizada; no se pueden registrar pagos.");
   const params: (string | number)[] = [opts.estadoPago, empresaId, periodoId];
   let sql = `UPDATE rrhh_planilla_lineas SET estado_pago = ?
               WHERE empresa_id = ? AND periodo_id = ?`;
@@ -1378,18 +1267,68 @@ export async function marcarPagos(
   });
 }
 
+async function tieneAutorizacion(conn: PoolConnection, empresaId: number, periodoId: number): Promise<boolean> {
+  const [rows] = await conn.query<RowDataPacket[]>("SELECT autorizado_en FROM rrhh_planilla_periodos WHERE empresa_id = ? AND id = ? FOR UPDATE", [empresaId, periodoId]);
+  return rows[0]?.autorizado_en != null;
+}
+
+export async function autorizarPeriodoPlanilla(empresaId: number, periodoId: number, usuario: string): Promise<void> {
+  if (!usuario.trim()) throw new Error("Se requiere el usuario responsable.");
+  await asegurarSchemaPlanillas();
+  await conPeriodoBloqueado(empresaId, periodoId, async (conn, estado) => {
+    if (await tieneAutorizacion(conn, empresaId, periodoId)) throw new Error("La planilla ya está autorizada.");
+    if (estado !== "Generada") throw new Error("Solo se puede autorizar una planilla Generada.");
+    const [periodos] = await conn.query<RowDataPacket[]>("SELECT * FROM rrhh_planilla_periodos WHERE empresa_id = ? AND id = ? FOR UPDATE", [empresaId, periodoId]);
+    if (!periodos[0]) throw new Error("Periodo no encontrado.");
+    const periodo = mapPeriodo(periodos[0]);
+    const [rows] = await conn.query<RowDataPacket[]>("SELECT * FROM rrhh_planilla_lineas WHERE empresa_id = ? AND periodo_id = ? ORDER BY id FOR UPDATE", [empresaId, periodoId]);
+    if (!rows.length) throw new Error("No se puede autorizar una planilla sin líneas.");
+    if (rows.some((l) => l.estado_pago === "Pagado")) throw new Error("Este período tiene pagos históricos; requiere revisión explícita y no puede autorizarse retroactivamente.");
+    const pendientes = await obtenerConceptosPendientes(conn, empresaId, periodo);
+    const snapshots = rows.map((l) => validarSnapshotContraPendientes(l.conceptos_snapshot, pendientes.get(Number(l.id_empleado)) ?? pendientesVacios(), {
+      empresaId, periodoId, empleadoId: Number(l.id_empleado), descuentos: Number(l.descuentos), otrosIngresos: Number(l.otros_ingresos),
+    }));
+    for (const l of rows) {
+      const ingresos = Number(l.sueldo_base) + Number(l.bono_incentivo) + Number(l.bono_herramientas) + Number(l.otros_ingresos);
+      const retenciones = Number(l.igss_laboral) + Number(l.descuentos) + Number(l.isr);
+      if (!Number.isFinite(ingresos) || !Number.isFinite(retenciones) || Number(l.neto) !== redondearQ(ingresos - retenciones)) throw new Error("Los importes de la vista previa son inconsistentes. Regenera la planilla.");
+    }
+    const empleados = new Set(snapshots.map((s) => s.empleadoId));
+    if (empleados.size !== snapshots.length) throw new Error("La planilla contiene empleados duplicados.");
+    const [salarios] = await conn.query<RowDataPacket[]>(
+      `SELECT id, sueldo_base FROM empleados WHERE empresa_id = ? AND id IN (${snapshots.map(() => "?").join(",")}) ORDER BY id FOR UPDATE`,
+      [empresaId, ...snapshots.map((s) => s.empleadoId)],
+    );
+    const sueldoActualPorEmpleado = new Map(salarios.map((e) => [Number(e.id), Number(e.sueldo_base ?? 0) || 0]));
+    for (const s of snapshots) {
+      const sueldoActual = sueldoActualPorEmpleado.get(s.empleadoId);
+      if (sueldoActual == null || !Number.isFinite(sueldoActual) || redondearQ(sueldoActual) !== redondearQ(s.sueldoMensual)) {
+        throw new Error("La información salarial cambió. Debe regenerarse la planilla antes de autorizar.");
+      }
+    }
+    for (const s of snapshots) await aplicarConceptosSnapshot(conn, s, usuario);
+    const [r] = await conn.execute<ResultSetHeader>(`UPDATE rrhh_planilla_periodos SET estado = 'Cerrada', autorizado_por = ?, autorizado_en = NOW()
+      WHERE empresa_id = ? AND id = ? AND estado = 'Generada' AND autorizado_en IS NULL`, [usuario, empresaId, periodoId]);
+    if (r.affectedRows !== 1) throw new Error("No se pudo confirmar la autorización.");
+    await registrarAuditoriaTx(conn, { empresaId, usuario, accion: "autorizar_periodo_planilla", modulo: "rrhh", detalle: JSON.stringify({ periodoId, codigo: periodo.codigo, empleados: snapshots.length,
+      cuotas: snapshots.reduce((sum, s) => sum + s.cuotas.length + s.manuales.length, 0), horasExtra: snapshots.reduce((sum, s) => sum + s.horasExtra.length, 0) }) });
+  });
+}
+
 export async function actualizarEstadoPeriodo(
   empresaId: number,
   periodoId: number,
   estado: string,
   contexto: { usuario: string; motivo?: string },
 ): Promise<void> {
+  if (estado === "Cerrada") return autorizarPeriodoPlanilla(empresaId, periodoId, contexto.usuario);
   const motivo = contexto.motivo?.trim() ?? "";
   if (!contexto.usuario.trim()) throw new Error("Se requiere el usuario responsable.");
   if (estado === "Generada" && !motivo) throw new Error("Debes indicar un motivo para reabrir la planilla.");
   if (motivo.length > 1000) throw new Error("El motivo no debe exceder 1000 caracteres.");
   await asegurarSchemaPlanillas();
   await conPeriodoBloqueado(empresaId, periodoId, async (conn, actual) => {
+  if (await tieneAutorizacion(conn, empresaId, periodoId)) throw new Error("No se permite reabrir una planilla autorizada. Requiere una reversión explícita.");
   if (!((actual === "Generada" && estado === "Cerrada") || (actual === "Cerrada" && estado === "Generada"))) {
     throw new Error(`Transición de planilla no permitida: ${actual} → ${estado}.`);
   }
