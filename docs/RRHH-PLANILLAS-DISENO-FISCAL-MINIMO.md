@@ -2,7 +2,7 @@
 
 Fecha: 2026-09-16. Base inspeccionada: `c4d15fa56705d3847996963089ed797c0e4aa81a`.
 Rama: `codex/rrhh-planillas-isr-igss-scroll`.
-Solo diseño. El SQL de este documento NO se ha ejecutado. Sin cambios de cálculo, UI, históricos ni otros módulos.
+Solo diseño. No existe migración SQL en el repositorio y esta rama/PR no ha ejecutado SQL. El responsable confirmó que las dos sentencias CREATE TABLE propuestas fueron ejecutadas manualmente en phpMyAdmin después de redactar el diseño; la existencia y el esquema efectivo de ambas tablas deben verificarse antes de cualquier PR de modelo. Sin cambios de cálculo, UI, históricos ni otros módulos.
 El esquema descrito es el del repositorio; antes de una migración se requiere `SHOW CREATE TABLE` de producción y versión de MariaDB/MySQL.
 
 ## 1. Gaps y reutilización real
@@ -34,9 +34,12 @@ Campos económicos externos:
 Contrato `datos.version = 1`:
 
 - `constancias[]`: NIT patrono, número/identificador, rango de cobertura, `documentoId`; respaldo de los cuatro acumulados, sin una segunda copia de sus importes. Detectar documentos/rangos repetidos.
+- `ingresosPreviosPorConcepto[]`: cada entrada incluye `id` estable, `codigoConcepto`/`tipoConcepto`, `monto`, `tratamientoDeclarado` (`GRAVADO`, `EXENTO`, `CONDICIONAL`, `DESCONOCIDO`), `fundamentoDocumentado`, `fechaPercepcion` o `periodoDesde/Hasta`, `patronoNit`, `constanciaId`, `documentoId` y `observacionesLimitesAnuales`. Cuando corresponda, estas observaciones deben respaldar salario ordinario/base del límite y desglose gravado/exento documentado de aguinaldo, Bono 14 u otro concepto limitado. Tratamiento declarado no equivale a aceptación fiscal: validar evidencia y regla vigente. Las referencias pertenecen a las constancias/documentos del mismo empleado y empresa.
 - `ajustesPrevios[]`: tipo, fecha, referencia/documento y explicación; importes ya reflejados en los acumulados NO se aplican de nuevo. Si constancia no permite determinar el saldo real, no confirmar.
 - `deducciones[]`: clave estable, tipo (`DONACION`, `SEGURO_VIDA`, `IVA_PLANILLA`, `PREVISION_SOCIAL_OTRA`), monto solicitado, fechas, documentos, estado de comprobación y motivo. No equivale automáticamente a deducción admitida; el motor guarda monto admisible y límite en snapshot. IGSS propio/previo no se captura otra vez aquí.
 - `otrosPatronos`: declaración (`NO`, `SI`, `DESCONOCIDO`), calidad de agente retenedor y remuneraciones externas concurrentes documentadas, separadas de acumulados previos. No confundir multiempleo con cambio de patrono. No habilitar automatismo sin declaración suficiente.
+
+`ingresos_gravados_previos` e `ingresos_exentos_previos` sirven para conciliación y consulta rápida. El detalle por concepto permanece dentro de `datos JSON`, sin nuevas columnas/tablas, y debe conciliar con esos totales sin sumarse otra vez como ingreso adicional. Detectar entradas duplicadas y coberturas solapadas. El motor fiscal NO puede reconstruir límites de exención anual únicamente con `ingresos_exentos_previos`: si falta el desglose/evidencia necesario para un concepto limitado, exigir completarlo antes del cálculo automático y la autorización fiscal.
 
 RRHH captura solo estos antecedentes/evidencias y confirma cobertura. Sueldo, fechas laborales, horas y conceptos propios se toman de fuentes existentes.
 Planillas faltantes de esta misma empresa no se disfrazan de patrono anterior: requerir importación fiscal explícita con cobertura excluyente, en PR aparte si se necesita.
@@ -112,12 +115,13 @@ Clave lógica evento `(empresa, empleado, ejercicio, evento_clave)` + revisión.
 
 No registrar otra copia de cada ISR normal aquí. Una liquidación referencia retenciones originales, y solo su DIFERENCIA ejecutada participa una vez en el saldo fiscal. Devolución queda movimiento fiscal separado con pago/acreditación documentado, no recalcula netos aprobados. Rectificar una ejecutada requiere nuevo evento vinculado a la original, no editarla. Fecha fiscal del ajuste y ejercicio liquidado pueden diferir (por ejemplo devolución del año anterior en enero).
 
-## 8. SQL propuesto indispensable, aditivo y NO ejecutado
+## 8. SQL de referencia y estado real de la BD
 
-Solo estas dos tablas. Configuración y snapshot reutilizan estructuras existentes. Antes de ejecutar, revisar tipos de IDs, engine y compatibilidad JSON; `IF NOT EXISTS` permite repetir creación, pero NO valida tablas preexistentes ni reemplaza una migración versionada. Sin seeds ni backfill. Todos los importes manuales quedan NULL hasta declaración confirmada.
+Solo estas dos tablas. Configuración y snapshot reutilizan estructuras existentes. No hay archivo de migración SQL en el repositorio ni ejecución de SQL por esta rama/PR. Según confirmación del responsable, las sentencias siguientes ya fueron ejecutadas manualmente en phpMyAdmin; esto no constituye verificación independiente de su esquema efectivo. Antes de cualquier PR de modelo, verificar en solo lectura existencia, columnas, tipos de IDs, índices/FKs, engine y compatibilidad JSON. No volver a crear, alterar ni borrar tablas sin autorización separada. `IF NOT EXISTS` no valida tablas preexistentes ni reemplaza una migración versionada. Sin seeds ni backfill; los importes manuales desconocidos deben conservar NULL hasta declaración confirmada.
 
 ```sql
--- PROPUESTA DE DISEÑO. NO EJECUTADA. Requiere revisión y autorización separada.
+-- REFERENCIA DOCUMENTAL. Ejecución manual en phpMyAdmin confirmada por el responsable.
+-- Esta rama/PR no ejecutó SQL. Verificar existencia/esquema antes del PR de modelo.
 CREATE TABLE IF NOT EXISTS rrhh_fiscal_empleado_ejercicio (
   id INT AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,
@@ -181,10 +185,10 @@ Las FKs simples NO garantizan que empleado/documento sea del tenant: toda lectur
 
 ## 10. PRs pequeños propuestos
 
-1. Modelo: dos tablas tras aprobación SQL, schemas JSON/configuración versionada, captura/confirmación de antecedentes/evidencias, tenant/permisos/auditoría. Sin motor ni backfill.
+1. Modelo: verificar primero existencia/esquema de las dos tablas creadas manualmente; cualquier migración adicional requiere propuesta y autorización separadas. Schemas JSON/configuración versionada, captura/confirmación de antecedentes/evidencias, tenant/permisos/auditoría. Sin motor ni backfill.
 2. Motor fiscal puro + parámetros 2026 aprobados; clasificación y proyección/liquidación, tests normativos/rounding/altas/variables/cambios/retenciones. 2027 permanece deshabilitado hasta validación separada.
 3. Integración Planillas/snapshot v2: regeneración, overrides auditados, revalidación de todas las entradas y locks, congelamiento, pagos/fechas efectivas; conservar v1/históricos. Tests de idempotencia y concurrencia entre periodos.
 4. Liquidaciones/devoluciones: confirmación/ejecución y rectificación separadas; no duplicación de retenciones, evidence/pagos/tenant.
 5. Presentación: desglose empresarial sin descontarlo del neto y exportaciones compatibles. Tests de visualización de autorización, históricos y desglose fiscal/patronal.
 
-Verificación de este ticket: solo documento y SQL incrustado; no typecheck/tests de cálculo porque no cambia código. Revisar diff/espacios y ausencia de otros archivos modificados. No PR de implementación, commit/push ni merge en esta fase.
+Verificación de este ticket: solo documento y SQL de referencia incrustado, sin archivo de migración ni ejecución SQL por la rama/PR; no typecheck/tests de cálculo porque no cambia código. Revisar diff/espacios y ausencia de otros archivos modificados. Únicamente commit/push documental al PR de diseño; no PR de implementación ni merge en esta fase.
