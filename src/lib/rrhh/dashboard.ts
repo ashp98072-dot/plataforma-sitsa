@@ -1,6 +1,34 @@
 import type { RowDataPacket } from "mysql2";
 import { query, type SqlParams } from "@/lib/db";
-import { hoyLocal } from "./dates";
+import { hoyLocal, toIsoDate } from "./dates";
+
+export type MovimientoMensual = {
+  id: number; codigo: string; nombre: string; puesto: string;
+  fechaAlta: string | null; fechaEgreso: string | null; esBaja: boolean;
+};
+export type DetalleMovimientosMensual = { mes: string; altas: MovimientoMensual[]; bajas: MovimientoMensual[] };
+
+export async function obtenerDetalleMovimientosMensual(empresaId: number, mes: string): Promise<DetalleMovimientosMensual> {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mes) || Number(mes.slice(0, 4)) < 1000) throw new Error("Mes inválido.");
+  const [anio, numeroMes] = mes.split("-").map(Number);
+  const desde = `${mes}-01`;
+  const hasta = `${mes}-${new Date(Date.UTC(anio, numeroMes, 0)).getUTCDate()}`;
+  const rows = await query<RowDataPacket[]>(
+    `SELECT id, codigo, nombre, puesto, fecha_alta, fecha_egreso, estado,
+       (fecha_alta BETWEEN ? AND ?) AS es_alta,
+       (estado = 'Baja' AND fecha_egreso BETWEEN ? AND ?) AS es_baja_mes
+     FROM empleados WHERE empresa_id = ?
+       AND (fecha_alta BETWEEN ? AND ? OR (estado = 'Baja' AND fecha_egreso BETWEEN ? AND ?))
+     ORDER BY nombre, id`,
+    [desde, hasta, desde, hasta, empresaId, desde, hasta, desde, hasta],
+  );
+  const persona = (r: RowDataPacket): MovimientoMensual => ({
+    id: Number(r.id), codigo: String(r.codigo), nombre: String(r.nombre), puesto: String(r.puesto ?? ""),
+    fechaAlta: toIsoDate(r.fecha_alta), fechaEgreso: toIsoDate(r.fecha_egreso), esBaja: r.estado === "Baja",
+  });
+  return { mes, altas: rows.filter((r) => Number(r.es_alta) === 1).map(persona),
+    bajas: rows.filter((r) => Number(r.es_baja_mes) === 1).map(persona) };
+}
 
 export type DashboardStats = {
   totalEmpleados: number;
