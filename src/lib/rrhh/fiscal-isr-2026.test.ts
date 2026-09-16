@@ -412,3 +412,98 @@ describe("calcularIsrTrabajo2026 — validación de entrada", () => {
     expect(() => calcularIsrTrabajo2026(input({ periodosRestantes: -1 }))).toThrow(ErrorMotorIsr2026);
   });
 });
+
+describe("calcularIsrTrabajo2026 — motor SOLO PROYECCION: bloquea deducciones de liquidación anual", () => {
+  it("1. donación en proyección -> bloquea con código explícito", () => {
+    expect(() =>
+      calcularIsrTrabajo2026(
+        input({ deduccionesAdicionalesAdmitidas: [{ tipo: "DONACION", montoAdmitidoQ: "500.00" }] }),
+      ),
+    ).toThrow(ErrorMotorIsr2026);
+    try {
+      calcularIsrTrabajo2026(
+        input({ deduccionesAdicionalesAdmitidas: [{ tipo: "DONACION", montoAdmitidoQ: "500.00" }] }),
+      );
+      expect.unreachable();
+    } catch (e) {
+      expect(e).toBeInstanceOf(ErrorMotorIsr2026);
+      expect((e as ErrorMotorIsr2026).codigo).toBe("DEDUCCION_NO_ADMITIDA_EN_PROYECCION");
+      expect((e as ErrorMotorIsr2026).message).toContain("liquidación");
+    }
+  });
+
+  it("2. seguro de vida en proyección -> bloquea con código explícito", () => {
+    try {
+      calcularIsrTrabajo2026(
+        input({ deduccionesAdicionalesAdmitidas: [{ tipo: "SEGURO_VIDA", montoAdmitidoQ: "300.00" }] }),
+      );
+      expect.unreachable();
+    } catch (e) {
+      expect(e).toBeInstanceOf(ErrorMotorIsr2026);
+      expect((e as ErrorMotorIsr2026).codigo).toBe("DEDUCCION_NO_ADMITIDA_EN_PROYECCION");
+    }
+  });
+
+  it("3. Planilla/crédito IVA en proyección -> bloquea con código explícito", () => {
+    try {
+      calcularIsrTrabajo2026(
+        input({ deduccionesAdicionalesAdmitidas: [{ tipo: "IVA_PLANILLA", montoAdmitidoQ: "1000.00" }] }),
+      );
+      expect.unreachable();
+    } catch (e) {
+      expect(e).toBeInstanceOf(ErrorMotorIsr2026);
+      expect((e as ErrorMotorIsr2026).codigo).toBe("DEDUCCION_NO_ADMITIDA_EN_PROYECCION");
+    }
+  });
+
+  it("un tipo de deducción completamente desconocido también bloquea (enum cerrado, no solo lista negra)", () => {
+    try {
+      calcularIsrTrabajo2026(
+        input({ deduccionesAdicionalesAdmitidas: [{ tipo: "CREDITO_FISCAL_INVENTADO", montoAdmitidoQ: "10.00" }] }),
+      );
+      expect.unreachable();
+    } catch (e) {
+      expect(e).toBeInstanceOf(ErrorMotorIsr2026);
+      expect((e as ErrorMotorIsr2026).codigo).toBe("DEDUCCION_NO_ADMITIDA_EN_PROYECCION");
+    }
+  });
+
+  it("4. IGSS sigue aplicándose correctamente tras la corrección (no afectado por el bloqueo de deducciones)", () => {
+    const r = calcularIsrTrabajo2026(
+      input({
+        ingresosPropiosAcumulados: [concepto({ monto: "100000.00" })],
+        igssLaboralPropio: { acumuladoQ: "2000.00", proyectadoRestanteQ: "1000.00" },
+      }),
+    );
+    expect(r.igssDeducible).toBe("3000.00");
+    // imponible = 100000 - 48000 - 3024 - 3000 = 45976.00
+    expect(r.rentaImponible).toBe("45976.00");
+  });
+
+  it("5. la deducción extraordinaria Q3,024 de 2026 sigue aplicándose tras la corrección", () => {
+    const r = calcularIsrTrabajo2026(input());
+    expect(r.deduccionExtraordinaria2026).toBe("3024.00");
+  });
+
+  it("6. la aritmética de tramos no cambió (mismos resultados que antes de la corrección)", () => {
+    const tramo1 = calcularIsrTrabajo2026(input({ ingresosPropiosAcumulados: [concepto({ monto: "100000.00" })] }));
+    expect(tramo1.rentaImponible).toBe("48976.00");
+    expect(tramo1.isrAnual).toBe("2448.80");
+
+    const tramo2 = calcularIsrTrabajo2026(input({ ingresosPropiosAcumulados: [concepto({ monto: "400000.00" })] }));
+    expect(tramo2.rentaImponible).toBe("348976.00");
+    expect(tramo2.isrAnual).toBe("18428.32");
+  });
+
+  it("PREVISION_SOCIAL_OTRA sigue admitida en proyección (único tipo del enum cerrado)", () => {
+    const r = calcularIsrTrabajo2026(
+      input({
+        ingresosPropiosAcumulados: [concepto({ monto: "100000.00" })],
+        deduccionesAdicionalesAdmitidas: [{ tipo: "PREVISION_SOCIAL_OTRA", montoAdmitidoQ: "600.00" }],
+      }),
+    );
+    expect(r.otrasDeduccionesAdmitidas).toBe("600.00");
+    // imponible = 100000 - 48000 - 3024 - 600 = 48376.00
+    expect(r.rentaImponible).toBe("48376.00");
+  });
+});

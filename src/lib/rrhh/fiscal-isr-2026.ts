@@ -143,6 +143,30 @@ const antecedentesSchema = z.strictObject({
 });
 export type AntecedentesIsrInput = z.infer<typeof antecedentesSchema>;
 
+/**
+ * Tipos de deducción adicional admisibles durante la PROYECCIÓN (este
+ * motor). SAT distingue proyección de liquidación definitiva anual: la
+ * deducción ordinaria (Q48,000), la extraordinaria 2026 (Q3,024) y el IGSS
+ * laboral YA se aplican por separado (ver PARAMETROS_ISR_2026 e
+ * `igssLaboralPropio`/`antecedentes.igssLaboralQ`); este enum cerrado es
+ * SOLO para previsión social adicional legalmente admisible en la
+ * proyección periódica. Donaciones, seguro de vida y la Planilla/crédito de
+ * IVA se acreditan hasta la liquidación definitiva anual (Decreto 10-2012,
+ * Reglamento 213-2013) y NO deben restarse mes a mes aquí — ese motor de
+ * liquidación es un PR aparte, todavía no implementado. Ampliar esta lista
+ * exige la misma verificación legal que el resto de PARAMETROS_ISR_2026.
+ */
+export const TIPOS_DEDUCCION_PROYECCION_2026 = ["PREVISION_SOCIAL_OTRA"] as const;
+export type TipoDeduccionProyeccion2026 = (typeof TIPOS_DEDUCCION_PROYECCION_2026)[number];
+
+/**
+ * Tipos reconocidos que corresponden EXCLUSIVAMENTE a liquidación anual
+ * definitiva, nunca a proyección. Solo se usan para dar un mensaje de
+ * bloqueo más útil; cualquier tipo fuera de TIPOS_DEDUCCION_PROYECCION_2026
+ * se bloquea igual, esté o no en esta lista (ver `validarTipoDeduccion`).
+ */
+const TIPOS_DEDUCCION_SOLO_LIQUIDACION_2026 = ["DONACION", "SEGURO_VIDA", "IVA_PLANILLA"] as const;
+
 const deduccionAdmitidaSchema = z.strictObject({
   tipo: z.string().trim().min(1).max(80),
   /** Monto ya admitido (evaluación de comprobación/límite ocurrió antes de llegar aquí). */
@@ -169,7 +193,13 @@ const inputSchema = z.strictObject({
   }),
   /** ISR ya retenido por ESTA empresa en el ejercicio, antes del período que se está calculando. */
   isrRetenidoPropioQ: montoFiscalSchema,
-  /** Deducciones adicionales ya admitidas (previsión social, donación, seguro de vida, IVA de planilla, etc.). */
+  /**
+   * Deducciones adicionales ya admitidas para la PROYECCIÓN — `tipo` debe
+   * estar en TIPOS_DEDUCCION_PROYECCION_2026 (validado en tiempo de
+   * ejecución con error explícito; ver `validarTipoDeduccion`). NO enviar
+   * aquí donaciones, seguro de vida ni Planilla IVA: corresponden a
+   * liquidación anual definitiva, no a proyección.
+   */
   deduccionesAdicionalesAdmitidas: z.array(deduccionAdmitidaSchema).max(50),
 });
 export type InputIsrTrabajo2026 = z.input<typeof inputSchema>;
@@ -291,6 +321,24 @@ function procesarConceptos(
   return { gravadoC, exentoC };
 }
 
+/**
+ * Bloquea cualquier deducción que no esté en TIPOS_DEDUCCION_PROYECCION_2026.
+ * Motor SOLO PROYECCION: donaciones, seguro de vida y Planilla IVA
+ * corresponden a liquidación anual definitiva (otro PR, no implementado
+ * aquí) y nunca deben restarse mes a mes en la proyección.
+ */
+function validarTipoDeduccion(d: DeduccionAdmitidaIsr): void {
+  if ((TIPOS_DEDUCCION_PROYECCION_2026 as readonly string[]).includes(d.tipo)) return;
+  const esDeLiquidacion = (TIPOS_DEDUCCION_SOLO_LIQUIDACION_2026 as readonly string[]).includes(d.tipo);
+  throw new ErrorMotorIsr2026(
+    `La deducción "${d.tipo}" no es admisible en la PROYECCIÓN de ISR 2026.` +
+      (esDeLiquidacion
+        ? " Corresponde a la liquidación definitiva anual, no a la proyección periódica; ese motor es un PR aparte."
+        : ` Tipos admitidos en proyección: ${TIPOS_DEDUCCION_PROYECCION_2026.join(", ")}.`),
+    "DEDUCCION_NO_ADMITIDA_EN_PROYECCION",
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Función principal
 // ---------------------------------------------------------------------------
@@ -358,6 +406,7 @@ export function calcularIsrTrabajo2026(rawInput: unknown): ResultadoIsrTrabajo20
     centavosFiscales(input.igssLaboralPropio.acumuladoQ) +
     centavosFiscales(input.igssLaboralPropio.proyectadoRestanteQ) +
     antecedentesIgssC;
+  for (const d of input.deduccionesAdicionalesAdmitidas) validarTipoDeduccion(d);
   const otrasDeduccionesC = input.deduccionesAdicionalesAdmitidas.reduce(
     (sum, d) => sum + centavosFiscales(d.montoAdmitidoQ),
     BigInt(0),
