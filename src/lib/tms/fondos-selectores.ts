@@ -1,13 +1,17 @@
+import { destinoPagoEmpleado } from "./destino-pago-empleado";
 export type LineaSeleccionFondo = {
+  metodoPago?: string;
   planId: string; clienteId: string; fechaViaje: string; vehiculoId: string; empleadoId: string;
   empleadoNombre: string; cuenta: string; cargo: string;
 };
 export type PlanSeleccionFondo = {
   id: number; clienteId: number | null; fechaPlan: string; vehiculoId: number | null; empleadoId: number | null;
   empleadoNombre: string | null; empleadoCuenta: string | null; empleadoPuesto: string | null;
+  empleadoTelefono?: string | null;
 };
 export type EmpleadoSeleccionFondo = {
   id: number; nombre: string; cuentaBancaria: string | null; puesto: string | null;
+  telefono?: string | null;
 };
 
 /** Sugiere los datos vigentes de RRHH al cambiar explícitamente de empleado. */
@@ -20,7 +24,7 @@ export function aplicarEmpleadoSeleccionado(
     ...linea,
     empleadoId: value,
     empleadoNombre: empleado?.nombre ?? "",
-    cuenta: empleado?.cuentaBancaria ?? "",
+    cuenta: linea.metodoPago === undefined ? empleado?.cuentaBancaria ?? "" : destinoPagoEmpleado(linea.metodoPago, empleado),
     cargo: empleado?.puesto ?? "",
   };
 }
@@ -41,7 +45,7 @@ export function aplicarPlanSeleccionado(
     vehiculoId: plan?.vehiculoId ? String(plan.vehiculoId) : "",
     empleadoId: plan?.empleadoId ? String(plan.empleadoId) : "",
     empleadoNombre: empleadoDelPlan ? empleadoDelPlan.nombre : plan?.empleadoNombre ?? "",
-    cuenta: empleadoDelPlan ? empleadoDelPlan.cuentaBancaria ?? "" : plan?.empleadoCuenta ?? "",
+    cuenta: linea.metodoPago === undefined ? (empleadoDelPlan ? empleadoDelPlan.cuentaBancaria ?? "" : plan?.empleadoCuenta ?? "") : destinoPagoEmpleado(linea.metodoPago, empleadoDelPlan ?? { cuentaBancaria: plan?.empleadoCuenta, telefono: plan?.empleadoTelefono }),
     cargo: empleadoDelPlan ? empleadoDelPlan.puesto ?? "" : plan?.empleadoPuesto ?? "",
   };
 }

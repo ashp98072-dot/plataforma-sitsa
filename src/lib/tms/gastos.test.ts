@@ -117,6 +117,7 @@ function conexion(opts: {
   // test existente (ninguno inspecciona el contenido de esas filas, solo
   // si existen).
   lineaEmpleadoNombre?: string; lineaEmpleadoPuesto?: string | null;
+  empleadoCuenta?: string; empleadoTelefono?: string;
   lineaVehiculoPlaca?: string;
   lineaClienteNombre?: string;
   lineaPlanClienteId?: number; lineaPlanClienteNombre?: string; lineaPlanFecha?: string;
@@ -154,7 +155,7 @@ function conexion(opts: {
         return [usuarioEnEmpresa ? [{ nombre: opts.usuarioNombre ?? "Mario Caal", rol_global: opts.usuarioRol ?? "Operaciones" }] : []];
       }
       if (sql.includes("FROM empleados")) {
-        return [empleadoEnEmpresa ? [{ id: 3, nombre: opts.lineaEmpleadoNombre ?? "Juan Perez", puesto: opts.lineaEmpleadoPuesto ?? "Piloto" }] : []];
+        return [empleadoEnEmpresa ? [{ id: 3, nombre: opts.lineaEmpleadoNombre ?? "Juan Perez", puesto: opts.lineaEmpleadoPuesto ?? "Piloto", cuenta_bancaria: opts.empleadoCuenta, telefono: opts.empleadoTelefono }] : []];
       }
       if (sql.includes("FROM flota_vehiculos")) {
         return [vehiculoEnEmpresa ? [{ id: 5, placa: opts.lineaVehiculoPlaca ?? "P-123ABC" }] : []];
@@ -392,6 +393,15 @@ describe("crearGasto", () => {
   });
 
   describe("FONDOS-GASTOS-METODO-PAGO-1: Transferencia móvil", () => {
+    it.each([["Transferencia", "001234"], ["Transferencia móvil", "55551234"]])("resuelve %s desde RRHH en la empresa", async (metodoPago, destino) => {
+      const conn = conexion({ empleadoCuenta: "001234", empleadoTelefono: "55551234" });
+      vi.mocked(query).mockResolvedValue([filaGasto()] as never);
+      await crearGasto(7, { fechaSolicitud: "2026-09-01", categoria: "Otros", monto: 100, empleadoId: 3, metodoPago });
+      const insert = conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_gastos_operativos"))!;
+      expect(insert[1]).toContain(destino);
+      const lectura = conn.query.mock.calls.find((c) => c[0].includes("SELECT cuenta_bancaria, telefono"))!;
+      expect(lectura[0]).toContain("empresa_id = ?");
+    });
     it("rechaza crear sin número cuando el método es Transferencia móvil, sin abrir conexión", async () => {
       await expect(crearGasto(7, {
         fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, metodoPago: "Transferencia móvil",
@@ -748,10 +758,13 @@ describe("actualizarGasto / desactivarGasto", () => {
       expect(conn.rollback).toHaveBeenCalledOnce();
     });
 
-    it("acepta si el número ya existía en el registro actual y solo cambia el método", async () => {
-      conexion({ actualRaw: filaGastoRaw({ metodo_pago: "Efectivo", numero_cuenta_pago: "5555-1234" }) });
+    it("cambiar método reemplaza destino anterior por teléfono vigente RRHH", async () => {
+      const conn = conexion({ empleadoTelefono: "55559876", actualRaw: filaGastoRaw({ metodo_pago: "Transferencia", numero_cuenta_pago: "001234" }) });
       vi.mocked(query).mockResolvedValue([filaGasto({ metodo_pago: "Transferencia móvil", numero_cuenta_pago: "55551234" })] as never);
       await actualizarGasto(7, 1, { metodoPago: "Transferencia móvil" });
+      const update = conn.execute.mock.calls.find((c) => String(c[0]).includes("UPDATE tms_gastos_operativos"))!;
+      expect(update[1]).toContain("55559876");
+      expect(update[1]).not.toContain("001234");
     });
   });
 

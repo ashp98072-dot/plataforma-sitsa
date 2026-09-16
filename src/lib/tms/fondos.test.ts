@@ -37,7 +37,7 @@ function conexion(opts: {
   // SOLICITUD-FONDOS-REPORTE-1 — snapshot de línea: catálogos que
   // resolverSnapshotLineaTx relee dentro de la transacción.
   vehiculoEnEmpresa?: boolean; clienteEnEmpresa?: boolean; planEnEmpresa?: boolean;
-  empleadoNombre?: string; empleadoPuesto?: string | null; empleadoCuenta?: string | null; vehiculoPlaca?: string; clienteNombre?: string; planFecha?: string;
+  empleadoNombre?: string; empleadoPuesto?: string | null; empleadoCuenta?: string | null; empleadoTelefono?: string | null; vehiculoPlaca?: string; clienteNombre?: string; planFecha?: string;
   // SOLICITUD-FONDOS-REPORTE-1 (pendiente 1 del PR #211) — fila RAW que
   // actualizarSolicitudFondo relee FOR UPDATE antes de editar.
   actualRequirenteEmpleadoId?: number | null;
@@ -83,9 +83,9 @@ function conexion(opts: {
       }
       // SOLICITUD-FONDOS-REPORTE-1: resolverSnapshotLineaTx — cada catálogo
       // relecto por (id, empresa_id) dentro de la MISMA transacción.
-      if (sql.includes("nombre, puesto, cuenta_bancaria FROM empleados")) {
+      if (sql.includes("nombre, puesto, cuenta_bancaria, telefono FROM empleados")) {
         return [empleadoEnEmpresa
-          ? [{ nombre: opts.empleadoNombre ?? "Juan Pérez", puesto: opts.empleadoPuesto ?? "Piloto", cuenta_bancaria: opts.empleadoCuenta ?? "1234567890" }]
+          ? [{ nombre: opts.empleadoNombre ?? "Juan Pérez", puesto: opts.empleadoPuesto ?? "Piloto", cuenta_bancaria: opts.empleadoCuenta ?? "1234567890", telefono: opts.empleadoTelefono ?? null }]
           : []];
       }
       // AISLAMIENTO MULTIEMPRESA: SELECT id FROM empleados WHERE id = ? AND empresa_id = ? (requirente/autorizante)
@@ -406,6 +406,18 @@ describe("crearSolicitudFondo — snapshot histórico por línea (empleado/vehí
  * ya cubre gastos.test.ts.
  */
 describe("crearSolicitudFondo — método de pago por línea (FONDOS-GASTOS-METODO-PAGO-1)", () => {
+  it("resuelve móvil desde teléfono RRHH y mantiene consulta tenant-safe", async () => {
+    const conn = conexion({ empleadoTelefono: "5555-1234" });
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    await crearSolicitudFondo(7, {
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      lineas: [{ categoria: "Otros", monto: 100, empleadoId: 4, metodoPago: "Transferencia móvil" }],
+    });
+    const insert = conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_solicitud_fondo_lineas"))!;
+    expect(insert[1]).toContain("55551234");
+    const lectura = conn.query.mock.calls.find((c) => c[0].includes("cuenta_bancaria, telefono"))!;
+    expect(lectura[0]).toContain("empresa_id = ?");
+  });
   it("rechaza Transferencia móvil sin cuenta/override resuelto, con rollback y sin insertar nada", async () => {
     const conn = conexion({ empleadoCuenta: "" }); // sin cuenta bancaria en el maestro
     await expect(crearSolicitudFondo(7, {
