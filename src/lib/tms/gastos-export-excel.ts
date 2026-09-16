@@ -3,6 +3,7 @@ import { tablaAExcel } from "@/lib/rrhh/export-files";
 import { formatearFechaVisible } from "@/lib/rrhh/dates";
 import { resumirViaticosPorEstado, type FilaAgregadaGasto, type FilaGastoDetalle, type FilaRentabilidadViaje, type FilaSolicitudFondoReporte, type FilaViaticoReporte } from "@/lib/tms/reportes-gastos";
 import type { SolicitudFondo } from "@/lib/tms/fondos";
+import type { GastoOperativo } from "@/lib/tms/gastos";
 
 /**
  * TMS-GASTOS-REPORTES-1 (fase 1) — reutiliza el exportador genérico
@@ -209,8 +210,45 @@ export async function exportarReporteFondosExcel(filas: FilaSolicitudFondoReport
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
+async function encabezadoIndividual(buffer: Buffer, empresa: string | null | undefined, titulo: string): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(new Uint8Array(buffer).buffer);
+  const ws = wb.worksheets[0];
+  const ancho = ws.columnCount;
+  const ultimaFila = ws.rowCount;
+  const tieneFiltro = Boolean(ws.autoFilter);
+  // Históricos sin snapshot: no atribuir el documento a la empresa de sesión.
+  ws.spliceRows(1, 0, [empresa?.trim() || "EMPRESA REQUIRENTE NO REGISTRADA"], [titulo], []);
+  for (const fila of [1, 2]) {
+    ws.mergeCells(fila, 1, fila, ancho);
+    ws.getRow(fila).font = { bold: true, size: fila === 1 ? 16 : 12 };
+    ws.getRow(fila).alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    ws.getRow(fila).height = fila === 1 ? 32 : 26;
+  }
+  if (tieneFiltro) ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: ultimaFila - 2 + 3, column: ancho } };
+  ws.views = (ws.views ?? []).map((view) => view.state === "frozen" ? { ...view, ySplit: (view.ySplit ?? 0) + 3 } : view);
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+export async function exportarGastoOperativoExcel(gasto: GastoOperativo): Promise<Buffer> {
+  const cabecera: FilaGastoDetalle = {
+    id: gasto.id, lineaId: null, fechaSolicitud: gasto.fechaSolicitud, fechaViaje: gasto.fechaViaje,
+    planId: gasto.planId, planCodigo: gasto.planCodigo, empleadoId: gasto.empleadoId,
+    empleadoNombre: gasto.empleadoNombre, cargo: gasto.empleadoCargo, vehiculoId: gasto.vehiculoId,
+    placa: gasto.vehiculoPlaca, clienteId: gasto.clienteId, clienteNombre: gasto.clienteNombre,
+    categoria: gasto.categoria, descripcion: gasto.descripcion, cantidad: gasto.cantidad, monto: gasto.monto,
+    total: gasto.cantidad * gasto.monto, metodoPago: gasto.metodoPago, numeroCuentaPago: gasto.numeroCuentaPago,
+    activo: gasto.activo, registradoPor: gasto.creadoPor, observaciones: gasto.observaciones,
+  };
+  const filas = gasto.lineas?.length ? gasto.lineas.map((linea): FilaGastoDetalle => ({
+    ...cabecera, ...linea, lineaId: linea.id, id: gasto.id, planCodigo: linea.planId === gasto.planId ? gasto.planCodigo : null,
+    total: linea.cantidad * linea.monto,
+  })) : [cabecera];
+  return encabezadoIndividual(await exportarGastosDetalleExcel(filas), gasto.entidadRequirenteNombre, "GASTO OPERATIVO");
+}
+
 export async function exportarSolicitudFondoExcel(solicitud: SolicitudFondo): Promise<Buffer> {
-  return tablaAExcel({
+  const buffer = await tablaAExcel({
     sheetName: `Solicitud ${solicitud.codigo}`.slice(0, 31),
     headers: ["Fecha solicitud", "Fecha viaje", "Nombre", "Cuenta", "Cargo", "Placa", "Cliente", "Categoría", "Cantidad", "Descripción", "Valor", "Subtotal (Q)"],
     rows: [
@@ -222,4 +260,5 @@ export async function exportarSolicitudFondoExcel(solicitud: SolicitudFondo): Pr
       ["", "", "", "", "", "", "", "", "", "", "TOTAL", money(solicitud.total)],
     ],
   });
+  return encabezadoIndividual(buffer, solicitud.entidadRequirenteNombre, `SOLICITUD DE FONDO ${solicitud.codigo}`);
 }
