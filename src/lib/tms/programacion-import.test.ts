@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/db", () => ({ query: vi.fn() }));
+vi.mock("@/lib/db", () => ({ query: vi.fn(), execute: vi.fn(), getPool: vi.fn() }));
 vi.mock("@/lib/operaciones/disponibilidad", () => ({ listarDisponibilidadVehiculos: vi.fn() }));
+vi.mock("@/lib/auditoria", () => ({ registrarAuditoriaTx: vi.fn() }));
 
-import { query } from "@/lib/db";
+import { execute, getPool, query } from "@/lib/db";
+import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { listarDisponibilidadVehiculos, type VehiculoDisponibilidad } from "@/lib/operaciones/disponibilidad";
 import type { FilaProgramacionExcel } from "./programacion-import-excel";
 import {
@@ -11,6 +13,7 @@ import {
   detectarFilasDuplicadas,
   detectarTraslapesEnLote,
   previsualizarImportacionProgramacion,
+  confirmarImportacionProgramacion,
 } from "./programacion-import";
 
 /**
@@ -228,57 +231,226 @@ describe("detectarTraslapesEnLote", () => {
   });
 });
 
+// ---------------------------------------------------------------------
+// Helpers compartidos entre previsualizarImportacionProgramacion y
+// confirmarImportacionProgramacion (esta última reutiliza la primera
+// internamente — mismos fixtures de catálogo para ambos describe blocks).
+// ---------------------------------------------------------------------
+
+function rutaRow(overrides: Partial<{
+  id: number; codigo: string; cliente_id: number; activo: number; tarifa_referencia: number | null;
+  cliente_nombre: string; cliente_nit: string | null;
+  lugar_carga_texto: string | null; destino_descripcion: string | null;
+  contacto_nombre: string | null; contacto_cargo: string | null; contacto_telefono: string | null;
+}> = {}) {
+  return {
+    id: 10, codigo: "1001", cliente_id: 5, activo: 1, tarifa_referencia: 1500,
+    cliente_nombre: "Acme S.A.", cliente_nit: "123456-7",
+    lugar_carga_texto: "Bodega Zona 12", destino_descripcion: "Sucursal Zona 4",
+    contacto_nombre: "Ana Gómez", contacto_cargo: "Logística", contacto_telefono: "5555-1234",
+    ...overrides,
+  };
+}
+
+function empleadoRow(overrides: Partial<{ id: number; codigo: string; nombre: string; estado: string }> = {}) {
+  return { id: 20, codigo: "P-1", nombre: "Juan Pérez", estado: "Activo", ...overrides };
+}
+
+function tarifaRow(overrides: Partial<{
+  ruta_id: number; id: number; nombre: string; monto: number; moneda: string; predeterminada: number;
+}> = {}) {
+  return { ruta_id: 10, id: 100, nombre: "Estándar", monto: 1500, moneda: "GTQ", predeterminada: 1, ...overrides };
+}
+
+function vehiculo(overrides: Partial<VehiculoDisponibilidad> = {}): VehiculoDisponibilidad {
+  return {
+    id: 30, placa: "P-123ABC", marca: "Freightliner", modelo: "Cascadia", descripcion: null,
+    activo: true, enTaller: false, compartido: false, esPropio: true,
+    empresaDuenaNombre: null, empresaDuenaCodigo: null, kmActual: 0,
+    estadoDisponibilidad: "disponible", puedeEnviar: true, viajeAbierto: null, motivoNoDisponible: null,
+    ...overrides,
+  };
+}
+
+type EmpleadoMock = { id: number; codigo: string; nombre: string; estado: string };
+type PersonalMock = { id: number; codigo: string; tipo: string };
+type LugarMock = { id: number; nombre: string };
+
+/**
+ * Estado compartido de "base de datos" en memoria — mismo objeto lo leen
+ * y escriben TANTO el mock de @/lib/db.query/execute (pool global, usado
+ * por previsualizarImportacionProgramacion, siempre de solo lectura) COMO
+ * el mock de `conn.query`/`conn.execute` (usado por
+ * confirmarImportacionProgramacion desde el ajuste post-revisión PR #272:
+ * personalDesdeEmpleado/upsertLugar/el upsert de tms_unidades ahora
+ * reciben `conn`). Que sea el MISMO objeto es lo que hace posible probar
+ * correctamente "personal/lugar recién creado dentro de la transacción":
+ * lo que preview lee (antes de la transacción) es el estado inicial: lo
+ * que confirmar._crea_ vía `conn` se refleja en este mismo estado.
+ */
+type EstadoMock = {
+  rutas: unknown[];
+  empleados: EmpleadoMock[];
+  personal: PersonalMock[];
+  unidades: unknown[];
+  conflictoPersonal: unknown[];
+  conflictoUnidad: unknown[];
+  tarifas: unknown[];
+  lugares: LugarMock[];
+};
+
+function crearEstadoMock(opts: Partial<{
+  rutas: unknown[]; empleados: EmpleadoMock[]; personal: PersonalMock[]; unidades: unknown[];
+  conflictoPersonal: unknown[]; conflictoUnidad: unknown[]; tarifas: unknown[];
+}> = {}): EstadoMock {
+  return {
+    rutas: opts.rutas ?? [rutaRow()],
+    empleados: opts.empleados ?? [empleadoRow()],
+    personal: opts.personal ? [...opts.personal] : [],
+    unidades: opts.unidades ?? [],
+    conflictoPersonal: opts.conflictoPersonal ?? [],
+    conflictoUnidad: opts.conflictoUnidad ?? [],
+    tarifas: opts.tarifas ?? [tarifaRow()],
+    lugares: [],
+  };
+}
+
+/** Despacha una lectura (SELECT) contra el estado compartido — usado tanto por el mock de `query` (pool global) como por el de `conn.query`. */
+function dispatchQuery(estado: EstadoMock, sql: string, params: unknown[]): unknown[] {
+  const p = params;
+  // personalDesdeEmpleado: 1) empleado por id exacto.
+  if (sql.includes("WHERE id = ? AND empresa_id = ? AND estado = 'Activo'")) {
+    const emp = estado.empleados.find((e) => e.id === Number(p[0]));
+    return emp ? [emp] : [];
+  }
+  // personalDesdeEmpleado: 2) tms_personal existente por codigo+tipo exacto.
+  if (sql.includes("FROM tms_personal") && sql.includes("codigo = ? AND tipo = ?")) {
+    const [, codigo, tipo] = p as [number, string, string];
+    const match = estado.personal.find((r) => r.codigo === codigo && r.tipo === tipo);
+    return match ? [{ id: match.id }] : [];
+  }
+  // upsertLugar: lugar existente por nombre exacto.
+  if (sql.includes("FROM tms_lugares")) {
+    const [, nombre] = p as [number, string];
+    const match = estado.lugares.find((l) => l.nombre === nombre);
+    return match ? [{ id: match.id }] : [];
+  }
+  if (sql.includes("FROM tms_cliente_rutas r")) return estado.rutas;
+  if (sql.includes("FROM empleados WHERE empresa_id")) return estado.empleados;
+  if (sql.includes("SELECT id, codigo, tipo FROM tms_personal")) return estado.personal;
+  if (sql.includes("SELECT id, placa FROM tms_unidades")) return estado.unidades;
+  if (sql.includes("FROM tms_personal tp")) return estado.conflictoPersonal;
+  if (sql.includes("FROM tms_unidades u")) return estado.conflictoUnidad;
+  if (sql.includes("FROM tms_ruta_tarifas")) return estado.tarifas;
+  // asegurarCodigoPlanUnico / generarCodigoPlan: sin códigos previos -> genera PLAN-<fecha>-001.
+  if (sql.includes("FROM tms_planes_viaje")) return [];
+  return [];
+}
+
+let secuenciaIdMock = 9000;
+
+/** Despacha una escritura (INSERT/UPDATE) contra el estado compartido — usado tanto por el mock de `execute` (pool global, ya sin uso real desde el ajuste PR #272 salvo por defensividad) como por el de `conn.execute`. Los INSERT que crean personal/lugares MUTAN `estado` para que una lectura posterior (misma fila u otra del lote) ya los vea, igual que vería sus propias escrituras una transacción real. */
+function dispatchExecute(estado: EstadoMock, sql: string, params: unknown[]): { insertId: number; affectedRows: number } {
+  const p = params;
+  if (sql.includes("INSERT INTO tms_personal")) {
+    const [, codigo, , tipo] = p as [number, string, string, string];
+    const id = ++secuenciaIdMock;
+    estado.personal.push({ id, codigo, tipo });
+    return { insertId: id, affectedRows: 1 };
+  }
+  if (sql.includes("UPDATE tms_personal")) {
+    return { insertId: 0, affectedRows: 1 };
+  }
+  if (sql.includes("INSERT INTO tms_lugares")) {
+    const [, nombre] = p as [number, string];
+    const id = ++secuenciaIdMock;
+    estado.lugares.push({ id, nombre });
+    return { insertId: id, affectedRows: 1 };
+  }
+  return { insertId: ++secuenciaIdMock, affectedRows: 1 };
+}
+
+/**
+ * Mock de @/lib/db.query/execute (pool global) — despacha contra un
+ * estado en memoria (ver `EstadoMock`). Cubre las consultas bulk de
+ * previsualizarImportacionProgramacion Y las de personalDesdeEmpleado/
+ * upsertLugar cuando se llaman SIN `conn` (nunca ocurre ya dentro de
+ * confirmarImportacionProgramacion tras el ajuste PR #272, pero sigue
+ * aplicando para cualquier otro llamador futuro). Las consultas internas
+ * de primerConflictoTraslape ("FROM tms_personal tp" / "FROM
+ * tms_unidades u" con JOIN) devuelven [] (sin conflicto) salvo que se
+ * pasen explícitamente. Devuelve el `estado` para que el caller pueda
+ * compartirlo con `makeConnMock`/`mockGetPool` cuando haga falta.
+ */
+function mockDb(opts: Parameters<typeof crearEstadoMock>[0] = {}): EstadoMock {
+  const estado = crearEstadoMock(opts);
+  vi.mocked(query).mockImplementation(async (sql: string, params?: unknown) =>
+    dispatchQuery(estado, sql, (params ?? []) as unknown[]) as never,
+  );
+  vi.mocked(execute).mockImplementation(async (sql: string, params?: unknown) =>
+    dispatchExecute(estado, sql, (params ?? []) as unknown[]) as never,
+  );
+  return estado;
+}
+
+function mockVehiculos(lista: VehiculoDisponibilidad[] = [vehiculo()]) {
+  vi.mocked(listarDisponibilidadVehiculos).mockResolvedValue({
+    vehiculos: lista,
+    resumen: { total: lista.length, disponibles: lista.length, enTaller: 0, enRuta: 0, inactivos: 0, propios: lista.length, compartidos: 0 },
+    empresaId: 7,
+  });
+}
+
+/**
+ * Conexión de transacción mock — usada por `conn.execute()`/`conn.query()`
+ * dentro de confirmarImportacionProgramacion (personalDesdeEmpleado/
+ * upsertLugar/el upsert de tms_unidades, el INSERT de tms_planes_viaje, y
+ * guardarAuxiliaresPlan/guardarParadasPlan/sincronizarViaticosPlan, TODAS
+ * llamadas con `conn` desde el ajuste post-revisión PR #272). Opera sobre
+ * el MISMO `estado` que ya usa `mockDb` (pásalo explícitamente cuando el
+ * test necesite que preview y confirmar vean exactamente los mismos
+ * datos — el caso normal), o uno nuevo por defecto si no hace falta esa
+ * consistencia (tests de candado/rollback que nunca llegan a depender de
+ * personal/lugares reales).
+ */
+function makeConnMock(opts: { estado?: EstadoMock; insertIdsPlan?: number[] } = {}) {
+  const estado = opts.estado ?? crearEstadoMock();
+  const insertIdsPlan = opts.insertIdsPlan ? [...opts.insertIdsPlan] : null;
+  let siguienteIdPlan = 8000;
+  const conn = {
+    beginTransaction: vi.fn(async () => undefined),
+    commit: vi.fn(async () => undefined),
+    rollback: vi.fn(async () => undefined),
+    release: vi.fn(() => undefined),
+    query: vi.fn<(sql: string, params?: unknown[]) => Promise<unknown>>(async (sql, params) => [
+      dispatchQuery(estado, sql, params ?? []),
+      [],
+    ]),
+    execute: vi.fn<(sql: string, params?: unknown[]) => Promise<unknown>>(async (sql, params) => {
+      if (sql.includes("INSERT INTO tms_planes_viaje")) {
+        const insertId = insertIdsPlan?.length ? insertIdsPlan.shift()! : siguienteIdPlan++;
+        return [{ insertId, affectedRows: 1 }, []];
+      }
+      return [dispatchExecute(estado, sql, params ?? []), []];
+    }),
+  };
+  return conn;
+}
+
+/** Mock de getPool().getConnection() — primera llamada = candado (lockConn, solo .query), segunda = transacción (conn, execute+query+tx). Mismo orden que confirmarImportacionProgramacion. Sin `opts.conn`, construye uno nuevo compartiendo `opts.estado` (o uno propio si tampoco se pasa). */
+function mockGetPool(opts: { lockValor?: number; estado?: EstadoMock; conn?: ReturnType<typeof makeConnMock> } = {}) {
+  const lockConn = {
+    query: vi.fn(async () => [[{ l: opts.lockValor ?? 1 }], []] as unknown),
+    release: vi.fn(() => undefined),
+  };
+  const conn = opts.conn ?? makeConnMock({ estado: opts.estado });
+  const getConnection = vi.fn().mockResolvedValueOnce(lockConn).mockResolvedValueOnce(conn);
+  vi.mocked(getPool).mockReturnValue({ getConnection } as never);
+  return { lockConn, conn };
+}
+
 describe("previsualizarImportacionProgramacion", () => {
   beforeEach(() => vi.resetAllMocks());
-
-  function rutaRow(overrides: Partial<{
-    id: number; codigo: string; cliente_id: number; activo: number; tarifa_referencia: number | null;
-    cliente_nombre: string; cliente_nit: string | null;
-  }> = {}) {
-    return {
-      id: 10, codigo: "1001", cliente_id: 5, activo: 1, tarifa_referencia: 1500,
-      cliente_nombre: "Acme S.A.", cliente_nit: "123456-7",
-      ...overrides,
-    };
-  }
-
-  function empleadoRow(overrides: Partial<{ id: number; codigo: string; nombre: string; estado: string }> = {}) {
-    return { id: 20, codigo: "P-1", nombre: "Juan Pérez", estado: "Activo", ...overrides };
-  }
-
-  function vehiculo(overrides: Partial<VehiculoDisponibilidad> = {}): VehiculoDisponibilidad {
-    return {
-      id: 30, placa: "P-123ABC", marca: "Freightliner", modelo: "Cascadia", descripcion: null,
-      activo: true, enTaller: false, compartido: false, esPropio: true,
-      empresaDuenaNombre: null, empresaDuenaCodigo: null, kmActual: 0,
-      estadoDisponibilidad: "disponible", puedeEnviar: true, viajeAbierto: null, motivoNoDisponible: null,
-      ...overrides,
-    };
-  }
-
-  /** Mock de @/lib/db.query — despacha por texto de SQL. Las consultas internas de primerConflictoTraslape ("FROM tms_personal tp" / "FROM tms_unidades u" con JOIN) devuelven [] (sin conflicto) salvo que se pasen explícitamente. */
-  function mockDb(opts: {
-    rutas?: unknown[]; empleados?: unknown[]; personal?: unknown[]; unidades?: unknown[];
-    conflictoPersonal?: unknown[]; conflictoUnidad?: unknown[];
-  } = {}) {
-    vi.mocked(query).mockImplementation(async (sql: string) => {
-      if (sql.includes("FROM tms_cliente_rutas r")) return (opts.rutas ?? [rutaRow()]) as never;
-      if (sql.includes("FROM empleados WHERE empresa_id")) return (opts.empleados ?? [empleadoRow()]) as never;
-      if (sql.includes("SELECT id, codigo, tipo FROM tms_personal")) return (opts.personal ?? []) as never;
-      if (sql.includes("SELECT id, placa FROM tms_unidades")) return (opts.unidades ?? []) as never;
-      if (sql.includes("FROM tms_personal tp")) return (opts.conflictoPersonal ?? []) as never;
-      if (sql.includes("FROM tms_unidades u")) return (opts.conflictoUnidad ?? []) as never;
-      return [] as never;
-    });
-  }
-
-  function mockVehiculos(lista: VehiculoDisponibilidad[] = [vehiculo()]) {
-    vi.mocked(listarDisponibilidadVehiculos).mockResolvedValue({
-      vehiculos: lista,
-      resumen: { total: lista.length, disponibles: lista.length, enTaller: 0, enRuta: 0, inactivos: 0, propios: lista.length, compartidos: 0 },
-      empresaId: 7,
-    });
-  }
 
   it("fila totalmente válida (sin conflictos ni advertencias): estado ok, datos resueltos completos", async () => {
     mockDb();
@@ -526,5 +698,239 @@ describe("previsualizarImportacionProgramacion", () => {
     ];
     const resultado = await previsualizarImportacionProgramacion(7, filas);
     expect(resultado.resumen).toEqual({ totalFilas: 2, filasOk: 1, filasConError: 1 });
+  });
+});
+
+describe("confirmarImportacionProgramacion", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockDb();
+    mockVehiculos();
+  });
+
+  it("lote exitoso: crea el/los plan(es) dentro de una transacción, sin trabas", async () => {
+    const { lockConn, conn } = mockGetPool();
+    const resultado = await confirmarImportacionProgramacion(7, "admin", "programacion.xlsx", "sha256:abc", [filaFixture()]);
+
+    expect(resultado).toMatchObject({ resultado: "exitoso", filasTotales: 1, filasImportadas: 1 });
+    expect(resultado.resultado === "exitoso" && resultado.planIds).toHaveLength(1);
+
+    expect(conn.beginTransaction).toHaveBeenCalledOnce();
+    expect(conn.commit).toHaveBeenCalledOnce();
+    expect(conn.rollback).not.toHaveBeenCalled();
+    expect(conn.release).toHaveBeenCalledOnce();
+
+    // Ajuste post-revisión PR #272: TODA escritura (materialización de
+    // personal/unidad/lugares incluida) pasa por `conn` -- el pool
+    // global (`execute`) nunca debe recibir un INSERT/UPDATE de esta
+    // confirmación.
+    expect(execute).not.toHaveBeenCalled();
+
+    const insertPlan = vi.mocked(conn.execute).mock.calls.find(([sql]) => String(sql).includes("INSERT INTO tms_planes_viaje"));
+    expect(insertPlan).toBeDefined();
+    const params = insertPlan![1] as unknown[];
+    expect(params[0]).toBe(7); // empresa_id
+    expect(params[2]).toBe(5); // cliente_id (de la ruta, nunca del Excel)
+    expect(String(params[1])).toMatch(/^PLAN-/); // código generado por el sistema
+
+    // Candado: adquirido y liberado.
+    expect(lockConn.query).toHaveBeenCalledWith("SELECT GET_LOCK(?, ?) AS l", ["tms_traslape_7", 8]);
+    expect(lockConn.query).toHaveBeenCalledWith("SELECT RELEASE_LOCK(?) AS l", ["tms_traslape_7"]);
+    expect(lockConn.release).toHaveBeenCalledOnce();
+  });
+
+  it("error en una fila: no se importa ninguna (todo o nada) y nunca se abre transacción", async () => {
+    const { conn } = mockGetPool();
+    const filas = [
+      filaFixture({ filaExcel: 4 }),
+      // ruta inexistente en esta empresa -> falla la revalidación.
+      filaFixture({ filaExcel: 5, codigoRutaExcel: "9999", pilotoCodigoExcel: "P-2", placaExcel: "ZZZ999" }),
+    ];
+    const resultado = await confirmarImportacionProgramacion(7, "admin", "programacion.xlsx", "sha256:abc", filas);
+
+    expect(resultado.resultado).toBe("error");
+    expect(resultado.resultado === "error" && resultado.erroresPorFila?.some((f) => f.filaExcel === 5)).toBe(true);
+    expect(conn.beginTransaction).not.toHaveBeenCalled();
+    expect(registrarAuditoriaTx).not.toHaveBeenCalled();
+  });
+
+  it("rollback ante fallo durante una escritura posterior (segunda fila): ningún plan queda creado", async () => {
+    // El fallo se simula en una escritura POSTERIOR al INSERT del plan
+    // (sincronizarViaticosPlan, llamada después de crear cada plan) — no
+    // en el propio INSERT de tms_planes_viaje, porque ese sí tiene un
+    // bucle de reintento ante colisión de código y "absorbería" un fallo
+    // aislado reintentando con otro código en vez de propagarlo.
+    const estado = mockDb({ empleados: [empleadoRow(), empleadoRow({ id: 21, codigo: "P-2" })] });
+    mockVehiculos([vehiculo({ placa: "AAA111" }), vehiculo({ id: 31, placa: "BBB222" })]);
+    const conn = makeConnMock({ estado });
+    let intentosPlan = 0;
+    let intentosViatico = 0;
+    vi.mocked(conn.execute).mockImplementation(async (sql: string, params?: unknown[]) => {
+      if (String(sql).includes("INSERT INTO tms_planes_viaje")) {
+        intentosPlan += 1;
+        return [{ insertId: 7000 + intentosPlan, affectedRows: 1 }, []] as unknown;
+      }
+      if (String(sql).includes("INSERT INTO tms_viaticos")) {
+        intentosViatico += 1;
+        if (intentosViatico === 2) throw new Error("fallo de BD simulado en la segunda fila");
+        return [{ insertId: 1, affectedRows: 1 }, []] as unknown;
+      }
+      return [dispatchExecute(estado, sql, params ?? []), []] as unknown;
+    });
+    mockGetPool({ conn });
+
+    const filas = [
+      filaFixture({ filaExcel: 4, codigoRutaExcel: "1001", pilotoCodigoExcel: "P-1", placaExcel: "AAA111" }),
+      filaFixture({ filaExcel: 5, codigoRutaExcel: "1001", pilotoCodigoExcel: "P-2", placaExcel: "BBB222" }),
+    ];
+    const resultado = await confirmarImportacionProgramacion(7, "admin", "programacion.xlsx", "sha256:abc", filas);
+
+    expect(resultado.resultado).toBe("error");
+    expect(conn.beginTransaction).toHaveBeenCalledOnce();
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(conn.rollback).toHaveBeenCalledOnce();
+    expect(conn.release).toHaveBeenCalledOnce();
+    expect(registrarAuditoriaTx).not.toHaveBeenCalled();
+
+    // La prueba central del ajuste post-revisión PR #272: la
+    // materialización del piloto/unidad de la PRIMERA fila (que sí llegó
+    // a insertarse antes del fallo en la segunda) pasó por `conn` — así
+    // que el rollback de la transacción también la revierte. Si en
+    // cambio hubiera usado el pool global (`execute`), esa escritura NO
+    // se habría revertido pese al rollback, violando el todo-o-nada real.
+    expect(execute).not.toHaveBeenCalled();
+    const llamadasConn = vi.mocked(conn.execute).mock.calls.map(([sql]) => String(sql));
+    expect(llamadasConn.some((sql) => sql.includes("INSERT INTO tms_personal"))).toBe(true);
+    expect(llamadasConn.some((sql) => sql.includes("INSERT INTO tms_unidades"))).toBe(true);
+  });
+
+  it("fallo al adquirir el candado (GET_LOCK != 1): aborta sin escribir nada, nunca abre transacción", async () => {
+    const { lockConn, conn } = mockGetPool({ lockValor: 0 });
+    const resultado = await confirmarImportacionProgramacion(7, "admin", "programacion.xlsx", "sha256:abc", [filaFixture()]);
+
+    expect(resultado).toMatchObject({ resultado: "error" });
+    expect(resultado.resultado === "error" && resultado.mensaje).toContain("otra operación en curso");
+    expect(conn.beginTransaction).not.toHaveBeenCalled();
+    expect(registrarAuditoriaTx).not.toHaveBeenCalled();
+    // Nunca se llamó RELEASE_LOCK -- el candado nunca se adquirió de verdad.
+    expect(lockConn.query).toHaveBeenCalledTimes(1);
+    expect(lockConn.release).toHaveBeenCalledOnce();
+  });
+
+  it("conflicto aparecido ENTRE un preview anterior y esta confirmación: la revalidación fresca lo detecta y aborta", async () => {
+    // "Preview" que el usuario vio antes (todo limpio en ese momento).
+    const previewAnterior = await previsualizarImportacionProgramacion(7, [filaFixture()]);
+    expect(previewAnterior.resumen.filasConError).toBe(0);
+
+    // Entre ese preview y la confirmación, alguien más ocupó al piloto en
+    // un viaje que se solapa (conflicto real contra BD) -- confirmar debe
+    // detectarlo de NUEVO por sí mismo, nunca confiar en `previewAnterior`.
+    mockDb({
+      personal: [{ id: 900, codigo: "P-1", tipo: "Piloto" }],
+      conflictoPersonal: [{
+        recurso_nombre: "Juan Pérez", plan_id: 55, codigo: "PLAN-20260920-001", estado: "Programado",
+        inicio: "2026-09-20 09:00:00", regreso_estimado: "2026-09-20 15:00:00", llegada_tecnica: null,
+      }],
+    });
+    const { conn } = mockGetPool();
+    const resultado = await confirmarImportacionProgramacion(7, "admin", "programacion.xlsx", "sha256:abc", [filaFixture()]);
+
+    expect(resultado.resultado).toBe("error");
+    expect(conn.beginTransaction).not.toHaveBeenCalled();
+    expect(registrarAuditoriaTx).not.toHaveBeenCalled();
+  });
+
+  it("piloto/unidad sin registro previo: se materializan (crean) tms_personal/tms_unidades DENTRO de la transacción (conn), nunca antes ni fuera de ella", async () => {
+    const estado = mockDb(); // personal/unidades ya vacíos por defecto -- nadie existe todavía
+    const { conn } = mockGetPool({ estado });
+    const resultado = await confirmarImportacionProgramacion(7, "admin", "programacion.xlsx", "sha256:abc", [filaFixture()]);
+
+    expect(resultado.resultado).toBe("exitoso");
+    // Ajuste post-revisión PR #272: la materialización va por `conn`, NUNCA
+    // por el pool global -- si algo se coló por ahí, sería la prueba de
+    // que quedaría fuera de la transacción/rollback del lote.
+    expect(execute).not.toHaveBeenCalled();
+    const llamadas = vi.mocked(conn.execute).mock.calls.map(([sql]) => String(sql));
+    expect(llamadas.some((sql) => sql.includes("INSERT INTO tms_personal"))).toBe(true);
+    expect(llamadas.some((sql) => sql.includes("INSERT INTO tms_unidades"))).toBe(true);
+  });
+
+  it("piloto/unidad YA existentes: NO se vuelve a crear tms_personal (personalDesdeEmpleado solo actualiza), todo vía conn", async () => {
+    const estado = mockDb({ personal: [{ id: 900, codigo: "P-1", tipo: "Piloto" }] });
+    const { conn } = mockGetPool({ estado });
+    const resultado = await confirmarImportacionProgramacion(7, "admin", "programacion.xlsx", "sha256:abc", [filaFixture()]);
+
+    expect(resultado.resultado).toBe("exitoso");
+    expect(execute).not.toHaveBeenCalled();
+    const llamadas = vi.mocked(conn.execute).mock.calls.map(([sql]) => String(sql));
+    expect(llamadas.some((sql) => sql.includes("INSERT INTO tms_personal"))).toBe(false);
+    expect(llamadas.some((sql) => sql.includes("UPDATE tms_personal"))).toBe(true);
+  });
+
+  it("auditoría: UNA sola por lote (no una por fila), DENTRO de la misma transacción (conn), con empresa/usuario/archivo/hash/filas/resultado/planIds", async () => {
+    const filas = [
+      filaFixture({ filaExcel: 4, codigoRutaExcel: "1001", pilotoCodigoExcel: "P-1", placaExcel: "AAA111" }),
+      filaFixture({ filaExcel: 5, codigoRutaExcel: "1001", pilotoCodigoExcel: "P-2", placaExcel: "BBB222" }),
+      filaFixture({ filaExcel: 6, codigoRutaExcel: "1001", pilotoCodigoExcel: "P-3", placaExcel: "CCC333" }),
+    ];
+    const estado = mockDb({ empleados: [empleadoRow(), empleadoRow({ id: 21, codigo: "P-2" }), empleadoRow({ id: 22, codigo: "P-3" })] });
+    mockVehiculos([
+      vehiculo({ placa: "AAA111" }),
+      vehiculo({ id: 31, placa: "BBB222" }),
+      vehiculo({ id: 32, placa: "CCC333" }),
+    ]);
+    const { conn } = mockGetPool({ estado });
+    const resultado = await confirmarImportacionProgramacion(7, "admin", "programacion-septiembre.xlsx", "sha256:deadbeef", filas);
+
+    expect(resultado.resultado).toBe("exitoso");
+    expect(registrarAuditoriaTx).toHaveBeenCalledOnce();
+    // registrarAuditoriaTx(conn, input) -- se llama con la MISMA conexión
+    // de la transacción, para que un fallo en la auditoría también haga
+    // rollback de todo el lote.
+    const [connUsado, llamada] = vi.mocked(registrarAuditoriaTx).mock.calls[0];
+    expect(connUsado).toBe(conn);
+    expect(llamada.empresaId).toBe(7);
+    expect(llamada.usuario).toBe("admin");
+    expect(llamada.accion).toBe("importar_programacion");
+    const detalle = JSON.parse(llamada.detalle as string);
+    expect(detalle).toMatchObject({
+      archivo: "programacion-septiembre.xlsx",
+      hashArchivo: "sha256:deadbeef",
+      filasTotales: 3,
+      filasImportadas: 3,
+      resultado: "exitoso",
+    });
+    expect(detalle.planIds).toHaveLength(3);
+    // La auditoría se llamó ANTES del commit (todavía dentro de la
+    // transacción) -- si commit ya se hubiera llamado antes, el orden de
+    // las dos invocaciones lo delataría.
+    const ordenAuditoria = vi.mocked(registrarAuditoriaTx).mock.invocationCallOrder[0];
+    const ordenCommit = vi.mocked(conn.commit).mock.invocationCallOrder[0];
+    expect(ordenAuditoria).toBeLessThan(ordenCommit);
+  });
+
+  it("libera el candado (lockConn.release) incluso cuando la revalidación falla", async () => {
+    const { lockConn } = mockGetPool();
+    const filas = [filaFixture({ codigoRutaExcel: "9999" })]; // ruta inexistente
+    await confirmarImportacionProgramacion(7, "admin", "programacion.xlsx", "sha256:abc", filas);
+    expect(lockConn.release).toHaveBeenCalledOnce();
+  });
+
+  it("libera el candado (lockConn.release) incluso cuando la transacción falla y hace rollback", async () => {
+    const conn = makeConnMock();
+    vi.mocked(conn.execute).mockImplementation(async (sql: string) => {
+      if (String(sql).includes("INSERT INTO tms_planes_viaje")) throw new Error("fallo inesperado de BD");
+      return [{ insertId: 1, affectedRows: 1 }, []] as unknown;
+    });
+    const { lockConn } = mockGetPool({ conn });
+    await confirmarImportacionProgramacion(7, "admin", "programacion.xlsx", "sha256:abc", [filaFixture()]);
+    expect(lockConn.release).toHaveBeenCalledOnce();
+    expect(conn.release).toHaveBeenCalledOnce();
+  });
+
+  it("archivo sin filas: rechaza de inmediato, sin tocar el candado ni BD", async () => {
+    const resultado = await confirmarImportacionProgramacion(7, "admin", "programacion.xlsx", "sha256:abc", []);
+    expect(resultado).toEqual({ resultado: "error", mensaje: "No hay filas para importar." });
+    expect(getPool).not.toHaveBeenCalled();
   });
 });

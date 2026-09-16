@@ -1,5 +1,41 @@
-import type { RowDataPacket } from "mysql2";
-import { execute, query } from "@/lib/db";
+import type { ResultSetHeader, RowDataPacket } from "mysql2";
+import type { PoolConnection } from "mysql2/promise";
+import { execute, query, type SqlParams } from "@/lib/db";
+
+/**
+ * TMS-IMPORTACION-PROGRAMACION-EXCEL (PR 5, ajuste post-revisión) —
+ * `conn` opcional, mismo patrón `runQuery`/`runExecute` ya usado en
+ * disponibilidad-traslapes.ts/paradas.ts/plan-comunes.ts: si se pasa
+ * (dentro de la transacción de `confirmarImportacionProgramacion`), la
+ * lectura/escritura usa esa MISMA conexión, para que la materialización
+ * de tms_personal participe del rollback todo-o-nada del lote. Sin
+ * `conn`, comportamiento IDÉNTICO al actual (pool global) — el POST/PATCH
+ * de planes, que siguen llamando esta función sin `conn`, no cambian en
+ * absoluto.
+ */
+async function runQuery<T extends RowDataPacket[]>(
+  conn: PoolConnection | undefined,
+  sql: string,
+  params: SqlParams = [],
+): Promise<T> {
+  if (conn) {
+    const [rows] = await conn.query<RowDataPacket[]>(sql, params);
+    return rows as T;
+  }
+  return query<T>(sql, params);
+}
+
+async function runExecute(
+  conn: PoolConnection | undefined,
+  sql: string,
+  params: SqlParams = [],
+): Promise<ResultSetHeader> {
+  if (conn) {
+    const [result] = await conn.execute<ResultSetHeader>(sql, params);
+    return result;
+  }
+  return execute(sql, params);
+}
 
 /**
  * TMS-IMPORTACION-PROGRAMACION-EXCEL (PR 1) — extracción SIN CAMBIO DE
@@ -30,9 +66,11 @@ export async function personalDesdeEmpleado(
   empresaId: number,
   empleadoId: number | undefined,
   tipo: "Piloto" | "Auxiliar",
+  conn?: PoolConnection,
 ): Promise<number | null> {
   if (!empleadoId) return null;
-  const emp = await query<RowDataPacket[]>(
+  const emp = await runQuery<RowDataPacket[]>(
+    conn,
     `SELECT id, codigo, nombre FROM empleados
      WHERE id = ? AND empresa_id = ? AND estado = 'Activo' LIMIT 1`,
     [empleadoId, empresaId],
@@ -40,13 +78,15 @@ export async function personalDesdeEmpleado(
   if (!emp[0]) return null;
   const codigo = String(emp[0].codigo);
   const nombre = String(emp[0].nombre);
-  const existing = await query<RowDataPacket[]>(
+  const existing = await runQuery<RowDataPacket[]>(
+    conn,
     `SELECT id FROM tms_personal
      WHERE empresa_id = ? AND codigo = ? AND tipo = ? LIMIT 1`,
     [empresaId, codigo, tipo],
   );
   if (existing[0]) {
-    await execute(
+    await runExecute(
+      conn,
       `UPDATE tms_personal SET id_empleado = ?, nombre = ?
        WHERE id = ? AND empresa_id = ?
          AND (id_empleado IS NULL OR id_empleado = ?)`,
@@ -54,7 +94,8 @@ export async function personalDesdeEmpleado(
     );
     return Number(existing[0].id);
   }
-  const r = await execute(
+  const r = await runExecute(
+    conn,
     `INSERT INTO tms_personal
       (empresa_id, codigo, nombre, tipo, estado, id_empleado)
      VALUES (?, ?, ?, ?, 'Activo', ?)`,
