@@ -1,4 +1,5 @@
 import { readFile } from "fs/promises";
+import { existsSync } from "fs";
 import { extname } from "path";
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
@@ -8,6 +9,7 @@ import {
   borrarUpload,
   contentTypeFor,
   guardarUpload,
+  getUploadsRoot,
   UploadValidationError,
   validarRutaArchivoEmpresa,
 } from "@/lib/uploads";
@@ -52,9 +54,11 @@ export async function GET(_req: Request, ctx: Ctx) {
   if (!gasto?.factura_ruta_relativa || !gasto.factura_nombre_original) {
     return NextResponse.json({ error: "Comprobante no encontrado." }, { status: 404 });
   }
+  let rutaAbsolutaCalculada: string | null = null;
   try {
     const rutaSegura = validarRutaArchivoEmpresa(guard.empresa.id, gasto.factura_ruta_relativa);
     if (!rutaSegura) return NextResponse.json({ error: "Ruta de comprobante inválida." }, { status: 404 });
+    rutaAbsolutaCalculada = rutaSegura;
     const contenido = await readFile(rutaSegura);
     const nombre = gasto.factura_nombre_original.replace(/["\r\n]/g, "");
     return new NextResponse(contenido, { headers: {
@@ -62,7 +66,18 @@ export async function GET(_req: Request, ctx: Ctx) {
       "Content-Disposition": `inline; filename="${nombre}"`,
       "Cache-Control": "private, no-store",
     } });
-  } catch {
+  } catch (error) {
+    try {
+      console.error("[gastos-comprobante-diagnostico]", {
+        uploadsRoot: getUploadsRoot(),
+        imagenRuta: gasto.factura_ruta_relativa,
+        rutaAbsolutaCalculada,
+        existsSync: rutaAbsolutaCalculada ? existsSync(rutaAbsolutaCalculada) : false,
+        cwd: process.cwd(),
+        uploadDirDefinida: Boolean(process.env.UPLOAD_DIR?.trim()),
+        codigoError: error && typeof error === "object" && "code" in error ? String(error.code) : null,
+      });
+    } catch { /* El diagnóstico nunca modifica la respuesta existente. */ }
     return NextResponse.json({ error: "Comprobante no encontrado en disco." }, { status: 404 });
   }
 }
