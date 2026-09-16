@@ -44,7 +44,27 @@ describe("comprobante de gasto", () => {
         rutaAbsolutaCalculada: "/hbuilds/uploads/empresas/7/documentos/a.pdf",
         existsSync: code === "EACCES", cwd: process.cwd(),
         uploadDirDefinida: Boolean(process.env.UPLOAD_DIR?.trim()), codigoError: code,
+        etapa: "lectura", nombreError: "Error", mensajeError: "no registrar mensaje",
       });
+      expect(execute).not.toHaveBeenCalled();
+    } finally { log.mockRestore(); }
+  });
+  it("distingue fallo de respuesta después de leer el archivo sin modificar el 404", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      vi.mocked(query).mockResolvedValue([{ ...fila, factura_ruta_relativa: "empresas/7/documentos/a.pdf", factura_nombre_original: "catálogo 漢.pdf" }] as never);
+      vi.mocked(getUploadsRoot).mockReturnValue("/hbuilds/uploads");
+      vi.mocked(validarRutaArchivoEmpresa).mockReturnValue("/hbuilds/uploads/empresas/7/documentos/a.pdf");
+      vi.mocked(existsSync).mockReturnValue(true);
+      vi.mocked(readFile).mockResolvedValueOnce(Buffer.from("contenido privado"));
+      const res = await GET(new Request("http://x"), ctx);
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual({ error: "Comprobante no encontrado en disco." });
+      expect(log).toHaveBeenCalledWith("[gastos-comprobante-diagnostico]", expect.objectContaining({
+        etapa: "construccion_respuesta", nombreError: "TypeError", mensajeError: expect.any(String),
+        existsSync: true, codigoError: null,
+      }));
+      expect(JSON.stringify(log.mock.calls)).not.toContain("contenido privado");
       expect(execute).not.toHaveBeenCalled();
     } finally { log.mockRestore(); }
   });
