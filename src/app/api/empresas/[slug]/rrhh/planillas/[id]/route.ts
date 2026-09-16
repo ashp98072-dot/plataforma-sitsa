@@ -9,6 +9,7 @@ import {
   listarLineas,
   marcarPagos,
   obtenerPeriodo,
+  autorizarPeriodoPlanilla,
 } from "@/lib/rrhh/planillas";
 import { normalizarFormaPago } from "@/lib/rrhh/contratos-pago";
 import { listarCuotasAplicadasPeriodoDetalle } from "@/lib/rrhh/descuentos";
@@ -31,6 +32,9 @@ export async function GET(_req: Request, ctx: Ctx) {
     listarLineas(guard.empresa.id, periodoId),
     listarCuotasAplicadasPeriodoDetalle(guard.empresa.id, periodoId),
   ]);
+  for (const l of lineas) {
+    if (l.conceptosSnapshot) descuentosDetallePorEmpleado[l.empleadoId] = [...l.conceptosSnapshot.cuotas, ...l.conceptosSnapshot.manuales, ...l.conceptosSnapshot.descuentosLegado];
+  }
   return NextResponse.json({
     periodo,
     lineas,
@@ -45,6 +49,7 @@ const patchSchema = z.object({
     "marcar_pagados",
     "marcar_pendientes",
     "cerrar",
+    "autorizar",
     "reabrir",
     "cancelar",
   ]),
@@ -84,6 +89,9 @@ export async function POST(req: Request, ctx: Ctx) {
         listarLineas(guard.empresa.id, periodoId),
         listarCuotasAplicadasPeriodoDetalle(guard.empresa.id, periodoId),
       ]);
+      for (const l of lineas) {
+        if (l.conceptosSnapshot) descuentosDetallePorEmpleado[l.empleadoId] = [...l.conceptosSnapshot.cuotas, ...l.conceptosSnapshot.manuales, ...l.conceptosSnapshot.descuentosLegado];
+      }
       return NextResponse.json({
         mensaje:
           `Planilla generada: ${r.generadas} empleado(s).` +
@@ -126,12 +134,10 @@ export async function POST(req: Request, ctx: Ctx) {
         cuadre: calcularCuadre(lineas),
       });
     }
-    if (accion === "cerrar") {
-      await actualizarEstadoPeriodo(guard.empresa.id, periodoId, "Cerrada", {
-        usuario: guard.session.username,
-      });
+    if (accion === "autorizar" || accion === "cerrar") {
+      await autorizarPeriodoPlanilla(guard.empresa.id, periodoId, guard.session.username);
       return NextResponse.json({
-        mensaje: "Planilla cerrada.",
+        mensaje: "Planilla autorizada y cerrada.",
         periodo: await obtenerPeriodo(guard.empresa.id, periodoId),
       });
     }

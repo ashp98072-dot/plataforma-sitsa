@@ -1302,7 +1302,7 @@ export type { PoolConnection };
  * cuotas PENDIENTES. Nunca fuerza FINALIZADO con saldo pendiente. Debe
  * llamarse con la misma `conn` de la transacción que aplicó la cuota/abono.
  */
-async function finalizarSiCorresponde(
+export async function finalizarSiCorresponde(
   conn: PoolConnection,
   empresaId: number,
   descuentoId: number,

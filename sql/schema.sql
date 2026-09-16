@@ -133,6 +133,8 @@ CREATE TABLE IF NOT EXISTS rrhh_planilla_periodos (
   fecha_inicio DATE NOT NULL,
   fecha_fin DATE NOT NULL,
   estado VARCHAR(40) NOT NULL DEFAULT 'Borrador',
+  autorizado_por VARCHAR(100) NULL,
+  autorizado_en DATETIME NULL,
   -- Fase P0 (integridad de periodos): identidad de quincena, opcional y
   -- aditiva. NULL en periodos históricos — no se reinterpretan. Sirve para
   -- que la UI sugiera fechas (vía ciclo_quincenal de rrhh_configuracion,
@@ -162,6 +164,7 @@ CREATE TABLE IF NOT EXISTS rrhh_planilla_lineas (
   empresa_id INT NOT NULL,
   periodo_id INT NOT NULL,
   id_empleado INT NOT NULL,
+  conceptos_snapshot JSON NULL,
   codigo_empleado VARCHAR(40) NOT NULL,
   nombre_empleado VARCHAR(200) NOT NULL,
   dpi VARCHAR(20) NULL,

@@ -38,6 +38,9 @@ export async function GET(_req: Request, ctx: Ctx) {
     periodo.codigo,
     `${periodo.fechaInicio} → ${periodo.fechaFin}`,
     periodo.estado,
+    periodo.autorizadoEn ? "PLANILLA AUTORIZADA" : "PLANILLA NO AUTORIZADA",
+    periodo.autorizadoPor ?? "",
+    periodo.autorizadoEn ?? "",
   ]);
   ws.addRow([]);
   ws.addRow([

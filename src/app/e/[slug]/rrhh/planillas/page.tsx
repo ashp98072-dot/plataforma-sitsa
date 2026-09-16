@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { FotoEmpleadoMiniatura } from "@/components/rrhh/foto-empleado-miniatura";
 import {
   FORMAS_PAGO,
   etiquetaFormaPago,
@@ -26,6 +27,8 @@ type Periodo = {
   fechaInicio: string;
   fechaFin: string;
   estado: string;
+  autorizadoPor: string | null;
+  autorizadoEn: string | null;
   notas: string | null;
   tipoPeriodo: TipoPeriodo | null;
   numeroQuincena: 1 | 2 | null;
@@ -112,6 +115,7 @@ type CuadreIgssMensual = {
 };
 
 export default function PlanillasPage() {
+  const accionEnCurso = useRef(false);
   const slug = String(useParams().slug);
   const [rows, setRows] = useState<Periodo[]>([]);
   const [empleadosActivos, setEmpleadosActivos] = useState(0);
@@ -250,12 +254,14 @@ export default function PlanillasPage() {
       | "marcar_pagados"
       | "marcar_pendientes"
       | "cerrar"
+      | "autorizar"
       | "reabrir"
       | "cancelar",
     formaPago?: "todas" | FormaPago,
     motivo?: string,
   ) {
-    if (!periodoId) return;
+    if (!periodoId || accionEnCurso.current) return;
+    accionEnCurso.current = true;
     setBusy(true);
     setError("");
     setMsg("");
@@ -285,6 +291,7 @@ export default function PlanillasPage() {
       if (data.descuentosDetallePorEmpleado) setDescuentosDetalle(data.descuentosDetallePorEmpleado);
       await cargar();
     } finally {
+      accionEnCurso.current = false;
       setBusy(false);
     }
   }
@@ -368,12 +375,14 @@ export default function PlanillasPage() {
   // Fase P0: Cancelado se trata como bloqueado igual que Cerrada/Pagada —
   // ningún periodo terminal (en cualquiera de estos 3 sentidos) es editable.
   const cerrada =
+    periodo?.autorizadoEn != null ||
     periodo?.estado === "Cerrada" ||
     periodo?.estado === "Pagada" ||
     periodo?.estado === "Cancelado";
   const cancelada = periodo?.estado === "Cancelado";
   const puedeCancelar =
-    periodo?.estado === "Borrador" || periodo?.estado === "Generada";
+    periodo?.autorizadoEn == null && (periodo?.estado === "Borrador" || periodo?.estado === "Generada");
+  const puedePagar = periodo?.autorizadoEn != null && periodo?.estado === "Cerrada";
 
   return (
     <div className="min-w-0 max-w-full space-y-6">
@@ -654,17 +663,17 @@ export default function PlanillasPage() {
                 >
                   Exportar Excel + cuadre
                 </a>
-                {periodo.estado === "Generada" ? (
+                {periodo.estado === "Generada" && !periodo.autorizadoEn ? (
                   <button
                     type="button"
                     disabled={busy}
-                    onClick={() => void accion("cerrar")}
+                    onClick={() => { if (window.confirm("¿Está seguro de que desea autorizar esta planilla y fijar sus conceptos?")) void accion("autorizar"); }}
                     className="rounded bg-[#334155] px-3 py-1 text-sm text-white disabled:opacity-50"
                   >
-                    Cerrar planilla
+                    Autorizar planilla
                   </button>
                 ) : null}
-                {periodo.estado === "Cerrada" ? (
+                {periodo.estado === "Cerrada" && !periodo.autorizadoEn ? (
                   <button
                     type="button"
                     disabled={busy}
@@ -685,6 +694,11 @@ export default function PlanillasPage() {
                   </button>
                 ) : null}
               </div>
+
+              <p className="rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm font-semibold">
+                {periodo.autorizadoEn ? `PLANILLA AUTORIZADA · ${periodo.autorizadoPor ?? "—"} · ${periodo.autorizadoEn}` : "PLANILLA NO AUTORIZADA"}
+                {!periodo.autorizadoEn && ["Cerrada", "Pagada"].includes(periodo.estado) ? " · Histórico sin autorización registrada; no se completó retroactivamente." : ""}
+              </p>
 
               {cancelada ? (
                 <p className="rounded-lg border border-red-900/50 bg-red-950/20 px-3 py-2 text-sm text-red-300">
@@ -725,7 +739,7 @@ export default function PlanillasPage() {
                         <p className="text-xs text-amber-300">
                           Pendiente Q{q(b.pendiente)}
                         </p>
-                        {!cerrada ? (
+                        {puedePagar ? (
                           <button
                             type="button"
                             disabled={busy}
@@ -751,7 +765,7 @@ export default function PlanillasPage() {
                       Formales {cuadre.totales.formales} · Outsourcing{" "}
                       {cuadre.totales.outsourcing}
                     </p>
-                    {!cerrada ? (
+                    {puedePagar ? (
                       <button
                         type="button"
                         disabled={busy}
@@ -828,7 +842,7 @@ export default function PlanillasPage() {
                           className="border-t border-[var(--border)]"
                         >
                           <td className="px-2 py-2">
-                            <div className="font-medium">{l.nombreEmpleado}</div>
+                            <div className="flex items-center gap-2"><FotoEmpleadoMiniatura slug={slug} empleadoId={l.empleadoId} nombre={l.nombreEmpleado} /><div className="font-medium">{l.nombreEmpleado}</div></div>
                             <div className="text-xs text-[var(--muted)]">
                               {l.codigoEmpleado}
                               {l.dpi ? ` · DPI ${l.dpi}` : ""}
@@ -897,7 +911,7 @@ export default function PlanillasPage() {
                           <td className="px-2 py-2">
                             <select
                               className={input}
-                              disabled={cerrada}
+                              disabled={busy || !puedePagar || l.estadoPago === "Pagado"}
                               value={l.estadoPago}
                               onChange={(e) =>
                                 void patchLinea(l.id, {
