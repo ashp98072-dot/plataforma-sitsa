@@ -1,6 +1,6 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
-import { execute, getPool, query } from "@/lib/db";
-import { registrarAuditoria } from "@/lib/auditoria";
+import { getPool, query } from "@/lib/db";
+import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { listarDisponibilidadVehiculos } from "@/lib/operaciones/disponibilidad";
 import { asegurarCodigoPlanUnico } from "@/lib/tms/codigo-plan";
 import { personalDesdeEmpleado } from "@/lib/tms/personal-resolucion";
@@ -656,20 +656,6 @@ export type ResultadoImportacionProgramacion =
       erroresPorFila?: { filaExcel: number; errores: string[] }[];
     };
 
-type FilaListaParaImportar = {
-  filaExcel: number;
-  filaOriginal: FilaProgramacionExcel;
-  datos: DatosResueltosFilaProgramacion;
-  pilotoPersonalId: number;
-  auxPersonalIds: number[];
-  unidadId: number;
-  lugarCargaId: number | null;
-  lugarDescargaId: number | null;
-  paradasInput: ParadaInput[];
-  tarifaSnapshot: { id: number | null; nombre: string | null; monto: number; moneda: string };
-  codigoInicial: string;
-};
-
 /**
  * Confirma e importa TODO el lote en una sola operación todo-o-nada.
  * Reutiliza `previsualizarImportacionProgramacion` tal cual para la
@@ -684,25 +670,39 @@ type FilaListaParaImportar = {
  *     patrón/clave que planes/route.ts). Si `GET_LOCK` no devuelve
  *     exactamente 1, aborta sin escribir nada.
  *  2) Bajo el candado, revalida TODO el lote contra BD fresca
- *     (`previsualizarImportacionProgramacion`). Si CUALQUIER fila falla,
- *     aborta el lote completo — no se escribe nada, ni siquiera para las
- *     filas que sí pasaron (todo o nada).
- *  3) Solo si el 100% de las filas resolvió limpio: materializa
- *     piloto/auxiliares (`personalDesdeEmpleado`, reutilizada tal cual —
- *     PR 1) y la unidad (mismo INSERT…ON DUPLICATE KEY que usa el POST
- *     individual) — estas escrituras NO participan de la transacción de
- *     los planes, igual que hoy: el POST individual también las hace
- *     ANTES de `conn.beginTransaction()`.
- *  4) Abre UNA transacción y, para cada fila, inserta el plan (mismas 26
- *     columnas y mismo bucle de reintento ante colisión de código que el
- *     POST individual), sus auxiliares (`guardarAuxiliaresPlan`), sus
- *     paradas derivadas de la ruta (`guardarParadasPlan`) y sus viáticos
- *     por configuración vigente (`sincronizarViaticosPlan`, sin
- *     overrides — decisión aprobada: el Excel nunca los modifica).
- *     Cualquier error hace `rollback` de TODA la transacción.
- *  5) Si todo el lote se guardó, registra UNA auditoría del lote
- *     (`registrarAuditoria`, tabla genérica existente — ninguna tabla
- *     nueva) y libera el candado en `finally`.
+ *     (`previsualizarImportacionProgramacion`, solo lectura) más dos
+ *     lecturas de apoyo (disponibilidad de vehículos, tarifas activas de
+ *     las rutas involucradas) — TODAVÍA sin escribir nada. Si CUALQUIER
+ *     fila falla la revalidación, aborta el lote completo (todo o nada).
+ *  3) Solo si el 100% de las filas resolvió limpio: abre UNA transacción
+ *     y, dentro de ELLA (misma `conn` para todo, de principio a fin),
+ *     por cada fila: materializa piloto/auxiliares (`personalDesdeEmpleado`
+ *     con `conn` — PR 1, ajustada en el PR 5 para aceptarla), la unidad
+ *     (mismo INSERT…ON DUPLICATE KEY que usa el POST individual, ahora
+ *     vía `conn.execute`) y los lugares de carga/descarga (`upsertLugar`
+ *     con `conn`); inserta el plan (mismas 26 columnas y mismo bucle de
+ *     reintento ante colisión de código que el POST individual), sus
+ *     auxiliares (`guardarAuxiliaresPlan`), sus paradas derivadas de la
+ *     ruta (`guardarParadasPlan`) y sus viáticos por configuración
+ *     vigente (`sincronizarViaticosPlan`, sin overrides — decisión
+ *     aprobada: el Excel nunca los modifica). Al final, UNA auditoría del
+ *     lote (`registrarAuditoriaTx`, tabla genérica existente — ninguna
+ *     tabla nueva) DENTRO de la misma transacción, antes del `commit()`.
+ *     Cualquier error en cualquier paso — incluida la propia auditoría —
+ *     hace `rollback()` de TODA la transacción: no queda ninguna
+ *     materialización de personal/unidad/lugares "suelta" fuera de ella.
+ *  4) El candado se libera SIEMPRE en `finally`, con o sin éxito.
+ *
+ * Ajuste post-revisión (PR #272): antes, la materialización de
+ * tms_personal/tms_unidades/tms_lugares ocurría con el pool global ANTES
+ * de `conn.beginTransaction()` (mismo orden que usa hoy el POST
+ * individual) — si algo fallaba DESPUÉS, esas escrituras quedaban
+ * persistidas pese al rollback de los planes, violando el todo-o-nada
+ * real del LOTE (el POST individual no tiene este problema porque solo
+ * crea UN plan: si personal/unidad ya se materializaron y el resto
+ * falla, sigue siendo "un plan menos", no una inconsistencia de lote).
+ * Para un lote de N filas sí importa: ahora TODA escritura de esta
+ * función pasa por la MISMA `conn`/transacción.
  */
 export async function confirmarImportacionProgramacion(
   empresaId: number,
@@ -750,7 +750,8 @@ export async function confirmarImportacionProgramacion(
       };
     }
 
-    // 100% de las filas resolvió limpio — a partir de aquí se escribe.
+    // Lecturas de apoyo en bloque — TODAVÍA sin escribir nada (son solo
+    // lectura, no necesitan participar de la transacción/rollback).
     const dispVehiculos = await listarDisponibilidadVehiculos(empresaId);
     const flotaVehiculoIdPorPlaca = new Map(
       dispVehiculos.vehiculos.map((v) => [normalizarClave(v.placa), v.id]),
@@ -758,86 +759,73 @@ export async function confirmarImportacionProgramacion(
     const rutaIds = [...new Set(preview.filas.map((f) => f.datos!.rutaId))];
     const tarifasPorRuta = await tarifasActivasDeVariasRutas(empresaId, rutaIds);
 
-    // Materialización de personal/unidad y resolución de lugares/tarifa —
-    // FUERA de la transacción de los planes, mismo orden/criterio que ya
-    // usa el POST individual (personalDesdeEmpleado y el upsert de
-    // tms_unidades se llaman ahí también antes de conn.beginTransaction()).
-    const filasListas: FilaListaParaImportar[] = [];
-    for (const filaPreview of preview.filas) {
-      const datos = filaPreview.datos as DatosResueltosFilaProgramacion;
-      const filaOriginal = filas.find((f) => f.filaExcel === filaPreview.filaExcel);
-      if (!filaOriginal) {
-        return { resultado: "error", mensaje: `Fila ${filaPreview.filaExcel}: no se encontró en el archivo.` };
-      }
-
-      const pilotoPersonalId = await personalDesdeEmpleado(empresaId, datos.pilotoEmpleadoId, "Piloto");
-      if (!pilotoPersonalId) {
-        return { resultado: "error", mensaje: `Fila ${filaPreview.filaExcel}: no se pudo resolver el piloto.` };
-      }
-      const auxPersonalIds: number[] = [];
-      for (const aux of datos.auxiliares) {
-        const pid = await personalDesdeEmpleado(empresaId, aux.empleadoId, "Auxiliar");
-        if (!pid) {
-          return { resultado: "error", mensaje: `Fila ${filaPreview.filaExcel}: no se pudo resolver un auxiliar.` };
-        }
-        auxPersonalIds.push(pid);
-      }
-
-      const flotaVehiculoId = flotaVehiculoIdPorPlaca.get(normalizarClave(datos.unidadPlaca)) ?? null;
-      const rUnidad = await execute(
-        `INSERT INTO tms_unidades (empresa_id, placa, tipo, flota_vehiculo_id)
-         VALUES (?, ?, 'Camion', ?)
-         ON DUPLICATE KEY UPDATE
-           id = LAST_INSERT_ID(id),
-           flota_vehiculo_id = COALESCE(flota_vehiculo_id, VALUES(flota_vehiculo_id))`,
-        [empresaId, datos.unidadPlaca, flotaVehiculoId],
-      );
-      const unidadId = Number(rUnidad.insertId);
-
-      const lugarCargaId = await upsertLugar(empresaId, datos.lugarCargaTexto ?? undefined, "Carga");
-      const lugarDescargaId = await upsertLugar(empresaId, datos.destinoDescripcion ?? undefined, "Descarga");
-      const paradasInput: ParadaInput[] = [
-        ...(datos.lugarCargaTexto?.trim()
-          ? [{ lugarNombre: datos.lugarCargaTexto.trim(), tipo: "Carga" as const, requiereEvidencia: true }]
-          : []),
-        ...(datos.destinoDescripcion?.trim()
-          ? [{ lugarNombre: datos.destinoDescripcion.trim(), tipo: "Descarga" as const, requiereEvidencia: true }]
-          : []),
-      ];
-
-      const tarifaInfo = tarifasPorRuta.get(datos.rutaId);
-      const tarifaPredeterminada = tarifaInfo?.tarifas.find((t) => t.predeterminada) ?? null;
-
-      const codigoInicial = await asegurarCodigoPlanUnico(empresaId, filaOriginal.fechaSalidaExcel as string, null);
-
-      filasListas.push({
-        filaExcel: filaPreview.filaExcel,
-        filaOriginal,
-        datos,
-        pilotoPersonalId,
-        auxPersonalIds,
-        unidadId,
-        lugarCargaId,
-        lugarDescargaId,
-        paradasInput,
-        tarifaSnapshot: {
-          id: tarifaPredeterminada?.id ?? null,
-          nombre: tarifaPredeterminada?.nombre ?? null,
-          monto: tarifaPredeterminada?.monto ?? datos.tarifaVigente,
-          moneda: tarifaPredeterminada?.moneda ?? "GTQ",
-        },
-        codigoInicial,
-      });
-    }
-
-    // Transacción real: SOLO tms_planes_viaje + auxiliares + paradas +
-    // viáticos. Cualquier error -> rollback de TODO el lote.
+    // A partir de aquí se escribe: TODO dentro de la MISMA transacción y
+    // la MISMA conexión — materialización de personal/unidad/lugares,
+    // los planes, auxiliares, paradas, viáticos y la auditoría del lote.
+    // Cualquier error en cualquier paso -> rollback de TODO (ver nota de
+    // diseño en el docblock de esta función).
     const conn = await getPool().getConnection();
     const planIds: number[] = [];
     try {
       await conn.beginTransaction();
-      for (const item of filasListas) {
-        let codigoFinal = item.codigoInicial;
+      for (const filaPreview of preview.filas) {
+        const datos = filaPreview.datos as DatosResueltosFilaProgramacion;
+        const filaOriginal = filas.find((f) => f.filaExcel === filaPreview.filaExcel);
+        if (!filaOriginal) {
+          throw new Error(`Fila ${filaPreview.filaExcel}: no se encontró en el archivo.`);
+        }
+
+        const pilotoPersonalId = await personalDesdeEmpleado(empresaId, datos.pilotoEmpleadoId, "Piloto", conn);
+        if (!pilotoPersonalId) {
+          throw new Error(`Fila ${filaPreview.filaExcel}: no se pudo resolver el piloto.`);
+        }
+        const auxPersonalIds: number[] = [];
+        for (const aux of datos.auxiliares) {
+          const pid = await personalDesdeEmpleado(empresaId, aux.empleadoId, "Auxiliar", conn);
+          if (!pid) {
+            throw new Error(`Fila ${filaPreview.filaExcel}: no se pudo resolver un auxiliar.`);
+          }
+          auxPersonalIds.push(pid);
+        }
+
+        const flotaVehiculoId = flotaVehiculoIdPorPlaca.get(normalizarClave(datos.unidadPlaca)) ?? null;
+        const [rUnidad] = await conn.execute<ResultSetHeader>(
+          `INSERT INTO tms_unidades (empresa_id, placa, tipo, flota_vehiculo_id)
+           VALUES (?, ?, 'Camion', ?)
+           ON DUPLICATE KEY UPDATE
+             id = LAST_INSERT_ID(id),
+             flota_vehiculo_id = COALESCE(flota_vehiculo_id, VALUES(flota_vehiculo_id))`,
+          [empresaId, datos.unidadPlaca, flotaVehiculoId],
+        );
+        const unidadId = Number(rUnidad.insertId);
+
+        const lugarCargaId = await upsertLugar(empresaId, datos.lugarCargaTexto ?? undefined, "Carga", conn);
+        const lugarDescargaId = await upsertLugar(empresaId, datos.destinoDescripcion ?? undefined, "Descarga", conn);
+        const paradasInput: ParadaInput[] = [
+          ...(datos.lugarCargaTexto?.trim()
+            ? [{ lugarNombre: datos.lugarCargaTexto.trim(), tipo: "Carga" as const, requiereEvidencia: true }]
+            : []),
+          ...(datos.destinoDescripcion?.trim()
+            ? [{ lugarNombre: datos.destinoDescripcion.trim(), tipo: "Descarga" as const, requiereEvidencia: true }]
+            : []),
+        ];
+
+        const tarifaInfo = tarifasPorRuta.get(datos.rutaId);
+        const tarifaPredeterminada = tarifaInfo?.tarifas.find((t) => t.predeterminada) ?? null;
+        const tarifaSnapshot = {
+          id: tarifaPredeterminada?.id ?? null,
+          nombre: tarifaPredeterminada?.nombre ?? null,
+          monto: tarifaPredeterminada?.monto ?? datos.tarifaVigente,
+          moneda: tarifaPredeterminada?.moneda ?? "GTQ",
+        };
+
+        // asegurarCodigoPlanUnico sigue leyendo por el pool global (no
+        // recibe `conn`) — no hace falta cambiarlo: es un SELECT puro
+        // para PROPONER un código, y el bucle de reintento de abajo ya
+        // absorbe una colisión real (incluso contra una fila anterior de
+        // este mismo lote, todavía sin commit) reintentando con uno
+        // nuevo ante el error de UNIQUE KEY del propio INSERT.
+        let codigoFinal = await asegurarCodigoPlanUnico(empresaId, filaOriginal.fechaSalidaExcel as string, null);
         let planId = 0;
         for (let attempt = 0; attempt < 5; attempt++) {
           try {
@@ -848,56 +836,78 @@ export async function confirmarImportacionProgramacion(
               [
                 empresaId,
                 codigoFinal,
-                item.datos.clienteId,
-                item.lugarCargaId,
-                item.lugarDescargaId,
-                item.unidadId,
-                item.pilotoPersonalId,
-                item.auxPersonalIds[0] ?? null,
-                item.filaOriginal.fechaSalidaExcel,
-                item.filaOriginal.horaSalidaExcel,
-                item.filaOriginal.tipoTrasladoExcel || null,
-                item.datos.regresoEstimado?.replace("T", " ") ?? null,
-                item.filaOriginal.tarifaExcel,
-                item.tarifaSnapshot.id,
-                item.tarifaSnapshot.nombre,
-                item.tarifaSnapshot.monto,
-                item.tarifaSnapshot.moneda,
+                datos.clienteId,
+                lugarCargaId,
+                lugarDescargaId,
+                unidadId,
+                pilotoPersonalId,
+                auxPersonalIds[0] ?? null,
+                filaOriginal.fechaSalidaExcel,
+                filaOriginal.horaSalidaExcel,
+                filaOriginal.tipoTrasladoExcel || null,
+                datos.regresoEstimado?.replace("T", " ") ?? null,
+                filaOriginal.tarifaExcel,
+                tarifaSnapshot.id,
+                tarifaSnapshot.nombre,
+                tarifaSnapshot.monto,
+                tarifaSnapshot.moneda,
                 null, // costo_operativo_referencia: campo muerto (TMS-SIN-COSTO-OPERATIVO-1), nunca se popula.
                 null, // referencia_cliente: no forma parte de la plantilla aprobada.
-                item.datos.rutaId,
-                item.datos.rutaCodigo,
-                item.datos.destinoDescripcion,
-                item.datos.contactoNombre,
-                item.datos.contactoCargo,
-                item.datos.contactoTelefono,
-                item.filaOriginal.observacionesExcel || null,
+                datos.rutaId,
+                datos.rutaCodigo,
+                datos.destinoDescripcion,
+                datos.contactoNombre,
+                datos.contactoCargo,
+                datos.contactoTelefono,
+                filaOriginal.observacionesExcel || null,
               ],
             );
             planId = Number(result.insertId);
             break;
           } catch {
-            codigoFinal = await asegurarCodigoPlanUnico(empresaId, item.filaOriginal.fechaSalidaExcel as string, null);
+            codigoFinal = await asegurarCodigoPlanUnico(empresaId, filaOriginal.fechaSalidaExcel as string, null);
           }
         }
         if (!planId) {
-          throw new Error(`Fila ${item.filaExcel}: no se pudo generar un código de plan único.`);
+          throw new Error(`Fila ${filaPreview.filaExcel}: no se pudo generar un código de plan único.`);
         }
 
-        await guardarAuxiliaresPlan(planId, item.auxPersonalIds, conn);
-        if (item.paradasInput.length) {
-          const rParadas = await guardarParadasPlan(empresaId, planId, item.paradasInput, conn);
-          if (!rParadas.ok) throw new Error(`Fila ${item.filaExcel}: ${rParadas.error}`);
+        await guardarAuxiliaresPlan(planId, auxPersonalIds, conn);
+        if (paradasInput.length) {
+          const rParadas = await guardarParadasPlan(empresaId, planId, paradasInput, conn);
+          if (!rParadas.ok) throw new Error(`Fila ${filaPreview.filaExcel}: ${rParadas.error}`);
         }
         await sincronizarViaticosPlan(
           empresaId,
           planId,
-          { piloto: item.pilotoPersonalId, auxiliares: item.auxPersonalIds },
+          { piloto: pilotoPersonalId, auxiliares: auxPersonalIds },
           conn,
         );
 
         planIds.push(planId);
       }
+
+      // Auditoría de LOTE (una sola, no por fila) — DENTRO de la misma
+      // transacción, ANTES del commit: si esto falla, también se
+      // revierte todo el lote. `registrarAuditoriaTx` (a diferencia de
+      // `registrarAuditoria`) no traga errores — se propagan al catch de
+      // abajo como cualquier otro fallo. Reutiliza el sistema de
+      // auditoría existente (tabla genérica `auditoria`) — ninguna tabla
+      // nueva.
+      await registrarAuditoriaTx(conn, {
+        empresaId,
+        usuario,
+        accion: "importar_programacion",
+        modulo: "tms",
+        detalle: JSON.stringify({
+          archivo: nombreArchivo,
+          hashArchivo,
+          filasTotales: filas.length,
+          filasImportadas: planIds.length,
+          resultado: "exitoso",
+          planIds,
+        }),
+      });
 
       await conn.commit();
     } catch (e) {
@@ -909,26 +919,6 @@ export async function confirmarImportacionProgramacion(
     } finally {
       conn.release();
     }
-
-    // Auditoría de LOTE (una sola, no por fila) — solo al finalizar
-    // CORRECTAMENTE, fuera de la transacción (mismo criterio que
-    // confirmarImportacionRutas en rutas-import.ts). Reutiliza el sistema
-    // de auditoría existente (tabla genérica `auditoria`) — ninguna tabla
-    // nueva.
-    await registrarAuditoria({
-      empresaId,
-      usuario,
-      accion: "importar_programacion",
-      modulo: "tms",
-      detalle: JSON.stringify({
-        archivo: nombreArchivo,
-        hashArchivo,
-        filasTotales: filas.length,
-        filasImportadas: planIds.length,
-        resultado: "exitoso",
-        planIds,
-      }),
-    });
 
     return { resultado: "exitoso", filasTotales: filas.length, filasImportadas: planIds.length, planIds };
   } finally {

@@ -16,6 +16,18 @@ import { execute, query, type SqlParams } from "@/lib/db";
  * este cambio no le altera ni una query ni una regla.
  */
 
+async function runQuery<T extends RowDataPacket[]>(
+  conn: PoolConnection | undefined,
+  sql: string,
+  params: SqlParams = [],
+): Promise<T> {
+  if (conn) {
+    const [rows] = await conn.query<RowDataPacket[]>(sql, params);
+    return rows as T;
+  }
+  return query<T>(sql, params);
+}
+
 async function runExecute(
   conn: PoolConnection | undefined,
   sql: string,
@@ -28,19 +40,28 @@ async function runExecute(
   return execute(sql, params);
 }
 
-/** Resuelve un nombre de lugar a `tms_lugares.id`, creándolo si no existe. `undefined`/vacío -> `null` (sin lugar). */
+/**
+ * Resuelve un nombre de lugar a `tms_lugares.id`, creándolo si no existe.
+ * `undefined`/vacío -> `null` (sin lugar). `conn` opcional (PR 5, ajuste
+ * post-revisión): si viene, tanto el SELECT como el INSERT usan esa
+ * misma conexión/transacción — mismo patrón que `guardarAuxiliaresPlan`
+ * más abajo. Sin `conn`, comportamiento IDÉNTICO al actual (pool global).
+ */
 export async function upsertLugar(
   empresaId: number,
   nombre: string | undefined,
   tipo: string,
+  conn?: PoolConnection,
 ): Promise<number | null> {
   if (!nombre?.trim()) return null;
-  const existing = await query<RowDataPacket[]>(
+  const existing = await runQuery<RowDataPacket[]>(
+    conn,
     "SELECT id FROM tms_lugares WHERE empresa_id = ? AND nombre = ? LIMIT 1",
     [empresaId, nombre.trim()],
   );
   if (existing[0]) return Number(existing[0].id);
-  const r = await execute(
+  const r = await runExecute(
+    conn,
     "INSERT INTO tms_lugares (empresa_id, nombre, tipo) VALUES (?, ?, ?)",
     [empresaId, nombre.trim(), tipo],
   );
