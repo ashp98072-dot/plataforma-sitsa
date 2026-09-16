@@ -64,9 +64,11 @@ export async function GET(_req: Request, ctx: Ctx) {
     const contenido = await readFile(rutaSegura);
     etapa = "construccion_respuesta";
     const nombre = gasto.factura_nombre_original.replace(/["\r\n]/g, "");
+    const nombreAscii = nombre.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\x20-\x7e]/g, "_").replace(/\\/g, "_") || "comprobante";
+    const nombreUtf8 = encodeURIComponent(nombre).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
     return new NextResponse(contenido, { headers: {
       "Content-Type": gasto.factura_mime || contentTypeFor(nombre),
-      "Content-Disposition": `inline; filename="${nombre}"`,
+      "Content-Disposition": `inline; filename="${nombreAscii}"; filename*=UTF-8''${nombreUtf8}`,
       "Cache-Control": "private, no-store",
     } });
   } catch (error) {

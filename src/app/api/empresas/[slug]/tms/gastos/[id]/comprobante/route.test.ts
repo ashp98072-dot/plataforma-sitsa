@@ -52,7 +52,7 @@ describe("comprobante de gasto", () => {
   it("distingue fallo de respuesta después de leer el archivo sin modificar el 404", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      vi.mocked(query).mockResolvedValue([{ ...fila, factura_ruta_relativa: "empresas/7/documentos/a.pdf", factura_nombre_original: "catálogo 漢.pdf" }] as never);
+      vi.mocked(query).mockResolvedValue([{ ...fila, factura_ruta_relativa: "empresas/7/documentos/a.pdf", factura_nombre_original: "a.pdf", factura_mime: "application/pdf\ninvalid" }] as never);
       vi.mocked(getUploadsRoot).mockReturnValue("/hbuilds/uploads");
       vi.mocked(validarRutaArchivoEmpresa).mockReturnValue("/hbuilds/uploads/empresas/7/documentos/a.pdf");
       vi.mocked(existsSync).mockReturnValue(true);
@@ -67,6 +67,21 @@ describe("comprobante de gasto", () => {
       expect(JSON.stringify(log.mock.calls)).not.toContain("contenido privado");
       expect(execute).not.toHaveBeenCalled();
     } finally { log.mockRestore(); }
+  });
+  it.each(["LOGISERVICIOS MO\u0301NACO - CATA\u0301LOGO 2026.pdf", "catálogo 漢.pdf", "factura 'especial' (1).pdf"])("sirve nombre Unicode %s con encabezado ASCII y nombre UTF-8", async (nombre) => {
+    vi.mocked(query).mockResolvedValue([{ ...fila, factura_ruta_relativa: "empresas/7/documentos/a.pdf", factura_nombre_original: nombre, factura_mime: "application/pdf" }] as never);
+    vi.mocked(validarRutaArchivoEmpresa).mockReturnValue("/hbuilds/uploads/empresas/7/documentos/a.pdf");
+    vi.mocked(readFile).mockResolvedValueOnce(Buffer.from("pdf original"));
+    const res = await GET(new Request("http://x"), ctx);
+    expect(res.status).toBe(200);
+    const header = res.headers.get("Content-Disposition")!;
+    expect(header).toMatch(/^inline; filename="[\x20-\x7e]+"; filename\*=UTF-8''/);
+    expect(decodeURIComponent(header.split("filename*=UTF-8''")[1])).toBe(nombre);
+    expect(header).not.toMatch(/[\u0080-\uffff]/);
+    expect(res.headers.get("Content-Type")).toBe("application/pdf");
+    expect(res.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(await res.text()).toBe("pdf original");
+    expect(execute).not.toHaveBeenCalled();
   });
   it("sube PDF válido en el ámbito de la empresa y marca tiene_factura", async () => {
     vi.mocked(query).mockResolvedValue([fila] as never);
