@@ -44,12 +44,17 @@
  *   transitoria Q3,024, exclusiva del ejercicio 2026 — ya parametrizada en
  *   fiscal-isr-2026.ts, no se repite aquí.
  * - Decreto 78-89 y su reforma, Decreto 37-2001 (bonificación incentivo):
- *   crean/fijan la bonificación incentivo de Q250 mensuales. Tratamiento
- *   ASIMÉTRICO documentado en múltiples fuentes independientes convergentes:
- *   excluida de la base de cotización IGSS/IRTRA/INTECAP, pero SIN exención
- *   de ISR — no aparece en la lista taxativa del Art. 70 LAT, por lo que
- *   cae bajo la definición amplia del Art. 68 (bonificación = renta
- *   gravada).
+ *   crean/fijan la bonificación incentivo de Q250 mensuales. El propio texto
+ *   de la norma (fuente PRIMARIA, no una interpretación de terceros) excluye
+ *   expresamente esta bonificación de la base de cotización IGSS/IRTRA/
+ *   INTECAP, respaldado además por jurisprudencia constitucional sobre su
+ *   naturaleza no salarial para esos efectos — es el ÚNICO concepto de este
+ *   archivo, junto con SUELDO_BASE, donde los cuatro booleanos de carga
+ *   social se fijan en `true`/`false` con esa firmeza. Para ISR, en cambio,
+ *   NO hay exención: no aparece en la lista taxativa del Art. 70 LAT, por lo
+ *   que cae bajo la definición amplia del Art. 68 (bonificación = renta
+ *   gravada) — tratamiento deliberadamente ASIMÉTRICO entre ISR e IGSS/
+ *   IRTRA/INTECAP.
  * - Decreto 76-78 (Ley Reguladora del Aguinaldo) y Decreto 42-92 (Ley de
  *   Bonificación Anual para Trabajadores del Sector Privado y Público,
  *   "Bono 14"): fijan la OBLIGATORIEDAD LABORAL y el monto de cada
@@ -57,18 +62,23 @@
  *   anual). Estos decretos NO fijan el límite de exención FISCAL — ese
  *   límite lo fija el Art. 70 LAT (numerales 5/6, ver arriba). No confundir
  *   ambos.
- * - IGSS: base de cotización laboral/patronal. Fuentes secundarias
- *   consultadas coinciden en excluir bonificación incentivo, aguinaldo y
- *   Bono 14 de la base de cotización, e incluir comisiones. Para horas
- *   extra las fuentes consultadas se CONTRADICEN entre sí (unas afirman que
- *   cotiza, otras que no) — no se localizó en esta sesión el texto del
- *   Reglamento de Recaudación de Contribuciones del IGSS que resuelva la
- *   contradicción, así que horas extra queda `aplicaIgssLaboral: null`
- *   (pendiente), consistente con "no inventar". IRTRA/INTECAP: solo se
- *   confirmó independientemente la exclusión para bonificación incentivo
- *   (misma fuente que IGSS); para el resto de conceptos no se investigó lo
- *   suficiente en esta sesión — quedan `null` (pendiente), documentado
- *   explícitamente como gap, no como exención ni como inclusión asumida.
+ * - IGSS/IRTRA/INTECAP — regla de rigor aplicada a TODOS los conceptos
+ *   salvo SUELDO_BASE y BONO_INCENTIVO (los dos únicos con fuente PRIMARIA
+ *   suficiente, ver arriba): un booleano productivo (`true`/`false`) exige
+ *   poder citar la norma/reglamento/criterio institucional del IGSS/IRTRA/
+ *   INTECAP que lo respalde directamente. Para AGUINALDO, BONO_14,
+ *   VIATICO_COMPROBABLE y COMISION solo se encontraron menciones en fuentes
+ *   secundarias (blogs, sitios de asesoría) — CONVERGENTES entre sí, pero
+ *   NUNCA se localizó el Reglamento de Recaudación de Contribuciones del
+ *   IGSS (ni norma IRTRA/INTECAP) que las respalde directamente. Convergencia
+ *   de fuentes secundarias NO equivale a fuente primaria: por eso las cuatro
+ *   cargas quedan `null` (pendiente) para esos cuatro conceptos, aunque
+ *   exista consenso informal sobre cuál "debería" ser el resultado. Para
+ *   HORAS_EXTRA las fuentes consultadas ni siquiera convergen (unas afirman
+ *   que cotiza, otras que no) — `null` con más razón. BONO_HERRAMIENTAS y
+ *   BONO_VARIABLE: naturaleza económica no determinada, `null` por el mismo
+ *   principio. `null` significa PENDIENTE, nunca "exento" ni "no aplica" por
+ *   omisión.
  *
  * IMPORTANTE: esta clasificación NO se conecta hoy a `rrhh_prestaciones`
  * (aguinaldo, Bono 14, viáticos, comisiones, bonos variables) porque esa
@@ -128,11 +138,14 @@ export const CONFIGURACION_CONCEPTOS_2026: Readonly<Record<string, DefinicionCon
     aplicaIgssLaboral: false, aplicaIgssPatronal: false, aplicaIrtra: false, aplicaIntecap: false,
     fuenteLegal: "ISR: Decreto 10-2012 (LAT) Art. 68 (bonificaciones incluidas en el hecho generador) — el Art. 70 "
       + "no la incluye entre las exenciones taxativas, por lo que no goza de exención de ISR. "
-      + "IGSS/IRTRA/INTECAP: Decreto 78-89, reformado por Decreto 37-2001 (creación y monto Q250 mensuales) — "
-      + "excluida expresamente de la base de cotización de las tres cargas.",
-    notas: "Tratamiento ASIMÉTRICO deliberado: gravada para ISR, exenta de IGSS/IRTRA/INTECAP. No mezclar ambas "
-      + "conclusiones (ver ticket). Este es el concepto que desbloquea la generación 2026 en la práctica: por "
-      + "defecto casi todo empleado formal tiene bono_incentivo = Q250.",
+      + "IGSS/IRTRA/INTECAP: Decreto 78-89, reformado por Decreto 37-2001 (creación y monto Q250 mensuales) — el "
+      + "propio texto de la norma excluye expresamente esta bonificación de la base de cotización de las cuatro "
+      + "cargas (IGSS laboral, IGSS patronal, IRTRA, INTECAP), respaldado además por jurisprudencia constitucional "
+      + "sobre su naturaleza no salarial para esos efectos. Fuente PRIMARIA, no solo convergencia de fuentes "
+      + "secundarias.",
+    notas: "Tratamiento ASIMÉTRICO deliberado: gravada para ISR, exenta de IGSS/IRTRA/INTECAP con fuente primaria "
+      + "suficiente para ambas conclusiones — no mezclar ambas (ver ticket). Este es el concepto que desbloquea la "
+      + "generación 2026 en la práctica: por defecto casi todo empleado formal tiene bono_incentivo = Q250.",
   }),
   BONO_HERRAMIENTAS: def({
     codigo: "BONO_HERRAMIENTAS", tratamientoIsr: "PENDIENTE", categoriaLimiteAnual: null, requiereEvidencia: true,
@@ -148,34 +161,41 @@ export const CONFIGURACION_CONCEPTOS_2026: Readonly<Record<string, DefinicionCon
   }),
   AGUINALDO: def({
     codigo: "AGUINALDO", tratamientoIsr: "CONDICIONAL", categoriaLimiteAnual: "AGUINALDO", requiereEvidencia: false,
-    aplicaIgssLaboral: false, aplicaIgssPatronal: false, aplicaIrtra: false, aplicaIntecap: false,
+    aplicaIgssLaboral: null, aplicaIgssPatronal: null, aplicaIrtra: null, aplicaIntecap: null,
     fuenteLegal: "ISR: Decreto 10-2012 (LAT) Art. 70 numeral 5 — exento hasta el 100% del sueldo ordinario mensual; "
       + "el excedente es renta gravada bajo el Art. 68. Obligatoriedad laboral (no fiscal): Decreto 76-78. "
-      + "IGSS/IRTRA/INTECAP: fuentes secundarias convergentes lo excluyen de la base de cotización.",
+      + "IGSS/IRTRA/INTECAP: pendiente de verificación normativa oficial.",
     notas: "Límite de exención ANUAL (100% de un sueldo ordinario mensual) — debe considerar pagos propios del "
       + "mismo ejercicio y antecedentes de otro patrono (ver motor puro, `limitesExencionAnual`/`categoriaLimiteAnual` "
       + "en fiscal-isr-2026.ts, ya soporta este mecanismo). NO conectado hoy a ninguna fuente de datos real: "
-      + "`rrhh_prestaciones` es texto libre sin código estable (ver docblock del archivo). Configuración lista, "
-      + "sin fuente de datos que la consuma todavía.",
+      + "`rrhh_prestaciones` es texto libre sin código estable (ver docblock del archivo). Configuración ISR lista, "
+      + "sin fuente de datos que la consuma todavía. IGSS/IRTRA/INTECAP: NO se localizó reglamento o criterio "
+      + "institucional del IGSS (fuente primaria) que confirme la exclusión del aguinaldo de la base de cotización "
+      + "— solo se encontraron menciones en fuentes secundarias, insuficientes para fijar un booleano productivo. "
+      + "Queda null (pendiente) para las cuatro cargas.",
   }),
   BONO_14: def({
     codigo: "BONO_14", tratamientoIsr: "CONDICIONAL", categoriaLimiteAnual: "BONO_14", requiereEvidencia: false,
-    aplicaIgssLaboral: false, aplicaIgssPatronal: false, aplicaIrtra: false, aplicaIntecap: false,
+    aplicaIgssLaboral: null, aplicaIgssPatronal: null, aplicaIrtra: null, aplicaIntecap: null,
     fuenteLegal: "ISR: Decreto 10-2012 (LAT) Art. 70 numeral 6 — exento hasta el 100% del sueldo ordinario mensual; "
       + "el excedente es renta gravada bajo el Art. 68. Obligatoriedad laboral (no fiscal): Decreto 42-92. "
-      + "IGSS/IRTRA/INTECAP: fuentes secundarias convergentes lo excluyen de la base de cotización.",
+      + "IGSS/IRTRA/INTECAP: pendiente de verificación normativa oficial.",
     notas: "Mismo mecanismo de límite anual que AGUINALDO, categoría propia (no comparten el mismo tope: cada "
       + "prestación tiene su propio límite de un sueldo mensual). NO conectado hoy a ninguna fuente de datos real "
-      + "— mismo motivo que AGUINALDO.",
+      + "— mismo motivo que AGUINALDO. IGSS/IRTRA/INTECAP: mismo motivo que AGUINALDO — sin fuente primaria "
+      + "localizada, queda null (pendiente) para las cuatro cargas.",
   }),
   VIATICO_COMPROBABLE: def({
     codigo: "VIATICO_COMPROBABLE", tratamientoIsr: "CONDICIONAL", categoriaLimiteAnual: null, requiereEvidencia: true,
-    aplicaIgssLaboral: false, aplicaIgssPatronal: false, aplicaIrtra: null, aplicaIntecap: null,
-    fuenteLegal: "Decreto 10-2012 (LAT) Art. 70 — viáticos dentro y fuera del país exentos únicamente cuando están "
-      + "comprobados con facturas/documentación conforme a la legislación nacional; sin comprobación, no hay "
-      + "derecho a exención.",
-    notas: "Exento SOLO con evidencia válida — sin evidencia, no se asume exento ni gravado por defecto: bloquea "
-      + "(requiereEvidencia=true) hasta que se documente. No confundir con VIATICO_NO_COMPROBABLE.",
+    aplicaIgssLaboral: null, aplicaIgssPatronal: null, aplicaIrtra: null, aplicaIntecap: null,
+    fuenteLegal: "ISR: Decreto 10-2012 (LAT) Art. 70 — viáticos dentro y fuera del país exentos únicamente cuando "
+      + "están comprobados con facturas/documentación conforme a la legislación nacional; sin comprobación, no hay "
+      + "derecho a exención. IGSS/IRTRA/INTECAP: pendiente de verificación normativa oficial.",
+    notas: "ISR exento SOLO con evidencia válida — sin evidencia, no se asume exento ni gravado por defecto: "
+      + "bloquea (requiereEvidencia=true) hasta que se documente. No confundir con VIATICO_NO_COMPROBABLE. "
+      + "IGSS/IRTRA/INTECAP: no se localizó reglamento o criterio institucional del IGSS (fuente primaria) que "
+      + "confirme la exclusión de viáticos comprobados de la base de cotización — solo se encontraron menciones "
+      + "en fuentes secundarias, insuficientes para fijar un booleano productivo. Queda null (pendiente).",
   }),
   VIATICO_NO_COMPROBABLE: def({
     codigo: "VIATICO_NO_COMPROBABLE", tratamientoIsr: "GRAVADO", categoriaLimiteAnual: null, requiereEvidencia: false,
@@ -186,10 +206,13 @@ export const CONFIGURACION_CONCEPTOS_2026: Readonly<Record<string, DefinicionCon
   }),
   COMISION: def({
     codigo: "COMISION", tratamientoIsr: "GRAVADO", categoriaLimiteAnual: null, requiereEvidencia: false,
-    aplicaIgssLaboral: true, aplicaIgssPatronal: true, aplicaIrtra: null, aplicaIntecap: null,
-    fuenteLegal: "Decreto 10-2012 (LAT) Art. 68 — comisiones incluidas expresamente en la definición de renta del trabajo.",
-    notas: "ISR e IGSS laboral/patronal gravados, corroborado por fuentes convergentes. IRTRA/INTECAP no investigado "
-      + "con suficiente rigor: pendiente.",
+    aplicaIgssLaboral: null, aplicaIgssPatronal: null, aplicaIrtra: null, aplicaIntecap: null,
+    fuenteLegal: "ISR: Decreto 10-2012 (LAT) Art. 68 — comisiones incluidas expresamente en la definición de renta "
+      + "del trabajo. IGSS/IRTRA/INTECAP: pendiente de verificación normativa oficial.",
+    notas: "ISR gravado, asentado en el propio texto del Art. 68. IGSS/IRTRA/INTECAP: NO se localizó reglamento o "
+      + "criterio institucional del IGSS/IRTRA/INTECAP (fuente primaria) que confirme si las comisiones integran "
+      + "la base de cotización — solo se encontraron menciones en fuentes secundarias, insuficientes para fijar "
+      + "un booleano productivo. Queda null (pendiente) para las cuatro cargas hasta contar con esa fuente.",
   }),
   BONO_VARIABLE: def({
     codigo: "BONO_VARIABLE", tratamientoIsr: "GRAVADO", categoriaLimiteAnual: null, requiereEvidencia: false,

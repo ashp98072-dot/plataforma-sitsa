@@ -57,10 +57,23 @@ describe("resolverConceptoFiscal2026 — matriz ISR", () => {
     expect(resolverConceptoFiscal2026("VIATICO_NO_COMPROBABLE", 2026).tratamientoIsr).toBe("GRAVADO");
   });
 
-  it("11. comisión -> gravado (Art. 68 LAT, incluida expresamente)", () => {
+  it("11. comisión -> gravado para ISR (Art. 68 LAT, incluida expresamente); IGSS/IRTRA/INTECAP pendiente sin fuente primaria", () => {
     const def = resolverConceptoFiscal2026("COMISION", 2026);
     expect(def.tratamientoIsr).toBe("GRAVADO");
-    expect(def.aplicaIgssLaboral).toBe(true);
+    expect(def.aplicaIgssLaboral).toBeNull();
+    expect(def.aplicaIgssPatronal).toBeNull();
+    expect(def.aplicaIrtra).toBeNull();
+    expect(def.aplicaIntecap).toBeNull();
+  });
+
+  it("aguinaldo, Bono 14 y viático comprobable: IGSS/IRTRA/INTECAP pendiente sin fuente primaria oficial (no se convierte convergencia de blogs en un hecho productivo)", () => {
+    for (const codigo of ["AGUINALDO", "BONO_14", "VIATICO_COMPROBABLE"]) {
+      const def = resolverConceptoFiscal2026(codigo, 2026);
+      expect(def.aplicaIgssLaboral).toBeNull();
+      expect(def.aplicaIgssPatronal).toBeNull();
+      expect(def.aplicaIrtra).toBeNull();
+      expect(def.aplicaIntecap).toBeNull();
+    }
   });
 
   it("bono variable -> gravado (Art. 68 LAT, sin exención específica)", () => {
@@ -82,9 +95,26 @@ describe("resolverConceptoFiscal2026 — matriz ISR", () => {
     const horasExtra = resolverConceptoFiscal2026("HORAS_EXTRA", 2026);
     expect(horasExtra.tratamientoIsr).toBe("GRAVADO");
     expect(horasExtra.aplicaIgssLaboral).toBeNull();
-    // Aguinaldo: condicional ISR, pero se afirma explícitamente false (no null) para IGSS — corroborado, no adivinado.
+    // Aguinaldo: condicional ISR (con fuente primaria del límite, Art. 70), pero IGSS queda null: no hay fuente
+    // primaria del IGSS/IRTRA/INTECAP que lo respalde, solo convergencia de fuentes secundarias — insuficiente.
     const aguinaldo = resolverConceptoFiscal2026("AGUINALDO", 2026);
-    expect(aguinaldo.aplicaIgssLaboral).toBe(false);
+    expect(aguinaldo.aplicaIgssLaboral).toBeNull();
+    // Bono incentivo SÍ tiene fuente primaria (el propio Decreto 78-89 excluye expresamente la carga social) —
+    // es la única excepción legítima a "sin fuente primaria, queda null", junto con sueldo base.
+    const bonoIncentivo = resolverConceptoFiscal2026("BONO_INCENTIVO", 2026);
+    expect(bonoIncentivo.aplicaIgssLaboral).toBe(false);
+  });
+
+  it("regla de rigor: solo SUELDO_BASE y BONO_INCENTIVO tienen las 4 cargas sociales resueltas (no null) — el resto queda pendiente sin fuente primaria", () => {
+    const codigosConFuentePrimaria = ["SUELDO_BASE", "BONO_INCENTIVO"];
+    for (const [codigo, def] of Object.entries(CONFIGURACION_CONCEPTOS_2026)) {
+      const cargas = [def.aplicaIgssLaboral, def.aplicaIgssPatronal, def.aplicaIrtra, def.aplicaIntecap];
+      if (codigosConFuentePrimaria.includes(codigo)) {
+        expect(cargas.every((c) => c !== null), `${codigo} debería tener las 4 cargas resueltas`).toBe(true);
+      } else {
+        expect(cargas.every((c) => c === null), `${codigo} debería quedar pendiente (null) sin fuente primaria`).toBe(true);
+      }
+    }
   });
 });
 
