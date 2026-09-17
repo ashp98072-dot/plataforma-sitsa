@@ -20,3 +20,16 @@ it("empresa inactiva y falta de permiso propio rechazan", async () => {
   mocks.empresa.mockResolvedValue({ id: 1, activa: false, modulos: ["tms"] }); expect((await obtenerAccesoComprasPagina("a")).error?.status).toBe(403);
   mocks.empresa.mockResolvedValue({ id: 1, activa: true, modulos: ["tms"] }); mocks.permisos.mockResolvedValue([]); expect((await obtenerAccesoComprasPagina("a")).error?.status).toBe(403);
 });
+it("landing permite solo requerimientos pero no abre proveedores ni hereda TMS", async () => {
+  mocks.permisos.mockResolvedValue([{ modulo: "compras_requerimientos", puedeVer: true }]);
+  expect((await obtenerAccesoComprasPagina("a")).error).toBeUndefined();
+  expect((await obtenerAccesoComprasPagina("a", "compras_proveedores")).error?.status).toBe(403);
+  mocks.permisos.mockResolvedValue([{ modulo: "tms", puedeVer: true }]);
+  expect((await obtenerAccesoComprasPagina("a")).error?.status).toBe(403);
+});
+it("solo proveedores no concede requerimientos; capacidad TMS es obligatoria", async () => {
+  expect((await obtenerAccesoComprasPagina("a")).error).toBeUndefined();
+  expect((await obtenerAccesoComprasPagina("a", "compras_requerimientos")).error?.status).toBe(403);
+  mocks.empresa.mockResolvedValue({ id: 1, activa: true, modulos: ["rrhh"] });
+  expect((await obtenerAccesoComprasPagina("a")).error?.status).toBe(403);
+});

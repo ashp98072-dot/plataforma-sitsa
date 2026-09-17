@@ -4,7 +4,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it } from "vitest";
 import { ProveedoresComercialesClient, camposFormulario } from "@/components/compras/proveedores-comerciales-client";
-const leer = (p: string) => readFileSync(p, "utf8");
+const leer = (p: string) => readFileSync(p, "utf8").replace(/\r\n/g, "\n");
 it("menú/rutas y formulario sin funcionalidad de requerimientos", () => {
   const shell = leer("src/components/app-shell.tsx"); expect(shell).toContain('tienePermiso(permisos, "compras_proveedores", "ver")'); expect(shell).toContain('label: "Compras / Repuestos"'); expect(shell).toContain('label: "Proveedores comerciales"');
   expect(leer("src/app/e/[slug]/compras/page.tsx")).toContain("compras/proveedores");
