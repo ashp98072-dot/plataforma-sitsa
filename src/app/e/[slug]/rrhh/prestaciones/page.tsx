@@ -4,6 +4,11 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { TIPOS_DEVENGADO } from "@/lib/rrhh/catalogos-nomina";
+import {
+  CODIGOS_CONCEPTO_PRESTACION,
+  ETIQUETAS_CODIGO_CONCEPTO_PRESTACION,
+  type CodigoConceptoPrestacion,
+} from "@/lib/rrhh/prestaciones";
 
 type Emp = { id: number; codigo: string; nombre: string };
 type Prestacion = {
@@ -12,10 +17,16 @@ type Prestacion = {
   emp_codigo: string;
   emp_nombre: string;
   tipo: string;
+  codigoConcepto: CodigoConceptoPrestacion | null;
   monto: number | string;
   fecha: string;
   notas: string | null;
 };
+
+/** Solo presentación — histórico sin clasificar (codigoConcepto = NULL) nunca se oculta. */
+export function etiquetaConceptoFiscal(codigo: CodigoConceptoPrestacion | null): string {
+  return codigo ? ETIQUETAS_CODIGO_CONCEPTO_PRESTACION[codigo] : "Sin clasificar";
+}
 
 export default function PrestacionesPage() {
   const slug = String(useParams().slug);
@@ -26,6 +37,12 @@ export default function PrestacionesPage() {
   const [empleadoId, setEmpleadoId] = useState(0);
   const [tipo, setTipo] = useState("Bono");
   const [tipoOtro, setTipoOtro] = useState("");
+  // RRHH-PRESTACIONES-CODIGO-CONCEPTO: "" = sin seleccionar. Para creación
+  // es obligatorio antes de enviar (ver onSubmit); para edición, "" solo
+  // puede significar "este histórico ya tenía codigo_concepto = NULL y RRHH
+  // todavía no eligió uno" — nunca se envía como codigoConcepto: null al
+  // backend, se omite el campo por completo (ver onSubmit).
+  const [codigoConcepto, setCodigoConcepto] = useState<CodigoConceptoPrestacion | "">("");
   const [monto, setMonto] = useState(0);
   const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10));
   const [notas, setNotas] = useState("");
@@ -66,14 +83,26 @@ export default function PrestacionesPage() {
       setMsg("Escribe el tipo de devengado en 'Otro'.");
       return;
     }
+    // Obligatorio SOLO al crear — el backend exige codigoConcepto en POST
+    // (nunca null/""/desconocido). En edición puede quedar sin seleccionar
+    // si el histórico ya era NULL y RRHH todavía no lo clasifica.
+    if (!editandoId && !codigoConcepto) {
+      setMsg("Selecciona el concepto fiscal antes de guardar.");
+      return;
+    }
+    const body: Record<string, unknown> = { empleadoId, tipo: tipoFinal, monto, fecha, notas };
+    // Nunca se envía codigoConcepto: null — si no hay selección (solo
+    // posible en edición de un histórico NULL), el campo se omite por
+    // completo para que el backend lo deje tal cual (COALESCE).
+    if (codigoConcepto) body.codigoConcepto = codigoConcepto;
     const res = await fetch(
       editandoId
         ? `/api/empresas/${slug}/rrhh/prestaciones/${editandoId}`
         : `/api/empresas/${slug}/rrhh/prestaciones`,
       {
-      method: editandoId ? "PATCH" : "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ empleadoId, tipo: tipoFinal, monto, fecha, notas }),
+        method: editandoId ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
       },
     );
     const data = await res.json();
@@ -82,6 +111,7 @@ export default function PrestacionesPage() {
       setMonto(0);
       setNotas("");
       setTipoOtro("");
+      setCodigoConcepto("");
       setEditandoId(null);
       await cargar();
     }
@@ -93,6 +123,11 @@ export default function PrestacionesPage() {
     setEmpleadoId(row.id_empleado);
     setTipo(esCatalogo ? row.tipo : "Otro");
     setTipoOtro(esCatalogo ? "" : row.tipo);
+    // `tipo` (label libre) y `codigoConcepto` (clasificación fiscal) se
+    // cargan de forma completamente independiente — nunca se deriva el uno
+    // del otro. Un histórico con codigoConcepto null queda como "" (el
+    // selector lo muestra como "Sin clasificar (histórico)").
+    setCodigoConcepto(row.codigoConcepto ?? "");
     setMonto(Number(row.monto));
     setFecha(String(row.fecha).slice(0, 10));
     setNotas(row.notas ?? "");
@@ -104,6 +139,7 @@ export default function PrestacionesPage() {
     setMonto(0);
     setNotas("");
     setTipoOtro("");
+    setCodigoConcepto("");
   }
 
   async function anular(row: Prestacion) {
@@ -124,6 +160,10 @@ export default function PrestacionesPage() {
 
   const input =
     "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm";
+  // Editando un histórico que ya estaba sin clasificar (codigoConcepto null
+  // en BD) se distingue de "todavía no elegiste nada en un registro nuevo".
+  const placeholderConceptoFiscal =
+    editandoId && codigoConcepto === "" ? "Sin clasificar (histórico)" : "Seleccionar concepto fiscal";
 
   return (
     <div className="space-y-6">
@@ -170,6 +210,21 @@ export default function PrestacionesPage() {
             required
           />
         ) : null}
+        <label className="flex flex-col text-xs text-[var(--muted)]">
+          Concepto fiscal
+          <select
+            className={input}
+            value={codigoConcepto}
+            onChange={(e) => setCodigoConcepto(e.target.value as CodigoConceptoPrestacion | "")}
+          >
+            <option value="">{placeholderConceptoFiscal}</option>
+            {CODIGOS_CONCEPTO_PRESTACION.map((codigo) => (
+              <option key={codigo} value={codigo}>
+                {ETIQUETAS_CODIGO_CONCEPTO_PRESTACION[codigo]}
+              </option>
+            ))}
+          </select>
+        </label>
         <input
           type="number"
           step="0.01"
@@ -224,6 +279,9 @@ export default function PrestacionesPage() {
                 <span className="text-xs text-amber-300">Anulada</span>
               )}
             </div>
+            <p className="mt-1 text-xs text-[var(--muted)]">
+              Concepto fiscal: {etiquetaConceptoFiscal(r.codigoConcepto)}
+            </p>
             {r.notas ? <p className="mt-1 text-xs text-[var(--muted)]">{r.notas}</p> : null}
           </li>
         ))}
