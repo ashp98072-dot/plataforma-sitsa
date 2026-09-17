@@ -105,6 +105,7 @@ export const FLOTA_SUBMODULO_LABEL: Record<FlotaSubmodulo, string> = {
  * src/lib/tenant.ts (requireTenantViaticosAutorizar/Pagar/ViajesCerrar).
  */
 export const PLATAFORMA_PERMISIBLES = [
+  "compras_proveedores",
   "multas",
   "tms",
   "clientes",
@@ -288,6 +289,7 @@ export function esPlataformaPermisible(m: string): m is PlataformaPermisible {
  * null (no aplica este filtro — se rigen por otro mecanismo).
  */
 export function moduloEmpresaDelPermiso(m: string): Modulo | null {
+  if (m === "compras_proveedores") return "tms";
   if (m === "multas") return "tms";
   if (m === "flota_combustible") return "flota";
   if (
@@ -316,6 +318,7 @@ export function moduloEmpresaDelPermiso(m: string): Modulo | null {
 }
 
 export function labelPermiso(modulo: string): string {
+  if (modulo === "compras_proveedores") return "Compras: proveedores comerciales";
   if (modulo === "multas") return "Multas y sanciones";
   if (esRrhhSubmodulo(modulo)) return RRHH_SUBMODULO_LABEL[modulo];
   if (esFlotaSubmodulo(modulo)) return FLOTA_SUBMODULO_LABEL[modulo];
@@ -387,6 +390,7 @@ export const GRUPOS_PERMISOS: {
     descripcion:
       "Programación, TMS / logística, clientes, facturación de clientes, reciclaje, tarimas, viáticos (control, autorizar, pagar), gastos operativos / solicitudes de fondo y cierre administrativo de viajes.",
     modulos: [
+      "compras_proveedores",
       "programacion",
       "multas",
       "rutas",
@@ -559,7 +563,8 @@ export function modulosOtrasAreasDelRol(rol: RolGlobal): string[] {
 
 /** Catálogo completo editable para un rol (propios + cruzados). */
 export function catalogoPermisosRol(rol: RolGlobal): string[] {
-  return [...modulosPropiosDelRol(rol), ...modulosOtrasAreasDelRol(rol)];
+  // Asignable explícitamente, sin concederlo por rol ni por TMS.
+  return [...new Set([...modulosPropiosDelRol(rol), ...modulosOtrasAreasDelRol(rol), "compras_proveedores"])];
 }
 
 export function permisosDefaultPorRol(rol: RolGlobal): PermisoModulo[] {
@@ -742,6 +747,7 @@ export function modulosPlataformaDesdePermisos(
     // sistema (catálogo, editor de permisos, tienePermiso()).
     if (
       esPlataformaPermisible(p.modulo) &&
+      p.modulo !== "compras_proveedores" &&
       p.modulo !== "multas" &&
       p.modulo !== "viaticos" &&
       p.modulo !== "viaticos_autorizar" &&

@@ -432,6 +432,12 @@ export function AppShell({
         key: "portales-proveedores",
       });
     }
+    // No depender de tms:ver: el catálogo tiene permiso propio y su guard
+    // comprueba que la empresa tenga Operaciones habilitado.
+    if ((isAdmin && modulos.includes("tms")) || (!isAdmin && tienePermiso(permisos, "compras_proveedores", "ver"))) {
+      opsLinks.push({ href: `${base}/compras`, label: "Compras / Repuestos", key: "compras" });
+      opsLinks.push({ href: `${base}/compras/proveedores`, label: "Proveedores comerciales", key: "compras-proveedores" });
+    }
     const alcanceFact = alcanceFacturacion(rol);
     const puedeVerFact =
       isAdmin ||
