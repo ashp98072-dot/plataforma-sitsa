@@ -3,6 +3,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { TmsQuickLinks, TmsSummaryCards } from "@/components/tms/centro-logistico-resumen";
 import ViaticosConfigPanel from "@/components/tms/viaticos-config-panel";
 import ClienteUbicacionesAdmin from "@/components/tms/cliente-ubicaciones-admin";
 import ClienteContactosAdmin from "@/components/tms/cliente-contactos-admin";
@@ -11,29 +12,10 @@ import { tienePermiso } from "@/lib/permisos-shared";
 import { puedeCerrarManualmente } from "@/lib/tms/cierre-viaje-shared";
 
 /**
- * Operaciones → TMS / Logística — VIAT-1b/1c: centro de configuración/
- * administración/soporte operativo. Programación (src/app/e/[slug]/
- * programacion/) es la pantalla operativa diaria (crear/editar viajes,
- * asignar piloto/auxiliares/unidad, paradas, viáticos, estados) — esta
- * pantalla YA NO duplica ese formulario. Mismo backend/endpoints de
- * siempre, solo UI reorganizada en 3 secciones (VIAT-1c: se simplificó de
- * 4 a 3; VIAT-1/VIAT-2 agregaron temporalmente "Control de Viáticos" y
- * "Viáticos por pagar" aquí; VIAT-3 las traslada a su propio módulo
- * visible — Operaciones → Viáticos (src/app/e/[slug]/viaticos/) — porque
- * estaban "escondidas" dentro de TMS y el usuario no las encontraba. TMS
- * ya NO mantiene esas dos bandejas: solo conserva la configuración de
- * montos por puesto y un enlace directo al módulo):
- *   1. Configuración: viáticos predeterminados (ViaticosConfigPanel) +
- *      ubicaciones de clientes (ClienteUbicacionesAdmin) + enlace al
- *      módulo Viáticos para autorizar/pagar/liquidar.
- *   2. Viajes / control administrativo: tabla de solo lectura de
- *      GET /tms/planes con filtros, detalle y seguimiento de evidencias
- *      registradas desde el portal — no reasigna piloto/auxiliares/
- *      unidad/paradas, no cambia estado), enlace "Ver en Programación" y
- *      la bitácora de auditoría.
- *   3. Catálogos (clientes, unidades, pilotos, auxiliares, lugares) —
- *      resumen de solo lectura de GET /tms/catalogos, colapsado por
- *      defecto (<details>, sin JS adicional).
+ * Centro logístico: navegación, seguimiento con cierres administrativos
+ * sujetos a permisos, configuración y administración colapsable.
+ * Conserva las cargas, endpoints y acciones existentes; no duplica los
+ * formularios de Programación, Planes / Viajes ni Viáticos.
  */
 
 type ClienteCat = {
@@ -185,8 +167,7 @@ const POLLING_MS = 30_000;
 export default function TmsPage() {
   const slug = String(useParams().slug);
 
-  // --- Sección 3: catálogos (fuente única para el resumen y para el
-  // buscador de cliente de la sección 1) ---
+  // --- Catálogos: fuente única para consulta y administración de clientes ---
   const [clientesCat, setClientesCat] = useState<ClienteCat[]>([]);
   const [lugaresCat, setLugaresCat] = useState<LugarCat[]>([]);
   const [unidadesCat, setUnidadesCat] = useState<UnidadCat[]>([]);
@@ -212,7 +193,7 @@ export default function TmsPage() {
   const pilotosCat = useMemo(() => personalCat.filter((p) => p.tipo === "Piloto"), [personalCat]);
   const auxiliaresCat = useMemo(() => personalCat.filter((p) => p.tipo === "Auxiliar"), [personalCat]);
 
-  // --- Sección 2: viajes / control administrativo ---
+  // --- Seguimiento rápido / control administrativo ---
   const [planes, setPlanes] = useState<Plan[]>([]);
   const [loadingPlanes, setLoadingPlanes] = useState(true);
   const [fCodigo, setFCodigo] = useState("");
@@ -450,7 +431,7 @@ export default function TmsPage() {
     };
   }, [cargarEvidencias, expandido]);
 
-  // --- Bitácora (dentro de la sección 2 — administración avanzada de viajes) ---
+  // --- Bitácora: administración al final, carga manual existente ---
   const [bitacora, setBitacora] = useState<AudRow[]>([]);
   const [mostrarBitacora, setMostrarBitacora] = useState(false);
   const cargarBitacora = useCallback(async () => {
@@ -475,57 +456,28 @@ export default function TmsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">TMS / Logística</h1>
+        <h1 className="text-2xl font-semibold">Centro logístico</h1>
         <p className="text-sm text-[var(--muted)]">
-          Configuración, catálogos y consulta administrativa. Para crear o
-          editar un viaje (cliente, unidad, piloto, auxiliares, paradas,
-          viáticos, estado) usa{" "}
-          <Link href={`/e/${slug}/programacion`} className="text-[var(--accent)] underline">
-            Operaciones → Programación
-          </Link>
-          .
+          Accesos, seguimiento y configuración operativa de logística.
         </p>
       </div>
 
-      {/* 1. Configuración: viáticos predeterminados + ubicaciones de clientes + enlace al módulo Viáticos */}
-      <section className="space-y-3">
-        <h2 className="text-xs font-semibold uppercase tracking-[0.15em] text-[var(--muted)]">
-          1. Configuración
-        </h2>
-        <ViaticosConfigPanel slug={slug} />
-        <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-          <p className="text-sm">
-            Para autorizar, pagar/entregar o liquidar viáticos de cualquier viaje, usa el módulo
-            dedicado:
-          </p>
-          <Link
-            href={`/e/${slug}/viaticos`}
-            className="mt-2 inline-block rounded bg-[var(--accent)] px-3 py-1.5 text-xs font-medium text-white"
-          >
-            Ir al módulo Viáticos →
-          </Link>
-        </div>
-        <div id="cliente-contactos">
-          <ClienteContactosAdmin slug={slug} clientes={clientesCat} />
-        </div>
-        <ClienteUbicacionesAdmin slug={slug} clientes={clientesCat} />
-      </section>
+      <TmsQuickLinks slug={slug} />
+      <TmsSummaryCards planes={planesFiltrados} loading={loadingPlanes} />
 
-      {/* 2. Viajes / control administrativo (incluye bitácora) */}
       <section className="space-y-3">
-        <h2 className="text-xs font-semibold uppercase tracking-[0.15em] text-[var(--muted)]">
-          2. Viajes / control administrativo
+        <h2 className="text-lg font-semibold">
+          Seguimiento rápido
         </h2>
 
         <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
           <p className="text-xs text-[var(--muted)]">
-            TMS es solo consulta. Las evidencias las registra el piloto o personal asignado desde su portal.
-            El avance de la ruta y la última ubicación reportada se actualizan cada 5 segundos. Para filtros por
-            rango de fechas, indicadores del período, exportar Excel/PDF y cerrar viajes pendientes, usa{" "}
+            Consulta rápida de viajes. Para administración completa utiliza{" "}
             <Link href={`/e/${slug}/planes`} className="text-[var(--accent)] underline">
               Operaciones → Planes / Viajes →
             </Link>
-            .
+            . El seguimiento y las evidencias se actualizan cada 30 segundos mientras la pestaña está visible.
+            Los cierres administrativos disponibles aquí requieren el permiso correspondiente.
           </p>
 
           <div className="mt-3 flex flex-wrap items-end gap-2">
@@ -818,8 +770,32 @@ export default function TmsPage() {
           </div>
         </div>
 
+      </section>
+
+      <section className="space-y-3" aria-labelledby="configuracion-logistica">
+        <h2 id="configuracion-logistica" className="text-lg font-semibold">Configuración logística</h2>
+        <p className="text-sm text-[var(--muted)]">Montos predeterminados utilizados en la operación.</p>
+        <ViaticosConfigPanel slug={slug} />
+        <Link href={`/e/${slug}/viaticos`} className="inline-block text-sm text-[var(--accent)] underline">Ir al módulo Viáticos →</Link>
+      </section>
+
+      {/* Siguiente paso separado: evaluar la ubicación de estos componentes en Clientes sin duplicar lógica. */}
+      <details className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+        <summary className="cursor-pointer text-lg font-semibold">Administración de clientes</summary>
+        <p className="mt-2 text-sm text-[var(--muted)]">Contactos y ubicaciones operativas utilizadas por logística.</p>
+        <Link href={`/e/${slug}/clientes`} className="mt-2 inline-block text-sm text-[var(--accent)] underline">Operaciones → Clientes →</Link>
+        <div className="mt-3 space-y-3">
+          <div id="cliente-contactos">
+            <ClienteContactosAdmin slug={slug} clientes={clientesCat} />
+          </div>
+          <ClienteUbicacionesAdmin slug={slug} clientes={clientesCat} />
+        </div>
+      </details>
+
+      <section className="space-y-3" aria-labelledby="administracion-logistica">
+        <h2 id="administracion-logistica" className="text-lg font-semibold">Administración</h2>
         <details className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-          <summary className="cursor-pointer text-sm font-medium">Bitácora de rutas</summary>
+          <summary className="cursor-pointer text-sm font-medium">Bitácora de operaciones</summary>
           <p className="mt-1 text-[11px] text-[var(--muted)]">
             Quién crea, edita, cancela, sale, cierra o elimina evidencias — con fecha y hora.
           </p>
@@ -865,12 +841,10 @@ export default function TmsPage() {
             </div>
           ) : null}
         </details>
-      </section>
-
-      {/* 3. Catálogos — colapsado por defecto para no saturar la pantalla; el resumen de solo lectura no es lo primero que necesita el día a día. */}
+      {/* Catálogos: consulta y acceso rápido existente, colapsados por defecto. */}
       <details className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
         <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.15em] text-[var(--muted)]">
-          3. Catálogos
+          Catálogos operativos
         </summary>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
           <p className="text-sm font-medium">Clientes, unidades, personal y lugares</p>
@@ -943,6 +917,7 @@ export default function TmsPage() {
           </div>
         </div>
       </details>
+      </section>
     </div>
   );
 }
