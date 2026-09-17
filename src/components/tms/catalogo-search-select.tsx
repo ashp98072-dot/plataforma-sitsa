@@ -4,6 +4,12 @@ import { useId, useState } from "react";
 
 export type CatalogoSearchOption = { value: string; label: string; detail?: string; searchText?: string };
 
+/** Solo conserva la selección histórica; no incorpora otros usuarios fuera del catálogo. */
+export function opcionesConHistorico(options: CatalogoSearchOption[], value: string, nombre: string): CatalogoSearchOption[] {
+  return value && !options.some(o => o.value === value)
+    ? [{ value, label: `${nombre || "Sin dato histórico"} (histórico)` }, ...options] : options;
+}
+
 export function filtrarOpcionesBusqueda(opciones: CatalogoSearchOption[], texto: string, limite = 200): CatalogoSearchOption[] {
   const q = texto.trim().toLocaleLowerCase("es");
   if (!q) return opciones;

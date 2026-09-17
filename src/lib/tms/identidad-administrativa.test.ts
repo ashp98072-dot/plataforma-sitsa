@@ -4,6 +4,8 @@ import {
   CODIGOS_ENTIDAD_REQUIRIENTE,
   ROLES_SOLICITANTE_OPERACIONES,
   resolverEntidadRequirenteTx,
+  resolverRequirenteOperacionesTx,
+  esUsuarioOperaciones,
   resolverSolicitanteOperacionesTx,
   resolverUsuarioDeEmpresaTx,
   validarEmpleadoDeEmpresaTx,
@@ -20,6 +22,33 @@ import {
 function conn(respuesta: unknown[]): PoolConnection {
   return { query: vi.fn(async () => [respuesta]) } as unknown as PoolConnection;
 }
+
+describe("criterio único de usuario Operaciones y snapshots históricos", () => {
+  it.each(["Operaciones", "GerenteOperaciones", "JefeOperaciones", "AuxiliarOperaciones"])("rol %s aceptado", async rol => {
+    expect(esUsuarioOperaciones(rol)).toBe(true);
+    const c = conn([{ nombre: "Servidor", rol_global: rol }]);
+    expect(await resolverRequirenteOperacionesTx(c, 7, { requirenteUsuarioId: 9, requirenteNombre: "Inventado" })).toEqual({ nombre: "Servidor", rol });
+    expect(c.query).toHaveBeenCalledWith(expect.stringContaining("ue.empresa_id = ?"), [7, 9]);
+  });
+  it.each(["Admin", "Contabilidad", "Gerencia", "", null])("rol %s rechazado", async rol => {
+    expect(esUsuarioOperaciones(rol)).toBe(false);
+    await expect(resolverRequirenteOperacionesTx(conn([{ nombre: "Persona", rol_global: rol }]), 7, { requirenteUsuarioId: 9 })).rejects.toThrow("La persona que requiere debe ser un usuario de Operaciones.");
+  });
+  it("usuario ajeno o inactivo se rechaza con consulta tenant-safe", async () => {
+    const c = conn([]);
+    await expect(resolverRequirenteOperacionesTx(c, 7, { requirenteUsuarioId: 999 })).rejects.toThrow("usuario de Operaciones");
+    expect(c.query).toHaveBeenCalledWith(expect.stringContaining("u.activo = 1"), [7, 999]);
+  });
+  it.each([9, null])("histórico %s sin cambios no requiere revalidación", async id => {
+    const c = conn([]);
+    expect(await resolverRequirenteOperacionesTx(c, 7, { requirenteUsuarioId: id, requirenteNombre: "Anterior" }, { requirente_usuario_id: id, requirente_nombre: "Anterior" })).toBeNull();
+    expect(c.query).not.toHaveBeenCalled();
+  });
+  it("texto libre nuevo o cambio manual histórico rechazados", async () => {
+    await expect(resolverRequirenteOperacionesTx(conn([]), 7, { requirenteNombre: "Manual" })).rejects.toThrow("usuario de Operaciones");
+    await expect(resolverRequirenteOperacionesTx(conn([]), 7, { requirenteNombre: "Otro" }, { requirente_nombre: "Anterior" })).rejects.toThrow("usuario de Operaciones");
+  });
+});
 
 describe("validarEmpleadoDeEmpresaTx", () => {
   it("no hace nada si empleadoId es null/undefined (relación opcional)", async () => {

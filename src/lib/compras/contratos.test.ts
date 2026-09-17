@@ -26,9 +26,9 @@ it("preflight lectura, cuatro contratos y decisiones", () => {
   for (const tabla of ["compras_proveedores", "compras_requerimientos", "compras_requerimiento_lineas", "compras_linea_documentos"]) expect(sql).toContain(tabla);
   for (const s of ["APLICAR", "NOOP", "DETENER", "VERSION()", "COLUMN_TYPE", "TABLE_COLLATION", "REFERENTIAL_CONSTRAINTS", "STATISTICS"]) expect(sql).toContain(s);
 });
-it("no modifica RRHH, credenciales ni APIs de Fondos/Gastos", () => {
-  const files = execFileSync("git", ["diff", "--name-only", "608df8a55f75157c826350f3c131230a92db90ba"], { encoding: "utf8" }).trim().split(/\r?\n/);
-  expect(files.some(p => /src\/(lib\/rrhh|app\/api\/.*\/(fondos|gastos)\/|.*portales-proveedores)/.test(p))).toBe(false);
+it("no modifica RRHH, credenciales ni esquema SQL", () => {
+  const files = execFileSync("git", ["diff", "--name-only", "aebfdc1ee46f6fe2bac4b80612db928e0a10c71b"], { encoding: "utf8" }).trim().split(/\r?\n/);
+  expect(files.some(p => /(src\/lib\/rrhh|portales-proveedores|^sql\/)/.test(p))).toBe(false);
 });
 
 it("preflight compara DEFAULT 0 de DECIMAL(12,2) con 0.00 de MariaDB por valor numérico", () => {

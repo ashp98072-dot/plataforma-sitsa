@@ -10,6 +10,7 @@ import { normalizarDestinoPago } from "@/lib/tms/gastos";
 import { destinoPagoEmpleado } from "./destino-pago-empleado";
 import {
   resolverEntidadRequirenteTx,
+  resolverRequirenteOperacionesTx,
   resolverSolicitanteOperacionesTx,
   resolverUsuarioDeEmpresaTx,
   validarEmpleadoDeEmpresaTx,
@@ -382,13 +383,9 @@ export type SolicitudFondoInput = {
   requirenteEmpleadoId?: number | null;
   requirenteNombre?: string | null;
   /**
-   * SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§3 del ticket) — OPCIONAL: cuando
-   * el requirente corresponde a un usuario real del sistema (no solo un
-   * empleado RRHH sin login), seleccionable desde el catálogo. Permite
-   * que el PDF autorizado muestre su nombre real + firma manuscrita
-   * (snapshot capturado aquí, ver crearSolicitudFondo). Sin este campo,
-   * el requirente sigue siendo únicamente texto libre/empleado — nunca
-   * se inventa una firma para ese caso.
+   * Nuevas solicitudes requieren usuario de Operaciones del tenant.
+   * El tipo opcional conserva compatibilidad de lectura/edición de históricos;
+   * no habilita nuevas identidades de texto libre o empleados sin usuario.
    */
   requirenteUsuarioId?: number | null;
   /** Usuario de Operaciones que solicita el fondo; se elige explícitamente y nunca se infiere de la sesión. */
@@ -419,7 +416,7 @@ export async function crearSolicitudFondo(
 ): Promise<SolicitudFondo> {
   if (!input.fechaRequerimiento) throw new Error("Fecha de requerimiento requerida.");
   if (!input.requirenteEmpleadoId && !input.requirenteUsuarioId && !input.requirenteNombre?.trim()) {
-    throw new Error("Requirente requerido (empleado, usuario o nombre).");
+    throw new Error("Requirente requerido: selecciona un usuario de Operaciones.");
   }
   if (!input.lineas.length) throw new Error("La solicitud necesita al menos una línea de gasto.");
   for (const l of input.lineas) {
@@ -442,15 +439,9 @@ export async function crearSolicitudFondo(
       : await resolverEntidadRequirenteTx(conn, empresaId, input.entidadRequirenteId);
     await validarEmpleadoDeEmpresaTx(conn, empresaId, input.requirenteEmpleadoId, "requirente");
 
-    // §3 del ticket — requirente-usuario OPCIONAL: si viene, DEBE
-    // pertenecer a esta empresa (nunca se acepta un usuario de otro
-    // tenant aunque el id exista) y su nombre real resuelto por el
-    // servidor manda sobre cualquier texto libre enviado.
-    let requirenteUsuario: { nombre: string; rol: string | null } | null = null;
-    if (input.requirenteUsuarioId != null) {
-      requirenteUsuario = await resolverUsuarioDeEmpresaTx(conn, empresaId, input.requirenteUsuarioId);
-      if (!requirenteUsuario) throw new Error("El usuario requirente indicado no pertenece a esta empresa.");
-    }
+    // Requirente nuevo: usuario activo de Operaciones con acceso al tenant.
+    // El servidor obtiene el nombre; nunca utiliza el texto enviado.
+    const requirenteUsuario = await resolverRequirenteOperacionesTx(conn, empresaId, input);
     const solicitanteId = input.solicitanteUsuarioId ?? solicitanteLegado?.usuarioId ?? null;
     const solicitanteUsuario = solicitanteId == null ? null
       : input.solicitanteUsuarioId != null
@@ -629,13 +620,9 @@ export async function actualizarSolicitudFondo(
     // resuelve su nombre real; una nueva firma snapshot (REQUERIR_FONDO)
     // se captura solo si de verdad cambió (nunca se re-firma sin razón
     // en cada edición).
-    let requirenteUsuario: { nombre: string; rol: string | null } | null = null;
     const requirenteUsuarioCambio = input.requirenteUsuarioId !== undefined
       && input.requirenteUsuarioId !== (actual.requirente_usuario_id != null ? Number(actual.requirente_usuario_id) : null);
-    if (input.requirenteUsuarioId != null) {
-      requirenteUsuario = await resolverUsuarioDeEmpresaTx(conn, empresaId, input.requirenteUsuarioId);
-      if (!requirenteUsuario) throw new Error("El usuario requirente indicado no pertenece a esta empresa.");
-    }
+    const requirenteUsuario = await resolverRequirenteOperacionesTx(conn, empresaId, input, actual);
     let solicitanteUsuario: { nombre: string; rol: string | null } | null = null;
     const solicitanteUsuarioCambio = input.solicitanteUsuarioId !== undefined
       && input.solicitanteUsuarioId !== (actual.solicitante_usuario_id != null ? Number(actual.solicitante_usuario_id) : null);
@@ -656,10 +643,10 @@ export async function actualizarSolicitudFondo(
       [
         entidadRequirente?.id ?? actual.entidad_requirente_id,
         entidadRequirente?.nombre ?? actual.entidad_requirente_nombre,
-        input.requirenteEmpleadoId !== undefined ? input.requirenteEmpleadoId ?? null : actual.requirente_empleado_id,
+        requirenteUsuarioCambio ? null : actual.requirente_empleado_id,
         requirenteUsuario
           ? requirenteUsuario.nombre
-          : (input.requirenteNombre !== undefined ? input.requirenteNombre?.trim() || null : actual.requirente_nombre),
+          : actual.requirente_nombre,
         input.requirenteUsuarioId !== undefined ? input.requirenteUsuarioId ?? null : actual.requirente_usuario_id,
         ...actualizarSolicitanteParams,
         input.fechaRequerimiento ?? actual.fecha_requerimiento,

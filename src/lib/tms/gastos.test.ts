@@ -86,6 +86,25 @@ function filaGastoRaw(overrides: Record<string, unknown> = {}) {
 }
 
 /** GASTOS-ADMINISTRATIVO-1 (Fase 2) — fila mínima que autorizarGasto/rechazarGasto relee FOR UPDATE. */
+describe("regresión requirente de Operaciones Gastos", () => {
+  it.each(["Contabilidad", "Admin", "Gerencia"])("rechaza nuevo requirente %s sin escritura", async rol => {
+    const c = conexion({ usuarioRol: rol });
+    await expect(crearGasto(7, { fechaSolicitud: "2026-09-01", categoria: "Otros", monto: 10, requirenteUsuarioId: 9 })).rejects.toThrow("usuario de Operaciones");
+    expect(c.execute).not.toHaveBeenCalled(); expect(c.rollback).toHaveBeenCalledOnce();
+  });
+  it.each([9, null])("preserva histórico %s fuera del catálogo al editar otros datos", async id => {
+    const c = conexion({ actualRaw: filaGastoRaw({ requirente_usuario_id: id, requirente_nombre: "Anterior" }), usuarioRol: "Contabilidad" });
+    vi.mocked(query).mockResolvedValue([filaGasto()] as never);
+    await actualizarGasto(7, 1, { observaciones: "Otra edición", requirenteUsuarioId: id, requirenteNombre: "Anterior" });
+    expect(c.query.mock.calls.some(([sql]) => String(sql).includes("FROM usuarios"))).toBe(false);
+    expect(c.execute.mock.calls.find(([sql]) => String(sql).includes("UPDATE tms_gastos_operativos"))?.[1]).toContain("Anterior");
+  });
+  it("cambiar histórico a usuario no Operaciones rechaza antes de escrituras", async () => {
+    const c = conexion({ actualRaw: filaGastoRaw({ requirente_usuario_id: 8 }), usuarioRol: "Contabilidad" });
+    await expect(actualizarGasto(7, 1, { requirenteUsuarioId: 9 })).rejects.toThrow("usuario de Operaciones");
+    expect(c.execute).not.toHaveBeenCalled();
+  });
+});
 function filaGastoBloqueo(overrides: Record<string, unknown> = {}) {
   return {
     id: 1, estado: "Pendiente", requirente_usuario_id: null, solicitante_usuario_id: null, creado_por: "admin",
@@ -512,7 +531,7 @@ describe("crearGasto", () => {
       conexion({ usuarioEnEmpresa: false });
       await expect(crearGasto(7, {
         fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, requirenteUsuarioId: 999,
-      })).rejects.toThrow("El usuario requirente indicado no pertenece a esta empresa.");
+      })).rejects.toThrow("La persona que requiere debe ser un usuario de Operaciones.");
     });
 
     it("solicitanteUsuarioId sin rol de Operaciones se rechaza (resolverSolicitanteOperacionesTx)", async () => {
@@ -567,7 +586,7 @@ describe("crearGasto", () => {
     });
 
     it("requirente asociado a un usuario del catálogo: resuelve su nombre real y captura su firma", async () => {
-      conexion({ usuarioNombre: "Ana Gómez", usuarioRol: "Gerencia" });
+      conexion({ usuarioNombre: "Ana Gómez", usuarioRol: "GerenteOperaciones" });
       vi.mocked(query).mockResolvedValue([filaGasto({ id: 55 })] as never);
       vi.mocked(leerBytesFirmaGuardada).mockResolvedValue(IMAGEN_FIRMA as never);
       await crearGasto(7, {
@@ -578,16 +597,15 @@ describe("crearGasto", () => {
       }));
     });
 
-    it("requirente SIN usuario asociado (texto libre): no intenta resolver ni capturar ninguna firma", async () => {
+    it("texto libre nuevo rechazado sin escrituras ni captura de firma", async () => {
       const conn = conexion();
       vi.mocked(query).mockResolvedValue([filaGasto({ id: 55 })] as never);
-      await crearGasto(7, {
+      await expect(crearGasto(7, {
         fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, requirenteNombre: "Juan Pérez (texto libre)",
-      });
+      })).rejects.toThrow("La persona que requiere debe ser un usuario de Operaciones.");
       expect(leerBytesFirmaGuardada).not.toHaveBeenCalled();
       expect(crearFirmaInterna).not.toHaveBeenCalled();
-      const insert = conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_gastos_operativos"))!;
-      expect(insert[1]).toContain("Juan Pérez (texto libre)");
+      expect(conn.execute).not.toHaveBeenCalled();
     });
 
     it("si falla la transacción después de guardar las firmas, se compensan (borran) los archivos escritos", async () => {
@@ -839,7 +857,7 @@ describe("actualizarGasto / desactivarGasto", () => {
     it("cambia requirenteUsuarioId -> captura snapshot REQUERIR_GASTO si tiene 'Mi firma'", async () => {
       const conn = conexion({
         actualRaw: filaGastoRaw({ estado: "Pendiente", requirente_usuario_id: null }),
-        usuarioNombre: "Ana Gómez", usuarioRol: "Gerencia",
+        usuarioNombre: "Ana Gómez", usuarioRol: "GerenteOperaciones",
       });
       vi.mocked(query).mockResolvedValue([filaGasto({ estado: "Pendiente" })] as never);
       vi.mocked(leerBytesFirmaGuardada).mockResolvedValue(IMAGEN_FIRMA as never);

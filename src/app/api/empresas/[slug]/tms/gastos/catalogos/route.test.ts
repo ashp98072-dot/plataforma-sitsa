@@ -56,6 +56,7 @@ describe("GET catálogos de Gastos/Fondos", () => {
     }]);
     expect(body.usuarios).toHaveLength(2);
     expect(body.solicitantes).toEqual([{ id: 5, nombre: "Operador Uno" }]);
+    expect(body.usuariosOperaciones).toEqual(body.solicitantes);
     expect(body.entidadesRequirentes).toEqual([
       { id: 10, codigo: "KT", nombre: "Kuiqtrans" },
       { id: 11, codigo: "MONACO", nombre: "Logiservicios Mónaco" },

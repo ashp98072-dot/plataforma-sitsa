@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { CatalogoSearchSelect, type CatalogoSearchOption } from "@/components/tms/catalogo-search-select";
+import { CatalogoSearchSelect, opcionesConHistorico, type CatalogoSearchOption } from "@/components/tms/catalogo-search-select";
 import { destinoPagoEmpleado } from "@/lib/tms/destino-pago-empleado";
 import { MAX_UPLOAD_BYTES } from "@/lib/uploads-constants";
 import { MESES_ES } from "@/lib/tms/reportes-mes";
@@ -103,6 +103,7 @@ type Catalogos = {
   clientes: { id: number; codigo?: string | null; nombre: string; nit?: string | null }[];
   planes: PlanCatalogo[];
   usuarios: { id: number; nombre: string }[];
+  usuariosOperaciones: { id: number; nombre: string }[];
   solicitantes: { id: number; nombre: string }[];
   entidadesRequirentes: { id: number; codigo: string; nombre: string }[];
 };
@@ -179,7 +180,7 @@ export default function GastosPage() {
   const [gastos, setGastos] = useState<Gasto[]>([]);
   const [categorias, setCategorias] = useState<string[]>([]);
   const [metodosPago, setMetodosPago] = useState<string[]>([]);
-  const [catalogos, setCatalogos] = useState<Catalogos>({ empleados: [], vehiculos: [], clientes: [], planes: [], usuarios: [], solicitantes: [], entidadesRequirentes: [] });
+  const [catalogos, setCatalogos] = useState<Catalogos>({ empleados: [], vehiculos: [], clientes: [], planes: [], usuarios: [], usuariosOperaciones: [], solicitantes: [], entidadesRequirentes: [] });
   const opcionesUsuarios = (usuarios: { id: number; nombre: string }[]): CatalogoSearchOption[] => usuarios.map((u) => ({ value: String(u.id), label: u.nombre }));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -196,6 +197,7 @@ export default function GastosPage() {
 
   const [mostrarForm, setMostrarForm] = useState(false);
   const [editandoId, setEditandoId] = useState<number | null>(null);
+  const [requirenteHistorico, setRequirenteHistorico] = useState<{ id: string; nombre: string }>({ id: "", nombre: "" });
   const [form, setForm] = useState(FORM_VACIO);
   /** GASTOS-MULTIPLES-LINEAS-1 — líneas ADICIONALES a "Línea 1" (los campos de `form`); `[]` = gasto simple, comportamiento idéntico al actual. */
   const [lineasAdicionales, setLineasAdicionales] = useState<LineaGastoForm[]>([]);
@@ -225,7 +227,7 @@ export default function GastosPage() {
       setMetodosPago(dGastos.metodosPago ?? []);
       if (rCat.ok) setCatalogos({
         empleados: dCat.empleados ?? [], vehiculos: dCat.vehiculos ?? [], clientes: dCat.clientes ?? [], planes: dCat.planes ?? [],
-        usuarios: dCat.usuarios ?? [], solicitantes: dCat.solicitantes ?? [], entidadesRequirentes: dCat.entidadesRequirentes ?? [],
+        usuarios: dCat.usuarios ?? [], usuariosOperaciones: dCat.usuariosOperaciones ?? dCat.solicitantes ?? [], solicitantes: dCat.solicitantes ?? [], entidadesRequirentes: dCat.entidadesRequirentes ?? [],
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error al cargar.");
@@ -240,7 +242,7 @@ export default function GastosPage() {
   }, [cargar]);
 
   function nuevo() {
-    setEditandoId(null);
+    setEditandoId(null); setRequirenteHistorico({ id: "", nombre: "" });
     setForm(FORM_VACIO);
     setLineasAdicionales([]);
     setComprobante(null);
@@ -264,6 +266,7 @@ export default function GastosPage() {
     if (!res.ok) { setError(data.error ?? "No se pudo cargar el gasto para editarlo."); return; }
     const g = data.gasto as Gasto;
     setEditandoId(g.id);
+    setRequirenteHistorico({ id: String(g.requirenteUsuarioId ?? ""), nombre: g.requirenteNombre ?? "" });
     const lineasGuardadas = g.lineas ?? [];
     const primeraLinea = lineasGuardadas[0];
     setForm({
@@ -351,8 +354,7 @@ export default function GastosPage() {
       // NO acepta `null` (mismo contrato que SolicitudFondoInput en
       // Fondos) — se manda `undefined` para "no seleccionada", nunca `null`.
       entidadRequirenteId: form.entidadRequirenteId || undefined,
-      requirenteUsuarioId: form.requirenteUsuarioId || null,
-      requirenteNombre: form.requirenteNombre.trim() || null,
+      ...(editandoId && String(form.requirenteUsuarioId || "") === requirenteHistorico.id ? {} : { requirenteUsuarioId: form.requirenteUsuarioId || null }),
       solicitanteUsuarioId: form.solicitanteUsuarioId || null,
       // GASTOS-MULTIPLES-LINEAS-1 — SIN líneas adicionales, se omite
       // `lineas` por completo: el gasto se crea/edita EXACTAMENTE igual
@@ -501,7 +503,8 @@ export default function GastosPage() {
                 {catalogos.entidadesRequirentes.map((entidad) => <option key={entidad.id} value={entidad.id}>{entidad.nombre}</option>)}
               </select>
             </label>
-            <CatalogoSearchSelect label="Requirente" placeholder="Buscar requirente..." value={String(form.requirenteUsuarioId || "")} manualText={form.requirenteNombre} options={opcionesUsuarios(catalogos.usuarios)} inputClassName={inputCls} onTextChange={(text) => setForm((f) => ({ ...f, requirenteNombre: text }))} onChange={(value) => setForm((f) => ({ ...f, requirenteUsuarioId: Number(value) || 0, requirenteNombre: value ? "" : f.requirenteNombre }))} />
+            <CatalogoSearchSelect label="Requirente" placeholder="Buscar requirente..." value={String(form.requirenteUsuarioId || "")} options={opcionesConHistorico(opcionesUsuarios(catalogos.usuariosOperaciones), String(form.requirenteUsuarioId || "") === requirenteHistorico.id ? requirenteHistorico.id : "", requirenteHistorico.nombre)} inputClassName={inputCls} onChange={(value) => setForm((f) => ({ ...f, requirenteUsuarioId: Number(value) || 0, requirenteNombre: value ? "" : f.requirenteNombre }))} />
+            {editandoId && !requirenteHistorico.id && <p>Requirente histórico: {requirenteHistorico.nombre || "Sin dato histórico"}</p>}
             <CatalogoSearchSelect label="Solicitante" placeholder="Buscar solicitante de Operaciones..." value={String(form.solicitanteUsuarioId || "")} options={opcionesUsuarios(catalogos.solicitantes)} inputClassName={inputCls} onChange={(value) => setForm((f) => ({ ...f, solicitanteUsuarioId: Number(value) || 0 }))} />
             <label className="text-xs text-[var(--muted)]">Fecha solicitud
               <input type="date" className={`${inputCls} mt-0.5 w-full`} value={form.fechaSolicitud} onChange={(e) => setForm((f) => ({ ...f, fechaSolicitud: e.target.value }))} />

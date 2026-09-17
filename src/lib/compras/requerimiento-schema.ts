@@ -42,13 +42,13 @@ export const crearRequerimientoSchema = z.object(cabecera).strict().superRefine(
   validarLineas(datos, ctx);
   if (datos.lineas.some(l => l.id !== undefined)) ctx.addIssue({ code: "custom", path: ["lineas"], message: "Las líneas nuevas no pueden incluir ID." });
 });
-export const editarRequerimientoSchema = z.object({ ...cabecera, version: idCompra }).strict().superRefine(validarLineas);
+export const editarRequerimientoSchema = z.object({ ...cabecera, requirente_usuario_id: idCompra.nullable(), version: idCompra }).strict().superRefine(validarLineas);
 export const filtrosCompraSchema = z.object({
   codigo: z.string().trim().max(40).default(""), desde: fechaCompra.optional(), hasta: fechaCompra.optional(),
   estado: z.enum(ESTADOS_COMPRAS).optional(), proveedor_id: z.coerce.number().int().positive().max(2147483647).optional(),
 }).strict().refine(v => !v.desde || !v.hasta || v.desde <= v.hasta, "El rango de fechas no es válido.");
 export type LineaCompraDatos = z.infer<typeof lineaCompraSchema>;
-export type RequerimientoDatos = z.infer<typeof crearRequerimientoSchema> & { version?: number };
+export type RequerimientoDatos = Omit<z.infer<typeof crearRequerimientoSchema>, "requirente_usuario_id"> & { requirente_usuario_id: number | null; version?: number };
 export type FiltrosCompra = z.infer<typeof filtrosCompraSchema>;
 export type LineaCompra = LineaCompraDatos & {
   id: number; proveedor_nombre_snapshot: string; proveedor_razon_social_snapshot: string | null;

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
-import { resolverUsuarioDeEmpresaTx } from "@/lib/tms/identidad-administrativa";
+import { esUsuarioOperaciones, ERROR_REQUIRIENTE_OPERACIONES, resolverUsuarioDeEmpresaTx, resolverSolicitanteOperacionesTx } from "@/lib/tms/identidad-administrativa";
 import { normalizarMetodoPagoCompra } from "./metodos-pago";
 import { centavosCompra, importeCompra, type DetalleCompra, type FiltrosCompra, type LineaCompra, type RequerimientoCompra, type RequerimientoDatos } from "./requerimiento-schema";
 
@@ -42,10 +42,11 @@ export async function catalogosCompra(empresaId: number) {
     query<RowDataPacket[]>(`SELECT id, placa, descripcion, marca, modelo FROM flota_vehiculos WHERE empresa_id = ? AND activo = 1 ORDER BY placa, id`, [empresaId]),
     // El helper de Fondos/Gastos limita códigos KT/MONACO; Compras usa entidades reales del tenant, sin nombres/códigos hardcodeados.
     query<RowDataPacket[]>(`SELECT id, nombre FROM cont_entidades WHERE empresa_id = ? AND activa = 1 ORDER BY nombre, id`, [empresaId]),
-    query<RowDataPacket[]>(`SELECT DISTINCT u.id, u.nombre FROM usuarios u LEFT JOIN usuario_empresa ue ON ue.usuario_id = u.id AND ue.empresa_id = ?
+    query<RowDataPacket[]>(`SELECT DISTINCT u.id, u.nombre, u.rol_global FROM usuarios u LEFT JOIN usuario_empresa ue ON ue.usuario_id = u.id AND ue.empresa_id = ?
       WHERE u.activo = 1 AND u.nombre IS NOT NULL AND TRIM(u.nombre) <> '' AND (ue.usuario_id IS NOT NULL OR u.acceso_todas_empresas = 1) ORDER BY u.nombre, u.id`, [empresaId]),
   ]);
-  return { proveedores, vehiculos, entidades, usuarios };
+  const opciones = (rows: RowDataPacket[]) => rows.map(r => ({ id: Number(r.id), nombre: String(r.nombre) }));
+  return { proveedores, vehiculos, entidades, usuarios: opciones(usuarios), requirentesOperaciones: opciones(usuarios.filter(r => esUsuarioOperaciones(r.rol_global))) };
 }
 export async function guardarRequerimiento(empresaId: number, usuarioId: number, usuario: string,
   datos: RequerimientoDatos, puedeEliminar: boolean, id?: number) {
@@ -55,7 +56,7 @@ export async function guardarRequerimiento(empresaId: number, usuarioId: number,
     let antes: RowDataPacket | undefined;
     let existentes: RowDataPacket[] = [];
     if (id !== undefined) {
-      const [rows] = await conn.query<RowDataPacket[]>(`SELECT id, codigo, estado, total, version, encargado_compras_usuario_id, encargado_compras_nombre FROM compras_requerimientos WHERE empresa_id = ? AND id = ? FOR UPDATE`, [empresaId, id]);
+      const [rows] = await conn.query<RowDataPacket[]>(`SELECT id, codigo, estado, total, version, requirente_usuario_id, requirente_nombre, encargado_compras_usuario_id, encargado_compras_nombre FROM compras_requerimientos WHERE empresa_id = ? AND id = ? FOR UPDATE`, [empresaId, id]);
       antes = rows[0];
       if (!antes) throw new ErrorCompra("Requerimiento no encontrado.", 404);
       if (Number(antes.version) !== datos.version) throw new ErrorCompra(CONFLICTO_COMPRA, 409);
@@ -74,8 +75,10 @@ export async function guardarRequerimiento(empresaId: number, usuarioId: number,
     }
     const [entidades] = await conn.query<RowDataPacket[]>(`SELECT id, nombre FROM cont_entidades WHERE empresa_id = ? AND id = ? AND activa = 1 LOCK IN SHARE MODE`, [empresaId, datos.entidad_requirente_id]);
     if (!entidades[0]) throw new ErrorCompra("La empresa requirente no es válida o no pertenece a esta empresa.");
-    const requirente = await resolverUsuarioDeEmpresaTx(conn, empresaId, datos.requirente_usuario_id);
-    if (!requirente) throw new ErrorCompra("La persona que requiere no tiene acceso a esta empresa.");
+    const conservaRequirente = antes && datos.requirente_usuario_id === (antes.requirente_usuario_id == null ? null : Number(antes.requirente_usuario_id));
+    const requirente = conservaRequirente && antes ? { nombre: antes.requirente_nombre ?? null }
+      : await resolverSolicitanteOperacionesTx(conn, empresaId, datos.requirente_usuario_id);
+    if (!requirente) throw new ErrorCompra(ERROR_REQUIRIENTE_OPERACIONES);
     const solicitante = !antes ? await resolverUsuarioDeEmpresaTx(conn, empresaId, usuarioId) : null;
     if (!antes && !solicitante) throw new ErrorCompra("El solicitante no tiene acceso a esta empresa.");
     const encargadoId = datos.encargado_compras_usuario_id === undefined ? antes?.encargado_compras_usuario_id ?? null : datos.encargado_compras_usuario_id;

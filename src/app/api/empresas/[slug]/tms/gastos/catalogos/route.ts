@@ -3,6 +3,7 @@ import type { RowDataPacket } from "mysql2";
 import { query, type SqlParams } from "@/lib/db";
 import { requireTenantGastos } from "@/lib/tenant";
 import { CATEGORIAS_GASTO, METODOS_PAGO_GASTO } from "@/lib/tms/gastos";
+import { esUsuarioOperaciones } from "@/lib/tms/identidad-administrativa";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -99,7 +100,8 @@ export async function GET(_req: Request, ctx: Ctx) {
         empleadoTelefono: r.empleado_telefono != null ? String(r.empleado_telefono) : null,
       })),
       usuarios: usuarios.map((r) => ({ id: Number(r.id), nombre: String(r.nombre) })),
-      solicitantes: usuarios.filter((r) => ["Operaciones", "GerenteOperaciones", "JefeOperaciones", "AuxiliarOperaciones"].includes(String(r.rol_global ?? ""))).map((r) => ({ id: Number(r.id), nombre: String(r.nombre) })),
+      usuariosOperaciones: usuarios.filter((r) => esUsuarioOperaciones(r.rol_global)).map((r) => ({ id: Number(r.id), nombre: String(r.nombre) })),
+      solicitantes: usuarios.filter((r) => esUsuarioOperaciones(r.rol_global)).map((r) => ({ id: Number(r.id), nombre: String(r.nombre) })),
       entidadesRequirentes: entidadesRequirentes.map((r) => ({ id: Number(r.id), codigo: String(r.codigo), nombre: String(r.nombre) })),
       // FONDOS-GASTOS-METODO-PAGO-1 — catálogo compartido: Fondos ya
       // reutiliza este endpoint para empleados/vehículos/clientes/planes,
