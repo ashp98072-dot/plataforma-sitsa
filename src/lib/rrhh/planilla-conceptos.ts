@@ -28,6 +28,17 @@ const fiscalSnapshotSchema = z.object({
   fechaCorte: z.string(),
   inputUsado: z.unknown(),
   resultado: z.unknown(),
+  // Corrección de regla de negocio + revisión externa (segunda ronda,
+  // punto 3): valor de ISR REALMENTE aplicado a ESTA línea. En 2026 el ISR
+  // NO se reparte entre quincenas — se cobra una sola vez al mes: Q0.00 en
+  // QUINCENA_1, el ISR completo del mes en QUINCENA_2/MENSUAL/ESPECIAL.
+  // Distinto de `resultado.retencionSugerida` (el cálculo mensual del
+  // motor, antes de decidir en qué período del mes se cobra). Comparar
+  // `isr` persistido contra ESTE campo (no contra retencionSugerida) es lo
+  // único que detecta correctamente un ajuste manual, sin marcar falso
+  // positivo en QUINCENA_1 (cuyo automático legítimamente vale 0.00).
+  // Formato "0.00" — mismo criterio que el resto de montos fiscales.
+  isrAplicadoPeriodo: z.string().regex(/^\d+\.\d{2}$/),
 }).strict();
 export type FiscalSnapshot2026 = z.infer<typeof fiscalSnapshotSchema>;
 export const snapshotSchema = pendientesSchema.extend({

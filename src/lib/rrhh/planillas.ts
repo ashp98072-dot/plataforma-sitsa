@@ -925,20 +925,6 @@ export async function generarLineasPeriodo(
         isrMensual = calcularISRMensual(sueldo, bonoInc, anioFiscal);
       }
 
-      const snapshot: ConceptosSnapshot = fiscal2026
-        ? {
-            version: 2, empresaId, periodoId, empleadoId: empId, sueldoMensual: sueldo, ...conceptosEmpleado,
-            fiscal: {
-              motor: "ISR_TRABAJO_2026", ejercicio: EJERCICIO_MOTOR_ISR_2026,
-              antecedenteRevision: fiscal2026.antecedenteRevision,
-              parametrosRevision: fiscal2026.resultado.parametrosRevision,
-              fechaCorte: periodo.fechaInicio,
-              inputUsado: fiscal2026.input,
-              resultado: fiscal2026.resultado,
-            },
-          }
-        : { version: 1, empresaId, periodoId, empleadoId: empId, sueldoMensual: sueldo, ...conceptosEmpleado };
-
       let sueldoLinea: number;
       let bonoIncLinea: number;
       let bonoHerrLinea: number;
@@ -992,6 +978,23 @@ export async function generarLineasPeriodo(
         }
       }
 
+      // CORRECCIÓN DE REGLA DE NEGOCIO (2026): el ISR NO se reparte entre
+      // quincenas — en esta operación se descuenta UNA SOLA VEZ AL MES.
+      // QUINCENA_1 siempre aplica Q0.00 de ISR; QUINCENA_2 aplica el ISR
+      // completo del mes (el adapter ya no resta ISR de Q1 al calcularlo:
+      // Q1 nunca aporta ISR retenido, ver planilla-fiscal-2026.ts). MENSUAL
+      // y ESPECIAL ya cobran el mes completo sin repartir (isr = isrMensual
+      // arriba), así que no necesitan ajuste adicional. Esto SOLO aplica al
+      // ejercicio 2026 (motor nuevo); otros ejercicios conservan el reparto
+      // a la mitad + reconciliación de siempre, sin ningún cambio.
+      if (anioFiscal === EJERCICIO_MOTOR_ISR_2026 && !out) {
+        if (periodo.tipoPeriodo === "QUINCENA_1") {
+          isr = 0;
+        } else if (periodo.tipoPeriodo === "QUINCENA_2") {
+          isr = isrMensual;
+        }
+      }
+
       const forma = anterior
         ? anterior.formaPago
         : normalizarFormaPago(String(e.forma_pago ?? "transferencia"));
@@ -1005,6 +1008,32 @@ export async function generarLineasPeriodo(
       // comportamiento que ya tenían sueldo/bonos/IGSS antes de este cambio,
       // ahora extendido a ISR solo para este ejercicio.
       if (anterior && anioFiscal !== EJERCICIO_MOTOR_ISR_2026) isr = anterior.isr;
+
+      // RRHH-PLANILLAS-ISR-2026-INTEGRACION: el snapshot se arma AQUÍ, ya
+      // con `isr` resuelto (Q0.00 en QUINCENA_1; completo del mes en
+      // QUINCENA_2/MENSUAL/ESPECIAL — ver corrección de regla de negocio
+      // arriba) — nunca antes. `isrAplicadoPeriodo` guarda ESE valor final,
+      // distinto de `fiscal2026.resultado.retencionSugerida` (el cálculo
+      // mensual del motor, antes de decidir en qué período del mes se
+      // cobra) — es contra `isrAplicadoPeriodo` que autorizarPeriodoPlanilla
+      // debe comparar para detectar un ajuste manual, no contra
+      // retencionSugerida (eso marcaría falso positivo en QUINCENA_1, cuyo
+      // ISR automático legítimamente vale 0, no el mensual completo).
+      const snapshot: ConceptosSnapshot = fiscal2026
+        ? {
+            version: 2, empresaId, periodoId, empleadoId: empId, sueldoMensual: sueldo, ...conceptosEmpleado,
+            fiscal: {
+              motor: "ISR_TRABAJO_2026", ejercicio: EJERCICIO_MOTOR_ISR_2026,
+              antecedenteRevision: fiscal2026.antecedenteRevision,
+              parametrosRevision: fiscal2026.resultado.parametrosRevision,
+              fechaCorte: periodo.fechaInicio,
+              inputUsado: fiscal2026.input,
+              resultado: fiscal2026.resultado,
+              isrAplicadoPeriodo: isr.toFixed(2),
+            },
+          }
+        : { version: 1, empresaId, periodoId, empleadoId: empId, sueldoMensual: sueldo, ...conceptosEmpleado };
+
       // No convertir una diferencia inconsistente en retención negativa
       // (o devolución automática). Requiere revisión explícita de RRHH.
       const conceptos = {
@@ -1375,8 +1404,20 @@ export async function autorizarPeriodoPlanilla(empresaId: number, periodoId: num
         { id: s.empleadoId, codigo: actual.codigo, sueldo: actual.sueldo, bonoIncentivo: actual.bonoIncentivo, bonoHerramientas: actual.bonoHerramientas },
         { cuotas: s.cuotas, manuales: s.manuales, horasExtra: s.horasExtra, descuentosLegado: s.descuentosLegado, prestacionesLegado: s.prestacionesLegado },
       );
+      // Corrección de revisión externa (segunda ronda, punto 2):
+      // `parametrosRevision` vive en `resultado`, no en `input` — si solo
+      // se comparara `input`, un cambio de versión de parámetros 2026 entre
+      // generar y autorizar (p.ej. un despliegue que cambia
+      // PARAMETROS_ISR_2026 sin que cambie el ejercicio) pasaría
+      // desapercibido. calcularIsrTrabajo2026 es puro y determinista: si el
+      // input es idéntico, el resultado DEBE serlo también bajo la MISMA
+      // versión de código — comparar el `resultado` completo (que incluye
+      // parametrosRevision, isrAnual, rentaImponible, retencionSugerida...)
+      // detecta tanto ese caso como cualquier otro desvío, sin depender
+      // únicamente de la igualdad de `input`.
       if (
         JSON.stringify(recalculo.input) !== JSON.stringify(s.fiscal.inputUsado) ||
+        JSON.stringify(recalculo.resultado) !== JSON.stringify(s.fiscal.resultado) ||
         recalculo.antecedenteRevision !== s.fiscal.antecedenteRevision
       ) {
         throw new Error("La información fiscal (antecedentes, acumulados o parámetros 2026) cambió. Debe regenerarse la planilla antes de autorizar.");
@@ -1392,11 +1433,16 @@ export async function autorizarPeriodoPlanilla(empresaId: number, periodoId: num
     // alcance). Como mínimo, un ajuste manual del ISR vía actualizarLinea()
     // que sobreviva la revalidación de arriba (porque el INPUT fiscal no
     // cambió, solo el importe persistido) queda visible en la auditoría en
-    // vez de invisible.
+    // vez de invisible. Comparar contra `isrAplicadoPeriodo` (el valor
+    // REALMENTE aplicado a esta línea al generar — Q0.00 en QUINCENA_1, el
+    // mensual completo en QUINCENA_2/MENSUAL/ESPECIAL), NUNCA contra
+    // `resultado.retencionSugerida` (el cálculo mensual del motor, antes de
+    // decidir en qué período del mes se cobra) — así no se marca falso
+    // positivo en QUINCENA_1, cuyo ISR automático legítimamente vale 0.
     const empleadosConIsrSobrescrito = snapshots
       .map((s, i) => ({ empleadoId: s.empleadoId, isrPersistido: Number(rows[i].isr), fiscal: s.fiscal }))
       .filter(({ isrPersistido, fiscal }) => fiscal
-        && redondearQ(isrPersistido) !== redondearQ(Number((fiscal.resultado as { retencionSugerida: string }).retencionSugerida)))
+        && redondearQ(isrPersistido) !== redondearQ(Number(fiscal.isrAplicadoPeriodo)))
       .map(({ empleadoId }) => empleadoId);
     await registrarAuditoriaTx(conn, { empresaId, usuario, accion: "autorizar_periodo_planilla", modulo: "rrhh", detalle: JSON.stringify({ periodoId, codigo: periodo.codigo, empleados: snapshots.length,
       cuotas: snapshots.reduce((sum, s) => sum + s.cuotas.length + s.manuales.length, 0), horasExtra: snapshots.reduce((sum, s) => sum + s.horasExtra.length, 0),

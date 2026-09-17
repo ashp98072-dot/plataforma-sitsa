@@ -72,7 +72,7 @@ function snapshotV2Fiscal(overrides: Partial<Record<string, unknown>> = {}) {
     fiscal: {
       motor: "ISR_TRABAJO_2026", ejercicio: 2026, antecedenteRevision: 1,
       parametrosRevision: { ejercicio: 2026, version: "2026.1" }, fechaCorte: "2026-08-01",
-      inputUsado: {}, resultado: {},
+      inputUsado: {}, resultado: {}, isrAplicadoPeriodo: "0.00",
     },
     ...overrides,
   });

@@ -82,6 +82,19 @@ import { leerConceptosSnapshot, type PendientesPlanilla } from "./planilla-conce
  *      autorizado, así que el descuento siempre da 0 y el comportamiento es
  *      exactamente el de antes (proyección = sueldo × meses restantes).
  *
+ *    ISR retenido (corrección de regla de negocio): el ISR NO se reparte
+ *    entre quincenas en esta operación — se descuenta UNA SOLA VEZ AL MES.
+ *    `generarLineasPeriodo` aplica esa regla: QUINCENA_1 SIEMPRE queda con
+ *    isr = 0 (por construcción, no por cálculo); QUINCENA_2/MENSUAL/
+ *    ESPECIAL cobran `isrMensual` (el `retencionSugerida` del motor)
+ *    completo, sin restar nada de QUINCENA_1. Por eso `isrRetenidoPropioQ`
+ *    aquí simplemente suma el ISR de TODOS los períodos previos autorizados
+ *    del ejercicio, sin distinguir mes: como QUINCENA_1 nunca aporta ISR
+ *    mayor que cero, no hay nada que descontar dos veces. (El sueldo SÍ
+ *    sigue necesitando la exclusión por mes de arriba — eso no cambió: la
+ *    duplicación de INGRESO del mes actual es un problema distinto de la
+ *    retención de ISR.)
+ *
  * 4. RECONSTRUCCIÓN HISTÓRICA — SOLO SUELDO SE ASUME GRAVADO SIN EVIDENCIA
  *    (corrección de revisión externa, punto 4): una línea autorizada
  *    ANTES de este PR (snapshot v1, sin `fiscal`) no demuestra que su
@@ -212,14 +225,22 @@ export async function construirInputFiscalEmpleado2026(
   );
   let acumuladoGravado = 0;
   let acumuladoMesActualSueldo = 0;
+  // Corrección de regla de negocio: en 2026 el ISR NO se reparte entre
+  // quincenas — QUINCENA_1 SIEMPRE aplica Q0.00 (ver planillas.ts) y
+  // QUINCENA_2/MENSUAL/ESPECIAL cobran el ISR completo del mes. Como
+  // QUINCENA_1 nunca aporta ISR retenido (por construcción, no por
+  // exclusión aquí), sumar el ISR de TODOS los períodos previos autorizados
+  // — sin distinguir mes — ya es correcto: no hay nada que descontar dos
+  // veces, porque QUINCENA_1 nunca contribuye ISR > 0 en primer lugar.
   let acumuladoIsr = 0;
   let acumuladoIgss = 0;
   const bloqueantesHistorico: string[] = [];
   for (const r of prioRows) {
-    // isr/igss ya retenidos son hechos, independientes de si el desglose
+    const esMesActual = Number(r.anio_periodo) === ejercicio && Number(r.mes_periodo) === mes;
+    // igss e isr ya retenidos son hechos, independientes de si el desglose
     // gravado/pendiente de esa línea histórica puede demostrarse.
-    acumuladoIsr += Number(r.isr ?? 0);
     acumuladoIgss += Number(r.igss_laboral ?? 0);
+    acumuladoIsr += Number(r.isr ?? 0);
 
     const sueldoHist = Number(r.sueldo_base ?? 0);
     const bonoHist = Number(r.bono_incentivo ?? 0);
@@ -241,9 +262,7 @@ export async function construirInputFiscalEmpleado2026(
     }
     const gravadoHist = esV2ConFiscal ? sueldoHist + bonoHist + bonoHerrHist + otrosHist : sueldoHist;
     acumuladoGravado += gravadoHist;
-    if (Number(r.anio_periodo) === ejercicio && Number(r.mes_periodo) === mes) {
-      acumuladoMesActualSueldo += sueldoHist;
-    }
+    if (esMesActual) acumuladoMesActualSueldo += sueldoHist;
   }
   if (bloqueantesHistorico.length) {
     throw new ErrorFiscalPlanilla2026(
