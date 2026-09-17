@@ -1,5 +1,8 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { validarArchivo } from "./documentos-modal";
+import { TIPOS_DOCUMENTO_SELECCIONABLES } from "@/lib/rrhh/documentos-tipos";
 
 /**
  * RRHH-EXPEDIENTES-UPLOAD-STABILITY (sección 3 del ticket) — gate del
@@ -60,4 +63,54 @@ describe("validarArchivo — gate obligatorio antes del fetch", () => {
     const r = validarArchivo(archivoConTamano("vacio.pdf", 0));
     expect(r).toMatch(/vacío/);
   });
+});
+
+/**
+ * RRHH-EXPEDIENTE-TIPO-DOCUMENTO — el frontend mantenía su propio arreglo
+ * local de tipos (con "Antecedentes") mientras el backend usaba otro (sin
+ * "Antecedentes"): el POST caía a "Otro" en silencio. Fix: una sola fuente
+ * compartida (src/lib/rrhh/documentos-tipos.ts), consumida por el modal Y
+ * por el backend. `documentos-modal.tsx` es "use client" con hooks, así
+ * que el `<select>` se verifica por source-guard (mismo patrón que
+ * rrhh/prestaciones/page.test.ts) en vez de renderizarlo.
+ */
+const srcModal = readFileSync(join(__dirname, "documentos-modal.tsx"), "utf-8");
+
+describe("catálogo de tipos de documento: una sola fuente compartida", () => {
+  it("el modal importa TIPOS_DOCUMENTO_SELECCIONABLES desde @/lib/rrhh/documentos-tipos (no un array propio)", () => {
+    expect(srcModal).toMatch(
+      /import\s*\{\s*TIPOS_DOCUMENTO_SELECCIONABLES,\s*type TipoDocumentoEmpleado,?\s*\}\s*from\s*"@\/lib\/rrhh\/documentos-tipos";/,
+    );
+    expect(srcModal).not.toMatch(/const TIPOS_DOCUMENTO\s*=/);
+  });
+
+  it("el <select> de 'Tipo' mapea directamente sobre el catálogo compartido", () => {
+    expect(srcModal).toMatch(/TIPOS_DOCUMENTO_SELECCIONABLES\.map\(\(t\)\s*=>/);
+  });
+
+  it("'Antecedentes' está disponible para seleccionar en el modal (el bug corregido)", () => {
+    expect(TIPOS_DOCUMENTO_SELECCIONABLES).toContain("Antecedentes");
+  });
+
+  it.each([
+    "Tarjeta de manipulación de alimentos",
+    "Tarjeta de salud",
+    "Tarjeta de pulmones",
+    "Antecedentes penales",
+    "Antecedentes policíacos",
+    "Expediente RRHH",
+    "Contrato",
+    "Acuerdo de confidencialidad",
+    "Certificación PRAIND",
+    "Informe prueba de polígrafo",
+    "DPI",
+    "Licencia",
+    "Antecedentes",
+    "Otro",
+  ])(
+    "RRHH-EXPEDIENTE-TIPO-DOCUMENTO-AMPLIAR: '%s' aparece en el selector (mismo <select> que ya se verifica arriba, mapeado desde el catálogo compartido)",
+    (tipo) => {
+      expect(TIPOS_DOCUMENTO_SELECCIONABLES).toContain(tipo);
+    },
+  );
 });

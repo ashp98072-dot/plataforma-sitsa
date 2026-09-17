@@ -1,6 +1,6 @@
 import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { execute, getPool, query, type SqlParams } from "@/lib/db";
-import { hoyLocal, toIsoDate } from "@/lib/rrhh/dates";
+import { hoyLocal, toIsoDate, toIsoDateDesdeInstante } from "@/lib/rrhh/dates";
 import { obtenerDiaCorteQuincenal, obtenerRangoPeriodo } from "@/lib/rrhh/periodos";
 import { obtenerDocumento } from "@/lib/rrhh/documentos";
 import { registrarAuditoria } from "@/lib/auditoria";
@@ -1521,7 +1521,10 @@ export async function listarCuotasAplicadasDetalle(
   return rows.map((r) => ({
     concepto: `${String(r.concepto)} · Cuota ${Number(r.numero_cuota)} de ${Number(r.numero_cuotas)}`,
     monto: Number(r.monto_aplicado ?? 0),
-    fecha: toIsoDate(r.aplicado_en) ?? "",
+    // aplicado_en es DATETIME (instante real), NO una columna DATE de
+    // calendario — usa toIsoDateDesdeInstante(), no toIsoDate(). Ver
+    // RRHH-FECHAS-DATE-TIMEZONE en dates.ts.
+    fecha: toIsoDateDesdeInstante(r.aplicado_en) ?? "",
     notas: [r.motivo ? String(r.motivo) : "", `Descuento ${String(r.codigo)}`]
       .filter(Boolean)
       .join(" · "),
@@ -1547,7 +1550,10 @@ export async function listarCuotasAplicadasPeriodoDetalle(
     (detalle[empleadoId] ??= []).push({
       concepto: `${String(r.concepto)} · Cuota ${Number(r.numero_cuota)} de ${Number(r.numero_cuotas)}`,
       monto: Number(r.monto_aplicado ?? 0),
-      fecha: toIsoDate(r.aplicado_en) ?? "",
+      // aplicado_en es DATETIME (instante real), NO una columna DATE de
+      // calendario — usa toIsoDateDesdeInstante(), no toIsoDate(). Ver
+      // RRHH-FECHAS-DATE-TIMEZONE en dates.ts.
+      fecha: toIsoDateDesdeInstante(r.aplicado_en) ?? "",
       notas: [r.motivo ? String(r.motivo) : "", `Descuento ${String(r.codigo)}`]
         .filter(Boolean)
         .join(" · "),
