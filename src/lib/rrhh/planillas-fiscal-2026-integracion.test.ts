@@ -2,10 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/db", () => ({ query: vi.fn(), execute: vi.fn(), getPool: vi.fn() }));
 vi.mock("@/lib/auditoria", () => ({ registrarAuditoria: vi.fn(), registrarAuditoriaTx: vi.fn() }));
 vi.mock("./isr", () => ({ calcularISRMensual: () => 999 })); // testigo: si esto se usa en 2026, los tests fallarían.
-vi.mock("./fiscal-antecedentes", () => ({ leerAntecedentesFiscales: vi.fn() }));
+vi.mock("./fiscal-antecedentes", () => ({ leerAntecedentesFiscalesTx: vi.fn() }));
 import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
-import { leerAntecedentesFiscales } from "./fiscal-antecedentes";
+import { leerAntecedentesFiscalesTx } from "./fiscal-antecedentes";
 import { generarLineasPeriodo, autorizarPeriodoPlanilla } from "./planillas";
 import { leerConceptosSnapshot } from "./planilla-conceptos";
 
@@ -48,7 +48,7 @@ beforeEach(() => {
   sueldo = 4000; bonoIncentivo = 0; lineas = []; prioridades = [];
   periodo = { id: 1, empresa_id: 3, codigo: "PRUEBA", estado: "Borrador", autorizado_en: null, autorizado_por: null,
     fecha_inicio: "2026-09-01", fecha_fin: "2026-09-30", tipo_periodo: "MENSUAL", mes: 9, anio: 2026 };
-  vi.mocked(leerAntecedentesFiscales).mockResolvedValue(antecedenteSinAntecedentes() as never);
+  vi.mocked(leerAntecedentesFiscalesTx).mockResolvedValue(antecedenteSinAntecedentes() as never);
   conn.beginTransaction.mockImplementation(async () => { backup = JSON.stringify({ periodo, lineas }); });
   conn.rollback.mockImplementation(async () => { ({ periodo, lineas } = JSON.parse(backup)); });
   vi.mocked(getPool).mockReturnValue({ getConnection: async () => conn } as unknown as ReturnType<typeof getPool>);
@@ -102,13 +102,14 @@ describe("2026 activa el motor nuevo; otros ejercicios no", () => {
     expect(s.version).toBe(1);
     expect(s.fiscal).toBeUndefined();
     expect(Number(lineas[0].isr)).toBe(999); // sí usó calcularISRMensual (mockeado)
-    expect(leerAntecedentesFiscales).not.toHaveBeenCalled();
+    expect(leerAntecedentesFiscalesTx).not.toHaveBeenCalled();
   });
 });
 
 describe("acumulados, proyección y no duplicación", () => {
-  it("3/9. acumulados de un período 2026 ya autorizado se incorporan al calcular el actual", async () => {
-    prioridades = [{ sueldo_base: 4000, bono_incentivo: 0, bono_herramientas: 0, otros_ingresos: 0, igss_laboral: 193.2, isr: 150 }];
+  it("3/9. acumulados de un período 2026 ya autorizado (otro mes) se incorporan al calcular el actual", async () => {
+    prioridades = [{ sueldo_base: 4000, bono_incentivo: 0, bono_herramientas: 0, otros_ingresos: 0, igss_laboral: 193.2, isr: 150,
+      mes_periodo: 6, anio_periodo: 2026 }]; // junio: otro mes distinto al período actual (septiembre)
     await generar();
     const s = leerConceptosSnapshot(lineas[0].conceptos_snapshot)!;
     const input = s.fiscal!.inputUsado as { ingresosPropiosAcumulados: unknown[]; isrRetenidoPropioQ: string };
@@ -120,6 +121,42 @@ describe("acumulados, proyección y no duplicación", () => {
     await generar();
     const consulta = conn.query.mock.calls.find(([sql]) => String(sql).includes("p.autorizado_en IS NOT NULL"));
     expect(consulta?.[1]).toEqual([3, 7, 2026, 1]); // el último parámetro (1) es el periodoId excluido
+  });
+
+  it("B) Q2 del mismo mes que una Q1 ya autorizada no duplica el mes: acumulado + proyección de septiembre = un solo sueldo", async () => {
+    periodo.tipo_periodo = "QUINCENA_2"; periodo.mes = 9;
+    prioridades = [{ sueldo_base: 2000, bono_incentivo: 0, bono_herramientas: 0, otros_ingresos: 0, igss_laboral: 96.6, isr: 0,
+      mes_periodo: 9, anio_periodo: 2026 }]; // Q1 del MISMO mes (septiembre), ya autorizada
+    await generar();
+    const s = leerConceptosSnapshot(lineas[0].conceptos_snapshot)!;
+    const input = s.fiscal!.inputUsado as {
+      ingresosPropiosAcumulados: { monto: string }[];
+      ingresosPropiosProyectadosRestantes: { codigoConcepto: string; monto: string }[];
+    };
+    expect(input.ingresosPropiosAcumulados[0].monto).toBe("2000.00"); // Q1
+    const sueldoProyectado = input.ingresosPropiosProyectadosRestantes.find((c) => c.codigoConcepto === "SUELDO_BASE");
+    // remanente de septiembre (4000-2000=2000) + oct+nov+dic (3*4000=12000) = 14000, no 4000*4=16000.
+    expect(sueldoProyectado?.monto).toBe("14000.00");
+  });
+
+  it("histórico v1 (anterior a este PR) con bono incentivo sin clasificar bloquea toda la generación", async () => {
+    prioridades = [{ sueldo_base: 4000, bono_incentivo: 250, bono_herramientas: 0, otros_ingresos: 0, igss_laboral: 193.2, isr: 150,
+      mes_periodo: 6, anio_periodo: 2026,
+      conceptos_snapshot: JSON.stringify({ version: 1, empresaId: 3, periodoId: 2, empleadoId: 7, sueldoMensual: 4000,
+        cuotas: [], manuales: [], horasExtra: [], descuentosLegado: [], prestacionesLegado: [] }) }];
+    await expect(generar()).rejects.toThrow(/clasificación fiscal 2026 demostrable/);
+    expect(lineas).toEqual([]); // no se insertó ninguna línea: todo o nada
+  });
+});
+
+describe("IGSS proyectado (corrección #2)", () => {
+  it("el snapshot fiscal refleja IGSS proyectado sobre el sueldo proyectado, no en cero", async () => {
+    sueldo = 4000;
+    await generar();
+    const s = leerConceptosSnapshot(lineas[0].conceptos_snapshot)!;
+    const resultado = s.fiscal!.resultado as { igssDeducible: string };
+    // proyección = 4000*4 (sep-dic) = 16000 ; IGSS = 16000*4.83% = 772.80 (sin acumulados en este caso)
+    expect(resultado.igssDeducible).toBe("772.80");
   });
 });
 
@@ -151,10 +188,10 @@ describe("generar no consume; autorizar consume una vez", () => {
     await generar();
     await autorizar();
     const isrCongelado = lineas[0].isr;
-    vi.mocked(leerAntecedentesFiscales).mockClear();
+    vi.mocked(leerAntecedentesFiscalesTx).mockClear();
     await expect(autorizar()).rejects.toThrow("ya está autorizada");
     expect(lineas[0].isr).toBe(isrCongelado);
-    expect(leerAntecedentesFiscales).not.toHaveBeenCalled();
+    expect(leerAntecedentesFiscalesTx).not.toHaveBeenCalled();
   });
 });
 
@@ -168,7 +205,7 @@ describe("fallar cerrado en autorizar: cualquier cambio del input fiscal exige r
 
   it("16. cambio de antecedentes confirmados después de generar bloquea autorizar", async () => {
     await generar();
-    vi.mocked(leerAntecedentesFiscales).mockResolvedValue({
+    vi.mocked(leerAntecedentesFiscalesTx).mockResolvedValue({
       ultima: null, revisiones: [],
       confirmada: { ...antecedenteSinAntecedentes().confirmada, revision: 2, ingresosGravadosPrevios: null },
     } as never);
@@ -178,7 +215,7 @@ describe("fallar cerrado en autorizar: cualquier cambio del input fiscal exige r
 
   it("cambio de antecedentes a CON_ANTECEDENTES con montos también bloquea autorizar", async () => {
     await generar();
-    vi.mocked(leerAntecedentesFiscales).mockResolvedValue({
+    vi.mocked(leerAntecedentesFiscalesTx).mockResolvedValue({
       ultima: null, revisiones: [],
       confirmada: {
         ...antecedenteSinAntecedentes().confirmada,
@@ -192,7 +229,7 @@ describe("fallar cerrado en autorizar: cualquier cambio del input fiscal exige r
 
   it("si al autorizar ya no hay antecedente confirmado, bloquea igual (no autoriza con fiscal indeterminado)", async () => {
     await generar();
-    vi.mocked(leerAntecedentesFiscales).mockResolvedValue({ ultima: null, confirmada: null, revisiones: [] } as never);
+    vi.mocked(leerAntecedentesFiscalesTx).mockResolvedValue({ ultima: null, confirmada: null, revisiones: [] } as never);
     await expect(autorizar()).rejects.toThrow(/antecedentes fiscales/);
     expect(periodo.estado).toBe("Generada");
   });

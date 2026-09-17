@@ -1,12 +1,12 @@
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
-import { redondearQ } from "./contratos-pago";
-import { leerAntecedentesFiscales } from "./fiscal-antecedentes";
+import { IGSS_LABORAL_PCT, redondearQ } from "./contratos-pago";
+import { leerAntecedentesFiscalesTx } from "./fiscal-antecedentes";
 import {
   calcularIsrTrabajo2026,
   type ConceptoIngresoIsr,
   type InputIsrTrabajo2026,
 } from "./fiscal-isr-2026";
-import type { PendientesPlanilla } from "./planilla-conceptos";
+import { leerConceptosSnapshot, type PendientesPlanilla } from "./planilla-conceptos";
 
 /**
  * RRHH-PLANILLAS-ISR-2026-INTEGRACION — adapter entre Planillas y el motor
@@ -16,7 +16,9 @@ import type { PendientesPlanilla } from "./planilla-conceptos";
  * `generarLineasPeriodo`/`autorizarPeriodoPlanilla` (`bloquearPeriodosPlanilla`
  * ya bloquea TODOS los períodos de la empresa antes de llegar aquí, así que
  * las lecturas de este adapter están serializadas contra generaciones o
- * autorizaciones concurrentes de la misma empresa).
+ * autorizaciones concurrentes de la misma empresa). Incluye antecedentes:
+ * `leerAntecedentesFiscalesTx` usa la MISMA `conn` (nunca abre otra del
+ * pool) — ver corrección de revisión externa, punto 1.
  *
  * Decisiones de diseño (documentadas aquí porque no hay configuración fiscal
  * de conceptos publicada todavía — ver docs/RRHH-PLANILLAS-DISENO-FISCAL-
@@ -58,34 +60,64 @@ import type { PendientesPlanilla } from "./planilla-conceptos";
  *    para empleados con conceptos PENDIENTES"), documentado también en el
  *    reporte de este PR.
  *
- * 3. ACUMULADOS PROPIOS: se agregan en UN solo concepto GRAVADO ("ya
- *    ocurrió, ya se retuvo, no está en disputa") sumando sueldo_base +
- *    bono_incentivo + bono_herramientas + otros_ingresos de TODAS las
- *    líneas de períodos de la MISMA empresa/empleado/ejercicio (por
- *    `YEAR(fecha_inicio)`, igual que `anioFiscal` en planillas.ts) que ya
- *    tienen `autorizado_en IS NOT NULL`, EXCLUYENDO el período actual — así
- *    nunca aparece a la vez como acumulado y como proyección, y un
- *    borrador/regenerado nunca cuenta como retención ya ejecutada. No se
- *    reclasifica esa historia por concepto: ya fue gravada bajo lo que
- *    estuviera vigente cuando se autorizó.
+ * 3. ACUMULADOS PROPIOS Y ANTI-DUPLICACIÓN DEL MES ACTUAL (corrección de
+ *    revisión externa, punto 3): se leen TODAS las líneas de períodos de la
+ *    MISMA empresa/empleado/ejercicio (por `YEAR(fecha_inicio)`, igual que
+ *    `anioFiscal` en planillas.ts) que ya tienen `autorizado_en IS NOT NULL`,
+ *    EXCLUYENDO el período actual. Cada línea se clasifica según si su
+ *    período cae en el MISMO mes/año que el período actual o no:
+ *    - Otros meses (pasados, ya cerrados): su sueldo (+bono/otros cuando el
+ *      snapshot demuestre que fueron gravados, ver punto 4 más abajo) entra
+ *      íntegro a `ingresosPropiosAcumulados` — ya ocurrió, no está en
+ *      disputa.
+ *    - MISMO mes/año que el actual (típicamente la QUINCENA_1 ya autorizada
+ *      cuando se genera QUINCENA_2, o una QUINCENA_2 ya autorizada si se
+ *      regenera QUINCENA_1 después): su SUELDO ya autorizado se resta del
+ *      sueldo mensual completo antes de proyectar el resto del mes, en vez
+ *      de sumarse dos veces (una como acumulado del mes, otra dentro de la
+ *      proyección "mes actual + meses futuros"). Esto es intencionalmente
+ *      genérico por `mes/año del período`, no por `tipoPeriodo`: cubre
+ *      QUINCENA_1, QUINCENA_2, MENSUAL y ESPECIAL sin ramas especiales — un
+ *      MENSUAL normalmente no comparte mes con ningún otro período
+ *      autorizado, así que el descuento siempre da 0 y el comportamiento es
+ *      exactamente el de antes (proyección = sueldo × meses restantes).
  *
- * 4. PROYECCIÓN RESTANTE: sueldo/bono_incentivo/bono_herramientas
- *    contractuales MENSUALES del empleado × meses restantes del ejercicio
- *    (incluyendo el mes actual) — asume que la condición salarial vigente
- *    HOY se mantiene el resto del año (misma hipótesis que ya usaba
- *    implícitamente el motor viejo, que aplicaba el mismo `isrMensual` mes
- *    tras mes hasta la siguiente regeneración). Un alta a mitad de año o un
- *    cambio salarial no necesitan caso especial: los acumulados reflejan
- *    solo períodos que realmente existen y están autorizados, y la
- *    proyección siempre usa el sueldo VIGENTE ahora.
+ * 4. RECONSTRUCCIÓN HISTÓRICA — SOLO SUELDO SE ASUME GRAVADO SIN EVIDENCIA
+ *    (corrección de revisión externa, punto 4): una línea autorizada
+ *    ANTES de este PR (snapshot v1, sin `fiscal`) no demuestra que su
+ *    bono_incentivo/bono_herramientas/otros_ingresos hayan sido evaluados
+ *    bajo estas reglas — el motor viejo los sumaba todos como gravables sin
+ *    distinción. Que esa planilla esté autorizada y congelada NO convierte
+ *    retroactivamente esos montos en "gravado demostrado" para la
+ *    proyección anual 2026. Por eso:
+ *    - snapshot v2 (`fiscal` presente): la línea YA pasó por estas mismas
+ *      reglas para poder autorizarse (bono/otros no clasificados habrían
+ *      bloqueado en su momento) — se suma sueldo+bono+bonoHerramientas+
+ *      otros íntegro como gravado, sin volver a evaluarlo.
+ *    - snapshot v1 o ausente/ilegible: solo `sueldo_base` se incorpora como
+ *      gravado (asentado, ver punto 2). Si esa línea histórica tiene
+ *      bono_incentivo, bono_herramientas U otros_ingresos distintos de
+ *      cero, BLOQUEA todo el cálculo — no se puede demostrar su
+ *      clasificación fiscal, ni se le asigna una por herencia del motor
+ *      viejo. La línea histórica en sí NUNCA se modifica: esto solo afecta
+ *      si HOY se puede calcular automáticamente el período actual.
  *
  * 5. ANTECEDENTES: únicamente la última revisión CONFIRMADA de
- *    `rrhh_fiscal_empleado_ejercicio` (PR #282, `leerAntecedentesFiscales`).
- *    Si no hay ninguna revisión confirmada, bloquea (no asume cero). Si la
- *    confirmada declara SIN_ANTECEDENTES, continúa con `antecedentes: null`
- *    en el input del motor (el motor ya modela ese caso).
+ *    `rrhh_fiscal_empleado_ejercicio` (PR #282, vía `leerAntecedentesFiscalesTx`,
+ *    misma conexión). Si no hay ninguna revisión confirmada, bloquea (no
+ *    asume cero). Si la confirmada declara SIN_ANTECEDENTES, continúa con
+ *    `antecedentes: null` en el input del motor (el motor ya modela ese
+ *    caso).
  *
- * 6. Outsourcing: igual que el motor viejo, nunca paga ISR — no pasa por
+ * 6. IGSS PROYECTADO (corrección de revisión externa, punto 2): el IGSS
+ *    laboral solo aplica sobre sueldo ordinario (misma base que ya usa
+ *    `IGSS_LABORAL_PCT` en contratos-pago.ts/planillas.ts — "sin bono
+ *    incentivo"). `igssLaboralPropio.proyectadoRestanteQ` se calcula sobre
+ *    la MISMA proyección de sueldo ya anti-duplicada del punto 3 (nunca
+ *    sobre `sueldo × mesesRestantes` sin ajustar), para no arrastrar el
+ *    mismo doble conteo del mes actual al IGSS.
+ *
+ * 7. Outsourcing: igual que el motor viejo, nunca paga ISR — no pasa por
  *    este adapter en absoluto (ver planillas.ts).
  */
 
@@ -143,8 +175,9 @@ export async function construirInputFiscalEmpleado2026(
     throw new ErrorFiscalPlanilla2026(`No se pudo determinar el mes fiscal del período #${periodo.id}.`);
   }
 
-  // 1) Antecedentes: SOLO la última revisión CONFIRMADA.
-  const antecedentesInfo = await leerAntecedentesFiscales(empresaId, empleado.id, ejercicio);
+  // 1) Antecedentes: SOLO la última revisión CONFIRMADA, misma conexión
+  // transaccionada del llamador (nunca abre otra del pool).
+  const antecedentesInfo = await leerAntecedentesFiscalesTx(conn, empresaId, empleado.id, ejercicio);
   const confirmada = antecedentesInfo.confirmada;
   if (!confirmada) {
     throw new ErrorFiscalPlanilla2026(
@@ -163,9 +196,13 @@ export async function construirInputFiscalEmpleado2026(
         };
 
   // 2) Acumulados propios: períodos ya AUTORIZADOS del mismo ejercicio,
-  // excluyendo el período actual (ver docblock, punto 3).
+  // excluyendo el período actual (ver docblock, punto 3). Se traen mes/año
+  // del período de cada línea para separar "mismo mes que el actual" (anti-
+  // duplicación) de "otros meses" (acumulado íntegro), y el snapshot para
+  // saber si esa línea ya pasó por estas reglas (v2) o es histórica (v1).
   const [prioRows] = await conn.query<RowDataPacket[]>(
-    `SELECT l.sueldo_base, l.bono_incentivo, l.bono_herramientas, l.otros_ingresos, l.igss_laboral, l.isr
+    `SELECT l.sueldo_base, l.bono_incentivo, l.bono_herramientas, l.otros_ingresos, l.igss_laboral, l.isr,
+            l.conceptos_snapshot, MONTH(p.fecha_inicio) AS mes_periodo, YEAR(p.fecha_inicio) AS anio_periodo
      FROM rrhh_planilla_lineas l
      INNER JOIN rrhh_planilla_periodos p ON p.id = l.periodo_id AND p.empresa_id = l.empresa_id
      WHERE l.empresa_id = ? AND l.id_empleado = ? AND p.autorizado_en IS NOT NULL
@@ -174,12 +211,44 @@ export async function construirInputFiscalEmpleado2026(
     [empresaId, empleado.id, ejercicio, periodo.id],
   );
   let acumuladoGravado = 0;
+  let acumuladoMesActualSueldo = 0;
   let acumuladoIsr = 0;
   let acumuladoIgss = 0;
+  const bloqueantesHistorico: string[] = [];
   for (const r of prioRows) {
-    acumuladoGravado += Number(r.sueldo_base ?? 0) + Number(r.bono_incentivo ?? 0) + Number(r.bono_herramientas ?? 0) + Number(r.otros_ingresos ?? 0);
+    // isr/igss ya retenidos son hechos, independientes de si el desglose
+    // gravado/pendiente de esa línea histórica puede demostrarse.
     acumuladoIsr += Number(r.isr ?? 0);
     acumuladoIgss += Number(r.igss_laboral ?? 0);
+
+    const sueldoHist = Number(r.sueldo_base ?? 0);
+    const bonoHist = Number(r.bono_incentivo ?? 0);
+    const bonoHerrHist = Number(r.bono_herramientas ?? 0);
+    const otrosHist = Number(r.otros_ingresos ?? 0);
+
+    let snapshotHist: ReturnType<typeof leerConceptosSnapshot> = null;
+    try { snapshotHist = leerConceptosSnapshot(r.conceptos_snapshot); } catch { snapshotHist = null; }
+    const esV2ConFiscal = snapshotHist?.version === 2 && snapshotHist.fiscal != null;
+
+    if (!esV2ConFiscal && (bonoHist > 0.004 || bonoHerrHist > 0.004 || otrosHist > 0.004)) {
+      bloqueantesHistorico.push(
+        `Un período histórico ${ejercicio} del empleado ${empleado.codigo} (línea autorizada anterior a este motor) tiene ` +
+          `bono incentivo/herramientas u otros ingresos por Q${q(bonoHist + bonoHerrHist + otrosHist)} sin clasificación ` +
+          "fiscal 2026 demostrable. No se hereda la clasificación del cálculo anterior: requiere revisión antes de poder " +
+          "calcular ISR automático de este período.",
+      );
+      continue;
+    }
+    const gravadoHist = esV2ConFiscal ? sueldoHist + bonoHist + bonoHerrHist + otrosHist : sueldoHist;
+    acumuladoGravado += gravadoHist;
+    if (Number(r.anio_periodo) === ejercicio && Number(r.mes_periodo) === mes) {
+      acumuladoMesActualSueldo += sueldoHist;
+    }
+  }
+  if (bloqueantesHistorico.length) {
+    throw new ErrorFiscalPlanilla2026(
+      `No se puede calcular el ISR 2026 automático del empleado ${empleado.codigo} (#${empleado.id}): ${bloqueantesHistorico.join(" ")}`,
+    );
   }
 
   const ingresosPropiosAcumulados: ConceptoIngresoIsr[] = [];
@@ -193,19 +262,24 @@ export async function construirInputFiscalEmpleado2026(
     });
   }
 
-  // 3) Proyección restante: concepto actual + resto del ejercicio (ver
-  // docblock, punto 4), más los eventos puntuales de ESTE período (horas
-  // extra gravadas, prestaciones libres pendientes de clasificar).
+  // 3) Proyección restante: sueldo mensual vigente, restando lo del mes
+  // actual que YA quedó en acumulados (ver docblock, punto 3), más los
+  // meses futuros completos; más los eventos puntuales de ESTE período
+  // (horas extra gravadas, prestaciones libres pendientes de clasificar).
   const restantes = mesesRestantes(mes);
+  const mesesFuturosCompletos = Math.max(0, 12 - mes);
+  const sueldoRestanteMesActual = Math.max(0, empleado.sueldo - acumuladoMesActualSueldo);
+  const proyeccionSueldoTotal = sueldoRestanteMesActual + empleado.sueldo * mesesFuturosCompletos;
+
   const bloqueantes: string[] = [];
   const proyectados: ConceptoIngresoIsr[] = [];
 
-  if (empleado.sueldo > 0.004) {
+  if (proyeccionSueldoTotal > 0.004) {
     proyectados.push({
       id: "sueldo-mensual",
       codigoConcepto: "SUELDO_BASE",
       tratamiento: "GRAVADO",
-      monto: q(empleado.sueldo * restantes),
+      monto: q(proyeccionSueldoTotal),
       categoriaLimiteAnual: null,
     });
   }
@@ -244,8 +318,12 @@ export async function construirInputFiscalEmpleado2026(
     );
   }
 
-  // 4) ISR propio ya retenido en el ejercicio (solo períodos autorizados,
-  // ver punto 3) — el período actual todavía no tiene ISR retenido real.
+  // 4) IGSS laboral: acumulado real de períodos ya autorizados + proyectado
+  // sobre la MISMA proyección de sueldo anti-duplicada de arriba (nunca
+  // sobre bono/otros — misma base que ya usa IGSS_LABORAL_PCT en el resto
+  // de Planillas).
+  const igssProyectado = redondearQ(proyeccionSueldoTotal * IGSS_LABORAL_PCT);
+
   const input: InputIsrTrabajo2026 = {
     ejercicio,
     fechaCorte: periodo.fechaInicio,
@@ -254,7 +332,7 @@ export async function construirInputFiscalEmpleado2026(
     ingresosPropiosProyectadosRestantes: proyectados,
     limitesExencionAnual: [],
     antecedentes: antecedentesMotor,
-    igssLaboralPropio: { acumuladoQ: q(acumuladoIgss), proyectadoRestanteQ: "0.00" },
+    igssLaboralPropio: { acumuladoQ: q(acumuladoIgss), proyectadoRestanteQ: q(igssProyectado) },
     isrRetenidoPropioQ: q(acumuladoIsr),
     deduccionesAdicionalesAdmitidas: [],
   };
