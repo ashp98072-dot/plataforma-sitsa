@@ -29,3 +29,42 @@ it("no modifica RRHH, credenciales ni APIs de Fondos/Gastos", () => {
   const files = execFileSync("git", ["diff", "--name-only", "8fcc7cc575acaefd55207ba3715e93849ede854d"], { encoding: "utf8" }).trim().split(/\r?\n/);
   expect(files.some(p => /src\/(lib\/rrhh|app\/api\/.*\/(fondos|gastos)\/|.*portales-proveedores)/.test(p))).toBe(false);
 });
+
+it("preflight compara DEFAULT 0 de DECIMAL(12,2) con 0.00 de MariaDB por valor numérico", () => {
+  const sql = leer("sql/preflight-2026-09-compras-base.sql");
+  expect(sql).toContain("'compras_requerimientos' tabla, 'total' columna, 12 posicion, 'decimal' tipo, NULL longitud, 12 precision_num, 2 escala, 'NO' nullable, '0' defecto");
+  expect(leer("sql/migrate-2026-09-compras-base.sql")).toContain("total DECIMAL(12,2) NOT NULL DEFAULT 0");
+  const bloque = sql.match(/OR NOT \(CASE WHEN e\.tipo IN \('int','bigint','tinyint','decimal'\) THEN[\s\S]*?END\)/)?.[0];
+  expect(bloque).toBeDefined();
+  expect(bloque).toContain("THEN e.defecto IS NULL");
+  expect(bloque).toContain("AND e.defecto REGEXP '^[-+]?[0-9]+([.][0-9]+)?$'");
+  expect(bloque).toContain("THEN CAST(REPLACE(c.COLUMN_DEFAULT, CHAR(39), '') AS DECIMAL(65,30))\n        <=> CAST(e.defecto AS DECIMAL(65,30))");
+  expect(bloque).toContain("ELSE 0");
+  expect(bloque).toContain("ELSE NULLIF(LOWER(REPLACE(REPLACE(c.COLUMN_DEFAULT, CHAR(39), ''), '()', '')), 'null') <=> LOWER(e.defecto)");
+
+  // Contrato local, no ejecución SQL: replica la conversión decimal exacta
+  // usando la expresión regular y escala capturadas del bloque comprobado.
+  const patron = bloque!.match(/REGEXP '([^']+)'/)![1];
+  const escala = Number(bloque!.match(/DECIMAL\(65,(\d+)\)/)![1]);
+  const decimal = (value: string) => {
+    const [entero, fraccion = ""] = value.replace(/^[-+]/, "").split(".");
+    return BigInt(`${entero}${fraccion.padEnd(escala, "0")}`) * BigInt(value.startsWith("-") ? -1 : 1);
+  };
+  const equivalentes = (actual: string | null, esperado: string | null) => {
+    const normal = actual === null || actual.toLowerCase() === "null" ? null : actual.replaceAll("'", "");
+    if (normal === null) return esperado === null;
+    if (esperado === null || !new RegExp(patron).test(normal) || !new RegExp(patron).test(esperado)) return false;
+    return decimal(normal) === decimal(esperado);
+  };
+  expect(equivalentes("0.00", "0")).toBe(true);
+  expect(equivalentes("1.0", "1")).toBe(true);
+  expect(equivalentes("'0.00'", "0")).toBe(true);
+  expect(equivalentes("0.01", "0")).toBe(false);
+  expect(equivalentes("1", "0")).toBe(false);
+  expect(equivalentes(null, "0")).toBe(false);
+  expect(equivalentes("0", null)).toBe(false);
+  expect(equivalentes(null, null)).toBe(true);
+  expect(equivalentes("texto", "0")).toBe(false);
+  expect(equivalentes("0abc", "0")).toBe(false);
+  expect(equivalentes("9007199254740993", "9007199254740992")).toBe(false);
+});

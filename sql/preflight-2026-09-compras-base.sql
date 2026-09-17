@@ -319,7 +319,20 @@ OR (e.tipo IN ('int','bigint','tinyint','decimal') AND c.COLUMN_TYPE LIKE '%unsi
 OR (e.tipo IN ('varchar','char') AND NOT (c.CHARACTER_MAXIMUM_LENGTH <=> e.longitud))
 OR (e.tipo = 'decimal' AND (c.NUMERIC_PRECISION <> e.precision_num OR c.NUMERIC_SCALE <> e.escala))
 OR c.IS_NULLABLE <> e.nullable
-OR NOT (NULLIF(LOWER(REPLACE(REPLACE(c.COLUMN_DEFAULT, CHAR(39), ''), '()', '')), 'null') <=> LOWER(e.defecto))
+-- DEFAULT numérico: comparación decimal exacta, sin convertir texto inválido a cero.
+-- Conservar NULL frente a DEFAULT 0 y la comparación existente para tipos no numéricos.
+OR NOT (CASE WHEN e.tipo IN ('int','bigint','tinyint','decimal') THEN
+  CASE
+    WHEN NULLIF(LOWER(REPLACE(REPLACE(c.COLUMN_DEFAULT, CHAR(39), ''), '()', '')), 'null') IS NULL
+      THEN e.defecto IS NULL
+    WHEN REPLACE(c.COLUMN_DEFAULT, CHAR(39), '') REGEXP '^[-+]?[0-9]+([.][0-9]+)?$'
+      AND e.defecto REGEXP '^[-+]?[0-9]+([.][0-9]+)?$'
+      THEN CAST(REPLACE(c.COLUMN_DEFAULT, CHAR(39), '') AS DECIMAL(65,30))
+        <=> CAST(e.defecto AS DECIMAL(65,30))
+    ELSE 0
+  END
+ELSE NULLIF(LOWER(REPLACE(REPLACE(c.COLUMN_DEFAULT, CHAR(39), ''), '()', '')), 'null') <=> LOWER(e.defecto)
+END)
 OR LOWER(REPLACE(c.EXTRA, '()', '')) <> e.extra
 OR (e.tipo IN ('varchar','char','text') AND c.COLLATION_NAME <> 'utf8mb4_unicode_ci')
 ))
