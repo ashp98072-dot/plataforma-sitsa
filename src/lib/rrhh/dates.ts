@@ -160,7 +160,56 @@ export function normalizarHora(valor: string): string | null {
   return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
 }
 
+/**
+ * Convierte una columna SQL DATE (fecha calendario, SIN hora ni timezone) a
+ * "YYYY-MM-DD". Usa los componentes LOCALES del Date que mysql2 devuelve —
+ * mismo principio que fmtTs() ya usa para DATETIME/TIMESTAMP con
+ * `timezone: "local"` (ver src/lib/db.ts): esos componentes reflejan
+ * exactamente el valor guardado, sin volver a interpretarlo por zona
+ * horaria.
+ *
+ * RRHH-FECHAS-DATE-TIMEZONE: antes esta función usaba partesEnZona()
+ * (conversión explícita a America/Guatemala vía Intl), lo cual trata una
+ * columna DATE como si fuera un INSTANTE real. mysql2 arma cualquier DATE
+ * con hora 00:00:00 en la zona local del proceso; si esa zona no es
+ * exactamente America/Guatemala (p. ej. UTC en el hosting), restar el
+ * offset de Guatemala desde medianoche SIEMPRE cruza al día anterior → un
+ * desfase de -1 día reproducible al 100% para toda fecha DATE. Bug
+ * confirmado en producción (fecha_alta/fecha_inicio_laboral de empleados,
+ * entre otras columnas DATE) — ver toIsoDate.test.ts.
+ *
+ * Para DATETIME/TIMESTAMP reales (instantes con hora) usar fmtTs(). Se
+ * auditaron los 17 consumidores existentes de toIsoDate(): todos son
+ * columnas DATE de calendario excepto `rrhh_descuento_cuotas.aplicado_en`
+ * (DATETIME), cuyas 2 llamadas en descuentos.ts se movieron a
+ * toIsoDateDesdeInstante() para no tocar semántica de DATETIME/TIMESTAMP
+ * en este ticket.
+ */
 export function toIsoDate(value: string | Date | null | undefined): string | null {
+  if (value == null) return null;
+  if (value instanceof Date) {
+    const y = value.getFullYear();
+    const m = String(value.getMonth() + 1).padStart(2, "0");
+    const d = String(value.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+  return String(value).slice(0, 10);
+}
+
+/**
+ * Comportamiento ORIGINAL (pre-fix) de toIsoDate() para Date: convierte un
+ * INSTANTE real a su fecha calendario en America/Guatemala vía Intl. Existe
+ * únicamente para `rrhh_descuento_cuotas.aplicado_en` (DATETIME, "fecha/hora
+ * de aplicación a planilla" — ver src/lib/rrhh/descuentos.ts), el único
+ * consumidor no-DATE detectado en la auditoría de RRHH-FECHAS-DATE-TIMEZONE.
+ * Este ticket corrige explícitamente solo columnas DATE de calendario, no
+ * DATETIME/TIMESTAMP — no usar para nada nuevo sin confirmar primero que el
+ * valor es un instante real, no una fecha de calendario (para eso está
+ * toIsoDate()).
+ */
+export function toIsoDateDesdeInstante(
+  value: string | Date | null | undefined,
+): string | null {
   if (value == null) return null;
   if (value instanceof Date) {
     const p = partesEnZona(value);
