@@ -27,11 +27,17 @@ import { leerConceptosSnapshot, type PendientesPlanilla } from "./planilla-conce
  * 1. GRANULARIDAD: el cálculo fiscal corre a nivel MENSUAL equivalente
  *    (mismo nivel que el `isrMensual` que ya calcula `calcularISRMensual` en
  *    el motor viejo). El resultado (`retencionSugerida`) se entrega a
- *    `generarLineasPeriodo`, que sigue aplicando EXACTAMENTE el mismo
- *    reparto de quincenas (mitad en QUINCENA_1, conciliación contra QUINCENA_1
- *    persistida en QUINCENA_2) que ya existía — este adapter no toca esa
- *    lógica, solo reemplaza la FUENTE de `isrMensual` para el ejercicio 2026.
- *    `periodosRestantes` que se le pasa al motor es la cuenta de MESES
+ *    `generarLineasPeriodo`, que decide en qué período del mes se APLICA
+ *    ese ISR — regla de negocio: el ISR NO se reparte entre quincenas, se
+ *    cobra UNA SOLA VEZ AL MES. QUINCENA_1 siempre aplica Q0.00; QUINCENA_2
+ *    aplica el mensual completo (sin restar nada de QUINCENA_1, que nunca
+ *    aporta ISR); MENSUAL/ESPECIAL aplican el mensual completo (sin
+ *    repartir, como siempre). Sueldo/bono/IGSS sí se siguen repartiendo
+ *    entre quincenas igual que antes — ver punto 3 más abajo; este adapter
+ *    no toca esa lógica, solo reemplaza la FUENTE de `isrMensual` para el
+ *    ejercicio 2026 (ver también el punto "ISR retenido" del punto 3, y la
+ *    aplicación exacta en planillas.ts). `periodosRestantes` que se le
+ *    pasa al motor es la cuenta de MESES
  *    restantes del ejercicio, incluyendo el mes del período actual.
  *
  * 2. CONCEPTOS CLASIFICADOS (sin inventar configuración):
