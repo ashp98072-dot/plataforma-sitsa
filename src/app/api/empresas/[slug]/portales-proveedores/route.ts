@@ -115,15 +115,41 @@ export async function POST(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: "Sin acceso a portales de proveedores." }, { status: 403 });
   }
 
-  const parsed = portalSchema.safeParse(await req.json());
+  const admin = guard.session.rol === "Admin";
+  let payload: unknown;
+  try {
+    payload = await req.json();
+  } catch {
+    return NextResponse.json({ error: "El formulario no contiene JSON válido." }, { status: 400 });
+  }
+  // La asignación de no Admin procede exclusivamente de la sesión.
+  if (!admin && payload && typeof payload === "object" && !Array.isArray(payload)) {
+    payload = { ...payload, asignadoUsuarioId: undefined };
+  }
+  const parsed = portalSchema.safeParse(payload);
   if (!parsed.success) {
-    return NextResponse.json({ error: "Datos del portal inválidos." }, { status: 400 });
+    const mensajes: Record<string, string> = {
+      id: "El identificador del portal no es válido.",
+      proveedor: "El proveedor es obligatorio y debe tener como máximo 160 caracteres.",
+      nombrePortal: "El nombre del portal es obligatorio y debe tener como máximo 160 caracteres.",
+      url: "El enlace del portal no es válido.",
+      usuarioPortal: "El usuario del proveedor es obligatorio y debe tener como máximo 255 caracteres.",
+      password: "La contraseña debe ser texto de como máximo 1000 caracteres.",
+      asignadoUsuarioId: "Selecciona un usuario asignado válido.",
+      notas: "Las notas deben tener como máximo 1000 caracteres.",
+      activo: "El estado activo no es válido.",
+    };
+    const erroresCampos: Record<string, string> = {};
+    for (const issue of parsed.error.issues) {
+      const campo = String(issue.path[0] ?? "formulario");
+      erroresCampos[campo] = mensajes[campo] ?? "El formulario no es válido.";
+    }
+    return NextResponse.json({ error: Object.values(erroresCampos)[0], erroresCampos }, { status: 400 });
   }
   const data = parsed.data;
-  const admin = guard.session.rol === "Admin";
   const asignadoUsuarioId = admin ? data.asignadoUsuarioId : guard.session.id;
   if (!asignadoUsuarioId) {
-    return NextResponse.json({ error: "Selecciona el usuario asignado." }, { status: 400 });
+    return NextResponse.json({ error: "Selecciona el usuario asignado.", erroresCampos: { asignadoUsuarioId: "Selecciona el usuario asignado." } }, { status: 400 });
   }
   if (admin && !(await usuarioAsignable(asignadoUsuarioId, guard.empresa.id))) {
     return NextResponse.json({ error: "El usuario asignado no pertenece a esta empresa." }, { status: 400 });
@@ -170,7 +196,7 @@ export async function POST(req: Request, ctx: Ctx) {
   }
 
   if (!data.password) {
-    return NextResponse.json({ error: "La contraseña es obligatoria al crear el portal." }, { status: 400 });
+    return NextResponse.json({ error: "La contraseña es obligatoria al crear el portal.", erroresCampos: { password: "La contraseña es obligatoria al crear el portal." } }, { status: 400 });
   }
   const result = await execute(
     `INSERT INTO proveedor_portales
