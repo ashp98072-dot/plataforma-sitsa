@@ -2,6 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { EXT_PERMITIDAS, MAX_UPLOAD_BYTES } from "@/lib/uploads-constants";
+import {
+  TIPOS_DOCUMENTO_SELECCIONABLES,
+  type TipoDocumentoEmpleado,
+} from "@/lib/rrhh/documentos-tipos";
 
 const MAX_UPLOAD_MB = Math.round(MAX_UPLOAD_BYTES / (1024 * 1024));
 
@@ -26,14 +30,6 @@ export function validarArchivo(file: File): string | null {
   }
   return null;
 }
-
-const TIPOS_DOCUMENTO = [
-  "DPI",
-  "Contrato",
-  "Licencia",
-  "Antecedentes",
-  "Otro",
-] as const;
 
 type Doc = {
   id: number;
@@ -60,7 +56,7 @@ export function DocumentosModal({
   onChanged,
 }: Props) {
   const [docs, setDocs] = useState<Doc[]>([]);
-  const [tipo, setTipo] = useState<(typeof TIPOS_DOCUMENTO)[number]>("DPI");
+  const [tipo, setTipo] = useState<TipoDocumentoEmpleado>("DPI");
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState("");
   const [mensaje, setMensaje] = useState("");
@@ -173,10 +169,10 @@ export function DocumentosModal({
                 className="mt-1 w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm"
                 value={tipo}
                 onChange={(e) =>
-                  setTipo(e.target.value as (typeof TIPOS_DOCUMENTO)[number])
+                  setTipo(e.target.value as TipoDocumentoEmpleado)
                 }
               >
-                {TIPOS_DOCUMENTO.map((t) => (
+                {TIPOS_DOCUMENTO_SELECCIONABLES.map((t) => (
                   <option key={t} value={t}>
                     {t}
                   </option>

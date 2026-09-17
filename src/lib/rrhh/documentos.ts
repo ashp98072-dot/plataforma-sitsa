@@ -2,20 +2,10 @@ import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
 import { borrarUpload } from "@/lib/uploads";
 
-export const TIPOS_DOCUMENTO = [
-  "DPI",
-  "Foto",
-  "Contrato",
-  "Licencia",
-  "Antecedentes penales",
-  "Antecedentes policíacos",
-  "Tarjeta de pulmones",
-  "Tarjeta de salud",
-  "Manipulación de alimentos",
-  "IGSS",
-  "Boleta permiso",
-  "Otro",
-] as const;
+// RRHH-EXPEDIENTE-TIPO-DOCUMENTO — catálogo único compartido con el
+// frontend (documentos-modal.tsx). Ver documentos-tipos.ts para el detalle
+// del bug que esto corrige ("Antecedentes" se guardaba como "Otro").
+export { TIPOS_DOCUMENTO } from "./documentos-tipos";
 
 export type DocumentoEmpleado = {
   id: number;

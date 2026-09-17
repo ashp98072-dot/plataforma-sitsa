@@ -5,10 +5,14 @@ vi.mock("@/lib/rrhh/empleados", () => ({ obtenerEmpleado: vi.fn() }));
 vi.mock("@/lib/rrhh/documentos", () => ({
   listarDocumentos: vi.fn(),
   registrarDocumento: vi.fn(),
+  // RRHH-EXPEDIENTE-TIPO-DOCUMENTO: debe reflejar el catálogo real
+  // (documentos-tipos.ts), incluyendo "Antecedentes" — si este mock se
+  // queda desactualizado respecto al catálogo real, el caso "Antecedentes"
+  // de abajo lo detecta (fallaría con fallback a "Otro").
   TIPOS_DOCUMENTO: [
-    "DPI", "Foto", "Contrato", "Licencia", "Antecedentes penales",
-    "Antecedentes policíacos", "Tarjeta de pulmones", "Tarjeta de salud",
-    "Manipulación de alimentos", "IGSS", "Boleta permiso", "Otro",
+    "DPI", "Foto", "Contrato", "Licencia", "Antecedentes",
+    "Antecedentes penales", "Antecedentes policíacos", "Tarjeta de pulmones",
+    "Tarjeta de salud", "Manipulación de alimentos", "IGSS", "Boleta permiso", "Otro",
   ],
 }));
 vi.mock("@/lib/uploads", async () => {
@@ -32,6 +36,13 @@ const ctx = { params: Promise.resolve({ slug: "sitsa", id: "42" }) };
 function reqConArchivo(nombre = "dpi.pdf"): Request {
   const form = new FormData();
   form.append("tipo", "DPI");
+  form.append("file", new File([new Uint8Array([1, 2, 3])], nombre, { type: "application/pdf" }));
+  return new Request("http://localhost/x", { method: "POST", body: form });
+}
+
+function reqConTipo(tipo: string, nombre = "archivo.pdf"): Request {
+  const form = new FormData();
+  form.append("tipo", tipo);
   form.append("file", new File([new Uint8Array([1, 2, 3])], nombre, { type: "application/pdf" }));
   return new Request("http://localhost/x", { method: "POST", body: form });
 }
@@ -174,6 +185,38 @@ describe("RRHH-EXPEDIENTES-UPLOAD-STABILITY — POST documentos", () => {
     const res = await POST(reqConArchivo(), ctx);
     expect(res.status).toBe(404);
     expect(guardarUpload).not.toHaveBeenCalled();
+  });
+
+  it("RRHH-EXPEDIENTE-TIPO-DOCUMENTO: tipo 'Antecedentes' se persiste exactamente como 'Antecedentes', NO cae a 'Otro'", async () => {
+    const res = await POST(reqConTipo("Antecedentes"), ctx);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.documento.tipoDocumento).toBe("Antecedentes");
+    expect(registrarDocumento).toHaveBeenCalledWith(
+      expect.objectContaining({ tipoDocumento: "Antecedentes" }),
+    );
+  });
+
+  it("RRHH-EXPEDIENTE-TIPO-DOCUMENTO: conserva compatibilidad con tipos históricos 'Antecedentes penales'/'Antecedentes policíacos'", async () => {
+    const res1 = await POST(reqConTipo("Antecedentes penales"), ctx);
+    expect(res1.status).toBe(200);
+    expect(registrarDocumento).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tipoDocumento: "Antecedentes penales" }),
+    );
+
+    const res2 = await POST(reqConTipo("Antecedentes policíacos"), ctx);
+    expect(res2.status).toBe(200);
+    expect(registrarDocumento).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tipoDocumento: "Antecedentes policíacos" }),
+    );
+  });
+
+  it("tipo desconocido/no listado sigue cayendo a 'Otro' (comportamiento de fallback preexistente, sin cambios)", async () => {
+    const res = await POST(reqConTipo("Valor inventado que no existe"), ctx);
+    expect(res.status).toBe(200);
+    expect(registrarDocumento).toHaveBeenCalledWith(
+      expect.objectContaining({ tipoDocumento: "Otro" }),
+    );
   });
 
   it("sin permiso (ni editar ni crear) → error del guard, nunca toca la DB", async () => {

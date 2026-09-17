@@ -531,6 +531,11 @@ export default function EmpleadosPage() {
     if (filtroEstado) params.set("estado", filtroEstado);
     const res = await fetch(
       `/api/empresas/${slug}/empleados?${params.toString()}`,
+      // RRHH-EMPLEADOS-LISTADO-STALE: después de un PUT, cargar() debe
+      // reflejar de inmediato lo que quedó en BD, sin depender de caché de
+      // navegador/CDN — el servidor es la fuente de verdad, nunca un
+      // optimistic update local.
+      { cache: "no-store" },
     );
     const data = await res.json();
     if (!res.ok) return;
