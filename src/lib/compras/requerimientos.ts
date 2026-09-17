@@ -3,6 +3,7 @@ import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { resolverUsuarioDeEmpresaTx } from "@/lib/tms/identidad-administrativa";
+import { normalizarMetodoPagoCompra } from "./metodos-pago";
 import { centavosCompra, importeCompra, type DetalleCompra, type FiltrosCompra, type LineaCompra, type RequerimientoCompra, type RequerimientoDatos } from "./requerimiento-schema";
 
 export class ErrorCompra extends Error {
@@ -11,7 +12,7 @@ export class ErrorCompra extends Error {
 export const CONFLICTO_COMPRA = "El requerimiento fue modificado por otro usuario. Actualiza la información.";
 const columnasCabecera = `id, codigo, DATE_FORMAT(fecha_requerimiento, '%Y-%m-%d') AS fecha_requerimiento,
   entidad_requirente_id, entidad_requirente_nombre, requirente_usuario_id, requirente_nombre,
-  solicitante_usuario_id, solicitante_nombre, observaciones, total, estado, version`;
+  solicitante_usuario_id, solicitante_nombre, encargado_compras_usuario_id, encargado_compras_nombre, observaciones, total, estado, version`;
 const columnasLinea = `id, vehiculo_id, unidad_descripcion, DATE_FORMAT(fecha, '%Y-%m-%d') AS fecha,
   serie_factura, numero_factura, proveedor_id, proveedor_nombre_snapshot, proveedor_razon_social_snapshot,
   proveedor_nit_snapshot, repuesto_descripcion, metodo_pago, condicion_pago, banco_snapshot,
@@ -54,7 +55,7 @@ export async function guardarRequerimiento(empresaId: number, usuarioId: number,
     let antes: RowDataPacket | undefined;
     let existentes: RowDataPacket[] = [];
     if (id !== undefined) {
-      const [rows] = await conn.query<RowDataPacket[]>(`SELECT id, codigo, estado, total, version FROM compras_requerimientos WHERE empresa_id = ? AND id = ? FOR UPDATE`, [empresaId, id]);
+      const [rows] = await conn.query<RowDataPacket[]>(`SELECT id, codigo, estado, total, version, encargado_compras_usuario_id, encargado_compras_nombre FROM compras_requerimientos WHERE empresa_id = ? AND id = ? FOR UPDATE`, [empresaId, id]);
       antes = rows[0];
       if (!antes) throw new ErrorCompra("Requerimiento no encontrado.", 404);
       if (Number(antes.version) !== datos.version) throw new ErrorCompra(CONFLICTO_COMPRA, 409);
@@ -77,6 +78,13 @@ export async function guardarRequerimiento(empresaId: number, usuarioId: number,
     if (!requirente) throw new ErrorCompra("La persona que requiere no tiene acceso a esta empresa.");
     const solicitante = !antes ? await resolverUsuarioDeEmpresaTx(conn, empresaId, usuarioId) : null;
     if (!antes && !solicitante) throw new ErrorCompra("El solicitante no tiene acceso a esta empresa.");
+    const encargadoId = datos.encargado_compras_usuario_id === undefined ? antes?.encargado_compras_usuario_id ?? null : datos.encargado_compras_usuario_id;
+    let encargadoNombre: string | null = antes?.encargado_compras_nombre ?? null;
+    if (datos.encargado_compras_usuario_id !== undefined || !antes) {
+      const encargado = encargadoId === null ? null : await resolverUsuarioDeEmpresaTx(conn, empresaId, encargadoId);
+      if (encargadoId !== null && !encargado) throw new ErrorCompra("El encargado de compras no tiene acceso a esta empresa.");
+      encargadoNombre = encargado?.nombre ?? null;
+    }
     // Resolver y validar TODAS las líneas antes de escribir. Un proveedor inactivo existente conserva su snapshot si no cambia.
     const resueltas: LineaCompra[] = [];
     const proveedores = new Map<number, RowDataPacket>();
@@ -112,7 +120,9 @@ export async function guardarRequerimiento(empresaId: number, usuarioId: number,
         if (!vehiculo.activo && (!vieja || Number(vieja.vehiculo_id) !== linea.vehiculo_id)) throw new ErrorCompra("La unidad seleccionada no está activa.");
         unidad = !vehiculo.activo && vieja ? vieja.unidad_descripcion : [vehiculo.placa, vehiculo.descripcion || [vehiculo.marca, vehiculo.modelo].filter(Boolean).join(" ")].filter(Boolean).join(" · ").slice(0, 200);
       }
-      resueltas.push({ ...linea, id: linea.id ?? 0, unidad_descripcion: unidad, ...snapshot } as LineaCompra);
+      const metodoPago = vieja && Number(vieja.proveedor_id) === linea.proveedor_id && vieja.metodo_pago === linea.metodo_pago
+        ? linea.metodo_pago : normalizarMetodoPagoCompra(linea.metodo_pago);
+      resueltas.push({ ...linea, metodo_pago: metodoPago!, id: linea.id ?? 0, unidad_descripcion: unidad, ...snapshot } as LineaCompra);
     }
     const total = importeCompra(datos.lineas.reduce((sum, l) => sum + centavosCompra(l.total), 0));
     let codigo = antes ? String(antes.codigo) : "";
@@ -120,19 +130,20 @@ export async function guardarRequerimiento(empresaId: number, usuarioId: number,
       // Igual convención legible basada en AUTO_INCREMENT que Fondos, con placeholder único para evitar colisiones concurrentes.
       const [result] = await conn.execute<ResultSetHeader>(`INSERT INTO compras_requerimientos
         (empresa_id, codigo, fecha_requerimiento, entidad_requirente_id, entidad_requirente_nombre,
-         requirente_usuario_id, requirente_nombre, solicitante_usuario_id, solicitante_nombre, estado, total, observaciones, creado_por)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pendiente', ?, ?, ?)`,
+         requirente_usuario_id, requirente_nombre, solicitante_usuario_id, solicitante_nombre, estado, total, observaciones, creado_por,
+         encargado_compras_usuario_id, encargado_compras_nombre)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pendiente', ?, ?, ?, ?, ?)`,
       [empresaId, `TMP-${randomUUID()}`, datos.fecha_requerimiento, datos.entidad_requirente_id, entidades[0].nombre,
-        datos.requirente_usuario_id, requirente.nombre, usuarioId, solicitante!.nombre, total, datos.observaciones, usuarioId]);
+        datos.requirente_usuario_id, requirente.nombre, usuarioId, solicitante!.nombre, total, datos.observaciones, usuarioId, encargadoId, encargadoNombre]);
       id = result.insertId;
       codigo = `RC-${datos.fecha_requerimiento.slice(0, 4)}-${String(id).padStart(6, "0")}`;
       await conn.execute(`UPDATE compras_requerimientos SET codigo = ? WHERE empresa_id = ? AND id = ?`, [codigo, empresaId, id]);
     } else {
       const [result] = await conn.execute<ResultSetHeader>(`UPDATE compras_requerimientos SET fecha_requerimiento = ?, entidad_requirente_id = ?, entidad_requirente_nombre = ?,
-        requirente_usuario_id = ?, requirente_nombre = ?, observaciones = ?, total = ?, version = version + 1
+        requirente_usuario_id = ?, requirente_nombre = ?, observaciones = ?, total = ?, encargado_compras_usuario_id = ?, encargado_compras_nombre = ?, version = version + 1
         WHERE empresa_id = ? AND id = ? AND version = ? AND estado = 'Pendiente'`,
       [datos.fecha_requerimiento, datos.entidad_requirente_id, entidades[0].nombre, datos.requirente_usuario_id, requirente.nombre,
-        datos.observaciones, total, empresaId, id, datos.version]);
+        datos.observaciones, total, encargadoId, encargadoNombre, empresaId, id, datos.version]);
       if (result.affectedRows !== 1) throw new ErrorCompra(CONFLICTO_COMPRA, 409);
     }
     const requerimientoId = id!;
@@ -153,7 +164,7 @@ export async function guardarRequerimiento(empresaId: number, usuarioId: number,
     for (const lineaId of eliminadas) await conn.execute(`DELETE FROM compras_requerimiento_lineas WHERE empresa_id = ? AND requerimiento_id = ? AND id = ?`, [empresaId, requerimientoId, lineaId]);
     await registrarAuditoriaTx(conn, { empresaId, usuario, modulo: "compras_requerimientos", accion: antes ? "editar_requerimiento_compras" : "crear_requerimiento_compras",
       detalle: JSON.stringify({ requerimientoId: id, codigo, cantidadLineas: resueltas.length, totalAnterior: antes ? String(antes.total) : null,
-        totalNuevo: total, agregadas, editadas, eliminadas, usuarioId }) });
+        totalNuevo: total, agregadas, editadas, eliminadas, usuarioId, encargadoComprasUsuarioId: encargadoId }) });
     await conn.commit();
     return { id: id!, codigo, version: antes ? Number(antes.version) + 1 : 1 };
   } catch (error) { await conn.rollback(); throw error; }

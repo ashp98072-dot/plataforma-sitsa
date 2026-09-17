@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { METODOS_PAGO_COMPRAS, type DetalleCompra, type LineaCompraDatos } from "@/lib/compras/requerimiento-schema";
+import { seleccionarProveedorCompra } from "@/lib/compras/metodos-pago";
 
 type Opcion = { id: number; nombre: string };
 type Proveedor = { id: number; nombre_comercial: string; nit: string | null; contacto_nombre: string | null; contacto_telefono: string | null; telefono: string | null; metodo_pago_habitual: string | null; banco: string | null; numero_cuenta: string | null; dias_credito: number | null };
@@ -12,7 +13,7 @@ type LineaForm = LineaCompraDatos & { key: string };
 const estilo = "block w-full rounded border border-[var(--border)] bg-[var(--input)] p-2 disabled:opacity-80";
 const boton = "rounded border border-[var(--border)] px-3 py-2 disabled:opacity-50";
 function nuevaLinea(fecha: string, key: string): LineaForm { return { key, vehiculo_id: null, unidad_descripcion: null, fecha, serie_factura: null, numero_factura: null, proveedor_id: 0, repuesto_descripcion: "", metodo_pago: "Transferencia", condicion_pago: "Contado", total: "", observaciones: null }; }
-function lineaEditable(l: DetalleCompra["lineas"][number]): LineaForm {
+export function lineaEditable(l: DetalleCompra["lineas"][number]): LineaForm {
   // No devolver snapshots en PATCH: solo IDs y campos editables.
   return { key: `id-${l.id}`, id: l.id, vehiculo_id: l.vehiculo_id, unidad_descripcion: l.unidad_descripcion, fecha: l.fecha, serie_factura: l.serie_factura, numero_factura: l.numero_factura, proveedor_id: l.proveedor_id, repuesto_descripcion: l.repuesto_descripcion, metodo_pago: l.metodo_pago, condicion_pago: l.condicion_pago, total: l.total, observaciones: l.observaciones };
 }
@@ -21,6 +22,7 @@ export function RequerimientoFormClient({ slug, detalle, editable, solicitante, 
   const [fecha, setFecha] = useState(detalle?.fecha_requerimiento ?? fechaHoy);
   const [entidad, setEntidad] = useState(detalle?.entidad_requirente_id ?? 0);
   const [requirente, setRequirente] = useState(detalle?.requirente_usuario_id ?? 0);
+  const [encargado, setEncargado] = useState(detalle?.encargado_compras_usuario_id ?? 0);
   const [observaciones, setObservaciones] = useState(detalle?.observaciones ?? "");
   const [lineas, setLineas] = useState<LineaForm[]>(detalle ? detalle.lineas.map(lineaEditable) : [nuevaLinea(fechaHoy, "nueva-1")]);
   const [catalogos, setCatalogos] = useState<Catalogos | null>(null);
@@ -39,7 +41,7 @@ export function RequerimientoFormClient({ slug, detalle, editable, solicitante, 
   async function guardar(e: React.FormEvent) {
     e.preventDefault(); setGuardando(true); setError("");
     try {
-      const r = await fetch(`/api/empresas/${slug}/compras/requerimientos${detalle ? `/${detalle.id}` : ""}`, { method: detalle ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fecha_requerimiento: fecha, entidad_requirente_id: entidad, requirente_usuario_id: requirente, observaciones: observaciones || null, ...(detalle ? { version: detalle.version } : {}), lineas: lineas.map(l => Object.fromEntries(Object.entries(l).filter(([campo]) => campo !== "key"))) }) });
+      const r = await fetch(`/api/empresas/${slug}/compras/requerimientos${detalle ? `/${detalle.id}` : ""}`, { method: detalle ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fecha_requerimiento: fecha, entidad_requirente_id: entidad, requirente_usuario_id: requirente, ...(detalle && encargado === (detalle.encargado_compras_usuario_id ?? 0) ? {} : { encargado_compras_usuario_id: encargado || null }), observaciones: observaciones || null, ...(detalle ? { version: detalle.version } : {}), lineas: lineas.map(l => Object.fromEntries(Object.entries(l).filter(([campo]) => campo !== "key"))) }) });
       const data = await r.json(); if (!r.ok) { if (r.status === 409) setConflicto(true); throw new Error(data.error); }
       router.push(`/e/${slug}/compras/requerimientos/${data.id}`); router.refresh();
     } catch (e) { setError(e instanceof Error ? e.message : "No se pudo guardar."); }
@@ -52,6 +54,7 @@ export function RequerimientoFormClient({ slug, detalle, editable, solicitante, 
       <label>Fecha de requerimiento<input className={estilo} type="date" required value={fecha} onChange={e => setFecha(e.target.value)} /></label>
       {editable ? <><label>Empresa requirente<select className={estilo} required value={entidad || ""} onChange={e => setEntidad(Number(e.target.value))}><option value="">Seleccionar</option>{entidad && !catalogos?.entidades.some(v => v.id === entidad) && <option value={entidad}>{detalle?.entidad_requirente_nombre} (revalidar)</option>}{catalogos?.entidades.map(v => <option key={v.id} value={v.id}>{v.nombre}</option>)}</select></label>
         <label>Persona que requiere<select className={estilo} required value={requirente || ""} onChange={e => setRequirente(Number(e.target.value))}><option value="">Seleccionar</option>{requirente && !catalogos?.usuarios.some(v => v.id === requirente) && <option value={requirente}>{detalle?.requirente_nombre} (revalidar)</option>}{catalogos?.usuarios.map(v => <option key={v.id} value={v.id}>{v.nombre}</option>)}</select></label></> : <><p>Empresa requirente: {detalle?.entidad_requirente_nombre || "Sin dato histórico"}</p><p>Persona que requiere: {detalle?.requirente_nombre || "—"}</p></>}
+      {editable ? <label>Encargado de compras<select className={estilo} value={encargado || ""} onChange={e => setEncargado(Number(e.target.value))}><option value="">Sin asignar</option>{encargado !== 0 && !catalogos?.usuarios.some(v => v.id === encargado) && <option value={encargado}>{detalle?.encargado_compras_nombre} (histórico)</option>}{catalogos?.usuarios.map(v => <option key={v.id} value={v.id}>{v.nombre}</option>)}</select></label> : <p>Encargado de compras: {detalle?.encargado_compras_nombre || "Sin asignar"}</p>}
       <p>Solicitante: {detalle?.solicitante_nombre ?? solicitante} (solo lectura)</p><label className="md:col-span-2">Observaciones<textarea className={estilo} maxLength={10000} value={observaciones} onChange={e => setObservaciones(e.target.value)} /></label>
     </fieldset><h2 className="text-lg font-semibold">Detalle de compra</h2>
     {lineas.map((l, indice) => {
@@ -64,9 +67,9 @@ export function RequerimientoFormClient({ slug, detalle, editable, solicitante, 
         <label>Fecha<input className={estilo} type="date" required value={l.fecha} onChange={e => cambiar(l.key, { fecha: e.target.value })} /></label>
         <label>Serie factura<input className={estilo} maxLength={100} value={l.serie_factura ?? ""} onChange={e => cambiar(l.key, { serie_factura: e.target.value || null })} /></label>
         <label>Número factura<input className={estilo} maxLength={100} value={l.numero_factura ?? ""} onChange={e => cambiar(l.key, { numero_factura: e.target.value || null })} /></label>
-        <label>Proveedor{editable ? <select className={estilo} required value={l.proveedor_id || ""} onChange={e => cambiar(l.key, { proveedor_id: Number(e.target.value) })}><option value="">Seleccionar</option>{l.proveedor_id && !catalogos?.proveedores.some(v => v.id === l.proveedor_id) && <option value={l.proveedor_id}>{original?.proveedor_nombre_snapshot ?? "Proveedor histórico"}</option>}{catalogos?.proveedores.map(v => <option key={v.id} value={v.id}>{v.nombre_comercial}</option>)}</select> : <p>{original?.proveedor_nombre_snapshot}</p>}</label>
+        <label>Proveedor{editable ? <select className={estilo} required value={l.proveedor_id || ""} onChange={e => { const id = Number(e.target.value); const habitual = catalogos?.proveedores.find(v => v.id === id)?.metodo_pago_habitual; setLineas(actual => actual.map(v => v.key === l.key ? seleccionarProveedorCompra(v, id, habitual) : v)); }}><option value="">Seleccionar</option>{l.proveedor_id && !catalogos?.proveedores.some(v => v.id === l.proveedor_id) && <option value={l.proveedor_id}>{original?.proveedor_nombre_snapshot ?? "Proveedor histórico"}</option>}{catalogos?.proveedores.map(v => <option key={v.id} value={v.id}>{v.nombre_comercial}</option>)}</select> : <p>{original?.proveedor_nombre_snapshot}</p>}</label>
         <label>Repuesto a comprar<input className={estilo} required maxLength={1000} value={l.repuesto_descripcion} onChange={e => cambiar(l.key, { repuesto_descripcion: e.target.value })} /></label>
-        <label>Método de pago<select className={estilo} value={l.metodo_pago} onChange={e => cambiar(l.key, { metodo_pago: e.target.value as LineaForm["metodo_pago"] })}>{METODOS_PAGO_COMPRAS.map(v => <option key={v}>{v}</option>)}</select></label>
+        <label>Método de pago<select className={estilo} value={l.metodo_pago} onChange={e => cambiar(l.key, { metodo_pago: e.target.value })}>{!METODOS_PAGO_COMPRAS.some(v => v === l.metodo_pago) && <option value={l.metodo_pago}>{l.metodo_pago}</option>}{METODOS_PAGO_COMPRAS.map(v => <option key={v}>{v}</option>)}</select></label>
         <label>Condición de pago<select className={estilo} value={l.condicion_pago} onChange={e => cambiar(l.key, { condicion_pago: e.target.value as LineaForm["condicion_pago"] })}><option>Contado</option><option>Crédito</option></select></label>
         <label>Total (Q)<input className={estilo} type="number" min="0.01" max="9999999999.99" step="0.01" required value={l.total} onChange={e => cambiar(l.key, { total: e.target.value })} /></label>
         <label className="md:col-span-2">Observaciones<textarea className={estilo} maxLength={10000} value={l.observaciones ?? ""} onChange={e => cambiar(l.key, { observaciones: e.target.value || null })} /></label>

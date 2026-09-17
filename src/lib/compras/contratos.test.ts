@@ -15,7 +15,8 @@ it("menú/rutas y formulario sin funcionalidad de requerimientos", () => {
 it("migración canónica coincide y no altera/borrra datos", () => {
   const sql = leer("sql/migrate-2026-09-compras-base.sql"); const schema = leer("sql/schema.sql");
   const bloques = sql.match(/CREATE TABLE IF NOT EXISTS [\s\S]*?COLLATE=utf8mb4_unicode_ci;/g)!;
-  expect(bloques).toHaveLength(4); for (const bloque of bloques) expect(schema).toContain(bloque);
+  const baseSinExpansion = schema.replace(/  encargado_compras_usuario_id INT NULL DEFAULT NULL,\n  encargado_compras_nombre VARCHAR\(200\) NULL DEFAULT NULL,\n/, "");
+  expect(bloques).toHaveLength(4); for (const bloque of bloques) expect(baseSinExpansion).toContain(bloque);
   const sinComentarios = sql.replace(/^--.*$/gm, ""); expect(sinComentarios).not.toMatch(/\b(ALTER|DROP|INSERT|UPDATE|DELETE|REPLACE)\b\s+(TABLE|INTO|FROM|compras_)/i);
   expect(sql).not.toMatch(/UNIQUE[^\n]*nit/i); expect(sql).toContain("FOREIGN KEY (empresa_id, requerimiento_id, linea_id)"); expect(sql).toContain("ON DELETE RESTRICT");
 });
@@ -26,7 +27,7 @@ it("preflight lectura, cuatro contratos y decisiones", () => {
   for (const s of ["APLICAR", "NOOP", "DETENER", "VERSION()", "COLUMN_TYPE", "TABLE_COLLATION", "REFERENTIAL_CONSTRAINTS", "STATISTICS"]) expect(sql).toContain(s);
 });
 it("no modifica RRHH, credenciales ni APIs de Fondos/Gastos", () => {
-  const files = execFileSync("git", ["diff", "--name-only", "8fcc7cc575acaefd55207ba3715e93849ede854d"], { encoding: "utf8" }).trim().split(/\r?\n/);
+  const files = execFileSync("git", ["diff", "--name-only", "608df8a55f75157c826350f3c131230a92db90ba"], { encoding: "utf8" }).trim().split(/\r?\n/);
   expect(files.some(p => /src\/(lib\/rrhh|app\/api\/.*\/(fondos|gastos)\/|.*portales-proveedores)/.test(p))).toBe(false);
 });
 

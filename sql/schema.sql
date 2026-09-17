@@ -1599,6 +1599,8 @@ CREATE TABLE IF NOT EXISTS compras_requerimientos (
   creado_por INT NULL,
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  encargado_compras_usuario_id INT NULL DEFAULT NULL,
+  encargado_compras_nombre VARCHAR(200) NULL DEFAULT NULL,
   UNIQUE KEY uq_compras_req_empresa (empresa_id, id),
   UNIQUE KEY uq_compras_req_codigo (empresa_id, codigo),
   INDEX idx_compras_req_fecha (empresa_id, estado, fecha_requerimiento),
