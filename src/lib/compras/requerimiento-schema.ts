@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const METODOS_PAGO_COMPRAS = ["Efectivo", "Transferencia", "Transferencia móvil", "Tarjeta", "Cheque", "Otro"] as const;
+export { METODOS_PAGO_COMPRAS } from "./metodos-pago";
 export const ESTADOS_COMPRAS = ["Pendiente", "Autorizada", "Rechazada"] as const;
 export const fechaCompra = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Fecha no válida.").refine(v => {
   const date = new Date(`${v}T00:00:00Z`);
@@ -25,11 +25,12 @@ export const lineaCompraSchema = z.object({
   id: idCompra.optional(), vehiculo_id: idCompra.nullable().optional().transform(v => v ?? null),
   unidad_descripcion: texto(200), fecha: fechaCompra, serie_factura: texto(100), numero_factura: texto(100),
   proveedor_id: idCompra, repuesto_descripcion: z.string().trim().min(1, "El repuesto es obligatorio.").max(1000),
-  metodo_pago: z.enum(METODOS_PAGO_COMPRAS), condicion_pago: z.enum(["Contado", "Crédito"]),
+  metodo_pago: z.string().trim().min(1, "El método de pago es obligatorio.").max(80).refine(v => !/[\u0000-\u001f\u007f]/.test(v), "El método de pago contiene caracteres no permitidos."), condicion_pago: z.enum(["Contado", "Crédito"]),
   total: montoCompra, observaciones: texto(10000),
 }).strict();
 const cabecera = {
   fecha_requerimiento: fechaCompra, entidad_requirente_id: idCompra, requirente_usuario_id: idCompra,
+  encargado_compras_usuario_id: idCompra.nullable().optional(),
   observaciones: texto(10000), lineas: z.array(lineaCompraSchema).min(1, "Agrega al menos una línea.").max(500),
 };
 function validarLineas(datos: { lineas: z.infer<typeof lineaCompraSchema>[] }, ctx: z.RefinementCtx) {
@@ -56,6 +57,7 @@ export type LineaCompra = LineaCompraDatos & {
 export type RequerimientoCompra = {
   id: number; codigo: string; fecha_requerimiento: string; entidad_requirente_id: number | null; entidad_requirente_nombre: string | null;
   requirente_usuario_id: number | null; requirente_nombre: string | null; solicitante_usuario_id: number | null; solicitante_nombre: string | null;
+  encargado_compras_usuario_id: number | null; encargado_compras_nombre: string | null;
   observaciones: string | null; total: string; estado: typeof ESTADOS_COMPRAS[number]; version: number; cantidad_lineas: number;
 };
 export type DetalleCompra = RequerimientoCompra & { lineas: LineaCompra[] };

@@ -64,7 +64,7 @@ describe("mutaciones transaccionales", () => {
   it("creación genera código seguro, solicitante sesión, Pendiente, snapshots servidor y suma exacta", async () => {
     const datos = crearRequerimientoSchema.parse({ ...payload, lineas: [linea, { ...linea, total: "0.10", vehiculo_id: 5 }] });
     expect(await guardarRequerimiento(1, 8, "registrador", datos, false)).toEqual({ id: 12, codigo: "RC-2026-000012", version: 1 });
-    const [sql, params] = m.conn.execute.mock.calls[0]; expect(sql).toContain("'Pendiente'"); expect(params[0]).toBe(1); expect(params[1]).toMatch(/^TMP-[\da-f-]{36}$/); expect(params[7]).toBe(8); expect(params[9]).toBe("10.35"); expect(params.at(-1)).toBe(8);
+    const [sql, params] = m.conn.execute.mock.calls[0]; expect(sql).toContain("'Pendiente'"); expect(params[0]).toBe(1); expect(params[1]).toMatch(/^TMP-[\da-f-]{36}$/); expect(params[7]).toBe(8); expect(params[9]).toBe("10.35"); expect(params[11]).toBe(8);
     const inserts = m.conn.execute.mock.calls.filter(([s]) => s.includes("INSERT INTO compras_requerimiento_lineas"));
     expect(inserts[0][1]).toContain("Proveedor real"); expect(inserts[0][1]).toContain("privada"); expect(inserts[1][1]).toContain("C-123ABC · Cabezal");
     expect(m.audit.mock.calls[0][0]).toBe(m.conn); expect(m.audit.mock.calls[0][1].detalle).not.toContain("privada"); expect(m.conn.commit).toHaveBeenCalledOnce();
@@ -104,4 +104,35 @@ describe("mutaciones transaccionales", () => {
   it.each(["Autorizada", "Rechazada"])("%s solo lectura", async estado => { cabecera!.estado = estado; await expect(editar()).rejects.toThrow("Pendiente"); expect(m.conn.execute).not.toHaveBeenCalled(); });
   it("PATCH ajeno retorna 404", async () => { cabecera = null; await expect(editar()).rejects.toMatchObject({ status: 404 }); expect(m.conn.execute).not.toHaveBeenCalled(); });
   it.each([false, true])("fallo auditoría revierte crear/editar %s", async edicion => { m.audit.mockRejectedValue(new Error("fallo auditoría")); await expect(edicion ? editar() : crear()).rejects.toThrow("fallo auditoría"); expect(m.conn.rollback).toHaveBeenCalledOnce(); expect(m.conn.commit).not.toHaveBeenCalled(); expect(m.conn.release).toHaveBeenCalledOnce(); });
+  it("creación valida encargado del tenant y guarda snapshot servidor separado de solicitante", async () => {
+    const original = m.conn.query.getMockImplementation()!;
+    m.conn.query.mockImplementation((sql: string, params: unknown[]) => sql.includes("FROM usuarios") && params[1] === 10 ? Promise.resolve([[{ nombre: "Encargado real" }]]) : original(sql, params));
+    await guardarRequerimiento(1, 8, "registrador", crearRequerimientoSchema.parse({ ...payload, encargado_compras_usuario_id: 10 }), false);
+    expect(m.conn.execute.mock.calls[0][1].slice(-2)).toEqual([10, "Encargado real"]);
+    expect(m.conn.query.mock.calls.find(([, params]) => params?.[1] === 10)?.[1]).toEqual([1, 10]);
+    expect(crearRequerimientoSchema.safeParse({ ...payload, encargado_compras_nombre: "Falso" }).success).toBe(false);
+  });
+  it.each([false, true])("encargado ajeno rechazado sin escrituras al crear/editar %s", async edicion => {
+    const original = m.conn.query.getMockImplementation()!;
+    m.conn.query.mockImplementation((sql: string, params: unknown[]) => sql.includes("FROM usuarios") && params[1] === 99 ? Promise.resolve([[]]) : original(sql, params));
+    await expect(edicion ? editar({ encargado_compras_usuario_id: 99 }) : guardarRequerimiento(1, 8, "registrador", crearRequerimientoSchema.parse({ ...payload, encargado_compras_usuario_id: 99 }), false)).rejects.toThrow("encargado de compras");
+    expect(m.conn.execute).not.toHaveBeenCalled(); expect(m.conn.rollback).toHaveBeenCalledOnce();
+  });
+  it("PATCH omitido conserva encargado/snapshot, seleccionarlo cambia y null desasigna", async () => {
+    cabecera!.encargado_compras_usuario_id = 10; cabecera!.encargado_compras_nombre = "Snapshot anterior";
+    await editar(); expect(m.conn.execute.mock.calls[0][1].slice(-5, -3)).toEqual([10, "Snapshot anterior"]);
+    m.conn.execute.mockClear(); await editar({ encargado_compras_usuario_id: 11 }); expect(m.conn.execute.mock.calls[0][1].slice(-5, -3)).toEqual([11, "Usuario real"]);
+    m.conn.execute.mockClear(); await editar({ encargado_compras_usuario_id: null }); expect(m.conn.execute.mock.calls[0][1].slice(-5, -3)).toEqual([null, null]);
+  });
+  it("servidor normaliza método nuevo pero respeta override manual y banco viene del proveedor", async () => {
+    await guardarRequerimiento(1, 8, "registrador", crearRequerimientoSchema.parse({ ...payload, lineas: [{ ...linea, metodo_pago: "TARJETA DE CREDITO" }, { ...linea, metodo_pago: "Cheque" }] }), false);
+    const inserts = m.conn.execute.mock.calls.filter(([s]) => s.includes("INSERT INTO compras_requerimiento_lineas"));
+    expect(inserts[0][1]).toContain("Tarjeta de crédito"); expect(inserts[1][1]).toContain("Cheque"); expect(inserts[0][1]).toContain("Banco real");
+  });
+  it("servidor conserva método histórico intacto en PATCH sin cambio de proveedor/método", async () => {
+    existentes[0].metodo_pago = "Tarjeta";
+    await editar({ lineas: [{ ...linea, id: 21, metodo_pago: "Tarjeta" }] } as Partial<RequerimientoDatos>);
+    const [, params] = m.conn.execute.mock.calls.find(([s]) => s.startsWith("UPDATE compras_requerimiento_lineas"))!;
+    expect(params).toContain("Tarjeta"); expect(params).not.toContain("Tarjeta de crédito");
+  });
 });
