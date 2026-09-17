@@ -117,6 +117,14 @@ CREATE TABLE IF NOT EXISTS rrhh_prestaciones (
   empresa_id INT NOT NULL,
   id_empleado INT NOT NULL,
   tipo VARCHAR(80) NOT NULL,
+  -- Identificador fiscal ESTABLE, separado del label libre `tipo` (ver
+  -- sql/migrate-2026-09-rrhh-prestaciones-codigo-concepto.sql). NULL en todo
+  -- histórico — nunca inferido desde `tipo` por texto. Catálogo previsto
+  -- (documental, sin ENUM/CHECK en SQL): AGUINALDO, BONO_14,
+  -- VIATICO_COMPROBABLE, VIATICO_NO_COMPROBABLE, COMISION, BONO_VARIABLE,
+  -- OTRO — validación estricta en aplicación/Zod en un PR de integración
+  -- futuro, no usado todavía por Planillas.
+  codigo_concepto VARCHAR(40) NULL,
   monto DECIMAL(12,2) NOT NULL DEFAULT 0,
   fecha DATE NOT NULL,
   notas TEXT NULL,

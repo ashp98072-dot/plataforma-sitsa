@@ -1,0 +1,21 @@
+-- Manual, aditiva y reejecutable (MariaDB 11.8). No autoriza, no clasifica y
+-- no modifica ningún registro histórico. Ejecutar
+-- sql/preflight-2026-09-rrhh-prestaciones-codigo-concepto.sql primero y leer
+-- su resultado — si `codigo_concepto` ya existe con una definición distinta
+-- de VARCHAR(40) NULL, NO ejecutar este archivo: revisar manualmente.
+--
+-- Agrega ÚNICAMENTE el identificador fiscal ESTABLE, separado por completo
+-- del label libre `tipo` (que no se toca). Todas las filas existentes
+-- quedan con codigo_concepto = NULL — "sin clasificación estable todavía",
+-- nunca inferido desde `tipo` por texto (nada de includes/LIKE/regex sobre
+-- "Aguinaldo", "Bono 14", etc.). Planillas sigue fail-closed hasta el
+-- siguiente PR de integración: este PR no toca planilla-conceptos.ts,
+-- planilla-fiscal-2026.ts, la API ni la UI de prestaciones.
+--
+-- Catálogo de códigos PREVISTO para ese PR futuro (documental — esta
+-- migración NO impone ENUM/CHECK en SQL; la validación estricta será en
+-- aplicación/Zod cuando se conecte):
+--   AGUINALDO, BONO_14, VIATICO_COMPROBABLE, VIATICO_NO_COMPROBABLE,
+--   COMISION, BONO_VARIABLE, OTRO.
+ALTER TABLE rrhh_prestaciones
+  ADD COLUMN IF NOT EXISTS codigo_concepto VARCHAR(40) NULL AFTER tipo;
