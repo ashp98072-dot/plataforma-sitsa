@@ -91,13 +91,21 @@ export async function GET(req: Request, ctx: Ctx) {
     }),
     obtenerParametros(guard.empresa.id),
   ]);
-  return NextResponse.json({
-    empleados,
-    horarioDefault: {
-      entrada: (cfg.hora_entrada_default || "07:00:00").slice(0, 5),
-      salida: (cfg.hora_salida_default || "16:00:00").slice(0, 5),
+  return NextResponse.json(
+    {
+      empleados,
+      horarioDefault: {
+        entrada: (cfg.hora_entrada_default || "07:00:00").slice(0, 5),
+        salida: (cfg.hora_salida_default || "16:00:00").slice(0, 5),
+      },
     },
-  });
+    // RRHH-EMPLEADOS-LISTADO-STALE: el listado de empleados venía mostrando
+    // fechas viejas tras editar y guardar (BD correcta, UI stale). El
+    // next.config headers() global de no-store solo cubre rutas de página
+    // (/e/:path*), no /api/:path* — mismo patrón ya usado en
+    // src/lib/compras/proveedor-api.ts y src/lib/rrhh/foto-empleado.ts.
+    { headers: { "Cache-Control": "private, no-store" } },
+  );
 }
 
 export async function POST(req: Request, ctx: Ctx) {
