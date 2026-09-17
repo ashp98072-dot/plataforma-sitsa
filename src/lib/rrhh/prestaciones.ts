@@ -43,3 +43,20 @@ export type CodigoConceptoPrestacion = (typeof CODIGOS_CONCEPTO_PRESTACION)[numb
  * (rechazado), y nunca se puede borrar un código ya asignado.
  */
 export const codigoConceptoPrestacionSchema = z.enum(CODIGOS_CONCEPTO_PRESTACION);
+
+/**
+ * Etiquetas humanas para la UI — SOLO presentación. La BD/API siempre usan
+ * el código estable (`codigo_concepto`); esto nunca se guarda ni se envía
+ * al backend, es puramente para mostrarle algo legible a RRHH en el
+ * `<select>` y en el listado. Compartido para no duplicarlo entre la
+ * pantalla de creación/edición y el listado.
+ */
+export const ETIQUETAS_CODIGO_CONCEPTO_PRESTACION: Record<CodigoConceptoPrestacion, string> = {
+  AGUINALDO: "Aguinaldo",
+  BONO_14: "Bono 14",
+  VIATICO_COMPROBABLE: "Viático comprobable",
+  VIATICO_NO_COMPROBABLE: "Viático no comprobable",
+  COMISION: "Comisión",
+  BONO_VARIABLE: "Bono variable",
+  OTRO: "Otro",
+};
