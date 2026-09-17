@@ -41,6 +41,7 @@ export function PortalesProveedoresClient({ slug }: { slug: string }) {
   const [puedeCrear, setPuedeCrear] = useState(false);
   const [usuarioActualId, setUsuarioActualId] = useState(0);
   const [form, setForm] = useState(FORM_INICIAL);
+  const [mostrarPassword, setMostrarPassword] = useState(false);
   const [passwords, setPasswords] = useState<Record<number, string>>({});
   const [cargando, setCargando] = useState(true);
   const [mensaje, setMensaje] = useState("");
@@ -82,7 +83,11 @@ export function PortalesProveedoresClient({ slug }: { slug: string }) {
     const res = await fetch(`/api/empresas/${slug}/portales-proveedores`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form),
+      body: JSON.stringify({
+        ...form,
+        id: form.id || undefined,
+        asignadoUsuarioId: puedeAdministrar ? form.asignadoUsuarioId : undefined,
+      }),
     });
     const body = await res.json();
     if (!res.ok) {
@@ -95,10 +100,12 @@ export function PortalesProveedoresClient({ slug }: { slug: string }) {
       asignadoUsuarioId: usuarios[0]?.id ?? usuarioActualId,
     });
     setPasswords({});
+    setMostrarPassword(false);
     await cargar();
   }
 
   function editar(portal: Portal) {
+    setMostrarPassword(false);
     setForm({
       id: portal.id,
       proveedor: portal.proveedor,
@@ -136,8 +143,12 @@ export function PortalesProveedoresClient({ slug }: { slug: string }) {
   }
 
   async function copiar(valor: string, etiqueta: string) {
-    await navigator.clipboard.writeText(valor);
-    setMensaje(`${etiqueta} copiado.`);
+    try {
+      await navigator.clipboard.writeText(valor);
+      setMensaje(`${etiqueta} copiado.`);
+    } catch {
+      setError("No se pudo copiar al portapapeles.");
+    }
   }
 
   async function eliminar(id: number) {
@@ -178,7 +189,7 @@ export function PortalesProveedoresClient({ slug }: { slug: string }) {
           <label className="text-sm">Nombre del portal<input className={`${input} mt-1 w-full`} value={form.nombrePortal} onChange={(e) => setForm({ ...form, nombrePortal: e.target.value })} required /></label>
           <label className="text-sm">Enlace<input className={`${input} mt-1 w-full`} type="url" placeholder="https://..." value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} required /></label>
           <label className="text-sm">Usuario del proveedor<input className={`${input} mt-1 w-full`} value={form.usuarioPortal} onChange={(e) => setForm({ ...form, usuarioPortal: e.target.value })} required /></label>
-          <label className="text-sm">Contraseña{form.id ? " (vacío conserva la actual)" : ""}<input className={`${input} mt-1 w-full`} type="password" autoComplete="new-password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required={!form.id} /></label>
+          <div className="text-sm"><label>Contraseña{form.id ? " (vacío conserva la actual)" : ""}<input className={`${input} mt-1 w-full`} type={mostrarPassword ? "text" : "password"} autoComplete="new-password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required={!form.id} /></label><div className="mt-2 flex gap-2"><button type="button" className="rounded bg-slate-700 px-3 py-1.5" aria-pressed={mostrarPassword} onClick={() => setMostrarPassword((actual) => !actual)}>{mostrarPassword ? "Ocultar" : "Mostrar"}</button><button type="button" className="rounded bg-slate-700 px-3 py-1.5" disabled={!form.password} onClick={() => void copiar(form.password, "Contraseña")}>Copiar</button></div></div>
           {puedeAdministrar ? <label className="text-sm">Asignar a usuario<select className={`${input} mt-1 w-full`} value={form.asignadoUsuarioId} onChange={(e) => setForm({ ...form, asignadoUsuarioId: Number(e.target.value) })} required><option value={0}>Seleccionar…</option>{usuarios.map((u) => <option key={u.id} value={u.id}>{u.nombre ?? u.username} · {u.rol} ({u.username})</option>)}</select></label> : <p className="self-end rounded border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm text-[var(--muted)]">Este acceso se guardará únicamente para tu usuario.</p>}
           <label className="text-sm md:col-span-2 xl:col-span-3">Notas<textarea className={`${input} mt-1 min-h-20 w-full`} value={form.notas} onChange={(e) => setForm({ ...form, notas: e.target.value })} /></label>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.activo} onChange={(e) => setForm({ ...form, activo: e.target.checked })} /> Portal activo</label>
