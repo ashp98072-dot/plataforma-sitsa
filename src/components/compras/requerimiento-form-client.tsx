@@ -4,12 +4,27 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { METODOS_PAGO_COMPRAS, type DetalleCompra, type LineaCompraDatos } from "@/lib/compras/requerimiento-schema";
 import { seleccionarProveedorCompra } from "@/lib/compras/metodos-pago";
-import { CatalogoSearchSelect, type CatalogoSearchOption } from "@/components/tms/catalogo-search-select";
+import { CatalogoSearchSelect, opcionesConHistorico, type CatalogoSearchOption } from "@/components/tms/catalogo-search-select";
 
 type Opcion = { id: number; nombre: string };
 type Proveedor = { id: number; nombre_comercial: string; nit: string | null; contacto_nombre: string | null; contacto_telefono: string | null; telefono: string | null; metodo_pago_habitual: string | null; banco: string | null; numero_cuenta: string | null; dias_credito: number | null };
 type Vehiculo = { id: number; placa: string; descripcion: string | null; marca: string | null; modelo: string | null };
 type Catalogos = { entidades: Opcion[]; usuarios: Opcion[]; requirentesOperaciones: Opcion[]; proveedores: Proveedor[]; vehiculos: Vehiculo[] };
+
+export function opcionesUnidadesCompra(vehiculos: Vehiculo[], id: number | null, nombre: string | null): CatalogoSearchOption[] {
+  return opcionesConHistorico(vehiculos.map(v => ({
+    value: String(v.id),
+    label: [v.placa, v.descripcion || [v.marca, v.modelo].filter(Boolean).join(" ")].filter(Boolean).join(" · "),
+    searchText: [v.placa, v.descripcion, v.marca, v.modelo].filter(Boolean).join(" "),
+  })), String(id || ""), nombre || "Unidad histórica");
+}
+
+export function opcionesProveedoresCompra(proveedores: Proveedor[], id: number, nombre?: string): CatalogoSearchOption[] {
+  return opcionesConHistorico(proveedores.map(p => ({
+    value: String(p.id), label: p.nombre_comercial,
+    searchText: [p.nombre_comercial, p.nit, p.contacto_nombre, p.contacto_telefono, p.telefono].filter(Boolean).join(" "),
+  })), String(id || ""), nombre || "Proveedor histórico");
+}
 
 function opcionesIdentidad(usuarios: Opcion[], id: number, nombre?: string | null): CatalogoSearchOption[] {
   const opciones = usuarios.map(u => ({ value: String(u.id), label: u.nombre }));
@@ -19,7 +34,7 @@ function opcionesIdentidad(usuarios: Opcion[], id: number, nombre?: string | nul
 type LineaForm = LineaCompraDatos & { key: string };
 const estilo = "block w-full rounded border border-[var(--border)] bg-[var(--input)] p-2 disabled:opacity-80";
 const boton = "rounded border border-[var(--border)] px-3 py-2 disabled:opacity-50";
-function nuevaLinea(fecha: string, key: string): LineaForm { return { key, vehiculo_id: null, unidad_descripcion: null, fecha, serie_factura: null, numero_factura: null, proveedor_id: 0, repuesto_descripcion: "", metodo_pago: "Transferencia", condicion_pago: "Contado", total: "", observaciones: null }; }
+export function nuevaLinea(fecha: string, key: string): LineaForm { return { key, vehiculo_id: null, unidad_descripcion: null, fecha, serie_factura: null, numero_factura: null, proveedor_id: 0, repuesto_descripcion: "", metodo_pago: "Transferencia", condicion_pago: "Contado", total: "", observaciones: null }; }
 export function lineaEditable(l: DetalleCompra["lineas"][number]): LineaForm {
   // No devolver snapshots en PATCH: solo IDs y campos editables.
   return { key: `id-${l.id}`, id: l.id, vehiculo_id: l.vehiculo_id, unidad_descripcion: l.unidad_descripcion, fecha: l.fecha, serie_factura: l.serie_factura, numero_factura: l.numero_factura, proveedor_id: l.proveedor_id, repuesto_descripcion: l.repuesto_descripcion, metodo_pago: l.metodo_pago, condicion_pago: l.condicion_pago, total: l.total, observaciones: l.observaciones };
@@ -48,6 +63,7 @@ export function RequerimientoFormClient({ slug, detalle, editable, solicitante, 
   async function guardar(e: React.FormEvent) {
     e.preventDefault();
     if (!requirente && (!detalle || detalle.requirente_usuario_id !== null)) { setError("Selecciona un requirente de Operaciones."); return; }
+    if (lineas.some(l => !l.proveedor_id)) { setError("Selecciona un proveedor para cada línea."); return; }
     setGuardando(true); setError("");
     try {
       const r = await fetch(`/api/empresas/${slug}/compras/requerimientos${detalle ? `/${detalle.id}` : ""}`, { method: detalle ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fecha_requerimiento: fecha, entidad_requirente_id: entidad, requirente_usuario_id: requirente || null, ...(detalle && encargado === (detalle.encargado_compras_usuario_id ?? 0) ? {} : { encargado_compras_usuario_id: encargado || null }), observaciones: observaciones || null, ...(detalle ? { version: detalle.version } : {}), lineas: lineas.map(l => Object.fromEntries(Object.entries(l).filter(([campo]) => campo !== "key"))) }) });
@@ -71,12 +87,12 @@ export function RequerimientoFormClient({ slug, detalle, editable, solicitante, 
       const original = detalle?.lineas.find(v => v.id === l.id);
       const ayuda = proveedor ? [["NIT", proveedor.nit], ["Contacto", proveedor.contacto_nombre], ["Teléfono", proveedor.contacto_telefono || proveedor.telefono], ["Método habitual", proveedor.metodo_pago_habitual], ["Banco", proveedor.banco], ["Cuenta", proveedor.numero_cuenta], ["Días de crédito", proveedor.dias_credito]] : [];
       return <section key={l.key} className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4"><h3 className="font-semibold">Línea {indice + 1}</h3><fieldset disabled={deshabilitado} className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        <label>Unidad / placa{editable ? <select className={estilo} value={l.vehiculo_id ?? ""} onChange={e => cambiar(l.key, { vehiculo_id: e.target.value ? Number(e.target.value) : null, unidad_descripcion: null })}><option value="">Unidad manual / sin unidad</option>{l.vehiculo_id && !catalogos?.vehiculos.some(v => v.id === l.vehiculo_id) && <option value={l.vehiculo_id}>{l.unidad_descripcion} (histórica)</option>}{catalogos?.vehiculos.map(v => <option key={v.id} value={v.id}>{[v.placa, v.descripcion || [v.marca, v.modelo].filter(Boolean).join(" ")].filter(Boolean).join(" · ")}</option>)}</select> : <p>{l.unidad_descripcion || "—"}</p>}</label>
+        {editable ? <CatalogoSearchSelect label="Unidad / placa" placeholder="Buscar placa o unidad..." value={String(l.vehiculo_id || "")} options={opcionesUnidadesCompra(catalogos?.vehiculos ?? [], l.vehiculo_id, l.unidad_descripcion)} inputClassName={estilo} emptyLabel="Unidad manual / sin unidad" onChange={value => cambiar(l.key, { vehiculo_id: value ? Number(value) : null, unidad_descripcion: null })} /> : <p>Unidad / placa: {l.unidad_descripcion || "—"}</p>}
         {editable && !l.vehiculo_id && <label>Descripción manual de unidad<input className={estilo} maxLength={200} value={l.unidad_descripcion ?? ""} onChange={e => cambiar(l.key, { unidad_descripcion: e.target.value || null })} /></label>}
         <label>Fecha<input className={estilo} type="date" required value={l.fecha} onChange={e => cambiar(l.key, { fecha: e.target.value })} /></label>
         <label>Serie factura<input className={estilo} maxLength={100} value={l.serie_factura ?? ""} onChange={e => cambiar(l.key, { serie_factura: e.target.value || null })} /></label>
         <label>Número factura<input className={estilo} maxLength={100} value={l.numero_factura ?? ""} onChange={e => cambiar(l.key, { numero_factura: e.target.value || null })} /></label>
-        <label>Proveedor{editable ? <select className={estilo} required value={l.proveedor_id || ""} onChange={e => { const id = Number(e.target.value); const habitual = catalogos?.proveedores.find(v => v.id === id)?.metodo_pago_habitual; setLineas(actual => actual.map(v => v.key === l.key ? seleccionarProveedorCompra(v, id, habitual) : v)); }}><option value="">Seleccionar</option>{l.proveedor_id && !catalogos?.proveedores.some(v => v.id === l.proveedor_id) && <option value={l.proveedor_id}>{original?.proveedor_nombre_snapshot ?? "Proveedor histórico"}</option>}{catalogos?.proveedores.map(v => <option key={v.id} value={v.id}>{v.nombre_comercial}</option>)}</select> : <p>{original?.proveedor_nombre_snapshot}</p>}</label>
+        {editable ? <CatalogoSearchSelect label="Proveedor" placeholder="Buscar proveedor..." value={String(l.proveedor_id || "")} options={opcionesProveedoresCompra(catalogos?.proveedores ?? [], l.proveedor_id, original?.proveedor_nombre_snapshot)} inputClassName={estilo} emptyLabel="Seleccionar" onChange={value => { const id = Number(value); const habitual = catalogos?.proveedores.find(v => v.id === id)?.metodo_pago_habitual; setLineas(actual => actual.map(v => v.key === l.key ? seleccionarProveedorCompra(v, id, habitual) : v)); }} /> : <p>Proveedor: {original?.proveedor_nombre_snapshot}</p>}
         <label>Repuesto a comprar<input className={estilo} required maxLength={1000} value={l.repuesto_descripcion} onChange={e => cambiar(l.key, { repuesto_descripcion: e.target.value })} /></label>
         <label>Método de pago<select className={estilo} value={l.metodo_pago} onChange={e => cambiar(l.key, { metodo_pago: e.target.value })}>{!METODOS_PAGO_COMPRAS.some(v => v === l.metodo_pago) && <option value={l.metodo_pago}>{l.metodo_pago}</option>}{METODOS_PAGO_COMPRAS.map(v => <option key={v}>{v}</option>)}</select></label>
         <label>Condición de pago<select className={estilo} value={l.condicion_pago} onChange={e => cambiar(l.key, { condicion_pago: e.target.value as LineaForm["condicion_pago"] })}><option>Contado</option><option>Crédito</option></select></label>

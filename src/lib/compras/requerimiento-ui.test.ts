@@ -4,11 +4,59 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it, vi } from "vitest";
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }));
-import { lineaEditable, RequerimientoFormClient } from "@/components/compras/requerimiento-form-client";
+import { lineaEditable, nuevaLinea, opcionesUnidadesCompra, opcionesProveedoresCompra, RequerimientoFormClient } from "@/components/compras/requerimiento-form-client";
+import { filtrarOpcionesBusqueda } from "@/components/tms/catalogo-search-select";
+import { seleccionarProveedorCompra } from "./metodos-pago";
 import { RequerimientosClient } from "@/components/compras/requerimientos-client";
 import type { DetalleCompra } from "./requerimiento-schema";
 const leer = (p: string) => readFileSync(p, "utf8");
 const detalle = { id: 12, codigo: "RC-2026-000012", fecha_requerimiento: "2026-09-17", estado: "Autorizada", version: 3, entidad_requirente_nombre: "Empresa real", requirente_nombre: "Persona real", solicitante_nombre: "Autor original", encargado_compras_usuario_id: 10, encargado_compras_nombre: "Gestor original", total: "10.25", lineas: [{ id: 21, fecha: "2026-09-17", unidad_descripcion: "C-123ABC · Cabezal", vehiculo_id: 5, proveedor_id: 3, proveedor_nombre_snapshot: "Proveedor histórico", repuesto_descripcion: "Filtro", total: "10.25", metodo_pago: "Efectivo", condicion_pago: "Contado" }] } as DetalleCompra;
+
+it("unidad y proveedor reutilizan CatalogoSearchSelect y conservan históricos/inactivos", () => {
+  const source = leer("src/components/compras/requerimiento-form-client.tsx");
+  for (const label of ["Unidad / placa", "Proveedor"]) expect(source).toContain(`<CatalogoSearchSelect label="${label}"`);
+  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, fechaHoy: "2026-09-17" }));
+  for (const texto of ["Buscar placa o unidad...", "Buscar proveedor...", "C-123ABC · Cabezal (histórico)", "Proveedor histórico (histórico)"]) expect(html).toContain(texto);
+  expect(html).toContain('value="5" selected=""');
+  expect(html).toContain('value="3" selected=""');
+  expect(opcionesUnidadesCompra([], 5, "Cabezal")).toEqual([{ value: "5", label: "Cabezal (histórico)" }]);
+  expect(opcionesProveedoresCompra([], 3, "Proveedor original")).toEqual([{ value: "3", label: "Proveedor original (histórico)" }]);
+});
+
+it("busca unidades por placa, descripción, marca y modelo aunque no estén en la etiqueta", () => {
+  const opciones = opcionesUnidadesCompra([{ id: 5, placa: "C-123ABC", descripcion: "Cabezal", marca: "Freightliner", modelo: "Cascadia" }], 5, "Anterior");
+  for (const texto of ["123abc", "cabezal", "freightliner", "cascadia"]) expect(filtrarOpcionesBusqueda(opciones, texto).map(o => o.value)).toEqual(["5"]);
+  expect(opciones).toHaveLength(1);
+  expect(filtrarOpcionesBusqueda(opciones, "inexistente")).toEqual([]);
+});
+
+it("busca proveedores por nombre, NIT, contacto y ambos teléfonos", () => {
+  const opciones = opcionesProveedoresCompra([{ id: 3, nombre_comercial: "LLANTAS Y MANGUERAS", nit: "123456-7", contacto_nombre: "Ana", contacto_telefono: "55550001", telefono: "22220001", metodo_pago_habitual: "TARJETA DE CREDITO", banco: null, numero_cuenta: null, dias_credito: null }], 3);
+  for (const texto of ["llantas", "123456-7", "ana", "55550001", "22220001"]) expect(filtrarOpcionesBusqueda(opciones, texto).map(o => o.value)).toEqual(["3"]);
+  expect(opciones).toHaveLength(1);
+});
+
+it("seleccionar proveedor conserva callback de método habitual y no afecta otras líneas", () => {
+  const source = leer("src/components/compras/requerimiento-form-client.tsx");
+  expect(source).toMatch(/label="Proveedor"[^\n]*onChange=\{value =>[^\n]*seleccionarProveedorCompra\(v, id, habitual\)/);
+  const original = lineaEditable(detalle.lineas[0]);
+  const nueva = nuevaLinea("2026-09-18", "nueva-2");
+  const lineas = [original, nueva].map(v => v.key === nueva.key ? seleccionarProveedorCompra(v, 7, "TARJETA DE CREDITO") : v);
+  expect(lineas[0]).toEqual(original);
+  expect(lineas[1]).toMatchObject({ proveedor_id: 7, metodo_pago: "Tarjeta de crédito", condicion_pago: "Contado", vehiculo_id: null, fecha: "2026-09-18", key: "nueva-2" });
+  expect(nueva.proveedor_id).toBe(0);
+  expect(source).toContain("[...actual, nuevaLinea(fecha, crypto.randomUUID())]");
+});
+
+it("unidad manual/sin unidad sigue disponible y línea nueva no hereda selección", () => {
+  const nueva = nuevaLinea("2026-09-18", "nueva-2");
+  expect(nueva).toMatchObject({ vehiculo_id: null, unidad_descripcion: null, proveedor_id: 0, metodo_pago: "Transferencia" });
+  expect(opcionesUnidadesCompra([], nueva.vehiculo_id, nueva.unidad_descripcion)).toEqual([]);
+  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, fechaHoy: "2026-09-17" }));
+  expect(html).toContain("Unidad manual / sin unidad");
+  expect(html).toContain("Descripción manual de unidad");
+  expect(leer("src/components/compras/requerimiento-form-client.tsx")).toContain("vehiculo_id: value ? Number(value) : null, unidad_descripcion: null");
+});
 it("detalle solo lectura usa snapshots históricos y conserva total sin acciones futuras", () => {
   const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle, editable: false, solicitante: "Editor actual", puedeEliminar: false, puedeVerProveedores: false, fechaHoy: "2026-09-17" }));
   for (const texto of ["Empresa real", "Persona real", "Autor original", "Gestor original", "Proveedor histórico", "C-123ABC", "10.25"]) expect(html).toContain(texto);
