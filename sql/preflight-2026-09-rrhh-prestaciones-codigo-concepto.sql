@@ -17,6 +17,39 @@
 
 SELECT VERSION() AS version_servidor;
 
+-- Estado automático: un solo veredicto en texto, para no depender de que el
+-- operador deduzca el caso leyendo information_schema a mano.
+--   APLICAR — la tabla existe y `codigo_concepto` todavía no existe.
+--   NOOP    — `codigo_concepto` ya existe exactamente como varchar(40) NULL.
+--   DETENER — la tabla no existe, o `codigo_concepto` existe con una
+--             definición distinta (tipo/tamaño/nulabilidad). No ejecutar
+--             la migración en este caso; revisar manualmente primero.
+SELECT
+  CASE
+    WHEN NOT EXISTS (
+      SELECT 1 FROM information_schema.TABLES
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'rrhh_prestaciones'
+    ) THEN 'DETENER'
+    WHEN NOT EXISTS (
+      SELECT 1 FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'rrhh_prestaciones'
+        AND COLUMN_NAME = 'codigo_concepto'
+    ) THEN 'APLICAR'
+    WHEN EXISTS (
+      SELECT 1 FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'rrhh_prestaciones'
+        AND COLUMN_NAME = 'codigo_concepto'
+        AND COLUMN_TYPE = 'varchar(40)' AND IS_NULLABLE = 'YES'
+    ) THEN 'NOOP'
+    ELSE 'DETENER'
+  END AS estado_migracion,
+  (SELECT COLUMN_TYPE FROM information_schema.COLUMNS
+   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'rrhh_prestaciones'
+     AND COLUMN_NAME = 'codigo_concepto') AS codigo_concepto_tipo_actual,
+  (SELECT IS_NULLABLE FROM information_schema.COLUMNS
+   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'rrhh_prestaciones'
+     AND COLUMN_NAME = 'codigo_concepto') AS codigo_concepto_nullable_actual;
+
 -- Existencia, engine y collation de la tabla.
 SELECT TABLE_NAME, ENGINE, TABLE_COLLATION
 FROM information_schema.TABLES
@@ -34,9 +67,11 @@ WHERE TABLE_SCHEMA = DATABASE()
   AND COLUMN_NAME IN ('tipo', 'codigo_concepto')
 ORDER BY ORDINAL_POSITION;
 
--- Volumen total — para dimensionar el ALTER (aditivo, sin reescritura de
--- filas al no llevar DEFAULT distinto de NULL, pero útil para confirmar
--- alcance antes de tocar producción).
+-- Volumen total — el ALTER es aditivo, pero eso no garantiza por sí solo
+-- cómo lo ejecuta el servidor: revisar volumen y condiciones operativas
+-- antes de ejecutarlo; el algoritmo/locking efectivo depende de la versión
+-- de MariaDB/InnoDB y del estado de la tabla en ese momento, no se promete
+-- aquí "sin reescritura" ni un ALGORITHM/LOCK específico.
 SELECT COUNT(*) AS total_filas FROM rrhh_prestaciones;
 
 -- Confirmar que NO se requiere backfill: no se puede referenciar
