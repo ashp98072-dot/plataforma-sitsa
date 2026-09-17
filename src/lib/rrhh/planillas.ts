@@ -1030,6 +1030,7 @@ export async function generarLineasPeriodo(
               inputUsado: fiscal2026.input,
               resultado: fiscal2026.resultado,
               isrAplicadoPeriodo: isr.toFixed(2),
+              configuracionConceptosRevision: fiscal2026.configuracionConceptosRevision,
             },
           }
         : { version: 1, empresaId, periodoId, empleadoId: empId, sueldoMensual: sueldo, ...conceptosEmpleado };
@@ -1415,12 +1416,21 @@ export async function autorizarPeriodoPlanilla(empresaId: number, periodoId: num
       // parametrosRevision, isrAnual, rentaImponible, retencionSugerida...)
       // detecta tanto ese caso como cualquier otro desvío, sin depender
       // únicamente de la igualdad de `input`.
+      // RRHH-FISCAL-CONCEPTOS-2026: también revalida la revisión de la
+      // configuración de conceptos (sueldo/bono incentivo/bono herramientas/
+      // horas extra) — mismo motivo que parametrosRevision: si cambió entre
+      // generar y autorizar (p.ej. bono_herramientas pasó de PENDIENTE a
+      // GRAVADO en una revisión publicada después), el input recalculado
+      // podría coincidir por casualidad para ESTE empleado puntual aunque la
+      // configuración real haya cambiado — comparar la revisión explícita lo
+      // detecta siempre, no solo cuando cambia el resultado numérico.
       if (
         JSON.stringify(recalculo.input) !== JSON.stringify(s.fiscal.inputUsado) ||
         JSON.stringify(recalculo.resultado) !== JSON.stringify(s.fiscal.resultado) ||
-        recalculo.antecedenteRevision !== s.fiscal.antecedenteRevision
+        recalculo.antecedenteRevision !== s.fiscal.antecedenteRevision ||
+        recalculo.configuracionConceptosRevision !== s.fiscal.configuracionConceptosRevision
       ) {
-        throw new Error("La información fiscal (antecedentes, acumulados o parámetros 2026) cambió. Debe regenerarse la planilla antes de autorizar.");
+        throw new Error("La información fiscal (antecedentes, acumulados, configuración de conceptos o parámetros 2026) cambió. Debe regenerarse la planilla antes de autorizar.");
       }
     }
     for (const s of snapshots) await aplicarConceptosSnapshot(conn, s, usuario);
