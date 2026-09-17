@@ -56,3 +56,26 @@ it("catálogo asignable pero sin defaults nuevos no Admin", () => {
     expect(!p || !(p.puedeVer || p.puedeCrear || p.puedeEditar || p.puedeEliminar)).toBe(true);
   }
 });
+
+it.each(["puedeCrear", "puedeEditar", "puedeVer"] as const)("catálogos acepta solo %s sin inferir otras acciones", async accion => {
+  permisos = [{ modulo: "compras_requerimientos", puedeVer: false, puedeCrear: false, puedeEditar: false, puedeEliminar: false, [accion]: true }];
+  expect((await comprasCatalogosGet("a")).status).toBe(200);
+  expect(m.catalogos).toHaveBeenCalledWith(1);
+  if (accion !== "puedeVer") {
+    expect((await requerimientoGet(request(), "a")).status).toBe(403);
+    expect((await requerimientoGet(request(), "a", "12")).status).toBe(403);
+    expect(m.listar).not.toHaveBeenCalled(); expect(m.obtener).not.toHaveBeenCalled();
+  }
+  expect((await requerimientoGuardar(request(), "a")).status).toBe(accion === "puedeCrear" ? 201 : 403);
+  expect((await requerimientoGuardar(request({ ...payload, version: 2 }), "a", "12")).status).toBe(accion === "puedeEditar" ? 200 : 403);
+});
+it.each(["ninguno", "eliminar", "compras_proveedores", "tms"])("catálogos rechaza %s sin ver/crear/editar propios", async caso => {
+  permisos = caso === "ninguno" ? [] : [{ modulo: caso === "eliminar" ? "compras_requerimientos" : caso,
+    puedeVer: caso !== "eliminar", puedeCrear: caso !== "eliminar", puedeEditar: caso !== "eliminar", puedeEliminar: true }];
+  expect((await comprasCatalogosGet("a")).status).toBe(403); expect(m.catalogos).not.toHaveBeenCalled();
+});
+it("catálogos conserva requisito TMS de empresa aunque crear esté permitido", async () => {
+  permisos = [{ modulo: "compras_requerimientos", puedeVer: false, puedeCrear: true, puedeEditar: false, puedeEliminar: false }];
+  m.tenant.mockResolvedValue({ empresa: { id: 1, modulos: ["rrhh"] }, session: { id: 8, rol: "Operaciones" } });
+  expect((await comprasCatalogosGet("a")).status).toBe(403); expect(m.catalogos).not.toHaveBeenCalled();
+});

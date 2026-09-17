@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { tienePermiso } from "@/lib/permisos-shared";
-import { requireComprasRequerimientos } from "./acceso";
+import { requireComprasCatalogos, requireComprasRequerimientos } from "./acceso";
 import { crearRequerimientoSchema, editarRequerimientoSchema, filtrosCompraSchema } from "./requerimiento-schema";
 import { catalogosCompra, ErrorCompra, guardarRequerimiento, listarRequerimientos, obtenerRequerimiento } from "./requerimientos";
 
@@ -41,7 +41,7 @@ export async function requerimientoGuardar(req: Request, slug: string, rawId?: s
   } catch (error) { return fallo(error); }
 }
 export async function comprasCatalogosGet(slug: string) {
-  const guard = await requireComprasRequerimientos(slug, "ver");
+  const guard = await requireComprasCatalogos(slug);
   if (guard.error) { guard.error.headers.set("Cache-Control", "private, no-store"); return guard.error; }
   try { return respuesta(await catalogosCompra(guard.empresa.id)); } catch (error) { return fallo(error); }
 }
