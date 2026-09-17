@@ -4,11 +4,18 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { METODOS_PAGO_COMPRAS, type DetalleCompra, type LineaCompraDatos } from "@/lib/compras/requerimiento-schema";
 import { seleccionarProveedorCompra } from "@/lib/compras/metodos-pago";
+import { CatalogoSearchSelect, type CatalogoSearchOption } from "@/components/tms/catalogo-search-select";
 
 type Opcion = { id: number; nombre: string };
 type Proveedor = { id: number; nombre_comercial: string; nit: string | null; contacto_nombre: string | null; contacto_telefono: string | null; telefono: string | null; metodo_pago_habitual: string | null; banco: string | null; numero_cuenta: string | null; dias_credito: number | null };
 type Vehiculo = { id: number; placa: string; descripcion: string | null; marca: string | null; modelo: string | null };
-type Catalogos = { entidades: Opcion[]; usuarios: Opcion[]; proveedores: Proveedor[]; vehiculos: Vehiculo[] };
+type Catalogos = { entidades: Opcion[]; usuarios: Opcion[]; requirentesOperaciones: Opcion[]; proveedores: Proveedor[]; vehiculos: Vehiculo[] };
+
+function opcionesIdentidad(usuarios: Opcion[], id: number, nombre?: string | null): CatalogoSearchOption[] {
+  const opciones = usuarios.map(u => ({ value: String(u.id), label: u.nombre }));
+  if (id && !usuarios.some(u => u.id === id)) opciones.unshift({ value: String(id), label: `${nombre || "Sin dato histórico"} (histórico)` });
+  return opciones;
+}
 type LineaForm = LineaCompraDatos & { key: string };
 const estilo = "block w-full rounded border border-[var(--border)] bg-[var(--input)] p-2 disabled:opacity-80";
 const boton = "rounded border border-[var(--border)] px-3 py-2 disabled:opacity-50";
@@ -39,9 +46,11 @@ export function RequerimientoFormClient({ slug, detalle, editable, solicitante, 
   }, [slug, editable]);
   const cambiar = (key: string, cambios: Partial<LineaForm>) => setLineas(actual => actual.map(l => l.key === key ? { ...l, ...cambios } : l));
   async function guardar(e: React.FormEvent) {
-    e.preventDefault(); setGuardando(true); setError("");
+    e.preventDefault();
+    if (!requirente && (!detalle || detalle.requirente_usuario_id !== null)) { setError("Selecciona un requirente de Operaciones."); return; }
+    setGuardando(true); setError("");
     try {
-      const r = await fetch(`/api/empresas/${slug}/compras/requerimientos${detalle ? `/${detalle.id}` : ""}`, { method: detalle ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fecha_requerimiento: fecha, entidad_requirente_id: entidad, requirente_usuario_id: requirente, ...(detalle && encargado === (detalle.encargado_compras_usuario_id ?? 0) ? {} : { encargado_compras_usuario_id: encargado || null }), observaciones: observaciones || null, ...(detalle ? { version: detalle.version } : {}), lineas: lineas.map(l => Object.fromEntries(Object.entries(l).filter(([campo]) => campo !== "key"))) }) });
+      const r = await fetch(`/api/empresas/${slug}/compras/requerimientos${detalle ? `/${detalle.id}` : ""}`, { method: detalle ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fecha_requerimiento: fecha, entidad_requirente_id: entidad, requirente_usuario_id: requirente || null, ...(detalle && encargado === (detalle.encargado_compras_usuario_id ?? 0) ? {} : { encargado_compras_usuario_id: encargado || null }), observaciones: observaciones || null, ...(detalle ? { version: detalle.version } : {}), lineas: lineas.map(l => Object.fromEntries(Object.entries(l).filter(([campo]) => campo !== "key"))) }) });
       const data = await r.json(); if (!r.ok) { if (r.status === 409) setConflicto(true); throw new Error(data.error); }
       router.push(`/e/${slug}/compras/requerimientos/${data.id}`); router.refresh();
     } catch (e) { setError(e instanceof Error ? e.message : "No se pudo guardar."); }
@@ -53,8 +62,8 @@ export function RequerimientoFormClient({ slug, detalle, editable, solicitante, 
     <form onSubmit={guardar} className="space-y-5"><fieldset disabled={deshabilitado} className="grid gap-4 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 md:grid-cols-2">
       <label>Fecha de requerimiento<input className={estilo} type="date" required value={fecha} onChange={e => setFecha(e.target.value)} /></label>
       {editable ? <><label>Empresa requirente<select className={estilo} required value={entidad || ""} onChange={e => setEntidad(Number(e.target.value))}><option value="">Seleccionar</option>{entidad && !catalogos?.entidades.some(v => v.id === entidad) && <option value={entidad}>{detalle?.entidad_requirente_nombre} (revalidar)</option>}{catalogos?.entidades.map(v => <option key={v.id} value={v.id}>{v.nombre}</option>)}</select></label>
-        <label>Persona que requiere<select className={estilo} required value={requirente || ""} onChange={e => setRequirente(Number(e.target.value))}><option value="">Seleccionar</option>{requirente && !catalogos?.usuarios.some(v => v.id === requirente) && <option value={requirente}>{detalle?.requirente_nombre} (revalidar)</option>}{catalogos?.usuarios.map(v => <option key={v.id} value={v.id}>{v.nombre}</option>)}</select></label></> : <><p>Empresa requirente: {detalle?.entidad_requirente_nombre || "Sin dato histórico"}</p><p>Persona que requiere: {detalle?.requirente_nombre || "—"}</p></>}
-      {editable ? <label>Encargado de compras<select className={estilo} value={encargado || ""} onChange={e => setEncargado(Number(e.target.value))}><option value="">Sin asignar</option>{encargado !== 0 && !catalogos?.usuarios.some(v => v.id === encargado) && <option value={encargado}>{detalle?.encargado_compras_nombre} (histórico)</option>}{catalogos?.usuarios.map(v => <option key={v.id} value={v.id}>{v.nombre}</option>)}</select></label> : <p>Encargado de compras: {detalle?.encargado_compras_nombre || "Sin asignar"}</p>}
+        <div><CatalogoSearchSelect label="Persona que requiere" placeholder="Buscar requirente..." value={String(requirente || "")} options={opcionesIdentidad(catalogos?.requirentesOperaciones ?? [], requirente === detalle?.requirente_usuario_id ? requirente : 0, detalle?.requirente_nombre)} inputClassName={estilo} onChange={value => setRequirente(Number(value) || 0)} />{detalle?.requirente_usuario_id === null && <p>Requirente histórico: {detalle.requirente_nombre || "Sin dato histórico"}</p>}</div></> : <><p>Empresa requirente: {detalle?.entidad_requirente_nombre || "Sin dato histórico"}</p><p>Persona que requiere: {detalle?.requirente_nombre || "—"}</p></>}
+      {editable ? <CatalogoSearchSelect label="Encargado de compras" placeholder="Buscar encargado de compras..." value={String(encargado || "")} options={opcionesIdentidad(catalogos?.usuarios ?? [], encargado === detalle?.encargado_compras_usuario_id ? encargado : 0, detalle?.encargado_compras_nombre)} inputClassName={estilo} emptyLabel="Sin asignar" onChange={value => setEncargado(Number(value) || 0)} /> : <p>Encargado de compras: {detalle?.encargado_compras_nombre || "Sin asignar"}</p>}
       <p>Solicitante: {detalle?.solicitante_nombre ?? solicitante} (solo lectura)</p><label className="md:col-span-2">Observaciones<textarea className={estilo} maxLength={10000} value={observaciones} onChange={e => setObservaciones(e.target.value)} /></label>
     </fieldset><h2 className="text-lg font-semibold">Detalle de compra</h2>
     {lineas.map((l, indice) => {

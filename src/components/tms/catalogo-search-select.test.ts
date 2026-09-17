@@ -1,10 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { debeMostrarNombreManual, filtrarOpcionesBusqueda, textoInicialBusqueda } from "./catalogo-search-select";
+import { debeMostrarNombreManual, filtrarOpcionesBusqueda, textoInicialBusqueda, opcionesConHistorico } from "./catalogo-search-select";
 
 const opciones = [
   { value: "1", label: "Ana Pérez", detail: "EMP-01 · Piloto", searchText: "P123ABC Toyota Hilux CLI-01 NIT 123 Cliente Uno PLAN-001 09/09/2026" },
   { value: "2", label: "Mario López", detail: "EMP-02 · Auxiliar", searchText: "C456DEF Cliente Dos PLAN-002 10/09/2026" },
 ];
+
+it("buscar no modifica selección ni catálogo; conserva únicamente la opción histórica seleccionada", () => {
+  const antes = structuredClone(opciones), value = "2";
+  expect(filtrarOpcionesBusqueda(opciones, "Ana").map(o => o.value)).toEqual(["1"]);
+  expect(value).toBe("2"); expect(opciones).toEqual(antes);
+  expect(opcionesConHistorico(opciones, "99", "Anterior")[0]).toEqual({ value: "99", label: "Anterior (histórico)" });
+  expect(opcionesConHistorico(opciones, "2", "Anterior")).toBe(opciones);
+  expect(opcionesConHistorico(opciones, "", "Manual")).toBe(opciones);
+});
 
 describe("filtrarOpcionesBusqueda", () => {
   it.each([

@@ -106,11 +106,34 @@ export async function resolverUsuarioDeEmpresaTx(
 /** Roles habilitados para actuar como "solicitante" (Operaciones) — compartido entre Fondos y Gastos. */
 export const ROLES_SOLICITANTE_OPERACIONES = new Set(["Operaciones", "GerenteOperaciones", "JefeOperaciones", "AuxiliarOperaciones"]);
 
+export function esUsuarioOperaciones(rol: unknown): boolean {
+  return typeof rol === "string" && ROLES_SOLICITANTE_OPERACIONES.has(rol);
+}
+
+export const ERROR_REQUIRIENTE_OPERACIONES = "La persona que requiere debe ser un usuario de Operaciones.";
+
+/** Crear/cambiar valida rol y tenant; identidad sin cambios conserva el snapshot histórico. */
+export async function resolverRequirenteOperacionesTx(
+  conn: PoolConnection, empresaId: number,
+  input: { requirenteUsuarioId?: number | null; requirenteNombre?: string | null; requirenteEmpleadoId?: number | null },
+  actual?: Record<string, unknown>,
+): Promise<{ nombre: string; rol: string | null } | null> {
+  const idActual = actual?.requirente_usuario_id == null ? null : Number(actual.requirente_usuario_id);
+  const mismoId = input.requirenteUsuarioId === undefined || input.requirenteUsuarioId === idActual;
+  const mismoNombre = idActual !== null || input.requirenteNombre === undefined || (input.requirenteNombre?.trim() || null) === (actual?.requirente_nombre == null ? null : String(actual.requirente_nombre).trim() || null);
+  const mismoEmpleado = input.requirenteEmpleadoId === undefined || input.requirenteEmpleadoId === (actual?.requirente_empleado_id == null ? null : Number(actual.requirente_empleado_id));
+  if (actual && mismoId && mismoNombre && mismoEmpleado) return null;
+  if (input.requirenteUsuarioId == null) throw new Error(ERROR_REQUIRIENTE_OPERACIONES);
+  const usuario = await resolverSolicitanteOperacionesTx(conn, empresaId, input.requirenteUsuarioId);
+  if (!usuario || input.requirenteEmpleadoId != null) throw new Error(ERROR_REQUIRIENTE_OPERACIONES);
+  return usuario;
+}
+
 export async function resolverSolicitanteOperacionesTx(
   conn: PoolConnection,
   empresaId: number,
   usuarioId: number | null,
 ): Promise<{ nombre: string; rol: string | null } | null> {
   const usuario = await resolverUsuarioDeEmpresaTx(conn, empresaId, usuarioId);
-  return usuario && usuario.rol && ROLES_SOLICITANTE_OPERACIONES.has(usuario.rol) ? usuario : null;
+  return usuario && esUsuarioOperaciones(usuario.rol) ? usuario : null;
 }

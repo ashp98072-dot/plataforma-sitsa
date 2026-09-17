@@ -5,8 +5,8 @@ import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { destinoPagoEmpleado } from "./destino-pago-empleado";
 import {
   resolverEntidadRequirenteTx,
+  resolverRequirenteOperacionesTx,
   resolverSolicitanteOperacionesTx,
-  resolverUsuarioDeEmpresaTx,
   validarEmpleadoDeEmpresaTx,
 } from "@/lib/tms/identidad-administrativa";
 import { crearFirmaInterna } from "@/lib/firmas/firmas-internas";
@@ -584,7 +584,8 @@ async function validarReferenciasGastoTx(
 async function resolverIdentidadAdministrativaGastoTx(
   conn: PoolConnection,
   empresaId: number,
-  input: Pick<GastoOperativoInput, "entidadRequirenteId" | "requirenteEmpleadoId" | "requirenteUsuarioId" | "solicitanteUsuarioId">,
+  input: Pick<GastoOperativoInput, "entidadRequirenteId" | "requirenteEmpleadoId" | "requirenteNombre" | "requirenteUsuarioId" | "solicitanteUsuarioId">,
+  actual?: RowDataPacket,
 ): Promise<{
   entidadRequirente: { id: number; nombre: string } | null;
   requirenteUsuario: { nombre: string; rol: string | null } | null;
@@ -594,11 +595,9 @@ async function resolverIdentidadAdministrativaGastoTx(
     ? null
     : await resolverEntidadRequirenteTx(conn, empresaId, input.entidadRequirenteId);
   await validarEmpleadoDeEmpresaTx(conn, empresaId, input.requirenteEmpleadoId, "requirente");
-  let requirenteUsuario: { nombre: string; rol: string | null } | null = null;
-  if (input.requirenteUsuarioId != null) {
-    requirenteUsuario = await resolverUsuarioDeEmpresaTx(conn, empresaId, input.requirenteUsuarioId);
-    if (!requirenteUsuario) throw new Error("El usuario requirente indicado no pertenece a esta empresa.");
-  }
+  // El campo sigue siendo opcional; si se informa una identidad nueva debe ser Operaciones.
+  const requirenteUsuario = !actual && input.requirenteUsuarioId == null && !input.requirenteNombre?.trim() && input.requirenteEmpleadoId == null
+    ? null : await resolverRequirenteOperacionesTx(conn, empresaId, input, actual);
   let solicitanteUsuario: { nombre: string; rol: string | null } | null = null;
   if (input.solicitanteUsuarioId != null) {
     solicitanteUsuario = await resolverSolicitanteOperacionesTx(conn, empresaId, input.solicitanteUsuarioId);
@@ -964,7 +963,7 @@ export async function actualizarGasto(
     // fueron validadas al crear el gasto (no se re-valida en cada edición
     // no relacionada; cambios.x en undefined significa "no tocar este campo").
     await validarReferenciasGastoTx(conn, empresaId, cambios);
-    const { entidadRequirente, requirenteUsuario, solicitanteUsuario } = await resolverIdentidadAdministrativaGastoTx(conn, empresaId, cambios);
+    const { entidadRequirente, requirenteUsuario, solicitanteUsuario } = await resolverIdentidadAdministrativaGastoTx(conn, empresaId, cambios, actual);
 
     // GASTOS-ADMINISTRATIVO-1 (Fase 5) — mismo criterio que
     // actualizarSolicitudFondo: una nueva firma snapshot se captura solo
@@ -977,10 +976,10 @@ export async function actualizarGasto(
 
     const entidadRequirenteId = entidadRequirente?.id ?? (actual.entidad_requirente_id != null ? Number(actual.entidad_requirente_id) : null);
     const entidadRequirenteNombre = entidadRequirente?.nombre ?? (actual.entidad_requirente_nombre != null ? String(actual.entidad_requirente_nombre) : null);
-    const requirenteEmpleadoId = cambios.requirenteEmpleadoId !== undefined ? cambios.requirenteEmpleadoId ?? null : (actual.requirente_empleado_id != null ? Number(actual.requirente_empleado_id) : null);
+    const requirenteEmpleadoId = requirenteUsuarioCambio ? null : (actual.requirente_empleado_id != null ? Number(actual.requirente_empleado_id) : null);
     const requirenteNombre = requirenteUsuario
       ? requirenteUsuario.nombre
-      : (cambios.requirenteNombre !== undefined ? cambios.requirenteNombre?.trim() || null : (actual.requirente_nombre != null ? String(actual.requirente_nombre) : null));
+      : (actual.requirente_nombre != null ? String(actual.requirente_nombre) : null);
     const requirenteUsuarioId = cambios.requirenteUsuarioId !== undefined ? cambios.requirenteUsuarioId ?? null : (actual.requirente_usuario_id != null ? Number(actual.requirente_usuario_id) : null);
     const solicitanteUsuarioId = cambios.solicitanteUsuarioId !== undefined ? cambios.solicitanteUsuarioId ?? null : (actual.solicitante_usuario_id != null ? Number(actual.solicitante_usuario_id) : null);
     const solicitanteNombre = cambios.solicitanteUsuarioId !== undefined

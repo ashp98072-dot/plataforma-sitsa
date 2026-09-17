@@ -25,6 +25,55 @@ beforeEach(() => {
   m.conn.execute.mockResolvedValue([{ insertId: 12, affectedRows: 1 }]); m.query.mockResolvedValue([]);
 });
 const crear = () => guardarRequerimiento(1, 8, "registrador", crearRequerimientoSchema.parse(payload), false);
+
+describe("requirentes exclusivamente Operaciones", () => {
+  it("encargado no Operaciones permitido; requirente sí exige Operaciones", async () => {
+    const original = m.conn.query.getMockImplementation()!;
+    m.conn.query.mockImplementation(async (sql: string, params: unknown[]) => sql.includes("FROM usuarios") && params[1] === 20
+      ? [[{ nombre: "Encargada Contabilidad", rol_global: "Contabilidad" }]] : original(sql, params));
+    await guardarRequerimiento(1, 8, "registrador", crearRequerimientoSchema.parse({ ...payload, encargado_compras_usuario_id: 20 }), false);
+    expect(m.conn.execute.mock.calls[0][1]).toContain("Encargada Contabilidad");
+    expect(m.conn.commit).toHaveBeenCalledOnce();
+  });
+  it("catálogo separa requirentes y encargado sin duplicar consultas ni exponer roles", async () => {
+    m.query.mockImplementation(async (sql: string) => sql.includes("FROM usuarios") ? [
+      { id: 9, nombre: "Operador", rol_global: "Operaciones" },
+      { id: 10, nombre: "Contadora", rol_global: "Contabilidad" },
+    ] : []);
+    const c = await catalogosCompra(1);
+    expect(c.requirentesOperaciones).toEqual([{ id: 9, nombre: "Operador" }]);
+    expect(c.usuarios).toEqual([{ id: 9, nombre: "Operador" }, { id: 10, nombre: "Contadora" }]);
+    expect(m.query).toHaveBeenCalledTimes(4);
+  });
+  it.each(["Contabilidad", "Admin", "Gerencia", null])("rechaza rol %s nuevo sin escrituras", async rol => {
+    const original = m.conn.query.getMockImplementation()!;
+    m.conn.query.mockImplementation(async (sql: string, params: unknown[]) => sql.includes("FROM usuarios")
+      ? [[{ nombre: "Ajeno a Operaciones", rol_global: rol }]] : original(sql, params));
+    await expect(crear()).rejects.toThrow("La persona que requiere debe ser un usuario de Operaciones.");
+    expect(m.conn.execute).not.toHaveBeenCalled(); expect(m.conn.rollback).toHaveBeenCalledOnce();
+  });
+  it.each(["Operaciones", "GerenteOperaciones", "JefeOperaciones", "AuxiliarOperaciones"])("acepta rol %s", async rol => {
+    const original = m.conn.query.getMockImplementation()!;
+    m.conn.query.mockImplementation(async (sql: string, params: unknown[]) => sql.includes("FROM usuarios")
+      ? [[{ nombre: "Servidor", rol_global: rol }]] : original(sql, params));
+    await crear(); expect(m.conn.commit).toHaveBeenCalledOnce();
+  });
+  it.each([9, null])("conserva requirente histórico %s sin consultar su rol ni reemplazar nombre", async id => {
+    cabecera = { ...cabecera, requirente_usuario_id: id, requirente_nombre: "Snapshot anterior" };
+    await editar({ requirente_usuario_id: id, observaciones: "Otra edición" });
+    expect(m.conn.query.mock.calls.some(([sql]) => sql.includes("FROM usuarios"))).toBe(false);
+    const [, params] = m.conn.execute.mock.calls.find(([sql]) => sql.startsWith("UPDATE compras_requerimientos"))!;
+    expect(params).toContain("Snapshot anterior"); expect(params[3]).toBe(id);
+  });
+  it("cambio de histórico revalida Operaciones sin afectar encargado ni solicitante", async () => {
+    cabecera = { ...cabecera, requirente_usuario_id: 10, requirente_nombre: "Anterior" };
+    const original = m.conn.query.getMockImplementation()!;
+    m.conn.query.mockImplementation(async (sql: string, params: unknown[]) => sql.includes("FROM usuarios")
+      ? [[{ nombre: "Contadora", rol_global: "Contabilidad" }]] : original(sql, params));
+    await expect(editar()).rejects.toThrow("La persona que requiere debe ser un usuario de Operaciones.");
+    expect(m.conn.execute).not.toHaveBeenCalled();
+  });
+});
 const editar = (datos: Partial<RequerimientoDatos> = {}, eliminar = true) => guardarRequerimiento(1, 8, "editor", editarRequerimientoSchema.parse({ ...payload, version: 2, lineas: [{ ...linea, id: 21 }, { ...linea, total: "0.10" }], ...datos }), eliminar, 12);
 
 describe("contrato estricto", () => {

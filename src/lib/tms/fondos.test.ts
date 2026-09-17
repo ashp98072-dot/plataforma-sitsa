@@ -177,12 +177,31 @@ describe("listarSolicitudesFondo — filtro Requirente", () => {
   });
 });
 
+describe("regresión requirente de Operaciones Fondos", () => {
+  it.each(["Contabilidad", "Admin", "Gerencia"])("rechaza nuevo requirente %s sin escritura", async rol => {
+    const c = conexion({ usuarioRol: rol });
+    await expect(crearSolicitudFondo(7, { fechaRequerimiento: "2026-09-01", requirenteUsuarioId: 9, lineas: [{ categoria: "Otros", monto: 10 }] })).rejects.toThrow("usuario de Operaciones");
+    expect(c.execute).not.toHaveBeenCalled(); expect(c.rollback).toHaveBeenCalledOnce();
+  });
+  it.each([9, null])("preserva histórico %s fuera del catálogo al editar otros datos", async id => {
+    const c = conexion({ actualRequirenteUsuarioId: id, actualRequirenteNombre: "Anterior", usuarioRol: "Contabilidad" });
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    await actualizarSolicitudFondo(7, 1, { observaciones: "Otra edición", requirenteUsuarioId: id, requirenteNombre: "Anterior" });
+    expect(c.query.mock.calls.some(([sql]) => sql.includes("FROM usuarios"))).toBe(false);
+    expect(c.execute.mock.calls.find(([sql]) => sql.includes("UPDATE tms_solicitudes_fondo"))?.[1]).toContain("Anterior");
+  });
+  it("cambiar histórico a usuario no Operaciones rechaza antes de escrituras", async () => {
+    const c = conexion({ actualRequirenteUsuarioId: 8, usuarioRol: "Contabilidad" });
+    await expect(actualizarSolicitudFondo(7, 1, { requirenteUsuarioId: 9 })).rejects.toThrow("usuario de Operaciones");
+    expect(c.execute).not.toHaveBeenCalled();
+  });
+});
 describe("crearSolicitudFondo", () => {
   it("valida la entidad requirente por empresa, activa y código permitido, y guarda nombre resuelto", async () => {
     const conn = conexion();
     vi.mocked(query).mockResolvedValue([filaSolicitud({ entidad_requirente_id: 10, entidad_requirente_nombre: "Kuiqtrans" })] as never);
     await crearSolicitudFondo(7, {
-      entidadRequirenteId: 10, fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      entidadRequirenteId: 10, fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", requirenteUsuarioId: 9,
       lineas: [{ categoria: "Combustible", monto: 100 }],
     });
     const consulta = conn.query.mock.calls.find((c) => String(c[0]).includes("FROM cont_entidades"));
@@ -195,14 +214,14 @@ describe("crearSolicitudFondo", () => {
   it("rechaza una entidad requirente ajena, inactiva o con código no permitido", async () => {
     conexion({ entidadRequirenteValida: false });
     await expect(crearSolicitudFondo(7, {
-      entidadRequirenteId: 99, fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      entidadRequirenteId: 99, fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", requirenteUsuarioId: 9,
       lineas: [{ categoria: "Combustible", monto: 100 }],
     })).rejects.toThrow("empresa requirente no es válida");
   });
   it("rechaza sin líneas", async () => {
     conexion();
     await expect(crearSolicitudFondo(7, {
-      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", lineas: [],
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", requirenteUsuarioId: 9, lineas: [],
     })).rejects.toThrow("al menos una línea");
   });
 
@@ -216,7 +235,7 @@ describe("crearSolicitudFondo", () => {
   it("rechaza línea con monto <= 0", async () => {
     conexion();
     await expect(crearSolicitudFondo(7, {
-      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", requirenteUsuarioId: 9,
       lineas: [{ categoria: "Combustible", monto: 0 }],
     })).rejects.toThrow("mayor a cero");
   });
@@ -225,7 +244,7 @@ describe("crearSolicitudFondo", () => {
     const conn = conexion();
     vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
     await crearSolicitudFondo(7, {
-      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", requirenteUsuarioId: 9,
       lineas: [
         { categoria: "Combustible", monto: 100, cantidad: 2 },
         { categoria: "Hospedaje", monto: 150 },
@@ -242,7 +261,7 @@ describe("crearSolicitudFondo", () => {
   it("hace rollback si falla la inserción de una línea", async () => {
     const conn = conexion({ fallaEn: "INSERT INTO tms_solicitud_fondo_lineas" });
     await expect(crearSolicitudFondo(7, {
-      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", requirenteUsuarioId: 9,
       lineas: [{ categoria: "Combustible", monto: 100 }],
     })).rejects.toThrow();
     expect(conn.rollback).toHaveBeenCalledOnce();
@@ -260,11 +279,11 @@ describe("crearSolicitudFondo", () => {
     expect(conn.execute.mock.calls.some((c) => (c[0] as string).includes("INSERT"))).toBe(false);
   });
 
-  it("con requirenteEmpleadoId de la MISMA empresa, sí crea (no bloquea referencias legítimas)", async () => {
+  it("con requirente usuario de Operaciones de la MISMA empresa, sí crea", async () => {
     const conn = conexion({ empleadoEnEmpresa: true });
     vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
     await crearSolicitudFondo(7, {
-      fechaRequerimiento: "2026-09-01", requirenteEmpleadoId: 3,
+      fechaRequerimiento: "2026-09-01", requirenteUsuarioId: 9,
       lineas: [{ categoria: "Combustible", monto: 100 }],
     });
     expect(conn.commit).toHaveBeenCalledOnce();
@@ -285,7 +304,7 @@ describe("crearSolicitudFondo — snapshot histórico por línea (empleado/vehí
     });
     vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
     await crearSolicitudFondo(7, {
-      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", requirenteUsuarioId: 9,
       lineas: [
         { categoria: "Combustible", monto: 100, cantidad: 2, empleadoId: 4, vehiculoId: 9, clienteId: 5, fechaViaje: "2026-09-02" },
         { categoria: "Hospedaje", monto: 150 }, // línea sin relaciones — sigue siendo válida
@@ -311,7 +330,7 @@ describe("crearSolicitudFondo — snapshot histórico por línea (empleado/vehí
     const conn = conexion({ empleadoNombre: "Nombre Real En BD", empleadoPuesto: "Auxiliar" });
     vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
     await crearSolicitudFondo(7, {
-      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", requirenteUsuarioId: 9,
       lineas: [{ categoria: "Combustible", monto: 100, empleadoId: 4 }],
     });
     const insertLinea = conn.execute.mock.calls.find((c) => (c[0] as string).includes("INSERT INTO tms_solicitud_fondo_lineas"))!;
@@ -322,7 +341,7 @@ describe("crearSolicitudFondo — snapshot histórico por línea (empleado/vehí
     const conn = conexion({ empleadoNombre: "Nombre Maestro", empleadoPuesto: "Piloto", empleadoCuenta: "111" });
     vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
     await crearSolicitudFondo(7, {
-      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", requirenteUsuarioId: 9,
       lineas: [{ categoria: "Combustible", monto: 100, empleadoId: 4, empleadoNombreOverride: "  Nombre Administrativo  ", cuentaOverride: "  9988 7766 ", cargoOverride: " Piloto especial " }],
     });
     const insert = conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_solicitud_fondo_lineas"))!;
@@ -334,7 +353,7 @@ describe("crearSolicitudFondo — snapshot histórico por línea (empleado/vehí
     const conn = conexion({ empleadoCuenta: "001122" });
     vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
     await crearSolicitudFondo(7, {
-      requirenteNombre: "Prueba", solicitanteUsuarioId: 9,
+      requirenteUsuarioId: 8, solicitanteUsuarioId: 9,
       fechaRequerimiento: "2026-09-09",
       lineas: [{ categoria: "Otros", monto: 25, empleadoId: 4, cuentaOverride: "" }],
     }, "admin");
@@ -347,7 +366,7 @@ describe("crearSolicitudFondo — snapshot histórico por línea (empleado/vehí
     const conn = conexion({ planFecha: "2026-09-10" });
     vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
     await crearSolicitudFondo(7, {
-      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", requirenteUsuarioId: 9,
       lineas: [{ categoria: "Combustible", monto: 100, planId: 8, fechaViaje: "2026-09-03" }],
     });
     const insertLinea = conn.execute.mock.calls.find((c) => (c[0] as string).includes("INSERT INTO tms_solicitud_fondo_lineas"))!;
@@ -358,7 +377,7 @@ describe("crearSolicitudFondo — snapshot histórico por línea (empleado/vehí
     const conn = conexion({ planFecha: "2026-09-10" });
     vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
     await crearSolicitudFondo(7, {
-      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", requirenteUsuarioId: 9,
       lineas: [{ categoria: "Combustible", monto: 100, planId: 8 }],
     });
     const insertLinea = conn.execute.mock.calls.find((c) => (c[0] as string).includes("INSERT INTO tms_solicitud_fondo_lineas"))!;
@@ -371,7 +390,7 @@ describe("crearSolicitudFondo — snapshot histórico por línea (empleado/vehí
     const conn = conexion({ planFecha: "2026-09-10", clienteNombre: "Cliente elegido" });
     vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
     await crearSolicitudFondo(7, {
-      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", requirenteUsuarioId: 9,
       lineas: [{ categoria: "Combustible", monto: 100, planId: 8, clienteId: 5 }],
     });
     const insert = conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_solicitud_fondo_lineas"))!;
@@ -388,7 +407,7 @@ describe("crearSolicitudFondo — snapshot histórico por línea (empleado/vehí
   ])("AISLAMIENTO MULTIEMPRESA: rechaza una línea con %s de otra empresa, sin insertar nada", async (_campo, extra, flag, mensaje) => {
     const conn = conexion({ [flag]: false });
     await expect(crearSolicitudFondo(7, {
-      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", requirenteUsuarioId: 9,
       lineas: [{ categoria: "Combustible", monto: 100, ...extra }],
     })).rejects.toThrow(mensaje);
     expect(conn.rollback).toHaveBeenCalledOnce();
@@ -410,7 +429,7 @@ describe("crearSolicitudFondo — método de pago por línea (FONDOS-GASTOS-METO
     const conn = conexion({ empleadoTelefono: "5555-1234" });
     vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
     await crearSolicitudFondo(7, {
-      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", requirenteUsuarioId: 9,
       lineas: [{ categoria: "Otros", monto: 100, empleadoId: 4, metodoPago: "Transferencia móvil" }],
     });
     const insert = conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_solicitud_fondo_lineas"))!;
@@ -421,7 +440,7 @@ describe("crearSolicitudFondo — método de pago por línea (FONDOS-GASTOS-METO
   it("rechaza Transferencia móvil sin cuenta/override resuelto, con rollback y sin insertar nada", async () => {
     const conn = conexion({ empleadoCuenta: "" }); // sin cuenta bancaria en el maestro
     await expect(crearSolicitudFondo(7, {
-      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", requirenteUsuarioId: 9,
       lineas: [{ categoria: "Combustible", monto: 100, empleadoId: 4, metodoPago: "Transferencia móvil" }],
     })).rejects.toThrow("Ingresa el número");
     expect(conn.rollback).toHaveBeenCalledOnce();
@@ -433,7 +452,7 @@ describe("crearSolicitudFondo — método de pago por línea (FONDOS-GASTOS-METO
     const conn = conexion({ empleadoCuenta: "1234567890" });
     vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
     await crearSolicitudFondo(7, {
-      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", requirenteUsuarioId: 9,
       lineas: [{ categoria: "Combustible", monto: 100, empleadoId: 4, cuentaOverride: "5555-1234", metodoPago: "Transferencia móvil" }],
     });
     const insertLinea = conn.execute.mock.calls.find((c) => (c[0] as string).includes("INSERT INTO tms_solicitud_fondo_lineas"))!;
@@ -445,7 +464,7 @@ describe("crearSolicitudFondo — método de pago por línea (FONDOS-GASTOS-METO
     const conn = conexion();
     vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
     await crearSolicitudFondo(7, {
-      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", requirenteUsuarioId: 9,
       lineas: [{ categoria: "Hospedaje", monto: 100 }], // sin empleado -> sin cuenta -> sin metodoPago tampoco es un problema
     });
     expect(conn.commit).toHaveBeenCalledOnce();
@@ -455,7 +474,7 @@ describe("crearSolicitudFondo — método de pago por línea (FONDOS-GASTOS-METO
     const conn = conexion({ empleadoCuenta: "1234567890" });
     vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
     await crearSolicitudFondo(7, {
-      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan",
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", requirenteUsuarioId: 9,
       lineas: [{ categoria: "Combustible", monto: 100, empleadoId: 4 }],
     });
     const insertLinea = conn.execute.mock.calls.find((c) => (c[0] as string).includes("INSERT INTO tms_solicitud_fondo_lineas"))!;
@@ -476,11 +495,11 @@ describe("crearSolicitudFondo — firma real de solicitante y requirente (§1/§
     const conn = conexion({ usuarioNombre: "Persona de Operaciones", usuarioRol: "JefeOperaciones" });
     vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
     await crearSolicitudFondo(7, {
-      fechaRequerimiento: "2026-09-01", requirenteNombre: "Gestora administrativa", solicitanteUsuarioId: 55,
+      fechaRequerimiento: "2026-09-01", requirenteUsuarioId: 9, solicitanteUsuarioId: 55,
       lineas: [{ categoria: "Combustible", monto: 100 }],
     }, "admin");
     const insert = conn.execute.mock.calls.find((c) => (c[0] as string).includes("INSERT INTO tms_solicitudes_fondo"));
-    expect(insert?.[1]).toContain("Gestora administrativa");
+    expect(insert?.[1]).toContain(9);
     expect(insert?.[1]).toContain(55);
     expect(insert?.[1]).toContain("Persona de Operaciones");
   });
@@ -490,7 +509,7 @@ describe("crearSolicitudFondo — firma real de solicitante y requirente (§1/§
     vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
     vi.mocked(leerBytesFirmaGuardada).mockResolvedValue(IMAGEN_FIRMA as never);
     await crearSolicitudFondo(7, {
-      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", lineas: [{ categoria: "Combustible", monto: 100 }],
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", requirenteUsuarioId: 9, lineas: [{ categoria: "Combustible", monto: 100 }],
     }, "mcaal", SOLICITANTE);
 
     const insertCabecera = conn.execute.mock.calls.find((c) => (c[0] as string).includes("INSERT INTO tms_solicitudes_fondo"));
@@ -508,14 +527,14 @@ describe("crearSolicitudFondo — firma real de solicitante y requirente (§1/§
     vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
     vi.mocked(leerBytesFirmaGuardada).mockResolvedValue(null); // sin "Mi firma"
     await crearSolicitudFondo(7, {
-      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", lineas: [{ categoria: "Combustible", monto: 100 }],
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", requirenteUsuarioId: 9, lineas: [{ categoria: "Combustible", monto: 100 }],
     }, "mcaal", SOLICITANTE);
     expect(conn.commit).toHaveBeenCalledOnce();
     expect(crearFirmaInterna).not.toHaveBeenCalled();
   });
 
   it("requirente asociado a un usuario del catálogo: resuelve su nombre real y captura su firma", async () => {
-    const conn = conexion({ usuarioNombre: "Ana Gómez", usuarioRol: "Gerencia" });
+    const conn = conexion({ usuarioNombre: "Ana Gómez", usuarioRol: "GerenteOperaciones" });
     vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
     vi.mocked(leerBytesFirmaGuardada).mockResolvedValue(IMAGEN_FIRMA as never);
     await crearSolicitudFondo(7, {
@@ -534,23 +553,22 @@ describe("crearSolicitudFondo — firma real de solicitante y requirente (§1/§
     const conn = conexion({ usuarioEnEmpresa: false });
     await expect(crearSolicitudFondo(7, {
       fechaRequerimiento: "2026-09-01", requirenteUsuarioId: 999, lineas: [{ categoria: "Combustible", monto: 100 }],
-    })).rejects.toThrow("El usuario requirente indicado no pertenece a esta empresa.");
+    })).rejects.toThrow("La persona que requiere debe ser un usuario de Operaciones.");
     expect(conn.rollback).toHaveBeenCalledOnce();
     expect(conn.commit).not.toHaveBeenCalled();
     expect(conn.execute.mock.calls.some((c) => (c[0] as string).includes("INSERT INTO tms_solicitudes_fondo"))).toBe(false);
     expect(crearFirmaInterna).not.toHaveBeenCalled();
   });
 
-  it("requirente SIN usuario asociado (texto libre): no intenta resolver ni capturar ninguna firma", async () => {
+  it("texto libre nuevo rechazado sin escrituras ni captura de firma", async () => {
     const conn = conexion();
     vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
-    await crearSolicitudFondo(7, {
+    await expect(crearSolicitudFondo(7, {
       fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan Pérez (texto libre)", lineas: [{ categoria: "Combustible", monto: 100 }],
-    });
+    })).rejects.toThrow("La persona que requiere debe ser un usuario de Operaciones.");
     expect(leerBytesFirmaGuardada).not.toHaveBeenCalled();
     expect(crearFirmaInterna).not.toHaveBeenCalled();
-    const insertCabecera = conn.execute.mock.calls.find((c) => (c[0] as string).includes("INSERT INTO tms_solicitudes_fondo"));
-    expect(insertCabecera?.[1]).toContain("Juan Pérez (texto libre)");
+    expect(conn.execute).not.toHaveBeenCalled();
   });
 
   it("si falla la transacción después de guardar las firmas, se compensan (borran) los archivos escritos", async () => {
@@ -560,7 +578,7 @@ describe("crearSolicitudFondo — firma real de solicitante y requirente (§1/§
     conexion({ fallaEn: "INSERT INTO auditoria" });
     vi.mocked(leerBytesFirmaGuardada).mockResolvedValue(IMAGEN_FIRMA as never);
     await expect(crearSolicitudFondo(7, {
-      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", lineas: [{ categoria: "Combustible", monto: 100 }],
+      fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan", requirenteUsuarioId: 9, lineas: [{ categoria: "Combustible", monto: 100 }],
     }, "mcaal", SOLICITANTE)).rejects.toThrow();
     expect(borrarUpload).toHaveBeenCalledWith("empresas/7/firmas/firma_x.png");
   });
@@ -735,7 +753,7 @@ describe("actualizarSolicitudFondo", () => {
     vi.mocked(query).mockResolvedValue([filaSolicitud({ total: "600.00" })] as never);
     await actualizarSolicitudFondo(7, 1, {
       fechaRequerimiento: "2026-09-05",
-      requirenteNombre: "Maria Lopez",
+      requirenteUsuarioId: 9,
       observaciones: "Actualizada",
       lineas: [
         { categoria: "Combustible", monto: 200, cantidad: 2 }, // 400
@@ -743,7 +761,7 @@ describe("actualizarSolicitudFondo", () => {
       ],
     }, "admin");
     const updateHeader = conn.execute.mock.calls.find((c) => (c[0] as string).includes("UPDATE tms_solicitudes_fondo"))!;
-    expect(updateHeader[1]).toEqual([undefined, undefined, null, "Maria Lopez", null, "2026-09-05", 600, "Actualizada", 1, 7]);
+    expect(updateHeader[1]).toEqual([undefined, undefined, null, "Mario Caal", 9, "2026-09-05", 600, "Actualizada", 1, 7]);
     const deleteLineas = conn.execute.mock.calls.find((c) => (c[0] as string).includes("DELETE FROM tms_solicitud_fondo_lineas"));
     expect(deleteLineas?.[1]).toEqual([7, 1]);
     const insertsLinea = conn.execute.mock.calls.filter((c) => (c[0] as string).includes("INSERT INTO tms_solicitud_fondo_lineas"));

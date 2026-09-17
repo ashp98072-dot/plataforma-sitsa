@@ -18,8 +18,31 @@ it("detalle solo lectura usa snapshots históricos y conserva total sin acciones
 it("alta tiene todos los campos, múltiples líneas, tarjetas responsive y permisos de listado", () => {
   const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", editable: true, solicitante: "Usuario actual", puedeEliminar: false, puedeVerProveedores: false, fechaHoy: "2026-09-17" }));
   for (const texto of ["Empresa requirente", "Persona que requiere", "Encargado de compras", "Usuario actual", "Serie factura", "Número factura", "Repuesto a comprar", "Método de pago", "Condición de pago", "Contado", "Crédito", "Agregar línea", "md:grid-cols-2"]) expect(html).toContain(texto);
+  expect(html).toContain('placeholder="Buscar requirente..."');
+  expect(html).toContain('placeholder="Buscar encargado de compras..."');
+  expect(html).not.toContain("Nombre manual");
   expect(renderToStaticMarkup(createElement(RequerimientosClient, { slug: "a", puedeCrear: false, puedeEditar: false }))).not.toContain("Nuevo requerimiento");
   expect(renderToStaticMarkup(createElement(RequerimientosClient, { slug: "a", puedeCrear: true, puedeEditar: false }))).toContain("Nuevo requerimiento");
+});
+
+it("buscadores reutilizados con catálogos distintos, histórico visible y sin entrada libre", () => {
+  const compras = leer("src/components/compras/requerimiento-form-client.tsx");
+  expect(compras).toContain('from "@/components/tms/catalogo-search-select"');
+  expect(compras).toMatch(/label="Persona que requiere"[^\n]*catalogos\?\.requirentesOperaciones/);
+  expect(compras).toMatch(/label="Encargado de compras"[^\n]*catalogos\?\.usuarios/);
+  for (const modulo of ["fondos", "gastos"]) {
+    const source = leer(`src/app/e/[slug]/${modulo}/page.tsx`);
+    const campo = source.split("\n").find(l => l.includes('label="Requirente"') && l.includes("requirenteHistorico"))!;
+    expect(campo).toContain("catalogos.usuariosOperaciones");
+    expect(campo).not.toContain("onTextChange");
+    expect(source).toMatch(/label="Solicitante"[^\n]*catalogos\.solicitantes/);
+    expect(source).toContain("Requirente histórico:");
+  }
+  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, {
+    slug: "a", detalle: { ...detalle, requirente_usuario_id: 99 }, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, fechaHoy: "2026-09-17",
+  }));
+  expect(html).toContain('value="99" selected=""');
+  expect(html).toContain("Persona real (histórico)");
 });
 it("landing, menú y página proveedores tienen gates independientes", () => {
   const landing = leer("src/app/e/[slug]/compras/page.tsx");
@@ -27,10 +50,10 @@ it("landing, menú y página proveedores tienen gates independientes", () => {
   expect(leer("src/app/e/[slug]/compras/proveedores/page.tsx")).toContain('obtenerAccesoComprasPagina(slug, "compras_proveedores")');
   expect(leer("src/components/app-shell.tsx")).toContain('tienePermiso(permisos, "compras_requerimientos", "ver")');
 });
-it("expansión SQL únicamente del encargado, sin RRHH, Fondos/Gastos, uploads ni credenciales", () => {
-  const files = execFileSync("git", ["diff", "--name-only", "608df8a55f75157c826350f3c131230a92db90ba"], { encoding: "utf8" }).trim().split(/\r?\n/);
-  expect(files.some(p => /rrhh|planillas|portales-proveedores|src\/lib\/tms\/|\/(fondos|gastos|programacion)\//i.test(p))).toBe(false);
-  expect(files.filter(p => p.startsWith("sql/")).every(p => ["sql/schema.sql", "sql/migrate-2026-09-compras-encargado.sql", "sql/preflight-2026-09-compras-encargado.sql"].includes(p))).toBe(true);
+it("ajuste transversal sin SQL, RRHH, programación ni credenciales", () => {
+  const files = execFileSync("git", ["diff", "--name-only", "aebfdc1ee46f6fe2bac4b80612db928e0a10c71b"], { encoding: "utf8" }).trim().split(/\r?\n/);
+  expect(files.some(p => /rrhh|planillas|portales-proveedores|\/programacion\//i.test(p))).toBe(false);
+  expect(files.filter(p => p.startsWith("sql/"))).toEqual([]);
   const modelo = leer("src/lib/compras/requerimientos.ts");
   expect(modelo).not.toMatch(/MAX\(id\)|DELETE FROM compras_requerimientos\b|writeFile|unlink|UPDATE compras_linea_documentos/);
   expect(leer("src/app/api/empresas/[slug]/compras/requerimientos/[id]/route.ts")).not.toContain("function DELETE");
