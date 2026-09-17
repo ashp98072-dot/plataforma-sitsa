@@ -4,7 +4,7 @@ vi.mock("@/lib/db", () => ({ getPool: vi.fn() }));
 vi.mock("@/lib/auditoria", () => ({ registrarAuditoriaTx: vi.fn() }));
 import { getPool } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
-import { capturarAntecedentesFiscales, confirmarAntecedentesFiscales, leerAntecedentesFiscales } from "./fiscal-antecedentes";
+import { capturarAntecedentesFiscales, confirmarAntecedentesFiscales, leerAntecedentesFiscales, leerAntecedentesFiscalesTx } from "./fiscal-antecedentes";
 
 const base = (): AntecedenteFiscal => ({ inicioFiscal: null, corteAntecedentes: null,
   ingresosGravadosPrevios: "0.00", ingresosExentosPrevios: "0.00", igssLaboralPrevio: "0.00", isrRetenidoPrevio: "0.00",
@@ -100,6 +100,16 @@ describe("antecedentes fiscales tenant/transacción", () => {
     expect(result.ultima?.revision).toBe(2); expect(result.confirmada?.revision).toBe(1);
     expect(conn.execute).toHaveBeenCalledWith(expect.stringContaining("empresa_id = ? AND id_empleado = ? AND ejercicio = ?"), [7, 9, 2026]);
     expect(conn.execute.mock.calls.some(([sql]) => sql.includes("estado ="))).toBe(false);
+  });
+  it("RRHH-PLANILLAS-ISR-2026-INTEGRACION (corrección #1): leerAntecedentesFiscalesTx usa la conexión del llamador, nunca abre otra vía getPool", async () => {
+    rows = [fila(2), fila(1, true)];
+    const result = await leerAntecedentesFiscalesTx(conn as never, 7, 9, 2026);
+    expect(result.ultima?.revision).toBe(2);
+    expect(result.confirmada?.revision).toBe(1);
+    // Misma lógica que leerAntecedentesFiscales (comparado arriba), pero sin pedir conexión al pool.
+    expect(getPool).not.toHaveBeenCalled();
+    // No es dueño de la conexión: no debe liberarla (eso es responsabilidad del llamador transaccional).
+    expect(conn.release).not.toHaveBeenCalled();
   });
   it("confirmación solo añade responsable/fecha, sin economía ni liquidación", async () => {
     rows = [fila()];

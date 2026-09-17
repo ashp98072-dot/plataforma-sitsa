@@ -8,7 +8,7 @@ import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { obtenerConceptosPendientes, aplicarConceptosSnapshot, pendientesVacios } from "./planilla-conceptos";
 import { generarLineasPeriodo, actualizarLinea, marcarPagos, actualizarEstadoPeriodo, cancelarPeriodo } from "./planillas";
 const conn = { beginTransaction: vi.fn(), query: vi.fn(), execute: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn() };
-const periodo = { id: 1, codigo: "PRUEBA", fecha_inicio: "2026-08-01", fecha_fin: "2026-08-15", estado: "Generada", tipo_periodo: "QUINCENA_1", mes: 8, anio: 2026 };
+const periodo = { id: 1, codigo: "PRUEBA", fecha_inicio: "2025-08-01", fecha_fin: "2025-08-15", estado: "Generada", tipo_periodo: "QUINCENA_1", mes: 8, anio: 2025 };
 const empleado = { id: 7, codigo: "PRUEBA", nombre: "Empleado ficticio", sueldo_base: 4000, bono_incentivo: 250, bono_herramientas: 0 };
 let prev: Record<string, unknown>[];
 let estado: string;
@@ -31,7 +31,7 @@ beforeEach(() => {
   });
   conn.query.mockImplementation(async (sql: string) => {
     if (sql.includes("SELECT id, estado FROM rrhh_planilla_periodos")) return [[{ id: 1, estado }], []];
-    if (sql.includes("SELECT autorizado_en")) return [[{ autorizado_en: autorizada ? "2026-09-01" : null }], []];
+    if (sql.includes("SELECT autorizado_en")) return [[{ autorizado_en: autorizada ? "2025-09-01" : null }], []];
     if (sql.includes("SELECT * FROM rrhh_planilla_periodos")) return [[periodo], []];
     if (sql.includes("SELECT q2.id")) return [dependientes, []];
     if (sql.includes("SELECT * FROM rrhh_planilla_lineas")) return [prev, []];
@@ -47,7 +47,7 @@ beforeEach(() => {
     }
     return [{ affectedRows: 1 }, []];
   });
-  vi.mocked(obtenerConceptosPendientes).mockResolvedValue(new Map([[7, { ...pendientesVacios(), cuotas: [{ id: 1, descuentoId: 1, saldoDescuento: 150, monto: 150, concepto: "Cuota", fecha: "2026-08-01", notas: "" }] }]]));
+  vi.mocked(obtenerConceptosPendientes).mockResolvedValue(new Map([[7, { ...pendientesVacios(), cuotas: [{ id: 1, descuentoId: 1, saldoDescuento: 150, monto: 150, concepto: "Cuota", fecha: "2025-08-01", notas: "" }] }]]));
 });
 describe("controles compartidos de planilla", () => {
   it("exige motivo al reabrir antes de iniciar transacción", async () => {
@@ -200,7 +200,7 @@ describe("regeneración segura de planilla", () => {
     expect(prev[0]).toMatchObject({ sueldo_base: 2000.01, bono_incentivo: 124.99,
       igss_laboral: 96.61, igss_patronal: 253.41, isr: 65 });
     const lectura = conn.query.mock.calls.find(([sql]) => sql.includes("INNER JOIN rrhh_planilla_lineas"));
-    expect(lectura).toEqual([expect.stringContaining("FOR UPDATE"), [3, 8, 2026]]);
+    expect(lectura).toEqual([expect.stringContaining("FOR UPDATE"), [3, 8, 2025]]);
     prev[0].isr = 60;
     await generar();
     expect(prev[0].isr).toBe(60); // ajuste manual del período, no se divide de nuevo
@@ -264,7 +264,7 @@ describe("regeneración segura de planilla", () => {
     expect(conn.execute.mock.calls.some(([sql]) => sql.includes("INSERT INTO rrhh_planilla_lineas"))).toBe(false);
   });
   it("las horas extra incluidas se conservan al regenerar sin duplicar su importe", async () => {
-    vi.mocked(obtenerConceptosPendientes).mockResolvedValue(new Map([[7, { ...pendientesVacios(), horasExtra: [{ id: 1, monto: 125, horas: 5, concepto: "Horas extra", fecha: "2026-08-01", notas: "" }] }]]));
+    vi.mocked(obtenerConceptosPendientes).mockResolvedValue(new Map([[7, { ...pendientesVacios(), horasExtra: [{ id: 1, monto: 125, horas: 5, concepto: "Horas extra", fecha: "2025-08-01", notas: "" }] }]]));
     await generar();
     const neto = prev[0].neto;
     await generar();

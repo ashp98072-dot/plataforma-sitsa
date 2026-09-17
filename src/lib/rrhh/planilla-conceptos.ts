@@ -11,7 +11,44 @@ const cuota = item.extend({ descuentoId: id, saldoDescuento: monto }).strict();
 const hora = item.extend({ horas: monto }).strict();
 const pendientesSchema = z.object({ cuotas: z.array(cuota), manuales: z.array(item), horasExtra: z.array(hora),
   descuentosLegado: z.array(item), prestacionesLegado: z.array(item) }).strict();
-export const snapshotSchema = pendientesSchema.extend({ version: z.literal(1), empresaId: id, periodoId: id, empleadoId: id, sueldoMensual: monto }).strict();
+// RRHH-PLANILLAS-ISR-2026-INTEGRACION: snapshot v2 amplía v1 con `fiscal`
+// (resultado reproducible del motor puro de ISR — ver planilla-fiscal-2026.ts
+// y fiscal-isr-2026.ts). v1 sigue leyéndose exactamente igual que antes
+// (histórico intacto, nunca reescrito); `fiscal` es OBLIGATORIO en v2 y
+// PROHIBIDO en v1, para que nunca quede ambiguo si una línea pasó por el
+// motor 2026 o no. inputUsado/resultado quedan sin tipar aquí a propósito
+// (z.unknown): su forma exacta la valida `calcularIsrTrabajo2026` al
+// calcularlos; este schema solo necesita saber que el snapshot los trae,
+// para poder guardarlos y compararlos tal cual al autorizar.
+const fiscalSnapshotSchema = z.object({
+  motor: z.literal("ISR_TRABAJO_2026"),
+  ejercicio: z.literal(2026),
+  antecedenteRevision: z.number().int(),
+  parametrosRevision: z.object({ ejercicio: z.number(), version: z.string() }),
+  fechaCorte: z.string(),
+  inputUsado: z.unknown(),
+  resultado: z.unknown(),
+  // Corrección de regla de negocio + revisión externa (segunda ronda,
+  // punto 3): valor de ISR REALMENTE aplicado a ESTA línea. En 2026 el ISR
+  // NO se reparte entre quincenas — se cobra una sola vez al mes: Q0.00 en
+  // QUINCENA_1, el ISR completo del mes en QUINCENA_2/MENSUAL/ESPECIAL.
+  // Distinto de `resultado.retencionSugerida` (el cálculo mensual del
+  // motor, antes de decidir en qué período del mes se cobra). Comparar
+  // `isr` persistido contra ESTE campo (no contra retencionSugerida) es lo
+  // único que detecta correctamente un ajuste manual, sin marcar falso
+  // positivo en QUINCENA_1 (cuyo automático legítimamente vale 0.00).
+  // Formato "0.00" — mismo criterio que el resto de montos fiscales.
+  isrAplicadoPeriodo: z.string().regex(/^\d+\.\d{2}$/),
+}).strict();
+export type FiscalSnapshot2026 = z.infer<typeof fiscalSnapshotSchema>;
+export const snapshotSchema = pendientesSchema.extend({
+  version: z.union([z.literal(1), z.literal(2)]),
+  empresaId: id, periodoId: id, empleadoId: id, sueldoMensual: monto,
+  fiscal: fiscalSnapshotSchema.optional(),
+}).strict().superRefine((v, ctx) => {
+  if (v.version === 1 && v.fiscal !== undefined) ctx.addIssue({ code: "custom", message: "snapshot v1 no debe incluir fiscal" });
+  if (v.version === 2 && v.fiscal === undefined) ctx.addIssue({ code: "custom", message: "snapshot v2 requiere fiscal" });
+});
 export type PendientesPlanilla = z.infer<typeof pendientesSchema>;
 export type ConceptosSnapshot = z.infer<typeof snapshotSchema>;
 export const pendientesVacios = (): PendientesPlanilla => ({ cuotas: [], manuales: [], horasExtra: [], descuentosLegado: [], prestacionesLegado: [] });

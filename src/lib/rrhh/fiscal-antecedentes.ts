@@ -61,19 +61,43 @@ async function revisiones(conn: PoolConnection, empresaId: number, empleadoId: n
   return rows;
 }
 
-export async function leerAntecedentesFiscales(empresaId: number, empleadoId: number, ejercicio: number) {
+export type AntecedentesFiscalesLectura = { ultima: RevisionFiscal | null; confirmada: RevisionFiscal | null; revisiones: RevisionFiscal[] };
+
+/**
+ * Núcleo de lectura, sin abrir ni cerrar conexión — para reutilizar dentro
+ * de una transacción ya abierta por el llamador (ver leerAntecedentesFiscalesTx
+ * más abajo, usado por planilla-fiscal-2026.ts). No hacer FOR UPDATE aquí:
+ * sigue siendo una lectura, no reserva la fila para escribir.
+ */
+async function leerAntecedentesConn(conn: PoolConnection, empresaId: number, empleadoId: number, ejercicio: number): Promise<AntecedentesFiscalesLectura> {
+  await empleado(conn, empresaId, empleadoId, false);
+  const rows = await revisiones(conn, empresaId, empleadoId, ejercicio);
+  // Confirmada se consulta aparte: puede ser anterior a las últimas 100 revisiones.
+  const [confirmadas] = await conn.execute<RowDataPacket[]>(
+    `SELECT * FROM rrhh_fiscal_empleado_ejercicio WHERE empresa_id = ? AND id_empleado = ? AND ejercicio = ? AND confirmado_en IS NOT NULL ORDER BY revision DESC LIMIT 1`,
+    [empresaId, empleadoId, ejercicio]);
+  return { ultima: rows[0] ? mapear(rows[0]) : null,
+    confirmada: confirmadas[0] ? mapear(confirmadas[0]) : null, revisiones: rows.map(mapear) };
+}
+
+export async function leerAntecedentesFiscales(empresaId: number, empleadoId: number, ejercicio: number): Promise<AntecedentesFiscalesLectura> {
   identidad(empresaId, empleadoId, ejercicio);
   const conn = await getPool().getConnection();
   try {
-    await empleado(conn, empresaId, empleadoId, false);
-    const rows = await revisiones(conn, empresaId, empleadoId, ejercicio);
-    // Confirmada se consulta aparte: puede ser anterior a las últimas 100 revisiones.
-    const [confirmadas] = await conn.execute<RowDataPacket[]>(
-      `SELECT * FROM rrhh_fiscal_empleado_ejercicio WHERE empresa_id = ? AND id_empleado = ? AND ejercicio = ? AND confirmado_en IS NOT NULL ORDER BY revision DESC LIMIT 1`,
-      [empresaId, empleadoId, ejercicio]);
-    return { ultima: rows[0] ? mapear(rows[0]) : null,
-      confirmada: confirmadas[0] ? mapear(confirmadas[0]) : null, revisiones: rows.map(mapear) };
+    return await leerAntecedentesConn(conn, empresaId, empleadoId, ejercicio);
   } finally { conn.release(); }
+}
+
+/**
+ * Variante transaccional: usa la conexión YA ABIERTA del llamador (por
+ * ejemplo, la transacción de generarLineasPeriodo/autorizarPeriodoPlanilla
+ * en planillas.ts, vía planilla-fiscal-2026.ts) en vez de pedir otra del
+ * pool. Misma lógica de selección/parseo exacta que leerAntecedentesFiscales
+ * — nunca abre ni libera conexión, esa es responsabilidad del llamador.
+ */
+export async function leerAntecedentesFiscalesTx(conn: PoolConnection, empresaId: number, empleadoId: number, ejercicio: number): Promise<AntecedentesFiscalesLectura> {
+  identidad(empresaId, empleadoId, ejercicio);
+  return leerAntecedentesConn(conn, empresaId, empleadoId, ejercicio);
 }
 
 async function transaccion<T>(trabajo: (conn: PoolConnection) => Promise<T>): Promise<T> {
