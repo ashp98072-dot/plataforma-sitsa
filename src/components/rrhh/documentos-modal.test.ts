@@ -91,4 +91,26 @@ describe("catálogo de tipos de documento: una sola fuente compartida", () => {
   it("'Antecedentes' está disponible para seleccionar en el modal (el bug corregido)", () => {
     expect(TIPOS_DOCUMENTO_SELECCIONABLES).toContain("Antecedentes");
   });
+
+  it.each([
+    "Tarjeta de manipulación de alimentos",
+    "Tarjeta de salud",
+    "Tarjeta de pulmones",
+    "Antecedentes penales",
+    "Antecedentes policíacos",
+    "Expediente RRHH",
+    "Contrato",
+    "Acuerdo de confidencialidad",
+    "Certificación PRAIND",
+    "Informe prueba de polígrafo",
+    "DPI",
+    "Licencia",
+    "Antecedentes",
+    "Otro",
+  ])(
+    "RRHH-EXPEDIENTE-TIPO-DOCUMENTO-AMPLIAR: '%s' aparece en el selector (mismo <select> que ya se verifica arriba, mapeado desde el catálogo compartido)",
+    (tipo) => {
+      expect(TIPOS_DOCUMENTO_SELECCIONABLES).toContain(tipo);
+    },
+  );
 });

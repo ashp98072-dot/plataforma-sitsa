@@ -2,19 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/tenant", () => ({ requireTenantRrhh: vi.fn() }));
 vi.mock("@/lib/rrhh/empleados", () => ({ obtenerEmpleado: vi.fn() }));
-vi.mock("@/lib/rrhh/documentos", () => ({
-  listarDocumentos: vi.fn(),
-  registrarDocumento: vi.fn(),
-  // RRHH-EXPEDIENTE-TIPO-DOCUMENTO: debe reflejar el catálogo real
-  // (documentos-tipos.ts), incluyendo "Antecedentes" — si este mock se
-  // queda desactualizado respecto al catálogo real, el caso "Antecedentes"
-  // de abajo lo detecta (fallaría con fallback a "Otro").
-  TIPOS_DOCUMENTO: [
-    "DPI", "Foto", "Contrato", "Licencia", "Antecedentes",
-    "Antecedentes penales", "Antecedentes policíacos", "Tarjeta de pulmones",
-    "Tarjeta de salud", "Manipulación de alimentos", "IGSS", "Boleta permiso", "Otro",
-  ],
-}));
+vi.mock("@/lib/rrhh/documentos", async () => {
+  // RRHH-EXPEDIENTE-TIPO-DOCUMENTO-AMPLIAR: TIPOS_DOCUMENTO se toma del
+  // catálogo REAL (documentos-tipos.ts), nunca de una copia hardcodeada —
+  // así este mock no puede desincronizarse del catálogo cuando se agreguen
+  // tipos nuevos (ver documentos-tipos.test.ts para el catálogo en sí).
+  const { TIPOS_DOCUMENTO } = await vi.importActual<typeof import("@/lib/rrhh/documentos-tipos")>(
+    "@/lib/rrhh/documentos-tipos",
+  );
+  return { listarDocumentos: vi.fn(), registrarDocumento: vi.fn(), TIPOS_DOCUMENTO };
+});
 vi.mock("@/lib/uploads", async () => {
   // AJUSTE PRE-MERGE PR #176 — UploadValidationError se mantiene REAL
   // (vía importActual), no mockeada: la ruta hace `instanceof
@@ -29,6 +26,7 @@ import { requireTenantRrhh } from "@/lib/tenant";
 import { obtenerEmpleado } from "@/lib/rrhh/empleados";
 import { listarDocumentos, registrarDocumento } from "@/lib/rrhh/documentos";
 import { guardarUpload, borrarUpload, UploadValidationError } from "@/lib/uploads";
+import { TIPOS_DOCUMENTO_SELECCIONABLES } from "@/lib/rrhh/documentos-tipos";
 import { GET, POST } from "./route";
 
 const ctx = { params: Promise.resolve({ slug: "sitsa", id: "42" }) };
@@ -208,6 +206,32 @@ describe("RRHH-EXPEDIENTES-UPLOAD-STABILITY — POST documentos", () => {
     expect(res2.status).toBe(200);
     expect(registrarDocumento).toHaveBeenLastCalledWith(
       expect.objectContaining({ tipoDocumento: "Antecedentes policíacos" }),
+    );
+  });
+
+  it.each(TIPOS_DOCUMENTO_SELECCIONABLES)(
+    "RRHH-EXPEDIENTE-TIPO-DOCUMENTO-AMPLIAR: tipo seleccionable '%s' se persiste con su valor canónico, nunca cae a 'Otro'",
+    async (tipo) => {
+      const res = await POST(reqConTipo(tipo), ctx);
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      if (tipo !== "Otro") {
+        expect(data.documento.tipoDocumento).not.toBe("Otro");
+      }
+      expect(data.documento.tipoDocumento).toBe(tipo);
+      expect(registrarDocumento).toHaveBeenCalledWith(
+        expect.objectContaining({ tipoDocumento: tipo }),
+      );
+    },
+  );
+
+  it("RRHH-EXPEDIENTE-TIPO-DOCUMENTO-AMPLIAR: conserva compatibilidad de lectura con el histórico 'Manipulación de alimentos' (ya no seleccionable, pero sigue siendo válido)", async () => {
+    const res = await POST(reqConTipo("Manipulación de alimentos"), ctx);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.documento.tipoDocumento).toBe("Manipulación de alimentos");
+    expect(registrarDocumento).toHaveBeenCalledWith(
+      expect.objectContaining({ tipoDocumento: "Manipulación de alimentos" }),
     );
   });
 

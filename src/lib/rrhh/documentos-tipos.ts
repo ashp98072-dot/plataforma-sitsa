@@ -21,9 +21,19 @@ export const TIPOS_DOCUMENTO = [
   "Antecedentes policíacos",
   "Tarjeta de pulmones",
   "Tarjeta de salud",
+  // RRHH-EXPEDIENTE-TIPO-DOCUMENTO-AMPLIAR — "Manipulación de alimentos" se
+  // mantiene SOLO para lectura/compatibilidad de documentos ya guardados
+  // con ese valor; las cargas nuevas usan "Tarjeta de manipulación de
+  // alimentos" (ver TIPOS_DOCUMENTO_SELECCIONABLES). Cambio aditivo: no se
+  // borra ni se reclasifica ningún histórico.
   "Manipulación de alimentos",
+  "Tarjeta de manipulación de alimentos",
   "IGSS",
   "Boleta permiso",
+  "Expediente RRHH",
+  "Acuerdo de confidencialidad",
+  "Certificación PRAIND",
+  "Informe prueba de polígrafo",
   "Otro",
 ] as const;
 
@@ -31,23 +41,32 @@ export type TipoDocumentoEmpleado = (typeof TIPOS_DOCUMENTO)[number];
 
 /**
  * Subconjunto ofrecido en el <select> del modal de "Expediente" al subir un
- * documento manualmente (mismo subconjunto que ya se mostraba antes de este
- * fix, solo que ahora agrega "Antecedentes"). Tipado contra
- * `TipoDocumentoEmpleado` para que cualquier valor aquí sea, por
- * construcción, uno de los valores válidos del catálogo único de arriba —
- * así no puede volver a ocurrir lo mismo que con "Antecedentes".
+ * documento manualmente. Tipado contra `TipoDocumentoEmpleado` para que
+ * cualquier valor aquí sea, por construcción, uno de los valores válidos
+ * del catálogo único de arriba — así no puede volver a ocurrir lo mismo que
+ * pasó con "Antecedentes" (un valor que el frontend ofrecía pero el
+ * backend no reconocía).
  *
  * No incluye "Foto" (tiene su propio flujo dedicado — ver
  * src/app/api/empresas/[slug]/empleados/[id]/foto/route.ts, que asume una
- * única fila con tipo_documento = 'Foto' por empleado) ni los tipos más
- * especializados (tarjetas, IGSS, boleta de permiso, "Antecedentes
- * penales"/"policíacos", etc.) — esos siguen siendo válidos para
+ * única fila con tipo_documento = 'Foto' por empleado), ni "IGSS"/"Boleta
+ * permiso"/"Manipulación de alimentos" (siguen siendo válidos para
  * históricos y para el backend, pero no se ofrecen como atajo en este
- * modal genérico, igual que antes de este fix.
+ * modal — "Manipulación de alimentos" además fue reemplazado por "Tarjeta
+ * de manipulación de alimentos" para cargas nuevas).
  */
 export const TIPOS_DOCUMENTO_SELECCIONABLES: readonly TipoDocumentoEmpleado[] = [
-  "DPI",
+  "Tarjeta de manipulación de alimentos",
+  "Tarjeta de salud",
+  "Tarjeta de pulmones",
+  "Antecedentes penales",
+  "Antecedentes policíacos",
+  "Expediente RRHH",
   "Contrato",
+  "Acuerdo de confidencialidad",
+  "Certificación PRAIND",
+  "Informe prueba de polígrafo",
+  "DPI",
   "Licencia",
   "Antecedentes",
   "Otro",
