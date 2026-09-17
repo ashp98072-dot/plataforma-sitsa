@@ -16,6 +16,14 @@ import type { PoolConnection } from "mysql2/promise";
 import { registrarAuditoria, registrarAuditoriaTx } from "@/lib/auditoria";
 import { bloquearPeriodosPlanilla, conPeriodoBloqueado, exigirPrimeraQuincenaSinDependientes } from "./planilla-control";
 import { liberarReservasPeriodo } from "./planilla-reversion";
+import { calcularFiscal2026Empleado } from "./planilla-fiscal-2026";
+
+/**
+ * RRHH-PLANILLAS-ISR-2026-INTEGRACION: único ejercicio con motor propio por
+ * ahora — ver planilla-fiscal-2026.ts y fiscal-isr-2026.ts. Cualquier otro
+ * ejercicio conserva el cálculo de isr.ts sin cambios (calcularISRMensual).
+ */
+const EJERCICIO_MOTOR_ISR_2026 = 2026;
 
 /** Fase P0: identidad opcional de quincena/mes de un periodo. */
 export type TipoPeriodo = "QUINCENA_1" | "QUINCENA_2" | "MENSUAL" | "ESPECIAL";
@@ -883,7 +891,6 @@ export async function generarLineasPeriodo(
       // Vista previa: fuentes independientes capturadas sin consumirlas.
       const conceptosEmpleado = pendientes.get(empId) ?? pendientesVacios();
       const { otrosIngresos: otros, descuentos: desc } = totalesConceptos(conceptosEmpleado);
-      const snapshot: ConceptosSnapshot = { version: 1, empresaId, periodoId, empleadoId: empId, sueldoMensual: sueldo, ...conceptosEmpleado };
 
       // Fase D3 / P1: valores mensuales esperados — siempre sobre los
       // campos CONTRACTUALES completos del empleado (nunca se sobreescriben
@@ -896,9 +903,41 @@ export async function generarLineasPeriodo(
       const anterior = prevMap.get(empId);
       const anioFiscal =
         Number(periodo.fechaInicio.slice(0, 4)) || new Date().getFullYear();
-      const isrMensual = out
-        ? 0
-        : calcularISRMensual(sueldo, bonoInc, anioFiscal);
+
+      // RRHH-PLANILLAS-ISR-2026-INTEGRACION: ejercicio 2026 usa el motor
+      // puro (vía adapter) a nivel MENSUAL equivalente; el reparto de
+      // quincenas de más abajo queda intacto, solo cambia la FUENTE de
+      // isrMensual. Outsourcing nunca pasa por el adapter (nunca paga ISR).
+      // Cualquier otro ejercicio conserva isr.ts sin cambios.
+      let isrMensual: number;
+      let fiscal2026: Awaited<ReturnType<typeof calcularFiscal2026Empleado>> | null = null;
+      if (out) {
+        isrMensual = 0;
+      } else if (anioFiscal === EJERCICIO_MOTOR_ISR_2026) {
+        fiscal2026 = await calcularFiscal2026Empleado(
+          conn, empresaId, anioFiscal,
+          { id: periodoId, mes: periodo.mes, fechaInicio: periodo.fechaInicio },
+          { id: empId, codigo: String(e.codigo ?? ""), sueldo, bonoIncentivo: bonoInc, bonoHerramientas: bonoHerr },
+          conceptosEmpleado,
+        );
+        isrMensual = Number(fiscal2026.resultado.retencionSugerida);
+      } else {
+        isrMensual = calcularISRMensual(sueldo, bonoInc, anioFiscal);
+      }
+
+      const snapshot: ConceptosSnapshot = fiscal2026
+        ? {
+            version: 2, empresaId, periodoId, empleadoId: empId, sueldoMensual: sueldo, ...conceptosEmpleado,
+            fiscal: {
+              motor: "ISR_TRABAJO_2026", ejercicio: EJERCICIO_MOTOR_ISR_2026,
+              antecedenteRevision: fiscal2026.antecedenteRevision,
+              parametrosRevision: fiscal2026.resultado.parametrosRevision,
+              fechaCorte: periodo.fechaInicio,
+              inputUsado: fiscal2026.input,
+              resultado: fiscal2026.resultado,
+            },
+          }
+        : { version: 1, empresaId, periodoId, empleadoId: empId, sueldoMensual: sueldo, ...conceptosEmpleado };
 
       let sueldoLinea: number;
       let bonoIncLinea: number;
@@ -958,8 +997,14 @@ export async function generarLineasPeriodo(
         : normalizarFormaPago(String(e.forma_pago ?? "transferencia"));
       const estadoPago = anterior?.estadoPago === "Pagado" ? "Pagado" : "Pendiente";
       const refPago = anterior?.refPago ?? "";
-      // El ISR persistido ya es del período, no un importe mensual a dividir.
-      if (anterior) isr = anterior.isr;
+      // El ISR persistido ya es del período, no un importe mensual a dividir
+      // — EXCEPTO en 2026, donde el ticket pide recalcular en cada generar/
+      // regenerar con el motor puro (ver docblock de planilla-fiscal-2026.ts).
+      // Esto también significa que un ajuste manual de ISR hecho vía
+      // actualizarLinea() en un período 2026 se pierde al regenerar — mismo
+      // comportamiento que ya tenían sueldo/bonos/IGSS antes de este cambio,
+      // ahora extendido a ISR solo para este ejercicio.
+      if (anterior && anioFiscal !== EJERCICIO_MOTOR_ISR_2026) isr = anterior.isr;
       // No convertir una diferencia inconsistente en retención negativa
       // (o devolución automática). Requiere revisión explícita de RRHH.
       const conceptos = {
@@ -1296,22 +1341,66 @@ export async function autorizarPeriodoPlanilla(empresaId: number, periodoId: num
     const empleados = new Set(snapshots.map((s) => s.empleadoId));
     if (empleados.size !== snapshots.length) throw new Error("La planilla contiene empleados duplicados.");
     const [salarios] = await conn.query<RowDataPacket[]>(
-      `SELECT id, sueldo_base FROM empleados WHERE empresa_id = ? AND id IN (${snapshots.map(() => "?").join(",")}) ORDER BY id FOR UPDATE`,
+      `SELECT id, codigo, sueldo_base, bono_incentivo, bono_herramientas FROM empleados WHERE empresa_id = ? AND id IN (${snapshots.map(() => "?").join(",")}) ORDER BY id FOR UPDATE`,
       [empresaId, ...snapshots.map((s) => s.empleadoId)],
     );
-    const sueldoActualPorEmpleado = new Map(salarios.map((e) => [Number(e.id), Number(e.sueldo_base ?? 0) || 0]));
+    const empleadoActualPorId = new Map(salarios.map((e) => [Number(e.id), {
+      codigo: String(e.codigo ?? ""),
+      sueldo: Number(e.sueldo_base ?? 0) || 0,
+      bonoIncentivo: e.bono_incentivo != null && e.bono_incentivo !== "" ? Number(e.bono_incentivo) : 250,
+      bonoHerramientas: Number(e.bono_herramientas ?? 0) || 0,
+    }]));
     for (const s of snapshots) {
-      const sueldoActual = sueldoActualPorEmpleado.get(s.empleadoId);
+      const sueldoActual = empleadoActualPorId.get(s.empleadoId)?.sueldo;
       if (sueldoActual == null || !Number.isFinite(sueldoActual) || redondearQ(sueldoActual) !== redondearQ(s.sueldoMensual)) {
         throw new Error("La información salarial cambió. Debe regenerarse la planilla antes de autorizar.");
+      }
+    }
+    // RRHH-PLANILLAS-ISR-2026-INTEGRACION: revalida que el input fiscal
+    // (antecedentes confirmados, acumulados de períodos ya autorizados,
+    // sueldo/bonos vigentes, parámetros 2026) siga siendo EXACTAMENTE el
+    // usado al generar/regenerar — igual de estricto que la revalidación de
+    // sueldo de arriba. Cualquier diferencia, o que el cálculo ahora
+    // bloquee (antecedentes ya no confirmados, concepto ahora PENDIENTE),
+    // exige regenerar la planilla; nunca autoriza con un fiscal desactualizado
+    // ni recalcula/aplica nada por su cuenta. Líneas sin `fiscal` (snapshot
+    // v1, ejercicio distinto de 2026) no pasan por aquí.
+    for (const s of snapshots) {
+      if (!s.fiscal) continue;
+      const actual = empleadoActualPorId.get(s.empleadoId);
+      if (!actual) throw new Error("La información salarial cambió. Debe regenerarse la planilla antes de autorizar.");
+      const recalculo = await calcularFiscal2026Empleado(
+        conn, empresaId, s.fiscal.ejercicio,
+        { id: s.periodoId, mes: periodo.mes, fechaInicio: periodo.fechaInicio },
+        { id: s.empleadoId, codigo: actual.codigo, sueldo: actual.sueldo, bonoIncentivo: actual.bonoIncentivo, bonoHerramientas: actual.bonoHerramientas },
+        { cuotas: s.cuotas, manuales: s.manuales, horasExtra: s.horasExtra, descuentosLegado: s.descuentosLegado, prestacionesLegado: s.prestacionesLegado },
+      );
+      if (
+        JSON.stringify(recalculo.input) !== JSON.stringify(s.fiscal.inputUsado) ||
+        recalculo.antecedenteRevision !== s.fiscal.antecedenteRevision
+      ) {
+        throw new Error("La información fiscal (antecedentes, acumulados o parámetros 2026) cambió. Debe regenerarse la planilla antes de autorizar.");
       }
     }
     for (const s of snapshots) await aplicarConceptosSnapshot(conn, s, usuario);
     const [r] = await conn.execute<ResultSetHeader>(`UPDATE rrhh_planilla_periodos SET estado = 'Cerrada', autorizado_por = ?, autorizado_en = NOW()
       WHERE empresa_id = ? AND id = ? AND estado = 'Generada' AND autorizado_en IS NULL`, [usuario, empresaId, periodoId]);
     if (r.affectedRows !== 1) throw new Error("No se pudo confirmar la autorización.");
+    // RRHH-PLANILLAS-ISR-2026-INTEGRACION: no hay isrCalculado/isrAplicado
+    // separados todavía (ver planilla-fiscal-2026.ts — documentado como gap
+    // pendiente, no se implementa en este PR para no ampliar demasiado el
+    // alcance). Como mínimo, un ajuste manual del ISR vía actualizarLinea()
+    // que sobreviva la revalidación de arriba (porque el INPUT fiscal no
+    // cambió, solo el importe persistido) queda visible en la auditoría en
+    // vez de invisible.
+    const empleadosConIsrSobrescrito = snapshots
+      .map((s, i) => ({ empleadoId: s.empleadoId, isrPersistido: Number(rows[i].isr), fiscal: s.fiscal }))
+      .filter(({ isrPersistido, fiscal }) => fiscal
+        && redondearQ(isrPersistido) !== redondearQ(Number((fiscal.resultado as { retencionSugerida: string }).retencionSugerida)))
+      .map(({ empleadoId }) => empleadoId);
     await registrarAuditoriaTx(conn, { empresaId, usuario, accion: "autorizar_periodo_planilla", modulo: "rrhh", detalle: JSON.stringify({ periodoId, codigo: periodo.codigo, empleados: snapshots.length,
-      cuotas: snapshots.reduce((sum, s) => sum + s.cuotas.length + s.manuales.length, 0), horasExtra: snapshots.reduce((sum, s) => sum + s.horasExtra.length, 0) }) });
+      cuotas: snapshots.reduce((sum, s) => sum + s.cuotas.length + s.manuales.length, 0), horasExtra: snapshots.reduce((sum, s) => sum + s.horasExtra.length, 0),
+      ...(empleadosConIsrSobrescrito.length ? { isrSobrescritoManualmente: empleadosConIsrSobrescrito } : {}) }) });
   });
 }
 

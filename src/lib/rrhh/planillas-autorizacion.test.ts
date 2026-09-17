@@ -25,13 +25,13 @@ const generar = () => generarLineasPeriodo(3, 1, { usuario: "prueba" });
 const autorizar = () => autorizarPeriodoPlanilla(3, 1, "gerente");
 beforeEach(() => {
   vi.resetAllMocks(); sueldo = 4000; fallo = "";
-  periodo = { id: 1, empresa_id: 3, codigo: "PRUEBA", estado: "Borrador", autorizado_en: null, autorizado_por: null, fecha_inicio: "2026-08-01", fecha_fin: "2026-08-15", tipo_periodo: "QUINCENA_1", mes: 8, anio: 2026 };
+  periodo = { id: 1, empresa_id: 3, codigo: "PRUEBA", estado: "Borrador", autorizado_en: null, autorizado_por: null, fecha_inicio: "2025-08-01", fecha_fin: "2025-08-15", tipo_periodo: "QUINCENA_1", mes: 8, anio: 2025 };
   lineas = []; abonos = [];
-  maestros = [{ id: 11, empresa_id: 3, empleado_id: 7, estado: "ACTIVO", monto_original: 600, periodicidad: "QUINCENAL", concepto: "Anticipo", fecha_inicio: "2026-08-01" }];
-  cuotas = [1, 2, 3].map((n) => ({ id: 20 + n, empresa_id: 3, descuento_id: 11, numero_cuota: n, estado: "PENDIENTE", planilla_periodo_id: null, fecha_programada: "2026-08-01", monto_programado: 200 }));
-  horas = [{ id: 31, empresa_id: 3, id_empleado: 7, estado: "APROBADA", fecha: "2026-08-10", monto: 125, horas: 5, planilla_periodo_id: null }];
-  legado = [{ id: 41, empresa_id: 3, id_empleado: 7, concepto: "Descuento legado", fecha: "2026-08-01", monto: 25 }];
-  prestaciones = [{ id: 51, empresa_id: 3, id_empleado: 7, concepto: "Prestación", fecha: "2026-08-01", monto: 75 }];
+  maestros = [{ id: 11, empresa_id: 3, empleado_id: 7, estado: "ACTIVO", monto_original: 600, periodicidad: "QUINCENAL", concepto: "Anticipo", fecha_inicio: "2025-08-01" }];
+  cuotas = [1, 2, 3].map((n) => ({ id: 20 + n, empresa_id: 3, descuento_id: 11, numero_cuota: n, estado: "PENDIENTE", planilla_periodo_id: null, fecha_programada: "2025-08-01", monto_programado: 200 }));
+  horas = [{ id: 31, empresa_id: 3, id_empleado: 7, estado: "APROBADA", fecha: "2025-08-10", monto: 125, horas: 5, planilla_periodo_id: null }];
+  legado = [{ id: 41, empresa_id: 3, id_empleado: 7, concepto: "Descuento legado", fecha: "2025-08-01", monto: 25 }];
+  prestaciones = [{ id: 51, empresa_id: 3, id_empleado: 7, concepto: "Prestación", fecha: "2025-08-01", monto: 75 }];
   conn.beginTransaction.mockImplementation(async () => { backup = JSON.stringify({ periodo, lineas, cuotas, horas, maestros, abonos, legado, prestaciones }); });
   conn.rollback.mockImplementation(async () => { ({ periodo, lineas, cuotas, horas, maestros, abonos, legado, prestaciones } = JSON.parse(backup)); });
   vi.mocked(getPool).mockReturnValue({ getConnection: async () => conn } as unknown as ReturnType<typeof getPool>);
@@ -72,7 +72,7 @@ beforeEach(() => {
       const h = horas.find((h) => h.id === p[2])!;
       h.estado = "APLICADA_EN_PLANILLA"; h.planilla_periodo_id = p[0];
     } else if (sql.includes("UPDATE rrhh_planilla_periodos")) {
-      if (sql.includes("autorizado_en = NOW()")) { periodo.estado = "Cerrada"; periodo.autorizado_por = p[0]; periodo.autorizado_en = "2026-09-16 12:00:00"; }
+      if (sql.includes("autorizado_en = NOW()")) { periodo.estado = "Cerrada"; periodo.autorizado_por = p[0]; periodo.autorizado_en = "2025-09-16 12:00:00"; }
       else periodo.estado = "Generada";
     } else if (sql.includes("UPDATE rrhh_descuentos_maestro")) maestros[0].estado = "FINALIZADO";
     else if (sql.includes("SET estado_pago")) for (const l of lineas) l.estado_pago = p[0];
@@ -166,7 +166,7 @@ describe("generar / regenerar / autorizar con fuentes reales simuladas", () => {
   });
   it("empresa ajena no puede generar ni autorizar; collector excluye sus conceptos", async () => {
     maestros.push({ ...maestros[0], id: 12, empresa_id: 99, empleado_id: 99 });
-    const p = await obtenerConceptosPendientes(conn as never, 3, { id: 1, fechaInicio: "2026-08-01", fechaFin: "2026-08-15" });
+    const p = await obtenerConceptosPendientes(conn as never, 3, { id: 1, fechaInicio: "2025-08-01", fechaFin: "2025-08-15" });
     expect(p.has(99)).toBe(false);
     await expect(autorizarPeriodoPlanilla(99, 1, "prueba")).rejects.toThrow("Periodo no encontrado");
     await expect(generarLineasPeriodo(99, 1, { usuario: "prueba" })).rejects.toThrow("Periodo no encontrado");
