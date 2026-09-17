@@ -1,24 +1,29 @@
--- SOLO LECTURA. No ejecutado por este PR. Seleccionar la base de destino primero.
+-- SOLO LECTURA de datos/metadatos. No ejecutado por este PR.
+-- Configuración explícita: ajustar SOLO este literal para otra instalación.
+-- Ejecutar el archivo completo; no depende de la vista activa de phpMyAdmin.
+-- SET configura una variable de sesión, no modifica tablas ni datos persistentes.
+SET @compras_schema_objetivo = 'u611730801_Plataforma';
 -- MariaDB: JSON no interviene en estas tablas. No asumir FKs declaradas físicamente.
 -- APLICAR = ausente y dependencias compatibles; NOOP = contrato existente compatible.
 -- DETENER = divergencia/dependencia incompatible. Ante cualquier DETENER NO aplicar nada.
 -- Los IDs de usuarios son globales: acceso usuario/empresa se validará en aplicación.
-SELECT VERSION() AS version_servidor, DATABASE() AS base_destino;
+SELECT VERSION() AS version_servidor, @compras_schema_objetivo AS base_destino,
+DATABASE() AS contexto_activo;
 SELECT TABLE_NAME, ENGINE, TABLE_COLLATION
-FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()
+FROM information_schema.TABLES WHERE TABLE_SCHEMA = @compras_schema_objetivo
 AND TABLE_NAME IN ('empresas','usuarios','cont_entidades','flota_vehiculos',
 'compras_proveedores','compras_requerimientos','compras_requerimiento_lineas','compras_linea_documentos');
 SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, CHARACTER_SET_NAME, COLLATION_NAME
-FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE()
+FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = @compras_schema_objetivo
 AND TABLE_NAME IN ('empresas','usuarios','cont_entidades','flota_vehiculos')
 AND COLUMN_NAME IN ('id','empresa_id');
 SELECT TABLE_NAME, INDEX_NAME, NON_UNIQUE,
 GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) AS columnas
-FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE()
+FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = @compras_schema_objetivo
 AND TABLE_NAME IN ('empresas','usuarios','cont_entidades','flota_vehiculos')
 GROUP BY TABLE_NAME, INDEX_NAME, NON_UNIQUE;
 SELECT TABLE_NAME, CONSTRAINT_NAME, COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME
-FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = DATABASE()
+FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = @compras_schema_objetivo
 AND REFERENCED_TABLE_NAME IS NOT NULL AND TABLE_NAME IN
 ('empresas','usuarios','cont_entidades','flota_vehiculos',
 'compras_proveedores','compras_requerimientos','compras_requerimiento_lineas','compras_linea_documentos');
@@ -252,7 +257,7 @@ SELECT 'compras_linea_documentos' tabla, 'fk_cb_linea_documentos_retirado' nombr
 indices_reales AS (
 SELECT TABLE_NAME tabla, INDEX_NAME nombre, NON_UNIQUE no_unico,
 GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) columnas
-FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE()
+FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = @compras_schema_objetivo
 GROUP BY TABLE_NAME, INDEX_NAME, NON_UNIQUE
 ),
 fks_reales AS (
@@ -265,25 +270,27 @@ MAX(r.DELETE_RULE) regla_delete, MAX(r.UPDATE_RULE) regla_update
 FROM information_schema.KEY_COLUMN_USAGE k
 JOIN information_schema.REFERENTIAL_CONSTRAINTS r
 ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.TABLE_NAME = k.TABLE_NAME AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME
-WHERE k.TABLE_SCHEMA = DATABASE() AND k.REFERENCED_TABLE_NAME IS NOT NULL
+WHERE k.TABLE_SCHEMA = @compras_schema_objetivo AND k.REFERENCED_TABLE_NAME IS NOT NULL
 GROUP BY k.TABLE_NAME, k.CONSTRAINT_NAME
 ),
 padres AS (
 SELECT 'empresas' tabla UNION ALL SELECT 'usuarios' UNION ALL SELECT 'cont_entidades' UNION ALL SELECT 'flota_vehiculos'
 ),
 compatibilidad AS (
-SELECT CASE WHEN DATABASE() IS NULL OR VERSION() NOT LIKE '11.8.%MariaDB%'
+SELECT CASE WHEN @compras_schema_objetivo IS NULL
+OR NOT EXISTS (SELECT 1 FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = @compras_schema_objetivo)
+OR VERSION() NOT LIKE '11.8.%MariaDB%'
 OR EXISTS (
 SELECT 1 FROM padres p LEFT JOIN information_schema.TABLES t
-ON t.TABLE_SCHEMA = DATABASE() AND t.TABLE_NAME = p.tabla
-LEFT JOIN information_schema.COLUMNS c ON c.TABLE_SCHEMA = DATABASE() AND c.TABLE_NAME = p.tabla AND c.COLUMN_NAME = 'id'
+ON t.TABLE_SCHEMA = @compras_schema_objetivo AND t.TABLE_NAME = p.tabla
+LEFT JOIN information_schema.COLUMNS c ON c.TABLE_SCHEMA = @compras_schema_objetivo AND c.TABLE_NAME = p.tabla AND c.COLUMN_NAME = 'id'
 WHERE t.ENGINE IS NULL OR t.ENGINE <> 'InnoDB' OR t.TABLE_COLLATION NOT LIKE 'utf8mb4%'
 OR c.DATA_TYPE IS NULL OR c.DATA_TYPE <> 'int' OR c.COLUMN_TYPE LIKE '%unsigned%' OR c.IS_NULLABLE <> 'NO'
 OR NOT EXISTS (SELECT 1 FROM indices_reales i WHERE i.tabla = p.tabla AND i.columnas = 'id' AND i.no_unico = 0)
 )
 OR EXISTS (
 SELECT 1 FROM padres p LEFT JOIN information_schema.COLUMNS c
-ON c.TABLE_SCHEMA = DATABASE() AND c.TABLE_NAME = p.tabla AND c.COLUMN_NAME = 'empresa_id'
+ON c.TABLE_SCHEMA = @compras_schema_objetivo AND c.TABLE_NAME = p.tabla AND c.COLUMN_NAME = 'empresa_id'
 WHERE p.tabla IN ('cont_entidades','flota_vehiculos')
 AND (c.DATA_TYPE IS NULL OR c.DATA_TYPE <> 'int' OR c.COLUMN_TYPE LIKE '%unsigned%' OR c.IS_NULLABLE <> 'NO'
 OR NOT EXISTS (SELECT 1 FROM indices_reales i WHERE i.tabla = p.tabla AND i.columnas = 'empresa_id,id' AND i.no_unico = 0))
@@ -301,11 +308,11 @@ SELECT n.tabla,
 CASE WHEN compatibilidad.ok = 0 THEN 'DETENER'
 WHEN t.TABLE_NAME IS NULL THEN 'APLICAR'
 WHEN t.ENGINE <> 'InnoDB' OR t.TABLE_COLLATION <> 'utf8mb4_unicode_ci'
-OR (SELECT COUNT(*) FROM information_schema.COLUMNS c WHERE c.TABLE_SCHEMA = DATABASE() AND c.TABLE_NAME = n.tabla)
+OR (SELECT COUNT(*) FROM information_schema.COLUMNS c WHERE c.TABLE_SCHEMA = @compras_schema_objetivo AND c.TABLE_NAME = n.tabla)
 <> (SELECT COUNT(*) FROM esperadas e WHERE e.tabla = n.tabla)
 OR EXISTS (
 SELECT 1 FROM esperadas e LEFT JOIN information_schema.COLUMNS c
-ON c.TABLE_SCHEMA = DATABASE() AND c.TABLE_NAME = e.tabla AND c.COLUMN_NAME = e.columna
+ON c.TABLE_SCHEMA = @compras_schema_objetivo AND c.TABLE_NAME = e.tabla AND c.COLUMN_NAME = e.columna
 WHERE e.tabla = n.tabla AND (
 c.COLUMN_NAME IS NULL OR c.ORDINAL_POSITION <> e.posicion OR c.DATA_TYPE <> e.tipo
 OR (e.tipo IN ('int','bigint','tinyint','decimal') AND c.COLUMN_TYPE LIKE '%unsigned%')
@@ -325,20 +332,20 @@ AND NOT EXISTS (SELECT 1 FROM indices_esperados e WHERE e.tabla = i.tabla AND e.
 OR EXISTS (
 SELECT 1 FROM fks_esperadas e LEFT JOIN fks_reales f ON f.tabla = e.tabla AND f.nombre = e.nombre
 WHERE e.tabla = n.tabla AND (f.nombre IS NULL OR f.columnas <> e.columnas OR f.destino <> e.destino
-OR f.esquema_destino <> DATABASE() OR f.columnas_destino <> e.columnas_destino OR f.regla_delete <> 'RESTRICT' OR f.regla_update <> 'RESTRICT')
+OR f.esquema_destino <> @compras_schema_objetivo OR f.columnas_destino <> e.columnas_destino OR f.regla_delete <> 'RESTRICT' OR f.regla_update <> 'RESTRICT')
 )
 OR (SELECT COUNT(*) FROM fks_reales f WHERE f.tabla = n.tabla) <> (SELECT COUNT(*) FROM fks_esperadas e WHERE e.tabla = n.tabla)
 OR EXISTS (SELECT 1 FROM checks_esperados e WHERE e.tabla = n.tabla AND NOT EXISTS (
-SELECT 1 FROM information_schema.CHECK_CONSTRAINTS c WHERE c.CONSTRAINT_SCHEMA = DATABASE() AND c.TABLE_NAME = e.tabla AND c.CONSTRAINT_NAME = e.nombre
+SELECT 1 FROM information_schema.CHECK_CONSTRAINTS c WHERE c.CONSTRAINT_SCHEMA = @compras_schema_objetivo AND c.TABLE_NAME = e.tabla AND c.CONSTRAINT_NAME = e.nombre
 AND LOWER(REPLACE(REPLACE(REPLACE(c.CHECK_CLAUSE, '`', ''), ' ', ''), CHAR(10), '')) = e.clausula
 ))
-OR (SELECT COUNT(*) FROM information_schema.CHECK_CONSTRAINTS c WHERE c.CONSTRAINT_SCHEMA = DATABASE() AND c.TABLE_NAME = n.tabla)
+OR (SELECT COUNT(*) FROM information_schema.CHECK_CONSTRAINTS c WHERE c.CONSTRAINT_SCHEMA = @compras_schema_objetivo AND c.TABLE_NAME = n.tabla)
 <> (SELECT COUNT(*) FROM checks_esperados e WHERE e.tabla = n.tabla)
 THEN 'DETENER' ELSE 'NOOP' END decision,
 CASE WHEN compatibilidad.ok = 0 THEN 'Validar versión, padres, INT signed, InnoDB/utf8mb4 e índices únicos físicos.'
 WHEN t.TABLE_NAME IS NULL THEN 'Crear con la migración completa, en orden.'
 ELSE 'Contrato contrastado: columnas/defaults/índices/FKs/checks. No corregir divergencias automáticamente.' END detalle
 FROM nuevas n CROSS JOIN compatibilidad
-LEFT JOIN information_schema.TABLES t ON t.TABLE_SCHEMA = DATABASE() AND t.TABLE_NAME = n.tabla
+LEFT JOIN information_schema.TABLES t ON t.TABLE_SCHEMA = @compras_schema_objetivo AND t.TABLE_NAME = n.tabla
 ORDER BY n.tabla;
 -- Revisar además SHOW CREATE TABLE de cualquier tabla ya existente antes de aplicar.
