@@ -72,7 +72,7 @@ function snapshotV2Fiscal(overrides: Partial<Record<string, unknown>> = {}) {
     fiscal: {
       motor: "ISR_TRABAJO_2026", ejercicio: 2026, antecedenteRevision: 1,
       parametrosRevision: { ejercicio: 2026, version: "2026.1" }, fechaCorte: "2026-08-01",
-      inputUsado: {}, resultado: {}, isrAplicadoPeriodo: "0.00",
+      inputUsado: {}, resultado: {}, isrAplicadoPeriodo: "0.00", configuracionConceptosRevision: "2026.r1",
     },
     ...overrides,
   });
@@ -129,16 +129,19 @@ describe("construirInputFiscalEmpleado2026 — antecedentes", () => {
 describe("construirInputFiscalEmpleado2026 — conceptos PENDIENTES bloquean", () => {
   beforeEach(() => vi.mocked(leerAntecedentesFiscalesTx).mockResolvedValue(antecedenteConfirmado()));
 
-  it("9. bono incentivo distinto de cero bloquea (sin configuración fiscal publicada)", async () => {
-    await expect(
-      construirInputFiscalEmpleado2026(conn as never, 3, 2026, periodo, { ...empleado, bonoIncentivo: 250 }, pendientesVacios()),
-    ).rejects.toThrow(/[Bb]ono incentivo.*PENDIENTE/);
+  it("3. bono incentivo ya NO bloquea: la configuración 2026 lo resuelve GRAVADO y se proyecta como recurrente", async () => {
+    const { input } = await construirInputFiscalEmpleado2026(
+      conn as never, 3, 2026, periodo, { ...empleado, bonoIncentivo: 250 }, pendientesVacios(),
+    );
+    const bono = input.ingresosPropiosProyectadosRestantes.find((c) => c.codigoConcepto === "BONO_INCENTIVO");
+    // periodo.mes = 9 -> 4 meses restantes: 250 * 4 = 1000.00
+    expect(bono).toMatchObject({ tratamiento: "GRAVADO", monto: "1000.00" });
   });
 
-  it("bono herramientas distinto de cero bloquea", async () => {
+  it("13. bono herramientas sin clasificación oficial suficiente -> pendiente, bloquea", async () => {
     await expect(
       construirInputFiscalEmpleado2026(conn as never, 3, 2026, periodo, { ...empleado, bonoHerramientas: 100 }, pendientesVacios()),
-    ).rejects.toThrow(/[Bb]ono herramientas.*PENDIENTE/);
+    ).rejects.toThrow(/BONO_HERRAMIENTAS.*PENDIENTE/);
   });
 
   it("10. prestación de texto libre (rrhh_prestaciones) distinta de cero bloquea", async () => {
@@ -158,8 +161,8 @@ describe("construirInputFiscalEmpleado2026 — conceptos PENDIENTES bloquean", (
   it("reporta TODOS los conceptos bloqueantes de una vez, no solo el primero", async () => {
     const pendientes = { ...pendientesVacios(), prestacionesLegado: [{ id: 1, monto: 75, concepto: "Otro", fecha: "2026-09-01", notas: "" }] };
     await expect(
-      construirInputFiscalEmpleado2026(conn as never, 3, 2026, periodo, { ...empleado, bonoIncentivo: 250, bonoHerramientas: 50 }, pendientes),
-    ).rejects.toThrow(/[Bb]ono incentivo[\s\S]*[Bb]ono herramientas[\s\S]*Prestación/);
+      construirInputFiscalEmpleado2026(conn as never, 3, 2026, periodo, { ...empleado, bonoHerramientas: 50 }, pendientes),
+    ).rejects.toThrow(/BONO_HERRAMIENTAS[\s\S]*Prestación/);
   });
 });
 

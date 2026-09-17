@@ -9,6 +9,7 @@ import { leerAntecedentesFiscalesTx } from "./fiscal-antecedentes";
 import { generarLineasPeriodo, autorizarPeriodoPlanilla } from "./planillas";
 import { leerConceptosSnapshot } from "./planilla-conceptos";
 import * as fiscalIsr2026 from "./fiscal-isr-2026";
+import * as fiscalConceptos2026 from "./fiscal-conceptos-2026";
 import { redondearQ } from "./contratos-pago";
 
 /**
@@ -390,5 +391,49 @@ describe("auditoría de override manual sin falsos positivos en quincenas (corre
     );
     await autorizar();
     expect(detalleAuditoria().isrSobrescritoManualmente).toEqual([7]);
+  });
+});
+
+describe("configuración fiscal versionada de conceptos (RRHH-FISCAL-CONCEPTOS-2026)", () => {
+  it("14. la revisión de configuración de conceptos usada queda congelada en el snapshot", async () => {
+    await generar();
+    const s = leerConceptosSnapshot(lineas[0].conceptos_snapshot)!;
+    expect(s.fiscal!.configuracionConceptosRevision).toBe("2026.r1");
+  });
+
+  it("15. un cambio de revisión de configuración entre generar y autorizar bloquea, aunque el input fiscal siga igual", async () => {
+    await generar();
+    const spy = vi
+      .spyOn(fiscalConceptos2026, "CONFIGURACION_CONCEPTOS_2026_REVISION", "get")
+      .mockReturnValue("2026.r2-simulada" as never);
+    try {
+      await expect(autorizar()).rejects.toThrow(/información fiscal.*regenerarse/);
+      expect(periodo.estado).toBe("Generada");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("16. no hay fuzzy matching por texto: una prestación con texto 'Aguinaldo' sigue bloqueando como PENDIENTE, no se resuelve por coincidencia de nombre", async () => {
+    conn.query.mockImplementation(async (sql: string, params: unknown[]) => {
+      if (sql.includes("p.autorizado_en IS NOT NULL")) return [prioridades, []];
+      if (sql.includes("INNER JOIN rrhh_planilla_lineas")) return [q1Datos, []];
+      if (sql.includes("FROM empleados")) return [Number(params[0]) === 3 && params.slice(1).includes(7) ? [{ id: 7, codigo: "E7", sueldo_base: sueldo, bono_incentivo: bonoIncentivo, bono_herramientas: 0 }] : [], []];
+      if (sql.includes("SELECT id, estado FROM")) return [Number(params[0]) === 3 ? [periodo] : [], []];
+      if (sql.includes("SELECT q2.id")) return [[], []];
+      if (sql.includes("SELECT autorizado_en") || sql.includes("SELECT * FROM rrhh_planilla_periodos")) return [[periodo], []];
+      if (sql.includes("FROM rrhh_planilla_lineas")) return [lineas, []];
+      if (sql.includes("FROM rrhh_descuentos_maestro")) return [[], []];
+      if (sql.includes("FROM rrhh_descuento_cuotas")) return [[], []];
+      if (sql.includes("FROM rrhh_descuento_abonos")) return [[], []];
+      if (sql.includes("FROM horas_extra_registros")) return [[], []];
+      if (sql.includes("FROM rrhh_descuentos")) return [[], []];
+      // Texto libre exacto "Aguinaldo" — aunque la configuración 2026 SÍ
+      // clasifica el código AGUINALDO (CONDICIONAL con límite), esta fila NO
+      // trae ese código: solo texto libre sin origen estable.
+      if (sql.includes("FROM rrhh_prestaciones")) return [[{ id: 90, empresa_id: 3, id_empleado: 7, concepto: "Aguinaldo", fecha: "2026-09-01", monto: 3000 }], []];
+      return [[], []];
+    });
+    await expect(generar()).rejects.toThrow(/Prestación "Aguinaldo".*PENDIENTE|no tiene clasificación fiscal 2026/);
   });
 });

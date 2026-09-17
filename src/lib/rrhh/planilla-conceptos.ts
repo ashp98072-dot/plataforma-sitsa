@@ -39,6 +39,13 @@ const fiscalSnapshotSchema = z.object({
   // positivo en QUINCENA_1 (cuyo automático legítimamente vale 0.00).
   // Formato "0.00" — mismo criterio que el resto de montos fiscales.
   isrAplicadoPeriodo: z.string().regex(/^\d+\.\d{2}$/),
+  // RRHH-FISCAL-CONCEPTOS-2026: revisión de la configuración fiscal de
+  // conceptos (ver fiscal-conceptos-2026.ts) usada para clasificar
+  // sueldo/bono incentivo/bono herramientas/horas extra de esta línea.
+  // autorizarPeriodoPlanilla exige que coincida con la recalculada al
+  // autorizar — si cambió, exige regenerar (mismo patrón que
+  // antecedenteRevision/parametrosRevision).
+  configuracionConceptosRevision: z.string().min(1),
 }).strict();
 export type FiscalSnapshot2026 = z.infer<typeof fiscalSnapshotSchema>;
 export const snapshotSchema = pendientesSchema.extend({

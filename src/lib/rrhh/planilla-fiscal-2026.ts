@@ -2,6 +2,11 @@ import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { IGSS_LABORAL_PCT, redondearQ } from "./contratos-pago";
 import { leerAntecedentesFiscalesTx } from "./fiscal-antecedentes";
 import {
+  CONFIGURACION_CONCEPTOS_2026_REVISION,
+  resolverConceptoFiscal2026,
+  type DefinicionConceptoFiscal2026,
+} from "./fiscal-conceptos-2026";
+import {
   calcularIsrTrabajo2026,
   type ConceptoIngresoIsr,
   type InputIsrTrabajo2026,
@@ -40,31 +45,45 @@ import { leerConceptosSnapshot, type PendientesPlanilla } from "./planilla-conce
  *    pasa al motor es la cuenta de MESES
  *    restantes del ejercicio, incluyendo el mes del período actual.
  *
- * 2. CONCEPTOS CLASIFICADOS (sin inventar configuración):
- *    - `sueldo_base` (mensual contractual) → GRAVADO. Asentado, no está en
- *      discusión en el diseño (tabla §3: "Sueldo ordinario | Gravado").
- *    - horas extra del período (`horas_extra_registros`) → GRAVADO. También
- *      asentado en el diseño (tabla §3: "Horas extra | Gravado"). Son
- *      eventos puntuales del período, NO se proyectan a meses futuros.
- *    - `bono_incentivo` y `bono_herramientas` → PENDIENTE (bloquea) cuando
- *      son distintos de cero. El diseño marca bono incentivo "sujeto a
- *      revisión de criterio aplicable" y bono herramientas "pendiente de
- *      naturaleza" — NO están asentados, así que no se heredan del criterio
- *      implícito del motor viejo (que sí los suma como gravables) sin pasar
- *      por configuración fiscal versionada.
- *    - `rrhh_prestaciones` del período (tipo libre: aguinaldo, viáticos,
- *      "Otro", bonos variables...) → PENDIENTE (bloquea) cuando son
- *      distintas de cero. Texto libre sin clasificación posible sin
- *      configuración (diseño §3: "Otro / texto libre: Pendiente").
+ * 2. CONCEPTOS CLASIFICADOS — VÍA CONFIGURACIÓN VERSIONADA (RRHH-FISCAL-
+ *    CONCEPTOS-2026, ver fiscal-conceptos-2026.ts, `resolverConceptoFiscal2026`):
+ *    NADA se hardcodea aquí. Cada concepto con código/origen ESTABLE se
+ *    resuelve por su `codigoConcepto` contra `CONFIGURACION_CONCEPTOS_2026`:
+ *    - `sueldo_base` → código `SUELDO_BASE` (columna estable de `empleados`).
+ *    - horas extra del período (`horas_extra_registros`) → código
+ *      `HORAS_EXTRA` (fuente con id/registro propio). Eventos puntuales del
+ *      período, NO se proyectan a meses futuros.
+ *    - `bono_incentivo` → código `BONO_INCENTIVO` (columna estable de
+ *      `empleados`). La configuración 2026 lo resuelve GRAVADO para ISR
+ *      (Decreto 10-2012 Art. 68, sin exención en el Art. 70) y exento de
+ *      IGSS/IRTRA/INTECAP (Decreto 78-89/37-2001) — ver fuentes completas en
+ *      fiscal-conceptos-2026.ts. Como es un monto CONTRACTUAL MENSUAL igual
+ *      que el sueldo, se proyecta igual: resto del mes actual (anti-
+ *      duplicado) + meses futuros completos.
+ *    - `bono_herramientas` → código `BONO_HERRAMIENTAS` (columna estable de
+ *      `empleados`). La configuración 2026 lo deja PENDIENTE (bloquea): no
+ *      se localizó decreto/criterio que determine su naturaleza (compensación
+ *      vs. reintegro documentado), y el sistema no captura evidencia de
+ *      reintegro — no se inventa, sigue bloqueando.
+ *    - `rrhh_prestaciones` del período (aguinaldo, Bono14, viáticos, "Otro",
+ *      comisiones, bonos variables...) → PENDIENTE (bloquea) SIEMPRE,
+ *      incondicionalmente. Aunque la configuración 2026 SÍ tiene entradas
+ *      para AGUINALDO/BONO_14/COMISION/VIATICO_COMPROBABLE/VIATICO_NO_COMPROBABLE/
+ *      BONO_VARIABLE (con fuente legal documentada), esta tabla solo guarda texto libre
+ *      (`concepto`/`tipo`) sin código/origen estable — conectarla por
+ *      coincidencia de texto ("aguinaldo" en el string) sería fuzzy
+ *      matching, EXPRESAMENTE prohibido por el diseño. Hasta que exista una
+ *      fuente de datos con código/origen estable para estos conceptos (ver
+ *      docs/RRHH-PLANILLAS-DISENO-FISCAL-MINIMO.md §3, "asignaciones
+ *      explícitas"), quedan PENDIENTE sin excepción — gap documentado, no
+ *      resuelto en este PR.
  *    - Cuotas/descuentos (rrhh_descuentos, cuotas de rrhh_descuentos_maestro)
  *      NO entran aquí: son descuentos de nómina, no ingreso ni deducción
  *      fiscal reconocida — quedan fuera del input fiscal por completo.
- *    En la práctica esto bloqueará la generación 2026 de cualquier empleado
- *    con bono_incentivo/bono_herramientas/prestaciones distintos de cero
- *    hasta que exista una configuración fiscal de conceptos publicada (PR
- *    aparte) — es el comportamiento pedido ("impedir cálculo automático
- *    para empleados con conceptos PENDIENTES"), documentado también en el
- *    reporte de este PR.
+ *    En la práctica esto YA NO bloquea la generación 2026 solo por tener
+ *    bono_incentivo (el caso más común, Q250 por defecto) — sigue
+ *    bloqueando si hay bono_herramientas o prestaciones distintos de cero,
+ *    hasta que existan sus propias fuentes de datos con código estable.
  *
  * 3. ACUMULADOS PROPIOS Y ANTI-DUPLICACIÓN DEL MES ACTUAL (corrección de
  *    revisión externa, punto 3): se leen TODAS las líneas de períodos de la
@@ -138,6 +157,14 @@ import { leerConceptosSnapshot, type PendientesPlanilla } from "./planilla-conce
  *
  * 7. Outsourcing: igual que el motor viejo, nunca paga ISR — no pasa por
  *    este adapter en absoluto (ver planillas.ts).
+ *
+ * 8. CONFIGURACIÓN DE CONCEPTOS VERSIONADA: la revisión usada
+ *    (`CONFIGURACION_CONCEPTOS_2026_REVISION`, ver fiscal-conceptos-2026.ts)
+ *    se devuelve junto al input/resultado y planillas.ts la guarda en el
+ *    snapshot (`fiscal.configuracionConceptosRevision`). Al autorizar, si la
+ *    revisión recalculada difiere de la guardada, bloquea y exige
+ *    regenerar — mismo patrón ya usado para `antecedenteRevision` y
+ *    `parametrosRevision` del motor puro.
  */
 
 export class ErrorFiscalPlanilla2026 extends Error {}
@@ -172,6 +199,7 @@ export type PeriodoFiscal2026 = { id: number; mes: number | null; fechaInicio: s
 export type ResultadoAdapterFiscal2026 = {
   input: InputIsrTrabajo2026;
   antecedenteRevision: number;
+  configuracionConceptosRevision: string;
 };
 
 /**
@@ -229,8 +257,15 @@ export async function construirInputFiscalEmpleado2026(
      FOR UPDATE`,
     [empresaId, empleado.id, ejercicio, periodo.id],
   );
+  // Configuración fiscal versionada de conceptos — ver fiscal-conceptos-2026.ts.
+  const defSueldo = resolverConceptoFiscal2026("SUELDO_BASE", ejercicio);
+  const defHorasExtra = resolverConceptoFiscal2026("HORAS_EXTRA", ejercicio);
+  const defBonoIncentivo = resolverConceptoFiscal2026("BONO_INCENTIVO", ejercicio);
+  const defBonoHerramientas = resolverConceptoFiscal2026("BONO_HERRAMIENTAS", ejercicio);
+
   let acumuladoGravado = 0;
   let acumuladoMesActualSueldo = 0;
+  let acumuladoMesActualBonoIncentivo = 0;
   // Corrección de regla de negocio: en 2026 el ISR NO se reparte entre
   // quincenas — QUINCENA_1 SIEMPRE aplica Q0.00 (ver planillas.ts) y
   // QUINCENA_2/MENSUAL/ESPECIAL cobran el ISR completo del mes. Como
@@ -268,7 +303,12 @@ export async function construirInputFiscalEmpleado2026(
     }
     const gravadoHist = esV2ConFiscal ? sueldoHist + bonoHist + bonoHerrHist + otrosHist : sueldoHist;
     acumuladoGravado += gravadoHist;
-    if (esMesActual) acumuladoMesActualSueldo += sueldoHist;
+    if (esMesActual) {
+      acumuladoMesActualSueldo += sueldoHist;
+      // bonoHist de una línea v1 nunca llega aquí distinto de cero (habría
+      // bloqueado arriba); de una línea v2 sí puede ser > 0 legítimamente.
+      acumuladoMesActualBonoIncentivo += bonoHist;
+    }
   }
   if (bloqueantesHistorico.length) {
     throw new ErrorFiscalPlanilla2026(
@@ -287,54 +327,68 @@ export async function construirInputFiscalEmpleado2026(
     });
   }
 
-  // 3) Proyección restante: sueldo mensual vigente, restando lo del mes
-  // actual que YA quedó en acumulados (ver docblock, punto 3), más los
-  // meses futuros completos; más los eventos puntuales de ESTE período
-  // (horas extra gravadas, prestaciones libres pendientes de clasificar).
+  // 3) Proyección restante: conceptos CONTRACTUALES MENSUALES recurrentes
+  // (sueldo, y bono incentivo cuando la configuración lo resuelve GRAVADO)
+  // restando lo del mes actual que YA quedó en acumulados (ver docblock,
+  // punto 3), más los meses futuros completos; más los eventos puntuales de
+  // ESTE período (horas extra, prestaciones libres pendientes de clasificar).
   const restantes = mesesRestantes(mes);
   const mesesFuturosCompletos = Math.max(0, 12 - mes);
-  const sueldoRestanteMesActual = Math.max(0, empleado.sueldo - acumuladoMesActualSueldo);
-  const proyeccionSueldoTotal = sueldoRestanteMesActual + empleado.sueldo * mesesFuturosCompletos;
+  const proyectarRecurrente = (montoMensual: number, acumuladoMesActual: number): number => {
+    const restanteMesActual = Math.max(0, montoMensual - acumuladoMesActual);
+    return restanteMesActual + montoMensual * mesesFuturosCompletos;
+  };
+  const proyeccionSueldoTotal = proyectarRecurrente(empleado.sueldo, acumuladoMesActualSueldo);
 
   const bloqueantes: string[] = [];
   const proyectados: ConceptoIngresoIsr[] = [];
 
-  if (proyeccionSueldoTotal > 0.004) {
-    proyectados.push({
-      id: "sueldo-mensual",
-      codigoConcepto: "SUELDO_BASE",
-      tratamiento: "GRAVADO",
-      monto: q(proyeccionSueldoTotal),
-      categoriaLimiteAnual: null,
-    });
-  }
-  if (empleado.bonoIncentivo > 0.004) {
+  /** Empuja un concepto RECURRENTE MENSUAL (sueldo, bono incentivo) según su definición fiscal, o bloquea si está PENDIENTE/CONDICIONAL sin evidencia. */
+  function resolverConceptoRecurrente(idConcepto: string, def: DefinicionConceptoFiscal2026, montoProyectado: number, montoMensualParaMensaje: number) {
+    if (montoProyectado <= 0.004) return;
+    if (def.tratamientoIsr === "GRAVADO" || def.tratamientoIsr === "EXENTO") {
+      proyectados.push({
+        id: idConcepto, codigoConcepto: def.codigo, tratamiento: def.tratamientoIsr,
+        monto: q(montoProyectado), categoriaLimiteAnual: def.categoriaLimiteAnual,
+      });
+      return;
+    }
+    // PENDIENTE, o CONDICIONAL sin evidencia disponible en este adapter (ver fiscal-conceptos-2026.ts).
     bloqueantes.push(
-      `Bono incentivo (Q${q(empleado.bonoIncentivo)}/mes) del empleado ${empleado.codigo} no tiene clasificación fiscal ` +
-        "2026 publicada (PENDIENTE): sujeto a revisión de criterio aplicable, ver docs/RRHH-PLANILLAS-DISENO-FISCAL-MINIMO.md.",
+      `${def.codigo} (Q${q(montoMensualParaMensaje)}/mes) del empleado ${empleado.codigo} no tiene clasificación fiscal ` +
+        `${ejercicio} firme (${def.tratamientoIsr}): ${def.notas} Fuente: ${def.fuenteLegal}`,
     );
   }
-  if (empleado.bonoHerramientas > 0.004) {
-    bloqueantes.push(
-      `Bono herramientas (Q${q(empleado.bonoHerramientas)}/mes) del empleado ${empleado.codigo} no tiene clasificación ` +
-        "fiscal 2026 publicada (PENDIENTE): naturaleza pendiente de determinar.",
-    );
-  }
+
+  const proyeccionBonoIncentivoTotal = proyectarRecurrente(empleado.bonoIncentivo, acumuladoMesActualBonoIncentivo);
+  resolverConceptoRecurrente("sueldo-mensual", defSueldo, proyeccionSueldoTotal, empleado.sueldo);
+  resolverConceptoRecurrente("bono-incentivo-mensual", defBonoIncentivo, proyeccionBonoIncentivoTotal, empleado.bonoIncentivo);
+  // Bono herramientas no es (todavía) recurrente-proyectable: mientras esté
+  // PENDIENTE nunca llega a proyectarse; si algún día se publica GRAVADO/
+  // EXENTO, debe recibir el mismo tratamiento mensual que sueldo/bono
+  // incentivo (pendiente para esa futura revisión, no se adivina aquí).
+  resolverConceptoRecurrente("bono-herramientas-mensual", defBonoHerramientas, empleado.bonoHerramientas, empleado.bonoHerramientas);
+
   for (const h of pendientes.horasExtra) {
     if (h.monto <= 0.004) continue;
-    proyectados.push({
-      id: `he-${h.id}`,
-      codigoConcepto: "HORAS_EXTRA",
-      tratamiento: "GRAVADO",
-      monto: q(h.monto),
-      categoriaLimiteAnual: null,
-    });
+    if (defHorasExtra.tratamientoIsr === "GRAVADO" || defHorasExtra.tratamientoIsr === "EXENTO") {
+      proyectados.push({
+        id: `he-${h.id}`, codigoConcepto: defHorasExtra.codigo, tratamiento: defHorasExtra.tratamientoIsr,
+        monto: q(h.monto), categoriaLimiteAnual: defHorasExtra.categoriaLimiteAnual,
+      });
+    } else {
+      bloqueantes.push(`HORAS_EXTRA (Q${q(h.monto)}) del empleado ${empleado.codigo} no tiene clasificación fiscal ${ejercicio} firme.`);
+    }
   }
   for (const p of pendientes.prestacionesLegado) {
     if (p.monto <= 0.004) continue;
+    // Texto libre sin código/origen estable: NUNCA se resuelve contra la
+    // configuración por coincidencia de texto (fuzzy matching prohibido,
+    // ver docblock punto 2) — PENDIENTE incondicional hasta que exista una
+    // fuente con código/origen estable para estos registros.
     bloqueantes.push(
       `Prestación "${p.concepto}" (Q${q(p.monto)}) del empleado ${empleado.codigo} no tiene clasificación fiscal 2026 ` +
-        "publicada (PENDIENTE): concepto de texto libre, requiere clasificación explícita antes de calcular ISR automático.",
+        "publicada (PENDIENTE): concepto de texto libre sin código/origen estable, requiere asignación explícita antes de calcular ISR automático.",
     );
   }
   if (bloqueantes.length) {
@@ -345,8 +399,9 @@ export async function construirInputFiscalEmpleado2026(
 
   // 4) IGSS laboral: acumulado real de períodos ya autorizados + proyectado
   // sobre la MISMA proyección de sueldo anti-duplicada de arriba (nunca
-  // sobre bono/otros — misma base que ya usa IGSS_LABORAL_PCT en el resto
-  // de Planillas).
+  // sobre bono/otros — la configuración 2026 excluye bono incentivo de la
+  // base IGSS, misma base que ya usa IGSS_LABORAL_PCT en el resto de
+  // Planillas).
   const igssProyectado = redondearQ(proyeccionSueldoTotal * IGSS_LABORAL_PCT);
 
   const input: InputIsrTrabajo2026 = {
@@ -362,7 +417,11 @@ export async function construirInputFiscalEmpleado2026(
     deduccionesAdicionalesAdmitidas: [],
   };
 
-  return { input, antecedenteRevision: confirmada.revision };
+  return {
+    input,
+    antecedenteRevision: confirmada.revision,
+    configuracionConceptosRevision: CONFIGURACION_CONCEPTOS_2026_REVISION,
+  };
 }
 
 /**
@@ -377,9 +436,9 @@ export async function calcularFiscal2026Empleado(
   empleado: EmpleadoFiscal2026,
   pendientes: PendientesPlanilla,
 ) {
-  const { input, antecedenteRevision } = await construirInputFiscalEmpleado2026(
+  const { input, antecedenteRevision, configuracionConceptosRevision } = await construirInputFiscalEmpleado2026(
     conn, empresaId, ejercicio, periodo, empleado, pendientes,
   );
   const resultado = calcularIsrTrabajo2026(input);
-  return { input, resultado, antecedenteRevision };
+  return { input, resultado, antecedenteRevision, configuracionConceptosRevision };
 }
