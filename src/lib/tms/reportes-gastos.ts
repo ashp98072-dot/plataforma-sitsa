@@ -650,6 +650,7 @@ export type FilaSolicitudFondoReporte = {
   monto: number;
   total: number;
   cuenta?: string | null;
+  metodoPago?: string | null;
   requirenteNombre?: string | null;
   entidadRequirenteNombre?: string | null;
   solicitanteNombre?: string | null;
@@ -715,7 +716,7 @@ export async function reporteSolicitudesFondo(
     `SELECT l.id AS linea_id, l.solicitud_id, s.codigo AS solicitud_codigo,
             DATE_FORMAT(s.fecha_requerimiento, '%Y-%m-%d') AS fecha_solicitud,
             DATE_FORMAT(l.fecha_viaje, '%Y-%m-%d') AS fecha_viaje,
-            l.empleado_id, l.empleado_nombre, l.cuenta, l.cargo,
+            l.empleado_id, l.empleado_nombre, l.cuenta, l.metodo_pago, l.cargo,
             l.vehiculo_id, l.placa,
             l.cliente_id, l.cliente_nombre,
             l.plan_id, l.cantidad, l.descripcion, l.monto,
@@ -741,6 +742,7 @@ export async function reporteSolicitudesFondo(
       empleadoNombre: r.empleado_nombre != null ? String(r.empleado_nombre) : null,
       cargo: r.cargo != null ? String(r.cargo) : null,
       cuenta: r.cuenta != null ? String(r.cuenta) : null,
+      metodoPago: r.metodo_pago != null ? String(r.metodo_pago) : null,
       vehiculoId: r.vehiculo_id != null ? Number(r.vehiculo_id) : null,
       placa: r.placa != null ? String(r.placa) : null,
       clienteId: r.cliente_id != null ? Number(r.cliente_id) : null,

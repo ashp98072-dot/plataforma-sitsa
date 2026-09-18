@@ -457,6 +457,22 @@ describe("SOLICITUD-FONDOS-REPORTE-1 — reporteSolicitudesFondo", () => {
     };
   }
 
+  it("selecciona y devuelve metodo_pago de cada línea sin inferir desde cuenta", async () => {
+    vi.mocked(query).mockResolvedValue([
+      filaFondo({ metodo_pago: "Transferencia" }),
+      filaFondo({ metodo_pago: "Transferencia móvil" }),
+      filaFondo({ metodo_pago: "Método histórico" }),
+      filaFondo({ metodo_pago: null, cuenta: "123456" }),
+    ] as never);
+    const filas = await reporteSolicitudesFondo(7);
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("l.metodo_pago");
+    expect(sql).toContain("l.empresa_id = ?");
+    expect(params).toEqual([7]);
+    expect(filas.map(f => f.metodoPago)).toEqual(["Transferencia", "Transferencia móvil", "Método histórico", null]);
+    expect(filas.map(f => f.total)).toEqual([200, 200, 200, 200]);
+  });
+
   it("una fila por LÍNEA, con 'Total' = cantidad × monto (nunca el total de la solicitud completa)", async () => {
     vi.mocked(query).mockResolvedValue([filaFondo()] as never);
     const [f] = await reporteSolicitudesFondo(7);
