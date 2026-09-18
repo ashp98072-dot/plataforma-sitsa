@@ -232,3 +232,63 @@ describe("permisos críticos por rol", () => {
     expect(tienePermiso(permisos, "vacaciones", "ver")).toBe(false);
   });
 });
+
+describe("COMPRAS-FASE-4-AUTORIZACION — permiso compras_autorizar", () => {
+  it("es un módulo asignable propio, con etiqueta clara y bajo el módulo de empresa 'tms'", () => {
+    expect(esPlataformaPermisible("compras_autorizar")).toBe(true);
+    expect(labelPermiso("compras_autorizar")).toBe("Compras: autorizar y rechazar requerimientos");
+    expect(moduloEmpresaDelPermiso("compras_autorizar")).toBe("tms");
+  });
+
+  it("aparece en el grupo 'Operaciones' de la matriz de Usuarios, junto a (no dentro de) 'compras_requerimientos'", () => {
+    const operaciones = GRUPOS_PERMISOS.find((g) => g.id === "operaciones");
+    expect(operaciones?.modulos).toContain("compras_autorizar");
+    expect(operaciones?.modulos).toContain("compras_requerimientos");
+  });
+
+  it("ningún rol lo trae por defecto salvo Admin (a diferencia de gastos_autorizar/viaticos_autorizar: no hay regla ya documentada que lo justifique en esta fase)", () => {
+    expect(tienePermiso(permisosDefaultPorRol("Admin"), "compras_autorizar", "editar")).toBe(true);
+    for (const rol of ROLES.filter((r) => r !== "Admin")) {
+      expect(tienePermiso(permisosDefaultPorRol(rol), "compras_autorizar", "editar")).toBe(false);
+    }
+  });
+
+  it("editar requerimientos de compra NO implica autorizar", () => {
+    const permisos = mergePermisosConCatalogo("Visualizador", [permisoFull("compras_requerimientos")]);
+    expect(tienePermiso(permisos, "compras_requerimientos", "editar")).toBe(true);
+    expect(tienePermiso(permisos, "compras_autorizar", "editar")).toBe(false);
+  });
+
+  it("tms:editar NO implica autorizar", () => {
+    const permisos = mergePermisosConCatalogo("Visualizador", [permisoFull("tms")]);
+    expect(tienePermiso(permisos, "tms", "editar")).toBe(true);
+    expect(tienePermiso(permisos, "compras_autorizar", "editar")).toBe(false);
+  });
+
+  it("compras_proveedores:editar NO implica autorizar", () => {
+    const permisos = mergePermisosConCatalogo("Visualizador", [permisoFull("compras_proveedores")]);
+    expect(tienePermiso(permisos, "compras_proveedores", "editar")).toBe(true);
+    expect(tienePermiso(permisos, "compras_autorizar", "editar")).toBe(false);
+  });
+
+  it("tener compras_autorizar full NO otorga compras_requerimientos", () => {
+    const permisos = mergePermisosConCatalogo("Visualizador", [permisoFull("compras_autorizar")]);
+    expect(tienePermiso(permisos, "compras_autorizar", "editar")).toBe(true);
+    expect(tienePermiso(permisos, "compras_requerimientos", "editar")).toBe(false);
+  });
+
+  it("un usuario existente sin compras_autorizar guardado lo recibe vacío al recargar (secure by default)", () => {
+    const permisos = mergePermisosConCatalogo("Operaciones", [
+      { modulo: "compras_requerimientos", puedeVer: true, puedeCrear: true, puedeEditar: true, puedeEliminar: true },
+    ]);
+    expect(tienePermiso(permisos, "compras_requerimientos", "editar")).toBe(true);
+    expect(tienePermiso(permisos, "compras_autorizar", "editar")).toBe(false);
+  });
+
+  it("es asignable en el catálogo de TODOS los roles (incluidos Marcaje/Piloto, igual que compras_requerimientos/compras_proveedores)", () => {
+    for (const rol of ["Marcaje", "Piloto"] as const) {
+      const permisos = mergePermisosConCatalogo(rol, []);
+      expect(permisos.some((p) => p.modulo === "compras_autorizar")).toBe(true);
+    }
+  });
+});

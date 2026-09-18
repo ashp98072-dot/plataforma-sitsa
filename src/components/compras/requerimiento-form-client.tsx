@@ -6,6 +6,7 @@ import { METODOS_PAGO_COMPRAS, type DetalleCompra, type LineaCompraDatos } from 
 import { seleccionarProveedorCompra } from "@/lib/compras/metodos-pago";
 import { CatalogoSearchSelect, opcionesConHistorico, type CatalogoSearchOption } from "@/components/tms/catalogo-search-select";
 import { LineaDocumentosClient } from "@/components/compras/linea-documentos-client";
+import { RequerimientoDecisionClient, formatearTimestampCompra } from "@/components/compras/requerimiento-decision-client";
 
 type Opcion = { id: number; nombre: string };
 type Proveedor = { id: number; nombre_comercial: string; nit: string | null; contacto_nombre: string | null; contacto_telefono: string | null; telefono: string | null; metodo_pago_habitual: string | null; banco: string | null; numero_cuenta: string | null; dias_credito: number | null };
@@ -40,7 +41,7 @@ export function lineaEditable(l: DetalleCompra["lineas"][number]): LineaForm {
   // No devolver snapshots en PATCH: solo IDs y campos editables.
   return { key: `id-${l.id}`, id: l.id, vehiculo_id: l.vehiculo_id, unidad_descripcion: l.unidad_descripcion, fecha: l.fecha, serie_factura: l.serie_factura, numero_factura: l.numero_factura, proveedor_id: l.proveedor_id, repuesto_descripcion: l.repuesto_descripcion, metodo_pago: l.metodo_pago, condicion_pago: l.condicion_pago, total: l.total, observaciones: l.observaciones };
 }
-export function RequerimientoFormClient({ slug, detalle, editable, solicitante, puedeEliminar, puedeVerProveedores, puedeSubirDocumentos, fechaHoy }: { slug: string; detalle?: DetalleCompra; editable: boolean; solicitante: string; puedeEliminar: boolean; puedeVerProveedores: boolean; puedeSubirDocumentos: boolean; fechaHoy: string }) {
+export function RequerimientoFormClient({ slug, detalle, editable, solicitante, puedeEliminar, puedeVerProveedores, puedeSubirDocumentos, puedeAutorizar, fechaHoy }: { slug: string; detalle?: DetalleCompra; editable: boolean; solicitante: string; puedeEliminar: boolean; puedeVerProveedores: boolean; puedeSubirDocumentos: boolean; puedeAutorizar: boolean; fechaHoy: string }) {
   const router = useRouter();
   const [fecha, setFecha] = useState(detalle?.fecha_requerimiento ?? fechaHoy);
   const [entidad, setEntidad] = useState(detalle?.entidad_requirente_id ?? 0);
@@ -76,6 +77,10 @@ export function RequerimientoFormClient({ slug, detalle, editable, solicitante, 
   const deshabilitado = !editable || guardando || conflicto;
   const total = lineas.reduce((sum, l) => sum + (Number.isFinite(Number(l.total)) ? Number(l.total) : 0), 0);
   return <main className="space-y-5 p-6"><h1 className="text-2xl font-semibold">{detalle?.codigo ?? "Nuevo requerimiento de compra"}</h1>{detalle && <p>Estado: {detalle.estado} · Versión: {detalle.version}</p>}
+    {/* COMPRAS-FASE-4-AUTORIZACION: snapshot de la decisión — nunca un JOIN en vivo contra usuarios (autorizante_nombre ya viene guardado tal cual estaba al momento de autorizar). */}
+    {detalle && detalle.estado === "Autorizada" ? <p className="text-sm text-[var(--muted)]">Autorizado por: {detalle.autorizante_nombre ?? "—"} · Fecha autorización: {formatearTimestampCompra(detalle.autorizado_en)}</p> : null}
+    {detalle && detalle.estado === "Rechazada" ? <div className="text-sm text-[var(--muted)]"><p>Fecha rechazo: {formatearTimestampCompra(detalle.rechazado_en)}</p><p>Motivo: {detalle.motivo_rechazo ?? "—"}</p></div> : null}
+    {detalle && detalle.estado === "Pendiente" && puedeAutorizar ? <RequerimientoDecisionClient slug={slug} requerimientoId={detalle.id} version={detalle.version} /> : null}
     <form onSubmit={guardar} className="space-y-5"><fieldset disabled={deshabilitado} className="grid gap-4 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 md:grid-cols-2">
       <label>Fecha de requerimiento<input className={estilo} type="date" required value={fecha} onChange={e => setFecha(e.target.value)} /></label>
       {editable ? <><label>Empresa requirente<select className={estilo} required value={entidad || ""} onChange={e => setEntidad(Number(e.target.value))}><option value="">Seleccionar</option>{entidad && !catalogos?.entidades.some(v => v.id === entidad) && <option value={entidad}>{detalle?.entidad_requirente_nombre} (revalidar)</option>}{catalogos?.entidades.map(v => <option key={v.id} value={v.id}>{v.nombre}</option>)}</select></label>

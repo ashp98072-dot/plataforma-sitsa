@@ -1,10 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
+import type { PoolConnection } from "mysql2/promise";
 import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { esUsuarioOperaciones, ERROR_REQUIRIENTE_OPERACIONES, resolverUsuarioDeEmpresaTx, resolverSolicitanteOperacionesTx } from "@/lib/tms/identidad-administrativa";
 import { normalizarMetodoPagoCompra } from "./metodos-pago";
 import { centavosCompra, importeCompra, type DetalleCompra, type FiltrosCompra, type LineaCompra, type RequerimientoCompra, type RequerimientoDatos } from "./requerimiento-schema";
+import { crearFirmaInterna } from "@/lib/firmas/firmas-internas";
+import { sha256Hex } from "@/lib/firmas/imagen-firma";
+import { borrarUpload, guardarUpload } from "@/lib/uploads";
 
 export class ErrorCompra extends Error {
   constructor(message: string, public status = 400) { super(message); }
@@ -12,7 +16,9 @@ export class ErrorCompra extends Error {
 export const CONFLICTO_COMPRA = "El requerimiento fue modificado por otro usuario. Actualiza la información.";
 const columnasCabecera = `id, codigo, DATE_FORMAT(fecha_requerimiento, '%Y-%m-%d') AS fecha_requerimiento,
   entidad_requirente_id, entidad_requirente_nombre, requirente_usuario_id, requirente_nombre,
-  solicitante_usuario_id, solicitante_nombre, encargado_compras_usuario_id, encargado_compras_nombre, observaciones, total, estado, version`;
+  solicitante_usuario_id, solicitante_nombre, encargado_compras_usuario_id, encargado_compras_nombre, observaciones, total, estado, version,
+  autorizante_usuario_id, autorizante_nombre, DATE_FORMAT(autorizado_en, '%Y-%m-%d %H:%i:%s') AS autorizado_en,
+  DATE_FORMAT(rechazado_en, '%Y-%m-%d %H:%i:%s') AS rechazado_en, motivo_rechazo`;
 const columnasLinea = `id, vehiculo_id, unidad_descripcion, DATE_FORMAT(fecha, '%Y-%m-%d') AS fecha,
   serie_factura, numero_factura, proveedor_id, proveedor_nombre_snapshot, proveedor_razon_social_snapshot,
   proveedor_nit_snapshot, repuesto_descripcion, metodo_pago, condicion_pago, banco_snapshot,
@@ -172,4 +178,239 @@ export async function guardarRequerimiento(empresaId: number, usuarioId: number,
     return { id: id!, codigo, version: antes ? Number(antes.version) + 1 : 1 };
   } catch (error) { await conn.rollback(); throw error; }
   finally { conn.release(); }
+}
+
+/**
+ * COMPRAS-FASE-4-AUTORIZACION — Pendiente -> Autorizada / Rechazada.
+ * Fuente única de la transición: no hay reapertura (Autorizada/Rechazada
+ * son estados finales en esta fase), doble autorización/rechazo, ni
+ * Autorizada -> Rechazada o viceversa.
+ */
+export const MENSAJE_FIRMA_REQUERIDA_AUTORIZAR =
+  "Debes registrar tu firma en Mi firma antes de autorizar el requerimiento.";
+export const MENSAJE_AUTOAUTORIZACION_COMPRA = "No puede autorizar su propio requerimiento de compra.";
+
+/**
+ * Cada uso de "Mi firma" genera una COPIA física independiente (mismo
+ * patrón exacto que guardarImagenFirmaFondo/guardarImagenFirmaGasto) —
+ * nunca se referencia el archivo de usuario_firmas directamente, así
+ * cambiar/reemplazar la plantilla personal después nunca altera una firma
+ * histórica ya guardada en firmas_electronicas.
+ */
+async function guardarImagenFirmaCompra(
+  empresaId: number,
+  requerimientoId: number,
+  imagen: { bytes: ArrayBuffer; original: string },
+): Promise<{ relative: string; original: string; mime: string; size: number; sha256: string }> {
+  const guardada = await guardarUpload(empresaId, "firmas", `firma_compra_autorizar_${requerimientoId}`, {
+    name: imagen.original || "firma.png",
+    size: imagen.bytes.byteLength,
+    arrayBuffer: async () => imagen.bytes,
+  });
+  return {
+    relative: guardada.relative,
+    original: guardada.original,
+    mime: "image/png",
+    size: guardada.size,
+    sha256: sha256Hex(imagen.bytes),
+  };
+}
+
+/**
+ * Bloquea la fila FOR UPDATE y valida, en una sola pasada: que exista en
+ * esta empresa, que su estado siga siendo 'Pendiente' (única transición
+ * permitida en esta fase — Autorizada/Rechazada son finales, sin
+ * reapertura, sin doble decisión) y que la versión que el cliente está
+ * viendo coincida (CONFLICTO_COMPRA si no). Concurrencia: dos decisiones
+ * simultáneas sobre el mismo requerimiento solo pueden completar una —
+ * FOR UPDATE serializa la segunda transacción hasta que la primera
+ * confirma o revierte; al reanudar, ve el estado/versión ya cambiados y
+ * falla con 409.
+ */
+async function bloquearRequerimientoParaDecisionTx(
+  conn: PoolConnection,
+  empresaId: number,
+  id: number,
+  version: number,
+): Promise<{
+  codigo: string;
+  total: string;
+  requirenteUsuarioId: number | null;
+  solicitanteUsuarioId: number | null;
+  creadoPor: number | null;
+} | null> {
+  const [rows] = await conn.query<RowDataPacket[]>(
+    `SELECT codigo, total, estado, version, requirente_usuario_id, solicitante_usuario_id, creado_por
+     FROM compras_requerimientos WHERE empresa_id = ? AND id = ? LIMIT 1 FOR UPDATE`,
+    [empresaId, id],
+  );
+  const fila = rows[0];
+  if (!fila) return null;
+  const estadoActual = String(fila.estado);
+  if (estadoActual !== "Pendiente") {
+    throw new ErrorCompra(
+      `Solo se puede autorizar o rechazar un requerimiento Pendiente (estado actual: ${estadoActual}).`,
+      409,
+    );
+  }
+  if (Number(fila.version) !== version) {
+    throw new ErrorCompra(CONFLICTO_COMPRA, 409);
+  }
+  return {
+    codigo: String(fila.codigo),
+    total: String(fila.total),
+    requirenteUsuarioId: fila.requirente_usuario_id != null ? Number(fila.requirente_usuario_id) : null,
+    solicitanteUsuarioId: fila.solicitante_usuario_id != null ? Number(fila.solicitante_usuario_id) : null,
+    creadoPor: fila.creado_por != null ? Number(fila.creado_por) : null,
+  };
+}
+
+/**
+ * Autorizar: exige firma registrada en "Mi firma" (guardada como snapshot
+ * INMUTABLE en firmas_electronicas, mismo patrón exacto que
+ * AUTORIZAR_FONDO/AUTORIZAR_GASTO) y bloquea la autoautorización SIEMPRE
+ * — a diferencia de autorizarGasto() (que la permite si el permiso
+ * específico ya fue verificado), este ticket pide explícitamente "no
+ * confiar en nombres, comparar IDs" y prohibirla sin excepción, así que
+ * NO se ofrece un parámetro permitirAutoautorizacion.
+ *
+ * `null` = el requerimiento no existe en esta empresa (el caller responde
+ * 404). Lanza ErrorCompra para: sin firma (400), estado ya decidido o
+ * versión desactualizada (409), autoautorización (403).
+ */
+export async function autorizarRequerimientoCompra(
+  empresaId: number,
+  id: number,
+  version: number,
+  opts: {
+    usuario: string;
+    autorizanteUsuarioId: number;
+    autorizanteNombre: string;
+    autorizanteRol?: string | null;
+    firmaImagen: { bytes: ArrayBuffer; original: string } | null;
+  },
+): Promise<DetalleCompra | null> {
+  if (!opts.firmaImagen) throw new ErrorCompra(MENSAJE_FIRMA_REQUERIDA_AUTORIZAR, 400);
+  // Copia física ANTES de abrir la transacción — guardarUpload() no es
+  // transaccional. Se compensa (borrarUpload) en el finally si el commit
+  // no llega a completarse, por cualquier motivo (rollback o excepción).
+  const imagenGuardada = await guardarImagenFirmaCompra(empresaId, id, opts.firmaImagen);
+  let committed = false;
+  const conn = await getPool().getConnection();
+  try {
+    await conn.beginTransaction();
+    const bloqueo = await bloquearRequerimientoParaDecisionTx(conn, empresaId, id, version);
+    if (!bloqueo) {
+      await conn.rollback();
+      return null;
+    }
+    const esPropio =
+      (bloqueo.requirenteUsuarioId != null && bloqueo.requirenteUsuarioId === opts.autorizanteUsuarioId) ||
+      (bloqueo.solicitanteUsuarioId != null && bloqueo.solicitanteUsuarioId === opts.autorizanteUsuarioId) ||
+      (bloqueo.creadoPor != null && bloqueo.creadoPor === opts.autorizanteUsuarioId);
+    if (esPropio) throw new ErrorCompra(MENSAJE_AUTOAUTORIZACION_COMPRA, 403);
+    await conn.execute(
+      `UPDATE compras_requerimientos
+       SET estado = 'Autorizada', autorizante_usuario_id = ?, autorizante_nombre = ?, autorizado_en = NOW(),
+           rechazado_en = NULL, motivo_rechazo = NULL, version = version + 1
+       WHERE empresa_id = ? AND id = ?`,
+      [opts.autorizanteUsuarioId, opts.autorizanteNombre, empresaId, id],
+    );
+    // Firma + transición + auditoría: MISMA transacción (regla dura de
+    // firmas-internas.ts) — un solo commit para las tres.
+    await crearFirmaInterna(conn, {
+      empresaId,
+      usuarioId: opts.autorizanteUsuarioId,
+      empleadoId: null,
+      nombreFirmante: opts.autorizanteNombre,
+      rolFirmante: opts.autorizanteRol ?? "",
+      accion: "AUTORIZAR_COMPRA",
+      modulo: "COMPRAS",
+      entidadTipo: "REQUERIMIENTO_COMPRA",
+      entidadId: id,
+      valoresRelevantes: { requerimientoId: id, codigo: bloqueo.codigo, total: bloqueo.total, version: version + 1 },
+      imagen: imagenGuardada,
+      metodo: "FIRMA_MANUSCRITA",
+      origenFirma: "GUARDADA",
+    });
+    await registrarAuditoriaTx(conn, {
+      empresaId,
+      usuario: opts.usuario,
+      modulo: "compras_requerimientos",
+      accion: "autorizar_requerimiento_compras",
+      detalle: JSON.stringify({
+        requerimientoId: id,
+        codigo: bloqueo.codigo,
+        estadoAnterior: "Pendiente",
+        estadoNuevo: "Autorizada",
+        total: bloqueo.total,
+        usuarioId: opts.autorizanteUsuarioId,
+      }),
+    });
+    await conn.commit();
+    committed = true;
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+    if (!committed) borrarUpload(imagenGuardada.relative);
+  }
+  return obtenerRequerimiento(empresaId, id);
+}
+
+/**
+ * Rechazar: nunca exige firma. Motivo obligatorio (trim, no vacío, máximo
+ * 1000 caracteres — mismo límite que motivo_rechazo VARCHAR(1000)). NO
+ * llena autorizante_usuario_id/autorizante_nombre/autorizado_en — esos
+ * campos quedan reservados exclusivamente para una autorización real.
+ * `usuarioId` es solo para la auditoría (quién rechazó) — el frontend
+ * nunca lo envía, viene de la sesión real del caller.
+ */
+export async function rechazarRequerimientoCompra(
+  empresaId: number,
+  id: number,
+  version: number,
+  opts: { usuario: string; usuarioId: number; motivo: string },
+): Promise<DetalleCompra | null> {
+  const motivo = opts.motivo.trim();
+  if (!motivo) throw new ErrorCompra("El rechazo requiere un motivo.");
+  if (motivo.length > 1000) throw new ErrorCompra("El motivo no puede superar 1000 caracteres.");
+  const conn = await getPool().getConnection();
+  try {
+    await conn.beginTransaction();
+    const bloqueo = await bloquearRequerimientoParaDecisionTx(conn, empresaId, id, version);
+    if (!bloqueo) {
+      await conn.rollback();
+      return null;
+    }
+    await conn.execute(
+      `UPDATE compras_requerimientos
+       SET estado = 'Rechazada', rechazado_en = NOW(), motivo_rechazo = ?, version = version + 1
+       WHERE empresa_id = ? AND id = ?`,
+      [motivo, empresaId, id],
+    );
+    await registrarAuditoriaTx(conn, {
+      empresaId,
+      usuario: opts.usuario,
+      modulo: "compras_requerimientos",
+      accion: "rechazar_requerimiento_compras",
+      detalle: JSON.stringify({
+        requerimientoId: id,
+        codigo: bloqueo.codigo,
+        estadoAnterior: "Pendiente",
+        estadoNuevo: "Rechazada",
+        total: bloqueo.total,
+        usuarioId: opts.usuarioId,
+        motivoRechazo: motivo,
+      }),
+    });
+    await conn.commit();
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
+  return obtenerRequerimiento(empresaId, id);
 }

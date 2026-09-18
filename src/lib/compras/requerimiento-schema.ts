@@ -43,6 +43,23 @@ export const crearRequerimientoSchema = z.object(cabecera).strict().superRefine(
   if (datos.lineas.some(l => l.id !== undefined)) ctx.addIssue({ code: "custom", path: ["lineas"], message: "Las líneas nuevas no pueden incluir ID." });
 });
 export const editarRequerimientoSchema = z.object({ ...cabecera, requirente_usuario_id: idCompra.nullable(), version: idCompra }).strict().superRefine(validarLineas);
+// COMPRAS-FASE-4-AUTORIZACION — payload estricto del endpoint
+// POST .../requerimientos/[id]/estado. Discriminado por `accion`: nunca
+// acepta autorizante_usuario_id/autorizante_nombre ni ningún otro campo de
+// identidad desde el cliente (esos SIEMPRE vienen de la sesión real, ver
+// requerimiento-estado-api.ts) — .strict() en ambas ramas rechaza
+// cualquier campo extra, igual que crearRequerimientoSchema/
+// editarRequerimientoSchema.
+export const cambiarEstadoRequerimientoSchema = z.discriminatedUnion("accion", [
+  z.object({ accion: z.literal("autorizar"), version: idCompra }).strict(),
+  z.object({
+    accion: z.literal("rechazar"),
+    version: idCompra,
+    motivo: z.string().trim().min(1, "El rechazo requiere un motivo.").max(1000, "El motivo no puede superar 1000 caracteres."),
+  }).strict(),
+]);
+export type CambiarEstadoRequerimientoDatos = z.infer<typeof cambiarEstadoRequerimientoSchema>;
+
 export const filtrosCompraSchema = z.object({
   codigo: z.string().trim().max(40).default(""), desde: fechaCompra.optional(), hasta: fechaCompra.optional(),
   estado: z.enum(ESTADOS_COMPRAS).optional(), proveedor_id: z.coerce.number().int().positive().max(2147483647).optional(),
@@ -59,5 +76,10 @@ export type RequerimientoCompra = {
   requirente_usuario_id: number | null; requirente_nombre: string | null; solicitante_usuario_id: number | null; solicitante_nombre: string | null;
   encargado_compras_usuario_id: number | null; encargado_compras_nombre: string | null;
   observaciones: string | null; total: string; estado: typeof ESTADOS_COMPRAS[number]; version: number; cantidad_lineas: number;
+  // COMPRAS-FASE-4-AUTORIZACION: snapshot de la decisión — autorizante_nombre
+  // es el nombre guardado EN EL MOMENTO de autorizar (nunca un JOIN en vivo
+  // contra usuarios, que mostraría el nombre actual si cambió después).
+  autorizante_usuario_id: number | null; autorizante_nombre: string | null;
+  autorizado_en: string | null; rechazado_en: string | null; motivo_rechazo: string | null;
 };
 export type DetalleCompra = RequerimientoCompra & { lineas: LineaCompra[] };

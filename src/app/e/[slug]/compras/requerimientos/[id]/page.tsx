@@ -13,6 +13,10 @@ export default async function DetalleRequerimientoPage({ params, searchParams }:
   if (!detalle) notFound();
   const puedeEditar = detalle.estado === "Pendiente" && tienePermiso(guard.permisos, "compras_requerimientos", "editar");
   const editable = puedeEditar && (await searchParams).editar === "1";
+  // COMPRAS-FASE-4-AUTORIZACION: permiso independiente de editable/
+  // puedeEliminar/puedeSubirDocumentos — compras_requerimientos:editar NO
+  // implica autorizar (ver requireComprasAutorizar en acceso.ts).
+  const puedeAutorizar = tienePermiso(guard.permisos, "compras_autorizar", "editar");
   return <>{puedeEditar && !editable && <Link className="inline-block px-6 pt-5 underline" href={`/e/${slug}/compras/requerimientos/${id}?editar=1`}>Editar requerimiento</Link>}
-    <RequerimientoFormClient key={`${detalle.id}-${detalle.version}-${editable}`} slug={slug} detalle={detalle} editable={editable} solicitante={guard.session.nombre ?? guard.session.username} fechaHoy={detalle.fecha_requerimiento} puedeEliminar={tienePermiso(guard.permisos, "compras_requerimientos", "eliminar")} puedeVerProveedores={tienePermiso(guard.permisos, "compras_proveedores", "ver")} puedeSubirDocumentos={tienePermiso(guard.permisos, "compras_requerimientos", "editar")} /></>;
+    <RequerimientoFormClient key={`${detalle.id}-${detalle.version}-${editable}`} slug={slug} detalle={detalle} editable={editable} solicitante={guard.session.nombre ?? guard.session.username} fechaHoy={detalle.fecha_requerimiento} puedeEliminar={tienePermiso(guard.permisos, "compras_requerimientos", "eliminar")} puedeVerProveedores={tienePermiso(guard.permisos, "compras_proveedores", "ver")} puedeSubirDocumentos={tienePermiso(guard.permisos, "compras_requerimientos", "editar")} puedeAutorizar={puedeAutorizar} /></>;
 }

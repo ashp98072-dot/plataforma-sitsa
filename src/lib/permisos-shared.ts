@@ -107,6 +107,20 @@ export const FLOTA_SUBMODULO_LABEL: Record<FlotaSubmodulo, string> = {
 export const PLATAFORMA_PERMISIBLES = [
   "compras_proveedores",
   "compras_requerimientos",
+  // COMPRAS-FASE-4-AUTORIZACION: autorizar/rechazar un Requerimiento de
+  // compra (Pendiente -> Autorizada/Rechazada) es una acción INDEPENDIENTE
+  // del resto del módulo Compras — mismo patrón exacto que
+  // "gastos_autorizar"/"viaticos_autorizar": permiso propio dentro de
+  // PLATAFORMA_PERMISIBLES, "editar" = puede autorizar/rechazar. NO da
+  // autoridad implícita compras_requerimientos:editar, tms:editar ni
+  // compras_proveedores:editar — el endpoint de autorización lo exige sin
+  // fallback (ver requireComprasAutorizar en src/lib/compras/acceso.ts).
+  // Ningún rol lo trae por defecto en esta fase (ni siquiera
+  // GerenteOperaciones/JefeOperaciones, a diferencia de gastos_autorizar/
+  // viaticos_autorizar) — no hay una regla ya documentada en el repo que
+  // lo justifique todavía; Admin lo recibe por catálogo global, cualquier
+  // otro usuario lo recibe explícitamente desde la matriz de Usuarios.
+  "compras_autorizar",
   "multas",
   "tms",
   "clientes",
@@ -290,7 +304,7 @@ export function esPlataformaPermisible(m: string): m is PlataformaPermisible {
  * null (no aplica este filtro — se rigen por otro mecanismo).
  */
 export function moduloEmpresaDelPermiso(m: string): Modulo | null {
-  if (m === "compras_proveedores" || m === "compras_requerimientos") return "tms";
+  if (m === "compras_proveedores" || m === "compras_requerimientos" || m === "compras_autorizar") return "tms";
   if (m === "multas") return "tms";
   if (m === "flota_combustible") return "flota";
   if (
@@ -321,6 +335,7 @@ export function moduloEmpresaDelPermiso(m: string): Modulo | null {
 export function labelPermiso(modulo: string): string {
   if (modulo === "compras_proveedores") return "Compras: proveedores comerciales";
   if (modulo === "compras_requerimientos") return "Compras: requerimientos de compra";
+  if (modulo === "compras_autorizar") return "Compras: autorizar y rechazar requerimientos";
   if (modulo === "multas") return "Multas y sanciones";
   if (esRrhhSubmodulo(modulo)) return RRHH_SUBMODULO_LABEL[modulo];
   if (esFlotaSubmodulo(modulo)) return FLOTA_SUBMODULO_LABEL[modulo];
@@ -394,6 +409,7 @@ export const GRUPOS_PERMISOS: {
     modulos: [
       "compras_proveedores",
       "compras_requerimientos",
+      "compras_autorizar",
       "programacion",
       "multas",
       "rutas",
@@ -567,7 +583,7 @@ export function modulosOtrasAreasDelRol(rol: RolGlobal): string[] {
 /** Catálogo completo editable para un rol (propios + cruzados). */
 export function catalogoPermisosRol(rol: RolGlobal): string[] {
   // Asignable explícitamente, sin concederlo por rol ni por TMS.
-  return [...new Set([...modulosPropiosDelRol(rol), ...modulosOtrasAreasDelRol(rol), "compras_proveedores", "compras_requerimientos"])];
+  return [...new Set([...modulosPropiosDelRol(rol), ...modulosOtrasAreasDelRol(rol), "compras_proveedores", "compras_requerimientos", "compras_autorizar"])];
 }
 
 export function permisosDefaultPorRol(rol: RolGlobal): PermisoModulo[] {
@@ -752,6 +768,7 @@ export function modulosPlataformaDesdePermisos(
       esPlataformaPermisible(p.modulo) &&
       p.modulo !== "compras_proveedores" &&
       p.modulo !== "compras_requerimientos" &&
+      p.modulo !== "compras_autorizar" &&
       p.modulo !== "multas" &&
       p.modulo !== "viaticos" &&
       p.modulo !== "viaticos_autorizar" &&
