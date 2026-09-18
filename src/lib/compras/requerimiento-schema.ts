@@ -68,7 +68,7 @@ export type LineaCompraDatos = z.infer<typeof lineaCompraSchema>;
 export type RequerimientoDatos = Omit<z.infer<typeof crearRequerimientoSchema>, "requirente_usuario_id"> & { requirente_usuario_id: number | null; version?: number };
 export type FiltrosCompra = z.infer<typeof filtrosCompraSchema>;
 export type LineaCompra = LineaCompraDatos & {
-  id: number; proveedor_nombre_snapshot: string; proveedor_razon_social_snapshot: string | null;
+  id: number; orden?: number; proveedor_nombre_snapshot: string; proveedor_razon_social_snapshot: string | null;
   proveedor_nit_snapshot: string | null; banco_snapshot: string | null; numero_cuenta_snapshot: string | null; dias_credito_snapshot: number | null;
 };
 export type RequerimientoCompra = {
