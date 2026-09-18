@@ -9,14 +9,46 @@ export type FirmaCompraReporte = {
   nombre: string | null; rol: string | null; fecha: string; codigo: string;
   imagen: { buffer: Buffer; mime: string } | null;
 };
+export type FirmasCompraReporte = {
+  requirente: FirmaCompraReporte | null;
+  encargado: FirmaCompraReporte | null;
+  autorizante: FirmaCompraReporte | null;
+};
+
+/** La última asociación auditada puede ser NULL: nunca resucitar una copia
+ * antigua al cambiar a una persona sin plantilla (incluido A -> B -> A).
+ * Históricos anteriores sin evento conservan exclusivamente línea manual.
+ */
+async function firmaRolReporte(empresaId: number, requerimientoId: number, accion: "REQUERIR_COMPRA" | "GESTIONAR_COMPRA") {
+  const eventos = await query<RowDataPacket[]>(`SELECT detalle FROM auditoria
+    WHERE empresa_id = ? AND modulo = 'compras_requerimientos' AND accion = ?
+    AND JSON_UNQUOTE(JSON_EXTRACT(CASE WHEN JSON_VALID(detalle) THEN detalle ELSE '{}' END, '$.requerimientoId')) = ?
+    ORDER BY id DESC LIMIT 1`, [empresaId, `capturar_${accion.toLowerCase()}`, String(requerimientoId)]);
+  if (!eventos[0]) return null;
+  let firmaId: unknown;
+  try { firmaId = JSON.parse(String(eventos[0].detalle)).firmaId; } catch { return null; }
+  if (typeof firmaId !== "number" || !Number.isSafeInteger(firmaId) || firmaId <= 0) return null;
+  return firmaHistoricaCompraReporte(empresaId, requerimientoId, accion, firmaId);
+}
+
+export async function firmasHistoricasCompraReporte(empresaId: number, requerimientoId: number, autorizada: boolean): Promise<FirmasCompraReporte> {
+  const [requirente, encargado, autorizante] = await Promise.all([
+    firmaRolReporte(empresaId, requerimientoId, "REQUERIR_COMPRA"),
+    firmaRolReporte(empresaId, requerimientoId, "GESTIONAR_COMPRA"),
+    autorizada ? firmaHistoricaCompraReporte(empresaId, requerimientoId) : Promise.resolve(null),
+  ]);
+  return { requirente, encargado, autorizante };
+}
 
 /** Exclusivamente el snapshot de Fase 4: nunca consulta Mi firma ni usuarios. */
-export async function firmaHistoricaCompraReporte(empresaId: number, requerimientoId: number): Promise<FirmaCompraReporte | null> {
+export async function firmaHistoricaCompraReporte(empresaId: number, requerimientoId: number,
+  accion: "AUTORIZAR_COMPRA" | "REQUERIR_COMPRA" | "GESTIONAR_COMPRA" = "AUTORIZAR_COMPRA", firmaId?: number): Promise<FirmaCompraReporte | null> {
   const rows = await query<RowDataPacket[]>(`SELECT payload_canonico, imagen_ruta, codigo_firma,
     DATE_FORMAT(fecha_hora_servidor, '%Y-%m-%d %H:%i:%s') AS fecha
     FROM firmas_electronicas WHERE empresa_id = ? AND modulo = 'COMPRAS'
-    AND entidad_tipo = 'REQUERIMIENTO_COMPRA' AND entidad_id = ? AND accion = 'AUTORIZAR_COMPRA'
-    ORDER BY fecha_hora_servidor DESC, id DESC LIMIT 1`, [empresaId, requerimientoId]);
+    AND entidad_tipo = 'REQUERIMIENTO_COMPRA' AND entidad_id = ? AND accion = ?
+    ${firmaId === undefined ? "" : "AND id = ?"}
+    ORDER BY fecha_hora_servidor DESC, id DESC LIMIT 1`, [empresaId, requerimientoId, accion, ...(firmaId === undefined ? [] : [firmaId])]);
   const row = rows[0];
   if (!row) return null;
   let nombre: string | null = null, rol: string | null = null;
