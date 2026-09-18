@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { METODOS_PAGO_COMPRAS, type DetalleCompra, type LineaCompraDatos } from "@/lib/compras/requerimiento-schema";
 import { seleccionarProveedorCompra } from "@/lib/compras/metodos-pago";
 import { CatalogoSearchSelect, opcionesConHistorico, type CatalogoSearchOption } from "@/components/tms/catalogo-search-select";
+import { LineaDocumentosClient } from "@/components/compras/linea-documentos-client";
 
 type Opcion = { id: number; nombre: string };
 type Proveedor = { id: number; nombre_comercial: string; nit: string | null; contacto_nombre: string | null; contacto_telefono: string | null; telefono: string | null; metodo_pago_habitual: string | null; banco: string | null; numero_cuenta: string | null; dias_credito: number | null };
@@ -39,7 +40,7 @@ export function lineaEditable(l: DetalleCompra["lineas"][number]): LineaForm {
   // No devolver snapshots en PATCH: solo IDs y campos editables.
   return { key: `id-${l.id}`, id: l.id, vehiculo_id: l.vehiculo_id, unidad_descripcion: l.unidad_descripcion, fecha: l.fecha, serie_factura: l.serie_factura, numero_factura: l.numero_factura, proveedor_id: l.proveedor_id, repuesto_descripcion: l.repuesto_descripcion, metodo_pago: l.metodo_pago, condicion_pago: l.condicion_pago, total: l.total, observaciones: l.observaciones };
 }
-export function RequerimientoFormClient({ slug, detalle, editable, solicitante, puedeEliminar, puedeVerProveedores, fechaHoy }: { slug: string; detalle?: DetalleCompra; editable: boolean; solicitante: string; puedeEliminar: boolean; puedeVerProveedores: boolean; fechaHoy: string }) {
+export function RequerimientoFormClient({ slug, detalle, editable, solicitante, puedeEliminar, puedeVerProveedores, puedeSubirDocumentos, fechaHoy }: { slug: string; detalle?: DetalleCompra; editable: boolean; solicitante: string; puedeEliminar: boolean; puedeVerProveedores: boolean; puedeSubirDocumentos: boolean; fechaHoy: string }) {
   const router = useRouter();
   const [fecha, setFecha] = useState(detalle?.fecha_requerimiento ?? fechaHoy);
   const [entidad, setEntidad] = useState(detalle?.entidad_requirente_id ?? 0);
@@ -102,6 +103,7 @@ export function RequerimientoFormClient({ slug, detalle, editable, solicitante, 
       {ayuda.some(([, valor]) => valor !== null && valor !== "") && <dl className="flex flex-wrap gap-x-5 gap-y-2 text-sm text-[var(--muted)]">{ayuda.filter(([, valor]) => valor !== null && valor !== "").map(([nombre, valor]) => <div key={String(nombre)}><dt>{nombre}</dt><dd>{valor}</dd></div>)}</dl>}
       {editable && puedeVerProveedores && <Link className="text-sm underline" href={`/e/${slug}/compras/proveedores`}>Administrar proveedores comerciales</Link>}
       {editable && (!l.id || puedeEliminar) && <button className={boton} type="button" disabled={deshabilitado || lineas.length === 1} onClick={() => setLineas(actual => actual.filter(v => v.key !== l.key))}>Eliminar línea</button>}
+      {detalle && l.id ? <LineaDocumentosClient slug={slug} requerimientoId={detalle.id} lineaId={l.id} puedeSubir={puedeSubirDocumentos} puedeEliminar={puedeEliminar && detalle.estado === "Pendiente"} /> : null}
     </section>; })}
     {editable && <button className={boton} type="button" disabled={deshabilitado || lineas.length >= 500} onClick={() => setLineas(actual => [...actual, nuevaLinea(fecha, crypto.randomUUID())])}>+ Agregar línea</button>}
     <p className="text-lg font-semibold">Total requerimiento: Q {total.toFixed(2)}</p>{error && <p role="alert">{error}</p>}
