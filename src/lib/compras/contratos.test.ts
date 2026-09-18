@@ -28,7 +28,13 @@ it("preflight lectura, cuatro contratos y decisiones", () => {
 });
 it("no modifica RRHH, credenciales ni esquema SQL", () => {
   const files = execFileSync("git", ["diff", "--name-only", "aebfdc1ee46f6fe2bac4b80612db928e0a10c71b"], { encoding: "utf8" }).trim().split(/\r?\n/);
-  expect(files.some(p => /(src\/lib\/rrhh|portales-proveedores|^sql\/)/.test(p))).toBe(false);
+  // COMPRAS-FASE-3-DOCUMENTOS-LINEA agregó una migración/preflight reales
+  // (amplía el CHECK de compras_linea_documentos.tipo — ver auditoría en
+  // src/lib/compras/linea-documentos.ts), pedidos explícitamente por ese
+  // ticket y sin ejecutar. Se excluyen por nombre solo esos 2 archivos, no
+  // cualquier sql/ futuro — mismo criterio ya aplicado en
+  // requerimiento-ui.test.ts.
+  expect(files.some(p => /(src\/lib\/rrhh|portales-proveedores)/.test(p) || (p.startsWith("sql/") && !p.includes("compras-documentos-linea-tipo")))).toBe(false);
 });
 
 it("preflight compara DEFAULT 0 de DECIMAL(12,2) con 0.00 de MariaDB por valor numérico", () => {

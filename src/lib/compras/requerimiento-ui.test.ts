@@ -15,7 +15,7 @@ const detalle = { id: 12, codigo: "RC-2026-000012", fecha_requerimiento: "2026-0
 it("unidad y proveedor reutilizan CatalogoSearchSelect y conservan históricos/inactivos", () => {
   const source = leer("src/components/compras/requerimiento-form-client.tsx");
   for (const label of ["Unidad / placa", "Proveedor"]) expect(source).toContain(`<CatalogoSearchSelect label="${label}"`);
-  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, fechaHoy: "2026-09-17" }));
+  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, fechaHoy: "2026-09-17" }));
   for (const texto of ["Buscar placa o unidad...", "Buscar proveedor...", "C-123ABC · Cabezal (histórico)", "Proveedor histórico (histórico)"]) expect(html).toContain(texto);
   expect(html).toContain('value="5" selected=""');
   expect(html).toContain('value="3" selected=""');
@@ -52,19 +52,19 @@ it("unidad manual/sin unidad sigue disponible y línea nueva no hereda selecció
   const nueva = nuevaLinea("2026-09-18", "nueva-2");
   expect(nueva).toMatchObject({ vehiculo_id: null, unidad_descripcion: null, proveedor_id: 0, metodo_pago: "Transferencia" });
   expect(opcionesUnidadesCompra([], nueva.vehiculo_id, nueva.unidad_descripcion)).toEqual([]);
-  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, fechaHoy: "2026-09-17" }));
+  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, fechaHoy: "2026-09-17" }));
   expect(html).toContain("Unidad manual / sin unidad");
   expect(html).toContain("Descripción manual de unidad");
   expect(leer("src/components/compras/requerimiento-form-client.tsx")).toContain("vehiculo_id: value ? Number(value) : null, unidad_descripcion: null");
 });
 it("detalle solo lectura usa snapshots históricos y conserva total sin acciones futuras", () => {
-  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle, editable: false, solicitante: "Editor actual", puedeEliminar: false, puedeVerProveedores: false, fechaHoy: "2026-09-17" }));
+  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle, editable: false, solicitante: "Editor actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, fechaHoy: "2026-09-17" }));
   for (const texto of ["Empresa real", "Persona real", "Autor original", "Gestor original", "Proveedor histórico", "C-123ABC", "10.25"]) expect(html).toContain(texto);
   for (const texto of ["Guardar requerimiento", "Eliminar línea", "Agregar línea", "Autorizar", "Rechazar", "Editor actual"]) expect(html).not.toContain(texto);
   expect(html).toContain("disabled");
 });
 it("alta tiene todos los campos, múltiples líneas, tarjetas responsive y permisos de listado", () => {
-  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", editable: true, solicitante: "Usuario actual", puedeEliminar: false, puedeVerProveedores: false, fechaHoy: "2026-09-17" }));
+  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", editable: true, solicitante: "Usuario actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, fechaHoy: "2026-09-17" }));
   for (const texto of ["Empresa requirente", "Persona que requiere", "Encargado de compras", "Usuario actual", "Serie factura", "Número factura", "Repuesto a comprar", "Método de pago", "Condición de pago", "Contado", "Crédito", "Agregar línea", "md:grid-cols-2"]) expect(html).toContain(texto);
   expect(html).toContain('placeholder="Buscar requirente..."');
   expect(html).toContain('placeholder="Buscar encargado de compras..."');
@@ -87,7 +87,7 @@ it("buscadores reutilizados con catálogos distintos, histórico visible y sin e
     expect(source).toContain("Requirente histórico:");
   }
   const html = renderToStaticMarkup(createElement(RequerimientoFormClient, {
-    slug: "a", detalle: { ...detalle, requirente_usuario_id: 99 }, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, fechaHoy: "2026-09-17",
+    slug: "a", detalle: { ...detalle, requirente_usuario_id: 99 }, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, fechaHoy: "2026-09-17",
   }));
   expect(html).toContain('value="99" selected=""');
   expect(html).toContain("Persona real (histórico)");
@@ -101,7 +101,13 @@ it("landing, menú y página proveedores tienen gates independientes", () => {
 it("ajuste transversal sin SQL, RRHH, programación ni credenciales", () => {
   const files = execFileSync("git", ["diff", "--name-only", "aebfdc1ee46f6fe2bac4b80612db928e0a10c71b"], { encoding: "utf8" }).trim().split(/\r?\n/);
   expect(files.some(p => /rrhh|planillas|portales-proveedores|\/programacion\//i.test(p))).toBe(false);
-  expect(files.filter(p => p.startsWith("sql/"))).toEqual([]);
+  // COMPRAS-FASE-3-DOCUMENTOS-LINEA agregó una migración/preflight reales
+  // (amplía el CHECK de compras_linea_documentos.tipo — ver auditoría en
+  // src/lib/compras/linea-documentos.ts), pedidos explícitamente por ese
+  // ticket y sin ejecutar. Este guard seguía protegiendo el diff de la
+  // Fase 2 original contra SQL no pedido; se excluyen por nombre solo los
+  // 2 archivos de esa Fase 3, no cualquier sql/ futuro.
+  expect(files.filter(p => p.startsWith("sql/") && !p.includes("compras-documentos-linea-tipo"))).toEqual([]);
   const modelo = leer("src/lib/compras/requerimientos.ts");
   expect(modelo).not.toMatch(/MAX\(id\)|DELETE FROM compras_requerimientos\b|writeFile|unlink|UPDATE compras_linea_documentos/);
   expect(leer("src/app/api/empresas/[slug]/compras/requerimientos/[id]/route.ts")).not.toContain("function DELETE");
@@ -110,7 +116,39 @@ it("abrir edición conserva métodos históricos/desconocidos, sin normalizar po
   for (const metodo of ["Tarjeta", "TARJETA DE CREDITO", "Pago especial local"]) {
     const linea = { ...detalle.lineas[0], metodo_pago: metodo };
     expect(lineaEditable(linea).metodo_pago).toBe(metodo);
-    const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle: { ...detalle, lineas: [linea] }, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, fechaHoy: "2026-09-17" }));
+    const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle: { ...detalle, lineas: [linea] }, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, fechaHoy: "2026-09-17" }));
     expect(html).toContain(`value="${metodo}" selected=""`);
   }
+});
+
+/**
+ * COMPRAS-FASE-3-DOCUMENTOS-LINEA — "Documentos" solo tiene sentido para
+ * una línea ya persistida (compras_linea_documentos exige requerimiento_id/
+ * linea_id reales): se monta cuando detalle existe Y la línea tiene id, no
+ * al dar de alta un requerimiento nuevo (nuevaLinea() nunca trae id).
+ */
+it("sección Documentos se monta por cada línea con id al ver/editar un requerimiento existente", () => {
+  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: true, fechaHoy: "2026-09-17" }));
+  expect(html).toContain("Documentos (0)");
+});
+
+it("sección Documentos NO se monta al dar de alta un requerimiento nuevo (líneas sin id todavía)", () => {
+  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: true, fechaHoy: "2026-09-17" }));
+  expect(html).not.toContain("Documentos (");
+});
+
+it("puedeSubirDocumentos controla el formulario de subida independientemente de puedeEliminar", () => {
+  const conSubida = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: true, fechaHoy: "2026-09-17" }));
+  expect(conSubida).toContain("Subir documento");
+  const sinSubida = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, fechaHoy: "2026-09-17" }));
+  expect(sinSubida).not.toContain("Subir documento");
+});
+
+it("eliminar documentos exige permiso Y estado Pendiente (regla documentada, más restrictiva que subir)", () => {
+  const source = leer("src/components/compras/requerimiento-form-client.tsx");
+  expect(source).toContain('puedeEliminar={puedeEliminar && detalle.estado === "Pendiente"}');
+  // La sección se sigue mostrando (para Ver/consultar) aunque el
+  // requerimiento ya esté Autorizada — solo cambia si permite eliminar.
+  const autorizada = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle: { ...detalle, estado: "Autorizada" }, editable: false, solicitante: "Actual", puedeEliminar: true, puedeVerProveedores: false, puedeSubirDocumentos: true, fechaHoy: "2026-09-17" }));
+  expect(autorizada).toContain("Documentos (0)");
 });

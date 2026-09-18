@@ -269,7 +269,9 @@ export async function guardarUpload(
   empresaId: number,
   // VIATICOS-FIRMA (firma visual) — "firmas": imágenes PNG de firma
   // manuscrita (src/lib/tms/viaticos.ts autorizarViatico/liquidarViatico).
-  subdir: "documentos" | "evidencias" | "flota" | "multas" | "firmas",
+  // COMPRAS-FASE-3-DOCUMENTOS-LINEA — "compras": facturas/cotizaciones/
+  // comprobantes adjuntos a una línea de compras_requerimiento_lineas.
+  subdir: "documentos" | "evidencias" | "flota" | "multas" | "firmas" | "compras",
   prefix: string,
   file: UploadLike,
 ): Promise<{ relative: string; original: string; size: number }> {
