@@ -1,5 +1,5 @@
 import PDFDocument from "pdfkit";
-import ExcelJS from "exceljs";
+import ExcelJS, { type PaperSize } from "exceljs";
 import { decodificarPng, reforzarFirmaParaPdf } from "@/lib/firmas/reforzar-firma-pdf";
 import { dibujarTablaEnDoc } from "@/lib/rrhh/export-files";
 import { formatearFechaVisible, formatearTimestampVisible } from "@/lib/rrhh/dates";
@@ -19,10 +19,13 @@ export const RECORDATORIOS_COMPRA = [
 ] as const;
 export const FRASE_INSTITUCIONAL_COMPRA = "EL ORDEN Y LA DISCIPLINA SON LA BASE PARA UN SERVICIO DE CALIDAD, EFICIENCIA Y SATISFACCIÓN A NUESTRO CLIENTE";
 export const COLUMNAS_EXCEL_COMPRA = [
-  "Fecha requerimiento", "Empresa requirente", "Persona que requiere", "Solicitante", "Encargado compras",
-  "Unidad / placa", "Fecha línea", "Serie factura", "Número factura", "Proveedor", "Repuesto",
-  "Método de pago", "Condición de pago", "Total", "Observaciones",
+  "No.", "Unidad / placa", "Fecha", "Serie / factura", "Proveedor", "Repuesto a comprar",
+  "Método de pago", "Condición", "Total",
 ] as const;
+const ANCHO_COLUMNAS_EXCEL_COMPRA = [6, 20, 12, 16, 26, 42, 18, 12, 14];
+const COLUMNAS_TABLA_COMPRA = COLUMNAS_EXCEL_COMPRA.length;
+const bordeFino = { style: "thin", color: { argb: "FF94A3B8" } } as const;
+const bordeCelda = { top: bordeFino, bottom: bordeFino, left: bordeFino, right: bordeFino };
 
 /** Solo datos persistidos: no JOIN de nombres, no recálculo del total. */
 export function requerimientoCompraPdf(d: DetalleCompra, empresaNombre: string, firmas: FirmasCompraReporte | FirmaCompraReporte | null): Promise<Buffer> {
@@ -120,42 +123,134 @@ export function requerimientoCompraPdf(d: DetalleCompra, empresaNombre: string, 
 }
 
 const fechaExcel = (s: string) => new Date(`${s}T00:00:00Z`);
+
+/**
+ * Excel administrativo: mismo formato visual/estructural que el PDF
+ * vigente (mismo encabezado, mismos datos generales, misma tabla,
+ * mismos recordatorios y frase institucional) — pero SIN firmas. Nunca
+ * consulta firmasHistoricasCompraReporte(): el endpoint ya solo la
+ * carga cuando formato === "pdf" (ver requerimiento-exportaciones-api.ts),
+ * esta función ni siquiera recibe ese dato. Solo datos persistidos: no
+ * JOIN de nombres, no recálculo del total.
+ */
 export async function requerimientoCompraExcel(d: DetalleCompra, empresaNombre: string): Promise<Buffer> {
+  // Mismo criterio que el PDF: el título SIEMPRE es la empresa
+  // requirente del propio requerimiento (d.entidad_requirente_nombre),
+  // nunca el tenant/guard — ambos pueden diferir legítimamente
+  // (multiempresa). empresaNombre se conserva en la firma por
+  // compatibilidad con el caller, pero no se usa como título visible.
+  void empresaNombre;
   const wb = new ExcelJS.Workbook();
   wb.creator = "Plataforma corporativa";
   // Excel limita nombres de hoja a 31 caracteres; códigos largos se conservan completos en cabecera.
-  const ws = wb.addWorksheet(`Requerimiento ${d.codigo}`.replace(/[\\/*?:\[\]]/g, "-").slice(0, 31), { views: [{ state: "frozen", ySplit: 7, showGridLines: false }] });
-  ws.columns = [19, 30, 28, 28, 28, 28, 16, 22, 24, 32, 48, 24, 20, 20, 55].map(width => ({ width }));
-  for (const [i, valor] of [empresaNombre, "REQUERIMIENTO DE COMPRA", `Código: ${d.codigo}`, `Fecha: ${formatearFechaVisible(d.fecha_requerimiento)} · Estado: ${d.estado}`].entries()) {
-    ws.mergeCells(i + 1, 1, i + 1, 15);
-    const row = ws.getRow(i + 1);
-    row.getCell(1).value = valor;
-    row.font = { name: "Arial", bold: true, size: i === 0 ? 16 : 12 };
+  const ws = wb.addWorksheet(`Requerimiento ${d.codigo}`.replace(/[\\/*?:\[\]]/g, "-").slice(0, 31));
+  ws.columns = ANCHO_COLUMNAS_EXCEL_COMPRA.map(width => ({ width }));
+
+  const centrada = (valor: string, size: number) => {
+    const row = ws.addRow([valor.normalize("NFC")]);
+    ws.mergeCells(row.number, 1, row.number, COLUMNAS_TABLA_COMPRA);
+    row.font = { name: "Arial", bold: true, size };
     row.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-    row.height = 30;
-  }
-  ws.mergeCells("A5:O5"); ws.getCell("A5").value = `Observaciones del requerimiento: ${d.observaciones || "—"}`;
-  ws.getCell("A5").alignment = { wrapText: true, vertical: "top" };
-  ws.getRow(5).height = Math.max(24, Math.ceil((d.observaciones?.length ?? 0) / 250) * 15);
-  const header = ws.getRow(7); header.values = [...COLUMNAS_EXCEL_COMPRA]; header.height = 32;
+    row.height = Math.max(22, size * 1.6);
+    return row;
+  };
+  const texto = (valor: string, opts: { bold?: boolean } = {}) => {
+    const row = ws.addRow([valor]);
+    ws.mergeCells(row.number, 1, row.number, COLUMNAS_TABLA_COMPRA);
+    row.font = { name: "Arial", size: 10, bold: Boolean(opts.bold) };
+    row.alignment = { horizontal: "left", vertical: "top", wrapText: true };
+    row.height = Math.max(18, Math.ceil(valor.length / 140) * 14);
+    return row;
+  };
+
+  centrada(d.entidad_requirente_nombre?.trim() || "EMPRESA REQUIRENTE NO REGISTRADA", 16);
+  centrada("REQUERIMIENTO DE REPUESTOS", 13);
+  texto(`Código: ${d.codigo} · Fecha: ${formatearFechaVisible(d.fecha_requerimiento)} · Estado: ${d.estado}`);
+  texto(`Persona que requiere: ${visible(d.requirente_nombre)} · Encargado de compras: ${visible(d.encargado_compras_nombre)}`);
+  ws.addRow([]);
+
+  // Tabla principal — mismas 9 columnas que el PDF (sección 15 del
+  // ticket). Datos repetitivos por línea (empresa/requirente/
+  // solicitante/encargado/fecha del requerimiento) quedan solo en el
+  // encabezado, no en la tabla.
+  const filaEncabezadoTabla = ws.rowCount + 1;
+  const header = ws.getRow(filaEncabezadoTabla);
+  header.values = [...COLUMNAS_EXCEL_COMPRA];
+  header.height = 26;
   header.font = { name: "Arial", bold: true, color: { argb: "FFFFFFFF" } };
   header.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F4E78" } };
   header.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-  for (const l of d.lineas) {
-    const row = ws.addRow([fechaExcel(d.fecha_requerimiento), visible(d.entidad_requirente_nombre), visible(d.requirente_nombre), visible(d.solicitante_nombre), visible(d.encargado_compras_nombre), visible(l.unidad_descripcion), fechaExcel(l.fecha), l.serie_factura || "", l.numero_factura || "", visible(l.proveedor_nombre_snapshot), l.repuesto_descripcion, l.metodo_pago, l.condicion_pago, Number(l.total), l.observaciones || ""]);
-    row.font = { name: "Arial", size: 10 }; row.alignment = { vertical: "top", wrapText: true };
-    row.height = Math.max(30, Math.ceil(l.repuesto_descripcion.length / 45) * 14, Math.ceil((l.observaciones?.length ?? 0) / 50) * 14);
-  }
-  ws.getColumn(1).numFmt = "dd/mm/yyyy"; ws.getColumn(7).numFmt = "dd/mm/yyyy";
-  ws.getColumn(14).numFmt = '"Q "#,##0.00';
-  ws.autoFilter = { from: "A7", to: `O${7 + d.lineas.length}` };
+  header.border = bordeCelda;
+
+  d.lineas.forEach((l, i) => {
+    const row = ws.addRow([
+      i + 1,
+      visible(l.unidad_descripcion),
+      fechaExcel(l.fecha),
+      `${l.serie_factura || "—"} / ${l.numero_factura || "—"}`,
+      visible(l.proveedor_nombre_snapshot),
+      visible(l.repuesto_descripcion),
+      visible(l.metodo_pago),
+      l.condicion_pago,
+      Number(l.total),
+    ]);
+    row.font = { name: "Arial", size: 10 };
+    row.alignment = { vertical: "top", wrapText: true };
+    row.height = Math.max(20, Math.ceil(l.repuesto_descripcion.length / 30) * 13);
+    row.border = bordeCelda;
+    row.getCell(1).alignment = { horizontal: "center", vertical: "top" };
+  });
+  ws.getColumn(3).numFmt = "dd/mm/yyyy";
+  ws.getColumn(9).numFmt = '"Q "#,##0.00';
+  ws.getColumn(9).alignment = { horizontal: "right", vertical: "top" };
+  ws.views = [{ state: "frozen", ySplit: filaEncabezadoTabla, showGridLines: false }];
+
   ws.addRow([]);
-  const total = ws.addRow(Array.from({ length: 14 }, (_, i) => i === 12 ? "TOTAL" : i === 13 ? Number(d.total) : null));
-  total.font = { bold: true }; total.getCell(14).numFmt = '"Q "#,##0.00';
+  // TOTAL: mismo dato persistido que el PDF (d.total), nunca recalculado
+  // sumando líneas.
+  const total = ws.addRow([]);
+  ws.mergeCells(total.number, 1, total.number, COLUMNAS_TABLA_COMPRA - 1);
+  total.getCell(1).value = "TOTAL:";
+  total.getCell(1).alignment = { horizontal: "right" };
+  total.getCell(COLUMNAS_TABLA_COMPRA).value = Number(d.total);
+  total.getCell(COLUMNAS_TABLA_COMPRA).numFmt = '"Q "#,##0.00';
+  total.getCell(COLUMNAS_TABLA_COMPRA).alignment = { horizontal: "right" };
+  total.font = { name: "Arial", bold: true, size: 11 };
+  total.height = 22;
+
+  d.lineas.forEach((l, i) => { if (l.observaciones) texto(`Observaciones de línea ${i + 1}: ${l.observaciones}`); });
+  if (d.observaciones) texto(`Observaciones del requerimiento: ${d.observaciones}`);
+
+  // Mismo criterio que el PDF: Autorizada NO agrega ninguna fila aquí
+  // (nunca metadata técnica de firma en este bloque).
   if (d.estado === "Rechazada") {
-    ws.addRow(["Fecha de rechazo", formatearTimestampVisible(d.rechazado_en)]);
-    const row = ws.addRow(["Motivo", d.motivo_rechazo || "Sin dato histórico"]);
-    ws.mergeCells(row.number, 2, row.number, 15); row.alignment = { wrapText: true }; row.height = Math.max(30, Math.ceil((d.motivo_rechazo?.length ?? 0) / 200) * 15);
+    texto("RECHAZADA", { bold: true });
+    texto(`Fecha de rechazo: ${formatearTimestampVisible(d.rechazado_en)}`);
+    texto(`Motivo: ${visible(d.motivo_rechazo)}`);
+  } else if (d.estado === "Pendiente") {
+    texto("PENDIENTE DE AUTORIZACIÓN", { bold: true });
   }
+
+  ws.addRow([]);
+  RECORDATORIOS_COMPRA.forEach((recordatorio) => {
+    const row = ws.addRow([recordatorio]);
+    ws.mergeCells(row.number, 1, row.number, COLUMNAS_TABLA_COMPRA);
+    row.font = { name: "Arial", size: 8 };
+    row.alignment = { horizontal: "left", vertical: "top", wrapText: true };
+    row.height = Math.max(16, Math.ceil(recordatorio.length / 160) * 12);
+    row.border = bordeCelda;
+  });
+  centrada(FRASE_INSTITUCIONAL_COMPRA, 10);
+
+  ws.pageSetup = {
+    orientation: "landscape",
+    paperSize: 1 as PaperSize, // 1 = Letter (código OOXML estándar; no listado en el const enum de exceljs)
+    fitToPage: true,
+    fitToWidth: 1,
+    fitToHeight: 0,
+    margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 },
+    printTitlesRow: `${filaEncabezadoTabla}:${filaEncabezadoTabla}`,
+  };
+
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
