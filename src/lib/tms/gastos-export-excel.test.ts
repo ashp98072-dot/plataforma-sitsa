@@ -1,4 +1,6 @@
 import ExcelJS from "exceljs";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   exportarAgregadoGastosExcel,
@@ -42,6 +44,11 @@ async function primeraHoja(buffer: Buffer) {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(buffer as unknown as ExcelJS.Buffer);
   return wb.worksheets[0]!;
+}
+
+function guardarQA(nombre: string, buffer: Buffer) {
+  const dir = process.env.EXCEL_METODO_QA_DIR;
+  if (dir) { mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, nombre), buffer); }
 }
 
 describe("exportación Excel de reportes de gastos", () => {
@@ -90,19 +97,20 @@ describe("exportación Excel de reportes de gastos", () => {
       filaGasto({ id: 2, activo: false }),
     ]);
     const ws = await primeraHoja(buf);
+    guardarQA("Gastos-detalle.xlsx", buf);
     expect(ws.getRow(1).values).toEqual([
-      undefined, "Fecha solicitud", "Fecha de viaje", "Nombre", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Total",
+      undefined, "Fecha solicitud", "Fecha de viaje", "Nombre", "Método de pago", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Total",
       "Código viaje", "Categoría", "Monto unitario", "Estado", "Registrado por", "Observaciones",
     ]);
     expect(ws.getRow(2).values).toEqual([
-      undefined, "01/09/2026", "02/09/2026", "Heber Sitan", "Piloto", "P111AAA", "Cliente A", 2, "Diesel", 200,
+      undefined, "01/09/2026", "02/09/2026", "Heber Sitan", "—", "Piloto", "P111AAA", "Cliente A", 2, "Diesel", 200,
       "PLAN-1", "Combustible", 100, "Activo", "admin", "—",
     ]);
-    expect(ws.getRow(3).getCell(13).value).toBe("Anulado");
+    expect(ws.getRow(3).getCell(14).value).toBe("Anulado");
     // fila 4 = blank, fila 5 = TOTAL GENERAL
-    expect(ws.getRow(5).getCell(8).value).toBe("TOTAL GENERAL");
-    expect(ws.getRow(5).getCell(9).value).toBe(400);
-    expect(ws.getRow(5).getCell(10).value).toBe("2 registro(s)");
+    expect(ws.getRow(5).getCell(9).value).toBe("TOTAL GENERAL");
+    expect(ws.getRow(5).getCell(10).value).toBe(400);
+    expect(ws.getRow(5).getCell(11).value).toBe("2 registro(s)");
   });
 
   it("rentabilidad por viaje: tarifa, gastos, viáticos y utilidad separados (sin costo operativo, TMS-SIN-COSTO-OPERATIVO-1)", async () => {
@@ -127,28 +135,33 @@ describe("exportación Excel de reportes de gastos", () => {
       lineas: [
         {
           id: 1, categoria: "Combustible", descripcion: "Diesel", cantidad: 2, monto: 100, orden: 0,
-          fechaViaje: null, empleadoId: null, empleadoNombre: null, cargo: null, cuenta: null, metodoPago: null,
+          fechaViaje: null, empleadoId: null, empleadoNombre: null, cargo: null, cuenta: null, metodoPago: "Transferencia",
           vehiculoId: null, placa: null, clienteId: null, clienteNombre: null, planId: null,
         },
         {
           id: 2, categoria: "Hospedaje", descripcion: null, cantidad: 1, monto: 150, orden: 1,
-          fechaViaje: null, empleadoId: null, empleadoNombre: null, cargo: null, cuenta: null, metodoPago: null,
+          fechaViaje: null, empleadoId: null, empleadoNombre: null, cargo: null, cuenta: null, metodoPago: "Transferencia móvil",
           vehiculoId: null, placa: null, clienteId: null, clienteNombre: null, planId: null,
         },
       ],
     };
     const buf = await exportarSolicitudFondoExcel(solicitud);
+    guardarQA("Fondo-individual.xlsx", buf);
     const ws = await primeraHoja(buf);
     expect(ws.getCell("A1").value).toBe("EMPRESA REQUIRENTE NO REGISTRADA");
     expect(ws.getCell("A2").value).toBe("SOLICITUD DE FONDO FONDO-000001");
-    expect(ws.getRow(4).values).toEqual([undefined, "Fecha solicitud", "Fecha viaje", "Nombre", "Cuenta", "Cargo", "Placa", "Cliente", "Categoría", "Cantidad", "Descripción", "Valor", "Subtotal (Q)"]);
-    expect(ws.getRow(5).values).toEqual([undefined, "01/09/2026", "", "", "", "", "", "", "Combustible", "2", "Diesel", "100.00", "200.00"]);
-    expect(ws.getRow(7).values).toEqual([undefined, "", "", "", "", "", "", "", "", "", "", "TOTAL", "350.00"]);
+    expect(ws.getRow(4).values).toEqual([undefined, "Fecha solicitud", "Fecha viaje", "Nombre", "Cuenta", "Método de pago", "Cargo", "Placa", "Cliente", "Categoría", "Cantidad", "Descripción", "Valor", "Subtotal (Q)"]);
+    expect(ws.getRow(5).values).toEqual([undefined, "01/09/2026", "", "", "", "Transferencia", "", "", "", "Combustible", "2", "Diesel", "100.00", "200.00"]);
+    expect(ws.getCell("E6").value).toBe("Transferencia móvil");
+    expect(ws.getRow(4).values).not.toContain("Tipo de pago");
+    const historico = await primeraHoja(await exportarSolicitudFondoExcel({ ...solicitud, lineas: [{ ...solicitud.lineas[0], metodoPago: null, cuenta: "123456" }] }));
+    expect(historico.getCell("E5").value).toBe("");
+    expect(ws.getRow(7).values).toEqual([undefined, "", "", "", "", "", "", "", "", "", "", "", "TOTAL", "350.00"]);
     for (const nombre of ["Empresa requirente A", "Empresa requirente B"]) {
       const otra = await primeraHoja(await exportarSolicitudFondoExcel({ ...solicitud, entidadRequirenteNombre: nombre }));
       expect(otra.getCell("A1").value).toBe(nombre);
       expect(otra.getColumn(1).width).toBe(ws.getColumn(1).width);
-      expect(otra.getCell("L1").isMerged).toBe(true);
+      expect(otra.getCell("M1").isMerged).toBe(true);
       expect(otra.getRow(7).values).toEqual(ws.getRow(7).values);
     }
   });
@@ -160,21 +173,25 @@ describe("exportación Excel de reportes de gastos", () => {
       descripcion: "Diesel", cantidad: 2, monto: 100, activo: true,
       empleadoId: null, empleadoNombre: null, empleadoCargo: null, vehiculoId: null,
       vehiculoPlaca: null, clienteId: null, clienteNombre: null, planId: null, planCodigo: null,
-      metodoPago: null, numeroCuentaPago: null, creadoPor: "admin", observaciones: null,
+      metodoPago: "Cheque", numeroCuentaPago: null, creadoPor: "admin", observaciones: null,
     } as GastoOperativo;
-    const ws = await primeraHoja(await exportarGastoOperativoExcel(gasto));
+    const buffer = await exportarGastoOperativoExcel(gasto);
+    guardarQA("Gasto-individual.xlsx", buffer);
+    const ws = await primeraHoja(buffer);
     expect(ws.getCell("A1").value).toBe(gasto.entidadRequirenteNombre);
     expect(ws.getCell("A2").value).toBe("GASTO OPERATIVO");
-    expect(ws.getCell("O1").isMerged).toBe(true);
+    expect(ws.getCell("D5").value).toBe("Cheque");
+    expect(ws.getRow(4).values).not.toContain("Tipo de pago");
+    expect(ws.getCell("P1").isMerged).toBe(true);
     expect(ws.getCell("A1").font).toMatchObject({ bold: true, size: 16 });
     expect(ws.getCell("A1").alignment.horizontal).toBe("center");
-    expect(ws.getRow(4).values).toEqual([undefined, "Fecha solicitud", "Fecha de viaje", "Nombre", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Total", "Código viaje", "Categoría", "Monto unitario", "Estado", "Registrado por", "Observaciones"]);
-    expect(ws.getCell("I5").value).toBe(200);
-    expect(ws.getCell("H7").value).toBe("TOTAL GENERAL");
-    expect(ws.getCell("I7").value).toBe(200);
-    expect(ws.getCell("I5").numFmt).toBe('"Q"#,##0.00');
-    expect(ws.getColumn(8).width).toBe(40);
-    expect(ws.autoFilter).toBe("A4:O5");
+    expect(ws.getRow(4).values).toEqual([undefined, "Fecha solicitud", "Fecha de viaje", "Nombre", "Método de pago", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Total", "Código viaje", "Categoría", "Monto unitario", "Estado", "Registrado por", "Observaciones"]);
+    expect(ws.getCell("J5").value).toBe(200);
+    expect(ws.getCell("I7").value).toBe("TOTAL GENERAL");
+    expect(ws.getCell("J7").value).toBe(200);
+    expect(ws.getCell("J5").numFmt).toBe('"Q"#,##0.00');
+    expect(ws.getColumn(9).width).toBe(40);
+    expect(ws.autoFilter).toBe("A4:P5");
     expect(ws.views[0]).toMatchObject({ state: "frozen", ySplit: 4 });
     const linea = {
       id: 1, orden: 0, categoria: "Combustible", descripcion: "Diesel", cantidad: 2, monto: 100,
@@ -183,19 +200,36 @@ describe("exportación Excel de reportes de gastos", () => {
     };
     const varias = await primeraHoja(await exportarGastoOperativoExcel({
       ...gasto, cantidad: 1, monto: 350,
-      lineas: [linea, { ...linea, id: 2, orden: 1, categoria: "Hospedaje", cantidad: 1, monto: 150 }],
+      lineas: [linea, { ...linea, id: 2, orden: 1, categoria: "Hospedaje", cantidad: 1, monto: 150, metodoPago: "Transferencia móvil" }],
     }));
-    expect(varias.getCell("I5").value).toBe(200);
-    expect(varias.getCell("I6").value).toBe(150);
-    expect(varias.getCell("I8").value).toBe(350);
-    expect(varias.autoFilter).toBe("A4:O6");
+    expect(varias.getCell("J5").value).toBe(200);
+    expect(varias.getCell("J6").value).toBe(150);
+    expect(varias.getCell("J8").value).toBe(350);
+    expect(varias.getCell("D5").value).toBe("—"); // NULL de línea no hereda Cheque de cabecera.
+    expect(varias.getCell("D6").value).toBe("Transferencia móvil");
+    expect(varias.autoFilter).toBe("A4:P6");
     for (const nombre of [null, "Otra empresa"]) {
       const otra = await primeraHoja(await exportarGastoOperativoExcel({ ...gasto, entidadRequirenteNombre: nombre }));
       expect(otra.getCell("A1").value).toBe(nombre ?? "EMPRESA REQUIRENTE NO REGISTRADA");
       expect(otra.getRow(5).values).toEqual(ws.getRow(5).values);
-      expect(otra.getCell("I7").value).toBe(200);
+      expect(otra.getCell("J7").value).toBe(200);
     }
   });
+});
+
+it("Gastos exporta cada método persistido e históricos sin inferir; filtros y formatos desplazados", async () => {
+  const metodos = ["Efectivo", "Transferencia", "Transferencia móvil", "Tarjeta de crédito", "Cheque", "Otro", "Método histórico", null];
+  const ws = await primeraHoja(await exportarGastosDetalleExcel(metodos.map(metodoPago => filaGasto({ metodoPago, numeroCuentaPago: "123456" }))));
+  expect(ws.getRow(1).values).not.toContain("Tipo de pago");
+  metodos.forEach((metodo, i) => expect(ws.getRow(i + 2).getCell(4).value).toBe(metodo ?? "—"));
+  expect(ws.autoFilter).toBe("A1:P9");
+  expect(ws.getColumn(8).numFmt).toBe("0.00");
+  for (const col of [10, 13]) expect(ws.getColumn(col).numFmt).toContain("Q");
+  expect(ws.getCell("I11").value).toBe("TOTAL GENERAL");
+  expect(ws.getCell("J11").value).toBe(1600);
+  expect(ws.getColumn(4).width).toBeGreaterThanOrEqual(24);
+  expect(ws.getColumn(9).alignment?.wrapText).toBe(true);
+  expect(ws.getColumn(16).alignment?.wrapText).toBe(true);
 });
 
 /**
@@ -219,11 +253,24 @@ describe("exportarReporteFondosExcel (SOLICITUD-FONDOS-REPORTE-1)", () => {
     };
   }
 
+  it("Fondos conserva métodos por línea y NULL aunque haya cuenta, sin Tipo de pago", async () => {
+    const metodos = ["Transferencia", "Transferencia móvil", "Método histórico", null];
+    const ws = await primeraHoja(await exportarReporteFondosExcel(metodos.map(metodoPago => fila({ metodoPago }))));
+    metodos.forEach((metodo, i) => expect(ws.getRow(i + 2).getCell(7).value).toBe(metodo ?? "—"));
+    expect(ws.getRow(1).values).not.toContain("Tipo de pago");
+    expect(ws.autoFilter).toBe("A1:S5");
+    for (const col of [13, 14, 19]) expect(ws.getColumn(col).numFmt).toContain("Q");
+    expect(ws.getColumn(11).numFmt).toBe("0.00");
+    expect(ws.getColumn(7).width).toBeGreaterThanOrEqual(24);
+    expect(ws.getCell("S2").alignment.vertical).toBe("top");
+  });
+
   it("encabezados EXACTOS pedidos por el ticket, en orden, sin ids internos", async () => {
     const buf = await exportarReporteFondosExcel([fila()]);
+    guardarQA("Fondos-reporte.xlsx", buf);
     const ws = await primeraHoja(buf);
     expect(ws.getRow(1).values).toEqual([
-      undefined, "Código solicitud", "Estado", "Fecha solicitud", "Fecha viaje", "Nombre", "Cuenta", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Monto unitario", "Total línea", "Requirente", "Solicitante", "Autorizante", "Fecha autorización", "Total solicitud",
+      undefined, "Código solicitud", "Estado", "Fecha solicitud", "Fecha viaje", "Nombre", "Cuenta", "Método de pago", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Monto unitario", "Total línea", "Requirente", "Solicitante", "Autorizante", "Fecha autorización", "Total solicitud",
     ]);
   });
 
@@ -231,17 +278,17 @@ describe("exportarReporteFondosExcel (SOLICITUD-FONDOS-REPORTE-1)", () => {
     const buf = await exportarReporteFondosExcel([fila()]);
     const ws = await primeraHoja(buf);
     expect(ws.getRow(2).values).toEqual([
-      undefined, "FONDO-000010", "Autorizada", "01/09/2026", "02/09/2026", "Heber Sitan", "123-456", "Piloto", "P111AAA", "Cliente A", 2, "Viáticos de ruta", 100, 200, "Requirente", "Solicitante", "Autorizante", "03/09/2026", 200,
+      undefined, "FONDO-000010", "Autorizada", "01/09/2026", "02/09/2026", "Heber Sitan", "123-456", "—", "Piloto", "P111AAA", "Cliente A", 2, "Viáticos de ruta", 100, 200, "Requirente", "Solicitante", "Autorizante", "03/09/2026", 200,
     ]);
-    expect(ws.getColumn(13).numFmt).toContain("Q");
-    expect(ws.getColumn(10).numFmt).toBe("0.00");
+    expect(ws.getColumn(14).numFmt).toContain("Q");
+    expect(ws.getColumn(11).numFmt).toBe("0.00");
   });
 
   it("línea sin fecha de viaje (nunca ligada a un viaje) muestra '—', no revienta ni inventa una fecha", async () => {
     const buf = await exportarReporteFondosExcel([fila({ fechaViaje: null, empleadoNombre: null, cargo: null, placa: null, clienteNombre: null })]);
     const ws = await primeraHoja(buf);
     expect(ws.getRow(2).values).toEqual([
-      undefined, "FONDO-000010", "Autorizada", "01/09/2026", "—", "—", "123-456", "—", "—", "—", 2, "Viáticos de ruta", 100, 200, "Requirente", "Solicitante", "Autorizante", "03/09/2026", 200,
+      undefined, "FONDO-000010", "Autorizada", "01/09/2026", "—", "—", "123-456", "—", "—", "—", "—", 2, "Viáticos de ruta", 100, 200, "Requirente", "Solicitante", "Autorizante", "03/09/2026", 200,
     ]);
   });
 
@@ -256,7 +303,7 @@ describe("exportarReporteFondosExcel (SOLICITUD-FONDOS-REPORTE-1)", () => {
   it("incluye autofiltro cubriendo encabezado y todas las filas", async () => {
     const buf = await exportarReporteFondosExcel([fila(), fila({ lineaId: 2 })]);
     const ws = await primeraHoja(buf);
-    expect(ws.autoFilter).toEqual("A1:R3");
+    expect(ws.autoFilter).toEqual("A1:S3");
   });
 
   it("nunca incluye columnas de ids internos (lineaId/solicitudId/empleadoId/vehiculoId/clienteId/planId)", async () => {

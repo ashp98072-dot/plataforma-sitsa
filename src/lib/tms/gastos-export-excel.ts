@@ -99,12 +99,9 @@ export async function exportarGastosDetalleExcel(filas: FilaGastoDetalle[]): Pro
   wb.creator = "Plataforma corporativa";
   const ws = wb.addWorksheet("Gastos", { views: [{ state: "frozen", ySplit: 1, showGridLines: false }] });
 
-  // GASTOS-OPERATIVOS-DETALLE-FORMATO-1 — primero las 9 columnas exigidas
-  // por el ticket en ese orden (Fecha solicitud, Fecha viaje, Nombre,
-  // Cargo, Placa, Cliente, Cantidad, Descripción, Total) y luego el resto
-  // del detalle operativo.
+  // Método persistido después de Nombre; conservar el resto del detalle operativo.
   const headers = [
-    "Fecha solicitud", "Fecha de viaje", "Nombre", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Total",
+    "Fecha solicitud", "Fecha de viaje", "Nombre", "Método de pago", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Total",
     "Código viaje", "Categoría", "Monto unitario", "Estado", "Registrado por", "Observaciones",
   ];
   ws.addRow(headers);
@@ -116,7 +113,7 @@ export async function exportarGastosDetalleExcel(filas: FilaGastoDetalle[]): Pro
   for (const f of filas) {
     ws.addRow([
       formatearFechaVisible(f.fechaSolicitud) || "—", f.fechaViaje ? formatearFechaVisible(f.fechaViaje) : "—",
-      f.empleadoNombre ?? "—", f.cargo ?? "—", f.placa ?? "—", f.clienteNombre ?? "—",
+      f.empleadoNombre ?? "—", f.metodoPago ?? "—", f.cargo ?? "—", f.placa ?? "—", f.clienteNombre ?? "—",
       f.cantidad, f.descripcion ?? "—", f.total,
       f.planCodigo ?? "—", f.categoria, f.monto,
       f.activo ? "Activo" : "Anulado", f.registradoPor ?? "—", f.observaciones ?? "—",
@@ -124,23 +121,23 @@ export async function exportarGastosDetalleExcel(filas: FilaGastoDetalle[]): Pro
   }
 
   const ultimaFilaDatos = filas.length + 1;
-  ws.autoFilter = { from: "A1", to: `O${Math.max(1, ultimaFilaDatos)}` };
-  ws.columns = [14, 14, 26, 18, 12, 24, 12, 40, 16, 16, 16, 16, 12, 20, 30].map((width) => ({ width }));
-  ws.getColumn(7).numFmt = "0.00";
-  for (const col of [9, 12]) ws.getColumn(col).numFmt = '"Q"#,##0.00';
-  ws.getColumn(8).alignment = { vertical: "top", wrapText: true };
-  ws.getColumn(15).alignment = { vertical: "top", wrapText: true };
+  ws.autoFilter = { from: "A1", to: `P${Math.max(1, ultimaFilaDatos)}` };
+  ws.columns = [14, 14, 26, 24, 18, 12, 24, 12, 40, 16, 16, 16, 16, 12, 20, 30].map((width) => ({ width }));
+  ws.getColumn(8).numFmt = "0.00";
+  for (const col of [10, 13]) ws.getColumn(col).numFmt = '"Q"#,##0.00';
+  ws.getColumn(9).alignment = { vertical: "top", wrapText: true };
+  ws.getColumn(16).alignment = { vertical: "top", wrapText: true };
   for (let i = 2; i <= ultimaFilaDatos; i++) {
     for (let col = 1; col <= headers.length; col++) {
-      if (col !== 8 && col !== 15) ws.getRow(i).getCell(col).alignment = { vertical: "top" };
+      if (col !== 9 && col !== 16) ws.getRow(i).getCell(col).alignment = { vertical: "top" };
     }
   }
 
   ws.addRow([]);
   const totalGeneral = filas.reduce((s, f) => s + f.total, 0);
-  const filaTotal = ws.addRow(["", "", "", "", "", "", "", "TOTAL GENERAL", totalGeneral, `${filas.length} registro(s)`]);
+  const filaTotal = ws.addRow(["", "", "", "", "", "", "", "", "TOTAL GENERAL", totalGeneral, `${filas.length} registro(s)`]);
   filaTotal.font = { bold: true };
-  filaTotal.getCell(9).numFmt = '"Q"#,##0.00';
+  filaTotal.getCell(10).numFmt = '"Q"#,##0.00';
 
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
@@ -179,7 +176,7 @@ export async function exportarReporteFondosExcel(filas: FilaSolicitudFondoReport
   wb.creator = "Plataforma corporativa";
   const ws = wb.addWorksheet("Solicitudes de fondo", { views: [{ state: "frozen", ySplit: 1, showGridLines: false }] });
 
-  const headers = ["Código solicitud", "Estado", "Fecha solicitud", "Fecha viaje", "Nombre", "Cuenta", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Monto unitario", "Total línea", "Requirente", "Solicitante", "Autorizante", "Fecha autorización", "Total solicitud"];
+  const headers = ["Código solicitud", "Estado", "Fecha solicitud", "Fecha viaje", "Nombre", "Cuenta", "Método de pago", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Monto unitario", "Total línea", "Requirente", "Solicitante", "Autorizante", "Fecha autorización", "Total solicitud"];
   ws.addRow(headers);
   const header = ws.getRow(1);
   header.font = { bold: true, color: { argb: "FFFFFFFF" } };
@@ -191,20 +188,20 @@ export async function exportarReporteFondosExcel(filas: FilaSolicitudFondoReport
       f.solicitudCodigo, f.estadoFondo,
       formatearFechaVisible(f.fechaSolicitud) || "—", f.fechaViaje ? formatearFechaVisible(f.fechaViaje) : "—",
       f.empleadoNombre ?? "—",
-      f.cuenta ?? "—", f.cargo ?? "—", f.placa ?? "—", f.clienteNombre ?? "—",
+      f.cuenta ?? "—", f.metodoPago ?? "—", f.cargo ?? "—", f.placa ?? "—", f.clienteNombre ?? "—",
       f.cantidad, f.descripcion ?? "—", f.monto, f.total,
       f.requirenteNombre ?? "—", f.solicitanteNombre ?? "—", f.autorizanteNombre ?? "—",
       f.fechaAutorizacion ? formatearFechaVisible(f.fechaAutorizacion) : "—", f.totalSolicitud,
     ]);
   }
 
-  ws.autoFilter = { from: "A1", to: `R${Math.max(1, filas.length + 1)}` };
-  ws.columns = [18,14,14,14,26,20,20,14,26,12,40,16,16,24,24,24,18,18].map((width) => ({ width }));
-  ws.getColumn(10).numFmt = "0.00";
-  for (const col of [12, 13, 18]) ws.getColumn(col).numFmt = '"Q"#,##0.00';
-  ws.getColumn(11).alignment = { vertical: "top", wrapText: true };
+  ws.autoFilter = { from: "A1", to: `S${Math.max(1, filas.length + 1)}` };
+  ws.columns = [18,14,14,14,26,20,24,20,14,26,12,40,16,16,24,24,24,18,18].map((width) => ({ width }));
+  ws.getColumn(11).numFmt = "0.00";
+  for (const col of [13, 14, 19]) ws.getColumn(col).numFmt = '"Q"#,##0.00';
+  ws.getColumn(12).alignment = { vertical: "top", wrapText: true };
   for (let i = 2; i <= filas.length + 1; i++) {
-    for (let col = 1; col <= 18; col++) ws.getRow(i).getCell(col).alignment = { vertical: "top" };
+    for (let col = 1; col <= headers.length; col++) ws.getRow(i).getCell(col).alignment = { vertical: "top" };
   }
 
   return Buffer.from(await wb.xlsx.writeBuffer());
@@ -250,14 +247,14 @@ export async function exportarGastoOperativoExcel(gasto: GastoOperativo): Promis
 export async function exportarSolicitudFondoExcel(solicitud: SolicitudFondo): Promise<Buffer> {
   const buffer = await tablaAExcel({
     sheetName: `Solicitud ${solicitud.codigo}`.slice(0, 31),
-    headers: ["Fecha solicitud", "Fecha viaje", "Nombre", "Cuenta", "Cargo", "Placa", "Cliente", "Categoría", "Cantidad", "Descripción", "Valor", "Subtotal (Q)"],
+    headers: ["Fecha solicitud", "Fecha viaje", "Nombre", "Cuenta", "Método de pago", "Cargo", "Placa", "Cliente", "Categoría", "Cantidad", "Descripción", "Valor", "Subtotal (Q)"],
     rows: [
       ...solicitud.lineas.map((l) => [
         formatearFechaVisible(solicitud.fechaRequerimiento), l.fechaViaje ? formatearFechaVisible(l.fechaViaje) : "",
-        l.empleadoNombre ?? "", l.cuenta ?? "", l.cargo ?? "", l.placa ?? "", l.clienteNombre ?? "",
+        l.empleadoNombre ?? "", l.cuenta ?? "", l.metodoPago ?? "", l.cargo ?? "", l.placa ?? "", l.clienteNombre ?? "",
         l.categoria, String(l.cantidad), l.descripcion ?? "", money(l.monto), money(l.cantidad * l.monto),
       ]),
-      ["", "", "", "", "", "", "", "", "", "", "TOTAL", money(solicitud.total)],
+      ["", "", "", "", "", "", "", "", "", "", "", "TOTAL", money(solicitud.total)],
     ],
   });
   return encabezadoIndividual(buffer, solicitud.entidadRequirenteNombre, `SOLICITUD DE FONDO ${solicitud.codigo}`);
