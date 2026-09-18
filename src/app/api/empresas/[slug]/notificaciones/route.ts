@@ -426,6 +426,38 @@ export async function GET(_req: Request, ctx: Ctx) {
     }
   }
 
+  // COMPRAS-NOTIFICACIONES (Parte E): mismo patrón que las alertas de
+  // arriba (COUNT liviano, sin JOIN, gateado por el permiso explícito
+  // correspondiente — nunca por rol ni por compras_requerimientos/tms).
+  // tipo "aprobacion" (no "alerta"): contribuye al badge `pendientes` ya
+  // existente, igual que las aprobaciones de flota. Autoautorización
+  // (COMPRAS-NOTIFICACIONES Parte D): el propio requerimiento del
+  // autorizante SIGUE contando aquí — la campana refleja el estado real
+  // de la tabla, no quién lo creó; el guard del endpoint de decisión ya
+  // decide quién puede actuar. Sin acciones directas aprobar/rechazar:
+  // esa decisión exige firma + version vigente, solo desde el listado.
+  if (puede("compras_autorizar", "editar")) {
+    try {
+      const rows = await query<RowDataPacket[]>(
+        `SELECT COUNT(*) AS c FROM compras_requerimientos WHERE empresa_id = ? AND estado = 'Pendiente'`,
+        [empresaId],
+      );
+      const c = Number(rows[0]?.c ?? 0);
+      if (c > 0) {
+        items.push({
+          id: "alerta-compras-autorizar",
+          tipo: "aprobacion",
+          titulo: "Requerimientos de compra pendientes de autorización",
+          detalle: `${c} requerimiento(s) pendiente(s) de autorización`,
+          enlace: `/e/${slug}/compras/requerimientos`,
+          creadoAt: null,
+        });
+      }
+    } catch (e) {
+      console.error("[notificaciones] compras_autorizar:", e);
+    }
+  }
+
   return NextResponse.json({
     notificaciones: items,
     pendientes: items.filter((i) => i.tipo === "aprobacion").length,

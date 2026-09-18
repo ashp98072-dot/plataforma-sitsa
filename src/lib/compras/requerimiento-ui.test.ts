@@ -69,8 +69,8 @@ it("alta tiene todos los campos, múltiples líneas, tarjetas responsive y permi
   expect(html).toContain('placeholder="Buscar requirente..."');
   expect(html).toContain('placeholder="Buscar encargado de compras..."');
   expect(html).not.toContain("Nombre manual");
-  expect(renderToStaticMarkup(createElement(RequerimientosClient, { slug: "a", puedeCrear: false, puedeEditar: false }))).not.toContain("Nuevo requerimiento");
-  expect(renderToStaticMarkup(createElement(RequerimientosClient, { slug: "a", puedeCrear: true, puedeEditar: false }))).toContain("Nuevo requerimiento");
+  expect(renderToStaticMarkup(createElement(RequerimientosClient, { slug: "a", puedeCrear: false, puedeEditar: false, puedeAutorizar: false }))).not.toContain("Nuevo requerimiento");
+  expect(renderToStaticMarkup(createElement(RequerimientosClient, { slug: "a", puedeCrear: true, puedeEditar: false, puedeAutorizar: false }))).toContain("Nuevo requerimiento");
 });
 
 it("buscadores reutilizados con catálogos distintos, histórico visible y sin entrada libre", () => {

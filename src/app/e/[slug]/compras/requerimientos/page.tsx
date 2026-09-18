@@ -5,5 +5,5 @@ export default async function RequerimientosPage({ params }: { params: Promise<{
   const { slug } = await params;
   const guard = await obtenerAccesoComprasPagina(slug, "compras_requerimientos");
   if (guard.error) return <p className="p-6">Sin acceso a requerimientos de compra.</p>;
-  return <RequerimientosClient slug={slug} puedeCrear={tienePermiso(guard.permisos, "compras_requerimientos", "crear")} puedeEditar={tienePermiso(guard.permisos, "compras_requerimientos", "editar")} />;
+  return <RequerimientosClient slug={slug} puedeCrear={tienePermiso(guard.permisos, "compras_requerimientos", "crear")} puedeEditar={tienePermiso(guard.permisos, "compras_requerimientos", "editar")} puedeAutorizar={tienePermiso(guard.permisos, "compras_autorizar", "editar")} />;
 }

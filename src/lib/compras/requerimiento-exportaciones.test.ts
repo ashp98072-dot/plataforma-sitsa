@@ -31,8 +31,13 @@ it.each(["Pendiente", "Rechazada", "Autorizada"] as const)("PDF %s válido, comp
   const bytes = await requerimientoCompraPdf({ ...d, estado }, "Tenant Real / Razón Social", firma);
   expect(bytes.subarray(0, 5).toString()).toBe("%PDF-");
   const contenido = text.mock.calls.map(c => String(c[0])).join(" ").replace(/\s+/g, " ");
-  for (const dato of [d.entidad_requirente_nombre, "REQUERIMIENTO DE REPUESTOS", d.codigo, "18/09/2026", "Requirente Histórico", "José López", "María Peña", "Ana Muñoz", "Proveedor Histórico", "Cabezal histórico", "Taller manual", "Piñón", "cañería", "Serie A", "00001", "00002", "Tarjeta de crédito", "Contado", "Entrega en taller", "TOTAL: Q 1,250.75", "Página 1 de", "FIRMA DE LA PERSONA QUE REQUIERE", "FIRMA DEL ENCARGADO DE COMPRAS", "FIRMA DEL AUTORIZANTE"]) expect(contenido).toContain(dato);
+  for (const dato of [d.entidad_requirente_nombre, "REQUERIMIENTO DE REPUESTOS", d.codigo, "18/09/2026", "Requirente Histórico", "José López", "Ana Muñoz", "Proveedor Histórico", "Cabezal histórico", "Taller manual", "Piñón", "cañería", "Serie A", "00001", "00002", "Tarjeta de crédito", "Contado", "Entrega en taller", "TOTAL: Q 1,250.75", "Página 1 de", "FIRMA DE LA PERSONA QUE REQUIERE", "FIRMA DEL ENCARGADO DE COMPRAS", "FIRMA DEL AUTORIZANTE"]) expect(contenido).toContain(dato);
   expect(contenido).not.toMatch(/Tenant Real|FIRMA DEL SOLICITANTE|Detalle de compra - Línea/);
+  // COMPRAS-NOTIFICACIONES Parte A: "Registrado por (solicitante)" se quitó
+  // del PDF — el nombre del solicitante (María Peña en este fixture) ya no
+  // debe aparecer en ningún bloque de texto del reporte impreso.
+  expect(contenido).not.toContain("Registrado por");
+  expect(contenido).not.toContain(d.solicitante_nombre!);
   if (estado === "Autorizada") {
     expect(image).toHaveBeenCalled();
     expect(image.mock.results.map(r => r.type === "throw" ? String(r.value) : r.type)).toEqual(["return"]);

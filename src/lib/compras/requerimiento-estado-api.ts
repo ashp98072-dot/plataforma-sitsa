@@ -58,12 +58,18 @@ export async function requerimientoEstadoCambiar(req: Request, slug: string, raw
       // base de datos — si no hay firma guardada, 400 funcional, sin
       // abrir ninguna transacción.
       const firmaImagen = await leerBytesFirmaGuardada(guard.session.id);
+      // COMPRAS-NOTIFICACIONES Parte D: permitirAutoautorizacion es un
+      // literal fijo aquí, NUNCA proviene de `datos.data` (el schema es
+      // .strict() y ni siquiera lo acepta) ni del body HTTP — solo este
+      // endpoint, ya después de requireComprasAutorizar(slug, "editar")
+      // arriba, puede otorgarlo.
       const requerimiento = await autorizarRequerimientoCompra(guard.empresa.id, id, datos.data.version, {
         usuario: guard.session.username,
         autorizanteUsuarioId: guard.session.id,
         autorizanteNombre: guard.session.nombre || guard.session.username,
         autorizanteRol: guard.session.rol ?? null,
         firmaImagen,
+        permitirAutoautorizacion: true,
       });
       if (!requerimiento) return respuesta({ error: "Requerimiento no encontrado." }, 404);
       return respuesta({ mensaje: "Requerimiento autorizado.", requerimiento });
