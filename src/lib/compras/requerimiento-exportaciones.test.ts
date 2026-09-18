@@ -2,6 +2,7 @@ import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import PDFDocument from "pdfkit";
 import { reforzarFirmaParaPdf } from "@/lib/firmas/reforzar-firma-pdf";
+import { formatearTimestampVisible } from "@/lib/rrhh/dates";
 import ExcelJS from "exceljs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
@@ -62,33 +63,124 @@ it("PDF conserva texto largo completo y pagina sin truncar observaciones", async
   guardarQA("Multipagina.pdf", bytes);
 });
 
-it("Excel válido: cabecera, snapshots, todas las líneas, fechas y moneda numéricas, total persistido", async () => {
+// COMPRAS-EXCEL-ADMINISTRATIVO: helpers para no depender de direcciones de
+// celda fijas (el layout crece/encoge según observaciones/estado).
+function textoCompleto(ws: ExcelJS.Worksheet): string {
+  const out: string[] = [];
+  ws.eachRow(row => row.eachCell({ includeEmpty: false }, cell => { if (cell.value != null) out.push(String(cell.value)); }));
+  return out.join("\n");
+}
+function filaConValores(ws: ExcelJS.Worksheet, valores: readonly string[]): number | undefined {
+  let encontrada: number | undefined;
+  ws.eachRow((row, n) => {
+    const vals = (row.values as unknown[]).slice(1).map(v => v == null ? undefined : String(v));
+    if (vals.length === valores.length && valores.every((v, i) => vals[i] === v)) encontrada = n;
+  });
+  return encontrada;
+}
+
+it.each(["Pendiente", "Autorizada", "Rechazada"] as const)("Excel %s: mismo formato administrativo que el PDF, sin firmas", async estado => {
   // Total diferente a la suma adrede: el reporte debe mostrar el persistido, nunca recalcularlo.
-  const bytes = await requerimientoCompraExcel({ ...d, total: "1300.00" }, "Tenant Real");
+  const detalle = { ...d, estado, total: "1300.00" };
+  const bytes = await requerimientoCompraExcel(detalle, "Tenant Real (nunca debe aparecer como título)");
   const wb = new ExcelJS.Workbook(); await wb.xlsx.load(new Uint8Array(bytes).buffer);
   expect(wb.worksheets).toHaveLength(1);
   const ws = wb.worksheets[0];
   expect(ws.name.length).toBeLessThanOrEqual(31);
-  expect(ws.getCell("A1").value).toBe("Tenant Real"); expect(ws.getCell("A2").value).toBe("REQUERIMIENTO DE COMPRA");
-  expect(ws.getCell("A3").value).toContain(d.codigo); expect(ws.getCell("A4").value).toContain("Pendiente");
-  expect(ws.getRow(7).values).toEqual([undefined, ...COLUMNAS_EXCEL_COMPRA]);
-  expect(COLUMNAS_EXCEL_COMPRA).not.toContain("Tipo de pago");
-  for (const [i, linea] of d.lineas.entries()) {
-    const row = ws.getRow(8 + i);
-    expect(row.getCell(1).value).toBeInstanceOf(Date); expect(row.getCell(7).value).toBeInstanceOf(Date);
-    expect(row.getCell(2).value).toBe(d.entidad_requirente_nombre); expect(row.getCell(3).value).toBe(d.requirente_nombre);
-    expect(row.getCell(4).value).toBe(d.solicitante_nombre); expect(row.getCell(5).value).toBe(d.encargado_compras_nombre);
-    expect(row.getCell(6).value).toBe(linea.unidad_descripcion); expect(row.getCell(10).value).toBe(linea.proveedor_nombre_snapshot);
-    expect(row.getCell(14).value).toBe(Number(linea.total)); expect(row.getCell(14).numFmt).toBe('"Q "#,##0.00');
+
+  // Encabezado: empresa requirente (nunca el tenant), título exacto.
+  expect(ws.getCell("A1").value).toBe(d.entidad_requirente_nombre);
+  expect(ws.getCell("A2").value).toBe("REQUERIMIENTO DE REPUESTOS");
+  expect(String(ws.getCell("A2").value)).not.toBe("REQUERIMIENTO DE COMPRA");
+  const texto = textoCompleto(ws);
+  expect(texto).not.toContain("Tenant Real");
+  expect(texto).toContain(d.codigo);
+  expect(texto).toContain(estado);
+  expect(texto).toContain(`Persona que requiere: ${d.requirente_nombre}`);
+  expect(texto).toContain(`Encargado de compras: ${d.encargado_compras_nombre}`);
+
+  // Datos que ya no deben estar visibles (sección 3/14 del ticket) — no se
+  // borran de BD, solo no se presentan en este Excel administrativo.
+  expect(texto).not.toContain("Solicitante"); expect(texto).not.toContain(d.solicitante_nombre!);
+  expect(texto).not.toContain("Registrado por");
+
+  // Tabla: exactamente las 9 columnas del PDF, mismo orden.
+  expect(COLUMNAS_EXCEL_COMPRA).toEqual([
+    "No.", "Unidad / placa", "Fecha", "Serie / factura", "Proveedor", "Repuesto a comprar", "Método de pago", "Condición", "Total",
+  ]);
+  const filaHeader = filaConValores(ws, COLUMNAS_EXCEL_COMPRA);
+  expect(filaHeader).toBeDefined();
+  for (const [i, linea] of detalle.lineas.entries()) {
+    const row = ws.getRow(filaHeader! + 1 + i);
+    expect(row.getCell(3).value).toBeInstanceOf(Date); // Fecha de línea, no la del requerimiento.
+    expect(row.getCell(4).value).toBe(`${linea.serie_factura} / ${linea.numero_factura}`); // Serie / factura combinadas.
+    expect(row.getCell(5).value).toBe(linea.proveedor_nombre_snapshot);
+    expect(row.getCell(6).value).toBe(linea.repuesto_descripcion);
+    expect(row.getCell(9).value).toBe(Number(linea.total)); // Total de línea numérico.
+    expect(row.getCell(9).numFmt).toBe('"Q "#,##0.00');
   }
-  expect(ws.getCell("N11").value).toBe(1300); expect(ws.autoFilter).toBe("A7:O9");
-  guardarQA("Requerimiento.xlsx", bytes);
+  // La tabla ya NO repite fecha/empresa/persona/solicitante/encargado por línea.
+  expect(ws.getRow(filaHeader! + 1).values).toHaveLength(10); // undefined + 9 columnas, nunca 15.
+
+  // TOTAL general = d.total persistido, numérico, formato Q, nunca recalculado.
+  expect(texto).not.toContain("1,251"); // suma de líneas del fixture ≠ total persistido
+  let totalEncontrado = false;
+  ws.eachRow(row => { const c9 = row.getCell(9); if (c9.value === 1300 && c9.numFmt === '"Q "#,##0.00') totalEncontrado = true; });
+  expect(totalEncontrado).toBe(true);
+
+  // Observaciones: fuera de la tabla (no son una columna), solo si existen.
+  expect(texto).toContain(`Observaciones de línea 1: ${detalle.lineas[0].observaciones}`);
+  expect(texto).toContain(`Observaciones de línea 2: ${detalle.lineas[1].observaciones}`);
+  expect(texto).toContain(`Observaciones del requerimiento: ${detalle.observaciones}`);
+
+  // Estado.
+  if (estado === "Pendiente") expect(texto).toContain("PENDIENTE DE AUTORIZACIÓN");
+  if (estado === "Rechazada") {
+    expect(texto).toContain("RECHAZADA");
+    expect(texto).toContain(`Fecha de rechazo: ${formatearTimestampVisible(detalle.rechazado_en)}`);
+    expect(texto).toContain(`Motivo: ${detalle.motivo_rechazo}`);
+  }
+  // Autorizada: sin metadata técnica de firma, nunca.
+  for (const dato of ["Autorizado por:", "Rol al firmar:", "Fecha/hora:", "Código de firma:"]) expect(texto).not.toContain(dato);
+
+  // Sin firmas en ningún estado: ni etiquetas ni imágenes.
+  for (const etiqueta of ["FIRMA DE LA PERSONA QUE REQUIERE", "FIRMA DEL ENCARGADO DE COMPRAS", "FIRMA DEL AUTORIZANTE"]) expect(texto).not.toContain(etiqueta);
+  let tieneImagenes = false;
+  ws.eachRow(() => {}); // no-op: exceljs expone imágenes vía ws.getImages(), no en celdas.
+  tieneImagenes = ws.getImages().length > 0;
+  expect(tieneImagenes).toBe(false);
+
+  // Recordatorios (reutilizados, no duplicados en otra constante) + frase institucional.
+  for (const recordatorio of RECORDATORIOS_COMPRA) expect(texto).toContain(recordatorio);
+  expect(texto).toContain(FRASE_INSTITUCIONAL_COMPRA);
+  expect(RECORDATORIOS_COMPRA[1]).toMatch(/sacar$/);
+
+  // Impresión: landscape, ancho a una página, sin gridlines.
+  expect(ws.pageSetup.orientation).toBe("landscape");
+  expect(ws.pageSetup.fitToWidth).toBe(1);
+  expect(ws.pageSetup.fitToHeight).toBe(0);
+  expect(ws.views?.[0]?.showGridLines).toBe(false);
+
+  guardarQA(`Requerimiento-${estado}.xlsx`, bytes);
 });
 
-it("Excel refleja rechazo y fallback histórico sin sustituir snapshots por tenant", async () => {
-  const wb = new ExcelJS.Workbook(); await wb.xlsx.load(new Uint8Array(await requerimientoCompraExcel({ ...d, estado: "Rechazada", entidad_requirente_nombre: null }, "Tenant B")).buffer);
-  const ws = wb.worksheets[0]; expect(ws.getCell("B8").value).toBe("Sin dato histórico");
-  expect(ws.getCell("A4").value).toContain("Rechazada"); expect(ws.getCell("B13").value).toBe(d.motivo_rechazo);
+it("Excel usa fallback histórico de empresa requirente y NO sustituye snapshots por el tenant", async () => {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(new Uint8Array(await requerimientoCompraExcel({ ...d, entidad_requirente_nombre: null }, "Tenant B")).buffer);
+  const ws = wb.worksheets[0];
+  expect(ws.getCell("A1").value).toBe("EMPRESA REQUIRENTE NO REGISTRADA");
+  expect(textoCompleto(ws)).not.toContain("Tenant B");
+});
+
+it.each([1, 5, 30])("Excel QA %i líneas: filas completas, sin truncar, imprime en una página de ancho", async cantidad => {
+  const detalle = { ...d, observaciones: null, lineas: Array.from({ length: cantidad }, (_, i) => ({ ...d.lineas[0], id: i + 1, observaciones: null })) };
+  const bytes = await requerimientoCompraExcel(detalle, "Tenant");
+  const wb = new ExcelJS.Workbook(); await wb.xlsx.load(new Uint8Array(bytes).buffer);
+  const ws = wb.worksheets[0];
+  const filaHeader = filaConValores(ws, COLUMNAS_EXCEL_COMPRA)!;
+  for (let i = 0; i < cantidad; i++) expect(ws.getRow(filaHeader + 1 + i).getCell(6).value).toBe(detalle.lineas[i].repuesto_descripcion);
+  expect(ws.pageSetup.fitToWidth).toBe(1);
+  guardarQA(`Excel-QA-${cantidad}-lineas.xlsx`, bytes);
 });
 
 it.each(["Pendiente", "Autorizada", "Rechazada"] as const)("UI %s: botones disponibles con ver, sin compras_autorizar", async estado => {
