@@ -39,6 +39,37 @@ export async function requireComprasProveedores(slug: string, accion: AccionPerm
   return validarAcceso(guard, accion);
 }
 
+/**
+ * COMPRAS-FASE-4-AUTORIZACION — autorizar/rechazar un Requerimiento de
+ * compra exige el permiso "compras_autorizar" propio, SIN fallback a
+ * compras_requerimientos:editar, tms:editar ni compras_proveedores:editar.
+ * Mismo patrón exacto que requireTenantGastosAutorizar/
+ * requireTenantViaticosAutorizar (src/lib/tenant.ts): Admin pasa siempre
+ * (no depende de que su fila usuario_modulo ya tenga sincronizado este
+ * permiso nuevo — "Admin lo obtiene por catálogo global"), cualquier otro
+ * rol necesita el permiso explícito en su matriz.
+ */
+export async function requireComprasAutorizar(slug: string, accion: AccionPermiso = "ver") {
+  const guard = await requireTenant(slug);
+  if (guard.error) return guard;
+  const { session, empresa } = guard;
+  if (session.rol === "Admin") return { session, empresa, permisos: [], error: undefined };
+  const modulos = empresa.modulos.length ? empresa.modulos : modulosPorRol(session.rol);
+  if (!modulos.includes("tms")) {
+    return { error: NextResponse.json({ error: "Esta empresa no tiene el módulo TMS." }, { status: 403 }) };
+  }
+  const permisos = await permisosEfectivos(session.id, session.rol);
+  if (!tienePermiso(permisos, "compras_autorizar", accion)) {
+    return {
+      error: NextResponse.json(
+        { error: "Sin permiso para autorizar/rechazar requerimientos de compra." },
+        { status: 403 },
+      ),
+    };
+  }
+  return { session, empresa, permisos, error: undefined };
+}
+
 /** Server Components: valida acceso sin intentar escribir cookies. */
 export async function obtenerAccesoComprasPagina(slug: string, ambito: AmbitoCompras = "compras", accion: AccionPermiso = "ver") {
   const session = await getSession();

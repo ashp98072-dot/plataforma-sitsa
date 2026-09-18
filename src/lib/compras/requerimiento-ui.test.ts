@@ -15,7 +15,7 @@ const detalle = { id: 12, codigo: "RC-2026-000012", fecha_requerimiento: "2026-0
 it("unidad y proveedor reutilizan CatalogoSearchSelect y conservan históricos/inactivos", () => {
   const source = leer("src/components/compras/requerimiento-form-client.tsx");
   for (const label of ["Unidad / placa", "Proveedor"]) expect(source).toContain(`<CatalogoSearchSelect label="${label}"`);
-  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, fechaHoy: "2026-09-17" }));
+  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, puedeAutorizar: false, fechaHoy: "2026-09-17" }));
   for (const texto of ["Buscar placa o unidad...", "Buscar proveedor...", "C-123ABC · Cabezal (histórico)", "Proveedor histórico (histórico)"]) expect(html).toContain(texto);
   expect(html).toContain('value="5" selected=""');
   expect(html).toContain('value="3" selected=""');
@@ -52,19 +52,19 @@ it("unidad manual/sin unidad sigue disponible y línea nueva no hereda selecció
   const nueva = nuevaLinea("2026-09-18", "nueva-2");
   expect(nueva).toMatchObject({ vehiculo_id: null, unidad_descripcion: null, proveedor_id: 0, metodo_pago: "Transferencia" });
   expect(opcionesUnidadesCompra([], nueva.vehiculo_id, nueva.unidad_descripcion)).toEqual([]);
-  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, fechaHoy: "2026-09-17" }));
+  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, puedeAutorizar: false, fechaHoy: "2026-09-17" }));
   expect(html).toContain("Unidad manual / sin unidad");
   expect(html).toContain("Descripción manual de unidad");
   expect(leer("src/components/compras/requerimiento-form-client.tsx")).toContain("vehiculo_id: value ? Number(value) : null, unidad_descripcion: null");
 });
 it("detalle solo lectura usa snapshots históricos y conserva total sin acciones futuras", () => {
-  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle, editable: false, solicitante: "Editor actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, fechaHoy: "2026-09-17" }));
+  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle, editable: false, solicitante: "Editor actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, puedeAutorizar: false, fechaHoy: "2026-09-17" }));
   for (const texto of ["Empresa real", "Persona real", "Autor original", "Gestor original", "Proveedor histórico", "C-123ABC", "10.25"]) expect(html).toContain(texto);
   for (const texto of ["Guardar requerimiento", "Eliminar línea", "Agregar línea", "Autorizar", "Rechazar", "Editor actual"]) expect(html).not.toContain(texto);
   expect(html).toContain("disabled");
 });
 it("alta tiene todos los campos, múltiples líneas, tarjetas responsive y permisos de listado", () => {
-  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", editable: true, solicitante: "Usuario actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, fechaHoy: "2026-09-17" }));
+  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", editable: true, solicitante: "Usuario actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, puedeAutorizar: false, fechaHoy: "2026-09-17" }));
   for (const texto of ["Empresa requirente", "Persona que requiere", "Encargado de compras", "Usuario actual", "Serie factura", "Número factura", "Repuesto a comprar", "Método de pago", "Condición de pago", "Contado", "Crédito", "Agregar línea", "md:grid-cols-2"]) expect(html).toContain(texto);
   expect(html).toContain('placeholder="Buscar requirente..."');
   expect(html).toContain('placeholder="Buscar encargado de compras..."');
@@ -87,7 +87,7 @@ it("buscadores reutilizados con catálogos distintos, histórico visible y sin e
     expect(source).toContain("Requirente histórico:");
   }
   const html = renderToStaticMarkup(createElement(RequerimientoFormClient, {
-    slug: "a", detalle: { ...detalle, requirente_usuario_id: 99 }, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, fechaHoy: "2026-09-17",
+    slug: "a", detalle: { ...detalle, requirente_usuario_id: 99 }, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, puedeAutorizar: false, fechaHoy: "2026-09-17",
   }));
   expect(html).toContain('value="99" selected=""');
   expect(html).toContain("Persona real (histórico)");
@@ -116,7 +116,7 @@ it("abrir edición conserva métodos históricos/desconocidos, sin normalizar po
   for (const metodo of ["Tarjeta", "TARJETA DE CREDITO", "Pago especial local"]) {
     const linea = { ...detalle.lineas[0], metodo_pago: metodo };
     expect(lineaEditable(linea).metodo_pago).toBe(metodo);
-    const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle: { ...detalle, lineas: [linea] }, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, fechaHoy: "2026-09-17" }));
+    const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle: { ...detalle, lineas: [linea] }, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, puedeAutorizar: false, fechaHoy: "2026-09-17" }));
     expect(html).toContain(`value="${metodo}" selected=""`);
   }
 });
@@ -128,19 +128,19 @@ it("abrir edición conserva métodos históricos/desconocidos, sin normalizar po
  * al dar de alta un requerimiento nuevo (nuevaLinea() nunca trae id).
  */
 it("sección Documentos se monta por cada línea con id al ver/editar un requerimiento existente", () => {
-  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: true, fechaHoy: "2026-09-17" }));
+  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: true, puedeAutorizar: false, fechaHoy: "2026-09-17" }));
   expect(html).toContain("Documentos (0)");
 });
 
 it("sección Documentos NO se monta al dar de alta un requerimiento nuevo (líneas sin id todavía)", () => {
-  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: true, fechaHoy: "2026-09-17" }));
+  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: true, puedeAutorizar: false, fechaHoy: "2026-09-17" }));
   expect(html).not.toContain("Documentos (");
 });
 
 it("puedeSubirDocumentos controla el formulario de subida independientemente de puedeEliminar", () => {
-  const conSubida = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: true, fechaHoy: "2026-09-17" }));
+  const conSubida = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: true, puedeAutorizar: false, fechaHoy: "2026-09-17" }));
   expect(conSubida).toContain("Subir documento");
-  const sinSubida = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, fechaHoy: "2026-09-17" }));
+  const sinSubida = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, puedeAutorizar: false, fechaHoy: "2026-09-17" }));
   expect(sinSubida).not.toContain("Subir documento");
 });
 
@@ -149,6 +149,66 @@ it("eliminar documentos exige permiso Y estado Pendiente (regla documentada, má
   expect(source).toContain('puedeEliminar={puedeEliminar && detalle.estado === "Pendiente"}');
   // La sección se sigue mostrando (para Ver/consultar) aunque el
   // requerimiento ya esté Autorizada — solo cambia si permite eliminar.
-  const autorizada = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle: { ...detalle, estado: "Autorizada" }, editable: false, solicitante: "Actual", puedeEliminar: true, puedeVerProveedores: false, puedeSubirDocumentos: true, fechaHoy: "2026-09-17" }));
+  const autorizada = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle: { ...detalle, estado: "Autorizada" }, editable: false, solicitante: "Actual", puedeEliminar: true, puedeVerProveedores: false, puedeSubirDocumentos: true, puedeAutorizar: false, fechaHoy: "2026-09-17" }));
   expect(autorizada).toContain("Documentos (0)");
+});
+
+/**
+ * COMPRAS-FASE-4-AUTORIZACION — botones Autorizar/Rechazar y el
+ * "resultado de la decisión" (autorizante/fecha o motivo/fecha), gateados
+ * de forma independiente a editable/puedeEliminar/puedeSubirDocumentos.
+ */
+const pendienteFase4 = { ...detalle, estado: "Pendiente" as const };
+const autorizadaFase4 = {
+  ...detalle, estado: "Autorizada" as const,
+  autorizante_usuario_id: 8, autorizante_nombre: "Gerente Real", autorizado_en: "2026-09-18 12:00:00",
+  rechazado_en: null, motivo_rechazo: null,
+};
+const rechazadaFase4 = {
+  ...detalle, estado: "Rechazada" as const,
+  autorizante_usuario_id: null, autorizante_nombre: null, autorizado_en: null,
+  rechazado_en: "2026-09-18 13:30:00", motivo_rechazo: "Presupuesto insuficiente para este trimestre",
+};
+
+it("UI: botones Autorizar/Rechazar SOLO si estado Pendiente Y puedeAutorizar", () => {
+  const conPermiso = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle: pendienteFase4, editable: false, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, puedeAutorizar: true, fechaHoy: "2026-09-17" }));
+  expect(conPermiso).toContain("Autorizar");
+  expect(conPermiso).toContain("Rechazar");
+
+  const sinPermiso = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle: pendienteFase4, editable: false, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, puedeAutorizar: false, fechaHoy: "2026-09-17" }));
+  expect(sinPermiso).not.toContain("Decisión sobre este requerimiento");
+});
+
+it("UI: NO muestra los botones si el requerimiento ya está Autorizada o Rechazada, aunque haya permiso", () => {
+  const autorizada = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle: autorizadaFase4, editable: false, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, puedeAutorizar: true, fechaHoy: "2026-09-17" }));
+  expect(autorizada).not.toContain("Decisión sobre este requerimiento");
+  const rechazada = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle: rechazadaFase4, editable: false, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, puedeAutorizar: true, fechaHoy: "2026-09-17" }));
+  expect(rechazada).not.toContain("Decisión sobre este requerimiento");
+});
+
+it("UI: Autorizada muestra 'Autorizado por' (snapshot) y fecha de autorización, nunca un JOIN en vivo", () => {
+  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle: autorizadaFase4, editable: false, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, puedeAutorizar: false, fechaHoy: "2026-09-17" }));
+  expect(html).toContain("Autorizado por: Gerente Real");
+  expect(html).toContain("18/09/2026 12:00:00");
+});
+
+it("UI: Rechazada muestra fecha de rechazo y motivo", () => {
+  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle: rechazadaFase4, editable: false, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, puedeAutorizar: false, fechaHoy: "2026-09-17" }));
+  expect(html).toContain("Fecha rechazo:");
+  expect(html).toContain("18/09/2026 13:30:00");
+  expect(html).toContain("Presupuesto insuficiente para este trimestre");
+});
+
+it("UI: requerimiento Autorizado/Rechazado sigue sin poder editarse (editable=false, sin botón Guardar)", () => {
+  for (const d of [autorizadaFase4, rechazadaFase4]) {
+    const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle: d, editable: false, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, puedeAutorizar: false, fechaHoy: "2026-09-17" }));
+    expect(html).not.toContain("Guardar requerimiento");
+    expect(html).not.toContain("Eliminar línea");
+  }
+});
+
+it("UI: documentos siguen visibles y subibles en un requerimiento ya Autorizada si tiene permiso de editar", () => {
+  const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle: autorizadaFase4, editable: false, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: true, puedeAutorizar: false, fechaHoy: "2026-09-17" }));
+  expect(html).toContain("Documentos (0)");
+  expect(html).toContain("Subir documento");
 });
