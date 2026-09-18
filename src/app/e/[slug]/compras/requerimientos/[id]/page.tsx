@@ -17,6 +17,9 @@ export default async function DetalleRequerimientoPage({ params, searchParams }:
   // puedeEliminar/puedeSubirDocumentos — compras_requerimientos:editar NO
   // implica autorizar (ver requireComprasAutorizar en acceso.ts).
   const puedeAutorizar = tienePermiso(guard.permisos, "compras_autorizar", "editar");
-  return <>{puedeEditar && !editable && <Link className="inline-block px-6 pt-5 underline" href={`/e/${slug}/compras/requerimientos/${id}?editar=1`}>Editar requerimiento</Link>}
+  return <><nav aria-label="Descargas del requerimiento" className="flex flex-wrap gap-3 px-6 pt-5">
+    <a className="rounded border border-[var(--border)] px-3 py-2" href={`/api/empresas/${slug}/compras/requerimientos/${id}/pdf`}>Descargar PDF</a>
+    <a className="rounded border border-[var(--border)] px-3 py-2" href={`/api/empresas/${slug}/compras/requerimientos/${id}/excel`}>Descargar Excel</a>
+  </nav>{puedeEditar && !editable && <Link className="inline-block px-6 pt-5 underline" href={`/e/${slug}/compras/requerimientos/${id}?editar=1`}>Editar requerimiento</Link>}
     <RequerimientoFormClient key={`${detalle.id}-${detalle.version}-${editable}`} slug={slug} detalle={detalle} editable={editable} solicitante={guard.session.nombre ?? guard.session.username} fechaHoy={detalle.fecha_requerimiento} puedeEliminar={tienePermiso(guard.permisos, "compras_requerimientos", "eliminar")} puedeVerProveedores={tienePermiso(guard.permisos, "compras_proveedores", "ver")} puedeSubirDocumentos={tienePermiso(guard.permisos, "compras_requerimientos", "editar")} puedeAutorizar={puedeAutorizar} /></>;
 }
