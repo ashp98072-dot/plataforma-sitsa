@@ -4,13 +4,23 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it } from "vitest";
 import { ProveedoresComercialesClient, camposFormulario } from "@/components/compras/proveedores-comerciales-client";
+import ComprasPage from "@/app/e/[slug]/compras/page";
 const leer = (p: string) => readFileSync(p, "utf8").replace(/\r\n/g, "\n");
 it("menú/rutas y formulario sin funcionalidad de requerimientos", () => {
-  const shell = leer("src/components/app-shell.tsx"); expect(shell).toContain('tienePermiso(permisos, "compras_proveedores", "ver")'); expect(shell).toContain('label: "Compras / Repuestos"'); expect(shell).toContain('label: "Proveedores comerciales"');
-  expect(leer("src/app/e/[slug]/compras/page.tsx")).toContain("compras/proveedores");
+  const shell = leer("src/components/app-shell.tsx"); expect(shell).toContain('tienePermiso(permisos, "compras_proveedores", "ver")'); expect(shell).not.toContain('label: "Compras / Repuestos"'); expect(shell).toContain('label: "Proveedores comerciales"');
+  expect(leer("src/app/e/[slug]/compras/page.tsx")).toContain("compras/requerimientos");
   const html = renderToStaticMarkup(createElement(ProveedoresComercialesClient, { slug: "a", puedeCrear: true, puedeEditar: true })); expect(html).toContain("Proveedores comerciales"); expect(html).toContain("Nuevo proveedor"); expect(html).toContain("Buscar por nombre comercial");
   expect(renderToStaticMarkup(createElement(ProveedoresComercialesClient, { slug: "a", puedeCrear: false, puedeEditar: false }))).not.toContain("Nuevo proveedor");
   expect(camposFormulario.map(([c]) => c)).toContain("tipo_cuenta"); expect(camposFormulario).toHaveLength(16);
+});
+it.each(["kt-monaco", "otra-empresa"])("ruta histórica %s redirige en servidor sin pantalla de tarjetas", async slug => {
+  await expect(ComprasPage({ params: Promise.resolve({ slug }) })).rejects.toMatchObject({
+    message: "NEXT_REDIRECT",
+    digest: expect.stringContaining(`/e/${slug}/compras/requerimientos`),
+  });
+  const page = leer("src/app/e/[slug]/compras/page.tsx");
+  expect(page).not.toMatch(/use client|useRouter|<main|<Link|<h2/);
+  expect(page).toContain('import { redirect } from "next/navigation"');
 });
 it("migración canónica coincide y no altera/borrra datos", () => {
   const sql = leer("sql/migrate-2026-09-compras-base.sql"); const schema = leer("sql/schema.sql");
