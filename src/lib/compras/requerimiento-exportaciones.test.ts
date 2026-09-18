@@ -116,3 +116,15 @@ it("PDF sin entidad utiliza fallback explícito y total persistido", async () =>
   const contenido = text.mock.calls.map(c => c[0]).join("\n");
   expect(contenido).toContain("EMPRESA REQUIRENTE NO REGISTRADA"); expect(contenido).toContain("TOTAL: Q 999.00"); expect(contenido).not.toContain("Nombre combinado prohibido");
 });
+it.each(["Autorizada", "Pendiente", "Rechazada"] as const)("PDF %s imágenes históricas opcionales, tres bloques sin alterar página", async estado => {
+  const image = vi.spyOn(PDFDocument.prototype, "image");
+  const text = vi.spyOn(PDFDocument.prototype, "text");
+  const bytes = await requerimientoCompraPdf({ ...d, estado, observaciones: null, lineas: [{ ...d.lineas[0], observaciones: null }] }, "Tenant", {
+    requirente: firma, encargado: firma, autorizante: firma,
+  });
+  expect(image).toHaveBeenCalledTimes(estado === "Autorizada" ? 3 : 2);
+  expect(text.mock.calls.filter(c => String(c[0]).startsWith("Página "))).toHaveLength(1);
+  for (const etiqueta of ["FIRMA DE LA PERSONA QUE REQUIERE", "FIRMA DEL ENCARGADO DE COMPRAS", "FIRMA DEL AUTORIZANTE"]) expect(text.mock.calls.filter(c => c[0] === etiqueta)).toHaveLength(1);
+  expect(text.mock.calls.map(c => c[0]).join("\n")).not.toContain("FIRMA DEL SOLICITANTE");
+  guardarQA(`Tres-firmas-${estado}.pdf`, bytes);
+});

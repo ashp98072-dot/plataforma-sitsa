@@ -9,6 +9,7 @@ import { centavosCompra, importeCompra, type DetalleCompra, type FiltrosCompra, 
 import { crearFirmaInterna } from "@/lib/firmas/firmas-internas";
 import { sha256Hex } from "@/lib/firmas/imagen-firma";
 import { borrarUpload, guardarUpload } from "@/lib/uploads";
+import { capturarFirmaRolCompraTx } from "./requerimiento-firmas-captura";
 
 export class ErrorCompra extends Error {
   constructor(message: string, public status = 400) { super(message); }
@@ -57,6 +58,8 @@ export async function catalogosCompra(empresaId: number) {
 export async function guardarRequerimiento(empresaId: number, usuarioId: number, usuario: string,
   datos: RequerimientoDatos, puedeEliminar: boolean, id?: number) {
   const conn = await getPool().getConnection();
+  const rutasFirmas: string[] = [];
+  let confirmado = false;
   try {
     await conn.beginTransaction();
     let antes: RowDataPacket | undefined;
@@ -171,13 +174,31 @@ export async function guardarRequerimiento(empresaId: number, usuarioId: number,
       }
     }
     for (const lineaId of eliminadas) await conn.execute(`DELETE FROM compras_requerimiento_lineas WHERE empresa_id = ? AND requerimiento_id = ? AND id = ?`, [empresaId, requerimientoId, lineaId]);
+    if (!antes || !conservaRequirente) await capturarFirmaRolCompraTx(conn, {
+      empresaId, requerimientoId, codigo, total, usuarioId: datos.requirente_usuario_id,
+      nombre: requirente.nombre, rol: "requirente", registradoPor: usuario,
+    }, rutasFirmas);
+    if (!antes || (encargadoId === null ? null : Number(encargadoId)) !== (antes.encargado_compras_usuario_id == null ? null : Number(antes.encargado_compras_usuario_id))) {
+      await capturarFirmaRolCompraTx(conn, {
+        empresaId, requerimientoId, codigo, total, usuarioId: encargadoId === null ? null : Number(encargadoId),
+        nombre: encargadoNombre, rol: "encargado", registradoPor: usuario,
+      }, rutasFirmas);
+    }
     await registrarAuditoriaTx(conn, { empresaId, usuario, modulo: "compras_requerimientos", accion: antes ? "editar_requerimiento_compras" : "crear_requerimiento_compras",
       detalle: JSON.stringify({ requerimientoId: id, codigo, cantidadLineas: resueltas.length, totalAnterior: antes ? String(antes.total) : null,
         totalNuevo: total, agregadas, editadas, eliminadas, usuarioId, encargadoComprasUsuarioId: encargadoId }) });
     await conn.commit();
+    confirmado = true;
     return { id: id!, codigo, version: antes ? Number(antes.version) + 1 : 1 };
-  } catch (error) { await conn.rollback(); throw error; }
-  finally { conn.release(); }
+  } catch (error) {
+    try { await conn.rollback(); } catch { /* Conservar el error original. */ }
+    throw error;
+  } finally {
+    if (!confirmado) for (const ruta of rutasFirmas) {
+      try { borrarUpload(ruta); } catch { /* Compensación best-effort. */ }
+    }
+    conn.release();
+  }
 }
 
 /**

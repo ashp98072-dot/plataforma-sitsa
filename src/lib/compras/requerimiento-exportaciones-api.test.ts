@@ -3,7 +3,7 @@ const m = vi.hoisted(() => ({ tenant: vi.fn(), permisos: vi.fn(), obtener: vi.fn
 vi.mock("@/lib/tenant", () => ({ requireTenant: m.tenant }));
 vi.mock("@/lib/permisos", async original => ({ ...await original<typeof import("@/lib/permisos")>(), permisosEfectivos: m.permisos }));
 vi.mock("./requerimientos", () => ({ obtenerRequerimiento: m.obtener }));
-vi.mock("./requerimiento-firma-reporte", () => ({ firmaHistoricaCompraReporte: m.firma }));
+vi.mock("./requerimiento-firma-reporte", () => ({ firmasHistoricasCompraReporte: m.firma }));
 vi.mock("./requerimiento-exportaciones", () => ({ requerimientoCompraPdf: m.pdf, requerimientoCompraExcel: m.excel }));
 vi.mock("@/lib/load-env", () => ({ loadRuntimeEnv: m.env }));
 import { requerimientoExportar } from "./requerimiento-exportaciones-api";
@@ -15,7 +15,7 @@ beforeEach(() => {
   m.tenant.mockResolvedValue({ empresa: { id: 1, nombre: "Tenant Real", modulos: ["tms"] }, session: { id: 8, rol: "Operaciones" } });
   m.permisos.mockResolvedValue([{ modulo: "compras_requerimientos", puedeVer: true }]);
   m.obtener.mockResolvedValue(d); m.pdf.mockResolvedValue(Buffer.from("%PDF-fixture")); m.excel.mockResolvedValue(Buffer.from("XLSX-fixture"));
-  m.firma.mockResolvedValue({ nombre: "Histórico", imagen: { buffer: pngFirmaFixture, mime: "image/png" } });
+  m.firma.mockResolvedValue({ requirente: null, encargado: null, autorizante: { nombre: "Histórico", imagen: { buffer: pngFirmaFixture, mime: "image/png" } } });
 });
 it.each(["pdf", "excel"] as const)("%s: tenant, ver y cabeceras attachment seguras/no-store", async formato => {
   const route = formato === "pdf" ? pdfGet : excelGet;
@@ -24,7 +24,8 @@ it.each(["pdf", "excel"] as const)("%s: tenant, ver y cabeceras attachment segur
   expect(r.headers.get("Content-Type")).toBe(formato === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   expect(r.headers.get("Content-Disposition")).toContain(`attachment; filename="Requerimiento-Compra-${d.codigo}.${formato === "pdf" ? "pdf" : "xlsx"}"`);
   expect(r.headers.get("Cache-Control")).toBe("private, no-store");
-  expect(m.firma).not.toHaveBeenCalled();
+  if (formato === "excel") expect(m.firma).not.toHaveBeenCalled();
+  else expect(m.firma).toHaveBeenCalledWith(1, 12, false);
 });
 it.each(["pdf", "excel"] as const)("%s sin ver =>403 aunque tenga autorizar/editar", async formato => {
   m.permisos.mockResolvedValue([{ modulo: "compras_requerimientos", puedeEditar: true, puedeVer: false }, { modulo: "compras_autorizar", puedeVer: true, puedeEditar: true }]);
@@ -45,17 +46,18 @@ it.each(["0", "-1", "abc", "2147483648", "1.5"])("ID inválido %s rechazado ante
 it("Autorizada usa firma histórica y carga env antes de resolver imagen", async () => {
   m.obtener.mockResolvedValue({ ...d, estado: "Autorizada" });
   expect((await requerimientoExportar("a", "12", "pdf")).status).toBe(200);
-  expect(m.firma).toHaveBeenCalledWith(1, 12);
-  expect(m.pdf).toHaveBeenCalledWith(expect.objectContaining({ autorizante_nombre: d.autorizante_nombre }), "Tenant Real", expect.objectContaining({ nombre: "Histórico" }));
+  expect(m.firma).toHaveBeenCalledWith(1, 12, true);
+  expect(m.pdf).toHaveBeenCalledWith(expect.objectContaining({ autorizante_nombre: d.autorizante_nombre }), "Tenant Real", expect.objectContaining({ autorizante: expect.objectContaining({ nombre: "Histórico" }) }));
   expect(m.env.mock.invocationCallOrder[0]).toBeLessThan(m.firma.mock.invocationCallOrder[0]);
 });
 it("Autorizada sin imagen histórica =>409, no genera constancia sin firma", async () => {
   m.obtener.mockResolvedValue({ ...d, estado: "Autorizada" }); m.firma.mockResolvedValue(null);
   expect((await requerimientoExportar("a", "12", "pdf")).status).toBe(409); expect(m.pdf).not.toHaveBeenCalled();
 });
-it("Rechazada no consulta ni usa firma; Excel Autorizada no depende de archivos", async () => {
+it("Rechazada consulta solo roles opcionales; Excel Autorizada no depende de archivos", async () => {
   m.obtener.mockResolvedValue({ ...d, estado: "Rechazada" });
-  await requerimientoExportar("a", "12", "pdf"); expect(m.pdf).toHaveBeenCalledWith(expect.objectContaining({ motivo_rechazo: d.motivo_rechazo }), "Tenant Real", null);
+  await requerimientoExportar("a", "12", "pdf"); expect(m.firma).toHaveBeenCalledWith(1, 12, false);
+  m.firma.mockClear();
   m.obtener.mockResolvedValue({ ...d, estado: "Autorizada" });
   await requerimientoExportar("a", "12", "excel"); expect(m.firma).not.toHaveBeenCalled();
 });

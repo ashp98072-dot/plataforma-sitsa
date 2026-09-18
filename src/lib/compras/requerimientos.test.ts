@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-const m = vi.hoisted(() => ({ query: vi.fn(), audit: vi.fn(), conn: { query: vi.fn(), execute: vi.fn(), beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn() } }));
+const m = vi.hoisted(() => ({ plantilla: vi.fn(), firma: vi.fn(), upload: vi.fn(), borrar: vi.fn(), query: vi.fn(), audit: vi.fn(), conn: { query: vi.fn(), execute: vi.fn(), beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn() } }));
 vi.mock("@/lib/db", () => ({ query: m.query, getPool: () => ({ getConnection: async () => m.conn }) }));
 vi.mock("@/lib/auditoria", () => ({ registrarAuditoriaTx: m.audit }));
+vi.mock("@/lib/firmas/usuario-firmas", () => ({ leerBytesFirmaGuardada: m.plantilla }));
+vi.mock("@/lib/firmas/firmas-internas", () => ({ crearFirmaInterna: m.firma }));
+vi.mock("@/lib/uploads", () => ({ guardarUpload: m.upload, borrarUpload: m.borrar }));
+import { pngFirmaFixture } from "./requerimiento-exportaciones.fixture";
 import { catalogosCompra, CONFLICTO_COMPRA, guardarRequerimiento, listarRequerimientos, obtenerRequerimiento } from "./requerimientos";
 import { crearRequerimientoSchema, editarRequerimientoSchema, filtrosCompraSchema, type RequerimientoDatos } from "./requerimiento-schema";
 
@@ -10,6 +14,9 @@ const payload = { fecha_requerimiento: "2026-09-17", entidad_requirente_id: 4, r
 let proveedor: Record<string, unknown>, cabecera: Record<string, unknown> | null, existentes: Record<string, unknown>[], documento: boolean;
 beforeEach(() => {
   vi.resetAllMocks(); cabecera = { id: 12, codigo: "RC-2026-000012", estado: "Pendiente", version: 2, total: "20.50" };
+  m.plantilla.mockResolvedValue(null);
+  m.firma.mockResolvedValue({ id: 50 });
+  m.upload.mockResolvedValue({ relative: "empresas/1/firmas/copia.png", original: "firma.png", size: pngFirmaFixture.length });
   proveedor = { id: 3, activo: 1, nombre_comercial: "Proveedor real", razon_social: "Sociedad", nit: "123", banco: "Banco real", numero_cuenta: "privada", dias_credito: 30 };
   existentes = [{ ...linea, id: 21, proveedor_nombre_snapshot: "Histórico", proveedor_razon_social_snapshot: null, proveedor_nit_snapshot: null, banco_snapshot: null, numero_cuenta_snapshot: null, dias_credito_snapshot: null }, { ...linea, id: 22 }]; documento = false;
   m.conn.query.mockImplementation(async (sql: string) => {
@@ -25,6 +32,58 @@ beforeEach(() => {
   m.conn.execute.mockResolvedValue([{ insertId: 12, affectedRows: 1 }]); m.query.mockResolvedValue([]);
 });
 const crear = () => guardarRequerimiento(1, 8, "registrador", crearRequerimientoSchema.parse(payload), false);
+
+describe("captura histórica opcional de roles", () => {
+  const bytes = pngFirmaFixture.buffer.slice(pngFirmaFixture.byteOffset, pngFirmaFixture.byteOffset + pngFirmaFixture.byteLength) as ArrayBuffer;
+  const conEncargado = () => guardarRequerimiento(1, 8, "registrador", crearRequerimientoSchema.parse({ ...payload, encargado_compras_usuario_id: 20 }), false);
+  it.each([{ ids: [9] }, { ids: [20] }, { ids: [9, 20] }, { ids: [] }])("crear con plantillas $ids no bloquea otras personas", async ({ ids }) => {
+    m.plantilla.mockImplementation(async id => ids.includes(id) ? { bytes, original: "personal.png" } : null);
+    await conEncargado();
+    expect(m.firma).toHaveBeenCalledTimes(ids.length);
+    expect(m.plantilla.mock.calls.map(c => c[0])).toEqual([9, 20]);
+    for (const [, firma] of m.firma.mock.calls) {
+      expect(firma).toMatchObject({ empresaId: 1, entidadId: 12, nombreFirmante: "Usuario real", metodo: "FIRMA_MANUSCRITA", origenFirma: "GUARDADA" });
+      expect(firma.accion).toBe(firma.usuarioId === 9 ? "REQUERIR_COMPRA" : "GESTIONAR_COMPRA");
+      expect(firma.imagen.relative).not.toBe("personal.png");
+    }
+    expect(m.conn.commit).toHaveBeenCalledOnce(); expect(m.borrar).not.toHaveBeenCalled();
+  });
+  it("rechaza imagen e identidad suministradas por cliente", () => {
+    expect(crearRequerimientoSchema.safeParse({ ...payload, nombreFirmante: "Cliente", firmaImagen: "Cliente" }).success).toBe(false);
+    expect(m.plantilla).not.toHaveBeenCalled();
+  });
+  it("editar mismas personas no lee plantillas ni duplica snapshots", async () => {
+    cabecera = { ...cabecera, requirente_usuario_id: 9, requirente_nombre: "Anterior", encargado_compras_usuario_id: 20, encargado_compras_nombre: "Encargado" };
+    await editar({ requirente_usuario_id: 9, encargado_compras_usuario_id: 20 });
+    expect(m.plantilla).not.toHaveBeenCalled(); expect(m.firma).not.toHaveBeenCalled();
+  });
+  it.each(["requirente_usuario_id", "encargado_compras_usuario_id"] as const)("cambio %s captura nueva persona", async campo => {
+    cabecera = { ...cabecera, requirente_usuario_id: 9, encargado_compras_usuario_id: 20 };
+    m.plantilla.mockResolvedValue({ bytes, original: "personal.png" });
+    await editar({ requirente_usuario_id: 9, [campo]: 30 });
+    expect(m.plantilla).toHaveBeenCalledExactlyOnceWith(30);
+    expect(m.firma).toHaveBeenCalledOnce();
+  });
+  it("cambio sin plantilla invalida asociación anterior mediante evento NULL", async () => {
+    cabecera = { ...cabecera, requirente_usuario_id: 9 };
+    await editar({ requirente_usuario_id: 30 });
+    expect(m.firma).not.toHaveBeenCalled();
+    expect(m.audit).toHaveBeenCalledWith(m.conn, expect.objectContaining({ accion: "capturar_requerir_compra", detalle: JSON.stringify({ requerimientoId: 12, usuarioId: 30, firmaId: null }) }));
+  });
+  it("fallo de commit compensa ambas copias y rollback fallido conserva error original", async () => {
+    m.plantilla.mockResolvedValue({ bytes, original: "personal.png" });
+    m.upload.mockResolvedValueOnce({ relative: "empresas/1/firmas/uno.png", original: "f.png", size: bytes.byteLength })
+      .mockResolvedValueOnce({ relative: "empresas/1/firmas/dos.png", original: "f.png", size: bytes.byteLength });
+    m.conn.commit.mockRejectedValue(new Error("Original")); m.conn.rollback.mockRejectedValue(new Error("Rollback"));
+    await expect(conEncargado()).rejects.toThrow("Original");
+    expect(m.borrar.mock.calls).toEqual([["empresas/1/firmas/uno.png"], ["empresas/1/firmas/dos.png"]]);
+  });
+  it("fallo registrando firma compensa copia recién escrita", async () => {
+    m.plantilla.mockResolvedValue({ bytes, original: "personal.png" }); m.firma.mockRejectedValue(new Error("Firma falló"));
+    await expect(crear()).rejects.toThrow("Firma falló");
+    expect(m.borrar).toHaveBeenCalledExactlyOnceWith("empresas/1/firmas/copia.png"); expect(m.conn.commit).not.toHaveBeenCalled();
+  });
+});
 
 describe("requirentes exclusivamente Operaciones", () => {
   it("encargado no Operaciones permitido; requirente sí exige Operaciones", async () => {
@@ -139,7 +198,7 @@ describe("mutaciones transaccionales", () => {
     const updates = calls.filter(([s]) => s.startsWith("UPDATE compras_requerimiento_lineas")); expect(updates).toHaveLength(1); expect(updates[0][1].slice(-3)).toEqual([1, 12, 21]);
     expect(calls.filter(([s]) => s.includes("INSERT INTO compras_requerimiento_lineas"))).toHaveLength(1);
     expect(calls.filter(([s]) => s.startsWith("DELETE"))).toEqual([["DELETE FROM compras_requerimiento_lineas WHERE empresa_id = ? AND requerimiento_id = ? AND id = ?", [1, 12, 22]]]);
-    const audit = JSON.parse(m.audit.mock.calls[0][1].detalle); expect(audit).toMatchObject({ totalAnterior: "20.50", totalNuevo: "10.35", agregadas: [12], editadas: [21], eliminadas: [22] });
+    const audit = JSON.parse(m.audit.mock.calls.find(([, a]) => a.accion === "editar_requerimiento_compras")![1].detalle); expect(audit).toMatchObject({ totalAnterior: "20.50", totalNuevo: "10.35", agregadas: [12], editadas: [21], eliminadas: [22] });
   });
   it("no permite ID de línea ajeno", async () => { await expect(editar({ lineas: [{ ...linea, id: 99 }] } as Partial<RequerimientoDatos>)).rejects.toThrow("no pertenece"); expect(m.conn.execute).not.toHaveBeenCalled(); });
   it("eliminar exige permiso propio", async () => { await expect(editar({}, false)).rejects.toMatchObject({ status: 403 }); expect(m.conn.execute).not.toHaveBeenCalled(); });

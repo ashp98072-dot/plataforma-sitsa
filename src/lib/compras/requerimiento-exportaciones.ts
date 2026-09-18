@@ -5,7 +5,7 @@ import { dibujarTablaEnDoc } from "@/lib/rrhh/export-files";
 import { formatearFechaVisible, formatearTimestampVisible } from "@/lib/rrhh/dates";
 import { moneda } from "@/lib/tms/fondos-solicitud-pdf";
 import type { DetalleCompra } from "./requerimiento-schema";
-import type { FirmaCompraReporte } from "./requerimiento-firma-reporte";
+import type { FirmaCompraReporte, FirmasCompraReporte } from "./requerimiento-firma-reporte";
 
 const visible = (s: string | null | undefined) => (s?.trim() || "Sin dato histórico").normalize("NFC");
 export const COLUMNAS_EXCEL_COMPRA = [
@@ -15,7 +15,10 @@ export const COLUMNAS_EXCEL_COMPRA = [
 ] as const;
 
 /** Solo datos persistidos: no JOIN de nombres, no recálculo del total. */
-export function requerimientoCompraPdf(d: DetalleCompra, empresaNombre: string, firma: FirmaCompraReporte | null): Promise<Buffer> {
+export function requerimientoCompraPdf(d: DetalleCompra, empresaNombre: string, firmas: FirmasCompraReporte | FirmaCompraReporte | null): Promise<Buffer> {
+  const historicas = firmas && "autorizante" in firmas ? firmas : { requirente: null, encargado: null, autorizante: firmas };
+  const firma = historicas.autorizante;
+  const imagenes = [historicas.requirente?.imagen, historicas.encargado?.imagen, d.estado === "Autorizada" ? firma?.imagen : null];
   // Se conserva el contrato del caller/Excel; el título del PDF nunca usa el tenant.
   void empresaNombre;
   return new Promise((resolve, reject) => {
@@ -59,7 +62,7 @@ export function requerimientoCompraPdf(d: DetalleCompra, empresaNombre: string, 
     } else if (d.estado === "Pendiente") texto("PENDIENTE DE AUTORIZACIÓN");
     // Validar que la imagen histórica es dibujable antes del helper compartido,
     // que tolera imágenes inválidas en otros documentos.
-    if (d.estado === "Autorizada" && firma?.imagen) decodificarPng(firma.imagen.buffer);
+    for (const imagen of imagenes) if (imagen) decodificarPng(imagen.buffer);
     const nombres = [visible(d.requirente_nombre), visible(d.encargado_compras_nombre), d.estado === "Autorizada" ? visible(d.autorizante_nombre || firma?.nombre) : d.estado === "Pendiente" ? "PENDIENTE DE AUTORIZACIÓN" : "RECHAZADA"];
     const etiquetas = ["FIRMA DE LA PERSONA QUE REQUIERE", "FIRMA DEL ENCARGADO DE COMPRAS", "FIRMA DEL AUTORIZANTE"];
     const anchoFirma = width / 3 - 16;
@@ -76,7 +79,8 @@ export function requerimientoCompraPdf(d: DetalleCompra, empresaNombre: string, 
     const inicioFirma = doc.y;
     etiquetas.forEach((etiqueta, i) => {
       const columnaX = x + i * width / 3 + 8;
-      if (i === 2 && d.estado === "Autorizada" && firma?.imagen) doc.image(reforzarFirmaParaPdf(firma.imagen.buffer), columnaX + (anchoFirma - 140) / 2, inicioFirma + 8, { fit: [140, 35] });
+      const imagen = imagenes[i];
+      if (imagen) doc.image(reforzarFirmaParaPdf(imagen.buffer), columnaX + (anchoFirma - 140) / 2, inicioFirma + 8, { fit: [140, 35] });
       doc.moveTo(columnaX, inicioFirma + 50).lineTo(columnaX + anchoFirma, inicioFirma + 50).strokeColor("#94a3b8").lineWidth(0.6).stroke();
       doc.fillColor("#0f172a").font("Helvetica-Bold").fontSize(8).text(etiqueta, columnaX, inicioFirma + 55, { width: anchoFirma, align: "center" });
       doc.font("Helvetica").text(nombres[i], columnaX, inicioFirma + 55 + altoEtiqueta, { width: anchoFirma, align: "center" });
