@@ -19,7 +19,7 @@ const columnasCabecera = `id, codigo, DATE_FORMAT(fecha_requerimiento, '%Y-%m-%d
   solicitante_usuario_id, solicitante_nombre, encargado_compras_usuario_id, encargado_compras_nombre, observaciones, total, estado, version,
   autorizante_usuario_id, autorizante_nombre, DATE_FORMAT(autorizado_en, '%Y-%m-%d %H:%i:%s') AS autorizado_en,
   DATE_FORMAT(rechazado_en, '%Y-%m-%d %H:%i:%s') AS rechazado_en, motivo_rechazo`;
-const columnasLinea = `id, vehiculo_id, unidad_descripcion, DATE_FORMAT(fecha, '%Y-%m-%d') AS fecha,
+const columnasLinea = `id, orden, vehiculo_id, unidad_descripcion, DATE_FORMAT(fecha, '%Y-%m-%d') AS fecha,
   serie_factura, numero_factura, proveedor_id, proveedor_nombre_snapshot, proveedor_razon_social_snapshot,
   proveedor_nit_snapshot, repuesto_descripcion, metodo_pago, condicion_pago, banco_snapshot,
   numero_cuenta_snapshot, dias_credito_snapshot, total, observaciones`;

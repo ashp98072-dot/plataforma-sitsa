@@ -30,8 +30,9 @@ it.each(["Pendiente", "Rechazada", "Autorizada"] as const)("PDF %s válido, comp
   const image = vi.spyOn(PDFDocument.prototype, "image");
   const bytes = await requerimientoCompraPdf({ ...d, estado }, "Tenant Real / Razón Social", firma);
   expect(bytes.subarray(0, 5).toString()).toBe("%PDF-");
-  const contenido = text.mock.calls.map(c => String(c[0])).join("\n");
-  for (const dato of ["Tenant Real / Razón Social", d.codigo, "18/09/2026", "Requirente Histórico", "José López", "María Peña", "Ana Muñoz", "Proveedor Histórico", "Cabezal histórico", "Taller manual", "Piñón", "cañería", "Serie A", "00001", "00002", "Tarjeta de crédito", "Contado", "Entrega en taller", "TOTAL: Q 1,250.75", "Página 1 de"]) expect(contenido).toContain(dato);
+  const contenido = text.mock.calls.map(c => String(c[0])).join(" ").replace(/\s+/g, " ");
+  for (const dato of [d.entidad_requirente_nombre, "REQUERIMIENTO DE REPUESTOS", d.codigo, "18/09/2026", "Requirente Histórico", "José López", "María Peña", "Ana Muñoz", "Proveedor Histórico", "Cabezal histórico", "Taller manual", "Piñón", "cañería", "Serie A", "00001", "00002", "Tarjeta de crédito", "Contado", "Entrega en taller", "TOTAL: Q 1,250.75", "Página 1 de", "FIRMA DE LA PERSONA QUE REQUIERE", "FIRMA DEL ENCARGADO DE COMPRAS", "FIRMA DEL AUTORIZANTE"]) expect(contenido).toContain(dato);
+  expect(contenido).not.toMatch(/Tenant Real|FIRMA DEL SOLICITANTE|Detalle de compra - Línea/);
   if (estado === "Autorizada") {
     expect(image).toHaveBeenCalled();
     expect(image.mock.results.map(r => r.type === "throw" ? String(r.value) : r.type)).toEqual(["return"]);
@@ -97,6 +98,21 @@ it("UI sin ver no expone descargas", async () => {
 });
 it("solo Compras: reutiliza patrón, no cambia snapshots/firmas actuales ni SQL", () => {
   const source = readFileSync("src/lib/compras/requerimiento-exportaciones.ts", "utf8");
-  expect(source).toContain("dibujarTablaEnDoc"); expect(source).toContain("dibujarFirmas");
+  expect(source).toContain("dibujarTablaEnDoc"); expect(source).toContain("altoFirmas");
   expect(source).not.toMatch(/usuario_firmas|leerBytesFirmaGuardada|Tipo de pago/);
+});
+
+it.each([1, 5, 30])("QA autorizada %i líneas: páginas naturales y tres firmas al final", async cantidad => {
+  const text = vi.spyOn(PDFDocument.prototype, "text");
+  const bytes = await requerimientoCompraPdf({ ...d, estado: "Autorizada", observaciones: null, lineas: Array.from({ length: cantidad }, (_, i) => ({ ...d.lineas[0], id: i + 1, observaciones: null })) }, "Tenant combinado", firma);
+  const paginas = text.mock.calls.filter(c => String(c[0]).startsWith("Página ")).length;
+  expect(paginas).toBe(cantidad < 10 ? 1 : 3);
+  for (const etiqueta of ["FIRMA DE LA PERSONA QUE REQUIERE", "FIRMA DEL ENCARGADO DE COMPRAS", "FIRMA DEL AUTORIZANTE"]) expect(text.mock.calls.filter(c => c[0] === etiqueta)).toHaveLength(1);
+  guardarQA(`Autorizada-${cantidad}.pdf`, bytes);
+});
+it("PDF sin entidad utiliza fallback explícito y total persistido", async () => {
+  const text = vi.spyOn(PDFDocument.prototype, "text");
+  await requerimientoCompraPdf({ ...d, entidad_requirente_nombre: null, total: "999.00" }, "Nombre combinado prohibido", null);
+  const contenido = text.mock.calls.map(c => c[0]).join("\n");
+  expect(contenido).toContain("EMPRESA REQUIRENTE NO REGISTRADA"); expect(contenido).toContain("TOTAL: Q 999.00"); expect(contenido).not.toContain("Nombre combinado prohibido");
 });

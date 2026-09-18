@@ -11,6 +11,7 @@ import { MESES_ES } from "@/lib/tms/reportes-mes";
 import { paramsExportarFondos, paramsListadoFondos } from "@/lib/tms/exportacion-operativa-filtros";
 import { AutorizacionConfirmacionModal } from "@/components/tms/autorizacion-confirmacion-modal";
 import { procesarConfirmacionAutorizacion } from "@/lib/tms/autorizacion-confirmacion";
+import { FondoLineasClient, type DetalleLineasFondo } from "@/components/tms/fondo-lineas-client";
 
 type LineaFondo = {
   id: number; categoria: string; descripcion: string | null; cantidad: number; monto: number; orden: number;
@@ -124,6 +125,7 @@ export default function FondosPage() {
   const [lineas, setLineas] = useState<LineaForm[]>([{ ...LINEA_VACIA }]);
 
   const [expandido, setExpandido] = useState<number | null>(null);
+  const [cacheLineas] = useState(() => new Map<string, DetalleLineasFondo>());
   const [motivoRechazo, setMotivoRechazo] = useState<Record<number, string>>({});
 
   const opcionesUsuarios = (usuarios: { id: number; nombre: string }[]): CatalogoSearchOption[] => usuarios.map((u) => ({ value: String(u.id), label: u.nombre }));
@@ -153,13 +155,14 @@ export default function FondosPage() {
       const res = await fetch(`/api/empresas/${slug}/tms/fondos?${params.toString()}`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "No se pudieron cargar las solicitudes.");
+      cacheLineas.clear(); setExpandido(null);
       setSolicitudes(data.solicitudes ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error al cargar.");
     } finally {
       setLoading(false);
     }
-  }, [slug, fEstado, fFechaDesde, fFechaHasta, fMes, fAnio, fRequirenteId]);
+  }, [slug, fEstado, fFechaDesde, fFechaHasta, fMes, fAnio, fRequirenteId, cacheLineas]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -520,25 +523,7 @@ export default function FondosPage() {
             </div>
             {s.motivoRechazo ? <p className="mt-1 text-xs text-red-300">Motivo de rechazo: {s.motivoRechazo}</p> : null}
             {expandido === s.id ? (
-              <table className="mt-2 w-full text-left text-xs">
-                <thead className="text-[var(--muted)]">
-                  <tr>
-                    <th>Categoría</th><th>Descripción</th><th>Empleado</th><th>Cargo</th><th>Cuenta / Número</th><th>Placa</th><th>Cliente</th>
-                    <th>Fecha viaje</th><th>Cantidad</th><th>Monto</th><th>Total línea</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {s.lineas.map((l) => (
-                    <tr key={l.id}>
-                      <td>{l.categoria}</td><td>{l.descripcion ?? "—"}</td>
-                      <td>{l.empleadoNombre ?? "—"}</td><td>{l.cargo ?? "—"}</td><td>{l.cuenta ?? "—"}</td><td>{l.placa ?? "—"}</td><td>{l.clienteNombre ?? "—"}</td>
-                      <td>{l.fechaViaje ?? "—"}</td><td>{l.cantidad}</td>
-                      <td>Q{l.monto.toLocaleString("es-GT", { minimumFractionDigits: 2 })}</td>
-                      <td>Q{(l.cantidad * l.monto).toLocaleString("es-GT", { minimumFractionDigits: 2 })}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <FondoLineasClient key={`${slug}/${s.id}`} slug={slug} id={s.id} cache={cacheLineas} />
             ) : null}
           </div>
         ))}

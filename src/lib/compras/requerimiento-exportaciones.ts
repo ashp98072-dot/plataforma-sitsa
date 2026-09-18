@@ -1,9 +1,9 @@
 import PDFDocument from "pdfkit";
 import ExcelJS from "exceljs";
-import { decodificarPng } from "@/lib/firmas/reforzar-firma-pdf";
+import { decodificarPng, reforzarFirmaParaPdf } from "@/lib/firmas/reforzar-firma-pdf";
 import { dibujarTablaEnDoc } from "@/lib/rrhh/export-files";
 import { formatearFechaVisible, formatearTimestampVisible } from "@/lib/rrhh/dates";
-import { dibujarFirmas, moneda } from "@/lib/tms/fondos-solicitud-pdf";
+import { moneda } from "@/lib/tms/fondos-solicitud-pdf";
 import type { DetalleCompra } from "./requerimiento-schema";
 import type { FirmaCompraReporte } from "./requerimiento-firma-reporte";
 
@@ -16,8 +16,10 @@ export const COLUMNAS_EXCEL_COMPRA = [
 
 /** Solo datos persistidos: no JOIN de nombres, no recálculo del total. */
 export function requerimientoCompraPdf(d: DetalleCompra, empresaNombre: string, firma: FirmaCompraReporte | null): Promise<Buffer> {
+  // Se conserva el contrato del caller/Excel; el título del PDF nunca usa el tenant.
+  void empresaNombre;
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: "LETTER", layout: "landscape", margins: { top: 40, bottom: 56, left: 32, right: 32 }, bufferPages: true });
+    const doc = new PDFDocument({ size: "LETTER", layout: "landscape", margins: { top: 28, bottom: 38, left: 32, right: 32 }, bufferPages: true });
     const chunks: Buffer[] = [];
     doc.on("data", c => chunks.push(c as Buffer));
     doc.on("end", () => resolve(Buffer.concat(chunks)));
@@ -29,37 +31,24 @@ export function requerimientoCompraPdf(d: DetalleCompra, empresaNombre: string, 
       doc.x = x;
       doc.font("Helvetica").fontSize(9.5).fillColor("#0f172a").text(s.normalize("NFC"), { width });
     };
-    doc.font("Helvetica-Bold").fontSize(15).fillColor("#0f172a").text(empresaNombre.normalize("NFC"), { width, align: "center" });
-    doc.moveDown(0.3).text("REQUERIMIENTO DE COMPRA", { width, align: "center" });
+    doc.font("Helvetica-Bold").fontSize(14).fillColor("#0f172a").text((d.entidad_requirente_nombre?.trim() || "EMPRESA REQUIRENTE NO REGISTRADA").normalize("NFC"), { width, align: "center" });
+    doc.moveDown(0.2).fontSize(12).text("REQUERIMIENTO DE REPUESTOS", { width, align: "center" });
     doc.moveDown(0.4);
-    texto(`Código: ${d.codigo}`);
-    texto(`Fecha de requerimiento: ${formatearFechaVisible(d.fecha_requerimiento)} · Estado: ${d.estado}`);
-    texto(`Empresa requirente: ${visible(d.entidad_requirente_nombre)}`);
-    texto(`Persona que requiere: ${visible(d.requirente_nombre)}`);
-    texto(`Solicitante: ${visible(d.solicitante_nombre)}`);
-    texto(`Encargado de compras: ${visible(d.encargado_compras_nombre)}`);
+    texto(`Código: ${d.codigo} · Fecha: ${formatearFechaVisible(d.fecha_requerimiento)} · Estado: ${d.estado}`);
+    texto(`Persona que requiere: ${visible(d.requirente_nombre)} · Encargado de compras: ${visible(d.encargado_compras_nombre)}`);
+    texto(`Registrado por (solicitante): ${visible(d.solicitante_nombre)}`);
     doc.moveDown(0.5);
 
-    // Bloques por línea: tabla compartida para datos cortos; textos largos fluyen completos
-    // entre páginas, sin maxLines/ellipsis que pudiera ocultar repuestos u observaciones.
-    d.lineas.forEach((l, i) => {
-      espacio(150);
-      doc.font("Helvetica-Bold").fontSize(10).text(`Detalle de compra - Línea ${i + 1}`, x, doc.y, { width });
-      doc.moveDown(0.3);
-      dibujarTablaEnDoc(doc, {
-        headers: ["Unidad / placa", "Fecha", "Proveedor", "Total"],
-        rows: [[visible(l.unidad_descripcion), formatearFechaVisible(l.fecha), visible(l.proveedor_nombre_snapshot), moneda(Number(l.total))]],
-        weight: { 0: 210, 1: 90, 2: 310, 3: 118 }, align: { 3: "right" }, maxLines: 100,
-      });
-      doc.moveDown(0.3);
-      texto(`Serie factura: ${visible(l.serie_factura)} · Número factura: ${visible(l.numero_factura)}`);
-      texto(`Método de pago: ${visible(l.metodo_pago)} · Condición de pago: ${l.condicion_pago}`);
-      texto(`Repuesto / descripción: ${visible(l.repuesto_descripcion)}`);
-      if (l.observaciones) texto(`Observaciones de línea ${i + 1}: ${l.observaciones}`);
-      doc.moveDown(0.6);
+    // Una tabla continua, con encabezados repetidos por el helper existente.
+    dibujarTablaEnDoc(doc, {
+      headers: ["No.", "Unidad / placa", "Fecha", "Serie / factura", "Proveedor", "Repuesto a comprar", "Método de pago", "Condición", "Total"],
+      rows: d.lineas.map((l, i) => [String(i + 1), visible(l.unidad_descripcion), formatearFechaVisible(l.fecha), `${l.serie_factura || "—"} / ${l.numero_factura || "—"}`, visible(l.proveedor_nombre_snapshot), visible(l.repuesto_descripcion), visible(l.metodo_pago), l.condicion_pago, moneda(Number(l.total))]),
+      weight: { 0: 24, 1: 80, 2: 60, 3: 85, 4: 110, 5: 160, 6: 85, 7: 58, 8: 66 }, align: { 8: "right" }, maxLines: 100,
     });
+    doc.y += 6;
     espacio(28);
     doc.font("Helvetica-Bold").fontSize(11).text(`TOTAL: ${moneda(Number(d.total))}`, x, doc.y, { width, align: "right" });
+    d.lineas.forEach((l, i) => { if (l.observaciones) { doc.moveDown(0.2); texto(`Observaciones de línea ${i + 1}: ${l.observaciones}`); } });
     if (d.observaciones) { doc.moveDown(0.4); texto(`Observaciones del requerimiento: ${d.observaciones}`); }
     doc.moveDown(0.5);
     espacio(50);
@@ -68,27 +57,32 @@ export function requerimientoCompraPdf(d: DetalleCompra, empresaNombre: string, 
       texto(`Fecha de rechazo: ${formatearTimestampVisible(d.rechazado_en)}`);
       texto(`Motivo: ${visible(d.motivo_rechazo)}`);
     } else if (d.estado === "Pendiente") texto("PENDIENTE DE AUTORIZACIÓN");
-    espacio(d.estado === "Autorizada" ? 285 : 205);
     // Validar que la imagen histórica es dibujable antes del helper compartido,
     // que tolera imágenes inválidas en otros documentos.
     if (d.estado === "Autorizada" && firma?.imagen) decodificarPng(firma.imagen.buffer);
-    dibujarFirmas(doc, width, x, bottom, {
-      solicitante: d.solicitante_nombre, requirente: d.requirente_nombre,
-      autorizante: d.estado === "Autorizada" ? d.autorizante_nombre || firma?.nombre || null : null,
-      imagenSolicitante: null, imagenRequirente: null,
-      imagenAutorizante: d.estado === "Autorizada" ? firma?.imagen ?? null : null,
+    const nombres = [visible(d.requirente_nombre), visible(d.encargado_compras_nombre), d.estado === "Autorizada" ? visible(d.autorizante_nombre || firma?.nombre) : d.estado === "Pendiente" ? "PENDIENTE DE AUTORIZACIÓN" : "RECHAZADA"];
+    const etiquetas = ["FIRMA DE LA PERSONA QUE REQUIERE", "FIRMA DEL ENCARGADO DE COMPRAS", "FIRMA DEL AUTORIZANTE"];
+    const anchoFirma = width / 3 - 16;
+    const metadata = d.estado === "Autorizada" && firma ? [`Autorizado por: ${visible(d.autorizante_nombre || firma.nombre)}`, `Rol al firmar: ${visible(firma.rol)}`, `Fecha/hora: ${formatearTimestampVisible(firma.fecha)} (Guatemala)`, `Código de firma: ${firma.codigo}`].join("\n") : "";
+    doc.font("Helvetica-Bold").fontSize(8);
+    const altoEtiqueta = Math.max(...etiquetas.map(s => doc.heightOfString(s, { width: anchoFirma })));
+    doc.font("Helvetica").fontSize(8);
+    const altoNombre = Math.max(...nombres.map(s => doc.heightOfString(s, { width: anchoFirma })));
+    doc.fontSize(7.5);
+    const altoMetadata = metadata ? doc.heightOfString(metadata, { width: anchoFirma }) + 6 : 0;
+    const altoFirmas = 55 + altoEtiqueta + altoNombre + altoMetadata + 12;
+    // Reserva medida, no 285 puntos fijos; tres bloques horizontales al final.
+    espacio(altoFirmas);
+    const inicioFirma = doc.y;
+    etiquetas.forEach((etiqueta, i) => {
+      const columnaX = x + i * width / 3 + 8;
+      if (i === 2 && d.estado === "Autorizada" && firma?.imagen) doc.image(reforzarFirmaParaPdf(firma.imagen.buffer), columnaX + (anchoFirma - 140) / 2, inicioFirma + 8, { fit: [140, 35] });
+      doc.moveTo(columnaX, inicioFirma + 50).lineTo(columnaX + anchoFirma, inicioFirma + 50).strokeColor("#94a3b8").lineWidth(0.6).stroke();
+      doc.fillColor("#0f172a").font("Helvetica-Bold").fontSize(8).text(etiqueta, columnaX, inicioFirma + 55, { width: anchoFirma, align: "center" });
+      doc.font("Helvetica").text(nombres[i], columnaX, inicioFirma + 55 + altoEtiqueta, { width: anchoFirma, align: "center" });
+      if (i === 2 && metadata) doc.fontSize(7.5).text(metadata, columnaX, inicioFirma + 55 + altoEtiqueta + altoNombre + 6, { width: anchoFirma });
     });
-    espacio(65);
-    doc.moveDown(0.2);
-    doc.moveTo(x, doc.y + 16).lineTo(x + 220, doc.y + 16).strokeColor("#94a3b8").lineWidth(0.6).stroke();
-    doc.y += 20;
-    texto(`ENCARGADO DE COMPRAS: ${visible(d.encargado_compras_nombre)}`);
-    if (d.estado === "Autorizada" && firma) {
-      texto(`Autorizado por: ${visible(d.autorizante_nombre || firma.nombre)}`);
-      if (firma.rol) texto(`Rol al firmar: ${firma.rol}`);
-      texto(`Fecha/hora de firma: ${formatearTimestampVisible(firma.fecha)} (Guatemala)`);
-      texto(`Código de firma: ${firma.codigo}`);
-    }
+    doc.x = x; doc.y = inicioFirma + altoFirmas;
     const range = doc.bufferedPageRange();
     for (let i = 0; i < range.count; i++) {
       doc.switchToPage(range.start + i);
