@@ -92,9 +92,10 @@ it("buscadores reutilizados con catálogos distintos, histórico visible y sin e
   expect(html).toContain('value="99" selected=""');
   expect(html).toContain("Persona real (histórico)");
 });
-it("landing, menú y página proveedores tienen gates independientes", () => {
+it("ruta antigua redirige y las páginas y menú conservan gates independientes", () => {
   const landing = leer("src/app/e/[slug]/compras/page.tsx");
-  for (const permiso of ["compras_proveedores", "compras_requerimientos"]) expect(landing).toContain(`tienePermiso(guard.permisos, "${permiso}", "ver")`);
+  expect(landing).toContain('redirect(`/e/${slug}/compras/requerimientos`)');
+  expect(leer("src/app/e/[slug]/compras/requerimientos/page.tsx")).toContain('obtenerAccesoComprasPagina(slug, "compras_requerimientos")');
   expect(leer("src/app/e/[slug]/compras/proveedores/page.tsx")).toContain('obtenerAccesoComprasPagina(slug, "compras_proveedores")');
   expect(leer("src/components/app-shell.tsx")).toContain('tienePermiso(permisos, "compras_requerimientos", "ver")');
 });

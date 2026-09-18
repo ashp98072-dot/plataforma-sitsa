@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { tienePermiso, type PermisoModulo } from "@/lib/permisos-shared";
 
 /**
  * OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — reorganización visual del menú de
@@ -16,6 +17,38 @@ import { describe, expect, it } from "vitest";
  */
 const src = readFileSync(join(__dirname, "app-shell.tsx"), "utf-8");
 
+describe("Compras — accesos directos sin padre redundante", () => {
+  // Ejecutar el bloque real con el evaluador real, sin refactorizar navegación
+  // productiva ni duplicar sus condiciones de permisos en el test.
+  const bloque = src.match(/    if \(\(isAdmin && modulos\.includes\("tms"\)\)[\s\S]*?\n    \}/)?.[0];
+  function enlaces(requerimientos: boolean, proveedores: boolean, rol = "Operaciones", modulos = ["tms"]) {
+    expect(bloque).toBeDefined();
+    const permisos: PermisoModulo[] = [
+      { modulo: "compras_requerimientos", puedeVer: requerimientos, puedeCrear: false, puedeEditar: false, puedeEliminar: false },
+      { modulo: "compras_proveedores", puedeVer: proveedores, puedeCrear: false, puedeEditar: false, puedeEliminar: false },
+    ];
+    return new Function("isAdmin", "modulos", "permisos", "tienePermiso", "base", `const opsLinks = []; ${bloque}; return opsLinks;`)(
+      rol === "Admin", modulos, permisos, tienePermiso, "/e/kt-monaco",
+    ) as { href: string; label: string; key: string }[];
+  }
+  it("elimina únicamente el enlace clicable Compras / Repuestos", () => {
+    expect(src).not.toContain('label: "Compras / Repuestos"');
+    expect(enlaces(true, true)).toEqual([
+      { href: "/e/kt-monaco/compras/requerimientos", label: "Requerimientos de compra", key: "compras-requerimientos" },
+      { href: "/e/kt-monaco/compras/proveedores", label: "Proveedores comerciales", key: "compras-proveedores" },
+    ]);
+  });
+  it.each([[true, false], [false, true], [false, false]])("permisos independientes ver requerimientos=%s, proveedores=%s", (req, prov) => {
+    const links = enlaces(req, prov);
+    expect(links.some(l => l.key === "compras-requerimientos")).toBe(req);
+    expect(links.some(l => l.key === "compras-proveedores")).toBe(prov);
+  });
+  it("Admin conserva acceso con Operaciones habilitado y no añade acceso sin módulo", () => {
+    expect(enlaces(false, false, "Admin")).toHaveLength(2);
+    expect(enlaces(false, false, "Admin", [])).toEqual([]);
+  });
+});
+
 describe("menú Operaciones — nombres y orden", () => {
   it("existe el enlace 'Planes / Viajes' apuntando a /planes", () => {
     expect(src).toMatch(/label: "Planes \/ Viajes"/);
@@ -27,8 +60,8 @@ describe("menú Operaciones — nombres y orden", () => {
     expect(src).not.toMatch(/`\$\{base\}\/tms\/reportes`/);
   });
 
-  it("'Reportes de gastos' se retituló a 'Reportes' (misma ruta /reportes/gastos)", () => {
-    expect(src).toMatch(/href: `\$\{base\}\/reportes\/gastos`/); // ruta intacta
+  it("'Reportes' apunta a la ruta actual /reportes", () => {
+    expect(src).toMatch(/href: `\$\{base\}\/reportes`/);
     expect(src).toMatch(/label: "Reportes",/); // nombre entendible
     expect(src).not.toMatch(/label: "Reportes de gastos"/);
   });
