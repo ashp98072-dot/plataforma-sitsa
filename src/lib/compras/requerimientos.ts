@@ -360,11 +360,20 @@ export async function autorizarRequerimientoCompra(
     // Solo revertir si de verdad se abrió una transacción — si
     // getConnection()/beginTransaction() fue lo que falló, `conn` puede
     // seguir siendo undefined (o existir pero sin transacción activa) y
-    // no hay nada que revertir. rollback() nunca reemplaza el error
-    // original: siempre se relanza tal cual, incluso si el propio
-    // rollback llegara a fallar (no se envuelve en su propio try/catch a
-    // propósito, para no ocultar el error real).
-    if (conn) await conn.rollback();
+    // no hay nada que revertir. rollback() es best-effort: si él mismo
+    // lanza (conexión ya caída, etc.), NUNCA debe sustituir `error` — un
+    // `await conn.rollback()` sin su propio try/catch aquí haría
+    // exactamente eso (el throw de rollback() reemplazaría el `throw
+    // error` de abajo, que nunca llegaría a ejecutarse). Se descarta el
+    // error de rollback a propósito: no hay patrón de logging adicional
+    // ya establecido en este archivo para este caso.
+    if (conn) {
+      try {
+        await conn.rollback();
+      } catch {
+        // best-effort: conservar el error original, no propagar este.
+      }
+    }
     throw error;
   } finally {
     conn?.release();

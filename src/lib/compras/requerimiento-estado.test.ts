@@ -144,6 +144,35 @@ describe("Pendiente -> Autorizada", () => {
     expect(m.conn.beginTransaction).not.toHaveBeenCalled();
   });
 
+  it("ÚLTIMA REVISIÓN PRE-MERGE — rollback() best-effort: si el UPDATE falla Y el propio rollback() TAMBIÉN falla, se conserva el error ORIGINAL (nunca el de rollback)", async () => {
+    m.conn.execute.mockRejectedValueOnce(new Error("error original"));
+    m.conn.rollback.mockRejectedValueOnce(new Error("rollback falló"));
+    // 1. UPDATE/operación falla con Error("error original").
+    // 2. rollback() también falla con Error("rollback falló").
+    // 3. La función debe rechazar con "error original" — nunca con "rollback falló".
+    await expect(autorizarRequerimientoCompra(1, 12, 2, autorizarOpts())).rejects.toThrow("error original");
+    // 4. borrarUpload() debe ejecutarse igualmente.
+    expect(m.borrarUpload).toHaveBeenCalledWith("empresas/1/firmas/firma_compra_autorizar_12_x.png");
+    // 5. release() debe ejecutarse si hubo conexión.
+    expect(m.conn.release).toHaveBeenCalledOnce();
+    expect(m.conn.rollback).toHaveBeenCalledOnce();
+    expect(m.conn.commit).not.toHaveBeenCalled();
+  });
+
+  it("beginTransaction() falla y rollback() también falla: se conserva el error de beginTransaction, firma se limpia, conexión se libera", async () => {
+    m.conn.beginTransaction.mockRejectedValueOnce(new Error("beginTransaction falló"));
+    m.conn.rollback.mockRejectedValueOnce(new Error("rollback falló"));
+    await expect(autorizarRequerimientoCompra(1, 12, 2, autorizarOpts())).rejects.toThrow("beginTransaction falló");
+    expect(m.borrarUpload).toHaveBeenCalledWith("empresas/1/firmas/firma_compra_autorizar_12_x.png");
+    expect(m.conn.release).toHaveBeenCalledOnce();
+    // conn SÍ llegó a existir (getConnection tuvo éxito), así que rollback
+    // se intenta igual aunque nunca haya habido una transacción activa —
+    // best-effort, su propio fallo se descarta sin afectar el error real.
+    expect(m.conn.rollback).toHaveBeenCalledOnce();
+    expect(m.crearFirma).not.toHaveBeenCalled();
+    expect(m.audit).not.toHaveBeenCalled();
+  });
+
   it("requerimiento inexistente en esta empresa -> null (el caller responde 404), revierte sin escribir nada más, limpia la copia física", async () => {
     fila = null;
     const r = await autorizarRequerimientoCompra(1, 999, 2, autorizarOpts());
