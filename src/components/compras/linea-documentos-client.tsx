@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import { ETIQUETAS_TIPO_LINEA_DOCUMENTO, TIPOS_LINEA_DOCUMENTO, type TipoLineaDocumento } from "@/lib/compras/linea-documentos";
+import { ETIQUETAS_TIPO_LINEA_DOCUMENTO, TIPOS_LINEA_DOCUMENTO, type TipoLineaDocumento } from "@/lib/compras/linea-documentos-schema";
 
 type Doc = {
   id: number;
@@ -35,24 +35,32 @@ export function LineaDocumentosClient({ slug, requerimientoId, lineaId, puedeSub
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState("");
   const [mensaje, setMensaje] = useState("");
-  const [loading, setLoading] = useState(false);
+  // Arranca en true: se muestra "Cargando…" hasta que resuelva el primer
+  // fetch, SIN necesitar un setLoading(true) síncrono dentro del efecto de
+  // montaje (eso es justo lo que dispara react-hooks/set-state-in-effect —
+  // ver la cadena .then()/.catch()/.finally() de cargar() más abajo, que
+  // nunca llama a un setState de forma síncrona en el cuerpo del efecto).
+  const [loading, setLoading] = useState(true);
   const [subiendo, setSubiendo] = useState(false);
 
   const base = `/api/empresas/${slug}/compras/requerimientos/${requerimientoId}/lineas/${lineaId}/documentos`;
 
-  const cargar = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const res = await fetch(base, { cache: "no-store" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Error");
-      setDocs(data.documentos ?? []);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Error");
-    } finally {
-      setLoading(false);
-    }
+  // cargar() nunca ejecuta un setState de forma síncrona antes del primer
+  // punto de suspensión (fetch): todo setState vive dentro de
+  // .then()/.catch()/.finally(), que corren en un microtask posterior a
+  // que el efecto de montaje ya haya retornado. Es el mismo criterio que
+  // ya usa el fetch de catálogos más abajo en requerimiento-form-client.tsx
+  // (.then(setCatalogos).catch(...)), que tampoco dispara el lint.
+  const cargar = useCallback(() => {
+    return fetch(base, { cache: "no-store" })
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? "Error");
+        setDocs(data.documentos ?? []);
+        setError("");
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : "Error"))
+      .finally(() => setLoading(false));
   }, [base]);
 
   useEffect(() => {
@@ -154,7 +162,7 @@ export function LineaDocumentosClient({ slug, requerimientoId, lineaId, puedeSub
             Seleccionar archivo
             <input
               type="file"
-              accept=".jpg,.jpeg,.png,.webp,.pdf,image/*,application/pdf"
+              accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
               className="block text-xs"
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
             />

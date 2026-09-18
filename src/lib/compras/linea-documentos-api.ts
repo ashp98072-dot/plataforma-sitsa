@@ -1,4 +1,5 @@
 import { createReadStream, existsSync, statSync } from "fs";
+import { extname } from "path";
 import { Readable } from "stream";
 import { NextResponse } from "next/server";
 import { requireComprasRequerimientos } from "./acceso";
@@ -12,6 +13,21 @@ import {
   type TipoLineaDocumento,
 } from "./linea-documentos";
 import { absPathFromRelative, borrarUpload, contentTypeFor, guardarUpload, UploadValidationError } from "@/lib/uploads";
+
+// Whitelist LOCAL de Compras — más angosta que EXT_PERMITIDAS de
+// src/lib/uploads.ts (que también acepta .bmp para otros módulos que sí lo
+// necesitan). No se toca la constante global; esta validación es
+// adicional y específica de documentos de línea de compras. Mismo criterio
+// ya usado en operaciones/multas/[id]/documentos/route.ts
+// (EXT_PERMITIDAS_MULTAS).
+const EXT_PERMITIDAS_COMPRAS = new Set([".pdf", ".jpg", ".jpeg", ".png", ".webp"]);
+const MIME_POR_EXTENSION_COMPRAS: Record<string, string> = {
+  ".pdf": "application/pdf",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+};
 
 /**
  * COMPRAS-FASE-3-DOCUMENTOS-LINEA — capa HTTP delgada, mismo patrón que
@@ -80,6 +96,28 @@ export async function lineaDocumentoSubir(req: Request, slug: string, rawId: str
     return respuesta({ error: "Tipo de documento no permitido." }, 400);
   }
   const tipo = tipoRaw as TipoLineaDocumento;
+
+  // Validación específica de Compras — MÁS estricta que EXT_PERMITIDAS
+  // compartida (rechaza .bmp aquí aunque guardarUpload() la acepte para
+  // otros módulos). El atributo accept del <input> del navegador no es
+  // seguridad — esta es la validación server-side real.
+  const ext = extname(file.name || "").toLowerCase();
+  if (!EXT_PERMITIDAS_COMPRAS.has(ext)) {
+    return respuesta({ error: "Formato no permitido. Usa: pdf, jpg, jpeg, png o webp." }, 400);
+  }
+  // No hay magic-byte sniffing en este proyecto (ver guardarUpload()): como
+  // mínimo, si el navegador SÍ declaró un MIME específico, debe coincidir
+  // con la extensión — nunca se acepta un MIME incompatible declarado.
+  // "application/octet-stream" (el valor que un multipart/form-data real
+  // asigna a una parte SIN Content-Type explícito — verificado con un
+  // round-trip real de Request/FormData, no solo con el File en memoria)
+  // se trata igual que "sin declarar": no hay nada específico que
+  // contrastar, se deja pasar por extensión.
+  const mimeEsperado = MIME_POR_EXTENSION_COMPRAS[ext];
+  const mimeDeclarado = file.type && file.type !== "application/octet-stream" ? file.type : null;
+  if (mimeDeclarado && mimeDeclarado !== mimeEsperado) {
+    return respuesta({ error: "El tipo de archivo (MIME) no coincide con su extensión." }, 400);
+  }
 
   let saved: Awaited<ReturnType<typeof guardarUpload>> | undefined;
   try {

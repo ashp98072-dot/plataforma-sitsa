@@ -27,13 +27,19 @@ WHERE CONSTRAINT_SCHEMA = @compras_schema_objetivo
   AND TABLE_NAME = 'compras_linea_documentos'
   AND CONSTRAINT_NAME = 'chk_compras_documento_tipo';
 
--- Conteo actual de filas por valor de `tipo` — SOLO informativo (para
--- confirmar visualmente que ampliar el CHECK no deja ninguna fila
--- existente fuera de rango; un CHECK más permisivo nunca puede invalidar
--- filas ya guardadas, pero sirve para ver qué se está guardando hoy).
-SELECT tipo, COUNT(*) AS filas
-FROM compras_linea_documentos
-GROUP BY tipo;
+-- CORRECCIÓN post-revisión: este archivo tenía un SELECT informativo
+-- (conteo de filas por `tipo`) que consultaba compras_linea_documentos
+-- directamente, SIN calificar el esquema — a diferencia de todo lo demás
+-- aquí, que solo lee information_schema filtrando por
+-- @compras_schema_objetivo. Ese SELECT sí dependía de DATABASE()/USE
+-- activo, contradiciendo la garantía "no depende de la vista activa de
+-- phpMyAdmin" de la cabecera. Se eliminó en vez de calificarlo (MariaDB no
+-- permite parametrizar un identificador de esquema en un SELECT plano; la
+-- alternativa —PREPARE/EXECUTE armando el nombre calificado con CONCAT—
+-- añadía complejidad para un dato puramente informativo que no participa
+-- en la decisión APLICAR/NOOP/DETENER). Un CHECK más permisivo nunca
+-- invalida filas ya guardadas, así que no hace falta para decidir si es
+-- seguro aplicar la migración.
 
 WITH normalizado AS (
   SELECT LOWER(REPLACE(REPLACE(REPLACE(CHECK_CLAUSE, '`', ''), ' ', ''), CHAR(10), '')) AS clausula

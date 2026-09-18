@@ -41,6 +41,15 @@ function reqConTipo(tipo: string, nombre = "factura.pdf"): Request {
   return new Request("http://localhost/x", { method: "POST", body: fd });
 }
 
+/** Permite fijar nombre y MIME declarado por separado — para los casos de
+ * validación de extensión/MIME específicos de Compras. */
+function reqConArchivo(nombre: string, mime: string, tipo = "FACTURA"): Request {
+  const fd = new FormData();
+  fd.append("tipo", tipo);
+  fd.append("file", new File([new Uint8Array([1, 2, 3])], nombre, { type: mime }));
+  return new Request("http://localhost/x", { method: "POST", body: fd });
+}
+
 beforeEach(() => {
   vi.resetAllMocks();
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -123,10 +132,10 @@ describe("POST subir — compras_requerimientos:editar", () => {
     expect(borrarUpload).not.toHaveBeenCalled();
   });
 
-  it("MIME/extensión inválida => rechazo (guardarUpload valida extensión)", async () => {
-    vi.mocked(guardarUpload).mockRejectedValue(new UploadValidationError("Formato no permitido. Usa: jpg, png, webp, bmp o pdf.", 400));
+  it("extensión inválida (.exe) => rechazo 400 ANTES de llegar a guardarUpload (validación propia de Compras)", async () => {
     const res = await lineaDocumentoSubir(reqConTipo("FACTURA", "malware.exe"), "a", "12", "21");
     expect(res.status).toBe(400);
+    expect(guardarUpload).not.toHaveBeenCalled();
     expect(m.registrar).not.toHaveBeenCalled();
   });
 
@@ -151,6 +160,75 @@ describe("POST subir — compras_requerimientos:editar", () => {
     fd.append("tipo", "FACTURA");
     const res = await lineaDocumentoSubir(new Request("http://localhost/x", { method: "POST", body: fd }), "a", "12", "21");
     expect(res.status).toBe(400);
+  });
+});
+
+/**
+ * COMPRAS-FASE-3-DOCUMENTOS-LINEA (corrección post-revisión) — validación
+ * server-side específica de Compras, MÁS estricta que EXT_PERMITIDAS
+ * compartida (guardarUpload() global también acepta .bmp para otros
+ * módulos). El atributo accept del navegador no es seguridad: estos tests
+ * verifican el rechazo real en el servidor.
+ */
+describe("validación de archivo específica de Compras (pdf/jpg/jpeg/png/webp, sin bmp)", () => {
+  it("BMP => 400, aunque EXT_PERMITIDAS compartida sí lo permitiría", async () => {
+    const res = await lineaDocumentoSubir(reqConArchivo("foto.bmp", "image/bmp"), "a", "12", "21");
+    expect(res.status).toBe(400);
+    expect(guardarUpload).not.toHaveBeenCalled();
+    const data = await res.json();
+    expect(data.error).toMatch(/pdf, jpg, jpeg, png o webp/);
+  });
+
+  it(".exe => 400", async () => {
+    const res = await lineaDocumentoSubir(reqConArchivo("virus.exe", "application/octet-stream"), "a", "12", "21");
+    expect(res.status).toBe(400);
+    expect(guardarUpload).not.toHaveBeenCalled();
+  });
+
+  it("PDF válido (extensión + MIME correctos) => aceptado", async () => {
+    const res = await lineaDocumentoSubir(reqConArchivo("factura.pdf", "application/pdf"), "a", "12", "21");
+    expect(res.status).toBe(201);
+    expect(guardarUpload).toHaveBeenCalled();
+  });
+
+  it("JPG válido => aceptado", async () => {
+    const res = await lineaDocumentoSubir(reqConArchivo("foto.jpg", "image/jpeg"), "a", "12", "21");
+    expect(res.status).toBe(201);
+  });
+
+  it("JPEG válido => aceptado", async () => {
+    const res = await lineaDocumentoSubir(reqConArchivo("foto.jpeg", "image/jpeg"), "a", "12", "21");
+    expect(res.status).toBe(201);
+  });
+
+  it("PNG válido => aceptado", async () => {
+    const res = await lineaDocumentoSubir(reqConArchivo("foto.png", "image/png"), "a", "12", "21");
+    expect(res.status).toBe(201);
+  });
+
+  it("WEBP válido => aceptado", async () => {
+    const res = await lineaDocumentoSubir(reqConArchivo("foto.webp", "image/webp"), "a", "12", "21");
+    expect(res.status).toBe(201);
+  });
+
+  it("extensión permitida (.pdf) con MIME incompatible declarado (image/png) => 400", async () => {
+    const res = await lineaDocumentoSubir(reqConArchivo("factura.pdf", "image/png"), "a", "12", "21");
+    expect(res.status).toBe(400);
+    expect(guardarUpload).not.toHaveBeenCalled();
+    const data = await res.json();
+    expect(data.error).toMatch(/MIME/);
+  });
+
+  it("extensión permitida (.jpg) sin MIME declarado => aceptado por extensión (un multipart real sin Content-Type explícito llega como application/octet-stream, tratado igual que 'sin declarar')", async () => {
+    const res = await lineaDocumentoSubir(reqConArchivo("foto.jpg", ""), "a", "12", "21");
+    expect(res.status).toBe(201);
+  });
+
+  it("tamaño > MAX_UPLOAD_BYTES => 413 (guardarUpload lo hace cumplir, tras pasar la validación de extensión)", async () => {
+    vi.mocked(guardarUpload).mockRejectedValue(new UploadValidationError("El archivo supera el máximo de 50 MB.", 413));
+    const res = await lineaDocumentoSubir(reqConArchivo("factura.pdf", "application/pdf"), "a", "12", "21");
+    expect(res.status).toBe(413);
+    expect(m.registrar).not.toHaveBeenCalled();
   });
 });
 

@@ -1,5 +1,13 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
+import { ETIQUETAS_TIPO_LINEA_DOCUMENTO, TIPOS_LINEA_DOCUMENTO, type TipoLineaDocumento } from "./linea-documentos-schema";
+
+// Re-exportadas tal cual — fuente única en linea-documentos-schema.ts (sin
+// mysql2/db/fs), así linea-documentos-client.tsx ("use client") puede
+// importar el catálogo directamente desde ahí sin arrastrar este módulo
+// server-only a su bundle. Ningún consumidor existente de este archivo
+// (route.ts, linea-documentos-api.ts, tests) cambia su import.
+export { ETIQUETAS_TIPO_LINEA_DOCUMENTO, TIPOS_LINEA_DOCUMENTO, type TipoLineaDocumento };
 
 /**
  * COMPRAS-FASE-3-DOCUMENTOS-LINEA — documentos adjuntos a una línea de un
@@ -28,27 +36,10 @@ import { execute, query } from "@/lib/db";
  * para ampliarlo (ver sql/migrate-2026-09-compras-documentos-linea-tipo.sql
  * y su preflight) — NO ejecutada. Hasta que se aplique, la BD solo acepta
  * FACTURA/COMPROBANTE; los otros 4 tipos quedan validados en la aplicación
- * (TIPOS_LINEA_DOCUMENTO de abajo) pero el INSERT fallará con un error de
- * MySQL (constraint check) si se intentan antes de migrar.
+ * (TIPOS_LINEA_DOCUMENTO, ver linea-documentos-schema.ts) pero el INSERT
+ * fallará con un error de MySQL (constraint check) si se intentan antes de
+ * migrar.
  */
-export const TIPOS_LINEA_DOCUMENTO = [
-  "FACTURA",
-  "COTIZACION",
-  "ORDEN_COMPRA",
-  "COMPROBANTE",
-  "NOTA_CREDITO",
-  "OTRO",
-] as const;
-export type TipoLineaDocumento = (typeof TIPOS_LINEA_DOCUMENTO)[number];
-
-export const ETIQUETAS_TIPO_LINEA_DOCUMENTO: Record<TipoLineaDocumento, string> = {
-  FACTURA: "Factura",
-  COTIZACION: "Cotización",
-  ORDEN_COMPRA: "Orden de compra",
-  COMPROBANTE: "Comprobante de pago",
-  NOTA_CREDITO: "Nota de crédito",
-  OTRO: "Otro",
-};
 
 export type DocumentoLineaCompra = {
   id: number;

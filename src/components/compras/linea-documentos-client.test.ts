@@ -4,7 +4,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { LineaDocumentosClient } from "./linea-documentos-client";
-import { ETIQUETAS_TIPO_LINEA_DOCUMENTO, TIPOS_LINEA_DOCUMENTO } from "@/lib/compras/linea-documentos";
+import { ETIQUETAS_TIPO_LINEA_DOCUMENTO, TIPOS_LINEA_DOCUMENTO } from "@/lib/compras/linea-documentos-schema";
 
 const src = readFileSync(join(__dirname, "linea-documentos-client.tsx"), "utf-8");
 
@@ -30,10 +30,10 @@ function render(props: Partial<Parameters<typeof LineaDocumentosClient>[0]> = {}
 }
 
 describe("LineaDocumentosClient — estructura estática", () => {
-  it("muestra 'Documentos (0)' y 'Sin documentos.' antes de que resuelva el fetch inicial", () => {
+  it("muestra 'Documentos (0)' y 'Cargando…' antes de que resuelva el fetch inicial (loading arranca en true, sin setState síncrono en el efecto)", () => {
     const html = render();
     expect(html).toContain("Documentos (0)");
-    expect(html).toContain("Sin documentos.");
+    expect(html).toContain("Cargando…");
   });
 
   it("el selector de tipo ofrece los 6 tipos con las etiquetas del catálogo compartido", () => {
@@ -53,9 +53,11 @@ describe("LineaDocumentosClient — estructura estática", () => {
     expect(html).toContain("Subir documento");
   });
 
-  it("acepta PDF/JPG/JPEG/PNG/WEBP en el input de archivo", () => {
+  it("acepta exactamente PDF/JPG/JPEG/PNG/WEBP en el input de archivo (sin BMP ni wildcard image/*)", () => {
     const html = render();
-    expect(html).toContain('accept=".jpg,.jpeg,.png,.webp,.pdf,image/*,application/pdf"');
+    expect(html).toContain('accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"');
+    expect(html).not.toContain("image/*");
+    expect(html).not.toContain(".bmp");
   });
 
   it("botón Subir documento arranca deshabilitado (sin archivo seleccionado)", () => {
@@ -65,5 +67,20 @@ describe("LineaDocumentosClient — estructura estática", () => {
 
   it("GET de listar usa cache: 'no-store' (no mostrar datos stale entre líneas)", () => {
     expect(src).toMatch(/fetch\(base, \{ cache: "no-store" \}\)/);
+  });
+
+  it("react-hooks/set-state-in-effect: cargar() no llama a un setState de forma síncrona antes del fetch (todo vive en .then()/.catch()/.finally())", () => {
+    const cuerpo = src.match(/const cargar = useCallback\(\(\) => \{([\s\S]*?)\n  \}, \[base\]\);/)?.[1] ?? "";
+    expect(cuerpo).not.toBe("");
+    const antesDelFetch = cuerpo.split("fetch(base")[0];
+    expect(antesDelFetch).not.toMatch(/set[A-Z]\w*\(/);
+    expect(cuerpo).toMatch(/\.then\(/);
+    expect(cuerpo).toMatch(/\.catch\(/);
+    expect(cuerpo).toMatch(/\.finally\(\(\) => setLoading\(false\)\)/);
+  });
+
+  it("useEffect de montaje solo llama a cargar(), sin ningún setState directo en su cuerpo", () => {
+    const cuerpo = src.match(/useEffect\(\(\) => \{([\s\S]*?)\n  \}, \[cargar\]\);/)?.[1] ?? "";
+    expect(cuerpo.trim()).toBe("void cargar();");
   });
 });
