@@ -8,6 +8,16 @@ import type { DetalleCompra } from "./requerimiento-schema";
 import type { FirmaCompraReporte, FirmasCompraReporte } from "./requerimiento-firma-reporte";
 
 const visible = (s: string | null | undefined) => (s?.trim() || "Sin dato histórico").normalize("NFC");
+// Transcripción del formato físico: el punto 2 termina en "sacar" en la referencia.
+// No completar ni reinterpretar ese texto desde el generador.
+export const RECORDATORIOS_COMPRA = [
+  "1. RECORDAR QUE LAS FACTURAS DEBEN SALIR A NOMBRE Y NIT DE LA EMPRESA REQUIRENTE",
+  "2. Este formulario impreso, también debe ser enviado en Excel a Tesorería y a Contabilidad quien llevara un acumulado de requerimientos durante el mes para poder sacar",
+  "3. Realizada la compra, presentar la factura sellada con una fotocopia de este requerimiento al frente para saber a que requerimiento corresponden y evitar cruces.",
+  "4. Si al realizar la compra hubiere algún sobrante de efectivo, depositar o transferir a la cuenta de la empresa requirente el sobrante y con eso se liquidara el anticipo realizado.",
+  "5. Se recomienda el requerimiento de la semana siguiente, los Jueves o Viernes por la mañana, para dejar programados los pagos y transferir a primera hora.",
+] as const;
+export const FRASE_INSTITUCIONAL_COMPRA = "EL ORDEN Y LA DISCIPLINA SON LA BASE PARA UN SERVICIO DE CALIDAD, EFICIENCIA Y SATISFACCIÓN A NUESTRO CLIENTE";
 export const COLUMNAS_EXCEL_COMPRA = [
   "Fecha requerimiento", "Empresa requirente", "Persona que requiere", "Solicitante", "Encargado compras",
   "Unidad / placa", "Fecha línea", "Serie factura", "Número factura", "Proveedor", "Repuesto",
@@ -66,16 +76,18 @@ export function requerimientoCompraPdf(d: DetalleCompra, empresaNombre: string, 
     const nombres = [visible(d.requirente_nombre), visible(d.encargado_compras_nombre), d.estado === "Autorizada" ? visible(d.autorizante_nombre || firma?.nombre) : d.estado === "Pendiente" ? "PENDIENTE DE AUTORIZACIÓN" : "RECHAZADA"];
     const etiquetas = ["FIRMA DE LA PERSONA QUE REQUIERE", "FIRMA DEL ENCARGADO DE COMPRAS", "FIRMA DEL AUTORIZANTE"];
     const anchoFirma = width / 3 - 16;
-    const metadata = d.estado === "Autorizada" && firma ? [`Autorizado por: ${visible(d.autorizante_nombre || firma.nombre)}`, `Rol al firmar: ${visible(firma.rol)}`, `Fecha/hora: ${formatearTimestampVisible(firma.fecha)} (Guatemala)`, `Código de firma: ${firma.codigo}`].join("\n") : "";
     doc.font("Helvetica-Bold").fontSize(8);
     const altoEtiqueta = Math.max(...etiquetas.map(s => doc.heightOfString(s, { width: anchoFirma })));
     doc.font("Helvetica").fontSize(8);
     const altoNombre = Math.max(...nombres.map(s => doc.heightOfString(s, { width: anchoFirma })));
-    doc.fontSize(7.5);
-    const altoMetadata = metadata ? doc.heightOfString(metadata, { width: anchoFirma }) + 6 : 0;
-    const altoFirmas = 55 + altoEtiqueta + altoNombre + altoMetadata + 12;
+    const altoFirmas = 55 + altoEtiqueta + altoNombre + 12;
+    doc.font("Helvetica").fontSize(7);
+    const altosRecordatorios = RECORDATORIOS_COMPRA.map(s => doc.heightOfString(s, { width: width - 12 }) + 8);
+    doc.font("Helvetica-Bold").fontSize(7.5);
+    const altoFrase = doc.heightOfString(FRASE_INSTITUCIONAL_COMPRA, { width, align: "center" });
+    const altoBloqueInferior = 8 + altosRecordatorios.reduce((sum, h) => sum + h, 0) + 8 + altoFrase;
     // Reserva medida, no 285 puntos fijos; tres bloques horizontales al final.
-    espacio(altoFirmas);
+    espacio(altoFirmas + altoBloqueInferior);
     const inicioFirma = doc.y;
     etiquetas.forEach((etiqueta, i) => {
       const columnaX = x + i * width / 3 + 8;
@@ -84,9 +96,18 @@ export function requerimientoCompraPdf(d: DetalleCompra, empresaNombre: string, 
       doc.moveTo(columnaX, inicioFirma + 50).lineTo(columnaX + anchoFirma, inicioFirma + 50).strokeColor("#94a3b8").lineWidth(0.6).stroke();
       doc.fillColor("#0f172a").font("Helvetica-Bold").fontSize(8).text(etiqueta, columnaX, inicioFirma + 55, { width: anchoFirma, align: "center" });
       doc.font("Helvetica").text(nombres[i], columnaX, inicioFirma + 55 + altoEtiqueta, { width: anchoFirma, align: "center" });
-      if (i === 2 && metadata) doc.fontSize(7.5).text(metadata, columnaX, inicioFirma + 55 + altoEtiqueta + altoNombre + 6, { width: anchoFirma });
     });
     doc.x = x; doc.y = inicioFirma + altoFirmas;
+    const inicioRecordatorios = doc.y + 8;
+    const altoRecordatorios = altosRecordatorios.reduce((sum, h) => sum + h, 0);
+    doc.rect(x, inicioRecordatorios, width, altoRecordatorios).lineWidth(0.5).strokeColor("#64748b").stroke();
+    let filaY = inicioRecordatorios;
+    RECORDATORIOS_COMPRA.forEach((recordatorio, i) => {
+      if (i) doc.moveTo(x, filaY).lineTo(x + width, filaY).stroke();
+      doc.font("Helvetica").fontSize(7).fillColor("#0f172a").text(recordatorio, x + 6, filaY + 4, { width: width - 12 });
+      filaY += altosRecordatorios[i];
+    });
+    doc.font("Helvetica-Bold").fontSize(7.5).text(FRASE_INSTITUCIONAL_COMPRA, x, filaY + 8, { width, align: "center" });
     const range = doc.bufferedPageRange();
     for (let i = 0; i < range.count; i++) {
       doc.switchToPage(range.start + i);
