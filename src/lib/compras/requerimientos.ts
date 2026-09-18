@@ -289,15 +289,19 @@ async function bloquearRequerimientoParaDecisionTx(
 /**
  * Autorizar: exige firma registrada en "Mi firma" (guardada como snapshot
  * INMUTABLE en firmas_electronicas, mismo patrón exacto que
- * AUTORIZAR_FONDO/AUTORIZAR_GASTO) y bloquea la autoautorización SIEMPRE
- * — a diferencia de autorizarGasto() (que la permite si el permiso
- * específico ya fue verificado), este ticket pide explícitamente "no
- * confiar en nombres, comparar IDs" y prohibirla sin excepción, así que
- * NO se ofrece un parámetro permitirAutoautorizacion.
+ * AUTORIZAR_FONDO/AUTORIZAR_GASTO). COMPRAS-NOTIFICACIONES (Parte D):
+ * la defensa contra autoautorización se CONSERVA aquí (comparación por
+ * ID, nunca por nombre) — igual que autorizarGasto(), es la propia
+ * función de modelo la que decide, nunca un guard externo por sí solo.
+ * `permitirAutoautorizacion` (default false) SOLO puede pasarlo en true
+ * el endpoint oficial (requerimiento-estado-api.ts), y únicamente
+ * DESPUÉS de que requireComprasAutorizar(slug, "editar") ya validó que
+ * quien autoriza posee el permiso específico compras_autorizar — nunca
+ * un valor tomado del body HTTP.
  *
  * `null` = el requerimiento no existe en esta empresa (el caller responde
  * 404). Lanza ErrorCompra para: sin firma (400), estado ya decidido o
- * versión desactualizada (409), autoautorización (403).
+ * versión desactualizada (409), autoautorización sin permitirla (403).
  */
 export async function autorizarRequerimientoCompra(
   empresaId: number,
@@ -309,6 +313,7 @@ export async function autorizarRequerimientoCompra(
     autorizanteNombre: string;
     autorizanteRol?: string | null;
     firmaImagen: { bytes: ArrayBuffer; original: string } | null;
+    permitirAutoautorizacion?: boolean;
   },
 ): Promise<DetalleCompra | null> {
   if (!opts.firmaImagen) throw new ErrorCompra(MENSAJE_FIRMA_REQUERIDA_AUTORIZAR, 400);
@@ -336,7 +341,9 @@ export async function autorizarRequerimientoCompra(
       (bloqueo.requirenteUsuarioId != null && bloqueo.requirenteUsuarioId === opts.autorizanteUsuarioId) ||
       (bloqueo.solicitanteUsuarioId != null && bloqueo.solicitanteUsuarioId === opts.autorizanteUsuarioId) ||
       (bloqueo.creadoPor != null && bloqueo.creadoPor === opts.autorizanteUsuarioId);
-    if (esPropio) throw new ErrorCompra(MENSAJE_AUTOAUTORIZACION_COMPRA, 403);
+    if (esPropio && !opts.permitirAutoautorizacion) {
+      throw new ErrorCompra(MENSAJE_AUTOAUTORIZACION_COMPRA, 403);
+    }
     await conn.execute(
       `UPDATE compras_requerimientos
        SET estado = 'Autorizada', autorizante_usuario_id = ?, autorizante_nombre = ?, autorizado_en = NOW(),

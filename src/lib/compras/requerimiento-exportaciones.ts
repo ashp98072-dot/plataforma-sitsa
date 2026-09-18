@@ -49,7 +49,6 @@ export function requerimientoCompraPdf(d: DetalleCompra, empresaNombre: string, 
     doc.moveDown(0.4);
     texto(`Código: ${d.codigo} · Fecha: ${formatearFechaVisible(d.fecha_requerimiento)} · Estado: ${d.estado}`);
     texto(`Persona que requiere: ${visible(d.requirente_nombre)} · Encargado de compras: ${visible(d.encargado_compras_nombre)}`);
-    texto(`Registrado por (solicitante): ${visible(d.solicitante_nombre)}`);
     doc.moveDown(0.5);
 
     // Una tabla continua, con encabezados repetidos por el helper existente.

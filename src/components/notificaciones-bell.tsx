@@ -20,7 +20,7 @@ type Props = {
   rol: string;
 };
 
-export function NotificacionesBell({ slug, rol }: Props) {
+export function NotificacionesBell({ slug }: Props) {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<Notif[]>([]);
   const [pendientes, setPendientes] = useState(0);
@@ -28,20 +28,15 @@ export function NotificacionesBell({ slug, rol }: Props) {
   const [msg, setMsg] = useState("");
   const ref = useRef<HTMLDivElement>(null);
 
-  // OPS-1: se agregan los roles operativos nuevos — el filtrado real de
-  // QUÉ alerta ve cada quien ya lo hace el propio endpoint por permiso
-  // explícito (viaticos_autorizar/viaticos_pagar/viajes_cerrar/
-  // facturacion); esto solo evita la petición para roles que nunca
-  // tendrían nada que ver aquí (RRHH, Marcaje, Piloto, Visualizador…).
-  const puedeVer =
-    rol === "Admin" ||
-    rol === "RRHH" ||
-    rol === "Operaciones" ||
-    rol === "GerenteOperaciones" ||
-    rol === "JefeOperaciones" ||
-    rol === "AuxiliarOperaciones" ||
-    rol === "Facturador" ||
-    rol === "CoordinadorPredios";
+  // COMPRAS-NOTIFICACIONES: antes era una allowlist fija de roles, pero
+  // permisos explícitos como compras_autorizar (y cualquier otro futuro)
+  // son asignables a CUALQUIER rol vía la matriz de Usuarios — una lista
+  // hardcodeada queda desactualizada cada vez que se otorga un permiso a
+  // un rol que no estaba en la lista (p. ej. CoordinadorCompras). El
+  // filtrado real de QUÉ alerta ve cada quien siempre lo hace el propio
+  // endpoint por permiso/sesión; `rol` se conserva en las props porque el
+  // endpoint podría necesitarlo, pero ya no se usa para bloquear la carga.
+  const puedeVer = true;
 
   const cargar = useCallback(async (silencioso = false) => {
     if (!puedeVer) return;

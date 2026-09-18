@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { createElement, isValidElement, type ReactElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,11 +20,12 @@ vi.mock("react", async importar => {
   };
 });
 import { RequerimientosClient } from "./requerimientos-client";
+import { AutorizacionConfirmacionModal } from "@/components/tms/autorizacion-confirmacion-modal";
 import { cargarLineasCompra, COLUMNAS_LINEAS_COMPRA, LineasCompraClient, TablaLineasCompra, type LineasCompraConsulta } from "./lineas-compra-client";
 
 const detalle = {
   id: 12, codigo: "RC-2026-000012", fecha_requerimiento: "2026-09-18", requirente_nombre: "Mario Caal", entidad_requirente_nombre: "Empresa histórica", cantidad_lineas: 2,
-  total: "11222.00", estado: "Pendiente", motivo_rechazo: null,
+  total: "11222.00", estado: "Pendiente", version: 3, motivo_rechazo: null,
   lineas: [21, 22].map(id => ({ id, fecha: "2026-09-18", unidad_descripcion: "C-123 Histórico", proveedor_nombre_snapshot: "Proveedor histórico", repuesto_descripcion: `Filtro ${id}`, metodo_pago: "Tarjeta de crédito", condicion_pago: "Crédito", serie_factura: "A", numero_factura: "123", total: "5611.00" })),
 } as DetalleCompra;
 const datos: LineasCompraConsulta = { detalle, documentos: { 21: { documentos: [] }, 22: { documentos: [{ id: 9, tipo: "FACTURA", nombreOriginal: "FAC-1234.pdf" }, { id: 10, tipo: "COTIZACION", nombreOriginal: "cotizacion.pdf" }] } } };
@@ -48,11 +50,11 @@ beforeEach(() => { hooks.estados = []; hooks.efectos = []; hooks.activo = false;
 afterEach(() => vi.unstubAllGlobals());
 
 describe("Listado compacto Compras", () => {
-  async function cargar(puedeEditar = true) {
-    const render = () => RequerimientosClient({ slug: "a", puedeCrear: true, puedeEditar });
+  async function cargar(puedeEditar = true, puedeAutorizar = false) {
+    const render = () => RequerimientosClient({ slug: "a", puedeCrear: true, puedeEditar, puedeAutorizar });
     fetchMock.mockImplementation(() => respuesta({ requerimientos: [detalle, { ...detalle, id: 13, codigo: "RC-13", estado: "Autorizada" }, { ...detalle, id: 14, codigo: "RC-14", estado: "Rechazada" }] }));
     ejecutar(render); hooks.efectos[0]();
-    await vi.waitFor(() => expect(hooks.estados[5]).toBe(false));
+    await vi.waitFor(() => expect(hooks.estados[6]).toBe(false));
     return { render, arbol: ejecutar(render) };
   }
   it("muestra cabeceras compactas, estados, acciones y filtros, sin tabla general ni enlace obsoleto", async () => {
@@ -79,6 +81,45 @@ describe("Listado compacto Compras", () => {
     expect(salida.includes("/12?editar=1")).toBe(permiso);
     expect(salida).not.toContain("/13?editar=1"); expect(salida).not.toContain("/14?editar=1");
     expect(salida).toContain("Descargar PDF"); expect(salida).not.toContain("Autorizar");
+  });
+
+  it("puedeAutorizar=false: nunca muestra Autorizar aunque haya fila Pendiente", async () => {
+    const { arbol } = await cargar(true, false);
+    const salida = html(arbol);
+    expect(salida).not.toContain("Autorizar");
+  });
+
+  it("puedeAutorizar=true: Autorizar solo aparece en la fila Pendiente (no en Autorizada/Rechazada); Rechazar NUNCA aparece en el listado", async () => {
+    const { arbol } = await cargar(true, true);
+    const salida = html(arbol);
+    expect((salida.match(/>Autorizar</g) ?? []).length).toBe(1);
+    expect(salida).not.toContain("Rechazar"); expect(salida).not.toContain("Motivo de rechazo");
+  });
+
+  it("Autorizar abre el modal compartido de Fondos/Gastos y confirma con la version real de la fila", async () => {
+    const { render, arbol } = await cargar(true, true);
+    let tree = arbol;
+    const botonAutorizar = elementos(tree).find(e => e.type === "button" && texto(e.props.children as ReactNode) === "Autorizar")!;
+    (botonAutorizar.props.onClick as () => void)();
+    tree = ejecutar(render);
+    const modal = elementos(tree).find(e => e.type === AutorizacionConfirmacionModal)!;
+    expect(modal.props.abierto).toBe(true);
+
+    fetchMock.mockClear();
+    fetchMock.mockImplementation((url: string) => url.includes("/estado")
+      ? respuesta({ mensaje: "Requerimiento autorizado.", requerimiento: { ...detalle, estado: "Autorizada" } })
+      : respuesta({ requerimientos: [] }));
+    (modal.props.onConfirmar as () => void)();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const llamada = fetchMock.mock.calls.find(([u]) => String(u).includes("/estado"))!;
+    expect(llamada[0]).toBe("/api/empresas/a/compras/requerimientos/12/estado");
+    expect((llamada[1] as RequestInit).method).toBe("POST");
+    expect(JSON.parse((llamada[1] as RequestInit).body as string)).toEqual({ accion: "autorizar", version: 3 });
+  });
+
+  it("el listado nunca expone un botón Rechazar: el rechazo sigue siendo exclusivo de Ver detalle", async () => {
+    const source = readFileSync("src/components/compras/requerimientos-client.tsx", "utf8");
+    expect(source).not.toMatch(/rechazar|Rechazar/);
   });
 });
 

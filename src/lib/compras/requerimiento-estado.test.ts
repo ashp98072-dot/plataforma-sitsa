@@ -183,7 +183,7 @@ describe("Pendiente -> Autorizada", () => {
     expect(m.borrarUpload).toHaveBeenCalledWith("empresas/1/firmas/firma_compra_autorizar_12_x.png");
   });
 
-  describe("autoautorización bloqueada (comparación por ID, nunca por nombre)", () => {
+  describe("autoautorización bloqueada por defecto (comparación por ID, nunca por nombre) — permitirAutoautorizacion=false/ausente", () => {
     it("bloquea si el autorizante es el requirente, limpia la copia física de la firma", async () => {
       await expect(autorizarRequerimientoCompra(1, 12, 2, { ...autorizarOpts(), autorizanteUsuarioId: 30 }))
         .rejects.toMatchObject({ message: MENSAJE_AUTOAUTORIZACION_COMPRA, status: 403 });
@@ -198,8 +198,27 @@ describe("Pendiente -> Autorizada", () => {
       await expect(autorizarRequerimientoCompra(1, 12, 2, { ...autorizarOpts(), autorizanteUsuarioId: 32 }))
         .rejects.toMatchObject({ message: MENSAJE_AUTOAUTORIZACION_COMPRA, status: 403 });
     });
-    it("permite si el autorizante NO coincide con ninguno de los tres", async () => {
+    it("bloquea aunque permitirAutoautorizacion venga explícitamente en false", async () => {
+      await expect(autorizarRequerimientoCompra(1, 12, 2, { ...autorizarOpts(), autorizanteUsuarioId: 30, permitirAutoautorizacion: false }))
+        .rejects.toMatchObject({ message: MENSAJE_AUTOAUTORIZACION_COMPRA, status: 403 });
+    });
+    it("permite si el autorizante NO coincide con ninguno de los tres, sin necesidad de la bandera", async () => {
       await expect(autorizarRequerimientoCompra(1, 12, 2, { ...autorizarOpts(), autorizanteUsuarioId: 8 })).resolves.not.toBeNull();
+    });
+  });
+
+  describe("autoautorización permitida solo con permitirAutoautorizacion=true (uso exclusivo del endpoint oficial, ver requerimiento-estado-api.test.ts)", () => {
+    it("permite si el autorizante es el requirente", async () => {
+      const r = await autorizarRequerimientoCompra(1, 12, 2, { ...autorizarOpts(), autorizanteUsuarioId: 30, permitirAutoautorizacion: true });
+      expect(r).not.toBeNull();
+      const [, params] = m.conn.execute.mock.calls[0];
+      expect(params).toEqual([30, "Autorizante", 1, 12]);
+    });
+    it("permite si el autorizante es el solicitante", async () => {
+      await expect(autorizarRequerimientoCompra(1, 12, 2, { ...autorizarOpts(), autorizanteUsuarioId: 31, permitirAutoautorizacion: true })).resolves.not.toBeNull();
+    });
+    it("permite si el autorizante es quien creó el registro (creado_por)", async () => {
+      await expect(autorizarRequerimientoCompra(1, 12, 2, { ...autorizarOpts(), autorizanteUsuarioId: 32, permitirAutoautorizacion: true })).resolves.not.toBeNull();
     });
   });
 

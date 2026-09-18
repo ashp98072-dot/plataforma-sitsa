@@ -49,6 +49,25 @@ it("el body NO puede falsificar autorizante_usuario_id/autorizante_nombre — el
   expect(m.autorizar).not.toHaveBeenCalled();
 });
 
+// COMPRAS-NOTIFICACIONES Parte D: solo este endpoint, ya DESPUÉS del
+// guard requireComprasAutorizar(slug, "editar"), puede otorgar
+// permitirAutoautorizacion — y siempre como literal fijo, nunca leído
+// del body (el schema .strict() ni siquiera lo admite como campo).
+it("autorizar: SIEMPRE pasa permitirAutoautorizacion: true a la lib, ya que este endpoint corre después del guard de permiso", async () => {
+  const res = await requerimientoEstadoCambiar(req({ accion: "autorizar", version: 3 }), "a", "12");
+  expect(res.status).toBe(200);
+  expect(m.autorizar).toHaveBeenCalledWith(1, 12, 3, expect.objectContaining({ permitirAutoautorizacion: true }));
+});
+
+it("el body NO puede desactivar ni tocar permitirAutoautorizacion — campo no reconocido por el schema (.strict())", async () => {
+  const res = await requerimientoEstadoCambiar(
+    req({ accion: "autorizar", version: 3, permitirAutoautorizacion: false }),
+    "a", "12",
+  );
+  expect(res.status).toBe(400);
+  expect(m.autorizar).not.toHaveBeenCalled();
+});
+
 it("sin firma registrada -> 400 con el mensaje fijo propagado (la validación real vive en autorizarRequerimientoCompra, ver requerimiento-estado.test.ts)", async () => {
   m.firma.mockResolvedValue(null);
   // autorizarRequerimientoCompra está mockeada en este archivo (capa HTTP
