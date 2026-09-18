@@ -5,9 +5,10 @@ const m = vi.hoisted(() => ({
   crearFirma: vi.fn(),
   guardarUpload: vi.fn(),
   borrarUpload: vi.fn(),
+  getConnection: vi.fn(),
   conn: { query: vi.fn(), execute: vi.fn(), beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn() },
 }));
-vi.mock("@/lib/db", () => ({ query: m.queryPublico, getPool: () => ({ getConnection: async () => m.conn }) }));
+vi.mock("@/lib/db", () => ({ query: m.queryPublico, getPool: () => ({ getConnection: m.getConnection }) }));
 vi.mock("@/lib/auditoria", () => ({ registrarAuditoriaTx: m.audit }));
 vi.mock("@/lib/firmas/firmas-internas", () => ({ crearFirmaInterna: m.crearFirma }));
 vi.mock("@/lib/uploads", () => ({ guardarUpload: m.guardarUpload, borrarUpload: m.borrarUpload }));
@@ -40,6 +41,7 @@ beforeEach(() => {
     solicitante_usuario_id: 31,
     creado_por: 32,
   };
+  m.getConnection.mockResolvedValue(m.conn);
   m.conn.query.mockImplementation(async () => [fila ? [fila] : []]);
   m.conn.execute.mockResolvedValue([{ affectedRows: 1 }]);
   m.crearFirma.mockResolvedValue({
@@ -127,20 +129,37 @@ describe("Pendiente -> Autorizada", () => {
     expect(m.borrarUpload).toHaveBeenCalledWith("empresas/1/firmas/firma_compra_autorizar_12_x.png");
   });
 
-  it("requerimiento inexistente en esta empresa -> null (el caller responde 404), revierte sin escribir nada más", async () => {
+  it("REVISIÓN PRE-MERGE — getPool().getConnection() falla DESPUÉS de guardar la copia física: no queda huérfana, no crea firma ni auditoría, sin rollback (nunca hubo conexión/transacción)", async () => {
+    m.getConnection.mockRejectedValue(new Error("pool agotado"));
+    await expect(autorizarRequerimientoCompra(1, 12, 2, autorizarOpts())).rejects.toThrow("pool agotado");
+    // La copia física SÍ se creó (guardarImagenFirmaCompra corre antes de
+    // getConnection) — debe limpiarse igual que cualquier otro fallo
+    // posterior, aunque nunca haya llegado a abrirse una transacción.
+    expect(m.borrarUpload).toHaveBeenCalledWith("empresas/1/firmas/firma_compra_autorizar_12_x.png");
+    expect(m.crearFirma).not.toHaveBeenCalled();
+    expect(m.audit).not.toHaveBeenCalled();
+    // No hay conexión que revertir ni liberar: conn nunca llegó a existir.
+    expect(m.conn.rollback).not.toHaveBeenCalled();
+    expect(m.conn.release).not.toHaveBeenCalled();
+    expect(m.conn.beginTransaction).not.toHaveBeenCalled();
+  });
+
+  it("requerimiento inexistente en esta empresa -> null (el caller responde 404), revierte sin escribir nada más, limpia la copia física", async () => {
     fila = null;
     const r = await autorizarRequerimientoCompra(1, 999, 2, autorizarOpts());
     expect(r).toBeNull();
     expect(m.conn.rollback).toHaveBeenCalledOnce();
     expect(m.crearFirma).not.toHaveBeenCalled();
     expect(m.audit).not.toHaveBeenCalled();
+    expect(m.borrarUpload).toHaveBeenCalledWith("empresas/1/firmas/firma_compra_autorizar_12_x.png");
   });
 
   describe("autoautorización bloqueada (comparación por ID, nunca por nombre)", () => {
-    it("bloquea si el autorizante es el requirente", async () => {
+    it("bloquea si el autorizante es el requirente, limpia la copia física de la firma", async () => {
       await expect(autorizarRequerimientoCompra(1, 12, 2, { ...autorizarOpts(), autorizanteUsuarioId: 30 }))
         .rejects.toMatchObject({ message: MENSAJE_AUTOAUTORIZACION_COMPRA, status: 403 });
       expect(m.conn.execute).not.toHaveBeenCalled();
+      expect(m.borrarUpload).toHaveBeenCalledWith("empresas/1/firmas/firma_compra_autorizar_12_x.png");
     });
     it("bloquea si el autorizante es el solicitante", async () => {
       await expect(autorizarRequerimientoCompra(1, 12, 2, { ...autorizarOpts(), autorizanteUsuarioId: 31 }))
@@ -155,10 +174,11 @@ describe("Pendiente -> Autorizada", () => {
     });
   });
 
-  it("versión desactualizada -> 409 CONFLICTO_COMPRA (mismo mensaje que guardarRequerimiento)", async () => {
+  it("versión desactualizada -> 409 CONFLICTO_COMPRA (mismo mensaje que guardarRequerimiento), limpia la copia física", async () => {
     await expect(autorizarRequerimientoCompra(1, 12, 99, autorizarOpts()))
       .rejects.toMatchObject({ message: CONFLICTO_COMPRA, status: 409 });
     expect(m.conn.execute).not.toHaveBeenCalled();
+    expect(m.borrarUpload).toHaveBeenCalledWith("empresas/1/firmas/firma_compra_autorizar_12_x.png");
   });
 
   it("Autorizada no vuelve a cambiar: un segundo intento sobre un requerimiento ya Autorizada rechaza con 409", async () => {

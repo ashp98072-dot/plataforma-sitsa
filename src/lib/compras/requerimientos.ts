@@ -293,11 +293,18 @@ export async function autorizarRequerimientoCompra(
   if (!opts.firmaImagen) throw new ErrorCompra(MENSAJE_FIRMA_REQUERIDA_AUTORIZAR, 400);
   // Copia física ANTES de abrir la transacción — guardarUpload() no es
   // transaccional. Se compensa (borrarUpload) en el finally si el commit
-  // no llega a completarse, por cualquier motivo (rollback o excepción).
+  // no llega a completarse, por CUALQUIER motivo posterior — incluido que
+  // getPool().getConnection() en sí falle (pool agotado, red caída,
+  // etc.). Por eso getConnection() vive DENTRO del try: si quedara antes,
+  // un fallo ahí saltaría directo al caller sin pasar por el finally y la
+  // copia física quedaría huérfana en disco para siempre. `conn` se
+  // declara afuera (posiblemente undefined) para que catch/finally sepan
+  // si de verdad hay una conexión/transacción que revertir/liberar.
   const imagenGuardada = await guardarImagenFirmaCompra(empresaId, id, opts.firmaImagen);
   let committed = false;
-  const conn = await getPool().getConnection();
+  let conn: PoolConnection | undefined;
   try {
+    conn = await getPool().getConnection();
     await conn.beginTransaction();
     const bloqueo = await bloquearRequerimientoParaDecisionTx(conn, empresaId, id, version);
     if (!bloqueo) {
@@ -350,10 +357,22 @@ export async function autorizarRequerimientoCompra(
     await conn.commit();
     committed = true;
   } catch (error) {
-    await conn.rollback();
+    // Solo revertir si de verdad se abrió una transacción — si
+    // getConnection()/beginTransaction() fue lo que falló, `conn` puede
+    // seguir siendo undefined (o existir pero sin transacción activa) y
+    // no hay nada que revertir. rollback() nunca reemplaza el error
+    // original: siempre se relanza tal cual, incluso si el propio
+    // rollback llegara a fallar (no se envuelve en su propio try/catch a
+    // propósito, para no ocultar el error real).
+    if (conn) await conn.rollback();
     throw error;
   } finally {
-    conn.release();
+    conn?.release();
+    // Cubre TODOS los caminos de fallo posteriores a guardarImagenFirmaCompra:
+    // getConnection(), beginTransaction(), el SELECT FOR UPDATE, versión/
+    // estado desactualizados, autoautorización, el UPDATE, crearFirmaInterna,
+    // la auditoría y el propio commit. `committed` solo llega a true tras un
+    // commit real, así que este finally es el único punto de limpieza.
     if (!committed) borrarUpload(imagenGuardada.relative);
   }
   return obtenerRequerimiento(empresaId, id);
