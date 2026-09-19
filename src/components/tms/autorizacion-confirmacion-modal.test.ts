@@ -15,7 +15,11 @@ describe("confirmación de autorización en Gastos y Fondos", () => {
   it("Gastos solicita confirmación con el mensaje exacto", () => {
     const pagina = leer("src/app/e/[slug]/gastos/page.tsx");
     expect(pagina).toContain("¿Está seguro de que desea autorizar este gasto operativo?");
-    expect(pagina).toContain("setConfirmandoAutorizacionId(g.id)");
+    // GASTOS-REDISENO-VISUAL: el botón vive ahora en GastosListado y la página
+    // le entrega setConfirmandoAutorizacionId — mismo flujo: clic => modal.
+    expect(pagina).toContain("onAutorizar={setConfirmandoAutorizacionId}");
+    expect(pagina).toContain("<AutorizacionConfirmacionModal");
+    expect(leer("src/components/tms/gastos-listado.tsx")).toContain("p.onAutorizar(g.id)");
   });
 
   it("Fondos solicita confirmación con el mensaje exacto", () => {

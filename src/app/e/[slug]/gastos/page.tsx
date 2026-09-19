@@ -11,6 +11,7 @@ import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
 import { AutorizacionConfirmacionModal } from "@/components/tms/autorizacion-confirmacion-modal";
 import { procesarConfirmacionAutorizacion } from "@/lib/tms/autorizacion-confirmacion";
+import { GastosListado, type GastoVista } from "@/components/tms/gastos-listado";
 
 type Gasto = {
   id: number;
@@ -209,6 +210,9 @@ export default function GastosPage() {
   const [confirmandoAutorizacionId, setConfirmandoAutorizacionId] = useState<number | null>(null);
   const [autorizandoId, setAutorizandoId] = useState<number | null>(null);
   const bloqueoAutorizacion = useRef<number | null>(null);
+  /** GASTOS-REDISENO-VISUAL — un solo gasto expandido a la vez; detalle lazy con caché por id (mismo patrón que Fondos/Compras). */
+  const [expandido, setExpandido] = useState<number | null>(null);
+  const [cacheDetalle] = useState(() => new Map<string, GastoVista>());
 
   const cargar = useCallback(async () => {
     setLoading(true);
@@ -222,6 +226,7 @@ export default function GastosPage() {
       const dGastos = await rGastos.json().catch(() => ({}));
       const dCat = await rCat.json().catch(() => ({}));
       if (!rGastos.ok) throw new Error(dGastos.error ?? "No se pudieron cargar los gastos.");
+      cacheDetalle.clear(); setExpandido(null);
       setGastos(dGastos.gastos ?? []);
       setCategorias(dGastos.categorias ?? []);
       setMetodosPago(dGastos.metodosPago ?? []);
@@ -234,7 +239,7 @@ export default function GastosPage() {
     } finally {
       setLoading(false);
     }
-  }, [slug, fFechaDesde, fFechaHasta, fMes, fAnio, fCategoria, fEmpleadoId, fVehiculoId, fClienteId]);
+  }, [slug, cacheDetalle, fFechaDesde, fFechaHasta, fMes, fAnio, fCategoria, fEmpleadoId, fVehiculoId, fClienteId]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -453,17 +458,17 @@ export default function GastosPage() {
   const limpiarFiltros = () => { setFFechaDesde(""); setFFechaHasta(""); setFMes(""); setFAnio(""); setFCategoria(""); setFEmpleadoId(""); setFVehiculoId(""); setFClienteId(""); };
 
   return (
-    <div className="space-y-4 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-lg font-semibold">Gastos operativos</h1>
+    <div className="space-y-5 p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-2xl font-semibold">Gastos operativos</h1>
         <button type="button" onClick={nuevo} className="rounded bg-[var(--accent)] px-3 py-2 text-sm text-white">
           Nuevo gasto
         </button>
       </div>
 
-      <div className="space-y-2 rounded-lg border border-[var(--border)] bg-[var(--panel)] p-3">
+      <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
         <p className="text-sm font-medium">Filtros y exportación</p>
-        <div className="flex flex-wrap items-end gap-2">
+        <div className="flex flex-wrap items-end gap-3">
         <label className="text-xs text-[var(--muted)]">Fecha desde<input type="date" className={`${inputCls} mt-0.5 block`} value={fFechaDesde} onChange={(e) => setFFechaDesde(e.target.value)} disabled={filtroMensual} /></label>
         <label className="text-xs text-[var(--muted)]">Fecha hasta<input type="date" className={`${inputCls} mt-0.5 block`} value={fFechaHasta} onChange={(e) => setFFechaHasta(e.target.value)} disabled={filtroMensual} /></label>
         <label className="text-xs text-[var(--muted)]">Mes<select className={`${inputCls} mt-0.5 block`} value={fMes} onChange={(e) => setFMes(e.target.value)}><option value="">—</option>{MESES_ES.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}</select></label>
@@ -483,8 +488,8 @@ export default function GastosPage() {
         </div>
       </div>
 
-      {error ? <p className="text-sm text-red-300">{error}</p> : null}
-      {msg ? <p className="text-sm text-emerald-300">{msg}</p> : null}
+      {error ? <p role="alert" className="text-sm text-red-300">{error}</p> : null}
+      {msg ? <p role="status" className="text-sm text-emerald-300">{msg}</p> : null}
 
       {mostrarForm ? (
         <div className="space-y-2 rounded-lg border border-[var(--border)] bg-[var(--panel)] p-3">
@@ -651,96 +656,23 @@ export default function GastosPage() {
         </div>
       ) : null}
 
-      <div className="overflow-auto rounded-lg border border-[var(--border)]">
-        <table className="min-w-full text-left text-xs">
-          <thead className="bg-[var(--thead)] text-[var(--muted)]">
-            <tr>
-              <th className="px-2 py-2">Fecha viaje</th>
-              <th className="px-2 py-2">Categoría</th>
-              <th className="px-2 py-2">Descripción</th>
-              <th className="px-2 py-2">Persona</th>
-              <th className="px-2 py-2">Unidad</th>
-              <th className="px-2 py-2">Cliente</th>
-              <th className="px-2 py-2">Viaje</th>
-              <th className="px-2 py-2">Monto</th>
-              <th className="px-2 py-2">Estado</th>
-              <th className="px-2 py-2">Comprobante</th>
-              <th className="px-2 py-2" />
-            </tr>
-          </thead>
-          <tbody>
-            {gastos.map((g) => (
-              <tr key={g.id} className="border-t border-[var(--border)]">
-                <td className="px-2 py-2">{g.fechaViaje ?? g.fechaSolicitud}</td>
-                <td className="px-2 py-2">{g.categoria}</td>
-                <td className="px-2 py-2">{g.descripcion ?? "—"}</td>
-                <td className="px-2 py-2">{g.empleadoNombre ?? "—"}</td>
-                <td className="px-2 py-2">{g.vehiculoPlaca ?? "—"}</td>
-                <td className="px-2 py-2">{g.clienteNombre ?? "—"}</td>
-                <td className="px-2 py-2">{g.planCodigo ?? "—"}</td>
-                <td className="px-2 py-2">Q{(g.cantidad * g.monto).toLocaleString("es-GT", { minimumFractionDigits: 2 })}</td>
-                {/*
-                  GASTOS-ADMINISTRATIVO-1 (Fase 4) — mismo ternario de
-                  color por estado que fondos/page.tsx (sin "Liquidada",
-                  que no existe en Gastos; `estado === null` -> Histórico,
-                  color neutro). Texto plano, nunca una píldora/badge —
-                  Fondos tampoco usa eso.
-                */}
-                <td className="px-2 py-2">
-                  <span className={g.estado === "Rechazada" ? "text-red-400" : g.estado === "Autorizada" ? "text-emerald-400" : g.estado === "Pendiente" ? "text-amber-400" : "text-[var(--muted)]"}>
-                    {g.estado ?? "Histórico"}
-                  </span>
-                  {g.motivoRechazo ? <span className="block text-red-400">Motivo de rechazo: {g.motivoRechazo}</span> : null}
-                </td>
-                <td className="px-2 py-2">{g.facturaNombreOriginal ? <span><a className="text-[var(--accent)]" href={`/api/empresas/${slug}/tms/gastos/${g.id}/comprobante`} target="_blank" rel="noreferrer">{g.facturaNombreOriginal}</a><button type="button" onClick={() => void eliminarComprobante(g.id)} className="ml-2 text-red-400">Quitar</button></span> : "—"}</td>
-                {/*
-                  GASTOS-ADMINISTRATIVO-1 (Fase 4) — Autorizar/Rechazar:
-                  mismos botones sólidos (bg-emerald-600/bg-red-600) e
-                  input "Motivo de rechazo" siempre visible que ya usa
-                  Fondos, gateados por `puedeAutorizar` (gastos_operativos_autorizar)
-                  Y por `estado === "Pendiente"` — un histórico o un gasto
-                  ya Autorizada/Rechazada nunca los muestra. "Editar"
-                  también se oculta en Autorizada/Rechazada (bloqueo de
-                  contenido ya exigido por el backend desde la Fase 2) —
-                  un histórico (`estado === null`) sigue editable sin
-                  restricción, igual que siempre. "Desactivar" queda SIN
-                  condición alguna: es la excepción administrativa
-                  aprobada, independiente del flujo de autorización.
-                */}
-                <td className="px-2 py-2">
-                  <div className="flex flex-wrap items-center gap-1">
-                    {puedeAutorizar && g.estado === "Pendiente" ? (
-                      <>
-                        <button type="button" onClick={() => setConfirmandoAutorizacionId(g.id)} disabled={autorizandoId !== null} className="rounded bg-emerald-600 px-2 py-1 text-white disabled:opacity-50">Autorizar</button>
-                        <input className={`${inputCls} w-32`} placeholder="Motivo de rechazo" value={motivoRechazo[g.id] ?? ""} onChange={(e) => setMotivoRechazo((m) => ({ ...m, [g.id]: e.target.value }))} />
-                        <button type="button" onClick={() => void cambiarEstado(g.id, "rechazar")} className="rounded bg-red-600 px-2 py-1 text-white">Rechazar</button>
-                      </>
-                    ) : null}
-                    {g.estado === "Pendiente" || g.estado === null ? (
-                      <button type="button" onClick={() => void editar(g)} className="text-[var(--accent)]">Editar</button>
-                    ) : null}
-                    {/*
-                      GASTOS-ADMINISTRATIVO-1 (Fase 5) — PDF individual
-                      (con firmas) solo tiene sentido una vez autorizado,
-                      mismo criterio que fondos/page.tsx. El endpoint
-                      vuelve a validar el estado del lado del servidor —
-                      este enlace oculto no es la única defensa.
-                    */}
-                    {g.estado === "Autorizada" ? (
-                      <a href={`/api/empresas/${slug}/tms/gastos/${g.id}/pdf`} className="rounded border border-[var(--border)] px-2 py-1">Ver PDF</a>
-                    ) : null}
-                    <a href={`/api/empresas/${slug}/tms/gastos/${g.id}/exportar`} className="rounded border border-[var(--border)] px-2 py-1">Exportar Excel</a>
-                    <button type="button" onClick={() => void desactivar(g.id)} className="text-red-400">Desactivar</button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-            {!gastos.length && !loading ? (
-              <tr><td colSpan={11} className="px-3 py-4 text-[var(--muted)]">Sin gastos con este filtro.</td></tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
+      <GastosListado
+        slug={slug}
+        gastos={gastos}
+        loading={loading}
+        puedeAutorizar={puedeAutorizar}
+        expandido={expandido}
+        onToggle={(id) => setExpandido((actual) => (actual === id ? null : id))}
+        cache={cacheDetalle}
+        autorizandoId={autorizandoId}
+        motivoRechazo={motivoRechazo}
+        onMotivoChange={(id, valor) => setMotivoRechazo((m) => ({ ...m, [id]: valor }))}
+        onAutorizar={setConfirmandoAutorizacionId}
+        onRechazar={(id) => void cambiarEstado(id, "rechazar")}
+        onEditar={(id) => { const g = gastos.find((x) => x.id === id); if (g) void editar(g); }}
+        onDesactivar={(id) => void desactivar(id)}
+        onEliminarComprobante={(id) => void eliminarComprobante(id)}
+      />
       <AutorizacionConfirmacionModal
         abierto={confirmandoAutorizacionId !== null}
         mensaje="¿Está seguro de que desea autorizar este gasto operativo?"
