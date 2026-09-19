@@ -161,6 +161,19 @@ it.each(["Pendiente", "Autorizada", "Rechazada"] as const)("Excel %s: mismo form
   expect(ws.pageSetup.fitToHeight).toBe(0);
   expect(ws.views?.[0]?.showGridLines).toBe(false);
 
+  // REGRESIÓN: row.border = x (a diferencia de font/alignment) fija el
+  // borde como estilo POR DEFECTO de toda la fila en ExcelJS — Excel lo
+  // pinta como una cuadrícula fantasma mucho más allá de las 9 columnas
+  // reales (J en adelante, vacías). Ninguna celda fuera de la tabla debe
+  // tener borde.
+  const columnasTabla = COLUMNAS_EXCEL_COMPRA.length;
+  ws.eachRow(row => {
+    for (let c = columnasTabla + 1; c <= columnasTabla + 10; c++) {
+      const cell = row.getCell(c);
+      expect(cell.border, `fila ${row.number} columna ${c} no debe tener borde`).toEqual({});
+    }
+  });
+
   guardarQA(`Requerimiento-${estado}.xlsx`, bytes);
 });
 

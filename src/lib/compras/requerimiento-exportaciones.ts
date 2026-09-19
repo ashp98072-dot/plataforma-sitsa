@@ -123,6 +123,14 @@ export function requerimientoCompraPdf(d: DetalleCompra, empresaNombre: string, 
 }
 
 const fechaExcel = (s: string) => new Date(`${s}T00:00:00Z`);
+// ExcelJS: `row.border = x` fija el border como estilo POR DEFECTO de la
+// fila (this.style.border), no solo de las celdas ya creadas — Excel lo
+// renderiza como una cuadrícula que se extiende mucho más allá de las 9
+// columnas reales de la tabla (columnas J en adelante, vacías, con borde).
+// Por eso el borde SIEMPRE se aplica celda por celda, nunca vía row.border.
+function bordeFila(row: ExcelJS.Row, columnas: number) {
+  for (let c = 1; c <= columnas; c++) row.getCell(c).border = bordeCelda;
+}
 
 /**
  * Excel administrativo: mismo formato visual/estructural que el PDF
@@ -180,7 +188,7 @@ export async function requerimientoCompraExcel(d: DetalleCompra, empresaNombre: 
   header.font = { name: "Arial", bold: true, color: { argb: "FFFFFFFF" } };
   header.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F4E78" } };
   header.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-  header.border = bordeCelda;
+  bordeFila(header, COLUMNAS_TABLA_COMPRA);
 
   d.lineas.forEach((l, i) => {
     const row = ws.addRow([
@@ -197,7 +205,7 @@ export async function requerimientoCompraExcel(d: DetalleCompra, empresaNombre: 
     row.font = { name: "Arial", size: 10 };
     row.alignment = { vertical: "top", wrapText: true };
     row.height = Math.max(20, Math.ceil(l.repuesto_descripcion.length / 30) * 13);
-    row.border = bordeCelda;
+    bordeFila(row, COLUMNAS_TABLA_COMPRA);
     row.getCell(1).alignment = { horizontal: "center", vertical: "top" };
   });
   ws.getColumn(3).numFmt = "dd/mm/yyyy";
@@ -238,7 +246,7 @@ export async function requerimientoCompraExcel(d: DetalleCompra, empresaNombre: 
     row.font = { name: "Arial", size: 8 };
     row.alignment = { horizontal: "left", vertical: "top", wrapText: true };
     row.height = Math.max(16, Math.ceil(recordatorio.length / 160) * 12);
-    row.border = bordeCelda;
+    bordeFila(row, COLUMNAS_TABLA_COMPRA);
   });
   centrada(FRASE_INSTITUCIONAL_COMPRA, 10);
 
