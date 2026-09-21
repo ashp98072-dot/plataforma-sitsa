@@ -282,7 +282,7 @@ export async function crearCotizacion(
          tarifa_referencia, tarifa_cotizada, incluye_iva, fecha_emision, fecha_vencimiento,
          piloto_incluido, gps_incluido, seguro_mercaderia_incluido, seguro_terceros_incluido, servicio_refrigerado,
          km_incluidos, tarifa_km_adicional, condiciones_adicionales, observaciones, creado_por)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         empresaId,
         "", // se completa abajo, mismo criterio que fondos.ts (código derivado del id, sin condición de carrera)
