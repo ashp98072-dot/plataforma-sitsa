@@ -8,6 +8,7 @@ import { aplicarDefaultsRutaCotizacion, sugerirServicioRefrigerado } from "@/lib
 import { CosteoRegistradoDetalle, CotizacionCosteoPanel, useCosteoConfig } from "@/components/tms/cotizacion-costeo-panel";
 import { aplicarPrecioSugerido, type PayloadCosteoCliente } from "@/lib/tms/cotizacion-costeo-ui";
 import { CotizacionCatalogosRapidos } from "@/components/tms/cotizacion-catalogos-rapidos";
+import { DOCUMENTOS_EMISOR, DOCUMENTO_EMISOR_DEFAULT, MARCAS_DOCUMENTO, type DocumentoEmisor } from "@/lib/tms/cotizacion-documento";
 
 type EstadoCotizacion = "Borrador" | "Enviada" | "Aceptada" | "Rechazada" | "Vencida";
 
@@ -36,6 +37,10 @@ type Cotizacion = {
   tarifaKmAdicional: number | null;
   condicionesAdicionales: string | null;
   observaciones: string | null;
+  documentoEmisor: DocumentoEmisor;
+  atencionNombre: string | null;
+  atencionCargo: string | null;
+  unidadDescripcion: string | null;
 };
 
 const inputCls = "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
@@ -71,6 +76,10 @@ const FORM_VACIO = {
   tarifaKmAdicional: "",
   condicionesAdicionales: "",
   observaciones: "",
+  documentoEmisor: DOCUMENTO_EMISOR_DEFAULT as DocumentoEmisor,
+  atencionNombre: "",
+  atencionCargo: "",
+  unidadDescripcion: "",
 };
 
 /**
@@ -165,6 +174,10 @@ export default function CotizacionesPage() {
       tarifaKmAdicional: c.tarifaKmAdicional != null ? String(c.tarifaKmAdicional) : "",
       condicionesAdicionales: c.condicionesAdicionales ?? "",
       observaciones: c.observaciones ?? "",
+      documentoEmisor: c.documentoEmisor,
+      atencionNombre: c.atencionNombre ?? "",
+      atencionCargo: c.atencionCargo ?? "",
+      unidadDescripcion: c.unidadDescripcion ?? "",
     });
     setMostrarForm(true);
   }
@@ -208,6 +221,10 @@ export default function CotizacionesPage() {
       tarifaKmAdicional: form.tarifaKmAdicional === "" ? null : Number(form.tarifaKmAdicional),
       condicionesAdicionales: form.condicionesAdicionales.trim() || null,
       observaciones: form.observaciones.trim() || null,
+      documentoEmisor: form.documentoEmisor,
+      atencionNombre: form.atencionNombre.trim() || null,
+      atencionCargo: form.atencionCargo.trim() || null,
+      unidadDescripcion: form.unidadDescripcion.trim() || null,
       // Solo viaja si hay un cálculo vigente que el usuario quiere registrar; el servidor lo RECALCULA.
       ...(costeoPayload ? { costeo: costeoPayload } : {}),
     };
@@ -285,11 +302,13 @@ export default function CotizacionesPage() {
               mensajeSinSeleccion="Selecciona un cliente de la lista o crea uno nuevo."
               onChange={({ clienteId, clienteNombre }) => setForm((f) => ({ ...f, clienteId, clienteNombre }))}
               inputClassName={`${inputCls} w-full`} />
-            <label className="text-xs text-[var(--muted)]">Ruta (opcional — sugiere tarifa/origen/destino)
-              <RutaSelect slug={slug} clienteId={form.clienteId} value={form.rutaCodigo} inputClassName={`${inputCls} mt-0.5 w-full`}
+            <div>
+              <RutaSelect slug={slug} clienteId={form.clienteId} value={form.rutaCodigo} inputClassName={`${inputCls} w-full`}
+                label="Ruta (opcional — sugiere tarifa/origen/destino)"
+                descripcion="Al elegir una ruta se sugieren tarifa, origen y destino; puedes ajustarlos."
                 onSeleccionar={aplicarRuta} />
               <button type="button" className="mt-1 text-[10px] text-[var(--accent)]" onClick={() => setForm((f) => ({ ...f, rutaId: null, rutaCodigo: "" }))}>Usar sin guardar como ruta</button>
-            </label>
+            </div>
             <label className="text-xs text-[var(--muted)]">Fecha de emisión
               <input type="date" className={`${inputCls} mt-0.5 w-full`} value={form.fechaEmision} onChange={(e) => setForm((f) => ({ ...f, fechaEmision: e.target.value }))} />
             </label>
@@ -301,6 +320,27 @@ export default function CotizacionesPage() {
             </label>
             <label className="text-xs text-[var(--muted)]">Fecha de vencimiento
               <input type="date" className={`${inputCls} mt-0.5 w-full`} value={form.fechaVencimiento} onChange={(e) => setForm((f) => ({ ...f, fechaVencimiento: e.target.value }))} />
+            </label>
+          </div>
+          <CotizacionCatalogosRapidos slug={slug} clienteId={form.clienteId} puedeCrearCliente={permisosRapidos.clientes} puedeCrearRuta={permisosRapidos.rutas}
+            onCliente={(c) => setForm((f) => ({ ...f, clienteId: c.id, clienteNombre: c.nombre }))} onRuta={aplicarRuta} />
+
+          <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">B. Presentación comercial</p>
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+            <label className="text-xs text-[var(--muted)]">Documento emitido por
+              <select className={`${inputCls} mt-0.5 w-full`} value={form.documentoEmisor}
+                onChange={(e) => setForm((f) => ({ ...f, documentoEmisor: e.target.value as DocumentoEmisor }))}>
+                {DOCUMENTOS_EMISOR.map((d) => <option key={d} value={d}>{MARCAS_DOCUMENTO[d].etiqueta}</option>)}
+              </select>
+            </label>
+            <label className="text-xs text-[var(--muted)]">Atención a (opcional)
+              <input maxLength={160} className={`${inputCls} mt-0.5 w-full`} value={form.atencionNombre} onChange={(e) => setForm((f) => ({ ...f, atencionNombre: e.target.value }))} />
+            </label>
+            <label className="text-xs text-[var(--muted)]">Cargo / referencia (opcional)
+              <input maxLength={160} className={`${inputCls} mt-0.5 w-full`} value={form.atencionCargo} onChange={(e) => setForm((f) => ({ ...f, atencionCargo: e.target.value }))} />
+            </label>
+            <label className="text-xs text-[var(--muted)]">Unidad
+              <input maxLength={160} placeholder="Ej. Camión 5 toneladas" className={`${inputCls} mt-0.5 w-full`} value={form.unidadDescripcion} onChange={(e) => setForm((f) => ({ ...f, unidadDescripcion: e.target.value }))} />
             </label>
             <label className="text-xs text-[var(--muted)]">Tarifa cotizada (Q)
               <input type="number" min="0.01" step="0.01" className={`${inputCls} mt-0.5 w-full`} value={form.tarifaCotizada} onChange={(e) => setForm((f) => ({ ...f, tarifaCotizada: e.target.value }))} />
@@ -316,10 +356,6 @@ export default function CotizacionesPage() {
               </p>
             ) : null}
           </div>
-          <CotizacionCatalogosRapidos slug={slug} clienteId={form.clienteId} puedeCrearCliente={permisosRapidos.clientes} puedeCrearRuta={permisosRapidos.rutas}
-            onCliente={(c) => setForm((f) => ({ ...f, clienteId: c.id, clienteNombre: c.nombre }))} onRuta={aplicarRuta} />
-
-          <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">B. Datos comerciales</p>
           <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">C. Condiciones de servicio</p>
           <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
             <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={form.pilotoIncluido} onChange={(e) => setForm((f) => ({ ...f, pilotoIncluido: e.target.checked }))} /> Piloto incluido</label>
@@ -353,6 +389,7 @@ export default function CotizacionesPage() {
             editable
             onPayloadGuardar={setCosteoPayload}
             onUsarPrecioSugerido={(precio) => setForm((f) => aplicarPrecioSugerido(f, precio))}
+            onPerfilElegido={(nombre) => setForm((f) => (f.unidadDescripcion.trim() ? f : { ...f, unidadDescripcion: nombre }))}
           />
           <div className="flex gap-2">
             <button type="button" onClick={() => void guardar()} className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm text-white">Guardar</button>
@@ -374,7 +411,7 @@ export default function CotizacionesPage() {
                   {expandidoId === c.id ? "Ocultar detalle" : "Ver detalle"}
                 </button>
                 {c.estado === "Borrador" ? <button type="button" onClick={() => editar(c)} className="text-[var(--accent)]">Editar</button> : null}
-                <a href={`/api/empresas/${slug}/tms/cotizaciones/${c.id}/pdf`} className="rounded border border-[var(--border)] px-2 py-1">Descargar PDF</a>
+                <a href={`/api/empresas/${slug}/tms/cotizaciones/${c.id}/pdf`} className="rounded border border-[var(--border)] px-2 py-1">PDF comercial</a>
                 <button type="button" onClick={() => void duplicar(c.id)} className="rounded border border-[var(--border)] px-2 py-1">Duplicar</button>
                 {c.estado === "Borrador" ? <button type="button" onClick={() => void cambiarEstado(c.id, "Enviada")} className="rounded bg-amber-600 px-2 py-1 text-white">Marcar enviada</button> : null}
                 {c.estado === "Enviada" ? (
@@ -391,6 +428,9 @@ export default function CotizacionesPage() {
                 <div><span className="text-[var(--muted)]">Origen:</span> {c.origenTexto ?? "—"}</div>
                 <div><span className="text-[var(--muted)]">Destino:</span> {c.destinoTexto ?? "—"}</div>
                 <div><span className="text-[var(--muted)]">Ruta:</span> {c.rutaCodigoHistorico ?? "—"}</div>
+                <div><span className="text-[var(--muted)]">Documento emitido por:</span> {MARCAS_DOCUMENTO[c.documentoEmisor]?.nombre ?? c.documentoEmisor}</div>
+                <div><span className="text-[var(--muted)]">Atención:</span> {[c.atencionNombre, c.atencionCargo].filter(Boolean).join(" · ") || "—"}</div>
+                <div><span className="text-[var(--muted)]">Unidad:</span> {c.unidadDescripcion ?? "—"}</div>
                 <div><span className="text-[var(--muted)]">Tarifa referencia:</span> {money(c.tarifaReferencia)}</div>
                 <div><span className="text-[var(--muted)]">Vigencia:</span> {c.fechaVencimiento ?? "—"}</div>
                 <div><span className="text-[var(--muted)]">Piloto incluido:</span> {c.pilotoIncluido ? "Sí" : "No"}</div>
