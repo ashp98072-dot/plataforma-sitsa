@@ -2,7 +2,7 @@
 
 Estado: **IMPLEMENTADO y VERIFICADO TÉCNICAMENTE** (motor puro + pruebas de regresión contra el libro). No está conectado a la UI, a la base de datos ni a `tms_cotizaciones`. **No aprobado para producción** hasta la Fase 3.
 
-Código: `src/lib/tms/cotizacion-costeo.ts` · Pruebas: `src/lib/tms/cotizacion-costeo.test.ts` · Propuesta de persistencia: `sql/propuesta-2026-09-cotizaciones-costeo.sql` (no ejecutable, en revisión).
+Código: `src/lib/tms/cotizacion-costeo.ts` · Pruebas: `src/lib/tms/cotizacion-costeo.test.ts` · Propuesta de persistencia: `docs/COTIZACIONES-COSTEO-PERSISTENCIA-PROPUESTA.md` (documento; **no es una migración**, en revisión).
 
 ## 1. Qué se extrajo del Excel
 
@@ -91,7 +91,7 @@ Cómo se mapea el libro al motor: los multiplicadores de personal (`×2`, `×6`)
 
 Una cotización debe guardar un snapshot de **todos** los valores usados: perfil, parámetros económicos, input del servicio y resultado con sus componentes. Una cotización histórica **no puede cambiar** si después cambian combustible, salario, viáticos, seguro, GPS, llantas, aceite, depreciación, rendimiento o parámetros de la ruta.
 
-Propuesta (`sql/propuesta-2026-09-cotizaciones-costeo.sql`): tablas vivas `tms_cotizacion_costeo_perfiles` y `tms_cotizacion_costeo_parametros` (vigencia), y tablas **inmutables** `tms_cotizacion_costeos` (copia JSON de perfil/parámetros/input + resultados + versión del motor) y `tms_cotizacion_costeo_componentes`. Solo `INSERT`; sin FK viva hacia perfiles/parámetros. Este PR **no** escribe nada en `tms_cotizaciones` ni ejecuta SQL.
+Propuesta (`docs/COTIZACIONES-COSTEO-PERSISTENCIA-PROPUESTA.md`, no es una migración): tablas vivas `tms_cotizacion_costeo_perfiles` y `tms_cotizacion_costeo_parametros` (vigencia), y tablas **inmutables** `tms_cotizacion_costeos` (copia JSON de perfil/parámetros/input + resultados + versión del motor) y `tms_cotizacion_costeo_componentes`. Solo `INSERT`; sin FK viva hacia perfiles/parámetros. Este PR **no** escribe nada en `tms_cotizaciones` ni ejecuta SQL.
 
 ## 10. Qué falta para la Fase 3
 
