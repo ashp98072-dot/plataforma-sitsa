@@ -9,8 +9,6 @@ import { CosteoRegistradoDetalle, CotizacionCosteoPanel, useCosteoConfig } from 
 import { aplicarPrecioSugerido, type PayloadCosteoCliente } from "@/lib/tms/cotizacion-costeo-ui";
 import { CotizacionCatalogosRapidos } from "@/components/tms/cotizacion-catalogos-rapidos";
 
-type ClienteOpt = { id: number; nombre: string; codigo?: string | null; nit?: string | null; telefono?: string | null; estado?: string | null };
-
 type EstadoCotizacion = "Borrador" | "Enviada" | "Aceptada" | "Rechazada" | "Vencida";
 
 type Cotizacion = {
@@ -85,7 +83,6 @@ const FORM_VACIO = {
 export default function CotizacionesPage() {
   const slug = String(useParams().slug);
 
-  const [clientes, setClientes] = useState<ClienteOpt[]>([]);
   const [cotizaciones, setCotizaciones] = useState<Cotizacion[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -107,12 +104,6 @@ export default function CotizacionesPage() {
   const [costeoPayload, setCosteoPayload] = useState<PayloadCosteoCliente | null>(null);
   const [permisosRapidos, setPermisosRapidos] = useState({ clientes: false, rutas: false });
 
-  const cargarClientes = useCallback(async () => {
-    const res = await fetch(`/api/empresas/${slug}/tms/catalogos`);
-    const data = await res.json().catch(() => ({}));
-    if (res.ok) setClientes(data.tmsClientes ?? []);
-  }, [slug]);
-
   const cargar = useCallback(async () => {
     setLoading(true); setError("");
     try {
@@ -132,10 +123,6 @@ export default function CotizacionesPage() {
     }
   }, [slug, fClienteId, fEstado, fFechaDesde, fFechaHasta]);
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void cargarClientes();
-  }, [cargarClientes]);
   useEffect(() => {
     fetch("/api/auth/me", { cache: "no-store" }).then((r) => r.json()).then((data) => {
       const ps = Array.isArray(data.permisos) ? data.permisos : [];
@@ -200,7 +187,8 @@ export default function CotizacionesPage() {
 
   async function guardar() {
     setError(""); setMsg("");
-    if (!form.clienteId) { setError("Selecciona un cliente."); return; }
+    // El id sale solo de elegir un cliente de la lista (o de crearlo): texto suelto nunca guarda clienteId = 0.
+    if (!(form.clienteId > 0)) { setError("Selecciona un cliente de la lista o crea uno nuevo."); return; }
     if (!(Number(form.tarifaCotizada) > 0)) { setError("La tarifa cotizada debe ser mayor a cero."); return; }
     const payload = {
       clienteId: form.clienteId,
@@ -269,9 +257,12 @@ export default function CotizacionesPage() {
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <div className="min-w-[220px]">
-          <ClienteSearch clientes={clientes} valueNombre={fClienteNombre} valueId={fClienteId}
+        <div className="min-w-[260px]">
+          <ClienteSearch slug={slug} label="Filtrar cotizaciones por cliente" valueNombre={fClienteNombre} valueId={fClienteId}
+            descripcion="Busca por nombre, código, NIT o teléfono para filtrar la lista"
+            mensajeSinSeleccion="Selecciona un cliente de la lista para filtrar."
             onChange={({ clienteId, clienteNombre }) => { setFClienteId(clienteId); setFClienteNombre(clienteNombre); }}
+            onLimpiar={() => { setFClienteId(0); setFClienteNombre(""); }} limpiarAriaLabel="Limpiar filtro de cliente"
             inputClassName={inputCls} />
         </div>
         <select className={inputCls} value={fEstado} onChange={(e) => setFEstado(e.target.value)}>
@@ -290,11 +281,10 @@ export default function CotizacionesPage() {
           <p className="text-sm font-medium">{editandoId ? "Editar cotización (solo en Borrador)" : "Nueva cotización"}</p>
           <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">A. Cliente y ruta</p>
           <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
-            <label className="text-xs text-[var(--muted)]">Cliente
-              <ClienteSearch clientes={clientes} valueNombre={form.clienteNombre} valueId={form.clienteId}
-                onChange={({ clienteId, clienteNombre }) => setForm((f) => ({ ...f, clienteId, clienteNombre }))}
-                inputClassName={`${inputCls} mt-0.5 w-full`} />
-            </label>
+            <ClienteSearch slug={slug} label="Cliente de la cotización" valueNombre={form.clienteNombre} valueId={form.clienteId}
+              mensajeSinSeleccion="Selecciona un cliente de la lista o crea uno nuevo."
+              onChange={({ clienteId, clienteNombre }) => setForm((f) => ({ ...f, clienteId, clienteNombre }))}
+              inputClassName={`${inputCls} w-full`} />
             <label className="text-xs text-[var(--muted)]">Ruta (opcional — sugiere tarifa/origen/destino)
               <RutaSelect slug={slug} clienteId={form.clienteId} value={form.rutaCodigo} inputClassName={`${inputCls} mt-0.5 w-full`}
                 onSeleccionar={aplicarRuta} />
@@ -327,7 +317,7 @@ export default function CotizacionesPage() {
             ) : null}
           </div>
           <CotizacionCatalogosRapidos slug={slug} clienteId={form.clienteId} puedeCrearCliente={permisosRapidos.clientes} puedeCrearRuta={permisosRapidos.rutas}
-            onCliente={(c) => { setForm((f) => ({ ...f, clienteId: c.id, clienteNombre: c.nombre })); void cargarClientes(); }} onRuta={aplicarRuta} />
+            onCliente={(c) => setForm((f) => ({ ...f, clienteId: c.id, clienteNombre: c.nombre }))} onRuta={aplicarRuta} />
 
           <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">B. Datos comerciales</p>
           <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">C. Condiciones de servicio</p>
