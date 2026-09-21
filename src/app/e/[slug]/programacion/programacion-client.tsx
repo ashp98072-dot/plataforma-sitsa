@@ -9,6 +9,7 @@ import type {
 } from "@/lib/operaciones/disponibilidad-personal";
 import PlanForm from "./plan-form";
 import { formatearFechaHora12, formatearHora12 } from "@/lib/tms/hora-formato";
+import { resumenRegreso } from "@/lib/tms/regreso-viaje";
 
 /**
  * OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — tras CERRAR un viaje, Programación
@@ -100,7 +101,12 @@ export type Plan = {
    */
   atrasado?: number;
   tipo_traslado: string | null;
+  /** Dato OPCIONAL de planificación: puede ser null. */
   regreso_estimado: string | null;
+  /** Regreso REAL: flota_viajes.hora_llegada (llegada física). Null si aún no hubo llegada o el cierre fue manual sin llegada. */
+  regreso_real?: string | null;
+  /** El cierre fue manual (sin llegada física). Solo aplica a planes Cerrado. */
+  cierre_manual?: boolean;
   tarifa_comercial: number | null;
   /**
    * RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 — snapshot de la tarifa
@@ -1306,10 +1312,35 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
                   <p className="text-[11px] text-[var(--muted)]">Servicio</p>
                   <p>{p.tipo_traslado || "—"}</p>
                 </div>
-                <div>
-                  <p className="text-[11px] text-[var(--muted)]">Regreso estimado</p>
-                  <p>{formatearFechaHora12(p.regreso_estimado)}</p>
-                </div>
+                {(() => {
+                  const regreso = resumenRegreso(
+                    { estado: p.estado, regresoEstimado: p.regreso_estimado, regresoReal: p.regreso_real ?? null, cerradoEn: p.cerrado_en, cierreManual: p.cierre_manual },
+                    formatearFechaHora12,
+                  );
+                  return (
+                    <>
+                      <div>
+                        <p className="text-[11px] text-[var(--muted)]">Regreso estimado</p>
+                        <p>{regreso.estimado}</p>
+                      </div>
+                      {regreso.real ? (
+                        <div>
+                          <p className="text-[11px] text-[var(--muted)]">Regreso real</p>
+                          <p>{regreso.real}</p>
+                        </div>
+                      ) : null}
+                      {regreso.cierreAdministrativo ? (
+                        <div>
+                          <p className="text-[11px] text-[var(--muted)]">Cierre administrativo</p>
+                          <p>{regreso.cierreAdministrativo}</p>
+                        </div>
+                      ) : null}
+                      {regreso.notaCierreManual ? (
+                        <p className="text-[11px] text-rose-500 sm:col-span-2 lg:col-span-4">{regreso.notaCierreManual}</p>
+                      ) : null}
+                    </>
+                  );
+                })()}
                 <div>
                   <p className="text-[11px] text-[var(--muted)]">Tarifa comercial</p>
                   <p>

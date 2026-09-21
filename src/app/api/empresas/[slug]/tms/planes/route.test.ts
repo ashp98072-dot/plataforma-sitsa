@@ -36,6 +36,7 @@ vi.mock("@/lib/tms/viaticos", () => ({
 }));
 vi.mock("@/lib/tms/disponibilidad-traslapes", () => ({
   ESTADOS_QUE_RESERVAN_RECURSOS: new Set(),
+  SQL_HORA_LLEGADA_REAL: "(SELECT MAX(fv.hora_llegada) FROM flota_viajes fv WHERE fv.plan_id = p.id AND fv.estado = 'cerrado' AND fv.hora_llegada IS NOT NULL)",
   finViajeDesdeInput: vi.fn(),
   inicioViaje: vi.fn(),
   mensajeConflicto: vi.fn(),
@@ -206,5 +207,76 @@ describe("GET /api/empresas/[slug]/tms/planes?id=", () => {
     const res = await GET(req(`?id=${valor}`), ctx);
     expect(res.status).toBe(400);
     expect(query).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Regreso estimado OPCIONAL + regreso REAL: el GET expone `regreso_real` (única fuente: flota_viajes.hora_llegada),
+ * nunca lo mezcla con `cerrado_en`, y un plan sin regreso estimado no se marca atrasado.
+ */
+describe("GET /tms/planes — regreso estimado opcional y regreso real", () => {
+  it("el SELECT trae regreso_estimado (opcional) y regreso_real desde flota_viajes.hora_llegada, sin usar cerrado_en", async () => {
+    vi.mocked(query).mockResolvedValueOnce([filaPlan()] as never);
+    await GET(req("?fechaDesde=2026-09-01&fechaHasta=2026-09-01"), ctx);
+    const sql = String(vi.mocked(query).mock.calls[0][0]);
+    expect(sql).toContain("AS regreso_estimado");
+    expect(sql).toMatch(/DATE_FORMAT\(\(SELECT MAX\(fv\.hora_llegada\) FROM flota_viajes fv[\s\S]*?\), '%Y-%m-%dT%H:%i'\) AS regreso_real/);
+    const regresoReal = sql.slice(sql.indexOf("DATE_FORMAT((SELECT MAX(fv.hora_llegada)"), sql.indexOf("AS regreso_real"));
+    expect(regresoReal).not.toContain("cerrado_en");
+    // Un solo lugar guarda el hecho real: no hay columna regreso_real en tms_planes_viaje.
+    expect(sql).not.toMatch(/p\.regreso_real/);
+  });
+
+  it("un plan sin regreso estimado se devuelve con regreso_estimado null y no atrasado", async () => {
+    vi.mocked(query).mockResolvedValueOnce([filaPlan({ estado: "En ruta", regreso_estimado: null, atrasado: 0, regreso_real: null })] as never);
+    const res = await GET(req(`?id=${PLAN_ID}`), ctx);
+    const [plan] = (await res.json()).planes;
+    expect(plan).toMatchObject({ regreso_estimado: null, atrasado: 0, regreso_real: null });
+  });
+
+  it("el indicador atrasado exige regreso_estimado NOT NULL y vencido, En ruta/Cargado y sin llegada", async () => {
+    vi.mocked(query).mockResolvedValueOnce([] as never);
+    await GET(req("?fechaDesde=2026-09-01&fechaHasta=2026-09-01"), ctx);
+    const sql = String(vi.mocked(query).mock.calls[0][0]);
+    const atrasado = sql.slice(sql.lastIndexOf("p.estado IN ('En ruta', 'Cargado')"), sql.indexOf("AS atrasado"));
+    expect(atrasado).toContain("p.regreso_estimado IS NOT NULL");
+    expect(atrasado).toContain("p.regreso_estimado < ?");
+    expect(atrasado).toContain("NOT EXISTS");
+  });
+
+  it("devuelve regreso_real cuando hubo llegada física y NO marca cierre manual", async () => {
+    vi.mocked(query).mockResolvedValueOnce([filaPlan({ estado: "Cerrado", regreso_real: "2026-09-01T15:40", cerrado_en: "2026-09-02T08:00" })] as never)
+      .mockResolvedValueOnce([] as never) // auxiliares
+      .mockResolvedValueOnce([] as never); // cierre manual
+    const [plan] = (await (await GET(req(`?id=${PLAN_ID}`), ctx)).json()).planes;
+    expect(plan).toMatchObject({ estado: "Cerrado", regreso_real: "2026-09-01T15:40", cerrado_en: "2026-09-02T08:00", cierre_manual: false });
+  });
+
+  it("cierre manual sin llegada: regreso_real null, cerrado_en intacto y cierre_manual true (cerrado_en no se convierte en llegada)", async () => {
+    vi.mocked(query).mockResolvedValueOnce([filaPlan({ estado: "Cerrado", regreso_real: null, cerrado_en: "2026-09-02T08:00" })] as never)
+      .mockResolvedValueOnce([] as never)
+      .mockResolvedValueOnce([{ id: PLAN_ID, cierre_manual: 1 }] as never);
+    const [plan] = (await (await GET(req(`?id=${PLAN_ID}`), ctx)).json()).planes;
+    expect(plan).toMatchObject({ estado: "Cerrado", regreso_real: null, cerrado_en: "2026-09-02T08:00", cierre_manual: true });
+    // La consulta de cierre manual va acotada por empresa y solo pide ese plan Cerrado.
+    const [sqlManual, paramsManual] = vi.mocked(query).mock.calls[2];
+    expect(String(sqlManual)).toContain("empresa_id = ?");
+    expect(paramsManual).toEqual([EMPRESA_ID, PLAN_ID]);
+  });
+
+  it("los planes que no están Cerrado no disparan la consulta de cierre manual", async () => {
+    vi.mocked(query).mockResolvedValueOnce([filaPlan({ estado: "En ruta" })] as never).mockResolvedValueOnce([] as never);
+    const [plan] = (await (await GET(req(`?id=${PLAN_ID}`), ctx)).json()).planes;
+    expect(plan.cierre_manual).toBe(false);
+    expect(vi.mocked(query).mock.calls).toHaveLength(2); // planes + auxiliares
+  });
+
+  it("si la consulta de cierre manual falla (columna ausente), el listado sigue respondiendo", async () => {
+    vi.mocked(query).mockResolvedValueOnce([filaPlan({ estado: "Cerrado", regreso_real: null })] as never)
+      .mockResolvedValueOnce([] as never)
+      .mockRejectedValueOnce(new Error("Unknown column 'cierre_manual'"));
+    const res = await GET(req(`?id=${PLAN_ID}`), ctx);
+    expect(res.status).toBe(200);
+    expect((await res.json()).planes[0].cierre_manual).toBe(false);
   });
 });

@@ -8,6 +8,7 @@ import { tienePermiso } from "@/lib/permisos-shared";
 import { hoyLocal } from "@/lib/rrhh/dates";
 import { puedeCerrarManualmente } from "@/lib/tms/cierre-viaje-shared";
 import { formatearFechaHora12, formatearHora12 } from "@/lib/tms/hora-formato";
+import { resumenRegreso } from "@/lib/tms/regreso-viaje";
 
 /**
  * OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — deep-link a un plan puntual.
@@ -114,7 +115,12 @@ type PlanReporte = {
   lugarDescargaHistorico: string | null;
   referenciaCliente: string | null;
   tipoTraslado: string | null;
+  /** Dato OPCIONAL de planificación: puede ser null. */
   regresoEstimado: string | null;
+  /** Regreso REAL (flota_viajes.hora_llegada); null si no hubo llegada física. */
+  regresoReal?: string | null;
+  /** El cierre fue manual (sin llegada física). */
+  cierreManual?: boolean;
   tarifaComercial: number | null;
   /** RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§3) — tarifa del catálogo usada en el viaje (snapshot). */
   tarifaId: number | null;
@@ -906,7 +912,20 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                               <li>Km llegada: {p.kmLlegada ?? "—"}</li>
                               <li>Km recorridos: {p.kmRecorridos ?? "—"}</li>
                               <li>Días de ruta: {p.diasRuta ?? "—"}</li>
-                              <li>Regreso estimado: {fh(p.regresoEstimado)}</li>
+                              {(() => {
+                                const regreso = resumenRegreso(
+                                  { estado: p.estado, regresoEstimado: p.regresoEstimado, regresoReal: p.regresoReal ?? p.horaLlegada ?? null, cerradoEn: p.cerradoEn, cierreManual: p.cierreManual },
+                                  fh,
+                                );
+                                return (
+                                  <>
+                                    <li>Regreso estimado: {regreso.estimado}</li>
+                                    {regreso.real ? <li>Regreso real: {regreso.real}</li> : null}
+                                    {regreso.cierreAdministrativo ? <li>Cierre administrativo: {regreso.cierreAdministrativo}</li> : null}
+                                    {regreso.notaCierreManual ? <li className="text-rose-500">{regreso.notaCierreManual}</li> : null}
+                                  </>
+                                );
+                              })()}
                             </ul>
                             <p className="mt-3 text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">D. Paradas</p>
                             {p.paradas.length ? (

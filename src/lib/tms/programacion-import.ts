@@ -12,9 +12,11 @@ import type { FilaProgramacionExcel } from "./programacion-import-excel";
 import {
   finViajeDesdeInput,
   inicioViaje,
+  intervaloOcupacionReal,
   mensajeConflicto,
   primerConflictoTraslape,
-  type IntervaloViaje,
+  seSolapaConOcupacionReal,
+  type IntervaloConsulta,
   type RecursoAValidar,
 } from "./disponibilidad-traslapes";
 
@@ -28,10 +30,17 @@ import {
  * auxiliar/unidad contra catálogo, NO se valida tarifa vigente, NO se
  * compara contra viajes YA EXISTENTES en BD (eso es
  * `primerConflictoTraslape` de disponibilidad-traslapes.ts, y es alcance
- * de una fase posterior — PR 4/5). Este módulo reutiliza de ese mismo
- * archivo únicamente sus dos funciones puras de combinación de fecha/hora
- * (`inicioViaje`/`finViajeDesdeInput`) y el tipo `IntervaloViaje` — nunca
- * `primerConflictoTraslape` en sí (esa sí toca BD).
+ * de una fase posterior — PR 4/5). La comparación ENTRE filas reutiliza de
+ * ese mismo archivo sus funciones puras (`inicioViaje`/`finViajeDesdeInput`,
+ * `intervaloOcupacionReal`/`seSolapaConOcupacionReal`) — nunca
+ * `primerConflictoTraslape` en sí (esa sí toca BD, y se usa más abajo en la
+ * previsualización).
+ *
+ * REGRESO ESTIMADO OPCIONAL: igual que en POST/PATCH /tms/planes, una fila
+ * sin regreso estimado NO se excluye de la validación: es un viaje ABIERTO
+ * (intervalo [salida, sin límite)) y bloquea a su piloto/auxiliares/unidad
+ * hasta que exista una terminación real. La regla es la misma en el lote y
+ * contra la BD porque ambas usan el mismo criterio de ocupación.
  */
 
 /** Comparación case-insensitive de códigos/placas — mismo criterio que normalizarCodigoEmpleado() en rutas-import.ts. */
@@ -155,24 +164,50 @@ function recursosDeFila(fila: FilaProgramacionExcel): RecursoFila[] {
  * Intervalo real de la fila (salida -> regreso estimado), reutilizando
  * las MISMAS funciones puras que ya usa el resto de Programación
  * (inicioViaje/finViajeDesdeInput de disponibilidad-traslapes.ts) —
- * mismo formato "YYYY-MM-DD HH:mm:ss", comparable como string. `null` si
- * no se puede construir un intervalo completo: sin fecha de salida
- * válida, o sin regreso estimado completo (fecha+hora). Una fila sin
- * regreso NO se compara por traslape (no hay con qué) — su propia
- * ausencia de regreso, si corresponde, ya se reporta aparte (PR 2:
- * "incompleto" si viene a medias; completamente vacío se permite en V1).
+ * mismo formato "YYYY-MM-DD HH:mm:ss", comparable como string.
+ *
+ * - Con regreso estimado completo (fecha+hora): `[salida, regreso]`.
+ * - SIN regreso estimado (ninguna de las dos mitades): `fin: null` — viaje
+ *   abierto, igual que un plan creado por POST/PATCH sin regreso.
+ * - `null` (no comparable) solo si no hay fecha de salida válida, o si el
+ *   regreso viene a medias (fecha sin hora u hora sin fecha): esa fila ya
+ *   sale con error "Regreso estimado incompleto" y no se compara.
  */
-function intervaloDeFila(fila: FilaProgramacionExcel): IntervaloViaje | null {
+function intervaloDeFila(fila: FilaProgramacionExcel): IntervaloConsulta | null {
   if (!fila.fechaSalidaExcel) return null;
-  if (!fila.fechaRegresoExcel || !fila.horaRegresoExcel) return null;
+  const inicio = inicioViaje(fila.fechaSalidaExcel, fila.horaSalidaExcel);
+  const tieneFecha = Boolean(fila.fechaRegresoExcel);
+  const tieneHora = Boolean(fila.horaRegresoExcel);
+  if (tieneFecha !== tieneHora) return null;
+  if (!tieneFecha) return { inicio, fin: null };
   const fin = finViajeDesdeInput(`${fila.fechaRegresoExcel}T${fila.horaRegresoExcel}`);
   if (!fin) return null;
-  return { inicio: inicioViaje(fila.fechaSalidaExcel, fila.horaSalidaExcel), fin };
+  return { inicio, fin };
 }
 
-/** Mismo criterio documentado en disponibilidad-traslapes.ts: se solapan si inicioA < finB Y inicioB < finA (tocar el límite NO es traslape). */
-function seSolapan(a: IntervaloViaje, b: IntervaloViaje): boolean {
-  return a.inicio < b.fin && b.inicio < a.fin;
+/**
+ * Dos filas del lote se solapan según el MISMO criterio de ocupación que la
+ * validación contra la BD y que POST/PATCH: cada fila es un viaje Programado
+ * (con su regreso estimado, o abierto si no lo tiene) y "tocar el límite NO
+ * es traslape". Simétrico: `fin: null` es "sin límite" en cualquiera de las
+ * dos.
+ */
+function seSolapan(a: IntervaloConsulta, b: IntervaloConsulta): boolean {
+  const ocupacionA = intervaloOcupacionReal({
+    estado: "Programado",
+    inicio: a.inicio,
+    regresoEstimado: a.fin,
+    llegadaTecnica: false,
+  });
+  return seSolapaConOcupacionReal(ocupacionA, b);
+}
+
+/** Texto del intervalo de una fila para los mensajes de error. */
+function describirIntervaloFila(i: IntervaloConsulta): string {
+  const inicio = i.inicio.slice(0, 16);
+  return i.fin == null
+    ? `sale ${inicio} y no tiene regreso estimado: se considera un viaje abierto`
+    : `${inicio} a ${i.fin.slice(0, 16)}`;
 }
 
 export type ConflictoTraslapeEnLote = {
@@ -185,6 +220,8 @@ export type ConflictoTraslapeEnLote = {
   rolEnFila: RolRecurso;
   /** Rol que jugaba el recurso compartido en `filaExcelConflicto`. */
   rolEnFilaConflicto: RolRecurso;
+  /** Intervalo de la OTRA fila (la que genera el conflicto): `fin: null` = sin regreso estimado, viaje abierto. */
+  intervaloConflicto: IntervaloConsulta;
 };
 
 /**
@@ -218,6 +255,7 @@ export function detectarTraslapesEnLote(filas: FilaProgramacionExcel[]): Conflic
             valor: ra.valor,
             rolEnFila: ra.rol,
             rolEnFilaConflicto: rb.rol,
+            intervaloConflicto: b.intervalo,
           });
           resultado.push({
             filaExcel: b.fila.filaExcel,
@@ -226,6 +264,7 @@ export function detectarTraslapesEnLote(filas: FilaProgramacionExcel[]): Conflic
             valor: rb.valor,
             rolEnFila: rb.rol,
             rolEnFilaConflicto: ra.rol,
+            intervaloConflicto: a.intervalo,
           });
         }
       }
@@ -385,7 +424,9 @@ export async function previsualizarImportacionProgramacion(
       [empresaId],
     ),
     query<RowDataPacket[]>(
-      `SELECT id, codigo, tipo FROM tms_personal WHERE empresa_id = ? AND codigo IS NOT NULL`,
+      // id_empleado: la disponibilidad se evalúa por la PERSONA (empleado), no por el rol —
+      // ver buscarConflictoPersonal en disponibilidad-traslapes.ts.
+      `SELECT id, codigo, tipo, id_empleado FROM tms_personal WHERE empresa_id = ? AND (codigo IS NOT NULL OR id_empleado IS NOT NULL) ORDER BY id`,
       [empresaId],
     ),
     query<RowDataPacket[]>(`SELECT id, placa FROM tms_unidades WHERE empresa_id = ?`, [empresaId]),
@@ -421,8 +462,16 @@ export async function previsualizarImportacionProgramacion(
   }
 
   const personalExistentePorClave = new Map<string, number>();
+  // Cualquier tms_personal ya vinculado a cada empleado (sin importar tipo): sirve solo para
+  // identificar a la persona en la validación de traslapes; no se usa para crear ni cambiar roles.
+  const personalPorEmpleado = new Map<number, number>();
   for (const p of personalRows) {
-    personalExistentePorClave.set(`${String(p.tipo)}|${normalizarClave(String(p.codigo))}`, Number(p.id));
+    if (p.codigo != null) {
+      personalExistentePorClave.set(`${String(p.tipo)}|${normalizarClave(String(p.codigo))}`, Number(p.id));
+    }
+    if (p.id_empleado != null && !personalPorEmpleado.has(Number(p.id_empleado))) {
+      personalPorEmpleado.set(Number(p.id_empleado), Number(p.id));
+    }
   }
 
   const unidadesPorPlaca = new Map<string, number>();
@@ -444,6 +493,16 @@ export async function previsualizarImportacionProgramacion(
     return personalExistentePorClave.get(`${tipo}|${normalizarClave(codigo)}`) ?? null;
   }
 
+  /**
+   * personal_id con el que se busca el conflicto de una PERSONA: el del rol pedido si ya existe y,
+   * si esa persona solo existe en TMS con el otro rol (Auxiliar vs Piloto), el personal ya vinculado
+   * a ese mismo empleado. La búsqueda de conflictos expande luego a TODAS las filas de ese empleado.
+   * `null` solo si la persona nunca ha estado en TMS (no puede tener viajes).
+   */
+  function personalIdParaConflicto(tipo: "Piloto" | "Auxiliar", codigo: string, empleadoId: number): number | null {
+    return personalIdExistente(tipo, codigo) ?? personalPorEmpleado.get(empleadoId) ?? null;
+  }
+
   const resultado: PreviewFilaProgramacion[] = [];
 
   for (const fila of filas) {
@@ -458,7 +517,7 @@ export async function previsualizarImportacionProgramacion(
     }
     for (const c of traslapesLotePorFila.get(fila.filaExcel) ?? []) {
       errores.push(
-        `Traslape con la fila ${c.filaExcelConflicto} del mismo archivo: comparten ${c.categoria === "unidad" ? "la unidad" : "personal"} "${c.valor}".`,
+        `Traslape con la fila ${c.filaExcelConflicto} del mismo archivo: comparten ${c.categoria === "unidad" ? "la unidad" : "personal"} "${c.valor}" (fila ${c.filaExcelConflicto}: ${describirIntervaloFila(c.intervaloConflicto)}).`,
       );
     }
 
@@ -570,30 +629,35 @@ export async function previsualizarImportacionProgramacion(
     // el alta manual, sin `conn` ni candado: esto es solo lectura, el
     // candado/transacción son del PR 5). Solo se arman recursos con id
     // REAL ya existente (personalId/unidadId no nulos) — ver nota sobre
-    // personalDesdeEmpleado más arriba. Sin regreso estimado completo no
-    // hay intervalo que comparar, se omite el chequeo (igual que el
-    // resto del sistema: sin regreso no se puede validar disponibilidad).
+    // personalDesdeEmpleado más arriba.
+    //
+    // El regreso estimado es OPCIONAL: sin él el intervalo de la fila es
+    // ABIERTO (`fin: null`) y se valida igual — exactamente la misma regla
+    // que POST/PATCH /tms/planes. Un regreso a medias nunca llega aquí (la
+    // fila ya salió con error sintáctico más arriba).
     let regresoEstimadoCombinado: string | null = null;
     if (fila.fechaRegresoExcel && fila.horaRegresoExcel) {
       regresoEstimadoCombinado = `${fila.fechaRegresoExcel}T${fila.horaRegresoExcel}`;
-      const fin = finViajeDesdeInput(regresoEstimadoCombinado);
-      if (fin) {
-        // fechaSalidaExcel está garantizado no-nulo: es obligatorio (PR 2)
-        // y cualquier fila sin él ya salió por `fila.erroresSintacticos`
-        // en el chequeo de arriba.
-        const intervalo: IntervaloViaje = { inicio: inicioViaje(fila.fechaSalidaExcel!, fila.horaSalidaExcel), fin };
-        const recursos: RecursoAValidar[] = [
-          ...(pilotoPersonalId != null ? [{ tipo: "piloto" as const, id: pilotoPersonalId }] : []),
-          ...auxiliaresDatos
-            .filter((a): a is AuxiliarResueltoFila & { personalId: number } => a.personalId != null)
-            .map((a) => ({ tipo: "auxiliar" as const, id: a.personalId })),
-          ...(unidadId != null ? [{ tipo: "unidad" as const, id: unidadId }] : []),
-        ];
-        if (recursos.length) {
-          const conflicto = await primerConflictoTraslape(empresaId, recursos, intervalo, null);
-          if (conflicto) errores.push(mensajeConflicto(conflicto));
-        }
-      }
+    }
+    // fechaSalidaExcel está garantizado no-nulo: es obligatorio (PR 2) y
+    // cualquier fila sin él ya salió por `fila.erroresSintacticos` en el
+    // chequeo de arriba.
+    const intervalo: IntervaloConsulta = {
+      inicio: inicioViaje(fila.fechaSalidaExcel!, fila.horaSalidaExcel),
+      fin: finViajeDesdeInput(regresoEstimadoCombinado),
+    };
+    const pilotoParaConflicto = personalIdParaConflicto("Piloto", fila.pilotoCodigoExcel, pilotoOk.id);
+    const auxiliaresParaConflicto = auxiliaresResueltos
+      .map((aux) => personalIdParaConflicto("Auxiliar", aux.codigo, aux.id))
+      .filter((id): id is number => id != null);
+    const recursos: RecursoAValidar[] = [
+      ...(pilotoParaConflicto != null ? [{ tipo: "piloto" as const, id: pilotoParaConflicto }] : []),
+      ...auxiliaresParaConflicto.map((id) => ({ tipo: "auxiliar" as const, id })),
+      ...(unidadId != null ? [{ tipo: "unidad" as const, id: unidadId }] : []),
+    ];
+    if (recursos.length) {
+      const conflicto = await primerConflictoTraslape(empresaId, recursos, intervalo, null);
+      if (conflicto) errores.push(mensajeConflicto(conflicto));
     }
 
     if (errores.length) {

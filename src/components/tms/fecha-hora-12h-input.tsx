@@ -149,9 +149,9 @@ type Props = {
  *
  * Vaciar la fecha O la hora de un valor YA completo sigue colapsando el
  * valor combinado a `""` (mismo contrato de siempre) — necesario porque
- * `regresoEstimado` es opcional salvo cuando el plan tiene piloto/
- * auxiliares/unidad asignados (esa validación vive en plan-form.tsx, sin
- * cambios).
+ * `regresoEstimado` es siempre opcional (ya no hay caso en que un plan con
+ * piloto/auxiliares/unidad lo exija): vaciarlo deja el viaje sin regreso
+ * estimado.
  */
 export function FechaHora12Input({ label, value, onChange, inputClassName, disabled, required }: Props) {
   const [estado, setEstado] = useState(() => inicializarEstadoFechaHora12(value));
