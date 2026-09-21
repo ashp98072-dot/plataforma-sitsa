@@ -44,7 +44,9 @@ it("no modifica RRHH, credenciales ni esquema SQL", () => {
   // ticket y sin ejecutar. Se excluyen por nombre solo esos 2 archivos, no
   // cualquier sql/ futuro — mismo criterio ya aplicado en
   // requerimiento-ui.test.ts.
-  expect(files.some(p => /(src\/lib\/rrhh|portales-proveedores)/.test(p) || (p.startsWith("sql/") && !p.includes("compras-documentos-linea-tipo")))).toBe(false);
+  // COTIZACIONES-COSTEO (Fase 3): migración, preflight y schema.sql por nombre EXACTO (sin comodines).
+  const sqlCotizacionesCosteo = ["sql/migrate-2026-09-cotizaciones-costeo.sql", "sql/preflight-2026-09-cotizaciones-costeo.sql", "sql/schema.sql"];
+  expect(files.some(p => /(src\/lib\/rrhh|portales-proveedores)/.test(p) || (p.startsWith("sql/") && !p.includes("compras-documentos-linea-tipo") && !sqlCotizacionesCosteo.includes(p)))).toBe(false);
 });
 
 it("preflight compara DEFAULT 0 de DECIMAL(12,2) con 0.00 de MariaDB por valor numérico", () => {

@@ -5,6 +5,8 @@ import { useParams } from "next/navigation";
 import { ClienteSearch } from "@/components/tms/cliente-search";
 import { RutaSelect, type RutaOpt } from "@/components/tms/ruta-select";
 import { aplicarDefaultsRutaCotizacion } from "@/lib/tms/cotizacion-defaults";
+import { CosteoRegistradoDetalle, CotizacionCosteoPanel, useCosteoConfig } from "@/components/tms/cotizacion-costeo-panel";
+import { aplicarPrecioSugerido, type PayloadCosteoCliente } from "@/lib/tms/cotizacion-costeo-ui";
 
 type ClienteOpt = { id: number; nombre: string; codigo?: string | null; nit?: string | null; telefono?: string | null; estado?: string | null };
 
@@ -96,6 +98,10 @@ export default function CotizacionesPage() {
   const [editandoId, setEditandoId] = useState<number | null>(null);
   const [form, setForm] = useState(FORM_VACIO);
   const [expandidoId, setExpandidoId] = useState<number | null>(null);
+  // COTIZACIONES-COSTEO: el backend decide (403 => la sección no aparece). El costeo es OPCIONAL.
+  // La configuración visible (vigencia, margen) es la de la fecha de emisión del formulario: la misma que usa el cálculo real.
+  const costeoConfig = useCosteoConfig(slug, form.fechaEmision);
+  const [costeoPayload, setCosteoPayload] = useState<PayloadCosteoCliente | null>(null);
 
   const cargarClientes = useCallback(async () => {
     const res = await fetch(`/api/empresas/${slug}/tms/catalogos`);
@@ -133,12 +139,14 @@ export default function CotizacionesPage() {
 
   function nueva() {
     setEditandoId(null);
+    setCosteoPayload(null);
     setForm(FORM_VACIO);
     setMostrarForm(true);
   }
 
   function editar(c: Cotizacion) {
     setEditandoId(c.id);
+    setCosteoPayload(null);
     setForm({
       clienteId: c.clienteId,
       clienteNombre: c.clienteNombre,
@@ -198,12 +206,15 @@ export default function CotizacionesPage() {
       tarifaKmAdicional: form.tarifaKmAdicional === "" ? null : Number(form.tarifaKmAdicional),
       condicionesAdicionales: form.condicionesAdicionales.trim() || null,
       observaciones: form.observaciones.trim() || null,
+      // Solo viaja si hay un cálculo vigente que el usuario quiere registrar; el servidor lo RECALCULA.
+      ...(costeoPayload ? { costeo: costeoPayload } : {}),
     };
     const url = editandoId ? `/api/empresas/${slug}/tms/cotizaciones/${editandoId}` : `/api/empresas/${slug}/tms/cotizaciones`;
     const res = await fetch(url, { method: editandoId ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) { setError(data.error ?? "No se pudo guardar."); return; }
     setMsg(data.mensaje ?? "Guardado.");
+    setCosteoPayload(null);
     setMostrarForm(false);
     await cargar();
   }
@@ -319,6 +330,18 @@ export default function CotizacionesPage() {
           <label className="block text-xs text-[var(--muted)]">Observaciones
             <textarea className={`${inputCls} mt-0.5 w-full`} value={form.observaciones} onChange={(e) => setForm((f) => ({ ...f, observaciones: e.target.value }))} />
           </label>
+          <CotizacionCosteoPanel
+            key={editandoId ?? "nueva"}
+            slug={slug}
+            config={costeoConfig}
+            fechaEmision={form.fechaEmision}
+            tarifaCotizada={form.tarifaCotizada}
+            incluyeIva={form.incluyeIva}
+            cotizacionId={editandoId}
+            editable
+            onPayloadGuardar={setCosteoPayload}
+            onUsarPrecioSugerido={(precio) => setForm((f) => aplicarPrecioSugerido(f, precio))}
+          />
           <div className="flex gap-2">
             <button type="button" onClick={() => void guardar()} className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm text-white">Guardar</button>
             <button type="button" onClick={() => setMostrarForm(false)} className="rounded border border-[var(--border)] px-3 py-1.5 text-sm">Cancelar</button>
@@ -366,6 +389,7 @@ export default function CotizacionesPage() {
                 <div><span className="text-[var(--muted)]">Tarifa km adicional:</span> {money(c.tarifaKmAdicional)}</div>
                 {c.condicionesAdicionales ? <div className="md:col-span-3"><span className="text-[var(--muted)]">Condiciones:</span> {c.condicionesAdicionales}</div> : null}
                 {c.observaciones ? <div className="md:col-span-3"><span className="text-[var(--muted)]">Observaciones:</span> {c.observaciones}</div> : null}
+                {costeoConfig.estado === "listo" ? <CosteoRegistradoDetalle slug={slug} cotizacionId={c.id} /> : null}
               </div>
             ) : null}
           </div>

@@ -292,3 +292,44 @@ describe("COMPRAS-FASE-4-AUTORIZACION — permiso compras_autorizar", () => {
     }
   });
 });
+
+describe("COTIZACIONES-COSTEO — permiso cotizaciones_costeo (confidencial)", () => {
+  it("es un módulo asignable propio, con etiqueta clara y bajo el módulo de empresa 'tms'", () => {
+    expect(esPlataformaPermisible("cotizaciones_costeo")).toBe(true);
+    expect(labelPermiso("cotizaciones_costeo")).toBe("Cotizaciones: costeo interno (confidencial)");
+    expect(moduloEmpresaDelPermiso("cotizaciones_costeo")).toBe("tms");
+  });
+
+  it("aparece en el grupo 'Operaciones' de la matriz de Usuarios", () => {
+    expect(GRUPOS_PERMISOS.find((g) => g.id === "operaciones")?.modulos).toContain("cotizaciones_costeo");
+  });
+
+  it("solo Admin lo trae por defecto (ver/crear/editar); ningún otro rol, sin ampliar autoridad en silencio", () => {
+    for (const accion of ["ver", "crear", "editar"] as const) expect(tienePermiso(permisosDefaultPorRol("Admin"), "cotizaciones_costeo", accion)).toBe(true);
+    for (const rol of ROLES.filter((r) => r !== "Admin")) {
+      for (const accion of ["ver", "crear", "editar"] as const) expect(tienePermiso(permisosDefaultPorRol(rol), "cotizaciones_costeo", accion)).toBe(false);
+    }
+  });
+
+  it("tms:* y compras_autorizar NO implican costeo", () => {
+    const permisos = mergePermisosConCatalogo("Visualizador", [permisoFull("tms"), permisoFull("compras_autorizar")]);
+    for (const accion of ["ver", "crear", "editar"] as const) expect(tienePermiso(permisos, "cotizaciones_costeo", accion)).toBe(false);
+  });
+
+  it("tener cotizaciones_costeo full NO otorga tms", () => {
+    const permisos = mergePermisosConCatalogo("Visualizador", [permisoFull("cotizaciones_costeo")]);
+    expect(tienePermiso(permisos, "cotizaciones_costeo", "ver")).toBe(true);
+    expect(tienePermiso(permisos, "tms", "ver")).toBe(false);
+  });
+
+  it("un usuario existente sin cotizaciones_costeo guardado lo recibe vacío al recargar (secure by default)", () => {
+    const permisos = mergePermisosConCatalogo("Operaciones", [{ modulo: "tms", puedeVer: true, puedeCrear: true, puedeEditar: true, puedeEliminar: true }]);
+    expect(tienePermiso(permisos, "cotizaciones_costeo", "ver")).toBe(false);
+  });
+
+  it("es asignable en el catálogo de TODOS los roles (igual que compras_autorizar)", () => {
+    for (const rol of ["Marcaje", "Piloto", "Operaciones", "Visualizador"] as const) {
+      expect(mergePermisosConCatalogo(rol, []).some((p) => p.modulo === "cotizaciones_costeo")).toBe(true);
+    }
+  });
+});

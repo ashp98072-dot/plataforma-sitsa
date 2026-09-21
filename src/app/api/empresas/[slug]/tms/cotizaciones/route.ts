@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireTenantCotizaciones } from "@/lib/tenant";
+import { requireTenantCotizaciones, requireTenantCotizacionesCosteo } from "@/lib/tenant";
 import { ESTADOS_COTIZACION, crearCotizacion, listarCotizaciones } from "@/lib/tms/cotizaciones";
+import { ErrorCosteoYaRegistrado } from "@/lib/tms/cotizacion-costeo-db";
+import { costeoPayloadSchema, mensajeErrorCosteo, prepararCosteo } from "@/lib/tms/cotizacion-costeo-servicio";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -42,6 +44,8 @@ const schema = z.object({
   tarifaKmAdicional: z.number().nonnegative().nullable().optional(),
   condicionesAdicionales: z.string().max(2000).nullable().optional(),
   observaciones: z.string().max(2000).nullable().optional(),
+  // COTIZACIONES-COSTEO: opcional. El costeo se RECALCULA en servidor (el cliente no manda resultados ni parámetros).
+  costeo: costeoPayloadSchema.optional(),
 });
 
 export async function POST(req: Request, ctx: Ctx) {
@@ -53,10 +57,21 @@ export async function POST(req: Request, ctx: Ctx) {
   if (!parsed.success) {
     return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
   }
+  const { costeo, ...datos } = parsed.data;
   try {
-    const cotizacion = await crearCotizacion(guard.empresa.id, parsed.data, guard.session.username);
-    return NextResponse.json({ mensaje: "Cotización creada.", cotizacion });
+    let preparado = null;
+    if (costeo) {
+      // Guardar costeo exige su propio permiso: sin él se rechaza TODO el alta (no se ignora en silencio).
+      const guardCosteo = await requireTenantCotizacionesCosteo(slug, "crear");
+      if (guardCosteo.error) return guardCosteo.error;
+      preparado = await prepararCosteo(guard.empresa.id, costeo, { fechaEmision: datos.fechaEmision, tarifaCotizada: datos.tarifaCotizada, incluyeIva: datos.incluyeIva });
+    }
+    const cotizacion = await crearCotizacion(guard.empresa.id, datos, guard.session.username, preparado);
+    return NextResponse.json({ mensaje: preparado ? "Cotización y costeo creados." : "Cotización creada.", cotizacion });
   } catch (error) {
+    if (error instanceof ErrorCosteoYaRegistrado) return NextResponse.json({ error: error.message }, { status: 409 });
+    const mensajeCosteo = mensajeErrorCosteo(error);
+    if (mensajeCosteo) return NextResponse.json({ error: mensajeCosteo }, { status: 400 });
     return NextResponse.json({ error: error instanceof Error ? error.message : "No se pudo crear la cotización." }, { status: 400 });
   }
 }

@@ -829,6 +829,41 @@ export async function requireTenantCotizaciones(
 }
 
 /**
+ * COTIZACIONES-COSTEO (Fase 3) — el costeo interno es CONFIDENCIAL (costo
+ * operativo, combustible, salarios, margen, utilidad, precio sugerido).
+ * Exige el permiso propio "cotizaciones_costeo:<accion>" SIN fallback a
+ * tms:* ni cotizaciones:* — tener tms:ver o cotizaciones:ver NO revela
+ * nada del costeo. Mismo patrón que requireTenantGastosOperativosAutorizar:
+ * exige TMS en la empresa y Admin pasa siempre.
+ */
+export async function requireTenantCotizacionesCosteo(
+  slug: string,
+  accion: AccionPermiso = "ver",
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length ? empresa.modulos : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("tms")) {
+    return { error: NextResponse.json({ error: "Esta empresa no tiene el módulo TMS." }, { status: 403 }) };
+  }
+
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  if (!tienePermiso(perms, "cotizaciones_costeo", accion)) {
+    return {
+      error: NextResponse.json(
+        { error: "Sin permiso para el costeo interno de cotizaciones." },
+        { status: 403 },
+      ),
+    };
+  }
+  return { session, empresa };
+}
+
+/**
  * Lectura/escritura de dependencias compartidas entre Programación y
  * TMS: acepta CUALQUIERA de los dos permisos para la MISMA acción
  * (programacion:<accion> O tms:<accion>), mismo patrón OR que

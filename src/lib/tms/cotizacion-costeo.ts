@@ -12,6 +12,9 @@
  * de presentación y no vive aquí).
  */
 
+/** Versión de las fórmulas; se persiste en cada snapshot (tms_cotizacion_costeos.motor_version). Cambiar una fórmula exige subirla. */
+export const COTIZACION_COSTEO_MOTOR_VERSION = "COSTEO_V1";
+
 // ---------------------------------------------------------------------------
 // A. PARÁMETROS / INPUTS
 // ---------------------------------------------------------------------------

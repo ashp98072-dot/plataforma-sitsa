@@ -108,7 +108,11 @@ it("ajuste transversal sin SQL, RRHH, programación ni credenciales", () => {
   // ticket y sin ejecutar. Este guard seguía protegiendo el diff de la
   // Fase 2 original contra SQL no pedido; se excluyen por nombre solo los
   // 2 archivos de esa Fase 3, no cualquier sql/ futuro.
-  expect(files.filter(p => p.startsWith("sql/") && !p.includes("compras-documentos-linea-tipo"))).toEqual([]);
+  // COTIZACIONES-COSTEO (Fase 3) versionó por nombre EXACTO su migración,
+  // su preflight y la actualización de schema.sql (producción KT ya estaba
+  // aplicada a mano): solo esas 3 rutas, sin comodines.
+  const SQL_COTIZACIONES_COSTEO = ["sql/migrate-2026-09-cotizaciones-costeo.sql", "sql/preflight-2026-09-cotizaciones-costeo.sql", "sql/schema.sql"];
+  expect(files.filter(p => p.startsWith("sql/") && !p.includes("compras-documentos-linea-tipo") && !SQL_COTIZACIONES_COSTEO.includes(p))).toEqual([]);
   const modelo = leer("src/lib/compras/requerimientos.ts");
   expect(modelo).not.toMatch(/MAX\(id\)|DELETE FROM compras_requerimientos\b|writeFile|unlink|UPDATE compras_linea_documentos/);
   expect(leer("src/app/api/empresas/[slug]/compras/requerimientos/[id]/route.ts")).not.toContain("function DELETE");
