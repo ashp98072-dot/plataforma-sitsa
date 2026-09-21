@@ -99,7 +99,8 @@ export default function CotizacionesPage() {
   const [form, setForm] = useState(FORM_VACIO);
   const [expandidoId, setExpandidoId] = useState<number | null>(null);
   // COTIZACIONES-COSTEO: el backend decide (403 => la sección no aparece). El costeo es OPCIONAL.
-  const costeoConfig = useCosteoConfig(slug);
+  // La configuración visible (vigencia, margen) es la de la fecha de emisión del formulario: la misma que usa el cálculo real.
+  const costeoConfig = useCosteoConfig(slug, form.fechaEmision);
   const [costeoPayload, setCosteoPayload] = useState<PayloadCosteoCliente | null>(null);
 
   const cargarClientes = useCallback(async () => {

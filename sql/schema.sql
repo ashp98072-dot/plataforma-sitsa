@@ -1527,6 +1527,7 @@ CREATE TABLE IF NOT EXISTS tms_cotizacion_costeo_perfiles (
   actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY uq_costeo_perfil_codigo (empresa_id, codigo),
   UNIQUE KEY uq_costeo_perfil_empresa_id (empresa_id, id),
+  INDEX idx_costeo_perfil_activo (empresa_id, activo, nombre),
   CONSTRAINT fk_costeo_perfil_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -1546,6 +1547,8 @@ CREATE TABLE IF NOT EXISTS tms_cotizacion_costeo_parametros (
   creado_por VARCHAR(100) NULL,
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uq_costeo_param_vigencia (empresa_id, vigente_desde),
+  UNIQUE KEY uq_costeo_param_empresa_id (empresa_id, id),
+  INDEX idx_costeo_param_fecha (empresa_id, vigente_desde),
   CONSTRAINT fk_costeo_param_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -1566,15 +1569,16 @@ CREATE TABLE IF NOT EXISTS tms_cotizacion_costeos (
   costo_operativo DECIMAL(16,6) NOT NULL,
   iva DECIMAL(16,6) NOT NULL,
   costo_con_iva DECIMAL(16,6) NOT NULL,
-  margen_objetivo DECIMAL(6,4) NOT NULL,
+  margen_objetivo DECIMAL(10,6) NOT NULL,
   precio_sugerido DECIMAL(16,6) NOT NULL,
   precio_venta DECIMAL(14,2) NULL,
   utilidad_estimada DECIMAL(16,6) NULL,
-  margen_real DECIMAL(10,6) NULL,              -- utilidad / costo con IVA (margen SOBRE COSTO)
+  margen_real DECIMAL(12,6) NULL,              -- utilidad / costo con IVA (margen SOBRE COSTO)
   creado_por VARCHAR(100) NULL,
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uq_cotizacion_costeo_cotizacion (empresa_id, cotizacion_id),
   UNIQUE KEY uq_cotizacion_costeo_empresa_id (empresa_id, id),
+  INDEX idx_cotizacion_costeo_fecha (empresa_id, creado_en),
   CONSTRAINT fk_cotizacion_costeo_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
   CONSTRAINT fk_cotizacion_costeo_cotizacion FOREIGN KEY (empresa_id, cotizacion_id) REFERENCES tms_cotizaciones (empresa_id, id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -1587,8 +1591,8 @@ CREATE TABLE IF NOT EXISTS tms_cotizacion_costeo_componentes (
   clave VARCHAR(60) NOT NULL,                  -- depreciacion, gps, combustible, otro:0, ...
   concepto VARCHAR(200) NOT NULL,
   monto DECIMAL(16,6) NOT NULL,
-  UNIQUE KEY uq_costeo_componente_orden (costeo_id, orden),
-  INDEX idx_costeo_componente_empresa (empresa_id, costeo_id),
+  UNIQUE KEY uq_costeo_componente_orden (empresa_id, costeo_id, orden),
+  INDEX idx_costeo_componente_costeo (empresa_id, costeo_id),
   CONSTRAINT fk_costeo_componente_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
   CONSTRAINT fk_costeo_componente_costeo FOREIGN KEY (empresa_id, costeo_id) REFERENCES tms_cotizacion_costeos (empresa_id, id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

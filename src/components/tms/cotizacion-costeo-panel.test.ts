@@ -18,7 +18,7 @@ vi.mock("react", async importar => {
     useEffect: (efecto: () => void | (() => void)) => { if (hooks.activo) hooks.efectos.push(efecto); else real.useEffect(efecto); },
   };
 });
-import { CotizacionCosteoPanel, ResumenCosteo, useCosteoConfig, type ConfigCosteo, type CotizacionCosteoPanelProps } from "./cotizacion-costeo-panel";
+import { CotizacionCosteoPanel, ResumenCosteo, fechaEmisionValida, useCosteoConfig, type ConfigCosteo, type CotizacionCosteoPanelProps } from "./cotizacion-costeo-panel";
 import { calcularCosteoServicio } from "@/lib/tms/cotizacion-costeo";
 import { COSTEO_FORM_VACIO, monedaCosteo, resumenDesdeResultado } from "@/lib/tms/cotizacion-costeo-ui";
 
@@ -65,18 +65,18 @@ describe("La sección se oculta cuando el backend responde 403 (el resto de Coti
     for (const status of [403, 401]) {
       hooks.estados = []; fetchMock.mockReset();
       fetchMock.mockImplementation(() => respuesta({ error: "Sin permiso para el costeo interno de cotizaciones." }, false, status));
-      ejecutar(() => useCosteoConfig("kt")); hooks.efectos[0]();
+      ejecutar(() => useCosteoConfig("kt", "2026-09-21")); hooks.efectos[0]();
       await vi.waitFor(() => expect(hooks.estados[0]).toEqual({ estado: "sin-permiso" }));
-      expect(fetchMock.mock.calls[0][0]).toBe("/api/empresas/kt/tms/cotizaciones/costeo/config");
+      expect(fetchMock.mock.calls[0][0]).toBe("/api/empresas/kt/tms/cotizaciones/costeo/config?fecha=2026-09-21");
     }
   });
   it("useCosteoConfig: 200 => listo con perfiles y margen; 409 (sin parámetros) => error visible dentro de la sección; sin permiso jamás", async () => {
     fetchMock.mockImplementation(() => respuesta({ perfiles: LISTO.perfiles, parametros: { vigenteDesde: "2026-09-21", margenObjetivo: 0.2 } }));
-    ejecutar(() => useCosteoConfig("kt")); hooks.efectos[0]();
+    ejecutar(() => useCosteoConfig("kt", "2026-09-21")); hooks.efectos[0]();
     await vi.waitFor(() => expect(hooks.estados[0]).toMatchObject({ estado: "listo", margenObjetivo: 0.2, vigenteDesde: "2026-09-21" }));
     hooks.estados = []; fetchMock.mockReset();
     fetchMock.mockImplementation(() => respuesta({ error: "No hay parámetros de costeo vigentes para la fecha indicada." }, false, 409));
-    ejecutar(() => useCosteoConfig("kt")); hooks.efectos[0]();
+    ejecutar(() => useCosteoConfig("kt", "2026-09-21")); hooks.efectos[0]();
     await vi.waitFor(() => expect(hooks.estados[0]).toEqual({ estado: "error", mensaje: "No hay parámetros de costeo vigentes para la fecha indicada." }));
   });
   it("el panel no renderiza NADA con sin-permiso ni mientras carga", () => {
@@ -90,8 +90,77 @@ describe("La sección se oculta cuando el backend responde 403 (el resto de Coti
   });
   it("la página oculta el costeo por config y nunca lo trata como error del módulo", () => {
     const pagina = readFileSync("src/app/e/[slug]/cotizaciones/page.tsx", "utf8");
-    expect(pagina).toContain("useCosteoConfig(slug)"); expect(pagina).toContain('costeoConfig.estado === "listo"');
+    expect(pagina).toContain("useCosteoConfig(slug, form.fechaEmision)"); expect(pagina).toContain('costeoConfig.estado === "listo"');
     expect(pagina).not.toMatch(/costeoConfig[^\n]*setError|setError[^\n]*costeoConfig/);
+  });
+});
+
+describe("La configuración visible usa la MISMA fecha que el cálculo (fechaEmision)", () => {
+  const vigencia = (desde: string, margen: number) => respuesta({ perfiles: LISTO.perfiles, parametros: { vigenteDesde: desde, margenObjetivo: margen } });
+  it("consulta /costeo/config?fecha=<fechaEmision> y muestra la vigencia y el margen de ESA fecha", async () => {
+    fetchMock.mockImplementation((url: string) => (url.endsWith("fecha=2026-09-21") ? vigencia("2026-09-21", 0.2) : vigencia("2026-12-01", 0.25)));
+    ejecutar(() => useCosteoConfig("kt", "2026-09-21")); hooks.efectos[0]();
+    await vi.waitFor(() => expect(hooks.estados[0]).toMatchObject({ estado: "listo", vigenteDesde: "2026-09-21", margenObjetivo: 0.2 }));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/empresas/kt/tms/cotizaciones/costeo/config?fecha=2026-09-21");
+  });
+  it("al cambiar la fecha de emisión recarga: nueva petición con la nueva fecha, aborta la anterior y actualiza vigencia y margen", async () => {
+    fetchMock.mockImplementation((url: string) => (url.endsWith("fecha=2026-09-21") ? vigencia("2026-09-21", 0.2) : vigencia("2026-12-01", 0.25)));
+    ejecutar(() => useCosteoConfig("kt", "2026-09-21")); const limpiar = hooks.efectos[0]();
+    await vi.waitFor(() => expect(hooks.estados[0]).toMatchObject({ vigenteDesde: "2026-09-21" }));
+    // Re-render con otra fecha: React corre el cleanup del efecto anterior y luego el nuevo.
+    if (limpiar) limpiar();
+    ejecutar(() => useCosteoConfig("kt", "2026-12-15")); hooks.efectos[0]();
+    await vi.waitFor(() => expect(hooks.estados[0]).toMatchObject({ estado: "listo", vigenteDesde: "2026-12-01", margenObjetivo: 0.25 }));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/empresas/kt/tms/cotizaciones/costeo/config?fecha=2026-12-15");
+    expect((fetchMock.mock.calls[0][1] as RequestInit).signal!.aborted).toBe(true);
+  });
+  it("una respuesta obsoleta (de la fecha anterior) no pisa la de la fecha vigente", async () => {
+    let resolverVieja!: (v: unknown) => void;
+    fetchMock.mockImplementationOnce(() => new Promise(resolve => { resolverVieja = resolve; }));
+    fetchMock.mockImplementationOnce(() => vigencia("2026-12-01", 0.25));
+    ejecutar(() => useCosteoConfig("kt", "2026-09-21")); const limpiar = hooks.efectos[0]();
+    if (limpiar) limpiar();
+    ejecutar(() => useCosteoConfig("kt", "2026-12-15")); hooks.efectos[0]();
+    await vi.waitFor(() => expect(hooks.estados[0]).toMatchObject({ vigenteDesde: "2026-12-01" }));
+    resolverVieja({ ok: true, status: 200, json: async () => ({ perfiles: [], parametros: { vigenteDesde: "2026-09-21", margenObjetivo: 0.2 } }) });
+    await new Promise(r => setTimeout(r, 0));
+    expect(hooks.estados[0]).toMatchObject({ vigenteDesde: "2026-12-01", margenObjetivo: 0.25 });
+  });
+  it.each(["", "2026-09", "2026-9-1", "21/09/2026", "2026-02-31", "2026-13-01", "abc"])("fecha inválida %j: NO se hace ninguna petición", (fecha) => {
+    ejecutar(() => useCosteoConfig("kt", fecha)); hooks.efectos[0]();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(hooks.estados[0]).toEqual({ estado: "cargando" });
+    expect(fechaEmisionValida(fecha)).toBe(false);
+  });
+  it("fechas válidas se aceptan (incluido bisiesto)", () => {
+    for (const f of ["2026-09-21", "2028-02-29", "2026-12-31"]) expect(fechaEmisionValida(f)).toBe(true);
+    expect(fechaEmisionValida("2027-02-29")).toBe(false);
+  });
+  it("una fecha inválida a medio escribir conserva la configuración ya cargada (no oculta la sección)", async () => {
+    fetchMock.mockImplementation(() => vigencia("2026-09-21", 0.2));
+    ejecutar(() => useCosteoConfig("kt", "2026-09-21")); hooks.efectos[0]();
+    await vi.waitFor(() => expect(hooks.estados[0]).toMatchObject({ estado: "listo" }));
+    ejecutar(() => useCosteoConfig("kt", "")); hooks.efectos[0]();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(hooks.estados[0]).toMatchObject({ estado: "listo", vigenteDesde: "2026-09-21" });
+  });
+  it("la fecha sin parámetros vigentes (409) muestra el error dentro de la sección y se recupera al volver a una fecha válida", async () => {
+    fetchMock.mockImplementation((url: string) => (url.endsWith("fecha=2026-01-01") ? respuesta({ error: "No hay parámetros de costeo vigentes para la fecha indicada." }, false, 409) : vigencia("2026-09-21", 0.2)));
+    ejecutar(() => useCosteoConfig("kt", "2026-01-01")); hooks.efectos[0]();
+    await vi.waitFor(() => expect(hooks.estados[0]).toMatchObject({ estado: "error" }));
+    ejecutar(() => useCosteoConfig("kt", "2026-09-21")); hooks.efectos[0]();
+    await vi.waitFor(() => expect(hooks.estados[0]).toMatchObject({ estado: "listo", vigenteDesde: "2026-09-21" }));
+  });
+  it("el margen placeholder del panel es el de la vigencia cargada", () => {
+    const salida = html(ejecutar(() => CotizacionCosteoPanel(props({ config: { ...LISTO, margenObjetivo: 0.25, vigenteDesde: "2026-12-01" } }))));
+    expect(salida).toContain('placeholder="25"'); expect(salida).toContain("Parámetros vigentes desde 2026-12-01");
+  });
+  it("la página pasa form.fechaEmision al hook (misma fecha que el cálculo real)", () => {
+    const pagina = readFileSync("src/app/e/[slug]/cotizaciones/page.tsx", "utf8");
+    expect(pagina).toContain("useCosteoConfig(slug, form.fechaEmision)");
+    expect(pagina).toContain("fechaEmision={form.fechaEmision}");
   });
 });
 

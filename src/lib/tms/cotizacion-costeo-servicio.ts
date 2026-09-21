@@ -37,7 +37,7 @@ export const costeoPayloadSchema = z.object({
   viaticoGuiaTotal: opcional(monto),
   hotelTotal: opcional(monto),
   otrosCostos: z.array(z.object({ concepto: z.string().trim().min(1).max(120), monto }).strict()).max(50).optional(),
-  // Fracción (0.2 = 20 %). El tope de 5 (500 %) cabe en DECIMAL(6,4) del snapshot.
+  // Fracción (0.2 = 20 %). Tope de negocio de 5 (500 %); el snapshot lo guarda en DECIMAL(10,6).
   margenObjetivo: opcional(z.number().finite().min(0).max(5)),
 }).strict();
 export type CosteoPayload = z.infer<typeof costeoPayloadSchema>;

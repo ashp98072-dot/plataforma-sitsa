@@ -22,12 +22,29 @@ export type ConfigCosteo =
 
 const inputCls = "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
 
-/** Carga la configuración UNA vez. 401/403 => "sin-permiso" (la sección se oculta; nunca es un error global del módulo). */
-export function useCosteoConfig(slug: string): ConfigCosteo {
+/** YYYY-MM-DD y una fecha real (no 2026-02-31). Mismo criterio que el servidor antes de consultar vigencias. */
+export function fechaEmisionValida(fecha: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return false;
+  const d = new Date(`${fecha}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === fecha;
+}
+
+/**
+ * Carga la configuración de la MISMA vigencia que usará el cálculo real: la
+ * de `fechaEmision` (GET .../costeo/config?fecha=YYYY-MM-DD). Al cambiar la
+ * fecha se vuelve a consultar y la vigencia/margen mostrados son los de esa
+ * fecha; mientras llega la respuesta se conserva la configuración anterior
+ * (sin ocultar la sección) y una respuesta obsoleta se aborta. Con una fecha
+ * inválida (p. ej. un <input type=date> a medio escribir) NO se hace ninguna
+ * petición. 401/403 => "sin-permiso" (la sección se oculta; nunca es un error
+ * global del módulo).
+ */
+export function useCosteoConfig(slug: string, fechaEmision: string): ConfigCosteo {
   const [config, setConfig] = useState<ConfigCosteo>({ estado: "cargando" });
   useEffect(() => {
+    if (!fechaEmisionValida(fechaEmision)) return;
     const controller = new AbortController();
-    fetch(`/api/empresas/${slug}/tms/cotizaciones/costeo/config`, { cache: "no-store", signal: controller.signal })
+    fetch(`/api/empresas/${slug}/tms/cotizaciones/costeo/config?fecha=${encodeURIComponent(fechaEmision)}`, { cache: "no-store", signal: controller.signal })
       .then(async (res) => ({ status: res.status, ok: res.ok, data: await res.json().catch(() => ({})) }))
       .then(({ status, ok, data }) => {
         if (controller.signal.aborted) return;
@@ -37,7 +54,7 @@ export function useCosteoConfig(slug: string): ConfigCosteo {
       })
       .catch(() => { if (!controller.signal.aborted) setConfig({ estado: "error", mensaje: "No se pudo cargar la configuración del costeo." }); });
     return () => controller.abort();
-  }, [slug]);
+  }, [slug, fechaEmision]);
   return config;
 }
 
