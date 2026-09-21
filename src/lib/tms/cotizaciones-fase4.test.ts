@@ -43,7 +43,9 @@ describe("Cotizaciones fase 4", () => {
     const preflight = leer("sql/preflight-2026-09-cotizaciones-fase4.sql");
     expect(migration.match(/ADD COLUMN IF NOT EXISTS/g)).toHaveLength(2);
     expect(migration).not.toMatch(/DROP|DELETE|UPDATE|INSERT/i);
-    expect(preflight).toContain("information_schema.columns");
+    expect(preflight).toContain("SHOW COLUMNS FROM tms_cliente_rutas");
+    expect(preflight).toContain("SHOW COLUMNS FROM tms_cotizaciones");
+    expect(preflight).not.toMatch(/information_schema/i);
     expect(preflight).not.toMatch(/ALTER TABLE|DROP TABLE|DELETE FROM|UPDATE /i);
   });
 });
