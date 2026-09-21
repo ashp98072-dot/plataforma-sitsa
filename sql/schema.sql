@@ -1485,6 +1485,11 @@ CREATE TABLE IF NOT EXISTS tms_cotizaciones (
   tarifa_km_adicional DECIMAL(12,2) NULL,
   condiciones_adicionales TEXT NULL,
   observaciones TEXT NULL,
+  -- COTIZACIONES FASE 6 — documento comercial (ver sql/migrate-2026-09-cotizaciones-documento-comercial.sql).
+  documento_emisor VARCHAR(20) NOT NULL DEFAULT 'KUIQTRANS',   -- 'KUIQTRANS' | 'MONACO' (validado en la aplicación)
+  atencion_nombre VARCHAR(160) NULL,
+  atencion_cargo VARCHAR(160) NULL,
+  unidad_descripcion VARCHAR(160) NULL,
   creado_por VARCHAR(100) NULL,
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

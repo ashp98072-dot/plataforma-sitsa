@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireTenantCotizaciones, requireTenantCotizacionesCosteo } from "@/lib/tenant";
 import { ESTADOS_COTIZACION, crearCotizacion, listarCotizaciones } from "@/lib/tms/cotizaciones";
+import { DOCUMENTOS_EMISOR } from "@/lib/tms/cotizacion-documento";
 import { ErrorCosteoYaRegistrado } from "@/lib/tms/cotizacion-costeo-db";
 import { costeoPayloadSchema, mensajeErrorCosteo, prepararCosteo } from "@/lib/tms/cotizacion-costeo-servicio";
 
@@ -45,6 +46,11 @@ const schema = z.object({
   tarifaKmAdicional: z.number().nonnegative().nullable().optional(),
   condicionesAdicionales: z.string().max(2000).nullable().optional(),
   observaciones: z.string().max(2000).nullable().optional(),
+  // FASE 6 — documento comercial. La marca es un catálogo cerrado; atención/cargo/unidad son opcionales.
+  documentoEmisor: z.enum(DOCUMENTOS_EMISOR).optional(),
+  atencionNombre: z.string().max(160).nullable().optional(),
+  atencionCargo: z.string().max(160).nullable().optional(),
+  unidadDescripcion: z.string().max(160).nullable().optional(),
   // COTIZACIONES-COSTEO: opcional. El costeo se RECALCULA en servidor (el cliente no manda resultados ni parámetros).
   costeo: costeoPayloadSchema.optional(),
 });

@@ -1,52 +1,195 @@
-import { describe, expect, it } from "vitest";
+import PDFDocument from "pdfkit";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cotizacionPdf } from "./cotizacion-pdf";
+import { construirDocumentoComercial } from "./cotizacion-documento";
+import { COTIZACION_DOC } from "./cotizacion-documento.fixture";
+import { cotizacionPdfKuiqtrans } from "./cotizacion-pdf-kuiqtrans";
+import { cotizacionPdfMonaco } from "./cotizacion-pdf-monaco";
 import type { Cotizacion } from "./cotizaciones";
 
-const COTIZACION_BASE: Cotizacion = {
-  id: 1, empresaId: 7, codigo: "COT-000001", clienteId: 3, clienteNombre: "PriceSmart",
-  rutaId: 5, rutaCodigoHistorico: "RUTA-1", origenTexto: "Bodega Zona 12", destinoTexto: "PriceSmart Miraflores",
-  tarifaReferencia: 1250, tarifaCotizada: 1400, incluyeIva: false,
-  moneda: "GTQ", fechaEmision: "2026-09-08", fechaVencimiento: "2026-09-22", estado: "Borrador",
-  pilotoIncluido: true, gpsIncluido: true, seguroMercaderiaIncluido: false, seguroTercerosIncluido: true,
-  kmIncluidos: 50, tarifaKmAdicional: 12.5, condicionesAdicionales: "Pago contra entrega.",
-  observaciones: "Cliente frecuente.", creadoPor: "admin", creadoEn: "2026-09-08 10:00:00", actualizadoEn: null,
-};
+/**
+ * pdfkit comprime los content streams (FlateDecode): inspeccionar el buffer crudo no sirve. Se valida el
+ * TEXTO que cada plantilla pide dibujar (espía sobre PDFDocument.prototype.text) y la estructura del PDF.
+ */
+const KUIQ: Cotizacion = { ...COTIZACION_DOC, documentoEmisor: "KUIQTRANS", incluyeIva: false };
+const MONACO: Cotizacion = { ...COTIZACION_DOC, documentoEmisor: "MONACO", incluyeIva: false };
 
-describe("cotizacionPdf (COTIZADOR-TMS-1)", () => {
-  it("genera un PDF válido (empieza con %PDF)", async () => {
-    const buf = await cotizacionPdf("KT / Logiservicios Mónaco", COTIZACION_BASE);
-    expect(buf.subarray(0, 4).toString("latin1")).toBe("%PDF");
-    expect(buf.length).toBeGreaterThan(500);
+afterEach(() => vi.restoreAllMocks());
+
+async function generar(c: Cotizacion) {
+  const espia = vi.spyOn(PDFDocument.prototype, "text");
+  const buffer = await cotizacionPdf(c);
+  const textos = espia.mock.calls.map((llamada) => String(llamada[0]));
+  espia.mockRestore();
+  return { buffer, textos, todo: textos.join("\n") };
+}
+const paginas = (buffer: Buffer) => buffer.toString("latin1").match(/\/Type\s*\/Page\b/g)?.length ?? 0;
+
+describe("selección de plantilla por documentoEmisor", () => {
+  it("KUIQTRANS usa la plantilla KuiqTrans (banda azul, «PROPUESTA COMERCIAL»)", async () => {
+    const { textos, buffer } = await generar(KUIQ);
+    expect(buffer.subarray(0, 4).toString("latin1")).toBe("%PDF");
+    expect(textos).toContain("KuiqTrans");
+    expect(textos).toContain("PROPUESTA COMERCIAL");
+    expect(textos).toContain("Observaciones y condiciones");
+    expect(textos.join("\n")).not.toContain("MÓNACO");
+    expect(textos.join("\n")).not.toContain("Logiservicios");
   });
 
-  it("no revienta con campos opcionales vacíos (sin ruta, sin condiciones, sin observaciones)", async () => {
-    const minima: Cotizacion = {
-      ...COTIZACION_BASE, rutaId: null, rutaCodigoHistorico: null, origenTexto: null, destinoTexto: null,
-      tarifaReferencia: null, kmIncluidos: null, tarifaKmAdicional: null,
-      condicionesAdicionales: null, observaciones: null, fechaVencimiento: null,
-    };
-    const buf = await cotizacionPdf("SITSA", minima);
-    expect(buf.subarray(0, 4).toString("latin1")).toBe("%PDF");
+  it("MONACO usa la plantilla Mónaco (LOGISERVICIOS / MÓNACO, «COTIZACIÓN», secciones separadas)", async () => {
+    const { textos } = await generar(MONACO);
+    expect(textos).toContain("LOGISERVICIOS");
+    expect(textos).toContain("MÓNACO");
+    expect(textos).toContain("COTIZACIÓN");
+    expect(textos).toContain("CONDICIONES");
+    expect(textos).toContain("OBSERVACIONES");
+    expect(textos.join("\n")).not.toContain("KuiqTrans");
+    expect(textos.join("\n")).not.toContain("PROPUESTA COMERCIAL");
   });
 
-  it("genera un solo PDF (una página) para una cotización simple", async () => {
-    const buf = await cotizacionPdf("SITSA", COTIZACION_BASE);
-    // %PDF contiene un solo objeto /Type /Page cuando no hay contenido extra que fuerce una segunda página.
-    expect(buf.toString("latin1").match(/\/Type\s*\/Page\b/g)!.length).toBeGreaterThanOrEqual(1);
+  it("no usa el nombre de la empresa/cliente para elegir: un cliente llamado «Logiservicios Mónaco» con marca KUIQTRANS sale KuiqTrans", async () => {
+    const { textos } = await generar({ ...KUIQ, clienteNombre: "Logiservicios Mónaco" });
+    expect(textos).toContain("KuiqTrans");
+    expect(textos).not.toContain("LOGISERVICIOS");
   });
 
-  /**
-   * TMS-SIN-COSTO-OPERATIVO-1 — negocio confirmó que ya no se muestra en
-   * el PDF de cotización. pdfkit comprime los content streams (FlateDecode),
-   * así que inspeccionar el buffer crudo en busca de texto NO es una
-   * prueba confiable (mismo criterio ya establecido en este archivo y en
-   * viaticos-comprobante-pdf.test.ts: solo se valida estructura del PDF,
-   * nunca texto renderizado, sobre un pdfkit comprimido). La garantía
-   * real y verificable es a nivel de TIPOS: `Cotizacion` (cotizaciones.ts)
-   * ya NO tiene el campo `costoOperativoReferencia` — si cotizacion-pdf.ts
-   * intentara volver a leerlo, `npx tsc --noEmit` fallaría.
-   */
-  it("el tipo Cotizacion que recibe el PDF ya no tiene costoOperativoReferencia (garantía en tiempo de compilación)", () => {
-    expect(COTIZACION_BASE).not.toHaveProperty("costoOperativoReferencia");
+  it("las dos plantillas producen PDFs distintos para la misma cotización", async () => {
+    const a = await cotizacionPdfKuiqtrans(construirDocumentoComercial(KUIQ));
+    const b = await cotizacionPdfMonaco(construirDocumentoComercial(KUIQ));
+    expect(a.equals(b)).toBe(false);
+  });
+
+  it("marca ausente en una cotización histórica => plantilla KuiqTrans", async () => {
+    const { textos } = await generar({ ...KUIQ, documentoEmisor: undefined as never });
+    expect(textos).toContain("KuiqTrans");
+  });
+});
+
+describe.each([["KUIQTRANS", KUIQ], ["MONACO", MONACO]] as const)("contenido comercial — %s", (_marca, base) => {
+  it("imprime cliente, atención, cargo, origen, destino, unidad y precio", async () => {
+    const { todo } = await generar(base);
+    for (const valor of ["Distribuidora Ejemplo, S.A.", "Atención: Claudia Cordero", "Compras / Logística", "Bodega Zona 12", "Puerto Barrios, Izabal", "Camión 5 toneladas", "Q1,400.00"]) {
+      expect(todo).toContain(valor);
+    }
+  });
+
+  it("tabla comercial con las cuatro columnas y el saludo propio de la marca", async () => {
+    const { textos } = await generar(base);
+    for (const titulo of ["Punto de carga", "Punto de descarga", "Unidad", "Precio sin IVA"]) expect(textos).toContain(titulo);
+    expect(textos.some((t) => t.includes(base.documentoEmisor === "MONACO" ? "Es un gusto saludarles" : "Reciban un cordial saludo"))).toBe(true);
+  });
+
+  it("no incluye IVA: encabezado «Precio sin IVA» y nunca el otro", async () => {
+    const { textos, todo } = await generar({ ...base, incluyeIva: false });
+    expect(textos).toContain("Precio sin IVA");
+    expect(todo).not.toContain("Precio IVA incluido");
+  });
+
+  it("incluye IVA: encabezado «Precio IVA incluido» y nunca el otro", async () => {
+    const { textos, todo } = await generar({ ...base, incluyeIva: true });
+    expect(textos).toContain("Precio IVA incluido");
+    expect(todo).not.toContain("Precio sin IVA");
+  });
+
+  it("una sola semántica de IVA: sin subtotal, IVA (12%), total ni «+ IVA» en ningún caso", async () => {
+    for (const incluyeIva of [true, false]) {
+      const { todo } = await generar({ ...base, incluyeIva });
+      expect(todo).not.toMatch(/subtotal|iva \(12|total|\+ iva/i);
+      expect(todo).toContain("Q1,400.00"); // siempre tarifaCotizada
+    }
+  });
+
+  it("lista únicamente las condiciones que aplican", async () => {
+    const { todo } = await generar(base);
+    for (const valor of ["Piloto incluido", "GPS", "Seguro contra terceros", "Servicio refrigerado", "50 km incluidos", "Q12.50 por km adicional", "Pago contra entrega.", "Vigencia sujeta a disponibilidad."]) {
+      expect(todo).toContain(valor);
+    }
+    expect(todo).not.toContain("Seguro de mercadería"); // apagado en la cotización
+  });
+
+  it("todo apagado: sin sección de condiciones y sin «No» sueltos", async () => {
+    const { textos } = await generar({
+      ...base, pilotoIncluido: false, gpsIncluido: false, seguroMercaderiaIncluido: false, seguroTercerosIncluido: false,
+      servicioRefrigerado: false, kmIncluidos: null, tarifaKmAdicional: null, condicionesAdicionales: null, observaciones: null,
+    });
+    expect(textos).not.toContain("Observaciones y condiciones");
+    expect(textos).not.toContain("CONDICIONES");
+    expect(textos).not.toContain("OBSERVACIONES");
+    expect(textos).not.toContain("No");
+    expect(textos.join("\n")).not.toMatch(/GPS|Piloto|Seguro/);
+  });
+
+  it("observaciones, fecha de emisión y fecha de vencimiento", async () => {
+    const { todo } = await generar(base);
+    expect(todo).toContain("Cliente frecuente.");
+    expect(todo).toContain("Fecha: 8 de septiembre de 2026");
+    expect(todo).toContain("Propuesta válida hasta el 22 de septiembre de 2026.");
+    expect(todo).toContain("COT-000123");
+  });
+
+  it("sin fecha de vencimiento no imprime vigencia inventada", async () => {
+    const { todo } = await generar({ ...base, fechaVencimiento: null });
+    expect(todo).not.toContain("Propuesta válida");
+  });
+
+  it("atención y cargo opcionales: sin ellos solo aparece el cliente", async () => {
+    const { todo } = await generar({ ...base, atencionNombre: null, atencionCargo: null });
+    expect(todo).toContain("Distribuidora Ejemplo, S.A.");
+    expect(todo).not.toContain("Atención");
+    expect(todo).not.toContain("Claudia");
+  });
+
+  it("no revienta con todos los opcionales vacíos y produce un PDF válido", async () => {
+    const { buffer } = await generar({
+      ...base, rutaId: null, rutaCodigoHistorico: null, origenTexto: null, destinoTexto: null, unidadDescripcion: null,
+      tarifaReferencia: null, kmIncluidos: null, tarifaKmAdicional: null, condicionesAdicionales: null, observaciones: null,
+      fechaVencimiento: null, atencionNombre: null, atencionCargo: null,
+    });
+    expect(buffer.subarray(0, 4).toString("latin1")).toBe("%PDF");
+    expect(buffer.subarray(-6).toString("latin1")).toContain("%%EOF");
+  });
+
+  it("PDF válido, no vacío y de una sola página Letter para una cotización simple", async () => {
+    const { buffer } = await generar(base);
+    expect(buffer.subarray(0, 4).toString("latin1")).toBe("%PDF");
+    expect(buffer.length).toBeGreaterThan(1500);
+    expect(paginas(buffer)).toBe(1);
+    expect(buffer.toString("latin1")).toContain("/MediaBox [0 0 612 792]");
+  });
+
+  it("textos largos: el PDF sigue siendo válido y el texto llega completo (no se trunca)", async () => {
+    const largo = "Almacén general de distribución nacional con dirección extensa ".repeat(8).trim();
+    const { buffer, textos } = await generar({
+      ...base, origenTexto: largo, destinoTexto: largo, unidadDescripcion: largo,
+      observaciones: "Observación extensa. ".repeat(80).trim(),
+      condicionesAdicionales: Array.from({ length: 45 }, (_, i) => `Condición adicional número ${i + 1} con texto de relleno suficiente para ocupar el ancho.`).join("\n"),
+    });
+    expect(buffer.subarray(0, 4).toString("latin1")).toBe("%PDF");
+    expect(textos.filter((t) => t === largo).length).toBeGreaterThanOrEqual(3);
+    expect(textos.some((t) => t.startsWith("Observación extensa."))).toBe(true);
+    expect(textos).toContain("Condición adicional número 45 con texto de relleno suficiente para ocupar el ancho.");
+    expect(paginas(buffer)).toBeGreaterThan(1);
+    // Pie con paginación en cada página.
+    const total = paginas(buffer);
+    for (let i = 1; i <= total; i++) expect(textos).toContain(`Página ${i} de ${total}`);
+  });
+});
+
+describe("tabla comercial preparada para varias líneas (renderer con lineas[])", () => {
+  const muchas = (base: Cotizacion) => {
+    const modelo = construirDocumentoComercial(base);
+    modelo.lineas = Array.from({ length: 70 }, (_, i) => ({ origen: `Origen ${i + 1} con texto largo de ejemplo`, destino: `Destino ${i + 1}`, unidad: "Camión 5 toneladas", precio: 1000 + i }));
+    return modelo;
+  };
+
+  it.each([["KuiqTrans", cotizacionPdfKuiqtrans, KUIQ], ["Mónaco", cotizacionPdfMonaco, MONACO]] as const)("%s: cruza páginas y repite el encabezado de la tabla", async (_n, render, base) => {
+    const espia = vi.spyOn(PDFDocument.prototype, "text");
+    const buffer = await render(muchas(base));
+    const textos = espia.mock.calls.map((c) => String(c[0]));
+    const paginasTotal = paginas(buffer);
+    expect(paginasTotal).toBeGreaterThan(1);
+    expect(textos.filter((t) => t === "Punto de carga").length).toBe(paginasTotal);
+    expect(textos).toContain("Origen 70 con texto largo de ejemplo");
+    expect(textos).toContain("Q1,069.00");
   });
 });

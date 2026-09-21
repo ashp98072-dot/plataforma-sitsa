@@ -116,6 +116,8 @@ export type CotizacionCosteoPanelProps = {
   onPayloadGuardar: (payload: PayloadCosteoCliente | null) => void;
   /** Acción EXPLÍCITA del usuario: el padre pone tarifaCotizada = precio y incluyeIva = true. */
   onUsarPrecioSugerido: (precio: number) => void;
+  /** Aviso al elegir un perfil de unidad: el padre PUEDE usarlo para sugerir la descripción comercial de la unidad (editable). */
+  onPerfilElegido?: (nombrePerfil: string) => void;
 };
 
 export function CotizacionCosteoPanel(p: CotizacionCosteoPanelProps) {
@@ -211,6 +213,7 @@ export function CotizacionCosteoPanel(p: CotizacionCosteoPanelProps) {
         <label className="col-span-2 text-xs text-[var(--muted)]">Perfil de unidad
           <select className={`${inputCls} mt-0.5 w-full`} value={form.perfilId} onChange={(e) => {
             const elegido = perfiles.find((x) => x.id === Number(e.target.value)) ?? null;
+            if (elegido) p.onPerfilElegido?.(elegido.nombre);
             setForm((f) => {
               const siguiente = aplicarPerfilCosteo(f, elegido);
               return p.servicioRefrigerado && elegido?.costoRefrigeracion ? { ...siguiente, usarRefrigeracion: true } : siguiente;

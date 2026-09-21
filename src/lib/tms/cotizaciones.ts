@@ -3,6 +3,14 @@ import type { PoolConnection } from "mysql2/promise";
 import { getPool, query, type SqlParams } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { guardarSnapshotCosteoTx, type CosteoPreparado } from "./cotizacion-costeo-db";
+import {
+  DOCUMENTO_EMISOR_DEFAULT,
+  LIMITE_TEXTO_DOCUMENTO,
+  esDocumentoEmisor,
+  normalizarDocumentoEmisor,
+  textoOpcional,
+  type DocumentoEmisor,
+} from "./cotizacion-documento";
 
 /**
  * COTIZADOR-TMS-1 (fase 1) — cotizaciones comerciales de TMS. Reutiliza
@@ -107,6 +115,11 @@ export type Cotizacion = {
   tarifaKmAdicional: number | null;
   condicionesAdicionales: string | null;
   observaciones: string | null;
+  /** FASE 6 — datos del documento comercial, guardados en la fila (histórico inmutable tras Enviada). */
+  documentoEmisor: DocumentoEmisor;
+  atencionNombre: string | null;
+  atencionCargo: string | null;
+  unidadDescripcion: string | null;
   creadoPor: string | null;
   creadoEn: string | null;
   actualizadoEn: string | null;
@@ -139,6 +152,10 @@ function mapRow(r: RowDataPacket): Cotizacion {
     tarifaKmAdicional: r.tarifa_km_adicional != null ? Number(r.tarifa_km_adicional) : null,
     condicionesAdicionales: r.condiciones_adicionales != null ? String(r.condiciones_adicionales) : null,
     observaciones: r.observaciones != null ? String(r.observaciones) : null,
+    documentoEmisor: normalizarDocumentoEmisor(r.documento_emisor),
+    atencionNombre: r.atencion_nombre != null ? String(r.atencion_nombre) : null,
+    atencionCargo: r.atencion_cargo != null ? String(r.atencion_cargo) : null,
+    unidadDescripcion: r.unidad_descripcion != null ? String(r.unidad_descripcion) : null,
     creadoPor: r.creado_por != null ? String(r.creado_por) : null,
     creadoEn: r.creado_en != null ? String(r.creado_en) : null,
     actualizadoEn: r.actualizado_en != null ? String(r.actualizado_en) : null,
@@ -152,6 +169,7 @@ const SELECT = `
          DATE_FORMAT(fecha_vencimiento, '%Y-%m-%d') AS fecha_vencimiento, estado,
          piloto_incluido, gps_incluido, seguro_mercaderia_incluido, seguro_terceros_incluido, servicio_refrigerado,
          km_incluidos, tarifa_km_adicional, condiciones_adicionales, observaciones,
+         documento_emisor, atencion_nombre, atencion_cargo, unidad_descripcion,
          creado_por, creado_en, actualizado_en
   FROM tms_cotizaciones
 `;
@@ -200,6 +218,10 @@ export type CotizacionInput = {
   tarifaKmAdicional?: number | null;
   condicionesAdicionales?: string | null;
   observaciones?: string | null;
+  documentoEmisor?: DocumentoEmisor;
+  atencionNombre?: string | null;
+  atencionCargo?: string | null;
+  unidadDescripcion?: string | null;
 };
 
 type SnapshotRuta = {
@@ -247,10 +269,28 @@ async function resolverCliente(conn: PoolConnection, empresaId: number, clienteI
   return String(rows[0].nombre);
 }
 
-function validarInput(input: Pick<CotizacionInput, "fechaEmision" | "tarifaCotizada" | "clienteId">) {
+/** Marca del documento: solo valores del catálogo cerrado (KUIQTRANS | MONACO); cualquier otro se rechaza. */
+function validarDocumentoEmisor(valor: unknown) {
+  if (valor !== undefined && !esDocumentoEmisor(valor)) throw new Error("Documento emisor inválido.");
+}
+
+/** Atención / cargo / unidad: opcionales; con texto, no pueden exceder la columna VARCHAR(160). */
+function validarTextosDocumento(input: Pick<CotizacionInput, "atencionNombre" | "atencionCargo" | "unidadDescripcion">) {
+  for (const [valor, etiqueta] of [
+    [input.atencionNombre, "La atención"], [input.atencionCargo, "El cargo / referencia"], [input.unidadDescripcion, "La unidad"],
+  ] as const) {
+    if ((textoOpcional(valor)?.length ?? 0) > LIMITE_TEXTO_DOCUMENTO) {
+      throw new Error(`${etiqueta} no puede exceder ${LIMITE_TEXTO_DOCUMENTO} caracteres.`);
+    }
+  }
+}
+
+function validarInput(input: Pick<CotizacionInput, "fechaEmision" | "tarifaCotizada" | "clienteId" | "documentoEmisor" | "atencionNombre" | "atencionCargo" | "unidadDescripcion">) {
   if (!input.clienteId) throw new Error("Cliente requerido.");
   if (!input.fechaEmision) throw new Error("Fecha de emisión requerida.");
   if (!(input.tarifaCotizada > 0)) throw new Error("La tarifa cotizada debe ser mayor a cero.");
+  validarDocumentoEmisor(input.documentoEmisor);
+  validarTextosDocumento(input);
 }
 
 /**
@@ -281,8 +321,9 @@ export async function crearCotizacion(
         (empresa_id, codigo, cliente_id, cliente_nombre, ruta_id, ruta_codigo_historico, origen_texto, destino_texto,
          tarifa_referencia, tarifa_cotizada, incluye_iva, fecha_emision, fecha_vencimiento,
          piloto_incluido, gps_incluido, seguro_mercaderia_incluido, seguro_terceros_incluido, servicio_refrigerado,
-         km_incluidos, tarifa_km_adicional, condiciones_adicionales, observaciones, creado_por)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         km_incluidos, tarifa_km_adicional, condiciones_adicionales, observaciones, creado_por,
+         documento_emisor, atencion_nombre, atencion_cargo, unidad_descripcion)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         empresaId,
         "", // se completa abajo, mismo criterio que fondos.ts (código derivado del id, sin condición de carrera)
@@ -307,6 +348,10 @@ export async function crearCotizacion(
         input.condicionesAdicionales?.trim() || null,
         input.observaciones?.trim() || null,
         creadoPor ?? null,
+        input.documentoEmisor ?? DOCUMENTO_EMISOR_DEFAULT,
+        textoOpcional(input.atencionNombre),
+        textoOpcional(input.atencionCargo),
+        textoOpcional(input.unidadDescripcion),
       ],
     );
     cotizacionId = Number(r.insertId);
@@ -363,6 +408,8 @@ export async function actualizarCotizacion(
     const snapshot = cambios.rutaId !== undefined ? await resolverSnapshotRuta(conn, empresaId, rutaId) : null;
     const tarifaCotizada = cambios.tarifaCotizada ?? actual.tarifaCotizada;
     if (!(tarifaCotizada > 0)) throw new Error("La tarifa cotizada debe ser mayor a cero.");
+    validarDocumentoEmisor(cambios.documentoEmisor);
+    validarTextosDocumento(cambios);
 
     const origenTexto = cambios.origenTexto !== undefined
       ? (cambios.origenTexto?.trim() || snapshot?.origenDefault || null)
@@ -377,7 +424,8 @@ export async function actualizarCotizacion(
          tarifa_referencia = ?, tarifa_cotizada = ?, incluye_iva = ?,
          fecha_emision = ?, fecha_vencimiento = ?, piloto_incluido = ?, gps_incluido = ?,
          seguro_mercaderia_incluido = ?, seguro_terceros_incluido = ?, servicio_refrigerado = ?, km_incluidos = ?, tarifa_km_adicional = ?,
-         condiciones_adicionales = ?, observaciones = ?
+         condiciones_adicionales = ?, observaciones = ?,
+         documento_emisor = ?, atencion_nombre = ?, atencion_cargo = ?, unidad_descripcion = ?
        WHERE id = ? AND empresa_id = ?`,
       [
         clienteId,
@@ -400,6 +448,10 @@ export async function actualizarCotizacion(
         cambios.tarifaKmAdicional !== undefined ? cambios.tarifaKmAdicional : actual.tarifaKmAdicional,
         cambios.condicionesAdicionales !== undefined ? cambios.condicionesAdicionales?.trim() || null : actual.condicionesAdicionales,
         cambios.observaciones !== undefined ? cambios.observaciones?.trim() || null : actual.observaciones,
+        cambios.documentoEmisor ?? actual.documentoEmisor,
+        cambios.atencionNombre !== undefined ? textoOpcional(cambios.atencionNombre) : actual.atencionNombre,
+        cambios.atencionCargo !== undefined ? textoOpcional(cambios.atencionCargo) : actual.atencionCargo,
+        cambios.unidadDescripcion !== undefined ? textoOpcional(cambios.unidadDescripcion) : actual.unidadDescripcion,
         id,
         empresaId,
       ],
@@ -456,7 +508,8 @@ export async function cambiarEstadoCotizacion(
 
 /**
  * "Duplicar para crear una nueva versión" — copia los mismos datos
- * (cliente, ruta, tarifas, condiciones) a una cotización NUEVA en
+ * (cliente, ruta, tarifas, condiciones, marca/atención/cargo/unidad del
+ * documento comercial) a una cotización NUEVA en
  * Borrador con código propio y fecha de emisión de hoy; la original NO
  * se modifica. No requiere una columna de "versión anterior": es
  * simplemente un alta nueva pre-llenada, mismo criterio que "duplicar"
@@ -487,5 +540,9 @@ export async function duplicarCotizacion(
     tarifaKmAdicional: original.tarifaKmAdicional,
     condicionesAdicionales: original.condicionesAdicionales,
     observaciones: original.observaciones,
+    documentoEmisor: original.documentoEmisor,
+    atencionNombre: original.atencionNombre,
+    atencionCargo: original.atencionCargo,
+    unidadDescripcion: original.unidadDescripcion,
   }, creadoPor);
 }
