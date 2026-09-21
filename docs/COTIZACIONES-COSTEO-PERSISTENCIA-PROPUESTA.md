@@ -1,5 +1,7 @@
 # Cotizaciones — Propuesta de persistencia del costeo (Fase 3)
 
+> **ACTUALIZACIÓN (Fase 3):** este diseño fue aprobado y aplicado manualmente en producción KT; ahora está versionado como `sql/migrate-2026-09-cotizaciones-costeo.sql` (+ preflight y `sql/schema.sql`). Los bloques de abajo se conservan idénticos como referencia del diseño; la fuente canónica es la migración.
+>
 > **ESTO NO ES UNA MIGRACIÓN Y NO DEBE EJECUTARSE.**
 > Es una **propuesta para revisión y aprobación**. Los bloques `sql` de este documento son ilustrativos de un diseño pendiente: no están en `sql/`, no forman parte de ningún flujo de migración y no se aplican automáticamente. Antes de convertirlos en migración faltan decisiones de negocio (ver "Decisiones pendientes"). Este PR **no** agrega columnas a `tms_cotizaciones`, no crea tablas y no ejecuta SQL.
 

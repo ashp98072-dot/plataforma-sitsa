@@ -121,6 +121,15 @@ export const PLATAFORMA_PERMISIBLES = [
   // lo justifique todavía; Admin lo recibe por catálogo global, cualquier
   // otro usuario lo recibe explícitamente desde la matriz de Usuarios.
   "compras_autorizar",
+  // COTIZACIONES-COSTEO (Fase 3): el costeo interno (costo operativo,
+  // combustible, salarios, margen, utilidad, precio sugerido) es
+  // CONFIDENCIAL — permiso propio, independiente de "cotizaciones"/"tms".
+  // Acciones: ver (config + snapshot), crear (calcular y registrar),
+  // editar (calcular al editar un Borrador). Mismo patrón que
+  // gastos_operativos_autorizar/compras_autorizar: NUNCA hay fallback a
+  // tms:* ni cotizaciones:* (ver requireTenantCotizacionesCosteo en
+  // tenant.ts). Ningún rol lo trae por defecto; Admin pasa siempre.
+  "cotizaciones_costeo",
   "multas",
   "tms",
   "clientes",
@@ -304,7 +313,7 @@ export function esPlataformaPermisible(m: string): m is PlataformaPermisible {
  * null (no aplica este filtro — se rigen por otro mecanismo).
  */
 export function moduloEmpresaDelPermiso(m: string): Modulo | null {
-  if (m === "compras_proveedores" || m === "compras_requerimientos" || m === "compras_autorizar") return "tms";
+  if (m === "compras_proveedores" || m === "compras_requerimientos" || m === "compras_autorizar" || m === "cotizaciones_costeo") return "tms";
   if (m === "multas") return "tms";
   if (m === "flota_combustible") return "flota";
   if (
@@ -336,6 +345,7 @@ export function labelPermiso(modulo: string): string {
   if (modulo === "compras_proveedores") return "Compras: proveedores comerciales";
   if (modulo === "compras_requerimientos") return "Compras: requerimientos de compra";
   if (modulo === "compras_autorizar") return "Compras: autorizar y rechazar requerimientos";
+  if (modulo === "cotizaciones_costeo") return "Cotizaciones: costeo interno (confidencial)";
   if (modulo === "multas") return "Multas y sanciones";
   if (esRrhhSubmodulo(modulo)) return RRHH_SUBMODULO_LABEL[modulo];
   if (esFlotaSubmodulo(modulo)) return FLOTA_SUBMODULO_LABEL[modulo];
@@ -410,6 +420,7 @@ export const GRUPOS_PERMISOS: {
       "compras_proveedores",
       "compras_requerimientos",
       "compras_autorizar",
+      "cotizaciones_costeo",
       "programacion",
       "multas",
       "rutas",
@@ -583,7 +594,7 @@ export function modulosOtrasAreasDelRol(rol: RolGlobal): string[] {
 /** Catálogo completo editable para un rol (propios + cruzados). */
 export function catalogoPermisosRol(rol: RolGlobal): string[] {
   // Asignable explícitamente, sin concederlo por rol ni por TMS.
-  return [...new Set([...modulosPropiosDelRol(rol), ...modulosOtrasAreasDelRol(rol), "compras_proveedores", "compras_requerimientos", "compras_autorizar"])];
+  return [...new Set([...modulosPropiosDelRol(rol), ...modulosOtrasAreasDelRol(rol), "compras_proveedores", "compras_requerimientos", "compras_autorizar", "cotizaciones_costeo"])];
 }
 
 export function permisosDefaultPorRol(rol: RolGlobal): PermisoModulo[] {
@@ -769,6 +780,7 @@ export function modulosPlataformaDesdePermisos(
       p.modulo !== "compras_proveedores" &&
       p.modulo !== "compras_requerimientos" &&
       p.modulo !== "compras_autorizar" &&
+      p.modulo !== "cotizaciones_costeo" &&
       p.modulo !== "multas" &&
       p.modulo !== "viaticos" &&
       p.modulo !== "viaticos_autorizar" &&

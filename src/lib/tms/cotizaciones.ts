@@ -2,6 +2,7 @@ import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import type { PoolConnection } from "mysql2/promise";
 import { getPool, query, type SqlParams } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
+import { guardarSnapshotCosteoTx, type CosteoPreparado } from "./cotizacion-costeo-db";
 
 /**
  * COTIZADOR-TMS-1 (fase 1) — cotizaciones comerciales de TMS. Reutiliza
@@ -249,10 +250,18 @@ function validarInput(input: Pick<CotizacionInput, "fechaEmision" | "tarifaCotiz
   if (!(input.tarifaCotizada > 0)) throw new Error("La tarifa cotizada debe ser mayor a cero.");
 }
 
+/**
+ * `costeo` (opcional, COTIZACIONES-COSTEO Fase 3): costeo YA calculado en
+ * servidor. Si viene, el snapshot se guarda en la MISMA transacción que la
+ * cotización — si falla cualquier parte, rollback completo (nunca queda una
+ * cotización sin el snapshot que el usuario pidió guardar). Sin `costeo`,
+ * el comportamiento es idéntico al de siempre.
+ */
 export async function crearCotizacion(
   empresaId: number,
   input: CotizacionInput,
   creadoPor?: string | null,
+  costeo?: CosteoPreparado | null,
 ): Promise<Cotizacion> {
   validarInput(input);
   const conn = await getPool().getConnection();
@@ -306,6 +315,9 @@ export async function crearCotizacion(
       modulo: "tms_cotizaciones",
       detalle: `Cotización #${cotizacionId} ${codigo} creada para cliente ${clienteNombre} por Q${input.tarifaCotizada.toFixed(2)}.`,
     });
+    if (costeo) {
+      await guardarSnapshotCosteoTx(conn, { empresaId, cotizacionId, cotizacionCodigo: codigo, usuario: creadoPor ?? null, costeo });
+    }
     await conn.commit();
   } catch (error) {
     await conn.rollback();
@@ -320,11 +332,17 @@ export async function crearCotizacion(
 
 export type CotizacionUpdate = Partial<CotizacionInput>;
 
-/** Solo editable mientras estado = 'Borrador' — una vez Enviada, el contenido queda fijo (solo cambia de estado). */
+/**
+ * Solo editable mientras estado = 'Borrador' — una vez Enviada, el contenido queda fijo (solo cambia de estado).
+ * `costeo` (opcional): registra el snapshot por PRIMERA vez dentro de esta transacción; si la cotización ya
+ * tiene uno, falla (ErrorCosteoYaRegistrado) y se revierte todo — el snapshot es inmutable.
+ */
 export async function actualizarCotizacion(
   empresaId: number,
   id: number,
   cambios: CotizacionUpdate,
+  costeo?: CosteoPreparado | null,
+  usuario?: string | null,
 ): Promise<Cotizacion | null> {
   const conn = await getPool().getConnection();
   try {
@@ -381,6 +399,9 @@ export async function actualizarCotizacion(
         empresaId,
       ],
     );
+    if (costeo) {
+      await guardarSnapshotCosteoTx(conn, { empresaId, cotizacionId: id, cotizacionCodigo: actual.codigo, usuario: usuario ?? null, costeo });
+    }
     await conn.commit();
   } catch (error) {
     await conn.rollback();

@@ -1,6 +1,6 @@
 # Cotizaciones — Motor de costeo interno (Fase 1 + Fase 2)
 
-Estado: **IMPLEMENTADO y VERIFICADO TÉCNICAMENTE** (motor puro + pruebas de regresión contra el libro). No está conectado a la UI, a la base de datos ni a `tms_cotizaciones`. **No aprobado para producción** hasta la Fase 3.
+Estado: **IMPLEMENTADO y VERIFICADO TÉCNICAMENTE** (motor puro + pruebas de regresión contra el libro). El motor sigue siendo PURO (sin DB, sin React). **Fase 3** lo integró a Cotizaciones: permiso `cotizaciones_costeo`, endpoints de configuración/cálculo/lectura, snapshot inmutable en la misma transacción de la cotización y sección interna en el formulario (ver "Fase 3" al final). El PDF comercial, el listado y el GET normal de cotización NO llevan costeo.
 
 Código: `src/lib/tms/cotizacion-costeo.ts` · Pruebas: `src/lib/tms/cotizacion-costeo.test.ts` · Propuesta de persistencia: `docs/COTIZACIONES-COSTEO-PERSISTENCIA-PROPUESTA.md` (documento; **no es una migración**, en revisión).
 
@@ -102,3 +102,14 @@ Propuesta (`docs/COTIZACIONES-COSTEO-PERSISTENCIA-PROPUESTA.md`, no es una migra
 5. Cargar perfiles reales y parámetros vigentes (sin hardcodear valores del libro).
 6. Servicios de lectura/escritura del snapshot, permisos del costeo y UI (fuera de este PR).
 7. Definir cómo el costeo alimenta `tarifa_cotizada` sin tocar el flujo/estados actuales.
+
+## Fase 3 — integración (permiso, DB, UI interna)
+
+- **Permiso**: `cotizaciones_costeo` (ver/crear/editar), independiente de `tms`/`cotizaciones`; sin fallback (`requireTenantCotizacionesCosteo`). Solo Admin lo trae por defecto.
+- **Endpoints** (todos `Cache-Control: private, no-store`): `GET /tms/cotizaciones/costeo/config` (ver), `POST /tms/cotizaciones/costeo/calcular` (crear o editar), `GET /tms/cotizaciones/[id]/costeo` (ver). `POST`/`PATCH` de cotizaciones aceptan un `costeo` opcional que el servidor RECALCULA.
+- **Servidor autoritativo**: el cliente solo envía datos operativos; perfil (revalidado por empresa) y parámetros vigentes por fecha salen de la base. Payload estricto: cualquier parámetro económico se rechaza.
+- **Precio de venta** para utilidad/margen = tarifa comercial TOTAL con IVA (`calcularIva()` comercial); el IVA del costo interno es independiente.
+- **Snapshot**: `tms_cotizacion_costeos` + `_componentes`, en la MISMA transacción; 1:1 e inmutable (sin UPDATE/DELETE; si ya existe, "Esta cotización ya tiene un costeo registrado."). `motor_version = COSTEO_V1`. `input_snapshot` guarda lo consumido por el motor sin repetir perfil/parámetros (van en sus propias columnas).
+- **Duplicar** no copia el costeo: la copia es un Borrador nuevo que se recostea con parámetros vigentes.
+- **Auditoría**: `crear_costeo` en `tms_cotizaciones`, sin montos ni parámetros en el texto.
+- **Pendiente** (sin cambios): dos porcentajes históricos 15 %/20 %, regla de hotel/noches, política de redondeo.
