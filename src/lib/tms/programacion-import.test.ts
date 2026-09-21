@@ -8,6 +8,7 @@ import { execute, getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { listarDisponibilidadVehiculos, type VehiculoDisponibilidad } from "@/lib/operaciones/disponibilidad";
 import type { FilaProgramacionExcel } from "./programacion-import-excel";
+import { emularConsultaConflictoPersonal, type ModeloPersonal } from "./personal-identidad.fixture";
 import {
   claveDuplicadoFila,
   detectarFilasDuplicadas,
@@ -276,7 +277,7 @@ function vehiculo(overrides: Partial<VehiculoDisponibilidad> = {}): VehiculoDisp
 }
 
 type EmpleadoMock = { id: number; codigo: string; nombre: string; estado: string };
-type PersonalMock = { id: number; codigo: string; tipo: string };
+type PersonalMock = { id: number; codigo: string; tipo: string; id_empleado?: number | null };
 type LugarMock = { id: number; nombre: string };
 
 /**
@@ -340,7 +341,7 @@ function dispatchQuery(estado: EstadoMock, sql: string, params: unknown[]): unkn
   }
   if (sql.includes("FROM tms_cliente_rutas r")) return estado.rutas;
   if (sql.includes("FROM empleados WHERE empresa_id")) return estado.empleados;
-  if (sql.includes("SELECT id, codigo, tipo FROM tms_personal")) return estado.personal;
+  if (sql.includes("FROM tms_personal WHERE empresa_id = ? AND (codigo IS NOT NULL OR id_empleado IS NOT NULL)")) return estado.personal;
   if (sql.includes("SELECT id, placa FROM tms_unidades")) return estado.unidades;
   if (sql.includes("FROM tms_personal tp")) return estado.conflictoPersonal;
   if (sql.includes("FROM tms_unidades u")) return estado.conflictoUnidad;
@@ -1200,5 +1201,129 @@ describe("confirmarImportacionProgramacion — regreso estimado opcional (todo o
     expect(r.resultado === "error" && r.erroresPorFila?.map((f) => f.filaExcel).sort()).toEqual([4, 5]);
     expect(conn.beginTransaction).not.toHaveBeenCalled();
     expect(insertsPlan(conn)).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------
+// IDENTIDAD DE PERSONAL — el importador identifica a la PERSONA por su
+// empleado (id_empleado), no por el rol con el que viene en el Excel: si el
+// empleado ya existe en TMS con el otro rol (Auxiliar vs Piloto), sus viajes
+// existentes también cuentan. Misma regla que POST/PATCH (primerConflictoTraslape).
+// ---------------------------------------------------------------------
+describe("importador — identidad de personal por empleado (id_empleado)", () => {
+  beforeEach(() => vi.resetAllMocks());
+
+  const EMP_JUAN = empleadoRow(); // id 20, código P-1
+  const EMP_ANA = empleadoRow({ id: 21, codigo: "A-1", nombre: "Ana Auxiliar" });
+  const planExistente = (over: Record<string, unknown> = {}) => ({
+    id: 900, empresa_id: 7, codigo: "PLAN-EXISTENTE", estado: "Programado", inicio: "2026-09-20 09:00:00", regreso_estimado: "2026-09-20 15:00:00", ...over,
+  });
+  const persona = (over: Record<string, unknown>) => ({ empresa_id: 7, nombre: "Juan Pérez", tipo: "Piloto", id_empleado: 20, codigo: "P-1", ...over }) as ModeloPersonal["personal"][number];
+
+  /** Catálogos desde el modelo; los conflictos de personal se calculan sobre el mismo modelo (emulador de la consulta). */
+  function montar(modelo: ModeloPersonal, empleados = [EMP_JUAN, EMP_ANA]) {
+    const estado = crearEstadoMock({
+      empleados,
+      personal: modelo.personal.filter((p) => p.empresa_id === 7 && p.codigo).map((p) => ({ id: p.id, codigo: p.codigo!, tipo: p.tipo, id_empleado: p.id_empleado })),
+    });
+    vi.mocked(query).mockImplementation((async (sql: string, params?: unknown) => {
+      const pr = (params ?? []) as unknown[];
+      if (sql.includes("FROM tms_personal tp")) return emularConsultaConflictoPersonal(modelo, sql, pr);
+      return dispatchQuery(estado, sql, pr);
+    }) as never);
+    mockVehiculos();
+    return estado;
+  }
+  const conflictoPersonal = () => vi.mocked(query).mock.calls.filter(([sql]) => String(sql).includes("FROM tms_personal tp"));
+
+  it("piloto del Excel que en TMS solo existe como AUXILIAR con viaje existente solapado: CONFLICTO", async () => {
+    montar({ personal: [persona({ id: 901, tipo: "Auxiliar" })], planes: [planExistente({ auxiliares: [901] })] });
+    const r = await previsualizarImportacionProgramacion(7, [filaFixture()]);
+    expect(r.filas[0].estado).toBe("error");
+    expect(r.filas[0].errores).toEqual(["El piloto Juan Pérez ya está asignado al viaje PLAN-EXISTENTE de 09:00 a 15:00."]);
+    // Se consultó con el personal_id del OTRO rol (901): la consulta expande a todos los del empleado.
+    expect((conflictoPersonal()[0][1] as unknown[]).slice(0, 2)).toEqual([901, 7]);
+  });
+
+  it("piloto del Excel con fila de Piloto (22) y de Auxiliar (10) del mismo empleado; el viaje usa la de Auxiliar: CONFLICTO", async () => {
+    montar({ personal: [persona({ id: 10, tipo: "Auxiliar" }), persona({ id: 22, tipo: "Piloto" })], planes: [planExistente({ auxiliares: [10] })] });
+    const r = await previsualizarImportacionProgramacion(7, [filaFixture()]);
+    expect(r.filas[0].estado).toBe("error");
+    expect((conflictoPersonal()[0][1] as unknown[])[0]).toBe(22); // el rol pedido primero; la consulta cubre ambos
+    expect(r.filas[0].errores[0]).toContain("PLAN-EXISTENTE");
+  });
+
+  it("auxiliar del Excel que en TMS solo existe como PILOTO con viaje existente solapado: CONFLICTO", async () => {
+    montar({ personal: [persona({ id: 950, tipo: "Piloto", nombre: "Ana Auxiliar", id_empleado: 21, codigo: "A-1" })], planes: [planExistente({ piloto_id: 950 })] });
+    const r = await previsualizarImportacionProgramacion(7, [filaFixture({ auxiliar1CodigoExcel: "A-1", pilotoCodigoExcel: "P-1" })]);
+    expect(r.filas[0].estado).toBe("error");
+    expect(r.filas[0].errores[0]).toBe("El auxiliar Ana Auxiliar ya está asignado al viaje PLAN-EXISTENTE de 09:00 a 15:00.");
+  });
+
+  it("sin regreso estimado en el Excel + mismo empleado con otro rol en un viaje abierto: CONFLICTO (misma regla que POST/PATCH)", async () => {
+    montar({ personal: [persona({ id: 901, tipo: "Auxiliar" })], planes: [planExistente({ auxiliares: [901], regreso_estimado: null, estado: "En ruta", inicio: "2026-09-19 06:00:00" })] });
+    const r = await previsualizarImportacionProgramacion(7, [filaFixture(SIN_REGRESO)]);
+    expect(r.filas[0].errores).toEqual(["El piloto Juan Pérez sigue asignado al viaje PLAN-EXISTENTE, que aún no registra llegada."]);
+  });
+
+  it("personal SIN id_empleado: fallback por personal_id exacto (la fila de otro rol no se toma por la misma persona)", async () => {
+    montar({
+      personal: [persona({ id: 30, tipo: "Auxiliar", id_empleado: null }), persona({ id: 31, tipo: "Piloto", id_empleado: null })],
+      planes: [planExistente({ auxiliares: [30] })],
+    });
+    const r = await previsualizarImportacionProgramacion(7, [filaFixture()]);
+    expect(r.filas[0].estado).toBe("ok"); // el Piloto 31 no comparte id_empleado con el Auxiliar 30
+    expect((conflictoPersonal()[0][1] as unknown[])[0]).toBe(31);
+  });
+
+  it("personal SIN id_empleado y del MISMO rol con viaje solapado: sigue habiendo conflicto por personal_id exacto", async () => {
+    montar({ personal: [persona({ id: 31, tipo: "Piloto", id_empleado: null })], planes: [planExistente({ piloto_id: 31 })] });
+    const r = await previsualizarImportacionProgramacion(7, [filaFixture()]);
+    expect(r.filas[0].estado).toBe("error");
+  });
+
+  it("empleado DISTINTO con el mismo nombre: sin conflicto", async () => {
+    montar({
+      personal: [persona({ id: 22, tipo: "Piloto" }), persona({ id: 40, tipo: "Auxiliar", id_empleado: 77, codigo: "X-9" })],
+      planes: [planExistente({ auxiliares: [40] })],
+    });
+    const r = await previsualizarImportacionProgramacion(7, [filaFixture()]);
+    expect(r.filas[0].estado).toBe("ok");
+  });
+
+  it("empleado nunca visto en TMS (sin ninguna fila en tms_personal): no hay viajes que comprobar", async () => {
+    montar({ personal: [], planes: [planExistente({ auxiliares: [901] })] });
+    const r = await previsualizarImportacionProgramacion(7, [filaFixture()]);
+    expect(r.filas[0].estado).toBe("ok");
+    expect(conflictoPersonal()).toHaveLength(0);
+  });
+
+  it("aislamiento por empresa: los personal/viajes de otra empresa con el mismo id_empleado no cuentan y la consulta va con la empresa importada", async () => {
+    const modelo: ModeloPersonal = {
+      personal: [persona({ id: 22, tipo: "Piloto" }), persona({ id: 60, tipo: "Auxiliar", empresa_id: 8 })],
+      planes: [planExistente({ id: 901, empresa_id: 8, codigo: "PLAN-OTRA-EMPRESA", auxiliares: [60] })],
+    };
+    montar(modelo);
+    const r = await previsualizarImportacionProgramacion(7, [filaFixture()]);
+    expect(r.filas[0].estado).toBe("ok");
+    const [sql, params] = conflictoPersonal()[0] as [string, unknown[]];
+    expect(sql).toContain("eq.empresa_id = tp.empresa_id");
+    expect(params.slice(0, 2)).toEqual([22, 7]);
+  });
+
+  it("los catálogos de personal se piden por empresa e incluyen id_empleado", async () => {
+    montar({ personal: [], planes: [] });
+    await previsualizarImportacionProgramacion(9, [filaFixture()]);
+    const catalogoPersonal = vi.mocked(query).mock.calls.find(([sql]) => String(sql).includes("id_empleado FROM tms_personal WHERE empresa_id = ?"));
+    expect(catalogoPersonal?.[1]).toEqual([9]);
+  });
+
+  it("confirmar: el conflicto por identidad de empleado rechaza el lote (todo o nada) sin abrir transacción", async () => {
+    const estado = montar({ personal: [persona({ id: 901, tipo: "Auxiliar" })], planes: [planExistente({ auxiliares: [901] })] });
+    const { conn } = mockGetPool({ estado });
+    const r = await confirmarImportacionProgramacion(7, "admin", "p.xlsx", "sha256:x", [filaFixture()]);
+    expect(r.resultado).toBe("error");
+    expect(conn.beginTransaction).not.toHaveBeenCalled();
+    expect(vi.mocked(conn.execute).mock.calls.some(([sql]) => String(sql).includes("INSERT INTO tms_planes_viaje"))).toBe(false);
   });
 });

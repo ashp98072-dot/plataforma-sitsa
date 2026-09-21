@@ -60,7 +60,11 @@ export type TipoRecurso = "piloto" | "auxiliar" | "unidad";
 
 export type RecursoAValidar = {
   tipo: TipoRecurso;
-  /** personal_id (tms_personal) para piloto/auxiliar; id de tms_unidades para unidad. */
+  /**
+   * personal_id (tms_personal) para piloto/auxiliar; id de tms_unidades para unidad.
+   * Para personas, la disponibilidad se evalúa sobre el EMPLEADO (id_empleado) del
+   * personal indicado cuando existe; ver buscarConflictoPersonal.
+   */
   id: number;
 };
 
@@ -188,6 +192,21 @@ function primerCandidatoQueOcupa(
   return null;
 }
 
+/**
+ * IDENTIDAD DE PERSONAL — la persona es el EMPLEADO real, no su rol. Un mismo
+ * `empleados.id` puede tener más de una fila en `tms_personal` (p. ej. una
+ * como Piloto y otra como Auxiliar, con distinto personal_id): son la misma
+ * persona física y no pueden estar en dos viajes solapados.
+ *
+ * Por eso el conflicto de un recurso de personas se busca sobre TODAS las
+ * filas de tms_personal EQUIVALENTES (`eq`) de la MISMA empresa:
+ *   - si el personal validado (`tp`) tiene `id_empleado`: cualquier fila con
+ *     ese mismo id_empleado, sin importar `tipo`;
+ *   - si no lo tiene (personal sin vínculo RRHH): solo esa misma fila
+ *     (fallback por personal_id exacto).
+ * No se fusiona, cambia ni actualiza ningún registro: solo se amplía la
+ * lectura. El nombre del mensaje sigue siendo el del personal validado (`tp`).
+ */
 async function buscarConflictoPersonal(
   conn: PoolConnection | undefined,
   empresaId: number,
@@ -205,12 +224,15 @@ async function buscarConflictoPersonal(
             DATE_FORMAT(${SQL_HORA_LLEGADA_REAL}, '%Y-%m-%d %H:%i:%s') AS hora_llegada,
             DATE_FORMAT(p.cerrado_en, '%Y-%m-%d %H:%i:%s') AS cerrado_en
      FROM tms_personal tp
+     INNER JOIN tms_personal eq
+       ON eq.empresa_id = tp.empresa_id
+      AND (eq.id = tp.id OR (tp.id_empleado IS NOT NULL AND eq.id_empleado = tp.id_empleado))
      INNER JOIN tms_planes_viaje p
        ON p.empresa_id = tp.empresa_id
-      AND (p.piloto_id = tp.id OR p.auxiliar_id = tp.id
+      AND (p.piloto_id = eq.id OR p.auxiliar_id = eq.id
            OR EXISTS (
              SELECT 1 FROM tms_plan_auxiliares pa
-             WHERE pa.plan_id = p.id AND pa.personal_id = tp.id
+             WHERE pa.plan_id = p.id AND pa.personal_id = eq.id
            ))
      WHERE tp.id = ? AND tp.empresa_id = ?
        AND p.estado IN (${CANDIDATOS_PLACEHOLDERS})

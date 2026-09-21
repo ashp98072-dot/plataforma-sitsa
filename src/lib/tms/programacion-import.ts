@@ -424,7 +424,9 @@ export async function previsualizarImportacionProgramacion(
       [empresaId],
     ),
     query<RowDataPacket[]>(
-      `SELECT id, codigo, tipo FROM tms_personal WHERE empresa_id = ? AND codigo IS NOT NULL`,
+      // id_empleado: la disponibilidad se evalúa por la PERSONA (empleado), no por el rol —
+      // ver buscarConflictoPersonal en disponibilidad-traslapes.ts.
+      `SELECT id, codigo, tipo, id_empleado FROM tms_personal WHERE empresa_id = ? AND (codigo IS NOT NULL OR id_empleado IS NOT NULL) ORDER BY id`,
       [empresaId],
     ),
     query<RowDataPacket[]>(`SELECT id, placa FROM tms_unidades WHERE empresa_id = ?`, [empresaId]),
@@ -460,8 +462,16 @@ export async function previsualizarImportacionProgramacion(
   }
 
   const personalExistentePorClave = new Map<string, number>();
+  // Cualquier tms_personal ya vinculado a cada empleado (sin importar tipo): sirve solo para
+  // identificar a la persona en la validación de traslapes; no se usa para crear ni cambiar roles.
+  const personalPorEmpleado = new Map<number, number>();
   for (const p of personalRows) {
-    personalExistentePorClave.set(`${String(p.tipo)}|${normalizarClave(String(p.codigo))}`, Number(p.id));
+    if (p.codigo != null) {
+      personalExistentePorClave.set(`${String(p.tipo)}|${normalizarClave(String(p.codigo))}`, Number(p.id));
+    }
+    if (p.id_empleado != null && !personalPorEmpleado.has(Number(p.id_empleado))) {
+      personalPorEmpleado.set(Number(p.id_empleado), Number(p.id));
+    }
   }
 
   const unidadesPorPlaca = new Map<string, number>();
@@ -481,6 +491,16 @@ export async function previsualizarImportacionProgramacion(
 
   function personalIdExistente(tipo: "Piloto" | "Auxiliar", codigo: string): number | null {
     return personalExistentePorClave.get(`${tipo}|${normalizarClave(codigo)}`) ?? null;
+  }
+
+  /**
+   * personal_id con el que se busca el conflicto de una PERSONA: el del rol pedido si ya existe y,
+   * si esa persona solo existe en TMS con el otro rol (Auxiliar vs Piloto), el personal ya vinculado
+   * a ese mismo empleado. La búsqueda de conflictos expande luego a TODAS las filas de ese empleado.
+   * `null` solo si la persona nunca ha estado en TMS (no puede tener viajes).
+   */
+  function personalIdParaConflicto(tipo: "Piloto" | "Auxiliar", codigo: string, empleadoId: number): number | null {
+    return personalIdExistente(tipo, codigo) ?? personalPorEmpleado.get(empleadoId) ?? null;
   }
 
   const resultado: PreviewFilaProgramacion[] = [];
@@ -626,11 +646,13 @@ export async function previsualizarImportacionProgramacion(
       inicio: inicioViaje(fila.fechaSalidaExcel!, fila.horaSalidaExcel),
       fin: finViajeDesdeInput(regresoEstimadoCombinado),
     };
+    const pilotoParaConflicto = personalIdParaConflicto("Piloto", fila.pilotoCodigoExcel, pilotoOk.id);
+    const auxiliaresParaConflicto = auxiliaresResueltos
+      .map((aux) => personalIdParaConflicto("Auxiliar", aux.codigo, aux.id))
+      .filter((id): id is number => id != null);
     const recursos: RecursoAValidar[] = [
-      ...(pilotoPersonalId != null ? [{ tipo: "piloto" as const, id: pilotoPersonalId }] : []),
-      ...auxiliaresDatos
-        .filter((a): a is AuxiliarResueltoFila & { personalId: number } => a.personalId != null)
-        .map((a) => ({ tipo: "auxiliar" as const, id: a.personalId })),
+      ...(pilotoParaConflicto != null ? [{ tipo: "piloto" as const, id: pilotoParaConflicto }] : []),
+      ...auxiliaresParaConflicto.map((id) => ({ tipo: "auxiliar" as const, id })),
       ...(unidadId != null ? [{ tipo: "unidad" as const, id: unidadId }] : []),
     ];
     if (recursos.length) {

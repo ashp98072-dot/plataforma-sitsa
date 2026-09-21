@@ -32,6 +32,8 @@ vi.mock("@/lib/tms/personal-resolucion", () => ({ personalDesdeEmpleado: vi.fn((
 
 import { execute, getPool, query } from "@/lib/db";
 import { requireTenantProgramacion } from "@/lib/tenant";
+import { personalDesdeEmpleado } from "@/lib/tms/personal-resolucion";
+import { emularConsultaConflictoPersonal, type ModeloPersonal } from "@/lib/tms/personal-identidad.fixture";
 import { POST, PATCH } from "./route";
 
 const ctx = { params: Promise.resolve({ slug: "kt-monaco" }) };
@@ -271,5 +273,108 @@ describe("regreso_estimado nunca se rellena con datos reales", () => {
     const fuente = readFileSync("src/app/api/empresas/[slug]/tms/planes/route.ts", "utf8");
     expect(fuente).not.toContain("Indica el regreso estimado");
     expect(fuente).not.toContain("es obligatorio para poder validar disponibilidad");
+  });
+});
+
+describe("identidad de personal por empleado — POST y PATCH usan la misma regla", () => {
+  const juanAux = { id: 10, empresa_id: 7, nombre: "Juan Pérez", tipo: "Auxiliar" as const, id_empleado: 55 };
+  const juanPiloto = { id: 22, empresa_id: 7, nombre: "Juan Pérez", tipo: "Piloto" as const, id_empleado: 55 };
+  const viajeExistente = { id: 77, empresa_id: 7, codigo: "PLAN-77", estado: "Programado", inicio: "2026-09-30 07:00:00", regreso_estimado: "2026-09-30 12:00:00", auxiliares: [10] };
+
+  /** La búsqueda de conflictos de personal se responde con el emulador de la consulta real sobre un modelo en memoria. */
+  function responderConModelo(modelo: ModeloPersonal) {
+    const emular = (sql: string, params: unknown[]) => emularConsultaConflictoPersonal(modelo, sql, params);
+    vi.mocked(query).mockImplementation((async (sql: string, params: unknown[] = []) => {
+      sqlDeConsultas.push({ sql: String(sql), params });
+      return String(sql).includes("FROM tms_personal tp") ? emular(String(sql), params) : [];
+    }) as never);
+    conexion.query.mockImplementation((async (sql: string, params: unknown[] = []) => {
+      if (String(sql).includes("GET_LOCK")) return [[{ l: 1 }]];
+      sqlDeConsultas.push({ sql: String(sql), params });
+      return [String(sql).includes("FROM tms_personal tp") ? emular(String(sql), params) : []];
+    }) as never);
+  }
+
+  it("POST: el piloto (personal 22, rol Piloto) ya está en un viaje como Auxiliar (personal 10) del mismo empleado: 409", async () => {
+    vi.mocked(personalDesdeEmpleado).mockResolvedValue(22);
+    responderConModelo({ personal: [juanAux, juanPiloto], planes: [viajeExistente] });
+    const res = await post({ ...PLAN_BASE, pilotoNombre: undefined, pilotoEmpleadoId: 55, regresoEstimado: "2026-09-30T17:30" });
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe("El piloto Juan Pérez ya está asignado al viaje PLAN-77 de 07:00 a 12:00.");
+    expect(insertPlan()).toBeUndefined();
+  });
+
+  it("POST sin regreso estimado: el mismo empleado con otro rol en un viaje abierto también bloquea", async () => {
+    vi.mocked(personalDesdeEmpleado).mockResolvedValue(22);
+    responderConModelo({ personal: [juanAux, juanPiloto], planes: [{ ...viajeExistente, regreso_estimado: null, estado: "En ruta" }] });
+    const res = await post({ ...PLAN_BASE, pilotoNombre: undefined, pilotoEmpleadoId: 55 });
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toContain("aún no registra llegada");
+  });
+
+  it("POST: un empleado DISTINTO con el mismo nombre no bloquea", async () => {
+    vi.mocked(personalDesdeEmpleado).mockResolvedValue(22);
+    responderConModelo({
+      personal: [juanPiloto, { ...juanAux, id: 40, id_empleado: 77 }],
+      planes: [{ ...viajeExistente, auxiliares: [40] }],
+    });
+    const res = await post({ ...PLAN_BASE, pilotoNombre: undefined, pilotoEmpleadoId: 55, regresoEstimado: "2026-09-30T17:30" });
+    expect(res.status).toBe(200);
+  });
+
+  it("POST: personal sin id_empleado (creado por nombre) usa el fallback por personal_id exacto", async () => {
+    // pilotoNombre => tms_personal nuevo (id 91 = insertId del mock), sin id_empleado.
+    responderConModelo({
+      personal: [{ id: 91, empresa_id: 7, nombre: "Piloto Uno", tipo: "Piloto", id_empleado: null }, { id: 92, empresa_id: 7, nombre: "Piloto Uno", tipo: "Auxiliar", id_empleado: null }],
+      planes: [{ ...viajeExistente, auxiliares: [92] }],
+    });
+    const res = await post({ ...PLAN_BASE, regresoEstimado: "2026-09-30T17:30" });
+    expect(res.status).toBe(200); // 92 es otra fila sin vínculo de empleado: no es la misma persona
+  });
+
+  it("POST: aislamiento por empresa — el mismo id_empleado en otra empresa no bloquea", async () => {
+    vi.mocked(personalDesdeEmpleado).mockResolvedValue(22);
+    responderConModelo({
+      personal: [juanPiloto, { ...juanAux, id: 60, empresa_id: 8 }],
+      planes: [{ ...viajeExistente, empresa_id: 8, auxiliares: [60] }],
+    });
+    const res = await post({ ...PLAN_BASE, pilotoNombre: undefined, pilotoEmpleadoId: 55, regresoEstimado: "2026-09-30T17:30" });
+    expect(res.status).toBe(200);
+    expect(sqlDeConsultas.find((c) => c.sql.includes("FROM tms_personal tp"))!.params.slice(0, 2)).toEqual([22, 7]);
+  });
+
+  it("PATCH: al mover el viaje, el piloto (personal 12, empleado 55) choca con un viaje donde el mismo empleado es Auxiliar (personal 10): 409", async () => {
+    vi.mocked(query).mockImplementation((async (sql: string, params: unknown[] = []) => {
+      sqlDeConsultas.push({ sql: String(sql), params });
+      if (String(sql).includes("FROM tms_planes_viaje p") && String(sql).includes("WHERE p.id = ?")) {
+        return [{
+          id: 40, codigo: "PLAN-40", estado: "Programado", fecha_plan: "2026-09-30", hora_carga: "08:00:00", placa: "", piloto: "Juan Pérez",
+          piloto_id: 12, unidad_id: null, regreso_estimado: "2026-09-30T17:30", tarifa_comercial: null, costo_operativo_referencia: null,
+          referencia_cliente: null, flota_vehiculo_id: null, pendiente_cierre: 0, ruta_id: null, tarifa_id: null, notas: null,
+        }];
+      }
+      return [];
+    }) as never);
+    const modelo: ModeloPersonal = {
+      personal: [{ ...juanPiloto, id: 12 }, juanAux],
+      planes: [{ ...viajeExistente, inicio: "2026-10-02 07:00:00", regreso_estimado: "2026-10-02 12:00:00" }],
+    };
+    conexion.query.mockImplementation((async (sql: string, params: unknown[] = []) => {
+      if (String(sql).includes("GET_LOCK")) return [[{ l: 1 }]];
+      sqlDeConsultas.push({ sql: String(sql), params });
+      return [String(sql).includes("FROM tms_personal tp") ? emularConsultaConflictoPersonal(modelo, String(sql), params) : []];
+    }) as never);
+    const res = await patch({ id: 40, fechaPlan: "2026-10-02", horaCarga: "08:00", regresoEstimado: "2026-10-02T11:00" });
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toContain("PLAN-77");
+    const c = sqlDeConsultas.find((x) => x.sql.includes("FROM tms_personal tp"))!;
+    expect(c.sql).toContain("(eq.id = tp.id OR (tp.id_empleado IS NOT NULL AND eq.id_empleado = tp.id_empleado))");
+    expect(c.params.slice(0, 2)).toEqual([12, 7]);
+  });
+
+  it("planes/route.ts no reimplementa la identidad: usa primerConflictoTraslape en POST y PATCH", () => {
+    const fuente = readFileSync("src/app/api/empresas/[slug]/tms/planes/route.ts", "utf8");
+    expect((fuente.match(/primerConflictoTraslape\(/g) ?? []).length).toBe(2);
+    expect(fuente).not.toContain("eq.id_empleado");
   });
 });
