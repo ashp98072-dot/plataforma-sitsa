@@ -871,11 +871,11 @@ export async function requireTenantCotizacionesAjustes(
   const tenant = await requireTenant(slug);
   if (tenant.error) return tenant;
   const { session, empresa } = tenant;
-  if (session.rol === "Admin") return { session, empresa };
   const empresaMods = empresa.modulos.length ? empresa.modulos : modulosPorRol(session.rol);
   if (empresaMods.length && !empresaMods.includes("tms")) {
     return { error: NextResponse.json({ error: "Esta empresa no tiene el módulo TMS." }, { status: 403 }) };
   }
+  if (session.rol === "Admin") return { session, empresa };
   const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
   if (!tienePermiso(perms, "cotizaciones_ajustes", accion)) {
     return { error: NextResponse.json({ error: "Sin permiso para administrar los ajustes de costeo." }, { status: 403 }) };

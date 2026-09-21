@@ -121,7 +121,7 @@ export async function crearParametrosAjustes(empresaId: number, usuario: string,
        input.viaticoPilotoDia,input.viaticoAuxiliarDia,input.viaticoGuiaDia,input.hotelDia,input.margenObjetivo,usuario]);
     await registrarAuditoriaTx(conn,{empresaId,usuario,accion:"crear_vigencia_costeo",modulo:"tms_cotizaciones",detalle:`Nueva vigencia de costeo desde ${input.vigenteDesde}.`});
     return Number(r.insertId);
-  }); } catch(e) { if (duplicado(e)) throw new ErrorAjustesCosteo("Ya existe una vigencia para esa fecha."); throw e; }
+  }); } catch(e) { if (duplicado(e)) throw new ErrorAjustesCosteo("Ya existe una configuración con esa fecha de vigencia."); throw e; }
 }
 
 const CAMPOS_PERFIL = `nombre,activo,costo_adquisicion,dias_operacion_mes,gps_mensual,seguro_vehiculo_mensual,costo_aceite_servicio,

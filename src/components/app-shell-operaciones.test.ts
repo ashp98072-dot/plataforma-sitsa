@@ -53,7 +53,7 @@ describe("menú Operaciones — nombres y orden", () => {
   it("muestra Ajustes de costeo solo con su permiso explícito y la ruta correcta", () => {
     expect(src).toContain('tienePermiso(permisos, "cotizaciones_ajustes", "ver")');
     expect(src).toContain('href: `${base}/cotizaciones/ajustes`');
-    expect(src).toContain('label: "Ajustes de costeo"');
+    expect(src).toContain('label: "Ajustes de cotizaciones"');
     const bloque = src.match(/const puedeAjustesCotizaciones =[\s\S]*?\n    \}/)?.[0] ?? "";
     expect(bloque).not.toContain("permisos.length === 0");
     expect(bloque).not.toContain('"cotizaciones_costeo"');

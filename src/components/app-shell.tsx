@@ -417,7 +417,7 @@ export function AppShell({
     if (puedeAjustesCotizaciones) {
       opsLinks.push({
         href: `${base}/cotizaciones/ajustes`,
-        label: "Ajustes de costeo",
+        label: "Ajustes de cotizaciones",
         key: "cotizaciones-ajustes",
       });
     }
