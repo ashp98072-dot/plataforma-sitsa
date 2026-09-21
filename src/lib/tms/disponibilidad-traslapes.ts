@@ -40,6 +40,19 @@ import { query, type SqlParams } from "@/lib/db";
  * real): Programado, En ruta, Cargado. Estados que YA NO reservan (se
  * excluyen, igual que el propio plan que se edita): Descargado, Cerrado,
  * Cancelado — sin cambios respecto a antes de este PR.
+ *
+ * REGRESO ESTIMADO OPCIONAL — `regreso_estimado` dejó de ser obligatorio.
+ * Un viaje SIN regreso estimado no tiene un intervalo planificado, así que
+ * ocupa a sus recursos desde `fecha_plan + hora_carga` hasta una
+ * terminación REAL, nunca inventada:
+ *   1. `flota_viajes.hora_llegada` (llegada física registrada por Flota/Piloto);
+ *   2. si no hay llegada pero el plan ya está Cerrado: `cerrado_en`, usado
+ *      SOLO como final administrativo para disponibilidad (no es una
+ *      llegada física y nunca se copia a `regreso_estimado`);
+ *   3. si no hay ninguna: el viaje sigue abierto (`fin = null`, sin límite).
+ * El NUEVO viaje que se valida sin regreso estimado se trata igual: su
+ * intervalo es [inicio, sin límite). Un viaje CON regreso estimado conserva
+ * exactamente la validación por intervalo de siempre.
  */
 export const ESTADOS_QUE_RESERVAN_RECURSOS = ["Programado", "En ruta", "Cargado"] as const;
 
@@ -55,6 +68,17 @@ export type IntervaloViaje = {
   /** "YYYY-MM-DD HH:mm:ss" — ya combinado, listo para SQL. */
   inicio: string;
   fin: string;
+};
+
+/**
+ * Intervalo del viaje que SE VALIDA. `fin: null` = el viaje no tiene regreso
+ * estimado: está abierto hasta que exista una terminación real (ver el
+ * encabezado de este módulo). `IntervaloViaje` (fin obligatorio) es
+ * asignable a este tipo.
+ */
+export type IntervaloConsulta = {
+  inicio: string;
+  fin: string | null;
 };
 
 export type ConflictoTraslape = {
@@ -86,7 +110,16 @@ async function runQuery<T extends RowDataPacket[]>(
   return query<RowDataPacket[]>(sql, params) as Promise<T>;
 }
 
-const RESERVA_PLACEHOLDERS = ESTADOS_QUE_RESERVAN_RECURSOS.map(() => "?").join(",");
+/**
+ * Estados que la consulta SQL trae como candidatos. "Cerrado" entra SOLO para
+ * los planes sin regreso estimado (su ocupación termina en la llegada real o,
+ * si no la hubo, en el cierre administrativo) — el prefiltro de abajo descarta
+ * cualquier Cerrado que tenga regreso estimado, que nunca bloquea (sin cambios).
+ * `ESTADOS_QUE_RESERVAN_RECURSOS` (arriba) NO cambia: sigue siendo el criterio
+ * de si el plan que se está guardando reserva recursos.
+ */
+const ESTADOS_CANDIDATOS_TRASLAPE = [...ESTADOS_QUE_RESERVAN_RECURSOS, "Cerrado"] as const;
+const CANDIDATOS_PLACEHOLDERS = ESTADOS_CANDIDATOS_TRASLAPE.map(() => "?").join(",");
 
 /** Combina fecha_plan (DATE) y hora_carga (opcional) en "YYYY-MM-DD HH:mm:ss". */
 export function inicioViaje(fechaPlan: string, horaCarga: string | null | undefined): string {
@@ -128,7 +161,7 @@ export function finViajeDesdeInput(regresoEstimado: string | null | undefined): 
 function primerCandidatoQueOcupa(
   filas: RowDataPacket[],
   nombreCampo: string,
-  intervaloConsulta: IntervaloViaje,
+  intervaloConsulta: IntervaloConsulta,
 ): { nombre: string; planId: number; codigo: string; inicioConflicto: string; finConflicto: string | null } | null {
   for (const r of filas) {
     const ocupacion = intervaloOcupacionReal({
@@ -136,6 +169,8 @@ function primerCandidatoQueOcupa(
       inicio: String(r.inicio),
       regresoEstimado: r.regreso_estimado != null ? String(r.regreso_estimado) : null,
       llegadaTecnica: Number(r.llegada_tecnica) === 1,
+      horaLlegada: r.hora_llegada != null ? String(r.hora_llegada) : null,
+      cerradoEn: r.cerrado_en != null ? String(r.cerrado_en) : null,
     });
     if (seSolapaConOcupacionReal(ocupacion, intervaloConsulta)) {
       // ocupacion no puede ser null aquí: seSolapaConOcupacionReal(null, ..)
@@ -157,15 +192,18 @@ async function buscarConflictoPersonal(
   conn: PoolConnection | undefined,
   empresaId: number,
   personalId: number,
-  intervalo: IntervaloViaje,
+  intervalo: IntervaloConsulta,
   excluirPlanId: number | null,
 ): Promise<{ nombre: string; planId: number; codigo: string; inicioConflicto: string; finConflicto: string | null } | null> {
+  const prefiltro = prefiltroOcupacion(intervalo);
   const rows = await runQuery<RowDataPacket[]>(
     conn,
     `SELECT tp.nombre AS recurso_nombre, p.id AS plan_id, p.codigo, p.estado,
             DATE_FORMAT(TIMESTAMP(p.fecha_plan, COALESCE(p.hora_carga, '00:00:00')), '%Y-%m-%d %H:%i:%s') AS inicio,
             DATE_FORMAT(p.regreso_estimado, '%Y-%m-%d %H:%i:%s') AS regreso_estimado,
-            ${SQL_LLEGADA_TECNICA} AS llegada_tecnica
+            ${SQL_LLEGADA_TECNICA} AS llegada_tecnica,
+            DATE_FORMAT(${SQL_HORA_LLEGADA_REAL}, '%Y-%m-%d %H:%i:%s') AS hora_llegada,
+            DATE_FORMAT(p.cerrado_en, '%Y-%m-%d %H:%i:%s') AS cerrado_en
      FROM tms_personal tp
      INNER JOIN tms_planes_viaje p
        ON p.empresa_id = tp.empresa_id
@@ -175,15 +213,15 @@ async function buscarConflictoPersonal(
              WHERE pa.plan_id = p.id AND pa.personal_id = tp.id
            ))
      WHERE tp.id = ? AND tp.empresa_id = ?
-       AND p.estado IN (${RESERVA_PLACEHOLDERS})
+       AND p.estado IN (${CANDIDATOS_PLACEHOLDERS})
        ${excluirPlanId ? "AND p.id != ?" : ""}
-       ${SQL_PREFILTRO_OCUPACION}`,
+       ${prefiltro.sql}`,
     [
       personalId,
       empresaId,
-      ...ESTADOS_QUE_RESERVAN_RECURSOS,
+      ...ESTADOS_CANDIDATOS_TRASLAPE,
       ...(excluirPlanId ? [excluirPlanId] : []),
-      ...paramsPrefiltroOcupacion(intervalo),
+      ...prefiltro.params,
     ],
   );
   return primerCandidatoQueOcupa(rows, "recurso_nombre", intervalo);
@@ -193,28 +231,31 @@ async function buscarConflictoUnidad(
   conn: PoolConnection | undefined,
   empresaId: number,
   unidadId: number,
-  intervalo: IntervaloViaje,
+  intervalo: IntervaloConsulta,
   excluirPlanId: number | null,
 ): Promise<{ nombre: string; planId: number; codigo: string; inicioConflicto: string; finConflicto: string | null } | null> {
+  const prefiltro = prefiltroOcupacion(intervalo);
   const rows = await runQuery<RowDataPacket[]>(
     conn,
     `SELECT u.placa AS recurso_nombre, p.id AS plan_id, p.codigo, p.estado,
             DATE_FORMAT(TIMESTAMP(p.fecha_plan, COALESCE(p.hora_carga, '00:00:00')), '%Y-%m-%d %H:%i:%s') AS inicio,
             DATE_FORMAT(p.regreso_estimado, '%Y-%m-%d %H:%i:%s') AS regreso_estimado,
-            ${SQL_LLEGADA_TECNICA} AS llegada_tecnica
+            ${SQL_LLEGADA_TECNICA} AS llegada_tecnica,
+            DATE_FORMAT(${SQL_HORA_LLEGADA_REAL}, '%Y-%m-%d %H:%i:%s') AS hora_llegada,
+            DATE_FORMAT(p.cerrado_en, '%Y-%m-%d %H:%i:%s') AS cerrado_en
      FROM tms_unidades u
      INNER JOIN tms_planes_viaje p
        ON p.empresa_id = u.empresa_id AND p.unidad_id = u.id
      WHERE u.id = ? AND u.empresa_id = ?
-       AND p.estado IN (${RESERVA_PLACEHOLDERS})
+       AND p.estado IN (${CANDIDATOS_PLACEHOLDERS})
        ${excluirPlanId ? "AND p.id != ?" : ""}
-       ${SQL_PREFILTRO_OCUPACION}`,
+       ${prefiltro.sql}`,
     [
       unidadId,
       empresaId,
-      ...ESTADOS_QUE_RESERVAN_RECURSOS,
+      ...ESTADOS_CANDIDATOS_TRASLAPE,
       ...(excluirPlanId ? [excluirPlanId] : []),
-      ...paramsPrefiltroOcupacion(intervalo),
+      ...prefiltro.params,
     ],
   );
   return primerCandidatoQueOcupa(rows, "recurso_nombre", intervalo);
@@ -236,7 +277,7 @@ async function buscarConflictoUnidad(
 export async function primerConflictoTraslape(
   empresaId: number,
   recursos: RecursoAValidar[],
-  intervalo: IntervaloViaje,
+  intervalo: IntervaloConsulta,
   excluirPlanId: number | null,
   conn?: PoolConnection,
 ): Promise<ConflictoTraslape | null> {
@@ -332,53 +373,76 @@ export const SQL_LLEGADA_TECNICA = `EXISTS (
   WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
 )`;
 
+/** Inicio del plan (fecha_plan + hora_carga) como DATETIME, para el prefiltro SQL de candidatos (CORRECCIÓN PR #83, ver prefiltroOcupacion). */
+const SQL_INICIO_PLAN = "TIMESTAMP(p.fecha_plan, COALESCE(p.hora_carga, '00:00:00'))";
+
 /**
- * CORRECCIÓN PR #83 — prefiltro SQL de candidatos, usado por
- * buscarConflictoPersonal/buscarConflictoUnidad (arriba) ANTES de traer
- * las filas a JS. Sin este filtro, la query solo acotaba por
- * `estado IN (...)` — sin límite temporal ni LIMIT — pudiendo leer todo
- * el historial "activo" del recurso (cualquier plan Programado/En ruta/
- * Cargado alguna vez asignado a él, sin importar qué tan viejo).
- *
- * Por construcción, este filtro es EXACTAMENTE equivalente a lo que
- * decidirían intervaloOcupacionReal() + seSolapaConOcupacionReal() para
- * cada fila — no una aproximación amplia: una fila que lo pasa SIEMPRE
- * haría match ahí, y una que no lo pasa NUNCA lo haría. Aun así, el
- * helper JS se mantiene como autoridad final (no se agrega `LIMIT` aquí)
- * — este filtro es solo una reducción segura de candidatos, no un
- * reemplazo de la lógica de negocio.
- *
- * - Programado: solo puede chocar por su intervalo PLANIFICADO — mismo
- *   criterio de siempre (`regreso_estimado` como fin), incluyendo excluir
- *   los que no tienen `regreso_estimado` (nunca ocupan, ver
- *   intervaloOcupacionReal — un Programado sin regreso_estimado jamás
- *   genera conflicto).
- * - En ruta / Cargado: NUNCA se filtra por `regreso_estimado` — ese era
- *   exactamente el bug que corrigió OPS-4.2b (un regreso_estimado vencido
- *   no puede excluir un viaje que sigue físicamente activo). Solo se
- *   exige que ya haya iniciado antes de que termine el nuevo intervalo, y
- *   que NO tenga llegada técnica (con llegada, ya no ocupa — se descarta
- *   aquí mismo, sin esperar al helper JS).
- *
- * Placeholders en el mismo orden que produce paramsPrefiltroOcupacion().
+ * Hora de llegada FÍSICA registrada del plan: `flota_viajes.hora_llegada` de
+ * un viaje cerrado (la última, si hubiera varios). Es la ÚNICA fuente del
+ * "regreso real" — no se duplica en `tms_planes_viaje`. Un cierre manual sin
+ * llegada física deja `hora_llegada` en NULL, así que aquí devuelve NULL.
+ * Referencia el alias `p` de `tms_planes_viaje`.
  */
-const SQL_PREFILTRO_OCUPACION = `AND (
-  (
-    p.estado = 'Programado'
-    AND p.regreso_estimado IS NOT NULL
-    AND TIMESTAMP(p.fecha_plan, COALESCE(p.hora_carga, '00:00:00')) < ?
-    AND p.regreso_estimado > ?
-  )
-  OR (
-    p.estado IN ('En ruta', 'Cargado')
-    AND TIMESTAMP(p.fecha_plan, COALESCE(p.hora_carga, '00:00:00')) < ?
-    AND NOT (${SQL_LLEGADA_TECNICA})
-  )
+export const SQL_HORA_LLEGADA_REAL = `(
+  SELECT MAX(fv.hora_llegada) FROM flota_viajes fv
+  WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado' AND fv.hora_llegada IS NOT NULL
 )`;
 
-/** Parámetros de SQL_PREFILTRO_OCUPACION, en el mismo orden que sus `?`. */
-function paramsPrefiltroOcupacion(intervalo: IntervaloViaje): [string, string, string] {
-  return [intervalo.fin, intervalo.inicio, intervalo.fin];
+/**
+ * Prefiltro SQL de candidatos (CORRECCIÓN PR #83): sin él la query solo acotaba
+ * por `estado IN (...)`, sin límite temporal, y podía leer todo el historial
+ * "activo" del recurso. Reduce lo que se trae a JS sin cambiar la decisión, que sigue siendo de
+ * intervaloOcupacionReal() + seSolapaConOcupacionReal(). Cada rama es
+ * equivalente o más amplia que esa lógica — nunca más estrecha.
+ *
+ * - Programado CON regreso estimado: intervalo planificado de siempre.
+ * - En ruta / Cargado CON regreso estimado: nunca se filtra por
+ *   regreso_estimado (OPS-4.2b); solo que haya iniciado antes de que termine
+ *   la consulta y que NO tenga llegada técnica.
+ * - Programado / En ruta / Cargado SIN regreso estimado: candidatos por haber
+ *   iniciado antes del fin de la consulta; la terminación real (llegada o
+ *   abierto) la resuelve el helper de JS.
+ * - Cerrado SIN regreso estimado: solo si su terminación real (hora de
+ *   llegada o, en su defecto, cerrado_en) es posterior al inicio de la
+ *   consulta.
+ *
+ * `intervalo.fin === null` (consulta sin regreso estimado) elimina la
+ * condición "inicia antes de que termine la consulta": no tiene fin.
+ * Los parámetros se devuelven en el mismo orden que sus `?`.
+ */
+function prefiltroOcupacion(intervalo: IntervaloConsulta): { sql: string; params: string[] } {
+  const params: string[] = [];
+  const iniciaAntesDeFinConsulta = () => {
+    if (intervalo.fin == null) return "1 = 1";
+    params.push(intervalo.fin);
+    return `${SQL_INICIO_PLAN} < ?`;
+  };
+  const programadoConRegreso = `(
+    p.estado = 'Programado'
+    AND p.regreso_estimado IS NOT NULL
+    AND ${iniciaAntesDeFinConsulta()}
+    AND p.regreso_estimado > ?
+  )`;
+  params.push(intervalo.inicio);
+  const activoConRegreso = `(
+    p.estado IN ('En ruta', 'Cargado')
+    AND p.regreso_estimado IS NOT NULL
+    AND ${iniciaAntesDeFinConsulta()}
+    AND NOT (${SQL_LLEGADA_TECNICA})
+  )`;
+  const sinRegreso = `(
+    p.estado IN ('Programado', 'En ruta', 'Cargado')
+    AND p.regreso_estimado IS NULL
+    AND ${iniciaAntesDeFinConsulta()}
+  )`;
+  const cerradoSinRegreso = `(
+    p.estado = 'Cerrado'
+    AND p.regreso_estimado IS NULL
+    AND ${iniciaAntesDeFinConsulta()}
+    AND COALESCE(${SQL_HORA_LLEGADA_REAL}, p.cerrado_en) > ?
+  )`;
+  params.push(intervalo.inicio);
+  return { sql: `AND (${programadoConRegreso} OR ${activoConRegreso} OR ${sinRegreso} OR ${cerradoSinRegreso})`, params };
 }
 
 /**
@@ -439,13 +503,16 @@ export function intervaloOcupacionReal(plan: {
   inicio: string;
   regresoEstimado: string | null;
   llegadaTecnica: boolean;
+  /** Llegada FÍSICA (flota_viajes.hora_llegada), "YYYY-MM-DD HH:mm:ss"; solo se usa si el plan no tiene regreso estimado. */
+  horaLlegada?: string | null;
+  /** Cierre administrativo (tms_planes_viaje.cerrado_en); solo cuenta como final de un plan Cerrado sin regreso estimado ni llegada. */
+  cerradoEn?: string | null;
 }): IntervaloOcupacion {
+  // Sin regreso estimado no hay intervalo planificado: la ocupación termina
+  // en una terminación REAL (ver intervaloSinRegresoEstimado). Con regreso
+  // estimado, TODO lo de abajo es exactamente el criterio de siempre.
+  if (plan.regresoEstimado == null) return intervaloSinRegresoEstimado(plan);
   if (plan.estado === "Programado") {
-    // CORRECCIÓN PR #82: sin regresoEstimado no hay intervalo planificado
-    // que devolver — nunca se usa `fin: null` aquí, ese significado queda
-    // reservado exclusivamente para "viaje físicamente activo sin
-    // llegada" (En ruta/Cargado). No inventar un fin que no existe.
-    if (plan.regresoEstimado == null) return null;
     return { inicio: plan.inicio, fin: plan.regresoEstimado };
   }
   if (
@@ -458,6 +525,47 @@ export function intervaloOcupacionReal(plan: {
 }
 
 /**
+ * Ocupación de un plan SIN regreso estimado (dato opcional de planificación).
+ * Nunca se inventa un fin (+N horas, fin de día, etc.) ni se copia una hora
+ * real a `regreso_estimado`:
+ *   - Programado / En ruta / Cargado sin llegada: abierto (`fin: null`) desde
+ *     `inicio` hasta que exista una terminación real.
+ *   - Programado / En ruta / Cargado CON llegada técnica: hasta la hora de
+ *     llegada física; si el viaje cerrado en Flota no guardó hora de llegada
+ *     (cierre manual), no hay ventana que reservar (`null`, como antes).
+ *   - Cerrado: hasta la hora de llegada física o, si no la hubo, hasta el
+ *     cierre administrativo (`cerrado_en`), usado SOLO para disponibilidad.
+ *     Sin ninguna de las dos marcas, no reserva nada.
+ *   - Cualquier otro estado (Descargado, Cancelado…): no ocupa.
+ * Una terminación anterior o igual al inicio (p. ej. un viaje futuro cerrado
+ * manualmente antes de salir) no genera ventana: no ocupa.
+ */
+function intervaloSinRegresoEstimado(plan: {
+  estado: string;
+  inicio: string;
+  llegadaTecnica: boolean;
+  horaLlegada?: string | null;
+  cerradoEn?: string | null;
+}): IntervaloOcupacion {
+  let fin: string | null;
+  if (plan.estado === "Cerrado") {
+    fin = plan.horaLlegada ?? plan.cerradoEn ?? null;
+    if (fin == null) return null;
+  } else if ((ESTADOS_QUE_RESERVAN_RECURSOS as readonly string[]).includes(plan.estado)) {
+    if (plan.llegadaTecnica) {
+      if (plan.horaLlegada == null) return null;
+      fin = plan.horaLlegada;
+    } else {
+      fin = null;
+    }
+  } else {
+    return null;
+  }
+  if (fin !== null && fin <= plan.inicio) return null;
+  return { inicio: plan.inicio, fin };
+}
+
+/**
  * ¿El intervalo de ocupación real se solapa con un intervalo de consulta
  * (p.ej. el del plan NUEVO que se quiere validar)? Mismo criterio de
  * solape que ya usa primerConflictoTraslape — sin "misma fecha": dos
@@ -467,10 +575,11 @@ export function intervaloOcupacionReal(plan: {
  */
 export function seSolapaConOcupacionReal(
   ocupacion: IntervaloOcupacion,
-  consulta: IntervaloViaje,
+  consulta: IntervaloConsulta,
 ): boolean {
   if (!ocupacion) return false;
-  const empiezaAntesDeQueTermineConsulta = ocupacion.inicio < consulta.fin;
+  // Consulta sin fin (viaje sin regreso estimado): sin límite superior.
+  const empiezaAntesDeQueTermineConsulta = consulta.fin == null || ocupacion.inicio < consulta.fin;
   const terminaDespuesDeQueEmpieceConsulta =
     ocupacion.fin == null || ocupacion.fin > consulta.inicio;
   return empiezaAntesDeQueTermineConsulta && terminaDespuesDeQueEmpieceConsulta;

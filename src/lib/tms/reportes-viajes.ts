@@ -1,5 +1,6 @@
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
+import { planesConCierreManual } from "@/lib/tms/cierre-manual-planes";
 import { listarParadasDePlanes, type PlanParada } from "@/lib/tms/paradas";
 import {
   estadoFinancieroDe,
@@ -70,6 +71,15 @@ export type PlanReporte = {
   /** Del ÚNICO flota_viajes vinculado (si existe). */
   horaSalida: string | null;
   horaLlegada: string | null;
+  /**
+   * Regreso REAL del viaje: la misma llegada física de `horaLlegada`
+   * (flota_viajes.hora_llegada), expuesta con su nombre de negocio. No
+   * reemplaza a `regresoEstimado` (dato de planificación, opcional) ni usa
+   * `cerradoEn` (cierre administrativo).
+   */
+  regresoReal?: string | null;
+  /** El cierre fue manual (sin llegada física). Solo puede ser true si estado = Cerrado. */
+  cierreManual?: boolean;
   kmSalida: number | null;
   kmLlegada: number | null;
   kmRecorridos: number | null;
@@ -651,9 +661,10 @@ export async function obtenerReporteViajes(
   );
 
   const planIds = rows.map((r) => Number(r.id));
-  const [paradasMap, auxMap] = await Promise.all([
+  const [paradasMap, auxMap, cierreManualIds] = await Promise.all([
     listarParadasDePlanes(planIds),
     auxiliaresDePlanesReporte(planIds),
+    planesConCierreManual(empresaId, rows.filter((r) => r.estado === "Cerrado").map((r) => Number(r.id))),
   ]);
 
   return rows.map((r) => {
@@ -693,6 +704,8 @@ export async function obtenerReporteViajes(
       evidencias: Number(r.evidencias ?? 0),
       horaSalida,
       horaLlegada,
+      regresoReal: horaLlegada,
+      cierreManual: cierreManualIds.has(id),
       kmSalida,
       kmLlegada,
       kmRecorridos: calcularKmRecorridos(kmSalida, kmLlegada),

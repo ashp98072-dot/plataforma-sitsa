@@ -2,6 +2,7 @@ import PDFDocument from "pdfkit";
 import type { PlanReporte } from "@/lib/tms/reportes-viajes";
 import { ahoraLocal, formatearTimestampVisible } from "@/lib/rrhh/dates";
 import { formatearFechaHora12, formatearHora12 } from "@/lib/tms/hora-formato";
+import { resumenRegreso } from "@/lib/tms/regreso-viaje";
 
 function moneda(v: number | null): string {
   if (v == null) return "Pendiente";
@@ -92,7 +93,12 @@ export async function reporteViajePdf(
     campo("Km llegada", p.kmLlegada != null ? String(p.kmLlegada) : "—");
     campo("Km recorridos", p.kmRecorridos != null ? String(p.kmRecorridos) : "—");
     campo("Días de ruta", p.diasRuta != null ? String(p.diasRuta) : "—");
-    campo("Regreso estimado", fechaHora(p.regresoEstimado));
+    const regreso = resumenRegreso(
+      { estado: p.estado, regresoEstimado: p.regresoEstimado, regresoReal: p.regresoReal ?? p.horaLlegada ?? null, cerradoEn: p.cerradoEn, cierreManual: p.cierreManual },
+      fechaHora,
+    );
+    campo("Regreso estimado", regreso.estimado);
+    if (regreso.real) campo("Regreso real", regreso.real);
 
     // D. Paradas
     seccion("D. Paradas");
@@ -119,6 +125,8 @@ export async function reporteViajePdf(
     campo("Pendiente de cierre", p.pendienteCierre ? "Sí" : "No");
     campo("Cerrado por", p.cerradoPor ?? "—");
     campo("Cerrado en", fechaHora(p.cerradoEn));
+    // Cierre sin llegada física: el cierre administrativo NO es un regreso real.
+    if (regreso.notaCierreManual) campo("Cierre", regreso.notaCierreManual);
 
     // G. Facturación (FACT-1-TMS-REPORTES) — solo lectura, mismos datos
     // que la pantalla; NUNCA botones de acción (eso vive exclusivamente
