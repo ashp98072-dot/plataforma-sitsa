@@ -239,6 +239,7 @@ export type ClienteRuta = {
   destinoDescripcion: string | null;
   horaHabitual: string | null;
   tarifaReferencia: number | null;
+  servicioRefrigeradoHabitual?: boolean;
   /** RUTAS-TARIFARIO-HISTORIAL-1 (§1/§4/§6) — datos del ÚLTIMO cambio registrado en tms_cliente_ruta_tarifas, para no tener que releer todo listarHistorialTarifas() solo para mostrar esto. `null` si la ruta nunca tuvo un cambio de tarifa registrado en el historial (p. ej. creada antes de este ticket). */
   tarifaVigenteDesde: string | null;
   tarifaUltimoCambioEn: string | null;
@@ -273,6 +274,7 @@ function mapRuta(r: RowDataPacket): Omit<ClienteRuta, "paradas"> {
     destinoDescripcion: r.destino_descripcion != null ? String(r.destino_descripcion) : null,
     horaHabitual: r.hora_habitual != null ? String(r.hora_habitual) : null,
     tarifaReferencia: r.tarifa_referencia != null ? Number(r.tarifa_referencia) : null,
+    servicioRefrigeradoHabitual: Number(r.servicio_refrigerado_habitual ?? 0) === 1,
     contactoClienteId: r.contacto_cliente_id != null ? Number(r.contacto_cliente_id) : null,
     contactoNombre: r.contacto_nombre != null ? String(r.contacto_nombre) : null,
     contactoCargo: r.contacto_cargo != null ? String(r.contacto_cargo) : null,
@@ -293,7 +295,7 @@ function mapRuta(r: RowDataPacket): Omit<ClienteRuta, "paradas"> {
 const SELECT_RUTA = `
   SELECT r.id, r.cliente_id, c.nombre AS cliente_nombre, r.codigo, r.nombre,
          r.ubicacion_carga_id, r.lugar_carga_texto, r.destino_descripcion, r.hora_habitual,
-         r.tarifa_referencia,
+         r.tarifa_referencia, r.servicio_refrigerado_habitual,
          r.unidad_recurrente_id, fvr.placa AS unidad_recurrente_placa,
          r.contacto_cliente_id, ct.nombre AS contacto_nombre, ct.cargo AS contacto_cargo,
          ct.telefono AS contacto_telefono,
@@ -366,6 +368,17 @@ export type FiltrosRutas = {
   /** RUTAS-TARIFARIO-HISTORIAL-1 (§6) — filtro EXPLÍCITO de estado (true=solo activas, false=solo inactivas), para el export filtrable. `undefined` preserva el comportamiento previo de `incluirInactivas` sin cambios. */
   activo?: boolean;
 };
+
+/** Sugerencia server-side. La restricción UNIQUE (empresa_id,codigo) y la
+ * validación transaccional de crearRuta son la autoridad ante concurrencia. */
+export async function sugerirCodigoRuta(empresaId: number): Promise<string> {
+  const rows = await query<RowDataPacket[]>(
+    "SELECT codigo FROM tms_cliente_rutas WHERE empresa_id = ? AND codigo REGEXP '^R-[0-9]{6}$' ORDER BY codigo DESC LIMIT 1",
+    [empresaId],
+  );
+  const ultimo = rows[0]?.codigo ? Number(String(rows[0].codigo).slice(2)) : 0;
+  return `R-${String(ultimo + 1).padStart(6, "0")}`;
+}
 
 /**
  * Buscar/listar rutas (Operaciones > Rutas y el selector de Programación).
@@ -466,12 +479,14 @@ export async function obtenerRuta(empresaId: number, id: number): Promise<Client
 export type ClienteRutaInput = {
   clienteId: number;
   codigo: string;
+  generarCodigo?: boolean;
   nombre?: string | null;
   ubicacionCargaId?: number | null;
   lugarCargaTexto?: string | null;
   destinoDescripcion?: string | null;
   horaHabitual?: string | null;
   tarifaReferencia?: number | null;
+  servicioRefrigeradoHabitual?: boolean;
   /** RUTAS-TARIFARIO-HISTORIAL-1 (§5 del ticket) — SOLO metadatos del cambio de tarifa; nunca se guardan como columna de tms_cliente_rutas, alimentan tms_cliente_ruta_tarifas (registrarCambioTarifaTx). Ignorados si tarifaReferencia no viene o no cambió. */
   tarifaVigenteDesde?: string | null;
   tarifaMotivo?: string | null;
@@ -590,13 +605,22 @@ export async function crearRuta(
   input: ClienteRutaInput,
   actor?: ActorRuta,
 ): Promise<ClienteRuta> {
-  const codigo = input.codigo.trim();
-  if (!codigo) throw new Error("Código de ruta requerido.");
+  let codigo = input.codigo.trim();
+  if (!codigo && !input.generarCodigo) throw new Error("Código de ruta requerido.");
   if (!input.clienteId) throw new Error("Cliente requerido.");
   const conn = await getPool().getConnection();
   let rutaId = 0;
   try {
     await conn.beginTransaction();
+    if (input.generarCodigo) {
+      // Serializa por empresa: dos altas concurrentes no reciben el mismo código.
+      await queryConn<RowDataPacket[]>(conn, "SELECT id FROM empresas WHERE id = ? FOR UPDATE", [empresaId]);
+      const codigos = await queryConn<RowDataPacket[]>(conn,
+        "SELECT codigo FROM tms_cliente_rutas WHERE empresa_id = ? AND codigo REGEXP '^R-[0-9]{6}$' ORDER BY codigo DESC LIMIT 1",
+        [empresaId]);
+      const ultimo = codigos[0]?.codigo ? Number(String(codigos[0].codigo).slice(2)) : 0;
+      codigo = `R-${String(ultimo + 1).padStart(6, "0")}`;
+    }
     if (input.personalPredeterminado !== undefined) {
       await validarPersonalRuta(conn, empresaId, input.personalPredeterminado);
     }
@@ -612,11 +636,11 @@ export async function crearRuta(
     const lugarCargaTexto = await resolverLugarCargaTexto(conn, empresaId, input.ubicacionCargaId, input.lugarCargaTexto);
     const r = await executeConn(conn,
       `INSERT INTO tms_cliente_rutas
-        (empresa_id, cliente_id, codigo, nombre, ubicacion_carga_id, lugar_carga_texto, destino_descripcion, hora_habitual, tarifa_referencia, unidad_recurrente_id, contacto_cliente_id, observaciones)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (empresa_id, cliente_id, codigo, nombre, ubicacion_carga_id, lugar_carga_texto, destino_descripcion, hora_habitual, tarifa_referencia, servicio_refrigerado_habitual, unidad_recurrente_id, contacto_cliente_id, observaciones)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [empresaId, input.clienteId, codigo, input.nombre?.trim() || null, input.ubicacionCargaId ?? null,
         lugarCargaTexto, input.destinoDescripcion?.trim() || null, input.horaHabitual?.trim() || null,
-        input.tarifaReferencia ?? null, input.unidadRecurrenteId ?? null, input.contactoClienteId ?? null, input.observaciones?.trim() || null],
+        input.tarifaReferencia ?? null, input.servicioRefrigeradoHabitual ? 1 : 0, input.unidadRecurrenteId ?? null, input.contactoClienteId ?? null, input.observaciones?.trim() || null],
     );
     rutaId = Number(r.insertId);
     if (input.paradas !== undefined) await guardarParadasRuta(conn, empresaId, rutaId, input.paradas);
@@ -701,7 +725,7 @@ export async function actualizarRuta(
   await executeConn(conn,
     `UPDATE tms_cliente_rutas
      SET codigo = ?, nombre = ?, ubicacion_carga_id = ?, lugar_carga_texto = ?, destino_descripcion = ?,
-         hora_habitual = ?, tarifa_referencia = ?, unidad_recurrente_id = ?, contacto_cliente_id = ?, observaciones = ?, activo = ?
+         hora_habitual = ?, tarifa_referencia = ?, servicio_refrigerado_habitual = ?, unidad_recurrente_id = ?, contacto_cliente_id = ?, observaciones = ?, activo = ?
      WHERE id = ? AND empresa_id = ?`,
     [
       codigo,
@@ -713,6 +737,7 @@ export async function actualizarRuta(
         : actual.destinoDescripcion,
       cambios.horaHabitual !== undefined ? cambios.horaHabitual?.trim() || null : actual.horaHabitual,
       tarifaNueva,
+      cambios.servicioRefrigeradoHabitual !== undefined ? (cambios.servicioRefrigeradoHabitual ? 1 : 0) : actual.servicioRefrigeradoHabitual ? 1 : 0,
       cambios.unidadRecurrenteId !== undefined ? cambios.unidadRecurrenteId ?? null : actual.unidadRecurrenteId,
       cambios.contactoClienteId !== undefined
         ? cambios.contactoClienteId ?? null

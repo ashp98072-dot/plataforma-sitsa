@@ -817,6 +817,7 @@ CREATE TABLE IF NOT EXISTS tms_cliente_rutas (
   destino_descripcion VARCHAR(300) NULL,
   hora_habitual VARCHAR(20) NULL,
   tarifa_referencia DECIMAL(12,2) NULL DEFAULT NULL,
+  servicio_refrigerado_habitual TINYINT(1) NOT NULL DEFAULT 0,
   costo_operativo DECIMAL(12,2) NULL DEFAULT NULL,
   -- RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1: unidad habitual de la
   -- ruta (opcional). FK simple a flota_vehiculos(id) más abajo; el
@@ -1479,6 +1480,7 @@ CREATE TABLE IF NOT EXISTS tms_cotizaciones (
   gps_incluido TINYINT(1) NOT NULL DEFAULT 0,
   seguro_mercaderia_incluido TINYINT(1) NOT NULL DEFAULT 0,
   seguro_terceros_incluido TINYINT(1) NOT NULL DEFAULT 0,
+  servicio_refrigerado TINYINT(1) NOT NULL DEFAULT 0,
   km_incluidos DECIMAL(10,2) NULL,
   tarifa_km_adicional DECIMAL(12,2) NULL,
   condiciones_adicionales TEXT NULL,

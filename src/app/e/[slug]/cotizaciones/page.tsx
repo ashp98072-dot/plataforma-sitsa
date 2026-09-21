@@ -4,9 +4,10 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { ClienteSearch } from "@/components/tms/cliente-search";
 import { RutaSelect, type RutaOpt } from "@/components/tms/ruta-select";
-import { aplicarDefaultsRutaCotizacion } from "@/lib/tms/cotizacion-defaults";
+import { aplicarDefaultsRutaCotizacion, sugerirServicioRefrigerado } from "@/lib/tms/cotizacion-defaults";
 import { CosteoRegistradoDetalle, CotizacionCosteoPanel, useCosteoConfig } from "@/components/tms/cotizacion-costeo-panel";
 import { aplicarPrecioSugerido, type PayloadCosteoCliente } from "@/lib/tms/cotizacion-costeo-ui";
+import { CotizacionCatalogosRapidos } from "@/components/tms/cotizacion-catalogos-rapidos";
 
 type ClienteOpt = { id: number; nombre: string; codigo?: string | null; nit?: string | null; telefono?: string | null; estado?: string | null };
 
@@ -32,6 +33,7 @@ type Cotizacion = {
   gpsIncluido: boolean;
   seguroMercaderiaIncluido: boolean;
   seguroTercerosIncluido: boolean;
+  servicioRefrigerado: boolean;
   kmIncluidos: number | null;
   tarifaKmAdicional: number | null;
   condicionesAdicionales: string | null;
@@ -66,6 +68,7 @@ const FORM_VACIO = {
   gpsIncluido: false,
   seguroMercaderiaIncluido: false,
   seguroTercerosIncluido: false,
+  servicioRefrigerado: false,
   kmIncluidos: "",
   tarifaKmAdicional: "",
   condicionesAdicionales: "",
@@ -102,6 +105,7 @@ export default function CotizacionesPage() {
   // La configuración visible (vigencia, margen) es la de la fecha de emisión del formulario: la misma que usa el cálculo real.
   const costeoConfig = useCosteoConfig(slug, form.fechaEmision);
   const [costeoPayload, setCosteoPayload] = useState<PayloadCosteoCliente | null>(null);
+  const [permisosRapidos, setPermisosRapidos] = useState({ clientes: false, rutas: false });
 
   const cargarClientes = useCallback(async () => {
     const res = await fetch(`/api/empresas/${slug}/tms/catalogos`);
@@ -133,6 +137,13 @@ export default function CotizacionesPage() {
     void cargarClientes();
   }, [cargarClientes]);
   useEffect(() => {
+    fetch("/api/auth/me", { cache: "no-store" }).then((r) => r.json()).then((data) => {
+      const ps = Array.isArray(data.permisos) ? data.permisos : [];
+      const crear = (m: string) => Boolean(ps.find((p: { modulo?: string; puedeCrear?: boolean }) => p.modulo === m)?.puedeCrear);
+      setPermisosRapidos({ clientes: crear("clientes"), rutas: crear("rutas") || crear("tms") });
+    }).catch(() => setPermisosRapidos({ clientes: false, rutas: false }));
+  }, []);
+  useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void cargar();
   }, [cargar]);
@@ -162,6 +173,7 @@ export default function CotizacionesPage() {
       gpsIncluido: c.gpsIncluido,
       seguroMercaderiaIncluido: c.seguroMercaderiaIncluido,
       seguroTercerosIncluido: c.seguroTercerosIncluido,
+      servicioRefrigerado: c.servicioRefrigerado,
       kmIncluidos: c.kmIncluidos != null ? String(c.kmIncluidos) : "",
       tarifaKmAdicional: c.tarifaKmAdicional != null ? String(c.tarifaKmAdicional) : "",
       condicionesAdicionales: c.condicionesAdicionales ?? "",
@@ -182,6 +194,7 @@ export default function CotizacionesPage() {
       tarifaCotizada: defaults.tarifaCotizada,
       origenTexto: defaults.origenTexto,
       destinoTexto: defaults.destinoTexto,
+      servicioRefrigerado: sugerirServicioRefrigerado(f.servicioRefrigerado, ruta.servicioRefrigeradoHabitual),
     }));
   }
 
@@ -202,6 +215,7 @@ export default function CotizacionesPage() {
       gpsIncluido: form.gpsIncluido,
       seguroMercaderiaIncluido: form.seguroMercaderiaIncluido,
       seguroTercerosIncluido: form.seguroTercerosIncluido,
+      servicioRefrigerado: form.servicioRefrigerado,
       kmIncluidos: form.kmIncluidos === "" ? null : Number(form.kmIncluidos),
       tarifaKmAdicional: form.tarifaKmAdicional === "" ? null : Number(form.tarifaKmAdicional),
       condicionesAdicionales: form.condicionesAdicionales.trim() || null,
@@ -274,6 +288,7 @@ export default function CotizacionesPage() {
       {mostrarForm ? (
         <div className="space-y-2 rounded-lg border border-[var(--border)] bg-[var(--panel)] p-3">
           <p className="text-sm font-medium">{editandoId ? "Editar cotización (solo en Borrador)" : "Nueva cotización"}</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">A. Cliente y ruta</p>
           <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
             <label className="text-xs text-[var(--muted)]">Cliente
               <ClienteSearch clientes={clientes} valueNombre={form.clienteNombre} valueId={form.clienteId}
@@ -283,6 +298,7 @@ export default function CotizacionesPage() {
             <label className="text-xs text-[var(--muted)]">Ruta (opcional — sugiere tarifa/origen/destino)
               <RutaSelect slug={slug} clienteId={form.clienteId} value={form.rutaCodigo} inputClassName={`${inputCls} mt-0.5 w-full`}
                 onSeleccionar={aplicarRuta} />
+              <button type="button" className="mt-1 text-[10px] text-[var(--accent)]" onClick={() => setForm((f) => ({ ...f, rutaId: null, rutaCodigo: "" }))}>Usar sin guardar como ruta</button>
             </label>
             <label className="text-xs text-[var(--muted)]">Fecha de emisión
               <input type="date" className={`${inputCls} mt-0.5 w-full`} value={form.fechaEmision} onChange={(e) => setForm((f) => ({ ...f, fechaEmision: e.target.value }))} />
@@ -310,13 +326,17 @@ export default function CotizacionesPage() {
               </p>
             ) : null}
           </div>
+          <CotizacionCatalogosRapidos slug={slug} clienteId={form.clienteId} puedeCrearCliente={permisosRapidos.clientes} puedeCrearRuta={permisosRapidos.rutas}
+            onCliente={(c) => { setForm((f) => ({ ...f, clienteId: c.id, clienteNombre: c.nombre })); void cargarClientes(); }} onRuta={aplicarRuta} />
 
-          <p className="mt-2 text-xs font-medium text-[var(--muted)]">Condiciones de servicio</p>
+          <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">B. Datos comerciales</p>
+          <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">C. Condiciones de servicio</p>
           <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
             <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={form.pilotoIncluido} onChange={(e) => setForm((f) => ({ ...f, pilotoIncluido: e.target.checked }))} /> Piloto incluido</label>
             <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={form.gpsIncluido} onChange={(e) => setForm((f) => ({ ...f, gpsIncluido: e.target.checked }))} /> GPS</label>
             <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={form.seguroMercaderiaIncluido} onChange={(e) => setForm((f) => ({ ...f, seguroMercaderiaIncluido: e.target.checked }))} /> Seguro de mercadería</label>
             <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={form.seguroTercerosIncluido} onChange={(e) => setForm((f) => ({ ...f, seguroTercerosIncluido: e.target.checked }))} /> Seguro contra terceros</label>
+            <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={form.servicioRefrigerado} onChange={(e) => setForm((f) => ({ ...f, servicioRefrigerado: e.target.checked }))} /> Servicio refrigerado</label>
             <label className="text-xs text-[var(--muted)]">Km incluidos
               <input type="number" min="0" step="0.01" className={`${inputCls} mt-0.5 w-full`} value={form.kmIncluidos} onChange={(e) => setForm((f) => ({ ...f, kmIncluidos: e.target.value }))} />
             </label>
@@ -330,6 +350,7 @@ export default function CotizacionesPage() {
           <label className="block text-xs text-[var(--muted)]">Observaciones
             <textarea className={`${inputCls} mt-0.5 w-full`} value={form.observaciones} onChange={(e) => setForm((f) => ({ ...f, observaciones: e.target.value }))} />
           </label>
+          <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">D. Costeo interno</p>
           <CotizacionCosteoPanel
             key={editandoId ?? "nueva"}
             slug={slug}
@@ -337,6 +358,7 @@ export default function CotizacionesPage() {
             fechaEmision={form.fechaEmision}
             tarifaCotizada={form.tarifaCotizada}
             incluyeIva={form.incluyeIva}
+            servicioRefrigerado={form.servicioRefrigerado}
             cotizacionId={editandoId}
             editable
             onPayloadGuardar={setCosteoPayload}
@@ -385,6 +407,7 @@ export default function CotizacionesPage() {
                 <div><span className="text-[var(--muted)]">GPS:</span> {c.gpsIncluido ? "Sí" : "No"}</div>
                 <div><span className="text-[var(--muted)]">Seguro mercadería:</span> {c.seguroMercaderiaIncluido ? "Sí" : "No"}</div>
                 <div><span className="text-[var(--muted)]">Seguro terceros:</span> {c.seguroTercerosIncluido ? "Sí" : "No"}</div>
+                <div><span className="text-[var(--muted)]">Servicio refrigerado:</span> {c.servicioRefrigerado ? "Sí" : "No"}</div>
                 <div><span className="text-[var(--muted)]">Km incluidos:</span> {c.kmIncluidos ?? "—"}</div>
                 <div><span className="text-[var(--muted)]">Tarifa km adicional:</span> {money(c.tarifaKmAdicional)}</div>
                 {c.condicionesAdicionales ? <div className="md:col-span-3"><span className="text-[var(--muted)]">Condiciones:</span> {c.condicionesAdicionales}</div> : null}

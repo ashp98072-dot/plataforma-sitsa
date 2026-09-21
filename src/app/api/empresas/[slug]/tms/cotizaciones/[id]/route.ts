@@ -29,6 +29,7 @@ const schema = z.object({
   gpsIncluido: z.boolean().optional(),
   seguroMercaderiaIncluido: z.boolean().optional(),
   seguroTercerosIncluido: z.boolean().optional(),
+  servicioRefrigerado: z.boolean().optional(),
   kmIncluidos: z.number().nonnegative().nullable().optional(),
   tarifaKmAdicional: z.number().nonnegative().nullable().optional(),
   condicionesAdicionales: z.string().max(2000).nullable().optional(),

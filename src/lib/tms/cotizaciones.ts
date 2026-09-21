@@ -102,6 +102,7 @@ export type Cotizacion = {
   gpsIncluido: boolean;
   seguroMercaderiaIncluido: boolean;
   seguroTercerosIncluido: boolean;
+  servicioRefrigerado?: boolean;
   kmIncluidos: number | null;
   tarifaKmAdicional: number | null;
   condicionesAdicionales: string | null;
@@ -133,6 +134,7 @@ function mapRow(r: RowDataPacket): Cotizacion {
     gpsIncluido: Number(r.gps_incluido ?? 0) === 1,
     seguroMercaderiaIncluido: Number(r.seguro_mercaderia_incluido ?? 0) === 1,
     seguroTercerosIncluido: Number(r.seguro_terceros_incluido ?? 0) === 1,
+    servicioRefrigerado: Number(r.servicio_refrigerado ?? 0) === 1,
     kmIncluidos: r.km_incluidos != null ? Number(r.km_incluidos) : null,
     tarifaKmAdicional: r.tarifa_km_adicional != null ? Number(r.tarifa_km_adicional) : null,
     condicionesAdicionales: r.condiciones_adicionales != null ? String(r.condiciones_adicionales) : null,
@@ -148,7 +150,7 @@ const SELECT = `
          origen_texto, destino_texto, tarifa_referencia, tarifa_cotizada,
          incluye_iva, moneda, DATE_FORMAT(fecha_emision, '%Y-%m-%d') AS fecha_emision,
          DATE_FORMAT(fecha_vencimiento, '%Y-%m-%d') AS fecha_vencimiento, estado,
-         piloto_incluido, gps_incluido, seguro_mercaderia_incluido, seguro_terceros_incluido,
+         piloto_incluido, gps_incluido, seguro_mercaderia_incluido, seguro_terceros_incluido, servicio_refrigerado,
          km_incluidos, tarifa_km_adicional, condiciones_adicionales, observaciones,
          creado_por, creado_en, actualizado_en
   FROM tms_cotizaciones
@@ -193,6 +195,7 @@ export type CotizacionInput = {
   gpsIncluido?: boolean;
   seguroMercaderiaIncluido?: boolean;
   seguroTercerosIncluido?: boolean;
+  servicioRefrigerado?: boolean;
   kmIncluidos?: number | null;
   tarifaKmAdicional?: number | null;
   condicionesAdicionales?: string | null;
@@ -277,9 +280,9 @@ export async function crearCotizacion(
       `INSERT INTO tms_cotizaciones
         (empresa_id, codigo, cliente_id, cliente_nombre, ruta_id, ruta_codigo_historico, origen_texto, destino_texto,
          tarifa_referencia, tarifa_cotizada, incluye_iva, fecha_emision, fecha_vencimiento,
-         piloto_incluido, gps_incluido, seguro_mercaderia_incluido, seguro_terceros_incluido,
+         piloto_incluido, gps_incluido, seguro_mercaderia_incluido, seguro_terceros_incluido, servicio_refrigerado,
          km_incluidos, tarifa_km_adicional, condiciones_adicionales, observaciones, creado_por)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         empresaId,
         "", // se completa abajo, mismo criterio que fondos.ts (código derivado del id, sin condición de carrera)
@@ -298,6 +301,7 @@ export async function crearCotizacion(
         input.gpsIncluido ? 1 : 0,
         input.seguroMercaderiaIncluido ? 1 : 0,
         input.seguroTercerosIncluido ? 1 : 0,
+        input.servicioRefrigerado ? 1 : 0,
         input.kmIncluidos ?? null,
         input.tarifaKmAdicional ?? null,
         input.condicionesAdicionales?.trim() || null,
@@ -372,7 +376,7 @@ export async function actualizarCotizacion(
          cliente_id = ?, cliente_nombre = ?, ruta_id = ?, ruta_codigo_historico = ?, origen_texto = ?, destino_texto = ?,
          tarifa_referencia = ?, tarifa_cotizada = ?, incluye_iva = ?,
          fecha_emision = ?, fecha_vencimiento = ?, piloto_incluido = ?, gps_incluido = ?,
-         seguro_mercaderia_incluido = ?, seguro_terceros_incluido = ?, km_incluidos = ?, tarifa_km_adicional = ?,
+         seguro_mercaderia_incluido = ?, seguro_terceros_incluido = ?, servicio_refrigerado = ?, km_incluidos = ?, tarifa_km_adicional = ?,
          condiciones_adicionales = ?, observaciones = ?
        WHERE id = ? AND empresa_id = ?`,
       [
@@ -391,6 +395,7 @@ export async function actualizarCotizacion(
         cambios.gpsIncluido !== undefined ? (cambios.gpsIncluido ? 1 : 0) : actual.gpsIncluido ? 1 : 0,
         cambios.seguroMercaderiaIncluido !== undefined ? (cambios.seguroMercaderiaIncluido ? 1 : 0) : actual.seguroMercaderiaIncluido ? 1 : 0,
         cambios.seguroTercerosIncluido !== undefined ? (cambios.seguroTercerosIncluido ? 1 : 0) : actual.seguroTercerosIncluido ? 1 : 0,
+        cambios.servicioRefrigerado !== undefined ? (cambios.servicioRefrigerado ? 1 : 0) : actual.servicioRefrigerado ? 1 : 0,
         cambios.kmIncluidos !== undefined ? cambios.kmIncluidos : actual.kmIncluidos,
         cambios.tarifaKmAdicional !== undefined ? cambios.tarifaKmAdicional : actual.tarifaKmAdicional,
         cambios.condicionesAdicionales !== undefined ? cambios.condicionesAdicionales?.trim() || null : actual.condicionesAdicionales,
@@ -477,6 +482,7 @@ export async function duplicarCotizacion(
     gpsIncluido: original.gpsIncluido,
     seguroMercaderiaIncluido: original.seguroMercaderiaIncluido,
     seguroTercerosIncluido: original.seguroTercerosIncluido,
+    servicioRefrigerado: original.servicioRefrigerado,
     kmIncluidos: original.kmIncluidos,
     tarifaKmAdicional: original.tarifaKmAdicional,
     condicionesAdicionales: original.condicionesAdicionales,

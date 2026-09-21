@@ -46,3 +46,8 @@ export function aplicarDefaultsRutaCotizacion(
         : actual.destinoTexto,
   };
 }
+
+/** La ruta solo sugiere activar; nunca apaga una decisión manual previa. */
+export function sugerirServicioRefrigerado(actual: boolean, habitual: boolean | undefined): boolean {
+  return actual || habitual === true;
+}
