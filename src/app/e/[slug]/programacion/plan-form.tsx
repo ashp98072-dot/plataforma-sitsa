@@ -904,18 +904,6 @@ export default function PlanForm({
       },
     );
 
-  // VIAT-2: el servidor exige regreso_estimado cuando el plan queda con
-  // piloto, auxiliares o unidad asignados (lo necesita para poder validar
-  // traslapes) — esto es solo ayuda de UI, la regla real la aplica
-  // planes/route.ts.
-  const requiereRegreso = Boolean(
-    form.pilotoEmpleadoId ||
-      form.pilotoNombre.trim() ||
-      form.auxiliarEmpleadoIds.length ||
-      form.auxiliarNombres.length ||
-      form.placa.trim(),
-  );
-
   // Mejora Programación (Opción A, punto 1/7) — filas de la sección
   // "Viáticos del viaje" en modo creación, SIEMPRE derivadas de
   // piloto/auxiliares actuales (nunca un estado aparte): cambiar de
@@ -1011,12 +999,6 @@ export default function PlanForm({
     const salidaProgramada = `${form.fechaPlan}T${form.horaCarga || "00:00"}`;
     if (form.regresoEstimado && form.regresoEstimado <= salidaProgramada) {
       setError("El regreso estimado debe ser posterior a la salida programada.");
-      return;
-    }
-    if (requiereRegreso && !form.regresoEstimado) {
-      setError(
-        "Indica el regreso estimado: es obligatorio para poder validar disponibilidad cuando hay piloto, auxiliares o unidad asignados.",
-      );
       return;
     }
     // OPS-AJUSTES (sección 3) — mismo requisito del backend, verificado
@@ -1642,17 +1624,15 @@ export default function PlanForm({
             lexicográfica de más abajo (salidaProgramada). Sin cambios en
             esos dos puntos. */}
         <FechaHora12Input
-          label={`Regreso estimado${requiereRegreso ? " (obligatorio)" : ""}`}
-          required={requiereRegreso}
+          label="Regreso estimado (opcional)"
           inputClassName={inputCls}
           value={form.regresoEstimado}
           onChange={(value) => setForm((f) => ({ ...f, regresoEstimado: value }))}
         />
-        {requiereRegreso ? (
-          <span className="mt-0.5 block text-[10px] text-amber-300/90">
-            Necesario para validar que piloto/auxiliares/unidad no queden asignados a dos viajes a la vez.
-          </span>
-        ) : null}
+        <span className="mt-0.5 block text-[10px] text-[var(--muted)]">
+          Si no se conoce todavía, puede dejarse vacío. El regreso real se registrará automáticamente cuando
+          finalice el viaje.
+        </span>
       </div>
       {tarifasRuta.length ? (
         <label className={`text-xs text-[var(--muted)] ${bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}`}>

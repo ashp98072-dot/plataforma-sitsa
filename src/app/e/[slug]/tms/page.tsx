@@ -10,6 +10,7 @@ import ClienteContactosAdmin from "@/components/tms/cliente-contactos-admin";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
 import { puedeCerrarManualmente } from "@/lib/tms/cierre-viaje-shared";
+import { resumenRegreso } from "@/lib/tms/regreso-viaje";
 
 /**
  * Centro logístico: navegación, seguimiento con cierres administrativos
@@ -52,6 +53,10 @@ type Plan = {
   pendiente_cierre: number;
   tipo_traslado: string | null;
   regreso_estimado: string | null;
+  /** Regreso REAL (flota_viajes.hora_llegada); null si no hubo llegada física. */
+  regreso_real?: string | null;
+  /** El cierre fue manual (sin llegada física). */
+  cierre_manual?: boolean;
   tarifa_comercial: number | null;
   referencia_cliente: string | null;
   notas: string | null;
@@ -578,9 +583,20 @@ export default function TmsPage() {
                               </p>
                               <p className="text-xs">Referencia cliente: {p.referencia_cliente || "—"}</p>
                               <p className="text-xs">Tipo de traslado: {p.tipo_traslado || "—"}</p>
-                              <p className="text-xs">
-                                Regreso estimado: {p.regreso_estimado ? p.regreso_estimado.replace("T", " · ") : "—"}
-                              </p>
+                              {(() => {
+                                const regreso = resumenRegreso(
+                                  { estado: p.estado, regresoEstimado: p.regreso_estimado, regresoReal: p.regreso_real ?? null, cerradoEn: p.cerrado_en, cierreManual: p.cierre_manual },
+                                  (v) => (v ? v.replace("T", " · ") : "—"),
+                                );
+                                return (
+                                  <>
+                                    <p className="text-xs">Regreso estimado: {regreso.estimado}</p>
+                                    {regreso.real ? <p className="text-xs">Regreso real: {regreso.real}</p> : null}
+                                    {regreso.cierreAdministrativo ? <p className="text-xs">Cierre administrativo: {regreso.cierreAdministrativo}</p> : null}
+                                    {regreso.notaCierreManual ? <p className="text-xs text-rose-500">{regreso.notaCierreManual}</p> : null}
+                                  </>
+                                );
+                              })()}
                             </div>
                             <div>
                               <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--muted)]">

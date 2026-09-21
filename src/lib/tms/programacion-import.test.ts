@@ -8,6 +8,7 @@ import { execute, getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { listarDisponibilidadVehiculos, type VehiculoDisponibilidad } from "@/lib/operaciones/disponibilidad";
 import type { FilaProgramacionExcel } from "./programacion-import-excel";
+import { emularConsultaConflictoPersonal, type ModeloPersonal } from "./personal-identidad.fixture";
 import {
   claveDuplicadoFila,
   detectarFilasDuplicadas,
@@ -201,12 +202,15 @@ describe("detectarTraslapesEnLote", () => {
     expect(detectarTraslapesEnLote(filas)).toEqual([]);
   });
 
-  it("fila sin regreso estimado (ninguna de las dos mitades): se excluye de la comparación, sin error", () => {
+  it("fila sin regreso estimado (ninguna de las dos mitades): ya NO se excluye — es un viaje abierto y choca con la otra fila", () => {
     const filas = [
-      filaFixture({ filaExcel: 4, pilotoCodigoExcel: "P-1", fechaRegresoExcel: null, horaRegresoExcel: null }),
-      filaFixture({ filaExcel: 5, pilotoCodigoExcel: "P-1", horaSalidaExcel: "09:00" }),
+      filaFixture({ filaExcel: 4, pilotoCodigoExcel: "P-1", placaExcel: "AAA111", fechaRegresoExcel: null, horaRegresoExcel: null }),
+      filaFixture({ filaExcel: 5, pilotoCodigoExcel: "P-1", placaExcel: "BBB222", horaSalidaExcel: "09:00" }),
     ];
-    expect(detectarTraslapesEnLote(filas)).toEqual([]);
+    const resultado = detectarTraslapesEnLote(filas);
+    expect(resultado).toHaveLength(2);
+    expect(resultado[0]).toMatchObject({ filaExcel: 4, filaExcelConflicto: 5, categoria: "persona" });
+    expect(resultado[1]).toMatchObject({ filaExcel: 5, filaExcelConflicto: 4, categoria: "persona", intervaloConflicto: { fin: null } });
   });
 
   it("fila sin fecha de salida válida: se excluye de la comparación, sin lanzar excepción", () => {
@@ -273,7 +277,7 @@ function vehiculo(overrides: Partial<VehiculoDisponibilidad> = {}): VehiculoDisp
 }
 
 type EmpleadoMock = { id: number; codigo: string; nombre: string; estado: string };
-type PersonalMock = { id: number; codigo: string; tipo: string };
+type PersonalMock = { id: number; codigo: string; tipo: string; id_empleado?: number | null };
 type LugarMock = { id: number; nombre: string };
 
 /**
@@ -337,7 +341,7 @@ function dispatchQuery(estado: EstadoMock, sql: string, params: unknown[]): unkn
   }
   if (sql.includes("FROM tms_cliente_rutas r")) return estado.rutas;
   if (sql.includes("FROM empleados WHERE empresa_id")) return estado.empleados;
-  if (sql.includes("SELECT id, codigo, tipo FROM tms_personal")) return estado.personal;
+  if (sql.includes("FROM tms_personal WHERE empresa_id = ? AND (codigo IS NOT NULL OR id_empleado IS NOT NULL)")) return estado.personal;
   if (sql.includes("SELECT id, placa FROM tms_unidades")) return estado.unidades;
   if (sql.includes("FROM tms_personal tp")) return estado.conflictoPersonal;
   if (sql.includes("FROM tms_unidades u")) return estado.conflictoUnidad;
@@ -649,7 +653,7 @@ describe("previsualizarImportacionProgramacion", () => {
     // Solo lectura: ningún UPDATE/INSERT -> execute jamás importado/llamado por este módulo.
   });
 
-  it("sin regreso estimado: no intenta validar traslape contra BD, fila válida igual", async () => {
+  it("sin regreso estimado y sin conflicto: fila válida, regresoEstimado null (nada inventado)", async () => {
     mockDb();
     mockVehiculos();
     const fila = filaFixture({ fechaRegresoExcel: null, horaRegresoExcel: null });
@@ -932,5 +936,394 @@ describe("confirmarImportacionProgramacion", () => {
     const resultado = await confirmarImportacionProgramacion(7, "admin", "programacion.xlsx", "sha256:abc", []);
     expect(resultado).toEqual({ resultado: "error", mensaje: "No hay filas para importar." });
     expect(getPool).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------
+// REGRESO ESTIMADO OPCIONAL — el importador aplica LA MISMA regla de
+// disponibilidad que POST/PATCH /tms/planes: una fila sin regreso estimado
+// es un viaje ABIERTO ([salida, sin límite)) y se valida contra la BD y
+// contra las otras filas del lote con primerConflictoTraslape / los mismos
+// helpers de ocupación (no hay una segunda implementación).
+// ---------------------------------------------------------------------
+const SIN_REGRESO = { fechaRegresoExcel: null, horaRegresoExcel: null } as const;
+const FLOTA = [vehiculo(), vehiculo({ id: 31, placa: "AAA111" }), vehiculo({ id: 32, placa: "BBB222" }), vehiculo({ id: 33, placa: "CCC333" })];
+
+/** Fila existente en BD, con los campos que devuelve la consulta de conflictos de primerConflictoTraslape. */
+const candidato = (over: Record<string, unknown> = {}) => ({
+  recurso_nombre: "Juan Pérez", plan_id: 55, codigo: "PLAN-20260920-001", estado: "Programado",
+  inicio: "2026-09-20 09:00:00", regreso_estimado: "2026-09-20 15:00:00", llegada_tecnica: 0, hora_llegada: null, cerrado_en: null,
+  ...over,
+});
+
+/** Igual que mockDb, pero el conflicto depende del recurso consultado (id de tms_personal / de tms_unidades). */
+function mockDbConflictosPorRecurso(estado: EstadoMock, porPersonalId: Record<number, unknown[]> = {}, porUnidadId: Record<number, unknown[]> = {}) {
+  vi.mocked(query).mockImplementation((async (sql: string, params?: unknown) => {
+    const p = (params ?? []) as unknown[];
+    if (sql.includes("FROM tms_personal tp")) return porPersonalId[Number(p[0])] ?? [];
+    if (sql.includes("FROM tms_unidades u")) return porUnidadId[Number(p[0])] ?? [];
+    return dispatchQuery(estado, sql, p);
+  }) as never);
+}
+
+const consultasConflicto = () =>
+  vi.mocked(query).mock.calls.filter(([sql]) => String(sql).includes("FROM tms_personal tp") || String(sql).includes("FROM tms_unidades u"));
+
+describe("detectarTraslapesEnLote — filas sin regreso estimado (viaje abierto)", () => {
+  it("una fila abierta choca con una fila POSTERIOR del mismo piloto aunque sea de otro día (sin límite superior)", () => {
+    const filas = [
+      filaFixture({ filaExcel: 4, pilotoCodigoExcel: "P-1", placaExcel: "AAA111", ...SIN_REGRESO }),
+      filaFixture({ filaExcel: 5, pilotoCodigoExcel: "P-1", placaExcel: "BBB222", fechaSalidaExcel: "2026-09-25", fechaRegresoExcel: "2026-09-25", horaRegresoExcel: "17:00" }),
+    ];
+    expect(detectarTraslapesEnLote(filas).map((c) => [c.filaExcel, c.filaExcelConflicto])).toEqual([[4, 5], [5, 4]]);
+  });
+
+  it("una fila con regreso que TERMINA antes de que salga la fila abierta no choca", () => {
+    const filas = [
+      filaFixture({ filaExcel: 4, pilotoCodigoExcel: "P-1", placaExcel: "AAA111", horaSalidaExcel: "06:00", horaRegresoExcel: "07:59" }),
+      filaFixture({ filaExcel: 5, pilotoCodigoExcel: "P-1", placaExcel: "BBB222", horaSalidaExcel: "08:00", ...SIN_REGRESO }),
+    ];
+    expect(detectarTraslapesEnLote(filas)).toEqual([]);
+  });
+
+  it("dos filas abiertas del mismo piloto chocan siempre", () => {
+    const filas = [
+      filaFixture({ filaExcel: 4, pilotoCodigoExcel: "P-1", placaExcel: "AAA111", ...SIN_REGRESO }),
+      filaFixture({ filaExcel: 5, pilotoCodigoExcel: "P-1", placaExcel: "BBB222", fechaSalidaExcel: "2026-10-30", ...SIN_REGRESO }),
+    ];
+    expect(detectarTraslapesEnLote(filas)).toHaveLength(2);
+  });
+
+  it("auxiliar y unidad: misma regla que el piloto", () => {
+    const aux = detectarTraslapesEnLote([
+      filaFixture({ filaExcel: 4, pilotoCodigoExcel: "P-1", auxiliar1CodigoExcel: "A-1", placaExcel: "AAA111", ...SIN_REGRESO }),
+      filaFixture({ filaExcel: 5, pilotoCodigoExcel: "P-2", auxiliar2CodigoExcel: "A-1", placaExcel: "BBB222" }),
+    ]);
+    expect(aux.some((c) => c.filaExcel === 5 && c.rolEnFila === "auxiliar" && c.rolEnFilaConflicto === "auxiliar")).toBe(true);
+    const unidad = detectarTraslapesEnLote([
+      filaFixture({ filaExcel: 4, pilotoCodigoExcel: "P-1", placaExcel: "AAA111", ...SIN_REGRESO }),
+      filaFixture({ filaExcel: 5, pilotoCodigoExcel: "P-2", placaExcel: "aaa111" }),
+    ]);
+    expect(unidad.some((c) => c.categoria === "unidad" && c.filaExcel === 5 && c.filaExcelConflicto === 4)).toBe(true);
+  });
+
+  it("piloto y unidad distintos: sin conflicto aunque una fila esté abierta", () => {
+    const filas = [
+      filaFixture({ filaExcel: 4, pilotoCodigoExcel: "P-1", placaExcel: "AAA111", ...SIN_REGRESO }),
+      filaFixture({ filaExcel: 5, pilotoCodigoExcel: "P-2", placaExcel: "BBB222" }),
+    ];
+    expect(detectarTraslapesEnLote(filas)).toEqual([]);
+  });
+
+  it("regreso a medias (fecha sin hora): la fila no se compara (ya sale con su propio error de regreso incompleto)", () => {
+    const filas = [
+      filaFixture({ filaExcel: 4, pilotoCodigoExcel: "P-1", placaExcel: "AAA111", fechaRegresoExcel: "2026-09-20", horaRegresoExcel: null }),
+      filaFixture({ filaExcel: 5, pilotoCodigoExcel: "P-1", placaExcel: "BBB222" }),
+    ];
+    expect(detectarTraslapesEnLote(filas)).toEqual([]);
+  });
+});
+
+describe("previsualizarImportacionProgramacion — traslapes con y sin regreso estimado", () => {
+  beforeEach(() => vi.resetAllMocks());
+  const personalPiloto = { id: 900, codigo: "P-1", tipo: "Piloto" };
+
+  it("CON regreso estimado y sin conflicto: ok; se valida el intervalo [salida, regreso]", async () => {
+    mockDb({ personal: [personalPiloto] });
+    mockVehiculos();
+    const r = await previsualizarImportacionProgramacion(7, [filaFixture()]);
+    expect(r.filas[0].estado).toBe("ok");
+    const [sql, params] = consultasConflicto()[0] as [string, unknown[]];
+    expect(params).toContain("2026-09-20 08:00:00");
+    expect(params).toContain("2026-09-20 17:00:00");
+    expect(String(sql)).toContain("TIMESTAMP(p.fecha_plan, COALESCE(p.hora_carga, '00:00:00')) < ?");
+  });
+
+  it("SIN regreso estimado y sin conflicto: ok, y SÍ se valida contra la BD con intervalo abierto (sin fin, nada inventado)", async () => {
+    mockDb({ personal: [personalPiloto] });
+    mockVehiculos();
+    const r = await previsualizarImportacionProgramacion(7, [filaFixture(SIN_REGRESO)]);
+    expect(r.filas[0].estado).toBe("ok");
+    expect(r.filas[0].datos?.regresoEstimado).toBeNull();
+    expect(consultasConflicto()).toHaveLength(1);
+    const [sql, params] = consultasConflicto()[0] as [string, unknown[]];
+    expect(String(sql)).toContain("1 = 1");
+    expect(params).toContain("2026-09-20 08:00:00");
+    expect(params).not.toContain("2026-09-20 17:00:00");
+    expect(params.filter((x) => typeof x === "string" && /^2026-09-20 (1[0-9]|2[0-3])/.test(x))).toEqual([]);
+  });
+
+  it("SIN regreso que choca con un viaje existente del PILOTO: error claro (recurso, viaje y estado/intervalo)", async () => {
+    mockDb({ personal: [personalPiloto], conflictoPersonal: [candidato({ regreso_estimado: null })] });
+    mockVehiculos();
+    const r = await previsualizarImportacionProgramacion(7, [filaFixture(SIN_REGRESO)]);
+    expect(r.filas[0].estado).toBe("error");
+    expect(r.filas[0].errores).toEqual(["El piloto Juan Pérez sigue asignado al viaje PLAN-20260920-001, que aún no registra llegada."]);
+  });
+
+  it("SIN regreso que choca con un viaje existente CON intervalo: el mensaje muestra el rango", async () => {
+    mockDb({ personal: [personalPiloto], conflictoPersonal: [candidato()] });
+    mockVehiculos();
+    const r = await previsualizarImportacionProgramacion(7, [filaFixture(SIN_REGRESO)]);
+    expect(r.filas[0].errores).toEqual(["El piloto Juan Pérez ya está asignado al viaje PLAN-20260920-001 de 09:00 a 15:00."]);
+  });
+
+  it("SIN regreso que choca con un viaje existente del AUXILIAR: solo ese recurso genera el conflicto", async () => {
+    const estado = crearEstadoMock({
+      empleados: [empleadoRow(), empleadoRow({ id: 21, codigo: "A-1", nombre: "Auxiliar Uno" })],
+      personal: [personalPiloto, { id: 901, codigo: "A-1", tipo: "Auxiliar" }],
+    });
+    mockDbConflictosPorRecurso(estado, { 901: [candidato({ recurso_nombre: "Auxiliar Uno", codigo: "PLAN-AUX-7", regreso_estimado: null })] });
+    mockVehiculos();
+    const r = await previsualizarImportacionProgramacion(7, [filaFixture({ auxiliar1CodigoExcel: "A-1", ...SIN_REGRESO })]);
+    expect(r.filas[0].estado).toBe("error");
+    expect(r.filas[0].errores).toEqual(["El auxiliar Auxiliar Uno sigue asignado al viaje PLAN-AUX-7, que aún no registra llegada."]);
+  });
+
+  it("SIN regreso que choca con un viaje existente de la UNIDAD", async () => {
+    const estado = crearEstadoMock({ personal: [personalPiloto], unidades: [{ id: 950, placa: "P-123ABC" }] });
+    mockDbConflictosPorRecurso(estado, {}, { 950: [candidato({ recurso_nombre: "P-123ABC", codigo: "PLAN-UNI-3", estado: "En ruta", regreso_estimado: null })] });
+    mockVehiculos();
+    const r = await previsualizarImportacionProgramacion(7, [filaFixture(SIN_REGRESO)]);
+    expect(r.filas[0].estado).toBe("error");
+    expect(r.filas[0].errores).toEqual(["La unidad P-123ABC sigue asignado al viaje PLAN-UNI-3, que aún no registra llegada."]);
+  });
+
+  it("un viaje existente Cerrado sin regreso estimado ocupa solo hasta su llegada real: una fila posterior sin regreso pasa", async () => {
+    mockDb({
+      personal: [personalPiloto],
+      conflictoPersonal: [candidato({ estado: "Cerrado", regreso_estimado: null, inicio: "2026-09-19 06:00:00", llegada_tecnica: 1, hora_llegada: "2026-09-19 18:00:00", cerrado_en: "2026-09-25 09:00:00" })],
+    });
+    mockVehiculos();
+    const r = await previsualizarImportacionProgramacion(7, [filaFixture(SIN_REGRESO)]);
+    expect(r.filas[0].estado).toBe("ok");
+  });
+
+  it("SIN regreso que choca con una fila ANTERIOR del mismo lote: error claro en ambas filas, con el estado de la otra fila", async () => {
+    mockDb({ personal: [personalPiloto] });
+    mockVehiculos(FLOTA);
+    const filas = [
+      filaFixture({ filaExcel: 4, placaExcel: "AAA111", ...SIN_REGRESO }),
+      filaFixture({ filaExcel: 5, placaExcel: "BBB222", fechaSalidaExcel: "2026-09-22", fechaRegresoExcel: "2026-09-22", horaRegresoExcel: "17:00" }),
+    ];
+    const r = await previsualizarImportacionProgramacion(7, filas);
+    expect(r.filas.map((f) => f.estado)).toEqual(["error", "error"]);
+    expect(r.filas[1].errores.join("\n")).toContain('Traslape con la fila 4 del mismo archivo: comparten personal "P-1"');
+    expect(r.filas[1].errores.join("\n")).toContain("no tiene regreso estimado: se considera un viaje abierto");
+    expect(r.filas[0].errores.join("\n")).toContain("Traslape con la fila 5 del mismo archivo");
+    expect(r.filas[0].errores.join("\n")).toContain("2026-09-22 08:00 a 2026-09-22 17:00");
+  });
+
+  it("filas del mismo lote sin traslape y sin regreso: ambas ok cuando no comparten recursos", async () => {
+    mockDb({ empleados: [empleadoRow(), empleadoRow({ id: 22, codigo: "P-2", nombre: "Otro Piloto" })] });
+    mockVehiculos(FLOTA);
+    const filas = [
+      filaFixture({ filaExcel: 4, pilotoCodigoExcel: "P-1", placaExcel: "AAA111", ...SIN_REGRESO }),
+      filaFixture({ filaExcel: 5, pilotoCodigoExcel: "P-2", placaExcel: "BBB222", ...SIN_REGRESO }),
+    ];
+    const r = await previsualizarImportacionProgramacion(7, filas);
+    expect(r.filas.map((f) => f.estado)).toEqual(["ok", "ok"]);
+  });
+
+  it("aislamiento por empresa: la búsqueda de conflictos usa la empresa de la importación en SQL y parámetros", async () => {
+    mockDb({ personal: [personalPiloto], unidades: [{ id: 950, placa: "P-123ABC" }] });
+    mockVehiculos();
+    await previsualizarImportacionProgramacion(9, [filaFixture(SIN_REGRESO)]);
+    const consultas = consultasConflicto() as [string, unknown[]][];
+    expect(consultas).toHaveLength(2); // piloto + unidad
+    for (const [sql, params] of consultas) {
+      expect(sql).toMatch(/(tp|u)\.empresa_id = \?/);
+      expect(sql).toContain("fv.empresa_id = p.empresa_id");
+      expect(params[1]).toBe(9);
+      expect(params).not.toContain(7);
+    }
+  });
+
+  it("las filas resueltas nunca traen recursos de otra empresa: los catálogos se piden con la empresa de la importación", async () => {
+    mockDb({ personal: [personalPiloto] });
+    mockVehiculos();
+    await previsualizarImportacionProgramacion(9, [filaFixture(SIN_REGRESO)]);
+    const catalogos = vi.mocked(query).mock.calls.filter(([sql]) => /FROM (tms_cliente_rutas r|empleados|tms_personal|tms_unidades)\b/.test(String(sql)) && !String(sql).includes("tp") );
+    for (const [, params] of catalogos) expect((params as unknown[])[0]).toBe(9);
+  });
+});
+
+describe("confirmarImportacionProgramacion — regreso estimado opcional (todo o nada)", () => {
+  beforeEach(() => vi.resetAllMocks());
+  const personalPiloto = { id: 900, codigo: "P-1", tipo: "Piloto" };
+  const insertsPlan = (conn: ReturnType<typeof makeConnMock>) => vi.mocked(conn.execute).mock.calls.filter(([sql]) => String(sql).includes("INSERT INTO tms_planes_viaje"));
+
+  it("sin regreso estimado y sin conflicto: se importa y regreso_estimado queda NULL", async () => {
+    const estado = mockDb({ personal: [personalPiloto] });
+    mockVehiculos();
+    const { conn } = mockGetPool({ estado });
+    const r = await confirmarImportacionProgramacion(7, "admin", "p.xlsx", "sha256:x", [filaFixture(SIN_REGRESO)]);
+    expect(r).toMatchObject({ resultado: "exitoso", filasImportadas: 1 });
+    expect(insertsPlan(conn)).toHaveLength(1);
+    expect((insertsPlan(conn)[0][1] as unknown[])[11]).toBeNull();
+  });
+
+  it("con regreso estimado y sin conflicto: se importa con el regreso tal cual", async () => {
+    const estado = mockDb({ personal: [personalPiloto] });
+    mockVehiculos();
+    const { conn } = mockGetPool({ estado });
+    const r = await confirmarImportacionProgramacion(7, "admin", "p.xlsx", "sha256:x", [filaFixture()]);
+    expect(r.resultado).toBe("exitoso");
+    expect((insertsPlan(conn)[0][1] as unknown[])[11]).toBe("2026-09-20 17:00");
+  });
+
+  it("sin regreso que choca con un viaje existente: rechaza TODO el lote, no abre transacción ni inserta nada", async () => {
+    const estado = mockDb({ personal: [personalPiloto], conflictoPersonal: [candidato({ regreso_estimado: null })] });
+    mockVehiculos();
+    const { conn, lockConn } = mockGetPool({ estado });
+    const r = await confirmarImportacionProgramacion(7, "admin", "p.xlsx", "sha256:x", [filaFixture(SIN_REGRESO)]);
+    expect(r.resultado).toBe("error");
+    expect(r.resultado === "error" && r.erroresPorFila?.[0].errores[0]).toContain("PLAN-20260920-001");
+    expect(conn.beginTransaction).not.toHaveBeenCalled();
+    expect(insertsPlan(conn)).toHaveLength(0);
+    expect(registrarAuditoriaTx).not.toHaveBeenCalled();
+    expect(lockConn.release).toHaveBeenCalledOnce();
+  });
+
+  it("sin regreso que choca con una fila anterior del mismo lote: nada se inserta (ni la fila buena)", async () => {
+    const estado = mockDb({
+      empleados: [empleadoRow(), empleadoRow({ id: 22, codigo: "P-2", nombre: "Otro Piloto" })],
+    });
+    mockVehiculos(FLOTA);
+    const { conn } = mockGetPool({ estado });
+    const filas = [
+      filaFixture({ filaExcel: 4, pilotoCodigoExcel: "P-1", placaExcel: "AAA111", ...SIN_REGRESO }),
+      filaFixture({ filaExcel: 5, pilotoCodigoExcel: "P-1", placaExcel: "BBB222", fechaSalidaExcel: "2026-09-24", fechaRegresoExcel: "2026-09-24", horaRegresoExcel: "17:00" }),
+      filaFixture({ filaExcel: 6, pilotoCodigoExcel: "P-2", placaExcel: "CCC333" }),
+    ];
+    const r = await confirmarImportacionProgramacion(7, "admin", "p.xlsx", "sha256:x", filas);
+    expect(r.resultado).toBe("error");
+    expect(r.resultado === "error" && r.erroresPorFila?.map((f) => f.filaExcel).sort()).toEqual([4, 5]);
+    expect(conn.beginTransaction).not.toHaveBeenCalled();
+    expect(insertsPlan(conn)).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------
+// IDENTIDAD DE PERSONAL — el importador identifica a la PERSONA por su
+// empleado (id_empleado), no por el rol con el que viene en el Excel: si el
+// empleado ya existe en TMS con el otro rol (Auxiliar vs Piloto), sus viajes
+// existentes también cuentan. Misma regla que POST/PATCH (primerConflictoTraslape).
+// ---------------------------------------------------------------------
+describe("importador — identidad de personal por empleado (id_empleado)", () => {
+  beforeEach(() => vi.resetAllMocks());
+
+  const EMP_JUAN = empleadoRow(); // id 20, código P-1
+  const EMP_ANA = empleadoRow({ id: 21, codigo: "A-1", nombre: "Ana Auxiliar" });
+  const planExistente = (over: Record<string, unknown> = {}) => ({
+    id: 900, empresa_id: 7, codigo: "PLAN-EXISTENTE", estado: "Programado", inicio: "2026-09-20 09:00:00", regreso_estimado: "2026-09-20 15:00:00", ...over,
+  });
+  const persona = (over: Record<string, unknown>) => ({ empresa_id: 7, nombre: "Juan Pérez", tipo: "Piloto", id_empleado: 20, codigo: "P-1", ...over }) as ModeloPersonal["personal"][number];
+
+  /** Catálogos desde el modelo; los conflictos de personal se calculan sobre el mismo modelo (emulador de la consulta). */
+  function montar(modelo: ModeloPersonal, empleados = [EMP_JUAN, EMP_ANA]) {
+    const estado = crearEstadoMock({
+      empleados,
+      personal: modelo.personal.filter((p) => p.empresa_id === 7 && p.codigo).map((p) => ({ id: p.id, codigo: p.codigo!, tipo: p.tipo, id_empleado: p.id_empleado })),
+    });
+    vi.mocked(query).mockImplementation((async (sql: string, params?: unknown) => {
+      const pr = (params ?? []) as unknown[];
+      if (sql.includes("FROM tms_personal tp")) return emularConsultaConflictoPersonal(modelo, sql, pr);
+      return dispatchQuery(estado, sql, pr);
+    }) as never);
+    mockVehiculos();
+    return estado;
+  }
+  const conflictoPersonal = () => vi.mocked(query).mock.calls.filter(([sql]) => String(sql).includes("FROM tms_personal tp"));
+
+  it("piloto del Excel que en TMS solo existe como AUXILIAR con viaje existente solapado: CONFLICTO", async () => {
+    montar({ personal: [persona({ id: 901, tipo: "Auxiliar" })], planes: [planExistente({ auxiliares: [901] })] });
+    const r = await previsualizarImportacionProgramacion(7, [filaFixture()]);
+    expect(r.filas[0].estado).toBe("error");
+    expect(r.filas[0].errores).toEqual(["El piloto Juan Pérez ya está asignado al viaje PLAN-EXISTENTE de 09:00 a 15:00."]);
+    // Se consultó con el personal_id del OTRO rol (901): la consulta expande a todos los del empleado.
+    expect((conflictoPersonal()[0][1] as unknown[]).slice(0, 2)).toEqual([901, 7]);
+  });
+
+  it("piloto del Excel con fila de Piloto (22) y de Auxiliar (10) del mismo empleado; el viaje usa la de Auxiliar: CONFLICTO", async () => {
+    montar({ personal: [persona({ id: 10, tipo: "Auxiliar" }), persona({ id: 22, tipo: "Piloto" })], planes: [planExistente({ auxiliares: [10] })] });
+    const r = await previsualizarImportacionProgramacion(7, [filaFixture()]);
+    expect(r.filas[0].estado).toBe("error");
+    expect((conflictoPersonal()[0][1] as unknown[])[0]).toBe(22); // el rol pedido primero; la consulta cubre ambos
+    expect(r.filas[0].errores[0]).toContain("PLAN-EXISTENTE");
+  });
+
+  it("auxiliar del Excel que en TMS solo existe como PILOTO con viaje existente solapado: CONFLICTO", async () => {
+    montar({ personal: [persona({ id: 950, tipo: "Piloto", nombre: "Ana Auxiliar", id_empleado: 21, codigo: "A-1" })], planes: [planExistente({ piloto_id: 950 })] });
+    const r = await previsualizarImportacionProgramacion(7, [filaFixture({ auxiliar1CodigoExcel: "A-1", pilotoCodigoExcel: "P-1" })]);
+    expect(r.filas[0].estado).toBe("error");
+    expect(r.filas[0].errores[0]).toBe("El auxiliar Ana Auxiliar ya está asignado al viaje PLAN-EXISTENTE de 09:00 a 15:00.");
+  });
+
+  it("sin regreso estimado en el Excel + mismo empleado con otro rol en un viaje abierto: CONFLICTO (misma regla que POST/PATCH)", async () => {
+    montar({ personal: [persona({ id: 901, tipo: "Auxiliar" })], planes: [planExistente({ auxiliares: [901], regreso_estimado: null, estado: "En ruta", inicio: "2026-09-19 06:00:00" })] });
+    const r = await previsualizarImportacionProgramacion(7, [filaFixture(SIN_REGRESO)]);
+    expect(r.filas[0].errores).toEqual(["El piloto Juan Pérez sigue asignado al viaje PLAN-EXISTENTE, que aún no registra llegada."]);
+  });
+
+  it("personal SIN id_empleado: fallback por personal_id exacto (la fila de otro rol no se toma por la misma persona)", async () => {
+    montar({
+      personal: [persona({ id: 30, tipo: "Auxiliar", id_empleado: null }), persona({ id: 31, tipo: "Piloto", id_empleado: null })],
+      planes: [planExistente({ auxiliares: [30] })],
+    });
+    const r = await previsualizarImportacionProgramacion(7, [filaFixture()]);
+    expect(r.filas[0].estado).toBe("ok"); // el Piloto 31 no comparte id_empleado con el Auxiliar 30
+    expect((conflictoPersonal()[0][1] as unknown[])[0]).toBe(31);
+  });
+
+  it("personal SIN id_empleado y del MISMO rol con viaje solapado: sigue habiendo conflicto por personal_id exacto", async () => {
+    montar({ personal: [persona({ id: 31, tipo: "Piloto", id_empleado: null })], planes: [planExistente({ piloto_id: 31 })] });
+    const r = await previsualizarImportacionProgramacion(7, [filaFixture()]);
+    expect(r.filas[0].estado).toBe("error");
+  });
+
+  it("empleado DISTINTO con el mismo nombre: sin conflicto", async () => {
+    montar({
+      personal: [persona({ id: 22, tipo: "Piloto" }), persona({ id: 40, tipo: "Auxiliar", id_empleado: 77, codigo: "X-9" })],
+      planes: [planExistente({ auxiliares: [40] })],
+    });
+    const r = await previsualizarImportacionProgramacion(7, [filaFixture()]);
+    expect(r.filas[0].estado).toBe("ok");
+  });
+
+  it("empleado nunca visto en TMS (sin ninguna fila en tms_personal): no hay viajes que comprobar", async () => {
+    montar({ personal: [], planes: [planExistente({ auxiliares: [901] })] });
+    const r = await previsualizarImportacionProgramacion(7, [filaFixture()]);
+    expect(r.filas[0].estado).toBe("ok");
+    expect(conflictoPersonal()).toHaveLength(0);
+  });
+
+  it("aislamiento por empresa: los personal/viajes de otra empresa con el mismo id_empleado no cuentan y la consulta va con la empresa importada", async () => {
+    const modelo: ModeloPersonal = {
+      personal: [persona({ id: 22, tipo: "Piloto" }), persona({ id: 60, tipo: "Auxiliar", empresa_id: 8 })],
+      planes: [planExistente({ id: 901, empresa_id: 8, codigo: "PLAN-OTRA-EMPRESA", auxiliares: [60] })],
+    };
+    montar(modelo);
+    const r = await previsualizarImportacionProgramacion(7, [filaFixture()]);
+    expect(r.filas[0].estado).toBe("ok");
+    const [sql, params] = conflictoPersonal()[0] as [string, unknown[]];
+    expect(sql).toContain("eq.empresa_id = tp.empresa_id");
+    expect(params.slice(0, 2)).toEqual([22, 7]);
+  });
+
+  it("los catálogos de personal se piden por empresa e incluyen id_empleado", async () => {
+    montar({ personal: [], planes: [] });
+    await previsualizarImportacionProgramacion(9, [filaFixture()]);
+    const catalogoPersonal = vi.mocked(query).mock.calls.find(([sql]) => String(sql).includes("id_empleado FROM tms_personal WHERE empresa_id = ?"));
+    expect(catalogoPersonal?.[1]).toEqual([9]);
+  });
+
+  it("confirmar: el conflicto por identidad de empleado rechaza el lote (todo o nada) sin abrir transacción", async () => {
+    const estado = montar({ personal: [persona({ id: 901, tipo: "Auxiliar" })], planes: [planExistente({ auxiliares: [901] })] });
+    const { conn } = mockGetPool({ estado });
+    const r = await confirmarImportacionProgramacion(7, "admin", "p.xlsx", "sha256:x", [filaFixture()]);
+    expect(r.resultado).toBe("error");
+    expect(conn.beginTransaction).not.toHaveBeenCalled();
+    expect(vi.mocked(conn.execute).mock.calls.some(([sql]) => String(sql).includes("INSERT INTO tms_planes_viaje"))).toBe(false);
   });
 });

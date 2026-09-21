@@ -24,8 +24,10 @@ import { debeLimpiarTarifaPorCambioDeRuta, tarifaParaSnapshot } from "@/lib/tms/
 import { listarDisponibilidadPersonal } from "@/lib/operaciones/disponibilidad-personal";
 import { ahoraLocal, hoyLocal, toIsoDate } from "@/lib/rrhh/dates";
 import { listarViaticosRechazadosDelPlan, personalRecienAsignadoDelPlan, sincronizarViaticosPlan } from "@/lib/tms/viaticos";
+import { planesConCierreManual } from "@/lib/tms/cierre-manual-planes";
 import {
   ESTADOS_QUE_RESERVAN_RECURSOS,
+  SQL_HORA_LLEGADA_REAL,
   finViajeDesdeInput,
   inicioViaje,
   mensajeConflicto,
@@ -292,6 +294,11 @@ export async function GET(req: Request, ctx: Ctx) {
               ${SQL_ATRASADO} AS atrasado,
               p.tipo_traslado, p.notas,
               DATE_FORMAT(p.regreso_estimado, '%Y-%m-%dT%H:%i') AS regreso_estimado,
+              -- Regreso REAL: fuente única flota_viajes.hora_llegada (llegada
+              -- física registrada por Flota/Piloto). NULL si no hubo llegada
+              -- (p. ej. cierre manual). No se duplica en tms_planes_viaje y
+              -- cerrado_en NUNCA se presenta como llegada.
+              DATE_FORMAT(${SQL_HORA_LLEGADA_REAL}, '%Y-%m-%dT%H:%i') AS regreso_real,
               p.tarifa_comercial, p.tarifa_id, p.tarifa_nombre_historico, p.tarifa_monto_historico, p.tarifa_moneda_historico,
               p.costo_operativo_referencia, p.referencia_cliente, p.ruta_id, p.ruta_codigo_historico,
               p.lugar_descarga_historico, p.contacto_nombre_historico, p.contacto_cargo_historico,
@@ -325,9 +332,13 @@ export async function GET(req: Request, ctx: Ctx) {
   ]);
 
   const planIds = rows.map((r) => Number(r.id));
-  const [paradasMap, auxMap] = await Promise.all([
+  const [paradasMap, auxMap, cierreManualIds] = await Promise.all([
     listarParadasDePlanes(planIds),
     auxiliaresDePlanes(planIds),
+    planesConCierreManual(
+      guard.empresa.id,
+      rows.filter((r) => r.estado === "Cerrado").map((r) => Number(r.id)),
+    ),
   ]);
 
   const planes = rows.map((r) => {
@@ -367,6 +378,8 @@ export async function GET(req: Request, ctx: Ctx) {
     const paradas = paradasMap.get(id) ?? [];
     return {
       ...resto,
+      // Aditivo: el cierre fue manual (sin llegada física). Solo aplica a Cerrado.
+      cierre_manual: cierreManualIds.has(id),
       // Aditivo (Fase P4.3): id real del piloto, cuando existe.
       pilotoId,
       pilotoEmpleadoId: piloto_empleado_id != null ? Number(piloto_empleado_id) : null,
@@ -760,22 +773,18 @@ export async function POST(req: Request, ctx: Ctx) {
   // unidad) y su intervalo real (fecha_plan+hora_carga → regreso_estimado).
   // Sin "misma fecha" — dos viajes el mismo día que no se traslapan en hora
   // están permitidos (ver disponibilidad-traslapes.ts).
+  //
+  // El regreso estimado es OPCIONAL: sin él, el intervalo del viaje queda
+  // abierto (fin = null) hasta que exista una terminación real — la llegada
+  // registrada por Flota o, tras cerrarse, el cierre administrativo. Nunca se
+  // inventa un regreso (+N horas, fin de día...) para poder validar.
   const recursosNuevoPlan: RecursoAValidar[] = [
     ...(pilotoId ? [{ tipo: "piloto" as const, id: pilotoId }] : []),
     ...auxPersonalIds.map((id) => ({ tipo: "auxiliar" as const, id })),
     ...(unidadId ? [{ tipo: "unidad" as const, id: unidadId }] : []),
   ];
   const finNuevo = finViajeDesdeInput(d.regresoEstimado);
-  if (recursosNuevoPlan.length && !finNuevo) {
-    return NextResponse.json(
-      {
-        error:
-          "Indica el regreso estimado: es obligatorio para poder validar disponibilidad y guardar la programación cuando hay piloto, auxiliares o unidad asignados.",
-      },
-      { status: 400 },
-    );
-  }
-  const intervaloNuevo = finNuevo
+  const intervaloNuevo = recursosNuevoPlan.length
     ? { inicio: inicioViaje(d.fechaPlan, d.horaCarga), fin: finNuevo }
     : null;
 
@@ -1871,16 +1880,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
           d.regresoEstimado !== undefined
             ? finViajeDesdeInput(d.regresoEstimado)
             : antes.regresoEstimado;
-        if (!finEfectivo) {
-          await conn.rollback();
-          return NextResponse.json(
-            {
-              error:
-                "Indica el regreso estimado: es obligatorio para poder validar disponibilidad y guardar la programación cuando hay piloto, auxiliares o unidad asignados.",
-            },
-            { status: 400 },
-          );
-        }
+        // Sin regreso estimado (finEfectivo = null) el viaje queda abierto
+        // hasta una terminación real; ver disponibilidad-traslapes.ts.
         // CORRECCIÓN PR #81: GET_LOCK() de MySQL NO lanza excepción cuando
         // no consigue el candado — retorna 1 (adquirido), 0 (timeout) o
         // NULL (error). Un try/catch vacío alrededor de la llamada no basta
