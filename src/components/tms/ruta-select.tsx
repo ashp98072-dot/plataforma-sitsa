@@ -22,6 +22,7 @@ export type RutaOpt = {
   destinoDescripcion: string | null;
   horaHabitual: string | null;
   tarifaReferencia: number | null;
+  servicioRefrigeradoHabitual?: boolean;
   /** RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 — opciones de tarifa activas del catálogo (predeterminada primero) + unidad habitual. */
   tarifasActivas?: { id: number; nombre: string; monto: number; moneda: string; predeterminada: boolean }[];
   tarifaPredeterminadaId?: number | null;

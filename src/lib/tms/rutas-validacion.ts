@@ -37,12 +37,14 @@ const FECHA_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 export const crearRutaSchema = z.object({
   clienteId: z.number({ error: "selecciona un cliente." }).int("selecciona un cliente.").positive("selecciona un cliente."),
   codigo: z.string({ error: "es obligatorio." }).min(1, "es obligatorio.").max(40, "máximo 40 caracteres."),
+  generarCodigo: z.boolean().optional(),
   nombre: z.string().max(200, "máximo 200 caracteres.").optional(),
   ubicacionCargaId: z.number().int().positive("ubicación no válida.").optional(),
   lugarCargaTexto: z.string().max(300, "máximo 300 caracteres.").optional(),
   destinoDescripcion: z.string().max(300, "máximo 300 caracteres.").optional(),
   horaHabitual: horaHabitualSchema.optional(),
   tarifaReferencia: tarifaReferenciaSchema.nullable().optional(),
+  servicioRefrigeradoHabitual: z.boolean().optional(),
   // RUTAS-TARIFARIO-HISTORIAL-1 (§5) — metadatos del cambio de tarifa;
   // solo tienen efecto si tarifaReferencia viene con valor.
   tarifaVigenteDesde: z.string().regex(FECHA_REGEX, "fecha inválida (usa AAAA-MM-DD).").optional(),
@@ -68,6 +70,7 @@ export const actualizarRutaSchema = z.object({
   destinoDescripcion: z.string().max(300, "máximo 300 caracteres.").nullable().optional(),
   horaHabitual: horaHabitualSchema.nullable().optional(),
   tarifaReferencia: tarifaReferenciaSchema.nullable().optional(),
+  servicioRefrigeradoHabitual: z.boolean().optional(),
   tarifaVigenteDesde: z.string().regex(FECHA_REGEX, "fecha inválida (usa AAAA-MM-DD).").optional(),
   tarifaMotivo: z.string().max(300, "máximo 300 caracteres.").optional(),
   costoOperativo: z.number().min(0).max(9999999999.99).nullable().optional(),
@@ -84,6 +87,7 @@ const ETIQUETAS: Record<string, string> = {
   ubicacionCargaId: "Lugar de carga (ubicación guardada)", lugarCargaTexto: "Lugar de carga",
   destinoDescripcion: "Destino", horaHabitual: "Hora habitual",
   tarifaReferencia: "Tarifa de referencia", tarifaVigenteDesde: "Vigente desde",
+  servicioRefrigeradoHabitual: "Servicio refrigerado habitual",
   tarifaMotivo: "Motivo del cambio de tarifa", costoOperativo: "Costo operativo",
   unidadRecurrenteId: "Unidad recurrente",
   contactoClienteId: "Contacto del cliente", observaciones: "Observaciones", activo: "Estado",

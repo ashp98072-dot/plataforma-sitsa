@@ -106,6 +106,8 @@ export type CotizacionCosteoPanelProps = {
   fechaEmision: string;
   tarifaCotizada: string;
   incluyeIva: boolean;
+  /** Condición comercial; solo sugiere refrigeración al elegir perfil. */
+  servicioRefrigerado?: boolean;
   /** Cotización que se edita (null = alta): permite detectar un snapshot ya registrado (inmutable). */
   cotizacionId: number | null;
   /** Solo un Borrador (o un alta) permite aplicar el precio sugerido. */
@@ -207,7 +209,13 @@ export function CotizacionCosteoPanel(p: CotizacionCosteoPanelProps) {
       {p.config.vigenteDesde ? <p className="text-[11px] text-[var(--muted)]">Parámetros vigentes desde {p.config.vigenteDesde}. Los define el servidor; no se editan aquí.</p> : null}
       <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
         <label className="col-span-2 text-xs text-[var(--muted)]">Perfil de unidad
-          <select className={`${inputCls} mt-0.5 w-full`} value={form.perfilId} onChange={(e) => setForm((f) => aplicarPerfilCosteo(f, perfiles.find((x) => x.id === Number(e.target.value)) ?? null))}>
+          <select className={`${inputCls} mt-0.5 w-full`} value={form.perfilId} onChange={(e) => {
+            const elegido = perfiles.find((x) => x.id === Number(e.target.value)) ?? null;
+            setForm((f) => {
+              const siguiente = aplicarPerfilCosteo(f, elegido);
+              return p.servicioRefrigerado && elegido?.costoRefrigeracion ? { ...siguiente, usarRefrigeracion: true } : siguiente;
+            });
+          }}>
             <option value={0}>Selecciona…</option>
             {perfiles.map((x) => <option key={x.id} value={x.id}>{x.nombre}</option>)}
           </select>
@@ -224,6 +232,7 @@ export function CotizacionCosteoPanel(p: CotizacionCosteoPanelProps) {
         <label className="flex items-center gap-2"><input type="checkbox" checked={form.incluirSeguroVehiculo} onChange={(e) => set({ incluirSeguroVehiculo: e.target.checked })} /> Incluir seguro del vehículo</label>
         <label className="flex items-center gap-2"><input type="checkbox" checked={form.usarRefrigeracion} disabled={!perfil?.costoRefrigeracion} onChange={(e) => set({ usarRefrigeracion: e.target.checked })} /> Usar refrigeración</label>
       </div>
+      {p.servicioRefrigerado && perfil && !perfil.costoRefrigeracion ? <p role="alert" className="text-xs text-amber-300">El servicio está marcado como refrigerado, pero este perfil no tiene refrigeración configurada. Selecciona otro perfil o corrige la configuración antes de calcular.</p> : null}
       <p className="text-[11px] text-[var(--muted)]">Overrides opcionales (monto TOTAL del servicio; vacío = cálculo automático):</p>
       <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
         {num("Viático piloto total (Q)", "viaticoPilotoTotal")}
@@ -254,6 +263,7 @@ export function CotizacionCosteoPanel(p: CotizacionCosteoPanelProps) {
         <div className="space-y-2 border-t border-amber-500/30 pt-2">
           {!vigente ? <p role="status" className="text-xs text-amber-300">Los datos cambiaron desde el último cálculo: vuelve a calcular. Este resultado no se guardará.</p> : null}
           <ResumenCosteo datos={calculado.datos} />
+          {p.tarifaCotizada && calculado.datos.precioSugerido != null ? <p className="text-xs text-[var(--muted)]">Diferencia tarifa vs. sugerido: {monedaCosteo(Number(p.tarifaCotizada) - calculado.datos.precioSugerido)}</p> : null}
           <div className="flex flex-wrap items-center gap-3 text-xs">
             {p.editable ? <button type="button" disabled={!vigente} onClick={usarPrecioSugerido} className="rounded border border-[var(--border)] px-2 py-1 disabled:opacity-50">Usar precio sugerido</button> : null}
             <label className="flex items-center gap-2"><input type="checkbox" checked={registrar} onChange={(e) => setRegistrar(e.target.checked)} /> Registrar este costeo al guardar la cotización (queda inmutable)</label>

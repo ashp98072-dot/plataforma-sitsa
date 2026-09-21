@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireTenantProgramacionOTms, requireTenantRutas } from "@/lib/tenant";
-import { crearRuta, listarRutas } from "@/lib/tms/cliente-rutas";
+import { crearRuta, listarRutas, sugerirCodigoRuta } from "@/lib/tms/cliente-rutas";
 import { crearRutaSchema, etiquetaCampoRutaFactory } from "@/lib/tms/rutas-validacion";
 import { respuestaErrorValidacion } from "@/lib/validacion-http";
 
@@ -32,6 +32,12 @@ export async function GET(req: Request, ctx: Ctx) {
   const clienteId = clienteIdRaw && Number.isFinite(Number(clienteIdRaw)) ? Number(clienteIdRaw) : undefined;
   const q = url.searchParams.get("q") || undefined;
   const todas = url.searchParams.get("todas") === "1";
+
+  if (url.searchParams.get("sugerirCodigo") === "1") {
+    const crearGuard = await requireTenantRutas(slug, "crear");
+    if (crearGuard.error) return crearGuard.error;
+    return NextResponse.json({ codigo: await sugerirCodigoRuta(crearGuard.empresa.id) }, { headers: { "Cache-Control": "private, no-store" } });
+  }
 
   let guard = await requireTenantRutas(slug, "ver");
   if (guard.error && !todas) {
