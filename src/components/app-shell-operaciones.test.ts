@@ -50,6 +50,14 @@ describe("Compras — accesos directos sin padre redundante", () => {
 });
 
 describe("menú Operaciones — nombres y orden", () => {
+  it("muestra Ajustes de costeo solo con su permiso explícito y la ruta correcta", () => {
+    expect(src).toContain('tienePermiso(permisos, "cotizaciones_ajustes", "ver")');
+    expect(src).toContain('href: `${base}/cotizaciones/ajustes`');
+    expect(src).toContain('label: "Ajustes de costeo"');
+    const bloque = src.match(/const puedeAjustesCotizaciones =[\s\S]*?\n    \}/)?.[0] ?? "";
+    expect(bloque).not.toContain("permisos.length === 0");
+    expect(bloque).not.toContain('"cotizaciones_costeo"');
+  });
   it("existe el enlace 'Planes / Viajes' apuntando a /planes", () => {
     expect(src).toMatch(/label: "Planes \/ Viajes"/);
     expect(src).toMatch(/href: `\$\{base\}\/planes`/);

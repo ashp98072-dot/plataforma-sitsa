@@ -333,3 +333,16 @@ describe("COTIZACIONES-COSTEO — permiso cotizaciones_costeo (confidencial)", (
     }
   });
 });
+
+describe("COTIZACIONES-AJUSTES — permiso administrativo independiente", () => {
+  it("es asignable, pertenece a TMS y aparece en Operaciones", () => {
+    expect(esPlataformaPermisible("cotizaciones_ajustes")).toBe(true);
+    expect(moduloEmpresaDelPermiso("cotizaciones_ajustes")).toBe("tms");
+    expect(GRUPOS_PERMISOS.find((g) => g.id === "operaciones")?.modulos).toContain("cotizaciones_ajustes");
+  });
+  it("solo Admin lo recibe por defecto y no hereda permisos de costeo/tms", () => {
+    expect(tienePermiso(permisosDefaultPorRol("Admin"), "cotizaciones_ajustes", "editar")).toBe(true);
+    for (const rol of ROLES.filter((r) => r !== "Admin")) expect(tienePermiso(permisosDefaultPorRol(rol), "cotizaciones_ajustes", "ver")).toBe(false);
+    expect(tienePermiso(mergePermisosConCatalogo("Operaciones", [permisoFull("tms"), permisoFull("cotizaciones_costeo")]), "cotizaciones_ajustes", "ver")).toBe(false);
+  });
+});

@@ -410,6 +410,17 @@ export function AppShell({
         key: "cotizaciones",
       });
     }
+    const puedeAjustesCotizaciones =
+      rol !== "Piloto" &&
+      opsMods.includes("tms") &&
+      (isAdmin || tienePermiso(permisos, "cotizaciones_ajustes", "ver"));
+    if (puedeAjustesCotizaciones) {
+      opsLinks.push({
+        href: `${base}/cotizaciones/ajustes`,
+        label: "Ajustes de costeo",
+        key: "cotizaciones-ajustes",
+      });
+    }
     // Multas y sanciones (MULTAS-2/3): permiso propio "multas", exige TMS
     // habilitado (requireTenantMultas). Mismo criterio que Rutas arriba —
     // SOLO permisos efectivos, nunca un bypass por rol (sección 21 del
