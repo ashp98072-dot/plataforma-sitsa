@@ -130,6 +130,9 @@ export const PLATAFORMA_PERMISIBLES = [
   // tms:* ni cotizaciones:* (ver requireTenantCotizacionesCosteo en
   // tenant.ts). Ningún rol lo trae por defecto; Admin pasa siempre.
   "cotizaciones_costeo",
+  // Administración de vigencias y perfiles de costeo. Independiente del
+  // acceso al cálculo/snapshot y sin permisos por rol; Admin pasa siempre.
+  "cotizaciones_ajustes",
   "multas",
   "tms",
   "clientes",
@@ -313,7 +316,7 @@ export function esPlataformaPermisible(m: string): m is PlataformaPermisible {
  * null (no aplica este filtro — se rigen por otro mecanismo).
  */
 export function moduloEmpresaDelPermiso(m: string): Modulo | null {
-  if (m === "compras_proveedores" || m === "compras_requerimientos" || m === "compras_autorizar" || m === "cotizaciones_costeo") return "tms";
+  if (m === "compras_proveedores" || m === "compras_requerimientos" || m === "compras_autorizar" || m === "cotizaciones_costeo" || m === "cotizaciones_ajustes") return "tms";
   if (m === "multas") return "tms";
   if (m === "flota_combustible") return "flota";
   if (
@@ -346,6 +349,7 @@ export function labelPermiso(modulo: string): string {
   if (modulo === "compras_requerimientos") return "Compras: requerimientos de compra";
   if (modulo === "compras_autorizar") return "Compras: autorizar y rechazar requerimientos";
   if (modulo === "cotizaciones_costeo") return "Cotizaciones: costeo interno (confidencial)";
+  if (modulo === "cotizaciones_ajustes") return "Cotizaciones: ajustes de costeo";
   if (modulo === "multas") return "Multas y sanciones";
   if (esRrhhSubmodulo(modulo)) return RRHH_SUBMODULO_LABEL[modulo];
   if (esFlotaSubmodulo(modulo)) return FLOTA_SUBMODULO_LABEL[modulo];
@@ -421,6 +425,7 @@ export const GRUPOS_PERMISOS: {
       "compras_requerimientos",
       "compras_autorizar",
       "cotizaciones_costeo",
+      "cotizaciones_ajustes",
       "programacion",
       "multas",
       "rutas",
@@ -594,7 +599,7 @@ export function modulosOtrasAreasDelRol(rol: RolGlobal): string[] {
 /** Catálogo completo editable para un rol (propios + cruzados). */
 export function catalogoPermisosRol(rol: RolGlobal): string[] {
   // Asignable explícitamente, sin concederlo por rol ni por TMS.
-  return [...new Set([...modulosPropiosDelRol(rol), ...modulosOtrasAreasDelRol(rol), "compras_proveedores", "compras_requerimientos", "compras_autorizar", "cotizaciones_costeo"])];
+  return [...new Set([...modulosPropiosDelRol(rol), ...modulosOtrasAreasDelRol(rol), "compras_proveedores", "compras_requerimientos", "compras_autorizar", "cotizaciones_costeo", "cotizaciones_ajustes"])];
 }
 
 export function permisosDefaultPorRol(rol: RolGlobal): PermisoModulo[] {
@@ -781,6 +786,7 @@ export function modulosPlataformaDesdePermisos(
       p.modulo !== "compras_requerimientos" &&
       p.modulo !== "compras_autorizar" &&
       p.modulo !== "cotizaciones_costeo" &&
+      p.modulo !== "cotizaciones_ajustes" &&
       p.modulo !== "multas" &&
       p.modulo !== "viaticos" &&
       p.modulo !== "viaticos_autorizar" &&
