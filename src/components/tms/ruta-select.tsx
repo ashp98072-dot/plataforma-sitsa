@@ -49,6 +49,10 @@ type Props = {
   value: string;
   inputClassName: string;
   onSeleccionar: (ruta: RutaOpt) => void;
+  /** Etiqueta propia del campo (el componente ya dibuja su <label>: el llamador no debe envolverlo en otro). */
+  label?: string;
+  /** Texto de ayuda bajo el campo. */
+  descripcion?: string;
 };
 
 /**
@@ -60,7 +64,7 @@ type Props = {
  * la hace el llamador (plan-form.tsx). Mismo patrón visual que
  * ClienteSearch/PilotoSelect/PlacaSelect.
  */
-export function RutaSelect({ slug, clienteId, value, inputClassName, onSeleccionar }: Props) {
+export function RutaSelect({ slug, clienteId, value, inputClassName, onSeleccionar, label, descripcion }: Props) {
   const listId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
@@ -129,7 +133,7 @@ export function RutaSelect({ slug, clienteId, value, inputClassName, onSeleccion
       className={`relative block text-xs text-[var(--muted)] ${open ? "z-30" : "z-10"}`}
     >
       <label htmlFor={listId} className="block">
-        Código / Ruta {clienteId ? "(rutas de este cliente)" : "(busca por código, cliente o nombre)"}
+        {label ?? `Código / Ruta ${clienteId ? "(rutas de este cliente)" : "(busca por código, cliente o nombre)"}`}
       </label>
       <input
         id={listId}
@@ -164,8 +168,8 @@ export function RutaSelect({ slug, clienteId, value, inputClassName, onSeleccion
         }}
       />
       <span className="mt-0.5 block text-[10px]">
-        Al elegir una ruta se sugieren lugar de carga, hora y destinos — puedes ajustarlos para este
-        viaje sin modificar la ruta maestra.
+        {descripcion ??
+          "Al elegir una ruta se sugieren lugar de carga, hora y destinos — puedes ajustarlos para este viaje sin modificar la ruta maestra."}
       </span>
 
       {open ? (
