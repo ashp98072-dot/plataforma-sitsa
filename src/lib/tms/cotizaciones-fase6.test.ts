@@ -97,14 +97,14 @@ describe("COTIZACIONES FASE 6 — formulario", () => {
     return i;
   };
 
-  it("secciones A. Cliente y ruta / B. Presentación comercial / C. Condiciones de servicio / D. Costeo interno, en ese orden", () => {
-    const orden = ["A. Cliente y ruta", "B. Presentación comercial", "C. Condiciones de servicio", "D. Costeo interno"].map(pos);
+  it("ordena datos generales, rutas, presentación, condiciones y costeo", () => {
+    const orden = ["A. Cliente y datos generales", "B. Rutas / viajes cotizados", "C. Presentación comercial", "D. Condiciones de servicio", "E. Costeo interno"].map(pos);
     expect(orden).toEqual([...orden].sort((a, b) => a - b));
     expect(page).not.toContain("B. Datos comerciales");
   });
 
   it("«Documento emitido por» es un selector visible con las dos marcas y KuiqTrans preseleccionado", () => {
-    const b = page.slice(pos("B. Presentación comercial"), pos("C. Condiciones de servicio"));
+    const b = page.slice(pos("C. Presentación comercial"), pos("D. Condiciones de servicio"));
     expect(b).toContain("Documento emitido por");
     expect(b).toContain("<select");
     expect(b).toContain("DOCUMENTOS_EMISOR.map");
@@ -112,15 +112,12 @@ describe("COTIZACIONES FASE 6 — formulario", () => {
     expect(page).toContain("documentoEmisor: DOCUMENTO_EMISOR_DEFAULT as DocumentoEmisor");
   });
 
-  it("la sección B agrupa marca, atención, cargo, unidad, tarifa e IVA (opcionales donde corresponde)", () => {
-    const b = page.slice(pos("B. Presentación comercial"), pos("C. Condiciones de servicio"));
-    for (const etiqueta of ["Documento emitido por", "Atención a (opcional)", "Cargo / referencia (opcional)", "Unidad", "Tarifa cotizada (Q)", "La tarifa ya incluye IVA"]) {
-      expect(b).toContain(etiqueta);
-    }
-    // Ya no quedan en la sección A.
-    const a = page.slice(pos("A. Cliente y ruta"), pos("B. Presentación comercial"));
-    expect(a).not.toContain("Tarifa cotizada (Q)");
-    expect(a).not.toContain("La tarifa ya incluye IVA");
+  it("presentación agrupa solo marca, atención, cargo y mensaje; unidad/tarifa/IVA quedan en rutas", () => {
+    const presentacion = page.slice(pos("C. Presentación comercial"), pos("D. Condiciones de servicio"));
+    for (const etiqueta of ["Documento emitido por", "Atención a (opcional)", "Cargo / referencia (opcional)", "Mensaje para el cliente"]) expect(presentacion).toContain(etiqueta);
+    for (const etiqueta of ["Unidad / camión", "Precio cotizado (Q)", "La tarifa ya incluye IVA"]) expect(presentacion).not.toContain(etiqueta);
+    const rutas = page.slice(pos("B. Rutas / viajes cotizados"), pos("C. Presentación comercial"));
+    for (const etiqueta of ["Unidad / camión", "Precio cotizado (Q)", "La tarifa ya incluye IVA"]) expect(rutas).toContain(etiqueta);
   });
 
   it("los campos nuevos viajan en el payload y se precargan al editar", () => {
