@@ -10,6 +10,8 @@ import {
   cambiarEstadoCotizacion,
   crearCotizacion,
   duplicarCotizacion,
+  listarCotizaciones,
+  obtenerCotizacion,
 } from "./cotizaciones";
 
 function filaCotizacion(overrides: Partial<Record<string, unknown>> = {}) {
@@ -23,6 +25,22 @@ function filaCotizacion(overrides: Partial<Record<string, unknown>> = {}) {
     creado_por: "admin", creado_en: "2026-09-08 10:00:00", actualizado_en: "2026-09-08 10:00:00",
     ...overrides,
   };
+}
+
+function filaLinea(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    id: 10, cotizacion_id: 1, orden: 2, origen_texto: "PriceSmart Pradera", destino_texto: "PriceSmart Pradera — bodega",
+    unidad_descripcion: "1 Tonelada", tarifa_cotizada: "937.50",
+    ...overrides,
+  };
+}
+
+/** El `query` de nivel superior (@/lib/db) lo usan tanto el SELECT de tms_cotizaciones como el de tms_cotizacion_lineas — se distinguen por el texto del SQL, igual que conn.query en `conexion()`. */
+function mockQueryPorTabla(filasCotizaciones: Record<string, unknown>[], filasLineas: Record<string, unknown>[] = []) {
+  vi.mocked(query).mockImplementation(async (sql: unknown) => {
+    if (String(sql).includes("FROM tms_cotizacion_lineas")) return filasLineas as never;
+    return filasCotizaciones as never;
+  });
 }
 
 type ConnOpts = {
@@ -284,5 +302,133 @@ describe("duplicarCotizacion", () => {
   it("devuelve null si la cotización original no existe", async () => {
     vi.mocked(query).mockResolvedValue([] as never);
     expect(await duplicarCotizacion(7, 999)).toBeNull();
+  });
+
+  it("copia también las líneas adicionales (sin sus id/orden originales — se reasignan al insertar)", async () => {
+    const conn = conexion();
+    mockQueryPorTabla(
+      [filaCotizacion({ id: 1 })],
+      [filaLinea({ id: 10, orden: 2, origen_texto: "Pradera", tarifa_cotizada: "937.50" }), filaLinea({ id: 11, orden: 3, origen_texto: "Fraijanes", tarifa_cotizada: "820.00" })],
+    );
+    const nueva = await duplicarCotizacion(7, 1, "admin");
+    expect(nueva).not.toBeNull();
+    const inserts = conn.execute.mock.calls.filter((c) => String(c[0]).includes("INSERT INTO tms_cotizacion_lineas"));
+    expect(inserts).toHaveLength(2);
+    expect(inserts.map((c) => (c[1] as unknown[])[3])).toEqual(["Pradera", "Fraijanes"]); // origen_texto, en el mismo orden
+    expect(inserts.map((c) => (c[1] as unknown[])[2])).toEqual([2, 3]); // orden reasignado desde 2, nunca el id/orden original
+  });
+});
+
+describe("líneas adicionales — varias rutas/destinos en una sola cotización, cada una con su propio precio", () => {
+  it("crearCotizacion inserta cada línea adicional con orden consecutivo desde 2 (1 es la línea principal)", async () => {
+    const conn = conexion();
+    mockQueryPorTabla([filaCotizacion()]);
+    await crearCotizacion(7, {
+      clienteId: 3, tarifaCotizada: 1400, fechaEmision: "2026-09-08",
+      lineasAdicionales: [
+        { origenTexto: "PriceSmart Pradera", destinoTexto: "PriceSmart Pradera", unidadDescripcion: "1 Tonelada", tarifaCotizada: 937.5 },
+        { origenTexto: "PriceSmart Fraijanes", destinoTexto: "PriceSmart Fraijanes", unidadDescripcion: "1 Tonelada", tarifaCotizada: 937.5 },
+        { origenTexto: "PriceSmart San Cristóbal", destinoTexto: "PriceSmart San Cristóbal", unidadDescripcion: "1 Tonelada", tarifaCotizada: 937.5 },
+      ],
+    }, "admin");
+    const inserts = conn.execute.mock.calls.filter((c) => String(c[0]).includes("INSERT INTO tms_cotizacion_lineas"));
+    expect(inserts).toHaveLength(3);
+    const ordenes = inserts.map((c) => (c[1] as unknown[])[2]); // empresaId, cotizacionId, orden, ...
+    expect(ordenes).toEqual([2, 3, 4]);
+    expect(inserts[0][1]).toEqual([7, 1, 2, "PriceSmart Pradera", "PriceSmart Pradera", "1 Tonelada", 937.5]);
+  });
+
+  it("crearCotizacion sin lineasAdicionales no inserta nada en tms_cotizacion_lineas", async () => {
+    const conn = conexion();
+    mockQueryPorTabla([filaCotizacion()]);
+    await crearCotizacion(7, { clienteId: 3, tarifaCotizada: 1400, fechaEmision: "2026-09-08" }, "admin");
+    expect(conn.execute.mock.calls.some((c) => String(c[0]).includes("tms_cotizacion_lineas"))).toBe(false);
+  });
+
+  it("rechaza una línea adicional con precio <= 0, sin insertar la cotización", async () => {
+    const conn = conexion();
+    await expect(crearCotizacion(7, {
+      clienteId: 3, tarifaCotizada: 1400, fechaEmision: "2026-09-08",
+      lineasAdicionales: [{ tarifaCotizada: 0 }],
+    })).rejects.toThrow("El precio de la línea 2 debe ser mayor a cero");
+    expect(conn.execute).not.toHaveBeenCalled();
+  });
+
+  it("rechaza más de 50 líneas adicionales", async () => {
+    conexion();
+    const muchas = Array.from({ length: 51 }, () => ({ tarifaCotizada: 100 }));
+    await expect(crearCotizacion(7, { clienteId: 3, tarifaCotizada: 1400, fechaEmision: "2026-09-08", lineasAdicionales: muchas }))
+      .rejects.toThrow("No se pueden agregar más de 50 líneas adicionales");
+  });
+
+  it("rechaza un punto de carga/descarga de más de 300 caracteres en una línea adicional", async () => {
+    conexion();
+    await expect(crearCotizacion(7, {
+      clienteId: 3, tarifaCotizada: 1400, fechaEmision: "2026-09-08",
+      lineasAdicionales: [{ origenTexto: "x".repeat(301), tarifaCotizada: 100 }],
+    })).rejects.toThrow("no puede exceder 300 caracteres");
+  });
+
+  it("actualizarCotizacion: si lineasAdicionales se omite, NO toca tms_cotizacion_lineas (las existentes se conservan)", async () => {
+    const conn = conexion({ estadoActual: "Borrador" });
+    mockQueryPorTabla([filaCotizacion()]);
+    await actualizarCotizacion(7, 1, { tarifaCotizada: 2000 });
+    expect(conn.execute.mock.calls.some((c) => String(c[0]).includes("tms_cotizacion_lineas"))).toBe(false);
+  });
+
+  it("actualizarCotizacion: si se manda lineasAdicionales (aunque vacío), reemplaza por completo — DELETE + INSERT", async () => {
+    const conn = conexion({ estadoActual: "Borrador" });
+    mockQueryPorTabla([filaCotizacion()]);
+    await actualizarCotizacion(7, 1, {
+      lineasAdicionales: [{ origenTexto: "Nueva ruta", destinoTexto: "Nuevo destino", tarifaCotizada: 500 }],
+    });
+    const deleteCall = conn.execute.mock.calls.find((c) => String(c[0]).includes("DELETE FROM tms_cotizacion_lineas"));
+    expect(deleteCall?.[1]).toEqual([7, 1]);
+    const insertCalls = conn.execute.mock.calls.filter((c) => String(c[0]).includes("INSERT INTO tms_cotizacion_lineas"));
+    expect(insertCalls).toHaveLength(1);
+  });
+
+  it("actualizarCotizacion: lineasAdicionales = [] borra todas las líneas adicionales guardadas (DELETE sin ningún INSERT)", async () => {
+    const conn = conexion({ estadoActual: "Borrador" });
+    mockQueryPorTabla([filaCotizacion()]);
+    await actualizarCotizacion(7, 1, { lineasAdicionales: [] });
+    expect(conn.execute.mock.calls.some((c) => String(c[0]).includes("DELETE FROM tms_cotizacion_lineas"))).toBe(true);
+    expect(conn.execute.mock.calls.some((c) => String(c[0]).includes("INSERT INTO tms_cotizacion_lineas"))).toBe(false);
+  });
+
+  it("una cotización Enviada rechaza el cambio de líneas igual que cualquier otro campo (solo Borrador es editable)", async () => {
+    conexion({ estadoActual: "Enviada" });
+    mockQueryPorTabla([filaCotizacion({ estado: "Enviada" })]);
+    await expect(actualizarCotizacion(7, 1, { lineasAdicionales: [{ tarifaCotizada: 100 }] })).rejects.toThrow("solo mientras está en Borrador");
+  });
+
+  it("obtenerCotizacion adjunta las líneas adicionales de la tabla nueva, en orden, aisladas por empresa_id", async () => {
+    mockQueryPorTabla(
+      [filaCotizacion({ id: 1 })],
+      [filaLinea({ id: 11, orden: 3, origen_texto: "Fraijanes", tarifa_cotizada: "937.50" }), filaLinea({ id: 10, orden: 2, origen_texto: "Pradera", tarifa_cotizada: "820.00" })],
+    );
+    const c = await obtenerCotizacion(7, 1);
+    expect(c?.lineasAdicionales).toHaveLength(2);
+    const lineasCall = vi.mocked(query).mock.calls.find((c) => String(c[0]).includes("FROM tms_cotizacion_lineas"))!;
+    expect(lineasCall[1]).toEqual([7, 1]);
+    expect(String(lineasCall[0])).toContain("empresa_id = ?");
+  });
+
+  it("listarCotizaciones agrupa las líneas de varias cotizaciones en una sola consulta batch (IN)", async () => {
+    mockQueryPorTabla(
+      [filaCotizacion({ id: 1 }), filaCotizacion({ id: 2, codigo: "COT-000002" })],
+      [filaLinea({ id: 10, cotizacion_id: 1 }), filaLinea({ id: 11, cotizacion_id: 2, orden: 2 })],
+    );
+    const lista = await listarCotizaciones(7);
+    expect(lista.find((c) => c.id === 1)?.lineasAdicionales).toHaveLength(1);
+    expect(lista.find((c) => c.id === 2)?.lineasAdicionales).toHaveLength(1);
+    const lineasCalls = vi.mocked(query).mock.calls.filter((c) => String(c[0]).includes("FROM tms_cotizacion_lineas"));
+    expect(lineasCalls).toHaveLength(1); // una sola consulta batch, no N+1
+  });
+
+  it("sin cotizaciones: listarCotizaciones no ejecuta ninguna consulta a tms_cotizacion_lineas (evita un IN () vacío)", async () => {
+    mockQueryPorTabla([]);
+    await listarCotizaciones(7);
+    expect(vi.mocked(query).mock.calls.some((c) => String(c[0]).includes("FROM tms_cotizacion_lineas"))).toBe(false);
   });
 });

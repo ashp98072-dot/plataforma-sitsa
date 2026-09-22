@@ -100,7 +100,7 @@ describe("PDF multipágina — la marca de agua y el branding se repiten en cada
   // Se distingue del logo del encabezado por el ANCHO con el que se pidió dibujarla (el ancho de
   // destino de la marca de agua, ver marcaDeAgua en cada plantilla) — necesario porque Mónaco
   // reutiliza el MISMO archivo (LOGO_MONACO) para encabezado y marca de agua.
-  it.each([["KuiqTrans", KUIQ, 260], ["Mónaco", MONACO, 420]] as const)(
+  it.each([["KuiqTrans", KUIQ, 300], ["Mónaco", MONACO, 420]] as const)(
     "%s: una marca de agua por página, todas centradas en el centro físico (no solo en la primera)",
     async (_marca, base, anchoMarcaDeAgua) => {
       const doc = construirDocumentoComercial({
@@ -247,5 +247,79 @@ describe("tabla comercial preparada para varias líneas (renderer con lineas[])"
     expect(textos.filter((t) => t === "Punto de carga").length).toBe(paginasTotal);
     expect(textos).toContain("Origen 70 con texto largo de ejemplo");
     expect(textos).toContain("Q1,069.00");
+  });
+});
+
+describe.each([["KUIQTRANS", KUIQ], ["MONACO", MONACO]] as const)("cotización con varias rutas/destinos — %s (AJUSTES FINALES)", (_marca, base) => {
+  // Caso real: una sola cotización con 4 destinos PriceSmart, cada uno "Distribución Local",
+  // unidad "1 Tonelada" y el mismo precio (Q937.50) — pero cada renglón imprime SU PROPIO precio,
+  // nunca un total colapsado en su lugar.
+  const priceSmart = (n: number) => Array.from({ length: n }, (_, i) => ({
+    id: i + 1, orden: i + 2, origenTexto: `Bodega Central`, destinoTexto: `PriceSmart Destino ${i + 1}`, unidadDescripcion: "1 Tonelada", tarifaCotizada: 937.5,
+  }));
+
+  it("1 sola línea (la principal, sin adicionales): nunca imprime fila «Total»", async () => {
+    const { todo } = await generar({ ...base, lineasAdicionales: [] });
+    expect(todo).not.toMatch(/Total \(/);
+  });
+
+  it("3 líneas adicionales (4 en total): cada una imprime su propio origen/destino/unidad/precio, más un Total adicional que nunca sustituye los precios individuales", async () => {
+    const { textos, todo } = await generar({ ...base, tarifaCotizada: 937.5, lineasAdicionales: priceSmart(3) });
+    for (let i = 1; i <= 3; i++) {
+      expect(textos).toContain(`PriceSmart Destino ${i}`);
+    }
+    // 4 celdas con el mismo precio individual (la principal + 3 adicionales) — el precio de cada
+    // línea sigue apareciendo tal cual, la fila Total es ADICIONAL.
+    expect(textos.filter((t) => t === "Q937.50").length).toBeGreaterThanOrEqual(4);
+    expect(todo).toMatch(/Total \(Precio (sin IVA|IVA incluido)\): Q3,750\.00/);
+  });
+
+  it("4 líneas adicionales (5 en total): ninguna se pierde ni se colapsa, cada precio individual sigue impreso", async () => {
+    const { textos } = await generar({ ...base, tarifaCotizada: 937.5, lineasAdicionales: priceSmart(4) });
+    for (let i = 1; i <= 4; i++) expect(textos).toContain(`PriceSmart Destino ${i}`);
+    expect(textos.filter((t) => t === "Q937.50").length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("10+ líneas adicionales: fuerza varias páginas, repite el encabezado de la tabla, conserva «Página X de Y», marca de agua y branding en cada página", async () => {
+    const espiaTexto = vi.spyOn(PDFDocument.prototype, "text");
+    const espiaImagen = vi.spyOn(PDFDocument.prototype, "image");
+    const doc = construirDocumentoComercial({
+      ...base,
+      lineasAdicionales: Array.from({ length: 12 }, (_, i) => ({
+        id: i + 1, orden: i + 2, origenTexto: `Origen ${i + 2}`, destinoTexto: `Destino ${i + 2} con nombre largo de referencia`, unidadDescripcion: "1 Tonelada", tarifaCotizada: 100 + i,
+      })),
+    });
+    const render = base.documentoEmisor === "MONACO" ? cotizacionPdfMonaco : cotizacionPdfKuiqtrans;
+    const buffer = await render(doc);
+    const textos = espiaTexto.mock.calls.map((c) => String(c[0]));
+    const totalPaginas = paginas(buffer);
+    expect(totalPaginas).toBeGreaterThan(1);
+    // El encabezado de la tabla se repite cada vez que ESTA se corta entre páginas (puede haber
+    // más páginas que cortes de tabla si el resto del contenido también desborda) — nunca menos
+    // de 1, y la prueba de 70 líneas (arriba) ya confirma 1:1 cuando el desborde es solo de tabla.
+    expect(textos.filter((t) => t === "Punto de carga").length).toBeGreaterThanOrEqual(1);
+    for (let i = 1; i <= totalPaginas; i++) expect(textos).toContain(`Página ${i} de ${totalPaginas}`);
+    // Las 13 líneas (1 principal + 12 adicionales) están completas, ninguna se perdió al paginar.
+    expect(textos).toContain("Destino 13 con nombre largo de referencia");
+    // Branding/marca de agua preservados en TODAS las páginas (ver también el describe "PDF multipágina").
+    const anchoMarcaDeAgua = base.documentoEmisor === "MONACO" ? 420 : 300;
+    const marcaDeAgua = espiaImagen.mock.calls.filter(([, , , opts]) => (opts as { width?: number } | undefined)?.width === anchoMarcaDeAgua);
+    expect(marcaDeAgua).toHaveLength(totalPaginas);
+  });
+
+  it("varias líneas: cada renglón respeta el encabezado de IVA vigente (sin IVA e IVA incluido), nunca mezclado", async () => {
+    for (const incluyeIva of [false, true]) {
+      const { textos, todo } = await generar({ ...base, incluyeIva, lineasAdicionales: priceSmart(3) });
+      expect(textos).toContain(incluyeIva ? "Precio IVA incluido" : "Precio sin IVA");
+      expect(todo).not.toContain(incluyeIva ? "Precio sin IVA" : "Precio IVA incluido");
+    }
+  });
+
+  it("línea adicional sin origen/destino/unidad (null) cae al mismo placeholder «—» que la línea principal", async () => {
+    const { textos } = await generar({
+      ...base,
+      lineasAdicionales: [{ id: 1, orden: 2, origenTexto: null, destinoTexto: null, unidadDescripcion: null, tarifaCotizada: 500 }],
+    });
+    expect(textos).toContain("Q500.00");
   });
 });
