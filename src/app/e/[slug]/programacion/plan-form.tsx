@@ -310,11 +310,12 @@ export default function PlanForm({
   // nunca las oculta en silencio (ver sección 9 del ticket).
   const [todosVehiculos, setTodosVehiculos] = useState<VehiculoOpt[]>([]);
   const [resumenFlota, setResumenFlota] = useState({ disponibles: 0, enTaller: 0, enRuta: 0 });
-  // empleadoId -> ocupación real (piloto/auxiliar) y placa -> ocupación real
-  // (unidad) contra el intervalo actual del formulario — ver el useEffect
-  // más abajo que las recalcula cada vez que cambian fecha/hora/regreso.
-  const [ocupacionPersonal, setOcupacionPersonal] = useState<Record<number, OcupacionRecurso>>({});
-  const [ocupacionUnidades, setOcupacionUnidades] = useState<Record<string, OcupacionRecurso>>({});
+  // empleadoId -> ocupación diaria (piloto/auxiliar) y placa -> ocupación
+  // diaria (unidad); la respuesta se asocia a su fecha para no mostrar
+  // ocupaciones obsoletas mientras llega la siguiente consulta.
+  const [ocupacionDia, setOcupacionDia] = useState<{
+    fecha: string; personal: Record<number, OcupacionRecurso>; unidades: Record<string, OcupacionRecurso>;
+  }>({ fecha: "", personal: {}, unidades: {} });
   // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§2) — tarifas ACTIVAS de
   // la ruta elegida (del catálogo tms_ruta_tarifas). Se cargan al elegir
   // la ruta y al montar el formulario en edición (si el viaje ya tiene
@@ -358,6 +359,8 @@ export default function PlanForm({
     contactoTelefonoHistorico: plan?.contacto_telefono_historico ?? "",
     estado: plan?.estado ?? "Programado",
   });
+  const ocupacionPersonal = ocupacionDia.fecha === form.fechaPlan ? ocupacionDia.personal : {};
+  const ocupacionUnidades = ocupacionDia.fecha === form.fechaPlan ? ocupacionDia.unidades : {};
   const [paradasForm, setParadasForm] = useState<ParadaForm[]>(
     plan?.paradas?.length
       ? plan.paradas.map((p) => ({
@@ -535,28 +538,24 @@ export default function PlanForm({
   }, [cargarCatalogos]);
 
   // PROGRAMACION-DISPONIBILIDAD-BUSCADORES-1 — recalcula qué piloto/
-  // auxiliar/unidad ya está asignado a OTRO viaje que se traslapa con el
-  // intervalo ACTUAL del formulario, cada vez que cambia fecha, hora de
-  // salida o regreso estimado (sección 13 del ticket: sin recargar la
-  // página). En edición se excluye el propio plan (plan.id) — el viaje que
-  // se está editando nunca "choca contra sí mismo" (sección 12). Un
-  // pequeño debounce evita ráfagas de solicitudes mientras el usuario
-  // ajusta la hora con los selects de Hora12Input/FechaHora12Input.
+  // auxiliar/unidad ya está asignado a OTRO plan en la fecha elegida.
+  // La hora y el regreso estimado no afectan esta disponibilidad. En
+  // edición se excluye el propio plan; el debounce evita solicitudes
+  // innecesarias mientras se cambia la fecha.
   const excluirPlanId = plan?.id ?? null;
   useEffect(() => {
     if (!form.fechaPlan) return;
     let cancelado = false;
     const id = window.setTimeout(() => {
       const params = new URLSearchParams({ fecha: form.fechaPlan });
-      if (form.horaCarga) params.set("horaCarga", form.horaCarga);
-      if (form.regresoEstimado) params.set("regresoEstimado", form.regresoEstimado);
       if (excluirPlanId) params.set("excluirPlanId", String(excluirPlanId));
       fetch(`/api/empresas/${slug}/tms/planes/disponibilidad-recursos?${params.toString()}`)
         .then((r) => (r.ok ? r.json() : null))
         .then((data) => {
           if (cancelado || !data) return;
-          setOcupacionPersonal((data.personal ?? {}) as Record<number, OcupacionRecurso>);
-          setOcupacionUnidades((data.unidades ?? {}) as Record<string, OcupacionRecurso>);
+          setOcupacionDia({ fecha: form.fechaPlan,
+            personal: (data.personal ?? {}) as Record<number, OcupacionRecurso>,
+            unidades: (data.unidades ?? {}) as Record<string, OcupacionRecurso> });
         })
         .catch(() => {});
     }, 300);
@@ -564,7 +563,7 @@ export default function PlanForm({
       cancelado = true;
       window.clearTimeout(id);
     };
-  }, [slug, form.fechaPlan, form.horaCarga, form.regresoEstimado, excluirPlanId]);
+  }, [slug, form.fechaPlan, excluirPlanId]);
 
   // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§2) — en EDICIÓN, si el
   // viaje ya tiene una ruta, carga las tarifas activas de esa ruta para

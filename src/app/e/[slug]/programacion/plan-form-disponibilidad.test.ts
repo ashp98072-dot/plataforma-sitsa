@@ -11,12 +11,13 @@ describe("PlanForm — disponibilidad de piloto/auxiliar/unidad en los buscadore
     return i;
   };
 
-  it("consulta /tms/planes/disponibilidad-recursos con fecha/horaCarga/regresoEstimado y refresca cada vez que cambian (sin recargar la página)", () => {
+  it("consulta disponibilidad por fecha y la refresca cuando cambia el día, sin recargar la página", () => {
     expect(page).toContain("/api/empresas/${slug}/tms/planes/disponibilidad-recursos?${params.toString()}");
     const efecto = page.slice(pos("const excluirPlanId = plan?.id ?? null;"), pos("en EDICIÓN, si el"));
-    expect(efecto).toContain("[slug, form.fechaPlan, form.horaCarga, form.regresoEstimado, excluirPlanId]");
-    expect(efecto).toContain('params.set("horaCarga", form.horaCarga)');
-    expect(efecto).toContain('params.set("regresoEstimado", form.regresoEstimado)');
+    expect(efecto).toContain("[slug, form.fechaPlan, excluirPlanId]");
+    expect(page).toContain("ocupacionDia.fecha === form.fechaPlan ? ocupacionDia.personal : {}");
+    expect(page).toContain("ocupacionDia.fecha === form.fechaPlan ? ocupacionDia.unidades : {}");
+    expect(efecto).not.toContain('params.set("horaCarga"');
   });
 
   it("edición: excluye el propio plan (plan.id) de la comprobación — nunca choca contra sí mismo", () => {

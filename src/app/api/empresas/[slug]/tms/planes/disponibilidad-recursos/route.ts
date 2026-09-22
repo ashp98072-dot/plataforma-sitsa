@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireTenantProgramacionOTms } from "@/lib/tenant";
-import { finViajeDesdeInput, inicioViaje } from "@/lib/tms/disponibilidad-traslapes";
-import { listarConflictosPersonal, listarConflictosUnidades } from "@/lib/tms/disponibilidad-recursos-lista";
+import { listarDisponibilidadProgramacionDia } from "@/lib/tms/disponibilidad-programacion-dia";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -11,18 +10,15 @@ const REGRESO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 
 /**
  * PROGRAMACION-DISPONIBILIDAD-BUSCADORES-1 — disponibilidad de TODOS los
- * pilotos/auxiliares/unidades de la empresa contra el intervalo del viaje
+ * pilotos/auxiliares/unidades de la empresa en la fecha_plan seleccionada
  * que se está armando en el formulario de Programación (crear o editar),
  * para los buscadores de piloto/auxiliar/unidad: nunca oculta un recurso
  * ocupado, solo lo marca. Misma empresa_id de la sesión, nunca la que
  * mande el cliente (requireTenantProgramacionOTms).
  *
- * Reutiliza el MISMO motor de "ocupación real" que ya usa el guardado
- * (disponibilidad-traslapes.ts) — ver disponibilidad-recursos-lista.ts —
- * así que el resultado es exactamente el mismo criterio que después
- * aplicará el backend al validar el guardado (sección 11 del ticket): el
- * color gris en la UI y el rechazo del servidor nunca pueden divergir
- * porque comparten el mismo código.
+ * Comparte estados y consultas con el guardado en
+ * disponibilidad-programacion-dia.ts. La hora y el regreso se aceptan
+ * por compatibilidad con clientes anteriores, pero no alteran el resultado.
  */
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
@@ -45,15 +41,7 @@ export async function GET(req: Request, ctx: Ctx) {
   const excluirPlanIdParam = p.get("excluirPlanId");
   const excluirPlanId = excluirPlanIdParam && /^\d+$/.test(excluirPlanIdParam) ? Number(excluirPlanIdParam) : null;
 
-  const intervalo = {
-    inicio: inicioViaje(fecha, horaCargaParam),
-    fin: finViajeDesdeInput(regresoEstimadoParam),
-  };
-
-  const [personal, unidades] = await Promise.all([
-    listarConflictosPersonal(guard.empresa.id, intervalo, excluirPlanId),
-    listarConflictosUnidades(guard.empresa.id, intervalo, excluirPlanId),
-  ]);
+  const { personal, unidades } = await listarDisponibilidadProgramacionDia(guard.empresa.id, fecha, excluirPlanId);
 
   return NextResponse.json(
     {

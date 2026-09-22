@@ -30,6 +30,23 @@ export type PlanModelo = {
 export type ModeloPersonal = { personal: PersonalModelo[]; planes: PlanModelo[] };
 
 export function emularConsultaConflictoPersonal(modelo: ModeloPersonal, sql: string, params: unknown[]): Record<string, unknown>[] {
+  if (sql.includes("p.fecha_plan = ?")) {
+    const empresaId = Number(params[0]);
+    const fecha = String(params[1]);
+    const estados = params.slice(2, 7) as string[];
+    const ids = params.slice(7, sql.includes("p.id != ?") ? -1 : undefined).map(Number);
+    const excluir = sql.includes("p.id != ?") ? Number(params.at(-1)) : null;
+    return modelo.personal.filter((tp) => tp.empresa_id === empresaId && ids.includes(tp.id)).flatMap((tp) => {
+      const equivalentes = new Set(modelo.personal.filter((eq) => eq.empresa_id === empresaId &&
+        (eq.id === tp.id || (tp.id_empleado !== null && eq.id_empleado === tp.id_empleado))).map((eq) => eq.id));
+      return modelo.planes.filter((p) => p.empresa_id === empresaId && p.inicio.slice(0, 10) === fecha &&
+        estados.includes(p.estado) && p.id !== excluir &&
+        ((p.piloto_id != null && equivalentes.has(p.piloto_id)) ||
+          (p.auxiliar_id != null && equivalentes.has(p.auxiliar_id)) ||
+          (p.auxiliares ?? []).some((id) => equivalentes.has(id))))
+        .map((p) => ({ recurso_id: tp.id, nombre: tp.nombre, plan_id: p.id, codigo: p.codigo, fecha }));
+    });
+  }
   const [personalId, empresaId] = params as [number, number];
   const excluirPlanId = sql.includes("p.id != ?") ? Number(params[6]) : null;
   const estadosCandidatos = params.slice(2, 6) as string[];
