@@ -9,6 +9,7 @@ import {
   type ClienteTipo,
 } from "@/lib/clientes/tipos";
 import { ClientesImportador } from "@/components/clientes/clientes-importador";
+import { ContactosClientePanel } from "@/components/clientes/contactos-cliente-panel";
 
 type Props = { slug: string; puedeEditar: boolean };
 
@@ -54,6 +55,7 @@ export function ClientesClient({ slug, puedeEditar }: Props) {
   const [estado, setEstado] = useState("Activo");
   const [form, setForm] = useState<FormState>(vacio);
   const [editId, setEditId] = useState<number | null>(null);
+  const [contactosClienteId, setContactosClienteId] = useState<number | null>(null);
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -347,6 +349,7 @@ export function ClientesClient({ slug, puedeEditar }: Props) {
               {saving ? "Guardando…" : editId ? "Actualizar" : "Crear cliente"}
             </button>
           </div>
+          {editId ? <ContactosClientePanel slug={slug} clienteId={editId} puedeEditar={puedeEditar} /> : null}
         </form>
       ) : null}
 
@@ -403,8 +406,8 @@ export function ClientesClient({ slug, puedeEditar }: Props) {
                 <th className="px-3 py-2">Nombre</th>
                 <th className="px-3 py-2">NIT / RTU</th>
                 <th className="px-3 py-2">Tipo</th>
-                <th className="px-3 py-2">Contacto</th>
-                {puedeEditar ? <th className="px-3 py-2" /> : null}
+                <th className="px-3 py-2">Contactos</th>
+                <th className="px-3 py-2" />
               </tr>
             </thead>
             <tbody>
@@ -432,11 +435,13 @@ export function ClientesClient({ slug, puedeEditar }: Props) {
                     ) : null}
                   </td>
                   <td className="px-3 py-2 text-xs">
-                    {c.telefono || c.email || "—"}
+                    <div>{c.contactosActivos ?? 0} activos</div>
+                    {(c.contactosInactivos ?? 0) > 0 ? <div className="text-[var(--muted)]">{c.contactosInactivos} inactivos</div> : null}
                   </td>
-                  {puedeEditar ? (
                     <td className="px-3 py-2">
                       <div className="flex flex-wrap gap-2">
+                        <button type="button" className="text-xs text-[var(--accent)] underline" onClick={() => setContactosClienteId(c.id)}>Contactos</button>
+                        {puedeEditar ? <>
                         <button
                           type="button"
                           className="text-xs text-[var(--accent)] underline"
@@ -450,15 +455,15 @@ export function ClientesClient({ slug, puedeEditar }: Props) {
                         >
                           Portal
                         </Link>
+                        </> : null}
                       </div>
                     </td>
-                  ) : null}
                 </tr>
               ))}
               {!clientes.length ? (
                 <tr>
                   <td
-                    colSpan={puedeEditar ? 6 : 5}
+                    colSpan={6}
                     className="px-3 py-6 text-center text-[var(--muted)]"
                   >
                     No hay clientes con este filtro.
@@ -469,6 +474,7 @@ export function ClientesClient({ slug, puedeEditar }: Props) {
           </table>
         </div>
           )}
+          {contactosClienteId ? <ContactosClientePanel slug={slug} clienteId={contactosClienteId} puedeEditar={puedeEditar} /> : null}
         </section>
       ) : null}
     </div>

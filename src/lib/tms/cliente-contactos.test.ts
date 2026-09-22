@@ -1,8 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db", () => ({ query: vi.fn(), execute: vi.fn() }));
 import { execute, query } from "@/lib/db";
-import { buscarPosiblesDuplicadosContacto, crearContactoCliente, listarContactosCliente } from "./cliente-contactos";
+import { actualizarContactoCliente, buscarPosiblesDuplicadosContacto, crearContactoCliente, eliminarContactoClienteSinUso, listarContactosCliente } from "./cliente-contactos";
+
+beforeEach(()=>vi.clearAllMocks());
 
 /**
  * RUTAS-TARIFARIO-HISTORIAL-1 (§7/§8 del ticket) — "+ Agregar contacto"
@@ -46,6 +48,13 @@ describe("crearContactoCliente — queda disponible en el cliente real (§7 del 
     await expect(crearContactoCliente(7, 5, { nombre: "   " })).rejects.toThrow("Nombre del contacto requerido.");
     expect(execute).not.toHaveBeenCalled();
   });
+});
+
+describe("administración y conservación histórica",()=>{
+  it("listar administración incluye activos e inactivos del mismo tenant/cliente",async()=>{vi.mocked(query).mockResolvedValue([fila(),fila({id:2,activo:0})] as never);const r=await listarContactosCliente(7,5,{incluirInactivos:true});expect(r).toHaveLength(2);const [sql,params]=vi.mocked(query).mock.calls[0];expect(sql).not.toContain("activo = 1");expect(params).toEqual([7,5]);});
+  it("editar/desactivar conserva la fila y acota por empresa",async()=>{vi.mocked(query).mockResolvedValueOnce([fila()] as never).mockResolvedValueOnce([fila({activo:0})] as never);await actualizarContactoCliente(7,1,{activo:false});expect(execute).toHaveBeenCalledWith(expect.stringContaining("UPDATE tms_cliente_contactos"),expect.arrayContaining([1,7]));expect(execute).not.toHaveBeenCalledWith(expect.stringContaining("DELETE"),expect.anything());});
+  it("bloquea eliminación si una ruta usa el contacto",async()=>{vi.mocked(query).mockResolvedValueOnce([{id:1}] as never).mockResolvedValueOnce([{id:9}] as never);await expect(eliminarContactoClienteSinUso(7,5,1)).resolves.toEqual({ok:false,motivo:"UTILIZADO"});expect(execute).not.toHaveBeenCalled();});
+  it("elimina definitivamente solo si no tiene uso y conserva aislamiento",async()=>{vi.mocked(query).mockResolvedValueOnce([{id:1}] as never).mockResolvedValueOnce([] as never);await expect(eliminarContactoClienteSinUso(7,5,1)).resolves.toEqual({ok:true});expect(execute).toHaveBeenCalledWith(expect.stringContaining("DELETE FROM tms_cliente_contactos"),[1,7,5]);});
 });
 
 describe("buscarPosiblesDuplicadosContacto (§8 del ticket)", () => {
