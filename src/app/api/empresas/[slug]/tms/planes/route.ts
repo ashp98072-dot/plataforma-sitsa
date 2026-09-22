@@ -25,15 +25,8 @@ import { listarDisponibilidadPersonal } from "@/lib/operaciones/disponibilidad-p
 import { ahoraLocal, hoyLocal, toIsoDate } from "@/lib/rrhh/dates";
 import { listarViaticosRechazadosDelPlan, personalRecienAsignadoDelPlan, sincronizarViaticosPlan } from "@/lib/tms/viaticos";
 import { planesConCierreManual } from "@/lib/tms/cierre-manual-planes";
-import {
-  ESTADOS_QUE_RESERVAN_RECURSOS,
-  SQL_HORA_LLEGADA_REAL,
-  finViajeDesdeInput,
-  inicioViaje,
-  mensajeConflicto,
-  primerConflictoTraslape,
-  type RecursoAValidar,
-} from "@/lib/tms/disponibilidad-traslapes";
+import { SQL_HORA_LLEGADA_REAL, type RecursoAValidar } from "@/lib/tms/disponibilidad-traslapes";
+import { mensajeConflictoProgramacionDia, primerConflictoProgramacionDia } from "@/lib/tms/disponibilidad-programacion-dia";
 import { personalDesdeEmpleado, validarPersonalId } from "@/lib/tms/personal-resolucion";
 import { upsertLugar, guardarAuxiliaresPlan } from "@/lib/tms/plan-comunes";
 import type { ResultSetHeader } from "mysql2/promise";
@@ -780,29 +773,18 @@ export async function POST(req: Request, ctx: Ctx) {
     "Descarga",
   );
 
-  // VIAT-2: recursos que este plan reservaría (piloto + cada auxiliar +
-  // unidad) y su intervalo real (fecha_plan+hora_carga → regreso_estimado).
-  // Sin "misma fecha" — dos viajes el mismo día que no se traslapan en hora
-  // están permitidos (ver disponibilidad-traslapes.ts).
-  //
-  // El regreso estimado es OPCIONAL: sin él, el intervalo del viaje queda
-  // abierto (fin = null) hasta que exista una terminación real — la llegada
-  // registrada por Flota o, tras cerrarse, el cierre administrativo. Nunca se
-  // inventa un regreso (+N horas, fin de día...) para poder validar.
+  // Piloto, auxiliares y unidad quedan ocupados durante toda fecha_plan.
+  // La hora y el regreso estimado no modifican esta reserva diaria.
   const recursosNuevoPlan: RecursoAValidar[] = [
     ...(pilotoId ? [{ tipo: "piloto" as const, id: pilotoId }] : []),
     ...auxPersonalIds.map((id) => ({ tipo: "auxiliar" as const, id })),
     ...(unidadId ? [{ tipo: "unidad" as const, id: unidadId }] : []),
   ];
-  const finNuevo = finViajeDesdeInput(d.regresoEstimado);
-  const intervaloNuevo = recursosNuevoPlan.length
-    ? { inicio: inicioViaje(d.fechaPlan, d.horaCarga), fin: finNuevo }
-    : null;
+  const validarDiaNuevo = recursosNuevoPlan.length > 0;
 
   // OPS-4.2c: disponibilidad FÍSICA actual (viaje realmente abierto en
   // Flota, flota_viajes.estado='abierto') — protección complementaria a
-  // primerConflictoTraslape de más abajo (que valida TMS/planificación/
-  // ocupación real, ver OPS-4.2b). El POST nunca la había consultado para
+  // la reserva por fecha_plan de más abajo. El POST nunca la había consultado para
   // piloto/auxiliares (solo para la unidad, vía listarDisponibilidadVehiculos
   // arriba) — hueco detectado en OPS-4.1.
   //
@@ -811,8 +793,8 @@ export async function POST(req: Request, ctx: Ctx) {
   // planes del día — aquí SOLO el hecho físico "viaje en curso" que pidió
   // este ticket): solo aplica para HOY. Un viaje abierto ahora mismo NO
   // debe bloquear una programación futura — no se sabe cuándo terminará
-  // y no se inventa una duración estimada; esa protección futura ya la
-  // da primerConflictoTraslape con la ocupación real (OPS-4.2b).
+  // y no se inventa una duración estimada; la protección de días futuros
+  // corresponde exclusivamente a las asignaciones de esa fecha_plan.
   //
   // Una sola llamada a listarDisponibilidadPersonal (piloto + auxiliares
   // juntos, vía un Map por personalId) — nunca una por recurso, evita N+1.
@@ -865,7 +847,7 @@ export async function POST(req: Request, ctx: Ctx) {
   // que `lockTraslapeAdquirido` en el PATCH de más abajo.
   let lockTraslapePostAdquirido = false;
   try {
-    if (lockConn && intervaloNuevo) {
+    if (lockConn && validarDiaNuevo) {
       // CORRECCIÓN PR #81: GET_LOCK() de MySQL NO lanza excepción cuando no
       // consigue el candado — retorna 1 (adquirido), 0 (timeout) o NULL
       // (error). Hay que leer el valor real de `l`: sin candado
@@ -891,14 +873,14 @@ export async function POST(req: Request, ctx: Ctx) {
           { status: 409 },
         );
       }
-      const conflicto = await primerConflictoTraslape(
+      const conflicto = await primerConflictoProgramacionDia(
         empresaId,
         recursosNuevoPlan,
-        intervaloNuevo,
+        d.fechaPlan,
         null,
       );
       if (conflicto) {
-        return NextResponse.json({ error: mensajeConflicto(conflicto) }, { status: 409 });
+        return NextResponse.json({ error: mensajeConflictoProgramacionDia(conflicto) }, { status: 409 });
       }
     }
 
@@ -1859,23 +1841,16 @@ export async function PATCH(req: Request, ctx: Ctx) {
     // se liberaba aquí mismo, justo después de leer el conflicto y ANTES de
     // escribir/confirmar. Bajo REPEATABLE READ eso dejaba una ventana real:
     // dos transacciones concurrentes podían adquirir el candado una tras
-    // otra, ambas leer "sin conflicto" (ninguna veía todavía la escritura
-    // no confirmada de la otra) y ambas terminar asignando el mismo
-    // piloto/auxiliar/unidad a planes que se solapan. Mantener el candado
-    // hasta el commit fuerza a que quien llegue segundo espere hasta que el
-    // primero haya confirmado — y como primerConflictoTraslape recibe este
-    // mismo `conn` (más abajo) y es la PRIMERA lectura consistente que hace
-    // esta transacción sobre tablas InnoDB (lo de arriba son solo
-    // INSERT..ON DUPLICATE KEY UPDATE), su propio snapshot de REPEATABLE
-    // READ se establece recién AL EJECUTARSE — es decir, DESPUÉS de haber
-    // esperado el candado — así que ya ve el commit de quien lo tenía antes
-    // (current read correcto, sin necesidad de FOR UPDATE aquí).
+    // otra y terminar asignando el mismo recurso. El candado se mantiene
+    // hasta commit. Además, la consulta diaria usa FOR UPDATE: PATCH pudo
+    // haber establecido un snapshot REPEATABLE READ antes de GET_LOCK, y
+    // necesita ver la escritura ya confirmada por quien obtuvo el candado
+    // primero.
     //
-    // Se omite si el estado efectivo ya no reserva recursos (Descargado/
-    // Cerrado/Cancelado) — no tiene sentido validar disponibilidad de algo
-    // que se está liberando.
+    // Solo Cancelado libera la fecha. Descargado y Cerrado continúan
+    // ocupando su fecha_plan, sin bloquear días posteriores.
     const estadoEfectivo = d.estado ?? antes.estado;
-    if ((ESTADOS_QUE_RESERVAN_RECURSOS as readonly string[]).includes(estadoEfectivo)) {
+    if (estadoEfectivo !== "Cancelado") {
       const pilotoEfectivo = pilotoId ?? antes.pilotoId;
       const unidadEfectiva = unidadId ?? antes.unidadId;
       const auxiliaresEfectivos = auxPersonalIdsNuevo ?? auxPersonalIdsLegado ?? antesAuxiliaresIds;
@@ -1886,13 +1861,6 @@ export async function PATCH(req: Request, ctx: Ctx) {
       ];
       if (recursosEfectivos.length) {
         const fechaEfectivaPlan = d.fechaPlan ?? antes.fechaPlan;
-        const horaEfectivaCarga = d.horaCarga ?? antes.hora;
-        const finEfectivo =
-          d.regresoEstimado !== undefined
-            ? finViajeDesdeInput(d.regresoEstimado)
-            : antes.regresoEstimado;
-        // Sin regreso estimado (finEfectivo = null) el viaje queda abierto
-        // hasta una terminación real; ver disponibilidad-traslapes.ts.
         // CORRECCIÓN PR #81: GET_LOCK() de MySQL NO lanza excepción cuando
         // no consigue el candado — retorna 1 (adquirido), 0 (timeout) o
         // NULL (error). Un try/catch vacío alrededor de la llamada no basta
@@ -1922,10 +1890,10 @@ export async function PATCH(req: Request, ctx: Ctx) {
             { status: 409 },
           );
         }
-        const conflicto = await primerConflictoTraslape(
+        const conflicto = await primerConflictoProgramacionDia(
           empresaId,
           recursosEfectivos,
-          { inicio: inicioViaje(fechaEfectivaPlan, horaEfectivaCarga), fin: finEfectivo },
+          fechaEfectivaPlan,
           d.id,
           conn,
         );
@@ -1934,7 +1902,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
         // en este `return` por conflicto (ver comentario arriba del bloque).
         if (conflicto) {
           await conn.rollback();
-          return NextResponse.json({ error: mensajeConflicto(conflicto) }, { status: 409 });
+          return NextResponse.json({ error: mensajeConflictoProgramacionDia(conflicto) }, { status: 409 });
         }
       }
     }

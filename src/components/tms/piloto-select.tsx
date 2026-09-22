@@ -9,7 +9,7 @@ export type PilotoOpt = {
   nombre: string;
 };
 
-/** Ocupación real de un recurso para el intervalo del viaje que se está armando — ver disponibilidad-recursos-lista.ts. */
+/** Ocupación de un recurso en fecha_plan; la hora se conserva por compatibilidad con otros consumidores. */
 export type OcupacionRecurso = {
   planCodigo: string;
   /** "YYYY-MM-DD HH:mm:ss" */

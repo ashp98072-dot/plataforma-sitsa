@@ -9,38 +9,26 @@ import { guardarParadasPlan, type ParadaInput } from "@/lib/tms/paradas";
 import { sincronizarViaticosPlan } from "@/lib/tms/viaticos";
 import { tarifasActivasDeVariasRutas } from "@/lib/tms/ruta-tarifas";
 import type { FilaProgramacionExcel } from "./programacion-import-excel";
+import { mensajeConflictoProgramacionDia, primerConflictoProgramacionDia } from "./disponibilidad-programacion-dia";
 import {
   finViajeDesdeInput,
   inicioViaje,
-  intervaloOcupacionReal,
-  mensajeConflicto,
-  primerConflictoTraslape,
-  seSolapaConOcupacionReal,
   type IntervaloConsulta,
   type RecursoAValidar,
 } from "./disponibilidad-traslapes";
 
 /**
  * TMS-IMPORTACION-PROGRAMACION-EXCEL (PR 3 de 6) — validaciones PURAS
- * entre filas del mismo Excel: filas duplicadas y traslapes de piloto/
- * auxiliar/unidad DENTRO del lote (fila contra fila del propio archivo).
+ * entre filas del mismo Excel: filas duplicadas y asignaciones repetidas de
+ * piloto/auxiliar/unidad en la misma fecha_plan.
  * Ver docs/TMS-IMPORTACION-PROGRAMACION-EXCEL-{0,1,2}-*.md.
  *
  * Nada de esto consulta BD. Todavía NO se resuelve ruta/cliente/piloto/
  * auxiliar/unidad contra catálogo, NO se valida tarifa vigente, NO se
- * compara contra viajes YA EXISTENTES en BD (eso es
- * `primerConflictoTraslape` de disponibilidad-traslapes.ts, y es alcance
- * de una fase posterior — PR 4/5). La comparación ENTRE filas reutiliza de
- * ese mismo archivo sus funciones puras (`inicioViaje`/`finViajeDesdeInput`,
- * `intervaloOcupacionReal`/`seSolapaConOcupacionReal`) — nunca
- * `primerConflictoTraslape` en sí (esa sí toca BD, y se usa más abajo en la
- * previsualización).
- *
- * REGRESO ESTIMADO OPCIONAL: igual que en POST/PATCH /tms/planes, una fila
- * sin regreso estimado NO se excluye de la validación: es un viaje ABIERTO
- * (intervalo [salida, sin límite)) y bloquea a su piloto/auxiliares/unidad
- * hasta que exista una terminación real. La regla es la misma en el lote y
- * contra la BD porque ambas usan el mismo criterio de ocupación.
+ * compara contra viajes YA EXISTENTES en BD (eso se hace más abajo). El
+ * regreso estimado sigue siendo opcional, pero no define la disponibilidad:
+ * un plan de otra fecha nunca bloquea y dos del mismo día sí, aun con
+ * horarios separados o con uno cerrado.
  */
 
 /** Comparación case-insensitive de códigos/placas — mismo criterio que normalizarCodigoEmpleado() en rutas-import.ts. */
@@ -186,20 +174,10 @@ function intervaloDeFila(fila: FilaProgramacionExcel): IntervaloConsulta | null 
 }
 
 /**
- * Dos filas del lote se solapan según el MISMO criterio de ocupación que la
- * validación contra la BD y que POST/PATCH: cada fila es un viaje Programado
- * (con su regreso estimado, o abierto si no lo tiene) y "tocar el límite NO
- * es traslape". Simétrico: `fin: null` es "sin límite" en cualquiera de las
- * dos.
+ * La disponibilidad del lote depende solo de fecha_plan, nunca del regreso.
  */
 function seSolapan(a: IntervaloConsulta, b: IntervaloConsulta): boolean {
-  const ocupacionA = intervaloOcupacionReal({
-    estado: "Programado",
-    inicio: a.inicio,
-    regresoEstimado: a.fin,
-    llegadaTecnica: false,
-  });
-  return seSolapaConOcupacionReal(ocupacionA, b);
+  return a.inicio.slice(0, 10) === b.inicio.slice(0, 10);
 }
 
 /** Texto del intervalo de una fila para los mensajes de error. */
@@ -227,7 +205,7 @@ export type ConflictoTraslapeEnLote = {
 /**
  * Detecta traslapes de piloto/auxiliar/unidad ENTRE filas del mismo
  * archivo (nunca contra BD — eso es una fase posterior). Dos filas
- * conflictúan cuando sus intervalos se solapan Y comparten al menos un
+ * conflictúan cuando comparten fecha de salida Y al menos un
  * recurso de la MISMA categoría (persona o unidad). Devuelve una entrada
  * por cada lado del conflicto (ambas filas involucradas), ordenadas por
  * número de fila de Excel. `[]` si no hay ningún conflicto.
@@ -624,17 +602,13 @@ export async function previsualizarImportacionProgramacion(
     }));
     const unidadId = unidadesPorPlaca.get(normalizarClave(fila.placaExcel)) ?? null;
 
-    // 7) Disponibilidad/traslape contra viajes YA EXISTENTES en BD —
-    // reutiliza primerConflictoTraslape tal cual (misma función que usa
-    // el alta manual, sin `conn` ni candado: esto es solo lectura, el
-    // candado/transacción son del PR 5). Solo se arman recursos con id
+    // 7) Disponibilidad diaria contra planes YA EXISTENTES en BD.
+    // Solo se arman recursos con id
     // REAL ya existente (personalId/unidadId no nulos) — ver nota sobre
     // personalDesdeEmpleado más arriba.
     //
-    // El regreso estimado es OPCIONAL: sin él el intervalo de la fila es
-    // ABIERTO (`fin: null`) y se valida igual — exactamente la misma regla
-    // que POST/PATCH /tms/planes. Un regreso a medias nunca llega aquí (la
-    // fila ya salió con error sintáctico más arriba).
+    // El regreso estimado es opcional y no cambia el bloqueo de fecha_plan.
+    // Un regreso a medias nunca llega aquí (error sintáctico anterior).
     let regresoEstimadoCombinado: string | null = null;
     if (fila.fechaRegresoExcel && fila.horaRegresoExcel) {
       regresoEstimadoCombinado = `${fila.fechaRegresoExcel}T${fila.horaRegresoExcel}`;
@@ -642,10 +616,6 @@ export async function previsualizarImportacionProgramacion(
     // fechaSalidaExcel está garantizado no-nulo: es obligatorio (PR 2) y
     // cualquier fila sin él ya salió por `fila.erroresSintacticos` en el
     // chequeo de arriba.
-    const intervalo: IntervaloConsulta = {
-      inicio: inicioViaje(fila.fechaSalidaExcel!, fila.horaSalidaExcel),
-      fin: finViajeDesdeInput(regresoEstimadoCombinado),
-    };
     const pilotoParaConflicto = personalIdParaConflicto("Piloto", fila.pilotoCodigoExcel, pilotoOk.id);
     const auxiliaresParaConflicto = auxiliaresResueltos
       .map((aux) => personalIdParaConflicto("Auxiliar", aux.codigo, aux.id))
@@ -656,8 +626,8 @@ export async function previsualizarImportacionProgramacion(
       ...(unidadId != null ? [{ tipo: "unidad" as const, id: unidadId }] : []),
     ];
     if (recursos.length) {
-      const conflicto = await primerConflictoTraslape(empresaId, recursos, intervalo, null);
-      if (conflicto) errores.push(mensajeConflicto(conflicto));
+      const conflicto = await primerConflictoProgramacionDia(empresaId, recursos, fila.fechaSalidaExcel!, null);
+      if (conflicto) errores.push(mensajeConflictoProgramacionDia(conflicto));
     }
 
     if (errores.length) {

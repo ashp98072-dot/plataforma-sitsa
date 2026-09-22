@@ -47,6 +47,16 @@ let candidatosPiloto: Record<string, unknown>[] = [];
 let sqlDeConsultas: { sql: string; params: unknown[] }[] = [];
 let conexion: ReturnType<typeof crearConexion>;
 
+function candidatosDelDia(params: unknown[]) {
+  const fecha = String(params[1]);
+  const id = Number(params[7]);
+  return candidatosPiloto.flatMap((r) => {
+    const dia = String(r.fecha ?? r.inicio ?? "").slice(0, 10);
+    if (dia !== fecha || r.estado === "Cancelado") return [];
+    return [{ ...r, recurso_id: r.recurso_id ?? id, nombre: r.nombre ?? r.recurso_nombre, fecha: dia }];
+  });
+}
+
 function crearConexion() {
   return {
     beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn(),
@@ -54,7 +64,7 @@ function crearConexion() {
     query: vi.fn(async (sql: string, params: unknown[] = []) => {
       if (String(sql).includes("GET_LOCK")) return [[{ l: 1 }]];
       sqlDeConsultas.push({ sql: String(sql), params });
-      return [String(sql).includes("FROM tms_personal tp") ? candidatosPiloto : []];
+      return [String(sql).includes("FROM tms_personal tp") ? candidatosDelDia(params) : []];
     }),
     execute: vi.fn<(sql: string, params?: unknown[]) => Promise<unknown[]>>(async () => [{ insertId: 55, affectedRows: 1 }]),
   };
@@ -70,7 +80,7 @@ beforeEach(() => {
   vi.mocked(execute).mockResolvedValue({ insertId: 91, affectedRows: 1 } as never);
   vi.mocked(query).mockImplementation((async (sql: string, params: unknown[] = []) => {
     sqlDeConsultas.push({ sql: String(sql), params });
-    if (String(sql).includes("FROM tms_personal tp")) return candidatosPiloto;
+    if (String(sql).includes("FROM tms_personal tp")) return candidatosDelDia(params);
     return [];
   }) as never);
 });
@@ -109,23 +119,23 @@ describe("POST /tms/planes — regreso estimado opcional", () => {
     expect((await res.json()).error).toContain("posterior a la salida programada");
   });
 
-  it("sin regreso estimado, el intervalo que se valida está ABIERTO: sin condición de fin en el SQL y sin inventar una hora", async () => {
+  it("sin regreso estimado, se valida solo fecha_plan sin inventar una hora", async () => {
     await post(PLAN_BASE);
     const c = consultaTraslapePiloto()!;
-    expect(c.sql).toContain("1 = 1");
+    expect(c.sql).toContain("p.fecha_plan = ?");
     expect(c.sql).not.toMatch(/regreso_estimado\s*<\s*\?/);
     // Ningún parámetro es una hora inventada (+8h, fin de día...): solo el inicio real del viaje.
-    expect(c.params).toContain("2026-09-30 08:00:00");
+    expect(c.params).toContain("2026-09-30");
     expect(c.params).not.toContain("2026-09-30 16:00:00");
     expect(c.params).not.toContain("2026-09-30 23:59:59");
   });
 
-  it("con regreso estimado el SQL conserva la validación por intervalo [inicio, regreso]", async () => {
+  it("con regreso estimado, la disponibilidad sigue dependiendo solo de fecha_plan", async () => {
     await post({ ...PLAN_BASE, regresoEstimado: "2026-09-30T17:30" });
     const c = consultaTraslapePiloto()!;
-    expect(c.params).toContain("2026-09-30 17:30:00");
-    expect(c.params).toContain("2026-09-30 08:00:00");
-    expect(c.sql).toContain("TIMESTAMP(p.fecha_plan, COALESCE(p.hora_carga, '00:00:00')) < ?");
+    expect(c.params).toContain("2026-09-30");
+    expect(c.params).not.toContain("2026-09-30 17:30:00");
+    expect(c.sql).toContain("p.fecha_plan = ?");
   });
 
   it("aislamiento por empresa: la búsqueda de conflictos va acotada por empresa_id de la sesión", async () => {
@@ -133,19 +143,16 @@ describe("POST /tms/planes — regreso estimado opcional", () => {
     const c = consultaTraslapePiloto()!;
     expect(c.sql).toContain("tp.empresa_id = ?");
     expect(c.sql).toContain("p.empresa_id = tp.empresa_id");
-    expect(c.sql).toContain("fv.empresa_id = p.empresa_id");
-    expect(c.params[1]).toBe(7);
+    expect(c.params[0]).toBe(7);
   });
 
-  it("sin regreso estimado un viaje abierto del mismo piloto SÍ da conflicto (409) — el recurso queda ocupado", async () => {
+  it("un viaje abierto del día anterior no bloquea", async () => {
     candidatosPiloto = [{
       recurso_nombre: "Piloto Uno", plan_id: 40, codigo: "PLAN-40", estado: "Programado", inicio: "2026-09-29 06:00:00",
       regreso_estimado: null, llegada_tecnica: 0, hora_llegada: null, cerrado_en: null,
     }];
     const res = await post(PLAN_BASE);
-    expect(res.status).toBe(409);
-    expect((await res.json()).error).toContain("PLAN-40");
-    expect(insertPlan()).toBeUndefined();
+    expect(res.status).toBe(200); // viaje del día anterior no bloquea
   });
 
   it("con regreso estimado, un viaje abierto sin regreso del mismo piloto que inició antes del fin también choca", async () => {
@@ -164,16 +171,16 @@ describe("POST /tms/planes — regreso estimado opcional", () => {
     }];
     const res = await post({ ...PLAN_BASE, regresoEstimado: "2026-09-30T17:30" });
     expect(res.status).toBe(409);
-    expect((await res.json()).error).toBe("El piloto Piloto Uno ya está asignado al viaje PLAN-41 de 07:00 a 12:00.");
+    expect((await res.json()).error).toContain("PLAN-41 para el 30/09/2026");
   });
 
-  it("un viaje CERRADO con regreso estimado nunca bloquea (comportamiento actual)", async () => {
+  it("un viaje Cerrado del mismo día sigue bloqueando", async () => {
     candidatosPiloto = [{
       recurso_nombre: "Piloto Uno", plan_id: 42, codigo: "PLAN-42", estado: "Cerrado", inicio: "2026-09-30 06:00:00",
       regreso_estimado: "2026-09-30 20:00:00", llegada_tecnica: 1, hora_llegada: "2026-09-30 19:00:00", cerrado_en: "2026-10-01 09:00:00",
     }];
     const res = await post(PLAN_BASE);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(409);
   });
 
   it("un viaje CERRADO sin regreso estimado ocupa solo hasta su llegada real (no más allá)", async () => {
@@ -200,7 +207,7 @@ describe("PATCH /tms/planes — editar y dejar el regreso estimado en null", () 
   const usarPlan = (fila: Record<string, unknown>) => {
     vi.mocked(query).mockImplementation((async (sql: string, params: unknown[] = []) => {
       sqlDeConsultas.push({ sql: String(sql), params });
-      if (String(sql).includes("FROM tms_personal tp")) return candidatosPiloto;
+      if (String(sql).includes("FROM tms_personal tp")) return candidatosDelDia(params);
       if (String(sql).includes("FROM tms_planes_viaje p") && String(sql).includes("WHERE p.id = ?")) return [fila];
       return [];
     }) as never);
@@ -225,13 +232,13 @@ describe("PATCH /tms/planes — editar y dejar el regreso estimado en null", () 
     expect(res.status).toBe(200);
   });
 
-  it("al editar sin regreso estimado, el viaje queda con intervalo abierto en la validación de traslapes", async () => {
+  it("al editar sin regreso estimado, se valida la fecha efectiva", async () => {
     usarPlan(filaPlan({ regreso_estimado: null }));
     await patch({ id: 40, fechaPlan: "2026-10-01", horaCarga: "09:00" });
     const c = consultaTraslapePiloto()!;
-    expect(c.sql).toContain("1 = 1");
-    expect(c.params).toContain("2026-10-01 09:00:00");
-    expect(c.params[c.params.indexOf(7)]).toBe(7);
+    expect(c.sql).toContain("p.fecha_plan = ?");
+    expect(c.params).toContain("2026-10-01");
+    expect(c.params[0]).toBe(7);
     expect(c.sql).toContain("p.id != ?");
   });
 
@@ -246,7 +253,7 @@ describe("PATCH /tms/planes — editar y dejar el regreso estimado en null", () 
   it("editar y conflicto con un viaje abierto de OTRO plan del mismo piloto: 409", async () => {
     usarPlan(filaPlan());
     candidatosPiloto = [{
-      recurso_nombre: "Piloto Uno", plan_id: 77, codigo: "PLAN-77", estado: "En ruta", inicio: "2026-09-29 06:00:00",
+      recurso_nombre: "Piloto Uno", plan_id: 77, codigo: "PLAN-77", estado: "En ruta", inicio: "2026-10-02 06:00:00",
       regreso_estimado: null, llegada_tecnica: 0, hora_llegada: null, cerrado_en: null,
     }];
     const res = await patch({ id: 40, regresoEstimado: null, fechaPlan: "2026-10-02" });
@@ -300,7 +307,7 @@ describe("identidad de personal por empleado — POST y PATCH usan la misma regl
     responderConModelo({ personal: [juanAux, juanPiloto], planes: [viajeExistente] });
     const res = await post({ ...PLAN_BASE, pilotoNombre: undefined, pilotoEmpleadoId: 55, regresoEstimado: "2026-09-30T17:30" });
     expect(res.status).toBe(409);
-    expect((await res.json()).error).toBe("El piloto Juan Pérez ya está asignado al viaje PLAN-77 de 07:00 a 12:00.");
+    expect((await res.json()).error).toContain("PLAN-77 para el 30/09/2026");
     expect(insertPlan()).toBeUndefined();
   });
 
@@ -309,7 +316,7 @@ describe("identidad de personal por empleado — POST y PATCH usan la misma regl
     responderConModelo({ personal: [juanAux, juanPiloto], planes: [{ ...viajeExistente, regreso_estimado: null, estado: "En ruta" }] });
     const res = await post({ ...PLAN_BASE, pilotoNombre: undefined, pilotoEmpleadoId: 55 });
     expect(res.status).toBe(409);
-    expect((await res.json()).error).toContain("aún no registra llegada");
+    expect((await res.json()).error).toContain("PLAN-77 para el 30/09/2026");
   });
 
   it("POST: un empleado DISTINTO con el mismo nombre no bloquea", async () => {
@@ -340,7 +347,7 @@ describe("identidad de personal por empleado — POST y PATCH usan la misma regl
     });
     const res = await post({ ...PLAN_BASE, pilotoNombre: undefined, pilotoEmpleadoId: 55, regresoEstimado: "2026-09-30T17:30" });
     expect(res.status).toBe(200);
-    expect(sqlDeConsultas.find((c) => c.sql.includes("FROM tms_personal tp"))!.params.slice(0, 2)).toEqual([22, 7]);
+    expect(sqlDeConsultas.find((c) => c.sql.includes("FROM tms_personal tp"))!.params.slice(0, 2)).toEqual([7, "2026-09-30"]);
   });
 
   it("PATCH: al mover el viaje, el piloto (personal 12, empleado 55) choca con un viaje donde el mismo empleado es Auxiliar (personal 10): 409", async () => {
@@ -369,12 +376,12 @@ describe("identidad de personal por empleado — POST y PATCH usan la misma regl
     expect((await res.json()).error).toContain("PLAN-77");
     const c = sqlDeConsultas.find((x) => x.sql.includes("FROM tms_personal tp"))!;
     expect(c.sql).toContain("(eq.id = tp.id OR (tp.id_empleado IS NOT NULL AND eq.id_empleado = tp.id_empleado))");
-    expect(c.params.slice(0, 2)).toEqual([12, 7]);
+    expect(c.params.slice(0, 2)).toEqual([7, "2026-10-02"]);
   });
 
   it("planes/route.ts no reimplementa la identidad: usa primerConflictoTraslape en POST y PATCH", () => {
     const fuente = readFileSync("src/app/api/empresas/[slug]/tms/planes/route.ts", "utf8");
-    expect((fuente.match(/primerConflictoTraslape\(/g) ?? []).length).toBe(2);
+    expect((fuente.match(/primerConflictoProgramacionDia\(/g) ?? []).length).toBe(2);
     expect(fuente).not.toContain("eq.id_empleado");
   });
 });

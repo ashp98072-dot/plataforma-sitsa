@@ -28,8 +28,7 @@ type Props = {
   allowManual?: boolean;
   /**
    * PROGRAMACION-DISPONIBILIDAD-BUSCADORES-1 — placa (mayúsculas) ->
-   * ocupación real por asignación a OTRO viaje que se traslapa con el
-   * intervalo actual (ver disponibilidad-recursos-lista.ts). Nunca se
+   * ocupación por asignación a OTRO plan en la fecha elegida. Nunca se
    * confunde con `estadoDisponibilidad` (taller/en_ruta de flota, arriba):
    * si la unidad ya está marcada no disponible por flota, ese motivo manda
    * y esta ocupación ni se consulta.
