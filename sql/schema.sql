@@ -1535,6 +1535,9 @@ CREATE TABLE IF NOT EXISTS tms_cotizaciones (
   atencion_nombre VARCHAR(160) NULL,
   atencion_cargo VARCHAR(160) NULL,
   unidad_descripcion VARCHAR(160) NULL,
+  -- ver sql/migrate-2026-09-cotizaciones-presentacion-comercial.sql — snapshot editable del texto del PDF.
+  mensaje_comercial TEXT NULL,
+  cierre_comercial TEXT NULL,
   creado_por VARCHAR(100) NULL,
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

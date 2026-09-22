@@ -40,6 +40,11 @@ const schema = z.object({
   atencionNombre: z.string().max(160).nullable().optional(),
   atencionCargo: z.string().max(160).nullable().optional(),
   unidadDescripcion: z.string().max(160).nullable().optional(),
+  // PRESENTACIÓN COMERCIAL — snapshot editable del texto del PDF; solo cambia si el PATCH lo trae
+  // explícito (mismo criterio que atencionNombre/unidadDescripcion). Sin re-resolución de defaults
+  // aquí: cambiar de marca en el formulario y no tocar el mensaje NO lo pisa en silencio.
+  mensajeComercial: z.string().max(2000).nullable().optional(),
+  cierreComercial: z.string().max(2000).nullable().optional(),
   // COTIZACIONES-COSTEO: registra el snapshot por primera vez; si ya existe, 409 (inmutable).
   costeo: costeoPayloadSchema.optional(),
 });

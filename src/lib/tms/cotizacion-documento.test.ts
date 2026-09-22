@@ -119,6 +119,24 @@ describe("construirDocumentoComercial: datos guardados en la fila", () => {
     expect(monaco.emisor).toBe("MONACO");
     expect(kuiq.emisor).toBe("KUIQTRANS");
   });
+
+  it("mensaje y cierre GUARDADOS en la cotización (snapshot) tienen prioridad sobre el fijo de la marca", () => {
+    const doc = construirDocumentoComercial({ ...COTIZACION_DOC, mensajeComercial: "Mensaje a la medida de este cliente.", cierreComercial: "Cierre a la medida." });
+    expect(doc.saludo).toBe("Mensaje a la medida de este cliente.");
+    expect(doc.cierre).toBe("Cierre a la medida.");
+  });
+
+  it("sin snapshot (columna NULL, cotización histórica): cae al texto FIJO de MARCAS_DOCUMENTO, no a un valor configurable", () => {
+    const doc = construirDocumentoComercial({ ...COTIZACION_DOC, documentoEmisor: "MONACO", mensajeComercial: null, cierreComercial: null });
+    expect(doc.saludo).toBe(MARCAS_DOCUMENTO.MONACO.saludo);
+    expect(doc.cierre).toBe(MARCAS_DOCUMENTO.MONACO.cierre);
+  });
+
+  it("un mensaje guardado en blanco (solo espacios) también cae al fijo — nunca se imprime un párrafo vacío", () => {
+    const doc = construirDocumentoComercial({ ...COTIZACION_DOC, mensajeComercial: "   ", cierreComercial: "" });
+    expect(doc.saludo).toBe(MARCAS_DOCUMENTO[COTIZACION_DOC.documentoEmisor].saludo);
+    expect(doc.cierre).toBe(MARCAS_DOCUMENTO[COTIZACION_DOC.documentoEmisor].cierre);
+  });
 });
 
 describe("helpers de formato", () => {

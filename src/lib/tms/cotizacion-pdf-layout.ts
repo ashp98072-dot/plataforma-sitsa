@@ -154,12 +154,63 @@ export function asegurarEspacio(doc: Pdf, alto: number): void {
 }
 
 /**
+ * Ancho/alto REAL (en píxeles) de un PNG, leído directamente del chunk IHDR
+ * (bytes 16–23: firma de 8 + longitud de 4 + "IHDR" de 4). Sin dependencia
+ * nueva — PDFKit no expone esto como API pública, y es lo que permite
+ * calcular el CENTRO FÍSICO exacto de una marca de agua (nunca a ojo).
+ */
+export function dimensionesPng(buffer: Buffer): { width: number; height: number } {
+  if (buffer.length < 24 || buffer.toString("ascii", 12, 16) !== "IHDR") {
+    throw new Error("No se pudo leer el tamaño del PNG (encabezado IHDR no encontrado).");
+  }
+  return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+}
+
+/** Dibuja una imagen a un ancho dado (alto proporcional); devuelve el tamaño con el que quedó dibujada, en puntos. */
+export function dibujarImagen(doc: Pdf, buffer: Buffer, x: number, y: number, anchoDestino: number): { width: number; height: number } {
+  const { width: wPx, height: hPx } = dimensionesPng(buffer);
+  const altoDestino = anchoDestino * (hPx / wPx);
+  doc.image(buffer, x, y, { width: anchoDestino });
+  return { width: anchoDestino, height: altoDestino };
+}
+
+export type OpcionesMarcaDeAgua = {
+  anchoDestino: number;
+  /** Si se da, se dibuja con `doc.opacity(opacidad)` (para un logo cuyo fondo ya coincide con el de la hoja). Si el PNG ya trae su propia transparencia horneada (p. ej. KuiqTrans), se omite. */
+  opacidad?: number;
+};
+
+/**
+ * Marca de agua centrada en el CENTRO FÍSICO de la página — `doc.page.width`/
+ * `doc.page.height`, nunca `doc.y` ni una posición aproximada: el centro de
+ * la imagen dibujada coincide exactamente con el centro de la hoja, sin
+ * importar cuánto texto haya arriba ni en qué página se dibuje.
+ */
+export function dibujarMarcaDeAgua(doc: Pdf, buffer: Buffer, opciones: OpcionesMarcaDeAgua): void {
+  const { width: wPx, height: hPx } = dimensionesPng(buffer);
+  const anchoDestino = opciones.anchoDestino;
+  const altoDestino = anchoDestino * (hPx / wPx);
+  const x = (doc.page.width - anchoDestino) / 2;
+  const y = (doc.page.height - altoDestino) / 2;
+  const conOpacidad = opciones.opacidad != null;
+  if (conOpacidad) doc.opacity(opciones.opacidad!);
+  doc.image(buffer, x, y, { width: anchoDestino });
+  if (conOpacidad) doc.opacity(1);
+}
+
+/**
  * Tema de una marca: lo que cambia entre plantillas. El cuerpo del documento
  * (destinatario, saludo, tabla comercial, condiciones, vigencia y cierre) se
  * arma una sola vez en `renderDocumentoComercial` con estos ingredientes.
  */
 export type TemaComercial = {
   colores: { acento: string; textoSobreAcento: string; texto: string; suave: string; borde: string; filaAlterna: string };
+  /**
+   * Marca de agua de la marca — se dibuja PRIMERO en cada página (antes del
+   * encabezado y de todo el contenido), para quedar detrás del texto. Usa
+   * `dibujarMarcaDeAgua` (centro físico real, nunca `doc.y`).
+   */
+  marcaDeAgua: (doc: Pdf) => void;
   /** Dibuja el encabezado de la primera página y deja `doc.y` debajo. */
   encabezado: (doc: Pdf, ancho: number, modelo: DocumentoComercial) => void;
   /** Título de sección propio de la marca. */
@@ -178,6 +229,8 @@ export function renderDocumentoComercial(tema: TemaComercial, modelo: DocumentoC
   return generarPdf(
     (doc, ancho) => {
       const x = doc.page.margins.left;
+      // Primero la marca de agua (queda detrás de todo lo que se dibuje después).
+      tema.marcaDeAgua(doc);
       tema.encabezado(doc, ancho, modelo);
 
       // Destinatario: el cliente es el principal; atención y cargo son opcionales.
@@ -235,7 +288,11 @@ export function renderDocumentoComercial(tema: TemaComercial, modelo: DocumentoC
       dibujarParrafo(doc, x, ancho, modelo.cierre, { color: colores.texto, tamano: 10 });
     },
     {
-      cabeceraContinuacion: (doc, ancho) => tema.cabeceraContinuacion(doc, ancho, modelo),
+      // Misma regla en cada página nueva: marca de agua primero, detrás del contenido.
+      cabeceraContinuacion: (doc, ancho) => {
+        tema.marcaDeAgua(doc);
+        tema.cabeceraContinuacion(doc, ancho, modelo);
+      },
       pie: (doc, pagina, total, ancho) => tema.pie(doc, pagina, total, ancho, modelo),
     },
   );

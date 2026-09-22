@@ -41,6 +41,7 @@ type Cotizacion = {
   atencionNombre: string | null;
   atencionCargo: string | null;
   unidadDescripcion: string | null;
+  mensajeComercial: string | null;
 };
 
 const inputCls = "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
@@ -80,6 +81,7 @@ const FORM_VACIO = {
   atencionNombre: "",
   atencionCargo: "",
   unidadDescripcion: "",
+  mensajeComercial: "",
 };
 
 /**
@@ -112,6 +114,12 @@ export default function CotizacionesPage() {
   const costeoConfig = useCosteoConfig(slug, form.fechaEmision);
   const [costeoPayload, setCosteoPayload] = useState<PayloadCosteoCliente | null>(null);
   const [permisosRapidos, setPermisosRapidos] = useState({ clientes: false, rutas: false });
+  // PRESENTACIÓN COMERCIAL — mensaje predeterminado por marca (solo lectura aquí; se edita en
+  // Ajustes de cotizaciones). `mensajeTocado`: una vez que el usuario edita el textarea a mano (o
+  // carga una cotización ya guardada), cambiar de marca deja de pisarlo en silencio — se muestra
+  // un aviso con el texto que se aplicaría, ver el bloque debajo del textarea.
+  const [presentacion, setPresentacion] = useState<Record<DocumentoEmisor, { mensaje: string; cierre: string }> | null>(null);
+  const [mensajeTocado, setMensajeTocado] = useState(false);
 
   const cargar = useCallback(async () => {
     setLoading(true); setError("");
@@ -140,14 +148,25 @@ export default function CotizacionesPage() {
     }).catch(() => setPermisosRapidos({ clientes: false, rutas: false }));
   }, []);
   useEffect(() => {
+    fetch(`/api/empresas/${slug}/tms/cotizaciones/presentacion`, { cache: "no-store" }).then((r) => r.json()).then((data) => {
+      if (data.presentacion) setPresentacion(data.presentacion);
+    }).catch(() => {});
+  }, [slug]);
+  useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void cargar();
   }, [cargar]);
+  useEffect(() => {
+    if (!presentacion || editandoId != null || mensajeTocado || form.mensajeComercial) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setForm((f) => ({ ...f, mensajeComercial: presentacion[f.documentoEmisor]?.mensaje ?? "" }));
+  }, [presentacion, editandoId, mensajeTocado, form.mensajeComercial, form.documentoEmisor]);
 
   function nueva() {
     setEditandoId(null);
     setCosteoPayload(null);
-    setForm(FORM_VACIO);
+    setMensajeTocado(false);
+    setForm({ ...FORM_VACIO, mensajeComercial: presentacion?.[DOCUMENTO_EMISOR_DEFAULT]?.mensaje ?? "" });
     setMostrarForm(true);
   }
 
@@ -178,7 +197,9 @@ export default function CotizacionesPage() {
       atencionNombre: c.atencionNombre ?? "",
       atencionCargo: c.atencionCargo ?? "",
       unidadDescripcion: c.unidadDescripcion ?? "",
+      mensajeComercial: c.mensajeComercial ?? "",
     });
+    setMensajeTocado(true);
     setMostrarForm(true);
   }
 
@@ -222,6 +243,7 @@ export default function CotizacionesPage() {
       condicionesAdicionales: form.condicionesAdicionales.trim() || null,
       observaciones: form.observaciones.trim() || null,
       documentoEmisor: form.documentoEmisor,
+      mensajeComercial: form.mensajeComercial.trim() || null,
       atencionNombre: form.atencionNombre.trim() || null,
       atencionCargo: form.atencionCargo.trim() || null,
       unidadDescripcion: form.unidadDescripcion.trim() || null,
@@ -329,7 +351,16 @@ export default function CotizacionesPage() {
           <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
             <label className="text-xs text-[var(--muted)]">Documento emitido por
               <select className={`${inputCls} mt-0.5 w-full`} value={form.documentoEmisor}
-                onChange={(e) => setForm((f) => ({ ...f, documentoEmisor: e.target.value as DocumentoEmisor }))}>
+                onChange={(e) => {
+                  const marca = e.target.value as DocumentoEmisor;
+                  setForm((f) => ({
+                    ...f,
+                    documentoEmisor: marca,
+                    // Silencioso SOLO si el usuario nunca tocó el mensaje a mano; si ya lo editó
+                    // (o cargó una cotización guardada), no se pisa — ver el aviso más abajo.
+                    mensajeComercial: mensajeTocado ? f.mensajeComercial : (presentacion?.[marca]?.mensaje ?? f.mensajeComercial),
+                  }));
+                }}>
                 {DOCUMENTOS_EMISOR.map((d) => <option key={d} value={d}>{MARCAS_DOCUMENTO[d].etiqueta}</option>)}
               </select>
             </label>
@@ -341,6 +372,20 @@ export default function CotizacionesPage() {
             </label>
             <label className="text-xs text-[var(--muted)]">Unidad
               <input maxLength={160} placeholder="Ej. Camión 5 toneladas" className={`${inputCls} mt-0.5 w-full`} value={form.unidadDescripcion} onChange={(e) => setForm((f) => ({ ...f, unidadDescripcion: e.target.value }))} />
+            </label>
+            <label className="text-xs text-[var(--muted)] md:col-span-3">Mensaje para el cliente
+              <textarea rows={3} maxLength={2000} className={`${inputCls} mt-0.5 w-full`} value={form.mensajeComercial}
+                onChange={(e) => { setMensajeTocado(true); setForm((f) => ({ ...f, mensajeComercial: e.target.value })); }} />
+              {mensajeTocado && presentacion && presentacion[form.documentoEmisor]?.mensaje.trim() !== form.mensajeComercial.trim() ? (
+                <span className="mt-0.5 block text-[10px] text-amber-300/90">
+                  Se aplicaría el mensaje predeterminado de {MARCAS_DOCUMENTO[form.documentoEmisor].etiqueta}: “{presentacion[form.documentoEmisor].mensaje}”{" "}
+                  <button type="button" className="text-[var(--accent)] underline" onClick={() => setForm((f) => ({ ...f, mensajeComercial: presentacion[f.documentoEmisor]?.mensaje ?? "" }))}>
+                    Usar este mensaje
+                  </button>
+                </span>
+              ) : (
+                <span className="mt-0.5 block text-[10px]">Va tal cual en el PDF; se guarda con la cotización (un cambio futuro del mensaje predeterminado en Ajustes no la modifica).</span>
+              )}
             </label>
             <label className="text-xs text-[var(--muted)]">Tarifa cotizada (Q)
               <input type="number" min="0.01" step="0.01" className={`${inputCls} mt-0.5 w-full`} value={form.tarifaCotizada} onChange={(e) => setForm((f) => ({ ...f, tarifaCotizada: e.target.value }))} />
@@ -431,6 +476,7 @@ export default function CotizacionesPage() {
                 <div><span className="text-[var(--muted)]">Documento emitido por:</span> {MARCAS_DOCUMENTO[c.documentoEmisor]?.nombre ?? c.documentoEmisor}</div>
                 <div><span className="text-[var(--muted)]">Atención:</span> {[c.atencionNombre, c.atencionCargo].filter(Boolean).join(" · ") || "—"}</div>
                 <div><span className="text-[var(--muted)]">Unidad:</span> {c.unidadDescripcion ?? "—"}</div>
+                <div className="md:col-span-3"><span className="text-[var(--muted)]">Mensaje al cliente:</span> {c.mensajeComercial ?? "(predeterminado de la marca)"}</div>
                 <div><span className="text-[var(--muted)]">Tarifa referencia:</span> {money(c.tarifaReferencia)}</div>
                 <div><span className="text-[var(--muted)]">Vigencia:</span> {c.fechaVencimiento ?? "—"}</div>
                 <div><span className="text-[var(--muted)]">Piloto incluido:</span> {c.pilotoIncluido ? "Sí" : "No"}</div>

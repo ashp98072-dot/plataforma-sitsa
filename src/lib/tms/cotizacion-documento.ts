@@ -20,6 +20,9 @@ export const DOCUMENTO_EMISOR_DEFAULT: DocumentoEmisor = "KUIQTRANS";
 
 export const LIMITE_TEXTO_DOCUMENTO = 160;
 
+/** Mensaje/cierre comercial — mismo límite que condicionesAdicionales/observaciones en la cotización. */
+export const LIMITE_TEXTO_MENSAJE_COMERCIAL = 2000;
+
 export type MarcaDocumento = {
   clave: DocumentoEmisor;
   /** Nombre comercial completo, tal como se lee en el documento. */
@@ -95,6 +98,7 @@ export type DatosDocumento = Pick<
   | "fechaEmision" | "fechaVencimiento" | "pilotoIncluido" | "gpsIncluido" | "seguroMercaderiaIncluido"
   | "seguroTercerosIncluido" | "servicioRefrigerado" | "kmIncluidos" | "tarifaKmAdicional"
   | "condicionesAdicionales" | "observaciones" | "documentoEmisor" | "atencionNombre" | "atencionCargo" | "unidadDescripcion"
+  | "mensajeComercial" | "cierreComercial"
 >;
 
 /**
@@ -154,7 +158,18 @@ export type DocumentoComercial = {
   cierre: string;
 };
 
-/** Arma el documento a partir de la fila guardada (marca, atención, cargo y unidad incluidos): un cambio posterior de defaults no altera un PDF ya emitido. */
+/**
+ * Arma el documento a partir de la fila guardada (marca, atención, cargo,
+ * unidad, mensaje y cierre comercial incluidos): un cambio posterior de
+ * defaults no altera un PDF ya emitido.
+ *
+ * `saludo`/`cierre` son el texto YA GUARDADO en la propia cotización
+ * (`mensajeComercial`/`cierreComercial`) cuando existe. Cotizaciones
+ * anteriores a esta funcionalidad (columna NULL — nunca se reescriben en
+ * masa) caen a un fallback DETERMINISTA fijo por marca: el texto histórico
+ * de `MARCAS_DOCUMENTO`, nunca el valor que hoy tenga configurado Ajustes
+ * (que puede haber cambiado desde entonces).
+ */
 export function construirDocumentoComercial(c: DatosDocumento): DocumentoComercial {
   const emisor = normalizarDocumentoEmisor(c.documentoEmisor);
   const marca = MARCAS_DOCUMENTO[emisor];
@@ -167,14 +182,14 @@ export function construirDocumentoComercial(c: DatosDocumento): DocumentoComerci
     cliente: c.clienteNombre,
     atencionNombre: textoOpcional(c.atencionNombre),
     atencionCargo: textoOpcional(c.atencionCargo),
-    saludo: marca.saludo,
+    saludo: textoOpcional(c.mensajeComercial) ?? marca.saludo,
     lineas: lineasComerciales(c),
     incluyeIva: c.incluyeIva,
     encabezadoPrecio: encabezadoPrecio(c.incluyeIva),
     moneda: c.moneda,
     condiciones: condicionesComerciales(c),
     observaciones: lineasDeTexto(c.observaciones),
-    cierre: marca.cierre,
+    cierre: textoOpcional(c.cierreComercial) ?? marca.cierre,
   };
 }
 

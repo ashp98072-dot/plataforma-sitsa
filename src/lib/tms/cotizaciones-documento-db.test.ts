@@ -15,6 +15,7 @@ function fila(over: Partial<Record<string, unknown>> = {}) {
     piloto_incluido: 1, gps_incluido: 0, seguro_mercaderia_incluido: 0, seguro_terceros_incluido: 0, servicio_refrigerado: 0,
     km_incluidos: null, tarifa_km_adicional: null, condiciones_adicionales: null, observaciones: null,
     documento_emisor: "MONACO", atencion_nombre: "Claudia Cordero", atencion_cargo: "Compras", unidad_descripcion: "Camión 5 toneladas",
+    mensaje_comercial: null, cierre_comercial: null,
     creado_por: "admin", creado_en: "2026-09-08 10:00:00", actualizado_en: null,
     ...over,
   };
@@ -45,13 +46,17 @@ const BASE = { clienteId: 3, tarifaCotizada: 1400, fechaEmision: "2026-09-08" };
 beforeEach(() => vi.resetAllMocks());
 
 describe("crearCotizacion — documento comercial", () => {
-  it("guarda documentoEmisor, atención, cargo y unidad en el INSERT", async () => {
+  it("guarda documentoEmisor, atención, cargo, unidad, mensaje y cierre comercial en el INSERT", async () => {
     const conn = conexion();
     vi.mocked(query).mockResolvedValue([fila()] as never);
-    await crearCotizacion(7, { ...BASE, documentoEmisor: "MONACO", atencionNombre: " Claudia Cordero ", atencionCargo: "Compras", unidadDescripcion: "Camión 5 toneladas" }, "admin");
+    await crearCotizacion(7, {
+      ...BASE, documentoEmisor: "MONACO", atencionNombre: " Claudia Cordero ", atencionCargo: "Compras", unidadDescripcion: "Camión 5 toneladas",
+      mensajeComercial: " Mensaje a la medida del cliente. ", cierreComercial: " Quedamos atentos. ",
+    }, "admin");
     const [sql, params] = insertDe(conn) as [string, unknown[]];
     expect(sql).toContain("documento_emisor, atencion_nombre, atencion_cargo, unidad_descripcion");
-    expect(params.slice(-4)).toEqual(["MONACO", "Claudia Cordero", "Compras", "Camión 5 toneladas"]);
+    expect(sql).toContain("mensaje_comercial, cierre_comercial");
+    expect(params.slice(-6)).toEqual(["MONACO", "Claudia Cordero", "Compras", "Camión 5 toneladas", "Mensaje a la medida del cliente.", "Quedamos atentos."]);
     expect(params[0]).toBe(7); // empresa_id
   });
 
@@ -69,7 +74,22 @@ describe("crearCotizacion — documento comercial", () => {
     const conn = conexion();
     vi.mocked(query).mockResolvedValue([fila()] as never);
     await crearCotizacion(7, { ...BASE, atencionNombre: "  ", unidadDescripcion: "" }, "admin");
-    expect((insertDe(conn)[1] as unknown[]).slice(-4)).toEqual(["KUIQTRANS", null, null, null]);
+    expect((insertDe(conn)[1] as unknown[]).slice(-6)).toEqual(["KUIQTRANS", null, null, null, null, null]);
+  });
+
+  it("rechaza mensaje o cierre comercial de más de 2000 caracteres, sin insertar", async () => {
+    conexion();
+    const largo = "x".repeat(2001);
+    await expect(crearCotizacion(7, { ...BASE, mensajeComercial: largo })).rejects.toThrow("El mensaje para el cliente no puede exceder 2000 caracteres.");
+    await expect(crearCotizacion(7, { ...BASE, cierreComercial: largo })).rejects.toThrow("El cierre comercial no puede exceder 2000 caracteres.");
+    expect(getPool).not.toHaveBeenCalled();
+  });
+
+  it("mensaje y cierre comercial son opcionales: sin ellos se guarda NULL (nunca se inventa un texto)", async () => {
+    const conn = conexion();
+    vi.mocked(query).mockResolvedValue([fila()] as never);
+    await crearCotizacion(7, BASE, "admin");
+    expect((insertDe(conn)[1] as unknown[]).slice(-2)).toEqual([null, null]);
   });
 
   it.each(["kuiqtrans", "SITSA", "", "MONACO ", "Monaco"])("rechaza documentoEmisor inválido %j sin abrir conexión ni insertar", async (malo) => {
@@ -92,14 +112,14 @@ describe("crearCotizacion — documento comercial", () => {
     vi.mocked(query).mockResolvedValue([fila()] as never);
     await crearCotizacion(7, { ...BASE, rutaId: null, documentoEmisor: "MONACO" }, "admin");
     expect(conn.query.mock.calls.some((c) => String(c[0]).includes("FROM tms_cliente_rutas"))).toBe(false);
-    expect((insertDe(conn)[1] as unknown[]).slice(-4)[0]).toBe("MONACO");
+    expect((insertDe(conn)[1] as unknown[]).slice(-6)[0]).toBe("MONACO");
   });
 
   it("la marca no depende del cliente ni de la ruta elegidos", async () => {
     const conn = conexion();
     vi.mocked(query).mockResolvedValue([fila()] as never);
     await crearCotizacion(7, { ...BASE, rutaId: 5, documentoEmisor: "KUIQTRANS" }, "admin");
-    expect((insertDe(conn)[1] as unknown[]).slice(-4)[0]).toBe("KUIQTRANS");
+    expect((insertDe(conn)[1] as unknown[]).slice(-6)[0]).toBe("KUIQTRANS");
   });
 
   it("no toca el costeo ni el estado: sin costeo no se ejecuta ninguna sentencia de costeo", async () => {
@@ -112,16 +132,24 @@ describe("crearCotizacion — documento comercial", () => {
 });
 
 describe("lectura — histórico y mapeo", () => {
-  it("SELECT incluye las cuatro columnas nuevas", async () => {
+  it("SELECT incluye las columnas del documento comercial (marca, atención, cargo, unidad, mensaje, cierre)", async () => {
     vi.mocked(query).mockResolvedValue([fila()] as never);
     await obtenerCotizacion(7, 1);
     const sql = String(vi.mocked(query).mock.calls[0][0]);
-    for (const columna of ["documento_emisor", "atencion_nombre", "atencion_cargo", "unidad_descripcion"]) expect(sql).toContain(columna);
+    for (const columna of ["documento_emisor", "atencion_nombre", "atencion_cargo", "unidad_descripcion", "mensaje_comercial", "cierre_comercial"]) expect(sql).toContain(columna);
   });
 
-  it("mapea marca, atención, cargo y unidad", async () => {
+  it("mapea marca, atención, cargo, unidad, mensaje y cierre comercial", async () => {
+    vi.mocked(query).mockResolvedValue([fila({ mensaje_comercial: "Mensaje guardado.", cierre_comercial: "Cierre guardado." })] as never);
+    expect(await obtenerCotizacion(7, 1)).toMatchObject({
+      documentoEmisor: "MONACO", atencionNombre: "Claudia Cordero", atencionCargo: "Compras", unidadDescripcion: "Camión 5 toneladas",
+      mensajeComercial: "Mensaje guardado.", cierreComercial: "Cierre guardado.",
+    });
+  });
+
+  it("cotización histórica sin mensaje/cierre guardado (columna NULL): se mapea a null, sin inventar texto (el fallback lo aplica el PDF)", async () => {
     vi.mocked(query).mockResolvedValue([fila()] as never);
-    expect(await obtenerCotizacion(7, 1)).toMatchObject({ documentoEmisor: "MONACO", atencionNombre: "Claudia Cordero", atencionCargo: "Compras", unidadDescripcion: "Camión 5 toneladas" });
+    expect(await obtenerCotizacion(7, 1)).toMatchObject({ mensajeComercial: null, cierreComercial: null });
   });
 
   it("cotización histórica (DEFAULT de la columna): KUIQTRANS y textos null", async () => {
@@ -149,10 +177,14 @@ describe("actualizarCotizacion — documento comercial (solo Borrador)", () => {
   it("en Borrador cambia marca, atención, cargo y unidad", async () => {
     const conn = conexion();
     vi.mocked(query).mockResolvedValue([fila({ documento_emisor: "KUIQTRANS" })] as never);
-    await actualizarCotizacion(7, 1, { documentoEmisor: "KUIQTRANS", atencionNombre: "Otra Persona", atencionCargo: null, unidadDescripcion: "Cabezal 53'" });
+    await actualizarCotizacion(7, 1, {
+      documentoEmisor: "KUIQTRANS", atencionNombre: "Otra Persona", atencionCargo: null, unidadDescripcion: "Cabezal 53'",
+      mensajeComercial: "Nuevo mensaje.", cierreComercial: "Nuevo cierre.",
+    });
     const [sql, params] = updateDe(conn) as [string, unknown[]];
     expect(sql).toContain("documento_emisor = ?, atencion_nombre = ?, atencion_cargo = ?, unidad_descripcion = ?");
-    expect(params.slice(-6)).toEqual(["KUIQTRANS", "Otra Persona", null, "Cabezal 53'", 1, 7]); // ... WHERE id = ? AND empresa_id = ?
+    expect(sql).toContain("mensaje_comercial = ?, cierre_comercial = ?");
+    expect(params.slice(-8)).toEqual(["KUIQTRANS", "Otra Persona", null, "Cabezal 53'", "Nuevo mensaje.", "Nuevo cierre.", 1, 7]); // ... WHERE id = ? AND empresa_id = ?
     expect(conn.commit).toHaveBeenCalled();
   });
 
@@ -160,14 +192,38 @@ describe("actualizarCotizacion — documento comercial (solo Borrador)", () => {
     const conn = conexion();
     vi.mocked(query).mockResolvedValue([fila()] as never);
     await actualizarCotizacion(7, 1, { observaciones: "Solo cambia esto" });
-    expect((updateDe(conn)![1] as unknown[]).slice(-6)).toEqual(["MONACO", "Claudia Cordero", "Compras", "Camión 5 toneladas", 1, 7]);
+    expect((updateDe(conn)![1] as unknown[]).slice(-8)).toEqual(["MONACO", "Claudia Cordero", "Compras", "Camión 5 toneladas", null, null, 1, 7]);
+  });
+
+  it("un PATCH sin mensaje/cierre conserva el valor guardado, aunque cambie otros campos (nunca se pisa en silencio)", async () => {
+    const conn = conexion({ filaActual: { mensaje_comercial: "Mensaje original.", cierre_comercial: "Cierre original." } });
+    // Solo alimenta el re-fetch final (obtenerCotizacion, fuera de la transacción) — la lectura
+    // "antes de escribir" (SELECT ... FOR UPDATE) es la de conn.query, vía filaActual arriba.
+    vi.mocked(query).mockResolvedValue([fila()] as never);
+    await actualizarCotizacion(7, 1, { documentoEmisor: "KUIQTRANS" });
+    expect((updateDe(conn)![1] as unknown[]).slice(-4, -2)).toEqual(["Mensaje original.", "Cierre original."]);
   });
 
   it("cadena vacía en atención/cargo/unidad los borra (null); no queda espacio en blanco guardado", async () => {
     const conn = conexion();
     vi.mocked(query).mockResolvedValue([fila()] as never);
     await actualizarCotizacion(7, 1, { atencionNombre: "  ", atencionCargo: "", unidadDescripcion: "   " });
-    expect((updateDe(conn)![1] as unknown[]).slice(-6, -2)).toEqual(["MONACO", null, null, null]);
+    expect((updateDe(conn)![1] as unknown[]).slice(-8, -4)).toEqual(["MONACO", null, null, null]);
+  });
+
+  it("cadena vacía en mensaje/cierre comercial también los borra (null)", async () => {
+    const conn = conexion();
+    vi.mocked(query).mockResolvedValue([fila({ mensaje_comercial: "Algo previo.", cierre_comercial: "Algo previo." })] as never);
+    await actualizarCotizacion(7, 1, { mensajeComercial: "   ", cierreComercial: "" });
+    expect((updateDe(conn)![1] as unknown[]).slice(-4, -2)).toEqual([null, null]);
+  });
+
+  it("rechaza mensaje o cierre comercial de más de 2000 caracteres y revierte sin actualizar", async () => {
+    const conn = conexion();
+    vi.mocked(query).mockResolvedValue([fila()] as never);
+    await expect(actualizarCotizacion(7, 1, { mensajeComercial: "x".repeat(2001) })).rejects.toThrow("no puede exceder 2000 caracteres");
+    expect(updateDe(conn)).toBeUndefined();
+    expect(conn.rollback).toHaveBeenCalled();
   });
 
   it.each(["Enviada", "Aceptada", "Rechazada", "Vencida"])("una cotización %s NO se edita: ni marca ni contacto ni unidad", async (estadoActual) => {
@@ -210,17 +266,24 @@ describe("duplicarCotizacion — copia el documento comercial", () => {
     vi.mocked(query).mockResolvedValue([fila()] as never);
     await duplicarCotizacion(7, 1, "admin");
     const [sql, params] = insertDe(conn) as [string, unknown[]];
-    expect(params.slice(-4)).toEqual(["MONACO", "Claudia Cordero", "Compras", "Camión 5 toneladas"]);
+    expect(params.slice(-6)).toEqual(["MONACO", "Claudia Cordero", "Compras", "Camión 5 toneladas", null, null]);
     expect(params[0]).toBe(7);
     expect(sql).not.toContain("estado"); // el alta nueva queda en el DEFAULT de la tabla: Borrador
     expect(conn.execute.mock.calls.some((c) => /costeo/i.test(String(c[0])))).toBe(false);
+  });
+
+  it("copia el mensaje y cierre comercial guardados (nunca los recalcula desde Ajustes)", async () => {
+    const conn = conexion();
+    vi.mocked(query).mockResolvedValue([fila({ mensaje_comercial: "Mensaje original.", cierre_comercial: "Cierre original." })] as never);
+    await duplicarCotizacion(7, 1, "admin");
+    expect((insertDe(conn)[1] as unknown[]).slice(-2)).toEqual(["Mensaje original.", "Cierre original."]);
   });
 
   it("duplicar una cotización histórica copia el default KUIQTRANS (no la deja sin marca)", async () => {
     const conn = conexion();
     vi.mocked(query).mockResolvedValue([fila({ documento_emisor: "KUIQTRANS", atencion_nombre: null, atencion_cargo: null, unidad_descripcion: null })] as never);
     await duplicarCotizacion(7, 1, "admin");
-    expect((insertDe(conn)[1] as unknown[]).slice(-4)).toEqual(["KUIQTRANS", null, null, null]);
+    expect((insertDe(conn)[1] as unknown[]).slice(-6)).toEqual(["KUIQTRANS", null, null, null, null, null]);
   });
 
   it("de otra empresa: no encuentra el original y no inserta nada", async () => {

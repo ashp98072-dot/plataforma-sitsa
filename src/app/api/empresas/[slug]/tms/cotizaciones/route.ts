@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireTenantCotizaciones, requireTenantCotizacionesCosteo } from "@/lib/tenant";
 import { ESTADOS_COTIZACION, crearCotizacion, listarCotizaciones } from "@/lib/tms/cotizaciones";
-import { DOCUMENTOS_EMISOR } from "@/lib/tms/cotizacion-documento";
+import { DOCUMENTOS_EMISOR, DOCUMENTO_EMISOR_DEFAULT } from "@/lib/tms/cotizacion-documento";
+import { obtenerPresentacionComercial } from "@/lib/tms/cotizacion-presentacion";
 import { ErrorCosteoYaRegistrado } from "@/lib/tms/cotizacion-costeo-db";
 import { costeoPayloadSchema, mensajeErrorCosteo, prepararCosteo } from "@/lib/tms/cotizacion-costeo-servicio";
 
@@ -51,6 +52,11 @@ const schema = z.object({
   atencionNombre: z.string().max(160).nullable().optional(),
   atencionCargo: z.string().max(160).nullable().optional(),
   unidadDescripcion: z.string().max(160).nullable().optional(),
+  // PRESENTACIÓN COMERCIAL — snapshot editable del texto del PDF. Si se omite/vacío al crear,
+  // el POST lo resuelve desde el default de Ajustes de esta marca (ver más abajo); nunca se
+  // recalcula al leer o exportar más tarde — eso lo lee directamente el PDF del snapshot guardado.
+  mensajeComercial: z.string().max(2000).nullable().optional(),
+  cierreComercial: z.string().max(2000).nullable().optional(),
   // COTIZACIONES-COSTEO: opcional. El costeo se RECALCULA en servidor (el cliente no manda resultados ni parámetros).
   costeo: costeoPayloadSchema.optional(),
 });
@@ -66,6 +72,17 @@ export async function POST(req: Request, ctx: Ctx) {
   }
   const { costeo, ...datos } = parsed.data;
   try {
+    // Snapshot desde el primer momento: si el usuario dejó "Mensaje para el
+    // cliente" vacío, se resuelve AHORA el default configurado en Ajustes
+    // (o el fallback fijo de la marca) y se guarda ese texto — nunca queda
+    // NULL para una cotización nueva, así el PDF de esta cotización nunca
+    // cambia aunque mañana se edite el default en Ajustes.
+    if (!datos.mensajeComercial?.trim() || !datos.cierreComercial?.trim()) {
+      const marca = datos.documentoEmisor ?? DOCUMENTO_EMISOR_DEFAULT;
+      const defaults = (await obtenerPresentacionComercial(guard.empresa.id))[marca];
+      if (!datos.mensajeComercial?.trim()) datos.mensajeComercial = defaults.mensaje;
+      if (!datos.cierreComercial?.trim()) datos.cierreComercial = defaults.cierre;
+    }
     let preparado = null;
     if (costeo) {
       // Guardar costeo exige su propio permiso: sin él se rechaza TODO el alta (no se ignora en silencio).
