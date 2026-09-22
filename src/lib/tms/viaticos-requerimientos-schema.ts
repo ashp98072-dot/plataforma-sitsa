@@ -8,7 +8,7 @@ const opcional = (max: number) => z.string().trim().max(max).nullable().optional
 const decimal = z.union([z.string(), z.number()]).transform(String).refine(v => /^\d{1,10}(\.\d{1,2})?$/.test(v), "El monto no es válido.");
 
 export const lineaRequerimientoViaticoSchema = z.object({
-  fecha, personalId: id, vehiculoId: id.nullable().optional().transform(v => v ?? null),
+  fechaSolicitud: fecha, fechaViaje: fecha, personalId: id, vehiculoId: id.nullable().optional().transform(v => v ?? null),
   clienteId: id.nullable().optional().transform(v => v ?? null),
   cantidad: decimal.refine(v => Number(v) > 0, "La cantidad debe ser mayor que cero."),
   destino: z.string().trim().min(1, "El destino es obligatorio.").max(300),
@@ -17,7 +17,7 @@ export const lineaRequerimientoViaticoSchema = z.object({
 
 export const guardarRequerimientoViaticoSchema = z.object({
   fechaRequerimiento: fecha, requirenteUsuarioId: id,
-  observaciones: opcional(10000), estado: z.enum(["BORRADOR", "PENDIENTE"]).default("BORRADOR"),
+  observaciones: opcional(10000),
   version: id.optional(), lineas: z.array(lineaRequerimientoViaticoSchema).min(1, "Agrega al menos una línea.").max(300),
 }).strict();
 

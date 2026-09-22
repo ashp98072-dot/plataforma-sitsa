@@ -44,7 +44,7 @@ export async function obtenerRequerimientoViatico(empresaId: number, id: number,
   const rows = await run(`SELECT * FROM tms_viatico_requerimientos WHERE empresa_id=? AND id=? LIMIT 1`, [empresaId, id]);
   if (!rows[0]) return null;
   const lineas = await run(`SELECT * FROM tms_viatico_requerimiento_lineas WHERE empresa_id=? AND requerimiento_id=? ORDER BY orden,id`, [empresaId, id]);
-  return { ...mapCabecera(rows[0]), lineas: lineas.map(l => ({ ...l, id:Number(l.id), fecha:fechaSql(l.fecha), cantidad:String(l.cantidad), monto_sugerido:String(l.monto_sugerido), monto_unitario:String(l.monto_unitario), total:String(l.total) })) };
+  return { ...mapCabecera(rows[0]), lineas: lineas.map(l => ({ ...l, id:Number(l.id), fecha_solicitud:fechaSql(l.fecha_solicitud), fecha_viaje:fechaSql(l.fecha_viaje), cantidad:String(l.cantidad), monto_sugerido:String(l.monto_sugerido), monto_unitario:String(l.monto_unitario), total:String(l.total) })) };
 }
 
 async function snapshotLinea(conn: PoolConnection, empresaId: number, l: GuardarRequerimientoViatico["lineas"][number]) {
@@ -79,16 +79,16 @@ export async function guardarRequerimientoViatico(empresaId:number, usuarioId:nu
       if (!actual[0]) throw new ErrorRequerimientoViatico("Requerimiento no encontrado.",404);
       if (!["BORRADOR","PENDIENTE"].includes(String(actual[0].estado))) throw new ErrorRequerimientoViatico("El requerimiento ya está congelado y no puede editarse.",409);
       if (Number(actual[0].version)!==datos.version) throw new ErrorRequerimientoViatico("El requerimiento cambió; recarga la página.",409);
-      await conn.execute(`UPDATE tms_viatico_requerimientos SET fecha_requerimiento=?,requirente_usuario_id=?,requirente_nombre_snapshot=?,estado=?,total=?,observaciones=?,version=version+1 WHERE empresa_id=? AND id=?`,[datos.fechaRequerimiento,datos.requirenteUsuarioId,requirente.nombre,datos.estado,dinero(total),datos.observaciones,empresaId,id]);
+      await conn.execute(`UPDATE tms_viatico_requerimientos SET fecha_requerimiento=?,requirente_usuario_id=?,requirente_nombre_snapshot=?,total=?,observaciones=?,version=version+1 WHERE empresa_id=? AND id=?`,[datos.fechaRequerimiento,datos.requirenteUsuarioId,requirente.nombre,dinero(total),datos.observaciones,empresaId,id]);
       await conn.execute(`DELETE FROM tms_viatico_requerimiento_lineas WHERE empresa_id=? AND requerimiento_id=?`,[empresaId,id]);
     } else {
       const [sol] = await conn.query<RowDataPacket[]>(`SELECT nombre FROM usuarios WHERE id=? AND activo=1 LIMIT 1`,[usuarioId]);
       const temporal=`TMP-${randomUUID()}`;
-      const [r] = await conn.execute<ResultSetHeader>(`INSERT INTO tms_viatico_requerimientos (empresa_id,codigo,fecha_requerimiento,empresa_requirente_nombre,requirente_usuario_id,requirente_nombre_snapshot,solicitante_usuario_id,solicitante_nombre_snapshot,estado,total,observaciones,creado_por) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,[empresaId,temporal,datos.fechaRequerimiento,empresaNombre,datos.requirenteUsuarioId,requirente.nombre,usuarioId,String(sol[0]?.nombre||usuarioNombre),datos.estado,dinero(total),datos.observaciones,usuarioId]);
+      const [r] = await conn.execute<ResultSetHeader>(`INSERT INTO tms_viatico_requerimientos (empresa_id,codigo,fecha_requerimiento,empresa_requirente_nombre,requirente_usuario_id,requirente_nombre_snapshot,solicitante_usuario_id,solicitante_nombre_snapshot,estado,total,observaciones,creado_por) VALUES (?,?,?,?,?,?,?,?,'BORRADOR',?,?,?)`,[empresaId,temporal,datos.fechaRequerimiento,empresaNombre,datos.requirenteUsuarioId,requirente.nombre,usuarioId,String(sol[0]?.nombre||usuarioNombre),dinero(total),datos.observaciones,usuarioId]);
       reqId=r.insertId; const codigo=`VR-${new Date().getFullYear()}-${String(reqId).padStart(6,"0")}`;
       await conn.execute(`UPDATE tms_viatico_requerimientos SET codigo=? WHERE empresa_id=? AND id=?`,[codigo,empresaId,reqId]);
     }
-    for (const [i,x] of resueltas.entries()) await conn.execute(`INSERT INTO tms_viatico_requerimiento_lineas (empresa_id,requerimiento_id,orden,fecha,personal_id,empleado_id,personal_nombre_snapshot,cargo_snapshot,vehiculo_id,placa_snapshot,cliente_id,cliente_nombre_snapshot,cantidad,destino,monto_sugerido,monto_unitario,motivo_cambio,total,plan_id,origen,observaciones) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,'MANUAL',?)`,[empresaId,reqId,i+1,x.l.fecha,x.l.personalId,x.p.id_empleado,x.p.nombre,x.p.cargo,x.l.vehiculoId,x.placa,x.l.clienteId,x.cliente,x.l.cantidad,x.l.destino,x.sugerido,x.l.montoUnitario,x.l.motivoCambio,x.total,x.l.observaciones]);
+    for (const [i,x] of resueltas.entries()) await conn.execute(`INSERT INTO tms_viatico_requerimiento_lineas (empresa_id,requerimiento_id,orden,fecha_solicitud,fecha_viaje,personal_id,empleado_id,personal_nombre_snapshot,cargo_snapshot,vehiculo_id,placa_snapshot,cliente_id,cliente_nombre_snapshot,cantidad,destino,monto_sugerido,monto_unitario,motivo_cambio,total,plan_id,origen,observaciones) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,'MANUAL',?)`,[empresaId,reqId,i+1,x.l.fechaSolicitud,x.l.fechaViaje,x.l.personalId,x.p.id_empleado,x.p.nombre,x.p.cargo,x.l.vehiculoId,x.placa,x.l.clienteId,x.cliente,x.l.cantidad,x.l.destino,x.sugerido,x.l.montoUnitario,x.l.motivoCambio,x.total,x.l.observaciones]);
     await registrarAuditoriaTx(conn,{empresaId,usuario:usuarioNombre,accion:id?"editar_requerimiento_viatico":"crear_requerimiento_viatico",modulo:"tms",detalle:`Requerimiento de viáticos #${reqId}`});
     await conn.commit(); return await obtenerRequerimientoViatico(empresaId,reqId!);
   } catch(e){ await conn.rollback(); throw e; } finally { conn.release(); }
@@ -102,7 +102,7 @@ export async function transicionarRequerimientoViatico(empresaId:number,id:numbe
     if(plantilla&&esPngValido(Buffer.from(plantilla.bytes))){const f=await guardarUpload(empresaId,"firmas",`firma_viatico_requerimiento_autorizar_${id}`,{name:plantilla.original||"firma.png",size:plantilla.bytes.byteLength,arrayBuffer:async()=>plantilla.bytes});firmaRuta=f.relative;firmaImagen={relative:f.relative,original:f.original,mime:"image/png",size:f.size,sha256:sha256Hex(plantilla.bytes)};}
   }
   const conn=await getPool().getConnection(); let confirmado=false; try{ await conn.beginTransaction();
-    const [rows]=await conn.query<RowDataPacket[]>(`SELECT estado,version FROM tms_viatico_requerimientos WHERE empresa_id=? AND id=? FOR UPDATE`,[empresaId,id]); const actual=rows[0];
+    const [rows]=await conn.query<RowDataPacket[]>(`SELECT estado,version,total FROM tms_viatico_requerimientos WHERE empresa_id=? AND id=? FOR UPDATE`,[empresaId,id]); const actual=rows[0];
     if(!actual) throw new ErrorRequerimientoViatico("Requerimiento no encontrado.",404); const paso=pasos[datos.accion];
     if(Number(actual.version)!==datos.version || !paso.desde.includes(String(actual.estado))) throw new ErrorRequerimientoViatico("La transición ya no es válida; recarga la página.",409);
     const extra: string[]=[]; const params:SqlParams=[paso.hacia];

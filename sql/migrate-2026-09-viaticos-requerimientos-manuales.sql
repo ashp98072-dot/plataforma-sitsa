@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS tms_viatico_requerimiento_lineas (
   empresa_id INT NOT NULL,
   requerimiento_id INT NOT NULL,
   orden INT NOT NULL,
-  fecha DATE NOT NULL,
+  fecha_solicitud DATE NOT NULL,
+  fecha_viaje DATE NOT NULL,
   personal_id INT NOT NULL,
   empleado_id INT NULL,
   personal_nombre_snapshot VARCHAR(200) NOT NULL,
@@ -71,6 +72,10 @@ CREATE TABLE IF NOT EXISTS tms_viatico_requerimiento_lineas (
   KEY idx_vreql_plan (empresa_id, plan_id),
   CONSTRAINT fk_vreql_req FOREIGN KEY (empresa_id, requerimiento_id) REFERENCES tms_viatico_requerimientos(empresa_id, id) ON DELETE CASCADE,
   CONSTRAINT fk_vreql_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
+  -- FKs simples deliberadas: ON DELETE SET NULL sobre una FK compuesta
+  -- (empresa_id, id_nullable) intentaría poner empresa_id=NULL, incompatible
+  -- con el tenant NOT NULL. La aplicación valida empresa_id antes de escribir.
+  -- tms_personal tampoco tiene índice UNIQUE (empresa_id,id) canónico.
   CONSTRAINT fk_vreql_personal FOREIGN KEY (personal_id) REFERENCES tms_personal(id),
   CONSTRAINT fk_vreql_vehiculo FOREIGN KEY (vehiculo_id) REFERENCES flota_vehiculos(id) ON DELETE SET NULL,
   CONSTRAINT fk_vreql_cliente FOREIGN KEY (cliente_id) REFERENCES tms_clientes(id) ON DELETE SET NULL,
