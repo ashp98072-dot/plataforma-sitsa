@@ -4,6 +4,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import ViaticosControlPanel from "@/components/tms/viaticos-control-panel";
 import ViaticosPorPagarPanel from "@/components/tms/viaticos-por-pagar-panel";
+import ViaticosRequerimientosClient from "@/components/tms/viaticos-requerimientos-client";
 
 /**
  * VIAT-3 — Operaciones > Viáticos: módulo visible dedicado a administrar
@@ -41,8 +42,12 @@ export default function ViaticosPage() {
       </div>
 
       <section className="space-y-3">
+        <ViaticosRequerimientosClient slug={slug} />
+      </section>
+
+      <section className="space-y-3 border-t border-[var(--border)] pt-5">
         <h2 className="text-xs font-semibold uppercase tracking-[0.15em] text-[var(--muted)]">
-          Listado general
+          Listado general (generados desde Programación)
         </h2>
         <ViaticosControlPanel slug={slug} />
       </section>

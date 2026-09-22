@@ -1,0 +1,11 @@
+import { beforeEach,expect,it,vi } from "vitest";
+const m=vi.hoisted(()=>({query:vi.fn(),firma:vi.fn(),audit:vi.fn(),plantilla:vi.fn(),conn:{query:vi.fn(),execute:vi.fn(),beginTransaction:vi.fn(),commit:vi.fn(),rollback:vi.fn(),release:vi.fn()}}));
+vi.mock("@/lib/db",()=>({getPool:()=>({getConnection:async()=>m.conn}),query:m.query}));
+vi.mock("@/lib/auditoria",()=>({registrarAuditoriaTx:m.audit}));
+vi.mock("@/lib/firmas/usuario-firmas",()=>({leerBytesFirmaGuardada:m.plantilla}));
+vi.mock("@/lib/firmas/firmas-internas",()=>({crearFirmaInterna:m.firma}));
+vi.mock("@/lib/uploads",()=>({guardarUpload:vi.fn(),borrarUpload:vi.fn()}));
+import { transicionarRequerimientoViatico } from "./viaticos-requerimientos";
+beforeEach(()=>{vi.clearAllMocks();m.plantilla.mockResolvedValue(null);m.conn.query.mockResolvedValue([[{estado:"PENDIENTE",version:3,total:"450.75"}],[]]);m.conn.execute.mockResolvedValue([{affectedRows:1},[]]);m.query.mockResolvedValueOnce([{id:12,codigo:"VR-2026-000012",estado:"AUTORIZADO",total:"450.75",fecha_requerimiento:"2026-09-22"}]).mockResolvedValueOnce([]);m.firma.mockResolvedValue({id:9});});
+it("autorizar firma el total real bloqueado y audita la única transición",async()=>{await transicionarRequerimientoViatico(1,12,7,"Autorizante","JefeOperaciones",{accion:"autorizar",version:3});expect(m.firma).toHaveBeenCalledWith(m.conn,expect.objectContaining({empresaId:1,entidadId:12,accion:"AUTORIZAR_REQUERIMIENTO_VIATICO",valoresRelevantes:{requerimientoId:12,estadoAnterior:"PENDIENTE",estadoNuevo:"AUTORIZADO",total:"450.75"}}));expect(m.audit).toHaveBeenCalledWith(m.conn,expect.objectContaining({accion:"autorizar_requerimiento_viatico"}));});
+it("enviar es la transición auditada BORRADOR a PENDIENTE",async()=>{m.conn.query.mockResolvedValue([[{estado:"BORRADOR",version:1,total:"25.00"}],[]]);await transicionarRequerimientoViatico(1,12,7,"Operador","Operaciones",{accion:"enviar",version:1});expect(m.conn.execute).toHaveBeenCalledWith(expect.stringContaining("SET estado=?"),expect.arrayContaining(["PENDIENTE",1,12,1]));expect(m.audit).toHaveBeenCalledWith(m.conn,expect.objectContaining({accion:"enviar_requerimiento_viatico",detalle:expect.stringContaining("BORRADOR -> PENDIENTE")}));});

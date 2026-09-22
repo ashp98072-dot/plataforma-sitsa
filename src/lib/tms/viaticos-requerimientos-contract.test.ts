@@ -1,0 +1,14 @@
+import { readFileSync } from "node:fs";import { join } from "node:path";import { describe,expect,it } from "vitest";
+const root=process.cwd();const read=(p:string)=>readFileSync(join(root,p),"utf8");
+describe("contrato SQL y aislamiento",()=>{
+  const migration=read("sql/migrate-2026-09-viaticos-requerimientos-manuales.sql");const preflight=read("sql/preflight-2026-09-viaticos-requerimientos-manuales.sql");const model=read("src/lib/tms/viaticos-requerimientos.ts");
+  it("crea solo las dos tablas separadas y conserva plan nullable",()=>{expect(migration.match(/CREATE TABLE IF NOT EXISTS/g)).toHaveLength(2);expect(migration).toContain("plan_id INT NULL");expect(migration).not.toMatch(/ALTER TABLE tms_viaticos|DROP\s/i);});
+  it("preflight fase A es ejecutable aunque no existan tablas y bloque B queda comentado",()=>{expect(preflight).not.toMatch(/information_schema|INSERT|UPDATE|DELETE|ALTER|DROP/i);expect(preflight.match(/^SHOW TABLES/gm)).toHaveLength(2);expect(preflight.match(/^SHOW CREATE TABLE/gm)).toBeNull();expect(preflight).toContain("-- SHOW CREATE TABLE");});
+  it("todas las lecturas de catálogos y entidades están acotadas por empresa",()=>{expect(model).toMatch(/tp\.empresa_id=\?/);expect(model).toMatch(/flota_vehiculos WHERE empresa_id=\?/);expect(model).toMatch(/tms_clientes WHERE empresa_id=\?/);expect(model).toMatch(/WHERE empresa_id=\? AND id=\?/);});
+  it("calcula total en servidor y congela estados posteriores a pendiente",()=>{expect(model).toContain("Math.round(cantidad * unitario / 100)");expect(model).toContain('["BORRADOR","PENDIENTE"]');expect(model).toContain("ya está congelado");});
+  it("audita las cinco transiciones y captura firma interna al autorizar",()=>{for(const a of ["enviar","autorizar","rechazar","entregar","liquidar"])expect(model).toContain(`${a}:`);expect(model).toContain("crearFirmaInterna");expect(model).toContain("AUTORIZAR_REQUERIMIENTO_VIATICO");});
+  it("firma el total real seleccionado y nunca undefined",()=>{expect(model).toContain("SELECT estado,version,total FROM tms_viatico_requerimientos");expect(model).toContain('total:actual.total');});
+  it("POST fija BORRADOR y PATCH de contenido no escribe estado",()=>{expect(model).toContain("'BORRADOR'");const update=model.match(/UPDATE tms_viatico_requerimientos SET fecha_requerimiento=[\s\S]*?\`,/)?.[0]||"";expect(update).not.toContain("estado=?");expect(model).toContain('enviar:{desde:["BORRADOR"],hacia:"PENDIENTE"}');});
+  it("persiste fechas separadas y valida tenant de cliente/vehículo",()=>{expect(model).toContain("fecha_solicitud,fecha_viaje");expect(model).toContain("flota_vehiculos WHERE empresa_id=? AND id=?");expect(model).toContain("tms_clientes WHERE empresa_id=? AND id=?");});
+  it("resuelve el snapshot de empresa desde la clave cerrada y no desde el tenant",()=>{expect(model).toContain("nombreEmpresaRequirente(datos.empresaRequirente)");expect(model).not.toContain("empresaNombre");});
+});
