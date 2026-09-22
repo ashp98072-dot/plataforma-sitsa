@@ -49,9 +49,9 @@ function montarDom() {
 }
 
 const ENCABEZADO: EncabezadoProgramacionImagen = { empresa: "KuiqTrans", rango: "2026-09-22", filtros: "", generado: "22/9/2026" };
-const filaDe = (codigo: string): FilaProgramacionImagen => ({
-  codigo, fechaHora: "2026-09-22 · 08:00 AM", cliente: "Cliente", ruta: "A → B", piloto: "Juan",
-  auxiliares: "", unidad: "P-123ABC", estado: "Programado", regresoEstimado: "", tarifaComercial: "",
+const filaDe = (placa: string): FilaProgramacionImagen => ({
+  mes: "SEP", dia: "22", placa, piloto: "Juan", auxiliar1: "", auxiliar2: "",
+  cliente: "Cliente", lugarCarga: "Bodega A", hora: "08:00", lugarDescarga: "Cliente B",
 });
 
 beforeEach(() => vi.unstubAllGlobals());

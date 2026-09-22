@@ -12,7 +12,7 @@ import { formatearFechaHora12, formatearHora12 } from "@/lib/tms/hora-formato";
 import { resumenRegreso } from "@/lib/tms/regreso-viaje";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { exportarProgramacionComoImagen } from "./programacion-exportar-imagen";
-import type { FilaProgramacionImagen } from "@/lib/tms/programacion-imagen";
+import { mesDia, type FilaProgramacionImagen } from "@/lib/tms/programacion-imagen";
 
 /**
  * OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — tras CERRAR un viaje, Programación
@@ -886,35 +886,42 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   const [exportandoImagen, setExportandoImagen] = useState(false);
 
   /**
-   * PROGRAMACION-EXPORT-IMAGEN-1 — "Exportar imagen": mismo criterio que
-   * reporteQueryString de arriba (rango + Estado/Piloto/Unidad/Cliente
-   * activos), pero a partir de `visibles` (los viajes YA filtrados que
-   * están en pantalla) en vez de una consulta nueva al servidor — así el
-   * PNG/JPG siempre coincide exactamente con lo que el usuario ve, sin
-   * duplicar la lógica de filtrado del tablero ni agregar una consulta.
-   * Los textos de cada celda reutilizan los MISMOS helpers que ya pinta
-   * el tablero (estadoVisible, origenDestino, formatearHora12) — nunca
-   * decide de nuevo cómo se ve un estado o una ruta.
+   * PROGRAMACION-EXPORT-IMAGEN-1 (ajuste: mismo formato que el reporte
+   * tradicional) — "Exportar imagen": mismo criterio que reporteQueryString
+   * de arriba (rango + Estado/Piloto/Unidad/Cliente activos), pero a partir
+   * de `visibles` (los viajes YA filtrados que están en pantalla) en vez de
+   * una consulta nueva al servidor — así el PNG/JPG siempre coincide
+   * exactamente con lo que el usuario ve, sin duplicar la lógica de
+   * filtrado del tablero ni agregar una consulta.
+   *
+   * Las columnas y el criterio de cada celda son EXACTAMENTE los del
+   * reporte tradicional Excel/PDF (ver .../tms/programacion/reporte/
+   * route.ts): mesDia() usa la misma tabla de abreviaturas; "Lugar de
+   * Carga" reutiliza origenDestino(p.paradas).origen (la misma búsqueda de
+   * la parada tipo "Carga" que ya usa el tablero); "Lugar de Descarga" usa
+   * `lugar_descarga_historico` — NUNCA una parada (regla VIAT-4b, ya
+   * documentada en el reporte tradicional); "Hora" queda en 24h, sin AM/PM,
+   * igual que ese reporte; Auxiliar 1/Auxiliar 2 son los primeros dos de la
+   * lista — un tercero se descarta, mismo criterio que el reporte
+   * tradicional (nunca se inventa uno nuevo).
    */
   async function exportarImagen(formato: "png" | "jpeg") {
     setExportandoImagen(true);
     try {
       const filas: FilaProgramacionImagen[] = visibles.map((p) => {
-        const { origen, destino } = origenDestino(p.paradas);
+        const { origen } = origenDestino(p.paradas);
+        const { mes, dia } = mesDia(p.fecha_plan);
         return {
-          codigo: p.codigo,
-          fechaHora: `${p.fecha_plan}${p.hora_carga ? ` · ${formatearHora12(p.hora_carga)}` : ""}`,
-          cliente: p.cliente || "",
-          ruta: origen || destino ? `${origen || "—"} → ${destino || "—"}` : "",
+          mes,
+          dia,
+          placa: p.placa || "",
           piloto: p.piloto || "",
-          auxiliares: p.auxiliares.join(", "),
-          unidad: p.placa || "",
-          estado: estadoVisible(p).label,
-          regresoEstimado: p.regreso_estimado ? formatearFechaHora12(p.regreso_estimado) : "",
-          tarifaComercial:
-            p.tarifa_comercial != null
-              ? `Q${Number(p.tarifa_comercial).toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-              : "",
+          auxiliar1: p.auxiliares[0] ?? "",
+          auxiliar2: p.auxiliares[1] ?? "",
+          cliente: p.cliente || "",
+          lugarCarga: origen || "",
+          hora: p.hora_carga ? p.hora_carga.slice(0, 5) : "",
+          lugarDescarga: p.lugar_descarga_historico || "",
         };
       });
       const rango =

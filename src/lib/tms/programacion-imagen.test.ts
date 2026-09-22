@@ -10,22 +10,23 @@ import {
   construirLayoutImagen,
   filasPorPagina,
   lineasEncabezado,
+  mesDia,
   paginar,
   type EncabezadoProgramacionImagen,
   type FilaProgramacionImagen,
 } from "./programacion-imagen";
 
 const FILA: FilaProgramacionImagen = {
-  codigo: "PLAN-000123",
-  fechaHora: "2026-09-22 · 08:00 AM",
-  cliente: "Distribuidora Ejemplo",
-  ruta: "Bodega Zona 12 → Puerto Barrios",
+  mes: "SEP",
+  dia: "22",
+  placa: "C-801BXY",
   piloto: "Juan Pérez",
-  auxiliares: "Ana López, Beto Ruiz",
-  unidad: "P-123ABC",
-  estado: "Programado",
-  regresoEstimado: "2026-09-22 · 05:00 PM",
-  tarifaComercial: "Q1,400.00",
+  auxiliar1: "Ana López",
+  auxiliar2: "Beto Ruiz",
+  cliente: "Distribuidora Ejemplo",
+  lugarCarga: "BODEGAS CALSA, ZONA 12",
+  hora: "08:00",
+  lugarDescarga: "DOLLAR CITY",
 };
 
 const ENCABEZADO: EncabezadoProgramacionImagen = {
@@ -35,19 +36,46 @@ const ENCABEZADO: EncabezadoProgramacionImagen = {
   generado: "22/9/2026, 10:00:00",
 };
 
-describe("COLUMNAS_IMAGEN — mínimo del ticket", () => {
-  it("10 columnas, en el orden pedido: código, fecha/hora, cliente, ruta, piloto, auxiliares, unidad, estado, regreso, tarifa", () => {
+describe("COLUMNAS_IMAGEN — MISMAS columnas que el reporte tradicional Excel/PDF de Programación", () => {
+  it("10 columnas, en el orden EXACTO del reporte tradicional (reporte/route.ts): Mes, Día, Placa, Piloto, Auxiliar 1, Auxiliar 2, Cliente, Lugar de Carga, Hora, Lugar de Descarga", () => {
     expect(COLUMNAS_IMAGEN.map((c) => c.titulo)).toEqual([
-      "Código", "Fecha / Hora", "Cliente", "Ruta", "Piloto", "Auxiliares", "Unidad", "Estado", "Regreso est.", "Tarifa",
+      "Mes", "Día", "Placa", "Piloto", "Auxiliar 1", "Auxiliar 2", "Cliente", "Lugar de Carga", "Hora", "Lugar de Descarga",
     ]);
+  });
+
+  it("nunca incluye Código, Estado, Regreso estimado, Tarifa ni una columna de Ruta combinada", () => {
+    const titulos = COLUMNAS_IMAGEN.map((c) => c.titulo.toLowerCase());
+    for (const prohibido of ["código", "codigo", "estado", "regreso", "tarifa", "ruta"]) {
+      expect(titulos.some((t) => t.includes(prohibido))).toBe(false);
+    }
+  });
+
+  it("nunca combina los auxiliares en una sola columna", () => {
+    expect(COLUMNAS_IMAGEN.map((c) => c.titulo)).not.toContain("Auxiliares");
+  });
+});
+
+describe("mesDia — misma tabla de abreviaturas que el reporte tradicional (ENE..DIC)", () => {
+  it("2026-09-22 -> SEP / 22", () => {
+    expect(mesDia("2026-09-22")).toEqual({ mes: "SEP", dia: "22" });
+  });
+
+  it("cubre los 12 meses con abreviatura de 3 letras", () => {
+    expect(mesDia("2026-01-05").mes).toBe("ENE");
+    expect(mesDia("2026-12-31").mes).toBe("DIC");
+    expect(mesDia("2026-08-01").mes).toBe("AGO"); // no "Agosto" — mismo criterio que el reporte tradicional
+  });
+
+  it("fecha vacía o inválida no revienta (mismo fallback ?? 1 que ya usa el reporte tradicional: mes indefinido cae a ENE, día queda vacío)", () => {
+    expect(mesDia("")).toEqual({ mes: "ENE", dia: "" });
   });
 });
 
 describe("anchosColumnasImagen", () => {
-  it("suma exactamente el ancho disponible (reutiliza anchosColumnas de cotizacion-pdf-layout.ts)", () => {
-    const anchos = anchosColumnasImagen(1700);
+  it("suma exactamente el ancho disponible", () => {
+    const anchos = anchosColumnasImagen(2000);
     expect(anchos).toHaveLength(10);
-    expect(anchos.reduce((s, a) => s + a, 0)).toBeCloseTo(1700, 5);
+    expect(anchos.reduce((s, a) => s + a, 0)).toBeCloseTo(2000, 5);
   });
 
   it("usa ANCHO_IMAGEN por defecto", () => {
@@ -58,22 +86,28 @@ describe("anchosColumnasImagen", () => {
 describe("celdasFila", () => {
   it("arma el arreglo en el MISMO orden que COLUMNAS_IMAGEN", () => {
     expect(celdasFila(FILA)).toEqual([
-      "PLAN-000123", "2026-09-22 · 08:00 AM", "Distribuidora Ejemplo", "Bodega Zona 12 → Puerto Barrios",
-      "Juan Pérez", "Ana López, Beto Ruiz", "P-123ABC", "Programado", "2026-09-22 · 05:00 PM", "Q1,400.00",
+      "SEP", "22", "C-801BXY", "Juan Pérez", "Ana López", "Beto Ruiz", "Distribuidora Ejemplo",
+      "BODEGAS CALSA, ZONA 12", "08:00", "DOLLAR CITY",
     ]);
+  });
+
+  it("auxiliar2 vacío queda como celda vacía (nunca inventa un valor)", () => {
+    expect(celdasFila({ ...FILA, auxiliar2: "" })[5]).toBe("");
   });
 });
 
 describe("lineasEncabezado", () => {
-  it("título = empresa + PROGRAMACIÓN; subtítulo une rango, filtros y generado con « · »", () => {
+  it("título fijo «PROGRAMACIÓN»; subtítulo empieza con la empresa, luego rango, filtros y generado", () => {
     const l = lineasEncabezado(ENCABEZADO);
-    expect(l.titulo).toBe("Kuiqtrans / Logiservicios Mónaco — PROGRAMACIÓN");
-    expect(l.subtitulo).toBe("2026-09-22 a 2026-09-28 · Estado: Programado · Piloto: Juan Pérez · Generado 22/9/2026, 10:00:00");
+    expect(l.titulo).toBe("PROGRAMACIÓN");
+    expect(l.subtitulo).toBe(
+      "Kuiqtrans / Logiservicios Mónaco · 2026-09-22 a 2026-09-28 · Estado: Programado · Piloto: Juan Pérez · Generado 22/9/2026, 10:00:00",
+    );
   });
 
   it("sin filtros activos, el subtítulo no deja un « · » colgando", () => {
     const l = lineasEncabezado({ ...ENCABEZADO, filtros: "" });
-    expect(l.subtitulo).toBe("2026-09-22 a 2026-09-28 · Generado 22/9/2026, 10:00:00");
+    expect(l.subtitulo).toBe("Kuiqtrans / Logiservicios Mónaco · 2026-09-22 a 2026-09-28 · Generado 22/9/2026, 10:00:00");
     expect(l.subtitulo).not.toContain("·  ·");
   });
 });
@@ -120,13 +154,14 @@ describe("filasPorPagina", () => {
 });
 
 describe("construirLayoutImagen", () => {
-  it("pocas filas (caso normal): una sola página con todas las filas", () => {
-    const filas = Array.from({ length: 5 }, (_, i) => ({ ...FILA, codigo: `PLAN-00000${i}` }));
+  it("pocas filas (caso normal): una sola página con todas las filas, encabezado y encabezados de tabla presentes en cada página", () => {
+    const filas = Array.from({ length: 5 }, (_, i) => ({ ...FILA, placa: `C-00${i}ABC` }));
     const layout = construirLayoutImagen(ENCABEZADO, filas);
     expect(layout.totalPaginas).toBe(1);
     expect(layout.paginas).toHaveLength(1);
     expect(layout.paginas[0]).toHaveLength(5);
     expect(layout.anchoColumnas).toHaveLength(10);
+    expect(layout.encabezado.titulo).toBe("PROGRAMACIÓN");
   });
 
   it("sin viajes (lista vacía): una página vacía, nunca revienta", () => {
@@ -136,15 +171,14 @@ describe("construirLayoutImagen", () => {
   });
 
   it("contenido muy largo: se divide en varias páginas, ninguna fila se pierde ni se repite", () => {
-    const filas = Array.from({ length: 250 }, (_, i) => ({ ...FILA, codigo: `PLAN-${String(i).padStart(6, "0")}` }));
+    const filas = Array.from({ length: 250 }, (_, i) => ({ ...FILA, placa: `C-${String(i).padStart(3, "0")}ABC` }));
     // Fuerza un lienzo chico para forzar la división sin depender de miles de filas reales.
     const layout = construirLayoutImagen(ENCABEZADO, filas, { altoMaximoLienzo: 1000, altoEncabezado: 90 });
     expect(layout.totalPaginas).toBeGreaterThan(1);
     const totalFilasReconstruidas = layout.paginas.reduce((s, p) => s + p.length, 0);
     expect(totalFilasReconstruidas).toBe(250);
-    // Cada código aparece exactamente una vez en todo el conjunto de páginas.
-    const codigos = layout.paginas.flat().map((celdas) => celdas[0]);
-    expect(new Set(codigos).size).toBe(250);
+    const placas = layout.paginas.flat().map((celdas) => celdas[2]); // placa es la columna índice 2
+    expect(new Set(placas).size).toBe(250);
   });
 
   it("cada fila mantiene el orden de columnas de COLUMNAS_IMAGEN dentro del layout", () => {

@@ -15,9 +15,15 @@ import {
  * (nada de `canvas`/`puppeteer`/html2canvas — ese tipo de librería suele
  * requerir un binario nativo, frágil de desplegar en Hostinger). Es
  * deliberadamente un REPORTE dibujado (encabezado, tabla con bordes,
- * filas alternas), no una captura cruda de la pantalla — mismo criterio
- * visual que ya usan los PDF de Cotizaciones/Programación (PDFKit), solo
- * que aquí el "lienzo" es un <canvas>.
+ * filas alternas), no una captura cruda de la pantalla.
+ *
+ * AJUSTE (negocio pidió que se vea igual al reporte tradicional): la
+ * paleta de colores de abajo es la MISMA que ya usa el PDF tradicional de
+ * Programación (dibujarTitulo/pdfTabla en src/lib/rrhh/export-files.ts) —
+ * fondo blanco, encabezado de tabla azul marino #1e3a5f con texto blanco,
+ * filas blancas/gris muy claro alternadas, texto casi negro, bordes
+ * finos — copiada literalmente de esos mismos valores hexadecimales, no
+ * inventada de nuevo aquí.
  *
  * TODA la lógica de negocio (qué va en cada columna, anchos, paginación)
  * ya viene resuelta por construirLayoutImagen (programacion-imagen.ts,
@@ -26,14 +32,16 @@ import {
  * `canvas`, `Blob`) — motivo por el que la lógica se separó.
  */
 
-const COLOR_FONDO = "#0b1220";
-const COLOR_BANDA = "#111827";
-const COLOR_ENCABEZADO_TABLA = "#1e3a8a";
+const COLOR_FONDO = "#ffffff";
+const COLOR_TITULO = "#0f172a";
+const COLOR_SUBTITULO = "#475569";
+const COLOR_ENCABEZADO_TABLA = "#1e3a5f";
 const COLOR_TEXTO_ENCABEZADO_TABLA = "#ffffff";
-const COLOR_TEXTO = "#e5e7eb";
-const COLOR_TEXTO_SUAVE = "#9ca3af";
-const COLOR_BORDE = "#374151";
-const COLOR_FILA_ALTERNA = "#0f172a";
+const COLOR_BORDE_ENCABEZADO_TABLA = "#0f172a";
+const COLOR_TEXTO = "#0f172a";
+const COLOR_BORDE_CELDA = "#e2e8f0";
+const COLOR_BORDE_TABLA = "#94a3b8";
+const COLOR_FILA_ALTERNA = "#f1f5f9";
 const PAD_X = 8;
 const MARGEN = 24;
 
@@ -64,16 +72,15 @@ function dibujarPagina(
   canvas.height = alto;
   const ctx = canvas.getContext("2d")!;
 
+  // Fondo BLANCO de toda la imagen (mismo criterio que el PDF tradicional: nunca un tema oscuro).
   ctx.fillStyle = COLOR_FONDO;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  ctx.fillStyle = COLOR_BANDA;
-  ctx.fillRect(0, 0, canvas.width, altoEncabezado);
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "bold 22px Arial, sans-serif";
   ctx.textBaseline = "top";
+  ctx.fillStyle = COLOR_TITULO;
+  ctx.font = "bold 22px Arial, sans-serif";
   ctx.fillText(encabezadoTitulo, MARGEN, 18);
-  ctx.fillStyle = COLOR_TEXTO_SUAVE;
+  ctx.fillStyle = COLOR_SUBTITULO;
   ctx.font = "13px Arial, sans-serif";
   ctx.fillText(encabezadoSubtitulo, MARGEN, 50);
 
@@ -90,6 +97,10 @@ function dibujarPagina(
     else ctx.fillText(texto, x + PAD_X, y + 11);
     x += w;
   });
+  // Contorno del encabezado de tabla (mismo #0f172a que el PDF tradicional).
+  ctx.strokeStyle = COLOR_BORDE_ENCABEZADO_TABLA;
+  ctx.lineWidth = 0.75;
+  ctx.strokeRect(MARGEN, y, anchoTabla, ALTO_FILA_CABECERA);
   y += ALTO_FILA_CABECERA;
 
   ctx.font = "13px Arial, sans-serif";
@@ -102,7 +113,7 @@ function dibujarPagina(
     ctx.fillStyle = COLOR_TEXTO;
     celdas.forEach((valor, i) => {
       const w = anchoColumnas[i];
-      const texto = truncar(ctx, valor || "—", w - PAD_X * 2);
+      const texto = truncar(ctx, valor || "", w - PAD_X * 2);
       if (COLUMNAS_IMAGEN[i]?.alinear === "right") ctx.fillText(texto, x + w - PAD_X - ctx.measureText(texto).width, y + 9);
       else ctx.fillText(texto, x + PAD_X, y + 9);
       x += w;
@@ -110,10 +121,15 @@ function dibujarPagina(
     y += ALTO_FILA;
   });
 
-  // Bordes: contorno de la tabla + líneas horizontales entre filas (discreto, un solo trazo delgado).
-  ctx.strokeStyle = COLOR_BORDE;
+  // Bordes finos: contorno exterior de toda la tabla + líneas horizontales
+  // entre filas + líneas verticales entre columnas — mismos colores que ya
+  // usa pdfTabla() en export-files.ts (#94a3b8 exterior, #e2e8f0 interior).
+  ctx.strokeStyle = COLOR_BORDE_TABLA;
   ctx.lineWidth = 1;
   ctx.strokeRect(MARGEN, altoEncabezado, anchoTabla, altoTabla);
+
+  ctx.strokeStyle = COLOR_BORDE_CELDA;
+  ctx.lineWidth = 0.5;
   let yLinea = altoEncabezado + ALTO_FILA_CABECERA;
   for (let i = 0; i < filas.length; i++) {
     ctx.beginPath();
@@ -122,6 +138,14 @@ function dibujarPagina(
     ctx.stroke();
     yLinea += ALTO_FILA;
   }
+  let xLinea = MARGEN;
+  anchoColumnas.slice(0, -1).forEach((w) => {
+    xLinea += w;
+    ctx.beginPath();
+    ctx.moveTo(xLinea, altoEncabezado);
+    ctx.lineTo(xLinea, altoEncabezado + altoTabla);
+    ctx.stroke();
+  });
 
   return canvas;
 }
