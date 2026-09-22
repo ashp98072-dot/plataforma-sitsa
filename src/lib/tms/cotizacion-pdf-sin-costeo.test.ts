@@ -43,7 +43,8 @@ describe("PDF comercial sin costeo interno", () => {
   it("ni los módulos del PDF ni su endpoint referencian el costeo (ni importan sus módulos)", () => {
     for (const ruta of [
       "src/lib/tms/cotizacion-pdf.ts", "src/lib/tms/cotizacion-pdf-kuiqtrans.ts", "src/lib/tms/cotizacion-pdf-monaco.ts",
-      "src/lib/tms/cotizacion-pdf-layout.ts", "src/lib/tms/cotizacion-documento.ts",
+      "src/lib/tms/cotizacion-pdf-layout.ts", "src/lib/tms/cotizacion-documento.ts", "src/lib/tms/cotizacion-pdf-assets.ts",
+      "src/lib/tms/cotizacion-presentacion.ts",
       "src/app/api/empresas/[slug]/tms/cotizaciones/[id]/pdf/route.ts",
     ]) {
       const fuente = readFileSync(ruta, "utf8");

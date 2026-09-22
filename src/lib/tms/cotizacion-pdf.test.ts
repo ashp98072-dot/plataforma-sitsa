@@ -3,13 +3,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cotizacionPdf } from "./cotizacion-pdf";
 import { construirDocumentoComercial } from "./cotizacion-documento";
 import { COTIZACION_DOC } from "./cotizacion-documento.fixture";
+import { LOGO_KUIQTRANS_HEADER, LOGO_KUIQTRANS_WATERMARK, LOGO_MONACO } from "./cotizacion-pdf-assets";
 import { cotizacionPdfKuiqtrans } from "./cotizacion-pdf-kuiqtrans";
 import { cotizacionPdfMonaco } from "./cotizacion-pdf-monaco";
 import type { Cotizacion } from "./cotizaciones";
 
 /**
  * pdfkit comprime los content streams (FlateDecode): inspeccionar el buffer crudo no sirve. Se valida el
- * TEXTO que cada plantilla pide dibujar (espía sobre PDFDocument.prototype.text) y la estructura del PDF.
+ * TEXTO que cada plantilla pide dibujar (espía sobre PDFDocument.prototype.text) y, para los logos/marca de
+ * agua (ahora imágenes reales, no texto), la espía sobre PDFDocument.prototype.image.
  */
 const KUIQ: Cotizacion = { ...COTIZACION_DOC, documentoEmisor: "KUIQTRANS", incluyeIva: false };
 const MONACO: Cotizacion = { ...COTIZACION_DOC, documentoEmisor: "MONACO", incluyeIva: false };
@@ -17,40 +19,49 @@ const MONACO: Cotizacion = { ...COTIZACION_DOC, documentoEmisor: "MONACO", inclu
 afterEach(() => vi.restoreAllMocks());
 
 async function generar(c: Cotizacion) {
-  const espia = vi.spyOn(PDFDocument.prototype, "text");
+  const espiaTexto = vi.spyOn(PDFDocument.prototype, "text");
+  const espiaImagen = vi.spyOn(PDFDocument.prototype, "image");
   const buffer = await cotizacionPdf(c);
-  const textos = espia.mock.calls.map((llamada) => String(llamada[0]));
-  espia.mockRestore();
-  return { buffer, textos, todo: textos.join("\n") };
+  const textos = espiaTexto.mock.calls.map((llamada) => String(llamada[0]));
+  const imagenes = espiaImagen.mock.calls.map((llamada) => llamada[0]);
+  espiaTexto.mockRestore();
+  espiaImagen.mockRestore();
+  return { buffer, textos, todo: textos.join("\n"), imagenes };
 }
 const paginas = (buffer: Buffer) => buffer.toString("latin1").match(/\/Type\s*\/Page\b/g)?.length ?? 0;
 
 describe("selección de plantilla por documentoEmisor", () => {
-  it("KUIQTRANS usa la plantilla KuiqTrans (banda azul, «PROPUESTA COMERCIAL»)", async () => {
-    const { textos, buffer } = await generar(KUIQ);
+  it("KUIQTRANS usa la plantilla KuiqTrans: LOGO real (encabezado + marca de agua), banda azul, «PROPUESTA COMERCIAL»", async () => {
+    const { textos, todo, imagenes, buffer } = await generar(KUIQ);
     expect(buffer.subarray(0, 4).toString("latin1")).toBe("%PDF");
-    expect(textos).toContain("KuiqTrans");
+    expect(imagenes).toContain(LOGO_KUIQTRANS_HEADER);
+    expect(imagenes).toContain(LOGO_KUIQTRANS_WATERMARK);
+    expect(imagenes).not.toContain(LOGO_MONACO);
+    expect(todo).toContain("KuiqTrans"); // pie de página
     expect(textos).toContain("PROPUESTA COMERCIAL");
     expect(textos).toContain("Observaciones y condiciones");
-    expect(textos.join("\n")).not.toContain("MÓNACO");
-    expect(textos.join("\n")).not.toContain("Logiservicios");
+    expect(todo).not.toContain("MÓNACO");
+    expect(todo).not.toContain("Logiservicios");
   });
 
-  it("MONACO usa la plantilla Mónaco (LOGISERVICIOS / MÓNACO, «COTIZACIÓN», secciones separadas)", async () => {
-    const { textos } = await generar(MONACO);
-    expect(textos).toContain("LOGISERVICIOS");
-    expect(textos).toContain("MÓNACO");
+  it("MONACO usa la plantilla Mónaco: LOGO real (encabezado + marca de agua), «COTIZACIÓN», secciones separadas", async () => {
+    const { textos, todo, imagenes } = await generar(MONACO);
+    expect(imagenes.filter((img) => img === LOGO_MONACO)).toHaveLength(2); // encabezado + marca de agua
+    expect(imagenes).not.toContain(LOGO_KUIQTRANS_HEADER);
+    expect(todo).toContain("Logiservicios Mónaco"); // pie de página
     expect(textos).toContain("COTIZACIÓN");
     expect(textos).toContain("CONDICIONES");
     expect(textos).toContain("OBSERVACIONES");
-    expect(textos.join("\n")).not.toContain("KuiqTrans");
-    expect(textos.join("\n")).not.toContain("PROPUESTA COMERCIAL");
+    expect(todo).not.toContain("KuiqTrans");
+    expect(todo).not.toContain("PROPUESTA COMERCIAL");
   });
 
-  it("no usa el nombre de la empresa/cliente para elegir: un cliente llamado «Logiservicios Mónaco» con marca KUIQTRANS sale KuiqTrans", async () => {
-    const { textos } = await generar({ ...KUIQ, clienteNombre: "Logiservicios Mónaco" });
-    expect(textos).toContain("KuiqTrans");
-    expect(textos).not.toContain("LOGISERVICIOS");
+  it("no usa el nombre de la empresa/cliente para elegir: un cliente llamado «Logiservicios Mónaco» con marca KUIQTRANS usa el logo y el pie de KuiqTrans", async () => {
+    const { todo, imagenes } = await generar({ ...KUIQ, clienteNombre: "Logiservicios Mónaco" });
+    expect(imagenes).toContain(LOGO_KUIQTRANS_HEADER);
+    expect(imagenes).not.toContain(LOGO_MONACO);
+    expect(todo).toContain("KuiqTrans");
+    expect(todo).not.toContain("Logiservicios Mónaco · Propuesta"); // el pie NUNCA se arma con el nombre del cliente
   });
 
   it("las dos plantillas producen PDFs distintos para la misma cotización", async () => {
@@ -59,10 +70,55 @@ describe("selección de plantilla por documentoEmisor", () => {
     expect(a.equals(b)).toBe(false);
   });
 
-  it("marca ausente en una cotización histórica => plantilla KuiqTrans", async () => {
-    const { textos } = await generar({ ...KUIQ, documentoEmisor: undefined as never });
-    expect(textos).toContain("KuiqTrans");
+  it("marca ausente en una cotización histórica => plantilla KuiqTrans (logo y pie de KuiqTrans)", async () => {
+    const { todo, imagenes } = await generar({ ...KUIQ, documentoEmisor: undefined as never });
+    expect(todo).toContain("KuiqTrans");
+    expect(imagenes).toContain(LOGO_KUIQTRANS_HEADER);
   });
+});
+
+describe("logo real y marca de agua — sin firma en ningún documento", () => {
+  it.each([["KuiqTrans", KUIQ, [LOGO_KUIQTRANS_HEADER, LOGO_KUIQTRANS_WATERMARK]], ["Mónaco", MONACO, [LOGO_MONACO]]] as const)(
+    "%s: el logo dibujado es el archivo REAL en public/brands (mismo buffer, nunca redibujado con texto)",
+    async (_marca, base, buffersEsperados) => {
+      const { imagenes } = await generar(base);
+      for (const esperado of buffersEsperados) expect(imagenes).toContain(esperado);
+    },
+  );
+
+  it.each([["KuiqTrans", KUIQ], ["Mónaco", MONACO]] as const)(
+    "%s: el documento se emite y se envía en digital — sin bloque de firma, línea para firmar ni «Equipo Comercial»",
+    async (_marca, base) => {
+      const { todo } = await generar(base);
+      for (const prohibido of ["Atentamente", "Equipo Comercial", "_________"]) expect(todo).not.toContain(prohibido);
+      expect(todo).not.toMatch(/\bfirma\b/i); // palabra completa: no confunde con "confirmación"
+    },
+  );
+});
+
+describe("PDF multipágina — la marca de agua y el branding se repiten en cada página", () => {
+  // Se distingue del logo del encabezado por el ANCHO con el que se pidió dibujarla (el ancho de
+  // destino de la marca de agua, ver marcaDeAgua en cada plantilla) — necesario porque Mónaco
+  // reutiliza el MISMO archivo (LOGO_MONACO) para encabezado y marca de agua.
+  it.each([["KuiqTrans", KUIQ, 260], ["Mónaco", MONACO, 420]] as const)(
+    "%s: una marca de agua por página, todas centradas en el centro físico (no solo en la primera)",
+    async (_marca, base, anchoMarcaDeAgua) => {
+      const doc = construirDocumentoComercial({
+        ...base,
+        observaciones: Array.from({ length: 80 }, (_, i) => `Observación larga número ${i + 1} para forzar varias páginas de contenido real.`).join("\n"),
+      });
+      const espiaImagen = vi.spyOn(PDFDocument.prototype, "image");
+      const render = base.documentoEmisor === "MONACO" ? cotizacionPdfMonaco : cotizacionPdfKuiqtrans;
+      const buffer = await render(doc);
+      const totalPaginas = paginas(buffer);
+      expect(totalPaginas).toBeGreaterThan(1);
+      const llamadasWatermark = espiaImagen.mock.calls.filter(([, , , opts]) => (opts as { width?: number } | undefined)?.width === anchoMarcaDeAgua);
+      expect(llamadasWatermark).toHaveLength(totalPaginas);
+      // Todas al MISMO centro físico (mismo x/y en cada página: el centrado no depende del contenido).
+      const posiciones = new Set(llamadasWatermark.map(([, x, y]) => `${x},${y}`));
+      expect(posiciones.size).toBe(1);
+    },
+  );
 });
 
 describe.each([["KUIQTRANS", KUIQ], ["MONACO", MONACO]] as const)("contenido comercial — %s", (_marca, base) => {

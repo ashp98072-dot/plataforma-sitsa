@@ -35,7 +35,7 @@ const denegado = () => ({ error: NextResponse.json({ error: "Sin permiso para el
 const PAYLOAD = { perfilId: 4, distanciaKm: 600, diasServicio: 1, cantidadPilotos: 2, cantidadAuxiliares: 2, incluirGps: true, incluirSeguroVehiculo: true };
 const CALCULAR = { ...PAYLOAD, fechaEmision: "2026-09-21", tarifaCotizada: 5000, incluyeIva: false };
 const PREPARADO = { perfil: { id: 4, codigo: "CABEZAL", nombre: "Cabezal" }, input: {}, resultado: { costoOperativo: 3907.2 }, parametrosVigenteDesde: "2026-09-21" };
-const COTIZACION = { fechaEmision: "2026-09-21", clienteId: 3, tarifaCotizada: 5000, incluyeIva: false };
+const COTIZACION = { fechaEmision: "2026-09-21", clienteId: 3, tarifaCotizada: 5000, incluyeIva: false, mensajeComercial: "Mensaje de prueba.", cierreComercial: "Cierre de prueba." };
 
 beforeEach(() => {
   vi.resetAllMocks();

@@ -1,5 +1,6 @@
 import PDFDocument from "pdfkit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { LOGO_KUIQTRANS_HEADER, LOGO_MONACO } from "@/lib/tms/cotizacion-pdf-assets";
 
 vi.mock("@/lib/db", () => ({ getPool: vi.fn(), query: vi.fn(), execute: vi.fn() }));
 vi.mock("@/lib/auditoria", () => ({ registrarAuditoriaTx: vi.fn() }));
@@ -98,11 +99,14 @@ describe("POST /tms/cotizaciones/[id]/duplicar", () => {
 
 describe("GET /tms/cotizaciones/[id]/pdf", () => {
   const texto = async (fn: () => Promise<Response>) => {
-    const espia = vi.spyOn(PDFDocument.prototype, "text");
+    const espiaTexto = vi.spyOn(PDFDocument.prototype, "text");
+    const espiaImagen = vi.spyOn(PDFDocument.prototype, "image");
     const res = await fn();
-    const textos = espia.mock.calls.map((c) => String(c[0]));
-    espia.mockRestore();
-    return { res, textos };
+    const textos = espiaTexto.mock.calls.map((c) => String(c[0]));
+    const imagenes = espiaImagen.mock.calls.map((c) => c[0]);
+    espiaTexto.mockRestore();
+    espiaImagen.mockRestore();
+    return { res, textos, imagenes };
   };
 
   it("nombre de archivo COT-000123-Monaco.pdf, PDF válido, sin caché", async () => {
@@ -114,19 +118,19 @@ describe("GET /tms/cotizaciones/[id]/pdf", () => {
     expect(Buffer.from(await res.arrayBuffer()).subarray(0, 4).toString("latin1")).toBe("%PDF");
   });
 
-  it("KUIQTRANS => COT-000123-KuiqTrans.pdf y plantilla KuiqTrans, aunque la empresa activa se llame «Kuiqtrans / Logiservicios Mónaco»", async () => {
+  it("KUIQTRANS => COT-000123-KuiqTrans.pdf y plantilla KuiqTrans (logo real), aunque la empresa activa se llame «Kuiqtrans / Logiservicios Mónaco»", async () => {
     vi.mocked(obtenerCotizacion).mockResolvedValue({ ...COTIZACION_DOC, documentoEmisor: "KUIQTRANS" });
-    const { res, textos } = await texto(() => pdf(new Request("http://x/api"), ctx()));
+    const { res, textos, imagenes } = await texto(() => pdf(new Request("http://x/api"), ctx()));
     expect(res.headers.get("Content-Disposition")).toContain("COT-000123-KuiqTrans.pdf");
-    expect(textos).toContain("KuiqTrans");
-    expect(textos).not.toContain("LOGISERVICIOS");
+    expect(imagenes).toContain(LOGO_KUIQTRANS_HEADER);
+    expect(imagenes).not.toContain(LOGO_MONACO);
     expect(textos.join("\n")).not.toContain("Kuiqtrans / Logiservicios Mónaco"); // el nombre de la empresa activa no se imprime ni decide
   });
 
-  it("la marca guardada manda aunque cambien los defaults: MONACO sigue saliendo como Mónaco", async () => {
-    const { textos } = await texto(() => pdf(new Request("http://x/api"), ctx()));
-    expect(textos).toContain("LOGISERVICIOS");
-    expect(textos).not.toContain("KuiqTrans");
+  it("la marca guardada manda aunque cambien los defaults: MONACO sigue saliendo con el logo de Mónaco", async () => {
+    const { imagenes } = await texto(() => pdf(new Request("http://x/api"), ctx()));
+    expect(imagenes).toContain(LOGO_MONACO);
+    expect(imagenes).not.toContain(LOGO_KUIQTRANS_HEADER);
   });
 
   it("aislamiento por empresa: relee la cotización con la empresa de la sesión; 404 si no existe en ella", async () => {

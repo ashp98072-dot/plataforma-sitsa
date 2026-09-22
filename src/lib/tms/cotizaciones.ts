@@ -6,6 +6,7 @@ import { guardarSnapshotCosteoTx, type CosteoPreparado } from "./cotizacion-cost
 import {
   DOCUMENTO_EMISOR_DEFAULT,
   LIMITE_TEXTO_DOCUMENTO,
+  LIMITE_TEXTO_MENSAJE_COMERCIAL,
   esDocumentoEmisor,
   normalizarDocumentoEmisor,
   textoOpcional,
@@ -120,6 +121,9 @@ export type Cotizacion = {
   atencionNombre: string | null;
   atencionCargo: string | null;
   unidadDescripcion: string | null;
+  /** Snapshot del texto del PDF — ver mensajeComercial en cotizacion-documento.ts (fallback determinista si es null). */
+  mensajeComercial: string | null;
+  cierreComercial: string | null;
   creadoPor: string | null;
   creadoEn: string | null;
   actualizadoEn: string | null;
@@ -156,6 +160,8 @@ function mapRow(r: RowDataPacket): Cotizacion {
     atencionNombre: r.atencion_nombre != null ? String(r.atencion_nombre) : null,
     atencionCargo: r.atencion_cargo != null ? String(r.atencion_cargo) : null,
     unidadDescripcion: r.unidad_descripcion != null ? String(r.unidad_descripcion) : null,
+    mensajeComercial: r.mensaje_comercial != null ? String(r.mensaje_comercial) : null,
+    cierreComercial: r.cierre_comercial != null ? String(r.cierre_comercial) : null,
     creadoPor: r.creado_por != null ? String(r.creado_por) : null,
     creadoEn: r.creado_en != null ? String(r.creado_en) : null,
     actualizadoEn: r.actualizado_en != null ? String(r.actualizado_en) : null,
@@ -170,6 +176,7 @@ const SELECT = `
          piloto_incluido, gps_incluido, seguro_mercaderia_incluido, seguro_terceros_incluido, servicio_refrigerado,
          km_incluidos, tarifa_km_adicional, condiciones_adicionales, observaciones,
          documento_emisor, atencion_nombre, atencion_cargo, unidad_descripcion,
+         mensaje_comercial, cierre_comercial,
          creado_por, creado_en, actualizado_en
   FROM tms_cotizaciones
 `;
@@ -222,6 +229,9 @@ export type CotizacionInput = {
   atencionNombre?: string | null;
   atencionCargo?: string | null;
   unidadDescripcion?: string | null;
+  /** Snapshot del texto del PDF; si se omite al CREAR, el llamador (route.ts) resuelve el default de Ajustes/fallback antes de llamar. */
+  mensajeComercial?: string | null;
+  cierreComercial?: string | null;
 };
 
 type SnapshotRuta = {
@@ -285,12 +295,24 @@ function validarTextosDocumento(input: Pick<CotizacionInput, "atencionNombre" | 
   }
 }
 
-function validarInput(input: Pick<CotizacionInput, "fechaEmision" | "tarifaCotizada" | "clienteId" | "documentoEmisor" | "atencionNombre" | "atencionCargo" | "unidadDescripcion">) {
+/** Mensaje/cierre comercial: opcionales; con texto, no pueden exceder LIMITE_TEXTO_MENSAJE_COMERCIAL. */
+function validarMensajesComerciales(input: Pick<CotizacionInput, "mensajeComercial" | "cierreComercial">) {
+  for (const [valor, etiqueta] of [
+    [input.mensajeComercial, "El mensaje para el cliente"], [input.cierreComercial, "El cierre comercial"],
+  ] as const) {
+    if ((textoOpcional(valor)?.length ?? 0) > LIMITE_TEXTO_MENSAJE_COMERCIAL) {
+      throw new Error(`${etiqueta} no puede exceder ${LIMITE_TEXTO_MENSAJE_COMERCIAL} caracteres.`);
+    }
+  }
+}
+
+function validarInput(input: Pick<CotizacionInput, "fechaEmision" | "tarifaCotizada" | "clienteId" | "documentoEmisor" | "atencionNombre" | "atencionCargo" | "unidadDescripcion" | "mensajeComercial" | "cierreComercial">) {
   if (!input.clienteId) throw new Error("Cliente requerido.");
   if (!input.fechaEmision) throw new Error("Fecha de emisión requerida.");
   if (!(input.tarifaCotizada > 0)) throw new Error("La tarifa cotizada debe ser mayor a cero.");
   validarDocumentoEmisor(input.documentoEmisor);
   validarTextosDocumento(input);
+  validarMensajesComerciales(input);
 }
 
 /**
@@ -322,8 +344,9 @@ export async function crearCotizacion(
          tarifa_referencia, tarifa_cotizada, incluye_iva, fecha_emision, fecha_vencimiento,
          piloto_incluido, gps_incluido, seguro_mercaderia_incluido, seguro_terceros_incluido, servicio_refrigerado,
          km_incluidos, tarifa_km_adicional, condiciones_adicionales, observaciones, creado_por,
-         documento_emisor, atencion_nombre, atencion_cargo, unidad_descripcion)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         documento_emisor, atencion_nombre, atencion_cargo, unidad_descripcion,
+         mensaje_comercial, cierre_comercial)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         empresaId,
         "", // se completa abajo, mismo criterio que fondos.ts (código derivado del id, sin condición de carrera)
@@ -352,6 +375,8 @@ export async function crearCotizacion(
         textoOpcional(input.atencionNombre),
         textoOpcional(input.atencionCargo),
         textoOpcional(input.unidadDescripcion),
+        textoOpcional(input.mensajeComercial),
+        textoOpcional(input.cierreComercial),
       ],
     );
     cotizacionId = Number(r.insertId);
@@ -410,6 +435,7 @@ export async function actualizarCotizacion(
     if (!(tarifaCotizada > 0)) throw new Error("La tarifa cotizada debe ser mayor a cero.");
     validarDocumentoEmisor(cambios.documentoEmisor);
     validarTextosDocumento(cambios);
+    validarMensajesComerciales(cambios);
 
     const origenTexto = cambios.origenTexto !== undefined
       ? (cambios.origenTexto?.trim() || snapshot?.origenDefault || null)
@@ -425,7 +451,8 @@ export async function actualizarCotizacion(
          fecha_emision = ?, fecha_vencimiento = ?, piloto_incluido = ?, gps_incluido = ?,
          seguro_mercaderia_incluido = ?, seguro_terceros_incluido = ?, servicio_refrigerado = ?, km_incluidos = ?, tarifa_km_adicional = ?,
          condiciones_adicionales = ?, observaciones = ?,
-         documento_emisor = ?, atencion_nombre = ?, atencion_cargo = ?, unidad_descripcion = ?
+         documento_emisor = ?, atencion_nombre = ?, atencion_cargo = ?, unidad_descripcion = ?,
+         mensaje_comercial = ?, cierre_comercial = ?
        WHERE id = ? AND empresa_id = ?`,
       [
         clienteId,
@@ -452,6 +479,8 @@ export async function actualizarCotizacion(
         cambios.atencionNombre !== undefined ? textoOpcional(cambios.atencionNombre) : actual.atencionNombre,
         cambios.atencionCargo !== undefined ? textoOpcional(cambios.atencionCargo) : actual.atencionCargo,
         cambios.unidadDescripcion !== undefined ? textoOpcional(cambios.unidadDescripcion) : actual.unidadDescripcion,
+        cambios.mensajeComercial !== undefined ? textoOpcional(cambios.mensajeComercial) : actual.mensajeComercial,
+        cambios.cierreComercial !== undefined ? textoOpcional(cambios.cierreComercial) : actual.cierreComercial,
         id,
         empresaId,
       ],
@@ -544,5 +573,7 @@ export async function duplicarCotizacion(
     atencionNombre: original.atencionNombre,
     atencionCargo: original.atencionCargo,
     unidadDescripcion: original.unidadDescripcion,
+    mensajeComercial: original.mensajeComercial,
+    cierreComercial: original.cierreComercial,
   }, creadoPor);
 }
