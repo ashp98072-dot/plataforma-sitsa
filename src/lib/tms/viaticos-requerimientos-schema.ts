@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DOCUMENTOS_EMISOR, MARCAS_DOCUMENTO, type DocumentoEmisor } from "./cotizacion-documento";
 
 export const ESTADOS_REQUERIMIENTO_VIATICO = ["BORRADOR", "PENDIENTE", "AUTORIZADO", "RECHAZADO", "ENTREGADO", "LIQUIDADO"] as const;
 export const METODOS_ENTREGA_VIATICO = ["EFECTIVO", "TRANSFERENCIA", "CHEQUE"] as const;
@@ -16,10 +17,15 @@ export const lineaRequerimientoViaticoSchema = z.object({
 }).strict();
 
 export const guardarRequerimientoViaticoSchema = z.object({
-  fechaRequerimiento: fecha, requirenteUsuarioId: id,
+  fechaRequerimiento: fecha, empresaRequirente: z.enum(DOCUMENTOS_EMISOR), requirenteUsuarioId: id,
   observaciones: opcional(10000),
   version: id.optional(), lineas: z.array(lineaRequerimientoViaticoSchema).min(1, "Agrega al menos una línea.").max(300),
 }).strict();
+
+/** Convierte la clave cerrada validada en el snapshot comercial persistido. */
+export function nombreEmpresaRequirente(clave: DocumentoEmisor): string {
+  return MARCAS_DOCUMENTO[clave].nombre;
+}
 
 export const transicionRequerimientoViaticoSchema = z.discriminatedUnion("accion", [
   z.object({ accion: z.literal("enviar"), version: id }).strict(),

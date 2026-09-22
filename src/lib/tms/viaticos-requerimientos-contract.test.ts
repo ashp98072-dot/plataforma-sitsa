@@ -10,4 +10,5 @@ describe("contrato SQL y aislamiento",()=>{
   it("firma el total real seleccionado y nunca undefined",()=>{expect(model).toContain("SELECT estado,version,total FROM tms_viatico_requerimientos");expect(model).toContain('total:actual.total');});
   it("POST fija BORRADOR y PATCH de contenido no escribe estado",()=>{expect(model).toContain("'BORRADOR'");const update=model.match(/UPDATE tms_viatico_requerimientos SET fecha_requerimiento=[\s\S]*?\`,/)?.[0]||"";expect(update).not.toContain("estado=?");expect(model).toContain('enviar:{desde:["BORRADOR"],hacia:"PENDIENTE"}');});
   it("persiste fechas separadas y valida tenant de cliente/vehículo",()=>{expect(model).toContain("fecha_solicitud,fecha_viaje");expect(model).toContain("flota_vehiculos WHERE empresa_id=? AND id=?");expect(model).toContain("tms_clientes WHERE empresa_id=? AND id=?");});
+  it("resuelve el snapshot de empresa desde la clave cerrada y no desde el tenant",()=>{expect(model).toContain("nombreEmpresaRequirente(datos.empresaRequirente)");expect(model).not.toContain("empresaNombre");});
 });

@@ -8,7 +8,7 @@ import { leerBytesFirmaGuardada } from "@/lib/firmas/usuario-firmas";
 import { crearFirmaInterna } from "@/lib/firmas/firmas-internas";
 import { esPngValido, sha256Hex } from "@/lib/firmas/imagen-firma";
 import { borrarUpload, guardarUpload } from "@/lib/uploads";
-import type { GuardarRequerimientoViatico, RequerimientoViatico, TransicionRequerimientoViatico } from "./viaticos-requerimientos-schema";
+import { nombreEmpresaRequirente, type GuardarRequerimientoViatico, type RequerimientoViatico, type TransicionRequerimientoViatico } from "./viaticos-requerimientos-schema";
 
 export class ErrorRequerimientoViatico extends Error { constructor(message: string, public status = 400) { super(message); } }
 const CENTAVOS_MAX = 99999999999999;
@@ -64,7 +64,7 @@ async function snapshotLinea(conn: PoolConnection, empresaId: number, l: Guardar
   return { l, p:p[0], placa:v[0]?.placa ?? null, cliente:c[0]?.nombre ?? null, sugerido:dinero(sugerido), total:dinero(total) };
 }
 
-export async function guardarRequerimientoViatico(empresaId:number, usuarioId:number, usuarioNombre:string, empresaNombre:string, datos:GuardarRequerimientoViatico, id?:number) {
+export async function guardarRequerimientoViatico(empresaId:number, usuarioId:number, usuarioNombre:string, datos:GuardarRequerimientoViatico, id?:number) {
   const conn = await getPool().getConnection();
   try {
     await conn.beginTransaction();
@@ -79,12 +79,12 @@ export async function guardarRequerimientoViatico(empresaId:number, usuarioId:nu
       if (!actual[0]) throw new ErrorRequerimientoViatico("Requerimiento no encontrado.",404);
       if (!["BORRADOR","PENDIENTE"].includes(String(actual[0].estado))) throw new ErrorRequerimientoViatico("El requerimiento ya está congelado y no puede editarse.",409);
       if (Number(actual[0].version)!==datos.version) throw new ErrorRequerimientoViatico("El requerimiento cambió; recarga la página.",409);
-      await conn.execute(`UPDATE tms_viatico_requerimientos SET fecha_requerimiento=?,requirente_usuario_id=?,requirente_nombre_snapshot=?,total=?,observaciones=?,version=version+1 WHERE empresa_id=? AND id=?`,[datos.fechaRequerimiento,datos.requirenteUsuarioId,requirente.nombre,dinero(total),datos.observaciones,empresaId,id]);
+      await conn.execute(`UPDATE tms_viatico_requerimientos SET fecha_requerimiento=?,empresa_requirente_nombre=?,requirente_usuario_id=?,requirente_nombre_snapshot=?,total=?,observaciones=?,version=version+1 WHERE empresa_id=? AND id=?`,[datos.fechaRequerimiento,nombreEmpresaRequirente(datos.empresaRequirente),datos.requirenteUsuarioId,requirente.nombre,dinero(total),datos.observaciones,empresaId,id]);
       await conn.execute(`DELETE FROM tms_viatico_requerimiento_lineas WHERE empresa_id=? AND requerimiento_id=?`,[empresaId,id]);
     } else {
       const [sol] = await conn.query<RowDataPacket[]>(`SELECT nombre FROM usuarios WHERE id=? AND activo=1 LIMIT 1`,[usuarioId]);
       const temporal=`TMP-${randomUUID()}`;
-      const [r] = await conn.execute<ResultSetHeader>(`INSERT INTO tms_viatico_requerimientos (empresa_id,codigo,fecha_requerimiento,empresa_requirente_nombre,requirente_usuario_id,requirente_nombre_snapshot,solicitante_usuario_id,solicitante_nombre_snapshot,estado,total,observaciones,creado_por) VALUES (?,?,?,?,?,?,?,?,'BORRADOR',?,?,?)`,[empresaId,temporal,datos.fechaRequerimiento,empresaNombre,datos.requirenteUsuarioId,requirente.nombre,usuarioId,String(sol[0]?.nombre||usuarioNombre),dinero(total),datos.observaciones,usuarioId]);
+      const [r] = await conn.execute<ResultSetHeader>(`INSERT INTO tms_viatico_requerimientos (empresa_id,codigo,fecha_requerimiento,empresa_requirente_nombre,requirente_usuario_id,requirente_nombre_snapshot,solicitante_usuario_id,solicitante_nombre_snapshot,estado,total,observaciones,creado_por) VALUES (?,?,?,?,?,?,?,?,'BORRADOR',?,?,?)`,[empresaId,temporal,datos.fechaRequerimiento,nombreEmpresaRequirente(datos.empresaRequirente),datos.requirenteUsuarioId,requirente.nombre,usuarioId,String(sol[0]?.nombre||usuarioNombre),dinero(total),datos.observaciones,usuarioId]);
       reqId=r.insertId; const codigo=`VR-${new Date().getFullYear()}-${String(reqId).padStart(6,"0")}`;
       await conn.execute(`UPDATE tms_viatico_requerimientos SET codigo=? WHERE empresa_id=? AND id=?`,[codigo,empresaId,reqId]);
     }
