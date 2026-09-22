@@ -9,24 +9,36 @@ import { join } from "node:path";
  * public/brands/monaco/logo.png        — encabezado y marca de agua (mismo
  *                                          archivo: el fondo de la imagen ya
  *                                          es blanco, igual que la hoja).
- * public/brands/kuiqtrans/logo-header.png     — lockup completo (ícono +
- *                                          "KUIQTRANS" + slogan) sobre el
- *                                          azul de marca, para el encabezado.
+ * public/brands/kuiqtrans/logo-header.png     — lockup horizontal completo
+ *                                          (ícono + "KUIQTRANS" + slogan),
+ *                                          recorte con bbox exacto de un PNG
+ *                                          con transparencia real entregado
+ *                                          por negocio (1037×301 — mucho más
+ *                                          resolución que el mínimo necesario
+ *                                          en el PDF, para que no se vea
+ *                                          pixelado ni ampliado). Se dibuja
+ *                                          sobre fondo blanco (ver
+ *                                          cotizacion-pdf-kuiqtrans.ts): el
+ *                                          asset oficial es texto oscuro
+ *                                          sobre transparente, nunca se
+ *                                          recoloreó para forzarlo sobre un
+ *                                          fondo azul.
  * public/brands/kuiqtrans/logo-watermark.png  — SOLO el ícono circular,
- *                                          recortado y con el fondo azul ya
- *                                          enmascarado a transparente y el
- *                                          trazo horneado a opacidad baja en
- *                                          el propio PNG (no depende de
+ *                                          recortado (445×443) del mismo PNG
+ *                                          con transparencia real. El canal
+ *                                          alfa original se escaló a ~8% de
+ *                                          opacidad y quedó horneado en el
+ *                                          propio PNG (no depende de
  *                                          `doc.opacity()` sobre un fondo
- *                                          coloreado).
+ *                                          coloreado, y el fondo detrás del
+ *                                          ícono es transparencia real, no
+ *                                          una máscara por luminancia).
  *
- * IMPORTANTE — origen de estos archivos: negocio proporcionó como
- * referencia el diseño OFICIAL completo de cada marca (una propuesta ya
- * maquetada), no el logotipo aislado en un archivo vectorial/transparente
- * separado. Estos PNG son un RECORTE de esa referencia — el logo real, tal
- * cual, no una reconstrucción — pero no un asset vectorial oficial. Si
- * negocio entrega más adelante el archivo oficial (PNG con fondo
- * transparente o SVG), basta reemplazar estos 3 archivos sin tocar código.
+ * Ambos archivos de KuiqTrans son un RECORTE del logo oficial que entregó
+ * negocio (PNG de alta resolución con transparencia real) — el logo tal
+ * cual, en su color y proporción originales, nunca una reconstrucción
+ * tipográfica ni un recoloreo. Si negocio entrega más adelante un SVG
+ * oficial, basta reemplazar estos archivos sin tocar código.
  */
 const RAIZ_MARCAS = join(process.cwd(), "public", "brands");
 

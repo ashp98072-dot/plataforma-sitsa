@@ -90,6 +90,29 @@ export function calcularIva(tarifaCotizada: number, incluyeIva: boolean): Desglo
   return { subtotal: redondear(tarifaCotizada), iva: redondear(iva), total: redondear(tarifaCotizada + iva) };
 }
 
+/**
+ * Línea ADICIONAL de una cotización con varias rutas/destinos (tabla
+ * tms_cotizacion_lineas, ver sql/migrate-2026-09-cotizaciones-lineas.sql).
+ * La línea PRINCIPAL (orden 1) nunca vive aquí: son las propias columnas
+ * origenTexto/destinoTexto/unidadDescripcion/tarifaCotizada de la
+ * cotización — el costeo interno solo lee esas, nunca esta tabla.
+ */
+export type LineaAdicional = {
+  id: number;
+  orden: number;
+  origenTexto: string | null;
+  destinoTexto: string | null;
+  unidadDescripcion: string | null;
+  tarifaCotizada: number;
+};
+
+export type LineaAdicionalInput = {
+  origenTexto?: string | null;
+  destinoTexto?: string | null;
+  unidadDescripcion?: string | null;
+  tarifaCotizada: number;
+};
+
 export type Cotizacion = {
   id: number;
   empresaId: number;
@@ -127,9 +150,43 @@ export type Cotizacion = {
   creadoPor: string | null;
   creadoEn: string | null;
   actualizadoEn: string | null;
+  /** Rutas/destinos adicionales a la línea principal (orden 2 en adelante). Ver LineaAdicional. */
+  lineasAdicionales: LineaAdicional[];
 };
 
-function mapRow(r: RowDataPacket): Cotizacion {
+function mapLineaRow(r: RowDataPacket): LineaAdicional {
+  return {
+    id: Number(r.id),
+    orden: Number(r.orden),
+    origenTexto: r.origen_texto != null ? String(r.origen_texto) : null,
+    destinoTexto: r.destino_texto != null ? String(r.destino_texto) : null,
+    unidadDescripcion: r.unidad_descripcion != null ? String(r.unidad_descripcion) : null,
+    tarifaCotizada: Number(r.tarifa_cotizada ?? 0),
+  };
+}
+
+/** Trae las líneas adicionales de varias cotizaciones en una sola consulta (aislada por empresa_id). */
+async function lineasDeCotizaciones(empresaId: number, cotizacionIds: number[]): Promise<Map<number, LineaAdicional[]>> {
+  const mapa = new Map<number, LineaAdicional[]>();
+  if (!cotizacionIds.length) return mapa;
+  const placeholders = cotizacionIds.map(() => "?").join(",");
+  const rows = await query<RowDataPacket[]>(
+    `SELECT id, cotizacion_id, orden, origen_texto, destino_texto, unidad_descripcion, tarifa_cotizada
+     FROM tms_cotizacion_lineas
+     WHERE empresa_id = ? AND cotizacion_id IN (${placeholders})
+     ORDER BY cotizacion_id, orden`,
+    [empresaId, ...cotizacionIds],
+  );
+  for (const r of rows) {
+    const cotizacionId = Number(r.cotizacion_id);
+    const arr = mapa.get(cotizacionId) ?? [];
+    arr.push(mapLineaRow(r));
+    mapa.set(cotizacionId, arr);
+  }
+  return mapa;
+}
+
+function mapRow(r: RowDataPacket): Omit<Cotizacion, "lineasAdicionales"> {
   return {
     id: Number(r.id),
     empresaId: Number(r.empresa_id),
@@ -199,12 +256,17 @@ export async function listarCotizaciones(empresaId: number, filtros: FiltrosCoti
     `${SELECT} WHERE ${condiciones.join(" AND ")} ORDER BY fecha_emision DESC, id DESC`,
     params,
   );
-  return rows.map(mapRow);
+  const cotizaciones = rows.map(mapRow);
+  const mapaLineas = await lineasDeCotizaciones(empresaId, cotizaciones.map((c) => c.id));
+  return cotizaciones.map((c) => ({ ...c, lineasAdicionales: mapaLineas.get(c.id) ?? [] }));
 }
 
 export async function obtenerCotizacion(empresaId: number, id: number): Promise<Cotizacion | null> {
   const rows = await query<RowDataPacket[]>(`${SELECT} WHERE id = ? AND empresa_id = ? LIMIT 1`, [id, empresaId]);
-  return rows[0] ? mapRow(rows[0]) : null;
+  if (!rows[0]) return null;
+  const cotizacion = mapRow(rows[0]);
+  const mapaLineas = await lineasDeCotizaciones(empresaId, [cotizacion.id]);
+  return { ...cotizacion, lineasAdicionales: mapaLineas.get(cotizacion.id) ?? [] };
 }
 
 export type CotizacionInput = {
@@ -232,6 +294,15 @@ export type CotizacionInput = {
   /** Snapshot del texto del PDF; si se omite al CREAR, el llamador (route.ts) resuelve el default de Ajustes/fallback antes de llamar. */
   mensajeComercial?: string | null;
   cierreComercial?: string | null;
+  /**
+   * Rutas/destinos adicionales a la línea principal (orden 2 en adelante).
+   * CREAR: si se omite, la cotización queda con una sola línea (comportamiento
+   * de siempre). EDITAR (CotizacionUpdate = Partial<CotizacionInput>): si se
+   * omite (undefined), las líneas existentes NO se tocan; si se manda un
+   * arreglo (incluido vacío []), REEMPLAZA por completo las líneas
+   * adicionales existentes — nunca se intenta diffear id por id.
+   */
+  lineasAdicionales?: LineaAdicionalInput[];
 };
 
 type SnapshotRuta = {
@@ -306,6 +377,32 @@ function validarMensajesComerciales(input: Pick<CotizacionInput, "mensajeComerci
   }
 }
 
+const LIMITE_LINEAS_ADICIONALES = 50;
+/** Mismo límite que las columnas origen_texto/destino_texto de tms_cotizaciones (VARCHAR(300)). */
+const LIMITE_TEXTO_UBICACION = 300;
+
+/** Rutas/destinos adicionales: precio > 0 y textos dentro del límite de columna — igual criterio que la línea principal. */
+function validarLineasAdicionales(lineas: LineaAdicionalInput[] | undefined) {
+  if (lineas === undefined) return;
+  if (lineas.length > LIMITE_LINEAS_ADICIONALES) {
+    throw new Error(`No se pueden agregar más de ${LIMITE_LINEAS_ADICIONALES} líneas adicionales.`);
+  }
+  lineas.forEach((linea, i) => {
+    const numero = i + 2; // la línea 1 es siempre la principal
+    if (!(linea.tarifaCotizada > 0)) throw new Error(`El precio de la línea ${numero} debe ser mayor a cero.`);
+    for (const [valor, etiqueta] of [
+      [linea.origenTexto, "El punto de carga"], [linea.destinoTexto, "El punto de descarga"],
+    ] as const) {
+      if ((textoOpcional(valor)?.length ?? 0) > LIMITE_TEXTO_UBICACION) {
+        throw new Error(`${etiqueta} de la línea ${numero} no puede exceder ${LIMITE_TEXTO_UBICACION} caracteres.`);
+      }
+    }
+    if ((textoOpcional(linea.unidadDescripcion)?.length ?? 0) > LIMITE_TEXTO_DOCUMENTO) {
+      throw new Error(`La unidad de la línea ${numero} no puede exceder ${LIMITE_TEXTO_DOCUMENTO} caracteres.`);
+    }
+  });
+}
+
 function validarInput(input: Pick<CotizacionInput, "fechaEmision" | "tarifaCotizada" | "clienteId" | "documentoEmisor" | "atencionNombre" | "atencionCargo" | "unidadDescripcion" | "mensajeComercial" | "cierreComercial">) {
   if (!input.clienteId) throw new Error("Cliente requerido.");
   if (!input.fechaEmision) throw new Error("Fecha de emisión requerida.");
@@ -313,6 +410,25 @@ function validarInput(input: Pick<CotizacionInput, "fechaEmision" | "tarifaCotiz
   validarDocumentoEmisor(input.documentoEmisor);
   validarTextosDocumento(input);
   validarMensajesComerciales(input);
+}
+
+/** INSERT puro (sin DELETE previo) — usado al crear. orden empieza en 2 (1 es la línea principal). */
+async function insertarLineasAdicionalesTx(conn: PoolConnection, empresaId: number, cotizacionId: number, lineas: LineaAdicionalInput[]): Promise<void> {
+  let orden = 2;
+  for (const linea of lineas) {
+    await executeConn(conn,
+      `INSERT INTO tms_cotizacion_lineas (empresa_id, cotizacion_id, orden, origen_texto, destino_texto, unidad_descripcion, tarifa_cotizada)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [empresaId, cotizacionId, orden, textoOpcional(linea.origenTexto), textoOpcional(linea.destinoTexto), textoOpcional(linea.unidadDescripcion), linea.tarifaCotizada],
+    );
+    orden += 1;
+  }
+}
+
+/** Reemplazo completo — usado al editar (DELETE + INSERT en la misma transacción; nunca UPDATE id por id). */
+async function reemplazarLineasAdicionalesTx(conn: PoolConnection, empresaId: number, cotizacionId: number, lineas: LineaAdicionalInput[]): Promise<void> {
+  await executeConn(conn, "DELETE FROM tms_cotizacion_lineas WHERE empresa_id = ? AND cotizacion_id = ?", [empresaId, cotizacionId]);
+  await insertarLineasAdicionalesTx(conn, empresaId, cotizacionId, lineas);
 }
 
 /**
@@ -329,6 +445,7 @@ export async function crearCotizacion(
   costeo?: CosteoPreparado | null,
 ): Promise<Cotizacion> {
   validarInput(input);
+  validarLineasAdicionales(input.lineasAdicionales);
   const conn = await getPool().getConnection();
   let cotizacionId = 0;
   try {
@@ -382,6 +499,9 @@ export async function crearCotizacion(
     cotizacionId = Number(r.insertId);
     const codigo = `COT-${String(cotizacionId).padStart(6, "0")}`;
     await executeConn(conn, "UPDATE tms_cotizaciones SET codigo = ? WHERE id = ? AND empresa_id = ?", [codigo, cotizacionId, empresaId]);
+    if (input.lineasAdicionales?.length) {
+      await insertarLineasAdicionalesTx(conn, empresaId, cotizacionId, input.lineasAdicionales);
+    }
     await registrarAuditoriaTx(conn, {
       empresaId,
       usuario: creadoPor ?? null,
@@ -436,6 +556,7 @@ export async function actualizarCotizacion(
     validarDocumentoEmisor(cambios.documentoEmisor);
     validarTextosDocumento(cambios);
     validarMensajesComerciales(cambios);
+    validarLineasAdicionales(cambios.lineasAdicionales);
 
     const origenTexto = cambios.origenTexto !== undefined
       ? (cambios.origenTexto?.trim() || snapshot?.origenDefault || null)
@@ -485,6 +606,9 @@ export async function actualizarCotizacion(
         empresaId,
       ],
     );
+    if (cambios.lineasAdicionales !== undefined) {
+      await reemplazarLineasAdicionalesTx(conn, empresaId, id, cambios.lineasAdicionales);
+    }
     if (costeo) {
       await guardarSnapshotCosteoTx(conn, { empresaId, cotizacionId: id, cotizacionCodigo: actual.codigo, usuario: usuario ?? null, costeo });
     }
@@ -575,5 +699,11 @@ export async function duplicarCotizacion(
     unidadDescripcion: original.unidadDescripcion,
     mensajeComercial: original.mensajeComercial,
     cierreComercial: original.cierreComercial,
+    lineasAdicionales: original.lineasAdicionales.map((l) => ({
+      origenTexto: l.origenTexto,
+      destinoTexto: l.destinoTexto,
+      unidadDescripcion: l.unidadDescripcion,
+      tarifaCotizada: l.tarifaCotizada,
+    })),
   }, creadoPor);
 }

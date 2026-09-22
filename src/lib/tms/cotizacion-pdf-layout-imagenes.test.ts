@@ -28,6 +28,34 @@ describe("dimensionesPng — lee el ancho/alto real del PNG (chunk IHDR)", () =>
   });
 });
 
+/** Byte 25 del IHDR (offset fijo: firma 8 + longitud 4 + "IHDR" 4 + ancho 4 + alto 4 + profundidad 1) — 4 o 6 = con canal alfa. */
+function tieneCanalAlfa(buffer: Buffer): boolean {
+  return buffer[25] === 4 || buffer[25] === 6;
+}
+
+describe("AJUSTES FINALES — assets de KuiqTrans son de alta resolución y con transparencia real (nunca un thumbnail pequeño)", () => {
+  it("logo-header.png: suficientemente grande para dibujarse nítido incluso ampliado en el PDF, y con canal alfa", () => {
+    const { width, height } = dimensionesPng(LOGO_KUIQTRANS_HEADER);
+    // La plantilla lo dibuja como mucho a 190pt de ancho (ver cotizacion-pdf-kuiqtrans.ts) — exigir
+    // varias veces esa resolución asegura que nunca se está reescalando hacia arriba un thumbnail.
+    expect(width).toBeGreaterThanOrEqual(190 * 3);
+    expect(height).toBeGreaterThan(0);
+    expect(tieneCanalAlfa(LOGO_KUIQTRANS_HEADER)).toBe(true);
+  });
+
+  it("logo-watermark.png: suficientemente grande para la marca de agua (300pt de ancho) y con canal alfa", () => {
+    const { width } = dimensionesPng(LOGO_KUIQTRANS_WATERMARK);
+    expect(width).toBeGreaterThanOrEqual(300);
+    expect(tieneCanalAlfa(LOGO_KUIQTRANS_WATERMARK)).toBe(true);
+  });
+
+  it("Mónaco no se tocó: sigue siendo el mismo asset de siempre, con dimensiones válidas", () => {
+    const { width, height } = dimensionesPng(LOGO_MONACO);
+    expect(width).toBeGreaterThan(0);
+    expect(height).toBeGreaterThan(0);
+  });
+});
+
 describe("dibujarImagen — ancho fijo, alto proporcional (nunca deforma el logo)", () => {
   it("dibuja con el ancho pedido y devuelve el alto en la MISMA proporción que el PNG real", () => {
     const doc = docDeMentiras();

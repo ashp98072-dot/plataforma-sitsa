@@ -66,6 +66,33 @@ describe("POST /tms/cotizaciones — documento comercial", () => {
   });
 });
 
+describe("POST /tms/cotizaciones — líneas adicionales (varias rutas/destinos)", () => {
+  it("pasa lineasAdicionales tal cual a crearCotizacion", async () => {
+    const lineas = [{ origenTexto: "PriceSmart Pradera", destinoTexto: "PriceSmart Pradera", unidadDescripcion: "1 Tonelada", tarifaCotizada: 937.5 }];
+    const res = await crear(new Request("http://x/api", json({ ...BASE, lineasAdicionales: lineas })), ctx());
+    expect(res.status).toBe(200);
+    expect(vi.mocked(crearCotizacion).mock.calls[0][1].lineasAdicionales).toEqual(lineas);
+  });
+
+  it("rechaza una línea adicional con precio <= 0 (400, sin crear)", async () => {
+    const res = await crear(new Request("http://x/api", json({ ...BASE, lineasAdicionales: [{ tarifaCotizada: 0 }] })), ctx());
+    expect(res.status).toBe(400);
+    expect(crearCotizacion).not.toHaveBeenCalled();
+  });
+
+  it("rechaza más de 50 líneas adicionales (400, sin crear)", async () => {
+    const muchas = Array.from({ length: 51 }, () => ({ tarifaCotizada: 100 }));
+    const res = await crear(new Request("http://x/api", json({ ...BASE, lineasAdicionales: muchas })), ctx());
+    expect(res.status).toBe(400);
+    expect(crearCotizacion).not.toHaveBeenCalled();
+  });
+
+  it("sin lineasAdicionales, el campo llega undefined a la capa de datos (comportamiento de siempre)", async () => {
+    await crear(new Request("http://x/api", json(BASE)), ctx());
+    expect(vi.mocked(crearCotizacion).mock.calls[0][1].lineasAdicionales).toBeUndefined();
+  });
+});
+
 describe("PATCH /tms/cotizaciones/[id] — documento comercial", () => {
   const patch = (body: unknown) => editar(new Request("http://x/api", { ...json(body), method: "PATCH" }), ctx());
 
@@ -86,6 +113,18 @@ describe("PATCH /tms/cotizaciones/[id] — documento comercial", () => {
     const res = await patch({ documentoEmisor: "MONACO" });
     expect(res.status).toBe(400);
     expect((await res.json()).error).toContain("solo mientras está en Borrador");
+  });
+
+  it("líneas adicionales: se pasan tal cual a actualizarCotizacion (incluido [] para vaciarlas)", async () => {
+    const res = await patch({ lineasAdicionales: [] });
+    expect(res.status).toBe(200);
+    expect(vi.mocked(actualizarCotizacion).mock.calls[0][2]).toEqual({ lineasAdicionales: [] });
+  });
+
+  it("líneas adicionales: rechaza precio <= 0 (400, sin llamar a la capa de datos)", async () => {
+    const res = await patch({ lineasAdicionales: [{ tarifaCotizada: -5 }] });
+    expect(res.status).toBe(400);
+    expect(actualizarCotizacion).not.toHaveBeenCalled();
   });
 });
 

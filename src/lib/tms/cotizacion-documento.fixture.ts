@@ -13,4 +13,5 @@ export const COTIZACION_DOC: Cotizacion = {
   // null a propósito: ejercita el fallback determinista de MARCAS_DOCUMENTO (ver construirDocumentoComercial).
   mensajeComercial: null, cierreComercial: null,
   creadoPor: "admin", creadoEn: "2026-09-08 10:00:00", actualizadoEn: null,
+  lineasAdicionales: [],
 };

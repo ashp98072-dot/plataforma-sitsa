@@ -42,7 +42,13 @@ type Cotizacion = {
   atencionCargo: string | null;
   unidadDescripcion: string | null;
   mensajeComercial: string | null;
+  lineasAdicionales: LineaAdicional[];
 };
+
+/** Ruta/destino adicional a la línea principal (varias rutas en una sola cotización, cada una con su propio precio). */
+type LineaAdicional = { id: number; orden: number; origenTexto: string | null; destinoTexto: string | null; unidadDescripcion: string | null; tarifaCotizada: number };
+type LineaForm = { origenTexto: string; destinoTexto: string; unidadDescripcion: string; tarifaCotizada: string };
+const LINEA_FORM_VACIA: LineaForm = { origenTexto: "", destinoTexto: "", unidadDescripcion: "", tarifaCotizada: "" };
 
 const inputCls = "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
 const IVA = 0.12;
@@ -82,6 +88,7 @@ const FORM_VACIO = {
   atencionCargo: "",
   unidadDescripcion: "",
   mensajeComercial: "",
+  lineasAdicionales: [] as LineaForm[],
 };
 
 /**
@@ -198,9 +205,25 @@ export default function CotizacionesPage() {
       atencionCargo: c.atencionCargo ?? "",
       unidadDescripcion: c.unidadDescripcion ?? "",
       mensajeComercial: c.mensajeComercial ?? "",
+      lineasAdicionales: (c.lineasAdicionales ?? []).map((l) => ({
+        origenTexto: l.origenTexto ?? "",
+        destinoTexto: l.destinoTexto ?? "",
+        unidadDescripcion: l.unidadDescripcion ?? "",
+        tarifaCotizada: String(l.tarifaCotizada),
+      })),
     });
     setMensajeTocado(true);
     setMostrarForm(true);
+  }
+
+  function agregarLinea() {
+    setForm((f) => ({ ...f, lineasAdicionales: [...f.lineasAdicionales, { ...LINEA_FORM_VACIA }] }));
+  }
+  function actualizarLinea(indice: number, cambios: Partial<LineaForm>) {
+    setForm((f) => ({ ...f, lineasAdicionales: f.lineasAdicionales.map((l, i) => (i === indice ? { ...l, ...cambios } : l)) }));
+  }
+  function quitarLinea(indice: number) {
+    setForm((f) => ({ ...f, lineasAdicionales: f.lineasAdicionales.filter((_, i) => i !== indice) }));
   }
 
   function aplicarRuta(ruta: RutaOpt) {
@@ -224,6 +247,16 @@ export default function CotizacionesPage() {
     // El id sale solo de elegir un cliente de la lista (o de crearlo): texto suelto nunca guarda clienteId = 0.
     if (!(form.clienteId > 0)) { setError("Selecciona un cliente de la lista o crea uno nuevo."); return; }
     if (!(Number(form.tarifaCotizada) > 0)) { setError("La tarifa cotizada debe ser mayor a cero."); return; }
+    // Filas sin tocar (todas vacías) se descartan solas; una fila con algún dato exige precio > 0, igual que la línea principal.
+    const lineasAdicionales = form.lineasAdicionales
+      .filter((l) => l.origenTexto.trim() || l.destinoTexto.trim() || l.unidadDescripcion.trim() || l.tarifaCotizada.trim())
+      .map((l) => ({
+        origenTexto: l.origenTexto.trim() || null,
+        destinoTexto: l.destinoTexto.trim() || null,
+        unidadDescripcion: l.unidadDescripcion.trim() || null,
+        tarifaCotizada: Number(l.tarifaCotizada),
+      }));
+    if (lineasAdicionales.some((l) => !(l.tarifaCotizada > 0))) { setError("Cada ruta adicional debe tener un precio mayor a cero."); return; }
     const payload = {
       clienteId: form.clienteId,
       rutaId: form.rutaId,
@@ -247,6 +280,9 @@ export default function CotizacionesPage() {
       atencionNombre: form.atencionNombre.trim() || null,
       atencionCargo: form.atencionCargo.trim() || null,
       unidadDescripcion: form.unidadDescripcion.trim() || null,
+      // Siempre se manda: en editar, reemplaza por completo las líneas adicionales guardadas
+      // (incluido vaciarlas si el usuario quitó todas); en crear, [] equivale a no mandarlo.
+      lineasAdicionales,
       // Solo viaja si hay un cálculo vigente que el usuario quiere registrar; el servidor lo RECALCULA.
       ...(costeoPayload ? { costeo: costeoPayload } : {}),
     };
@@ -346,6 +382,33 @@ export default function CotizacionesPage() {
           </div>
           <CotizacionCatalogosRapidos slug={slug} clienteId={form.clienteId} puedeCrearCliente={permisosRapidos.clientes} puedeCrearRuta={permisosRapidos.rutas}
             onCliente={(c) => setForm((f) => ({ ...f, clienteId: c.id, clienteNombre: c.nombre }))} onRuta={aplicarRuta} />
+
+          <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">Rutas adicionales (opcional)</p>
+          <p className="text-[10px] text-[var(--muted)]">
+            La ruta de arriba (Origen/Destino/Unidad/Tarifa cotizada) siempre es la línea 1 del PDF. Agrega aquí más destinos de la misma propuesta — cada uno con su propio precio.
+          </p>
+          <div className="space-y-2">
+            {form.lineasAdicionales.map((l, i) => (
+              <div key={i} className="grid grid-cols-1 gap-2 rounded border border-[var(--border)] p-2 md:grid-cols-5">
+                <label className="text-xs text-[var(--muted)]">Punto de carga
+                  <input className={`${inputCls} mt-0.5 w-full`} value={l.origenTexto} onChange={(e) => actualizarLinea(i, { origenTexto: e.target.value })} />
+                </label>
+                <label className="text-xs text-[var(--muted)]">Punto de descarga
+                  <input className={`${inputCls} mt-0.5 w-full`} value={l.destinoTexto} onChange={(e) => actualizarLinea(i, { destinoTexto: e.target.value })} />
+                </label>
+                <label className="text-xs text-[var(--muted)]">Unidad
+                  <input className={`${inputCls} mt-0.5 w-full`} value={l.unidadDescripcion} onChange={(e) => actualizarLinea(i, { unidadDescripcion: e.target.value })} />
+                </label>
+                <label className="text-xs text-[var(--muted)]">Precio (Q)
+                  <input type="number" min="0.01" step="0.01" className={`${inputCls} mt-0.5 w-full`} value={l.tarifaCotizada} onChange={(e) => actualizarLinea(i, { tarifaCotizada: e.target.value })} />
+                </label>
+                <div className="flex items-end">
+                  <button type="button" className="rounded border border-[var(--border)] px-2 py-1 text-xs text-red-300" onClick={() => quitarLinea(i)}>Quitar ruta</button>
+                </div>
+              </div>
+            ))}
+            <button type="button" className="rounded border border-[var(--border)] px-2 py-1 text-xs text-[var(--accent)]" onClick={agregarLinea}>+ Agregar ruta</button>
+          </div>
 
           <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">B. Presentación comercial</p>
           <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
@@ -476,6 +539,16 @@ export default function CotizacionesPage() {
                 <div><span className="text-[var(--muted)]">Documento emitido por:</span> {MARCAS_DOCUMENTO[c.documentoEmisor]?.nombre ?? c.documentoEmisor}</div>
                 <div><span className="text-[var(--muted)]">Atención:</span> {[c.atencionNombre, c.atencionCargo].filter(Boolean).join(" · ") || "—"}</div>
                 <div><span className="text-[var(--muted)]">Unidad:</span> {c.unidadDescripcion ?? "—"}</div>
+                {c.lineasAdicionales?.length ? (
+                  <div className="md:col-span-3">
+                    <span className="text-[var(--muted)]">Rutas adicionales:</span>
+                    <ul className="ml-4 list-disc">
+                      {c.lineasAdicionales.map((l) => (
+                        <li key={l.id}>{l.origenTexto ?? "—"} → {l.destinoTexto ?? "—"} · {l.unidadDescripcion ?? "—"} · {money(l.tarifaCotizada)}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
                 <div className="md:col-span-3"><span className="text-[var(--muted)]">Mensaje al cliente:</span> {c.mensajeComercial ?? "(predeterminado de la marca)"}</div>
                 <div><span className="text-[var(--muted)]">Tarifa referencia:</span> {money(c.tarifaReferencia)}</div>
                 <div><span className="text-[var(--muted)]">Vigencia:</span> {c.fechaVencimiento ?? "—"}</div>
