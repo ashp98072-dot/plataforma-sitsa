@@ -47,12 +47,18 @@ type Cotizacion = {
 
 /** Ruta/destino adicional a la línea principal (varias rutas en una sola cotización, cada una con su propio precio). */
 type LineaAdicional = { id: number; orden: number; origenTexto: string | null; destinoTexto: string | null; unidadDescripcion: string | null; tarifaCotizada: number };
-type LineaForm = { origenTexto: string; destinoTexto: string; unidadDescripcion: string; tarifaCotizada: string };
-const LINEA_FORM_VACIA: LineaForm = { origenTexto: "", destinoTexto: "", unidadDescripcion: "", tarifaCotizada: "" };
+type LineaForm = { origenTexto: string; destinoTexto: string; unidadDescripcion: string; tarifaCotizada: string; usarUnidadAnterior: boolean };
+const LINEA_FORM_VACIA: LineaForm = { origenTexto: "", destinoTexto: "", unidadDescripcion: "", tarifaCotizada: "", usarUnidadAnterior: false };
 
 const inputCls = "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
 const IVA = 0.12;
 const money = (n: number | null) => (n == null ? "—" : `Q${n.toLocaleString("es-GT", { minimumFractionDigits: 2 })}`);
+
+export function resolverUnidadAnterior(principal: string, lineas: LineaForm[], indice: number): string {
+  if (indice === 0) return principal;
+  const anterior = lineas[indice - 1];
+  return anterior.usarUnidadAnterior ? resolverUnidadAnterior(principal, lineas, indice - 1) : anterior.unidadDescripcion;
+}
 
 function desgloseIva(tarifa: number, incluyeIva: boolean) {
   if (incluyeIva) {
@@ -210,6 +216,7 @@ export default function CotizacionesPage() {
         destinoTexto: l.destinoTexto ?? "",
         unidadDescripcion: l.unidadDescripcion ?? "",
         tarifaCotizada: String(l.tarifaCotizada),
+        usarUnidadAnterior: false,
       })),
     });
     setMensajeTocado(true);
@@ -226,6 +233,10 @@ export default function CotizacionesPage() {
     setForm((f) => ({ ...f, lineasAdicionales: f.lineasAdicionales.filter((_, i) => i !== indice) }));
   }
 
+  function unidadRutaAnterior(indice: number, estado = form) {
+    return resolverUnidadAnterior(estado.unidadDescripcion, estado.lineasAdicionales, indice);
+  }
+
   function aplicarRuta(ruta: RutaOpt) {
     const defaults = aplicarDefaultsRutaCotizacion(
       { tarifaCotizada: form.tarifaCotizada, origenTexto: form.origenTexto, destinoTexto: form.destinoTexto },
@@ -238,6 +249,7 @@ export default function CotizacionesPage() {
       tarifaCotizada: defaults.tarifaCotizada,
       origenTexto: defaults.origenTexto,
       destinoTexto: defaults.destinoTexto,
+      unidadDescripcion: f.unidadDescripcion || ruta.unidadRecurrentePlaca || "",
       servicioRefrigerado: sugerirServicioRefrigerado(f.servicioRefrigerado, ruta.servicioRefrigeradoHabitual),
     }));
   }
@@ -250,10 +262,10 @@ export default function CotizacionesPage() {
     // Filas sin tocar (todas vacías) se descartan solas; una fila con algún dato exige precio > 0, igual que la línea principal.
     const lineasAdicionales = form.lineasAdicionales
       .filter((l) => l.origenTexto.trim() || l.destinoTexto.trim() || l.unidadDescripcion.trim() || l.tarifaCotizada.trim())
-      .map((l) => ({
+      .map((l, indice) => ({
         origenTexto: l.origenTexto.trim() || null,
         destinoTexto: l.destinoTexto.trim() || null,
-        unidadDescripcion: l.unidadDescripcion.trim() || null,
+        unidadDescripcion: (l.usarUnidadAnterior ? unidadRutaAnterior(indice) : l.unidadDescripcion).trim() || null,
         tarifaCotizada: Number(l.tarifaCotizada),
       }));
     if (lineasAdicionales.some((l) => !(l.tarifaCotizada > 0))) { setError("Cada ruta adicional debe tener un precio mayor a cero."); return; }
@@ -354,8 +366,8 @@ export default function CotizacionesPage() {
       {mostrarForm ? (
         <div className="space-y-2 rounded-lg border border-[var(--border)] bg-[var(--panel)] p-3">
           <p className="text-sm font-medium">{editandoId ? "Editar cotización (solo en Borrador)" : "Nueva cotización"}</p>
-          <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">A. Cliente y ruta</p>
-          <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">A. Cliente y datos generales</p>
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
             <ClienteSearch slug={slug} label="Cliente de la cotización" valueNombre={form.clienteNombre} valueId={form.clienteId}
               mensajeSinSeleccion="Selecciona un cliente de la lista o crea uno nuevo."
               onChange={({ clienteId, clienteNombre }) => setForm((f) => ({ ...f, clienteId, clienteNombre }))}
@@ -370,12 +382,6 @@ export default function CotizacionesPage() {
             <label className="text-xs text-[var(--muted)]">Fecha de emisión
               <input type="date" className={`${inputCls} mt-0.5 w-full`} value={form.fechaEmision} onChange={(e) => setForm((f) => ({ ...f, fechaEmision: e.target.value }))} />
             </label>
-            <label className="text-xs text-[var(--muted)]">Origen
-              <input className={`${inputCls} mt-0.5 w-full`} value={form.origenTexto} onChange={(e) => setForm((f) => ({ ...f, origenTexto: e.target.value }))} />
-            </label>
-            <label className="text-xs text-[var(--muted)]">Destino
-              <input className={`${inputCls} mt-0.5 w-full`} value={form.destinoTexto} onChange={(e) => setForm((f) => ({ ...f, destinoTexto: e.target.value }))} />
-            </label>
             <label className="text-xs text-[var(--muted)]">Fecha de vencimiento
               <input type="date" className={`${inputCls} mt-0.5 w-full`} value={form.fechaVencimiento} onChange={(e) => setForm((f) => ({ ...f, fechaVencimiento: e.target.value }))} />
             </label>
@@ -383,23 +389,35 @@ export default function CotizacionesPage() {
           <CotizacionCatalogosRapidos slug={slug} clienteId={form.clienteId} puedeCrearCliente={permisosRapidos.clientes} puedeCrearRuta={permisosRapidos.rutas}
             onCliente={(c) => setForm((f) => ({ ...f, clienteId: c.id, clienteNombre: c.nombre }))} onRuta={aplicarRuta} />
 
-          <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">Rutas adicionales (opcional)</p>
-          <p className="text-[10px] text-[var(--muted)]">
-            La ruta de arriba (Origen/Destino/Unidad/Tarifa cotizada) siempre es la línea 1 del PDF. Agrega aquí más destinos de la misma propuesta — cada uno con su propio precio.
-          </p>
+          <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">B. Rutas / viajes cotizados</p>
           <div className="space-y-2">
+            <div className="grid grid-cols-1 gap-2 rounded border border-[var(--border)] p-2 md:grid-cols-4">
+              <label className="text-xs text-[var(--muted)]">Ruta 1 · Origen
+                <input className={`${inputCls} mt-0.5 w-full`} value={form.origenTexto} onChange={(e) => setForm((f) => ({ ...f, origenTexto: e.target.value }))} />
+              </label>
+              <label className="text-xs text-[var(--muted)]">Destino
+                <input className={`${inputCls} mt-0.5 w-full`} value={form.destinoTexto} onChange={(e) => setForm((f) => ({ ...f, destinoTexto: e.target.value }))} />
+              </label>
+              <label className="text-xs text-[var(--muted)]">Unidad / camión
+                <input maxLength={160} placeholder="Ej. Camión 5 toneladas" className={`${inputCls} mt-0.5 w-full`} value={form.unidadDescripcion} onChange={(e) => setForm((f) => ({ ...f, unidadDescripcion: e.target.value }))} />
+              </label>
+              <label className="text-xs text-[var(--muted)]">Precio cotizado (Q)
+                <input type="number" min="0.01" step="0.01" className={`${inputCls} mt-0.5 w-full`} value={form.tarifaCotizada} onChange={(e) => setForm((f) => ({ ...f, tarifaCotizada: e.target.value }))} />
+              </label>
+            </div>
             {form.lineasAdicionales.map((l, i) => (
               <div key={i} className="grid grid-cols-1 gap-2 rounded border border-[var(--border)] p-2 md:grid-cols-5">
-                <label className="text-xs text-[var(--muted)]">Punto de carga
+                <label className="text-xs text-[var(--muted)]">Ruta {i + 2} · Origen
                   <input className={`${inputCls} mt-0.5 w-full`} value={l.origenTexto} onChange={(e) => actualizarLinea(i, { origenTexto: e.target.value })} />
                 </label>
-                <label className="text-xs text-[var(--muted)]">Punto de descarga
+                <label className="text-xs text-[var(--muted)]">Destino
                   <input className={`${inputCls} mt-0.5 w-full`} value={l.destinoTexto} onChange={(e) => actualizarLinea(i, { destinoTexto: e.target.value })} />
                 </label>
-                <label className="text-xs text-[var(--muted)]">Unidad
-                  <input className={`${inputCls} mt-0.5 w-full`} value={l.unidadDescripcion} onChange={(e) => actualizarLinea(i, { unidadDescripcion: e.target.value })} />
+                <label className="text-xs text-[var(--muted)]">Unidad / camión
+                  <input className={`${inputCls} mt-0.5 w-full`} disabled={l.usarUnidadAnterior} value={l.usarUnidadAnterior ? unidadRutaAnterior(i) : l.unidadDescripcion} onChange={(e) => actualizarLinea(i, { unidadDescripcion: e.target.value })} />
+                  <span className="mt-1 flex items-center gap-1 text-[10px]"><input type="checkbox" checked={l.usarUnidadAnterior} onChange={(e) => actualizarLinea(i, { usarUnidadAnterior: e.target.checked, ...(e.target.checked ? { unidadDescripcion: unidadRutaAnterior(i) } : {}) })} /> Usar la misma unidad/camión de la ruta anterior</span>
                 </label>
-                <label className="text-xs text-[var(--muted)]">Precio (Q)
+                <label className="text-xs text-[var(--muted)]">Precio cotizado (Q)
                   <input type="number" min="0.01" step="0.01" className={`${inputCls} mt-0.5 w-full`} value={l.tarifaCotizada} onChange={(e) => actualizarLinea(i, { tarifaCotizada: e.target.value })} />
                 </label>
                 <div className="flex items-end">
@@ -410,7 +428,13 @@ export default function CotizacionesPage() {
             <button type="button" className="rounded border border-[var(--border)] px-2 py-1 text-xs text-[var(--accent)]" onClick={agregarLinea}>+ Agregar ruta</button>
           </div>
 
-          <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">B. Presentación comercial</p>
+          <label className="flex items-center gap-2 text-xs text-[var(--muted)]">
+            <input type="checkbox" checked={form.incluyeIva} onChange={(e) => setForm((f) => ({ ...f, incluyeIva: e.target.checked }))} />
+            La tarifa ya incluye IVA
+          </label>
+          {form.tarifaCotizada ? <p className="text-xs text-[var(--muted)]">{(() => { const d = desgloseIva(Number(form.tarifaCotizada) || 0, form.incluyeIva); return `Ruta 1: Subtotal ${money(d.subtotal)} · IVA (12%) ${money(d.iva)} · Total ${money(d.total)}`; })()}</p> : null}
+
+          <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">C. Presentación comercial</p>
           <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
             <label className="text-xs text-[var(--muted)]">Documento emitido por
               <select className={`${inputCls} mt-0.5 w-full`} value={form.documentoEmisor}
@@ -433,9 +457,6 @@ export default function CotizacionesPage() {
             <label className="text-xs text-[var(--muted)]">Cargo / referencia (opcional)
               <input maxLength={160} className={`${inputCls} mt-0.5 w-full`} value={form.atencionCargo} onChange={(e) => setForm((f) => ({ ...f, atencionCargo: e.target.value }))} />
             </label>
-            <label className="text-xs text-[var(--muted)]">Unidad
-              <input maxLength={160} placeholder="Ej. Camión 5 toneladas" className={`${inputCls} mt-0.5 w-full`} value={form.unidadDescripcion} onChange={(e) => setForm((f) => ({ ...f, unidadDescripcion: e.target.value }))} />
-            </label>
             <label className="text-xs text-[var(--muted)] md:col-span-3">Mensaje para el cliente
               <textarea rows={3} maxLength={2000} className={`${inputCls} mt-0.5 w-full`} value={form.mensajeComercial}
                 onChange={(e) => { setMensajeTocado(true); setForm((f) => ({ ...f, mensajeComercial: e.target.value })); }} />
@@ -450,21 +471,8 @@ export default function CotizacionesPage() {
                 <span className="mt-0.5 block text-[10px]">Va tal cual en el PDF; se guarda con la cotización (un cambio futuro del mensaje predeterminado en Ajustes no la modifica).</span>
               )}
             </label>
-            <label className="text-xs text-[var(--muted)]">Tarifa cotizada (Q)
-              <input type="number" min="0.01" step="0.01" className={`${inputCls} mt-0.5 w-full`} value={form.tarifaCotizada} onChange={(e) => setForm((f) => ({ ...f, tarifaCotizada: e.target.value }))} />
-            </label>
-            <label className="mt-4 flex items-center gap-2 text-xs text-[var(--muted)]">
-              <input type="checkbox" checked={form.incluyeIva} onChange={(e) => setForm((f) => ({ ...f, incluyeIva: e.target.checked }))} />
-              La tarifa ya incluye IVA
-            </label>
-            {form.tarifaCotizada ? (
-              <p className="text-xs text-[var(--muted)] md:col-span-3">
-                {(() => { const d = desgloseIva(Number(form.tarifaCotizada) || 0, form.incluyeIva);
-                  return `Subtotal ${money(d.subtotal)} · IVA (12%) ${money(d.iva)} · Total ${money(d.total)}`; })()}
-              </p>
-            ) : null}
           </div>
-          <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">C. Condiciones de servicio</p>
+          <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">D. Condiciones de servicio</p>
           <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
             <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={form.pilotoIncluido} onChange={(e) => setForm((f) => ({ ...f, pilotoIncluido: e.target.checked }))} /> Piloto incluido</label>
             <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={form.gpsIncluido} onChange={(e) => setForm((f) => ({ ...f, gpsIncluido: e.target.checked }))} /> GPS</label>
@@ -484,7 +492,7 @@ export default function CotizacionesPage() {
           <label className="block text-xs text-[var(--muted)]">Observaciones
             <textarea className={`${inputCls} mt-0.5 w-full`} value={form.observaciones} onChange={(e) => setForm((f) => ({ ...f, observaciones: e.target.value }))} />
           </label>
-          <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">D. Costeo interno</p>
+          <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">E. Costeo interno</p>
           <CotizacionCosteoPanel
             key={editandoId ?? "nueva"}
             slug={slug}

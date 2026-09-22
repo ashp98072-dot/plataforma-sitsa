@@ -11,17 +11,14 @@ describe("Formulario de Cotizaciones — «Mensaje para el cliente»", () => {
     return i;
   };
 
-  it("va DESPUÉS de Documento emitido por / Atención a / Cargo / referencia / Unidad, dentro de B. Presentación comercial", () => {
-    // Búsqueda ACOTADA a la sección B: "Unidad" también aparece como etiqueta de cada fila de
-    // "Rutas adicionales" (AJUSTES FINALES, varias rutas por cotización), que va ANTES de B — un
-    // pos() global tomaría esa ocurrencia en vez de la de B.
-    const b = page.slice(pos("B. Presentación comercial"), pos("C. Condiciones de servicio"));
+  it("va después de Documento emitido por / Atención a / Cargo dentro de C. Presentación comercial", () => {
+    const b = page.slice(pos("C. Presentación comercial"), pos("D. Condiciones de servicio"));
     const posEnB = (texto: string) => {
       const i = b.indexOf(texto);
       expect(i, `no se encontró dentro de B: ${texto}`).toBeGreaterThan(-1);
       return i;
     };
-    const orden = ["Documento emitido por", "Atención a (opcional)", "Cargo / referencia (opcional)", "Unidad", "Mensaje para el cliente"].map(posEnB);
+    const orden = ["Documento emitido por", "Atención a (opcional)", "Cargo / referencia (opcional)", "Mensaje para el cliente"].map(posEnB);
     expect(orden).toEqual([...orden].sort((a, b) => a - b));
     expect(b).toContain("Mensaje para el cliente");
   });
@@ -66,8 +63,8 @@ describe("Formulario de Cotizaciones — «Mensaje para el cliente»", () => {
     expect(page).toContain("{c.mensajeComercial ??");
   });
 
-  it("el costeo interno nunca aparece cerca de este campo: la sección de costeo sigue siendo la D, después de condiciones", () => {
-    const orden = ["B. Presentación comercial", "C. Condiciones de servicio", "D. Costeo interno"].map(pos);
+  it("el costeo interno nunca aparece cerca de este campo: sigue después de condiciones", () => {
+    const orden = ["C. Presentación comercial", "D. Condiciones de servicio", "E. Costeo interno"].map(pos);
     expect(orden).toEqual([...orden].sort((a, b) => a - b));
   });
 });
