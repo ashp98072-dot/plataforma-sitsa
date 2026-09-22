@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
+import { formatearHora12 } from "@/lib/tms/hora-formato";
 
 export type PilotoOpt = {
   id: number;
@@ -8,12 +9,34 @@ export type PilotoOpt = {
   nombre: string;
 };
 
+/** Ocupación real de un recurso para el intervalo del viaje que se está armando — ver disponibilidad-recursos-lista.ts. */
+export type OcupacionRecurso = {
+  planCodigo: string;
+  /** "YYYY-MM-DD HH:mm:ss" */
+  horaInicio: string;
+  /** `null` = viaje activo sin fin real conocido (nunca inventado). */
+  horaFin: string | null;
+};
+
+/** Texto del badge: "PLAN-000123 · 08:00 AM" (o solo el código si no hay hora). */
+export function textoOcupacion(o: OcupacionRecurso): string {
+  const hora = formatearHora12(o.horaInicio.slice(11, 16));
+  return hora === "—" ? o.planCodigo : `${o.planCodigo} · ${hora}`;
+}
+
 type Props = {
   pilotos: PilotoOpt[];
   empleadoId: number;
   nombre: string;
   inputClassName: string;
   onChange: (next: { empleadoId: number; nombre: string }) => void;
+  /**
+   * PROGRAMACION-DISPONIBILIDAD-BUSCADORES-1 — empleadoId -> ocupación real
+   * si ese piloto ya está asignado a OTRO viaje que se traslapa con el
+   * intervalo actual (nunca se filtra de la lista, solo se marca; ver
+   * sección 1/10 del ticket). Ausente o vacío = todos disponibles.
+   */
+  ocupados?: Record<number, OcupacionRecurso>;
 };
 
 /**
@@ -29,6 +52,7 @@ export function PilotoSelect({
   nombre,
   inputClassName,
   onChange,
+  ocupados,
 }: Props) {
   const listId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -65,6 +89,9 @@ export function PilotoSelect({
   }, [open]);
 
   function elegir(p: PilotoOpt) {
+    // Defensa adicional: aunque el botón ya viene `disabled`, Enter usa
+    // `filtered[0]` directamente — nunca debe seleccionar un piloto ocupado.
+    if (ocupados?.[p.id]) return;
     onChange({ empleadoId: p.id, nombre: p.nombre });
     setOpen(false);
   }
@@ -130,22 +157,35 @@ export function PilotoSelect({
           role="listbox"
           className="absolute left-0 right-0 top-full z-50 mt-1 max-h-44 overflow-auto rounded-lg border border-[var(--border)] bg-[var(--card)] py-1 shadow-lg"
         >
-          {filtered.map((p) => (
-            <li key={p.id} role="option" aria-selected={empleadoId === p.id}>
-              <button
-                type="button"
-                className={[
-                  "flex w-full items-center justify-between px-2.5 py-1.5 text-left text-sm hover:bg-[var(--nav-hover)]",
-                  empleadoId === p.id ? "bg-[var(--nav-active)]" : "",
-                ].join(" ")}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => elegir(p)}
-              >
-                <span className="text-[var(--text)]">{p.nombre}</span>
-                <span className="text-[10px] text-[var(--muted)]">{p.codigo}</span>
-              </button>
-            </li>
-          ))}
+          {filtered.map((p) => {
+            const ocupacion = ocupados?.[p.id];
+            return (
+              <li key={p.id} role="option" aria-selected={empleadoId === p.id} aria-disabled={Boolean(ocupacion)}>
+                <button
+                  type="button"
+                  disabled={Boolean(ocupacion)}
+                  className={[
+                    "flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-left text-sm",
+                    ocupacion
+                      ? "cursor-not-allowed bg-[var(--muted-bg,rgba(120,120,120,0.12))] opacity-60"
+                      : "hover:bg-[var(--nav-hover)]",
+                    !ocupacion && empleadoId === p.id ? "bg-[var(--nav-active)]" : "",
+                  ].join(" ")}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => elegir(p)}
+                >
+                  <span className={ocupacion ? "text-[var(--muted)]" : "text-[var(--text)]"}>{p.nombre}</span>
+                  {ocupacion ? (
+                    <span className="rounded bg-amber-900/30 px-1.5 py-0.5 text-[10px] font-medium text-amber-300">
+                      Asignado · {textoOcupacion(ocupacion)}
+                    </span>
+                  ) : (
+                    <span className="text-[10px] text-[var(--muted)]">{p.codigo}</span>
+                  )}
+                </button>
+              </li>
+            );
+          })}
         </ul>
       ) : null}
     </div>

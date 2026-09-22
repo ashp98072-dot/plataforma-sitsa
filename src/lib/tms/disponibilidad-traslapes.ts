@@ -122,7 +122,7 @@ async function runQuery<T extends RowDataPacket[]>(
  * `ESTADOS_QUE_RESERVAN_RECURSOS` (arriba) NO cambia: sigue siendo el criterio
  * de si el plan que se está guardando reserva recursos.
  */
-const ESTADOS_CANDIDATOS_TRASLAPE = [...ESTADOS_QUE_RESERVAN_RECURSOS, "Cerrado"] as const;
+export const ESTADOS_CANDIDATOS_TRASLAPE = [...ESTADOS_QUE_RESERVAN_RECURSOS, "Cerrado"] as const;
 const CANDIDATOS_PLACEHOLDERS = ESTADOS_CANDIDATOS_TRASLAPE.map(() => "?").join(",");
 
 /** Combina fecha_plan (DATE) y hora_carga (opcional) en "YYYY-MM-DD HH:mm:ss". */
@@ -162,7 +162,14 @@ export function finViajeDesdeInput(regresoEstimado: string | null | undefined): 
  * query (vía SQL_LLEGADA_TECNICA) — sin N+1, una sola consulta por
  * recurso a validar, igual que antes.
  */
-function primerCandidatoQueOcupa(
+/**
+ * PROGRAMACION-DISPONIBILIDAD-BUSCADORES-1 — exportada para que
+ * disponibilidad-recursos-lista.ts (listado EN LOTE de disponibilidad para
+ * los buscadores de piloto/auxiliar/unidad) reutilice el MISMO criterio de
+ * "primer candidato que realmente ocupa" que ya usa la validación real de
+ * traslapes de arriba — nunca una segunda implementación del algoritmo.
+ */
+export function primerCandidatoQueOcupa(
   filas: RowDataPacket[],
   nombreCampo: string,
   intervaloConsulta: IntervaloConsulta,
@@ -432,7 +439,14 @@ export const SQL_HORA_LLEGADA_REAL = `(
  * condición "inicia antes de que termine la consulta": no tiene fin.
  * Los parámetros se devuelven en el mismo orden que sus `?`.
  */
-function prefiltroOcupacion(intervalo: IntervaloConsulta): { sql: string; params: string[] } {
+/**
+ * PROGRAMACION-DISPONIBILIDAD-BUSCADORES-1 — exportada por el mismo motivo
+ * que primerCandidatoQueOcupa: disponibilidad-recursos-lista.ts arma su
+ * propia consulta SQL (sin el filtro `tp.id = ?` / `u.id = ?`, porque lista
+ * TODOS los recursos a la vez) pero reutiliza EXACTAMENTE este prefiltro,
+ * nunca una copia.
+ */
+export function prefiltroOcupacion(intervalo: IntervaloConsulta): { sql: string; params: string[] } {
   const params: string[] = [];
   const iniciaAntesDeFinConsulta = () => {
     if (intervalo.fin == null) return "1 = 1";

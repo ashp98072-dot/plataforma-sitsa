@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { ClienteSearch } from "@/components/tms/cliente-search";
 import { PlacaSelect, type VehiculoOpt } from "@/components/tms/placa-select";
-import { PilotoSelect } from "@/components/tms/piloto-select";
+import { PilotoSelect, type OcupacionRecurso } from "@/components/tms/piloto-select";
 import { RutaSelect, type RutaOpt } from "@/components/tms/ruta-select";
 import { AuxiliaresSelect } from "@/components/tms/auxiliares-select";
 import { Hora12Input } from "@/components/tms/hora-input-12h";
@@ -303,8 +303,18 @@ export default function PlanForm({
   // sigue mandando ViaticosPanel (ya existente).
   const [viaticosConfig, setViaticosConfig] = useState<ViaticoConfigOpt[]>([]);
   const [viaticosMontos, setViaticosMontos] = useState<Record<string, string>>({});
-  const [vehiculosDisponibles, setVehiculosDisponibles] = useState<VehiculoOpt[]>([]);
+  // PROGRAMACION-DISPONIBILIDAD-BUSCADORES-1: `todosVehiculos` reemplaza el
+  // antiguo `vehiculosDisponibles` (que llegaba YA filtrado a solo
+  // puedeEnviar) — ahora PlacaSelect recibe TODAS las unidades y decide
+  // cómo mostrarlas (disponible / taller / en ruta / asignada a otro plan),
+  // nunca las oculta en silencio (ver sección 9 del ticket).
+  const [todosVehiculos, setTodosVehiculos] = useState<VehiculoOpt[]>([]);
   const [resumenFlota, setResumenFlota] = useState({ disponibles: 0, enTaller: 0, enRuta: 0 });
+  // empleadoId -> ocupación real (piloto/auxiliar) y placa -> ocupación real
+  // (unidad) contra el intervalo actual del formulario — ver el useEffect
+  // más abajo que las recalcula cada vez que cambian fecha/hora/regreso.
+  const [ocupacionPersonal, setOcupacionPersonal] = useState<Record<number, OcupacionRecurso>>({});
+  const [ocupacionUnidades, setOcupacionUnidades] = useState<Record<string, OcupacionRecurso>>({});
   // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§2) — tarifas ACTIVAS de
   // la ruta elegida (del catálogo tms_ruta_tarifas). Se cargan al elegir
   // la ruta y al montar el formulario en edición (si el viaje ya tiene
@@ -466,7 +476,21 @@ export default function PlanForm({
       const vd =
         (data.vehiculosDisponibles as VehiculoOpt[] | undefined) ??
         ((data.placasFlota as string[] | undefined) ?? []).map((p) => ({ placa: p }));
-      setVehiculosDisponibles(vd);
+      // PROGRAMACION-DISPONIBILIDAD-BUSCADORES-1: `estadoVehiculos` trae
+      // TODAS las unidades (taller/en ruta/inactivas incluidas), ya con
+      // marca/modelo/compartido — PlacaSelect decide cómo mostrar cada una
+      // (ver sección 9 del ticket). Sin fila -> sin unidades (mismo caso
+      // vacío que antes tenía vehiculosDisponibles).
+      setTodosVehiculos(
+        ((data.estadoVehiculos as VehiculoOpt[] | undefined) ?? []).map((v) => ({
+          placa: v.placa,
+          marca: v.marca,
+          modelo: v.modelo,
+          compartido: v.compartido,
+          estadoDisponibilidad: v.estadoDisponibilidad,
+          motivoNoDisponible: v.motivoNoDisponible,
+        })),
+      );
       const rf = data.resumenFlota ?? {};
       setResumenFlota({
         disponibles: Number(rf.disponibles ?? vd.length),
@@ -509,6 +533,38 @@ export default function PlanForm({
       ignore = true;
     };
   }, [cargarCatalogos]);
+
+  // PROGRAMACION-DISPONIBILIDAD-BUSCADORES-1 — recalcula qué piloto/
+  // auxiliar/unidad ya está asignado a OTRO viaje que se traslapa con el
+  // intervalo ACTUAL del formulario, cada vez que cambia fecha, hora de
+  // salida o regreso estimado (sección 13 del ticket: sin recargar la
+  // página). En edición se excluye el propio plan (plan.id) — el viaje que
+  // se está editando nunca "choca contra sí mismo" (sección 12). Un
+  // pequeño debounce evita ráfagas de solicitudes mientras el usuario
+  // ajusta la hora con los selects de Hora12Input/FechaHora12Input.
+  const excluirPlanId = plan?.id ?? null;
+  useEffect(() => {
+    if (!form.fechaPlan) return;
+    let cancelado = false;
+    const id = window.setTimeout(() => {
+      const params = new URLSearchParams({ fecha: form.fechaPlan });
+      if (form.horaCarga) params.set("horaCarga", form.horaCarga);
+      if (form.regresoEstimado) params.set("regresoEstimado", form.regresoEstimado);
+      if (excluirPlanId) params.set("excluirPlanId", String(excluirPlanId));
+      fetch(`/api/empresas/${slug}/tms/planes/disponibilidad-recursos?${params.toString()}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (cancelado || !data) return;
+          setOcupacionPersonal((data.personal ?? {}) as Record<number, OcupacionRecurso>);
+          setOcupacionUnidades((data.unidades ?? {}) as Record<string, OcupacionRecurso>);
+        })
+        .catch(() => {});
+    }, 300);
+    return () => {
+      cancelado = true;
+      window.clearTimeout(id);
+    };
+  }, [slug, form.fechaPlan, form.horaCarga, form.regresoEstimado, excluirPlanId]);
 
   // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§2) — en EDICIÓN, si el
   // viaje ya tiene una ruta, carga las tarifas activas de esa ruta para
@@ -1547,10 +1603,11 @@ export default function PlanForm({
       <div className={bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}>
         <PlacaSelect
           value={form.placa}
-          options={vehiculosDisponibles}
+          options={todosVehiculos}
           resumen={resumenFlota}
           inputClassName={inputCls}
           onChange={(placa) => setForm((f) => ({ ...f, placa }))}
+          ocupadas={ocupacionUnidades}
         />
       </div>
       <div className={bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}>
@@ -1560,6 +1617,7 @@ export default function PlanForm({
           nombre={form.pilotoNombre}
           inputClassName={inputCls}
           onChange={({ empleadoId, nombre }) => setForm((f) => ({ ...f, pilotoEmpleadoId: empleadoId, pilotoNombre: nombre }))}
+          ocupados={ocupacionPersonal}
         />
       </div>
 
@@ -1577,6 +1635,7 @@ export default function PlanForm({
           onChange={({ empleadoIds, nombresLibres }) =>
             setForm((f) => ({ ...f, auxiliarEmpleadoIds: empleadoIds, auxiliarNombres: nombresLibres }))
           }
+          ocupados={ocupacionPersonal}
         />
       </div>
 
