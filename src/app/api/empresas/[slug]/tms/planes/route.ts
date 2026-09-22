@@ -421,8 +421,19 @@ export async function GET(req: Request, ctx: Ctx) {
   // estaba calculado en `vehiculos` (listarDisponibilidadVehiculos), solo
   // se exponía filtrado/recortado como vehiculosDisponibles. No cambia
   // listarDisponibilidadVehiculos ni la lógica de disponibilidad.
+  //
+  // PROGRAMACION-DISPONIBILIDAD-BUSCADORES-1: se agregan marca/modelo/
+  // compartido (mismos campos que ya trae `vehiculos`, sin query nueva) para
+  // que PlacaSelect pueda mostrar TODAS las unidades (incluidas taller/en
+  // ruta/inactivas) con su propio motivo, en vez de solo las que ya venían
+  // filtradas en vehiculosDisponibles — ese campo NO se toca, sigue igual
+  // para cualquier otro consumidor.
   const estadoVehiculos = vehiculos.map((v) => ({
     placa: v.placa,
+    marca: v.marca,
+    modelo: v.modelo,
+    compartido: v.compartido,
+    esPropio: v.esPropio,
     estadoDisponibilidad: v.estadoDisponibilidad,
     motivoNoDisponible: v.motivoNoDisponible,
   }));

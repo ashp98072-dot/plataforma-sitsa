@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
+import { textoOcupacion, type OcupacionRecurso } from "./piloto-select";
 
 export type AuxiliarOpt = {
   id: number;
@@ -17,6 +18,12 @@ type Props = {
   max: number;
   inputClassName: string;
   onChange: (next: { empleadoIds: number[]; nombresLibres: string[] }) => void;
+  /**
+   * PROGRAMACION-DISPONIBILIDAD-BUSCADORES-1 — mismo mapa que PilotoSelect
+   * (empleadoId -> ocupación real): nunca se filtra de la lista, solo se
+   * marca y se bloquea la selección (ver sección 1/8/10 del ticket).
+   */
+  ocupados?: Record<number, OcupacionRecurso>;
 };
 
 /**
@@ -27,7 +34,7 @@ type Props = {
  * duplicados; al quitar un chip, ese auxiliar vuelve a estar disponible
  * en la búsqueda.
  */
-export function AuxiliaresSelect({ auxiliares, empleadoIds, nombresLibres, max, inputClassName, onChange }: Props) {
+export function AuxiliaresSelect({ auxiliares, empleadoIds, nombresLibres, max, inputClassName, onChange, ocupados }: Props) {
   const listId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
@@ -59,7 +66,10 @@ export function AuxiliaresSelect({ auxiliares, empleadoIds, nombresLibres, max, 
   }, [open]);
 
   function agregarId(a: AuxiliarOpt) {
-    if (lleno || empleadoIds.includes(a.id)) return;
+    // Defensa adicional: aunque el botón ya viene `disabled`, agregarLibre()
+    // puede llegar aquí por match exacto o único resultado filtrado — nunca
+    // debe agregar un auxiliar ocupado.
+    if (lleno || empleadoIds.includes(a.id) || ocupados?.[a.id]) return;
     onChange({ empleadoIds: [...empleadoIds, a.id], nombresLibres });
     setTexto("");
     setOpen(false);
@@ -177,19 +187,32 @@ export function AuxiliaresSelect({ auxiliares, empleadoIds, nombresLibres, max, 
           role="listbox"
           className="absolute left-0 right-0 top-full z-50 mt-1 max-h-52 overflow-auto rounded-lg border border-[var(--border)] bg-[var(--card)] py-1 shadow-lg"
         >
-          {filtered.map((a) => (
-            <li key={a.id} role="option" aria-selected={false}>
-              <button
-                type="button"
-                className="flex w-full items-center justify-between px-2.5 py-1.5 text-left text-sm hover:bg-[var(--nav-hover)]"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => agregarId(a)}
-              >
-                <span className="text-[var(--text)]">{a.nombre}</span>
-                <span className="text-[10px] text-[var(--muted)]">{a.codigo}</span>
-              </button>
-            </li>
-          ))}
+          {filtered.map((a) => {
+            const ocupacion = ocupados?.[a.id];
+            return (
+              <li key={a.id} role="option" aria-selected={false} aria-disabled={Boolean(ocupacion)}>
+                <button
+                  type="button"
+                  disabled={Boolean(ocupacion)}
+                  className={[
+                    "flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-left text-sm",
+                    ocupacion ? "cursor-not-allowed bg-[var(--muted-bg,rgba(120,120,120,0.12))] opacity-60" : "hover:bg-[var(--nav-hover)]",
+                  ].join(" ")}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => agregarId(a)}
+                >
+                  <span className={ocupacion ? "text-[var(--muted)]" : "text-[var(--text)]"}>{a.nombre}</span>
+                  {ocupacion ? (
+                    <span className="rounded bg-amber-900/30 px-1.5 py-0.5 text-[10px] font-medium text-amber-300">
+                      Asignado · {textoOcupacion(ocupacion)}
+                    </span>
+                  ) : (
+                    <span className="text-[10px] text-[var(--muted)]">{a.codigo}</span>
+                  )}
+                </button>
+              </li>
+            );
+          })}
         </ul>
       ) : null}
     </div>
