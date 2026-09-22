@@ -271,14 +271,6 @@ export function renderDocumentoComercial(tema: TemaComercial, modelo: DocumentoC
         { fondoEncabezado: colores.acento, textoEncabezado: colores.textoSobreAcento, colorBorde: colores.borde, colorTexto: colores.texto, fondoFilaAlterna: colores.filaAlterna },
       );
 
-      // Total ADICIONAL (nunca sustituye el precio individual de cada línea de la tabla): solo cuando hay más de una ruta.
-      if (modelo.lineas.length > 1) {
-        const total = modelo.lineas.reduce((suma, l) => suma + l.precio, 0);
-        asegurarEspacio(doc, 20);
-        dibujarParrafo(doc, x, ancho, `Total (${modelo.encabezadoPrecio}): ${formatoMoneda(total, modelo.moneda)}`, { color: colores.texto, tamano: 10.5, negrita: true, alinear: "right" });
-        doc.moveDown(0.3);
-      }
-
       const estiloLista = { color: colores.texto, colorVineta: colores.acento };
       if (tema.seccionUnica) {
         const todo = [...modelo.condiciones, ...modelo.observaciones];

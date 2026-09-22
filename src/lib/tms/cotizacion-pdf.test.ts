@@ -258,26 +258,28 @@ describe.each([["KUIQTRANS", KUIQ], ["MONACO", MONACO]] as const)("cotización c
     id: i + 1, orden: i + 2, origenTexto: `Bodega Central`, destinoTexto: `PriceSmart Destino ${i + 1}`, unidadDescripcion: "1 Tonelada", tarifaCotizada: 937.5,
   }));
 
-  it("1 sola línea (la principal, sin adicionales): nunca imprime fila «Total»", async () => {
+  it("1 sola línea (la principal, sin adicionales): sin total general", async () => {
     const { todo } = await generar({ ...base, lineasAdicionales: [] });
-    expect(todo).not.toMatch(/Total \(/);
+    expect(todo).not.toMatch(/Total/i);
   });
 
-  it("3 líneas adicionales (4 en total): cada una imprime su propio origen/destino/unidad/precio, más un Total adicional que nunca sustituye los precios individuales", async () => {
+  it("3 líneas adicionales (4 en total): cada una imprime su propio origen/destino/unidad/precio, SIN ningún total general debajo de la tabla", async () => {
     const { textos, todo } = await generar({ ...base, tarifaCotizada: 937.5, lineasAdicionales: priceSmart(3) });
     for (let i = 1; i <= 3; i++) {
       expect(textos).toContain(`PriceSmart Destino ${i}`);
     }
     // 4 celdas con el mismo precio individual (la principal + 3 adicionales) — el precio de cada
-    // línea sigue apareciendo tal cual, la fila Total es ADICIONAL.
+    // línea sigue apareciendo tal cual en la tabla.
     expect(textos.filter((t) => t === "Q937.50").length).toBeGreaterThanOrEqual(4);
-    expect(todo).toMatch(/Total \(Precio (sin IVA|IVA incluido)\): Q3,750\.00/);
+    expect(todo).not.toMatch(/Total/i);
+    expect(todo).not.toContain("Q3,750.00"); // la suma de las 4 líneas nunca se imprime
   });
 
-  it("4 líneas adicionales (5 en total): ninguna se pierde ni se colapsa, cada precio individual sigue impreso", async () => {
-    const { textos } = await generar({ ...base, tarifaCotizada: 937.5, lineasAdicionales: priceSmart(4) });
+  it("4 líneas adicionales (5 en total): ninguna se pierde ni se colapsa, cada precio individual sigue impreso, sin total general", async () => {
+    const { textos, todo } = await generar({ ...base, tarifaCotizada: 937.5, lineasAdicionales: priceSmart(4) });
     for (let i = 1; i <= 4; i++) expect(textos).toContain(`PriceSmart Destino ${i}`);
     expect(textos.filter((t) => t === "Q937.50").length).toBeGreaterThanOrEqual(5);
+    expect(todo).not.toMatch(/Total/i);
   });
 
   it("10+ líneas adicionales: fuerza varias páginas, repite el encabezado de la tabla, conserva «Página X de Y», marca de agua y branding en cada página", async () => {
@@ -305,6 +307,8 @@ describe.each([["KUIQTRANS", KUIQ], ["MONACO", MONACO]] as const)("cotización c
     const anchoMarcaDeAgua = base.documentoEmisor === "MONACO" ? 420 : 300;
     const marcaDeAgua = espiaImagen.mock.calls.filter(([, , , opts]) => (opts as { width?: number } | undefined)?.width === anchoMarcaDeAgua);
     expect(marcaDeAgua).toHaveLength(totalPaginas);
+    // Sin total general en ningún lado del documento, ni siquiera con 13 líneas.
+    expect(textos.join("\n")).not.toMatch(/Total/i);
   });
 
   it("varias líneas: cada renglón respeta el encabezado de IVA vigente (sin IVA e IVA incluido), nunca mezclado", async () => {
