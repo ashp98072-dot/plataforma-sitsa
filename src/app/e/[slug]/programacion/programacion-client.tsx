@@ -10,6 +10,9 @@ import type {
 import PlanForm from "./plan-form";
 import { formatearFechaHora12, formatearHora12 } from "@/lib/tms/hora-formato";
 import { resumenRegreso } from "@/lib/tms/regreso-viaje";
+import { useEmpresaSession } from "@/lib/empresa-session";
+import { exportarProgramacionComoImagen } from "./programacion-exportar-imagen";
+import type { FilaProgramacionImagen } from "@/lib/tms/programacion-imagen";
 
 /**
  * OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — tras CERRAR un viaje, Programación
@@ -490,6 +493,7 @@ const POLLING_MS = 30_000;
 
 export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   const router = useRouter();
+  const { empresaNombre } = useEmpresaSession();
   const [planes, setPlanes] = useState<Plan[]>([]);
   // OPS-2.1: lista completa e independiente del rango de fechas — ver
   // DatosProgramacion.pendientesCierre.
@@ -580,6 +584,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
     if (fCliente) p.set("cliente", fCliente);
     return p.toString();
   }
+
 
   // Carga inicial: función definida DENTRO del efecto (patrón oficial de
   // React para "Fetching data with Effects", con bandera `ignore` para
@@ -878,6 +883,64 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
     [enRango, pendientesCierre],
   );
 
+  const [exportandoImagen, setExportandoImagen] = useState(false);
+
+  /**
+   * PROGRAMACION-EXPORT-IMAGEN-1 — "Exportar imagen": mismo criterio que
+   * reporteQueryString de arriba (rango + Estado/Piloto/Unidad/Cliente
+   * activos), pero a partir de `visibles` (los viajes YA filtrados que
+   * están en pantalla) en vez de una consulta nueva al servidor — así el
+   * PNG/JPG siempre coincide exactamente con lo que el usuario ve, sin
+   * duplicar la lógica de filtrado del tablero ni agregar una consulta.
+   * Los textos de cada celda reutilizan los MISMOS helpers que ya pinta
+   * el tablero (estadoVisible, origenDestino, formatearHora12) — nunca
+   * decide de nuevo cómo se ve un estado o una ruta.
+   */
+  async function exportarImagen(formato: "png" | "jpeg") {
+    setExportandoImagen(true);
+    try {
+      const filas: FilaProgramacionImagen[] = visibles.map((p) => {
+        const { origen, destino } = origenDestino(p.paradas);
+        return {
+          codigo: p.codigo,
+          fechaHora: `${p.fecha_plan}${p.hora_carga ? ` · ${formatearHora12(p.hora_carga)}` : ""}`,
+          cliente: p.cliente || "",
+          ruta: origen || destino ? `${origen || "—"} → ${destino || "—"}` : "",
+          piloto: p.piloto || "",
+          auxiliares: p.auxiliares.join(", "),
+          unidad: p.placa || "",
+          estado: estadoVisible(p).label,
+          regresoEstimado: p.regreso_estimado ? formatearFechaHora12(p.regreso_estimado) : "",
+          tarifaComercial:
+            p.tarifa_comercial != null
+              ? `Q${Number(p.tarifa_comercial).toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+              : "",
+        };
+      });
+      const rango =
+        filtroRapido === "PendienteCierre"
+          ? "Pendientes de cierre (todas las fechas)"
+          : desde === hasta
+            ? desde
+            : `${desde} a ${hasta}`;
+      const filtros = [
+        filtroRapido !== "todos" ? `Estado: ${filtroRapido === "PendienteCierre" ? "Pendiente de cierre" : filtroRapido}` : null,
+        fPiloto ? `Piloto: ${fPiloto}` : null,
+        fUnidad ? `Unidad: ${fUnidad}` : null,
+        fCliente ? `Cliente: ${fCliente}` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      await exportarProgramacionComoImagen(
+        { empresa: empresaNombre || "Programación", rango, filtros, generado: new Date().toLocaleString("es-GT") },
+        filas,
+        { formato, nombreBase: `programacion-${new Date().toISOString().slice(0, 10)}` },
+      );
+    } finally {
+      setExportandoImagen(false);
+    }
+  }
+
   const input =
     "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
 
@@ -1098,6 +1161,26 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
         >
           Exportar PDF
         </a>
+        {/* PROGRAMACION-EXPORT-IMAGEN-1 — PNG como formato principal (mejor
+            nitidez de texto); JPG queda disponible como opción secundaria,
+            más discreta. Ambos exportan exactamente `visibles` (mismo
+            rango/Estado/Piloto/Unidad/Cliente que Excel/PDF de arriba). */}
+        <button
+          type="button"
+          disabled={exportandoImagen}
+          onClick={() => void exportarImagen("png")}
+          className="rounded bg-indigo-700 px-3 py-1.5 text-xs text-white hover:bg-indigo-600 disabled:opacity-60"
+        >
+          {exportandoImagen ? "Generando imagen…" : "Exportar imagen (PNG)"}
+        </button>
+        <button
+          type="button"
+          disabled={exportandoImagen}
+          onClick={() => void exportarImagen("jpeg")}
+          className="text-[11px] text-[var(--muted)] underline hover:text-[var(--text)] disabled:opacity-60"
+        >
+          o como JPG
+        </button>
         {/* TMS-IMPORTACION-PROGRAMACION-EXCEL (PR 6/6) — importación masiva desde Excel, página aparte (mismo criterio que Rutas > Importar Excel). */}
         <Link
           href={`/e/${slug}/programacion/importar`}
