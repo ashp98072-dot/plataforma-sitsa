@@ -29,6 +29,14 @@ export async function GET(req: Request, ctx: Ctx) {
   );
 }
 
+// Ruta/destino adicional a la línea principal — mismo criterio de validación que origen/destino/unidad de la cotización.
+const lineaAdicionalSchema = z.object({
+  origenTexto: z.string().max(300).nullable().optional(),
+  destinoTexto: z.string().max(300).nullable().optional(),
+  unidadDescripcion: z.string().max(160).nullable().optional(),
+  tarifaCotizada: z.number().positive().max(9999999999.99),
+});
+
 const schema = z.object({
   clienteId: z.number().int().positive(),
   rutaId: z.number().int().positive().nullable().optional(),
@@ -57,6 +65,8 @@ const schema = z.object({
   // recalcula al leer o exportar más tarde — eso lo lee directamente el PDF del snapshot guardado.
   mensajeComercial: z.string().max(2000).nullable().optional(),
   cierreComercial: z.string().max(2000).nullable().optional(),
+  // Rutas/destinos adicionales a la línea principal (varias rutas en una sola cotización, cada una con su propio precio).
+  lineasAdicionales: z.array(lineaAdicionalSchema).max(50).optional(),
   // COTIZACIONES-COSTEO: opcional. El costeo se RECALCULA en servidor (el cliente no manda resultados ni parámetros).
   costeo: costeoPayloadSchema.optional(),
 });

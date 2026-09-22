@@ -98,23 +98,31 @@ export type DatosDocumento = Pick<
   | "fechaEmision" | "fechaVencimiento" | "pilotoIncluido" | "gpsIncluido" | "seguroMercaderiaIncluido"
   | "seguroTercerosIncluido" | "servicioRefrigerado" | "kmIncluidos" | "tarifaKmAdicional"
   | "condicionesAdicionales" | "observaciones" | "documentoEmisor" | "atencionNombre" | "atencionCargo" | "unidadDescripcion"
-  | "mensajeComercial" | "cierreComercial"
+  | "mensajeComercial" | "cierreComercial" | "lineasAdicionales"
 >;
 
 /**
- * Hoy una cotización es UN servicio, pero el documento se arma siempre a partir
- * de un arreglo de líneas: así una fase futura con varias rutas por propuesta
- * no obliga a rehacer el diseño de las plantillas.
+ * La cotización guarda su LÍNEA PRINCIPAL en sus propias columnas
+ * (origenTexto/destinoTexto/unidadDescripcion/tarifaCotizada) y, cuando la
+ * propuesta cubre varias rutas/destinos, las líneas adicionales en
+ * `lineasAdicionales` (tabla tms_cotizacion_lineas). El documento siempre
+ * se arma a partir del arreglo completo [principal, ...adicionales] — cada
+ * línea con su propio precio, nunca colapsadas en un total.
  */
 export function lineasComerciales(c: DatosDocumento): LineaComercial[] {
-  return [
-    {
-      origen: textoOpcional(c.origenTexto) ?? "—",
-      destino: textoOpcional(c.destinoTexto) ?? "—",
-      unidad: textoOpcional(c.unidadDescripcion) ?? "—",
-      precio: c.tarifaCotizada,
-    },
-  ];
+  const principal: LineaComercial = {
+    origen: textoOpcional(c.origenTexto) ?? "—",
+    destino: textoOpcional(c.destinoTexto) ?? "—",
+    unidad: textoOpcional(c.unidadDescripcion) ?? "—",
+    precio: c.tarifaCotizada,
+  };
+  const adicionales = (c.lineasAdicionales ?? []).map((l) => ({
+    origen: textoOpcional(l.origenTexto) ?? "—",
+    destino: textoOpcional(l.destinoTexto) ?? "—",
+    unidad: textoOpcional(l.unidadDescripcion) ?? "—",
+    precio: l.tarifaCotizada,
+  }));
+  return [principal, ...adicionales];
 }
 
 function lineasDeTexto(texto: string | null | undefined): string[] {

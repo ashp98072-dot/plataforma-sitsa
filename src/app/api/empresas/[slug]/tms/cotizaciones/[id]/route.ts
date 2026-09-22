@@ -17,6 +17,14 @@ export async function GET(_req: Request, ctx: Ctx) {
   return NextResponse.json({ cotizacion });
 }
 
+// Ruta/destino adicional a la línea principal — mismo criterio de validación que origen/destino/unidad de la cotización.
+const lineaAdicionalSchema = z.object({
+  origenTexto: z.string().max(300).nullable().optional(),
+  destinoTexto: z.string().max(300).nullable().optional(),
+  unidadDescripcion: z.string().max(160).nullable().optional(),
+  tarifaCotizada: z.number().positive().max(9999999999.99),
+});
+
 const schema = z.object({
   clienteId: z.number().int().positive().optional(),
   rutaId: z.number().int().positive().nullable().optional(),
@@ -45,6 +53,9 @@ const schema = z.object({
   // aquí: cambiar de marca en el formulario y no tocar el mensaje NO lo pisa en silencio.
   mensajeComercial: z.string().max(2000).nullable().optional(),
   cierreComercial: z.string().max(2000).nullable().optional(),
+  // Rutas/destinos adicionales: si se omite, las líneas existentes no se tocan; si se manda
+  // (incluido vacío []), reemplaza por completo las líneas adicionales guardadas.
+  lineasAdicionales: z.array(lineaAdicionalSchema).max(50).optional(),
   // COTIZACIONES-COSTEO: registra el snapshot por primera vez; si ya existe, 409 (inmutable).
   costeo: costeoPayloadSchema.optional(),
 });

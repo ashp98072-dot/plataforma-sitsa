@@ -1550,6 +1550,29 @@ CREATE TABLE IF NOT EXISTS tms_cotizaciones (
   CONSTRAINT fk_cotizacion_cliente_ambito FOREIGN KEY (empresa_id, cliente_id) REFERENCES tms_clientes (empresa_id, id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- COTIZACIONES — varias rutas/viajes por cotización (ver
+-- sql/migrate-2026-09-cotizaciones-lineas.sql). ADITIVA: la cotización sigue
+-- teniendo su propia origen_texto/destino_texto/unidad_descripcion/
+-- tarifa_cotizada como LÍNEA PRINCIPAL (orden 1, sin cambios — costeo interno
+-- y todo lo demás la siguen usando tal cual); esta tabla guarda SOLO las
+-- líneas ADICIONALES (orden 2 en adelante) de la misma propuesta.
+CREATE TABLE IF NOT EXISTS tms_cotizacion_lineas (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  cotizacion_id INT NOT NULL,
+  orden INT NOT NULL,
+  origen_texto VARCHAR(300) NULL,
+  destino_texto VARCHAR(300) NULL,
+  unidad_descripcion VARCHAR(160) NULL,
+  tarifa_cotizada DECIMAL(12,2) NOT NULL,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_cotizacion_lineas_empresa_id (empresa_id, id),
+  UNIQUE KEY uq_cotizacion_lineas_orden (empresa_id, cotizacion_id, orden),
+  INDEX idx_cotizacion_lineas_cotizacion (empresa_id, cotizacion_id),
+  CONSTRAINT fk_cotlineas_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
+  CONSTRAINT fk_cotlineas_cotizacion_ambito FOREIGN KEY (empresa_id, cotizacion_id) REFERENCES tms_cotizaciones (empresa_id, id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- COTIZACIONES-COSTEO (Fase 3) — costeo interno: perfiles y parámetros vivos + snapshot INMUTABLE por
 -- cotización. Ver sql/migrate-2026-09-cotizaciones-costeo.sql (aplicada manualmente en producción KT antes de
 -- versionarse) y docs/COTIZACIONES-COSTEO-PERSISTENCIA-PROPUESTA.md. Perfiles/parámetros son configuración

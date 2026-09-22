@@ -12,9 +12,17 @@ describe("Formulario de Cotizaciones — «Mensaje para el cliente»", () => {
   };
 
   it("va DESPUÉS de Documento emitido por / Atención a / Cargo / referencia / Unidad, dentro de B. Presentación comercial", () => {
-    const orden = ["Documento emitido por", "Atención a (opcional)", "Cargo / referencia (opcional)", "Unidad", "Mensaje para el cliente"].map(pos);
-    expect(orden).toEqual([...orden].sort((a, b) => a - b));
+    // Búsqueda ACOTADA a la sección B: "Unidad" también aparece como etiqueta de cada fila de
+    // "Rutas adicionales" (AJUSTES FINALES, varias rutas por cotización), que va ANTES de B — un
+    // pos() global tomaría esa ocurrencia en vez de la de B.
     const b = page.slice(pos("B. Presentación comercial"), pos("C. Condiciones de servicio"));
+    const posEnB = (texto: string) => {
+      const i = b.indexOf(texto);
+      expect(i, `no se encontró dentro de B: ${texto}`).toBeGreaterThan(-1);
+      return i;
+    };
+    const orden = ["Documento emitido por", "Atención a (opcional)", "Cargo / referencia (opcional)", "Unidad", "Mensaje para el cliente"].map(posEnB);
+    expect(orden).toEqual([...orden].sort((a, b) => a - b));
     expect(b).toContain("Mensaje para el cliente");
   });
 

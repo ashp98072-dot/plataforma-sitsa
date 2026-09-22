@@ -141,6 +141,18 @@ export function dibujarLista(doc: Pdf, x: number, ancho: number, items: string[]
   doc.x = doc.page.margins.left;
 }
 
+/**
+ * Línea divisoria discreta (un solo trazo delgado, color neutro de la
+ * marca) — separador corporativo entre bloques del documento (cliente,
+ * mensaje, tabla, condiciones, cierre), sin usar bloques de color sólido.
+ */
+export function dibujarSeparador(doc: Pdf, x: number, ancho: number, color: string, grosor = 0.6): void {
+  const y = doc.y;
+  doc.moveTo(x, y).lineTo(x + ancho, y).lineWidth(grosor).strokeColor(color).stroke();
+  doc.x = x;
+  doc.y = y + 10;
+}
+
 /** Párrafo de texto corrido con ancho fijo. */
 export function dibujarParrafo(doc: Pdf, x: number, ancho: number, texto: string, opciones: { color: string; tamano?: number; negrita?: boolean; alinear?: "left" | "right" | "center" }): void {
   doc.font(opciones.negrita ? "Helvetica-Bold" : "Helvetica").fontSize(opciones.tamano ?? 10).fillColor(opciones.color)
@@ -239,10 +251,12 @@ export function renderDocumentoComercial(tema: TemaComercial, modelo: DocumentoC
       if (modelo.atencionNombre) dibujarParrafo(doc, x, ancho, `Atención: ${modelo.atencionNombre}`, { color: colores.texto, tamano: 10 });
       if (modelo.atencionCargo) dibujarParrafo(doc, x, ancho, modelo.atencionCargo, { color: colores.suave, tamano: 9.5 });
 
-      doc.moveDown(0.9);
+      doc.moveDown(0.7);
+      dibujarSeparador(doc, x, ancho, colores.borde);
       dibujarParrafo(doc, x, ancho, modelo.saludo, { color: colores.texto, tamano: 10 });
 
-      doc.moveDown(1);
+      doc.moveDown(0.7);
+      dibujarSeparador(doc, x, ancho, colores.borde);
       asegurarEspacio(doc, 90);
       tema.seccion(doc, x, ancho, tema.tituloTabla);
       dibujarTabla(
@@ -256,6 +270,14 @@ export function renderDocumentoComercial(tema: TemaComercial, modelo: DocumentoC
         modelo.lineas.map((l) => [l.origen, l.destino, l.unidad, formatoMoneda(l.precio, modelo.moneda)]),
         { fondoEncabezado: colores.acento, textoEncabezado: colores.textoSobreAcento, colorBorde: colores.borde, colorTexto: colores.texto, fondoFilaAlterna: colores.filaAlterna },
       );
+
+      // Total ADICIONAL (nunca sustituye el precio individual de cada línea de la tabla): solo cuando hay más de una ruta.
+      if (modelo.lineas.length > 1) {
+        const total = modelo.lineas.reduce((suma, l) => suma + l.precio, 0);
+        asegurarEspacio(doc, 20);
+        dibujarParrafo(doc, x, ancho, `Total (${modelo.encabezadoPrecio}): ${formatoMoneda(total, modelo.moneda)}`, { color: colores.texto, tamano: 10.5, negrita: true, alinear: "right" });
+        doc.moveDown(0.3);
+      }
 
       const estiloLista = { color: colores.texto, colorVineta: colores.acento };
       if (tema.seccionUnica) {
@@ -283,8 +305,9 @@ export function renderDocumentoComercial(tema: TemaComercial, modelo: DocumentoC
         doc.moveDown(0.6);
         dibujarParrafo(doc, x, ancho, `Propuesta válida hasta el ${fechaLarga(modelo.fechaVencimiento)}.`, { color: colores.texto, tamano: 9.5, negrita: true });
       }
-      doc.moveDown(1);
-      asegurarEspacio(doc, 40);
+      doc.moveDown(0.8);
+      asegurarEspacio(doc, 44);
+      dibujarSeparador(doc, x, ancho, colores.borde);
       dibujarParrafo(doc, x, ancho, modelo.cierre, { color: colores.texto, tamano: 10 });
     },
     {
