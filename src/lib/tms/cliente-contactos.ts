@@ -183,3 +183,30 @@ export async function actualizarContactoCliente(
   const rows = await query<RowDataPacket[]>(`${SELECT} WHERE id = ? LIMIT 1`, [id]);
   return rows[0] ? mapRow(rows[0]) : null;
 }
+
+export type ResultadoEliminarContacto =
+  | { ok: true }
+  | { ok: false; motivo: "NO_ENCONTRADO" | "UTILIZADO" };
+
+/** El borrado físico es excepcional: solo contactos nunca usados por una ruta. */
+export async function eliminarContactoClienteSinUso(
+  empresaId: number,
+  clienteId: number,
+  contactoId: number,
+): Promise<ResultadoEliminarContacto> {
+  const existentes = await query<RowDataPacket[]>(
+    "SELECT id FROM tms_cliente_contactos WHERE id=? AND empresa_id=? AND cliente_id=? LIMIT 1",
+    [contactoId, empresaId, clienteId],
+  );
+  if (!existentes[0]) return { ok: false, motivo: "NO_ENCONTRADO" };
+  const usos = await query<RowDataPacket[]>(
+    "SELECT id FROM tms_cliente_rutas WHERE empresa_id=? AND contacto_cliente_id=? LIMIT 1",
+    [empresaId, contactoId],
+  );
+  if (usos[0]) return { ok: false, motivo: "UTILIZADO" };
+  await execute(
+    "DELETE FROM tms_cliente_contactos WHERE id=? AND empresa_id=? AND cliente_id=?",
+    [contactoId, empresaId, clienteId],
+  );
+  return { ok: true };
+}

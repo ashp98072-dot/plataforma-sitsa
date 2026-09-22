@@ -32,6 +32,8 @@ function mapRow(r: RowDataPacket): Cliente {
     notas: r.notas != null ? String(r.notas) : null,
     tmsClienteId:
       r.tms_cliente_id != null ? Number(r.tms_cliente_id) : null,
+    contactosActivos: Number(r.contactos_activos ?? 0),
+    contactosInactivos: Number(r.contactos_inactivos ?? 0),
     creadoAt: r.creado_at != null ? String(r.creado_at) : null,
     actualizadoAt: r.actualizado_at != null ? String(r.actualizado_at) : null,
   };
@@ -39,7 +41,9 @@ function mapRow(r: RowDataPacket): Cliente {
 
 const SELECT = `SELECT id, empresa_id, codigo, nombre, razon_social, nit, rtu, telefono,
   email, direccion, contacto_nombre, contacto_telefono, tipo, estado, condicion_credito, notas,
-  tms_cliente_id, creado_at, actualizado_at FROM clientes`;
+  tms_cliente_id, creado_at, actualizado_at,
+  (SELECT COUNT(*) FROM tms_cliente_contactos cc WHERE cc.empresa_id=clientes.empresa_id AND cc.cliente_id=clientes.tms_cliente_id AND cc.activo=1) contactos_activos,
+  (SELECT COUNT(*) FROM tms_cliente_contactos cc WHERE cc.empresa_id=clientes.empresa_id AND cc.cliente_id=clientes.tms_cliente_id AND cc.activo=0) contactos_inactivos FROM clientes`;
 
 export async function listarClientes(
   empresaId: number,

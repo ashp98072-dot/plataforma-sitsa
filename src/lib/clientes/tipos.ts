@@ -27,6 +27,8 @@ export type Cliente = {
   condicionCredito: string | null;
   notas: string | null;
   tmsClienteId: number | null;
+  contactosActivos?: number;
+  contactosInactivos?: number;
   creadoAt: string | null;
   actualizadoAt: string | null;
 };
