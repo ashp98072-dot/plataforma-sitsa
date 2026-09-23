@@ -1,12 +1,23 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
 import { hoyLocal } from "@/lib/rrhh/dates";
-import { puedeCerrarManualmente } from "@/lib/tms/cierre-viaje-shared";
+import { puedeCerrarManualmente, puedeCerrarNormalmente } from "@/lib/tms/cierre-viaje-shared";
+import type { ResultadoCierreMasivo } from "@/lib/tms/cierre-masivo";
+import {
+  agruparPorFecha,
+  esSeleccionable,
+  fechaVisible,
+  grupoAbierto,
+  idsSeleccionables,
+  notaPaginacionGrupo,
+  resumenSeleccion,
+  type GrupoFecha,
+} from "./planes-agrupacion";
 import { formatearFechaHora12, formatearHora12 } from "@/lib/tms/hora-formato";
 import { resumenRegreso } from "@/lib/tms/regreso-viaje";
 
@@ -67,7 +78,9 @@ export function accionesViaje(
     verDetalle: true,
     pdf: true,
     irProgramacion: !consulta && !historico,
-    cerrar: !consulta && p.pendienteCierre && puedeCerrarViaje,
+    // TMS-CIERRE-MASIVO-1: misma regla que cerrarViaje() en el backend (Descargado, o En ruta/Cargado con llegada).
+    // `pendienteCierre` por sí solo también incluye Programado con llegada, que el backend rechaza.
+    cerrar: !consulta && puedeCerrarViaje && puedeCerrarNormalmente(p.estado, p.pendienteCierre),
     cierreManual: !consulta && puedeCerrarViaje && puedeCerrarManualmente(p.estado),
   };
 }
@@ -451,6 +464,8 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
   const cargar = useCallback(async (paginaSolicitada = page) => {
     setLoading(true);
     setError("");
+    // Nunca cerrar viajes que ya no están visibles: cualquier carga (filtros, página, rango, búsqueda, recarga tras cerrar) limpia la selección.
+    setSeleccion(new Set());
     try {
       const p = filtrosQueryString();
       p.set("page", String(paginaSolicitada));
@@ -540,6 +555,17 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
   const [enviandoManual, setEnviandoManual] = useState(false);
   const [errorManual, setErrorManual] = useState("");
 
+  // TMS-CIERRE-MASIVO-1 — selección (UNA por pantalla; cada botón masivo recalcula qué seleccionados admite),
+  // grupos por fecha expandidos/contraídos y cierre masivo (NORMAL o MANUAL, botones separados).
+  const [seleccion, setSeleccion] = useState<Set<number>>(new Set());
+  const [togglesGrupo, setTogglesGrupo] = useState<Record<string, boolean>>({});
+  const [masivo, setMasivo] = useState<{ tipo: "NORMAL" | "MANUAL"; fecha: string } | null>(null);
+  const [motivoMasivo, setMotivoMasivo] = useState("");
+  const [comentarioMasivo, setComentarioMasivo] = useState("");
+  const [enviandoMasivo, setEnviandoMasivo] = useState(false);
+  const [errorMasivo, setErrorMasivo] = useState("");
+  const [resultadoMasivo, setResultadoMasivo] = useState<(ResultadoCierreMasivo & { fecha: string }) | null>(null);
+
   function abrirCierreManual(planId: number) {
     if (expandido !== planId) void abrirDetalle(planId);
     setCierreManualPlanId(planId);
@@ -625,7 +651,84 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
     }
   }
 
+  const mostrarSel = !esReporte && puedeCerrarViaje;
+
+  // Agrupación visual por fecha SOLO en modo operativo (el reporte conserva la tabla plana).
+  const grupos = useMemo(() => (esReporte ? [] : agruparPorFecha(planes)), [esReporte, planes]);
+  const items = useMemo(() => {
+    if (esReporte) return planes.map((p) => ({ kind: "plan" as const, p }));
+    const lista: ({ kind: "grupo"; grupo: GrupoFecha<PlanReporte>; indice: number; abierto: boolean } | { kind: "plan"; p: PlanReporte })[] = [];
+    grupos.forEach((grupo, indice) => {
+      const abierto = grupoAbierto(indice, grupo.fecha, togglesGrupo, planFocoId != null && grupo.planes.some((p) => p.id === planFocoId));
+      lista.push({ kind: "grupo", grupo, indice, abierto });
+      if (abierto) for (const p of grupo.planes) lista.push({ kind: "plan", p });
+    });
+    return lista;
+  }, [esReporte, planes, grupos, togglesGrupo, planFocoId]);
+
+  function alternarSeleccion(p: PlanReporte) {
+    if (!esSeleccionable(p, puedeCerrarViaje)) return;
+    setSeleccion((prev) => {
+      const n = new Set(prev);
+      if (n.has(p.id)) n.delete(p.id); else n.add(p.id);
+      return n;
+    });
+  }
+
+  function seleccionarElegibles(g: GrupoFecha<PlanReporte>) {
+    setSeleccion((prev) => new Set([...prev, ...idsSeleccionables(g.planes, puedeCerrarViaje)]));
+  }
+
+  function limpiarSeleccionGrupo(g: GrupoFecha<PlanReporte>) {
+    const ids = new Set(g.planes.map((p) => p.id));
+    setSeleccion((prev) => new Set([...prev].filter((id) => !ids.has(id))));
+  }
+
+  function abrirMasivo(tipo: "NORMAL" | "MANUAL", fecha: string) {
+    setMasivo({ tipo, fecha });
+    setMotivoMasivo("");
+    setComentarioMasivo("");
+    setErrorMasivo("");
+  }
+
+  /** Envía SOLO los elegibles del tipo elegido; el servidor vuelve a validar todo (permiso, empresa, estado). */
+  async function ejecutarMasivo() {
+    if (!masivo || enviandoMasivo) return;
+    const grupo = grupos.find((g) => g.fecha === masivo.fecha);
+    if (!grupo) return;
+    const r = resumenSeleccion(grupo.planes, seleccion, puedeCerrarViaje);
+    const ids = masivo.tipo === "NORMAL" ? r.normal.ids : r.manual.ids;
+    if (!ids.length) { setErrorMasivo("No hay viajes elegibles seleccionados."); return; }
+    const motivo = motivoMasivo.trim();
+    if (masivo.tipo === "MANUAL" && (motivo.length < 5 || motivo.length > 500)) {
+      setErrorMasivo("El motivo es obligatorio: entre 5 y 500 caracteres.");
+      return;
+    }
+    if (comentarioMasivo.trim().length > 1000) { setErrorMasivo("El comentario no puede superar 1000 caracteres."); return; }
+    setEnviandoMasivo(true);
+    setErrorMasivo("");
+    try {
+      const res = await fetch(`/api/empresas/${slug}/tms/planes/cerrar-masivo`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(masivo.tipo === "NORMAL"
+          ? { tipo: "NORMAL", planIds: ids, grupo: masivo.fecha }
+          : { tipo: "MANUAL", planIds: ids, grupo: masivo.fecha, motivo, comentario: comentarioMasivo.trim() || undefined }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setErrorMasivo(data.error ?? "No se pudo ejecutar el cierre masivo."); return; }
+      setResultadoMasivo({ ...(data as ResultadoCierreMasivo), fecha: masivo.fecha });
+      setMasivo(null);
+      await cargar(); // recarga resultados (y limpia la selección)
+    } catch {
+      setErrorMasivo("Error de conexión.");
+    } finally {
+      setEnviandoMasivo(false);
+    }
+  }
+
   const columnas = [
+    ...(mostrarSel ? ["Sel."] : []),
     "Código", "Fecha", "Cliente", "Ruta", "Placa", "Piloto", "Auxiliares",
     "H. salida", "H. llegada", "Km salida", "Km llegada", "Km rec.",
     "Evid.", "Tarifa usada", "Tarifa", "Estado",
@@ -792,6 +895,23 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
 
       {error ? <p className="text-sm text-rose-500">{error}</p> : null}
 
+      {resultadoMasivo ? (
+        <section aria-label="Resultado del cierre masivo" className="space-y-1 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm text-[var(--text)]">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <strong>Cierre masivo {resultadoMasivo.tipo === "MANUAL" ? "manual" : "normal"} — {fechaVisible(resultadoMasivo.fecha)}</strong>
+            <button type="button" className="text-xs underline" onClick={() => setResultadoMasivo(null)}>Ocultar</button>
+          </div>
+          <p>Cerrados: {resultadoMasivo.cerrados.length} · Omitidos: {resultadoMasivo.omitidos.length} · Errores: {resultadoMasivo.errores.length}</p>
+          {resultadoMasivo.cerrados.length ? <p className="text-xs text-emerald-400">Cerrados: {resultadoMasivo.cerrados.map((c) => c.codigo).join(", ")}</p> : null}
+          {resultadoMasivo.omitidos.length ? (
+            <ul className="list-disc pl-5 text-xs text-amber-300">{resultadoMasivo.omitidos.map((o) => <li key={`o${o.id}`}>{o.codigo}: {o.motivo}</li>)}</ul>
+          ) : null}
+          {resultadoMasivo.errores.length ? (
+            <ul className="list-disc pl-5 text-xs text-rose-400">{resultadoMasivo.errores.map((o) => <li key={`e${o.id}`}>{o.codigo}: {o.motivo}</li>)}</ul>
+          ) : null}
+        </section>
+      ) : null}
+
       {/* Tabla */}
       <section className="overflow-x-auto rounded-xl border border-[var(--border)]">
         <table className="min-w-[1400px] w-full text-left text-sm">
@@ -803,12 +923,64 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
             ))}</tr>
           </thead>
           <tbody>
-            {planes.map((p) => {
+            {items.map((it) => {
+              if (it.kind === "grupo") {
+                const g = it.grupo;
+                const nota = notaPaginacionGrupo(it.indice, grupos.length, page, totalPaginas);
+                const parcial = nota != null;
+                const r = resumenSeleccion(g.planes, seleccion, puedeCerrarViaje);
+                return (
+                  <tr key={`grupo-${g.fecha}`} data-grupo-fecha={g.fecha} className="border-t-2 border-[var(--border)] bg-[var(--thead)]">
+                    <td colSpan={columnas.length} className="px-3 py-2">
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+                        <button
+                          type="button"
+                          aria-expanded={it.abierto}
+                          className="text-sm font-semibold text-[var(--text)]"
+                          onClick={() => setTogglesGrupo((t) => ({ ...t, [g.fecha]: !it.abierto }))}
+                        >
+                          {it.abierto ? "▼" : "▶"} {fechaVisible(g.fecha)}
+                        </button>
+                        {g.fecha === hoy ? <span className="rounded-full bg-sky-600 px-2 py-0.5 text-[10px] font-medium text-white">Hoy</span> : null}
+                        <span className="text-xs text-[var(--text)]">{g.total} viaje(s){parcial ? " en esta página" : ""}</span>
+                        <span className="text-xs text-amber-500">{g.cerrables} pendientes de cierre</span>
+                        <span className="text-xs text-emerald-500">{g.cerrados} cerrados</span>
+                        <span className="text-xs text-[var(--muted)]">{g.otros} otros</span>
+                        {nota ? <span className="text-xs italic text-[var(--muted)]">{nota}</span> : null}
+                      </div>
+                      {mostrarSel && it.abierto ? (
+                        <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
+                          <button type="button" className={linkCls} disabled={!idsSeleccionables(g.planes, puedeCerrarViaje).length} onClick={() => seleccionarElegibles(g)}>Seleccionar elegibles</button>
+                          <button type="button" className={linkCls} disabled={!r.seleccionados} onClick={() => limpiarSeleccionGrupo(g)}>Limpiar selección</button>
+                          <button type="button" className="rounded bg-emerald-600 px-2.5 py-1 font-medium text-white disabled:opacity-40" disabled={!r.normal.elegibles} onClick={() => abrirMasivo("NORMAL", g.fecha)}>
+                            Cerrar seleccionados{r.seleccionados ? ` (Elegibles ${r.normal.elegibles} / No elegibles ${r.normal.noElegibles})` : ""}
+                          </button>
+                          <button type="button" className="rounded bg-rose-600 px-2.5 py-1 font-medium text-white disabled:opacity-40" disabled={!r.manual.elegibles} onClick={() => abrirMasivo("MANUAL", g.fecha)}>
+                            Cierre manual masivo{r.seleccionados ? ` (Elegibles ${r.manual.elegibles} / No elegibles ${r.manual.noElegibles})` : ""}
+                          </button>
+                        </div>
+                      ) : null}
+                    </td>
+                  </tr>
+                );
+              }
+              const p = it.p;
               const badge = badgeEstado(p);
               const acc = accionesViaje(modo, p, puedeCerrarViaje);
               return (
                 <Fragment key={p.id}>
                   <tr className="border-t border-[var(--border)] bg-[var(--card)] align-top">
+                    {mostrarSel ? (
+                      <td className="px-2 py-1.5 text-xs">
+                        <input
+                          type="checkbox"
+                          aria-label={`Seleccionar ${p.codigo}`}
+                          checked={seleccion.has(p.id)}
+                          disabled={!esSeleccionable(p, puedeCerrarViaje)}
+                          onChange={() => alternarSeleccion(p)}
+                        />
+                      </td>
+                    ) : null}
                     <td className="px-2 py-1.5 font-mono text-xs">{p.codigo}</td>
                     <td className="whitespace-nowrap px-2 py-1.5 text-xs">{p.fechaPlan}</td>
                     <td className="px-2 py-1.5 text-xs">{p.cliente ?? "—"}</td>
@@ -1109,6 +1281,52 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
           <button type="button" className="rounded border border-[var(--border)] px-2.5 py-1 text-[var(--text)] disabled:opacity-40" disabled={loading || page >= totalPaginas} onClick={() => void cargar(page + 1)}>Siguiente →</button>
         </div>
       </div>
+
+      {masivo ? (() => {
+        const grupo = grupos.find((g) => g.fecha === masivo.fecha);
+        const r = grupo ? resumenSeleccion(grupo.planes, seleccion, puedeCerrarViaje) : null;
+        if (!r) return null;
+        const manual = masivo.tipo === "MANUAL";
+        const cual = manual ? r.manual : r.normal;
+        return (
+          <div role="dialog" aria-modal="true" aria-label={manual ? "Cierre manual masivo" : "Cierre masivo"} className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+            <div className="w-full max-w-lg space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 text-sm text-[var(--text)]">
+              <h2 className="text-base font-semibold">{manual ? "Cierre manual masivo" : "Cierre masivo"} — {fechaVisible(masivo.fecha)}</h2>
+              <div>
+                <p>Seleccionados: {r.seleccionados}</p>
+                <p>{manual ? "Elegibles para cierre manual" : "Elegibles"}: {cual.elegibles}</p>
+                <p>No elegibles: {cual.noElegibles}</p>
+              </div>
+              {manual ? (
+                <>
+                  <p className="rounded border border-amber-700/60 bg-amber-950/20 px-2 py-1.5 text-xs text-amber-300">
+                    Este cierre es administrativo y puede cerrar viajes sin llegada física registrada. No se crearán horas de llegada, km de llegada ni evidencias.
+                  </p>
+                  <label className="block text-xs text-[var(--muted)]">Motivo *
+                    <textarea className={`${inputCls} mt-0.5 block w-full`} rows={2} maxLength={500} value={motivoMasivo} onChange={(e) => setMotivoMasivo(e.target.value)} />
+                  </label>
+                  <label className="block text-xs text-[var(--muted)]">Comentario (opcional)
+                    <textarea className={`${inputCls} mt-0.5 block w-full`} rows={2} maxLength={1000} value={comentarioMasivo} onChange={(e) => setComentarioMasivo(e.target.value)} />
+                  </label>
+                </>
+              ) : null}
+              <p>Se intentarán cerrar únicamente los {cual.elegibles} elegibles. ¿Continuar?</p>
+              {errorMasivo ? <p role="alert" className="text-xs text-rose-500">{errorMasivo}</p> : null}
+              <div className="flex justify-end gap-2">
+                <button type="button" className="rounded border border-[var(--border)] px-3 py-1.5 text-xs" disabled={enviandoMasivo} onClick={() => setMasivo(null)}>Cancelar</button>
+                <button
+                  type="button"
+                  className={`rounded px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40 ${manual ? "bg-rose-600" : "bg-emerald-600"}`}
+                  disabled={enviandoMasivo || !cual.elegibles || (manual && motivoMasivo.trim().length < 5)}
+                  onClick={() => void ejecutarMasivo()}
+                >
+                  {enviandoMasivo ? "Cerrando…" : manual ? "Confirmar cierre manual" : "Confirmar cierre"}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })() : null}
     </div>
   );
 }
