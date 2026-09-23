@@ -58,6 +58,81 @@ describe("resolverTcReporte (regla única de resolución)", () => {
   });
 });
 
+describe("fallback de la placa ACTUAL: acotado por empresa/acceso (el snapshot nunca depende del acceso)", () => {
+  // Emula el LEFT JOIN de la consulta: SOLO si el SQL trae el predicado de acceso (dueño = empresa del plan
+  // o fila en flota_vehiculo_acceso), un vehículo se "une"; si no, tc_placa_actual llega NULL. No hay BD real.
+  type Veh = { id: number; placa: string; empresa_id: number };
+  let vehiculos: Veh[];
+  let acceso: { vehiculo_id: number; empresa_id: number }[];
+  const EMPRESA = 7;
+  const emularJoin = (sql: string, p: { tc_vehiculo_id: number | null; tc_placa_historica?: string | null }) => {
+    const acotado = sql.includes("tcv.empresa_id = p.empresa_id") && sql.includes("tca.vehiculo_id = tcv.id AND tca.empresa_id = p.empresa_id");
+    const v = vehiculos.find((x) => x.id === p.tc_vehiculo_id);
+    const unido = v && (!acotado || v.empresa_id === EMPRESA || acceso.some((a) => a.vehiculo_id === v.id && a.empresa_id === EMPRESA));
+    return unido ? v.placa : null;
+  };
+  const conectar = (p: { tc_vehiculo_id: number | null; tc_placa_historica?: string | null }) => {
+    vi.mocked(query).mockImplementation((async (sql: string) => {
+      if (!(String(sql).includes("LEFT JOIN tms_clientes"))) return [];
+      return [fila({ tc_vehiculo_id: p.tc_vehiculo_id, tc_placa_historica: p.tc_placa_historica ?? null, tc_placa_actual: emularJoin(String(sql), p) })];
+    }) as never);
+  };
+  beforeEach(() => {
+    vehiculos = [{ id: 5, placa: "TC-PROPIO", empresa_id: 7 }, { id: 6, placa: "TC-COMPARTIDO", empresa_id: 9 }, { id: 8, placa: "TC-AJENO", empresa_id: 9 }];
+    acceso = [{ vehiculo_id: 6, empresa_id: 7 }];
+  });
+
+  it("la consulta condiciona el JOIN al dueño o al acceso explícito de la empresa DEL PLAN", async () => {
+    await obtenerReporteViajes(7, {});
+    const sql = String(vi.mocked(query).mock.calls[0][0]);
+    expect(sql).toContain("LEFT JOIN flota_vehiculos tcv ON tcv.id = p.tc_vehiculo_id");
+    expect(sql).toContain("tcv.empresa_id = p.empresa_id");
+    expect(sql).toContain("SELECT 1 FROM flota_vehiculo_acceso tca");
+    expect(sql).toContain("tca.vehiculo_id = tcv.id AND tca.empresa_id = p.empresa_id");
+  });
+
+  it("1) TC propio + sin snapshot -> el fallback muestra la placa actual", async () => {
+    conectar({ tc_vehiculo_id: 5 });
+    expect(await primero()).toMatchObject({ tcPlaca: "TC-PROPIO", tcOrigen: "INTERNO", tcVehiculoId: 5 });
+  });
+
+  it("2) TC compartido CON acceso + sin snapshot -> el fallback muestra la placa actual (compartidos siguen permitidos)", async () => {
+    conectar({ tc_vehiculo_id: 6 });
+    expect(await primero()).toMatchObject({ tcPlaca: "TC-COMPARTIDO", tcOrigen: "INTERNO", tcVehiculoId: 6 });
+  });
+
+  it("3) TC de otra empresa SIN acceso + sin snapshot -> NO expone la placa actual (tcPlaca = null)", async () => {
+    conectar({ tc_vehiculo_id: 8 });
+    const r = await primero();
+    expect(r.tcPlaca).toBeNull();
+    expect(r.tcOrigen).toBeNull();
+    expect(JSON.stringify(r)).not.toContain("TC-AJENO");
+  });
+
+  it("4) TC de otra empresa sin acceso PERO con tc_placa_historica -> sigue mostrando el snapshot histórico", async () => {
+    conectar({ tc_vehiculo_id: 8, tc_placa_historica: "TC-SNAPSHOT" });
+    expect(await primero()).toMatchObject({ tcPlaca: "TC-SNAPSHOT", tcOrigen: "INTERNO", tcVehiculoId: 8 });
+  });
+
+  it("5) se retira el acceso compartido DESPUÉS del viaje: con snapshot mantiene el snapshot; sin snapshot no obtiene la placa actual", async () => {
+    acceso = []; // acceso retirado
+    conectar({ tc_vehiculo_id: 6, tc_placa_historica: "TC-COMPARTIDO-ORIGINAL" });
+    expect((await primero()).tcPlaca).toBe("TC-COMPARTIDO-ORIGINAL");
+    conectar({ tc_vehiculo_id: 6 });
+    expect((await primero()).tcPlaca).toBeNull();
+  });
+
+  it("el snapshot se conserva aunque el vehículo se elimine o cambie de placa (no depende del catálogo)", async () => {
+    vehiculos = [];
+    conectar({ tc_vehiculo_id: 5, tc_placa_historica: "TC-PLACA-ORIGINAL" });
+    expect((await primero()).tcPlaca).toBe("TC-PLACA-ORIGINAL");
+  });
+
+  it("el control de acceso NO se aplica al snapshot: resolverTcReporte no consulta acceso alguno", () => {
+    expect(resolverTcReporte({ tc_vehiculo_id: 8, tc_placa_historica: "TC-SNAPSHOT", tc_placa_actual: null }).tcPlaca).toBe("TC-SNAPSHOT");
+  });
+});
+
 describe("obtenerReporteViajes — TC en el contrato del reporte", () => {
   it("PROPIO con tc_placa_historica", async () => {
     filasBD = [fila({ tc_vehiculo_id: 5, tc_placa_historica: "TC-456XYZ", tc_placa_actual: "TC-456XYZ" })];

@@ -619,7 +619,11 @@ export type PaginacionReporte = { limit: number; offset: number };
  *     después, el viaje histórico conserva la placa programada.
  *  2) `tc_externo_placa` (texto de un viaje Tercerizado) => EXTERNO.
  *  3) Solo si no hay snapshot y `tc_vehiculo_id` sigue vivo: la placa ACTUAL del catálogo, como
- *     fallback visual (INTERNO). Nunca sustituye a un snapshot existente.
+ *     fallback visual (INTERNO). Nunca sustituye a un snapshot existente. El JOIN que la trae
+ *     (`tc_placa_actual`) solo devuelve el vehículo si es de la empresa del plan o si esta tiene acceso
+ *     explícito (flota_vehiculo_acceso); un vehículo sin acceso llega como NULL y no se expone. Ese control
+ *     aplica ÚNICAMENTE a la placa actual: el snapshot (1) se muestra siempre, aunque el vehículo se
+ *     elimine, cambie de placa o se retire el acceso compartido.
  * Propio y Tercerizado no coexisten (Programación limpia el otro campo al guardar); si algún dato
  * legado los trajera juntos, gana el snapshot interno.
  */
@@ -673,7 +677,14 @@ export async function obtenerReporteViajes(
      LEFT JOIN tms_clientes c ON c.id = p.cliente_id
      LEFT JOIN tms_unidades u ON u.id = p.unidad_id
      LEFT JOIN flota_vehiculos ve ON ve.id = u.flota_vehiculo_id
-     ${conTc ? "LEFT JOIN flota_vehiculos tcv ON tcv.id = p.tc_vehiculo_id" : ""}
+     ${conTc ? `LEFT JOIN flota_vehiculos tcv ON tcv.id = p.tc_vehiculo_id
+       AND (
+         tcv.empresa_id = p.empresa_id
+         OR EXISTS (
+           SELECT 1 FROM flota_vehiculo_acceso tca
+           WHERE tca.vehiculo_id = tcv.id AND tca.empresa_id = p.empresa_id
+         )
+       )` : ""}
      LEFT JOIN tms_personal pil ON pil.id = p.piloto_id
      LEFT JOIN (
        SELECT plan_id, COUNT(*) AS cnt FROM tms_evidencias GROUP BY plan_id

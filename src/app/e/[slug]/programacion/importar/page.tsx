@@ -261,7 +261,7 @@ export default function ImportarProgramacionPage() {
 
       <div className="rounded-lg border border-[var(--border)] bg-[var(--panel)] p-3 text-xs text-[var(--muted)]">
         <p>
-          La plantilla incluye hojas de referencia (Rutas, Vehiculos, Empleados, Clientes) — son
+          La plantilla incluye hojas de referencia (Rutas, Vehiculos, TC, Empleados, Clientes) — son
           solo ayuda para llenar el Excel, nunca fuente de verdad: al importar siempre se revalida
           todo contra el sistema real. Código de ruta, código de piloto/auxiliares y placa deben
           existir previamente — esta importación nunca crea catálogo nuevo.
