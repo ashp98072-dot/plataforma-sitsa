@@ -4,9 +4,9 @@ import type { PoolConnection } from "mysql2/promise";
 vi.mock("@/lib/db", () => ({ getPool: vi.fn(), execute: vi.fn(), query: vi.fn() }));
 vi.mock("@/lib/auditoria", () => ({ registrarAuditoria: vi.fn(), registrarAuditoriaTx: vi.fn() }));
 
-import { getPool } from "@/lib/db";
-import { registrarAuditoriaTx } from "@/lib/auditoria";
-import { cerrarViajeManual, puedeCerrarManualmente } from "./cierre-viaje";
+import { execute, getPool, query } from "@/lib/db";
+import { registrarAuditoria, registrarAuditoriaTx } from "@/lib/auditoria";
+import { cerrarViaje, cerrarViajeManual, puedeCerrarManualmente } from "./cierre-viaje";
 
 /**
  * TMS-CIERRE-OPERACIONES-1 — cerrarViajeManual(). Mismo arnés de mocks ya
@@ -210,6 +210,27 @@ describe("cerrarViajeManual — auditoría (17)", () => {
     const [, detalle] = vi.mocked(registrarAuditoriaTx).mock.calls[0];
     expect(detalle.detalle).toContain("SIN VIAJE FÍSICO REGISTRADO");
   });
+
+  /**
+   * PROGRAMACION-VIAJES-TERCERIZADOS-1 (sección 22) — el cierre manual
+   * ahora también registra tipo_viaje en la auditoría; ser Tercerizado
+   * nunca cambia si el cierre procede (sección 19).
+   */
+  it("registra tipo_viaje = Tercerizado en la auditoría cuando el plan lo es", async () => {
+    plan = { id: 10, estado: "Programado", tipo_viaje: "Tercerizado" };
+    const r = await cerrar();
+    expect(r.ok).toBe(true);
+    const [, detalle] = vi.mocked(registrarAuditoriaTx).mock.calls[0];
+    expect(detalle.detalle).toContain("Tipo: Tercerizado");
+  });
+
+  it("un plan sin tipo_viaje en la fila (dato legado) audita como Propio, nunca revienta", async () => {
+    plan = { id: 10, estado: "Programado" };
+    const r = await cerrar();
+    expect(r.ok).toBe(true);
+    const [, detalle] = vi.mocked(registrarAuditoriaTx).mock.calls[0];
+    expect(detalle.detalle).toContain("Tipo: Propio");
+  });
 });
 
 describe("cerrarViajeManual — flota_viajes huérfano (18-21)", () => {
@@ -299,5 +320,56 @@ describe("puedeCerrarManualmente — criterio PURO compartido con la UI (23-25)"
 
   it.each(["Cerrado", "Cancelado", "Descargado"])("24) no permite cierre manual desde %s", (estado) => {
     expect(puedeCerrarManualmente(estado)).toBe(false);
+  });
+});
+
+/**
+ * PROGRAMACION-VIAJES-TERCERIZADOS-1 (sección 22) — cerrarViaje() (cierre
+ * normal, no manual) no tenía pruebas dedicadas en este archivo; se agregan
+ * aquí, centradas en el único cambio de este ticket: la auditoría ahora
+ * incluye tipo_viaje. El UPDATE atómico en sí (transición de estados) no
+ * se modificó — sección 19: Tercerizado nunca bloquea el cierre, y en
+ * efecto el UPDATE ni siquiera consulta tipo_viaje para decidir.
+ */
+describe("cerrarViaje (no manual) — auditoría incluye tipo_viaje", () => {
+  beforeEach(() => {
+    vi.mocked(execute).mockImplementation((async (sql: string) => {
+      if (String(sql).includes("UPDATE tms_planes_viaje")) return { affectedRows: 1 };
+      throw new Error(`execute inesperado: ${sql}`);
+    }) as never);
+  });
+
+  it("un plan Tercerizado cerrado audita 'Tipo: Tercerizado'", async () => {
+    vi.mocked(query).mockResolvedValue([{ tipo_viaje: "Tercerizado" }] as never);
+    const r = await cerrarViaje(7, 10, "ops1");
+    expect(r).toEqual({ ok: true });
+    expect(registrarAuditoria).toHaveBeenCalledWith(
+      expect.objectContaining({ empresaId: 7, usuario: "ops1", accion: "cerrar_viaje", modulo: "tms" }),
+    );
+    const [detalle] = vi.mocked(registrarAuditoria).mock.calls[0];
+    expect(detalle.detalle).toBe("Plan #10 → Cerrado · tipo Tercerizado");
+  });
+
+  it("un plan Propio cerrado audita 'Tipo: Propio'", async () => {
+    vi.mocked(query).mockResolvedValue([{ tipo_viaje: "Propio" }] as never);
+    await cerrarViaje(7, 11, "ops1");
+    const [detalle] = vi.mocked(registrarAuditoria).mock.calls[0];
+    expect(detalle.detalle).toBe("Plan #11 → Cerrado · tipo Propio");
+  });
+
+  it("una fila legada sin tipo_viaje audita 'Propio' por defecto, nunca revienta", async () => {
+    vi.mocked(query).mockResolvedValue([{}] as never);
+    const r = await cerrarViaje(7, 12, "ops1");
+    expect(r.ok).toBe(true);
+    const [detalle] = vi.mocked(registrarAuditoria).mock.calls[0];
+    expect(detalle.detalle).toContain("tipo Propio");
+  });
+
+  it("el tipo_viaje se lee acotado por empresa_id (aislamiento multiempresa)", async () => {
+    vi.mocked(query).mockResolvedValue([{ tipo_viaje: "Propio" }] as never);
+    await cerrarViaje(42, 10, "ops1");
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(String(sql)).toContain("empresa_id = ?");
+    expect(params).toEqual([10, 42]);
   });
 });

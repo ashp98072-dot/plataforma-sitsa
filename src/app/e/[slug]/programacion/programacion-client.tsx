@@ -131,6 +131,22 @@ export type Plan = {
    */
   costo_operativo_referencia: number | null;
   referencia_cliente: string | null;
+  /**
+   * PROGRAMACION-VIAJES-TERCERIZADOS-1 — 'Propio' (default, comportamiento
+   * de siempre) | 'Tercerizado' (recursos externos, snapshot de texto en
+   * los 5 campos siguientes — piloto_id/auxiliar_id/placa quedan vacíos a
+   * propósito, no hay FK hacia un recurso externo). Opcional en el tipo
+   * por compatibilidad con cualquier consumidor que no lo espere — el GET
+   * ya lo devuelve siempre.
+   */
+  tipo_viaje?: string;
+  piloto_externo_nombre?: string | null;
+  /** Un nombre por línea — mismo criterio que notas/condiciones_adicionales (texto con saltos de línea, no un arreglo). */
+  auxiliares_externos?: string | null;
+  unidad_externa_placa?: string | null;
+  unidad_externa_descripcion?: string | null;
+  transportista_externo?: string | null;
+  costo_tercerizado?: number | null;
   /** VIAT-4/VIAT-4b: fotografía histórica de la ruta usada al armar el viaje. */
   ruta_id: number | null;
   ruta_codigo_historico: string | null;
@@ -911,13 +927,28 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
       const filas: FilaProgramacionImagen[] = visibles.map((p) => {
         const { origen } = origenDestino(p.paradas);
         const { mes, dia } = mesDia(p.fecha_plan);
+        // PROGRAMACION-VIAJES-TERCERIZADOS-1 — mismo criterio que el
+        // reporte tradicional (reporte/route.ts): un viaje Tercerizado no
+        // tiene placa/piloto/auxiliares internos (p.placa/p.piloto/
+        // p.auxiliares salen vacíos a propósito), se completan con su
+        // propio snapshot de texto, nunca se dejan vacíos. Marca
+        // "(Tercerizado)" agregada a la celda de Piloto — discreta, sin
+        // columna nueva que altere el formato que Operaciones ya conoce.
+        const esTercerizado = (p.tipo_viaje ?? "Propio") === "Tercerizado";
+        const auxiliaresExternos = esTercerizado
+          ? (p.auxiliares_externos ?? "").split(/\r?\n/).map((n) => n.trim()).filter(Boolean)
+          : [];
         return {
           mes,
           dia,
-          placa: p.placa || "",
-          piloto: p.piloto || "",
-          auxiliar1: p.auxiliares[0] ?? "",
-          auxiliar2: p.auxiliares[1] ?? "",
+          placa: esTercerizado ? p.unidad_externa_placa || "" : p.placa || "",
+          piloto: esTercerizado
+            ? p.piloto_externo_nombre
+              ? `${p.piloto_externo_nombre} (Tercerizado)`
+              : ""
+            : p.piloto || "",
+          auxiliar1: esTercerizado ? (auxiliaresExternos[0] ?? "") : (p.auxiliares[0] ?? ""),
+          auxiliar2: esTercerizado ? (auxiliaresExternos[1] ?? "") : (p.auxiliares[1] ?? ""),
           cliente: p.cliente || "",
           lugarCarga: origen || "",
           hora: p.hora_carga ? p.hora_carga.slice(0, 5) : "",

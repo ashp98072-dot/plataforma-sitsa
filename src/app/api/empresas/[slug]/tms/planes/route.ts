@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
 import { execute, getPool, query, type SqlParams } from "@/lib/db";
-import { registrarAuditoria } from "@/lib/auditoria";
+import { registrarAuditoria, registrarAuditoriaTx } from "@/lib/auditoria";
 import { requireTenantProgramacion, requireTenantProgramacionOTms } from "@/lib/tenant";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
 import {
@@ -296,6 +296,9 @@ export async function GET(req: Request, ctx: Ctx) {
               p.costo_operativo_referencia, p.referencia_cliente, p.ruta_id, p.ruta_codigo_historico,
               p.lugar_descarga_historico, p.contacto_nombre_historico, p.contacto_cargo_historico,
               p.contacto_telefono_historico,
+              -- PROGRAMACION-VIAJES-TERCERIZADOS-1
+              p.tipo_viaje, p.piloto_externo_nombre, p.auxiliares_externos, p.unidad_externa_placa,
+              p.unidad_externa_descripcion, p.transportista_externo, p.costo_tercerizado,
               c.nombre AS cliente, u.placa, pil.nombre AS piloto, aux.nombre AS auxiliar,
               p.piloto_id, p.auxiliar_id, pil.id_empleado AS piloto_empleado_id,
               emp_pil.telefono AS piloto_telefono,
@@ -472,6 +475,19 @@ const schema = z.object({
   pilotoEmpleadoId: z.number().int().positive().optional(),
   auxiliarEmpleadoId: z.number().int().positive().optional(),
   auxiliarEmpleadoIds: z.array(z.number().int().positive()).max(8).optional(),
+  // PROGRAMACION-VIAJES-TERCERIZADOS-1 — 'Propio' (default, compatibilidad
+  // con el flujo de siempre) | 'Tercerizado' (la empresa sigue cobrando el
+  // servicio; lo ejecuta otra empresa/proveedor). Los 6 campos *Externo*
+  // solo aplican cuando tipoViaje = 'Tercerizado' — ver validación más
+  // abajo (nunca se confía en que el cliente HTTP mande el tipo correcto
+  // sin datos, o datos sin el tipo correcto).
+  tipoViaje: z.enum(["Propio", "Tercerizado"]).optional(),
+  pilotoExternoNombre: z.string().max(160).optional(),
+  auxiliaresExternos: z.array(z.string().min(1).max(160)).max(8).optional(),
+  unidadExternaPlaca: z.string().max(40).optional(),
+  unidadExternaDescripcion: z.string().max(160).optional(),
+  transportistaExterno: z.string().max(160).optional(),
+  costoTercerizado: z.number().nonnegative().optional(),
   lugarCarga: z.string().optional(),
   lugarDescarga: z.string().optional(),
   // VIAT-4/VIAT-4b: de qué ruta maestra (tms_cliente_rutas) salió la
@@ -578,9 +594,51 @@ export async function POST(req: Request, ctx: Ctx) {
   // El monto del viaje se DERIVA de la tarifa elegida, pero sigue siendo
   // editable como override manual (si el usuario mandó tarifaComercial).
   const tarifaComercialFinal = d.tarifaComercial ?? snapshotTarifa?.monto ?? null;
+
+  // PROGRAMACION-VIAJES-TERCERIZADOS-1 — 'Propio' (default) usa los
+  // catálogos internos tal cual siempre (bloque más abajo, sin cambios de
+  // comportamiento); 'Tercerizado' NUNCA toca tms_personal/tms_unidades —
+  // solo guarda el snapshot de texto capturado. Validado aquí, antes de
+  // escribir nada: un Tercerizado sin al menos el nombre del piloto
+  // externo no tiene sentido operativo.
+  const tipoViaje = d.tipoViaje === "Tercerizado" ? "Tercerizado" : "Propio";
+  const esTercerizado = tipoViaje === "Tercerizado";
+  if (esTercerizado && !d.pilotoExternoNombre?.trim()) {
+    return NextResponse.json(
+      { error: "Un viaje tercerizado requiere el nombre del piloto externo." },
+      { status: 400 },
+    );
+  }
+  const opcional = (v: string | null | undefined): string | null => { const t = (v ?? "").trim(); return t ? t : null; };
+  const snapshotTercerizado = {
+    pilotoExternoNombre: esTercerizado ? opcional(d.pilotoExternoNombre) : null,
+    auxiliaresExternos: esTercerizado ? opcional((d.auxiliaresExternos ?? []).map((n) => n.trim()).filter(Boolean).slice(0, 8).join("\n")) : null,
+    unidadExternaPlaca: esTercerizado ? opcional(d.unidadExternaPlaca?.trim().toUpperCase()) : null,
+    unidadExternaDescripcion: esTercerizado ? opcional(d.unidadExternaDescripcion) : null,
+    transportistaExterno: esTercerizado ? opcional(d.transportistaExterno) : null,
+    costoTercerizado: esTercerizado ? (d.costoTercerizado ?? null) : null,
+  };
+
   let clienteId: number | null = null;
   let unidadId: number | null = null;
   let pilotoId: number | null = null;
+  // Declaradas aquí (antes del bloque `if (tipoViaje === "Propio")` de
+  // abajo) para que sigan en [] / null cuando el viaje es Tercerizado —
+  // eso basta para que primerConflictoTraslape/sincronizarViaticosPlan
+  // (más abajo, sin cambios) no encuentren ningún recurso interno que
+  // validar ni ningún viático que crear, sin necesidad de un `if`
+  // adicional en ninguno de los dos.
+  const auxPersonalIds: number[] = [];
+  let auxiliarId: number | null = null;
+  // Mejora Programación (Opción A) — mapa empleadoId (RRHH) -> personalId
+  // (tms_personal, recién resuelto) SOLO para el personal ligado a RRHH —
+  // es la clave para traducir viaticosAsignados (que llega en espacio de
+  // empleadoId, el único que el cliente conoce antes de guardar) al
+  // personalId real que espera sincronizarViaticosPlan. Vacío en un viaje
+  // Tercerizado: no hay personal interno que resolver, así que cualquier
+  // viaticosAsignados que llegara (no debería) no calza con nada y se
+  // rechaza más abajo, igual que ya pasaría con un empleadoId inventado.
+  const empleadoIdAPersonalId = new Map<number, number>();
 
   const codigo = await asegurarCodigoPlanUnico(
     empresaId,
@@ -620,101 +678,104 @@ export async function POST(req: Request, ctx: Ctx) {
       }
     }
   }
-  if (d.placa?.trim()) {
-    const placaNorm = d.placa.trim().toUpperCase();
-    // Fase A4.2: si listarDisponibilidadVehiculos (server-side, ya valida
-    // acceso propio/compartido contra Flota) encontró el vehículo real,
-    // guardamos también su id en tms_unidades.flota_vehiculo_id. Nunca se
-    // confía en un id enviado por el cliente — sale exclusivamente de esta
-    // consulta ya validada.
-    let flotaVehiculoId: number | null = null;
-    try {
-      const dispCheck = await listarDisponibilidadVehiculos(empresaId);
-      const v = dispCheck.vehiculos.find(
-        (x) => x.placa.toUpperCase() === placaNorm,
-      );
-      if (v && !v.puedeEnviar) {
-        return NextResponse.json(
-          {
-            error: `La placa ${placaNorm} no está disponible: ${v.motivoNoDisponible ?? v.estadoDisponibilidad}.`,
-          },
-          { status: 400 },
+  // PROGRAMACION-VIAJES-TERCERIZADOS-1 — TODO este bloque (placa, piloto,
+  // auxiliares: catálogos internos de Flota/RRHH) es EXCLUSIVO de
+  // 'Propio' — código sin cambios de comportamiento respecto a antes de
+  // este ticket. Un viaje 'Tercerizado' nunca lo ejecuta: unidadId/
+  // pilotoId quedan NULL y auxPersonalIds vacío (declarados arriba), así
+  // que ni se crea un tms_personal/tms_unidades para el recurso externo,
+  // ni primerConflictoTraslape/sincronizarViaticosPlan (más abajo)
+  // encuentran nada que validar o que generar.
+  if (tipoViaje === "Propio") {
+    if (d.placa?.trim()) {
+      const placaNorm = d.placa.trim().toUpperCase();
+      // Fase A4.2: si listarDisponibilidadVehiculos (server-side, ya valida
+      // acceso propio/compartido contra Flota) encontró el vehículo real,
+      // guardamos también su id en tms_unidades.flota_vehiculo_id. Nunca se
+      // confía en un id enviado por el cliente — sale exclusivamente de esta
+      // consulta ya validada.
+      let flotaVehiculoId: number | null = null;
+      try {
+        const dispCheck = await listarDisponibilidadVehiculos(empresaId);
+        const v = dispCheck.vehiculos.find(
+          (x) => x.placa.toUpperCase() === placaNorm,
         );
+        if (v && !v.puedeEnviar) {
+          return NextResponse.json(
+            {
+              error: `La placa ${placaNorm} no está disponible: ${v.motivoNoDisponible ?? v.estadoDisponibilidad}.`,
+            },
+            { status: 400 },
+          );
+        }
+        flotaVehiculoId = v?.id ?? null;
+      } catch {
+        /* si falla disponibilidad, no bloquear creación */
       }
-      flotaVehiculoId = v?.id ?? null;
-    } catch {
-      /* si falla disponibilidad, no bloquear creación */
+      const r = await execute(
+        `INSERT INTO tms_unidades (empresa_id, placa, tipo, flota_vehiculo_id)
+         VALUES (?, ?, 'Camion', ?)
+         ON DUPLICATE KEY UPDATE
+           id = LAST_INSERT_ID(id),
+           flota_vehiculo_id = COALESCE(flota_vehiculo_id, VALUES(flota_vehiculo_id))`,
+        [empresaId, placaNorm, flotaVehiculoId],
+      );
+      unidadId = Number(r.insertId);
     }
-    const r = await execute(
-      `INSERT INTO tms_unidades (empresa_id, placa, tipo, flota_vehiculo_id)
-       VALUES (?, ?, 'Camion', ?)
-       ON DUPLICATE KEY UPDATE
-         id = LAST_INSERT_ID(id),
-         flota_vehiculo_id = COALESCE(flota_vehiculo_id, VALUES(flota_vehiculo_id))`,
-      [empresaId, placaNorm, flotaVehiculoId],
-    );
-    unidadId = Number(r.insertId);
-  }
-  // Mejora Programación (Opción A) — mapa empleadoId (RRHH) -> personalId
-  // (tms_personal, recién resuelto) SOLO para el personal ligado a RRHH —
-  // es la clave para traducir viaticosAsignados (que llega en espacio de
-  // empleadoId, el único que el cliente conoce antes de guardar) al
-  // personalId real que espera sincronizarViaticosPlan.
-  const empleadoIdAPersonalId = new Map<number, number>();
 
-  pilotoId = await personalDesdeEmpleado(
-    empresaId,
-    d.pilotoEmpleadoId,
-    "Piloto",
-  );
-  if (!pilotoId && d.pilotoNombre?.trim()) {
-    const r = await execute(
-      "INSERT INTO tms_personal (empresa_id, nombre, tipo) VALUES (?, ?, 'Piloto')",
-      [empresaId, d.pilotoNombre.trim()],
+    pilotoId = await personalDesdeEmpleado(
+      empresaId,
+      d.pilotoEmpleadoId,
+      "Piloto",
     );
-    pilotoId = Number(r.insertId);
-  }
-  if (pilotoId && d.pilotoEmpleadoId) empleadoIdAPersonalId.set(d.pilotoEmpleadoId, pilotoId);
+    if (!pilotoId && d.pilotoNombre?.trim()) {
+      const r = await execute(
+        "INSERT INTO tms_personal (empresa_id, nombre, tipo) VALUES (?, ?, 'Piloto')",
+        [empresaId, d.pilotoNombre.trim()],
+      );
+      pilotoId = Number(r.insertId);
+    }
+    if (pilotoId && d.pilotoEmpleadoId) empleadoIdAPersonalId.set(d.pilotoEmpleadoId, pilotoId);
 
-  const auxIdsRaw =
-    d.auxiliarEmpleadoIds?.length
-      ? d.auxiliarEmpleadoIds
-      : d.auxiliarEmpleadoId
-        ? [d.auxiliarEmpleadoId]
-        : [];
-  const auxPersonalIds: number[] = [];
-  for (const eid of auxIdsRaw.slice(0, 8)) {
-    const pid = await personalDesdeEmpleado(empresaId, eid, "Auxiliar");
-    if (pid) {
-      auxPersonalIds.push(pid);
-      empleadoIdAPersonalId.set(eid, pid);
+    const auxIdsRaw =
+      d.auxiliarEmpleadoIds?.length
+        ? d.auxiliarEmpleadoIds
+        : d.auxiliarEmpleadoId
+          ? [d.auxiliarEmpleadoId]
+          : [];
+    for (const eid of auxIdsRaw.slice(0, 8)) {
+      const pid = await personalDesdeEmpleado(empresaId, eid, "Auxiliar");
+      if (pid) {
+        auxPersonalIds.push(pid);
+        empleadoIdAPersonalId.set(eid, pid);
+      }
     }
-  }
-  const nombresAux = [
-    ...(d.auxiliarNombres ?? []),
-    ...(d.auxiliarNombre?.trim() ? [d.auxiliarNombre.trim()] : []),
-  ];
-  for (const nom of nombresAux) {
-    if (auxPersonalIds.length >= 8) break;
-    const nombre = nom.trim();
-    if (nombre.length < 2) continue;
-    const existing = await query<RowDataPacket[]>(
-      `SELECT id FROM tms_personal
-       WHERE empresa_id = ? AND tipo = 'Auxiliar' AND LOWER(TRIM(nombre)) = LOWER(?)
-       LIMIT 1`,
-      [empresaId, nombre],
-    );
-    if (existing[0]) {
-      auxPersonalIds.push(Number(existing[0].id));
-      continue;
+    const nombresAux = [
+      ...(d.auxiliarNombres ?? []),
+      ...(d.auxiliarNombre?.trim() ? [d.auxiliarNombre.trim()] : []),
+    ];
+    for (const nom of nombresAux) {
+      if (auxPersonalIds.length >= 8) break;
+      const nombre = nom.trim();
+      if (nombre.length < 2) continue;
+      const existing = await query<RowDataPacket[]>(
+        `SELECT id FROM tms_personal
+         WHERE empresa_id = ? AND tipo = 'Auxiliar' AND LOWER(TRIM(nombre)) = LOWER(?)
+         LIMIT 1`,
+        [empresaId, nombre],
+      );
+      if (existing[0]) {
+        auxPersonalIds.push(Number(existing[0].id));
+        continue;
+      }
+      const r = await execute(
+        "INSERT INTO tms_personal (empresa_id, nombre, tipo) VALUES (?, ?, 'Auxiliar')",
+        [empresaId, nombre],
+      );
+      auxPersonalIds.push(Number(r.insertId));
     }
-    const r = await execute(
-      "INSERT INTO tms_personal (empresa_id, nombre, tipo) VALUES (?, ?, 'Auxiliar')",
-      [empresaId, nombre],
-    );
-    auxPersonalIds.push(Number(r.insertId));
+    auxiliarId = auxPersonalIds[0] ?? null;
   }
-  const auxiliarId = auxPersonalIds[0] ?? null;
 
   // Mejora Programación (Opción A) — validar viaticosAsignados ANTES de
   // escribir absolutamente nada: cada empleadoId debe corresponder
@@ -890,8 +951,8 @@ export async function POST(req: Request, ctx: Ctx) {
       try {
         const [result] = await conn.execute<ResultSetHeader>(
           `INSERT INTO tms_planes_viaje
-            (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, tarifa_id, tarifa_nombre_historico, tarifa_monto_historico, tarifa_moneda_historico, costo_operativo_referencia, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado')`,
+            (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, tarifa_id, tarifa_nombre_historico, tarifa_monto_historico, tarifa_moneda_historico, costo_operativo_referencia, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado, tipo_viaje, piloto_externo_nombre, auxiliares_externos, unidad_externa_placa, unidad_externa_descripcion, transportista_externo, costo_tercerizado)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado', ?, ?, ?, ?, ?, ?, ?)`,
           [
             empresaId,
             codigoFinal,
@@ -919,6 +980,13 @@ export async function POST(req: Request, ctx: Ctx) {
             d.contactoCargoHistorico?.trim() || null,
             d.contactoTelefonoHistorico?.trim() || null,
             d.notas ?? null,
+            tipoViaje,
+            snapshotTercerizado.pilotoExternoNombre,
+            snapshotTercerizado.auxiliaresExternos,
+            snapshotTercerizado.unidadExternaPlaca,
+            snapshotTercerizado.unidadExternaDescripcion,
+            snapshotTercerizado.transportistaExterno,
+            snapshotTercerizado.costoTercerizado,
           ],
         );
         planId = Number(result.insertId);
@@ -1001,7 +1069,7 @@ export async function POST(req: Request, ctx: Ctx) {
     usuario: guard.session.username,
     accion: "crear_ruta",
     modulo: "tms",
-    detalle: `Plan #${planId} ${codigoFinal} · fecha ${d.fechaPlan} · piloto ${d.pilotoNombre?.trim() || "—"} · placa ${(d.placa || "").toUpperCase() || "—"} · ${paradasInput.length} parada(s)${paradasTxt ? `: ${paradasTxt}` : ""}`,
+    detalle: `Plan #${planId} ${codigoFinal} · fecha ${d.fechaPlan} · tipo ${tipoViaje} · piloto ${(esTercerizado ? snapshotTercerizado.pilotoExternoNombre : d.pilotoNombre?.trim()) || "—"} · placa ${(esTercerizado ? snapshotTercerizado.unidadExternaPlaca : (d.placa || "").toUpperCase()) || "—"} · ${paradasInput.length} parada(s)${paradasTxt ? `: ${paradasTxt}` : ""}`,
   });
 
   return NextResponse.json({
@@ -1098,7 +1166,126 @@ const patchSchema = z.object({
   pilotoPersonalId: z.number().int().positive().optional(),
   auxiliarPersonalIds: z.array(z.number().int().positive()).max(8).optional(),
   flotaVehiculoId: z.number().int().positive().optional(),
+  // PROGRAMACION-VIAJES-TERCERIZADOS-1 — un PATCH que trae `tipoViaje` se
+  // atiende en patchTipoViaje() (aislado del resto de este archivo, ver
+  // comentario ahí) — nunca en el flujo normal de abajo, que no conoce el
+  // concepto de viaje tercerizado.
+  tipoViaje: z.enum(["Propio", "Tercerizado"]).optional(),
+  pilotoExternoNombre: z.string().max(160).optional(),
+  auxiliaresExternos: z.array(z.string().min(1).max(160)).max(8).optional(),
+  unidadExternaPlaca: z.string().max(40).optional(),
+  unidadExternaDescripcion: z.string().max(160).optional(),
+  transportistaExterno: z.string().max(160).optional(),
+  costoTercerizado: z.number().nonnegative().nullable().optional(),
 });
+
+/**
+ * PROGRAMACION-VIAJES-TERCERIZADOS-1 — cambia el tipo de un plan (Propio
+ * <-> Tercerizado) en un flujo PEQUEÑO y AISLADO, deliberadamente separado
+ * del resto de PATCH (~800 líneas de reglas de tarifa/ruta/disponibilidad/
+ * "motivo sensible" ya endurecidas, que no tienen por qué aprender este
+ * concepto nuevo). Nunca se invoca junto con otros cambios del mismo PATCH
+ * — el frontend, cuando el tipo cambia, manda ESTA llamada primero y
+ * luego (si hace falta asignar piloto/auxiliares/unidad internos al volver
+ * a Propio) un PATCH normal aparte, que sí pasa por toda la validación de
+ * siempre.
+ *
+ * Tercerizado: limpia cualquier piloto_id/auxiliar_id/unidad_id interno
+ * que hubiera quedado (nunca se mezcla un id interno con un snapshot
+ * externo), guarda el snapshot de texto, vacía tms_plan_auxiliares y
+ * sincroniza viáticos con recursos vacíos — sincronizarViaticosPlan ya
+ * borra cualquier viático PROGRAMADO existente y no crea ninguno nuevo
+ * cuando no hay piloto ni auxiliares (ver el propio archivo viaticos.ts),
+ * así que NO hace falta un `if` especial para "no generar viáticos".
+ *
+ * Propio: limpia los snapshots externos. NO resuelve piloto/auxiliares/
+ * unidad internos aquí — igual que un Propio recién creado sin esos
+ * campos, quedan vacíos hasta el PATCH normal que sí los resuelve con
+ * disponibilidad/motivo-sensible completos.
+ */
+async function patchTipoViaje(
+  empresaId: number,
+  d: z.infer<typeof patchSchema>,
+  usuario?: string | null,
+): Promise<NextResponse> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT id, codigo, estado, tipo_viaje FROM tms_planes_viaje WHERE id = ? AND empresa_id = ? LIMIT 1`,
+    [d.id, empresaId],
+  );
+  if (!rows[0]) {
+    return NextResponse.json({ error: "Plan no encontrado." }, { status: 404 });
+  }
+  const antes = {
+    codigo: String(rows[0].codigo),
+    estado: String(rows[0].estado),
+    tipoViaje: String(rows[0].tipo_viaje ?? "Propio"),
+  };
+  if (antes.estado === "Cerrado" || antes.estado === "Cancelado") {
+    return NextResponse.json({ error: `No se puede editar un plan ${antes.estado}.` }, { status: 400 });
+  }
+  const tipoViaje = d.tipoViaje === "Tercerizado" ? "Tercerizado" : "Propio";
+  const esTercerizado = tipoViaje === "Tercerizado";
+  if (esTercerizado && !d.pilotoExternoNombre?.trim()) {
+    return NextResponse.json(
+      { error: "Un viaje tercerizado requiere el nombre del piloto externo." },
+      { status: 400 },
+    );
+  }
+  const opcional = (v: string | null | undefined): string | null => { const t = (v ?? "").trim(); return t ? t : null; };
+
+  const conn = await getPool().getConnection();
+  try {
+    await conn.beginTransaction();
+    if (esTercerizado) {
+      await conn.execute(
+        `UPDATE tms_planes_viaje SET
+           tipo_viaje = 'Tercerizado', piloto_id = NULL, auxiliar_id = NULL, unidad_id = NULL,
+           piloto_externo_nombre = ?, auxiliares_externos = ?, unidad_externa_placa = ?,
+           unidad_externa_descripcion = ?, transportista_externo = ?, costo_tercerizado = ?
+         WHERE id = ? AND empresa_id = ?`,
+        [
+          opcional(d.pilotoExternoNombre),
+          opcional((d.auxiliaresExternos ?? []).map((n) => n.trim()).filter(Boolean).slice(0, 8).join("\n")),
+          opcional(d.unidadExternaPlaca?.trim().toUpperCase()),
+          opcional(d.unidadExternaDescripcion),
+          opcional(d.transportistaExterno),
+          d.costoTercerizado ?? null,
+          d.id,
+          empresaId,
+        ],
+      );
+      await guardarAuxiliaresPlan(d.id, [], conn);
+      await sincronizarViaticosPlan(empresaId, d.id, { piloto: null, auxiliares: [] }, conn);
+    } else {
+      await conn.execute(
+        `UPDATE tms_planes_viaje SET
+           tipo_viaje = 'Propio', piloto_externo_nombre = NULL, auxiliares_externos = NULL,
+           unidad_externa_placa = NULL, unidad_externa_descripcion = NULL, transportista_externo = NULL,
+           costo_tercerizado = NULL
+         WHERE id = ? AND empresa_id = ?`,
+        [d.id, empresaId],
+      );
+    }
+    await registrarAuditoriaTx(conn, {
+      empresaId,
+      usuario: usuario ?? null,
+      accion: "editar_ruta",
+      modulo: "tms",
+      detalle: `Plan #${d.id} ${antes.codigo} · tipo ${antes.tipoViaje} -> ${tipoViaje}`,
+    });
+    await conn.commit();
+  } catch (e) {
+    await conn.rollback();
+    console.error("PATCH tms/planes (tipoViaje)", e);
+    return NextResponse.json(
+      { error: "No se pudo actualizar el tipo de viaje. No se guardó ningún cambio." },
+      { status: 500 },
+    );
+  } finally {
+    conn.release();
+  }
+  return NextResponse.json({ mensaje: "Plan actualizado.", id: d.id });
+}
 
 export async function PATCH(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
@@ -1119,6 +1306,14 @@ export async function PATCH(req: Request, ctx: Ctx) {
   }
   const d = parsed.data;
   const empresaId = guard.empresa.id;
+
+  // PROGRAMACION-VIAJES-TERCERIZADOS-1 — ver patchTipoViaje() arriba: un
+  // PATCH que trae `tipoViaje` se resuelve ahí, aislado del resto de este
+  // handler. Cualquier PATCH que NO lo traiga sigue exactamente el mismo
+  // camino de siempre (todo lo de abajo, sin cambios).
+  if (d.tipoViaje !== undefined) {
+    return patchTipoViaje(empresaId, d, guard.session.username);
+  }
 
   // Fase P5.1c: SELECT ampliado — se agregan fecha_plan, piloto_id y
   // flota_vehiculo_id (antes no se traían) para poder calcular la fecha

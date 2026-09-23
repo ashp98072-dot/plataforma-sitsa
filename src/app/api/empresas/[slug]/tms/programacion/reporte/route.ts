@@ -147,7 +147,13 @@ export async function GET(req: Request, ctx: Ctx) {
   const rows = await query<RowDataPacket[]>(
     `SELECT p.id, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan,
             p.hora_carga, p.ruta_codigo_historico, p.lugar_descarga_historico,
-            c.nombre AS cliente, u.placa, pil.nombre AS piloto
+            c.nombre AS cliente, u.placa, pil.nombre AS piloto,
+            -- PROGRAMACION-VIAJES-TERCERIZADOS-1 — un viaje Tercerizado no
+            -- tiene placa/piloto/auxiliares internos (u.placa/pil.nombre
+            -- salen NULL de los JOIN de arriba, porque unidad_id/piloto_id
+            -- son NULL a propósito): se completan con su propio snapshot
+            -- de texto más abajo, nunca se dejan vacíos.
+            p.tipo_viaje, p.piloto_externo_nombre, p.auxiliares_externos, p.unidad_externa_placa
      FROM tms_planes_viaje p
      LEFT JOIN tms_clientes c ON c.id = p.cliente_id
      LEFT JOIN tms_unidades u ON u.id = p.unidad_id
@@ -201,15 +207,36 @@ export async function GET(req: Request, ctx: Ctx) {
     const lugarCarga = paradas.find((p) => p.tipo === "Carga")?.lugar_nombre ?? "";
     // VIAT-4b: NUNCA "primera parada" — siempre el histórico congelado del viaje.
     const lugarDescarga = r.lugar_descarga_historico ? String(r.lugar_descarga_historico) : "";
-    const auxiliares = auxPorPlan.get(id) ?? [];
     const hora = r.hora_carga ? String(r.hora_carga).slice(0, 5) : "";
+
+    // PROGRAMACION-VIAJES-TERCERIZADOS-1 — un viaje Tercerizado nunca
+    // tiene placa/piloto/auxiliares internos (unidad_id/piloto_id/
+    // tms_plan_auxiliares quedan vacíos a propósito): se completan con su
+    // propio snapshot de texto, nunca se dejan vacíos solo porque no
+    // tengan id interno. Marca "(Tercerizado)" en Piloto — discreta,
+    // agregada a la celda existente, sin una columna nueva que altere el
+    // formato que Operaciones ya conoce.
+    const esTercerizado = String(r.tipo_viaje ?? "Propio") === "Tercerizado";
+    const placa = esTercerizado ? (r.unidad_externa_placa ? String(r.unidad_externa_placa) : "") : r.placa ? String(r.placa) : "";
+    const piloto = esTercerizado
+      ? `${r.piloto_externo_nombre ? String(r.piloto_externo_nombre) : ""}${r.piloto_externo_nombre ? " (Tercerizado)" : ""}`
+      : r.piloto
+        ? String(r.piloto)
+        : "";
+    const auxiliaresExternos = esTercerizado
+      ? String(r.auxiliares_externos ?? "").split(/\r?\n/).map((n) => n.trim()).filter(Boolean)
+      : [];
+    const auxiliares = auxPorPlan.get(id) ?? [];
+    const auxiliar1 = esTercerizado ? (auxiliaresExternos[0] ?? "") : (auxiliares[0]?.nombre ?? "");
+    const auxiliar2 = esTercerizado ? (auxiliaresExternos[1] ?? "") : (auxiliares[1]?.nombre ?? "");
+
     const fila = [
       MESES[(mes ?? 1) - 1] ?? "",
       String(dia ?? ""),
-      r.placa ? String(r.placa) : "",
-      r.piloto ? String(r.piloto) : "",
-      auxiliares[0]?.nombre ?? "",
-      auxiliares[1]?.nombre ?? "",
+      placa,
+      piloto,
+      auxiliar1,
+      auxiliar2,
     ];
     if (!ocultarCodigo) fila.push(r.ruta_codigo_historico ? String(r.ruta_codigo_historico) : "");
     fila.push(r.cliente ? String(r.cliente) : "", lugarCarga, hora, lugarDescarga);

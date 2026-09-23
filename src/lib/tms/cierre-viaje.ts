@@ -122,12 +122,23 @@ export async function cerrarViaje(
     };
   }
 
+  // PROGRAMACION-VIAJES-TERCERIZADOS-1 (sección 22) — registrar tipo_viaje
+  // también al cerrar, igual que al crear/editar. El UPDATE de arriba ya es
+  // atómico (affectedRows) y no trae la fila; esta lectura extra es
+  // exclusivamente para la auditoría, nunca decide si se puede cerrar (eso
+  // ya pasó, siempre igual, sea Propio o Tercerizado — sección 19).
+  const tipoRows = await query<RowDataPacket[]>(
+    `SELECT tipo_viaje FROM tms_planes_viaje WHERE id = ? AND empresa_id = ? LIMIT 1`,
+    [planId, empresaId],
+  );
+  const tipoViaje = String(tipoRows[0]?.tipo_viaje ?? "Propio");
+
   await registrarAuditoria({
     empresaId,
     usuario,
     accion: "cerrar_viaje",
     modulo: "tms",
-    detalle: `Plan #${planId} → Cerrado`,
+    detalle: `Plan #${planId} → Cerrado · tipo ${tipoViaje}`,
   });
 
   return { ok: true };
@@ -196,7 +207,7 @@ export async function cerrarViajeManual(opts: {
     await conn.beginTransaction();
 
     const [planRows] = await conn.query<RowDataPacket[]>(
-      `SELECT id, estado FROM tms_planes_viaje WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
+      `SELECT id, estado, tipo_viaje FROM tms_planes_viaje WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
       [opts.planId, opts.empresaId],
     );
     const plan = planRows[0];
@@ -205,6 +216,10 @@ export async function cerrarViajeManual(opts: {
       return { ok: false, error: "Viaje no encontrado." };
     }
     const estadoAnterior = String(plan.estado);
+    // PROGRAMACION-VIAJES-TERCERIZADOS-1 (sección 22) — mismo criterio que
+    // cerrarViaje(): solo para la auditoría, nunca cambia si el cierre
+    // manual procede (sección 19: Tercerizado nunca bloquea el cierre).
+    const tipoViaje = String(plan.tipo_viaje ?? "Propio");
     if (!ESTADOS_CIERRE_MANUAL.includes(estadoAnterior as (typeof ESTADOS_CIERRE_MANUAL)[number])) {
       await conn.rollback();
       if (estadoAnterior === "Cerrado") {
@@ -258,7 +273,7 @@ export async function cerrarViajeManual(opts: {
       modulo: "tms",
       detalle: `Plan #${opts.planId} → Cerrado (CIERRE MANUAL POR OPERACIONES`
         + `${flotaViaje ? "" : " — SIN VIAJE FÍSICO REGISTRADO"}). `
-        + `Estado anterior: ${estadoAnterior}. Motivo: ${motivo}.`
+        + `Estado anterior: ${estadoAnterior}. Tipo: ${tipoViaje}. Motivo: ${motivo}.`
         + `${comentario ? ` Comentario: ${comentario}.` : ""}`
         + `${flotaViaje ? ` flota_viajes #${flotaViaje.id} ${flotaViajeCerrado ? "cerrado también (sin datos físicos)" : "ya estaba cerrado"}.` : ""}`,
     });

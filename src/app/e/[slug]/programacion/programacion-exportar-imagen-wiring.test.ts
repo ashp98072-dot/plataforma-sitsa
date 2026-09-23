@@ -58,9 +58,21 @@ describe("programacion-client.tsx — Exportar imagen", () => {
 
   it("Auxiliar 1 / Auxiliar 2 separados (primeros dos, nunca combinados en una sola columna)", () => {
     const fn = programacionClient.slice(pos("async function exportarImagen"), pos("const rango ="));
-    expect(fn).toContain("auxiliar1: p.auxiliares[0] ?? \"\"");
-    expect(fn).toContain("auxiliar2: p.auxiliares[1] ?? \"\"");
+    // PROGRAMACION-VIAJES-TERCERIZADOS-1: Propio sigue usando p.auxiliares[0]/[1]
+    // sin cambios; Tercerizado usa su propio snapshot de texto — en ambos casos
+    // Auxiliar 1 y Auxiliar 2 quedan en variables/celdas separadas, nunca unidas.
+    expect(fn).toContain("p.auxiliares[0] ?? \"\"");
+    expect(fn).toContain("p.auxiliares[1] ?? \"\"");
     expect(fn).not.toContain("p.auxiliares.join");
+    expect(fn).not.toContain("auxiliaresExternos.join");
+  });
+
+  it("PROGRAMACION-VIAJES-TERCERIZADOS-1: sustituye placa/piloto/auxiliares por el snapshot externo, con marca (Tercerizado) en Piloto", () => {
+    const fn = programacionClient.slice(pos("async function exportarImagen"), pos("const rango ="));
+    expect(fn).toContain('const esTercerizado = (p.tipo_viaje ?? "Propio") === "Tercerizado"');
+    expect(fn).toContain("esTercerizado ? p.unidad_externa_placa");
+    expect(fn).toContain("(Tercerizado)");
+    expect(fn).toContain("p.auxiliares_externos");
   });
 
   it("nunca arma código, estado, regreso estimado, tarifa comercial ni una columna de ruta combinada", () => {
