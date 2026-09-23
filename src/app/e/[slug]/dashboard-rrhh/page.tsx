@@ -9,6 +9,8 @@ import { DetalleMovimientosPanel } from "@/components/rrhh/detalle-movimientos-m
 
 type Stats = {
   totalEmpleados: number;
+  /** Empleados actualmente de Baja (estado = 'Baja'); ausente en respuestas antiguas. */
+  totalBajas?: number;
   presentesHoy: number;
   ausentesHoy: number;
   enVacaciones: number;
@@ -210,9 +212,11 @@ function DashboardRrhh({ slug }: { slug: string }) {
       {!cargando && !error && !resumenGerencial.length && <p>Resumen mensual no disponible.</p>}
 
       {stats ? (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
           {[
             { label: "Empleados activos", value: stats.totalEmpleados },
+            // Estado ACTUAL (empleados con estado 'Baja'); distinto de "Bajas del mes seleccionado".
+            ...(typeof stats.totalBajas === "number" ? [{ label: "Empleados de baja", value: stats.totalBajas }] : []),
             { label: "Presentes (abiertos)", value: stats.presentesHoy },
             { label: "Sin marcar hoy", value: stats.ausentesHoy },
             { label: "En vacaciones", value: stats.enVacaciones },

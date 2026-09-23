@@ -31,7 +31,14 @@ export async function obtenerDetalleMovimientosMensual(empresaId: number, mes: s
 }
 
 export type DashboardStats = {
+  /** Empleados ACTUALMENTE Activos (estado = 'Activo'). */
   totalEmpleados: number;
+  /**
+   * RRHH-DASHBOARD-BAJAS-FOTO-1 — empleados ACTUALMENTE de Baja (estado =
+   * 'Baja'). Es un total del estado actual, NO las "Bajas del mes" del
+   * resumen mensual (que se cuentan por fecha_egreso del mes).
+   */
+  totalBajas: number;
   presentesHoy: number;
   ausentesHoy: number;
   enVacaciones: number;
@@ -75,11 +82,17 @@ export async function obtenerEstadisticasDashboard(
       throw new Error("Estadísticas de hoy no disponibles.");
     });
 
-  const [totalRows, presentesRows, ausentesRows, vacRows, otrasRows] = await Promise.all([
+  const [totalRows, bajasRows, presentesRows, ausentesRows, vacRows, otrasRows] = await Promise.all([
     consultaSegura(
       "totalEmpleados",
       `SELECT COUNT(*) AS total FROM empleados
        WHERE empresa_id = ? AND estado = 'Activo'`,
+      [empresaId],
+    ),
+    consultaSegura(
+      "totalBajas",
+      `SELECT COUNT(*) AS total FROM empleados
+       WHERE empresa_id = ? AND estado = 'Baja'`,
       [empresaId],
     ),
     consultaSegura(
@@ -138,6 +151,7 @@ export async function obtenerEstadisticasDashboard(
   ]);
 
   const totalEmpleados = Number(totalRows[0]?.total ?? 0);
+  const totalBajas = Number(bajasRows[0]?.total ?? 0);
   const presentesHoy = Number(presentesRows[0]?.total ?? 0);
   const ausentesHoy = Number(ausentesRows[0]?.total ?? 0);
   const enVacaciones = Number(vacRows[0]?.total ?? 0);
@@ -145,6 +159,7 @@ export async function obtenerEstadisticasDashboard(
 
   return {
     totalEmpleados,
+    totalBajas,
     presentesHoy,
     ausentesHoy,
     enVacaciones,
