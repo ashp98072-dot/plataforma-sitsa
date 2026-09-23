@@ -4,7 +4,7 @@ import type { PoolConnection } from "mysql2/promise";
 vi.mock("@/lib/db", () => ({ getPool: vi.fn(), execute: vi.fn(), query: vi.fn() }));
 vi.mock("@/lib/auditoria", () => ({ registrarAuditoria: vi.fn(), registrarAuditoriaTx: vi.fn() }));
 
-import { execute, getPool, query } from "@/lib/db";
+import { getPool } from "@/lib/db";
 import { registrarAuditoria, registrarAuditoriaTx } from "@/lib/auditoria";
 import { cerrarViaje, cerrarViajeManual, puedeCerrarManualmente } from "./cierre-viaje";
 
@@ -332,44 +332,131 @@ describe("puedeCerrarManualmente — criterio PURO compartido con la UI (23-25)"
  * efecto el UPDATE ni siquiera consulta tipo_viaje para decidir.
  */
 describe("cerrarViaje (no manual) — auditoría incluye tipo_viaje", () => {
-  beforeEach(() => {
-    vi.mocked(execute).mockImplementation((async (sql: string) => {
-      if (String(sql).includes("UPDATE tms_planes_viaje")) return { affectedRows: 1 };
-      throw new Error(`execute inesperado: ${sql}`);
-    }) as never);
-  });
-
   it("un plan Tercerizado cerrado audita 'Tipo: Tercerizado'", async () => {
-    vi.mocked(query).mockResolvedValue([{ tipo_viaje: "Tercerizado" }] as never);
+    plan = { id: 10, estado: "Descargado", tipo_viaje: "Tercerizado" };
     const r = await cerrarViaje(7, 10, "ops1");
     expect(r).toEqual({ ok: true });
-    expect(registrarAuditoria).toHaveBeenCalledWith(
+    expect(registrarAuditoriaTx).toHaveBeenCalledWith(
+      conn,
       expect.objectContaining({ empresaId: 7, usuario: "ops1", accion: "cerrar_viaje", modulo: "tms" }),
     );
-    const [detalle] = vi.mocked(registrarAuditoria).mock.calls[0];
-    expect(detalle.detalle).toBe("Plan #10 → Cerrado · tipo Tercerizado");
+    const [, detalle] = vi.mocked(registrarAuditoriaTx).mock.calls[0];
+    expect(detalle.detalle).toContain("Tercerizado");
   });
 
   it("un plan Propio cerrado audita 'Tipo: Propio'", async () => {
-    vi.mocked(query).mockResolvedValue([{ tipo_viaje: "Propio" }] as never);
+    plan = { id: 11, estado: "Descargado", tipo_viaje: "Propio" };
     await cerrarViaje(7, 11, "ops1");
-    const [detalle] = vi.mocked(registrarAuditoria).mock.calls[0];
+    const [, detalle] = vi.mocked(registrarAuditoriaTx).mock.calls[0];
     expect(detalle.detalle).toBe("Plan #11 → Cerrado · tipo Propio");
   });
 
   it("una fila legada sin tipo_viaje audita 'Propio' por defecto, nunca revienta", async () => {
-    vi.mocked(query).mockResolvedValue([{}] as never);
+    plan = { id: 12, estado: "Descargado" };
     const r = await cerrarViaje(7, 12, "ops1");
     expect(r.ok).toBe(true);
-    const [detalle] = vi.mocked(registrarAuditoria).mock.calls[0];
+    const [, detalle] = vi.mocked(registrarAuditoriaTx).mock.calls[0];
     expect(detalle.detalle).toContain("tipo Propio");
   });
 
   it("el tipo_viaje se lee acotado por empresa_id (aislamiento multiempresa)", async () => {
-    vi.mocked(query).mockResolvedValue([{ tipo_viaje: "Propio" }] as never);
+    plan = { id: 10, estado: "Descargado", tipo_viaje: "Propio" };
     await cerrarViaje(42, 10, "ops1");
-    const [sql, params] = vi.mocked(query).mock.calls[0];
-    expect(String(sql)).toContain("empresa_id = ?");
-    expect(params).toEqual([10, 42]);
+    const lectura = conn.query.mock.calls.find(([sql]) => String(sql).includes("SELECT tipo_viaje"))!;
+    expect(String(lectura[0])).toContain("empresa_id = ?");
+    expect(lectura[1]).toEqual([10, 42]);
+  });
+});
+
+/**
+ * TMS-CIERRE-MASIVO-1 (ajuste) — cerrarViaje() es TRANSACCIONAL: UPDATE +
+ * lectura de tipo_viaje + auditoría individual se comprometen juntos.
+ * ok:true => cerrado Y auditado; excepción => rollback (nunca un cierre
+ * silencioso reportado como error).
+ */
+describe("cerrarViaje (no manual) — transacción y consistencia", () => {
+  it("camino feliz: begin → UPDATE condicional → tipo_viaje → auditoría (misma conexión) → commit; sin rollback", async () => {
+    plan = { id: 10, estado: "Descargado" };
+    const r = await cerrarViaje(7, 10, "ops1");
+    expect(r).toEqual({ ok: true });
+    expect(conn.beginTransaction).toHaveBeenCalledOnce();
+    expect(conn.commit).toHaveBeenCalledOnce();
+    expect(conn.rollback).not.toHaveBeenCalled();
+    expect(conn.release).toHaveBeenCalledOnce();
+    const update = conn.execute.mock.calls.find(([sql]) => String(sql).includes("UPDATE tms_planes_viaje"))!;
+    expect(String(update[0])).toContain("p.estado = 'Descargado'");
+    expect(String(update[0])).toContain("p.estado IN ('En ruta', 'Cargado')");
+    expect(update[1]).toEqual(["ops1", 10, 7]);
+    expect(conn.beginTransaction.mock.invocationCallOrder[0]).toBeLessThan(update ? conn.execute.mock.invocationCallOrder[0] : 0);
+    expect(vi.mocked(registrarAuditoriaTx).mock.invocationCallOrder[0]).toBeLessThan(conn.commit.mock.invocationCallOrder[0]);
+    expect(registrarAuditoria).not.toHaveBeenCalled(); // ya no auditoría fuera de la transacción
+  });
+
+  it("si la auditoría falla DESPUÉS del UPDATE: rollback, se relanza el error y el viaje NO queda cerrado", async () => {
+    plan = { id: 10, estado: "Descargado" };
+    vi.mocked(registrarAuditoriaTx).mockRejectedValueOnce(new Error("auditoría falló"));
+    await expect(cerrarViaje(7, 10, "ops1")).rejects.toThrow("auditoría falló");
+    expect(conn.rollback).toHaveBeenCalledOnce();
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(conn.release).toHaveBeenCalledOnce();
+  });
+
+  it("si falla la lectura de tipo_viaje después del UPDATE: rollback y sin auditoría", async () => {
+    plan = { id: 10, estado: "Descargado" };
+    const original = conn.query.getMockImplementation()!;
+    conn.query.mockImplementation(async (sql: string, params: unknown[]) => {
+      if (String(sql).includes("SELECT tipo_viaje")) throw new Error("conexión perdida");
+      return original(sql, params);
+    });
+    await expect(cerrarViaje(7, 10, "ops1")).rejects.toThrow("conexión perdida");
+    expect(conn.rollback).toHaveBeenCalledOnce();
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(registrarAuditoriaTx).not.toHaveBeenCalled();
+  });
+
+  it("si el rollback mismo falla se conserva el error ORIGINAL y se libera la conexión", async () => {
+    plan = { id: 10, estado: "Descargado" };
+    vi.mocked(registrarAuditoriaTx).mockRejectedValueOnce(new Error("auditoría falló"));
+    conn.rollback.mockRejectedValueOnce(new Error("rollback falló"));
+    await expect(cerrarViaje(7, 10, "ops1")).rejects.toThrow("auditoría falló");
+    expect(conn.release).toHaveBeenCalledOnce();
+  });
+
+  it("doble clic / concurrencia: el UPDATE condicional (affectedRows) evita el doble cierre y no audita", async () => {
+    plan = { id: 10, estado: "Cerrado" };
+    planUpdateAffectedRows = 0;
+    const r = await cerrarViaje(7, 10, "ops1");
+    expect(r).toEqual({ ok: false, error: "Este viaje ya fue cerrado." });
+    expect(registrarAuditoriaTx).not.toHaveBeenCalled();
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(conn.rollback).toHaveBeenCalledOnce();
+    expect(conn.release).toHaveBeenCalledOnce();
+  });
+});
+
+describe("cerrarViaje (no manual) — mensajes cuando NO es elegible (sin cambios)", () => {
+  beforeEach(() => { planUpdateAffectedRows = 0; });
+
+  it("no existe / es de otra empresa -> 'Viaje no encontrado.'", async () => {
+    plan = undefined;
+    expect(await cerrarViaje(7, 10, "ops1")).toEqual({ ok: false, error: "Viaje no encontrado." });
+  });
+
+  it("En ruta o Cargado sin llegada registrada -> mensaje de llegada pendiente", async () => {
+    for (const estado of ["En ruta", "Cargado"]) {
+      plan = { id: 10, estado, llegada_registrada: 0 };
+      const r = await cerrarViaje(7, 10, "ops1");
+      expect(r).toEqual({ ok: false, error: "El piloto todavía no ha registrado la llegada de este viaje; no se puede cerrar todavía." });
+    }
+  });
+
+  it("Programado / Cancelado -> mensaje genérico con el estado actual", async () => {
+    for (const estado of ["Programado", "Cancelado"]) {
+      plan = { id: 10, estado, llegada_registrada: 1 };
+      const r = await cerrarViaje(7, 10, "ops1");
+      expect(r).toEqual({ ok: false, error: `Este viaje está "${estado}"; solo se puede cerrar cuando el piloto ya registró la llegada.` });
+    }
+    expect(registrarAuditoriaTx).not.toHaveBeenCalled();
+    expect(conn.commit).not.toHaveBeenCalled();
   });
 });

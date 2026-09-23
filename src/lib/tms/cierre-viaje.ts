@@ -1,7 +1,7 @@
 import type { RowDataPacket } from "mysql2";
 import type { ResultSetHeader } from "mysql2/promise";
-import { execute, getPool, query } from "@/lib/db";
-import { registrarAuditoria, registrarAuditoriaTx } from "@/lib/auditoria";
+import { getPool } from "@/lib/db";
+import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { ESTADOS_CIERRE_MANUAL } from "@/lib/tms/cierre-viaje-shared";
 
 export { puedeCerrarManualmente } from "@/lib/tms/cierre-viaje-shared";
@@ -42,9 +42,9 @@ export { puedeCerrarManualmente } from "@/lib/tms/cierre-viaje-shared";
  *
  * Mismo patrón de transición atómica y verificada que
  * src/lib/tms/viaticos.ts (autorizarViatico/registrarEntregaViatico/
- * liquidarViatico): UPDATE condicional + affectedRows, para que dos
- * clics concurrentes (o un doble cierre) nunca produzcan un estado
- * inconsistente.
+ * liquidarViatico): UPDATE condicional + affectedRows (ahora dentro de una
+ * transacción junto con su auditoría), para que dos clics concurrentes (o
+ * un doble cierre) nunca produzcan un estado inconsistente.
  *
  * Esquema: NO se crea/altera desde este módulo. `cerrado_por`/
  * `cerrado_en` deben existir por haberse aplicado manualmente
@@ -61,87 +61,107 @@ export type ResultadoCierreViaje =
  * Cierra administrativamente un plan/viaje. Requiere que el permiso
  * `viajes_cerrar:editar` ya se haya verificado en el endpoint (este
  * módulo no vuelve a chequear permisos — solo aplica la transición).
+ *
+ * TRANSACCIONAL (igual que cerrarViajeManual): el UPDATE condicional, la
+ * lectura de tipo_viaje y la auditoría individual `cerrar_viaje` se
+ * comprometen JUNTOS o no se compromete ninguno. Semántica:
+ *  - `{ ok: true }` => el viaje quedó Cerrado Y su auditoría quedó registrada.
+ *  - `{ ok: false }` => la regla de negocio lo rechazó; no se escribió nada.
+ *  - excepción => hubo rollback: el viaje NO quedó cerrado (nunca un cierre
+ *    silencioso que luego se reporte como error, p. ej. en el cierre masivo).
+ * El UPDATE condicional (affectedRows) sigue evitando el doble cierre y las
+ * reglas de elegibilidad son exactamente las de siempre.
  */
 export async function cerrarViaje(
   empresaId: number,
   planId: number,
   usuario: string,
 ): Promise<ResultadoCierreViaje> {
-  const r = await execute(
-    `UPDATE tms_planes_viaje p
-     SET p.estado = 'Cerrado', p.cerrado_por = ?, p.cerrado_en = NOW()
-     WHERE p.id = ? AND p.empresa_id = ?
-       AND (
-         p.estado = 'Descargado'
-         OR (
-           p.estado IN ('En ruta', 'Cargado')
-           AND EXISTS (
-             SELECT 1 FROM flota_viajes fv
-             WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
+  const conn = await getPool().getConnection();
+  try {
+    await conn.beginTransaction();
+    const [r] = await conn.execute<ResultSetHeader>(
+      `UPDATE tms_planes_viaje p
+       SET p.estado = 'Cerrado', p.cerrado_por = ?, p.cerrado_en = NOW()
+       WHERE p.id = ? AND p.empresa_id = ?
+         AND (
+           p.estado = 'Descargado'
+           OR (
+             p.estado IN ('En ruta', 'Cargado')
+             AND EXISTS (
+               SELECT 1 FROM flota_viajes fv
+               WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
+             )
            )
-         )
-       )`,
-    [usuario, planId, empresaId],
-  );
-  if (r.affectedRows !== 1) {
-    const existe = await query<RowDataPacket[]>(
-      `SELECT p.estado,
-              EXISTS (
-                SELECT 1 FROM flota_viajes fv
-                WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
-              ) AS llegada_registrada
-       FROM tms_planes_viaje p WHERE p.id = ? AND p.empresa_id = ? LIMIT 1`,
-      [planId, empresaId],
+         )`,
+      [usuario, planId, empresaId],
     );
-    if (!existe[0]) {
-      return { ok: false, error: "Viaje no encontrado." };
-    }
-    const estadoActual = String(existe[0].estado ?? "");
-    const llegadaRegistrada = Number(existe[0].llegada_registrada ?? 0) === 1;
-    if (estadoActual === "Cerrado") {
-      return { ok: false, error: "Este viaje ya fue cerrado." };
-    }
-    // OPS-5.2d: "Cargado" sigue el mismo criterio que "En ruta" — si
-    // llegó hasta aquí (no hizo match en el UPDATE de arriba) es porque
-    // TODAVÍA no tiene llegada técnica registrada; nunca porque estar
-    // "Cargado" en sí mismo sea insuficiente. Mismo mensaje para ambos
-    // estados — evita el mensaje engañoso anterior ("solo se puede
-    // cerrar cuando el piloto ya registró la llegada") que un plan
-    // "Cargado" CON llegada ya registrada habría recibido antes de esta
-    // corrección (ese caso ahora cierra directamente en el UPDATE, sin
-    // llegar a este bloque).
-    if ((estadoActual === "En ruta" || estadoActual === "Cargado") && !llegadaRegistrada) {
+    if (r.affectedRows !== 1) {
+      const [existe] = await conn.query<RowDataPacket[]>(
+        `SELECT p.estado,
+                EXISTS (
+                  SELECT 1 FROM flota_viajes fv
+                  WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
+                ) AS llegada_registrada
+         FROM tms_planes_viaje p WHERE p.id = ? AND p.empresa_id = ? LIMIT 1`,
+        [planId, empresaId],
+      );
+      await conn.rollback(); // no se cambió nada; se libera antes de responder
+      if (!existe[0]) {
+        return { ok: false, error: "Viaje no encontrado." };
+      }
+      const estadoActual = String(existe[0].estado ?? "");
+      const llegadaRegistrada = Number(existe[0].llegada_registrada ?? 0) === 1;
+      if (estadoActual === "Cerrado") {
+        return { ok: false, error: "Este viaje ya fue cerrado." };
+      }
+      // OPS-5.2d: "Cargado" sigue el mismo criterio que "En ruta" — si
+      // llegó hasta aquí (no hizo match en el UPDATE de arriba) es porque
+      // TODAVÍA no tiene llegada técnica registrada; nunca porque estar
+      // "Cargado" en sí mismo sea insuficiente. Mismo mensaje para ambos
+      // estados.
+      if ((estadoActual === "En ruta" || estadoActual === "Cargado") && !llegadaRegistrada) {
+        return {
+          ok: false,
+          error: "El piloto todavía no ha registrado la llegada de este viaje; no se puede cerrar todavía.",
+        };
+      }
       return {
         ok: false,
-        error: "El piloto todavía no ha registrado la llegada de este viaje; no se puede cerrar todavía.",
+        error: `Este viaje está "${estadoActual}"; solo se puede cerrar cuando el piloto ya registró la llegada.`,
       };
     }
-    return {
-      ok: false,
-      error: `Este viaje está "${estadoActual}"; solo se puede cerrar cuando el piloto ya registró la llegada.`,
-    };
+
+    // PROGRAMACION-VIAJES-TERCERIZADOS-1 (sección 22) — registrar tipo_viaje
+    // también al cerrar, igual que al crear/editar. Esta lectura es
+    // exclusivamente para la auditoría, nunca decide si se puede cerrar
+    // (eso ya pasó, siempre igual, sea Propio o Tercerizado — sección 19).
+    const [tipoRows] = await conn.query<RowDataPacket[]>(
+      `SELECT tipo_viaje FROM tms_planes_viaje WHERE id = ? AND empresa_id = ? LIMIT 1`,
+      [planId, empresaId],
+    );
+    const tipoViaje = String(tipoRows[0]?.tipo_viaje ?? "Propio");
+
+    await registrarAuditoriaTx(conn, {
+      empresaId,
+      usuario,
+      accion: "cerrar_viaje",
+      modulo: "tms",
+      detalle: `Plan #${planId} → Cerrado · tipo ${tipoViaje}`,
+    });
+
+    await conn.commit();
+    return { ok: true };
+  } catch (e) {
+    try {
+      await conn.rollback();
+    } catch {
+      // se conserva el error original
+    }
+    throw e;
+  } finally {
+    conn.release();
   }
-
-  // PROGRAMACION-VIAJES-TERCERIZADOS-1 (sección 22) — registrar tipo_viaje
-  // también al cerrar, igual que al crear/editar. El UPDATE de arriba ya es
-  // atómico (affectedRows) y no trae la fila; esta lectura extra es
-  // exclusivamente para la auditoría, nunca decide si se puede cerrar (eso
-  // ya pasó, siempre igual, sea Propio o Tercerizado — sección 19).
-  const tipoRows = await query<RowDataPacket[]>(
-    `SELECT tipo_viaje FROM tms_planes_viaje WHERE id = ? AND empresa_id = ? LIMIT 1`,
-    [planId, empresaId],
-  );
-  const tipoViaje = String(tipoRows[0]?.tipo_viaje ?? "Propio");
-
-  await registrarAuditoria({
-    empresaId,
-    usuario,
-    accion: "cerrar_viaje",
-    modulo: "tms",
-    detalle: `Plan #${planId} → Cerrado · tipo ${tipoViaje}`,
-  });
-
-  return { ok: true };
 }
 
 /**
