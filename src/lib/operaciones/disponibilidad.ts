@@ -1,5 +1,6 @@
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
+import { normalizarTipoUnidad, type TipoUnidad } from "@/lib/flota/tipo-unidad";
 
 /**
  * Disponibilidad de flota para Operaciones / TMS.
@@ -25,6 +26,12 @@ export type VehiculoDisponibilidad = {
   marca: string | null;
   modelo: string | null;
   descripcion: string | null;
+  /**
+   * PROGRAMACION-TC-CAJA-REMOLQUE-1 — clasificación formal (flota_vehiculos.
+   * tipo_unidad). 'VEHICULO' por defecto (fila legada / columna aún no
+   * migrada): comportamiento de siempre.
+   */
+  tipoUnidad?: TipoUnidad;
   activo: boolean;
   enTaller: boolean;
   compartido: boolean;
@@ -104,9 +111,14 @@ export async function listarDisponibilidadVehiculos(
   empresaId: number,
 ): Promise<DisponibilidadPayload> {
   let rows: RowDataPacket[] = [];
-  try {
-    rows = await query<RowDataPacket[]>(
+  // PROGRAMACION-TC-CAJA-REMOLQUE-1: `tipo_unidad` se lee en un primer
+  // intento; si la columna todavía no existe (migración sin aplicar), el
+  // segundo intento es EXACTAMENTE la consulta de siempre (sin perder las
+  // unidades compartidas) y `tipoUnidad` cae a 'VEHICULO'.
+  const consultaAccesibles = (conTipo: boolean) =>
+    query<RowDataPacket[]>(
       `SELECT v.id, v.placa, v.marca, v.modelo, v.descripcion,
+              ${conTipo ? "v.tipo_unidad," : ""}
               v.activo, v.en_taller, v.estado, v.km_actual, v.empresa_id,
               e.codigo AS empresa_duena_codigo, e.nombre AS empresa_duena_nombre,
               CASE WHEN v.empresa_id = ? THEN 0 ELSE 1 END AS compartido
@@ -120,6 +132,12 @@ export async function listarDisponibilidadVehiculos(
        ORDER BY v.activo DESC, v.en_taller ASC, v.placa`,
       [empresaId, empresaId, empresaId],
     );
+  try {
+    try {
+      rows = await consultaAccesibles(true);
+    } catch {
+      rows = await consultaAccesibles(false);
+    }
   } catch {
     rows = await query<RowDataPacket[]>(
       `SELECT id, placa, marca, modelo, descripcion, activo, en_taller, estado,
@@ -173,6 +191,7 @@ export async function listarDisponibilidadVehiculos(
       marca: r.marca != null ? String(r.marca) : null,
       modelo: r.modelo != null ? String(r.modelo) : null,
       descripcion: r.descripcion != null ? String(r.descripcion) : null,
+      tipoUnidad: normalizarTipoUnidad(r.tipo_unidad),
       activo,
       enTaller,
       compartido,

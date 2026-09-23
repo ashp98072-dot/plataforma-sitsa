@@ -54,9 +54,13 @@ export async function listarVehiculosAccesibles(
   empresaId: number,
 ): Promise<RowDataPacket[]> {
   // Schema lo asegura la ruta API; no bloquear cada listado.
-  try {
-    return await query<RowDataPacket[]>(
+  // PROGRAMACION-TC-CAJA-REMOLQUE-1: `tipo_unidad` se intenta primero; si la
+  // columna aún no existe (migración sin aplicar) el segundo intento es
+  // EXACTAMENTE la consulta de siempre (sin perder las unidades compartidas).
+  const consulta = (conTipo: boolean) =>
+    query<RowDataPacket[]>(
       `SELECT v.id, v.empresa_id, v.placa, v.marca, v.modelo, v.descripcion,
+              ${conTipo ? "v.tipo_unidad," : ""}
               v.color, v.tipo_combustible, v.chasis, v.capacidad, v.km_actual,
               v.km_intervalo_servicio, v.km_ultimo_servicio, v.fecha_ultimo_servicio,
               v.odometro_funcional, v.mantenimiento_intervalo_meses,
@@ -76,6 +80,12 @@ export async function listarVehiculosAccesibles(
        ORDER BY v.activo DESC, v.placa`,
       [empresaId, empresaId, empresaId],
     );
+  try {
+    try {
+      return await consulta(true);
+    } catch {
+      return await consulta(false);
+    }
   } catch {
     return query<RowDataPacket[]>(
       `SELECT * FROM flota_vehiculos WHERE empresa_id = ? ORDER BY placa`,

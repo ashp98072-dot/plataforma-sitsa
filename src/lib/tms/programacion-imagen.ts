@@ -49,6 +49,12 @@ export type FilaProgramacionImagen = {
   mes: string;
   dia: string;
   placa: string;
+  /**
+   * PROGRAMACION-TC-CAJA-REMOLQUE-1 — TC/caja/remolque del viaje (Propio:
+   * interno; Tercerizado: snapshot externo — mismo concepto "TC"). Vacío si
+   * el viaje no lleva TC.
+   */
+  tc: string;
   piloto: string;
   auxiliar1: string;
   auxiliar2: string;
@@ -85,6 +91,7 @@ export const COLUMNAS_IMAGEN: ColumnaImagen[] = [
   { titulo: "Mes", peso: 0.7 },
   { titulo: "Día", peso: 0.6 },
   { titulo: "Placa", peso: 1.1 },
+  { titulo: "TC", peso: 0.9 },
   { titulo: "Piloto", peso: 1.7 },
   { titulo: "Auxiliar 1", peso: 1.5 },
   { titulo: "Auxiliar 2", peso: 1.5 },
@@ -115,7 +122,7 @@ export function anchosColumnasImagen(anchoDisponible: number = ANCHO_IMAGEN): nu
 
 /** Una fila -> arreglo de celdas, en el mismo orden que COLUMNAS_IMAGEN. */
 export function celdasFila(f: FilaProgramacionImagen): string[] {
-  return [f.mes, f.dia, f.placa, f.piloto, f.auxiliar1, f.auxiliar2, f.cliente, f.lugarCarga, f.hora, f.lugarDescarga];
+  return [f.mes, f.dia, f.placa, f.tc, f.piloto, f.auxiliar1, f.auxiliar2, f.cliente, f.lugarCarga, f.hora, f.lugarDescarga];
 }
 
 /** Líneas de texto del encabezado del reporte: título fijo "PROGRAMACIÓN", subtítulo con empresa + rango + filtros + generado (mismo orden que pide el ticket). */

@@ -41,12 +41,14 @@ export async function GET(req: Request, ctx: Ctx) {
   const excluirPlanIdParam = p.get("excluirPlanId");
   const excluirPlanId = excluirPlanIdParam && /^\d+$/.test(excluirPlanIdParam) ? Number(excluirPlanIdParam) : null;
 
-  const { personal, unidades } = await listarDisponibilidadProgramacionDia(guard.empresa.id, fecha, excluirPlanId);
+  const { personal, unidades, tcs } = await listarDisponibilidadProgramacionDia(guard.empresa.id, fecha, excluirPlanId);
 
   return NextResponse.json(
     {
       personal: Object.fromEntries(personal),
       unidades: Object.fromEntries(unidades),
+      // PROGRAMACION-TC-CAJA-REMOLQUE-1: placa (mayúsculas) del TC -> plan que lo ocupa ese día.
+      tcs: Object.fromEntries(tcs ?? new Map()),
     },
     { headers: { "Cache-Control": "private, no-store" } },
   );

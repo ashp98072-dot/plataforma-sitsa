@@ -31,6 +31,7 @@ import { normalizarFotoCamara, normalizarFotosCamara } from "@/lib/flota/camera-
 import { ImportErroresLista } from "@/components/import-errores-lista";
 import { resolverVehiculoPorPlacaInput } from "@/lib/flota/placa";
 import { useEmpresaSession } from "@/lib/empresa-session";
+import { ETIQUETA_TIPO_UNIDAD, TIPOS_UNIDAD, normalizarTipoUnidad, type TipoUnidad } from "@/lib/flota/tipo-unidad";
 import {
   ahoraLocal,
   formatearFechaVisible,
@@ -118,6 +119,8 @@ type Vehiculo = {
   medida_llanta?: string | null;
   tipo_aceite?: string | null;
   tipo_combustible?: string | null;
+  /** PROGRAMACION-TC-CAJA-REMOLQUE-1: 'VEHICULO' | 'CABEZAL' | 'TC' (ausente = VEHICULO). */
+  tipo_unidad?: string | null;
   compartido?: boolean;
   esDueno?: boolean;
   accesoEmpresaIds?: number[];
@@ -289,6 +292,7 @@ const emptyForm = {
   marca: "",
   modelo: "",
   descripcion: "",
+  tipoUnidad: "VEHICULO" as TipoUnidad,
   kmActual: 0,
   intervalo: KM_INTERVALO_SERVICIO_DEFAULT,
   odometroFuncional: true,
@@ -1086,6 +1090,7 @@ export default function FlotaClient() {
       marca: v.marca ?? "",
       modelo: v.modelo ?? "",
       descripcion: v.descripcion ?? "",
+      tipoUnidad: normalizarTipoUnidad(v.tipo_unidad),
       kmActual: Number(v.km_actual ?? 0),
       intervalo: Number(
         v.km_intervalo_servicio ?? KM_INTERVALO_SERVICIO_DEFAULT,
@@ -1130,6 +1135,9 @@ export default function FlotaClient() {
       modelo: form.modelo,
       descripcion: form.descripcion,
       color: form.color,
+      // PROGRAMACION-TC-CAJA-REMOLQUE-1: solo se edita desde la empresa dueña
+      // (empezarEdicion ya bloquea las unidades compartidas; el backend también lo exige).
+      tipoUnidad: form.tipoUnidad,
       empresaActivo: form.empresaActivo || undefined,
       kmActual: form.kmActual,
       kmIntervaloServicio: form.intervalo,
@@ -2939,6 +2947,25 @@ export default function FlotaClient() {
                     }
                   />
                 </label> : null}
+                <label className="text-xs text-[var(--muted)]">
+                  Tipo de unidad
+                  <select
+                    className={`${input} mt-1 w-full`}
+                    value={form.tipoUnidad}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, tipoUnidad: normalizarTipoUnidad(e.target.value) }))
+                    }
+                  >
+                    {TIPOS_UNIDAD.map((t) => (
+                      <option key={t} value={t}>
+                        {ETIQUETA_TIPO_UNIDAD[t]}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="mt-0.5 block text-[10px]">
+                    Los TC / cajas / remolques se asignan por viaje desde Programación (campo TC), no como Unidad.
+                  </span>
+                </label>
                 <label className="text-xs text-[var(--muted)]">
                   Estado
                   <select

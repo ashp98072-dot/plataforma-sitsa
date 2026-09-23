@@ -58,12 +58,13 @@ describe("Disponibilidad diaria de Programación", () => {
     expect(await primerConflictoProgramacionDia(8, recursos, "2026-09-23", null)).toBeNull();
   });
 
-  it("selector devuelve ocupación por empleado/placa, no por rol; dos queries", async () => {
+  it("selector devuelve ocupación por empleado/placa, no por rol; tres queries en lote (personal, unidades, TC)", async () => {
     const r = await listarDisponibilidadProgramacionDia(7, "2026-09-23", null);
     expect(r.personal.get(101)?.planCodigo).toBe("PLAN-100");
     expect(r.personal.get(102)?.planCodigo).toBe("PLAN-100");
     expect(r.unidades.get("C-987CBV")?.planCodigo).toBe("PLAN-100");
-    expect(query).toHaveBeenCalledTimes(2);
+    // PROGRAMACION-TC-CAJA-REMOLQUE-1: +1 consulta en lote para los TC (antes eran 2).
+    expect(query).toHaveBeenCalledTimes(3);
   });
 
   it("edición excluye su propio plan", async () => {

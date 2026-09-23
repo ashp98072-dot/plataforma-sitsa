@@ -25,8 +25,10 @@ import { listarDisponibilidadPersonal } from "@/lib/operaciones/disponibilidad-p
 import { ahoraLocal, hoyLocal, toIsoDate } from "@/lib/rrhh/dates";
 import { listarViaticosRechazadosDelPlan, personalRecienAsignadoDelPlan, sincronizarViaticosPlan } from "@/lib/tms/viaticos";
 import { planesConCierreManual } from "@/lib/tms/cierre-manual-planes";
-import { SQL_HORA_LLEGADA_REAL, type RecursoAValidar } from "@/lib/tms/disponibilidad-traslapes";
-import { mensajeConflictoProgramacionDia, primerConflictoProgramacionDia } from "@/lib/tms/disponibilidad-programacion-dia";
+import { SQL_HORA_LLEGADA_REAL } from "@/lib/tms/disponibilidad-traslapes";
+import { mensajeConflictoProgramacionDia, primerConflictoProgramacionDia, type RecursoDia } from "@/lib/tms/disponibilidad-programacion-dia";
+import { resolverTcInterno } from "@/lib/tms/tc-plan";
+import { esTc, normalizarTipoUnidad } from "@/lib/flota/tipo-unidad";
 import { personalDesdeEmpleado, validarPersonalId } from "@/lib/tms/personal-resolucion";
 import { upsertLugar, guardarAuxiliaresPlan } from "@/lib/tms/plan-comunes";
 import type { ResultSetHeader } from "mysql2/promise";
@@ -299,6 +301,12 @@ export async function GET(req: Request, ctx: Ctx) {
               -- PROGRAMACION-VIAJES-TERCERIZADOS-1
               p.tipo_viaje, p.piloto_externo_nombre, p.auxiliares_externos, p.unidad_externa_placa,
               p.unidad_externa_descripcion, p.transportista_externo, p.costo_tercerizado,
+              -- PROGRAMACION-TC-CAJA-REMOLQUE-1: TC del viaje. "tc" es el valor a
+              -- mostrar (Tercerizado: snapshot externo; Propio: placa del TC interno
+              -- o, si el vehículo ya no existe, su fotografía).
+              p.tc_vehiculo_id, p.tc_placa_historica, p.tc_externo_placa,
+              CASE WHEN p.tipo_viaje = 'Tercerizado' THEN p.tc_externo_placa
+                   ELSE COALESCE(tcv.placa, p.tc_placa_historica) END AS tc,
               c.nombre AS cliente, u.placa, pil.nombre AS piloto, aux.nombre AS auxiliar,
               p.piloto_id, p.auxiliar_id, pil.id_empleado AS piloto_empleado_id,
               emp_pil.telefono AS piloto_telefono,
@@ -308,6 +316,7 @@ export async function GET(req: Request, ctx: Ctx) {
        FROM tms_planes_viaje p
        LEFT JOIN tms_clientes c ON c.id = p.cliente_id
        LEFT JOIN tms_unidades u ON u.id = p.unidad_id
+       LEFT JOIN flota_vehiculos tcv ON tcv.id = p.tc_vehiculo_id
        LEFT JOIN tms_personal pil ON pil.id = p.piloto_id
        LEFT JOIN empleados emp_pil
          ON emp_pil.id = pil.id_empleado AND emp_pil.empresa_id = p.empresa_id
@@ -394,9 +403,12 @@ export async function GET(req: Request, ctx: Ctx) {
   });
 
   const vehiculos = disp?.vehiculos ?? [];
-  const placasFlota = placasDisponiblesParaPlan(vehiculos);
+  // PROGRAMACION-TC-CAJA-REMOLQUE-1: los TC nunca se ofrecen como Unidad
+  // (selector propio de TC en el formulario). `estadoVehiculos` (abajo) sí
+  // los trae todos, con `tipoUnidad`, para que el cliente los separe.
+  const placasFlota = placasDisponiblesParaPlan(vehiculos.filter((v) => !esTc(v.tipoUnidad)));
   const vehiculosDisponibles = vehiculos
-    .filter((v) => v.puedeEnviar)
+    .filter((v) => v.puedeEnviar && !esTc(v.tipoUnidad))
     .map((v) => ({
       placa: v.placa,
       marca: v.marca,
@@ -425,6 +437,9 @@ export async function GET(req: Request, ctx: Ctx) {
   // filtradas en vehiculosDisponibles — ese campo NO se toca, sigue igual
   // para cualquier otro consumidor.
   const estadoVehiculos = vehiculos.map((v) => ({
+    // PROGRAMACION-TC-CAJA-REMOLQUE-1: id de flota_vehiculos — el selector de TC
+    // manda tcVehiculoId (el servidor lo revalida: acceso + clasificación).
+    id: v.id,
     placa: v.placa,
     marca: v.marca,
     modelo: v.modelo,
@@ -432,6 +447,7 @@ export async function GET(req: Request, ctx: Ctx) {
     esPropio: v.esPropio,
     estadoDisponibilidad: v.estadoDisponibilidad,
     motivoNoDisponible: v.motivoNoDisponible,
+    tipoUnidad: normalizarTipoUnidad(v.tipoUnidad),
   }));
 
   return NextResponse.json(
@@ -488,6 +504,11 @@ const schema = z.object({
   unidadExternaDescripcion: z.string().max(160).optional(),
   transportistaExterno: z.string().max(160).optional(),
   costoTercerizado: z.number().nonnegative().optional(),
+  // PROGRAMACION-TC-CAJA-REMOLQUE-1 — TC/caja/remolque del viaje. Propio:
+  // `tcVehiculoId` (flota_vehiculos.id, clasificado como TC; opcional).
+  // Tercerizado: `tcExternoPlaca` (solo texto, snapshot). Nunca se mezclan.
+  tcVehiculoId: z.number().int().positive().optional(),
+  tcExternoPlaca: z.string().max(40).optional(),
   lugarCarga: z.string().optional(),
   lugarDescarga: z.string().optional(),
   // VIAT-4/VIAT-4b: de qué ruta maestra (tms_cliente_rutas) salió la
@@ -617,7 +638,16 @@ export async function POST(req: Request, ctx: Ctx) {
     unidadExternaDescripcion: esTercerizado ? opcional(d.unidadExternaDescripcion) : null,
     transportistaExterno: esTercerizado ? opcional(d.transportistaExterno) : null,
     costoTercerizado: esTercerizado ? (d.costoTercerizado ?? null) : null,
+    tcExternoPlaca: esTercerizado ? opcional(d.tcExternoPlaca?.trim().toUpperCase()) : null,
   };
+  // Un viaje Tercerizado NUNCA acepta un TC interno como sustituto del
+  // snapshot externo (mismo criterio que piloto/unidad).
+  if (esTercerizado && d.tcVehiculoId != null) {
+    return NextResponse.json(
+      { error: "Un viaje tercerizado no usa TC interno: captura el TC externo como texto." },
+      { status: 400 },
+    );
+  }
 
   let clienteId: number | null = null;
   let unidadId: number | null = null;
@@ -700,6 +730,12 @@ export async function POST(req: Request, ctx: Ctx) {
         const v = dispCheck.vehiculos.find(
           (x) => x.placa.toUpperCase() === placaNorm,
         );
+        if (v && esTc(v.tipoUnidad)) {
+          return NextResponse.json(
+            { error: `La placa ${placaNorm} está clasificada como TC: asígnala en el campo TC, no como Unidad.` },
+            { status: 400 },
+          );
+        }
         if (v && !v.puedeEnviar) {
           return NextResponse.json(
             {
@@ -777,6 +813,19 @@ export async function POST(req: Request, ctx: Ctx) {
     auxiliarId = auxPersonalIds[0] ?? null;
   }
 
+  // PROGRAMACION-TC-CAJA-REMOLQUE-1 — TC INTERNO (solo Propio, opcional):
+  // se valida en servidor (acceso de la empresa + clasificación TC) y
+  // queda en su propia columna, nunca en unidad_id. La disponibilidad por
+  // fecha se valida más abajo junto con piloto/auxiliares/unidad.
+  let tcVehiculoId: number | null = null;
+  let tcPlacaHistorica: string | null = null;
+  if (tipoViaje === "Propio" && d.tcVehiculoId != null) {
+    const tc = await resolverTcInterno(empresaId, d.tcVehiculoId);
+    if (!tc.ok) return NextResponse.json({ error: tc.error }, { status: tc.status });
+    tcVehiculoId = tc.vehiculoId;
+    tcPlacaHistorica = tc.placa;
+  }
+
   // Mejora Programación (Opción A) — validar viaticosAsignados ANTES de
   // escribir absolutamente nada: cada empleadoId debe corresponder
   // realmente al piloto/auxiliares RESUELTOS arriba (empleadoIdAPersonalId
@@ -836,10 +885,12 @@ export async function POST(req: Request, ctx: Ctx) {
 
   // Piloto, auxiliares y unidad quedan ocupados durante toda fecha_plan.
   // La hora y el regreso estimado no modifican esta reserva diaria.
-  const recursosNuevoPlan: RecursoAValidar[] = [
+  const recursosNuevoPlan: RecursoDia[] = [
     ...(pilotoId ? [{ tipo: "piloto" as const, id: pilotoId }] : []),
     ...auxPersonalIds.map((id) => ({ tipo: "auxiliar" as const, id })),
     ...(unidadId ? [{ tipo: "unidad" as const, id: unidadId }] : []),
+    // PROGRAMACION-TC-CAJA-REMOLQUE-1: el TC interno entra a la misma reserva diaria.
+    ...(tcVehiculoId ? [{ tipo: "tc" as const, id: tcVehiculoId }] : []),
   ];
   const validarDiaNuevo = recursosNuevoPlan.length > 0;
 
@@ -951,8 +1002,8 @@ export async function POST(req: Request, ctx: Ctx) {
       try {
         const [result] = await conn.execute<ResultSetHeader>(
           `INSERT INTO tms_planes_viaje
-            (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, tarifa_id, tarifa_nombre_historico, tarifa_monto_historico, tarifa_moneda_historico, costo_operativo_referencia, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado, tipo_viaje, piloto_externo_nombre, auxiliares_externos, unidad_externa_placa, unidad_externa_descripcion, transportista_externo, costo_tercerizado)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado', ?, ?, ?, ?, ?, ?, ?)`,
+            (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, tarifa_id, tarifa_nombre_historico, tarifa_monto_historico, tarifa_moneda_historico, costo_operativo_referencia, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado, tipo_viaje, piloto_externo_nombre, auxiliares_externos, unidad_externa_placa, unidad_externa_descripcion, transportista_externo, costo_tercerizado, tc_vehiculo_id, tc_placa_historica, tc_externo_placa)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             empresaId,
             codigoFinal,
@@ -987,6 +1038,9 @@ export async function POST(req: Request, ctx: Ctx) {
             snapshotTercerizado.unidadExternaDescripcion,
             snapshotTercerizado.transportistaExterno,
             snapshotTercerizado.costoTercerizado,
+            tcVehiculoId,
+            tcPlacaHistorica,
+            snapshotTercerizado.tcExternoPlaca,
           ],
         );
         planId = Number(result.insertId);
@@ -1069,7 +1123,7 @@ export async function POST(req: Request, ctx: Ctx) {
     usuario: guard.session.username,
     accion: "crear_ruta",
     modulo: "tms",
-    detalle: `Plan #${planId} ${codigoFinal} · fecha ${d.fechaPlan} · tipo ${tipoViaje} · piloto ${(esTercerizado ? snapshotTercerizado.pilotoExternoNombre : d.pilotoNombre?.trim()) || "—"} · placa ${(esTercerizado ? snapshotTercerizado.unidadExternaPlaca : (d.placa || "").toUpperCase()) || "—"} · ${paradasInput.length} parada(s)${paradasTxt ? `: ${paradasTxt}` : ""}`,
+    detalle: `Plan #${planId} ${codigoFinal} · fecha ${d.fechaPlan} · tipo ${tipoViaje} · piloto ${(esTercerizado ? snapshotTercerizado.pilotoExternoNombre : d.pilotoNombre?.trim()) || "—"} · placa ${(esTercerizado ? snapshotTercerizado.unidadExternaPlaca : (d.placa || "").toUpperCase()) || "—"} · TC ${(esTercerizado ? snapshotTercerizado.tcExternoPlaca : tcPlacaHistorica) || "—"} · ${paradasInput.length} parada(s)${paradasTxt ? `: ${paradasTxt}` : ""}`,
   });
 
   return NextResponse.json({
@@ -1177,6 +1231,9 @@ const patchSchema = z.object({
   unidadExternaDescripcion: z.string().max(160).optional(),
   transportistaExterno: z.string().max(160).optional(),
   costoTercerizado: z.number().nonnegative().nullable().optional(),
+  // PROGRAMACION-TC-CAJA-REMOLQUE-1 — `null` (o "" en tcExternoPlaca) quita el TC.
+  tcVehiculoId: z.number().int().positive().nullable().optional(),
+  tcExternoPlaca: z.string().max(40).nullable().optional(),
 });
 
 /**
@@ -1232,6 +1289,13 @@ async function patchTipoViaje(
     );
   }
   const opcional = (v: string | null | undefined): string | null => { const t = (v ?? "").trim(); return t ? t : null; };
+  // PROGRAMACION-TC-CAJA-REMOLQUE-1: un Tercerizado nunca acepta un TC interno.
+  if (esTercerizado && d.tcVehiculoId != null) {
+    return NextResponse.json(
+      { error: "Un viaje tercerizado no usa TC interno: captura el TC externo como texto." },
+      { status: 400 },
+    );
+  }
 
   const conn = await getPool().getConnection();
   try {
@@ -1241,7 +1305,8 @@ async function patchTipoViaje(
         `UPDATE tms_planes_viaje SET
            tipo_viaje = 'Tercerizado', piloto_id = NULL, auxiliar_id = NULL, unidad_id = NULL,
            piloto_externo_nombre = ?, auxiliares_externos = ?, unidad_externa_placa = ?,
-           unidad_externa_descripcion = ?, transportista_externo = ?, costo_tercerizado = ?
+           unidad_externa_descripcion = ?, transportista_externo = ?, costo_tercerizado = ?,
+           tc_vehiculo_id = NULL, tc_placa_historica = NULL, tc_externo_placa = ?
          WHERE id = ? AND empresa_id = ?`,
         [
           opcional(d.pilotoExternoNombre),
@@ -1250,6 +1315,7 @@ async function patchTipoViaje(
           opcional(d.unidadExternaDescripcion),
           opcional(d.transportistaExterno),
           d.costoTercerizado ?? null,
+          opcional(d.tcExternoPlaca?.trim().toUpperCase()),
           d.id,
           empresaId,
         ],
@@ -1261,7 +1327,7 @@ async function patchTipoViaje(
         `UPDATE tms_planes_viaje SET
            tipo_viaje = 'Propio', piloto_externo_nombre = NULL, auxiliares_externos = NULL,
            unidad_externa_placa = NULL, unidad_externa_descripcion = NULL, transportista_externo = NULL,
-           costo_tercerizado = NULL
+           costo_tercerizado = NULL, tc_externo_placa = NULL
          WHERE id = ? AND empresa_id = ?`,
         [d.id, empresaId],
       );
@@ -1325,6 +1391,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
   const plan = await query<RowDataPacket[]>(
     `SELECT p.id, p.codigo, p.estado, p.fecha_plan, p.hora_carga, p.notas,
             p.piloto_id, p.unidad_id, p.regreso_estimado, p.ruta_id,
+            p.tipo_viaje, p.tc_vehiculo_id,
             p.tarifa_comercial, p.tarifa_id, p.costo_operativo_referencia, p.referencia_cliente,
             u.placa, u.flota_vehiculo_id, pil.nombre AS piloto,
             ${SQL_PENDIENTE_CIERRE} AS pendiente_cierre
@@ -1346,6 +1413,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
     fechaPlan: toIsoDate(plan[0].fecha_plan) ?? "",
     pilotoId: plan[0].piloto_id != null ? Number(plan[0].piloto_id) : null,
     unidadId: plan[0].unidad_id != null ? Number(plan[0].unidad_id) : null,
+    tipoViaje: String(plan[0].tipo_viaje ?? "Propio"),
+    tcVehiculoId: plan[0].tc_vehiculo_id != null ? Number(plan[0].tc_vehiculo_id) : null,
     regresoEstimado:
       plan[0].regreso_estimado != null
         ? String(plan[0].regreso_estimado).slice(0, 19).replace("T", " ")
@@ -1373,6 +1442,38 @@ export async function PATCH(req: Request, ctx: Ctx) {
     rutaId: plan[0].ruta_id != null ? Number(plan[0].ruta_id) : null,
     tarifaId: plan[0].tarifa_id != null ? Number(plan[0].tarifa_id) : null,
   };
+
+  // PROGRAMACION-TC-CAJA-REMOLQUE-1 — TC del viaje.
+  //  - Tercerizado: solo `tcExternoPlaca` (texto); un TC interno se rechaza.
+  //  - Propio: `tcVehiculoId` (null lo quita). Un TC DISTINTO al actual se
+  //    valida en servidor (acceso + clasificación + activo/taller); el mismo
+  //    TC no se re-valida por taller/inactivo (editar otros campos de un
+  //    viaje no debe fallar porque el TC ya entró a taller). La
+  //    disponibilidad por fecha va más abajo, bajo el candado por empresa.
+  const planEsTercerizado = antes.tipoViaje === "Tercerizado";
+  if (planEsTercerizado && d.tcVehiculoId != null) {
+    return NextResponse.json(
+      { error: "Un viaje tercerizado no usa TC interno: captura el TC externo como texto." },
+      { status: 400 },
+    );
+  }
+  const escribirTcInterno =
+    !planEsTercerizado && d.tcVehiculoId !== undefined && (d.tcVehiculoId === null || d.tcVehiculoId !== antes.tcVehiculoId);
+  let tcVehiculoIdNuevo: number | null = null;
+  let tcPlacaNueva: string | null = null;
+  if (escribirTcInterno && d.tcVehiculoId != null) {
+    const tc = await resolverTcInterno(empresaId, d.tcVehiculoId);
+    if (!tc.ok) return NextResponse.json({ error: tc.error }, { status: tc.status });
+    tcVehiculoIdNuevo = tc.vehiculoId;
+    tcPlacaNueva = tc.placa;
+  }
+  const escribirTcExterno = planEsTercerizado && d.tcExternoPlaca !== undefined;
+  const tcExternoNuevo = escribirTcExterno ? ((d.tcExternoPlaca ?? "").trim().toUpperCase() || null) : null;
+  const tcEfectivo: number | null = planEsTercerizado
+    ? null
+    : escribirTcInterno
+      ? tcVehiculoIdNuevo
+      : antes.tcVehiculoId;
 
   // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§2/§5) — consistencia
   // tarifa↔ruta del viaje. `d.rutaId` (zod) es undefined o un id positivo,
@@ -1952,6 +2053,12 @@ export async function PATCH(req: Request, ctx: Ctx) {
   if (vehiculoIdParaValidar != null) {
     const dispVeh = await listarDisponibilidadVehiculos(empresaId);
     const v = dispVeh.vehiculos.find((x) => x.id === vehiculoIdParaValidar);
+    if (v && unidadCambioReal && esTc(v.tipoUnidad)) {
+      return NextResponse.json(
+        { error: `La placa ${v.placa} está clasificada como TC: asígnala en el campo TC, no como Unidad.` },
+        { status: 400 },
+      );
+    }
     if (v) {
       if (v.estadoDisponibilidad === "inactivo") {
         return NextResponse.json(
@@ -2049,10 +2156,12 @@ export async function PATCH(req: Request, ctx: Ctx) {
       const pilotoEfectivo = pilotoId ?? antes.pilotoId;
       const unidadEfectiva = unidadId ?? antes.unidadId;
       const auxiliaresEfectivos = auxPersonalIdsNuevo ?? auxPersonalIdsLegado ?? antesAuxiliaresIds;
-      const recursosEfectivos: RecursoAValidar[] = [
+      const recursosEfectivos: RecursoDia[] = [
         ...(pilotoEfectivo ? [{ tipo: "piloto" as const, id: pilotoEfectivo }] : []),
         ...auxiliaresEfectivos.map((id) => ({ tipo: "auxiliar" as const, id })),
         ...(unidadEfectiva ? [{ tipo: "unidad" as const, id: unidadEfectiva }] : []),
+        // PROGRAMACION-TC-CAJA-REMOLQUE-1: el propio plan se autoexcluye (excluirPlanId = d.id).
+        ...(tcEfectivo ? [{ tipo: "tc" as const, id: tcEfectivo }] : []),
       ];
       if (recursosEfectivos.length) {
         const fechaEfectivaPlan = d.fechaPlan ?? antes.fechaPlan;
@@ -2132,7 +2241,10 @@ export async function PATCH(req: Request, ctx: Ctx) {
         lugar_descarga_historico = COALESCE(?, lugar_descarga_historico),
         contacto_nombre_historico = COALESCE(?, contacto_nombre_historico),
         contacto_cargo_historico = COALESCE(?, contacto_cargo_historico),
-        contacto_telefono_historico = COALESCE(?, contacto_telefono_historico)
+        contacto_telefono_historico = COALESCE(?, contacto_telefono_historico),
+        tc_vehiculo_id = CASE WHEN ? THEN ? ELSE tc_vehiculo_id END,
+        tc_placa_historica = CASE WHEN ? THEN ? ELSE tc_placa_historica END,
+        tc_externo_placa = CASE WHEN ? THEN ? ELSE tc_externo_placa END
        WHERE id = ? AND empresa_id = ? AND estado = ?`,
       [
         d.fechaPlan ?? null,
@@ -2173,6 +2285,12 @@ export async function PATCH(req: Request, ctx: Ctx) {
         d.contactoNombreHistorico?.trim() || null,
         d.contactoCargoHistorico?.trim() || null,
         d.contactoTelefonoHistorico?.trim() || null,
+        escribirTcInterno,
+        tcVehiculoIdNuevo,
+        escribirTcInterno,
+        tcPlacaNueva,
+        escribirTcExterno,
+        tcExternoNuevo,
         d.id,
         empresaId,
         antes.estado,
