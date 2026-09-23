@@ -33,6 +33,9 @@ type DatosResueltosFila = {
   pilotoPersonalId: number | null;
   auxiliares: { empleadoId: number; nombre: string; personalId: number | null }[];
   unidadPlaca: string;
+  /** TC INTERNO resuelto por el backend (solo si la fila trae TC). */
+  tcVehiculoId?: number;
+  tcPlaca?: string;
   unidadId: number | null;
   tarifaVigente: number;
   regresoEstimado: string | null;
@@ -63,6 +66,7 @@ type FilaValidar = {
   fechaRegresoExcel: string | null;
   horaRegresoExcel: string | null;
   observacionesExcel: string;
+  tcExcel?: string;
   resuelto: DatosResueltosFila | null;
 };
 
@@ -306,6 +310,7 @@ export default function ImportarProgramacionPage() {
                     <th className="px-2 py-2">Piloto</th>
                     <th className="px-2 py-2">Auxiliares</th>
                     <th className="px-2 py-2">Placa</th>
+                    <th className="px-2 py-2">TC / Caja / Remolque</th>
                     <th className="px-2 py-2">Tarifa</th>
                     <th className="px-2 py-2">Salida</th>
                     <th className="px-2 py-2">Regreso estimado</th>
@@ -443,6 +448,9 @@ function FilaPreviewRow({ fila }: { fila: FilaValidar }) {
           : [fila.auxiliar1CodigoExcel, fila.auxiliar2CodigoExcel].filter(Boolean).join(", ") || "—"}
       </td>
       <td className="px-2 py-2">{ok ? r?.unidadPlaca : fila.placaExcel || "—"}</td>
+      <td className="px-2 py-2">
+        {ok ? (r?.tcPlaca ? `${r.tcPlaca} (Propio)` : "—") : fila.tcExcel || "—"}
+      </td>
       <td className="px-2 py-2">
         {ok
           ? r != null

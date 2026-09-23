@@ -61,6 +61,12 @@ const COL_TARIFA = 10; // J
 const COL_FECHA_REGRESO = 11; // K
 const COL_HORA_REGRESO = 12; // L
 const COL_OBSERVACIONES = 13; // M
+// TMS-TC-PLANES-REPORTES-1 — columna OPCIONAL N. Va al FINAL para no mover ninguna de las 13 columnas
+// aprobadas: un archivo antiguo (13 columnas, sin este encabezado) se lee EXACTAMENTE como antes.
+const COL_TC = 14; // N
+export const ENCABEZADO_TC = "TC / Caja / Remolque";
+/** Encabezados de la plantilla NUEVA (14 columnas). El importador acepta 13 (formato viejo) o 14. */
+export const ENCABEZADOS_PLANTILLA_PROGRAMACION = [...ENCABEZADOS_PROGRAMACION, ENCABEZADO_TC] as const;
 
 const HOJA_PROGRAMACION = "Programacion";
 const FILA_ENCABEZADO = 1;
@@ -89,6 +95,11 @@ export type FilaProgramacionExcel = {
   fechaRegresoExcel: string | null;
   horaRegresoExcel: string | null;
   observacionesExcel: string;
+  /**
+   * TC / caja / remolque (columna opcional N), en mayúsculas y sin espacios repetidos. "" o ausente = sin TC
+   * (archivo de 13 columnas o celda vacía). Nunca resuelve nada por sí solo: el backend lo valida contra Flota.
+   */
+  tcExcel?: string;
   /** Errores puramente sintácticos de ESTA fila (formato/obligatoriedad/regreso vs. salida). Vacío = fila sintácticamente correcta. */
   erroresSintacticos: string[];
 };
@@ -257,6 +268,7 @@ function letraColumna(n: number): string {
 function parsearFila(
   ws: ExcelJS.Worksheet,
   rowIndex: number,
+  conColumnaTc = false,
 ): FilaProgramacionExcel {
   const row = ws.getRow(rowIndex);
   const errores: string[] = [];
@@ -343,6 +355,7 @@ function parsearFila(
   }
 
   const observacionesExcel = normalizarEspacios(cellStr(row.getCell(COL_OBSERVACIONES).value));
+  const tcExcel = conColumnaTc ? normalizarPlaca(row.getCell(COL_TC).value) : "";
 
   return {
     filaExcel: rowIndex,
@@ -359,6 +372,8 @@ function parsearFila(
     fechaRegresoExcel,
     horaRegresoExcel,
     observacionesExcel,
+    // Solo cuando el archivo trae la columna: el objeto de un archivo de 13 columnas queda idéntico al de siempre.
+    ...(conColumnaTc ? { tcExcel } : {}),
     erroresSintacticos: errores,
   };
 }
@@ -398,6 +413,16 @@ export async function parsearExcelProgramacion(buffer: Buffer): Promise<FilaProg
     }
   }
 
+  // Columna 14 OPCIONAL: vacía = formato viejo de 13 columnas; "TC / Caja / Remolque" = formato nuevo;
+  // cualquier otro texto es un archivo alterado/ambiguo y se rechaza (no se adivina).
+  const encabezadoN = cellStr(ws.getRow(FILA_ENCABEZADO).getCell(COL_TC).value);
+  const conColumnaTc = normalizarComparacion(encabezadoN) === normalizarComparacion(ENCABEZADO_TC);
+  if (encabezadoN.trim() && !conColumnaTc) {
+    throw new Error(
+      `Encabezado inválido en la columna ${letraColumna(COL_TC)}: se esperaba "${ENCABEZADO_TC}" (o dejarla vacía en el formato anterior de 13 columnas) y se encontró "${encabezadoN}". No modifique ni reordene las columnas de la hoja "${HOJA_PROGRAMACION}".`,
+    );
+  }
+
   const filas: FilaProgramacionExcel[] = [];
   const ultimaFila = ws.rowCount;
   for (let rowIndex = FILA_INICIO_DATOS; rowIndex <= ultimaFila; rowIndex++) {
@@ -416,6 +441,7 @@ export async function parsearExcelProgramacion(buffer: Buffer): Promise<FilaProg
       row.getCell(COL_FECHA_REGRESO).value,
       row.getCell(COL_HORA_REGRESO).value,
       row.getCell(COL_OBSERVACIONES).value,
+      ...(conColumnaTc ? [row.getCell(COL_TC).value] : []),
     ];
     if (celdas.every((v) => !cellStr(v).trim())) continue; // fila completamente vacía: se ignora
 
@@ -427,7 +453,7 @@ export async function parsearExcelProgramacion(buffer: Buffer): Promise<FilaProg
         `El archivo supera el límite de ${MAX_FILAS_PROGRAMACION} filas por importación.`,
       );
     }
-    filas.push(parsearFila(ws, rowIndex));
+    filas.push(parsearFila(ws, rowIndex, conColumnaTc));
   }
 
   return filas;
@@ -487,7 +513,22 @@ async function catalogoVehiculos(empresaId: number): Promise<CatalogoVehiculo[]>
   // 2-DISCOVERY-CAMPOS-CATALOGOS.md §7).
   const { vehiculos } = await listarDisponibilidadVehiculos(empresaId);
   return vehiculos
-    .filter((v) => v.activo)
+    // TMS-TC-PLANES-REPORTES-1: los TC / cajas / remolques van en su PROPIA hoja ("TC"); no se mezclan con las unidades.
+    .filter((v) => v.activo && v.tipoUnidad !== "TC")
+    .map((v) => ({
+      placa: v.placa,
+      marca: v.marca ?? "",
+      modelo: v.modelo ?? "",
+      estado: v.estadoDisponibilidad,
+      propia: v.esPropio,
+    }));
+}
+
+/** TC / caja / remolque ACTIVOS y accesibles para la empresa (propios o compartidos). Mismo origen que Programación. */
+async function catalogoTc(empresaId: number): Promise<CatalogoVehiculo[]> {
+  const { vehiculos } = await listarDisponibilidadVehiculos(empresaId);
+  return vehiculos
+    .filter((v) => v.activo && v.tipoUnidad === "TC")
     .map((v) => ({
       placa: v.placa,
       marca: v.marca ?? "",
@@ -565,7 +606,7 @@ function construirHojaProgramacion(wb: ExcelJS.Workbook): ExcelJS.Worksheet {
     properties: { tabColor: { argb: COLOR_HEADER } },
   });
 
-  ENCABEZADOS_PROGRAMACION.forEach((valor, index) => {
+  ENCABEZADOS_PLANTILLA_PROGRAMACION.forEach((valor, index) => {
     ws.getCell(FILA_ENCABEZADO, index + 1).value = valor;
   });
   ws.getRow(FILA_ENCABEZADO).font = { name: "Calibri", size: 11, bold: true, color: { argb: "FFFFFFFF" } };
@@ -573,7 +614,7 @@ function construirHojaProgramacion(wb: ExcelJS.Workbook): ExcelJS.Worksheet {
   ws.getRow(FILA_ENCABEZADO).alignment = { vertical: "middle", horizontal: "center", wrapText: true };
   ws.getRow(FILA_ENCABEZADO).height = 32;
 
-  const anchos = [13, 11, 13, 26, 13, 13, 15, 15, 18, 12, 15, 13, 30];
+  const anchos = [13, 11, 13, 26, 13, 13, 15, 15, 18, 12, 15, 13, 30, 22];
   anchos.forEach((w, i) => {
     ws.getColumn(i + 1).width = w;
   });
@@ -588,11 +629,11 @@ function construirHojaProgramacion(wb: ExcelJS.Workbook): ExcelJS.Worksheet {
   // rutas-import-excel.ts).
   const ejemplo1 = [
     "2026-09-20", "08:00", "EJEMPLO-NO-IMPORTAR", "Acme S.A. (o su NIT)", "1234",
-    "P-123ABC", "5678", "", "Carga completa", 1500, "2026-09-20", "17:00", "Ejemplo — no se importa",
+    "P-123ABC", "5678", "", "Carga completa", 1500, "2026-09-20", "17:00", "Ejemplo — no se importa", "",
   ];
   const ejemplo2 = [
     "2026-09-21", "02:30 PM", "EJEMPLO-NO-IMPORTAR", "Acme S.A.", "1234",
-    "P-456XYZ", "5678", "9012", "Paquetería", 800, "2026-09-21", "06:00 PM", "Ejemplo — no se importa",
+    "P-456XYZ", "5678", "9012", "Paquetería", 800, "2026-09-21", "06:00 PM", "Ejemplo — no se importa", "TC-456XYZ",
   ];
   [ejemplo1, ejemplo2].forEach((fila, i) => {
     const rowNum = FILA_EJEMPLO_1 + i;
@@ -603,7 +644,7 @@ function construirHojaProgramacion(wb: ExcelJS.Workbook): ExcelJS.Worksheet {
     ws.getRow(rowNum).fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLOR_EJEMPLO } };
   });
 
-  ws.autoFilter = { from: "A1", to: `M${FILA_INICIO_DATOS + MAX_FILAS_PROGRAMACION}` };
+  ws.autoFilter = { from: "A1", to: `N${FILA_INICIO_DATOS + MAX_FILAS_PROGRAMACION}` };
   return ws;
 }
 
@@ -658,13 +699,14 @@ function construirHojaInstrucciones(wb: ExcelJS.Workbook): void {
     ["Cliente *", 'Obligatorio, pero SOLO de contraste: escriba el NIT del cliente si lo tiene registrado (ver hoja "Clientes"), o su nombre si no. El cliente real del viaje lo determina el Código de ruta, no este campo — se usa para detectar discrepancias.'],
     ["Código piloto *", 'Código de empleado (RRHH) del piloto, tal como aparece en la hoja "Empleados". Debe existir y estar activo/habilitado.'],
     ["Placa *", 'Placa exacta de la unidad, tal como aparece en la hoja "Vehiculos".'],
+    ["TC / Caja / Remolque", 'OPCIONAL. Placa del TC / caja / remolque del viaje, tal como aparece en la hoja "TC" (solo TC activos de Flota; no use aquí una placa de la hoja "Vehiculos"). Déjela vacía si el viaje no lleva TC. Un mismo TC no puede estar en dos viajes el mismo día. Los archivos antiguos de 13 columnas (sin esta columna) siguen funcionando igual.'],
     ["Código auxiliar 1 / 2", "Códigos de empleado de los auxiliares, si aplica. Ambos son opcionales."],
     ["Tipo traslado", "Texto libre, por ejemplo: Carga completa, Paquetería."],
     ["Tarifa GTQ *", "Obligatoria. Monto en quetzales (puede ser 0). Se contrastará contra la tarifa vigente del sistema para esa ruta al momento de importar."],
     ["Fecha/Hora regreso estimado", "Ambas juntas u ambas vacías — no se acepta solo una de las dos. Debe ser posterior a la fecha/hora de salida."],
     ["Observaciones", "Texto libre, opcional."],
     ["Código de plan", "NO existe esta columna — el sistema genera el código de cada viaje automáticamente al importar."],
-    ["Hojas Rutas / Vehiculos / Empleados / Clientes", "Son SOLO de referencia, una fotografía del momento en que descargó este archivo. Editarlas no tiene ningún efecto: el sistema siempre vuelve a consultar la base de datos real al importar."],
+    ["Hojas Rutas / Vehiculos / TC / Empleados / Clientes", "Son SOLO de referencia, una fotografía del momento en que descargó este archivo. Editarlas no tiene ningún efecto: el sistema siempre vuelve a consultar la base de datos real al importar."],
     ["Esta importación NO crea catálogo", "Rutas, clientes, empleados, pilotos, auxiliares, unidades y tarifas deben existir previamente en el sistema. Si algo no existe, esa fila se rechaza."],
     ["Fila azul", "Nombre de cada columna. No la elimine ni reordene las columnas."],
     ["Filas amarillas", "Son únicamente un ejemplo y NO se importan. Empiece a ingresar sus viajes debajo de esas 2 filas."],
@@ -714,17 +756,18 @@ function aplicarDropdown(ws: ExcelJS.Worksheet, columna: number, nombreLista: st
 
 /**
  * Genera la plantilla oficial de importación masiva de Programación:
- * "Programacion" (hoja de trabajo, 13 columnas) + 4 hojas de catálogo de
- * referencia (Rutas/Vehiculos/Empleados/Clientes, generadas con datos
+ * "Programacion" (hoja de trabajo, 13 columnas + "TC / Caja / Remolque" opcional) + 5 hojas de catálogo de
+ * referencia (Rutas/Vehiculos/TC/Empleados/Clientes, generadas con datos
  * REALES y ACTUALES de la empresa) + "Instrucciones". Los catálogos
  * NUNCA son fuente de verdad al importar — son solo ayuda de llenado; el
  * backend siempre revalida contra BD fresca en la fase de importación
  * (fuera de alcance de este módulo, ver PR 3/4/5).
  */
 export async function generarPlantillaProgramacion(empresaId: number): Promise<Buffer> {
-  const [rutas, vehiculos, empleados, clientes] = await Promise.all([
+  const [rutas, vehiculos, tcs, empleados, clientes] = await Promise.all([
     catalogoRutas(empresaId),
     catalogoVehiculos(empresaId),
+    catalogoTc(empresaId),
     catalogoEmpleados(empresaId),
     catalogoClientes(empresaId),
   ]);
@@ -751,6 +794,13 @@ export async function generarPlantillaProgramacion(empresaId: number): Promise<B
   );
   construirHojaCatalogo(
     wb,
+    "TC",
+    ["Placa TC", "Marca", "Modelo", "Estado actual", "Propia / compartida"],
+    tcs.map((v) => [v.placa, v.marca, v.modelo, v.estado, v.propia ? "Propia" : "Compartida"]),
+    [14, 16, 16, 16, 18],
+  );
+  construirHojaCatalogo(
+    wb,
     "Empleados",
     ["Código", "Nombre", "Categoría operativa"],
     empleados.map((e) => [e.codigo, e.nombre, e.categoria]),
@@ -767,10 +817,12 @@ export async function generarPlantillaProgramacion(empresaId: number): Promise<B
 
   definirRangoLista(wb, "LISTA_RUTAS_CODIGOS", "Rutas", rutas.length);
   definirRangoLista(wb, "LISTA_VEHICULOS_PLACAS", "Vehiculos", vehiculos.length);
+  definirRangoLista(wb, "LISTA_TC_PLACAS", "TC", tcs.length);
   definirRangoLista(wb, "LISTA_EMPLEADOS_CODIGOS", "Empleados", empleados.length);
 
   aplicarDropdown(wsProgramacion, COL_CODIGO_RUTA, "LISTA_RUTAS_CODIGOS");
   aplicarDropdown(wsProgramacion, COL_PLACA, "LISTA_VEHICULOS_PLACAS");
+  aplicarDropdown(wsProgramacion, COL_TC, "LISTA_TC_PLACAS");
   aplicarDropdown(wsProgramacion, COL_PILOTO, "LISTA_EMPLEADOS_CODIGOS");
   aplicarDropdown(wsProgramacion, COL_AUX1, "LISTA_EMPLEADOS_CODIGOS");
   aplicarDropdown(wsProgramacion, COL_AUX2, "LISTA_EMPLEADOS_CODIGOS");

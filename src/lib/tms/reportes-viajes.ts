@@ -63,6 +63,14 @@ export type PlanReporte = {
   placa: string | null;
   unidadTipo: string | null;
   unidadCapacidad: string | null;
+  /**
+   * TMS-TC-PLANES-REPORTES-1 — TC / caja / remolque del viaje (dato descriptivo, no monetario).
+   * `tcPlaca` + `tcOrigen` se resuelven con `resolverTcReporte` (snapshot histórico primero; el backend siempre los envía, opcionales solo por compatibilidad de tipos);
+   * null/null si el viaje no tiene TC. `tcVehiculoId` = tms_planes_viaje.tc_vehiculo_id (solo Propio).
+   */
+  tcPlaca?: string | null;
+  tcOrigen?: "INTERNO" | "EXTERNO" | null;
+  tcVehiculoId?: number | null;
   pilotoId: number | null;
   piloto: string | null;
   auxiliares: string[];
@@ -605,6 +613,28 @@ export async function obtenerKpisReporte(
 
 export type PaginacionReporte = { limit: number; offset: number };
 
+/**
+ * TMS-TC-PLANES-REPORTES-1 — resolución ÚNICA del TC de un viaje para pantallas y exportaciones.
+ *  1) `tc_placa_historica` (snapshot al programar) => INTERNO. Manda SIEMPRE: si el TC cambia de placa
+ *     después, el viaje histórico conserva la placa programada.
+ *  2) `tc_externo_placa` (texto de un viaje Tercerizado) => EXTERNO.
+ *  3) Solo si no hay snapshot y `tc_vehiculo_id` sigue vivo: la placa ACTUAL del catálogo, como
+ *     fallback visual (INTERNO). Nunca sustituye a un snapshot existente.
+ * Propio y Tercerizado no coexisten (Programación limpia el otro campo al guardar); si algún dato
+ * legado los trajera juntos, gana el snapshot interno.
+ */
+export function resolverTcReporte(r: Record<string, unknown>): { tcPlaca: string | null; tcOrigen: "INTERNO" | "EXTERNO" | null; tcVehiculoId: number | null } {
+  const txt = (v: unknown) => (v == null ? "" : String(v).trim());
+  const vehiculoId = r.tc_vehiculo_id != null && Number(r.tc_vehiculo_id) > 0 ? Number(r.tc_vehiculo_id) : null;
+  const historica = txt(r.tc_placa_historica);
+  if (historica) return { tcPlaca: historica, tcOrigen: "INTERNO", tcVehiculoId: vehiculoId };
+  const externa = txt(r.tc_externo_placa);
+  if (externa) return { tcPlaca: externa, tcOrigen: "EXTERNO", tcVehiculoId: vehiculoId };
+  const actual = vehiculoId != null ? txt(r.tc_placa_actual) : "";
+  if (actual) return { tcPlaca: actual, tcOrigen: "INTERNO", tcVehiculoId: vehiculoId };
+  return { tcPlaca: null, tcOrigen: null, tcVehiculoId: vehiculoId };
+}
+
 /** Mismo mapeo que src/app/e/[slug]/tms/page.tsx (ESTADO_LABEL) — reutilizado aquí solo como referencia de estados válidos, sin importar ese archivo "use client". */
 export async function obtenerReporteViajes(
   empresaId: number,
@@ -615,7 +645,10 @@ export async function obtenerReporteViajes(
   const limit = paginacion ? Math.min(Math.max(paginacion.limit, 1), LIMITE_EXPORTACION_MAXIMO) : LIMITE_PAGINA_DEFECTO;
   const offset = paginacion ? Math.max(paginacion.offset, 0) : 0;
 
-  const rows = await query<RowDataPacket[]>(
+  // TC (tc_vehiculo_id / tc_placa_historica / tc_externo_placa): columnas de la migración
+  // PROGRAMACION-TC-CAJA-REMOLQUE-1. Si una instalación aún no las tiene, el reporte sigue
+  // funcionando (sin TC) — nunca se rompe por esto.
+  const consulta = (conTc: boolean) => query<RowDataPacket[]>(
     `SELECT p.id, p.codigo, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan,
             p.hora_carga, p.estado, p.cerrado_por,
             DATE_FORMAT(p.cerrado_en, '%Y-%m-%dT%H:%i') AS cerrado_en,
@@ -627,6 +660,7 @@ export async function obtenerReporteViajes(
             p.tarifa_comercial,
             p.tarifa_id, p.tarifa_nombre_historico, p.tarifa_monto_historico, p.tarifa_moneda_historico,
             u.placa, u.tipo AS unidad_tipo, ve.capacidad AS unidad_capacidad,
+            ${conTc ? "p.tc_vehiculo_id, p.tc_placa_historica, p.tc_externo_placa, tcv.placa AS tc_placa_actual," : ""}
             p.piloto_id, pil.nombre AS piloto,
             COALESCE(ev.cnt, 0) AS evidencias,
             fviaje.km_salida, fviaje.km_llegada,
@@ -639,6 +673,7 @@ export async function obtenerReporteViajes(
      LEFT JOIN tms_clientes c ON c.id = p.cliente_id
      LEFT JOIN tms_unidades u ON u.id = p.unidad_id
      LEFT JOIN flota_vehiculos ve ON ve.id = u.flota_vehiculo_id
+     ${conTc ? "LEFT JOIN flota_vehiculos tcv ON tcv.id = p.tc_vehiculo_id" : ""}
      LEFT JOIN tms_personal pil ON pil.id = p.piloto_id
      LEFT JOIN (
        SELECT plan_id, COUNT(*) AS cnt FROM tms_evidencias GROUP BY plan_id
@@ -659,6 +694,14 @@ export async function obtenerReporteViajes(
      LIMIT ? OFFSET ?`,
     [...params, limit, offset],
   );
+  let rows: RowDataPacket[];
+  try {
+    rows = await consulta(true);
+  } catch (e) {
+    const err = e as { code?: string; errno?: number };
+    if (err?.code !== "ER_BAD_FIELD_ERROR" && err?.errno !== 1054) throw e;
+    rows = await consulta(false);
+  }
 
   const planIds = rows.map((r) => Number(r.id));
   const [paradasMap, auxMap, cierreManualIds] = await Promise.all([
@@ -697,6 +740,7 @@ export async function obtenerReporteViajes(
       placa: r.placa ? String(r.placa) : null,
       unidadTipo: r.unidad_tipo ? String(r.unidad_tipo) : null,
       unidadCapacidad: r.unidad_capacidad ? String(r.unidad_capacidad) : null,
+      ...resolverTcReporte(r),
       pilotoId: r.piloto_id != null ? Number(r.piloto_id) : null,
       piloto: r.piloto ? String(r.piloto) : null,
       auxiliares: auxMap.get(id) ?? [],
