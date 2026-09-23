@@ -445,7 +445,13 @@ export default function EmpleadosPage() {
   const [qDebounced, setQDebounced] = useState("");
   const [filtroTipo, setFiltroTipo] = useState("");
   const [filtroPago, setFiltroPago] = useState("");
-  const [filtroEstado, setFiltroEstado] = useState("");
+  // RRHH-EMPLEADOS-ACTIVOS-BAJAS-1 — la vista abre SOLO con empleados Activos
+  // (antes mezclaba Activo y Baja). Valores: "Activo" (Activos), "Baja"
+  // (Bajas) y "" (Todos — cargar() no envía `estado`). Es el mismo filtro
+  // `estado` que ya aceptaba GET /empleados; el servidor sigue siendo la
+  // fuente de verdad: tras editar un estado, cargar() recarga y el empleado
+  // sale o entra al listado por sí solo (sin actualización optimista).
+  const [filtroEstado, setFiltroEstado] = useState("Activo");
   const [horaDef, setHoraDef] = useState({ entrada: "07:00", salida: "16:00" });
   const [form, setForm] = useState<FormState>(() => emptyForm());
   const [editId, setEditId] = useState<number | null>(null);
@@ -1664,9 +1670,9 @@ export default function EmpleadosPage() {
           value={filtroEstado}
           onChange={(e) => setFiltroEstado(e.target.value)}
         >
-          <option value="">Activos y bajas</option>
-          <option value="Activo">Activo</option>
-          <option value="Baja">Baja</option>
+          <option value="Activo">Activos</option>
+          <option value="Baja">Bajas</option>
+          <option value="">Todos</option>
         </select>
         <button
           type="button"
