@@ -179,7 +179,13 @@ type EstadoVehiculo = {
   motivoNoDisponible: string | null;
 };
 
-export type Rango = "hoy" | "manana" | "semana";
+// PROGRAMACION-FILTRO-FECHA-ESPECIFICA-1 — "fecha" es un cuarto modo,
+// junto a los 3 de siempre: un solo día elegido libremente (pasado o
+// futuro, sin restricción), guardado aparte en `fechaSeleccionada` (no
+// se puede derivar de `hoy` como los otros 3). `rangoQueContiene` (más
+// abajo) NUNCA devuelve "fecha" — sigue siendo estrictamente Hoy/Mañana/
+// Semana, ver su propio comentario.
+export type Rango = "hoy" | "manana" | "semana" | "fecha";
 
 const ESTADO_LABEL: Record<string, string> = {
   Programado: "Programado",
@@ -386,11 +392,32 @@ function sumarDias(iso: string, dias: number): string {
   ).padStart(2, "0")}`;
 }
 
-function rangoFechas(hoy: string, rango: Rango): { desde: string; hasta: string } {
+/**
+ * PROGRAMACION-FILTRO-FECHA-ESPECIFICA-1 — "fecha" es el único modo cuyo
+ * rango NO se deriva de `hoy`: usa tal cual `fechaSeleccionada` (desde ==
+ * hasta, un solo día — mismo criterio que ya usaban "hoy"/"mañana", sin
+ * inventar un caso nuevo de "un solo día"), sin restricción de pasado ni
+ * futuro (histórico completo, igual que ya acepta el backend vía
+ * fechaDesde/fechaHasta — ver reporte/route.ts y tms/planes/route.ts, que
+ * solo validan el formato YYYY-MM-DD, nunca un mínimo/máximo). Si
+ * `fechaSeleccionada` viene vacía (input date limpiado por el usuario, o
+ * un llamador que no la pasa) cae a `hoy`, nunca a un rango vacío que
+ * rompería la consulta al backend. Exportada para probarse directo (mismo
+ * criterio que rangoQueContiene, más abajo).
+ */
+export function rangoFechas(
+  hoy: string,
+  rango: Rango,
+  fechaSeleccionada?: string,
+): { desde: string; hasta: string } {
   if (rango === "hoy") return { desde: hoy, hasta: hoy };
   if (rango === "manana") {
     const manana = sumarDias(hoy, 1);
     return { desde: manana, hasta: manana };
+  }
+  if (rango === "fecha") {
+    const f = fechaSeleccionada || hoy;
+    return { desde: f, hasta: f };
   }
   return { desde: hoy, hasta: sumarDias(hoy, 6) };
 }
@@ -407,8 +434,18 @@ function rangoFechas(hoy: string, rango: Rango): { desde: string; hasta: string 
  * estado de React — extraída así para poder probarse sin infraestructura
  * de testing de componentes (no hay @testing-library/react en este
  * proyecto).
+ *
+ * PROGRAMACION-FILTRO-FECHA-ESPECIFICA-1 — sigue devolviendo SOLO "hoy" |
+ * "manana" | "semana" | null, NUNCA "fecha": el nuevo modo es una
+ * selección manual del usuario, no algo a lo que esta navegación
+ * automática deba saltar por su cuenta (evita el efecto sorpresa de
+ * "hacer clic en un enlace y terminar en modo Fecha con un valor
+ * inventado"). Comportamiento sin cambios respecto a antes de este ticket.
  */
-export function rangoQueContiene(hoy: string, fechaPlan: string): Rango | null {
+export function rangoQueContiene(
+  hoy: string,
+  fechaPlan: string,
+): "hoy" | "manana" | "semana" | null {
   if (fechaPlan === hoy) return "hoy";
   if (fechaPlan === sumarDias(hoy, 1)) return "manana";
   if (fechaPlan > hoy && fechaPlan <= sumarDias(hoy, 6)) return "semana";
@@ -531,6 +568,13 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   // vista inicial de Programación abre en "Mañana", no "Hoy". Botones Hoy/
   // Mañana/Semana siguen disponibles para cambiarlo.
   const [rango, setRango] = useState<Rango>("manana");
+  // PROGRAMACION-FILTRO-FECHA-ESPECIFICA-1 — solo se USA cuando rango ===
+  // "fecha" (ver rangoFechas), pero se mantiene aparte de `rango` para que
+  // el valor elegido no se pierda al alternar a Hoy/Mañana/Semana y volver
+  // a "Fecha" (el <input type="date"> reabre con la última fecha
+  // elegida, nunca vacío). Arranca en `hoy` — mismo valor por defecto que
+  // ya usa "hoy" en rangoFechas, así el input nunca abre vacío.
+  const [fechaSeleccionada, setFechaSeleccionada] = useState(hoy);
   const [filtroRapido, setFiltroRapido] = useState<FiltroRapido>("Programado");
   const [fPiloto, setFPiloto] = useState("");
   const [fUnidad, setFUnidad] = useState("");
@@ -540,7 +584,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   // antes) porque el efecto de carga ahora depende de desde/hasta — el
   // servidor filtra por fecha, ya no el navegador sobre un array de hasta
   // 200 filas.
-  const { desde, hasta } = rangoFechas(hoy, rango);
+  const { desde, hasta } = rangoFechas(hoy, rango, fechaSeleccionada);
 
   // Creación/edición de viajes: `mostrarCrear` abre el formulario en modo
   // creación; `editando` selecciona un plan del tablero para abrir el mismo
@@ -1031,7 +1075,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
     setMostrarCrear(false);
     await cargar();
     setEditandoId(info.id);
-    const { desde, hasta } = rangoFechas(hoy, rango);
+    const { desde, hasta } = rangoFechas(hoy, rango, fechaSeleccionada);
     if (info.fechaPlan >= desde && info.fechaPlan <= hasta) {
       setAvisoRango("");
       return;
@@ -1143,12 +1187,13 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
       </div>
 
       {/* Rango de fechas */}
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {(
           [
             ["hoy", "Hoy"],
             ["manana", "Mañana"],
             ["semana", "Semana"],
+            ["fecha", "Fecha"],
           ] as const
         ).map(([key, label]) => (
           <button
@@ -1168,6 +1213,22 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
             {label}
           </button>
         ))}
+        {/* PROGRAMACION-FILTRO-FECHA-ESPECIFICA-1 — sin restricción de
+            min/max: histórico completo (pasado) y cualquier fecha futura,
+            igual que ya acepta el backend. Vacío nunca se aplica (ver
+            rangoFechas): si el usuario borra el campo, el rango vigente
+            sigue siendo el último `fechaSeleccionada` válido hasta que
+            elija una nueva. */}
+        {rango === "fecha" ? (
+          <input
+            type="date"
+            className={`${input} py-1`}
+            value={fechaSeleccionada}
+            onChange={(e) => {
+              if (e.target.value) setFechaSeleccionada(e.target.value);
+            }}
+          />
+        ) : null}
         <span className="self-center text-xs text-[var(--muted)]">
           {filtroRapido === "PendienteCierre"
             ? "Pendientes de cierre: se muestran todos, sin importar la fecha."
