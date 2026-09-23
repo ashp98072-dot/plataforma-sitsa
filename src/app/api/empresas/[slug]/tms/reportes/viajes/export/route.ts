@@ -10,6 +10,7 @@ import { tablaAExcel, tablaAPdf } from "@/lib/rrhh/export-files";
 import { ahoraLocal, formatearTimestampVisible, hoyLocal } from "@/lib/rrhh/dates";
 import { filaReporteDiario, HEADERS_REPORTE_DIARIO, totalValorViajes } from "@/lib/tms/reporte-diario-viajes";
 import { reporteViajesHistorialPdf } from "@/lib/tms/reporte-viajes-historial-pdf";
+import { ETIQUETA_TC, etiquetaOrigenTc } from "@/lib/tms/tc-viaje-shared";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -69,6 +70,10 @@ function filaExcel(p: PlanReporte): string[] {
     p.totalFactura != null ? String(p.totalFactura) : "—",
     p.totalPagadoFactura != null ? String(p.totalPagadoFactura) : "—",
     p.saldoFactura != null ? String(p.saldoFactura) : "—",
+    // TMS-TC-PLANES-REPORTES-1 — al FINAL (no se renombra ni se mueve ninguna columna existente).
+    // Sin TC: celda vacía. Placa = snapshot histórico (o texto externo si es Tercerizado).
+    p.tcPlaca ?? "",
+    etiquetaOrigenTc(p.tcOrigen),
   ];
 }
 
@@ -89,6 +94,7 @@ const HEADERS_EXCEL = [
   // invariante "exporta exactamente N filas" ya probado.
   "Estado facturación", "Número factura", "Monto facturado viaje",
   "Estado cobro factura", "Total factura", "Total pagado factura", "Saldo factura",
+  ETIQUETA_TC, "Origen TC",
 ];
 
 export async function GET(req: Request, ctx: Ctx) {

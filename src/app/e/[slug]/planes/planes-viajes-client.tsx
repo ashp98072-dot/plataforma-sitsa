@@ -19,6 +19,7 @@ import {
   type GrupoFecha,
 } from "./planes-agrupacion";
 import { formatearFechaHora12, formatearHora12 } from "@/lib/tms/hora-formato";
+import { ETIQUETA_TC, etiquetaOrigenTc } from "@/lib/tms/tc-viaje-shared";
 import { resumenRegreso } from "@/lib/tms/regreso-viaje";
 
 /**
@@ -143,6 +144,10 @@ type PlanReporte = {
   placa: string | null;
   unidadTipo: string | null;
   unidadCapacidad: string | null;
+  /** TMS-TC-PLANES-REPORTES-1 — TC / caja / remolque (snapshot histórico primero; ver resolverTcReporte). */
+  tcPlaca?: string | null;
+  tcOrigen?: "INTERNO" | "EXTERNO" | null;
+  tcVehiculoId?: number | null;
   pilotoId: number | null;
   piloto: string | null;
   auxiliares: string[];
@@ -985,7 +990,12 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                     <td className="whitespace-nowrap px-2 py-1.5 text-xs">{p.fechaPlan}</td>
                     <td className="px-2 py-1.5 text-xs">{p.cliente ?? "—"}</td>
                     <td className="px-2 py-1.5 text-xs">{p.rutaCodigo ?? "—"}</td>
-                    <td className="px-2 py-1.5 text-xs">{p.placa ?? "—"}</td>
+                    <td className="px-2 py-1.5 text-xs">
+                      {p.placa ?? "—"}
+                      {p.tcPlaca ? (
+                        <span className="block text-[10px] text-[var(--muted)]" title={`${ETIQUETA_TC} (${etiquetaOrigenTc(p.tcOrigen)})`}>TC: {p.tcPlaca}</span>
+                      ) : null}
+                    </td>
                     <td className="px-2 py-1.5 text-xs">{p.piloto ?? "—"}</td>
                     <td className="px-2 py-1.5 text-xs">{p.auxiliares.join(", ") || "—"}</td>
                     <td className="whitespace-nowrap px-2 py-1.5 text-xs">{formatearFechaHora12(p.horaSalida)}</td>
@@ -1072,6 +1082,8 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                               <li>Auxiliares: {p.auxiliares.join(", ") || "—"}</li>
                               <li>Unidad: {p.placa ?? "—"}</li>
                               <li>Equipo asignado: {p.unidadTipo ? `${p.unidadTipo}${p.unidadCapacidad ? ` · ${p.unidadCapacidad}` : ""}` : "—"}</li>
+                              <li>{ETIQUETA_TC}: {p.tcPlaca ?? "—"}</li>
+                              {p.tcPlaca ? <li>Origen del TC: {etiquetaOrigenTc(p.tcOrigen)}</li> : null}
                             </ul>
                           </div>
                           <div>

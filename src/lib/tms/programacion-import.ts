@@ -9,12 +9,12 @@ import { guardarParadasPlan, type ParadaInput } from "@/lib/tms/paradas";
 import { sincronizarViaticosPlan } from "@/lib/tms/viaticos";
 import { tarifasActivasDeVariasRutas } from "@/lib/tms/ruta-tarifas";
 import type { FilaProgramacionExcel } from "./programacion-import-excel";
-import { mensajeConflictoProgramacionDia, primerConflictoProgramacionDia } from "./disponibilidad-programacion-dia";
+import { mensajeConflictoProgramacionDia, primerConflictoProgramacionDia, type RecursoDia } from "./disponibilidad-programacion-dia";
+import { resolverTcInterno } from "./tc-plan";
 import {
   finViajeDesdeInput,
   inicioViaje,
   type IntervaloConsulta,
-  type RecursoAValidar,
 } from "./disponibilidad-traslapes";
 
 /**
@@ -110,8 +110,8 @@ export function detectarFilasDuplicadas(filas: FilaProgramacionExcel[]): FilaDup
 // Traslapes de piloto/auxiliar/unidad ENTRE filas del mismo archivo
 // ---------------------------------------------------------------------
 
-type CategoriaRecurso = "persona" | "unidad";
-type RolRecurso = "piloto" | "auxiliar" | "unidad";
+type CategoriaRecurso = "persona" | "unidad" | "tc";
+type RolRecurso = "piloto" | "auxiliar" | "unidad" | "tc";
 
 type RecursoFila = {
   categoria: CategoriaRecurso;
@@ -144,6 +144,10 @@ function recursosDeFila(fila: FilaProgramacionExcel): RecursoFila[] {
   }
   if (fila.placaExcel) {
     recursos.push({ categoria: "unidad", rol: "unidad", valor: fila.placaExcel, claveComparacion: normalizarClave(fila.placaExcel) });
+  }
+  // TMS-TC-PLANES-REPORTES-1 — un mismo TC no puede ir en dos filas del archivo el mismo día.
+  if (fila.tcExcel) {
+    recursos.push({ categoria: "tc", rol: "tc", valor: fila.tcExcel, claveComparacion: normalizarClave(fila.tcExcel) });
   }
   return recursos;
 }
@@ -277,6 +281,9 @@ export type DatosResueltosFilaProgramacion = {
   pilotoPersonalId: number | null;
   auxiliares: AuxiliarResueltoFila[];
   unidadPlaca: string;
+  /** TMS-TC-PLANES-REPORTES-1 — TC INTERNO resuelto (solo si la fila trae TC): flota_vehiculos.id y placa canónica de Flota. */
+  tcVehiculoId?: number;
+  tcPlaca?: string;
   /** tms_unidades.id YA existente para esta placa, o null si nunca se ha usado en TMS. */
   unidadId: number | null;
   /** = tarifa_referencia de la ruta (predeterminada activa) — el mismo valor contra el que se contrastó fila.tarifaExcel. */
@@ -495,7 +502,7 @@ export async function previsualizarImportacionProgramacion(
     }
     for (const c of traslapesLotePorFila.get(fila.filaExcel) ?? []) {
       errores.push(
-        `Traslape con la fila ${c.filaExcelConflicto} del mismo archivo: comparten ${c.categoria === "unidad" ? "la unidad" : "personal"} "${c.valor}" (fila ${c.filaExcelConflicto}: ${describirIntervaloFila(c.intervaloConflicto)}).`,
+        `Traslape con la fila ${c.filaExcelConflicto} del mismo archivo: comparten ${c.categoria === "unidad" ? "la unidad" : c.categoria === "tc" ? "el TC" : "personal"} "${c.valor}" (fila ${c.filaExcelConflicto}: ${describirIntervaloFila(c.intervaloConflicto)}).`,
       );
     }
 
@@ -571,6 +578,25 @@ export async function previsualizarImportacionProgramacion(
       );
     }
 
+    // 5b) TC / caja / remolque (columna opcional; TMS-TC-PLANES-REPORTES-1). Vacío = sin TC (como siempre).
+    // Se resuelve SOLO contra Flota con la MISMA regla que Programación manual (resolverTcInterno):
+    // vehículo propio o compartido con ESTA empresa, clasificado TC, activo y fuera de taller. Nunca se
+    // infiere de la placa ni se acepta un VEHICULO/CABEZAL. Un vehículo de otra empresa sin acceso se
+    // reporta igual que uno inexistente (no se revela su existencia).
+    let tcResuelto: { vehiculoId: number; placa: string } | null = null;
+    if (fila.tcExcel) {
+      const tcCat = vehiculosPorPlaca.get(normalizarClave(fila.tcExcel));
+      if (!tcCat) {
+        errores.push(`El TC con placa "${fila.tcExcel}" no existe o no es accesible para esta empresa.`);
+      } else if (normalizarClave(fila.tcExcel) === normalizarClave(fila.placaExcel)) {
+        errores.push(`El TC "${fila.tcExcel}" no puede ser la misma placa que la unidad del viaje.`);
+      } else {
+        const tc = await resolverTcInterno(empresaId, tcCat.id);
+        if (tc.ok) tcResuelto = { vehiculoId: tc.vehiculoId, placa: tc.placa };
+        else errores.push(tc.error);
+      }
+    }
+
     // 6) Tarifa GTQ vs. tarifa vigente de la ruta — cualquier diferencia
     // es error bloqueante (decisión aprobada), sin override manual.
     if (ruta?.activo) {
@@ -620,10 +646,12 @@ export async function previsualizarImportacionProgramacion(
     const auxiliaresParaConflicto = auxiliaresResueltos
       .map((aux) => personalIdParaConflicto("Auxiliar", aux.codigo, aux.id))
       .filter((id): id is number => id != null);
-    const recursos: RecursoAValidar[] = [
+    const recursos: RecursoDia[] = [
       ...(pilotoParaConflicto != null ? [{ tipo: "piloto" as const, id: pilotoParaConflicto }] : []),
       ...auxiliaresParaConflicto.map((id) => ({ tipo: "auxiliar" as const, id })),
       ...(unidadId != null ? [{ tipo: "unidad" as const, id: unidadId }] : []),
+      // Misma política diaria que Programación manual: un TC interno no puede ir en dos viajes el mismo día.
+      ...(tcResuelto ? [{ tipo: "tc" as const, id: tcResuelto.vehiculoId }] : []),
     ];
     if (recursos.length) {
       const conflicto = await primerConflictoProgramacionDia(empresaId, recursos, fila.fechaSalidaExcel!, null);
@@ -650,6 +678,8 @@ export async function previsualizarImportacionProgramacion(
         pilotoPersonalId,
         auxiliares: auxiliaresDatos,
         unidadPlaca: vehiculoOk.placa,
+        // Solo cuando la fila trae TC: el resultado de una fila sin TC queda idéntico al de siempre.
+        ...(tcResuelto ? { tcVehiculoId: tcResuelto.vehiculoId, tcPlaca: tcResuelto.placa } : {}),
         unidadId,
         tarifaVigente: rutaOk.tarifaVigente as number,
         regresoEstimado: regresoEstimadoCombinado,
@@ -904,6 +934,17 @@ export async function confirmarImportacionProgramacion(
         }
         if (!planId) {
           throw new Error(`Fila ${filaPreview.filaExcel}: no se pudo generar un código de plan único.`);
+        }
+
+        // TMS-TC-PLANES-REPORTES-1 — TC INTERNO (viaje Propio): id + snapshot de la placa; externo = NULL.
+        // Mismo hecho, misma transacción (rollback conjunto). Sin TC no se ejecuta nada (INSERT original intacto).
+        if (datos.tcVehiculoId != null) {
+          await conn.execute(
+            `UPDATE tms_planes_viaje
+             SET tc_vehiculo_id = ?, tc_placa_historica = ?, tc_externo_placa = NULL
+             WHERE id = ? AND empresa_id = ?`,
+            [datos.tcVehiculoId, datos.tcPlaca ?? null, planId, empresaId],
+          );
         }
 
         await guardarAuxiliaresPlan(planId, auxPersonalIds, conn);
