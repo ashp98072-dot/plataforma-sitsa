@@ -3,14 +3,16 @@ import { z } from "zod";
 import { redondearQ } from "./contratos-pago";
 import { toIsoDate } from "./dates";
 import { finalizarSiCorresponde } from "./descuentos";
+import { obtenerFaltasPlanilla } from "./planilla-faltas";
 
 const id = z.number().int().positive();
 const monto = z.number().finite().nonnegative();
 const item = z.object({ id, monto, concepto: z.string(), fecha: z.string(), notas: z.string() }).strict();
 const cuota = item.extend({ descuentoId: id, saldoDescuento: monto }).strict();
 const hora = item.extend({ horas: monto }).strict();
+// `faltas` (RRHH-TOMAR-ASISTENCIA-2) es OPCIONAL: los snapshots históricos no la traen y siguen siendo válidos.
 const pendientesSchema = z.object({ cuotas: z.array(cuota), manuales: z.array(item), horasExtra: z.array(hora),
-  descuentosLegado: z.array(item), prestacionesLegado: z.array(item) }).strict();
+  descuentosLegado: z.array(item), prestacionesLegado: z.array(item), faltas: z.array(item).optional() }).strict();
 // RRHH-PLANILLAS-ISR-2026-INTEGRACION: snapshot v2 amplía v1 con `fiscal`
 // (resultado reproducible del motor puro de ISR — ver planilla-fiscal-2026.ts
 // y fiscal-isr-2026.ts). v1 sigue leyéndose exactamente igual que antes
@@ -107,13 +109,15 @@ export async function obtenerConceptosPendientes(conn: PoolConnection, empresaId
     const [rows] = await conn.query<RowDataPacket[]>(`SELECT * FROM ${tabla} WHERE empresa_id = ? AND fecha BETWEEN ? AND ? ORDER BY id FOR UPDATE`, [empresaId, periodo.fechaInicio, periodo.fechaFin]);
     for (const row of rows) de(Number(row.id_empleado))[campo].push({ id: Number(row.id), monto: Number(row.monto), concepto: String(row.concepto ?? row.tipo ?? ""), fecha: toIsoDate(row.fecha) ?? "", notas: String(row.notas ?? "") });
   }
+  // Faltas confirmadas por RRHH (revalidadas contra vacaciones/permisos/ruta/etc.); solo empleados Activos, igual que la planilla.
+  for (const [empleadoId, faltas] of await obtenerFaltasPlanilla(conn, empresaId, periodo)) de(empleadoId).faltas = faltas;
   for (const conceptos of resultado.values()) pendientesSchema.parse(conceptos);
   return resultado;
 }
 
 export function totalesConceptos(p: PendientesPlanilla) {
   const suma = (items: { monto: number }[]) => redondearQ(items.reduce((sum, i) => sum + i.monto, 0));
-  return { descuentos: suma([...p.cuotas, ...p.manuales, ...p.descuentosLegado]), otrosIngresos: suma([...p.horasExtra, ...p.prestacionesLegado]) };
+  return { descuentos: suma([...p.cuotas, ...p.manuales, ...p.descuentosLegado, ...(p.faltas ?? [])]), otrosIngresos: suma([...p.horasExtra, ...p.prestacionesLegado]) };
 }
 
 export function validarSnapshotContraPendientes(snapshot: unknown, actual: PendientesPlanilla,
@@ -128,6 +132,8 @@ export function validarSnapshotContraPendientes(snapshot: unknown, actual: Pendi
     if (JSON.stringify(s[campo]) !== JSON.stringify(normalizado[campo])) throw cambió();
     if (new Set(s[campo].map((i) => i.id)).size !== s[campo].length) throw cambió();
   }
+  if (JSON.stringify(s.faltas ?? []) !== JSON.stringify(normalizado.faltas ?? [])) throw cambió();
+  if (new Set((s.faltas ?? []).map((i) => i.id)).size !== (s.faltas ?? []).length) throw cambió();
   const totales = totalesConceptos(s);
   if (totales.descuentos !== contexto.descuentos || totales.otrosIngresos !== contexto.otrosIngresos) throw cambió();
   return s;
@@ -152,6 +158,12 @@ export async function aplicarConceptosSnapshot(conn: PoolConnection, s: Concepto
   for (const h of s.horasExtra) {
     const [r] = await conn.execute<ResultSetHeader>(`UPDATE horas_extra_registros SET estado = 'APLICADA_EN_PLANILLA', planilla_periodo_id = ?, aplicado_en = NOW()
       WHERE empresa_id = ? AND id = ? AND id_empleado = ? AND estado = 'APROBADA' AND planilla_periodo_id IS NULL AND monto = ? AND horas = ?`, [s.periodoId, s.empresaId, h.id, s.empleadoId, h.monto, h.horas]);
+    if (r.affectedRows !== 1) throw cambió();
+  }
+  for (const f of s.faltas ?? []) {
+    const [r] = await conn.execute<ResultSetHeader>(`UPDATE rrhh_asistencia_ausencias SET planilla_periodo_id = ?, monto_aplicado = ?, aplicado_en = NOW(), aplicado_por = ?
+      WHERE empresa_id = ? AND id = ? AND empleado_id = ? AND estado = 'CONFIRMADA' AND planilla_periodo_id IS NULL`,
+    [s.periodoId, f.monto, usuario, s.empresaId, f.id, s.empleadoId]);
     if (r.affectedRows !== 1) throw cambió();
   }
   for (const d of maestros) await finalizarSiCorresponde(conn, s.empresaId, d);

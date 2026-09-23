@@ -8,6 +8,7 @@ import {
   listarPrestacionesDetalle,
 } from "@/lib/rrhh/planillas";
 import { listarCuotasAplicadasDetalle } from "@/lib/rrhh/descuentos";
+import { listarFaltasAplicadasDetalle } from "@/lib/rrhh/planilla-faltas";
 import { listarHorasExtraAplicadasDetalle } from "@/lib/rrhh/horas-extra";
 
 const ESTADOS_VISIBLES_COLABORADOR = ["Cerrada", "Pagada"];
@@ -67,7 +68,7 @@ export default async function BoletaDetallePage({
     notFound();
   }
 
-  const [prestacionesLegadoDetalle, descuentosLegadoDetalle, cuotasD1Detalle, horasExtraDetalle] =
+  const [prestacionesLegadoDetalle, descuentosLegadoDetalle, cuotasD1Detalle, horasExtraDetalle, faltasDetalle] =
     await Promise.all([
       listarPrestacionesDetalle(
         session!.empresaId,
@@ -90,9 +91,11 @@ export default async function BoletaDetallePage({
       // adicional sin solape con las prestaciones legado (H1/H2 ya no
       // escriben en rrhh_prestaciones).
       listarHorasExtraAplicadasDetalle(session!.empresaId, session!.empleadoId, periodoId),
+      // Faltas confirmadas por RRHH aplicadas a ESTE periodo (descuento por sueldo base ÷ divisor).
+      listarFaltasAplicadasDetalle(session!.empresaId, session!.empleadoId, periodoId),
     ]);
   const prestacionesDetalle = [...prestacionesLegadoDetalle, ...horasExtraDetalle];
-  const descuentosDetalle = [...descuentosLegadoDetalle, ...cuotasD1Detalle];
+  const descuentosDetalle = [...descuentosLegadoDetalle, ...cuotasD1Detalle, ...faltasDetalle];
 
   const sumaPrestacionesDetalle = prestacionesDetalle.reduce((a, i) => a + i.monto, 0);
   const sumaDescuentosDetalle = descuentosDetalle.reduce((a, i) => a + i.monto, 0);

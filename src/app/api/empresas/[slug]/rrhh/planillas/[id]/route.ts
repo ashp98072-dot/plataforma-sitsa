@@ -33,7 +33,7 @@ export async function GET(_req: Request, ctx: Ctx) {
     listarCuotasAplicadasPeriodoDetalle(guard.empresa.id, periodoId),
   ]);
   for (const l of lineas) {
-    if (l.conceptosSnapshot) descuentosDetallePorEmpleado[l.empleadoId] = [...l.conceptosSnapshot.cuotas, ...l.conceptosSnapshot.manuales, ...l.conceptosSnapshot.descuentosLegado];
+    if (l.conceptosSnapshot) descuentosDetallePorEmpleado[l.empleadoId] = [...l.conceptosSnapshot.cuotas, ...l.conceptosSnapshot.manuales, ...l.conceptosSnapshot.descuentosLegado, ...(l.conceptosSnapshot.faltas ?? [])];
   }
   return NextResponse.json({
     periodo,
@@ -90,7 +90,7 @@ export async function POST(req: Request, ctx: Ctx) {
         listarCuotasAplicadasPeriodoDetalle(guard.empresa.id, periodoId),
       ]);
       for (const l of lineas) {
-        if (l.conceptosSnapshot) descuentosDetallePorEmpleado[l.empleadoId] = [...l.conceptosSnapshot.cuotas, ...l.conceptosSnapshot.manuales, ...l.conceptosSnapshot.descuentosLegado];
+        if (l.conceptosSnapshot) descuentosDetallePorEmpleado[l.empleadoId] = [...l.conceptosSnapshot.cuotas, ...l.conceptosSnapshot.manuales, ...l.conceptosSnapshot.descuentosLegado, ...(l.conceptosSnapshot.faltas ?? [])];
       }
       return NextResponse.json({
         mensaje:

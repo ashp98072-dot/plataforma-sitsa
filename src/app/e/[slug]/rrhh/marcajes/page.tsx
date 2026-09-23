@@ -365,12 +365,21 @@ export default function MarcajesKioskoPage() {
         </div>
 
         {rolSesion && rolSesion !== "Marcaje" ? (
-          <Link
-            href={`/e/${slug}/rrhh/marcajes/manual`}
-            className="rounded-lg bg-[#1e293b] px-3 py-2 text-xs text-[var(--muted)] hover:text-white"
-          >
-            Corrección manual RRHH →
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            {/* RRHH-TOMAR-ASISTENCIA-1: solo RRHH/admin (nunca el rol kiosco). */}
+            <Link
+              href={`/e/${slug}/rrhh/marcajes/asistencia`}
+              className="rounded-lg bg-[var(--accent)] px-3 py-2 text-xs font-medium text-white"
+            >
+              Tomar asistencia →
+            </Link>
+            <Link
+              href={`/e/${slug}/rrhh/marcajes/manual`}
+              className="rounded-lg bg-[#1e293b] px-3 py-2 text-xs text-[var(--muted)] hover:text-white"
+            >
+              Corrección manual RRHH →
+            </Link>
+          </div>
         ) : null}
       </div>
 
