@@ -390,3 +390,121 @@ describe("GET /tms/programacion/reporte — viajes Tercerizados usan el snapshot
     expect(filas[0][3]).toBe("");
   });
 });
+
+/**
+ * PROGRAMACION-PDF-LEGIBILIDAD-1 — el PDF (no el Excel) recortaba "Hora"
+ * ("07:00" → "07:0…") porque el ancho automático por longitud de texto
+ * (dibujarTablaEnDoc) le daba un peso proporcional demasiado angosto
+ * frente a columnas largas (Lugar de Carga/Descarga, Cliente, Piloto).
+ * Ajuste ÚNICAMENTE de la salida PDF: Hora en 12h con AM/PM + `minWeight`/
+ * `preserveSingleLine` para Placa y Hora. El Excel (`tablaAExcel`, mismo
+ * `dataRows` de siempre) queda intacto — se prueba explícitamente que NO
+ * cambió.
+ */
+describe("GET /tms/programacion/reporte — PDF: Hora en 12h + ancho garantizado (Excel intacto)", () => {
+  const planConHora = (hora: string, over: Record<string, unknown> = {}) => ({
+    id: 20, fecha_plan: "2026-09-15", hora_carga: hora, ruta_codigo_historico: null,
+    lugar_descarga_historico: "Puerto Barrios", cliente: "Cliente H", placa: "P111AAA", piloto: "Piloto Uno",
+    ...over,
+  });
+  const usarPlan = (fila: Record<string, unknown>) => {
+    vi.mocked(query).mockImplementation((async (sql: string) => {
+      if (sql.includes("FROM tms_plan_auxiliares")) return [];
+      if (sql.includes("FROM tms_planes_viaje p")) return [fila];
+      return [];
+    }) as typeof query);
+  };
+
+  // Sin estado=Programado, los headers incluyen "Código" -> Hora queda en el índice 9 (0-based).
+  it("el Excel sigue mostrando Hora en 24h (HH:mm) — esta salida NO se tocó", async () => {
+    usarPlan(planConHora("13:30:00"));
+    await GET(new Request("http://localhost/x?formato=xlsx&fechaDesde=2026-09-15&fechaHasta=2026-09-15"), ctx);
+    const filas = vi.mocked(tablaAExcel).mock.calls[0][0].rows;
+    expect(filas[0][9]).toBe("13:30");
+  });
+
+  it("el PDF muestra Hora en 12h con AM/PM (13:30 -> 01:30 PM)", async () => {
+    usarPlan(planConHora("13:30:00"));
+    await GET(new Request("http://localhost/x?formato=pdf&fechaDesde=2026-09-15&fechaHasta=2026-09-15"), ctx);
+    const filas = vi.mocked(tablaAPdf).mock.calls[0][0].rows;
+    expect(filas[0][9]).toBe("01:30 PM");
+  });
+
+  it.each([
+    ["00:00:00", "12:00 AM"],
+    ["08:00:00", "08:00 AM"],
+    ["12:00:00", "12:00 PM"],
+    ["23:59:00", "11:59 PM"],
+  ])("PDF: %s (24h) -> %s (12h)", async (hora24, hora12) => {
+    usarPlan(planConHora(hora24));
+    await GET(new Request("http://localhost/x?formato=pdf&fechaDesde=2026-09-15&fechaHasta=2026-09-15"), ctx);
+    const filas = vi.mocked(tablaAPdf).mock.calls[0][0].rows;
+    expect(filas[0][9]).toBe(hora12);
+  });
+
+  it("un plan sin hora_carga: celda vacía en el PDF, nunca '—' (mismo criterio que el Excel)", async () => {
+    usarPlan(planConHora("", { hora_carga: null }));
+    await GET(new Request("http://localhost/x?formato=pdf&fechaDesde=2026-09-15&fechaHasta=2026-09-15"), ctx);
+    const filas = vi.mocked(tablaAPdf).mock.calls[0][0].rows;
+    expect(filas[0][9]).toBe("");
+  });
+
+  it("el PDF nunca modifica dataRows (el Excel, llamado con el mismo objeto en memoria, no ve el cambio a 12h)", async () => {
+    usarPlan(planConHora("13:30:00"));
+    await GET(new Request("http://localhost/x?formato=pdf&fechaDesde=2026-09-15&fechaHasta=2026-09-15"), ctx);
+    const filasPdf = vi.mocked(tablaAPdf).mock.calls[0][0].rows;
+    expect(filasPdf[0][9]).toBe("01:30 PM");
+    // Reconsulta en formato Excel (mismo escenario): confirma que la fuente de datos original sigue en 24h.
+    vi.mocked(tablaAExcel).mockClear();
+    await GET(new Request("http://localhost/x?formato=xlsx&fechaDesde=2026-09-15&fechaHasta=2026-09-15"), ctx);
+    const filasXlsx = vi.mocked(tablaAExcel).mock.calls[0][0].rows;
+    expect(filasXlsx[0][9]).toBe("13:30");
+  });
+
+  it("minWeight y preserveSingleLine del PDF cubren exactamente los índices de Placa y Hora (dinámico, no hardcodeado)", async () => {
+    usarPlan(planConHora("13:30:00"));
+    await GET(new Request("http://localhost/x?formato=pdf&fechaDesde=2026-09-15&fechaHasta=2026-09-15&estado=Cerrado"), ctx);
+    const llamada = vi.mocked(tablaAPdf).mock.calls[0][0];
+    const idxPlaca = llamada.headers.indexOf("Placa");
+    const idxHora = llamada.headers.indexOf("Hora");
+    expect(idxPlaca).toBeGreaterThanOrEqual(0);
+    expect(idxHora).toBeGreaterThanOrEqual(0);
+    expect(llamada.minWeight).toEqual({ [idxPlaca]: 9, [idxHora]: 12 });
+    expect(llamada.preserveSingleLine).toEqual([idxPlaca, idxHora]);
+  });
+
+  it("estado=Programado (sin columna Código, los índices se corren): minWeight/preserveSingleLine siguen apuntando a Placa/Hora reales", async () => {
+    usarPlan(planConHora("13:30:00"));
+    await GET(new Request("http://localhost/x?formato=pdf&fechaDesde=2026-09-15&fechaHasta=2026-09-15&estado=Programado"), ctx);
+    const llamada = vi.mocked(tablaAPdf).mock.calls[0][0];
+    expect(llamada.headers).not.toContain("Código");
+    const idxPlaca = llamada.headers.indexOf("Placa");
+    const idxHora = llamada.headers.indexOf("Hora");
+    // Con Código oculto, Hora pasa del índice 9 al 8 — confirma que no se hardcodeó el índice anterior.
+    expect(idxHora).toBe(8);
+    expect(llamada.minWeight).toEqual({ [idxPlaca]: 9, [idxHora]: 12 });
+    expect(llamada.preserveSingleLine).toEqual([idxPlaca, idxHora]);
+    expect(llamada.rows[0][idxHora]).toBe("01:30 PM");
+  });
+
+  it("el resto de las columnas del PDF no cambia (mismos valores que siempre, solo Hora se reformatea)", async () => {
+    usarPlan(planConHora("13:30:00"));
+    await GET(new Request("http://localhost/x?formato=pdf&fechaDesde=2026-09-15&fechaHasta=2026-09-15"), ctx);
+    const fila = vi.mocked(tablaAPdf).mock.calls[0][0].rows[0];
+    expect(fila).toEqual([
+      "SEP", "15", "P111AAA", "Piloto Uno", "", "", "", "Cliente H", "", "01:30 PM", "Puerto Barrios",
+    ]);
+  });
+
+  it("Tercerizado en PDF: Hora también se convierte a 12h (mismo ajuste, sin distinguir tipo de viaje)", async () => {
+    usarPlan({
+      id: 21, fecha_plan: "2026-09-15", hora_carga: "08:00:00", ruta_codigo_historico: null,
+      lugar_descarga_historico: "Xela", cliente: "Cliente X", placa: null, piloto: null,
+      tipo_viaje: "Tercerizado", piloto_externo_nombre: "Juan Externo", auxiliares_externos: null, unidad_externa_placa: "EXT-1",
+    });
+    await GET(new Request("http://localhost/x?formato=pdf&fechaDesde=2026-09-15&fechaHasta=2026-09-15"), ctx);
+    const fila = vi.mocked(tablaAPdf).mock.calls[0][0].rows[0];
+    expect(fila[9]).toBe("08:00 AM");
+    expect(fila[3]).toBe("Juan Externo (Tercerizado)");
+  });
+});

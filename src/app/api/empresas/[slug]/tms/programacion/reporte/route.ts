@@ -4,6 +4,7 @@ import { query } from "@/lib/db";
 import { requireTenantModulo } from "@/lib/tenant";
 import { listarParadasDePlanes } from "@/lib/tms/paradas";
 import { tablaAExcel, tablaAPdf } from "@/lib/rrhh/export-files";
+import { formatearHora12 } from "@/lib/tms/hora-formato";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -260,13 +261,36 @@ export async function GET(req: Request, ctx: Ctx) {
   const fecha = new Date().toISOString().slice(0, 10);
 
   if (formato === "pdf") {
+    // PROGRAMACION-PDF-LEGIBILIDAD-1 — ajuste ÚNICAMENTE de esta salida
+    // (Excel sigue igual, ver tablaAExcel más abajo con `dataRows` sin
+    // tocar): Hora en 24h ("07:00") + el ancho automático por longitud de
+    // texto (dibujarTablaEnDoc en export-files.ts) dejaban a "Hora" con un
+    // peso proporcional tan angosto frente a columnas largas (Lugar de
+    // Carga/Descarga, Cliente, Piloto) que el propio "07:00" ya no cabía
+    // en una línea y se recortaba con "…". Cambiar a 12h con AM/PM
+    // ("07:00 AM") solo habría empeorado el recorte sin también darle más
+    // ancho — por eso van juntos: `minWeight` (mismo mecanismo ya usado en
+    // viaticos-comprobante-pdf.ts/fondos-solicitud-pdf.ts para este mismo
+    // problema) le da un piso de ancho a Hora y Placa sin tocar el cálculo
+    // automático de las demás columnas, y `preserveSingleLine` evita que
+    // esas dos, ya con ancho suficiente, se envuelvan en dos líneas.
+    const idxPlaca = headers.indexOf("Placa");
+    const idxHora = headers.indexOf("Hora");
+    const rowsPdf = dataRows.map((fila) => {
+      if (idxHora < 0 || !fila[idxHora]) return fila;
+      const copia = [...fila];
+      copia[idxHora] = formatearHora12(copia[idxHora]);
+      return copia;
+    });
     const buf = await tablaAPdf({
       title: "PROGRAMACIÓN",
       subtitle: `${guard.empresa.nombre} · ${rango}${filtrosAplicados ? ` · ${filtrosAplicados}` : ""} · Generado ${new Date().toLocaleString("es-GT")}`,
       headers,
-      rows: dataRows,
+      rows: rowsPdf,
       layout: "landscape",
       modo: "tabla",
+      minWeight: { [idxPlaca]: 9, [idxHora]: 12 },
+      preserveSingleLine: [idxPlaca, idxHora],
     });
     return new NextResponse(new Uint8Array(buf), {
       headers: {
