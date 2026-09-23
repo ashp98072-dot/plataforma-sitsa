@@ -7,6 +7,7 @@ vi.mock("@/lib/rrhh/documentos", () => ({ contarDocumentosPorEmpleado: vi.fn(() 
 
 import { query, execute } from "@/lib/db";
 import { listarEmpleados } from "@/lib/rrhh/empleados";
+import { construirParamsEmpleados } from "@/lib/rrhh/empleados-filtros";
 
 /**
  * RRHH-EMPLEADOS-ACTIVOS-BAJAS-1 — RRHH > Empleados abre SOLO con Activos;
@@ -52,13 +53,9 @@ describe("page.tsx — filtro de estado: Activos / Bajas / Todos", () => {
 
   it("cargar() envía `estado` solo si hay valor: Activo -> estado=Activo, Baja -> estado=Baja, Todos ('') -> NO envía estado", () => {
     const c = cuerpoDeCallback("cargar");
-    expect(c).toContain('if (filtroEstado) params.set("estado", filtroEstado);');
-    // Reproduce la construcción de la query con la misma condición.
-    const construir = (estado: string) => {
-      const p = new URLSearchParams();
-      if (estado) p.set("estado", estado);
-      return p.toString();
-    };
+    expect(c).toContain("construirParamsEmpleados(filtrosActuales)"); // helper compartido con la exportación
+    // Comportamiento REAL del helper (mismo que usa cargar()).
+    const construir = (estado: string) => construirParamsEmpleados({ estado }).toString();
     expect(construir("Activo")).toBe("estado=Activo");
     expect(construir("Baja")).toBe("estado=Baja");
     expect(construir("")).toBe("");
@@ -66,13 +63,13 @@ describe("page.tsx — filtro de estado: Activos / Bajas / Todos", () => {
 
   it("el estado se combina con búsqueda, tipo de contrato y forma de pago en la MISMA consulta", () => {
     const c = cuerpoDeCallback("cargar");
-    for (const p of ['params.set("q", qDebounced.trim())', 'params.set("tipoContrato", filtroTipo)', 'params.set("formaPago", filtroPago)', 'params.set("estado", filtroEstado)']) {
-      expect(c).toContain(p);
-    }
+    expect(c).toContain("construirParamsEmpleados(filtrosActuales)");
+    expect(src).toContain("q: qDebounced, tipoContrato: filtroTipo, formaPago: filtroPago, estado: filtroEstado");
+    expect(construirParamsEmpleados({ q: " Ana ", tipoContrato: "fijo", formaPago: "cheque", estado: "Baja" }).toString()).toBe("q=Ana&tipoContrato=fijo&formaPago=cheque&estado=Baja");
   });
 
   it("cambiar el selector recarga (filtroEstado es dependencia de cargar y de su efecto) — y el fetch va sin caché", () => {
-    expect(src).toMatch(/\}, \[slug, qDebounced, filtroTipo, filtroPago, filtroEstado\]\);/);
+    expect(src).toMatch(/\}, \[slug, filtrosActuales\]\);/); // filtrosActuales agrupa qDebounced/filtroTipo/filtroPago/filtroEstado
     expect(cuerpoDeCallback("cargar")).toMatch(/\{\s*cache:\s*"no-store",?\s*\}/);
   });
 
@@ -121,11 +118,10 @@ describe("page.tsx — editar/crear y recarga desde el servidor", () => {
 });
 
 describe("page.tsx — exportaciones (hallazgo, sin ampliar alcance)", () => {
-  it("los enlaces Excel/PDF NO envían filtros (ni estado ni búsqueda/contrato/pago): exportan la lista completa — comportamiento existente, sin cambios en este ticket", () => {
-    expect(src).toContain("`/api/empresas/${slug}/empleados/export?format=xlsx`");
-    expect(src).toContain("`/api/empresas/${slug}/empleados/export?format=pdf`");
-    const enlaces = src.slice(src.indexOf("empleados/export?format=xlsx") - 40, src.indexOf("empleados/export?format=pdf") + 60);
-    expect(enlaces).not.toContain("estado");
+  it("los enlaces Excel/PDF ahora llevan los MISMOS filtros que la tabla (RRHH-EMPLEADOS-EXPORT-FILTROS-1; detalle en empleados-export-filtros.test.ts)", () => {
+    expect(src).toContain('href={hrefExportEmpleados(slug, "xlsx", filtrosActuales)}');
+    expect(src).toContain('href={hrefExportEmpleados(slug, "pdf", filtrosActuales)}');
+    expect(src).toContain("/empleados/export?format=plantilla"); // la plantilla no depende de filtros
   });
 });
 
