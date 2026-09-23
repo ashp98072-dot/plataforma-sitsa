@@ -5,6 +5,7 @@ import { requireTenantModulo } from "@/lib/tenant";
 import { listarParadasDePlanes } from "@/lib/tms/paradas";
 import { tablaAExcel, tablaAPdf } from "@/lib/rrhh/export-files";
 import { formatearHora12 } from "@/lib/tms/hora-formato";
+import { configuracionPdfProgramacion } from "@/lib/tms/programacion-pdf-anchos";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -269,22 +270,17 @@ export async function GET(req: Request, ctx: Ctx) {
   const fecha = new Date().toISOString().slice(0, 10);
 
   if (formato === "pdf") {
-    // PROGRAMACION-PDF-LEGIBILIDAD-1 — ajuste ÚNICAMENTE de esta salida
-    // (Excel sigue igual, ver tablaAExcel más abajo con `dataRows` sin
-    // tocar): Hora en 24h ("07:00") + el ancho automático por longitud de
-    // texto (dibujarTablaEnDoc en export-files.ts) dejaban a "Hora" con un
-    // peso proporcional tan angosto frente a columnas largas (Lugar de
-    // Carga/Descarga, Cliente, Piloto) que el propio "07:00" ya no cabía
-    // en una línea y se recortaba con "…". Cambiar a 12h con AM/PM
-    // ("07:00 AM") solo habría empeorado el recorte sin también darle más
-    // ancho — por eso van juntos: `minWeight` (mismo mecanismo ya usado en
-    // viaticos-comprobante-pdf.ts/fondos-solicitud-pdf.ts para este mismo
-    // problema) le da un piso de ancho a Hora y Placa sin tocar el cálculo
-    // automático de las demás columnas, y `preserveSingleLine` evita que
-    // esas dos, ya con ancho suficiente, se envuelvan en dos líneas.
-    const idxPlaca = headers.indexOf("Placa");
-    const idxTc = headers.indexOf("TC");
+    // PROGRAMACION-PDF-LEGIBILIDAD-1 — ajuste ÚNICAMENTE de esta salida (Excel
+    // sigue igual, ver tablaAExcel más abajo con `dataRows` sin tocar): Hora
+    // en 12h con AM/PM en una copia de las filas.
+    // PROGRAMACION-PDF-ANCHOS-1 — el ancho se reparte como CONJUNTO (ver
+    // programacion-pdf-anchos.ts): columnas compactas (Mes/Día/Placa/TC/Hora)
+    // con ancho fijo suficiente y una sola línea, y el resto para las
+    // columnas de texto con wrap controlado. Un `minWeight` aislado por
+    // columna le quitaba ancho a las demás (Mes salía "SE…", Cliente
+    // "SAUZALIT…"), por eso se reemplazó.
     const idxHora = headers.indexOf("Hora");
+    const pdfCfg = configuracionPdfProgramacion(headers);
     const rowsPdf = dataRows.map((fila) => {
       if (idxHora < 0 || !fila[idxHora]) return fila;
       const copia = [...fila];
@@ -298,9 +294,9 @@ export async function GET(req: Request, ctx: Ctx) {
       rows: rowsPdf,
       layout: "landscape",
       modo: "tabla",
-      // TC (PROGRAMACION-TC-CAJA-REMOLQUE-1): mismo tratamiento que Placa — piso de ancho y una sola línea.
-      minWeight: { [idxPlaca]: 9, [idxTc]: 8, [idxHora]: 12 },
-      preserveSingleLine: [idxPlaca, idxTc, idxHora],
+      weight: pdfCfg.weight,
+      preserveSingleLine: pdfCfg.preserveSingleLine,
+      maxLinesPorColumna: pdfCfg.maxLinesPorColumna,
     });
     return new NextResponse(new Uint8Array(buf), {
       headers: {

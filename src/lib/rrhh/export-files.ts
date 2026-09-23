@@ -53,7 +53,8 @@ function truncar(s: string, max: number): string {
 
 type PdfDoc = InstanceType<typeof PDFDocument>;
 
-function wrapText(
+/** Exportada para poder probar, con las métricas reales de PDFKit, cómo se parte una celda (ver programacion-pdf-anchos.test.ts). */
+export function wrapText(
   doc: PdfDoc,
   text: string,
   width: number,
@@ -114,6 +115,8 @@ export async function tablaAPdf(opts: {
   align?: Partial<Record<number, "left" | "center" | "right">>;
   preserveSingleLine?: number[];
   maxLines?: number;
+  /** PROGRAMACION-PDF-ANCHOS-1 — tope de líneas por columna (opt-in); ver dibujarTablaEnDoc. */
+  maxLinesPorColumna?: Partial<Record<number, number>>;
 }): Promise<Buffer> {
   const headers = opts.headers.map((h) => String(h ?? ""));
   const rows = opts.rows.map((r) =>
@@ -187,6 +190,14 @@ export function dibujarTablaEnDoc(
     maxLines?: number;
     /** Columnas críticas que deben conservar el texto completo en una sola línea. */
     preserveSingleLine?: number[];
+    /**
+     * PROGRAMACION-PDF-ANCHOS-1 — tope de líneas POR COLUMNA (índice 0-based),
+     * en vez del `maxLines` global. Opt-in: una columna sin entrada usa
+     * `maxLines` exactamente como antes. Solo en las columnas que lo piden,
+     * si el texto no cabe en ese tope la última línea visible termina en "…"
+     * (nunca se descarta texto en silencio).
+     */
+    maxLinesPorColumna?: Partial<Record<number, number>>;
   },
 ): void {
   const cols = opts.headers.length;
@@ -234,14 +245,16 @@ export function dibujarTablaEnDoc(
 
   const linesOf = (text: string, col: number, bold = false) => {
     if (opts.preserveSingleLine?.includes(col)) return [text];
-    const lines = wrapText(
-      doc,
-      text,
-      Math.max(12, widths[col] - padX * 2),
-      fontSize,
-      bold,
-    );
-    return lines.slice(0, maxLines);
+    const anchoTexto = Math.max(12, widths[col] - padX * 2);
+    const lines = wrapText(doc, text, anchoTexto, fontSize, bold);
+    const tope = opts.maxLinesPorColumna?.[col];
+    if (tope == null) return lines.slice(0, maxLines);
+    if (lines.length <= tope) return lines;
+    const visibles = lines.slice(0, tope);
+    let ultima = visibles[tope - 1].replace(/…$/, "");
+    while (ultima.length > 1 && doc.widthOfString(`${ultima}…`) > anchoTexto) ultima = ultima.slice(0, -1);
+    visibles[tope - 1] = `${ultima}…`;
+    return visibles;
   };
 
   const heightOf = (cells: string[], bold = false) => {
@@ -332,6 +345,7 @@ async function pdfTabla(opts: {
   align?: Partial<Record<number, "left" | "center" | "right">>;
   preserveSingleLine?: number[];
   maxLines?: number;
+  maxLinesPorColumna?: Partial<Record<number, number>>;
 }): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const cols = opts.headers.length;
@@ -367,6 +381,7 @@ async function pdfTabla(opts: {
       align: opts.align,
       preserveSingleLine: opts.preserveSingleLine,
       maxLines: opts.maxLines,
+      maxLinesPorColumna: opts.maxLinesPorColumna,
     });
 
     piePaginas(doc, opts.rows.length, marginL, marginB, pageWidth);

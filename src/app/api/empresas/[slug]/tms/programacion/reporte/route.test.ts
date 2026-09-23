@@ -461,7 +461,7 @@ describe("GET /tms/programacion/reporte — PDF: Hora en 12h + ancho garantizado
     expect(filasXlsx[0][10]).toBe("13:30");
   });
 
-  it("minWeight y preserveSingleLine del PDF cubren exactamente los índices de Placa y Hora (dinámico, no hardcodeado)", async () => {
+  it("PDF: las 5 columnas compactas (Mes/Día/Placa/TC/Hora) van en una sola línea, calculadas por nombre (no por índice fijo)", async () => {
     usarPlan(planConHora("13:30:00"));
     await GET(new Request("http://localhost/x?formato=pdf&fechaDesde=2026-09-15&fechaHasta=2026-09-15&estado=Cerrado"), ctx);
     const llamada = vi.mocked(tablaAPdf).mock.calls[0][0];
@@ -471,11 +471,11 @@ describe("GET /tms/programacion/reporte — PDF: Hora en 12h + ancho garantizado
     expect(idxPlaca).toBeGreaterThanOrEqual(0);
     expect(idxTc).toBe(idxPlaca + 1);
     expect(idxHora).toBeGreaterThanOrEqual(0);
-    expect(llamada.minWeight).toEqual({ [idxPlaca]: 9, [idxTc]: 8, [idxHora]: 12 });
-    expect(llamada.preserveSingleLine).toEqual([idxPlaca, idxTc, idxHora]);
+    expect(llamada.preserveSingleLine).toEqual(["Mes", "Día", "Placa", "TC", "Hora"].map((h) => llamada.headers.indexOf(h)));
+    expect(llamada.minWeight).toBeUndefined(); // ya no se aplica minWeight aislado: pesos explícitos (programacion-pdf-anchos.ts)
   });
 
-  it("estado=Programado (sin columna Código, los índices se corren): minWeight/preserveSingleLine siguen apuntando a Placa/Hora reales", async () => {
+  it("estado=Programado (sin columna Código, los índices se corren): pesos/una-línea siguen apuntando a las columnas reales", async () => {
     usarPlan(planConHora("13:30:00"));
     await GET(new Request("http://localhost/x?formato=pdf&fechaDesde=2026-09-15&fechaHasta=2026-09-15&estado=Programado"), ctx);
     const llamada = vi.mocked(tablaAPdf).mock.calls[0][0];
@@ -485,8 +485,10 @@ describe("GET /tms/programacion/reporte — PDF: Hora en 12h + ancho garantizado
     const idxHora = llamada.headers.indexOf("Hora");
     // Con Código oculto, Hora pasa del índice 10 al 9 — confirma que no se hardcodeó el índice anterior.
     expect(idxHora).toBe(9);
-    expect(llamada.minWeight).toEqual({ [idxPlaca]: 9, [idxTc]: 8, [idxHora]: 12 });
-    expect(llamada.preserveSingleLine).toEqual([idxPlaca, idxTc, idxHora]);
+    expect(idxPlaca).toBe(2);
+    expect(idxTc).toBe(3);
+    expect(llamada.preserveSingleLine).toEqual(["Mes", "Día", "Placa", "TC", "Hora"].map((h) => llamada.headers.indexOf(h)));
+    expect(llamada.weight?.[idxHora]).toBe(46);
     expect(llamada.rows[0][idxHora]).toBe("01:30 PM");
   });
 
@@ -577,13 +579,13 @@ describe("GET /tms/programacion/reporte — columna TC (Propio y Tercerizado baj
     expect(sql).toContain("p.empresa_id = ?");
   });
 
-  it("PDF: TC recibe piso de ancho y una sola línea (legible) igual que Placa/Hora; con Código oculto los índices siguen correctos", async () => {
+  it("PDF: TC recibe ancho fijo y una sola línea (legible) igual que Placa/Hora; con Código oculto los índices siguen correctos", async () => {
     usarPlanes([plan({ tc: "TC-045" })]);
     await GET(url("pdf", "&estado=Programado"), ctx);
     const llamada = vi.mocked(tablaAPdf).mock.calls[0][0];
     const idxTc = llamada.headers.indexOf("TC");
     expect(llamada.headers).not.toContain("Código");
-    expect(llamada.minWeight?.[idxTc]).toBe(8);
+    expect(llamada.weight?.[idxTc]).toBe(42);
     expect(llamada.preserveSingleLine).toContain(idxTc);
     expect(llamada.rows[0][idxTc]).toBe("TC-045");
   });
