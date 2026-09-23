@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/db", () => ({ getPool: vi.fn(), execute: vi.fn(), query: vi.fn() }));
 vi.mock("@/lib/auditoria", () => ({ registrarAuditoria: vi.fn(), registrarAuditoriaTx: vi.fn() }));
 
-import { execute, getPool, query } from "@/lib/db";
+import { getPool, query } from "@/lib/db";
 import { registrarAuditoria, registrarAuditoriaTx } from "@/lib/auditoria";
 import { cerrarViajesMasivo } from "./cierre-masivo";
 import {
@@ -28,6 +28,8 @@ type Flota = { id: number; plan_id: number; empresa_id: number; estado: string }
 let planes: Plan[];
 let flotas: Flota[];
 let fallar: Set<number>;
+let fallaAuditoria: Set<number>;
+let respaldo: string;
 const conn = { query: vi.fn(), execute: vi.fn(), beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn() };
 
 const plan = (id: number, estado: string, extra: Partial<Plan> = {}): Plan => ({ id, empresa_id: 7, codigo: `PLAN-${id}`, estado, tipo_viaje: "Propio", ...extra });
@@ -42,38 +44,34 @@ const manual = (ids: number[], extra: Partial<Parameters<typeof cerrarViajesMasi
 
 beforeEach(() => {
   vi.resetAllMocks();
-  planes = []; flotas = []; fallar = new Set();
+  planes = []; flotas = []; fallar = new Set(); fallaAuditoria = new Set();
   vi.mocked(query).mockImplementation((async (sql: string, params: unknown[]) => {
     const s = String(sql);
     if (s.includes("p.id IN")) {
       const [emp, ...ids] = params as number[];
       return planes.filter((p) => p.empresa_id === emp && ids.includes(p.id)).map((p) => ({ id: p.id, codigo: p.codigo, estado: p.estado, llegada_registrada: tieneLlegada(p) ? 1 : 0 }));
     }
+    throw new Error(`query inesperada: ${s}`);
+  }) as never);
+  // cerrarViaje() y cerrarViajeManual() reales: ambos transaccionales sobre la conexión, con rollback REAL
+  // (beginTransaction respalda el estado; rollback lo restaura; commit lo confirma).
+  conn.beginTransaction.mockImplementation(async () => { respaldo = JSON.stringify(planes); });
+  conn.rollback.mockImplementation(async () => { planes = JSON.parse(respaldo); });
+  vi.mocked(registrarAuditoriaTx).mockImplementation((async (_c: unknown, a: { detalle?: string }) => {
+    for (const id of fallaAuditoria) if (String(a.detalle).includes(`Plan #${id} `)) throw new Error("auditoría falló");
+  }) as never);
+  conn.query.mockImplementation(async (sql: string, params: unknown[]) => {
+    const s = String(sql);
     if (s.includes("SELECT p.estado")) {
       const [id, emp] = params as number[];
       const p = planes.find((x) => x.id === id && x.empresa_id === emp);
-      return p ? [{ estado: p.estado, llegada_registrada: tieneLlegada(p) ? 1 : 0 }] : [];
+      return [p ? [{ estado: p.estado, llegada_registrada: tieneLlegada(p) ? 1 : 0 }] : []];
     }
     if (s.includes("SELECT tipo_viaje")) {
       const [id, emp] = params as number[];
       const p = planes.find((x) => x.id === id && x.empresa_id === emp);
-      return p ? [{ tipo_viaje: p.tipo_viaje }] : [];
+      return [p ? [{ tipo_viaje: p.tipo_viaje }] : []];
     }
-    throw new Error(`query inesperada: ${s}`);
-  }) as never);
-  // cerrarViaje() real: UPDATE condicional (misma condición que su SQL).
-  vi.mocked(execute).mockImplementation((async (sql: string, params: unknown[]) => {
-    const [usuario, id, emp] = params as [string, number, number];
-    if (fallar.has(id)) throw new Error("fallo de BD");
-    const p = planes.find((x) => x.id === id && x.empresa_id === emp);
-    const ok = p && (p.estado === "Descargado" || (["En ruta", "Cargado"].includes(p.estado) && tieneLlegada(p)));
-    if (!ok) return { affectedRows: 0 };
-    p.estado = "Cerrado"; p.cerrado_por = usuario;
-    return { affectedRows: 1 };
-  }) as never);
-  // cerrarViajeManual() real: transacción por viaje.
-  conn.query.mockImplementation(async (sql: string, params: unknown[]) => {
-    const s = String(sql);
     if (s.includes("FROM tms_planes_viaje")) { const p = planes.find((x) => x.id === params[0] && x.empresa_id === params[1]); return [p ? [p] : []]; }
     if (s.includes("FROM flota_viajes")) { const f = flotas.filter((x) => x.plan_id === params[0]).at(-1); return [f ? [f] : []]; }
     throw new Error(`conn.query inesperada: ${s}`);
@@ -81,12 +79,21 @@ beforeEach(() => {
   conn.execute.mockImplementation(async (sql: string, params: unknown[]) => {
     const s = String(sql);
     if (s.includes("UPDATE flota_viajes")) return [{ affectedRows: 1 }];
-    if (s.includes("UPDATE tms_planes_viaje")) {
+    if (s.includes("UPDATE tms_planes_viaje") && s.includes("cierre_manual")) {
       const [usuario, motivo, , id, emp] = params as [string, string, string | null, number, number];
       if (fallar.has(id)) throw new Error("fallo de BD");
       const p = planes.find((x) => x.id === id && x.empresa_id === emp && ["Programado", "Cargado", "En ruta"].includes(x.estado));
       if (!p) return [{ affectedRows: 0 }];
       Object.assign(p, { estado: "Cerrado", cerrado_por: usuario, cierre_manual: 1, motivo });
+      return [{ affectedRows: 1 }];
+    }
+    if (s.includes("UPDATE tms_planes_viaje")) { // cerrarViaje(): UPDATE condicional (misma condición que su SQL)
+      const [usuario, id, emp] = params as [string, number, number];
+      if (fallar.has(id)) throw new Error("fallo de BD");
+      const p = planes.find((x) => x.id === id && x.empresa_id === emp);
+      const ok = p && (p.estado === "Descargado" || (["En ruta", "Cargado"].includes(p.estado) && tieneLlegada(p)));
+      if (!ok) return [{ affectedRows: 0 }];
+      p.estado = "Cerrado"; p.cerrado_por = usuario;
       return [{ affectedRows: 1 }];
     }
     throw new Error(`conn.execute inesperado: ${s}`);
@@ -140,9 +147,9 @@ describe("cierre masivo NORMAL — reutiliza cerrarViaje() real", () => {
     expect(r.omitidos.find((o) => o.id === 5)!.motivo).toContain("no ha registrado la llegada");
     expect(estados()).toEqual({ 1: "Cerrado", 2: "Cerrado", 3: "Cerrado", 4: "Programado", 5: "En ruta", 6: "Cerrado", 7: "Cancelado" });
     // Se ejecutó la función real: UPDATE condicional de cerrarViaje, una vez por elegible, nunca para los omitidos.
-    const ids = vi.mocked(execute).mock.calls.map(([, p]) => (p as number[])[1]);
-    expect(ids).toEqual([1, 2, 3]);
-    expect(String(vi.mocked(execute).mock.calls[0][0])).toContain("UPDATE tms_planes_viaje p");
+    const updates = conn.execute.mock.calls.filter(([sql]) => String(sql).includes("UPDATE tms_planes_viaje"));
+    expect(updates.map(([, p]) => (p as number[])[1])).toEqual([1, 2, 3]);
+    expect(String(updates[0][0])).toContain("UPDATE tms_planes_viaje p");
   });
 
   it("ids duplicados se cierran UNA sola vez y se cuentan una vez", async () => {
@@ -150,7 +157,7 @@ describe("cierre masivo NORMAL — reutiliza cerrarViaje() real", () => {
     const r = await normal([1, 1, 1]);
     expect(r.solicitados).toBe(1);
     expect(r.cerrados).toHaveLength(1);
-    expect(vi.mocked(execute)).toHaveBeenCalledTimes(1);
+    expect(conn.execute.mock.calls.filter(([sql]) => String(sql).includes("UPDATE tms_planes_viaje"))).toHaveLength(1);
   });
 
   it("tenant: un id de OTRA empresa o inexistente no se toca y se reporta como no encontrado", async () => {
@@ -160,7 +167,7 @@ describe("cierre masivo NORMAL — reutiliza cerrarViaje() real", () => {
     expect(r.omitidos).toEqual([{ id: 2, codigo: "—", motivo: "Viaje no encontrado." }, { id: 999, codigo: "—", motivo: "Viaje no encontrado." }]);
     expect(planes[1].estado).toBe("Descargado");
     expect(vi.mocked(query).mock.calls[0][1]).toEqual([7, 1, 2, 999]); // empresa de la sesión primero
-    expect(vi.mocked(execute).mock.calls.every(([, p]) => (p as number[])[2] === 7)).toBe(true);
+    expect(conn.execute.mock.calls.filter(([sql]) => String(sql).includes("UPDATE tms_planes_viaje")).every(([, p]) => (p as number[])[2] === 7)).toBe(true);
   });
 
   it("un viaje que FALLA no impide cerrar los demás y no revierte los cierres ya hechos", async () => {
@@ -189,8 +196,9 @@ describe("cierre masivo NORMAL — reutiliza cerrarViaje() real", () => {
   it("auditoría: cada viaje cerrado conserva su auditoría individual y se agrega UN resumen cierre_masivo_viajes", async () => {
     planes = [plan(1, "Descargado"), plan(2, "Programado")];
     await normal([1, 2], { grupo: "2026-09-23" });
+    const individuales = vi.mocked(registrarAuditoriaTx).mock.calls.map(([, a]) => a);
+    expect(individuales.filter((a) => a.accion === "cerrar_viaje")).toHaveLength(1); // auditoría individual (dentro de la transacción)
     const llamadas = vi.mocked(registrarAuditoria).mock.calls.map(([a]) => a);
-    expect(llamadas.filter((a) => a.accion === "cerrar_viaje")).toHaveLength(1);
     const resumen = llamadas.filter((a) => a.accion === "cierre_masivo_viajes");
     expect(resumen).toHaveLength(1);
     expect(resumen[0]).toMatchObject({ empresaId: 7, usuario: "jefe", modulo: "tms" });
@@ -204,7 +212,59 @@ describe("cierre masivo NORMAL — reutiliza cerrarViaje() real", () => {
     const r = await normal([]);
     expect(r).toMatchObject({ solicitados: 0, cerrados: [], omitidos: [], errores: [] });
     expect(vi.mocked(query)).not.toHaveBeenCalled();
-    expect(vi.mocked(execute)).not.toHaveBeenCalled();
+    expect(conn.execute).not.toHaveBeenCalled();
+  });
+});
+
+describe("consistencia: el resumen del masivo dice la verdad (cerrarViaje transaccional)", () => {
+  it("UPDATE logra cerrar pero la auditoría FALLA: rollback, el viaje NO queda Cerrado, se reporta como error y los demás continúan", async () => {
+    planes = [plan(1, "Descargado"), plan(2, "Descargado"), plan(3, "Descargado")];
+    fallaAuditoria = new Set([2]);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const r = await normal([1, 2, 3]);
+    expect(r.cerrados.map((c) => c.id)).toEqual([1, 3]);
+    expect(r.errores).toEqual([{ id: 2, codigo: "PLAN-2", motivo: "Error inesperado al cerrar este viaje." }]);
+    expect(estados()).toEqual({ 1: "Cerrado", 2: "Descargado", 3: "Cerrado" }); // el errado NO quedó cerrado en silencio
+    expect(conn.rollback).toHaveBeenCalledTimes(1);
+    expect(conn.commit).toHaveBeenCalledTimes(2);
+  });
+
+  it("todo lo que aparece en 'cerrados' está realmente Cerrado y todo 'errores'/'omitidos' NO se cerró (invariante del resumen)", async () => {
+    planes = [plan(1, "Descargado"), plan(2, "Descargado"), plan(3, "Programado"), plan(4, "Descargado")];
+    fallaAuditoria = new Set([2]);
+    fallar = new Set([4]);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const r = await normal([1, 2, 3, 4]);
+    for (const c of r.cerrados) expect(planes.find((p) => p.id === c.id)!.estado).toBe("Cerrado");
+    for (const e of [...r.errores, ...r.omitidos]) expect(planes.find((p) => p.id === e.id)!.estado).not.toBe("Cerrado");
+    expect(r.cerrados.map((c) => c.id)).toEqual([1]);
+    expect(r.errores.map((c) => c.id)).toEqual([2, 4]);
+    expect(r.omitidos.map((c) => c.id)).toEqual([3]);
+  });
+
+  it("auditoría correcta: el viaje aparece en cerrados con su auditoría individual dentro de la transacción (antes del commit)", async () => {
+    planes = [plan(1, "Descargado")];
+    const r = await normal([1]);
+    expect(r.cerrados).toEqual([{ id: 1, codigo: "PLAN-1" }]);
+    expect(vi.mocked(registrarAuditoriaTx).mock.calls[0][1]).toMatchObject({ accion: "cerrar_viaje", empresaId: 7 });
+    expect(vi.mocked(registrarAuditoriaTx).mock.invocationCallOrder[0]).toBeLessThan(conn.commit.mock.invocationCallOrder[0]);
+  });
+
+  it("un fallo NO revierte los cierres exitosos de otros viajes del lote (sin transacción global)", async () => {
+    planes = [plan(1, "Descargado"), plan(2, "Descargado"), plan(3, "Descargado")];
+    fallaAuditoria = new Set([3]);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await normal([1, 2, 3]);
+    expect(estados()).toEqual({ 1: "Cerrado", 2: "Cerrado", 3: "Descargado" });
+  });
+
+  it("el resumen masivo se audita aunque un viaje haya fallado (cerrados 1 · errores 1)", async () => {
+    planes = [plan(1, "Descargado"), plan(2, "Descargado")];
+    fallaAuditoria = new Set([2]);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await normal([1, 2]);
+    const resumen = vi.mocked(registrarAuditoria).mock.calls.map(([a]) => a).find((a) => a.accion === "cierre_masivo_viajes")!;
+    expect(resumen.detalle).toContain("cerrados 1 · omitidos 0 · errores 1");
   });
 });
 
