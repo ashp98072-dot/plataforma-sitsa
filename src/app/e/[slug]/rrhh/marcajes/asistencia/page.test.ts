@@ -24,11 +24,12 @@ describe("Tomar asistencia — pantalla", () => {
 
   it("confirmación con presentes/ausencias y aviso de vacaciones/permisos", () => {
     expect(page).toContain("Se registrarán ${seleccionados} presentes y ${pendientes} ausencias");
+    expect(page).toContain("CONFIRMADAS como falta injustificada y se descontarán en la planilla");
     expect(page).toContain("vacaciones/permisos/en ruta no serán marcados como falta");
   });
 
   it("Marcar todos solo selecciona elegibles; no seleccionables tienen checkbox deshabilitado", () => {
-    expect(page).toContain("setSeleccion(new Set(elegibles.map((e) => e.id)))");
+    expect(page).toContain('setSeleccion(new Set(elegibles.filter((e) => e.estado === "Pendiente").map((e) => e.id)))'); // no pisa ausencias ya confirmadas
     expect(page).toContain("disabled={!e.seleccionable}");
     expect(page).toContain("Desmarcar todos");
   });
@@ -39,5 +40,13 @@ describe("Tomar asistencia — pantalla", () => {
     expect(page).toContain("await cargar(dia.fecha)");
     expect(page).toContain("Presentes: {cierre.resumen.presentes}");
     expect(page).toContain("Ausentes: {cierre.resumen.ausentes}");
+  });
+
+  it("muestra el estado del cierre y el bloqueo por planilla cerrada, y no permite cerrar bloqueado", () => {
+    expect(page).toContain("dia?.bloqueo");
+    expect(page).toContain("Boolean(dia?.bloqueo)");
+    expect(page).toContain("dia.cierre.cerradoPor");
+    expect(page).toContain("Día pendiente: aún no se ha cerrado la asistencia.");
+    expect(page).toContain("Ausencias confirmadas: {cierre.ausenciasConfirmadas}");
   });
 });

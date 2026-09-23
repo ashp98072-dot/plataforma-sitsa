@@ -30,6 +30,12 @@ let incidencias: Inc[] = [];
 let enRuta: { empresa_id: number; id_empleado: number; fecha_inicio: string; fecha_fin: string }[] = [];
 let feriados: { empresa_id: number; fecha: string }[] = [];
 let inserts: unknown[][] = [];
+type Aus = { id: number; empresa_id: number; empleado_id: number; fecha: string; estado: string; planilla_periodo_id: number | null; confirmado_por: string; anulado_por?: string };
+let ausencias: Aus[] = [];
+let cierres: { empresa_id: number; fecha: string; cerrado_por: string; actualizado_por?: string; presentes: number; ausentes: number; justificados: number }[] = [];
+let periodos: { empresa_id: number; codigo: string; estado: string; fecha_inicio: string; fecha_fin: string; autorizado_en: string | null }[] = [];
+let sinMigracion = false;
+const errTabla = () => Object.assign(new Error("Table doesn't exist"), { code: "ER_NO_SUCH_TABLE", errno: 1146 });
 let ejecuciones: string[] = [];
 let lockResultado = 1;
 let fallarInsert = false;
@@ -41,10 +47,19 @@ const emp = (id: number, over: Partial<Emp> = {}): Emp => ({
   tipo_horario: "Fijo", hora_entrada_teorica: "07:00:00", hora_salida_teorica: "16:00:00", ...over,
 });
 
-function emular(sql: string, params: unknown[]): RowDataPacket[] {
+function emular(sql: string, paramsIn?: unknown[]): RowDataPacket[] {
   const s = String(sql);
+  const params = paramsIn ?? [];
   consultas.push({ sql: s, params });
   const [e, a, b] = params as [number, string, string];
+  if (s.includes("rrhh_asistencia_") && sinMigracion) throw errTabla();
+  if (s.includes("SELECT 1 FROM rrhh_asistencia_")) return [] as never;
+  if (s.includes("FROM rrhh_asistencia_ausencias")) return ausencias.filter((x) => x.empresa_id === e && x.fecha === a) as never;
+  if (s.includes("FROM rrhh_asistencia_cierres")) return cierres.filter((x) => x.empresa_id === e && x.fecha === a) as never;
+  if (s.includes("FROM rrhh_planilla_periodos")) {
+    return periodos.filter((x) => x.empresa_id === e && x.fecha_inicio <= a && x.fecha_fin >= a && x.estado !== "Cancelado"
+      && (["Cerrada", "Pagada"].includes(x.estado) || x.autorizado_en != null)) as never;
+  }
   if (s.includes("FROM sesiones_trabajo s") && s.includes("JOIN empleados")) {
     const [ini, fin] = [params[2] as string, params[3] as string];
     return sesiones.filter((x) => x.empresa_id === e && x.fecha_jornada >= ini && x.fecha_jornada <= fin)
@@ -91,6 +106,26 @@ function crearConexion() {
         const [emp_, idEmp, fecha, entrada, salida, comentarios] = params as [number, number, string, string, string, string];
         sesiones.push({ id: 1000 + inserts.length, empresa_id: emp_, id_empleado: idEmp, fecha_jornada: fecha, entrada_at: entrada, salida_at: salida, estado: "CERRADA", comentarios_rrhh: comentarios });
       }
+      if (String(sql).includes("INSERT IGNORE INTO rrhh_asistencia_ausencias")) {
+        const [emp_, idEmp, fecha, por] = params as [number, number, string, string];
+        if (ausencias.some((x) => x.empresa_id === emp_ && x.empleado_id === idEmp && x.fecha === fecha)) return [{ affectedRows: 0 }];
+        ausencias.push({ id: ausencias.length + 1, empresa_id: emp_, empleado_id: idEmp, fecha, estado: "CONFIRMADA", planilla_periodo_id: null, confirmado_por: por });
+        return [{ affectedRows: 1 }];
+      }
+      if (String(sql).includes("UPDATE rrhh_asistencia_ausencias")) {
+        const [por, emp_, idEmp, fecha] = params as [string, number, number, string];
+        const a = ausencias.find((x) => x.empresa_id === emp_ && x.empleado_id === idEmp && x.fecha === fecha && x.estado === "CONFIRMADA" && x.planilla_periodo_id == null);
+        if (!a) return [{ affectedRows: 0 }];
+        a.estado = "ANULADA"; a.anulado_por = por;
+        return [{ affectedRows: 1 }];
+      }
+      if (String(sql).includes("INSERT INTO rrhh_asistencia_cierres")) {
+        const [emp_, fecha, por, presentes, ausentes, justificados] = params as [number, string, string, number, number, number];
+        const previo = cierres.find((x) => x.empresa_id === emp_ && x.fecha === fecha);
+        if (previo) Object.assign(previo, { actualizado_por: por, presentes, ausentes, justificados });
+        else cierres.push({ empresa_id: emp_, fecha, cerrado_por: por, presentes, ausentes, justificados });
+        return [{ affectedRows: 1 }];
+      }
       return [{ insertId: 1, affectedRows: 1 }];
     }),
   };
@@ -100,6 +135,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   consultas.length = 0;
   empleados = []; sesiones = []; incidencias = []; enRuta = []; feriados = []; inserts = []; ejecuciones = [];
+  ausencias = []; cierres = []; periodos = []; sinMigracion = false;
   lockResultado = 1; fallarInsert = false;
   conexion = crearConexion();
   vi.mocked(getPool).mockReturnValue({ getConnection: vi.fn().mockResolvedValue(conexion) } as never);
@@ -281,10 +317,13 @@ describe("cerrar asistencia: checkbox presente crea la jornada correcta", () => 
     expect(entrada.detalle).toContain("E1, E2");
   });
 
-  it("sin nada que crear no hay transacción ni auditoría", async () => {
+  it("sin nada que crear ni confirmar, el cierre igual se persiste pero no hay auditoría ni jornadas ni ausencias", async () => {
     empleados = [emp(1)];
+    incidencias = [{ id: 1, empresa_id: 7, id_empleado: 1, tipo: "Vacaciones", fecha_inicio: MIERCOLES, fecha_fin: MIERCOLES }];
     await cerrar([]);
-    expect(conexion.beginTransaction).not.toHaveBeenCalled();
+    expect(cierres).toHaveLength(1);
+    expect(inserts).toEqual([]);
+    expect(ausencias).toEqual([]);
     expect(registrarAuditoriaTx).not.toHaveBeenCalled();
   });
 
@@ -311,7 +350,10 @@ describe("cierre del día: resumen, ausentes e idempotencia", () => {
     expect(r).toMatchObject({ ok: true, creados: 1 });
     expect(r.ok && r.resumen).toEqual({ presentes: 1, vacaciones: 1, permisos: 1, enRuta: 0, noAplica: 0, requiereManual: 0, ausentes: 1 });
     expect(r.ok && r.ausentes.map((a) => a.id)).toEqual([2]);
-    expect(inserts).toHaveLength(1); // solo la jornada del presente; ninguna fila para ausentes
+    expect(inserts).toHaveLength(1); // una sola jornada (la del presente)
+    // La ausencia queda CONFIRMADA solo para el elegible no marcado (no para vacaciones/permiso).
+    expect(ausencias.map((a) => [a.empleado_id, a.estado, a.confirmado_por])).toEqual([[2, "CONFIRMADA", "rrhh1"]]);
+    expect(cierres).toEqual([expect.objectContaining({ fecha: MIERCOLES, cerrado_por: "rrhh1", presentes: 1, ausentes: 1, justificados: 2 })]);
   });
 
   it("idempotente: cerrar dos veces NO duplica jornadas (la 2ª crea 0 y reporta yaRegistrados)", async () => {
@@ -321,6 +363,18 @@ describe("cierre del día: resumen, ausentes e idempotencia", () => {
     expect(segunda).toMatchObject({ ok: true, creados: 0, yaRegistrados: 2 });
     expect(sesiones).toHaveLength(2);
     expect(inserts).toHaveLength(2);
+  });
+
+  it("doble cierre no duplica ausencias ni cierres (UNIQUE + INSERT IGNORE): 1 ausencia, 1 cierre", async () => {
+    empleados = [emp(1), emp(2)];
+    const primera = await cerrar([1]);
+    const segunda = await cerrar([1]);
+    expect(primera).toMatchObject({ ok: true, creados: 1, ausenciasConfirmadas: 1 });
+    expect(segunda).toMatchObject({ ok: true, creados: 0, ausenciasConfirmadas: 0 });
+    expect(ausencias).toHaveLength(1);
+    expect(cierres).toHaveLength(1);
+    expect(cierres[0].actualizado_por).toBe("rrhh1");
+    expect(registrarAuditoriaTx).toHaveBeenCalledTimes(1); // el 2º cierre no cambió nada
   });
 
   it("candado por empresa+fecha: si otro cierre está en curso -> 409 y no crea nada", async () => {
@@ -337,6 +391,143 @@ describe("cierre del día: resumen, ausentes e idempotencia", () => {
     await cerrar([1]);
     const lock = conexion.query.mock.calls.find(([s]) => String(s).includes("GET_LOCK"))!;
     expect((lock as unknown[])[1]).toEqual([`rrhh_asistencia_7_${MIERCOLES}`]);
+  });
+});
+
+describe("ausencia confirmada por RRHH (persistida al cerrar)", () => {
+  it("ANTES del cierre no hay ausencia confirmada ni cierre: quien no está marcado es solo Pendiente", async () => {
+    empleados = [emp(1), emp(2)];
+    const dia = await obtenerAsistenciaDia(7, MIERCOLES);
+    expect(dia.cierre).toBeNull();
+    expect(dia.empleados.map((e) => e.estado)).toEqual(["Pendiente", "Pendiente"]);
+    expect(ausencias).toEqual([]);
+    expect(cierres).toEqual([]);
+  });
+
+  it("al cerrar: el no marcado queda Ausente (CONFIRMADA por RRHH) y el día queda cerrado", async () => {
+    empleados = [emp(1), emp(2)];
+    await cerrar([1]);
+    const dia = await obtenerAsistenciaDia(7, MIERCOLES);
+    expect(dia.cierre).toMatchObject({ cerradoPor: "rrhh1" });
+    expect(dia.empleados.find((e) => e.id === 2)).toMatchObject({ estado: "Ausente", detalle: "Falta confirmada por RRHH", seleccionable: true, marcado: false });
+    expect(dia.empleados.find((e) => e.id === 1)).toMatchObject({ estado: "Presente", marcado: true });
+  });
+
+  it("vacaciones, permiso, en ruta, viaje, Variable y sin horario NUNCA generan ausencia", async () => {
+    empleados = [emp(1), emp(2), emp(3), emp(4, { tipo_horario: "Variable" }), emp(5, { hora_entrada_teorica: null }), emp(6)];
+    incidencias = [
+      { id: 1, empresa_id: 7, id_empleado: 1, tipo: "Vacaciones", fecha_inicio: MIERCOLES, fecha_fin: MIERCOLES },
+      { id: 2, empresa_id: 7, id_empleado: 2, tipo: "Permiso con goce", fecha_inicio: MIERCOLES, fecha_fin: MIERCOLES },
+    ];
+    enRuta = [{ empresa_id: 7, id_empleado: 3, fecha_inicio: MIERCOLES, fecha_fin: MIERCOLES }];
+    await cerrar([]);
+    expect(ausencias.map((a) => a.empleado_id)).toEqual([6]);
+  });
+
+  it("domingo y feriado: no se puede cerrar (400) y no se escribe ninguna ausencia ni cierre", async () => {
+    empleados = [emp(1)];
+    expect(await cerrar([], DOMINGO)).toMatchObject({ ok: false, status: 400 });
+    feriados = [{ empresa_id: 7, fecha: MIERCOLES }];
+    expect(await cerrar([])).toMatchObject({ ok: false, status: 400 });
+    expect(ausencias).toEqual([]);
+    expect(cierres).toEqual([]);
+  });
+
+  it("fuera de la relación laboral (antes del alta / después del egreso) no genera ausencia", async () => {
+    empleados = [emp(1, { fecha_alta: "2026-09-25" }), emp(2, { fecha_egreso: "2026-09-10" }), emp(3)];
+    await cerrar([]);
+    expect(ausencias.map((a) => a.empleado_id)).toEqual([3]);
+  });
+
+  it("CORRECCIÓN: marcar a un Ausente y volver a cerrar crea la jornada y ANULA la ausencia (no se borra)", async () => {
+    empleados = [emp(1)];
+    await cerrar([]);
+    expect(ausencias[0].estado).toBe("CONFIRMADA");
+    const r = await cerrar([1]);
+    expect(r).toMatchObject({ ok: true, creados: 1, ausenciasAnuladas: 1 });
+    expect(ausencias).toHaveLength(1);
+    expect(ausencias[0]).toMatchObject({ estado: "ANULADA", anulado_por: "rrhh1" });
+    expect((await estadoDe(1))!.estado).toBe("Presente");
+    expect(String(vi.mocked(registrarAuditoriaTx).mock.calls.at(-1)?.[1].detalle)).toContain("1 ausencia(s) anulada(s)");
+  });
+
+  it("una ANULADA no se re-confirma sola: cerrar otra vez sin marcarla no la vuelve a CONFIRMADA", async () => {
+    empleados = [emp(1)];
+    ausencias = [{ id: 1, empresa_id: 7, empleado_id: 1, fecha: MIERCOLES, estado: "ANULADA", planilla_periodo_id: null, confirmado_por: "rrhh1" }];
+    await cerrar([]);
+    expect(ausencias).toHaveLength(1);
+    expect(ausencias[0].estado).toBe("ANULADA");
+  });
+
+  it("ausencia ya descontada en una planilla: no es corregible (seleccionable=false) y el servidor no la anula", async () => {
+    empleados = [emp(1)];
+    ausencias = [{ id: 1, empresa_id: 7, empleado_id: 1, fecha: MIERCOLES, estado: "CONFIRMADA", planilla_periodo_id: 5, confirmado_por: "rrhh1" }];
+    const e = (await estadoDe(1))!;
+    expect(e).toMatchObject({ estado: "Ausente", seleccionable: false });
+    expect(e.detalle).toContain("descontada en planilla");
+    const r = await cerrar([1]);
+    expect(r).toMatchObject({ ok: true, creados: 0, ausenciasAnuladas: 0 });
+    expect(ausencias[0].estado).toBe("CONFIRMADA");
+    expect(inserts).toEqual([]);
+  });
+
+  it("si la ausencia quedó usada por una planilla justo antes de anular: falla y hace rollback (sin jornada)", async () => {
+    empleados = [emp(1)];
+    ausencias = [{ id: 1, empresa_id: 7, empleado_id: 1, fecha: MIERCOLES, estado: "CONFIRMADA", planilla_periodo_id: null, confirmado_por: "rrhh1" }];
+    const original = conexion.execute.getMockImplementation()!;
+    conexion.execute.mockImplementation(async (sql: string, params: unknown[]) => {
+      if (String(sql).includes("UPDATE rrhh_asistencia_ausencias")) return [{ affectedRows: 0 }];
+      return original(sql, params);
+    });
+    await expect(cerrar([1])).rejects.toThrow("planilla");
+    expect(conexion.rollback).toHaveBeenCalled();
+  });
+});
+
+describe("planillas cerradas: fechas bloqueadas", () => {
+  const per = (estado: string, autorizado = false) => ({ empresa_id: 7, codigo: "2026-09-Q2", estado, fecha_inicio: "2026-09-16", fecha_fin: "2026-09-30", autorizado_en: autorizado ? "2026-09-30 10:00:00" : null });
+
+  it.each([["Cerrada"], ["Pagada"]])("fecha dentro de una planilla %s: GET informa el bloqueo, nada es seleccionable y cerrar -> 409 sin escribir", async (estado) => {
+    empleados = [emp(1)];
+    periodos = [per(estado)];
+    const dia = await obtenerAsistenciaDia(7, MIERCOLES);
+    expect(dia.bloqueo).toContain("flujo de reapertura/corrección de planilla");
+    expect(dia.bloqueo).toContain("2026-09-Q2");
+    expect(dia.empleados.every((e) => !e.seleccionable)).toBe(true);
+    const r = await cerrar([1]);
+    expect(r).toMatchObject({ ok: false, status: 409 });
+    expect(!r.ok && r.error).toContain("reapertura");
+    expect(inserts).toEqual([]);
+    expect(ausencias).toEqual([]);
+    expect(cierres).toEqual([]);
+    expect(conexion.beginTransaction).not.toHaveBeenCalled();
+  });
+
+  it("una planilla autorizada (autorizado_en) también bloquea aunque su estado no diga Cerrada", async () => {
+    periodos = [per("Generada", true)];
+    expect((await obtenerAsistenciaDia(7, MIERCOLES)).bloqueo).not.toBeNull();
+  });
+
+  it("Borrador/Generada sin autorizar, Cancelado, otra empresa u otras fechas NO bloquean", async () => {
+    empleados = [emp(1)];
+    periodos = [per("Generada"), per("Borrador"), { ...per("Cerrada"), estado: "Cancelado" }, { ...per("Cerrada"), empresa_id: 8 }, { ...per("Cerrada"), fecha_inicio: "2026-09-01", fecha_fin: "2026-09-15" }];
+    expect((await obtenerAsistenciaDia(7, MIERCOLES)).bloqueo).toBeNull();
+    expect(await cerrar([1])).toMatchObject({ ok: true, creados: 1 });
+  });
+});
+
+describe("migración de asistencia aún no aplicada", () => {
+  it("la lista sigue funcionando (sin cierre ni ausencias) y cerrar responde 409 SIN escribir nada", async () => {
+    empleados = [emp(1)];
+    sinMigracion = true;
+    const dia = await obtenerAsistenciaDia(7, MIERCOLES);
+    expect(dia.cierre).toBeNull();
+    expect(dia.empleados[0].estado).toBe("Pendiente");
+    const r = await cerrar([1]);
+    expect(r).toMatchObject({ ok: false, status: 409 });
+    expect(!r.ok && r.error).toContain("migración");
+    expect(getPool).not.toHaveBeenCalled();
+    expect(inserts).toEqual([]);
   });
 });
 
@@ -407,5 +598,7 @@ describe("integración con la fuente de verdad: el reporte de asistencias (quien
     // Y esta feature tampoco toca planillas ni su generación.
     const feature = readFileSync("src/lib/rrhh/asistencia-diaria.ts", "utf8");
     expect(feature).not.toMatch(/from "\.\/planillas"|planilla_lineas|generarLineasPeriodo/);
+    // La integración vive SOLO en el concepto de descuento (planilla-faltas + planilla-conceptos).
+    expect(readFileSync("src/lib/rrhh/planilla-conceptos.ts", "utf8")).toContain("obtenerFaltasPlanilla");
   });
 });

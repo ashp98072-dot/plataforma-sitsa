@@ -17,6 +17,7 @@ const ESTILO_ESTADO: Record<string, string> = {
   "En ruta": "text-sky-300",
   "No aplica": "text-[var(--muted)]",
   "Requiere registro manual": "text-amber-300",
+  Ausente: "text-rose-300",
   Pendiente: "text-[var(--text)]",
 };
 
@@ -84,7 +85,7 @@ export default function TomarAsistenciaPage() {
 
   async function cerrarDia() {
     if (!dia || procesando) return;
-    const mensaje = `Se registrarán ${seleccionados} presentes y ${pendientes} ausencias (sin marcaje: los reportes las muestran como falta).\nLos empleados con vacaciones/permisos/en ruta no serán marcados como falta.\n¿Continuar?`;
+    const mensaje = `Se registrarán ${seleccionados} presentes y ${pendientes} ausencias. Las ausencias quedan CONFIRMADAS como falta injustificada y se descontarán en la planilla (sueldo base ÷ divisor).\nLos empleados con vacaciones/permisos/en ruta no serán marcados como falta.\n¿Continuar?`;
     if (!window.confirm(mensaje)) return;
     setProcesando(true);
     setError("");
@@ -126,9 +127,9 @@ export default function TomarAsistenciaPage() {
             onChange={(e) => { setCierre(null); void cargar(e.target.value); }}
           />
         </label>
-        <button type="button" disabled={!elegibles.length} onClick={() => setSeleccion(new Set(elegibles.map((e) => e.id)))} className="rounded border border-[var(--border)] px-3 py-1.5 text-sm disabled:opacity-40">Marcar todos</button>
+        <button type="button" disabled={!elegibles.some((e) => e.estado === "Pendiente")} onClick={() => setSeleccion(new Set(elegibles.filter((e) => e.estado === "Pendiente").map((e) => e.id)))} className="rounded border border-[var(--border)] px-3 py-1.5 text-sm disabled:opacity-40">Marcar todos</button>
         <button type="button" disabled={!seleccion.size} onClick={() => setSeleccion(new Set())} className="rounded border border-[var(--border)] px-3 py-1.5 text-sm disabled:opacity-40">Desmarcar todos</button>
-        <button type="button" disabled={procesando || cargando || !dia?.laborable} onClick={() => void cerrarDia()} className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40">
+        <button type="button" disabled={procesando || cargando || !dia?.laborable || Boolean(dia?.bloqueo)} onClick={() => void cerrarDia()} className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40">
           {procesando ? "Cerrando…" : "Cerrar asistencia del día"}
         </button>
       </div>
@@ -137,13 +138,15 @@ export default function TomarAsistenciaPage() {
         Presentes seleccionados: <strong>{seleccionados}</strong> · Ya presentes: <strong>{yaPresentes}</strong> · Justificados: <strong>{justificados}</strong> · Pendientes/Ausentes: <strong>{pendientes}</strong>
       </p>
       {dia && !dia.laborable ? <p className="text-sm text-amber-300">La fecha no es día laborable (domingo o feriado): no aplica tomar asistencia.</p> : null}
+      {dia?.bloqueo ? <p role="alert" className="text-sm text-amber-300">{dia.bloqueo}</p> : null}
+      {dia?.cierre ? <p className="text-sm text-emerald-300">Asistencia de este día cerrada por {dia.cierre.cerradoPor}. Para corregir a alguien marcado como ausente, márcalo y vuelve a cerrar.</p> : dia?.laborable ? <p className="text-sm text-[var(--muted)]">Día pendiente: aún no se ha cerrado la asistencia.</p> : null}
       {error ? <p role="alert" className="text-sm text-rose-300">{error}</p> : null}
 
       {cierre ? (
         <section aria-label="Resumen del cierre" className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 text-sm">
           <h2 className="font-semibold">Asistencia del {fmtFecha(cierre.fecha)}</h2>
           <p>Presentes: {cierre.resumen.presentes} · Vacaciones: {cierre.resumen.vacaciones} · Permisos: {cierre.resumen.permisos} · Ausentes: {cierre.resumen.ausentes}</p>
-          <p className="text-[var(--muted)]">Jornadas administrativas creadas ahora: {cierre.creados}. Con marcaje existente: {cierre.yaRegistrados}.{cierre.resumen.enRuta ? ` En ruta: ${cierre.resumen.enRuta}.` : ""}{cierre.resumen.requiereManual ? ` Requieren registro manual: ${cierre.resumen.requiereManual}.` : ""}</p>
+          <p className="text-[var(--muted)]">Jornadas administrativas creadas ahora: {cierre.creados}. Ausencias confirmadas: {cierre.ausenciasConfirmadas}{cierre.ausenciasAnuladas ? ` (anuladas por corrección: ${cierre.ausenciasAnuladas})` : ""}. Con marcaje existente: {cierre.yaRegistrados}.{cierre.resumen.enRuta ? ` En ruta: ${cierre.resumen.enRuta}.` : ""}{cierre.resumen.requiereManual ? ` Requieren registro manual: ${cierre.resumen.requiereManual}.` : ""}</p>
         </section>
       ) : null}
 

@@ -2,7 +2,22 @@ import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
 import { normalizarHora } from "./dates";
 
+/**
+ * Divisor del sueldo mensual para valuar UNA falta injustificada
+ * (valor del día = sueldo_base / divisor). ÚNICA definición del 30: la
+ * planilla lo lee con parsearDivisorFalta(), nunca lo repite.
+ */
+export const DIVISOR_FALTA_DEFAULT = 30;
+
+/** Divisor válido (entero 15–31) o el default si el valor falta o es inválido. */
+export function parsearDivisorFalta(valor: unknown): number {
+  const n = Number.parseInt(String(valor ?? "").trim(), 10);
+  return Number.isInteger(n) && n >= 15 && n <= 31 ? n : DIVISOR_FALTA_DEFAULT;
+}
+
 export const PARAMETROS_DEFAULT: Record<string, string> = {
+  /** Divisor del sueldo mensual para descontar una falta confirmada (planilla) */
+  divisor_falta: String(DIVISOR_FALTA_DEFAULT),
   hora_entrada_default: "07:00:00",
   hora_salida_default: "16:00:00",
   /** Salida teórica los sábados (Monaco: 11:00) */
@@ -111,6 +126,16 @@ export function validarParametros(
     return { ok: false, error: "Ciclo quincenal: día de corte entre 1 y 28." };
   }
 
+  // Opcional: solo se guarda si el cliente lo envía (no pisa el valor existente).
+  let divisorFalta: string | null = null;
+  if (parametros.divisor_falta !== undefined && String(parametros.divisor_falta).trim() !== "") {
+    const d = Number(parametros.divisor_falta);
+    if (!Number.isInteger(d) || d < 15 || d > 31) {
+      return { ok: false, error: "Divisor de falta: entero entre 15 y 31." };
+    }
+    divisorFalta = String(d);
+  }
+
   const geoActiva = String(parametros.geocerca_activa ?? "0") === "1" ? "1" : "0";
   const radio = Number.parseInt(parametros.geocerca_radio_m ?? "150", 10);
   if (!Number.isFinite(radio) || radio < 30 || radio > 5000) {
@@ -154,6 +179,7 @@ export function validarParametros(
       geocerca_lat: latStr,
       geocerca_lng: lngStr,
       geocerca_radio_m: String(radio),
+      ...(divisorFalta ? { divisor_falta: divisorFalta } : {}),
     },
   };
 }

@@ -1456,6 +1456,7 @@ export async function autorizarPeriodoPlanilla(empresaId: number, periodoId: num
       .map(({ empleadoId }) => empleadoId);
     await registrarAuditoriaTx(conn, { empresaId, usuario, accion: "autorizar_periodo_planilla", modulo: "rrhh", detalle: JSON.stringify({ periodoId, codigo: periodo.codigo, empleados: snapshots.length,
       cuotas: snapshots.reduce((sum, s) => sum + s.cuotas.length + s.manuales.length, 0), horasExtra: snapshots.reduce((sum, s) => sum + s.horasExtra.length, 0),
+      ...(snapshots.some((s) => s.faltas?.length) ? { faltas: snapshots.reduce((sum, s) => sum + (s.faltas?.length ?? 0), 0) } : {}),
       ...(empleadosConIsrSobrescrito.length ? { isrSobrescritoManualmente: empleadosConIsrSobrescrito } : {}) }) });
   });
 }
