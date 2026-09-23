@@ -668,6 +668,22 @@ CREATE TABLE IF NOT EXISTS tms_planes_viaje (
   -- sql/migrate-2026-08-ops-1-roles-cierre.sql y
   -- src/lib/tms/cierre-viaje.ts. cerrado_por/cerrado_en quedan NULL hasta
   -- que el UPDATE condicional (WHERE estado = 'Descargado') los llena.
+  -- PROGRAMACION-VIAJES-TERCERIZADOS-1 — 'Propio' | 'Tercerizado'
+  -- (validado en la aplicación, ver sql/migrate-2026-09-programacion-
+  -- viajes-tercerizados.sql). Un viaje Tercerizado deja piloto_id/
+  -- auxiliar_id/unidad_id (arriba) en NULL a propósito — el recurso es
+  -- externo, sin FK posible — y guarda su propio snapshot de texto en las
+  -- 5 columnas siguientes (nunca crea tms_personal/tms_unidades para un
+  -- recurso externo).
+  tipo_viaje VARCHAR(20) NOT NULL DEFAULT 'Propio',
+  piloto_externo_nombre VARCHAR(160) NULL,
+  auxiliares_externos TEXT NULL,
+  unidad_externa_placa VARCHAR(40) NULL,
+  unidad_externa_descripcion VARCHAR(160) NULL,
+  transportista_externo VARCHAR(160) NULL,
+  -- Informativo/control interno únicamente — NUNCA cuentas por pagar ni
+  -- integración con Compras (fuera de alcance, ver el ticket sección 12).
+  costo_tercerizado DECIMAL(12,2) NULL,
   cerrado_por VARCHAR(100) NULL,
   cerrado_en DATETIME NULL,
   notas TEXT NULL,

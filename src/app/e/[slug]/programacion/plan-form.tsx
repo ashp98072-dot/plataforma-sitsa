@@ -358,6 +358,16 @@ export default function PlanForm({
     contactoCargoHistorico: plan?.contacto_cargo_historico ?? "",
     contactoTelefonoHistorico: plan?.contacto_telefono_historico ?? "",
     estado: plan?.estado ?? "Programado",
+    // PROGRAMACION-VIAJES-TERCERIZADOS-1 — 'Propio' por defecto (compatibilidad
+    // con el flujo de siempre). auxiliaresExternosTexto: un nombre por línea,
+    // igual criterio que notas/condicionesAdicionales en otros formularios.
+    tipoViaje: (plan?.tipo_viaje === "Tercerizado" ? "Tercerizado" : "Propio") as "Propio" | "Tercerizado",
+    pilotoExternoNombre: plan?.piloto_externo_nombre ?? "",
+    auxiliaresExternosTexto: plan?.auxiliares_externos ?? "",
+    unidadExternaPlaca: plan?.unidad_externa_placa ?? "",
+    unidadExternaDescripcion: plan?.unidad_externa_descripcion ?? "",
+    transportistaExterno: plan?.transportista_externo ?? "",
+    costoTercerizado: plan?.costo_tercerizado != null ? String(plan.costo_tercerizado) : "",
   });
   const ocupacionPersonal = ocupacionDia.fecha === form.fechaPlan ? ocupacionDia.personal : {};
   const ocupacionUnidades = ocupacionDia.fecha === form.fechaPlan ? ocupacionDia.unidades : {};
@@ -944,8 +954,14 @@ export default function PlanForm({
         ...form.auxiliarNombres.map((nombre) => ({ empleadoId: null, nombre })),
       ]
     : [];
+  // PROGRAMACION-VIAJES-TERCERIZADOS-1 — un plan Tercerizado (antes o
+  // ahora) nunca exige "motivo del cambio" por piloto/placa/auxiliares:
+  // esos 4 campos no aplican y se resuelven por su propio PATCH dedicado
+  // (patchTipoViaje), nunca por este PATCH normal.
   const cambioSensible =
     esEdicion &&
+    form.tipoViaje !== "Tercerizado" &&
+    (plan?.tipo_viaje ?? "Propio") !== "Tercerizado" &&
     calcularCambioSensible(
       {
         piloto: { empleadoId: plan!.pilotoEmpleadoId ?? null, nombre: plan!.piloto ?? "" },
@@ -1017,6 +1033,30 @@ export default function PlanForm({
       });
   }
 
+  /**
+   * PROGRAMACION-VIAJES-TERCERIZADOS-1 — campos de tipo de viaje, comunes
+   * al POST (todo en una sola llamada) y al PATCH dedicado
+   * (patchTipoViaje en el backend, ver más abajo). auxiliaresExternos se
+   * parte por línea aquí (una sola vez, en el único lugar que arma este
+   * payload) — el backend lo vuelve a unir con "\n" tal cual para guardar
+   * el snapshot, sin inventar un arreglo relacional nuevo.
+   */
+  function camposTipoViaje() {
+    return {
+      tipoViaje: form.tipoViaje,
+      pilotoExternoNombre: form.tipoViaje === "Tercerizado" ? form.pilotoExternoNombre.trim() || undefined : undefined,
+      auxiliaresExternos:
+        form.tipoViaje === "Tercerizado"
+          ? form.auxiliaresExternosTexto.split(/\r?\n/).map((n) => n.trim()).filter(Boolean).slice(0, 8)
+          : undefined,
+      unidadExternaPlaca: form.tipoViaje === "Tercerizado" ? form.unidadExternaPlaca.trim() || undefined : undefined,
+      unidadExternaDescripcion: form.tipoViaje === "Tercerizado" ? form.unidadExternaDescripcion.trim() || undefined : undefined,
+      transportistaExterno: form.tipoViaje === "Tercerizado" ? form.transportistaExterno.trim() || undefined : undefined,
+      costoTercerizado:
+        form.tipoViaje === "Tercerizado" && form.costoTercerizado !== "" ? Number(form.costoTercerizado) : undefined,
+    };
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (saving || bloqueado) return;
@@ -1042,7 +1082,15 @@ export default function PlanForm({
         setError("Busca y selecciona un cliente (o escribe el nombre).");
         return;
       }
-      if (!form.pilotoEmpleadoId && !form.pilotoNombre.trim()) {
+      // PROGRAMACION-VIAJES-TERCERIZADOS-1 — mismo requisito del backend
+      // (patchTipoViaje/POST): un Tercerizado exige el nombre del piloto
+      // externo; un Propio sigue exigiendo el piloto interno de siempre.
+      if (form.tipoViaje === "Tercerizado") {
+        if (!form.pilotoExternoNombre.trim()) {
+          setError("Indica el nombre del piloto externo.");
+          return;
+        }
+      } else if (!form.pilotoEmpleadoId && !form.pilotoNombre.trim()) {
         setError("Indica el piloto (elige de RRHH o escríbelo).");
         return;
       }
@@ -1099,6 +1147,7 @@ export default function PlanForm({
             pilotoNombre: form.pilotoNombre.trim() || undefined,
             auxiliarEmpleadoIds: form.auxiliarEmpleadoIds.length ? form.auxiliarEmpleadoIds : undefined,
             auxiliarNombres: form.auxiliarNombres.length ? form.auxiliarNombres : undefined,
+            ...camposTipoViaje(),
             paradas,
             lugarCarga: paradas.find((p) => p.tipo === "Carga")?.lugarNombre,
             lugarDescarga: paradas.find((p) => p.tipo === "Descarga" || p.tipo === "Entrega")?.lugarNombre,
@@ -1115,21 +1164,47 @@ export default function PlanForm({
         return;
       }
 
+      // PROGRAMACION-VIAJES-TERCERIZADOS-1 — un cambio de tipoViaje (o
+      // cualquier edición de los campos *Externo* de un plan Tercerizado)
+      // se manda SIEMPRE por su propio PATCH dedicado primero, aislado del
+      // resto de este guardado (ver patchTipoViaje en el backend — nunca
+      // aprende de tarifa/ruta/disponibilidad/motivo-sensible, ni falta
+      // que le hace). El PATCH normal de abajo sigue para el resto de los
+      // campos (notas, hora, tarifa, etc.), sin cambios.
+      const tipoViajeOriginal = plan?.tipo_viaje === "Tercerizado" ? "Tercerizado" : "Propio";
+      if (form.tipoViaje !== tipoViajeOriginal || form.tipoViaje === "Tercerizado") {
+        const resTipo = await fetch(`/api/empresas/${slug}/tms/planes`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: plan!.id, ...camposTipoViaje() }),
+        });
+        const dataTipo = await resTipo.json().catch(() => ({}));
+        if (!resTipo.ok) {
+          setError(dataTipo.error ?? "No se pudo actualizar el tipo de viaje.");
+          return;
+        }
+      }
+
       // PROGRAMACION-CAMBIO-SENSIBLE-FALSO-POSITIVO-1 (ajuste pre-merge):
       // piloto/placa/auxiliares/motivoCambio se calculan UNA vez aquí (ver
       // camposSensiblesPatch arriba) — solo se incluyen en el PATCH si
       // `cambioSensible` es real, para no disparar la protección del
       // backend (tocaPiloto/tocaUnidad/tocaAuxiliares por presencia) al
-      // editar campos no sensibles (tarifa, notas, etc.).
-      const camposSensibles = camposSensiblesPatch({
-        bloqueadoParaPreCierre,
-        cambioSensible,
-        pilotoNombre: form.pilotoNombre,
-        placa: form.placa,
-        auxiliarEmpleadoIds: form.auxiliarEmpleadoIds,
-        auxiliarNombres: form.auxiliarNombres,
-        motivoCambioFinal,
-      });
+      // editar campos no sensibles (tarifa, notas, etc.). Un plan
+      // Tercerizado nunca manda estos 4 campos por este PATCH normal — ya
+      // se resolvieron arriba, por su propio endpoint.
+      const esTercerizadoAhora = form.tipoViaje === "Tercerizado";
+      const camposSensibles = esTercerizadoAhora
+        ? { pilotoNombre: undefined, placa: undefined, auxiliarEmpleadoIds: undefined, auxiliarNombres: undefined, motivoCambio: undefined }
+        : camposSensiblesPatch({
+            bloqueadoParaPreCierre,
+            cambioSensible,
+            pilotoNombre: form.pilotoNombre,
+            placa: form.placa,
+            auxiliarEmpleadoIds: form.auxiliarEmpleadoIds,
+            auxiliarNombres: form.auxiliarNombres,
+            motivoCambioFinal,
+          });
       const res = await fetch(`/api/empresas/${slug}/tms/planes`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -1596,47 +1671,145 @@ export default function PlanForm({
           Ajustes operativos
         </p>
       ) : null}
+      {/* PROGRAMACION-VIAJES-TERCERIZADOS-1 — Propio (default, compatibilidad
+          con el flujo de siempre) usa los catálogos internos tal cual;
+          Tercerizado cambia piloto/auxiliares/unidad a captura de texto
+          libre (nunca crea empleado/tms_personal ni tms_unidades — ver el
+          PATCH dedicado en el backend) y agrega Transportista + Costo
+          tercerizado (informativo). El resto del formulario NO cambia de
+          estructura. */}
+      <label className="text-xs text-[var(--muted)]">
+        Tipo de viaje
+        <select
+          className={`${inputCls} mt-1 w-full`}
+          value={form.tipoViaje}
+          disabled={bloqueadoParaPreCierre || bloqueado}
+          onChange={(e) => setForm((f) => ({ ...f, tipoViaje: e.target.value as "Propio" | "Tercerizado" }))}
+        >
+          <option value="Propio">Propio</option>
+          <option value="Tercerizado">Tercerizado</option>
+        </select>
+        <span className="mt-0.5 block text-[10px]">
+          {form.tipoViaje === "Tercerizado"
+            ? "Otra empresa ejecuta el viaje físicamente — el cliente/tarifa/programación siguen siendo tuyos."
+            : "Piloto, auxiliares y unidad propios (RRHH/Flota)."}
+        </span>
+      </label>
+
       {/* OPS-3.2c: unidad/piloto/auxiliares pasan de `soloNotas` a
           `bloqueadoParaPreCierre` — se habilitan en pendiente de cierre.
           fecha/hora/paradas siguen atadas a `soloNotas` sin cambios. */}
-      <div className={bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}>
-        <PlacaSelect
-          value={form.placa}
-          options={todosVehiculos}
-          resumen={resumenFlota}
-          inputClassName={inputCls}
-          onChange={(placa) => setForm((f) => ({ ...f, placa }))}
-          ocupadas={ocupacionUnidades}
-        />
-      </div>
-      <div className={bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}>
-        <PilotoSelect
-          pilotos={pilotos}
-          empleadoId={form.pilotoEmpleadoId}
-          nombre={form.pilotoNombre}
-          inputClassName={inputCls}
-          onChange={({ empleadoId, nombre }) => setForm((f) => ({ ...f, pilotoEmpleadoId: empleadoId, pilotoNombre: nombre }))}
-          ocupados={ocupacionPersonal}
-        />
-      </div>
+      {form.tipoViaje === "Propio" ? (
+        <>
+          <div className={bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}>
+            <PlacaSelect
+              value={form.placa}
+              options={todosVehiculos}
+              resumen={resumenFlota}
+              inputClassName={inputCls}
+              onChange={(placa) => setForm((f) => ({ ...f, placa }))}
+              ocupadas={ocupacionUnidades}
+            />
+          </div>
+          <div className={bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}>
+            <PilotoSelect
+              pilotos={pilotos}
+              empleadoId={form.pilotoEmpleadoId}
+              nombre={form.pilotoNombre}
+              inputClassName={inputCls}
+              onChange={({ empleadoId, nombre }) => setForm((f) => ({ ...f, pilotoEmpleadoId: empleadoId, pilotoNombre: nombre }))}
+              ocupados={ocupacionPersonal}
+            />
+          </div>
 
-      <div
-        className={`md:col-span-3 rounded border border-[var(--border)] p-3 ${
-          bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""
-        }`}
-      >
-        <AuxiliaresSelect
-          auxiliares={auxiliares}
-          empleadoIds={form.auxiliarEmpleadoIds}
-          nombresLibres={form.auxiliarNombres}
-          max={8}
-          inputClassName={inputCls}
-          onChange={({ empleadoIds, nombresLibres }) =>
-            setForm((f) => ({ ...f, auxiliarEmpleadoIds: empleadoIds, auxiliarNombres: nombresLibres }))
-          }
-          ocupados={ocupacionPersonal}
-        />
-      </div>
+          <div
+            className={`md:col-span-3 rounded border border-[var(--border)] p-3 ${
+              bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""
+            }`}
+          >
+            <AuxiliaresSelect
+              auxiliares={auxiliares}
+              empleadoIds={form.auxiliarEmpleadoIds}
+              nombresLibres={form.auxiliarNombres}
+              max={8}
+              inputClassName={inputCls}
+              onChange={({ empleadoIds, nombresLibres }) =>
+                setForm((f) => ({ ...f, auxiliarEmpleadoIds: empleadoIds, auxiliarNombres: nombresLibres }))
+              }
+              ocupados={ocupacionPersonal}
+            />
+          </div>
+        </>
+      ) : (
+        <div
+          className={`md:col-span-3 grid grid-cols-1 gap-2 rounded border border-amber-700/60 bg-amber-950/10 p-2 md:grid-cols-2 ${
+            bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""
+          }`}
+        >
+          <label className="text-xs text-[var(--muted)]">
+            Piloto (texto libre — no consulta RRHH)
+            <input
+              className={`${inputCls} mt-1 w-full`}
+              placeholder="Ej. Juan Pérez - Transportes XYZ"
+              value={form.pilotoExternoNombre}
+              onChange={(e) => setForm((f) => ({ ...f, pilotoExternoNombre: e.target.value }))}
+            />
+          </label>
+          <label className="text-xs text-[var(--muted)]">
+            Transportista / proveedor
+            <input
+              className={`${inputCls} mt-1 w-full`}
+              placeholder="Ej. Transportes Pérez, S.A."
+              value={form.transportistaExterno}
+              onChange={(e) => setForm((f) => ({ ...f, transportistaExterno: e.target.value }))}
+            />
+          </label>
+          <label className="text-xs text-[var(--muted)]">
+            Unidad / placa (texto libre — no consulta Flota)
+            <input
+              className={`${inputCls} mt-1 w-full font-mono uppercase`}
+              placeholder="Ej. C-987XYZ"
+              value={form.unidadExternaPlaca}
+              onChange={(e) => setForm((f) => ({ ...f, unidadExternaPlaca: e.target.value.toUpperCase() }))}
+            />
+          </label>
+          <label className="text-xs text-[var(--muted)]">
+            Descripción de la unidad
+            <input
+              className={`${inputCls} mt-1 w-full`}
+              placeholder="Ej. Camión 5 toneladas"
+              value={form.unidadExternaDescripcion}
+              onChange={(e) => setForm((f) => ({ ...f, unidadExternaDescripcion: e.target.value }))}
+            />
+          </label>
+          <label className="text-xs text-[var(--muted)] md:col-span-2">
+            Auxiliares externos (uno por línea — no consulta RRHH)
+            <textarea
+              rows={3}
+              className={`${inputCls} mt-1 w-full`}
+              placeholder={"Pedro López\nCarlos Gómez"}
+              value={form.auxiliaresExternosTexto}
+              onChange={(e) => setForm((f) => ({ ...f, auxiliaresExternosTexto: e.target.value }))}
+            />
+          </label>
+          <label className="text-xs text-[var(--muted)]">
+            Costo tercerizado (opcional — control interno)
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              className={`${inputCls} mt-1 w-full`}
+              placeholder="Q0.00"
+              value={form.costoTercerizado}
+              onChange={(e) => setForm((f) => ({ ...f, costoTercerizado: e.target.value }))}
+            />
+          </label>
+          <p className="text-[10px] text-[var(--muted)] md:col-span-2">
+            Nunca crea empleados en RRHH ni unidades en Flota — se guarda solo como texto de este viaje.
+            No genera viáticos ni valida disponibilidad interna (el recurso no pertenece a tus catálogos).
+          </p>
+        </div>
+      )}
 
       {/* OPS-AJUSTES (sección 3) — motivo obligatorio, solo visible cuando
           piloto/unidad/auxiliares realmente cambian respecto al plan

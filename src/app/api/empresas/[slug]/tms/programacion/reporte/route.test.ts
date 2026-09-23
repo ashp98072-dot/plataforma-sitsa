@@ -327,3 +327,66 @@ describe("GET /tms/programacion/reporte — Programado: exporta EXACTAMENTE lo q
     expect(params).toEqual([42, "2026-09-10", "2026-09-10", "Programado"]);
   });
 });
+
+/**
+ * PROGRAMACION-VIAJES-TERCERIZADOS-1 (sección 20) — un viaje Tercerizado
+ * nunca tiene placa/piloto/auxiliares internos (unidad_id/piloto_id/
+ * tms_plan_auxiliares quedan vacíos a propósito): el reporte tradicional
+ * debe completar esas celdas con el snapshot de texto, nunca dejarlas
+ * vacías solo porque no hay id interno, y marcar "(Tercerizado)" en Piloto.
+ */
+describe("GET /tms/programacion/reporte — viajes Tercerizados usan el snapshot de texto", () => {
+  const planTercerizado = {
+    id: 5, fecha_plan: "2026-09-15", hora_carga: "08:00:00", ruta_codigo_historico: null,
+    lugar_descarga_historico: "Puerto Barrios", cliente: "Cliente T",
+    placa: null, piloto: null,
+    tipo_viaje: "Tercerizado",
+    piloto_externo_nombre: "Juan Externo",
+    auxiliares_externos: "Aux Externo 1\nAux Externo 2",
+    unidad_externa_placa: "EXT-999",
+  };
+
+  it("sustituye placa/piloto/auxiliares por el snapshot externo y marca (Tercerizado) en Piloto", async () => {
+    vi.mocked(query).mockImplementation((async (sql: string) => {
+      if (sql.includes("FROM tms_plan_auxiliares")) return [];
+      if (sql.includes("FROM tms_planes_viaje p")) return [planTercerizado];
+      return [];
+    }) as typeof query);
+    await GET(new Request("http://localhost/x?formato=xlsx&fechaDesde=2026-09-15&fechaHasta=2026-09-15"), ctx);
+    const filas = vi.mocked(tablaAExcel).mock.calls[0][0].rows;
+    expect(filas[0]).toEqual([
+      "SEP", "15", "EXT-999", "Juan Externo (Tercerizado)", "Aux Externo 1", "Aux Externo 2",
+      "", "Cliente T", "", "08:00", "Puerto Barrios",
+    ]);
+  });
+
+  it("un plan Propio en la misma consulta conserva su placa/piloto/auxiliares internos sin marca", async () => {
+    const planPropio = {
+      id: 6, fecha_plan: "2026-09-15", hora_carga: "10:00:00", ruta_codigo_historico: null,
+      lugar_descarga_historico: "Zacapa", cliente: "Cliente P", placa: "P333CCC", piloto: "Piloto Interno",
+      tipo_viaje: "Propio", piloto_externo_nombre: null, auxiliares_externos: null, unidad_externa_placa: null,
+    };
+    vi.mocked(query).mockImplementation((async (sql: string) => {
+      if (sql.includes("FROM tms_plan_auxiliares")) return [];
+      if (sql.includes("FROM tms_planes_viaje p")) return [planTercerizado, planPropio];
+      return [];
+    }) as typeof query);
+    await GET(new Request("http://localhost/x?formato=xlsx&fechaDesde=2026-09-15&fechaHasta=2026-09-15"), ctx);
+    const filas = vi.mocked(tablaAExcel).mock.calls[0][0].rows;
+    expect(filas[1]).toEqual([
+      "SEP", "15", "P333CCC", "Piloto Interno", "", "", "", "Cliente P", "", "10:00", "Zacapa",
+    ]);
+    expect(filas[1][3]).not.toContain("Tercerizado");
+  });
+
+  it("un piloto externo vacío no arrastra la marca (Tercerizado) sobre una celda vacía", async () => {
+    vi.mocked(query).mockImplementation((async (sql: string) => {
+      if (sql.includes("FROM tms_plan_auxiliares")) return [];
+      if (sql.includes("FROM tms_planes_viaje p")) return [{ ...planTercerizado, piloto_externo_nombre: null }];
+      return [];
+    }) as typeof query);
+    await GET(new Request("http://localhost/x?formato=xlsx&fechaDesde=2026-09-15&fechaHasta=2026-09-15"), ctx);
+    const filas = vi.mocked(tablaAExcel).mock.calls[0][0].rows;
+    expect(filas[0][3]).toBe("");
+  });
+});
