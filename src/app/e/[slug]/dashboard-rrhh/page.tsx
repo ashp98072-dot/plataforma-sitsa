@@ -234,10 +234,22 @@ function DashboardRrhh({ slug }: { slug: string }) {
       ) : null}
 
       {situacionHoy !== null ? (
-        <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
+        // Contraída por defecto (sin `open`): HTML nativo, usable con teclado, sin estado React.
+        <details className="group rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+          <summary className="flex cursor-pointer flex-wrap items-center justify-between gap-2 font-semibold">
+            <h2 className="font-semibold">Situación del personal hoy</h2>
+            <span className="flex items-center gap-2 text-xs font-normal text-[var(--muted)]">
+              <span className={situacionHoy.length ? "text-[#e8c468]" : "text-[#8fd4a0]"}>
+                {situacionHoy.length === 0
+                  ? "Sin novedades"
+                  : `${situacionHoy.length} ${situacionHoy.length === 1 ? "registro" : "registros"} por revisar`}
+              </span>
+              <span className="group-open:hidden">Mostrar detalle ▸</span>
+              <span className="hidden group-open:inline">Ocultar detalle ▾</span>
+            </span>
+          </summary>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
             <div>
-              <h2 className="font-semibold">Situación del personal hoy</h2>
               <p className="text-xs text-[var(--muted)]">
                 Personal sin marcaje y ausencias justificadas vigentes.
               </p>
@@ -284,7 +296,7 @@ function DashboardRrhh({ slug }: { slug: string }) {
               Todo el personal activo tiene marcaje y no hay ausencias vigentes.
             </p>
           )}
-        </section>
+        </details>
       ) : null}
 
       {mesActual ? (
