@@ -50,3 +50,37 @@ it("usa empresa validada, no la del query string", async () => {
   expect(requireTenantRrhh).toHaveBeenCalledWith("prueba", "empleados", "ver");
   for (const fn of [obtenerEstadisticasDashboard, obtenerResumenGerencial, obtenerSituacionEmpleadosHoy]) expect(fn).toHaveBeenCalledWith(7);
 });
+it("loggea internamente sección + code/errno/sqlState/message de cada sección caída, sin exponerlos al cliente", async () => {
+  const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  const sqlError = Object.assign(new Error("You have an error in your SQL syntax near 'GROUP_CONCAT'"), { code: "ER_PARSE_ERROR", errno: 1064, sqlState: "42000" });
+  vi.mocked(obtenerSituacionEmpleadosHoy).mockRejectedValue(sqlError);
+  vi.mocked(obtenerResumenGerencial).mockRejectedValue(Object.assign(new Error("timeout"), { code: "PROTOCOL_SEQUENCE_TIMEOUT" }));
+  const res = await GET(req, ctx), data = await res.json();
+  expect(log).toHaveBeenCalledWith("[dashboard-rrhh] Sección no disponible", {
+    seccion: "Situación del personal", code: "ER_PARSE_ERROR", errno: 1064, sqlState: "42000", message: "You have an error in your SQL syntax near 'GROUP_CONCAT'",
+  });
+  expect(log).toHaveBeenCalledWith("[dashboard-rrhh] Sección no disponible", expect.objectContaining({ seccion: "Resumen mensual", code: "PROTOCOL_SEQUENCE_TIMEOUT", errno: null, sqlState: null }));
+  expect(log).toHaveBeenCalledTimes(2); // la sección sana (Estadísticas) no se loguea
+  const cuerpo = JSON.stringify(data);
+  for (const secreto of ["ER_PARSE_ERROR", "1064", "42000", "GROUP_CONCAT", "SQL syntax", "PROTOCOL_SEQUENCE_TIMEOUT"]) expect(cuerpo).not.toContain(secreto);
+  expect(data.avisos).toEqual([
+    "Resumen mensual: no disponible. Intenta nuevamente o solicita revisar el servidor.",
+    "Situación del personal: no disponible. Intenta nuevamente o solicita revisar el servidor.",
+  ]);
+  expect(data.stats.totalEmpleados).toBe(4); // las secciones sanas se conservan
+  log.mockRestore();
+});
+it("un rechazo que no es un Error (valor arbitrario) también se loguea sin romper la respuesta", async () => {
+  const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  vi.mocked(obtenerEstadisticasDashboard).mockRejectedValue("fallo raro");
+  const res = await GET(req, ctx);
+  expect(res.status).toBe(200);
+  expect(log).toHaveBeenCalledWith("[dashboard-rrhh] Sección no disponible", expect.objectContaining({ seccion: "Estadísticas de hoy", code: null, message: "fallo raro" }));
+  log.mockRestore();
+});
+it("sin fallos no se loguea nada", async () => {
+  const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  await GET(req, ctx);
+  expect(log).not.toHaveBeenCalled();
+  log.mockRestore();
+});

@@ -168,53 +168,72 @@ export async function obtenerEstadisticasDashboard(
 }
 
 /**
- * Bandeja operativa del día. Clasifica a cada empleado activo sin duplicarlo:
- * una incidencia vigente tiene prioridad y, si no existe, se reporta la falta
- * de marcaje. Es una consulta de solo lectura y siempre queda aislada por empresa.
+ * Bandeja operativa del día. Clasifica a cada empleado activo sin duplicarlo,
+ * con prioridad Vacaciones > Otra incidencia > Sin marcaje; quien tiene jornada
+ * hoy y ninguna incidencia vigente no aparece.
+ *
+ * RRHH-DASHBOARD-SITUACION-1 — antes era UNA consulta agregada (LEFT JOIN doble
+ * + GROUP_CONCAT(DISTINCT CASE ... ORDER BY otra_columna) + MAX(CASE) +
+ * COUNT(DISTINCT) + HAVING/ORDER BY sobre alias) que en producción fallaba y
+ * dejaba "Situación del personal: no disponible". Ahora son TRES lecturas
+ * planas (empleados activos, jornadas de hoy, incidencias vigentes hoy), con
+ * los mismos predicados que ya usan los indicadores del mismo dashboard, y la
+ * clasificación se hace en TypeScript. Solo lectura y SIEMPRE acotada por
+ * empresa_id (la empresa de la sesión); las incidencias solo se cruzan con los
+ * empleados activos de esa misma empresa.
  */
 export async function obtenerSituacionEmpleadosHoy(
   empresaId: number,
 ): Promise<SituacionEmpleadoHoy[]> {
   const fechaHoy = hoyLocal();
-  const rows = await query<RowDataPacket[]>(
-    `SELECT e.id, e.codigo, e.nombre,
-            MAX(CASE WHEN i.tipo LIKE '%Vacaciones%' THEN 1 ELSE 0 END) AS en_vacaciones,
-            GROUP_CONCAT(DISTINCT CASE
-              WHEN i.tipo NOT LIKE '%Vacaciones%' THEN i.tipo
-              ELSE NULL
-            END ORDER BY i.tipo SEPARATOR ', ') AS otras_incidencias,
-            COUNT(DISTINCT s.id) AS total_sesiones
-     FROM empleados e
-     LEFT JOIN sesiones_trabajo s
-       ON s.empresa_id = e.empresa_id
-      AND s.id_empleado = e.id
-      AND s.fecha_jornada = ?
-     LEFT JOIN incidencias i
-       ON i.empresa_id = e.empresa_id
-      AND i.id_empleado = e.id
-      AND ? BETWEEN i.fecha_inicio AND i.fecha_fin
-     WHERE e.empresa_id = ? AND e.estado = 'Activo'
-     GROUP BY e.id, e.codigo, e.nombre
-     HAVING total_sesiones = 0 OR en_vacaciones = 1 OR otras_incidencias IS NOT NULL
-     ORDER BY en_vacaciones DESC, otras_incidencias IS NOT NULL DESC, e.nombre`,
-    [fechaHoy, fechaHoy, empresaId],
-  );
+  const [empleados, sesiones, incidencias] = await Promise.all([
+    query<RowDataPacket[]>(
+      `SELECT id, codigo, nombre FROM empleados
+       WHERE empresa_id = ? AND estado = 'Activo' ORDER BY nombre`,
+      [empresaId],
+    ),
+    query<RowDataPacket[]>(
+      `SELECT DISTINCT id_empleado FROM sesiones_trabajo
+       WHERE empresa_id = ? AND fecha_jornada = ?`,
+      [empresaId, fechaHoy],
+    ),
+    query<RowDataPacket[]>(
+      `SELECT id_empleado, tipo FROM incidencias
+       WHERE empresa_id = ? AND ? BETWEEN fecha_inicio AND fecha_fin`,
+      [empresaId, fechaHoy],
+    ),
+  ]);
 
-  return rows.map((row) => {
-    const vacaciones = Number(row.en_vacaciones ?? 0) === 1;
-    const otras = row.otras_incidencias ? String(row.otras_incidencias) : "";
-    return {
-      idEmpleado: Number(row.id),
-      codigo: String(row.codigo ?? ""),
-      nombre: String(row.nombre ?? ""),
-      situacion: vacaciones
-        ? "Vacaciones"
-        : otras
-          ? "Otra incidencia"
-          : "Sin marcaje",
-      detalle: vacaciones ? "Vacaciones vigentes" : otras || "No registra jornada hoy",
-    };
-  });
+  const conSesion = new Set(sesiones.map((r) => Number(r.id_empleado)));
+  const tiposPorEmpleado = new Map<number, string[]>();
+  for (const r of incidencias) {
+    const tipo = r.tipo == null ? "" : String(r.tipo).trim();
+    if (!tipo) continue;
+    const id = Number(r.id_empleado);
+    const lista = tiposPorEmpleado.get(id);
+    if (lista) lista.push(tipo); else tiposPorEmpleado.set(id, [tipo]);
+  }
+
+  const RANGO = { Vacaciones: 0, "Otra incidencia": 1, "Sin marcaje": 2 } as const;
+  const resultado: SituacionEmpleadoHoy[] = [];
+  const vistos = new Set<number>();
+  for (const e of empleados) {
+    const id = Number(e.id);
+    if (vistos.has(id)) continue; // nunca duplicar un empleado
+    vistos.add(id);
+    const tipos = tiposPorEmpleado.get(id) ?? [];
+    const vacaciones = tipos.some((t) => /vacaciones/i.test(t));
+    const otras = [...new Set(tipos.filter((t) => !/vacaciones/i.test(t)))].sort((a, b) => a.localeCompare(b, "es"));
+    let situacion: SituacionEmpleadoHoy["situacion"];
+    let detalle: string;
+    if (vacaciones) { situacion = "Vacaciones"; detalle = "Vacaciones vigentes"; }
+    else if (otras.length) { situacion = "Otra incidencia"; detalle = otras.join(", "); }
+    else if (!conSesion.has(id)) { situacion = "Sin marcaje"; detalle = "No registra jornada hoy"; }
+    else continue; // con jornada hoy y sin incidencia: no aparece en la bandeja
+    resultado.push({ idEmpleado: id, codigo: String(e.codigo ?? ""), nombre: String(e.nombre ?? ""), situacion, detalle });
+  }
+  // Vacaciones, luego otras incidencias, luego sin marcaje; dentro de cada grupo se conserva el orden por nombre (sort estable).
+  return resultado.sort((a, b) => RANGO[a.situacion] - RANGO[b.situacion]);
 }
 
 /**
