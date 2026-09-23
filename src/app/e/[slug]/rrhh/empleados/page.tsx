@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useEffectEvent,
+  useMemo,
   useRef,
   useState,
   type FormEvent,
@@ -23,6 +24,7 @@ import {
 import { formatearFechaVisible, hoyLocal } from "@/lib/rrhh/dates";
 import { CATEGORIAS_OPS, PUESTOS_MONACO } from "@/lib/rrhh/categorias-ops";
 import { faltantesAlta } from "@/lib/rrhh/empleado-validacion";
+import { construirParamsEmpleados, hrefExportEmpleados } from "@/lib/rrhh/empleados-filtros";
 import {
   FORMAS_PAGO,
   TIPOS_CONTRATO,
@@ -529,12 +531,16 @@ export default function EmpleadosPage() {
     return () => clearTimeout(t);
   }, [q]);
 
+  // RRHH-EMPLEADOS-EXPORT-FILTROS-1 — UN solo objeto de filtros alimenta el listado (cargar) y los
+  // enlaces Excel/PDF, para que exporten exactamente lo que se ve. `q` es la búsqueda ya aplicada
+  // (debounced), la misma que muestra la tabla. "Todos" (filtroEstado === "") no envía `estado`.
+  const filtrosActuales = useMemo(
+    () => ({ q: qDebounced, tipoContrato: filtroTipo, formaPago: filtroPago, estado: filtroEstado }),
+    [qDebounced, filtroTipo, filtroPago, filtroEstado],
+  );
+
   const cargar = useCallback(async () => {
-    const params = new URLSearchParams();
-    if (qDebounced.trim()) params.set("q", qDebounced.trim());
-    if (filtroTipo) params.set("tipoContrato", filtroTipo);
-    if (filtroPago) params.set("formaPago", filtroPago);
-    if (filtroEstado) params.set("estado", filtroEstado);
+    const params = construirParamsEmpleados(filtrosActuales);
     const res = await fetch(
       `/api/empresas/${slug}/empleados?${params.toString()}`,
       // RRHH-EMPLEADOS-LISTADO-STALE: después de un PUT, cargar() debe
@@ -559,7 +565,7 @@ export default function EmpleadosPage() {
       }
       return id;
     });
-  }, [slug, qDebounced, filtroTipo, filtroPago, filtroEstado]);
+  }, [slug, filtrosActuales]);
 
   // Acumula id -> etiqueta para los chips, sin perder las de supervisores ya
   // asignados que dejaron de estar Activos (esos no vuelven a llegar por
@@ -1739,13 +1745,13 @@ export default function EmpleadosPage() {
           }}
         />
         <a
-          href={`/api/empresas/${slug}/empleados/export?format=xlsx`}
+          href={hrefExportEmpleados(slug, "xlsx", filtrosActuales)}
           className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white"
         >
           Excel
         </a>
         <a
-          href={`/api/empresas/${slug}/empleados/export?format=pdf`}
+          href={hrefExportEmpleados(slug, "pdf", filtrosActuales)}
           className="rounded-lg bg-[#1e293b] px-3 py-2 text-sm text-white"
         >
           PDF

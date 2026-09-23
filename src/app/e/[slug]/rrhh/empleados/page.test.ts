@@ -38,12 +38,10 @@ describe("cargar() pide datos sin caché", () => {
     expect(cuerpo).toMatch(/\{\s*cache:\s*"no-store",?\s*\}/);
   });
 
-  it("conserva el comportamiento de filtros: q/tipoContrato/formaPago/estado siguen construyendo la query", () => {
+  it("conserva el comportamiento de filtros: q/tipoContrato/formaPago/estado siguen construyendo la query (ahora vía el helper compartido con la exportación)", () => {
     const cuerpo = cuerpoDeCallback("cargar");
-    expect(cuerpo).toMatch(/params\.set\("q", qDebounced\.trim\(\)\)/);
-    expect(cuerpo).toMatch(/params\.set\("tipoContrato", filtroTipo\)/);
-    expect(cuerpo).toMatch(/params\.set\("formaPago", filtroPago\)/);
-    expect(cuerpo).toMatch(/params\.set\("estado", filtroEstado\)/);
+    expect(cuerpo).toMatch(/construirParamsEmpleados\(filtrosActuales\)/);
+    expect(src).toMatch(/q: qDebounced, tipoContrato: filtroTipo, formaPago: filtroPago, estado: filtroEstado/);
   });
 });
 

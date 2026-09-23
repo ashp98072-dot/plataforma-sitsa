@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireTenantRrhh } from "@/lib/tenant";
 import { listarEmpleados } from "@/lib/rrhh/empleados";
+import { parsearFiltrosEmpleados } from "@/lib/rrhh/empleados-filtros";
 import {
   exportarEmpleadosExcel,
   exportarEmpleadosPdf,
@@ -14,7 +15,8 @@ export async function GET(req: Request, ctx: Ctx) {
   const guard = await requireTenantRrhh(slug, "empleados", "ver");
   if (guard.error) return guard.error;
 
-  const format = new URL(req.url).searchParams.get("format") ?? "xlsx";
+  const searchParams = new URL(req.url).searchParams;
+  const format = searchParams.get("format") ?? "xlsx";
 
   try {
     if (format === "plantilla") {
@@ -29,9 +31,18 @@ export async function GET(req: Request, ctx: Ctx) {
       });
     }
 
-    const empleados = await listarEmpleados(guard.empresa.id, "", {
+    // RRHH-EMPLEADOS-EXPORT-FILTROS-1 — exporta EXACTAMENTE el conjunto filtrado de la pantalla
+    // (q, tipoContrato, formaPago, estado). La plantilla (arriba) no depende de filtros.
+    // La empresa sale siempre de la sesión; ningún filtro inválido llega al SQL.
+    const filtros = parsearFiltrosEmpleados(searchParams);
+    if (!filtros.ok) return NextResponse.json({ error: filtros.error }, { status: 400 });
+    const { q, tipoContrato, formaPago, estado } = filtros.filtros;
+    const empleados = await listarEmpleados(guard.empresa.id, q, {
       completo: true,
       conDocs: false,
+      tipoContrato,
+      formaPago,
+      estado,
     });
     const nombre = guard.empresa.nombre;
 
