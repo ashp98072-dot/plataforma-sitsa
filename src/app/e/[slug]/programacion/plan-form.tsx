@@ -315,7 +315,9 @@ export default function PlanForm({
   // ocupaciones obsoletas mientras llega la siguiente consulta.
   const [ocupacionDia, setOcupacionDia] = useState<{
     fecha: string; personal: Record<number, OcupacionRecurso>; unidades: Record<string, OcupacionRecurso>;
-  }>({ fecha: "", personal: {}, unidades: {} });
+    // PROGRAMACION-TC-CAJA-REMOLQUE-1: placa (mayúsculas) del TC -> plan que lo ocupa ese día.
+    tcs: Record<string, OcupacionRecurso>;
+  }>({ fecha: "", personal: {}, unidades: {}, tcs: {} });
   // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§2) — tarifas ACTIVAS de
   // la ruta elegida (del catálogo tms_ruta_tarifas). Se cargan al elegir
   // la ruta y al montar el formulario en edición (si el viaje ya tiene
@@ -367,10 +369,20 @@ export default function PlanForm({
     unidadExternaPlaca: plan?.unidad_externa_placa ?? "",
     unidadExternaDescripcion: plan?.unidad_externa_descripcion ?? "",
     transportistaExterno: plan?.transportista_externo ?? "",
+    // PROGRAMACION-TC-CAJA-REMOLQUE-1 — TC del viaje. tcPlaca (Propio, del
+    // catálogo interno de TC) y tcExternoPlaca (Tercerizado, texto libre) son
+    // campos distintos: un id/placa interno nunca se mezcla con un snapshot externo.
+    tcPlaca: plan?.tipo_viaje === "Tercerizado" ? "" : (plan?.tc ?? ""),
+    tcExternoPlaca: plan?.tipo_viaje === "Tercerizado" ? (plan?.tc_externo_placa ?? "") : "",
     costoTercerizado: plan?.costo_tercerizado != null ? String(plan.costo_tercerizado) : "",
   });
   const ocupacionPersonal = ocupacionDia.fecha === form.fechaPlan ? ocupacionDia.personal : {};
   const ocupacionUnidades = ocupacionDia.fecha === form.fechaPlan ? ocupacionDia.unidades : {};
+  const ocupacionTcs = ocupacionDia.fecha === form.fechaPlan ? ocupacionDia.tcs : {};
+  // PROGRAMACION-TC-CAJA-REMOLQUE-1: Unidad y TC son recursos distintos con
+  // selectores distintos — el TC nunca aparece como Unidad ni al revés.
+  const unidadesOpciones = todosVehiculos.filter((v) => v.tipoUnidad !== "TC");
+  const tcOpciones = todosVehiculos.filter((v) => v.tipoUnidad === "TC");
   const [paradasForm, setParadasForm] = useState<ParadaForm[]>(
     plan?.paradas?.length
       ? plan.paradas.map((p) => ({
@@ -496,6 +508,8 @@ export default function PlanForm({
       // vacío que antes tenía vehiculosDisponibles).
       setTodosVehiculos(
         ((data.estadoVehiculos as VehiculoOpt[] | undefined) ?? []).map((v) => ({
+          id: v.id,
+          tipoUnidad: v.tipoUnidad,
           placa: v.placa,
           marca: v.marca,
           modelo: v.modelo,
@@ -565,7 +579,8 @@ export default function PlanForm({
           if (cancelado || !data) return;
           setOcupacionDia({ fecha: form.fechaPlan,
             personal: (data.personal ?? {}) as Record<number, OcupacionRecurso>,
-            unidades: (data.unidades ?? {}) as Record<string, OcupacionRecurso> });
+            unidades: (data.unidades ?? {}) as Record<string, OcupacionRecurso>,
+            tcs: (data.tcs ?? {}) as Record<string, OcupacionRecurso> });
         })
         .catch(() => {});
     }, 300);
@@ -1034,6 +1049,28 @@ export default function PlanForm({
   }
 
   /**
+   * PROGRAMACION-TC-CAJA-REMOLQUE-1 — id del TC INTERNO elegido (solo Propio).
+   * El texto del campo debe coincidir con un TC clasificado en Flota: nunca
+   * se manda un texto libre como si fuera un TC interno (el servidor además
+   * revalida acceso y clasificación). Vacío = viaje sin TC (opcional).
+   * Un TC ya guardado en el viaje y sin cambios se conserva aunque el
+   * catálogo todavía no haya cargado.
+   */
+  function resolverTcId(): { ok: true; id: number | null } | { ok: false; error: string } {
+    if (form.tipoViaje !== "Propio") return { ok: true, id: null };
+    const texto = form.tcPlaca.trim().toUpperCase();
+    if (!texto) return { ok: true, id: null };
+    if (plan?.tc_vehiculo_id != null && texto === (plan.tc ?? "").toUpperCase()) {
+      return { ok: true, id: plan.tc_vehiculo_id };
+    }
+    const opcion = tcOpciones.find((v) => v.placa.toUpperCase() === texto);
+    if (!opcion || opcion.id == null) {
+      return { ok: false, error: "Selecciona un TC de la lista (solo se aceptan TC clasificados en Flota)." };
+    }
+    return { ok: true, id: opcion.id };
+  }
+
+  /**
    * PROGRAMACION-VIAJES-TERCERIZADOS-1 — campos de tipo de viaje, comunes
    * al POST (todo en una sola llamada) y al PATCH dedicado
    * (patchTipoViaje en el backend, ver más abajo). auxiliaresExternos se
@@ -1052,6 +1089,7 @@ export default function PlanForm({
       unidadExternaPlaca: form.tipoViaje === "Tercerizado" ? form.unidadExternaPlaca.trim() || undefined : undefined,
       unidadExternaDescripcion: form.tipoViaje === "Tercerizado" ? form.unidadExternaDescripcion.trim() || undefined : undefined,
       transportistaExterno: form.tipoViaje === "Tercerizado" ? form.transportistaExterno.trim() || undefined : undefined,
+      tcExternoPlaca: form.tipoViaje === "Tercerizado" ? form.tcExternoPlaca.trim().toUpperCase() || undefined : undefined,
       costoTercerizado:
         form.tipoViaje === "Tercerizado" && form.costoTercerizado !== "" ? Number(form.costoTercerizado) : undefined,
     };
@@ -1077,6 +1115,11 @@ export default function PlanForm({
         clienteUbicacionId: p.clienteUbicacionId ?? undefined,
       }));
 
+    const tcResuelto = resolverTcId();
+    if (!tcResuelto.ok) {
+      setError(tcResuelto.error);
+      return;
+    }
     if (!esEdicion) {
       if (!form.clienteId && !form.clienteNombre.trim()) {
         setError("Busca y selecciona un cliente (o escribe el nombre).");
@@ -1143,6 +1186,7 @@ export default function PlanForm({
             clienteId: form.clienteId || undefined,
             clienteNombre: form.clienteNombre.trim() || undefined,
             placa: form.placa || undefined,
+            tcVehiculoId: tcResuelto.id ?? undefined,
             pilotoEmpleadoId: form.pilotoEmpleadoId || undefined,
             pilotoNombre: form.pilotoNombre.trim() || undefined,
             auxiliarEmpleadoIds: form.auxiliarEmpleadoIds.length ? form.auxiliarEmpleadoIds : undefined,
@@ -1220,6 +1264,10 @@ export default function PlanForm({
           // solo se reenvían si hubo un cambio sensible real (ver arriba).
           pilotoNombre: camposSensibles.pilotoNombre,
           placa: camposSensibles.placa,
+          // PROGRAMACION-TC-CAJA-REMOLQUE-1: solo Propio, y solo si cambió (null lo quita).
+          // Un Tercerizado guarda su TC externo por el PATCH dedicado de tipo de viaje.
+          tcVehiculoId:
+            form.tipoViaje === "Propio" && tcResuelto.id !== (plan?.tc_vehiculo_id ?? null) ? tcResuelto.id : undefined,
           // OPS-AJUSTES (sección 7): "estado" ya NO se envía desde este
           // guardado general — Cargado/Cancelado ahora son acciones
           // dedicadas (marcarCargado()/cancelarViaje() más abajo), y
@@ -1704,11 +1752,26 @@ export default function PlanForm({
           <div className={bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}>
             <PlacaSelect
               value={form.placa}
-              options={todosVehiculos}
+              options={unidadesOpciones}
               resumen={resumenFlota}
               inputClassName={inputCls}
               onChange={(placa) => setForm((f) => ({ ...f, placa }))}
               ocupadas={ocupacionUnidades}
+            />
+          </div>
+          {/* PROGRAMACION-TC-CAJA-REMOLQUE-1 — TC / caja / remolque: recurso distinto de la
+              Unidad, opcional, solo TC clasificados en Flota. Mismo comportamiento de
+              disponibilidad que Unidad: asignado ese día -> visible pero deshabilitado. */}
+          <div className={bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}>
+            <PlacaSelect
+              value={form.tcPlaca}
+              options={tcOpciones}
+              inputClassName={inputCls}
+              onChange={(tcPlaca) => setForm((f) => ({ ...f, tcPlaca }))}
+              ocupadas={ocupacionTcs}
+              label="TC (buscar placa/marca/modelo)"
+              ayuda="Opcional · solo TC clasificados en Flota"
+              placeholderVacio="Sin TC registrados…"
             />
           </div>
           <div className={bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}>
@@ -1790,6 +1853,15 @@ export default function PlanForm({
               placeholder={"Pedro López\nCarlos Gómez"}
               value={form.auxiliaresExternosTexto}
               onChange={(e) => setForm((f) => ({ ...f, auxiliaresExternosTexto: e.target.value }))}
+            />
+          </label>
+          <label className="text-xs text-[var(--muted)]">
+            TC externo (texto libre — no consulta Flota)
+            <input
+              className={`${inputCls} mt-1 w-full font-mono uppercase`}
+              placeholder="Ej. TC-778"
+              value={form.tcExternoPlaca}
+              onChange={(e) => setForm((f) => ({ ...f, tcExternoPlaca: e.target.value.toUpperCase() }))}
             />
           </label>
           <label className="text-xs text-[var(--muted)]">

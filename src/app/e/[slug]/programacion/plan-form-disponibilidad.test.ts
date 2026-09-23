@@ -32,9 +32,12 @@ describe("PlanForm — disponibilidad de piloto/auxiliar/unidad en los buscadore
     expect(auxiliares).toContain("ocupados={ocupacionPersonal}");
   });
 
-  it("PlacaSelect recibe TODAS las unidades (todosVehiculos, no solo las puedeEnviar) más el mapa de ocupación por asignación", () => {
+  it("PlacaSelect recibe TODAS las unidades (todosVehiculos sin los TC, no solo las puedeEnviar) más el mapa de ocupación por asignación", () => {
     const placa = page.slice(pos("<PlacaSelect"), pos("<PlacaSelect") + 300);
-    expect(placa).toContain("options={todosVehiculos}");
+    // PROGRAMACION-TC-CAJA-REMOLQUE-1: Unidad ya no muestra los TC (selector propio), pero sigue
+    // recibiendo TODAS las demás unidades (taller/en ruta/inactivas incluidas) — nunca solo puedeEnviar.
+    expect(placa).toContain("options={unidadesOpciones}");
+    expect(page).toContain('const unidadesOpciones = todosVehiculos.filter((v) => v.tipoUnidad !== "TC");');
     expect(placa).toContain("ocupadas={ocupacionUnidades}");
     expect(page).not.toContain("options={vehiculosDisponibles}");
   });

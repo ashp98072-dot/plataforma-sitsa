@@ -16,6 +16,7 @@ beforeEach(() => {
   vi.mocked(listarDisponibilidadProgramacionDia).mockResolvedValue({
     personal: new Map([[10, { planId: 1, planCodigo: "PLAN-000001", horaInicio: "", horaFin: null }]]),
     unidades: new Map([["P-123ABC", { planId: 2, planCodigo: "PLAN-000002", horaInicio: "", horaFin: null }]]),
+    tcs: new Map([["TC-045", { planId: 3, planCodigo: "PLAN-000125", horaInicio: "", horaFin: null }]]),
   });
 });
 
@@ -26,6 +27,9 @@ describe("GET /tms/planes/disponibilidad-recursos", () => {
     const data = await res.json();
     expect(data.personal[10].planCodigo).toBe("PLAN-000001");
     expect(data.unidades["P-123ABC"].planCodigo).toBe("PLAN-000002");
+    // PROGRAMACION-TC-CAJA-REMOLQUE-1: el TC viaja en su propio mapa, nunca mezclado con unidades.
+    expect(data.tcs["TC-045"].planCodigo).toBe("PLAN-000125");
+    expect(data.unidades["TC-045"]).toBeUndefined();
     expect(listarDisponibilidadProgramacionDia).toHaveBeenCalledWith(7, "2026-09-22", null);
   });
 

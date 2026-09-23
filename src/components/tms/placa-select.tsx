@@ -4,6 +4,10 @@ import { useEffect, useId, useRef, useState } from "react";
 import { textoOcupacion, type OcupacionRecurso } from "./piloto-select";
 
 export type VehiculoOpt = {
+  /** flota_vehiculos.id (PROGRAMACION-TC-CAJA-REMOLQUE-1: el selector de TC manda tcVehiculoId). */
+  id?: number;
+  /** 'VEHICULO' | 'CABEZAL' | 'TC' — ausente = VEHICULO (compatibilidad). */
+  tipoUnidad?: "VEHICULO" | "CABEZAL" | "TC";
   placa: string;
   marca?: string | null;
   modelo?: string | null;
@@ -34,6 +38,13 @@ type Props = {
    * y esta ocupación ni se consulta.
    */
   ocupadas?: Record<string, OcupacionRecurso>;
+  /**
+   * PROGRAMACION-TC-CAJA-REMOLQUE-1 — el mismo selector sirve para el TC.
+   * Todos opcionales: sin ellos el texto es EXACTAMENTE el de Unidad de siempre.
+   */
+  label?: string;
+  ayuda?: string;
+  placeholderVacio?: string;
 };
 
 const MOTIVO_FLOTA: Record<string, string> = {
@@ -55,6 +66,9 @@ export function PlacaSelect({
   onChange,
   allowManual = true,
   ocupadas,
+  label = "Unidad (buscar placa/marca/modelo)",
+  ayuda,
+  placeholderVacio = "Sin unidades disponibles…",
 }: Props) {
   const listId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -122,12 +136,12 @@ export function PlacaSelect({
       className={`relative block text-xs text-[var(--muted)] ${open ? "z-30" : "z-10"}`}
     >
       <label htmlFor={listId} className="block">
-        Unidad (buscar placa/marca/modelo)
+        {label}
       </label>
       <input
         id={listId}
         className={`${inputClassName} mt-1 w-full font-mono uppercase`}
-        placeholder={options.length ? "Escribe placa, marca o modelo…" : "Sin unidades disponibles…"}
+        placeholder={options.length ? "Escribe placa, marca o modelo…" : placeholderVacio}
         value={value}
         autoComplete="off"
         role="combobox"
@@ -159,9 +173,10 @@ export function PlacaSelect({
         }}
       />
       <span className="mt-0.5 block text-[10px]">
-        {resumen
-          ? `${resumen.disponibles} disponibles · ${resumen.enTaller} taller · ${resumen.enRuta} en ruta`
-          : "No se envían unidades en taller o en ruta"}
+        {ayuda ??
+          (resumen
+            ? `${resumen.disponibles} disponibles · ${resumen.enTaller} taller · ${resumen.enRuta} en ruta`
+            : "No se envían unidades en taller o en ruta")}
       </span>
 
       {open && filtered.length > 0 ? (

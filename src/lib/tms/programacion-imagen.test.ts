@@ -20,6 +20,7 @@ const FILA: FilaProgramacionImagen = {
   mes: "SEP",
   dia: "22",
   placa: "C-801BXY",
+  tc: "TC-045",
   piloto: "Juan Pérez",
   auxiliar1: "Ana López",
   auxiliar2: "Beto Ruiz",
@@ -37,9 +38,10 @@ const ENCABEZADO: EncabezadoProgramacionImagen = {
 };
 
 describe("COLUMNAS_IMAGEN — MISMAS columnas que el reporte tradicional Excel/PDF de Programación", () => {
-  it("10 columnas, en el orden EXACTO del reporte tradicional (reporte/route.ts): Mes, Día, Placa, Piloto, Auxiliar 1, Auxiliar 2, Cliente, Lugar de Carga, Hora, Lugar de Descarga", () => {
+  it("11 columnas, en el orden EXACTO del reporte tradicional (reporte/route.ts): Mes, Día, Placa, TC, Piloto, Auxiliar 1, Auxiliar 2, Cliente, Lugar de Carga, Hora, Lugar de Descarga", () => {
+    // PROGRAMACION-TC-CAJA-REMOLQUE-1: "TC" va compacta, justo después de Placa (igual que en Excel/PDF).
     expect(COLUMNAS_IMAGEN.map((c) => c.titulo)).toEqual([
-      "Mes", "Día", "Placa", "Piloto", "Auxiliar 1", "Auxiliar 2", "Cliente", "Lugar de Carga", "Hora", "Lugar de Descarga",
+      "Mes", "Día", "Placa", "TC", "Piloto", "Auxiliar 1", "Auxiliar 2", "Cliente", "Lugar de Carga", "Hora", "Lugar de Descarga",
     ]);
   });
 
@@ -74,7 +76,7 @@ describe("mesDia — misma tabla de abreviaturas que el reporte tradicional (ENE
 describe("anchosColumnasImagen", () => {
   it("suma exactamente el ancho disponible", () => {
     const anchos = anchosColumnasImagen(2000);
-    expect(anchos).toHaveLength(10);
+    expect(anchos).toHaveLength(11);
     expect(anchos.reduce((s, a) => s + a, 0)).toBeCloseTo(2000, 5);
   });
 
@@ -86,13 +88,17 @@ describe("anchosColumnasImagen", () => {
 describe("celdasFila", () => {
   it("arma el arreglo en el MISMO orden que COLUMNAS_IMAGEN", () => {
     expect(celdasFila(FILA)).toEqual([
-      "SEP", "22", "C-801BXY", "Juan Pérez", "Ana López", "Beto Ruiz", "Distribuidora Ejemplo",
+      "SEP", "22", "C-801BXY", "TC-045", "Juan Pérez", "Ana López", "Beto Ruiz", "Distribuidora Ejemplo",
       "BODEGAS CALSA, ZONA 12", "08:00", "DOLLAR CITY",
     ]);
   });
 
+  it("PROGRAMACION-TC-CAJA-REMOLQUE-1: viaje sin TC deja la celda TC vacía (nunca inventa un valor)", () => {
+    expect(celdasFila({ ...FILA, tc: "" })[3]).toBe("");
+  });
+
   it("auxiliar2 vacío queda como celda vacía (nunca inventa un valor)", () => {
-    expect(celdasFila({ ...FILA, auxiliar2: "" })[5]).toBe("");
+    expect(celdasFila({ ...FILA, auxiliar2: "" })[6]).toBe("");
   });
 });
 
@@ -160,7 +166,7 @@ describe("construirLayoutImagen", () => {
     expect(layout.totalPaginas).toBe(1);
     expect(layout.paginas).toHaveLength(1);
     expect(layout.paginas[0]).toHaveLength(5);
-    expect(layout.anchoColumnas).toHaveLength(10);
+    expect(layout.anchoColumnas).toHaveLength(11);
     expect(layout.encabezado.titulo).toBe("PROGRAMACIÓN");
   });
 

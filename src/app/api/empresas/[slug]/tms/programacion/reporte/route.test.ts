@@ -147,7 +147,7 @@ describe("GET /tms/programacion/reporte — columnas del reporte tradicional sin
     await GET(new Request("http://localhost/x?formato=xlsx&fechaDesde=2026-09-01&fechaHasta=2026-09-08"), ctx);
     const headers = vi.mocked(tablaAExcel).mock.calls[0][0].headers;
     expect(headers).toEqual([
-      "Mes", "Día", "Placa", "Piloto", "Auxiliar 1", "Auxiliar 2",
+      "Mes", "Día", "Placa", "TC", "Piloto", "Auxiliar 1", "Auxiliar 2",
       "Código", "Cliente", "Lugar de Carga", "Hora", "Lugar de Descarga",
     ]);
   });
@@ -171,7 +171,7 @@ describe("GET /tms/programacion/reporte — columna Código SOLO se oculta para 
     await GET(new Request("http://localhost/x?formato=xlsx&fechaDesde=2026-09-01&fechaHasta=2026-09-08&estado=Programado"), ctx);
     const headers = vi.mocked(tablaAExcel).mock.calls[0][0].headers;
     expect(headers).toEqual([
-      "Mes", "Día", "Placa", "Piloto", "Auxiliar 1", "Auxiliar 2",
+      "Mes", "Día", "Placa", "TC", "Piloto", "Auxiliar 1", "Auxiliar 2",
       "Cliente", "Lugar de Carga", "Hora", "Lugar de Descarga",
     ]);
     expect(headers).not.toContain("Código");
@@ -181,7 +181,7 @@ describe("GET /tms/programacion/reporte — columna Código SOLO se oculta para 
     await GET(new Request("http://localhost/x?formato=pdf&fechaDesde=2026-09-01&fechaHasta=2026-09-08&estado=Programado"), ctx);
     const headers = vi.mocked(tablaAPdf).mock.calls[0][0].headers;
     expect(headers).toEqual([
-      "Mes", "Día", "Placa", "Piloto", "Auxiliar 1", "Auxiliar 2",
+      "Mes", "Día", "Placa", "TC", "Piloto", "Auxiliar 1", "Auxiliar 2",
       "Cliente", "Lugar de Carga", "Hora", "Lugar de Descarga",
     ]);
     expect(headers).not.toContain("Código");
@@ -199,7 +199,7 @@ describe("GET /tms/programacion/reporte — columna Código SOLO se oculta para 
     }) as typeof query);
     await GET(new Request("http://localhost/x?formato=xlsx&fechaDesde=2026-09-01&fechaHasta=2026-09-08&estado=Programado"), ctx);
     const fila = vi.mocked(tablaAExcel).mock.calls[0][0].rows[0];
-    expect(fila).toHaveLength(10); // sin Código (11 columnas normales - 1)
+    expect(fila).toHaveLength(11); // sin Código (12 columnas normales con TC - 1)
     expect(fila).not.toContain("RUTA-9"); // el código de ruta nunca aparece, ni en otra posición
   });
 
@@ -257,8 +257,8 @@ describe("GET /tms/programacion/reporte — Programado: exporta EXACTAMENTE lo q
     // Placa/piloto/lugar de descarga de CADA fila deben corresponder a SU
     // PROPIO plan — nunca al del otro (placa index 2, piloto index 3, lugar
     // de descarga la última posición del arreglo, ver dataRows en route.ts).
-    expect(filas[0]).toEqual(["SEP", "10", "P111AAA", "Piloto Uno", "", "", "Cliente A", "", "07:00", "Xela"]);
-    expect(filas[1]).toEqual(["SEP", "10", "P222BBB", "Piloto Dos", "", "", "Cliente B", "", "09:30", "Retalhuleu"]);
+    expect(filas[0]).toEqual(["SEP", "10", "P111AAA", "", "Piloto Uno", "", "", "Cliente A", "", "07:00", "Xela"]);
+    expect(filas[1]).toEqual(["SEP", "10", "P222BBB", "", "Piloto Dos", "", "", "Cliente B", "", "09:30", "Retalhuleu"]);
   });
 
   it("respeta fechaDesde/fechaHasta también combinado con estado=Programado (no solo estado por separado)", async () => {
@@ -311,8 +311,8 @@ describe("GET /tms/programacion/reporte — Programado: exporta EXACTAMENTE lo q
     await GET(new Request("http://localhost/x?formato=xlsx&fechaDesde=2026-09-10&fechaHasta=2026-09-10&estado=Programado"), ctx);
     const filas = vi.mocked(tablaAExcel).mock.calls[0][0].rows;
     // Auxiliar 1 (índice 4) de cada fila debe ser el auxiliar de SU plan.
-    expect(filas[0][4]).toBe("Aux Plan 1");
-    expect(filas[1][4]).toBe("Aux Plan 2");
+    expect(filas[0][5]).toBe("Aux Plan 1");
+    expect(filas[1][5]).toBe("Aux Plan 2");
   });
 
   it("multiempresa: el filtro estado=Programado nunca reemplaza la condición de empresa_id", async () => {
@@ -355,7 +355,7 @@ describe("GET /tms/programacion/reporte — viajes Tercerizados usan el snapshot
     await GET(new Request("http://localhost/x?formato=xlsx&fechaDesde=2026-09-15&fechaHasta=2026-09-15"), ctx);
     const filas = vi.mocked(tablaAExcel).mock.calls[0][0].rows;
     expect(filas[0]).toEqual([
-      "SEP", "15", "EXT-999", "Juan Externo (Tercerizado)", "Aux Externo 1", "Aux Externo 2",
+      "SEP", "15", "EXT-999", "", "Juan Externo (Tercerizado)", "Aux Externo 1", "Aux Externo 2",
       "", "Cliente T", "", "08:00", "Puerto Barrios",
     ]);
   });
@@ -374,9 +374,9 @@ describe("GET /tms/programacion/reporte — viajes Tercerizados usan el snapshot
     await GET(new Request("http://localhost/x?formato=xlsx&fechaDesde=2026-09-15&fechaHasta=2026-09-15"), ctx);
     const filas = vi.mocked(tablaAExcel).mock.calls[0][0].rows;
     expect(filas[1]).toEqual([
-      "SEP", "15", "P333CCC", "Piloto Interno", "", "", "", "Cliente P", "", "10:00", "Zacapa",
+      "SEP", "15", "P333CCC", "", "Piloto Interno", "", "", "", "Cliente P", "", "10:00", "Zacapa",
     ]);
-    expect(filas[1][3]).not.toContain("Tercerizado");
+    expect(filas[1][4]).not.toContain("Tercerizado");
   });
 
   it("un piloto externo vacío no arrastra la marca (Tercerizado) sobre una celda vacía", async () => {
@@ -387,7 +387,7 @@ describe("GET /tms/programacion/reporte — viajes Tercerizados usan el snapshot
     }) as typeof query);
     await GET(new Request("http://localhost/x?formato=xlsx&fechaDesde=2026-09-15&fechaHasta=2026-09-15"), ctx);
     const filas = vi.mocked(tablaAExcel).mock.calls[0][0].rows;
-    expect(filas[0][3]).toBe("");
+    expect(filas[0][4]).toBe("");
   });
 });
 
@@ -415,19 +415,19 @@ describe("GET /tms/programacion/reporte — PDF: Hora en 12h + ancho garantizado
     }) as typeof query);
   };
 
-  // Sin estado=Programado, los headers incluyen "Código" -> Hora queda en el índice 9 (0-based).
+  // Sin estado=Programado, los headers incluyen "Código" y "TC" -> Hora queda en el índice 10 (0-based).
   it("el Excel sigue mostrando Hora en 24h (HH:mm) — esta salida NO se tocó", async () => {
     usarPlan(planConHora("13:30:00"));
     await GET(new Request("http://localhost/x?formato=xlsx&fechaDesde=2026-09-15&fechaHasta=2026-09-15"), ctx);
     const filas = vi.mocked(tablaAExcel).mock.calls[0][0].rows;
-    expect(filas[0][9]).toBe("13:30");
+    expect(filas[0][10]).toBe("13:30");
   });
 
   it("el PDF muestra Hora en 12h con AM/PM (13:30 -> 01:30 PM)", async () => {
     usarPlan(planConHora("13:30:00"));
     await GET(new Request("http://localhost/x?formato=pdf&fechaDesde=2026-09-15&fechaHasta=2026-09-15"), ctx);
     const filas = vi.mocked(tablaAPdf).mock.calls[0][0].rows;
-    expect(filas[0][9]).toBe("01:30 PM");
+    expect(filas[0][10]).toBe("01:30 PM");
   });
 
   it.each([
@@ -439,26 +439,26 @@ describe("GET /tms/programacion/reporte — PDF: Hora en 12h + ancho garantizado
     usarPlan(planConHora(hora24));
     await GET(new Request("http://localhost/x?formato=pdf&fechaDesde=2026-09-15&fechaHasta=2026-09-15"), ctx);
     const filas = vi.mocked(tablaAPdf).mock.calls[0][0].rows;
-    expect(filas[0][9]).toBe(hora12);
+    expect(filas[0][10]).toBe(hora12);
   });
 
   it("un plan sin hora_carga: celda vacía en el PDF, nunca '—' (mismo criterio que el Excel)", async () => {
     usarPlan(planConHora("", { hora_carga: null }));
     await GET(new Request("http://localhost/x?formato=pdf&fechaDesde=2026-09-15&fechaHasta=2026-09-15"), ctx);
     const filas = vi.mocked(tablaAPdf).mock.calls[0][0].rows;
-    expect(filas[0][9]).toBe("");
+    expect(filas[0][10]).toBe("");
   });
 
   it("el PDF nunca modifica dataRows (el Excel, llamado con el mismo objeto en memoria, no ve el cambio a 12h)", async () => {
     usarPlan(planConHora("13:30:00"));
     await GET(new Request("http://localhost/x?formato=pdf&fechaDesde=2026-09-15&fechaHasta=2026-09-15"), ctx);
     const filasPdf = vi.mocked(tablaAPdf).mock.calls[0][0].rows;
-    expect(filasPdf[0][9]).toBe("01:30 PM");
+    expect(filasPdf[0][10]).toBe("01:30 PM");
     // Reconsulta en formato Excel (mismo escenario): confirma que la fuente de datos original sigue en 24h.
     vi.mocked(tablaAExcel).mockClear();
     await GET(new Request("http://localhost/x?formato=xlsx&fechaDesde=2026-09-15&fechaHasta=2026-09-15"), ctx);
     const filasXlsx = vi.mocked(tablaAExcel).mock.calls[0][0].rows;
-    expect(filasXlsx[0][9]).toBe("13:30");
+    expect(filasXlsx[0][10]).toBe("13:30");
   });
 
   it("minWeight y preserveSingleLine del PDF cubren exactamente los índices de Placa y Hora (dinámico, no hardcodeado)", async () => {
@@ -466,11 +466,13 @@ describe("GET /tms/programacion/reporte — PDF: Hora en 12h + ancho garantizado
     await GET(new Request("http://localhost/x?formato=pdf&fechaDesde=2026-09-15&fechaHasta=2026-09-15&estado=Cerrado"), ctx);
     const llamada = vi.mocked(tablaAPdf).mock.calls[0][0];
     const idxPlaca = llamada.headers.indexOf("Placa");
+    const idxTc = llamada.headers.indexOf("TC");
     const idxHora = llamada.headers.indexOf("Hora");
     expect(idxPlaca).toBeGreaterThanOrEqual(0);
+    expect(idxTc).toBe(idxPlaca + 1);
     expect(idxHora).toBeGreaterThanOrEqual(0);
-    expect(llamada.minWeight).toEqual({ [idxPlaca]: 9, [idxHora]: 12 });
-    expect(llamada.preserveSingleLine).toEqual([idxPlaca, idxHora]);
+    expect(llamada.minWeight).toEqual({ [idxPlaca]: 9, [idxTc]: 8, [idxHora]: 12 });
+    expect(llamada.preserveSingleLine).toEqual([idxPlaca, idxTc, idxHora]);
   });
 
   it("estado=Programado (sin columna Código, los índices se corren): minWeight/preserveSingleLine siguen apuntando a Placa/Hora reales", async () => {
@@ -479,11 +481,12 @@ describe("GET /tms/programacion/reporte — PDF: Hora en 12h + ancho garantizado
     const llamada = vi.mocked(tablaAPdf).mock.calls[0][0];
     expect(llamada.headers).not.toContain("Código");
     const idxPlaca = llamada.headers.indexOf("Placa");
+    const idxTc = llamada.headers.indexOf("TC");
     const idxHora = llamada.headers.indexOf("Hora");
-    // Con Código oculto, Hora pasa del índice 9 al 8 — confirma que no se hardcodeó el índice anterior.
-    expect(idxHora).toBe(8);
-    expect(llamada.minWeight).toEqual({ [idxPlaca]: 9, [idxHora]: 12 });
-    expect(llamada.preserveSingleLine).toEqual([idxPlaca, idxHora]);
+    // Con Código oculto, Hora pasa del índice 10 al 9 — confirma que no se hardcodeó el índice anterior.
+    expect(idxHora).toBe(9);
+    expect(llamada.minWeight).toEqual({ [idxPlaca]: 9, [idxTc]: 8, [idxHora]: 12 });
+    expect(llamada.preserveSingleLine).toEqual([idxPlaca, idxTc, idxHora]);
     expect(llamada.rows[0][idxHora]).toBe("01:30 PM");
   });
 
@@ -492,7 +495,7 @@ describe("GET /tms/programacion/reporte — PDF: Hora en 12h + ancho garantizado
     await GET(new Request("http://localhost/x?formato=pdf&fechaDesde=2026-09-15&fechaHasta=2026-09-15"), ctx);
     const fila = vi.mocked(tablaAPdf).mock.calls[0][0].rows[0];
     expect(fila).toEqual([
-      "SEP", "15", "P111AAA", "Piloto Uno", "", "", "", "Cliente H", "", "01:30 PM", "Puerto Barrios",
+      "SEP", "15", "P111AAA", "", "Piloto Uno", "", "", "", "Cliente H", "", "01:30 PM", "Puerto Barrios",
     ]);
   });
 
@@ -504,7 +507,91 @@ describe("GET /tms/programacion/reporte — PDF: Hora en 12h + ancho garantizado
     });
     await GET(new Request("http://localhost/x?formato=pdf&fechaDesde=2026-09-15&fechaHasta=2026-09-15"), ctx);
     const fila = vi.mocked(tablaAPdf).mock.calls[0][0].rows[0];
-    expect(fila[9]).toBe("08:00 AM");
-    expect(fila[3]).toBe("Juan Externo (Tercerizado)");
+    expect(fila[10]).toBe("08:00 AM");
+    expect(fila[4]).toBe("Juan Externo (Tercerizado)");
+  });
+});
+
+/**
+ * PROGRAMACION-TC-CAJA-REMOLQUE-1 — el TC/caja/remolque viaja en Excel y PDF
+ * como una columna compacta "TC" justo después de "Placa". Mismo concepto
+ * para Propio (TC interno) y Tercerizado (snapshot externo): el SQL ya lo
+ * resuelve en el alias `tc`.
+ */
+describe("GET /tms/programacion/reporte — columna TC (Propio y Tercerizado bajo el mismo concepto)", () => {
+  const plan = (over: Record<string, unknown> = {}) => ({
+    id: 30, fecha_plan: "2026-09-23", hora_carga: "08:00:00", ruta_codigo_historico: null, lugar_descarga_historico: "Xela",
+    cliente: "Cliente A", placa: "C-123ABC", piloto: "Piloto Uno", tipo_viaje: "Propio", tc: null, ...over,
+  });
+  const usarPlanes = (filas: Record<string, unknown>[]) => {
+    vi.mocked(query).mockImplementation((async (sql: string) => {
+      if (sql.includes("FROM tms_plan_auxiliares")) return [];
+      if (sql.includes("FROM tms_planes_viaje p")) return filas;
+      return [];
+    }) as typeof query);
+  };
+  const url = (formato: string, extra = "") => new Request(`http://localhost/x?formato=${formato}&fechaDesde=2026-09-23&fechaHasta=2026-09-23${extra}`);
+
+  it("TC va inmediatamente después de Placa en Excel y PDF", async () => {
+    usarPlanes([plan()]);
+    await GET(url("xlsx"), ctx);
+    await GET(url("pdf"), ctx);
+    for (const headers of [vi.mocked(tablaAExcel).mock.calls[0][0].headers, vi.mocked(tablaAPdf).mock.calls[0][0].headers]) {
+      expect(headers.indexOf("TC")).toBe(headers.indexOf("Placa") + 1);
+    }
+  });
+
+  it("Propio: muestra el TC interno asignado junto a la Unidad (no sustituye la placa)", async () => {
+    usarPlanes([plan({ tc: "TC-045" })]);
+    await GET(url("xlsx"), ctx);
+    const h = vi.mocked(tablaAExcel).mock.calls[0][0].headers;
+    const fila = vi.mocked(tablaAExcel).mock.calls[0][0].rows[0];
+    expect(fila[h.indexOf("Placa")]).toBe("C-123ABC");
+    expect(fila[h.indexOf("TC")]).toBe("TC-045");
+  });
+
+  it("Tercerizado: muestra el snapshot del TC externo bajo la misma columna TC, junto a la placa externa", async () => {
+    usarPlanes([plan({ placa: null, piloto: null, tipo_viaje: "Tercerizado", piloto_externo_nombre: "Juan Externo", unidad_externa_placa: "EXT-1", tc: "TC-778" })]);
+    await GET(url("pdf"), ctx);
+    const llamada = vi.mocked(tablaAPdf).mock.calls[0][0];
+    const fila = llamada.rows[0];
+    expect(fila[llamada.headers.indexOf("Placa")]).toBe("EXT-1");
+    expect(fila[llamada.headers.indexOf("TC")]).toBe("TC-778");
+  });
+
+  it("un viaje sin TC deja la celda vacía (nunca '—' ni un valor inventado); Propio y Tercerizado no cambian de formato", async () => {
+    usarPlanes([plan(), plan({ id: 31, tipo_viaje: "Tercerizado", placa: null, piloto: null, piloto_externo_nombre: "X", tc: null })]);
+    await GET(url("xlsx"), ctx);
+    const { headers, rows } = vi.mocked(tablaAExcel).mock.calls[0][0];
+    expect(rows.map((r) => r[headers.indexOf("TC")])).toEqual(["", ""]);
+    expect(rows[0]).toHaveLength(headers.length);
+    expect(rows[1]).toHaveLength(headers.length);
+  });
+
+  it("el SQL resuelve `tc` por tipo de viaje y reutiliza flota_vehiculos (sin catálogo nuevo): Tercerizado = tc_externo_placa; Propio = placa del TC interno o su fotografía", async () => {
+    await GET(url("xlsx"), ctx);
+    const [sql] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("LEFT JOIN flota_vehiculos tcv ON tcv.id = p.tc_vehiculo_id");
+    expect(sql).toContain("CASE WHEN p.tipo_viaje = 'Tercerizado' THEN p.tc_externo_placa");
+    expect(sql).toContain("COALESCE(tcv.placa, p.tc_placa_historica) END AS tc");
+    expect(sql).toContain("p.empresa_id = ?");
+  });
+
+  it("PDF: TC recibe piso de ancho y una sola línea (legible) igual que Placa/Hora; con Código oculto los índices siguen correctos", async () => {
+    usarPlanes([plan({ tc: "TC-045" })]);
+    await GET(url("pdf", "&estado=Programado"), ctx);
+    const llamada = vi.mocked(tablaAPdf).mock.calls[0][0];
+    const idxTc = llamada.headers.indexOf("TC");
+    expect(llamada.headers).not.toContain("Código");
+    expect(llamada.minWeight?.[idxTc]).toBe(8);
+    expect(llamada.preserveSingleLine).toContain(idxTc);
+    expect(llamada.rows[0][idxTc]).toBe("TC-045");
+  });
+
+  it("el Excel no cambia de formato de Hora por el TC (24h) — regresión del ajuste anterior", async () => {
+    usarPlanes([plan({ tc: "TC-045", hora_carga: "13:30:00" })]);
+    await GET(url("xlsx"), ctx);
+    const { headers, rows } = vi.mocked(tablaAExcel).mock.calls[0][0];
+    expect(rows[0][headers.indexOf("Hora")]).toBe("13:30");
   });
 });

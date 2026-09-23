@@ -20,6 +20,7 @@ import {
   type FiltroVehiculo,
 } from "@/lib/flota/filtros";
 import { KM_INTERVALO_SERVICIO_DEFAULT } from "@/lib/flota/constants";
+import { TIPOS_UNIDAD } from "@/lib/flota/tipo-unidad";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -119,6 +120,8 @@ const schema = z.object({
   rinLlanta: z.string().optional(),
   medidaLlanta: z.string().optional(),
   tipoAceite: z.string().optional(),
+  // PROGRAMACION-TC-CAJA-REMOLQUE-1: clasificación formal (VEHICULO por defecto).
+  tipoUnidad: z.enum(TIPOS_UNIDAD).optional(),
   filtros: z
     .array(
       z.object({
@@ -207,6 +210,16 @@ export async function POST(req: Request, ctx: Ctx) {
         guard.empresa.id,
       ],
     );
+    // PROGRAMACION-TC-CAJA-REMOLQUE-1: 'VEHICULO' es el DEFAULT de la columna,
+    // así que solo se escribe cuando se clasifica como CABEZAL/TC (un alta
+    // normal no toca la columna: sigue funcionando aunque la migración aún
+    // no se haya aplicado).
+    if (d.tipoUnidad && d.tipoUnidad !== "VEHICULO") {
+      await execute(
+        "UPDATE flota_vehiculos SET tipo_unidad = ? WHERE id = ? AND empresa_id = ?",
+        [d.tipoUnidad, nuevoId, guard.empresa.id],
+      );
+    }
     if (d.filtros?.length) {
       await guardarFiltrosVehiculo(
         guard.empresa.id,
@@ -253,6 +266,8 @@ const patchSchema = z.object({
   tipoAceite: z.string().optional(),
   tipoCombustible: z.string().optional(),
   empresaActivo: z.string().optional(),
+  // PROGRAMACION-TC-CAJA-REMOLQUE-1: solo la empresa dueña puede reclasificar.
+  tipoUnidad: z.enum(TIPOS_UNIDAD).optional(),
   filtros: z
     .array(
       z.object({
@@ -338,6 +353,30 @@ export async function PATCH(req: Request, ctx: Ctx) {
       },
       { status: 403 },
     );
+  }
+
+  // PROGRAMACION-TC-CAJA-REMOLQUE-1: el tipo de unidad es atributo de la
+  // empresa dueña (igual que los accesos compartidos). Se guarda aparte del
+  // UPDATE principal para que un fallo (columna aún sin migrar) nunca quede
+  // oculto por el fallback mínimo de más abajo.
+  if (d.tipoUnidad !== undefined) {
+    if (!esDueno) {
+      return NextResponse.json(
+        { error: "Solo la empresa dueña puede cambiar el tipo de unidad." },
+        { status: 403 },
+      );
+    }
+    try {
+      await execute(
+        "UPDATE flota_vehiculos SET tipo_unidad = ? WHERE id = ? AND empresa_id = ?",
+        [d.tipoUnidad, d.id, Number(cur[0].empresa_id)],
+      );
+    } catch {
+      return NextResponse.json(
+        { error: "No se pudo guardar el tipo de unidad. Verifica que la migración de tipo_unidad esté aplicada." },
+        { status: 500 },
+      );
+    }
   }
 
   const enTaller =

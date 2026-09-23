@@ -618,6 +618,14 @@ CREATE TABLE IF NOT EXISTS tms_planes_viaje (
   lugar_carga_id INT NULL,
   lugar_descarga_id INT NULL,
   unidad_id INT NULL,
+  -- PROGRAMACION-TC-CAJA-REMOLQUE-1: TC/caja/remolque del viaje (recurso distinto de
+  -- unidad_id). tc_vehiculo_id = TC interno (flota_vehiculos.id, FK más abajo);
+  -- tc_placa_historica = fotografía de su placa; tc_externo_placa = TC del
+  -- proveedor en viajes Tercerizados (solo texto). Ver migrate-2026-09-
+  -- programacion-tc-caja-remolque.sql.
+  tc_vehiculo_id INT NULL,
+  tc_placa_historica VARCHAR(40) NULL,
+  tc_externo_placa VARCHAR(40) NULL,
   piloto_id INT NULL,
   auxiliar_id INT NULL,
   fecha_plan DATE NOT NULL,
@@ -1025,6 +1033,9 @@ CREATE TABLE IF NOT EXISTS flota_vehiculos (
   marca VARCHAR(80) NULL,
   modelo VARCHAR(80) NULL,
   descripcion VARCHAR(200) NULL,
+  -- PROGRAMACION-TC-CAJA-REMOLQUE-1: 'VEHICULO' | 'CABEZAL' | 'TC' (catálogo validado
+  -- en la aplicación, src/lib/flota/tipo-unidad.ts). Default 'VEHICULO'.
+  tipo_unidad VARCHAR(20) NOT NULL DEFAULT 'VEHICULO',
   color VARCHAR(80) NULL,
   tipo_combustible VARCHAR(40) NULL DEFAULT 'diesel',
   chasis VARCHAR(80) NULL,
@@ -1061,6 +1072,15 @@ CREATE TABLE IF NOT EXISTS flota_vehiculos (
 ALTER TABLE tms_unidades
   ADD CONSTRAINT fk_tmsuni_flota
   FOREIGN KEY (flota_vehiculo_id) REFERENCES flota_vehiculos(id)
+  ON DELETE SET NULL;
+
+-- PROGRAMACION-TC-CAJA-REMOLQUE-1: índice de disponibilidad diaria del TC y FK a
+-- flota_vehiculos (declarada aquí porque flota_vehiculos recién queda definida
+-- en este punto). Mismo patrón que fk_tmsuni_flota.
+ALTER TABLE tms_planes_viaje
+  ADD INDEX idx_tmsplan_tc_fecha (empresa_id, tc_vehiculo_id, fecha_plan),
+  ADD CONSTRAINT fk_tmsplan_tc_vehiculo
+  FOREIGN KEY (tc_vehiculo_id) REFERENCES flota_vehiculos(id)
   ON DELETE SET NULL;
 
 -- RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1: la FK de

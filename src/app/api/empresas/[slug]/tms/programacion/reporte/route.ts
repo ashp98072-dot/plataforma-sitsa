@@ -154,10 +154,16 @@ export async function GET(req: Request, ctx: Ctx) {
             -- salen NULL de los JOIN de arriba, porque unidad_id/piloto_id
             -- son NULL a propósito): se completan con su propio snapshot
             -- de texto más abajo, nunca se dejan vacíos.
-            p.tipo_viaje, p.piloto_externo_nombre, p.auxiliares_externos, p.unidad_externa_placa
+            p.tipo_viaje, p.piloto_externo_nombre, p.auxiliares_externos, p.unidad_externa_placa,
+            -- PROGRAMACION-TC-CAJA-REMOLQUE-1 — TC del viaje, mismo concepto para
+            -- ambos tipos: Tercerizado = snapshot externo; Propio = placa del TC
+            -- interno (o su fotografía si el vehículo ya no existe).
+            CASE WHEN p.tipo_viaje = 'Tercerizado' THEN p.tc_externo_placa
+                 ELSE COALESCE(tcv.placa, p.tc_placa_historica) END AS tc
      FROM tms_planes_viaje p
      LEFT JOIN tms_clientes c ON c.id = p.cliente_id
      LEFT JOIN tms_unidades u ON u.id = p.unidad_id
+     LEFT JOIN flota_vehiculos tcv ON tcv.id = p.tc_vehiculo_id
      LEFT JOIN tms_personal pil ON pil.id = p.piloto_id
      WHERE ${condiciones.join(" AND ")}
      ORDER BY p.fecha_plan, p.hora_carga, p.id`,
@@ -197,8 +203,8 @@ export async function GET(req: Request, ctx: Ctx) {
   // recorte es ESTRICTAMENTE por valor de `estado`, nunca global.
   const ocultarCodigo = estado === "Programado";
   const headers = ocultarCodigo
-    ? ["Mes", "Día", "Placa", "Piloto", "Auxiliar 1", "Auxiliar 2", "Cliente", "Lugar de Carga", "Hora", "Lugar de Descarga"]
-    : ["Mes", "Día", "Placa", "Piloto", "Auxiliar 1", "Auxiliar 2", "Código", "Cliente", "Lugar de Carga", "Hora", "Lugar de Descarga"];
+    ? ["Mes", "Día", "Placa", "TC", "Piloto", "Auxiliar 1", "Auxiliar 2", "Cliente", "Lugar de Carga", "Hora", "Lugar de Descarga"]
+    : ["Mes", "Día", "Placa", "TC", "Piloto", "Auxiliar 1", "Auxiliar 2", "Código", "Cliente", "Lugar de Carga", "Hora", "Lugar de Descarga"];
 
   const dataRows = rows.map((r) => {
     const id = Number(r.id);
@@ -235,6 +241,8 @@ export async function GET(req: Request, ctx: Ctx) {
       MESES[(mes ?? 1) - 1] ?? "",
       String(dia ?? ""),
       placa,
+      // PROGRAMACION-TC-CAJA-REMOLQUE-1: columna compacta justo después de Placa; vacía si el viaje no lleva TC.
+      r.tc ? String(r.tc) : "",
       piloto,
       auxiliar1,
       auxiliar2,
@@ -275,6 +283,7 @@ export async function GET(req: Request, ctx: Ctx) {
     // automático de las demás columnas, y `preserveSingleLine` evita que
     // esas dos, ya con ancho suficiente, se envuelvan en dos líneas.
     const idxPlaca = headers.indexOf("Placa");
+    const idxTc = headers.indexOf("TC");
     const idxHora = headers.indexOf("Hora");
     const rowsPdf = dataRows.map((fila) => {
       if (idxHora < 0 || !fila[idxHora]) return fila;
@@ -289,8 +298,9 @@ export async function GET(req: Request, ctx: Ctx) {
       rows: rowsPdf,
       layout: "landscape",
       modo: "tabla",
-      minWeight: { [idxPlaca]: 9, [idxHora]: 12 },
-      preserveSingleLine: [idxPlaca, idxHora],
+      // TC (PROGRAMACION-TC-CAJA-REMOLQUE-1): mismo tratamiento que Placa — piso de ancho y una sola línea.
+      minWeight: { [idxPlaca]: 9, [idxTc]: 8, [idxHora]: 12 },
+      preserveSingleLine: [idxPlaca, idxTc, idxHora],
     });
     return new NextResponse(new Uint8Array(buf), {
       headers: {

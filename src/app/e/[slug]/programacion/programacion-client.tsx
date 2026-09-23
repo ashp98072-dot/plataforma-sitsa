@@ -140,6 +140,16 @@ export type Plan = {
    * ya lo devuelve siempre.
    */
   tipo_viaje?: string;
+  /**
+   * PROGRAMACION-TC-CAJA-REMOLQUE-1 — TC/caja/remolque del viaje. `tc` es el
+   * valor a mostrar (Tercerizado: snapshot externo; Propio: placa del TC
+   * interno). tc_vehiculo_id/tc_externo_placa se mantienen separados: un id
+   * interno y un texto externo nunca comparten campo.
+   */
+  tc?: string | null;
+  tc_vehiculo_id?: number | null;
+  tc_placa_historica?: string | null;
+  tc_externo_placa?: string | null;
   piloto_externo_nombre?: string | null;
   /** Un nombre por línea — mismo criterio que notas/condiciones_adicionales (texto con saltos de línea, no un arreglo). */
   auxiliares_externos?: string | null;
@@ -986,6 +996,8 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
           mes,
           dia,
           placa: esTercerizado ? p.unidad_externa_placa || "" : p.placa || "",
+          // Mismo concepto "TC" para Propio (interno) y Tercerizado (snapshot): p.tc ya viene resuelto del GET.
+          tc: p.tc || "",
           piloto: esTercerizado
             ? p.piloto_externo_nombre
               ? `${p.piloto_externo_nombre} (Tercerizado)`
@@ -1552,6 +1564,12 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
                     Sin unidad
                   </span>
                 )}
+                {p.tc ? (
+                  <>
+                    <span className="text-xs text-[var(--muted)]">TC:</span>
+                    <span className="font-mono text-sm font-semibold">{p.tc}</span>
+                  </>
+                ) : null}
                 {p.paradasPendientes > 0 ? (
                   <span className="rounded bg-amber-900/40 px-1.5 py-0.5 text-[10px] text-amber-200">
                     {p.paradasPendientes} parada(s) sin evidencia
