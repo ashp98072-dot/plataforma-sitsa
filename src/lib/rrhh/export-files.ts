@@ -103,6 +103,14 @@ export async function tablaAPdf(opts: {
    * ignorados sin efecto en cualquier caller que no los pase.
    */
   weight?: Partial<Record<number, number>>;
+  /**
+   * PROGRAMACION-PDF-LEGIBILIDAD-1 — mismo passthrough opt-in que `weight`
+   * (ver `dibujarTablaEnDoc`, único lugar donde ya se usaba `minWeight`
+   * hasta ahora): un piso de ancho para una columna puntual sin reemplazar
+   * el cálculo automático de las demás. Ignorado sin efecto en cualquier
+   * caller que no lo pase.
+   */
+  minWeight?: Partial<Record<number, number>>;
   align?: Partial<Record<number, "left" | "center" | "right">>;
   preserveSingleLine?: number[];
   maxLines?: number;
@@ -320,6 +328,7 @@ async function pdfTabla(opts: {
   rows: string[][];
   layout?: "portrait" | "landscape" | "auto";
   weight?: Partial<Record<number, number>>;
+  minWeight?: Partial<Record<number, number>>;
   align?: Partial<Record<number, "left" | "center" | "right">>;
   preserveSingleLine?: number[];
   maxLines?: number;
@@ -354,6 +363,7 @@ async function pdfTabla(opts: {
       headers: opts.headers,
       rows: opts.rows,
       weight: opts.weight,
+      minWeight: opts.minWeight,
       align: opts.align,
       preserveSingleLine: opts.preserveSingleLine,
       maxLines: opts.maxLines,
