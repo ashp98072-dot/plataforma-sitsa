@@ -46,6 +46,15 @@ function detalleAuditoria(f: FilaTrabajo, ctx: ContextoEdicionRapida, motivo: st
     const placa = (id: number | null) => (id == null ? "—" : ctx.tcPlaca.get(id) ?? tcPlacas.get(id) ?? `#${id}`);
     cambios.push(`TC ${placa(f.actual!.tcVehiculoId)} → ${placa(f.final!.tcVehiculoId)}`);
   }
+  if (f.cambiaTarifa) {
+    const antes = plan.tarifaId != null ? `#${plan.tarifaId} (${plan.tarifaComercial ?? "—"})` : "sin tarifa";
+    const despues = f.tarifaNueva ? `${f.tarifaNueva.nombre} #${f.tarifaNueva.id} (${f.tarifaNueva.monto} ${f.tarifaNueva.moneda})` : "sin tarifa";
+    cambios.push(`tarifa ${antes} → ${despues}`);
+  }
+  if (f.cambiaViaticos) {
+    const actual = new Map(plan.viaticos.map((v) => [v.personalId, v.montoAsignado]));
+    cambios.push(`viáticos ${f.viaticosOverrides.map((v) => `${nombre(v.personalId)} ${actual.has(v.personalId) ? actual.get(v.personalId) : "—"} → ${v.montoAsignado}`).join(", ")}`);
+  }
   return `Plan #${plan.id} ${plan.codigo} · edición rápida · ${cambios.join("; ")}${motivo ? ` · motivo: ${motivo}` : ""}`;
 }
 
@@ -108,6 +117,18 @@ export async function guardarEdicionRapida(empresaId: number, usuario: string, d
         sets.push("tc_vehiculo_id = ?", "tc_placa_historica = ?");
         params.push(f.final!.tcVehiculoId, f.final!.tcVehiculoId != null ? contexto.tcPlaca.get(f.final!.tcVehiculoId) ?? null : null);
       }
+      if (f.cambiaTarifa) {
+        // Mismo criterio que el PATCH (Ajustar): asignar escribe snapshot + tarifa_comercial; quitar limpia SOLO el snapshot
+        // del catálogo y deja tarifa_comercial (monto manual) intacta.
+        if (f.tarifaNueva) {
+          sets.push("tarifa_id = ?", "tarifa_nombre_historico = ?", "tarifa_monto_historico = ?", "tarifa_moneda_historico = ?", "tarifa_comercial = ?");
+          params.push(f.tarifaNueva.id, f.tarifaNueva.nombre, f.tarifaNueva.monto, f.tarifaNueva.moneda, f.tarifaNueva.monto);
+        } else {
+          sets.push("tarifa_id = NULL", "tarifa_nombre_historico = NULL", "tarifa_monto_historico = NULL", "tarifa_moneda_historico = NULL");
+        }
+      }
+      // Solo viáticos cambiaron: el viaje no se reescribe (el UPDATE quedaría sin columnas); los viáticos van en el paso 7.
+      if (!sets.length) continue;
       const [u] = await conn.execute<ResultSetHeader>(
         `UPDATE tms_planes_viaje SET ${sets.join(", ")} WHERE id = ? AND empresa_id = ? AND estado = ?`,
         [...params, f.planId, empresaId, f.plan!.estado],
@@ -117,8 +138,9 @@ export async function guardarEdicionRapida(empresaId: number, usuario: string, d
 
     // 6) auxiliares (el orden define al principal) y 7) viáticos con las MISMAS reglas del PATCH (solo filas PROGRAMADO)
     for (const f of aGuardar.filter((x) => x.cambiaAuxiliares)) await guardarAuxiliaresPlan(f.planId, f.final!.auxiliaresIds, conn);
-    for (const f of aGuardar.filter((x) => x.cambiaPiloto || x.cambiaAuxiliares)) {
-      await sincronizarViaticosPlan(empresaId, f.planId, { piloto: f.final!.pilotoId, auxiliares: f.final!.auxiliaresIds }, conn);
+    for (const f of aGuardar.filter((x) => x.cambiaPiloto || x.cambiaAuxiliares || x.cambiaViaticos)) {
+      // PR-355: los montos editados viajan como override (solo cambios reales; ya validados contra el estado final y su estado PROGRAMADO)
+      await sincronizarViaticosPlan(empresaId, f.planId, { piloto: f.final!.pilotoId, auxiliares: f.final!.auxiliaresIds }, conn, f.viaticosOverrides);
     }
 
     // 8) auditoría POR CADA plan realmente modificado, dentro de la transacción (los sin_cambios no se auditan)

@@ -39,7 +39,8 @@ import { regresoTrasladado } from "@/lib/tms/programacion-copia-ventana";
  * resolverTcInterno). No refactoriza el POST manual ni el importador (decisión de alcance del PR A).
  *
  * Nunca se copia historia operativa: los planes nuevos nacen 'Programado', con snapshots NUEVOS de ruta y
- * tarifa; la tarifa solo puede ser una tarifa VIGENTE del catálogo de la ruta (sin monto libre).
+ * tarifa; la tarifa solo puede ser una tarifa VIGENTE del catálogo de la ruta (sin monto libre). Una ruta sin tarifa vigente
+ * NO bloquea la copia: el viaje nace SIN tarifa (se puede asignar después, p. ej. desde Edición rápida).
  */
 export const MAX_FILAS_LOTE = 200;
 export const MAX_AUXILIARES = 8;
@@ -244,7 +245,10 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
         };
         const opciones = tarifas.get(res.rutaId)?.tarifas ?? [];
         if (!opciones.length) {
-          errores.push(`La ruta "${res.rutaCodigo}" no tiene una tarifa vigente.`);
+          // La tarifa NO es requisito para copiar: una ruta sin tarifa vigente crea el viaje SIN tarifa (tarifa_id, snapshots y
+          // tarifa_comercial en NULL; no se inventa ninguna). Solo si el usuario ELIGIÓ una tarifa concreta y la ruta no la
+          // tiene vigente se rechaza (una elección explícita inválida nunca se ignora en silencio).
+          if (b.tarifaId != null) errores.push("La tarifa seleccionada no es una tarifa vigente de esta ruta.");
         } else {
           const elegida = b.tarifaId != null
             ? opciones.find((t) => t.id === b.tarifaId)

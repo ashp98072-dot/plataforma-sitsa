@@ -7,8 +7,9 @@ import { describe, expect, it } from "vitest";
  * @testing-library/react; mismo criterio que programacion-exportar-imagen-wiring.test.ts). La lógica decidible sin
  * React (borrador, payload, estados, envío) se prueba en edicion-rapida-helpers.test.ts.
  */
-const cliente = readFileSync(join(__dirname, "programacion-client.tsx"), "utf-8");
-const tabla = readFileSync(join(__dirname, "edicion-rapida.tsx"), "utf-8");
+// Normaliza saltos de línea: en Windows (core.autocrlf) el árbol de trabajo trae CRLF y los trozos buscan "\n".
+const cliente = readFileSync(join(__dirname, "programacion-client.tsx"), "utf-8").replace(/\r\n/g, "\n");
+const tabla = readFileSync(join(__dirname, "edicion-rapida.tsx"), "utf-8").replace(/\r\n/g, "\n");
 const trozo = (src: string, desde: string, hasta: string) => {
   const i = src.indexOf(desde);
   expect(i, `no se encontró: ${desde}`).toBeGreaterThan(-1);
@@ -125,7 +126,7 @@ describe("edicion-rapida.tsx", () => {
   it("32) candado contra doble submit en Validar y Guardar; mientras guarda los selects se deshabilitan", () => {
     expect(trozo(tabla, "async function validar()", "\n  }\n")).toContain("if (ocupadoRef.current) return;");
     expect(trozo(tabla, "async function guardar()", "\n  }\n")).toContain("if (ocupadoRef.current) return;");
-    expect(tabla).toContain("const deshabilitado = bloqueo != null || guardando;");
+    expect(tabla).toContain("const deshabilitado = bloqueo != null || guardando || internosBloqueados;");
     expect(tabla).toContain("disabled={!puedeValidar(borrador, motivo, ocupado)}");
     expect(tabla).toContain("disabled={!puedeGuardar(borrador, motivo, resultados, ocupado)}");
   });
@@ -142,10 +143,11 @@ describe("edicion-rapida.tsx", () => {
     expect(tabla).toContain("{bloqueo}");
   });
 
-  it("34) solo edita piloto/auxiliares/unidad/TC: no hay inputs de fecha, hora, regreso, ruta, cliente, tarifa ni estado", () => {
-    expect(tabla).not.toMatch(/type="(date|time|datetime-local|number)"/);
-    expect(tabla.match(/<select/g)).toHaveLength(4);
-    for (const x of ["pilotoPersonalId:", "auxiliarPersonalIds:", "flotaVehiculoId:", "tcVehiculoId:"]) expect(tabla).toContain(x);
+  it("34) edita piloto/auxiliares/unidad/TC + (PR-355) tarifa y viáticos: no hay inputs de fecha, hora, regreso, ruta, cliente ni estado", () => {
+    expect(tabla).not.toMatch(/type="(date|time|datetime-local)"/);
+    expect(tabla.match(/type="number"/g)).toHaveLength(1); // solo el monto del viático
+    expect(tabla.match(/<select/g)).toHaveLength(5); // piloto, + auxiliar, unidad, TC y tarifa
+    for (const x of ["pilotoPersonalId:", "auxiliarPersonalIds:", "flotaVehiculoId:", "tcVehiculoId:", "tarifaId:"]) expect(tabla).toContain(x);
   });
 
   it("tabla compacta con scroll horizontal y selects con aria-label", () => {

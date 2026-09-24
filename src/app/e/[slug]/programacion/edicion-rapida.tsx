@@ -9,6 +9,7 @@ import {
   confirmarPerdida,
   cuerpoEdicionRapida,
   editarRecursos,
+  editarViatico,
   enviarGuardar,
   enviarValidar,
   errorAntesDeEnviar,
@@ -17,29 +18,38 @@ import {
   mensajeGuardado,
   MAX_AUXILIARES_EDICION_RAPIDA,
   motivoNoEditable,
+  montoViaticoValido,
   opcionesPersonal,
+  opcionesTarifa,
   opcionesVehiculo,
+  puedeEditarTarifa,
+  puedeEditarViaticos,
   puedeGuardar,
   puedeValidar,
   quitarAuxiliar,
+  recursosInternosBloqueados,
   recursosVisibles,
   resumenEdicion,
   subirAuxiliar,
+  tarifaVisible,
   unidadSinVinculoFlota,
+  viaticosVisibles,
   type Borrador,
   type EntradaBorrador,
+  type EstadoEditado,
   type EstadoEdicionFila,
   type PersonalCatalogo,
   type PlanEdicionRapida,
-  type RecursosEditables,
+  type TarifaRutaEdicion,
   type VehiculoCatalogo,
 } from "./edicion-rapida-helpers";
 
 /**
- * PROGRAMACIÓN — EDICIÓN RÁPIDA PR-3: tabla compacta tipo Excel para cambiar piloto/auxiliares/unidad/TC de los viajes
+ * PROGRAMACIÓN — EDICIÓN RÁPIDA PR-3: tabla compacta tipo Excel para cambiar piloto/auxiliares/unidad/TC (y, PR-355,
+ * tarifa del catálogo y montos de viáticos) de los viajes
  * VISIBLES en Programación sin abrir "Ajustar" por viaje. Cambiar un select NO guarda: se mantiene un borrador local y
  * se envía todo el lote (con UN motivo) a /edicion-rapida/validar y /edicion-rapida. No toca fecha, hora, regreso,
- * ruta, cliente, tarifa, paradas, notas ni estado. Toda la lógica decidible sin React vive en edicion-rapida-helpers.ts.
+ * ruta, cliente, paradas, notas ni estado. Toda la lógica decidible sin React vive en edicion-rapida-helpers.ts.
  */
 export type FilaEdicionRapidaEntrada = {
   plan: PlanEdicionRapida & { cliente: string | null };
@@ -63,6 +73,7 @@ export function EdicionRapida({
   filas,
   disponibilidadPorFecha,
   vehiculos,
+  tarifasPorRuta,
   onPendientesChange,
   onGuardado,
 }: {
@@ -73,6 +84,8 @@ export function EdicionRapida({
   disponibilidadPorFecha: Map<string, DisponibilidadPersonal[]>;
   /** estadoVehiculos del GET /tms/planes (id = flota_vehiculos.id). */
   vehiculos: VehiculoCatalogo[];
+  /** Tarifas ACTIVAS por ruta (GET /tms/planes, aditivo PR-355). */
+  tarifasPorRuta: Record<string, TarifaRutaEdicion[]>;
   onPendientesChange: (hayPendientes: boolean) => void;
   /** Refresca Programación desde el servidor. */
   onGuardado: () => Promise<void>;
@@ -118,11 +131,19 @@ export function EdicionRapida({
   const ocupado = validando || guardando;
   const nombrePersonal = useMemo(() => new Map(personal.map((p) => [p.id, p.nombre])), [personal]);
 
-  function cambiar(plan: PlanEdicionRapida, cambios: Partial<RecursosEditables>) {
+  function cambiar(plan: PlanEdicionRapida, cambios: Partial<EstadoEditado>) {
     if (guardando) return;
     versionRef.current++;
     setBorrador((b) => editarRecursos(b, plan, cambios));
     setResultados(new Map()); // los cruces entre filas cambian: toda validación previa queda vieja
+    setMensaje("");
+  }
+
+  function cambiarViatico(plan: PlanEdicionRapida, personalId: number, monto: number) {
+    if (guardando) return;
+    versionRef.current++;
+    setBorrador((b) => editarViatico(b, plan, personalId, monto));
+    setResultados(new Map());
     setMensaje("");
   }
 
@@ -221,10 +242,10 @@ export function EdicionRapida({
       {mensaje ? <p role="status" className="rounded border border-emerald-700/60 bg-emerald-900/20 px-3 py-1.5 text-sm text-emerald-300">{mensaje}</p> : null}
 
       <div className="overflow-x-auto rounded-lg border border-[var(--border)]">
-        <table className="w-full min-w-[1150px] text-left text-xs">
+        <table className="w-full min-w-[1500px] text-left text-xs">
           <thead className="bg-[var(--thead)] text-[var(--muted)]">
             <tr>
-              {["Estado", "Hora", "Código", "Ruta / Cliente", "Piloto", "Auxiliares", "Unidad", "TC", "Estado de edición"].map((h) => (
+              {["Estado", "Hora", "Código", "Ruta / Cliente", "Piloto", "Auxiliares", "Unidad", "TC", "Tarifa", "Viáticos", "Estado de edición"].map((h) => (
                 <th key={h} scope="col" className="px-2 py-2 font-medium">{h}</th>
               ))}
             </tr>
@@ -232,7 +253,13 @@ export function EdicionRapida({
           <tbody>
             {filas.map(({ plan: p, estadoLabel, estadoBadge, ruta }) => {
               const bloqueo = motivoNoEditable(p, hoy);
-              const deshabilitado = bloqueo != null || guardando;
+              const internosBloqueados = recursosInternosBloqueados(p);
+              const deshabilitado = bloqueo != null || guardando || internosBloqueados;
+              const tarifaSel = tarifaVisible(borrador, p);
+              const opcionesDeTarifa = opcionesTarifa(p.ruta_id != null ? tarifasPorRuta[String(p.ruta_id)] : undefined, { id: p.tarifa_id ?? null, nombre: p.tarifa_nombre_historico, monto: p.tarifa_monto_historico });
+              const tarifaDeshabilitada = bloqueo != null || guardando || !puedeEditarTarifa(p);
+              const viaticos = puedeEditarViaticos(p) ? viaticosVisibles(borrador, p) : [];
+              const viaticosDeshabilitados = bloqueo != null || guardando;
               const r = recursosVisibles(borrador, p);
               const estado = estadoFila(p.id, borrador, resultados);
               const vista = ESTADO_EDICION[estado];
@@ -325,6 +352,60 @@ export function EdicionRapida({
                       {tcs.map((o) => <option key={o.id} value={o.id}>{o.etiqueta}</option>)}
                     </select>
                   </td>
+                  <td className="px-2 py-1.5">
+                    <select
+                      className={celda}
+                      aria-label={`Tarifa de ${p.codigo}`}
+                      disabled={tarifaDeshabilitada}
+                      title={!puedeEditarTarifa(p) ? "Este viaje no tiene ruta con catálogo de tarifas: usa Ajustar." : undefined}
+                      value={tarifaSel ?? ""}
+                      onChange={(e) => cambiar(p, { tarifaId: e.target.value ? Number(e.target.value) : null })}
+                    >
+                      <option value="">— Sin tarifa —</option>
+                      {opcionesDeTarifa.map((o) => <option key={o.id} value={o.id}>{o.etiqueta}</option>)}
+                    </select>
+                    {tarifaSel == null && p.tarifa_comercial != null ? (
+                      <span className="mt-0.5 block text-[10px] text-[var(--muted)]" title="Monto comercial manual del viaje (no viene del catálogo)">
+                        Monto manual: Q{Number(p.tarifa_comercial).toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    ) : null}
+                  </td>
+                  <td className="min-w-[170px] px-2 py-1.5">
+                    {viaticos.length ? (
+                      <ul className="space-y-1">
+                        {viaticos.map((v) => {
+                          const estadoViatico = v.estado ?? "PROGRAMADO";
+                          const procesado = estadoViatico !== "PROGRAMADO";
+                          const nombre = nombreDe(v.personalId);
+                          return (
+                            <li key={v.personalId} className="flex items-center gap-1">
+                              <span className="max-w-[80px] truncate" title={nombre}>{nombre}</span>
+                              <input
+                                key={`${p.id}-${v.personalId}-${v.monto ?? ""}`}
+                                type="number"
+                                min={0}
+                                step="0.01"
+                                inputMode="decimal"
+                                className={`${celda} w-20 ${v.editado ? "border-sky-500" : ""}`}
+                                aria-label={`Viático de ${nombre} en ${p.codigo}`}
+                                disabled={viaticosDeshabilitados || procesado}
+                                title={procesado ? `Viático ${estadoViatico.toLowerCase()}: ya no se edita aquí.` : v.monto == null ? "Aún sin viático: se generará al guardar." : undefined}
+                                defaultValue={v.monto ?? ""}
+                                placeholder={v.monto == null ? "auto" : undefined}
+                                onBlur={(e) => {
+                                  if (e.target.value === "") return;
+                                  const n = Number(e.target.value);
+                                  if (!montoViaticoValido(n)) { setError("Monto de viático inválido (≥ 0, máximo 2 decimales)."); return; }
+                                  if (n !== v.monto) cambiarViatico(p, v.personalId, n);
+                                }}
+                              />
+                              {procesado ? <span className="text-[10px] text-[var(--muted)]">{estadoViatico}</span> : null}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    ) : <span className="text-[var(--muted)]">—</span>}
+                  </td>
                   <td className="min-w-[200px] px-2 py-1.5">
                     {bloqueo ? (
                       <span className="rounded bg-[var(--input)] px-1.5 py-0.5 text-[10px] text-[var(--muted)]" title="No editable en Edición rápida">{bloqueo}</span>
@@ -347,7 +428,7 @@ export function EdicionRapida({
             })}
             {!filas.length ? (
               <tr>
-                <td colSpan={9} className="px-3 py-6 text-center text-[var(--muted)]">No hay viajes con este filtro.</td>
+                <td colSpan={11} className="px-3 py-6 text-center text-[var(--muted)]">No hay viajes con este filtro.</td>
               </tr>
             ) : null}
           </tbody>

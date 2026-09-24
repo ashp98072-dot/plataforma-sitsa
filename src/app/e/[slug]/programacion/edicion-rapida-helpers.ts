@@ -9,7 +9,7 @@ import {
  * PROGRAMACIÓN — EDICIÓN RÁPIDA PR-3: lógica PURA (sin React) de la tabla compacta de edición rápida, para poder
  * probarla sin infraestructura de componentes (mismo criterio que copiar/copiar-helpers.ts).
  *
- * Solo se editan piloto, auxiliares, unidad y TC. Nada se guarda al cambiar un select: se mantiene un BORRADOR local
+ * Se editan piloto, auxiliares, unidad, TC y (PR-355) la tarifa del catálogo y los montos de viáticos. Nada se guarda al cambiar un select: se mantiene un BORRADOR local
  * (planId -> { esperado, nuevo }). `esperado` es el snapshot REAL del viaje tal como estaba cargado cuando el usuario lo
  * tocó por primera vez (ids, nunca etiquetas/nombres); `nuevo` es el estado editado. El contrato es exactamente el de
  * POST /tms/planes/edicion-rapida[/validar] (edicion-rapida-schema.ts). El servidor es la autoridad: vuelve a validar
@@ -35,7 +35,20 @@ export type PlanEdicionRapida = {
   flotaVehiculoId?: number | null;
   /** Aditivo (PR-3): auxiliares SOLO de tms_plan_auxiliares, en orden (el primero es el principal). */
   auxiliarPersonalIds?: number[];
+  /** PR-355 (aditivo del GET): ruta, tarifa del catálogo y monto comercial vigente del viaje. */
+  ruta_id?: number | null;
+  tarifa_id?: number | null;
+  tarifa_comercial?: number | string | null;
+  tarifa_nombre_historico?: string | null;
+  tarifa_monto_historico?: number | string | null;
+  /** PR-355 (aditivo del GET): viáticos por tms_personal.id. */
+  viaticos?: ViaticoPlan[];
 };
+
+export type ViaticoPlan = { personalId: number; rol?: string; montoSugerido?: number | string; montoAsignado: number | string; estado: string };
+export type MontoViatico = { personalId: number; montoAsignado: number };
+export type ViaticoEsperado = MontoViatico & { estado: string };
+export type TarifaRutaEdicion = { id: number; nombre: string; monto: number | string; moneda: string; predeterminada?: boolean };
 
 export type RecursosEditables = {
   pilotoPersonalId: number | null;
@@ -49,14 +62,20 @@ export type SnapshotEsperado = RecursosEditables & {
   fechaPlan: string;
   horaCarga: string | null;
   regresoEstimado: string | null;
+  /** PR-355: presentes solo si el GET los trae (servidor anterior: la fila no edita tarifa/viáticos). */
+  tarifaId?: number | null;
+  tarifaComercial?: number | null;
+  viaticos?: ViaticoEsperado[];
 };
 
-export type EntradaBorrador = { esperado: SnapshotEsperado; nuevo: RecursosEditables };
+/** Estado editado: los 4 recursos + tarifa (undefined = sin tocar; null = sin tarifa) + montos de viático EXPLÍCITAMENTE editados. */
+export type EstadoEditado = RecursosEditables & { tarifaId?: number | null; viaticos?: MontoViatico[] };
+export type EntradaBorrador = { esperado: SnapshotEsperado; nuevo: EstadoEditado };
 /** planId -> fila modificada. Una fila que vuelve a sus valores originales sale del borrador. */
 export type Borrador = ReadonlyMap<number, EntradaBorrador>;
 export type ResultadosValidacion = ReadonlyMap<number, FilaResultadoEdicionRapida>;
 export type EstadoEdicionFila = "sin_cambios" | "modificada" | "ok" | "conflicto";
-export type CambioLote = { planId: number; esperado: SnapshotEsperado; nuevo: RecursosEditables };
+export type CambioLote = { planId: number; esperado: SnapshotEsperado; nuevo: EstadoEditado };
 export type CuerpoEdicionRapida = { motivoCambio: string; cambios: CambioLote[] };
 
 export const MAX_AUXILIARES_EDICION_RAPIDA = 8;
@@ -68,8 +87,19 @@ export function puedeUsarEdicionRapida(permisos: PermisoModulo[]): boolean {
 }
 
 /** Snapshot `esperado` desde los datos REALES del viaje cargado (ids del GET, nunca nombres/etiquetas). */
+const num = (v: number | string | null | undefined): number => Number(v ?? 0);
+
 export function snapshotEsperado(p: PlanEdicionRapida): SnapshotEsperado {
+  const extra: Partial<SnapshotEsperado> = {};
+  if (p.tarifa_id !== undefined) {
+    extra.tarifaId = p.tarifa_id ?? null;
+    extra.tarifaComercial = p.tarifa_comercial != null ? Number(p.tarifa_comercial) : null;
+  }
+  if (p.viaticos !== undefined) {
+    extra.viaticos = p.viaticos.map((v) => ({ personalId: v.personalId, montoAsignado: num(v.montoAsignado), estado: v.estado }));
+  }
   return {
+    ...extra,
     estado: p.estado,
     fechaPlan: p.fecha_plan,
     horaCarga: p.hora_carga ?? null,
@@ -106,7 +136,6 @@ export function mismosRecursos(a: RecursosEditables, b: RecursosEditables): bool
  * resto (p. ej. "En ruta") lo decide el backend al validar.
  */
 export function motivoNoEditable(p: PlanEdicionRapida, hoy: string): string | null {
-  if ((p.tipo_viaje ?? "Propio") === "Tercerizado") return "Tercerizado";
   if (p.estado === "Cerrado" || p.estado === "Cancelado") return p.estado;
   if (p.fecha_plan < hoy) return "Histórico";
   // Datos que el GET aún no trae (versión anterior del servidor): sin snapshot exacto no se edita.
@@ -115,6 +144,23 @@ export function motivoNoEditable(p: PlanEdicionRapida, hoy: string): string | nu
   if (p.auxiliaresDetalle.length > 0 && p.auxiliarPersonalIds.length === 0) return "Auxiliar legado: usa Ajustar";
   return null;
 }
+
+/** Tercerizado: la tarifa se puede editar, pero piloto/auxiliares/unidad/TC/viáticos internos no aplican. */
+export function recursosInternosBloqueados(p: PlanEdicionRapida): boolean {
+  return (p.tipo_viaje ?? "Propio") === "Tercerizado";
+}
+
+/** ¿La fila tiene datos para editar tarifa? (GET nuevo + ruta conocida). */
+export function puedeEditarTarifa(p: PlanEdicionRapida): boolean {
+  return p.tarifa_id !== undefined && p.ruta_id != null && p.ruta_id > 0;
+}
+
+/** ¿La fila tiene datos para editar viáticos? (GET nuevo, viaje con recursos internos). */
+export function puedeEditarViaticos(p: PlanEdicionRapida): boolean {
+  return p.viaticos !== undefined && !recursosInternosBloqueados(p);
+}
+
+export const montoViaticoValido = (n: number) => Number.isFinite(n) && n >= 0 && n <= 9999999999.99 && Math.abs(n * 100 - Math.round(n * 100)) < 1e-6;
 
 /** Unidad legado (placa sin vínculo con Flota): no se puede representar por flotaVehiculoId -> se ajusta desde "Ajustar". */
 export function unidadSinVinculoFlota(p: PlanEdicionRapida): boolean {
@@ -126,22 +172,69 @@ export function recursosVisibles(borrador: Borrador, p: PlanEdicionRapida): Recu
   return borrador.get(p.id)?.nuevo ?? recursosDe(snapshotEsperado(p));
 }
 
+/** Tarifa a mostrar: la editada si existe, si no la real (null = sin tarifa del catálogo). */
+export function tarifaVisible(borrador: Borrador, p: PlanEdicionRapida): number | null {
+  const n = borrador.get(p.id)?.nuevo.tarifaId;
+  return n !== undefined ? n : p.tarifa_id ?? null;
+}
+
+/** Filas de viático a mostrar para las personas FINALES (piloto + auxiliares): monto editado o el actual de la BD (o null = aún sin fila). */
+export function viaticosVisibles(borrador: Borrador, p: PlanEdicionRapida): { personalId: number; monto: number | null; estado: string | null; editado: boolean }[] {
+  const e = borrador.get(p.id);
+  const r = e?.nuevo ?? recursosDe(snapshotEsperado(p));
+  const ids = [...(r.pilotoPersonalId != null ? [r.pilotoPersonalId] : []), ...r.auxiliarPersonalIds];
+  const reales = new Map((p.viaticos ?? []).map((v) => [v.personalId, v]));
+  const editados = new Map((e?.nuevo.viaticos ?? []).map((v) => [v.personalId, v.montoAsignado]));
+  return ids.map((personalId) => {
+    const real = reales.get(personalId);
+    const ed = editados.get(personalId);
+    return { personalId, monto: ed ?? (real ? num(real.montoAsignado) : null), estado: real?.estado ?? null, editado: ed !== undefined };
+  });
+}
+
+/** Deja en los montos editados solo lo vigente: personas del estado FINAL cuyo monto realmente difiere del real. */
+export function normalizarViaticos(esperado: SnapshotEsperado, r: RecursosEditables, viaticos: MontoViatico[] | undefined): MontoViatico[] | undefined {
+  if (!viaticos) return undefined;
+  const finales = new Set([...(r.pilotoPersonalId != null ? [r.pilotoPersonalId] : []), ...r.auxiliarPersonalIds]);
+  const reales = new Map((esperado.viaticos ?? []).map((v) => [v.personalId, v.montoAsignado]));
+  const lista = viaticos.filter((v) => finales.has(v.personalId) && (!reales.has(v.personalId) || Math.abs((reales.get(v.personalId) ?? 0) - v.montoAsignado) >= 0.005));
+  return lista.length ? lista : undefined;
+}
+
+/** ¿El estado editado difiere del snapshot? (recursos, tarifa o viáticos) */
+export function hayDiferencias(esperado: SnapshotEsperado, nuevo: EstadoEditado): boolean {
+  if (!mismosRecursos(nuevo, recursosDe(esperado))) return true;
+  if (nuevo.tarifaId !== undefined && nuevo.tarifaId !== (esperado.tarifaId ?? null)) return true;
+  return (nuevo.viaticos?.length ?? 0) > 0;
+}
+
 /**
  * Aplica un cambio a una fila. El snapshot `esperado` se toma la PRIMERA vez que se toca la fila y se conserva (así un
  * cambio concurrente en el servidor se detecta como PLAN_DESACTUALIZADO). Si la fila vuelve a sus valores originales,
  * sale del borrador.
  */
-export function editarRecursos(borrador: Borrador, p: PlanEdicionRapida, cambios: Partial<RecursosEditables>): Map<number, EntradaBorrador> {
+export function editarRecursos(borrador: Borrador, p: PlanEdicionRapida, cambios: Partial<EstadoEditado>): Map<number, EntradaBorrador> {
   const siguiente = new Map(borrador);
   const esperado = borrador.get(p.id)?.esperado ?? snapshotEsperado(p);
-  const actual = borrador.get(p.id)?.nuevo ?? recursosDe(esperado);
+  const actual: EstadoEditado = borrador.get(p.id)?.nuevo ?? recursosDe(esperado);
   const aux = cambios.auxiliarPersonalIds
     ? [...new Set(cambios.auxiliarPersonalIds)].slice(0, MAX_AUXILIARES_EDICION_RAPIDA)
     : actual.auxiliarPersonalIds;
-  const nuevo: RecursosEditables = { ...actual, ...cambios, auxiliarPersonalIds: aux };
-  if (mismosRecursos(nuevo, recursosDe(esperado))) siguiente.delete(p.id);
+  const nuevo: EstadoEditado = { ...actual, ...cambios, auxiliarPersonalIds: aux };
+  // La tarifa editada que vuelve a la original deja de contar como cambio; los montos de quien ya no está en el viaje se descartan.
+  if (nuevo.tarifaId !== undefined && nuevo.tarifaId === (esperado.tarifaId ?? null)) delete nuevo.tarifaId;
+  const viaticos = normalizarViaticos(esperado, nuevo, nuevo.viaticos);
+  if (viaticos) nuevo.viaticos = viaticos;
+  else delete nuevo.viaticos;
+  if (!hayDiferencias(esperado, nuevo)) siguiente.delete(p.id);
   else siguiente.set(p.id, { esperado, nuevo });
   return siguiente;
+}
+
+/** Edita el monto de viático de UNA persona (reemplaza su edición previa). */
+export function editarViatico(borrador: Borrador, p: PlanEdicionRapida, personalId: number, montoAsignado: number): Map<number, EntradaBorrador> {
+  const previos = (borrador.get(p.id)?.nuevo.viaticos ?? []).filter((v) => v.personalId !== personalId);
+  return editarRecursos(borrador, p, { viaticos: [...previos, { personalId, montoAsignado }] });
 }
 
 export const agregarAuxiliar = (lista: number[], id: number) => (lista.includes(id) ? lista : [...lista, id]);
@@ -158,12 +251,18 @@ export function subirAuxiliar(lista: number[], id: number): number[] {
 /** Filas con cambios reales, en el formato exacto del contrato. */
 export function cambiosDelBorrador(borrador: Borrador): CambioLote[] {
   return [...borrador.entries()]
-    .filter(([, e]) => !mismosRecursos(e.nuevo, recursosDe(e.esperado)))
-    .map(([planId, e]) => ({
-      planId,
-      esperado: { ...e.esperado, auxiliarPersonalIds: [...e.esperado.auxiliarPersonalIds] },
-      nuevo: { ...e.nuevo, auxiliarPersonalIds: [...e.nuevo.auxiliarPersonalIds] },
-    }));
+    .filter(([, e]) => hayDiferencias(e.esperado, e.nuevo))
+    .map(([planId, e]) => {
+      const nuevo: EstadoEditado = { pilotoPersonalId: e.nuevo.pilotoPersonalId, auxiliarPersonalIds: [...e.nuevo.auxiliarPersonalIds], flotaVehiculoId: e.nuevo.flotaVehiculoId, tcVehiculoId: e.nuevo.tcVehiculoId };
+      // Solo se envía lo que el usuario tocó de verdad: tarifa/viáticos omitidos = el servidor no los toca.
+      if (e.nuevo.tarifaId !== undefined) nuevo.tarifaId = e.nuevo.tarifaId;
+      if (e.nuevo.viaticos?.length) nuevo.viaticos = e.nuevo.viaticos.map((v) => ({ personalId: v.personalId, montoAsignado: v.montoAsignado }));
+      return {
+        planId,
+        esperado: { ...e.esperado, auxiliarPersonalIds: [...e.esperado.auxiliarPersonalIds], ...(e.esperado.viaticos ? { viaticos: e.esperado.viaticos.map((v) => ({ ...v })) } : {}) },
+        nuevo,
+      };
+    });
 }
 
 /** Cuerpo de POST /edicion-rapida/validar y /edicion-rapida: UN motivo por lote. */
@@ -177,6 +276,8 @@ export function errorAntesDeEnviar(borrador: Borrador, motivo: string): string |
   if (!n) return "No hay cambios para validar o guardar.";
   if (n > MAX_FILAS_EDICION_RAPIDA) return `Máximo ${MAX_FILAS_EDICION_RAPIDA} viajes por lote (tienes ${n}).`;
   if (!motivo.trim()) return "Indica el motivo del cambio.";
+  const malo = cambiosDelBorrador(borrador).some((c) => (c.nuevo.viaticos ?? []).some((v) => !montoViaticoValido(v.montoAsignado)));
+  if (malo) return "Hay un monto de viático inválido (debe ser ≥ 0 con máximo 2 decimales).";
   return null;
 }
 
@@ -295,6 +396,20 @@ export function opcionesPersonal(
     const ind = indicadorPersona(disp.get(p.id), planId);
     return { id: p.id, etiqueta: ind ? `${p.nombre} ${ind}` : p.nombre };
   });
+}
+
+const montoTexto = (m: number | string) => Number(m).toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/**
+ * Opciones de tarifa de la RUTA del viaje (solo las activas del GET). La tarifa actual se conserva aunque ya no esté
+ * activa/vigente, para no perderla visualmente (el servidor solo acepta activas si el usuario la cambia).
+ */
+export function opcionesTarifa(catalogo: TarifaRutaEdicion[] | undefined, actual: { id: number | null; nombre?: string | null; monto?: number | string | null }): Opcion[] {
+  const lista = (catalogo ?? []).map((t) => ({ id: t.id, etiqueta: `${t.nombre} · ${t.moneda} ${montoTexto(t.monto)}` }));
+  if (actual.id != null && !lista.some((o) => o.id === actual.id)) {
+    lista.unshift({ id: actual.id, etiqueta: `${actual.nombre ?? `#${actual.id}`}${actual.monto != null ? ` · ${montoTexto(actual.monto)}` : ""} (no vigente)` });
+  }
+  return lista;
 }
 
 /** Opciones de unidad (no TC) o TC por flota_vehiculos.id, mostrando la placa. */

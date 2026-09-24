@@ -20,7 +20,7 @@ import {
 } from "@/lib/tms/paradas";
 import { obtenerVehiculoAccesible } from "@/lib/flota/acceso";
 import { vehiculoPorPlaca } from "@/lib/flota/pilotos";
-import { debeLimpiarTarifaPorCambioDeRuta, tarifaParaSnapshot } from "@/lib/tms/ruta-tarifas";
+import { debeLimpiarTarifaPorCambioDeRuta, tarifaParaSnapshot, tarifasActivasDeVariasRutas } from "@/lib/tms/ruta-tarifas";
 import { listarDisponibilidadPersonal } from "@/lib/operaciones/disponibilidad-personal";
 import { ahoraLocal, hoyLocal, toIsoDate } from "@/lib/rrhh/dates";
 import { listarViaticosRechazadosDelPlan, personalRecienAsignadoDelPlan, sincronizarViaticosPlan } from "@/lib/tms/viaticos";
@@ -135,6 +135,34 @@ const SQL_ATRASADO = `(
                   WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
                 )
               )`;
+
+/** Viático de un viaje tal como lo necesita la edición rápida (ids de tms_personal). */
+type ViaticoPlanLista = { personalId: number; rol: string; montoSugerido: number; montoAsignado: number; estado: string };
+
+/** Viáticos de varios viajes en UNA consulta (acotada por empresa). Sin tabla/columna aún: lista vacía, nunca rompe el GET. */
+async function viaticosDePlanes(empresaId: number, planIds: number[]): Promise<Map<number, ViaticoPlanLista[]>> {
+  const map = new Map<number, ViaticoPlanLista[]>();
+  const ids = [...new Set(planIds.filter((id) => id > 0))];
+  if (!ids.length) return map;
+  try {
+    const rows = await query<RowDataPacket[]>(
+      `SELECT plan_id, personal_id, rol, monto_sugerido, monto_asignado, estado
+       FROM tms_viaticos WHERE empresa_id = ? AND plan_id IN (${ids.map(() => "?").join(",")})
+       ORDER BY plan_id, personal_id`,
+      [empresaId, ...ids],
+    );
+    for (const r of rows) {
+      const pid = Number(r.plan_id);
+      map.set(pid, [...(map.get(pid) ?? []), {
+        personalId: Number(r.personal_id), rol: String(r.rol ?? ""), montoSugerido: Number(r.monto_sugerido ?? 0),
+        montoAsignado: Number(r.monto_asignado ?? 0), estado: String(r.estado ?? "PROGRAMADO"),
+      }]);
+    }
+  } catch {
+    /* tabla aún no existe */
+  }
+  return map;
+}
 
 /** Auxiliar de un plan con su id real de tms_personal (Fase P4.3). */
 type AuxiliarPlan = {
@@ -365,6 +393,11 @@ export async function GET(req: Request, ctx: Ctx) {
       rows.filter((r) => r.estado === "Cerrado").map((r) => Number(r.id)),
     ),
   ]);
+  // EDICIÓN RÁPIDA (aditivo, en lote y DESPUÉS de las lecturas previas): viáticos por viaje y tarifas ACTIVAS por ruta.
+  const viaticosMap = await viaticosDePlanes(guard.empresa.id, planIds);
+  const tarifasPorRuta = await tarifasActivasDeVariasRutas(guard.empresa.id, rows.map((r) => Number(r.ruta_id)).filter((n) => n > 0)).catch(
+    () => new Map<number, { tarifas: unknown[]; predeterminadaId: number | null }>(),
+  );
 
   const planes = rows.map((r) => {
     const id = Number(r.id);
@@ -421,6 +454,9 @@ export async function GET(req: Request, ctx: Ctx) {
       // auxiliaresDetalle), en su orden (el primero es el principal).
       flotaVehiculoId: flota_vehiculo_id != null ? Number(flota_vehiculo_id) : null,
       auxiliarPersonalIds: extras.map((a) => a.personalId),
+      // EDICIÓN RÁPIDA (aditivo): viáticos del viaje por tms_personal.id (mismo espacio de ids que piloto/auxiliares),
+      // para el snapshot de concurrencia y para mostrar/editar montos. Ver viaticosDePlanes.
+      viaticos: viaticosMap.get(id) ?? [],
       paradas,
       paradasPendientes: paradas.filter(
         (p) => p.requiere_evidencia && p.evidencias < 1,
@@ -483,6 +519,8 @@ export async function GET(req: Request, ctx: Ctx) {
       vehiculosDisponibles,
       estadoVehiculos,
       resumenFlota,
+      // EDICIÓN RÁPIDA (aditivo): { [rutaId]: [{ id, nombre, monto, moneda, predeterminada }] } de las rutas presentes.
+      tarifasPorRuta: Object.fromEntries([...tarifasPorRuta.entries()].map(([rutaId, t]) => [rutaId, t.tarifas])),
     },
     { headers: { "Cache-Control": "private, no-store" } },
   );

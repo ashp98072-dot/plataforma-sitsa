@@ -19,6 +19,7 @@ import {
   puedeUsarEdicionRapida,
   puedeValidar,
   quitarAuxiliar,
+  recursosInternosBloqueados,
   recursosVisibles,
   resumenEdicion,
   snapshotEsperado,
@@ -243,8 +244,10 @@ describe("red", () => {
 });
 
 describe("filas no editables", () => {
-  it("24) Tercerizado no permite editar recursos internos", () => {
-    expect(motivoNoEditable(plan(1, { tipo_viaje: "Tercerizado" }), HOY)).toBe("Tercerizado");
+  it("24) Tercerizado no permite editar recursos internos (PR-355: la fila sí es editable por su tarifa)", () => {
+    const t = plan(1, { tipo_viaje: "Tercerizado" });
+    expect(motivoNoEditable(t, HOY)).toBeNull();
+    expect(recursosInternosBloqueados(t)).toBe(true);
   });
   it("25) Cerrado bloqueado", () => {
     expect(motivoNoEditable(plan(1, { estado: "Cerrado" }), HOY)).toBe("Cerrado");
