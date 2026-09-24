@@ -569,6 +569,14 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
     await cargar();
   }
 
+  /** Solo el PRIMER grupo arranca abierto (al montarse); después el usuario controla qué grupos abre/cierra: `open` NO se
+   *  impone desde React, así seleccionar filas (re-render) no reabre ni cierra grupos. La `key` (modo-clave) remonta al cambiar Día/Semana/Mes. */
+  function abrirPrimerGrupoUnaVez(el: HTMLDetailsElement | null, esPrimero: boolean) {
+    if (!el || el.dataset.inicializado) return;
+    el.dataset.inicializado = "1";
+    if (esPrimero) el.open = true;
+  }
+
   /** Fila de un viático (idéntica a la tabla anterior: mismas acciones y permisos). */
   function renderFila(r: ViaticoControlRow) {
     return (
@@ -788,7 +796,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
         {grupos.map((g, indice) => {
           const sel = seleccionadosDelGrupo(seleccionados, g);
           return (
-            <details key={`${modoAgrupacion}-${g.clave}`} open={indice === 0} className="overflow-hidden rounded-xl border border-[var(--border)]" data-grupo={g.clave}>
+            <details key={`${modoAgrupacion}-${g.clave}`} ref={(el) => abrirPrimerGrupoUnaVez(el, indice === 0)} className="overflow-hidden rounded-xl border border-[var(--border)]" data-grupo={g.clave}>
               <summary className="flex cursor-pointer flex-wrap items-center gap-x-4 gap-y-1 bg-[var(--thead)] px-3 py-2 text-sm">
                 <span className="font-semibold">{g.etiqueta}</span>
                 <span className="text-xs">{resumenGrupo(g, q)}</span>
