@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db", () => ({ getPool: vi.fn(), query: vi.fn() }));
@@ -198,5 +199,55 @@ describe("tarifaParaSnapshot — validación por empresa/ruta/activa (§2/§5)",
   it("devuelve el snapshot mínimo cuando la tarifa es válida", async () => {
     vi.mocked(query).mockResolvedValue([{ id: 5, nombre: "Tarifa lluvia", monto: 1800, moneda: "GTQ" }] as never);
     expect(await tarifaParaSnapshot(7, 44, 5)).toEqual({ id: 5, nombre: "Tarifa lluvia", monto: 1800, moneda: "GTQ" });
+  });
+});
+
+describe("tarifaParaSnapshot — misma regla de vigencia que el selector (tarifasActivasDeVariasRutas)", () => {
+  type Fila = { id: number; empresa_id: number; ruta_id: number; activa: number; vigente_hasta: string | null };
+  const HOY = "2026-09-24";
+  const filas: Fila[] = [
+    { id: 1, empresa_id: 7, ruta_id: 44, activa: 1, vigente_hasta: "2099-01-01" }, // vigente
+    { id: 2, empresa_id: 7, ruta_id: 44, activa: 1, vigente_hasta: null }, // sin vencimiento
+    { id: 3, empresa_id: 7, ruta_id: 44, activa: 1, vigente_hasta: "2026-09-23" }, // vencida
+    { id: 4, empresa_id: 7, ruta_id: 44, activa: 0, vigente_hasta: null }, // inactiva
+    { id: 5, empresa_id: 7, ruta_id: 99, activa: 1, vigente_hasta: null }, // de otra ruta
+    { id: 6, empresa_id: 8, ruta_id: 44, activa: 1, vigente_hasta: null }, // de otra empresa
+    { id: 7, empresa_id: 7, ruta_id: 44, activa: 1, vigente_hasta: HOY }, // vence hoy: aún vigente
+  ];
+  // Emula el WHERE ENVIADO: si el SQL no trae la regla de vigencia, no se aplica (el test lo detectaría).
+  const emular = (sql: string, params: unknown[]) => {
+    const [id, empresa, ruta] = params as number[];
+    return filas
+      .filter((f) => f.id === id && f.empresa_id === empresa && f.ruta_id === ruta)
+      .filter((f) => !sql.includes("activa = 1") || f.activa === 1)
+      .filter((f) => !sql.includes("(vigente_hasta IS NULL OR vigente_hasta >= CURDATE())") || f.vigente_hasta == null || f.vigente_hasta >= HOY)
+      .map((f) => ({ id: f.id, nombre: `T${f.id}`, monto: 100, moneda: "GTQ" }));
+  };
+  const conConn = { query: async (sql: string, params: unknown[]) => [emular(sql, params)] };
+
+  beforeEach(() => {
+    vi.mocked(query).mockImplementation((async (sql: string, params: unknown[]) => emular(String(sql), params)) as never);
+  });
+
+  const casos: [string, number, number, number, boolean][] = [
+    ["1) activa y vigente -> aceptada", 7, 44, 1, true],
+    ["2) activa con vigente_hasta NULL -> aceptada", 7, 44, 2, true],
+    ["3) activa pero vencida -> rechazada", 7, 44, 3, false],
+    ["4) inactiva -> rechazada", 7, 44, 4, false],
+    ["5) de otra ruta -> rechazada", 7, 44, 5, false],
+    ["6) de otra empresa -> rechazada", 7, 44, 6, false],
+    ["7) vence hoy -> aún aceptada (>= CURDATE())", 7, 44, 7, true],
+  ];
+  for (const [nombre, empresa, ruta, id, ok] of casos) {
+    it(`${nombre} (pool y conn de la transacción)`, async () => {
+      const esperado = ok ? expect.objectContaining({ id }) : null;
+      expect(await tarifaParaSnapshot(empresa, ruta, id)).toEqual(esperado);
+      expect(await tarifaParaSnapshot(empresa, ruta, id, conConn)).toEqual(esperado);
+    });
+  }
+
+  it("la consulta de validación lleva la misma regla de vigencia que el selector", () => {
+    const fuente = readFileSync("src/lib/tms/ruta-tarifas.ts", "utf8");
+    expect(fuente.match(/\(vigente_hasta IS NULL OR vigente_hasta >= CURDATE\(\)\)/g)?.length).toBeGreaterThanOrEqual(2);
   });
 });

@@ -189,7 +189,8 @@ export async function tarifaParaSnapshot(
   conn?: { query: (sql: string, params: unknown[]) => Promise<unknown> },
 ): Promise<{ id: number; nombre: string; monto: number; moneda: string } | null> {
   const sql = `SELECT id, nombre, monto, moneda FROM tms_ruta_tarifas
-     WHERE id = ? AND empresa_id = ? AND ruta_id = ? AND activa = 1 LIMIT 1`;
+     WHERE id = ? AND empresa_id = ? AND ruta_id = ? AND activa = 1
+       AND (vigente_hasta IS NULL OR vigente_hasta >= CURDATE()) LIMIT 1`;
   const params = [tarifaId, empresaId, rutaId];
   const rows = conn
     ? ((await conn.query(sql, params)) as [RowDataPacket[]])[0]
