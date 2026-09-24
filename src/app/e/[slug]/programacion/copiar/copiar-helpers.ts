@@ -19,6 +19,43 @@ export type CambiosFila = Partial<Pick<BorradorLote, "horaCarga" | "unidadPlaca"
 
 export const MAX_AUXILIARES_UI = 8;
 
+/**
+ * Fila recién cargada del origen: nace DESMARCADA (`incluida: false`). El usuario va MARCANDO solo lo que quiere
+ * copiar; la validación que trae la carga (calculada para todo el origen) se muestra como información, pero no cuenta
+ * hasta que la fila se marca y se revalida junto con la selección.
+ */
+export function filaDesdeCarga(f: { origen: OrigenFila; advertencias: string[]; borrador: BorradorLote; validacion: ResultadoFilaLote | null }): FilaEditable {
+  return { incluida: false, origen: f.origen, advertencias: f.advertencias, borrador: f.borrador, validacion: f.validacion, sucia: false };
+}
+
+/** ¿Alguna fila SELECCIONADA depende de las demás (colisión dentro del lote)? Su resultado quedó viejo al cambiar la selección. */
+const dependeDelLote = (f: FilaEditable) => f.validacion?.errores.some((e) => e.includes("de este mismo lote")) ?? false;
+
+/**
+ * Marca/desmarca UNA fila. Marcar: la fila entra a la siguiente validación (y las ya seleccionadas se revalidan, porque
+ * pueden chocar con la nueva). Desmarcar: la fila deja de afectar el estado global INMEDIATAMENTE (puedeConfirmar solo
+ * mira las seleccionadas); su información visual no se borra; las demás solo se revalidan si sus errores venían de
+ * chocar dentro del lote (podrían haber sido con la fila que se quitó).
+ */
+export function alternarSeleccion(filas: FilaEditable[], indice: number): FilaEditable[] {
+  const marcando = !filas[indice].incluida;
+  return filas.map((f, i) => {
+    if (i === indice) return marcando ? { ...f, incluida: true, sucia: true } : { ...f, incluida: false, sucia: false };
+    if (!f.incluida) return f;
+    return marcando || dependeDelLote(f) ? { ...f, sucia: true, validacion: null } : f;
+  });
+}
+
+/** Marca TODAS las filas (no filtra por válidas: el usuario decide y luego la validación muestra los errores). */
+export function seleccionarTodos(filas: FilaEditable[]): FilaEditable[] {
+  return filas.map((f) => ({ ...f, incluida: true, sucia: true, validacion: f.incluida ? null : f.validacion }));
+}
+
+/** Deja 0 seleccionadas sin borrar ni recargar la programación (la información visual de cada fila se conserva). */
+export function limpiarSeleccion(filas: FilaEditable[]): FilaEditable[] {
+  return filas.map((f) => ({ ...f, incluida: false, sucia: false }));
+}
+
 export function filasIncluidas(filas: FilaEditable[]): FilaEditable[] {
   return filas.filter((f) => f.incluida);
 }
