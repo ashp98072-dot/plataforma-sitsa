@@ -51,9 +51,9 @@ describe("plan-form.tsx — Unidad y TC son selectores distintos (nunca mezclado
     expect(bloque).toContain("Opcional");
   });
 
-  it("la ocupación del TC sale de la MISMA consulta diaria (disponibilidad-recursos) y se asocia a su fecha", () => {
+  it("la ocupación del TC sale de la MISMA consulta por intervalos (disponibilidad-recursos) y se asocia a su ventana", () => {
     expect(planForm).toContain("tcs: (data.tcs ?? {}) as Record<string, OcupacionRecurso>");
-    expect(planForm).toContain("const ocupacionTcs = ocupacionDia.fecha === form.fechaPlan ? ocupacionDia.tcs : {};");
+    expect(planForm).toContain("const ocupacionTcs = ocupacionDia.fecha === ventanaDisponibilidad ? ocupacionDia.tcs : {};");
   });
 
   it("el catálogo conserva id y tipoUnidad de cada vehículo (necesarios para separar y para mandar tcVehiculoId)", () => {

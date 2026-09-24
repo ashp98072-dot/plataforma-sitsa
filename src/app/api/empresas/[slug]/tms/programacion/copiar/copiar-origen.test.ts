@@ -51,9 +51,9 @@ beforeEach(() => {
       const [emp, fecha] = params as [number, string];
       return planes.filter((p) => p.empresa_id === emp && p.fecha === fecha && p.estado !== "Cancelado").map((p) => ({ id: p.id, codigo: `P${p.id}`, estado: p.estado }));
     }
-    if (s.includes("SELECT id FROM tms_planes_viaje WHERE empresa_id = ? AND fecha_plan = ?")) {
+    if (s.includes("FROM tms_planes_viaje WHERE empresa_id = ? AND fecha_plan = ?") && s.includes("DATE_FORMAT(regreso_estimado")) {
       const [emp, fecha, ...ids] = params as [number, string, ...number[]];
-      return planes.filter((p) => p.empresa_id === emp && p.fecha === fecha && (!s.includes("estado <> 'Cancelado'") || p.estado !== "Cancelado") && ids.includes(p.id)).map((p) => ({ id: p.id }));
+      return planes.filter((p) => p.empresa_id === emp && p.fecha === fecha && (!s.includes("estado <> 'Cancelado'") || p.estado !== "Cancelado") && ids.includes(p.id)).map((p) => ({ id: p.id, hora_carga: null, regreso_estimado: null }));
     }
     return [];
   }) as never);

@@ -244,3 +244,65 @@ export async function primerConflictoProgramacionIntervalo(
   }
   return null;
 }
+
+// ---------------------------------------------------------------------------------------------- lectura / buscadores
+export type OcupacionIntervalo = { planId: number; planCodigo: string; horaInicio: string; horaFin: null };
+
+/**
+ * A2.2 — ocupación de TODOS los recursos de la empresa frente a la ventana consultada (buscadores de Programación).
+ * Misma política que `primerConflictoProgramacionIntervalo`: mismos estados, mismo predicado de ventana, misma
+ * comparación de intervalos (semiabiertos; sin hora o sin regreso = todo fecha_plan) y misma exclusión de planes.
+ * Forma de la respuesta = contrato de `listarDisponibilidadProgramacionDia`: personal por `empleados.id`
+ * (`tms_personal.id_empleado`, equivalencia entre filas del mismo empleado), unidades y TC por placa en mayúsculas.
+ */
+export async function listarOcupacionProgramacionIntervalo(
+  empresaId: number,
+  ventana: VentanaProgramacion,
+  excluirPlanIds: readonly number[],
+): Promise<{ personal: Map<number, OcupacionIntervalo>; unidades: Map<string, OcupacionIntervalo>; tcs: Map<string, OcupacionIntervalo> }> {
+  const ventanaSegura = ventanaProgramacionSegura(ventana);
+  const intervaloConsulta = intervaloProgramacion(ventanaSegura);
+  const excluidos = normalizarPlanesExcluidos(excluirPlanIds);
+  const excluirSql = excluidos.length ? ` AND p.id NOT IN (${Array(excluidos.length).fill("?").join(",")})` : "";
+  const base: SqlParams = [empresaId, ...ESTADOS_ASIGNACION_DIARIA, intervaloConsulta.fin.slice(0, 10), intervaloConsulta.inicio.slice(0, 10), intervaloConsulta.inicio];
+  const [personas, unidades, tcs] = await Promise.all([
+    query<Candidato[]>(
+      `${columnas("tp.id_empleado", "tp.nombre")}
+       FROM tms_personal tp
+       INNER JOIN tms_personal eq ON eq.empresa_id = tp.empresa_id
+         AND (eq.id = tp.id OR (tp.id_empleado IS NOT NULL AND eq.id_empleado = tp.id_empleado))
+       INNER JOIN tms_planes_viaje p ON p.empresa_id = tp.empresa_id
+         AND (p.piloto_id = eq.id OR p.auxiliar_id = eq.id OR EXISTS (
+           SELECT 1 FROM tms_plan_auxiliares pa WHERE pa.plan_id = p.id AND pa.personal_id = eq.id))
+       WHERE ${ventanaSql} AND tp.empresa_id = ? AND tp.id_empleado IS NOT NULL${excluirSql}
+       ORDER BY p.fecha_plan, p.id`,
+      [...base, empresaId, ...excluidos],
+    ),
+    query<Candidato[]>(
+      `${columnas("u.placa", "u.placa")}
+       FROM tms_unidades u
+       INNER JOIN tms_planes_viaje p ON p.empresa_id = u.empresa_id AND p.unidad_id = u.id
+       WHERE ${ventanaSql}${excluirSql}
+       ORDER BY p.fecha_plan, p.id`,
+      [...base, ...excluidos],
+    ),
+    query<Candidato[]>(
+      `${columnas("v.placa", "v.placa")}
+       FROM flota_vehiculos v
+       INNER JOIN tms_planes_viaje p ON p.tc_vehiculo_id = v.id
+       WHERE ${ventanaSql}${excluirSql}
+       ORDER BY p.fecha_plan, p.id`,
+      [...base, ...excluidos],
+    ).catch((): Candidato[] => []), // catálogo de TC aún no migrado: como en la política diaria
+  ]);
+  const ocupacion = (f: Candidato): OcupacionIntervalo => ({ planId: Number(f.plan_id), planCodigo: String(f.codigo), horaInicio: "", horaFin: null });
+  const choca = (f: Candidato) => seSolapaConOcupacionReal(intervaloCandidato(f), intervaloConsulta);
+  const personal = new Map<number, OcupacionIntervalo>();
+  for (const f of personas) if (choca(f) && !personal.has(Number(f.recurso_id))) personal.set(Number(f.recurso_id), ocupacion(f));
+  const porPlaca = (filas: Candidato[]) => {
+    const m = new Map<string, OcupacionIntervalo>();
+    for (const f of filas) { const placa = String(f.recurso_id).toUpperCase(); if (choca(f) && !m.has(placa)) m.set(placa, ocupacion(f)); }
+    return m;
+  };
+  return { personal, unidades: porPlaca(unidades), tcs: porPlaca(tcs) };
+}

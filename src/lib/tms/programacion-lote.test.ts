@@ -40,7 +40,7 @@ const DESTINO = "2026-09-25";
 type Plan = {
   id: number; empresa_id: number; codigo: string; estado: string; fecha: string; cliente_id: number | null; unidad_id: number | null; piloto_id: number | null;
   auxiliar_id: number | null; aux: number[]; tc_vehiculo_id: number | null; tipo_viaje: string; ruta_id: number | null;
-  hora: string | null; tarifa_comercial: number | null; tarifa_id: number | null; tarifa_nombre: string | null; tc_placa: string | null;
+  hora: string | null; regreso?: string | null; tarifa_comercial: number | null; tarifa_id: number | null; tarifa_nombre: string | null; tc_placa: string | null;
   tc_externo: string | null; piloto_externo: string | null; unidad_ext: string | null; cerrado_por?: string | null;
 };
 type Estado = {
@@ -141,19 +141,27 @@ beforeEach(() => {
     if (s.includes("FROM empleados WHERE empresa_id = ? AND id IN")) { const [emp, ...ids] = params as number[]; return emp === EMP ? ids.map((i) => empleados[i]).filter(Boolean) : []; }
     if (s.includes("FROM tms_personal WHERE empresa_id = ? AND id_empleado IN")) { const [, ...ids] = params as number[]; return e.personal.filter((p) => ids.includes(p.id_empleado)).map((p) => ({ id: p.id, tipo: "Piloto", id_empleado: p.id_empleado })); }
     if (s.includes("SELECT id, placa FROM tms_unidades")) return e.unidades;
-    // política de disponibilidad diaria (REAL): personal / unidad / TC
-    const [emp, fecha, ...resto] = params as [number, string, ...unknown[]];
-    const ids = resto.slice(ESTADOS_ASIGNACION_DIARIA.length).filter((x): x is number => typeof x === "number");
-    const ocupa = (p: Plan) => p.empresa_id === emp && p.fecha === fecha && (ESTADOS_ASIGNACION_DIARIA as readonly string[]).includes(p.estado);
+    // A2.2 — política de disponibilidad por INTERVALOS (REAL): personal / unidad / TC. Emula el predicado de ventana
+    // (fecha_plan <= fin, y fecha_plan >= inicio o regreso > inicio); la decisión de solape es del código de producción.
+    const n = ESTADOS_ASIGNACION_DIARIA.length;
+    const emp = Number(params[0]);
+    const fechaFin = String(params[1 + n]);
+    const fechaInicio = String(params[2 + n]);
+    const inicioVentana = String(params[3 + n]);
+    const nEx = (/p\.id NOT IN \(([?,]+)\)/.exec(s)?.[1].split(",").length) ?? 0;
+    const excl = (nEx ? params.slice(-nEx) : []) as number[];
+    const ids = params.slice(s.includes("FROM tms_personal tp") ? 5 + n : 4 + n, params.length - nEx).filter((x): x is number => typeof x === "number");
+    const ocupa = (p: Plan) => p.empresa_id === emp && (ESTADOS_ASIGNACION_DIARIA as readonly string[]).includes(p.estado) && !excl.includes(p.id)
+      && p.fecha <= fechaFin && (p.fecha >= fechaInicio || (p.regreso != null && p.regreso > inicioVentana));
+    const fila = (p: Plan, recurso_id: unknown, nombre: unknown) => ({ recurso_id, nombre, plan_id: p.id, codigo: p.codigo, fecha_plan: p.fecha, hora_carga: p.hora, regreso_estimado: p.regreso ?? null });
     if (s.includes("FROM tms_personal tp")) {
       return e.personal.filter((tp) => ids.includes(tp.id)).flatMap((tp) => {
         const eq = new Set(e.personal.filter((x) => x.id === tp.id || x.id_empleado === tp.id_empleado).map((x) => x.id));
-        return e.planes.filter((p) => ocupa(p) && ((p.piloto_id != null && eq.has(p.piloto_id)) || p.aux.some((a) => eq.has(a))))
-          .map((p) => ({ recurso_id: tp.id, nombre: tp.nombre, plan_id: p.id, codigo: p.codigo, fecha }));
+        return e.planes.filter((p) => ocupa(p) && ((p.piloto_id != null && eq.has(p.piloto_id)) || p.aux.some((a) => eq.has(a)))).map((p) => fila(p, tp.id, tp.nombre));
       });
     }
-    if (s.includes("FROM tms_unidades u")) return e.planes.filter((p) => ocupa(p) && p.unidad_id != null && ids.includes(p.unidad_id)).map((p) => ({ recurso_id: p.unidad_id, nombre: e.unidades.find((u) => u.id === p.unidad_id)?.placa, plan_id: p.id, codigo: p.codigo, fecha }));
-    if (s.includes("p.tc_vehiculo_id = v.id")) return e.planes.filter((p) => ocupa(p) && p.tc_vehiculo_id != null && ids.includes(p.tc_vehiculo_id)).map((p) => ({ recurso_id: p.tc_vehiculo_id, nombre: flota[p.tc_vehiculo_id as number].placa, plan_id: p.id, codigo: p.codigo, fecha }));
+    if (s.includes("FROM tms_unidades u")) return e.planes.filter((p) => ocupa(p) && p.unidad_id != null && ids.includes(p.unidad_id)).map((p) => fila(p, p.unidad_id, e.unidades.find((u) => u.id === p.unidad_id)?.placa));
+    if (s.includes("p.tc_vehiculo_id = v.id")) return e.planes.filter((p) => ocupa(p) && p.tc_vehiculo_id != null && ids.includes(p.tc_vehiculo_id)).map((p) => fila(p, p.tc_vehiculo_id, flota[p.tc_vehiculo_id as number]?.placa));
     return [];
   }) as never);
 
@@ -172,8 +180,8 @@ beforeEach(() => {
     if (s.includes("INSERT INTO tms_planes_viaje")) {
       const id = e.sigPlan++;
       e.planes.push(plan({ id, codigo: p[1] as string, cliente_id: p[2] as number | null, unidad_id: p[5] as number | null, piloto_id: p[6] as number | null, auxiliar_id: p[7] as number | null,
-        fecha: p[8] as string, hora: p[9] as string | null, tarifa_comercial: p[11] as number | null, tarifa_id: p[12] as number | null, tarifa_nombre: p[13] as string | null, ruta_id: p[16] as number | null,
-        tipo_viaje: p[22] as string, piloto_externo: p[23] as string | null, unidad_ext: p[25] as string | null, tc_vehiculo_id: p[29] as number | null, tc_placa: p[30] as string | null, tc_externo: p[31] as string | null,
+        fecha: p[8] as string, hora: p[9] as string | null, regreso: p[11] as string | null, tarifa_comercial: p[12] as number | null, tarifa_id: p[13] as number | null, tarifa_nombre: p[14] as string | null, ruta_id: p[17] as number | null,
+        tipo_viaje: p[23] as string, piloto_externo: p[24] as string | null, unidad_ext: p[26] as string | null, tc_vehiculo_id: p[30] as number | null, tc_placa: p[31] as string | null, tc_externo: p[32] as string | null,
         aux: [] }));
       return [{ insertId: id }];
     }
@@ -460,7 +468,7 @@ describe("anti-duplicado (origen + fecha destino) y trazabilidad", () => {
 // ------------------------------------------------------------------ copiar: origen -> borradores
 describe("copiar programación de otra fecha", () => {
   const origenRow = (over: Record<string, unknown> = {}) => ({
-    id: 900, codigo: "PLAN-20260924-001", estado: "Cerrado", cliente_id: 3, cliente_nombre: "Acme", ruta_id: 10, ruta_codigo_historico: "1001", hora_carga: "03:00:00", tipo_traslado: "Carga",
+    id: 900, codigo: "PLAN-20260924-001", estado: "Cerrado", cliente_id: 3, cliente_nombre: "Acme", ruta_id: 10, ruta_codigo_historico: "1001", hora_carga: "03:00:00", regreso_estimado: null, tipo_traslado: "Carga",
     tipo_viaje: "Propio", unidad_placa: "P-1", tc_vehiculo_id: 31, tc_placa_historica: "TC-1", tc_externo_placa: null, piloto_empleado_id: 1, piloto_nombre: "Juan Pérez",
     aux1_empleado_id: null, aux1_nombre: null, piloto_externo_nombre: null, auxiliares_externos: null, unidad_externa_placa: null, unidad_externa_descripcion: null,
     transportista_externo: null, costo_tercerizado: null,
@@ -487,7 +495,7 @@ describe("copiar programación de otra fecha", () => {
     const aux = Array.from({ length: 8 }, (_, i) => ({ plan_id: 900, orden: i + 1, id_empleado: 20 + i, nombre: `Aux ${i}` }));
     const [f] = await cargar([origenRow()], aux);
     expect(f.borrador).toEqual({
-      fila: 1, origenPlanId: 900, rutaId: 10, clienteId: 3, horaCarga: "03:00", tipoTraslado: "Carga", tipoViaje: "Propio", unidadPlaca: "P-1", tcVehiculoId: 31,
+      fila: 1, origenPlanId: 900, rutaId: 10, clienteId: 3, horaCarga: "03:00", regresoOffsetDias: null, regresoHora: null, tipoTraslado: "Carga", tipoViaje: "Propio", unidadPlaca: "P-1", tcVehiculoId: 31,
       pilotoEmpleadoId: 1, auxiliarEmpleadoIds: [20, 21, 22, 23, 24, 25, 26, 27], tarifaId: null, externo: null,
       paradas: [{ lugarNombre: "Bodega", tipo: "Carga", requiereEvidencia: true }, { lugarNombre: "Xela", tipo: "Descarga", requiereEvidencia: true }],
     });
@@ -535,9 +543,9 @@ describe("copiar programación de otra fecha", () => {
     const base = vi.mocked(query).getMockImplementation() as unknown as (s: string, p: unknown[]) => Promise<unknown>;
     vi.mocked(query).mockImplementation((async (sql: string, params: unknown[]) => {
       const s = String(sql);
-      if (s.includes("SELECT id FROM tms_planes_viaje WHERE empresa_id = ? AND fecha_plan = ?")) {
+      if (s.includes("FROM tms_planes_viaje WHERE empresa_id = ? AND fecha_plan = ?") && s.includes("DATE_FORMAT(regreso_estimado")) {
         const [emp, fecha, ...ids] = params as [number, string, ...number[]];
-        return origenes.filter((o) => o.empresa_id === emp && o.fecha === fecha && (!s.includes("estado <> 'Cancelado'") || o.estado !== "Cancelado") && ids.includes(o.id)).map((o) => ({ id: o.id }));
+        return origenes.filter((o) => o.empresa_id === emp && o.fecha === fecha && (!s.includes("estado <> 'Cancelado'") || o.estado !== "Cancelado") && ids.includes(o.id)).map((o) => ({ id: o.id, hora_carga: null, regreso_estimado: null }));
       }
       return base(sql, params);
     }) as never);
@@ -558,7 +566,7 @@ describe("copiar programación de otra fecha", () => {
     const r = await desde([902]);
     expect(r).toEqual({ ok: false, error: "Algún viaje origen no existe, está cancelado o no pertenece a la fecha/empresa indicada." });
     expect((await desde([900, 902])).ok).toBe(false); // uno bueno + uno cancelado: se rechaza el lote
-    expect(String(vi.mocked(query).mock.calls.find(([s]) => String(s).includes("SELECT id FROM tms_planes_viaje WHERE empresa_id = ?"))![0])).toContain("estado <> 'Cancelado'");
+    expect(String(vi.mocked(query).mock.calls.find(([s]) => String(s).includes("FROM tms_planes_viaje WHERE empresa_id = ? AND fecha_plan = ?") && String(s).includes("DATE_FORMAT(regreso_estimado"))![0])).toContain("estado <> 'Cancelado'");
   });
 
   it("origen CERRADO sigue siendo válido (lo que se copia es configuración, no estado)", async () => {
@@ -582,5 +590,320 @@ describe("copiar programación de otra fecha", () => {
     expect((await desde([900])).ok).toBe(true); // el origen (no cancelado) sigue válido
     expect((await confirmar([borrador({ origenPlanId: 900 })])).ok).toBe(true); // nueva copia permitida
     expect(e.origen).toHaveLength(2);
+  });
+});
+
+// ------------------------------------------------------------------ A2.2: política por INTERVALOS en Copiar / lote
+import { calcularTrasladoRegreso, regresoTrasladado, sumarDiasFecha } from "./programacion-copia-ventana";
+
+/** Fila con ventana explícita: hora de carga + regreso trasladado (desfase en días desde la fecha_plan del origen + hora). */
+const conVentana = (fila: number, hora: string | null, regreso: { dias: number; hora: string } | null, over: Partial<BorradorLote> = {}): BorradorLote =>
+  borrador({
+    fila, origenPlanId: 900 + fila, horaCarga: hora, regresoOffsetDias: regreso ? regreso.dias : null, regresoHora: regreso ? regreso.hora : null,
+    unidadPlaca: null, pilotoEmpleadoId: 1 + fila, auxiliarEmpleadoIds: [], ...over,
+  });
+const estados = async (b: BorradorLote[], fecha = DESTINO) => (await validarLote(EMP, fecha, b)).map((r) => r.estado);
+
+describe("A2.2 lote: colisiones DENTRO del lote por ventanas (no por día)", () => {
+  const mismoPiloto = { pilotoEmpleadoId: 1 };
+
+  it("1/4) dos filas secuenciales del mismo recurso: permitido, incluido el borde exacto fin == inicio", async () => {
+    expect(await estados([conVentana(1, "05:00", { dias: 0, hora: "08:00" }, mismoPiloto), conVentana(2, "08:00", { dias: 0, hora: "11:00" }, mismoPiloto)])).toEqual(["ok", "ok"]);
+  });
+
+  it("2) solape de 1 minuto: bloqueado en AMBAS filas con el mensaje de siempre", async () => {
+    const r = await validarLote(EMP, DESTINO, [conVentana(1, "05:00", { dias: 0, hora: "08:00" }, mismoPiloto), conVentana(2, "07:59", { dias: 0, hora: "11:00" }, mismoPiloto)]);
+    expect(r.map((x) => x.estado)).toEqual(["error", "error"]);
+    expect(r[0].errores[0]).toBe("Juan Pérez está asignado también en la fila 2 de este mismo lote.");
+  });
+
+  it("3) cruce de medianoche dentro del lote: 22:00 -> 02:00 (+1 día) choca con una fila 23:00 y NO con una 01:00 -> 04:00 del mismo día", async () => {
+    const noche = conVentana(1, "22:00", { dias: 1, hora: "02:00" }, mismoPiloto);
+    expect(await estados([noche, conVentana(2, "23:00", { dias: 1, hora: "01:00" }, mismoPiloto)])).toEqual(["error", "error"]);
+    expect(await estados([noche, conVentana(2, "01:00", { dias: 0, hora: "04:00" }, mismoPiloto)])).toEqual(["ok", "ok"]);
+  });
+
+  it("5) sin regreso: reserva TODO el día y choca con cualquier fila del mismo recurso ese día", async () => {
+    expect(await estados([conVentana(1, "05:00", null, mismoPiloto), conVentana(2, "20:00", { dias: 0, hora: "22:00" }, mismoPiloto)])).toEqual(["error", "error"]);
+  });
+
+  it("6) sin hora de carga: reserva TODO el día aunque traiga regreso", async () => {
+    expect(await estados([conVentana(1, null, { dias: 0, hora: "08:00" }, mismoPiloto), conVentana(2, "20:00", { dias: 0, hora: "22:00" }, mismoPiloto)])).toEqual(["error", "error"]);
+  });
+
+  it("7) la misma persona como piloto en una fila y auxiliar en otra: conflicto solo si las ventanas se solapan", async () => {
+    const a = conVentana(1, "05:00", { dias: 0, hora: "08:00" }, { pilotoEmpleadoId: 1 });
+    expect(await estados([a, conVentana(2, "07:00", { dias: 0, hora: "10:00" }, { pilotoEmpleadoId: 2, auxiliarEmpleadoIds: [1] })])).toEqual(["error", "error"]);
+    expect(await estados([a, conVentana(2, "08:00", { dias: 0, hora: "10:00" }, { pilotoEmpleadoId: 2, auxiliarEmpleadoIds: [1] })])).toEqual(["ok", "ok"]);
+  });
+
+  it("8) auxiliares adicionales (hasta 8) usan la misma comparación", async () => {
+    const a = conVentana(1, "05:00", { dias: 0, hora: "08:00" }, { pilotoEmpleadoId: 1, auxiliarEmpleadoIds: [20, 21, 22] });
+    expect(await estados([a, conVentana(2, "06:00", { dias: 0, hora: "09:00" }, { pilotoEmpleadoId: 2, auxiliarEmpleadoIds: [28, 22] })])).toEqual(["error", "error"]);
+    expect(await estados([a, conVentana(2, "08:00", { dias: 0, hora: "09:00" }, { pilotoEmpleadoId: 2, auxiliarEmpleadoIds: [28, 22] })])).toEqual(["ok", "ok"]);
+  });
+
+  it("9) unidad: misma placa, ventanas solapadas => conflicto; secuenciales => ok", async () => {
+    const u = (fila: number, h: string, r: string) => conVentana(fila, h, { dias: 0, hora: r }, { unidadPlaca: "P-1" });
+    expect(await estados([u(1, "05:00", "08:00"), u(2, "07:59", "10:00")])).toEqual(["error", "error"]);
+    expect(await estados([u(1, "05:00", "08:00"), u(2, "08:00", "10:00")])).toEqual(["ok", "ok"]);
+  });
+
+  it("10) TC: misma semántica temporal que la unidad", async () => {
+    const t = (fila: number, h: string, r: string) => conVentana(fila, h, { dias: 0, hora: r }, { tcVehiculoId: 31 });
+    expect(await estados([t(1, "05:00", "08:00"), t(2, "07:59", "10:00")])).toEqual(["error", "error"]);
+    expect(await estados([t(1, "05:00", "08:00"), t(2, "08:00", "10:00")])).toEqual(["ok", "ok"]);
+  });
+
+  it("11) Tercerizado no consume recursos internos: ni colisiona en el lote ni consulta disponibilidad", async () => {
+    const ext = (fila: number) => borrador({
+      fila, origenPlanId: 900 + fila, tipoViaje: "Tercerizado", unidadPlaca: null, pilotoEmpleadoId: null, auxiliarEmpleadoIds: [], horaCarga: "05:00",
+      externo: { pilotoExternoNombre: "Externo", auxiliaresExternos: [], unidadExternaPlaca: "EXT-1", unidadExternaDescripcion: "", transportistaExterno: "T", costoTercerizado: null, tcExternoPlaca: "" },
+    });
+    vi.mocked(query).mockClear();
+    expect(await estados([ext(1), ext(2)])).toEqual(["ok", "ok"]);
+    expect(vi.mocked(query).mock.calls.filter(([s]) => String(s).includes("FROM tms_personal tp") || String(s).includes("FROM tms_unidades u"))).toHaveLength(0);
+  });
+});
+
+describe("A2.2 lote: validación contra BD con la ventana DESTINO trasladada", () => {
+  const existente = (over: Partial<Plan> = {}) => plan({ id: 50, codigo: "PLAN-50", piloto_id: 501, fecha: DESTINO, hora: "05:00", regreso: `${DESTINO} 08:00:00`, ...over });
+
+  it("05:00-08:00 existente: la fila 08:00-11:00 pasa y la 07:59-11:00 choca (piloto)", async () => {
+    e.planes.push(existente());
+    expect(await estados([conVentana(1, "08:00", { dias: 0, hora: "11:00" }, { pilotoEmpleadoId: 1 })])).toEqual(["ok"]);
+    const r = await validarLote(EMP, DESTINO, [conVentana(1, "07:59", { dias: 0, hora: "11:00" }, { pilotoEmpleadoId: 1 })]);
+    expect(r[0]).toMatchObject({ estado: "error", errores: ["El piloto Juan Pérez ya está asignado al PLAN-50 para el 25/09/2026."] });
+  });
+
+  it("cruce de medianoche contra BD: existente de ayer 22:00 -> hoy 02:00; fila 01:00 choca, 02:00 no", async () => {
+    e.planes.push(existente({ fecha: ORIGEN, hora: "22:00", regreso: `${DESTINO} 02:00:00` }));
+    expect(await estados([conVentana(1, "01:00", { dias: 0, hora: "04:00" }, { pilotoEmpleadoId: 1 })])).toEqual(["error"]);
+    expect(await estados([conVentana(1, "02:00", { dias: 0, hora: "05:00" }, { pilotoEmpleadoId: 1 })])).toEqual(["ok"]);
+  });
+
+  it("existente SIN regreso (o sin hora) reserva todo su día: la fila choca aunque sea de otra hora, y no toca el día siguiente", async () => {
+    e.planes.push(existente({ regreso: null }));
+    expect(await estados([conVentana(1, "20:00", { dias: 0, hora: "22:00" }, { pilotoEmpleadoId: 1 })])).toEqual(["error"]);
+    expect(await estados([conVentana(1, "01:00", { dias: 0, hora: "03:00" }, { pilotoEmpleadoId: 1 })], "2026-09-26")).toEqual(["ok"]);
+  });
+
+  it("auxiliar, unidad y TC contra BD usan la misma comparación (07:59 choca, 08:00 pasa)", async () => {
+    e.planes.push(existente({ piloto_id: null, aux: [502], unidad_id: 601, tc_vehiculo_id: 31 }));
+    for (const recurso of [{ pilotoEmpleadoId: 3, auxiliarEmpleadoIds: [2] }, { unidadPlaca: "P-1" }, { tcVehiculoId: 31 }]) {
+      expect(await estados([conVentana(1, "07:59", { dias: 0, hora: "10:00" }, recurso)])).toEqual(["error"]);
+      expect(await estados([conVentana(1, "08:00", { dias: 0, hora: "10:00" }, recurso)])).toEqual(["ok"]);
+    }
+  });
+
+  it("un plan Cancelado no bloquea; uno Cerrado sigue reservando su ventana", async () => {
+    e.planes.push(existente({ estado: "Cancelado" }));
+    expect(await estados([conVentana(1, "06:00", { dias: 0, hora: "07:00" }, { pilotoEmpleadoId: 1 })])).toEqual(["ok"]);
+    e.planes[e.planes.length - 1].estado = "Cerrado";
+    expect(await estados([conVentana(1, "06:00", { dias: 0, hora: "07:00" }, { pilotoEmpleadoId: 1 })])).toEqual(["error"]);
+  });
+
+  it("la consulta usa el motor por intervalos (ventana) y nunca la política diaria por fecha exacta", async () => {
+    vi.mocked(query).mockClear();
+    await estados([conVentana(1, "08:00", { dias: 0, hora: "11:00" }, { pilotoEmpleadoId: 1 })]);
+    const sql = vi.mocked(query).mock.calls.map(([s]) => String(s)).find((s) => s.includes("FROM tms_personal tp"))!;
+    expect(sql).toContain("p.fecha_plan <= ?");
+    expect(sql).not.toContain("p.fecha_plan = ?");
+  });
+
+  it("confirmar revalida bajo el candado y persiste el regreso TRASLADADO (no el literal del origen)", async () => {
+    const r = await confirmar([conVentana(1, "22:00", { dias: 1, hora: "02:00" }, { pilotoEmpleadoId: 1 })], "2026-09-30");
+    expect(r.ok).toBe(true);
+    const creado = e.planes.find((p) => p.id >= 1000)!;
+    expect([creado.fecha, creado.hora, creado.regreso]).toEqual(["2026-09-30", "22:00", "2026-10-01 02:00"]);
+  });
+
+  it("confirmar: un conflicto aparecido bajo el candado revierte todo el lote (todo o nada)", async () => {
+    e.planes.push(existente());
+    const r = await confirmar([conVentana(1, "10:00", { dias: 0, hora: "12:00" }, { pilotoEmpleadoId: 2 }), conVentana(2, "07:00", { dias: 0, hora: "09:00" }, { pilotoEmpleadoId: 1 })]);
+    expect(r.ok).toBe(false);
+    expect(e.planes.filter((p) => p.id >= 1000)).toHaveLength(0);
+  });
+});
+
+describe("A2.2 copiar: traslado del regreso estimado", () => {
+  it("12) mismo día: 24/09 -> 24/09 17:30 copiado al 30/09 => 30/09 17:30", () => {
+    const t = calcularTrasladoRegreso("2026-09-24", "08:00", "2026-09-24 17:30:00");
+    expect(t).toEqual({ offsetDias: 0, hora: "17:30" });
+    expect(regresoTrasladado("2026-09-30", t)).toBe("2026-09-30T17:30");
+  });
+
+  it("13) +1 día: 24/09 22:00 -> 25/09 02:00 copiado al 30/09 => 01/10 02:00 (NO 25/09)", () => {
+    const t = calcularTrasladoRegreso("2026-09-24", "22:00", "2026-09-25 02:00:00");
+    expect(t).toEqual({ offsetDias: 1, hora: "02:00" });
+    expect(regresoTrasladado("2026-09-30", t)).toBe("2026-10-01T02:00");
+  });
+
+  it("14) +2 días: 24/09 -> 26/09 05:00 copiado al 30/09 => 02/10 05:00", () => {
+    const t = calcularTrasladoRegreso("2026-09-24", "08:00", "2026-09-26T05:00");
+    expect(t).toEqual({ offsetDias: 2, hora: "05:00" });
+    expect(regresoTrasladado("2026-09-30", t)).toBe("2026-10-02T05:00");
+  });
+
+  it("15) cambio de mes (y febrero bisiesto)", () => {
+    expect(regresoTrasladado("2026-09-30", { offsetDias: 1, hora: "02:00" })).toBe("2026-10-01T02:00");
+    expect(regresoTrasladado("2028-02-28", { offsetDias: 1, hora: "02:00" })).toBe("2028-02-29T02:00");
+    expect(regresoTrasladado("2026-02-28", { offsetDias: 1, hora: "02:00" })).toBe("2026-03-01T02:00");
+  });
+
+  it("16) cambio de año", () => {
+    expect(regresoTrasladado("2026-12-31", { offsetDias: 1, hora: "02:00" })).toBe("2027-01-01T02:00");
+    expect(regresoTrasladado("2026-12-30", { offsetDias: 2, hora: "05:00" })).toBe("2027-01-01T05:00");
+    expect(sumarDiasFecha("2026-12-31", 1)).toBe("2027-01-01");
+  });
+
+  it("sin regreso (o incoherente) => null: la copia queda sin regreso (reserva diaria)", () => {
+    expect(calcularTrasladoRegreso("2026-09-24", "08:00", null)).toBeNull();
+    expect(calcularTrasladoRegreso("2026-09-24", "08:00", "")).toBeNull();
+    expect(calcularTrasladoRegreso("2026-09-24", "08:00", "2026-09-23 10:00:00")).toBeNull(); // antes de la fecha de salida
+    expect(calcularTrasladoRegreso("2026-09-24", "08:00", "basura")).toBeNull();
+    expect(regresoTrasladado("2026-09-30", null)).toBeNull();
+  });
+
+  const origenRow = (regreso: string | null) => ({
+    id: 900, codigo: "PLAN-20260924-001", estado: "Programado", cliente_id: 3, cliente_nombre: "Acme", ruta_id: 10, ruta_codigo_historico: "1001", hora_carga: "22:00:00", regreso_estimado: regreso, tipo_traslado: "Carga",
+    tipo_viaje: "Propio", unidad_placa: "P-1", tc_vehiculo_id: null, tc_placa_historica: null, tc_externo_placa: null, piloto_empleado_id: 1, piloto_nombre: "Juan Pérez",
+    aux1_empleado_id: null, aux1_nombre: null, piloto_externo_nombre: null, auxiliares_externos: null, unidad_externa_placa: null, unidad_externa_descripcion: null, transportista_externo: null, costo_tercerizado: null,
+  });
+  const cargarOrigen = async (regreso: string | null) => {
+    const base = vi.mocked(query).getMockImplementation() as unknown as (s: string, p: unknown[]) => Promise<unknown>;
+    vi.mocked(query).mockImplementation((async (sql: string, params: unknown[]) => {
+      const s = String(sql);
+      if (s.includes("LEFT JOIN tms_clientes c") && s.includes("p.fecha_plan = ?")) return [origenRow(regreso)];
+      if (s.includes("FROM tms_plan_auxiliares pa")) return [];
+      return base(sql, params);
+    }) as never);
+    return cargarCopiaDeFecha(EMP, ORIGEN);
+  };
+
+  it("la carga de la fecha origen deriva desfase y hora del regreso del ORIGEN (servidor)", async () => {
+    const [con] = await cargarOrigen("2026-09-25 02:00:00");
+    expect(con.borrador).toMatchObject({ horaCarga: "22:00", regresoOffsetDias: 1, regresoHora: "02:00" });
+    const [sin] = await cargarOrigen(null);
+    expect(sin.borrador).toMatchObject({ regresoOffsetDias: null, regresoHora: null });
+    expect(String(vi.mocked(query).mock.calls.find(([s]) => String(s).includes("LEFT JOIN tms_clientes c"))![0])).toContain("DATE_FORMAT(p.regreso_estimado");
+  });
+
+  it("borradoresDesdeCliente recalcula el traslado desde el origen y IGNORA lo que mande el cliente", async () => {
+    const base = vi.mocked(query).getMockImplementation() as unknown as (s: string, p: unknown[]) => Promise<unknown>;
+    vi.mocked(query).mockImplementation((async (sql: string, params: unknown[]) => {
+      if (String(sql).includes("FROM tms_planes_viaje WHERE empresa_id = ? AND fecha_plan = ?") && String(sql).includes("DATE_FORMAT(regreso_estimado")) return [{ id: 900, hora_carga: "03:00:00", regreso_estimado: "2026-09-26 05:00:00" }];
+      return base(sql, params);
+    }) as never);
+    const falso = { ...borrador({ origenPlanId: 900 }), regresoOffsetDias: 9, regresoHora: "23:59" } as never;
+    const r = await borradoresDesdeCliente(EMP, ORIGEN, [falso]);
+    expect(r.ok && r.borradores[0]).toMatchObject({ regresoOffsetDias: 2, regresoHora: "05:00" });
+  });
+
+  it("el cuerpo que arma la pantalla de Copiar no envía los campos de traslado (el esquema estricto los rechazaría)", async () => {
+    const { cuerpoLote } = await import("../../app/e/[slug]/programacion/copiar/copiar-helpers");
+    const cuerpo = cuerpoLote(ORIGEN, DESTINO, [{ incluida: true, origen: {} as never, advertencias: [], borrador: { ...borrador(), regresoOffsetDias: 1, regresoHora: "02:00" }, validacion: null, sucia: false }]);
+    const claves = Object.keys(cuerpo.filas[0]);
+    expect(claves).not.toContain("regresoOffsetDias");
+    expect(claves).not.toContain("regresoHora");
+    expect(claves).not.toContain("paradas");
+  });
+});
+
+// ------------------------------------------------------------------ A2.2 corrección: el traslado se valida contra la hora de carga
+import { regresoPersistidoDeBorrador, ventanaDeBorrador } from "./programacion-lote";
+
+describe("A2.2 traslado del regreso validado contra la hora de carga del origen", () => {
+  it("1) mismo día con regreso POSTERIOR a la salida: conserva +0 y la hora (05:00 -> 08:00)", () => {
+    expect(calcularTrasladoRegreso("2026-09-24", "05:00", "2026-09-24 08:00:00")).toEqual({ offsetDias: 0, hora: "08:00" });
+    expect(regresoTrasladado("2026-09-30", calcularTrasladoRegreso("2026-09-24", "05:00:00", "2026-09-24 08:00:00"))).toBe("2026-09-30T08:00");
+  });
+
+  it("2) mismo día con regreso ANTERIOR a la salida (22:00 -> 02:00 del mismo día): null", () => {
+    expect(calcularTrasladoRegreso("2026-09-24", "22:00", "2026-09-24 02:00:00")).toBeNull();
+  });
+
+  it("3) regreso IGUAL a la salida: null (también 1 minuto antes; 1 minuto después se conserva)", () => {
+    expect(calcularTrasladoRegreso("2026-09-24", "05:00", "2026-09-24 05:00:00")).toBeNull();
+    expect(calcularTrasladoRegreso("2026-09-24", "05:00", "2026-09-24 04:59:00")).toBeNull();
+    expect(calcularTrasladoRegreso("2026-09-24", "05:00", "2026-09-24 05:01:00")).toEqual({ offsetDias: 0, hora: "05:01" });
+  });
+
+  it("4) cruce de medianoche válido: 22:00 -> 25/09 02:00 = +1 día, 02:00", () => {
+    expect(calcularTrasladoRegreso("2026-09-24", "22:00", "2026-09-25 02:00:00")).toEqual({ offsetDias: 1, hora: "02:00" });
+  });
+
+  it("5) +2 días: 22:00 -> 26/09 05:00 => +2, 05:00 (aunque la hora del regreso sea menor que la de carga)", () => {
+    expect(calcularTrasladoRegreso("2026-09-24", "22:00", "2026-09-26 05:00:00")).toEqual({ offsetDias: 2, hora: "05:00" });
+  });
+
+  it("hora de carga inválida o regreso inválido: null; sin hora de carga se compara contra el inicio del día", () => {
+    expect(calcularTrasladoRegreso("2026-09-24", "25:00", "2026-09-24 08:00:00")).toBeNull();
+    expect(calcularTrasladoRegreso("2026-09-24", "abc", "2026-09-24 08:00:00")).toBeNull();
+    expect(calcularTrasladoRegreso("2026-09-24", null, "2026-09-24 08:00:00")).toEqual({ offsetDias: 0, hora: "08:00" });
+    expect(calcularTrasladoRegreso("2026-09-24", null, "2026-09-24 00:00:00")).toBeNull();
+    expect(calcularTrasladoRegreso("2026-09-24", "05:00", "2026-13-40 08:00:00")).toBeNull();
+  });
+
+  const origenRow = (hora: string | null, regreso: string | null) => ({
+    id: 900, codigo: "PLAN-20260924-001", estado: "Programado", cliente_id: 3, cliente_nombre: "Acme", ruta_id: 10, ruta_codigo_historico: "1001", hora_carga: hora, regreso_estimado: regreso, tipo_traslado: "Carga",
+    tipo_viaje: "Propio", unidad_placa: "P-1", tc_vehiculo_id: null, tc_placa_historica: null, tc_externo_placa: null, piloto_empleado_id: 1, piloto_nombre: "Juan Pérez",
+    aux1_empleado_id: null, aux1_nombre: null, piloto_externo_nombre: null, auxiliares_externos: null, unidad_externa_placa: null, unidad_externa_descripcion: null, transportista_externo: null, costo_tercerizado: null,
+  });
+  const cargar = async (hora: string | null, regreso: string | null) => {
+    const base = vi.mocked(query).getMockImplementation() as unknown as (s: string, p: unknown[]) => Promise<unknown>;
+    vi.mocked(query).mockImplementation((async (sql: string, params: unknown[]) => {
+      const s = String(sql);
+      if (s.includes("LEFT JOIN tms_clientes c") && s.includes("p.fecha_plan = ?")) return [origenRow(hora, regreso)];
+      if (s.includes("FROM tms_plan_auxiliares pa")) return [];
+      return base(sql, params);
+    }) as never);
+    return cargarCopiaDeFecha(EMP, ORIGEN);
+  };
+
+  it("cargarCopiaDeFecha pasa la hora de carga del origen: 22:00 con regreso 02:00 del MISMO día => sin traslado", async () => {
+    const [incoherente] = await cargar("22:00:00", "2026-09-24 02:00:00");
+    expect(incoherente.borrador).toMatchObject({ horaCarga: "22:00", regresoOffsetDias: null, regresoHora: null });
+    const [valido] = await cargar("22:00:00", "2026-09-25 02:00:00");
+    expect(valido.borrador).toMatchObject({ regresoOffsetDias: 1, regresoHora: "02:00" });
+  });
+
+  it("6) confirmar un origen incoherente persiste regreso_estimado NULL (la validación usó reserva diaria)", async () => {
+    const [f] = await cargar("22:00:00", "2026-09-24 02:00:00");
+    const b = { ...f.borrador, fila: 1, unidadPlaca: null, pilotoEmpleadoId: 2 };
+    expect(ventanaDeBorrador(b, "2026-09-30")).toEqual({ fechaPlan: "2026-09-30", horaCarga: "22:00", regresoEstimado: null });
+    expect((await confirmar([b], "2026-09-30")).ok).toBe(true);
+    const creado = e.planes.find((p) => p.id >= 1000)!;
+    expect([creado.fecha, creado.hora, creado.regreso]).toEqual(["2026-09-30", "22:00", null]);
+  });
+
+  it("borradoresDesdeCliente relee hora_carga Y regreso del ORIGEN: un origen incoherente no se traslada aunque el cliente lo mande", async () => {
+    const base = vi.mocked(query).getMockImplementation() as unknown as (s: string, p: unknown[]) => Promise<unknown>;
+    vi.mocked(query).mockImplementation((async (sql: string, params: unknown[]) => {
+      if (String(sql).includes("FROM tms_planes_viaje WHERE empresa_id = ? AND fecha_plan = ?") && String(sql).includes("hora_carga, DATE_FORMAT(regreso_estimado")) return [{ id: 900, hora_carga: "22:00:00", regreso_estimado: "2026-09-24 02:00:00" }];
+      return base(sql, params);
+    }) as never);
+    const falso = { ...borrador({ origenPlanId: 900, horaCarga: "22:00" }), regresoOffsetDias: 0, regresoHora: "02:00" } as never;
+    const r = await borradoresDesdeCliente(EMP, ORIGEN, [falso]);
+    expect(r.ok && r.borradores[0]).toMatchObject({ regresoOffsetDias: null, regresoHora: null });
+  });
+
+  it("7) la ventana validada y el valor persistido coinciden SIEMPRE (incluida una hora editada en la vista previa)", async () => {
+    const casos: [string, BorradorLote][] = [
+      ["regreso posterior", conVentana(1, "05:00", { dias: 0, hora: "08:00" })],
+      ["cruce de medianoche", conVentana(1, "22:00", { dias: 1, hora: "02:00" })],
+      ["sin regreso", conVentana(1, "05:00", null)],
+      ["hora editada DESPUÉS del regreso derivado (09:00 > 08:00)", conVentana(1, "09:00", { dias: 0, hora: "08:00" })],
+      ["hora editada igual al regreso", conVentana(1, "08:00", { dias: 0, hora: "08:00" })],
+    ];
+    for (const [nombre, b] of casos) {
+      const validada = ventanaDeBorrador(b, "2026-09-30").regresoEstimado;
+      expect(regresoPersistidoDeBorrador(b, "2026-09-30"), nombre).toBe(validada);
+      e.planes = [];
+      e.origen = []; // el anti-duplicado (origen + destino) no debe ver la confirmación del caso anterior
+      expect((await confirmar([b], "2026-09-30")).ok, nombre).toBe(true);
+      const guardado = e.planes.find((p) => p.id >= 1000)!.regreso ?? null;
+      expect(guardado, nombre).toBe(validada ? validada.replace("T", " ") : null);
+    }
   });
 });

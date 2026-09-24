@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { requireTenantProgramacionOTms } from "@/lib/tenant";
-import { listarDisponibilidadProgramacionDia } from "@/lib/tms/disponibilidad-programacion-dia";
+import { listarOcupacionProgramacionIntervalo, ventanaProgramacionSegura } from "@/lib/tms/disponibilidad-programacion-intervalos";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
 const FECHA_RE = /^\d{4}-\d{2}-\d{2}$/;
 const HORA_RE = /^\d{2}:\d{2}(?::\d{2})?$/;
-const REGRESO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
+const REGRESO_RE = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}$/;
 
 /**
  * PROGRAMACION-DISPONIBILIDAD-BUSCADORES-1 — disponibilidad de TODOS los
@@ -16,9 +16,14 @@ const REGRESO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
  * ocupado, solo lo marca. Misma empresa_id de la sesión, nunca la que
  * mande el cliente (requireTenantProgramacionOTms).
  *
- * Comparte estados y consultas con el guardado en
- * disponibilidad-programacion-dia.ts. La hora y el regreso se aceptan
- * por compatibilidad con clientes anteriores, pero no alteran el resultado.
+ * A2.2 — misma política por INTERVALOS que POST/PATCH/importación/lote
+ * (disponibilidad-programacion-intervalos.ts): `fecha` + `horaCarga` +
+ * `regresoEstimado` forman la ventana consultada; con hora Y regreso se
+ * consulta [inicio, fin), y si falta cualquiera de los dos se consulta todo
+ * `fecha` (reserva conservadora; nunca se inventa una duración). Un recurso
+ * está ocupado solo si su reserva se SOLAPA con esa ventana; un viaje que
+ * termina justo cuando empieza la consulta no ocupa. `excluirPlanId` excluye
+ * el plan que se está editando. El contrato de respuesta no cambia.
  */
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
@@ -41,7 +46,13 @@ export async function GET(req: Request, ctx: Ctx) {
   const excluirPlanIdParam = p.get("excluirPlanId");
   const excluirPlanId = excluirPlanIdParam && /^\d+$/.test(excluirPlanIdParam) ? Number(excluirPlanIdParam) : null;
 
-  const { personal, unidades, tcs } = await listarDisponibilidadProgramacionDia(guard.empresa.id, fecha, excluirPlanId);
+  let ventana;
+  try {
+    ventana = ventanaProgramacionSegura({ fechaPlan: fecha, horaCarga: horaCargaParam || null, regresoEstimado: regresoEstimadoParam || null });
+  } catch {
+    return NextResponse.json({ error: "fecha inválida (YYYY-MM-DD)." }, { status: 400 });
+  }
+  const { personal, unidades, tcs } = await listarOcupacionProgramacionIntervalo(guard.empresa.id, ventana, excluirPlanId == null ? [] : [excluirPlanId]);
 
   return NextResponse.json(
     {

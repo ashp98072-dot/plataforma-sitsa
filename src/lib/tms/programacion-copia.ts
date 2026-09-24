@@ -4,6 +4,7 @@ import { listarDisponibilidadVehiculos } from "@/lib/operaciones/disponibilidad"
 import { listarParadasDePlanes, type ParadaInput } from "@/lib/tms/paradas";
 import { tarifasActivasDeVariasRutas } from "@/lib/tms/ruta-tarifas";
 import { MAX_AUXILIARES, MAX_FILAS_LOTE, type BorradorLote } from "@/lib/tms/programacion-lote";
+import { calcularTrasladoRegreso } from "@/lib/tms/programacion-copia-ventana";
 
 /**
  * TMS-PROGRAMACION-LOTE-1 (PR A) — COPIAR PROGRAMACIÓN de otra fecha.
@@ -34,10 +35,19 @@ const texto = (v: unknown): string | null => {
   return t ? t : null;
 };
 
+/**
+ * A2.2 — el regreso estimado del origen se traslada al destino conservando hora y desfase en días respecto a su
+ * fecha_plan (ver programacion-copia-ventana.ts). Lo calcula SIEMPRE el servidor desde el plan origen.
+ */
+function trasladoDeOrigen(fechaOrigen: string, horaCargaOrigen: unknown, regresoOrigen: unknown): Pick<BorradorLote, "regresoOffsetDias" | "regresoHora"> {
+  const t = calcularTrasladoRegreso(fechaOrigen, horaCargaOrigen == null ? null : String(horaCargaOrigen), regresoOrigen == null ? null : String(regresoOrigen));
+  return { regresoOffsetDias: t ? t.offsetDias : null, regresoHora: t ? t.hora : null };
+}
+
 export async function cargarCopiaDeFecha(empresaId: number, fechaOrigen: string): Promise<FilaCopia[]> {
   const planes = await query<RowDataPacket[]>(
     `SELECT p.id, p.codigo, p.estado, p.cliente_id, c.nombre AS cliente_nombre, p.ruta_id, p.ruta_codigo_historico,
-            p.hora_carga, p.tipo_traslado, p.tipo_viaje, u.placa AS unidad_placa,
+            p.hora_carga, DATE_FORMAT(p.regreso_estimado, '%Y-%m-%d %H:%i:%s') AS regreso_estimado, p.tipo_traslado, p.tipo_viaje, u.placa AS unidad_placa,
             p.tc_vehiculo_id, p.tc_placa_historica, p.tc_externo_placa,
             pil.id_empleado AS piloto_empleado_id, pil.nombre AS piloto_nombre,
             aux1.id_empleado AS aux1_empleado_id, aux1.nombre AS aux1_nombre,
@@ -92,6 +102,7 @@ export async function cargarCopiaDeFecha(empresaId: number, fechaOrigen: string)
       rutaId: p.ruta_id != null ? Number(p.ruta_id) : null,
       clienteId: p.cliente_id != null ? Number(p.cliente_id) : null,
       horaCarga: p.hora_carga ? String(p.hora_carga).slice(0, 5) : null,
+      ...trasladoDeOrigen(fechaOrigen, p.hora_carga, p.regreso_estimado),
       tipoTraslado: texto(p.tipo_traslado),
       tipoViaje: tercerizado ? "Tercerizado" : "Propio",
       unidadPlaca: tercerizado ? null : texto(p.unidad_placa),
@@ -131,7 +142,7 @@ export async function cargarCopiaDeFecha(empresaId: number, fechaOrigen: string)
  * fecha origen indicada y que NO esté Cancelado (igual que la carga inicial; un Cerrado sí es origen válido — no
  * confundir con la regla del plan DESTINO cancelado, que sí permite volver a copiar) — nunca se confía en ids o paradas enviados por el cliente.
  */
-export type EdicionFilaCopia = Omit<BorradorLote, "paradas">;
+export type EdicionFilaCopia = Omit<BorradorLote, "paradas" | "regresoOffsetDias" | "regresoHora">;
 
 export async function borradoresDesdeCliente(
   empresaId: number,
@@ -144,16 +155,18 @@ export async function borradoresDesdeCliente(
   if (new Set(filas.map((f) => f.origenPlanId)).size !== filas.length) return { ok: false, error: "Un mismo viaje origen no puede copiarse dos veces en el lote." };
   const validos = origenIds.length
     ? await query<RowDataPacket[]>(
-        `SELECT id FROM tms_planes_viaje WHERE empresa_id = ? AND fecha_plan = ? AND estado <> 'Cancelado' AND id IN (${origenIds.map(() => "?").join(",")})`,
+        `SELECT id, hora_carga, DATE_FORMAT(regreso_estimado, '%Y-%m-%d %H:%i:%s') AS regreso_estimado FROM tms_planes_viaje WHERE empresa_id = ? AND fecha_plan = ? AND estado <> 'Cancelado' AND id IN (${origenIds.map(() => "?").join(",")})`,
         [empresaId, fechaOrigen, ...origenIds],
       )
     : [];
   if (validos.length !== origenIds.length) return { ok: false, error: "Algún viaje origen no existe, está cancelado o no pertenece a la fecha/empresa indicada." };
   const paradasMap = await listarParadasDePlanes(origenIds);
+  const origenPorId = new Map(validos.map((v) => [Number(v.id), v])); // hora_carga y regreso del ORIGEN (nunca del cliente)
   return {
     ok: true,
     borradores: filas.map((f) => ({
       ...f,
+      ...trasladoDeOrigen(fechaOrigen, origenPorId.get(f.origenPlanId as number)?.hora_carga, origenPorId.get(f.origenPlanId as number)?.regreso_estimado), // del ORIGEN en servidor, nunca del cliente
       paradas: (paradasMap.get(f.origenPlanId as number) ?? []).map((pp) => ({
         lugarNombre: String(pp.lugar_nombre), tipo: String(pp.tipo), requiereEvidencia: Boolean(pp.requiere_evidencia),
       })),

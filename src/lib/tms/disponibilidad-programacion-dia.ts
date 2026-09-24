@@ -4,6 +4,13 @@ import { query, type SqlParams } from "@/lib/db";
 import type { TipoRecurso } from "./disponibilidad-traslapes";
 
 /** Una asignación consume el recurso durante toda fecha_plan, incluso después del cierre. */
+/**
+ * LEGADO (A2.2): la política DIARIA ("un recurso no puede estar en dos planes el mismo día") fue sustituida por la
+ * política por INTERVALOS (disponibilidad-programacion-intervalos.ts) en POST, PATCH, importación, Copiar/lote y
+ * buscadores. `primerConflictoProgramacionDia` y `listarDisponibilidadProgramacionDia` ya NO tienen llamadores
+ * productivos y se conservan solo por compatibilidad de pruebas; siguen en uso las constantes y tipos
+ * (`ESTADOS_ASIGNACION_DIARIA`, `RecursoDia`, `mensajeConflictoProgramacionDia`), que reutiliza el motor por intervalos.
+ */
 export const ESTADOS_ASIGNACION_DIARIA = ["Programado", "Cargado", "En ruta", "Descargado", "Cerrado"] as const;
 const estadosSql = ESTADOS_ASIGNACION_DIARIA.map(() => "?").join(",");
 
