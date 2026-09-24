@@ -12,6 +12,7 @@ import { verificarPasswordUsuarioActual } from "@/lib/auth";
 import { crearFirmaInterna } from "@/lib/firmas/firmas-internas";
 import { sha256Hex } from "@/lib/firmas/imagen-firma";
 import { borrarUpload, guardarUpload } from "@/lib/uploads";
+import { agruparViaticos } from "./viaticos-agrupacion";
 import {
   autorizarViatico,
   liquidarViatico,
@@ -706,6 +707,44 @@ describe("rechazarViatico — PROGRAMADO -> RECHAZADO", () => {
     getConnection.mockRejectedValueOnce(new Error("pool exhausted"));
     await expect(rechazarViatico(7, 10, MOTIVO_VALIDO, "jefe1")).rejects.toThrow("pool exhausted");
     expect(registrarAuditoriaTx).not.toHaveBeenCalled();
+  });
+});
+
+describe("listarViaticosControl — fecha DATE de MySQL", () => {
+  const fila = (fecha_plan: Date | string | null) => ({
+    id: 10, plan_id: 1, personal_id: 5, rol: "Piloto", monto_sugerido: "500",
+    monto_asignado: "500", estado: "PROGRAMADO", plan_codigo: "PLAN-1",
+    fecha_plan, personal_nombre: "Carlos Ruiz", puesto: "Piloto",
+  });
+
+  it.each([
+    ["Date de mysql2", new Date(2026, 8, 24), "2026-09-24"],
+    ["string SQL", "2026-09-24", "2026-09-24"],
+    ["string datetime", "2026-09-24T00:00:00.000Z", "2026-09-24"],
+    ["null", null, ""],
+  ])("normaliza %s a fecha de calendario ISO", async (_caso, fecha, esperado) => {
+    vi.mocked(query)
+      .mockResolvedValueOnce([] as never)
+      .mockResolvedValueOnce([fila(fecha)] as never);
+    const { items } = await listarViaticosControl(7);
+    expect(items[0].fechaPlan).toBe(esperado);
+  });
+
+  it("agrupa el resultado real del listado por día, semana y mes, nunca sin fecha", async () => {
+    vi.mocked(query)
+      .mockResolvedValueOnce([] as never)
+      .mockResolvedValueOnce([fila(new Date(2026, 8, 24))] as never);
+    const { items } = await listarViaticosControl(7);
+    expect(items[0].fechaPlan).toBe("2026-09-24");
+    for (const [modo, etiqueta] of [
+      ["DIA", "24/09/2026"],
+      ["SEMANA", "Semana 21–27 septiembre 2026"],
+      ["MES", "Septiembre 2026"],
+    ] as const) {
+      const grupos = agruparViaticos(items, modo);
+      expect(grupos.map((grupo) => grupo.etiqueta)).toEqual([etiqueta]);
+      expect(grupos[0].clave).not.toBe("SIN-FECHA");
+    }
   });
 });
 
