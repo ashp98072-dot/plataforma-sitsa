@@ -11,15 +11,24 @@ import { guardarParadasPlan, type ParadaInput } from "@/lib/tms/paradas";
 import { tarifasActivasDeVariasRutas } from "@/lib/tms/ruta-tarifas";
 import { sincronizarViaticosPlan } from "@/lib/tms/viaticos";
 import { resolverTcInterno } from "@/lib/tms/tc-plan";
-import { mensajeConflictoProgramacionDia, primerConflictoProgramacionDia, type RecursoDia } from "@/lib/tms/disponibilidad-programacion-dia";
+import type { RecursoDia } from "@/lib/tms/disponibilidad-programacion-dia";
+import {
+  mensajeConflictoProgramacionIntervalo,
+  primerConflictoProgramacionIntervalo,
+  ventanaProgramacionSegura,
+  ventanasProgramacionSeSolapan,
+  type VentanaProgramacion,
+} from "@/lib/tms/disponibilidad-programacion-intervalos";
+import { regresoTrasladado } from "@/lib/tms/programacion-copia-ventana";
 
 /**
  * TMS-PROGRAMACION-LOTE-1 (PR A) — MOTOR REUTILIZABLE de creación de planes por lote.
  *
  * Recibe BORRADORES normalizados (`BorradorLote`, ya con ids; nunca texto libre del Excel) y:
  *   1. resuelve/revalida cada fila contra datos REALES de la empresa (ruta, cliente, personal, unidad, TC, tarifa);
- *   2. comprueba disponibilidad diaria contra viajes existentes (primerConflictoProgramacionDia, la MISMA
- *      política de Programación manual: piloto, auxiliar, unidad, TC) y colisiones DENTRO del lote;
+ *   2. comprueba disponibilidad POR INTERVALOS contra viajes existentes (primerConflictoProgramacionIntervalo, la
+ *      MISMA política de Programación manual: piloto, auxiliar, unidad, TC; sin hora o sin regreso = todo fecha_plan)
+ *      y colisiones DENTRO del lote con esa misma comparación de ventanas;
  *   3. (confirmar) toma el candado por empresa `tms_traslape_<empresa>` — el mismo del POST manual y la
  *      importación Excel —, REVALIDA todo bajo el candado y, solo si el 100% pasa, abre UNA transacción y
  *      crea todos los planes (auxiliares, paradas, viáticos por configuración vigente, trazabilidad de origen
@@ -56,6 +65,12 @@ export type BorradorLote = {
   rutaId: number | null;
   clienteId: number | null;
   horaCarga: string | null;
+  /**
+   * A2.2 — traslado del regreso estimado (lo pone el SERVIDOR desde el plan origen; nunca el cliente): desfase en
+   * días respecto a la fecha_plan del origen y hora. `null`/ausente = el origen no tenía regreso (reserva diaria).
+   */
+  regresoOffsetDias?: number | null;
+  regresoHora?: string | null;
   tipoTraslado: string | null;
   tipoViaje: "Propio" | "Tercerizado";
   unidadPlaca: string | null;
@@ -95,6 +110,16 @@ export type ResultadoFilaLote = {
 type FilaInterna = { borrador: BorradorLote; errores: string[]; resuelto: Resuelto | null; recursos: RecursoDia[] };
 
 const fmt = (iso: string) => iso.split("-").reverse().join("/");
+
+/** Regreso estimado de la fila para la fecha destino ("YYYY-MM-DDTHH:mm") o null (sin regreso: reserva diaria). */
+export function regresoDestinoDeBorrador(b: Pick<BorradorLote, "regresoOffsetDias" | "regresoHora">, fechaDestino: string): string | null {
+  return b.regresoOffsetDias != null && b.regresoHora ? regresoTrasladado(fechaDestino, { offsetDias: b.regresoOffsetDias, hora: b.regresoHora }) : null;
+}
+
+/** Ventana de reserva de la fila en la fecha destino (misma política que POST/PATCH/importación). */
+export function ventanaDeBorrador(b: Pick<BorradorLote, "horaCarga" | "regresoOffsetDias" | "regresoHora">, fechaDestino: string): VentanaProgramacion {
+  return ventanaProgramacionSegura({ fechaPlan: fechaDestino, horaCarga: b.horaCarga || null, regresoEstimado: regresoDestinoDeBorrador(b, fechaDestino) });
+}
 const norm = (s: string) => s.trim().toUpperCase();
 const ids = (l: number[]) => `(${l.map(() => "?").join(",")})`;
 
@@ -290,13 +315,15 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
 
     // --- disponibilidad diaria contra viajes ya existentes (solo si no hay errores previos de resolución) ---
     if (!errores.length && recursos.length) {
-      const conflicto = await primerConflictoProgramacionDia(empresaId, recursos, fechaDestino, null);
-      if (conflicto) errores.push(mensajeConflictoProgramacionDia(conflicto));
+      const conflicto = await primerConflictoProgramacionIntervalo(empresaId, recursos, ventanaDeBorrador(b, fechaDestino), []);
+      if (conflicto) errores.push(mensajeConflictoProgramacionIntervalo(conflicto));
     }
     internas.push({ borrador: b, errores, resuelto: errores.length ? null : res, recursos });
   }
 
-  // --- colisiones DENTRO del lote: la misma persona / unidad / TC en dos filas ---
+  // --- colisiones DENTRO del lote (A2.2): la misma persona / unidad / TC en dos filas cuyas VENTANAS se solapan ---
+  // Misma política que la comparación contra BD: [hora, regreso) semiabierto; sin hora o sin regreso = todo fecha_plan.
+  // La persona se identifica por empleado (piloto vs auxiliar de la misma persona física = conflicto).
   const uso = new Map<string, { fila: number; etiqueta: string }[]>();
   const anotar = (clave: string, fila: number, etiqueta: string) => uso.set(clave, [...(uso.get(clave) ?? []), { fila, etiqueta }]);
   for (const f of internas) {
@@ -306,12 +333,17 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
     if (b.unidadPlaca?.trim()) anotar(`unidad:${norm(b.unidadPlaca)}`, b.fila, `unidad ${norm(b.unidadPlaca)}`);
     if (b.tcVehiculoId != null) anotar(`tc:${b.tcVehiculoId}`, b.fila, `TC #${b.tcVehiculoId}`);
   }
+  const ventanaPorFila = new Map(internas.map((f) => [f.borrador.fila, ventanaDeBorrador(f.borrador, fechaDestino)]));
+  const marcadas = new Set<string>(); // "clave|fila": un mensaje por recurso y fila
   for (const [clave, usos] of uso) {
     const filas = [...new Set(usos.map((u) => u.fila))];
     if (filas.length < 2) continue;
     for (const f of internas) {
-      if (!filas.includes(f.borrador.fila)) continue;
-      const otras = filas.filter((n) => n !== f.borrador.fila);
+      const fila = f.borrador.fila;
+      if (!filas.includes(fila)) continue;
+      const otras = filas.filter((n) => n !== fila && ventanasProgramacionSeSolapan(ventanaPorFila.get(fila)!, ventanaPorFila.get(n)!));
+      if (!otras.length || marcadas.has(`${clave}|${fila}`)) continue;
+      marcadas.add(`${clave}|${fila}`);
       const etiqueta = usos[0].etiqueta;
       const que = clave.startsWith("unidad:") ? "la" : clave.startsWith("tc:") ? "el" : "";
       f.errores.push(`${clave.startsWith("persona:") ? `${etiqueta} está asignado` : `${que === "la" ? "La" : "El"} ${etiqueta} está asignad${que === "la" ? "a" : "o"}`} también en la fila ${otras.join(", ")} de este mismo lote.`);
@@ -440,10 +472,10 @@ export async function confirmarLote(
             const [ins] = await conn.execute<ResultSetHeader>(
               `INSERT INTO tms_planes_viaje
                 (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, tarifa_id, tarifa_nombre_historico, tarifa_monto_historico, tarifa_moneda_historico, costo_operativo_referencia, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado, tipo_viaje, piloto_externo_nombre, auxiliares_externos, unidad_externa_placa, unidad_externa_descripcion, transportista_externo, costo_tercerizado, tc_vehiculo_id, tc_placa_historica, tc_externo_placa)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, NULL, 'Programado', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, NULL, 'Programado', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               [
                 empresaId, codigo, r.clienteId, lugarCargaId, lugarDescargaId, unidadId, pilotoId, auxIds[0] ?? null, fechaDestino,
-                b.horaCarga, b.tipoTraslado,
+                b.horaCarga, b.tipoTraslado, regresoDestinoDeBorrador(b, fechaDestino)?.replace("T", " ") ?? null,
                 r.tarifa?.monto ?? null, r.tarifa?.id ?? null, r.tarifa?.nombre ?? null, r.tarifa?.monto ?? null, r.tarifa?.moneda ?? null,
                 r.rutaId, r.rutaCodigo, r.destino, r.contacto.nombre, r.contacto.cargo, r.contacto.telefono,
                 b.tipoViaje,

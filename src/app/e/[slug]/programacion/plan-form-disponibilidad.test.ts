@@ -11,13 +11,16 @@ describe("PlanForm — disponibilidad de piloto/auxiliar/unidad en los buscadore
     return i;
   };
 
-  it("consulta disponibilidad por fecha y la refresca cuando cambia el día, sin recargar la página", () => {
+  it("A2.2: consulta disponibilidad con fecha + hora + regreso y la refresca cuando cambia cualquiera, sin recargar la página", () => {
     expect(page).toContain("/api/empresas/${slug}/tms/planes/disponibilidad-recursos?${params.toString()}");
     const efecto = page.slice(pos("const excluirPlanId = plan?.id ?? null;"), pos("en EDICIÓN, si el"));
-    expect(efecto).toContain("[slug, form.fechaPlan, excluirPlanId]");
-    expect(page).toContain("ocupacionDia.fecha === form.fechaPlan ? ocupacionDia.personal : {}");
-    expect(page).toContain("ocupacionDia.fecha === form.fechaPlan ? ocupacionDia.unidades : {}");
-    expect(efecto).not.toContain('params.set("horaCarga"');
+    expect(efecto).toContain("[slug, form.fechaPlan, form.horaCarga, form.regresoEstimado, ventanaDisponibilidad, excluirPlanId]");
+    expect(page).toContain("ocupacionDia.fecha === ventanaDisponibilidad ? ocupacionDia.personal : {}");
+    expect(page).toContain("ocupacionDia.fecha === ventanaDisponibilidad ? ocupacionDia.unidades : {}");
+    // La ventana consultada = fecha + hora + regreso (misma política por intervalos que el guardado); sin duración inventada.
+    expect(efecto).toContain('params.set("horaCarga", form.horaCarga)');
+    expect(efecto).toContain('params.set("regresoEstimado", form.regresoEstimado.replace(" ", "T"))');
+    expect(page).toContain("const ventanaDisponibilidad = `${form.fechaPlan}|${form.horaCarga}|${form.regresoEstimado}`;");
   });
 
   it("edición: excluye el propio plan (plan.id) de la comprobación — nunca choca contra sí mismo", () => {

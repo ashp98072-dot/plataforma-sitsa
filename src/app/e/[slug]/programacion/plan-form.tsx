@@ -314,6 +314,7 @@ export default function PlanForm({
   // diaria (unidad); la respuesta se asocia a su fecha para no mostrar
   // ocupaciones obsoletas mientras llega la siguiente consulta.
   const [ocupacionDia, setOcupacionDia] = useState<{
+    /** A2.2: clave de la ventana consultada (fecha|hora|regreso) — evita mostrar ocupación de una ventana anterior. */
     fecha: string; personal: Record<number, OcupacionRecurso>; unidades: Record<string, OcupacionRecurso>;
     // PROGRAMACION-TC-CAJA-REMOLQUE-1: placa (mayúsculas) del TC -> plan que lo ocupa ese día.
     tcs: Record<string, OcupacionRecurso>;
@@ -376,9 +377,10 @@ export default function PlanForm({
     tcExternoPlaca: plan?.tipo_viaje === "Tercerizado" ? (plan?.tc_externo_placa ?? "") : "",
     costoTercerizado: plan?.costo_tercerizado != null ? String(plan.costo_tercerizado) : "",
   });
-  const ocupacionPersonal = ocupacionDia.fecha === form.fechaPlan ? ocupacionDia.personal : {};
-  const ocupacionUnidades = ocupacionDia.fecha === form.fechaPlan ? ocupacionDia.unidades : {};
-  const ocupacionTcs = ocupacionDia.fecha === form.fechaPlan ? ocupacionDia.tcs : {};
+  const ventanaDisponibilidad = `${form.fechaPlan}|${form.horaCarga}|${form.regresoEstimado}`;
+  const ocupacionPersonal = ocupacionDia.fecha === ventanaDisponibilidad ? ocupacionDia.personal : {};
+  const ocupacionUnidades = ocupacionDia.fecha === ventanaDisponibilidad ? ocupacionDia.unidades : {};
+  const ocupacionTcs = ocupacionDia.fecha === ventanaDisponibilidad ? ocupacionDia.tcs : {};
   // PROGRAMACION-TC-CAJA-REMOLQUE-1: Unidad y TC son recursos distintos con
   // selectores distintos — el TC nunca aparece como Unidad ni al revés.
   const unidadesOpciones = todosVehiculos.filter((v) => v.tipoUnidad !== "TC");
@@ -563,21 +565,26 @@ export default function PlanForm({
 
   // PROGRAMACION-DISPONIBILIDAD-BUSCADORES-1 — recalcula qué piloto/
   // auxiliar/unidad ya está asignado a OTRO plan en la fecha elegida.
-  // La hora y el regreso estimado no afectan esta disponibilidad. En
-  // edición se excluye el propio plan; el debounce evita solicitudes
-  // innecesarias mientras se cambia la fecha.
+  // A2.2 — la ventana consultada es fecha + hora de carga + regreso estimado
+  // (misma política por intervalos que el guardado): con hora Y regreso se
+  // compara [inicio, fin); si falta alguno, todo el día. Se refresca cuando
+  // cambia cualquiera de los tres (deps primitivas: sin solicitudes si no
+  // cambian). En edición se excluye el propio plan; el debounce evita
+  // solicitudes innecesarias mientras se teclea.
   const excluirPlanId = plan?.id ?? null;
   useEffect(() => {
     if (!form.fechaPlan) return;
     let cancelado = false;
     const id = window.setTimeout(() => {
       const params = new URLSearchParams({ fecha: form.fechaPlan });
+      if (form.horaCarga) params.set("horaCarga", form.horaCarga);
+      if (form.regresoEstimado) params.set("regresoEstimado", form.regresoEstimado.replace(" ", "T"));
       if (excluirPlanId) params.set("excluirPlanId", String(excluirPlanId));
       fetch(`/api/empresas/${slug}/tms/planes/disponibilidad-recursos?${params.toString()}`)
         .then((r) => (r.ok ? r.json() : null))
         .then((data) => {
           if (cancelado || !data) return;
-          setOcupacionDia({ fecha: form.fechaPlan,
+          setOcupacionDia({ fecha: ventanaDisponibilidad,
             personal: (data.personal ?? {}) as Record<number, OcupacionRecurso>,
             unidades: (data.unidades ?? {}) as Record<string, OcupacionRecurso>,
             tcs: (data.tcs ?? {}) as Record<string, OcupacionRecurso> });
@@ -588,7 +595,7 @@ export default function PlanForm({
       cancelado = true;
       window.clearTimeout(id);
     };
-  }, [slug, form.fechaPlan, excluirPlanId]);
+  }, [slug, form.fechaPlan, form.horaCarga, form.regresoEstimado, ventanaDisponibilidad, excluirPlanId]);
 
   // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§2) — en EDICIÓN, si el
   // viaje ya tiene una ruta, carga las tarifas activas de esa ruta para
