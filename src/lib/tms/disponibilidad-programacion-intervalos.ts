@@ -8,6 +8,7 @@ import { inicioViaje, seSolapaConOcupacionReal, type IntervaloConsulta } from ".
  * Motor de planificación por intervalos (A1). Todavía no sustituye la política
  * diaria de POST/PATCH/importación/copia: esos flujos deben migrarse juntos en
  * A2, conservando su revalidación bajo tms_traslape_<empresa>.
+ * PR-0 edición rápida: admite excluir VARIOS planes (`excluirPlanIds`).
  *
  * Un plan completo ocupa [fecha_plan + hora_carga, regreso_estimado). Si falta
  * cualquiera de los extremos, ocupa [inicio del día, inicio del día siguiente).
@@ -129,12 +130,21 @@ async function leer(
   return query<Candidato[]>(sql, params);
 }
 
+/**
+ * Ids de plan a excluir de la comparación (deduplicados y saneados). `[]` = no excluir nada. Un lote que reemplaza
+ * asignaciones (p. ej. intercambio de pilotos) excluye todos los planes que él mismo reescribe: su estado FINAL se
+ * compara aparte, no contra el estado viejo de la BD.
+ */
+export function normalizarPlanesExcluidos(excluirPlanIds: readonly number[]): number[] {
+  return [...new Set(excluirPlanIds.filter((id) => Number.isInteger(id) && id > 0))];
+}
+
 /** Consulta compartida para piloto, auxiliares, unidad y TC; sin N+1 por recurso. */
 export async function primerConflictoProgramacionIntervalo(
   empresaId: number,
   recursos: RecursoDia[],
   ventana: VentanaProgramacion,
-  excluirPlanId: number | null,
+  excluirPlanIds: readonly number[],
   conn?: PoolConnection,
 ): Promise<ConflictoProgramacionIntervalo | null> {
   if (!recursos.length) return null; // Tercerizado sin recursos internos.
@@ -142,12 +152,14 @@ export async function primerConflictoProgramacionIntervalo(
   const fechaInicio = intervaloNuevo.inicio.slice(0, 10);
   const fechaFin = intervaloNuevo.fin.slice(0, 10);
   const base: SqlParams = [empresaId, ...ESTADOS_ASIGNACION_DIARIA, fechaFin, fechaInicio, intervaloNuevo.inicio];
-  const excluirSql = excluirPlanId == null ? "" : " AND p.id <> ?";
+  const excluidos = normalizarPlanesExcluidos(excluirPlanIds);
+  // Siempre parametrizado: nunca se concatenan ids en el SQL.
+  const excluirSql = excluidos.length ? ` AND p.id NOT IN (${Array(excluidos.length).fill("?").join(",")})` : "";
   const idsPersonal = [...new Set(recursos.filter((r) => r.tipo === "piloto" || r.tipo === "auxiliar").map((r) => r.id))];
   const idsUnidad = [...new Set(recursos.filter((r) => r.tipo === "unidad").map((r) => r.id))];
   const idsTc = [...new Set(recursos.filter((r) => r.tipo === "tc").map((r) => r.id))];
   const idsSql = (n: number) => Array(n).fill("?").join(",");
-  const params = (ids: number[]): SqlParams => [...base, ...ids, ...(excluirPlanId == null ? [] : [excluirPlanId])];
+  const params = (ids: number[]): SqlParams => [...base, ...ids, ...excluidos];
 
   const [personas, unidades, tcs] = await Promise.all([
     idsPersonal.length ? leer(conn,
@@ -160,7 +172,7 @@ export async function primerConflictoProgramacionIntervalo(
            SELECT 1 FROM tms_plan_auxiliares pa WHERE pa.plan_id = p.id AND pa.personal_id = eq.id))
        WHERE ${ventanaSql} AND tp.empresa_id = ? AND tp.id IN (${idsSql(idsPersonal.length)})${excluirSql}
        ORDER BY p.fecha_plan, p.id`,
-      [...base, empresaId, ...idsPersonal, ...(excluirPlanId == null ? [] : [excluirPlanId])],
+      [...base, empresaId, ...idsPersonal, ...excluidos],
     ) : Promise.resolve([] as Candidato[]),
     idsUnidad.length ? leer(conn,
       `${columnas("u.id", "u.placa")}
