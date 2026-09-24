@@ -73,6 +73,22 @@ const hora5 = (h: string | null) => (h ? h.slice(0, 5) : null);
 const regresoNorm = (r: string | null) => (r ? r.slice(0, 16).replace(" ", "T") : null);
 const placeholders = (n: number) => Array(n).fill("?").join(",");
 const fechaDMA = (f: string) => f.split("-").reverse().join("/");
+const placaNormalizada = (placa: string | null | undefined) => placa?.trim().toUpperCase() || null;
+
+/** Una placa ambigua conserva identidad por placa: nunca separa dos referencias al mismo vehículo físico. */
+function claveUnidadFinal(
+  flotaId: number | null, tmsId: number | null, placa: string | null,
+  flotaPorPlaca: Map<string, Set<number>>,
+): string | null {
+  const normalizada = placaNormalizada(placa);
+  if (normalizada) {
+    const ids = flotaPorPlaca.get(normalizada);
+    if (ids?.size === 1) return `u:${ids.values().next().value}`;
+    return `placa:${normalizada}`;
+  }
+  if (flotaId != null) return `u:${flotaId}`;
+  return tmsId != null ? `ut:${tmsId}` : null;
+}
 
 async function cargarPlanes(empresaId: number, ids: number[]): Promise<Map<number, PlanBD>> {
   const mapa = new Map<number, PlanBD>();
@@ -274,8 +290,11 @@ export async function validarEdicionRapida(empresaId: number, datos: ValidarEdic
   const unidadesNuevas = activas.filter((f) => f.cambiaUnidad && f.final!.flotaVehiculoId != null);
   let vehiculos: VehiculoDisponibilidadRegla[] = [];
   const placaPorFlota = new Map<number, string>();
-  if (unidadesNuevas.length) {
+  const hayUnidadHeredada = filas.some((f) => f.plan?.unidadTmsId != null && f.plan.flotaVehiculoId == null && !f.cambiaUnidad);
+  if (unidadesNuevas.length || hayUnidadHeredada) {
     vehiculos = ((await listarDisponibilidadVehiculos(empresaId)).vehiculos as unknown) as VehiculoDisponibilidadRegla[];
+  }
+  if (unidadesNuevas.length) {
     for (const fila of unidadesNuevas) {
       const fid = fila.final!.flotaVehiculoId!;
       const acc = await obtenerVehiculoAccesible(empresaId, fid);
@@ -323,6 +342,17 @@ export async function validarEdicionRapida(empresaId: number, datos: ValidarEdic
   }
   type Uso = { fila: FilaTrabajo; cambiado: boolean };
   const claves = new Map<string, { etiqueta: string; usos: Uso[] }>();
+  const flotaPorPlaca = new Map<string, Set<number>>();
+  const registrarFlota = (id: number, placa: string | null | undefined) => {
+    const normalizada = placaNormalizada(placa);
+    if (!normalizada) return;
+    const ids = flotaPorPlaca.get(normalizada) ?? new Set<number>();
+    ids.add(id);
+    flotaPorPlaca.set(normalizada, ids);
+  };
+  for (const vehiculo of vehiculos) registrarFlota(vehiculo.id, vehiculo.placa);
+  for (const [id, placa] of placaPorFlota) registrarFlota(id, placa);
+  for (const f of filas) if (f.plan?.flotaVehiculoId != null) registrarFlota(f.plan.flotaVehiculoId, f.plan.unidadPlaca);
   const anotar = (clave: string, etiqueta: string, fila: FilaTrabajo, cambiado: boolean) => {
     const e = claves.get(clave) ?? { etiqueta, usos: [] };
     if (!e.usos.some((u) => u.fila === fila)) e.usos.push({ fila, cambiado });
@@ -335,8 +365,9 @@ export async function validarEdicionRapida(empresaId: number, datos: ValidarEdic
     const personasFinal = [...(f.final.pilotoId != null ? [f.final.pilotoId] : []), ...f.final.auxiliaresIds];
     for (const pid of personasFinal) anotar(claveDe(pid), nombreDe(pid), f, !antesPersonas.has(claveDe(pid)));
     const fid = f.final.flotaVehiculoId;
-    if (fid != null) anotar(`u:${fid}`, `La unidad ${placaPorFlota.get(fid) ?? f.plan.unidadPlaca ?? `#${fid}`}`, f, f.cambiaUnidad);
-    else if (f.plan.unidadTmsId != null && !f.cambiaUnidad) anotar(`ut:${f.plan.unidadTmsId}`, `La unidad ${f.plan.unidadPlaca ?? `#${f.plan.unidadTmsId}`}`, f, false);
+    const placa = f.cambiaUnidad && fid != null ? placaPorFlota.get(fid) ?? null : f.plan.unidadPlaca;
+    const unidadClave = claveUnidadFinal(fid, f.cambiaUnidad ? null : f.plan.unidadTmsId, placa, flotaPorPlaca);
+    if (unidadClave) anotar(unidadClave, `La unidad ${placa ?? (fid != null ? `#${fid}` : `#${f.plan.unidadTmsId}`)}`, f, f.cambiaUnidad);
     const tid = f.final.tcVehiculoId;
     if (tid != null) anotar(`tc:${tid}`, `El TC ${tcPlaca.get(tid) ?? `#${tid}`}`, f, f.cambiaTc);
   }

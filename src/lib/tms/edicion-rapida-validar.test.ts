@@ -420,6 +420,40 @@ describe("estado FINAL del lote: intercambios y rotaciones", () => {
     expect(fila(r, 101).errores[0].mensaje).toBe("La unidad C-31 queda asignada también en el viaje PLAN-102 de este mismo lote con horarios que se solapan.");
   });
 
+  it("unidad heredada y Flota con la misma placa: solape bloqueado; ventanas secuenciales permitidas", async () => {
+    planes[0].unidad_tms = 50; planes[0].flota = null; planes[0].unidad_placa = "P-123ABC";
+    planes[0].regreso = `${D0} 09:00:00`;
+    vi.mocked(obtenerVehiculoAccesible).mockImplementation((async (_e: number, id: number) => ({ id, placa: id === 900 ? "P-123ABC" : `C-${id}` })) as never);
+    vi.mocked(listarDisponibilidadVehiculos).mockResolvedValue({ vehiculos: [{ id: 900, placa: "P-123ABC", tipoUnidad: "Camion", estadoDisponibilidad: "disponible", viajeAbierto: null }] } as never);
+    const cambios = () => validar([cambio(101), cambio(102, { flotaVehiculoId: 900 })]);
+    const solapados = await cambios();
+    expect(codigos(solapados, 102)).toEqual(["RECURSO_OCUPADO_LOTE"]);
+    expect(fila(solapados, 101).estado).toBe("sin_cambios");
+    planes[0].regreso = `${D0} 08:00:00`;
+    expect((await cambios()).ok).toBe(true);
+  });
+
+  it("dos referencias heredadas con distinto TMS id y misma placa normalizada no se separan", async () => {
+    planes[0].unidad_tms = 50; planes[0].flota = null; planes[0].unidad_placa = " p-123abc ";
+    planes[1].unidad_tms = 51; planes[1].flota = null; planes[1].unidad_placa = "P-123ABC";
+    planes[0].regreso = `${D0} 09:00:00`;
+    vi.mocked(obtenerVehiculoAccesible).mockResolvedValue({ id: 900, placa: "P-123ABC" } as never);
+    vi.mocked(listarDisponibilidadVehiculos).mockResolvedValue({ vehiculos: [{ id: 900, placa: "P-123ABC", tipoUnidad: "Camion", estadoDisponibilidad: "disponible", viajeAbierto: null }] } as never);
+    const r = await validar([cambio(101), cambio(102, { flotaVehiculoId: 900 })]);
+    expect(codigos(r, 102)).toEqual(["RECURSO_OCUPADO_LOTE"]);
+  });
+
+  it("unidad heredada sin contraparte Flota conserva fallback estable sin error artificial", async () => {
+    planes[0].unidad_tms = 50; planes[0].flota = null; planes[0].unidad_placa = "P-999XYZ";
+    vi.mocked(listarDisponibilidadVehiculos).mockResolvedValue({ vehiculos: [] } as never);
+    const r = await validar([cambio(101)]);
+    expect(r.ok).toBe(true);
+    expect(fila(r, 101).estado).toBe("sin_cambios");
+    expect(listarDisponibilidadVehiculos).toHaveBeenCalledWith(EMP);
+    expect(execute).not.toHaveBeenCalled();
+    for (const s of sqls) expect(s.trimStart()).toMatch(/^SELECT/i);
+  });
+
   it("26) TC: el intercambio es válido; el mismo TC en dos viajes solapados no; sucesivos sí", async () => {
     const swap = () => validar([cambio(101, { tcVehiculoId: 41 }), cambio(102, { tcVehiculoId: 40 })]);
     expect((await swap()).ok).toBe(true);
