@@ -145,7 +145,7 @@ describe("edicion-rapida.tsx", () => {
 
   it("34) edita piloto/auxiliares/unidad/TC + (PR-355) tarifa y viáticos: no hay inputs de fecha, hora, regreso, ruta, cliente ni estado", () => {
     expect(tabla).not.toMatch(/type="(date|time|datetime-local)"/);
-    expect(tabla.match(/type="number"/g)).toHaveLength(1); // solo el monto del viático
+    expect(tabla.match(/type="number"/g)).toHaveLength(2); // monto del viático y monto de tarifa manual
     expect(tabla.match(/<select/g)).toHaveLength(5); // piloto, + auxiliar, unidad, TC y tarifa
     for (const x of ["pilotoPersonalId:", "auxiliarPersonalIds:", "flotaVehiculoId:", "tcVehiculoId:", "tarifaId:"]) expect(tabla).toContain(x);
   });

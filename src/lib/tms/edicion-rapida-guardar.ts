@@ -29,6 +29,8 @@ export const MSG_CAMBIOS_INVALIDOS = "Los cambios ya no son válidos.";
 
 class GuardadoAbortado extends Error {}
 
+/** Q1,000.00 (formato fijo, independiente del locale del servidor). */
+const dinero = (n: number | null) => (n == null ? "Q—" : `Q${n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}`);
 const lista = (nombres: string[]) => `[${nombres.length ? nombres.join(", ") : "—"}]`;
 
 /** Detalle de auditoría (empieza con "Plan #<id> <código> ·": así lo encuentra la bitácora del plan). */
@@ -47,8 +49,9 @@ function detalleAuditoria(f: FilaTrabajo, ctx: ContextoEdicionRapida, motivo: st
     cambios.push(`TC ${placa(f.actual!.tcVehiculoId)} → ${placa(f.final!.tcVehiculoId)}`);
   }
   if (f.cambiaTarifa) {
-    const antes = plan.tarifaId != null ? `#${plan.tarifaId} (${plan.tarifaComercial ?? "—"})` : "sin tarifa";
-    const despues = f.tarifaNueva ? `${f.tarifaNueva.nombre} #${f.tarifaNueva.id} (${f.tarifaNueva.monto} ${f.tarifaNueva.moneda})` : "sin tarifa";
+    const d = f.tarifaDestino!;
+    const antes = plan.tarifaId != null ? `Catálogo ${plan.tarifaNombre ?? `#${plan.tarifaId}`} ${dinero(plan.tarifaComercial)}` : plan.tarifaComercial != null ? `manual ${dinero(plan.tarifaComercial)}` : "sin tarifa";
+    const despues = d.tipo === "catalogo" ? `Catálogo ${d.snap.nombre} ${dinero(d.snap.monto)}` : d.tipo === "manual" ? `manual ${dinero(d.monto)}` : "sin tarifa";
     cambios.push(`tarifa ${antes} → ${despues}`);
   }
   if (f.cambiaViaticos) {
@@ -118,13 +121,16 @@ export async function guardarEdicionRapida(empresaId: number, usuario: string, d
         params.push(f.final!.tcVehiculoId, f.final!.tcVehiculoId != null ? contexto.tcPlaca.get(f.final!.tcVehiculoId) ?? null : null);
       }
       if (f.cambiaTarifa) {
-        // Mismo criterio que el PATCH (Ajustar): asignar escribe snapshot + tarifa_comercial; quitar limpia SOLO el snapshot
-        // del catálogo y deja tarifa_comercial (monto manual) intacta.
-        if (f.tarifaNueva) {
+        // Tres estados finales. Catálogo: snapshot + tarifa_comercial = monto de catálogo. Manual: snapshot NULL y
+        // tarifa_comercial = monto escrito (no se crea nada en tms_ruta_tarifas). Sin tarifa: todo NULL (nunca 0).
+        const d = f.tarifaDestino!;
+        if (d.tipo === "catalogo") {
           sets.push("tarifa_id = ?", "tarifa_nombre_historico = ?", "tarifa_monto_historico = ?", "tarifa_moneda_historico = ?", "tarifa_comercial = ?");
-          params.push(f.tarifaNueva.id, f.tarifaNueva.nombre, f.tarifaNueva.monto, f.tarifaNueva.moneda, f.tarifaNueva.monto);
+          params.push(d.snap.id, d.snap.nombre, d.snap.monto, d.snap.moneda, d.snap.monto);
         } else {
           sets.push("tarifa_id = NULL", "tarifa_nombre_historico = NULL", "tarifa_monto_historico = NULL", "tarifa_moneda_historico = NULL");
+          if (d.tipo === "manual") { sets.push("tarifa_comercial = ?"); params.push(d.monto); }
+          else sets.push("tarifa_comercial = NULL");
         }
       }
       // Solo viáticos cambiaron: el viaje no se reescribe (el UPDATE quedaría sin columnas); los viáticos van en el paso 7.

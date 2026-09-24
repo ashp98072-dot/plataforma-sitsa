@@ -68,18 +68,20 @@ export type PlanBD = {
   tipoViaje: string; pilotoId: number | null; unidadTmsId: number | null; unidadPlaca: string | null; flotaVehiculoId: number | null;
   tcVehiculoId: number | null; pendienteCierre: boolean; auxiliares: { personalId: number; nombre: string }[]; pilotoNombre: string;
   // PR-355: tarifa del catálogo (snapshot en el viaje) y viáticos actuales por tms_personal.id.
-  rutaId: number | null; tarifaId: number | null; tarifaComercial: number | null;
+  rutaId: number | null; tarifaId: number | null; tarifaComercial: number | null; tarifaNombre: string | null;
   viaticos: { personalId: number; montoAsignado: number; montoSugerido: number; estado: string }[];
 };
 export type TarifaSnapshot = { id: number; nombre: string; monto: number; moneda: string };
+/** Estado FINAL de la tarifa de un viaje: catálogo (snapshot), manual (solo tarifa_comercial) o sin tarifa. */
+export type TarifaDestino = { tipo: "catalogo"; snap: TarifaSnapshot } | { tipo: "manual"; monto: number } | { tipo: "sin" };
 
 export type Recursos = { pilotoId: number | null; auxiliaresIds: number[]; flotaVehiculoId: number | null; tcVehiculoId: number | null };
 export type FilaTrabajo = {
   planId: number; plan: PlanBD | null; errores: ErrorFilaEdicionRapida[]; advertencias: AdvertenciaFilaEdicionRapida[];
   actual: Recursos | null; final: Recursos | null; hayCambios: boolean; fatal: boolean;
   cambiaPiloto: boolean; cambiaAuxiliares: boolean; cambiaUnidad: boolean; cambiaTc: boolean;
-  /** PR-355: `tarifaNueva` undefined = no se toca; null = quitar tarifa del catálogo; objeto = snapshot validado a escribir. */
-  cambiaTarifa: boolean; tarifaNueva: TarifaSnapshot | null | undefined;
+  /** `tarifaDestino` undefined = no se toca la tarifa; si no, el estado final ya validado a escribir. */
+  cambiaTarifa: boolean; tarifaDestino: TarifaDestino | undefined;
   /** PR-355: solo los montos que REALMENTE cambian (los que el sync de viáticos debe respetar como override). */
   cambiaViaticos: boolean; viaticosOverrides: { personalId: number; montoAsignado: number }[];
 };
@@ -122,7 +124,7 @@ async function cargarPlanes(leer: Lector, empresaId: number, ids: number[], bloq
       `SELECT p.id, p.codigo, p.estado, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan, p.hora_carga,
               DATE_FORMAT(p.regreso_estimado, '%Y-%m-%d %H:%i:%s') AS regreso_estimado, p.tipo_viaje, p.piloto_id, p.unidad_id,
               u.placa AS unidad_placa, u.flota_vehiculo_id, p.tc_vehiculo_id, pil.nombre AS piloto_nombre,
-              p.ruta_id, p.tarifa_id, p.tarifa_comercial,
+              p.ruta_id, p.tarifa_id, p.tarifa_comercial, p.tarifa_nombre_historico,
               ${SQL_PENDIENTE_CIERRE} AS pendiente_cierre
        FROM tms_planes_viaje p
        LEFT JOIN tms_unidades u ON u.id = p.unidad_id
@@ -155,7 +157,7 @@ async function cargarPlanes(leer: Lector, empresaId: number, ids: number[], bloq
       tcVehiculoId: r.tc_vehiculo_id != null ? Number(r.tc_vehiculo_id) : null, pendienteCierre: Number(r.pendiente_cierre) === 1,
       auxiliares: [], pilotoNombre: r.piloto_nombre ? String(r.piloto_nombre) : "",
       rutaId: r.ruta_id != null && Number(r.ruta_id) > 0 ? Number(r.ruta_id) : null, tarifaId: r.tarifa_id != null ? Number(r.tarifa_id) : null,
-      tarifaComercial: r.tarifa_comercial != null ? Number(r.tarifa_comercial) : null, viaticos: [],
+      tarifaComercial: r.tarifa_comercial != null ? Number(r.tarifa_comercial) : null, tarifaNombre: r.tarifa_nombre_historico ? String(r.tarifa_nombre_historico) : null, viaticos: [],
     });
   }
   for (const v of viaticos) {
@@ -223,7 +225,7 @@ export async function evaluarEdicionRapida(empresaId: number, datos: ValidarEdic
   const filas: FilaTrabajo[] = datos.cambios.map((c) => ({
     planId: c.planId, plan: planes.get(c.planId) ?? null, errores: [], advertencias: [], actual: null, final: null,
     hayCambios: false, fatal: false, cambiaPiloto: false, cambiaAuxiliares: false, cambiaUnidad: false, cambiaTc: false,
-    cambiaTarifa: false, tarifaNueva: undefined, cambiaViaticos: false, viaticosOverrides: [],
+    cambiaTarifa: false, tarifaDestino: undefined, cambiaViaticos: false, viaticosOverrides: [],
   }));
 
   // ---------------------------------------------------------------- 1) existencia + snapshot esperado + cambios reales
@@ -269,7 +271,13 @@ export async function evaluarEdicionRapida(empresaId: number, datos: ValidarEdic
     fila.cambiaAuxiliares = !igualesOrdenados(fila.final.auxiliaresIds, fila.actual.auxiliaresIds); // el orden define al principal
     fila.cambiaUnidad = fila.final.flotaVehiculoId !== fila.actual.flotaVehiculoId;
     fila.cambiaTc = fila.final.tcVehiculoId !== fila.actual.tcVehiculoId;
-    fila.cambiaTarifa = c.nuevo.tarifaId !== undefined && c.nuevo.tarifaId !== plan.tarifaId;
+    if (c.nuevo.tarifaId !== undefined) {
+      if (c.nuevo.tarifaId != null) fila.cambiaTarifa = c.nuevo.tarifaId !== plan.tarifaId; // catálogo: misma tarifa = sin cambio
+      else if (c.nuevo.tarifaComercial != null) {
+        // manual: cambia si hoy hay tarifa de catálogo, no hay monto, o el monto es distinto (un monto negativo o con más de 2 decimales se marca como cambio para rechazarlo abajo)
+        fila.cambiaTarifa = plan.tarifaId != null || plan.tarifaComercial == null || c.nuevo.tarifaComercial < 0 || Math.abs(c.nuevo.tarifaComercial * 100 - Math.round(c.nuevo.tarifaComercial * 100)) > 1e-6 || !montoIgual(c.nuevo.tarifaComercial, plan.tarifaComercial);
+      } else fila.cambiaTarifa = plan.tarifaId != null || plan.tarifaComercial != null; // sin tarifa
+    }
     if (c.nuevo.viaticos !== undefined) {
       const porPersona = new Map(plan.viaticos.map((v) => [v.personalId, v]));
       fila.viaticosOverrides = c.nuevo.viaticos.filter((v) => { const ex = porPersona.get(v.personalId); return !ex || !montoIgual(ex.montoAsignado, v.montoAsignado); });
@@ -299,15 +307,21 @@ export async function evaluarEdicionRapida(empresaId: number, datos: ValidarEdic
       fila.fatal = true;
       continue;
     }
-    // PR-355: tarifa del catálogo. Debe pertenecer a la ruta del viaje (misma empresa) y estar activa; nunca se inventa.
+    // Tarifa final. Catálogo: debe ser vigente y de la ruta del viaje (misma empresa), nunca se inventa. Manual: monto >= 0 con
+    // máximo 2 decimales (NO crea filas en tms_ruta_tarifas). Sin tarifa: todo NULL (nunca 0).
     if (fila.cambiaTarifa) {
-      const tarifaId = datos.cambios.find((x) => x.planId === fila.planId)!.nuevo.tarifaId ?? null;
-      if (tarifaId == null) fila.tarifaNueva = null;
-      else {
-        const snap = plan.rutaId != null ? await tarifaParaSnapshot(empresaId, plan.rutaId, tarifaId, opciones.conn) : null;
+      const n = datos.cambios.find((x) => x.planId === fila.planId)!.nuevo;
+      if (n.tarifaId != null) {
+        const snap = plan.rutaId != null ? await tarifaParaSnapshot(empresaId, plan.rutaId, n.tarifaId, opciones.conn) : null;
         if (!snap) err(fila, "TARIFA_INVALIDA", "La tarifa seleccionada no es una tarifa vigente de la ruta de este viaje.");
-        else fila.tarifaNueva = snap;
-      }
+        else fila.tarifaDestino = { tipo: "catalogo", snap };
+      } else if (n.tarifaComercial != null) {
+        const m = n.tarifaComercial;
+        if (!Number.isFinite(m) || m < 0) err(fila, "TARIFA_INVALIDA", "El monto de la tarifa manual debe ser un número mayor o igual a 0.");
+        else if (Math.abs(m * 100 - Math.round(m * 100)) > 1e-6) err(fila, "TARIFA_INVALIDA", "El monto de la tarifa manual admite máximo 2 decimales.");
+        else if (m > 9999999999.99) err(fila, "TARIFA_INVALIDA", "El monto de la tarifa manual es demasiado grande.");
+        else fila.tarifaDestino = { tipo: "manual", monto: Math.round(m * 100) / 100 };
+      } else fila.tarifaDestino = { tipo: "sin" };
     }
   }
   // una fila con error fatal aporta su asignación ACTUAL (nada cambia en ella) al estado final del lote
@@ -437,7 +451,7 @@ export async function evaluarEdicionRapida(empresaId: number, datos: ValidarEdic
   // ---------------------------------------------------------------- 4) ESTADO FINAL del lote: las filas se comparan entre sí
   // Una fila inválida (personal/unidad inexistente, etc.) no reasigna nada: aporta su asignación ACTUAL.
   for (const f of filas) {
-    if (f.fatal && f.actual) { f.final = f.actual; f.cambiaPiloto = f.cambiaAuxiliares = f.cambiaUnidad = f.cambiaTc = false; f.cambiaTarifa = f.cambiaViaticos = false; f.tarifaNueva = undefined; f.viaticosOverrides = []; }
+    if (f.fatal && f.actual) { f.final = f.actual; f.cambiaPiloto = f.cambiaAuxiliares = f.cambiaUnidad = f.cambiaTc = false; f.cambiaTarifa = f.cambiaViaticos = false; f.tarifaDestino = undefined; f.viaticosOverrides = []; }
   }
   type Uso = { fila: FilaTrabajo; cambiado: boolean };
   const claves = new Map<string, { etiqueta: string; usos: Uso[] }>();
