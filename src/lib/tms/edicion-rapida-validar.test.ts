@@ -526,8 +526,11 @@ describe("solo lectura (guarda de código)", () => {
     const { readFileSync } = await import("node:fs");
     for (const f of ["src/lib/tms/edicion-rapida-validar.ts", "src/app/api/empresas/[slug]/tms/planes/edicion-rapida/validar/route.ts"]) {
       const codigo = readFileSync(f, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-      expect(codigo, f).not.toMatch(/(INSERT|UPDATE|DELETE)/);
-      expect(codigo, f).not.toMatch(/execute\(|getPool|beginTransaction|GET_LOCK|FOR UPDATE|registrarAuditoria|sincronizarViaticosPlan|personalDesdeEmpleado|guardarAuxiliaresPlan|guardarParadasPlan/);
+      // El núcleo compartido puede leer con FOR UPDATE SOLO cuando el llamador le pasa una conexión con candado (PR-2 guardar).
+      const sinBloqueo = codigo.replace(/FOR UPDATE/g, "");
+      expect(sinBloqueo, f).not.toMatch(/(INSERT|UPDATE|DELETE)/);
+      expect(sinBloqueo, f).not.toMatch(/execute\(|getPool|beginTransaction|GET_LOCK|registrarAuditoria|sincronizarViaticosPlan|personalDesdeEmpleado|guardarAuxiliaresPlan|guardarParadasPlan/);
+      if (f.includes("/validar/route.ts")) expect(codigo, f).not.toMatch(/FOR UPDATE|conn/);
     }
   });
 });
