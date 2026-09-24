@@ -24,18 +24,31 @@ export function sumarDiasFecha(fecha: string, dias: number): string {
 export type TrasladoRegreso = { offsetDias: number; hora: string };
 
 /**
- * Desfase (días de calendario) y hora del regreso del ORIGEN respecto a su `fecha_plan`. `null` si no hay regreso
- * o es incoherente (fecha/hora inválidas o anterior al día de salida): la copia queda sin regreso (reserva diaria).
- * `regresoOrigen`: "YYYY-MM-DD HH:mm[:ss]" o con "T".
+ * Desfase (días de calendario) y hora del regreso del ORIGEN respecto a su `fecha_plan`, validado contra la HORA DE
+ * CARGA del origen. `null` (la copia queda sin regreso => reserva diaria y se persiste NULL) si: no hay regreso;
+ * fecha u hora inválidas (también la hora de carga); o el regreso es anterior o IGUAL a la salida
+ * (`fecha_plan + horaCarga`; sin hora de carga, inicio del día). Solo un regreso posterior a la salida conserva
+ * desfase + hora. `regresoOrigen`: "YYYY-MM-DD HH:mm[:ss]" o con "T"; `horaCargaOrigen`: "HH:mm[:ss]" o null.
  */
-export function calcularTrasladoRegreso(fechaOrigen: string, regresoOrigen: string | null | undefined): TrasladoRegreso | null {
+export function calcularTrasladoRegreso(
+  fechaOrigen: string,
+  horaCargaOrigen: string | null | undefined,
+  regresoOrigen: string | null | undefined,
+): TrasladoRegreso | null {
   if (!regresoOrigen) return null;
   const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2})(?::\d{2})?$/.exec(regresoOrigen.trim());
   const desde = aMs(fechaOrigen);
   const hasta = m ? aMs(m[1]) : null;
   if (!m || desde == null || hasta == null || Number(m[2]) > 23 || Number(m[3]) > 59) return null;
+  let minutosSalida = 0;
+  if (horaCargaOrigen != null && String(horaCargaOrigen).trim() !== "") {
+    const h = /^(\d{2}):(\d{2})(?::\d{2})?$/.exec(String(horaCargaOrigen).trim());
+    if (!h || Number(h[1]) > 23 || Number(h[2]) > 59) return null;
+    minutosSalida = Number(h[1]) * 60 + Number(h[2]);
+  }
   const offsetDias = Math.round((hasta - desde) / DIA_MS);
-  return offsetDias < 0 ? null : { offsetDias, hora: `${m[2]}:${m[3]}` };
+  const minutosRegreso = offsetDias * 1440 + Number(m[2]) * 60 + Number(m[3]);
+  return offsetDias < 0 || minutosRegreso <= minutosSalida ? null : { offsetDias, hora: `${m[2]}:${m[3]}` };
 }
 
 /** Regreso de la copia ("YYYY-MM-DDTHH:mm") para la fecha destino, o `null` si el origen no tenía regreso. */

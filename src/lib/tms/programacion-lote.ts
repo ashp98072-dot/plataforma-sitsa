@@ -116,6 +116,15 @@ export function regresoDestinoDeBorrador(b: Pick<BorradorLote, "regresoOffsetDia
   return b.regresoOffsetDias != null && b.regresoHora ? regresoTrasladado(fechaDestino, { offsetDias: b.regresoOffsetDias, hora: b.regresoHora }) : null;
 }
 
+/**
+ * Regreso que se PERSISTE para la fila: exactamente el de la ventana validada. Si el regreso derivado es incoherente
+ * con la hora de carga efectiva de la fila (p. ej. la hora se editó en la vista previa), la validación cae a reserva
+ * diaria y aquí devuelve null: nunca se guarda un regreso que la validación no usó.
+ */
+export function regresoPersistidoDeBorrador(b: Pick<BorradorLote, "horaCarga" | "regresoOffsetDias" | "regresoHora">, fechaDestino: string): string | null {
+  return ventanaDeBorrador(b, fechaDestino).regresoEstimado;
+}
+
 /** Ventana de reserva de la fila en la fecha destino (misma política que POST/PATCH/importación). */
 export function ventanaDeBorrador(b: Pick<BorradorLote, "horaCarga" | "regresoOffsetDias" | "regresoHora">, fechaDestino: string): VentanaProgramacion {
   return ventanaProgramacionSegura({ fechaPlan: fechaDestino, horaCarga: b.horaCarga || null, regresoEstimado: regresoDestinoDeBorrador(b, fechaDestino) });
@@ -475,7 +484,7 @@ export async function confirmarLote(
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, NULL, 'Programado', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               [
                 empresaId, codigo, r.clienteId, lugarCargaId, lugarDescargaId, unidadId, pilotoId, auxIds[0] ?? null, fechaDestino,
-                b.horaCarga, b.tipoTraslado, regresoDestinoDeBorrador(b, fechaDestino)?.replace("T", " ") ?? null,
+                b.horaCarga, b.tipoTraslado, regresoPersistidoDeBorrador(b, fechaDestino)?.replace("T", " ") ?? null,
                 r.tarifa?.monto ?? null, r.tarifa?.id ?? null, r.tarifa?.nombre ?? null, r.tarifa?.monto ?? null, r.tarifa?.moneda ?? null,
                 r.rutaId, r.rutaCodigo, r.destino, r.contacto.nombre, r.contacto.cargo, r.contacto.telefono,
                 b.tipoViaje,

@@ -39,8 +39,8 @@ const texto = (v: unknown): string | null => {
  * A2.2 — el regreso estimado del origen se traslada al destino conservando hora y desfase en días respecto a su
  * fecha_plan (ver programacion-copia-ventana.ts). Lo calcula SIEMPRE el servidor desde el plan origen.
  */
-function trasladoDeOrigen(fechaOrigen: string, regresoOrigen: unknown): Pick<BorradorLote, "regresoOffsetDias" | "regresoHora"> {
-  const t = calcularTrasladoRegreso(fechaOrigen, regresoOrigen == null ? null : String(regresoOrigen));
+function trasladoDeOrigen(fechaOrigen: string, horaCargaOrigen: unknown, regresoOrigen: unknown): Pick<BorradorLote, "regresoOffsetDias" | "regresoHora"> {
+  const t = calcularTrasladoRegreso(fechaOrigen, horaCargaOrigen == null ? null : String(horaCargaOrigen), regresoOrigen == null ? null : String(regresoOrigen));
   return { regresoOffsetDias: t ? t.offsetDias : null, regresoHora: t ? t.hora : null };
 }
 
@@ -102,7 +102,7 @@ export async function cargarCopiaDeFecha(empresaId: number, fechaOrigen: string)
       rutaId: p.ruta_id != null ? Number(p.ruta_id) : null,
       clienteId: p.cliente_id != null ? Number(p.cliente_id) : null,
       horaCarga: p.hora_carga ? String(p.hora_carga).slice(0, 5) : null,
-      ...trasladoDeOrigen(fechaOrigen, p.regreso_estimado),
+      ...trasladoDeOrigen(fechaOrigen, p.hora_carga, p.regreso_estimado),
       tipoTraslado: texto(p.tipo_traslado),
       tipoViaje: tercerizado ? "Tercerizado" : "Propio",
       unidadPlaca: tercerizado ? null : texto(p.unidad_placa),
@@ -155,18 +155,18 @@ export async function borradoresDesdeCliente(
   if (new Set(filas.map((f) => f.origenPlanId)).size !== filas.length) return { ok: false, error: "Un mismo viaje origen no puede copiarse dos veces en el lote." };
   const validos = origenIds.length
     ? await query<RowDataPacket[]>(
-        `SELECT id, DATE_FORMAT(regreso_estimado, '%Y-%m-%d %H:%i:%s') AS regreso_estimado FROM tms_planes_viaje WHERE empresa_id = ? AND fecha_plan = ? AND estado <> 'Cancelado' AND id IN (${origenIds.map(() => "?").join(",")})`,
+        `SELECT id, hora_carga, DATE_FORMAT(regreso_estimado, '%Y-%m-%d %H:%i:%s') AS regreso_estimado FROM tms_planes_viaje WHERE empresa_id = ? AND fecha_plan = ? AND estado <> 'Cancelado' AND id IN (${origenIds.map(() => "?").join(",")})`,
         [empresaId, fechaOrigen, ...origenIds],
       )
     : [];
   if (validos.length !== origenIds.length) return { ok: false, error: "Algún viaje origen no existe, está cancelado o no pertenece a la fecha/empresa indicada." };
   const paradasMap = await listarParadasDePlanes(origenIds);
-  const regresoPorOrigen = new Map(validos.map((v) => [Number(v.id), v.regreso_estimado]));
+  const origenPorId = new Map(validos.map((v) => [Number(v.id), v])); // hora_carga y regreso del ORIGEN (nunca del cliente)
   return {
     ok: true,
     borradores: filas.map((f) => ({
       ...f,
-      ...trasladoDeOrigen(fechaOrigen, regresoPorOrigen.get(f.origenPlanId as number)), // del ORIGEN en servidor, nunca del cliente
+      ...trasladoDeOrigen(fechaOrigen, origenPorId.get(f.origenPlanId as number)?.hora_carga, origenPorId.get(f.origenPlanId as number)?.regreso_estimado), // del ORIGEN en servidor, nunca del cliente
       paradas: (paradasMap.get(f.origenPlanId as number) ?? []).map((pp) => ({
         lugarNombre: String(pp.lugar_nombre), tipo: String(pp.tipo), requiereEvidencia: Boolean(pp.requiere_evidencia),
       })),
