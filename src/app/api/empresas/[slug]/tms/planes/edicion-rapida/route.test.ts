@@ -67,12 +67,13 @@ describe("POST /tms/planes/edicion-rapida (guardar)", () => {
     expect(guardarEdicionRapida).not.toHaveBeenCalled();
   });
 
-  it("usa el MISMO esquema que /validar y no toca la UI", async () => {
+  it("usa el MISMO esquema que /validar; la UI (PR-3) lo llama solo desde edicion-rapida-helpers", async () => {
     const { readFileSync } = await import("node:fs");
     const guardar = readFileSync("src/app/api/empresas/[slug]/tms/planes/edicion-rapida/route.ts", "utf8");
     const validar = readFileSync("src/app/api/empresas/[slug]/tms/planes/edicion-rapida/validar/route.ts", "utf8");
     expect(guardar).toContain("validarEdicionRapidaSchema");
     expect(validar).toContain("validarEdicionRapidaSchema");
-    expect(readFileSync("src/app/e/[slug]/programacion/programacion-client.tsx", "utf8")).not.toMatch(/edicion-rapida/i);
+    expect(readFileSync("src/app/e/[slug]/programacion/programacion-client.tsx", "utf8")).not.toContain("tms/planes/edicion-rapida");
+    expect(readFileSync("src/app/e/[slug]/programacion/edicion-rapida-helpers.ts", "utf8")).toContain("/tms/planes/edicion-rapida`");
   });
 });
