@@ -150,20 +150,27 @@ describe("detectarTraslapesEnLote", () => {
     expect(resultado[1]).toMatchObject({ filaExcel: 5, filaExcelConflicto: 4, categoria: "persona" });
   });
 
-  it("mismo piloto y día bloquea aunque las horas solo se toquen", () => {
+  it("intervalos semiabiertos: [08:00,12:00) y [12:00,18:00) solo se tocan -> NO hay conflicto", () => {
     const filas = [
       filaFixture({ filaExcel: 4, pilotoCodigoExcel: "P-1", placaExcel: "AAA111", horaSalidaExcel: "08:00", horaRegresoExcel: "12:00" }),
       filaFixture({ filaExcel: 5, pilotoCodigoExcel: "P-1", placaExcel: "BBB222", horaSalidaExcel: "12:00", horaRegresoExcel: "18:00" }),
     ];
-    expect(detectarTraslapesEnLote(filas)).toHaveLength(2);
+    expect(detectarTraslapesEnLote(filas)).toEqual([]);
   });
 
-  it("mismo piloto y día bloquea aunque los horarios no se solapen", () => {
+  it("mismo piloto y día con horarios que NO se solapan ([08:00,12:00) y [13:00,18:00)): permitido", () => {
     const filas = [
       filaFixture({ filaExcel: 4, pilotoCodigoExcel: "P-1", placaExcel: "AAA111", horaSalidaExcel: "08:00", horaRegresoExcel: "12:00" }),
       filaFixture({ filaExcel: 5, pilotoCodigoExcel: "P-1", placaExcel: "BBB222", horaSalidaExcel: "13:00", horaRegresoExcel: "18:00" }),
     ];
-    expect(detectarTraslapesEnLote(filas)).toHaveLength(2);
+    expect(detectarTraslapesEnLote(filas)).toEqual([]);
+  });
+
+  it("A2.1 cruce de medianoche: 24/09 22:00 -> 25/09 02:00 choca con 25/09 01:00 pero NO con 25/09 02:00", () => {
+    const noche = filaFixture({ filaExcel: 4, pilotoCodigoExcel: "P-1", placaExcel: "AAA111", fechaSalidaExcel: "2026-09-24", horaSalidaExcel: "22:00", fechaRegresoExcel: "2026-09-25", horaRegresoExcel: "02:00" });
+    const madrugada = (hora: string) => filaFixture({ filaExcel: 5, pilotoCodigoExcel: "P-1", placaExcel: "BBB222", fechaSalidaExcel: "2026-09-25", horaSalidaExcel: hora, fechaRegresoExcel: "2026-09-25", horaRegresoExcel: "05:00" });
+    expect(detectarTraslapesEnLote([noche, madrugada("01:00")])).toHaveLength(2);
+    expect(detectarTraslapesEnLote([noche, madrugada("02:00")])).toEqual([]);
   });
 
   it("el piloto de una fila es el auxiliar de otra (misma persona, roles distintos): SÍ es conflicto — mismo criterio que disponibilidad-traslapes.ts", () => {
@@ -202,7 +209,7 @@ describe("detectarTraslapesEnLote", () => {
     expect(detectarTraslapesEnLote(filas)).toEqual([]);
   });
 
-  it("fila sin regreso estimado (ninguna de las dos mitades): ya NO se excluye — es un viaje abierto y choca con la otra fila", () => {
+  it("fila sin regreso estimado (ninguna de las dos mitades): reserva TODO su fecha_plan y choca con otra fila de ese día", () => {
     const filas = [
       filaFixture({ filaExcel: 4, pilotoCodigoExcel: "P-1", placaExcel: "AAA111", fechaRegresoExcel: null, horaRegresoExcel: null }),
       filaFixture({ filaExcel: 5, pilotoCodigoExcel: "P-1", placaExcel: "BBB222", horaSalidaExcel: "09:00" }),
@@ -210,7 +217,7 @@ describe("detectarTraslapesEnLote", () => {
     const resultado = detectarTraslapesEnLote(filas);
     expect(resultado).toHaveLength(2);
     expect(resultado[0]).toMatchObject({ filaExcel: 4, filaExcelConflicto: 5, categoria: "persona" });
-    expect(resultado[1]).toMatchObject({ filaExcel: 5, filaExcelConflicto: 4, categoria: "persona", intervaloConflicto: { fin: null } });
+    expect(resultado[1]).toMatchObject({ filaExcel: 5, filaExcelConflicto: 4, categoria: "persona", intervaloConflicto: { inicio: "2026-09-20 00:00:00", fin: "2026-09-21 00:00:00" } });
   });
 
   it("fila sin fecha de salida válida: se excluye de la comparación, sin lanzar excepción", () => {
@@ -230,8 +237,8 @@ describe("detectarTraslapesEnLote", () => {
     ];
     const resultado = detectarTraslapesEnLote(filas);
     const pares = resultado.map((r) => [r.filaExcel, r.filaExcelConflicto].sort((a, b) => a - b).join("-"));
-    expect(new Set(pares)).toEqual(new Set(["4-5", "4-6", "5-6"]));
-    expect(resultado).toHaveLength(6);
+    expect(new Set(pares)).toEqual(new Set(["4-5", "5-6"])); // A-C ([08,12) y [14,18)) no se solapan
+    expect(resultado).toHaveLength(4);
   });
 });
 
@@ -343,24 +350,39 @@ function dispatchQuery(estado: EstadoMock, sql: string, params: unknown[]): unkn
   if (sql.includes("FROM empleados WHERE empresa_id")) return estado.empleados;
   if (sql.includes("FROM tms_personal WHERE empresa_id = ? AND (codigo IS NOT NULL OR id_empleado IS NOT NULL)")) return estado.personal;
   if (sql.includes("SELECT id, placa FROM tms_unidades")) return estado.unidades;
-  if (sql.includes("FROM tms_personal tp")) return candidatosDiarios(estado.conflictoPersonal, params);
-  if (sql.includes("FROM tms_unidades u")) return candidatosDiarios(estado.conflictoUnidad, params);
+  if (sql.includes("FROM tms_personal tp")) return candidatosIntervalo(sql, estado.conflictoPersonal, params);
+  if (sql.includes("FROM tms_unidades u")) return candidatosIntervalo(sql, estado.conflictoUnidad, params);
   if (sql.includes("FROM tms_ruta_tarifas")) return estado.tarifas;
   // asegurarCodigoPlanUnico / generarCodigoPlan: sin códigos previos -> genera PLAN-<fecha>-001.
   if (sql.includes("FROM tms_planes_viaje")) return [];
   return [];
 }
 
-function candidatosDiarios(filas: unknown[], params: unknown[]): unknown[] {
-  const fecha = String(params[1]);
-  const ids = params.slice(7).map(Number);
+/**
+ * A2.1 — la validación contra BD usa la consulta por INTERVALOS (disponibilidad-programacion-intervalos.ts). Emula su
+ * filtro: `p.fecha_plan <= fechaFin` y (`p.fecha_plan >= fechaInicio` o `p.regreso_estimado > inicio`), estados de
+ * asignación y `p.id NOT IN (…)`. La decisión de solape es la del código de producción.
+ */
+function idsDeConsulta(sql: string, params: unknown[]): number[] {
+  const nExcluidos = (/p\.id NOT IN \(([?,]+)\)/.exec(sql)?.[1].split(",").length) ?? 0;
+  const desde = sql.includes("FROM tms_personal tp") ? 10 : 9; // personal repite empresa_id de tp antes de los ids
+  return params.slice(desde, params.length - nExcluidos).map(Number);
+}
+
+function candidatosIntervalo(sql: string, filas: unknown[], params: unknown[]): unknown[] {
+  const fechaFin = String(params[6]);
+  const fechaInicio = String(params[7]);
+  const inicioVentana = String(params[8]);
+  const ids = idsDeConsulta(sql, params);
   return filas.flatMap((fila) => {
     const r = fila as Record<string, unknown>;
-    const dia = String(r.fecha ?? r.inicio ?? "").slice(0, 10);
-    if (dia !== fecha || r.estado === "Cancelado") return [];
+    const inicio = String(r.inicio ?? `${r.fecha} 00:00:00`);
+    const dia = inicio.slice(0, 10);
+    const regreso = (r.regreso_estimado as string | null | undefined) ?? null;
+    if (r.estado === "Cancelado" || dia > fechaFin) return [];
+    if (!(dia >= fechaInicio || (regreso != null && regreso > inicioVentana))) return [];
     const id = Number(r.recurso_id ?? ids[0]);
-    return ids.includes(id) ? [{ ...r, recurso_id: id, nombre: r.nombre ?? r.recurso_nombre,
-      fecha: dia }] : [];
+    return ids.includes(id) ? [{ ...r, recurso_id: id, nombre: r.nombre ?? r.recurso_nombre, fecha_plan: dia, hora_carga: inicio.slice(11, 19), regreso_estimado: regreso }] : [];
   });
 }
 
@@ -973,10 +995,10 @@ const candidato = (over: Record<string, unknown> = {}) => ({
 function mockDbConflictosPorRecurso(estado: EstadoMock, porPersonalId: Record<number, unknown[]> = {}, porUnidadId: Record<number, unknown[]> = {}) {
   vi.mocked(query).mockImplementation((async (sql: string, params?: unknown) => {
     const p = (params ?? []) as unknown[];
-    if (sql.includes("FROM tms_personal tp")) return candidatosDiarios(p.slice(7).flatMap((id) =>
-      (porPersonalId[Number(id)] ?? []).map((r) => ({ ...(r as object), recurso_id: Number(id) }))), p);
-    if (sql.includes("FROM tms_unidades u")) return candidatosDiarios(p.slice(7).flatMap((id) =>
-      (porUnidadId[Number(id)] ?? []).map((r) => ({ ...(r as object), recurso_id: Number(id) }))), p);
+    if (sql.includes("FROM tms_personal tp")) return candidatosIntervalo(sql, idsDeConsulta(sql, p).flatMap((id) =>
+      (porPersonalId[id] ?? []).map((r) => ({ ...(r as object), recurso_id: id }))), p);
+    if (sql.includes("FROM tms_unidades u")) return candidatosIntervalo(sql, idsDeConsulta(sql, p).flatMap((id) =>
+      (porUnidadId[id] ?? []).map((r) => ({ ...(r as object), recurso_id: id }))), p);
     return dispatchQuery(estado, sql, p);
   }) as never);
 }
@@ -993,7 +1015,7 @@ describe("detectarTraslapesEnLote — filas sin regreso estimado (viaje abierto)
     expect(detectarTraslapesEnLote(filas)).toEqual([]);
   });
 
-  it("una fila con regreso que TERMINA antes de que salga la fila abierta no choca", () => {
+  it("una fila abierta reserva todo el día: choca con una fila con regreso del mismo día aunque esta termine antes de su salida", () => {
     const filas = [
       filaFixture({ filaExcel: 4, pilotoCodigoExcel: "P-1", placaExcel: "AAA111", horaSalidaExcel: "06:00", horaRegresoExcel: "07:59" }),
       filaFixture({ filaExcel: 5, pilotoCodigoExcel: "P-1", placaExcel: "BBB222", horaSalidaExcel: "08:00", ...SIN_REGRESO }),
@@ -1043,18 +1065,19 @@ describe("previsualizarImportacionProgramacion — traslapes con y sin regreso e
   beforeEach(() => vi.resetAllMocks());
   const personalPiloto = { id: 900, codigo: "P-1", tipo: "Piloto" };
 
-  it("CON regreso estimado y sin conflicto: ok; se valida el intervalo [salida, regreso]", async () => {
+  it("CON hora de salida y regreso estimado y sin conflicto: ok; se valida el intervalo [salida, regreso)", async () => {
     mockDb({ personal: [personalPiloto] });
     mockVehiculos();
     const r = await previsualizarImportacionProgramacion(7, [filaFixture()]);
     expect(r.filas[0].estado).toBe("ok");
     const [sql, params] = consultasConflicto()[0] as [string, unknown[]];
-    expect(params).toContain("2026-09-20");
-    expect(params).not.toContain("2026-09-20 17:00:00");
-    expect(String(sql)).toContain("p.fecha_plan = ?");
+    expect(params).toContain("2026-09-20 08:00:00"); // inicio de la ventana; el fin se compara en JS contra los candidatos
+    expect(params).not.toContain("2026-09-20 00:00:00");
+    expect(String(sql)).toContain("p.fecha_plan <= ?");
+    expect(String(sql)).toContain("p.regreso_estimado > ?");
   });
 
-  it("SIN regreso estimado y sin conflicto: ok, y SÍ se valida contra la BD con intervalo abierto (sin fin, nada inventado)", async () => {
+  it("SIN regreso estimado y sin conflicto: ok, y SÍ se valida contra la BD reservando todo fecha_plan (nada inventado)", async () => {
     mockDb({ personal: [personalPiloto] });
     mockVehiculos();
     const r = await previsualizarImportacionProgramacion(7, [filaFixture(SIN_REGRESO)]);
@@ -1062,10 +1085,29 @@ describe("previsualizarImportacionProgramacion — traslapes con y sin regreso e
     expect(r.filas[0].datos?.regresoEstimado).toBeNull();
     expect(consultasConflicto()).toHaveLength(1);
     const [sql, params] = consultasConflicto()[0] as [string, unknown[]];
-    expect(String(sql)).toContain("p.fecha_plan = ?");
-    expect(params).toContain("2026-09-20");
+    expect(String(sql)).toContain("p.fecha_plan <= ?");
+    expect(params).toContain("2026-09-20 00:00:00"); // reserva conservadora del día completo
+    expect(params).not.toContain("2026-09-20 08:00:00");
     expect(params).not.toContain("2026-09-20 17:00:00");
     expect(params.filter((x) => typeof x === "string" && /^2026-09-20 (1[0-9]|2[0-3])/.test(x))).toEqual([]);
+  });
+
+  it("A2.1 misma regla que POST/PATCH: existente 05:00-08:00 y fila 08:00-11:00 se permite; fila 07:59-10:00 choca", async () => {
+    mockDb({ personal: [personalPiloto], conflictoPersonal: [candidato({ inicio: "2026-09-20 05:00:00", regreso_estimado: "2026-09-20 08:00:00" })] });
+    mockVehiculos();
+    const permitido = await previsualizarImportacionProgramacion(7, [filaFixture({ horaSalidaExcel: "08:00", horaRegresoExcel: "11:00" })]);
+    expect(permitido.filas[0].estado).toBe("ok");
+    const bloqueado = await previsualizarImportacionProgramacion(7, [filaFixture({ horaSalidaExcel: "07:59", horaRegresoExcel: "10:00" })]);
+    expect(bloqueado.filas[0].estado).toBe("error");
+    expect(bloqueado.filas[0].errores).toEqual(["El piloto Juan Pérez ya está asignado al PLAN-20260920-001 para el 20/09/2026."]);
+  });
+
+  it("A2.1 cruce de medianoche contra BD: existente 20/09 22:00 -> 21/09 02:00; fila del 21 a las 01:00 choca y a las 02:00 no", async () => {
+    mockDb({ personal: [personalPiloto], conflictoPersonal: [candidato({ inicio: "2026-09-20 22:00:00", regreso_estimado: "2026-09-21 02:00:00" })] });
+    mockVehiculos();
+    const dia21 = (hora: string) => filaFixture({ fechaSalidaExcel: "2026-09-21", horaSalidaExcel: hora, fechaRegresoExcel: "2026-09-21", horaRegresoExcel: "06:00" });
+    expect((await previsualizarImportacionProgramacion(7, [dia21("01:00")])).filas[0].estado).toBe("error");
+    expect((await previsualizarImportacionProgramacion(7, [dia21("02:00")])).filas[0].estado).toBe("ok");
   });
 
   it("SIN regreso que choca con un viaje existente del PILOTO: error claro (recurso, viaje y estado/intervalo)", async () => {
@@ -1076,7 +1118,7 @@ describe("previsualizarImportacionProgramacion — traslapes con y sin regreso e
     expect(r.filas[0].errores).toEqual(["El piloto Juan Pérez ya está asignado al PLAN-20260920-001 para el 20/09/2026."]);
   });
 
-  it("SIN regreso que choca con un viaje existente CON intervalo: el mensaje muestra el rango", async () => {
+  it("SIN regreso que choca con un viaje existente CON intervalo: el mensaje conserva el formato con la fecha", async () => {
     mockDb({ personal: [personalPiloto], conflictoPersonal: [candidato()] });
     mockVehiculos();
     const r = await previsualizarImportacionProgramacion(7, [filaFixture(SIN_REGRESO)]);
@@ -1104,7 +1146,7 @@ describe("previsualizarImportacionProgramacion — traslapes con y sin regreso e
     expect(r.filas[0].errores).toEqual(["La unidad P-123ABC ya está asignada al PLAN-UNI-3 para el 20/09/2026."]);
   });
 
-  it("un viaje existente Cerrado sin regreso estimado ocupa solo hasta su llegada real: una fila posterior sin regreso pasa", async () => {
+  it("un viaje existente Cerrado sin regreso estimado reserva solo su propio día: una fila de otro día sin regreso pasa", async () => {
     mockDb({
       personal: [personalPiloto],
       conflictoPersonal: [candidato({ estado: "Cerrado", regreso_estimado: null, inicio: "2026-09-19 06:00:00", llegada_tecnica: 1, hora_llegada: "2026-09-19 18:00:00", cerrado_en: "2026-09-25 09:00:00" })],
@@ -1124,7 +1166,7 @@ describe("previsualizarImportacionProgramacion — traslapes con y sin regreso e
     const r = await previsualizarImportacionProgramacion(7, filas);
     expect(r.filas.map((f) => f.estado)).toEqual(["error", "error"]);
     expect(r.filas[1].errores.join("\n")).toContain('Traslape con la fila 4 del mismo archivo: comparten personal "P-1"');
-    expect(r.filas[1].errores.join("\n")).toContain("no tiene regreso estimado: se considera un viaje abierto");
+    expect(r.filas[1].errores.join("\n")).toContain("reserva todo el 20/09/2026 (sin hora de salida o sin regreso estimado completos)");
     expect(r.filas[0].errores.join("\n")).toContain("Traslape con la fila 5 del mismo archivo");
     expect(r.filas[0].errores.join("\n")).toContain("2026-09-20 08:00 a 2026-09-20 17:00");
   });
@@ -1147,8 +1189,9 @@ describe("previsualizarImportacionProgramacion — traslapes con y sin regreso e
     const consultas = consultasConflicto() as [string, unknown[]][];
     expect(consultas).toHaveLength(2); // piloto + unidad
     for (const [sql, params] of consultas) {
-      expect(sql).toMatch(/(tp|u)\.empresa_id = \?/);
-      expect(sql).toContain("p.empresa_id = ");
+      // Personal: tp.empresa_id; unidad: se acota por p.empresa_id (+ join p.empresa_id = u.empresa_id) en la ventana compartida.
+      expect(sql).toMatch(/p\.empresa_id = \?/);
+      expect(sql).toMatch(/p\.empresa_id = (tp|u)\.empresa_id/);
       expect(params[0]).toBe(9);
       expect(params).not.toContain(7);
     }
@@ -1257,7 +1300,8 @@ describe("importador — identidad de personal por empleado (id_empleado)", () =
     expect(r.filas[0].estado).toBe("error");
     expect(r.filas[0].errores).toEqual(["El piloto Juan Pérez ya está asignado al PLAN-EXISTENTE para el 20/09/2026."]);
     // Se consultó con el personal_id del OTRO rol (901): la consulta expande a todos los del empleado.
-    expect((conflictoPersonal()[0][1] as unknown[]).slice(0, 2)).toEqual([7, "2026-09-20"]);
+    const consulta = conflictoPersonal()[0][1] as unknown[];
+    expect([consulta[0], consulta[7]]).toEqual([7, "2026-09-20"]); // empresa + inicio de la ventana (política por intervalos)
   });
 
   it("piloto del Excel con fila de Piloto (22) y de Auxiliar (10) del mismo empleado; el viaje usa la de Auxiliar: CONFLICTO", async () => {
@@ -1323,7 +1367,7 @@ describe("importador — identidad de personal por empleado (id_empleado)", () =
     expect(r.filas[0].estado).toBe("ok");
     const [sql, params] = conflictoPersonal()[0] as [string, unknown[]];
     expect(sql).toContain("eq.empresa_id = tp.empresa_id");
-    expect(params.slice(0, 2)).toEqual([7, "2026-09-20"]);
+    expect([params[0], params[7]]).toEqual([7, "2026-09-20"]);
   });
 
   it("los catálogos de personal se piden por empresa e incluyen id_empleado", async () => {

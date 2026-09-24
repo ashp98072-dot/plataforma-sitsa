@@ -28,9 +28,9 @@ vi.mock("@/lib/tms/viaticos", () => ({
 vi.mock("@/lib/tms/plan-comunes", () => ({ upsertLugar: vi.fn(), guardarAuxiliaresPlan: vi.fn(() => Promise.resolve()) }));
 vi.mock("@/lib/tms/personal-resolucion", () => ({ personalDesdeEmpleado: vi.fn(), validarPersonalId: vi.fn() }));
 vi.mock("@/lib/tms/tc-plan", () => ({ resolverTcInterno: vi.fn() }));
-vi.mock("@/lib/tms/disponibilidad-programacion-dia", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/tms/disponibilidad-programacion-dia")>();
-  return { ...actual, primerConflictoProgramacionDia: vi.fn(() => Promise.resolve(null)) };
+vi.mock("@/lib/tms/disponibilidad-programacion-intervalos", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/tms/disponibilidad-programacion-intervalos")>();
+  return { ...actual, primerConflictoProgramacionIntervalo: vi.fn(() => Promise.resolve(null)) };
 });
 
 import { execute, getPool, query } from "@/lib/db";
@@ -44,7 +44,7 @@ import { guardarAuxiliaresPlan } from "@/lib/tms/plan-comunes";
 import { personalDesdeEmpleado, validarPersonalId } from "@/lib/tms/personal-resolucion";
 import { resolverTcInterno } from "@/lib/tms/tc-plan";
 import { sincronizarViaticosPlan } from "@/lib/tms/viaticos";
-import { primerConflictoProgramacionDia } from "@/lib/tms/disponibilidad-programacion-dia";
+import { primerConflictoProgramacionIntervalo } from "@/lib/tms/disponibilidad-programacion-intervalos";
 import { hoyLocal } from "@/lib/rrhh/dates";
 import { PATCH } from "./route";
 
@@ -111,7 +111,7 @@ beforeEach(() => {
   }) as never);
   vi.mocked(execute).mockResolvedValue({ insertId: 500, affectedRows: 1 } as never);
   vi.mocked(registrarAuditoria).mockImplementation((async () => { orden.push("auditoria"); }) as never);
-  vi.mocked(primerConflictoProgramacionDia).mockImplementation((async () => { orden.push("conflicto"); return null; }) as never);
+  vi.mocked(primerConflictoProgramacionIntervalo).mockImplementation((async () => { orden.push("conflicto"); return null; }) as never);
   vi.mocked(guardarAuxiliaresPlan).mockImplementation((async () => { orden.push("auxiliares"); }) as never);
   vi.mocked(sincronizarViaticosPlan).mockImplementation((async () => { orden.push("viaticos"); }) as never);
   vi.mocked(validarPersonalId).mockImplementation((async (_e: number, id: number) => ({ id, nombre: id === 20 ? "Piloto Nuevo" : `Persona ${id}` })) as never);
@@ -202,7 +202,7 @@ describe("PATCH — tercerizado y TC", () => {
     filaPlan = plan({ tipo_viaje: "Tercerizado", piloto_id: null, unidad_id: null, flota_vehiculo_id: null, placa: null, piloto: null });
     expect((await patch({ id: 40, notas: "externo", tcExternoPlaca: "tc-ext" })).status).toBe(200);
     expect(listarDisponibilidadPersonal).not.toHaveBeenCalled();
-    expect(primerConflictoProgramacionDia).not.toHaveBeenCalled();
+    expect(primerConflictoProgramacionIntervalo).not.toHaveBeenCalled();
     expect(orden).not.toContain("lock");
     expect(update()![1]).toContain("TC-EXT"); // placa externa en mayúsculas
   });
@@ -218,7 +218,7 @@ describe("PATCH — tercerizado y TC", () => {
   it("TC válido distinto: se valida, se escribe (id + fotografía de placa) y participa en la política diaria", async () => {
     vi.mocked(resolverTcInterno).mockResolvedValue({ ok: true, vehiculoId: 9, placa: "TC-9" } as never);
     expect((await patch({ id: 40, tcVehiculoId: 9 })).status).toBe(200);
-    expect(vi.mocked(primerConflictoProgramacionDia).mock.calls[0][1]).toContainEqual({ tipo: "tc", id: 9 });
+    expect(vi.mocked(primerConflictoProgramacionIntervalo).mock.calls[0][1]).toContainEqual({ tipo: "tc", id: 9 });
     expect(update()![1]).toEqual(expect.arrayContaining([true, 9, "TC-9"]));
   });
 
@@ -353,7 +353,7 @@ describe("PATCH — quitar personal con viático ya procesado", () => {
   });
 });
 
-describe("PATCH — auxiliares (principal y adicionales) y política diaria/lock", () => {
+describe("PATCH — auxiliares (principal y adicionales) y política por intervalos/lock", () => {
   it("18) auxiliarPersonalIds: el primero es el principal (auxiliar_id), todos van a tms_plan_auxiliares y a la sincronización de viáticos", async () => {
     usarPersonal(personalDisp({ personalId: 7, nombre: "Aux Siete" }), personalDisp({ personalId: 9, nombre: "Aux Nueve" }));
     const res = await patch({ id: 40, auxiliarPersonalIds: [7, 9, 7], motivoCambio: "Reorganización" });
@@ -370,21 +370,21 @@ describe("PATCH — auxiliares (principal y adicionales) y política diaria/lock
     expect(update()![1][2]).toBeNull();
   });
 
-  it("política diaria vigente: recursos efectivos (piloto, auxiliares, unidad, TC) vs la fecha efectiva excluyendo el propio plan, con la misma conexión", async () => {
+  it("A2.1 política por intervalos: recursos efectivos (piloto, auxiliares, unidad, TC) vs la ventana efectiva excluyendo el propio plan, con la misma conexión", async () => {
     auxiliaresActuales = [{ plan_id: 40, personal_id: 5, id_empleado: null, nombre: "Aux Cinco", telefono: null }];
     filaPlan = plan({ tc_vehiculo_id: 9 });
     await patch({ id: 40, notas: "x", fechaPlan: sumarDias(MANANA, 1) });
-    expect(primerConflictoProgramacionDia).toHaveBeenCalledWith(
+    expect(primerConflictoProgramacionIntervalo).toHaveBeenCalledWith(
       7,
       [{ tipo: "piloto", id: 10 }, { tipo: "auxiliar", id: 5 }, { tipo: "unidad", id: 3 }, { tipo: "tc", id: 9 }],
-      sumarDias(MANANA, 1),
-      40,
+      { fechaPlan: sumarDias(MANANA, 1), horaCarga: "08:00:00", regresoEstimado: null }, // hora guardada; sin regreso => reserva diaria en el motor
+      [40],
       conexion,
     );
   });
 
   it("un conflicto bajo el candado revierte TODO (rollback, sin UPDATE) y libera el lock", async () => {
-    vi.mocked(primerConflictoProgramacionDia).mockResolvedValue({ tipo: "piloto", id: 20, nombre: "Piloto Nuevo", planIdConflicto: 41, codigoConflicto: "PLAN-41", fechaConflicto: MANANA } as never);
+    vi.mocked(primerConflictoProgramacionIntervalo).mockResolvedValue({ tipo: "piloto", id: 20, nombre: "Piloto Nuevo", planIdConflicto: 41, codigoConflicto: "PLAN-41", inicioConflicto: `${MANANA} 00:00:00`, finConflicto: `${sumarDias(MANANA, 1)} 00:00:00` } as never);
     const res = await patch(cambiarPiloto());
     expect(res.status).toBe(409);
     expect((await res.json()).error).toBe(`El piloto Piloto Nuevo ya está asignado al PLAN-41 para el ${MANANA.split("-").reverse().join("/")}.`);
@@ -410,7 +410,7 @@ describe("PATCH — auxiliares (principal y adicionales) y política diaria/lock
 
   it("Cancelado por PATCH no valida traslapes (libera recursos)", async () => {
     expect((await patch({ id: 40, estado: "Cancelado", notas: "cancelado" })).status).toBe(200);
-    expect(primerConflictoProgramacionDia).not.toHaveBeenCalled();
+    expect(primerConflictoProgramacionIntervalo).not.toHaveBeenCalled();
     expect(registrarAuditoria).toHaveBeenLastCalledWith(expect.objectContaining({ accion: "cancelar_ruta" }));
   });
 });

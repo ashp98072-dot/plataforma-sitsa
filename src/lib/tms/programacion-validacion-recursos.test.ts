@@ -228,9 +228,9 @@ describe("PATCH usa los helpers y el PR-0 no cambia superficie", () => {
     }
   });
 
-  it("el PATCH sigue con la política DIARIA, el candado por empresa y la auditoría fuera de la transacción", () => {
-    expect(route).toContain("primerConflictoProgramacionDia(");
-    expect(route).not.toContain("primerConflictoProgramacionIntervalo");
+  it("el PATCH usa la política por INTERVALOS (A2.1), el candado por empresa y la auditoría fuera de la transacción", () => {
+    expect(route).toContain("primerConflictoProgramacionIntervalo(");
+    expect(route).not.toContain("primerConflictoProgramacionDia(");
     expect(route).toContain("`tms_traslape_${empresaId}`");
   });
 

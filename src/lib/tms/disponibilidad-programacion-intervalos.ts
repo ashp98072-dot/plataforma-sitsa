@@ -1,7 +1,7 @@
 import type { RowDataPacket } from "mysql2";
 import type { PoolConnection } from "mysql2/promise";
 import { query, type SqlParams } from "@/lib/db";
-import { ESTADOS_ASIGNACION_DIARIA, type RecursoDia } from "./disponibilidad-programacion-dia";
+import { ESTADOS_ASIGNACION_DIARIA, mensajeConflictoProgramacionDia, type RecursoDia } from "./disponibilidad-programacion-dia";
 import { inicioViaje, seSolapaConOcupacionReal, type IntervaloConsulta } from "./disponibilidad-traslapes";
 
 /**
@@ -86,6 +86,43 @@ export function intervaloProgramacion(ventana: VentanaProgramacion): IntervaloCo
   const fin = regresoEstimado.replace("T", " ").padEnd(19, ":00");
   if (fin <= inicio) throw new Error("El regreso estimado debe ser posterior a la hora de carga.");
   return { inicio, fin };
+}
+
+/**
+ * A2.1 — ventana utilizable por POST/PATCH/importación aunque el dato venga incompleto o incoherente (hora con
+ * formato inválido, regreso <= carga, regreso sin hora…): nunca lanza por hora/regreso; sin ventana completa válida
+ * conserva la reserva conservadora de TODO `fecha_plan`. Solo lanza si la fecha misma es inválida (los llamadores ya
+ * la validan). No inventa duración.
+ */
+export function ventanaProgramacionSegura(ventana: VentanaProgramacion): VentanaProgramacion {
+  const limpia: VentanaProgramacion = {
+    fechaPlan: ventana.fechaPlan,
+    horaCarga: ventana.horaCarga || null,
+    regresoEstimado: ventana.regresoEstimado || null,
+  };
+  try {
+    intervaloProgramacion(limpia);
+    return limpia;
+  } catch {
+    if (!fechaValida(limpia.fechaPlan)) throw new Error("Fecha de programación inválida.");
+    return { fechaPlan: limpia.fechaPlan, horaCarga: null, regresoEstimado: null };
+  }
+}
+
+/** Dos ventanas de planificación (ya seguras) se solapan como intervalos semiabiertos [inicio, fin). */
+export function ventanasProgramacionSeSolapan(a: VentanaProgramacion, b: VentanaProgramacion): boolean {
+  return seSolapaConOcupacionReal(
+    intervaloProgramacion(ventanaProgramacionSegura(a)),
+    intervaloProgramacion(ventanaProgramacionSegura(b)),
+  );
+}
+
+/** Mismo texto que la política diaria ("… ya está asignado al PLAN-X para el dd/mm/aaaa."); la fecha es la del inicio del conflicto. */
+export function mensajeConflictoProgramacionIntervalo(c: ConflictoProgramacionIntervalo): string {
+  return mensajeConflictoProgramacionDia({
+    tipo: c.tipo, id: c.id, nombre: c.nombre, planIdConflicto: c.planIdConflicto,
+    codigoConflicto: c.codigoConflicto, fechaConflicto: c.inicioConflicto.slice(0, 10),
+  });
 }
 
 /** Históricos incoherentes nunca liberan recursos: vuelven a la reserva diaria. */

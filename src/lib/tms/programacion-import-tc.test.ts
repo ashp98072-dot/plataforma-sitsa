@@ -161,11 +161,13 @@ beforeEach(() => {
     if (s.includes("FROM empleados")) return [{ id: 100, codigo: "P-1", nombre: "Juan", estado: "Activo" }];
     if (s.includes("FROM tms_personal")) return [];
     if (s.includes("FROM tms_unidades")) return [];
-    if (s.includes("p.tc_vehiculo_id = v.id")) { // tcsDelDia REAL: mismo día y misma empresa del plan
-      const [emp, fecha, ...resto] = params as [number, string, ...unknown[]];
-      const ids = resto.filter((x): x is number => typeof x === "number");
-      return planes.filter((p) => p.empresa_id === emp && p.fecha === fecha && ids.includes(p.tc_vehiculo_id))
-        .map((p) => ({ recurso_id: p.tc_vehiculo_id, nombre: flota[p.tc_vehiculo_id].placa, plan_id: 1, codigo: p.codigo, fecha: p.fecha }));
+    if (s.includes("p.tc_vehiculo_id = v.id")) { // consulta REAL por intervalos (A2.1): misma empresa y ventana; estos planes no tienen hora/regreso
+      const empresa = Number(params[0]);
+      const fechaFin = String(params[6]);
+      const fechaInicio = String(params[7]);
+      const ids = (params.slice(9) as unknown[]).filter((x): x is number => typeof x === "number");
+      return planes.filter((p) => p.empresa_id === empresa && p.fecha <= fechaFin && p.fecha >= fechaInicio && ids.includes(p.tc_vehiculo_id))
+        .map((p) => ({ recurso_id: p.tc_vehiculo_id, nombre: flota[p.tc_vehiculo_id].placa, plan_id: 1, codigo: p.codigo, fecha_plan: p.fecha, hora_carga: null, regreso_estimado: null }));
     }
     return [];
   }) as never);
@@ -237,7 +239,7 @@ describe("preview: TC de un viaje PROPIO", () => {
     expect(r.datos?.tcVehiculoId).toBe(7);
   });
 
-  it("TC ocupado el mismo día por otro viaje YA existente -> error con el código del plan (misma regla de disponibilidad diaria)", async () => {
+  it("TC ocupado el mismo día por otro viaje YA existente -> error con el código del plan (misma política temporal que la unidad)", async () => {
     planes = [{ empresa_id: 7, tc_vehiculo_id: 3, fecha: "2026-09-21", codigo: "PLAN-20260921-001", estado: "Programado" }];
     const r = (await preview([fila({ tcExcel: "TC-456XYZ" })])).filas[0];
     expect(r.estado).toBe("error");

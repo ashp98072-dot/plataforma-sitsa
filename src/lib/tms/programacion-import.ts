@@ -9,13 +9,16 @@ import { guardarParadasPlan, type ParadaInput } from "@/lib/tms/paradas";
 import { sincronizarViaticosPlan } from "@/lib/tms/viaticos";
 import { tarifasActivasDeVariasRutas } from "@/lib/tms/ruta-tarifas";
 import type { FilaProgramacionExcel } from "./programacion-import-excel";
-import { mensajeConflictoProgramacionDia, primerConflictoProgramacionDia, type RecursoDia } from "./disponibilidad-programacion-dia";
-import { resolverTcInterno } from "./tc-plan";
+import type { RecursoDia } from "./disponibilidad-programacion-dia";
 import {
-  finViajeDesdeInput,
-  inicioViaje,
-  type IntervaloConsulta,
-} from "./disponibilidad-traslapes";
+  intervaloProgramacion,
+  mensajeConflictoProgramacionIntervalo,
+  primerConflictoProgramacionIntervalo,
+  ventanaProgramacionSegura,
+  type VentanaProgramacion,
+} from "./disponibilidad-programacion-intervalos";
+import { resolverTcInterno } from "./tc-plan";
+import { seSolapaConOcupacionReal, type IntervaloConsulta } from "./disponibilidad-traslapes";
 
 /**
  * TMS-IMPORTACION-PROGRAMACION-EXCEL (PR 3 de 6) — validaciones PURAS
@@ -25,10 +28,11 @@ import {
  *
  * Nada de esto consulta BD. Todavía NO se resuelve ruta/cliente/piloto/
  * auxiliar/unidad contra catálogo, NO se valida tarifa vigente, NO se
- * compara contra viajes YA EXISTENTES en BD (eso se hace más abajo). El
- * regreso estimado sigue siendo opcional, pero no define la disponibilidad:
- * un plan de otra fecha nunca bloquea y dos del mismo día sí, aun con
- * horarios separados o con uno cerrado.
+ * compara contra viajes YA EXISTENTES en BD (eso se hace más abajo).
+ * A2.1: la disponibilidad usa la MISMA política por intervalos que Programación
+ * (disponibilidad-programacion-intervalos.ts): con hora de salida + regreso
+ * estimado se reserva [salida, regreso); sin alguno de los dos extremos se
+ * reserva todo fecha_plan. Dos filas se traslapan solo si esos intervalos se solapan.
  */
 
 /** Comparación case-insensitive de códigos/placas — mismo criterio que normalizarCodigoEmpleado() en rutas-import.ts. */
@@ -153,45 +157,46 @@ function recursosDeFila(fila: FilaProgramacionExcel): RecursoFila[] {
 }
 
 /**
- * Intervalo real de la fila (salida -> regreso estimado), reutilizando
- * las MISMAS funciones puras que ya usa el resto de Programación
- * (inicioViaje/finViajeDesdeInput de disponibilidad-traslapes.ts) —
- * mismo formato "YYYY-MM-DD HH:mm:ss", comparable como string.
- *
- * - Con regreso estimado completo (fecha+hora): `[salida, regreso]`.
- * - SIN regreso estimado (ninguna de las dos mitades): `fin: null` — viaje
- *   abierto, igual que un plan creado por POST/PATCH sin regreso.
- * - `null` (no comparable) solo si no hay fecha de salida válida, o si el
- *   regreso viene a medias (fecha sin hora u hora sin fecha): esa fila ya
- *   sale con error "Regreso estimado incompleto" y no se compara.
+ * Intervalo de reserva de la fila según la política compartida de Programación (A2.1): [salida, regreso) si la
+ * fila trae hora de salida Y regreso completo; si falta hora o regreso, todo `fecha_plan`. `null` (no comparable)
+ * solo si no hay fecha de salida válida, o si el regreso viene a medias (fecha sin hora u hora sin fecha): esa fila
+ * ya sale con error "Regreso estimado incompleto" y no se compara.
  */
-function intervaloDeFila(fila: FilaProgramacionExcel): IntervaloConsulta | null {
+function ventanaDeFila(fila: FilaProgramacionExcel): VentanaProgramacion | null {
   if (!fila.fechaSalidaExcel) return null;
-  const inicio = inicioViaje(fila.fechaSalidaExcel, fila.horaSalidaExcel);
   const tieneFecha = Boolean(fila.fechaRegresoExcel);
   const tieneHora = Boolean(fila.horaRegresoExcel);
   if (tieneFecha !== tieneHora) return null;
-  if (!tieneFecha) return { inicio, fin: null };
-  const fin = finViajeDesdeInput(`${fila.fechaRegresoExcel}T${fila.horaRegresoExcel}`);
-  if (!fin) return null;
-  return { inicio, fin };
+  try {
+    return ventanaProgramacionSegura({
+      fechaPlan: fila.fechaSalidaExcel,
+      horaCarga: fila.horaSalidaExcel || null,
+      regresoEstimado: tieneFecha ? `${fila.fechaRegresoExcel}T${fila.horaRegresoExcel}` : null,
+    });
+  } catch {
+    return null;
+  }
 }
 
-/**
- * La disponibilidad del lote depende solo de fecha_plan, nunca del regreso.
- */
+function intervaloDeFila(fila: FilaProgramacionExcel): (IntervaloConsulta & { fin: string }) | null {
+  const ventana = ventanaDeFila(fila);
+  return ventana ? intervaloProgramacion(ventana) : null;
+}
+
+/** Traslape entre dos filas del lote: intervalos semiabiertos con la política compartida. */
 function seSolapan(a: IntervaloConsulta, b: IntervaloConsulta): boolean {
-  return a.inicio.slice(0, 10) === b.inicio.slice(0, 10);
+  return seSolapaConOcupacionReal(a, b);
 }
-
 /** Texto del intervalo de una fila para los mensajes de error. */
 function describirIntervaloFila(i: IntervaloConsulta): string {
   const inicio = i.inicio.slice(0, 16);
-  return i.fin == null
-    ? `sale ${inicio} y no tiene regreso estimado: se considera un viaje abierto`
-    : `${inicio} a ${i.fin.slice(0, 16)}`;
+  const fin = i.fin?.slice(0, 16) ?? "";
+  // Reserva de todo el día (fila sin hora de salida o sin regreso completo): 00:00 -> 00:00 del día siguiente.
+  if (inicio.endsWith("00:00") && fin.endsWith("00:00") && new Date(`${fin.slice(0, 10)}T00:00:00Z`).getTime() - new Date(`${inicio.slice(0, 10)}T00:00:00Z`).getTime() === 86_400_000) {
+    return `reserva todo el ${inicio.slice(0, 10).split("-").reverse().join("/")} (sin hora de salida o sin regreso estimado completos)`;
+  }
+  return `${inicio} a ${fin}`;
 }
-
 export type ConflictoTraslapeEnLote = {
   filaExcel: number;
   filaExcelConflicto: number;
@@ -202,15 +207,15 @@ export type ConflictoTraslapeEnLote = {
   rolEnFila: RolRecurso;
   /** Rol que jugaba el recurso compartido en `filaExcelConflicto`. */
   rolEnFilaConflicto: RolRecurso;
-  /** Intervalo de la OTRA fila (la que genera el conflicto): `fin: null` = sin regreso estimado, viaje abierto. */
+  /** Intervalo de reserva de la OTRA fila (la que genera el conflicto). */
   intervaloConflicto: IntervaloConsulta;
 };
 
 /**
  * Detecta traslapes de piloto/auxiliar/unidad ENTRE filas del mismo
  * archivo (nunca contra BD — eso es una fase posterior). Dos filas
- * conflictúan cuando comparten fecha de salida Y al menos un
- * recurso de la MISMA categoría (persona o unidad). Devuelve una entrada
+ * conflictúan cuando sus intervalos de reserva se solapan Y comparten al menos un
+ * recurso de la MISMA categoría (persona, unidad o TC). Devuelve una entrada
  * por cada lado del conflicto (ambas filas involucradas), ordenadas por
  * número de fila de Excel. `[]` si no hay ningún conflicto.
  */
@@ -633,8 +638,8 @@ export async function previsualizarImportacionProgramacion(
     // REAL ya existente (personalId/unidadId no nulos) — ver nota sobre
     // personalDesdeEmpleado más arriba.
     //
-    // El regreso estimado es opcional y no cambia el bloqueo de fecha_plan.
-    // Un regreso a medias nunca llega aquí (error sintáctico anterior).
+    // A2.1: política por intervalos — con hora de salida + regreso completo se reserva [salida, regreso); si falta
+    // alguno de los dos extremos, todo fecha_plan. Un regreso a medias nunca llega aquí (error sintáctico anterior).
     let regresoEstimadoCombinado: string | null = null;
     if (fila.fechaRegresoExcel && fila.horaRegresoExcel) {
       regresoEstimadoCombinado = `${fila.fechaRegresoExcel}T${fila.horaRegresoExcel}`;
@@ -650,12 +655,17 @@ export async function previsualizarImportacionProgramacion(
       ...(pilotoParaConflicto != null ? [{ tipo: "piloto" as const, id: pilotoParaConflicto }] : []),
       ...auxiliaresParaConflicto.map((id) => ({ tipo: "auxiliar" as const, id })),
       ...(unidadId != null ? [{ tipo: "unidad" as const, id: unidadId }] : []),
-      // Misma política diaria que Programación manual: un TC interno no puede ir en dos viajes el mismo día.
+      // Misma política temporal que Programación manual (intervalos): el TC se comporta igual que la unidad.
       ...(tcResuelto ? [{ tipo: "tc" as const, id: tcResuelto.vehiculoId }] : []),
     ];
     if (recursos.length) {
-      const conflicto = await primerConflictoProgramacionDia(empresaId, recursos, fila.fechaSalidaExcel!, null);
-      if (conflicto) errores.push(mensajeConflictoProgramacionDia(conflicto));
+      const conflicto = await primerConflictoProgramacionIntervalo(
+        empresaId,
+        recursos,
+        ventanaProgramacionSegura({ fechaPlan: fila.fechaSalidaExcel!, horaCarga: fila.horaSalidaExcel || null, regresoEstimado: regresoEstimadoCombinado }),
+        [],
+      );
+      if (conflicto) errores.push(mensajeConflictoProgramacionIntervalo(conflicto));
     }
 
     if (errores.length) {

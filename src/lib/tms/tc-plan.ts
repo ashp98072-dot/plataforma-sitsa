@@ -11,7 +11,7 @@ import { esTc } from "@/lib/flota/tipo-unidad";
  *     jamás se infiere de placa/marca/modelo/descripción;
  *   - no puede estar inactivo ni en taller.
  * La disponibilidad por fecha (mismo TC, mismo día) NO se decide aquí: la
- * resuelve primerConflictoProgramacionDia bajo el candado por empresa.
+ * resuelve primerConflictoProgramacionIntervalo bajo el candado por empresa.
  */
 export type ResultadoTcInterno =
   | { ok: true; vehiculoId: number; placa: string }
