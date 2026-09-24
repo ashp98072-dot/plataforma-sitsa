@@ -11,6 +11,7 @@ import PlanForm from "./plan-form";
 import { formatearFechaHora12, formatearHora12 } from "@/lib/tms/hora-formato";
 import { resumenRegreso } from "@/lib/tms/regreso-viaje";
 import { useEmpresaSession } from "@/lib/empresa-session";
+import { tienePermiso } from "@/lib/permisos-shared";
 import { exportarProgramacionComoImagen } from "./programacion-exportar-imagen";
 import { mesDia, type FilaProgramacionImagen } from "@/lib/tms/programacion-imagen";
 
@@ -557,6 +558,7 @@ const POLLING_MS = 30_000;
 export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   const router = useRouter();
   const { empresaNombre } = useEmpresaSession();
+  const { permisos } = useEmpresaSession();
   const [planes, setPlanes] = useState<Plan[]>([]);
   // OPS-2.1: lista completa e independiente del rango de fechas — ver
   // DatosProgramacion.pendientesCierre.
@@ -1132,6 +1134,12 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
           >
             {mostrarCrear ? "Cancelar" : "+ Nuevo viaje"}
           </button>
+          {/* TMS-PROGRAMACION-LOTE-1 (PR A) — copiar la programación de otra fecha (vista previa editable, todo o nada). */}
+          {tienePermiso(permisos, "programacion", "crear") ? (
+            <Link href={`/e/${slug}/programacion/copiar`} className="rounded border border-[var(--border)] px-3 py-1.5 text-sm">
+              Copiar programación
+            </Link>
+          ) : null}
           <button
             type="button"
             className="rounded bg-[#334155] px-3 py-1.5 text-sm text-white disabled:opacity-40"
