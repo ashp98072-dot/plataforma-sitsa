@@ -1,6 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  agruparViaticos,
+  alternarEnSeleccion,
+  grupoCompletoSeleccionado,
+  idsAAutorizarDelGrupo,
+  limpiarSeleccionDelGrupo,
+  MODOS_AGRUPACION,
+  resumenGrupo,
+  seleccionadosDelGrupo,
+  seleccionarTodosDelGrupo,
+  type ModoAgrupacion,
+} from "@/lib/tms/viaticos-agrupacion";
 import { TEXTO_FIRMA_INTERNA } from "@/lib/firmas/textos";
 import type { FirmaCanvasHandle } from "@/components/tms/firma-canvas";
 import SelectorFirma from "@/components/tms/selector-firma";
@@ -142,6 +154,10 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   const [fEstado, setFEstado] = useState("");
 
   const [seleccionados, setSeleccionados] = useState<Set<number>>(new Set());
+  // TMS-VIATICOS-AGRUPACION-1 — agrupar el resultado YA filtrado por Día / Semana / Mes (solo cliente) y ids que
+  // "Autorizar seleccionados" de UN grupo enviará al flujo de autorización actual (se congelan al abrir el modal).
+  const [modoAgrupacion, setModoAgrupacion] = useState<ModoAgrupacion>("DIA");
+  const [idsMasivo, setIdsMasivo] = useState<number[]>([]);
   const [autorizandoMasivo, setAutorizandoMasivo] = useState(false);
 
   // VIATICOS-FIRMA-VISUAL — modal "Autorizar seleccionados" (antes
@@ -286,7 +302,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setSeleccionados(new Set());
-  }, [fBusqueda, fRol, fMetodo]);
+  }, [fBusqueda, fRol, fMetodo, modoAgrupacion]);
 
   const filtrados = items.filter((r) => {
     if (fBusqueda.trim()) {
@@ -303,19 +319,11 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   });
 
   function toggleSeleccion(id: number) {
-    setSeleccionados((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+    setSeleccionados((prev) => alternarEnSeleccion(prev, id));
   }
 
-  function toggleSeleccionTodos() {
-    setSeleccionados((prev) =>
-      prev.size === filtrados.length ? new Set() : new Set(filtrados.map((r) => r.id)),
-    );
-  }
+  /** Grupos del resultado YA filtrado (filtrar primero, agrupar después). */
+  const grupos = useMemo(() => agruparViaticos(filtrados, modoAgrupacion), [filtrados, modoAgrupacion]);
 
   // VIATICOS-FIRMA — "Firmar y autorizar": abre el modal (Viaje/
   // Beneficiario/Monto), el POST solo ocurre al confirmar dentro del
@@ -478,11 +486,12 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   }
 
   /** VIATICOS-FIRMA-VISUAL — abre el modal de firma masiva (antes window.prompt). */
-  async function abrirMasivo() {
-    if (!seleccionados.size) {
+  async function abrirMasivo(ids: number[]) {
+    if (!ids.length) {
       setError("Selecciona al menos un viático PROGRAMADO para autorizar.");
       return;
     }
+    setIdsMasivo(ids); // SOLO los seleccionados de ESE grupo
     setFirmaSesion((n) => n + 1);
     setTieneTrazoMasivo(false);
     setErrorMasivo("");
@@ -519,7 +528,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
     setErrorMasivo("");
     setError("");
     setMensaje("");
-    const ids = [...seleccionados];
+    const ids = [...idsMasivo]; // los seleccionados del grupo con el que se abrió el modal
     const porId = new Map(items.map((r) => [r.id, r]));
     const fallos: string[] = [];
     let exitos = 0;
@@ -558,6 +567,103 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
     setAutorizandoMasivo(false);
     setMasivoAbierto(false);
     await cargar();
+  }
+
+  /** Fila de un viático (idéntica a la tabla anterior: mismas acciones y permisos). */
+  function renderFila(r: ViaticoControlRow) {
+    return (
+              <tr key={r.id} className="border-t border-[var(--border)]">
+                {puedeAutorizar ? (
+                  <td className="px-2 py-2">
+                    <input type="checkbox" checked={seleccionados.has(r.id)} onChange={() => toggleSeleccion(r.id)} />
+                  </td>
+                ) : null}
+                <td className="px-3 py-2">{r.planCodigo}</td>
+                <td className="px-3 py-2">{r.fechaPlan}</td>
+                <td className="px-3 py-2">{r.cliente ?? "—"}</td>
+                <td className="px-3 py-2">{r.personalNombre}</td>
+                <td className="px-3 py-2">{r.rol}</td>
+                <td className="px-3 py-2">{q(r.montoSugerido)}</td>
+                <td className="px-3 py-2">{q(r.montoAsignado)}</td>
+                <td className="px-3 py-2">
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${ESTADO_BADGE_CLS[r.estado] ?? ""}`}>
+                    {ESTADO_LABEL_UI[r.estado] ?? r.estado}
+                  </span>
+                </td>
+                <td className="px-3 py-2">{r.metodoPago ? METODO_PAGO_LABEL[r.metodoPago] ?? r.metodoPago : "—"}</td>
+                {puedeVerBancario ? (
+                  <>
+                    <td className="px-3 py-2 text-[11px]">{r.banco || "—"}</td>
+                    <td className="px-3 py-2 text-[11px]">
+                      {r.cuentaBancaria ? `${r.cuentaBancaria}${r.tipoCuenta ? ` (${r.tipoCuenta})` : ""}` : "—"}
+                    </td>
+                  </>
+                ) : null}
+                <td className="px-3 py-2">
+                  {r.estado === "RECHAZADO" ? (
+                    /* VIATICOS-RECHAZADO-1 (sección 10) — sin botones de
+                       pago/autorizar/liquidar/Ver firmas (rechazar nunca
+                       crea firma, sección 11). */
+                    <div className="text-[11px] text-[var(--muted)]">
+                      <p>Rechazado por: {r.rechazadoPor ?? "—"}</p>
+                      <p>Fecha: {r.rechazadoEn ?? "—"}</p>
+                      <p>Motivo: {r.motivoRechazo ?? "—"}</p>
+                    </div>
+                  ) : (
+                    <>
+                      {puedeAutorizar && r.estado === "PROGRAMADO" ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => void abrirAutorizar(r)}
+                            className="rounded bg-sky-700 px-2 py-1 text-xs text-white"
+                          >
+                            Firmar y autorizar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => abrirRechazar(r)}
+                            className="ml-1 rounded bg-red-800 px-2 py-1 text-xs text-white"
+                          >
+                            Rechazar
+                          </button>
+                        </>
+                      ) : null}
+                      {puedeLiquidar && r.estado === "ENTREGADO" ? (
+                        <button
+                          type="button"
+                          onClick={() => void abrirLiquidar(r)}
+                          className="rounded bg-emerald-700 px-2 py-1 text-xs text-white"
+                        >
+                          Firmar liquidación
+                        </button>
+                      ) : null}
+                      {/* VIATICOS-HISTORIAL-FIRMA-1 — visible en cuanto exista
+                          al menos una firma (AUTORIZADO/ENTREGADO/LIQUIDADO;
+                          NUNCA RECHAZADO — VIATICOS-RECHAZADO-1 sección 11,
+                          rechazar no crea firma). Un LIQUIDADO puede tener
+                          autorización + liquidación, de ahí "Ver firmas" en
+                          plural (sección 6 del ticket original). */}
+                      {r.estado !== "PROGRAMADO" && r.estado !== "RECHAZADO" ? (
+                        <button
+                          type="button"
+                          onClick={() => setVerFirmasDe(r)}
+                          className="ml-1 rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--input)]"
+                        >
+                          Ver firmas
+                        </button>
+                      ) : null}
+                      {/* Único caso sin ningún botón: PROGRAMADO y sin permiso
+                          de autorizar — "Ver firmas" ya cubre todo lo demás
+                          (ENTREGADO/LIQUIDADO siempre tienen al menos una firma). */}
+                      {r.estado === "PROGRAMADO" && !puedeAutorizar ? (
+                        <span className="text-[11px] text-[var(--muted)]">—</span>
+                      ) : null}
+                    </>
+                  )}
+                </td>
+              </tr>
+    );
   }
 
   return (
@@ -661,155 +767,94 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
         >
           {loading ? "Actualizando…" : "Actualizar"}
         </button>
-        {puedeAutorizar ? (
-          <button
-            type="button"
-            className="rounded bg-sky-700 px-3 py-1.5 text-xs text-white disabled:opacity-50"
-            disabled={autorizandoMasivo || !seleccionados.size}
-            onClick={() => void abrirMasivo()}
-          >
-            {autorizandoMasivo ? "Autorizando…" : `Autorizar seleccionados${seleccionados.size ? ` (${seleccionados.size})` : ""}`}
-          </button>
-        ) : null}
+        <label className="text-xs text-[var(--muted)]">
+          Agrupar por
+          <select className={`${inputCls} mt-0.5 block`} value={modoAgrupacion} onChange={(e) => setModoAgrupacion(e.target.value as ModoAgrupacion)}>
+            {MODOS_AGRUPACION.map((m) => <option key={m.modo} value={m.modo}>{m.etiqueta}</option>)}
+          </select>
+        </label>
       </div>
 
       {error ? <p className="text-xs text-red-300">{error}</p> : null}
       {mensaje ? <p className="text-xs text-emerald-300">{mensaje}</p> : null}
 
-      <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
-        <table className="min-w-full text-left text-sm">
-          <thead className="bg-[#1F6AA5] text-white">
-            <tr>
+      {!grupos.length && !loading ? (
+        <p className="rounded-xl border border-[var(--border)] px-3 py-4 text-sm text-[var(--muted)]">Sin viáticos con este filtro.</p>
+      ) : null}
+
+      {/* TMS-VIATICOS-AGRUPACION-1 — un <details> por período (Día/Semana/Mes), el más reciente abierto por defecto;
+          la `key` incluye el modo para que al cambiar de agrupación se reapliquen los valores por defecto. */}
+      <div className="space-y-3">
+        {grupos.map((g, indice) => {
+          const sel = seleccionadosDelGrupo(seleccionados, g);
+          return (
+            <details key={`${modoAgrupacion}-${g.clave}`} open={indice === 0} className="overflow-hidden rounded-xl border border-[var(--border)]" data-grupo={g.clave}>
+              <summary className="flex cursor-pointer flex-wrap items-center gap-x-4 gap-y-1 bg-[var(--thead)] px-3 py-2 text-sm">
+                <span className="font-semibold">{g.etiqueta}</span>
+                <span className="text-xs">{resumenGrupo(g, q)}</span>
+                <span className="text-[11px] text-[var(--muted)]">
+                  {g.conteos.PROGRAMADO} por autorizar · {g.conteos.AUTORIZADO} autorizados · {g.conteos.RECHAZADO} rechazados · {g.conteos.ENTREGADO} entregados · {g.conteos.LIQUIDADO} liquidados
+                </span>
+              </summary>
               {puedeAutorizar ? (
-                <th className="px-2 py-2">
-                  <input
-                    type="checkbox"
-                    checked={filtrados.length > 0 && seleccionados.size === filtrados.length}
-                    onChange={toggleSeleccionTodos}
-                  />
-                </th>
+                <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border)] px-3 py-2 text-xs">
+                  <span aria-live="polite">Seleccionados: <strong>{sel.length}</strong> de <strong>{g.total}</strong></span>
+                  <button type="button" className="rounded border border-[var(--border)] px-2 py-1" disabled={grupoCompletoSeleccionado(seleccionados, g)} onClick={() => setSeleccionados((prev) => seleccionarTodosDelGrupo(prev, g))}>
+                    Seleccionar todos del grupo
+                  </button>
+                  <button type="button" className="rounded border border-[var(--border)] px-2 py-1" disabled={!sel.length} onClick={() => setSeleccionados((prev) => limpiarSeleccionDelGrupo(prev, g))}>
+                    Limpiar selección del grupo
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded bg-sky-700 px-3 py-1 text-white disabled:opacity-50"
+                    disabled={autorizandoMasivo || !sel.length}
+                    onClick={() => void abrirMasivo(idsAAutorizarDelGrupo(seleccionados, g))}
+                  >
+                    {autorizandoMasivo ? "Autorizando…" : `Autorizar seleccionados${sel.length ? ` (${sel.length})` : ""}`}
+                  </button>
+                </div>
               ) : null}
-              <th className="px-3 py-2">Viaje</th>
-              <th className="px-3 py-2">Fecha</th>
-              <th className="px-3 py-2">Cliente</th>
-              <th className="px-3 py-2">Empleado</th>
-              <th className="px-3 py-2">Rol</th>
-              <th className="px-3 py-2">Sugerido</th>
-              <th className="px-3 py-2">Asignado</th>
-              <th className="px-3 py-2">Estado</th>
-              <th className="px-3 py-2">Método</th>
-              {puedeVerBancario ? (
-                <>
-                  <th className="px-3 py-2">Banco</th>
-                  <th className="px-3 py-2">Cuenta</th>
-                </>
-              ) : null}
-              <th className="px-3 py-2">Acciones</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtrados.map((r) => (
-              <tr key={r.id} className="border-t border-[var(--border)]">
-                {puedeAutorizar ? (
-                  <td className="px-2 py-2">
-                    <input type="checkbox" checked={seleccionados.has(r.id)} onChange={() => toggleSeleccion(r.id)} />
-                  </td>
-                ) : null}
-                <td className="px-3 py-2">{r.planCodigo}</td>
-                <td className="px-3 py-2">{r.fechaPlan}</td>
-                <td className="px-3 py-2">{r.cliente ?? "—"}</td>
-                <td className="px-3 py-2">{r.personalNombre}</td>
-                <td className="px-3 py-2">{r.rol}</td>
-                <td className="px-3 py-2">{q(r.montoSugerido)}</td>
-                <td className="px-3 py-2">{q(r.montoAsignado)}</td>
-                <td className="px-3 py-2">
-                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${ESTADO_BADGE_CLS[r.estado] ?? ""}`}>
-                    {ESTADO_LABEL_UI[r.estado] ?? r.estado}
-                  </span>
-                </td>
-                <td className="px-3 py-2">{r.metodoPago ? METODO_PAGO_LABEL[r.metodoPago] ?? r.metodoPago : "—"}</td>
-                {puedeVerBancario ? (
-                  <>
-                    <td className="px-3 py-2 text-[11px]">{r.banco || "—"}</td>
-                    <td className="px-3 py-2 text-[11px]">
-                      {r.cuentaBancaria ? `${r.cuentaBancaria}${r.tipoCuenta ? ` (${r.tipoCuenta})` : ""}` : "—"}
-                    </td>
-                  </>
-                ) : null}
-                <td className="px-3 py-2">
-                  {r.estado === "RECHAZADO" ? (
-                    /* VIATICOS-RECHAZADO-1 (sección 10) — sin botones de
-                       pago/autorizar/liquidar/Ver firmas (rechazar nunca
-                       crea firma, sección 11). */
-                    <div className="text-[11px] text-[var(--muted)]">
-                      <p>Rechazado por: {r.rechazadoPor ?? "—"}</p>
-                      <p>Fecha: {r.rechazadoEn ?? "—"}</p>
-                      <p>Motivo: {r.motivoRechazo ?? "—"}</p>
-                    </div>
-                  ) : (
-                    <>
-                      {puedeAutorizar && r.estado === "PROGRAMADO" ? (
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="bg-[#1F6AA5] text-white">
+                    <tr>
+                      {puedeAutorizar ? (
+                        <th className="px-2 py-2">
+                          <input
+                            type="checkbox"
+                            aria-label={`Seleccionar todos: ${g.etiqueta}`}
+                            checked={grupoCompletoSeleccionado(seleccionados, g)}
+                            onChange={() => setSeleccionados((prev) => (grupoCompletoSeleccionado(prev, g) ? limpiarSeleccionDelGrupo(prev, g) : seleccionarTodosDelGrupo(prev, g)))}
+                          />
+                        </th>
+                      ) : null}
+                      <th className="px-3 py-2">Viaje</th>
+                      <th className="px-3 py-2">Fecha</th>
+                      <th className="px-3 py-2">Cliente</th>
+                      <th className="px-3 py-2">Empleado</th>
+                      <th className="px-3 py-2">Rol</th>
+                      <th className="px-3 py-2">Sugerido</th>
+                      <th className="px-3 py-2">Asignado</th>
+                      <th className="px-3 py-2">Estado</th>
+                      <th className="px-3 py-2">Método</th>
+                      {puedeVerBancario ? (
                         <>
-                          <button
-                            type="button"
-                            onClick={() => void abrirAutorizar(r)}
-                            className="rounded bg-sky-700 px-2 py-1 text-xs text-white"
-                          >
-                            Firmar y autorizar
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => abrirRechazar(r)}
-                            className="ml-1 rounded bg-red-800 px-2 py-1 text-xs text-white"
-                          >
-                            Rechazar
-                          </button>
+                          <th className="px-3 py-2">Banco</th>
+                          <th className="px-3 py-2">Cuenta</th>
                         </>
                       ) : null}
-                      {puedeLiquidar && r.estado === "ENTREGADO" ? (
-                        <button
-                          type="button"
-                          onClick={() => void abrirLiquidar(r)}
-                          className="rounded bg-emerald-700 px-2 py-1 text-xs text-white"
-                        >
-                          Firmar liquidación
-                        </button>
-                      ) : null}
-                      {/* VIATICOS-HISTORIAL-FIRMA-1 — visible en cuanto exista
-                          al menos una firma (AUTORIZADO/ENTREGADO/LIQUIDADO;
-                          NUNCA RECHAZADO — VIATICOS-RECHAZADO-1 sección 11,
-                          rechazar no crea firma). Un LIQUIDADO puede tener
-                          autorización + liquidación, de ahí "Ver firmas" en
-                          plural (sección 6 del ticket original). */}
-                      {r.estado !== "PROGRAMADO" && r.estado !== "RECHAZADO" ? (
-                        <button
-                          type="button"
-                          onClick={() => setVerFirmasDe(r)}
-                          className="ml-1 rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--input)]"
-                        >
-                          Ver firmas
-                        </button>
-                      ) : null}
-                      {/* Único caso sin ningún botón: PROGRAMADO y sin permiso
-                          de autorizar — "Ver firmas" ya cubre todo lo demás
-                          (ENTREGADO/LIQUIDADO siempre tienen al menos una firma). */}
-                      {r.estado === "PROGRAMADO" && !puedeAutorizar ? (
-                        <span className="text-[11px] text-[var(--muted)]">—</span>
-                      ) : null}
-                    </>
-                  )}
-                </td>
-              </tr>
-            ))}
-            {!filtrados.length && !loading ? (
-              <tr>
-                <td colSpan={puedeAutorizar ? (puedeVerBancario ? 13 : 11) : puedeVerBancario ? 12 : 10} className="px-3 py-4 text-[var(--muted)]">
-                  Sin viáticos con este filtro.
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
+                      <th className="px-3 py-2">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {g.items.map((r) => renderFila(r))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          );
+        })}
       </div>
 
       {/* VIATICOS-FIRMA — modal "Firma de autorización". Firma electrónica
@@ -1021,9 +1066,9 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
       {masivoAbierto ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="w-full max-w-md space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-xl">
-            <h3 className="text-sm font-semibold">Firmar y autorizar seleccionados ({seleccionados.size})</h3>
+            <h3 className="text-sm font-semibold">Firmar y autorizar seleccionados ({idsMasivo.length})</h3>
             <p className="text-xs text-[var(--muted)]">
-              Esta firma se aplicará a los {seleccionados.size} viáticos seleccionados: se usará la misma para
+              Esta firma se aplicará a los {idsMasivo.length} viáticos seleccionados: se usará la misma para
               autorizar cada uno de ellos.
             </p>
             <SelectorFirma
@@ -1045,7 +1090,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
                 className="flex-1 rounded bg-sky-700 px-3 py-1.5 text-sm text-white disabled:opacity-50"
                 onClick={() => void autorizarSeleccionados()}
               >
-                {autorizandoMasivo ? "Firmando…" : `Firmar y autorizar (${seleccionados.size})`}
+                {autorizandoMasivo ? "Firmando…" : `Firmar y autorizar (${idsMasivo.length})`}
               </button>
               <button
                 type="button"
