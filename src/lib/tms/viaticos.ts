@@ -7,6 +7,7 @@ import { crearFirmaInterna, type ResultadoFirmaInterna } from "@/lib/firmas/firm
 import { sha256Hex } from "@/lib/firmas/imagen-firma";
 import { borrarUpload, guardarUpload } from "@/lib/uploads";
 import { centavos, decimal } from "@/lib/multas/reglas";
+import { toIsoDate } from "@/lib/rrhh/dates";
 
 /**
  * VIAT-0 — viáticos operativos asociados a una programación/viaje (piloto y
@@ -1390,7 +1391,7 @@ function mapDetalle(r: RowDataPacket): ViaticoDetalle {
     id: Number(r.id),
     planId: Number(r.plan_id),
     planCodigo: String(r.plan_codigo ?? ""),
-    fechaPlan: r.fecha_plan != null ? String(r.fecha_plan).slice(0, 10) : "",
+    fechaPlan: toIsoDate(r.fecha_plan as string | Date | null) ?? "",
     cliente: r.cliente != null ? String(r.cliente) : null,
     unidadPlaca: r.unidad_placa != null ? String(r.unidad_placa) : null,
     personalId: Number(r.personal_id),
@@ -1748,7 +1749,7 @@ function mapPorPagar(r: RowDataPacket): ViaticoPorPagar {
     id: Number(r.id),
     planId: Number(r.plan_id),
     planCodigo: String(r.plan_codigo ?? ""),
-    fechaPlan: r.fecha_plan != null ? String(r.fecha_plan).slice(0, 10) : "",
+    fechaPlan: toIsoDate(r.fecha_plan as string | Date | null) ?? "",
     personalCodigo: r.personal_codigo != null ? String(r.personal_codigo) : null,
     personalNombre: String(r.personal_nombre ?? ""),
     rol: String(r.rol),
