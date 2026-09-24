@@ -63,10 +63,11 @@ describe("POST /tms/planes/edicion-rapida/validar", () => {
     expect(validarEdicionRapida).not.toHaveBeenCalled();
   });
 
-  it("/validar sigue SIN guardar: no importa el módulo de guardado y no toca la UI", async () => {
+  it("/validar sigue SIN guardar: no importa el módulo de guardado; la UI (PR-3) lo llama solo desde edicion-rapida-helpers", async () => {
     const { readFileSync } = await import("node:fs");
     const fuente = readFileSync("src/app/api/empresas/[slug]/tms/planes/edicion-rapida/validar/route.ts", "utf8");
     expect(fuente).not.toContain("edicion-rapida-guardar");
-    expect(readFileSync("src/app/e/[slug]/programacion/programacion-client.tsx", "utf8")).not.toMatch(/edicion-rapida/i);
+    expect(readFileSync("src/app/e/[slug]/programacion/programacion-client.tsx", "utf8")).not.toContain("tms/planes/edicion-rapida");
+    expect(readFileSync("src/app/e/[slug]/programacion/edicion-rapida-helpers.ts", "utf8")).toContain("/tms/planes/edicion-rapida/validar`");
   });
 });

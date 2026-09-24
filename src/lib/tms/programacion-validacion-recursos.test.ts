@@ -234,9 +234,9 @@ describe("PATCH usa los helpers y el PR-0 no cambia superficie", () => {
     expect(route).toContain("`tms_traslape_${empresaId}`");
   });
 
-  it("no se crearon endpoints de edición rápida ni se tocó la UI", () => {
+  it("PR-0 no tocó la UI de Ajustar (la UI de edición rápida llega en PR-3 y no usa plan-form ni llama endpoints directo)", () => {
     const fuente = (p: string) => readFileSync(p, "utf8");
-    expect(fuente("src/app/e/[slug]/programacion/programacion-client.tsx")).not.toMatch(/edicion-rapida|Edición rápida/i);
+    expect(fuente("src/app/e/[slug]/programacion/programacion-client.tsx")).not.toContain("tms/planes/edicion-rapida");
     expect(fuente("src/app/e/[slug]/programacion/plan-form.tsx")).not.toMatch(/edicion-rapida/i);
   });
 });

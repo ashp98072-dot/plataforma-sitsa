@@ -70,7 +70,8 @@ describe("programacion-client.tsx — botón 'Fecha' + input date", () => {
   it("un valor vacío del input NO se aplica (evita un rango roto) — solo actualiza fechaSeleccionada si e.target.value es verdadero", () => {
     const i = pos('rango === "fecha" ? (');
     const bloque = programacionClient.slice(i, pos(") : null}", i));
-    expect(bloque).toContain("if (e.target.value) setFechaSeleccionada(e.target.value);");
+    // Edición rápida PR-3: el valor vacío se descarta ANTES de la confirmación por cambios pendientes.
+    expect(bloque).toContain("if (valor) siSePuedenPerderCambios(() => setFechaSeleccionada(valor));");
   });
 });
 

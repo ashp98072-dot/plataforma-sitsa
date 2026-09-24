@@ -326,6 +326,8 @@ export async function GET(req: Request, ctx: Ctx) {
               CASE WHEN p.tipo_viaje = 'Tercerizado' THEN p.tc_externo_placa
                    ELSE COALESCE(tcv.placa, p.tc_placa_historica) END AS tc,
               c.nombre AS cliente, u.placa, pil.nombre AS piloto, aux.nombre AS auxiliar,
+              -- EDICIÓN RÁPIDA PR-3 (aditivo): vehículo de Flota de la unidad (mismo JOIN que ya da la placa).
+              u.flota_vehiculo_id,
               p.piloto_id, p.auxiliar_id, pil.id_empleado AS piloto_empleado_id,
               emp_pil.telefono AS piloto_telefono,
               aux.id_empleado AS auxiliar_empleado_id,
@@ -375,6 +377,7 @@ export async function GET(req: Request, ctx: Ctx) {
       piloto_telefono,
       auxiliar_empleado_id,
       auxiliar_telefono,
+      flota_vehiculo_id,
       ...resto
     } = r;
     const pilotoId = piloto_id != null ? Number(piloto_id) : null;
@@ -413,6 +416,11 @@ export async function GET(req: Request, ctx: Ctx) {
       // reemplaza `auxiliares` (string[]) — TMS y otros consumidores
       // existentes siguen leyendo ese campo tal cual.
       auxiliaresDetalle,
+      // EDICIÓN RÁPIDA PR-3 (aditivo): ids EXACTOS que el validador de edición rápida compara como snapshot —
+      // unidad por flota_vehiculos.id y auxiliares SOLO de tms_plan_auxiliares (sin el fallback legado de
+      // auxiliaresDetalle), en su orden (el primero es el principal).
+      flotaVehiculoId: flota_vehiculo_id != null ? Number(flota_vehiculo_id) : null,
+      auxiliarPersonalIds: extras.map((a) => a.personalId),
       paradas,
       paradasPendientes: paradas.filter(
         (p) => p.requiere_evidencia && p.evidencias < 1,

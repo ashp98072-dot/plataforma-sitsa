@@ -14,6 +14,8 @@ import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
 import { exportarProgramacionComoImagen } from "./programacion-exportar-imagen";
 import { mesDia, type FilaProgramacionImagen } from "@/lib/tms/programacion-imagen";
+import { EdicionRapida, type FilaEdicionRapidaEntrada } from "./edicion-rapida";
+import { confirmarPerdida, MSG_CAMBIOS_PENDIENTES, puedeUsarEdicionRapida } from "./edicion-rapida-helpers";
 
 /**
  * OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — tras CERRAR un viaje, Programación
@@ -177,6 +179,10 @@ export type Plan = {
   pilotoTelefono: string | null;
   /** Aditivo (Fase P4.3): auxiliares con su personal_id real. */
   auxiliaresDetalle: AuxiliarPlan[];
+  /** Aditivo (Edición rápida PR-3): flota_vehiculos.id de la unidad (snapshot `esperado`). */
+  flotaVehiculoId?: number | null;
+  /** Aditivo (Edición rápida PR-3): auxiliares SOLO de tms_plan_auxiliares, en orden (snapshot `esperado`). */
+  auxiliarPersonalIds?: number[];
   paradas: ParadaPlan[];
   paradasPendientes: number;
   evidencias: number;
@@ -185,6 +191,9 @@ export type Plan = {
 /** Estado real por placa (Ajuste 2) — mismos valores que EstadoDisponibilidad
  * de src/lib/operaciones/disponibilidad.ts, expuestos ahora por el GET. */
 type EstadoVehiculo = {
+  /** flota_vehiculos.id (lo usa Edición rápida como valor de Unidad/TC). */
+  id?: number;
+  tipoUnidad?: string;
   placa: string;
   estadoDisponibilidad: "disponible" | "en_taller" | "en_ruta" | "inactivo";
   motivoNoDisponible: string | null;
@@ -592,6 +601,50 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   const [fUnidad, setFUnidad] = useState("");
   const [fCliente, setFCliente] = useState("");
 
+  // EDICIÓN RÁPIDA PR-3 — modo tabla compacta para cambiar piloto/auxiliares/unidad/TC de las filas VISIBLES. El
+  // borrador vive dentro de <EdicionRapida>; aquí solo se sabe si hay cambios pendientes para pedir confirmación antes
+  // de perderlos (filtros, fecha, Actualizar, salir, recargar) y para pausar el sondeo pasivo mientras tanto.
+  // `versionRapida` remonta el componente (= descarta el borrador) cuando el usuario acepta perder los cambios.
+  const puedeEdicionRapida = puedeUsarEdicionRapida(permisos);
+  const [modoRapido, setModoRapido] = useState(false);
+  const [pendientesRapida, setPendientesRapida] = useState(false);
+  const [versionRapida, setVersionRapida] = useState(0);
+  const hayPendientesRapida = modoRapido && pendientesRapida;
+  const pausarSondeoRef = useRef(false);
+  useEffect(() => {
+    pausarSondeoRef.current = hayPendientesRapida;
+  }, [hayPendientesRapida]);
+  useEffect(() => {
+    if (!hayPendientesRapida) return;
+    const alSalir = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = MSG_CAMBIOS_PENDIENTES;
+    };
+    window.addEventListener("beforeunload", alSalir);
+    return () => window.removeEventListener("beforeunload", alSalir);
+  }, [hayPendientesRapida]);
+
+  /** Ejecuta `accion` (cambio de filtro/fecha/refresh) solo si no hay borrador que perder o el usuario lo confirma. */
+  function siSePuedenPerderCambios(accion: () => void) {
+    if (!confirmarPerdida(hayPendientesRapida, (m) => window.confirm(m))) return;
+    if (hayPendientesRapida) {
+      setVersionRapida((v) => v + 1);
+      setPendientesRapida(false);
+    }
+    accion();
+  }
+
+  function alternarModoRapido() {
+    if (modoRapido) {
+      siSePuedenPerderCambios(() => setModoRapido(false));
+      return;
+    }
+    setMostrarCrear(false);
+    setEditandoId(null);
+    setPendientesRapida(false);
+    setModoRapido(true);
+  }
+
   // OPS-2.1: se calcula aquí arriba (no más abajo, junto a `enRango` como
   // antes) porque el efecto de carga ahora depende de desde/hasta — el
   // servidor filtra por fecha, ya no el navegador sobre un array de hasta
@@ -702,6 +755,8 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
       }
       try {
         if (silencioso) {
+          // Edición rápida con cambios pendientes: no se reemplaza la lista bajo el borrador del usuario.
+          if (pausarSondeoRef.current) return;
           const r = await obtenerProgramacion(slug, desde, hasta).catch(() => null);
           if (!ignore && r?.ok) {
             setPlanes(r.datos.planes);
@@ -1037,6 +1092,21 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
     }
   }
 
+  // EDICIÓN RÁPIDA PR-3 — exactamente `visibles` (rango + filtros activos), nunca otra consulta ni el historial.
+  const filasEdicionRapida = useMemo<FilaEdicionRapidaEntrada[]>(
+    () =>
+      visibles.map((p) => {
+        const { origen, destino } = origenDestino(p.paradas);
+        const { label, badge } = estadoVisible(p);
+        return {
+          plan: p,
+          estadoLabel: label,
+          estadoBadge: badge,
+          ruta: origen || destino ? `${origen || "—"} → ${destino || "—"}` : p.ruta_codigo_historico ?? "",
+        };
+      }),
+    [visibles],
+  );
   const input =
     "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
 
@@ -1126,7 +1196,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
           <button
             type="button"
             className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm text-white disabled:opacity-40"
-            disabled={loading}
+            disabled={loading || modoRapido}
             onClick={() => {
               setEditandoId(null);
               setMostrarCrear((v) => !v);
@@ -1140,11 +1210,25 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
               Copiar programación
             </Link>
           ) : null}
+          {/* EDICIÓN RÁPIDA PR-3 — solo con programacion:editar (el backend exige el mismo permiso). */}
+          {puedeEdicionRapida ? (
+            <button
+              type="button"
+              aria-pressed={modoRapido}
+              className={[
+                "rounded border px-3 py-1.5 text-sm",
+                modoRapido ? "border-[var(--accent)] bg-[var(--accent)] text-white" : "border-[var(--border)]",
+              ].join(" ")}
+              onClick={alternarModoRapido}
+            >
+              {modoRapido ? "Salir de edición rápida" : "Edición rápida"}
+            </button>
+          ) : null}
           <button
             type="button"
             className="rounded bg-[#334155] px-3 py-1.5 text-sm text-white disabled:opacity-40"
             disabled={loading}
-            onClick={() => void cargar()}
+            onClick={() => siSePuedenPerderCambios(() => void cargar())}
           >
             {loading ? "Actualizando…" : "Actualizar"}
           </button>
@@ -1192,7 +1276,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
           <button
             key={key}
             type="button"
-            onClick={() => setFiltroRapido(key)}
+            onClick={() => siSePuedenPerderCambios(() => setFiltroRapido(key))}
             className={[
               "rounded-xl border px-3 py-2 text-left transition",
               filtroRapido === key
@@ -1220,8 +1304,10 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
             key={key}
             type="button"
             onClick={() => {
-              setRango(key);
-              setAvisoRango("");
+              siSePuedenPerderCambios(() => {
+                setRango(key);
+                setAvisoRango("");
+              });
             }}
             className={[
               "rounded-lg border px-3 py-1.5 text-sm font-medium transition",
@@ -1245,7 +1331,8 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
             className={`${input} py-1`}
             value={fechaSeleccionada}
             onChange={(e) => {
-              if (e.target.value) setFechaSeleccionada(e.target.value);
+              const valor = e.target.value;
+              if (valor) siSePuedenPerderCambios(() => setFechaSeleccionada(valor));
             }}
           />
         ) : null}
@@ -1333,7 +1420,10 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
                 ? filtroRapido
                 : "todos"
             }
-            onChange={(e) => setFiltroRapido(e.target.value as FiltroRapido)}
+            onChange={(e) => {
+              const valor = e.target.value as FiltroRapido;
+              siSePuedenPerderCambios(() => setFiltroRapido(valor));
+            }}
           >
             <option value="todos">Todos</option>
             <option value="Programado">Programado</option>
@@ -1346,7 +1436,10 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
           <select
             className={`${input} mt-1 block`}
             value={fPiloto}
-            onChange={(e) => setFPiloto(e.target.value)}
+            onChange={(e) => {
+              const valor = e.target.value;
+              siSePuedenPerderCambios(() => setFPiloto(valor));
+            }}
           >
             <option value="">Todos</option>
             {opcionesPiloto.map((p) => (
@@ -1361,7 +1454,10 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
           <select
             className={`${input} mt-1 block`}
             value={fUnidad}
-            onChange={(e) => setFUnidad(e.target.value)}
+            onChange={(e) => {
+              const valor = e.target.value;
+              siSePuedenPerderCambios(() => setFUnidad(valor));
+            }}
           >
             <option value="">Todas</option>
             {opcionesUnidad.map((p) => (
@@ -1376,7 +1472,10 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
           <select
             className={`${input} mt-1 block`}
             value={fCliente}
-            onChange={(e) => setFCliente(e.target.value)}
+            onChange={(e) => {
+              const valor = e.target.value;
+              siSePuedenPerderCambios(() => setFCliente(valor));
+            }}
           >
             <option value="">Todos</option>
             {opcionesCliente.map((c) => (
@@ -1388,8 +1487,22 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
         </label>
       </div>
 
+      {/* EDICIÓN RÁPIDA PR-3 — reemplaza las tarjetas por la tabla compacta sobre las MISMAS filas visibles. */}
+      {modoRapido ? (
+        <EdicionRapida
+          key={versionRapida}
+          slug={slug}
+          hoy={hoy}
+          filas={filasEdicionRapida}
+          disponibilidadPorFecha={disponibilidadPorFecha}
+          vehiculos={estadoVehiculos}
+          onPendientesChange={setPendientesRapida}
+          onGuardado={cargar}
+        />
+      ) : null}
+
       {/* Tablero */}
-      <div className="space-y-2">
+      <div className="space-y-2" hidden={modoRapido}>
         {visibles.map((p) => {
           const { origen, destino, intermedias } = origenDestino(p.paradas);
           const estadoUnidad = unidadEstado(p.placa);
