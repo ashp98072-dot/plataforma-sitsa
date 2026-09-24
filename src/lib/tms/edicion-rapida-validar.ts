@@ -1,4 +1,5 @@
 import type { RowDataPacket } from "mysql2";
+import type { PoolConnection } from "mysql2/promise";
 import { query } from "@/lib/db";
 import { obtenerVehiculoAccesible } from "@/lib/flota/acceso";
 import { listarDisponibilidadVehiculos } from "@/lib/operaciones/disponibilidad";
@@ -53,14 +54,22 @@ const SQL_PENDIENTE_CIERRE = `(
   AND EXISTS (SELECT 1 FROM flota_viajes fv WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado')
 )`;
 
-type PlanBD = {
+/**
+ * Lector de BD del núcleo. Sin `conn` (PR-1 /validar) usa el pool: solo lectura, sin transacción ni candado. Con `conn`
+ * (PR-2 guardar) lee por la conexión que tiene el candado y la transacción abiertos.
+ */
+type Lector = (sql: string, params: unknown[]) => Promise<RowDataPacket[]>;
+const lectorDe = (conn?: PoolConnection): Lector =>
+  conn ? async (sql, params) => (await conn.query<RowDataPacket[]>(sql, params))[0] : (sql, params) => query<RowDataPacket[]>(sql, params as never);
+
+export type PlanBD = {
   id: number; codigo: string; estado: string; fechaPlan: string; horaCarga: string | null; regresoEstimado: string | null;
   tipoViaje: string; pilotoId: number | null; unidadTmsId: number | null; unidadPlaca: string | null; flotaVehiculoId: number | null;
   tcVehiculoId: number | null; pendienteCierre: boolean; auxiliares: { personalId: number; nombre: string }[]; pilotoNombre: string;
 };
 
-type Recursos = { pilotoId: number | null; auxiliaresIds: number[]; flotaVehiculoId: number | null; tcVehiculoId: number | null };
-type FilaTrabajo = {
+export type Recursos = { pilotoId: number | null; auxiliaresIds: number[]; flotaVehiculoId: number | null; tcVehiculoId: number | null };
+export type FilaTrabajo = {
   planId: number; plan: PlanBD | null; errores: ErrorFilaEdicionRapida[]; advertencias: AdvertenciaFilaEdicionRapida[];
   actual: Recursos | null; final: Recursos | null; hayCambios: boolean; fatal: boolean;
   cambiaPiloto: boolean; cambiaAuxiliares: boolean; cambiaUnidad: boolean; cambiaTc: boolean;
@@ -90,11 +99,16 @@ function claveUnidadFinal(
   return tmsId != null ? `ut:${tmsId}` : null;
 }
 
-async function cargarPlanes(empresaId: number, ids: number[]): Promise<Map<number, PlanBD>> {
+async function cargarPlanes(leer: Lector, empresaId: number, ids: number[], bloquear: boolean): Promise<Map<number, PlanBD>> {
   const mapa = new Map<number, PlanBD>();
   if (!ids.length) return mapa;
+  if (bloquear) {
+    // PR-2: relectura final de los planes del lote CON FOR UPDATE (orden por id: sin deadlocks entre dos lotes). Las lecturas
+    // siguientes ya ven lo confirmado por quien tenía el candado antes que nosotros.
+    await leer(`SELECT id FROM tms_planes_viaje WHERE empresa_id = ? AND id IN (${placeholders(ids.length)}) ORDER BY id FOR UPDATE`, [empresaId, ...ids]);
+  }
   const [planes, aux] = await Promise.all([
-    query<RowDataPacket[]>(
+    leer(
       `SELECT p.id, p.codigo, p.estado, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan, p.hora_carga,
               DATE_FORMAT(p.regreso_estimado, '%Y-%m-%d %H:%i:%s') AS regreso_estimado, p.tipo_viaje, p.piloto_id, p.unidad_id,
               u.placa AS unidad_placa, u.flota_vehiculo_id, p.tc_vehiculo_id, pil.nombre AS piloto_nombre,
@@ -105,7 +119,7 @@ async function cargarPlanes(empresaId: number, ids: number[]): Promise<Map<numbe
        WHERE p.empresa_id = ? AND p.id IN (${placeholders(ids.length)})`,
       [empresaId, ...ids],
     ),
-    query<RowDataPacket[]>(
+    leer(
       `SELECT pa.plan_id, pa.personal_id, per.nombre
        FROM tms_plan_auxiliares pa
        INNER JOIN tms_personal per ON per.id = pa.personal_id AND per.empresa_id = ?
@@ -131,10 +145,11 @@ async function cargarPlanes(empresaId: number, ids: number[]): Promise<Map<numbe
 }
 
 type PersonalInfo = { id: number; idEmpleado: number | null; nombre: string };
-async function cargarPersonal(empresaId: number, ids: number[]): Promise<Map<number, PersonalInfo>> {
+export type { PersonalInfo };
+async function cargarPersonal(leer: Lector, empresaId: number, ids: number[]): Promise<Map<number, PersonalInfo>> {
   const mapa = new Map<number, PersonalInfo>();
   if (!ids.length) return mapa;
-  const rows = await query<RowDataPacket[]>(
+  const rows = await leer(
     `SELECT id, id_empleado, nombre FROM tms_personal WHERE empresa_id = ? AND id IN (${placeholders(ids.length)})`,
     [empresaId, ...ids],
   );
@@ -143,11 +158,11 @@ async function cargarPersonal(empresaId: number, ids: number[]): Promise<Map<num
 }
 
 /** tms_unidades.id YA existente por placa (SOLO LECTURA: la edición real puede crear la unidad, esta validación nunca). */
-async function cargarUnidadesTms(empresaId: number, placas: string[]): Promise<Map<string, number>> {
+async function cargarUnidadesTms(leer: Lector, empresaId: number, placas: string[]): Promise<Map<string, number>> {
   const mapa = new Map<string, number>();
   const lista = [...new Set(placas.map((p) => p.toUpperCase()))];
   if (!lista.length) return mapa;
-  const rows = await query<RowDataPacket[]>(
+  const rows = await leer(
     `SELECT id, placa FROM tms_unidades WHERE empresa_id = ? AND UPPER(placa) IN (${placeholders(lista.length)})`,
     [empresaId, ...lista],
   );
@@ -155,10 +170,31 @@ async function cargarUnidadesTms(empresaId: number, placas: string[]): Promise<M
   return mapa;
 }
 
+export type ContextoEdicionRapida = {
+  /** Personal implicado (actual y final) con su `id_empleado` y nombre (para identidad y auditoría). */
+  personal: Map<number, PersonalInfo>;
+  /** Placa (mayúsculas) de las unidades NUEVAS por `flota_vehiculos.id`. */
+  placaPorFlota: Map<number, string>;
+  /** Placa de los TC NUEVOS por `flota_vehiculos.id`. */
+  tcPlaca: Map<number, string>;
+};
+export type EvaluacionEdicionRapida = { resultado: ResultadoValidarEdicionRapida; filas: FilaTrabajo[]; contexto: ContextoEdicionRapida };
+
+/** PR-1 /validar: solo lectura, sin candado ni transacción. */
 export async function validarEdicionRapida(empresaId: number, datos: ValidarEdicionRapida): Promise<ResultadoValidarEdicionRapida> {
+  return (await evaluarEdicionRapida(empresaId, datos)).resultado;
+}
+
+/**
+ * Núcleo COMPARTIDO por /validar (PR-1) y guardar (PR-2). Sin `conn`: lectura por el pool. Con `conn`: el llamador ya
+ * tiene el candado por empresa y una transacción abiertos; los planes se releen con FOR UPDATE y los conflictos contra
+ * BD se leen por esa misma conexión (también FOR UPDATE, como el motor de intervalos). No escribe nunca.
+ */
+export async function evaluarEdicionRapida(empresaId: number, datos: ValidarEdicionRapida, opciones: { conn?: PoolConnection } = {}): Promise<EvaluacionEdicionRapida> {
   const hoy = hoyLocal();
+  const leer = lectorDe(opciones.conn);
   const planIdsLote = datos.cambios.map((c) => c.planId);
-  const planes = await cargarPlanes(empresaId, planIdsLote);
+  const planes = await cargarPlanes(leer, empresaId, planIdsLote, opciones.conn != null);
   const motivo = datos.motivoCambio?.trim() || undefined;
 
   const filas: FilaTrabajo[] = datos.cambios.map((c) => ({
@@ -239,7 +275,7 @@ export async function validarEdicionRapida(empresaId: number, datos: ValidarEdic
     const rep = fila.final!.pilotoId != null && fila.final!.auxiliaresIds.includes(fila.final!.pilotoId);
     if (!fila.fatal && rep) { err(fila, "PERSONAL_INVALIDO", "El piloto no puede ser también auxiliar del mismo viaje."); fila.fatal = true; }
   }
-  const personal = await cargarPersonal(empresaId, [...todosPersonalIds]);
+  const personal = await cargarPersonal(leer, empresaId, [...todosPersonalIds]);
   const claveDe = (personalId: number) => { const p = personal.get(personalId); return p?.idEmpleado != null ? `e:${p.idEmpleado}` : `p:${personalId}`; };
   const nombreDe = (personalId: number) => personal.get(personalId)?.nombre ?? `#${personalId}`;
 
@@ -315,7 +351,7 @@ export async function validarEdicionRapida(empresaId: number, datos: ValidarEdic
   }
 
   // ---------------------------------------------------------------- 3) contra la BD, EXCLUYENDO todos los planes del lote
-  const unidadesTms = await cargarUnidadesTms(empresaId, [...placaPorFlota.values()]);
+  const unidadesTms = await cargarUnidadesTms(leer, empresaId, [...placaPorFlota.values()]);
   const ventanaDe = (f: FilaTrabajo): VentanaProgramacion =>
     ventanaProgramacionSegura({ fechaPlan: f.plan!.fechaPlan, horaCarga: f.plan!.horaCarga, regresoEstimado: f.plan!.regresoEstimado });
   for (const fila of activas.filter((x) => !x.fatal)) {
@@ -331,7 +367,7 @@ export async function validarEdicionRapida(empresaId: number, datos: ValidarEdic
     if (fila.cambiaTc && fila.final!.tcVehiculoId != null) recursos.push({ tipo: "tc", id: fila.final!.tcVehiculoId });
     if (!recursos.length) continue;
     // Excluye TODOS los planes del lote (no solo el propio): su estado final se compara aparte, en el paso 4.
-    const conflicto = await primerConflictoProgramacionIntervalo(empresaId, recursos, ventanaDe(fila), planIdsLote);
+    const conflicto = await primerConflictoProgramacionIntervalo(empresaId, recursos, ventanaDe(fila), planIdsLote, opciones.conn);
     if (conflicto) err(fila, "RECURSO_OCUPADO_BD", mensajeConflictoProgramacionIntervalo(conflicto));
   }
 
@@ -396,5 +432,5 @@ export async function validarEdicionRapida(empresaId: number, datos: ValidarEdic
     errores: f.errores,
     advertencias: f.advertencias,
   }));
-  return { ok: resultado.every((f) => f.estado !== "error"), filas: resultado };
+  return { resultado: { ok: resultado.every((f) => f.estado !== "error"), filas: resultado }, filas, contexto: { personal, placaPorFlota, tcPlaca } };
 }
