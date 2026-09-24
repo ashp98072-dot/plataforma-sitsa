@@ -15,7 +15,7 @@ import { tienePermiso } from "@/lib/permisos-shared";
 import { exportarProgramacionComoImagen } from "./programacion-exportar-imagen";
 import { mesDia, type FilaProgramacionImagen } from "@/lib/tms/programacion-imagen";
 import { EdicionRapida, type FilaEdicionRapidaEntrada } from "./edicion-rapida";
-import { confirmarPerdida, MSG_CAMBIOS_PENDIENTES, puedeUsarEdicionRapida } from "./edicion-rapida-helpers";
+import { confirmarPerdida, MSG_CAMBIOS_PENDIENTES, puedeUsarEdicionRapida, type TarifaRutaEdicion } from "./edicion-rapida-helpers";
 
 /**
  * OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — tras CERRAR un viaje, Programación
@@ -183,6 +183,8 @@ export type Plan = {
   flotaVehiculoId?: number | null;
   /** Aditivo (Edición rápida PR-3): auxiliares SOLO de tms_plan_auxiliares, en orden (snapshot `esperado`). */
   auxiliarPersonalIds?: number[];
+  /** Aditivo (Edición rápida PR-355): viáticos del viaje por tms_personal.id (snapshot `esperado`). */
+  viaticos?: { personalId: number; rol: string; montoSugerido: number; montoAsignado: number; estado: string }[];
   paradas: ParadaPlan[];
   paradasPendientes: number;
   evidencias: number;
@@ -513,6 +515,8 @@ type DatosProgramacion = {
    */
   pendientesCierre: Plan[];
   estadoVehiculos: EstadoVehiculo[];
+  /** Aditivo (Edición rápida PR-355): tarifas ACTIVAS por ruta, para el selector de tarifa. */
+  tarifasPorRuta: Record<string, TarifaRutaEdicion[]>;
 };
 
 /**
@@ -553,6 +557,7 @@ async function obtenerProgramacion(
       planes: (dataPlanes.planes ?? []) as Plan[],
       pendientesCierre,
       estadoVehiculos: (dataPlanes.estadoVehiculos ?? []) as EstadoVehiculo[],
+      tarifasPorRuta: (dataPlanes.tarifasPorRuta ?? {}) as Record<string, TarifaRutaEdicion[]>,
     },
   };
 }
@@ -573,6 +578,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   // DatosProgramacion.pendientesCierre.
   const [pendientesCierre, setPendientesCierre] = useState<Plan[]>([]);
   const [estadoVehiculos, setEstadoVehiculos] = useState<EstadoVehiculo[]>([]);
+  const [tarifasPorRuta, setTarifasPorRuta] = useState<Record<string, TarifaRutaEdicion[]>>({});
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
 
@@ -762,6 +768,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
             setPlanes(r.datos.planes);
             setPendientesCierre(r.datos.pendientesCierre);
             setEstadoVehiculos(r.datos.estadoVehiculos);
+            setTarifasPorRuta(r.datos.tarifasPorRuta);
           }
         } else {
           const r = await obtenerProgramacion(slug, desde, hasta).catch(
@@ -774,6 +781,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
             setPlanes(r.datos.planes);
             setPendientesCierre(r.datos.pendientesCierre);
             setEstadoVehiculos(r.datos.estadoVehiculos);
+            setTarifasPorRuta(r.datos.tarifasPorRuta);
           }
         }
       } finally {
@@ -866,6 +874,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
       setPlanes(r.datos.planes);
       setPendientesCierre(r.datos.pendientesCierre);
       setEstadoVehiculos(r.datos.estadoVehiculos);
+      setTarifasPorRuta(r.datos.tarifasPorRuta);
     } catch {
       setErr("Error de conexión al cargar la programación.");
     } finally {
@@ -1496,6 +1505,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
           filas={filasEdicionRapida}
           disponibilidadPorFecha={disponibilidadPorFecha}
           vehiculos={estadoVehiculos}
+          tarifasPorRuta={tarifasPorRuta}
           onPendientesChange={setPendientesRapida}
           onGuardado={cargar}
         />

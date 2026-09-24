@@ -258,7 +258,7 @@ export default function CopiarProgramacionPage() {
                           <select className={celda} disabled={!f.incluida} value={efectiva} onChange={(e) => cambiar(i, { tarifaId: Number(e.target.value) })}>
                             {tarifas.map((t) => <option key={t.id} value={t.id}>{t.nombre} · {t.moneda} {t.monto.toLocaleString("es-GT", { minimumFractionDigits: 2 })}</option>)}
                           </select>
-                        ) : "—"}
+                        ) : <span className="text-[var(--muted)]" title="Sin tarifa vigente: el viaje se copia sin tarifa">Sin tarifa</span>}
                       </td>
                       <td className="px-2 py-1.5">
                         {!f.incluida ? (
@@ -271,6 +271,7 @@ export default function CopiarProgramacionPage() {
                           : f.sucia || !f.validacion ? <span className="text-[var(--muted)]">Validando…</span>
                           : f.validacion.estado === "ok" ? <span className="text-emerald-400">Disponible</span>
                           : <ul className="space-y-0.5 text-rose-400">{f.validacion.errores.map((e, k) => <li key={k}>Fila {b.fila}: {e}</li>)}</ul>}
+                        {f.incluida && f.validacion?.estado === "ok" && !f.validacion.tarifa ? <p className="text-amber-300">Sin tarifa — podrás asignarla después</p> : null}
                         {f.advertencias.map((a, k) => <p key={k} className="text-amber-300">⚠ {a}</p>)}
                       </td>
                     </tr>

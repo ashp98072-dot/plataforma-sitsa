@@ -268,7 +268,9 @@ describe("GET /tms/planes — regreso estimado opcional y regreso real", () => {
     vi.mocked(query).mockResolvedValueOnce([filaPlan({ estado: "En ruta" })] as never).mockResolvedValueOnce([] as never);
     const [plan] = (await (await GET(req(`?id=${PLAN_ID}`), ctx)).json()).planes;
     expect(plan.cierre_manual).toBe(false);
-    expect(vi.mocked(query).mock.calls).toHaveLength(2); // planes + auxiliares
+    // planes + auxiliares (las lecturas aditivas de Edición rápida — viáticos y tarifas por ruta — no son la consulta de cierre manual)
+    const previas = vi.mocked(query).mock.calls.filter(([sql]) => !/tms_viaticos|tms_ruta_tarifas/.test(String(sql)));
+    expect(previas).toHaveLength(2);
   });
 
   it("si la consulta de cierre manual falla (columna ausente), el listado sigue respondiendo", async () => {

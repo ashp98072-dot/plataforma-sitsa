@@ -256,9 +256,10 @@ describe("tarifa: siempre re-resuelta; solo tarifas vigentes del catálogo", () 
     expect(r[0].errores[0]).toContain("no es una tarifa vigente de esta ruta");
     expect(readFileSync("src/lib/tms/programacion-copia-schema.ts", "utf8").replace(/\/\*[\s\S]*?\*\//g, "")).not.toMatch(/tarifaComercial|monto/i); // el esquema no admite montos
   });
-  it("ruta sin tarifa vigente -> la fila tiene error; ruta inactiva/inexistente -> error", async () => {
-    const r = await validarLote(EMP, DESTINO, [borrador({ rutaId: 12 }), borrador({ fila: 2, origenPlanId: 901, rutaId: 13 }), borrador({ fila: 3, origenPlanId: 902, rutaId: 99 })]);
-    expect(r[0].errores[0]).toContain("no tiene una tarifa vigente");
+  it("ruta sin tarifa vigente NO bloquea (se copia sin tarifa); ruta inactiva/inexistente -> error", async () => {
+    const r = await validarLote(EMP, DESTINO, [borrador({ rutaId: 12 }), borrador({ fila: 2, origenPlanId: 901, rutaId: 13, unidadPlaca: "P-2", pilotoEmpleadoId: 2 }), borrador({ fila: 3, origenPlanId: 902, rutaId: 99, unidadPlaca: null, pilotoEmpleadoId: 3 })]);
+    expect(r[0].errores).toEqual([]);
+    expect(r[0]).toMatchObject({ estado: "ok", tarifa: null });
     expect(r[1].errores[0]).toContain("inactiva");
     expect(r[2].errores[0]).toContain("no existe");
   });
@@ -905,5 +906,72 @@ describe("A2.2 traslado del regreso validado contra la hora de carga del origen"
       const guardado = e.planes.find((p) => p.id >= 1000)!.regreso ?? null;
       expect(guardado, nombre).toBe(validada ? validada.replace("T", " ") : null);
     }
+  });
+});
+
+// ------------------------------------------------------------------ PR #355: copiar SIN tarifa
+import { filaDesdeCarga, puedeConfirmar, resumenFilas, alternarSeleccion, aplicarValidacion } from "../../app/e/[slug]/programacion/copiar/copiar-helpers";
+
+describe("Copiar: la ausencia de tarifa NO bloquea", () => {
+  const insertPlan = () => conn.execute.mock.calls.filter((c) => String(c[0]).includes("INSERT INTO tms_planes_viaje")) as unknown as [string, unknown[]][];
+  const sinTarifa = (over: Partial<BorradorLote> = {}) => borrador({ rutaId: 12, ...over }); // ruta 12: sin tarifa vigente
+
+  it("1) una fila CON tarifa sigue copiando su tarifa vigente/predeterminada", async () => {
+    expect((await confirmar([borrador()])).ok).toBe(true);
+    expect(creadosDestino()[0]).toMatchObject({ tarifa_comercial: 1500, tarifa_id: 100, tarifa_nombre: "Base" });
+  });
+
+  it("2/8) una fila SIN tarifa es válida: sin errores, estado ok y tarifa null (advertencia solo visual)", async () => {
+    const [r] = await validarLote(EMP, DESTINO, [sinTarifa()]);
+    expect(r).toEqual({ fila: 1, estado: "ok", errores: [], tarifa: null });
+  });
+
+  it("2) en la pantalla de Copiar la fila sin tarifa es seleccionable y CUENTA para Confirmar copia (X viajes)", () => {
+    const f = filaDesdeCarga({ origen: {} as never, advertencias: [], borrador: sinTarifa(), validacion: null });
+    let filas = alternarSeleccion([f], 0);
+    filas = aplicarValidacion(filas, [{ fila: 1, estado: "ok", errores: [], tarifa: null }]);
+    expect(resumenFilas(filas).incluidas).toBe(1);
+    expect(puedeConfirmar(filas, false)).toBe(true);
+  });
+
+  it("3/4/5/6) confirmar copia sin tarifa: el viaje destino queda con tarifa_id, snapshots y tarifa_comercial en NULL (no 0)", async () => {
+    const r = await confirmar([sinTarifa()]);
+    expect(r.ok).toBe(true);
+    expect(creadosDestino()[0]).toMatchObject({ tarifa_comercial: null, tarifa_id: null, tarifa_nombre: null });
+    const p = insertPlan()[0][1];
+    expect(p.slice(12, 17)).toEqual([null, null, null, null, null]); // comercial, id, nombre, monto, moneda
+    expect(p.slice(12, 17)).not.toContain(0);
+  });
+
+  it("7) lote mixto: A con tarifa y B sin tarifa copian ambos, cada uno con lo suyo", async () => {
+    const r = await confirmar([borrador({ fila: 1, origenPlanId: 900 }), sinTarifa({ fila: 2, origenPlanId: 901, pilotoEmpleadoId: 2, unidadPlaca: "P-2" })]);
+    expect(r.ok).toBe(true);
+    const [a, b] = creadosDestino();
+    expect([a.tarifa_id, a.tarifa_comercial]).toEqual([100, 1500]);
+    expect([b.tarifa_id, b.tarifa_comercial]).toEqual([null, null]);
+  });
+
+  it("9) NO inventa tarifa: elegir una tarifa (de otra ruta) para una ruta sin tarifa es error explícito; sin elegir nada queda sin tarifa", async () => {
+    const [explicita] = await validarLote(EMP, DESTINO, [sinTarifa({ tarifaId: 100 })]); // 100 es de la ruta 10
+    expect(explicita).toMatchObject({ estado: "error", errores: ["La tarifa seleccionada no es una tarifa vigente de esta ruta."] });
+    const [implicita] = await validarLote(EMP, DESTINO, [sinTarifa()]);
+    expect(implicita.tarifa).toBeNull();
+    await confirmar([sinTarifa()]);
+    expect(creadosDestino()[0].tarifa_id).not.toBe(100);
+  });
+
+  it("10) no altera fecha, hora, regreso trasladado ni recursos de la copia", async () => {
+    const b = sinTarifa({ horaCarga: "22:00", regresoOffsetDias: 1, regresoHora: "02:00", unidadPlaca: "P-1", pilotoEmpleadoId: 1 });
+    await confirmar([b], "2026-09-30");
+    const c = e.planes.find((x) => x.id >= 1000)!;
+    expect([c.fecha, c.hora, c.regreso, c.unidad_id, c.piloto_id]).toEqual(["2026-09-30", "22:00", "2026-10-01 02:00", 601, 501]);
+  });
+
+  it("la pantalla de Copiar muestra 'Sin tarifa' como aviso NO bloqueante y no filtra filas por tarifa", () => {
+    const page = readFileSync("src/app/e/[slug]/programacion/copiar/page.tsx", "utf8");
+    expect(page).toContain("Sin tarifa — podrás asignarla después");
+    expect(page).not.toMatch(/no tiene una tarifa vigente/);
+    const helpers = readFileSync("src/app/e/[slug]/programacion/copiar/copiar-helpers.ts", "utf8");
+    expect(helpers).not.toMatch(/tarifa\s*(===|==|!==)\s*null/); // ninguna regla de selección/confirmación mira la tarifa
   });
 });

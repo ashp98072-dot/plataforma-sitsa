@@ -185,12 +185,15 @@ export async function tarifaParaSnapshot(
   empresaId: number,
   rutaId: number,
   tarifaId: number,
+  /** Edición rápida (guardar): leer por la conexión que ya tiene la transacción abierta. */
+  conn?: { query: (sql: string, params: unknown[]) => Promise<unknown> },
 ): Promise<{ id: number; nombre: string; monto: number; moneda: string } | null> {
-  const rows = await query<RowDataPacket[]>(
-    `SELECT id, nombre, monto, moneda FROM tms_ruta_tarifas
-     WHERE id = ? AND empresa_id = ? AND ruta_id = ? AND activa = 1 LIMIT 1`,
-    [tarifaId, empresaId, rutaId],
-  );
+  const sql = `SELECT id, nombre, monto, moneda FROM tms_ruta_tarifas
+     WHERE id = ? AND empresa_id = ? AND ruta_id = ? AND activa = 1 LIMIT 1`;
+  const params = [tarifaId, empresaId, rutaId];
+  const rows = conn
+    ? ((await conn.query(sql, params)) as [RowDataPacket[]])[0]
+    : await query<RowDataPacket[]>(sql, params);
   const r = rows[0];
   if (!r) return null;
   return { id: Number(r.id), nombre: String(r.nombre), monto: Number(r.monto), moneda: String(r.moneda ?? "GTQ") };
