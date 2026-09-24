@@ -28,8 +28,22 @@ import { planesConCierreManual } from "@/lib/tms/cierre-manual-planes";
 import { SQL_HORA_LLEGADA_REAL } from "@/lib/tms/disponibilidad-traslapes";
 import { mensajeConflictoProgramacionDia, primerConflictoProgramacionDia, type RecursoDia } from "@/lib/tms/disponibilidad-programacion-dia";
 import { resolverTcInterno } from "@/lib/tms/tc-plan";
+import {
+  calcularCambiosRecursos,
+  camposTocados,
+  evaluarDisponibilidadPersonal,
+  evaluarDisponibilidadUnidad,
+  personalQueSale,
+  resolverCambioTc,
+  resolverSeleccionPersonal,
+  validarEstadoEditable,
+  validarFechaNoPasada,
+  validarMotivoCambioRecursos,
+  validarRegresoPosteriorASalida,
+  validarRemocionConViaticos,
+} from "@/lib/tms/programacion-validacion-recursos";
 import { esTc, normalizarTipoUnidad } from "@/lib/flota/tipo-unidad";
-import { personalDesdeEmpleado, validarPersonalId } from "@/lib/tms/personal-resolucion";
+import { personalDesdeEmpleado } from "@/lib/tms/personal-resolucion";
 import { upsertLugar, guardarAuxiliaresPlan } from "@/lib/tms/plan-comunes";
 import type { ResultSetHeader } from "mysql2/promise";
 
@@ -65,8 +79,7 @@ type AdvertenciaPatch = { tipo: string; mensaje: string };
  * /tms/planes/[id]/cerrar y src/lib/tms/cierre-viaje.ts — nunca ocurre
  * vía este PATCH general.
  */
-const ESTADOS_SOLO_NOTAS = new Set(["En ruta"]);
-const ESTADOS_BLOQUEADOS = new Set(["Cerrado", "Cancelado"]);
+// ESTADOS_SOLO_NOTAS / ESTADOS_BLOQUEADOS viven ahora en programacion-validacion-recursos.ts (PR-0 edición rápida).
 
 /**
  * OPS-2.1: misma definición que la columna calculada de GET — un alias de
@@ -1450,30 +1463,13 @@ export async function PATCH(req: Request, ctx: Ctx) {
   //    TC no se re-valida por taller/inactivo (editar otros campos de un
   //    viaje no debe fallar porque el TC ya entró a taller). La
   //    disponibilidad por fecha va más abajo, bajo el candado por empresa.
-  const planEsTercerizado = antes.tipoViaje === "Tercerizado";
-  if (planEsTercerizado && d.tcVehiculoId != null) {
-    return NextResponse.json(
-      { error: "Un viaje tercerizado no usa TC interno: captura el TC externo como texto." },
-      { status: 400 },
-    );
-  }
-  const escribirTcInterno =
-    !planEsTercerizado && d.tcVehiculoId !== undefined && (d.tcVehiculoId === null || d.tcVehiculoId !== antes.tcVehiculoId);
-  let tcVehiculoIdNuevo: number | null = null;
-  let tcPlacaNueva: string | null = null;
-  if (escribirTcInterno && d.tcVehiculoId != null) {
-    const tc = await resolverTcInterno(empresaId, d.tcVehiculoId);
-    if (!tc.ok) return NextResponse.json({ error: tc.error }, { status: tc.status });
-    tcVehiculoIdNuevo = tc.vehiculoId;
-    tcPlacaNueva = tc.placa;
-  }
-  const escribirTcExterno = planEsTercerizado && d.tcExternoPlaca !== undefined;
-  const tcExternoNuevo = escribirTcExterno ? ((d.tcExternoPlaca ?? "").trim().toUpperCase() || null) : null;
-  const tcEfectivo: number | null = planEsTercerizado
-    ? null
-    : escribirTcInterno
-      ? tcVehiculoIdNuevo
-      : antes.tcVehiculoId;
+  const cambioTc = await resolverCambioTc(
+    empresaId,
+    { tipoViaje: antes.tipoViaje, tcVehiculoId: antes.tcVehiculoId },
+    { tcVehiculoId: d.tcVehiculoId, tcExternoPlaca: d.tcExternoPlaca },
+  );
+  if (!cambioTc.ok) return NextResponse.json({ error: cambioTc.error }, { status: cambioTc.status });
+  const { escribirTcInterno, tcVehiculoIdNuevo, tcPlacaNueva, escribirTcExterno, tcExternoNuevo, tcEfectivo } = cambioTc;
 
   // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§2/§5) — consistencia
   // tarifa↔ruta del viaje. `d.rutaId` (zod) es undefined o un id positivo,
@@ -1540,22 +1536,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // ID — es una protección de integridad del viaje ya iniciado, no una
   // regla exclusiva de Programación (mismo criterio ya usado para bloquear
   // paradas en "En ruta").
-  const tocaPiloto = d.pilotoNombre != null || d.pilotoPersonalId != null;
-  const tocaAuxiliares =
-    d.auxiliarEmpleadoIds != null ||
-    d.auxiliarNombres != null ||
-    d.auxiliarNombre != null ||
-    d.auxiliarPersonalIds != null;
-  const tocaUnidad = d.placa != null || d.flotaVehiculoId != null;
-  const tocaFecha = d.fechaPlan != null;
-  const tocaParadas = d.paradas != null;
-  const tocaHora = d.horaCarga != null;
-  const tocaComercial =
-    d.regresoEstimado !== undefined ||
-    d.tarifaComercial !== undefined ||
-    d.tarifaId !== undefined ||
-    d.costoOperativoReferencia !== undefined ||
-    d.referenciaCliente !== undefined;
+  const toca = camposTocados(d);
 
   // OPS-AJUSTES (sección 3) — motivo obligatorio para cambios sensibles:
   // piloto, unidad y auxiliares. Se valida aquí, ANTES de cualquier
@@ -1564,67 +1545,11 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // usa toca* (ya calculados arriba: "la solicitud incluye un valor para
   // este campo"), no una comparación contra el valor anterior, para
   // nunca dejar pasar un cambio real sin motivo registrado.
-  if ((tocaPiloto || tocaUnidad || tocaAuxiliares) && !d.motivoCambio?.trim()) {
-    return NextResponse.json(
-      { error: "Indica el motivo del cambio de piloto, unidad o auxiliares." },
-      { status: 400 },
-    );
-  }
+  const errorMotivo = validarMotivoCambioRecursos(toca, d.motivoCambio);
+  if (errorMotivo) return NextResponse.json({ error: errorMotivo.error }, { status: errorMotivo.status });
 
-  if (ESTADOS_BLOQUEADOS.has(antes.estado)) {
-    return NextResponse.json(
-      {
-        error: `Este plan está en estado "${antes.estado}" y ya no admite modificaciones desde Programación.`,
-      },
-      { status: 409 },
-    );
-  }
-  if (ESTADOS_SOLO_NOTAS.has(antes.estado) && !antes.pendienteCierre) {
-    // En ruta SIN llegada registrada — comportamiento sin cambios: solo
-    // notas. piloto/auxiliares/unidad/fecha/paradas/hora/comercial siguen
-    // bloqueados exactamente igual que antes de OPS-3.2b.
-    const camposNoPermitidos: string[] = [];
-    if (tocaPiloto) camposNoPermitidos.push("piloto");
-    if (tocaAuxiliares) camposNoPermitidos.push("auxiliares");
-    if (tocaUnidad) camposNoPermitidos.push("unidad");
-    if (tocaFecha) camposNoPermitidos.push("fecha");
-    if (tocaParadas) camposNoPermitidos.push("paradas");
-    if (tocaHora) camposNoPermitidos.push("hora de carga");
-    if (tocaComercial) camposNoPermitidos.push("datos comerciales/regreso estimado");
-    if (camposNoPermitidos.length) {
-      return NextResponse.json(
-        {
-          error: `El plan está "${antes.estado}"; solo se pueden editar notas mientras está en ruta (no permitido: ${camposNoPermitidos.join(", ")}).`,
-        },
-        { status: 409 },
-      );
-    }
-  } else if (ESTADOS_SOLO_NOTAS.has(antes.estado) && antes.pendienteCierre) {
-    // OPS-3.2b/c/d — En ruta CON llegada registrada (pendiente de
-    // cierre): reconciliación administrativa. Se habilitan notas, tarifa
-    // comercial, referencia de cliente, regreso estimado, snapshots de
-    // ruta/lugar de descarga/contacto (OPS-3.2b), piloto/unidad/
-    // auxiliares (OPS-3.2c) y, desde OPS-3.2d, también paradas — todas
-    // pasan por EXACTAMENTE las mismas validaciones de abajo (personal/
-    // unidad existente, disponibilidad, traslapes, viáticos avanzados,
-    // y ahora guardado seguro por identidad para no romper evidencias ya
-    // subidas — ver guardarParadasPlan en src/lib/tms/paradas.ts) que ya
-    // corren para "Programado"; no se salta ninguna. Solo fecha/hora de
-    // carga SIGUEN bloqueadas. `tocaComercial`/`tocaPiloto`/
-    // `tocaAuxiliares`/`tocaUnidad`/`tocaParadas` NO se revisan en esta
-    // rama a propósito: es justo lo que estos PR habilitan.
-    const camposNoPermitidos: string[] = [];
-    if (tocaFecha) camposNoPermitidos.push("fecha");
-    if (tocaHora) camposNoPermitidos.push("hora de carga");
-    if (camposNoPermitidos.length) {
-      return NextResponse.json(
-        {
-          error: `El plan está "${antes.estado}" (pendiente de cierre); no se puede modificar: ${camposNoPermitidos.join(", ")}. Antes del cierre solo se pueden corregir notas, tarifa comercial, referencia de cliente, regreso estimado, ruta/contacto, piloto, unidad, auxiliares y paradas.`,
-        },
-        { status: 409 },
-      );
-    }
-  }
+  const errorEstado = validarEstadoEditable({ estado: antes.estado, pendienteCierre: antes.pendienteCierre }, toca);
+  if (errorEstado) return NextResponse.json({ error: errorEstado.error }, { status: errorEstado.status });
 
   // Fase P5.1c — FECHA EFECTIVA Y FECHA PASADA. "hoy" se calcula en
   // America/Guatemala (hoyLocal(), ya existente y reutilizado en el resto
@@ -1633,134 +1558,22 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // Programación (no se toca el POST ni su comportamiento histórico).
   const hoy = hoyLocal();
   const fechaEfectiva = d.fechaPlan ?? antes.fechaPlan;
-  if (fechaEfectiva && fechaEfectiva < hoy) {
-    return NextResponse.json(
-      { error: "No se puede reprogramar un viaje hacia una fecha pasada." },
-      { status: 400 },
-    );
-  }
+  const errorFecha = validarFechaNoPasada(fechaEfectiva, hoy);
+  if (errorFecha) return NextResponse.json({ error: errorFecha.error }, { status: errorFecha.status });
   const esHoy = fechaEfectiva === hoy;
   // Si la fecha cambia, los recursos YA asignados (que no cambian de ID en
   // este mismo request) deben revalidarse contra la NUEVA fecha — cambia el
   // contexto temporal de toda la asignación.
   const fechaCambia = d.fechaPlan != null && d.fechaPlan !== antes.fechaPlan;
-  if (d.regresoEstimado) {
-    const horaEfectiva = d.horaCarga ?? antes.hora ?? "00:00";
-    const salidaProgramada = `${fechaEfectiva}T${(horaEfectiva || "00:00").slice(0, 5)}`;
-    if (d.regresoEstimado <= salidaProgramada) {
-      return NextResponse.json(
-        { error: "El regreso estimado debe ser posterior a la salida programada." },
-        { status: 400 },
-      );
-    }
-  }
+  const errorRegreso = validarRegresoPosteriorASalida(d.regresoEstimado, fechaEfectiva, d.horaCarga ?? antes.hora ?? "00:00");
+  if (errorRegreso) return NextResponse.json({ error: errorRegreso.error }, { status: errorRegreso.status });
 
-  let pilotoId: number | undefined;
-  let auxiliarId: number | null | undefined;
   let unidadId: number | undefined;
 
-  if (d.pilotoNombre?.trim()) {
-    const existingPil = await query<RowDataPacket[]>(
-      `SELECT id FROM tms_personal
-       WHERE empresa_id = ? AND tipo = 'Piloto' AND LOWER(TRIM(nombre)) = LOWER(?)
-       LIMIT 1`,
-      [empresaId, d.pilotoNombre.trim()],
-    );
-    if (existingPil[0]) {
-      pilotoId = Number(existingPil[0].id);
-    } else {
-      const r = await execute(
-        "INSERT INTO tms_personal (empresa_id, nombre, tipo) VALUES (?, ?, 'Piloto')",
-        [empresaId, d.pilotoNombre.trim()],
-      );
-      pilotoId = Number(r.insertId);
-    }
-  }
-
-  // Fase P5.1a: campo por ID exclusivo de Programación. Se evalúa DESPUÉS
-  // del bloque por nombre a propósito — si un request trajera ambos (no
-  // debería ocurrir en uso normal), el id validado tiene precedencia.
-  if (d.pilotoPersonalId != null) {
-    const piloto = await validarPersonalId(empresaId, d.pilotoPersonalId, "Piloto");
-    if (!piloto) {
-      return NextResponse.json(
-        { error: "El piloto seleccionado no existe o no pertenece a esta empresa." },
-        { status: 400 },
-      );
-    }
-    pilotoId = piloto.id;
-  }
-
-  // Fase P5.1b: de aquí en adelante solo RESOLUCIÓN/VALIDACIÓN (sin tocar
-  // tms_unidades, tms_planes_viaje ni tms_plan_auxiliares todavía) — las 4
-  // escrituras relacionadas se ejecutan más abajo dentro de una única
-  // transacción. personalDesdeEmpleado()/el alta por nombre SÍ pueden
-  // crear filas en tms_personal aquí (fuera de la transacción): es el
-  // mismo patrón, sin envolver, que ya usa el POST para clientes/personal
-  // nuevos — no es una de las 4 escrituras que P5.1b debe hacer atómicas.
-  const actualizarAux =
-    d.auxiliarEmpleadoIds != null ||
-    d.auxiliarNombres != null ||
-    d.auxiliarNombre != null;
-  let auxPersonalIdsLegado: number[] | undefined;
-  if (actualizarAux) {
-    const auxPersonalIds: number[] = [];
-    for (const eid of (d.auxiliarEmpleadoIds ?? []).slice(0, 8)) {
-      const pid = await personalDesdeEmpleado(empresaId, eid, "Auxiliar");
-      if (pid) auxPersonalIds.push(pid);
-    }
-    const nombresAux = [
-      ...(d.auxiliarNombres ?? []),
-      ...(d.auxiliarNombre?.trim() ? [d.auxiliarNombre.trim()] : []),
-    ];
-    for (const nom of nombresAux) {
-      if (auxPersonalIds.length >= 8) break;
-      const nombre = nom.trim();
-      if (nombre.length < 2) continue;
-      const existing = await query<RowDataPacket[]>(
-        `SELECT id FROM tms_personal
-         WHERE empresa_id = ? AND tipo = 'Auxiliar' AND LOWER(TRIM(nombre)) = LOWER(?)
-         LIMIT 1`,
-        [empresaId, nombre],
-      );
-      if (existing[0]) {
-        const id = Number(existing[0].id);
-        if (!auxPersonalIds.includes(id)) auxPersonalIds.push(id);
-        continue;
-      }
-      const r = await execute(
-        "INSERT INTO tms_personal (empresa_id, nombre, tipo) VALUES (?, ?, 'Auxiliar')",
-        [empresaId, nombre],
-      );
-      auxPersonalIds.push(Number(r.insertId));
-    }
-    auxiliarId = auxPersonalIds[0] ?? null;
-    auxPersonalIdsLegado = auxPersonalIds;
-  }
-
-  // Fase P5.1a: campo por ID exclusivo de Programación. Igual que piloto,
-  // se evalúa después del bloque por nombre/id_empleado y tiene precedencia
-  // si ambos vinieran en el mismo request. Fase P5.1b: solo valida aquí —
-  // el reemplazo real de tms_plan_auxiliares se hace dentro de la
-  // transacción, más abajo.
-  let auxPersonalIdsNuevo: number[] | undefined;
-  if (d.auxiliarPersonalIds != null) {
-    const auxIds: number[] = [];
-    for (const pid of d.auxiliarPersonalIds.slice(0, 8)) {
-      const aux = await validarPersonalId(empresaId, pid, "Auxiliar");
-      if (!aux) {
-        return NextResponse.json(
-          {
-            error: `Un auxiliar seleccionado no existe o no pertenece a esta empresa (id ${pid}).`,
-          },
-          { status: 400 },
-        );
-      }
-      if (!auxIds.includes(aux.id)) auxIds.push(aux.id);
-    }
-    auxiliarId = auxIds[0] ?? null;
-    auxPersonalIdsNuevo = auxIds;
-  }
+  // Resolución de piloto/auxiliares (modo "escritura": idéntico al PATCH previo, puede crear tms_personal).
+  const seleccion = await resolverSeleccionPersonal(empresaId, d, "escritura");
+  if (!seleccion.ok) return NextResponse.json({ error: seleccion.error }, { status: seleccion.status });
+  const { pilotoId, auxiliarId, auxPersonalIdsLegado, auxPersonalIdsNuevo } = seleccion;
 
   // OPS-3.2c (corrección) — recursos EFECTIVOS y si realmente CAMBIARON,
   // no solo si el campo vino en el request. El formulario real de
@@ -1774,17 +1587,9 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // de `cambiaPersonal`) para reutilizarse también en la sección de
   // disponibilidad, más abajo — sin recalcular dos veces.
   const pilotoFinal = pilotoId !== undefined ? pilotoId : antes.pilotoId;
-  const pilotoCambioReal = pilotoFinal !== antes.pilotoId;
   const auxiliaresFinal = auxPersonalIdsNuevo ?? auxPersonalIdsLegado ?? antesAuxiliaresIds;
   // Comparación como CONJUNTOS — el orden en que el formulario mande los
   // auxiliares no representa una diferencia de asignación real.
-  const auxiliaresCambioReal = (() => {
-    const finalSet = new Set(auxiliaresFinal);
-    const antesSet = new Set(antesAuxiliaresIds);
-    if (finalSet.size !== antesSet.size) return true;
-    for (const id of finalSet) if (!antesSet.has(id)) return true;
-    return false;
-  })();
 
   // Mejora Programación — bloquear el cambio de personal si a quien se
   // quita/reemplaza ya se le procesó un viático (AUTORIZADO/ENTREGADO/
@@ -1802,39 +1607,12 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // queda vacío y no se bloquea nada.
   const cambiaPersonal = pilotoId !== undefined || auxPersonalIdsLegado != null || auxPersonalIdsNuevo != null;
   if (cambiaPersonal) {
-    const removidos: { personalId: number; nombre: string }[] = [];
-    if (antes.pilotoId != null && antes.pilotoId !== pilotoFinal) {
-      removidos.push({ personalId: antes.pilotoId, nombre: antes.piloto || `Piloto #${antes.pilotoId}` });
-    }
-    antesAuxiliaresIds.forEach((id, i) => {
-      if (!auxiliaresFinal.includes(id)) {
-        removidos.push({ personalId: id, nombre: antesAuxiliaresNombres[i] || `Auxiliar #${id}` });
-      }
-    });
-
-    if (removidos.length) {
-      const viaticosRemovidos = await query<RowDataPacket[]>(
-        `SELECT personal_id, estado FROM tms_viaticos
-         WHERE plan_id = ? AND personal_id IN (${removidos.map(() => "?").join(",")}) AND estado != 'PROGRAMADO'`,
-        [d.id, ...removidos.map((r) => r.personalId)],
-      );
-      if (viaticosRemovidos.length) {
-        const estadoPorPersonal = new Map(viaticosRemovidos.map((r) => [Number(r.personal_id), String(r.estado)]));
-        const bloqueados = removidos.filter((r) => estadoPorPersonal.has(r.personalId));
-        const detalle = bloqueados
-          .map((b) => `${b.nombre} (viático ${estadoPorPersonal.get(b.personalId)!.toLowerCase()})`)
-          .join(", ");
-        return NextResponse.json(
-          {
-            error:
-              bloqueados.length === 1
-                ? `No se puede quitar a ${bloqueados[0].nombre} del viaje porque su viático ya fue ${estadoPorPersonal.get(bloqueados[0].personalId)!.toLowerCase()}.`
-                : `No se puede modificar el personal del viaje: ${detalle} — su(s) viático(s) ya fue(ron) procesado(s).`,
-          },
-          { status: 409 },
-        );
-      }
-    }
+    const removidos = personalQueSale(
+      { pilotoId: antes.pilotoId, piloto: antes.piloto, auxiliaresIds: antesAuxiliaresIds, auxiliaresNombres: antesAuxiliaresNombres },
+      { pilotoId: pilotoFinal, auxiliaresIds: auxiliaresFinal },
+    );
+    const errorViaticos = await validarRemocionConViaticos(d.id, removidos);
+    if (errorViaticos) return NextResponse.json({ error: errorViaticos.error }, { status: errorViaticos.status });
   }
 
   // Placa legada: solo normaliza el texto aquí. El upsert real de
@@ -1880,7 +1658,6 @@ export async function PATCH(req: Request, ctx: Ctx) {
     const vehiculoLegado = await vehiculoPorPlaca(empresaId, placaNorm);
     unidadFinalId = vehiculoLegado ? Number(vehiculoLegado.id) : null;
   }
-  const unidadCambioReal = unidadFinalId !== (antes.flotaVehiculoId ?? null);
 
   // Fase P5.1c — DISPONIBILIDAD.
   //
@@ -1908,24 +1685,18 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // por ID), o (b) el recurso YA asignado si la fecha cambió y ese
   // recurso en particular no cambió (revalidación preexistente por
   // cambio de fecha). Todo esto corre ANTES de abrir la transacción.
-  const pilotoIdParaValidar =
-    pilotoCambioReal
-      ? pilotoFinal
-      : fechaCambia && antes.pilotoId != null
-        ? antes.pilotoId
-        : null;
-  const auxiliaresIdsParaValidar: number[] =
-    auxiliaresCambioReal
-      ? auxiliaresFinal
-      : fechaCambia
-        ? antesAuxiliaresIds
-        : [];
-  const vehiculoIdParaValidar: number | null =
-    unidadCambioReal
-      ? unidadFinalId
-      : fechaCambia && antes.flotaVehiculoId != null
-        ? antes.flotaVehiculoId
-        : null;
+  const {
+    pilotoCambioReal,
+    auxiliaresCambioReal,
+    unidadCambioReal,
+    pilotoIdParaValidar,
+    auxiliaresIdsParaValidar,
+    vehiculoIdParaValidar,
+  } = calcularCambiosRecursos(
+    { pilotoId: antes.pilotoId, auxiliaresIds: antesAuxiliaresIds, unidadFlotaId: antes.flotaVehiculoId ?? null },
+    { pilotoId, auxiliaresIds: auxPersonalIdsNuevo ?? auxPersonalIdsLegado, unidadFlotaId: unidadFinalId },
+    fechaCambia,
+  );
 
   const advertencias: AdvertenciaPatch[] = [];
 
@@ -1986,114 +1757,16 @@ export async function PATCH(req: Request, ctx: Ctx) {
       });
     }
 
-    for (const r of recursos) {
-      const disp = personalDisp.find((p) => p.personalId === r.personalId);
-      // No debería faltar (tms_personal ya se validó antes) — si por alguna
-      // inconsistencia no aparece, no se bloquea por un dato que no se pudo
-      // verificar (mismo criterio de "no bloquear por falla ajena" que ya
-      // usa el POST con la disponibilidad de placa).
-      if (!disp) continue;
-      const etiqueta =
-        r.rol === "piloto" ? "El piloto seleccionado" : `El auxiliar ${disp.nombre}`;
-
-      if (disp.incidenciasBloqueantes.length > 0) {
-        const inc = disp.incidenciasBloqueantes[0];
-        return NextResponse.json(
-          {
-            error: `${etiqueta} tiene una incidencia (${inc.tipo}) del ${inc.fechaInicio} al ${inc.fechaFin} que cubre el ${fechaEfectiva}.`,
-          },
-          { status: 409 },
-        );
-      }
-      if (disp.viajeActual != null) {
-        if (esHoy) {
-          return NextResponse.json(
-            { error: `${etiqueta} tiene un viaje en curso.` },
-            { status: 409 },
-          );
-        }
-        // Futuro: el viaje abierto ahora mismo NO bloquea — no se conoce
-        // cuándo terminará y no se inventa una duración estimada.
-        advertencias.push({
-          tipo: r.rol === "piloto" ? "viaje_actual_piloto" : "viaje_actual_auxiliar",
-          mensaje: `${disp.nombre} está actualmente en ruta. Esto no impide su programación para el ${fechaEfectiva}.`,
-        });
-      } else if (disp.estadoDisponibilidad === "no_disponible") {
-        // Por eliminación (ya se descartaron incidencia bloqueante y viaje
-        // actual arriba): personal inactivo o empleado de baja — hecho
-        // estructural, bloquea siempre sin importar la fecha.
-        return NextResponse.json(
-          {
-            error: `${etiqueta} no está activo o el empleado vinculado está de baja.`,
-          },
-          { status: 409 },
-        );
-      }
-      for (const otro of disp.otrosPlanesDelDia) {
-        if (otro.planId === d.id) continue; // nunca advertir contra el propio plan
-        advertencias.push({
-          tipo: r.rol === "piloto" ? "otro_plan_dia_piloto" : "otro_plan_dia_auxiliar",
-          mensaje: `${disp.nombre} ya tiene otro plan el mismo día (${otro.planCodigo}).`,
-        });
-      }
-      for (const a of disp.advertencias) {
-        if (a.tipo === "incidencia_informativa") {
-          advertencias.push({
-            tipo:
-              r.rol === "piloto"
-                ? "incidencia_informativa_piloto"
-                : "incidencia_informativa_auxiliar",
-            mensaje: `${disp.nombre} tiene una incidencia informativa (${a.incidencia.tipo}) el ${fechaEfectiva}.`,
-          });
-        }
-      }
-    }
+    const evaluacionPersonal = evaluarDisponibilidadPersonal(personalDisp, recursos, { fechaEfectiva, esHoy, planId: d.id });
+    advertencias.push(...evaluacionPersonal.advertencias);
+    if (evaluacionPersonal.error) return NextResponse.json({ error: evaluacionPersonal.error.error }, { status: evaluacionPersonal.error.status });
   }
 
   if (vehiculoIdParaValidar != null) {
     const dispVeh = await listarDisponibilidadVehiculos(empresaId);
-    const v = dispVeh.vehiculos.find((x) => x.id === vehiculoIdParaValidar);
-    if (v && unidadCambioReal && esTc(v.tipoUnidad)) {
-      return NextResponse.json(
-        { error: `La placa ${v.placa} está clasificada como TC: asígnala en el campo TC, no como Unidad.` },
-        { status: 400 },
-      );
-    }
-    if (v) {
-      if (v.estadoDisponibilidad === "inactivo") {
-        return NextResponse.json(
-          { error: "La unidad seleccionada está inactiva." },
-          { status: 409 },
-        );
-      }
-      if (v.estadoDisponibilidad === "en_taller") {
-        if (esHoy) {
-          return NextResponse.json(
-            { error: "La unidad seleccionada está actualmente en taller." },
-            { status: 409 },
-          );
-        }
-        // Futuro: no bloquea, pero SIN fecha de salida conocida — el
-        // sistema no tiene ese dato y no se inventa. Advertencia fuerte.
-        advertencias.push({
-          tipo: "vehiculo_en_taller",
-          mensaje: `La unidad ${v.placa} está actualmente en taller y no tiene fecha de salida registrada. Verifique su disponibilidad antes de confirmar.`,
-        });
-      } else if (v.estadoDisponibilidad === "en_ruta") {
-        if (esHoy) {
-          return NextResponse.json(
-            {
-              error: `La unidad seleccionada está actualmente en ruta${v.viajeAbierto ? ` con ${v.viajeAbierto.pilotoNombre}` : ""}.`,
-            },
-            { status: 409 },
-          );
-        }
-        advertencias.push({
-          tipo: "vehiculo_en_ruta",
-          mensaje: `La unidad ${v.placa} está actualmente en ruta. Esto no impide su programación para el ${fechaEfectiva}.`,
-        });
-      }
-    }
+    const evaluacionUnidad = evaluarDisponibilidadUnidad(dispVeh.vehiculos, vehiculoIdParaValidar, unidadCambioReal, { fechaEfectiva, esHoy });
+    advertencias.push(...evaluacionUnidad.advertencias);
+    if (evaluacionUnidad.error) return NextResponse.json({ error: evaluacionUnidad.error.error }, { status: evaluacionUnidad.error.status });
   }
 
   // Fase P5.1b: TODO O NADA. Las 4 escrituras relacionadas de una
