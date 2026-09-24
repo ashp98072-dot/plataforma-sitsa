@@ -16,6 +16,14 @@ export function fechaDMA(v: unknown): string {
   return f ? f.split("-").reverse().join("/") : String(v ?? "").trim() || "—";
 }
 
+/** Mensaje de error si alguna fecha de viaje cae fuera del periodo declarado (null = todas coherentes). */
+export function fechaFueraDePeriodo(desde: string, hasta: string, tipo: PeriodoTipo, fechas: string[]): string | null {
+  const fuera = [...new Set(fechas)].filter(f => f < desde || f > hasta).sort();
+  if (!fuera.length) return null;
+  const etiqueta = etiquetaPeriodoRequerimiento(tipo, desde, hasta);
+  return `Todas las fechas de viaje deben pertenecer al periodo (${etiqueta}). Fuera del periodo: ${fuera.map(fechaDMA).join(", ")}.`;
+}
+
 /** Periodo (tipo, desde, hasta) que contiene la fecha de referencia. */
 export function calcularPeriodoRequerimiento(tipo: PeriodoTipo, referencia: string): { periodoTipo: PeriodoTipo; periodoDesde: string; periodoHasta: string } {
   const f = fechaCalendario(referencia);

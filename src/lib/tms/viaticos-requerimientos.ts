@@ -8,7 +8,8 @@ import { leerBytesFirmaGuardada } from "@/lib/firmas/usuario-firmas";
 import { crearFirmaInterna } from "@/lib/firmas/firmas-internas";
 import { esPngValido, MAX_FIRMA_IMAGEN_BYTES, sha256Hex } from "@/lib/firmas/imagen-firma";
 import { borrarUpload, guardarUpload } from "@/lib/uploads";
-import { calcularPeriodoRequerimiento } from "./viaticos-requerimientos-periodo";
+import { hoyLocal } from "@/lib/rrhh/dates";
+import { calcularPeriodoRequerimiento, fechaFueraDePeriodo } from "./viaticos-requerimientos-periodo";
 import { ACCION_FIRMA_REQUIRENTE, nombreEmpresaRequirente, type GuardarRequerimientoViatico, type RequerimientoViatico, type TransicionRequerimientoViatico } from "./viaticos-requerimientos-schema";
 
 export class ErrorRequerimientoViatico extends Error { constructor(message: string, public status = 400) { super(message); } }
@@ -70,7 +71,11 @@ async function snapshotLinea(conn: PoolConnection, empresaId: number, l: Guardar
 function periodoDeRequerimiento(datos: GuardarRequerimientoViatico) {
   if (!datos.periodoTipo) return { periodoTipo: null, periodoDesde: null, periodoHasta: null };
   const referencia = datos.periodoReferencia ?? datos.lineas.map(l => l.fechaViaje).sort()[0];
-  return calcularPeriodoRequerimiento(datos.periodoTipo, referencia);
+  const p = calcularPeriodoRequerimiento(datos.periodoTipo, referencia);
+  // El periodo declarado debe contener TODAS las fechas de viaje (Día: mismo día; Semana: lunes–domingo; Mes: mismo mes).
+  const error = fechaFueraDePeriodo(p.periodoDesde, p.periodoHasta, p.periodoTipo, datos.lineas.map(l => l.fechaViaje));
+  if (error) throw new ErrorRequerimientoViatico(error);
+  return p;
 }
 
 export async function guardarRequerimientoViatico(empresaId:number, usuarioId:number, usuarioNombre:string, datos:GuardarRequerimientoViatico, id?:number) {
@@ -89,12 +94,12 @@ export async function guardarRequerimientoViatico(empresaId:number, usuarioId:nu
       if (!actual[0]) throw new ErrorRequerimientoViatico("Requerimiento no encontrado.",404);
       if (!["BORRADOR","PENDIENTE"].includes(String(actual[0].estado))) throw new ErrorRequerimientoViatico("El requerimiento ya está congelado y no puede editarse.",409);
       if (Number(actual[0].version)!==datos.version) throw new ErrorRequerimientoViatico("El requerimiento cambió; recarga la página.",409);
-      await conn.execute(`UPDATE tms_viatico_requerimientos SET fecha_requerimiento=?,periodo_tipo=?,periodo_desde=?,periodo_hasta=?,empresa_requirente_nombre=?,requirente_usuario_id=?,requirente_nombre_snapshot=?,total=?,observaciones=?,version=version+1 WHERE empresa_id=? AND id=?`,[datos.fechaRequerimiento,periodo.periodoTipo,periodo.periodoDesde,periodo.periodoHasta,nombreEmpresaRequirente(datos.empresaRequirente),datos.requirenteUsuarioId,requirente.nombre,dinero(total),datos.observaciones,empresaId,id]);
+      await conn.execute(`UPDATE tms_viatico_requerimientos SET periodo_tipo=?,periodo_desde=?,periodo_hasta=?,empresa_requirente_nombre=?,requirente_usuario_id=?,requirente_nombre_snapshot=?,total=?,observaciones=?,version=version+1 WHERE empresa_id=? AND id=?`,[periodo.periodoTipo,periodo.periodoDesde,periodo.periodoHasta,nombreEmpresaRequirente(datos.empresaRequirente),datos.requirenteUsuarioId,requirente.nombre,dinero(total),datos.observaciones,empresaId,id]);
       await conn.execute(`DELETE FROM tms_viatico_requerimiento_lineas WHERE empresa_id=? AND requerimiento_id=?`,[empresaId,id]);
     } else {
       const [sol] = await conn.query<RowDataPacket[]>(`SELECT nombre FROM usuarios WHERE id=? AND activo=1 LIMIT 1`,[usuarioId]);
       const temporal=`TMP-${randomUUID()}`;
-      const [r] = await conn.execute<ResultSetHeader>(`INSERT INTO tms_viatico_requerimientos (empresa_id,codigo,fecha_requerimiento,periodo_tipo,periodo_desde,periodo_hasta,empresa_requirente_nombre,requirente_usuario_id,requirente_nombre_snapshot,solicitante_usuario_id,solicitante_nombre_snapshot,estado,total,observaciones,creado_por) VALUES (?,?,?,?,?,?,?,?,?,?,?,'BORRADOR',?,?,?)`,[empresaId,temporal,datos.fechaRequerimiento,periodo.periodoTipo,periodo.periodoDesde,periodo.periodoHasta,nombreEmpresaRequirente(datos.empresaRequirente),datos.requirenteUsuarioId,requirente.nombre,usuarioId,String(sol[0]?.nombre||usuarioNombre),dinero(total),datos.observaciones,usuarioId]);
+      const [r] = await conn.execute<ResultSetHeader>(`INSERT INTO tms_viatico_requerimientos (empresa_id,codigo,fecha_requerimiento,periodo_tipo,periodo_desde,periodo_hasta,empresa_requirente_nombre,requirente_usuario_id,requirente_nombre_snapshot,solicitante_usuario_id,solicitante_nombre_snapshot,estado,total,observaciones,creado_por) VALUES (?,?,?,?,?,?,?,?,?,?,?,'BORRADOR',?,?,?)`,[empresaId,temporal,hoyLocal(),periodo.periodoTipo,periodo.periodoDesde,periodo.periodoHasta,nombreEmpresaRequirente(datos.empresaRequirente),datos.requirenteUsuarioId,requirente.nombre,usuarioId,String(sol[0]?.nombre||usuarioNombre),dinero(total),datos.observaciones,usuarioId]);
       reqId=r.insertId; const codigo=`VR-${new Date().getFullYear()}-${String(reqId).padStart(6,"0")}`;
       await conn.execute(`UPDATE tms_viatico_requerimientos SET codigo=? WHERE empresa_id=? AND id=?`,[codigo,empresaId,reqId]);
     }
@@ -113,9 +118,11 @@ export async function transicionarRequerimientoViatico(empresaId:number,id:numbe
   }
   // Firma del REQUIRENTE al emitir (enviar): SOLO si el requirente es el usuario de sesión (nunca se firma por otra persona).
   let firmaRequirente:{relative:string;original:string;mime:string;size:number;sha256:string;origen:"GUARDADA"|"DIBUJADA"}|null=null;
-  if(datos.accion==="enviar"&&datos.firmaRequirente){
+  if(datos.accion==="enviar"){
     const [r]=await query<RowDataPacket[]>(`SELECT requirente_usuario_id FROM tms_viatico_requerimientos WHERE empresa_id=? AND id=? LIMIT 1`,[empresaId,id]);
     if(r&&Number(r.requirente_usuario_id)===usuarioId){
+      // El requirente ES el usuario de sesión (dato de BD, no de la UI): su firma es OBLIGATORIA para emitir.
+      if(!datos.firmaRequirente)throw new ErrorRequerimientoViatico("Como persona que requiere debes firmar el requerimiento (Mi firma o firma dibujada) para enviarlo.",400);
       let bytes:ArrayBuffer|null=null;let original="firma.png";
       if(datos.firmaRequirente.modo==="GUARDADA"){const g=await leerBytesFirmaGuardada(usuarioId);if(g){bytes=g.bytes;original=g.original;}}
       else{const b=Buffer.from(datos.firmaRequirente.imagenBase64,"base64");if(b.length<=MAX_FIRMA_IMAGEN_BYTES)bytes=b.buffer.slice(b.byteOffset,b.byteOffset+b.byteLength) as ArrayBuffer;}
@@ -124,7 +131,7 @@ export async function transicionarRequerimientoViatico(empresaId:number,id:numbe
       firmaRuta=f.relative;firmaRequirente={relative:f.relative,original:f.original,mime:"image/png",size:f.size,sha256:sha256Hex(bytes),origen:datos.firmaRequirente.modo};
     }
   }
-  const conn=await getPool().getConnection(); let confirmado=false; try{ await conn.beginTransaction();
+  const conn=await getPool().getConnection(); let confirmado=false; let firmaUsada=false; try{ await conn.beginTransaction();
     const [rows]=await conn.query<RowDataPacket[]>(`SELECT estado,version,total,requirente_usuario_id FROM tms_viatico_requerimientos WHERE empresa_id=? AND id=? FOR UPDATE`,[empresaId,id]); const actual=rows[0];
     if(!actual) throw new ErrorRequerimientoViatico("Requerimiento no encontrado.",404); const paso=pasos[datos.accion];
     if(Number(actual.version)!==datos.version || !paso.desde.includes(String(actual.estado))) throw new ErrorRequerimientoViatico("La transición ya no es válida; recarga la página.",409);
@@ -133,7 +140,9 @@ export async function transicionarRequerimientoViatico(empresaId:number,id:numbe
       extra.push("autorizado_por_usuario_id=?","autorizado_por_nombre=?","autorizado_en=NOW()");params.push(usuarioId,usuarioNombre);
       await crearFirmaInterna(conn,{empresaId,usuarioId,empleadoId:null,nombreFirmante:usuarioNombre,rolFirmante:usuarioRol,accion:"AUTORIZAR_REQUERIMIENTO_VIATICO",modulo:"TMS",entidadTipo:"REQUERIMIENTO_VIATICO",entidadId:id,valoresRelevantes:{requerimientoId:id,estadoAnterior:actual.estado,estadoNuevo:"AUTORIZADO",total:actual.total},metodo:"FIRMA_MANUSCRITA",origenFirma:firmaImagen?"GUARDADA":null,imagen:firmaImagen});
     }
+    if(datos.accion==="enviar"&&Number(actual.requirente_usuario_id)===usuarioId&&!firmaRequirente)throw new ErrorRequerimientoViatico("Como persona que requiere debes firmar el requerimiento (Mi firma o firma dibujada) para enviarlo.",400); // fila bloqueada: el requirente pudo cambiar tras la pre-consulta
     if(datos.accion==="enviar"&&firmaRequirente&&Number(actual.requirente_usuario_id)===usuarioId){
+      firmaUsada=true;
       await crearFirmaInterna(conn,{empresaId,usuarioId,empleadoId:null,nombreFirmante:usuarioNombre,rolFirmante:usuarioRol,accion:ACCION_FIRMA_REQUIRENTE,modulo:"TMS",entidadTipo:"REQUERIMIENTO_VIATICO",entidadId:id,valoresRelevantes:{requerimientoId:id,estadoAnterior:actual.estado,estadoNuevo:"PENDIENTE",total:actual.total,rol:"REQUIRENTE"},metodo:"FIRMA_MANUSCRITA",origenFirma:firmaRequirente.origen,imagen:firmaRequirente});
     }
     if(datos.accion==="rechazar"){extra.push("rechazado_por_usuario_id=?","rechazado_por_nombre=?","rechazado_en=NOW()","motivo_rechazo=?");params.push(usuarioId,usuarioNombre,datos.motivo);}
@@ -142,5 +151,5 @@ export async function transicionarRequerimientoViatico(empresaId:number,id:numbe
     params.push(empresaId,id,datos.version); await conn.execute(`UPDATE tms_viatico_requerimientos SET estado=?,${extra.length?extra.join(",")+",":""}version=version+1 WHERE empresa_id=? AND id=? AND version=?`,params);
     await registrarAuditoriaTx(conn,{empresaId,usuario:usuarioNombre,accion:`${datos.accion}_requerimiento_viatico`,modulo:"tms",detalle:`Requerimiento de viáticos #${id}: ${actual.estado} -> ${paso.hacia}`});
     await conn.commit(); confirmado=true; return await obtenerRequerimientoViatico(empresaId,id);
-  }catch(e){await conn.rollback();throw e;}finally{conn.release();if(!confirmado&&firmaRuta)try{borrarUpload(firmaRuta);}catch{}}
+  }catch(e){await conn.rollback();throw e;}finally{conn.release();if(!confirmado&&firmaRuta)try{borrarUpload(firmaRuta);}catch{}else if(confirmado&&firmaRuta&&datos.accion==="enviar"&&!firmaUsada)try{borrarUpload(firmaRuta);}catch{}}
 }

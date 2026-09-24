@@ -99,6 +99,9 @@ describe("exportación y API (guardas de código)", () => {
     expect(ui).toContain("Periodo del requerimiento");
     expect(ui).toContain("esRequirente?abrirFirma():accion(\"enviar\")");
     expect(ui).toContain("SelectorFirma");
+    // la fecha del requerimiento ya no es editable ni se envía: la fija el servidor
+    expect(ui).not.toMatch(/Fecha del requerimiento<input/);
+    expect(ui).toContain("fechaRequerimiento:undefined");
   });
 });
 

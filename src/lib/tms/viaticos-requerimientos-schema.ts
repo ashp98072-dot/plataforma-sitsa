@@ -18,7 +18,8 @@ export const lineaRequerimientoViaticoSchema = z.object({
 }).strict();
 
 export const guardarRequerimientoViaticoSchema = z.object({
-  fechaRequerimiento: fecha, empresaRequirente: z.enum(DOCUMENTOS_EMISOR), requirenteUsuarioId: id,
+  /** Ignorada: la fecha del requerimiento la fija el servidor (hoy, Guatemala) al crear. Se acepta solo por compatibilidad con clientes anteriores. */
+  fechaRequerimiento: fecha.optional(), empresaRequirente: z.enum(DOCUMENTOS_EMISOR), requirenteUsuarioId: id,
   observaciones: opcional(10000),
   /** Periodo cubierto (Día/Semana/Mes). Se calcula y persiste en el servidor a partir de la referencia (por defecto, la fecha de viaje más antigua). */
   periodoTipo: z.enum(PERIODOS_REQUERIMIENTO).optional(), periodoReferencia: fecha.optional(),
