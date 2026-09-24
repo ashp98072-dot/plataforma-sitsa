@@ -60,7 +60,7 @@ describe("permisos y tenant", () => {
     expect(vi.mocked(confirmarLote).mock.calls[0].slice(0, 4)).toEqual([7, "jefe", "2026-09-25", { tipo: "COPIA", fechaOrigen: "2026-09-24" }]);
   });
   it("otra empresa: si algún origen no es accesible para la sesión, 400 y no se crea nada", async () => {
-    vi.mocked(borradoresDesdeCliente).mockResolvedValue({ ok: false, error: "Algún viaje origen no existe en esta empresa para la fecha origen indicada." });
+    vi.mocked(borradoresDesdeCliente).mockResolvedValue({ ok: false, error: "Algún viaje origen no existe, está cancelado o no pertenece a la fecha/empresa indicada." });
     const r = await post(confirmar, cuerpo());
     expect(r.status).toBe(400);
     expect(confirmarLote).not.toHaveBeenCalled();

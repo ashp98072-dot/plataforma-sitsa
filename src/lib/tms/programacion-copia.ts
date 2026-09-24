@@ -127,8 +127,9 @@ export async function cargarCopiaDeFecha(empresaId: number, fechaOrigen: string)
 
 /**
  * Filas que llegan del cliente al validar/confirmar: el cliente solo aporta las EDICIONES permitidas. Todo lo
- * demás (paradas, origen) se vuelve a leer del plan origen en el servidor y se exige que sea de ESTA empresa y
- * de la fecha origen indicada — nunca se confía en ids o paradas enviados por el cliente.
+ * demás (paradas, origen) se vuelve a leer del plan origen en el servidor y se exige que sea de ESTA empresa, de la
+ * fecha origen indicada y que NO esté Cancelado (igual que la carga inicial; un Cerrado sí es origen válido — no
+ * confundir con la regla del plan DESTINO cancelado, que sí permite volver a copiar) — nunca se confía en ids o paradas enviados por el cliente.
  */
 export type EdicionFilaCopia = Omit<BorradorLote, "paradas">;
 
@@ -143,11 +144,11 @@ export async function borradoresDesdeCliente(
   if (new Set(filas.map((f) => f.origenPlanId)).size !== filas.length) return { ok: false, error: "Un mismo viaje origen no puede copiarse dos veces en el lote." };
   const validos = origenIds.length
     ? await query<RowDataPacket[]>(
-        `SELECT id FROM tms_planes_viaje WHERE empresa_id = ? AND fecha_plan = ? AND id IN (${origenIds.map(() => "?").join(",")})`,
+        `SELECT id FROM tms_planes_viaje WHERE empresa_id = ? AND fecha_plan = ? AND estado <> 'Cancelado' AND id IN (${origenIds.map(() => "?").join(",")})`,
         [empresaId, fechaOrigen, ...origenIds],
       )
     : [];
-  if (validos.length !== origenIds.length) return { ok: false, error: "Algún viaje origen no existe en esta empresa para la fecha origen indicada." };
+  if (validos.length !== origenIds.length) return { ok: false, error: "Algún viaje origen no existe, está cancelado o no pertenece a la fecha/empresa indicada." };
   const paradasMap = await listarParadasDePlanes(origenIds);
   return {
     ok: true,

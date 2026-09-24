@@ -523,22 +523,64 @@ describe("copiar programación de otra fecha", () => {
     expect(readFileSync("src/lib/tms/programacion-copia.ts", "utf8")).not.toMatch(/tms_viaticos|monto_asignado|viatico/i);
   });
 
-  it("borradoresDesdeCliente: el origen debe ser de ESTA empresa y de la fecha origen; las paradas se releen en el servidor", async () => {
+  // Emula el SELECT de validación de origen HONRANDO los predicados que aparecen en el SQL (empresa, fecha, no Cancelado).
+  const origenes = [
+    { id: 900, empresa_id: EMP, fecha: ORIGEN, estado: "Programado" },
+    { id: 901, empresa_id: EMP, fecha: ORIGEN, estado: "Cerrado" },
+    { id: 902, empresa_id: EMP, fecha: ORIGEN, estado: "Cancelado" },
+    { id: 903, empresa_id: EMP, fecha: "2026-09-20", estado: "Programado" },
+    { id: 904, empresa_id: 8, fecha: ORIGEN, estado: "Programado" },
+  ];
+  const emularValidacionOrigen = () => {
     const base = vi.mocked(query).getMockImplementation() as unknown as (s: string, p: unknown[]) => Promise<unknown>;
     vi.mocked(query).mockImplementation((async (sql: string, params: unknown[]) => {
-      if (String(sql).includes("SELECT id FROM tms_planes_viaje WHERE empresa_id = ? AND fecha_plan = ?")) {
+      const s = String(sql);
+      if (s.includes("SELECT id FROM tms_planes_viaje WHERE empresa_id = ? AND fecha_plan = ?")) {
         const [emp, fecha, ...ids] = params as [number, string, ...number[]];
-        return emp === EMP && fecha === ORIGEN ? ids.filter((i) => i === 900).map((id) => ({ id })) : [];
+        return origenes.filter((o) => o.empresa_id === emp && o.fecha === fecha && (!s.includes("estado <> 'Cancelado'") || o.estado !== "Cancelado") && ids.includes(o.id)).map((o) => ({ id: o.id }));
       }
       return base(sql, params);
     }) as never);
-    const ok = await borradoresDesdeCliente(EMP, ORIGEN, [{ ...borrador(), paradas: undefined } as never]);
+  };
+  const desde = (ids: number[], empresa = EMP, fecha = ORIGEN) => borradoresDesdeCliente(empresa, fecha, ids.map((id, i) => ({ ...borrador({ fila: i + 1, origenPlanId: id }), paradas: undefined }) as never));
+
+  it("borradoresDesdeCliente: el origen debe ser de ESTA empresa, de la fecha origen y NO Cancelado; las paradas se releen en el servidor", async () => {
+    emularValidacionOrigen();
+    const ok = await desde([900]);
     expect(ok).toMatchObject({ ok: true });
     expect(ok.ok && ok.borradores[0].paradas).toHaveLength(2); // de la BD, no del cliente
-    expect(await borradoresDesdeCliente(EMP, ORIGEN, [borrador({ origenPlanId: 5555 })])).toMatchObject({ ok: false }); // otro plan / otra empresa
-    expect(await borradoresDesdeCliente(8, ORIGEN, [borrador()])).toMatchObject({ ok: false }); // otra empresa
-    expect(await borradoresDesdeCliente(EMP, "2026-01-01", [borrador()])).toMatchObject({ ok: false }); // fecha origen distinta
     expect(await borradoresDesdeCliente(EMP, ORIGEN, [borrador({ origenPlanId: null })])).toMatchObject({ ok: false });
     expect(await borradoresDesdeCliente(EMP, ORIGEN, [borrador(), borrador({ fila: 2 })])).toMatchObject({ ok: false }); // mismo origen dos veces
+  });
+
+  it("origen CANCELADO enviado a mano -> rechazo con mensaje claro (aunque la carga inicial ya lo excluya)", async () => {
+    emularValidacionOrigen();
+    const r = await desde([902]);
+    expect(r).toEqual({ ok: false, error: "Algún viaje origen no existe, está cancelado o no pertenece a la fecha/empresa indicada." });
+    expect((await desde([900, 902])).ok).toBe(false); // uno bueno + uno cancelado: se rechaza el lote
+    expect(String(vi.mocked(query).mock.calls.find(([s]) => String(s).includes("SELECT id FROM tms_planes_viaje WHERE empresa_id = ?"))![0])).toContain("estado <> 'Cancelado'");
+  });
+
+  it("origen CERRADO sigue siendo válido (lo que se copia es configuración, no estado)", async () => {
+    emularValidacionOrigen();
+    expect(await desde([901])).toMatchObject({ ok: true });
+    expect(await desde([900, 901])).toMatchObject({ ok: true });
+  });
+
+  it("origen de OTRA FECHA o de OTRA EMPRESA -> rechazo", async () => {
+    emularValidacionOrigen();
+    expect((await desde([903])).ok).toBe(false); // el plan es del 2026-09-20
+    expect((await desde([900], EMP, "2026-09-20")).ok).toBe(false); // fecha origen indicada distinta
+    expect((await desde([904])).ok).toBe(false); // plan de la empresa 8
+    expect((await desde([900], 8)).ok).toBe(false); // sesión de otra empresa
+  });
+
+  it("ORIGEN cancelado ≠ DESTINO anterior cancelado: un destino Cancelado sigue permitiendo volver a copiar el mismo origen", async () => {
+    emularValidacionOrigen();
+    expect((await confirmar([borrador({ origenPlanId: 900 })])).ok).toBe(true);
+    creadosDestino()[0].estado = "Cancelado"; // el plan DESTINO generado se cancela
+    expect((await desde([900])).ok).toBe(true); // el origen (no cancelado) sigue válido
+    expect((await confirmar([borrador({ origenPlanId: 900 })])).ok).toBe(true); // nueva copia permitida
+    expect(e.origen).toHaveLength(2);
   });
 });
