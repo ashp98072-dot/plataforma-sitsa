@@ -31,7 +31,8 @@ import {
   recursosVisibles,
   resumenEdicion,
   subirAuxiliar,
-  tarifaVisible,
+  tarifaEfectiva,
+  TARIFA_MANUAL_PENDIENTE,
   unidadSinVinculoFlota,
   viaticosVisibles,
   type Borrador,
@@ -255,7 +256,8 @@ export function EdicionRapida({
               const bloqueo = motivoNoEditable(p, hoy);
               const internosBloqueados = recursosInternosBloqueados(p);
               const deshabilitado = bloqueo != null || guardando || internosBloqueados;
-              const tarifaSel = tarifaVisible(borrador, p);
+              const tarifa = tarifaEfectiva(borrador, p);
+              const tarifaSel = tarifa.tipo === "manual" ? "manual" : tarifa.tarifaId != null ? String(tarifa.tarifaId) : "";
               const opcionesDeTarifa = opcionesTarifa(p.ruta_id != null ? tarifasPorRuta[String(p.ruta_id)] : undefined, { id: p.tarifa_id ?? null, nombre: p.tarifa_nombre_historico, monto: p.tarifa_monto_historico });
               const tarifaDeshabilitada = bloqueo != null || guardando || !puedeEditarTarifa(p);
               const viaticos = puedeEditarViaticos(p) ? viaticosVisibles(borrador, p) : [];
@@ -357,17 +359,42 @@ export function EdicionRapida({
                       className={celda}
                       aria-label={`Tarifa de ${p.codigo}`}
                       disabled={tarifaDeshabilitada}
-                      title={!puedeEditarTarifa(p) ? "Este viaje no tiene ruta con catálogo de tarifas: usa Ajustar." : undefined}
-                      value={tarifaSel ?? ""}
-                      onChange={(e) => cambiar(p, { tarifaId: e.target.value ? Number(e.target.value) : null })}
+                      title={!puedeEditarTarifa(p) ? "Datos de tarifa no disponibles: recarga la programación." : undefined}
+                      value={tarifaSel}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v === "manual") {
+                          // Con monto manual ya guardado se parte de él; si no, queda pendiente hasta escribir el monto.
+                          const real = p.tarifa_id == null && p.tarifa_comercial != null ? Number(p.tarifa_comercial) : TARIFA_MANUAL_PENDIENTE;
+                          cambiar(p, { tarifaId: null, tarifaComercial: real });
+                        } else if (v === "") cambiar(p, { tarifaId: null, tarifaComercial: null });
+                        else cambiar(p, { tarifaId: Number(v) });
+                      }}
                     >
                       <option value="">— Sin tarifa —</option>
+                      <option value="manual">— Tarifa manual —</option>
                       {opcionesDeTarifa.map((o) => <option key={o.id} value={o.id}>{o.etiqueta}</option>)}
                     </select>
-                    {tarifaSel == null && p.tarifa_comercial != null ? (
-                      <span className="mt-0.5 block text-[10px] text-[var(--muted)]" title="Monto comercial manual del viaje (no viene del catálogo)">
-                        Monto manual: Q{Number(p.tarifa_comercial).toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </span>
+                    {tarifa.tipo === "manual" ? (
+                      <label className="mt-1 flex items-center gap-1 text-[10px] text-[var(--muted)]">
+                        Q
+                        <input
+                          key={`${p.id}-tarifa-${Number.isNaN(tarifa.monto) ? "" : tarifa.monto}`}
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          inputMode="decimal"
+                          className={`${celda} w-24`}
+                          aria-label={`Monto de tarifa manual de ${p.codigo}`}
+                          disabled={tarifaDeshabilitada}
+                          defaultValue={tarifa.monto != null && !Number.isNaN(tarifa.monto) ? tarifa.monto : ""}
+                          placeholder="0.00"
+                          onBlur={(e) => {
+                            const n = e.target.value === "" ? TARIFA_MANUAL_PENDIENTE : Number(e.target.value);
+                            if (!Object.is(n, tarifa.monto) && n !== tarifa.monto) cambiar(p, { tarifaId: null, tarifaComercial: n });
+                          }}
+                        />
+                      </label>
                     ) : null}
                   </td>
                   <td className="min-w-[170px] px-2 py-1.5">

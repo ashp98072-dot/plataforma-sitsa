@@ -24,6 +24,8 @@ vi.mock("@/lib/tms/ruta-tarifas", () => ({ tarifaParaSnapshot: vi.fn() }));
 import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { listarDisponibilidadPersonal } from "@/lib/operaciones/disponibilidad-personal";
+import { listarDisponibilidadVehiculos } from "@/lib/operaciones/disponibilidad";
+import { obtenerVehiculoAccesible } from "@/lib/flota/acceso";
 import { hoyLocal } from "@/lib/rrhh/dates";
 import { validarPersonalId } from "@/lib/tms/personal-resolucion";
 import { tarifaParaSnapshot } from "@/lib/tms/ruta-tarifas";
@@ -97,6 +99,7 @@ function crearConexion() {
     }),
     execute: vi.fn(async (sql: string, params: unknown[] = []) => {
       const s = String(sql);
+      if (s.includes("INSERT INTO tms_unidades")) return [{ insertId: 900, affectedRows: 1 }];
       if (!s.startsWith("UPDATE tms_planes_viaje SET")) throw new Error(`SQL de escritura inesperado: ${s.slice(0, 60)}`);
       updates.push({ sql: s, params });
       eventos.push("update");
@@ -120,6 +123,8 @@ beforeEach(() => {
   vi.mocked(listarDisponibilidadPersonal).mockImplementation((async () => PERSONAL.map((p) => ({
     personalId: p.id, nombre: p.nombre, incidenciasBloqueantes: [], viajeActual: null, estadoDisponibilidad: "disponible", otrosPlanesDelDia: [], advertencias: [],
   }))) as never);
+  vi.mocked(obtenerVehiculoAccesible).mockImplementation((async (_e: number, id: number) => ({ id, placa: `C-${id}` })) as never);
+  vi.mocked(listarDisponibilidadVehiculos).mockResolvedValue({ vehiculos: [{ id: 30, placa: "C-30", tipoUnidad: "Camion", estadoDisponibilidad: "disponible", viajeAbierto: null }] } as never);
   vi.mocked(tarifaParaSnapshot).mockImplementation((async (_e: number, ruta: number, id: number) => (ruta === 5 && id === TARIFA_A.id ? TARIFA_A : null)) as never);
 });
 
@@ -167,7 +172,7 @@ describe("Edición rápida — TARIFA (validar)", () => {
 
   it("4) quitar la tarifa (sin tarifa) es un cambio válido", async () => {
     planes[0].tarifa_id = 61; planes[0].tarifa_comercial = 1500;
-    const r = await validar([cambio(101, { tarifaId: null })]);
+    const r = await validar([cambio(101, { tarifaId: null, tarifaComercial: null })]);
     expect(r.filas[0].estado).toBe("ok");
   });
 
@@ -245,15 +250,16 @@ describe("Edición rápida — TARIFA (guardar)", () => {
     expect(u.sql).not.toMatch(/piloto_id|unidad_id|tc_vehiculo_id/); // solo lo que cambió
   });
 
-  it("14) quitar: limpia el snapshot del catálogo y NO toca tarifa_comercial (monto manual)", async () => {
+  it("14) sin tarifa: limpia el snapshot Y tarifa_comercial (todo NULL, nunca 0)", async () => {
     planes[0].tarifa_id = 61; planes[0].tarifa_comercial = 1500;
-    await guardar([cambio(101, { tarifaId: null })]);
+    await guardar([cambio(101, { tarifaId: null, tarifaComercial: null })]);
     const u = updates[0];
     expect(u.sql).toContain("tarifa_id = NULL");
     expect(u.sql).toContain("tarifa_nombre_historico = NULL");
     expect(u.sql).toContain("tarifa_monto_historico = NULL");
     expect(u.sql).toContain("tarifa_moneda_historico = NULL");
-    expect(u.sql).not.toContain("tarifa_comercial");
+    expect(u.sql).toContain("tarifa_comercial = NULL");
+    expect(u.params).toEqual([101, EMP, "Programado"]);
   });
 
   it("15) atómico: si UNA fila del lote es inválida no se escribe NINGUNA (rollback, sin UPDATE)", async () => {
@@ -269,7 +275,7 @@ describe("Edición rápida — TARIFA (guardar)", () => {
     await guardar([cambio(101, { tarifaId: 61 })], "Se acordó la tarifa");
     const detalle = vi.mocked(registrarAuditoriaTx).mock.calls[0][1].detalle as string;
     expect(detalle).toContain("Plan #101");
-    expect(detalle).toContain("tarifa sin tarifa → Ruta corta #61 (1500 GTQ)");
+    expect(detalle).toContain("tarifa sin tarifa → Catálogo Ruta corta Q1,500.00");
     expect(detalle).toContain("motivo: Se acordó la tarifa");
     expect(eventos.indexOf("commit")).toBeGreaterThan(eventos.indexOf("update"));
   });
@@ -408,5 +414,167 @@ describe("Edición rápida — VIÁTICOS", () => {
     expect(updates[0].sql).toContain("piloto_id = ?");
     expect(updates[0].sql).toContain("tarifa_id = ?");
     expect(registrarAuditoriaTx).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Edición rápida — TARIFA MANUAL (tres estados: catálogo / manual / sin tarifa)", () => {
+  const man = (monto: number | null) => ({ tarifaId: null, tarifaComercial: monto });
+  const enEstado = (t: "sin" | "manual" | "catalogo", monto = 850) => {
+    if (t === "manual") { planes[0].tarifa_id = null; planes[0].tarifa_comercial = monto; }
+    else if (t === "catalogo") { planes[0].tarifa_id = 61; planes[0].tarifa_comercial = 1500; }
+    else { planes[0].tarifa_id = null; planes[0].tarifa_comercial = null; }
+  };
+  const detalle = () => vi.mocked(registrarAuditoriaTx).mock.calls[0][1].detalle as string;
+  const SNAP_NULL = ["tarifa_id = NULL", "tarifa_nombre_historico = NULL", "tarifa_monto_historico = NULL", "tarifa_moneda_historico = NULL"];
+
+  it("1) sin tarifa → manual 850: snapshot NULL, tarifa_comercial = 850 y NO se crea tarifa maestra", async () => {
+    enEstado("sin");
+    expect(await guardar([cambio(101, man(850))])).toMatchObject({ ok: true, guardados: 1 });
+    const u = updates[0];
+    for (const c of SNAP_NULL) expect(u.sql).toContain(c);
+    expect(u.sql).toContain("tarifa_comercial = ?");
+    expect(u.params).toEqual([850, 101, EMP, "Programado"]);
+    expect(tarifaParaSnapshot).not.toHaveBeenCalled(); // manual no consulta ni escribe tms_ruta_tarifas
+    expect(detalle()).toContain("tarifa sin tarifa → manual Q850.00");
+  });
+
+  it("2) manual 850 → manual 900", async () => {
+    enEstado("manual", 850);
+    await guardar([cambio(101, man(900))]);
+    expect(updates[0].params.slice(0, 1)).toEqual([900]);
+    expect(detalle()).toContain("tarifa manual Q850.00 → manual Q900.00");
+  });
+
+  it("3) manual → catálogo", async () => {
+    enEstado("manual", 900);
+    await guardar([cambio(101, { tarifaId: 61 })]);
+    expect(updates[0].params.slice(0, 5)).toEqual([61, "Ruta corta", 1500, "GTQ", 1500]);
+    expect(detalle()).toContain("tarifa manual Q900.00 → Catálogo Ruta corta Q1,500.00");
+  });
+
+  it("4) catálogo → manual", async () => {
+    enEstado("catalogo");
+    await guardar([cambio(101, man(700))]);
+    for (const c of SNAP_NULL) expect(updates[0].sql).toContain(c);
+    expect(updates[0].params.slice(0, 1)).toEqual([700]);
+    expect(detalle()).toContain("→ manual Q700.00");
+  });
+
+  it("5) catálogo → sin tarifa", async () => {
+    enEstado("catalogo");
+    await guardar([cambio(101, man(null))]);
+    expect(updates[0].sql).toContain("tarifa_comercial = NULL");
+    expect(detalle()).toContain("→ sin tarifa");
+  });
+
+  it("6) manual → sin tarifa (tarifa_comercial pasa a NULL)", async () => {
+    enEstado("manual", 850);
+    await guardar([cambio(101, man(null))]);
+    expect(updates[0].sql).toContain("tarifa_comercial = NULL");
+    expect(detalle()).toContain("tarifa manual Q850.00 → sin tarifa");
+  });
+
+  it("7) sin tarifa → catálogo", async () => {
+    enEstado("sin");
+    await guardar([cambio(101, { tarifaId: 61 })]);
+    expect(updates[0].sql).toContain("tarifa_id = ?");
+  });
+
+  it("8) monto manual 0 es válido y es DISTINTO de sin tarifa (se guarda 0, no NULL)", async () => {
+    enEstado("sin");
+    expect(await guardar([cambio(101, man(0))])).toMatchObject({ ok: true });
+    expect(updates[0].sql).toContain("tarifa_comercial = ?");
+    expect(updates[0].params[0]).toBe(0);
+    enEstado("manual", 0); // un viaje con manual 0 NO es 'sin tarifa': pasar a sin tarifa sí es un cambio
+    expect((await validar([cambio(101, man(null))])).filas[0].estado).toBe("ok");
+  });
+
+  it("9) monto negativo → TARIFA_INVALIDA", async () => {
+    enEstado("sin");
+    expect(codigos(await validar([cambio(101, man(-1))]), 101)).toContain("TARIFA_INVALIDA");
+  });
+
+  it("10) más de 2 decimales → TARIFA_INVALIDA (aunque quedara igual al monto actual dentro de la tolerancia)", async () => {
+    enEstado("sin");
+    expect(codigos(await validar([cambio(101, man(850.555))]), 101)).toContain("TARIFA_INVALIDA");
+    enEstado("manual", 850);
+    expect(codigos(await validar([cambio(101, man(850.004))]), 101)).toContain("TARIFA_INVALIDA");
+  });
+
+  it("11) tarifaId + monto manual a la vez es inválido (esquema); tarifaId null sin monto y monto sin tarifaId también", () => {
+    const ok = (nuevo: Record<string, unknown>) => validarEdicionRapidaSchema.safeParse({ motivoCambio: "x", cambios: [cambio(101, nuevo)] });
+    const r = ok({ tarifaId: 12, tarifaComercial: 850 });
+    expect(r.success).toBe(false);
+    expect(JSON.stringify(r.error?.issues)).toContain("No se puede enviar tarifa de catálogo y monto manual al mismo tiempo.");
+    expect(ok({ tarifaId: null }).success).toBe(false);
+    expect(ok({ tarifaComercial: 850 }).success).toBe(false);
+    expect(ok({ tarifaId: 12 }).success).toBe(true);
+    expect(ok(man(850)).success).toBe(true);
+    expect(ok(man(null)).success).toBe(true);
+  });
+
+  it("12) concurrencia: otro usuario cambió el monto manual mientras editabas → PLAN_DESACTUALIZADO (y no se guarda)", async () => {
+    enEstado("manual", 900); // Usuario B ya lo dejó en 900
+    const c = cambio(101, man(850), { esperado: { tarifaId: null, tarifaComercial: 800 } }); // Usuario A vio 800
+    expect(codigos(await validar([c]), 101)).toContain("PLAN_DESACTUALIZADO");
+    expect(await guardar([c])).toMatchObject({ ok: false, status: 409 });
+    expect(updates).toHaveLength(0);
+  });
+
+  it("13) solo cambia el monto manual: la fila cuenta como modificada; mismo monto = sin cambios", async () => {
+    enEstado("manual", 850);
+    expect((await validar([cambio(101, man(900))])).filas[0].estado).toBe("ok");
+    expect((await validar([cambio(101, man(850))])).filas[0].estado).toBe("sin_cambios");
+    enEstado("sin");
+    expect((await validar([cambio(101, man(null))])).filas[0].estado).toBe("sin_cambios");
+  });
+
+  it("14) la tarifa (manual) por sí sola no exige motivo: solo lo exigen recursos y viáticos", async () => {
+    enEstado("sin");
+    const r = await validarEdicionRapida(EMP, validarEdicionRapidaSchema.parse({ cambios: [cambio(101, man(850))] }));
+    expect(r.ok).toBe(true);
+  });
+
+  it("15) tarifa manual + viáticos en el mismo lote (misma transacción)", async () => {
+    enEstado("sin");
+    viaticos = [{ plan_id: 101, personal_id: 10, monto_asignado: 200, monto_sugerido: 200, estado: "PROGRAMADO" }];
+    const r = await guardar([cambio(101, { ...man(850), viaticos: [{ personalId: 10, montoAsignado: 260 }] })], "Ajuste");
+    expect(r).toMatchObject({ ok: true, guardados: 1 });
+    expect(updates[0].params[0]).toBe(850);
+    expect(vi.mocked(sincronizarViaticosPlan).mock.calls[0][4]).toEqual([{ personalId: 10, montoAsignado: 260 }]);
+    expect(eventos.indexOf("commit")).toBeGreaterThan(eventos.indexOf("update"));
+  });
+
+  it("16) tarifa manual + cambio de piloto y auxiliares en el mismo viaje: un UPDATE con todo", async () => {
+    enEstado("sin");
+    await guardar([cambio(101, { ...man(850), pilotoPersonalId: 11, auxiliarPersonalIds: [21] })], "Cambio de equipo");
+    expect(updates).toHaveLength(1);
+    expect(updates[0].sql).toContain("piloto_id = ?");
+    expect(updates[0].sql).toContain("auxiliar_id = ?");
+    expect(updates[0].sql).toContain("tarifa_comercial = ?");
+    expect(registrarAuditoriaTx).toHaveBeenCalledTimes(1);
+  });
+
+  it("16b) tarifa manual + cambio de unidad en el mismo lote", async () => {
+    enEstado("sin");
+    const r = await guardar([cambio(101, { ...man(850), flotaVehiculoId: 30 })], "Cambio de unidad");
+    expect(r).toMatchObject({ ok: true, guardados: 1 });
+    expect(updates[0].sql).toContain("unidad_id = ?");
+    expect(updates[0].sql).toContain("tarifa_comercial = ?");
+  });
+
+  it("17) un fallo de tarifa manual en UNA fila hace rollback total del lote", async () => {
+    enEstado("sin");
+    const r = await guardar([cambio(101, man(850)), cambio(102, man(-5))]);
+    expect(r).toMatchObject({ ok: false, status: 409 });
+    expect(updates).toHaveLength(0);
+    expect(eventos).toContain("rollback");
+    expect(eventos).not.toContain("commit");
+    expect(registrarAuditoriaTx).not.toHaveBeenCalled();
+  });
+
+  it("18) Tercerizado puede tener tarifa manual", async () => {
+    planes[0].tipo_viaje = "Tercerizado"; planes[0].aux = [];
+    expect((await validar([cambio(101, man(850))])).ok).toBe(true);
   });
 });

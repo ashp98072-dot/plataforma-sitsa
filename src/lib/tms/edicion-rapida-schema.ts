@@ -45,16 +45,32 @@ export const nuevoSchema = z.object({
   auxiliarPersonalIds: auxiliares,
   flotaVehiculoId: id.nullable(),
   tcVehiculoId: id.nullable(),
-  /** PR-355: tarifa del catálogo final (null = sin tarifa). Omitido = no tocar la tarifa. */
+  /**
+   * Tarifa final del viaje (tres estados, sin ambigüedad). Omitir AMBOS = no tocar la tarifa.
+   *  - catálogo: `tarifaId` = id (el servidor resuelve el monto; NO se manda `tarifaComercial`)
+   *  - manual:   `tarifaId` = null y `tarifaComercial` = monto (>= 0, máx. 2 decimales; se valida en el servidor -> TARIFA_INVALIDA)
+   *  - sin tarifa: `tarifaId` = null y `tarifaComercial` = null
+   */
   tarifaId: id.nullable().optional(),
+  tarifaComercial: z.number().nullable().optional(),
   /** PR-355: montos de viático EXPLÍCITAMENTE editados. Omitido = no tocar viáticos (solo se sincroniza por cambio de personal). */
   viaticos: z.array(viaticoNuevoSchema).max(9).refine(sinRepetidos, "Viáticos repetidos en la misma fila.").optional(),
 }).strict();
 
 export const cambioEdicionRapidaSchema = z.object({ planId: id, esperado: esperadoSchema, nuevo: nuevoSchema }).strict()
   .superRefine((c, ctx) => {
-    if (c.nuevo.tarifaId !== undefined && (c.esperado.tarifaId === undefined || c.esperado.tarifaComercial === undefined)) {
+    const toca = c.nuevo.tarifaId !== undefined || c.nuevo.tarifaComercial !== undefined;
+    if (toca && (c.esperado.tarifaId === undefined || c.esperado.tarifaComercial === undefined)) {
       ctx.addIssue({ code: "custom", path: ["esperado", "tarifaId"], message: "Para cambiar la tarifa envía la tarifa esperada (tarifaId y tarifaComercial)." });
+    }
+    if (c.nuevo.tarifaId != null && c.nuevo.tarifaComercial !== undefined) {
+      ctx.addIssue({ code: "custom", path: ["nuevo", "tarifaComercial"], message: "No se puede enviar tarifa de catálogo y monto manual al mismo tiempo." });
+    }
+    if (c.nuevo.tarifaId === null && c.nuevo.tarifaComercial === undefined) {
+      ctx.addIssue({ code: "custom", path: ["nuevo", "tarifaComercial"], message: "Con tarifaId null indica tarifaComercial: un monto (tarifa manual) o null (sin tarifa)." });
+    }
+    if (c.nuevo.tarifaId === undefined && c.nuevo.tarifaComercial !== undefined) {
+      ctx.addIssue({ code: "custom", path: ["nuevo", "tarifaId"], message: "Para tarifa manual o sin tarifa envía tarifaId: null." });
     }
     if (c.nuevo.viaticos !== undefined && c.esperado.viaticos === undefined) {
       ctx.addIssue({ code: "custom", path: ["esperado", "viaticos"], message: "Para cambiar viáticos envía los viáticos esperados." });

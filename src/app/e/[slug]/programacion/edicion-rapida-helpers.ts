@@ -69,7 +69,15 @@ export type SnapshotEsperado = RecursosEditables & {
 };
 
 /** Estado editado: los 4 recursos + tarifa (undefined = sin tocar; null = sin tarifa) + montos de viático EXPLÍCITAMENTE editados. */
-export type EstadoEditado = RecursosEditables & { tarifaId?: number | null; viaticos?: MontoViatico[] };
+/**
+ * Tarifa editada (tres estados): catálogo = `tarifaId` (sin `tarifaComercial`); manual = `tarifaId: null` + `tarifaComercial: monto`;
+ * sin tarifa = ambos null. Ambos undefined = sin tocar. `tarifaComercial: NaN` = "Tarifa manual" elegida pero sin monto todavía.
+ */
+export type EstadoEditado = RecursosEditables & { tarifaId?: number | null; tarifaComercial?: number | null; viaticos?: MontoViatico[] };
+export type TipoTarifa = "catalogo" | "manual" | "sin";
+export const TARIFA_MANUAL_PENDIENTE = Number.NaN;
+export const tipoTarifa = (tarifaId: number | null | undefined, tarifaComercial: number | null | undefined): TipoTarifa =>
+  tarifaId != null ? "catalogo" : tarifaComercial != null ? "manual" : "sin";
 export type EntradaBorrador = { esperado: SnapshotEsperado; nuevo: EstadoEditado };
 /** planId -> fila modificada. Una fila que vuelve a sus valores originales sale del borrador. */
 export type Borrador = ReadonlyMap<number, EntradaBorrador>;
@@ -150,10 +158,13 @@ export function recursosInternosBloqueados(p: PlanEdicionRapida): boolean {
   return (p.tipo_viaje ?? "Propio") === "Tercerizado";
 }
 
-/** ¿La fila tiene datos para editar tarifa? (GET nuevo + ruta conocida). */
+/** ¿La fila tiene datos para editar tarifa? (GET nuevo). La tarifa MANUAL no necesita ruta; el catálogo sí (ver `tieneRutaConTarifas`). */
 export function puedeEditarTarifa(p: PlanEdicionRapida): boolean {
-  return p.tarifa_id !== undefined && p.ruta_id != null && p.ruta_id > 0;
+  return p.tarifa_id !== undefined;
 }
+
+/** Solo un viaje con ruta puede tomar una tarifa de catálogo. */
+export const tieneRutaConTarifas = (p: PlanEdicionRapida): boolean => p.ruta_id != null && p.ruta_id > 0;
 
 /** ¿La fila tiene datos para editar viáticos? (GET nuevo, viaje con recursos internos). */
 export function puedeEditarViaticos(p: PlanEdicionRapida): boolean {
@@ -176,6 +187,25 @@ export function recursosVisibles(borrador: Borrador, p: PlanEdicionRapida): Recu
 export function tarifaVisible(borrador: Borrador, p: PlanEdicionRapida): number | null {
   const n = borrador.get(p.id)?.nuevo.tarifaId;
   return n !== undefined ? n : p.tarifa_id ?? null;
+}
+
+/** Tarifa efectiva a mostrar (borrador si se tocó, si no la real): tipo + id + monto manual (NaN = manual sin monto aún). */
+export function tarifaEfectiva(borrador: Borrador, p: PlanEdicionRapida): { tipo: TipoTarifa; tarifaId: number | null; monto: number | null } {
+  const n = borrador.get(p.id)?.nuevo;
+  const editada = n?.tarifaId !== undefined;
+  const tarifaId = editada ? n!.tarifaId ?? null : p.tarifa_id ?? null;
+  const monto = editada ? n!.tarifaComercial ?? null : p.tarifa_comercial != null ? Number(p.tarifa_comercial) : null;
+  return { tipo: tipoTarifa(tarifaId, monto), tarifaId, monto: tarifaId != null ? null : monto };
+}
+
+/** ¿La tarifa editada equivale EXACTAMENTE a la original del snapshot? (NaN nunca es igual: falta el monto). */
+function tarifaIgualOriginal(esperado: SnapshotEsperado, tarifaId: number | null, tarifaComercial: number | null | undefined): boolean {
+  const idOrig = esperado.tarifaId ?? null;
+  const comOrig = esperado.tarifaComercial ?? null;
+  if (tarifaId != null) return tarifaId === idOrig;
+  if (idOrig != null) return false;
+  if (tarifaComercial == null) return comOrig == null;
+  return comOrig != null && Math.abs(tarifaComercial - comOrig) < 0.005;
 }
 
 /** Filas de viático a mostrar para las personas FINALES (piloto + auxiliares): monto editado o el actual de la BD (o null = aún sin fila). */
@@ -204,7 +234,7 @@ export function normalizarViaticos(esperado: SnapshotEsperado, r: RecursosEditab
 /** ¿El estado editado difiere del snapshot? (recursos, tarifa o viáticos) */
 export function hayDiferencias(esperado: SnapshotEsperado, nuevo: EstadoEditado): boolean {
   if (!mismosRecursos(nuevo, recursosDe(esperado))) return true;
-  if (nuevo.tarifaId !== undefined && nuevo.tarifaId !== (esperado.tarifaId ?? null)) return true;
+  if (nuevo.tarifaId !== undefined && !tarifaIgualOriginal(esperado, nuevo.tarifaId, nuevo.tarifaComercial)) return true;
   return (nuevo.viaticos?.length ?? 0) > 0;
 }
 
@@ -222,7 +252,11 @@ export function editarRecursos(borrador: Borrador, p: PlanEdicionRapida, cambios
     : actual.auxiliarPersonalIds;
   const nuevo: EstadoEditado = { ...actual, ...cambios, auxiliarPersonalIds: aux };
   // La tarifa editada que vuelve a la original deja de contar como cambio; los montos de quien ya no está en el viaje se descartan.
-  if (nuevo.tarifaId !== undefined && nuevo.tarifaId === (esperado.tarifaId ?? null)) delete nuevo.tarifaId;
+  if (nuevo.tarifaId !== undefined) {
+    if (nuevo.tarifaId != null) delete nuevo.tarifaComercial; // catálogo: el servidor resuelve el monto
+    else if (nuevo.tarifaComercial === undefined) nuevo.tarifaComercial = null;
+    if (tarifaIgualOriginal(esperado, nuevo.tarifaId, nuevo.tarifaComercial)) { delete nuevo.tarifaId; delete nuevo.tarifaComercial; }
+  } else delete nuevo.tarifaComercial;
   const viaticos = normalizarViaticos(esperado, nuevo, nuevo.viaticos);
   if (viaticos) nuevo.viaticos = viaticos;
   else delete nuevo.viaticos;
@@ -255,7 +289,10 @@ export function cambiosDelBorrador(borrador: Borrador): CambioLote[] {
     .map(([planId, e]) => {
       const nuevo: EstadoEditado = { pilotoPersonalId: e.nuevo.pilotoPersonalId, auxiliarPersonalIds: [...e.nuevo.auxiliarPersonalIds], flotaVehiculoId: e.nuevo.flotaVehiculoId, tcVehiculoId: e.nuevo.tcVehiculoId };
       // Solo se envía lo que el usuario tocó de verdad: tarifa/viáticos omitidos = el servidor no los toca.
-      if (e.nuevo.tarifaId !== undefined) nuevo.tarifaId = e.nuevo.tarifaId;
+      if (e.nuevo.tarifaId !== undefined) {
+        nuevo.tarifaId = e.nuevo.tarifaId;
+        if (e.nuevo.tarifaId === null) nuevo.tarifaComercial = e.nuevo.tarifaComercial ?? null; // manual (monto) o sin tarifa (null)
+      }
       if (e.nuevo.viaticos?.length) nuevo.viaticos = e.nuevo.viaticos.map((v) => ({ personalId: v.personalId, montoAsignado: v.montoAsignado }));
       return {
         planId,
@@ -276,6 +313,9 @@ export function errorAntesDeEnviar(borrador: Borrador, motivo: string): string |
   if (!n) return "No hay cambios para validar o guardar.";
   if (n > MAX_FILAS_EDICION_RAPIDA) return `Máximo ${MAX_FILAS_EDICION_RAPIDA} viajes por lote (tienes ${n}).`;
   if (!motivo.trim()) return "Indica el motivo del cambio.";
+  const tarifas = cambiosDelBorrador(borrador).map((c) => c.nuevo).filter((n) => n.tarifaId === null && n.tarifaComercial != null);
+  if (tarifas.some((n) => Number.isNaN(n.tarifaComercial))) return "Falta el monto de la tarifa manual.";
+  if (tarifas.some((n) => !montoViaticoValido(n.tarifaComercial as number))) return "Hay un monto de tarifa manual inválido (debe ser ≥ 0 con máximo 2 decimales).";
   const malo = cambiosDelBorrador(borrador).some((c) => (c.nuevo.viaticos ?? []).some((v) => !montoViaticoValido(v.montoAsignado)));
   if (malo) return "Hay un monto de viático inválido (debe ser ≥ 0 con máximo 2 decimales).";
   return null;

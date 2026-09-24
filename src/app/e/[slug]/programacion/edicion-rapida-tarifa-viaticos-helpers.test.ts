@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { validarEdicionRapidaSchema } from "@/lib/tms/edicion-rapida-schema";
 import {
+  cambiosDelBorrador,
   cuerpoEdicionRapida,
   editarRecursos,
   editarViatico,
@@ -11,9 +12,12 @@ import {
   opcionesTarifa,
   puedeEditarTarifa,
   puedeEditarViaticos,
+  tieneRutaConTarifas,
   recursosInternosBloqueados,
   snapshotEsperado,
+  tarifaEfectiva,
   tarifaVisible,
+  TARIFA_MANUAL_PENDIENTE,
   viaticosVisibles,
   type Borrador,
   type EntradaBorrador,
@@ -79,9 +83,10 @@ describe("Edición rápida (UI) — TARIFA", () => {
     expect(opcionesTarifa(undefined, { id: null })).toEqual([]); // ruta sin tarifas: solo "— Sin tarifa —" en el select
   });
 
-  it("T7) sin ruta o con GET anterior (sin tarifa_id) la fila no edita tarifa", () => {
+  it("T7) con GET anterior (sin tarifa_id) la fila no edita tarifa; sin ruta solo hay tarifa manual", () => {
     expect(puedeEditarTarifa(plan())).toBe(true);
-    expect(puedeEditarTarifa(plan({ ruta_id: null }))).toBe(false);
+    expect(puedeEditarTarifa(plan({ ruta_id: null }))).toBe(true); // sin ruta: la tarifa manual sigue disponible
+    expect(tieneRutaConTarifas(plan({ ruta_id: null }))).toBe(false); // pero no el catálogo
     expect(puedeEditarTarifa(plan({ tarifa_id: undefined }))).toBe(false);
   });
 
@@ -192,5 +197,105 @@ describe("Edición rápida (UI) — guardas de código (PR-355)", () => {
   it("U3) programacion-client trae las tarifas por ruta del GET aditivo y las pasa a la tabla", () => {
     expect(cliente).toContain("tarifasPorRuta: (dataPlanes.tarifasPorRuta ?? {})");
     expect(cliente).toContain("tarifasPorRuta={tarifasPorRuta}");
+  });
+});
+
+describe("Edición rápida (UI) — TARIFA MANUAL", () => {
+  const sin = () => plan({ tarifa_id: null, tarifa_comercial: null });
+  const manual = (m: number | string) => plan({ tarifa_id: null, tarifa_comercial: m });
+  const conCatalogo = () => plan({ tarifa_id: 61, tarifa_comercial: 1500 });
+  const man = (m: number | null) => ({ tarifaId: null, tarifaComercial: m });
+
+  it("M1) distingue los tres estados: catálogo / manual / sin tarifa (nunca 0 = sin tarifa)", () => {
+    expect(tarifaEfectiva(vacio(), conCatalogo()).tipo).toBe("catalogo");
+    expect(tarifaEfectiva(vacio(), manual("850.00"))).toMatchObject({ tipo: "manual", monto: 850 });
+    expect(tarifaEfectiva(vacio(), sin()).tipo).toBe("sin");
+    expect(tarifaEfectiva(vacio(), manual(0)).tipo).toBe("manual"); // manual 0 ≠ sin tarifa
+  });
+
+  it("M2) sin tarifa → manual 850: la fila queda Modificada (Cambios +1) y el cuerpo manda tarifaId null + monto", () => {
+    const b = editarRecursos(vacio(), sin(), man(850));
+    expect(cambiosDelBorrador(b)).toHaveLength(1);
+    const c = cuerpoEdicionRapida(b, "m").cambios[0];
+    expect(c.nuevo).toMatchObject({ tarifaId: null, tarifaComercial: 850 });
+    expect(c.esperado).toMatchObject({ tarifaId: null, tarifaComercial: null });
+    expect(validarEdicionRapidaSchema.safeParse(cuerpoEdicionRapida(b, "m")).success).toBe(true);
+  });
+
+  it("M3) cambiar solo el monto manual (850 → 900) cuenta como fila modificada", () => {
+    const b = editarRecursos(vacio(), manual(850), man(900));
+    expect(cambiosDelBorrador(b)).toHaveLength(1);
+    expect(cuerpoEdicionRapida(b, "m").cambios[0].esperado.tarifaComercial).toBe(850);
+  });
+
+  it("M4) volver exactamente al monto original elimina el borrador (también al volver de un cambio de tipo)", () => {
+    const p = manual(850);
+    let b = editarRecursos(vacio(), p, man(900));
+    expect(editarRecursos(b, p, man(850)).size).toBe(0);
+    b = editarRecursos(vacio(), p, { tarifaId: 61 }); // manual → catálogo
+    expect(b.size).toBe(1);
+    expect(editarRecursos(b, p, man(850)).size).toBe(0); // vuelve a manual 850
+    expect(editarRecursos(editarRecursos(vacio(), sin(), man(null)), sin(), man(null)).size).toBe(0);
+  });
+
+  it("M5) manual → sin tarifa y catálogo → sin tarifa se envían con tarifaComercial null (estado explícito)", () => {
+    for (const p of [manual(850), conCatalogo()]) {
+      const c = cuerpoEdicionRapida(editarRecursos(vacio(), p, man(null)), "m").cambios[0];
+      expect(c.nuevo).toMatchObject({ tarifaId: null, tarifaComercial: null });
+      expect(validarEdicionRapidaSchema.safeParse({ motivoCambio: "m", cambios: [c] }).success).toBe(true);
+    }
+  });
+
+  it("M6) catálogo NO manda tarifaComercial (el servidor resuelve el monto); manual → catálogo descarta el monto", () => {
+    const b = editarRecursos(editarRecursos(vacio(), manual(850), man(900)), manual(850), { tarifaId: 62, tarifaComercial: 123 });
+    const c = cuerpoEdicionRapida(b, "m").cambios[0];
+    expect(c.nuevo.tarifaId).toBe(62);
+    expect("tarifaComercial" in c.nuevo).toBe(false);
+    expect(validarEdicionRapidaSchema.safeParse({ motivoCambio: "m", cambios: [c] }).success).toBe(true);
+  });
+
+  it("M7) 'Tarifa manual' elegida sin monto aún: la fila queda modificada pero NO se puede enviar", () => {
+    const b = editarRecursos(vacio(), sin(), man(TARIFA_MANUAL_PENDIENTE));
+    expect(b.size).toBe(1);
+    expect(tarifaEfectiva(b, sin()).tipo).toBe("manual");
+    expect(errorAntesDeEnviar(b, "m")).toBe("Falta el monto de la tarifa manual.");
+  });
+
+  it("M8) monto manual 0 es válido; negativo o con más de 2 decimales no se envían", () => {
+    expect(errorAntesDeEnviar(editarRecursos(vacio(), sin(), man(0)), "m")).toBeNull();
+    expect(errorAntesDeEnviar(editarRecursos(vacio(), sin(), man(-1)), "m")).toMatch(/tarifa manual inválido/i);
+    expect(errorAntesDeEnviar(editarRecursos(vacio(), sin(), man(10.555)), "m")).toMatch(/tarifa manual inválido/i);
+  });
+
+  it("M9) tarifa manual + viáticos en el mismo borrador viajan juntos", () => {
+    const p = sin();
+    const b = editarViatico(editarRecursos(vacio(), p, man(850)), p, 10, 250);
+    const c = cuerpoEdicionRapida(b, "m").cambios[0];
+    expect(c.nuevo).toMatchObject({ tarifaId: null, tarifaComercial: 850, viaticos: [{ personalId: 10, montoAsignado: 250 }] });
+    expect(validarEdicionRapidaSchema.safeParse(cuerpoEdicionRapida(b, "m")).success).toBe(true);
+  });
+
+  it("M10) tarifa manual + cambio de piloto en el mismo borrador", () => {
+    const b = editarRecursos(editarRecursos(vacio(), sin(), man(850)), sin(), { pilotoPersonalId: 11 });
+    const c = cuerpoEdicionRapida(b, "m").cambios[0];
+    expect(c.nuevo).toMatchObject({ pilotoPersonalId: 11, tarifaComercial: 850 });
+  });
+
+  it("M11) la tabla ofrece 'Tarifa manual' con su input de monto (Q) accesible", () => {
+    const tabla = readFileSync(join(__dirname, "edicion-rapida.tsx"), "utf-8").replace(/\r\n/g, "\n");
+    expect(tabla).toContain('<option value="manual">— Tarifa manual —</option>');
+    expect(tabla).toContain("aria-label={`Monto de tarifa manual de ${p.codigo}`}");
+    expect(tabla).toContain('tarifa.tipo === "manual" ?');
+  });
+
+  it("M12) viaje sin ruta: se puede poner tarifa manual (no requiere ruta) pero no de catálogo", () => {
+    const p = plan({ ruta_id: null });
+    expect(puedeEditarTarifa(p)).toBe(true);
+    expect(tieneRutaConTarifas(p)).toBe(false);
+    expect(cuerpoEdicionRapida(editarRecursos(vacio(), p, man(850)), "m").cambios[0].nuevo.tarifaComercial).toBe(850);
+  });
+
+  it("M13) contrato sin cambios en el estado de catálogo: tarifaVisible sigue devolviendo el id", () => {
+    expect(tarifaVisible(editarRecursos(vacio(), sin(), { tarifaId: 61 }), sin())).toBe(61);
   });
 });
