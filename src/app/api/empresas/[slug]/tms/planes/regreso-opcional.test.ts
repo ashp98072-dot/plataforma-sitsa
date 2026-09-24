@@ -47,14 +47,21 @@ let candidatosPiloto: Record<string, unknown>[] = [];
 let sqlDeConsultas: { sql: string; params: unknown[] }[] = [];
 let conexion: ReturnType<typeof crearConexion>;
 
-function candidatosDelDia(params: unknown[]) {
-  const fecha = String(params[1]);
-  const id = Number(params[7]);
-  return candidatosPiloto.flatMap((r) => {
-    const dia = String(r.fecha ?? r.inicio ?? "").slice(0, 10);
-    if (dia !== fecha || r.estado === "Cancelado") return [];
-    return [{ ...r, recurso_id: r.recurso_id ?? id, nombre: r.nombre ?? r.recurso_nombre, fecha: dia }];
-  });
+/**
+ * A2.1 — la validación usa la política por INTERVALOS (disponibilidad-programacion-intervalos.ts). Los candidatos se
+ * responden con el emulador de esa consulta sobre un modelo en memoria (los ids de piloto son los que pide la consulta).
+ */
+function candidatosIntervalo(sql: string, params: unknown[]) {
+  const nExcluidos = (/p\.id NOT IN \(([?,]+)\)/.exec(sql)?.[1].split(",").length) ?? 0;
+  const ids = params.slice(10, params.length - nExcluidos).map(Number);
+  const modelo: ModeloPersonal = {
+    personal: ids.map((id) => ({ id, empresa_id: 7, nombre: "Piloto Uno", tipo: "Piloto" as const, id_empleado: null })),
+    planes: candidatosPiloto.map((r) => ({
+      id: Number(r.plan_id), empresa_id: 7, codigo: String(r.codigo), estado: String(r.estado),
+      inicio: String(r.inicio ?? `${r.fecha} 00:00:00`), regreso_estimado: (r.regreso_estimado as string | null) ?? null, piloto_id: ids[0],
+    })),
+  };
+  return emularConsultaConflictoPersonal(modelo, sql, params);
 }
 
 function crearConexion() {
@@ -64,7 +71,7 @@ function crearConexion() {
     query: vi.fn(async (sql: string, params: unknown[] = []) => {
       if (String(sql).includes("GET_LOCK")) return [[{ l: 1 }]];
       sqlDeConsultas.push({ sql: String(sql), params });
-      return [String(sql).includes("FROM tms_personal tp") ? candidatosDelDia(params) : []];
+      return [String(sql).includes("FROM tms_personal tp") ? candidatosIntervalo(String(sql), params) : []];
     }),
     execute: vi.fn<(sql: string, params?: unknown[]) => Promise<unknown[]>>(async () => [{ insertId: 55, affectedRows: 1 }]),
   };
@@ -80,7 +87,7 @@ beforeEach(() => {
   vi.mocked(execute).mockResolvedValue({ insertId: 91, affectedRows: 1 } as never);
   vi.mocked(query).mockImplementation((async (sql: string, params: unknown[] = []) => {
     sqlDeConsultas.push({ sql: String(sql), params });
-    if (String(sql).includes("FROM tms_personal tp")) return candidatosDelDia(params);
+    if (String(sql).includes("FROM tms_personal tp")) return candidatosIntervalo(String(sql), params);
     return [];
   }) as never);
 });
@@ -119,23 +126,25 @@ describe("POST /tms/planes — regreso estimado opcional", () => {
     expect((await res.json()).error).toContain("posterior a la salida programada");
   });
 
-  it("sin regreso estimado, se valida solo fecha_plan sin inventar una hora", async () => {
+  it("sin regreso estimado, reserva todo fecha_plan (00:00 -> 00:00 del día siguiente) sin inventar una duración", async () => {
     await post(PLAN_BASE);
     const c = consultaTraslapePiloto()!;
-    expect(c.sql).toContain("p.fecha_plan = ?");
-    expect(c.sql).not.toMatch(/regreso_estimado\s*<\s*\?/);
-    // Ningún parámetro es una hora inventada (+8h, fin de día...): solo el inicio real del viaje.
-    expect(c.params).toContain("2026-09-30");
+    expect(c.sql).toContain("p.fecha_plan <= ?");
+    // Ventana conservadora: el día completo; nunca la hora de carga + una duración inventada (+8h, fin de día...).
+    expect(c.params).toContain("2026-09-30 00:00:00");
+    expect(c.params).toContain("2026-10-01"); // fecha fin de la consulta (día siguiente)
+    expect(c.params).not.toContain("2026-09-30 08:00:00");
     expect(c.params).not.toContain("2026-09-30 16:00:00");
     expect(c.params).not.toContain("2026-09-30 23:59:59");
   });
 
-  it("con regreso estimado, la disponibilidad sigue dependiendo solo de fecha_plan", async () => {
+  it("con hora de carga Y regreso estimado, la disponibilidad usa el intervalo [salida, regreso)", async () => {
     await post({ ...PLAN_BASE, regresoEstimado: "2026-09-30T17:30" });
     const c = consultaTraslapePiloto()!;
-    expect(c.params).toContain("2026-09-30");
-    expect(c.params).not.toContain("2026-09-30 17:30:00");
-    expect(c.sql).toContain("p.fecha_plan = ?");
+    expect(c.params).toContain("2026-09-30 08:00:00");
+    expect(c.params).not.toContain("2026-09-30 00:00:00");
+    expect(c.sql).toContain("p.fecha_plan <= ?");
+    expect(c.sql).toContain("p.regreso_estimado > ?");
   });
 
   it("aislamiento por empresa: la búsqueda de conflictos va acotada por empresa_id de la sesión", async () => {
@@ -207,7 +216,7 @@ describe("PATCH /tms/planes — editar y dejar el regreso estimado en null", () 
   const usarPlan = (fila: Record<string, unknown>) => {
     vi.mocked(query).mockImplementation((async (sql: string, params: unknown[] = []) => {
       sqlDeConsultas.push({ sql: String(sql), params });
-      if (String(sql).includes("FROM tms_personal tp")) return candidatosDelDia(params);
+      if (String(sql).includes("FROM tms_personal tp")) return candidatosIntervalo(String(sql), params);
       if (String(sql).includes("FROM tms_planes_viaje p") && String(sql).includes("WHERE p.id = ?")) return [fila];
       return [];
     }) as never);
@@ -236,10 +245,10 @@ describe("PATCH /tms/planes — editar y dejar el regreso estimado en null", () 
     usarPlan(filaPlan({ regreso_estimado: null }));
     await patch({ id: 40, fechaPlan: "2026-10-01", horaCarga: "09:00" });
     const c = consultaTraslapePiloto()!;
-    expect(c.sql).toContain("p.fecha_plan = ?");
+    expect(c.sql).toContain("p.fecha_plan <= ?");
     expect(c.params).toContain("2026-10-01");
     expect(c.params[0]).toBe(7);
-    expect(c.sql).toContain("p.id != ?");
+    expect(c.sql).toContain("p.id NOT IN (?)");
   });
 
   it("editar y dejar null conserva la validación por empresa y excluye al propio plan", async () => {
@@ -347,7 +356,8 @@ describe("identidad de personal por empleado — POST y PATCH usan la misma regl
     });
     const res = await post({ ...PLAN_BASE, pilotoNombre: undefined, pilotoEmpleadoId: 55, regresoEstimado: "2026-09-30T17:30" });
     expect(res.status).toBe(200);
-    expect(sqlDeConsultas.find((c) => c.sql.includes("FROM tms_personal tp"))!.params.slice(0, 2)).toEqual([7, "2026-09-30"]);
+    const consulta = sqlDeConsultas.find((c) => c.sql.includes("FROM tms_personal tp"))!.params;
+    expect([consulta[0], consulta[7]]).toEqual([7, "2026-09-30"]); // empresa de la sesión + fecha de inicio de la ventana
   });
 
   it("PATCH: al mover el viaje, el piloto (personal 12, empleado 55) choca con un viaje donde el mismo empleado es Auxiliar (personal 10): 409", async () => {
@@ -376,12 +386,13 @@ describe("identidad de personal por empleado — POST y PATCH usan la misma regl
     expect((await res.json()).error).toContain("PLAN-77");
     const c = sqlDeConsultas.find((x) => x.sql.includes("FROM tms_personal tp"))!;
     expect(c.sql).toContain("(eq.id = tp.id OR (tp.id_empleado IS NOT NULL AND eq.id_empleado = tp.id_empleado))");
-    expect(c.params.slice(0, 2)).toEqual([7, "2026-10-02"]);
+    expect([c.params[0], c.params[7]]).toEqual([7, "2026-10-02"]);
   });
 
   it("planes/route.ts no reimplementa la identidad: usa primerConflictoTraslape en POST y PATCH", () => {
     const fuente = readFileSync("src/app/api/empresas/[slug]/tms/planes/route.ts", "utf8");
-    expect((fuente.match(/primerConflictoProgramacionDia\(/g) ?? []).length).toBe(2);
+    expect((fuente.match(/primerConflictoProgramacionIntervalo\(/g) ?? []).length).toBe(2);
+    expect(fuente).not.toContain("primerConflictoProgramacionDia(");
     expect(fuente).not.toContain("eq.id_empleado");
   });
 });

@@ -48,11 +48,19 @@ let conexion: ReturnType<typeof crearConexion>;
 /** Ocupaciones del TC (filas que devolvería la BD): se filtran por fecha_plan (params[1]) igual que el WHERE real. */
 let ocupacionesTc: { recurso_id: number; nombre: string; plan_id: number; codigo: string; fecha: string }[] = [];
 
+/**
+ * A2.1 — el TC se valida con la política por INTERVALOS (misma consulta que la unidad): filtro `p.fecha_plan <= fechaFin`
+ * y `p.fecha_plan >= fechaInicio`; las ocupaciones de estas pruebas no tienen hora/regreso (reserva de todo el día).
+ */
 function responderTc(sql: string, params: unknown[]) {
-  const ids = params.filter((v): v is number => typeof v === "number").slice(-3);
-  const excluyeOtro = sql.includes("AND p.id != ?");
-  const excluido = excluyeOtro ? (params[params.length - 1] as number) : null;
-  return ocupacionesTc.filter((r) => r.fecha === params[1] && ids.includes(r.recurso_id) && (excluido == null || r.plan_id !== excluido));
+  const nExcluidos = (/p\.id NOT IN \(([?,]+)\)/.exec(sql)?.[1].split(",").length) ?? 0;
+  const excluidos = nExcluidos ? (params.slice(-nExcluidos) as number[]) : [];
+  const ids = params.slice(9, params.length - nExcluidos) as number[];
+  const fechaFin = String(params[6]);
+  const fechaInicio = String(params[7]);
+  return ocupacionesTc
+    .filter((r) => r.fecha <= fechaFin && r.fecha >= fechaInicio && ids.includes(r.recurso_id) && !excluidos.includes(r.plan_id))
+    .map((r) => ({ ...r, fecha_plan: r.fecha, hora_carga: null, regreso_estimado: null }));
 }
 
 function crearConexion() {
@@ -211,8 +219,8 @@ describe("POST — disponibilidad diaria del TC (misma política que Unidad/Pilo
     await post({ ...BASE, tcVehiculoId: 45 });
     const c = consultaTc()[0];
     expect(c.sql).toContain("p.empresa_id = ?");
-    expect(c.sql).toContain("p.fecha_plan = ?");
-    expect(c.params.slice(0, 2)).toEqual([7, "2026-09-23"]);
+    expect(c.sql).toContain("p.fecha_plan <= ?");
+    expect([c.params[0], c.params[7]]).toEqual([7, "2026-09-23"]); // empresa de la sesión + inicio de la ventana (política por intervalos)
     expect(c.params).toContain("Cerrado");
     expect(c.params).not.toContain("Cancelado");
   });
@@ -293,7 +301,7 @@ describe("PATCH — editar el TC de un viaje PROPIO", () => {
     expect(res.status).toBe(200);
     expect(paramsTc()).toEqual([false, null, false, null, false, null]);
     const validacion = consultas.find((c) => c.sql.includes("FROM flota_vehiculos v") && c.sql.includes("FOR UPDATE"))!;
-    expect(validacion.sql).toContain("AND p.id != ?");
+    expect(validacion.sql).toContain("AND p.id NOT IN (?)");
     expect(validacion.params[validacion.params.length - 1]).toBe(40);
   });
 

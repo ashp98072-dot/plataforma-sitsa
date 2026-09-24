@@ -26,7 +26,12 @@ import { ahoraLocal, hoyLocal, toIsoDate } from "@/lib/rrhh/dates";
 import { listarViaticosRechazadosDelPlan, personalRecienAsignadoDelPlan, sincronizarViaticosPlan } from "@/lib/tms/viaticos";
 import { planesConCierreManual } from "@/lib/tms/cierre-manual-planes";
 import { SQL_HORA_LLEGADA_REAL } from "@/lib/tms/disponibilidad-traslapes";
-import { mensajeConflictoProgramacionDia, primerConflictoProgramacionDia, type RecursoDia } from "@/lib/tms/disponibilidad-programacion-dia";
+import type { RecursoDia } from "@/lib/tms/disponibilidad-programacion-dia";
+import {
+  mensajeConflictoProgramacionIntervalo,
+  primerConflictoProgramacionIntervalo,
+  ventanaProgramacionSegura,
+} from "@/lib/tms/disponibilidad-programacion-intervalos";
 import { resolverTcInterno } from "@/lib/tms/tc-plan";
 import {
   calcularCambiosRecursos,
@@ -998,14 +1003,15 @@ export async function POST(req: Request, ctx: Ctx) {
           { status: 409 },
         );
       }
-      const conflicto = await primerConflictoProgramacionDia(
+      // A2.1 — política por intervalos: [fecha+hora, regreso); sin hora o sin regreso reserva todo fecha_plan.
+      const conflicto = await primerConflictoProgramacionIntervalo(
         empresaId,
         recursosNuevoPlan,
-        d.fechaPlan,
-        null,
+        ventanaProgramacionSegura({ fechaPlan: d.fechaPlan, horaCarga: d.horaCarga ?? null, regresoEstimado: d.regresoEstimado ?? null }),
+        [],
       );
       if (conflicto) {
-        return NextResponse.json({ error: mensajeConflictoProgramacionDia(conflicto) }, { status: 409 });
+        return NextResponse.json({ error: mensajeConflictoProgramacionIntervalo(conflicto) }, { status: 409 });
       }
     }
 
@@ -1403,7 +1409,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // asignados que esta solicitud no toca) al validar traslapes.
   const plan = await query<RowDataPacket[]>(
     `SELECT p.id, p.codigo, p.estado, p.fecha_plan, p.hora_carga, p.notas,
-            p.piloto_id, p.unidad_id, p.regreso_estimado, p.ruta_id,
+            p.piloto_id, p.unidad_id, DATE_FORMAT(p.regreso_estimado, '%Y-%m-%d %H:%i:%s') AS regreso_estimado, p.ruta_id,
             p.tipo_viaje, p.tc_vehiculo_id,
             p.tarifa_comercial, p.tarifa_id, p.costo_operativo_referencia, p.referencia_cliente,
             u.placa, u.flota_vehiculo_id, pil.nombre AS piloto,
@@ -1867,11 +1873,17 @@ export async function PATCH(req: Request, ctx: Ctx) {
             { status: 409 },
           );
         }
-        const conflicto = await primerConflictoProgramacionDia(
+        // A2.1 — ventana EFECTIVA del plan (lo que la solicitud cambia + lo ya guardado) contra los demás planes;
+        // el propio plan se autoexcluye ([d.id]). La lectura sigue bajo el candado y con FOR UPDATE (conn).
+        const conflicto = await primerConflictoProgramacionIntervalo(
           empresaId,
           recursosEfectivos,
-          fechaEfectivaPlan,
-          d.id,
+          ventanaProgramacionSegura({
+            fechaPlan: fechaEfectivaPlan,
+            horaCarga: (d.horaCarga ?? antes.hora) || null,
+            regresoEstimado: d.regresoEstimado !== undefined ? d.regresoEstimado : antes.regresoEstimado,
+          }),
+          [d.id],
           conn,
         );
         // OPS-3.3: el candado YA NO se libera aquí — se mantiene hasta el
@@ -1879,7 +1891,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
         // en este `return` por conflicto (ver comentario arriba del bloque).
         if (conflicto) {
           await conn.rollback();
-          return NextResponse.json({ error: mensajeConflictoProgramacionDia(conflicto) }, { status: 409 });
+          return NextResponse.json({ error: mensajeConflictoProgramacionIntervalo(conflicto) }, { status: 409 });
         }
       }
     }

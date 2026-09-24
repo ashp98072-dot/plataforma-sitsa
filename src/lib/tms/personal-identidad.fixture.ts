@@ -25,11 +25,45 @@ export type PlanModelo = {
   llegada_tecnica?: 0 | 1;
   hora_llegada?: string | null;
   cerrado_en?: string | null;
+  /** Solo política por intervalos (A2.1): hora_carga guardada del plan. Por defecto, la hora de `inicio`. `null` = plan sin hora. */
+  hora_carga?: string | null;
 };
 
 export type ModeloPersonal = { personal: PersonalModelo[]; planes: PlanModelo[] };
 
+/**
+ * A2.1 — emula la consulta de PERSONAL del motor por intervalos (disponibilidad-programacion-intervalos.ts):
+ * `p.fecha_plan <= ?` y (`p.fecha_plan >= ?` o `p.regreso_estimado > ?`), equivalencia por id_empleado, estados y
+ * `p.id NOT IN (…)`. Devuelve las columnas que lee el motor; la decisión de solape es del código de producción.
+ */
+function emularIntervalosPersonal(modelo: ModeloPersonal, sql: string, params: unknown[]): Record<string, unknown>[] {
+  const nExcluidos = (/p\.id NOT IN \(([?,]+)\)/.exec(sql)?.[1].split(",").length) ?? 0;
+  const empresaId = Number(params[0]);
+  const estados = params.slice(1, 6) as string[];
+  const fechaFin = String(params[6]);
+  const fechaInicio = String(params[7]);
+  const inicioVentana = String(params[8]);
+  const excluidos = (nExcluidos ? params.slice(-nExcluidos) : []).map(Number);
+  const ids = params.slice(10, params.length - nExcluidos).map(Number);
+  return modelo.personal.filter((tp) => tp.empresa_id === empresaId && ids.includes(tp.id)).flatMap((tp) => {
+    const equivalentes = new Set(modelo.personal.filter((eq) => eq.empresa_id === empresaId &&
+      (eq.id === tp.id || (tp.id_empleado !== null && eq.id_empleado === tp.id_empleado))).map((eq) => eq.id));
+    return modelo.planes.filter((p) => {
+      const fecha = p.inicio.slice(0, 10);
+      const regreso = p.regreso_estimado;
+      return p.empresa_id === empresaId && estados.includes(p.estado) && !excluidos.includes(p.id)
+        && fecha <= fechaFin && (fecha >= fechaInicio || (regreso != null && regreso > inicioVentana))
+        && ((p.piloto_id != null && equivalentes.has(p.piloto_id)) || (p.auxiliar_id != null && equivalentes.has(p.auxiliar_id)) ||
+          (p.auxiliares ?? []).some((id) => equivalentes.has(id)));
+    }).map((p) => ({
+      recurso_id: tp.id, nombre: tp.nombre, plan_id: p.id, codigo: p.codigo, fecha_plan: p.inicio.slice(0, 10),
+      hora_carga: p.hora_carga !== undefined ? p.hora_carga : p.inicio.slice(11, 19), regreso_estimado: p.regreso_estimado,
+    }));
+  });
+}
+
 export function emularConsultaConflictoPersonal(modelo: ModeloPersonal, sql: string, params: unknown[]): Record<string, unknown>[] {
+  if (sql.includes("p.fecha_plan <= ?")) return emularIntervalosPersonal(modelo, sql, params);
   if (sql.includes("p.fecha_plan = ?")) {
     const empresaId = Number(params[0]);
     const fecha = String(params[1]);
