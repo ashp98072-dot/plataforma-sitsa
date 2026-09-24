@@ -11,6 +11,10 @@ import type { BorradorLote, ResultadoFilaLote } from "@/lib/tms/programacion-lot
 import {
   aplicarErroresConfirmacion,
   aplicarValidacion,
+  alternarSeleccion,
+  filaDesdeCarga,
+  limpiarSeleccion,
+  seleccionarTodos,
   cuerpoLote,
   editarFila,
   fechaVisible,
@@ -62,7 +66,7 @@ export default function CopiarProgramacionPage() {
       const res = await fetch(`/api/empresas/${slug}/tms/programacion/copiar?${p.toString()}`, { cache: "no-store" });
       const data = (await res.json().catch(() => ({}))) as Partial<RespuestaCarga> & { error?: string };
       if (!res.ok || !data.filas) { setError(data.error ?? "No se pudo cargar la programación."); return; }
-      setFilas(data.filas.map((f) => ({ incluida: true, origen: f.origen, advertencias: f.advertencias, borrador: f.borrador, validacion: f.validacion, sucia: false })));
+      setFilas(data.filas.map(filaDesdeCarga)); // todas DESMARCADAS: el usuario marca lo que quiere copiar
       setCatalogos(data.catalogos ?? null);
       setCargado(true);
     } catch {
@@ -104,8 +108,7 @@ export default function CopiarProgramacionPage() {
     setFilas((f) => f.map((x, i) => (i === indice ? editarFila(x, cambios) : x)));
   }
   function alternar(indice: number) {
-    // Excluir/incluir cambia las colisiones dentro del lote: hay que revalidar el resto.
-    setFilas((f) => f.map((x, i) => (i === indice ? { ...x, incluida: !x.incluida } : { ...x, sucia: x.incluida ? true : x.sucia, validacion: x.incluida ? null : x.validacion })));
+    setFilas((f) => alternarSeleccion(f, indice));
   }
 
   async function confirmar() {
@@ -177,8 +180,12 @@ export default function CopiarProgramacionPage() {
       {cargado ? (
         <>
           <p className="text-sm" aria-live="polite">
-            {r.total} viaje(s) en {fechaVisible(fechaOrigen)} · Incluidos: <strong>{r.incluidas}</strong> · OK: <strong>{r.ok}</strong> · Con error: <strong>{r.conError}</strong> · Pendientes de validar: <strong>{r.pendientes}</strong>
+            {r.total} viaje(s) en {fechaVisible(fechaOrigen)} · Seleccionados: <strong>{r.incluidas}</strong> de <strong>{r.total}</strong> · OK: <strong>{r.ok}</strong> · Con error: <strong>{r.conError}</strong> · Pendientes de validar: <strong>{r.pendientes}</strong>
           </p>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" disabled={!r.total || r.incluidas === r.total} onClick={() => setFilas((f) => seleccionarTodos(f))} className="rounded border border-[var(--border)] px-3 py-1.5 text-xs disabled:opacity-40">Seleccionar todos</button>
+            <button type="button" disabled={!r.incluidas} onClick={() => setFilas((f) => limpiarSeleccion(f))} className="rounded border border-[var(--border)] px-3 py-1.5 text-xs disabled:opacity-40">Limpiar selección</button>
+          </div>
           {!filas.length ? <p className="text-sm text-[var(--muted)]">No hay viajes (no cancelados) en la fecha origen.</p> : null}
           <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
             <table className="w-full min-w-[1200px] text-left text-xs">
@@ -195,7 +202,7 @@ export default function CopiarProgramacionPage() {
                   const efectiva = f.validacion?.tarifa?.id ?? b.tarifaId ?? tarifas.find((t) => t.predeterminada)?.id ?? tarifas[0]?.id ?? "";
                   return (
                     <tr key={b.fila} className={`border-t border-[var(--border)] align-top ${f.incluida ? "" : "opacity-40"}`}>
-                      <td className="px-2 py-1.5"><input type="checkbox" aria-label={`Incluir fila ${b.fila}`} checked={f.incluida} onChange={() => alternar(i)} /></td>
+                      <td className="px-2 py-1.5"><input type="checkbox" aria-label={`Seleccionar fila ${b.fila}`} checked={f.incluida} onChange={() => alternar(i)} /></td>
                       <td className="px-2 py-1.5">
                         <span className="font-mono">{f.origen.codigo}</span>
                         <span className="block text-[10px] text-[var(--muted)]">{f.origen.estado}{terc ? " · Tercerizado" : ""}</span>
@@ -254,7 +261,13 @@ export default function CopiarProgramacionPage() {
                         ) : "—"}
                       </td>
                       <td className="px-2 py-1.5">
-                        {!f.incluida ? <span className="text-[var(--muted)]">Excluida</span>
+                        {!f.incluida ? (
+                          <div className="text-[var(--muted)]">
+                            <span>No seleccionada</span>
+                            {/* información ya calculada: se muestra, pero NO bloquea la confirmación de las seleccionadas */}
+                            {f.validacion?.estado === "error" ? <ul className="mt-0.5 space-y-0.5">{f.validacion.errores.map((e, k) => <li key={k}>Fila {b.fila}: {e}</li>)}</ul> : null}
+                          </div>
+                        )
                           : f.sucia || !f.validacion ? <span className="text-[var(--muted)]">Validando…</span>
                           : f.validacion.estado === "ok" ? <span className="text-emerald-400">Disponible</span>
                           : <ul className="space-y-0.5 text-rose-400">{f.validacion.errores.map((e, k) => <li key={k}>Fila {b.fila}: {e}</li>)}</ul>}
