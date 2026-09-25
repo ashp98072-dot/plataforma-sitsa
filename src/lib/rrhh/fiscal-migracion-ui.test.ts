@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { PermisoModulo } from "@/lib/permisos-shared";
 import {
   borradorPendiente, confirmarRevision, construirCuerpoMigracion, estadoFiscalUi, formularioDesdeRevision, formularioVacio, guardarBorrador,
-  montoATexto, permisosFiscal, resumenAcumulado, resumenFiscalLinea, unaSolaVez, urlFiscal, type LecturaFiscalUi, type RevisionFiscalUi,
+  AYUDA_FECHA_CORTE, EJEMPLO_FECHA_CORTE, montoATexto, permisosFiscal, resumenAcumulado, resumenFiscalLinea, unaSolaVez, urlFiscal, type LecturaFiscalUi, type RevisionFiscalUi,
 } from "./fiscal-migracion-ui";
 
 /** Sección "7. Fiscal / ISR" de la ficha (acumulado inicial de migración): lógica pura + guardas del código (sin harness de componentes). */
@@ -14,7 +14,7 @@ const rev = (over: Partial<RevisionFiscalUi> = {}): RevisionFiscalUi => ({
   confirmadoPor: null, confirmadoEn: null, ...over,
 });
 const conf = (over: Partial<RevisionFiscalUi> = {}) => rev({ confirmadoPor: "gerente", confirmadoEn: "2026-10-02", ...over });
-const form = () => ({ ...formularioVacio(2026), gravado: "45000", exento: "2000", igss: "2173.5", isr: "1250" });
+const form = () => ({ ...formularioVacio(), fechaCorte: "2026-09-30", gravado: "45000", exento: "2000", igss: "2173.5", isr: "1250" });
 const tabla = readFileSync("src/components/rrhh/fiscal-empleado-seccion.tsx", "utf8").replace(/\r\n/g, "\n");
 const ficha = readFileSync("src/app/e/[slug]/rrhh/empleados/page.tsx", "utf8").replace(/\r\n/g, "\n");
 const planillas = readFileSync("src/app/e/[slug]/rrhh/planillas/page.tsx", "utf8").replace(/\r\n/g, "\n");
@@ -60,6 +60,29 @@ describe("UI — sección Fiscal / ISR en la ficha", () => {
     expect(construirCuerpoMigracion({ ...form(), fechaCorte: "2025-12-31" }, 2026, 0, HOY)).toMatchObject({ error: expect.stringContaining("ejercicio") });
     expect(construirCuerpoMigracion({ ...form(), referencia: " " }, 2026, 0, HOY)).toMatchObject({ error: expect.stringContaining("origen") });
     expect(montoATexto("Q 45000.5")).toBe("45000.50");
+  });
+  it("fecha de corte: el formulario nuevo inicia VACÍO (sin septiembre ni fecha asumida) y no permite guardar sin ella", () => {
+    expect(formularioVacio().fechaCorte).toBe("");
+    expect(JSON.stringify(formularioVacio())).not.toContain("-09-30");
+    expect(construirCuerpoMigracion({ ...form(), fechaCorte: "" }, 2026, 0, HOY)).toMatchObject({ error: "Indica la fecha de corte." });
+    expect(construirCuerpoMigracion({ ...formularioVacio(), gravado: "1", exento: "0", igss: "0", isr: "0" }, 2026, 0, HOY)).toHaveProperty("error");
+  });
+  it("fecha de corte: la futura sigue bloqueando y una válida (incluida hoy) funciona", () => {
+    expect(construirCuerpoMigracion({ ...form(), fechaCorte: "2026-10-06" }, 2026, 0, HOY)).toMatchObject({ error: expect.stringContaining("posterior a hoy") });
+    expect(construirCuerpoMigracion({ ...form(), fechaCorte: "2026-09-15" }, 2026, 0, HOY)).toHaveProperty("cuerpo");
+    expect(construirCuerpoMigracion({ ...form(), fechaCorte: HOY }, 2026, 0, HOY)).toHaveProperty("cuerpo");
+  });
+  it("fecha de corte: la UI muestra la ayuda y el ejemplo (último día incluido; la primera planilla nueva comienza después)", () => {
+    expect(AYUDA_FECHA_CORTE).toBe("Indica el último día incluido en los acumulados del sistema anterior. La primera planilla del sistema nuevo debe comenzar después de esta fecha.");
+    expect(EJEMPLO_FECHA_CORTE).toContain("15/09/2026");
+    expect(EJEMPLO_FECHA_CORTE).toContain("16/09/2026");
+    expect(tabla).toContain("{AYUDA_FECHA_CORTE}");
+    expect(tabla).toContain('aria-describedby="ayuda-fecha-corte"');
+  });
+  it("fecha de corte: editar un borrador (o una confirmada) sigue cargando la fecha GUARDADA en la revisión", () => {
+    expect(formularioDesdeRevision(rev({ corteAntecedentes: "2026-09-15" })).fechaCorte).toBe("2026-09-15");
+    expect(formularioDesdeRevision(conf({ corteAntecedentes: "2026-08-31" })).fechaCorte).toBe("2026-08-31");
+    expect(formularioDesdeRevision(rev({ corteAntecedentes: null })).fechaCorte).toBe("");
   });
   it("33) la confirmación muestra el resumen del acumulado ANTES de confirmar", () => {
     const r = resumenAcumulado(rev(), 2026);

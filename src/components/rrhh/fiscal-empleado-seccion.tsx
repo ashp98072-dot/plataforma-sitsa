@@ -10,6 +10,8 @@ import {
   estadoFiscalUi,
   formatoQ,
   formularioDesdeRevision,
+  AYUDA_FECHA_CORTE,
+  EJEMPLO_FECHA_CORTE,
   formularioVacio,
   guardarBorrador,
   resumenAcumulado,
@@ -33,7 +35,7 @@ export function FiscalEmpleadoSeccion({ slug, empleadoId, permisos }: { slug: st
   const [ejercicio, setEjercicio] = useState(Number(hoy.slice(0, 4)));
   const [lectura, setLectura] = useState<LecturaFiscalUi | null>(null);
   const [cargando, setCargando] = useState(true);
-  const [form, setForm] = useState<FormularioMigracion>(formularioVacio(ejercicio));
+  const [form, setForm] = useState<FormularioMigracion>(formularioVacio());
   const [formAbierto, setFormAbierto] = useState(false);
   const [sucio, setSucio] = useState(false);
   const [error, setError] = useState("");
@@ -63,7 +65,7 @@ export function FiscalEmpleadoSeccion({ slug, empleadoId, permisos }: { slug: st
   const pendiente = borradorPendiente(lectura);
 
   function abrirFormulario(desde?: FormularioMigracion) {
-    setForm(desde ?? formularioVacio(ejercicio));
+    setForm(desde ?? formularioVacio());
     setSucio(false);
     setError("");
     setFormAbierto(true);
@@ -145,7 +147,8 @@ export function FiscalEmpleadoSeccion({ slug, empleadoId, permisos }: { slug: st
       {formAbierto && permisos.puedeCapturar ? (
         <div className="grid gap-3 rounded-lg border border-[var(--border)] p-3 sm:grid-cols-2" data-formulario-migracion>
           <label className="text-xs text-[var(--muted)]">Fecha de corte
-            <input type="date" className={`${input} mt-1`} value={form.fechaCorte} max={hoy} onChange={(e) => cambiar({ fechaCorte: e.target.value })} disabled={ocupado} />
+            <input type="date" className={`${input} mt-1`} value={form.fechaCorte} max={hoy} required aria-describedby="ayuda-fecha-corte" onChange={(e) => cambiar({ fechaCorte: e.target.value })} disabled={ocupado} />
+            <span id="ayuda-fecha-corte" className="mt-1 block text-[11px] leading-snug">{AYUDA_FECHA_CORTE} <em>{EJEMPLO_FECHA_CORTE}</em></span>
           </label>
           <label className="text-xs text-[var(--muted)]">Ingresos gravados acumulados (Q)
             <input inputMode="decimal" className={`${input} mt-1`} value={form.gravado} placeholder="0.00" onChange={(e) => cambiar({ gravado: e.target.value })} disabled={ocupado} />

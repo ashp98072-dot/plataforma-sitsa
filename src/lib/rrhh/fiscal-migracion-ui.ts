@@ -62,8 +62,13 @@ export type FormularioMigracion = {
   referencia: string;
   observaciones: string;
 };
-export const formularioVacio = (ejercicio: number): FormularioMigracion => ({
-  fechaCorte: `${ejercicio}-09-30`, gravado: "", exento: "", igss: "", isr: "", referencia: "Sistema anterior de planillas", observaciones: "",
+export const AYUDA_FECHA_CORTE =
+  "Indica el último día incluido en los acumulados del sistema anterior. La primera planilla del sistema nuevo debe comenzar después de esta fecha.";
+export const EJEMPLO_FECHA_CORTE = "Ejemplo: si el sistema anterior cubre hasta el 15/09/2026, la fecha de corte es 15/09/2026 y la primera planilla nueva puede iniciar el 16/09/2026.";
+
+export const formularioVacio = (): FormularioMigracion => ({
+  // Sin fecha por defecto: RRHH debe indicar explícitamente el último día cubierto por el sistema anterior (no se asume ninguna).
+  fechaCorte: "", gravado: "", exento: "", igss: "", isr: "", referencia: "Sistema anterior de planillas", observaciones: "",
 });
 const quitar = (v: string | null) => (v == null ? "" : v);
 export function formularioDesdeRevision(r: RevisionFiscalUi): FormularioMigracion {
