@@ -149,7 +149,8 @@ describe("exportación Excel de reportes de gastos", () => {
     guardarQA("Fondo-individual.xlsx", buf);
     const ws = await primeraHoja(buf);
     expect(ws.getCell("A1").value).toBe("EMPRESA REQUIRENTE NO REGISTRADA");
-    expect(ws.getCell("A2").value).toBe("SOLICITUD DE FONDO FONDO-000001");
+    expect(ws.getCell("A2").value).toBe("SOLICITUD DE FONDO");
+    expect(ws.getCell("K2").value).toBe("FONDO-000001"); // el código va arriba a la derecha, en celda propia
     expect(ws.getRow(4).values).toEqual([undefined, "Fecha solicitud", "Fecha viaje", "Nombre", "Cuenta", "Método de pago", "Cargo", "Placa", "Cliente", "Categoría", "Cantidad", "Descripción", "Valor", "Subtotal (Q)"]);
     expect(ws.getRow(5).values).toEqual([undefined, "01/09/2026", "", "", "", "Transferencia", "", "", "", "Combustible", "2", "Diesel", "100.00", "200.00"]);
     expect(ws.getCell("E6").value).toBe("Transferencia móvil");

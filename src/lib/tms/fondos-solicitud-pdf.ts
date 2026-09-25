@@ -6,6 +6,7 @@ import { absPathFromRelative } from "@/lib/uploads";
 import { ahoraLocal, formatearFechaVisible, formatearTimestampVisible } from "@/lib/rrhh/dates";
 import { dibujarTablaEnDoc } from "@/lib/rrhh/export-files";
 import { reforzarFirmaParaPdf } from "@/lib/firmas/reforzar-firma-pdf";
+import { dibujarCodigoDocumentoPdf } from "@/lib/documentos-encabezado";
 import { obtenerSolicitudFondo, type SolicitudFondo } from "@/lib/tms/fondos";
 
 /**
@@ -224,7 +225,8 @@ function construirPdf(
     const pageWidth = doc.page.width - marginL - doc.page.margins.right;
     const pageBottom = () => doc.page.height - doc.page.margins.bottom - 12;
 
-    // §1 Encabezado
+    // §1 Encabezado — el título sigue centrado; el número de la solicitud (solicitud.codigo, el persistido) va arriba a la derecha.
+    dibujarCodigoDocumentoPdf(doc, solicitud.codigo, { x: marginL, width: pageWidth, y: doc.y + 2 });
     doc.font("Helvetica-Bold").fontSize(15).fillColor("#0f172a")
       .text("SOLICITUD DE FONDO", { width: pageWidth, align: "center" });
     doc.moveDown(0.5);

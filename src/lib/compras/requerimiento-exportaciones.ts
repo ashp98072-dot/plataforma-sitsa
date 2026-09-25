@@ -2,6 +2,7 @@ import PDFDocument from "pdfkit";
 import ExcelJS, { type PaperSize } from "exceljs";
 import { decodificarPng, reforzarFirmaParaPdf } from "@/lib/firmas/reforzar-firma-pdf";
 import { dibujarTablaEnDoc } from "@/lib/rrhh/export-files";
+import { dibujarCodigoDocumentoPdf } from "@/lib/documentos-encabezado";
 import { formatearFechaVisible, formatearTimestampVisible } from "@/lib/rrhh/dates";
 import { moneda } from "@/lib/tms/fondos-solicitud-pdf";
 import type { DetalleCompra } from "./requerimiento-schema";
@@ -48,7 +49,10 @@ export function requerimientoCompraPdf(d: DetalleCompra, empresaNombre: string, 
       doc.font("Helvetica").fontSize(9.5).fillColor("#0f172a").text(s.normalize("NFC"), { width });
     };
     doc.font("Helvetica-Bold").fontSize(14).fillColor("#0f172a").text((d.entidad_requirente_nombre?.trim() || "EMPRESA REQUIRENTE NO REGISTRADA").normalize("NFC"), { width, align: "center" });
-    doc.moveDown(0.2).fontSize(12).text("REQUERIMIENTO DE REPUESTOS", { width, align: "center" });
+    doc.moveDown(0.2);
+    // Número del requerimiento (d.codigo, el persistido) arriba a la derecha, en la línea del título; la línea "Código: …" se conserva.
+    dibujarCodigoDocumentoPdf(doc, d.codigo, { x, width, y: doc.y });
+    doc.fontSize(12).text("REQUERIMIENTO DE REPUESTOS", { width, align: "center" });
     doc.moveDown(0.4);
     texto(`Código: ${d.codigo} · Fecha: ${formatearFechaVisible(d.fecha_requerimiento)} · Estado: ${d.estado}`);
     texto(`Persona que requiere: ${visible(d.requirente_nombre)} · Encargado de compras: ${visible(d.encargado_compras_nombre)}`);
@@ -172,7 +176,16 @@ export async function requerimientoCompraExcel(d: DetalleCompra, empresaNombre: 
   };
 
   centrada(d.entidad_requirente_nombre?.trim() || "EMPRESA REQUIRENTE NO REGISTRADA", 16);
-  centrada("REQUERIMIENTO DE REPUESTOS", 13);
+  // Título centrado y, en las últimas columnas de la MISMA fila, el número del requerimiento (d.codigo, el persistido).
+  const filaTitulo = ws.addRow(["REQUERIMIENTO DE REPUESTOS".normalize("NFC")]);
+  filaTitulo.getCell(COLUMNAS_TABLA_COMPRA - 2).value = d.codigo.normalize("NFC");
+  ws.mergeCells(filaTitulo.number, 1, filaTitulo.number, COLUMNAS_TABLA_COMPRA - 3);
+  ws.mergeCells(filaTitulo.number, COLUMNAS_TABLA_COMPRA - 2, filaTitulo.number, COLUMNAS_TABLA_COMPRA);
+  filaTitulo.font = { name: "Arial", bold: true, size: 13 };
+  filaTitulo.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+  filaTitulo.getCell(COLUMNAS_TABLA_COMPRA - 2).font = { name: "Arial", bold: true, size: 12 };
+  filaTitulo.getCell(COLUMNAS_TABLA_COMPRA - 2).alignment = { horizontal: "right", vertical: "middle" };
+  filaTitulo.height = Math.max(22, 13 * 1.6);
   texto(`Código: ${d.codigo} · Fecha: ${formatearFechaVisible(d.fecha_requerimiento)} · Estado: ${d.estado}`);
   texto(`Persona que requiere: ${visible(d.requirente_nombre)} · Encargado de compras: ${visible(d.encargado_compras_nombre)}`);
   ws.addRow([]);
