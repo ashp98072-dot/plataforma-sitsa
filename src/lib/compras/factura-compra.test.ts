@@ -153,9 +153,9 @@ describe("PREFLIGHT — paridad con la regla del código", () => {
     for (const campo of ["empresa_id", "proveedor_id", "serie_normalizada", "numero_normalizado", "cantidad", "requerimientos_y_lineas"]) expect(preflight).toContain(campo);
     expect(preflight).toContain("NO importa"); // el estado del requerimiento no importa
   });
-  it("la migración UNIQUE NO se crea: solo se propone en comentarios (requiere columna generada y autorización)", () => {
+  it("la propuesta comentada del preflight coincide con la migración creada aparte", () => {
     expect(preflight).toContain("PROPUESTA (NO ejecutar");
     expect(preflight).toMatch(/--\s+ALTER TABLE compras_requerimiento_lineas/);
-    expect(() => readFileSync("sql/migrate-2026-09-compras-facturas-unicas.sql", "utf8")).toThrow();
+    expect(readFileSync("sql/migrate-2026-09-compras-facturas-unicas.sql", "utf8")).toContain("uq_compras_factura_proveedor"); // ya creada (sin ejecutar) en el PR de migración
   });
 });

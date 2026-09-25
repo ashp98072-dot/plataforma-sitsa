@@ -57,6 +57,13 @@ export async function catalogosCompra(empresaId: number) {
   const opciones = (rows: RowDataPacket[]) => rows.map(r => ({ id: Number(r.id), nombre: String(r.nombre) }));
   return { proveedores, vehiculos, entidades, usuarios: opciones(usuarios), requirentesOperaciones: opciones(usuarios.filter(r => esUsuarioOperaciones(r.rol_global))) };
 }
+export const MSG_FACTURA_UNICA_BD = "Una de las facturas ya está registrada para ese proveedor en otro requerimiento. Revisa las líneas e inténtalo de nuevo.";
+/** ER_DUP_ENTRY (1062) del índice uq_compras_factura_proveedor, y solo de ese. */
+export const esDuplicadoFacturaUnica = (error: unknown) => {
+  const e = error as { code?: string; errno?: number; message?: string } | null;
+  return !!e && (e.code === "ER_DUP_ENTRY" || e.errno === 1062) && String(e.message ?? "").includes("uq_compras_factura_proveedor");
+};
+
 export async function guardarRequerimiento(empresaId: number, usuarioId: number, usuario: string,
   datos: RequerimientoDatos, puedeEliminar: boolean, id?: number) {
   // FACTURAS DUPLICADAS (1/3) — dentro del MISMO payload: se valida ANTES de abrir conexión ni escribir nada. Una factura es
@@ -216,6 +223,8 @@ export async function guardarRequerimiento(empresaId: number, usuarioId: number,
     return { id: id!, codigo, version: antes ? Number(antes.version) + 1 : 1 };
   } catch (error) {
     try { await conn.rollback(); } catch { /* Conservar el error original. */ }
+    // Red de seguridad del UNIQUE de BD (sql/migrate-2026-09-compras-facturas-unicas.sql): solo ese índice se traduce; otros ER_DUP_ENTRY se propagan.
+    if (esDuplicadoFacturaUnica(error)) throw new ErrorCompra(MSG_FACTURA_UNICA_BD, 409);
     throw error;
   } finally {
     if (!confirmado) for (const ruta of rutasFirmas) {
