@@ -14,6 +14,7 @@ import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { DocumentosModal } from "@/components/rrhh/documentos-modal";
 import { FiscalEmpleadoSeccion } from "@/components/rrhh/fiscal-empleado-seccion";
+import { ImportarAcumuladosFiscalesModal } from "@/components/rrhh/importar-acumulados-fiscales-modal";
 import { permisosFiscal } from "@/lib/rrhh/fiscal-migracion-ui";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { FotoEmpleado } from "@/components/rrhh/foto-empleado";
@@ -494,6 +495,7 @@ export default function EmpleadosPage() {
     otros: false,
   });
   const { rol: rolSesion, permisos: permisosSesion } = useEmpresaSession();
+  const [importandoFiscal, setImportandoFiscal] = useState(false);
   const [vista, setVista] = useState<"lista" | "ficha">("lista");
   const entrevistaCargada = useRef<string | null>(null);
 
@@ -1717,6 +1719,11 @@ export default function EmpleadosPage() {
         >
           {importando ? "Importando…" : "Importar Excel"}
         </button>
+        {permisosFiscal(rolSesion, permisosSesion).puedeCapturar ? (
+          <button type="button" className="rounded-lg bg-[#7c3aed] px-3 py-2 text-sm text-white" onClick={() => setImportandoFiscal(true)}>
+            Importar acumulados fiscales
+          </button>
+        ) : null}
         <input
           ref={fileRef}
           type="file"
@@ -1871,6 +1878,10 @@ export default function EmpleadosPage() {
         </table>
       </div>
       </>
+      ) : null}
+
+      {importandoFiscal ? (
+        <ImportarAcumuladosFiscalesModal slug={slug} onClose={() => setImportandoFiscal(false)} />
       ) : null}
 
       {docsEmp ? (

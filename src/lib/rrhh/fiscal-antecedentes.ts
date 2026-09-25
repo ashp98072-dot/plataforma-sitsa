@@ -143,28 +143,80 @@ function actor(usuario: string, expectedRevision: number) {
   }
 }
 
+/**
+ * Núcleo de captura de UNA revisión dentro de una transacción/conexión YA abierta por el llamador: bloquea al empleado, valida
+ * expectedRevision, evidencias, anti doble conteo (migración) e inserta la revisión + auditoría. Lo comparten la captura
+ * individual (una transacción) y la importación masiva (UNA transacción para todas las filas): las reglas no se duplican.
+ */
+async function capturarEnConexion(
+  conn: PoolConnection, empresaId: number, empleadoId: number, ejercicio: number, a: AntecedenteFiscal, usuario: string,
+  expectedRevision: number, origenExtra?: string,
+): Promise<{ id: number; revision: number }> {
+  await empleado(conn, empresaId, empleadoId, true);
+  const rows = await revisiones(conn, empresaId, empleadoId, ejercicio);
+  if (Number(rows[0]?.revision ?? 0) !== expectedRevision) throw new ErrorModeloFiscal("La revisión cambió; vuelva a consultar.", 409);
+  await evidencias(conn, empresaId, empleadoId, a.datos);
+  const migracion = a.datos.declaracionAntecedentes === TIPO_ORIGEN_MIGRACION;
+  if (migracion) await sinSolapamientoConPlanillas(conn, empresaId, empleadoId, ejercicio, a.corteAntecedentes!);
+  const revision = expectedRevision + 1;
+  const [insert] = await conn.execute<ResultSetHeader>(
+    `INSERT INTO rrhh_fiscal_empleado_ejercicio (empresa_id, id_empleado, ejercicio, revision, inicio_fiscal, corte_antecedentes,
+     ingresos_gravados_previos, ingresos_exentos_previos, igss_laboral_previo, isr_retenido_previo, datos, creado_por)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [empresaId, empleadoId, ejercicio, revision, a.inicioFiscal, a.corteAntecedentes,
+      a.ingresosGravadosPrevios, a.ingresosExentosPrevios, a.igssLaboralPrevio, a.isrRetenidoPrevio, JSON.stringify(a.datos), usuario]);
+  await registrarAuditoriaTx(conn, { empresaId, usuario, accion: migracion ? "CAPTURAR_ACUMULADO_FISCAL_INICIAL" : "CAPTURAR_ANTECEDENTES_FISCALES", modulo: "rrhh_fiscal",
+    detalle: `Empleado #${empleadoId} ejercicio ${ejercicio} revisión ${revision} registro #${insert.insertId}${migracion ? ` · ${auditoriaMigracion(a)}` : ""}${origenExtra ? ` · ${origenExtra}` : ""}` });
+  return { id: insert.insertId, revision };
+}
+
 export async function capturarAntecedentesFiscales(
   empresaId: number, empleadoId: number, ejercicio: number, raw: unknown, usuario: string, expectedRevision: number,
 ): Promise<{ id: number; revision: number }> {
   identidad(empresaId, empleadoId, ejercicio); actor(usuario, expectedRevision);
   const a = validarAntecedenteFiscal(raw, ejercicio);
+  return transaccion((conn) => capturarEnConexion(conn, empresaId, empleadoId, ejercicio, a, usuario, expectedRevision));
+}
+
+/** Error de una fila concreta de la importación masiva (provoca ROLLBACK de todo el archivo). */
+export class ErrorImportacionFiscal extends ErrorModeloFiscal {
+  constructor(public readonly numeroFila: number, message: string, status = 409) { super(`Fila ${numeroFila}: ${message}`, status); }
+}
+export type ItemImportacionAcumulado = { numeroFila: number; empleadoId: number; ejercicio: number; antecedente: unknown };
+
+/**
+ * IMPORTACIÓN MASIVA de acumulados iniciales como BORRADORES (nunca confirma). TODO O NADA: UNA conexión y UNA transacción para
+ * todas las filas (no una por fila). Cada fila se revalida AQUÍ, con locks, aunque el análisis previo la haya dado por válida:
+ * empleado, revisión esperada (0: cualquier borrador o confirmada posterior falla), anti doble conteo y modelo fiscal. Cualquier
+ * fallo revierte todo. Auditoría por empleado (IMPORTACION_EXCEL) + un evento general.
+ */
+export async function importarAcumuladosFiscales(
+  empresaId: number, items: ItemImportacionAcumulado[], usuario: string, archivo: string,
+): Promise<{ importados: number; revisiones: { empleadoId: number; revision: number }[] }> {
+  actor(usuario, 0);
+  if (!items.length) throw new ErrorModeloFiscal("No hay filas para importar.");
+  const validados = items.map((it) => {
+    identidad(empresaId, it.empleadoId, it.ejercicio);
+    try { return { ...it, a: validarAntecedenteFiscal(it.antecedente, it.ejercicio) }; }
+    catch (e) { throw e instanceof ErrorModeloFiscal ? new ErrorImportacionFiscal(it.numeroFila, e.message, e.status) : e; }
+  });
+  // Orden estable por empleado: dos importaciones concurrentes toman los locks en el mismo orden (sin deadlocks).
+  validados.sort((x, y) => x.empleadoId - y.empleadoId || x.ejercicio - y.ejercicio);
+  const nombre = archivo.replace(/[\r\n"]/g, " ").slice(0, 120);
   return transaccion(async (conn) => {
-    await empleado(conn, empresaId, empleadoId, true);
-    const rows = await revisiones(conn, empresaId, empleadoId, ejercicio);
-    if (Number(rows[0]?.revision ?? 0) !== expectedRevision) throw new ErrorModeloFiscal("La revisión cambió; vuelva a consultar.", 409);
-    await evidencias(conn, empresaId, empleadoId, a.datos);
-    const migracion = a.datos.declaracionAntecedentes === TIPO_ORIGEN_MIGRACION;
-    if (migracion) await sinSolapamientoConPlanillas(conn, empresaId, empleadoId, ejercicio, a.corteAntecedentes!);
-    const revision = expectedRevision + 1;
-    const [insert] = await conn.execute<ResultSetHeader>(
-      `INSERT INTO rrhh_fiscal_empleado_ejercicio (empresa_id, id_empleado, ejercicio, revision, inicio_fiscal, corte_antecedentes,
-       ingresos_gravados_previos, ingresos_exentos_previos, igss_laboral_previo, isr_retenido_previo, datos, creado_por)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [empresaId, empleadoId, ejercicio, revision, a.inicioFiscal, a.corteAntecedentes,
-        a.ingresosGravadosPrevios, a.ingresosExentosPrevios, a.igssLaboralPrevio, a.isrRetenidoPrevio, JSON.stringify(a.datos), usuario]);
-    await registrarAuditoriaTx(conn, { empresaId, usuario, accion: migracion ? "CAPTURAR_ACUMULADO_FISCAL_INICIAL" : "CAPTURAR_ANTECEDENTES_FISCALES", modulo: "rrhh_fiscal",
-      detalle: `Empleado #${empleadoId} ejercicio ${ejercicio} revisión ${revision} registro #${insert.insertId}${migracion ? ` · ${auditoriaMigracion(a)}` : ""}` });
-    return { id: insert.insertId, revision };
+    const revisionesCreadas: { empleadoId: number; revision: number }[] = [];
+    for (const v of validados) {
+      try {
+        const r = await capturarEnConexion(conn, empresaId, v.empleadoId, v.ejercicio, v.a, usuario, 0, `IMPORTACION_EXCEL fila ${v.numeroFila} archivo "${nombre}"`);
+        revisionesCreadas.push({ empleadoId: v.empleadoId, revision: r.revision });
+      } catch (e) {
+        throw e instanceof ErrorModeloFiscal && !(e instanceof ErrorImportacionFiscal) ? new ErrorImportacionFiscal(v.numeroFila, e.message, e.status) : e;
+      }
+    }
+    const ejercicios = [...new Set(validados.map((v) => v.ejercicio))].join(",");
+    await registrarAuditoriaTx(conn, { empresaId, usuario, accion: "IMPORTAR_ACUMULADOS_FISCALES", modulo: "rrhh_fiscal",
+      detalle: `Importación Excel de acumulados fiscales iniciales · ejercicio ${ejercicios} · ${validados.length} borradores · archivo "${nombre}" · usuario ${usuario}` });
+    return { importados: validados.length, revisiones: revisionesCreadas };
   });
 }
 
