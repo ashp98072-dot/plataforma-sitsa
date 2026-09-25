@@ -6,6 +6,7 @@ import { absPathFromRelative } from "@/lib/uploads";
 import { ahoraLocal, formatearFechaVisible, formatearTimestampVisible } from "@/lib/rrhh/dates";
 import { dibujarTablaEnDoc } from "@/lib/rrhh/export-files";
 import { dibujarFirmas, moneda } from "@/lib/tms/fondos-solicitud-pdf";
+import { dibujarCodigoDocumentoPdf } from "@/lib/documentos-encabezado";
 import { HEADERS_PDF_GASTOS, WEIGHT_PDF_GASTOS } from "@/lib/tms/gastos-solicitud-pdf";
 import { obtenerGasto, type GastoOperativo } from "@/lib/tms/gastos";
 
@@ -130,7 +131,7 @@ export async function generarPdfGastoAutorizado(
     imagenRequirente: firmaRequirente?.imagen ?? null,
     imagenAutorizante: firmaAutorizante?.imagen ?? null,
   });
-  return { ok: true, buffer, nombreArchivo: `gasto-${gasto.id}.pdf` };
+  return { ok: true, buffer, nombreArchivo: `gasto-${gasto.codigo || gasto.id}.pdf` };
 }
 
 type DatosFirmasPdfGasto = {
@@ -164,7 +165,8 @@ function construirPdf(
     const pageWidth = doc.page.width - marginL - doc.page.margins.right;
     const pageBottom = () => doc.page.height - doc.page.margins.bottom - 12;
 
-    // Encabezado — mismo criterio que SOLICITUD DE FONDO.
+    // Encabezado — mismo criterio que SOLICITUD DE FONDO: título centrado y, arriba a la derecha, el código persistido (gasto.codigo).
+    dibujarCodigoDocumentoPdf(doc, gasto.codigo, { x: marginL, width: pageWidth, y: doc.y + 2 });
     doc.font("Helvetica-Bold").fontSize(15).fillColor("#0f172a")
       .text("SOLICITUD DE GASTOS", { width: pageWidth, align: "center" });
     doc.moveDown(0.5);

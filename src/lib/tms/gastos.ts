@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import type { PoolConnection } from "mysql2/promise";
 import { getPool, query, type SqlParams } from "@/lib/db";
@@ -216,8 +217,16 @@ export type LineaGastoOperativo = {
   planId: number | null;
 };
 
+/**
+ * Código administrativo PERSISTIDO del gasto: `GASTO-<id con 6 dígitos>` (mismo criterio que `FONDO-000055`). El id AUTO_INCREMENT
+ * es la fuente estable: no hay correlativo aparte, ni MAX()+1, ni COUNT().
+ */
+export const codigoGasto = (id: number) => `GASTO-${String(id).padStart(6, "0")}`;
+
 export type GastoOperativo = {
   id: number;
+  /** Código administrativo persistido (columna `codigo`, migrate-2026-09-gastos-codigo.sql). Nunca se reconstruye desde el id al mostrar. */
+  codigo: string;
   empresaId: number;
   fechaSolicitud: string;
   fechaViaje: string | null;
@@ -298,6 +307,7 @@ export type GastoOperativo = {
 function mapRow(r: RowDataPacket): GastoOperativo {
   return {
     id: Number(r.id),
+    codigo: String(r.codigo ?? ""),
     empresaId: Number(r.empresa_id),
     fechaSolicitud: String(r.fecha_solicitud),
     fechaViaje: r.fecha_viaje != null ? String(r.fecha_viaje) : null,
@@ -343,7 +353,7 @@ function mapRow(r: RowDataPacket): GastoOperativo {
 }
 
 const SELECT = `
-  SELECT g.id, g.empresa_id, DATE_FORMAT(g.fecha_solicitud, '%Y-%m-%d') AS fecha_solicitud,
+  SELECT g.id, g.codigo, g.empresa_id, DATE_FORMAT(g.fecha_solicitud, '%Y-%m-%d') AS fecha_solicitud,
          DATE_FORMAT(g.fecha_viaje, '%Y-%m-%d') AS fecha_viaje,
          g.empleado_id, emp.codigo AS empleado_codigo, emp.nombre AS empleado_nombre, emp.puesto AS empleado_cargo,
          g.vehiculo_id, veh.placa AS vehiculo_placa,
@@ -772,6 +782,10 @@ export async function crearGasto(
   const conn = await getPool().getConnection();
   const archivosFirmaEscritos: string[] = [];
   let insertId = 0;
+  let codigo = "";
+  // La columna `codigo` es NOT NULL + UNIQUE (empresa_id, codigo): se inserta un marcador único y se reemplaza por GASTO-<id> antes
+  // de confirmar (el id solo se conoce tras el INSERT). Único por conexión/transacción: no choca con inserciones concurrentes.
+  const codigoTemporal = `TMP-${randomBytes(12).toString("hex")}`;
   try {
     await conn.beginTransaction();
     await validarReferenciasGastoTx(conn, empresaId, input);
@@ -785,8 +799,8 @@ export async function crearGasto(
           observaciones, creado_por,
           entidad_requirente_id, entidad_requirente_nombre,
           requirente_empleado_id, requirente_nombre, requirente_usuario_id,
-          solicitante_usuario_id, solicitante_nombre, estado)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pendiente')`,
+          solicitante_usuario_id, solicitante_nombre, codigo, estado)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pendiente')`,
       [
         empresaId,
         input.fechaSolicitud,
@@ -811,9 +825,15 @@ export async function crearGasto(
         input.requirenteUsuarioId ?? null,
         input.solicitanteUsuarioId ?? null,
         solicitanteUsuario?.nombre ?? null,
+        codigoTemporal,
       ],
     );
     insertId = Number(r.insertId);
+    // Código administrativo definitivo, en la MISMA transacción: GASTO-<id con 6 dígitos>. Si no se pudo fijar, la creación falla
+    // completa (rollback): nunca queda un gasto sin código ni con el temporal.
+    codigo = codigoGasto(insertId);
+    const asignado = await executeConn(conn, `UPDATE tms_gastos_operativos SET codigo = ? WHERE id = ? AND empresa_id = ?`, [codigo, insertId, empresaId]);
+    if (Number(asignado.affectedRows) !== 1) throw new Error("No se pudo asignar el código del gasto.");
 
     // GASTOS-MULTIPLES-LINEAS-1 — líneas nuevas, dentro de la MISMA
     // transacción que el INSERT de cabecera: si falla cualquier línea, se
@@ -836,7 +856,7 @@ export async function crearGasto(
           empresaId, usuarioId: input.solicitanteUsuarioId, empleadoId: null,
           nombreFirmante: solicitanteUsuario.nombre, rolFirmante: solicitanteUsuario.rol ?? "",
           accion: "SOLICITAR_GASTO", modulo: "GASTOS", entidadTipo: "GASTO_OPERATIVO", entidadId: insertId,
-          valoresRelevantes: { gastoId: insertId, monto: montoCabecera },
+          valoresRelevantes: { gastoId: insertId, codigo, monto: montoCabecera },
           imagen, metodo: "FIRMA_MANUSCRITA", origenFirma: "GUARDADA",
         });
       }
@@ -850,7 +870,7 @@ export async function crearGasto(
           empresaId, usuarioId: input.requirenteUsuarioId, empleadoId: null,
           nombreFirmante: requirenteUsuario.nombre, rolFirmante: requirenteUsuario.rol ?? "",
           accion: "REQUERIR_GASTO", modulo: "GASTOS", entidadTipo: "GASTO_OPERATIVO", entidadId: insertId,
-          valoresRelevantes: { gastoId: insertId, monto: montoCabecera },
+          valoresRelevantes: { gastoId: insertId, codigo, monto: montoCabecera },
           imagen, metodo: "FIRMA_MANUSCRITA", origenFirma: "GUARDADA",
         });
       }
@@ -858,7 +878,7 @@ export async function crearGasto(
 
     await registrarAuditoriaTx(conn, {
       empresaId, usuario: creadoPor ?? null, accion: "crear", modulo: "tms_gastos",
-      detalle: `Gasto operativo #${insertId} creado por Q${montoCabecera.toFixed(2)}.`,
+      detalle: `Gasto operativo #${insertId} ${codigo} creado por Q${montoCabecera.toFixed(2)}.`,
     });
     await conn.commit();
   } catch (error) {

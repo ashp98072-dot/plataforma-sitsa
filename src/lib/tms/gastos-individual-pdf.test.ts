@@ -32,7 +32,7 @@ function contarPaginas(buf: Buffer): number {
 
 function gasto(overrides: Partial<Record<string, unknown>> = {}) {
   return {
-    id: 1, empresaId: 7, fechaSolicitud: "2026-09-01", fechaViaje: "2026-09-02",
+    id: 1, codigo: "GASTO-000001", empresaId: 7, fechaSolicitud: "2026-09-01", fechaViaje: "2026-09-02",
     empleadoId: 4, empleadoCodigo: "EMP-004", empleadoNombre: "Heber Sitan", empleadoCargo: "Piloto",
     vehiculoId: 9, vehiculoPlaca: "P111AAA",
     clienteId: 5, clienteNombre: "Cliente A",
@@ -112,7 +112,7 @@ describe("generarPdfGastoAutorizado — estado", () => {
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.buffer.subarray(0, 4).toString("latin1")).toBe("%PDF");
-      expect(r.nombreArchivo).toBe("gasto-1.pdf");
+      expect(r.nombreArchivo).toBe("gasto-GASTO-000001.pdf");
     }
   });
 });

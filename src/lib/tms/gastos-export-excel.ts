@@ -253,7 +253,7 @@ export async function exportarGastoOperativoExcel(gasto: GastoOperativo): Promis
     ...cabecera, ...linea, lineaId: linea.id, id: gasto.id, planCodigo: linea.planId === gasto.planId ? gasto.planCodigo : null,
     total: linea.cantidad * linea.monto,
   })) : [cabecera];
-  return encabezadoIndividual(await exportarGastosDetalleExcel(filas), gasto.entidadRequirenteNombre, "GASTO OPERATIVO");
+  return encabezadoIndividual(await exportarGastosDetalleExcel(filas), gasto.entidadRequirenteNombre, "GASTO OPERATIVO", gasto.codigo);
 }
 
 export async function exportarSolicitudFondoExcel(solicitud: SolicitudFondo): Promise<Buffer> {

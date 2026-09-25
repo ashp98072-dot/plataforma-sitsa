@@ -10,6 +10,7 @@ export function dibujarCodigoDocumentoPdf(
   codigo: string,
   area: { x: number; width: number; y: number },
 ): void {
+  if (!codigo?.trim()) return; // sin código persistido no se dibuja nada (nunca se inventa)
   const x0 = doc.x;
   const y0 = doc.y;
   doc.font("Helvetica-Bold").fontSize(11).fillColor("#0f172a")

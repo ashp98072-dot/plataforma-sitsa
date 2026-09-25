@@ -27,6 +27,8 @@ export type GastoLineaVista = {
 
 export type GastoVista = {
   id: number;
+  /** Código administrativo persistido (GASTO-000055); si falta (dato antiguo/caché) se muestra "Gasto #id". */
+  codigo?: string;
   fechaSolicitud: string;
   fechaViaje: string | null;
   empleadoNombre: string | null;
@@ -200,10 +202,10 @@ export function GastosListado(p: GastosListadoProps) {
       {p.loading ? <p role="status" className="text-[var(--muted)]">Cargando…</p> : null}
       {!p.gastos.length && !p.loading ? <p className="text-[var(--muted)]">Sin gastos con este filtro.</p> : null}
       {p.gastos.map((g) => (
-        <section key={g.id} aria-label={`Gasto ${g.id}`} className="rounded-lg border border-[var(--border)] p-3 text-sm">
+        <section key={g.id} aria-label={`Gasto ${g.codigo || g.id}`} className="rounded-lg border border-[var(--border)] p-3 text-sm">
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div className="min-w-0">
-              <span className="font-medium">Gasto #{g.id}</span> · {g.empleadoNombre ?? "—"} · {g.fechaViaje ?? g.fechaSolicitud} ·{" "}
+              <span className="font-medium">{g.codigo || `Gasto #${g.id}`}</span> · {g.empleadoNombre ?? "—"} · {g.fechaViaje ?? g.fechaSolicitud} ·{" "}
               <span className={colorEstado(g.estado)}>{g.estado ?? "Histórico"}</span> · {monedaGasto(g.cantidad * g.monto)}
               <p className="mt-1 break-words text-xs text-[var(--muted)]">
                 {[g.categoria, g.entidadRequirenteNombre, g.metodoPago].filter(Boolean).join(" · ")}
