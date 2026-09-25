@@ -3,6 +3,7 @@ import type { PoolConnection } from "mysql2/promise";
 import { getPool, query } from "@/lib/db";
 import { toIsoDate, hoyLocal } from "./dates";
 import { asegurarSchemaEmpleados } from "./empleados-schema";
+import { filtrarPersonas } from "@/lib/busqueda-personas";
 
 export type Empleado = {
   id: number;
@@ -196,15 +197,9 @@ export async function listarEmpleados(
   const cols = opts?.completo ? "*" : COLUMNAS_LISTA;
   const where: string[] = ["empresa_id = ?"];
   const params: (string | number)[] = [empresaId];
-  if (f) {
-    where.push(
-      `(nombre LIKE ? OR numero_empleado LIKE ? OR codigo LIKE ? OR dpi LIKE ?)`,
-    );
-
-    const like = `%${f}%`;
-
-    params.push(like, like, like, like);
-  }
+  // El texto de búsqueda YA NO se filtra con LIKE en SQL: se aplica en memoria con la semántica compartida (sin tildes/mayúsculas,
+  // todas las palabras) para que el resultado no dependa de la collation. El universo (empresa, estado, tipo, forma de pago) sigue
+  // acotado en SQL exactamente igual; el filtro de texto solo puede quitar filas, nunca agregarlas.
   if (opts?.tipoContrato) {
     where.push(`LOWER(COALESCE(tipo_contrato,'')) = ?`);
     params.push(opts.tipoContrato.toLowerCase());
@@ -223,7 +218,16 @@ export async function listarEmpleados(
      ORDER BY nombre`,
     params,
   );
-  const empleados = rows.map(mapEmpleado);
+  const todos = rows.map(mapEmpleado);
+  // Sin búsqueda se conserva el orden SQL (nombre); con búsqueda, ranking compartido (exacto > prefijo > palabra > resto).
+  const empleados = f
+    ? filtrarPersonas(
+        todos,
+        f,
+        { nombre: (e) => e.nombre, buscable: (e) => `${e.numeroEmpleado ?? ""} ${e.codigo ?? ""} ${e.dpi ?? ""}` },
+        Number.MAX_SAFE_INTEGER,
+      )
+    : todos;
   const conDocs = opts?.conDocs ?? !opts?.completo;
   if (conDocs) {
     try {

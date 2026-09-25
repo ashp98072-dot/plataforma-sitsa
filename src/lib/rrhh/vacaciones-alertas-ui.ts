@@ -3,11 +3,10 @@ export type SaldoAlerta = {
   diasDisponibles: number; fechaContratacion: string | null;
 };
 export type FiltrosSaldo = { nombre: string; desde: string; hasta: string; orden: string };
-const normalizar = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+import { coincideBusquedaPersona } from "@/lib/busqueda-personas";
 export function filtrarSaldos(saldos: SaldoAlerta[], filtro: FiltrosSaldo) {
-  const texto = normalizar(filtro.nombre);
   return saldos.filter((s) => {
-    if (!normalizar([s.nombre, s.codigo, s.dpi ?? ""].join(" ")).includes(texto)) return false;
+    if (!coincideBusquedaPersona(filtro.nombre, [s.nombre, s.codigo, s.dpi ?? ""].join(" "))) return false;
     if ((filtro.desde || filtro.hasta) && !s.fechaContratacion) return false;
     return (!filtro.desde || s.fechaContratacion! >= filtro.desde) && (!filtro.hasta || s.fechaContratacion! <= filtro.hasta);
   }).sort((a, b) => {

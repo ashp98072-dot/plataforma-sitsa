@@ -10,6 +10,7 @@ import {
 } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { filtrarPersonas } from "@/lib/busqueda-personas";
 import { horaAhora } from "@/lib/rrhh/dates";
 import { useEmpresaSession } from "@/lib/empresa-session";
 
@@ -202,24 +203,17 @@ export default function MarcajeManualPage() {
   }, [cargarRegistros]);
 
   const filtrados = useMemo(() => {
-    const q = buscar.trim().toLowerCase();
-
-    if (!q) {
+    if (!buscar.trim()) {
       return empleados.slice(0, 80);
     }
 
-    return empleados
-      .filter((e) => {
-        const numero = (e.numeroEmpleado || "").toLowerCase();
-        const codigoInterno = (e.codigo || "").toLowerCase();
-
-        return (
-          e.nombre.toLowerCase().includes(q) ||
-          numero.includes(q) ||
-          codigoInterno.includes(q)
-        );
-      })
-      .slice(0, 80);
+    // Búsqueda compartida: nombre sin tildes/mayúsculas, todas las palabras, y sigue buscando por número y código.
+    return filtrarPersonas(
+      empleados,
+      buscar,
+      { nombre: (e) => e.nombre, buscable: (e) => `${e.numeroEmpleado || ""} ${e.codigo || ""}` },
+      80,
+    );
   }, [empleados, buscar]);
 
   useEffect(() => {
