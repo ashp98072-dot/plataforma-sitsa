@@ -267,6 +267,26 @@ export async function obtenerEmpleadoPorCodigo(
   return rows[0] ? mapEmpleado(rows[0]) : null;
 }
 
+/**
+ * Empleado de la empresa cuyo DPI coincide EXACTAMENTE (ignorando espacios y guiones). Lo usa la importación Excel para no
+ * crear un duplicado cuando el código de una fila fue modificado pero el DPI ya pertenece a un empleado existente.
+ */
+export async function obtenerEmpleadoPorDpi(
+  empresaId: number,
+  dpi: string,
+): Promise<Empleado | null> {
+  const limpio = dpi.replace(/[\s-]/g, "");
+  if (!limpio) return null;
+  await asegurarSchemaEmpleados().catch(() => undefined);
+  const rows = await query<RowDataPacket[]>(
+    `SELECT * FROM empleados
+     WHERE empresa_id = ? AND dpi IS NOT NULL AND dpi <> '' AND REPLACE(REPLACE(dpi, ' ', ''), '-', '') = ?
+     ORDER BY id LIMIT 1`,
+    [empresaId, limpio],
+  );
+  return rows[0] ? mapEmpleado(rows[0]) : null;
+}
+
 export async function codigoDuplicado(
   empresaId: number,
   codigo: string,
