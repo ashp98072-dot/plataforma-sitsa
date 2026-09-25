@@ -406,7 +406,7 @@ export default function FondosPage() {
                     congela como snapshot al guardar (fondos.ts).
                   */}
                   <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
-                    <CatalogoSearchSelect label="Empleado" placeholder="Buscar empleado por nombre..." value={l.empleadoId} options={catalogos.empleados.map((e) => ({ value: String(e.id), label: e.nombre, detail: [e.codigo, e.puesto].filter(Boolean).join(" · "), searchText: e.nombre }))} inputClassName={inputCls} onChange={(value) => {
+                    <CatalogoSearchSelect label="Empleado" placeholder="Buscar empleado por nombre..." sinResultados="No se encontraron empleados." value={l.empleadoId} options={catalogos.empleados.map((e) => ({ value: String(e.id), label: e.nombre, detail: [e.codigo, e.puesto].filter(Boolean).join(" · "), searchText: e.nombre }))} inputClassName={inputCls} onChange={(value) => {
                       const empleado = catalogos.empleados.find((e) => String(e.id) === value);
                       set(aplicarEmpleadoSeleccionado(l, empleado, value));
                     }} />

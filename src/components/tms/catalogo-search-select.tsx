@@ -1,6 +1,7 @@
 "use client";
 
 import { useId, useState } from "react";
+import { filtrarPersonas } from "@/lib/busqueda-personas";
 
 export type CatalogoSearchOption = { value: string; label: string; detail?: string; searchText?: string };
 
@@ -10,19 +11,18 @@ export function opcionesConHistorico(options: CatalogoSearchOption[], value: str
     ? [{ value, label: `${nombre || "Sin dato histórico"} (histórico)` }, ...options] : options;
 }
 
+/**
+ * Búsqueda compartida (src/lib/busqueda-personas.ts): sin distinguir mayúsculas ni tildes, espacios repetidos = uno, todas las
+ * palabras deben estar presentes, y ranking exacto > prefijo > palabra > resto (alfabético dentro de cada nivel). Solo filtra
+ * y ordena las opciones recibidas: no cambia quién es seleccionable.
+ */
 export function filtrarOpcionesBusqueda(opciones: CatalogoSearchOption[], texto: string, limite = 200): CatalogoSearchOption[] {
-  const q = texto.trim().toLocaleLowerCase("es");
-  if (!q) return opciones;
-  return opciones
-    .filter((o) => `${o.label} ${o.searchText ?? o.detail ?? ""}`.toLocaleLowerCase("es").includes(q))
-    .sort((a, b) => {
-      const nombreA = a.label.toLocaleLowerCase("es");
-      const nombreB = b.label.toLocaleLowerCase("es");
-      const rango = (nombre: string) => nombre.startsWith(q) ? 0 : nombre.includes(q) ? 1 : 2;
-      return rango(nombreA) - rango(nombreB);
-    })
-    .slice(0, limite);
+  if (!texto.trim()) return opciones;
+  return filtrarPersonas(opciones, texto, { nombre: (o) => o.label, buscable: (o) => o.searchText ?? o.detail }, limite);
 }
+
+/** Texto visible de una opción: siempre el nombre real, más el detalle de identificación si existe (código · puesto). */
+export const etiquetaOpcion = (o: CatalogoSearchOption) => `${o.label}${o.detail ? ` · ${o.detail}` : ""}`;
 
 export function textoInicialBusqueda(opciones: CatalogoSearchOption[], value: string, manualText = ""): string {
   return opciones.find((o) => o.value === value)?.label ?? manualText;
@@ -46,10 +46,12 @@ type Props = {
   onOptionSelected?: (option: CatalogoSearchOption | undefined) => void;
   emptyLabel?: string;
   selectDataCampo?: string;
+  /** Mensaje cuando la búsqueda no encuentra nada (por defecto "Sin coincidencias."). */
+  sinResultados?: string;
 };
 
 /** Buscador auxiliar + select nativo visible. El input solo filtra; la selección siempre ocurre en el desplegable. */
-export function CatalogoSearchSelect({ label, placeholder, value, options, inputClassName, onChange, manualText, onTextChange, onOptionSelected, emptyLabel, selectDataCampo }: Props) {
+export function CatalogoSearchSelect({ label, placeholder, value, options, inputClassName, onChange, manualText, onTextChange, onOptionSelected, emptyLabel, selectDataCampo, sinResultados }: Props) {
   const id = useId();
   const [busqueda, setBusqueda] = useState("");
   const [modoManual, setModoManual] = useState(false);
@@ -85,9 +87,9 @@ export function CatalogoSearchSelect({ label, placeholder, value, options, input
       >
         <option value="">{emptyLabel ?? `— Seleccionar ${label.toLocaleLowerCase("es")} —`}</option>
         {onTextChange ? <option value={VALOR_NOMBRE_MANUAL}>Nombre manual</option> : null}
-        {opcionesVisibles.map((o) => <option key={o.value} value={o.value}>{o.label}{o.detail ? ` · ${o.detail}` : ""}</option>)}
+        {opcionesVisibles.map((o) => <option key={o.value} value={o.value}>{etiquetaOpcion(o)}</option>)}
       </select>
-      {busqueda.trim() && filtradas.length === 0 ? <p className="text-[11px]">Sin coincidencias.</p> : null}
+      {busqueda.trim() && filtradas.length === 0 ? <p className="text-[11px]">{sinResultados ?? "Sin coincidencias."}</p> : null}
       {manual ? <input className={`${inputClassName} w-full`} placeholder="Nombre manual" value={manualText ?? ""} onChange={(e) => onTextChange!(e.target.value)} /> : null}
     </div>
   );
