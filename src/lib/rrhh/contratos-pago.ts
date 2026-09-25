@@ -29,7 +29,13 @@ export type EstadoPagoPlanilla = (typeof ESTADOS_PAGO_PLANILLA)[number];
 
 /** IGSS laboral (trabajador) — % sobre sueldo ordinario (sin bono incentivo). */
 export const IGSS_LABORAL_PCT = 0.0483;
-/** IGSS patronal + IRTRA/INTECAP aproximado (costo empleador, no se descuenta al trabajador). */
+/**
+ * Aporte patronal ESTIMADO = IGSS patronal + IRTRA + INTECAP (costo empleador, no se descuenta al trabajador). NO es solo
+ * "IGSS patronal": 12.67% = 10.67% IGSS patronal + 1% IRTRA + 1% INTECAP. Los tres conceptos comparten hoy una sola cifra.
+ * HALLAZGO PENDIENTE (no se cambia aquí): la base actual es solo el sueldo ordinario; según la normativa el IGSS y el IRTRA
+ * (IRTRA: salarios ordinarios y extraordinarios) podrían requerir incorporar el salario extraordinario (horas extra). Requiere
+ * revisión y decisión separadas antes de tocar base o porcentajes.
+ */
 export const IGSS_PATRONAL_PCT = 0.1267;
 
 export function normalizarFormaPago(raw: string | null | undefined): FormaPago {

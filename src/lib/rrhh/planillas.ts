@@ -25,7 +25,9 @@ import {
   importePorDias,
   repartirConceptoMensual,
   diasBase30EnMes,
-  BASE_DIAS_MES,
+  camposDevengoCambiados,
+  construirDevengoSnapshot,
+  MSG_DEVENGO_CAMBIO,
 } from "./planilla-devengo";
 import { calcularFiscal2026Empleado } from "./planilla-fiscal-2026";
 
@@ -1056,24 +1058,17 @@ export async function generarLineasPeriodo(
       // debe comparar para detectar un ajuste manual, no contra
       // retencionSugerida (eso marcaría falso positivo en QUINCENA_1, cuyo
       // ISR automático legítimamente vale 0, no el mensual completo).
-      const devengoSnapshot: DevengoSnapshot = {
+      const devengoSnapshot: DevengoSnapshot = construirDevengoSnapshot({
+        periodo: { tipoPeriodo: periodo.tipoPeriodo, fechaInicio: periodo.fechaInicio, fechaFin: periodo.fechaFin },
+        vigencia,
         estadoEmpleado: String(e.estado ?? "Activo"),
-        fechaInicioLaboral: vigencia.inicioLaboral,
-        fechaEgreso: vigencia.finLaboral,
-        inicioDevengo: devengo.inicioDevengo,
-        finDevengo: devengo.finDevengo,
-        diasPeriodoNominales: devengo.diasPeriodoNominales,
-        diasDevengados: devengo.prorrateado ? devengo.diasDevengados : devengo.diasPeriodoNominales,
-        baseDiasMensual: BASE_DIAS_MES,
-        prorrateado: devengo.prorrateado,
         sueldoMensual: sueldo,
-        salarioDiario: Math.round((sueldo / BASE_DIAS_MES) * 10000) / 10000,
-        sueldoPeriodo: sueldoLinea,
         bonoIncentivoMensual: bonoInc,
-        bonoIncentivoPeriodo: bonoIncLinea,
         bonoHerramientasMensual: bonoHerr,
+        sueldoPeriodo: sueldoLinea,
+        bonoIncentivoPeriodo: bonoIncLinea,
         bonoHerramientasPeriodo: bonoHerrLinea,
-      };
+      });
       const snapshot: ConceptosSnapshot = fiscal2026
         ? {
             version: 2, empresaId, periodoId, empleadoId: empId, sueldoMensual: sueldo, ...conceptosEmpleado, devengo: devengoSnapshot,
@@ -1438,13 +1433,15 @@ export async function autorizarPeriodoPlanilla(empresaId: number, periodoId: num
     const empleados = new Set(snapshots.map((s) => s.empleadoId));
     if (empleados.size !== snapshots.length) throw new Error("La planilla contiene empleados duplicados.");
     const [salarios] = await conn.query<RowDataPacket[]>(
-      `SELECT id, codigo, sueldo_base, bono_incentivo, bono_herramientas, fecha_alta, fecha_inicio_laboral, fecha_egreso FROM empleados WHERE empresa_id = ? AND id IN (${snapshots.map(() => "?").join(",")}) ORDER BY id FOR UPDATE`,
+      `SELECT id, codigo, estado, tipo_contrato, sueldo_base, bono_incentivo, bono_herramientas, fecha_alta, fecha_inicio_laboral, fecha_egreso FROM empleados WHERE empresa_id = ? AND id IN (${snapshots.map(() => "?").join(",")}) ORDER BY id FOR UPDATE`,
       [empresaId, ...snapshots.map((s) => s.empleadoId)],
     );
     const empleadoActualPorId = new Map(salarios.map((e) => [Number(e.id), {
       codigo: String(e.codigo ?? ""),
+      estado: String(e.estado ?? "Activo"),
       sueldo: Number(e.sueldo_base ?? 0) || 0,
-      bonoIncentivo: e.bono_incentivo != null && e.bono_incentivo !== "" ? Number(e.bono_incentivo) : 250,
+      // mismo default que al generar: Q250 para formales, Q0 para outsourcing cuando el campo está vacío
+      bonoIncentivo: e.bono_incentivo != null && e.bono_incentivo !== "" ? Number(e.bono_incentivo) : esOutsourcing(normalizarTipoContrato(String(e.tipo_contrato ?? "fijo"))) ? 0 : 250,
       bonoHerramientas: Number(e.bono_herramientas ?? 0) || 0,
       inicioLaboral: toIsoDate(e.fecha_inicio_laboral as string | Date | null) ?? toIsoDate(e.fecha_alta as string | Date | null),
       finLaboral: toIsoDate(e.fecha_egreso as string | Date | null),
@@ -1454,6 +1451,30 @@ export async function autorizarPeriodoPlanilla(empresaId: number, periodoId: num
       if (sueldoActual == null || !Number.isFinite(sueldoActual) || redondearQ(sueldoActual) !== redondearQ(s.sueldoMensual)) {
         throw new Error("La información salarial cambió. Debe regenerarse la planilla antes de autorizar.");
       }
+    }
+    // DEVENGO PROPORCIONAL: para TODA línea con `devengo` (formal u outsourcing, cualquier ejercicio, con o sin snapshot fiscal)
+    // se recalcula el devengo con la relación laboral ACTUAL (estado, fecha entrada/contratación, egreso, sueldo y bonos) usando la
+    // MISMA función que al generar y se compara contra lo guardado. No depende del motor de ISR: si cambió una fecha o el estado
+    // después de generar, el sueldo proporcional de la línea quedó viejo y hay que regenerar.
+    for (let i = 0; i < snapshots.length; i++) {
+      const s = snapshots[i];
+      if (!s.devengo) continue;
+      const actual = empleadoActualPorId.get(s.empleadoId);
+      if (!actual) throw new Error(MSG_DEVENGO_CAMBIO);
+      const l = rows[i];
+      const recalculado = construirDevengoSnapshot({
+        periodo: { tipoPeriodo: periodo.tipoPeriodo, fechaInicio: periodo.fechaInicio, fechaFin: periodo.fechaFin },
+        vigencia: { inicioLaboral: actual.inicioLaboral, finLaboral: actual.finLaboral },
+        estadoEmpleado: actual.estado,
+        sueldoMensual: actual.sueldo,
+        bonoIncentivoMensual: actual.bonoIncentivo,
+        bonoHerramientasMensual: actual.bonoHerramientas,
+        // importes del período: los realmente persistidos en la línea (deben coincidir con lo que el snapshot dice haber calculado)
+        sueldoPeriodo: Number(l.sueldo_base),
+        bonoIncentivoPeriodo: Number(l.bono_incentivo),
+        bonoHerramientasPeriodo: Number(l.bono_herramientas),
+      });
+      if (camposDevengoCambiados(s.devengo, recalculado).length) throw new Error(MSG_DEVENGO_CAMBIO);
     }
     // RRHH-PLANILLAS-ISR-2026-INTEGRACION: revalida que el input fiscal
     // (antecedentes confirmados, acumulados de períodos ya autorizados,

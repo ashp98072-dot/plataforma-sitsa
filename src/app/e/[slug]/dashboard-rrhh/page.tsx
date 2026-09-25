@@ -359,7 +359,7 @@ function DashboardRrhh({ slug }: { slug: string }) {
               {mesActual.costoRegistrado == null ? "No disponible" : fmtQ(mesActual.costoRegistrado)}
             </p>
             <p className="mt-2 text-xs text-[var(--muted)]">
-              Ingresos antes de descuentos más IGSS patronal registrado. No es el costo empresarial total:
+              Ingresos antes de descuentos más aporte patronal estimado registrado (IGSS + IRTRA + INTECAP). No es el costo empresarial total:
               excluye provisiones y gastos externos a planilla. Solo períodos Cerrados o Pagados,
               agrupados por su fecha de inicio. Neto a pagar no significa dinero ya entregado.
               El mes actual puede estar incompleto; la comparación es contra el mes anterior completo.

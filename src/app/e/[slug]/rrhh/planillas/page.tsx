@@ -710,7 +710,8 @@ export default function PlanillasPage() {
               ) : null}
 
               <p className="text-xs text-[var(--muted)]">
-                Guatemala: IGSS laboral 4.83% y patronal 12.67% sobre sueldo
+                Guatemala: IGSS laboral 4.83% y aporte patronal estimado 12.67%
+                (IGSS patronal 10.67% + IRTRA 1% + INTECAP 1%) sobre sueldo
                 ordinario (sin bono incentivo Q250). Outsourcing no calcula IGSS.
                 ISR se edita manualmente por línea (RetenISR/SAT).
                 {periodo.tipoPeriodo === "QUINCENA_1" || periodo.tipoPeriodo === "QUINCENA_2"
@@ -820,7 +821,7 @@ export default function PlanillasPage() {
                       <th className="px-2 py-2 text-right">Otros ingresos</th>
                       <th className="px-2 py-2 text-right">Total ingresos</th>
                       <th className="px-2 py-2 text-right">IGSS laboral</th>
-                      <th className="px-2 py-2 text-right">IGSS patronal</th>
+                      <th className="px-2 py-2 text-right" title="Aporte patronal estimado: IGSS patronal 10.67% + IRTRA 1% + INTECAP 1% (12.67%)">Aporte patronal est.</th>
                       <th className="px-2 py-2">ISR</th>
                       <th className="px-2 py-2 text-right">Descuentos</th>
                       <th className="px-2 py-2 text-right">Total desc.</th>

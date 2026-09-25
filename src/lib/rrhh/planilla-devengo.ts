@@ -1,4 +1,5 @@
 import { redondearQ } from "./contratos-pago";
+import type { DevengoSnapshot } from "./planilla-conceptos";
 
 /**
  * RRHH PLANILLAS — DEVENGO PROPORCIONAL por fecha de ingreso/egreso. Lógica PURA (sin BD), documentada.
@@ -145,6 +146,55 @@ export function diasBase30EnMes(anio: number, mes: number, v: VigenciaLaboral): 
   const desde = ini && ini > desdeMes ? ini : desdeMes;
   const hasta = fin && fin < hastaMes ? fin : hastaMes;
   return Math.min(BASE_DIAS_MES, diasBase30(desde, hasta));
+}
+
+/**
+ * Bloque `conceptos_snapshot.devengo` de UNA línea. Se usa TANTO al generar como al autorizar (misma función, mismos redondeos),
+ * para que al autorizar se pueda recalcular con los datos ACTUALES del empleado y detectar cualquier cambio.
+ */
+export function construirDevengoSnapshot(a: {
+  periodo: { tipoPeriodo: TipoPeriodoDevengo; fechaInicio: string; fechaFin: string };
+  vigencia: VigenciaLaboral;
+  estadoEmpleado: string;
+  sueldoMensual: number;
+  bonoIncentivoMensual: number;
+  bonoHerramientasMensual: number;
+  sueldoPeriodo: number;
+  bonoIncentivoPeriodo: number;
+  bonoHerramientasPeriodo: number;
+}): DevengoSnapshot {
+  const d = calcularDevengoPeriodo(a.periodo, a.vigencia);
+  return {
+    estadoEmpleado: a.estadoEmpleado,
+    fechaInicioLaboral: d.inicioLaboral,
+    fechaEgreso: d.finLaboral,
+    inicioDevengo: d.inicioDevengo,
+    finDevengo: d.finDevengo,
+    diasPeriodoNominales: d.diasPeriodoNominales,
+    diasDevengados: d.prorrateado ? d.diasDevengados : d.diasPeriodoNominales,
+    baseDiasMensual: BASE_DIAS_MES,
+    prorrateado: d.prorrateado,
+    sueldoMensual: a.sueldoMensual,
+    salarioDiario: Math.round((a.sueldoMensual / BASE_DIAS_MES) * 10000) / 10000,
+    sueldoPeriodo: a.sueldoPeriodo,
+    bonoIncentivoMensual: a.bonoIncentivoMensual,
+    bonoIncentivoPeriodo: a.bonoIncentivoPeriodo,
+    bonoHerramientasMensual: a.bonoHerramientasMensual,
+    bonoHerramientasPeriodo: a.bonoHerramientasPeriodo,
+  };
+}
+
+export const MSG_DEVENGO_CAMBIO = "La relación laboral o el cálculo de devengo cambió. Regenera la planilla antes de autorizar.";
+
+const CAMPOS_DEVENGO: (keyof DevengoSnapshot)[] = [
+  "estadoEmpleado", "fechaInicioLaboral", "fechaEgreso", "inicioDevengo", "finDevengo", "diasPeriodoNominales", "diasDevengados",
+  "baseDiasMensual", "prorrateado", "sueldoMensual", "salarioDiario", "sueldoPeriodo", "bonoIncentivoMensual", "bonoIncentivoPeriodo",
+  "bonoHerramientasMensual", "bonoHerramientasPeriodo",
+];
+
+/** Campos del devengo guardado que ya no coinciden con el recalculado con los datos actuales (vacío = sin cambios). */
+export function camposDevengoCambiados(guardado: DevengoSnapshot, actual: DevengoSnapshot): string[] {
+  return CAMPOS_DEVENGO.filter((c) => guardado[c] !== actual[c]) as string[];
 }
 
 export type DevengoVisible = {
