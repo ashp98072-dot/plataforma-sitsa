@@ -10,6 +10,8 @@ import { crearFirmaInterna } from "@/lib/firmas/firmas-internas";
 import { sha256Hex } from "@/lib/firmas/imagen-firma";
 import { borrarUpload, guardarUpload } from "@/lib/uploads";
 import { capturarFirmaRolCompraTx } from "./requerimiento-firmas-captura";
+import { indicesFacturasRepetidas, MSG_FACTURAS_REPETIDAS, mensajeFacturaDuplicadaServidor, normalizarFacturaCompra } from "./factura-compra";
+import { adquirirLocksFacturas, buscarFacturaExistente, liberarLocksFacturas } from "./facturas-duplicadas";
 
 export class ErrorCompra extends Error {
   constructor(message: string, public status = 400) { super(message); }
@@ -57,10 +59,23 @@ export async function catalogosCompra(empresaId: number) {
 }
 export async function guardarRequerimiento(empresaId: number, usuarioId: number, usuario: string,
   datos: RequerimientoDatos, puedeEliminar: boolean, id?: number) {
+  // FACTURAS DUPLICADAS (1/3) — dentro del MISMO payload: se valida ANTES de abrir conexión ni escribir nada. Una factura es
+  // la misma por proveedor + serie normalizada + número normalizado; sin número no hay control. Vale para líneas nuevas y editadas.
+  const repetidas = indicesFacturasRepetidas(datos.lineas);
+  if (repetidas.size) throw new ErrorCompra(`${MSG_FACTURAS_REPETIDAS} (líneas ${[...repetidas].map(i => i + 1).join(", ")})`, 409);
   const conn = await getPool().getConnection();
   const rutasFirmas: string[] = [];
+  const locksFacturas: string[] = [];
   let confirmado = false;
   try {
+    // FACTURAS DUPLICADAS (2/3) — concurrencia: se serializa a los escritores de facturas del MISMO proveedor (GET_LOCK, orden
+    // estable) antes de comprobar contra la BD. Ver facturas-duplicadas.ts: sin UNIQUE en BD, esto cubre esta aplicación.
+    const proveedoresConFactura = datos.lineas.filter(l => normalizarFacturaCompra(l.serie_factura, l.numero_factura)).map(l => l.proveedor_id);
+    if (proveedoresConFactura.length) {
+      const bloqueo = await adquirirLocksFacturas(conn, empresaId, proveedoresConFactura);
+      locksFacturas.push(...bloqueo.adquiridos);
+      if (!bloqueo.ok) throw new ErrorCompra("No se pudo validar las facturas porque hay otra operación en curso para el mismo proveedor. Intenta de nuevo.", 409);
+    }
     await conn.beginTransaction();
     let antes: RowDataPacket | undefined;
     let existentes: RowDataPacket[] = [];
@@ -111,6 +126,15 @@ export async function guardarRequerimiento(empresaId: number, usuarioId: number,
         proveedores.set(linea.proveedor_id, proveedor);
       }
       if (!proveedor.activo && (!vieja || Number(vieja.proveedor_id) !== linea.proveedor_id)) throw new ErrorCompra("El proveedor debe estar activo para una línea nueva o al cambiar proveedor.");
+      // FACTURAS DUPLICADAS (3/3) — contra la BD, dentro de la transacción, con el proveedor ya validado de ESTA empresa. Cuenta
+      // cualquier requerimiento (Pendiente, Autorizada o Rechazada). Se excluyen las líneas de ESTE requerimiento porque su estado
+      // final es el payload (ya comprobado en memoria): una línea no se detecta a sí misma ni a una hermana que se va a modificar.
+      if (normalizarFacturaCompra(linea.serie_factura, linea.numero_factura)) {
+        const existente = await buscarFacturaExistente(async (sql, params) => (await conn.query<RowDataPacket[]>(sql, params))[0], empresaId,
+          linea.proveedor_id, linea.serie_factura, linea.numero_factura, { excluirRequerimientoId: id, bloquear: true });
+        if (existente) throw new ErrorCompra(mensajeFacturaDuplicadaServidor(linea.serie_factura, linea.numero_factura!, existente.requerimientoCodigo,
+          existente.proveedorNombre || String(proveedor.nombre_comercial ?? "")), 409);
+      }
       const snapshot = !proveedor.activo && vieja ? {
         proveedor_nombre_snapshot: vieja.proveedor_nombre_snapshot, proveedor_razon_social_snapshot: vieja.proveedor_razon_social_snapshot,
         proveedor_nit_snapshot: vieja.proveedor_nit_snapshot, banco_snapshot: vieja.banco_snapshot,
@@ -197,6 +221,7 @@ export async function guardarRequerimiento(empresaId: number, usuarioId: number,
     if (!confirmado) for (const ruta of rutasFirmas) {
       try { borrarUpload(ruta); } catch { /* Compensación best-effort. */ }
     }
+    await liberarLocksFacturas(conn, locksFacturas);
     conn.release();
   }
 }
