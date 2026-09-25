@@ -3,8 +3,8 @@ import type { PoolConnection } from "mysql2/promise";
 import { getPool } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import {
-  antecedenteFiscalSchema, documentosAntecedente, ErrorModeloFiscal,
-  parsearDatosFiscales, validarAntecedenteFiscal, type AntecedenteFiscal,
+  antecedenteFiscalSchema, documentosAntecedente, ErrorModeloFiscal, inicioEjercicio, MSG_MIGRACION_SOLAPADA,
+  parsearDatosFiscales, TIPO_ORIGEN_MIGRACION, validarAntecedenteFiscal, type AntecedenteFiscal,
 } from "./fiscal-modelo";
 
 export type RevisionFiscal = AntecedenteFiscal & {
@@ -52,6 +52,26 @@ async function evidencias(conn: PoolConnection, empresaId: number, empleadoId: n
   if (new Set(rows.map((r) => Number(r.id))).size !== ids.length) {
     throw new ErrorModeloFiscal("Evidencia no disponible para este empleado y empresa.");
   }
+}
+
+/**
+ * ANTI DOBLE CONTEO: el acumulado de migración cubre TODO desde el 1 de enero hasta la fecha de corte (inclusive). Ninguna planilla
+ * AUTORIZADA de este sistema con líneas de ese empleado puede solaparse con ese rango: el motor las sumaría como propias y
+ * quedarían contadas dos veces. Bloquea al capturar, al confirmar y (defensa adicional) al calcular el ISR de una planilla.
+ */
+async function sinSolapamientoConPlanillas(conn: PoolConnection, empresaId: number, empleadoId: number, ejercicio: number, corte: string) {
+  const [rows] = await conn.execute<RowDataPacket[]>(
+    `SELECT p.id FROM rrhh_planilla_periodos p
+     INNER JOIN rrhh_planilla_lineas l ON l.periodo_id = p.id AND l.empresa_id = p.empresa_id
+     WHERE p.empresa_id = ? AND l.id_empleado = ? AND p.autorizado_en IS NOT NULL AND p.fecha_inicio <= ? AND p.fecha_fin >= ?
+     ORDER BY p.id LIMIT 1 FOR UPDATE`,
+    [empresaId, empleadoId, corte, inicioEjercicio(ejercicio)]);
+  if (rows.length) throw new ErrorModeloFiscal(MSG_MIGRACION_SOLAPADA, 409);
+}
+
+function auditoriaMigracion(a: AntecedenteFiscal) {
+  return `tipo ${TIPO_ORIGEN_MIGRACION} corte ${a.corteAntecedentes} gravado ${a.ingresosGravadosPrevios} exento ${a.ingresosExentosPrevios} ` +
+    `igss ${a.igssLaboralPrevio} isr ${a.isrRetenidoPrevio} origen "${a.datos.migracion?.referenciaOrigen ?? ""}"`;
 }
 
 async function revisiones(conn: PoolConnection, empresaId: number, empleadoId: number, ejercicio: number) {
@@ -133,6 +153,8 @@ export async function capturarAntecedentesFiscales(
     const rows = await revisiones(conn, empresaId, empleadoId, ejercicio);
     if (Number(rows[0]?.revision ?? 0) !== expectedRevision) throw new ErrorModeloFiscal("La revisión cambió; vuelva a consultar.", 409);
     await evidencias(conn, empresaId, empleadoId, a.datos);
+    const migracion = a.datos.declaracionAntecedentes === TIPO_ORIGEN_MIGRACION;
+    if (migracion) await sinSolapamientoConPlanillas(conn, empresaId, empleadoId, ejercicio, a.corteAntecedentes!);
     const revision = expectedRevision + 1;
     const [insert] = await conn.execute<ResultSetHeader>(
       `INSERT INTO rrhh_fiscal_empleado_ejercicio (empresa_id, id_empleado, ejercicio, revision, inicio_fiscal, corte_antecedentes,
@@ -140,8 +162,8 @@ export async function capturarAntecedentesFiscales(
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [empresaId, empleadoId, ejercicio, revision, a.inicioFiscal, a.corteAntecedentes,
         a.ingresosGravadosPrevios, a.ingresosExentosPrevios, a.igssLaboralPrevio, a.isrRetenidoPrevio, JSON.stringify(a.datos), usuario]);
-    await registrarAuditoriaTx(conn, { empresaId, usuario, accion: "CAPTURAR_ANTECEDENTES_FISCALES", modulo: "rrhh_fiscal",
-      detalle: `Empleado #${empleadoId} ejercicio ${ejercicio} revisión ${revision} registro #${insert.insertId}` });
+    await registrarAuditoriaTx(conn, { empresaId, usuario, accion: migracion ? "CAPTURAR_ACUMULADO_FISCAL_INICIAL" : "CAPTURAR_ANTECEDENTES_FISCALES", modulo: "rrhh_fiscal",
+      detalle: `Empleado #${empleadoId} ejercicio ${ejercicio} revisión ${revision} registro #${insert.insertId}${migracion ? ` · ${auditoriaMigracion(a)}` : ""}` });
     return { id: insert.insertId, revision };
   });
 }
@@ -163,13 +185,15 @@ export async function confirmarAntecedentesFiscales(
       ingresosGravadosPrevios: stored.ingresosGravadosPrevios, ingresosExentosPrevios: stored.ingresosExentosPrevios,
       igssLaboralPrevio: stored.igssLaboralPrevio, isrRetenidoPrevio: stored.isrRetenidoPrevio, datos: stored.datos }, ejercicio, true);
     await evidencias(conn, empresaId, empleadoId, a.datos);
+    const migracion = a.datos.declaracionAntecedentes === TIPO_ORIGEN_MIGRACION;
+    if (migracion) await sinSolapamientoConPlanillas(conn, empresaId, empleadoId, ejercicio, a.corteAntecedentes!);
     const [update] = await conn.execute<ResultSetHeader>(
       `UPDATE rrhh_fiscal_empleado_ejercicio SET confirmado_por = ?, confirmado_en = CURRENT_TIMESTAMP
        WHERE empresa_id = ? AND id_empleado = ? AND ejercicio = ? AND revision = ? AND confirmado_en IS NULL`,
       [usuario, empresaId, empleadoId, ejercicio, revision]);
     if (update.affectedRows !== 1) throw new ErrorModeloFiscal("No se pudo confirmar la revisión.", 409);
-    await registrarAuditoriaTx(conn, { empresaId, usuario, accion: "CONFIRMAR_ANTECEDENTES_FISCALES", modulo: "rrhh_fiscal",
-      detalle: `Empleado #${empleadoId} ejercicio ${ejercicio} revisión ${revision}` });
+    await registrarAuditoriaTx(conn, { empresaId, usuario, accion: migracion ? "CONFIRMAR_ACUMULADO_FISCAL_INICIAL" : "CONFIRMAR_ANTECEDENTES_FISCALES", modulo: "rrhh_fiscal",
+      detalle: `Empleado #${empleadoId} ejercicio ${ejercicio} revisión ${revision}${migracion ? ` · ${auditoriaMigracion(a)}` : ""}` });
     return { revision };
   });
 }

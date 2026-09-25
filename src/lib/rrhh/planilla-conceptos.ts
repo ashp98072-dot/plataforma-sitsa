@@ -26,6 +26,13 @@ const fiscalSnapshotSchema = z.object({
   motor: z.literal("ISR_TRABAJO_2026"),
   ejercicio: z.literal(2026),
   antecedenteRevision: z.number().int(),
+  // Origen del acumulado previo usado (ACUMULADO_INICIAL_MIGRACION → origen MIGRACION_SISTEMA_ANTERIOR). OPCIONAL: snapshots previos no lo traen.
+  origenFiscal: z.strictObject({
+    tipo: z.enum(["SIN_ANTECEDENTES", "ANTECEDENTES_OTRO_PATRONO", "ACUMULADO_INICIAL_MIGRACION", "DESCONOCIDO"]),
+    origen: z.enum(["MIGRACION_SISTEMA_ANTERIOR", "ANTECEDENTES", "SIN_ANTECEDENTES"]),
+    fechaCorte: z.string().nullable(),
+    revision: z.number().int(),
+  }).optional(),
   parametrosRevision: z.object({ ejercicio: z.number(), version: z.string() }),
   fechaCorte: z.string(),
   inputUsado: z.unknown(),

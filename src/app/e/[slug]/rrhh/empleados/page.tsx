@@ -13,6 +13,9 @@ import {
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { DocumentosModal } from "@/components/rrhh/documentos-modal";
+import { FiscalEmpleadoSeccion } from "@/components/rrhh/fiscal-empleado-seccion";
+import { permisosFiscal } from "@/lib/rrhh/fiscal-migracion-ui";
+import { useEmpresaSession } from "@/lib/empresa-session";
 import { FotoEmpleado } from "@/components/rrhh/foto-empleado";
 import { PortalAccesoModal } from "@/components/rrhh/portal-acceso-modal";
 import { BitacoraLegalEmpleado } from "@/components/rrhh/bitacora-legal-empleado";
@@ -427,7 +430,8 @@ type SeccionFicha =
   | "salarios"
   | "contacto"
   | "licencia"
-  | "otros";
+  | "otros"
+  | "fiscal";
 
 export default function EmpleadosPage() {
   const slug = String(useParams().slug);
@@ -481,7 +485,7 @@ export default function EmpleadosPage() {
   const [docsEmp, setDocsEmp] = useState<Emp | null>(null);
   const [portalEmp, setPortalEmp] = useState<Emp | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const [secciones, setSecciones] = useState<Record<SeccionFicha, boolean>>({
+  const [secciones, setSecciones] = useState<Record<Exclude<SeccionFicha, "fiscal">, boolean> & { fiscal?: boolean }>({
     identidad: true,
     laboral: true,
     salarios: false,
@@ -489,6 +493,7 @@ export default function EmpleadosPage() {
     licencia: false,
     otros: false,
   });
+  const { rol: rolSesion, permisos: permisosSesion } = useEmpresaSession();
   const [vista, setVista] = useState<"lista" | "ficha">("lista");
   const entrevistaCargada = useRef<string | null>(null);
 
@@ -1595,6 +1600,17 @@ export default function EmpleadosPage() {
 
         {editId ? (
           <BitacoraLegalEmpleado slug={slug} empleadoId={editId} />
+        ) : null}
+
+        {editId != null ? (
+          <FormSection
+            title="7. Fiscal / ISR"
+            hint="Acumulado fiscal inicial de migración desde el sistema anterior · antecedentes"
+            open={Boolean(secciones.fiscal)}
+            onToggle={() => toggleSeccion("fiscal")}
+          >
+            <FiscalEmpleadoSeccion slug={slug} empleadoId={editId} permisos={permisosFiscal(rolSesion, permisosSesion)} />
+          </FormSection>
         ) : null}
 
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3">
