@@ -11,11 +11,22 @@ import {
 } from "@/lib/rrhh/contratos-pago";
 import { calcularISRMensual } from "@/lib/rrhh/isr";
 import { obtenerRangoPeriodo } from "@/lib/rrhh/periodos";
+import type { DevengoSnapshot } from "./planilla-conceptos";
 import { aplicarConceptosSnapshot, leerConceptosSnapshot, obtenerConceptosPendientes, pendientesVacios, totalesConceptos, validarSnapshotContraPendientes, type ConceptosSnapshot } from "./planilla-conceptos";
 import type { PoolConnection } from "mysql2/promise";
 import { registrarAuditoria, registrarAuditoriaTx } from "@/lib/auditoria";
 import { bloquearPeriodosPlanilla, conPeriodoBloqueado, exigirPrimeraQuincenaSinDependientes } from "./planilla-control";
 import { liberarReservasPeriodo } from "./planilla-reversion";
+import { toIsoDate } from "./dates";
+import {
+  calcularDevengoPeriodo,
+  diasDevengadosQuincenas,
+  empleadoEntraEnPeriodo,
+  importePorDias,
+  repartirConceptoMensual,
+  diasBase30EnMes,
+  BASE_DIAS_MES,
+} from "./planilla-devengo";
 import { calcularFiscal2026Empleado } from "./planilla-fiscal-2026";
 
 /**
@@ -84,6 +95,8 @@ export type PlanillaLinea = {
   refPago: string;
   notas: string;
   conceptosSnapshot?: ConceptosSnapshot | null;
+  /** Desglose del devengo (días pagados, ingreso/egreso). Ausente en líneas anteriores a este cálculo. */
+  devengo?: DevengoSnapshot | null;
 };
 
 export type CuadrePlanilla = {
@@ -226,6 +239,7 @@ function mapLinea(r: RowDataPacket): PlanillaLinea {
     formaPago: normalizarFormaPago(String(r.forma_pago ?? "transferencia")),
     sueldoMensual: snapshot?.sueldoMensual ?? Number(r.sueldo_mensual ?? r.sueldo_base ?? 0),
     conceptosSnapshot: snapshot,
+    devengo: snapshot?.devengo ?? null,
     sueldoBase: Number(r.sueldo_base ?? 0),
     bonoIncentivo: Number(r.bono_incentivo ?? 0),
     bonoHerramientas: Number(r.bono_herramientas ?? 0),
@@ -781,13 +795,27 @@ export async function generarLineasPeriodo(
     );
   }
 
-  const empleados = await query<RowDataPacket[]>(
-    `SELECT id, codigo, nombre, dpi, tipo_contrato, forma_pago,
-            sueldo_base, bono_incentivo, bono_herramientas
+  // Inclusión por RELACIÓN LABORAL (no solo `estado = 'Activo'`): un empleado dado de baja que trabajó parte del período
+  // sigue apareciendo en la planilla que le corresponde. Ver planilla-devengo.ts (empleadoEntraEnPeriodo).
+  const empleadosCandidatos = await query<RowDataPacket[]>(
+    `SELECT id, codigo, nombre, dpi, tipo_contrato, forma_pago, estado,
+            sueldo_base, bono_incentivo, bono_herramientas,
+            fecha_alta, fecha_inicio_laboral, fecha_egreso
      FROM empleados
-     WHERE empresa_id = ? AND estado = 'Activo'
+     WHERE empresa_id = ? AND estado IN ('Activo', 'Baja')
      ORDER BY nombre`,
     [empresaId],
+  );
+  const vigenciaDe = (e: RowDataPacket) => ({
+    // Se paga desde que se EMPIEZA a trabajar (fecha entrada laboral); la fecha de contratación es el respaldo.
+    inicioLaboral: toIsoDate(e.fecha_inicio_laboral as string | Date | null) ?? toIsoDate(e.fecha_alta as string | Date | null),
+    finLaboral: toIsoDate(e.fecha_egreso as string | Date | null),
+  });
+  const empleados = empleadosCandidatos.filter((e) =>
+    empleadoEntraEnPeriodo(
+      { estado: String(e.estado ?? "Activo"), ...vigenciaDe(e) },
+      { tipoPeriodo: periodo.tipoPeriodo, fechaInicio: periodo.fechaInicio, fechaFin: periodo.fechaFin },
+    ),
   );
 
   // Fase D3: solo relevante para QUINCENA_2 — IGSS ya retenido en QUINCENA_1
@@ -917,7 +945,7 @@ export async function generarLineasPeriodo(
         fiscal2026 = await calcularFiscal2026Empleado(
           conn, empresaId, anioFiscal,
           { id: periodoId, mes: periodo.mes, fechaInicio: periodo.fechaInicio },
-          { id: empId, codigo: String(e.codigo ?? ""), sueldo, bonoIncentivo: bonoInc, bonoHerramientas: bonoHerr },
+          { id: empId, codigo: String(e.codigo ?? ""), sueldo, bonoIncentivo: bonoInc, bonoHerramientas: bonoHerr, ...vigenciaDe(e) },
           conceptosEmpleado,
         );
         isrMensual = Number(fiscal2026.resultado.retencionSugerida);
@@ -932,7 +960,26 @@ export async function generarLineasPeriodo(
       let igssPat: number;
       let isr: number;
 
-      if (periodo.tipoPeriodo == null || periodo.tipoPeriodo === "MENSUAL") {
+      // DEVENGO: período ∩ relación laboral, en base 30 (ver planilla-devengo.ts). Solo QUINCENA_1/QUINCENA_2/MENSUAL se
+      // prorratean; ESPECIAL e históricos (sin tipo) conservan su regla anterior.
+      const vigencia = vigenciaDe(e);
+      const devengo = calcularDevengoPeriodo(
+        { tipoPeriodo: periodo.tipoPeriodo, fechaInicio: periodo.fechaInicio, fechaFin: periodo.fechaFin },
+        vigencia,
+      );
+      const IGSS_LAB_BASE = out ? 0 : sueldo * IGSS_LABORAL_PCT;
+      const IGSS_PAT_BASE = out ? 0 : sueldo * IGSS_PATRONAL_PCT;
+
+      if (periodo.tipoPeriodo === "MENSUAL") {
+        // Mes completo = 30 días; ingreso/egreso dentro del mes = proporcional (mensual × días / 30).
+        const d = devengo.diasDevengados;
+        sueldoLinea = importePorDias(sueldo, d);
+        bonoIncLinea = importePorDias(bonoInc, d);
+        bonoHerrLinea = importePorDias(bonoHerr, d);
+        igssLab = importePorDias(IGSS_LAB_BASE, d);
+        igssPat = importePorDias(IGSS_PAT_BASE, d);
+        isr = isrMensual;
+      } else if (periodo.tipoPeriodo == null) {
         sueldoLinea = sueldo;
         bonoIncLinea = bonoInc;
         bonoHerrLinea = bonoHerr;
@@ -947,35 +994,25 @@ export async function generarLineasPeriodo(
         igssLab = 0;
         igssPat = igssPatMensual;
         isr = isrMensual;
-      } else if (periodo.tipoPeriodo === "QUINCENA_1") {
-        sueldoLinea = redondearQ(sueldo / 2);
-        bonoIncLinea = redondearQ(bonoInc / 2);
-        bonoHerrLinea = redondearQ(bonoHerr / 2);
-        igssLab = redondearQ(igssMensual / 2);
-        igssPat = redondearQ(igssPatMensual / 2);
-        isr = redondearQ(isrMensual / 2);
       } else {
-        // QUINCENA_2 — reconcilia contra lo que Q1 REALMENTE tiene
-        // persistido (ver JSDoc de la función).
-        const q1 = necesitaIgssQ1 ? datosQ1PorEmpleado.get(empId) : undefined;
-        if (q1 == null) {
-          // Q2 puede generarse antes que Q1. Aun así sigue siendo una
-          // quincena: nunca debe cargar el valor mensual completo.
-          sueldoLinea = redondearQ(sueldo / 2);
-          bonoIncLinea = redondearQ(bonoInc / 2);
-          bonoHerrLinea = redondearQ(bonoHerr / 2);
-          igssLab = redondearQ(igssMensual / 2);
-          igssPat = redondearQ(igssPatMensual / 2);
-          isr = redondearQ(isrMensual / 2);
-          empleadosSinIgssQ1 += 1;
-        } else {
-          sueldoLinea = redondearQ(sueldo - q1.sueldoBase);
-          bonoIncLinea = redondearQ(bonoInc - q1.bonoIncentivo);
-          bonoHerrLinea = redondearQ(bonoHerr - q1.bonoHerramientas);
-          igssLab = redondearQ(igssMensual - q1.igssLaboral);
-          igssPat = redondearQ(igssPatMensual - q1.igssPatronal);
-          isr = redondearQ(isrMensual - q1.isr);
-        }
+        // QUINCENA_1 / QUINCENA_2: el mes real devengado = días(Q1) + días(Q2) en base 30. Q1 y Q2 nunca suman más
+        // que ese mes (ni 31 días en meses de 31). Q2 se concilia contra lo que Q1 REALMENTE tiene persistido.
+        const quincena: 1 | 2 = periodo.tipoPeriodo === "QUINCENA_1" ? 1 : 2;
+        const { diasQ1, diasQ2 } = diasDevengadosQuincenas(
+          { tipoPeriodo: periodo.tipoPeriodo, fechaInicio: periodo.fechaInicio, fechaFin: periodo.fechaFin },
+          vigencia,
+        );
+        const q1 = quincena === 2 && necesitaIgssQ1 ? datosQ1PorEmpleado.get(empId) : undefined;
+        if (quincena === 2 && q1 == null && diasQ1 > 0) empleadosSinIgssQ1 += 1; // Q2 generada sin Q1 válida para quien sí trabajó en Q1
+        const parte = (mensualBase: number, q1Valor: number | undefined) =>
+          repartirConceptoMensual({ mensualBase, diasQ1, diasQ2, quincena, q1Persistido: q1Valor ?? null });
+        sueldoLinea = parte(sueldo, q1?.sueldoBase);
+        bonoIncLinea = parte(bonoInc, q1?.bonoIncentivo);
+        bonoHerrLinea = parte(bonoHerr, q1?.bonoHerramientas);
+        igssLab = parte(IGSS_LAB_BASE, q1?.igssLaboral);
+        igssPat = parte(IGSS_PAT_BASE, q1?.igssPatronal);
+        // ISR (ejercicios sin motor propio): reparto a la mitad + conciliación, como siempre; 2026 se decide abajo.
+        isr = quincena === 1 ? redondearQ(isrMensual / 2) : q1 == null ? redondearQ(isrMensual / 2) : redondearQ(isrMensual - q1.isr);
       }
 
       // CORRECCIÓN DE REGLA DE NEGOCIO (2026): el ISR NO se reparte entre
@@ -1019,9 +1056,27 @@ export async function generarLineasPeriodo(
       // debe comparar para detectar un ajuste manual, no contra
       // retencionSugerida (eso marcaría falso positivo en QUINCENA_1, cuyo
       // ISR automático legítimamente vale 0, no el mensual completo).
+      const devengoSnapshot: DevengoSnapshot = {
+        estadoEmpleado: String(e.estado ?? "Activo"),
+        fechaInicioLaboral: vigencia.inicioLaboral,
+        fechaEgreso: vigencia.finLaboral,
+        inicioDevengo: devengo.inicioDevengo,
+        finDevengo: devengo.finDevengo,
+        diasPeriodoNominales: devengo.diasPeriodoNominales,
+        diasDevengados: devengo.prorrateado ? devengo.diasDevengados : devengo.diasPeriodoNominales,
+        baseDiasMensual: BASE_DIAS_MES,
+        prorrateado: devengo.prorrateado,
+        sueldoMensual: sueldo,
+        salarioDiario: Math.round((sueldo / BASE_DIAS_MES) * 10000) / 10000,
+        sueldoPeriodo: sueldoLinea,
+        bonoIncentivoMensual: bonoInc,
+        bonoIncentivoPeriodo: bonoIncLinea,
+        bonoHerramientasMensual: bonoHerr,
+        bonoHerramientasPeriodo: bonoHerrLinea,
+      };
       const snapshot: ConceptosSnapshot = fiscal2026
         ? {
-            version: 2, empresaId, periodoId, empleadoId: empId, sueldoMensual: sueldo, ...conceptosEmpleado,
+            version: 2, empresaId, periodoId, empleadoId: empId, sueldoMensual: sueldo, ...conceptosEmpleado, devengo: devengoSnapshot,
             fiscal: {
               motor: "ISR_TRABAJO_2026", ejercicio: EJERCICIO_MOTOR_ISR_2026,
               antecedenteRevision: fiscal2026.antecedenteRevision,
@@ -1033,7 +1088,7 @@ export async function generarLineasPeriodo(
               configuracionConceptosRevision: fiscal2026.configuracionConceptosRevision,
             },
           }
-        : { version: 1, empresaId, periodoId, empleadoId: empId, sueldoMensual: sueldo, ...conceptosEmpleado };
+        : { version: 1, empresaId, periodoId, empleadoId: empId, sueldoMensual: sueldo, ...conceptosEmpleado, devengo: devengoSnapshot };
 
       // No convertir una diferencia inconsistente en retención negativa
       // (o devolución automática). Requiere revisión explícita de RRHH.
@@ -1165,11 +1220,23 @@ export async function calcularCuadreIgssMensual(
 ): Promise<CuadreIgssMensual> {
   await asegurarSchemaPlanillas();
 
-  const empleados = await query<RowDataPacket[]>(
-    `SELECT id, codigo, nombre, tipo_contrato, sueldo_base
-     FROM empleados WHERE empresa_id = ? AND estado = 'Activo' ORDER BY nombre`,
+  const candidatos = await query<RowDataPacket[]>(
+    `SELECT id, codigo, nombre, tipo_contrato, sueldo_base, estado, fecha_alta, fecha_inicio_laboral, fecha_egreso
+     FROM empleados WHERE empresa_id = ? AND estado IN ('Activo', 'Baja') ORDER BY nombre`,
     [empresaId],
   );
+  // El IGSS esperado del mes es sobre lo REALMENTE devengado (base 30): quien ingresó o se dio de baja a mitad de mes no
+  // cotiza como si hubiera trabajado el mes completo; quien salió antes del mes no aparece.
+  const vigenciaMes = (e: RowDataPacket) => ({
+    inicioLaboral: toIsoDate(e.fecha_inicio_laboral as string | Date | null) ?? toIsoDate(e.fecha_alta as string | Date | null),
+    finLaboral: toIsoDate(e.fecha_egreso as string | Date | null),
+  });
+  const diasMes = (e: RowDataPacket) => diasBase30EnMes(anio, mes, vigenciaMes(e));
+  const empleados = candidatos.filter((e) => {
+    const estado = String(e.estado ?? "Activo");
+    if (estado === "Baja" && !e.fecha_egreso) return false;
+    return diasMes(e) > 0;
+  });
 
   const periodosRows = await query<RowDataPacket[]>(
     `SELECT id, tipo_periodo FROM rrhh_planilla_periodos
@@ -1205,7 +1272,7 @@ export async function calcularCuadreIgssMensual(
     const empId = Number(e.id);
     const out = esOutsourcing(String(e.tipo_contrato ?? "fijo"));
     const sueldo = Number(e.sueldo_base ?? 0) || 0;
-    const igssMensualEsperado = out ? 0 : redondearQ(sueldo * IGSS_LABORAL_PCT);
+    const igssMensualEsperado = out ? 0 : importePorDias(sueldo * IGSS_LABORAL_PCT, diasMes(e));
     const igssQ1 = q1Map.has(empId) ? (q1Map.get(empId) as number) : null;
     const igssQ2 = q2Map.has(empId) ? (q2Map.get(empId) as number) : null;
     const totalRetenido = redondearQ((igssQ1 ?? 0) + (igssQ2 ?? 0));
@@ -1371,7 +1438,7 @@ export async function autorizarPeriodoPlanilla(empresaId: number, periodoId: num
     const empleados = new Set(snapshots.map((s) => s.empleadoId));
     if (empleados.size !== snapshots.length) throw new Error("La planilla contiene empleados duplicados.");
     const [salarios] = await conn.query<RowDataPacket[]>(
-      `SELECT id, codigo, sueldo_base, bono_incentivo, bono_herramientas FROM empleados WHERE empresa_id = ? AND id IN (${snapshots.map(() => "?").join(",")}) ORDER BY id FOR UPDATE`,
+      `SELECT id, codigo, sueldo_base, bono_incentivo, bono_herramientas, fecha_alta, fecha_inicio_laboral, fecha_egreso FROM empleados WHERE empresa_id = ? AND id IN (${snapshots.map(() => "?").join(",")}) ORDER BY id FOR UPDATE`,
       [empresaId, ...snapshots.map((s) => s.empleadoId)],
     );
     const empleadoActualPorId = new Map(salarios.map((e) => [Number(e.id), {
@@ -1379,6 +1446,8 @@ export async function autorizarPeriodoPlanilla(empresaId: number, periodoId: num
       sueldo: Number(e.sueldo_base ?? 0) || 0,
       bonoIncentivo: e.bono_incentivo != null && e.bono_incentivo !== "" ? Number(e.bono_incentivo) : 250,
       bonoHerramientas: Number(e.bono_herramientas ?? 0) || 0,
+      inicioLaboral: toIsoDate(e.fecha_inicio_laboral as string | Date | null) ?? toIsoDate(e.fecha_alta as string | Date | null),
+      finLaboral: toIsoDate(e.fecha_egreso as string | Date | null),
     }]));
     for (const s of snapshots) {
       const sueldoActual = empleadoActualPorId.get(s.empleadoId)?.sueldo;
@@ -1402,7 +1471,7 @@ export async function autorizarPeriodoPlanilla(empresaId: number, periodoId: num
       const recalculo = await calcularFiscal2026Empleado(
         conn, empresaId, s.fiscal.ejercicio,
         { id: s.periodoId, mes: periodo.mes, fechaInicio: periodo.fechaInicio },
-        { id: s.empleadoId, codigo: actual.codigo, sueldo: actual.sueldo, bonoIncentivo: actual.bonoIncentivo, bonoHerramientas: actual.bonoHerramientas },
+        { id: s.empleadoId, codigo: actual.codigo, sueldo: actual.sueldo, bonoIncentivo: actual.bonoIncentivo, bonoHerramientas: actual.bonoHerramientas, inicioLaboral: actual.inicioLaboral, finLaboral: actual.finLaboral },
         { cuotas: s.cuotas, manuales: s.manuales, horasExtra: s.horasExtra, descuentosLegado: s.descuentosLegado, prestacionesLegado: s.prestacionesLegado },
       );
       // Corrección de revisión externa (segunda ronda, punto 2):

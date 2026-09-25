@@ -54,9 +54,10 @@ export async function obtenerFaltasPlanilla(
        FROM rrhh_asistencia_ausencias a
        INNER JOIN empleados e ON e.id = a.empleado_id AND e.empresa_id = a.empresa_id
        WHERE a.empresa_id = ? AND a.estado = 'CONFIRMADA' AND a.planilla_periodo_id IS NULL
-         AND a.fecha BETWEEN ? AND ? AND e.estado = 'Activo'
+         AND a.fecha BETWEEN ? AND ?
+         AND (e.estado = 'Activo' OR (e.estado = 'Baja' AND e.fecha_egreso IS NOT NULL AND e.fecha_egreso >= ?))
        ORDER BY a.fecha, a.id FOR UPDATE`,
-      [empresaId, periodo.fechaInicio, periodo.fechaFin],
+      [empresaId, periodo.fechaInicio, periodo.fechaFin, periodo.fechaInicio],
     );
   } catch (e) {
     if (sinTabla(e)) return resultado;
