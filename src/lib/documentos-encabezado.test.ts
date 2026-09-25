@@ -186,6 +186,16 @@ describe("Gastos — código persistido (GASTO-<id con 6 dígitos>) en PDF, Exce
     expect(valores).not.toContain("GASTO-000005");
     expect(ws.getRow(4).getCell(1).value).toBeTruthy(); // encabezados de la tabla en la misma fila de siempre
   });
+  it("APP NUEVA + fila creada por la app vieja (codigo NULL → ''): Excel sin celda de código, encabezado intacto, sin romper", async () => {
+    for (const codigo of ["", null]) {
+      const ws = await hoja(await exportarGastoOperativoExcel({ ...gasto, codigo } as never));
+      const ancho = ws.columnCount;
+      expect(ws.getCell("A2").value).toBe("GASTO OPERATIVO");
+      expect(ws.getCell(2, ancho).isMerged).toBe(true); // título combinado en todo el ancho, como antes de existir el código
+      expect(ws.getCell(2, ancho - 2).value).toBe("GASTO OPERATIVO"); // (celda esclava de la combinación: sin código propio)
+      expect(JSON.stringify(ws.getRow(2).values)).not.toContain("GASTO-");
+    }
+  });
   it("nombres de archivo: PDF gasto-<codigo>.pdf y Excel <codigo>.xlsx (misma convención que Fondos); rutas siguen usando el id", () => {
     expect(src("src/lib/tms/gastos-individual-pdf.ts")).toContain("`gasto-${gasto.codigo || gasto.id}.pdf`");
     const r = src("src/app/api/empresas/[slug]/tms/gastos/[id]/exportar/route.ts");
