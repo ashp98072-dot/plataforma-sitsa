@@ -1,10 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { EvidenciasModal } from "@/components/rrhh/evidencias-modal";
 import { EmpleadoPicker } from "@/components/rrhh/empleado-picker";
+import { useEmpresaSession } from "@/lib/empresa-session";
+import {
+  eliminarUnaVez,
+  puedeEliminarVacaciones,
+  textoConfirmacion,
+  tipoDescuentaSaldo,
+  tipoEliminable,
+  type FilaHistorial,
+} from "@/lib/rrhh/vacaciones-eliminar-ui";
 import { SolicitudesVacacionesPanel } from "@/components/rrhh/solicitudes-vacaciones-panel";
 import { VacacionesAlertasPanel } from "@/components/rrhh/vacaciones-alertas-panel";
 
@@ -37,6 +46,8 @@ function fmtUi(iso: string | null | undefined): string {
 
 export default function VacacionesPage() {
   const slug = String(useParams().slug);
+  const { rol, permisos } = useEmpresaSession();
+  const puedeEliminar = puedeEliminarVacaciones(rol, permisos);
   const [empleados, setEmpleados] = useState<Emp[]>([]);
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
   const [empleadoId, setEmpleadoId] = useState(0);
@@ -57,6 +68,11 @@ export default function VacacionesPage() {
     id: number;
     titulo: string;
   } | null>(null);
+  // Eliminar registro: confirmación explícita, candado contra doble clic y errores que conservan la fila.
+  const [porEliminar, setPorEliminar] = useState<Record<string, unknown> | null>(null);
+  const [eliminando, setEliminando] = useState(false);
+  const [errorEliminar, setErrorEliminar] = useState("");
+  const eliminandoRef = useRef(false);
 
   const cargar = useCallback(async () => {
     const e = await fetch(`/api/empresas/${slug}/empleados`).then((r) =>
@@ -124,6 +140,24 @@ export default function VacacionesPage() {
           : ""),
     );
     await cargar();
+  }
+
+  async function confirmarEliminar() {
+    if (!porEliminar) return;
+    const fila = porEliminar as FilaHistorial;
+    setEliminando(true);
+    setErrorEliminar("");
+    const r = await eliminarUnaVez(eliminandoRef, (u, i) => fetch(u, i), slug, Number(fila.id), tipoDescuentaSaldo(String(fila.tipo ?? "")));
+    setEliminando(false);
+    if (r === null) return; // ya había un DELETE en curso
+    if (r.tipo === "error") {
+      setErrorEliminar(r.error); // la fila se conserva
+      return;
+    }
+    setPorEliminar(null);
+    setError("");
+    setMsg(r.mensaje + (r.advertencias.length ? ` ${r.advertencias.join(" ")}` : ""));
+    await cargar(); // historial, saldo y períodos
   }
 
   const usaSaldo =
@@ -256,6 +290,7 @@ export default function VacacionesPage() {
               <th className="px-3 py-2">Hasta</th>
               <th className="px-3 py-2">Días</th>
               <th className="px-3 py-2">Evid.</th>
+              {puedeEliminar ? <th className="px-3 py-2">Acciones</th> : null}
             </tr>
           </thead>
           <tbody>
@@ -292,11 +327,58 @@ export default function VacacionesPage() {
                     📎 {Number(r.evidencias ?? 0)}
                   </button>
                 </td>
+                {puedeEliminar ? (
+                  <td className="px-3 py-2">
+                    {tipoEliminable(String(r.tipo)) ? (
+                      <button
+                        type="button"
+                        className="text-red-300 underline disabled:opacity-40"
+                        disabled={eliminando}
+                        aria-label={`Eliminar registro de ${String(r.emp_nombre ?? r.emp_codigo)}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setErrorEliminar("");
+                          setPorEliminar(r);
+                        }}
+                      >
+                        Eliminar
+                      </button>
+                    ) : null}
+                  </td>
+                ) : null}
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      {porEliminar ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-label="Eliminar registro de vacaciones">
+          {(() => {
+            const t = textoConfirmacion(porEliminar as FilaHistorial);
+            return (
+              <div className="w-full max-w-md space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 text-sm">
+                <h2 className="text-lg font-semibold">{t.titulo}</h2>
+                <dl className="space-y-1">
+                  <div><dt className="text-xs text-[var(--muted)]">Empleado</dt><dd>{t.empleado}</dd></div>
+                  <div><dt className="text-xs text-[var(--muted)]">Periodo</dt><dd>{t.periodo}</dd></div>
+                  <div><dt className="text-xs text-[var(--muted)]">Días</dt><dd>{t.dias}</dd></div>
+                </dl>
+                <p>{t.aviso}</p>
+                {errorEliminar ? <p role="alert" className="text-red-300">{errorEliminar}</p> : null}
+                <div className="flex justify-end gap-2">
+                  <button type="button" className="rounded border border-[var(--border)] px-3 py-1.5" disabled={eliminando} onClick={() => setPorEliminar(null)}>
+                    Cancelar
+                  </button>
+                  <button type="button" className="rounded bg-red-700 px-3 py-1.5 text-white disabled:opacity-50" disabled={eliminando} onClick={() => void confirmarEliminar()}>
+                    {eliminando ? "Eliminando…" : t.botonConfirmar}
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      ) : null}
 
       {evModal ? (
         <EvidenciasModal
