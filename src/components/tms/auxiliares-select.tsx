@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import { textoOcupacion, type OcupacionRecurso } from "./piloto-select";
+import { filtrarPersonas } from "@/lib/busqueda-personas";
 
 export type AuxiliarOpt = {
   id: number;
@@ -43,11 +44,10 @@ export function AuxiliaresSelect({ auxiliares, empleadoIds, nombresLibres, max, 
   const total = empleadoIds.length + nombresLibres.length;
   const lleno = total >= max;
 
-  const q = texto.trim().toLowerCase();
-  const filtered = auxiliares
-    .filter((a) => !empleadoIds.includes(a.id))
-    .filter((a) => (q ? `${a.nombre} ${a.codigo}`.toLowerCase().includes(q) : true))
-    .slice(0, 20);
+  const q = texto.trim();
+  // Igual que antes, los ya elegidos no se ofrecen; la búsqueda/orden es la compartida (sin tildes, todas las palabras, ranking).
+  const disponibles = auxiliares.filter((a) => !empleadoIds.includes(a.id));
+  const filtered = q ? filtrarPersonas(disponibles, q, { nombre: (a) => a.nombre, buscable: (a) => a.codigo }, 20) : disponibles.slice(0, 20);
 
   useEffect(() => {
     if (!open) return;
@@ -180,6 +180,8 @@ export function AuxiliaresSelect({ auxiliares, empleadoIds, nombresLibres, max, 
           ))}
         </div>
       ) : null}
+
+      {open && !lleno && q.length > 0 && filtered.length === 0 ? <span className="mt-0.5 block text-[10px]">No se encontraron empleados.</span> : null}
 
       {open && !lleno && filtered.length > 0 ? (
         <ul

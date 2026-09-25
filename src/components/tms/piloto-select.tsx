@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import { formatearHora12 } from "@/lib/tms/hora-formato";
+import { filtrarPersonas } from "@/lib/busqueda-personas";
 
 export type PilotoOpt = {
   id: number;
@@ -62,14 +63,14 @@ export function PilotoSelect({
     empleadoId > 0
       ? (pilotos.find((p) => p.id === empleadoId)?.nombre ?? nombre)
       : nombre;
-  const q = display.trim().toLowerCase();
+  const q = display.trim();
 
+  // Búsqueda compartida (sin tildes/mayúsculas, todas las palabras, ranking). El catálogo `pilotos` ya viene acotado por
+  // empresa y tipo; aquí solo se filtra/ordena, y los ocupados siguen mostrándose (marcados y bloqueados).
   const filtered = (
     q.length < 1
       ? pilotos.slice(0, 12)
-      : pilotos
-          .filter((p) => `${p.nombre} ${p.codigo}`.toLowerCase().includes(q))
-          .slice(0, 20)
+      : filtrarPersonas(pilotos, q, { nombre: (p) => p.nombre, buscable: (p) => p.codigo }, 20)
   );
 
   useEffect(() => {
@@ -150,6 +151,8 @@ export function PilotoSelect({
             ? `${pilotos.length} pilotos en planilla — escribe para buscar`
             : "Sin pilotos en RRHH — puedes escribir el nombre"}
       </span>
+
+      {open && q.length > 0 && filtered.length === 0 ? <span className="mt-0.5 block text-[10px]">No se encontraron empleados.</span> : null}
 
       {open && filtered.length > 0 ? (
         <ul
