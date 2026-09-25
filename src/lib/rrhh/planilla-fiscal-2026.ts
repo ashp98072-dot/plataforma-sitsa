@@ -12,6 +12,7 @@ import {
   type InputIsrTrabajo2026,
 } from "./fiscal-isr-2026";
 import { leerConceptosSnapshot, type PendientesPlanilla } from "./planilla-conceptos";
+import { diasBase30EnMes } from "./planilla-devengo";
 
 /**
  * RRHH-PLANILLAS-ISR-2026-INTEGRACION — adapter entre Planillas y el motor
@@ -175,11 +176,6 @@ function q(n: number): string {
   return (v === 0 ? 0 : v).toFixed(2);
 }
 
-/** Meses restantes del ejercicio, incluyendo el mes del período actual (1..12). */
-function mesesRestantes(mes: number): number {
-  return Math.max(1, 13 - mes);
-}
-
 function mesDelPeriodo(periodo: { mes: number | null; fechaInicio: string }): number {
   if (periodo.mes != null) return periodo.mes;
   const mes = Number(periodo.fechaInicio.slice(5, 7));
@@ -192,6 +188,13 @@ export type EmpleadoFiscal2026 = {
   sueldo: number;
   bonoIncentivo: number;
   bonoHerramientas: number;
+  /**
+   * Relación laboral (RRHH-PLANILLA-PROPORCIONAL): sin ellas se asume vigente todo el ejercicio (comportamiento anterior).
+   * Con ellas la proyección NO paga meses anteriores al ingreso ni posteriores al egreso, y el mes de ingreso/egreso se
+   * prorratea en base 30.
+   */
+  inicioLaboral?: string | null;
+  finLaboral?: string | null;
 };
 
 export type PeriodoFiscal2026 = { id: number; mes: number | null; fechaInicio: string };
@@ -332,11 +335,17 @@ export async function construirInputFiscalEmpleado2026(
   // restando lo del mes actual que YA quedó en acumulados (ver docblock,
   // punto 3), más los meses futuros completos; más los eventos puntuales de
   // ESTE período (horas extra, prestaciones libres pendientes de clasificar).
-  const restantes = mesesRestantes(mes);
-  const mesesFuturosCompletos = Math.max(0, 12 - mes);
+  // Meses del ejercicio (desde el actual) con devengo real, en base 30: un mes completo vale 30/30; el de ingreso/egreso
+  // vale la fracción trabajada; después de un egreso conocido, 0. NO se proyecta sueldo de meses fuera de la relación laboral.
+  const vigencia = { inicioLaboral: empleado.inicioLaboral ?? null, finLaboral: empleado.finLaboral ?? null };
+  const fraccionMes = (m: number) => diasBase30EnMes(ejercicio, m, vigencia) / 30;
+  const mesesConDevengo = Array.from({ length: 13 - mes }, (_, i) => mes + i).filter((m) => fraccionMes(m) > 0);
+  const restantes = Math.max(1, mesesConDevengo.length);
   const proyectarRecurrente = (montoMensual: number, acumuladoMesActual: number): number => {
-    const restanteMesActual = Math.max(0, montoMensual - acumuladoMesActual);
-    return restanteMesActual + montoMensual * mesesFuturosCompletos;
+    const restanteMesActual = Math.max(0, montoMensual * fraccionMes(mes) - acumuladoMesActual);
+    let mesesFuturos = 0;
+    for (let m = mes + 1; m <= 12; m++) mesesFuturos += fraccionMes(m);
+    return restanteMesActual + montoMensual * mesesFuturos;
   };
   const proyeccionSueldoTotal = proyectarRecurrente(empleado.sueldo, acumuladoMesActualSueldo);
 

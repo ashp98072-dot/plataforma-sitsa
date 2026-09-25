@@ -54,12 +54,13 @@ export async function GET(_req: Request, ctx: Ctx) {
     "Bono herramientas",
     "Otros ingresos",
     "IGSS laboral 4.83%",
-    "IGSS patronal 12.67%",
+    "Aporte patronal est. IGSS+IRTRA+INTECAP 12.67%",
     "Descuentos",
     "ISR",
     "Neto a pagar",
     "Estado pago",
     "Ref. pago",
+    "Días pagados",
   ]);
   ws.getRow(3).font = { bold: true };
   for (const l of lineas) {
@@ -80,6 +81,7 @@ export async function GET(_req: Request, ctx: Ctx) {
       l.neto,
       l.estadoPago,
       l.refPago,
+      l.devengo ? l.devengo.diasDevengados : "",
     ]);
   }
 
@@ -107,7 +109,7 @@ export async function GET(_req: Request, ctx: Ctx) {
   cu.addRow(["Bonos", cuadre.totales.bonos]);
   cu.addRow(["Otros ingresos (prestaciones del periodo)", cuadre.totales.otrosIngresos]);
   cu.addRow(["IGSS laboral retenido", cuadre.totales.igssLaboral]);
-  cu.addRow(["IGSS patronal (costo empresa)", cuadre.totales.igssPatronal]);
+  cu.addRow(["Aporte patronal estimado IGSS + IRTRA + INTECAP (costo empresa)", cuadre.totales.igssPatronal]);
   cu.addRow(["Descuentos", cuadre.totales.descuentos]);
   cu.addRow(["ISR", cuadre.totales.isr]);
   cu.addRow(["Neto a pagar", cuadre.totales.neto]);
@@ -116,7 +118,7 @@ export async function GET(_req: Request, ctx: Ctx) {
   cu.addRow([]);
   cu.addRow([
     "Notas",
-    "IGSS laboral 4.83% e IGSS patronal 12.67% sobre sueldo ordinario (sin bono incentivo). Outsourcing no calcula IGSS. ISR se calcula automáticamente (proyección anual SAT) y es ajustable manualmente por línea si hace falta. En periodos de Quincena 1/Quincena 2, sueldo, bonos, IGSS e ISR se reparten entre ambas quincenas del mes. Exportar y cruzar con planilla electrónica IGSS.",
+    "IGSS laboral 4.83% y aporte patronal estimado 12.67% (IGSS patronal 10.67% + IRTRA 1% + INTECAP 1%) sobre sueldo ordinario (sin bono incentivo). Outsourcing no calcula IGSS. ISR se calcula automáticamente (proyección anual SAT) y es ajustable manualmente por línea si hace falta. En periodos de Quincena 1/Quincena 2 el sueldo, los bonos y el IGSS se calculan por los días realmente devengados (base 30 días/mes; ingreso o baja a mitad de período = proporcional; ver «Días pagados») y el ISR se aplica una vez al mes. Exportar y cruzar con planilla electrónica IGSS.",
   ]);
 
   const buf = Buffer.from(await wb.xlsx.writeBuffer());

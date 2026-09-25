@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { FotoEmpleadoMiniatura } from "@/components/rrhh/foto-empleado-miniatura";
+import { resumenDevengoUi } from "@/lib/rrhh/planilla-devengo";
 import {
   FORMAS_PAGO,
   etiquetaFormaPago,
@@ -46,6 +47,8 @@ type Linea = {
   tipoContrato: string;
   formaPago: FormaPago;
   sueldoMensual: number;
+  /** Desglose del devengo (días pagados, ingreso/egreso); ausente en líneas anteriores. */
+  devengo?: { fechaInicioLaboral: string | null; fechaEgreso: string | null; diasDevengados: number; diasPeriodoNominales: number; prorrateado: boolean } | null;
   sueldoBase: number;
   bonoIncentivo: number;
   bonoHerramientas: number;
@@ -707,7 +710,8 @@ export default function PlanillasPage() {
               ) : null}
 
               <p className="text-xs text-[var(--muted)]">
-                Guatemala: IGSS laboral 4.83% y patronal 12.67% sobre sueldo
+                Guatemala: IGSS laboral 4.83% y aporte patronal estimado 12.67%
+                (IGSS patronal 10.67% + IRTRA 1% + INTECAP 1%) sobre sueldo
                 ordinario (sin bono incentivo Q250). Outsourcing no calcula IGSS.
                 ISR se edita manualmente por línea (RetenISR/SAT).
                 {periodo.tipoPeriodo === "QUINCENA_1" || periodo.tipoPeriodo === "QUINCENA_2"
@@ -810,13 +814,14 @@ export default function PlanillasPage() {
                       <th className="px-2 py-2">Contrato</th>
                       <th className="px-2 py-2">Forma pago</th>
                       <th className="px-2 py-2 text-right">Sueldo mensual</th>
+                      <th className="px-2 py-2 text-right">Días pagados</th>
                       <th className="px-2 py-2 text-right">Sueldo período</th>
                       <th className="px-2 py-2 text-right">Bono incentivo</th>
                       <th className="px-2 py-2 text-right">Bono herram.</th>
                       <th className="px-2 py-2 text-right">Otros ingresos</th>
                       <th className="px-2 py-2 text-right">Total ingresos</th>
                       <th className="px-2 py-2 text-right">IGSS laboral</th>
-                      <th className="px-2 py-2 text-right">IGSS patronal</th>
+                      <th className="px-2 py-2 text-right" title="Aporte patronal estimado: IGSS patronal 10.67% + IRTRA 1% + INTECAP 1% (12.67%)">Aporte patronal est.</th>
                       <th className="px-2 py-2">ISR</th>
                       <th className="px-2 py-2 text-right">Descuentos</th>
                       <th className="px-2 py-2 text-right">Total desc.</th>
@@ -830,6 +835,7 @@ export default function PlanillasPage() {
                       const totalIngresos = redondearQ(
                         l.sueldoBase + l.bonoIncentivo + l.bonoHerramientas + l.otrosIngresos,
                       );
+                      const dev = resumenDevengoUi(l.devengo, { fechaInicio: periodo?.fechaInicio ?? "", fechaFin: periodo?.fechaFin ?? "" });
                       // Fase P1: IGSS patronal es un costo/aporte patronal —
                       // no se incluye aquí, no debe verse como si redujera
                       // el líquido del trabajador.
@@ -870,6 +876,11 @@ export default function PlanillasPage() {
                             </select>
                           </td>
                           <td className="px-2 py-2 text-right">Q{q(l.sueldoMensual)}</td>
+                          <td className="px-2 py-2 text-right" title={dev.titulo}>
+                            {dev.dias}
+                            {dev.ingreso ? <span className="ml-1 block rounded bg-emerald-900/40 px-1 text-[10px] text-emerald-300">{dev.ingreso}</span> : null}
+                            {dev.baja ? <span className="ml-1 block rounded bg-rose-900/40 px-1 text-[10px] text-rose-300">{dev.baja}</span> : null}
+                          </td>
                           <td className="px-2 py-2 text-right">Q{q(l.sueldoBase)}</td>
                           <td className="px-2 py-2 text-right">Q{q(l.bonoIncentivo)}</td>
                           <td className="px-2 py-2 text-right">Q{q(l.bonoHerramientas)}</td>
@@ -944,7 +955,7 @@ export default function PlanillasPage() {
                     {!lineasFiltradas.length ? (
                       <tr>
                         <td
-                          colSpan={17}
+                          colSpan={18}
                           className="px-3 py-4 text-[var(--muted)]"
                         >
                           {lineas.length

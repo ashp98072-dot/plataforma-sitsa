@@ -15,6 +15,8 @@ let estado: string;
 let q1: Record<string, unknown>[];
 let dependientes: { id: number }[];
 let autorizada: boolean;
+// Una QUINCENA_2 real empieza el día 16 (el devengo proporcional deriva Q1/Q2 de las fechas del período).
+const usarQ2 = () => { periodo.tipo_periodo = "QUINCENA_2"; periodo.fecha_inicio = "2025-08-16"; periodo.fecha_fin = "2025-08-31"; };
 const generar = (conservarPagos = true) => generarLineasPeriodo(3, 1, { usuario: "prueba", conservarPagos });
 beforeEach(() => {
   vi.resetAllMocks();
@@ -22,7 +24,7 @@ beforeEach(() => {
   autorizada = false;
   q1 = [];
   dependientes = [];
-  periodo.tipo_periodo = "QUINCENA_1";
+  periodo.tipo_periodo = "QUINCENA_1"; periodo.fecha_inicio = "2025-08-01"; periodo.fecha_fin = "2025-08-15";
   vi.mocked(getPool).mockReturnValue({ getConnection: async () => conn } as unknown as ReturnType<typeof getPool>);
   vi.mocked(query).mockImplementation(async (sql) => {
     if (sql.includes("FROM rrhh_planilla_periodos")) return [periodo] as never;
@@ -187,13 +189,13 @@ describe("regeneración segura de planilla", () => {
     expect(consulta?.[0]).toContain("FOR UPDATE");
   });
   it("segunda quincena sin primera solo cobra la mitad mensual", async () => {
-    periodo.tipo_periodo = "QUINCENA_2";
+    usarQ2();
     const result = await generar();
     expect(result.empleadosSinIgssQ1).toBe(1);
     expect(prev[0]).toMatchObject({ sueldo_base: 2000, bono_incentivo: 125, igss_laboral: 96.6, igss_patronal: 253.4, isr: 50 });
   });
   it("segunda quincena concilia contra los importes persistidos de primera", async () => {
-    periodo.tipo_periodo = "QUINCENA_2";
+    usarQ2();
     q1 = [{ id_empleado: 7, sueldo_base: 1999.99, bono_incentivo: 125.01,
       bono_herramientas: 0, igss_laboral: 96.59, igss_patronal: 253.39, isr: 35 }];
     await generar();
@@ -206,7 +208,7 @@ describe("regeneración segura de planilla", () => {
     expect(prev[0].isr).toBe(60); // ajuste manual del período, no se divide de nuevo
   });
   it("rechaza dos primeras quincenas para el mismo empleado", async () => {
-    periodo.tipo_periodo = "QUINCENA_2";
+    usarQ2();
     q1 = [{ id_empleado: 7 }, { id_empleado: 7 }];
     await expect(generar()).rejects.toThrow("más de una primera quincena");
     expect(conn.rollback).toHaveBeenCalledOnce();
@@ -216,7 +218,7 @@ describe("regeneración segura de planilla", () => {
     { sueldo_base: 4001 }, { bono_incentivo: 251 }, { bono_herramientas: 1 },
     { igss_laboral: 194 }, { igss_patronal: 508 }, { isr: 101 },
   ])("rechaza saldo negativo al conciliar %j", async (importe) => {
-    periodo.tipo_periodo = "QUINCENA_2";
+    usarQ2();
     q1 = [{ id_empleado: 7, ...importe }];
     await expect(generar()).rejects.toThrow("negativo o inválido");
     expect(conn.rollback).toHaveBeenCalledOnce();

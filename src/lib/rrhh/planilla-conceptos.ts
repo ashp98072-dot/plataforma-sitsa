@@ -50,9 +50,32 @@ const fiscalSnapshotSchema = z.object({
   configuracionConceptosRevision: z.string().min(1),
 }).strict();
 export type FiscalSnapshot2026 = z.infer<typeof fiscalSnapshotSchema>;
+// RRHH-PLANILLA-PROPORCIONAL: explica CÓMO se calculó el sueldo/bono del período (relación laboral ∩ período, base 30).
+// OPCIONAL: los snapshots históricos no lo traen y siguen siendo válidos (sin migración: es JSON).
+const fechaOpt = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable();
+export const devengoSnapshotSchema = z.object({
+  estadoEmpleado: z.string(),
+  fechaInicioLaboral: fechaOpt,
+  fechaEgreso: fechaOpt,
+  inicioDevengo: fechaOpt,
+  finDevengo: fechaOpt,
+  diasPeriodoNominales: z.number().finite().nonnegative(),
+  diasDevengados: z.number().finite().nonnegative(),
+  baseDiasMensual: z.literal(30),
+  prorrateado: z.boolean(),
+  sueldoMensual: z.number().finite().nonnegative(),
+  salarioDiario: z.number().finite().nonnegative(),
+  sueldoPeriodo: z.number().finite().nonnegative(),
+  bonoIncentivoMensual: z.number().finite().nonnegative(),
+  bonoIncentivoPeriodo: z.number().finite().nonnegative(),
+  bonoHerramientasMensual: z.number().finite().nonnegative(),
+  bonoHerramientasPeriodo: z.number().finite().nonnegative(),
+}).strict();
+export type DevengoSnapshot = z.infer<typeof devengoSnapshotSchema>;
 export const snapshotSchema = pendientesSchema.extend({
   version: z.union([z.literal(1), z.literal(2)]),
   empresaId: id, periodoId: id, empleadoId: id, sueldoMensual: monto,
+  devengo: devengoSnapshotSchema.optional(),
   fiscal: fiscalSnapshotSchema.optional(),
 }).strict().superRefine((v, ctx) => {
   if (v.version === 1 && v.fiscal !== undefined) ctx.addIssue({ code: "custom", message: "snapshot v1 no debe incluir fiscal" });
