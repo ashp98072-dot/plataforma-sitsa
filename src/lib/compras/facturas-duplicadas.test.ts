@@ -227,6 +227,6 @@ describe("concurrencia — qué protege y qué NO (sin índice UNIQUE en BD)", (
     expect(fuente).toContain("NO protege contra inserciones manuales fuera de ella");
     expect(fuente).toContain("FOR UPDATE");
     // no existe (todavía) ninguna migración con el índice: se propone en el preflight y requiere autorización
-    expect(() => readFileSync("sql/migrate-2026-09-compras-facturas-unicas.sql", "utf8")).toThrow();
+    expect(readFileSync("sql/migrate-2026-09-compras-facturas-unicas.sql", "utf8")).toContain("uq_compras_factura_proveedor"); // el UNIQUE definitivo existe como migración (aplicarlo es manual)
   });
 });
