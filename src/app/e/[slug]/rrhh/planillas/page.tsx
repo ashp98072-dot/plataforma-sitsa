@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { FotoEmpleadoMiniatura } from "@/components/rrhh/foto-empleado-miniatura";
 import { resumenDevengoUi } from "@/lib/rrhh/planilla-devengo";
+import { resumenFiscalLinea } from "@/lib/rrhh/fiscal-migracion-ui";
 import {
   FORMAS_PAGO,
   etiquetaFormaPago,
@@ -48,6 +49,8 @@ type Linea = {
   formaPago: FormaPago;
   sueldoMensual: number;
   /** Desglose del devengo (días pagados, ingreso/egreso); ausente en líneas anteriores. */
+  /** Snapshot de la línea (incluye `fiscal.origenFiscal` cuando el ISR pasó por el motor 2026). */
+  conceptosSnapshot?: unknown;
   devengo?: { fechaInicioLaboral: string | null; fechaEgreso: string | null; diasDevengados: number; diasPeriodoNominales: number; prorrateado: boolean } | null;
   sueldoBase: number;
   bonoIncentivo: number;
@@ -835,6 +838,7 @@ export default function PlanillasPage() {
                       const totalIngresos = redondearQ(
                         l.sueldoBase + l.bonoIncentivo + l.bonoHerramientas + l.otrosIngresos,
                       );
+                      const fiscalLinea = resumenFiscalLinea(l.conceptosSnapshot);
                       const dev = resumenDevengoUi(l.devengo, { fechaInicio: periodo?.fechaInicio ?? "", fechaFin: periodo?.fechaFin ?? "" });
                       // Fase P1: IGSS patronal es un costo/aporte patronal —
                       // no se incluye aquí, no debe verse como si redujera
@@ -853,6 +857,9 @@ export default function PlanillasPage() {
                               {l.codigoEmpleado}
                               {l.dpi ? ` · DPI ${l.dpi}` : ""}
                             </div>
+                            {fiscalLinea ? (
+                              <div className="text-[10px] text-sky-300" title={fiscalLinea.detalle}>{fiscalLinea.texto}</div>
+                            ) : null}
                           </td>
                           <td className="px-2 py-2 text-xs">
                             {etiquetaTipoContrato(l.tipoContrato)}

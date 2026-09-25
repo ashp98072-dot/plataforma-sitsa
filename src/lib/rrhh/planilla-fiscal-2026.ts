@@ -1,6 +1,7 @@
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { IGSS_LABORAL_PCT, redondearQ } from "./contratos-pago";
 import { leerAntecedentesFiscalesTx } from "./fiscal-antecedentes";
+import { MSG_MIGRACION_SOLAPADA, TIPO_ORIGEN_MIGRACION, tipoOrigenFiscal, type TipoOrigenFiscal } from "./fiscal-modelo";
 import {
   CONFIGURACION_CONCEPTOS_2026_REVISION,
   resolverConceptoFiscal2026,
@@ -199,7 +200,17 @@ export type EmpleadoFiscal2026 = {
 
 export type PeriodoFiscal2026 = { id: number; mes: number | null; fechaInicio: string };
 
+/** Metadata de origen del acumulado previo usado (auditoría/snapshot). `MIGRACION_SISTEMA_ANTERIOR` = ACUMULADO_INICIAL_MIGRACION. */
+export type OrigenFiscalUsado = { tipo: TipoOrigenFiscal; origen: "MIGRACION_SISTEMA_ANTERIOR" | "ANTECEDENTES" | "SIN_ANTECEDENTES"; fechaCorte: string | null; revision: number };
+
+const diaSiguiente = (iso: string) => {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+};
+
 export type ResultadoAdapterFiscal2026 = {
+  origenFiscal: OrigenFiscalUsado;
   input: InputIsrTrabajo2026;
   antecedenteRevision: number;
   configuracionConceptosRevision: string;
@@ -235,6 +246,21 @@ export async function construirInputFiscalEmpleado2026(
         "Captura y confirma sus antecedentes (o la declaración SIN_ANTECEDENTES) antes de generar la planilla.",
     );
   }
+  // ORIGEN del acumulado previo. ACUMULADO_INICIAL_MIGRACION (sistema anterior de esta misma empresa) alimenta los MISMOS campos
+  // del motor que los antecedentes de otro patrono, pero conserva su origen para auditoría y exige coherencia de fechas.
+  const tipoOrigen = tipoOrigenFiscal(confirmada.datos);
+  const esMigracion = tipoOrigen === TIPO_ORIGEN_MIGRACION;
+  const corteMigracion = esMigracion ? confirmada.corteAntecedentes : null;
+  if (esMigracion) {
+    if (!corteMigracion) throw new ErrorFiscalPlanilla2026(`El acumulado fiscal inicial del empleado ${empleado.codigo} no tiene fecha de corte.`);
+    // El período que se calcula debe ser POSTERIOR al corte: lo anterior ya está dentro del acumulado.
+    if (periodo.fechaInicio <= corteMigracion) throw new ErrorFiscalPlanilla2026(MSG_MIGRACION_SOLAPADA);
+  }
+  const origenFiscal: OrigenFiscalUsado = {
+    tipo: tipoOrigen,
+    origen: esMigracion ? "MIGRACION_SISTEMA_ANTERIOR" : tipoOrigen === "SIN_ANTECEDENTES" ? "SIN_ANTECEDENTES" : "ANTECEDENTES",
+    fechaCorte: corteMigracion, revision: confirmada.revision,
+  };
   const antecedentesMotor =
     confirmada.datos.declaracionAntecedentes === "SIN_ANTECEDENTES"
       ? null
@@ -252,7 +278,8 @@ export async function construirInputFiscalEmpleado2026(
   // saber si esa línea ya pasó por estas reglas (v2) o es histórica (v1).
   const [prioRows] = await conn.query<RowDataPacket[]>(
     `SELECT l.sueldo_base, l.bono_incentivo, l.bono_herramientas, l.otros_ingresos, l.igss_laboral, l.isr,
-            l.conceptos_snapshot, MONTH(p.fecha_inicio) AS mes_periodo, YEAR(p.fecha_inicio) AS anio_periodo
+            l.conceptos_snapshot, MONTH(p.fecha_inicio) AS mes_periodo, YEAR(p.fecha_inicio) AS anio_periodo,
+            p.fecha_inicio AS fecha_inicio_periodo
      FROM rrhh_planilla_lineas l
      INNER JOIN rrhh_planilla_periodos p ON p.id = l.periodo_id AND p.empresa_id = l.empresa_id
      WHERE l.empresa_id = ? AND l.id_empleado = ? AND p.autorizado_en IS NOT NULL
@@ -280,6 +307,10 @@ export async function construirInputFiscalEmpleado2026(
   let acumuladoIgss = 0;
   const bloqueantesHistorico: string[] = [];
   for (const r of prioRows) {
+    // ANTI DOBLE CONTEO: con acumulado de migración, ningún período AUTORIZADO propio puede caer dentro de enero → corte.
+    if (esMigracion && String(r.fecha_inicio_periodo instanceof Date ? r.fecha_inicio_periodo.toISOString() : r.fecha_inicio_periodo).slice(0, 10) <= corteMigracion!) {
+      throw new ErrorFiscalPlanilla2026(MSG_MIGRACION_SOLAPADA);
+    }
     const esMesActual = Number(r.anio_periodo) === ejercicio && Number(r.mes_periodo) === mes;
     // igss e isr ya retenidos son hechos, independientes de si el desglose
     // gravado/pendiente de esa línea histórica puede demostrarse.
@@ -338,7 +369,14 @@ export async function construirInputFiscalEmpleado2026(
   // Meses del ejercicio (desde el actual) con devengo real, en base 30: un mes completo vale 30/30; el de ingreso/egreso
   // vale la fracción trabajada; después de un egreso conocido, 0. NO se proyecta sueldo de meses fuera de la relación laboral.
   const vigencia = { inicioLaboral: empleado.inicioLaboral ?? null, finLaboral: empleado.finLaboral ?? null };
-  const fraccionMes = (m: number) => diasBase30EnMes(ejercicio, m, vigencia) / 30;
+  // Con acumulado de migración cuyo corte cae DENTRO del mes actual, lo devengado hasta el corte ya está en el acumulado: el mes
+  // actual solo proyecta desde el día siguiente al corte (no se cuenta dos veces). Meses anteriores al actual nunca se proyectan.
+  const mm = String(mes).padStart(2, "0");
+  const vigenciaMesActual = esMigracion && corteMigracion! >= `${ejercicio}-${mm}-01` &&
+    (!vigencia.inicioLaboral || vigencia.inicioLaboral <= corteMigracion!)
+    ? { ...vigencia, inicioLaboral: diaSiguiente(corteMigracion!) }
+    : vigencia;
+  const fraccionMes = (m: number) => diasBase30EnMes(ejercicio, m, m === mes ? vigenciaMesActual : vigencia) / 30;
   const mesesConDevengo = Array.from({ length: 13 - mes }, (_, i) => mes + i).filter((m) => fraccionMes(m) > 0);
   const restantes = Math.max(1, mesesConDevengo.length);
   const proyectarRecurrente = (montoMensual: number, acumuladoMesActual: number): number => {
@@ -427,6 +465,7 @@ export async function construirInputFiscalEmpleado2026(
   };
 
   return {
+    origenFiscal,
     input,
     antecedenteRevision: confirmada.revision,
     configuracionConceptosRevision: CONFIGURACION_CONCEPTOS_2026_REVISION,
@@ -445,9 +484,9 @@ export async function calcularFiscal2026Empleado(
   empleado: EmpleadoFiscal2026,
   pendientes: PendientesPlanilla,
 ) {
-  const { input, antecedenteRevision, configuracionConceptosRevision } = await construirInputFiscalEmpleado2026(
+  const { input, antecedenteRevision, configuracionConceptosRevision, origenFiscal } = await construirInputFiscalEmpleado2026(
     conn, empresaId, ejercicio, periodo, empleado, pendientes,
   );
   const resultado = calcularIsrTrabajo2026(input);
-  return { input, resultado, antecedenteRevision, configuracionConceptosRevision };
+  return { input, resultado, antecedenteRevision, configuracionConceptosRevision, origenFiscal };
 }

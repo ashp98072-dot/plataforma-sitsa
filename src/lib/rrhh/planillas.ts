@@ -1075,6 +1075,7 @@ export async function generarLineasPeriodo(
             fiscal: {
               motor: "ISR_TRABAJO_2026", ejercicio: EJERCICIO_MOTOR_ISR_2026,
               antecedenteRevision: fiscal2026.antecedenteRevision,
+              origenFiscal: fiscal2026.origenFiscal,
               parametrosRevision: fiscal2026.resultado.parametrosRevision,
               fechaCorte: periodo.fechaInicio,
               inputUsado: fiscal2026.input,
