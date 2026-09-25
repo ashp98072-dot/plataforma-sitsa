@@ -29,6 +29,7 @@ import { formatearFechaVisible, hoyLocal } from "@/lib/rrhh/dates";
 import { CATEGORIAS_OPS, PUESTOS_MONACO } from "@/lib/rrhh/categorias-ops";
 import { faltantesAlta } from "@/lib/rrhh/empleado-validacion";
 import { construirParamsEmpleados, hrefExportEmpleados } from "@/lib/rrhh/empleados-filtros";
+import { filtrarPersonas } from "@/lib/busqueda-personas";
 import {
   FORMAS_PAGO,
   TIPOS_CONTRATO,
@@ -1280,18 +1281,17 @@ export default function EmpleadosPage() {
           {supervisorBusqueda.trim() ? (
             <div className="mt-1 max-h-40 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--card)]">
               {(() => {
-                const q = supervisorBusqueda.trim().toLowerCase();
-                const candidatos = supervisoresDisponibles.filter((s) => {
-                  if (s.id === editId) return false;
-                  if (form.supervisorIds.includes(s.id)) return false;
-                  const haystack =
-                    `${s.nombre} ${s.numeroEmpleado ?? ""} ${s.codigo}`.toLowerCase();
-                  return haystack.includes(q);
-                });
+                // Mismo universo de antes (sin el propio empleado ni supervisores ya elegidos); solo cambia cómo se compara/ordena.
+                const candidatos = filtrarPersonas(
+                  supervisoresDisponibles.filter((s) => s.id !== editId && !form.supervisorIds.includes(s.id)),
+                  supervisorBusqueda,
+                  { nombre: (s) => s.nombre, buscable: (s) => `${s.numeroEmpleado ?? ""} ${s.codigo}` },
+                  Number.MAX_SAFE_INTEGER,
+                );
                 if (candidatos.length === 0) {
                   return (
                     <p className="px-3 py-2 text-xs text-[var(--muted)]">
-                      Sin resultados.
+                      No se encontraron empleados.
                     </p>
                   );
                 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { filtrarPersonas } from "@/lib/busqueda-personas";
 
 export type EmpOpt = {
   id: number;
@@ -29,14 +30,10 @@ export function EmpleadoPicker({
 }: Props) {
   const [q, setQ] = useState("");
   const filtrados = useMemo(() => {
-    const term = q.trim().toLowerCase();
-    if (!term) return empleados.slice(0, 120);
-    return empleados
-      .filter((e) => {
-        const hay = `${e.codigo} ${e.nombre} ${e.dpi ?? ""}`.toLowerCase();
-        return hay.includes(term);
-      })
-      .slice(0, 120);
+    // Búsqueda compartida (src/lib/busqueda-personas.ts): sin tildes/mayúsculas, todas las palabras, ranking. Sigue buscando por
+    // nombre, código y DPI como antes (el DPI no se muestra en más sitios que antes).
+    if (!q.trim()) return empleados.slice(0, 120);
+    return filtrarPersonas(empleados, q, { nombre: (e) => e.nombre, buscable: (e) => `${e.codigo} ${e.dpi ?? ""}` }, 120);
   }, [empleados, q]);
 
   const selected = empleados.find((e) => e.id === value);
@@ -74,7 +71,7 @@ export function EmpleadoPicker({
       </select>
       {q.trim() ? (
         <span className="mt-0.5 block text-xs opacity-70">
-          {filtrados.length} coincidencia(s)
+          {filtrados.length === 0 ? "No se encontraron empleados." : `${filtrados.length} coincidencia(s)`}
         </span>
       ) : null}
     </label>

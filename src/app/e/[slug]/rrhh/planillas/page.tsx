@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { coincideBusquedaPersona } from "@/lib/busqueda-personas";
 import { FotoEmpleadoMiniatura } from "@/components/rrhh/foto-empleado-miniatura";
 import { resumenDevengoUi } from "@/lib/rrhh/planilla-devengo";
 import { resumenFiscalLinea } from "@/lib/rrhh/fiscal-migracion-ui";
@@ -325,13 +326,10 @@ export default function PlanillasPage() {
   }
 
   const lineasFiltradas = useMemo(() => {
-    const term = filtro.trim().toLowerCase();
     return lineas.filter((l) => {
       if (filtroForma !== "todas" && l.formaPago !== filtroForma) return false;
-      if (!term) return true;
-      return `${l.codigoEmpleado} ${l.nombreEmpleado} ${l.dpi}`
-        .toLowerCase()
-        .includes(term);
+      // Búsqueda compartida (sin tildes, todas las palabras); conserva el orden de la planilla y sigue buscando por código/DPI.
+      return coincideBusquedaPersona(filtro, `${l.codigoEmpleado} ${l.nombreEmpleado} ${l.dpi}`);
     });
   }, [lineas, filtro, filtroForma]);
 
