@@ -13,6 +13,17 @@ import {
   seleccionarTodosDelGrupo,
   type ModoAgrupacion,
 } from "@/lib/tms/viaticos-agrupacion";
+import {
+  algunoAbierto,
+  alternarGrupo,
+  claveExpansion,
+  estaAbierto,
+  expandirTodos,
+  GRUPOS_INICIALES,
+  ocultarTodos,
+  todosAbiertos,
+  type GruposAbiertos,
+} from "@/lib/tms/viaticos-grupos-expansion";
 import { TEXTO_FIRMA_INTERNA } from "@/lib/firmas/textos";
 import type { FirmaCanvasHandle } from "@/components/tms/firma-canvas";
 import SelectorFirma from "@/components/tms/selector-firma";
@@ -157,6 +168,10 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   // TMS-VIATICOS-AGRUPACION-1 — agrupar el resultado YA filtrado por Día / Semana / Mes (solo cliente) y ids que
   // "Autorizar seleccionados" de UN grupo enviará al flujo de autorización actual (se congelan al abrir el modal).
   const [modoAgrupacion, setModoAgrupacion] = useState<ModoAgrupacion>("DIA");
+  // Expansión de los grupos de fecha: SOLO visual (no toca selección, filtros ni datos). Vacío = todos colapsados al entrar;
+  // es un conjunto de claves abiertas, así puede haber varios abiertos y ninguno queda forzado. Sobrevive a los filtros:
+  // un grupo que sigue existiendo conserva su estado y los nuevos inician cerrados.
+  const [gruposAbiertos, setGruposAbiertos] = useState<GruposAbiertos>(GRUPOS_INICIALES);
   const [idsMasivo, setIdsMasivo] = useState<number[]>([]);
   const [autorizandoMasivo, setAutorizandoMasivo] = useState(false);
 
@@ -569,13 +584,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
     await cargar();
   }
 
-  /** Solo el PRIMER grupo arranca abierto (al montarse); después el usuario controla qué grupos abre/cierra: `open` NO se
-   *  impone desde React, así seleccionar filas (re-render) no reabre ni cierra grupos. La `key` (modo-clave) remonta al cambiar Día/Semana/Mes. */
-  function abrirPrimerGrupoUnaVez(el: HTMLDetailsElement | null, esPrimero: boolean) {
-    if (!el || el.dataset.inicializado) return;
-    el.dataset.inicializado = "1";
-    if (esPrimero) el.open = true;
-  }
+  const clavesGrupos = grupos.map((g) => claveExpansion(modoAgrupacion, g.clave));
 
   /** Fila de un viático (idéntica a la tabla anterior: mismas acciones y permisos). */
   function renderFila(r: ViaticoControlRow) {
@@ -790,20 +799,42 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
         <p className="rounded-xl border border-[var(--border)] px-3 py-4 text-sm text-[var(--muted)]">Sin viáticos con este filtro.</p>
       ) : null}
 
-      {/* TMS-VIATICOS-AGRUPACION-1 — un <details> por período (Día/Semana/Mes), el más reciente abierto por defecto;
-          la `key` incluye el modo para que al cambiar de agrupación se reapliquen los valores por defecto. */}
+      {/* Grupos de fecha (Día/Semana/Mes): TODOS colapsables, todos inician colapsados. Solo cambia la visibilidad. */}
+      {grupos.length ? (
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <button type="button" className="rounded border border-[var(--border)] px-2 py-1 disabled:opacity-50" disabled={todosAbiertos(gruposAbiertos, clavesGrupos)} onClick={() => setGruposAbiertos((a) => expandirTodos(a, clavesGrupos))}>
+            Expandir todos
+          </button>
+          <button type="button" className="rounded border border-[var(--border)] px-2 py-1 disabled:opacity-50" disabled={!algunoAbierto(gruposAbiertos, clavesGrupos)} onClick={() => setGruposAbiertos(ocultarTodos())}>
+            Ocultar todos
+          </button>
+        </div>
+      ) : null}
       <div className="space-y-3">
-        {grupos.map((g, indice) => {
+        {grupos.map((g) => {
           const sel = seleccionadosDelGrupo(seleccionados, g);
+          const claveG = claveExpansion(modoAgrupacion, g.clave);
+          const abierto = estaAbierto(gruposAbiertos, claveG);
+          const idCuerpo = `grupo-viaticos-${modoAgrupacion}-${g.clave}`;
           return (
-            <details key={`${modoAgrupacion}-${g.clave}`} ref={(el) => abrirPrimerGrupoUnaVez(el, indice === 0)} className="overflow-hidden rounded-xl border border-[var(--border)]" data-grupo={g.clave}>
-              <summary className="flex cursor-pointer flex-wrap items-center gap-x-4 gap-y-1 bg-[var(--thead)] px-3 py-2 text-sm">
-                <span className="font-semibold">{g.etiqueta}</span>
-                <span className="text-xs">{resumenGrupo(g, q)}</span>
-                <span className="text-[11px] text-[var(--muted)]">
-                  {g.conteos.PROGRAMADO} por autorizar · {g.conteos.AUTORIZADO} autorizados · {g.conteos.RECHAZADO} rechazados · {g.conteos.ENTREGADO} entregados · {g.conteos.LIQUIDADO} liquidados
-                </span>
-              </summary>
+            <section key={claveG} className="overflow-hidden rounded-xl border border-[var(--border)]" data-grupo={g.clave}>
+              <h3>
+                <button
+                  type="button"
+                  aria-expanded={abierto}
+                  aria-controls={idCuerpo}
+                  className="flex w-full cursor-pointer flex-wrap items-center gap-x-4 gap-y-1 bg-[var(--thead)] px-3 py-2 text-left text-sm"
+                  onClick={() => setGruposAbiertos((a) => alternarGrupo(a, claveG))}
+                >
+                  <span aria-hidden="true">{abierto ? "▼" : "▶"}</span>
+                  <span className="font-semibold">{g.etiqueta}</span>
+                  <span className="text-xs">{resumenGrupo(g, q)}</span>
+                  <span className="text-[11px] text-[var(--muted)]">
+                    {g.conteos.PROGRAMADO} por autorizar · {g.conteos.AUTORIZADO} autorizados · {g.conteos.RECHAZADO} rechazados · {g.conteos.ENTREGADO} entregados · {g.conteos.LIQUIDADO} liquidados
+                  </span>
+                </button>
+              </h3>
+              <div id={idCuerpo} hidden={!abierto}>
               {puedeAutorizar ? (
                 <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border)] px-3 py-2 text-xs">
                   <span aria-live="polite">Seleccionados: <strong>{sel.length}</strong> de <strong>{g.total}</strong></span>
@@ -860,7 +891,8 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
                   </tbody>
                 </table>
               </div>
-            </details>
+              </div>
+            </section>
           );
         })}
       </div>

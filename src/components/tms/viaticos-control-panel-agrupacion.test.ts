@@ -18,14 +18,11 @@ describe("UI: selector y grupos desplegables", () => {
     for (const e of ['"Día"', '"Semana"', '"Mes"']) expect(lib).toContain(e);
   });
 
-  it("un <details>/<summary> por grupo, el más reciente abierto por defecto; la key incluye el modo", () => {
-    expect(src).toContain("<details key={`${modoAgrupacion}-${g.clave}`} ref={(el) => abrirPrimerGrupoUnaVez(el, indice === 0)}");
-    // `open` NO se impone desde React (un re-render al seleccionar reabriría/cerraría grupos); `defaultOpen` no existe en <details>.
-    expect(src).not.toMatch(/open=\{indice === 0\}/);
-    expect(src).not.toContain("defaultOpen");
-    expect(src).toMatch(/if \(!el \|\| el\.dataset\.inicializado\) return;\s+el\.dataset\.inicializado = "1";\s+if \(esPrimero\) el\.open = true;/);
-    expect(src).toContain("<summary");
-    expect(src).not.toMatch(/setGrupoAbierto|useState<Record<string, boolean>>/); // sin estado React para abrir/cerrar
+  it("un encabezado-botón por grupo con estado de expansión propio; todos inician colapsados (ver viaticos-grupos-colapsables.test.ts)", () => {
+    expect(src).toContain("<section key={claveG}");
+    expect(src).toContain("aria-expanded={abierto}");
+    expect(src).not.toContain("<details");
+    expect(src).not.toContain("abrirPrimerGrupoUnaVez"); // ningún grupo (ni el primero) queda forzado abierto
   });
 
   it("encabezado con etiqueta, resumen (total · pendientes · monto no rechazado) y conteos por estado", () => {
