@@ -3,6 +3,7 @@ import type { Empleado } from "./empleados";
 import { formatearFechaVisible } from "./dates";
 import { tablaAPdf } from "@/lib/rrhh/export-files";
 import { CATEGORIAS_OPS, PUESTOS_MONACO } from "./categorias-ops";
+import { FORMAS_PAGO, TIPOS_CONTRATO } from "./contratos-pago";
 
 /** Columnas de plantilla / import (cuestionario Monaco + compat). */
 export const HEADERS_EMPLEADOS = [
@@ -51,149 +52,181 @@ export const HEADERS_EMPLEADOS = [
   "observaciones",
 ] as const;
 
-const EJEMPLO: string[] = [
-  "DPI001",
-  "DPI001",
-  "Juan",
-  "Carlos",
-  "Pérez",
-  "López",
-  "",
-  "Juan Carlos Pérez López",
-  "1234567-8",
-  "1234567890",
-  "IRTRA01",
-  "M",
-  "15/03/1990",
-  "Piloto",
-  "Transporte",
-  "Fijo",
-  "fijo",
-  "transferencia",
-  "Piloto",
-  "01/01/2024",
-  "01/01/2024",
-  "07:00",
-  "16:00",
-  "Activo",
-  "3500",
-  "250",
-  "0",
-  "5555-1234",
-  "correo@ejemplo.com",
-  "Ciudad de Guatemala",
-  "Guatemala",
-  "Guatemala",
-  "Ladino",
-  "",
-  "Español",
-  "",
-  "",
-  "",
-  "",
-  "monetaria",
-  "",
-  "",
-  "",
+// ------------------------------------------------------------------------------------------------ FUENTE ÚNICA DEL EXCEL
+/**
+ * PLANTILLA y EXPORTACIÓN de empleados se construyen desde ESTA misma definición (hoja, encabezados, orden, formatos, anchos,
+ * catálogos, instrucciones y mapeo de filas): la exportación es directamente reimportable y esa compatibilidad es una garantía
+ * del código (ver empleados-export-roundtrip.test.ts), no una coincidencia. Un encabezado nuevo en HEADERS_EMPLEADOS obliga (por
+ * tipos) a declarar su formato aquí.
+ */
+export const HOJA_EMPLEADOS = "Empleados";
+/** Nombre que usaban las exportaciones anteriores: el importador lo sigue aceptando (retrocompatibilidad). */
+export const HOJA_EMPLEADOS_LEGADO = "Personal";
+export const HOJA_CATALOGOS = "Catalogos";
+export const HOJA_INSTRUCCIONES = "Instrucciones";
+
+type HeaderEmpleado = (typeof HEADERS_EMPLEADOS)[number];
+type FormatoColumna = { ancho: number; tipo: "texto" | "fecha" | "hora" | "monto"; lista?: readonly string[] };
+const LICENCIAS_TIPO = ["A", "B", "C", "M"] as const;
+const LISTAS = {
+  sexo: ["M", "F"],
+  tipoHorario: ["Fijo", "Variable"],
+  tipoContrato: TIPOS_CONTRATO.map((t) => t.value),
+  formaPago: FORMAS_PAGO.map((f) => f.value),
+  estado: ["Activo", "Baja"],
+  licencia: LICENCIAS_TIPO,
+} as const;
+
+export const FORMATO_COLUMNAS: Record<HeaderEmpleado, FormatoColumna> = {
+  codigo: { ancho: 16, tipo: "texto" }, dpi: { ancho: 16, tipo: "texto" },
+  primer_nombre: { ancho: 16, tipo: "texto" }, segundo_nombre: { ancho: 16, tipo: "texto" },
+  primer_apellido: { ancho: 16, tipo: "texto" }, segundo_apellido: { ancho: 16, tipo: "texto" },
+  apellido_casada: { ancho: 16, tipo: "texto" }, nombre: { ancho: 30, tipo: "texto" },
+  nit: { ancho: 14, tipo: "texto" }, igss: { ancho: 14, tipo: "texto" }, irtra: { ancho: 14, tipo: "texto" },
+  sexo: { ancho: 8, tipo: "texto", lista: LISTAS.sexo }, fecha_nacimiento: { ancho: 14, tipo: "fecha" },
+  puesto: { ancho: 20, tipo: "texto" }, area: { ancho: 20, tipo: "texto" },
+  tipo_horario: { ancho: 12, tipo: "texto", lista: LISTAS.tipoHorario },
+  tipo_contrato: { ancho: 14, tipo: "texto", lista: LISTAS.tipoContrato },
+  forma_pago: { ancho: 15, tipo: "texto", lista: LISTAS.formaPago },
+  profesion: { ancho: 18, tipo: "texto" }, fecha_contratacion: { ancho: 16, tipo: "fecha" }, fecha_ingreso: { ancho: 14, tipo: "fecha" },
+  hora_entrada_teorica: { ancho: 12, tipo: "hora" }, hora_salida_teorica: { ancho: 12, tipo: "hora" },
+  estado_laboral: { ancho: 13, tipo: "texto", lista: LISTAS.estado },
+  sueldo_base: { ancho: 13, tipo: "monto" }, bono_incentivo: { ancho: 14, tipo: "monto" }, bono_herramientas: { ancho: 16, tipo: "monto" },
+  telefono: { ancho: 14, tipo: "texto" }, email: { ancho: 26, tipo: "texto" }, direccion: { ancho: 30, tipo: "texto" },
+  pais_origen: { ancho: 14, tipo: "texto" }, municipio: { ancho: 16, tipo: "texto" }, etnia: { ancho: 12, tipo: "texto" },
+  religion: { ancho: 12, tipo: "texto" }, idioma: { ancho: 12, tipo: "texto" },
+  licencia_numero: { ancho: 16, tipo: "texto" }, licencia_tipo: { ancho: 12, tipo: "texto", lista: LISTAS.licencia },
+  licencia_vence: { ancho: 14, tipo: "fecha" }, cuenta_bancaria: { ancho: 18, tipo: "texto" }, tipo_cuenta: { ancho: 14, tipo: "texto" },
+  banco: { ancho: 16, tipo: "texto" }, contacto_emergencia: { ancho: 24, tipo: "texto" }, observaciones: { ancho: 30, tipo: "texto" },
+};
+
+// ---- seguridad de texto Excel
+/**
+ * Texto de la BD que EMPIEZA con `=`, `@`, tab/CR (o `+`/`-` seguidos de algo que no sea número/teléfono) se guarda con un `'`
+ * delante para que ninguna hoja de cálculo lo interprete como fórmula. El importador quita ese `'` (desprotegerTextoExcel), así
+ * el ciclo exportar → importar devuelve EXACTAMENTE el mismo texto. Un texto que ya empieza con `'` + carácter peligroso
+ * también se antepone otro `'` para que la ida y vuelta sea exacta.
+ */
+export function protegerTextoExcel(valor: string | null | undefined): string {
+  const v = String(valor ?? "");
+  if (/^'+[=+\-@\t\r]/.test(v)) return `'${v}`;
+  if (/^[=@\t\r]/.test(v)) return `'${v}`;
+  if (/^[+-]/.test(v) && v.length > 1 && !/^[+-][\d\s().-]*$/.test(v)) return `'${v}`;
+  return v;
+}
+export function desprotegerTextoExcel(valor: string): string {
+  return /^'+[=+\-@\t\r]/.test(valor) ? valor.slice(1) : valor;
+}
+
+/** HH:MM (o HH:MM:SS si tiene segundos ≠ 0) — el importador lo normaliza al mismo valor lógico. */
+export function horaParaExcel(h: string | null | undefined): string {
+  const m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?/.exec(String(h ?? "").trim());
+  if (!m) return "";
+  const base = `${m[1].padStart(2, "0")}:${m[2]}`;
+  return m[3] && m[3] !== "00" ? `${base}:${m[3]}` : base;
+}
+
+/** ÚNICO mapeo Empleado → fila (orden = HEADERS_EMPLEADOS). Importes como NÚMERO (exactos), fechas DD/MM/AAAA, horas HH:MM. */
+export function filaExcelDeEmpleado(e: Empleado): (string | number)[] {
+  const t = (v: string | null | undefined) => protegerTextoExcel(v ?? "");
+  const fila: Record<HeaderEmpleado, string | number> = {
+    codigo: t(e.codigo), dpi: t(e.dpi), primer_nombre: t(e.primerNombre), segundo_nombre: t(e.segundoNombre),
+    primer_apellido: t(e.primerApellido), segundo_apellido: t(e.segundoApellido), apellido_casada: t(e.apellidoCasada),
+    nombre: t(e.nombre), nit: t(e.nit), igss: t(e.igss), irtra: t(e.irtra), sexo: t(e.sexo),
+    fecha_nacimiento: formatearFechaVisible(e.fechaNacimiento), puesto: t(e.puesto), area: t(e.categoriaOps),
+    tipo_horario: t(e.tipoHorario), tipo_contrato: t(e.tipoContrato), forma_pago: t(e.formaPago), profesion: t(e.profesion),
+    fecha_contratacion: formatearFechaVisible(e.fechaAlta), fecha_ingreso: formatearFechaVisible(e.fechaInicioLaboral),
+    hora_entrada_teorica: horaParaExcel(e.horaEntradaTeorica), hora_salida_teorica: horaParaExcel(e.horaSalidaTeorica),
+    estado_laboral: t(e.estado),
+    sueldo_base: e.sueldoBase != null ? Number(e.sueldoBase) : "", bono_incentivo: e.bonoIncentivo != null ? Number(e.bonoIncentivo) : "",
+    bono_herramientas: e.bonoHerramientas != null ? Number(e.bonoHerramientas) : "",
+    telefono: t(e.telefono), email: t(e.email), direccion: t(e.direccion), pais_origen: t(e.paisOrigen), municipio: t(e.municipio),
+    etnia: t(e.etnia), religion: t(e.religion), idioma: t(e.idioma), licencia_numero: t(e.licenciaNumero), licencia_tipo: t(e.licenciaTipo),
+    licencia_vence: formatearFechaVisible(e.licenciaVence), cuenta_bancaria: t(e.cuentaBancaria), tipo_cuenta: t(e.tipoCuenta),
+    banco: t(e.banco), contacto_emergencia: t(e.contactoEmergencia), observaciones: t(e.observaciones),
+  };
+  return HEADERS_EMPLEADOS.map((h) => fila[h]);
+}
+
+/** Empleado de ejemplo de la plantilla (pasa por el MISMO mapeo que la exportación). */
+const EMPLEADO_EJEMPLO: Empleado = {
+  id: 0, numeroEmpleado: "", codigo: "DPI001", dpi: "DPI001", primerNombre: "Juan", segundoNombre: "Carlos", primerApellido: "Pérez",
+  segundoApellido: "López", apellidoCasada: "", nombre: "Juan Carlos Pérez López", nit: "1234567-8", igss: "1234567890", irtra: "IRTRA01",
+  sexo: "M", fechaNacimiento: "1990-03-15", puesto: "Piloto", categoriaOps: "Transporte", tipoHorario: "Fijo", tipoContrato: "fijo",
+  formaPago: "transferencia", profesion: "Piloto", fechaAlta: "2024-01-01", fechaInicioLaboral: "2024-01-01", horaEntradaTeorica: "07:00:00",
+  horaSalidaTeorica: "16:00:00", estado: "Activo", sueldoBase: 3500, bonoIncentivo: 250, bonoHerramientas: 0, telefono: "5555-1234",
+  email: "correo@ejemplo.com", direccion: "Ciudad de Guatemala", paisOrigen: "Guatemala", municipio: "Guatemala", etnia: "Ladino",
+  religion: "", idioma: "Español", licenciaNumero: "", licenciaTipo: "", licenciaVence: null, cuentaBancaria: "", tipoCuenta: "monetaria",
+  banco: "", contactoEmergencia: "", observaciones: "",
+};
+
+const INSTRUCCIONES_COMUNES = [
+  "Este archivo puede editarse y volver a importarse directamente desde RRHH > Empleados > Importar Excel.",
+  "El código identifica al empleado. No lo cambies si deseas actualizar la ficha existente.",
+  "Las celdas vacías o placeholders (48, N/A, NA, Pendiente, 0000, -, —) no eliminan información existente durante una actualización: vacío = conservar el dato actual.",
+  "Si reemplazas un placeholder por un dato real, el dato se actualiza.",
+  "Supervisores, fecha de egreso, fotografía, documentos y configuración de horas extra se gestionan desde la ficha y no se modifican al reimportar este Excel.",
+  "Fechas: DD/MM/AAAA · Horas: HH:MM · Importes: números (por ejemplo 4002.28).",
+  "Si el código del archivo no existe pero el DPI ya pertenece a otro empleado, la fila se bloquea (no se crea un duplicado): corrige el código.",
 ];
 
-export async function generarPlantillaEmpleados(): Promise<Buffer> {
+function construirLibroEmpleados(filas: (string | number)[][], modo: "plantilla" | "exportacion"): ExcelJS.Workbook {
   const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet("Empleados");
+  const ws = wb.addWorksheet(HOJA_EMPLEADOS);
   ws.addRow([...HEADERS_EMPLEADOS]);
   ws.getRow(1).font = { bold: true };
-  ws.addRow(EJEMPLO);
+  for (const f of filas) ws.addRow(f);
+  HEADERS_EMPLEADOS.forEach((h, i) => {
+    const fmt = FORMATO_COLUMNAS[h];
+    const col = ws.getColumn(i + 1);
+    col.width = fmt.ancho;
+    // Texto explícito en identificadores/fechas/horas (evita que Excel convierta DPI o fechas); importes numéricos con 2 decimales.
+    const numFmt = fmt.tipo === "monto" ? "0.00" : "@";
+    for (let r = 2; r <= ws.rowCount; r++) ws.getCell(r, i + 1).numFmt = numFmt;
+  });
+  ws.views = [{ state: "frozen", ySplit: 1 }];
+  // Desplegables (advertencia, no bloqueo: un valor antiguo fuera de catálogo no se rechaza).
+  const ultima = Math.max(ws.rowCount, 300);
+  HEADERS_EMPLEADOS.forEach((h, i) => {
+    const lista = FORMATO_COLUMNAS[h].lista;
+    if (!lista) return;
+    for (let r = 2; r <= ultima; r++) {
+      ws.getCell(r, i + 1).dataValidation = {
+        type: "list", allowBlank: true, formulae: [`"${lista.join(",")}"`], showErrorMessage: true, errorStyle: "warning",
+        errorTitle: "Valor fuera de catálogo", error: `Valores esperados: ${lista.join(", ")}`,
+      };
+    }
+  });
 
-  const help = wb.addWorksheet("Catalogos");
-  help.addRow(["area", "puesto", "notas"]);
-  help.getRow(1).font = { bold: true };
-  const max = Math.max(CATEGORIAS_OPS.length, PUESTOS_MONACO.length);
-  for (let i = 0; i < max; i++) {
-    help.addRow([
-      CATEGORIAS_OPS[i] ?? "",
-      PUESTOS_MONACO[i] ?? "",
-      i === 0
-        ? "codigo = DPI. Área = organigrama. Puesto = cargo (Piloto/Auxiliar…)."
-        : "",
-    ]);
-  }
-  help.addRow([]);
-  help.addRow([
-    "Sexo: M / F",
-    "tipo_contrato: fijo / prueba / temporal / outsourcing",
-    "forma_pago: transferencia / efectivo / cheque",
-  ]);
-  help.addRow([
-    "Fechas: DD/MM/AAAA",
-    "Horas: HH:MM",
-    "estado_laboral: Activo / Baja",
-  ]);
+  const cat = wb.addWorksheet(HOJA_CATALOGOS);
+  const columnas: [string, readonly string[]][] = [
+    ["area", CATEGORIAS_OPS], ["puesto", PUESTOS_MONACO], ["sexo", LISTAS.sexo], ["tipo_contrato", LISTAS.tipoContrato],
+    ["forma_pago", LISTAS.formaPago], ["estado_laboral", LISTAS.estado], ["tipo_horario", LISTAS.tipoHorario], ["licencia_tipo", LISTAS.licencia],
+  ];
+  cat.addRow(columnas.map(([n]) => n));
+  cat.getRow(1).font = { bold: true };
+  const max = Math.max(...columnas.map(([, v]) => v.length));
+  for (let i = 0; i < max; i++) cat.addRow(columnas.map(([, v]) => v[i] ?? ""));
+  cat.columns = columnas.map(() => ({ width: 22 }));
 
-  ws.columns = HEADERS_EMPLEADOS.map(() => ({ width: 16 }));
-  help.columns = [{ width: 22 }, { width: 28 }, { width: 55 }];
-  return Buffer.from(await wb.xlsx.writeBuffer());
+  const ins = wb.addWorksheet(HOJA_INSTRUCCIONES);
+  ins.addRow([modo === "exportacion" ? "Empleados exportados — archivo de actualización" : "Plantilla de empleados"]);
+  ins.getRow(1).font = { bold: true };
+  for (const l of INSTRUCCIONES_COMUNES) ins.addRow([l]);
+  ins.getColumn(1).width = 150;
+  return wb;
+}
+
+export async function generarPlantillaEmpleados(): Promise<Buffer> {
+  return Buffer.from(await construirLibroEmpleados([filaExcelDeEmpleado(EMPLEADO_EJEMPLO)], "plantilla").xlsx.writeBuffer());
 }
 
 export async function exportarEmpleadosExcel(
   empleados: Empleado[],
   empresaNombre: string,
 ): Promise<Buffer> {
-  const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet("Personal");
-  ws.addRow([...HEADERS_EMPLEADOS]);
-  ws.getRow(1).font = { bold: true };
-  for (const e of empleados) {
-    ws.addRow([
-      e.codigo,
-      e.dpi ?? "",
-      e.primerNombre ?? "",
-      e.segundoNombre ?? "",
-      e.primerApellido ?? "",
-      e.segundoApellido ?? "",
-      e.apellidoCasada ?? "",
-      e.nombre,
-      e.nit ?? "",
-      e.igss ?? "",
-      e.irtra ?? "",
-      e.sexo ?? "",
-      formatearFechaVisible(e.fechaNacimiento),
-      e.puesto ?? "",
-      e.categoriaOps ?? "",
-      e.tipoHorario,
-      e.tipoContrato ?? "",
-      e.formaPago ?? "",
-      e.profesion ?? "",
-      formatearFechaVisible(e.fechaAlta),
-      formatearFechaVisible(e.fechaInicioLaboral),
-      e.horaEntradaTeorica,
-      e.horaSalidaTeorica,
-      e.estado,
-      e.sueldoBase != null ? String(e.sueldoBase) : "",
-      e.bonoIncentivo != null ? String(e.bonoIncentivo) : "",
-      e.bonoHerramientas != null ? String(e.bonoHerramientas) : "",
-      e.telefono ?? "",
-      e.email ?? "",
-      e.direccion ?? "",
-      e.paisOrigen ?? "",
-      e.municipio ?? "",
-      e.etnia ?? "",
-      e.religion ?? "",
-      e.idioma ?? "",
-      e.licenciaNumero ?? "",
-      e.licenciaTipo ?? "",
-      formatearFechaVisible(e.licenciaVence),
-      e.cuentaBancaria ?? "",
-      e.tipoCuenta ?? "",
-      e.banco ?? "",
-      e.contactoEmergencia ?? "",
-      e.observaciones ?? "",
-    ]);
-  }
-  ws.columns.forEach((c) => {
-    c.width = 14;
-  });
   void empresaNombre;
-  return Buffer.from(await wb.xlsx.writeBuffer());
+  return Buffer.from(await construirLibroEmpleados(empleados.map(filaExcelDeEmpleado), "exportacion").xlsx.writeBuffer());
 }
 
 export async function exportarEmpleadosPdf(
@@ -251,6 +284,11 @@ export type FilaImportEmpleado = {
   codigo: string;
   nombre: string;
   dpi: string;
+  /**
+   * true si la columna `dpi` vino VACÍA y el parser usó el código como DPI (compatibilidad con plantillas donde codigo = DPI).
+   * En un empleado EXISTENTE ese valor derivado NO debe escribirse como su DPI (contaminaría una ficha cuyo DPI está vacío).
+   */
+  dpiDesdeCodigo?: boolean;
   primerNombre: string;
   segundoNombre: string;
   primerApellido: string;
@@ -317,6 +355,7 @@ export type ResultadoParseoEmpleados = {
 
 function cellStr(v: ExcelJS.CellValue | undefined): string {
   if (v == null) return "";
+  if (typeof v === "string") return desprotegerTextoExcel(v.trim());
   if (typeof v === "object" && "text" in v) return String(v.text ?? "").trim();
   if (v instanceof Date) {
     const d = String(v.getDate()).padStart(2, "0");
@@ -353,7 +392,11 @@ export async function parsearPlantillaEmpleadosConAdvertencias(
 ): Promise<ResultadoParseoEmpleados> {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(buffer as unknown as ExcelJS.Buffer);
-  const ws = wb.worksheets.find((s) => /empleado|personal/i.test(s.name))
+  // Hoja principal: "Empleados" (plantilla y exportación actuales), o "Personal" (exportaciones anteriores); luego, por compatibilidad,
+  // cualquier hoja cuyo nombre lo sugiera y, por último, la primera.
+  const ws = wb.getWorksheet(HOJA_EMPLEADOS)
+    ?? wb.getWorksheet(HOJA_EMPLEADOS_LEGADO)
+    ?? wb.worksheets.find((s) => /empleado|personal/i.test(s.name))
     ?? wb.worksheets[0];
   if (!ws) throw new Error("El Excel no tiene hojas.");
 
@@ -472,6 +515,7 @@ export async function parsearPlantillaEmpleadosConAdvertencias(
       codigo,
       nombre,
       dpi: get(col("dpi")) || codigo,
+      dpiDesdeCodigo: !get(col("dpi")),
       primerNombre,
       segundoNombre,
       primerApellido,

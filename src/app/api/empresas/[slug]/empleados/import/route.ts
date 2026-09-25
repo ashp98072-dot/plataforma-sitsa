@@ -9,10 +9,12 @@ import {
   actualizarEmpleado,
   crearEmpleado,
   obtenerEmpleadoPorCodigo,
+  obtenerEmpleadoPorDpi,
 } from "@/lib/rrhh/empleados";
 import { parsearPlantillaEmpleadosConAdvertencias } from "@/lib/rrhh/empleados-export";
 import {
   codigoSospechosoImport,
+  esPlaceholderImport,
   fusionarEmpleadoImport,
 } from "@/lib/rrhh/empleados-import";
 import { obtenerParametros } from "@/lib/rrhh/config";
@@ -195,9 +197,10 @@ export async function POST(req: Request, ctx: Ctx) {
           // defaults del parser (columna ausente/vacía) del Excel, y
           // nunca toca supervisorIds/horasExtraHabilitado/fechaEgreso —
           // ver fusionarEmpleadoImport().
+          // Un DPI derivado del código (columna dpi vacía) nunca se escribe como DPI de un empleado existente.
           const payloadActualizado = fusionarEmpleadoImport(
             existente,
-            payload,
+            fila.dpiDesdeCodigo ? { ...payload, dpi: "" } : payload,
             fila.camposConDefault,
           );
           await actualizarEmpleado(
@@ -207,6 +210,22 @@ export async function POST(req: Request, ctx: Ctx) {
           );
           actualizados += 1;
         } else {
+          // PROTECCIÓN DE DUPLICADOS (flujo exportar → editar → reimportar): si el código NO existe pero el DPI ya pertenece a un
+          // empleado de esta empresa, casi seguro el código de la fila fue modificado. NO se crea un empleado nuevo ni se reasigna
+          // por DPI en silencio: la fila queda bloqueada con un mensaje claro.
+          if (fila.dpi && !esPlaceholderImport(fila.dpi)) {
+            const dueno = await obtenerEmpleadoPorDpi(guard.empresa.id, fila.dpi);
+            if (dueno) {
+              errores.push(
+                formatoErrorImport({
+                  filaExcel: fila.filaExcel,
+                  identidad,
+                  detalle: `El DPI ya pertenece al empleado ${dueno.codigo} — ${dueno.nombre}. El código del archivo fue modificado. Corrige el código para actualizar el empleado existente.`,
+                }),
+              );
+              continue;
+            }
+          }
           // Empleado nuevo: comportamiento normal de creación, sin
           // aplicar la protección de placeholders (no hay nada previo
           // que preservar).

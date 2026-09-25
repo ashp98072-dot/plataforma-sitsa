@@ -1709,7 +1709,7 @@ export default function EmpleadosPage() {
           href={`/api/empresas/${slug}/empleados/export?format=plantilla`}
           className="rounded-lg bg-[#334155] px-3 py-2 text-sm text-white"
         >
-          Plantilla Excel
+          Descargar plantilla
         </a>
         <button
           type="button"
@@ -1770,8 +1770,9 @@ export default function EmpleadosPage() {
         <a
           href={hrefExportEmpleados(slug, "xlsx", filtrosActuales)}
           className="rounded-lg bg-[var(--accent)] px-3 py-2 text-sm text-white"
+          title="Exporta los empleados filtrados; el mismo archivo se puede editar y volver a importar"
         >
-          Excel
+          Exportar empleados
         </a>
         <a
           href={hrefExportEmpleados(slug, "pdf", filtrosActuales)}
@@ -1780,6 +1781,11 @@ export default function EmpleadosPage() {
           PDF
         </a>
       </div>
+
+      <p className="text-xs text-[var(--muted)]">
+        Podés exportar los empleados, modificar los datos en Excel y volver a importar el mismo archivo para actualizar las fichas.
+        El código identifica al empleado; las celdas vacías no borran información existente.
+      </p>
 
       <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
         <table className="w-full text-left text-sm">

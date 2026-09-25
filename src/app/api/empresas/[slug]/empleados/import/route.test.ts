@@ -10,6 +10,7 @@ vi.mock("@/lib/rrhh/empleados", () => ({
   actualizarEmpleado: vi.fn(),
   crearEmpleado: vi.fn(),
   obtenerEmpleadoPorCodigo: vi.fn(),
+  obtenerEmpleadoPorDpi: vi.fn(),
 }));
 vi.mock("@/lib/rrhh/empleados-export", () => ({
   parsearPlantillaEmpleadosConAdvertencias: vi.fn(),
