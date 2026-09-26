@@ -61,6 +61,44 @@ export function DocumentosModal({
   const [error, setError] = useState("");
   const [mensaje, setMensaje] = useState("");
   const [loading, setLoading] = useState(false);
+  const [generando, setGenerando] = useState(false);
+
+  // Expediente completo en UN PDF (se genera bajo demanda en el servidor; los documentos originales no se tocan).
+  async function descargarExpediente() {
+    if (generando) return;
+    setGenerando(true);
+    setError("");
+    setMensaje("");
+    try {
+      const res = await fetch(`/api/empresas/${slug}/empleados/${empleadoId}/expediente-pdf`);
+      if (!res.ok) {
+        let texto = "No se pudo generar el expediente. Intenta nuevamente.";
+        try {
+          const data = await res.json();
+          if (res.status !== 500 && typeof data.error === "string") texto = data.error;
+        } catch {
+          // respuesta no JSON: se conserva el mensaje amigable
+        }
+        setError(texto);
+        return;
+      }
+      const blob = await res.blob();
+      const m = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") ?? "");
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = m?.[1] ?? "Expediente.pdf";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setMensaje(docs.length ? "Expediente generado." : "Expediente generado (el empleado no tiene documentos cargados; solo incluye la portada).");
+    } catch {
+      setError("No se pudo generar el expediente. Revisa tu conexión e intenta nuevamente.");
+    } finally {
+      setGenerando(false);
+    }
+  }
 
   const cargar = useCallback(async () => {
     setLoading(true);
@@ -160,6 +198,16 @@ export function DocumentosModal({
             Cerrar
           </button>
         </div>
+
+        <button
+          type="button"
+          data-descargar-expediente
+          disabled={generando}
+          onClick={() => void descargarExpediente()}
+          className="mt-4 w-full rounded-md border border-[var(--border)] px-4 py-2 text-sm hover:bg-[var(--nav-hover)] disabled:opacity-50"
+        >
+          {generando ? "Generando…" : "Descargar expediente completo"}
+        </button>
 
         {puedeEditar ? (
           <div className="mt-4 space-y-2 rounded-lg border border-[var(--border)] p-3">
