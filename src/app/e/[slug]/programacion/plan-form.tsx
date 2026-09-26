@@ -6,6 +6,11 @@ import { ClienteSearch } from "@/components/tms/cliente-search";
 import { PlacaSelect, type VehiculoOpt } from "@/components/tms/placa-select";
 import { PilotoSelect, type OcupacionRecurso } from "@/components/tms/piloto-select";
 import { MSG_PERSONA_DUPLICADA, hayPersonaDuplicada } from "@/lib/tms/piloto-extra-comun";
+import { payloadTipoViaje, precargaTipoViajeDesdePlan } from "@/lib/tms/plan-form-tercerizado";
+import {
+  agruparViaticosPorRol, derivarFilasViaticos, derivarPreviewViaticosEdicion, empleadosPersistidos, tituloGrupoPilotos,
+  type EstadoFormularioPersonal,
+} from "@/lib/tms/plan-form-viaticos";
 import { RutaSelect, type RutaOpt } from "@/components/tms/ruta-select";
 import { AuxiliaresSelect } from "@/components/tms/auxiliares-select";
 import { Hora12Input } from "@/components/tms/hora-input-12h";
@@ -378,18 +383,13 @@ export default function PlanForm({
     // PROGRAMACION-VIAJES-TERCERIZADOS-1 — 'Propio' por defecto (compatibilidad
     // con el flujo de siempre). auxiliaresExternosTexto: un nombre por línea,
     // igual criterio que notas/condicionesAdicionales en otros formularios.
-    tipoViaje: (plan?.tipo_viaje === "Tercerizado" ? "Tercerizado" : "Propio") as "Propio" | "Tercerizado",
-    pilotoExternoNombre: plan?.piloto_externo_nombre ?? "",
-    auxiliaresExternosTexto: plan?.auxiliares_externos ?? "",
-    unidadExternaPlaca: plan?.unidad_externa_placa ?? "",
-    unidadExternaDescripcion: plan?.unidad_externa_descripcion ?? "",
-    transportistaExterno: plan?.transportista_externo ?? "",
+    // (helper puro plan-form-tercerizado.ts: piloto/auxiliares/unidad/descripción/transportista/TC externo/costo, con los saltos de línea
+    // de los auxiliares externos)
+    ...precargaTipoViajeDesdePlan(plan),
     // PROGRAMACION-TC-CAJA-REMOLQUE-1 — TC del viaje. tcPlaca (Propio, del
     // catálogo interno de TC) y tcExternoPlaca (Tercerizado, texto libre) son
     // campos distintos: un id/placa interno nunca se mezcla con un snapshot externo.
     tcPlaca: plan?.tipo_viaje === "Tercerizado" ? "" : (plan?.tc ?? ""),
-    tcExternoPlaca: plan?.tipo_viaje === "Tercerizado" ? (plan?.tc_externo_placa ?? "") : "",
-    costoTercerizado: plan?.costo_tercerizado != null ? String(plan.costo_tercerizado) : "",
   });
   const ventanaDisponibilidad = `${form.fechaPlan}|${form.horaCarga}|${form.regresoEstimado}`;
   const ocupacionPersonal = ocupacionDia.fecha === ventanaDisponibilidad ? ocupacionDia.personal : {};
@@ -1034,52 +1034,23 @@ export default function PlanForm({
   const pilotosParaExtra = pilotos.filter((p) => p.id !== form.pilotoEmpleadoId && !form.auxiliarEmpleadoIds.includes(p.id));
   const sugeridoPorRol = (rol: "Piloto" | "Auxiliar") =>
     viaticosConfig.find((c) => c.puesto === rol)?.montoDefecto ?? 0;
-  const filasViaticos: FilaViaticoCreacion[] = [];
-  if (form.pilotoEmpleadoId) {
-    filasViaticos.push({
-      key: "piloto",
-      nombre: form.pilotoNombre || `Empleado #${form.pilotoEmpleadoId}`,
-      rol: "Piloto",
-      empleadoId: form.pilotoEmpleadoId,
-      sugerido: sugeridoPorRol("Piloto"),
-    });
-  } else if (form.pilotoNombre.trim()) {
-    filasViaticos.push({
-      key: "piloto-libre",
-      nombre: form.pilotoNombre.trim(),
-      rol: "Piloto",
-      empleadoId: null,
-      sugerido: sugeridoPorRol("Piloto"),
-    });
-  }
-  // PILOTO EXTRA: fila PROPIA de viático (rol "Piloto", monto individual): nunca comparte monto con el principal.
-  if (form.tipoViaje === "Propio" && form.mostrarPilotoExtra && form.pilotoExtraEmpleadoId) {
-    filasViaticos.push({
-      key: "piloto-extra",
-      nombre: form.pilotoExtraNombre || `Empleado #${form.pilotoExtraEmpleadoId}`,
-      rol: "Piloto",
-      empleadoId: form.pilotoExtraEmpleadoId,
-      sugerido: sugeridoPorRol("Piloto"),
-    });
-  }
-  for (const id of form.auxiliarEmpleadoIds) {
-    filasViaticos.push({
-      key: `aux-emp-${id}`,
-      nombre: auxiliares.find((a) => a.id === id)?.nombre ?? `Empleado #${id}`,
-      rol: "Auxiliar",
-      empleadoId: id,
-      sugerido: sugeridoPorRol("Auxiliar"),
-    });
-  }
-  for (const nombreLibre of form.auxiliarNombres) {
-    filasViaticos.push({
-      key: `aux-nombre-${nombreLibre}`,
-      nombre: nombreLibre,
-      rol: "Auxiliar",
-      empleadoId: null,
-      sugerido: sugeridoPorRol("Auxiliar"),
-    });
-  }
+  // Filas derivadas del estado ACTUAL del formulario (helper puro, plan-form-viaticos.ts): principal, piloto extra (fila propia, rol Piloto)
+  // y auxiliares. En edición, además, la previsualización de quien el formulario ya asignó y el viaje guardado todavía no.
+  const estadoPersonalForm: EstadoFormularioPersonal = {
+    tipoViaje: form.tipoViaje,
+    pilotoEmpleadoId: form.pilotoEmpleadoId,
+    pilotoNombre: form.pilotoNombre,
+    mostrarPilotoExtra: form.mostrarPilotoExtra,
+    pilotoExtraEmpleadoId: form.pilotoExtraEmpleadoId,
+    pilotoExtraNombre: form.pilotoExtraNombre,
+    auxiliarEmpleadoIds: form.auxiliarEmpleadoIds,
+    auxiliarNombres: form.auxiliarNombres,
+  };
+  const opcionesViaticos = { sugeridoPorRol, nombreAuxiliar: (id: number) => auxiliares.find((a) => a.id === id)?.nombre };
+  const filasViaticos: FilaViaticoCreacion[] = derivarFilasViaticos(estadoPersonalForm, opcionesViaticos);
+  const gruposViaticos = agruparViaticosPorRol(filasViaticos);
+  const previewViaticosEdicion =
+    esEdicion && form.tipoViaje === "Propio" ? derivarPreviewViaticosEdicion(estadoPersonalForm, empleadosPersistidos(plan!), opcionesViaticos) : [];
 
   /** POST viaticosAsignados — solo filas con vínculo RRHH (empleadoId conocido, el único id que este formulario tiene antes de guardar); el backend valida pertenencia y traduce a tms_personal.id internamente. */
   function construirViaticosAsignados(): { empleadoId: number; montoAsignado: number }[] {
@@ -1123,20 +1094,7 @@ export default function PlanForm({
    * el snapshot, sin inventar un arreglo relacional nuevo.
    */
   function camposTipoViaje() {
-    return {
-      tipoViaje: form.tipoViaje,
-      pilotoExternoNombre: form.tipoViaje === "Tercerizado" ? form.pilotoExternoNombre.trim() || undefined : undefined,
-      auxiliaresExternos:
-        form.tipoViaje === "Tercerizado"
-          ? form.auxiliaresExternosTexto.split(/\r?\n/).map((n) => n.trim()).filter(Boolean).slice(0, 8)
-          : undefined,
-      unidadExternaPlaca: form.tipoViaje === "Tercerizado" ? form.unidadExternaPlaca.trim() || undefined : undefined,
-      unidadExternaDescripcion: form.tipoViaje === "Tercerizado" ? form.unidadExternaDescripcion.trim() || undefined : undefined,
-      transportistaExterno: form.tipoViaje === "Tercerizado" ? form.transportistaExterno.trim() || undefined : undefined,
-      tcExternoPlaca: form.tipoViaje === "Tercerizado" ? form.tcExternoPlaca.trim().toUpperCase() || undefined : undefined,
-      costoTercerizado:
-        form.tipoViaje === "Tercerizado" && form.costoTercerizado !== "" ? Number(form.costoTercerizado) : undefined,
-    };
+    return payloadTipoViaje(form);
   }
 
   async function onSubmit(e: FormEvent) {
@@ -1337,7 +1295,8 @@ export default function PlanForm({
           motivoCambio: camposSensibles.motivoCambio,
           auxiliarEmpleadoIds: camposSensibles.auxiliarEmpleadoIds,
           auxiliarNombres: camposSensibles.auxiliarNombres,
-          tipoTraslado: undefined,
+          // Tipo de traslado: se guarda al editarlo (antes se mostraba pero nunca se enviaba). Solo si cambió; bloqueado en "En ruta" sin llegada.
+          tipoTraslado: soloNotas || form.tipoTraslado.trim() === (plan?.tipo_traslado ?? "").trim() ? undefined : form.tipoTraslado.trim(),
           // OPS-3.2b: estos seis ya no dependen de `soloNotas` a secas —
           // `bloqueadoParaPreCierre` los libera cuando el plan está
           // pendiente de cierre (llegada ya registrada), aunque siga
@@ -2288,15 +2247,37 @@ export default function PlanForm({
       ) : null}
 
       {esEdicion ? (
-        <div className="md:col-span-3">
+        <div className="md:col-span-3 space-y-2">
           <ViaticosPanel key={viaticosVersion} slug={slug} planId={plan!.id} />
+          {/* PREVISUALIZACIÓN (no persistida): personal que el formulario ya asignó y el viaje guardado todavía no (p. ej. un piloto extra
+              recién agregado). Se muestra al instante, sin recargar; al guardar, el servidor crea su viático y el panel lo trae persistido.
+              Quien ya está guardado nunca aparece aquí (no se duplica con el viático real). */}
+          {previewViaticosEdicion.length ? (
+            <div className="rounded border border-dashed border-[var(--border)] p-2 text-xs" data-preview-viaticos>
+              <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--muted)]">Viáticos por crear al guardar</p>
+              {previewViaticosEdicion.map((f) => (
+                <div key={f.key} className="mt-1 flex flex-wrap items-center gap-3">
+                  <div className="min-w-[140px] flex-1">
+                    <p className="text-sm">{f.nombre}</p>
+                    <p className="text-[10px] text-[var(--muted)]">{f.rol}</p>
+                  </div>
+                  <p className="text-[11px] text-[var(--muted)]">Sugerido Q{f.sugerido.toFixed(2)} · se crea al guardar; luego puedes ajustar el monto en la lista de arriba.</p>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : (
         <div className="md:col-span-3 space-y-2 rounded border border-[var(--border)] p-3">
           <p className="text-xs font-medium">Viáticos del viaje</p>
           {filasViaticos.length ? (
             <div className="space-y-2">
-              {filasViaticos.map((f) => (
+              {[{ titulo: tituloGrupoPilotos(gruposViaticos.pilotos.length), filas: gruposViaticos.pilotos }, { titulo: "Auxiliares", filas: gruposViaticos.auxiliares }]
+                .filter((g) => g.filas.length)
+                .map((g) => (
+              <div key={g.titulo} className="space-y-2" data-grupo-viaticos={g.titulo}>
+                <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--muted)]">{g.titulo}</p>
+                {g.filas.map((f) => (
                 <div key={f.key} className="flex flex-wrap items-center gap-3 rounded border border-[var(--border)] p-2 text-xs">
                   <div className="min-w-[140px] flex-1">
                     <p className="text-sm">{f.nombre}</p>
@@ -2325,6 +2306,8 @@ export default function PlanForm({
                     </p>
                   )}
                 </div>
+                ))}
+              </div>
               ))}
               <p className="text-[10px] text-[var(--muted)]">
                 Se guarda junto con el viaje. Mientras el viático esté PROGRAMADO puede seguir ajustándose desde aquí; una vez AUTORIZADO queda bloqueado.

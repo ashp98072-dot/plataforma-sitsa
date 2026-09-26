@@ -105,6 +105,45 @@ export const COLUMNAS_IMAGEN: ColumnaImagen[] = [
 export const ANCHO_IMAGEN = 2000;
 export const ALTO_FILA = 34;
 export const ALTO_FILA_CABECERA = 38;
+/** Alto de cada línea ADICIONAL de una celda con varias líneas (p. ej. piloto principal + piloto extra en la misma celda "Piloto"). */
+export const ALTO_LINEA_EXTRA = 17;
+/** Separador de líneas dentro de UNA celda (cada piloto en su propia línea; nunca una columna nueva). */
+export const SEPARADOR_LINEAS_CELDA = "\n";
+
+/**
+ * Texto de la celda "Piloto" de la imagen: el principal y, si existe, el piloto EXTRA — cada uno en su propia línea DENTRO de la misma
+ * columna. Sin extra queda exactamente el texto de siempre (una línea). Nunca se manda al piloto extra a Auxiliar 1/2.
+ */
+export function celdaPilotoImagen(principal: string | null | undefined, extra: string | null | undefined): string {
+  return [principal, extra].map((n) => (n ?? "").trim()).filter(Boolean).join(SEPARADOR_LINEAS_CELDA);
+}
+
+/**
+ * Parte un texto en líneas que quepan en `anchoMax` (medido con `medir`, p. ej. ctx.measureText): respeta los saltos de línea de la celda y
+ * envuelve por PALABRAS, de modo que un nombre largo se muestra COMPLETO en varias líneas. Solo una palabra suelta más ancha que la celda
+ * se corta al final (última defensa; no ocurre con nombres reales).
+ */
+export function envolverTexto(texto: string, anchoMax: number, medir: (t: string) => number): string[] {
+  const salida: string[] = [];
+  for (const bloque of String(texto ?? "").split(SEPARADOR_LINEAS_CELDA)) {
+    const palabras = bloque.split(/\s+/).filter(Boolean);
+    if (!palabras.length) { salida.push(""); continue; }
+    let actual = "";
+    for (const palabra of palabras) {
+      const candidata = actual ? `${actual} ${palabra}` : palabra;
+      if (!actual || medir(candidata) <= anchoMax) actual = candidata;
+      else { salida.push(actual); actual = palabra; }
+    }
+    salida.push(actual);
+  }
+  return salida.length ? salida : [""];
+}
+
+/** Alto de una fila según su celda con MÁS líneas: una línea = ALTO_FILA (aspecto de siempre); cada línea extra suma ALTO_LINEA_EXTRA. */
+export function altoFilaImagen(lineasPorCelda: number[]): number {
+  const maximo = Math.max(1, ...lineasPorCelda);
+  return ALTO_FILA + (maximo - 1) * ALTO_LINEA_EXTRA;
+}
 /**
  * Alto máximo razonable de UN lienzo (muy por debajo del límite real de
  * los navegadores, ~16000-32000px según motor) — evita un PNG gigantesco
@@ -140,6 +179,21 @@ export function paginar<T>(items: T[], porPagina: number): T[][] {
   return paginas;
 }
 
+/** Pagina por alto acumulado (las filas con celdas de varias líneas miden más). Nunca deja una página vacía ni parte una fila. */
+export function paginarPorAlto(filas: string[][], altoDisponible: number): string[][][] {
+  const paginas: string[][][] = [];
+  let actual: string[][] = [];
+  let usado = 0;
+  for (const fila of filas) {
+    const alto = altoFilaImagen(fila.map((c) => c.split(SEPARADOR_LINEAS_CELDA).length));
+    if (actual.length && usado + alto > altoDisponible) { paginas.push(actual); actual = []; usado = 0; }
+    actual.push(fila);
+    usado += alto;
+  }
+  if (actual.length) paginas.push(actual);
+  return paginas;
+}
+
 /**
  * Cuántas filas caben en un solo lienzo antes de tener que dividir en más
  * de una imagen, dado el alto ya ocupado por encabezado + título de tabla.
@@ -170,9 +224,13 @@ export function construirLayoutImagen(
 ): LayoutImagenPrograma {
   const ancho = opts.anchoDisponible ?? ANCHO_IMAGEN;
   const altoEncabezadoPx = opts.altoEncabezado ?? 90;
-  const porPagina = filasPorPagina(altoEncabezadoPx, opts.altoMaximoLienzo ?? ALTO_MAXIMO_LIENZO);
+  const altoMaximo = opts.altoMaximoLienzo ?? ALTO_MAXIMO_LIENZO;
+  const porPagina = filasPorPagina(altoEncabezadoPx, altoMaximo);
   const celdas = filas.map(celdasFila);
-  const paginas = paginar(celdas, porPagina);
+  // Si alguna celda tiene varias líneas (piloto principal + extra) las filas miden más: se pagina por el alto acumulado (con todo de una línea,
+  // exactamente las mismas filas por página de siempre).
+  const varias = celdas.some((fila) => fila.some((c) => c.includes(SEPARADOR_LINEAS_CELDA)));
+  const paginas = varias ? paginarPorAlto(celdas, altoMaximo - altoEncabezadoPx - ALTO_FILA_CABECERA) : paginar(celdas, porPagina);
   return {
     anchoColumnas: anchosColumnasImagen(ancho),
     encabezado: lineasEncabezado(encabezado),

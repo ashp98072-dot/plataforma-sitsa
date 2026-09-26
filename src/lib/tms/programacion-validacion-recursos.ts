@@ -60,6 +60,8 @@ export type EntradaCamposTocados = {
   tarifaId?: unknown;
   costoOperativoReferencia?: unknown;
   referenciaCliente?: unknown;
+  /** Tipo de traslado (dato comercial descriptivo). */
+  tipoTraslado?: unknown;
 };
 
 export function camposTocados(d: EntradaCamposTocados): CamposTocados {
@@ -76,7 +78,8 @@ export function camposTocados(d: EntradaCamposTocados): CamposTocados {
       d.tarifaComercial !== undefined ||
       d.tarifaId !== undefined ||
       d.costoOperativoReferencia !== undefined ||
-      d.referenciaCliente !== undefined,
+      d.referenciaCliente !== undefined ||
+      d.tipoTraslado !== undefined,
   };
 }
 

@@ -20,6 +20,8 @@ import { describe, expect, it } from "vitest";
  *   PRIMERO el PATCH dedicado (tipoViaje), aislado del PATCH normal.
  */
 const planForm = readFileSync(join(__dirname, "plan-form.tsx"), "utf-8").replace(/\r\n/g, "\n");
+/** camposTipoViaje() delega en el helper puro (plan-form-tercerizado.ts): las guardas sobre SU lógica leen ese archivo. */
+const helperTipoViaje = readFileSync(join(__dirname, "../../../../lib/tms/plan-form-tercerizado.ts"), "utf-8").replace(/\r\n/g, "\n");
 /** indexOf con `from` opcional — evita que una coincidencia MÁS TEMPRANA en otra parte del archivo (p.ej. otro "if (!esEdicion) {" o otro ") : (") arruine el recorte. */
 const pos = (texto: string, from = 0) => {
   const i = planForm.indexOf(texto, from);
@@ -28,21 +30,25 @@ const pos = (texto: string, from = 0) => {
 };
 
 describe("plan-form.tsx — camposTipoViaje()", () => {
-  const fn = () => planForm.slice(pos("function camposTipoViaje()"), pos("async function onSubmit"));
+  const fn = () => helperTipoViaje.slice(helperTipoViaje.indexOf("export function payloadTipoViaje"));
+
+  it("el formulario delega camposTipoViaje() en el helper puro", () => {
+    expect(planForm.slice(pos("function camposTipoViaje()"), pos("async function onSubmit"))).toContain("return payloadTipoViaje(form);");
+  });
 
   it("siempre manda tipoViaje; los 5 campos de texto libre solo cuando tipoViaje === 'Tercerizado' (undefined en Propio)", () => {
     const f = fn();
     expect(f).toContain("tipoViaje: form.tipoViaje");
     for (const campo of ["pilotoExternoNombre", "unidadExternaPlaca", "unidadExternaDescripcion", "transportistaExterno"]) {
-      expect(f).toContain(`form.tipoViaje === "Tercerizado" ? form.${campo}`);
+      expect(f).toContain(`terc ? form.${campo}`);
     }
-    expect(f).toContain('form.tipoViaje === "Tercerizado"');
+    expect(f).toContain('const terc = form.tipoViaje === "Tercerizado";');
     expect(f).toContain("form.auxiliaresExternosTexto");
   });
 
   it("costoTercerizado también queda undefined salvo Tercerizado con valor no vacío (nunca 0 falso-vacío)", () => {
     const f = fn();
-    expect(f).toContain('form.tipoViaje === "Tercerizado" && form.costoTercerizado !== "" ? Number(form.costoTercerizado) : undefined');
+    expect(f).toContain('terc && form.costoTercerizado !== "" ? Number(form.costoTercerizado) : undefined');
   });
 
   it("auxiliaresExternos se parte por línea aquí, una sola vez (el backend solo vuelve a unir con \\n, nunca reinterpreta)", () => {
