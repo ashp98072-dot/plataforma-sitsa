@@ -26,7 +26,10 @@ describe("RRHH Empleados — foto en el listado", () => {
   it("3) ampliación: reutiliza FotoAmpliada del dashboard (no crea otro modal); clic no dispara el doble clic/expediente de la fila", () => {
     const f = leer("src/components/rrhh/foto-empleado-miniatura.tsx");
     expect(f).toContain('import { FotoAmpliada } from "@/components/rrhh/detalle-movimientos-mensual"');
-    expect(f).toContain("ev.stopPropagation()");
+    expect(f).toContain("onClick={(ev) => { ev.stopPropagation(); setAmpliada(true); }}");
+    // doble clic sobre la foto no debe subir al <tr onDoubleClick> (expediente)
+    expect(f).toContain("onDoubleClick={(ev) => ev.stopPropagation()}");
+    expect(page).toContain("onDoubleClick={() => setDocsEmp(e)}"); // el resto de la fila sigue abriendo el expediente
     expect(f).not.toContain("createPortal");
   });
   it("sin ampliable (Planillas) el componente es igual que antes: sin botón", () => {

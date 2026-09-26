@@ -19,7 +19,7 @@ export function FotoEmpleadoMiniatura({ slug, empleadoId, nombre, ampliable = fa
   );
   return <div className={`flex ${compacta ? "h-8 w-8" : "h-10 w-10"} shrink-0 items-center justify-center overflow-hidden rounded-full border border-[var(--border)] bg-[var(--input)]`}>
     {fallida === src ? <span className="text-xs text-[var(--muted)]" aria-label={`Sin fotografía de ${nombre}`}>{nombre.trim().split(/\s+/).slice(0, 2).map((n) => n[0]).join("") || "—"}</span> :
-      ampliable ? <button type="button" aria-label={`Ampliar fotografía de ${nombre}`} onClick={(ev) => { ev.stopPropagation(); setAmpliada(true); }} className="h-full w-full cursor-zoom-in focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">{imagen}</button> : imagen}
+      ampliable ? <button type="button" aria-label={`Ampliar fotografía de ${nombre}`} onClick={(ev) => { ev.stopPropagation(); setAmpliada(true); }} onDoubleClick={(ev) => ev.stopPropagation()} className="h-full w-full cursor-zoom-in focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">{imagen}</button> : imagen}
     {ampliable && ampliada && fallida !== src ? <FotoAmpliada src={src} nombre={nombre} cerrar={() => setAmpliada(false)} /> : null}
   </div>;
 }
