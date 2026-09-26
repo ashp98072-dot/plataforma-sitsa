@@ -26,6 +26,8 @@ export type AsignacionOperativaPortal = {
   destino: string | null;
   placa: string | null;
   piloto: string | null;
+  /** Piloto EXTRA del viaje (co-piloto), si tiene. El principal sigue siendo `piloto`. */
+  pilotoExtra?: string | null;
   auxiliares: string[];
   viajeId: number | null;
   viajeEstado: string | null;
@@ -42,7 +44,12 @@ export type AsignacionOperativaPortal = {
   viaticoEstado?: string | null;
 };
 
-/** Planes donde el colaborador participa como piloto o auxiliar. */
+/**
+ * Planes donde el colaborador participa como piloto (principal o EXTRA) o auxiliar.
+ *
+ * PILOTO EXTRA: ve el viaje que tiene asignado (y solo ese) igual que el principal. Iniciar la salida (portal/viajes "salida"),
+ * vincular el viaje técnico y cerrar siguen siendo del piloto PRINCIPAL (`piloto_id`): el registro de Flota lleva UN empleado.
+ */
 export async function listarAsignacionesOperativasEmpleado(
   empresaId: number,
   empleadoId: number,
@@ -61,20 +68,34 @@ export async function listarAsignacionesOperativasEmpleado(
      LEFT JOIN tms_unidades u ON u.id = p.unidad_id
      LEFT JOIN flota_vehiculos ve ON ve.id = u.flota_vehiculo_id
      LEFT JOIN tms_personal pil ON pil.id = p.piloto_id
+     LEFT JOIN tms_plan_pilotos_adicionales pe ON pe.plan_id = p.id
+     LEFT JOIN tms_personal pex ON pex.id = pe.personal_id
      LEFT JOIN tms_plan_auxiliares pa ON pa.plan_id = p.id
      LEFT JOIN tms_personal aux ON aux.id = pa.personal_id
      LEFT JOIN tms_personal aux_legacy ON aux_legacy.id = p.auxiliar_id
      LEFT JOIN flota_viajes fv ON fv.plan_id = p.id AND fv.empresa_id = p.empresa_id
      WHERE p.empresa_id = ?
-       AND (pil.id_empleado = ? OR aux.id_empleado = ? OR aux_legacy.id_empleado = ?)
+       AND (pil.id_empleado = ? OR pex.id_empleado = ? OR aux.id_empleado = ? OR aux_legacy.id_empleado = ?)
        AND (p.fecha_plan >= DATE_SUB(CURDATE(), INTERVAL 12 MONTH)
             OR fv.estado = 'abierto')
      ORDER BY (fv.estado = 'abierto') DESC, p.fecha_plan DESC, p.hora_carga DESC
      LIMIT 250`,
-    [empresaId, empleadoId, empleadoId, empleadoId],
+    [empresaId, empleadoId, empleadoId, empleadoId, empleadoId],
   ).catch(() => [] as RowDataPacket[]);
 
   const ids = rows.map((r) => Number(r.id));
+  // Piloto extra de esos planes (una consulta).
+  const extraMap = new Map<number, string>();
+  if (ids.length) {
+    const extraRows = await query<RowDataPacket[]>(
+      `SELECT x.plan_id, per.nombre FROM tms_plan_pilotos_adicionales x
+       INNER JOIN tms_personal per ON per.id = x.personal_id
+       WHERE x.plan_id IN (${ids.map(() => "?").join(",")})
+       ORDER BY x.plan_id, x.orden`,
+      ids,
+    ).catch(() => [] as RowDataPacket[]);
+    for (const r of extraRows) if (!extraMap.has(Number(r.plan_id))) extraMap.set(Number(r.plan_id), String(r.nombre));
+  }
   const auxMap = new Map<number, string[]>();
   if (ids.length) {
     const auxRows = await query<RowDataPacket[]>(
@@ -102,6 +123,7 @@ export async function listarAsignacionesOperativasEmpleado(
     destino: r.destino ? String(r.destino) : null,
     placa: r.placa ? String(r.placa) : null,
     piloto: r.piloto ? String(r.piloto) : null,
+    pilotoExtra: extraMap.get(Number(r.id)) ?? null,
     auxiliares: auxMap.get(Number(r.id)) ?? [],
     viajeId: r.viaje_id != null ? Number(r.viaje_id) : null,
     viajeEstado: r.viaje_estado ? String(r.viaje_estado) : null,
@@ -110,7 +132,7 @@ export async function listarAsignacionesOperativasEmpleado(
   }));
 }
 
-/** Autoriza al piloto o a cualquier auxiliar asignado al plan del viaje. */
+/** Autoriza al piloto (principal o extra) o a cualquier auxiliar asignado al plan del viaje. */
 export async function colaboradorParticipaEnViaje(
   empresaId: number,
   empleadoId: number,
@@ -121,14 +143,16 @@ export async function colaboradorParticipaEnViaje(
      FROM flota_viajes fv
      LEFT JOIN tms_planes_viaje p ON p.id = fv.plan_id AND p.empresa_id = fv.empresa_id
      LEFT JOIN tms_personal pil ON pil.id = p.piloto_id
+     LEFT JOIN tms_plan_pilotos_adicionales pe ON pe.plan_id = p.id
+     LEFT JOIN tms_personal pex ON pex.id = pe.personal_id
      LEFT JOIN tms_plan_auxiliares pa ON pa.plan_id = p.id
      LEFT JOIN tms_personal aux ON aux.id = pa.personal_id
      LEFT JOIN tms_personal aux_legacy ON aux_legacy.id = p.auxiliar_id
      WHERE fv.id = ? AND fv.empresa_id = ?
-       AND (fv.empleado_id = ? OR pil.id_empleado = ?
+       AND (fv.empleado_id = ? OR pil.id_empleado = ? OR pex.id_empleado = ?
             OR aux.id_empleado = ? OR aux_legacy.id_empleado = ?)
      LIMIT 1`,
-    [viajeId, empresaId, empleadoId, empleadoId, empleadoId, empleadoId],
+    [viajeId, empresaId, empleadoId, empleadoId, empleadoId, empleadoId, empleadoId],
   ).catch(() => [] as RowDataPacket[]);
   return rows[0]
     ? {
@@ -162,14 +186,16 @@ export async function obtenerViajeAbiertoDeEmpleado(
      INNER JOIN flota_vehiculos ve ON ve.id = v.vehiculo_id
      LEFT JOIN tms_planes_viaje p ON p.id = v.plan_id AND p.empresa_id = v.empresa_id
      LEFT JOIN tms_personal pil ON pil.id = p.piloto_id
+     LEFT JOIN tms_plan_pilotos_adicionales pe ON pe.plan_id = p.id
+     LEFT JOIN tms_personal pex ON pex.id = pe.personal_id
      LEFT JOIN tms_plan_auxiliares pa ON pa.plan_id = p.id
      LEFT JOIN tms_personal aux ON aux.id = pa.personal_id
      LEFT JOIN tms_personal aux_legacy ON aux_legacy.id = p.auxiliar_id
      WHERE v.empresa_id = ? AND v.estado = 'abierto'
-       AND (v.empleado_id = ? OR pil.id_empleado = ?
+       AND (v.empleado_id = ? OR pil.id_empleado = ? OR pex.id_empleado = ?
             OR aux.id_empleado = ? OR aux_legacy.id_empleado = ?)
      LIMIT 1`,
-    [empresaId, empleadoId, empleadoId, empleadoId, empleadoId],
+    [empresaId, empleadoId, empleadoId, empleadoId, empleadoId, empleadoId],
   ).catch(() => [] as RowDataPacket[]);
   const r = rows[0];
   if (!r) return null;

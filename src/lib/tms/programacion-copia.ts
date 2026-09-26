@@ -23,6 +23,8 @@ export type OrigenFila = {
   clienteNombre: string | null;
   rutaCodigo: string | null;
   pilotoNombre: string | null;
+  /** Piloto extra del viaje origen (informativo; se copia si sigue disponible). */
+  pilotoExtraNombre?: string | null;
   auxiliaresNombres: string[];
   unidadPlaca: string | null;
   tcPlaca: string | null;
@@ -64,7 +66,16 @@ export async function cargarCopiaDeFecha(empresaId: number, fechaOrigen: string)
   );
   if (!planes.length) return [];
   const planIds = planes.map((p) => Number(p.id));
-  const [auxRows, paradasMap] = await Promise.all([
+  const [extraRows, auxRows, paradasMap] = await Promise.all([
+    // Piloto extra de los planes origen (una consulta; tolera que la tabla aún no exista).
+    query<RowDataPacket[]>(
+      `SELECT x.plan_id, tp.id_empleado, tp.nombre
+       FROM tms_plan_pilotos_adicionales x
+       INNER JOIN tms_personal tp ON tp.id = x.personal_id AND tp.empresa_id = ?
+       WHERE x.plan_id IN (${planIds.map(() => "?").join(",")})
+       ORDER BY x.plan_id, x.orden`,
+      [empresaId, ...planIds],
+    ).catch(() => [] as RowDataPacket[]),
     query<RowDataPacket[]>(
       `SELECT pa.plan_id, pa.orden, tp.id_empleado, tp.nombre
        FROM tms_plan_auxiliares pa
@@ -75,6 +86,8 @@ export async function cargarCopiaDeFecha(empresaId: number, fechaOrigen: string)
     ).catch(() => [] as RowDataPacket[]),
     listarParadasDePlanes(planIds),
   ]);
+  const extraPorPlan = new Map<number, RowDataPacket>();
+  for (const x of extraRows) if (!extraPorPlan.has(Number(x.plan_id))) extraPorPlan.set(Number(x.plan_id), x);
   const auxPorPlan = new Map<number, RowDataPacket[]>();
   for (const a of auxRows) auxPorPlan.set(Number(a.plan_id), [...(auxPorPlan.get(Number(a.plan_id)) ?? []), a]);
 
@@ -89,6 +102,9 @@ export async function cargarCopiaDeFecha(empresaId: number, fechaOrigen: string)
       if (a.id_empleado != null) auxiliarEmpleadoIds.push(Number(a.id_empleado));
       else advertencias.push(`El auxiliar "${String(a.nombre)}" no está vinculado a un empleado: selecciónalo.`);
     }
+    const extra = tercerizado ? undefined : extraPorPlan.get(id);
+    const pilotoExtraEmpleadoId = extra?.id_empleado != null ? Number(extra.id_empleado) : null;
+    if (extra && pilotoExtraEmpleadoId == null) advertencias.push(`El piloto extra "${String(extra.nombre)}" no está vinculado a un empleado: no se copiará.`);
     const pilotoEmpleadoId = !tercerizado && p.piloto_empleado_id != null ? Number(p.piloto_empleado_id) : null;
     if (!tercerizado && p.piloto_nombre && pilotoEmpleadoId == null) advertencias.push(`El piloto "${String(p.piloto_nombre)}" no está vinculado a un empleado: selecciónalo.`);
 
@@ -108,6 +124,7 @@ export async function cargarCopiaDeFecha(empresaId: number, fechaOrigen: string)
       unidadPlaca: tercerizado ? null : texto(p.unidad_placa),
       tcVehiculoId: !tercerizado && p.tc_vehiculo_id != null ? Number(p.tc_vehiculo_id) : null,
       pilotoEmpleadoId,
+      pilotoExtraEmpleadoId,
       auxiliarEmpleadoIds: tercerizado ? [] : auxiliarEmpleadoIds,
       tarifaId: null, // NUNCA la del origen: el motor toma la vigente/predeterminada de la ruta
       externo: tercerizado ? {
@@ -128,6 +145,7 @@ export async function cargarCopiaDeFecha(empresaId: number, fechaOrigen: string)
         planId: id, codigo: String(p.codigo), estado: String(p.estado),
         clienteNombre: texto(p.cliente_nombre), rutaCodigo: texto(p.ruta_codigo_historico),
         pilotoNombre: tercerizado ? texto(p.piloto_externo_nombre) : texto(p.piloto_nombre),
+        pilotoExtraNombre: extra ? texto(extra.nombre) : null,
         auxiliaresNombres: tercerizado ? borrador.externo!.auxiliaresExternos : auxFilas.map((a) => String(a.nombre)),
         unidadPlaca: tercerizado ? texto(p.unidad_externa_placa) : texto(p.unidad_placa),
         tcPlaca: tercerizado ? texto(p.tc_externo_placa) : texto(p.tc_placa_historica),

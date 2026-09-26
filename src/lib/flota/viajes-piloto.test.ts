@@ -18,6 +18,6 @@ describe("historial operativo del colaborador", () => {
     expect(sql).toContain("INTERVAL 12 MONTH");
     expect(sql).toContain("OR fv.estado = 'abierto'");
     expect(sql).toContain("LIMIT 250");
-    expect(params).toEqual([7, 23, 23, 23]);
+    expect(params).toEqual([7, 23, 23, 23, 23]); // piloto principal, piloto EXTRA, auxiliar y auxiliar legado
   });
 });

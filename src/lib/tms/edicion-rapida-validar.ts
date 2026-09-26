@@ -38,6 +38,7 @@ import {
   type RecursoPersonalValidar,
   type VehiculoDisponibilidadRegla,
 } from "./programacion-validacion-recursos";
+import { MSG_PERSONA_DUPLICADA, hayPersonaDuplicada } from "./piloto-extra";
 
 /**
  * PROGRAMACIÓN — EDICIÓN RÁPIDA PR-1: VALIDACIÓN de solo LECTURA del ESTADO FINAL de un lote de cambios de piloto,
@@ -67,6 +68,8 @@ export type PlanBD = {
   id: number; codigo: string; estado: string; fechaPlan: string; horaCarga: string | null; regresoEstimado: string | null;
   tipoViaje: string; pilotoId: number | null; unidadTmsId: number | null; unidadPlaca: string | null; flotaVehiculoId: number | null;
   tcVehiculoId: number | null; pendienteCierre: boolean; auxiliares: { personalId: number; nombre: string }[]; pilotoNombre: string;
+  /** Piloto EXTRA (tms_plan_pilotos_adicionales). La edición rápida NO lo modifica: lo conserva y lo tiene en cuenta en las validaciones. */
+  pilotoExtraId?: number | null;
   // PR-355: tarifa del catálogo (snapshot en el viaje) y viáticos actuales por tms_personal.id.
   rutaId: number | null; tarifaId: number | null; tarifaComercial: number | null; tarifaNombre: string | null;
   viaticos: { personalId: number; montoAsignado: number; montoSugerido: number; estado: string }[];
@@ -75,7 +78,14 @@ export type TarifaSnapshot = { id: number; nombre: string; monto: number; moneda
 /** Estado FINAL de la tarifa de un viaje: catálogo (snapshot), manual (solo tarifa_comercial) o sin tarifa. */
 export type TarifaDestino = { tipo: "catalogo"; snap: TarifaSnapshot } | { tipo: "manual"; monto: number } | { tipo: "sin" };
 
-export type Recursos = { pilotoId: number | null; auxiliaresIds: number[]; flotaVehiculoId: number | null; tcVehiculoId: number | null };
+export type Recursos = {
+  pilotoId: number | null;
+  /** Piloto extra: igual en `actual` y `final` (la edición rápida no lo cambia; solo se considera en duplicados/conflictos). */
+  pilotoExtraId?: number | null;
+  auxiliaresIds: number[];
+  flotaVehiculoId: number | null;
+  tcVehiculoId: number | null;
+};
 export type FilaTrabajo = {
   planId: number; plan: PlanBD | null; errores: ErrorFilaEdicionRapida[]; advertencias: AdvertenciaFilaEdicionRapida[];
   actual: Recursos | null; final: Recursos | null; hayCambios: boolean; fatal: boolean;
@@ -119,7 +129,7 @@ async function cargarPlanes(leer: Lector, empresaId: number, ids: number[], bloq
     // siguientes ya ven lo confirmado por quien tenía el candado antes que nosotros.
     await leer(`SELECT id FROM tms_planes_viaje WHERE empresa_id = ? AND id IN (${placeholders(ids.length)}) ORDER BY id FOR UPDATE`, [empresaId, ...ids]);
   }
-  const [planes, aux, viaticos] = await Promise.all([
+  const [planes, aux, viaticos, extras] = await Promise.all([
     leer(
       `SELECT p.id, p.codigo, p.estado, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan, p.hora_carga,
               DATE_FORMAT(p.regreso_estimado, '%Y-%m-%d %H:%i:%s') AS regreso_estimado, p.tipo_viaje, p.piloto_id, p.unidad_id,
@@ -146,6 +156,11 @@ async function cargarPlanes(leer: Lector, empresaId: number, ids: number[], bloq
        WHERE empresa_id = ? AND plan_id IN (${placeholders(ids.length)}) ORDER BY plan_id, personal_id`,
       [empresaId, ...ids],
     ).catch((): RowDataPacket[] => []),
+    // Piloto extra de los planes del lote (una consulta; tolera que la tabla aún no exista).
+    leer(
+      `SELECT plan_id, personal_id FROM tms_plan_pilotos_adicionales WHERE empresa_id = ? AND plan_id IN (${placeholders(ids.length)}) ORDER BY plan_id, orden, id`,
+      [empresaId, ...ids],
+    ).catch((): RowDataPacket[] => []),
   ]);
   for (const r of planes) {
     const id = Number(r.id);
@@ -166,6 +181,10 @@ async function cargarPlanes(leer: Lector, empresaId: number, ids: number[], bloq
     });
   }
   for (const a of aux) mapa.get(Number(a.plan_id))?.auxiliares.push({ personalId: Number(a.personal_id), nombre: String(a.nombre) });
+  for (const x of extras) {
+    const plan = mapa.get(Number(x.plan_id));
+    if (plan && plan.pilotoExtraId == null) plan.pilotoExtraId = Number(x.personal_id);
+  }
   return mapa;
 }
 
@@ -238,8 +257,8 @@ export async function evaluarEdicionRapida(empresaId: number, datos: ValidarEdic
       continue;
     }
     const auxActual = plan.auxiliares.map((a) => a.personalId);
-    fila.actual = { pilotoId: plan.pilotoId, auxiliaresIds: auxActual, flotaVehiculoId: plan.flotaVehiculoId, tcVehiculoId: plan.tcVehiculoId };
-    fila.final = { pilotoId: c.nuevo.pilotoPersonalId, auxiliaresIds: c.nuevo.auxiliarPersonalIds, flotaVehiculoId: c.nuevo.flotaVehiculoId, tcVehiculoId: c.nuevo.tcVehiculoId };
+    fila.actual = { pilotoId: plan.pilotoId, pilotoExtraId: plan.pilotoExtraId ?? null, auxiliaresIds: auxActual, flotaVehiculoId: plan.flotaVehiculoId, tcVehiculoId: plan.tcVehiculoId };
+    fila.final = { pilotoId: c.nuevo.pilotoPersonalId, pilotoExtraId: plan.pilotoExtraId ?? null, auxiliaresIds: c.nuevo.auxiliarPersonalIds, flotaVehiculoId: c.nuevo.flotaVehiculoId, tcVehiculoId: c.nuevo.tcVehiculoId };
 
     const dif: string[] = [];
     const e = c.esperado;
@@ -289,7 +308,7 @@ export async function evaluarEdicionRapida(empresaId: number, datos: ValidarEdic
   // ---------------------------------------------------------------- 2) reglas por fila (mismos helpers que el PATCH)
   const sinCambios = (f: FilaTrabajo) => !f.fatal && !f.hayCambios;
   const candidatas = filas.filter((f) => !f.fatal && f.hayCambios);
-  const tocaDe = (f: FilaTrabajo): CamposTocados => ({ piloto: f.cambiaPiloto, auxiliares: f.cambiaAuxiliares, unidad: f.cambiaUnidad, fecha: false, paradas: false, hora: false, comercial: f.cambiaTarifa || f.cambiaViaticos });
+  const tocaDe = (f: FilaTrabajo): CamposTocados => ({ piloto: f.cambiaPiloto, pilotoExtra: false, auxiliares: f.cambiaAuxiliares, unidad: f.cambiaUnidad, fecha: false, paradas: false, hora: false, comercial: f.cambiaTarifa || f.cambiaViaticos });
 
   for (const fila of candidatas) {
     const plan = fila.plan!;
@@ -340,6 +359,10 @@ export async function evaluarEdicionRapida(empresaId: number, datos: ValidarEdic
     if (!r.ok) { err(fila, "PERSONAL_INVALIDO", r.error); fila.fatal = true; }
     const rep = fila.final!.pilotoId != null && fila.final!.auxiliaresIds.includes(fila.final!.pilotoId);
     if (!fila.fatal && rep) { err(fila, "PERSONAL_INVALIDO", "El piloto no puede ser también auxiliar del mismo viaje."); fila.fatal = true; }
+    // Piloto extra (no editable aquí): el nuevo principal o los nuevos auxiliares no pueden coincidir con él.
+    if (!fila.fatal && hayPersonaDuplicada(fila.final!.pilotoId, fila.final!.pilotoExtraId ?? null, fila.final!.auxiliaresIds)) {
+      err(fila, "PERSONAL_INVALIDO", MSG_PERSONA_DUPLICADA); fila.fatal = true;
+    }
   }
   const personal = await cargarPersonal(leer, empresaId, [...todosPersonalIds]);
   const claveDe = (personalId: number) => { const p = personal.get(personalId); return p?.idEmpleado != null ? `e:${p.idEmpleado}` : `p:${personalId}`; };
@@ -379,7 +402,7 @@ export async function evaluarEdicionRapida(empresaId: number, datos: ValidarEdic
 
   // PR-355: viáticos editados. La persona debe estar en el estado FINAL del viaje y un viático ya procesado no se toca.
   for (const fila of filas.filter((x) => x.cambiaViaticos && !x.fatal)) {
-    const finalIds = new Set([...(fila.final!.pilotoId != null ? [fila.final!.pilotoId] : []), ...fila.final!.auxiliaresIds]);
+    const finalIds = new Set([...(fila.final!.pilotoId != null ? [fila.final!.pilotoId] : []), ...(fila.final!.pilotoExtraId != null ? [fila.final!.pilotoExtraId] : []), ...fila.final!.auxiliaresIds]);
     const existentes = new Map(fila.plan!.viaticos.map((v) => [v.personalId, v]));
     for (const ov of fila.viaticosOverrides) {
       const ex = existentes.get(ov.personalId);
@@ -392,8 +415,8 @@ export async function evaluarEdicionRapida(empresaId: number, datos: ValidarEdic
   for (const fila of activas.filter((x) => (x.cambiaPiloto || x.cambiaAuxiliares))) {
     const plan = fila.plan!;
     const removidos = personalQueSale(
-      { pilotoId: plan.pilotoId, piloto: plan.pilotoNombre, auxiliaresIds: plan.auxiliares.map((a) => a.personalId), auxiliaresNombres: plan.auxiliares.map((a) => a.nombre) },
-      { pilotoId: fila.final!.pilotoId, auxiliaresIds: fila.final!.auxiliaresIds },
+      { pilotoId: plan.pilotoId, piloto: plan.pilotoNombre, pilotoExtraId: plan.pilotoExtraId ?? null, auxiliaresIds: plan.auxiliares.map((a) => a.personalId), auxiliaresNombres: plan.auxiliares.map((a) => a.nombre) },
+      { pilotoId: fila.final!.pilotoId, pilotoExtraId: fila.final!.pilotoExtraId ?? null, auxiliaresIds: fila.final!.auxiliaresIds },
     );
     const ev = await validarRemocionConViaticos(fila.planId, removidos);
     if (ev) err(fila, "VIATICO_PROCESADO", ev.error);
@@ -474,8 +497,9 @@ export async function evaluarEdicionRapida(empresaId: number, datos: ValidarEdic
   for (const f of filas) {
     if (!f.plan || !f.final || !f.actual) continue;
     if (f.plan.tipoViaje === "Tercerizado") continue; // Tercerizado no consume recursos internos
-    const antesPersonas = new Set([...(f.actual.pilotoId != null ? [claveDe(f.actual.pilotoId)] : []), ...f.actual.auxiliaresIds.map(claveDe)]);
-    const personasFinal = [...(f.final.pilotoId != null ? [f.final.pilotoId] : []), ...f.final.auxiliaresIds];
+    const antesPersonas = new Set([...(f.actual.pilotoId != null ? [claveDe(f.actual.pilotoId)] : []), ...(f.actual.pilotoExtraId != null ? [claveDe(f.actual.pilotoExtraId)] : []), ...f.actual.auxiliaresIds.map(claveDe)]);
+    // El piloto extra cuenta como persona del viaje (ocupa el mismo intervalo que el principal) aunque esta edición no lo cambie.
+    const personasFinal = [...(f.final.pilotoId != null ? [f.final.pilotoId] : []), ...(f.final.pilotoExtraId != null ? [f.final.pilotoExtraId] : []), ...f.final.auxiliaresIds];
     for (const pid of personasFinal) anotar(claveDe(pid), nombreDe(pid), f, !antesPersonas.has(claveDe(pid)));
     const fid = f.final.flotaVehiculoId;
     const placa = f.cambiaUnidad && fid != null ? placaPorFlota.get(fid) ?? null : f.plan.unidadPlaca;

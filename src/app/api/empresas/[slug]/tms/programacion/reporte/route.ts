@@ -6,6 +6,7 @@ import { listarParadasDePlanes } from "@/lib/tms/paradas";
 import { tablaAExcel, tablaAPdf } from "@/lib/rrhh/export-files";
 import { formatearHora12 } from "@/lib/tms/hora-formato";
 import { configuracionPdfProgramacion } from "@/lib/tms/programacion-pdf-anchos";
+import { pilotoExtraDePlanes, textoPilotos } from "@/lib/tms/piloto-extra";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -134,8 +135,14 @@ export async function GET(req: Request, ctx: Ctx) {
     condiciones.push("NOT EXISTS (SELECT 1 FROM tms_plan_auxiliares pa WHERE pa.plan_id = p.id)");
   }
   if (piloto) {
-    condiciones.push("pil.nombre = ?");
-    params.push(piloto);
+    // El filtro por piloto incluye los viajes donde esa persona es piloto EXTRA (además de principal).
+    condiciones.push(
+      `(pil.nombre = ? OR EXISTS (
+         SELECT 1 FROM tms_plan_pilotos_adicionales x
+         INNER JOIN tms_personal xp ON xp.id = x.personal_id
+         WHERE x.plan_id = p.id AND xp.nombre = ?))`,
+    );
+    params.push(piloto, piloto);
   }
   if (unidad) {
     condiciones.push("u.placa = ?");
@@ -172,8 +179,10 @@ export async function GET(req: Request, ctx: Ctx) {
   );
 
   const planIds = rows.map((r) => Number(r.id));
-  const [paradasMap, auxRows] = await Promise.all([
+  const [paradasMap, extraMap, auxRows] = await Promise.all([
     listarParadasDePlanes(planIds),
+    // Piloto extra de todos los planes del reporte en UNA consulta.
+    pilotoExtraDePlanes(planIds),
     planIds.length
       ? query<RowDataPacket[]>(
           `SELECT a.plan_id, per.nombre, a.orden
@@ -226,11 +235,10 @@ export async function GET(req: Request, ctx: Ctx) {
     // formato que Operaciones ya conoce.
     const esTercerizado = String(r.tipo_viaje ?? "Propio") === "Tercerizado";
     const placa = esTercerizado ? (r.unidad_externa_placa ? String(r.unidad_externa_placa) : "") : r.placa ? String(r.placa) : "";
+    // Con piloto extra la celda queda "Principal / Extra"; sin extra, exactamente como antes.
     const piloto = esTercerizado
       ? `${r.piloto_externo_nombre ? String(r.piloto_externo_nombre) : ""}${r.piloto_externo_nombre ? " (Tercerizado)" : ""}`
-      : r.piloto
-        ? String(r.piloto)
-        : "";
+      : textoPilotos(r.piloto ? String(r.piloto) : "", extraMap.get(id)?.nombre);
     const auxiliaresExternos = esTercerizado
       ? String(r.auxiliares_externos ?? "").split(/\r?\n/).map((n) => n.trim()).filter(Boolean)
       : [];

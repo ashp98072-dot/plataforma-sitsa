@@ -39,7 +39,7 @@ const DESTINO = "2026-09-25";
 
 type Plan = {
   id: number; empresa_id: number; codigo: string; estado: string; fecha: string; cliente_id: number | null; unidad_id: number | null; piloto_id: number | null;
-  auxiliar_id: number | null; aux: number[]; tc_vehiculo_id: number | null; tipo_viaje: string; ruta_id: number | null;
+  auxiliar_id: number | null; aux: number[]; extra?: number | null; tc_vehiculo_id: number | null; tipo_viaje: string; ruta_id: number | null;
   hora: string | null; regreso?: string | null; tarifa_comercial: number | null; tarifa_id: number | null; tarifa_nombre: string | null; tc_placa: string | null;
   tc_externo: string | null; piloto_externo: string | null; unidad_ext: string | null; cerrado_por?: string | null;
 };
@@ -59,9 +59,11 @@ const flota: Record<number, { id: number; placa: string; activo: number; en_tall
   31: { id: 31, placa: "TC-1", activo: 1, en_taller: 0, tipo_unidad: "TC", empresa_id: 7 },
   32: { id: 32, placa: "TC-2", activo: 1, en_taller: 0, tipo_unidad: "TC", empresa_id: 7 },
 };
-const empleados: Record<number, { id: number; nombre: string; estado: string }> = {
+const empleados: Record<number, { id: number; nombre: string; estado: string; puesto?: string }> = {
   1: { id: 1, nombre: "Juan Pérez", estado: "Activo" }, 2: { id: 2, nombre: "Ana López", estado: "Activo" }, 3: { id: 3, nombre: "Beto Ruiz", estado: "Activo" },
-  4: { id: 4, nombre: "Carla Díaz", estado: "Activo" }, 5: { id: 5, nombre: "Inactivo Uno", estado: "Baja" },
+  4: { id: 4, nombre: "Carla Díaz", estado: "Activo" }, 5: { id: 5, nombre: "Inactivo Uno", estado: "Baja", puesto: "Piloto" },
+  // PILOTO EXTRA: 6 y 7 son pilotos (puesto de piloto); 8 es un auxiliar (no puede ser piloto extra).
+  6: { id: 6, nombre: "Extra Piloto", estado: "Activo", puesto: "Piloto" }, 7: { id: 7, nombre: "Otro Piloto", estado: "Activo", puesto: "Piloto" }, 8: { id: 8, nombre: "Solo Auxiliar", estado: "Activo", puesto: "Auxiliar" },
   ...Object.fromEntries(Array.from({ length: 10 }, (_, i) => [20 + i, { id: 20 + i, nombre: `Aux ${i}`, estado: "Activo" }])),
 };
 const rutas: Record<number, Record<string, unknown>> = {
@@ -157,7 +159,7 @@ beforeEach(() => {
     if (s.includes("FROM tms_personal tp")) {
       return e.personal.filter((tp) => ids.includes(tp.id)).flatMap((tp) => {
         const eq = new Set(e.personal.filter((x) => x.id === tp.id || x.id_empleado === tp.id_empleado).map((x) => x.id));
-        return e.planes.filter((p) => ocupa(p) && ((p.piloto_id != null && eq.has(p.piloto_id)) || p.aux.some((a) => eq.has(a)))).map((p) => fila(p, tp.id, tp.nombre));
+        return e.planes.filter((p) => ocupa(p) && ((p.piloto_id != null && eq.has(p.piloto_id)) || (p.extra != null && eq.has(p.extra)) || p.aux.some((a) => eq.has(a)))).map((p) => fila(p, tp.id, tp.nombre));
       });
     }
     if (s.includes("FROM tms_unidades u")) return e.planes.filter((p) => ocupa(p) && p.unidad_id != null && ids.includes(p.unidad_id)).map((p) => fila(p, p.unidad_id, e.unidades.find((u) => u.id === p.unidad_id)?.placa));
@@ -184,6 +186,11 @@ beforeEach(() => {
         tipo_viaje: p[23] as string, piloto_externo: p[24] as string | null, unidad_ext: p[26] as string | null, tc_vehiculo_id: p[30] as number | null, tc_placa: p[31] as string | null, tc_externo: p[32] as string | null,
         aux: [] }));
       return [{ insertId: id }];
+    }
+    if (s.includes("INSERT INTO tms_plan_pilotos_adicionales")) {
+      const pl = e.planes.find((x) => x.id === p[1]);
+      if (pl) pl.extra = p[2] as number;
+      return [{ affectedRows: 1 }];
     }
     if (s.includes("INSERT INTO tms_plan_origen")) {
       if (falla.en === "origen" && e.origen.length + 1 >= falla.enPlanNumero) throw new Error("fallo origen");
@@ -352,7 +359,7 @@ describe("tercerizados: solo texto externo, sin recursos ni disponibilidad inter
     const p = creadosDestino().find((x) => x.tipo_viaje === "Tercerizado")!;
     expect(p).toMatchObject({ piloto_externo: "Piloto Ext", unidad_ext: "X-123", tc_externo: "TX-9", piloto_id: null, unidad_id: null, tc_vehiculo_id: null, tc_placa: null });
     expect(personalDesdeEmpleado).not.toHaveBeenCalled();
-    expect(vi.mocked(sincronizarViaticosPlan).mock.calls[0][2]).toEqual({ piloto: null, auxiliares: [] });
+    expect(vi.mocked(sincronizarViaticosPlan).mock.calls[0][2]).toEqual({ piloto: null, pilotoExtra: null, auxiliares: [] });
     expect(conn.execute.mock.calls.some(([s]) => String(s).includes("INSERT INTO tms_unidades"))).toBe(false);
   });
   it("valida: piloto externo obligatorio, límites de longitud (placa 40) y no mezcla recursos internos", async () => {
@@ -497,7 +504,7 @@ describe("copiar programación de otra fecha", () => {
     const [f] = await cargar([origenRow()], aux);
     expect(f.borrador).toEqual({
       fila: 1, origenPlanId: 900, rutaId: 10, clienteId: 3, horaCarga: "03:00", regresoOffsetDias: null, regresoHora: null, tipoTraslado: "Carga", tipoViaje: "Propio", unidadPlaca: "P-1", tcVehiculoId: 31,
-      pilotoEmpleadoId: 1, auxiliarEmpleadoIds: [20, 21, 22, 23, 24, 25, 26, 27], tarifaId: null, externo: null,
+      pilotoEmpleadoId: 1, pilotoExtraEmpleadoId: null, auxiliarEmpleadoIds: [20, 21, 22, 23, 24, 25, 26, 27], tarifaId: null, externo: null,
       paradas: [{ lugarNombre: "Bodega", tipo: "Carga", requiereEvidencia: true }, { lugarNombre: "Xela", tipo: "Descarga", requiereEvidencia: true }],
     });
     // Nada de historia en el borrador (ni siquiera como campos ocultos)
@@ -973,5 +980,99 @@ describe("Copiar: la ausencia de tarifa NO bloquea", () => {
     expect(page).not.toMatch(/no tiene una tarifa vigente/);
     const helpers = readFileSync("src/app/e/[slug]/programacion/copiar/copiar-helpers.ts", "utf8");
     expect(helpers).not.toMatch(/tarifa\s*(===|==|!==)\s*null/); // ninguna regla de selección/confirmación mira la tarifa
+  });
+});
+
+// ------------------------------------------------------------------ PILOTO EXTRA: copiar programación
+describe("piloto extra al copiar programación (máximo 1; misma disponibilidad que el principal)", () => {
+  const conExtra = (fila = 1, origen = 900) => borrador({ fila, origenPlanId: origen, pilotoEmpleadoId: 1, pilotoExtraEmpleadoId: 6 });
+  const extras = () => conn.execute.mock.calls.filter((c) => String(c[0]).includes("tms_plan_pilotos_adicionales"));
+
+  it("18) copiar un viaje conserva el piloto extra: lo guarda en la MISMA transacción y le crea su viático (sync con pilotoExtra), sin copiar montos", async () => {
+    const r = await confirmar([conExtra()]);
+    expect(r.ok).toBe(true);
+    const creado = creadosDestino()[0];
+    expect(creado.extra).toBe(700); // tms_personal materializado del empleado 6 (rol Piloto)
+    expect(extras().map((c) => String(c[0]).split(" ")[0])).toEqual(["DELETE", "INSERT"]);
+    expect(vi.mocked(personalDesdeEmpleado)).toHaveBeenCalledWith(EMP, 6, "Piloto", conn);
+    expect(vi.mocked(sincronizarViaticosPlan).mock.calls[0][2]).toMatchObject({ piloto: 501, pilotoExtra: 700 });
+    expect(conn.commit).toHaveBeenCalledTimes(1);
+  });
+
+  it("sin extra en el origen: idéntico a antes (no escribe la tabla nueva; sync con pilotoExtra null)", async () => {
+    await confirmar([borrador()]);
+    expect(extras()).toHaveLength(0);
+    expect(vi.mocked(sincronizarViaticosPlan).mock.calls[0][2]).toMatchObject({ pilotoExtra: null });
+  });
+
+  it("el extra pasa por la MISMA validación de disponibilidad: ocupado el mismo día en otro viaje → error de fila y NO se crea nada", async () => {
+    e.personal.push({ id: 702, id_empleado: 6, nombre: "Extra Piloto" });
+    e.planes.push(plan({ id: 50, codigo: "PLAN-EXISTENTE", piloto_id: 502, extra: 702, unidad_id: 602, hora: "03:00", regreso: `${DESTINO} 06:00:00` }));
+    const r = await confirmar([conExtra()]);
+    expect(r).toMatchObject({ ok: false, status: 409 });
+    expect(JSON.stringify((r as { erroresPorFila?: unknown }).erroresPorFila)).toContain("Extra Piloto");
+    expect(creadosDestino()).toHaveLength(0);
+    expect(extras()).toHaveLength(0);
+  });
+
+  it("colisión DENTRO del lote: el extra de una fila y el principal de otra con ventanas solapadas → error en ambas", async () => {
+    const res = await validarLote(EMP, DESTINO, [conExtra(1, 900), borrador({ fila: 2, origenPlanId: 901, unidadPlaca: "P-2", pilotoEmpleadoId: 6 })]);
+    expect(res.every((f) => f.estado === "error")).toBe(true);
+    expect(res[0].errores.join(" ")).toContain("también en la fila 2");
+  });
+
+  it("4/5/6) el extra no puede repetir al principal ni a un auxiliar", async () => {
+    const [a] = await validarLote(EMP, DESTINO, [borrador({ pilotoEmpleadoId: 1, pilotoExtraEmpleadoId: 1 })]);
+    expect(a.errores.join(" ")).toContain("no pueden repetirse");
+    const [b] = await validarLote(EMP, DESTINO, [borrador({ pilotoExtraEmpleadoId: 6, auxiliarEmpleadoIds: [6] })]);
+    expect(b.errores.join(" ")).toContain("no pueden repetirse");
+  });
+
+  it("solo RRHH activo con puesto de piloto: un auxiliar/inactivo/inexistente no puede ser extra", async () => {
+    expect((await validarLote(EMP, DESTINO, [borrador({ pilotoExtraEmpleadoId: 8 })]))[0].errores.join(" ")).toContain("no tiene puesto de piloto");
+    expect((await validarLote(EMP, DESTINO, [borrador({ pilotoExtraEmpleadoId: 5 })]))[0].errores.join(" ")).toContain("inactivo");
+    expect((await validarLote(EMP, DESTINO, [borrador({ pilotoExtraEmpleadoId: 999 })]))[0].errores.join(" ")).toContain("piloto extra seleccionado no existe");
+  });
+
+  it("19) un viaje Tercerizado no admite piloto extra interno", async () => {
+    const externo = { pilotoExternoNombre: "Ext", auxiliaresExternos: [], unidadExternaPlaca: "", unidadExternaDescripcion: "", transportistaExterno: "", costoTercerizado: null, tcExternoPlaca: "" };
+    const [r] = await validarLote(EMP, DESTINO, [borrador({ tipoViaje: "Tercerizado", unidadPlaca: null, pilotoEmpleadoId: null, pilotoExtraEmpleadoId: 6, externo })]);
+    expect(r.errores.join(" ")).toContain("piloto extra");
+  });
+
+  it("todo o nada: si falla después de guardar el extra (viáticos) se revierte el plan Y el extra", async () => {
+    falla = { en: "viaticos", enPlanNumero: 1 };
+    const r = await confirmar([conExtra()]);
+    expect(r.ok).toBe(false);
+    expect(creadosDestino()).toHaveLength(0);
+    expect(conn.commit).not.toHaveBeenCalled();
+  });
+
+  it("copiar: el borrador toma el extra del viaje origen en UNA consulta para todos los planes (sin N+1) y avisa si no está vinculado a un empleado", async () => {
+    const base = vi.mocked(query).getMockImplementation() as unknown as (s: string, p: unknown[]) => Promise<unknown>;
+    let consultasExtra = 0;
+    vi.mocked(query).mockImplementation((async (sql: string, params: unknown[]) => {
+      const s = String(sql);
+      if (s.includes("LEFT JOIN tms_clientes c") && s.includes("p.fecha_plan = ?")) {
+        return [900, 901].map((id) => ({ id, codigo: `P${id}`, estado: "Programado", cliente_id: 3, cliente_nombre: "Acme", ruta_id: 10, ruta_codigo_historico: "1001", hora_carga: "03:00:00", regreso_estimado: null,
+          tipo_traslado: "Carga", tipo_viaje: "Propio", unidad_placa: "P-1", tc_vehiculo_id: null, tc_placa_historica: null, tc_externo_placa: null, piloto_empleado_id: 1, piloto_nombre: "Juan Pérez",
+          aux1_empleado_id: null, aux1_nombre: null, piloto_externo_nombre: null, auxiliares_externos: null, unidad_externa_placa: null, unidad_externa_descripcion: null, transportista_externo: null, costo_tercerizado: null }));
+      }
+      if (s.includes("FROM tms_plan_pilotos_adicionales x")) { consultasExtra++; return [{ plan_id: 900, id_empleado: 6, nombre: "Extra Piloto" }, { plan_id: 901, id_empleado: null, nombre: "Sin vínculo" }]; }
+      if (s.includes("FROM tms_plan_auxiliares pa")) return [];
+      return base(sql, params);
+    }) as never);
+    const filas = await cargarCopiaDeFecha(EMP, ORIGEN);
+    expect(consultasExtra).toBe(1);
+    expect(filas[0].borrador.pilotoExtraEmpleadoId).toBe(6);
+    expect(filas[0].origen.pilotoExtraNombre).toBe("Extra Piloto");
+    expect(filas[1].borrador.pilotoExtraEmpleadoId).toBeNull();
+    expect(filas[1].advertencias.join(" ")).toContain("piloto extra");
+  });
+
+  it("el esquema del cliente acepta el extra (opcional) y sigue siendo estricto; el servidor lo revalida", () => {
+    const src = readFileSync("src/lib/tms/programacion-copia-schema.ts", "utf8");
+    expect(src).toContain("pilotoExtraEmpleadoId: idNullable.optional()");
+    expect(src).toContain(".strict()");
   });
 });

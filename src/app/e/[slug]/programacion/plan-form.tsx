@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ClienteSearch } from "@/components/tms/cliente-search";
 import { PlacaSelect, type VehiculoOpt } from "@/components/tms/placa-select";
 import { PilotoSelect, type OcupacionRecurso } from "@/components/tms/piloto-select";
+import { MSG_PERSONA_DUPLICADA, hayPersonaDuplicada } from "@/lib/tms/piloto-extra-comun";
 import { RutaSelect, type RutaOpt } from "@/components/tms/ruta-select";
 import { AuxiliaresSelect } from "@/components/tms/auxiliares-select";
 import { Hora12Input } from "@/components/tms/hora-input-12h";
@@ -176,6 +177,8 @@ export function auxiliaresCambio(
 /** Snapshot mínimo (piloto/unidad/auxiliares) que decide `cambioSensible` — original (plan) o actual (form), misma forma para poder comparar. */
 export type SnapshotPersonalUnidad = {
   piloto: IdentidadPersonal;
+  /** Piloto EXTRA (opcional): asignarlo, cambiarlo o quitarlo también es un cambio sensible. */
+  pilotoExtra?: IdentidadPersonal | null;
   placa: string;
   auxiliares: IdentidadPersonal[];
 };
@@ -194,6 +197,7 @@ export function calcularCambioSensible(
 ): boolean {
   return (
     identidadPersonalCambio(original.piloto, actual.piloto) ||
+    identidadPersonalCambio(original.pilotoExtra ?? null, actual.pilotoExtra ?? null) ||
     normalizarPlaca(actual.placa) !== normalizarPlaca(original.placa) ||
     auxiliaresCambio(original.auxiliares, actual.auxiliares)
   );
@@ -224,6 +228,8 @@ export function calcularCambioSensible(
  */
 export type CamposSensiblesPatch = {
   pilotoNombre: string | undefined;
+  /** Piloto extra: número = asignarlo/cambiarlo, null = quitarlo, undefined = no tocarlo (solo se envía si REALMENTE cambió). */
+  pilotoExtraEmpleadoId: number | null | undefined;
   placa: string | undefined;
   auxiliarEmpleadoIds: number[] | undefined;
   auxiliarNombres: string[] | undefined;
@@ -238,6 +244,9 @@ export function camposSensiblesPatch(input: {
   auxiliarEmpleadoIds: number[];
   auxiliarNombres: string[];
   motivoCambioFinal: string;
+  /** El piloto extra realmente cambió (asignado / cambiado / quitado) y su empleado actual (null si no hay). */
+  pilotoExtraCambio?: boolean;
+  pilotoExtraEmpleadoId?: number | null;
 }): CamposSensiblesPatch {
   // Mismo criterio que ya regía piloto/placa/auxiliares: pre-cierre
   // ("En ruta" sin llegada) sigue bloqueando estos campos por completo,
@@ -245,6 +254,7 @@ export function camposSensiblesPatch(input: {
   const enviarCambioRecursos = !input.bloqueadoParaPreCierre && input.cambioSensible;
   return {
     pilotoNombre: enviarCambioRecursos ? input.pilotoNombre.trim() || undefined : undefined,
+    pilotoExtraEmpleadoId: enviarCambioRecursos && input.pilotoExtraCambio ? input.pilotoExtraEmpleadoId ?? null : undefined,
     placa: enviarCambioRecursos ? input.placa.trim() || undefined : undefined,
     auxiliarEmpleadoIds: enviarCambioRecursos ? input.auxiliarEmpleadoIds : undefined,
     auxiliarNombres: enviarCambioRecursos ? input.auxiliarNombres : undefined,
@@ -339,6 +349,10 @@ export default function PlanForm({
     placa: plan?.placa ?? "",
     pilotoEmpleadoId: 0,
     pilotoNombre: plan?.piloto ?? "",
+    // PILOTO EXTRA (máximo 1, solo Propio): el bloque solo se muestra si el viaje ya lo tiene o si se pulsa "+ Agregar piloto extra".
+    mostrarPilotoExtra: Boolean(plan?.pilotoExtraNombre),
+    pilotoExtraEmpleadoId: plan?.pilotoExtraEmpleadoId ?? 0,
+    pilotoExtraNombre: plan?.pilotoExtraNombre ?? "",
     auxiliarEmpleadoIds: [] as number[],
     auxiliarNombres: [] as string[],
     tipoTraslado: plan?.tipo_traslado ?? "",
@@ -967,6 +981,11 @@ export default function PlanForm({
       ? plan!.auxiliaresDetalle.map((a) => ({ empleadoId: a.empleadoId, nombre: a.nombre }))
       : (plan!.auxiliares ?? []).map((nombre) => ({ empleadoId: null, nombre }))
     : [];
+  const pilotoExtraOriginal: IdentidadPersonal | null =
+    esEdicion && plan!.pilotoExtraNombre ? { empleadoId: plan!.pilotoExtraEmpleadoId ?? null, nombre: plan!.pilotoExtraNombre } : null;
+  const pilotoExtraActual: IdentidadPersonal | null = form.mostrarPilotoExtra
+    ? { empleadoId: form.pilotoExtraEmpleadoId || null, nombre: form.pilotoExtraNombre }
+    : null;
   const auxActualesIdentidad: IdentidadPersonal[] = esEdicion
     ? [
         ...form.auxiliarEmpleadoIds.map((id) => ({
@@ -987,15 +1006,20 @@ export default function PlanForm({
     calcularCambioSensible(
       {
         piloto: { empleadoId: plan!.pilotoEmpleadoId ?? null, nombre: plan!.piloto ?? "" },
+        pilotoExtra: pilotoExtraOriginal,
         placa: plan!.placa ?? "",
         auxiliares: auxOriginalesIdentidad,
       },
       {
         piloto: { empleadoId: form.pilotoEmpleadoId || null, nombre: form.pilotoNombre },
+        pilotoExtra: pilotoExtraActual,
         placa: form.placa,
         auxiliares: auxActualesIdentidad,
       },
     );
+  // El piloto extra realmente cambió (asignado, cambiado o quitado) respecto al viaje guardado: solo entonces se envía al servidor.
+  const pilotoExtraCambio =
+    esEdicion && form.tipoViaje !== "Tercerizado" && identidadPersonalCambio(pilotoExtraOriginal, pilotoExtraActual);
 
   // Mejora Programación (Opción A, punto 1/7) — filas de la sección
   // "Viáticos del viaje" en modo creación, SIEMPRE derivadas de
@@ -1005,6 +1029,9 @@ export default function PlanForm({
   // vínculo RRHH (nombre libre) se muestra con el sugerido pero sin
   // override editable -- el backend no tiene forma de identificarlo antes
   // de crearse.
+  // Catálogos de los dos selectores de piloto: nadie puede ser principal y extra a la vez (ni el extra, un auxiliar ya elegido).
+  const pilotosParaPrincipal = pilotos.filter((p) => !(form.mostrarPilotoExtra && p.id === form.pilotoExtraEmpleadoId));
+  const pilotosParaExtra = pilotos.filter((p) => p.id !== form.pilotoEmpleadoId && !form.auxiliarEmpleadoIds.includes(p.id));
   const sugeridoPorRol = (rol: "Piloto" | "Auxiliar") =>
     viaticosConfig.find((c) => c.puesto === rol)?.montoDefecto ?? 0;
   const filasViaticos: FilaViaticoCreacion[] = [];
@@ -1022,6 +1049,16 @@ export default function PlanForm({
       nombre: form.pilotoNombre.trim(),
       rol: "Piloto",
       empleadoId: null,
+      sugerido: sugeridoPorRol("Piloto"),
+    });
+  }
+  // PILOTO EXTRA: fila PROPIA de viático (rol "Piloto", monto individual): nunca comparte monto con el principal.
+  if (form.tipoViaje === "Propio" && form.mostrarPilotoExtra && form.pilotoExtraEmpleadoId) {
+    filasViaticos.push({
+      key: "piloto-extra",
+      nombre: form.pilotoExtraNombre || `Empleado #${form.pilotoExtraEmpleadoId}`,
+      rol: "Piloto",
+      empleadoId: form.pilotoExtraEmpleadoId,
       sugerido: sugeridoPorRol("Piloto"),
     });
   }
@@ -1127,6 +1164,17 @@ export default function PlanForm({
       setError(tcResuelto.error);
       return;
     }
+    // PILOTO EXTRA (solo Propio): debe elegirse de RRHH (o quitarse) y nadie puede repetirse en el viaje. El servidor lo revalida.
+    if (form.tipoViaje === "Propio" && form.mostrarPilotoExtra) {
+      if (!form.pilotoExtraEmpleadoId) {
+        setError("Selecciona el piloto extra de la lista de RRHH o quítalo.");
+        return;
+      }
+      if (hayPersonaDuplicada(form.pilotoEmpleadoId || null, form.pilotoExtraEmpleadoId, form.auxiliarEmpleadoIds)) {
+        setError(MSG_PERSONA_DUPLICADA);
+        return;
+      }
+    }
     if (!esEdicion) {
       if (!form.clienteId && !form.clienteNombre.trim()) {
         setError("Busca y selecciona un cliente (o escribe el nombre).");
@@ -1196,6 +1244,8 @@ export default function PlanForm({
             tcVehiculoId: tcResuelto.id ?? undefined,
             pilotoEmpleadoId: form.pilotoEmpleadoId || undefined,
             pilotoNombre: form.pilotoNombre.trim() || undefined,
+            pilotoExtraEmpleadoId:
+              form.tipoViaje === "Propio" && form.mostrarPilotoExtra && form.pilotoExtraEmpleadoId ? form.pilotoExtraEmpleadoId : undefined,
             auxiliarEmpleadoIds: form.auxiliarEmpleadoIds.length ? form.auxiliarEmpleadoIds : undefined,
             auxiliarNombres: form.auxiliarNombres.length ? form.auxiliarNombres : undefined,
             ...camposTipoViaje(),
@@ -1246,7 +1296,7 @@ export default function PlanForm({
       // se resolvieron arriba, por su propio endpoint.
       const esTercerizadoAhora = form.tipoViaje === "Tercerizado";
       const camposSensibles = esTercerizadoAhora
-        ? { pilotoNombre: undefined, placa: undefined, auxiliarEmpleadoIds: undefined, auxiliarNombres: undefined, motivoCambio: undefined }
+        ? { pilotoNombre: undefined, placa: undefined, auxiliarEmpleadoIds: undefined, auxiliarNombres: undefined, motivoCambio: undefined, pilotoExtraEmpleadoId: undefined }
         : camposSensiblesPatch({
             bloqueadoParaPreCierre,
             cambioSensible,
@@ -1255,6 +1305,8 @@ export default function PlanForm({
             auxiliarEmpleadoIds: form.auxiliarEmpleadoIds,
             auxiliarNombres: form.auxiliarNombres,
             motivoCambioFinal,
+            pilotoExtraCambio,
+            pilotoExtraEmpleadoId: form.mostrarPilotoExtra ? form.pilotoExtraEmpleadoId || null : null,
           });
       const res = await fetch(`/api/empresas/${slug}/tms/planes`, {
         method: "PATCH",
@@ -1270,6 +1322,8 @@ export default function PlanForm({
           // igual que los seis campos de OPS-3.2b de abajo. Además, ahora
           // solo se reenvían si hubo un cambio sensible real (ver arriba).
           pilotoNombre: camposSensibles.pilotoNombre,
+          // Piloto extra: solo si realmente cambió (null lo quita); editar tarifa/notas/etc. lo conserva intacto.
+          pilotoExtraEmpleadoId: camposSensibles.pilotoExtraEmpleadoId,
           placa: camposSensibles.placa,
           // PROGRAMACION-TC-CAJA-REMOLQUE-1: solo Propio, y solo si cambió (null lo quita).
           // Un Tercerizado guarda su TC externo por el PATCH dedicado de tipo de viaje.
@@ -1783,13 +1837,50 @@ export default function PlanForm({
           </div>
           <div className={bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}>
             <PilotoSelect
-              pilotos={pilotos}
+              pilotos={pilotosParaPrincipal}
               empleadoId={form.pilotoEmpleadoId}
               nombre={form.pilotoNombre}
               inputClassName={inputCls}
               onChange={({ empleadoId, nombre }) => setForm((f) => ({ ...f, pilotoEmpleadoId: empleadoId, pilotoNombre: nombre }))}
               ocupados={ocupacionPersonal}
             />
+          </div>
+
+          {/* PILOTO EXTRA (máximo 1, solo viajes Propios): el mismo catálogo RRHH y las mismas reglas de disponibilidad que el
+              principal, sin texto libre. No se muestra fila vacía si no se pide. */}
+          <div className={`md:col-span-2 ${bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
+            {form.mostrarPilotoExtra && (
+              <div className="flex items-end gap-2">
+                <div className="min-w-0 flex-1">
+                  <PilotoSelect
+                    pilotos={pilotosParaExtra}
+                    empleadoId={form.pilotoExtraEmpleadoId}
+                    nombre={form.pilotoExtraNombre}
+                    inputClassName={inputCls}
+                    etiqueta="Piloto extra"
+                    soloCatalogo
+                    onChange={({ empleadoId, nombre }) => setForm((f) => ({ ...f, pilotoExtraEmpleadoId: empleadoId, pilotoExtraNombre: nombre }))}
+                    ocupados={ocupacionPersonal}
+                  />
+                </div>
+                <button
+                  type="button"
+                  className="mb-1 rounded border border-[var(--border)] px-2 py-1.5 text-xs text-red-300"
+                  onClick={() => setForm((f) => ({ ...f, mostrarPilotoExtra: false, pilotoExtraEmpleadoId: 0, pilotoExtraNombre: "" }))}
+                >
+                  Quitar
+                </button>
+              </div>
+            )}
+            {!form.mostrarPilotoExtra && (
+              <button
+                type="button"
+                className="rounded border border-[var(--border)] px-2 py-1.5 text-xs text-[var(--muted)] hover:bg-[var(--nav-hover)]"
+                onClick={() => setForm((f) => ({ ...f, mostrarPilotoExtra: true }))}
+              >
+                + Agregar piloto extra
+              </button>
+            )}
           </div>
 
           <div

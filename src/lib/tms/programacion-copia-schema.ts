@@ -19,6 +19,8 @@ export const filaEdicionSchema = z.object({
   unidadPlaca: z.string().max(40).nullable(),
   tcVehiculoId: idNullable,
   pilotoEmpleadoId: idNullable,
+  /** Piloto extra (empleado de RRHH): opcional; se revalida en el servidor con las mismas reglas que el principal. */
+  pilotoExtraEmpleadoId: idNullable.optional(),
   auxiliarEmpleadoIds: z.array(z.number().int().positive()).max(MAX_AUXILIARES),
   tarifaId: idNullable,
   externo: z.object({

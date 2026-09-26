@@ -4,6 +4,7 @@ import { execute, query } from "@/lib/db";
 import { esTc } from "@/lib/flota/tipo-unidad";
 import { personalDesdeEmpleado, validarPersonalId } from "./personal-resolucion";
 import { resolverTcInterno } from "./tc-plan";
+import { MSG_EXTRA_INVALIDO, MSG_PERSONA_DUPLICADA, hayPersonaDuplicada } from "./piloto-extra";
 
 /**
  * PROGRAMACIÓN — EDICIÓN RÁPIDA, PR-0. Validaciones de recursos de un viaje EXTRAÍDAS de PATCH /tms/planes
@@ -29,6 +30,8 @@ export const ESTADOS_BLOQUEADOS = new Set(["Cerrado", "Cancelado"]);
 /** Campos que la solicitud "toca" (presencia en el request, no comparación con el valor anterior). */
 export type CamposTocados = {
   piloto: boolean;
+  /** Piloto EXTRA (asignar, cambiar o quitar): cambio sensible igual que piloto/auxiliares/unidad. */
+  pilotoExtra: boolean;
   auxiliares: boolean;
   unidad: boolean;
   fecha: boolean;
@@ -40,6 +43,9 @@ export type CamposTocados = {
 export type EntradaCamposTocados = {
   pilotoNombre?: string | null;
   pilotoPersonalId?: number | null;
+  /** undefined = no se toca; null = quitar el piloto extra; número = asignarlo/cambiarlo. */
+  pilotoExtraEmpleadoId?: number | null;
+  pilotoExtraPersonalId?: number | null;
   auxiliarEmpleadoIds?: unknown[] | null;
   auxiliarNombres?: unknown[] | null;
   auxiliarNombre?: string | null;
@@ -59,6 +65,7 @@ export type EntradaCamposTocados = {
 export function camposTocados(d: EntradaCamposTocados): CamposTocados {
   return {
     piloto: d.pilotoNombre != null || d.pilotoPersonalId != null,
+    pilotoExtra: d.pilotoExtraEmpleadoId !== undefined || d.pilotoExtraPersonalId !== undefined,
     auxiliares: d.auxiliarEmpleadoIds != null || d.auxiliarNombres != null || d.auxiliarNombre != null || d.auxiliarPersonalIds != null,
     unidad: d.placa != null || d.flotaVehiculoId != null,
     fecha: d.fechaPlan != null,
@@ -75,7 +82,7 @@ export function camposTocados(d: EntradaCamposTocados): CamposTocados {
 
 /** OPS-AJUSTES: piloto, unidad y auxiliares exigen motivo (por presencia en el request). */
 export function validarMotivoCambioRecursos(toca: CamposTocados, motivoCambio: string | undefined): ErrorValidacion | null {
-  if ((toca.piloto || toca.unidad || toca.auxiliares) && !motivoCambio?.trim()) {
+  if ((toca.piloto || toca.pilotoExtra || toca.unidad || toca.auxiliares) && !motivoCambio?.trim()) {
     return { status: 400, error: "Indica el motivo del cambio de piloto, unidad o auxiliares." };
   }
   return null;
@@ -92,6 +99,7 @@ export function validarEstadoEditable(
   if (ESTADOS_SOLO_NOTAS.has(plan.estado) && !plan.pendienteCierre) {
     const camposNoPermitidos: string[] = [];
     if (toca.piloto) camposNoPermitidos.push("piloto");
+    if (toca.pilotoExtra) camposNoPermitidos.push("piloto extra");
     if (toca.auxiliares) camposNoPermitidos.push("auxiliares");
     if (toca.unidad) camposNoPermitidos.push("unidad");
     if (toca.fecha) camposNoPermitidos.push("fecha");
@@ -191,6 +199,10 @@ export type EntradaPersonal = {
   auxiliarNombres?: string[];
   auxiliarNombre?: string;
   auxiliarPersonalIds?: number[];
+  /** Piloto EXTRA por empleado de RRHH (nunca texto libre). undefined = no se toca; null = quitarlo. */
+  pilotoExtraEmpleadoId?: number | null;
+  /** Piloto extra por tms_personal.id exacto (edición rápida). undefined = no se toca; null = quitarlo. */
+  pilotoExtraPersonalId?: number | null;
 };
 
 /** Personal que, en modo "escritura", se habría CREADO en tms_personal (informativo en modo "lectura"). */
@@ -202,6 +214,8 @@ export type ResultadoSeleccionPersonal =
       ok: true;
       /** Piloto resuelto (undefined = la solicitud no lo toca o no pudo resolverse en modo lectura). */
       pilotoId: number | undefined;
+      /** Piloto extra resuelto: undefined = no se toca; null = quitarlo; número = tms_personal.id. */
+      pilotoExtraId?: number | null;
       /** Auxiliar principal (primero de la lista); undefined = no se tocan los auxiliares. */
       auxiliarId: number | null | undefined;
       /** Lista de auxiliares resuelta por empleado/nombre (campos legado). */
@@ -330,15 +344,62 @@ export async function resolverSeleccionPersonal(
     auxPersonalIdsNuevo = auxIds;
   }
 
-  return { ok: true, pilotoId, auxiliarId, auxPersonalIdsLegado, auxPersonalIdsNuevo, porCrear };
+  // PILOTO EXTRA — solo de RRHH (empleado activo con puesto de piloto) o por id exacto de tms_personal tipo Piloto; nunca texto libre.
+  let pilotoExtraId: number | null | undefined;
+  if (d.pilotoExtraPersonalId !== undefined || d.pilotoExtraEmpleadoId !== undefined) {
+    if (d.pilotoExtraPersonalId === null || (d.pilotoExtraPersonalId === undefined && d.pilotoExtraEmpleadoId === null)) {
+      pilotoExtraId = null; // quitarlo
+    } else if (d.pilotoExtraPersonalId != null) {
+      const extra = await validarPersonalId(empresaId, d.pilotoExtraPersonalId, "Piloto");
+      if (!extra) return { ok: false, status: 400, error: MSG_EXTRA_INVALIDO };
+      pilotoExtraId = extra.id;
+    } else if (d.pilotoExtraEmpleadoId != null) {
+      const emp = await query<RowDataPacket[]>(
+        `SELECT id FROM empleados
+         WHERE id = ? AND empresa_id = ? AND estado = 'Activo'
+           AND (categoria_ops = 'Piloto' OR LOWER(COALESCE(puesto, '')) LIKE '%piloto%' OR LOWER(COALESCE(categoria_ops, '')) LIKE '%piloto%')
+         LIMIT 1`,
+        [d.pilotoExtraEmpleadoId, empresaId],
+      );
+      if (!emp[0]) return { ok: false, status: 400, error: MSG_EXTRA_INVALIDO };
+      if (modo === "escritura") {
+        const pid = await personalDesdeEmpleado(empresaId, d.pilotoExtraEmpleadoId, "Piloto");
+        if (!pid) return { ok: false, status: 400, error: MSG_EXTRA_INVALIDO };
+        pilotoExtraId = pid;
+      } else {
+        const r = await personalExistenteDesdeEmpleado(empresaId, d.pilotoExtraEmpleadoId, "Piloto");
+        if (r?.existe) pilotoExtraId = r.id;
+        else if (r) porCrear.push({ tipo: "Piloto", empleadoId: d.pilotoExtraEmpleadoId });
+      }
+    }
+  }
+  // Una persona no puede estar dos veces en el mismo viaje (principal, extra y auxiliares): se valida en cuanto se conocen los ids
+  // enviados. La validación contra lo YA guardado (p. ej. extra nuevo == auxiliar actual) la hace el llamador con `hayPersonaDuplicada`.
+  const auxEnviados = auxPersonalIdsNuevo ?? auxPersonalIdsLegado ?? [];
+  if (hayPersonaDuplicada(pilotoId, pilotoExtraId ?? null, auxEnviados)) {
+    return { ok: false, status: 400, error: MSG_PERSONA_DUPLICADA };
+  }
+
+  return { ok: true, pilotoId, pilotoExtraId, auxiliarId, auxPersonalIdsLegado, auxPersonalIdsNuevo, porCrear };
 }
 
 // ------------------------------------------------------------------------------------ cambios reales
-export type AsignacionPlan = { pilotoId: number | null; auxiliaresIds: number[]; unidadFlotaId: number | null };
+export type AsignacionPlan = {
+  pilotoId: number | null;
+  /** Piloto extra actual (tms_personal.id) o null/undefined si no tiene. */
+  pilotoExtraId?: number | null;
+  auxiliaresIds: number[];
+  unidadFlotaId: number | null;
+};
 
 export type CambiosRecursos = {
   pilotoFinal: number | null;
   pilotoCambioReal: boolean;
+  /** Piloto extra tras el cambio (null = sin extra). */
+  pilotoExtraFinal: number | null;
+  pilotoExtraCambioReal: boolean;
+  /** El piloto extra a revalidar en disponibilidad: el nuevo si cambia, o el actual si cambia la fecha. */
+  pilotoExtraIdParaValidar: number | null;
   auxiliaresFinal: number[];
   auxiliaresCambioReal: boolean;
   unidadFinalId: number | null;
@@ -352,11 +413,14 @@ export type CambiosRecursos = {
 /** Qué recursos cambian de verdad y cuáles hay que revalidar (pura). */
 export function calcularCambiosRecursos(
   antes: AsignacionPlan,
-  final: { pilotoId: number | undefined; auxiliaresIds: number[] | undefined; unidadFlotaId: number | null },
+  final: { pilotoId: number | undefined; pilotoExtraId?: number | null | undefined; auxiliaresIds: number[] | undefined; unidadFlotaId: number | null },
   fechaCambia: boolean,
 ): CambiosRecursos {
   const pilotoFinal = final.pilotoId !== undefined ? final.pilotoId : antes.pilotoId;
   const pilotoCambioReal = pilotoFinal !== antes.pilotoId;
+  const pilotoExtraAntes = antes.pilotoExtraId ?? null;
+  const pilotoExtraFinal = final.pilotoExtraId !== undefined ? final.pilotoExtraId : pilotoExtraAntes;
+  const pilotoExtraCambioReal = pilotoExtraFinal !== pilotoExtraAntes;
   const auxiliaresFinal = final.auxiliaresIds ?? antes.auxiliaresIds;
   const auxiliaresCambioReal = (() => {
     const finalSet = new Set(auxiliaresFinal);
@@ -370,6 +434,9 @@ export function calcularCambiosRecursos(
   return {
     pilotoFinal,
     pilotoCambioReal,
+    pilotoExtraFinal,
+    pilotoExtraCambioReal,
+    pilotoExtraIdParaValidar: pilotoExtraCambioReal ? pilotoExtraFinal : fechaCambia && pilotoExtraAntes != null ? pilotoExtraAntes : null,
     auxiliaresFinal,
     auxiliaresCambioReal,
     unidadFinalId,
@@ -383,17 +450,27 @@ export function calcularCambiosRecursos(
 // ------------------------------------------------------------------------------------ viáticos que impiden quitar personal
 export type PersonalQueSale = { personalId: number; nombre: string };
 
-/** Quienes dejan el viaje: el piloto anterior si cambia y los auxiliares anteriores que ya no están. */
+/** Quienes dejan el viaje: el piloto anterior si cambia, el piloto extra anterior si ya no está y los auxiliares anteriores que ya no están. */
 export function personalQueSale(
-  antes: { pilotoId: number | null; piloto: string; auxiliaresIds: number[]; auxiliaresNombres: string[] },
-  final: { pilotoId: number | null; auxiliaresIds: number[] },
+  antes: { pilotoId: number | null; piloto: string; pilotoExtraId?: number | null; pilotoExtraNombre?: string; auxiliaresIds: number[]; auxiliaresNombres: string[] },
+  final: { pilotoId: number | null; pilotoExtraId?: number | null; auxiliaresIds: number[] },
 ): PersonalQueSale[] {
   const removidos: PersonalQueSale[] = [];
-  if (antes.pilotoId != null && antes.pilotoId !== final.pilotoId) {
+  // (El principal que pasa a ser el piloto EXTRA sigue en el viaje: no sale.)
+  if (antes.pilotoId != null && antes.pilotoId !== final.pilotoId && antes.pilotoId !== (final.pilotoExtraId ?? null)) {
     removidos.push({ personalId: antes.pilotoId, nombre: antes.piloto || `Piloto #${antes.pilotoId}` });
   }
+  // Piloto extra: sale si ya no es el extra NI pasa a ser el principal ni auxiliar (quien solo cambia de rol dentro del viaje conserva su viatico).
+  if (
+    antes.pilotoExtraId != null &&
+    antes.pilotoExtraId !== (final.pilotoExtraId ?? null) &&
+    antes.pilotoExtraId !== final.pilotoId &&
+    !final.auxiliaresIds.includes(antes.pilotoExtraId)
+  ) {
+    removidos.push({ personalId: antes.pilotoExtraId, nombre: antes.pilotoExtraNombre || `Piloto extra #${antes.pilotoExtraId}` });
+  }
   antes.auxiliaresIds.forEach((id, i) => {
-    if (!final.auxiliaresIds.includes(id)) {
+    if (!final.auxiliaresIds.includes(id) && id !== (final.pilotoExtraId ?? null)) {
       removidos.push({ personalId: id, nombre: antes.auxiliaresNombres[i] || `Auxiliar #${id}` });
     }
   });

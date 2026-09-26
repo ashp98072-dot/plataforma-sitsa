@@ -14,6 +14,7 @@ import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
 import { exportarProgramacionComoImagen } from "./programacion-exportar-imagen";
 import { mesDia, type FilaProgramacionImagen } from "@/lib/tms/programacion-imagen";
+import { textoPilotos } from "@/lib/tms/piloto-extra-comun";
 import { EdicionRapida, type FilaEdicionRapidaEntrada } from "./edicion-rapida";
 import { confirmarPerdida, MSG_CAMBIOS_PENDIENTES, puedeUsarEdicionRapida, type TarifaRutaEdicion } from "./edicion-rapida-helpers";
 
@@ -177,6 +178,11 @@ export type Plan = {
   pilotoId: number | null;
   pilotoEmpleadoId: number | null;
   pilotoTelefono: string | null;
+  /** PILOTO EXTRA (aditivo): co-piloto real de RRHH (máximo 1). El principal sigue siendo `piloto`/`pilotoId`. null/ausente = no tiene. */
+  pilotoExtraId?: number | null;
+  pilotoExtraEmpleadoId?: number | null;
+  pilotoExtraNombre?: string | null;
+  pilotoExtraTelefono?: string | null;
   /** Aditivo (Fase P4.3): auxiliares con su personal_id real. */
   auxiliaresDetalle: AuxiliarPlan[];
   /** Aditivo (Edición rápida PR-3): flota_vehiculos.id de la unidad (snapshot `esperado`). */
@@ -972,7 +978,8 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
 
   // Opciones de los filtros secundarios, solo con lo que aparece en el rango.
   const opcionesPiloto = useMemo(
-    () => [...new Set(enRango.map((p) => p.piloto).filter((x): x is string => Boolean(x)))].sort(),
+    // Incluye a quien aparece como piloto EXTRA: filtrar por su nombre muestra también esos viajes.
+    () => [...new Set(enRango.flatMap((p) => [p.piloto, p.pilotoExtraNombre]).filter((x): x is string => Boolean(x)))].sort(),
     [enRango],
   );
   const opcionesUnidad = useMemo(
@@ -997,7 +1004,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
       if (filtroRapido === "Programado" && p.estado !== "Programado") return false;
       if (filtroRapido === "En ruta" && p.estado !== "En ruta") return false;
       // PendienteCierre: baseFiltroRapido ya ES la lista de pendientes.
-      if (fPiloto && p.piloto !== fPiloto) return false;
+      if (fPiloto && p.piloto !== fPiloto && p.pilotoExtraNombre !== fPiloto) return false;
       if (fUnidad && p.placa !== fUnidad) return false;
       if (fCliente && p.cliente !== fCliente) return false;
       return true;
@@ -1064,11 +1071,12 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
           placa: esTercerizado ? p.unidad_externa_placa || "" : p.placa || "",
           // Mismo concepto "TC" para Propio (interno) y Tercerizado (snapshot): p.tc ya viene resuelto del GET.
           tc: p.tc || "",
+          // Con piloto extra la celda queda "Principal / Extra"; sin extra, exactamente como antes.
           piloto: esTercerizado
             ? p.piloto_externo_nombre
               ? `${p.piloto_externo_nombre} (Tercerizado)`
               : ""
-            : p.piloto || "",
+            : textoPilotos(p.piloto, p.pilotoExtraNombre),
           auxiliar1: esTercerizado ? (auxiliaresExternos[0] ?? "") : (p.auxiliares[0] ?? ""),
           auxiliar2: esTercerizado ? (auxiliaresExternos[1] ?? "") : (p.auxiliares[1] ?? ""),
           cliente: p.cliente || "",
@@ -1611,6 +1619,17 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
                   ) : (
                     <p className="text-amber-300">Sin piloto</p>
                   )}
+                  {p.pilotoExtraNombre ? (
+                    <div className="mt-1">
+                      <p className="text-[11px] text-[var(--muted)]">Piloto extra</p>
+                      <PersonaEstado
+                        nombre={p.pilotoExtraNombre}
+                        disp={p.pilotoExtraId != null ? dispPorPersonalId.get(p.pilotoExtraId) : undefined}
+                        tieneId={p.pilotoExtraId != null}
+                        planIdActual={p.id}
+                      />
+                    </div>
+                  ) : null}
                 </div>
                 <div>
                   <p className="text-[11px] text-[var(--muted)]">Auxiliares</p>

@@ -3,6 +3,7 @@ import type { PlanReporte } from "@/lib/tms/reportes-viajes";
 import { ahoraLocal, formatearTimestampVisible } from "@/lib/rrhh/dates";
 import { formatearFechaHora12, formatearHora12 } from "@/lib/tms/hora-formato";
 import { resumenRegreso } from "@/lib/tms/regreso-viaje";
+import { textoPilotos } from "@/lib/tms/piloto-extra-comun";
 
 function moneda(v: number | null): string {
   if (v == null) return "Pendiente";
@@ -73,7 +74,9 @@ export async function reporteViajePdf(
 
     // B. Personal / unidad
     seccion("B. Personal / unidad");
-    campo("Piloto", p.piloto ?? "—");
+    // Con piloto extra: "Pilotos: Principal / Extra"; sin extra, exactamente como antes.
+    if (p.pilotoExtra) campo("Pilotos", textoPilotos(p.piloto, p.pilotoExtra));
+    else campo("Piloto", p.piloto ?? "—");
     campo("Auxiliares", p.auxiliares.length ? p.auxiliares.join(", ") : "—");
     campo("Unidad", p.placa ?? "—");
     campo("Equipo asignado", p.unidadTipo ? `${p.unidadTipo}${p.unidadCapacidad ? ` · ${p.unidadCapacidad}` : ""}` : "—");

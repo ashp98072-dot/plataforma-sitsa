@@ -371,7 +371,7 @@ describe("Edición rápida — VIÁTICOS", () => {
     expect(r).toMatchObject({ ok: true, guardados: 1 });
     const [empresa, planId, asignacion, conn, overrides] = vi.mocked(sincronizarViaticosPlan).mock.calls[0];
     expect([empresa, planId]).toEqual([EMP, 101]);
-    expect(asignacion).toEqual({ piloto: 10, auxiliares: [20] });
+    expect(asignacion).toEqual({ piloto: 10, pilotoExtra: null, auxiliares: [20] });
     expect(conn).toBeDefined();
     expect(overrides).toEqual([{ personalId: 10, montoAsignado: 250 }]);
     expect(updates).toHaveLength(0); // solo viáticos: no se reescribe el viaje
@@ -380,7 +380,7 @@ describe("Edición rápida — VIÁTICOS", () => {
   it("12) cambiar piloto SIN editar montos sincroniza viáticos con overrides vacíos (monto sugerido del catálogo)", async () => {
     await guardar([cambio(101, { pilotoPersonalId: 11 })], "Cambio de piloto");
     const [, , asignacion, , overrides] = vi.mocked(sincronizarViaticosPlan).mock.calls[0];
-    expect(asignacion).toEqual({ piloto: 11, auxiliares: [20] });
+    expect(asignacion).toEqual({ piloto: 11, pilotoExtra: null, auxiliares: [20] });
     expect(overrides).toEqual([]);
   });
 

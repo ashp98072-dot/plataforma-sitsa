@@ -360,7 +360,7 @@ describe("PATCH — auxiliares (principal y adicionales) y política por interva
     expect(res.status).toBe(200);
     expect(guardarAuxiliaresPlan).toHaveBeenCalledWith(40, [7, 9], conexion);
     expect(update()![1][2]).toBe(7); // auxiliar_id = principal
-    expect(sincronizarViaticosPlan).toHaveBeenCalledWith(7, 40, { piloto: 10, auxiliares: [7, 9] }, conexion);
+    expect(sincronizarViaticosPlan).toHaveBeenCalledWith(7, 40, { piloto: 10, pilotoExtra: null, auxiliares: [7, 9] }, conexion);
   });
 
   it("18b) auxiliarPersonalIds: [] quita a todos (auxiliar_id NULL) y también sincroniza", async () => {

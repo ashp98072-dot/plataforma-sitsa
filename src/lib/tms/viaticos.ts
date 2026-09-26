@@ -8,6 +8,7 @@ import { sha256Hex } from "@/lib/firmas/imagen-firma";
 import { borrarUpload, guardarUpload } from "@/lib/uploads";
 import { centavos, decimal } from "@/lib/multas/reglas";
 import { toIsoDate } from "@/lib/rrhh/dates";
+import { pilotoExtraIdDePlan } from "./piloto-extra";
 
 /**
  * VIAT-0 — viáticos operativos asociados a una programación/viaje (piloto y
@@ -154,6 +155,13 @@ async function montoSugeridoParaPuesto(
 
 export type AsignacionPersonalPlan = {
   piloto: number | null;
+  /**
+   * Piloto EXTRA (tms_plan_pilotos_adicionales): recibe su PROPIA fila de viático con rol "Piloto" (monto sugerido por puesto,
+   * override individual, mismo ciclo autorizar/entregar/liquidar). `undefined` = el llamador no lo menciona (importación, lote,
+   * ediciones que no lo tocan): se conserva el que el plan YA tiene en BD, para que un sync ajeno nunca borre su viático PROGRAMADO.
+   * `null` = el plan no tiene piloto extra (o se quita).
+   */
+  pilotoExtra?: number | null;
   auxiliares: number[];
 };
 
@@ -207,6 +215,12 @@ export async function sincronizarViaticosPlan(
   const objetivo: { personalId: number; rol: "Piloto" | "Auxiliar" }[] = [];
   if (asignacion.piloto != null) {
     objetivo.push({ personalId: asignacion.piloto, rol: "Piloto" });
+  }
+  // Piloto extra: una fila de viático propia, rol "Piloto" (nunca comparte monto con el principal; el UNIQUE (plan_id, personal_id)
+  // sigue evitando duplicados). Sin mención explícita se lee el actual de la BD (ver AsignacionPersonalPlan.pilotoExtra).
+  const pilotoExtra = asignacion.pilotoExtra !== undefined ? asignacion.pilotoExtra : await pilotoExtraIdDePlan(planId, conn);
+  if (pilotoExtra != null && !objetivo.some((o) => o.personalId === pilotoExtra)) {
+    objetivo.push({ personalId: pilotoExtra, rol: "Piloto" });
   }
   for (const pid of asignacion.auxiliares) {
     if (!objetivo.some((o) => o.personalId === pid)) {
@@ -345,6 +359,9 @@ export async function listarViaticosRechazadosDelPlan(
 export function personalRecienAsignadoDelPlan(input: {
   pilotoCambioReal: boolean;
   pilotoFinal: number | null;
+  /** Piloto EXTRA nuevo o cambiado (mismo criterio que el principal). */
+  pilotoExtraCambioReal?: boolean;
+  pilotoExtraFinal?: number | null;
   auxiliaresCambioReal: boolean;
   auxiliaresFinal: number[];
   antesAuxiliaresIds: number[];
@@ -352,6 +369,9 @@ export function personalRecienAsignadoDelPlan(input: {
   const ids: number[] = [];
   if (input.pilotoCambioReal && input.pilotoFinal != null) {
     ids.push(input.pilotoFinal);
+  }
+  if (input.pilotoExtraCambioReal && input.pilotoExtraFinal != null) {
+    ids.push(input.pilotoExtraFinal);
   }
   if (input.auxiliaresCambioReal) {
     const antesSet = new Set(input.antesAuxiliaresIds);

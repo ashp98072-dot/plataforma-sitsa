@@ -965,7 +965,8 @@ export async function confirmarImportacionProgramacion(
         await sincronizarViaticosPlan(
           empresaId,
           planId,
-          { piloto: pilotoPersonalId, auxiliares: auxPersonalIds },
+          // Plan recién creado: no tiene piloto extra (la importación solo crea el piloto principal).
+          { piloto: pilotoPersonalId, pilotoExtra: null, auxiliares: auxPersonalIds },
           conn,
         );
 

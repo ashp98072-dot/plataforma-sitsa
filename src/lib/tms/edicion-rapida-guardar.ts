@@ -146,7 +146,7 @@ export async function guardarEdicionRapida(empresaId: number, usuario: string, d
     for (const f of aGuardar.filter((x) => x.cambiaAuxiliares)) await guardarAuxiliaresPlan(f.planId, f.final!.auxiliaresIds, conn);
     for (const f of aGuardar.filter((x) => x.cambiaPiloto || x.cambiaAuxiliares || x.cambiaViaticos)) {
       // PR-355: los montos editados viajan como override (solo cambios reales; ya validados contra el estado final y su estado PROGRAMADO)
-      await sincronizarViaticosPlan(empresaId, f.planId, { piloto: f.final!.pilotoId, auxiliares: f.final!.auxiliaresIds }, conn, f.viaticosOverrides);
+      await sincronizarViaticosPlan(empresaId, f.planId, { piloto: f.final!.pilotoId, pilotoExtra: f.final!.pilotoExtraId ?? null, auxiliares: f.final!.auxiliaresIds }, conn, f.viaticosOverrides);
     }
 
     // 8) auditoría POR CADA plan realmente modificado, dentro de la transacción (los sin_cambios no se auditan)

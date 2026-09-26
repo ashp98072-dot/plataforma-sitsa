@@ -123,6 +123,23 @@ function auxiliaresDePlan(
   return [...ids];
 }
 
+/** planId -> ids (tms_personal) del piloto extra, en UNA consulta. Vacío si no hay planes o si la tabla aún no existe. */
+async function pilotosExtraPorPlan(planIds: number[]): Promise<Map<number, number[]>> {
+  const map = new Map<number, number[]>();
+  if (!planIds.length) return map;
+  const rows = await query<RowDataPacket[]>(
+    `SELECT plan_id, personal_id FROM tms_plan_pilotos_adicionales WHERE plan_id IN (${planIds.map(() => "?").join(",")})`,
+    planIds,
+  ).catch(() => [] as RowDataPacket[]);
+  for (const r of rows) {
+    const pid = Number(r.plan_id);
+    const list = map.get(pid) ?? [];
+    list.push(Number(r.personal_id));
+    map.set(pid, list);
+  }
+  return map;
+}
+
 // ---------------------------------------------------------------------------
 // Función principal
 // ---------------------------------------------------------------------------
@@ -178,6 +195,10 @@ export async function listarDisponibilidadPersonal(
     }
   }
 
+  // PILOTO EXTRA (tms_plan_pilotos_adicionales): pilotos adicionales de los planes vinculados a viajes abiertos. Es un PILOTO real:
+  // ocupa el viaje en curso con rol "piloto", igual que el principal. Tolera que la tabla aún no exista.
+  const extraAbiertosMap = await pilotosExtraPorPlan(planIdsAbiertos);
+
   // Mapea personalId -> viaje actual (piloto directo, o auxiliar vía plan_id).
   const viajeActualPorPersonal = new Map<number, ViajeActualPersonal>();
   for (const r of abiertosRows) {
@@ -201,6 +222,14 @@ export async function listarDisponibilidadPersonal(
           planCodigo,
           rol: "piloto",
         });
+      }
+    }
+
+    // Piloto extra: solo si el viaje abierto tiene plan_id vinculado (mismo criterio que los auxiliares).
+    if (planId != null) {
+      for (const personalId of extraAbiertosMap.get(planId) ?? []) {
+        if (viajeActualPorPersonal.has(personalId)) continue;
+        viajeActualPorPersonal.set(personalId, { flotaViajeId: Number(r.id), horaSalidaReal, placa, planId, planCodigo, rol: "piloto" });
       }
     }
 
@@ -251,6 +280,9 @@ export async function listarDisponibilidadPersonal(
     }
   }
 
+  // Piloto extra de los planes del día (mismo criterio que los auxiliares del día).
+  const extraDiaMap = await pilotosExtraPorPlan(planIdsDia);
+
   // Reutiliza el helper ya existente de paradas (no se duplica su SQL) para
   // poder mostrar origen/destino de cada plan del día.
   const paradasDiaMap = planIdsDia.length
@@ -276,6 +308,7 @@ export async function listarDisponibilidadPersonal(
       destino,
     };
     if (r.piloto_id != null) agregarPlanDia(Number(r.piloto_id), plan);
+    for (const personalId of extraDiaMap.get(planId) ?? []) agregarPlanDia(personalId, plan);
     const auxiliarIdLegado = r.auxiliar_id != null ? Number(r.auxiliar_id) : null;
     for (const personalId of auxiliaresDePlan(planId, auxDiaMap, auxiliarIdLegado)) {
       agregarPlanDia(personalId, plan);

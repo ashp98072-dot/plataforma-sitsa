@@ -137,7 +137,7 @@ describe("POST /tms/planes — Tercerizado: texto libre, sin catálogos internos
     expect(sincronizarViaticosPlan).toHaveBeenCalledWith(
       7,
       expect.any(Number),
-      { piloto: null, auxiliares: [] },
+      { piloto: null, pilotoExtra: null, auxiliares: [] },
       expect.anything(),
       expect.anything(),
     );
@@ -193,7 +193,7 @@ describe("PATCH /tms/planes — patchTipoViaje: cambio de tipo aislado", () => {
     expect(params).toContain("Juan Externo");
     expect(params).toContain("EXT-1");
     expect(guardarAuxiliaresPlan).toHaveBeenCalledWith(40, [], conexion);
-    expect(sincronizarViaticosPlan).toHaveBeenCalledWith(7, 40, { piloto: null, auxiliares: [] }, conexion);
+    expect(sincronizarViaticosPlan).toHaveBeenCalledWith(7, 40, { piloto: null, pilotoExtra: null, auxiliares: [] }, conexion);
     expect(conexion.commit).toHaveBeenCalled();
   });
 

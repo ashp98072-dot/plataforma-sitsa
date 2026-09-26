@@ -112,7 +112,7 @@ describe("plan-form.tsx — PATCH normal: nunca reenvía piloto/placa/auxiliares
     const inicio = pos("const esTercerizadoAhora =");
     const f = planForm.slice(inicio, pos('method: "PATCH"', inicio));
     expect(f).toContain('const esTercerizadoAhora = form.tipoViaje === "Tercerizado";');
-    expect(f).toMatch(/esTercerizadoAhora\s*\n\s*\?\s*\{\s*pilotoNombre: undefined, placa: undefined, auxiliarEmpleadoIds: undefined, auxiliarNombres: undefined, motivoCambio: undefined,?\s*\}/);
+    expect(f).toMatch(/esTercerizadoAhora\s*\n\s*\?\s*\{\s*pilotoNombre: undefined, placa: undefined, auxiliarEmpleadoIds: undefined, auxiliarNombres: undefined, motivoCambio: undefined,?\s*(pilotoExtraEmpleadoId: undefined,?\s*)?\}/);
   });
 });
 

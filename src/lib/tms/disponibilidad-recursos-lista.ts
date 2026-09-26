@@ -70,7 +70,8 @@ export async function listarConflictosPersonal(
      INNER JOIN tms_planes_viaje p
        ON p.empresa_id = tp.empresa_id
       AND (p.piloto_id = tp.id OR p.auxiliar_id = tp.id
-           OR EXISTS (SELECT 1 FROM tms_plan_auxiliares pa WHERE pa.plan_id = p.id AND pa.personal_id = tp.id))
+           OR EXISTS (SELECT 1 FROM tms_plan_auxiliares pa WHERE pa.plan_id = p.id AND pa.personal_id = tp.id)
+           OR EXISTS (SELECT 1 FROM tms_plan_pilotos_adicionales pe WHERE pe.plan_id = p.id AND pe.personal_id = tp.id))
      WHERE tp.empresa_id = ? AND tp.id_empleado IS NOT NULL
        AND p.estado IN (${CANDIDATOS_PLACEHOLDERS})
        ${excluirPlanId ? "AND p.id != ?" : ""}

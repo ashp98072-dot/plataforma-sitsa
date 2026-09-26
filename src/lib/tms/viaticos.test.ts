@@ -866,7 +866,7 @@ describe("sincronizarViaticosPlan — RECHAZADO es terminal por (plan_id, person
     execConn.query.mockResolvedValueOnce([[{ personal_id: 5, estado: "RECHAZADO", monto_asignado: "500" }], []]);
     execConn.query.mockResolvedValueOnce([[{ puesto: "Piloto" }], []]); // puestoDePersonal(9) — fila nueva, sin RECHAZADO previo
     execConn.query.mockResolvedValueOnce([[{ monto_defecto: "500" }], []]); // montoSugeridoParaPuesto
-    await sincronizarViaticosPlan(7, 1, { piloto: 9, auxiliares: [] }, execConn as never);
+    await sincronizarViaticosPlan(7, 1, { piloto: 9, pilotoExtra: null, auxiliares: [] }, execConn as never);
     const deleteCall = execConn.execute.mock.calls.find((c) => String(c[0]).includes("DELETE FROM tms_viaticos"));
     expect(deleteCall![0]).toContain("estado = 'PROGRAMADO'");
     // El DELETE está condicionado a PROGRAMADO — una fila RECHAZADO nunca lo cumple, se preserva.
@@ -876,7 +876,7 @@ describe("sincronizarViaticosPlan — RECHAZADO es terminal por (plan_id, person
     // Plan 1 + Persona 9 ya tiene una fila RECHAZADO — sincronizar el
     // MISMO plan (1) otra vez con esa misma persona en `objetivo`.
     execConn.query.mockResolvedValueOnce([[{ personal_id: 9, estado: "RECHAZADO", monto_asignado: "500" }], []]);
-    await sincronizarViaticosPlan(7, 1, { piloto: 9, auxiliares: [] }, execConn as never);
+    await sincronizarViaticosPlan(7, 1, { piloto: 9, pilotoExtra: null, auxiliares: [] }, execConn as never);
     const insertCall = execConn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_viaticos"));
     // Ninguna fila RECHAZADO se toca: al no estar en PROGRAMADO, el bucle la salta (continue) — nunca se ejecuta el INSERT...ON DUPLICATE KEY UPDATE para esa persona, en ESE plan.
     expect(insertCall).toBeUndefined();
@@ -891,7 +891,7 @@ describe("sincronizarViaticosPlan — RECHAZADO es terminal por (plan_id, person
     execConn.query.mockResolvedValueOnce([[], []]); // existentesRows del plan 101: vacío
     execConn.query.mockResolvedValueOnce([[{ puesto: "Piloto" }], []]); // puestoDePersonal(9)
     execConn.query.mockResolvedValueOnce([[{ monto_defecto: "500" }], []]); // montoSugeridoParaPuesto
-    await sincronizarViaticosPlan(7, 101, { piloto: 9, auxiliares: [] }, execConn as never);
+    await sincronizarViaticosPlan(7, 101, { piloto: 9, pilotoExtra: null, auxiliares: [] }, execConn as never);
     const insertCall = execConn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_viaticos"));
     expect(insertCall).toBeDefined();
     expect(insertCall![1]).toEqual([7, 101, 9, "Piloto", 500, 500]);

@@ -50,6 +50,14 @@ import {
 import { esTc, normalizarTipoUnidad } from "@/lib/flota/tipo-unidad";
 import { personalDesdeEmpleado } from "@/lib/tms/personal-resolucion";
 import { upsertLugar, guardarAuxiliaresPlan } from "@/lib/tms/plan-comunes";
+import {
+  MSG_EXTRA_SOLO_PROPIO,
+  MSG_PERSONA_DUPLICADA,
+  guardarPilotoExtraPlan,
+  hayPersonaDuplicada,
+  pilotoExtraDePlanes,
+  resolverPilotoExtraDesdeEmpleado,
+} from "@/lib/tms/piloto-extra";
 import type { ResultSetHeader } from "mysql2/promise";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -385,13 +393,15 @@ export async function GET(req: Request, ctx: Ctx) {
   ]);
 
   const planIds = rows.map((r) => Number(r.id));
-  const [paradasMap, auxMap, cierreManualIds] = await Promise.all([
+  const [paradasMap, auxMap, cierreManualIds, extraMap] = await Promise.all([
     listarParadasDePlanes(planIds),
     auxiliaresDePlanes(planIds),
     planesConCierreManual(
       guard.empresa.id,
       rows.filter((r) => r.estado === "Cerrado").map((r) => Number(r.id)),
     ),
+    // Piloto extra de TODOS los planes en UNA consulta (sin N+1).
+    pilotoExtraDePlanes(planIds),
   ]);
   // EDICIÓN RÁPIDA (aditivo, en lote y DESPUÉS de las lecturas previas): viáticos por viaje y tarifas ACTIVAS por ruta.
   const viaticosMap = await viaticosDePlanes(guard.empresa.id, planIds);
@@ -443,6 +453,11 @@ export async function GET(req: Request, ctx: Ctx) {
       pilotoId,
       pilotoEmpleadoId: piloto_empleado_id != null ? Number(piloto_empleado_id) : null,
       pilotoTelefono: piloto_telefono ? String(piloto_telefono) : null,
+      // PILOTO EXTRA (aditivo; null si el viaje no tiene): el principal sigue siendo `pilotoId`/`piloto`.
+      pilotoExtraId: extraMap.get(id)?.personalId ?? null,
+      pilotoExtraEmpleadoId: extraMap.get(id)?.empleadoId ?? null,
+      pilotoExtraNombre: extraMap.get(id)?.nombre ?? null,
+      pilotoExtraTelefono: extraMap.get(id)?.telefono ?? null,
       auxiliares: auxList,
       auxiliar: auxList.join(", ") || null,
       // Aditivo (Fase P4.3): auxiliares con su personal_id real. No
@@ -553,6 +568,8 @@ const schema = z.object({
   auxiliarNombre: z.string().optional(),
   auxiliarNombres: z.array(z.string().min(2)).max(8).optional(),
   pilotoEmpleadoId: z.number().int().positive().optional(),
+  // PILOTO EXTRA (máximo 1 por viaje): empleado de RRHH con puesto de piloto; nunca texto libre; solo viajes Propios.
+  pilotoExtraEmpleadoId: z.number().int().positive().optional(),
   auxiliarEmpleadoId: z.number().int().positive().optional(),
   auxiliarEmpleadoIds: z.array(z.number().int().positive()).max(8).optional(),
   // PROGRAMACION-VIAJES-TERCERIZADOS-1 — 'Propio' (default, compatibilidad
@@ -618,7 +635,7 @@ const schema = z.object({
         montoAsignado: z.number().min(0),
       }),
     )
-    .max(9)
+    .max(10)
     .optional()
     .refine((arr) => !arr || new Set(arr.map((x) => x.empleadoId)).size === arr.length, {
       message: "No se permiten empleadoId duplicados en viaticosAsignados.",
@@ -704,6 +721,10 @@ export async function POST(req: Request, ctx: Ctx) {
     costoTercerizado: esTercerizado ? (d.costoTercerizado ?? null) : null,
     tcExternoPlaca: esTercerizado ? opcional(d.tcExternoPlaca?.trim().toUpperCase()) : null,
   };
+  // El piloto extra es un piloto INTERNO de RRHH: no aplica a viajes Tercerizados (usan el piloto externo).
+  if (esTercerizado && d.pilotoExtraEmpleadoId != null) {
+    return NextResponse.json({ error: MSG_EXTRA_SOLO_PROPIO }, { status: 400 });
+  }
   // Un viaje Tercerizado NUNCA acepta un TC interno como sustituto del
   // snapshot externo (mismo criterio que piloto/unidad).
   if (esTercerizado && d.tcVehiculoId != null) {
@@ -716,6 +737,8 @@ export async function POST(req: Request, ctx: Ctx) {
   let clienteId: number | null = null;
   let unidadId: number | null = null;
   let pilotoId: number | null = null;
+  // PILOTO EXTRA resuelto (tms_personal.id); null = el viaje no tiene.
+  let pilotoExtraId: number | null = null;
   // Declaradas aquí (antes del bloque `if (tipoViaje === "Propio")` de
   // abajo) para que sigan en [] / null cuando el viaje es Tercerizado —
   // eso basta para que primerConflictoTraslape/sincronizarViaticosPlan
@@ -837,6 +860,14 @@ export async function POST(req: Request, ctx: Ctx) {
     }
     if (pilotoId && d.pilotoEmpleadoId) empleadoIdAPersonalId.set(d.pilotoEmpleadoId, pilotoId);
 
+    // PILOTO EXTRA: de RRHH (empleado activo con puesto de piloto), con la misma identidad real que el principal.
+    if (d.pilotoExtraEmpleadoId != null) {
+      const extra = await resolverPilotoExtraDesdeEmpleado(empresaId, d.pilotoExtraEmpleadoId);
+      if (!extra.ok) return NextResponse.json({ error: extra.error }, { status: extra.status });
+      pilotoExtraId = extra.personalId;
+      empleadoIdAPersonalId.set(d.pilotoExtraEmpleadoId, extra.personalId);
+    }
+
     const auxIdsRaw =
       d.auxiliarEmpleadoIds?.length
         ? d.auxiliarEmpleadoIds
@@ -875,6 +906,11 @@ export async function POST(req: Request, ctx: Ctx) {
       auxPersonalIds.push(Number(r.insertId));
     }
     auxiliarId = auxPersonalIds[0] ?? null;
+
+    // Una persona no puede estar dos veces en el mismo viaje (principal, extra, auxiliares).
+    if (hayPersonaDuplicada(pilotoId, pilotoExtraId, auxPersonalIds)) {
+      return NextResponse.json({ error: MSG_PERSONA_DUPLICADA }, { status: 400 });
+    }
   }
 
   // PROGRAMACION-TC-CAJA-REMOLQUE-1 — TC INTERNO (solo Propio, opcional):
@@ -951,6 +987,8 @@ export async function POST(req: Request, ctx: Ctx) {
   // La hora y el regreso estimado no modifican esta reserva diaria.
   const recursosNuevoPlan: RecursoDia[] = [
     ...(pilotoId ? [{ tipo: "piloto" as const, id: pilotoId }] : []),
+    // El piloto extra consume disponibilidad EXACTAMENTE igual que el principal (mismo motor, misma ventana).
+    ...(pilotoExtraId ? [{ tipo: "piloto" as const, id: pilotoExtraId }] : []),
     ...auxPersonalIds.map((id) => ({ tipo: "auxiliar" as const, id })),
     ...(unidadId ? [{ tipo: "unidad" as const, id: unidadId }] : []),
     // PROGRAMACION-TC-CAJA-REMOLQUE-1: el TC interno entra a la misma reserva diaria.
@@ -976,11 +1014,12 @@ export async function POST(req: Request, ctx: Ctx) {
   // juntos, vía un Map por personalId) — nunca una por recurso, evita N+1.
   // Sin piloto ni auxiliares, o si no es hoy, no se ejecuta en absoluto.
   const esHoyPost = d.fechaPlan === hoyLocal();
-  if (esHoyPost && (pilotoId != null || auxPersonalIds.length > 0)) {
+  if (esHoyPost && (pilotoId != null || pilotoExtraId != null || auxPersonalIds.length > 0)) {
     const personalDisp = await listarDisponibilidadPersonal(empresaId, d.fechaPlan);
     const dispPorPersonalId = new Map(personalDisp.map((p) => [p.personalId, p]));
     const recursosFisicos: { personalId: number; rol: "piloto" | "auxiliar" }[] = [
       ...(pilotoId != null ? [{ personalId: pilotoId, rol: "piloto" as const }] : []),
+      ...(pilotoExtraId != null ? [{ personalId: pilotoExtraId, rol: "piloto" as const }] : []),
       ...auxPersonalIds.map((id) => ({ personalId: id, rol: "auxiliar" as const })),
     ];
     for (const r of recursosFisicos) {
@@ -1126,6 +1165,8 @@ export async function POST(req: Request, ctx: Ctx) {
       );
     }
     await guardarAuxiliaresPlan(planId, auxPersonalIds, conn);
+    // Piloto extra: misma transacción que el plan (rollback conjunto). Sin extra no se escribe nada.
+    if (pilotoExtraId != null) await guardarPilotoExtraPlan(empresaId, planId, pilotoExtraId, conn);
     if (paradasInput.length) {
       // OPS-3.2d: plan recién creado — guardarParadasPlan nunca puede
       // rechazar aquí (no hay paradas previas ni evidencia posible), pero
@@ -1145,7 +1186,7 @@ export async function POST(req: Request, ctx: Ctx) {
     await sincronizarViaticosPlan(
       empresaId,
       planId,
-      { piloto: pilotoId, auxiliares: auxPersonalIds },
+      { piloto: pilotoId, pilotoExtra: pilotoExtraId, auxiliares: auxPersonalIds },
       conn,
       viaticosOverrides,
     );
@@ -1283,6 +1324,9 @@ const patchSchema = z.object({
     .regex(/^\d{4}-\d{2}-\d{2}$/, "Fecha inválida (YYYY-MM-DD).")
     .optional(),
   pilotoPersonalId: z.number().int().positive().optional(),
+  // PILOTO EXTRA (máximo 1): `null` lo quita; ausente = no se toca. Por empleado de RRHH o por tms_personal.id exacto; nunca texto libre.
+  pilotoExtraEmpleadoId: z.number().int().positive().nullable().optional(),
+  pilotoExtraPersonalId: z.number().int().positive().nullable().optional(),
   auxiliarPersonalIds: z.array(z.number().int().positive()).max(8).optional(),
   flotaVehiculoId: z.number().int().positive().optional(),
   // PROGRAMACION-VIAJES-TERCERIZADOS-1 — un PATCH que trae `tipoViaje` se
@@ -1362,6 +1406,17 @@ async function patchTipoViaje(
     );
   }
 
+  // Propio -> Tercerizado: el piloto extra es interno y no puede quedar oculto. Si su viático ya fue procesado (AUTORIZADO/ENTREGADO/
+  // LIQUIDADO) se BLOQUEA el cambio (409); si solo está PROGRAMADO, se quita junto con su viático dentro de la misma transacción.
+  if (esTercerizado) {
+    const extraActual = await pilotoExtraDePlanes([d.id]);
+    const extra = extraActual.get(d.id);
+    if (extra) {
+      const errorViatico = await validarRemocionConViaticos(d.id, [{ personalId: extra.personalId, nombre: extra.nombre }]);
+      if (errorViatico) return NextResponse.json({ error: errorViatico.error }, { status: errorViatico.status });
+    }
+  }
+
   const conn = await getPool().getConnection();
   try {
     await conn.beginTransaction();
@@ -1386,7 +1441,8 @@ async function patchTipoViaje(
         ],
       );
       await guardarAuxiliaresPlan(d.id, [], conn);
-      await sincronizarViaticosPlan(empresaId, d.id, { piloto: null, auxiliares: [] }, conn);
+      await guardarPilotoExtraPlan(empresaId, d.id, null, conn);
+      await sincronizarViaticosPlan(empresaId, d.id, { piloto: null, pilotoExtra: null, auxiliares: [] }, conn);
     } else {
       await conn.execute(
         `UPDATE tms_planes_viaje SET
@@ -1574,6 +1630,9 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // para: (a) el detalle "antes → después" de la auditoría, y (b) revalidar
   // disponibilidad de los auxiliares YA asignados si la fecha cambia.
   const antesAuxMap = await auxiliaresDePlanes([d.id]);
+  // Piloto extra actual (antes de cualquier cambio).
+  const antesExtra = (await pilotoExtraDePlanes([d.id])).get(d.id) ?? null;
+  const antesExtraId = antesExtra?.personalId ?? null;
   const antesAuxiliares = antesAuxMap.get(d.id) ?? [];
   const antesAuxiliaresIds = antesAuxiliares.map((a) => a.personalId);
   const antesAuxiliaresNombres = antesAuxiliares.map((a) => a.nombre);
@@ -1625,7 +1684,11 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // Resolución de piloto/auxiliares (modo "escritura": idéntico al PATCH previo, puede crear tms_personal).
   const seleccion = await resolverSeleccionPersonal(empresaId, d, "escritura");
   if (!seleccion.ok) return NextResponse.json({ error: seleccion.error }, { status: seleccion.status });
-  const { pilotoId, auxiliarId, auxPersonalIdsLegado, auxPersonalIdsNuevo } = seleccion;
+  const { pilotoId, pilotoExtraId, auxiliarId, auxPersonalIdsLegado, auxPersonalIdsNuevo } = seleccion;
+  // Un viaje Tercerizado no admite piloto extra interno.
+  if (antes.tipoViaje === "Tercerizado" && pilotoExtraId != null) {
+    return NextResponse.json({ error: MSG_EXTRA_SOLO_PROPIO }, { status: 400 });
+  }
 
   // OPS-3.2c (corrección) — recursos EFECTIVOS y si realmente CAMBIARON,
   // no solo si el campo vino en el request. El formulario real de
@@ -1639,7 +1702,12 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // de `cambiaPersonal`) para reutilizarse también en la sección de
   // disponibilidad, más abajo — sin recalcular dos veces.
   const pilotoFinal = pilotoId !== undefined ? pilotoId : antes.pilotoId;
+  const pilotoExtraFinalPatch = pilotoExtraId !== undefined ? pilotoExtraId : antesExtraId;
   const auxiliaresFinal = auxPersonalIdsNuevo ?? auxPersonalIdsLegado ?? antesAuxiliaresIds;
+  // Estado FINAL del viaje: nadie puede aparecer dos veces (incluye lo ya guardado: p. ej. el extra nuevo no puede ser un auxiliar actual).
+  if (hayPersonaDuplicada(pilotoFinal, pilotoExtraFinalPatch, auxiliaresFinal)) {
+    return NextResponse.json({ error: MSG_PERSONA_DUPLICADA }, { status: 400 });
+  }
   // Comparación como CONJUNTOS — el orden en que el formulario mande los
   // auxiliares no representa una diferencia de asignación real.
 
@@ -1657,11 +1725,11 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // personal REALMENTE quitado comparando pilotoFinal/auxiliaresFinal
   // contra antes.*; si el campo vino pero nadie cambió, `removidos`
   // queda vacío y no se bloquea nada.
-  const cambiaPersonal = pilotoId !== undefined || auxPersonalIdsLegado != null || auxPersonalIdsNuevo != null;
+  const cambiaPersonal = pilotoId !== undefined || pilotoExtraId !== undefined || auxPersonalIdsLegado != null || auxPersonalIdsNuevo != null;
   if (cambiaPersonal) {
     const removidos = personalQueSale(
-      { pilotoId: antes.pilotoId, piloto: antes.piloto, auxiliaresIds: antesAuxiliaresIds, auxiliaresNombres: antesAuxiliaresNombres },
-      { pilotoId: pilotoFinal, auxiliaresIds: auxiliaresFinal },
+      { pilotoId: antes.pilotoId, piloto: antes.piloto, pilotoExtraId: antesExtraId, pilotoExtraNombre: antesExtra?.nombre, auxiliaresIds: antesAuxiliaresIds, auxiliaresNombres: antesAuxiliaresNombres },
+      { pilotoId: pilotoFinal, pilotoExtraId: pilotoExtraFinalPatch, auxiliaresIds: auxiliaresFinal },
     );
     const errorViaticos = await validarRemocionConViaticos(d.id, removidos);
     if (errorViaticos) return NextResponse.json({ error: errorViaticos.error }, { status: errorViaticos.status });
@@ -1739,14 +1807,16 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // cambio de fecha). Todo esto corre ANTES de abrir la transacción.
   const {
     pilotoCambioReal,
+    pilotoExtraCambioReal,
     auxiliaresCambioReal,
     unidadCambioReal,
     pilotoIdParaValidar,
+    pilotoExtraIdParaValidar,
     auxiliaresIdsParaValidar,
     vehiculoIdParaValidar,
   } = calcularCambiosRecursos(
-    { pilotoId: antes.pilotoId, auxiliaresIds: antesAuxiliaresIds, unidadFlotaId: antes.flotaVehiculoId ?? null },
-    { pilotoId, auxiliaresIds: auxPersonalIdsNuevo ?? auxPersonalIdsLegado, unidadFlotaId: unidadFinalId },
+    { pilotoId: antes.pilotoId, pilotoExtraId: antesExtraId, auxiliaresIds: antesAuxiliaresIds, unidadFlotaId: antes.flotaVehiculoId ?? null },
+    { pilotoId, pilotoExtraId, auxiliaresIds: auxPersonalIdsNuevo ?? auxPersonalIdsLegado, unidadFlotaId: unidadFinalId },
     fechaCambia,
   );
 
@@ -1760,7 +1830,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // registro técnico de flota_viajes (piloto_nombre, vehiculo_id,
   // kilometraje, horas, evidencias) capturado durante la ejecución real
   // del viaje NO se toca ni se sincroniza automáticamente.
-  if (antes.pendienteCierre && (pilotoCambioReal || auxiliaresCambioReal || unidadCambioReal)) {
+  if (antes.pendienteCierre && (pilotoCambioReal || pilotoExtraCambioReal || auxiliaresCambioReal || unidadCambioReal)) {
     advertencias.push({
       tipo: "reasignacion_pre_cierre",
       mensaje:
@@ -1768,7 +1838,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
     });
   }
 
-  if (pilotoIdParaValidar != null || auxiliaresIdsParaValidar.length > 0) {
+  if (pilotoIdParaValidar != null || pilotoExtraIdParaValidar != null || auxiliaresIdsParaValidar.length > 0) {
     const personalDisp = await listarDisponibilidadPersonal(
       empresaId,
       fechaEfectiva,
@@ -1776,6 +1846,10 @@ export async function PATCH(req: Request, ctx: Ctx) {
     const recursos: { personalId: number; rol: "piloto" | "auxiliar" }[] = [];
     if (pilotoIdParaValidar != null) {
       recursos.push({ personalId: pilotoIdParaValidar, rol: "piloto" });
+    }
+    // El piloto extra pasa por las MISMAS reglas que el principal (incidencia, baja, viaje en curso, otros planes del día).
+    if (pilotoExtraIdParaValidar != null) {
+      recursos.push({ personalId: pilotoExtraIdParaValidar, rol: "piloto" });
     }
     for (const pid of auxiliaresIdsParaValidar) {
       recursos.push({ personalId: pid, rol: "auxiliar" });
@@ -1795,6 +1869,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
       personalRecienAsignadoDelPlan({
         pilotoCambioReal,
         pilotoFinal,
+        pilotoExtraCambioReal,
+        pilotoExtraFinal: pilotoExtraFinalPatch,
         auxiliaresCambioReal,
         auxiliaresFinal,
         antesAuxiliaresIds,
@@ -1883,6 +1959,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
       const auxiliaresEfectivos = auxPersonalIdsNuevo ?? auxPersonalIdsLegado ?? antesAuxiliaresIds;
       const recursosEfectivos: RecursoDia[] = [
         ...(pilotoEfectivo ? [{ tipo: "piloto" as const, id: pilotoEfectivo }] : []),
+        ...(pilotoExtraFinalPatch ? [{ tipo: "piloto" as const, id: pilotoExtraFinalPatch }] : []),
         ...auxiliaresEfectivos.map((id) => ({ tipo: "auxiliar" as const, id })),
         ...(unidadEfectiva ? [{ tipo: "unidad" as const, id: unidadEfectiva }] : []),
         // PROGRAMACION-TC-CAJA-REMOLQUE-1: el propio plan se autoexcluye (excluirPlanId = d.id).
@@ -2077,6 +2154,10 @@ export async function PATCH(req: Request, ctx: Ctx) {
     if (auxPersonalIdsNuevo != null) {
       await guardarAuxiliaresPlan(d.id, auxPersonalIdsNuevo, conn);
     }
+    // Piloto extra: DELETE/INSERT (o quitarlo) en la MISMA transacción; solo si esta solicitud lo toca (editar tarifa/notas/etc. lo conserva).
+    if (pilotoExtraId !== undefined) {
+      await guardarPilotoExtraPlan(empresaId, d.id, pilotoExtraId, conn);
+    }
 
     // VIAT-0 (punto 12): solo si esta solicitud realmente tocó piloto y/o
     // auxiliares — misma transacción/conexión que el UPDATE de arriba y que
@@ -2085,12 +2166,13 @@ export async function PATCH(req: Request, ctx: Ctx) {
     // EFECTIVO resultante (lo nuevo si vino en el request, si no lo que ya
     // tenía el plan) para que el sync siempre refleje quién queda
     // realmente asignado.
-    if (pilotoId !== undefined || auxPersonalIdsLegado != null || auxPersonalIdsNuevo != null) {
+    if (pilotoId !== undefined || pilotoExtraId !== undefined || auxPersonalIdsLegado != null || auxPersonalIdsNuevo != null) {
       await sincronizarViaticosPlan(
         empresaId,
         d.id,
         {
           piloto: pilotoId ?? antes.pilotoId ?? null,
+          pilotoExtra: pilotoExtraFinalPatch,
           auxiliares: auxPersonalIdsNuevo ?? auxPersonalIdsLegado ?? antesAuxiliaresIds,
         },
         conn,
@@ -2152,6 +2234,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
     [d.id, empresaId],
   );
   const despuesAuxMap = await auxiliaresDePlanes([d.id]);
+  const despuesExtra = (await pilotoExtraDePlanes([d.id])).get(d.id) ?? null;
   const despues = {
     fechaPlan: toIsoDate(despuesRows[0]?.fecha_plan) || "",
     piloto: despuesRows[0]?.piloto ? String(despuesRows[0].piloto) : "",
@@ -2168,6 +2251,9 @@ export async function PATCH(req: Request, ctx: Ctx) {
   }
   if (despues.piloto !== antes.piloto) {
     cambios.push(`piloto ${antes.piloto || "—"} → ${despues.piloto || "—"}`);
+  }
+  if ((despuesExtra?.nombre ?? "") !== (antesExtra?.nombre ?? "")) {
+    cambios.push(`piloto extra ${antesExtra?.nombre || "—"} → ${despuesExtra?.nombre || "—"}`);
   }
   if (despues.placa !== antes.placa) {
     cambios.push(`unidad ${antes.placa || "—"} → ${despues.placa || "—"}`);
