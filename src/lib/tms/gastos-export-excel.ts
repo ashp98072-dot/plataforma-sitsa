@@ -207,7 +207,11 @@ export async function exportarReporteFondosExcel(filas: FilaSolicitudFondoReport
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
-async function encabezadoIndividual(buffer: Buffer, empresa: string | null | undefined, titulo: string): Promise<Buffer> {
+/**
+ * `codigoDocumento` (opcional): número persistido del documento; va en las últimas columnas de la fila del título (arriba a la
+ * derecha), como celda propia — no es una columna de datos. Sin él (Gasto individual) el encabezado queda exactamente como antes.
+ */
+async function encabezadoIndividual(buffer: Buffer, empresa: string | null | undefined, titulo: string, codigoDocumento?: string): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(new Uint8Array(buffer).buffer);
   const ws = wb.worksheets[0];
@@ -215,12 +219,20 @@ async function encabezadoIndividual(buffer: Buffer, empresa: string | null | und
   const ultimaFila = ws.rowCount;
   const tieneFiltro = Boolean(ws.autoFilter);
   // Históricos sin snapshot: no atribuir el documento a la empresa de sesión.
+  const conCodigo = Boolean(codigoDocumento?.trim()) && ancho >= 6;
   ws.spliceRows(1, 0, [empresa?.trim() || "EMPRESA REQUIRENTE NO REGISTRADA"], [titulo], []);
   for (const fila of [1, 2]) {
-    ws.mergeCells(fila, 1, fila, ancho);
+    // Fila 2 con código: título en las primeras columnas y código en las últimas 3; sin código, una sola celda combinada.
+    ws.mergeCells(fila, 1, fila, fila === 2 && conCodigo ? ancho - 3 : ancho);
     ws.getRow(fila).font = { bold: true, size: fila === 1 ? 16 : 12 };
     ws.getRow(fila).alignment = { horizontal: "center", vertical: "middle", wrapText: true };
     ws.getRow(fila).height = fila === 1 ? 32 : 26;
+  }
+  if (conCodigo) {
+    ws.getCell(2, ancho - 2).value = codigoDocumento!.trim();
+    ws.mergeCells(2, ancho - 2, 2, ancho);
+    ws.getCell(2, ancho - 2).font = { bold: true, size: 12 };
+    ws.getCell(2, ancho - 2).alignment = { horizontal: "right", vertical: "middle" };
   }
   if (tieneFiltro) ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: ultimaFila - 2 + 3, column: ancho } };
   ws.views = (ws.views ?? []).map((view) => view.state === "frozen" ? { ...view, ySplit: (view.ySplit ?? 0) + 3 } : view);
@@ -241,7 +253,7 @@ export async function exportarGastoOperativoExcel(gasto: GastoOperativo): Promis
     ...cabecera, ...linea, lineaId: linea.id, id: gasto.id, planCodigo: linea.planId === gasto.planId ? gasto.planCodigo : null,
     total: linea.cantidad * linea.monto,
   })) : [cabecera];
-  return encabezadoIndividual(await exportarGastosDetalleExcel(filas), gasto.entidadRequirenteNombre, "GASTO OPERATIVO");
+  return encabezadoIndividual(await exportarGastosDetalleExcel(filas), gasto.entidadRequirenteNombre, "GASTO OPERATIVO", gasto.codigo);
 }
 
 export async function exportarSolicitudFondoExcel(solicitud: SolicitudFondo): Promise<Buffer> {
@@ -257,5 +269,5 @@ export async function exportarSolicitudFondoExcel(solicitud: SolicitudFondo): Pr
       ["", "", "", "", "", "", "", "", "", "", "", "TOTAL", money(solicitud.total)],
     ],
   });
-  return encabezadoIndividual(buffer, solicitud.entidadRequirenteNombre, `SOLICITUD DE FONDO ${solicitud.codigo}`);
+  return encabezadoIndividual(buffer, solicitud.entidadRequirenteNombre, "SOLICITUD DE FONDO", solicitud.codigo);
 }

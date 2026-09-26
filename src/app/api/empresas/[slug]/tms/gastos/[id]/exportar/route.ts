@@ -15,7 +15,7 @@ export async function GET(_req: Request, ctx: Ctx) {
   return new NextResponse(new Uint8Array(buffer), {
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "Content-Disposition": `attachment; filename="gasto-${gasto.id}.xlsx"`,
+      "Content-Disposition": `attachment; filename="${gasto.codigo || `gasto-${gasto.id}`}.xlsx"`,
       "Cache-Control": "private, no-store",
     },
   });

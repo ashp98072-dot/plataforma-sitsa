@@ -20,6 +20,7 @@ import {
   METODOS_PAGO_GASTO,
   actualizarGasto,
   autorizarGasto,
+  codigoGasto,
   crearGasto,
   desactivarGasto,
   listarGastos,
@@ -495,7 +496,9 @@ describe("crearGasto", () => {
       const insert = conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_gastos_operativos"))!;
       const params = insert[1] as unknown[];
       // entidad_requirente_id/nombre, requirente_empleado_id/nombre/usuario_id, solicitante_usuario_id/nombre
-      expect(params.slice(-7)).toEqual([null, null, null, null, null, null, null]);
+      // (el último parámetro es el código temporal, que la misma transacción reemplaza por GASTO-<id>)
+      expect(params.slice(-8, -1)).toEqual([null, null, null, null, null, null, null]);
+      expect(String(params.at(-1))).toMatch(/^TMP-[0-9a-f]{24}$/);
       expect(conn.commit).toHaveBeenCalledOnce();
     });
 
@@ -1250,5 +1253,69 @@ describe("rechazarGasto", () => {
     const update = conn.execute.mock.calls.find((c) => String(c[0]).includes("UPDATE tms_gastos_operativos"))!;
     expect(update[1]).toEqual(["Factura ilegible", 1, 7]);
     expect(conn.commit).toHaveBeenCalledOnce();
+  });
+});
+
+describe("código administrativo persistido del gasto (GASTO-<id con 6 dígitos>)", () => {
+  const solicitud = { fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100 };
+  const llamada = (conn: ReturnType<typeof conexion>, texto: string) => conn.execute.mock.calls.find((c) => String(c[0]).includes(texto));
+  const ordenExecute = (conn: ReturnType<typeof conexion>, llamadaEncontrada: unknown[]) => conn.execute.mock.invocationCallOrder[conn.execute.mock.calls.indexOf(llamadaEncontrada as never)];
+
+  it("codigoGasto: id 1, 55, 723 y 1234567 (padStart no trunca)", () => {
+    expect([1, 55, 723, 1234567].map(codigoGasto)).toEqual(["GASTO-000001", "GASTO-000055", "GASTO-000723", "GASTO-1234567"]);
+  });
+  it("crear persiste GASTO-000055 con UPDATE por id + empresa, dentro de la misma transacción y ANTES del commit", async () => {
+    const conn = conexion();
+    vi.mocked(query).mockResolvedValue([filaGasto({ id: 55, codigo: "GASTO-000055" })] as never);
+    const creado = await crearGasto(7, solicitud);
+    const insert = llamada(conn, "INSERT INTO tms_gastos_operativos")!;
+    const update = llamada(conn, "SET codigo = ?")!;
+    expect(String(insert[0])).toContain("codigo, estado");
+    expect(String(update[0])).toContain("WHERE id = ? AND empresa_id = ?"); // tenant intacto
+    expect(update[1]).toEqual(["GASTO-000055", 55, 7]);
+    expect(ordenExecute(conn, update)).toBeLessThan(conn.commit.mock.invocationCallOrder[0]);
+    expect(conn.beginTransaction.mock.invocationCallOrder[0]).toBeLessThan(ordenExecute(conn, update));
+    expect(creado.codigo).toBe("GASTO-000055");
+  });
+  it("si no se pudo fijar el código (affectedRows 0) la creación FALLA completa: rollback, sin commit", async () => {
+    const conn = conexion();
+    conn.execute.mockImplementation(async (...args: [string, ...unknown[]]) => {
+      if (String(args[0]).includes("INSERT INTO tms_gastos_operativos")) return [{ insertId: 55, affectedRows: 1 }];
+      if (String(args[0]).includes("SET codigo = ?")) return [{ insertId: 0, affectedRows: 0 }];
+      return [{ insertId: 0, affectedRows: 1 }];
+    });
+    await expect(crearGasto(7, solicitud)).rejects.toThrow("No se pudo asignar el código del gasto.");
+    expect(conn.rollback).toHaveBeenCalled();
+    expect(conn.commit).not.toHaveBeenCalled();
+  });
+  it("gasto con líneas: el código se fija en la misma transacción y las líneas se conservan", async () => {
+    const conn = conexion();
+    vi.mocked(query).mockResolvedValue([filaGasto({ id: 55, codigo: "GASTO-000055" })] as never);
+    await crearGasto(7, { fechaSolicitud: "2026-09-01", categoria: "Combustible", lineas: [{ categoria: "Peaje", monto: 30 }, { categoria: "Hospedaje", monto: 70 }] });
+    expect(llamada(conn, "SET codigo = ?")![1]).toEqual(["GASTO-000055", 55, 7]);
+    expect(conn.execute.mock.calls.filter((c) => String(c[0]).includes("INSERT INTO tms_gasto_operativo_lineas")).length).toBeGreaterThan(0);
+    expect(conn.commit).toHaveBeenCalledOnce();
+  });
+  it("las firmas NUEVAS incluyen el código en valoresRelevantes; no se regeneran las antiguas", async () => {
+    conexion({ usuarioNombre: "Mario Caal", usuarioRol: "Operaciones" });
+    vi.mocked(query).mockResolvedValue([filaGasto({ id: 55 })] as never);
+    vi.mocked(leerBytesFirmaGuardada).mockResolvedValue(IMAGEN_FIRMA as never);
+    await crearGasto(7, { ...solicitud, solicitanteUsuarioId: 5 });
+    expect(crearFirmaInterna).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      accion: "SOLICITAR_GASTO", valoresRelevantes: { gastoId: 55, codigo: "GASTO-000055", monto: 100 },
+    }));
+  });
+  it("el modelo mapea codigo (y un dato sin código queda vacío, nunca 'undefined' ni reconstruido desde el id)", async () => {
+    vi.mocked(query).mockResolvedValueOnce([filaGasto({ id: 5, codigo: "GASTO-009999" })] as never).mockResolvedValueOnce([] as never);
+    expect((await obtenerGasto(7, 5))?.codigo).toBe("GASTO-009999");
+    vi.mocked(query).mockResolvedValueOnce([filaGasto({ id: 5 })] as never).mockResolvedValueOnce([] as never);
+    expect((await obtenerGasto(7, 5))?.codigo).toBe("");
+  });
+  it("el SELECT compartido (listar y obtener) incluye g.codigo y sigue acotado por empresa", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await listarGastos(7, {});
+    const sql = String(vi.mocked(query).mock.calls[0][0]);
+    expect(sql).toContain("SELECT g.id, g.codigo, g.empresa_id");
+    expect(sql).toContain("g.empresa_id = ?");
   });
 });

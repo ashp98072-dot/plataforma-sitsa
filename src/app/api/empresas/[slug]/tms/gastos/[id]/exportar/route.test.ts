@@ -16,7 +16,7 @@ describe("Excel individual protegido de gastos", () => {
 
   it("consulta solo la empresa autorizada y entrega el snapshot sin sustituirlo por el tenant", async () => {
     vi.mocked(requireTenantGastos).mockResolvedValue({ empresa: { id: 7, nombre: "Tenant distinto" } } as Awaited<ReturnType<typeof requireTenantGastos>>);
-    const gasto = { id: 10, empresaId: 7, entidadRequirenteNombre: "Requirente real" } as NonNullable<Awaited<ReturnType<typeof obtenerGasto>>>;
+    const gasto = { id: 10, codigo: "GASTO-000010", empresaId: 7, entidadRequirenteNombre: "Requirente real" } as NonNullable<Awaited<ReturnType<typeof obtenerGasto>>>;
     vi.mocked(obtenerGasto).mockResolvedValue(gasto);
     vi.mocked(exportarGastoOperativoExcel).mockResolvedValue(Buffer.from("xlsx"));
     const respuesta = await GET(req, ctx);
@@ -24,6 +24,7 @@ describe("Excel individual protegido de gastos", () => {
     expect(obtenerGasto).toHaveBeenCalledWith(7, 10);
     expect(exportarGastoOperativoExcel).toHaveBeenCalledExactlyOnceWith(gasto);
     expect(respuesta.status).toBe(200);
+    expect(respuesta.headers.get("Content-Disposition")).toBe('attachment; filename="GASTO-000010.xlsx"'); // código persistido, no el id
     expect(respuesta.headers.get("Cache-Control")).toBe("private, no-store");
   });
 
