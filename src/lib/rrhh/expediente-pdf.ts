@@ -1,4 +1,4 @@
-import { PDFDocument, PDFFont, PDFPage, StandardFonts, rgb } from "pdf-lib";
+import { PDFDocument, PDFFont, PDFImage, PDFPage, StandardFonts, rgb } from "pdf-lib";
 import { formatearFechaVisible } from "./dates";
 
 /**
@@ -115,27 +115,19 @@ type Doc = PDFDocument;
 type Fuentes = { normal: PDFFont; negrita: PDFFont };
 
 /** Portada: datos existentes del empleado (vacío → "—"), foto opcional, fecha de generación. */
-async function portada(pdf: Doc, f: Fuentes, emp: EmpleadoExpediente, foto: Uint8Array | null, generado: string, totalDocs: number) {
+async function portada(pdf: Doc, f: Fuentes, emp: EmpleadoExpediente, foto: PDFImage | null, generado: string, totalDocs: number) {
   const page = pdf.addPage(A4);
   const { width, height } = page.getSize();
   page.drawText("EXPEDIENTE DEL EMPLEADO", { x: MARGEN, y: height - 110, size: 24, font: f.negrita, color: NEGRO });
   page.drawRectangle({ x: MARGEN, y: height - 122, width: width - MARGEN * 2, height: 2, color: rgb(0.2, 0.3, 0.45) });
   let xTexto = MARGEN;
   if (foto) {
-    try {
-      const fmt = detectarFormato(foto);
-      const img = fmt === "png" ? await pdf.embedPng(foto) : fmt === "jpg" ? await pdf.embedJpg(foto) : null;
-      if (img) {
-        const caja = { w: 110, h: 140 };
-        const k = Math.min(caja.w / img.width, caja.h / img.height);
-        const w = img.width * k;
-        const h = img.height * k;
-        page.drawImage(img, { x: MARGEN, y: height - 160 - h, width: w, height: h });
-        xTexto = MARGEN + caja.w + 24;
-      }
-    } catch {
-      // La foto es opcional: si no se puede incrustar, la portada sale igual.
-    }
+    const caja = { w: 110, h: 140 };
+    const k = Math.min(caja.w / foto.width, caja.h / foto.height);
+    const w = foto.width * k;
+    const h = foto.height * k;
+    page.drawImage(foto, { x: MARGEN, y: height - 160 - h, width: w, height: h });
+    xTexto = MARGEN + caja.w + 24;
   }
   const v = (s: string | null | undefined) => (s && String(s).trim() ? String(s).trim() : "—");
   const filas: [string, string][] = [
@@ -235,21 +227,42 @@ async function paginaImagen(pdf: Doc, item: ItemPlan) {
   page.drawImage(img, { x: (pw - w) / 2, y: (ph - h) / 2, width: w, height: h });
 }
 
+/** La foto candidata a la portada: el documento "Foto" más reciente que tenga bytes. Solo es CANDIDATA: se excluye del cuerpo únicamente si se incrusta. */
+function elegirFotoPortada(entradas: readonly EntradaDocumento[]): EntradaDocumento | null {
+  const fotos = entradas.filter((e) => e.doc.tipoDocumento === "Foto" && e.bytes && e.bytes.length > 0);
+  fotos.sort((a, b) => String(b.doc.subidoEn).localeCompare(String(a.doc.subidoEn)) || b.doc.id - a.doc.id);
+  return fotos[0] ?? null;
+}
+
 /** Genera el PDF consolidado. Nunca lanza por un documento individual. */
 export async function construirExpedientePdf(input: {
   empleado: EmpleadoExpediente;
-  /** Ya en el orden final (ver ordenarDocumentosExpediente). */
+  /** Ya en el orden final (ver ordenarDocumentosExpediente). Incluye los documentos tipo "Foto": el generador decide si alguna sirve para la portada. */
   documentos: readonly EntradaDocumento[];
-  fotoPortada?: Uint8Array | null;
   generado: string;
 }): Promise<{ bytes: Uint8Array; resumen: ResumenExpediente }> {
-  const items = await planificar(input.documentos);
   const pdf = await PDFDocument.create();
   pdf.setTitle(`Expediente ${input.empleado.nombre}`.slice(0, 200));
   pdf.setProducer("Plataforma SITSA");
   const f: Fuentes = { normal: await pdf.embedFont(StandardFonts.Helvetica), negrita: await pdf.embedFont(StandardFonts.HelveticaBold) };
 
-  await portada(pdf, f, input.empleado, input.fotoPortada ?? null, input.generado, items.length);
+  // La foto sale del cuerpo SOLO si realmente se incrustó en la portada (firma JPG/PNG detectada por bytes Y embedJpg/embedPng exitoso).
+  // WebP/BMP, corrupta o ilegible → sigue en `documentos` y pasa por el flujo normal (incluye página informativa e índice). Nada se pierde.
+  const candidata = elegirFotoPortada(input.documentos);
+  let imagenPortada: PDFImage | null = null;
+  if (candidata?.bytes) {
+    const fmt = detectarFormato(candidata.bytes);
+    try {
+      if (fmt === "png") imagenPortada = await pdf.embedPng(candidata.bytes);
+      else if (fmt === "jpg") imagenPortada = await pdf.embedJpg(candidata.bytes);
+    } catch {
+      imagenPortada = null;
+    }
+  }
+  const restantes = imagenPortada && candidata ? input.documentos.filter((e) => e !== candidata) : input.documentos;
+  const items = await planificar(restantes);
+
+  await portada(pdf, f, input.empleado, imagenPortada, input.generado, items.length);
 
   // Índice solo con 2+ documentos. Puede ocupar varias páginas; el número de página de cada documento se calcula antes de dibujarlo.
   const paginasIndice = items.length > 1 ? Math.ceil(items.length / ITEMS_POR_PAGINA_INDICE) : 0;

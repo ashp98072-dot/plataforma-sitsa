@@ -3,7 +3,6 @@ import { MAX_UPLOAD_BYTES, validarRutaArchivoEmpresa } from "@/lib/uploads";
 import { formatearFechaVisible, ahoraLocal } from "@/lib/rrhh/dates";
 import { listarDocumentos } from "@/lib/rrhh/documentos";
 import type { Empleado } from "@/lib/rrhh/empleados";
-import { MAX_FOTO_EMPLEADO } from "@/lib/rrhh/foto-empleado";
 import { construirExpedientePdf, nombreArchivoExpediente, ordenarDocumentosExpediente, type EntradaDocumento } from "@/lib/rrhh/expediente-pdf";
 
 /**
@@ -59,19 +58,7 @@ export async function prepararExpedientePdf(empresaId: number, empleado: Emplead
     }
   }
 
-  // Foto de la portada: la más reciente tipo "Foto" (misma regla que respuestaFotoEmpleado). Opcional: si falta o no es JPG/PNG, sin foto.
-  const fotos = documentos.filter((d) => d.tipoDocumento === "Foto").sort((a, b) => String(b.subidoEn).localeCompare(String(a.subidoEn)) || b.id - a.id);
-  let fotoPortada: Uint8Array | null = null;
-  let fotoUsadaId: number | null = null;
-  for (const foto of fotos.slice(0, 1)) {
-    const bytes = await leer(foto.id, foto.rutaArchivo, MAX_FOTO_EMPLEADO);
-    if (bytes) {
-      fotoPortada = bytes;
-      fotoUsadaId = foto.id;
-    }
-  }
-
-  const ordenados = ordenarDocumentosExpediente(documentos.filter((d) => d.id !== fotoUsadaId));
+  const ordenados = ordenarDocumentosExpediente(documentos);
   const entradas: EntradaDocumento[] = [];
   for (const d of ordenados) {
     entradas.push({ doc: { id: d.id, tipoDocumento: d.tipoDocumento, nombreOriginal: d.nombreOriginal, subidoEn: d.subidoEn }, bytes: await leer(d.id, d.rutaArchivo, MAX_UPLOAD_BYTES) });
@@ -88,7 +75,6 @@ export async function prepararExpedientePdf(empresaId: number, empleado: Emplead
       fechaAlta: empleado.fechaAlta,
     },
     documentos: entradas,
-    fotoPortada,
     generado: `${formatearFechaVisible(ahoraLocal().slice(0, 10))} ${ahoraLocal().slice(11, 16)}`,
   });
   return { ok: true, bytes, filename: nombreArchivoExpediente(empleado.codigo, empleado.nombre), documentos: entradas.length, omitidos: resumen.omitidos };

@@ -181,11 +181,78 @@ describe("generador", () => {
     expect(g).toContain('"EXPEDIENTE DEL EMPLEADO"');
     for (const etiqueta of ['["Nombre"', '["Código"', '["DPI"', '["Puesto"', '["Área"', '["Estado"', '["Fecha de contratación"', '["Generado el"']) expect(g).toContain(etiqueta);
   });
-  it("23) foto de portada opcional: ausente, corrupta o válida no rompen", async () => {
-    for (const foto of [null, new Uint8Array([1, 2, 3]), new Uint8Array([0xff, 0xd8, 0xff, 0, 0]), pngDe(30, 40)]) {
-      const { bytes } = await construirExpedientePdf({ empleado: emp, documentos: [], fotoPortada: foto, generado: ahora });
-      expect(await paginasDe(bytes)).toBe(1);
-    }
+  describe("foto del empleado: solo sale del cuerpo si REALMENTE se incrustó en la portada", () => {
+    const WEBP = new Uint8Array(Buffer.from("RIFF0000WEBPVP8 ", "ascii"));
+    const PNG_ROTO = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 1]);
+    const JPG_ROTO = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 1, 2, 3]);
+    const conFoto = async (foto: Uint8Array | null) =>
+      construirExpedientePdf({
+        empleado: emp,
+        documentos: [
+          { doc: doc(1, "DPI", "d.pdf"), bytes: await pdfDe(1) },
+          { doc: doc(2, "Foto", "foto", "2026-02-01"), bytes: foto },
+        ],
+        generado: ahora,
+      });
+    it("1) foto JPG válida: en la portada y NO se repite como documento", async () => {
+      const { resumen } = await conFoto(JPG);
+      expect(resumen).toEqual({ incluidos: 1, omitidos: 0, paginas: 2 }); // portada + DPI (sin índice: 1 documento)
+    });
+    it("2) foto PNG válida: en la portada y NO se repite como documento", async () => {
+      const { resumen } = await conFoto(pngDe(30, 40));
+      expect(resumen).toEqual({ incluidos: 1, omitidos: 0, paginas: 2 });
+    });
+    it("3) foto WEBP: no se pierde; no se incrusta; página informativa e índice la incluyen", async () => {
+      const { bytes, resumen } = await conFoto(WEBP);
+      expect(resumen).toEqual({ incluidos: 1, omitidos: 1, paginas: 1 + 1 + 2 }); // portada + índice + DPI + informativa de la foto
+      expect(await paginasDe(bytes)).toBe(4);
+    });
+    it("4) foto JPG corrupta: no rompe, no desaparece, página informativa", async () => {
+      const { resumen } = await conFoto(JPG_ROTO);
+      expect(resumen).toEqual({ incluidos: 1, omitidos: 1, paginas: 4 });
+    });
+    it("5) foto PNG corrupta: mismo comportamiento", async () => {
+      const { resumen } = await conFoto(PNG_ROTO);
+      expect(resumen).toEqual({ incluidos: 1, omitidos: 1, paginas: 4 });
+    });
+    it("foto ilegible (bytes null): tampoco desaparece; queda como página informativa", async () => {
+      const { resumen } = await conFoto(null);
+      expect(resumen).toEqual({ incluidos: 1, omitidos: 1, paginas: 4 });
+    });
+    it("6) sin foto: portada normal y el resto intacto", async () => {
+      const { resumen } = await construirExpedientePdf({ empleado: emp, documentos: [{ doc: doc(1, "DPI", "d.pdf"), bytes: await pdfDe(2) }], generado: ahora });
+      expect(resumen).toEqual({ incluidos: 1, omitidos: 0, paginas: 3 });
+    });
+    it("varias fotos: solo la más reciente va a la portada; las anteriores siguen como documentos", async () => {
+      const { resumen } = await construirExpedientePdf({
+        empleado: emp,
+        documentos: [
+          { doc: doc(1, "Foto", "vieja", "2026-01-01"), bytes: pngDe(10, 10) },
+          { doc: doc(2, "Foto", "nueva", "2026-03-01"), bytes: JPG },
+        ],
+        generado: ahora,
+      });
+      // la nueva (JPG) a la portada; la vieja queda como su único documento: portada + PNG
+      expect(resumen).toEqual({ incluidos: 1, omitidos: 0, paginas: 2 });
+    });
+    it("si la más reciente no sirve (WebP) la portada no usa otra: cada foto se conserva y la anterior no se pierde", async () => {
+      const { resumen } = await construirExpedientePdf({
+        empleado: emp,
+        documentos: [
+          { doc: doc(1, "Foto", "vieja", "2026-01-01"), bytes: pngDe(10, 10) },
+          { doc: doc(2, "Foto", "nueva", "2026-03-01"), bytes: WEBP },
+        ],
+        generado: ahora,
+      });
+      expect(resumen.incluidos + resumen.omitidos).toBe(2);
+      expect(resumen.omitidos).toBe(1);
+    });
+    it("el índice lista la foto no incrustada como no incorporada (código del generador)", () => {
+      const g = readFileSync("src/lib/rrhh/expediente-pdf.ts", "utf8");
+      expect(g).toContain("elegirFotoPortada");
+      expect(g).toContain("input.documentos.filter((e) => e !== candidata)");
+      expect(g).toContain('" — no incorporado"');
+    });
   });
   it("caracteres fuera de WinAnsi en nombres no rompen el dibujo", async () => {
     const { resumen } = await construirExpedientePdf({
