@@ -1,4 +1,5 @@
 import { formatearFechaHora12, formatearHora12 } from "@/lib/tms/hora-formato";
+import { textoPilotos } from "@/lib/tms/piloto-extra-comun";
 
 export type ViajeDiario = {
   fechaPlan: string;
@@ -10,6 +11,8 @@ export type ViajeDiario = {
   horaSalida: string | null;
   horaCarga: string | null;
   piloto: string | null;
+  /** Piloto extra (si tiene): la celda de Piloto queda "Principal / Extra". */
+  pilotoExtra?: string | null;
   auxiliares: string[];
   estado: string;
   tarifaComercial: number | null;
@@ -43,7 +46,7 @@ export function filaReporteDiario(v: ViajeDiario): string[] {
     v.placa ?? "—",
     v.rutaCodigo ?? v.lugarDescargaHistorico ?? "—",
     horaMostrada(v.horaSalida, v.horaCarga),
-    v.piloto ?? "—",
+    textoPilotos(v.piloto, v.pilotoExtra) || "—",
     v.auxiliares[0] ?? "—",
     v.auxiliares[1] ?? "—",
     v.estado,

@@ -11,6 +11,7 @@ import { ahoraLocal, formatearTimestampVisible, hoyLocal } from "@/lib/rrhh/date
 import { filaReporteDiario, HEADERS_REPORTE_DIARIO, totalValorViajes } from "@/lib/tms/reporte-diario-viajes";
 import { reporteViajesHistorialPdf } from "@/lib/tms/reporte-viajes-historial-pdf";
 import { ETIQUETA_TC, etiquetaOrigenTc } from "@/lib/tms/tc-viaje-shared";
+import { textoPilotos } from "@/lib/tms/piloto-extra-comun";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -39,7 +40,8 @@ function filaExcel(p: PlanReporte): string[] {
     p.horaSalida ? p.horaSalida.replace("T", " ") : "—",
     p.kmRecorridos != null ? String(p.kmRecorridos) : "—",
     "—", // Consumo de combustible: sin fuente real por viaje (ver auditoría del ticket)
-    p.piloto ?? "—",
+    // Con piloto extra la celda queda "Principal / Extra"; sin extra, exactamente como antes.
+    textoPilotos(p.piloto, p.pilotoExtra) || "—",
     p.auxiliares[0] ?? "—",
     p.auxiliares[1] ?? "—",
     p.tarifaComercial != null ? String(p.tarifaComercial) : "Pendiente",

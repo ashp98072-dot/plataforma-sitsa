@@ -46,7 +46,7 @@ const AYER = sumarDias(HOY, -1);
 type Persona = PersonalModelo & { estado: string };
 type Plan = {
   id: number; empresa_id: number; codigo: string; estado: string; fecha: string; hora: string | null; regreso: string | null; tipo_viaje: string;
-  piloto_id: number | null; auxiliar_id: number | null; aux: number[]; unidad_tms: number | null; tc: number | null; pendiente?: boolean;
+  piloto_id: number | null; auxiliar_id: number | null; aux: number[]; extra?: number | null; unidad_tms: number | null; tc: number | null; pendiente?: boolean;
 };
 type Unidad = { id: number; placa: string; flota: number | null };
 type Modelo = { planes: Plan[]; unidades: Unidad[] };
@@ -119,6 +119,10 @@ async function responder(s: string, params: unknown[]): Promise<unknown[]> {
       piloto_nombre: personal.find((x) => x.id === p.piloto_id)?.nombre ?? null, pendiente_cierre: p.pendiente ? 1 : 0,
     }));
   }
+  if (s.includes("FROM tms_plan_pilotos_adicionales WHERE empresa_id = ?")) {
+    const ids = params.slice(1) as number[];
+    return m.planes.filter((p) => ids.includes(p.id) && p.empresa_id === empresa && p.extra != null).map((p) => ({ plan_id: p.id, personal_id: p.extra }));
+  }
   if (s.includes("FROM tms_plan_auxiliares pa") && s.includes("per.empresa_id = ?")) {
     const ids = params.slice(1) as number[];
     return m.planes.filter((p) => ids.includes(p.id) && p.empresa_id === empresa).flatMap((p) => p.aux.map((a, i) => ({ plan_id: p.id, personal_id: a, nombre: personal.find((x) => x.id === a)?.nombre, orden: i + 1 })));
@@ -145,7 +149,7 @@ async function responder(s: string, params: unknown[]): Promise<unknown[]> {
       && p.fecha <= fechaFin && (p.fecha >= fechaInicio || (p.regreso != null && p.regreso > inicio));
     const fila = (p: Plan, rid: unknown, nombre: unknown) => ({ recurso_id: rid, nombre, plan_id: p.id, codigo: p.codigo, fecha_plan: p.fecha, hora_carga: p.hora, regreso_estimado: p.regreso });
     if (s.includes("FROM tms_personal tp")) {
-      const modelo = { personal: personal as PersonalModelo[], planes: m.planes.filter((p) => p.tipo_viaje !== "Tercerizado").map((p) => ({ id: p.id, empresa_id: p.empresa_id, codigo: p.codigo, estado: p.estado, inicio: `${p.fecha} ${(p.hora ?? "00:00:00")}`, regreso_estimado: p.regreso, piloto_id: p.piloto_id, auxiliar_id: p.auxiliar_id, auxiliares: p.aux, hora_carga: p.hora })) };
+      const modelo = { personal: personal as PersonalModelo[], planes: m.planes.filter((p) => p.tipo_viaje !== "Tercerizado").map((p) => ({ id: p.id, empresa_id: p.empresa_id, codigo: p.codigo, estado: p.estado, inicio: `${p.fecha} ${(p.hora ?? "00:00:00")}`, regreso_estimado: p.regreso, piloto_id: p.piloto_id, pilotoExtra: p.extra ?? null, auxiliar_id: p.auxiliar_id, auxiliares: p.aux, hora_carga: p.hora })) };
       return emularConsultaConflictoPersonal(modelo, s, params);
     }
     if (s.includes("FROM tms_unidades u")) {
@@ -493,7 +497,7 @@ describe("recursos, auxiliares y viáticos", () => {
 
   it("viáticos: se sincronizan por conexión de la transacción y solo para filas donde cambia el personal", async () => {
     await guardar([cambio(101, { pilotoPersonalId: 12 }), cambio(102, { tcVehiculoId: 42 })]);
-    expect(syncs).toEqual([{ planId: 101, asignacion: { piloto: 12, auxiliares: [20] } }]);
+    expect(syncs).toEqual([{ planId: 101, asignacion: { piloto: 12, pilotoExtra: null, auxiliares: [20] } }]);
     expect(vi.mocked(sincronizarViaticosPlan).mock.calls[0][3]).toBe(conn);
   });
 
@@ -582,5 +586,46 @@ describe("seguridad", () => {
     const r = await guardar([cambio(101, { pilotoPersonalId: 12 })]);
     expect(r).toEqual({ ok: false, status: 500, error: "No se pudo guardar la edición rápida. No se modificó ningún viaje." });
     expect(h.eventos).toContain("unlock");
+  });
+});
+
+describe("PILOTO EXTRA — la edición rápida lo conserva y lo tiene en cuenta (no lo edita)", () => {
+  beforeEach(() => {
+    personal.push(persona(33, "Extra Piloto", 300));
+    p(101).extra = 33;
+  });
+
+  it("cambiar solo el piloto principal: el extra queda intacto (no se toca la tabla) y su viático se conserva en la sincronización", async () => {
+    const r = await guardar([cambio(101, { pilotoPersonalId: 12 })]);
+    expect(r).toMatchObject({ ok: true, guardados: 1 });
+    expect(p(101).extra).toBe(33);
+    expect(syncs).toEqual([{ planId: 101, asignacion: { piloto: 12, pilotoExtra: 33, auxiliares: [20] } }]);
+    expect(conn.execute.mock.calls.some((c) => String(c[0]).includes("tms_plan_pilotos_adicionales"))).toBe(false);
+  });
+
+  it("no se puede poner como principal (ni como auxiliar) a quien ya es piloto extra del viaje", async () => {
+    const r1 = await guardar([cambio(101, { pilotoPersonalId: 33 })]);
+    expect(r1.ok).toBe(false);
+    expect(codigos(r1, 101)).toEqual(["PERSONAL_INVALIDO"]);
+    const r2 = await guardar([cambio(101, { auxiliarPersonalIds: [20] , pilotoPersonalId: 10 }), cambio(102, { pilotoPersonalId: 11 })]);
+    expect(r2).toMatchObject({ ok: true });
+  });
+
+  it("el extra ocupa el intervalo: otro viaje solapado que quiera a esa persona choca (no se ignora en la validación)", async () => {
+    // plan 102 (08:00-11:00) intenta tomar como principal a la persona que es extra del plan 101 (05:00-08:00): NO solapan → permitido
+    expect((await guardar([cambio(102, { pilotoPersonalId: 33 })])).ok).toBe(true);
+  });
+
+  it("dos filas del mismo lote con ventanas solapadas: el extra de una y el nuevo principal de otra chocan", async () => {
+    p(102).hora = "05:00:00"; p(102).regreso = `${D0} 07:00:00`; // solapa con el plan 101 (05:00-08:00)
+    const r = await guardar([cambio(102, { pilotoPersonalId: 33 })]);
+    expect(r.ok).toBe(false);
+    expect((r as { filas?: { planId: number; errores: { codigo: string }[] }[] }).filas?.find((f) => f.planId === 102)?.errores.map((e) => e.codigo)).toEqual(["RECURSO_OCUPADO_BD"]);
+  });
+
+  it("los viáticos ya procesados del extra impiden retirarlo aunque se edite otra cosa: no se pierde (el extra no sale al cambiar el principal)", async () => {
+    viaticos.push({ plan_id: 101, personal_id: 33, estado: "AUTORIZADO" });
+    const r = await guardar([cambio(101, { pilotoPersonalId: 12 })]);
+    expect(r).toMatchObject({ ok: true }); // nadie sale: el extra sigue en el viaje
   });
 });

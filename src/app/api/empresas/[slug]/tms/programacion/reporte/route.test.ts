@@ -124,9 +124,10 @@ describe("GET /tms/programacion/reporte — respeta piloto/unidad/cliente (match
     expect(sql).toContain("p.fecha_plan BETWEEN ? AND ?");
     expect(sql).toContain("p.estado = ?");
     expect(sql).toContain("pil.nombre = ?");
+    expect(sql).toContain("xp.nombre = ?"); // el filtro por piloto también incluye los viajes donde es piloto EXTRA
     expect(sql).toContain("u.placa = ?");
     expect(sql).toContain("c.nombre = ?");
-    expect(params).toEqual([7, "2026-09-01", "2026-09-08", "Cerrado", "Carlos Ruiz", "P123ABC", "Cliente X"]);
+    expect(params).toEqual([7, "2026-09-01", "2026-09-08", "Cerrado", "Carlos Ruiz", "Carlos Ruiz", "P123ABC", "Cliente X"]);
   });
 });
 
@@ -276,7 +277,7 @@ describe("GET /tms/programacion/reporte — Programado: exporta EXACTAMENTE lo q
     const [sql, params] = vi.mocked(query).mock.calls[0];
     expect(sql).toContain("p.estado = ?");
     expect(sql).toContain("pil.nombre = ?");
-    expect(params).toEqual([7, "2026-09-10", "2026-09-10", "Programado", "Piloto Uno"]);
+    expect(params).toEqual([7, "2026-09-10", "2026-09-10", "Programado", "Piloto Uno", "Piloto Uno"]);
   });
 
   it("respeta unidad combinado con estado=Programado", async () => {
@@ -595,5 +596,43 @@ describe("GET /tms/programacion/reporte — columna TC (Propio y Tercerizado baj
     await GET(url("xlsx"), ctx);
     const { headers, rows } = vi.mocked(tablaAExcel).mock.calls[0][0];
     expect(rows[0][headers.indexOf("Hora")]).toBe("13:30");
+  });
+});
+
+/** PILOTO EXTRA — la celda "Piloto" del reporte (Excel/PDF) muestra "Principal / Extra"; sin extra, exactamente como antes. */
+describe("GET /tms/programacion/reporte — piloto extra", () => {
+  const fila = (id: number, piloto: string | null) => ({
+    id, fecha_plan: "2026-09-10", hora_carga: "08:00:00", ruta_codigo_historico: null, lugar_descarga_historico: "Xela", cliente: "Acme", placa: "C-100", piloto,
+    tipo_viaje: "Propio", piloto_externo_nombre: null, auxiliares_externos: null, unidad_externa_placa: null, tc: null,
+  });
+  const usarDatos = () => vi.mocked(query).mockImplementation((async (sql: string) => {
+    const s = String(sql);
+    if (s.includes("FROM tms_plan_pilotos_adicionales x") && s.includes("INNER JOIN tms_personal per")) return [{ plan_id: 1, personal_id: 30, id_empleado: 300, nombre: "Carlos López", telefono: null }];
+    if (s.includes("FROM tms_planes_viaje p")) return [fila(1, "Juan Pérez"), fila(2, "Ana Ruiz")];
+    return [];
+  }) as never);
+
+  it("con extra: 'Juan Pérez / Carlos López'; sin extra: solo el principal (aspecto actual)", async () => {
+    usarDatos();
+    await GET(new Request("http://localhost/x?formato=xlsx&fechaDesde=2026-09-10&fechaHasta=2026-09-10"), ctx);
+    const args = vi.mocked(tablaAExcel).mock.calls[0][0] as { headers: string[]; rows: string[][] };
+    const idx = args.headers.indexOf("Piloto");
+    expect(args.rows.map((f) => f[idx])).toEqual(["Juan Pérez / Carlos López", "Ana Ruiz"]);
+  });
+
+  it("el PDF recibe la misma celda combinada; el extra se lee UNA vez para todos los planes (sin N+1)", async () => {
+    usarDatos();
+    await GET(new Request("http://localhost/x?formato=pdf&fechaDesde=2026-09-10&fechaHasta=2026-09-10"), ctx);
+    const args = vi.mocked(tablaAPdf).mock.calls[0][0] as { headers: string[]; rows: string[][] };
+    expect(args.rows[0][args.headers.indexOf("Piloto")]).toBe("Juan Pérez / Carlos López");
+    expect(vi.mocked(query).mock.calls.filter(([sql]) => String(sql).includes("FROM tms_plan_pilotos_adicionales x"))).toHaveLength(1);
+  });
+
+  it("filtrar por piloto también incluye los viajes donde esa persona es piloto EXTRA", async () => {
+    await GET(new Request("http://localhost/x?formato=xlsx&fechaDesde=2026-09-10&fechaHasta=2026-09-10&piloto=Carlos+López"), ctx);
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(String(sql)).toContain("pil.nombre = ? OR EXISTS");
+    expect(String(sql)).toContain("xp.nombre = ?");
+    expect(params).toEqual([7, "2026-09-10", "2026-09-10", "Carlos López", "Carlos López"]);
   });
 });

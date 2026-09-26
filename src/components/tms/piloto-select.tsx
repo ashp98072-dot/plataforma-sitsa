@@ -38,6 +38,13 @@ type Props = {
    * sección 1/10 del ticket). Ausente o vacío = todos disponibles.
    */
   ocupados?: Record<number, OcupacionRecurso>;
+  /** Texto de la etiqueta (por defecto "Piloto (buscar en RRHH o escribir)"). */
+  etiqueta?: string;
+  /**
+   * PILOTO EXTRA — solo se elige de la lista de RRHH: no se ofrece escribir un nombre libre. Escribir solo BUSCA; mientras no se
+   * elija una opción el formulario no considera seleccionado a nadie (empleadoId = 0).
+   */
+  soloCatalogo?: boolean;
 };
 
 /**
@@ -54,6 +61,8 @@ export function PilotoSelect({
   inputClassName,
   onChange,
   ocupados,
+  etiqueta,
+  soloCatalogo,
 }: Props) {
   const listId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -108,7 +117,7 @@ export function PilotoSelect({
       className={`relative block text-xs text-[var(--muted)] ${open ? "z-30" : "z-10"}`}
     >
       <label htmlFor={listId} className="block">
-        Piloto (buscar en RRHH o escribir)
+        {etiqueta ?? "Piloto (buscar en RRHH o escribir)"}
       </label>
       <input
         id={listId}
@@ -147,7 +156,9 @@ export function PilotoSelect({
       <span className="mt-0.5 block text-[10px]">
         {empleadoId
           ? `Enlazado a RRHH #${empleadoId}`
-          : pilotos.length
+          : soloCatalogo
+            ? "Elige un piloto de la lista de RRHH (no se acepta texto libre)"
+            : pilotos.length
             ? `${pilotos.length} pilotos en planilla — escribe para buscar`
             : "Sin pilotos en RRHH — puedes escribir el nombre"}
       </span>

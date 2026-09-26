@@ -269,7 +269,7 @@ describe("GET /tms/planes — regreso estimado opcional y regreso real", () => {
     const [plan] = (await (await GET(req(`?id=${PLAN_ID}`), ctx)).json()).planes;
     expect(plan.cierre_manual).toBe(false);
     // planes + auxiliares (las lecturas aditivas de Edición rápida — viáticos y tarifas por ruta — no son la consulta de cierre manual)
-    const previas = vi.mocked(query).mock.calls.filter(([sql]) => !/tms_viaticos|tms_ruta_tarifas/.test(String(sql)));
+    const previas = vi.mocked(query).mock.calls.filter(([sql]) => !/tms_viaticos|tms_ruta_tarifas|tms_plan_pilotos_adicionales/.test(String(sql)));
     expect(previas).toHaveLength(2);
   });
 
@@ -280,5 +280,41 @@ describe("GET /tms/planes — regreso estimado opcional y regreso real", () => {
     const res = await GET(req(`?id=${PLAN_ID}`), ctx);
     expect(res.status).toBe(200);
     expect((await res.json()).planes[0].cierre_manual).toBe(false);
+  });
+});
+
+/** PILOTO EXTRA — el listado de Programación lo expone sin consultas por plan (una sola lectura para todos los planes). */
+describe("GET /api/empresas/[slug]/tms/planes — piloto extra", () => {
+  it("expone pilotoExtra* por plan con UNA sola consulta (sin N+1); el principal (piloto/pilotoId) queda intacto", async () => {
+    vi.mocked(query).mockImplementation((async (sql: string) => {
+      const s = String(sql);
+      if (s.includes("FROM tms_planes_viaje p") && s.includes("ORDER BY p.fecha_plan")) {
+        return [filaPlan({ piloto: "Juan Pérez", piloto_id: 10 }), filaPlan({ id: 32, codigo: "PLAN-20260901-006", piloto: "Ana Ruiz", piloto_id: 11 }), filaPlan({ id: 33, codigo: "PLAN-20260901-007" })];
+      }
+      if (s.includes("FROM tms_plan_pilotos_adicionales x")) return [{ plan_id: PLAN_ID, personal_id: 30, id_empleado: 300, nombre: "Carlos López", telefono: "5555-1234" }];
+      return [];
+    }) as never);
+    const res = await GET(req(`?id=${PLAN_ID}`), ctx);
+    expect(res.status).toBe(200);
+    const planes = (await res.json()).planes;
+    expect(planes[0]).toMatchObject({ piloto: "Juan Pérez", pilotoId: 10, pilotoExtraId: 30, pilotoExtraEmpleadoId: 300, pilotoExtraNombre: "Carlos López", pilotoExtraTelefono: "5555-1234" });
+    expect(planes[1]).toMatchObject({ piloto: "Ana Ruiz", pilotoExtraId: null, pilotoExtraNombre: null }); // sin extra: null, aspecto de siempre
+    expect(planes[2].pilotoExtraId).toBeNull();
+    const consultasExtra = vi.mocked(query).mock.calls.filter(([sql]) => String(sql).includes("tms_plan_pilotos_adicionales"));
+    expect(consultasExtra).toHaveLength(1);
+    expect(String(consultasExtra[0][0])).toContain("WHERE x.plan_id IN (?,?,?)");
+    expect(consultasExtra[0][1]).toEqual([PLAN_ID, 32, 33]);
+  });
+
+  it("si la tabla aún no existe el listado sigue respondiendo (sin piloto extra)", async () => {
+    vi.mocked(query).mockImplementation((async (sql: string) => {
+      const s = String(sql);
+      if (s.includes("FROM tms_plan_pilotos_adicionales x")) throw new Error("Table 'tms_plan_pilotos_adicionales' doesn't exist");
+      if (s.includes("FROM tms_planes_viaje p") && s.includes("ORDER BY p.fecha_plan")) return [filaPlan()];
+      return [];
+    }) as never);
+    const res = await GET(req(`?id=${PLAN_ID}`), ctx);
+    expect(res.status).toBe(200);
+    expect((await res.json()).planes[0].pilotoExtraId).toBeNull();
   });
 });

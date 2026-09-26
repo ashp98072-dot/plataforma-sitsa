@@ -21,6 +21,7 @@ import {
 import { formatearFechaHora12, formatearHora12 } from "@/lib/tms/hora-formato";
 import { ETIQUETA_TC, etiquetaOrigenTc } from "@/lib/tms/tc-viaje-shared";
 import { resumenRegreso } from "@/lib/tms/regreso-viaje";
+import { textoPilotos } from "@/lib/tms/piloto-extra-comun";
 
 /**
  * OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — deep-link a un plan puntual.
@@ -150,6 +151,8 @@ type PlanReporte = {
   tcVehiculoId?: number | null;
   pilotoId: number | null;
   piloto: string | null;
+  /** Piloto extra (si tiene): se muestra junto al principal. */
+  pilotoExtra?: string | null;
   auxiliares: string[];
   paradas: Parada[];
   evidencias: number;
@@ -353,7 +356,7 @@ export function resumenCierre(p: PlanReporte): {
     codigo: p.codigo,
     cliente: p.cliente ?? "—",
     placa: p.placa ?? "—",
-    piloto: p.piloto ?? "—",
+    piloto: textoPilotos(p.piloto, p.pilotoExtra) || "—",
     // OPERACIONES-HORA-12H-1 (Grupo C) — hora REAL de salida/llegada en
     // formato 12h con AM/PM; regresoEstimado/cerradoEn (fuera de este
     // ticket) siguen usando fh() sin cambios más abajo en este archivo.
@@ -996,7 +999,7 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                         <span className="block text-[10px] text-[var(--muted)]" title={`${ETIQUETA_TC} (${etiquetaOrigenTc(p.tcOrigen)})`}>TC: {p.tcPlaca}</span>
                       ) : null}
                     </td>
-                    <td className="px-2 py-1.5 text-xs">{p.piloto ?? "—"}</td>
+                    <td className="px-2 py-1.5 text-xs">{textoPilotos(p.piloto, p.pilotoExtra) || "—"}</td>
                     <td className="px-2 py-1.5 text-xs">{p.auxiliares.join(", ") || "—"}</td>
                     <td className="whitespace-nowrap px-2 py-1.5 text-xs">{formatearFechaHora12(p.horaSalida)}</td>
                     <td className="whitespace-nowrap px-2 py-1.5 text-xs">{formatearFechaHora12(p.horaLlegada)}</td>
@@ -1078,7 +1081,7 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                             </ul>
                             <p className="mt-3 text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">B. Personal / unidad</p>
                             <ul className="mt-1 space-y-0.5 text-xs text-[var(--text)]">
-                              <li>Piloto: {p.piloto ?? "—"}</li>
+                              <li>{p.pilotoExtra ? "Pilotos" : "Piloto"}: {textoPilotos(p.piloto, p.pilotoExtra) || "—"}</li>
                               <li>Auxiliares: {p.auxiliares.join(", ") || "—"}</li>
                               <li>Unidad: {p.placa ?? "—"}</li>
                               <li>Equipo asignado: {p.unidadTipo ? `${p.unidadTipo}${p.unidadCapacidad ? ` · ${p.unidadCapacidad}` : ""}` : "—"}</li>

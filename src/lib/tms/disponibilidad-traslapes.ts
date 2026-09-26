@@ -240,7 +240,8 @@ async function buscarConflictoPersonal(
            OR EXISTS (
              SELECT 1 FROM tms_plan_auxiliares pa
              WHERE pa.plan_id = p.id AND pa.personal_id = eq.id
-           ))
+           )
+           OR EXISTS (SELECT 1 FROM tms_plan_pilotos_adicionales pe WHERE pe.plan_id = p.id AND pe.personal_id = eq.id))
      WHERE tp.id = ? AND tp.empresa_id = ?
        AND p.estado IN (${CANDIDATOS_PLACEHOLDERS})
        ${excluirPlanId ? "AND p.id != ?" : ""}

@@ -269,7 +269,7 @@ describe("POST — viaje TERCERIZADO: TC externo solo como texto", () => {
 
   it("no genera viáticos internos (regresión: recursos vacíos)", async () => {
     await post(TERCERIZADO);
-    expect(sincronizarViaticosPlan).toHaveBeenCalledWith(7, expect.any(Number), { piloto: null, auxiliares: [] }, expect.anything(), expect.anything());
+    expect(sincronizarViaticosPlan).toHaveBeenCalledWith(7, expect.any(Number), { piloto: null, pilotoExtra: null, auxiliares: [] }, expect.anything(), expect.anything());
   });
 });
 

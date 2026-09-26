@@ -20,6 +20,8 @@ export type PlanModelo = {
   regreso_estimado: string | null;
   piloto_id?: number | null;
   auxiliar_id?: number | null;
+  /** tms_plan_pilotos_adicionales.personal_id (piloto EXTRA; máximo 1). */
+  pilotoExtra?: number | null;
   /** tms_plan_auxiliares.personal_id */
   auxiliares?: number[];
   llegada_tecnica?: 0 | 1;
@@ -54,7 +56,7 @@ function emularIntervalosPersonal(modelo: ModeloPersonal, sql: string, params: u
       return p.empresa_id === empresaId && estados.includes(p.estado) && !excluidos.includes(p.id)
         && fecha <= fechaFin && (fecha >= fechaInicio || (regreso != null && regreso > inicioVentana))
         && ((p.piloto_id != null && equivalentes.has(p.piloto_id)) || (p.auxiliar_id != null && equivalentes.has(p.auxiliar_id)) ||
-          (p.auxiliares ?? []).some((id) => equivalentes.has(id)));
+          (p.pilotoExtra != null && equivalentes.has(p.pilotoExtra)) || (p.auxiliares ?? []).some((id) => equivalentes.has(id)));
     }).map((p) => ({
       recurso_id: tp.id, nombre: tp.nombre, plan_id: p.id, codigo: p.codigo, fecha_plan: p.inicio.slice(0, 10),
       hora_carga: p.hora_carga !== undefined ? p.hora_carga : p.inicio.slice(11, 19), regreso_estimado: p.regreso_estimado,
@@ -77,7 +79,7 @@ export function emularConsultaConflictoPersonal(modelo: ModeloPersonal, sql: str
         estados.includes(p.estado) && p.id !== excluir &&
         ((p.piloto_id != null && equivalentes.has(p.piloto_id)) ||
           (p.auxiliar_id != null && equivalentes.has(p.auxiliar_id)) ||
-          (p.auxiliares ?? []).some((id) => equivalentes.has(id))))
+          (p.pilotoExtra != null && equivalentes.has(p.pilotoExtra)) || (p.auxiliares ?? []).some((id) => equivalentes.has(id))))
         .map((p) => ({ recurso_id: tp.id, nombre: tp.nombre, plan_id: p.id, codigo: p.codigo, fecha }));
     });
   }
@@ -94,7 +96,7 @@ export function emularConsultaConflictoPersonal(modelo: ModeloPersonal, sql: str
   const ids = new Set(equivalentes.map((e) => e.id));
   return modelo.planes
     .filter((p) => p.empresa_id === tp.empresa_id)
-    .filter((p) => (p.piloto_id != null && ids.has(p.piloto_id)) || (p.auxiliar_id != null && ids.has(p.auxiliar_id)) || (p.auxiliares ?? []).some((a) => ids.has(a)))
+    .filter((p) => (p.piloto_id != null && ids.has(p.piloto_id)) || (p.auxiliar_id != null && ids.has(p.auxiliar_id)) || (p.pilotoExtra != null && ids.has(p.pilotoExtra)) || (p.auxiliares ?? []).some((a) => ids.has(a)))
     .filter((p) => estadosCandidatos.includes(p.estado))
     .filter((p) => excluirPlanId == null || p.id !== excluirPlanId)
     .map((p) => ({

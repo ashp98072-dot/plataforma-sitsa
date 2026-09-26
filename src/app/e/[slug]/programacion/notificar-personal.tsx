@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { Plan } from "./programacion-client";
+import { lineaPilotosMensaje } from "@/lib/tms/piloto-extra-comun";
 
 type Destinatario = {
   clave: string;
@@ -37,7 +38,7 @@ function destinoDelPlan(plan: Plan): string {
     ?? "Pendiente";
 }
 
-function mensajeAsignacion(plan: Plan, nombre: string, urlPortal: string): string {
+export function mensajeAsignacion(plan: Plan, nombre: string, urlPortal: string): string {
   const carga = plan.paradas?.find((p) => p.tipo.toLowerCase() === "carga")?.lugar_nombre
     ?? plan.paradas?.[0]?.lugar_nombre
     ?? "Pendiente";
@@ -55,7 +56,8 @@ function mensajeAsignacion(plan: Plan, nombre: string, urlPortal: string): strin
     `Lugar de carga: ${carga}`,
     `Destino: ${destinoDelPlan(plan)}`,
     `Unidad: ${plan.placa || "Pendiente"}`,
-    `Piloto: ${plan.piloto || "Pendiente"}`,
+    // "Piloto: X" con uno; "Pilotos: X, Y" cuando el viaje tiene piloto extra.
+    lineaPilotosMensaje(plan.piloto, plan.pilotoExtraNombre),
     `Auxiliares: ${plan.auxiliares.length ? plan.auxiliares.join(", ") : "Ninguno"}`,
     `Regreso estimado: ${regresoGt(plan.regreso_estimado)}`,
     "",
@@ -67,15 +69,23 @@ function mensajeAsignacion(plan: Plan, nombre: string, urlPortal: string): strin
   ].join("\n");
 }
 
-export default function NotificarPersonal({ plan }: { plan: Plan }) {
-  const [copiado, setCopiado] = useState("");
-  const destinatarios: Destinatario[] = [
+/** Destinatarios del viaje: piloto principal, piloto EXTRA (también rol Piloto, con su propio teléfono) y auxiliares. */
+export function destinatariosDelPlan(plan: Plan): Destinatario[] {
+  return [
     ...(plan.piloto
       ? [{
           clave: `piloto-${plan.pilotoId ?? plan.piloto}`,
           rol: "Piloto" as const,
           nombre: plan.piloto,
           telefono: plan.pilotoTelefono,
+        }]
+      : []),
+    ...(plan.pilotoExtraNombre
+      ? [{
+          clave: `piloto-extra-${plan.pilotoExtraId ?? plan.pilotoExtraNombre}`,
+          rol: "Piloto" as const,
+          nombre: plan.pilotoExtraNombre,
+          telefono: plan.pilotoExtraTelefono ?? null,
         }]
       : []),
     ...plan.auxiliaresDetalle.map((aux) => ({
@@ -85,6 +95,11 @@ export default function NotificarPersonal({ plan }: { plan: Plan }) {
       telefono: aux.telefono,
     })),
   ];
+}
+
+export default function NotificarPersonal({ plan }: { plan: Plan }) {
+  const [copiado, setCopiado] = useState("");
+  const destinatarios = destinatariosDelPlan(plan);
 
   function preparar(destinatario: Destinatario) {
     const urlPortal = `${window.location.origin}/portal/viajes?viaje=${plan.id}`;

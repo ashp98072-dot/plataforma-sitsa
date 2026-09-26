@@ -117,9 +117,9 @@ describe("resolverSeleccionPersonal — modo lectura (SIN efectos secundarios)",
 describe("estado, motivo, fechas y regreso (puras)", () => {
   const nadie = camposTocados({});
   it("camposTocados: presencia en el request, no comparación con el valor anterior", () => {
-    expect(nadie).toEqual({ piloto: false, auxiliares: false, unidad: false, fecha: false, paradas: false, hora: false, comercial: false });
+    expect(nadie).toEqual({ piloto: false, pilotoExtra: false, auxiliares: false, unidad: false, fecha: false, paradas: false, hora: false, comercial: false });
     expect(camposTocados({ pilotoPersonalId: 1, auxiliarNombre: "x", flotaVehiculoId: 2, fechaPlan: "2026-01-01", paradas: [], horaCarga: "05:00", tarifaId: null }))
-      .toEqual({ piloto: true, auxiliares: true, unidad: true, fecha: true, paradas: true, hora: true, comercial: true });
+      .toEqual({ piloto: true, pilotoExtra: false, auxiliares: true, unidad: true, fecha: true, paradas: true, hora: true, comercial: true });
   });
 
   it("motivo obligatorio solo para piloto/unidad/auxiliares", () => {

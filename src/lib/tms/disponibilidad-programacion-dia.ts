@@ -55,7 +55,8 @@ async function personalDelDia(empresaId: number, fecha: string, excluirPlanId: n
       AND (eq.id = tp.id OR (tp.id_empleado IS NOT NULL AND eq.id_empleado = tp.id_empleado))
     INNER JOIN tms_planes_viaje p ON p.empresa_id = tp.empresa_id
       AND (p.piloto_id = eq.id OR p.auxiliar_id = eq.id OR EXISTS (
-        SELECT 1 FROM tms_plan_auxiliares pa WHERE pa.plan_id = p.id AND pa.personal_id = eq.id))
+        SELECT 1 FROM tms_plan_auxiliares pa WHERE pa.plan_id = p.id AND pa.personal_id = eq.id)
+        OR EXISTS (SELECT 1 FROM tms_plan_pilotos_adicionales pe WHERE pe.plan_id = p.id AND pe.personal_id = eq.id))
     WHERE tp.empresa_id = ? AND p.fecha_plan = ? AND p.estado IN (${estadosSql})
       ${ids ? `AND tp.id IN (${ids.map(() => "?").join(",")})` : "AND tp.id_empleado IS NOT NULL"}
       ${excluirPlanId != null ? "AND p.id != ?" : ""}

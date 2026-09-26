@@ -1,6 +1,7 @@
 import PDFDocument from "pdfkit";
 import type { FiltrosReporteViajes, KpiReporteViajes, PlanReporte } from "@/lib/tms/reportes-viajes";
 import { formatearFechaHora12 } from "@/lib/tms/hora-formato";
+import { textoPilotos } from "@/lib/tms/piloto-extra-comun";
 
 export const REPORTE_VIAJES_PDF_CONFIG = { size: "LEGAL" as const, layout: "landscape" as const, margins: { top: 32, bottom: 38, left: 28, right: 28 } };
 export const HEADERS_OPERATIVOS = ["Fecha", "Código", "Cliente", "Ruta", "Unidad / placa", "Piloto", "Auxiliares", "H. salida", "H. llegada", "Km salida", "Km llegada", "Km recorridos", "Evidencias", "Tarifa usada", "Tarifa", "Estado", "TC / Caja / Remolque"];
@@ -12,7 +13,7 @@ function moneda(valor: number | null): string {
 
 /** OPERACIONES-HORA-12H-1 (Grupo C) — columnas "H. salida"/"H. llegada" (índices 7-8) en formato 12h con AM/PM. */
 export function filaOperativa(p: PlanReporte): string[] {
-  return [p.fechaPlan, p.codigo, p.cliente ?? "—", p.rutaCodigo ?? p.lugarDescargaHistorico ?? "—", [p.unidadTipo, p.placa].filter(Boolean).join(" / ") || "—", p.piloto ?? "—", p.auxiliares.join(", ") || "—", formatearFechaHora12(p.horaSalida), formatearFechaHora12(p.horaLlegada), p.kmSalida != null ? String(p.kmSalida) : "—", p.kmLlegada != null ? String(p.kmLlegada) : "—", p.kmRecorridos != null ? String(p.kmRecorridos) : "—", String(p.evidencias), p.tarifaNombre ?? "—", moneda(p.tarifaComercial), p.estado, p.tcPlaca ? `${p.tcPlaca}${p.tcOrigen === "EXTERNO" ? " (Tercerizado)" : ""}` : "—"];
+  return [p.fechaPlan, p.codigo, p.cliente ?? "—", p.rutaCodigo ?? p.lugarDescargaHistorico ?? "—", [p.unidadTipo, p.placa].filter(Boolean).join(" / ") || "—", textoPilotos(p.piloto, p.pilotoExtra) || "—", p.auxiliares.join(", ") || "—", formatearFechaHora12(p.horaSalida), formatearFechaHora12(p.horaLlegada), p.kmSalida != null ? String(p.kmSalida) : "—", p.kmLlegada != null ? String(p.kmLlegada) : "—", p.kmRecorridos != null ? String(p.kmRecorridos) : "—", String(p.evidencias), p.tarifaNombre ?? "—", moneda(p.tarifaComercial), p.estado, p.tcPlaca ? `${p.tcPlaca}${p.tcOrigen === "EXTERNO" ? " (Tercerizado)" : ""}` : "—"];
 }
 export function filaFacturacion(p: PlanReporte): string[] {
   return [p.estadoFacturacion, p.numeroFactura ?? "—", moneda(p.montoFacturadoViaje ?? p.montoBorradorViaje), p.estadoFinancieroFactura ?? "—", moneda(p.totalFactura), moneda(p.totalPagadoFactura), moneda(p.saldoFactura)];

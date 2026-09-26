@@ -2,6 +2,7 @@ import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
 import { planesConCierreManual } from "@/lib/tms/cierre-manual-planes";
 import { listarParadasDePlanes, type PlanParada } from "@/lib/tms/paradas";
+import { pilotoExtraDePlanes } from "@/lib/tms/piloto-extra";
 import {
   estadoFinancieroDe,
   type EstadoAdminFactura,
@@ -73,6 +74,8 @@ export type PlanReporte = {
   tcVehiculoId?: number | null;
   pilotoId: number | null;
   piloto: string | null;
+  /** PILOTO EXTRA (nombre) del viaje, si tiene; el principal sigue siendo `piloto`/`pilotoId`. */
+  pilotoExtra?: string | null;
   auxiliares: string[];
   paradas: PlanParada[];
   evidencias: number;
@@ -436,8 +439,9 @@ function construirCondiciones(
     params.push(filtros.clienteId);
   }
   if (filtros.pilotoId) {
-    condiciones.push("p.piloto_id = ?");
-    params.push(filtros.pilotoId);
+    // El filtro por piloto también incluye los viajes donde esa persona es piloto EXTRA.
+    condiciones.push("(p.piloto_id = ? OR EXISTS (SELECT 1 FROM tms_plan_pilotos_adicionales x WHERE x.plan_id = p.id AND x.personal_id = ?))");
+    params.push(filtros.pilotoId, filtros.pilotoId);
   }
   if (filtros.unidadId) {
     condiciones.push("p.unidad_id = ?");
@@ -715,9 +719,11 @@ export async function obtenerReporteViajes(
   }
 
   const planIds = rows.map((r) => Number(r.id));
-  const [paradasMap, auxMap, cierreManualIds] = await Promise.all([
+  const [paradasMap, auxMap, extraMap, cierreManualIds] = await Promise.all([
     listarParadasDePlanes(planIds),
     auxiliaresDePlanesReporte(planIds),
+    // Piloto extra de todos los viajes del reporte en UNA consulta.
+    pilotoExtraDePlanes(planIds),
     planesConCierreManual(empresaId, rows.filter((r) => r.estado === "Cerrado").map((r) => Number(r.id))),
   ]);
 
@@ -754,6 +760,7 @@ export async function obtenerReporteViajes(
       ...resolverTcReporte(r),
       pilotoId: r.piloto_id != null ? Number(r.piloto_id) : null,
       piloto: r.piloto ? String(r.piloto) : null,
+      pilotoExtra: extraMap.get(id)?.nombre ?? null,
       auxiliares: auxMap.get(id) ?? [],
       paradas: paradasMap.get(id) ?? [],
       evidencias: Number(r.evidencias ?? 0),

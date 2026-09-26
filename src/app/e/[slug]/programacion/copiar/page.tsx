@@ -233,6 +233,11 @@ export default function CopiarProgramacionPage() {
                             {catalogos?.empleados.map((e) => <option key={e.id} value={e.id}>{e.codigo} — {e.nombre}</option>)}
                           </select>
                         )}
+                        {!terc && f.origen.pilotoExtraNombre ? (
+                          <span className="mt-0.5 block text-[10px] text-[var(--muted)]" title="Se copia con la misma regla de disponibilidad que el piloto principal">
+                            + Piloto extra: {f.origen.pilotoExtraNombre}
+                          </span>
+                        ) : null}
                       </td>
                       <td className="px-2 py-1.5">
                         {terc ? <span>{b.externo?.auxiliaresExternos.join(", ") || "—"}</span> : (

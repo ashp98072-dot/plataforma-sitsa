@@ -7,6 +7,7 @@ import { listarDisponibilidadPersonal } from "@/lib/operaciones/disponibilidad-p
 import { asegurarCodigoPlanUnico } from "@/lib/tms/codigo-plan";
 import { personalDesdeEmpleado } from "@/lib/tms/personal-resolucion";
 import { guardarAuxiliaresPlan, upsertLugar } from "@/lib/tms/plan-comunes";
+import { guardarPilotoExtraPlan } from "@/lib/tms/piloto-extra";
 import { guardarParadasPlan, type ParadaInput } from "@/lib/tms/paradas";
 import { tarifasActivasDeVariasRutas } from "@/lib/tms/ruta-tarifas";
 import { sincronizarViaticosPlan } from "@/lib/tms/viaticos";
@@ -77,6 +78,8 @@ export type BorradorLote = {
   unidadPlaca: string | null;
   tcVehiculoId: number | null;
   pilotoEmpleadoId: number | null;
+  /** PILOTO EXTRA (empleado de RRHH con puesto de piloto; máximo 1). Ausente/null = el viaje no lo tiene. Solo viajes Propios. */
+  pilotoExtraEmpleadoId?: number | null;
   auxiliarEmpleadoIds: number[];
   tarifaId: number | null;
   externo: ExternoLote | null;
@@ -173,7 +176,7 @@ export async function copiasVigentesDeOrigen(empresaId: number, fechaDestino: st
 async function resolverYValidar(empresaId: number, fechaDestino: string, borradores: BorradorLote[]): Promise<FilaInterna[]> {
   const rutaIds = [...new Set(borradores.map((b) => b.rutaId).filter((n): n is number => n != null))];
   const clienteIds = [...new Set(borradores.filter((b) => b.rutaId == null).map((b) => b.clienteId).filter((n): n is number => n != null))];
-  const empleadoIds = [...new Set(borradores.flatMap((b) => [b.pilotoEmpleadoId, ...b.auxiliarEmpleadoIds]).filter((n): n is number => n != null))];
+  const empleadoIds = [...new Set(borradores.flatMap((b) => [b.pilotoEmpleadoId, b.pilotoExtraEmpleadoId ?? null, ...b.auxiliarEmpleadoIds]).filter((n): n is number => n != null))];
   const origenIds = borradores.map((b) => b.origenPlanId).filter((n): n is number => n != null);
 
   const [rutasRows, clientesRows, empleadosRows, personalRows, unidadesRows, disp, tarifas, copias] = await Promise.all([
@@ -191,7 +194,7 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
       ? query<RowDataPacket[]>(`SELECT id FROM tms_clientes WHERE empresa_id = ? AND id IN ${ids(clienteIds)}`, [empresaId, ...clienteIds])
       : Promise.resolve([] as RowDataPacket[]),
     empleadoIds.length
-      ? query<RowDataPacket[]>(`SELECT id, nombre, estado FROM empleados WHERE empresa_id = ? AND id IN ${ids(empleadoIds)}`, [empresaId, ...empleadoIds])
+      ? query<RowDataPacket[]>(`SELECT id, nombre, estado, puesto, categoria_ops FROM empleados WHERE empresa_id = ? AND id IN ${ids(empleadoIds)}`, [empresaId, ...empleadoIds])
       : Promise.resolve([] as RowDataPacket[]),
     empleadoIds.length
       ? query<RowDataPacket[]>(`SELECT id, tipo, id_empleado FROM tms_personal WHERE empresa_id = ? AND id_empleado IN ${ids(empleadoIds)} ORDER BY id`, [empresaId, ...empleadoIds])
@@ -268,8 +271,8 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
     if (b.tipoViaje === "Tercerizado") {
       // Tercerizado: solo texto externo; NO se aplican recursos ni disponibilidad de flota/personal interno.
       const x = b.externo;
-      if (b.unidadPlaca || b.tcVehiculoId != null || b.pilotoEmpleadoId != null || b.auxiliarEmpleadoIds.length) {
-        errores.push("Un viaje tercerizado no usa recursos internos (unidad, TC, piloto ni auxiliares).");
+      if (b.unidadPlaca || b.tcVehiculoId != null || b.pilotoEmpleadoId != null || b.pilotoExtraEmpleadoId != null || b.auxiliarEmpleadoIds.length) {
+        errores.push("Un viaje tercerizado no usa recursos internos (unidad, TC, piloto, piloto extra ni auxiliares).");
       }
       if (!x || !x.pilotoExternoNombre.trim()) errores.push("Un viaje tercerizado requiere el nombre del piloto externo.");
       if (x) {
@@ -281,21 +284,25 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
     } else {
       if (b.externo) errores.push("Un viaje propio no lleva datos de tercerizado.");
       // --- personal ---
-      const todos = [b.pilotoEmpleadoId, ...b.auxiliarEmpleadoIds].filter((n): n is number => n != null);
+      const extraId = b.pilotoExtraEmpleadoId ?? null;
+      const todos = [b.pilotoEmpleadoId, extraId, ...b.auxiliarEmpleadoIds].filter((n): n is number => n != null);
       if (b.auxiliarEmpleadoIds.length > MAX_AUXILIARES) errores.push(`Máximo ${MAX_AUXILIARES} auxiliares por viaje.`);
-      if (new Set(todos).size !== todos.length) errores.push("El piloto y los auxiliares no pueden repetirse en el mismo viaje.");
-      const rolDe = (id: number) => (id === b.pilotoEmpleadoId ? "piloto" : "auxiliar");
+      if (new Set(todos).size !== todos.length) errores.push("El piloto, el piloto extra y los auxiliares no pueden repetirse en el mismo viaje.");
+      const rolDe = (id: number) => (id === b.pilotoEmpleadoId ? "piloto" : id === extraId ? "piloto extra" : "auxiliar");
       for (const id of todos) {
         const e = empleados.get(id);
         if (!e) errores.push(`El ${rolDe(id)} seleccionado no existe en esta empresa.`);
         else if (String(e.estado ?? "").toLowerCase() !== "activo") errores.push(`${String(e.nombre)} está inactivo y no puede asignarse.`);
-        else {
+        else if (id === extraId && !(String(e.categoria_ops ?? "") === "Piloto" || String(e.puesto ?? "").toLowerCase().includes("piloto") || String(e.categoria_ops ?? "").toLowerCase().includes("piloto"))) {
+          errores.push(`${String(e.nombre)} no tiene puesto de piloto y no puede ser piloto extra.`);
+        } else {
           if (id === b.pilotoEmpleadoId) res.pilotoNombre = String(e.nombre);
-          else res.auxiliaresNombres.push(String(e.nombre));
+          else if (id !== extraId) res.auxiliaresNombres.push(String(e.nombre));
           const pid = personalPorEmpleado.get(id);
-          if (pid != null) recursos.push({ tipo: id === b.pilotoEmpleadoId ? "piloto" : "auxiliar", id: pid });
+          // El piloto extra consume disponibilidad EXACTAMENTE igual que el principal (rol piloto, mismo motor por intervalos).
+          if (pid != null) recursos.push({ tipo: id === b.pilotoEmpleadoId || id === extraId ? "piloto" : "auxiliar", id: pid });
           const ocupado = pid != null ? enCurso.get(pid) : undefined;
-          if (ocupado !== undefined) errores.push(id === b.pilotoEmpleadoId ? "El piloto seleccionado tiene un viaje en curso." : `El auxiliar ${ocupado} tiene un viaje en curso.`);
+          if (ocupado !== undefined) errores.push(id === b.pilotoEmpleadoId || id === extraId ? `El ${rolDe(id)} seleccionado tiene un viaje en curso.` : `El auxiliar ${ocupado} tiene un viaje en curso.`);
         }
       }
       // --- unidad (misma regla que el POST manual: existe, no es TC, disponible) ---
@@ -342,7 +349,7 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
   for (const f of internas) {
     const b = f.borrador;
     if (b.tipoViaje !== "Propio") continue;
-    for (const id of [b.pilotoEmpleadoId, ...b.auxiliarEmpleadoIds]) if (id != null) anotar(`persona:${id}`, b.fila, `${empleados.get(id)?.nombre ?? `#${id}`}`);
+    for (const id of [b.pilotoEmpleadoId, b.pilotoExtraEmpleadoId ?? null, ...b.auxiliarEmpleadoIds]) if (id != null) anotar(`persona:${id}`, b.fila, `${empleados.get(id)?.nombre ?? `#${id}`}`);
     if (b.unidadPlaca?.trim()) anotar(`unidad:${norm(b.unidadPlaca)}`, b.fila, `unidad ${norm(b.unidadPlaca)}`);
     if (b.tcVehiculoId != null) anotar(`tc:${b.tcVehiculoId}`, b.fila, `TC #${b.tcVehiculoId}`);
   }
@@ -448,6 +455,7 @@ export async function confirmarLote(
 
         let unidadId: number | null = null;
         let pilotoId: number | null = null;
+        let pilotoExtraId: number | null = null;
         const auxIds: number[] = [];
         if (!esTerc) {
           if (r.unidad) {
@@ -462,6 +470,10 @@ export async function confirmarLote(
           if (b.pilotoEmpleadoId != null) {
             pilotoId = await personalDesdeEmpleado(empresaId, b.pilotoEmpleadoId, "Piloto", conn);
             if (!pilotoId) throw new Error(`Fila ${b.fila}: no se pudo resolver el piloto.`);
+          }
+          if (b.pilotoExtraEmpleadoId != null) {
+            pilotoExtraId = await personalDesdeEmpleado(empresaId, b.pilotoExtraEmpleadoId, "Piloto", conn);
+            if (!pilotoExtraId) throw new Error(`Fila ${b.fila}: no se pudo resolver el piloto extra.`);
           }
           for (const eid of b.auxiliarEmpleadoIds) {
             const pid = await personalDesdeEmpleado(empresaId, eid, "Auxiliar", conn);
@@ -510,12 +522,14 @@ export async function confirmarLote(
         if (!planId) throw new Error(`Fila ${b.fila}: no se pudo generar un código de plan único.`);
 
         await guardarAuxiliaresPlan(planId, auxIds, conn);
+        // Piloto extra copiado (revalidado arriba con las mismas reglas de disponibilidad): misma transacción del lote.
+        if (pilotoExtraId != null) await guardarPilotoExtraPlan(empresaId, planId, pilotoExtraId, conn);
         if (paradas.length) {
           const rp = await guardarParadasPlan(empresaId, planId, paradas, conn);
           if (!rp.ok) throw new Error(`Fila ${b.fila}: ${rp.error}`);
         }
         // Viáticos: SIEMPRE por la configuración vigente (nunca se copian montos ni ajustes del origen).
-        await sincronizarViaticosPlan(empresaId, planId, { piloto: pilotoId, auxiliares: auxIds }, conn);
+        await sincronizarViaticosPlan(empresaId, planId, { piloto: pilotoId, pilotoExtra: pilotoExtraId, auxiliares: auxIds }, conn);
         await conn.execute(
           `INSERT INTO tms_plan_origen (empresa_id, plan_id, tipo, plan_origen_id, fecha_destino, creado_por)
            VALUES (?, ?, ?, ?, ?, ?)`,

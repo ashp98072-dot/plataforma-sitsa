@@ -269,7 +269,7 @@ export default function ViaticosPanel({
         <div className="space-y-3">
           {pilotos.length ? (
             <div className="space-y-2">
-              <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--muted)]">Piloto</p>
+              <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--muted)]">{pilotos.length > 1 ? "Pilotos" : "Piloto"}</p>
               {pilotos.map(fila)}
             </div>
           ) : null}
