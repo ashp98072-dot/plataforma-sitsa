@@ -18,6 +18,7 @@ import { ImportarAcumuladosFiscalesModal } from "@/components/rrhh/importar-acum
 import { permisosFiscal } from "@/lib/rrhh/fiscal-migracion-ui";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { FotoEmpleado } from "@/components/rrhh/foto-empleado";
+import { FotoEmpleadoMiniatura } from "@/components/rrhh/foto-empleado-miniatura";
 import { PortalAccesoModal } from "@/components/rrhh/portal-acceso-modal";
 import { BitacoraLegalEmpleado } from "@/components/rrhh/bitacora-legal-empleado";
 import { ImportErroresLista } from "@/components/import-errores-lista";
@@ -1791,6 +1792,7 @@ export default function EmpleadosPage() {
         <table className="w-full text-left text-sm">
           <thead className="bg-[var(--thead)] text-[var(--muted)]">
             <tr>
+              <th className="w-12 px-3 py-2">Foto</th>
               <th className="px-3 py-2">Código</th>
               <th className="px-3 py-2">Nombre</th>
               {mostrarDpi ? <th className="px-3 py-2">DPI</th> : null}
@@ -1814,6 +1816,7 @@ export default function EmpleadosPage() {
                 title="Doble clic: expediente (PDF/fotos)"
                 onDoubleClick={() => setDocsEmp(e)}
               >
+                <td className="px-3 py-1"><FotoEmpleadoMiniatura slug={slug} empleadoId={e.id} nombre={e.nombre} ampliable compacta /></td>
                 <td className="px-3 py-2">{e.codigo}</td>
                 <td className="px-3 py-2">{e.nombre}</td>
                 {mostrarDpi ? (
