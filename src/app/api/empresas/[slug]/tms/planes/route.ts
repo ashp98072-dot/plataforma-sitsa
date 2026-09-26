@@ -1280,6 +1280,9 @@ const patchSchema = z.object({
   // piloto no debe exigir motivo).
   motivoCambio: z.string().trim().max(300).optional(),
   notas: z.string().optional(),
+  // Tipo de traslado (texto descriptivo, dato comercial): antes el formulario lo mostraba en edición pero el PATCH nunca lo guardaba.
+  // "" (o solo espacios) lo limpia; ausente = no se toca.
+  tipoTraslado: z.string().max(80).optional(),
   horaCarga: z.string().optional(),
   regresoEstimado: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/).nullable().optional(),
   tarifaComercial: z.number().nonnegative().nullable().optional(),
@@ -2052,7 +2055,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
         contacto_telefono_historico = COALESCE(?, contacto_telefono_historico),
         tc_vehiculo_id = CASE WHEN ? THEN ? ELSE tc_vehiculo_id END,
         tc_placa_historica = CASE WHEN ? THEN ? ELSE tc_placa_historica END,
-        tc_externo_placa = CASE WHEN ? THEN ? ELSE tc_externo_placa END
+        tc_externo_placa = CASE WHEN ? THEN ? ELSE tc_externo_placa END,
+        tipo_traslado = CASE WHEN ? THEN ? ELSE tipo_traslado END
        WHERE id = ? AND empresa_id = ? AND estado = ?`,
       [
         d.fechaPlan ?? null,
@@ -2099,6 +2103,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
         tcPlacaNueva,
         escribirTcExterno,
         tcExternoNuevo,
+        d.tipoTraslado !== undefined,
+        d.tipoTraslado?.trim() || null,
         d.id,
         empresaId,
         antes.estado,

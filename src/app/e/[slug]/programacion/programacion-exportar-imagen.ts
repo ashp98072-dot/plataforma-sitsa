@@ -1,10 +1,12 @@
 "use client";
 
 import {
-  ALTO_FILA,
   ALTO_FILA_CABECERA,
+  ALTO_LINEA_EXTRA,
   COLUMNAS_IMAGEN,
+  altoFilaImagen,
   construirLayoutImagen,
+  envolverTexto,
   type EncabezadoProgramacionImagen,
   type FilaProgramacionImagen,
 } from "@/lib/tms/programacion-imagen";
@@ -63,7 +65,15 @@ function dibujarPagina(
   altoEncabezado: number,
 ): HTMLCanvasElement {
   const anchoTabla = anchoColumnas.reduce((s, a) => s + a, 0);
-  const altoTabla = ALTO_FILA_CABECERA + filas.length * ALTO_FILA;
+  // Cada celda se envuelve por palabras (y respeta sus saltos de línea, p. ej. piloto principal + piloto extra en la MISMA celda): la fila
+  // crece lo necesario para que ningún nombre quede cortado. Una fila de una sola línea mide exactamente ALTO_FILA, como siempre.
+  const medidor = document.createElement("canvas").getContext("2d")!;
+  medidor.font = "13px Arial, sans-serif";
+  const lineasFilas = filas.map((celdas) =>
+    celdas.map((valor, i) => envolverTexto(valor || "", anchoColumnas[i] - PAD_X * 2, (t) => medidor.measureText(t).width)),
+  );
+  const altosFilas = lineasFilas.map((fila) => altoFilaImagen(fila.map((c) => c.length)));
+  const altoTabla = ALTO_FILA_CABECERA + altosFilas.reduce((s, a) => s + a, 0);
   const alto = altoEncabezado + altoTabla + MARGEN * 2;
   const ancho = anchoTabla + MARGEN * 2;
 
@@ -105,20 +115,24 @@ function dibujarPagina(
 
   ctx.font = "13px Arial, sans-serif";
   filas.forEach((celdas, indice) => {
+    const altoFila = altosFilas[indice];
     if (indice % 2 === 1) {
       ctx.fillStyle = COLOR_FILA_ALTERNA;
-      ctx.fillRect(MARGEN, y, anchoTabla, ALTO_FILA);
+      ctx.fillRect(MARGEN, y, anchoTabla, altoFila);
     }
     x = MARGEN;
     ctx.fillStyle = COLOR_TEXTO;
-    celdas.forEach((valor, i) => {
+    celdas.forEach((_valor, i) => {
       const w = anchoColumnas[i];
-      const texto = truncar(ctx, valor || "", w - PAD_X * 2);
-      if (COLUMNAS_IMAGEN[i]?.alinear === "right") ctx.fillText(texto, x + w - PAD_X - ctx.measureText(texto).width, y + 9);
-      else ctx.fillText(texto, x + PAD_X, y + 9);
+      lineasFilas[indice][i].forEach((linea, k) => {
+        const texto = truncar(ctx, linea, w - PAD_X * 2); // defensa final: solo una palabra suelta más ancha que la celda
+        const yTexto = y + 9 + k * ALTO_LINEA_EXTRA;
+        if (COLUMNAS_IMAGEN[i]?.alinear === "right") ctx.fillText(texto, x + w - PAD_X - ctx.measureText(texto).width, yTexto);
+        else ctx.fillText(texto, x + PAD_X, yTexto);
+      });
       x += w;
     });
-    y += ALTO_FILA;
+    y += altoFila;
   });
 
   // Bordes finos: contorno exterior de toda la tabla + líneas horizontales
@@ -136,7 +150,7 @@ function dibujarPagina(
     ctx.moveTo(MARGEN, yLinea);
     ctx.lineTo(MARGEN + anchoTabla, yLinea);
     ctx.stroke();
-    yLinea += ALTO_FILA;
+    yLinea += altosFilas[i];
   }
   let xLinea = MARGEN;
   anchoColumnas.slice(0, -1).forEach((w) => {

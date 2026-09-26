@@ -128,11 +128,13 @@ export async function GET(req: Request, ctx: Ctx) {
     condiciones.push("p.estado = ?");
     params.push(estado);
   } else if (estado === "sin_piloto") {
-    condiciones.push("p.piloto_id IS NULL");
+    // Mismo criterio que el tablero: un viaje Tercerizado con piloto externo SÍ tiene piloto.
+    condiciones.push("(p.piloto_id IS NULL AND (p.tipo_viaje <> 'Tercerizado' OR COALESCE(TRIM(p.piloto_externo_nombre), '') = ''))");
   } else if (estado === "sin_unidad") {
     condiciones.push("p.unidad_id IS NULL");
   } else if (estado === "sin_auxiliares") {
-    condiciones.push("NOT EXISTS (SELECT 1 FROM tms_plan_auxiliares pa WHERE pa.plan_id = p.id)");
+    // Un Tercerizado con auxiliares externos SÍ tiene auxiliares.
+    condiciones.push("(NOT EXISTS (SELECT 1 FROM tms_plan_auxiliares pa WHERE pa.plan_id = p.id) AND (p.tipo_viaje <> 'Tercerizado' OR COALESCE(TRIM(p.auxiliares_externos), '') = ''))");
   }
   if (piloto) {
     // El filtro por piloto incluye los viajes donde esa persona es piloto EXTRA (además de principal).

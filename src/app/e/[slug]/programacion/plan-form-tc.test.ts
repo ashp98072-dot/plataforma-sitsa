@@ -108,13 +108,17 @@ describe("plan-form.tsx — Tercerizado: TC externo solo como texto", () => {
   });
 
   it("camposTipoViaje manda tcExternoPlaca (mayúsculas) SOLO cuando el viaje es Tercerizado", () => {
-    const f = planForm.slice(pos(planForm, "function camposTipoViaje()"), pos(planForm, "async function onSubmit"));
-    expect(f).toContain('tcExternoPlaca: form.tipoViaje === "Tercerizado" ? form.tcExternoPlaca.trim().toUpperCase() || undefined : undefined');
+    // camposTipoViaje() delega en el helper puro plan-form-tercerizado.ts
+    expect(planForm.slice(pos(planForm, "function camposTipoViaje()"), pos(planForm, "async function onSubmit"))).toContain("return payloadTipoViaje(form);");
+    const helper = readFileSync(join(__dirname, "../../../../lib/tms/plan-form-tercerizado.ts"), "utf-8").replace(/\r\n/g, "\n");
+    expect(helper).toContain("tcExternoPlaca: terc ? form.tcExternoPlaca.trim().toUpperCase() || undefined : undefined");
   });
 
   it("el estado inicial separa el TC interno (tcPlaca) del externo (tcExternoPlaca) según el tipo del viaje", () => {
     expect(planForm).toContain('tcPlaca: plan?.tipo_viaje === "Tercerizado" ? "" : (plan?.tc ?? "")');
-    expect(planForm).toContain('tcExternoPlaca: plan?.tipo_viaje === "Tercerizado" ? (plan?.tc_externo_placa ?? "") : ""');
+    const helper = readFileSync(join(__dirname, "../../../../lib/tms/plan-form-tercerizado.ts"), "utf-8").replace(/\r\n/g, "\n");
+    expect(helper).toContain('tcExternoPlaca: terc ? (plan?.tc_externo_placa ?? "") : ""');
+    expect(planForm).toContain("...precargaTipoViajeDesdePlan(plan),");
   });
 });
 

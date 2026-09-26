@@ -11,7 +11,7 @@ import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
 import { puedeCerrarManualmente } from "@/lib/tms/cierre-viaje-shared";
 import { resumenRegreso } from "@/lib/tms/regreso-viaje";
-import { textoPilotos } from "@/lib/tms/piloto-extra-comun";
+import { PilotosCelda } from "@/components/tms/pilotos-celda";
 
 /**
  * Centro logístico: navegación, seguimiento con cierres administrativos
@@ -551,7 +551,7 @@ export default function TmsPage() {
                       <td className="px-3 py-2">{String(p.fecha_plan).slice(0, 10)}</td>
                       <td className="px-3 py-2">{p.cliente ?? "—"}</td>
                       <td className="px-3 py-2">{p.placa ?? "—"}</td>
-                      <td className="px-3 py-2">{textoPilotos(p.piloto, p.pilotoExtraNombre) || "—"}</td>
+                      <td className="px-3 py-2"><PilotosCelda principal={p.piloto} extra={p.pilotoExtraNombre} /></td>
                       <td className="px-3 py-2">{estadoLabelVisible(p)}</td>
                       <td className="px-3 py-2">{Number(p.evidencias ?? 0)}</td>
                       <td className="px-3 py-2">

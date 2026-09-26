@@ -104,8 +104,10 @@ describe("22) REPORTES / PDF / imagen / Excel: 'Principal / Extra'; sin extra, i
     const pv = src("src/app/e/[slug]/planes/planes-viajes-client.tsx");
     expect(pv).toContain("textoPilotos(p.piloto, p.pilotoExtra) || \"—\"");
     expect(pv).toContain('p.pilotoExtra ? "Pilotos" : "Piloto"');
-    expect(src("src/app/e/[slug]/tms/page.tsx")).toContain("textoPilotos(p.piloto, p.pilotoExtraNombre) || \"—\"");
-    expect(src("src/app/e/[slug]/programacion/programacion-client.tsx")).toContain(": textoPilotos(p.piloto, p.pilotoExtraNombre),"); // imagen de Programación
+    // tablas web: cada piloto en su propia línea de la MISMA celda (PilotosCelda), sin columna nueva
+    expect(pv).toContain("<PilotosCelda principal={p.piloto} extra={p.pilotoExtra} />");
+    expect(src("src/app/e/[slug]/tms/page.tsx")).toContain("<PilotosCelda principal={p.piloto} extra={p.pilotoExtraNombre} />");
+    expect(src("src/app/e/[slug]/programacion/programacion-client.tsx")).toContain(": celdaPilotoImagen(p.piloto, p.pilotoExtraNombre),"); // imagen de Programación
     expect(src("src/lib/tms/reportes-viajes.ts")).toContain("pilotoExtra: extraMap.get(id)?.nombre ?? null");
   });
   it("el reporte de viajes cuenta al extra al filtrar por piloto y lo lee en UNA consulta", () => {
@@ -151,10 +153,12 @@ describe("UI de Programación: '+ Agregar piloto extra' (máximo 1, solo Propio,
     expect(f).toContain("setError(MSG_PERSONA_DUPLICADA);");
   });
   it("en creación, el bloque 'Viáticos del viaje' incluye la fila del extra: rol Piloto y monto propio (nunca el del principal)", () => {
-    expect(f).toContain('key: "piloto-extra"');
-    const i = f.indexOf('key: "piloto-extra"');
-    expect(f.slice(i, i + 300)).toContain('rol: "Piloto"');
-    expect(f.indexOf('key: "piloto-extra"')).toBeGreaterThan(f.indexOf('key: "piloto",')); // justo después del principal
+    const v = src("src/lib/tms/plan-form-viaticos.ts");
+    expect(v).toContain("key: `piloto-extra-${f.pilotoExtraEmpleadoId}`");
+    const i = v.indexOf("key: `piloto-extra-");
+    expect(v.slice(i, i + 300)).toContain('rol: "Piloto"');
+    expect(i).toBeGreaterThan(v.indexOf('key: f.pilotoEmpleadoId ? "piloto"')); // justo después del principal
+    expect(f).toContain("derivarFilasViaticos(");
     expect(f).toContain('pilotoExtraEmpleadoId:\n              form.tipoViaje === "Propio" && form.mostrarPilotoExtra && form.pilotoExtraEmpleadoId ? form.pilotoExtraEmpleadoId : undefined,');
   });
   it("edición: cambiar/quitar el extra es cambio SENSIBLE (motivo); editar tarifa/notas no lo envía ni lo toca", () => {

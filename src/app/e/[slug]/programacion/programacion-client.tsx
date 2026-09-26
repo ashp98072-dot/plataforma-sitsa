@@ -13,8 +13,8 @@ import { resumenRegreso } from "@/lib/tms/regreso-viaje";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
 import { exportarProgramacionComoImagen } from "./programacion-exportar-imagen";
-import { mesDia, type FilaProgramacionImagen } from "@/lib/tms/programacion-imagen";
-import { textoPilotos } from "@/lib/tms/piloto-extra-comun";
+import { celdaPilotoImagen, mesDia, type FilaProgramacionImagen } from "@/lib/tms/programacion-imagen";
+import { auxiliaresDeVista, pilotosDeVista, tieneAuxiliaresVista, tienePilotoVista } from "@/lib/tms/programacion-personal-vista";
 import { EdicionRapida, type FilaEdicionRapidaEntrada } from "./edicion-rapida";
 import { confirmarPerdida, MSG_CAMBIOS_PENDIENTES, puedeUsarEdicionRapida, type TarifaRutaEdicion } from "./edicion-rapida-helpers";
 
@@ -998,9 +998,10 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   const baseFiltroRapido = filtroRapido === "PendienteCierre" ? pendientesCierre : enRango;
   const visibles = useMemo(() => {
     return baseFiltroRapido.filter((p) => {
-      if (filtroRapido === "sin_piloto" && p.piloto) return false;
+      // Un viaje Tercerizado con piloto externo SÍ tiene piloto (programacion-personal-vista.ts).
+      if (filtroRapido === "sin_piloto" && tienePilotoVista(p)) return false;
       if (filtroRapido === "sin_unidad" && p.placa) return false;
-      if (filtroRapido === "sin_auxiliares" && p.auxiliares.length > 0) return false;
+      if (filtroRapido === "sin_auxiliares" && tieneAuxiliaresVista(p)) return false;
       if (filtroRapido === "Programado" && p.estado !== "Programado") return false;
       if (filtroRapido === "En ruta" && p.estado !== "En ruta") return false;
       // PendienteCierre: baseFiltroRapido ya ES la lista de pendientes.
@@ -1020,7 +1021,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
       // rango de fechas visible — antes podía mostrar menos de los que
       // en realidad hay pendientes.
       finalizados: pendientesCierre.length,
-      sinPiloto: enRango.filter((p) => !p.piloto).length,
+      sinPiloto: enRango.filter((p) => !tienePilotoVista(p)).length,
       sinUnidad: enRango.filter((p) => !p.placa).length,
     }),
     [enRango, pendientesCierre],
@@ -1071,12 +1072,13 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
           placa: esTercerizado ? p.unidad_externa_placa || "" : p.placa || "",
           // Mismo concepto "TC" para Propio (interno) y Tercerizado (snapshot): p.tc ya viene resuelto del GET.
           tc: p.tc || "",
-          // Con piloto extra la celda queda "Principal / Extra"; sin extra, exactamente como antes.
+          // UNA sola columna "Piloto": con piloto extra, cada piloto en su propia LÍNEA dentro de la misma celda (la fila crece; nunca se
+          // trunca a "Mi…" ni pasa al Auxiliar 1/2). Sin extra, exactamente como antes.
           piloto: esTercerizado
             ? p.piloto_externo_nombre
               ? `${p.piloto_externo_nombre} (Tercerizado)`
               : ""
-            : textoPilotos(p.piloto, p.pilotoExtraNombre),
+            : celdaPilotoImagen(p.piloto, p.pilotoExtraNombre),
           auxiliar1: esTercerizado ? (auxiliaresExternos[0] ?? "") : (p.auxiliares[0] ?? ""),
           auxiliar2: esTercerizado ? (auxiliaresExternos[1] ?? "") : (p.auxiliares[1] ?? ""),
           cliente: p.cliente || "",
@@ -1263,6 +1265,9 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
       ) : null}
       {planEditando ? (
         <PlanForm
+          // key por viaje: al pasar de editar un viaje a OTRO el formulario se reconstruye desde los datos del nuevo (sin arrastrar el estado
+          // del anterior: piloto/auxiliares externos, unidad, transportista, etc.).
+          key={planEditando.id}
           slug={slug}
           hoy={hoy}
           plan={planEditando}
@@ -1609,7 +1614,13 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
                 </div>
                 <div>
                   <p className="text-[11px] text-[var(--muted)]">Piloto</p>
-                  {p.piloto ? (
+                  {pilotosDeVista(p).externo && pilotosDeVista(p).principal ? (
+                    // TERCERIZADO: piloto externo (texto). Sin disponibilidad RRHH: nunca "Sin piloto" si el dato externo existe.
+                    <p className="text-[12px] break-words" data-piloto-externo>
+                      {pilotosDeVista(p).principal}
+                      <span className="ml-1 rounded bg-[var(--input)] px-1 py-0.5 text-[10px] text-[var(--muted)]">Tercerizado</span>
+                    </p>
+                  ) : p.piloto && !pilotosDeVista(p).externo ? (
                     <PersonaEstado
                       nombre={p.piloto}
                       disp={p.pilotoId != null ? dispPorPersonalId.get(p.pilotoId) : undefined}
@@ -1633,7 +1644,17 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
                 </div>
                 <div>
                   <p className="text-[11px] text-[var(--muted)]">Auxiliares</p>
-                  {p.auxiliaresDetalle.length ? (
+                  {auxiliaresDeVista(p).externo && auxiliaresDeVista(p).nombres.length ? (
+                    // TERCERIZADO: auxiliares externos (texto, uno por línea); nunca "Sin auxiliares" si existen.
+                    <div className="space-y-0.5" data-auxiliares-externos>
+                      {auxiliaresDeVista(p).nombres.map((nombre, i) => (
+                        <p key={`${nombre}-${i}`} className="text-[12px] break-words">
+                          {nombre}
+                          <span className="ml-1 rounded bg-[var(--input)] px-1 py-0.5 text-[10px] text-[var(--muted)]">Tercerizado</span>
+                        </p>
+                      ))}
+                    </div>
+                  ) : p.auxiliaresDetalle.length && !auxiliaresDeVista(p).externo ? (
                     <div className="space-y-0.5">
                       {p.auxiliaresDetalle.map((aux) => (
                         <PersonaEstado
