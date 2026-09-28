@@ -10,6 +10,14 @@ import {
 } from "@/lib/rrhh/descuentos";
 import { hoyLocal } from "@/lib/rrhh/dates";
 import { redondearQ } from "@/lib/rrhh/contratos-pago";
+import {
+  calcularEstadoEntrega,
+  cantidadDisponibleParaAjuste,
+  validarCantidadAjuste,
+  validarCompatibilidadPrecioCambio,
+  type EstadoEntregaDerivado,
+  type TipoAjusteInventario,
+} from "@/lib/rrhh/inventario-ajustes";
 
 /**
  * Fase INV-0 — Inventario RRHH (artículos entregables a empleados:
@@ -39,8 +47,19 @@ export type ArticuloInventario = {
   estado: string;
 };
 
-/** Fase INV-1: agrega SALIDA (entrega a empleado). DEVOLUCION/PERDIDA quedan para fases futuras. */
-export type TipoMovimientoInventario = "ENTRADA" | "AJUSTE" | "SALIDA";
+/**
+ * Fase INV-1: agrega SALIDA (entrega a empleado). RRHH-INVENTARIO-CAMBIOS-1
+ * agrega DEVOLUCION (regresa stock, de una devolución o del lado "regresa"
+ * de un cambio) y CAMBIO_SALIDA (el lado "entrega el artículo nuevo" de un
+ * cambio — distinto de SALIDA para no confundirlo con una entrega inicial
+ * en el historial). PERDIDA queda para una fase futura.
+ */
+export type TipoMovimientoInventario =
+  | "ENTRADA"
+  | "AJUSTE"
+  | "SALIDA"
+  | "DEVOLUCION"
+  | "CAMBIO_SALIDA";
 
 export type MovimientoInventario = {
   id: number;
@@ -339,11 +358,12 @@ export async function listarMovimientos(
   );
   return rows.map((r) => {
     const tipo = String(r.tipo);
+    const TIPOS_VALIDOS: readonly string[] = ["AJUSTE", "SALIDA", "DEVOLUCION", "CAMBIO_SALIDA"];
     return {
       id: Number(r.id),
       articuloId: Number(r.articulo_id),
-      // Fase INV-1: incluye SALIDA — antes solo distinguía AJUSTE/ENTRADA.
-      tipo: (tipo === "AJUSTE" || tipo === "SALIDA" ? tipo : "ENTRADA") as TipoMovimientoInventario,
+      // Fase INV-1/RRHH-INVENTARIO-CAMBIOS-1: cualquier tipo desconocido cae a ENTRADA (mismo criterio previo).
+      tipo: (TIPOS_VALIDOS.includes(tipo) ? tipo : "ENTRADA") as TipoMovimientoInventario,
       cantidad: Number(r.cantidad),
       stockResultante: Number(r.stock_resultante),
       motivo: r.motivo != null ? String(r.motivo) : null,
@@ -362,6 +382,19 @@ export async function listarMovimientos(
 // necesitan ningún cambio de schema.
 // ---------------------------------------------------------------------------
 
+export type AjusteEntrega = {
+  id: number;
+  entregaId: number;
+  tipo: TipoAjusteInventario;
+  cantidad: number;
+  articuloNuevoId: number | null;
+  articuloNuevoNombre: string | null;
+  entregaNuevaId: number | null;
+  motivo: string;
+  registradoPor: string | null;
+  creadoEn: string;
+};
+
 export type EntregaInventario = {
   id: number;
   articuloId: number;
@@ -379,11 +412,21 @@ export type EntregaInventario = {
   movimientoId: number | null;
   motivo: string | null;
   entregadoPor: string | null;
-  estado: "ENTREGADO";
+  /**
+   * RRHH-INVENTARIO-CAMBIOS-1: SIEMPRE calculado desde `cantidad` + `ajustes`
+   * (ver calcularEstadoEntrega) — la fila en BD nunca se actualiza después
+   * de creada, sigue guardando 'ENTREGADO' para siempre.
+   */
+  estado: EstadoEntregaDerivado;
+  /** Cuánto de esta entrega sigue disponible para devolver/cambiar. */
+  cantidadDisponible: number;
+  /** Historial de devoluciones/cambios de ESTA entrega, más reciente primero. */
+  ajustes: AjusteEntrega[];
   creadoEn: string;
 };
 
-function mapEntrega(r: RowDataPacket): EntregaInventario {
+function mapEntrega(r: RowDataPacket, ajustes: AjusteEntrega[]): EntregaInventario {
+  const cantidad = Number(r.cantidad);
   return {
     id: Number(r.id),
     articuloId: Number(r.articulo_id),
@@ -392,7 +435,7 @@ function mapEntrega(r: RowDataPacket): EntregaInventario {
     empleadoId: Number(r.empleado_id),
     empleadoNombre: r.empleado_nombre != null ? String(r.empleado_nombre) : "",
     empleadoCodigo: r.empleado_codigo != null ? String(r.empleado_codigo) : "",
-    cantidad: Number(r.cantidad),
+    cantidad,
     costoUnitarioEntrega: Number(r.costo_unitario_entrega ?? 0),
     costoTotal: Number(r.costo_total ?? 0),
     montoCobrado: Number(r.monto_cobrado ?? 0),
@@ -400,9 +443,54 @@ function mapEntrega(r: RowDataPacket): EntregaInventario {
     movimientoId: r.movimiento_id != null ? Number(r.movimiento_id) : null,
     motivo: r.motivo != null ? String(r.motivo) : null,
     entregadoPor: r.entregado_por != null ? String(r.entregado_por) : null,
-    estado: "ENTREGADO",
+    estado: calcularEstadoEntrega(cantidad, ajustes),
+    cantidadDisponible: cantidadDisponibleParaAjuste(cantidad, ajustes),
+    ajustes,
     creadoEn: String(r.creado_en),
   };
+}
+
+function mapAjuste(r: RowDataPacket): AjusteEntrega {
+  return {
+    id: Number(r.id),
+    entregaId: Number(r.entrega_id),
+    tipo: String(r.tipo) as TipoAjusteInventario,
+    cantidad: Number(r.cantidad),
+    articuloNuevoId: r.articulo_nuevo_id != null ? Number(r.articulo_nuevo_id) : null,
+    articuloNuevoNombre: r.articulo_nuevo_nombre != null ? String(r.articulo_nuevo_nombre) : null,
+    entregaNuevaId: r.entrega_nueva_id != null ? Number(r.entrega_nueva_id) : null,
+    motivo: String(r.motivo ?? ""),
+    registradoPor: r.registrado_por != null ? String(r.registrado_por) : null,
+    creadoEn: String(r.creado_en),
+  };
+}
+
+/**
+ * Ajustes (devoluciones/cambios) de VARIAS entregas en una sola consulta
+ * (sin N+1) — mismo criterio que auxiliaresDePlanes/paradasDePlanes en TMS.
+ */
+async function ajustesDeEntregas(
+  empresaId: number,
+  entregaIds: number[],
+): Promise<Map<number, AjusteEntrega[]>> {
+  const mapa = new Map<number, AjusteEntrega[]>();
+  if (entregaIds.length === 0) return mapa;
+  const placeholders = entregaIds.map(() => "?").join(",");
+  const rows = await query<RowDataPacket[]>(
+    `SELECT aj.*, art.nombre AS articulo_nuevo_nombre
+     FROM inventario_rrhh_ajustes aj
+     LEFT JOIN inventario_rrhh art ON art.id = aj.articulo_nuevo_id
+     WHERE aj.empresa_id = ? AND aj.entrega_id IN (${placeholders})
+     ORDER BY aj.creado_en DESC, aj.id DESC`,
+    [empresaId, ...entregaIds],
+  );
+  for (const row of rows) {
+    const ajuste = mapAjuste(row);
+    const lista = mapa.get(ajuste.entregaId) ?? [];
+    lista.push(ajuste);
+    mapa.set(ajuste.entregaId, lista);
+  }
+  return mapa;
 }
 
 const SELECT_ENTREGA = `
@@ -431,7 +519,22 @@ export async function listarEntregas(
     `${SELECT_ENTREGA} WHERE ${where.join(" AND ")} ORDER BY ent.creado_en DESC, ent.id DESC LIMIT 300`,
     params,
   );
-  return rows.map(mapEntrega);
+  const ajustesPorEntrega = await ajustesDeEntregas(empresaId, rows.map((r) => Number(r.id)));
+  return rows.map((r) => mapEntrega(r, ajustesPorEntrega.get(Number(r.id)) ?? []));
+}
+
+/** Una entrega por id (con sus ajustes) — usada por devolver()/cambiar() para precargar la UI. */
+export async function obtenerEntrega(
+  empresaId: number,
+  entregaId: number,
+): Promise<EntregaInventario | null> {
+  const rows = await query<RowDataPacket[]>(
+    `${SELECT_ENTREGA} WHERE ent.empresa_id = ? AND ent.id = ? LIMIT 1`,
+    [empresaId, entregaId],
+  );
+  if (!rows[0]) return null;
+  const ajustes = await ajustesDeEntregas(empresaId, [entregaId]);
+  return mapEntrega(rows[0], ajustes.get(entregaId) ?? []);
 }
 
 /** Entrega vinculada a un descuento — para que `RRHH > Descuentos` muestre "Origen: Inventario" con detalle (artículo/cantidad/fecha) sin duplicar datos. */
@@ -443,7 +546,9 @@ export async function obtenerEntregaPorDescuento(
     `${SELECT_ENTREGA} WHERE ent.empresa_id = ? AND ent.descuento_id = ? LIMIT 1`,
     [empresaId, descuentoId],
   );
-  return rows[0] ? mapEntrega(rows[0]) : null;
+  if (!rows[0]) return null;
+  const ajustes = await ajustesDeEntregas(empresaId, [Number(rows[0].id)]);
+  return mapEntrega(rows[0], ajustes.get(Number(rows[0].id)) ?? []);
 }
 
 export type NuevaEntregaInput = {
@@ -639,4 +744,332 @@ export async function crearEntrega(
   });
 
   return { ok: true, id: entregaId, descuentoId: descuentoIdFinal, stockResultante };
+}
+
+// ---------------------------------------------------------------------------
+// RRHH-INVENTARIO-CAMBIOS-1 — Devolución y cambio de artículo sobre una
+// entrega ya realizada. Ver sql/discovery-2026-09-rrhh-inventario-cambios.sql
+// para el análisis completo. La entrega ORIGINAL nunca se actualiza
+// (append-only real): cada devolución/cambio queda como una fila nueva en
+// inventario_rrhh_ajustes, con sus propios movimientos de stock.
+// ---------------------------------------------------------------------------
+
+type FilaEntregaBloqueada = RowDataPacket & {
+  id: number;
+  articulo_id: number;
+  empleado_id: number;
+  cantidad: number;
+  costo_unitario_entrega: string | number;
+  monto_cobrado: string | number;
+  articulo_nombre: string;
+  articulo_codigo: string;
+};
+
+/**
+ * Bloquea (FOR UPDATE) la entrega original dentro de la transacción — mismo
+ * criterio ya usado en tms/planes (route.ts) para serializar dos
+ * devoluciones/cambios concurrentes sobre la MISMA entrega: la segunda
+ * llamada espera a que la primera confirme/revierta antes de poder leer
+ * `cantidadDisponible`, así nunca ambas ven "disponible" el mismo cupo.
+ * `inventario_rrhh_entregas` nunca se actualiza — este SELECT ... FOR UPDATE
+ * solo pide el lock de fila, nunca escribe sobre ella.
+ */
+async function bloquearEntregaTx(
+  conn: PoolConnection,
+  empresaId: number,
+  entregaId: number,
+): Promise<FilaEntregaBloqueada | null> {
+  const [rows] = await conn.query<FilaEntregaBloqueada[]>(
+    `SELECT ent.*, art.nombre AS articulo_nombre, art.codigo AS articulo_codigo
+     FROM inventario_rrhh_entregas ent
+     INNER JOIN inventario_rrhh art ON art.id = ent.articulo_id
+     WHERE ent.id = ? AND ent.empresa_id = ? LIMIT 1 FOR UPDATE`,
+    [entregaId, empresaId],
+  );
+  return rows[0] ?? null;
+}
+
+async function ajustesPreviosTx(
+  conn: PoolConnection,
+  empresaId: number,
+  entregaId: number,
+): Promise<{ tipo: TipoAjusteInventario; cantidad: number }[]> {
+  const [rows] = await conn.query<RowDataPacket[]>(
+    `SELECT tipo, cantidad FROM inventario_rrhh_ajustes WHERE empresa_id = ? AND entrega_id = ?`,
+    [empresaId, entregaId],
+  );
+  return rows.map((r) => ({ tipo: String(r.tipo) as TipoAjusteInventario, cantidad: Number(r.cantidad) }));
+}
+
+export type ResultadoDevolucion =
+  | { ok: true; ajusteId: number; entregaId: number; cantidad: number; stockResultante: number }
+  | { ok: false; motivo: string; mensaje: string };
+
+/**
+ * Devuelve `cantidad` unidades de una entrega al stock del artículo
+ * original. Transaccional: bloquea la entrega, calcula cuánto sigue
+ * disponible (cantidad - ajustes previos), valida, regresa stock
+ * (registrarMovimientoInterno, tipo DEVOLUCION) y dejala fila de ajuste —
+ * todo o nada. NUNCA toca la fila de la entrega original ni ningún
+ * descuento (ver discovery: el manejo de dinero para devoluciones queda
+ * fuera de este PR — RRHH resuelve el descuento con las herramientas ya
+ * existentes en Descuentos, si corresponde).
+ */
+export async function registrarDevolucion(
+  empresaId: number,
+  entregaId: number,
+  input: { cantidad: number; motivo: string; registradoPor: string },
+): Promise<ResultadoDevolucion> {
+  const motivo = input.motivo?.trim() || "";
+  if (!motivo) {
+    return { ok: false, motivo: "motivo_requerido", mensaje: "Indica el motivo de la devolución." };
+  }
+
+  const conn = await getPool().getConnection();
+  let ajusteId: number;
+  let stockResultante: number;
+  const cantidad = Math.trunc(input.cantidad);
+  try {
+    await conn.beginTransaction();
+
+    const entrega = await bloquearEntregaTx(conn, empresaId, entregaId);
+    if (!entrega) {
+      await conn.rollback();
+      return { ok: false, motivo: "no_encontrado", mensaje: "Entrega no encontrada." };
+    }
+
+    const ajustesPrevios = await ajustesPreviosTx(conn, empresaId, entregaId);
+    const disponible = cantidadDisponibleParaAjuste(entrega.cantidad, ajustesPrevios);
+    const validacion = validarCantidadAjuste(cantidad, disponible);
+    if (!validacion.ok) {
+      await conn.rollback();
+      return validacion;
+    }
+
+    const mov = await registrarMovimientoInterno(conn, empresaId, {
+      articuloId: entrega.articulo_id,
+      tipo: "DEVOLUCION",
+      cantidad,
+      motivo: `Devolución de entrega #${entregaId}: ${motivo}`,
+      registradoPor: input.registradoPor,
+    });
+    stockResultante = mov.stockResultante;
+
+    const [ajusteResult] = await conn.execute<ResultSetHeader>(
+      `INSERT INTO inventario_rrhh_ajustes
+        (empresa_id, entrega_id, tipo, cantidad, movimiento_devolucion_id, motivo, registrado_por)
+       VALUES (?, ?, 'DEVOLUCION', ?, ?, ?, ?)`,
+      [empresaId, entregaId, cantidad, mov.movimientoId, motivo, input.registradoPor],
+    );
+    ajusteId = Number(ajusteResult.insertId);
+
+    await conn.commit();
+  } catch (e) {
+    await conn.rollback();
+    if (e instanceof ErrorMovimiento) {
+      return { ok: false, motivo: e.motivo, mensaje: e.message };
+    }
+    throw e;
+  } finally {
+    conn.release();
+  }
+
+  await registrarAuditoria({
+    empresaId,
+    usuario: input.registradoPor,
+    accion: "inventario_devolucion",
+    modulo: "rrhh",
+    detalle: `Devolución de entrega #${entregaId} · ${cantidad} unidad(es) · motivo: ${motivo}`,
+  });
+
+  return { ok: true, ajusteId, entregaId, cantidad, stockResultante };
+}
+
+export type ResultadoCambio =
+  | {
+      ok: true;
+      ajusteId: number;
+      entregaId: number;
+      entregaNuevaId: number;
+      cantidad: number;
+      stockResultanteOriginal: number;
+      stockResultanteNuevo: number;
+    }
+  | { ok: false; motivo: string; mensaje: string };
+
+/**
+ * Cambia `cantidad` unidades de una entrega por otro artículo: devuelve
+ * stock del artículo original, descuenta stock del artículo nuevo, crea una
+ * entrega NUEVA para el artículo nuevo (vinculada a la original vía el
+ * ajuste) y deja la fila de ajuste — TODO en una sola transacción. Si
+ * cualquier paso falla (incluido stock insuficiente del artículo nuevo),
+ * rollback total: nunca queda "S devuelta pero M no entregada" ni viceversa.
+ *
+ * Descuentos (sección 8 del ticket): si la entrega original NO generó cobro,
+ * el cambio nunca toca ningún descuento. Si generó cobro, solo se permite
+ * cuando el artículo nuevo cuesta EXACTAMENTE igual por unidad que el
+ * histórico de la entrega original (validarCompatibilidadPrecioCambio) — el
+ * descuento original sigue cubriendo la misma deuda sin tocarse. Una
+ * diferencia real de precio se rechaza con un mensaje claro, sin tocar
+ * stock/entrega/descuento (ver discovery: no existe hoy un mecanismo seguro
+ * para cambiar el monto_original de un descuento ACTIVO).
+ */
+export async function registrarCambio(
+  empresaId: number,
+  entregaId: number,
+  input: { cantidad: number; articuloNuevoId: number; motivo: string; registradoPor: string },
+): Promise<ResultadoCambio> {
+  const motivo = input.motivo?.trim() || "";
+  if (!motivo) {
+    return { ok: false, motivo: "motivo_requerido", mensaje: "Indica el motivo del cambio." };
+  }
+
+  const conn = await getPool().getConnection();
+  let ajusteId: number;
+  let entregaNuevaId: number;
+  let stockResultanteOriginal: number;
+  let stockResultanteNuevo: number;
+  let articuloNuevoNombre = "";
+  let articuloOriginalNombre = "";
+  const cantidad = Math.trunc(input.cantidad);
+  try {
+    await conn.beginTransaction();
+
+    const entrega = await bloquearEntregaTx(conn, empresaId, entregaId);
+    if (!entrega) {
+      await conn.rollback();
+      return { ok: false, motivo: "no_encontrado", mensaje: "Entrega no encontrada." };
+    }
+    articuloOriginalNombre = entrega.articulo_nombre;
+
+    if (input.articuloNuevoId === entrega.articulo_id) {
+      await conn.rollback();
+      return {
+        ok: false,
+        motivo: "articulo_igual",
+        mensaje: "El artículo nuevo debe ser distinto al artículo original de la entrega.",
+      };
+    }
+
+    const ajustesPrevios = await ajustesPreviosTx(conn, empresaId, entregaId);
+    const disponible = cantidadDisponibleParaAjuste(entrega.cantidad, ajustesPrevios);
+    const validacionCantidad = validarCantidadAjuste(cantidad, disponible);
+    if (!validacionCantidad.ok) {
+      await conn.rollback();
+      return validacionCantidad;
+    }
+
+    const [articulosNuevoRows] = await conn.query<RowDataPacket[]>(
+      `SELECT id, nombre, codigo, costo_unitario FROM inventario_rrhh WHERE id = ? AND empresa_id = ? LIMIT 1`,
+      [input.articuloNuevoId, empresaId],
+    );
+    const articuloNuevo = articulosNuevoRows[0];
+    if (!articuloNuevo) {
+      await conn.rollback();
+      return {
+        ok: false,
+        motivo: "articulo_invalido",
+        mensaje: "El artículo nuevo no existe o no pertenece a esta empresa.",
+      };
+    }
+    articuloNuevoNombre = String(articuloNuevo.nombre);
+    const costoUnitarioNuevo = Number(articuloNuevo.costo_unitario ?? 0);
+
+    const validacionPrecio = validarCompatibilidadPrecioCambio({
+      huboCobro: Number(entrega.monto_cobrado) > 0,
+      costoUnitarioOriginal: Number(entrega.costo_unitario_entrega),
+      costoUnitarioNuevo,
+    });
+    if (!validacionPrecio.ok) {
+      await conn.rollback();
+      return validacionPrecio;
+    }
+
+    const movDevolucion = await registrarMovimientoInterno(conn, empresaId, {
+      articuloId: entrega.articulo_id,
+      tipo: "DEVOLUCION",
+      cantidad,
+      motivo: `Cambio de entrega #${entregaId}: devuelve ${cantidad} × ${articuloOriginalNombre} (${motivo})`,
+      registradoPor: input.registradoPor,
+    });
+    stockResultanteOriginal = movDevolucion.stockResultante;
+
+    const movSalida = await registrarMovimientoInterno(conn, empresaId, {
+      articuloId: input.articuloNuevoId,
+      tipo: "CAMBIO_SALIDA",
+      cantidad: -cantidad,
+      motivo: `Cambio de entrega #${entregaId}: entrega ${cantidad} × ${articuloNuevoNombre} (${motivo})`,
+      registradoPor: input.registradoPor,
+    });
+    stockResultanteNuevo = movSalida.stockResultante;
+
+    const costoTotalNuevo = redondearQ(costoUnitarioNuevo * cantidad);
+    const [entregaNuevaResult] = await conn.execute<ResultSetHeader>(
+      `INSERT INTO inventario_rrhh_entregas
+        (empresa_id, articulo_id, empleado_id, cantidad, costo_unitario_entrega, costo_total,
+         monto_cobrado, descuento_id, movimiento_id, motivo, entregado_por, estado)
+       VALUES (?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, 'ENTREGADO')`,
+      [
+        empresaId,
+        input.articuloNuevoId,
+        entrega.empleado_id,
+        cantidad,
+        costoUnitarioNuevo,
+        costoTotalNuevo,
+        movSalida.movimientoId,
+        `Cambio de entrega #${entregaId}: ${articuloOriginalNombre} → ${articuloNuevoNombre} (${motivo})`,
+        input.registradoPor,
+      ],
+    );
+    entregaNuevaId = Number(entregaNuevaResult.insertId);
+
+    const [ajusteResult] = await conn.execute<ResultSetHeader>(
+      `INSERT INTO inventario_rrhh_ajustes
+        (empresa_id, entrega_id, tipo, cantidad, articulo_nuevo_id, entrega_nueva_id,
+         movimiento_devolucion_id, movimiento_salida_id, motivo, registrado_por)
+       VALUES (?, ?, 'CAMBIO', ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        empresaId,
+        entregaId,
+        cantidad,
+        input.articuloNuevoId,
+        entregaNuevaId,
+        movDevolucion.movimientoId,
+        movSalida.movimientoId,
+        motivo,
+        input.registradoPor,
+      ],
+    );
+    ajusteId = Number(ajusteResult.insertId);
+
+    await conn.commit();
+  } catch (e) {
+    await conn.rollback();
+    if (e instanceof ErrorMovimiento) {
+      return { ok: false, motivo: e.motivo, mensaje: e.message };
+    }
+    throw e;
+  } finally {
+    conn.release();
+  }
+
+  await registrarAuditoria({
+    empresaId,
+    usuario: input.registradoPor,
+    accion: "inventario_cambio",
+    modulo: "rrhh",
+    detalle:
+      `Cambio entrega #${entregaId} · ${cantidad} × ${articuloOriginalNombre} → ${articuloNuevoNombre} · ` +
+      `nueva entrega #${entregaNuevaId} · motivo: ${motivo}`,
+  });
+
+  return {
+    ok: true,
+    ajusteId,
+    entregaId,
+    entregaNuevaId,
+    cantidad,
+    stockResultanteOriginal,
+    stockResultanteNuevo,
+  };
 }
