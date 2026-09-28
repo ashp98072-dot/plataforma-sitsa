@@ -9,7 +9,21 @@ import {
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
 
+// RRHH-ENTREVISTAS-IDENTIDAD-1 (punto 13) — antes este schema no aceptaba nombre/teléfono/email/puesto, aunque el UI
+// los mostraba editables (causa raíz reportada de "no deja editar"). Ahora sí: nombres/apellidos separados
+// (primerNombre/primerApellido nunca pueden quedar vacíos si se toca la identidad — se valida en actualizarEntrevista),
+// teléfono, email y puesto.
 const patchSchema = z.object({
+  candidatoPrimerNombre: z.string().trim().optional(),
+  candidatoSegundoNombre: z.string().nullable().optional(),
+  candidatoTercerNombre: z.string().nullable().optional(),
+  candidatoCuartoNombre: z.string().nullable().optional(),
+  candidatoPrimerApellido: z.string().trim().optional(),
+  candidatoSegundoApellido: z.string().nullable().optional(),
+  candidatoApellidoCasada: z.string().nullable().optional(),
+  candidatoTelefono: z.string().nullable().optional(),
+  candidatoEmail: z.string().email().nullable().optional().or(z.literal("")),
+  puesto: z.string().optional(),
   fechaHora: z.string().optional(),
   entrevistadorEmpleadoId: z.number().int().positive().nullable().optional(),
   modalidad: z.enum(["Presencial", "Virtual"]).optional(),

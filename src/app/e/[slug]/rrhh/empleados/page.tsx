@@ -31,6 +31,7 @@ import { CATEGORIAS_OPS, PUESTOS_MONACO } from "@/lib/rrhh/categorias-ops";
 import { faltantesAlta } from "@/lib/rrhh/empleado-validacion";
 import { construirParamsEmpleados, hrefExportEmpleados } from "@/lib/rrhh/empleados-filtros";
 import { filtrarPersonas } from "@/lib/busqueda-personas";
+import { componerNombreCompleto, tieneIdentidadEstructurada } from "@/lib/rrhh/nombre-completo";
 import {
   FORMAS_PAGO,
   TIPOS_CONTRATO,
@@ -173,6 +174,8 @@ function horaCortaCfg(v: string | undefined, fallback: string): string {
   return s.slice(0, 5);
 }
 
+// RRHH-ENTREVISTAS-IDENTIDAD-1: la composición en sí vive en el helper compartido con Entrevistas
+// (src/lib/rrhh/nombre-completo.ts) — aquí solo se agrega el fallback propio de Empleados (nombre libre).
 function componerNombre(f: Pick<
   FormState,
   | "primerNombre"
@@ -184,23 +187,7 @@ function componerNombre(f: Pick<
   | "apellidoCasada"
   | "nombre"
 >): string {
-  const nombres = [
-    f.primerNombre,
-    f.segundoNombre,
-    f.tercerNombre,
-    f.cuartoNombre,
-  ]
-    .map((x) => x.trim())
-    .filter(Boolean);
-  const apellidos = [
-    f.primerApellido,
-    f.segundoApellido,
-    f.apellidoCasada,
-  ]
-    .map((x) => x.trim())
-    .filter(Boolean);
-  const full = [...nombres, ...apellidos].join(" ").replace(/\s+/g, " ").trim();
-  return full || f.nombre.trim();
+  return componerNombreCompleto(f) || f.nombre.trim();
 }
 
 function emptyForm(entrada = "08:00", salida = "17:00"): FormState {
@@ -633,15 +620,43 @@ export default function EmpleadosPage() {
         candidatoTelefono: string | null;
         candidatoEmail: string | null;
         puesto: string;
+        candidatoPrimerNombre?: string | null;
+        candidatoSegundoNombre?: string | null;
+        candidatoTercerNombre?: string | null;
+        candidatoCuartoNombre?: string | null;
+        candidatoPrimerApellido?: string | null;
+        candidatoSegundoApellido?: string | null;
+        candidatoApellidoCasada?: string | null;
       };
+      // RRHH-ENTREVISTAS-IDENTIDAD-1 — si la entrevista ya tiene identidad estructurada (al menos un campo con
+      // contenido), se precarga separada por campo y nombreManual queda en false: el nombre completo sigue
+      // reaccionando si RRHH corrige algún nombre/apellido durante el Alta (igual que cualquier empleado nuevo).
+      // Una entrevista histórica sin estructura conserva el fallback: nombre = candidatoNombre, nombreManual = true
+      // (RRHH puede completar los campos separados manualmente; el nombre no se pierde mientras no los toque).
+      const tieneEstructura = tieneIdentidadEstructurada({
+        primerNombre: candidato.candidatoPrimerNombre ?? "",
+        segundoNombre: candidato.candidatoSegundoNombre ?? "",
+        tercerNombre: candidato.candidatoTercerNombre ?? "",
+        cuartoNombre: candidato.candidatoCuartoNombre ?? "",
+        primerApellido: candidato.candidatoPrimerApellido ?? "",
+        segundoApellido: candidato.candidatoSegundoApellido ?? "",
+        apellidoCasada: candidato.candidatoApellidoCasada ?? "",
+      });
       setEditId(null);
       setFoto(null);
       setFotoPreview(undefined);
       setHistorial([]);
       setForm({
         ...emptyForm(horaDef.entrada, horaDef.salida),
+        primerNombre: candidato.candidatoPrimerNombre ?? "",
+        segundoNombre: candidato.candidatoSegundoNombre ?? "",
+        tercerNombre: candidato.candidatoTercerNombre ?? "",
+        cuartoNombre: candidato.candidatoCuartoNombre ?? "",
+        primerApellido: candidato.candidatoPrimerApellido ?? "",
+        segundoApellido: candidato.candidatoSegundoApellido ?? "",
+        apellidoCasada: candidato.candidatoApellidoCasada ?? "",
         nombre: candidato.candidatoNombre,
-        nombreManual: true,
+        nombreManual: !tieneEstructura,
         puesto: candidato.puesto,
         telefono: candidato.candidatoTelefono ?? "",
         email: candidato.candidatoEmail ?? "",
@@ -654,7 +669,11 @@ export default function EmpleadosPage() {
         licencia: false,
         otros: true,
       });
-      setMensaje("Datos del candidato aprobados cargados. Complete la ficha laboral.");
+      setMensaje(
+        tieneEstructura
+          ? "Datos del candidato aprobados cargados. Complete la ficha laboral."
+          : "El candidato proviene de una entrevista anterior sin nombres separados. Complete la sección Identidad antes de guardar.",
+      );
       setVista("ficha");
     })();
   }, [entrevistaId, horaDef.entrada, horaDef.salida, slug]);
