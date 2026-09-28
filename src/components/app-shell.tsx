@@ -227,6 +227,16 @@ export function AppShell({
             key: `rrhh-${item.sub}`,
           });
         }
+        // RRHH-REQUERIMIENTOS-PROVEEDORES-1: "rrhh_requerimientos"/"rrhh_proveedores" no viven en RRHH_NAV
+        // (RrhhSubmodulo) porque, a propósito, NO se conceden por defecto al rol RRHH — se listan aparte, mismo
+        // filtro por permiso explícito.
+        for (const [modulo, label, path] of [
+          ["rrhh_requerimientos", "Requerimientos", "requerimientos"],
+          ["rrhh_proveedores", "Proveedores", "proveedores"],
+        ] as const) {
+          if (!isAdmin && permisos.length > 0 && !tienePermiso(permisos, modulo, "ver")) continue;
+          rrhhLinks.push({ href: `${base}/rrhh/${path}`, label, key: `rrhh-${modulo}` });
+        }
       }
     }
     if (rrhhLinks.length) {

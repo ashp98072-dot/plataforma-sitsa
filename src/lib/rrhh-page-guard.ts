@@ -25,9 +25,14 @@ export async function guardRrhhSub(
   return { ok: true };
 }
 
-/** Algún submódulo RRHH con ver (para hub / dashboard). */
+/**
+ * Algún submódulo RRHH con ver (para hub / dashboard / layout de /rrhh).
+ * `string[]` (no solo `RrhhSubmodulo[]`) a propósito: RRHH-REQUERIMIENTOS-PROVEEDORES-1 agrega "rrhh_requerimientos"/
+ * "rrhh_proveedores", permisos de plataforma propios de RRHH que NO viven en RRHH_SUBMODULOS (ver permisos-shared.ts)
+ * — sin este ensanche, un usuario con SOLO uno de esos dos permisos quedaría bloqueado de todo /rrhh/* por el layout.
+ */
 export async function guardRrhhAlguno(
-  submodulos: RrhhSubmodulo[],
+  submodulos: string[],
 ): Promise<RrhhGuardResult> {
   const session = await getSession();
   if (!session) return { ok: false, reason: "login" };

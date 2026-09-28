@@ -1,0 +1,4 @@
+import { requerimientoRrhhGet, requerimientoRrhhGuardar } from "@/lib/rrhh/requerimiento-api";
+type Ctx = { params: Promise<{ slug: string; id: string }> };
+export async function GET(req: Request, ctx: Ctx) { const { slug, id } = await ctx.params; return requerimientoRrhhGet(req, slug, id); }
+export async function PATCH(req: Request, ctx: Ctx) { const { slug, id } = await ctx.params; return requerimientoRrhhGuardar(req, slug, id); }
