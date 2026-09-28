@@ -80,6 +80,17 @@ function crearConexion() {
         const [empresaId, entregaId] = params as [number, number];
         return [ajustes.filter((a) => a.empresa_id === empresaId && a.entrega_id === entregaId)];
       }
+      // resolverOrigenFinancieroTx: fila de la entrega (por id, sin FOR UPDATE) y su ajuste "padre" (¿esta entrega nació de un cambio?).
+      if (s.includes("SELECT id, monto_cobrado, descuento_id, costo_unitario_entrega")) {
+        const [id, empresaId] = params as [number, number];
+        const ent = entregas.find((e) => e.id === id && e.empresa_id === empresaId);
+        return [ent ? [ent] : []];
+      }
+      if (s.includes("SELECT entrega_id FROM inventario_rrhh_ajustes")) {
+        const [empresaId, entregaNuevaId] = params as [number, number];
+        const padre = ajustes.find((a) => a.empresa_id === empresaId && a.entrega_nueva_id === entregaNuevaId);
+        return [padre ? [{ entrega_id: padre.entrega_id }] : []];
+      }
       if (s.includes("SELECT id, nombre, codigo, costo_unitario FROM inventario_rrhh")) {
         const [id, empresaId] = params as [number, number];
         const art = articulos.find((a) => a.id === id && a.empresa_id === empresaId);
@@ -333,10 +344,11 @@ describe("DESCUENTOS (sección 8 del ticket)", () => {
     expect(ajustes).toHaveLength(0);
   });
 
-  it("23) cuotas ya aplicadas nunca se tocan (este flujo jamás consulta rrhh_descuento_cuotas)", async () => {
+  it("23) cuotas ya aplicadas nunca se tocan (este flujo jamás consulta rrhh_descuento_cuotas), ni siquiera cuando la devolución se rechaza por tener cobro", async () => {
     articulos.find((a) => a.id === 2)!.stock = 5;
-    await cam(40, 1, 2);
-    await dev(41, 1);
+    await cam(40, 1, 2); // #40 sin cobro: permitido
+    const r = await dev(41, 1); // #41 CON cobro: bloqueado (ver bloque "origen financiero" abajo)
+    expect(r).toMatchObject({ ok: false, motivo: "devolucion_con_cobro_requiere_ajuste" });
     expect(queriesEjecutadas.some((q) => q.includes("rrhh_descuento_cuotas"))).toBe(false);
   });
 
@@ -351,5 +363,96 @@ describe("DESCUENTOS (sección 8 del ticket)", () => {
     expect(articulos.find((a) => a.id === 1)!.stock).toBe(5);
     expect(articulos.find((a) => a.id === 2)!.stock).toBe(5);
     expect(entregas).toHaveLength(2);
+  });
+});
+
+describe("ORIGEN FINANCIERO (cadenas de cambios) — corrección post-revisión de PR #379", () => {
+  it("S[cobro Q30] -> M[Q30] -> L[Q40]: el SEGUNDO cambio se bloquea (la deuda de S sigue pisándole los talones a M)", async () => {
+    articulos.find((a) => a.id === 2)!.stock = 5; // M
+    articulos.find((a) => a.id === 3)!.stock = 5; // L (costo 40, distinto)
+    articulos.push({ id: 4, empresa_id: EMPRESA, nombre: "Playera Monaco M2", codigo: "PLY-M2", stock: 5, costo_unitario: 30 });
+    const primero = await cam(41, 1, 4); // #41 tiene cobro; M2 cuesta igual (30) -> permitido
+    expect(primero.ok).toBe(true);
+    if (!primero.ok) return;
+    const segundo = await cam(primero.entregaNuevaId, 1, 3); // M2 -> L (40): la RAÍZ sigue siendo #41, con cobro
+    expect(segundo).toMatchObject({ ok: false, motivo: "diferencia_precio_no_soportada" });
+    // nada cambió por el segundo intento: M2 conserva su stock, L no se tocó
+    expect(articulos.find((a) => a.id === 4)!.stock).toBe(4); // 5 - 1 del primer cambio, intacto tras el segundo
+    expect(articulos.find((a) => a.id === 3)!.stock).toBe(5);
+  });
+
+  it("S[cobro Q30] -> M[Q30] -> L[Q30]: permitido (mismo precio que la raíz en TODA la cadena)", async () => {
+    articulos.find((a) => a.id === 2)!.stock = 5; // M, costo 30
+    articulos.push({ id: 4, empresa_id: EMPRESA, nombre: "Playera Monaco M2", codigo: "PLY-M2", stock: 5, costo_unitario: 30 });
+    articulos.push({ id: 5, empresa_id: EMPRESA, nombre: "Playera Monaco L2", codigo: "PLY-L2", stock: 5, costo_unitario: 30 });
+    const primero = await cam(41, 1, 4); // #41 con cobro (30) -> M2 (30): permitido
+    expect(primero.ok).toBe(true);
+    if (!primero.ok) return;
+    const segundo = await cam(primero.entregaNuevaId, 1, 5); // M2 -> L2 (30): sigue siendo el mismo precio que la raíz
+    expect(segundo.ok).toBe(true);
+  });
+
+  it("sin cobro: una cadena de cambios con precios TOTALMENTE distintos siempre se permite", async () => {
+    articulos.find((a) => a.id === 2)!.stock = 5; // M, costo 30
+    articulos.find((a) => a.id === 3)!.stock = 5; // L, costo 40
+    const primero = await cam(40, 1, 2); // #40 SIN cobro -> M
+    expect(primero.ok).toBe(true);
+    if (!primero.ok) return;
+    const segundo = await cam(primero.entregaNuevaId, 1, 3); // M -> L (precio distinto, pero la raíz nunca tuvo cobro)
+    expect(segundo.ok).toBe(true);
+  });
+
+  it("devolución DIRECTA de una entrega con cobro -> bloqueada (409), sin tocar stock", async () => {
+    const r = await dev(41, 1);
+    expect(r).toMatchObject({ ok: false, motivo: "devolucion_con_cobro_requiere_ajuste" });
+    expect(articulos.find((a) => a.id === 1)!.stock).toBe(5);
+  });
+
+  it("cambio con cobro -> devolución de la entrega DERIVADA -> también bloqueada (la deuda sigue siendo de la raíz)", async () => {
+    articulos.push({ id: 4, empresa_id: EMPRESA, nombre: "Playera Monaco M2", codigo: "PLY-M2", stock: 5, costo_unitario: 30 });
+    const cambio = await cam(41, 1, 4); // #41 con cobro -> M2, mismo precio: permitido
+    expect(cambio.ok).toBe(true);
+    if (!cambio.ok) return;
+    const devolucion = await dev(cambio.entregaNuevaId, 1); // intenta devolver M2 directamente
+    expect(devolucion).toMatchObject({ ok: false, motivo: "devolucion_con_cobro_requiere_ajuste" });
+    expect(articulos.find((a) => a.id === 4)!.stock).toBe(4); // stock del cambio se mantiene, la devolución no se aplicó
+  });
+
+  it("sin cobro -> cambio -> devolución de la entrega derivada -> permitida", async () => {
+    articulos.find((a) => a.id === 2)!.stock = 5;
+    const cambio = await cam(40, 1, 2); // #40 sin cobro -> M
+    expect(cambio.ok).toBe(true);
+    if (!cambio.ok) return;
+    const devolucion = await dev(cambio.entregaNuevaId, 1);
+    expect(devolucion.ok).toBe(true);
+    expect(articulos.find((a) => a.id === 2)!.stock).toBe(5); // 4 (tras el cambio) + 1 devuelto
+  });
+
+  it("tenant aislado: un ajuste con empresa_id distinto nunca se toma como 'padre' al resolver el origen financiero", async () => {
+    articulos.find((a) => a.id === 2)!.stock = 5;
+    // Fila corrupta/de otro tenant que APUNTA a nuestra entrega #40 — nunca debe tratarse como su origen.
+    ajustes.push({
+      id: 999, empresa_id: 999, entrega_id: 12345, tipo: "CAMBIO", cantidad: 1,
+      articulo_nuevo_id: null, entrega_nueva_id: 40, movimiento_devolucion_id: 1, movimiento_salida_id: null,
+      motivo: "ajuste de otro tenant", registrado_por: "otro", creado_en: "2020-01-01 00:00:00",
+    });
+    // #40 no tiene cobro: si el ajuste de otro tenant se colara, igual permitiría el cambio, así que además
+    // confirmamos explícitamente que la cadena se resuelve con #40 como raíz (no según la fila ajena).
+    const r = await cam(40, 1, 2);
+    expect(r.ok).toBe(true);
+    expect(queriesEjecutadas.some((q) => q.includes("SELECT entrega_id FROM inventario_rrhh_ajustes"))).toBe(true);
+  });
+
+  it("un ciclo en inventario_rrhh_ajustes nunca produce un loop infinito — lanza un error explícito", async () => {
+    entregas.push(
+      { id: 100, empresa_id: EMPRESA, articulo_id: 1, empleado_id: 900, cantidad: 1, costo_unitario_entrega: 30, costo_total: 30, monto_cobrado: 0, descuento_id: null, movimiento_id: null, motivo: null, entregado_por: "ops", estado: "ENTREGADO", creado_en: "2026-09-20 08:00:00" },
+      { id: 101, empresa_id: EMPRESA, articulo_id: 2, empleado_id: 900, cantidad: 1, costo_unitario_entrega: 30, costo_total: 30, monto_cobrado: 0, descuento_id: null, movimiento_id: null, motivo: null, entregado_por: "ops", estado: "ENTREGADO", creado_en: "2026-09-20 08:00:00" },
+    );
+    // Ciclo artificial: 100 dice que "nació de" 101, y 101 dice que "nació de" 100.
+    ajustes.push(
+      { id: 900, empresa_id: EMPRESA, entrega_id: 101, tipo: "CAMBIO", cantidad: 1, articulo_nuevo_id: 1, entrega_nueva_id: 100, movimiento_devolucion_id: 1, movimiento_salida_id: 1, motivo: "ciclo", registrado_por: "ops", creado_en: "2026-09-20 08:00:00" },
+      { id: 901, empresa_id: EMPRESA, entrega_id: 100, tipo: "CAMBIO", cantidad: 1, articulo_nuevo_id: 2, entrega_nueva_id: 101, movimiento_devolucion_id: 1, movimiento_salida_id: 1, motivo: "ciclo", registrado_por: "ops", creado_en: "2026-09-20 08:00:00" },
+    );
+    await expect(dev(100, 1)).rejects.toThrow(/ciclo detectado/);
   });
 });

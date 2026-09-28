@@ -44,6 +44,7 @@ it.each([
   ["cantidad_excede_disponible", 409],
   ["stock_insuficiente", 409],
   ["motivo_requerido", 400],
+  ["devolucion_con_cobro_requiere_ajuste", 409],
   ["error", 500],
 ])("motivo %s -> status %i", async (motivo, status) => {
   vi.mocked(registrarDevolucion).mockResolvedValue({ ok: false, motivo, mensaje: "x" } as never);

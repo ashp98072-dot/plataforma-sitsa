@@ -801,6 +801,87 @@ async function ajustesPreviosTx(
   return rows.map((r) => ({ tipo: String(r.tipo) as TipoAjusteInventario, cantidad: Number(r.cantidad) }));
 }
 
+export type OrigenFinancieroEntrega = {
+  /** La entrega que INICIÓ la cadena — la que tiene (o no) el cobro/descuento real. */
+  entregaRaizId: number;
+  huboCobro: boolean;
+  descuentoId: number | null;
+  /** Costo unitario histórico de la entrega RAÍZ — referencia real para comparar precios en un cambio encadenado. */
+  costoUnitarioOriginal: number;
+};
+
+/**
+ * CORRECCIÓN POST-REVISIÓN (RRHH-INVENTARIO-CAMBIOS-1) — un CAMBIO crea una
+ * entrega NUEVA con `monto_cobrado = 0` y `descuento_id = NULL` (nunca
+ * duplica el cobro). Eso es correcto para esa entrega en sí, pero significa
+ * que mirar solo `entrega.monto_cobrado` en un SEGUNDO cambio (ej. M -> L,
+ * cuando la cadena real es S[con cobro] -> M -> L) pierde el contexto
+ * financiero: M "parece" sin cobro aunque la deuda de S le siga pisando los
+ * talones. Esta función camina la cadena hacia atrás por
+ * `inventario_rrhh_ajustes.entrega_nueva_id` (¿esta entrega nació de un
+ * cambio? ¿de cuál?) hasta llegar a la entrega RAÍZ (la que nunca fue
+ * "entrega_nueva_id" de ningún ajuste) y devuelve el contexto financiero
+ * real desde ahí — nunca desde un eslabón intermedio.
+ *
+ * Protecciones:
+ *  - Tenant: cada lectura (entrega y ajuste padre) filtra por `empresa_id`
+ *    explícitamente — nunca cruza a una entrega de otra empresa.
+ *  - Ciclos/cadenas inválidas: límite duro de 50 saltos + un Set de
+ *    visitados; si se repite un id (ciclo) o se excede el límite, lanza un
+ *    Error explícito (nunca un loop infinito silencioso). Con el diseño
+ *    actual (una entrega solo puede ser `entrega_nueva_id` de UN ajuste,
+ *    porque nace de UN solo cambio) un ciclo real no debería ser posible,
+ *    pero la protección existe igual — nunca confiar ciegamente en la
+ *    integridad de datos históricos.
+ */
+async function resolverOrigenFinancieroTx(
+  conn: PoolConnection,
+  empresaId: number,
+  entregaId: number,
+): Promise<OrigenFinancieroEntrega> {
+  const visitados = new Set<number>();
+  let actualId = entregaId;
+  for (let saltos = 0; saltos < 50; saltos++) {
+    if (visitados.has(actualId)) {
+      throw new Error(
+        `inventario_rrhh_ajustes: ciclo detectado resolviendo el origen financiero de la entrega #${entregaId} (repite #${actualId}).`,
+      );
+    }
+    visitados.add(actualId);
+
+    const [filaRows] = await conn.query<RowDataPacket[]>(
+      `SELECT id, monto_cobrado, descuento_id, costo_unitario_entrega
+       FROM inventario_rrhh_entregas WHERE id = ? AND empresa_id = ? LIMIT 1`,
+      [actualId, empresaId],
+    );
+    const fila = filaRows[0];
+    if (!fila) {
+      throw new Error(
+        `inventario_rrhh_ajustes: entrega #${actualId} no encontrada (empresa ${empresaId}) resolviendo el origen financiero de #${entregaId}.`,
+      );
+    }
+
+    const [padreRows] = await conn.query<RowDataPacket[]>(
+      `SELECT entrega_id FROM inventario_rrhh_ajustes WHERE empresa_id = ? AND entrega_nueva_id = ? LIMIT 1`,
+      [empresaId, actualId],
+    );
+    const padre = padreRows[0];
+    if (!padre) {
+      // actualId nunca fue "entrega_nueva_id" de ningún ajuste -> es la raíz.
+      return {
+        entregaRaizId: actualId,
+        huboCobro: Number(fila.monto_cobrado) > 0,
+        descuentoId: fila.descuento_id != null ? Number(fila.descuento_id) : null,
+        costoUnitarioOriginal: Number(fila.costo_unitario_entrega),
+      };
+    }
+    actualId = Number(padre.entrega_id);
+  }
+  throw new Error(
+    `inventario_rrhh_ajustes: cadena de cambios demasiado larga resolviendo el origen financiero de la entrega #${entregaId} (posible ciclo).`,
+  );
+}
+
 export type ResultadoDevolucion =
   | { ok: true; ajusteId: number; entregaId: number; cantidad: number; stockResultante: number }
   | { ok: false; motivo: string; mensaje: string };
@@ -809,11 +890,19 @@ export type ResultadoDevolucion =
  * Devuelve `cantidad` unidades de una entrega al stock del artículo
  * original. Transaccional: bloquea la entrega, calcula cuánto sigue
  * disponible (cantidad - ajustes previos), valida, regresa stock
- * (registrarMovimientoInterno, tipo DEVOLUCION) y dejala fila de ajuste —
- * todo o nada. NUNCA toca la fila de la entrega original ni ningún
- * descuento (ver discovery: el manejo de dinero para devoluciones queda
- * fuera de este PR — RRHH resuelve el descuento con las herramientas ya
- * existentes en Descuentos, si corresponde).
+ * (registrarMovimientoInterno, tipo DEVOLUCION) y deja la fila de ajuste —
+ * todo o nada. NUNCA toca la fila de la entrega original.
+ *
+ * CORRECCIÓN POST-REVISIÓN: si la entrega (o su ORIGEN FINANCIERO —
+ * resolverOrigenFinancieroTx, para cubrir una devolución de una entrega
+ * DERIVADA de un cambio) tiene cobro/descuento asociado, se RECHAZA
+ * (`devolucion_con_cobro_requiere_ajuste`, 409) sin tocar stock ni cuotas
+ * — devolver stock físico mientras el empleado sigue debiendo por ese
+ * artículo (o el motor de descuentos no sabe reflejar la devolución sin
+ * arriesgar cuotas ya aplicadas) es exactamente la inconsistencia que este
+ * ticket pide evitar. RRHH debe resolver el descuento primero con las
+ * herramientas ya existentes en Descuentos (pausar/cancelar) antes de
+ * poder devolver el artículo por esta vía.
  */
 export async function registrarDevolucion(
   empresaId: number,
@@ -836,6 +925,19 @@ export async function registrarDevolucion(
     if (!entrega) {
       await conn.rollback();
       return { ok: false, motivo: "no_encontrado", mensaje: "Entrega no encontrada." };
+    }
+
+    const origenFinanciero = await resolverOrigenFinancieroTx(conn, empresaId, entregaId);
+    if (origenFinanciero.huboCobro) {
+      await conn.rollback();
+      const refDescuento = origenFinanciero.descuentoId ? ` (descuento #${origenFinanciero.descuentoId})` : "";
+      return {
+        ok: false,
+        motivo: "devolucion_con_cobro_requiere_ajuste",
+        mensaje:
+          `Esta entrega tiene un cobro/descuento asociado${refDescuento} — devolver el artículo requiere ajustar ` +
+          `primero el descuento manualmente en RRHH > Descuentos. No se modificó nada.`,
+      };
     }
 
     const ajustesPrevios = await ajustesPreviosTx(conn, empresaId, entregaId);
@@ -975,9 +1077,16 @@ export async function registrarCambio(
     articuloNuevoNombre = String(articuloNuevo.nombre);
     const costoUnitarioNuevo = Number(articuloNuevo.costo_unitario ?? 0);
 
+    // CORRECCIÓN POST-REVISIÓN: comparar contra el origen financiero REAL
+    // (camina la cadena de cambios hacia la raíz), nunca contra
+    // entrega.monto_cobrado/costo_unitario_entrega directos — en un cambio
+    // encadenado (S[cobro] -> M -> L) la entrega M ya tiene
+    // monto_cobrado = 0 por diseño (no duplica el cobro), pero la deuda de
+    // S le sigue pisando los talones. Ver resolverOrigenFinancieroTx.
+    const origenFinanciero = await resolverOrigenFinancieroTx(conn, empresaId, entregaId);
     const validacionPrecio = validarCompatibilidadPrecioCambio({
-      huboCobro: Number(entrega.monto_cobrado) > 0,
-      costoUnitarioOriginal: Number(entrega.costo_unitario_entrega),
+      huboCobro: origenFinanciero.huboCobro,
+      costoUnitarioOriginal: origenFinanciero.costoUnitarioOriginal,
       costoUnitarioNuevo,
     });
     if (!validacionPrecio.ok) {

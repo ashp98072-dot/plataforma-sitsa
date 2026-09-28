@@ -12,7 +12,13 @@ const schema = z.object({
 
 function statusParaAjuste(motivo: string): number {
   if (motivo === "no_encontrado") return 404;
-  if (motivo === "cantidad_excede_disponible" || motivo === "stock_insuficiente") return 409;
+  if (
+    motivo === "cantidad_excede_disponible" ||
+    motivo === "stock_insuficiente" ||
+    motivo === "devolucion_con_cobro_requiere_ajuste"
+  ) {
+    return 409;
+  }
   if (motivo === "error") return 500;
   return 400;
 }

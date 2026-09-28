@@ -68,3 +68,30 @@
 -- stock generados). Ver sql/migrate-2026-09-rrhh-inventario-cambios.sql.
 -- Ningún ALTER TABLE sobre inventario_rrhh, inventario_rrhh_movimientos,
 -- inventario_rrhh_entregas, rrhh_descuentos_maestro ni rrhh_descuento_cuotas.
+--
+-- ============================================================================
+-- 4. CORRECCIÓN POST-REVISIÓN — cadenas de cambios (S -> M -> L)
+-- ============================================================================
+-- Un CAMBIO crea una entrega NUEVA con monto_cobrado = 0 y descuento_id =
+-- NULL (para no duplicar el cobro). Eso es correcto para ESA entrega, pero
+-- un SEGUNDO cambio sobre esa entrega derivada (M -> L) que solo mirara
+-- `entrega.monto_cobrado` la vería "sin cobro" aunque la deuda real de la
+-- entrega RAÍZ (S) le siga pisando los talones — perdiendo el contexto
+-- financiero real de la cadena.
+--
+-- Corregido con resolverOrigenFinancieroTx() (src/lib/rrhh/inventario.ts):
+-- camina inventario_rrhh_ajustes.entrega_nueva_id hacia atrás hasta
+-- encontrar la entrega RAÍZ (la que nunca fue "entrega_nueva_id" de ningún
+-- ajuste) y usa SU monto_cobrado/costo_unitario_entrega/descuento_id como
+-- referencia real — tanto en registrarCambio() (compatibilidad de precio)
+-- como en registrarDevolucion() (que ahora BLOQUEA, motivo
+-- `devolucion_con_cobro_requiere_ajuste`, 409, si la entrega o su origen
+-- financiero tienen cobro — devolver stock físico mientras la deuda sigue
+-- viva es exactamente la inconsistencia que este ticket pide evitar).
+--
+-- Índice agregado para esa consulta (un salto de cadena por llamada):
+-- idx_ajustes_entrega_nueva (empresa_id, entrega_nueva_id).
+--
+-- Protecciones: cada lectura de la cadena filtra por empresa_id (tenant);
+-- límite duro de 50 saltos + Set de visitados (ciclos) — lanza un Error
+-- explícito en vez de un loop infinito silencioso.
