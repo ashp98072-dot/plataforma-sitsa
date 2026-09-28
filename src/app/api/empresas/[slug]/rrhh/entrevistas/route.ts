@@ -8,8 +8,17 @@ import {
 
 type Ctx = { params: Promise<{ slug: string }> };
 
+// RRHH-ENTREVISTAS-IDENTIDAD-1 — primer nombre y primer apellido obligatorios; el resto de la identidad es opcional.
+// El backend NUNCA confía en un "nombre completo" enviado por el cliente: candidato_nombre se recompone en
+// crearEntrevista() a partir de estas partes (ver src/lib/rrhh/entrevistas.ts).
 const crearSchema = z.object({
-  candidatoNombre: z.string().min(1),
+  candidatoPrimerNombre: z.string().trim().min(1),
+  candidatoSegundoNombre: z.string().optional().nullable(),
+  candidatoTercerNombre: z.string().optional().nullable(),
+  candidatoCuartoNombre: z.string().optional().nullable(),
+  candidatoPrimerApellido: z.string().trim().min(1),
+  candidatoSegundoApellido: z.string().optional().nullable(),
+  candidatoApellidoCasada: z.string().optional().nullable(),
   candidatoTelefono: z.string().optional().nullable(),
   candidatoEmail: z.string().email().optional().nullable().or(z.literal("")),
   puesto: z.string().min(1),
@@ -60,7 +69,13 @@ export async function POST(req: Request, ctx: Ctx) {
 
   const r = await crearEntrevista({
     empresaId: guard.empresa.id,
-    candidatoNombre: parsed.data.candidatoNombre,
+    candidatoPrimerNombre: parsed.data.candidatoPrimerNombre,
+    candidatoSegundoNombre: parsed.data.candidatoSegundoNombre,
+    candidatoTercerNombre: parsed.data.candidatoTercerNombre,
+    candidatoCuartoNombre: parsed.data.candidatoCuartoNombre,
+    candidatoPrimerApellido: parsed.data.candidatoPrimerApellido,
+    candidatoSegundoApellido: parsed.data.candidatoSegundoApellido,
+    candidatoApellidoCasada: parsed.data.candidatoApellidoCasada,
     candidatoTelefono: parsed.data.candidatoTelefono,
     candidatoEmail: parsed.data.candidatoEmail || null,
     puesto: parsed.data.puesto,

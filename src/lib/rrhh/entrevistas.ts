@@ -1,5 +1,6 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
+import { componerNombreCompleto, type PartesNombreCompleto } from "./nombre-completo";
 
 export type EstadoEntrevista =
   | "Programada"
@@ -9,10 +10,22 @@ export type EstadoEntrevista =
 export type ResultadoEntrevista = "Pendiente" | "Aprobado" | "Rechazado";
 export type ModalidadEntrevista = "Presencial" | "Virtual";
 
+/**
+ * RRHH-ENTREVISTAS-IDENTIDAD-1 — identidad estructurada del candidato, opcional (entrevistas históricas la tienen en
+ * NULL). `candidatoNombre` sigue siendo el nombre completo persistido/derivado — nunca se elimina, se usa en
+ * calendario, listados, portal, expediente, documentos e historial. Ver src/lib/rrhh/nombre-completo.ts.
+ */
 export type Entrevista = {
   id: number;
   empresaId: number;
   candidatoNombre: string;
+  candidatoPrimerNombre: string | null;
+  candidatoSegundoNombre: string | null;
+  candidatoTercerNombre: string | null;
+  candidatoCuartoNombre: string | null;
+  candidatoPrimerApellido: string | null;
+  candidatoSegundoApellido: string | null;
+  candidatoApellidoCasada: string | null;
   candidatoTelefono: string | null;
   candidatoEmail: string | null;
   puesto: string;
@@ -46,6 +59,13 @@ function mapEntrevista(r: RowDataPacket): Entrevista {
     id: Number(r.id),
     empresaId: Number(r.empresa_id),
     candidatoNombre: String(r.candidato_nombre),
+    candidatoPrimerNombre: r.candidato_primer_nombre ? String(r.candidato_primer_nombre) : null,
+    candidatoSegundoNombre: r.candidato_segundo_nombre ? String(r.candidato_segundo_nombre) : null,
+    candidatoTercerNombre: r.candidato_tercer_nombre ? String(r.candidato_tercer_nombre) : null,
+    candidatoCuartoNombre: r.candidato_cuarto_nombre ? String(r.candidato_cuarto_nombre) : null,
+    candidatoPrimerApellido: r.candidato_primer_apellido ? String(r.candidato_primer_apellido) : null,
+    candidatoSegundoApellido: r.candidato_segundo_apellido ? String(r.candidato_segundo_apellido) : null,
+    candidatoApellidoCasada: r.candidato_apellido_casada ? String(r.candidato_apellido_casada) : null,
     candidatoTelefono: r.candidato_telefono ? String(r.candidato_telefono) : null,
     candidatoEmail: r.candidato_email ? String(r.candidato_email) : null,
     puesto: String(r.puesto),
@@ -127,9 +147,20 @@ export async function listarEntrevistasPorEntrevistador(
   return rows.map(mapEntrevista);
 }
 
+/**
+ * RRHH-ENTREVISTAS-IDENTIDAD-1 — para una entrevista NUEVA, primer nombre y primer apellido son obligatorios
+ * (backend valida, nunca depende solo del frontend); el resto de la identidad es opcional. `candidato_nombre` se
+ * RECOMPONE aquí desde las partes — nunca se confía en un nombre completo enviado por el cliente.
+ */
 export async function crearEntrevista(input: {
   empresaId: number;
-  candidatoNombre: string;
+  candidatoPrimerNombre: string;
+  candidatoSegundoNombre?: string | null;
+  candidatoTercerNombre?: string | null;
+  candidatoCuartoNombre?: string | null;
+  candidatoPrimerApellido: string;
+  candidatoSegundoApellido?: string | null;
+  candidatoApellidoCasada?: string | null;
   candidatoTelefono?: string | null;
   candidatoEmail?: string | null;
   puesto: string;
@@ -140,10 +171,18 @@ export async function crearEntrevista(input: {
   notas?: string | null;
   creadoPor: string;
 }): Promise<{ ok: boolean; mensaje: string; id?: number }> {
-  const nombre = input.candidatoNombre.trim();
+  const partes: PartesNombreCompleto = {
+    primerNombre: input.candidatoPrimerNombre ?? "",
+    segundoNombre: input.candidatoSegundoNombre ?? "",
+    tercerNombre: input.candidatoTercerNombre ?? "",
+    cuartoNombre: input.candidatoCuartoNombre ?? "",
+    primerApellido: input.candidatoPrimerApellido ?? "",
+    segundoApellido: input.candidatoSegundoApellido ?? "",
+    apellidoCasada: input.candidatoApellidoCasada ?? "",
+  };
   const puesto = input.puesto.trim();
-  if (!nombre || !puesto) {
-    return { ok: false, mensaje: "Nombre del candidato y puesto son obligatorios." };
+  if (!partes.primerNombre.trim() || !partes.primerApellido.trim() || !puesto) {
+    return { ok: false, mensaje: "Primer nombre, primer apellido y puesto son obligatorios." };
   }
   if (!input.fechaHora || Number.isNaN(Date.parse(input.fechaHora))) {
     return { ok: false, mensaje: "Fecha y hora inválidas." };
@@ -159,14 +198,20 @@ export async function crearEntrevista(input: {
     }
   }
 
+  const nombreCompleto = componerNombreCompleto(partes);
+  const soloVacio = (v: string) => v.trim() || null;
   const result = await execute(
     `INSERT INTO entrevistas
-      (empresa_id, candidato_nombre, candidato_telefono, candidato_email, puesto,
+      (empresa_id, candidato_nombre, candidato_primer_nombre, candidato_segundo_nombre, candidato_tercer_nombre,
+       candidato_cuarto_nombre, candidato_primer_apellido, candidato_segundo_apellido, candidato_apellido_casada,
+       candidato_telefono, candidato_email, puesto,
        fecha_hora, entrevistador_empleado_id, modalidad, lugar_o_enlace, notas, creado_por)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       input.empresaId,
-      nombre,
+      nombreCompleto,
+      soloVacio(partes.primerNombre), soloVacio(partes.segundoNombre), soloVacio(partes.tercerNombre), soloVacio(partes.cuartoNombre),
+      soloVacio(partes.primerApellido), soloVacio(partes.segundoApellido), soloVacio(partes.apellidoCasada),
       input.candidatoTelefono?.trim() || null,
       input.candidatoEmail?.trim() || null,
       puesto,
@@ -192,10 +237,28 @@ export async function crearEntrevista(input: {
  * caller decide qué campos permite tocar cada uno, esta función no
  * distingue el origen.
  */
+/**
+ * RRHH-ENTREVISTAS-IDENTIDAD-1 (punto 13) — antes NO permitía editar candidatoNombre/candidatoTelefono/
+ * candidatoEmail/puesto aunque el formulario los mostraba como editables (causa raíz de "no deja editar"). Ahora sí:
+ * nombres/apellidos separados, teléfono, email y puesto son editables. Cuando se toca CUALQUIER parte de la
+ * identidad, `candidato_nombre` se RECOMPONE server-side a partir de las partes ya guardadas fusionadas con las que
+ * llegan en el patch — nunca se confía en un nombre completo enviado por el cliente. Si el patch no toca identidad,
+ * `candidato_nombre` (histórico o ya estructurado) queda intacto.
+ */
 export async function actualizarEntrevista(
   empresaId: number,
   id: number,
   patch: {
+    candidatoPrimerNombre?: string;
+    candidatoSegundoNombre?: string | null;
+    candidatoTercerNombre?: string | null;
+    candidatoCuartoNombre?: string | null;
+    candidatoPrimerApellido?: string;
+    candidatoSegundoApellido?: string | null;
+    candidatoApellidoCasada?: string | null;
+    candidatoTelefono?: string | null;
+    candidatoEmail?: string | null;
+    puesto?: string;
     fechaHora?: string;
     entrevistadorEmpleadoId?: number | null;
     modalidad?: ModalidadEntrevista;
@@ -206,16 +269,35 @@ export async function actualizarEntrevista(
   },
 ): Promise<{ ok: boolean; mensaje: string }> {
   const rows = await query<RowDataPacket[]>(
-    `SELECT id FROM entrevistas WHERE id = ? AND empresa_id = ? LIMIT 1`,
+    `SELECT candidato_primer_nombre, candidato_segundo_nombre, candidato_tercer_nombre, candidato_cuarto_nombre,
+            candidato_primer_apellido, candidato_segundo_apellido, candidato_apellido_casada, candidato_nombre
+     FROM entrevistas WHERE id = ? AND empresa_id = ? LIMIT 1`,
     [id, empresaId],
   );
-  if (!rows[0]) return { ok: false, mensaje: "Entrevista no encontrada." };
+  const actual = rows[0];
+  if (!actual) return { ok: false, mensaje: "Entrevista no encontrada." };
 
   if (patch.estado && !ESTADOS_VALIDOS.has(patch.estado)) {
     return { ok: false, mensaje: "Estado inválido." };
   }
   if (patch.resultado && !RESULTADOS_VALIDOS.has(patch.resultado)) {
     return { ok: false, mensaje: "Resultado inválido." };
+  }
+  if (patch.puesto !== undefined && !patch.puesto.trim()) {
+    return { ok: false, mensaje: "El puesto no puede quedar vacío." };
+  }
+  const IDENT_KEYS = [
+    "candidatoPrimerNombre", "candidatoSegundoNombre", "candidatoTercerNombre", "candidatoCuartoNombre",
+    "candidatoPrimerApellido", "candidatoSegundoApellido", "candidatoApellidoCasada",
+  ] as const;
+  const tocaIdentidad = IDENT_KEYS.some((k) => patch[k] !== undefined);
+  if (tocaIdentidad) {
+    // Primer nombre/apellido nunca pueden quedar vacíos una vez que se edita la identidad (mismo mínimo que al crear).
+    const primerNombre = patch.candidatoPrimerNombre !== undefined ? patch.candidatoPrimerNombre : (actual.candidato_primer_nombre ?? "");
+    const primerApellido = patch.candidatoPrimerApellido !== undefined ? patch.candidatoPrimerApellido : (actual.candidato_primer_apellido ?? "");
+    if (!String(primerNombre).trim() || !String(primerApellido).trim()) {
+      return { ok: false, mensaje: "Primer nombre y primer apellido son obligatorios." };
+    }
   }
 
   const sets: string[] = [];
@@ -247,6 +329,37 @@ export async function actualizarEntrevista(
   if (patch.notas !== undefined) {
     sets.push("notas = ?");
     params.push(patch.notas || null);
+  }
+  if (patch.puesto !== undefined) {
+    sets.push("puesto = ?");
+    params.push(patch.puesto.trim());
+  }
+  if (patch.candidatoTelefono !== undefined) {
+    sets.push("candidato_telefono = ?");
+    params.push(patch.candidatoTelefono?.trim() || null);
+  }
+  if (patch.candidatoEmail !== undefined) {
+    sets.push("candidato_email = ?");
+    params.push(patch.candidatoEmail?.trim() || null);
+  }
+  if (tocaIdentidad) {
+    const soloVacio = (v: string) => (v.trim() ? v.trim() : null);
+    const partes: PartesNombreCompleto = {
+      primerNombre: (patch.candidatoPrimerNombre !== undefined ? patch.candidatoPrimerNombre : (actual.candidato_primer_nombre ?? "")) as string,
+      segundoNombre: (patch.candidatoSegundoNombre !== undefined ? patch.candidatoSegundoNombre : (actual.candidato_segundo_nombre ?? "")) as string,
+      tercerNombre: (patch.candidatoTercerNombre !== undefined ? patch.candidatoTercerNombre : (actual.candidato_tercer_nombre ?? "")) as string,
+      cuartoNombre: (patch.candidatoCuartoNombre !== undefined ? patch.candidatoCuartoNombre : (actual.candidato_cuarto_nombre ?? "")) as string,
+      primerApellido: (patch.candidatoPrimerApellido !== undefined ? patch.candidatoPrimerApellido : (actual.candidato_primer_apellido ?? "")) as string,
+      segundoApellido: (patch.candidatoSegundoApellido !== undefined ? patch.candidatoSegundoApellido : (actual.candidato_segundo_apellido ?? "")) as string,
+      apellidoCasada: (patch.candidatoApellidoCasada !== undefined ? patch.candidatoApellidoCasada : (actual.candidato_apellido_casada ?? "")) as string,
+    };
+    sets.push("candidato_primer_nombre = ?", "candidato_segundo_nombre = ?", "candidato_tercer_nombre = ?", "candidato_cuarto_nombre = ?",
+      "candidato_primer_apellido = ?", "candidato_segundo_apellido = ?", "candidato_apellido_casada = ?", "candidato_nombre = ?");
+    params.push(
+      soloVacio(partes.primerNombre), soloVacio(partes.segundoNombre), soloVacio(partes.tercerNombre), soloVacio(partes.cuartoNombre),
+      soloVacio(partes.primerApellido), soloVacio(partes.segundoApellido), soloVacio(partes.apellidoCasada),
+      componerNombreCompleto(partes) || String(actual.candidato_nombre),
+    );
   }
   if (sets.length === 0) {
     return { ok: false, mensaje: "Nada que actualizar." };

@@ -6,10 +6,19 @@ import Link from "next/link";
 import { EmpleadoPicker, type EmpOpt } from "@/components/rrhh/empleado-picker";
 import { EntrevistaDocumentos } from "@/components/rrhh/entrevista-documentos";
 import { ExpedienteCandidato } from "@/components/rrhh/expediente-candidato";
+import { componerNombreCompleto, tieneIdentidadEstructurada } from "@/lib/rrhh/nombre-completo";
+import { construirIdentidadPatch, debeIncluirIdentidad as calcularDebeIncluirIdentidad } from "@/lib/rrhh/entrevista-form";
 
 type Entrevista = {
   id: number;
   candidatoNombre: string;
+  candidatoPrimerNombre: string | null;
+  candidatoSegundoNombre: string | null;
+  candidatoTercerNombre: string | null;
+  candidatoCuartoNombre: string | null;
+  candidatoPrimerApellido: string | null;
+  candidatoSegundoApellido: string | null;
+  candidatoApellidoCasada: string | null;
   candidatoTelefono: string | null;
   candidatoEmail: string | null;
   puesto: string;
@@ -35,21 +44,35 @@ const ESTADO_COLOR: Record<Entrevista["estado"], string> = {
   "No asistió": "bg-amber-500/20 text-amber-300 border-amber-500/40",
 };
 
+function hoyIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 function vacio() {
   return {
     id: 0,
-    candidatoNombre: "",
+    primerNombre: "",
+    segundoNombre: "",
+    tercerNombre: "",
+    cuartoNombre: "",
+    primerApellido: "",
+    segundoApellido: "",
+    apellidoCasada: "",
+    candidatoNombreHistorico: "", // solo lectura: nombre completo de una entrevista vieja sin estructura, hasta que se edite
     candidatoTelefono: "",
     candidatoEmail: "",
     puesto: "",
-    fecha: new Date().toISOString().slice(0, 10),
+    fecha: hoyIso(),
     hora: "09:00",
     entrevistadorEmpleadoId: 0,
     modalidad: "Presencial" as "Presencial" | "Virtual",
     lugarOEnlace: "",
+    estado: "Programada" as Entrevista["estado"],
+    resultado: "Pendiente" as Entrevista["resultado"],
     notas: "",
   };
 }
+type FormState = ReturnType<typeof vacio>;
 
 export default function EntrevistasPage() {
   const slug = String(useParams().slug);
@@ -59,11 +82,18 @@ export default function EntrevistasPage() {
   const [entrevistas, setEntrevistas] = useState<Entrevista[]>([]);
   const [empleados, setEmpleados] = useState<EmpOpt[]>([]);
   const [diaSel, setDiaSel] = useState<string | null>(null);
-  const [form, setForm] = useState(vacio());
+  const [form, setForm] = useState<FormState>(vacio());
   const [editandoId, setEditandoId] = useState<number | null>(null);
   const [expedienteId, setExpedienteId] = useState<number | null>(null);
   const [msg, setMsg] = useState("");
+  const [error, setError] = useState("");
   const [cargando, setCargando] = useState(false);
+  const [guardando, setGuardando] = useState(false);
+  // AJUSTE PR #375 — fijado al ABRIR la entrevista (no recalculado en cada tecla): distingue una entrevista histórica
+  // SIN estructura (candidato_primer_nombre etc. NULL en la BD) de una ya estructurada. Se usa para decidir si la
+  // identidad es obligatoria/se envía en el PATCH — independiente de que el usuario, mientras edita, empiece a
+  // escribir en esos campos (eso lo cubre `tieneAlgunaParteIdentidad`, calculado en vivo más abajo).
+  const [entrevistaCargadaSinEstructura, setEntrevistaCargadaSinEstructura] = useState(false);
 
   const cargar = useCallback(async () => {
     setCargando(true);
@@ -121,23 +151,48 @@ export default function EntrevistasPage() {
     setAnio(a);
   }
 
+  function irAHoy() {
+    setMes(hoy.getMonth() + 1);
+    setAnio(hoy.getFullYear());
+    seleccionarDia(hoyIso());
+  }
+
   function abrirNueva(diaIso?: string) {
     setEditandoId(null);
+    setError("");
+    setMsg("");
+    setEntrevistaCargadaSinEstructura(false);
     setForm({ ...vacio(), fecha: diaIso ?? vacio().fecha });
-    setDiaSel(diaIso ?? null);
   }
 
   function seleccionarDia(diaIso: string) {
     setDiaSel(diaIso);
     setEditandoId(null);
+    setError("");
+    setEntrevistaCargadaSinEstructura(false);
     setForm((actual) => ({ ...actual, id: 0, fecha: diaIso }));
   }
 
   function abrirEditar(ent: Entrevista) {
     setEditandoId(ent.id);
+    setError("");
+    setMsg("");
+    setEntrevistaCargadaSinEstructura(!tieneIdentidadEstructurada({
+      primerNombre: ent.candidatoPrimerNombre ?? "", segundoNombre: ent.candidatoSegundoNombre ?? "",
+      tercerNombre: ent.candidatoTercerNombre ?? "", cuartoNombre: ent.candidatoCuartoNombre ?? "",
+      primerApellido: ent.candidatoPrimerApellido ?? "", segundoApellido: ent.candidatoSegundoApellido ?? "",
+      apellidoCasada: ent.candidatoApellidoCasada ?? "",
+    }));
     setForm({
       id: ent.id,
-      candidatoNombre: ent.candidatoNombre,
+      primerNombre: ent.candidatoPrimerNombre ?? "",
+      segundoNombre: ent.candidatoSegundoNombre ?? "",
+      tercerNombre: ent.candidatoTercerNombre ?? "",
+      cuartoNombre: ent.candidatoCuartoNombre ?? "",
+      primerApellido: ent.candidatoPrimerApellido ?? "",
+      segundoApellido: ent.candidatoSegundoApellido ?? "",
+      apellidoCasada: ent.candidatoApellidoCasada ?? "",
+      candidatoNombreHistorico: ent.candidatoNombre,
       candidatoTelefono: ent.candidatoTelefono ?? "",
       candidatoEmail: ent.candidatoEmail ?? "",
       puesto: ent.puesto,
@@ -146,61 +201,80 @@ export default function EntrevistasPage() {
       entrevistadorEmpleadoId: ent.entrevistadorEmpleadoId ?? 0,
       modalidad: ent.modalidad,
       lugarOEnlace: ent.lugarOEnlace ?? "",
+      estado: ent.estado,
+      resultado: ent.resultado,
       notas: ent.notas ?? "",
     });
   }
 
+  // Lógica pura extraída a @/lib/rrhh/entrevista-form.ts (probada ahí con sus 12 casos: nueva/estructurada/histórica,
+  // histórica que empieza a completarse, etc.) — aquí solo se usa.
+  const debeIncluirIdentidad = calcularDebeIncluirIdentidad({ editando: editandoId != null, entrevistaCargadaSinEstructura, form });
+  const nombreCompletoDerivado = componerNombreCompleto(form) || (entrevistaCargadaSinEstructura ? form.candidatoNombreHistorico : "");
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setMsg("");
-    const body = {
-      candidatoNombre: form.candidatoNombre,
-      candidatoTelefono: form.candidatoTelefono || null,
-      candidatoEmail: form.candidatoEmail || null,
-      puesto: form.puesto,
-      fechaHora: `${form.fecha}T${form.hora}`,
-      entrevistadorEmpleadoId: form.entrevistadorEmpleadoId || null,
-      modalidad: form.modalidad,
-      lugarOEnlace: form.lugarOEnlace || null,
-      notas: form.notas || null,
-    };
+    setError("");
+    const resultadoIdentidad = construirIdentidadPatch({ editando: editandoId != null, entrevistaCargadaSinEstructura, form });
+    if (!resultadoIdentidad.ok) {
+      setError(resultadoIdentidad.mensaje);
+      return;
+    }
+    setGuardando(true);
+    try {
+      const identidad = resultadoIdentidad.identidad; // {} en histórica intacta: candidato_nombre y las 7 columnas quedan como estaban.
+      const resto = {
+        candidatoTelefono: form.candidatoTelefono || null, candidatoEmail: form.candidatoEmail || null,
+        puesto: form.puesto, fechaHora: `${form.fecha}T${form.hora}`, entrevistadorEmpleadoId: form.entrevistadorEmpleadoId || null,
+        modalidad: form.modalidad, lugarOEnlace: form.lugarOEnlace || null, notas: form.notas || null,
+      };
+      const body = editandoId ? { ...identidad, ...resto, estado: form.estado, resultado: form.resultado } : { ...identidad, ...resto };
 
-    const res = editandoId
-      ? await fetch(`/api/empresas/${slug}/rrhh/entrevistas/${editandoId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        })
-      : await fetch(`/api/empresas/${slug}/rrhh/entrevistas`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
+      const res = editandoId
+        ? await fetch(`/api/empresas/${slug}/rrhh/entrevistas/${editandoId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          })
+        : await fetch(`/api/empresas/${slug}/rrhh/entrevistas`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
 
-    const data = await res.json();
-    setMsg(data.mensaje || data.error || "");
-    if (res.ok) {
+      let data: { mensaje?: string; error?: string } = {};
+      try { data = await res.json(); } catch { /* respuesta sin cuerpo/no JSON */ }
+      if (!res.ok) { setError(data.error || "No se pudo guardar."); return; }
+      setMsg(data.mensaje || "Guardado.");
       setForm({ ...vacio(), fecha: diaSel ?? form.fecha });
       setEditandoId(null);
+      setEntrevistaCargadaSinEstructura(false);
       await cargar();
+    } catch {
+      setError("No se pudo guardar. Revisa tu conexión e intenta nuevamente.");
+    } finally {
+      setGuardando(false);
     }
   }
 
-  async function cambiarEstado(id: number, estado: Entrevista["estado"]) {
+  async function cambiarEstadoRapido(id: number, estado: Entrevista["estado"]) {
     await fetch(`/api/empresas/${slug}/rrhh/entrevistas/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ estado }),
     });
+    if (editandoId === id) setForm((f) => ({ ...f, estado }));
     await cargar();
   }
 
-  async function cambiarResultado(id: number, resultado: Entrevista["resultado"]) {
+  async function cambiarResultadoRapido(id: number, resultado: Entrevista["resultado"]) {
     await fetch(`/api/empresas/${slug}/rrhh/entrevistas/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ resultado }),
     });
+    if (editandoId === id) setForm((f) => ({ ...f, resultado }));
     await cargar();
   }
 
@@ -215,288 +289,286 @@ export default function EntrevistasPage() {
     await cargar();
   }
 
+  function cancelarEdicion() {
+    setForm({ ...vacio(), fecha: diaSel ?? vacio().fecha });
+    setEditandoId(null);
+    setEntrevistaCargadaSinEstructura(false);
+    setError("");
+  }
+
   const input =
     "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm";
   const entrevistasDelDia = diaSel ? porDia.get(diaSel) ?? [] : [];
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Entrevistas</h1>
-        <p className="text-sm text-[var(--muted)]">
-          Calendario de entrevistas de candidatos. Clic en un día para ver o
-          programar.
-        </p>
-      </div>
-
-      <div className="flex items-center justify-between rounded-xl border border-[var(--border)] bg-[var(--card)] p-3">
-        <button
-          type="button"
-          className="rounded border border-[var(--border)] px-3 py-1 text-sm"
-          onClick={() => cambiarMes(-1)}
-        >
-          ← Anterior
-        </button>
-        <span className="text-lg font-medium">
-          {MESES[mes - 1]} {anio}
-        </span>
-        <button
-          type="button"
-          className="rounded border border-[var(--border)] px-3 py-1 text-sm"
-          onClick={() => cambiarMes(1)}
-        >
-          Siguiente →
-        </button>
-      </div>
-
-      <div className="grid grid-cols-7 gap-1 text-center text-xs text-[var(--muted)]">
-        {["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"].map((d) => (
-          <div key={d} className="py-1">{d}</div>
-        ))}
-        {diasDelMes.map((diaIso, i) => {
-          if (!diaIso) return <div key={`vacio-${i}`} />;
-          const lista = porDia.get(diaIso) ?? [];
-          const esHoy = diaIso === hoy.toISOString().slice(0, 10);
-          return (
-            <button
-              key={diaIso}
-              type="button"
-              onClick={() => seleccionarDia(diaIso)}
-              className={`min-h-[4.5rem] rounded border p-1 text-left text-xs transition ${
-                diaSel === diaIso
-                  ? "border-[var(--accent)] bg-[var(--accent)]/10"
-                  : "border-[var(--border)] bg-[var(--card)] hover:border-[var(--accent)]/50"
-              }`}
-            >
-              <span className={esHoy ? "font-bold text-[var(--accent)]" : ""}>
-                {Number(diaIso.slice(8, 10))}
-              </span>
-              <div className="mt-1 space-y-0.5">
-                {lista.slice(0, 2).map((ent) => (
-                  <div
-                    key={ent.id}
-                    className={`truncate rounded border px-1 ${ESTADO_COLOR[ent.estado]}`}
-                  >
-                    {ent.fechaHora.slice(11, 16)} {ent.candidatoNombre}
-                  </div>
-                ))}
-                {lista.length > 2 ? (
-                  <div className="text-[10px] opacity-70">+{lista.length - 2} más</div>
-                ) : null}
-              </div>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold">Entrevistas</h1>
+          <p className="text-sm text-[var(--muted)]">
+            Calendario de entrevistas de candidatos. Clic en un día para ver o programar.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button type="button" className="rounded border border-[var(--border)] px-3 py-1.5 text-sm" onClick={irAHoy}>
+            Hoy
+          </button>
+          <div className="flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] px-2 py-1.5">
+            <button type="button" className="rounded border border-[var(--border)] px-2 py-1 text-sm" onClick={() => cambiarMes(-1)}>
+              ←
             </button>
-          );
-        })}
-      </div>
-
-      {cargando ? <p className="text-sm text-[var(--muted)]">Cargando…</p> : null}
-
-      {diaSel ? (
-        <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-medium">
-              {diaSel} — {entrevistasDelDia.length} entrevista(s)
-            </h2>
-            <button
-              type="button"
-              className="rounded bg-[var(--accent)] px-3 py-1 text-sm text-white"
-              onClick={() => abrirNueva(diaSel)}
-            >
-              + Nueva entrevista
+            <span className="min-w-[9rem] text-center text-sm font-medium">{MESES[mes - 1]} {anio}</span>
+            <button type="button" className="rounded border border-[var(--border)] px-2 py-1 text-sm" onClick={() => cambiarMes(1)}>
+              →
             </button>
           </div>
+        </div>
+      </div>
 
-          <ul className="space-y-2">
-            {entrevistasDelDia.map((ent) => (
-              <li
-                key={ent.id}
-                className="flex flex-wrap items-center justify-between gap-2 rounded border border-[var(--border)] px-3 py-2 text-sm"
-              >
-                <div>
-                  <span className="font-medium">{ent.fechaHora.slice(11, 16)}</span>
-                  {" · "}
-                  {ent.candidatoNombre} — {ent.puesto}
-                  {ent.entrevistadorNombre ? ` · Entrevistador: ${ent.entrevistadorNombre}` : ""}
-                  <span className={`ml-2 rounded border px-1.5 py-0.5 text-xs ${ESTADO_COLOR[ent.estado]}`}>
-                    {ent.estado}
-                  </span>
-                </div>
-                <div className="flex flex-wrap gap-1">
-                  <select
-                    className={input}
-                    value={ent.estado}
-                    onChange={(e) =>
-                      cambiarEstado(ent.id, e.target.value as Entrevista["estado"])
-                    }
-                  >
-                    <option value="Programada">Programada</option>
-                    <option value="Realizada">Realizada</option>
-                    <option value="Cancelada">Cancelada</option>
-                    <option value="No asistió">No asistió</option>
-                  </select>
-                  <select
-                    className={input}
-                    value={ent.resultado}
-                    onChange={(e) =>
-                      cambiarResultado(ent.id, e.target.value as Entrevista["resultado"])
-                    }
-                    aria-label={`Resultado de ${ent.candidatoNombre}`}
-                  >
-                    <option value="Pendiente">Resultado pendiente</option>
-                    <option value="Aprobado">Aprobado</option>
-                    <option value="Rechazado">Rechazado</option>
-                  </select>
-                  {ent.resultado === "Aprobado" ? (
-                    <Link
-                      href={`/e/${slug}/rrhh/empleados?entrevista=${ent.id}`}
-                      className="rounded bg-emerald-600 px-2 py-1 text-xs text-white"
-                    >
-                      Crear empleado
-                    </Link>
-                  ) : null}
-                  <button
-                    type="button"
-                    className="rounded bg-[#1F6AA5] px-2 py-1 text-xs text-white"
-                    onClick={() => setExpedienteId(ent.id)}
-                  >
-                    Ver expediente
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded border border-[var(--border)] px-2 py-1 text-xs"
-                    onClick={() => abrirEditar(ent)}
-                  >
-                    Editar
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded border border-red-500/40 px-2 py-1 text-xs text-red-300"
-                    onClick={() => eliminar(ent.id)}
-                  >
-                    Eliminar
-                  </button>
-                </div>
-              </li>
+      {/* CALENDARIO (2/3) + ENTREVISTAS DEL DÍA (1/3) en desktop; apilado en móvil/tablet. */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-3 lg:col-span-2">
+          {cargando ? <p className="mb-2 text-xs text-[var(--muted)]">Cargando…</p> : null}
+          <div className="grid grid-cols-7 gap-1 text-center text-xs text-[var(--muted)]">
+            {["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"].map((d) => (
+              <div key={d} className="py-1">{d}</div>
             ))}
-            {entrevistasDelDia.length === 0 ? (
-              <li className="text-sm text-[var(--muted)]">
-                Sin entrevistas este día.
-              </li>
-            ) : null}
-          </ul>
-        </div>
-      ) : null}
-
-      <form
-        onSubmit={onSubmit}
-        className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4"
-      >
-        <h2 className="text-lg font-medium">
-          {editandoId ? `Editar entrevista #${editandoId}` : "Programar entrevista"}
-        </h2>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-          <input
-            className={input}
-            placeholder="Nombre del candidato"
-            value={form.candidatoNombre}
-            onChange={(e) => setForm({ ...form, candidatoNombre: e.target.value })}
-            required
-          />
-          <input
-            className={input}
-            placeholder="Puesto al que aplica"
-            value={form.puesto}
-            onChange={(e) => setForm({ ...form, puesto: e.target.value })}
-            required
-          />
-          <input
-            className={input}
-            placeholder="Teléfono (opcional)"
-            value={form.candidatoTelefono}
-            onChange={(e) => setForm({ ...form, candidatoTelefono: e.target.value })}
-          />
-          <input
-            className={input}
-            type="email"
-            placeholder="Email (opcional)"
-            value={form.candidatoEmail}
-            onChange={(e) => setForm({ ...form, candidatoEmail: e.target.value })}
-          />
-          <input
-            className={input}
-            type="date"
-            value={form.fecha}
-            onChange={(e) => setForm({ ...form, fecha: e.target.value })}
-            required
-          />
-          <input
-            className={input}
-            type="time"
-            value={form.hora}
-            onChange={(e) => setForm({ ...form, hora: e.target.value })}
-            required
-          />
-          <select
-            className={input}
-            value={form.modalidad}
-            onChange={(e) =>
-              setForm({ ...form, modalidad: e.target.value as "Presencial" | "Virtual" })
-            }
-          >
-            <option value="Presencial">Presencial</option>
-            <option value="Virtual">Virtual</option>
-          </select>
-          <input
-            className={input}
-            placeholder={form.modalidad === "Virtual" ? "Enlace de la videollamada" : "Lugar"}
-            value={form.lugarOEnlace}
-            onChange={(e) => setForm({ ...form, lugarOEnlace: e.target.value })}
-          />
+            {diasDelMes.map((diaIso, i) => {
+              if (!diaIso) return <div key={`vacio-${i}`} />;
+              const lista = porDia.get(diaIso) ?? [];
+              const esHoy = diaIso === hoy.toISOString().slice(0, 10);
+              return (
+                <button
+                  key={diaIso}
+                  type="button"
+                  onClick={() => seleccionarDia(diaIso)}
+                  aria-pressed={diaSel === diaIso}
+                  className={`min-h-[4.5rem] rounded border p-1 text-left text-xs transition ${
+                    diaSel === diaIso
+                      ? "border-[var(--accent)] bg-[var(--accent)]/10"
+                      : "border-[var(--border)] bg-[var(--card)] hover:border-[var(--accent)]/50"
+                  }`}
+                >
+                  <span className={esHoy ? "font-bold text-[var(--accent)]" : ""}>
+                    {Number(diaIso.slice(8, 10))}
+                  </span>
+                  <div className="mt-1 space-y-0.5">
+                    {lista.slice(0, 2).map((ent) => (
+                      <div key={ent.id} className={`truncate rounded border px-1 ${ESTADO_COLOR[ent.estado]}`}>
+                        {ent.fechaHora.slice(11, 16)} {ent.candidatoNombre}
+                      </div>
+                    ))}
+                    {lista.length > 2 ? (
+                      <div className="text-[10px] opacity-70">+{lista.length - 2} más</div>
+                    ) : null}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
-        <EmpleadoPicker
-          empleados={empleados}
-          value={form.entrevistadorEmpleadoId}
-          onChange={(id) => setForm({ ...form, entrevistadorEmpleadoId: id })}
-          label="Entrevistador (empleado que la realizará)"
-        />
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-[var(--muted)]">DÍA SELECCIONADO</h2>
+          </div>
+          {diaSel ? (
+            <>
+              <div className="mb-3 flex items-center justify-between">
+                <p className="text-lg font-medium">{diaSel}</p>
+                <button type="button" className="rounded bg-[var(--accent)] px-3 py-1 text-sm text-white" onClick={() => abrirNueva(diaSel)}>
+                  + Nueva entrevista
+                </button>
+              </div>
+              <ul className="space-y-2">
+                {entrevistasDelDia.map((ent) => (
+                  <li
+                    key={ent.id}
+                    className={`space-y-1 rounded border px-2 py-2 text-sm ${editandoId === ent.id ? "border-[var(--accent)]" : "border-[var(--border)]"}`}
+                  >
+                    <button type="button" className="block w-full text-left" onClick={() => abrirEditar(ent)}>
+                      <span className="font-medium">{ent.fechaHora.slice(11, 16)}</span>{" · "}
+                      {ent.candidatoNombre}
+                      <span className={`ml-2 rounded border px-1.5 py-0.5 text-[10px] ${ESTADO_COLOR[ent.estado]}`}>{ent.estado}</span>
+                      <p className="text-xs text-[var(--muted)]">{ent.puesto}{ent.entrevistadorNombre ? ` · ${ent.entrevistadorNombre}` : ""}</p>
+                    </button>
+                    <div className="flex flex-wrap gap-1">
+                      <select className={input} value={ent.estado} aria-label={`Estado de ${ent.candidatoNombre}`}
+                        onChange={(e) => cambiarEstadoRapido(ent.id, e.target.value as Entrevista["estado"])}>
+                        <option value="Programada">Programada</option>
+                        <option value="Realizada">Realizada</option>
+                        <option value="Cancelada">Cancelada</option>
+                        <option value="No asistió">No asistió</option>
+                      </select>
+                      <select className={input} value={ent.resultado} aria-label={`Resultado de ${ent.candidatoNombre}`}
+                        onChange={(e) => cambiarResultadoRapido(ent.id, e.target.value as Entrevista["resultado"])}>
+                        <option value="Pendiente">Resultado pendiente</option>
+                        <option value="Aprobado">Aprobado</option>
+                        <option value="Rechazado">Rechazado</option>
+                      </select>
+                      {ent.resultado === "Aprobado" ? (
+                        <Link href={`/e/${slug}/rrhh/empleados?entrevista=${ent.id}`} className="rounded bg-emerald-600 px-2 py-1 text-xs text-white">
+                          Crear empleado
+                        </Link>
+                      ) : null}
+                      <button type="button" className="rounded bg-[#1F6AA5] px-2 py-1 text-xs text-white" onClick={() => setExpedienteId(ent.id)}>
+                        Expediente
+                      </button>
+                      <button type="button" className="rounded border border-red-500/40 px-2 py-1 text-xs text-red-300" onClick={() => eliminar(ent.id)}>
+                        Eliminar
+                      </button>
+                    </div>
+                  </li>
+                ))}
+                {entrevistasDelDia.length === 0 ? (
+                  <li className="text-sm text-[var(--muted)]">Sin entrevistas este día.</li>
+                ) : null}
+              </ul>
+            </>
+          ) : (
+            <p className="text-sm text-[var(--muted)]">Seleccioná un día del calendario para ver o programar entrevistas.</p>
+          )}
+        </div>
+      </div>
 
-        <textarea
-          className={`${input} w-full`}
-          placeholder="Comentarios y evaluación: experiencia, fortalezas, disponibilidad, observaciones y motivo del resultado (opcional)"
-          aria-label="Comentarios y evaluación de la entrevista"
-          rows={4}
-          value={form.notas}
-          onChange={(e) => setForm({ ...form, notas: e.target.value })}
-        />
+      {/* PROGRAMAR / EDITAR ENTREVISTA — único formulario para crear y editar. */}
+      <form onSubmit={onSubmit} className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-lg font-medium">
+            {editandoId ? `Editar entrevista #${editandoId}` : "Programar entrevista"}
+          </h2>
+          {editandoId && form.resultado === "Aprobado" ? (
+            <Link href={`/e/${slug}/rrhh/empleados?entrevista=${editandoId}`} className="rounded bg-emerald-600 px-3 py-1.5 text-sm text-white">
+              Crear empleado
+            </Link>
+          ) : null}
+        </div>
 
-        {editandoId ? (
-          <EntrevistaDocumentos slug={slug} entrevistaId={editandoId} />
-        ) : (
-          <p className="text-xs text-[var(--muted)]">
-            Guarda primero la entrevista para habilitar la papelería del candidato.
+        {entrevistaCargadaSinEstructura ? (
+          <p className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+            Este registro fue creado con nombre completo. Puede completar los campos separados para mejorar el expediente del candidato.
           </p>
-        )}
+        ) : null}
 
-        <div className="flex gap-2">
-          <button className="rounded bg-[var(--accent)] px-3 py-1 text-sm text-white">
-            {editandoId ? "Guardar cambios" : "Programar"}
+        <fieldset className="space-y-2">
+          <legend className="text-sm font-semibold text-[var(--muted)]">IDENTIDAD DEL CANDIDATO</legend>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            <input className={input} placeholder="Primer nombre *" value={form.primerNombre} required={debeIncluirIdentidad}
+              onChange={(e) => setForm({ ...form, primerNombre: e.target.value })} />
+            <input className={input} placeholder="Segundo nombre" value={form.segundoNombre}
+              onChange={(e) => setForm({ ...form, segundoNombre: e.target.value })} />
+            <input className={input} placeholder="Tercer nombre" value={form.tercerNombre}
+              onChange={(e) => setForm({ ...form, tercerNombre: e.target.value })} />
+            <input className={input} placeholder="Cuarto nombre" value={form.cuartoNombre}
+              onChange={(e) => setForm({ ...form, cuartoNombre: e.target.value })} />
+          </div>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <input className={input} placeholder="Primer apellido *" value={form.primerApellido} required={debeIncluirIdentidad}
+              onChange={(e) => setForm({ ...form, primerApellido: e.target.value })} />
+            <input className={input} placeholder="Segundo apellido" value={form.segundoApellido}
+              onChange={(e) => setForm({ ...form, segundoApellido: e.target.value })} />
+            <input className={input} placeholder="Apellido de casada" value={form.apellidoCasada}
+              onChange={(e) => setForm({ ...form, apellidoCasada: e.target.value })} />
+          </div>
+          <p className="text-sm">
+            <span className="text-[var(--muted)]">Nombre completo: </span>
+            <span className="font-medium">{nombreCompletoDerivado || "—"}</span>
+          </p>
+        </fieldset>
+
+        <fieldset className="space-y-2">
+          <legend className="text-sm font-semibold text-[var(--muted)]">CONTACTO</legend>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <input className={input} placeholder="Teléfono (opcional)" value={form.candidatoTelefono}
+              onChange={(e) => setForm({ ...form, candidatoTelefono: e.target.value })} />
+            <input className={input} type="email" placeholder="Email (opcional)" value={form.candidatoEmail}
+              onChange={(e) => setForm({ ...form, candidatoEmail: e.target.value })} />
+          </div>
+        </fieldset>
+
+        <fieldset className="space-y-2">
+          <legend className="text-sm font-semibold text-[var(--muted)]">DATOS DE ENTREVISTA</legend>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            <input className={input} placeholder="Puesto al que aplica" value={form.puesto} required
+              onChange={(e) => setForm({ ...form, puesto: e.target.value })} />
+            <input className={input} type="date" value={form.fecha} required
+              onChange={(e) => setForm({ ...form, fecha: e.target.value })} />
+            <input className={input} type="time" value={form.hora} required
+              onChange={(e) => setForm({ ...form, hora: e.target.value })} />
+            <select className={input} value={form.modalidad}
+              onChange={(e) => setForm({ ...form, modalidad: e.target.value as "Presencial" | "Virtual" })}>
+              <option value="Presencial">Presencial</option>
+              <option value="Virtual">Virtual</option>
+            </select>
+            <input className={input} placeholder={form.modalidad === "Virtual" ? "Enlace de la videollamada" : "Lugar"} value={form.lugarOEnlace}
+              onChange={(e) => setForm({ ...form, lugarOEnlace: e.target.value })} />
+          </div>
+          <EmpleadoPicker
+            empleados={empleados}
+            value={form.entrevistadorEmpleadoId}
+            onChange={(id) => setForm({ ...form, entrevistadorEmpleadoId: id })}
+            label="Entrevistador (empleado que la realizará)"
+          />
+        </fieldset>
+
+        <fieldset className="space-y-2">
+          <legend className="text-sm font-semibold text-[var(--muted)]">EVALUACIÓN</legend>
+          {editandoId ? (
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <label className="text-sm text-[var(--muted)]">Estado
+                <select className={`${input} mt-1 w-full`} value={form.estado}
+                  onChange={(e) => setForm({ ...form, estado: e.target.value as Entrevista["estado"] })}>
+                  <option value="Programada">Programada</option>
+                  <option value="Realizada">Realizada</option>
+                  <option value="Cancelada">Cancelada</option>
+                  <option value="No asistió">No asistió</option>
+                </select>
+              </label>
+              <label className="text-sm text-[var(--muted)]">Resultado
+                <select className={`${input} mt-1 w-full`} value={form.resultado}
+                  onChange={(e) => setForm({ ...form, resultado: e.target.value as Entrevista["resultado"] })}>
+                  <option value="Pendiente">Pendiente</option>
+                  <option value="Aprobado">Aprobado</option>
+                  <option value="Rechazado">Rechazado</option>
+                </select>
+              </label>
+            </div>
+          ) : (
+            <p className="text-xs text-[var(--muted)]">Estado y resultado quedan disponibles después de guardar (también editables desde la lista del día).</p>
+          )}
+          <textarea
+            className={`${input} w-full`}
+            placeholder="Comentarios y evaluación: experiencia, fortalezas, disponibilidad, observaciones y motivo del resultado (opcional)"
+            aria-label="Comentarios y evaluación de la entrevista"
+            rows={4}
+            value={form.notas}
+            onChange={(e) => setForm({ ...form, notas: e.target.value })}
+          />
+        </fieldset>
+
+        <fieldset className="space-y-2">
+          <legend className="text-sm font-semibold text-[var(--muted)]">DOCUMENTOS</legend>
+          {editandoId ? (
+            <EntrevistaDocumentos slug={slug} entrevistaId={editandoId} />
+          ) : (
+            <p className="text-xs text-[var(--muted)]">Guarde primero la entrevista para habilitar la papelería del candidato.</p>
+          )}
+        </fieldset>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm text-white disabled:opacity-50" disabled={guardando}>
+            {guardando ? "Guardando…" : editandoId ? "Guardar cambios" : "Programar entrevista"}
           </button>
           {editandoId ? (
-            <button
-              type="button"
-              className="rounded border border-[var(--border)] px-3 py-1 text-sm"
-              onClick={() => {
-                setForm(vacio());
-                setEditandoId(null);
-              }}
-            >
+            <button type="button" className="rounded border border-[var(--border)] px-3 py-1.5 text-sm" onClick={cancelarEdicion}>
               Cancelar edición
             </button>
           ) : null}
+          {error ? <p role="alert" className="text-sm text-red-300">{error}</p> : null}
+          {msg ? <p role="status" className="text-sm text-emerald-300">{msg}</p> : null}
         </div>
-        {msg ? <p className="text-sm text-emerald-300">{msg}</p> : null}
       </form>
+
       {expedienteId ? (
         <ExpedienteCandidato slug={slug} entrevistaId={expedienteId} onClose={() => setExpedienteId(null)} />
       ) : null}
