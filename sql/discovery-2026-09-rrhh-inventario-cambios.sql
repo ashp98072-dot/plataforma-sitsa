@@ -1,0 +1,97 @@
+-- DISCOVERY (solo lectura / documentación) — RRHH-INVENTARIO-CAMBIOS-1
+-- Devolución y cambio de artículo sobre una entrega ya realizada.
+-- Este archivo NO se ejecuta contra producción: documenta lo encontrado
+-- durante el discovery y por qué el diseño elegido (ver
+-- sql/migrate-2026-09-rrhh-inventario-cambios.sql) requiere solo UNA tabla
+-- nueva, sin ALTER TABLE sobre ninguna tabla existente.
+--
+-- ============================================================================
+-- 1. inventario_rrhh_movimientos.tipo — VARCHAR(20) SIN lista cerrada (sin
+--    ENUM, sin CHECK). El propio comentario de la tabla ya lo advierte:
+--    "columna VARCHAR sin lista cerrada, no requieren migración nueva para
+--    agregarse". Confirmado: no hace falta ALTER TABLE para agregar los
+--    tipos DEVOLUCION / CAMBIO_SALIDA — basta con escribirlos desde la
+--    aplicación (mismo criterio ya usado para agregar 'SALIDA' en Fase
+--    INV-1, que tampoco requirió ALTER).
+--
+-- 2. inventario_rrhh_entregas.estado — también VARCHAR(20) sin lista
+--    cerrada, DEFAULT 'ENTREGADO'. NO se necesita ALTER TABLE ni tampoco
+--    escribir nuevos valores en esta columna: el diseño elegido NUNCA
+--    actualiza la fila de la entrega original (permanece 100% append-only,
+--    tal como exige el ticket) — el estado visual (ENTREGADO /
+--    PARCIALMENTE DEVUELTO / DEVUELTO / CAMBIADO PARCIAL / CAMBIADO) se
+--    CALCULA en la aplicación a partir de `cantidad` menos la suma de
+--    `inventario_rrhh_ajustes.cantidad` para esa entrega — ver
+--    src/lib/rrhh/inventario-ajustes.ts (calcularEstadoEntrega). La columna
+--    `estado` de la fila original queda literalmente como quedó al
+--    crearse, siempre 'ENTREGADO'.
+--
+-- 3. rrhh_descuentos_maestro / rrhh_descuento_cuotas — motor D1/D2 ya
+--    existente (src/lib/rrhh/descuentos.ts). Funciones reutilizables sin
+--    modificar su schema ni su lógica:
+--      - cancelarDescuentoInterno / cancelarDescuento: cancela un
+--        descuento ACTIVO/PAUSADO/BORRADOR, cancela solo cuotas PENDIENTE
+--        (nunca toca APLICADA/OMITIDA/CANCELADA).
+--      - recalcularCuotasFuturas: redistribuye el SALDO PENDIENTE
+--        (monto_original - pagado) entre un nuevo número de cuotas,
+--        eliminando y regenerando SOLO las cuotas PENDIENTE. Nunca toca
+--        monto_original de rrhh_descuentos_maestro ni cuotas ya APLICADA.
+--
+--    HALLAZGO CRÍTICO: ninguna función existente permite cambiar el
+--    monto_original de un descuento ACTIVO (aumentar o disminuir la deuda
+--    total) de forma segura — recalcularCuotasFuturas solo redistribuye el
+--    saldo YA calculado desde el monto_original ORIGINAL, nunca lo
+--    modifica. Por eso, y siguiendo la instrucción explícita del ticket
+--    ("si no existe un mecanismo seguro... NO improvisar"), el diseño
+--    elegido:
+--      a) Cuando la entrega original NO generó cobro (monto_cobrado = 0):
+--         el cambio de artículo se permite siempre, sin tocar ningún
+--         descuento (no hay nada que tocar).
+--      b) Cuando SÍ generó cobro y el artículo nuevo cuesta EXACTAMENTE
+--         igual (por unidad) que el original: se permite el cambio; el
+--         descuento original NO se toca (la deuda ya cubre exactamente lo
+--         que ahora tiene el empleado) — nunca se crea un segundo
+--         descuento ni se duplica el cobro.
+--      c) Cuando SÍ generó cobro y el artículo nuevo cuesta distinto: se
+--         RECHAZA el cambio (400/409, "requiere ajuste manual del
+--         descuento en RRHH > Descuentos") sin tocar stock, entrega ni
+--         descuento — queda como Fase 2 explícita (un helper dedicado
+--         tipo `ajustarMontoDescuentoActivo` que sí sepa cambiar
+--         monto_original preservando cuotas ya aplicadas, con sus propias
+--         pruebas). Los pagos históricos (cuotas APLICADA) nunca se tocan
+--         en ningún escenario de este PR.
+--
+-- ============================================================================
+-- CONCLUSIÓN: se requiere UNA tabla nueva — inventario_rrhh_ajustes — que
+-- registra cada devolución/cambio (append-only, referencia explícita a la
+-- entrega original, al artículo nuevo cuando aplica, y a los movimientos de
+-- stock generados). Ver sql/migrate-2026-09-rrhh-inventario-cambios.sql.
+-- Ningún ALTER TABLE sobre inventario_rrhh, inventario_rrhh_movimientos,
+-- inventario_rrhh_entregas, rrhh_descuentos_maestro ni rrhh_descuento_cuotas.
+--
+-- ============================================================================
+-- 4. CORRECCIÓN POST-REVISIÓN — cadenas de cambios (S -> M -> L)
+-- ============================================================================
+-- Un CAMBIO crea una entrega NUEVA con monto_cobrado = 0 y descuento_id =
+-- NULL (para no duplicar el cobro). Eso es correcto para ESA entrega, pero
+-- un SEGUNDO cambio sobre esa entrega derivada (M -> L) que solo mirara
+-- `entrega.monto_cobrado` la vería "sin cobro" aunque la deuda real de la
+-- entrega RAÍZ (S) le siga pisando los talones — perdiendo el contexto
+-- financiero real de la cadena.
+--
+-- Corregido con resolverOrigenFinancieroTx() (src/lib/rrhh/inventario.ts):
+-- camina inventario_rrhh_ajustes.entrega_nueva_id hacia atrás hasta
+-- encontrar la entrega RAÍZ (la que nunca fue "entrega_nueva_id" de ningún
+-- ajuste) y usa SU monto_cobrado/costo_unitario_entrega/descuento_id como
+-- referencia real — tanto en registrarCambio() (compatibilidad de precio)
+-- como en registrarDevolucion() (que ahora BLOQUEA, motivo
+-- `devolucion_con_cobro_requiere_ajuste`, 409, si la entrega o su origen
+-- financiero tienen cobro — devolver stock físico mientras la deuda sigue
+-- viva es exactamente la inconsistencia que este ticket pide evitar).
+--
+-- Índice agregado para esa consulta (un salto de cadena por llamada):
+-- idx_ajustes_entrega_nueva (empresa_id, entrega_nueva_id).
+--
+-- Protecciones: cada lectura de la cadena filtra por empresa_id (tenant);
+-- límite duro de 50 saltos + Set de visitados (ciclos) — lanza un Error
+-- explícito en vez de un loop infinito silencioso.

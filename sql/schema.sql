@@ -526,6 +526,34 @@ CREATE TABLE IF NOT EXISTS inventario_rrhh_entregas (
   CONSTRAINT fk_entregas_movimiento FOREIGN KEY (movimiento_id) REFERENCES inventario_rrhh_movimientos(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- RRHH-INVENTARIO-CAMBIOS-1: devolución/cambio de artículo sobre una entrega
+-- ya realizada. Append-only — nunca se actualiza inventario_rrhh_entregas.
+-- Ver sql/discovery-2026-09-rrhh-inventario-cambios.sql para el análisis
+-- completo (por qué no hace falta ALTER TABLE en ninguna tabla existente).
+CREATE TABLE IF NOT EXISTS inventario_rrhh_ajustes (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  entrega_id INT NOT NULL,
+  tipo VARCHAR(20) NOT NULL, -- DEVOLUCION | CAMBIO
+  cantidad INT NOT NULL,
+  articulo_nuevo_id INT NULL,
+  entrega_nueva_id INT NULL,
+  movimiento_salida_id INT NULL,
+  movimiento_devolucion_id INT NOT NULL,
+  motivo VARCHAR(300) NOT NULL,
+  registrado_por VARCHAR(100) NULL,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_ajustes_entrega (empresa_id, entrega_id),
+  UNIQUE KEY uq_ajustes_entrega_nueva (empresa_id, entrega_nueva_id),
+  INDEX idx_ajustes_empresa (empresa_id, creado_en),
+  CONSTRAINT fk_ajustes_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
+  CONSTRAINT fk_ajustes_entrega FOREIGN KEY (entrega_id) REFERENCES inventario_rrhh_entregas(id) ON DELETE RESTRICT,
+  CONSTRAINT fk_ajustes_articulo_nuevo FOREIGN KEY (articulo_nuevo_id) REFERENCES inventario_rrhh(id) ON DELETE RESTRICT,
+  CONSTRAINT fk_ajustes_entrega_nueva FOREIGN KEY (entrega_nueva_id) REFERENCES inventario_rrhh_entregas(id) ON DELETE SET NULL,
+  CONSTRAINT fk_ajustes_mov_devolucion FOREIGN KEY (movimiento_devolucion_id) REFERENCES inventario_rrhh_movimientos(id) ON DELETE RESTRICT,
+  CONSTRAINT fk_ajustes_mov_salida FOREIGN KEY (movimiento_salida_id) REFERENCES inventario_rrhh_movimientos(id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS vacaciones (
   id INT AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
 
 type Articulo = {
@@ -17,12 +17,20 @@ type Articulo = {
 type Movimiento = {
   id: number;
   articuloId: number;
-  tipo: "ENTRADA" | "AJUSTE" | "SALIDA";
+  tipo: "ENTRADA" | "AJUSTE" | "SALIDA" | "DEVOLUCION" | "CAMBIO_SALIDA";
   cantidad: number;
   stockResultante: number;
   motivo: string | null;
   registradoPor: string | null;
   creadoEn: string;
+};
+
+const ETIQUETA_MOVIMIENTO: Record<Movimiento["tipo"], string> = {
+  ENTRADA: "Entrada",
+  SALIDA: "Salida (entrega)",
+  AJUSTE: "Ajuste",
+  DEVOLUCION: "Devolución",
+  CAMBIO_SALIDA: "Salida (cambio)",
 };
 
 type EmpleadoBusqueda = { id: number; codigo: string; nombre: string };
@@ -35,6 +43,19 @@ const PERIODICIDADES_ENTREGA = [
   { value: "UNA_VEZ", label: "Una vez" },
 ] as const;
 type PeriodicidadEntrega = (typeof PERIODICIDADES_ENTREGA)[number]["value"];
+
+type AjusteEntrega = {
+  id: number;
+  entregaId: number;
+  tipo: "DEVOLUCION" | "CAMBIO";
+  cantidad: number;
+  articuloNuevoId: number | null;
+  articuloNuevoNombre: string | null;
+  entregaNuevaId: number | null;
+  motivo: string;
+  registradoPor: string | null;
+  creadoEn: string;
+};
 
 type Entrega = {
   id: number;
@@ -52,6 +73,8 @@ type Entrega = {
   motivo: string | null;
   entregadoPor: string | null;
   estado: string;
+  cantidadDisponible: number;
+  ajustes: AjusteEntrega[];
   creadoEn: string;
 };
 
@@ -104,6 +127,21 @@ export default function InventarioRrhhPage() {
   const [enviandoEntrega, setEnviandoEntrega] = useState(false);
 
   const [entregas, setEntregas] = useState<Entrega[]>([]);
+  const [detalleAbierto, setDetalleAbierto] = useState<number | null>(null);
+
+  // RRHH-INVENTARIO-CAMBIOS-1: devolver
+  const [devolverEntrega, setDevolverEntrega] = useState<Entrega | null>(null);
+  const [cantidadDevolver, setCantidadDevolver] = useState("1");
+  const [motivoDevolver, setMotivoDevolver] = useState("");
+  const [enviandoDevolver, setEnviandoDevolver] = useState(false);
+
+  // RRHH-INVENTARIO-CAMBIOS-1: cambiar
+  const [cambiarEntrega, setCambiarEntrega] = useState<Entrega | null>(null);
+  const [cantidadCambiar, setCantidadCambiar] = useState("1");
+  const [busquedaArticuloNuevo, setBusquedaArticuloNuevo] = useState("");
+  const [articuloNuevoSel, setArticuloNuevoSel] = useState<Articulo | null>(null);
+  const [motivoCambiar, setMotivoCambiar] = useState("");
+  const [enviandoCambiar, setEnviandoCambiar] = useState(false);
 
   const cargarEntregas = useCallback(async () => {
     const res = await fetch(`/api/empresas/${slug}/rrhh/inventario/entregas`);
@@ -311,6 +349,143 @@ export default function InventarioRrhhPage() {
     }
   }
 
+  // RRHH-INVENTARIO-CAMBIOS-1 — devolver -----------------------------------
+
+  function abrirDevolver(ent: Entrega) {
+    setDevolverEntrega(ent);
+    setCantidadDevolver(String(Math.max(1, ent.cantidadDisponible)));
+    setMotivoDevolver("");
+    setError("");
+    setMensaje("");
+  }
+
+  function cerrarDevolver() {
+    setDevolverEntrega(null);
+  }
+
+  const cantidadDevolverNum = Number(cantidadDevolver) || 0;
+  const devolverExcedeDisponible =
+    Boolean(devolverEntrega) && cantidadDevolverNum > (devolverEntrega?.cantidadDisponible ?? 0);
+
+  async function enviarDevolver(e: FormEvent) {
+    e.preventDefault();
+    if (!devolverEntrega) return;
+    if (!motivoDevolver.trim()) {
+      setError("Indica el motivo de la devolución.");
+      return;
+    }
+    if (devolverExcedeDisponible || cantidadDevolverNum <= 0) {
+      setError("La cantidad a devolver no es válida.");
+      return;
+    }
+    setError("");
+    setMensaje("");
+    setEnviandoDevolver(true);
+    try {
+      const res = await fetch(
+        `/api/empresas/${slug}/rrhh/inventario/entregas/${devolverEntrega.id}/devolver`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cantidad: cantidadDevolverNum, motivo: motivoDevolver.trim() }),
+        },
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "No se pudo registrar la devolución.");
+        return;
+      }
+      setMensaje(data.mensaje || "Devolución registrada.");
+      cerrarDevolver();
+      await cargar();
+      await cargarEntregas();
+    } finally {
+      setEnviandoDevolver(false);
+    }
+  }
+
+  // RRHH-INVENTARIO-CAMBIOS-1 — cambiar -------------------------------------
+
+  function abrirCambiar(ent: Entrega) {
+    setCambiarEntrega(ent);
+    setCantidadCambiar(String(Math.max(1, ent.cantidadDisponible)));
+    setBusquedaArticuloNuevo("");
+    setArticuloNuevoSel(null);
+    setMotivoCambiar("");
+    setError("");
+    setMensaje("");
+  }
+
+  function cerrarCambiar() {
+    setCambiarEntrega(null);
+  }
+
+  const cantidadCambiarNum = Number(cantidadCambiar) || 0;
+  const cambiarExcedeDisponible =
+    Boolean(cambiarEntrega) && cantidadCambiarNum > (cambiarEntrega?.cantidadDisponible ?? 0);
+  // Búsqueda del artículo nuevo: sobre el catálogo YA cargado (`items`) — cada
+  // talla/variante es un artículo separado, así que se busca por código o
+  // nombre, nunca limitado a "mismo nombre" (ej. Playera Monaco S -> M).
+  const candidatosArticuloNuevo =
+    cambiarEntrega && busquedaArticuloNuevo.trim()
+      ? items.filter(
+          (it) =>
+            it.id !== cambiarEntrega.articuloId &&
+            (it.nombre.toLowerCase().includes(busquedaArticuloNuevo.trim().toLowerCase()) ||
+              it.codigo.toLowerCase().includes(busquedaArticuloNuevo.trim().toLowerCase())),
+        )
+      : [];
+  const costoOriginalCambio = cambiarEntrega?.costoUnitarioEntrega ?? 0;
+  const costoNuevoCambio = articuloNuevoSel?.costoUnitario ?? 0;
+  const diferenciaCambio = Math.round((costoNuevoCambio - costoOriginalCambio) * 100) / 100;
+  const huboCobroCambio = Boolean(cambiarEntrega && cambiarEntrega.montoCobrado > 0);
+  const diferenciaPrecioConCobroHistorico = huboCobroCambio && Math.abs(diferenciaCambio) > 0.005;
+
+  async function enviarCambiar(e: FormEvent) {
+    e.preventDefault();
+    if (!cambiarEntrega) return;
+    if (!articuloNuevoSel) {
+      setError("Selecciona el artículo nuevo.");
+      return;
+    }
+    if (!motivoCambiar.trim()) {
+      setError("Indica el motivo del cambio.");
+      return;
+    }
+    if (cambiarExcedeDisponible || cantidadCambiarNum <= 0) {
+      setError("La cantidad a cambiar no es válida.");
+      return;
+    }
+    setError("");
+    setMensaje("");
+    setEnviandoCambiar(true);
+    try {
+      const res = await fetch(
+        `/api/empresas/${slug}/rrhh/inventario/entregas/${cambiarEntrega.id}/cambiar`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            cantidad: cantidadCambiarNum,
+            articuloNuevoId: articuloNuevoSel.id,
+            motivo: motivoCambiar.trim(),
+          }),
+        },
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "No se pudo registrar el cambio.");
+        return;
+      }
+      setMensaje(data.mensaje || "Cambio registrado.");
+      cerrarCambiar();
+      await cargar();
+      await cargarEntregas();
+    } finally {
+      setEnviandoCambiar(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -427,7 +602,7 @@ export default function InventarioRrhhPage() {
           </thead>
           <tbody className="divide-y divide-[var(--border)]">
             {items.map((it) => (
-              <tr key={it.id}>
+              <tr key={it.id} className="transition-colors hover:bg-[var(--nav-hover)]">
                 <td className="px-3 py-2">{it.codigo}</td>
                 <td className="px-3 py-2">{it.nombre}</td>
                 <td className="px-3 py-2">{it.categoria || "—"}</td>
@@ -544,16 +719,10 @@ export default function InventarioRrhhPage() {
                 {movimientos.map((m) => (
                   <div
                     key={m.id}
-                    className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm"
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-lg px-2 py-2 text-sm transition-colors hover:bg-[var(--nav-hover)]"
                   >
                     <div>
-                      <span className="font-medium">
-                        {m.tipo === "ENTRADA"
-                          ? "Entrada"
-                          : m.tipo === "SALIDA"
-                            ? "Salida (entrega)"
-                            : "Ajuste"}
-                      </span>{" "}
+                      <span className="font-medium">{ETIQUETA_MOVIMIENTO[m.tipo] ?? m.tipo}</span>{" "}
                       <span
                         className={
                           m.cantidad >= 0 ? "text-emerald-400" : "text-red-400"
@@ -763,6 +932,213 @@ export default function InventarioRrhhPage() {
         </section>
       ) : null}
 
+      {devolverEntrega ? (
+        <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">
+              Devolver — Entrega #{devolverEntrega.id}
+            </h2>
+            <button type="button" onClick={cerrarDevolver} className="text-sm text-[var(--muted)]">
+              Cerrar
+            </button>
+          </div>
+          <form onSubmit={enviarDevolver} className="mt-4 space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <span className="text-sm text-[var(--muted)]">Empleado</span>
+                <p className="mt-1 font-medium">
+                  {devolverEntrega.empleadoCodigo} — {devolverEntrega.empleadoNombre}
+                </p>
+              </div>
+              <div>
+                <span className="text-sm text-[var(--muted)]">Artículo</span>
+                <p className="mt-1 font-medium">
+                  {devolverEntrega.articuloCodigo} — {devolverEntrega.articuloNombre}
+                </p>
+              </div>
+              <div>
+                <span className="text-sm text-[var(--muted)]">Cantidad original</span>
+                <p className="mt-1 font-medium">{devolverEntrega.cantidad}</p>
+              </div>
+              <div>
+                <span className="text-sm text-[var(--muted)]">Cantidad disponible</span>
+                <p className="mt-1 font-medium">{devolverEntrega.cantidadDisponible}</p>
+              </div>
+            </div>
+
+            <label>
+              <span className="text-sm text-[var(--muted)]">Cantidad a devolver</span>
+              <input
+                type="number"
+                min="1"
+                max={devolverEntrega.cantidadDisponible}
+                className={input}
+                value={cantidadDevolver}
+                onChange={(e) => setCantidadDevolver(e.target.value)}
+                required
+              />
+            </label>
+            {devolverExcedeDisponible ? (
+              <p className="text-sm text-red-400">
+                No puede superar lo disponible ({devolverEntrega.cantidadDisponible}).
+              </p>
+            ) : null}
+
+            <label>
+              <span className="text-sm text-[var(--muted)]">Motivo (obligatorio)</span>
+              <input
+                className={input}
+                value={motivoDevolver}
+                onChange={(e) => setMotivoDevolver(e.target.value)}
+                placeholder="Talla incorrecta, artículo no utilizado, reposición…"
+                required
+              />
+            </label>
+
+            <button
+              disabled={enviandoDevolver || devolverExcedeDisponible || cantidadDevolverNum <= 0}
+              className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+            >
+              {enviandoDevolver ? "Registrando…" : "Confirmar devolución"}
+            </button>
+          </form>
+        </section>
+      ) : null}
+
+      {cambiarEntrega ? (
+        <section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">
+              Cambiar — Entrega #{cambiarEntrega.id}
+            </h2>
+            <button type="button" onClick={cerrarCambiar} className="text-sm text-[var(--muted)]">
+              Cerrar
+            </button>
+          </div>
+          <form onSubmit={enviarCambiar} className="mt-4 space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <span className="text-sm text-[var(--muted)]">Empleado</span>
+                <p className="mt-1 font-medium">
+                  {cambiarEntrega.empleadoCodigo} — {cambiarEntrega.empleadoNombre}
+                </p>
+              </div>
+              <div>
+                <span className="text-sm text-[var(--muted)]">Artículo original</span>
+                <p className="mt-1 font-medium">
+                  {cambiarEntrega.articuloCodigo} — {cambiarEntrega.articuloNombre}
+                </p>
+              </div>
+              <div>
+                <span className="text-sm text-[var(--muted)]">Cantidad disponible</span>
+                <p className="mt-1 font-medium">{cambiarEntrega.cantidadDisponible}</p>
+              </div>
+              <label>
+                <span className="text-sm text-[var(--muted)]">Cantidad a cambiar</span>
+                <input
+                  type="number"
+                  min="1"
+                  max={cambiarEntrega.cantidadDisponible}
+                  className={input}
+                  value={cantidadCambiar}
+                  onChange={(e) => setCantidadCambiar(e.target.value)}
+                  required
+                />
+              </label>
+            </div>
+            {cambiarExcedeDisponible ? (
+              <p className="text-sm text-red-400">
+                No puede superar lo disponible ({cambiarEntrega.cantidadDisponible}).
+              </p>
+            ) : null}
+
+            <div>
+              <span className="text-sm text-[var(--muted)]">Artículo nuevo</span>
+              <input
+                className={input}
+                placeholder="Buscar por código o nombre (ej. Playera Monaco M)"
+                value={busquedaArticuloNuevo}
+                onChange={(e) => {
+                  setBusquedaArticuloNuevo(e.target.value);
+                  setArticuloNuevoSel(null);
+                }}
+              />
+              {articuloNuevoSel ? (
+                <p className="mt-1 text-sm text-emerald-400">
+                  Seleccionado: {articuloNuevoSel.codigo} — {articuloNuevoSel.nombre} · stock{" "}
+                  {articuloNuevoSel.stock}
+                </p>
+              ) : candidatosArticuloNuevo.length > 0 ? (
+                <div className="mt-1 max-h-40 overflow-y-auto rounded-lg border border-[var(--border)]">
+                  {candidatosArticuloNuevo.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className="block w-full px-3 py-2 text-left text-sm hover:bg-[var(--nav-hover)]"
+                      onClick={() => {
+                        setArticuloNuevoSel(c);
+                        setBusquedaArticuloNuevo(`${c.codigo} — ${c.nombre}`);
+                      }}
+                    >
+                      {c.codigo} — {c.nombre} · stock {c.stock}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
+            {articuloNuevoSel ? (
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div>
+                  <span className="text-sm text-[var(--muted)]">Costo original</span>
+                  <p className="mt-1 font-medium">{formatQ(costoOriginalCambio)}</p>
+                </div>
+                <div>
+                  <span className="text-sm text-[var(--muted)]">Costo nuevo</span>
+                  <p className="mt-1 font-medium">{formatQ(costoNuevoCambio)}</p>
+                </div>
+                <div>
+                  <span className="text-sm text-[var(--muted)]">Diferencia</span>
+                  <p className={`mt-1 font-medium ${diferenciaPrecioConCobroHistorico ? "text-amber-400" : ""}`}>
+                    {formatQ(diferenciaCambio)}
+                  </p>
+                </div>
+              </div>
+            ) : null}
+            {diferenciaPrecioConCobroHistorico ? (
+              <p className="text-sm text-amber-400">
+                Hay un cobro histórico y el precio es distinto. Si el descuento sigue activo,
+                cancélalo o regularízalo primero; si fue cancelado con movimientos aplicados,
+                se requiere revisión manual. El servidor verificará el estado financiero al guardar.
+              </p>
+            ) : null}
+
+            <label>
+              <span className="text-sm text-[var(--muted)]">Motivo (obligatorio)</span>
+              <input
+                className={input}
+                value={motivoCambiar}
+                onChange={(e) => setMotivoCambiar(e.target.value)}
+                placeholder="Talla incorrecta, reposición…"
+                required
+              />
+            </label>
+
+            <button
+              disabled={
+                enviandoCambiar ||
+                cambiarExcedeDisponible ||
+                cantidadCambiarNum <= 0 ||
+                !articuloNuevoSel
+              }
+              className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+            >
+              {enviandoCambiar ? "Registrando…" : "Confirmar cambio"}
+            </button>
+          </form>
+        </section>
+      ) : null}
+
       <section className="space-y-2">
         <h2 className="text-lg font-semibold">Historial de entregas</h2>
         <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
@@ -777,35 +1153,88 @@ export default function InventarioRrhhPage() {
                 <th className="px-3 py-2 text-right">Monto cobrado</th>
                 <th className="px-3 py-2">Estado</th>
                 <th className="px-3 py-2">Descuento</th>
+                <th className="px-3 py-2">Acciones</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--border)]">
               {entregas.map((e) => (
-                <tr key={e.id}>
-                  <td className="px-3 py-2">
-                    {e.empleadoCodigo} — {e.empleadoNombre}
-                  </td>
-                  <td className="px-3 py-2">
-                    {e.articuloCodigo} — {e.articuloNombre}
-                  </td>
-                  <td className="px-3 py-2 text-right">{e.cantidad}</td>
-                  <td className="px-3 py-2">
-                    {e.creadoEn.replace("T", " ").slice(0, 16)}
-                  </td>
-                  <td className="px-3 py-2 text-right">{formatQ(e.costoTotal)}</td>
-                  <td className="px-3 py-2 text-right">
-                    {e.descuentoId ? formatQ(e.montoCobrado) : "—"}
-                  </td>
-                  <td className="px-3 py-2">{e.estado}</td>
-                  <td className="px-3 py-2 text-xs">
-                    {e.descuentoId ? `#${e.descuentoId}` : "Sin cobro"}
-                  </td>
-                </tr>
+                <Fragment key={e.id}>
+                  <tr className="transition-colors hover:bg-[var(--nav-hover)]">
+                    <td className="px-3 py-2">
+                      {e.empleadoCodigo} — {e.empleadoNombre}
+                    </td>
+                    <td className="px-3 py-2">
+                      {e.articuloCodigo} — {e.articuloNombre}
+                    </td>
+                    <td className="px-3 py-2 text-right">{e.cantidad}</td>
+                    <td className="px-3 py-2">
+                      {e.creadoEn.replace("T", " ").slice(0, 16)}
+                    </td>
+                    <td className="px-3 py-2 text-right">{formatQ(e.costoTotal)}</td>
+                    <td className="px-3 py-2 text-right">
+                      {e.descuentoId ? formatQ(e.montoCobrado) : "—"}
+                    </td>
+                    <td className="px-3 py-2">
+                      {e.estado}
+                      {e.ajustes.length > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => setDetalleAbierto((v) => (v === e.id ? null : e.id))}
+                          className="ml-2 text-xs text-[var(--accent)] underline"
+                        >
+                          {detalleAbierto === e.id ? "Ocultar detalle" : "Ver detalle"}
+                        </button>
+                      ) : null}
+                    </td>
+                    <td className="px-3 py-2 text-xs">
+                      {e.descuentoId ? `#${e.descuentoId}` : "Sin cobro"}
+                    </td>
+                    <td className="px-3 py-2 text-right whitespace-nowrap">
+                      {e.cantidadDisponible > 0 ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => abrirDevolver(e)}
+                            className="mr-3 text-xs text-[var(--accent)] underline"
+                          >
+                            Devolver
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => abrirCambiar(e)}
+                            className="text-xs text-[var(--accent)] underline"
+                          >
+                            Cambiar
+                          </button>
+                        </>
+                      ) : (
+                        <span className="text-xs text-[var(--muted)]">—</span>
+                      )}
+                    </td>
+                  </tr>
+                  {detalleAbierto === e.id ? (
+                    <tr>
+                      <td colSpan={9} className="bg-[var(--input)] px-3 py-2">
+                        <ul className="space-y-1 text-xs text-[var(--muted)]">
+                          {e.ajustes.map((a) => (
+                            <li key={a.id}>
+                              {a.tipo === "CAMBIO"
+                                ? `Cambio: ${a.cantidad} × ${e.articuloNombre} → ${a.articuloNuevoNombre ?? "?"} (entrega #${a.entregaNuevaId})`
+                                : `Devolución: ${a.cantidad} × ${e.articuloNombre}`}{" "}
+                              · motivo: {a.motivo} · {a.registradoPor ?? ""} ·{" "}
+                              {a.creadoEn.replace("T", " ").slice(0, 16)}
+                            </li>
+                          ))}
+                        </ul>
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
               ))}
               {entregas.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={8}
+                    colSpan={9}
                     className="px-3 py-6 text-center text-[var(--muted)]"
                   >
                     Sin entregas todavía.
