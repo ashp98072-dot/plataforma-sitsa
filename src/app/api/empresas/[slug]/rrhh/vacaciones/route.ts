@@ -9,6 +9,7 @@ import {
   registrarIncidenciaSinSaldo,
   registrarVacacionesFifo,
 } from "@/lib/rrhh/vacaciones";
+import { TIPOS_VACACIONES } from "@/lib/rrhh/vacaciones-eliminar-ui";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -17,16 +18,61 @@ const TIPOS_CON_SALDO = new Set([
   "A cuenta de Vacaciones",
 ]);
 
+/**
+ * RRHH-VACACIONES-FILTROS-HISTORIAL-1 — GET acepta empleadoId/tipo/desde/hasta, todos OPCIONALES e independientes:
+ * `empleadoId` sigue siendo también el que decide si se calcula saldo/periodos (comportamiento sin cambios cuando no
+ * se manda ningún filtro nuevo). El frontend hace DOS llamadas separadas — una con el empleado del FORMULARIO (para
+ * saldo/periodos, ignora `vacaciones`) y otra con los filtros del HISTORIAL (ignora saldo/periodos) — así nunca se
+ * mezclan esas dos responsabilidades. Validación aquí, nunca solo en el cliente.
+ *
+ * AJUSTE PR #376 (punto 1) — `soloResumen=1` (exige `empleadoId`): la llamada de saldo/periodos del formulario deja
+ * de ejecutar `listarVacaciones()` (y por lo tanto el conteo de evidencias del historial completo) por completo.
+ * Antes, cargar la página hacía ese trabajo dos veces (una para saldo/periodos, ignorando `vacaciones`; otra real
+ * para el historial) — con `soloResumen=1` la primera llamada ya no toca el historial en absoluto.
+ */
+const filtrosSchema = z.object({
+  empleadoId: z.coerce.number().int().positive().max(2147483647).optional(),
+  tipo: z.enum(TIPOS_VACACIONES).optional(),
+  desde: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  hasta: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  soloResumen: z.enum(["1"]).optional(),
+}).refine((v) => !v.desde || !v.hasta || v.desde <= v.hasta, { message: "El rango de fechas no es válido." })
+  .refine((v) => !v.soloResumen || v.empleadoId, { message: "soloResumen requiere empleadoId." });
+
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenantRrhh(slug, "vacaciones", "ver");
   if (guard.error) return guard.error;
 
   const url = new URL(req.url);
-  const empleadoId = Number(url.searchParams.get("empleadoId") ?? "0");
-  const vacaciones = await listarVacaciones(guard.empresa.id);
+  const crudo = Object.fromEntries(
+    ["empleadoId", "tipo", "desde", "hasta", "soloResumen"]
+      .map((c) => [c, url.searchParams.get(c)])
+      .filter(([, v]) => v !== null && v !== ""),
+  );
+  const parsed = filtrosSchema.safeParse(crudo);
+  if (!parsed.success) {
+    return NextResponse.json({ error: "Filtros inválidos." }, { status: 400 });
+  }
+  const { empleadoId, tipo, desde, hasta, soloResumen } = parsed.data;
 
-  if (empleadoId > 0) {
+  if (soloResumen && empleadoId) {
+    try {
+      const saldo = await calcularSaldoTotalDisponible(guard.empresa.id, empleadoId);
+      const periodos = await obtenerPeriodosDisponibles(guard.empresa.id, empleadoId);
+      return NextResponse.json({ saldo, periodos });
+    } catch {
+      return NextResponse.json({
+        saldo: null,
+        periodos: [],
+        aviso: "Importa sql/migrate-2026-08-rrhh-core.sql para saldos FIFO.",
+      });
+    }
+  }
+
+  const vacaciones = await listarVacaciones(guard.empresa.id, { empleadoId, tipo, desde, hasta });
+
+  if (empleadoId) {
     try {
       const saldo = await calcularSaldoTotalDisponible(
         guard.empresa.id,
