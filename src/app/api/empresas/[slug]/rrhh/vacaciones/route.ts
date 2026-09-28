@@ -9,6 +9,7 @@ import {
   registrarIncidenciaSinSaldo,
   registrarVacacionesFifo,
 } from "@/lib/rrhh/vacaciones";
+import { TIPOS_VACACIONES } from "@/lib/rrhh/vacaciones-eliminar-ui";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -17,16 +18,39 @@ const TIPOS_CON_SALDO = new Set([
   "A cuenta de Vacaciones",
 ]);
 
+/**
+ * RRHH-VACACIONES-FILTROS-HISTORIAL-1 — GET acepta empleadoId/tipo/desde/hasta, todos OPCIONALES e independientes:
+ * `empleadoId` sigue siendo también el que decide si se calcula saldo/periodos (comportamiento sin cambios cuando no
+ * se manda ningún filtro nuevo). El frontend hace DOS llamadas separadas — una con el empleado del FORMULARIO (para
+ * saldo/periodos, ignora `vacaciones`) y otra con los filtros del HISTORIAL (ignora saldo/periodos) — así nunca se
+ * mezclan esas dos responsabilidades. Validación aquí, nunca solo en el cliente.
+ */
+const filtrosSchema = z.object({
+  empleadoId: z.coerce.number().int().positive().max(2147483647).optional(),
+  tipo: z.enum(TIPOS_VACACIONES).optional(),
+  desde: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  hasta: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+}).refine((v) => !v.desde || !v.hasta || v.desde <= v.hasta, { message: "El rango de fechas no es válido." });
+
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenantRrhh(slug, "vacaciones", "ver");
   if (guard.error) return guard.error;
 
   const url = new URL(req.url);
-  const empleadoId = Number(url.searchParams.get("empleadoId") ?? "0");
-  const vacaciones = await listarVacaciones(guard.empresa.id);
+  const crudo = Object.fromEntries(
+    ["empleadoId", "tipo", "desde", "hasta"]
+      .map((c) => [c, url.searchParams.get(c)])
+      .filter(([, v]) => v !== null && v !== ""),
+  );
+  const parsed = filtrosSchema.safeParse(crudo);
+  if (!parsed.success) {
+    return NextResponse.json({ error: "Filtros inválidos." }, { status: 400 });
+  }
+  const { empleadoId, tipo, desde, hasta } = parsed.data;
+  const vacaciones = await listarVacaciones(guard.empresa.id, { empleadoId, tipo, desde, hasta });
 
-  if (empleadoId > 0) {
+  if (empleadoId) {
     try {
       const saldo = await calcularSaldoTotalDisponible(
         guard.empresa.id,
