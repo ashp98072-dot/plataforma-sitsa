@@ -5,6 +5,13 @@ const nextConfig: NextConfig = {
   // Hostinger CDN a veces trunca respuestas gzip/zstd grandes → pantalla blanca.
   // Desactivar compresión de Next; el proxy puede recomprimir de forma más estable.
   compress: false,
+  // HOTFIX HOSTINGER (TurbopackInternalError en globals.css) — Turbopack evalúa los loaders de PostCSS/Tailwind por
+  // defecto en procesos hijo ("childProcesses"); en Hostinger ese proceso hijo termina con exit status 0 antes de que
+  // Turbopack pueda conectarse a él, y el build entero falla. "workerThreads" evalúa esos loaders dentro del mismo
+  // proceso de Node, sin depender de poder crear/conectar procesos hijo. Next 16.2.12 admite ambos valores.
+  experimental: {
+    turbopackPluginRuntimeStrategy: "workerThreads",
+  },
   serverExternalPackages: ["exceljs", "pdfkit"],
   async headers() {
     return [
