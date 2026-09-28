@@ -804,8 +804,11 @@ async function ajustesPreviosTx(
 export type OrigenFinancieroEntrega = {
   /** La entrega que INICIÓ la cadena — la que tiene (o no) el cobro/descuento real. */
   entregaRaizId: number;
-  huboCobro: boolean;
+  huboCobroHistorico: boolean;
   descuentoId: number | null;
+  estadoDescuento: string | null;
+  tieneMovimientosAplicados: boolean;
+  obligacionFinancieraRelevante: boolean;
   /** Costo unitario histórico de la entrega RAÍZ — referencia real para comparar precios en un cambio encadenado. */
   costoUnitarioOriginal: number;
 };
@@ -868,10 +871,39 @@ async function resolverOrigenFinancieroTx(
     const padre = padreRows[0];
     if (!padre) {
       // actualId nunca fue "entrega_nueva_id" de ningún ajuste -> es la raíz.
+      const huboCobroHistorico = Number(fila.monto_cobrado) > 0;
+      const descuentoId = fila.descuento_id != null ? Number(fila.descuento_id) : null;
+      let estadoDescuento: string | null = null;
+      let tieneMovimientosAplicados = false;
+      if (descuentoId != null) {
+        const [descuentos] = await conn.query<RowDataPacket[]>(
+          `SELECT estado FROM rrhh_descuentos_maestro WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
+          [descuentoId, empresaId],
+        );
+        estadoDescuento = descuentos[0] ? String(descuentos[0].estado) : null;
+        // Una cancelación solo extingue la obligación si jamás se aplicó una cuota ni se abonó.
+        // Lecturas bloqueantes en la MISMA transacción: Inventario no modifica estos históricos.
+        if (estadoDescuento === "CANCELADO") {
+          const [cuotas] = await conn.query<RowDataPacket[]>(
+            `SELECT id FROM rrhh_descuento_cuotas WHERE descuento_id = ? AND empresa_id = ? AND estado = 'APLICADA' LIMIT 1 FOR UPDATE`,
+            [descuentoId, empresaId],
+          );
+          const [abonos] = await conn.query<RowDataPacket[]>(
+            `SELECT id FROM rrhh_descuento_abonos WHERE descuento_id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
+            [descuentoId, empresaId],
+          );
+          tieneMovimientosAplicados = cuotas.length > 0 || abonos.length > 0;
+        }
+      }
       return {
         entregaRaizId: actualId,
-        huboCobro: Number(fila.monto_cobrado) > 0,
-        descuentoId: fila.descuento_id != null ? Number(fila.descuento_id) : null,
+        huboCobroHistorico,
+        descuentoId,
+        estadoDescuento,
+        tieneMovimientosAplicados,
+        obligacionFinancieraRelevante: descuentoId != null
+          ? estadoDescuento !== "CANCELADO" || tieneMovimientosAplicados
+          : huboCobroHistorico,
         costoUnitarioOriginal: Number(fila.costo_unitario_entrega),
       };
     }
@@ -893,16 +925,9 @@ export type ResultadoDevolucion =
  * (registrarMovimientoInterno, tipo DEVOLUCION) y deja la fila de ajuste —
  * todo o nada. NUNCA toca la fila de la entrega original.
  *
- * CORRECCIÓN POST-REVISIÓN: si la entrega (o su ORIGEN FINANCIERO —
- * resolverOrigenFinancieroTx, para cubrir una devolución de una entrega
- * DERIVADA de un cambio) tiene cobro/descuento asociado, se RECHAZA
- * (`devolucion_con_cobro_requiere_ajuste`, 409) sin tocar stock ni cuotas
- * — devolver stock físico mientras el empleado sigue debiendo por ese
- * artículo (o el motor de descuentos no sabe reflejar la devolución sin
- * arriesgar cuotas ya aplicadas) es exactamente la inconsistencia que este
- * ticket pide evitar. RRHH debe resolver el descuento primero con las
- * herramientas ya existentes en Descuentos (pausar/cancelar) antes de
- * poder devolver el artículo por esta vía.
+ * Un descuento cancelado sin cuotas aplicadas ni abonos deja de bloquear la
+ * devolución, aunque monto_cobrado conserve su snapshot histórico. Cualquier
+ * otro estado o movimiento financiero obliga a regularizar manualmente.
  */
 export async function registrarDevolucion(
   empresaId: number,
@@ -928,15 +953,15 @@ export async function registrarDevolucion(
     }
 
     const origenFinanciero = await resolverOrigenFinancieroTx(conn, empresaId, entregaId);
-    if (origenFinanciero.huboCobro) {
+    if (origenFinanciero.obligacionFinancieraRelevante) {
       await conn.rollback();
       const refDescuento = origenFinanciero.descuentoId ? ` (descuento #${origenFinanciero.descuentoId})` : "";
       return {
         ok: false,
         motivo: "devolucion_con_cobro_requiere_ajuste",
-        mensaje:
-          `Esta entrega tiene un cobro/descuento asociado${refDescuento} — devolver el artículo requiere ajustar ` +
-          `primero el descuento manualmente en RRHH > Descuentos. No se modificó nada.`,
+        mensaje: origenFinanciero.estadoDescuento === "CANCELADO" && origenFinanciero.tieneMovimientosAplicados
+          ? "El descuento fue cancelado, pero ya tiene movimientos financieros aplicados. La devolución requiere revisión manual."
+          : `Esta entrega tiene un cobro/descuento asociado${refDescuento}. Cancela o regulariza primero el descuento en RRHH > Descuentos; si ya fue finalizado o aplicado, la devolución requiere revisión manual. No se modificó nada.`,
       };
     }
 
@@ -1007,14 +1032,11 @@ export type ResultadoCambio =
  * cualquier paso falla (incluido stock insuficiente del artículo nuevo),
  * rollback total: nunca queda "S devuelta pero M no entregada" ni viceversa.
  *
- * Descuentos (sección 8 del ticket): si la entrega original NO generó cobro,
- * el cambio nunca toca ningún descuento. Si generó cobro, solo se permite
- * cuando el artículo nuevo cuesta EXACTAMENTE igual por unidad que el
- * histórico de la entrega original (validarCompatibilidadPrecioCambio) — el
- * descuento original sigue cubriendo la misma deuda sin tocarse. Una
- * diferencia real de precio se rechaza con un mensaje claro, sin tocar
- * stock/entrega/descuento (ver discovery: no existe hoy un mecanismo seguro
- * para cambiar el monto_original de un descuento ACTIVO).
+ * Descuentos: cuando la obligación de la raíz sigue vigente (incluidos
+ * descuentos cancelados CON aplicaciones/abonos), el nuevo artículo debe
+ * conservar el costo unitario histórico de la raíz. Si el descuento fue
+ * cancelado SIN efectos financieros, puede cambiar el precio como en una
+ * cadena sin cobro. Inventario nunca reescribe descuentos ni cuotas.
  */
 export async function registrarCambio(
   empresaId: number,
@@ -1085,7 +1107,7 @@ export async function registrarCambio(
     // S le sigue pisando los talones. Ver resolverOrigenFinancieroTx.
     const origenFinanciero = await resolverOrigenFinancieroTx(conn, empresaId, entregaId);
     const validacionPrecio = validarCompatibilidadPrecioCambio({
-      huboCobro: origenFinanciero.huboCobro,
+      huboCobro: origenFinanciero.obligacionFinancieraRelevante,
       costoUnitarioOriginal: origenFinanciero.costoUnitarioOriginal,
       costoUnitarioNuevo,
     });

@@ -11,17 +11,21 @@ FROM INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'inventario_rrhh_ajustes'
 ORDER BY ORDINAL_POSITION;
 
--- 3) Índices esperados: PRIMARY, idx_ajustes_entrega, idx_ajustes_entrega_nueva,
+-- 3) Índices esperados: PRIMARY, idx_ajustes_entrega, uq_ajustes_entrega_nueva,
 --    idx_ajustes_empresa (este último puede verse como parte de una FK también).
 SHOW INDEX FROM inventario_rrhh_ajustes;
 
--- 3b) Específicamente el índice usado por resolverOrigenFinancieroTx()
---     (camina la cadena de cambios por entrega_nueva_id) — debe existir.
-SELECT COUNT(*) AS existe_idx_entrega_nueva
+-- 3b) Debe ser ÚNICO, con exactamente empresa_id y entrega_nueva_id en ese
+--     orden. Los múltiples NULL de las devoluciones siguen permitidos.
+SELECT INDEX_NAME, GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) AS columnas,
+       MIN(NON_UNIQUE) AS non_unique, COUNT(*) AS cantidad_columnas
 FROM INFORMATION_SCHEMA.STATISTICS
 WHERE TABLE_SCHEMA = DATABASE()
   AND TABLE_NAME = 'inventario_rrhh_ajustes'
-  AND INDEX_NAME = 'idx_ajustes_entrega_nueva';
+  AND INDEX_NAME = 'uq_ajustes_entrega_nueva'
+GROUP BY INDEX_NAME;
+-- Esperado: una fila; columnas=empresa_id,entrega_nueva_id;
+-- non_unique=0; cantidad_columnas=2. Cualquier otro resultado: DETENER.
 
 -- 4) Foreign keys esperadas (6): empresa, entrega, articulo_nuevo,
 --    entrega_nueva, mov_devolucion, mov_salida.

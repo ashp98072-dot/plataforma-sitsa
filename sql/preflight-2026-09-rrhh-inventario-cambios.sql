@@ -39,3 +39,16 @@ SELECT TABLE_NAME, ENGINE
 FROM INFORMATION_SCHEMA.TABLES
 WHERE TABLE_SCHEMA = DATABASE()
   AND TABLE_NAME IN ('empresas', 'inventario_rrhh', 'inventario_rrhh_entregas', 'inventario_rrhh_movimientos');
+
+-- 6) Los nombres de FK son globales dentro del schema. Antes de crear la
+--    tabla, esta consulta debe devolver CERO filas. Si devuelve alguna,
+--    DETENER y revisar el conflicto; no renombrar ni alterar en producción.
+SELECT TABLE_NAME, CONSTRAINT_NAME
+FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS
+WHERE CONSTRAINT_SCHEMA = DATABASE()
+  AND CONSTRAINT_TYPE = 'FOREIGN KEY'
+  AND CONSTRAINT_NAME IN (
+    'fk_ajustes_empresa', 'fk_ajustes_entrega',
+    'fk_ajustes_articulo_nuevo', 'fk_ajustes_entrega_nueva',
+    'fk_ajustes_mov_devolucion', 'fk_ajustes_mov_salida'
+  );

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 
 /**
  * RRHH-INVENTARIO-CAMBIOS-1 — registrarDevolucion / registrarCambio.
@@ -31,10 +32,26 @@ let articulos: Articulo[];
 let entregas: Entrega[];
 let ajustes: Ajuste[];
 let movimientos: Movimiento[];
+let descuentos: { id: number; empresa_id: number; estado: string }[];
+let cuotas: { id: number; empresa_id: number; descuento_id: number; estado: string }[];
+let abonos: { id: number; empresa_id: number; descuento_id: number }[];
 let seq: number;
 let queriesEjecutadas: string[];
 
 const EMPRESA = 7;
+
+it("DDL de linaje: un solo padre por entrega derivada y postcheck del índice UNIQUE", () => {
+  for (const archivo of ["sql/migrate-2026-09-rrhh-inventario-cambios.sql", "sql/schema.sql"]) {
+    expect(readFileSync(archivo, "utf8")).toContain("UNIQUE KEY uq_ajustes_entrega_nueva (empresa_id, entrega_nueva_id)");
+  }
+  const postcheck = readFileSync("sql/postcheck-2026-09-rrhh-inventario-cambios.sql", "utf8");
+  expect(postcheck).toContain("INDEX_NAME = 'uq_ajustes_entrega_nueva'");
+  expect(postcheck).toContain("MIN(NON_UNIQUE)");
+  const preflight = readFileSync("sql/preflight-2026-09-rrhh-inventario-cambios.sql", "utf8");
+  for (const fk of ["empresa", "entrega", "articulo_nuevo", "entrega_nueva", "mov_devolucion", "mov_salida"]) {
+    expect(preflight).toContain(`'fk_ajustes_${fk}'`);
+  }
+});
 
 function snapshot() {
   return {
@@ -90,6 +107,18 @@ function crearConexion() {
         const [empresaId, entregaNuevaId] = params as [number, number];
         const padre = ajustes.find((a) => a.empresa_id === empresaId && a.entrega_nueva_id === entregaNuevaId);
         return [padre ? [{ entrega_id: padre.entrega_id }] : []];
+      }
+      if (s.includes("SELECT estado FROM rrhh_descuentos_maestro")) {
+        const [descuentoId, empresaId] = params as [number, number];
+        return [descuentos.filter((d) => d.id === descuentoId && d.empresa_id === empresaId)];
+      }
+      if (s.includes("SELECT id FROM rrhh_descuento_cuotas")) {
+        const [descuentoId, empresaId] = params as [number, number];
+        return [cuotas.filter((c) => c.descuento_id === descuentoId && c.empresa_id === empresaId && c.estado === "APLICADA").slice(0, 1)];
+      }
+      if (s.includes("SELECT id FROM rrhh_descuento_abonos")) {
+        const [descuentoId, empresaId] = params as [number, number];
+        return [abonos.filter((a) => a.descuento_id === descuentoId && a.empresa_id === empresaId).slice(0, 1)];
       }
       if (s.includes("SELECT id, nombre, codigo, costo_unitario FROM inventario_rrhh")) {
         const [id, empresaId] = params as [number, number];
@@ -175,6 +204,9 @@ beforeEach(() => {
   ];
   ajustes = [];
   movimientos = [];
+  descuentos = [{ id: 555, empresa_id: EMPRESA, estado: "ACTIVO" }];
+  cuotas = [];
+  abonos = [];
   conexion = crearConexion();
   vi.mocked(getPool).mockReturnValue({ getConnection: vi.fn().mockResolvedValue(conexion) } as never);
   vi.mocked(registrarAuditoria).mockResolvedValue(undefined as never);
@@ -332,7 +364,7 @@ describe("DESCUENTOS (sección 8 del ticket)", () => {
     if (!r.ok) return;
     const nueva = entregas.find((e) => e.id === r.entregaNuevaId)!;
     expect(nueva.descuento_id).toBeNull(); // no se duplica: el descuento #555 original sigue igual
-    expect(queriesEjecutadas.some((q) => q.includes("rrhh_descuentos_maestro"))).toBe(false);
+    expect(queriesEjecutadas.some((q) => q.includes("SELECT estado FROM rrhh_descuentos_maestro"))).toBe(true);
   });
 
   it("22) con cobro y precio DISTINTO -> 409, comportamiento definido: rechaza sin tocar nada", async () => {
@@ -344,12 +376,12 @@ describe("DESCUENTOS (sección 8 del ticket)", () => {
     expect(ajustes).toHaveLength(0);
   });
 
-  it("23) cuotas ya aplicadas nunca se tocan (este flujo jamás consulta rrhh_descuento_cuotas), ni siquiera cuando la devolución se rechaza por tener cobro", async () => {
+  it("23) cuotas ya aplicadas nunca se modifican desde Inventario", async () => {
     articulos.find((a) => a.id === 2)!.stock = 5;
     await cam(40, 1, 2); // #40 sin cobro: permitido
     const r = await dev(41, 1); // #41 CON cobro: bloqueado (ver bloque "origen financiero" abajo)
     expect(r).toMatchObject({ ok: false, motivo: "devolucion_con_cobro_requiere_ajuste" });
-    expect(queriesEjecutadas.some((q) => q.includes("rrhh_descuento_cuotas"))).toBe(false);
+    expect(queriesEjecutadas.some((q) => /UPDATE|DELETE|INSERT/.test(q) && q.includes("rrhh_descuento_cuotas"))).toBe(false);
   });
 
   it("24) si falla la escritura de la entrega nueva, rollback total (stock de ambos artículos queda como antes)", async () => {
@@ -367,6 +399,86 @@ describe("DESCUENTOS (sección 8 del ticket)", () => {
 });
 
 describe("ORIGEN FINANCIERO (cadenas de cambios) — corrección post-revisión de PR #379", () => {
+  it.each(["ACTIVO", "PAUSADO", "BORRADOR", "FINALIZADO"])("descuento %s bloquea la devolución", async (estado) => {
+    descuentos[0].estado = estado;
+    expect(await dev(41, 1)).toMatchObject({ ok: false, motivo: "devolucion_con_cobro_requiere_ajuste" });
+    expect(articulos[0].stock).toBe(5);
+  });
+
+  it("CANCELADO sin cuotas aplicadas ni abonos permite devolución pese al cobro histórico", async () => {
+    descuentos[0].estado = "CANCELADO";
+    cuotas.push({ id: 1, empresa_id: EMPRESA, descuento_id: 555, estado: "CANCELADA" });
+    expect((await dev(41, 1)).ok).toBe(true);
+    expect(articulos[0].stock).toBe(6);
+  });
+
+  it("CANCELADO con cuota APLICADA bloquea sin tocar cuota, stock ni planillas", async () => {
+    descuentos[0].estado = "CANCELADO";
+    cuotas.push({ id: 1, empresa_id: EMPRESA, descuento_id: 555, estado: "APLICADA" });
+    const r = await dev(41, 1);
+    expect(r).toMatchObject({ ok: false, motivo: "devolucion_con_cobro_requiere_ajuste" });
+    if (!r.ok) expect(r.mensaje).toContain("requiere revisión manual");
+    expect(cuotas[0].estado).toBe("APLICADA");
+    expect(articulos[0].stock).toBe(5);
+  });
+
+  it("CANCELADO con abono bloquea sin tocar abono ni stock", async () => {
+    descuentos[0].estado = "CANCELADO";
+    abonos.push({ id: 2, empresa_id: EMPRESA, descuento_id: 555 });
+    expect(await dev(41, 1)).toMatchObject({ ok: false, motivo: "devolucion_con_cobro_requiere_ajuste" });
+    expect(abonos).toHaveLength(1);
+    expect(articulos[0].stock).toBe(5);
+  });
+
+  it("S[cobro] -> M, descuento CANCELADO sin aplicación: puede devolverse M", async () => {
+    articulos.push({ id: 4, empresa_id: EMPRESA, nombre: "Playera M2", codigo: "M2", stock: 5, costo_unitario: 30 });
+    const primero = await cam(41, 1, 4);
+    expect(primero.ok).toBe(true);
+    if (!primero.ok) return;
+    descuentos[0].estado = "CANCELADO";
+    expect((await dev(primero.entregaNuevaId, 1)).ok).toBe(true);
+  });
+
+  it("S[cobro] -> M, CANCELADO con cuota APLICADA: M no puede devolverse", async () => {
+    articulos.push({ id: 4, empresa_id: EMPRESA, nombre: "Playera M2", codigo: "M2", stock: 5, costo_unitario: 30 });
+    const primero = await cam(41, 1, 4);
+    expect(primero.ok).toBe(true);
+    if (!primero.ok) return;
+    descuentos[0].estado = "CANCELADO";
+    cuotas.push({ id: 1, empresa_id: EMPRESA, descuento_id: 555, estado: "APLICADA" });
+    expect(await dev(primero.entregaNuevaId, 1)).toMatchObject({ ok: false, motivo: "devolucion_con_cobro_requiere_ajuste" });
+  });
+
+  it("CANCELADO limpio permite un cambio posterior Q30 -> Q40; con abono mantiene comparación a la raíz", async () => {
+    articulos.push({ id: 4, empresa_id: EMPRESA, nombre: "Playera M2", codigo: "M2", stock: 5, costo_unitario: 30 });
+    const primero = await cam(41, 2, 4);
+    expect(primero.ok).toBe(true);
+    if (!primero.ok) return;
+    descuentos[0].estado = "CANCELADO";
+    expect((await cam(primero.entregaNuevaId, 1, 3)).ok).toBe(true);
+    abonos.push({ id: 2, empresa_id: EMPRESA, descuento_id: 555 });
+    const segundo = await cam(primero.entregaNuevaId, 1, 3);
+    expect(segundo).toMatchObject({ ok: false, motivo: "diferencia_precio_no_soportada" });
+  });
+
+  it("tenant distinto nunca aporta estado, cuotas ni abonos financieros", async () => {
+    descuentos = [{ id: 555, empresa_id: 999, estado: "CANCELADO" }];
+    cuotas.push({ id: 1, empresa_id: 999, descuento_id: 555, estado: "APLICADA" });
+    abonos.push({ id: 2, empresa_id: 999, descuento_id: 555 });
+    expect(await dev(41, 1)).toMatchObject({ ok: false, motivo: "devolucion_con_cobro_requiere_ajuste" });
+    const llamadas = conexion.query.mock.calls.filter(([sql]) => String(sql).includes("rrhh_descuentos_maestro"));
+    expect(llamadas).toHaveLength(1);
+    expect(llamadas[0][1]).toEqual([555, EMPRESA]);
+    expect(queriesEjecutadas.some((sql) => sql.includes("rrhh_descuento_cuotas") || sql.includes("rrhh_descuento_abonos"))).toBe(false);
+    descuentos = [{ id: 555, empresa_id: EMPRESA, estado: "CANCELADO" }];
+    expect((await dev(41, 1)).ok).toBe(true); // los movimientos del otro tenant no bloquean
+    for (const [sql, params] of conexion.query.mock.calls) {
+      if (String(sql).includes("rrhh_descuento_cuotas") || String(sql).includes("rrhh_descuento_abonos")) {
+        expect(params).toEqual([555, EMPRESA]);
+      }
+    }
+  });
+
   it("S[cobro Q30] -> M[Q30] -> L[Q40]: el SEGUNDO cambio se bloquea (la deuda de S sigue pisándole los talones a M)", async () => {
     articulos.find((a) => a.id === 2)!.stock = 5; // M
     articulos.find((a) => a.id === 3)!.stock = 5; // L (costo 40, distinto)

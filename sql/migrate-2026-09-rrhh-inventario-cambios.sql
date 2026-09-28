@@ -28,9 +28,9 @@ CREATE TABLE IF NOT EXISTS inventario_rrhh_ajustes (
   INDEX idx_ajustes_entrega (empresa_id, entrega_id),
   -- Corrección post-revisión: resolverOrigenFinancieroTx() (inventario.ts)
   -- camina la cadena de cambios hacia atrás por entrega_nueva_id (¿esta
-  -- entrega vino de un cambio?) — este índice es el que usa esa consulta,
-  -- una vez por salto de la cadena.
-  INDEX idx_ajustes_entrega_nueva (empresa_id, entrega_nueva_id),
+  -- entrega vino de un cambio?) — este índice garantiza UN solo padre por
+  -- entrega derivada; las devoluciones conservan NULL y no colisionan.
+  UNIQUE KEY uq_ajustes_entrega_nueva (empresa_id, entrega_nueva_id),
   INDEX idx_ajustes_empresa (empresa_id, creado_en),
   CONSTRAINT fk_ajustes_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
   CONSTRAINT fk_ajustes_entrega FOREIGN KEY (entrega_id) REFERENCES inventario_rrhh_entregas(id) ON DELETE RESTRICT,

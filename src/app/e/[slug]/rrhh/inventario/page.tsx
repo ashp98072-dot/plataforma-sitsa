@@ -439,7 +439,7 @@ export default function InventarioRrhhPage() {
   const costoNuevoCambio = articuloNuevoSel?.costoUnitario ?? 0;
   const diferenciaCambio = Math.round((costoNuevoCambio - costoOriginalCambio) * 100) / 100;
   const huboCobroCambio = Boolean(cambiarEntrega && cambiarEntrega.montoCobrado > 0);
-  const diferenciaPrecioBloquea = huboCobroCambio && Math.abs(diferenciaCambio) > 0.005;
+  const diferenciaPrecioConCobroHistorico = huboCobroCambio && Math.abs(diferenciaCambio) > 0.005;
 
   async function enviarCambiar(e: FormEvent) {
     e.preventDefault();
@@ -1099,17 +1099,17 @@ export default function InventarioRrhhPage() {
                 </div>
                 <div>
                   <span className="text-sm text-[var(--muted)]">Diferencia</span>
-                  <p className={`mt-1 font-medium ${diferenciaPrecioBloquea ? "text-red-400" : ""}`}>
+                  <p className={`mt-1 font-medium ${diferenciaPrecioConCobroHistorico ? "text-amber-400" : ""}`}>
                     {formatQ(diferenciaCambio)}
                   </p>
                 </div>
               </div>
             ) : null}
-            {diferenciaPrecioBloquea ? (
-              <p className="text-sm text-red-400">
-                Esta entrega tiene cobro asociado y el artículo nuevo cuesta distinto — un cambio con
-                diferencia de precio requiere ajustar el descuento manualmente en RRHH &gt; Descuentos
-                antes de continuar.
+            {diferenciaPrecioConCobroHistorico ? (
+              <p className="text-sm text-amber-400">
+                Hay un cobro histórico y el precio es distinto. Si el descuento sigue activo,
+                cancélalo o regularízalo primero; si fue cancelado con movimientos aplicados,
+                se requiere revisión manual. El servidor verificará el estado financiero al guardar.
               </p>
             ) : null}
 
@@ -1129,8 +1129,7 @@ export default function InventarioRrhhPage() {
                 enviandoCambiar ||
                 cambiarExcedeDisponible ||
                 cantidadCambiarNum <= 0 ||
-                !articuloNuevoSel ||
-                diferenciaPrecioBloquea
+                !articuloNuevoSel
               }
               className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
             >
