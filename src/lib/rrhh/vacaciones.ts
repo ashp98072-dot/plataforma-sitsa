@@ -582,11 +582,29 @@ export async function registrarVacacionesFifo(
   }
 }
 
+/**
+ * RRHH-VACACIONES-FILTROS-HISTORIAL-1 — filtros OPCIONALES del historial, independientes del empleado del
+ * formulario de registro (ver route.ts): sin empleadoId = todos los colaboradores; sin tipo = todos los tipos; sin
+ * desde/hasta = sin restricción de fecha. `empresaId` sigue siendo obligatorio y es SIEMPRE la autoridad del tenant
+ * (nunca se filtra solo por lo que llega en `filtros`).
+ */
+export type FiltrosVacaciones = {
+  empleadoId?: number | null;
+  tipo?: string | null;
+  desde?: string | null;
+  hasta?: string | null;
+};
+
 export async function listarVacaciones(
   empresaId: number,
+  filtros: FiltrosVacaciones = {},
 ): Promise<RowDataPacket[]> {
   // Historial desde incidencias (como Control de Asistencias) para poder
   // adjuntar evidencias por incidencia_id.
+  const empleadoId = filtros.empleadoId ?? null;
+  const tipo = filtros.tipo ?? null;
+  const desde = filtros.desde ?? null;
+  const hasta = filtros.hasta ?? null;
   const rows = await query<RowDataPacket[]>(
     `SELECT i.id, i.id_empleado, i.tipo, i.fecha_inicio, i.fecha_fin,
             i.dias_habiles, e.codigo AS emp_codigo, e.nombre AS emp_nombre,
@@ -594,9 +612,13 @@ export async function listarVacaciones(
      FROM incidencias i
      INNER JOIN empleados e ON e.id = i.id_empleado AND e.empresa_id = i.empresa_id
      WHERE i.empresa_id = ?
-     ORDER BY i.fecha_inicio DESC
+       AND (? IS NULL OR i.id_empleado = ?)
+       AND (? IS NULL OR i.tipo = ?)
+       AND (? IS NULL OR i.fecha_inicio >= ?)
+       AND (? IS NULL OR i.fecha_inicio <= ?)
+     ORDER BY i.fecha_inicio DESC, i.id DESC
      LIMIT 300`,
-    [empresaId],
+    [empresaId, empleadoId, empleadoId, tipo, tipo, desde, desde, hasta, hasta],
   );
   const counts = await contarEvidenciasPorIncidencia(
     empresaId,

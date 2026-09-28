@@ -4,6 +4,15 @@ import { tienePermiso, type PermisoModulo } from "@/lib/permisos-shared";
  * RRHH VACACIONES — lógica PURA (sin React) del botón "Eliminar" del historial: permiso, texto de confirmación,
  * envío del DELETE con candado contra doble clic y mensaje de éxito. El backend es la autoridad.
  */
+
+/**
+ * RRHH-VACACIONES-FILTROS-HISTORIAL-1 — catálogo ÚNICO de tipos, compartido entre el formulario de registro, el
+ * filtro del historial (src/app/e/[slug]/rrhh/vacaciones/page.tsx) y la validación del backend (route.ts): antes cada
+ * lado tenía su propia copia local del mismo arreglo — aquí queda una sola fuente de verdad.
+ */
+export const TIPOS_VACACIONES = ["Vacaciones", "A cuenta de Vacaciones", "Permiso con goce", "Permiso sin goce", "IGSS", "Médico"] as const;
+export type TipoVacaciones = (typeof TIPOS_VACACIONES)[number];
+
 const TIPOS_CON_SALDO = new Set(["Vacaciones", "A cuenta de Vacaciones"]);
 const TIPOS_ELIMINABLES = new Set([...TIPOS_CON_SALDO, "Permiso con goce", "Permiso sin goce", "IGSS", "Médico"]);
 

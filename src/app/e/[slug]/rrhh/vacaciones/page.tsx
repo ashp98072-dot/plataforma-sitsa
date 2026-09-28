@@ -12,6 +12,7 @@ import {
   textoConfirmacion,
   tipoDescuentaSaldo,
   tipoEliminable,
+  TIPOS_VACACIONES,
   type FilaHistorial,
 } from "@/lib/rrhh/vacaciones-eliminar-ui";
 import { SolicitudesVacacionesPanel } from "@/components/rrhh/solicitudes-vacaciones-panel";
@@ -27,14 +28,8 @@ type Periodo = {
   diasDisponibles: number;
 };
 
-const TIPOS = [
-  "Vacaciones",
-  "A cuenta de Vacaciones",
-  "Permiso con goce",
-  "Permiso sin goce",
-  "IGSS",
-  "Médico",
-] as const;
+// RRHH-VACACIONES-FILTROS-HISTORIAL-1: catálogo único, reutilizado (antes era una copia local en esta página).
+const TIPOS = TIPOS_VACACIONES;
 
 function fmtUi(iso: string | null | undefined): string {
   if (!iso) return "—";
@@ -55,6 +50,14 @@ export default function VacacionesPage() {
   const [saldo, setSaldo] = useState<number | null>(null);
   const [periodos, setPeriodos] = useState<Periodo[]>([]);
   const [aviso, setAviso] = useState("");
+  // RRHH-VACACIONES-FILTROS-HISTORIAL-1 — estados INDEPENDIENTES del empleado/tipo del formulario de registro
+  // (empleadoId/tipo arriba). 0/"" = sin filtro ("Todos"). Cambiar estos filtros nunca toca empleadoId/tipo/
+  // fechaInicio/fechaFin/dias, y viceversa.
+  const [filtroEmpleadoId, setFiltroEmpleadoId] = useState(0);
+  const [filtroTipo, setFiltroTipo] = useState("");
+  const [filtroDesde, setFiltroDesde] = useState("");
+  const [filtroHasta, setFiltroHasta] = useState("");
+  const [errorFiltros, setErrorFiltros] = useState("");
   const [fechaInicio, setFechaInicio] = useState(
     new Date().toISOString().slice(0, 10),
   );
@@ -74,27 +77,72 @@ export default function VacacionesPage() {
   const [errorEliminar, setErrorEliminar] = useState("");
   const eliminandoRef = useRef(false);
 
-  const cargar = useCallback(async () => {
-    const e = await fetch(`/api/empresas/${slug}/empleados`).then((r) =>
-      r.json(),
-    );
-    setEmpleados(e.empleados ?? []);
-    const id = empleadoId || e.empleados?.[0]?.id || 0;
-    if (!empleadoId && id) setEmpleadoId(id);
-    const qs = id ? `?empleadoId=${id}` : "";
-    const v = await fetch(`/api/empresas/${slug}/rrhh/vacaciones${qs}`).then(
-      (r) => r.json(),
-    );
-    setRows(v.vacaciones ?? []);
+  // RRHH-VACACIONES-FILTROS-HISTORIAL-1 (punto 3) — SEPARADAS a propósito: cambiar un filtro del historial nunca
+  // vuelve a pedir saldo/periodos (y viceversa), así ninguna de las dos responsabilidades pisa a la otra aunque
+  // ambas lean del mismo endpoint GET con el mismo parámetro `empleadoId` (con significado distinto según la llamada
+  // — el del formulario en una, el del filtro en la otra).
+  const cargarFormularioEmpleado = useCallback(async () => {
+    if (!empleadoId) { setSaldo(null); setPeriodos([]); setAviso(""); return; }
+    // AJUSTE PR #376 (punto 1) — soloResumen=1: el backend calcula saldo/periodos SIN ejecutar listarVacaciones()
+    // (antes esta llamada traía y descartaba el historial completo; ahora nunca lo toca).
+    const v = await fetch(`/api/empresas/${slug}/rrhh/vacaciones?empleadoId=${empleadoId}&soloResumen=1`).then((r) => r.json());
     setSaldo(v.saldo ?? null);
     setPeriodos(v.periodos ?? []);
     setAviso(v.aviso ?? "");
   }, [slug, empleadoId]);
 
+  const cargarHistorial = useCallback(async () => {
+    if (filtroDesde && filtroHasta && filtroDesde > filtroHasta) {
+      setErrorFiltros("La fecha 'Desde' no puede ser posterior a 'Hasta'.");
+      return;
+    }
+    setErrorFiltros("");
+    const qs = new URLSearchParams();
+    if (filtroEmpleadoId) qs.set("empleadoId", String(filtroEmpleadoId));
+    if (filtroTipo) qs.set("tipo", filtroTipo);
+    if (filtroDesde) qs.set("desde", filtroDesde);
+    if (filtroHasta) qs.set("hasta", filtroHasta);
+    const texto = qs.toString();
+    const v = await fetch(`/api/empresas/${slug}/rrhh/vacaciones${texto ? `?${texto}` : ""}`).then((r) => r.json());
+    if (Array.isArray(v.vacaciones)) setRows(v.vacaciones);
+  }, [slug, filtroEmpleadoId, filtroTipo, filtroDesde, filtroHasta]);
+
+  const cargarEmpleados = useCallback(async () => {
+    const e = await fetch(`/api/empresas/${slug}/empleados`).then((r) => r.json());
+    const lista: Emp[] = e.empleados ?? [];
+    setEmpleados(lista);
+    if (!empleadoId && lista[0]?.id) setEmpleadoId(lista[0].id);
+  }, [slug, empleadoId]);
+
   useEffect(() => {
-    const inicio = window.setTimeout(() => void cargar(), 0);
+    const inicio = window.setTimeout(() => void cargarEmpleados(), 0);
     return () => window.clearTimeout(inicio);
-  }, [cargar]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- solo al montar/cambiar de empresa; no en cada cambio de empleadoId.
+  }, [slug]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- carga remota al cambiar el empleado del formulario
+    void cargarFormularioEmpleado();
+  }, [cargarFormularioEmpleado]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- carga remota al cambiar los filtros del historial
+    void cargarHistorial();
+  }, [cargarHistorial]);
+
+  /** Refresco coordinado tras una mutación (registrar, eliminar, evidencias, solicitudes) — recarga saldo/periodos
+   * del formulario Y el historial filtrado, sin que ninguno de los dos cambie los estados del otro. */
+  const cargar = useCallback(async () => {
+    await Promise.all([cargarFormularioEmpleado(), cargarHistorial()]);
+  }, [cargarFormularioEmpleado, cargarHistorial]);
+
+  function limpiarFiltrosHistorial() {
+    setFiltroEmpleadoId(0);
+    setFiltroTipo("");
+    setFiltroDesde("");
+    setFiltroHasta("");
+    setErrorFiltros("");
+  }
 
   useEffect(() => {
     if (!fechaInicio || !fechaFin) return;
@@ -280,6 +328,52 @@ export default function VacacionesPage() {
       {error ? <p className="text-sm text-red-300">{error}</p> : null}
       {msg ? <p className="text-sm text-emerald-300">{msg}</p> : null}
 
+      {/* RRHH-VACACIONES-FILTROS-HISTORIAL-1 — filtros del HISTORIAL, independientes del empleado/tipo del
+          formulario de registro de arriba: cambiarlos nunca toca empleadoId/tipo/fechaInicio/fechaFin/dias. */}
+      <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+        <h2 className="text-sm font-semibold text-[var(--muted)]">HISTORIAL DE VACACIONES</h2>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <EmpleadoPicker
+            empleados={empleados}
+            value={filtroEmpleadoId}
+            onChange={setFiltroEmpleadoId}
+            inputClassName={input}
+            label="Colaborador"
+            emptyLabel="Todos los colaboradores"
+            allowEmptySelection
+          />
+          <label className="text-sm text-[var(--muted)]">
+            Tipo
+            <select className={`${input} mt-1 w-full`} value={filtroTipo} onChange={(e) => setFiltroTipo(e.target.value)}>
+              <option value="">Todos los tipos</option>
+              {TIPOS.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm text-[var(--muted)]">
+            Desde
+            <input type="date" className={`${input} mt-1 w-full`} value={filtroDesde} onChange={(e) => setFiltroDesde(e.target.value)} />
+          </label>
+          <label className="text-sm text-[var(--muted)]">
+            Hasta
+            <input type="date" className={`${input} mt-1 w-full`} value={filtroHasta} onChange={(e) => setFiltroHasta(e.target.value)} />
+          </label>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs text-[var(--muted)]">
+            Mostrando {rows.length} registro(s)
+            {filtroEmpleadoId
+              ? ` · Filtrado por: ${empleados.find((e) => e.id === filtroEmpleadoId)?.nombre ?? "colaborador seleccionado"}`
+              : " · Todos los colaboradores"}
+          </p>
+          <button type="button" className="rounded border border-[var(--border)] px-3 py-1.5 text-sm" onClick={limpiarFiltrosHistorial}>
+            Limpiar filtros
+          </button>
+        </div>
+        {errorFiltros ? <p role="alert" className="text-sm text-red-300">{errorFiltros}</p> : null}
+      </div>
+
       <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
         <table className="w-full text-left text-sm">
           <thead className="bg-[var(--thead)] text-[var(--muted)]">
@@ -294,6 +388,13 @@ export default function VacacionesPage() {
             </tr>
           </thead>
           <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td className="px-3 py-3 text-[var(--muted)]" colSpan={puedeEliminar ? 7 : 6}>
+                  No hay registros que coincidan con los filtros.
+                </td>
+              </tr>
+            ) : null}
             {rows.map((r) => (
               <tr
                 key={String(r.id)}
