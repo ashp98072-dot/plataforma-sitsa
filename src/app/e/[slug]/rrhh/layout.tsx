@@ -11,7 +11,9 @@ type Props = {
 /** Bloquea todo /rrhh/* si el usuario no tiene ningún permiso RRHH. */
 export default async function RrhhAreaLayout({ children, params }: Props) {
   const { slug } = await params;
-  const g = await guardRrhhAlguno([...RRHH_SUBMODULOS]);
+  // RRHH-REQUERIMIENTOS-PROVEEDORES-1: "rrhh_requerimientos"/"rrhh_requerimientos_autorizar"/"rrhh_proveedores"
+  // también dan acceso a /rrhh/* aunque no vivan en RRHH_SUBMODULOS (ver guardRrhhAlguno).
+  const g = await guardRrhhAlguno([...RRHH_SUBMODULOS, "rrhh_requerimientos", "rrhh_requerimientos_autorizar", "rrhh_proveedores"]);
   if (g.ok === false && g.reason === "login") redirect("/login");
   if (g.ok === false) {
     return (
