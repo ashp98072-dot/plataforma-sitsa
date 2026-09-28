@@ -7,6 +7,7 @@ import { EmpleadoPicker, type EmpOpt } from "@/components/rrhh/empleado-picker";
 import { EntrevistaDocumentos } from "@/components/rrhh/entrevista-documentos";
 import { ExpedienteCandidato } from "@/components/rrhh/expediente-candidato";
 import { componerNombreCompleto, tieneIdentidadEstructurada } from "@/lib/rrhh/nombre-completo";
+import { construirIdentidadPatch, debeIncluirIdentidad as calcularDebeIncluirIdentidad } from "@/lib/rrhh/entrevista-form";
 
 type Entrevista = {
   id: number;
@@ -88,6 +89,11 @@ export default function EntrevistasPage() {
   const [error, setError] = useState("");
   const [cargando, setCargando] = useState(false);
   const [guardando, setGuardando] = useState(false);
+  // AJUSTE PR #375 — fijado al ABRIR la entrevista (no recalculado en cada tecla): distingue una entrevista histórica
+  // SIN estructura (candidato_primer_nombre etc. NULL en la BD) de una ya estructurada. Se usa para decidir si la
+  // identidad es obligatoria/se envía en el PATCH — independiente de que el usuario, mientras edita, empiece a
+  // escribir en esos campos (eso lo cubre `tieneAlgunaParteIdentidad`, calculado en vivo más abajo).
+  const [entrevistaCargadaSinEstructura, setEntrevistaCargadaSinEstructura] = useState(false);
 
   const cargar = useCallback(async () => {
     setCargando(true);
@@ -155,6 +161,7 @@ export default function EntrevistasPage() {
     setEditandoId(null);
     setError("");
     setMsg("");
+    setEntrevistaCargadaSinEstructura(false);
     setForm({ ...vacio(), fecha: diaIso ?? vacio().fecha });
   }
 
@@ -162,6 +169,7 @@ export default function EntrevistasPage() {
     setDiaSel(diaIso);
     setEditandoId(null);
     setError("");
+    setEntrevistaCargadaSinEstructura(false);
     setForm((actual) => ({ ...actual, id: 0, fecha: diaIso }));
   }
 
@@ -169,6 +177,12 @@ export default function EntrevistasPage() {
     setEditandoId(ent.id);
     setError("");
     setMsg("");
+    setEntrevistaCargadaSinEstructura(!tieneIdentidadEstructurada({
+      primerNombre: ent.candidatoPrimerNombre ?? "", segundoNombre: ent.candidatoSegundoNombre ?? "",
+      tercerNombre: ent.candidatoTercerNombre ?? "", cuartoNombre: ent.candidatoCuartoNombre ?? "",
+      primerApellido: ent.candidatoPrimerApellido ?? "", segundoApellido: ent.candidatoSegundoApellido ?? "",
+      apellidoCasada: ent.candidatoApellidoCasada ?? "",
+    }));
     setForm({
       id: ent.id,
       primerNombre: ent.candidatoPrimerNombre ?? "",
@@ -193,59 +207,55 @@ export default function EntrevistasPage() {
     });
   }
 
-  // Entrevista histórica: no tiene (todavía) identidad estructurada — se sigue mostrando candidatoNombreHistorico
-  // hasta que RRHH complete primer nombre/apellido y guarde.
-  const esHistoricaSinEstructura = editandoId != null && !tieneIdentidadEstructurada({
-    primerNombre: form.primerNombre, segundoNombre: form.segundoNombre, tercerNombre: form.tercerNombre, cuartoNombre: form.cuartoNombre,
-    primerApellido: form.primerApellido, segundoApellido: form.segundoApellido, apellidoCasada: form.apellidoCasada,
-  });
-  const nombreCompletoDerivado = componerNombreCompleto(form) || (esHistoricaSinEstructura ? form.candidatoNombreHistorico : "");
+  // Lógica pura extraída a @/lib/rrhh/entrevista-form.ts (probada ahí con sus 12 casos: nueva/estructurada/histórica,
+  // histórica que empieza a completarse, etc.) — aquí solo se usa.
+  const debeIncluirIdentidad = calcularDebeIncluirIdentidad({ editando: editandoId != null, entrevistaCargadaSinEstructura, form });
+  const nombreCompletoDerivado = componerNombreCompleto(form) || (entrevistaCargadaSinEstructura ? form.candidatoNombreHistorico : "");
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setMsg("");
     setError("");
-    if (!form.primerNombre.trim() || !form.primerApellido.trim()) {
-      setError("Primer nombre y primer apellido son obligatorios.");
+    const resultadoIdentidad = construirIdentidadPatch({ editando: editandoId != null, entrevistaCargadaSinEstructura, form });
+    if (!resultadoIdentidad.ok) {
+      setError(resultadoIdentidad.mensaje);
       return;
     }
     setGuardando(true);
-    const identidad = {
-      candidatoPrimerNombre: form.primerNombre,
-      candidatoSegundoNombre: form.segundoNombre || null,
-      candidatoTercerNombre: form.tercerNombre || null,
-      candidatoCuartoNombre: form.cuartoNombre || null,
-      candidatoPrimerApellido: form.primerApellido,
-      candidatoSegundoApellido: form.segundoApellido || null,
-      candidatoApellidoCasada: form.apellidoCasada || null,
-    };
-    const body = editandoId
-      ? { ...identidad, candidatoTelefono: form.candidatoTelefono || null, candidatoEmail: form.candidatoEmail || null,
-          puesto: form.puesto, fechaHora: `${form.fecha}T${form.hora}`, entrevistadorEmpleadoId: form.entrevistadorEmpleadoId || null,
-          modalidad: form.modalidad, lugarOEnlace: form.lugarOEnlace || null, estado: form.estado, resultado: form.resultado, notas: form.notas || null }
-      : { ...identidad, candidatoTelefono: form.candidatoTelefono || null, candidatoEmail: form.candidatoEmail || null,
-          puesto: form.puesto, fechaHora: `${form.fecha}T${form.hora}`, entrevistadorEmpleadoId: form.entrevistadorEmpleadoId || null,
-          modalidad: form.modalidad, lugarOEnlace: form.lugarOEnlace || null, notas: form.notas || null };
+    try {
+      const identidad = resultadoIdentidad.identidad; // {} en histórica intacta: candidato_nombre y las 7 columnas quedan como estaban.
+      const resto = {
+        candidatoTelefono: form.candidatoTelefono || null, candidatoEmail: form.candidatoEmail || null,
+        puesto: form.puesto, fechaHora: `${form.fecha}T${form.hora}`, entrevistadorEmpleadoId: form.entrevistadorEmpleadoId || null,
+        modalidad: form.modalidad, lugarOEnlace: form.lugarOEnlace || null, notas: form.notas || null,
+      };
+      const body = editandoId ? { ...identidad, ...resto, estado: form.estado, resultado: form.resultado } : { ...identidad, ...resto };
 
-    const res = editandoId
-      ? await fetch(`/api/empresas/${slug}/rrhh/entrevistas/${editandoId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        })
-      : await fetch(`/api/empresas/${slug}/rrhh/entrevistas`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
+      const res = editandoId
+        ? await fetch(`/api/empresas/${slug}/rrhh/entrevistas/${editandoId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          })
+        : await fetch(`/api/empresas/${slug}/rrhh/entrevistas`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
 
-    const data = await res.json();
-    setGuardando(false);
-    if (!res.ok) { setError(data.error || "No se pudo guardar."); return; }
-    setMsg(data.mensaje || "Guardado.");
-    setForm({ ...vacio(), fecha: diaSel ?? form.fecha });
-    setEditandoId(null);
-    await cargar();
+      let data: { mensaje?: string; error?: string } = {};
+      try { data = await res.json(); } catch { /* respuesta sin cuerpo/no JSON */ }
+      if (!res.ok) { setError(data.error || "No se pudo guardar."); return; }
+      setMsg(data.mensaje || "Guardado.");
+      setForm({ ...vacio(), fecha: diaSel ?? form.fecha });
+      setEditandoId(null);
+      setEntrevistaCargadaSinEstructura(false);
+      await cargar();
+    } catch {
+      setError("No se pudo guardar. Revisa tu conexión e intenta nuevamente.");
+    } finally {
+      setGuardando(false);
+    }
   }
 
   async function cambiarEstadoRapido(id: number, estado: Entrevista["estado"]) {
@@ -282,6 +292,7 @@ export default function EntrevistasPage() {
   function cancelarEdicion() {
     setForm({ ...vacio(), fecha: diaSel ?? vacio().fecha });
     setEditandoId(null);
+    setEntrevistaCargadaSinEstructura(false);
     setError("");
   }
 
@@ -433,7 +444,7 @@ export default function EntrevistasPage() {
           ) : null}
         </div>
 
-        {esHistoricaSinEstructura ? (
+        {entrevistaCargadaSinEstructura ? (
           <p className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
             Este registro fue creado con nombre completo. Puede completar los campos separados para mejorar el expediente del candidato.
           </p>
@@ -442,7 +453,7 @@ export default function EntrevistasPage() {
         <fieldset className="space-y-2">
           <legend className="text-sm font-semibold text-[var(--muted)]">IDENTIDAD DEL CANDIDATO</legend>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
-            <input className={input} placeholder="Primer nombre *" value={form.primerNombre} required
+            <input className={input} placeholder="Primer nombre *" value={form.primerNombre} required={debeIncluirIdentidad}
               onChange={(e) => setForm({ ...form, primerNombre: e.target.value })} />
             <input className={input} placeholder="Segundo nombre" value={form.segundoNombre}
               onChange={(e) => setForm({ ...form, segundoNombre: e.target.value })} />
@@ -452,7 +463,7 @@ export default function EntrevistasPage() {
               onChange={(e) => setForm({ ...form, cuartoNombre: e.target.value })} />
           </div>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-            <input className={input} placeholder="Primer apellido *" value={form.primerApellido} required
+            <input className={input} placeholder="Primer apellido *" value={form.primerApellido} required={debeIncluirIdentidad}
               onChange={(e) => setForm({ ...form, primerApellido: e.target.value })} />
             <input className={input} placeholder="Segundo apellido" value={form.segundoApellido}
               onChange={(e) => setForm({ ...form, segundoApellido: e.target.value })} />

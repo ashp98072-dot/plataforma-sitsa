@@ -80,3 +80,26 @@ describe("UI — rediseño de la pantalla de Entrevistas (28-36)", () => {
     expect(entrevistasPage).toContain("grid-cols-1 gap-4 lg:grid-cols-3");
   });
 });
+
+describe("AJUSTE PR #375 — protección adicional en el formulario de Entrevistas", () => {
+  it("usa el helper puro entrevista-form.ts para decidir/validar la identidad (no duplica la lógica inline)", () => {
+    expect(entrevistasPage).toContain('from "@/lib/rrhh/entrevista-form"');
+    expect(entrevistasPage).toContain("construirIdentidadPatch(");
+    expect(entrevistasPage).toContain("calcularDebeIncluirIdentidad(");
+  });
+  it("los inputs de primer nombre/apellido solo son required cuando debeIncluirIdentidad es true (no bloquean el guardado nativo del navegador en históricos)", () => {
+    expect(entrevistasPage).toContain('required={debeIncluirIdentidad}');
+  });
+  it("guardando se protege con try/catch/finally: nunca queda en true si fetch falla o la respuesta no es JSON", () => {
+    const inicio = entrevistasPage.indexOf("async function onSubmit");
+    const fin = entrevistasPage.indexOf("\n  }", entrevistasPage.indexOf("finally {", inicio));
+    const bloque = entrevistasPage.slice(inicio, fin);
+    expect(bloque).toContain("try {");
+    expect(bloque).toContain("} catch {");
+    expect(bloque).toContain("} finally {");
+    expect(bloque).toContain("setGuardando(false);");
+  });
+  it("entrevistaCargadaSinEstructura se fija al ABRIR (abrirEditar), no se recalcula en cada tecla", () => {
+    expect(entrevistasPage).toContain("setEntrevistaCargadaSinEstructura(!tieneIdentidadEstructurada({");
+  });
+});
