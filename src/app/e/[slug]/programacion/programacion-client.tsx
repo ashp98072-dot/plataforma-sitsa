@@ -170,6 +170,14 @@ export type Plan = {
   contacto_telefono_historico: string | null;
   notas: string | null;
   cliente: string | null;
+  /**
+   * BUGFIX-PROGRAMACION-CLIENTE-1 — id REAL persistido (p.cliente_id), expuesto de forma ADITIVA por el GET además
+   * de `cliente` (nombre, ya existente). Antes PlanForm resolvía el id buscando `cliente` por NOMBRE contra el
+   * catálogo de clientes (fragil: nombres repetidos/con espacios distintos podían resolver mal o no resolver) — con
+   * este campo, la edición precarga clienteId directo del dato persistido, sin adivinar. Null si el plan no tiene
+   * cliente asignado.
+   */
+  clienteId: number | null;
   placa: string | null;
   piloto: string | null;
   auxiliar: string | null;

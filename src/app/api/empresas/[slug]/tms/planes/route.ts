@@ -20,7 +20,7 @@ import {
 } from "@/lib/tms/paradas";
 import { obtenerVehiculoAccesible } from "@/lib/flota/acceso";
 import { vehiculoPorPlaca } from "@/lib/flota/pilotos";
-import { debeLimpiarTarifaPorCambioDeRuta, tarifaParaSnapshot, tarifasActivasDeVariasRutas } from "@/lib/tms/ruta-tarifas";
+import { debeLimpiarTarifaPorCambioDeRuta, rutaPerteneceACliente, tarifaParaSnapshot, tarifasActivasDeVariasRutas } from "@/lib/tms/ruta-tarifas";
 import { listarDisponibilidadPersonal } from "@/lib/operaciones/disponibilidad-personal";
 import { ahoraLocal, hoyLocal, toIsoDate } from "@/lib/rrhh/dates";
 import { listarViaticosRechazadosDelPlan, personalRecienAsignadoDelPlan, sincronizarViaticosPlan } from "@/lib/tms/viaticos";
@@ -361,7 +361,7 @@ export async function GET(req: Request, ctx: Ctx) {
               p.tc_vehiculo_id, p.tc_placa_historica, p.tc_externo_placa,
               CASE WHEN p.tipo_viaje = 'Tercerizado' THEN p.tc_externo_placa
                    ELSE COALESCE(tcv.placa, p.tc_placa_historica) END AS tc,
-              c.nombre AS cliente, u.placa, pil.nombre AS piloto, aux.nombre AS auxiliar,
+              c.nombre AS cliente, p.cliente_id AS clienteId, u.placa, pil.nombre AS piloto, aux.nombre AS auxiliar,
               -- EDICIÓN RÁPIDA PR-3 (aditivo): vehículo de Flota de la unidad (mismo JOIN que ya da la placa).
               u.flota_vehiculo_id,
               p.piloto_id, p.auxiliar_id, pil.id_empleado AS piloto_empleado_id,
@@ -1291,9 +1291,13 @@ const patchSchema = z.object({
   // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§2) — cambiar la tarifa
   // del viaje re-snapshotea nombre/monto/moneda; `null` la quita.
   tarifaId: z.number().int().positive().nullable().optional(),
+  // BUGFIX-PROGRAMACION-CLIENTE-1 — solo por ID, para edición desde Programación (mismo criterio que el resto de
+  // campos "por ID" de esta Fase P5.1a). Nunca se acepta un texto libre: el cliente debe existir en ESTA empresa.
+  clienteId: z.number().int().positive().optional(),
   // VIAT-4/VIAT-4b: igual que en el POST — fotografía histórica de la
-  // ruta usada.
-  rutaId: z.number().int().positive().optional(),
+  // ruta usada. BUGFIX-PROGRAMACION-CLIENTE-1: ahora también admite `null`
+  // (quita el vínculo a la ruta) — undefined = no tocar, null = quitar, number = cambiar.
+  rutaId: z.number().int().positive().nullable().optional(),
   rutaCodigo: z.string().max(40).optional(),
   lugarDescargaHistorico: z.string().max(300).optional(),
   contactoNombreHistorico: z.string().max(160).optional(),
@@ -1515,13 +1519,14 @@ export async function PATCH(req: Request, ctx: Ctx) {
   const plan = await query<RowDataPacket[]>(
     `SELECT p.id, p.codigo, p.estado, p.fecha_plan, p.hora_carga, p.notas,
             p.piloto_id, p.unidad_id, DATE_FORMAT(p.regreso_estimado, '%Y-%m-%d %H:%i:%s') AS regreso_estimado, p.ruta_id,
-            p.tipo_viaje, p.tc_vehiculo_id,
+            p.tipo_viaje, p.tc_vehiculo_id, p.cliente_id, c.nombre AS cliente_nombre,
             p.tarifa_comercial, p.tarifa_id, p.costo_operativo_referencia, p.referencia_cliente,
             u.placa, u.flota_vehiculo_id, pil.nombre AS piloto,
             ${SQL_PENDIENTE_CIERRE} AS pendiente_cierre
      FROM tms_planes_viaje p
      LEFT JOIN tms_unidades u ON u.id = p.unidad_id
      LEFT JOIN tms_personal pil ON pil.id = p.piloto_id
+     LEFT JOIN tms_clientes c ON c.id = p.cliente_id
      WHERE p.id = ? AND p.empresa_id = ? LIMIT 1`,
     [d.id, empresaId],
   );
@@ -1565,6 +1570,9 @@ export async function PATCH(req: Request, ctx: Ctx) {
     pendienteCierre: Number(plan[0].pendiente_cierre) === 1,
     rutaId: plan[0].ruta_id != null ? Number(plan[0].ruta_id) : null,
     tarifaId: plan[0].tarifa_id != null ? Number(plan[0].tarifa_id) : null,
+    // BUGFIX-PROGRAMACION-CLIENTE-1
+    clienteId: plan[0].cliente_id != null ? Number(plan[0].cliente_id) : null,
+    clienteNombre: plan[0].cliente_nombre != null ? String(plan[0].cliente_nombre) : null,
   };
 
   // PROGRAMACION-TC-CAJA-REMOLQUE-1 — TC del viaje.
@@ -1582,11 +1590,45 @@ export async function PATCH(req: Request, ctx: Ctx) {
   if (!cambioTc.ok) return NextResponse.json({ error: cambioTc.error }, { status: cambioTc.status });
   const { escribirTcInterno, tcVehiculoIdNuevo, tcPlacaNueva, escribirTcExterno, tcExternoNuevo, tcEfectivo } = cambioTc;
 
+  // BUGFIX-PROGRAMACION-CLIENTE-1 — cambiar de cliente. Solo por ID (mismo criterio que piloto/unidad "por ID" de
+  // esta fase); NUNCA se confía en un nombre de cliente enviado por el PATCH para esto. El cliente debe existir y
+  // pertenecer a ESTA empresa — nunca se permite mover un viaje al cliente de otro tenant.
+  let clienteNombreNuevo: string | null = null;
+  if (d.clienteId !== undefined) {
+    const clienteRows = await query<RowDataPacket[]>(
+      `SELECT id, nombre FROM tms_clientes WHERE empresa_id = ? AND id = ? LIMIT 1`,
+      [empresaId, d.clienteId],
+    );
+    if (!clienteRows[0]) {
+      return NextResponse.json({ error: "El cliente seleccionado no existe o no pertenece a esta empresa." }, { status: 400 });
+    }
+    clienteNombreNuevo = String(clienteRows[0].nombre);
+  }
+  const clienteCambio = d.clienteId !== undefined && d.clienteId !== antes.clienteId;
+  const clienteEfectivoPatch = d.clienteId ?? antes.clienteId ?? null;
+
   // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§2/§5) — consistencia
-  // tarifa↔ruta del viaje. `d.rutaId` (zod) es undefined o un id positivo,
-  // nunca null; `antes.rutaId`/`antes.tarifaId` pueden ser null.
-  const rutaEfectivaPatch = d.rutaId ?? antes.rutaId ?? null;
+  // tarifa↔ruta del viaje. BUGFIX-PROGRAMACION-CLIENTE-1: `d.rutaId` ahora SÍ puede ser `null` explícito (quitar la
+  // ruta) — se distingue de "no viene en el PATCH" (undefined, conserva la ruta actual). `antes.rutaId`/
+  // `antes.tarifaId` pueden ser null.
+  const rutaEfectivaPatch = d.rutaId !== undefined ? d.rutaId : (antes.rutaId ?? null);
   const rutaCambio = d.rutaId !== undefined && d.rutaId !== antes.rutaId;
+  const rutaSeQuita = d.rutaId === null;
+
+  // BUGFIX-PROGRAMACION-CLIENTE-1 — VALIDACIÓN SERVIDOR RUTA ↔ CLIENTE: nunca depende de que el frontend haya
+  // limpiado el selector. Si el PATCH termina con una ruta Y un cliente que no la tiene entre sus rutas (en esta
+  // empresa), 400 claro y NADA se modifica — incluye el caso en que solo cambia el cliente y el PATCH no tocó
+  // rutaId: la ruta ANTERIOR (que sigue "efectiva") debe seguir perteneciendo al cliente nuevo, o el PATCH se
+  // rechaza (el caller debe mandar rutaId explícito: null para quitarla, o el id de una ruta del nuevo cliente).
+  if (rutaEfectivaPatch != null && (clienteCambio || rutaCambio)) {
+    const rutaValida = await rutaPerteneceACliente(empresaId, rutaEfectivaPatch, clienteEfectivoPatch);
+    if (!rutaValida) {
+      return NextResponse.json(
+        { error: "La ruta seleccionada no pertenece al cliente de este viaje en esta empresa." },
+        { status: 400 },
+      );
+    }
+  }
 
   // Caso 1 — el PATCH trae `tarifaId`: se valida contra la ruta EFECTIVA
   // (la nueva si cambió) + empresa y se snapshotea. `tarifaId: null`
@@ -2047,12 +2089,19 @@ export async function PATCH(req: Request, ctx: Ctx) {
         tarifa_moneda_historico = CASE WHEN ? THEN ? ELSE tarifa_moneda_historico END,
         costo_operativo_referencia = CASE WHEN ? THEN ? ELSE costo_operativo_referencia END,
         referencia_cliente = CASE WHEN ? THEN ? ELSE referencia_cliente END,
-        ruta_id = COALESCE(?, ruta_id),
-        ruta_codigo_historico = COALESCE(?, ruta_codigo_historico),
-        lugar_descarga_historico = COALESCE(?, lugar_descarga_historico),
-        contacto_nombre_historico = COALESCE(?, contacto_nombre_historico),
-        contacto_cargo_historico = COALESCE(?, contacto_cargo_historico),
-        contacto_telefono_historico = COALESCE(?, contacto_telefono_historico),
+        cliente_id = COALESCE(?, cliente_id),
+        -- BUGFIX-PROGRAMACION-CLIENTE-1: ruta_id ahora distingue null (quitar) de undefined (no tocar) — antes
+        -- COALESCE hacía IMPOSIBLE quitar la ruta de un viaje vía PATCH.
+        ruta_id = CASE WHEN ? THEN ? ELSE ruta_id END,
+        -- Al QUITAR la ruta (rutaSeQuita) los snapshots dependientes de ella se limpian SIEMPRE, sin importar qué
+        -- texto haya mandado el cliente HTTP para esos campos — nunca debe quedar "Ruta: —" con un contacto/destino
+        -- de la ruta anterior todavía visible. Si la ruta NO se quita, conservan su comportamiento de siempre
+        -- (COALESCE: solo se pisan si el PATCH manda un valor no vacío; edición manual del destino sigue intacta).
+        ruta_codigo_historico = CASE WHEN ? THEN NULL ELSE COALESCE(?, ruta_codigo_historico) END,
+        lugar_descarga_historico = CASE WHEN ? THEN NULL ELSE COALESCE(?, lugar_descarga_historico) END,
+        contacto_nombre_historico = CASE WHEN ? THEN NULL ELSE COALESCE(?, contacto_nombre_historico) END,
+        contacto_cargo_historico = CASE WHEN ? THEN NULL ELSE COALESCE(?, contacto_cargo_historico) END,
+        contacto_telefono_historico = CASE WHEN ? THEN NULL ELSE COALESCE(?, contacto_telefono_historico) END,
         tc_vehiculo_id = CASE WHEN ? THEN ? ELSE tc_vehiculo_id END,
         tc_placa_historica = CASE WHEN ? THEN ? ELSE tc_placa_historica END,
         tc_externo_placa = CASE WHEN ? THEN ? ELSE tc_externo_placa END,
@@ -2091,12 +2140,14 @@ export async function PATCH(req: Request, ctx: Ctx) {
         d.costoOperativoReferencia ?? null,
         d.referenciaCliente !== undefined,
         d.referenciaCliente?.trim() || null,
+        d.clienteId ?? null,
+        d.rutaId !== undefined,
         d.rutaId ?? null,
-        d.rutaCodigo?.trim() || null,
-        d.lugarDescargaHistorico?.trim() || null,
-        d.contactoNombreHistorico?.trim() || null,
-        d.contactoCargoHistorico?.trim() || null,
-        d.contactoTelefonoHistorico?.trim() || null,
+        rutaSeQuita, d.rutaCodigo?.trim() || null,
+        rutaSeQuita, d.lugarDescargaHistorico?.trim() || null,
+        rutaSeQuita, d.contactoNombreHistorico?.trim() || null,
+        rutaSeQuita, d.contactoCargoHistorico?.trim() || null,
+        rutaSeQuita, d.contactoTelefonoHistorico?.trim() || null,
         escribirTcInterno,
         tcVehiculoIdNuevo,
         escribirTcInterno,
@@ -2296,6 +2347,16 @@ export async function PATCH(req: Request, ctx: Ctx) {
   }
   if (d.regresoEstimado !== undefined || d.referenciaCliente !== undefined) {
     cambios.push("datos comerciales/regreso estimado actualizados");
+  }
+  // BUGFIX-PROGRAMACION-CLIENTE-1 — bitácora explícita "Cliente: ABASA → SAUZALITO" (mismo patrón que tarifa/piloto/
+  // unidad arriba); clienteNombreNuevo ya viene resuelto (y validado del tenant) de la sección de arriba.
+  if (clienteCambio) {
+    cambios.push(`cliente ${antes.clienteNombre || "—"} → ${clienteNombreNuevo || "—"}`);
+  }
+  if (rutaSeQuita) {
+    cambios.push("ruta desvinculada (cambio de cliente u otro motivo)");
+  } else if (rutaCambio) {
+    cambios.push(`ruta ${antes.rutaId ?? "—"} → ${d.rutaId ?? "—"}`);
   }
   if (paradasInput != null) {
     cambios.push(`paradas redefinidas (${paradasAntesCount} → ${paradasInput.length})`);
