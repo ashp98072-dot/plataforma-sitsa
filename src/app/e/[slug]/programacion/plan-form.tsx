@@ -349,7 +349,10 @@ export default function PlanForm({
     codigo: plan?.codigo ?? "",
     fechaPlan: plan?.fecha_plan ?? fechaSugerida ?? hoy,
     horaCarga: plan?.hora_carga?.slice(0, 5) ?? "08:00",
-    clienteId: 0,
+    // BUGFIX-PROGRAMACION-CLIENTE-1 — precarga DIRECTA del id persistido (GET ya lo expone en `clienteId`, aditivo
+    // junto al nombre `cliente`), nunca por coincidencia de nombre (ver el efecto de fallback más abajo, que solo
+    // actúa si por algún motivo clienteId no vino en el payload).
+    clienteId: plan?.clienteId ?? 0,
     clienteNombre: plan?.cliente ?? "",
     placa: plan?.placa ?? "",
     pilotoEmpleadoId: 0,
@@ -678,6 +681,8 @@ export default function PlanForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plan?.id, pilotos.length]);
 
+  // BUGFIX-PROGRAMACION-CLIENTE-1 — FALLBACK: solo actúa si clienteId no llegó precargado (plan sin cliente_id
+  // persistido, o un GET más viejo que todavía no expone el campo). Ya no es la vía normal de precarga.
   useEffect(() => {
     if (!plan?.cliente || !clientesCat.length || form.clienteId) return;
     const m = clientesCat.find((c) => c.nombre === plan.cliente);
@@ -1322,7 +1327,14 @@ export default function PlanForm({
           // referencia del cliente ya no se editan desde este formulario —
           // no se envían en el PATCH nuevo (backend sigue aceptándolos
           // opcionalmente por compatibilidad, ver route.ts).
-          rutaId: bloqueadoParaPreCierre ? undefined : form.rutaId || undefined,
+          // BUGFIX-PROGRAMACION-CLIENTE-1 — causa raíz del bug "el cliente cambia en el formulario pero no queda
+          // guardado": este PATCH nunca mandaba clienteId. Solo se envía si REALMENTE cambió contra el plan
+          // persistido (mismo criterio que tarifaId arriba) — nunca el cliente actual si no se tocó.
+          clienteId: bloqueadoParaPreCierre || form.clienteId === (plan?.clienteId ?? 0) ? undefined : form.clienteId || undefined,
+          // rutaId ahora distingue "no tocar" (undefined, sin cambios) de "quitar" (null, el usuario limpió el
+          // selector — p. ej. al cambiar de cliente) de "cambiar" (number). Antes `form.rutaId || undefined`
+          // nunca podía mandar null, así que un viaje con ruta jamás podía quedarse SIN ruta vía este formulario.
+          rutaId: bloqueadoParaPreCierre || form.rutaId === (plan?.ruta_id ?? 0) ? undefined : (form.rutaId || null),
           rutaCodigo: bloqueadoParaPreCierre ? undefined : form.rutaCodigo.trim() || undefined,
           lugarDescargaHistorico: bloqueadoParaPreCierre ? undefined : form.lugarDescargaHistorico.trim() || undefined,
           contactoNombreHistorico: bloqueadoParaPreCierre ? undefined : form.contactoNombreHistorico.trim() || undefined,
@@ -1661,7 +1673,22 @@ export default function PlanForm({
           valueNombre={form.clienteNombre}
           valueId={form.clienteId}
           inputClassName={inputCls}
-          onChange={({ clienteId, clienteNombre }) => setForm((f) => ({ ...f, clienteId, clienteNombre }))}
+          onChange={({ clienteId, clienteNombre }) => {
+            // BUGFIX-PROGRAMACION-CLIENTE-1 — al CAMBIAR realmente de cliente (nunca reutilizar en silencio la ruta
+            // de otro cliente): se limpian ruta/tarifa/contacto dependientes, obligando a elegir una ruta válida del
+            // NUEVO cliente. Las PARADAS no se tocan (planificación operativa del viaje, puede tener información
+            // manual). Si es el mismo cliente (o la primera carga), no se limpia nada.
+            const cambioDeVerdad = clienteId !== form.clienteId && (clienteId || form.clienteId);
+            setForm((f) => ({
+              ...f,
+              clienteId, clienteNombre,
+              ...(cambioDeVerdad ? {
+                rutaId: 0, rutaCodigo: "", tarifaId: 0,
+                lugarDescargaHistorico: "", contactoNombreHistorico: "", contactoCargoHistorico: "", contactoTelefonoHistorico: "",
+              } : {}),
+            }));
+            if (cambioDeVerdad) { setTarifasRuta([]); setContactoClienteIdSeleccionado(null); }
+          }}
         />
       </div>
       <div className={bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}>

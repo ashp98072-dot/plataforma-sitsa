@@ -11,7 +11,12 @@ vi.mock("@/lib/tms/plan-comunes", () => ({ upsertLugar: vi.fn(async () => 1), gu
 vi.mock("@/lib/tms/paradas", () => ({ guardarParadasPlan: vi.fn(), listarParadasDePlanes: vi.fn() }));
 vi.mock("@/lib/tms/viaticos", () => ({ sincronizarViaticosPlan: vi.fn() }));
 vi.mock("@/lib/tms/ruta-tarifas", () => ({ tarifasActivasDeVariasRutas: vi.fn() }));
-vi.mock("@/lib/tms/codigo-plan", () => ({ asegurarCodigoPlanUnico: vi.fn() }));
+vi.mock("@/lib/tms/codigo-plan", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/tms/codigo-plan")>("@/lib/tms/codigo-plan");
+  // Se mantiene REAL esDuplicadoCodigoPlan (es pura, y las pruebas de PR (bugfix copia masiva) dependen de su
+  // criterio real ER_DUP_ENTRY/errno 1062); solo se mockea la generación de código en sí.
+  return { ...actual, asegurarCodigoPlanUnicoTx: vi.fn() };
+});
 
 import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
@@ -23,7 +28,8 @@ import { guardarAuxiliaresPlan } from "@/lib/tms/plan-comunes";
 import { guardarParadasPlan, listarParadasDePlanes } from "@/lib/tms/paradas";
 import { sincronizarViaticosPlan } from "@/lib/tms/viaticos";
 import { tarifasActivasDeVariasRutas } from "@/lib/tms/ruta-tarifas";
-import { asegurarCodigoPlanUnico } from "@/lib/tms/codigo-plan";
+import { asegurarCodigoPlanUnicoTx, esDuplicadoCodigoPlan } from "@/lib/tms/codigo-plan";
+void esDuplicadoCodigoPlan; // real (no mockeada); referenciada para dejar claro que no se reemplaza
 import { ESTADOS_ASIGNACION_DIARIA } from "@/lib/tms/disponibilidad-programacion-dia";
 import { confirmarLote, MAX_FILAS_LOTE, validarLote, type BorradorLote } from "./programacion-lote";
 import { borradoresDesdeCliente, cargarCopiaDeFecha } from "./programacion-copia";
@@ -53,6 +59,10 @@ let e: Estado;
 let respaldo: string;
 let falla: { en: "origen" | "viaticos" | "auditoria" | "paradas" | "auxiliares" | null; enPlanNumero: number };
 let sinTablaOrigen = false;
+// PROGRAMACION-COPIA-LOTE-TX-1 — cola de fallos SIMULADOS del INSERT de tms_planes_viaje, consumidos en orden (uno
+// por intento de INSERT): permite reproducir, dentro de la MISMA transacción del lote, una colisión real de
+// código (ER_DUP_ENTRY) que debe reintentar, o cualquier otro error de INSERT que debe propagarse tal cual.
+let insertPlanFallos: ("dup" | "otro")[] = [];
 const conn = { query: vi.fn(), execute: vi.fn(), beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn() };
 
 const flota: Record<number, { id: number; placa: string; activo: number; en_taller: number; tipo_unidad: string; empresa_id: number }> = {
@@ -91,6 +101,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   sinTablaOrigen = false;
   falla = { en: null, enPlanNumero: 0 };
+  insertPlanFallos = [];
   e = {
     planes: [], origen: [], auxiliares: [], paradas: [], viaticos: [], auditorias: [],
     personal: [{ id: 501, id_empleado: 1, nombre: "Juan Pérez" }, { id: 502, id_empleado: 2, nombre: "Ana López" }],
@@ -100,7 +111,7 @@ beforeEach(() => {
   vi.mocked(listarDisponibilidadPersonal).mockResolvedValue([]);
   vi.mocked(obtenerVehiculoAccesible).mockImplementation((async (empresa: number, id: number) => (flota[id] && flota[id].empresa_id === empresa ? flota[id] : null)) as never);
   vi.mocked(tarifasActivasDeVariasRutas).mockImplementation((async (_e: number, ids: number[]) => new Map([...tarifas].filter(([id]) => ids.includes(id)))) as never);
-  vi.mocked(asegurarCodigoPlanUnico).mockImplementation((async () => `PLAN-NUEVO-${String(e.sigCodigo++).padStart(3, "0")}`) as never);
+  vi.mocked(asegurarCodigoPlanUnicoTx).mockImplementation((async () => `PLAN-NUEVO-${String(e.sigCodigo++).padStart(3, "0")}`) as never);
   vi.mocked(personalDesdeEmpleado).mockImplementation((async (_e: number, empleadoId: number) => {
     const ya = e.personal.find((p) => p.id_empleado === empleadoId);
     if (ya) return ya.id;
@@ -180,6 +191,9 @@ beforeEach(() => {
       return [{ insertId: u.id }];
     }
     if (s.includes("INSERT INTO tms_planes_viaje")) {
+      const tipoFallo = insertPlanFallos.shift();
+      if (tipoFallo === "dup") throw Object.assign(new Error("Duplicate entry for key 'uq_plan'"), { code: "ER_DUP_ENTRY", errno: 1062 });
+      if (tipoFallo === "otro") throw Object.assign(new Error("ER_NO_REFERENCED_ROW: cliente_id no existe"), { code: "ER_NO_REFERENCED_ROW_2", errno: 1452 });
       const id = e.sigPlan++;
       e.planes.push(plan({ id, codigo: p[1] as string, cliente_id: p[2] as number | null, unidad_id: p[5] as number | null, piloto_id: p[6] as number | null, auxiliar_id: p[7] as number | null,
         fecha: p[8] as string, hora: p[9] as string | null, regreso: p[11] as string | null, tarifa_comercial: p[12] as number | null, tarifa_id: p[13] as number | null, tarifa_nombre: p[14] as string | null, ruta_id: p[17] as number | null,
@@ -373,6 +387,62 @@ describe("tercerizados: solo texto externo, sin recursos ni disponibilidad inter
     expect(r[1].errores[0]).toContain("40");
     expect(r[2].errores[0]).toContain("no usa recursos internos");
     expect(r[3].errores[0]).toContain("propio no lleva datos de tercerizado");
+  });
+});
+
+describe("PROGRAMACION-COPIA-LOTE-TX-1 — bugfix: copia masiva (regresión 'uno por uno funciona, varios juntos fallan')", () => {
+  it("1) copiar 1 plan sigue funcionando", async () => {
+    const r = await confirmar([borrador()]);
+    expect(r).toMatchObject({ ok: true, codigos: ["PLAN-NUEVO-001"] });
+    expect(creadosDestino()).toHaveLength(1);
+  });
+  it("2-3) copiar 6 planes de una vez genera 6 códigos DISTINTOS y secuenciales (reproduce el bug: antes fallaba con 'no se pudo generar un código de plan único')", async () => {
+    const pilotos = [1, 2, 3, 4, 6, 7]; // 6 pilotos DISTINTOS (mismo día: dos filas con el mismo piloto es un conflicto real, no del bug de código)
+    const lote = Array.from({ length: 6 }, (_, i) => borrador({ fila: i + 1, origenPlanId: 900 + i, unidadPlaca: null, pilotoEmpleadoId: pilotos[i] }));
+    const r = await confirmar(lote);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.codigos).toHaveLength(6);
+      expect(new Set(r.codigos).size).toBe(6); // 4) secuenciales y sin repetir dentro del lote
+      expect(r.codigos).toEqual(["PLAN-NUEVO-001", "PLAN-NUEVO-002", "PLAN-NUEVO-003", "PLAN-NUEVO-004", "PLAN-NUEVO-005", "PLAN-NUEVO-006"]);
+    }
+    expect(creadosDestino()).toHaveLength(6);
+    expect(conn.commit).toHaveBeenCalledTimes(1); // 10) commit único
+    expect(vi.mocked(asegurarCodigoPlanUnicoTx)).toHaveBeenCalledTimes(6); // una vez por fila, con la MISMA conn
+    for (const [connArg] of vi.mocked(asegurarCodigoPlanUnicoTx).mock.calls) expect(connArg).toBe(conn);
+  });
+  it("7) ER_DUP_ENTRY real (colisión de código) -> reintenta con otro código y el plan se crea igual", async () => {
+    insertPlanFallos = ["dup"]; // el primer INSERT de la fila 1 choca; el reintento con el siguiente código sí entra
+    const r = await confirmar([borrador()]);
+    expect(r).toMatchObject({ ok: true });
+    expect(vi.mocked(asegurarCodigoPlanUnicoTx)).toHaveBeenCalledTimes(2); // 1 inicial + 1 tras la colisión
+    expect(creadosDestino()).toHaveLength(1);
+  });
+  it("8-9-14) error de INSERT que NO es duplicado -> se propaga, rollback TOTAL, nunca se interpreta como colisión de código", async () => {
+    insertPlanFallos = ["otro"];
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const r = await confirmar([borrador(), borrador({ fila: 2, origenPlanId: 901, unidadPlaca: "P-2", pilotoEmpleadoId: 3 })]);
+    expect(r).toMatchObject({ ok: false, status: 500 });
+    if (!r.ok) expect(r.error).not.toContain("código de plan único"); // nunca se disfraza de colisión de código
+    expect(creadosDestino()).toHaveLength(0); // ningún plan parcial
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(conn.rollback).toHaveBeenCalledTimes(1);
+    // solo 1 intento de código para la fila que falló: el error NO-duplicado no dispara un segundo intento de generación.
+    expect(vi.mocked(asegurarCodigoPlanUnicoTx)).toHaveBeenCalledTimes(1);
+  });
+  it("11) tms_plan_origen se crea para TODAS las filas del lote", async () => {
+    const lote = [borrador({ fila: 1, origenPlanId: 900 }), borrador({ fila: 2, origenPlanId: 901, unidadPlaca: "P-2", pilotoEmpleadoId: 3 })];
+    await confirmar(lote);
+    expect(e.origen).toHaveLength(2);
+    expect(e.origen.map((o) => o.plan_origen_id)).toEqual([900, 901]);
+  });
+  it("13) la disponibilidad se sigue revalidando bajo el candado antes de crear (sin relación con el bug de código)", async () => {
+    const ok = await validarLote(EMP, DESTINO, [borrador()]);
+    expect(ok[0].estado).toBe("ok");
+    e.planes.push(plan({ id: 50, codigo: "PLAN-EXISTENTE", piloto_id: 501 })); // otro usuario ocupa el recurso entre la preview y el confirm
+    const r = await confirmar([borrador()]);
+    expect(r).toMatchObject({ ok: false, status: 409 });
+    expect(creadosDestino()).toHaveLength(0);
   });
 });
 

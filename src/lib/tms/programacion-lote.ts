@@ -4,7 +4,7 @@ import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { hoyLocal } from "@/lib/rrhh/dates";
 import { listarDisponibilidadVehiculos } from "@/lib/operaciones/disponibilidad";
 import { listarDisponibilidadPersonal } from "@/lib/operaciones/disponibilidad-personal";
-import { asegurarCodigoPlanUnico } from "@/lib/tms/codigo-plan";
+import { asegurarCodigoPlanUnicoTx, esDuplicadoCodigoPlan } from "@/lib/tms/codigo-plan";
 import { personalDesdeEmpleado } from "@/lib/tms/personal-resolucion";
 import { guardarAuxiliaresPlan, upsertLugar } from "@/lib/tms/plan-comunes";
 import { guardarPilotoExtraPlan } from "@/lib/tms/piloto-extra";
@@ -36,8 +36,10 @@ import { regresoTrasladado } from "@/lib/tms/programacion-copia-ventana";
  *      y auditoría). Cualquier fallo => ROLLBACK completo (todo o nada) y errores por fila.
  *
  * Reutiliza las MISMAS piezas que el POST manual y el importador (personalDesdeEmpleado, upsertLugar,
- * guardarAuxiliaresPlan, guardarParadasPlan, sincronizarViaticosPlan, asegurarCodigoPlanUnico,
- * resolverTcInterno). No refactoriza el POST manual ni el importador (decisión de alcance del PR A).
+ * guardarAuxiliaresPlan, guardarParadasPlan, sincronizarViaticosPlan, resolverTcInterno). La generación de código
+ * usa la variante TRANSACTION-AWARE (asegurarCodigoPlanUnicoTx, ver codigo-plan.ts) porque aquí SÍ hay varias
+ * filas insertándose dentro de la MISMA transacción, y cada una debe ver los códigos que las anteriores ya
+ * insertaron sin confirmar. No refactoriza el POST manual ni el importador (decisión de alcance del PR A).
  *
  * Nunca se copia historia operativa: los planes nuevos nacen 'Programado', con snapshots NUEVOS de ruta y
  * tarifa; la tarifa solo puede ser una tarifa VIGENTE del catálogo de la ruta (sin monto libre). Una ruta sin tarifa vigente
@@ -490,7 +492,12 @@ export async function confirmarLote(
         const lugarCargaId = await upsertLugar(empresaId, paradas.find((p) => p.tipo === "Carga")?.lugarNombre, "Carga", conn);
         const lugarDescargaId = await upsertLugar(empresaId, paradas.find((p) => p.tipo === "Descarga" || p.tipo === "Entrega")?.lugarNombre, "Descarga", conn);
 
-        let codigo = await asegurarCodigoPlanUnico(empresaId, fechaDestino, null);
+        // PROGRAMACION-COPIA-LOTE-TX-1 — transaction-aware: consulta con la MISMA conexión `conn`, así ve los
+        // códigos que esta misma transacción ya insertó (sin commit todavía) en filas anteriores del lote. Antes
+        // usaba la variante del pool (conexión distinta): dos filas del mismo lote podían proponerse el mismo
+        // código porque ninguna veía el INSERT sin confirmar de la otra — "uno por uno" funcionaba porque cada
+        // copia individual era su PROPIA transacción, sin nadie más compitiendo dentro de ella.
+        let codigo = await asegurarCodigoPlanUnicoTx(conn, empresaId, fechaDestino, null);
         let planId = 0;
         for (let intento = 0; intento < 5 && !planId; intento++) {
           try {
@@ -515,8 +522,13 @@ export async function confirmarLote(
               ],
             );
             planId = Number(ins.insertId);
-          } catch {
-            codigo = await asegurarCodigoPlanUnico(empresaId, fechaDestino, null);
+          } catch (errInsert) {
+            // PROGRAMACION-COPIA-LOTE-TX-1 — SOLO una colisión real del UNIQUE KEY (empresa_id, codigo) reintenta
+            // con otro código. Cualquier otro error del INSERT (FK, dato inválido, timeout, esquema…) se propaga
+            // tal cual: el catch exterior hace el rollback total real y devuelve el error verdadero, en vez de
+            // esconderlo detrás de un falso "no se pudo generar un código de plan único".
+            if (!esDuplicadoCodigoPlan(errInsert)) throw errInsert;
+            codigo = await asegurarCodigoPlanUnicoTx(conn, empresaId, fechaDestino, null);
           }
         }
         if (!planId) throw new Error(`Fila ${b.fila}: no se pudo generar un código de plan único.`);

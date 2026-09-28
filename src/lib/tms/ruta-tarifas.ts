@@ -469,3 +469,19 @@ export async function marcarPredeterminada(
   }
   return listarTarifasDeRuta(empresaId, rutaId);
 }
+
+/**
+ * BUGFIX-PROGRAMACION-CLIENTE-1 — invariancia obligatoria: una ruta de `tms_cliente_rutas` pertenece a UN cliente
+ * (`cliente_id`) de UNA empresa. El backend es la autoridad para nunca dejar un viaje con cliente_id = X pero
+ * ruta_id = una ruta de otro cliente Y — nunca se depende solo de que el frontend haya limpiado el selector.
+ * `null` = sin ruta (siempre válido, con cualquier cliente o sin cliente). `false` si la ruta no existe, no
+ * pertenece a esta empresa, o pertenece a otro cliente.
+ */
+export async function rutaPerteneceACliente(empresaId: number, rutaId: number, clienteId: number | null): Promise<boolean> {
+  if (clienteId == null) return false; // una ruta real siempre tiene cliente_id; sin cliente no puede "pertenecerle"
+  const rows = await query<RowDataPacket[]>(
+    `SELECT id FROM tms_cliente_rutas WHERE empresa_id = ? AND id = ? AND cliente_id = ? LIMIT 1`,
+    [empresaId, rutaId, clienteId],
+  );
+  return Boolean(rows[0]);
+}

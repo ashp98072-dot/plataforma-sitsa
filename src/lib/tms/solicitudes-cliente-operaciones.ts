@@ -2,7 +2,7 @@ import type { RowDataPacket, ResultSetHeader } from "mysql2";
 import { execute, getPool, query } from "@/lib/db";
 import { registrarAuditoria, registrarAuditoriaTx } from "@/lib/auditoria";
 import { guardarParadasPlan, type ParadaInput } from "@/lib/tms/paradas";
-import { asegurarCodigoPlanUnico } from "@/lib/tms/codigo-plan";
+import { asegurarCodigoPlanUnico, esDuplicadoCodigoPlan } from "@/lib/tms/codigo-plan";
 import { toIsoDate } from "@/lib/rrhh/dates";
 import {
   contarEntregas,
@@ -34,22 +34,6 @@ import {
  * disponibilidad/traslapes que no aplica a una conversión sin
  * piloto/unidad.
  */
-
-/**
- * AJUSTE PRE-MERGE PR #173 (punto 1) — el `catch` del reintento de
- * código de plan (ver programarSolicitud más abajo) solo debe capturar
- * la violación real del UNIQUE KEY (empresa_id, codigo), NUNCA
- * cualquier error (FK, dato inválido, timeout, error de esquema…). Un
- * error genérico capturado ahí como si fuera "código duplicado"
- * generaría otro código y reintentaría indefinidamente en vez de
- * abortar con rollback — escondiendo el error real. Mismo patrón ya
- * usado en el proyecto (ver src/lib/facturacion/facturas.ts,
- * esDuplicadoNumeroFactura).
- */
-function esDuplicadoCodigoPlan(e: unknown): boolean {
-  const err = e as { code?: string; errno?: number };
-  return err?.code === "ER_DUP_ENTRY" || err?.errno === 1062;
-}
 
 export type SolicitudClienteInternaFila = {
   id: number;

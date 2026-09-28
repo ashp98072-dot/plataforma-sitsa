@@ -3,7 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/db", () => ({ execute: vi.fn(), getPool: vi.fn(), query: vi.fn() }));
 vi.mock("@/lib/auditoria", () => ({ registrarAuditoria: vi.fn(), registrarAuditoriaTx: vi.fn() }));
 vi.mock("@/lib/tms/paradas", () => ({ guardarParadasPlan: vi.fn() }));
-vi.mock("@/lib/tms/codigo-plan", () => ({ asegurarCodigoPlanUnico: vi.fn() }));
+vi.mock("@/lib/tms/codigo-plan", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/tms/codigo-plan")>("@/lib/tms/codigo-plan");
+  // esDuplicadoCodigoPlan se mantiene REAL (compartida con programacion-lote.ts) — solo se mockea la generación.
+  return { ...actual, asegurarCodigoPlanUnico: vi.fn() };
+});
 
 import { execute, getPool, query } from "@/lib/db";
 import { registrarAuditoria, registrarAuditoriaTx } from "@/lib/auditoria";
