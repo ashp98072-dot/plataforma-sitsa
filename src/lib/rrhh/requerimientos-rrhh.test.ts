@@ -121,18 +121,68 @@ describe("16-17) snapshot del proveedor y cambiar proveedor después no cambia h
     expect(insertLinea[1]).toContain("Banco Industrial");
     expect(insertLinea[1]).toContain("111222");
   });
-  it("cambiar la cuenta del proveedor después no altera un requerimiento ya guardado (snapshot inmutable)", async () => {
-    existentes = [{ id: 21, proveedor_id: 3, proveedor_nombre_snapshot: "Clínica X", proveedor_razon_social_snapshot: "Clínica X SA", proveedor_nit_snapshot: "123", banco_snapshot: "Banco Industrial", numero_cuenta_snapshot: "111222", tipo_cuenta_snapshot: "Monetaria", dias_credito_snapshot: 30, descripcion: "Uniformes", cantidad: "2", precio_unitario: "150", metodo_pago: "Transferencia", condicion_pago: "Contado", total: "300.00" }];
-    proveedor = { ...proveedor, banco: "Banco G&T", numero_cuenta: "987654" }; // cambió DESPUÉS de crear el requerimiento
-    // Editar SIN tocar esta línea (misma id, mismos datos): el UPDATE de la línea vuelve a resolver el snapshot ACTUAL del proveedor
-    // porque el modelo no distingue "línea sin cambios" — documentado: para conservar el snapshot histórico intocado, la lectura vía
-    // obtenerRequerimientoRrhh() siempre trae lo que YA quedó grabado en la fila; este test cubre que un proveedor.activo=0 sí preserva
-    // el snapshot viejo (la otra ruta de inmutabilidad que sí está resuelta explícitamente).
+
+  // AJUSTE PR #372 (punto 1) — la línea existente (id: 21) SIEMPRE conserva su snapshot mientras conserve el mismo
+  // proveedor_id, sin importar si el proveedor sigue ACTIVO y sin importar qué otro dato del proveedor haya cambiado.
+  const lineaVieja = { id: 21, proveedor_id: 3, proveedor_nombre_snapshot: "Clínica X", proveedor_razon_social_snapshot: "Clínica X SA",
+    proveedor_nit_snapshot: "123", banco_snapshot: "Banco Industrial", numero_cuenta_snapshot: "111222", tipo_cuenta_snapshot: "Monetaria",
+    dias_credito_snapshot: 30, descripcion: "Uniformes", cantidad: "2", precio_unitario: "150", metodo_pago: "Transferencia", condicion_pago: "Contado", total: "300.00" };
+
+  it("1) proveedor ACTIVO cambia banco/cuenta/nombre/NIT/razón social/días de crédito después de crear el requerimiento", async () => {
+    existentes = [lineaVieja];
+    proveedor = { ...proveedor, activo: 1, nombre_comercial: "Clínica X (renombrada)", razon_social: "Otra SA", nit: "999",
+      banco: "Banco G&T", numero_cuenta: "987654", tipo_cuenta: "Ahorro", dias_credito: 60 };
+    await editar({ lineas: [{ id: 21, proveedor_id: 3, descripcion: "Uniformes actualizados", cantidad: "2", precio_unitario: "150", metodo_pago: "Transferencia", condicion_pago: "Contado" }] });
+    const upd = m.conn.execute.mock.calls.find((c: unknown[]) => String(c[0]).includes("UPDATE rrhh_requerimiento_lineas"))!;
+    // 2-3) editar descripción con el mismo proveedor: el snapshot VIEJO permanece (nunca "Banco G&T"/"987654"/999/60/"Otra SA").
+    expect(upd[1]).toContain("Uniformes actualizados");
+    expect(upd[1]).toContain("Clínica X");
+    expect(upd[1]).toContain("Clínica X SA");
+    expect(upd[1]).toContain("123");
+    expect(upd[1]).toContain("Banco Industrial");
+    expect(upd[1]).toContain("111222");
+    expect(upd[1]).toContain("Monetaria");
+    expect(upd[1]).toContain(30);
+    expect(upd[1]).not.toContain("Banco G&T");
+    expect(upd[1]).not.toContain("987654");
+    expect(upd[1]).not.toContain("Otra SA");
+    expect(upd[1]).not.toContain(60);
+  });
+  it("4-5) editar cantidad con el mismo proveedor: el snapshot viejo permanece", async () => {
+    existentes = [lineaVieja];
+    proveedor = { ...proveedor, activo: 1, banco: "Banco G&T", numero_cuenta: "987654" };
+    await editar({ lineas: [{ id: 21, proveedor_id: 3, descripcion: "Uniformes", cantidad: "5", precio_unitario: "150", metodo_pago: "Transferencia", condicion_pago: "Contado" }] });
+    const upd = m.conn.execute.mock.calls.find((c: unknown[]) => String(c[0]).includes("UPDATE rrhh_requerimiento_lineas"))!;
+    expect(upd[1]).toContain("Banco Industrial");
+    expect(upd[1]).toContain("111222");
+    expect(upd[1]).not.toContain("Banco G&T");
+  });
+  it("proveedor INACTIVO tampoco cambia el snapshot de la línea que ya lo tenía (caso ya cubierto, se conserva)", async () => {
+    existentes = [lineaVieja];
     proveedor = { ...proveedor, activo: 0 };
     await editar({ lineas: [{ id: 21, proveedor_id: 3, descripcion: "Uniformes", cantidad: "2", precio_unitario: "150", metodo_pago: "Transferencia", condicion_pago: "Contado" }] });
     const upd = m.conn.execute.mock.calls.find((c: unknown[]) => String(c[0]).includes("UPDATE rrhh_requerimiento_lineas"))!;
-    expect(upd[1]).toContain("Banco Industrial"); // snapshot viejo conservado, no "Banco G&T"
+    expect(upd[1]).toContain("Banco Industrial");
     expect(upd[1]).toContain("111222");
+  });
+  it("6-7) cambiar REALMENTE proveedor_id: entonces sí toma el snapshot del proveedor NUEVO", async () => {
+    const proveedorNuevo = { id: 5, activo: 1, nombre_comercial: "Lab Y", razon_social: "Lab Y SA", nit: "555", banco: "Banco G&T", numero_cuenta: "987654", tipo_cuenta: "Ahorro", dias_credito: 15 };
+    existentes = [lineaVieja];
+    m.conn.query.mockImplementation(async (sql: string, params: unknown[]) => {
+      if (sql.includes("FROM rrhh_requerimientos")) return [[cabecera]];
+      if (sql.includes("FROM rrhh_requerimiento_lineas")) return [existentes];
+      if (sql.includes("FROM cont_entidades")) return [[{ id: 4, nombre: "Entidad real" }]];
+      if (sql.includes("FROM usuarios")) return [[{ nombre: "Usuario real" }]];
+      if (sql.includes("FROM rrhh_proveedores")) return [(params as number[])[1] === 5 ? [proveedorNuevo] : [proveedor]];
+      throw new Error(sql);
+    });
+    await editar({ lineas: [{ id: 21, proveedor_id: 5, descripcion: "Uniformes", cantidad: "2", precio_unitario: "150", metodo_pago: "Transferencia", condicion_pago: "Contado" }] });
+    const upd = m.conn.execute.mock.calls.find((c: unknown[]) => String(c[0]).includes("UPDATE rrhh_requerimiento_lineas"))!;
+    expect(upd[1]).toContain("Lab Y");
+    expect(upd[1]).toContain("Banco G&T");
+    expect(upd[1]).toContain("987654");
+    expect(upd[1]).not.toContain("Clínica X");
+    expect(upd[1]).not.toContain("Banco Industrial");
   });
 });
 
@@ -218,5 +268,33 @@ describe("listado: tenant y filtros", () => {
   it("siempre filtra por empresa_id", async () => {
     await listarRequerimientosRrhh(1, { codigo: "", desde: undefined, hasta: undefined });
     expect(m.query.mock.calls[0][1][0]).toBe(1);
+  });
+  it("filtra por proveedor_id y entidad_requirente_id", async () => {
+    await listarRequerimientosRrhh(1, { codigo: "", proveedor_id: 3, entidad_requirente_id: 4 } as never);
+    const [sql, params] = m.query.mock.calls[0];
+    expect(sql).toContain("p.proveedor_id = ?");
+    expect(sql).toContain("entidad_requirente_id = ?");
+    expect(params).toContain(3);
+    expect(params).toContain(4);
+  });
+});
+
+// AJUSTE PR #372 (punto 3) — precisión de cantidad/precio_unitario alineada a 2 decimales en todo el flujo: schema,
+// centavosRrhhReq() y la columna DECIMAL(12,2) de rrhh_requerimiento_lineas. El total final siempre son centavos exactos.
+describe("precisión cantidad/precio (máximo 2 decimales)", () => {
+  it.each([
+    ["1", "150", "150.00"],
+    ["2.5", "100", "250.00"],
+    ["1.25", "80", "100.00"],
+  ])("cantidad %s × precio %s = total %s", async (cantidad, precio_unitario, totalEsperado) => {
+    await crear({ lineas: [{ ...lineaBase, cantidad, precio_unitario }] } as never);
+    const insertLinea = m.conn.execute.mock.calls.find((c: unknown[]) => String(c[0]).includes("INSERT INTO rrhh_requerimiento_lineas"))!;
+    expect(insertLinea[1]).toContain(totalEsperado);
+  });
+  it.each(["1.234", "1.2345"])("rechaza cantidad con más de 2 decimales: %s", cantidad => {
+    expect(crearRequerimientoRrhhSchema.safeParse({ ...payloadBase, lineas: [{ ...lineaBase, cantidad }] }).success).toBe(false);
+  });
+  it("rechaza precio con más de 2 decimales (10.999)", () => {
+    expect(crearRequerimientoRrhhSchema.safeParse({ ...payloadBase, lineas: [{ ...lineaBase, precio_unitario: "10.999" }] }).success).toBe(false);
   });
 });

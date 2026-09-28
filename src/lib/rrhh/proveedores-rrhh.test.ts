@@ -67,13 +67,35 @@ describe("4-5) desactivar proveedor / histórico sigue visible", () => {
   });
 });
 
-describe("6) búsqueda nombre/NIT/contacto", () => {
-  it("filtra por nombre comercial, razón social, NIT y contacto", async () => {
-    mocks.query.mockResolvedValue([]);
-    await listarProveedoresRrhh(1, "banco");
+describe("6) búsqueda nombre/NIT/contacto (AJUSTE PR #372 punto 4: sin tildes/mayúsculas, multi-token, filtrarPersonas)", () => {
+  const fila = (over: Partial<Record<string, unknown>>) => ({
+    id: over.id, empresa_id: 1, nombre_comercial: "", razon_social: null, nit: null, contacto_nombre: null,
+    telefono: null, email: null, direccion: null, metodo_pago_habitual: null, banco: null, numero_cuenta: null,
+    tipo_cuenta: null, dias_credito: null, observaciones: null, activo: 1, ...over,
+  });
+  beforeEach(() => {
+    mocks.query.mockResolvedValue([
+      fila({ id: 1, nombre_comercial: "Clínica Médica Central" }),
+      fila({ id: 2, nombre_comercial: "Clínica del Norte" }),
+      fila({ id: 3, nombre_comercial: "Papelería XYZ", nit: "123456" }),
+      fila({ id: 4, nombre_comercial: "Álvarez Consultores", contacto_nombre: "Ana Muñoz" }),
+    ]);
+  });
+  it("el universo se acota en SQL solo por empresa_id (sin LOCATE)", async () => {
+    await listarProveedoresRrhh(1, "");
     const [sql, params] = mocks.query.mock.calls[0];
-    expect(sql).toContain("LOCATE(?, nombre_comercial)");
-    expect(sql).toContain("LOCATE(?, COALESCE(contacto_nombre, ''))");
-    expect(params).toEqual([1, "banco", "banco", "banco", "banco", "banco"]);
+    expect(sql).toBe("SELECT id, empresa_id, nombre_comercial, razon_social, nit, contacto_nombre, telefono, email, direccion, metodo_pago_habitual, banco, numero_cuenta, tipo_cuenta, dias_credito, observaciones, activo FROM rrhh_proveedores WHERE empresa_id = ? ORDER BY nombre_comercial, id");
+    expect(params).toEqual([1]);
+  });
+  it("multi-token: 'clinica central' encuentra 'Clínica Médica Central' pero no 'Clínica del Norte'", async () => {
+    const r = await listarProveedoresRrhh(1, "clinica central");
+    expect(r.map(p => p.id)).toEqual([1]);
+  });
+  it("sin tildes ni mayúsculas: 'alvarez' encuentra 'Álvarez Consultores'; 'MUNOZ' encuentra por contacto", async () => {
+    expect((await listarProveedoresRrhh(1, "alvarez")).map(p => p.id)).toEqual([4]);
+    expect((await listarProveedoresRrhh(1, "MUNOZ")).map(p => p.id)).toEqual([4]);
+  });
+  it("busca también por NIT", async () => {
+    expect((await listarProveedoresRrhh(1, "123456")).map(p => p.id)).toEqual([3]);
   });
 });

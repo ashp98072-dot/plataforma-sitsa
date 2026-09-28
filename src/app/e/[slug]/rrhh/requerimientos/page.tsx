@@ -12,7 +12,7 @@ export default async function RequerimientosRrhhPage({ params }: { params: Promi
     slug={slug}
     puedeCrear={tienePermiso(permisos, "rrhh_requerimientos", "crear")}
     puedeEditar={tienePermiso(permisos, "rrhh_requerimientos", "editar")}
-    puedeAutorizar={tienePermiso(permisos, "rrhh_requerimientos", "editar")}
+    puedeAutorizar={tienePermiso(permisos, "rrhh_requerimientos_autorizar", "editar")}
     puedeVerProveedores={tienePermiso(permisos, "rrhh_proveedores", "ver")}
     fechaHoy={hoyLocal()}
   />;

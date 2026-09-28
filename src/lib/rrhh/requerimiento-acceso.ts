@@ -6,13 +6,13 @@ import { getSession, type SessionPayload } from "@/lib/session";
 import { empresasParaUsuario, obtenerEmpresaPorSlug, type Empresa } from "@/lib/empresas";
 
 /**
- * RRHH-REQUERIMIENTOS-PROVEEDORES-1 — guards PROPIOS de RRHH: "rrhh_requerimientos"/"rrhh_proveedores" son permisos
- * independientes de compras_requerimientos/compras_proveedores/compras_autorizar (nunca se importa lógica de permisos
- * de Compras aquí). Ningún rol los trae por defecto (ver PLATAFORMA_PERMISIBLES en permisos-shared.ts) — se asignan
- * explícitamente desde la matriz de Usuarios, igual que compras_autorizar/cotizaciones_costeo. Requiere el módulo
- * "rrhh" habilitado en la empresa (no "tms").
+ * RRHH-REQUERIMIENTOS-PROVEEDORES-1 — guards PROPIOS de RRHH: "rrhh_requerimientos"/"rrhh_requerimientos_autorizar"/
+ * "rrhh_proveedores" son permisos independientes de compras_requerimientos/compras_proveedores/compras_autorizar
+ * (nunca se importa lógica de permisos de Compras aquí). Ningún rol los trae por defecto (ver PLATAFORMA_PERMISIBLES
+ * en permisos-shared.ts) — se asignan explícitamente desde la matriz de Usuarios, igual que compras_autorizar/
+ * cotizaciones_costeo. Requiere el módulo "rrhh" habilitado en la empresa (no "tms").
  */
-type AmbitoRrhhReq = "rrhh_proveedores" | "rrhh_requerimientos";
+type AmbitoRrhhReq = "rrhh_proveedores" | "rrhh_requerimientos" | "rrhh_requerimientos_autorizar";
 
 async function validarAcceso(guard: { empresa: Empresa; session: SessionPayload }, accion: AccionPermiso, ambito: AmbitoRrhhReq) {
   const { session, empresa } = guard;
@@ -24,12 +24,8 @@ async function validarAcceso(guard: { empresa: Empresa; session: SessionPayload 
   // devuelve el catálogo completo por rol, así que también satisface tienePermiso() más abajo y en la UI.
   const permisos = await permisosEfectivos(session.id, session.rol);
   if (!tienePermiso(permisos, ambito, accion)) {
-    return {
-      error: NextResponse.json(
-        { error: `Sin permiso para ${accion} ${ambito === "rrhh_proveedores" ? "proveedores de RRHH" : "requerimientos de RRHH"}.` },
-        { status: 403 },
-      ),
-    };
+    const etiqueta = ambito === "rrhh_proveedores" ? "proveedores de RRHH" : ambito === "rrhh_requerimientos_autorizar" ? "autorizar/rechazar requerimientos de RRHH" : "requerimientos de RRHH";
+    return { error: NextResponse.json({ error: `Sin permiso para ${accion} ${etiqueta}.` }, { status: 403 }) };
   }
   return { session, empresa, permisos, error: undefined };
 }
@@ -47,14 +43,15 @@ export async function requireRrhhRequerimientos(slug: string, accion: AccionPerm
 }
 
 /**
- * Autorizar/rechazar exige el mismo permiso "rrhh_requerimientos" con acción "editar" — a diferencia de Compras
- * (que tiene "compras_autorizar" separado), aquí no se documentó una separación de roles pedida por el negocio para
- * esta primera fase; se reporta como decisión a confirmar (ver reporte del ticket).
+ * AJUSTE PR #372 (punto 2) — autorizar/rechazar exige EXCLUSIVAMENTE "rrhh_requerimientos_autorizar:editar", permiso
+ * propio, independiente de "rrhh_requerimientos" (mismo patrón exacto que compras_autorizar/gastos_autorizar/
+ * viaticos_autorizar). SIN fallback a rrhh_requerimientos:editar: alguien con permiso para editar datos del
+ * requerimiento pero sin este permiso NO puede autorizar/rechazar, y viceversa.
  */
 export async function requireRrhhRequerimientosAutorizar(slug: string) {
   const guard = await requireTenant(slug);
   if (guard.error) return guard;
-  return validarAcceso(guard, "editar", "rrhh_requerimientos");
+  return validarAcceso(guard, "editar", "rrhh_requerimientos_autorizar");
 }
 
 /** Server Components: valida acceso sin intentar escribir cookies (mismo patrón que obtenerAccesoComprasPagina). */

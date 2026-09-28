@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ProveedorRrhh } from "@/lib/rrhh/proveedor-schema";
+import { coincideBusquedaPersona } from "@/lib/busqueda-personas";
 
 /** RRHH-REQUERIMIENTOS-PROVEEDORES-1 — mismo patrón exacto que ProveedoresComercialesClient (Compras), catálogo/tabla independiente. */
 export const camposFormularioRrhh = [
@@ -52,8 +53,9 @@ export function ProveedoresRrhhClient({ slug, puedeCrear, puedeEditar }: { slug:
     } catch (error) { setMensaje(error instanceof Error ? error.message : "No se pudo guardar."); }
     finally { bloqueo.current = false; setOcupado(false); }
   }
-  const q = buscar.trim().toLocaleLowerCase();
-  const visibles = proveedores.filter(p => [p.nombre_comercial, p.razon_social, p.nit, p.contacto_nombre].some(v => v?.toLocaleLowerCase().includes(q)));
+  // AJUSTE PR #372 (punto 4) — mismo helper compartido que el servidor (coincideBusquedaPersona): sin tildes/mayúsculas,
+  // todas las palabras de la búsqueda deben estar presentes (en cualquier orden), en cualquiera de los 4 campos.
+  const visibles = proveedores.filter(p => coincideBusquedaPersona(buscar, `${p.nombre_comercial} ${p.razon_social ?? ""} ${p.nit ?? ""} ${p.contacto_nombre ?? ""}`));
   const inputClass = "w-full rounded border border-[var(--border)] bg-[var(--input)] p-2";
   return <main className="p-6 space-y-5">
     <div className="flex justify-between gap-4"><h1 className="text-2xl font-semibold">Proveedores (RRHH)</h1>{puedeCrear && <button disabled={ocupado} className="rounded bg-[var(--accent)] px-4 py-2 text-white" onClick={() => abrir()}>Nuevo proveedor</button>}</div>

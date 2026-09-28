@@ -102,11 +102,16 @@ export async function guardarRequerimientoRrhh(
     const solicitante = !antes ? await resolverUsuarioDeEmpresaTx(conn, empresaId, usuarioId) : null;
     if (!antes && !solicitante) throw new ErrorRequerimientoRrhh("El solicitante no tiene acceso a esta empresa.");
 
-    // Resolver y validar TODAS las líneas antes de escribir. Un proveedor inactivo existente conserva su snapshot si no cambia.
+    // AJUSTE PR #372 (punto 1) — Resolver y validar TODAS las líneas antes de escribir. El snapshot histórico de una línea
+    // EXISTENTE se preserva SIEMPRE que conserve el mismo proveedor_id, sin importar si ese proveedor sigue activo o si
+    // cambió su banco/cuenta/nombre/NIT/días de crédito DESPUÉS de crearse — editar cualquier otro campo de la línea
+    // (descripción, cantidad, método de pago…) nunca debe refrescar el snapshot. Solo una línea NUEVA o un cambio real de
+    // proveedor_id toma los datos ACTUALES de rrhh_proveedores.
     const resueltas: (LineaRequerimientoRrhh & { total: string })[] = [];
     const proveedores = new Map<number, RowDataPacket>();
     for (const linea of datos.lineas) {
       const vieja = linea.id === undefined ? undefined : porId.get(linea.id);
+      const mismoProveedor = Boolean(vieja) && Number(vieja!.proveedor_id) === linea.proveedor_id;
       let proveedor = proveedores.get(linea.proveedor_id);
       if (!proveedor) {
         const [rows] = await conn.query<RowDataPacket[]>(`SELECT id, activo, nombre_comercial, razon_social, nit, banco, numero_cuenta, tipo_cuenta, dias_credito FROM rrhh_proveedores WHERE empresa_id = ? AND id = ? LOCK IN SHARE MODE`, [empresaId, linea.proveedor_id]);
@@ -114,11 +119,11 @@ export async function guardarRequerimientoRrhh(
         if (!proveedor) throw new ErrorRequerimientoRrhh("El proveedor no pertenece a esta empresa.");
         proveedores.set(linea.proveedor_id, proveedor);
       }
-      if (!proveedor.activo && (!vieja || Number(vieja.proveedor_id) !== linea.proveedor_id)) throw new ErrorRequerimientoRrhh("El proveedor debe estar activo para una línea nueva o al cambiar de proveedor.");
-      const snapshot = !proveedor.activo && vieja ? {
-        proveedor_nombre_snapshot: String(vieja.proveedor_nombre_snapshot), proveedor_razon_social_snapshot: vieja.proveedor_razon_social_snapshot,
-        proveedor_nit_snapshot: vieja.proveedor_nit_snapshot, banco_snapshot: vieja.banco_snapshot,
-        numero_cuenta_snapshot: vieja.numero_cuenta_snapshot, tipo_cuenta_snapshot: vieja.tipo_cuenta_snapshot, dias_credito_snapshot: vieja.dias_credito_snapshot,
+      if (!proveedor.activo && !mismoProveedor) throw new ErrorRequerimientoRrhh("El proveedor debe estar activo para una línea nueva o al cambiar de proveedor.");
+      const snapshot = mismoProveedor ? {
+        proveedor_nombre_snapshot: String(vieja!.proveedor_nombre_snapshot), proveedor_razon_social_snapshot: vieja!.proveedor_razon_social_snapshot,
+        proveedor_nit_snapshot: vieja!.proveedor_nit_snapshot, banco_snapshot: vieja!.banco_snapshot,
+        numero_cuenta_snapshot: vieja!.numero_cuenta_snapshot, tipo_cuenta_snapshot: vieja!.tipo_cuenta_snapshot, dias_credito_snapshot: vieja!.dias_credito_snapshot,
       } : {
         proveedor_nombre_snapshot: String(proveedor.nombre_comercial), proveedor_razon_social_snapshot: proveedor.razon_social,
         proveedor_nit_snapshot: proveedor.nit, banco_snapshot: proveedor.banco,

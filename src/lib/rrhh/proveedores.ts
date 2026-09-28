@@ -1,6 +1,7 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
+import { filtrarPersonas } from "@/lib/busqueda-personas";
 import { camposProveedorRrhh, type ProveedorRrhh, type ProveedorRrhhDatos } from "./proveedor-schema";
 
 /**
@@ -17,11 +18,15 @@ function mapear(row: RowDataPacket): ProveedorRrhh {
 const columnas = `id, empresa_id, ${camposProveedorRrhh.join(", ")}`;
 
 export async function listarProveedoresRrhh(empresaId: number, buscar = ""): Promise<ProveedorRrhh[]> {
-  // Búsqueda literal (sin tildes/mayúsculas ya normalizado por el caller si aplica); igual criterio que Compras.
-  return (await query<RowDataPacket[]>(`SELECT ${columnas} FROM rrhh_proveedores
-    WHERE empresa_id = ? AND (? = '' OR LOCATE(?, nombre_comercial) > 0
-      OR LOCATE(?, COALESCE(razon_social, '')) > 0 OR LOCATE(?, COALESCE(nit, '')) > 0 OR LOCATE(?, COALESCE(contacto_nombre, '')) > 0)
-    ORDER BY nombre_comercial, id`, [empresaId, buscar, buscar, buscar, buscar, buscar])).map(mapear);
+  // AJUSTE PR #372 (punto 4) — el universo (empresa) se acota en SQL; el texto de búsqueda se aplica en MEMORIA con la
+  // semántica compartida de búsqueda de personas (filtrarPersonas: sin tildes/mayúsculas, todas las palabras deben
+  // aparecer, en cualquier orden — mismo helper que ya usa RRHH Empleados, ver src/lib/rrhh/empleados.ts). Nunca se
+  // depende de LOCATE ni de la collation de MariaDB para esta semántica.
+  const todos = (await query<RowDataPacket[]>(`SELECT ${columnas} FROM rrhh_proveedores WHERE empresa_id = ? ORDER BY nombre_comercial, id`, [empresaId])).map(mapear);
+  const f = buscar.trim();
+  return f
+    ? filtrarPersonas(todos, f, { nombre: (p) => p.nombre_comercial, buscable: (p) => `${p.razon_social ?? ""} ${p.nit ?? ""} ${p.contacto_nombre ?? ""}` }, Number.MAX_SAFE_INTEGER)
+    : todos;
 }
 
 export async function obtenerProveedorRrhh(empresaId: number, id: number): Promise<ProveedorRrhh | null> {

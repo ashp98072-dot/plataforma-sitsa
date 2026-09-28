@@ -22,10 +22,13 @@ export function centavosRrhhReq(v: string | number): number {
 export function importeRrhhReq(centavos: number): string {
   return `${Math.floor(centavos / 100)}.${String(centavos % 100).padStart(2, "0")}`;
 }
+// AJUSTE PR #372 (punto 3) — máximo 2 decimales, alineado con centavosRrhhReq() (que solo opera correctamente con 2) y con
+// las columnas DECIMAL(12,2) de rrhh_requerimiento_lineas. Antes el schema aceptaba hasta 4 decimales pero el cálculo y el
+// SQL solo soportaban 2 — un valor como "1.2345" se habría interpretado mal. Nunca se confía en que MariaDB redondee.
 const montoRrhhReq = z.union([z.string(), z.number()]).refine(v => {
   const s = String(v);
-  return /^\d{1,10}(\.\d{1,4})?$/.test(s) && Number.isFinite(Number(v)) && Number(v) > 0;
-}, "El valor debe ser positivo, con máximo cuatro decimales.");
+  return /^\d{1,10}(\.\d{1,2})?$/.test(s) && Number.isFinite(Number(v)) && Number(v) > 0;
+}, "El valor debe ser positivo, con máximo dos decimales.");
 
 export const lineaRrhhReqSchema = z.object({
   id: idRrhhReq.optional(),

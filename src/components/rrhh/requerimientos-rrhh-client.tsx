@@ -159,7 +159,7 @@ export function RequerimientosRrhhClient({ slug, puedeCrear, puedeEditar, puedeA
   slug: string; puedeCrear: boolean; puedeEditar: boolean; puedeAutorizar: boolean; puedeVerProveedores: boolean; fechaHoy: string;
 }) {
   const [filas, setFilas] = useState<RequerimientoRrhh[]>([]);
-  const [filtros, setFiltros] = useState({ codigo: "", desde: "", hasta: "", estado: "" });
+  const [filtros, setFiltros] = useState({ codigo: "", desde: "", hasta: "", estado: "", proveedor_id: "", entidad_requirente_id: "" });
   const [consulta, setConsulta] = useState("");
   const [refresco, setRefresco] = useState(0);
   const [cargando, setCargando] = useState(true);
@@ -179,13 +179,14 @@ export function RequerimientosRrhhClient({ slug, puedeCrear, puedeEditar, puedeA
       .catch(e => { if (!controller.signal.aborted) { setError(e instanceof Error ? e.message : "No se pudo cargar el listado."); setCargando(false); } });
     return () => controller.abort();
   }, [slug, consulta, refresco]);
+  // Los catálogos también alimentan los filtros "Proveedor" y "Empresa requirente" del listado — se cargan siempre que
+  // se pueda ver, no solo al crear/editar.
   useEffect(() => {
-    if (!puedeCrear && !puedeEditar) return;
     const controller = new AbortController();
     fetch(`/api/empresas/${slug}/rrhh/requerimientos/catalogos`, { cache: "no-store", signal: controller.signal })
       .then(r => r.json()).then(data => { if (!controller.signal.aborted) setCatalogos(data); }).catch(() => undefined);
     return () => controller.abort();
-  }, [slug, puedeCrear, puedeEditar]);
+  }, [slug]);
 
   async function verDetalle(id: number) {
     if (expandido === id) { setExpandido(null); return; }
@@ -215,6 +216,8 @@ export function RequerimientosRrhhClient({ slug, puedeCrear, puedeEditar, puedeA
       <label>Desde<input className={`${inputFiltro} block`} type="date" value={filtros.desde} onChange={e => setFiltros({ ...filtros, desde: e.target.value })} /></label>
       <label>Hasta<input className={`${inputFiltro} block`} type="date" value={filtros.hasta} onChange={e => setFiltros({ ...filtros, hasta: e.target.value })} /></label>
       <label>Estado<select className={`${inputFiltro} block`} value={filtros.estado} onChange={e => setFiltros({ ...filtros, estado: e.target.value })}><option value="">Todos</option>{["Pendiente", "Autorizada", "Rechazada"].map(v => <option key={v}>{v}</option>)}</select></label>
+      <label>Proveedor<select className={`${inputFiltro} block`} value={filtros.proveedor_id} onChange={e => setFiltros({ ...filtros, proveedor_id: e.target.value })}><option value="">Todos</option>{catalogos?.proveedores.map(p => <option key={p.id} value={p.id}>{p.nombre_comercial}</option>)}</select></label>
+      <label>Empresa requirente<select className={`${inputFiltro} block`} value={filtros.entidad_requirente_id} onChange={e => setFiltros({ ...filtros, entidad_requirente_id: e.target.value })}><option value="">Todas</option>{catalogos?.entidades.map(v => <option key={v.id} value={v.id}>{v.nombre}</option>)}</select></label>
       <button className={inputFiltro}>Filtrar</button>
     </form>
     {error && <p role="alert" className="text-red-300">{error}</p>}

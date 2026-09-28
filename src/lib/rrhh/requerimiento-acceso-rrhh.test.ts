@@ -33,10 +33,12 @@ describe("44-47) permisos propios de RRHH (nunca los de Compras)", () => {
     expect((await requireRrhhProveedores("sitsa", "editar")).error).toBeDefined();
     expect((await requireRrhhProveedores("sitsa", "crear")).error).toBeUndefined();
   });
-  it("47) sin autorizar -> no autorizar (rrhh_requerimientos:editar específico)", async () => {
+  it("47) sin rrhh_requerimientos_autorizar -> 403 (aunque tenga rrhh_requerimientos:editar completo)", async () => {
     m.requireTenant.mockResolvedValue({ session: sesion("RRHH"), empresa: empresaBase, error: undefined });
-    m.permisosEfectivos.mockResolvedValue([{ modulo: "rrhh_requerimientos", puedeVer: true, puedeCrear: true, puedeEditar: false, puedeEliminar: false }]);
-    expect((await requireRrhhRequerimientosAutorizar("sitsa")).error).toBeDefined();
+    m.permisosEfectivos.mockResolvedValue([{ modulo: "rrhh_requerimientos", puedeVer: true, puedeCrear: true, puedeEditar: true, puedeEliminar: false }]);
+    const g = await requireRrhhRequerimientosAutorizar("sitsa");
+    expect(g.error).toBeDefined();
+    expect((await g.error!.json()).error).toContain("autorizar/rechazar requerimientos de RRHH");
   });
   it("compras_requerimientos/compras_proveedores NUNCA otorgan acceso a RRHH", async () => {
     m.requireTenant.mockResolvedValue({ session: sesion("Operaciones"), empresa: empresaBase, error: undefined });
@@ -48,6 +50,42 @@ describe("44-47) permisos propios de RRHH (nunca los de Compras)", () => {
     const g = await requireRrhhRequerimientos("sitsa", "ver");
     expect(g.error).toBeDefined();
     expect(m.permisosEfectivos).not.toHaveBeenCalled();
+  });
+});
+
+// AJUSTE PR #372 (punto 2) — rrhh_requerimientos_autorizar es un permiso PROPIO, separado de rrhh_requerimientos,
+// mismo patrón que compras_autorizar/gastos_autorizar/viaticos_autorizar. Sin fallback en ninguna dirección.
+describe("permiso de autorización separado (rrhh_requerimientos_autorizar)", () => {
+  it("editar NO otorga autorizar", async () => {
+    m.requireTenant.mockResolvedValue({ session: sesion("RRHH"), empresa: empresaBase, error: undefined });
+    m.permisosEfectivos.mockResolvedValue([{ modulo: "rrhh_requerimientos", puedeVer: true, puedeCrear: true, puedeEditar: true, puedeEliminar: true }]);
+    expect((await requireRrhhRequerimientosAutorizar("sitsa")).error).toBeDefined();
+  });
+  it("autorizar NO otorga editar el requerimiento", async () => {
+    m.requireTenant.mockResolvedValue({ session: sesion("RRHH"), empresa: empresaBase, error: undefined });
+    m.permisosEfectivos.mockResolvedValue([{ modulo: "rrhh_requerimientos_autorizar", puedeVer: true, puedeCrear: false, puedeEditar: true, puedeEliminar: false }]);
+    expect((await requireRrhhRequerimientos("sitsa", "editar")).error).toBeDefined();
+    // pero SÍ puede autorizar/rechazar:
+    expect((await requireRrhhRequerimientosAutorizar("sitsa")).error).toBeUndefined();
+  });
+  it("permiso explícito de rrhh_requerimientos_autorizar:editar -> puede autorizar/rechazar", async () => {
+    m.requireTenant.mockResolvedValue({ session: sesion("RRHH"), empresa: empresaBase, error: undefined });
+    m.permisosEfectivos.mockResolvedValue([{ modulo: "rrhh_requerimientos_autorizar", puedeVer: true, puedeCrear: false, puedeEditar: true, puedeEliminar: false }]);
+    expect((await requireRrhhRequerimientosAutorizar("sitsa")).error).toBeUndefined();
+  });
+  it("compras_autorizar nunca sirve para autorizar requerimientos de RRHH", async () => {
+    m.requireTenant.mockResolvedValue({ session: sesion("Operaciones"), empresa: empresaBase, error: undefined });
+    m.permisosEfectivos.mockResolvedValue([{ modulo: "compras_autorizar", puedeVer: true, puedeCrear: true, puedeEditar: true, puedeEliminar: true }]);
+    expect((await requireRrhhRequerimientosAutorizar("sitsa")).error).toBeDefined();
+  });
+  it("ningún rol no-Admin recibe rrhh_requerimientos_autorizar automáticamente; Admin sí", async () => {
+    const { permisosDefaultPorRol } = await vi.importActual<typeof import("@/lib/permisos-shared")>("@/lib/permisos-shared");
+    const roles = ["RRHH", "Reclutamiento", "Operaciones", "GerenteOperaciones", "JefeOperaciones", "AuxiliarOperaciones", "Facturador", "Contabilidad", "CoordinadorPredios", "CoordinadorCompras", "Piloto", "Visualizador", "Marcaje"] as const;
+    for (const rol of roles) {
+      const p = permisosDefaultPorRol(rol).find(x => x.modulo === "rrhh_requerimientos_autorizar");
+      if (p) expect(p).toMatchObject({ puedeVer: false, puedeCrear: false, puedeEditar: false, puedeEliminar: false });
+    }
+    expect(permisosDefaultPorRol("Admin").find(x => x.modulo === "rrhh_requerimientos_autorizar")).toMatchObject({ puedeEditar: true });
   });
 });
 
@@ -94,7 +132,7 @@ describe("no SQL/permisos de Compras reutilizados por RRHH", () => {
 describe("navegación y guard de /rrhh/*", () => {
   it("el layout de /rrhh también deja pasar a quien SOLO tiene rrhh_requerimientos/rrhh_proveedores", () => {
     const layout = readFileSync("src/app/e/[slug]/rrhh/layout.tsx", "utf8");
-    expect(layout).toContain('"rrhh_requerimientos", "rrhh_proveedores"');
+    expect(layout).toContain('"rrhh_requerimientos", "rrhh_requerimientos_autorizar", "rrhh_proveedores"');
   });
   it("guardRrhhAlguno acepta string[] (no solo RrhhSubmodulo[])", () => {
     const guard = readFileSync("src/lib/rrhh-page-guard.ts", "utf8");
@@ -105,5 +143,23 @@ describe("navegación y guard de /rrhh/*", () => {
     expect(shell).toContain('"rrhh_requerimientos", "Requerimientos", "requerimientos"');
     expect(shell).toContain('"rrhh_proveedores", "Proveedores", "proveedores"');
     expect(shell).toContain('tienePermiso(permisos, modulo, "ver")');
+  });
+  it("page.tsx usa rrhh_requerimientos_autorizar (no rrhh_requerimientos) para puedeAutorizar", () => {
+    const page = readFileSync("src/app/e/[slug]/rrhh/requerimientos/page.tsx", "utf8");
+    expect(page).toContain('puedeEditar={tienePermiso(permisos, "rrhh_requerimientos", "editar")}');
+    expect(page).toContain('puedeAutorizar={tienePermiso(permisos, "rrhh_requerimientos_autorizar", "editar")}');
+  });
+});
+
+describe("filtros del listado: proveedor y empresa requirente (punto 5)", () => {
+  it("la UI expone los filtros de proveedor y empresa requirente sin quitar los existentes", () => {
+    const client = readFileSync("src/components/rrhh/requerimientos-rrhh-client.tsx", "utf8");
+    expect(client).toContain("proveedor_id: \"\", entidad_requirente_id: \"\"");
+    expect(client).toContain(">Proveedor<select");
+    expect(client).toContain(">Empresa requirente<select");
+    expect(client).toContain(">Código<input");
+    expect(client).toContain(">Desde<input");
+    expect(client).toContain(">Hasta<input");
+    expect(client).toContain(">Estado<select");
   });
 });

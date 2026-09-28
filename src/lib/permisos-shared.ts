@@ -143,6 +143,11 @@ export const PLATAFORMA_PERMISIBLES = [
   // completo por defecto al rol RRHH (y de solo lectura a Visualizador),
   // lo que violaría "no conceder automáticamente" para este módulo nuevo.
   "rrhh_requerimientos",
+  // AJUSTE PR #372 (punto 2): autorizar/rechazar un requerimiento de RRHH exige este permiso PROPIO,
+  // separado de "rrhh_requerimientos" — mismo patrón exacto que compras_autorizar/gastos_autorizar/viaticos_autorizar.
+  // "rrhh_requerimientos:editar" NUNCA autoriza/rechaza; "rrhh_requerimientos_autorizar:editar" nunca edita datos del
+  // requerimiento. Ningún rol lo trae por defecto (ni siquiera "RRHH"); Admin lo recibe por catálogo global.
+  "rrhh_requerimientos_autorizar",
   "rrhh_proveedores",
   "multas",
   "tms",
@@ -329,7 +334,7 @@ export function esPlataformaPermisible(m: string): m is PlataformaPermisible {
 export function moduloEmpresaDelPermiso(m: string): Modulo | null {
   if (m === "compras_proveedores" || m === "compras_requerimientos" || m === "compras_autorizar" || m === "cotizaciones_costeo" || m === "cotizaciones_ajustes") return "tms";
   // RRHH-REQUERIMIENTOS-PROVEEDORES-1: dependen de que la empresa tenga el módulo "rrhh" habilitado (no "tms").
-  if (m === "rrhh_requerimientos" || m === "rrhh_proveedores") return "rrhh";
+  if (m === "rrhh_requerimientos" || m === "rrhh_requerimientos_autorizar" || m === "rrhh_proveedores") return "rrhh";
   if (m === "multas") return "tms";
   if (m === "flota_combustible") return "flota";
   if (
@@ -364,6 +369,7 @@ export function labelPermiso(modulo: string): string {
   if (modulo === "cotizaciones_costeo") return "Cotizaciones: costeo interno (confidencial)";
   if (modulo === "cotizaciones_ajustes") return "Cotizaciones: ajustes de costeo";
   if (modulo === "rrhh_requerimientos") return "RRHH: requerimientos";
+  if (modulo === "rrhh_requerimientos_autorizar") return "RRHH: autorizar y rechazar requerimientos";
   if (modulo === "rrhh_proveedores") return "RRHH: proveedores";
   if (modulo === "multas") return "Multas y sanciones";
   if (esRrhhSubmodulo(modulo)) return RRHH_SUBMODULO_LABEL[modulo];
@@ -430,7 +436,7 @@ export const GRUPOS_PERMISOS: {
     descripcion: "Control de asistencias: personal, marcajes, vacaciones…",
     // "rrhh_requerimientos"/"rrhh_proveedores" van AQUÍ (visibles/asignables en el grupo RRHH de Usuarios) pero fuera
     // de RRHH_SUBMODULOS a propósito: ese arreglo se concede COMPLETO por defecto al rol RRHH — estos dos, no.
-    modulos: [...RRHH_SUBMODULOS, "rrhh_requerimientos", "rrhh_proveedores"],
+    modulos: [...RRHH_SUBMODULOS, "rrhh_requerimientos", "rrhh_requerimientos_autorizar", "rrhh_proveedores"],
   },
   {
     id: "operaciones",
@@ -805,6 +811,7 @@ export function modulosPlataformaDesdePermisos(
       p.modulo !== "cotizaciones_costeo" &&
       p.modulo !== "cotizaciones_ajustes" &&
       p.modulo !== "rrhh_requerimientos" &&
+      p.modulo !== "rrhh_requerimientos_autorizar" &&
       p.modulo !== "rrhh_proveedores" &&
       p.modulo !== "multas" &&
       p.modulo !== "viaticos" &&
@@ -822,7 +829,7 @@ export function modulosPlataformaDesdePermisos(
     ) {
       out.add(p.modulo);
     }
-    if (esRrhhSubmodulo(p.modulo) || p.modulo === "rrhh_requerimientos" || p.modulo === "rrhh_proveedores") {
+    if (esRrhhSubmodulo(p.modulo) || p.modulo === "rrhh_requerimientos" || p.modulo === "rrhh_requerimientos_autorizar" || p.modulo === "rrhh_proveedores") {
       out.add("rrhh");
     }
     if (esFlotaSubmodulo(p.modulo)) {
