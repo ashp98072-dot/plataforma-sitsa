@@ -83,7 +83,9 @@ export default function VacacionesPage() {
   // — el del formulario en una, el del filtro en la otra).
   const cargarFormularioEmpleado = useCallback(async () => {
     if (!empleadoId) { setSaldo(null); setPeriodos([]); setAviso(""); return; }
-    const v = await fetch(`/api/empresas/${slug}/rrhh/vacaciones?empleadoId=${empleadoId}`).then((r) => r.json());
+    // AJUSTE PR #376 (punto 1) — soloResumen=1: el backend calcula saldo/periodos SIN ejecutar listarVacaciones()
+    // (antes esta llamada traía y descartaba el historial completo; ahora nunca lo toca).
+    const v = await fetch(`/api/empresas/${slug}/rrhh/vacaciones?empleadoId=${empleadoId}&soloResumen=1`).then((r) => r.json());
     setSaldo(v.saldo ?? null);
     setPeriodos(v.periodos ?? []);
     setAviso(v.aviso ?? "");
@@ -338,6 +340,7 @@ export default function VacacionesPage() {
             inputClassName={input}
             label="Colaborador"
             emptyLabel="Todos los colaboradores"
+            allowEmptySelection
           />
           <label className="text-sm text-[var(--muted)]">
             Tipo

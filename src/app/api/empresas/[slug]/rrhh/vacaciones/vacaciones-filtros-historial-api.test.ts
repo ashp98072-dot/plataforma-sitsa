@@ -79,6 +79,49 @@ describe("GET vacaciones — filtros del historial, independientes de saldo/peri
   });
 });
 
+describe("AJUSTE PR #376 (punto 1) — soloResumen=1: evita ejecutar listarVacaciones en la llamada de saldo/periodos", () => {
+  it("1) soloResumen=1 + empleadoId válido: NO llama listarVacaciones; sí llama saldo y periodos", async () => {
+    const res = await GET(req("?empleadoId=55&soloResumen=1"), ctx);
+    expect(res.status).toBe(200);
+    expect(m.listarVacaciones).not.toHaveBeenCalled();
+    expect(m.calcularSaldoTotalDisponible).toHaveBeenCalledWith(1, 55);
+    expect(m.obtenerPeriodosDisponibles).toHaveBeenCalledWith(1, 55);
+    const data = await res.json();
+    expect(data).toEqual({ saldo: 10, periodos: [] });
+    expect(data.vacaciones).toBeUndefined();
+  });
+  it("2) soloResumen=1 sin empleadoId -> 400", async () => {
+    const res = await GET(req("?soloResumen=1"), ctx);
+    expect(res.status).toBe(400);
+    expect(m.listarVacaciones).not.toHaveBeenCalled();
+    expect(m.calcularSaldoTotalDisponible).not.toHaveBeenCalled();
+  });
+  it("3) soloResumen inválido -> 400", async () => {
+    for (const v of ["true", "0", "si", "2"]) {
+      const res = await GET(req(`?empleadoId=55&soloResumen=${v}`), ctx);
+      expect(res.status).toBe(400);
+    }
+    expect(m.listarVacaciones).not.toHaveBeenCalled();
+  });
+  it("4) GET normal sin soloResumen sigue llamando listarVacaciones", async () => {
+    await GET(req("?empleadoId=55"), ctx);
+    expect(m.listarVacaciones).toHaveBeenCalledWith(1, { empleadoId: 55 });
+  });
+  it("5) los filtros del historial siguen funcionando igual (sin soloResumen)", async () => {
+    await GET(req("?tipo=IGSS&desde=2026-01-01&hasta=2026-06-30"), ctx);
+    expect(m.listarVacaciones).toHaveBeenCalledWith(1, { tipo: "IGSS", desde: "2026-01-01", hasta: "2026-06-30" });
+    expect(m.calcularSaldoTotalDisponible).not.toHaveBeenCalled();
+  });
+  it("si el cálculo FIFO falla, soloResumen responde con saldo null/periodos vacíos/aviso, sin listarVacaciones", async () => {
+    m.calcularSaldoTotalDisponible.mockRejectedValue(new Error("sin migración"));
+    const res = await GET(req("?empleadoId=55&soloResumen=1"), ctx);
+    const data = await res.json();
+    expect(data.saldo).toBeNull();
+    expect(data.aviso).toContain("migrate");
+    expect(m.listarVacaciones).not.toHaveBeenCalled();
+  });
+});
+
 describe("UI (13-17): filtros del historial en la página", () => {
   const leer = (p: string) => readFileSync(p, "utf8").replace(/\r\n/g, "\n");
   const page = leer("src/app/e/[slug]/rrhh/vacaciones/page.tsx");
@@ -120,5 +163,14 @@ describe("UI (13-17): filtros del historial en la página", () => {
     expect(modelo).toContain("registrarVacacionesFifo");
     expect(modelo).toContain("calcularSaldoTotalDisponible");
     expect(modelo).toContain("obtenerPeriodosDisponibles");
+  });
+});
+
+describe("AJUSTE PR #376 — cargarFormularioEmpleado() pide soloResumen=1", () => {
+  it("la página envía soloResumen=1 en la llamada de saldo/periodos del formulario", () => {
+    const page = readFileSync("src/app/e/[slug]/rrhh/vacaciones/page.tsx", "utf8").replace(/\r\n/g, "\n");
+    const inicio = page.indexOf("const cargarFormularioEmpleado");
+    const fin = page.indexOf("}, [slug, empleadoId]);", inicio);
+    expect(page.slice(inicio, fin)).toContain("&soloResumen=1");
   });
 });

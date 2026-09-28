@@ -20,6 +20,13 @@ type Props = {
   /** Texto de la opción con value="" cuando no hay selección. Por defecto "— Seleccionar —"; un filtro de historial
    * (RRHH-VACACIONES-FILTROS-HISTORIAL-1) usa "Todos los colaboradores" — value=0 sigue significando "sin elegir". */
   emptyLabel?: string;
+  /**
+   * AJUSTE PR #376 (punto 2) — por defecto false (comportamiento sin cambios en el resto de usos de este picker): la
+   * opción value="" solo aparece mientras no hay selección. En un FILTRO (donde 0 = "Todos" es una elección válida,
+   * no la ausencia de una) debe seguir disponible aunque ya haya un empleado elegido, para poder volver a "Todos"
+   * desde el mismo selector sin depender de un botón "Limpiar filtros" aparte.
+   */
+  allowEmptySelection?: boolean;
 };
 
 /** Selector de empleado con filtro por nombre, código o DPI. */
@@ -31,6 +38,7 @@ export function EmpleadoPicker({
   inputClassName,
   label = "Empleado",
   emptyLabel = "— Seleccionar —",
+  allowEmptySelection = false,
 }: Props) {
   const [q, setQ] = useState("");
   const filtrados = useMemo(() => {
@@ -59,7 +67,7 @@ export function EmpleadoPicker({
         value={value || ""}
         onChange={(e) => onChange(Number(e.target.value))}
       >
-        {!value ? <option value="">{emptyLabel}</option> : null}
+        {!value || allowEmptySelection ? <option value="">{emptyLabel}</option> : null}
         {selected && !filtrados.some((e) => e.id === selected.id) ? (
           <option value={selected.id}>
             {selected.codigo} — {selected.nombre}
