@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { METODOS_PAGO_COMPRAS, type DetalleCompra, type LineaCompraDatos } from "@/lib/compras/requerimiento-schema";
 import { seleccionarProveedorCompra } from "@/lib/compras/metodos-pago";
 import { CatalogoSearchSelect, opcionesConHistorico, type CatalogoSearchOption } from "@/components/tms/catalogo-search-select";
+import { ProveedorCompraPicker, opcionesProveedoresCompra, fusionarProveedorEnCatalogo, type ProveedorPickerOpt } from "@/components/compras/proveedor-compra-picker";
 import { LineaDocumentosClient } from "@/components/compras/linea-documentos-client";
 import { DocumentosPendientesClient, subirPendientesCompra, type DocumentoPendienteCompra } from "./documentos-pendientes-client";
 import { RequerimientoDecisionClient, formatearTimestampCompra } from "@/components/compras/requerimiento-decision-client";
@@ -12,7 +13,7 @@ import { FacturaEstadoLinea } from "@/components/compras/factura-estado-linea";
 import { indicesFacturasRepetidas, MSG_FACTURAS_REPETIDAS } from "@/lib/compras/factura-compra";
 
 type Opcion = { id: number; nombre: string };
-type Proveedor = { id: number; nombre_comercial: string; nit: string | null; contacto_nombre: string | null; contacto_telefono: string | null; telefono: string | null; metodo_pago_habitual: string | null; banco: string | null; numero_cuenta: string | null; dias_credito: number | null };
+type Proveedor = ProveedorPickerOpt;
 type Vehiculo = { id: number; placa: string; descripcion: string | null; marca: string | null; modelo: string | null };
 type Catalogos = { entidades: Opcion[]; usuarios: Opcion[]; requirentesOperaciones: Opcion[]; proveedores: Proveedor[]; vehiculos: Vehiculo[] };
 
@@ -24,12 +25,9 @@ export function opcionesUnidadesCompra(vehiculos: Vehiculo[], id: number | null,
   })), String(id || ""), nombre || "Unidad histórica");
 }
 
-export function opcionesProveedoresCompra(proveedores: Proveedor[], id: number, nombre?: string): CatalogoSearchOption[] {
-  return opcionesConHistorico(proveedores.map(p => ({
-    value: String(p.id), label: p.nombre_comercial,
-    searchText: [p.nombre_comercial, p.nit, p.contacto_nombre, p.contacto_telefono, p.telefono].filter(Boolean).join(" "),
-  })), String(id || ""), nombre || "Proveedor histórico");
-}
+// COMPRAS-PROVEEDOR-INLINE — la implementación real vive en proveedor-compra-picker.tsx (junto al picker que la
+// consume); se re-exporta aquí para no romper a quien ya la importaba desde este archivo.
+export { opcionesProveedoresCompra };
 
 function opcionesIdentidad(usuarios: Opcion[], id: number, nombre?: string | null): CatalogoSearchOption[] {
   const opciones = usuarios.map(u => ({ value: String(u.id), label: u.nombre }));
@@ -44,7 +42,7 @@ export function lineaEditable(l: DetalleCompra["lineas"][number]): LineaForm {
   // No devolver snapshots en PATCH: solo IDs y campos editables.
   return { key: `id-${l.id}`, id: l.id, vehiculo_id: l.vehiculo_id, unidad_descripcion: l.unidad_descripcion, fecha: l.fecha, serie_factura: l.serie_factura, numero_factura: l.numero_factura, proveedor_id: l.proveedor_id, repuesto_descripcion: l.repuesto_descripcion, metodo_pago: l.metodo_pago, condicion_pago: l.condicion_pago, total: l.total, observaciones: l.observaciones };
 }
-export function RequerimientoFormClient({ slug, detalle, editable, solicitante, puedeEliminar, puedeVerProveedores, puedeSubirDocumentos, puedeAutorizar, fechaHoy }: { slug: string; detalle?: DetalleCompra; editable: boolean; solicitante: string; puedeEliminar: boolean; puedeVerProveedores: boolean; puedeSubirDocumentos: boolean; puedeAutorizar: boolean; fechaHoy: string }) {
+export function RequerimientoFormClient({ slug, detalle, editable, solicitante, puedeEliminar, puedeVerProveedores, puedeCrearProveedores = false, puedeEditarProveedores = false, puedeSubirDocumentos, puedeAutorizar, fechaHoy }: { slug: string; detalle?: DetalleCompra; editable: boolean; solicitante: string; puedeEliminar: boolean; puedeVerProveedores: boolean; puedeCrearProveedores?: boolean; puedeEditarProveedores?: boolean; puedeSubirDocumentos: boolean; puedeAutorizar: boolean; fechaHoy: string }) {
   const router = useRouter();
   const [fecha, setFecha] = useState(detalle?.fecha_requerimiento ?? fechaHoy);
   const [entidad, setEntidad] = useState(detalle?.entidad_requirente_id ?? 0);
@@ -68,6 +66,13 @@ export function RequerimientoFormClient({ slug, detalle, editable, solicitante, 
     return () => controller.abort();
   }, [slug, editable]);
   const cambiar = (key: string, cambios: Partial<LineaForm>) => setLineas(actual => actual.map(l => l.key === key ? { ...l, ...cambios } : l));
+  // COMPRAS-PROVEEDOR-INLINE (secciones 4, 19) — agrega/actualiza el catálogo local (sin recargar /compras/catalogos)
+  // y selecciona SOLO en la línea de origen (identificada por su `key` estable), sin alterar las demás. El proveedor
+  // queda disponible de inmediato para cualquier otra línea porque `catalogos.proveedores` es estado compartido.
+  const agregarProveedorYSeleccionar = (key: string, p: ProveedorPickerOpt) => {
+    setCatalogos(actual => actual ? { ...actual, proveedores: fusionarProveedorEnCatalogo(actual.proveedores, p) } : actual);
+    setLineas(actual => actual.map(v => v.key === key ? seleccionarProveedorCompra(v, p.id, p.metodo_pago_habitual) : v));
+  };
   // Duplicados dentro del propio formulario (proveedor + serie + número normalizados): se recalcula en cada render, al instante.
   const repetidas = indicesFacturasRepetidas(lineas);
   async function guardar(e: React.FormEvent) {
@@ -111,7 +116,7 @@ export function RequerimientoFormClient({ slug, detalle, editable, solicitante, 
         <label>Serie factura<input className={estilo} maxLength={100} value={l.serie_factura ?? ""} onChange={e => cambiar(l.key, { serie_factura: e.target.value || null })} /></label>
         <label>Número factura<input className={estilo} maxLength={100} value={l.numero_factura ?? ""} aria-invalid={repetidas.has(indice) || existentes[l.key] === true} onChange={e => cambiar(l.key, { numero_factura: e.target.value || null })} /></label>
         {editable ? <FacturaEstadoLinea slug={slug} linea={l} claveLinea={l.key} interna={repetidas.has(indice)} onDuplicada={marcarExistente} /> : null}
-        {editable ? <CatalogoSearchSelect label="Proveedor" placeholder="Buscar proveedor..." value={String(l.proveedor_id || "")} options={opcionesProveedoresCompra(catalogos?.proveedores ?? [], l.proveedor_id, original?.proveedor_nombre_snapshot)} inputClassName={estilo} emptyLabel="Seleccionar" onChange={value => { const id = Number(value); const habitual = catalogos?.proveedores.find(v => v.id === id)?.metodo_pago_habitual; setLineas(actual => actual.map(v => v.key === l.key ? seleccionarProveedorCompra(v, id, habitual) : v)); }} /> : <p>Proveedor: {original?.proveedor_nombre_snapshot}</p>}
+        {editable ? <ProveedorCompraPicker slug={slug} proveedores={catalogos?.proveedores ?? []} value={l.proveedor_id} nombreHistorico={original?.proveedor_nombre_snapshot} inputClassName={estilo} puedeCrear={puedeCrearProveedores} puedeEditar={puedeEditarProveedores} onChange={value => { const id = Number(value); const habitual = catalogos?.proveedores.find(v => v.id === id)?.metodo_pago_habitual; setLineas(actual => actual.map(v => v.key === l.key ? seleccionarProveedorCompra(v, id, habitual) : v)); }} onProveedorCreado={p => agregarProveedorYSeleccionar(l.key, p)} /> : <p>Proveedor: {original?.proveedor_nombre_snapshot}</p>}
         <label>Repuesto a comprar<input className={estilo} required maxLength={1000} value={l.repuesto_descripcion} onChange={e => cambiar(l.key, { repuesto_descripcion: e.target.value })} /></label>
         <label>Método de pago<select className={estilo} value={l.metodo_pago} onChange={e => cambiar(l.key, { metodo_pago: e.target.value })}>{!METODOS_PAGO_COMPRAS.some(v => v === l.metodo_pago) && <option value={l.metodo_pago}>{l.metodo_pago}</option>}{METODOS_PAGO_COMPRAS.map(v => <option key={v}>{v}</option>)}</select></label>
         <label>Condición de pago<select className={estilo} value={l.condicion_pago} onChange={e => cambiar(l.key, { condicion_pago: e.target.value as LineaForm["condicion_pago"] })}><option>Contado</option><option>Crédito</option></select></label>

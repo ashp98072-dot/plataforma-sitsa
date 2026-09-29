@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }));
 import { lineaEditable, nuevaLinea, opcionesUnidadesCompra, opcionesProveedoresCompra, RequerimientoFormClient } from "@/components/compras/requerimiento-form-client";
 import { filtrarOpcionesBusqueda } from "@/components/tms/catalogo-search-select";
@@ -14,7 +14,10 @@ const detalle = { id: 12, codigo: "RC-2026-000012", fecha_requerimiento: "2026-0
 
 it("unidad y proveedor reutilizan CatalogoSearchSelect y conservan históricos/inactivos", () => {
   const source = leer("src/components/compras/requerimiento-form-client.tsx");
-  for (const label of ["Unidad / placa", "Proveedor"]) expect(source).toContain(`<CatalogoSearchSelect label="${label}"`);
+  expect(source).toContain('<CatalogoSearchSelect label="Unidad / placa"');
+  // COMPRAS-PROVEEDOR-INLINE — "Proveedor" ahora se renderiza vía ProveedorCompraPicker (wrapper que sigue usando
+  // CatalogoSearchSelect internamente, ver proveedor-compra-picker.tsx).
+  expect(source).toContain('<ProveedorCompraPicker slug={slug}');
   const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, puedeAutorizar: false, fechaHoy: "2026-09-17" }));
   for (const texto of ["Buscar placa o unidad...", "Buscar proveedor...", "C-123ABC · Cabezal (histórico)", "Proveedor histórico (histórico)"]) expect(html).toContain(texto);
   expect(html).toContain('value="5" selected=""');
@@ -38,7 +41,7 @@ it("busca proveedores por nombre, NIT, contacto y ambos teléfonos", () => {
 
 it("seleccionar proveedor conserva callback de método habitual y no afecta otras líneas", () => {
   const source = leer("src/components/compras/requerimiento-form-client.tsx");
-  expect(source).toMatch(/label="Proveedor"[^\n]*onChange=\{value =>[^\n]*seleccionarProveedorCompra\(v, id, habitual\)/);
+  expect(source).toMatch(/<ProveedorCompraPicker[^\n]*onChange=\{value =>[^\n]*seleccionarProveedorCompra\(v, id, habitual\)/);
   const original = lineaEditable(detalle.lineas[0]);
   const nueva = nuevaLinea("2026-09-18", "nueva-2");
   const lineas = [original, nueva].map(v => v.key === nueva.key ? seleccionarProveedorCompra(v, 7, "TARJETA DE CREDITO") : v);
@@ -98,6 +101,27 @@ it("ruta antigua redirige y las páginas y menú conservan gates independientes"
   expect(leer("src/app/e/[slug]/compras/requerimientos/page.tsx")).toContain('obtenerAccesoComprasPagina(slug, "compras_requerimientos")');
   expect(leer("src/app/e/[slug]/compras/proveedores/page.tsx")).toContain('obtenerAccesoComprasPagina(slug, "compras_proveedores")');
   expect(leer("src/components/app-shell.tsx")).toContain('tienePermiso(permisos, "compras_requerimientos", "ver")');
+});
+
+describe("COMPRAS-PROVEEDOR-INLINE (sección 5) — permisos: NO se concede ninguno nuevo, se reutiliza compras_proveedores", () => {
+  it("21) ambas páginas (alta y detalle) pasan puedeCrearProveedores/puedeEditarProveedores calculados con tienePermiso sobre los permisos YA cargados por el guard", () => {
+    for (const ruta of ["src/app/e/[slug]/compras/requerimientos/nuevo/page.tsx", "src/app/e/[slug]/compras/requerimientos/[id]/page.tsx"]) {
+      const source = leer(ruta);
+      expect(source).toContain('puedeCrearProveedores={tienePermiso(guard.permisos, "compras_proveedores", "crear")}');
+      expect(source).toContain('puedeEditarProveedores={tienePermiso(guard.permisos, "compras_proveedores", "editar")}');
+    }
+  });
+
+  it("RequerimientoFormClient declara puedeCrearProveedores/puedeEditarProveedores opcionales con default false (seguro por defecto)", () => {
+    const source = leer("src/components/compras/requerimiento-form-client.tsx");
+    expect(source).toContain("puedeCrearProveedores = false");
+    expect(source).toContain("puedeEditarProveedores = false");
+  });
+
+  it("20) el endpoint POST sigue exigiendo compras_proveedores:crear vía requireComprasProveedores — no se relaja para el alta inline", () => {
+    const source = leer("src/lib/compras/proveedor-api.ts");
+    expect(source).toContain('requireComprasProveedores(slug, rawId === undefined ? "crear" : "editar")');
+  });
 });
 it("ajuste transversal sin SQL, RRHH, programación ni credenciales", () => {
   const files = execFileSync("git", ["diff", "--name-only", "aebfdc1ee46f6fe2bac4b80612db928e0a10c71b"], { encoding: "utf8" }).trim().split(/\r?\n/);
@@ -216,4 +240,24 @@ it("UI: documentos siguen visibles y subibles en un requerimiento ya Autorizada 
   const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle: autorizadaFase4, editable: false, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: true, puedeAutorizar: false, fechaHoy: "2026-09-17" }));
   expect(html).toContain("Documentos (0)");
   expect(html).toContain("Subir documento");
+});
+
+describe("COMPRAS-PROVEEDOR-INLINE — RequerimientoFormClient con puedeCrearProveedores", () => {
+  it("22) sigue mostrando 'Buscar proveedor...' por cada línea, con o sin el nuevo permiso (no rompe el selector existente)", () => {
+    const base = { slug: "a", detalle, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, puedeAutorizar: false, fechaHoy: "2026-09-17" } as const;
+    expect(renderToStaticMarkup(createElement(RequerimientoFormClient, { ...base, puedeCrearProveedores: false }))).toContain("Buscar proveedor...");
+    expect(renderToStaticMarkup(createElement(RequerimientoFormClient, { ...base, puedeCrearProveedores: true }))).toContain("Buscar proveedor...");
+  });
+
+  it("sin puedeCrearProveedores (prop omitida) es exactamente el mismo HTML que con puedeCrearProveedores=false (default seguro)", () => {
+    const base = { slug: "a", detalle, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, puedeAutorizar: false, fechaHoy: "2026-09-17" } as const;
+    const sinProp = renderToStaticMarkup(createElement(RequerimientoFormClient, base));
+    const conFalse = renderToStaticMarkup(createElement(RequerimientoFormClient, { ...base, puedeCrearProveedores: false }));
+    expect(sinProp).toBe(conFalse);
+  });
+
+  it("19) '+ Crear proveedor' nunca aparece en el render inicial (la búsqueda arranca vacía) sin importar el permiso", () => {
+    const base = { slug: "a", detalle, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeSubirDocumentos: false, puedeAutorizar: false, fechaHoy: "2026-09-17" } as const;
+    expect(renderToStaticMarkup(createElement(RequerimientoFormClient, { ...base, puedeCrearProveedores: true }))).not.toContain("Crear proveedor");
+  });
 });

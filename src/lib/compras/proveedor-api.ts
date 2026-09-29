@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { requireComprasProveedores } from "./acceso";
 import { crearProveedorSchema, editarProveedorSchema } from "./proveedor-schema";
-import { guardarProveedor, listarProveedores, obtenerProveedor } from "./proveedores";
+import { ErrorProveedorDuplicado, guardarProveedor, listarProveedores, obtenerProveedor } from "./proveedores";
+
+/** Campos mínimos del proveedor recién creado/editado para actualizar catálogos en cliente sin recargar (sección 17). */
+const CAMPOS_CATALOGO = ["id", "nombre_comercial", "nit", "contacto_nombre", "contacto_telefono", "telefono", "metodo_pago_habitual", "banco", "numero_cuenta", "dias_credito"] as const;
 
 const idValido = (id: string) => /^[1-9]\d*$/.test(id) && Number.isSafeInteger(Number(id)) && Number(id) <= 2147483647;
 
@@ -32,6 +35,15 @@ export async function proveedorGuardar(req: Request, slug: string, rawId?: strin
   try {
     const id = await guardarProveedor(guard.empresa.id, guard.session.id, guard.session.username, parsed.data, rawId === undefined ? undefined : Number(rawId));
     if (id === null) return NextResponse.json({ error: "Proveedor no encontrado." }, { status: 404 });
-    return NextResponse.json({ id, mensaje: "Proveedor guardado." }, { status: rawId === undefined ? 201 : 200 });
-  } catch { return NextResponse.json({ error: "No se pudo guardar el proveedor." }, { status: 500 }); }
+    // Payload mínimo del proveedor recién guardado (mismo shape que catalogosCompra): el cliente lo agrega/actualiza
+    // en su catálogo local y selecciona la línea de origen sin recargar /compras/catalogos completo.
+    const guardado = await obtenerProveedor(guard.empresa.id, id);
+    const proveedor = guardado ? Object.fromEntries(CAMPOS_CATALOGO.map(c => [c, guardado[c]])) : null;
+    return NextResponse.json({ id, mensaje: "Proveedor guardado.", proveedor }, { status: rawId === undefined ? 201 : 200 });
+  } catch (error) {
+    if (error instanceof ErrorProveedorDuplicado) {
+      return NextResponse.json({ error: error.message, codigo: error.codigo, proveedorExistente: error.proveedorExistente }, { status: 409 });
+    }
+    return NextResponse.json({ error: "No se pudo guardar el proveedor." }, { status: 500 });
+  }
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { filtrarPersonas } from "@/lib/busqueda-personas";
 
 export type CatalogoSearchOption = { value: string; label: string; detail?: string; searchText?: string };
@@ -48,10 +48,16 @@ type Props = {
   selectDataCampo?: string;
   /** Mensaje cuando la búsqueda no encuentra nada (por defecto "Sin coincidencias."). */
   sinResultados?: string;
+  /**
+   * COMPRAS-PROVEEDOR-INLINE — opt-in, sin efecto en ningún consumidor existente si se omite:
+   * notifica el texto de búsqueda en cada tecla, para que el padre pueda ofrecer una acción tipo
+   * "+ Crear <texto>" cuando no hay coincidencia exacta (ver ProveedorCompraPicker).
+   */
+  onSearchChange?: (texto: string) => void;
 };
 
 /** Buscador auxiliar + select nativo visible. El input solo filtra; la selección siempre ocurre en el desplegable. */
-export function CatalogoSearchSelect({ label, placeholder, value, options, inputClassName, onChange, manualText, onTextChange, onOptionSelected, emptyLabel, selectDataCampo, sinResultados }: Props) {
+export function CatalogoSearchSelect({ label, placeholder, value, options, inputClassName, onChange, manualText, onTextChange, onOptionSelected, emptyLabel, selectDataCampo, sinResultados, onSearchChange }: Props) {
   const id = useId();
   const [busqueda, setBusqueda] = useState("");
   const [modoManual, setModoManual] = useState(false);
@@ -61,6 +67,9 @@ export function CatalogoSearchSelect({ label, placeholder, value, options, input
     ? [seleccion, ...filtradas]
     : filtradas;
   const manual = Boolean(onTextChange) && debeMostrarNombreManual(value, modoManual, manualText);
+  // COMPRAS-PROVEEDOR-INLINE — useEffect en vez de llamarlo dentro del onChange del input: mantiene intacta la línea
+  // "El input solo filtra" (onChange={(e) => setBusqueda(e.target.value)}) para los otros 8 consumidores existentes.
+  useEffect(() => { onSearchChange?.(busqueda); }, [busqueda, onSearchChange]);
 
   return (
     <div className="space-y-1 text-xs text-[var(--muted)]">
