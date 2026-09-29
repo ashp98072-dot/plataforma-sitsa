@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 
 const leer = (p: string) => readFileSync(p, "utf8").replace(/\r\n/g, "\n");
 const empleados = leer("src/app/e/[slug]/rrhh/empleados/page.tsx");
-const entrevistasPage = leer("src/app/e/[slug]/rrhh/entrevistas/page.tsx");
+// ATRACCION-TALENTO-1: la UI real de Entrevistas se movió a este componente compartido
+// (src/app/e/[slug]/rrhh/entrevistas/page.tsx ahora es solo un redirect — ver page.test.ts ahí).
+const entrevistasPage = leer("src/components/rrhh/entrevistas-page-client.tsx");
 
 describe("ALTA EMPLEADO desde entrevista aprobada (19-27)", () => {
   it("19-24) transfiere primerNombre, segundoNombre, tercer/cuartoNombre, primerApellido, segundoApellido, apellidoCasada", () => {

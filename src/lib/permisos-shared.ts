@@ -855,7 +855,11 @@ export const RRHH_NAV: {
   { sub: "horas_extra", label: "Horas Extra", path: "horas-extra" },
   { sub: "inventario", label: "Inventario", path: "inventario" },
   { sub: "centros_costo", label: "Centros de Costo", path: "centros-costo" },
-  { sub: "entrevistas", label: "Entrevistas", path: "entrevistas" },
+  // ATRACCION-TALENTO-1: "Entrevistas" salió de este grupo (Gestión de
+  // Talento Humano) y ahora vive en su propio grupo de navegación
+  // "Atracción de Talento Humano" (ver app-shell.tsx) — el permiso
+  // `entrevistas` (RrhhSubmodulo) NO cambió, sigue siendo el mismo, solo
+  // cambió dónde se muestra el link.
   { sub: "recordatorios", label: "Recordatorios", path: "recordatorios" },
   { sub: "bitacora_legal", label: "Bitácora Legal", path: "bitacora-legal" },
   { sub: "configuracion", label: "Configuración", path: "configuracion" },
