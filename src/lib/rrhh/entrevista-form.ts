@@ -71,4 +71,31 @@ export function calcularPeriodoTrasGuardar(
   return { anio, mes, cambioPeriodo: anio !== anioActual || mes !== mesActual };
 }
 
+export type EntrevistadorMostrado =
+  | { tipo: "usuario"; nombre: string }
+  | { tipo: "empleado_historico"; nombre: string }
+  | { tipo: "ninguno" };
+
+/**
+ * ATRACCION-TALENTO-2 (secciones 3 y 9 del ticket) — precedencia de
+ * visualización del entrevistador: usuario > empleado histórico > ninguno.
+ * Pura (sin DB) a propósito: la usan tanto el calendario/listado de
+ * Entrevistas (client component) como Reportes — src/lib/rrhh/entrevistas.ts
+ * no puede importarse desde un client component (trae @/lib/db).
+ */
+export function resolverEntrevistadorMostrado(ent: {
+  entrevistadorUsuarioId: number | null;
+  entrevistadorUsuarioNombre?: string;
+  entrevistadorEmpleadoId: number | null;
+  entrevistadorNombre?: string;
+}): EntrevistadorMostrado {
+  if (ent.entrevistadorUsuarioId != null && ent.entrevistadorUsuarioNombre) {
+    return { tipo: "usuario", nombre: ent.entrevistadorUsuarioNombre };
+  }
+  if (ent.entrevistadorEmpleadoId != null && ent.entrevistadorNombre) {
+    return { tipo: "empleado_historico", nombre: ent.entrevistadorNombre };
+  }
+  return { tipo: "ninguno" };
+}
+
 export { componerNombreCompleto };

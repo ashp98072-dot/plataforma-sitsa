@@ -25,7 +25,13 @@ const patchSchema = z.object({
   candidatoEmail: z.string().email().nullable().optional().or(z.literal("")),
   puesto: z.string().optional(),
   fechaHora: z.string().optional(),
-  entrevistadorEmpleadoId: z.number().int().positive().nullable().optional(),
+  // ATRACCION-TALENTO-2 (corrección pre-SQL) — entrevistador principal/auxiliar ahora son usuarios del sistema
+  // (opcionales). Deliberadamente este schema HTTP NO acepta entrevistadorEmpleadoId: ningún flujo nuevo puede
+  // reasignar una entrevista a otro empleado histórico. actualizarEntrevista() SÍ conserva ese campo en su tipo
+  // interno (entrevistas.ts) para preservar/leer entrevistas ya existentes — no hay ningún caller HTTP real que lo
+  // necesite hoy.
+  entrevistadorUsuarioId: z.number().int().positive().nullable().optional(),
+  auxiliarUsuarioId: z.number().int().positive().nullable().optional(),
   modalidad: z.enum(["Presencial", "Virtual"]).optional(),
   lugarOEnlace: z.string().nullable().optional(),
   estado: z

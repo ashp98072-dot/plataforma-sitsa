@@ -91,37 +91,75 @@ describe("ATRACCION-TALENTO-1 — obtenerReportePorPuesto (24)", () => {
   });
 });
 
-describe("ATRACCION-TALENTO-1 — obtenerReportePorEntrevistador (25)", () => {
-  it("entrevistador NULL se muestra como 'Sin entrevistador asignado'", async () => {
+describe("ATRACCION-TALENTO-2 — obtenerReportePorEntrevistador (25, sección 10 clave conceptual)", () => {
+  it("usuario tiene precedencia sobre empleado histórico; sin ninguno -> 'Sin entrevistador asignado'", async () => {
     vi.mocked(query).mockResolvedValueOnce([
-      { entrevistador_empleado_id: 9, entrevistador_nombre: "Ana López", asignadas: 3, realizadas: 2, aprobados: 1, rechazados: 0, pendientes: 2 },
-      { entrevistador_empleado_id: null, entrevistador_nombre: null, asignadas: 1, realizadas: 0, aprobados: 0, rechazados: 0, pendientes: 1 },
+      { clave: "u:15", entrevistador_usuario_id: 15, entrevistador_empleado_id: null, usuario_nombre: "María López", empleado_nombre: null, asignadas: 4, realizadas: 3, aprobados: 2, rechazados: 0, pendientes: 2 },
+      { clave: "e:9", entrevistador_usuario_id: null, entrevistador_empleado_id: 9, usuario_nombre: null, empleado_nombre: "Ana López", asignadas: 3, realizadas: 2, aprobados: 1, rechazados: 0, pendientes: 2 },
+      { clave: "sin", entrevistador_usuario_id: null, entrevistador_empleado_id: null, usuario_nombre: null, empleado_nombre: null, asignadas: 1, realizadas: 0, aprobados: 0, rechazados: 0, pendientes: 1 },
     ] as never);
     const r = await obtenerReportePorEntrevistador(EMPRESA, {});
-    expect(r[0]).toMatchObject({ entrevistadorEmpleadoId: 9, entrevistadorNombre: "Ana López" });
-    expect(r[1]).toMatchObject({ entrevistadorEmpleadoId: null, entrevistadorNombre: "Sin entrevistador asignado" });
+    expect(r[0]).toMatchObject({ clave: "u:15", entrevistadorUsuarioId: 15, entrevistadorNombre: "María López", historico: false });
+    expect(r[1]).toMatchObject({ clave: "e:9", entrevistadorEmpleadoId: 9, entrevistadorNombre: "Ana López", historico: true });
+    expect(r[2]).toMatchObject({ clave: "sin", entrevistadorNombre: "Sin entrevistador asignado", historico: false });
     const [sql] = vi.mocked(query).mock.calls[0];
     expect(String(sql)).toContain("LEFT JOIN empleados e");
+    expect(String(sql)).toContain("LEFT JOIN usuarios ue");
+  });
+
+  it("agrupa por la clave conceptual (u:/e:/sin), nunca solo por el id numérico desnudo — evita fusionar un usuario.id con un empleado.id iguales", async () => {
+    vi.mocked(query).mockResolvedValueOnce([] as never);
+    await obtenerReportePorEntrevistador(EMPRESA, {});
+    const [sql] = vi.mocked(query).mock.calls[0];
+    expect(String(sql)).toContain("GROUP BY clave, ent.entrevistador_usuario_id, ent.entrevistador_empleado_id");
+    expect(String(sql)).toMatch(/CASE\s+WHEN ent\.entrevistador_usuario_id IS NOT NULL THEN CONCAT\('u:', ent\.entrevistador_usuario_id\)/);
+  });
+
+  it("filtro entrevistadorUsuarioId se agrega al WHERE (coexiste con el histórico entrevistadorEmpleadoId)", async () => {
+    vi.mocked(query).mockResolvedValueOnce([] as never);
+    await obtenerReportePorEntrevistador(EMPRESA, { entrevistadorUsuarioId: 15 });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(String(sql)).toContain("ent.entrevistador_usuario_id = ?");
+    expect(params).toEqual([EMPRESA, 15]);
   });
 });
 
-describe("ATRACCION-TALENTO-1 — obtenerDetalleEntrevistas", () => {
-  it("mapea el listado detallado y limita a 500 filas (evita payloads sin límite)", async () => {
+describe("ATRACCION-TALENTO-2 — obtenerDetalleEntrevistas (auxiliar + precedencia usuario/empleado)", () => {
+  it("mapea el listado detallado (con auxiliar) y limita a 500 filas (evita payloads sin límite)", async () => {
     vi.mocked(query).mockResolvedValueOnce([
-      { id: 1, fecha_hora_iso: "2026-09-29T09:00:00", candidato_nombre: "Juan Pérez", puesto: "Piloto", entrevistador_nombre: "Ana López", modalidad: "Presencial", estado: "Programada", resultado: "Pendiente" },
+      {
+        id: 1, fecha_hora_iso: "2026-09-29T09:00:00", candidato_nombre: "Juan Pérez", puesto: "Piloto",
+        entrevistador_usuario_nombre: "María López", entrevistador_empleado_nombre: null, auxiliar_nombre: "Carlos Pérez",
+        modalidad: "Presencial", estado: "Programada", resultado: "Pendiente",
+      },
     ] as never);
     const r = await obtenerDetalleEntrevistas(EMPRESA, {});
-    expect(r[0]).toMatchObject({ id: 1, candidatoNombre: "Juan Pérez", entrevistadorNombre: "Ana López" });
+    expect(r[0]).toMatchObject({
+      id: 1, candidatoNombre: "Juan Pérez", entrevistadorNombre: "María López", entrevistadorHistorico: false, auxiliarNombre: "Carlos Pérez",
+    });
     const [sql] = vi.mocked(query).mock.calls[0];
     expect(String(sql)).toContain("LIMIT 500");
     expect(String(sql)).toContain("ORDER BY ent.fecha_hora DESC");
+  });
+
+  it("11) sin auxiliar -> auxiliarNombre = null (no una cadena vacía ni un objeto)", async () => {
+    vi.mocked(query).mockResolvedValueOnce([
+      {
+        id: 2, fecha_hora_iso: "2026-09-29T10:00:00", candidato_nombre: "Ana Ruiz", puesto: "Auxiliar",
+        entrevistador_usuario_nombre: null, entrevistador_empleado_nombre: "Juan Gómez", auxiliar_nombre: null,
+        modalidad: "Virtual", estado: "Realizada", resultado: "Aprobado",
+      },
+    ] as never);
+    const r = await obtenerDetalleEntrevistas(EMPRESA, {});
+    expect(r[0]).toMatchObject({ entrevistadorNombre: "Juan Gómez", entrevistadorHistorico: true, auxiliarNombre: null });
   });
 
   it("no ejecuta ninguna consulta por fila (siempre exactamente 1 query, sin importar cuántas filas devuelva)", async () => {
     vi.mocked(query).mockResolvedValueOnce(
       Array.from({ length: 50 }, (_, i) => ({
         id: i, fecha_hora_iso: "2026-09-29T09:00:00", candidato_nombre: `C${i}`, puesto: "Piloto",
-        entrevistador_nombre: null, modalidad: "Presencial", estado: "Programada", resultado: "Pendiente",
+        entrevistador_usuario_nombre: null, entrevistador_empleado_nombre: null, auxiliar_nombre: null,
+        modalidad: "Presencial", estado: "Programada", resultado: "Pendiente",
       })) as never,
     );
     await obtenerDetalleEntrevistas(EMPRESA, {});

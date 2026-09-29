@@ -89,3 +89,45 @@ describe("regresiones: portal, expediente, documentos, seguimiento no cambiaron 
     expect(leer("src/app/api/empresas/[slug]/rrhh/entrevistas/[id]/seguimiento/route.ts")).toContain("obtenerEntrevista");
   });
 });
+
+describe("ATRACCION-TALENTO-2 (corrección pre-SQL) — POST/PATCH ya NO aceptan el modelo histórico de empleado", () => {
+  it("1) POST con entrevistadorUsuarioId válido crea correctamente y lo reenvía a crearEntrevista", async () => {
+    const res = await POST(req({ ...base, entrevistadorUsuarioId: 10 }), ctx);
+    expect(res.status).toBe(200);
+    expect(m.crearEntrevista).toHaveBeenCalledWith(expect.objectContaining({ entrevistadorUsuarioId: 10 }));
+  });
+
+  it("2) POST con auxiliarUsuarioId válido crea correctamente y lo reenvía a crearEntrevista", async () => {
+    const res = await POST(req({ ...base, entrevistadorUsuarioId: 10, auxiliarUsuarioId: 11 }), ctx);
+    expect(res.status).toBe(200);
+    expect(m.crearEntrevista).toHaveBeenCalledWith(expect.objectContaining({ entrevistadorUsuarioId: 10, auxiliarUsuarioId: 11 }));
+  });
+
+  it("3) POST con entrevistadorEmpleadoId en el body: el campo queda ignorado (Zod lo descarta), NUNCA llega a crearEntrevista", async () => {
+    const res = await POST(req({ ...base, entrevistadorEmpleadoId: 999 }), ctx);
+    expect(res.status).toBe(200);
+    const enviado = m.crearEntrevista.mock.calls[0]?.[0];
+    expect(enviado).toBeDefined();
+    expect(enviado.entrevistadorEmpleadoId).toBeUndefined();
+    expect(Object.keys(enviado)).not.toContain("entrevistadorEmpleadoId");
+  });
+
+  it("PATCH con entrevistadorEmpleadoId en el body: el campo también queda ignorado (Zod lo descarta), NUNCA llega a actualizarEntrevista", async () => {
+    const res = await PATCH(req({ entrevistadorEmpleadoId: 999, puesto: "Auxiliar" }), ctxId());
+    expect(res.status).toBe(200);
+    const enviado = m.actualizarEntrevista.mock.calls[0]?.[2];
+    expect(enviado).toBeDefined();
+    expect(enviado.entrevistadorEmpleadoId).toBeUndefined();
+    expect(Object.keys(enviado)).not.toContain("entrevistadorEmpleadoId");
+  });
+
+  it("el schema Zod del POST ya no declara el campo entrevistadorEmpleadoId (fuente de verdad: código, no solo runtime)", () => {
+    const src = readFileSync("src/app/api/empresas/[slug]/rrhh/entrevistas/route.ts", "utf8");
+    expect(src).not.toMatch(/entrevistadorEmpleadoId:\s*z\./);
+  });
+
+  it("el schema Zod del PATCH ya no declara el campo entrevistadorEmpleadoId", () => {
+    const src = readFileSync("src/app/api/empresas/[slug]/rrhh/entrevistas/[id]/route.ts", "utf8");
+    expect(src).not.toMatch(/entrevistadorEmpleadoId:\s*z\./);
+  });
+});

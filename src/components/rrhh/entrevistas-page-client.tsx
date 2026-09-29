@@ -3,11 +3,16 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { EmpleadoPicker, type EmpOpt } from "@/components/rrhh/empleado-picker";
+import { UsuarioEntrevistaPicker, type UsuarioEntrevistaOpt } from "@/components/rrhh/usuario-entrevista-picker";
 import { EntrevistaDocumentos } from "@/components/rrhh/entrevista-documentos";
 import { ExpedienteCandidato } from "@/components/rrhh/expediente-candidato";
 import { componerNombreCompleto, tieneIdentidadEstructurada } from "@/lib/rrhh/nombre-completo";
-import { construirIdentidadPatch, debeIncluirIdentidad as calcularDebeIncluirIdentidad, calcularPeriodoTrasGuardar } from "@/lib/rrhh/entrevista-form";
+import {
+  construirIdentidadPatch,
+  debeIncluirIdentidad as calcularDebeIncluirIdentidad,
+  calcularPeriodoTrasGuardar,
+  resolverEntrevistadorMostrado,
+} from "@/lib/rrhh/entrevista-form";
 
 type Entrevista = {
   id: number;
@@ -25,6 +30,10 @@ type Entrevista = {
   fechaHora: string;
   entrevistadorEmpleadoId: number | null;
   entrevistadorNombre?: string;
+  entrevistadorUsuarioId: number | null;
+  entrevistadorUsuarioNombre?: string;
+  auxiliarUsuarioId: number | null;
+  auxiliarUsuarioNombre?: string;
   modalidad: "Presencial" | "Virtual";
   lugarOEnlace: string | null;
   estado: "Programada" | "Realizada" | "Cancelada" | "No asistió";
@@ -36,6 +45,8 @@ const MESES = [
   "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
   "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
 ];
+
+const OTRO_PUESTO = "__otro__";
 
 const ESTADO_COLOR: Record<Entrevista["estado"], string> = {
   Programada: "bg-blue-500/20 text-blue-300 border-blue-500/40",
@@ -64,7 +75,10 @@ function vacio() {
     puesto: "",
     fecha: hoyIso(),
     hora: "09:00",
-    entrevistadorEmpleadoId: 0,
+    // ATRACCION-TALENTO-2 — el entrevistador principal ahora es un usuario (no un empleado). entrevistadorEmpleadoId
+    // histórico ya NO se edita desde este formulario: ver entrevistadorHistorico/entrevistadorTocado en el componente.
+    entrevistadorUsuarioId: 0,
+    auxiliarUsuarioId: 0,
     modalidad: "Presencial" as "Presencial" | "Virtual",
     lugarOEnlace: "",
     estado: "Programada" as Entrevista["estado"],
@@ -88,7 +102,8 @@ export default function EntrevistasPageClient() {
   const [anio, setAnio] = useState(hoy.getFullYear());
   const [mes, setMes] = useState(hoy.getMonth() + 1); // 1-12
   const [entrevistas, setEntrevistas] = useState<Entrevista[]>([]);
-  const [empleados, setEmpleados] = useState<EmpOpt[]>([]);
+  const [usuarios, setUsuarios] = useState<UsuarioEntrevistaOpt[]>([]);
+  const [puestos, setPuestos] = useState<string[]>([]);
   const [diaSel, setDiaSel] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(vacio());
   const [editandoId, setEditandoId] = useState<number | null>(null);
@@ -102,6 +117,14 @@ export default function EntrevistasPageClient() {
   // identidad es obligatoria/se envía en el PATCH — independiente de que el usuario, mientras edita, empiece a
   // escribir en esos campos (eso lo cubre `tieneAlgunaParteIdentidad`, calculado en vivo más abajo).
   const [entrevistaCargadaSinEstructura, setEntrevistaCargadaSinEstructura] = useState(false);
+  // ATRACCION-TALENTO-2 (sección 3) — nombre del empleado histórico cuando la entrevista NO tiene entrevistador_usuario_id
+  // asignado todavía; null si no aplica. entrevistadorTocado se fija en true SOLO si el usuario cambia el selector —
+  // así el PATCH nunca manda entrevistadorUsuarioId (y por lo tanto nunca limpia el histórico) al editar otro campo.
+  const [entrevistadorHistorico, setEntrevistadorHistorico] = useState<string | null>(null);
+  const [entrevistadorTocado, setEntrevistadorTocado] = useState(false);
+  // ATRACCION-TALENTO-2 (sección 13) — true cuando el puesto se escribe libre ("Otro puesto…" o uno ya guardado que
+  // no está en el catálogo actual: nunca se borra el valor existente).
+  const [puestoOtro, setPuestoOtro] = useState(false);
 
   const cargar = useCallback(async () => {
     setCargando(true);
@@ -120,16 +143,19 @@ export default function EntrevistasPageClient() {
 
   useEffect(() => {
     void (async () => {
-      // ATRACCION-TALENTO-1 (corrección post-revisión) — catálogo mínimo
-      // propio de Atracción (id/codigo/nombre de activos), NO el endpoint
-      // general de empleados: ese exige `empleados:ver`, que un usuario con
-      // solo `entrevistas:ver` no necesariamente tiene, y dejaba el
-      // selector de entrevistador vacío.
-      const res = await fetch(
-        `/api/empresas/${slug}/rrhh/entrevistas/entrevistadores`,
-      );
+      // ATRACCION-TALENTO-2 — el entrevistador principal/auxiliar ahora son
+      // usuarios del sistema (catálogo propio: activos, con acceso a esta
+      // empresa y permiso efectivo entrevistas:ver, o Admin). Reemplaza al
+      // catálogo de empleados usado antes de este ticket.
+      const res = await fetch(`/api/empresas/${slug}/rrhh/entrevistas/usuarios`);
       const data = await res.json();
-      setEmpleados(data.entrevistadores ?? []);
+      setUsuarios(data.usuarios ?? []);
+    })();
+    void (async () => {
+      // ATRACCION-TALENTO-2 (sección 12) — catálogo real de puestos de esta empresa.
+      const res = await fetch(`/api/empresas/${slug}/rrhh/entrevistas/puestos`);
+      const data = await res.json();
+      setPuestos(data.puestos ?? []);
     })();
   }, [slug]);
 
@@ -175,6 +201,9 @@ export default function EntrevistasPageClient() {
     setError("");
     setMsg("");
     setEntrevistaCargadaSinEstructura(false);
+    setEntrevistadorHistorico(null);
+    setEntrevistadorTocado(false);
+    setPuestoOtro(false);
     setForm({ ...vacio(), fecha: diaIso ?? vacio().fecha });
   }
 
@@ -183,6 +212,9 @@ export default function EntrevistasPageClient() {
     setEditandoId(null);
     setError("");
     setEntrevistaCargadaSinEstructura(false);
+    setEntrevistadorHistorico(null);
+    setEntrevistadorTocado(false);
+    setPuestoOtro(false);
     setForm((actual) => ({ ...actual, id: 0, fecha: diaIso }));
   }
 
@@ -196,6 +228,17 @@ export default function EntrevistasPageClient() {
       primerApellido: ent.candidatoPrimerApellido ?? "", segundoApellido: ent.candidatoSegundoApellido ?? "",
       apellidoCasada: ent.candidatoApellidoCasada ?? "",
     }));
+    // ATRACCION-TALENTO-2 (sección 3) — si esta entrevista todavía no tiene entrevistador_usuario_id (histórica
+    // con solo entrevistador_empleado_id), guardamos el nombre del empleado para mostrarlo de forma discreta; el
+    // selector arranca vacío y entrevistadorTocado en false: si RRHH no lo toca, el PATCH no manda entrevistadorUsuarioId
+    // y el histórico queda intacto.
+    setEntrevistadorHistorico(
+      ent.entrevistadorUsuarioId == null && ent.entrevistadorEmpleadoId != null
+        ? (ent.entrevistadorNombre ?? "Empleado")
+        : null,
+    );
+    setEntrevistadorTocado(false);
+    setPuestoOtro(!puestos.includes(ent.puesto));
     setForm({
       id: ent.id,
       primerNombre: ent.candidatoPrimerNombre ?? "",
@@ -211,7 +254,8 @@ export default function EntrevistasPageClient() {
       puesto: ent.puesto,
       fecha: ent.fechaHora.slice(0, 10),
       hora: ent.fechaHora.slice(11, 16),
-      entrevistadorEmpleadoId: ent.entrevistadorEmpleadoId ?? 0,
+      entrevistadorUsuarioId: ent.entrevistadorUsuarioId ?? 0,
+      auxiliarUsuarioId: ent.auxiliarUsuarioId ?? 0,
       modalidad: ent.modalidad,
       lugarOEnlace: ent.lugarOEnlace ?? "",
       estado: ent.estado,
@@ -239,7 +283,13 @@ export default function EntrevistasPageClient() {
       const identidad = resultadoIdentidad.identidad; // {} en histórica intacta: candidato_nombre y las 7 columnas quedan como estaban.
       const resto = {
         candidatoTelefono: form.candidatoTelefono || null, candidatoEmail: form.candidatoEmail || null,
-        puesto: form.puesto, fechaHora: `${form.fecha}T${form.hora}`, entrevistadorEmpleadoId: form.entrevistadorEmpleadoId || null,
+        puesto: form.puesto, fechaHora: `${form.fecha}T${form.hora}`,
+        auxiliarUsuarioId: form.auxiliarUsuarioId || null,
+        // ATRACCION-TALENTO-2 (sección 3) — al crear siempre se manda (puede ser null = sin entrevistador). Al editar
+        // solo se manda si RRHH tocó el selector explícitamente: así una entrevista histórica que solo cambia de
+        // fecha/notas/resultado nunca pierde su entrevistador_empleado_id (el backend limpia el histórico SOLO
+        // cuando recibe esta clave — ver actualizarEntrevista en entrevistas.ts).
+        ...((!editandoId || entrevistadorTocado) ? { entrevistadorUsuarioId: form.entrevistadorUsuarioId || null } : {}),
         modalidad: form.modalidad, lugarOEnlace: form.lugarOEnlace || null, notas: form.notas || null,
       };
       const body = editandoId ? { ...identidad, ...resto, estado: form.estado, resultado: form.resultado } : { ...identidad, ...resto };
@@ -269,6 +319,9 @@ export default function EntrevistasPageClient() {
       setForm({ ...vacio(), fecha: nuevoDiaSel });
       setEditandoId(null);
       setEntrevistaCargadaSinEstructura(false);
+      setEntrevistadorHistorico(null);
+      setEntrevistadorTocado(false);
+      setPuestoOtro(false);
       if (periodo.cambioPeriodo) {
         // Cambiar anio/mes cambia la identidad de `cargar` (useCallback con esas
         // deps) y dispara el useEffect que lo llama: esa única recarga ya trae
@@ -321,6 +374,9 @@ export default function EntrevistasPageClient() {
     setForm({ ...vacio(), fecha: diaSel ?? vacio().fecha });
     setEditandoId(null);
     setEntrevistaCargadaSinEstructura(false);
+    setEntrevistadorHistorico(null);
+    setEntrevistadorTocado(false);
+    setPuestoOtro(false);
     setError("");
   }
 
@@ -418,7 +474,24 @@ export default function EntrevistasPageClient() {
                       <span className="font-medium">{ent.fechaHora.slice(11, 16)}</span>{" · "}
                       {ent.candidatoNombre}
                       <span className={`ml-2 rounded border px-1.5 py-0.5 text-[10px] ${ESTADO_COLOR[ent.estado]}`}>{ent.estado}</span>
-                      <p className="text-xs text-[var(--muted)]">{ent.puesto}{ent.entrevistadorNombre ? ` · ${ent.entrevistadorNombre}` : ""}</p>
+                      <p className="text-xs text-[var(--muted)]">{ent.puesto}</p>
+                      {/* ATRACCION-TALENTO-2 (sección 9) — precedencia usuario > empleado histórico; sin línea vacía
+                          cuando no hay entrevistador/auxiliar. */}
+                      {(() => {
+                        const mostrado = resolverEntrevistadorMostrado(ent);
+                        if (mostrado.tipo === "ninguno") return null;
+                        return (
+                          <p className="text-xs text-[var(--muted)]">
+                            Entrevistador: {mostrado.nombre}
+                            {mostrado.tipo === "empleado_historico" ? (
+                              <span className="ml-1 rounded border border-[var(--border)] px-1 py-0.5 text-[10px]">Histórico · empleado</span>
+                            ) : null}
+                          </p>
+                        );
+                      })()}
+                      {ent.auxiliarUsuarioNombre ? (
+                        <p className="text-xs text-[var(--muted)]">Auxiliar: {ent.auxiliarUsuarioNombre}</p>
+                      ) : null}
                     </button>
                     <div className="flex flex-wrap gap-1">
                       <select className={input} value={ent.estado} aria-label={`Estado de ${ent.candidatoNombre}`}
@@ -523,8 +596,23 @@ export default function EntrevistasPageClient() {
         <fieldset className="space-y-2">
           <legend className="text-sm font-semibold text-[var(--muted)]">DATOS DE ENTREVISTA</legend>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            <input className={input} placeholder="Puesto al que aplica" value={form.puesto} required
-              onChange={(e) => setForm({ ...form, puesto: e.target.value })} />
+            {/* ATRACCION-TALENTO-2 (secciones 12-13) — catálogo real de puestos de la empresa + "Otro puesto…" para
+                no bloquear plazas nuevas. Un puesto ya guardado que ya no está en el catálogo sigue editable como
+                texto libre (nunca se borra). */}
+            {puestoOtro ? (
+              <input className={input} placeholder="Escribir puesto" value={form.puesto} required
+                onChange={(e) => setForm({ ...form, puesto: e.target.value })} />
+            ) : (
+              <select className={input} value={form.puesto} required
+                onChange={(e) => {
+                  if (e.target.value === OTRO_PUESTO) { setPuestoOtro(true); setForm({ ...form, puesto: "" }); return; }
+                  setForm({ ...form, puesto: e.target.value });
+                }}>
+                <option value="">Puesto al que aplica…</option>
+                {puestos.map((p) => <option key={p} value={p}>{p}</option>)}
+                <option value={OTRO_PUESTO}>Otro puesto…</option>
+              </select>
+            )}
             <input className={input} type="date" value={form.fecha} required
               onChange={(e) => setForm({ ...form, fecha: e.target.value })} />
             <input className={input} type="time" value={form.hora} required
@@ -537,11 +625,35 @@ export default function EntrevistasPageClient() {
             <input className={input} placeholder={form.modalidad === "Virtual" ? "Enlace de la videollamada" : "Lugar"} value={form.lugarOEnlace}
               onChange={(e) => setForm({ ...form, lugarOEnlace: e.target.value })} />
           </div>
-          <EmpleadoPicker
-            empleados={empleados}
-            value={form.entrevistadorEmpleadoId}
-            onChange={(id) => setForm({ ...form, entrevistadorEmpleadoId: id })}
-            label="Entrevistador (empleado que la realizará)"
+          {puestoOtro ? (
+            <button type="button" className="text-xs text-[var(--accent)] underline" onClick={() => { setPuestoOtro(false); setForm({ ...form, puesto: "" }); }}>
+              Volver al catálogo de puestos
+            </button>
+          ) : null}
+          {/* ATRACCION-TALENTO-2 (secciones 4-8) — entrevistador principal y auxiliar ahora son usuarios del
+              sistema; ambos opcionales, y el auxiliar nunca puede coincidir con el entrevistador principal
+              (el backend lo valida siempre, ver actualizarEntrevista/crearEntrevista en entrevistas.ts). */}
+          {entrevistadorHistorico ? (
+            <p className="rounded border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-xs text-[var(--muted)]">
+              Entrevistador histórico (empleado): <span className="font-medium">{entrevistadorHistorico}</span>.
+              Elegir un usuario abajo lo reemplaza; dejarlo vacío conserva el histórico.
+            </p>
+          ) : null}
+          <UsuarioEntrevistaPicker
+            usuarios={usuarios}
+            value={form.entrevistadorUsuarioId}
+            onChange={(id) => { setForm({ ...form, entrevistadorUsuarioId: id }); setEntrevistadorTocado(true); }}
+            label="Entrevistador principal"
+            allowEmptySelection
+            emptyLabel="— Sin entrevistador —"
+          />
+          <UsuarioEntrevistaPicker
+            usuarios={usuarios}
+            value={form.auxiliarUsuarioId}
+            onChange={(id) => setForm({ ...form, auxiliarUsuarioId: id })}
+            label="Auxiliar de entrevista (opcional)"
+            allowEmptySelection
+            emptyLabel="— Sin auxiliar —"
           />
         </fieldset>
 

@@ -12,6 +12,8 @@ const filtrosSchema = z.object({
   estado: z.enum(["Programada", "Realizada", "Cancelada", "No asistió"]).optional(),
   resultado: z.enum(["Pendiente", "Aprobado", "Rechazado"]).optional(),
   entrevistadorEmpleadoId: z.coerce.number().int().positive().optional(),
+  // ATRACCION-TALENTO-2 — filtro por entrevistador principal (usuario); coexiste con el histórico por empleado.
+  entrevistadorUsuarioId: z.coerce.number().int().positive().optional(),
   candidato: z.string().max(200).optional(),
 });
 
@@ -35,6 +37,7 @@ export async function GET(req: Request, ctx: Ctx) {
     estado: sp.get("estado") || undefined,
     resultado: sp.get("resultado") || undefined,
     entrevistadorEmpleadoId: sp.get("entrevistadorEmpleadoId") || undefined,
+    entrevistadorUsuarioId: sp.get("entrevistadorUsuarioId") || undefined,
     candidato: sp.get("candidato") || undefined,
   });
   if (!parsed.success) {

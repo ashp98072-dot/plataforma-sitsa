@@ -7,7 +7,7 @@ const base: FiltrosReporte = {
   puesto: "",
   estado: "",
   resultado: "",
-  entrevistadorId: 0,
+  entrevistadorUsuarioId: 0,
 };
 
 describe("ATRACCION-TALENTO-1 (corrección post-revisión) — construirParamsReporte", () => {
@@ -36,14 +36,14 @@ describe("ATRACCION-TALENTO-1 (corrección post-revisión) — construirParamsRe
     expect(p.get("resultado")).toBe("Aprobado");
   });
 
-  it("4) seleccionar un entrevistador manda su id", () => {
-    const p = construirParamsReporte({ ...base, entrevistadorId: 55 });
-    expect(p.get("entrevistadorEmpleadoId")).toBe("55");
+  it("4) seleccionar un entrevistador (usuario) manda su id", () => {
+    const p = construirParamsReporte({ ...base, entrevistadorUsuarioId: 55 });
+    expect(p.get("entrevistadorUsuarioId")).toBe("55");
   });
 
-  it("5) entrevistadorId = 0 ('Todos los entrevistadores') NO manda entrevistadorEmpleadoId", () => {
-    const p = construirParamsReporte({ ...base, entrevistadorId: 0 });
-    expect(p.has("entrevistadorEmpleadoId")).toBe(false);
+  it("5) entrevistadorUsuarioId = 0 ('Todos los entrevistadores') NO manda entrevistadorUsuarioId", () => {
+    const p = construirParamsReporte({ ...base, entrevistadorUsuarioId: 0 });
+    expect(p.has("entrevistadorUsuarioId")).toBe(false);
   });
 
   it("puesto se recorta (trim) y solo se manda si queda contenido", () => {
