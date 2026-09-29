@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   agruparViaticos,
   alternarEnSeleccion,
+  esAutorizable,
   etiquetaSemana,
   fechaCalendario,
   grupoCompletoSeleccionado,
@@ -197,5 +198,60 @@ describe("selección POR GRUPO", () => {
 
   it("un id seleccionado que ya no está en el grupo (p. ej. tras recargar) no se envía", () => {
     expect(idsAAutorizarDelGrupo(new Set([999]), hoy)).toEqual([]);
+  });
+});
+
+describe("VIATICOS-PENDIENTES-Q0-1 — Q0 y estados no-PROGRAMADO nunca son autorizables", () => {
+  it("esAutorizable: PROGRAMADO + monto > 0 -> true; PROGRAMADO + monto <= 0 -> false; cualquier otro estado -> false", () => {
+    expect(esAutorizable(v(1, "2026-09-29", "PROGRAMADO", 100))).toBe(true);
+    expect(esAutorizable(v(2, "2026-09-29", "PROGRAMADO", 0))).toBe(false);
+    expect(esAutorizable(v(3, "2026-09-29", "PROGRAMADO", -5))).toBe(false);
+    expect(esAutorizable(v(4, "2026-09-29", "AUTORIZADO", 100))).toBe(false);
+    expect(esAutorizable(v(5, "2026-09-29", "RECHAZADO", 100))).toBe(false);
+  });
+
+  it("2/3) agruparViaticos: conteos.PROGRAMADO (usado como 'pendientes' en resumenGrupo y el encabezado) EXCLUYE Q0", () => {
+    const grupo = agruparViaticos(
+      [
+        v(1, "2026-09-29", "PROGRAMADO", 100),
+        v(2, "2026-09-29", "PROGRAMADO", 0), // Q0: no cuenta como pendiente
+        v(3, "2026-09-29", "PROGRAMADO", 50),
+        v(4, "2026-09-29", "AUTORIZADO", 200),
+      ],
+      "DIA",
+    )[0];
+    expect(grupo.total).toBe(4); // el total SÍ incluye todo (nunca se ocultan registros)
+    expect(grupo.conteos.PROGRAMADO).toBe(2); // solo los 2 con monto > 0
+    expect(grupo.conteos.AUTORIZADO).toBe(1);
+    expect(resumenGrupo(grupo, q)).toContain("2 pendientes");
+  });
+
+  it("4) seleccionarTodosDelGrupo / grupoCompletoSeleccionado NUNCA marcan un Q0 ni un estado distinto de PROGRAMADO", () => {
+    const grupo = agruparViaticos(
+      [
+        v(1, "2026-09-29", "PROGRAMADO", 100),
+        v(2, "2026-09-29", "PROGRAMADO", 0),
+        v(3, "2026-09-29", "AUTORIZADO", 100),
+      ],
+      "DIA",
+    )[0];
+    const sel = seleccionarTodosDelGrupo(new Set(), grupo);
+    expect([...sel]).toEqual([1]); // ni el Q0 (2) ni el AUTORIZADO (3)
+    expect(grupoCompletoSeleccionado(sel, grupo)).toBe(true); // "completo" = todos los AUTORIZABLES, no todos los items
+  });
+
+  it("idsAAutorizarDelGrupo descarta cualquier id seleccionado que ya no sea autorizable (defensa en profundidad, sin depender solo del backend)", () => {
+    const grupo = agruparViaticos(
+      [v(1, "2026-09-29", "PROGRAMADO", 100), v(2, "2026-09-29", "PROGRAMADO", 0)],
+      "DIA",
+    )[0];
+    // Selección "corrupta" que de algún modo incluyó el Q0 — nunca debe autorizarse.
+    expect(idsAAutorizarDelGrupo(new Set([1, 2]), grupo)).toEqual([1]);
+  });
+
+  it("grupoCompletoSeleccionado: un grupo sin ningún autorizable (todo Q0/otros estados) nunca aparece como 'completo'", () => {
+    const grupo = agruparViaticos([v(1, "2026-09-29", "PROGRAMADO", 0)], "DIA")[0];
+    expect(grupoCompletoSeleccionado(new Set(), grupo)).toBe(false);
+    expect(seleccionarTodosDelGrupo(new Set(), grupo).size).toBe(0);
   });
 });

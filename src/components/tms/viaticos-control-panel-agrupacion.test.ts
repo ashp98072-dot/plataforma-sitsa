@@ -109,3 +109,26 @@ describe("autorización de seleccionados del grupo: el flujo ACTUAL, sin cambios
     for (const t of ["Firmar y autorizar", "Rechazar", "Firmar liquidación", "Ver firmas", "Rechazado por:"]) expect(src).toContain(t);
   });
 });
+
+describe("VIATICOS-PENDIENTES-Q0-1 — Q0 excluido del flujo de autorización, bandeja inicial = Por autorizar", () => {
+  it("6) fEstado inicia en 'PROGRAMADO' (bandeja 'Por autorizar' activa al entrar) — ya no en ''", () => {
+    expect(src).toContain('useState("PROGRAMADO")');
+    expect(src).not.toMatch(/const \[fEstado, setFEstado\] = useState\(""\)/);
+  });
+
+  it("2) 'Firmar y autorizar' de la fila individual exige montoAsignado > 0 (no solo estado === 'PROGRAMADO')", () => {
+    expect(src).toMatch(/r\.montoAsignado > 0 \? \(\s*<button[\s\S]{0,300}?Firmar y autorizar/);
+  });
+
+  it("4) el checkbox de selección solo existe para filas autorizables (esAutorizable) — nunca para AUTORIZADO/RECHAZADO/ENTREGADO/LIQUIDADO ni Q0", () => {
+    expect(src).toContain("esAutorizable(r) ? (");
+    expect(src).toContain('import {\n  agruparViaticos,\n  alternarEnSeleccion,\n  esAutorizable,');
+  });
+
+  it("Rechazar sigue disponible para un PROGRAMADO Q0 (acción distinta, no depende del monto)", () => {
+    // El bloque de "Rechazar" queda FUERA del `r.montoAsignado > 0 ? (...) : null` que envuelve solo "Firmar y autorizar".
+    const filaAcciones = bloque('r.estado === "RECHAZADO" ? (', "</tr>\n    );\n  }");
+    expect(filaAcciones).toContain("abrirRechazar(r)");
+    expect(filaAcciones.indexOf("abrirRechazar(r)")).toBeGreaterThan(filaAcciones.indexOf("r.montoAsignado > 0 ? ("));
+  });
+});
