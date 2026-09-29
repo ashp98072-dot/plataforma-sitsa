@@ -7,7 +7,7 @@ import { EmpleadoPicker, type EmpOpt } from "@/components/rrhh/empleado-picker";
 import { EntrevistaDocumentos } from "@/components/rrhh/entrevista-documentos";
 import { ExpedienteCandidato } from "@/components/rrhh/expediente-candidato";
 import { componerNombreCompleto, tieneIdentidadEstructurada } from "@/lib/rrhh/nombre-completo";
-import { construirIdentidadPatch, debeIncluirIdentidad as calcularDebeIncluirIdentidad } from "@/lib/rrhh/entrevista-form";
+import { construirIdentidadPatch, debeIncluirIdentidad as calcularDebeIncluirIdentidad, calcularPeriodoTrasGuardar } from "@/lib/rrhh/entrevista-form";
 
 type Entrevista = {
   id: number;
@@ -120,11 +120,16 @@ export default function EntrevistasPageClient() {
 
   useEffect(() => {
     void (async () => {
+      // ATRACCION-TALENTO-1 (corrección post-revisión) — catálogo mínimo
+      // propio de Atracción (id/codigo/nombre de activos), NO el endpoint
+      // general de empleados: ese exige `empleados:ver`, que un usuario con
+      // solo `entrevistas:ver` no necesariamente tiene, y dejaba el
+      // selector de entrevistador vacío.
       const res = await fetch(
-        `/api/empresas/${slug}/empleados?estado=Activo`,
+        `/api/empresas/${slug}/rrhh/entrevistas/entrevistadores`,
       );
       const data = await res.json();
-      setEmpleados(data.empleados ?? []);
+      setEmpleados(data.entrevistadores ?? []);
     })();
   }, [slug]);
 
@@ -255,10 +260,25 @@ export default function EntrevistasPageClient() {
       try { data = await res.json(); } catch { /* respuesta sin cuerpo/no JSON */ }
       if (!res.ok) { setError(data.error || "No se pudo guardar."); return; }
       setMsg(data.mensaje || "Guardado.");
-      setForm({ ...vacio(), fecha: diaSel ?? form.fecha });
+      // ATRACCION-TALENTO-1 (corrección post-revisión) — al reprogramar (o crear)
+      // en otro día/mes, el panel y el calendario deben moverse solos a la
+      // nueva fecha, sin F5. `form.fecha` es la fecha recién guardada.
+      const nuevoDiaSel = form.fecha;
+      const periodo = calcularPeriodoTrasGuardar(nuevoDiaSel, anio, mes);
+      setDiaSel(nuevoDiaSel);
+      setForm({ ...vacio(), fecha: nuevoDiaSel });
       setEditandoId(null);
       setEntrevistaCargadaSinEstructura(false);
-      await cargar();
+      if (periodo.cambioPeriodo) {
+        // Cambiar anio/mes cambia la identidad de `cargar` (useCallback con esas
+        // deps) y dispara el useEffect que lo llama: esa única recarga ya trae
+        // las entrevistas del nuevo mes. Llamar cargar() aquí duplicaría el
+        // fetch con los valores de anio/mes viejos (closure de este render).
+        setAnio(periodo.anio);
+        setMes(periodo.mes);
+      } else {
+        await cargar();
+      }
     } catch {
       setError("No se pudo guardar. Revisa tu conexión e intenta nuevamente.");
     } finally {

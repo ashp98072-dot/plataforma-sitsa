@@ -84,9 +84,15 @@ export default function ReportesAtraccionTalentoPage() {
 
   useEffect(() => {
     void (async () => {
-      const res = await fetch(`/api/empresas/${slug}/empleados?estado=Activo`);
+      // ATRACCION-TALENTO-1 (corrección post-revisión) — catálogo mínimo
+      // propio de Atracción (id/codigo/nombre de activos), NO el endpoint
+      // general de empleados: ese exige `empleados:ver`, que un usuario con
+      // solo `entrevistas:ver` no necesariamente tiene.
+      const res = await fetch(
+        `/api/empresas/${slug}/rrhh/entrevistas/entrevistadores`,
+      );
       const data = await res.json().catch(() => ({}));
-      if (res.ok) setEmpleados(data.empleados ?? []);
+      if (res.ok) setEmpleados(data.entrevistadores ?? []);
     })();
   }, [slug]);
 

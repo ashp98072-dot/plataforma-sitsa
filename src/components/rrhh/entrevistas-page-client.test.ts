@@ -43,3 +43,45 @@ describe("botón 'Editar' explícito en el panel DÍA SELECCIONADO", () => {
     expect(submit).toContain("setMsg(data.mensaje");
   });
 });
+
+describe("ATRACCION-TALENTO-1 (corrección post-revisión) — catálogo de entrevistadores", () => {
+  it("6) el selector de entrevistador usa /rrhh/entrevistas/entrevistadores, no el endpoint general de empleados", () => {
+    expect(src).toContain("/api/empresas/${slug}/rrhh/entrevistas/entrevistadores");
+    expect(src).not.toContain("/api/empresas/${slug}/empleados?estado=Activo");
+  });
+  it("lee data.entrevistadores (no data.empleados) de la respuesta", () => {
+    expect(src).toContain("data.entrevistadores ?? []");
+  });
+});
+
+describe("ATRACCION-TALENTO-1 (corrección post-revisión) — reselección al reprogramar", () => {
+  it("usa el helper puro calcularPeriodoTrasGuardar para decidir si cambió el mes/año (no duplica la lógica inline)", () => {
+    expect(src).toContain('from "@/lib/rrhh/entrevista-form"');
+    expect(src).toContain("calcularPeriodoTrasGuardar(");
+  });
+
+  it("1) diaSel se actualiza a la fecha recién guardada (form.fecha), tanto si cambia de mes como si no", () => {
+    const submit = src.slice(src.indexOf("async function onSubmit"), src.indexOf("async function cambiarEstadoRapido"));
+    expect(submit).toContain("const nuevoDiaSel = form.fecha;");
+    expect(submit).toContain("setDiaSel(nuevoDiaSel);");
+  });
+
+  it("2) si cambió el período (mes/año), setAnio/setMes se actualizan y NO se llama cargar() manualmente (evita doble carga)", () => {
+    const submit = src.slice(src.indexOf("async function onSubmit"), src.indexOf("async function cambiarEstadoRapido"));
+    const ramaCambio = submit.slice(submit.indexOf("if (periodo.cambioPeriodo)"), submit.indexOf("} else {"));
+    expect(ramaCambio).toContain("setAnio(periodo.anio);");
+    expect(ramaCambio).toContain("setMes(periodo.mes);");
+    expect(ramaCambio).not.toContain("await cargar()");
+  });
+
+  it("si NO cambió el período, se llama cargar() manualmente (mismo mes ya cargado, sin refetch automático por deps)", () => {
+    const submit = src.slice(src.indexOf("async function onSubmit"), src.indexOf("async function cambiarEstadoRapido"));
+    const ramaSinCambio = submit.slice(submit.indexOf("} else {"), submit.lastIndexOf("}"));
+    expect(ramaSinCambio).toContain("await cargar();");
+  });
+
+  it("3/4) el formulario se resetea a la nueva fecha sin perder candidato/documentos/expediente (EntrevistaDocumentos y ExpedienteCandidato siguen atados a editandoId/expedienteId, no al formulario)", () => {
+    expect(src).toContain('<EntrevistaDocumentos slug={slug} entrevistaId={editandoId} />');
+    expect(src).toContain("setForm({ ...vacio(), fecha: nuevoDiaSel });");
+  });
+});

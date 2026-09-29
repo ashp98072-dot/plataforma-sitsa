@@ -53,4 +53,22 @@ export function construirIdentidadPatch(opts: {
   };
 }
 
+/**
+ * ATRACCION-TALENTO-1 (corrección post-revisión) — lógica PURA para saber a
+ * qué día/mes/año debe moverse la UI de Entrevistas después de guardar
+ * (crear o reprogramar). `fecha` es la fecha ya guardada del formulario
+ * (YYYY-MM-DD). `cambioPeriodo` indica si el mes o el año visible en el
+ * calendario deben cambiar (y por lo tanto recargarse) o si basta con
+ * mover el día seleccionado dentro del mismo mes ya cargado.
+ */
+export function calcularPeriodoTrasGuardar(
+  fecha: string,
+  anioActual: number,
+  mesActual: number,
+): { anio: number; mes: number; cambioPeriodo: boolean } {
+  const anio = Number(fecha.slice(0, 4));
+  const mes = Number(fecha.slice(5, 7));
+  return { anio, mes, cambioPeriodo: anio !== anioActual || mes !== mesActual };
+}
+
 export { componerNombreCompleto };

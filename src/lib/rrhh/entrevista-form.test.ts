@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { construirIdentidadPatch, debeIncluirIdentidad } from "./entrevista-form";
+import { calcularPeriodoTrasGuardar, construirIdentidadPatch, debeIncluirIdentidad } from "./entrevista-form";
 
 const vacio = { primerNombre: "", segundoNombre: "", tercerNombre: "", cuartoNombre: "", primerApellido: "", segundoApellido: "", apellidoCasada: "" };
 const completa = { ...vacio, primerNombre: "Juan", primerApellido: "Pérez" };
@@ -64,5 +64,27 @@ describe("AJUSTE PR #375 — entrevista histórica: NO exigir/enviar identidad s
     expect(r.ok).toBe(false);
     const ok = construirIdentidadPatch({ editando: false, entrevistaCargadaSinEstructura: false, form: completa });
     expect(ok.ok).toBe(true);
+  });
+});
+
+describe("ATRACCION-TALENTO-1 (corrección post-revisión) — calcularPeriodoTrasGuardar (reselección al reprogramar)", () => {
+  it("1) 28/09/2026 -> 30/09/2026 (mismo mes): cambioPeriodo=false, anio/mes sin cambios", () => {
+    const r = calcularPeriodoTrasGuardar("2026-09-30", 2026, 9);
+    expect(r).toEqual({ anio: 2026, mes: 9, cambioPeriodo: false });
+  });
+
+  it("2) 28/09/2026 -> 02/10/2026 (cambia de mes): cambioPeriodo=true, mes=10, anio=2026", () => {
+    const r = calcularPeriodoTrasGuardar("2026-10-02", 2026, 9);
+    expect(r).toEqual({ anio: 2026, mes: 10, cambioPeriodo: true });
+  });
+
+  it("cambio de año (31/12 -> 05/01 del año siguiente): cambioPeriodo=true, anio se actualiza", () => {
+    const r = calcularPeriodoTrasGuardar("2027-01-05", 2026, 12);
+    expect(r).toEqual({ anio: 2027, mes: 1, cambioPeriodo: true });
+  });
+
+  it("misma fecha exacta que la ya cargada: cambioPeriodo=false", () => {
+    const r = calcularPeriodoTrasGuardar("2026-09-28", 2026, 9);
+    expect(r.cambioPeriodo).toBe(false);
   });
 });

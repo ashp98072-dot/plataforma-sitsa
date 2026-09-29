@@ -373,6 +373,33 @@ export async function actualizarEntrevista(
   return { ok: true, mensaje: "Entrevista actualizada." };
 }
 
+export type EntrevistadorOpt = { id: number; codigo: string; nombre: string };
+
+/**
+ * ATRACCION-TALENTO-1 (corrección post-revisión) — catálogo MÍNIMO de
+ * empleados activos para el selector de entrevistador, usado tanto por
+ * Entrevistas como por Reportes de Atracción. Deliberadamente una consulta
+ * propia (NO reutiliza listarEmpleados/Empleado): expone únicamente
+ * id/codigo/nombre — nunca sueldo, DPI, NIT, banco, cuenta, teléfono,
+ * email ni ningún otro dato sensible del expediente. Tenant siempre por
+ * empresaId (nunca confiado del cliente).
+ */
+export async function listarEntrevistadoresActivos(
+  empresaId: number,
+): Promise<EntrevistadorOpt[]> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT id, codigo, nombre FROM empleados
+     WHERE empresa_id = ? AND estado = 'Activo'
+     ORDER BY nombre`,
+    [empresaId],
+  );
+  return rows.map((r) => ({
+    id: Number(r.id),
+    codigo: String(r.codigo ?? ""),
+    nombre: String(r.nombre),
+  }));
+}
+
 export async function eliminarEntrevista(
   empresaId: number,
   id: number,
