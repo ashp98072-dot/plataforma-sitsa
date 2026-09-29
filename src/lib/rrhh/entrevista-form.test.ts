@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { calcularPeriodoTrasGuardar, construirIdentidadPatch, debeIncluirIdentidad } from "./entrevista-form";
+import { calcularPeriodoTrasGuardar, construirIdentidadPatch, debeIncluirIdentidad, resolverEntrevistadorMostrado } from "./entrevista-form";
 
 const vacio = { primerNombre: "", segundoNombre: "", tercerNombre: "", cuartoNombre: "", primerApellido: "", segundoApellido: "", apellidoCasada: "" };
 const completa = { ...vacio, primerNombre: "Juan", primerApellido: "Pérez" };
@@ -86,5 +86,39 @@ describe("ATRACCION-TALENTO-1 (corrección post-revisión) — calcularPeriodoTr
   it("misma fecha exacta que la ya cargada: cambioPeriodo=false", () => {
     const r = calcularPeriodoTrasGuardar("2026-09-28", 2026, 9);
     expect(r.cambioPeriodo).toBe(false);
+  });
+});
+
+describe("ATRACCION-TALENTO-2 (secciones 3, 9, 19-21) — resolverEntrevistadorMostrado (precedencia usuario > empleado histórico)", () => {
+  it("20) registro nuevo (solo entrevistadorUsuarioId) -> tipo usuario, con su nombre", () => {
+    const r = resolverEntrevistadorMostrado({
+      entrevistadorUsuarioId: 10, entrevistadorUsuarioNombre: "María López",
+      entrevistadorEmpleadoId: null, entrevistadorNombre: undefined,
+    });
+    expect(r).toEqual({ tipo: "usuario", nombre: "María López" });
+  });
+
+  it("19) registro antiguo (solo entrevistadorEmpleadoId histórico) -> tipo empleado_historico, sigue mostrando su nombre", () => {
+    const r = resolverEntrevistadorMostrado({
+      entrevistadorUsuarioId: null, entrevistadorUsuarioNombre: undefined,
+      entrevistadorEmpleadoId: 77, entrevistadorNombre: "Juan Gómez",
+    });
+    expect(r).toEqual({ tipo: "empleado_historico", nombre: "Juan Gómez" });
+  });
+
+  it("21) si por dato transitorio existen ambos, la precedencia documentada es usuario > empleado histórico", () => {
+    const r = resolverEntrevistadorMostrado({
+      entrevistadorUsuarioId: 10, entrevistadorUsuarioNombre: "María López",
+      entrevistadorEmpleadoId: 77, entrevistadorNombre: "Juan Gómez",
+    });
+    expect(r).toEqual({ tipo: "usuario", nombre: "María López" });
+  });
+
+  it("sin ninguno de los dos -> tipo ninguno (la UI no muestra ninguna línea)", () => {
+    const r = resolverEntrevistadorMostrado({
+      entrevistadorUsuarioId: null, entrevistadorUsuarioNombre: undefined,
+      entrevistadorEmpleadoId: null, entrevistadorNombre: undefined,
+    });
+    expect(r).toEqual({ tipo: "ninguno" });
   });
 });

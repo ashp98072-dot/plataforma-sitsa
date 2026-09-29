@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { EmpleadoPicker, type EmpOpt } from "@/components/rrhh/empleado-picker";
+import { UsuarioEntrevistaPicker, type UsuarioEntrevistaOpt } from "@/components/rrhh/usuario-entrevista-picker";
+import { GraficaBarras } from "@/components/rrhh/grafica-barras";
 import { construirParamsReporte } from "@/lib/rrhh/entrevistas-reportes-filtros";
 
 type Resumen = {
@@ -26,8 +27,11 @@ type PorPuesto = {
   tasaAprobacion: number | null;
 };
 type PorEntrevistador = {
+  clave: string;
+  entrevistadorUsuarioId: number | null;
   entrevistadorEmpleadoId: number | null;
   entrevistadorNombre: string;
+  historico: boolean;
   asignadas: number;
   realizadas: number;
   aprobados: number;
@@ -40,6 +44,8 @@ type DetalleFila = {
   candidatoNombre: string;
   puesto: string;
   entrevistadorNombre: string | null;
+  entrevistadorHistorico: boolean;
+  auxiliarNombre: string | null;
   modalidad: string;
   estado: string;
   resultado: string;
@@ -69,31 +75,35 @@ function fmtFechaHora(iso: string): string {
 
 const input = "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
 const card = "rounded-xl border border-[var(--border)] bg-[var(--card)] p-4";
+const OTRO_PUESTO = "__otro__";
 
 export default function ReportesAtraccionTalentoPage() {
   const slug = String(useParams().slug);
   const [fechaDesde, setFechaDesde] = useState(primerDiaMes());
   const [fechaHasta, setFechaHasta] = useState(ultimoDiaMes());
   const [puesto, setPuesto] = useState("");
+  const [puestoOtro, setPuestoOtro] = useState(false);
   const [estado, setEstado] = useState("");
   const [resultado, setResultado] = useState("");
-  const [entrevistadorId, setEntrevistadorId] = useState(0);
-  const [empleados, setEmpleados] = useState<EmpOpt[]>([]);
+  const [entrevistadorUsuarioId, setEntrevistadorUsuarioId] = useState(0);
+  const [usuarios, setUsuarios] = useState<UsuarioEntrevistaOpt[]>([]);
+  const [puestos, setPuestos] = useState<string[]>([]);
   const [reporte, setReporte] = useState<Reporte>({ resumen: RESUMEN_VACIO, porPuesto: [], porEntrevistador: [], detalle: [] });
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     void (async () => {
-      // ATRACCION-TALENTO-1 (corrección post-revisión) — catálogo mínimo
-      // propio de Atracción (id/codigo/nombre de activos), NO el endpoint
-      // general de empleados: ese exige `empleados:ver`, que un usuario con
-      // solo `entrevistas:ver` no necesariamente tiene.
-      const res = await fetch(
-        `/api/empresas/${slug}/rrhh/entrevistas/entrevistadores`,
-      );
+      // ATRACCION-TALENTO-2 — catálogo de usuarios elegibles (entrevistas:ver), no empleados.
+      const res = await fetch(`/api/empresas/${slug}/rrhh/entrevistas/usuarios`);
       const data = await res.json().catch(() => ({}));
-      if (res.ok) setEmpleados(data.entrevistadores ?? []);
+      if (res.ok) setUsuarios(data.usuarios ?? []);
+    })();
+    void (async () => {
+      // ATRACCION-TALENTO-2 (sección 25) — catálogo real de puestos de la empresa para el filtro.
+      const res = await fetch(`/api/empresas/${slug}/rrhh/entrevistas/puestos`);
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) setPuestos(data.puestos ?? []);
     })();
   }, [slug]);
 
@@ -101,7 +111,7 @@ export default function ReportesAtraccionTalentoPage() {
     setCargando(true);
     setError("");
     try {
-      const params = construirParamsReporte({ fechaDesde, fechaHasta, puesto, estado, resultado, entrevistadorId });
+      const params = construirParamsReporte({ fechaDesde, fechaHasta, puesto, estado, resultado, entrevistadorUsuarioId });
       const res = await fetch(`/api/empresas/${slug}/rrhh/entrevistas/reportes?${params.toString()}`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -114,7 +124,7 @@ export default function ReportesAtraccionTalentoPage() {
     } finally {
       setCargando(false);
     }
-  }, [slug, fechaDesde, fechaHasta, puesto, estado, resultado, entrevistadorId]);
+  }, [slug, fechaDesde, fechaHasta, puesto, estado, resultado, entrevistadorUsuarioId]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -125,8 +135,23 @@ export default function ReportesAtraccionTalentoPage() {
 
   const { resumen, porPuesto, porEntrevistador, detalle } = reporte;
 
+  const datosEstado: { etiqueta: string; valor: number; colorVar?: string }[] = [
+    { etiqueta: "Programadas", valor: resumen.programadas, colorVar: "--accent" },
+    { etiqueta: "Realizadas", valor: resumen.realizadas, colorVar: "--accent-2" },
+    { etiqueta: "Canceladas", valor: resumen.canceladas, colorVar: "--danger" },
+    { etiqueta: "No asistió", valor: resumen.noAsistio, colorVar: "--muted" },
+  ];
+  const datosResultado: { etiqueta: string; valor: number; colorVar?: string }[] = [
+    { etiqueta: "Aprobados", valor: resumen.aprobados, colorVar: "--accent-2" },
+    { etiqueta: "Rechazados", valor: resumen.rechazados, colorVar: "--danger" },
+    { etiqueta: "Pendientes", valor: resumen.pendientes, colorVar: "--muted" },
+  ];
+  const topPuestos = [...porPuesto].sort((a, b) => b.entrevistas - a.entrevistas).slice(0, 10);
+  const datosPuestos = topPuestos.map((p) => ({ etiqueta: p.puesto, valor: p.entrevistas }));
+
   return (
     <div className="space-y-6">
+      {/* 1) HEADER */}
       <div>
         <h1 className="text-2xl font-semibold">Reportes de Atracción de Talento Humano</h1>
         <p className="text-sm text-[var(--muted)]">
@@ -134,6 +159,7 @@ export default function ReportesAtraccionTalentoPage() {
         </p>
       </div>
 
+      {/* 2) FILTROS */}
       <form
         onSubmit={(e) => { e.preventDefault(); void cargar(); }}
         className={`${card} grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4`}
@@ -145,7 +171,36 @@ export default function ReportesAtraccionTalentoPage() {
           <input type="date" className={`${input} mt-1 w-full`} value={fechaHasta} onChange={(e) => setFechaHasta(e.target.value)} />
         </label>
         <label className="text-sm text-[var(--muted)]">Puesto
-          <input className={`${input} mt-1 w-full`} placeholder="Todos" value={puesto} onChange={(e) => setPuesto(e.target.value)} />
+          {puestoOtro ? (
+            <input
+              className={`${input} mt-1 w-full`}
+              placeholder="Escribir puesto"
+              value={puesto}
+              onChange={(e) => setPuesto(e.target.value)}
+            />
+          ) : (
+            <select
+              className={`${input} mt-1 w-full`}
+              value={puesto}
+              onChange={(e) => {
+                if (e.target.value === OTRO_PUESTO) { setPuestoOtro(true); setPuesto(""); return; }
+                setPuesto(e.target.value);
+              }}
+            >
+              <option value="">Todos los puestos</option>
+              {puestos.map((p) => <option key={p} value={p}>{p}</option>)}
+              <option value={OTRO_PUESTO}>Otro puesto…</option>
+            </select>
+          )}
+          {puestoOtro ? (
+            <button
+              type="button"
+              className="mt-1 text-xs text-[var(--accent)] underline"
+              onClick={() => { setPuestoOtro(false); setPuesto(""); }}
+            >
+              Volver al catálogo
+            </button>
+          ) : null}
         </label>
         <label className="text-sm text-[var(--muted)]">Estado
           <select className={`${input} mt-1 w-full`} value={estado} onChange={(e) => setEstado(e.target.value)}>
@@ -165,10 +220,10 @@ export default function ReportesAtraccionTalentoPage() {
           </select>
         </label>
         <div className="sm:col-span-2 lg:col-span-2">
-          <EmpleadoPicker
-            empleados={empleados}
-            value={entrevistadorId}
-            onChange={setEntrevistadorId}
+          <UsuarioEntrevistaPicker
+            usuarios={usuarios}
+            value={entrevistadorUsuarioId}
+            onChange={setEntrevistadorUsuarioId}
             label="Entrevistador"
             allowEmptySelection
             emptyLabel="Todos los entrevistadores"
@@ -183,6 +238,7 @@ export default function ReportesAtraccionTalentoPage() {
 
       {error ? <p className="text-sm text-red-400">{error}</p> : null}
 
+      {/* 3) KPIs */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">
         {[
           ["Total", resumen.total],
@@ -194,17 +250,36 @@ export default function ReportesAtraccionTalentoPage() {
           ["Rechazados", resumen.rechazados],
           ["Resultado pendiente", resumen.pendientes],
         ].map(([label, val]) => (
-          <div key={label as string} className={card}>
+          <div key={label as string} className={`${card} p-3`}>
             <p className="text-xs text-[var(--muted)]">{label}</p>
-            <p className="mt-1 text-xl font-semibold">{val}</p>
+            <p className="mt-1 text-lg font-semibold">{val}</p>
           </div>
         ))}
-        <div className={card}>
+        <div className={`${card} p-3`}>
           <p className="text-xs text-[var(--muted)]">Tasa de aprobación</p>
-          <p className="mt-1 text-xl font-semibold">{fmtTasa(resumen.tasaAprobacion)}</p>
+          <p className="mt-1 text-lg font-semibold">{fmtTasa(resumen.tasaAprobacion)}</p>
         </div>
       </div>
 
+      {/* 4) GRÁFICAS */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <section className={card}>
+          <h2 className="mb-3 text-sm font-semibold text-[var(--muted)]">ENTREVISTAS POR ESTADO</h2>
+          <GraficaBarras datos={datosEstado} />
+        </section>
+        <section className={card}>
+          <h2 className="mb-3 text-sm font-semibold text-[var(--muted)]">RESULTADOS DE SELECCIÓN</h2>
+          <GraficaBarras datos={datosResultado} />
+        </section>
+        <section className={card}>
+          <h2 className="mb-3 text-sm font-semibold text-[var(--muted)]">
+            ENTREVISTAS POR PUESTO {porPuesto.length > 10 ? "(TOP 10)" : ""}
+          </h2>
+          <GraficaBarras datos={datosPuestos} />
+        </section>
+      </div>
+
+      {/* 5) TABLAS DE ANÁLISIS */}
       <section className={card}>
         <h2 className="mb-2 text-sm font-semibold text-[var(--muted)]">POR PUESTO</h2>
         <div className="overflow-x-auto">
@@ -256,8 +331,15 @@ export default function ReportesAtraccionTalentoPage() {
             </thead>
             <tbody className="divide-y divide-[var(--border)]">
               {porEntrevistador.map((p) => (
-                <tr key={p.entrevistadorEmpleadoId ?? "sin-entrevistador"}>
-                  <td className="px-2 py-1.5">{p.entrevistadorNombre}</td>
+                <tr key={p.clave}>
+                  <td className="px-2 py-1.5">
+                    {p.entrevistadorNombre}
+                    {p.historico ? (
+                      <span className="ml-1.5 rounded border border-[var(--border)] px-1 py-0.5 text-[10px] text-[var(--muted)]">
+                        Histórico · empleado
+                      </span>
+                    ) : null}
+                  </td>
                   <td className="px-2 py-1.5 text-right">{p.asignadas}</td>
                   <td className="px-2 py-1.5 text-right">{p.realizadas}</td>
                   <td className="px-2 py-1.5 text-right">{p.aprobados}</td>
@@ -273,6 +355,7 @@ export default function ReportesAtraccionTalentoPage() {
         </div>
       </section>
 
+      {/* 6) LISTADO DETALLADO */}
       <section className={card}>
         <h2 className="mb-2 text-sm font-semibold text-[var(--muted)]">LISTADO DETALLADO</h2>
         <div className="overflow-x-auto">
@@ -283,6 +366,7 @@ export default function ReportesAtraccionTalentoPage() {
                 <th className="px-2 py-1">Candidato</th>
                 <th className="px-2 py-1">Puesto</th>
                 <th className="px-2 py-1">Entrevistador</th>
+                <th className="px-2 py-1">Auxiliar</th>
                 <th className="px-2 py-1">Modalidad</th>
                 <th className="px-2 py-1">Estado</th>
                 <th className="px-2 py-1">Resultado</th>
@@ -294,14 +378,22 @@ export default function ReportesAtraccionTalentoPage() {
                   <td className="px-2 py-1.5">{fmtFechaHora(d.fechaHora)}</td>
                   <td className="px-2 py-1.5">{d.candidatoNombre}</td>
                   <td className="px-2 py-1.5">{d.puesto}</td>
-                  <td className="px-2 py-1.5">{d.entrevistadorNombre ?? "—"}</td>
+                  <td className="px-2 py-1.5">
+                    {d.entrevistadorNombre ?? "—"}
+                    {d.entrevistadorHistorico ? (
+                      <span className="ml-1.5 rounded border border-[var(--border)] px-1 py-0.5 text-[10px] text-[var(--muted)]">
+                        Histórico
+                      </span>
+                    ) : null}
+                  </td>
+                  <td className="px-2 py-1.5">{d.auxiliarNombre ?? "—"}</td>
                   <td className="px-2 py-1.5">{d.modalidad}</td>
                   <td className="px-2 py-1.5">{d.estado}</td>
                   <td className="px-2 py-1.5">{d.resultado}</td>
                 </tr>
               ))}
               {detalle.length === 0 ? (
-                <tr><td colSpan={7} className="px-2 py-4 text-center text-[var(--muted)]">Sin entrevistas en el rango filtrado.</td></tr>
+                <tr><td colSpan={8} className="px-2 py-4 text-center text-[var(--muted)]">Sin entrevistas en el rango filtrado.</td></tr>
               ) : null}
             </tbody>
           </table>

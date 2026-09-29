@@ -24,6 +24,9 @@ const crearSchema = z.object({
   puesto: z.string().min(1),
   fechaHora: z.string().min(1),
   entrevistadorEmpleadoId: z.number().int().positive().optional().nullable(),
+  // ATRACCION-TALENTO-2 — entrevistador principal/auxiliar ahora son usuarios del sistema (opcionales).
+  entrevistadorUsuarioId: z.number().int().positive().optional().nullable(),
+  auxiliarUsuarioId: z.number().int().positive().optional().nullable(),
   modalidad: z.enum(["Presencial", "Virtual"]).optional(),
   lugarOEnlace: z.string().optional().nullable(),
   notas: z.string().optional().nullable(),
@@ -81,6 +84,8 @@ export async function POST(req: Request, ctx: Ctx) {
     puesto: parsed.data.puesto,
     fechaHora: parsed.data.fechaHora,
     entrevistadorEmpleadoId: parsed.data.entrevistadorEmpleadoId,
+    entrevistadorUsuarioId: parsed.data.entrevistadorUsuarioId,
+    auxiliarUsuarioId: parsed.data.auxiliarUsuarioId,
     modalidad: parsed.data.modalidad,
     lugarOEnlace: parsed.data.lugarOEnlace,
     notas: parsed.data.notas,

@@ -25,6 +25,8 @@ export type FiltrosReporteEntrevistas = {
   estado?: EstadoEntrevista;
   resultado?: ResultadoEntrevista;
   entrevistadorEmpleadoId?: number;
+  /** ATRACCION-TALENTO-2 — filtro por entrevistador principal (usuario). Coexiste con el histórico entrevistadorEmpleadoId. */
+  entrevistadorUsuarioId?: number;
   candidato?: string;
 };
 
@@ -52,9 +54,18 @@ export type ReportePorPuesto = {
 };
 
 export type ReportePorEntrevistador = {
+  /**
+   * ATRACCION-TALENTO-2 (sección 10) — clave conceptual para evitar
+   * colisión entre un usuario.id y un empleado.id que compartan el mismo
+   * número: "u:15" (usuario), "e:37" (empleado histórico) o "sin".
+   */
+  clave: string;
+  entrevistadorUsuarioId: number | null;
   entrevistadorEmpleadoId: number | null;
-  /** "Sin entrevistador asignado" cuando entrevistadorEmpleadoId es null. */
+  /** "Sin entrevistador asignado" cuando no hay ninguno de los dos. */
   entrevistadorNombre: string;
+  /** true cuando el nombre viene del empleado histórico (entrevistadorEmpleadoId), no de un usuario. */
+  historico: boolean;
   asignadas: number;
   realizadas: number;
   aprobados: number;
@@ -68,6 +79,10 @@ export type DetalleEntrevistaReporte = {
   candidatoNombre: string;
   puesto: string;
   entrevistadorNombre: string | null;
+  /** true cuando entrevistadorNombre viene del empleado histórico, no de un usuario. */
+  entrevistadorHistorico: boolean;
+  /** ATRACCION-TALENTO-2 (sección 11) — auxiliar de entrevista (usuario), null si no se asignó. */
+  auxiliarNombre: string | null;
   modalidad: string;
   estado: string;
   resultado: string;
@@ -101,6 +116,10 @@ function construirFiltros(empresaId: number, f: FiltrosReporteEntrevistas): { wh
   if (f.entrevistadorEmpleadoId != null) {
     cond.push("ent.entrevistador_empleado_id = ?");
     params.push(f.entrevistadorEmpleadoId);
+  }
+  if (f.entrevistadorUsuarioId != null) {
+    cond.push("ent.entrevistador_usuario_id = ?");
+    params.push(f.entrevistadorUsuarioId);
   }
   if (f.candidato?.trim()) {
     cond.push("ent.candidato_nombre LIKE ?");
@@ -183,6 +202,14 @@ export async function obtenerReportePorPuesto(
   });
 }
 
+/**
+ * ATRACCION-TALENTO-2 (sección 10) — agrupa por una CLAVE conceptual
+ * ("u:<id>" / "e:<id>" / "sin"), nunca por el id numérico desnudo: un
+ * usuario.id y un empleado.id pueden coincidir en valor sin ser la misma
+ * persona, y agrupar solo por el número los fusionaría incorrectamente.
+ * `entrevistador_usuario_id` tiene precedencia sobre el empleado histórico
+ * (mismo criterio que resolverEntrevistadorMostrado en entrevistas.ts).
+ */
 export async function obtenerReportePorEntrevistador(
   empresaId: number,
   filtros: FiltrosReporteEntrevistas,
@@ -190,8 +217,14 @@ export async function obtenerReportePorEntrevistador(
   const { where, params } = construirFiltros(empresaId, filtros);
   const rows = await query<RowDataPacket[]>(
     `SELECT
-       ent.entrevistador_empleado_id,
-       e.nombre AS entrevistador_nombre,
+       CASE
+         WHEN ent.entrevistador_usuario_id IS NOT NULL THEN CONCAT('u:', ent.entrevistador_usuario_id)
+         WHEN ent.entrevistador_empleado_id IS NOT NULL THEN CONCAT('e:', ent.entrevistador_empleado_id)
+         ELSE 'sin'
+       END AS clave,
+       ent.entrevistador_usuario_id, ent.entrevistador_empleado_id,
+       COALESCE(NULLIF(TRIM(ue.nombre), ''), ue.username) AS usuario_nombre,
+       e.nombre AS empleado_nombre,
        COUNT(*) AS asignadas,
        COALESCE(SUM(CASE WHEN ent.estado = 'Realizada' THEN 1 ELSE 0 END), 0) AS realizadas,
        COALESCE(SUM(CASE WHEN ent.resultado = 'Aprobado' THEN 1 ELSE 0 END), 0) AS aprobados,
@@ -199,20 +232,34 @@ export async function obtenerReportePorEntrevistador(
        COALESCE(SUM(CASE WHEN ent.resultado = 'Pendiente' THEN 1 ELSE 0 END), 0) AS pendientes
      FROM entrevistas ent
      LEFT JOIN empleados e ON e.id = ent.entrevistador_empleado_id AND e.empresa_id = ent.empresa_id
+     LEFT JOIN usuarios ue ON ue.id = ent.entrevistador_usuario_id
      WHERE ${where}
-     GROUP BY ent.entrevistador_empleado_id, e.nombre
+     GROUP BY clave, ent.entrevistador_usuario_id, ent.entrevistador_empleado_id, usuario_nombre, empleado_nombre
      ORDER BY asignadas DESC`,
     params,
   );
-  return rows.map((r) => ({
-    entrevistadorEmpleadoId: r.entrevistador_empleado_id != null ? Number(r.entrevistador_empleado_id) : null,
-    entrevistadorNombre: r.entrevistador_nombre ? String(r.entrevistador_nombre) : "Sin entrevistador asignado",
-    asignadas: Number(r.asignadas ?? 0),
-    realizadas: Number(r.realizadas ?? 0),
-    aprobados: Number(r.aprobados ?? 0),
-    rechazados: Number(r.rechazados ?? 0),
-    pendientes: Number(r.pendientes ?? 0),
-  }));
+  return rows.map((r) => {
+    const clave = String(r.clave);
+    const esUsuario = clave.startsWith("u:");
+    const esHistorico = clave.startsWith("e:");
+    const entrevistadorNombre = esUsuario
+      ? String(r.usuario_nombre ?? "")
+      : esHistorico
+        ? String(r.empleado_nombre ?? "")
+        : "Sin entrevistador asignado";
+    return {
+      clave,
+      entrevistadorUsuarioId: r.entrevistador_usuario_id != null ? Number(r.entrevistador_usuario_id) : null,
+      entrevistadorEmpleadoId: r.entrevistador_empleado_id != null ? Number(r.entrevistador_empleado_id) : null,
+      entrevistadorNombre: entrevistadorNombre || "Sin entrevistador asignado",
+      historico: esHistorico,
+      asignadas: Number(r.asignadas ?? 0),
+      realizadas: Number(r.realizadas ?? 0),
+      aprobados: Number(r.aprobados ?? 0),
+      rechazados: Number(r.rechazados ?? 0),
+      pendientes: Number(r.pendientes ?? 0),
+    };
+  });
 }
 
 /** Listado detallado filtrado, más reciente primero. Tope defensivo (evita payloads sin límite, mismo criterio que el resto del proyecto). */
@@ -223,25 +270,40 @@ export async function obtenerDetalleEntrevistas(
   const { where, params } = construirFiltros(empresaId, filtros);
   const rows = await query<RowDataPacket[]>(
     `SELECT ent.id, DATE_FORMAT(ent.fecha_hora, '%Y-%m-%dT%H:%i:%s') AS fecha_hora_iso,
-            ent.candidato_nombre, ent.puesto, e.nombre AS entrevistador_nombre,
+            ent.candidato_nombre, ent.puesto,
+            COALESCE(NULLIF(TRIM(ue.nombre), ''), ue.username) AS entrevistador_usuario_nombre,
+            e.nombre AS entrevistador_empleado_nombre,
+            COALESCE(NULLIF(TRIM(ua.nombre), ''), ua.username) AS auxiliar_nombre,
             ent.modalidad, ent.estado, ent.resultado
      FROM entrevistas ent
      LEFT JOIN empleados e ON e.id = ent.entrevistador_empleado_id AND e.empresa_id = ent.empresa_id
+     LEFT JOIN usuarios ue ON ue.id = ent.entrevistador_usuario_id
+     LEFT JOIN usuarios ua ON ua.id = ent.auxiliar_usuario_id
      WHERE ${where}
      ORDER BY ent.fecha_hora DESC
      LIMIT 500`,
     params,
   );
-  return rows.map((r) => ({
-    id: Number(r.id),
-    fechaHora: String(r.fecha_hora_iso),
-    candidatoNombre: String(r.candidato_nombre),
-    puesto: String(r.puesto),
-    entrevistadorNombre: r.entrevistador_nombre ? String(r.entrevistador_nombre) : null,
-    modalidad: String(r.modalidad),
-    estado: String(r.estado),
-    resultado: String(r.resultado),
-  }));
+  return rows.map((r) => {
+    const entrevistadorHistorico = !r.entrevistador_usuario_nombre && !!r.entrevistador_empleado_nombre;
+    const entrevistadorNombre = r.entrevistador_usuario_nombre
+      ? String(r.entrevistador_usuario_nombre)
+      : r.entrevistador_empleado_nombre
+        ? String(r.entrevistador_empleado_nombre)
+        : null;
+    return {
+      id: Number(r.id),
+      fechaHora: String(r.fecha_hora_iso),
+      candidatoNombre: String(r.candidato_nombre),
+      puesto: String(r.puesto),
+      entrevistadorNombre,
+      entrevistadorHistorico,
+      auxiliarNombre: r.auxiliar_nombre ? String(r.auxiliar_nombre) : null,
+      modalidad: String(r.modalidad),
+      estado: String(r.estado),
+      resultado: String(r.resultado),
+    };
+  });
 }
 
 export type ReporteEntrevistas = {

@@ -26,6 +26,9 @@ const patchSchema = z.object({
   puesto: z.string().optional(),
   fechaHora: z.string().optional(),
   entrevistadorEmpleadoId: z.number().int().positive().nullable().optional(),
+  // ATRACCION-TALENTO-2 — entrevistador principal/auxiliar ahora son usuarios del sistema (opcionales).
+  entrevistadorUsuarioId: z.number().int().positive().nullable().optional(),
+  auxiliarUsuarioId: z.number().int().positive().nullable().optional(),
   modalidad: z.enum(["Presencial", "Virtual"]).optional(),
   lugarOEnlace: z.string().nullable().optional(),
   estado: z

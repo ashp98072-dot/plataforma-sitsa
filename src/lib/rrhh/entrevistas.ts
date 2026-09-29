@@ -1,6 +1,8 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
 import { componerNombreCompleto, type PartesNombreCompleto } from "./nombre-completo";
+import { permisosEfectivos, tienePermiso } from "@/lib/permisos";
+import type { RolGlobal } from "@/lib/roles";
 
 export type EstadoEntrevista =
   | "Programada"
@@ -31,8 +33,20 @@ export type Entrevista = {
   puesto: string;
   /** ISO completo "YYYY-MM-DDTHH:mm:ss" en hora local del servidor. */
   fechaHora: string;
+  /** Histórico (RRHH-ENTREVISTAS-1). Se conserva para compatibilidad — ver ATRACCION-TALENTO-2. */
   entrevistadorEmpleadoId: number | null;
   entrevistadorNombre?: string;
+  /**
+   * ATRACCION-TALENTO-2 — el entrevistador principal AHORA es un usuario del
+   * sistema (no obligatoriamente un empleado). Precedencia de visualización:
+   * entrevistadorUsuarioId > entrevistadorEmpleadoId (histórico) > ninguno —
+   * ver resolverEntrevistadorMostrado().
+   */
+  entrevistadorUsuarioId: number | null;
+  entrevistadorUsuarioNombre?: string;
+  /** Auxiliar de entrevista (opcional), también un usuario. Sin equivalente histórico. */
+  auxiliarUsuarioId: number | null;
+  auxiliarUsuarioNombre?: string;
   modalidad: ModalidadEntrevista;
   lugarOEnlace: string | null;
   estado: EstadoEntrevista;
@@ -53,6 +67,12 @@ const RESULTADOS_VALIDOS = new Set<ResultadoEntrevista>([
   "Aprobado",
   "Rechazado",
 ]);
+
+/** ATRACCION-TALENTO-2 — nombre visible de un usuario: nombre.trim() o fallback a username. */
+function nombreVisibleUsuario(nombre: unknown, username: unknown): string {
+  const n = nombre != null ? String(nombre).trim() : "";
+  return n || String(username);
+}
 
 function mapEntrevista(r: RowDataPacket): Entrevista {
   return {
@@ -79,6 +99,18 @@ function mapEntrevista(r: RowDataPacket): Entrevista {
     entrevistadorNombre: r.entrevistador_nombre
       ? String(r.entrevistador_nombre)
       : undefined,
+    entrevistadorUsuarioId:
+      r.entrevistador_usuario_id != null
+        ? Number(r.entrevistador_usuario_id)
+        : null,
+    entrevistadorUsuarioNombre: r.entrevistador_usuario_username
+      ? nombreVisibleUsuario(r.entrevistador_usuario_nombre, r.entrevistador_usuario_username)
+      : undefined,
+    auxiliarUsuarioId:
+      r.auxiliar_usuario_id != null ? Number(r.auxiliar_usuario_id) : null,
+    auxiliarUsuarioNombre: r.auxiliar_usuario_username
+      ? nombreVisibleUsuario(r.auxiliar_usuario_nombre, r.auxiliar_usuario_username)
+      : undefined,
     modalidad: (String(r.modalidad) as ModalidadEntrevista) || "Presencial",
     lugarOEnlace: r.lugar_o_enlace ? String(r.lugar_o_enlace) : null,
     estado: String(r.estado) as EstadoEntrevista,
@@ -89,14 +121,26 @@ function mapEntrevista(r: RowDataPacket): Entrevista {
   };
 }
 
+/**
+ * ATRACCION-TALENTO-2 — dos JOIN adicionales contra `usuarios` (entrevistador
+ * principal y auxiliar), SIN filtrar por `activo`: si el usuario luego se
+ * desactiva, la entrevista histórica debe seguir mostrando su nombre (punto
+ * 28 del ticket). El catálogo para NUEVAS asignaciones sí filtra activos —
+ * ver listarUsuariosEntrevistadores().
+ */
 const SELECT_BASE = `
   SELECT ent.*,
          DATE_FORMAT(ent.fecha_hora, '%Y-%m-%dT%H:%i:%s') AS fecha_hora_iso,
-         e.nombre AS entrevistador_nombre
+         e.nombre AS entrevistador_nombre,
+         ue.nombre AS entrevistador_usuario_nombre, ue.username AS entrevistador_usuario_username,
+         ua.nombre AS auxiliar_usuario_nombre, ua.username AS auxiliar_usuario_username
   FROM entrevistas ent
   LEFT JOIN empleados e
     ON e.id = ent.entrevistador_empleado_id AND e.empresa_id = ent.empresa_id
+  LEFT JOIN usuarios ue ON ue.id = ent.entrevistador_usuario_id
+  LEFT JOIN usuarios ua ON ua.id = ent.auxiliar_usuario_id
 `;
+
 
 /** Obtiene una entrevista aislada por empresa para reutilizar sus datos en el alta. */
 export async function obtenerEntrevista(
@@ -166,6 +210,8 @@ export async function crearEntrevista(input: {
   puesto: string;
   fechaHora: string; // "YYYY-MM-DDTHH:mm"
   entrevistadorEmpleadoId?: number | null;
+  entrevistadorUsuarioId?: number | null;
+  auxiliarUsuarioId?: number | null;
   modalidad?: ModalidadEntrevista;
   lugarOEnlace?: string | null;
   notas?: string | null;
@@ -198,6 +244,20 @@ export async function crearEntrevista(input: {
     }
   }
 
+  // ATRACCION-TALENTO-2 (secciones 6-7, 26) — el backend SIEMPRE valida, nunca confía en los IDs que manda el
+  // navegador: cada usuario debe existir, estar activo, tener acceso a esta empresa y ser elegible para entrevistas
+  // (mismo catálogo que expone /rrhh/entrevistas/usuarios). El auxiliar nunca puede ser el mismo usuario que el
+  // entrevistador principal.
+  if (input.entrevistadorUsuarioId && input.auxiliarUsuarioId && input.entrevistadorUsuarioId === input.auxiliarUsuarioId) {
+    return { ok: false, mensaje: "El auxiliar no puede ser el mismo usuario que el entrevistador principal." };
+  }
+  if (input.entrevistadorUsuarioId && !(await esUsuarioElegibleEntrevista(input.empresaId, input.entrevistadorUsuarioId))) {
+    return { ok: false, mensaje: "El entrevistador principal no es un usuario elegible de esta empresa." };
+  }
+  if (input.auxiliarUsuarioId && !(await esUsuarioElegibleEntrevista(input.empresaId, input.auxiliarUsuarioId))) {
+    return { ok: false, mensaje: "El auxiliar no es un usuario elegible de esta empresa." };
+  }
+
   const nombreCompleto = componerNombreCompleto(partes);
   const soloVacio = (v: string) => v.trim() || null;
   const result = await execute(
@@ -205,8 +265,9 @@ export async function crearEntrevista(input: {
       (empresa_id, candidato_nombre, candidato_primer_nombre, candidato_segundo_nombre, candidato_tercer_nombre,
        candidato_cuarto_nombre, candidato_primer_apellido, candidato_segundo_apellido, candidato_apellido_casada,
        candidato_telefono, candidato_email, puesto,
-       fecha_hora, entrevistador_empleado_id, modalidad, lugar_o_enlace, notas, creado_por)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       fecha_hora, entrevistador_empleado_id, entrevistador_usuario_id, auxiliar_usuario_id,
+       modalidad, lugar_o_enlace, notas, creado_por)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       input.empresaId,
       nombreCompleto,
@@ -217,6 +278,8 @@ export async function crearEntrevista(input: {
       puesto,
       input.fechaHora.replace("T", " "),
       input.entrevistadorEmpleadoId || null,
+      input.entrevistadorUsuarioId || null,
+      input.auxiliarUsuarioId || null,
       input.modalidad ?? "Presencial",
       input.lugarOEnlace?.trim() || null,
       input.notas?.trim() || null,
@@ -261,6 +324,8 @@ export async function actualizarEntrevista(
     puesto?: string;
     fechaHora?: string;
     entrevistadorEmpleadoId?: number | null;
+    entrevistadorUsuarioId?: number | null;
+    auxiliarUsuarioId?: number | null;
     modalidad?: ModalidadEntrevista;
     lugarOEnlace?: string | null;
     estado?: EstadoEntrevista;
@@ -270,7 +335,8 @@ export async function actualizarEntrevista(
 ): Promise<{ ok: boolean; mensaje: string }> {
   const rows = await query<RowDataPacket[]>(
     `SELECT candidato_primer_nombre, candidato_segundo_nombre, candidato_tercer_nombre, candidato_cuarto_nombre,
-            candidato_primer_apellido, candidato_segundo_apellido, candidato_apellido_casada, candidato_nombre
+            candidato_primer_apellido, candidato_segundo_apellido, candidato_apellido_casada, candidato_nombre,
+            entrevistador_usuario_id, auxiliar_usuario_id
      FROM entrevistas WHERE id = ? AND empresa_id = ? LIMIT 1`,
     [id, empresaId],
   );
@@ -300,11 +366,51 @@ export async function actualizarEntrevista(
     }
   }
 
+  // ATRACCION-TALENTO-2 (secciones 6-7, 26) — valida contra los valores EFECTIVOS resultantes (lo que llega en el
+  // patch, o si no se toca, lo que ya estaba guardado) para que un PATCH que solo cambia uno de los dos igual detecte
+  // que quedarían iguales al otro ya existente. Backend nunca confía en los IDs del cliente.
+  const entrevistadorUsuarioIdEfectivo =
+    patch.entrevistadorUsuarioId !== undefined
+      ? patch.entrevistadorUsuarioId
+      : actual.entrevistador_usuario_id != null ? Number(actual.entrevistador_usuario_id) : null;
+  const auxiliarUsuarioIdEfectivo =
+    patch.auxiliarUsuarioId !== undefined
+      ? patch.auxiliarUsuarioId
+      : actual.auxiliar_usuario_id != null ? Number(actual.auxiliar_usuario_id) : null;
+  if (
+    entrevistadorUsuarioIdEfectivo != null &&
+    auxiliarUsuarioIdEfectivo != null &&
+    entrevistadorUsuarioIdEfectivo === auxiliarUsuarioIdEfectivo
+  ) {
+    return { ok: false, mensaje: "El auxiliar no puede ser el mismo usuario que el entrevistador principal." };
+  }
+  if (patch.entrevistadorUsuarioId != null && !(await esUsuarioElegibleEntrevista(empresaId, patch.entrevistadorUsuarioId))) {
+    return { ok: false, mensaje: "El entrevistador principal no es un usuario elegible de esta empresa." };
+  }
+  if (patch.auxiliarUsuarioId != null && !(await esUsuarioElegibleEntrevista(empresaId, patch.auxiliarUsuarioId))) {
+    return { ok: false, mensaje: "El auxiliar no es un usuario elegible de esta empresa." };
+  }
+
   const sets: string[] = [];
   const params: (string | number | null)[] = [];
   if (patch.fechaHora !== undefined) {
     sets.push("fecha_hora = ?");
     params.push(patch.fechaHora.replace("T", " "));
+  }
+  if (patch.entrevistadorUsuarioId !== undefined) {
+    // ATRACCION-TALENTO-2 (sección 3) — cambiar explícitamente el entrevistador (ahora un usuario) limpia el
+    // empleado histórico, salvo que el mismo PATCH también lo esté fijando explícitamente. Editar solo otros campos
+    // (fecha, notas, resultado, etc.) nunca toca ninguno de los dos.
+    sets.push("entrevistador_usuario_id = ?");
+    params.push(patch.entrevistadorUsuarioId);
+    if (patch.entrevistadorEmpleadoId === undefined) {
+      sets.push("entrevistador_empleado_id = ?");
+      params.push(null);
+    }
+  }
+  if (patch.auxiliarUsuarioId !== undefined) {
+    sets.push("auxiliar_usuario_id = ?");
+    params.push(patch.auxiliarUsuarioId);
   }
   if (patch.entrevistadorEmpleadoId !== undefined) {
     sets.push("entrevistador_empleado_id = ?");
@@ -398,6 +504,77 @@ export async function listarEntrevistadoresActivos(
     codigo: String(r.codigo ?? ""),
     nombre: String(r.nombre),
   }));
+}
+
+export type UsuarioEntrevistaOpt = { id: number; nombre: string; username: string; rol: string };
+
+/**
+ * ATRACCION-TALENTO-2 (secciones 4-8) — catálogo de usuarios elegibles como
+ * entrevistador principal/auxiliar: activos, con acceso real a la empresa
+ * (usuario_empresa o acceso_todas_empresas) y con permiso efectivo
+ * `entrevistas:ver` (Admin pasa siempre, igual que requireTenantRrhh — el
+ * resto se resuelve con permisosEfectivos()/tienePermiso(), NUNCA asumiendo
+ * que el rol RRHH por sí solo implica el permiso si fue revocado
+ * explícitamente). Primero se acota a activos+acceso a la empresa (una sola
+ * consulta) y solo sobre ESE conjunto se resuelve el permiso efectivo — no
+ * se cargan ni se evalúan todos los usuarios del sistema.
+ */
+export async function listarUsuariosEntrevistadores(
+  empresaId: number,
+): Promise<UsuarioEntrevistaOpt[]> {
+  const candidatos = await query<RowDataPacket[]>(
+    `SELECT id, username, nombre, rol_global
+     FROM usuarios
+     WHERE activo = 1
+       AND (acceso_todas_empresas = 1 OR EXISTS (
+         SELECT 1 FROM usuario_empresa ue WHERE ue.usuario_id = usuarios.id AND ue.empresa_id = ?
+       ))
+     ORDER BY COALESCE(NULLIF(TRIM(nombre), ''), username)`,
+    [empresaId],
+  );
+  const elegibles: UsuarioEntrevistaOpt[] = [];
+  for (const row of candidatos) {
+    const rol = String(row.rol_global) as RolGlobal;
+    let permitido = rol === "Admin";
+    if (!permitido) {
+      const perms = await permisosEfectivos(Number(row.id), rol);
+      permitido = tienePermiso(perms, "entrevistas", "ver");
+    }
+    if (!permitido) continue;
+    elegibles.push({
+      id: Number(row.id),
+      nombre: nombreVisibleUsuario(row.nombre, row.username),
+      username: String(row.username),
+      rol,
+    });
+  }
+  return elegibles;
+}
+
+/** Valida que `usuarioId` esté en el catálogo de elegibles de esta empresa (mismo patrón que reemplazarResponsables()). */
+async function esUsuarioElegibleEntrevista(empresaId: number, usuarioId: number): Promise<boolean> {
+  const elegibles = await listarUsuariosEntrevistadores(empresaId);
+  return elegibles.some((u) => u.id === usuarioId);
+}
+
+/**
+ * ATRACCION-TALENTO-2 (sección 12) — catálogo REAL de puestos de la empresa:
+ * unión de `empleados.puesto` (plazas ya existentes) y `entrevistas.puesto`
+ * (puestos ya usados en reclutamientos anteriores, incluida "Otro puesto"
+ * escrito libremente) — nunca mezcla puestos de otra empresa. PUESTOS_MONACO
+ * (src/lib/rrhh/categorias-ops.ts) es una lista estática distinta, no se toca.
+ */
+export async function listarPuestosDisponibles(empresaId: number): Promise<string[]> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT DISTINCT puesto FROM (
+       SELECT TRIM(puesto) AS puesto FROM empleados WHERE empresa_id = ? AND TRIM(COALESCE(puesto, '')) <> ''
+       UNION
+       SELECT TRIM(puesto) AS puesto FROM entrevistas WHERE empresa_id = ? AND TRIM(COALESCE(puesto, '')) <> ''
+     ) t
+     ORDER BY puesto`,
+    [empresaId, empresaId],
+  );
+  return rows.map((r) => String(r.puesto));
 }
 
 export async function eliminarEntrevista(
