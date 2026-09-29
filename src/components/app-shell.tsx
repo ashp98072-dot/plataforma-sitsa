@@ -105,6 +105,18 @@ function IconWeb() {
   );
 }
 
+/** ATRACCION-TALENTO-1 — persona + lupa: "búsqueda de personas" (reclutamiento/selección). */
+function IconTalento() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <circle cx="9" cy="8" r="3" />
+      <path d="M3.5 20a5.5 5.5 0 0 1 11 0" />
+      <circle cx="17.5" cy="17.5" r="3" />
+      <path d="M20 20l2 2" />
+    </svg>
+  );
+}
+
 function IconAdmin() {
   return (
     <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8">
@@ -206,7 +218,7 @@ export function AppShell({
       if (rol === "RRHH" || isAdmin) {
         rrhhLinks.push({
           href: homeRrhh,
-          label: "Dashboard RRHH",
+          label: "Dashboard Talento Humano",
           key: "dash-rrhh",
         });
       }
@@ -242,9 +254,49 @@ export function AppShell({
     if (rrhhLinks.length) {
       g.push({
         id: "rrhh",
-        label: "RRHH",
+        // ATRACCION-TALENTO-1 — solo el texto visible cambió; `id: "rrhh"`,
+        // el módulo `rrhh`, los permisos y las rutas existentes de este
+        // grupo NO se tocaron.
+        label: "Gestión de Talento Humano",
         icon: <IconUsers />,
         links: rrhhLinks,
+      });
+    }
+
+    // ATRACCION-TALENTO-1 — grupo independiente: Entrevistas (que salió de
+    // RRHH_NAV arriba) + Reportes de selección. Reutiliza el permiso
+    // `entrevistas` ya existente (RrhhSubmodulo) — mismo criterio que el
+    // resto de items de Gestión de Talento Humano arriba (permisos.length
+    // === 0 = legado/sin matriz configurada, se muestra igual). Requiere el
+    // módulo de empresa `rrhh` porque `entrevistas` vive bajo ese módulo.
+    const atraccionLinks: NavLink[] = [];
+    const puedeVerAtraccion =
+      modulos.includes("rrhh") &&
+      (isAdmin ||
+        permisos.length === 0 ||
+        tienePermiso(permisos, "entrevistas", "ver"));
+    if (puedeVerAtraccion) {
+      atraccionLinks.push({
+        href: dominioEmpresa
+          ? "/atraccion-talento/entrevistas"
+          : `${base}/atraccion-talento/entrevistas`,
+        label: "Entrevistas",
+        key: "atraccion-entrevistas",
+      });
+      atraccionLinks.push({
+        href: dominioEmpresa
+          ? "/atraccion-talento/reportes"
+          : `${base}/atraccion-talento/reportes`,
+        label: "Reportes",
+        key: "atraccion-reportes",
+      });
+    }
+    if (atraccionLinks.length) {
+      g.push({
+        id: "atraccion-talento",
+        label: "Atracción de Talento Humano",
+        icon: <IconTalento />,
+        links: atraccionLinks,
       });
     }
 

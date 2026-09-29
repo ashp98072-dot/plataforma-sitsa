@@ -188,11 +188,11 @@ function DashboardRrhh({ slug }: { slug: string }) {
     <div className="space-y-6">
       <div>
         <p className="text-xs uppercase tracking-[0.2em] text-[var(--muted)]">
-          Control de Asistencias · RRHH
+          Control de Asistencias · Gestión de Talento Humano
         </p>
 
         <h1 className="mt-1 text-2xl font-semibold">
-          {empresa || "Dashboard RRHH"}
+          {empresa || "Dashboard Talento Humano"}
         </h1>
 
         <p className="mt-1 text-sm text-[var(--muted)]">
