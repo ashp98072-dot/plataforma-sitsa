@@ -23,8 +23,9 @@ const crearSchema = z.object({
   candidatoEmail: z.string().email().optional().nullable().or(z.literal("")),
   puesto: z.string().min(1),
   fechaHora: z.string().min(1),
-  entrevistadorEmpleadoId: z.number().int().positive().optional().nullable(),
-  // ATRACCION-TALENTO-2 — entrevistador principal/auxiliar ahora son usuarios del sistema (opcionales).
+  // ATRACCION-TALENTO-2 (corrección pre-SQL) — una entrevista NUEVA nunca usa el modelo histórico de empleado:
+  // deliberadamente este schema NO acepta entrevistadorEmpleadoId. Entrevistador principal/auxiliar son usuarios
+  // del sistema (opcionales) — ver crearEntrevista() en entrevistas.ts, que tampoco lo acepta.
   entrevistadorUsuarioId: z.number().int().positive().optional().nullable(),
   auxiliarUsuarioId: z.number().int().positive().optional().nullable(),
   modalidad: z.enum(["Presencial", "Virtual"]).optional(),
@@ -83,7 +84,6 @@ export async function POST(req: Request, ctx: Ctx) {
     candidatoEmail: parsed.data.candidatoEmail || null,
     puesto: parsed.data.puesto,
     fechaHora: parsed.data.fechaHora,
-    entrevistadorEmpleadoId: parsed.data.entrevistadorEmpleadoId,
     entrevistadorUsuarioId: parsed.data.entrevistadorUsuarioId,
     auxiliarUsuarioId: parsed.data.auxiliarUsuarioId,
     modalidad: parsed.data.modalidad,

@@ -209,7 +209,9 @@ export async function crearEntrevista(input: {
   candidatoEmail?: string | null;
   puesto: string;
   fechaHora: string; // "YYYY-MM-DDTHH:mm"
-  entrevistadorEmpleadoId?: number | null;
+  // ATRACCION-TALENTO-2 (corrección pre-SQL) — una entrevista NUEVA nunca usa el modelo histórico de empleado:
+  // deliberadamente esta función NO acepta entrevistadorEmpleadoId (el INSERT siempre lo deja NULL). Solo
+  // actualizarEntrevista() puede leer/preservar ese campo para entrevistas YA existentes creadas antes de este ticket.
   entrevistadorUsuarioId?: number | null;
   auxiliarUsuarioId?: number | null;
   modalidad?: ModalidadEntrevista;
@@ -232,16 +234,6 @@ export async function crearEntrevista(input: {
   }
   if (!input.fechaHora || Number.isNaN(Date.parse(input.fechaHora))) {
     return { ok: false, mensaje: "Fecha y hora inválidas." };
-  }
-
-  if (input.entrevistadorEmpleadoId) {
-    const emp = await query<RowDataPacket[]>(
-      `SELECT id FROM empleados WHERE id = ? AND empresa_id = ? AND estado = 'Activo' LIMIT 1`,
-      [input.entrevistadorEmpleadoId, input.empresaId],
-    );
-    if (!emp[0]) {
-      return { ok: false, mensaje: "El entrevistador no es un empleado activo de esta empresa." };
-    }
   }
 
   // ATRACCION-TALENTO-2 (secciones 6-7, 26) — el backend SIEMPRE valida, nunca confía en los IDs que manda el
@@ -277,7 +269,7 @@ export async function crearEntrevista(input: {
       input.candidatoEmail?.trim() || null,
       puesto,
       input.fechaHora.replace("T", " "),
-      input.entrevistadorEmpleadoId || null,
+      null, // entrevistador_empleado_id — SIEMPRE NULL en altas nuevas; el modelo histórico de empleado no se acepta al crear.
       input.entrevistadorUsuarioId || null,
       input.auxiliarUsuarioId || null,
       input.modalidad ?? "Presencial",

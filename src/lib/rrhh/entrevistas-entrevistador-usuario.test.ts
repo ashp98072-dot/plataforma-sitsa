@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const m = vi.hoisted(() => ({ execute: vi.fn(), query: vi.fn() }));
@@ -117,6 +118,23 @@ describe("ATRACCION-TALENTO-2 — crearEntrevista con entrevistador/auxiliar usu
     const r = await crearEntrevista({ ...base, entrevistadorUsuarioId: 10, auxiliarUsuarioId: 99 });
     expect(r.ok).toBe(false);
     expect(r.mensaje).toContain("auxiliar no es un usuario elegible");
+  });
+
+  it("4) el INSERT de una entrevista NUEVA siempre deja entrevistador_empleado_id en NULL — crearEntrevista ni siquiera acepta ese campo como input", async () => {
+    mockCatalogoUsuarios([{ id: 10, username: "mlopez", nombre: "María López", rol_global: "RRHH" }], { 10: { puedeVer: true } });
+    await crearEntrevista({ ...base, entrevistadorUsuarioId: 10 });
+    const [sql, params] = m.execute.mock.calls[0];
+    const columnas = String(sql).slice(String(sql).indexOf("("), String(sql).indexOf(")")).split(",").map((c) => c.trim());
+    const idx = columnas.indexOf("entrevistador_empleado_id");
+    expect(idx).toBeGreaterThan(-1);
+    expect(params[idx]).toBeNull();
+  });
+
+  it("crearEntrevista no acepta entrevistadorEmpleadoId ni siquiera si se le pasa (el tipo de su input ya no lo declara; el INSERT siempre manda NULL literal)", () => {
+    const src = readFileSync("src/lib/rrhh/entrevistas.ts", "utf8");
+    const fn = src.slice(src.indexOf("export async function crearEntrevista"), src.indexOf("export async function actualizarEntrevista"));
+    expect(fn).not.toMatch(/entrevistadorEmpleadoId\??:\s*number/);
+    expect(fn).toContain("null, // entrevistador_empleado_id");
   });
 });
 
