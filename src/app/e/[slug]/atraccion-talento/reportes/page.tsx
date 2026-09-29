@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { EmpleadoPicker, type EmpOpt } from "@/components/rrhh/empleado-picker";
+import { construirParamsReporte } from "@/lib/rrhh/entrevistas-reportes-filtros";
 
 type Resumen = {
   total: number;
@@ -100,13 +101,7 @@ export default function ReportesAtraccionTalentoPage() {
     setCargando(true);
     setError("");
     try {
-      const params = new URLSearchParams();
-      if (fechaDesde) params.set("fechaDesde", fechaDesde);
-      if (fechaHasta) params.set("fechaHasta", fechaHasta);
-      if (puesto.trim()) params.set("puesto", puesto.trim());
-      if (estado) params.set("estado", estado);
-      if (resultado) params.set("resultado", resultado);
-      if (entrevistadorId) params.set("entrevistadorEmpleadoId", String(entrevistadorId));
+      const params = construirParamsReporte({ fechaDesde, fechaHasta, puesto, estado, resultado, entrevistadorId });
       const res = await fetch(`/api/empresas/${slug}/rrhh/entrevistas/reportes?${params.toString()}`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -119,8 +114,7 @@ export default function ReportesAtraccionTalentoPage() {
     } finally {
       setCargando(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slug]);
+  }, [slug, fechaDesde, fechaHasta, puesto, estado, resultado, entrevistadorId]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -171,7 +165,14 @@ export default function ReportesAtraccionTalentoPage() {
           </select>
         </label>
         <div className="sm:col-span-2 lg:col-span-2">
-          <EmpleadoPicker empleados={empleados} value={entrevistadorId} onChange={setEntrevistadorId} label="Entrevistador" />
+          <EmpleadoPicker
+            empleados={empleados}
+            value={entrevistadorId}
+            onChange={setEntrevistadorId}
+            label="Entrevistador"
+            allowEmptySelection
+            emptyLabel="Todos los entrevistadores"
+          />
         </div>
         <div className="flex items-end">
           <button className="rounded bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white disabled:opacity-50" disabled={cargando}>
