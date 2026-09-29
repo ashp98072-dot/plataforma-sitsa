@@ -239,6 +239,36 @@ describe("autorizarViatico — PROGRAMADO -> AUTORIZADO con firma", () => {
   });
 });
 
+describe("VIATICOS-PENDIENTES-Q0-1 — autorizarViatico rechaza monto_asignado <= 0", () => {
+  it("5) PROGRAMADO con monto_asignado = 0 -> 409 monto_sin_viatico, sin firmar, compensa la imagen ya guardada", async () => {
+    mockConnQuery({ viatico: { ...VIATICO_PROGRAMADO, monto_asignado: "0.00" } });
+    const r = await autorizarViatico(7, 10, "jefe1", firma);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.status).toBe(409);
+      expect(r.error).toContain("no requiere autorización");
+    }
+    expect(crearFirmaInterna).not.toHaveBeenCalled();
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(conn.rollback).toHaveBeenCalled();
+    expect(borrarUpload).toHaveBeenCalledWith("empresas/7/firmas/firma_x.png");
+  });
+
+  it("monto_asignado negativo (dato corrupto) también se rechaza — la regla es <= 0, no solo === 0", async () => {
+    mockConnQuery({ viatico: { ...VIATICO_PROGRAMADO, monto_asignado: "-10.00" } });
+    const r = await autorizarViatico(7, 10, "jefe1", firma);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.status).toBe(409);
+  });
+
+  it("estado != PROGRAMADO se reporta como conflicto de estado, NUNCA como monto_sin_viatico (aunque el monto también sea 0)", async () => {
+    mockConnQuery({ viatico: { ...VIATICO_PROGRAMADO, estado: "AUTORIZADO", monto_asignado: "0.00" } });
+    const r = await autorizarViatico(7, 10, "jefe1", firma);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("no se puede autorizar desde ese estado");
+  });
+});
+
 describe("liquidarViatico — ENTREGADO -> LIQUIDADO, regla crítica de diferencia === 0 exacto", () => {
   const firmaFacturador: DatosFirmaViatico = {
     usuarioId: 8, nombreFirmante: "Marta Ruiz", rolFirmante: "Facturador", password: "clave456",
@@ -748,6 +778,43 @@ describe("listarViaticosControl — fecha DATE de MySQL", () => {
   });
 });
 
+const RESUMEN_VACIO = { pendientes: 0, autorizados: 0, rechazados: 0, entregados: 0, liquidados: 0 };
+
+describe("VIATICOS-PENDIENTES-Q0-1 — listarViaticosControl excluye monto_asignado <= 0 de 'Por autorizar'", () => {
+  it("1) el filtro de items por estado=PROGRAMADO agrega también monto_asignado > 0 (bandeja pura)", async () => {
+    vi.mocked(query).mockResolvedValueOnce([RESUMEN_VACIO] as never).mockResolvedValueOnce([] as never);
+    await listarViaticosControl(7, { estado: "PROGRAMADO" });
+    const sqlItems = String(vi.mocked(query).mock.calls[1][0]);
+    expect(sqlItems).toContain("v.estado = ?");
+    expect(sqlItems).toContain("v.monto_asignado > 0");
+  });
+
+  it("otros filtros de estado (AUTORIZADO/RECHAZADO/ENTREGADO/LIQUIDADO) NUNCA agregan el filtro de monto — solo aplica a PROGRAMADO", async () => {
+    for (const estado of ["AUTORIZADO", "RECHAZADO", "ENTREGADO", "LIQUIDADO"] as const) {
+      vi.mocked(query).mockReset();
+      vi.mocked(query).mockResolvedValueOnce([RESUMEN_VACIO] as never).mockResolvedValueOnce([] as never);
+      await listarViaticosControl(7, { estado });
+      const sqlItems = String(vi.mocked(query).mock.calls[1][0]);
+      expect(sqlItems).not.toContain("v.monto_asignado > 0");
+    }
+  });
+
+  it("sin filtro de estado (vista 'Todos') tampoco agrega el filtro de monto — no se oculta nada globalmente sin analizarlo", async () => {
+    vi.mocked(query).mockResolvedValueOnce([RESUMEN_VACIO] as never).mockResolvedValueOnce([] as never);
+    await listarViaticosControl(7);
+    const sqlItems = String(vi.mocked(query).mock.calls[1][0]);
+    expect(sqlItems).not.toContain("v.monto_asignado > 0");
+  });
+
+  it("3) resumen.pendientes viene de la agregación SQL con CASE WHEN estado=PROGRAMADO AND monto_asignado > 0 (nunca cuenta Q0)", async () => {
+    vi.mocked(query).mockResolvedValueOnce([{ ...RESUMEN_VACIO, pendientes: 3, autorizados: 1 }] as never).mockResolvedValueOnce([] as never);
+    const { resumen } = await listarViaticosControl(7);
+    expect(resumen).toMatchObject({ pendientes: 3, autorizados: 1 });
+    const sqlResumen = String(vi.mocked(query).mock.calls[0][0]);
+    expect(sqlResumen).toContain("v.estado = 'PROGRAMADO' AND v.monto_asignado > 0");
+  });
+});
+
 /**
  * VIATICOS-RECHAZADO-1 — listarViaticosControl/mapDetalle deben conocer
  * RECHAZADO igual que los demás estados: contador propio, filtro, y los
@@ -756,12 +823,9 @@ describe("listarViaticosControl — fecha DATE de MySQL", () => {
  */
 describe("listarViaticosControl / mapDetalle — RECHAZADO", () => {
   it("18) el resumen cuenta 'rechazados' igual que los demás estados", async () => {
+    // VIATICOS-PENDIENTES-Q0-1: el resumen ahora es UNA fila agregada (CASE WHEN por estado), no GROUP BY estado.
     vi.mocked(query)
-      .mockResolvedValueOnce([
-        { estado: "PROGRAMADO", total: 2 },
-        { estado: "RECHAZADO", total: 3 },
-        { estado: "AUTORIZADO", total: 1 },
-      ] as never)
+      .mockResolvedValueOnce([{ pendientes: 2, autorizados: 1, rechazados: 3, entregados: 0, liquidados: 0 }] as never)
       .mockResolvedValueOnce([] as never);
     const { resumen } = await listarViaticosControl(7);
     expect(resumen).toEqual({ pendientes: 2, autorizados: 1, rechazados: 3, entregados: 0, liquidados: 0 });

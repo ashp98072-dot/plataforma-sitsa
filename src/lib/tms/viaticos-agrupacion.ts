@@ -112,7 +112,10 @@ export function agruparViaticos<T extends ViaticoAgrupable>(items: T[], modo: Mo
     }
     g.items.push(it);
     g.total += 1;
-    if ((ESTADOS_VIATICO as readonly string[]).includes(it.estado)) g.conteos[it.estado as EstadoViaticoAgrupable] += 1;
+    // VIATICOS-PENDIENTES-Q0-1 — conteos.PROGRAMADO representa "pendientes de autorizar" en toda la UI
+    // (resumenGrupo, encabezado del grupo): un PROGRAMADO con monto Q0.00 no cuenta ahí, no requiere autorización.
+    const cuentaComoEstado = it.estado === "PROGRAMADO" ? Number(it.montoAsignado) > 0 : (ESTADOS_VIATICO as readonly string[]).includes(it.estado);
+    if (cuentaComoEstado) g.conteos[it.estado as EstadoViaticoAgrupable] += 1;
     if (it.estado !== "RECHAZADO") g.montoNoRechazado = Math.round((g.montoNoRechazado + Number(it.montoAsignado || 0)) * 100) / 100;
   }
   return [...mapa.values()].sort((a, b) => {
@@ -127,6 +130,21 @@ export function agruparViaticos<T extends ViaticoAgrupable>(items: T[], modo: Mo
 
 export const idsDeGrupo = (g: { items: { id: number }[] }): number[] => g.items.map((x) => x.id);
 
+/**
+ * VIATICOS-PENDIENTES-Q0-1 — invariante que TODA la selección/autorización
+ * masiva debe respetar por sí misma, sin depender solo de que el backend
+ * ya haya filtrado la lista: un viático es autorizable si y solo si sigue
+ * PROGRAMADO y tiene un monto asignado real (> 0). Un PROGRAMADO con
+ * monto Q0.00 no requiere autorización.
+ */
+export const esAutorizable = (item: ViaticoAgrupable): boolean =>
+  item.estado === "PROGRAMADO" && Number(item.montoAsignado) > 0;
+
+/** Ids autorizables (PROGRAMADO + monto > 0) del grupo — nunca incluye AUTORIZADO/RECHAZADO/ENTREGADO/LIQUIDADO ni Q0. */
+export function idsAutorizablesDeGrupo(g: { items: ViaticoAgrupable[] }): number[] {
+  return g.items.filter(esAutorizable).map((x) => x.id);
+}
+
 export function seleccionadosDelGrupo(sel: ReadonlySet<number>, g: { items: { id: number }[] }): number[] {
   return g.items.filter((x) => sel.has(x.id)).map((x) => x.id);
 }
@@ -137,9 +155,9 @@ export function alternarEnSeleccion(sel: ReadonlySet<number>, id: number): Set<n
   return n;
 }
 
-/** Marca todos los viáticos del grupo (los demás grupos no cambian). */
-export function seleccionarTodosDelGrupo(sel: ReadonlySet<number>, g: { items: { id: number }[] }): Set<number> {
-  return new Set([...sel, ...idsDeGrupo(g)]);
+/** Marca los viáticos AUTORIZABLES del grupo (los demás grupos no cambian; nunca marca un item no autorizable). */
+export function seleccionarTodosDelGrupo(sel: ReadonlySet<number>, g: { items: ViaticoAgrupable[] }): Set<number> {
+  return new Set([...sel, ...idsAutorizablesDeGrupo(g)]);
 }
 
 /** Quita solo los ids de este grupo (los seleccionados de otros grupos se conservan). */
@@ -148,17 +166,23 @@ export function limpiarSeleccionDelGrupo(sel: ReadonlySet<number>, g: { items: {
   return new Set([...sel].filter((id) => !propios.has(id)));
 }
 
-/** ¿Están todos los viáticos del grupo seleccionados? (checkbox del encabezado del grupo) */
-export const grupoCompletoSeleccionado = (sel: ReadonlySet<number>, g: { items: { id: number }[] }): boolean =>
-  g.items.length > 0 && g.items.every((x) => sel.has(x.id));
+/** ¿Están TODOS los viáticos AUTORIZABLES del grupo seleccionados? (checkbox del encabezado del grupo) */
+export const grupoCompletoSeleccionado = (sel: ReadonlySet<number>, g: { items: ViaticoAgrupable[] }): boolean => {
+  const autorizables = idsAutorizablesDeGrupo(g);
+  return autorizables.length > 0 && autorizables.every((id) => sel.has(id));
+};
 
 /**
- * Ids que "Autorizar seleccionados" de ESTE grupo enviará al flujo actual: EXACTAMENTE los seleccionados del grupo
- * (ni de otros grupos, ni "todo lo visible"). El flujo de autorización (POST individual por viático, parcial) no cambia.
+ * Ids que "Autorizar seleccionados" de ESTE grupo enviará al flujo actual: la intersección de lo seleccionado con
+ * lo AUTORIZABLE del grupo (nunca un id ya AUTORIZADO/RECHAZADO/etc. ni un Q0, aunque por algún error hubiera
+ * quedado marcado). El flujo de autorización (POST individual por viático, parcial) no cambia.
  */
-export const idsAAutorizarDelGrupo = seleccionadosDelGrupo;
+export function idsAAutorizarDelGrupo(sel: ReadonlySet<number>, g: { items: ViaticoAgrupable[] }): number[] {
+  const autorizables = new Set(idsAutorizablesDeGrupo(g));
+  return [...sel].filter((id) => autorizables.has(id));
+}
 
-/** Texto del encabezado, p. ej. "35 viáticos · 30 pendientes · Q2,450.00". */
+/** Texto del encabezado, p. ej. "35 viáticos · 30 pendientes · Q2,450.00". `conteos.PROGRAMADO` ya excluye Q0 (ver agruparViaticos). */
 export function resumenGrupo(g: Pick<GrupoViaticos<ViaticoAgrupable>, "total" | "conteos" | "montoNoRechazado">, formatoMoneda: (n: number) => string): string {
   return [
     `${g.total} viático${g.total === 1 ? "" : "s"}`,

@@ -652,6 +652,17 @@ export async function autorizarViatico(
         status: 409,
       };
     }
+    // VIATICOS-PENDIENTES-Q0-1 — protección server-side: un viático sin
+    // monto asignado no requiere autorización. La UI ya lo excluye de "Por
+    // autorizar", pero esto nunca puede depender solo de eso (pestaña
+    // vieja, request manual, condición de carrera).
+    if (Number(v.monto_asignado) <= 0) {
+      return {
+        ok: false,
+        error: "Este registro no tiene un monto de viático asignado y no requiere autorización.",
+        status: 409,
+      };
+    }
 
     // Contexto de solo lectura para el payload firmado (viaje/beneficiario)
     // — NO forma parte de lo que se bloquea/actualiza, no necesita FOR UPDATE.
@@ -1544,48 +1555,45 @@ export async function listarViaticosControl(
 
   const whereBase = condiciones.join(" AND ");
 
-  const resumenRows = await query<RowDataPacket[]>(
-    `SELECT v.estado, COUNT(*) AS total
+  // VIATICOS-PENDIENTES-Q0-1 — "pendientes" (PROGRAMADO) EXCLUYE
+  // monto_asignado <= 0: un viático sin monto asignado no requiere
+  // autorización, así que nunca debe sumar al contador de "Por autorizar"
+  // ni a `resumen.pendientes`. El resto de estados no se toca — no
+  // dependen del monto.
+  const [resumenRow] = await query<RowDataPacket[]>(
+    `SELECT
+       COALESCE(SUM(CASE WHEN v.estado = 'PROGRAMADO' AND v.monto_asignado > 0 THEN 1 ELSE 0 END), 0) AS pendientes,
+       COALESCE(SUM(CASE WHEN v.estado = 'AUTORIZADO' THEN 1 ELSE 0 END), 0) AS autorizados,
+       COALESCE(SUM(CASE WHEN v.estado = 'RECHAZADO' THEN 1 ELSE 0 END), 0) AS rechazados,
+       COALESCE(SUM(CASE WHEN v.estado = 'ENTREGADO' THEN 1 ELSE 0 END), 0) AS entregados,
+       COALESCE(SUM(CASE WHEN v.estado = 'LIQUIDADO' THEN 1 ELSE 0 END), 0) AS liquidados
      FROM tms_viaticos v
      INNER JOIN tms_planes_viaje pl ON pl.id = v.plan_id
      INNER JOIN tms_personal tp ON tp.id = v.personal_id
-     WHERE ${whereBase}
-     GROUP BY v.estado`,
+     WHERE ${whereBase}`,
     params,
   );
   const resumen: ResumenControlViaticos = {
-    pendientes: 0,
-    autorizados: 0,
-    rechazados: 0,
-    entregados: 0,
-    liquidados: 0,
+    pendientes: Number(resumenRow?.pendientes ?? 0),
+    autorizados: Number(resumenRow?.autorizados ?? 0),
+    rechazados: Number(resumenRow?.rechazados ?? 0),
+    entregados: Number(resumenRow?.entregados ?? 0),
+    liquidados: Number(resumenRow?.liquidados ?? 0),
   };
-  for (const r of resumenRows) {
-    const total = Number(r.total ?? 0);
-    switch (String(r.estado)) {
-      case "PROGRAMADO":
-        resumen.pendientes = total;
-        break;
-      case "AUTORIZADO":
-        resumen.autorizados = total;
-        break;
-      case "RECHAZADO":
-        resumen.rechazados = total;
-        break;
-      case "ENTREGADO":
-        resumen.entregados = total;
-        break;
-      case "LIQUIDADO":
-        resumen.liquidados = total;
-        break;
-    }
-  }
 
   const condicionesItems = [...condiciones];
   const paramsItems = [...params];
   if (filtros.estado) {
     condicionesItems.push("v.estado = ?");
     paramsItems.push(filtros.estado);
+    // VIATICOS-PENDIENTES-Q0-1 — la bandeja "Por autorizar" (estado=PROGRAMADO)
+    // debe ser PURA: nunca incluir viáticos sin monto asignado, aunque su
+    // estado técnicamente sea PROGRAMADO. No se toca ningún otro filtro de
+    // estado — un viático Q0 sigue existiendo tal cual, solo no forma parte
+    // del flujo de autorización.
+    if (filtros.estado === "PROGRAMADO") {
+      condicionesItems.push("v.monto_asignado > 0");
+    }
   }
   const rows = await query<RowDataPacket[]>(
     `${DETALLE_SELECT} WHERE ${condicionesItems.join(" AND ")} ORDER BY pl.fecha_plan DESC, pl.codigo DESC, v.rol DESC, tp.nombre`,

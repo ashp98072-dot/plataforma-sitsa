@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   agruparViaticos,
   alternarEnSeleccion,
+  esAutorizable,
   grupoCompletoSeleccionado,
   idsAAutorizarDelGrupo,
   limpiarSeleccionDelGrupo,
@@ -162,7 +163,11 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   const [fMetodo, setFMetodo] = useState("");
   const [fFechaDesde, setFFechaDesde] = useState("");
   const [fFechaHasta, setFFechaHasta] = useState("");
-  const [fEstado, setFEstado] = useState("");
+  // VIATICOS-PENDIENTES-Q0-1 — la bandeja inicial es "Por autorizar"
+  // (PROGRAMADO): es la acción operativa principal de esta pantalla. Las
+  // demás pestañas siguen accesibles con un clic (incluido volver a
+  // "Todos" haciendo clic de nuevo en la pestaña activa).
+  const [fEstado, setFEstado] = useState("PROGRAMADO");
 
   const [seleccionados, setSeleccionados] = useState<Set<number>>(new Set());
   // TMS-VIATICOS-AGRUPACION-1 — agrupar el resultado YA filtrado por Día / Semana / Mes (solo cliente) y ids que
@@ -592,7 +597,11 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
               <tr key={r.id} className="border-t border-[var(--border)]">
                 {puedeAutorizar ? (
                   <td className="px-2 py-2">
-                    <input type="checkbox" checked={seleccionados.has(r.id)} onChange={() => toggleSeleccion(r.id)} />
+                    {/* VIATICOS-PENDIENTES-Q0-1 — el checkbox solo existe para filas autorizables (PROGRAMADO +
+                        monto > 0): en la vista "Todos" nunca debe poder marcarse un AUTORIZADO/RECHAZADO/etc. ni un Q0. */}
+                    {esAutorizable(r) ? (
+                      <input type="checkbox" checked={seleccionados.has(r.id)} onChange={() => toggleSeleccion(r.id)} />
+                    ) : null}
                   </td>
                 ) : null}
                 <td className="px-3 py-2">{r.planCodigo}</td>
@@ -630,13 +639,18 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
                     <>
                       {puedeAutorizar && r.estado === "PROGRAMADO" ? (
                         <>
-                          <button
-                            type="button"
-                            onClick={() => void abrirAutorizar(r)}
-                            className="rounded bg-sky-700 px-2 py-1 text-xs text-white"
-                          >
-                            Firmar y autorizar
-                          </button>
+                          {/* VIATICOS-PENDIENTES-Q0-1 — un PROGRAMADO sin monto asignado no requiere
+                              autorización: no tiene sentido ofrecer "Firmar y autorizar". Rechazar sigue
+                              disponible (es una acción distinta, no depende del monto). */}
+                          {r.montoAsignado > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => void abrirAutorizar(r)}
+                              className="rounded bg-sky-700 px-2 py-1 text-xs text-white"
+                            >
+                              Firmar y autorizar
+                            </button>
+                          ) : null}
                           <button
                             type="button"
                             onClick={() => abrirRechazar(r)}
