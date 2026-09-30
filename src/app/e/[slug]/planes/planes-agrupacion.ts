@@ -67,14 +67,14 @@ export function agruparPlanes<T extends PlanAgrupable>(planes: T[], modo: Agrupa
     });
 }
 
-/** Por defecto solo el grupo más reciente queda abierto (y el que contiene el plan enfocado por deep-link). */
+/** Grupos contraídos por defecto; el deep-link abre su grupo salvo que exista un toggle explícito. */
 export function grupoAbierto(
-  indice: number,
+  _indice: number,
   clave: string,
   toggles: Record<string, boolean>,
   contieneFoco: boolean,
 ): boolean {
-  return toggles[clave] ?? (indice === 0 || contieneFoco);
+  return toggles[clave] ?? contieneFoco;
 }
 
 /** "semana" es femenino ("Esta semana"); "día"/"mes" son masculinos ("Este día"/"Este mes"). */

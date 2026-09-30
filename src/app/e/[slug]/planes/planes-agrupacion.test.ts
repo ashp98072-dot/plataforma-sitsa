@@ -49,17 +49,48 @@ describe("agrupación visual por DÍA (comportamiento previo, ítem 1: se conser
     expect(agruparPlanes([], "DIA")).toEqual([]);
   });
 
-  it("expandir/contraer: por defecto solo el grupo más reciente abierto; el usuario puede alternar cualquiera", () => {
-    expect(grupoAbierto(0, "2026-09-23", {}, false)).toBe(true);
+  it("todos los grupos empiezan contraídos y el usuario puede alternar cualquiera", () => {
+    expect(grupoAbierto(0, "2026-09-23", {}, false)).toBe(false);
     expect(grupoAbierto(1, "2026-09-22", {}, false)).toBe(false);
     expect(grupoAbierto(2, "2026-09-21", {}, false)).toBe(false);
     expect(grupoAbierto(0, "2026-09-23", { "2026-09-23": false }, false)).toBe(false); // contraer el reciente
     expect(grupoAbierto(2, "2026-09-21", { "2026-09-21": true }, false)).toBe(true); // expandir uno antiguo
     expect(grupoAbierto(2, "2026-09-21", {}, true)).toBe(true); // deep-link ?plan=: el grupo del plan enfocado se abre
+    expect(grupoAbierto(2, "2026-09-21", { "2026-09-21": false }, true)).toBe(false); // el toggle explícito prevalece sobre el foco
   });
 
   it("fecha visible dd/mm/aaaa (helper conservado)", () => {
     expect(fechaVisible("2026-09-23")).toBe("23/09/2026");
+  });
+});
+
+describe("apertura por defecto en Día/Semana/Mes", () => {
+  it.each(["DIA", "SEMANA", "MES"] as const)("%s: todos cerrados, foco abierto y alternancia manual conservada", (modo) => {
+    const grupos = agruparPlanes([p(1, "2026-09-30", "Descargado"), p(2, "2026-08-10", "Cerrado")], modo);
+    expect(grupos).toHaveLength(2);
+    const toggles: Record<string, boolean> = {};
+    grupos.forEach((g, indice) => {
+      expect(grupoAbierto(indice, g.clave, toggles, false)).toBe(false);
+      expect(grupoAbierto(indice, g.clave, toggles, true)).toBe(true);
+      toggles[g.clave] = !grupoAbierto(indice, g.clave, toggles, false);
+      expect(grupoAbierto(indice, g.clave, toggles, false)).toBe(true);
+      toggles[g.clave] = !grupoAbierto(indice, g.clave, toggles, false);
+      expect(grupoAbierto(indice, g.clave, toggles, true)).toBe(false);
+    });
+    expect(grupos.map(({ total, cerrables, cerrados }) => ({ total, cerrables, cerrados }))).toEqual([
+      { total: 1, cerrables: 1, cerrados: 0 }, { total: 1, cerrables: 0, cerrados: 1 },
+    ]);
+  });
+
+  it("cambiar de modo no hereda la apertura de una clave de otro modo", () => {
+    const viaje = [p(1, "2026-09-30", "Programado")];
+    const claves = (["DIA", "SEMANA", "MES"] as const).map((modo) => agruparPlanes(viaje, modo)[0].clave);
+    expect(claves).toEqual(["2026-09-30", "2026-W40", "2026-09"]);
+    const toggles: Record<string, boolean> = {};
+    for (const clave of claves) {
+      expect(grupoAbierto(0, clave, toggles, false)).toBe(false);
+      toggles[clave] = true;
+    }
   });
 });
 
