@@ -16,6 +16,7 @@ import { agruparViaticos } from "./viaticos-agrupacion";
 import {
   autorizarViatico,
   liquidarViatico,
+  listarViaticosAutorizadosPorPeriodo,
   listarViaticosControl,
   listarViaticosDePlan,
   listarViaticosPorPagar,
@@ -960,5 +961,99 @@ describe("sincronizarViaticosPlan — RECHAZADO es terminal por (plan_id, person
     expect(insertCall).toBeDefined();
     expect(insertCall![1]).toEqual([7, 101, 9, "Piloto", 500, 500]);
     // El plan_id del INSERT es el NUEVO (101), nunca el plan 1 donde está el RECHAZADO.
+  });
+});
+
+/**
+ * VIATICOS-COMPROBANTE-PERIODO — listarViaticosAutorizadosPorPeriodo() es una consulta DELIBERADAMENTE separada
+ * de listarViaticosControl(): filtra por `autorizado_en` (rango semiabierto) y NUNCA por `estado`, para que el
+ * comprobante histórico de autorización siga mostrando un viático que fue autorizado dentro del período aunque
+ * después haya pasado a ENTREGADO o LIQUIDADO. Estas pruebas verifican el contrato de la consulta (SQL/params
+ * construidos y mapeo de filas) — el filtrado real por rango/empresa lo aplica MariaDB en el WHERE, no JS.
+ */
+describe("listarViaticosAutorizadosPorPeriodo — histórico por autorizado_en, nunca por estado actual", () => {
+  const filaAutorizada = (overrides: Record<string, unknown> = {}) => ({
+    id: 10,
+    plan_id: 1,
+    personal_id: 5,
+    rol: "Piloto",
+    monto_sugerido: "500",
+    monto_asignado: "500",
+    estado: "AUTORIZADO",
+    plan_codigo: "VJ-100",
+    fecha_plan: "2026-09-10",
+    personal_nombre: "Carlos Ruiz",
+    puesto: "Piloto",
+    autorizado_por: "op1",
+    autorizado_en: "2026-09-15 10:00:00",
+    ...overrides,
+  });
+
+  it("9) un viático con estado actual AUTORIZADO y autorizado_en dentro del rango se mapea en el resultado", async () => {
+    vi.mocked(query).mockResolvedValueOnce([filaAutorizada({ estado: "AUTORIZADO" })] as never);
+    const items = await listarViaticosAutorizadosPorPeriodo(7, "2026-09-01 00:00:00", "2026-10-01 00:00:00");
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ id: 10, estado: "AUTORIZADO", autorizadoEn: "2026-09-15 10:00:00" });
+  });
+
+  it("10) un viático AUTORIZADO en el período que luego pasó a ENTREGADO sigue apareciendo (estado actual no filtra)", async () => {
+    vi.mocked(query).mockResolvedValueOnce([filaAutorizada({ estado: "ENTREGADO", entregado_por: "op2", entregado_en: "2026-09-20 09:00:00" })] as never);
+    const items = await listarViaticosAutorizadosPorPeriodo(7, "2026-09-01 00:00:00", "2026-10-01 00:00:00");
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ estado: "ENTREGADO", autorizadoEn: "2026-09-15 10:00:00" });
+  });
+
+  it("11) un viático AUTORIZADO en el período que luego pasó a LIQUIDADO sigue apareciendo (estado actual no filtra)", async () => {
+    vi.mocked(query).mockResolvedValueOnce([filaAutorizada({ estado: "LIQUIDADO", liquidado_por: "op2", liquidado_en: "2026-09-25 09:00:00" })] as never);
+    const items = await listarViaticosAutorizadosPorPeriodo(7, "2026-09-01 00:00:00", "2026-10-01 00:00:00");
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ estado: "LIQUIDADO", autorizadoEn: "2026-09-15 10:00:00" });
+  });
+
+  it("12/13/14) el WHERE siempre filtra por empresa_id + autorizado_en NOT NULL + rango semiabierto — nunca por estado — así MariaDB excluye fuera de rango, NULL y otra empresa", async () => {
+    vi.mocked(query).mockResolvedValueOnce([] as never);
+    await listarViaticosAutorizadosPorPeriodo(7, "2026-09-01 00:00:00", "2026-10-01 00:00:00");
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(String(sql)).toContain("v.empresa_id = ?");
+    expect(String(sql)).toContain("v.autorizado_en IS NOT NULL");
+    expect(String(sql)).toContain("v.autorizado_en >= ?");
+    expect(String(sql)).toContain("v.autorizado_en < ?");
+    expect(String(sql)).not.toMatch(/v\.estado\s*=/);
+    expect(params).toEqual([7, "2026-09-01 00:00:00", "2026-10-01 00:00:00"]);
+  });
+
+  it("15) CASO IMPORTANTE del ticket: viático A (autorizado_en=2026-09-15, estado=LIQUIDADO) aparece en MES septiembre 2026; viático B (autorizado_en=2026-08-31, estado=AUTORIZADO) NO — la consulta se construye sobre el rango de septiembre y nunca sobre el estado", async () => {
+    // El mock simula lo que MariaDB YA filtró (WHERE autorizado_en en rango) — solo el viático A vendría en el
+    // resultset real; este test confirma que el mapeo no vuelve a excluirlo/incluirlo por su estado actual.
+    vi.mocked(query).mockResolvedValueOnce([
+      filaAutorizada({ id: 1, estado: "LIQUIDADO", autorizado_en: "2026-09-15 10:00:00" }),
+    ] as never);
+    const items = await listarViaticosAutorizadosPorPeriodo(7, "2026-09-01 00:00:00", "2026-10-01 00:00:00");
+    expect(items.map((v) => v.id)).toEqual([1]);
+    expect(items[0]).toMatchObject({ estado: "LIQUIDADO", autorizadoEn: "2026-09-15 10:00:00" });
+    // Los parámetros ligados confirman que el rango pedido es SEPTIEMBRE 2026 — el viático B
+    // (autorizado_en=2026-08-31, fuera de ese rango) nunca podría calificar bajo este WHERE.
+    const [, params] = vi.mocked(query).mock.calls[0];
+    expect(params).toEqual([7, "2026-09-01 00:00:00", "2026-10-01 00:00:00"]);
+  });
+
+  it("ORDER BY autorizado_en, id — orden cronológico estable del comprobante", async () => {
+    vi.mocked(query).mockResolvedValueOnce([] as never);
+    await listarViaticosAutorizadosPorPeriodo(7, "2026-09-01 00:00:00", "2026-10-01 00:00:00");
+    const [sql] = vi.mocked(query).mock.calls[0];
+    expect(String(sql)).toContain("ORDER BY v.autorizado_en, v.id");
+  });
+
+  it("empresa_id es SIEMPRE el primer parámetro ligado (tenant isolation) — nunca confiado del cliente", async () => {
+    vi.mocked(query).mockResolvedValueOnce([] as never);
+    await listarViaticosAutorizadosPorPeriodo(99, "2026-09-01 00:00:00", "2026-10-01 00:00:00");
+    const [, params] = vi.mocked(query).mock.calls[0];
+    expect(params![0]).toBe(99);
+  });
+
+  it("sin resultados en el período -> arreglo vacío (nunca null/undefined)", async () => {
+    vi.mocked(query).mockResolvedValueOnce([] as never);
+    const items = await listarViaticosAutorizadosPorPeriodo(7, "2026-09-01 00:00:00", "2026-10-01 00:00:00");
+    expect(items).toEqual([]);
   });
 });
