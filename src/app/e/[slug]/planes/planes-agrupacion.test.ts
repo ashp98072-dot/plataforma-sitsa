@@ -389,3 +389,161 @@ describe("PLANES-CIERRE-PERIODO — selector Día/Semana/Mes y acciones del per�
     expect(efecto).toContain("setSeleccion(new Set())");
   });
 });
+
+/**
+ * PLANES-SEPARAR-CERRADOS — separa "Pendientes / Activos" (estado <> 'Cerrado') de "Viajes cerrados"
+ * (estado = 'Cerrado') en dos pestañas del modo operativo, reutilizando soloSinCerrar/soloCerrados ya
+ * existentes en el backend (nunca una tabla nueva ni SQL duplicado). Mismo criterio de pruebas que el resto
+ * de este archivo: sin harness de componentes React, se verifica el código fuente directamente.
+ */
+describe("PLANES-SEPARAR-CERRADOS — pestañas Pendientes/Activos vs Viajes cerrados", () => {
+  const src = readFileSync("src/app/e/[slug]/planes/planes-viajes-client.tsx", "utf8").replace(/\r\n/g, "\n");
+  const fnAplicar = src.slice(src.indexOf("function aplicarFiltrosDeVista"), src.indexOf("function irAVista"));
+  const fnIrAVista = src.slice(src.indexOf("function irAVista"), src.indexOf("function limpiarFiltros"));
+  const fnLimpiar = src.slice(src.indexOf("function limpiarFiltros"), src.indexOf("function verTodosLosPlanes"));
+
+  it("1) modo operativo inicia en ACTIVOS (vista y soloSinCerrar por defecto)", () => {
+    expect(src).toContain('useState<VistaPlanes>("ACTIVOS")');
+    expect(src).toContain('useState(modo === "operativo")'); // soloSinCerrar: true en operativo, false en reporte (sin cambios)
+  });
+
+  it("2/3) ACTIVOS manda soloSinCerrar=1 y NO manda soloCerrados — mismo builder de query existente (filtrosQueryString)", () => {
+    expect(src).toContain('if (soloSinCerrar) p.set("soloSinCerrar", "1")');
+    expect(src).toContain('if (soloCerrados) p.set("soloCerrados", "1")');
+    // aplicarFiltrosDeVista(ACTIVOS) deja soloSinCerrar=true y soloCerrados=false — ambos estados fluyen al mismo filtrosQueryString ya existente.
+    expect(fnAplicar).toMatch(/setSoloSinCerrar\(true\);\s*\n\s*setSoloCerrados\(false\);/);
+  });
+
+  it("4/5) CERRADOS manda soloCerrados=1 y NO manda soloSinCerrar", () => {
+    expect(fnAplicar).toMatch(/setSoloCerrados\(true\);\s*\n\s*setSoloSinCerrar\(false\);/);
+  });
+
+  it("8) CERRADOS fuerza soloPendientes=false", () => {
+    const bloqueCerrados = fnAplicar.slice(fnAplicar.indexOf('if (v === "CERRADOS")'), fnAplicar.indexOf("} else {"));
+    expect(bloqueCerrados).toContain("setSoloPendientes(false)");
+  });
+
+  it("6) cambiar de pestaña resetea page=1 (reutiliza buscarTick -> cargar(1), mismo mecanismo que 'Buscar')", () => {
+    expect(fnIrAVista).toContain("setBuscarTick((t) => t + 1)");
+    // El efecto que escucha buscarTick llama cargar(1) con página fija — no cargar(page).
+    const efectoBuscarTick = src.slice(src.indexOf("useEffect(() => {\n    // eslint-disable-next-line react-hooks/set-state-in-effect\n    void cargar(1)"), src.indexOf("}, [buscarTick])"));
+    expect(efectoBuscarTick).toContain("void cargar(1)");
+  });
+
+  it("7) cambiar de pestaña limpia la selección de cierre masivo", () => {
+    expect(fnIrAVista).toContain("setSeleccion(new Set())");
+  });
+
+  it("9/10/11/12) filtros cliente/piloto/unidad/rango de fecha se CONSERVAN al cambiar de pestaña (irAVista nunca los toca)", () => {
+    for (const campo of ["fCliente", "fPiloto", "fUnidad", "fDesde", "fHasta"]) {
+      expect(fnIrAVista).not.toContain(`set${campo[0].toUpperCase()}${campo.slice(1)}`);
+    }
+  });
+
+  it("13/14/15) la agrupación Día/Semana/Mes es independiente de la pestaña — agruparPlanes(planes, modoAgrupacion) no depende de `vista`", () => {
+    expect(src).toContain("const grupos = useMemo(() => (esReporte ? [] : agruparPlanes(planes, modoAgrupacion))");
+  });
+
+  it("16/17) las acciones de cierre (selección/masivo/período) son visibles en ACTIVOS y se ocultan en CERRADOS: todas cuelgan de mostrarSel, que ahora exige vista === \"ACTIVOS\"", () => {
+    expect(src).toContain('const mostrarSel = !esReporte && puedeCerrarViaje && vista === "ACTIVOS"');
+    expect(src).toContain("const puedeAccionPeriodo = mostrarSel && planFocoId == null");
+    expect(src).toContain('...(mostrarSel ? ["Sel."] : [])');
+    expect(src).toContain("{mostrarSel && it.abierto ? (");
+    expect(src).toContain("{puedeAccionPeriodo && it.abierto ? (");
+  });
+
+  it("18) el checkbox 'Solo pendientes de cierre' solo aparece en modo reporte o en la pestaña ACTIVOS del operativo", () => {
+    expect(src).toContain('{esReporte || vista === "ACTIVOS" ? (');
+    expect(src).toContain("checked={soloPendientes}");
+  });
+
+  it("19) los checkboxes 'Solo cerrados'/'Solo sin cerrar' ya NO aparecen en modo operativo — solo dentro de `{esReporte ? (...) : null}`", () => {
+    const bloqueCheckboxes = src.slice(src.indexOf('<div className="mt-2 flex flex-wrap gap-3 text-xs">'), src.indexOf("{/* OPERACIONES-UX-PLANES-REPORTES-1 — exportación"));
+    expect(bloqueCheckboxes).toContain("{esReporte ? (");
+    expect(bloqueCheckboxes).toContain("checked={soloCerrados}");
+    expect(bloqueCheckboxes).toContain("checked={soloSinCerrar}");
+    // Ambos checkboxes (sus <input checked={...}>, no solo el texto en un comentario) quedan DENTRO del bloque
+    // `esReporte ? (...) : null` — nunca sueltos, fuera de esa condición.
+    const idxEsReporte = bloqueCheckboxes.indexOf("{esReporte ? (");
+    const idxSoloCerrados = bloqueCheckboxes.indexOf("checked={soloCerrados}");
+    const idxSoloSinCerrar = bloqueCheckboxes.indexOf("checked={soloSinCerrar}");
+    expect(idxSoloCerrados).toBeGreaterThan(idxEsReporte);
+    expect(idxSoloSinCerrar).toBeGreaterThan(idxEsReporte);
+  });
+
+  it("20) Reportes conserva los 3 filtros de siempre (soloPendientes/soloCerrados/soloSinCerrar), sin pestañas", () => {
+    expect(src).toContain("{!esReporte ? (");
+    expect(src).toContain('role="tablist" aria-label="Vista de viajes"');
+    // El bloque de pestañas nunca se renderiza cuando esReporte es true.
+    const idxPestañas = src.indexOf('role="tablist" aria-label="Vista de viajes"');
+    const idxEsReporteGuard = src.lastIndexOf("{!esReporte ? (", idxPestañas);
+    expect(idxEsReporteGuard).toBeGreaterThan(-1);
+    expect(idxEsReporteGuard).toBeLessThan(idxPestañas);
+  });
+
+  it("21/22) deep-link a un plan (abierto o Cerrado) sigue funcionando: filtrosQueryString ignora soloSinCerrar/soloCerrados/vista cuando hay planFocoId (comportamiento existente, sin cambios)", () => {
+    const fnFiltrosQuery = src.slice(src.indexOf("const filtrosQueryString = useCallback"), src.indexOf("const exportQueryString"));
+    expect(fnFiltrosQuery).toContain("if (planFocoId != null)");
+    expect(fnFiltrosQuery).toContain('p.set("planId", String(planFocoId))');
+    expect(fnFiltrosQuery).toContain("return p;"); // corta ANTES de aplicar soloSinCerrar/soloCerrados/fEstado
+    // El corte temprano ocurre ANTES de las líneas que agregan soloSinCerrar/soloCerrados a la query.
+    const idxCorte = fnFiltrosQuery.indexOf('p.set("planId", String(planFocoId))');
+    const idxSoloSinCerrar = fnFiltrosQuery.indexOf('p.set("soloSinCerrar"');
+    expect(idxCorte).toBeLessThan(idxSoloSinCerrar);
+  });
+
+  it("23/24/25/26) cerrar individual/manual/masivo/período recargan con `cargar()` (servidor sigue siendo fuente de verdad) — nunca un filter() optimista en el arreglo local", () => {
+    expect(src).not.toMatch(/planes\.filter\(\s*\(?p\)?\s*=>\s*p\.id\s*!==/); // ningún filtro optimista del arreglo `planes` tras cerrar
+    const fnConfirmarManual = src.slice(src.indexOf("async function confirmarCierreManual"), src.indexOf("async function abrirDetalle"));
+    expect(fnConfirmarManual).toContain("await cargar()");
+    const fnCerrarViaje = src.slice(src.indexOf("async function cerrarViaje(planId"), src.indexOf("const mostrarSel ="));
+    expect(fnCerrarViaje).toContain("await cargar()");
+    const fnEjecutarMasivo = src.slice(src.indexOf("async function ejecutarMasivo"), src.indexOf("async function abrirCierrePeriodo"));
+    expect(fnEjecutarMasivo).toContain("await cargar()");
+    const fnEjecutarPeriodo = src.slice(src.indexOf("async function ejecutarCierrePeriodo"), src.indexOf("puedeAccionPeriodo = mostrarSel"));
+    expect(fnEjecutarPeriodo).toContain("await cargar()");
+  });
+
+  it("27) el backend no cambia: sigue reutilizando soloCerrados/soloSinCerrar ya existentes (mismos nombres de parámetro en la query string)", () => {
+    expect(src).toContain('p.set("soloCerrados", "1")');
+    expect(src).toContain('p.set("soloSinCerrar", "1")');
+    expect(src).not.toContain("vista=cerrados"); // no se persiste en URL (fuera de alcance, estado client-side)
+  });
+
+  it("28) no SQL: ningún string de este archivo contiene una sentencia SQL (sigue siendo un componente cliente puro)", () => {
+    expect(src).not.toMatch(/\bSELECT\b|\bUPDATE\b|\bINSERT\b/);
+  });
+
+  it("Cancelados: ACTIVOS usa exactamente estado <> 'Cerrado' (vía soloSinCerrar) — nunca excluye Cancelado ni crea una tercera pestaña", () => {
+    expect(src).not.toContain('"CANCELADOS"');
+    expect(src).not.toContain("VistaPlanes = \"ACTIVOS\" | \"CERRADOS\" | \"CANCELADOS\"");
+    // El filtro Estado en ACTIVOS sigue permitiendo seleccionar "Cancelado" explícitamente.
+    expect(src).toContain('ESTADOS.filter((e) => e !== "Cerrado")');
+  });
+
+  it("filtro Estado: ACTIVOS nunca ofrece 'Cerrado'; CERRADOS lo fija y deshabilita; Reportes sin cambios", () => {
+    const bloqueEstado = src.slice(src.indexOf('<label className="text-xs text-[var(--muted)]">Estado\n'), src.indexOf("</label>", src.indexOf('<label className="text-xs text-[var(--muted)]">Estado\n')));
+    expect(bloqueEstado).toContain('disabled={!esReporte && vista === "CERRADOS"}');
+    expect(bloqueEstado).toContain('<option value="Cerrado">Cerrado</option>');
+    expect(bloqueEstado).toContain("ESTADOS.filter((e) => e !== \"Cerrado\")");
+  });
+
+  it("limpiarFiltros() en modo operativo reaplica los filtros de la pestaña ACTUAL (nunca deja soloSinCerrar/soloCerrados en false/false, lo que rompería la separación)", () => {
+    expect(fnLimpiar).toContain('if (modo === "operativo")');
+    expect(fnLimpiar).toContain("aplicarFiltrosDeVista(vista)");
+  });
+
+  it("contadores del grupo: CERRADOS muestra un resumen limpio ('N viaje(s) · N cerrados'); ACTIVOS oculta '0 cerrados'; ningún cambio al helper agruparPlanes", () => {
+    expect(src).toContain("{g.total} viaje(s) · {g.cerrados} cerrados");
+    expect(src).toContain("{g.cerrados > 0 ?");
+  });
+
+  it("las pestañas están posicionadas después de los filtros principales y antes de 'Agrupar por'", () => {
+    const idxFiltrosFin = src.indexOf("</section>\n\n      {/* PLANES-SEPARAR-CERRADOS — pestañas");
+    const idxPestañas = src.indexOf('role="tablist" aria-label="Vista de viajes"');
+    const idxAgruparPor = src.indexOf("Agrupar por");
+    expect(idxFiltrosFin).toBeGreaterThan(-1);
+    expect(idxFiltrosFin).toBeLessThan(idxPestañas);
+    expect(idxPestañas).toBeLessThan(idxAgruparPor);
+  });
+});
