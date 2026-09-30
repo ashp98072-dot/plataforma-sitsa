@@ -8,15 +8,15 @@ import { tienePermiso } from "@/lib/permisos-shared";
 import { hoyLocal } from "@/lib/rrhh/dates";
 import { puedeCerrarManualmente, puedeCerrarNormalmente } from "@/lib/tms/cierre-viaje-shared";
 import type { ResultadoCierreMasivo } from "@/lib/tms/cierre-masivo";
+import type { AgrupacionPlanes } from "@/lib/tms/planes-periodo";
 import {
-  agruparPorFecha,
+  agruparPlanes,
   esSeleccionable,
-  fechaVisible,
   grupoAbierto,
   idsSeleccionables,
   notaPaginacionGrupo,
   resumenSeleccion,
-  type GrupoFecha,
+  type GrupoPlanes,
 } from "./planes-agrupacion";
 import { formatearFechaHora12, formatearHora12 } from "@/lib/tms/hora-formato";
 import { ETIQUETA_TC, etiquetaOrigenTc } from "@/lib/tms/tc-viaje-shared";
@@ -217,6 +217,40 @@ type EvidenciaTms = {
 };
 
 type AudRow = { id: number; usuario: string | null; accion: string; detalle: string | null; creadoEn: string };
+
+/**
+ * PLANES-CIERRE-PERIODO — filtros ya tipados (clienteId/pilotoId/unidadId como number, nunca strings crudos
+ * del <select>) que respetan las acciones del período — mismo subconjunto que FiltrosCierrePeriodo en
+ * cierre-masivo.ts. Usado para el body JSON del POST y (convertido a string) para el query string del GET.
+ */
+type FiltrosPeriodoValores = {
+  clienteId?: number; pilotoId?: number; unidadId?: number; estado?: string; ruta?: string;
+  estadoFacturacion?: string; estadoCobro?: string;
+  soloPendientesCierre?: boolean; soloCerrados?: boolean; soloSinCerrar?: boolean;
+};
+
+/** PLANES-CIERRE-PERIODO — respuesta de GET .../planes/candidatos-cierre (vista previa antes de confirmar). */
+type CandidatosCierrePeriodo = {
+  periodo: { agrupacion: AgrupacionPlanes; valor: string; etiqueta: string; desde: string; hasta: string };
+  total: number;
+  normal: { elegibles: number; ids: number[] };
+  manual: { elegibles: number; ids: number[] };
+};
+
+/** PLANES-CIERRE-PERIODO — respuesta de POST .../planes/cerrar-masivo-periodo. */
+type ResultadoCierreMasivoPeriodo = ResultadoCierreMasivo & {
+  agrupacion: AgrupacionPlanes;
+  valor: string;
+  etiqueta: string;
+};
+
+/**
+ * Tipo SOLO de UI (no del backend): une el resultado del cierre por SELECCIÓN (esta página) y el cierre por
+ * PERÍODO completo bajo el mismo bloque visual — "Generalizar: fecha -> período" (pedido del ticket).
+ */
+type ResultadoMasivoUI = Pick<ResultadoCierreMasivo, "tipo" | "solicitados" | "cerrados" | "omitidos" | "errores"> & {
+  etiquetaOrigen: string;
+};
 
 const ESTADOS = ["Programado", "Cargado", "En ruta", "Descargado", "Cerrado", "Cancelado"];
 
@@ -565,15 +599,44 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
   const [errorManual, setErrorManual] = useState("");
 
   // TMS-CIERRE-MASIVO-1 — selección (UNA por pantalla; cada botón masivo recalcula qué seleccionados admite),
-  // grupos por fecha expandidos/contraídos y cierre masivo (NORMAL o MANUAL, botones separados).
+  // grupos por fecha expandidos/contraídos y cierre masivo (NORMAL o MANUAL, botones separados). Este flujo de
+  // "Cerrar seleccionados"/"Cierre manual masivo" se CONSERVA sin cambios: solo cierra lo marcado con checkbox
+  // EN ESTA PÁGINA — es un concepto separado de "Cerrar elegibles del período" (más abajo), que ignora la
+  // selección y resuelve TODO el período server-side (ver PLANES-CIERRE-PERIODO).
   const [seleccion, setSeleccion] = useState<Set<number>>(new Set());
   const [togglesGrupo, setTogglesGrupo] = useState<Record<string, boolean>>({});
-  const [masivo, setMasivo] = useState<{ tipo: "NORMAL" | "MANUAL"; fecha: string } | null>(null);
+  const [masivo, setMasivo] = useState<{ tipo: "NORMAL" | "MANUAL"; clave: string } | null>(null);
   const [motivoMasivo, setMotivoMasivo] = useState("");
   const [comentarioMasivo, setComentarioMasivo] = useState("");
   const [enviandoMasivo, setEnviandoMasivo] = useState(false);
   const [errorMasivo, setErrorMasivo] = useState("");
-  const [resultadoMasivo, setResultadoMasivo] = useState<(ResultadoCierreMasivo & { fecha: string }) | null>(null);
+
+  // PLANES-CIERRE-PERIODO — selector de agrupación (Día/Semana/Mes, default Día). Independiente de los
+  // filtros de fecha del listado (fDesde/fHasta): agrupa lo YA CARGADO en esta página, nunca decide qué cerrar.
+  const [modoAgrupacion, setModoAgrupacion] = useState<AgrupacionPlanes>("DIA");
+  useEffect(() => {
+    // Cambiar de Día/Semana/Mes cambia por completo las claves de grupo — una selección vieja podría quedar
+    // referida a un grupo que ya no existe con ese formato; se limpia por seguridad (mismo criterio que ya
+    // aplica cargar() al cambiar cualquier otro filtro operativo).
+    setSeleccion(new Set());
+  }, [modoAgrupacion]);
+
+  // PLANES-CIERRE-PERIODO — "Cerrar elegibles del período" / "Cierre manual del período": acción DEL GRUPO
+  // COMPLETO (Día/Semana/Mes), resuelta SIEMPRE server-side (candidatos-cierre al abrir, cerrar-masivo-periodo
+  // al confirmar) — nunca depende de `seleccion` ni de qué página está cargada. Deshabilitada con `?plan=<id>`
+  // activo (el usuario debe volver a "Ver todos los planes") y en modo reporte (sin acciones operativas).
+  const [periodoAccion, setPeriodoAccion] = useState<{ tipo: "NORMAL" | "MANUAL"; clave: string } | null>(null);
+  const [candidatosPeriodo, setCandidatosPeriodo] = useState<CandidatosCierrePeriodo | null>(null);
+  const [cargandoCandidatos, setCargandoCandidatos] = useState(false);
+  const [errorCandidatos, setErrorCandidatos] = useState("");
+  const [motivoPeriodo, setMotivoPeriodo] = useState("");
+  const [comentarioPeriodo, setComentarioPeriodo] = useState("");
+  const [enviandoPeriodo, setEnviandoPeriodo] = useState(false);
+  const [errorPeriodo, setErrorPeriodo] = useState("");
+
+  // Resultado combinado — mismo bloque visual para AMBOS orígenes (selección de esta página, o período
+  // completo): "Generalizar: fecha -> período" (pedido explícito del ticket), un solo estado/una sola sección.
+  const [resultadoMasivo, setResultadoMasivo] = useState<ResultadoMasivoUI | null>(null);
 
   function abrirCierreManual(planId: number) {
     if (expandido !== planId) void abrirDetalle(planId);
@@ -662,13 +725,13 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
 
   const mostrarSel = !esReporte && puedeCerrarViaje;
 
-  // Agrupación visual por fecha SOLO en modo operativo (el reporte conserva la tabla plana).
-  const grupos = useMemo(() => (esReporte ? [] : agruparPorFecha(planes)), [esReporte, planes]);
+  // Agrupación visual por Día/Semana/Mes SOLO en modo operativo (el reporte conserva la tabla plana).
+  const grupos = useMemo(() => (esReporte ? [] : agruparPlanes(planes, modoAgrupacion)), [esReporte, planes, modoAgrupacion]);
   const items = useMemo(() => {
     if (esReporte) return planes.map((p) => ({ kind: "plan" as const, p }));
-    const lista: ({ kind: "grupo"; grupo: GrupoFecha<PlanReporte>; indice: number; abierto: boolean } | { kind: "plan"; p: PlanReporte })[] = [];
+    const lista: ({ kind: "grupo"; grupo: GrupoPlanes<PlanReporte>; indice: number; abierto: boolean } | { kind: "plan"; p: PlanReporte })[] = [];
     grupos.forEach((grupo, indice) => {
-      const abierto = grupoAbierto(indice, grupo.fecha, togglesGrupo, planFocoId != null && grupo.planes.some((p) => p.id === planFocoId));
+      const abierto = grupoAbierto(indice, grupo.clave, togglesGrupo, planFocoId != null && grupo.planes.some((p) => p.id === planFocoId));
       lista.push({ kind: "grupo", grupo, indice, abierto });
       if (abierto) for (const p of grupo.planes) lista.push({ kind: "plan", p });
     });
@@ -684,26 +747,26 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
     });
   }
 
-  function seleccionarElegibles(g: GrupoFecha<PlanReporte>) {
+  function seleccionarElegibles(g: GrupoPlanes<PlanReporte>) {
     setSeleccion((prev) => new Set([...prev, ...idsSeleccionables(g.planes, puedeCerrarViaje)]));
   }
 
-  function limpiarSeleccionGrupo(g: GrupoFecha<PlanReporte>) {
+  function limpiarSeleccionGrupo(g: GrupoPlanes<PlanReporte>) {
     const ids = new Set(g.planes.map((p) => p.id));
     setSeleccion((prev) => new Set([...prev].filter((id) => !ids.has(id))));
   }
 
-  function abrirMasivo(tipo: "NORMAL" | "MANUAL", fecha: string) {
-    setMasivo({ tipo, fecha });
+  function abrirMasivo(tipo: "NORMAL" | "MANUAL", clave: string) {
+    setMasivo({ tipo, clave });
     setMotivoMasivo("");
     setComentarioMasivo("");
     setErrorMasivo("");
   }
 
-  /** Envía SOLO los elegibles del tipo elegido; el servidor vuelve a validar todo (permiso, empresa, estado). */
+  /** Envía SOLO los elegibles seleccionados EN ESTA PÁGINA; el servidor vuelve a validar todo (permiso, empresa, estado). */
   async function ejecutarMasivo() {
     if (!masivo || enviandoMasivo) return;
-    const grupo = grupos.find((g) => g.fecha === masivo.fecha);
+    const grupo = grupos.find((g) => g.clave === masivo.clave);
     if (!grupo) return;
     const r = resumenSeleccion(grupo.planes, seleccion, puedeCerrarViaje);
     const ids = masivo.tipo === "NORMAL" ? r.normal.ids : r.manual.ids;
@@ -721,12 +784,13 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(masivo.tipo === "NORMAL"
-          ? { tipo: "NORMAL", planIds: ids, grupo: masivo.fecha }
-          : { tipo: "MANUAL", planIds: ids, grupo: masivo.fecha, motivo, comentario: comentarioMasivo.trim() || undefined }),
+          ? { tipo: "NORMAL", planIds: ids, grupo: masivo.clave }
+          : { tipo: "MANUAL", planIds: ids, grupo: masivo.clave, motivo, comentario: comentarioMasivo.trim() || undefined }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setErrorMasivo(data.error ?? "No se pudo ejecutar el cierre masivo."); return; }
-      setResultadoMasivo({ ...(data as ResultadoCierreMasivo), fecha: masivo.fecha });
+      const resultado = data as ResultadoCierreMasivo;
+      setResultadoMasivo({ ...resultado, etiquetaOrigen: grupo.etiqueta });
       setMasivo(null);
       await cargar(); // recarga resultados (y limpia la selección)
     } catch {
@@ -735,6 +799,103 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
       setEnviandoMasivo(false);
     }
   }
+
+  /**
+   * PLANES-CIERRE-PERIODO (corrección pre-merge PR #386) — filtros ACTIVOS a respetar por las acciones del
+   * período (sección 9 del ticket): cliente/piloto/unidad/estado/ruta/facturación/cobro Y TAMBIÉN
+   * soloPendientes/soloCerrados/soloSinCerrar — la acción del período debe representar la INTERSECCIÓN de eso
+   * con el rango Día/Semana/Mes (nunca todo el período ignorando el filtro activo). Deliberadamente NO incluye
+   * fDesde/fHasta: el período SIEMPRE fija el rango de fechaPlan, nunca las fechas generales de la pantalla.
+   * Valores YA TIPADOS (clienteId/pilotoId/unidadId como number) — nunca strings crudos del <select>, para que
+   * encajen directo en el cuerpo JSON de cerrar-masivo-periodo (el esquema Zod del backend exige number).
+   */
+  const filtrosPeriodoValores = useCallback((): FiltrosPeriodoValores => {
+    const f: FiltrosPeriodoValores = {};
+    if (fCliente) f.clienteId = Number(fCliente);
+    if (fPiloto) f.pilotoId = Number(fPiloto);
+    if (fUnidad) f.unidadId = Number(fUnidad);
+    if (fEstado) f.estado = fEstado;
+    if (fRuta.trim()) f.ruta = fRuta.trim();
+    if (fEstadoFacturacion) f.estadoFacturacion = fEstadoFacturacion;
+    if (fEstadoCobro) f.estadoCobro = fEstadoCobro;
+    if (soloPendientes) f.soloPendientesCierre = true;
+    if (soloCerrados) f.soloCerrados = true;
+    if (soloSinCerrar) f.soloSinCerrar = true;
+    return f;
+  }, [fCliente, fPiloto, fUnidad, fEstado, fRuta, fEstadoFacturacion, fEstadoCobro, soloPendientes, soloCerrados, soloSinCerrar]);
+
+  /** Abre el modal de cierre DEL PERÍODO y consulta la vista previa (candidatos-cierre) — informativa, nunca ejecuta nada todavía. */
+  async function abrirCierrePeriodo(tipo: "NORMAL" | "MANUAL", clave: string) {
+    setPeriodoAccion({ tipo, clave });
+    setMotivoPeriodo("");
+    setComentarioPeriodo("");
+    setErrorPeriodo("");
+    setCandidatosPeriodo(null);
+    setErrorCandidatos("");
+    setCargandoCandidatos(true);
+    try {
+      const fv = filtrosPeriodoValores();
+      const qs = new URLSearchParams({ agrupacion: modoAgrupacion, valor: clave });
+      if (fv.clienteId != null) qs.set("clienteId", String(fv.clienteId));
+      if (fv.pilotoId != null) qs.set("pilotoId", String(fv.pilotoId));
+      if (fv.unidadId != null) qs.set("unidadId", String(fv.unidadId));
+      if (fv.estado) qs.set("estado", fv.estado);
+      if (fv.ruta) qs.set("ruta", fv.ruta);
+      if (fv.estadoFacturacion) qs.set("estadoFacturacion", fv.estadoFacturacion);
+      if (fv.estadoCobro) qs.set("estadoCobro", fv.estadoCobro);
+      if (fv.soloPendientesCierre) qs.set("soloPendientesCierre", "1");
+      if (fv.soloCerrados) qs.set("soloCerrados", "1");
+      if (fv.soloSinCerrar) qs.set("soloSinCerrar", "1");
+      const res = await fetch(`/api/empresas/${slug}/tms/planes/candidatos-cierre?${qs.toString()}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setErrorCandidatos(data.error ?? "No se pudo consultar el período."); return; }
+      setCandidatosPeriodo(data as CandidatosCierrePeriodo);
+    } catch {
+      setErrorCandidatos("Error de conexión.");
+    } finally {
+      setCargandoCandidatos(false);
+    }
+  }
+
+  /**
+   * Confirmar: el backend vuelve a resolver los candidatos DESDE CERO en ese momento (nunca reutiliza los ids
+   * de la vista previa de arriba) — si algún viaje cambió de estado mientras el modal estaba abierto, queda
+   * omitido con su motivo, nunca se fuerza el cierre (ver cerrarViajesMasivoPorPeriodo en cierre-masivo.ts).
+   */
+  async function ejecutarCierrePeriodo() {
+    if (!periodoAccion || enviandoPeriodo) return;
+    const motivo = motivoPeriodo.trim();
+    if (periodoAccion.tipo === "MANUAL" && (motivo.length < 5 || motivo.length > 500)) {
+      setErrorPeriodo("El motivo es obligatorio: entre 5 y 500 caracteres.");
+      return;
+    }
+    if (comentarioPeriodo.trim().length > 1000) { setErrorPeriodo("El comentario no puede superar 1000 caracteres."); return; }
+    setEnviandoPeriodo(true);
+    setErrorPeriodo("");
+    try {
+      const filtros = filtrosPeriodoValores();
+      const res = await fetch(`/api/empresas/${slug}/tms/planes/cerrar-masivo-periodo`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(periodoAccion.tipo === "NORMAL"
+          ? { agrupacion: modoAgrupacion, valor: periodoAccion.clave, tipo: "NORMAL", filtros }
+          : { agrupacion: modoAgrupacion, valor: periodoAccion.clave, tipo: "MANUAL", filtros, motivo, comentario: comentarioPeriodo.trim() || undefined }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setErrorPeriodo(data.error ?? "No se pudo ejecutar el cierre del período."); return; }
+      const resultado = data as ResultadoCierreMasivoPeriodo;
+      setResultadoMasivo({ ...resultado, etiquetaOrigen: resultado.etiqueta });
+      setPeriodoAccion(null);
+      await cargar();
+    } catch {
+      setErrorPeriodo("Error de conexión.");
+    } finally {
+      setEnviandoPeriodo(false);
+    }
+  }
+
+  /** "Cerrar elegibles del período"/"Cierre manual del período": deshabilitado con deep-link (?plan=) activo o en modo reporte. */
+  const puedeAccionPeriodo = mostrarSel && planFocoId == null;
 
   const columnas = [
     ...(mostrarSel ? ["Sel."] : []),
@@ -907,7 +1068,7 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
       {resultadoMasivo ? (
         <section aria-label="Resultado del cierre masivo" className="space-y-1 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm text-[var(--text)]">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <strong>Cierre masivo {resultadoMasivo.tipo === "MANUAL" ? "manual" : "normal"} — {fechaVisible(resultadoMasivo.fecha)}</strong>
+            <strong>Cierre masivo {resultadoMasivo.tipo === "MANUAL" ? "manual" : "normal"} — {resultadoMasivo.etiquetaOrigen}</strong>
             <button type="button" className="text-xs underline" onClick={() => setResultadoMasivo(null)}>Ocultar</button>
           </div>
           <p>Cerrados: {resultadoMasivo.cerrados.length} · Omitidos: {resultadoMasivo.omitidos.length} · Errores: {resultadoMasivo.errores.length}</p>
@@ -919,6 +1080,25 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
             <ul className="list-disc pl-5 text-xs text-rose-400">{resultadoMasivo.errores.map((o) => <li key={`e${o.id}`}>{o.codigo}: {o.motivo}</li>)}</ul>
           ) : null}
         </section>
+      ) : null}
+
+      {/* PLANES-CIERRE-PERIODO — selector de agrupación Día/Semana/Mes, solo en modo operativo (el reporte
+          conserva la tabla plana, sin agrupación ni acciones). Default DÍA. */}
+      {!esReporte ? (
+        <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
+          <label className="flex items-center gap-1.5">
+            Agrupar por
+            <select
+              className={`${inputCls} py-1`}
+              value={modoAgrupacion}
+              onChange={(e) => setModoAgrupacion(e.target.value as AgrupacionPlanes)}
+            >
+              <option value="DIA">Día</option>
+              <option value="SEMANA">Semana</option>
+              <option value="MES">Mes</option>
+            </select>
+          </label>
+        </div>
       ) : null}
 
       {/* Tabla */}
@@ -935,22 +1115,22 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
             {items.map((it) => {
               if (it.kind === "grupo") {
                 const g = it.grupo;
-                const nota = notaPaginacionGrupo(it.indice, grupos.length, page, totalPaginas);
+                const nota = notaPaginacionGrupo(it.indice, grupos.length, page, totalPaginas, modoAgrupacion);
                 const parcial = nota != null;
                 const r = resumenSeleccion(g.planes, seleccion, puedeCerrarViaje);
                 return (
-                  <tr key={`grupo-${g.fecha}`} data-grupo-fecha={g.fecha} className="border-t-2 border-[var(--border)] bg-[var(--thead)]">
+                  <tr key={`grupo-${g.clave}`} data-grupo-clave={g.clave} className="border-t-2 border-[var(--border)] bg-[var(--thead)]">
                     <td colSpan={columnas.length} className="px-3 py-2">
                       <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
                         <button
                           type="button"
                           aria-expanded={it.abierto}
                           className="text-sm font-semibold text-[var(--text)]"
-                          onClick={() => setTogglesGrupo((t) => ({ ...t, [g.fecha]: !it.abierto }))}
+                          onClick={() => setTogglesGrupo((t) => ({ ...t, [g.clave]: !it.abierto }))}
                         >
-                          {it.abierto ? "▼" : "▶"} {fechaVisible(g.fecha)}
+                          {it.abierto ? "▼" : "▶"} {g.etiqueta}
                         </button>
-                        {g.fecha === hoy ? <span className="rounded-full bg-sky-600 px-2 py-0.5 text-[10px] font-medium text-white">Hoy</span> : null}
+                        {modoAgrupacion === "DIA" && g.clave === hoy ? <span className="rounded-full bg-sky-600 px-2 py-0.5 text-[10px] font-medium text-white">Hoy</span> : null}
                         <span className="text-xs text-[var(--text)]">{g.total} viaje(s){parcial ? " en esta página" : ""}</span>
                         <span className="text-xs text-amber-500">{g.cerrables} pendientes de cierre</span>
                         <span className="text-xs text-emerald-500">{g.cerrados} cerrados</span>
@@ -961,11 +1141,24 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                         <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
                           <button type="button" className={linkCls} disabled={!idsSeleccionables(g.planes, puedeCerrarViaje).length} onClick={() => seleccionarElegibles(g)}>Seleccionar elegibles</button>
                           <button type="button" className={linkCls} disabled={!r.seleccionados} onClick={() => limpiarSeleccionGrupo(g)}>Limpiar selección</button>
-                          <button type="button" className="rounded bg-emerald-600 px-2.5 py-1 font-medium text-white disabled:opacity-40" disabled={!r.normal.elegibles} onClick={() => abrirMasivo("NORMAL", g.fecha)}>
+                          <button type="button" className="rounded bg-emerald-600 px-2.5 py-1 font-medium text-white disabled:opacity-40" disabled={!r.normal.elegibles} onClick={() => abrirMasivo("NORMAL", g.clave)}>
                             Cerrar seleccionados{r.seleccionados ? ` (Elegibles ${r.normal.elegibles} / No elegibles ${r.normal.noElegibles})` : ""}
                           </button>
-                          <button type="button" className="rounded bg-rose-600 px-2.5 py-1 font-medium text-white disabled:opacity-40" disabled={!r.manual.elegibles} onClick={() => abrirMasivo("MANUAL", g.fecha)}>
+                          <button type="button" className="rounded bg-rose-600 px-2.5 py-1 font-medium text-white disabled:opacity-40" disabled={!r.manual.elegibles} onClick={() => abrirMasivo("MANUAL", g.clave)}>
                             Cierre manual masivo{r.seleccionados ? ` (Elegibles ${r.manual.elegibles} / No elegibles ${r.manual.noElegibles})` : ""}
+                          </button>
+                        </div>
+                      ) : null}
+                      {/* PLANES-CIERRE-PERIODO — acción DEL PERÍODO COMPLETO, nunca de "lo seleccionado en esta página":
+                          resuelve TODO el Día/Semana/Mes server-side, incluyendo viajes de otras páginas. */}
+                      {puedeAccionPeriodo && it.abierto ? (
+                        <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
+                          <span className="text-[var(--muted)]">Período completo:</span>
+                          <button type="button" className="rounded border border-emerald-600 px-2.5 py-1 font-medium text-emerald-500" onClick={() => void abrirCierrePeriodo("NORMAL", g.clave)}>
+                            Cerrar elegibles del período
+                          </button>
+                          <button type="button" className="rounded border border-rose-600 px-2.5 py-1 font-medium text-rose-500" onClick={() => void abrirCierrePeriodo("MANUAL", g.clave)}>
+                            Cierre manual del período
                           </button>
                         </div>
                       ) : null}
@@ -1299,15 +1492,15 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
       </div>
 
       {masivo ? (() => {
-        const grupo = grupos.find((g) => g.fecha === masivo.fecha);
+        const grupo = grupos.find((g) => g.clave === masivo.clave);
         const r = grupo ? resumenSeleccion(grupo.planes, seleccion, puedeCerrarViaje) : null;
-        if (!r) return null;
+        if (!r || !grupo) return null;
         const manual = masivo.tipo === "MANUAL";
         const cual = manual ? r.manual : r.normal;
         return (
           <div role="dialog" aria-modal="true" aria-label={manual ? "Cierre manual masivo" : "Cierre masivo"} className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
             <div className="w-full max-w-lg space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 text-sm text-[var(--text)]">
-              <h2 className="text-base font-semibold">{manual ? "Cierre manual masivo" : "Cierre masivo"} — {fechaVisible(masivo.fecha)}</h2>
+              <h2 className="text-base font-semibold">{manual ? "Cierre manual masivo" : "Cierre masivo"} — {grupo.etiqueta}</h2>
               <div>
                 <p>Seleccionados: {r.seleccionados}</p>
                 <p>{manual ? "Elegibles para cierre manual" : "Elegibles"}: {cual.elegibles}</p>
@@ -1337,6 +1530,64 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                   onClick={() => void ejecutarMasivo()}
                 >
                   {enviandoMasivo ? "Cerrando…" : manual ? "Confirmar cierre manual" : "Confirmar cierre"}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })() : null}
+
+      {/* PLANES-CIERRE-PERIODO — modal de confirmación del cierre DEL PERÍODO COMPLETO. Nunca ejecuta nada al
+          abrir: candidatosPeriodo es solo una VISTA PREVIA informativa (GET candidatos-cierre); el POST de
+          confirmación (ejecutarCierrePeriodo) vuelve a resolver los candidatos desde cero en el servidor. */}
+      {periodoAccion ? (() => {
+        const manual = periodoAccion.tipo === "MANUAL";
+        const cual = candidatosPeriodo ? (manual ? candidatosPeriodo.manual : candidatosPeriodo.normal) : null;
+        const noElegibles = candidatosPeriodo && cual ? candidatosPeriodo.total - cual.elegibles : null;
+        const etiquetaPeriodo = candidatosPeriodo?.periodo.etiqueta
+          ?? grupos.find((g) => g.clave === periodoAccion.clave)?.etiqueta
+          ?? periodoAccion.clave;
+        const nombrePeriodo = modoAgrupacion === "DIA" ? "este día" : modoAgrupacion === "SEMANA" ? "esta semana" : "este mes";
+        return (
+          <div role="dialog" aria-modal="true" aria-label={manual ? "Cierre manual del período" : "Cierre del período completo"} className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+            <div className="w-full max-w-lg space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 text-sm text-[var(--text)]">
+              <h2 className="text-base font-semibold">{manual ? "Cierre manual del período" : "Cierre del período completo"} — {etiquetaPeriodo}</h2>
+              <p className="rounded border border-sky-700/60 bg-sky-950/20 px-2 py-1.5 text-xs text-sky-300">
+                Vas a intentar cerrar todos los viajes elegibles de {nombrePeriodo} que coincidan con los filtros actuales,
+                incluyendo viajes de otras páginas. Esta operación NO depende de lo que está seleccionado ni de lo que se ve en esta página.
+              </p>
+              {cargandoCandidatos ? <p className="text-xs text-[var(--muted)]">Consultando el período…</p> : null}
+              {errorCandidatos ? <p role="alert" className="text-xs text-rose-500">{errorCandidatos}</p> : null}
+              {candidatosPeriodo && cual ? (
+                <div>
+                  <p>Viajes encontrados: {candidatosPeriodo.total}</p>
+                  <p>{manual ? "Elegibles para cierre manual" : "Elegibles para cierre normal"}: {cual.elegibles}</p>
+                  <p>No elegibles: {noElegibles}</p>
+                </div>
+              ) : null}
+              {manual ? (
+                <>
+                  <p className="rounded border border-amber-700/60 bg-amber-950/20 px-2 py-1.5 text-xs text-amber-300">
+                    Este cierre es administrativo y puede cerrar viajes sin llegada física registrada. No se crearán horas de llegada, km de llegada ni evidencias.
+                  </p>
+                  <label className="block text-xs text-[var(--muted)]">Motivo *
+                    <textarea className={`${inputCls} mt-0.5 block w-full`} rows={2} maxLength={500} value={motivoPeriodo} onChange={(e) => setMotivoPeriodo(e.target.value)} />
+                  </label>
+                  <label className="block text-xs text-[var(--muted)]">Comentario (opcional)
+                    <textarea className={`${inputCls} mt-0.5 block w-full`} rows={2} maxLength={1000} value={comentarioPeriodo} onChange={(e) => setComentarioPeriodo(e.target.value)} />
+                  </label>
+                </>
+              ) : null}
+              {errorPeriodo ? <p role="alert" className="text-xs text-rose-500">{errorPeriodo}</p> : null}
+              <div className="flex justify-end gap-2">
+                <button type="button" className="rounded border border-[var(--border)] px-3 py-1.5 text-xs" disabled={enviandoPeriodo} onClick={() => setPeriodoAccion(null)}>Cancelar</button>
+                <button
+                  type="button"
+                  className={`rounded px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40 ${manual ? "bg-rose-600" : "bg-emerald-600"}`}
+                  disabled={enviandoPeriodo || cargandoCandidatos || !cual || !cual.elegibles || (manual && motivoPeriodo.trim().length < 5)}
+                  onClick={() => void ejecutarCierrePeriodo()}
+                >
+                  {enviandoPeriodo ? "Cerrando…" : cual ? `Confirmar cierre de ${cual.elegibles} viajes` : manual ? "Confirmar cierre manual" : "Confirmar cierre"}
                 </button>
               </div>
             </div>

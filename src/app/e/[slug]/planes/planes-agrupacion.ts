@@ -1,10 +1,14 @@
 import { puedeCerrarManualmente, puedeCerrarNormalmente } from "@/lib/tms/cierre-viaje-shared";
+import { claveAgrupacion, resolverPeriodoPlanes, type AgrupacionPlanes } from "@/lib/tms/planes-periodo";
+
+export type { AgrupacionPlanes };
 
 /**
- * TMS-CIERRE-MASIVO-1 — lógica PURA de la vista operativa de Planes / Viajes:
- * agrupación visual por fecha, elegibilidad de cierre y resumen de selección.
- * Es solo organización de los MISMOS datos (sin persistencia nueva). La
- * elegibilidad usa los criterios compartidos con el backend
+ * TMS-CIERRE-MASIVO-1 (generalizado en PLANES-CIERRE-PERIODO) — lógica PURA de la vista operativa de
+ * Planes / Viajes: agrupación visual por Día/Semana/Mes, elegibilidad de cierre y resumen de selección. Es solo
+ * organización de los MISMOS datos de la página YA CARGADA (sin persistencia nueva) — el cierre por período
+ * COMPLETO (más allá de esta página) lo resuelve el backend (candidatos-cierre / cerrarViajesMasivoPorPeriodo),
+ * nunca esta agrupación client-side. La elegibilidad usa los criterios compartidos con el backend
  * (cierre-viaje-shared.ts); el servidor SIEMPRE vuelve a validar.
  */
 export type PlanAgrupable = { id: number; fechaPlan: string; estado: string; pendienteCierre: boolean };
@@ -28,8 +32,11 @@ export function esSeleccionable(p: Pick<PlanAgrupable, "estado" | "pendienteCier
   return e.normal || e.manual;
 }
 
-export type GrupoFecha<T extends PlanAgrupable> = {
-  fecha: string;
+export type GrupoPlanes<T extends PlanAgrupable> = {
+  /** "2026-09-30" | "2026-W40" | "2026-09" — mismo formato que planes-periodo.ts. */
+  clave: string;
+  /** Texto humano: "30/09/2026" | "Semana 40 · 28/09/2026 al 04/10/2026" | "Septiembre 2026". */
+  etiqueta: string;
   planes: T[];
   total: number;
   /** Con cierre normal disponible. */
@@ -38,40 +45,58 @@ export type GrupoFecha<T extends PlanAgrupable> = {
   otros: number;
 };
 
-/** Grupos por fechaPlan, fecha DESC; dentro de cada fecha se conserva el orden del backend (orden estable). */
-export function agruparPorFecha<T extends PlanAgrupable>(planes: T[]): GrupoFecha<T>[] {
+/**
+ * Grupos por Día/Semana/Mes de fechaPlan, clave DESC; dentro de cada clave se conserva el orden del backend
+ * (orden estable). Agrupa SOLO la página ya cargada (paginación server-side aparte) — nunca decide qué cerrar,
+ * eso lo resuelve el backend sobre TODO el período (ver notaPaginacionGrupo más abajo).
+ */
+export function agruparPlanes<T extends PlanAgrupable>(planes: T[], modo: AgrupacionPlanes): GrupoPlanes<T>[] {
   const mapa = new Map<string, T[]>();
   for (const p of planes) {
-    const f = String(p.fechaPlan ?? "").slice(0, 10);
-    const lista = mapa.get(f);
-    if (lista) lista.push(p); else mapa.set(f, [p]);
+    const clave = claveAgrupacion(p.fechaPlan, modo);
+    const lista = mapa.get(clave);
+    if (lista) lista.push(p); else mapa.set(clave, [p]);
   }
   return [...mapa.entries()]
     .sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0))
-    .map(([fecha, lista]) => {
+    .map(([clave, lista]) => {
       const cerrables = lista.filter((p) => puedeCerrarNormalmente(p.estado, p.pendienteCierre)).length;
       const cerrados = lista.filter((p) => p.estado === "Cerrado").length;
-      return { fecha, planes: lista, total: lista.length, cerrables, cerrados, otros: lista.length - cerrables - cerrados };
+      const etiqueta = resolverPeriodoPlanes(modo, clave)?.etiqueta ?? clave;
+      return { clave, etiqueta, planes: lista, total: lista.length, cerrables, cerrados, otros: lista.length - cerrables - cerrados };
     });
 }
 
-/** Por defecto solo el día más reciente queda abierto (y el que contiene el plan enfocado por deep-link). */
+/** Por defecto solo el grupo más reciente queda abierto (y el que contiene el plan enfocado por deep-link). */
 export function grupoAbierto(
   indice: number,
-  fecha: string,
+  clave: string,
   toggles: Record<string, boolean>,
   contieneFoco: boolean,
 ): boolean {
-  return toggles[fecha] ?? (indice === 0 || contieneFoco);
+  return toggles[clave] ?? (indice === 0 || contieneFoco);
 }
 
-/** Paginación server-side: una fecha puede partirse entre páginas; solo los grupos de los bordes pueden estar incompletos. */
-export function notaPaginacionGrupo(indice: number, totalGrupos: number, pagina: number, totalPaginas: number): string | null {
+/** "semana" es femenino ("Esta semana"); "día"/"mes" son masculinos ("Este día"/"Este mes"). */
+const NOMBRE_AGRUPACION: Record<AgrupacionPlanes, { articulo: string; nombre: string }> = {
+  DIA: { articulo: "Este", nombre: "día" },
+  SEMANA: { articulo: "Esta", nombre: "semana" },
+  MES: { articulo: "Este", nombre: "mes" },
+};
+
+/**
+ * Paginación server-side: un grupo (día/semana/mes) puede partirse entre páginas; solo los grupos de los bordes
+ * pueden estar incompletos. Generalizado de "este día" a "este día/esta semana/este mes" según `modo` — sigue
+ * siendo puramente informativo (la acción de cierre del PERÍODO COMPLETO nunca depende de esta nota ni de qué
+ * página está cargada: la resuelve el backend sobre todo el rango, ver candidatos-cierre).
+ */
+export function notaPaginacionGrupo(indice: number, totalGrupos: number, pagina: number, totalPaginas: number, modo: AgrupacionPlanes): string | null {
+  const { articulo, nombre } = NOMBRE_AGRUPACION[modo];
   const continuaAntes = indice === 0 && pagina > 1;
   const continuaDespues = indice === totalGrupos - 1 && pagina < totalPaginas;
-  if (continuaAntes && continuaDespues) return "Este día puede continuar en la página anterior y en la siguiente.";
-  if (continuaAntes) return "Este día puede continuar en la página anterior.";
-  if (continuaDespues) return "Este día puede continuar en la página siguiente.";
+  if (continuaAntes && continuaDespues) return `${articulo} ${nombre} puede continuar en la página anterior y en la siguiente.`;
+  if (continuaAntes) return `${articulo} ${nombre} puede continuar en la página anterior.`;
+  if (continuaDespues) return `${articulo} ${nombre} puede continuar en la página siguiente.`;
   return null;
 }
 
@@ -93,9 +118,10 @@ export function resumenSeleccion<T extends PlanAgrupable>(planes: T[], seleccion
   };
 }
 
-/** "Seleccionar elegibles" de un día: solo viajes que admiten algún cierre. */
+/** "Seleccionar elegibles" de un grupo: solo viajes que admiten algún cierre (SOLO la página cargada). */
 export function idsSeleccionables<T extends PlanAgrupable>(planes: T[], puedeCerrarViaje: boolean): number[] {
   return planes.filter((p) => esSeleccionable(p, puedeCerrarViaje)).map((p) => p.id);
 }
 
+/** Formateador día-only (dd/mm/aaaa) — se mantiene por compatibilidad; los grupos ya traen su propia `etiqueta`. */
 export const fechaVisible = (f: string) => f.slice(0, 10).split("-").reverse().join("/");
