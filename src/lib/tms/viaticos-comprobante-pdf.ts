@@ -191,6 +191,14 @@ export async function comprobanteAutorizacionesPdf(
     "Fecha autorización",
     "Código de firma",
   ];
+  // VIATICOS-COMPROBANTE-PERIODO (corrección pre-merge) — "Fecha autorización" de la TABLA usa v.autorizadoEn
+  // (tms_viaticos.autorizado_en, el momento REAL de la transición PROGRAMADO->AUTORIZADO que ya decide QUÉ
+  // viáticos entran en el período — ver listarViaticosAutorizadosPorPeriodo) en vez de firma.fechaHoraServidor
+  // (firmas_electronicas.fecha_hora_servidor, el momento del REGISTRO de firma). Son dos fuentes distintas que
+  // normalmente casi coinciden pero no deben intercambiarse: si autorizado_en existe pero por algún motivo no se
+  // encuentra la firma AUTORIZAR_VIATICO de un registro histórico, la tabla debe seguir mostrando la fecha de
+  // autorización real, nunca "—" (fechaHoraServidor solo sigue usándose dentro del bloque visual de firma, más
+  // abajo, donde sí corresponde mostrar el momento del registro de firma).
   const rows = porViatico.map(({ viatico: v, firma }) => [
     v.planCodigo,
     v.fechaPlan,
@@ -199,7 +207,7 @@ export async function comprobanteAutorizacionesPdf(
     v.rol,
     moneda(v.montoAsignado),
     firma?.nombreFirmante ?? "No disponible",
-    firma?.fechaHoraServidor ?? "—",
+    fechaLargaEsGt(v.autorizadoEn),
     firma?.codigoFirma ?? "—",
   ]);
 

@@ -358,6 +358,77 @@ describe("VIATICOS-COMPROBANTE-PERIODO — encabezado muestra el período y el c
   });
 });
 
+/**
+ * VIATICOS-COMPROBANTE-PERIODO (corrección pre-merge) — la columna "Fecha autorización" de la TABLA debe usar
+ * v.autorizadoEn (tms_viaticos.autorizado_en, el mismo criterio que ya decide QUÉ viáticos entran en el período
+ * — ver listarViaticosAutorizadosPorPeriodo), NUNCA firma.fechaHoraServidor (firmas_electronicas.fecha_hora_
+ * servidor, el momento del REGISTRO de firma) — son dos fuentes distintas que normalmente casi coinciden pero no
+ * deben intercambiarse. El bloque de firma (más abajo, "Fecha: ...") SIGUE usando fechaHoraServidor sin cambios.
+ */
+describe("VIATICOS-COMPROBANTE-PERIODO — 'Fecha autorización' de la tabla usa autorizado_en, no la firma", () => {
+  it("1) la columna de la tabla refleja v.autorizadoEn, formateada con fechaLargaEsGt", async () => {
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([
+      { ...VIATICO_BASE, autorizadoEn: "2026-09-15 10:30:00" },
+    ]);
+    vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]);
+    const spy = espiarTexto();
+    await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
+    const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
+    expect(textos).toContain("15 de septiembre de 2026, 10:30");
+  });
+
+  it("2) autorizadoEn y fechaHoraServidor con minuto/hora distintos: la tabla muestra EXACTAMENTE autorizadoEn, nunca fechaHoraServidor", async () => {
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([
+      { ...VIATICO_BASE, autorizadoEn: "2026-09-15 10:30:00" },
+    ]);
+    vi.mocked(listarFirmasViatico).mockResolvedValue([
+      { ...FIRMA_BASE, fechaHoraServidor: "2026-09-15 11:45:05" },
+    ]);
+    const spy = espiarTexto();
+    await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
+    const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
+    // La tabla: 10:30 (de autorizadoEn), nunca 11:45 ni con segundos (:05).
+    expect(textos).toContain("15 de septiembre de 2026, 10:30");
+    expect(textos).not.toContain("15 de septiembre de 2026, 11:45");
+    // El bloque de firma sigue usando fechaHoraServidor (11:45) sin cambios — ver test 4 más abajo.
+    expect(textos).toContain("Fecha: 15 de septiembre de 2026, 11:45");
+  });
+
+  it("3) autorizadoEn existe pero NO se encuentra la firma AUTORIZAR_VIATICO: la tabla sigue mostrando la fecha de autorización real, nunca '—'", async () => {
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([
+      { ...VIATICO_BASE, autorizadoEn: "2026-09-15 10:30:00" },
+    ]);
+    vi.mocked(listarFirmasViatico).mockResolvedValue([]); // sin ninguna firma (registro histórico sin firma encontrada)
+    const spy = espiarTexto();
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
+    expect(buf).not.toBeNull();
+    const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
+    expect(textos).toContain("15 de septiembre de 2026, 10:30");
+  });
+
+  it("4) el bloque de firma sigue usando firma.fechaHoraServidor (no autorizadoEn) — 'Fecha: ...' bajo 'Autorizado por'", async () => {
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([
+      { ...VIATICO_BASE, autorizadoEn: "2026-09-01 09:00:00" },
+    ]);
+    vi.mocked(listarFirmasViatico).mockResolvedValue([
+      { ...FIRMA_BASE, fechaHoraServidor: "2026-09-03 18:47:26" },
+    ]);
+    const spy = espiarTexto();
+    await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
+    const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
+    expect(textos).toContain("Fecha: 3 de septiembre de 2026, 18:47");
+    expect(textos).not.toContain("Fecha: 1 de septiembre de 2026, 9:00");
+  });
+
+  it("autorizadoEn null (caso teórico, el WHERE de la consulta histórica ya lo excluye): fechaLargaEsGt(null) devuelve '—', sin romper el PDF", async () => {
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([{ ...VIATICO_BASE, autorizadoEn: null }]);
+    vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]);
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
+    expect(buf).not.toBeNull();
+    expect(buf!.subarray(0, 4).toString("latin1")).toBe("%PDF");
+  });
+});
+
 describe("VIATICOS-PDF-PRESENTACION-1 — bloque 'Autorizado por' muestra SOLO el nombre real", () => {
   it("el texto es exactamente 'Autorizado por: <nombre>' — sin username, sin rol, sin paréntesis", async () => {
     vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([VIATICO_BASE]);
