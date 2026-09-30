@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { debeMostrarNombreManual, filtrarOpcionesBusqueda, textoInicialBusqueda, opcionesConHistorico } from "./catalogo-search-select";
+import { readFileSync } from "node:fs";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, vi } from "vitest";
+import { CatalogoSearchSelect, debeMostrarNombreManual, filtrarOpcionesBusqueda, textoInicialBusqueda, opcionesConHistorico } from "./catalogo-search-select";
 
 const opciones = [
   { value: "1", label: "Ana Pérez", detail: "EMP-01 · Piloto", searchText: "P123ABC Toyota Hilux CLI-01 NIT 123 Cliente Uno PLAN-001 09/09/2026" },
@@ -56,5 +59,19 @@ describe("filtrarOpcionesBusqueda", () => {
   it("código queda visible como detalle, pero no domina la búsqueda de empleado", () => {
     const empleados = [{ value: "1", label: "Carlos Pineda", detail: "EMP-001 · Piloto", searchText: "Carlos Pineda" }];
     expect(filtrarOpcionesBusqueda(empleados, "EMP-001")).toEqual([]);
+  });
+});
+
+describe("COMPRAS-PROVEEDOR-INLINE — onSearchChange es opt-in, sin afectar a los consumidores que no lo usan", () => {
+  it("renderiza igual (mismo HTML) sin importar onSearchChange, para cualquier consumidor que no lo pase", () => {
+    const props = { label: "Proveedor", placeholder: "Buscar...", value: "", options: opciones, inputClassName: "x", onChange: vi.fn() };
+    const sinProp = renderToStaticMarkup(createElement(CatalogoSearchSelect, props));
+    const conProp = renderToStaticMarkup(createElement(CatalogoSearchSelect, { ...props, onSearchChange: vi.fn() }));
+    expect(sinProp).toBe(conProp);
+  });
+
+  it("el prop es opcional en el tipo (no rompe TS en los otros 8 consumidores que no lo pasan)", () => {
+    const source = readFileSync("src/components/tms/catalogo-search-select.tsx", "utf8");
+    expect(source).toContain("onSearchChange?: (texto: string) => void;");
   });
 });
