@@ -18,11 +18,11 @@ import {
   mensajeGuardado,
   MAX_AUXILIARES_EDICION_RAPIDA,
   motivoNoEditable,
+  motivoNoEditableTarifa,
   montoViaticoValido,
   opcionesPersonal,
   opcionesTarifa,
   opcionesVehiculo,
-  puedeEditarTarifa,
   puedeEditarViaticos,
   puedeGuardar,
   puedeValidar,
@@ -259,7 +259,8 @@ export function EdicionRapida({
               const tarifa = tarifaEfectiva(borrador, p);
               const tarifaSel = tarifa.tipo === "manual" ? "manual" : tarifa.tarifaId != null ? String(tarifa.tarifaId) : "";
               const opcionesDeTarifa = opcionesTarifa(p.ruta_id != null ? tarifasPorRuta[String(p.ruta_id)] : undefined, { id: p.tarifa_id ?? null, nombre: p.tarifa_nombre_historico, monto: p.tarifa_monto_historico });
-              const tarifaDeshabilitada = bloqueo != null || guardando || !puedeEditarTarifa(p);
+              const bloqueoTarifa = motivoNoEditableTarifa(p, hoy);
+              const tarifaDeshabilitada = bloqueoTarifa != null || guardando;
               const viaticos = puedeEditarViaticos(p) ? viaticosVisibles(borrador, p) : [];
               const viaticosDeshabilitados = bloqueo != null || guardando;
               const r = recursosVisibles(borrador, p);
@@ -359,7 +360,7 @@ export function EdicionRapida({
                       className={celda}
                       aria-label={`Tarifa de ${p.codigo}`}
                       disabled={tarifaDeshabilitada}
-                      title={!puedeEditarTarifa(p) ? "Datos de tarifa no disponibles: recarga la programación." : undefined}
+                      title={bloqueoTarifa ?? (p.fecha_plan < hoy ? "Viaje histórico: solo se permite actualizar la tarifa." : undefined)}
                       value={tarifaSel}
                       onChange={(e) => {
                         const v = e.target.value;

@@ -146,6 +146,20 @@ export function mismosRecursos(a: RecursosEditables, b: RecursosEditables): bool
 export function motivoNoEditable(p: PlanEdicionRapida, hoy: string): string | null {
   if (p.estado === "Cerrado" || p.estado === "Cancelado") return p.estado;
   if (p.fecha_plan < hoy) return "Histórico";
+  return motivoSnapshotNoEditable(p);
+}
+
+/** La tarifa conserva el snapshot defensivo, pero la fecha pasada por sí sola no la bloquea. */
+export function motivoNoEditableTarifa(p: PlanEdicionRapida, hoy: string): string | null {
+  if (!puedeEditarTarifa(p)) return "Datos de tarifa no disponibles: recarga la programación.";
+  if (p.fecha_plan < hoy) {
+    if (p.estado === "Cerrado" || p.estado === "Cancelado") return p.estado;
+    return motivoSnapshotNoEditable(p);
+  }
+  return motivoNoEditable(p, hoy);
+}
+
+function motivoSnapshotNoEditable(p: PlanEdicionRapida): string | null {
   // Datos que el GET aún no trae (versión anterior del servidor): sin snapshot exacto no se edita.
   if (p.auxiliarPersonalIds === undefined || p.flotaVehiculoId === undefined) return "Sin datos para edición rápida";
   // Auxiliar legado (solo columna auxiliar_id): el snapshot real no coincidiría con lo que se muestra.

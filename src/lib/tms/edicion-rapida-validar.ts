@@ -313,12 +313,18 @@ export async function evaluarEdicionRapida(empresaId: number, datos: ValidarEdic
   for (const fila of candidatas) {
     const plan = fila.plan!;
     const toca = tocaDe(fila);
+    // Excepción LOCAL: la fecha pasada admite solo tarifa, calculada desde diferencias reales con la BD.
+    // No relaja PATCH/Ajustar ni permite otros datos comerciales (viáticos incluidos).
+    const soloTarifa = fila.cambiaTarifa && !fila.cambiaPiloto && !fila.cambiaAuxiliares &&
+      !fila.cambiaUnidad && !fila.cambiaTc && !fila.cambiaViaticos;
+    const tarifaHistorica = plan.fechaPlan < hoy && soloTarifa && plan.estado !== "Cerrado" && plan.estado !== "Cancelado";
     const eMotivo = validarMotivoCambioRecursos(toca, motivo);
     if (eMotivo) err(fila, "MOTIVO_REQUERIDO", eMotivo.error);
     else if (fila.cambiaViaticos && !motivo) err(fila, "MOTIVO_REQUERIDO", "Indica el motivo del cambio de viáticos.");
-    const eEstado = validarEstadoEditable({ estado: plan.estado, pendienteCierre: plan.pendienteCierre }, toca);
+    else if (tarifaHistorica && !motivo) err(fila, "MOTIVO_REQUERIDO", "Indica el motivo del cambio de tarifa histórica.");
+    const eEstado = tarifaHistorica ? null : validarEstadoEditable({ estado: plan.estado, pendienteCierre: plan.pendienteCierre }, toca);
     if (eEstado) { err(fila, "ESTADO_NO_EDITABLE", eEstado.error); fila.fatal = true; continue; }
-    const eFecha = validarFechaNoPasada(plan.fechaPlan, hoy);
+    const eFecha = tarifaHistorica ? null : validarFechaNoPasada(plan.fechaPlan, hoy);
     if (eFecha) { err(fila, "FECHA_PASADA", eFecha.error); fila.fatal = true; continue; }
     // La tarifa SÍ es editable en un viaje tercerizado; recursos internos y viáticos no.
     if (plan.tipoViaje === "Tercerizado" && (fila.cambiaPiloto || fila.cambiaAuxiliares || fila.cambiaUnidad || fila.cambiaTc || fila.cambiaViaticos)) {

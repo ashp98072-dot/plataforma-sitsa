@@ -41,6 +41,7 @@ const D0 = sumarDias(HOY, 10);
 
 type Via = { plan_id: number; personal_id: number; monto_asignado: number; monto_sugerido: number; estado: string };
 type Plan = {
+  fecha_plan: string; pendiente_cierre: number;
   id: number; empresa_id: number; estado: string; tipo_viaje: string; piloto_id: number | null; aux: number[];
   ruta_id: number | null; tarifa_id: number | null; tarifa_comercial: number | null;
 };
@@ -50,6 +51,7 @@ let updates: { sql: string; params: unknown[] }[];
 let eventos: string[];
 
 const plan = (id: number, over: Partial<Plan> = {}): Plan => ({
+  fecha_plan: D0, pendiente_cierre: 0,
   id, empresa_id: EMP, estado: "Programado", tipo_viaje: "Propio", piloto_id: 10, aux: [20], ruta_id: 5, tarifa_id: null, tarifa_comercial: null, ...over,
 });
 const TARIFA_A = { id: 61, nombre: "Ruta corta", monto: 1500, moneda: "GTQ" };
@@ -64,9 +66,9 @@ function responder(s: string, params: unknown[]): unknown[] {
   if (s.includes("FROM tms_planes_viaje p") && s.includes("LEFT JOIN tms_unidades u ON u.id = p.unidad_id") && s.includes("p.id IN")) {
     const ids = params.slice(1) as number[];
     return planes.filter((p) => p.empresa_id === empresa && ids.includes(p.id)).map((p) => ({
-      id: p.id, codigo: `PLAN-${p.id}`, estado: p.estado, fecha_plan: D0, hora_carga: "05:00:00", regreso_estimado: `${D0} 08:00:00`, tipo_viaje: p.tipo_viaje,
+      id: p.id, codigo: `PLAN-${p.id}`, estado: p.estado, fecha_plan: p.fecha_plan, hora_carga: "05:00:00", regreso_estimado: `${p.fecha_plan} 08:00:00`, tipo_viaje: p.tipo_viaje,
       piloto_id: p.piloto_id, unidad_id: null, unidad_placa: null, flota_vehiculo_id: null, tc_vehiculo_id: null,
-      piloto_nombre: PERSONAL.find((x) => x.id === p.piloto_id)?.nombre ?? null, ruta_id: p.ruta_id, tarifa_id: p.tarifa_id, tarifa_comercial: p.tarifa_comercial, pendiente_cierre: 0,
+      piloto_nombre: PERSONAL.find((x) => x.id === p.piloto_id)?.nombre ?? null, ruta_id: p.ruta_id, tarifa_id: p.tarifa_id, tarifa_comercial: p.tarifa_comercial, pendiente_cierre: p.pendiente_cierre,
     }));
   }
   if (s.includes("FROM tms_plan_auxiliares pa")) {
@@ -139,7 +141,7 @@ function cambio(planId: number, nuevo: Nuevo = {}, opciones: { conExtras?: boole
   } : {};
   return {
     planId,
-    esperado: { estado: p.estado, fechaPlan: D0, horaCarga: "05:00", regresoEstimado: `${D0}T08:00`, pilotoPersonalId: p.piloto_id, auxiliarPersonalIds: p.aux, flotaVehiculoId: null, tcVehiculoId: null, ...extras, ...(opciones.esperado ?? {}) },
+    esperado: { estado: p.estado, fechaPlan: p.fecha_plan, horaCarga: "05:00", regresoEstimado: `${p.fecha_plan}T08:00`, pilotoPersonalId: p.piloto_id, auxiliarPersonalIds: p.aux, flotaVehiculoId: null, tcVehiculoId: null, ...extras, ...(opciones.esperado ?? {}) },
     nuevo: { pilotoPersonalId: p.piloto_id, auxiliarPersonalIds: p.aux, flotaVehiculoId: null, tcVehiculoId: null, ...nuevo },
   };
 }
@@ -147,6 +149,121 @@ const lote = (cambios: ReturnType<typeof cambio>[], motivoCambio = "Cambio de pr
 const validar = (cambios: ReturnType<typeof cambio>[], motivo?: string) => validarEdicionRapida(EMP, lote(cambios, motivo));
 const guardar = (cambios: ReturnType<typeof cambio>[], motivo?: string) => guardarEdicionRapida(EMP, "ana", lote(cambios, motivo));
 const codigos = (r: Awaited<ReturnType<typeof validar>>, planId: number) => r.filas.find((f) => f.planId === planId)!.errores.map((e) => e.codigo);
+
+describe("Edición rápida — tarifa histórica exclusivamente", () => {
+  beforeEach(() => { for (const p of planes) p.fecha_plan = sumarDias(HOY, -1); });
+
+  it.each(["Programado", "Cargado", "En ruta", "Descargado"])("%s histórico admite catálogo con recursos sin cambio real", async (estado) => {
+    planes[0].estado = estado;
+    expect((await validar([cambio(101, { tarifaId: 61 })])).ok).toBe(true);
+    expect(tarifaParaSnapshot).toHaveBeenCalledWith(EMP, 5, 61, undefined);
+  });
+
+  it("En ruta pendiente de cierre sigue admitiendo tarifa histórica", async () => {
+    planes[0].estado = "En ruta"; planes[0].pendiente_cierre = 1;
+    expect((await validar([cambio(101, { tarifaId: 61 })])).ok).toBe(true);
+  });
+
+  it.each([850, 0])("manual Q%s se guarda, sin convertir cero en NULL", async (monto) => {
+    expect(await guardar([cambio(101, { tarifaId: null, tarifaComercial: monto })])).toMatchObject({ ok: true, guardados: 1 });
+    expect(updates[0].params).toEqual([monto, 101, EMP, "Programado"]);
+    expect(updates[0].sql).toContain("tarifa_id = NULL");
+  });
+
+  it.each([
+    ["piloto", { pilotoPersonalId: 11 }], ["auxiliares", { auxiliarPersonalIds: [21] }],
+    ["unidad", { flotaVehiculoId: 30 }], ["TC", { tcVehiculoId: 40 }],
+    ["viáticos", { viaticos: [{ personalId: 10, montoAsignado: 250 }] }],
+  ])("tarifa + %s histórico es rechazado sin escrituras", async (_recurso, extra) => {
+    const cambios = [cambio(101, { tarifaId: 61, ...extra })];
+    expect(codigos(await validar(cambios), 101)).toContain("FECHA_PASADA");
+    expect(await guardar(cambios)).toMatchObject({ ok: false, status: 409 });
+    expect(updates).toHaveLength(0);
+    expect(registrarAuditoriaTx).not.toHaveBeenCalled();
+  });
+
+  it.each(["Cerrado", "Cancelado"])("%s histórico nunca admite tarifa", async (estado) => {
+    planes[0].estado = estado;
+    expect(codigos(await validar([cambio(101, { tarifaId: 61 })]), 101)).toContain("ESTADO_NO_EDITABLE");
+  });
+
+  it.each([0, 1])("hoy + %s días conserva restricciones de En ruta y permite Programado", async (dias) => {
+    planes[0].fecha_plan = sumarDias(HOY, dias);
+    expect((await validar([cambio(101, { tarifaId: 61 })])).ok).toBe(true);
+    planes[0].estado = "En ruta";
+    expect(codigos(await validar([cambio(101, { tarifaId: 61 })]), 101)).toContain("ESTADO_NO_EDITABLE");
+  });
+
+  it("no acepta fecha ni bandera soloTarifa ni piloto extra desde el payload", () => {
+    for (const extra of [{ fechaPlan: HOY }, { soloTarifa: true }, { pilotoExtraPersonalId: 11 }]) {
+      expect(validarEdicionRapidaSchema.safeParse({ motivoCambio: "Ajuste", cambios: [cambio(101, { tarifaId: 61, ...extra })] }).success).toBe(false);
+    }
+  });
+
+  it.each(["otra ruta", "inactiva", "otra empresa"])("catálogo %s conserva validación del snapshot", async (caso) => {
+    if (caso === "otra ruta") planes[0].ruta_id = 99;
+    else vi.mocked(tarifaParaSnapshot).mockResolvedValue(null);
+    expect(codigos(await validar([cambio(101, { tarifaId: 61 })]), 101)).toContain("TARIFA_INVALIDA");
+    expect(tarifaParaSnapshot).toHaveBeenCalledWith(EMP, planes[0].ruta_id, 61, undefined);
+  });
+
+  it.each([-1, 850.555])("manual inválida %s sigue rechazada", async (monto) => {
+    expect(codigos(await validar([cambio(101, { tarifaId: null, tarifaComercial: monto })]), 101)).toContain("TARIFA_INVALIDA");
+  });
+
+  it.each([{ tarifaId: 61, tarifaComercial: 1500 }, { tarifaId: null, tarifaComercial: 900 }])("snapshot concurrente %j no se pisa", async (esperado) => {
+    const cambios = [cambio(101, { tarifaId: null, tarifaComercial: 850 }, { esperado })];
+    expect(codigos(await validar(cambios), 101)).toContain("PLAN_DESACTUALIZADO");
+    expect(await guardar(cambios)).toMatchObject({ ok: false, status: 409 });
+    expect(updates).toHaveLength(0);
+  });
+
+  it("exige motivo también server-side, al validar y al guardar", async () => {
+    const datos = validarEdicionRapidaSchema.parse({ cambios: [cambio(101, { tarifaId: 61 })] });
+    expect(codigos(await validarEdicionRapida(EMP, datos), 101)).toContain("MOTIVO_REQUERIDO");
+    expect(await guardarEdicionRapida(EMP, "ana", datos)).toMatchObject({ ok: false, status: 409 });
+    expect(updates).toHaveLength(0);
+  });
+
+  it("tercerizado histórico admite tarifa sin habilitar recursos internos", async () => {
+    planes[0].tipo_viaje = "Tercerizado";
+    expect((await validar([cambio(101, { tarifaId: 61 })])).ok).toBe(true);
+    expect((await validar([cambio(101, { tarifaId: 61, pilotoPersonalId: 11 })])).ok).toBe(false);
+  });
+
+  it("lote histórico guarda únicamente tarifa y audita usuario/plan/antes/después/motivo bajo candado", async () => {
+    planes[0].tarifa_comercial = 800;
+    const conn = crearConexion();
+    vi.mocked(getPool).mockReturnValue({ getConnection: async () => conn } as never);
+    const cambios = [cambio(101, { tarifaId: 61 }), cambio(102, { tarifaId: null, tarifaComercial: 900 })];
+    expect(await guardar(cambios, "Tarifas pendientes")).toMatchObject({ ok: true, guardados: 2 });
+    expect(updates).toHaveLength(2);
+    for (const u of updates) {
+      const sets = u.sql.split(" SET ")[1].split(" WHERE ")[0];
+      expect(sets.split(", ").every((s) => s.startsWith("tarifa_"))).toBe(true);
+      expect(u.sql).not.toMatch(/fecha_plan|hora_carga|regreso_estimado|piloto_id|auxiliar_id|unidad_id|tc_vehiculo_id/);
+    }
+    expect(sincronizarViaticosPlan).not.toHaveBeenCalled();
+    expect(conn.query.mock.calls.some(([s]) => s.includes("GET_LOCK"))).toBe(true);
+    expect(conn.query.mock.calls.some(([s]) => s.includes("FOR UPDATE"))).toBe(true);
+    expect(eventos.indexOf("begin")).toBeLessThan(eventos.indexOf("update"));
+    expect(eventos.indexOf("commit")).toBeGreaterThan(eventos.lastIndexOf("update"));
+    expect(registrarAuditoriaTx).toHaveBeenCalledTimes(2);
+    const audit = vi.mocked(registrarAuditoriaTx).mock.calls[0][1];
+    expect(audit).toMatchObject({ empresaId: EMP, usuario: "ana" });
+    expect(audit.detalle).toContain("Plan #101");
+    expect(audit.detalle).toContain("tarifa manual Q800.00 → Catálogo Ruta corta Q1,500.00");
+    expect(audit.detalle).toContain("motivo: Tarifas pendientes");
+  });
+
+  it("una fila inválida mantiene atómico todo el lote histórico", async () => {
+    expect(await guardar([cambio(101, { tarifaId: 61 }), cambio(102, { tarifaId: 999 })])).toMatchObject({ ok: false, status: 409 });
+    expect(updates).toHaveLength(0);
+    expect(eventos).toContain("rollback");
+    expect(eventos).not.toContain("commit");
+    expect(registrarAuditoriaTx).not.toHaveBeenCalled();
+  });
+});
 
 describe("Edición rápida — TARIFA (validar)", () => {
   it("1) asigna una tarifa vigente de la ruta del viaje", async () => {
