@@ -65,8 +65,10 @@ export async function GET(req: Request, ctx: Ctx) {
     soloSinCerrar: sp.get("soloSinCerrar") === "1",
   });
 
-  const normalIds = candidatos.filter((c) => puedeCerrarNormalmente(c.estado, c.llegadaRegistrada)).map((c) => c.id);
-  const manualIds = candidatos.filter((c) => puedeCerrarManualmente(c.estado)).map((c) => c.id);
+  // PLANES-TARIFA-CIERRE-1 — un candidato sin tarifa NUNCA cuenta como elegible (ni normal ni manual), así el
+  // modal de confirmación ya informa la cantidad REAL que podrá cerrarse.
+  const normalIds = candidatos.filter((c) => puedeCerrarNormalmente(c.estado, c.llegadaRegistrada, c.tarifaComercial != null)).map((c) => c.id);
+  const manualIds = candidatos.filter((c) => puedeCerrarManualmente(c.estado, c.tarifaComercial != null)).map((c) => c.id);
 
   return NextResponse.json(
     {

@@ -84,6 +84,7 @@ export async function cerrarViaje(
       `UPDATE tms_planes_viaje p
        SET p.estado = 'Cerrado', p.cerrado_por = ?, p.cerrado_en = NOW()
        WHERE p.id = ? AND p.empresa_id = ?
+         AND p.tarifa_comercial IS NOT NULL
          AND (
            p.estado = 'Descargado'
            OR (
@@ -98,7 +99,7 @@ export async function cerrarViaje(
     );
     if (r.affectedRows !== 1) {
       const [existe] = await conn.query<RowDataPacket[]>(
-        `SELECT p.estado,
+        `SELECT p.estado, p.tarifa_comercial,
                 EXISTS (
                   SELECT 1 FROM flota_viajes fv
                   WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
@@ -112,8 +113,19 @@ export async function cerrarViaje(
       }
       const estadoActual = String(existe[0].estado ?? "");
       const llegadaRegistrada = Number(existe[0].llegada_registrada ?? 0) === 1;
+      // PLANES-TARIFA-CIERRE-1 — `!== null`, NUNCA `> 0`: una tarifa capturada como Q0.00 sigue contando.
+      const tieneTarifa = existe[0].tarifa_comercial != null;
       if (estadoActual === "Cerrado") {
         return { ok: false, error: "Este viaje ya fue cerrado." };
+      }
+      // PLANES-TARIFA-CIERRE-1 — orden de mensajes: no encontrado, ya Cerrado, Cancelado, sin tarifa,
+      // llegada/estado. Cancelado obtiene su propio mensaje (antes caía en el genérico de más abajo, que
+      // hablaba de "llegada" — confuso para un viaje cancelado).
+      if (estadoActual === "Cancelado") {
+        return { ok: false, error: "Este viaje está cancelado; no admite cierre." };
+      }
+      if (!tieneTarifa) {
+        return { ok: false, error: "No se puede cerrar este viaje porque todavía no tiene una tarifa asignada." };
       }
       // OPS-5.2d: "Cargado" sigue el mismo criterio que "En ruta" — si
       // llegó hasta aquí (no hizo match en el UPDATE de arriba) es porque
@@ -227,7 +239,7 @@ export async function cerrarViajeManual(opts: {
     await conn.beginTransaction();
 
     const [planRows] = await conn.query<RowDataPacket[]>(
-      `SELECT id, estado, tipo_viaje FROM tms_planes_viaje WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
+      `SELECT id, estado, tipo_viaje, tarifa_comercial FROM tms_planes_viaje WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
       [opts.planId, opts.empresaId],
     );
     const plan = planRows[0];
@@ -249,6 +261,13 @@ export async function cerrarViajeManual(opts: {
         return { ok: false, error: "Este viaje está cancelado; no admite cierre manual." };
       }
       return { ok: false, error: `Este viaje está "${estadoAnterior}"; no admite cierre manual.` };
+    }
+    // PLANES-TARIFA-CIERRE-1 — la tarifa se valida ANTES de tocar flota_viajes o el plan: "manual" significa
+    // que puede omitirse la llegada física, NUNCA que puede omitirse el requisito financiero. `!== null`,
+    // NUNCA `> 0` (Q0.00 capturado explícitamente SÍ cuenta como tarifa).
+    if (plan.tarifa_comercial == null) {
+      await conn.rollback();
+      return { ok: false, error: "No se puede cerrar este viaje porque todavía no tiene una tarifa asignada." };
     }
 
     // Buscar flota_viajes asociado — puede no existir (caso crítico del
@@ -278,10 +297,15 @@ export async function cerrarViajeManual(opts: {
       `UPDATE tms_planes_viaje
        SET estado = 'Cerrado', cerrado_por = ?, cerrado_en = NOW(),
            cierre_manual = 1, cierre_manual_motivo = ?, cierre_manual_comentario = ?
-       WHERE id = ? AND empresa_id = ? AND estado IN ('Programado', 'Cargado', 'En ruta')`,
+       WHERE id = ? AND empresa_id = ? AND estado IN ('Programado', 'Cargado', 'En ruta')
+         AND tarifa_comercial IS NOT NULL`,
       [opts.usuario, motivo, comentario, opts.planId, opts.empresaId],
     );
     if (upd.affectedRows !== 1) {
+      // PLANES-TARIFA-CIERRE-1 — defensa concurrente: la tarifa ya se validó arriba (antes de tocar
+      // flota_viajes), pero si desapareció justo entre esa lectura y este UPDATE (carrera), el UPDATE
+      // simplemente no afecta ninguna fila — mismo comportamiento seguro que un cambio de estado concurrente,
+      // nunca un cierre a medias (flota_viajes ya pudo quedar tocado arriba, pero el plan nunca queda Cerrado).
       await conn.rollback();
       return { ok: false, error: "El viaje cambió de estado durante la operación. Vuelve a intentarlo." };
     }

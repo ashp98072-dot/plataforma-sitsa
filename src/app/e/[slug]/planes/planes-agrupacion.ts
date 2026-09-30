@@ -11,23 +11,28 @@ export type { AgrupacionPlanes };
  * nunca esta agrupación client-side. La elegibilidad usa los criterios compartidos con el backend
  * (cierre-viaje-shared.ts); el servidor SIEMPRE vuelve a validar.
  */
-export type PlanAgrupable = { id: number; fechaPlan: string; estado: string; pendienteCierre: boolean };
+/** PLANES-TARIFA-CIERRE-1 — `tarifaComercial: number | null`; elegibilidadCierre exige `!== null`, nunca `> 0`. */
+export type PlanAgrupable = { id: number; fechaPlan: string; estado: string; pendienteCierre: boolean; tarifaComercial: number | null };
 
 /**
  * `pendienteCierre` del listado = no Cerrado/Cancelado Y existe llegada real
  * (flota_viajes 'cerrado'), por lo que equivale a "llegada registrada". El
  * cierre NORMAL además admite Descargado sin ese dato (ver puedeCerrarNormalmente).
+ *
+ * PLANES-TARIFA-CIERRE-1 — sin tarifa (`tarifaComercial === null`), NINGÚN cierre es elegible, sin importar
+ * estado/llegada — mismo criterio puro que el backend (cierre-viaje-shared.ts).
  */
-export function elegibilidadCierre(p: Pick<PlanAgrupable, "estado" | "pendienteCierre">, puedeCerrarViaje: boolean): { normal: boolean; manual: boolean } {
+export function elegibilidadCierre(p: Pick<PlanAgrupable, "estado" | "pendienteCierre" | "tarifaComercial">, puedeCerrarViaje: boolean): { normal: boolean; manual: boolean } {
   if (!puedeCerrarViaje) return { normal: false, manual: false };
+  const tieneTarifa = p.tarifaComercial != null;
   return {
-    normal: puedeCerrarNormalmente(p.estado, p.pendienteCierre),
-    manual: puedeCerrarManualmente(p.estado),
+    normal: puedeCerrarNormalmente(p.estado, p.pendienteCierre, tieneTarifa),
+    manual: puedeCerrarManualmente(p.estado, tieneTarifa),
   };
 }
 
-/** Un viaje se puede seleccionar si admite ALGUNO de los dos cierres (Cerrado/Cancelado/sin permiso: nunca). */
-export function esSeleccionable(p: Pick<PlanAgrupable, "estado" | "pendienteCierre">, puedeCerrarViaje: boolean): boolean {
+/** Un viaje se puede seleccionar si admite ALGUNO de los dos cierres (Cerrado/Cancelado/sin permiso/sin tarifa: nunca). */
+export function esSeleccionable(p: Pick<PlanAgrupable, "estado" | "pendienteCierre" | "tarifaComercial">, puedeCerrarViaje: boolean): boolean {
   const e = elegibilidadCierre(p, puedeCerrarViaje);
   return e.normal || e.manual;
 }
@@ -60,7 +65,7 @@ export function agruparPlanes<T extends PlanAgrupable>(planes: T[], modo: Agrupa
   return [...mapa.entries()]
     .sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0))
     .map(([clave, lista]) => {
-      const cerrables = lista.filter((p) => puedeCerrarNormalmente(p.estado, p.pendienteCierre)).length;
+      const cerrables = lista.filter((p) => puedeCerrarNormalmente(p.estado, p.pendienteCierre, p.tarifaComercial != null)).length;
       const cerrados = lista.filter((p) => p.estado === "Cerrado").length;
       const etiqueta = resolverPeriodoPlanes(modo, clave)?.etiqueta ?? clave;
       return { clave, etiqueta, planes: lista, total: lista.length, cerrables, cerrados, otros: lista.length - cerrables - cerrados };
