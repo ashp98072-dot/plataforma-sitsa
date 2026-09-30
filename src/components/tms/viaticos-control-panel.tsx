@@ -26,6 +26,8 @@ import {
   type GruposAbiertos,
 } from "@/lib/tms/viaticos-grupos-expansion";
 import { TEXTO_FIRMA_INTERNA } from "@/lib/firmas/textos";
+import { hoyLocal } from "@/lib/rrhh/dates";
+import { valorPeriodoHoy, type TipoPeriodoComprobante } from "@/lib/tms/viaticos-comprobante-periodo";
 import type { FirmaCanvasHandle } from "@/components/tms/firma-canvas";
 import SelectorFirma from "@/components/tms/selector-firma";
 import HistorialFirmasModal from "@/components/tms/historial-firmas-modal";
@@ -153,6 +155,14 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   // VIATICOS-COMPROBANTE-PDF — permiso propio y explícito, nunca por
   // defecto (ver requireTenantViaticosComprobantes en tenant.ts).
   const [puedeComprobantes, setPuedeComprobantes] = useState(false);
+  // VIATICOS-COMPROBANTE-PERIODO — selector propio del comprobante histórico (Día/Semana/Mes), TOTALMENTE
+  // independiente de fEstado/fFechaDesde/fFechaHasta/modoAgrupacion (esos filtran el LISTADO en pantalla; el
+  // comprobante es un reporte histórico separado por `autorizado_en`, no por lo que está visible en la tabla).
+  // Default pedido por el ticket: DÍA + fecha de hoy Guatemala.
+  const [tipoPeriodoComprobante, setTipoPeriodoComprobante] = useState<TipoPeriodoComprobante>("DIA");
+  const [valorPeriodoComprobante, setValorPeriodoComprobante] = useState(() => hoyLocal());
+  const [descargandoComprobante, setDescargandoComprobante] = useState(false);
+  const [errorComprobante, setErrorComprobante] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [mensaje, setMensaje] = useState("");
@@ -589,6 +599,55 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
     await cargar();
   }
 
+  /**
+   * VIATICOS-COMPROBANTE-PERIODO — cambiar el tipo de período recalcula un valor por defecto razonable (fecha/
+   * semana/mes de HOY, Guatemala) en vez de dejar el input vacío — el usuario ajusta desde ahí si necesita otra
+   * fecha. No dispara ninguna descarga por sí solo.
+   */
+  function cambiarTipoPeriodoComprobante(tipo: TipoPeriodoComprobante) {
+    setTipoPeriodoComprobante(tipo);
+    setValorPeriodoComprobante(valorPeriodoHoy(tipo, hoyLocal()));
+    setErrorComprobante("");
+  }
+
+  /**
+   * VIATICOS-COMPROBANTE-PERIODO — reemplaza el antiguo <a href> directo al endpoint (que abría el JSON de error
+   * crudo en el navegador cuando no había AUTORIZADO=0, o cuando el backend rechazaba la petición). Mismo patrón
+   * fetch+blob+descarga ya usado en ViaticosPorPagarPanel.generarArchivoBancario(): si la respuesta no es OK, se
+   * lee el JSON y el mensaje queda EN esta pantalla (nunca se navega a una pestaña con el JSON crudo); si es OK,
+   * se arma un blob y se dispara la descarga con un <a download> sintético. El nombre de archivo se toma del
+   * Content-Disposition del backend (fuente de verdad real); si por algún motivo no viniera, se cae a un nombre
+   * calculado localmente con el mismo formato (nunca undefined/"download").
+   */
+  async function descargarComprobante() {
+    setErrorComprobante("");
+    setDescargandoComprobante(true);
+    try {
+      const params = new URLSearchParams({ periodo: tipoPeriodoComprobante, valor: valorPeriodoComprobante });
+      const res = await fetch(`/api/empresas/${slug}/tms/viaticos/comprobante-autorizacion-pdf?${params.toString()}`);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setErrorComprobante(data.error ?? `No se pudo generar el comprobante (${res.status}).`);
+        return;
+      }
+      const blob = await res.blob();
+      const disposicion = res.headers.get("Content-Disposition") ?? "";
+      const nombreServidor = /filename="?([^"]+)"?/.exec(disposicion)?.[1];
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = nombreServidor || `viaticos-autorizados-${valorPeriodoComprobante}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      setErrorComprobante("Error de conexión.");
+    } finally {
+      setDescargandoComprobante(false);
+    }
+  }
+
   const clavesGrupos = grupos.map((g) => claveExpansion(modoAgrupacion, g.clave));
 
   /** Fila de un viático (idéntica a la tabla anterior: mismas acciones y permisos). */
@@ -739,20 +798,44 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
         })}
       </div>
 
-      {/* VIATICOS-COMPROBANTE-PDF — descarga en lote (todos los AUTORIZADO
-          actuales) del comprobante de autorización con firma electrónica
-          interna. Permiso propio (viaticos_comprobantes), independiente de
-          autorizar/pagar/liquidar — nunca por defecto, un Admin lo otorga
-          desde Usuarios. Enlace simple: la respuesta ya trae
-          Content-Disposition: attachment, no hace falta manejo de blob. */}
+      {/* VIATICOS-COMPROBANTE-PERIODO — comprobante HISTÓRICO de autorización por Día/Semana/Mes (criterio
+          autorizado_en, no el estado actual). Permiso propio (viaticos_comprobantes), independiente de
+          autorizar/pagar/liquidar — nunca por defecto, un Admin lo otorga desde Usuarios. Selector propio,
+          totalmente independiente de fEstado/fFechaDesde/fFechaHasta/modoAgrupacion del listado de abajo.
+          Descarga por fetch+blob (nunca un <a href> directo): un 404/400 muestra el mensaje AQUÍ mismo, sin
+          navegar nunca a una pestaña con el JSON crudo. */}
       {puedeComprobantes ? (
-        <div>
-          <a
-            href={`/api/empresas/${slug}/tms/viaticos/comprobante-autorizacion-pdf`}
-            className="inline-block rounded border border-[var(--border)] px-3 py-1.5 text-xs font-medium hover:bg-[var(--input)]"
+        <div className="flex flex-wrap items-end gap-2 rounded-lg border border-[var(--border)] p-2">
+          <label className="text-xs text-[var(--muted)]">
+            Comprobante de autorización — Período
+            <select
+              className={`${inputCls} mt-0.5 block`}
+              value={tipoPeriodoComprobante}
+              onChange={(e) => cambiarTipoPeriodoComprobante(e.target.value as TipoPeriodoComprobante)}
+            >
+              <option value="DIA">Día</option>
+              <option value="SEMANA">Semana</option>
+              <option value="MES">Mes</option>
+            </select>
+          </label>
+          <label className="text-xs text-[var(--muted)]">
+            {tipoPeriodoComprobante === "DIA" ? "Fecha" : tipoPeriodoComprobante === "SEMANA" ? "Semana" : "Mes"}
+            <input
+              type={tipoPeriodoComprobante === "DIA" ? "date" : tipoPeriodoComprobante === "SEMANA" ? "week" : "month"}
+              className={`${inputCls} mt-0.5 block`}
+              value={valorPeriodoComprobante}
+              onChange={(e) => setValorPeriodoComprobante(e.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            disabled={descargandoComprobante || !valorPeriodoComprobante}
+            onClick={() => void descargarComprobante()}
+            className="rounded border border-[var(--border)] px-3 py-1.5 text-xs font-medium hover:bg-[var(--input)] disabled:opacity-50"
           >
-            Descargar comprobantes de autorización (PDF)
-          </a>
+            {descargandoComprobante ? "Generando…" : "Descargar PDF"}
+          </button>
+          {errorComprobante ? <p className="w-full text-xs text-red-300">{errorComprobante}</p> : null}
         </div>
       ) : null}
 

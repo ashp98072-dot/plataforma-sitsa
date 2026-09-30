@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import PDFDocument from "pdfkit";
 
-vi.mock("@/lib/tms/viaticos", () => ({ listarViaticosControl: vi.fn() }));
+vi.mock("@/lib/tms/viaticos", () => ({ listarViaticosAutorizadosPorPeriodo: vi.fn() }));
 vi.mock("@/lib/firmas/firmas-lectura", () => ({ listarFirmasViatico: vi.fn() }));
 vi.mock("@/lib/db", () => ({ query: vi.fn() }));
 vi.mock("@/lib/uploads", () => ({ absPathFromRelative: vi.fn((r: string) => `/abs/${r}`) }));
 vi.mock("fs", () => ({ existsSync: vi.fn(() => false), readFileSync: vi.fn() }));
 
-import { listarViaticosControl } from "@/lib/tms/viaticos";
+import { listarViaticosAutorizadosPorPeriodo } from "@/lib/tms/viaticos";
 import { listarFirmasViatico } from "@/lib/firmas/firmas-lectura";
 import { query } from "@/lib/db";
 import { existsSync, readFileSync } from "fs";
@@ -67,7 +67,7 @@ const VIATICO_BASE = {
   rechazadoPor: null,
   rechazadoEn: null,
   motivoRechazo: null,
-} as unknown as Awaited<ReturnType<typeof listarViaticosControl>>["items"][number];
+} as unknown as Awaited<ReturnType<typeof listarViaticosAutorizadosPorPeriodo>>[number];
 
 const FIRMA_BASE = {
   id: 55,
@@ -84,6 +84,13 @@ const FIRMA_BASE = {
   origenFirma: null,
   tieneImagen: false,
   hashPayload: "hash-abc",
+};
+
+const PERIODO_BASE = {
+  inicio: "2026-09-01 00:00:00",
+  finExclusivo: "2026-10-01 00:00:00",
+  etiqueta: "septiembre de 2026",
+  archivo: "viaticos-autorizados-2026-09.pdf",
 };
 
 beforeEach(() => {
@@ -193,17 +200,17 @@ describe("agruparPorFirmante", () => {
 
 describe("comprobanteAutorizacionesPdf", () => {
   it("regresa null cuando no hay ningún viático AUTORIZADO (nunca un PDF vacío)", async () => {
-    vi.mocked(listarViaticosControl).mockResolvedValue({ items: [], resumen: {} as never });
-    const buf = await comprobanteAutorizacionesPdf(7, "SITSA");
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([]);
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
     expect(buf).toBeNull();
-    expect(listarViaticosControl).toHaveBeenCalledWith(7, { estado: "AUTORIZADO" });
+    expect(listarViaticosAutorizadosPorPeriodo).toHaveBeenCalledWith(7, PERIODO_BASE.inicio, PERIODO_BASE.finExclusivo);
     expect(listarFirmasViatico).not.toHaveBeenCalled();
   });
 
   it("genera un PDF válido (empieza con %PDF) con un viático autorizado y firma sin imagen", async () => {
-    vi.mocked(listarViaticosControl).mockResolvedValue({ items: [VIATICO_BASE], resumen: {} as never });
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([VIATICO_BASE]);
     vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]);
-    const buf = await comprobanteAutorizacionesPdf(7, "Kuiqtrans / Logiservicios Mónaco");
+    const buf = await comprobanteAutorizacionesPdf(7, "Kuiqtrans / Logiservicios Mónaco", PERIODO_BASE);
     expect(buf).not.toBeNull();
     expect(buf!.subarray(0, 4).toString("latin1")).toBe("%PDF");
     expect(listarFirmasViatico).toHaveBeenCalledWith(7, 1);
@@ -215,29 +222,29 @@ describe("comprobanteAutorizacionesPdf", () => {
   });
 
   it("sin ningún firmante con usuarioId, no consulta la tabla usuarios", async () => {
-    vi.mocked(listarViaticosControl).mockResolvedValue({ items: [VIATICO_BASE], resumen: {} as never });
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([VIATICO_BASE]);
     vi.mocked(listarFirmasViatico).mockResolvedValue([{ ...FIRMA_BASE, usuarioId: null }]);
-    const buf = await comprobanteAutorizacionesPdf(7, "SITSA");
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
     expect(buf).not.toBeNull();
     expect(query).not.toHaveBeenCalled();
   });
 
   it("2 viáticos autorizados por la MISMA persona no disparan ninguna consulta extra (ni de username, ya retirada, ni duplicada por viático)", async () => {
     const v2 = { ...VIATICO_BASE, id: 2, planCodigo: "VJ-002" };
-    vi.mocked(listarViaticosControl).mockResolvedValue({ items: [VIATICO_BASE, v2], resumen: {} as never });
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([VIATICO_BASE, v2]);
     vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]); // mismo usuarioId=9 para ambos viáticos
-    const buf = await comprobanteAutorizacionesPdf(7, "SITSA");
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
     expect(buf).not.toBeNull();
     expect(query).not.toHaveBeenCalled();
   });
 
   it("consulta la imagen de la firma acotada a empresa/modulo/entidad cuando tieneImagen=true", async () => {
-    vi.mocked(listarViaticosControl).mockResolvedValue({ items: [VIATICO_BASE], resumen: {} as never });
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([VIATICO_BASE]);
     vi.mocked(listarFirmasViatico).mockResolvedValue([{ ...FIRMA_BASE, tieneImagen: true }]);
     vi.mocked(query).mockResolvedValue([{ imagen_ruta: "firmas/x.png", imagen_mime: "image/png" }] as never);
     vi.mocked(existsSync).mockReturnValue(false); // archivo no existe -> PDF sigue generándose sin la imagen
 
-    const buf = await comprobanteAutorizacionesPdf(7, "SITSA");
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
     expect(buf).not.toBeNull();
     expect(query).toHaveBeenCalledWith(expect.stringContaining("firmas_electronicas"), [55, 7]);
   });
@@ -248,31 +255,31 @@ describe("comprobanteAutorizacionesPdf", () => {
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
       "base64",
     );
-    vi.mocked(listarViaticosControl).mockResolvedValue({ items: [VIATICO_BASE], resumen: {} as never });
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([VIATICO_BASE]);
     vi.mocked(listarFirmasViatico).mockResolvedValue([{ ...FIRMA_BASE, tieneImagen: true }]);
     vi.mocked(query).mockResolvedValue([{ imagen_ruta: "firmas/x.png", imagen_mime: "image/png" }] as never);
     vi.mocked(existsSync).mockReturnValue(true);
     vi.mocked(readFileSync).mockReturnValue(PNG_1X1 as never);
 
-    const buf = await comprobanteAutorizacionesPdf(7, "SITSA");
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
     expect(buf).not.toBeNull();
     expect(buf!.subarray(0, 4).toString("latin1")).toBe("%PDF");
     expect(readFileSync).toHaveBeenCalledWith("/abs/firmas/x.png");
   });
 
   it("sin firma de autorización registrada, el PDF se genera igual (lo indica en el texto, no falla)", async () => {
-    vi.mocked(listarViaticosControl).mockResolvedValue({ items: [VIATICO_BASE], resumen: {} as never });
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([VIATICO_BASE]);
     vi.mocked(listarFirmasViatico).mockResolvedValue([]);
-    const buf = await comprobanteAutorizacionesPdf(7, "SITSA");
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
     expect(buf).not.toBeNull();
     expect(buf!.subarray(0, 4).toString("latin1")).toBe("%PDF");
   });
 
   it("consulta la firma de CADA viático del lote (no solo el primero)", async () => {
     const v2 = { ...VIATICO_BASE, id: 2, planCodigo: "VJ-002", personalNombre: "María López" };
-    vi.mocked(listarViaticosControl).mockResolvedValue({ items: [VIATICO_BASE, v2], resumen: {} as never });
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([VIATICO_BASE, v2]);
     vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]);
-    const buf = await comprobanteAutorizacionesPdf(7, "SITSA");
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
     expect(buf).not.toBeNull();
     expect(listarFirmasViatico).toHaveBeenCalledWith(7, 1);
     expect(listarFirmasViatico).toHaveBeenCalledWith(7, 2);
@@ -280,34 +287,143 @@ describe("comprobanteAutorizacionesPdf", () => {
   });
 
   it("ignora una firma de LIQUIDAR_VIATICO y usa solo AUTORIZAR_VIATICO", async () => {
-    vi.mocked(listarViaticosControl).mockResolvedValue({ items: [VIATICO_BASE], resumen: {} as never });
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([VIATICO_BASE]);
     vi.mocked(listarFirmasViatico).mockResolvedValue([
       { ...FIRMA_BASE, accion: "LIQUIDAR_VIATICO", nombreFirmante: "Otro Firmante" },
     ]);
-    const buf = await comprobanteAutorizacionesPdf(7, "SITSA");
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
     expect(buf).not.toBeNull();
   });
 
   it("2 viáticos autorizados por la misma persona -> genera un PDF válido con UNA sola firma en el bloque de autorización", async () => {
     const v2 = { ...VIATICO_BASE, id: 2, planCodigo: "VJ-002", personalNombre: "María López" };
-    vi.mocked(listarViaticosControl).mockResolvedValue({ items: [VIATICO_BASE, v2], resumen: {} as never });
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([VIATICO_BASE, v2]);
     vi.mocked(listarFirmasViatico).mockImplementation(async (_empresaId, viaticoId) => [
       { ...FIRMA_BASE, id: 55 + viaticoId, codigoFirma: `SIG-${55 + viaticoId}` },
     ]);
-    const buf = await comprobanteAutorizacionesPdf(7, "SITSA");
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
     expect(buf).not.toBeNull();
     expect(buf!.subarray(0, 4).toString("latin1")).toBe("%PDF");
   });
 
   it("2 viáticos autorizados por personas distintas -> genera un PDF válido con 2 bloques de firma", async () => {
     const v2 = { ...VIATICO_BASE, id: 2, planCodigo: "VJ-002", personalNombre: "María López" };
-    vi.mocked(listarViaticosControl).mockResolvedValue({ items: [VIATICO_BASE, v2], resumen: {} as never });
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([VIATICO_BASE, v2]);
     vi.mocked(listarFirmasViatico).mockImplementation(async (_empresaId, viaticoId) =>
       viaticoId === 1
         ? [FIRMA_BASE]
         : [{ ...FIRMA_BASE, id: 60, usuarioId: 11, nombreFirmante: "Carlos Ruiz", codigoFirma: "SIG-60" }],
     );
-    const buf = await comprobanteAutorizacionesPdf(7, "SITSA");
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
+    expect(buf).not.toBeNull();
+    expect(buf!.subarray(0, 4).toString("latin1")).toBe("%PDF");
+  });
+});
+
+describe("VIATICOS-COMPROBANTE-PERIODO — encabezado muestra el período y el conteo", () => {
+  it("item 40: el encabezado incluye 'Período: <etiqueta>' y el conteo de viáticos autorizados", async () => {
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([VIATICO_BASE]);
+    vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]);
+    const spy = espiarTexto();
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
+    expect(buf).not.toBeNull();
+    const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
+    expect(textos).toContain(`Período: ${PERIODO_BASE.etiqueta}`);
+    expect(textos).toContain("1 viático autorizado");
+  });
+
+  it("el conteo usa plural cuando hay más de un viático autorizado", async () => {
+    const v2 = { ...VIATICO_BASE, id: 2, planCodigo: "VJ-002" };
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([VIATICO_BASE, v2]);
+    vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]);
+    const spy = espiarTexto();
+    await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
+    const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
+    expect(textos).toContain("2 viáticos autorizados");
+  });
+
+  it("la etiqueta de período refleja el período pedido (semana), no el default mensual", async () => {
+    const periodoSemana = {
+      inicio: "2026-09-28 00:00:00",
+      finExclusivo: "2026-10-05 00:00:00",
+      etiqueta: "28 de septiembre al 4 de octubre de 2026",
+      archivo: "viaticos-autorizados-2026-W40.pdf",
+    };
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([VIATICO_BASE]);
+    vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]);
+    const spy = espiarTexto();
+    await comprobanteAutorizacionesPdf(7, "SITSA", periodoSemana);
+    const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
+    expect(textos).toContain(`Período: ${periodoSemana.etiqueta}`);
+  });
+});
+
+/**
+ * VIATICOS-COMPROBANTE-PERIODO (corrección pre-merge) — la columna "Fecha autorización" de la TABLA debe usar
+ * v.autorizadoEn (tms_viaticos.autorizado_en, el mismo criterio que ya decide QUÉ viáticos entran en el período
+ * — ver listarViaticosAutorizadosPorPeriodo), NUNCA firma.fechaHoraServidor (firmas_electronicas.fecha_hora_
+ * servidor, el momento del REGISTRO de firma) — son dos fuentes distintas que normalmente casi coinciden pero no
+ * deben intercambiarse. El bloque de firma (más abajo, "Fecha: ...") SIGUE usando fechaHoraServidor sin cambios.
+ */
+describe("VIATICOS-COMPROBANTE-PERIODO — 'Fecha autorización' de la tabla usa autorizado_en, no la firma", () => {
+  it("1) la columna de la tabla refleja v.autorizadoEn, formateada con fechaLargaEsGt", async () => {
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([
+      { ...VIATICO_BASE, autorizadoEn: "2026-09-15 10:30:00" },
+    ]);
+    vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]);
+    const spy = espiarTexto();
+    await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
+    const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
+    expect(textos).toContain("15 de septiembre de 2026, 10:30");
+  });
+
+  it("2) autorizadoEn y fechaHoraServidor con minuto/hora distintos: la tabla muestra EXACTAMENTE autorizadoEn, nunca fechaHoraServidor", async () => {
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([
+      { ...VIATICO_BASE, autorizadoEn: "2026-09-15 10:30:00" },
+    ]);
+    vi.mocked(listarFirmasViatico).mockResolvedValue([
+      { ...FIRMA_BASE, fechaHoraServidor: "2026-09-15 11:45:05" },
+    ]);
+    const spy = espiarTexto();
+    await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
+    const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
+    // La tabla: 10:30 (de autorizadoEn), nunca 11:45 ni con segundos (:05).
+    expect(textos).toContain("15 de septiembre de 2026, 10:30");
+    expect(textos).not.toContain("15 de septiembre de 2026, 11:45");
+    // El bloque de firma sigue usando fechaHoraServidor (11:45) sin cambios — ver test 4 más abajo.
+    expect(textos).toContain("Fecha: 15 de septiembre de 2026, 11:45");
+  });
+
+  it("3) autorizadoEn existe pero NO se encuentra la firma AUTORIZAR_VIATICO: la tabla sigue mostrando la fecha de autorización real, nunca '—'", async () => {
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([
+      { ...VIATICO_BASE, autorizadoEn: "2026-09-15 10:30:00" },
+    ]);
+    vi.mocked(listarFirmasViatico).mockResolvedValue([]); // sin ninguna firma (registro histórico sin firma encontrada)
+    const spy = espiarTexto();
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
+    expect(buf).not.toBeNull();
+    const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
+    expect(textos).toContain("15 de septiembre de 2026, 10:30");
+  });
+
+  it("4) el bloque de firma sigue usando firma.fechaHoraServidor (no autorizadoEn) — 'Fecha: ...' bajo 'Autorizado por'", async () => {
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([
+      { ...VIATICO_BASE, autorizadoEn: "2026-09-01 09:00:00" },
+    ]);
+    vi.mocked(listarFirmasViatico).mockResolvedValue([
+      { ...FIRMA_BASE, fechaHoraServidor: "2026-09-03 18:47:26" },
+    ]);
+    const spy = espiarTexto();
+    await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
+    const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
+    expect(textos).toContain("Fecha: 3 de septiembre de 2026, 18:47");
+    expect(textos).not.toContain("Fecha: 1 de septiembre de 2026, 9:00");
+  });
+
+  it("autorizadoEn null (caso teórico, el WHERE de la consulta histórica ya lo excluye): fechaLargaEsGt(null) devuelve '—', sin romper el PDF", async () => {
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([{ ...VIATICO_BASE, autorizadoEn: null }]);
+    vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]);
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
     expect(buf).not.toBeNull();
     expect(buf!.subarray(0, 4).toString("latin1")).toBe("%PDF");
   });
@@ -315,27 +431,27 @@ describe("comprobanteAutorizacionesPdf", () => {
 
 describe("VIATICOS-PDF-PRESENTACION-1 — bloque 'Autorizado por' muestra SOLO el nombre real", () => {
   it("el texto es exactamente 'Autorizado por: <nombre>' — sin username, sin rol, sin paréntesis", async () => {
-    vi.mocked(listarViaticosControl).mockResolvedValue({ items: [VIATICO_BASE], resumen: {} as never });
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([VIATICO_BASE]);
     vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]);
     // Aunque exista un username resoluble para este usuarioId, la firma
     // de autorización ya NO debe consultarlo ni mostrarlo — ver test de
     // abajo ("ya no consulta la tabla usuarios").
     vi.mocked(query).mockResolvedValue([{ id: 9, username: "hsitan" }] as never);
     const spy = espiarTexto();
-    const buf = await comprobanteAutorizacionesPdf(7, "SITSA");
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
     expect(buf).not.toBeNull();
     const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
     expect(textos).toContain("Autorizado por: Ana Gómez");
   });
 
   it("no aparece '(admin)', '(usuario)', el username ni el rol del firmante en ningún texto del PDF", async () => {
-    vi.mocked(listarViaticosControl).mockResolvedValue({ items: [VIATICO_BASE], resumen: {} as never });
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([VIATICO_BASE]);
     vi.mocked(listarFirmasViatico).mockResolvedValue([
       { ...FIRMA_BASE, nombreFirmante: "Heber Sitan", rolFirmante: "Administrador General" },
     ]);
     vi.mocked(query).mockResolvedValue([{ id: 9, username: "admin" }] as never);
     const spy = espiarTexto();
-    await comprobanteAutorizacionesPdf(7, "SITSA");
+    await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
     const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
     for (const t of textos) {
       expect(t).not.toContain("(admin)");
@@ -347,9 +463,9 @@ describe("VIATICOS-PDF-PRESENTACION-1 — bloque 'Autorizado por' muestra SOLO e
   });
 
   it("ya no consulta la tabla usuarios (la búsqueda de username se retiró por completo, no solo se dejó de mostrar)", async () => {
-    vi.mocked(listarViaticosControl).mockResolvedValue({ items: [VIATICO_BASE], resumen: {} as never });
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([VIATICO_BASE]);
     vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]); // usuarioId=9, sin imagen
-    const buf = await comprobanteAutorizacionesPdf(7, "SITSA");
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
     expect(buf).not.toBeNull();
     // Sin imagen (tieneImagen=false) y sin búsqueda de username, este lote
     // no tiene ninguna razón para llamar a query().
@@ -357,10 +473,10 @@ describe("VIATICOS-PDF-PRESENTACION-1 — bloque 'Autorizado por' muestra SOLO e
   });
 
   it("mantiene la fecha en español debajo, sin cambios de formato", async () => {
-    vi.mocked(listarViaticosControl).mockResolvedValue({ items: [VIATICO_BASE], resumen: {} as never });
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([VIATICO_BASE]);
     vi.mocked(listarFirmasViatico).mockResolvedValue([{ ...FIRMA_BASE, fechaHoraServidor: "2026-09-09 14:12:00" }]);
     const spy = espiarTexto();
-    await comprobanteAutorizacionesPdf(7, "SITSA");
+    await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
     const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
     expect(textos).toContain("Fecha: 9 de septiembre de 2026, 14:12");
   });
@@ -368,10 +484,10 @@ describe("VIATICOS-PDF-PRESENTACION-1 — bloque 'Autorizado por' muestra SOLO e
 
 describe("VIATICOS-PDF-PRESENTACION-1 — columna Monto completa y centrada", () => {
   it("el encabezado 'Monto' se dibuja centrado", async () => {
-    vi.mocked(listarViaticosControl).mockResolvedValue({ items: [VIATICO_BASE], resumen: {} as never });
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([VIATICO_BASE]);
     vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]);
     const spy = espiarTexto();
-    await comprobanteAutorizacionesPdf(7, "SITSA");
+    await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
     const encabezado = spy.mock.calls.map(llamadaTexto).find((c) => c.texto === "Monto");
     expect(encabezado).toBeDefined();
     expect(encabezado!.opciones?.align).toBe("center");
@@ -389,12 +505,12 @@ describe("VIATICOS-PDF-PRESENTACION-1 — columna Monto completa y centrada", ()
       ...VIATICO_BASE, id: 2, planCodigo: "VJ-20260901-00123457", cliente: "Distribuidora Guatemalteca de Alimentos S.A.",
       personalNombre: "Maria Fernanda Lopez", montoAsignado: 1250,
     };
-    vi.mocked(listarViaticosControl).mockResolvedValue({ items: [v1, v2], resumen: {} as never });
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([v1, v2]);
     vi.mocked(listarFirmasViatico).mockResolvedValue([
       { ...FIRMA_BASE, nombreFirmante: "Heber Alexander Sitan Ramirez", codigoFirma: "SIG-20260909-a1b2c3d4" },
     ]);
     const spy = espiarTexto();
-    const buf = await comprobanteAutorizacionesPdf(7, "SITSA");
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
     expect(buf).not.toBeNull();
     const textos = spy.mock.calls.map(llamadaTexto);
     const montos = textos.filter((t) => /^Q[\d.,]+$/.test(t.texto));
@@ -407,12 +523,12 @@ describe("VIATICOS-PDF-PRESENTACION-1 — columna Monto completa y centrada", ()
       ...VIATICO_BASE, planCodigo: "VJ-20260901-00123456", cliente: "Distribuidora Guatemalteca de Alimentos S.A.",
       personalNombre: "Juan Carlos Perez Lopez Gonzalez", montoAsignado: 999999.99,
     };
-    vi.mocked(listarViaticosControl).mockResolvedValue({ items: [v1], resumen: {} as never });
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([v1]);
     vi.mocked(listarFirmasViatico).mockResolvedValue([
       { ...FIRMA_BASE, nombreFirmante: "Heber Alexander Sitan Ramirez", codigoFirma: "SIG-20260909-a1b2c3d4" },
     ]);
     const spy = espiarTexto();
-    await comprobanteAutorizacionesPdf(7, "SITSA");
+    await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
     const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
     const truncados = textos.filter((t) => t.includes("…"));
     expect(truncados).toEqual([]);
@@ -421,9 +537,9 @@ describe("VIATICOS-PDF-PRESENTACION-1 — columna Monto completa y centrada", ()
 
 describe("VIATICOS-PDF-PRESENTACION-1 — sin página en blanco extra", () => {
   it("un comprobante con un único viático genera EXACTAMENTE 1 página (antes generaba 2, la segunda vacía)", async () => {
-    vi.mocked(listarViaticosControl).mockResolvedValue({ items: [VIATICO_BASE], resumen: {} as never });
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([VIATICO_BASE]);
     vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]);
-    const buf = await comprobanteAutorizacionesPdf(7, "SITSA");
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
     expect(buf).not.toBeNull();
     // Marcador estructural del PDF (no comprimido, a diferencia del
     // contenido de texto) — mismo criterio ya usado en cotizacion-pdf.test.ts
@@ -443,7 +559,7 @@ describe("VIATICOS-PDF-PRESENTACION-1 — sin página en blanco extra", () => {
     const items = Array.from({ length: 12 }, (_, i) => ({
       ...VIATICO_BASE, id: i + 1, planCodigo: `VJ-${String(i + 1).padStart(3, "0")}`,
     }));
-    vi.mocked(listarViaticosControl).mockResolvedValue({ items, resumen: {} as never });
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue(items);
     vi.mocked(listarFirmasViatico).mockImplementation(async (_empresaId, viaticoId) => [
       { ...FIRMA_BASE, id: 100 + Number(viaticoId), usuarioId: 100 + Number(viaticoId), nombreFirmante: `Firmante ${viaticoId}`, codigoFirma: `SIG-${viaticoId}`, tieneImagen: true },
     ]);
@@ -453,7 +569,7 @@ describe("VIATICOS-PDF-PRESENTACION-1 — sin página en blanco extra", () => {
       if (sql.includes("firmas_electronicas")) return [{ imagen_ruta: "firmas/x.png", imagen_mime: "image/png" }];
       return [];
     }) as typeof query);
-    const buf = await comprobanteAutorizacionesPdf(7, "SITSA");
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
     expect(buf).not.toBeNull();
     const paginas = buf!.toString("latin1").match(/\/Type\s*\/Page(?!s)\b/g);
     // Con 12 firmantes distintos + imagen cada uno, legítimamente necesita

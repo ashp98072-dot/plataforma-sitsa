@@ -1624,6 +1624,30 @@ export async function listarViaticosControl(
   return { items, resumen };
 }
 
+/**
+ * VIATICOS-COMPROBANTE-PERIODO — histórico de autorizaciones por período (Día/Semana/Mes), para el comprobante en
+ * PDF (src/lib/tms/viaticos-comprobante-pdf.ts). Deliberadamente una consulta SEPARADA de listarViaticosControl():
+ * esa representa el estado ACTUAL (con su propio filtro `estado`), mientras que el comprobante debe demostrar que
+ * un viático FUE autorizado dentro del rango sin importar su estado actual — un viático autorizado en el período
+ * que luego pasó a ENTREGADO o LIQUIDADO sigue apareciendo; NUNCA filtra por `estado`. Rango semiabierto
+ * `[inicio, finExclusivo)` sobre `autorizado_en` (nunca sobre `fecha_plan` ni el estado). Reutiliza el mismo
+ * DETALLE_SELECT/mapDetalle (mismos JOINs y columnas, mismo tenant isolation) que el resto del módulo.
+ */
+export async function listarViaticosAutorizadosPorPeriodo(
+  empresaId: number,
+  inicio: string,
+  finExclusivo: string,
+): Promise<ViaticoControlItem[]> {
+  const rows = await query<RowDataPacket[]>(
+    `${DETALLE_SELECT}
+     WHERE v.empresa_id = ? AND v.autorizado_en IS NOT NULL
+       AND v.autorizado_en >= ? AND v.autorizado_en < ?
+     ORDER BY v.autorizado_en, v.id`,
+    [empresaId, inicio, finExclusivo],
+  );
+  return rows.map(mapDetalle);
+}
+
 export type ViaticoPropio = {
   planId: number;
   montoAsignado: number;

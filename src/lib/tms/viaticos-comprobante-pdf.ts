@@ -6,25 +6,24 @@ import { absPathFromRelative } from "@/lib/uploads";
 import { ahoraLocal, fmtTs, formatearTimestampVisible } from "@/lib/rrhh/dates";
 import { dibujarTablaEnDoc } from "@/lib/rrhh/export-files";
 import { reforzarFirmaParaPdf } from "@/lib/firmas/reforzar-firma-pdf";
-import { listarViaticosControl } from "@/lib/tms/viaticos";
+import { listarViaticosAutorizadosPorPeriodo } from "@/lib/tms/viaticos";
 import { listarFirmasViatico, type FirmaViaticoResumen } from "@/lib/firmas/firmas-lectura";
+import type { PeriodoComprobante } from "@/lib/tms/viaticos-comprobante-periodo";
 
 /**
- * VIATICOS-COMPROBANTE-PDF — comprobante en PDF, en lote, de todos los
- * viáticos actualmente AUTORIZADOS de una empresa: una tabla (no una
- * página por viático, ver dibujarTablaEnDoc) con los datos del
- * viaje/empleado/monto, y debajo UN bloque de firma por cada persona
- * distinta que autorizó (no uno por viático — si la misma persona
- * autorizó varios, aparece una sola vez) — en la MISMA página si cabe,
- * solo avanza a una página nueva cuando ya no hay espacio. Cada bloque
- * muestra el nombre real del firmante (nombreFirmante, nunca su usuario
- * de acceso), su rol, la fecha, y su imagen de firma más reciente del
- * lote si existe.
+ * VIATICOS-COMPROBANTE-PDF — comprobante en PDF, en lote, HISTÓRICO por período (Día/Semana/Mes) de todos los
+ * viáticos AUTORIZADOS de una empresa DURANTE ese período (criterio: `autorizado_en`, no el estado actual — ver
+ * VIATICOS-COMPROBANTE-PERIODO en viaticos-comprobante-periodo.ts y listarViaticosAutorizadosPorPeriodo() en
+ * viaticos.ts): una tabla (no una página por viático, ver dibujarTablaEnDoc) con los datos del viaje/empleado/
+ * monto, y debajo UN bloque de firma por cada persona distinta que autorizó (no uno por viático — si la misma
+ * persona autorizó varios, aparece una sola vez) — en la MISMA página si cabe, solo avanza a una página nueva
+ * cuando ya no hay espacio. Cada bloque muestra el nombre real del firmante (nombreFirmante, nunca su usuario
+ * de acceso), su rol, la fecha, y su imagen de firma más reciente del lote si existe.
  *
  * Reutiliza TAL CUAL:
- * - listarViaticosControl() — misma consulta que ya usa el Control de
- *   Viáticos (VIAT-3), filtrada a estado AUTORIZADO — no es una segunda
- *   fuente de verdad del listado.
+ * - listarViaticosAutorizadosPorPeriodo() — mismos JOINs/columnas que Control de Viáticos (VIAT-3), pero
+ *   filtrada por `autorizado_en` en el rango del período — nunca por estado actual, así un viático autorizado
+ *   dentro del período que después pasó a ENTREGADO/LIQUIDADO sigue apareciendo.
  * - listarFirmasViatico() — mismo historial de firmas que ya expone el
  *   modal "Ver firmas" (VIATICOS-HISTORIAL-FIRMA-1).
  * - dibujarTablaEnDoc() (src/lib/rrhh/export-files.ts) — el mismo
@@ -158,14 +157,15 @@ export function agruparPorFirmante(
 }
 
 /**
- * `null` cuando no hay ningún viático AUTORIZADO — el caller (route.ts)
- * decide el mensaje/estado HTTP; esta función nunca genera un PDF vacío.
+ * `null` cuando no hay ningún viático autorizado EN EL PERÍODO — el caller (route.ts) decide el mensaje/estado
+ * HTTP; esta función nunca genera un PDF vacío.
  */
 export async function comprobanteAutorizacionesPdf(
   empresaId: number,
   empresaNombre: string,
+  periodo: PeriodoComprobante,
 ): Promise<Buffer | null> {
-  const { items } = await listarViaticosControl(empresaId, { estado: "AUTORIZADO" });
+  const items = await listarViaticosAutorizadosPorPeriodo(empresaId, periodo.inicio, periodo.finExclusivo);
   if (!items.length) return null;
 
   // Firma de autorización de cada viático (y su imagen, si tiene) — antes
@@ -191,6 +191,14 @@ export async function comprobanteAutorizacionesPdf(
     "Fecha autorización",
     "Código de firma",
   ];
+  // VIATICOS-COMPROBANTE-PERIODO (corrección pre-merge) — "Fecha autorización" de la TABLA usa v.autorizadoEn
+  // (tms_viaticos.autorizado_en, el momento REAL de la transición PROGRAMADO->AUTORIZADO que ya decide QUÉ
+  // viáticos entran en el período — ver listarViaticosAutorizadosPorPeriodo) en vez de firma.fechaHoraServidor
+  // (firmas_electronicas.fecha_hora_servidor, el momento del REGISTRO de firma). Son dos fuentes distintas que
+  // normalmente casi coinciden pero no deben intercambiarse: si autorizado_en existe pero por algún motivo no se
+  // encuentra la firma AUTORIZAR_VIATICO de un registro histórico, la tabla debe seguir mostrando la fecha de
+  // autorización real, nunca "—" (fechaHoraServidor solo sigue usándose dentro del bloque visual de firma, más
+  // abajo, donde sí corresponde mostrar el momento del registro de firma).
   const rows = porViatico.map(({ viatico: v, firma }) => [
     v.planCodigo,
     v.fechaPlan,
@@ -199,7 +207,7 @@ export async function comprobanteAutorizacionesPdf(
     v.rol,
     moneda(v.montoAsignado),
     firma?.nombreFirmante ?? "No disponible",
-    firma?.fechaHoraServidor ?? "—",
+    fechaLargaEsGt(v.autorizadoEn),
     firma?.codigoFirma ?? "—",
   ]);
 
@@ -221,7 +229,13 @@ export async function comprobanteAutorizacionesPdf(
 
     doc.font("Helvetica-Bold").fontSize(14).fillColor("#0f172a").text(tituloEmpresa(empresaNombre), { width: pageWidth });
     doc.moveDown(0.2).font("Helvetica").fontSize(9).fillColor("#475569")
-      .text(`Comprobante de autorización de viáticos — TMS / Logística · ${items.length} viático(s) autorizado(s)`, { width: pageWidth });
+      .text("Comprobante de autorización de viáticos — TMS / Logística", { width: pageWidth });
+    // VIATICOS-COMPROBANTE-PERIODO — línea de período explícita, distinta de la fecha de generación del documento
+    // (footer, más abajo): esta es la FECHA/RANGO de autorización que demuestra el lote, no "hoy".
+    doc.font("Helvetica").fontSize(9).fillColor("#475569")
+      .text(`Período: ${periodo.etiqueta}`, { width: pageWidth });
+    doc.font("Helvetica").fontSize(9).fillColor("#475569")
+      .text(`${items.length} viático${items.length === 1 ? "" : "s"} autorizado${items.length === 1 ? "" : "s"}`, { width: pageWidth });
     doc.moveDown(0.35);
 
     // VIATICOS-PDF-PRESENTACION-1: "Monto" (índice 5) quedaba demasiado
