@@ -82,6 +82,19 @@ describe("programacion-client.tsx — no perder el borrador", () => {
 });
 
 describe("edicion-rapida.tsx", () => {
+  it("histórico: solo tarifa tiene bloqueo independiente; recursos y viáticos conservan el general", () => {
+    expect(tabla).toContain("const bloqueoTarifa = motivoNoEditableTarifa(p, hoy);");
+    expect(tabla).toContain("const tarifaDeshabilitada = bloqueoTarifa != null || guardando;");
+    expect(tabla.match(/disabled=\{tarifaDeshabilitada\}/g)).toHaveLength(2);
+    expect(tabla).toContain("Viaje histórico: solo se permite actualizar la tarifa.");
+    expect(tabla).toContain("const deshabilitado = bloqueo != null || guardando || internosBloqueados;");
+    expect(tabla).toContain("const viaticosDeshabilitados = bloqueo != null || guardando;");
+    for (const label of ["Piloto de", "Agregar auxiliar a", "Unidad de", "TC de"]) {
+      expect(trozo(tabla, `aria-label={\`${label}`, "value=")).toContain("disabled={deshabilitado");
+    }
+    expect(tabla).toContain("disabled={viaticosDeshabilitados || procesado}");
+  });
+
   it("usa los endpoints existentes a través de los helpers (sin contrato nuevo)", () => {
     expect(tabla).toContain("enviarValidar((u, i) => fetch(u, i), slug, cuerpoEdicionRapida(borrador, motivo))");
     expect(tabla).toContain("enviarGuardar((u, i) => fetch(u, i), slug, cuerpoEdicionRapida(borrador, motivo))");

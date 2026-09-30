@@ -9,6 +9,7 @@ import {
   editarViatico,
   errorAntesDeEnviar,
   motivoNoEditable,
+  motivoNoEditableTarifa,
   opcionesTarifa,
   puedeEditarTarifa,
   puedeEditarViaticos,
@@ -37,6 +38,41 @@ const plan = (over: Partial<PlanEdicionRapida> = {}): PlanEdicionRapida => ({
 });
 const vacio = (): Borrador => new Map<number, EntradaBorrador>();
 const TARIFAS: TarifaRutaEdicion[] = [{ id: 61, nombre: "Corta", monto: "1500.00", moneda: "GTQ" }, { id: 62, nombre: "Larga", monto: 2500, moneda: "GTQ" }];
+
+describe("Edición rápida (UI) — tarifa histórica", () => {
+  it.each(["Programado", "Cargado", "En ruta", "Descargado"])("%s histórico habilita solo tarifa, no recursos/viáticos", (estado) => {
+    const p = plan({ estado, fecha_plan: "2026-09-23" });
+    expect(motivoNoEditable(p, HOY)).toBe("Histórico");
+    expect(motivoNoEditableTarifa(p, HOY)).toBeNull();
+  });
+  it.each(["Cerrado", "Cancelado"])("%s sigue bloqueado", (estado) => {
+    expect(motivoNoEditableTarifa(plan({ estado, fecha_plan: "2026-09-23" }), HOY)).toBe(estado);
+  });
+  it.each([
+    { tarifa_id: undefined }, { auxiliarPersonalIds: undefined }, { flotaVehiculoId: undefined },
+    { auxiliarPersonalIds: [] },
+  ])("sin snapshot compatible %j no permite tarifa histórica", (over) => {
+    expect(motivoNoEditableTarifa(plan({ fecha_plan: "2026-09-23", ...over }), HOY)).not.toBeNull();
+  });
+  it("hoy/futuro conserva comportamiento; tercerizado histórico permite tarifa", () => {
+    for (const fecha_plan of [HOY, "2026-09-25"]) expect(motivoNoEditableTarifa(plan({ fecha_plan }), HOY)).toBeNull();
+    const p = plan({ fecha_plan: "2026-09-23", tipo_viaje: "Tercerizado" });
+    expect(motivoNoEditableTarifa(p, HOY)).toBeNull();
+    expect(recursosInternosBloqueados(p)).toBe(true);
+    expect(puedeEditarViaticos(p)).toBe(false);
+  });
+  it("varias tarifas históricas conservan snapshots y motivo, incluyendo manual Q0", () => {
+    const a = plan({ fecha_plan: "2026-09-23" });
+    const b = plan({ id: 2, fecha_plan: "2026-09-22" });
+    const borrador = editarRecursos(editarRecursos(vacio(), a, { tarifaId: 61 }), b, { tarifaId: null, tarifaComercial: 0 });
+    expect(errorAntesDeEnviar(borrador, " ")).toBe("Indica el motivo del cambio.");
+    const cuerpo = cuerpoEdicionRapida(borrador, "Ajuste histórico");
+    expect(cuerpo.cambios).toHaveLength(2);
+    expect(cuerpo.cambios[1].nuevo.tarifaComercial).toBe(0);
+    expect(cuerpo.cambios[0].esperado.fechaPlan).toBe("2026-09-23");
+    expect(validarEdicionRapidaSchema.safeParse(cuerpo).success).toBe(true);
+  });
+});
 
 describe("Edición rápida (UI) — TARIFA", () => {
   it("T1) el snapshot esperado incluye tarifa y monto comercial (números, aunque el GET los mande como texto)", () => {
