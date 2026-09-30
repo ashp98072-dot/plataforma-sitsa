@@ -55,9 +55,23 @@ type Props = {
 export function ProveedorCompraPicker({ slug, proveedores, value, nombreHistorico, inputClassName, onChange, onProveedorCreado, puedeCrear = false, puedeEditar = false }: Props) {
   const [busqueda, setBusqueda] = useState("");
   const [modalAbierto, setModalAbierto] = useState(false);
+  // HOTFIX (sección 7) — el input "Buscar proveedor" vive DENTRO de CatalogoSearchSelect; setBusqueda("") de este
+  // wrapper solo limpia SU copia (usada para el texto de "+ Crear"), no el input interno visible. Incrementar esta
+  // key fuerza a CatalogoSearchSelect a limpiarse a sí mismo (prop opt-in searchResetKey, ver ese componente).
+  const [resetKey, setResetKey] = useState(0);
   const opciones = opcionesProveedoresCompra(proveedores, value, nombreHistorico);
   const texto = busqueda.trim();
   const mostrarAccionCrear = puedeCrear && texto.length > 0 && !hayCoincidenciaExactaProveedor(proveedores, texto);
+
+  // HOTFIX (sección 6) — única autoridad de selección: onProveedorCreado (agregarProveedorYSeleccionar en el padre)
+  // ya fusiona el catálogo Y selecciona la línea de origen aplicando el método de pago habitual. NO se vuelve a
+  // llamar onChange aquí — hacerlo duplicaría la actualización de la misma línea con dos caminos distintos.
+  function proveedorListo(p: ProveedorPickerOpt) {
+    onProveedorCreado(p);
+    setBusqueda("");
+    setResetKey((k) => k + 1);
+    setModalAbierto(false);
+  }
 
   return (
     <div className="space-y-1">
@@ -70,6 +84,7 @@ export function ProveedorCompraPicker({ slug, proveedores, value, nombreHistoric
         emptyLabel="Seleccionar"
         onChange={onChange}
         onSearchChange={setBusqueda}
+        searchResetKey={resetKey}
       />
       {mostrarAccionCrear ? (
         <button type="button" className="text-xs text-[var(--accent)] underline" onClick={() => setModalAbierto(true)}>
@@ -83,7 +98,7 @@ export function ProveedorCompraPicker({ slug, proveedores, value, nombreHistoric
           proveedores={proveedores}
           puedeEditar={puedeEditar}
           onClose={() => setModalAbierto(false)}
-          onCreado={(p) => { onProveedorCreado(p); onChange(String(p.id)); setBusqueda(""); setModalAbierto(false); }}
+          onCreado={proveedorListo}
         />
       ) : null}
     </div>

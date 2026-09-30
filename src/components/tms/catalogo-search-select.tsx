@@ -54,10 +54,16 @@ type Props = {
    * "+ Crear <texto>" cuando no hay coincidencia exacta (ver ProveedorCompraPicker).
    */
   onSearchChange?: (texto: string) => void;
+  /**
+   * COMPRAS-PROVEEDOR-INLINE (hotfix) — opt-in, sin efecto en ningún consumidor existente si se omite: cuando este
+   * valor CAMBIA, limpia el texto de "Buscar <label>" interno. El wrapper (ProveedorCompraPicker) no puede limpiar
+   * ese input llamando su propio setBusqueda("") porque el estado de búsqueda vive DENTRO de este componente.
+   */
+  searchResetKey?: string | number;
 };
 
 /** Buscador auxiliar + select nativo visible. El input solo filtra; la selección siempre ocurre en el desplegable. */
-export function CatalogoSearchSelect({ label, placeholder, value, options, inputClassName, onChange, manualText, onTextChange, onOptionSelected, emptyLabel, selectDataCampo, sinResultados, onSearchChange }: Props) {
+export function CatalogoSearchSelect({ label, placeholder, value, options, inputClassName, onChange, manualText, onTextChange, onOptionSelected, emptyLabel, selectDataCampo, sinResultados, onSearchChange, searchResetKey }: Props) {
   const id = useId();
   const [busqueda, setBusqueda] = useState("");
   const [modoManual, setModoManual] = useState(false);
@@ -70,6 +76,10 @@ export function CatalogoSearchSelect({ label, placeholder, value, options, input
   // COMPRAS-PROVEEDOR-INLINE — useEffect en vez de llamarlo dentro del onChange del input: mantiene intacta la línea
   // "El input solo filtra" (onChange={(e) => setBusqueda(e.target.value)}) para los otros 8 consumidores existentes.
   useEffect(() => { onSearchChange?.(busqueda); }, [busqueda, onSearchChange]);
+  // COMPRAS-PROVEEDOR-INLINE (hotfix) — opt-in: solo se activa si el consumidor pasa searchResetKey. Sin ese prop,
+  // este efecto nunca dispara (deps [undefined], nunca cambia) — cero efecto en los demás consumidores.
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- reseteo explícito pedido por el padre, no un cálculo derivado
+  useEffect(() => { setBusqueda(""); }, [searchResetKey]);
 
   return (
     <div className="space-y-1 text-xs text-[var(--muted)]">

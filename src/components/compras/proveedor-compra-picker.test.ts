@@ -72,3 +72,31 @@ describe("regresión — opcionesProveedoresCompra sigue disponible desde requer
     expect(opcionesProveedoresCompra([p1], 1)).toEqual([{ value: "1", label: "Repuestos López", searchText: "Repuestos López 1234-56789-0101" }]);
   });
 });
+
+describe("HOTFIX (bug de producción) — proveedorListo es la ÚNICA autoridad de selección", () => {
+  const source = readFileSync("src/components/compras/proveedor-compra-picker.tsx", "utf8");
+  const fn = source.slice(source.indexOf("function proveedorListo"), source.indexOf("return ("));
+
+  it("6) onProveedorCreado se llama exactamente una vez dentro de proveedorListo", () => {
+    expect(fn.match(/onProveedorCreado\(/g)).toHaveLength(1);
+  });
+
+  it("7) NO existe una segunda llamada a onChange dentro de proveedorListo (agregarProveedorYSeleccionar del padre ya selecciona)", () => {
+    expect(fn).not.toContain("onChange(");
+  });
+
+  it("11/12/13) proveedorListo limpia la búsqueda (busqueda local Y el input interno de CatalogoSearchSelect vía resetKey) para los tres flujos: alta, usar existente y reactivar", () => {
+    expect(fn).toContain('setBusqueda("");');
+    expect(fn).toContain("setResetKey((k) => k + 1);");
+    // Los tres flujos del modal (crear/usar existente/reactivar) llaman al MISMO onCreado={proveedorListo}.
+    expect(source).toContain("onCreado={proveedorListo}");
+  });
+
+  it("searchResetKey se pasa a CatalogoSearchSelect (opt-in, sin afectar otros consumidores)", () => {
+    expect(source).toContain("searchResetKey={resetKey}");
+  });
+
+  it("modal se cierra después de cualquiera de los tres flujos", () => {
+    expect(fn).toContain("setModalAbierto(false);");
+  });
+});

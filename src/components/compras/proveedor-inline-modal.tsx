@@ -1,5 +1,5 @@
 "use client";
-import { useState, type FormEvent } from "react";
+import { useState } from "react";
 import type { ProveedorPickerOpt } from "./proveedor-compra-picker";
 
 type DuplicadoCodigo = "PROVEEDOR_DUPLICADO" | "PROVEEDOR_DUPLICADO_INACTIVO";
@@ -51,8 +51,11 @@ export function ProveedorInlineModal({ slug, nombreInicial, proveedores, puedeEd
   const [duplicado, setDuplicado] = useState<{ codigo: DuplicadoCodigo; existente: DuplicadoInfo } | null>(null);
   const input = "w-full rounded border border-[var(--border)] bg-[var(--input)] p-2";
 
-  async function guardar(e: FormEvent) {
-    e.preventDefault();
+  async function guardar() {
+    // HOTFIX (sección 3) — ya no depende del submit nativo de ningún formulario (este modal vive dentro del
+    // formulario del requerimiento); validamos explícitamente aquí lo mínimo que antes garantizaba el `required`
+    // del input nativo.
+    if (!form.nombre_comercial.trim()) { setError("El nombre comercial es obligatorio."); return; }
     setGuardando(true); setError(""); setDuplicado(null);
     try {
       const payload: Record<string, unknown> = { ...form, activo: true };
@@ -63,6 +66,9 @@ export function ProveedorInlineModal({ slug, nombreInicial, proveedores, puedeEd
         if (res.status === 409 && data.codigo && data.proveedorExistente) { setDuplicado({ codigo: data.codigo, existente: data.proveedorExistente }); return; }
         throw new Error(data.error || "No se pudo crear el proveedor.");
       }
+      // HOTFIX (sección 5) — el backend YA valida (Zod, autoridad definitiva); esto es defensa extra del lado
+      // cliente para nunca "seleccionar" algo sin id, dejando la línea en un estado inconsistente sin avisar.
+      if (!data.proveedor || !data.proveedor.id) throw new Error("El proveedor fue guardado pero no se pudo cargar en el formulario.");
       onCreado(data.proveedor);
     } catch (err) { setError(err instanceof Error ? err.message : "No se pudo crear el proveedor."); }
     finally { setGuardando(false); }
@@ -114,7 +120,12 @@ export function ProveedorInlineModal({ slug, nombreInicial, proveedores, puedeEd
             <button type="button" className="underline" onClick={() => setDuplicado(null)}>Volver a intentar con otros datos</button>
           </div>
         ) : (
-          <form className="space-y-4" onSubmit={guardar}>
+          // HOTFIX (secciones 1-2) — deliberadamente un <div>, nunca un elemento de formulario propio: este modal se
+          // monta DENTRO del formulario de RequerimientoFormClient, y un formulario anidado dentro de otro es HTML
+          // inválido (el navegador cierra el exterior al encontrar el interior) — esa era la causa real del bug
+          // reportado en producción (el modal se cerraba, el proveedor no quedaba seleccionado). Los botones son
+          // type="button": ninguno depende de un submit nativo.
+          <div className="space-y-4">
             <fieldset disabled={guardando} className="grid gap-3 sm:grid-cols-2">
               {CAMPOS_MODAL.map(([campo, etiqueta, max, requerido]) => (
                 <label key={campo} className={campo === "nombre_comercial" ? "sm:col-span-2" : ""}>{etiqueta}
@@ -134,10 +145,10 @@ export function ProveedorInlineModal({ slug, nombreInicial, proveedores, puedeEd
             <p className="text-xs text-[var(--muted)]">Podés completar los demás datos después en Proveedores comerciales.</p>
             {error ? <p role="alert" className="text-red-400">{error}</p> : null}
             <div className="flex gap-3">
-              <button className="rounded bg-[var(--accent)] px-4 py-2 text-white" disabled={guardando} type="submit">{guardando ? "Creando…" : "Crear proveedor"}</button>
+              <button type="button" className="rounded bg-[var(--accent)] px-4 py-2 text-white" disabled={guardando} onClick={() => void guardar()}>{guardando ? "Creando…" : "Crear proveedor"}</button>
               <button type="button" disabled={guardando} onClick={onClose}>Cancelar</button>
             </div>
-          </form>
+          </div>
         )}
       </div>
     </div>

@@ -99,3 +99,38 @@ describe("corrección pre-SQL (secciones 2-4) — resolverProveedorExistente NO 
     expect(src).not.toContain("resolverProveedorExistente(proveedores, data.proveedor");
   });
 });
+
+describe("HOTFIX (bug de producción) — sin <form> anidado dentro del requerimiento", () => {
+  it("1/15) ProveedorInlineModal NO renderiza ningún <form> en su código fuente (ni abierto ni cerrado)", () => {
+    expect(src).not.toMatch(/<form[\s>]/);
+    expect(src).not.toContain("</form>");
+  });
+
+  it("1/15) tampoco aparece un <form> en el HTML renderizado (formulario de alta, sin duplicado)", () => {
+    const html = renderToStaticMarkup(createElement(ProveedorInlineModal, { slug: "a", nombreInicial: "INTELAF", proveedores: [], puedeEditar: false, onClose: vi.fn(), onCreado: vi.fn() }));
+    expect(html).not.toMatch(/<form[\s>]/);
+  });
+
+  it("2) el botón 'Crear proveedor' es type=\"button\" (nunca type=\"submit\")", () => {
+    expect(src).toMatch(/onClick=\{\(\) => void guardar\(\)\}>\{guardando \? "Creando…" : "Crear proveedor"\}/);
+    expect(src).not.toContain('type="submit"');
+  });
+
+  it("3) guardar() ya no recibe FormEvent ni depende de onSubmit/preventDefault", () => {
+    expect(src).toContain("async function guardar() {");
+    expect(src).not.toContain("onSubmit={guardar}");
+    expect(src).not.toContain("e.preventDefault()");
+  });
+
+  it("4) nombre_comercial vacío se rechaza ANTES del fetch (validación explícita del lado cliente)", () => {
+    const fn = src.slice(src.indexOf("async function guardar()"), src.indexOf("async function reactivarYUsar"));
+    const antesDelFetch = fn.slice(0, fn.indexOf("fetch("));
+    expect(antesDelFetch).toContain('if (!form.nombre_comercial.trim()) { setError("El nombre comercial es obligatorio."); return; }');
+  });
+
+  it("5) éxito del POST exige data.proveedor con id antes de llamar onCreado (nunca selecciona algo inválido)", () => {
+    expect(src).toContain("if (!data.proveedor || !data.proveedor.id) throw new Error(");
+    const fn = src.slice(src.indexOf("async function guardar()"), src.indexOf("async function reactivarYUsar"));
+    expect(fn.indexOf("if (!data.proveedor")).toBeLessThan(fn.indexOf("onCreado(data.proveedor)"));
+  });
+});

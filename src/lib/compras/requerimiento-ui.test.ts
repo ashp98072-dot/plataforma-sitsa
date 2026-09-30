@@ -261,3 +261,29 @@ describe("COMPRAS-PROVEEDOR-INLINE — RequerimientoFormClient con puedeCrearPro
     expect(renderToStaticMarkup(createElement(RequerimientoFormClient, { ...base, puedeCrearProveedores: true }))).not.toContain("Crear proveedor");
   });
 });
+
+describe("HOTFIX (bug de producción) — nunca puede haber un <form> anidado dentro del requerimiento", () => {
+  it("15/16) RequerimientoFormClient tiene EXACTAMENTE un <form>, y ninguno de los componentes que se renderizan DENTRO de él agrega otro", () => {
+    const principal = leer("src/components/compras/requerimiento-form-client.tsx");
+    expect((principal.match(/<form[\s>]/g) ?? [])).toHaveLength(1);
+    // RequerimientoDecisionClient SÍ tiene su propio <form>, pero se renderiza ANTES de que abra <form
+    // onSubmit={guardar}> (línea 100 vs 101 — hermano, no descendiente) — no se incluye aquí a propósito.
+    expect(principal.indexOf("<RequerimientoDecisionClient")).toBeLessThan(principal.indexOf("<form onSubmit={guardar}"));
+    // Estructuralmente garantiza "sin form anidado" sin depender de simular la apertura del modal (no hay
+    // jsdom/Testing Library en este repo): si NINGÚN descendiente DENTRO del form declara uno, no puede haber uno anidado.
+    for (const componente of [
+      "src/components/compras/proveedor-compra-picker.tsx",
+      "src/components/compras/proveedor-inline-modal.tsx",
+      "src/components/compras/linea-documentos-client.tsx",
+      "src/components/compras/documentos-pendientes-client.tsx",
+      "src/components/compras/factura-estado-linea.tsx",
+    ]) {
+      expect(leer(componente)).not.toMatch(/<form[\s>]/);
+    }
+  });
+
+  it("el render estático (modal cerrado por defecto) tampoco produce ningún <form> además del principal", () => {
+    const html = renderToStaticMarkup(createElement(RequerimientoFormClient, { slug: "a", detalle, editable: true, solicitante: "Actual", puedeEliminar: false, puedeVerProveedores: false, puedeCrearProveedores: true, puedeSubirDocumentos: false, puedeAutorizar: false, fechaHoy: "2026-09-17" }));
+    expect((html.match(/<form[\s>]/g) ?? [])).toHaveLength(1);
+  });
+});
