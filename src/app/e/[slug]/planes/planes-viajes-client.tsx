@@ -64,6 +64,14 @@ export function esExpedienteHistorico(estado: string): boolean {
 export type ModoPlanesViajes = "operativo" | "reporte";
 
 /**
+ * PLANES-SEPARAR-CERRADOS — modo operativo separa los viajes en dos pestañas en vez de mezclarlos en una sola
+ * tabla: "Pendientes / Activos" (estado <> 'Cerrado', reutiliza `soloSinCerrar` ya existente en el backend) y
+ * "Viajes cerrados" (estado = 'Cerrado', reutiliza `soloCerrados`). Es SOLO un filtro — nunca una tabla nueva,
+ * nunca mueve datos. Modo reporte NO usa esto (conserva sus 3 checkboxes de filtro de siempre).
+ */
+export type VistaPlanes = "ACTIVOS" | "CERRADOS";
+
+/**
  * Qué acciones expone cada fila de la tabla según el modo. Función pura
  * (mismo criterio que el resto del repo: la lógica se prueba sin
  * renderizar el componente). En modo "reporte" nunca aparece una acción
@@ -447,8 +455,12 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
   const [fEstadoFacturacion, setFEstadoFacturacion] = useState("");
   const [fEstadoCobro, setFEstadoCobro] = useState("");
   const [soloPendientes, setSoloPendientes] = useState(false);
+  // PLANES-SEPARAR-CERRADOS — en modo operativo la pestaña por defecto es "Pendientes / Activos"
+  // (soloSinCerrar=true desde el inicio); en modo reporte se conservan los filtros de siempre (nada activo,
+  // "Todos" por defecto, como antes de este ticket).
   const [soloCerrados, setSoloCerrados] = useState(false);
-  const [soloSinCerrar, setSoloSinCerrar] = useState(false);
+  const [soloSinCerrar, setSoloSinCerrar] = useState(modo === "operativo");
+  const [vista, setVista] = useState<VistaPlanes>("ACTIVOS");
 
   const [clientesCat, setClientesCat] = useState<ClienteCat[]>([]);
   const [unidadesCat, setUnidadesCat] = useState<UnidadCat[]>([]);
@@ -562,12 +574,51 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
     setBuscarTick((t) => t + 1); // nuevo filtro: siempre vuelve a la primera página
   }
 
+  /**
+   * PLANES-SEPARAR-CERRADOS — filtros de estado que corresponden a cada pestaña (solo modo operativo; reutiliza
+   * `soloCerrados`/`soloSinCerrar`, ya existentes en el backend — nunca un filtro nuevo). CERRADOS fuerza
+   * `soloPendientes=false` (no tiene sentido combinarlo con "solo cerrados") y fija el select Estado en
+   * "Cerrado" (disabled, ver JSX); ACTIVOS nunca ofrece "Cerrado" como opción y limpia el Estado si venía de la
+   * pestaña de cerrados (evitaría la combinación imposible `estado='Cerrado' AND estado<>'Cerrado'`).
+   */
+  function aplicarFiltrosDeVista(v: VistaPlanes) {
+    if (v === "CERRADOS") {
+      setSoloCerrados(true);
+      setSoloSinCerrar(false);
+      setSoloPendientes(false);
+      setFEstado("Cerrado");
+    } else {
+      setSoloSinCerrar(true);
+      setSoloCerrados(false);
+      setFEstado((prev) => (prev === "Cerrado" ? "" : prev));
+    }
+  }
+
+  /** Cambiar de pestaña: aplica sus filtros, sale de cualquier deep-link, limpia selección de cierre masivo, vuelve a la página 1. */
+  function irAVista(nuevaVista: VistaPlanes) {
+    setVista(nuevaVista);
+    aplicarFiltrosDeVista(nuevaVista);
+    setPlanFocoId(null);
+    setBannerCierre(false);
+    setSeleccion(new Set());
+    setBuscarTick((t) => t + 1);
+  }
+
   function limpiarFiltros() {
     setFDesde(primerDiaMes);
     setFHasta(hoy);
-    setFCliente(""); setFPiloto(""); setFUnidad(""); setFEstado(""); setFRuta("");
+    setFCliente(""); setFPiloto(""); setFUnidad(""); setFRuta("");
     setFEstadoFacturacion(""); setFEstadoCobro("");
-    setSoloPendientes(false); setSoloCerrados(false); setSoloSinCerrar(false);
+    setSoloPendientes(false);
+    if (modo === "operativo") {
+      // Nunca deja soloSinCerrar/soloCerrados en false/false: eso mezclaría de nuevo activos y cerrados en la
+      // misma pestaña — "Limpiar filtros" reaplica los de la pestaña ACTUAL, no los apaga.
+      aplicarFiltrosDeVista(vista);
+    } else {
+      setFEstado("");
+      setSoloCerrados(false);
+      setSoloSinCerrar(false);
+    }
     setPlanFocoId(null);
     setBannerCierre(false);
     setBuscarTick((t) => t + 1);
@@ -731,7 +782,11 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
     }
   }
 
-  const mostrarSel = !esReporte && puedeCerrarViaje;
+  // PLANES-SEPARAR-CERRADOS — en la pestaña "Viajes cerrados" NUNCA se muestran selección/cierre masivo/cierre
+  // por período (ya están cerrados) — plegar `vista === "ACTIVOS"` aquí basta para ocultar TODO lo derivado:
+  // columna de checkbox, botones "Seleccionar elegibles"/"Cerrar seleccionados"/"Cierre manual masivo" y las
+  // acciones de período (puedeAccionPeriodo, más abajo).
+  const mostrarSel = !esReporte && puedeCerrarViaje && vista === "ACTIVOS";
 
   // Agrupación visual por Día/Semana/Mes SOLO en modo operativo (el reporte conserva la tabla plana).
   const grupos = useMemo(() => (esReporte ? [] : agruparPlanes(planes, modoAgrupacion)), [esReporte, planes, modoAgrupacion]);
@@ -979,9 +1034,23 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
             </select>
           </label>
           <label className="text-xs text-[var(--muted)]">Estado
-            <select className={`${inputCls} mt-0.5 block`} value={fEstado} onChange={(e) => setFEstado(e.target.value)}>
-              <option value="">Todos</option>
-              {ESTADOS.map((e) => <option key={e} value={e}>{e}</option>)}
+            {/* PLANES-SEPARAR-CERRADOS — en ACTIVOS (operativo) "Cerrado" no se ofrece (combinación imposible
+                con soloSinCerrar); en CERRADOS queda fijo en "Cerrado" y deshabilitado (la pestaña ya lo fija).
+                Modo reporte: sin cambios, todas las opciones de siempre. */}
+            <select
+              className={`${inputCls} mt-0.5 block`}
+              value={fEstado}
+              onChange={(e) => setFEstado(e.target.value)}
+              disabled={!esReporte && vista === "CERRADOS"}
+            >
+              {!esReporte && vista === "CERRADOS" ? (
+                <option value="Cerrado">Cerrado</option>
+              ) : (
+                <>
+                  <option value="">Todos</option>
+                  {(esReporte ? ESTADOS : ESTADOS.filter((e) => e !== "Cerrado")).map((e) => <option key={e} value={e}>{e}</option>)}
+                </>
+              )}
             </select>
           </label>
           {/* PROGRAMACION-REPORTES-FILTROS-1 — texto libre: código de ruta o destino (ej. "Xela"). */}
@@ -1011,18 +1080,38 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
           <button type="button" className="rounded border border-[var(--border)] px-3 py-1.5 text-xs text-[var(--text)]" disabled={loading} onClick={() => void cargar(page)}>{loading ? "Actualizando…" : "Actualizar"}</button>
         </div>
         <div className="mt-2 flex flex-wrap gap-3 text-xs">
-          <label className="flex items-center gap-1 text-[var(--text)]">
-            <input type="checkbox" checked={soloPendientes} onChange={(e) => { setSoloPendientes(e.target.checked); if (e.target.checked) { setSoloCerrados(false); setSoloSinCerrar(false); } }} />
-            Solo pendientes de cierre
-          </label>
-          <label className="flex items-center gap-1 text-[var(--text)]">
-            <input type="checkbox" checked={soloCerrados} onChange={(e) => { setSoloCerrados(e.target.checked); if (e.target.checked) setSoloSinCerrar(false); }} />
-            Solo cerrados
-          </label>
-          <label className="flex items-center gap-1 text-[var(--text)]">
-            <input type="checkbox" checked={soloSinCerrar} onChange={(e) => { setSoloSinCerrar(e.target.checked); if (e.target.checked) setSoloCerrados(false); }} />
-            Solo sin cerrar
-          </label>
+          {/* PLANES-SEPARAR-CERRADOS — "Solo pendientes de cierre" vive en AMBOS modos, pero en operativo solo
+              tiene sentido dentro de la pestaña ACTIVOS (en CERRADOS no aplica: todo ya está Cerrado). */}
+          {esReporte || vista === "ACTIVOS" ? (
+            <label className="flex items-center gap-1 text-[var(--text)]">
+              <input
+                type="checkbox"
+                checked={soloPendientes}
+                onChange={(e) => {
+                  setSoloPendientes(e.target.checked);
+                  // Modo reporte: se conserva la exclusión mutua de siempre entre los 3 checkboxes. Modo
+                  // operativo: soloSinCerrar ya lo controla la pestaña, nunca lo toca este checkbox.
+                  if (esReporte && e.target.checked) { setSoloCerrados(false); setSoloSinCerrar(false); }
+                }}
+              />
+              Solo pendientes de cierre
+            </label>
+          ) : null}
+          {/* PLANES-SEPARAR-CERRADOS — "Solo cerrados"/"Solo sin cerrar" se QUITAN de la interfaz en modo
+              operativo (esa función ahora la cumplen las pestañas) pero se CONSERVAN en modo reporte, sin
+              cambios, para el análisis flexible que Reportes necesita. */}
+          {esReporte ? (
+            <>
+              <label className="flex items-center gap-1 text-[var(--text)]">
+                <input type="checkbox" checked={soloCerrados} onChange={(e) => { setSoloCerrados(e.target.checked); if (e.target.checked) setSoloSinCerrar(false); }} />
+                Solo cerrados
+              </label>
+              <label className="flex items-center gap-1 text-[var(--text)]">
+                <input type="checkbox" checked={soloSinCerrar} onChange={(e) => { setSoloSinCerrar(e.target.checked); if (e.target.checked) setSoloCerrados(false); }} />
+                Solo sin cerrar
+              </label>
+            </>
+          ) : null}
         </div>
         {/* OPERACIONES-UX-PLANES-REPORTES-1 — exportación solo en la vista
             de Reportes (Reportes = análisis + exportaciones). */}
@@ -1033,6 +1122,32 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
           </div>
         ) : null}
       </section>
+
+      {/* PLANES-SEPARAR-CERRADOS — pestañas principales, SOLO modo operativo (Reportes conserva su vista de
+          siempre). Es exclusivamente un filtro de estado (soloSinCerrar/soloCerrados, ya existentes en el
+          backend) — nunca una tabla nueva ni datos movidos. Default: "Pendientes / Activos". */}
+      {!esReporte ? (
+        <div className="inline-flex overflow-hidden rounded-lg border border-[var(--border)] text-sm" role="tablist" aria-label="Vista de viajes">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={vista === "ACTIVOS"}
+            className={`px-4 py-2 font-medium transition ${vista === "ACTIVOS" ? "bg-[var(--accent)] text-white" : "text-[var(--text)] hover:bg-[var(--input)]"}`}
+            onClick={() => irAVista("ACTIVOS")}
+          >
+            Pendientes / Activos
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={vista === "CERRADOS"}
+            className={`border-l border-[var(--border)] px-4 py-2 font-medium transition ${vista === "CERRADOS" ? "bg-[var(--accent)] text-white" : "text-[var(--text)] hover:bg-[var(--input)]"}`}
+            onClick={() => irAVista("CERRADOS")}
+          >
+            Viajes cerrados
+          </button>
+        </div>
+      ) : null}
 
       {/* KPI — OPERACIONES-UX-PLANES-REPORTES-1: los indicadores y el bloque
           de facturación viven en la vista de Reportes, no en la gestión
@@ -1139,10 +1254,21 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                           {it.abierto ? "▼" : "▶"} {g.etiqueta}
                         </button>
                         {modoAgrupacion === "DIA" && g.clave === hoy ? <span className="rounded-full bg-sky-600 px-2 py-0.5 text-[10px] font-medium text-white">Hoy</span> : null}
-                        <span className="text-xs text-[var(--text)]">{g.total} viaje(s){parcial ? " en esta página" : ""}</span>
-                        <span className="text-xs text-amber-500">{g.cerrables} pendientes de cierre</span>
-                        <span className="text-xs text-emerald-500">{g.cerrados} cerrados</span>
-                        <span className="text-xs text-[var(--muted)]">{g.otros} otros</span>
+                        {/* PLANES-SEPARAR-CERRADOS — en la pestaña CERRADOS el grupo es 100% cerrados por
+                            filtro: un contador único y limpio en vez de repetir "0 pendientes de cierre · 0
+                            otros" sin sentido. En ACTIVOS se mantienen los contadores de siempre (ocultando
+                            "0 cerrados", que el filtro de la pestaña ya garantiza en 0). No se tocó el helper
+                            de conteos (agruparPlanes) — mismo GrupoPlanes de siempre, solo cambia qué se pinta. */}
+                        {!esReporte && vista === "CERRADOS" ? (
+                          <span className="text-xs text-emerald-500">{g.total} viaje(s) · {g.cerrados} cerrados</span>
+                        ) : (
+                          <>
+                            <span className="text-xs text-[var(--text)]">{g.total} viaje(s){parcial ? " en esta página" : ""}</span>
+                            <span className="text-xs text-amber-500">{g.cerrables} pendientes de cierre</span>
+                            {g.cerrados > 0 ? <span className="text-xs text-emerald-500">{g.cerrados} cerrados</span> : null}
+                            <span className="text-xs text-[var(--muted)]">{g.otros} otros</span>
+                          </>
+                        )}
                         {nota ? <span className="text-xs italic text-[var(--muted)]">{nota}</span> : null}
                       </div>
                       {mostrarSel && it.abierto ? (
