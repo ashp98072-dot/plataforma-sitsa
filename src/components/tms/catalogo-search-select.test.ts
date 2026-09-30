@@ -75,3 +75,22 @@ describe("COMPRAS-PROVEEDOR-INLINE — onSearchChange es opt-in, sin afectar a l
     expect(source).toContain("onSearchChange?: (texto: string) => void;");
   });
 });
+
+describe("HOTFIX (bug de producción, sección 7) — searchResetKey es opt-in, sin afectar a los otros consumidores", () => {
+  it("14) renderiza igual (mismo HTML) con o sin searchResetKey, para cualquier consumidor que no lo pase", () => {
+    const props = { label: "Proveedor", placeholder: "Buscar...", value: "", options: opciones, inputClassName: "x", onChange: vi.fn() };
+    const sinProp = renderToStaticMarkup(createElement(CatalogoSearchSelect, props));
+    const conProp = renderToStaticMarkup(createElement(CatalogoSearchSelect, { ...props, searchResetKey: 0 }));
+    expect(sinProp).toBe(conProp);
+  });
+
+  it("14) el prop es opcional en el tipo — no obliga a los otros 8 consumidores a pasarlo", () => {
+    const source = readFileSync("src/components/tms/catalogo-search-select.tsx", "utf8");
+    expect(source).toContain("searchResetKey?: string | number;");
+  });
+
+  it("limpia la búsqueda mediante un useEffect propio ([searchResetKey]) — nunca escribe el estado del padre", () => {
+    const source = readFileSync("src/components/tms/catalogo-search-select.tsx", "utf8");
+    expect(source).toMatch(/useEffect\(\(\) => \{ setBusqueda\(""\); \}, \[searchResetKey\]\);/);
+  });
+});
