@@ -218,6 +218,17 @@ type EvidenciaTms = {
 
 type AudRow = { id: number; usuario: string | null; accion: string; detalle: string | null; creadoEn: string };
 
+/**
+ * PLANES-CIERRE-PERIODO — filtros ya tipados (clienteId/pilotoId/unidadId como number, nunca strings crudos
+ * del <select>) que respetan las acciones del período — mismo subconjunto que FiltrosCierrePeriodo en
+ * cierre-masivo.ts. Usado para el body JSON del POST y (convertido a string) para el query string del GET.
+ */
+type FiltrosPeriodoValores = {
+  clienteId?: number; pilotoId?: number; unidadId?: number; estado?: string; ruta?: string;
+  estadoFacturacion?: string; estadoCobro?: string;
+  soloPendientesCierre?: boolean; soloCerrados?: boolean; soloSinCerrar?: boolean;
+};
+
 /** PLANES-CIERRE-PERIODO — respuesta de GET .../planes/candidatos-cierre (vista previa antes de confirmar). */
 type CandidatosCierrePeriodo = {
   periodo: { agrupacion: AgrupacionPlanes; valor: string; etiqueta: string; desde: string; hasta: string };
@@ -790,25 +801,28 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
   }
 
   /**
-   * PLANES-CIERRE-PERIODO — filtros ACTIVOS a respetar por las acciones del período (sección 9 del ticket):
-   * cliente/piloto/unidad/estado/ruta/facturación/cobro. Deliberadamente NO incluye fDesde/fHasta (el período
-   * Día/Semana/Mes FIJA el rango de fechaPlan) ni soloPendientes/soloCerrados/soloSinCerrar (filtros de VISTA
-   * de la tabla — la elegibilidad real ya la calcula el backend fila por fila con las mismas reglas puras,
-   * más precisas que esos filtros aproximados; aplicarlos aquí sería redundante y, en el caso de
-   * soloPendientesCierre, el propio backend del listado IGNORA el rango de fechas cuando ese filtro está
-   * activo — lo que violaría el requisito de que el período siempre acota fechaPlan).
+   * PLANES-CIERRE-PERIODO (corrección pre-merge PR #386) — filtros ACTIVOS a respetar por las acciones del
+   * período (sección 9 del ticket): cliente/piloto/unidad/estado/ruta/facturación/cobro Y TAMBIÉN
+   * soloPendientes/soloCerrados/soloSinCerrar — la acción del período debe representar la INTERSECCIÓN de eso
+   * con el rango Día/Semana/Mes (nunca todo el período ignorando el filtro activo). Deliberadamente NO incluye
+   * fDesde/fHasta: el período SIEMPRE fija el rango de fechaPlan, nunca las fechas generales de la pantalla.
+   * Valores YA TIPADOS (clienteId/pilotoId/unidadId como number) — nunca strings crudos del <select>, para que
+   * encajen directo en el cuerpo JSON de cerrar-masivo-periodo (el esquema Zod del backend exige number).
    */
-  const filtrosPeriodoQuery = useCallback((): Record<string, string> => {
-    const f: Record<string, string> = {};
-    if (fCliente) f.clienteId = fCliente;
-    if (fPiloto) f.pilotoId = fPiloto;
-    if (fUnidad) f.unidadId = fUnidad;
+  const filtrosPeriodoValores = useCallback((): FiltrosPeriodoValores => {
+    const f: FiltrosPeriodoValores = {};
+    if (fCliente) f.clienteId = Number(fCliente);
+    if (fPiloto) f.pilotoId = Number(fPiloto);
+    if (fUnidad) f.unidadId = Number(fUnidad);
     if (fEstado) f.estado = fEstado;
     if (fRuta.trim()) f.ruta = fRuta.trim();
     if (fEstadoFacturacion) f.estadoFacturacion = fEstadoFacturacion;
     if (fEstadoCobro) f.estadoCobro = fEstadoCobro;
+    if (soloPendientes) f.soloPendientesCierre = true;
+    if (soloCerrados) f.soloCerrados = true;
+    if (soloSinCerrar) f.soloSinCerrar = true;
     return f;
-  }, [fCliente, fPiloto, fUnidad, fEstado, fRuta, fEstadoFacturacion, fEstadoCobro]);
+  }, [fCliente, fPiloto, fUnidad, fEstado, fRuta, fEstadoFacturacion, fEstadoCobro, soloPendientes, soloCerrados, soloSinCerrar]);
 
   /** Abre el modal de cierre DEL PERÍODO y consulta la vista previa (candidatos-cierre) — informativa, nunca ejecuta nada todavía. */
   async function abrirCierrePeriodo(tipo: "NORMAL" | "MANUAL", clave: string) {
@@ -820,7 +834,18 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
     setErrorCandidatos("");
     setCargandoCandidatos(true);
     try {
-      const qs = new URLSearchParams({ agrupacion: modoAgrupacion, valor: clave, ...filtrosPeriodoQuery() });
+      const fv = filtrosPeriodoValores();
+      const qs = new URLSearchParams({ agrupacion: modoAgrupacion, valor: clave });
+      if (fv.clienteId != null) qs.set("clienteId", String(fv.clienteId));
+      if (fv.pilotoId != null) qs.set("pilotoId", String(fv.pilotoId));
+      if (fv.unidadId != null) qs.set("unidadId", String(fv.unidadId));
+      if (fv.estado) qs.set("estado", fv.estado);
+      if (fv.ruta) qs.set("ruta", fv.ruta);
+      if (fv.estadoFacturacion) qs.set("estadoFacturacion", fv.estadoFacturacion);
+      if (fv.estadoCobro) qs.set("estadoCobro", fv.estadoCobro);
+      if (fv.soloPendientesCierre) qs.set("soloPendientesCierre", "1");
+      if (fv.soloCerrados) qs.set("soloCerrados", "1");
+      if (fv.soloSinCerrar) qs.set("soloSinCerrar", "1");
       const res = await fetch(`/api/empresas/${slug}/tms/planes/candidatos-cierre?${qs.toString()}`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setErrorCandidatos(data.error ?? "No se pudo consultar el período."); return; }
@@ -848,7 +873,7 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
     setEnviandoPeriodo(true);
     setErrorPeriodo("");
     try {
-      const filtros = filtrosPeriodoQuery();
+      const filtros = filtrosPeriodoValores();
       const res = await fetch(`/api/empresas/${slug}/tms/planes/cerrar-masivo-periodo`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

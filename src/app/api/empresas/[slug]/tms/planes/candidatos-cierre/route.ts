@@ -44,9 +44,10 @@ export async function GET(req: Request, ctx: Ctx) {
   const estadoFacturacion = sp.get("estadoFacturacion");
   const estadoCobro = sp.get("estadoCobro");
 
-  // PLANES-CIERRE-PERIODO — deliberadamente SIN soloPendientesCierre/soloCerrados/soloSinCerrar (filtros de
-  // VISTA de la tabla, no de resolución de candidatos — ver JSDoc de obtenerCandidatosCierre) y SIN fechaDesde/
-  // fechaHasta del cliente (el período SIEMPRE los fija, nunca un filtro adicional del listado).
+  // PLANES-CIERRE-PERIODO (corrección pre-merge PR #386) — soloPendientesCierre/soloCerrados/soloSinCerrar SÍ
+  // se aceptan (booleano real: === "1", nunca un string arbitrario) y se reenvían — la acción de período debe
+  // representar la INTERSECCIÓN del filtro de vista activo con el rango del período, nunca ignorarlo.
+  // fechaDesde/fechaHasta del cliente NUNCA se aceptan aquí: el período SIEMPRE los fija.
   const candidatos = await obtenerCandidatosCierre(guard.empresa.id, {
     fechaDesde: periodo.desde,
     fechaHasta: periodo.hasta,
@@ -59,6 +60,9 @@ export async function GET(req: Request, ctx: Ctx) {
       ? (estadoFacturacion as FiltrosReporteViajes["estadoFacturacion"]) : undefined,
     estadoCobro: estadoCobro && (ESTADOS_COBRO as string[]).includes(estadoCobro)
       ? (estadoCobro as EstadoFinancieroFactura) : undefined,
+    soloPendientesCierre: sp.get("soloPendientesCierre") === "1",
+    soloCerrados: sp.get("soloCerrados") === "1",
+    soloSinCerrar: sp.get("soloSinCerrar") === "1",
   });
 
   const normalIds = candidatos.filter((c) => puedeCerrarNormalmente(c.estado, c.llegadaRegistrada)).map((c) => c.id);

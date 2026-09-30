@@ -51,20 +51,22 @@ describe("GET /tms/planes/candidatos-cierre — validación de período (20)", (
   });
 });
 
+const SIN_VISTA = { soloPendientesCierre: false, soloCerrados: false, soloSinCerrar: false };
+
 describe("GET /tms/planes/candidatos-cierre — resolución (16/17/18)", () => {
   it("DIA: fechaDesde = fechaHasta = la fecha exacta", async () => {
     await get("agrupacion=DIA&valor=2026-09-30");
-    expect(obtenerCandidatosCierre).toHaveBeenCalledWith(7, { fechaDesde: "2026-09-30", fechaHasta: "2026-09-30" });
+    expect(obtenerCandidatosCierre).toHaveBeenCalledWith(7, { fechaDesde: "2026-09-30", fechaHasta: "2026-09-30", ...SIN_VISTA });
   });
 
   it("SEMANA: fechaDesde/fechaHasta = lunes/domingo de esa semana ISO", async () => {
     await get("agrupacion=SEMANA&valor=2026-W40");
-    expect(obtenerCandidatosCierre).toHaveBeenCalledWith(7, { fechaDesde: "2026-09-28", fechaHasta: "2026-10-04" });
+    expect(obtenerCandidatosCierre).toHaveBeenCalledWith(7, { fechaDesde: "2026-09-28", fechaHasta: "2026-10-04", ...SIN_VISTA });
   });
 
   it("MES: fechaDesde/fechaHasta = primer/último día del mes", async () => {
     await get("agrupacion=MES&valor=2026-09");
-    expect(obtenerCandidatosCierre).toHaveBeenCalledWith(7, { fechaDesde: "2026-09-01", fechaHasta: "2026-09-30" });
+    expect(obtenerCandidatosCierre).toHaveBeenCalledWith(7, { fechaDesde: "2026-09-01", fechaHasta: "2026-09-30", ...SIN_VISTA });
   });
 
   it("19) reenvía los filtros activos (cliente/piloto/unidad/estado/ruta/facturación/cobro)", async () => {
@@ -73,12 +75,49 @@ describe("GET /tms/planes/candidatos-cierre — resolución (16/17/18)", () => {
       fechaDesde: "2026-09-01", fechaHasta: "2026-09-30",
       clienteId: 5, pilotoId: 9, unidadId: 3, estado: "Descargado", ruta: "Xela",
       estadoFacturacion: "Facturado", estadoCobro: "Cobrado",
+      ...SIN_VISTA,
     });
   });
 
   it("filtros ausentes/no reconocidos se omiten (undefined), nunca se envían strings vacíos o valores inválidos", async () => {
     await get("agrupacion=MES&valor=2026-09&estadoFacturacion=NoExiste&clienteId=abc");
-    expect(obtenerCandidatosCierre).toHaveBeenCalledWith(7, { fechaDesde: "2026-09-01", fechaHasta: "2026-09-30" });
+    expect(obtenerCandidatosCierre).toHaveBeenCalledWith(7, { fechaDesde: "2026-09-01", fechaHasta: "2026-09-30", ...SIN_VISTA });
+  });
+});
+
+/**
+ * Corrección pre-merge PR #386 (bloqueo 1, ítems 4/8) — soloPendientesCierre/soloCerrados/soloSinCerrar se
+ * aceptan como booleano REAL (`=== "1"`, nunca un string arbitrario confiado directamente) y se reenvían,
+ * manteniendo SIEMPRE fechaDesde/fechaHasta = periodo.desde/hasta (el período nunca se ignora, ver caso A).
+ */
+describe("GET /tms/planes/candidatos-cierre — filtros de vista (bloqueo 1)", () => {
+  it("4) soloPendientesCierre=1 se traduce a boolean true y se reenvía", async () => {
+    await get("agrupacion=MES&valor=2026-09&soloPendientesCierre=1");
+    expect(obtenerCandidatosCierre).toHaveBeenCalledWith(7, {
+      fechaDesde: "2026-09-01", fechaHasta: "2026-09-30",
+      soloPendientesCierre: true, soloCerrados: false, soloSinCerrar: false,
+    });
+  });
+
+  it("soloCerrados=1 se traduce a boolean true y se reenvía", async () => {
+    await get("agrupacion=MES&valor=2026-09&soloCerrados=1");
+    expect(obtenerCandidatosCierre).toHaveBeenCalledWith(7, {
+      fechaDesde: "2026-09-01", fechaHasta: "2026-09-30",
+      soloPendientesCierre: false, soloCerrados: true, soloSinCerrar: false,
+    });
+  });
+
+  it("soloSinCerrar=1 se traduce a boolean true y se reenvía", async () => {
+    await get("agrupacion=MES&valor=2026-09&soloSinCerrar=1");
+    expect(obtenerCandidatosCierre).toHaveBeenCalledWith(7, {
+      fechaDesde: "2026-09-01", fechaHasta: "2026-09-30",
+      soloPendientesCierre: false, soloCerrados: false, soloSinCerrar: true,
+    });
+  });
+
+  it("valores distintos de '1' (string arbitrario) NUNCA se interpretan como true", async () => {
+    await get("agrupacion=MES&valor=2026-09&soloPendientesCierre=true&soloCerrados=yes&soloSinCerrar=0");
+    expect(obtenerCandidatosCierre).toHaveBeenCalledWith(7, { fechaDesde: "2026-09-01", fechaHasta: "2026-09-30", ...SIN_VISTA });
   });
 });
 

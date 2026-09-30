@@ -407,10 +407,20 @@ const JOIN_FACTURACION = `
  * condiciones/params — usado por obtenerReporteViajes, contarReporteViajes
  * y obtenerKpisReporte, para que listado, conteo, KPI y exportador
  * apliquen SIEMPRE el mismo criterio (nunca dos WHERE que puedan divergir).
+ *
+ * PLANES-CIERRE-PERIODO (corrección pre-merge PR #386) — `opciones.forzarRangoConSoloPendientes` es un
+ * parámetro OPT-IN (default `false`, preserva EXACTAMENTE el comportamiento actual para todos los callers
+ * existentes: listado, KPI, conteo, exportador). Cuando es `true` (usado únicamente por
+ * obtenerCandidatosCierre, ver más abajo), `soloPendientesCierre` deja de ignorar el rango de fechas — se
+ * combinan AMBOS: `SQL_PENDIENTE_CIERRE` Y `fechaDesde`/`fechaHasta`. Necesario porque una acción de cierre
+ * "de período" (Día/Semana/Mes) exige que el rango de fechas sea SIEMPRE un límite duro, incluso cuando el
+ * usuario también tiene activo "Solo pendientes de cierre" en la pantalla — nunca cerrar septiembre completo
+ * ignorando el mes por culpa de ese filtro.
  */
 function construirCondiciones(
   empresaId: number,
   filtros: FiltrosReporteViajes,
+  opciones?: { forzarRangoConSoloPendientes?: boolean },
 ): { condiciones: string[]; params: (string | number)[] } {
   const condiciones = ["p.empresa_id = ?"];
   const params: (string | number)[] = [empresaId];
@@ -422,8 +432,19 @@ function construirCondiciones(
   // "Solo pendientes de cierre" ignora el rango de fechas a propósito —
   // mismo criterio ya establecido en tms/planes?pendienteCierre=1 (OPS-2.1):
   // un pendiente antiguo nunca debe desaparecer por quedar fuera de rango.
+  // (opciones.forzarRangoConSoloPendientes=true rompe deliberadamente esa excepción — ver JSDoc arriba.)
   if (filtros.soloPendientesCierre) {
     condiciones.push(SQL_PENDIENTE_CIERRE);
+    if (opciones?.forzarRangoConSoloPendientes) {
+      if (filtros.fechaDesde) {
+        condiciones.push("p.fecha_plan >= ?");
+        params.push(filtros.fechaDesde);
+      }
+      if (filtros.fechaHasta) {
+        condiciones.push("p.fecha_plan <= ?");
+        params.push(filtros.fechaHasta);
+      }
+    }
   } else {
     if (filtros.fechaDesde) {
       condiciones.push("p.fecha_plan >= ?");
@@ -822,11 +843,13 @@ function mapearFacturacionFila(
  * puras que ya usa el resto del sistema (puedeCerrarNormalmente/puedeCerrarManualmente, cierre-viaje-shared.ts)
  * — esta función solo trae los datos mínimos que esas reglas necesitan (estado + si hay llegada real).
  *
- * Deliberadamente NO acepta `soloPendientesCierre`/`soloCerrados`/`soloSinCerrar`: esos son filtros de VISTA de
- * la tabla (qué se muestra en pantalla), no filtros de resolución de candidatos — la elegibilidad real ya la
- * calcula el caller fila por fila con las reglas puras (más precisas que el filtro aproximado "pendiente"), y
- * `soloPendientesCierre` en particular hace que construirCondiciones IGNORE el rango de fechas — lo que
- * violaría el requisito de que el período SIEMPRE acota fecha_plan.
+ * SÍ acepta `soloPendientesCierre`/`soloCerrados`/`soloSinCerrar` (corrección pre-merge PR #386): la acción de
+ * cierre por período debe representar la INTERSECCIÓN de "lo que el usuario está viendo" (esos 3 filtros de
+ * vista de la tabla) con el rango del período — nunca todo el período ignorando el filtro activo. Se llama
+ * SIEMPRE con `{ forzarRangoConSoloPendientes: true }` para que `soloPendientesCierre` deje de ignorar
+ * `fechaDesde`/`fechaHasta` (comportamiento por defecto de construirCondiciones, sin cambios para el resto de
+ * callers) — así "Solo pendientes de cierre" + "Septiembre 2026" da pendientes DENTRO de septiembre, nunca
+ * todos los pendientes históricos.
  */
 export type CandidatoCierre = { id: number; codigo: string; estado: string; llegadaRegistrada: boolean };
 
@@ -834,7 +857,7 @@ export async function obtenerCandidatosCierre(
   empresaId: number,
   filtros: FiltrosReporteViajes,
 ): Promise<CandidatoCierre[]> {
-  const { condiciones, params } = construirCondiciones(empresaId, filtros);
+  const { condiciones, params } = construirCondiciones(empresaId, filtros, { forzarRangoConSoloPendientes: true });
   const rows = await query<RowDataPacket[]>(
     `SELECT p.id, p.codigo, p.estado,
             EXISTS (

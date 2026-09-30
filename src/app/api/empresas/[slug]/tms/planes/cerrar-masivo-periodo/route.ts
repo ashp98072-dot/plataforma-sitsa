@@ -15,6 +15,11 @@ const filtros = z.object({
   ruta: z.string().optional(),
   estadoFacturacion: z.enum(["No aplica", "Pendiente de facturación", "En borrador de factura", "Facturado"]).optional(),
   estadoCobro: z.enum(["Sin pagos", "Pago parcial", "Cobrado"]).optional(),
+  // PLANES-CIERRE-PERIODO (corrección pre-merge PR #386) — la acción de período debe respetar TAMBIÉN estos 3
+  // filtros de vista de la tabla (intersección con el rango del período, nunca ignorarlos).
+  soloPendientesCierre: z.boolean().optional(),
+  soloCerrados: z.boolean().optional(),
+  soloSinCerrar: z.boolean().optional(),
 }).strict().optional();
 
 /**

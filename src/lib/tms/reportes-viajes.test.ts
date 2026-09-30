@@ -183,6 +183,14 @@ describe("obtenerReporteViajes — construcción de filtros SQL", () => {
     expect(params).not.toContain("2026-08-01");
   });
 
+  it("corrección pre-merge PR #386 (bloqueo 1, ítem 7): el listado normal NO cambia de semántica — construirCondiciones() sin la opción forzarRangoConSoloPendientes (todos los callers existentes: listado/KPI/conteo/exportador) sigue ignorando el rango con soloPendientesCierre, exactamente como antes", async () => {
+    await obtenerReporteViajes(7, { fechaDesde: "2026-08-01", fechaHasta: "2026-08-31", soloPendientesCierre: true });
+    const [sql] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("p.estado NOT IN ('Cerrado', 'Cancelado')");
+    expect(sql).not.toContain("p.fecha_plan >= ?");
+    expect(sql).not.toContain("p.fecha_plan <= ?");
+  });
+
   it("3) filtra por estado exacto cuando se pasa", async () => {
     await obtenerReporteViajes(7, { estado: "Cerrado" });
     const [sql, params] = vi.mocked(query).mock.calls[0];
@@ -299,12 +307,34 @@ describe("PLANES-CIERRE-PERIODO — obtenerCandidatosCierre", () => {
     expect(sql).not.toContain("LIMIT");
   });
 
-  it("si el caller pasara soloPendientesCierre por error, construirCondiciones lo respetaría e ignoraría el rango — por eso el caller (cierre-masivo.ts) NUNCA debe fijarlo aquí (documentado, no forzado por el tipo)", async () => {
+  it("corrección pre-merge PR #386 (bloqueo 1 / caso A): soloPendientesCierre=true CONSERVA el rango del período — nunca todos los pendientes históricos, solo los del Día/Semana/Mes pedido", async () => {
     vi.mocked(query).mockResolvedValue([] as unknown as Awaited<ReturnType<typeof query>>);
     await obtenerCandidatosCierre(7, { fechaDesde: "2026-09-01", fechaHasta: "2026-09-30", soloPendientesCierre: true });
     const [sql, params] = vi.mocked(query).mock.calls[0];
-    expect(sql).not.toContain("p.fecha_plan >= ?"); // confirma el comportamiento documentado de construirCondiciones (no es un bug de esta función)
-    expect(params).not.toContain("2026-09-01");
+    expect(sql).toContain("p.estado NOT IN ('Cerrado', 'Cancelado')"); // SQL_PENDIENTE_CIERRE sigue presente
+    expect(sql).toContain("p.fecha_plan >= ?"); // Y el rango del período, a diferencia del listado normal
+    expect(sql).toContain("p.fecha_plan <= ?");
+    expect(params).toEqual([7, "2026-09-01", "2026-09-30"]);
+  });
+
+  it("caso B: soloCerrados=true + período — respeta ambos (todos Cerrado dentro del rango; la elegibilidad NORMAL/MANUAL del caller dará 0)", async () => {
+    vi.mocked(query).mockResolvedValue([] as unknown as Awaited<ReturnType<typeof query>>);
+    await obtenerCandidatosCierre(7, { fechaDesde: "2026-09-01", fechaHasta: "2026-09-30", soloCerrados: true });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("p.estado = 'Cerrado'");
+    expect(sql).toContain("p.fecha_plan >= ?");
+    expect(sql).toContain("p.fecha_plan <= ?");
+    expect(params).toEqual([7, "2026-09-01", "2026-09-30"]);
+  });
+
+  it("caso C: soloSinCerrar=true + período — excluye Cerrado pero sigue acotado al rango", async () => {
+    vi.mocked(query).mockResolvedValue([] as unknown as Awaited<ReturnType<typeof query>>);
+    await obtenerCandidatosCierre(7, { fechaDesde: "2026-09-01", fechaHasta: "2026-09-30", soloSinCerrar: true });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("p.estado <> 'Cerrado'");
+    expect(sql).toContain("p.fecha_plan >= ?");
+    expect(sql).toContain("p.fecha_plan <= ?");
+    expect(params).toEqual([7, "2026-09-01", "2026-09-30"]);
   });
 
   it("mapea id/codigo/estado/llegadaRegistrada (datos mínimos — nunca cliente/piloto/tarifa/facturación)", async () => {

@@ -271,16 +271,20 @@ describe("PLANES-CIERRE-PERIODO — selector Día/Semana/Mes y acciones del per�
     expect(src).toContain("/tms/planes/cerrar-masivo-periodo");
   });
 
-  it("filtros del período: cliente/piloto/unidad/estado/ruta/facturación/cobro se reenvían; fechaDesde/fHasta y soloPendientes/soloCerrados/soloSinCerrar NUNCA (el período fija el rango)", () => {
-    const fn = src.slice(src.indexOf("const filtrosPeriodoQuery = useCallback"), src.indexOf("}, [fCliente, fPiloto, fUnidad, fEstado, fRuta, fEstadoFacturacion, fEstadoCobro]"));
-    for (const campo of ["clienteId", "pilotoId", "unidadId", "estado", "ruta", "estadoFacturacion", "estadoCobro"]) {
+  it("filtros del período: cliente/piloto/unidad/estado/ruta/facturación/cobro Y soloPendientes/soloCerrados/soloSinCerrar se reenvían (intersección con el rango); fDesde/fHasta NUNCA (el período fija el rango, no las fechas generales de pantalla)", () => {
+    const fn = src.slice(src.indexOf("const filtrosPeriodoValores = useCallback"), src.indexOf("}, [fCliente, fPiloto, fUnidad, fEstado, fRuta, fEstadoFacturacion, fEstadoCobro, soloPendientes, soloCerrados, soloSinCerrar]"));
+    for (const campo of ["clienteId", "pilotoId", "unidadId", "estado", "ruta", "estadoFacturacion", "estadoCobro", "soloPendientesCierre", "soloCerrados", "soloSinCerrar"]) {
       expect(fn).toContain(campo);
     }
     expect(fn).not.toContain("fDesde");
     expect(fn).not.toContain("fHasta");
-    expect(fn).not.toContain("soloPendientes");
-    expect(fn).not.toContain("soloCerrados");
-    expect(fn).not.toContain("soloSinCerrar");
+  });
+
+  it("clienteId/pilotoId/unidadId se convierten a number (nunca strings crudos del <select>) — el backend exige number en el body JSON", () => {
+    const fn = src.slice(src.indexOf("const filtrosPeriodoValores = useCallback"), src.indexOf("}, [fCliente, fPiloto, fUnidad, fEstado, fRuta, fEstadoFacturacion, fEstadoCobro, soloPendientes, soloCerrados, soloSinCerrar]"));
+    expect(fn).toContain("f.clienteId = Number(fCliente)");
+    expect(fn).toContain("f.pilotoId = Number(fPiloto)");
+    expect(fn).toContain("f.unidadId = Number(fUnidad)");
   });
 
   it("al CONFIRMAR, el backend vuelve a resolver los candidatos (nunca reutiliza los ids de la vista previa) — el POST no envía ids", () => {

@@ -407,6 +407,41 @@ describe("cerrarViajesMasivoPorPeriodo — cierre por Día/Semana/Mes, más all�
     expect("cerrados" in r ? r.cerrados.length : null).toBe(n - 1); // los otros 200 (incluido el último lote) sí se cerraron
   });
 
+  it("401 candidatos: el fallo completo del primer chunk de 200 no impide cerrar los siguientes 200 + 1", async () => {
+    planes = Array.from({ length: 401 }, (_, i) => plan(i + 1, "Descargado", { codigo: `VIAJE-${9000 + i}` }));
+    const candidatos = planes.map((p) => ({ ...candidato(p.id, p.estado), codigo: p.codigo }));
+    vi.mocked(obtenerCandidatosCierre).mockResolvedValue(candidatos);
+    // Falla la consulta inicial del lote, antes de cualquier cierre individual o resultado.
+    vi.mocked(query).mockRejectedValueOnce(new Error("detalle interno de conexión que no debe exponerse"));
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const r = await cerrarViajesMasivoPorPeriodo({ empresaId: 7, usuario: "jefe", tipo: "NORMAL", agrupacion: "MES", valor: "2026-09" });
+    if ("error" in r) throw new Error(r.error);
+    expect(r.solicitados).toBe(401);
+    expect(r.errores).toEqual(candidatos.slice(0, 200).map(({ id, codigo }) => ({
+      id, codigo, motivo: "Error inesperado al procesar este lote.",
+    })));
+    expect(r.cerrados).toEqual(candidatos.slice(200).map(({ id, codigo }) => ({ id, codigo })));
+    expect(r.omitidos).toEqual([]);
+    const lotes = vi.mocked(query).mock.calls.map(([, params]) => (params as number[]).slice(1));
+    expect(lotes).toEqual([
+      candidatos.slice(0, 200).map((c) => c.id),
+      candidatos.slice(200, 400).map((c) => c.id),
+      [401],
+    ]);
+    expect(planes.slice(0, 200).every((p) => p.estado === "Descargado")).toBe(true);
+    expect(planes.slice(200).every((p) => p.estado === "Cerrado")).toBe(true);
+    // Solo las 201 transacciones individuales exitosas, ninguna global ni para el lote fallido.
+    expect(conn.beginTransaction).toHaveBeenCalledTimes(201);
+    expect(conn.commit).toHaveBeenCalledTimes(201);
+    expect(conn.rollback).not.toHaveBeenCalled();
+    expect(registrarAuditoria).toHaveBeenLastCalledWith(expect.objectContaining({
+      empresaId: 7, accion: "cierre_masivo_viajes_periodo",
+      detalle: expect.stringContaining("solicitados 401 · cerrados 201 · omitidos 0 · errores 200"),
+    }));
+    expect(vi.mocked(registrarAuditoria).mock.invocationCallOrder.at(-1)).toBeGreaterThan(conn.commit.mock.invocationCallOrder.at(-1)!);
+  });
+
   it("25) sin transacción global: no hay ningún beginTransaction/commit que abarque todos los lotes (cada cerrarViajesMasivo procesa su lote de forma independiente)", () => {
     const src = readFileSync("src/lib/tms/cierre-masivo.ts", "utf8");
     const fn = src.slice(src.indexOf("export async function cerrarViajesMasivoPorPeriodo"), src.length);

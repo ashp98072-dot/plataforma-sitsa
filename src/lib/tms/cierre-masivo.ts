@@ -114,10 +114,17 @@ export async function cerrarViajesMasivo(opts: {
   return { tipo: opts.tipo, solicitados: ids.length, cerrados, omitidos, errores };
 }
 
-/** PLANES-CIERRE-PERIODO — subconjunto de filtros que respeta el cierre por período (ver obtenerCandidatosCierre: deliberadamente SIN soloPendientesCierre/soloCerrados/soloSinCerrar ni fechaDesde/fechaHasta — el período los fija). */
+/**
+ * PLANES-CIERRE-PERIODO — subconjunto de filtros que respeta el cierre por período: cliente/piloto/unidad/
+ * estado/ruta/facturación/cobro Y los 3 filtros de vista de la tabla (soloPendientesCierre/soloCerrados/
+ * soloSinCerrar — corrección pre-merge PR #386, la acción de período debe ser la INTERSECCIÓN de esos filtros
+ * con el rango del período, no todo el período ignorándolos). Deliberadamente SIN `fechaDesde`/`fechaHasta`
+ * — el período SIEMPRE los fija (ver cerrarViajesMasivoPorPeriodo más abajo).
+ */
 export type FiltrosCierrePeriodo = Pick<
   FiltrosReporteViajes,
   "clienteId" | "pilotoId" | "unidadId" | "estado" | "ruta" | "estadoFacturacion" | "estadoCobro"
+  | "soloPendientesCierre" | "soloCerrados" | "soloSinCerrar"
 >;
 
 export type ResultadoCierreMasivoPeriodo = ResultadoCierreMasivo & {
@@ -169,25 +176,37 @@ export async function cerrarViajesMasivoPorPeriodo(opts: {
     .map((c) => c.id);
 
   const grupo = `${opts.agrupacion} ${periodo.clave}`;
+  const codigoPorId = new Map(candidatos.map((c) => [c.id, c.codigo]));
   const cerrados: ItemCierreMasivo[] = [];
   const omitidos: ItemCierreMasivoConMotivo[] = [];
   const errores: ItemCierreMasivoConMotivo[] = [];
 
   for (let i = 0; i < ids.length; i += MAX_PLANES_CIERRE_MASIVO) {
     const lote = ids.slice(i, i + MAX_PLANES_CIERRE_MASIVO);
-    // Secuencial a propósito: sin transacción global, cada lote se procesa de forma independiente.
-    const r = await cerrarViajesMasivo({
-      empresaId: opts.empresaId,
-      usuario: opts.usuario,
-      tipo: opts.tipo,
-      planIds: lote,
-      motivo: opts.motivo,
-      comentario: opts.comentario,
-      grupo,
-    });
-    cerrados.push(...r.cerrados);
-    omitidos.push(...r.omitidos);
-    errores.push(...r.errores);
+    try {
+      // Secuencial a propósito: sin transacción global, cada lote se procesa de forma independiente.
+      const r = await cerrarViajesMasivo({
+        empresaId: opts.empresaId,
+        usuario: opts.usuario,
+        tipo: opts.tipo,
+        planIds: lote,
+        motivo: opts.motivo,
+        comentario: opts.comentario,
+        grupo,
+      });
+      cerrados.push(...r.cerrados);
+      omitidos.push(...r.omitidos);
+      errores.push(...r.errores);
+    } catch (e) {
+      // Fallo del LOTE completo (p. ej. la consulta inicial de cerrarViajesMasivo lanza antes de procesar
+      // ningún viaje) — nunca debe cortar los lotes siguientes ni relanzar. Cada viaje del lote fallido queda
+      // registrado como error (nunca omitido: no se supo si era elegible o no), con un motivo genérico seguro
+      // (nunca el mensaje interno de la excepción) y el código ya conocido de la resolución de candidatos.
+      console.error("cierre masivo por período: fallo de lote completo", { empresaId: opts.empresaId, tipo: opts.tipo, loteSize: lote.length }, e);
+      for (const id of lote) {
+        errores.push({ id, codigo: codigoPorId.get(id) ?? "—", motivo: "Error inesperado al procesar este lote." });
+      }
+    }
   }
 
   // Resumen del PERÍODO completo (combinado de todos los lotes) — además del resumen por lote que ya audita

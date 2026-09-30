@@ -27,6 +27,7 @@ describe("POST /tms/planes/cerrar-masivo-periodo — seguridad", () => {
 
   it("la empresa y el usuario salen de la sesión; empresa_id en el cuerpo se RECHAZA (esquema estricto), nunca se envía ningún id de plan", async () => {
     expect((await post({ tipo: "NORMAL", agrupacion: "MES", valor: "2026-09", empresa_id: 99 })).status).toBe(400);
+    expect((await post({ tipo: "NORMAL", agrupacion: "MES", valor: "2026-09", empresaId: 99 })).status).toBe(400);
     expect((await post({ tipo: "NORMAL", agrupacion: "MES", valor: "2026-09", planIds: [1, 2] })).status).toBe(400);
     expect(cerrarViajesMasivoPorPeriodo).not.toHaveBeenCalled();
     await post({ tipo: "NORMAL", agrupacion: "MES", valor: "2026-09" });
@@ -75,13 +76,39 @@ describe("POST /tms/planes/cerrar-masivo-periodo — validación estricta del cu
     expect(cerrarViajesMasivoPorPeriodo).not.toHaveBeenCalled();
   });
 
-  it("filtros: solo acepta el subconjunto permitido (strict) — soloPendientesCierre/fechaDesde/fechaHasta se RECHAZAN", async () => {
-    expect((await post({ tipo: "NORMAL", agrupacion: "MES", valor: "2026-09", filtros: { soloPendientesCierre: true } })).status).toBe(400);
+  it("filtros: solo acepta el subconjunto permitido (strict) — fechaDesde/fechaHasta/planIds/empresaId dentro de filtros se RECHAZAN", async () => {
     expect((await post({ tipo: "NORMAL", agrupacion: "MES", valor: "2026-09", filtros: { fechaDesde: "2026-01-01" } })).status).toBe(400);
+    expect((await post({ tipo: "NORMAL", agrupacion: "MES", valor: "2026-09", filtros: { fechaHasta: "2026-01-01" } })).status).toBe(400);
+    expect((await post({ tipo: "NORMAL", agrupacion: "MES", valor: "2026-09", filtros: { planIds: [1, 2] } })).status).toBe(400);
+    expect((await post({ tipo: "NORMAL", agrupacion: "MES", valor: "2026-09", filtros: { empresaId: 99 } })).status).toBe(400);
     expect(cerrarViajesMasivoPorPeriodo).not.toHaveBeenCalled();
     await post({ tipo: "NORMAL", agrupacion: "SEMANA", valor: "2026-W40", filtros: { clienteId: 5, estado: "Descargado" } });
     expect(cerrarViajesMasivoPorPeriodo).toHaveBeenCalledWith(expect.objectContaining({
       agrupacion: "SEMANA", valor: "2026-W40", filtros: { clienteId: 5, estado: "Descargado" },
+    }));
+  });
+});
+
+/**
+ * Corrección pre-merge PR #386 (bloqueo 1, ítem 5) — el esquema de filtros SÍ acepta soloPendientesCierre/
+ * soloCerrados/soloSinCerrar como booleano (z.boolean(), nunca un string arbitrario) y los reenvía al servicio.
+ */
+describe("POST /tms/planes/cerrar-masivo-periodo — filtros de vista (bloqueo 1)", () => {
+  it.each(["soloPendientesCierre", "soloCerrados", "soloSinCerrar"])("acepta y reenvía %s=true al servicio", async (campo) => {
+    const filtros = { [campo]: true };
+    expect((await post({ tipo: "NORMAL", agrupacion: "MES", valor: "2026-09", filtros })).status).toBe(200);
+    expect(cerrarViajesMasivoPorPeriodo).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ filtros }));
+  });
+
+  it.each(["soloPendientesCierre", "soloCerrados", "soloSinCerrar"])("rechaza un string en %s (400)", async (campo) => {
+    expect((await post({ tipo: "NORMAL", agrupacion: "MES", valor: "2026-09", filtros: { [campo]: "1" } })).status).toBe(400);
+    expect(cerrarViajesMasivoPorPeriodo).not.toHaveBeenCalled();
+  });
+
+  it("combina con los demás filtros existentes en el mismo objeto", async () => {
+    await post({ tipo: "NORMAL", agrupacion: "SEMANA", valor: "2026-W40", filtros: { clienteId: 5, soloPendientesCierre: true } });
+    expect(cerrarViajesMasivoPorPeriodo).toHaveBeenCalledWith(expect.objectContaining({
+      filtros: { clienteId: 5, soloPendientesCierre: true },
     }));
   });
 });
