@@ -15,6 +15,7 @@ import {
   LIMITE_EXPORTACION_MAXIMO,
   LIMITE_EXPORTACION_SIN_RANGO,
   LIMITE_PAGINA_DEFECTO,
+  obtenerCandidatosCierre,
   obtenerKpisReporte,
   obtenerReporteViajes,
   obtenerReporteViajesParaExportar,
@@ -250,6 +251,85 @@ describe("[HALLAZGO 3] contarReporteViajes — mismo criterio de filtros que el 
     expect(sql).toContain("COUNT(*) AS total");
     expect(sql).toContain("p.estado = ?");
     expect(params).toContain("Cerrado");
+  });
+});
+
+/**
+ * PLANES-CIERRE-PERIODO (16/17/18) — obtenerCandidatosCierre resuelve TODO el período server-side, reutilizando
+ * construirCondiciones/JOIN_FACTURACION (mismo criterio de filtros que el listado — nunca un WHERE distinto).
+ */
+describe("PLANES-CIERRE-PERIODO — obtenerCandidatosCierre", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("16/17/18) siempre acota por empresa_id + rango de fecha_plan (Día/Semana/Mes ya resuelto por el caller como fechaDesde/fechaHasta)", async () => {
+    vi.mocked(query).mockResolvedValue([] as unknown as Awaited<ReturnType<typeof query>>);
+    await obtenerCandidatosCierre(7, { fechaDesde: "2026-09-01", fechaHasta: "2026-09-30" });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("p.empresa_id = ?");
+    expect(sql).toContain("p.fecha_plan >= ?");
+    expect(sql).toContain("p.fecha_plan <= ?");
+    expect(params).toEqual([7, "2026-09-01", "2026-09-30"]);
+  });
+
+  it("19) respeta los filtros activos (cliente/piloto/unidad/estado/ruta) además del rango de fecha", async () => {
+    vi.mocked(query).mockResolvedValue([] as unknown as Awaited<ReturnType<typeof query>>);
+    await obtenerCandidatosCierre(7, {
+      fechaDesde: "2026-09-01", fechaHasta: "2026-09-30",
+      clienteId: 5, pilotoId: 9, unidadId: 3, estado: "Descargado", ruta: "Xela",
+    });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("p.cliente_id = ?");
+    expect(sql).toContain("p.unidad_id = ?");
+    expect(sql).toContain("p.estado = ?");
+    expect(sql).toContain("p.ruta_codigo_historico LIKE ?");
+    expect(params).toEqual([7, "2026-09-01", "2026-09-30", 5, 9, 9, 3, "Descargado", "%Xela%", "%Xela%"]);
+  });
+
+  it("20) tenant isolation: empresa_id es siempre el primer parámetro ligado, nunca confiado del caller sin validar", async () => {
+    vi.mocked(query).mockResolvedValue([] as unknown as Awaited<ReturnType<typeof query>>);
+    await obtenerCandidatosCierre(99, { fechaDesde: "2026-09-01", fechaHasta: "2026-09-30" });
+    const [, params] = vi.mocked(query).mock.calls[0];
+    expect(params?.[0]).toBe(99);
+  });
+
+  it("21) ids no dependen de paginación: LIMIT/OFFSET nunca aparece en esta consulta (trae TODO el rango de una vez)", async () => {
+    vi.mocked(query).mockResolvedValue([] as unknown as Awaited<ReturnType<typeof query>>);
+    await obtenerCandidatosCierre(7, { fechaDesde: "2026-09-01", fechaHasta: "2026-09-30" });
+    const [sql] = vi.mocked(query).mock.calls[0];
+    expect(sql).not.toContain("LIMIT");
+  });
+
+  it("si el caller pasara soloPendientesCierre por error, construirCondiciones lo respetaría e ignoraría el rango — por eso el caller (cierre-masivo.ts) NUNCA debe fijarlo aquí (documentado, no forzado por el tipo)", async () => {
+    vi.mocked(query).mockResolvedValue([] as unknown as Awaited<ReturnType<typeof query>>);
+    await obtenerCandidatosCierre(7, { fechaDesde: "2026-09-01", fechaHasta: "2026-09-30", soloPendientesCierre: true });
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).not.toContain("p.fecha_plan >= ?"); // confirma el comportamiento documentado de construirCondiciones (no es un bug de esta función)
+    expect(params).not.toContain("2026-09-01");
+  });
+
+  it("mapea id/codigo/estado/llegadaRegistrada (datos mínimos — nunca cliente/piloto/tarifa/facturación)", async () => {
+    vi.mocked(query).mockResolvedValue([
+      { id: 1, codigo: "VJ-001", estado: "Descargado", llegada_registrada: 1 },
+      { id: 2, codigo: "VJ-002", estado: "Programado", llegada_registrada: 0 },
+    ] as unknown as Awaited<ReturnType<typeof query>>);
+    const candidatos = await obtenerCandidatosCierre(7, { fechaDesde: "2026-09-01", fechaHasta: "2026-09-30" });
+    expect(candidatos).toEqual([
+      { id: 1, codigo: "VJ-001", estado: "Descargado", llegadaRegistrada: true },
+      { id: 2, codigo: "VJ-002", estado: "Programado", llegadaRegistrada: false },
+    ]);
+  });
+
+  it("la consulta de llegada_registrada usa exactamente el mismo criterio EXISTS que el resto del módulo (flota_viajes...estado='cerrado')", async () => {
+    vi.mocked(query).mockResolvedValue([] as unknown as Awaited<ReturnType<typeof query>>);
+    await obtenerCandidatosCierre(7, { fechaDesde: "2026-09-01", fechaHasta: "2026-09-30" });
+    const [sql] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("fv.estado = 'cerrado'");
+  });
+
+  it("sin resultados en el período -> arreglo vacío", async () => {
+    vi.mocked(query).mockResolvedValue([] as unknown as Awaited<ReturnType<typeof query>>);
+    const candidatos = await obtenerCandidatosCierre(7, { fechaDesde: "2026-09-01", fechaHasta: "2026-09-30" });
+    expect(candidatos).toEqual([]);
   });
 });
 

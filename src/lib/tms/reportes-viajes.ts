@@ -814,6 +814,47 @@ function mapearFacturacionFila(
   };
 }
 
+/**
+ * PLANES-CIERRE-PERIODO — candidatos a cierre masivo por PERÍODO (Día/Semana/Mes), resueltos SIEMPRE server-side
+ * y sobre TODO el rango (nunca solo la página cargada por el cliente). Reutiliza construirCondiciones/
+ * JOIN_FACTURACION (mismo criterio de filtros que el listado/KPI/exportador — nunca un WHERE distinto que
+ * pueda divergir). El caller (cierre-masivo.ts) decide NORMAL/MANUAL aplicando exactamente las mismas reglas
+ * puras que ya usa el resto del sistema (puedeCerrarNormalmente/puedeCerrarManualmente, cierre-viaje-shared.ts)
+ * — esta función solo trae los datos mínimos que esas reglas necesitan (estado + si hay llegada real).
+ *
+ * Deliberadamente NO acepta `soloPendientesCierre`/`soloCerrados`/`soloSinCerrar`: esos son filtros de VISTA de
+ * la tabla (qué se muestra en pantalla), no filtros de resolución de candidatos — la elegibilidad real ya la
+ * calcula el caller fila por fila con las reglas puras (más precisas que el filtro aproximado "pendiente"), y
+ * `soloPendientesCierre` en particular hace que construirCondiciones IGNORE el rango de fechas — lo que
+ * violaría el requisito de que el período SIEMPRE acota fecha_plan.
+ */
+export type CandidatoCierre = { id: number; codigo: string; estado: string; llegadaRegistrada: boolean };
+
+export async function obtenerCandidatosCierre(
+  empresaId: number,
+  filtros: FiltrosReporteViajes,
+): Promise<CandidatoCierre[]> {
+  const { condiciones, params } = construirCondiciones(empresaId, filtros);
+  const rows = await query<RowDataPacket[]>(
+    `SELECT p.id, p.codigo, p.estado,
+            EXISTS (
+              SELECT 1 FROM flota_viajes fv
+              WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
+            ) AS llegada_registrada
+     FROM tms_planes_viaje p
+     ${JOIN_FACTURACION}
+     WHERE ${condiciones.join(" AND ")}
+     ORDER BY p.fecha_plan, p.id`,
+    params,
+  );
+  return rows.map((r) => ({
+    id: Number(r.id),
+    codigo: String(r.codigo),
+    estado: String(r.estado),
+    llegadaRegistrada: Number(r.llegada_registrada) === 1,
+  }));
+}
+
 /** Detalle de un único plan — mismos datos que la tabla, un solo registro. */
 export async function obtenerReporteViajePorId(
   empresaId: number,

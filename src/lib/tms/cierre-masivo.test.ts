@@ -3,10 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db", () => ({ getPool: vi.fn(), execute: vi.fn(), query: vi.fn() }));
 vi.mock("@/lib/auditoria", () => ({ registrarAuditoria: vi.fn(), registrarAuditoriaTx: vi.fn() }));
+vi.mock("@/lib/tms/reportes-viajes", () => ({ obtenerCandidatosCierre: vi.fn() }));
 
 import { getPool, query } from "@/lib/db";
 import { registrarAuditoria, registrarAuditoriaTx } from "@/lib/auditoria";
-import { cerrarViajesMasivo } from "./cierre-masivo";
+import { obtenerCandidatosCierre } from "@/lib/tms/reportes-viajes";
+import { cerrarViajesMasivo, cerrarViajesMasivoPorPeriodo, MAX_PLANES_CIERRE_MASIVO } from "./cierre-masivo";
 import {
   ESTADOS_CIERRE_NORMAL_CON_LLEGADA,
   ESTADOS_CIERRE_NORMAL_SIN_LLEGADA,
@@ -328,6 +330,134 @@ describe("cierre masivo MANUAL — reutiliza cerrarViajeManual() real con motivo
     const r = await manual([1, 2]);
     expect(r.cerrados.map((c) => c.id)).toEqual([2]);
     expect(planes[0].estado).toBe("Programado");
+  });
+});
+
+/**
+ * PLANES-CIERRE-PERIODO — cerrarViajesMasivoPorPeriodo(): resuelve candidatos SIEMPRE fresco desde la BD
+ * (obtenerCandidatosCierre, mockeado aquí), filtra por elegibilidad NORMAL/MANUAL, divide en lotes
+ * ≤MAX_PLANES_CIERRE_MASIVO y reutiliza cerrarViajesMasivo() REAL (misma base en memoria que el resto de este
+ * archivo) para cada lote — sin transacción global, combinando cerrados/omitidos/errores de todos los lotes.
+ */
+describe("cerrarViajesMasivoPorPeriodo — cierre por Día/Semana/Mes, más allá de la página cargada", () => {
+  const candidato = (id: number, estado: string, llegadaRegistrada = false) => ({ id, codigo: `PLAN-${id}`, estado, llegadaRegistrada });
+
+  it("16/17/18) resuelve el período (MES) y consulta candidatos con el rango de fechas correcto — SIEMPRE fresco, nunca ids pasados por el caller", async () => {
+    planes = [plan(1, "Descargado")];
+    vi.mocked(obtenerCandidatosCierre).mockResolvedValue([candidato(1, "Descargado")]);
+    const r = await cerrarViajesMasivoPorPeriodo({ empresaId: 7, usuario: "jefe", tipo: "NORMAL", agrupacion: "MES", valor: "2026-09" });
+    expect(obtenerCandidatosCierre).toHaveBeenCalledWith(7, { fechaDesde: "2026-09-01", fechaHasta: "2026-09-30" });
+    expect("cerrados" in r ? r.cerrados.map((c) => c.id) : null).toEqual([1]);
+  });
+
+  it("valor de período inválido -> { error }, nunca consulta candidatos ni cierra nada", async () => {
+    const r = await cerrarViajesMasivoPorPeriodo({ empresaId: 7, usuario: "jefe", tipo: "NORMAL", agrupacion: "MES", valor: "2026-13" });
+    expect(r).toEqual({ error: "Valor de período inválido." });
+    expect(obtenerCandidatosCierre).not.toHaveBeenCalled();
+  });
+
+  it("19) respeta los filtros activos pasados por el caller (se reenvían tal cual + el rango del período)", async () => {
+    planes = [];
+    vi.mocked(obtenerCandidatosCierre).mockResolvedValue([]);
+    await cerrarViajesMasivoPorPeriodo({
+      empresaId: 7, usuario: "jefe", tipo: "NORMAL", agrupacion: "SEMANA", valor: "2026-W40",
+      filtros: { clienteId: 5, estado: "Descargado" },
+    });
+    expect(obtenerCandidatosCierre).toHaveBeenCalledWith(7, {
+      clienteId: 5, estado: "Descargado", fechaDesde: "2026-09-28", fechaHasta: "2026-10-04",
+    });
+  });
+
+  it("filtra por elegibilidad ANTES de cerrar: NORMAL solo incluye Descargado/En ruta-Cargado con llegada; MANUAL solo Programado/Cargado/En ruta", async () => {
+    planes = [plan(1, "Descargado"), plan(2, "Programado"), plan(3, "Cerrado")];
+    vi.mocked(obtenerCandidatosCierre).mockResolvedValue([
+      candidato(1, "Descargado"), candidato(2, "Programado"), candidato(3, "Cerrado"),
+    ]);
+    const rNormal = await cerrarViajesMasivoPorPeriodo({ empresaId: 7, usuario: "jefe", tipo: "NORMAL", agrupacion: "MES", valor: "2026-09" });
+    expect("solicitados" in rNormal ? rNormal.solicitados : null).toBe(1); // solo el Descargado calificó como candidato NORMAL
+
+    planes = [plan(1, "Descargado"), plan(2, "Programado"), plan(3, "Cerrado")];
+    const rManual = await cerrarViajesMasivoPorPeriodo({ empresaId: 7, usuario: "jefe", tipo: "MANUAL", agrupacion: "MES", valor: "2026-09", motivo: "Cierre administrativo del mes" });
+    expect("solicitados" in rManual ? rManual.solicitados : null).toBe(1); // solo el Programado calificó como candidato MANUAL
+  });
+
+  it("22/23) más de 200 candidatos se dividen en lotes ≤200 y los resultados se combinan correctamente", async () => {
+    const n = 201;
+    planes = Array.from({ length: n }, (_, i) => plan(i + 1, "Descargado"));
+    vi.mocked(obtenerCandidatosCierre).mockResolvedValue(planes.map((p) => candidato(p.id, p.estado)));
+    const r = await cerrarViajesMasivoPorPeriodo({ empresaId: 7, usuario: "jefe", tipo: "NORMAL", agrupacion: "MES", valor: "2026-09" });
+    expect("solicitados" in r ? r.solicitados : null).toBe(n);
+    expect("cerrados" in r ? r.cerrados.length : null).toBe(n);
+    const updates = conn.execute.mock.calls.filter(([sql]) => String(sql).includes("UPDATE tms_planes_viaje"));
+    expect(updates).toHaveLength(n); // cada viaje se cerró individualmente, en AMBOS lotes
+    const llamadasMasivo = vi.mocked(registrarAuditoria).mock.calls.map(([a]) => a).filter((a) => a.accion === "cierre_masivo_viajes");
+    expect(llamadasMasivo).toHaveLength(2); // 2 lotes = 2 resúmenes por lote (200 + 1)
+    expect(llamadasMasivo[0].detalle).toContain("solicitados 200");
+    expect(llamadasMasivo[1].detalle).toContain("solicitados 1");
+  });
+
+  it("24) un fallo en el primer lote no impide procesar el segundo lote", async () => {
+    const n = MAX_PLANES_CIERRE_MASIVO + 1;
+    planes = Array.from({ length: n }, (_, i) => plan(i + 1, "Descargado"));
+    fallar = new Set([1]); // primer id del primer lote
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.mocked(obtenerCandidatosCierre).mockResolvedValue(planes.map((p) => candidato(p.id, p.estado)));
+    const r = await cerrarViajesMasivoPorPeriodo({ empresaId: 7, usuario: "jefe", tipo: "NORMAL", agrupacion: "MES", valor: "2026-09" });
+    expect("errores" in r ? r.errores.map((e) => e.id) : null).toEqual([1]);
+    expect("cerrados" in r ? r.cerrados.length : null).toBe(n - 1); // los otros 200 (incluido el último lote) sí se cerraron
+  });
+
+  it("25) sin transacción global: no hay ningún beginTransaction/commit que abarque todos los lotes (cada cerrarViajesMasivo procesa su lote de forma independiente)", () => {
+    const src = readFileSync("src/lib/tms/cierre-masivo.ts", "utf8");
+    const fn = src.slice(src.indexOf("export async function cerrarViajesMasivoPorPeriodo"), src.length);
+    expect(fn).not.toMatch(/beginTransaction/);
+  });
+
+  it("26/27) concurrencia: un viaje elegible en la vista previa que cambió de estado ANTES de cerrar queda omitido con su motivo, nunca forzado", async () => {
+    // El candidato llega como "Descargado" (lo que se le mostró al usuario en el modal), pero el registro REAL
+    // en la base de datos ya cambió a "Cerrado" para cuando cerrarViajesMasivo() lo re-valida justo antes de tocarlo.
+    planes = [plan(1, "Cerrado")];
+    vi.mocked(obtenerCandidatosCierre).mockResolvedValue([candidato(1, "Descargado")]);
+    const r = await cerrarViajesMasivoPorPeriodo({ empresaId: 7, usuario: "jefe", tipo: "NORMAL", agrupacion: "MES", valor: "2026-09" });
+    expect("cerrados" in r ? r.cerrados : null).toEqual([]);
+    expect("omitidos" in r ? r.omitidos : null).toEqual([expect.objectContaining({ id: 1, motivo: "Este viaje ya fue cerrado." })]);
+  });
+
+  it("auditoría: agrega UN resumen de período (cierre_masivo_viajes_periodo) con los totales combinados, además del resumen por lote", async () => {
+    planes = [plan(1, "Descargado"), plan(2, "Programado")];
+    vi.mocked(obtenerCandidatosCierre).mockResolvedValue([candidato(1, "Descargado"), candidato(2, "Programado")]);
+    await cerrarViajesMasivoPorPeriodo({ empresaId: 7, usuario: "jefe", tipo: "NORMAL", agrupacion: "SEMANA", valor: "2026-W40" });
+    const resumenPeriodo = vi.mocked(registrarAuditoria).mock.calls.map(([a]) => a).filter((a) => a.accion === "cierre_masivo_viajes_periodo");
+    expect(resumenPeriodo).toHaveLength(1);
+    expect(resumenPeriodo[0]).toMatchObject({ empresaId: 7, usuario: "jefe", modulo: "tms" });
+    expect(resumenPeriodo[0].detalle).toContain("SEMANA 2026-W40");
+    expect(resumenPeriodo[0].detalle).toContain("solicitados 1 · cerrados 1 · omitidos 0 · errores 0");
+  });
+
+  it("respuesta incluye agrupación/valor/etiqueta del período resuelto", async () => {
+    planes = [];
+    vi.mocked(obtenerCandidatosCierre).mockResolvedValue([]);
+    const r = await cerrarViajesMasivoPorPeriodo({ empresaId: 7, usuario: "jefe", tipo: "NORMAL", agrupacion: "MES", valor: "2026-09" });
+    expect(r).toMatchObject({ agrupacion: "MES", valor: "2026-09", etiqueta: "Septiembre 2026" });
+  });
+
+  it("MANUAL: exige motivo por viaje vía cerrarViajeManual (el mismo motivo común se aplica a todo el período)", async () => {
+    planes = [plan(1, "Programado")];
+    vi.mocked(obtenerCandidatosCierre).mockResolvedValue([candidato(1, "Programado")]);
+    const r = await cerrarViajesMasivoPorPeriodo({
+      empresaId: 7, usuario: "jefe", tipo: "MANUAL", agrupacion: "MES", valor: "2026-09",
+      motivo: "Regularización de fin de mes", comentario: "Revisado por Operaciones",
+    });
+    expect("cerrados" in r ? r.cerrados : null).toEqual([{ id: 1, codigo: "PLAN-1" }]);
+    expect(planes[0]).toMatchObject({ estado: "Cerrado", cierre_manual: 1, motivo: "Regularización de fin de mes" });
+  });
+
+  it("sin candidatos elegibles: no llama a cerrarViajesMasivo (ids vacío) y responde solicitados: 0", async () => {
+    planes = [plan(1, "Cerrado")];
+    vi.mocked(obtenerCandidatosCierre).mockResolvedValue([candidato(1, "Cerrado")]);
+    const r = await cerrarViajesMasivoPorPeriodo({ empresaId: 7, usuario: "jefe", tipo: "NORMAL", agrupacion: "MES", valor: "2026-09" });
+    expect(r).toMatchObject({ solicitados: 0, cerrados: [], omitidos: [], errores: [] });
+    expect(vi.mocked(query)).not.toHaveBeenCalled(); // cerrarViajesMasivo([]) nunca consulta nada
   });
 });
 
