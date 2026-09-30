@@ -72,19 +72,27 @@ export type ModoPlanesViajes = "operativo" | "reporte";
  */
 export function accionesViaje(
   modo: ModoPlanesViajes,
-  p: { estado: string; pendienteCierre: boolean },
+  p: { estado: string; pendienteCierre: boolean; tarifaComercial: number | null },
   puedeCerrarViaje: boolean,
-): { verDetalle: boolean; pdf: boolean; irProgramacion: boolean; cerrar: boolean; cierreManual: boolean } {
+): { verDetalle: boolean; pdf: boolean; irProgramacion: boolean; cerrar: boolean; cierreManual: boolean; faltaTarifa: boolean } {
   const consulta = modo === "reporte";
   const historico = esExpedienteHistorico(p.estado);
+  // PLANES-TARIFA-CIERRE-1 — `!== null`, NUNCA `> 0`: Q0.00 capturado explícitamente SÍ cuenta como tarifa.
+  const tieneTarifa = p.tarifaComercial != null;
+  // TMS-CIERRE-MASIVO-1: misma regla que cerrarViaje() en el backend (Descargado, o En ruta/Cargado con llegada).
+  // `pendienteCierre` por sí solo también incluye Programado con llegada, que el backend rechaza.
+  const cerrar = !consulta && puedeCerrarViaje && puedeCerrarNormalmente(p.estado, p.pendienteCierre, tieneTarifa);
+  const cierreManual = !consulta && puedeCerrarViaje && puedeCerrarManualmente(p.estado, tieneTarifa);
+  // Sin tarifa, pero el estado SÍ admitiría algún cierre si la tuviera — distingue "falta tarifa" de
+  // "el estado no lo permite" (nunca se muestra el aviso para un viaje que de todos modos no podría cerrarse).
+  const podriaConTarifa = puedeCerrarNormalmente(p.estado, p.pendienteCierre, true) || puedeCerrarManualmente(p.estado, true);
   return {
     verDetalle: true,
     pdf: true,
     irProgramacion: !consulta && !historico,
-    // TMS-CIERRE-MASIVO-1: misma regla que cerrarViaje() en el backend (Descargado, o En ruta/Cargado con llegada).
-    // `pendienteCierre` por sí solo también incluye Programado con llegada, que el backend rechaza.
-    cerrar: !consulta && puedeCerrarViaje && puedeCerrarNormalmente(p.estado, p.pendienteCierre),
-    cierreManual: !consulta && puedeCerrarViaje && puedeCerrarManualmente(p.estado),
+    cerrar,
+    cierreManual,
+    faltaTarifa: !consulta && puedeCerrarViaje && !tieneTarifa && podriaConTarifa,
   };
 }
 
@@ -1324,6 +1332,11 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                               <li>Cerrado por: {p.cerradoPor ?? "—"}</li>
                               <li>Cerrado en: {fh(p.cerradoEn)}</li>
                             </ul>
+                            {acc.faltaTarifa ? (
+                              <p className="mt-2 text-[11px] text-amber-500" title="Asigná una tarifa antes de cerrar este viaje.">
+                                Falta tarifa — asigná una tarifa antes de cerrar este viaje.
+                              </p>
+                            ) : null}
                             {acc.cerrar ? (
                               confirmandoCierre === p.id ? (
                                 // CORRECCIÓN PR #112 (HALLAZGO 1): confirmación

@@ -13,7 +13,8 @@ import {
 } from "./planes-agrupacion";
 import { accionesViaje } from "./planes-viajes-client";
 
-const p = (id: number, fechaPlan: string, estado: string, pendienteCierre = false): PlanAgrupable => ({ id, fechaPlan, estado, pendienteCierre });
+// PLANES-TARIFA-CIERRE-1 — tarifaComercial: 500 por defecto (CON tarifa); los tests "sin tarifa" la pasan explícitamente como null.
+const p = (id: number, fechaPlan: string, estado: string, pendienteCierre = false, tarifaComercial: number | null = 500): PlanAgrupable => ({ id, fechaPlan, estado, pendienteCierre, tarifaComercial });
 
 const planes: PlanAgrupable[] = [
   p(1, "2026-09-22", "Cerrado"),
@@ -167,18 +168,55 @@ describe("elegibilidad: la UI coincide con el backend", () => {
   });
 });
 
-describe('corrección de la inconsistencia: "Cerrar viaje" normal solo si cerrarViaje() lo admitiría', () => {
+describe('corrección de la inconsistencia: "Cerrar viaje" normal solo si cerrarViaje() lo admitiría (todos CON tarifa)', () => {
   it("Programado con llegada (pendienteCierre) YA NO muestra 'Cerrar viaje' pero conserva Cierre manual", () => {
-    const a = accionesViaje("operativo", { estado: "Programado", pendienteCierre: true }, true);
+    const a = accionesViaje("operativo", { estado: "Programado", pendienteCierre: true, tarifaComercial: 500 }, true);
     expect(a.cerrar).toBe(false);
     expect(a.cierreManual).toBe(true);
   });
   it("Descargado sí muestra 'Cerrar viaje' (el backend lo admite aunque el listado no lo marque pendiente)", () => {
-    expect(accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false }, true).cerrar).toBe(true);
+    expect(accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: 500 }, true).cerrar).toBe(true);
   });
   it("En ruta sin llegada: sin 'Cerrar viaje' (solo manual); con llegada: sí", () => {
-    expect(accionesViaje("operativo", { estado: "En ruta", pendienteCierre: false }, true).cerrar).toBe(false);
-    expect(accionesViaje("operativo", { estado: "En ruta", pendienteCierre: true }, true).cerrar).toBe(true);
+    expect(accionesViaje("operativo", { estado: "En ruta", pendienteCierre: false, tarifaComercial: 500 }, true).cerrar).toBe(false);
+    expect(accionesViaje("operativo", { estado: "En ruta", pendienteCierre: true, tarifaComercial: 500 }, true).cerrar).toBe(true);
+  });
+});
+
+/** PLANES-TARIFA-CIERRE-1 (7-10, 29-33) — accionesViaje respeta tarifa; UI test 29-37 se cubren en el bloque de inspección de código más abajo. */
+describe("accionesViaje — tarifa (PLANES-TARIFA-CIERRE-1)", () => {
+  it("Descargado SIN tarifa (null) -> ni cerrar ni cierreManual, y faltaTarifa=true", () => {
+    const a = accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: null }, true);
+    expect(a.cerrar).toBe(false);
+    expect(a.cierreManual).toBe(false);
+    expect(a.faltaTarifa).toBe(true);
+  });
+
+  it("Programado SIN tarifa -> cierreManual false, faltaTarifa true (el estado SÍ admitiría manual si tuviera tarifa)", () => {
+    const a = accionesViaje("operativo", { estado: "Programado", pendienteCierre: false, tarifaComercial: null }, true);
+    expect(a.cierreManual).toBe(false);
+    expect(a.faltaTarifa).toBe(true);
+  });
+
+  it("Cerrado SIN tarifa -> faltaTarifa false (el estado de todos modos no admitiría ningún cierre, no es 'culpa' de la tarifa)", () => {
+    const a = accionesViaje("operativo", { estado: "Cerrado", pendienteCierre: false, tarifaComercial: null }, true);
+    expect(a.faltaTarifa).toBe(false);
+  });
+
+  it("Q0.00 (tarifaComercial = 0, no null) se comporta como CON tarifa", () => {
+    const a = accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: 0 }, true);
+    expect(a.cerrar).toBe(true);
+    expect(a.faltaTarifa).toBe(false);
+  });
+
+  it("modo reporte: faltaTarifa siempre false (sin acciones operativas)", () => {
+    const a = accionesViaje("reporte", { estado: "Descargado", pendienteCierre: false, tarifaComercial: null }, true);
+    expect(a.faltaTarifa).toBe(false);
+  });
+
+  it("sin permiso viajes_cerrar:editar: faltaTarifa siempre false", () => {
+    const a = accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: null }, false);
+    expect(a.faltaTarifa).toBe(false);
   });
 });
 
@@ -245,7 +283,7 @@ describe("pantalla (código fuente): selección, botones separados y reporte sin
     expect(src).toContain("if (esReporte) return planes.map((p) => ({ kind: \"plan\" as const, p }))");
     expect(src).toContain("{mostrarSel && it.abierto ? (");
     expect(src).toContain("{!esReporte ? (");
-    expect(accionesViaje("reporte", { estado: "Descargado", pendienteCierre: true }, true)).toEqual({ verDetalle: true, pdf: true, irProgramacion: false, cerrar: false, cierreManual: false });
+    expect(accionesViaje("reporte", { estado: "Descargado", pendienteCierre: true, tarifaComercial: 500 }, true)).toEqual({ verDetalle: true, pdf: true, irProgramacion: false, cerrar: false, cierreManual: false, faltaTarifa: false });
   });
 
   it("regresión: cierre individual, cierre manual individual, Ver detalle, Programación y PDF siguen en cada fila", () => {

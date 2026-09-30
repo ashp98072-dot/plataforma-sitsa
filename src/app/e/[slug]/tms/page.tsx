@@ -640,7 +640,7 @@ export default function TmsPage() {
                                     {cerrandoId === p.id ? "Cerrando…" : "Cerrar viaje"}
                                   </button>
                                 ) : null}
-                                {puedeCerrarViaje && puedeCerrarManualmente(p.estado) ? (
+                                {puedeCerrarViaje && puedeCerrarManualmente(p.estado, p.tarifa_comercial != null) ? (
                                   <button
                                     type="button"
                                     onClick={() => abrirCierreManual(p.id)}

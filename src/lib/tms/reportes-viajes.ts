@@ -851,7 +851,12 @@ function mapearFacturacionFila(
  * callers) — así "Solo pendientes de cierre" + "Septiembre 2026" da pendientes DENTRO de septiembre, nunca
  * todos los pendientes históricos.
  */
-export type CandidatoCierre = { id: number; codigo: string; estado: string; llegadaRegistrada: boolean };
+/**
+ * PLANES-TARIFA-CIERRE-1 — `tarifaComercial` viaja tal cual (`number | null`, nunca `> 0` interpretado aquí)
+ * para que el caller decida elegibilidad con el MISMO criterio puro (`tarifa_comercial !== null`) que
+ * cierre-viaje-shared.ts — nunca una segunda regla inventada sobre el monto.
+ */
+export type CandidatoCierre = { id: number; codigo: string; estado: string; llegadaRegistrada: boolean; tarifaComercial: number | null };
 
 export async function obtenerCandidatosCierre(
   empresaId: number,
@@ -859,7 +864,7 @@ export async function obtenerCandidatosCierre(
 ): Promise<CandidatoCierre[]> {
   const { condiciones, params } = construirCondiciones(empresaId, filtros, { forzarRangoConSoloPendientes: true });
   const rows = await query<RowDataPacket[]>(
-    `SELECT p.id, p.codigo, p.estado,
+    `SELECT p.id, p.codigo, p.estado, p.tarifa_comercial,
             EXISTS (
               SELECT 1 FROM flota_viajes fv
               WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
@@ -875,6 +880,7 @@ export async function obtenerCandidatosCierre(
     codigo: String(r.codigo),
     estado: String(r.estado),
     llegadaRegistrada: Number(r.llegada_registrada) === 1,
+    tarifaComercial: r.tarifa_comercial != null ? Number(r.tarifa_comercial) : null,
   }));
 }
 

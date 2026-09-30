@@ -50,7 +50,7 @@ export async function cerrarViajesMasivo(opts: {
   // Solo viajes de ESTA empresa: un id ajeno o inexistente nunca aparece aquí.
   const filas = ids.length
     ? await query<RowDataPacket[]>(
-        `SELECT p.id, p.codigo, p.estado,
+        `SELECT p.id, p.codigo, p.estado, p.tarifa_comercial,
                 EXISTS (
                   SELECT 1 FROM flota_viajes fv
                   WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
@@ -70,10 +70,12 @@ export async function cerrarViajesMasivo(opts: {
     }
     const codigo = String(f.codigo ?? `#${id}`);
     const estado = String(f.estado ?? "");
+    // PLANES-TARIFA-CIERRE-1 — `!== null`, NUNCA `> 0` (Q0.00 capturado explícitamente SÍ cuenta).
+    const tieneTarifa = f.tarifa_comercial != null;
     // Elegibilidad recalculada en servidor con el MISMO criterio puro que usa la pantalla.
     const motivoNo = opts.tipo === "NORMAL"
-      ? motivoNoCierreNormal(estado, Number(f.llegada_registrada) === 1)
-      : motivoNoCierreManual(estado);
+      ? motivoNoCierreNormal(estado, Number(f.llegada_registrada) === 1, tieneTarifa)
+      : motivoNoCierreManual(estado, tieneTarifa);
     if (motivoNo) {
       omitidos.push({ id, codigo, motivo: motivoNo });
       continue;
@@ -171,8 +173,12 @@ export async function cerrarViajesMasivoPorPeriodo(opts: {
     fechaDesde: periodo.desde,
     fechaHasta: periodo.hasta,
   });
+  // PLANES-TARIFA-CIERRE-1 — la resolución FRESCA al confirmar también aplica la tarifa (nunca confía
+  // solamente en la vista previa): un candidato sin tarifa jamás entra en `ids`.
   const ids = candidatos
-    .filter((c) => (opts.tipo === "NORMAL" ? puedeCerrarNormalmente(c.estado, c.llegadaRegistrada) : puedeCerrarManualmente(c.estado)))
+    .filter((c) => (opts.tipo === "NORMAL"
+      ? puedeCerrarNormalmente(c.estado, c.llegadaRegistrada, c.tarifaComercial != null)
+      : puedeCerrarManualmente(c.estado, c.tarifaComercial != null)))
     .map((c) => c.id);
 
   const grupo = `${opts.agrupacion} ${periodo.clave}`;

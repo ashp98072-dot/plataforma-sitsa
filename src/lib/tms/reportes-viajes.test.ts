@@ -337,16 +337,24 @@ describe("PLANES-CIERRE-PERIODO — obtenerCandidatosCierre", () => {
     expect(params).toEqual([7, "2026-09-01", "2026-09-30"]);
   });
 
-  it("mapea id/codigo/estado/llegadaRegistrada (datos mínimos — nunca cliente/piloto/tarifa/facturación)", async () => {
+  it("mapea id/codigo/estado/llegadaRegistrada/tarifaComercial (datos mínimos — nunca cliente/piloto/facturación)", async () => {
     vi.mocked(query).mockResolvedValue([
-      { id: 1, codigo: "VJ-001", estado: "Descargado", llegada_registrada: 1 },
-      { id: 2, codigo: "VJ-002", estado: "Programado", llegada_registrada: 0 },
+      { id: 1, codigo: "VJ-001", estado: "Descargado", llegada_registrada: 1, tarifa_comercial: "500.00" },
+      { id: 2, codigo: "VJ-002", estado: "Programado", llegada_registrada: 0, tarifa_comercial: null },
     ] as unknown as Awaited<ReturnType<typeof query>>);
     const candidatos = await obtenerCandidatosCierre(7, { fechaDesde: "2026-09-01", fechaHasta: "2026-09-30" });
     expect(candidatos).toEqual([
-      { id: 1, codigo: "VJ-001", estado: "Descargado", llegadaRegistrada: true },
-      { id: 2, codigo: "VJ-002", estado: "Programado", llegadaRegistrada: false },
+      { id: 1, codigo: "VJ-001", estado: "Descargado", llegadaRegistrada: true, tarifaComercial: 500 },
+      { id: 2, codigo: "VJ-002", estado: "Programado", llegadaRegistrada: false, tarifaComercial: null },
     ]);
+  });
+
+  /** PLANES-TARIFA-CIERRE-1 (22) — CandidatoCierre trae tarifaComercial tal cual (number | null, nunca `> 0` interpretado aquí). */
+  it("22) el SELECT incluye p.tarifa_comercial", async () => {
+    vi.mocked(query).mockResolvedValue([] as unknown as Awaited<ReturnType<typeof query>>);
+    await obtenerCandidatosCierre(7, { fechaDesde: "2026-09-01", fechaHasta: "2026-09-30" });
+    const [sql] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("p.tarifa_comercial");
   });
 
   it("la consulta de llegada_registrada usa exactamente el mismo criterio EXISTS que el resto del módulo (flota_viajes...estado='cerrado')", async () => {

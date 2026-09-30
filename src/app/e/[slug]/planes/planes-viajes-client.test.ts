@@ -176,12 +176,12 @@ describe("esExpedienteHistorico — plan Cerrado/Cancelado = expediente, no 'edi
  * (modo "reporte", solo consulta). `accionesViaje` es la función pura que
  * decide qué acciones expone cada fila.
  */
-describe("accionesViaje — acciones por fila según el modo", () => {
+describe("accionesViaje — acciones por fila según el modo (todos CON tarifa, salvo donde se indique)", () => {
   it("modo 'reporte' NUNCA expone acciones que modifican el viaje (cierre, cierre manual, ir a Programación)", () => {
-    const pendiente = accionesViaje("reporte", { estado: "En ruta", pendienteCierre: true }, true);
-    expect(pendiente).toEqual({ verDetalle: true, pdf: true, irProgramacion: false, cerrar: false, cierreManual: false });
+    const pendiente = accionesViaje("reporte", { estado: "En ruta", pendienteCierre: true, tarifaComercial: 500 }, true);
+    expect(pendiente).toEqual({ verDetalle: true, pdf: true, irProgramacion: false, cerrar: false, cierreManual: false, faltaTarifa: false });
 
-    const enCurso = accionesViaje("reporte", { estado: "Programado", pendienteCierre: false }, true);
+    const enCurso = accionesViaje("reporte", { estado: "Programado", pendienteCierre: false, tarifaComercial: 500 }, true);
     expect(enCurso.cerrar).toBe(false);
     expect(enCurso.cierreManual).toBe(false);
     expect(enCurso.irProgramacion).toBe(false);
@@ -192,26 +192,31 @@ describe("accionesViaje — acciones por fila según el modo", () => {
   });
 
   it("modo 'operativo': un viaje pendiente de cierre con permiso muestra 'Cerrar viaje'", () => {
-    const a = accionesViaje("operativo", { estado: "En ruta", pendienteCierre: true }, true);
+    const a = accionesViaje("operativo", { estado: "En ruta", pendienteCierre: true, tarifaComercial: 500 }, true);
     expect(a.cerrar).toBe(true);
   });
 
   it("modo 'operativo' sin permiso viajes_cerrar:editar: no muestra cierre ni cierre manual", () => {
-    const a = accionesViaje("operativo", { estado: "En ruta", pendienteCierre: true }, false);
+    const a = accionesViaje("operativo", { estado: "En ruta", pendienteCierre: true, tarifaComercial: 500 }, false);
     expect(a.cerrar).toBe(false);
     expect(a.cierreManual).toBe(false);
   });
 
   it("modo 'operativo': cierre manual disponible desde Programado/Cargado/En ruta (mismo criterio puro que el backend)", () => {
     for (const estado of ["Programado", "Cargado", "En ruta"]) {
-      expect(accionesViaje("operativo", { estado, pendienteCierre: false }, true).cierreManual).toBe(true);
+      expect(accionesViaje("operativo", { estado, pendienteCierre: false, tarifaComercial: 500 }, true).cierreManual).toBe(true);
     }
-    expect(accionesViaje("operativo", { estado: "Cerrado", pendienteCierre: false }, true).cierreManual).toBe(false);
+    expect(accionesViaje("operativo", { estado: "Cerrado", pendienteCierre: false, tarifaComercial: 500 }, true).cierreManual).toBe(false);
   });
 
   it("modo 'operativo': un expediente histórico (Cerrado/Cancelado) no ofrece el salto a Programación", () => {
-    expect(accionesViaje("operativo", { estado: "Cerrado", pendienteCierre: false }, true).irProgramacion).toBe(false);
-    expect(accionesViaje("operativo", { estado: "Cancelado", pendienteCierre: false }, true).irProgramacion).toBe(false);
-    expect(accionesViaje("operativo", { estado: "En ruta", pendienteCierre: false }, true).irProgramacion).toBe(true);
+    expect(accionesViaje("operativo", { estado: "Cerrado", pendienteCierre: false, tarifaComercial: 500 }, true).irProgramacion).toBe(false);
+    expect(accionesViaje("operativo", { estado: "Cancelado", pendienteCierre: false, tarifaComercial: 500 }, true).irProgramacion).toBe(false);
+    expect(accionesViaje("operativo", { estado: "En ruta", pendienteCierre: false, tarifaComercial: 500 }, true).irProgramacion).toBe(true);
+  });
+
+  it("PLANES-TARIFA-CIERRE-1: sin tarifa, ni cerrar ni cierreManual, sin importar el estado", () => {
+    expect(accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: null }, true).cerrar).toBe(false);
+    expect(accionesViaje("operativo", { estado: "Programado", pendienteCierre: false, tarifaComercial: null }, true).cierreManual).toBe(false);
   });
 });
