@@ -1793,8 +1793,13 @@ CREATE TABLE IF NOT EXISTS compras_proveedores (
   id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,
   nombre_comercial VARCHAR(200) NOT NULL,
+  -- COMPRAS-PROVEEDOR-INLINE — identidad normalizada (sql/migrate-2026-09-compras-proveedores-unicidad.sql):
+  -- calculada SIEMPRE por el backend (src/lib/compras/proveedor-identidad.ts), nunca confiada del cliente.
+  -- Instalación nueva: no requiere backfill (la tabla nace vacía). Producción existente usa la migración.
+  nombre_normalizado VARCHAR(200) NULL,
   razon_social VARCHAR(250) NULL,
   nit VARCHAR(30) NULL,
+  nit_normalizado VARCHAR(30) NULL,
   direccion VARCHAR(500) NULL,
   telefono VARCHAR(50) NULL,
   correo VARCHAR(200) NULL,
@@ -1814,6 +1819,8 @@ CREATE TABLE IF NOT EXISTS compras_proveedores (
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY uq_compras_proveedor_empresa (empresa_id, id),
+  UNIQUE KEY uq_cb_proveedor_nombre (empresa_id, nombre_normalizado),
+  UNIQUE KEY uq_cb_proveedor_nit (empresa_id, nit_normalizado),
   INDEX idx_compras_proveedor_nombre (empresa_id, activo, nombre_comercial),
   INDEX idx_compras_proveedor_nit (empresa_id, nit),
   CONSTRAINT fk_cb_proveedores_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE RESTRICT,

@@ -80,6 +80,7 @@ export function ProveedorCompraPicker({ slug, proveedores, value, nombreHistoric
         <ProveedorInlineModal
           slug={slug}
           nombreInicial={texto}
+          proveedores={proveedores}
           puedeEditar={puedeEditar}
           onClose={() => setModalAbierto(false)}
           onCreado={(p) => { onProveedorCreado(p); onChange(String(p.id)); setBusqueda(""); setModalAbierto(false); }}

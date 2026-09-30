@@ -25,7 +25,15 @@ it.each(["kt-monaco", "otra-empresa"])("ruta histórica %s redirige en servidor 
 it("migración canónica coincide y no altera/borrra datos", () => {
   const sql = leer("sql/migrate-2026-09-compras-base.sql"); const schema = leer("sql/schema.sql");
   const bloques = sql.match(/CREATE TABLE IF NOT EXISTS [\s\S]*?COLLATE=utf8mb4_unicode_ci;/g)!;
-  const baseSinExpansion = schema.replace(/  encargado_compras_usuario_id INT NULL DEFAULT NULL,\n  encargado_compras_nombre VARCHAR\(200\) NULL DEFAULT NULL,\n/, "");
+  const baseSinExpansion = schema
+    .replace(/  encargado_compras_usuario_id INT NULL DEFAULT NULL,\n  encargado_compras_nombre VARCHAR\(200\) NULL DEFAULT NULL,\n/, "")
+    // COMPRAS-PROVEEDOR-INLINE (corrección pre-SQL) — sql/migrate-2026-09-compras-proveedores-unicidad.sql amplía
+    // compras_proveedores con ALTER TABLE (no recrea el CREATE TABLE canónico de compras-base): se retiran aquí las
+    // mismas líneas, exactamente como ya se hace arriba con encargado_compras_*, para comparar contra el bloque
+    // original de migrate-2026-09-compras-base.sql sin falsos negativos.
+    .replace(/ {2}-- COMPRAS-PROVEEDOR-INLINE — identidad normalizada \(sql\/migrate-2026-09-compras-proveedores-unicidad\.sql\):\n {2}-- calculada SIEMPRE por el backend \(src\/lib\/compras\/proveedor-identidad\.ts\), nunca confiada del cliente\.\n {2}-- Instalación nueva: no requiere backfill \(la tabla nace vacía\)\. Producción existente usa la migración\.\n {2}nombre_normalizado VARCHAR\(200\) NULL,\n/, "")
+    .replace(/ {2}nit_normalizado VARCHAR\(30\) NULL,\n/, "")
+    .replace(/ {2}UNIQUE KEY uq_cb_proveedor_nombre \(empresa_id, nombre_normalizado\),\n {2}UNIQUE KEY uq_cb_proveedor_nit \(empresa_id, nit_normalizado\),\n/, "");
   expect(bloques).toHaveLength(4); for (const bloque of bloques) expect(baseSinExpansion).toContain(bloque);
   const sinComentarios = sql.replace(/^--.*$/gm, ""); expect(sinComentarios).not.toMatch(/\b(ALTER|DROP|INSERT|UPDATE|DELETE|REPLACE)\b\s+(TABLE|INTO|FROM|compras_)/i);
   expect(sql).not.toMatch(/UNIQUE[^\n]*nit/i); expect(sql).toContain("FOREIGN KEY (empresa_id, requerimiento_id, linea_id)"); expect(sql).toContain("ON DELETE RESTRICT");

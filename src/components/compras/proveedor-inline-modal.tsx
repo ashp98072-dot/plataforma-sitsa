@@ -24,11 +24,23 @@ const proveedorMinimoDesdeExistente = (e: DuplicadoInfo): ProveedorPickerOpt =>
   ({ id: e.id, nombre_comercial: e.nombre_comercial, nit: e.nit, contacto_nombre: null, contacto_telefono: null, telefono: null, metodo_pago_habitual: null, banco: null, numero_cuenta: null, dias_credito: null });
 
 /**
+ * COMPRAS-PROVEEDOR-INLINE (corrección pre-SQL, sección 3) — "Usar proveedor existente" (409 duplicado ACTIVO) NUNCA
+ * debe degradar un registro ya conocido: el 409 solo trae un `proveedorExistente` MÍNIMO (id/nombre/nit/activo,
+ * sin exponer más datos de los necesarios), pero si ese proveedor YA está en el catálogo local (activo, por eso
+ * llegó a colisionar), preferimos ese objeto COMPLETO — método de pago habitual, NIT, contacto, teléfono, banco,
+ * cuenta, días de crédito — en vez del mínimo. El mínimo queda solo como respaldo si por algún motivo no estuviera
+ * ya cargado. Pura, para probarla sin useState/fetch.
+ */
+export function resolverProveedorExistente(proveedores: ProveedorPickerOpt[], existente: DuplicadoInfo): ProveedorPickerOpt {
+  return proveedores.find(p => p.id === existente.id) ?? proveedorMinimoDesdeExistente(existente);
+}
+
+/**
  * COMPRAS-PROVEEDOR-INLINE (sección 3, 10-11) — modal compacto de alta rápida, dentro del requerimiento. Maneja los
  * dos casos de 409 estructurado (PROVEEDOR_DUPLICADO / PROVEEDOR_DUPLICADO_INACTIVO) sin dejar crear una copia.
  */
-export function ProveedorInlineModal({ slug, nombreInicial, puedeEditar, onClose, onCreado }: {
-  slug: string; nombreInicial: string; puedeEditar: boolean;
+export function ProveedorInlineModal({ slug, nombreInicial, proveedores, puedeEditar, onClose, onCreado }: {
+  slug: string; nombreInicial: string; proveedores: ProveedorPickerOpt[]; puedeEditar: boolean;
   onClose: () => void; onCreado: (p: ProveedorPickerOpt) => void;
 }) {
   const api = `/api/empresas/${encodeURIComponent(slug)}/compras/proveedores`;
@@ -82,7 +94,7 @@ export function ProveedorInlineModal({ slug, nombreInicial, puedeEditar, onClose
             {duplicado.codigo === "PROVEEDOR_DUPLICADO" ? (
               <>
                 <p role="alert">Ya existe el proveedor &quot;{duplicado.existente.nombre_comercial}&quot;.</p>
-                <button type="button" className="rounded bg-[var(--accent)] px-4 py-2 text-white" onClick={() => onCreado(proveedorMinimoDesdeExistente(duplicado.existente))}>
+                <button type="button" className="rounded bg-[var(--accent)] px-4 py-2 text-white" onClick={() => onCreado(resolverProveedorExistente(proveedores, duplicado.existente))}>
                   Usar proveedor existente
                 </button>
               </>
