@@ -163,6 +163,10 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   const [valorPeriodoComprobante, setValorPeriodoComprobante] = useState(() => hoyLocal());
   const [descargandoComprobante, setDescargandoComprobante] = useState(false);
   const [errorComprobante, setErrorComprobante] = useState("");
+  // VIATICOS-COMPROBANTE-ADMIN-1 — botón Excel independiente: su propio loading/error, para que una descarga
+  // no bloquee ni pise el mensaje de la otra (mismo período/valor, comparten el resto del selector).
+  const [descargandoComprobanteExcel, setDescargandoComprobanteExcel] = useState(false);
+  const [errorComprobanteExcel, setErrorComprobanteExcel] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [mensaje, setMensaje] = useState("");
@@ -608,6 +612,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
     setTipoPeriodoComprobante(tipo);
     setValorPeriodoComprobante(valorPeriodoHoy(tipo, hoyLocal()));
     setErrorComprobante("");
+    setErrorComprobanteExcel("");
   }
 
   /**
@@ -645,6 +650,36 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
       setErrorComprobante("Error de conexión.");
     } finally {
       setDescargandoComprobante(false);
+    }
+  }
+
+  /** VIATICOS-COMPROBANTE-ADMIN-1 — mismo patrón fetch+blob que descargarComprobante(), equivalente Excel. */
+  async function descargarComprobanteExcel() {
+    setErrorComprobanteExcel("");
+    setDescargandoComprobanteExcel(true);
+    try {
+      const params = new URLSearchParams({ periodo: tipoPeriodoComprobante, valor: valorPeriodoComprobante });
+      const res = await fetch(`/api/empresas/${slug}/tms/viaticos/comprobante-autorizacion-excel?${params.toString()}`);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setErrorComprobanteExcel(data.error ?? `No se pudo generar el comprobante (${res.status}).`);
+        return;
+      }
+      const blob = await res.blob();
+      const disposicion = res.headers.get("Content-Disposition") ?? "";
+      const nombreServidor = /filename="?([^"]+)"?/.exec(disposicion)?.[1];
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = nombreServidor || `viaticos-autorizados-${valorPeriodoComprobante}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      setErrorComprobanteExcel("Error de conexión.");
+    } finally {
+      setDescargandoComprobanteExcel(false);
     }
   }
 
@@ -835,7 +870,16 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
           >
             {descargandoComprobante ? "Generando…" : "Descargar PDF"}
           </button>
+          <button
+            type="button"
+            disabled={descargandoComprobanteExcel || !valorPeriodoComprobante}
+            onClick={() => void descargarComprobanteExcel()}
+            className="rounded border border-[var(--border)] px-3 py-1.5 text-xs font-medium hover:bg-[var(--input)] disabled:opacity-50"
+          >
+            {descargandoComprobanteExcel ? "Generando…" : "Descargar Excel"}
+          </button>
           {errorComprobante ? <p className="w-full text-xs text-red-300">{errorComprobante}</p> : null}
+          {errorComprobanteExcel ? <p className="w-full text-xs text-red-300">{errorComprobanteExcel}</p> : null}
         </div>
       ) : null}
 

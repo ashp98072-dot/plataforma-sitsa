@@ -22,6 +22,8 @@ export type PeriodoComprobante = {
   etiqueta: string;
   /** Nombre de archivo sugerido, sin ruta (p. ej. "viaticos-autorizados-2026-09-30.pdf"). */
   archivo: string;
+  /** Mismo nombre base que `archivo`, extensión .xlsx (VIATICOS-COMPROBANTE-ADMIN-1 — exportación Excel del mismo lote). */
+  archivoExcel: string;
 };
 
 const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
@@ -55,6 +57,7 @@ function resolverDia(valor: string): PeriodoComprobante | null {
     finExclusivo: `${finExclusivo} 00:00:00`,
     etiqueta: fechaLarga(y, m, d),
     archivo: `viaticos-autorizados-${fecha}.pdf`,
+    archivoExcel: `viaticos-autorizados-${fecha}.xlsx`,
   };
 }
 
@@ -108,6 +111,7 @@ function resolverSemana(valor: string): PeriodoComprobante | null {
     finExclusivo: `${finExclusivaFecha} 00:00:00`,
     etiqueta,
     archivo: `viaticos-autorizados-${anio}-W${pad(semana)}.pdf`,
+    archivoExcel: `viaticos-autorizados-${anio}-W${pad(semana)}.xlsx`,
   };
 }
 
@@ -128,6 +132,7 @@ function resolverMes(valor: string): PeriodoComprobante | null {
     finExclusivo: `${finExclusivaFecha} 00:00:00`,
     etiqueta: `${MESES[mes - 1]} de ${anio}`,
     archivo: `viaticos-autorizados-${m[1]}-${m[2]}.pdf`,
+    archivoExcel: `viaticos-autorizados-${m[1]}-${m[2]}.xlsx`,
   };
 }
 

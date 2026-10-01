@@ -14,6 +14,7 @@ describe("DIA", () => {
       finExclusivo: "2026-10-01 00:00:00",
       etiqueta: "30 de septiembre de 2026",
       archivo: "viaticos-autorizados-2026-09-30.pdf",
+      archivoExcel: "viaticos-autorizados-2026-09-30.xlsx",
     });
   });
 
@@ -36,6 +37,7 @@ describe("DIA", () => {
       finExclusivo: "2028-03-01 00:00:00",
       etiqueta: "29 de febrero de 2028",
       archivo: "viaticos-autorizados-2028-02-29.pdf",
+      archivoExcel: "viaticos-autorizados-2028-02-29.xlsx",
     });
   });
 });
@@ -47,6 +49,7 @@ describe("SEMANA", () => {
       finExclusivo: "2026-09-21 00:00:00",
       etiqueta: "14 de septiembre al 20 de septiembre de 2026",
       archivo: "viaticos-autorizados-2026-W38.pdf",
+      archivoExcel: "viaticos-autorizados-2026-W38.xlsx",
     });
   });
 
@@ -56,6 +59,7 @@ describe("SEMANA", () => {
       finExclusivo: "2026-10-05 00:00:00",
       etiqueta: "28 de septiembre al 4 de octubre de 2026",
       archivo: "viaticos-autorizados-2026-W40.pdf",
+      archivoExcel: "viaticos-autorizados-2026-W40.xlsx",
     });
   });
 
@@ -65,6 +69,7 @@ describe("SEMANA", () => {
       finExclusivo: "2027-01-04 00:00:00",
       etiqueta: "28 de diciembre de 2026 al 3 de enero de 2027",
       archivo: "viaticos-autorizados-2026-W53.pdf",
+      archivoExcel: "viaticos-autorizados-2026-W53.xlsx",
     });
   });
 
@@ -87,6 +92,7 @@ describe("MES", () => {
       finExclusivo: "2026-10-01 00:00:00",
       etiqueta: "septiembre de 2026",
       archivo: "viaticos-autorizados-2026-09.pdf",
+      archivoExcel: "viaticos-autorizados-2026-09.xlsx",
     });
   });
 
@@ -96,6 +102,7 @@ describe("MES", () => {
       finExclusivo: "2027-01-01 00:00:00",
       etiqueta: "diciembre de 2026",
       archivo: "viaticos-autorizados-2026-12.pdf",
+      archivoExcel: "viaticos-autorizados-2026-12.xlsx",
     });
   });
 

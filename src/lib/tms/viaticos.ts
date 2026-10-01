@@ -1373,6 +1373,8 @@ export type ViaticoDetalle = {
   fechaPlan: string;
   cliente: string | null;
   unidadPlaca: string | null;
+  /** VIATICOS-COMPROBANTE-ADMIN-1 — snapshot histórico de tms_planes_viaje.lugar_descarga_historico (nunca el catálogo vivo de lugares, que puede cambiar). */
+  lugarDescarga: string | null;
   personalId: number;
   personalNombre: string;
   rol: string;
@@ -1425,6 +1427,7 @@ function mapDetalle(r: RowDataPacket): ViaticoDetalle {
     fechaPlan: toIsoDate(r.fecha_plan as string | Date | null) ?? "",
     cliente: r.cliente != null ? String(r.cliente) : null,
     unidadPlaca: r.unidad_placa != null ? String(r.unidad_placa) : null,
+    lugarDescarga: r.lugar_descarga != null ? String(r.lugar_descarga) : null,
     personalId: Number(r.personal_id),
     personalNombre: String(r.personal_nombre ?? ""),
     rol: String(r.rol),
@@ -1465,7 +1468,7 @@ const DETALLE_SELECT = `
          v.liquidado_por, v.liquidado_en, v.observaciones_liquidacion,
          v.gastos_comprobados, v.reintegro,
          v.rechazado_por, v.rechazado_en, v.motivo_rechazo,
-         pl.codigo AS plan_codigo, pl.fecha_plan,
+         pl.codigo AS plan_codigo, pl.fecha_plan, pl.lugar_descarga_historico AS lugar_descarga,
          c.nombre AS cliente, u.placa AS unidad_placa,
          tp.nombre AS personal_nombre,
          COALESCE(e.categoria_ops, tp.tipo) AS puesto
