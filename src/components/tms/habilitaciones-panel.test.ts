@@ -43,8 +43,37 @@ describe("Integración en el área TMS existente", () => {
 
   it("vive colapsada junto a 'Catálogos operativos' (mismo patrón <details> del resto de Administración)", () => {
     const idx = page.indexOf("<HabilitacionesPanel");
-    const antes = page.slice(Math.max(0, idx - 400), idx);
+    const antes = page.slice(Math.max(0, idx - 700), idx);
     expect(antes).toContain("Habilitaciones operativas");
     expect(antes).toContain("<details");
+  });
+});
+
+describe("TMS-PROGRAMACION-HABILITACIONES-1 (corrección post-revisión) — panel gateado por tms:editar", () => {
+  it("calcula puedeEditarTms con tienePermiso(permisosTms, \"tms\", \"editar\") — mismo patrón que puedeCerrarViaje", () => {
+    expect(page).toContain('const puedeEditarTms = tienePermiso(permisosTms, "tms", "editar");');
+  });
+
+  it("el bloque completo de 'Habilitaciones operativas' (el <details> entero) está condicionado a puedeEditarTms", () => {
+    const idx = page.indexOf("<HabilitacionesPanel");
+    const antes = page.slice(Math.max(0, idx - 700), idx);
+    expect(antes).toContain("{puedeEditarTms ? (");
+    // El <details> debe estar DENTRO del `{puedeEditarTms ? ( ... )}`, no solo el panel interno.
+    const idxCond = antes.indexOf("{puedeEditarTms ? (");
+    const idxDetails = antes.indexOf("<details", idxCond);
+    expect(idxDetails).toBeGreaterThan(idxCond);
+  });
+
+  it("un usuario con solo tms:ver (sin editar) NO ve el bloque — se oculta, no se deshabilita", () => {
+    const idx = page.indexOf("<HabilitacionesPanel");
+    const bloque = page.slice(Math.max(0, idx - 700), idx + 300);
+    expect(bloque).not.toMatch(/disabled=\{!puedeEditarTms\}/); // no es "mostrar deshabilitado", es "no renderizar"
+    expect(bloque).toContain("puedeEditarTms ? (");
+    expect(bloque).toContain(") : null}");
+  });
+
+  it("el backend sigue siendo la autoridad real: PUT exige tms:editar vía requireTenantModulo, sin cambios", () => {
+    const route = readFileSync("src/app/api/empresas/[slug]/tms/personal-habilitaciones/route.ts", "utf8");
+    expect(route).toContain('requireTenantModulo(slug, "tms", true)');
   });
 });
