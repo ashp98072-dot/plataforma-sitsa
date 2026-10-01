@@ -91,6 +91,7 @@ const PERIODO_BASE = {
   finExclusivo: "2026-10-01 00:00:00",
   etiqueta: "septiembre de 2026",
   archivo: "viaticos-autorizados-2026-09.pdf",
+  archivoExcel: "viaticos-autorizados-2026-09.xlsx",
 };
 
 beforeEach(() => {
@@ -320,15 +321,16 @@ describe("comprobanteAutorizacionesPdf", () => {
   });
 });
 
-describe("VIATICOS-COMPROBANTE-PERIODO — encabezado muestra el período y el conteo", () => {
-  it("item 40: el encabezado incluye 'Período: <etiqueta>' y el conteo de viáticos autorizados", async () => {
+describe("VIATICOS-COMPROBANTE-ADMIN-1 — cabecera muestra Período (en caja) y el conteo", () => {
+  it("item 40: la cabecera incluye el rótulo 'PERÍODO', el valor del período y el conteo de viáticos autorizados", async () => {
     vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([VIATICO_BASE]);
     vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]);
     const spy = espiarTexto();
     const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
     expect(buf).not.toBeNull();
     const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
-    expect(textos).toContain(`Período: ${PERIODO_BASE.etiqueta}`);
+    expect(textos).toContain("PERÍODO");
+    expect(textos).toContain(PERIODO_BASE.etiqueta);
     expect(textos).toContain("1 viático autorizado");
   });
 
@@ -342,68 +344,48 @@ describe("VIATICOS-COMPROBANTE-PERIODO — encabezado muestra el período y el c
     expect(textos).toContain("2 viáticos autorizados");
   });
 
-  it("la etiqueta de período refleja el período pedido (semana), no el default mensual", async () => {
+  it("el valor de período mostrado refleja el período pedido (semana), no el default mensual", async () => {
     const periodoSemana = {
       inicio: "2026-09-28 00:00:00",
       finExclusivo: "2026-10-05 00:00:00",
       etiqueta: "28 de septiembre al 4 de octubre de 2026",
       archivo: "viaticos-autorizados-2026-W40.pdf",
+      archivoExcel: "viaticos-autorizados-2026-W40.xlsx",
     };
     vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([VIATICO_BASE]);
     vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]);
     const spy = espiarTexto();
     await comprobanteAutorizacionesPdf(7, "SITSA", periodoSemana);
     const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
-    expect(textos).toContain(`Período: ${periodoSemana.etiqueta}`);
+    expect(textos).toContain(periodoSemana.etiqueta);
+  });
+
+  it("la cabecera incluye 'EMPRESA REQUIRIENTE' con el nombre reducido de la empresa, y NO incluye 'Código de petición' ni 'Persona que requiere' (sin fuente real para este comprobante histórico)", async () => {
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([VIATICO_BASE]);
+    vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]);
+    const spy = espiarTexto();
+    await comprobanteAutorizacionesPdf(7, "Kuiqtrans / Logiservicios Mónaco", PERIODO_BASE);
+    const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
+    expect(textos).toContain("EMPRESA REQUIRIENTE");
+    expect(textos).toContain("Logiservicios Mónaco");
+    expect(textos).not.toContain("CÓDIGO DE PETICIÓN");
+    expect(textos).not.toContain("PERSONA QUE REQUIERE");
   });
 });
 
 /**
- * VIATICOS-COMPROBANTE-PERIODO (corrección pre-merge) — la columna "Fecha autorización" de la TABLA debe usar
- * v.autorizadoEn (tms_viaticos.autorizado_en, el mismo criterio que ya decide QUÉ viáticos entran en el período
- * — ver listarViaticosAutorizadosPorPeriodo), NUNCA firma.fechaHoraServidor (firmas_electronicas.fecha_hora_
- * servidor, el momento del REGISTRO de firma) — son dos fuentes distintas que normalmente casi coinciden pero no
- * deben intercambiarse. El bloque de firma (más abajo, "Fecha: ...") SIGUE usando fechaHoraServidor sin cambios.
+ * VIATICOS-COMPROBANTE-ADMIN-1 — la tabla YA NO tiene columna "Fecha autorización" (ver docblock del módulo:
+ * ningún dato de autorización se repite por fila, solo en el bloque de firma final, como pidió el ticket). El
+ * bloque de firma SIGUE usando firma.fechaHoraServidor (fecha de REGISTRO de la firma), nunca v.autorizadoEn
+ * (fecha de transición PROGRAMADO->AUTORIZADO) — son dos fuentes distintas que no deben intercambiarse.
  */
-describe("VIATICOS-COMPROBANTE-PERIODO — 'Fecha autorización' de la tabla usa autorizado_en, no la firma", () => {
-  it("1) la columna de la tabla refleja v.autorizadoEn, formateada con fechaLargaEsGt", async () => {
-    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([
-      { ...VIATICO_BASE, autorizadoEn: "2026-09-15 10:30:00" },
-    ]);
+describe("VIATICOS-COMPROBANTE-ADMIN-1 — la tabla no repite fechas/datos de autorización por fila", () => {
+  it("autorizadoEn null (caso teórico, el WHERE de la consulta histórica ya lo excluye) no rompe el PDF — ya no se dibuja en ningún lado", async () => {
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([{ ...VIATICO_BASE, autorizadoEn: null }]);
     vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]);
-    const spy = espiarTexto();
-    await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
-    const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
-    expect(textos).toContain("15 de septiembre de 2026, 10:30");
-  });
-
-  it("2) autorizadoEn y fechaHoraServidor con minuto/hora distintos: la tabla muestra EXACTAMENTE autorizadoEn, nunca fechaHoraServidor", async () => {
-    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([
-      { ...VIATICO_BASE, autorizadoEn: "2026-09-15 10:30:00" },
-    ]);
-    vi.mocked(listarFirmasViatico).mockResolvedValue([
-      { ...FIRMA_BASE, fechaHoraServidor: "2026-09-15 11:45:05" },
-    ]);
-    const spy = espiarTexto();
-    await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
-    const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
-    // La tabla: 10:30 (de autorizadoEn), nunca 11:45 ni con segundos (:05).
-    expect(textos).toContain("15 de septiembre de 2026, 10:30");
-    expect(textos).not.toContain("15 de septiembre de 2026, 11:45");
-    // El bloque de firma sigue usando fechaHoraServidor (11:45) sin cambios — ver test 4 más abajo.
-    expect(textos).toContain("Fecha: 15 de septiembre de 2026, 11:45");
-  });
-
-  it("3) autorizadoEn existe pero NO se encuentra la firma AUTORIZAR_VIATICO: la tabla sigue mostrando la fecha de autorización real, nunca '—'", async () => {
-    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([
-      { ...VIATICO_BASE, autorizadoEn: "2026-09-15 10:30:00" },
-    ]);
-    vi.mocked(listarFirmasViatico).mockResolvedValue([]); // sin ninguna firma (registro histórico sin firma encontrada)
-    const spy = espiarTexto();
     const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
     expect(buf).not.toBeNull();
-    const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
-    expect(textos).toContain("15 de septiembre de 2026, 10:30");
+    expect(buf!.subarray(0, 4).toString("latin1")).toBe("%PDF");
   });
 
   it("4) el bloque de firma sigue usando firma.fechaHoraServidor (no autorizadoEn) — 'Fecha: ...' bajo 'Autorizado por'", async () => {
@@ -418,14 +400,6 @@ describe("VIATICOS-COMPROBANTE-PERIODO — 'Fecha autorización' de la tabla usa
     const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
     expect(textos).toContain("Fecha: 3 de septiembre de 2026, 18:47");
     expect(textos).not.toContain("Fecha: 1 de septiembre de 2026, 9:00");
-  });
-
-  it("autorizadoEn null (caso teórico, el WHERE de la consulta histórica ya lo excluye): fechaLargaEsGt(null) devuelve '—', sin romper el PDF", async () => {
-    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([{ ...VIATICO_BASE, autorizadoEn: null }]);
-    vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]);
-    const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
-    expect(buf).not.toBeNull();
-    expect(buf!.subarray(0, 4).toString("latin1")).toBe("%PDF");
   });
 });
 
@@ -482,56 +456,40 @@ describe("VIATICOS-PDF-PRESENTACION-1 — bloque 'Autorizado por' muestra SOLO e
   });
 });
 
-describe("VIATICOS-PDF-PRESENTACION-1 — columna Monto completa y centrada", () => {
-  it("el encabezado 'Monto' se dibuja centrado", async () => {
+describe("VIATICOS-COMPROBANTE-ADMIN-1 — columna Total completa y alineada a la derecha", () => {
+  it("el encabezado 'Total' se dibuja alineado a la derecha", async () => {
     vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([VIATICO_BASE]);
     vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]);
     const spy = espiarTexto();
     await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
-    const encabezado = spy.mock.calls.map(llamadaTexto).find((c) => c.texto === "Monto");
+    const encabezado = spy.mock.calls.map(llamadaTexto).find((c) => c.texto === "Total");
     expect(encabezado).toBeDefined();
-    expect(encabezado!.opciones?.align).toBe("center");
+    expect(encabezado!.opciones?.align).toBe("right");
   });
 
-  it("valores de Monto se dibujan centrados y COMPLETOS, sin truncar con '…', para montos normales en GTQ", async () => {
-    // Columnas largas a propósito (mismo escenario que reprodujo el bug
-    // real: "Q50.00" -> "Q50.0…" cuando Cliente/Empleado/Código de firma
-    // son largos y le quitan espacio proporcional a Monto).
-    const v1 = {
-      ...VIATICO_BASE, planCodigo: "VJ-20260901-00123456", cliente: "Distribuidora Guatemalteca de Alimentos S.A.",
-      personalNombre: "Juan Carlos Perez Lopez Gonzalez", montoAsignado: 50,
-    };
-    const v2 = {
-      ...VIATICO_BASE, id: 2, planCodigo: "VJ-20260901-00123457", cliente: "Distribuidora Guatemalteca de Alimentos S.A.",
-      personalNombre: "Maria Fernanda Lopez", montoAsignado: 1250,
-    };
+  it("valores de Total se dibujan COMPLETOS, sin truncar con '…', para montos normales en GTQ con miles", async () => {
+    const v1 = { ...VIATICO_BASE, planCodigo: "VJ-001", personalNombre: "Juan Pérez", montoAsignado: 50 };
+    const v2 = { ...VIATICO_BASE, id: 2, planCodigo: "VJ-002", personalNombre: "María López", montoAsignado: 1250 };
     vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([v1, v2]);
-    vi.mocked(listarFirmasViatico).mockResolvedValue([
-      { ...FIRMA_BASE, nombreFirmante: "Heber Alexander Sitan Ramirez", codigoFirma: "SIG-20260909-a1b2c3d4" },
-    ]);
+    vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]);
     const spy = espiarTexto();
     const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
     expect(buf).not.toBeNull();
     const textos = spy.mock.calls.map(llamadaTexto);
     const montos = textos.filter((t) => /^Q[\d.,]+$/.test(t.texto));
     expect(montos.map((m) => m.texto)).toEqual(["Q50.00", "Q1,250.00"]);
-    for (const m of montos) expect(m.opciones?.align).toBe("center");
+    for (const m of montos) expect(m.opciones?.align).toBe("right");
   });
 
-  it("ningún texto dibujado en el PDF contiene el carácter de truncamiento '…'", async () => {
-    const v1 = {
-      ...VIATICO_BASE, planCodigo: "VJ-20260901-00123456", cliente: "Distribuidora Guatemalteca de Alimentos S.A.",
-      personalNombre: "Juan Carlos Perez Lopez Gonzalez", montoAsignado: 999999.99,
-    };
-    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([v1]);
-    vi.mocked(listarFirmasViatico).mockResolvedValue([
-      { ...FIRMA_BASE, nombreFirmante: "Heber Alexander Sitan Ramirez", codigoFirma: "SIG-20260909-a1b2c3d4" },
-    ]);
+  it("el 'TOTAL GENERAL' suma exactamente los montos de las filas exportadas", async () => {
+    const v1 = { ...VIATICO_BASE, planCodigo: "VJ-001", montoAsignado: 100 };
+    const v2 = { ...VIATICO_BASE, id: 2, planCodigo: "VJ-002", montoAsignado: 250.5 };
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([v1, v2]);
+    vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]);
     const spy = espiarTexto();
     await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
     const textos = spy.mock.calls.map((c) => llamadaTexto(c).texto);
-    const truncados = textos.filter((t) => t.includes("…"));
-    expect(truncados).toEqual([]);
+    expect(textos).toContain("TOTAL GENERAL: Q350.50");
   });
 });
 
