@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db", () => ({ execute: vi.fn(), getPool: vi.fn(), query: vi.fn() }));
+vi.mock("@/lib/tms/cuadrilla", () => ({ cuadrillaDePlanes: vi.fn(() => Promise.resolve(new Map())) }));
 vi.mock("@/lib/auditoria", () => ({ registrarAuditoria: vi.fn() }));
 vi.mock("@/lib/tenant", () => ({
   requireTenantProgramacion: vi.fn(),

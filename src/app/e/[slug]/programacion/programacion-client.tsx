@@ -15,6 +15,7 @@ import { tienePermiso } from "@/lib/permisos-shared";
 import { exportarProgramacionComoImagen } from "./programacion-exportar-imagen";
 import { celdaPilotoImagen, mesDia, type FilaProgramacionImagen } from "@/lib/tms/programacion-imagen";
 import { auxiliaresDeVista, pilotosDeVista, tieneAuxiliaresVista, tienePilotoVista } from "@/lib/tms/programacion-personal-vista";
+import { textoCuadrilla } from "@/lib/tms/cuadrilla-contrato";
 import { EdicionRapida, type FilaEdicionRapidaEntrada } from "./edicion-rapida";
 import { confirmarPerdida, MSG_CAMBIOS_PENDIENTES, puedeUsarEdicionRapida, type TarifaRutaEdicion } from "./edicion-rapida-helpers";
 
@@ -82,6 +83,7 @@ type AuxiliarPlan = {
 };
 
 export type Plan = {
+  cuadrilla?: import("@/lib/tms/cuadrilla-contrato").IntegranteCuadrilla[];
   id: number;
   codigo: string;
   fecha_plan: string;
@@ -1089,6 +1091,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
             : celdaPilotoImagen(p.piloto, p.pilotoExtraNombre),
           auxiliar1: esTercerizado ? (auxiliaresExternos[0] ?? "") : (p.auxiliares[0] ?? ""),
           auxiliar2: esTercerizado ? (auxiliaresExternos[1] ?? "") : (p.auxiliares[1] ?? ""),
+          cuadrilla: textoCuadrilla(p.cuadrilla ?? []),
           cliente: p.cliente || "",
           lugarCarga: origen || "",
           hora: p.hora_carga ? p.hora_carga.slice(0, 5) : "",
@@ -1678,6 +1681,10 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
                     <p className="text-[var(--muted)]">Sin auxiliares</p>
                   )}
                 </div>
+                  <div>
+                    <p className="text-[11px] text-[var(--muted)]">Cuadrilla</p>
+                    {(p.cuadrilla ?? []).length ? p.cuadrilla!.map((c, i) => <p key={`${c.empleadoId ?? "externo"}-${i}`} className="text-[12px] break-words">{c.nombre} · {c.tipo === "INTERNO" ? "Interno" : "Externo"}</p>) : <p className="text-[var(--muted)]">Sin cuadrilla</p>}
+                  </div>
               </div>
 
               <div className="mt-3 grid gap-2 border-t border-[var(--border)] pt-2 text-sm sm:grid-cols-2 lg:grid-cols-4">

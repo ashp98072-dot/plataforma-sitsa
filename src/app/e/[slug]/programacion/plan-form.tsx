@@ -13,6 +13,8 @@ import {
 } from "@/lib/tms/plan-form-viaticos";
 import { RutaSelect, type RutaOpt } from "@/components/tms/ruta-select";
 import { AuxiliaresSelect } from "@/components/tms/auxiliares-select";
+import { CuadrillaSelect } from "@/components/tms/cuadrilla-select";
+import { cuadrillaPayload, type IntegranteCuadrilla } from "@/lib/tms/cuadrilla-contrato";
 import { Hora12Input } from "@/components/tms/hora-input-12h";
 import { FechaHora12Input } from "@/components/tms/fecha-hora-12h-input";
 import { formatearHora12 } from "@/lib/tms/hora-formato";
@@ -311,6 +313,9 @@ export default function PlanForm({
   const [clientesCat, setClientesCat] = useState<ClienteCat[]>([]);
   const [pilotos, setPilotos] = useState<EmpOps[]>([]);
   const [auxiliares, setAuxiliares] = useState<EmpOps[]>([]);
+  const [empleadosCuadrilla, setEmpleadosCuadrilla] = useState<EmpOps[]>([]);
+  const [cuadrilla, setCuadrilla] = useState<IntegranteCuadrilla[]>(plan?.cuadrilla ?? []);
+  const cuadrillaCambio = esEdicion && JSON.stringify(cuadrillaPayload(cuadrilla)) !== JSON.stringify(cuadrillaPayload(plan?.cuadrilla ?? []));
   // Mejora Programación (Opción A) — configuración de montos sugeridos
   // (tms_viaticos_config, misma que ya usa ViaticosConfigPanel en TMS) y
   // los montos que el usuario ajusta ANTES del primer guardado, keyed por
@@ -551,6 +556,7 @@ export default function PlanForm({
     if (ops.ok) {
       const o = await ops.json();
       const list = (o.personal ?? []) as EmpOps[];
+      setEmpleadosCuadrilla(list);
       const match = (p: EmpOps, kind: "piloto" | "auxiliar") => {
         const catOps = (p.categoriaOps || "").toLowerCase();
         const puesto = (p.puesto || "").toLowerCase();
@@ -1167,7 +1173,7 @@ export default function PlanForm({
     }
     // OPS-AJUSTES (sección 3) — mismo requisito del backend, verificado
     // aquí primero para no obligar un viaje redondo solo por el motivo.
-    if (cambioSensible && !motivoCambioFinal) {
+    if ((cambioSensible || cuadrillaCambio) && !motivoCambioFinal) {
       setError("Indica el motivo del cambio de piloto, unidad o auxiliares.");
       return;
     }
@@ -1211,6 +1217,7 @@ export default function PlanForm({
               form.tipoViaje === "Propio" && form.mostrarPilotoExtra && form.pilotoExtraEmpleadoId ? form.pilotoExtraEmpleadoId : undefined,
             auxiliarEmpleadoIds: form.auxiliarEmpleadoIds.length ? form.auxiliarEmpleadoIds : undefined,
             auxiliarNombres: form.auxiliarNombres.length ? form.auxiliarNombres : undefined,
+            cuadrilla: cuadrillaPayload(cuadrilla),
             ...camposTipoViaje(),
             paradas,
             lugarCarga: paradas.find((p) => p.tipo === "Carga")?.lugarNombre,
@@ -1297,7 +1304,8 @@ export default function PlanForm({
           // dedicadas (marcarCargado()/cancelarViaje() más abajo), y
           // "En ruta"/"Cerrado" nunca fueron responsabilidad de este
           // formulario (Portal y /cerrar respectivamente).
-          motivoCambio: camposSensibles.motivoCambio,
+          motivoCambio: cuadrillaCambio ? motivoCambioFinal : camposSensibles.motivoCambio,
+          cuadrilla: !bloqueadoParaPreCierre && cuadrillaCambio ? cuadrillaPayload(cuadrilla) : undefined,
           auxiliarEmpleadoIds: camposSensibles.auxiliarEmpleadoIds,
           auxiliarNombres: camposSensibles.auxiliarNombres,
           // Tipo de traslado: se guarda al editarlo (antes se mostraba pero nunca se enviaba). Solo si cambió; bloqueado en "En ruta" sin llegada.
@@ -1970,7 +1978,7 @@ export default function PlanForm({
       {/* OPS-AJUSTES (sección 3) — motivo obligatorio, solo visible cuando
           piloto/unidad/auxiliares realmente cambian respecto al plan
           original (cambioSensible). El backend lo vuelve a exigir. */}
-      {cambioSensible ? (
+      {cambioSensible || cuadrillaCambio ? (
         <div className="md:col-span-3 space-y-1 rounded border border-amber-700/60 bg-amber-950/10 p-2 text-xs">
           <label className="block text-[var(--muted)]">
             Motivo del cambio (piloto/unidad/auxiliares)
@@ -1993,6 +2001,9 @@ export default function PlanForm({
         </div>
       ) : null}
 
+      <CuadrillaSelect integrantes={cuadrilla} empleados={empleadosCuadrilla} ocupados={ocupacionPersonal}
+        excluidos={[form.pilotoEmpleadoId, form.mostrarPilotoExtra ? form.pilotoExtraEmpleadoId : 0, ...form.auxiliarEmpleadoIds]}
+        disabled={bloqueadoParaPreCierre || bloqueado} onChange={setCuadrilla} />
       <label className={`text-xs text-[var(--muted)] ${soloNotas || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
         Tipo de traslado
         <input

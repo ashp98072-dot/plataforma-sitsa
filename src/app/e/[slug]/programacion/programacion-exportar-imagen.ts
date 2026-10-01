@@ -9,6 +9,7 @@ import {
   envolverTexto,
   type EncabezadoProgramacionImagen,
   type FilaProgramacionImagen,
+  type ColumnaImagen,
 } from "@/lib/tms/programacion-imagen";
 
 /**
@@ -63,6 +64,7 @@ function dibujarPagina(
   filas: string[][],
   anchoLienzo: number,
   altoEncabezado: number,
+  columnas: ColumnaImagen[],
 ): HTMLCanvasElement {
   const anchoTabla = anchoColumnas.reduce((s, a) => s + a, 0);
   // Cada celda se envuelve por palabras (y respeta sus saltos de línea, p. ej. piloto principal + piloto extra en la MISMA celda): la fila
@@ -100,7 +102,7 @@ function dibujarPagina(
   ctx.fillRect(MARGEN, y, anchoTabla, ALTO_FILA_CABECERA);
   ctx.font = "bold 13px Arial, sans-serif";
   ctx.fillStyle = COLOR_TEXTO_ENCABEZADO_TABLA;
-  COLUMNAS_IMAGEN.forEach((col, i) => {
+  columnas.forEach((col, i) => {
     const w = anchoColumnas[i];
     const texto = truncar(ctx, col.titulo, w - PAD_X * 2);
     if (col.alinear === "right") ctx.fillText(texto, x + w - PAD_X - ctx.measureText(texto).width, y + 11);
@@ -127,7 +129,7 @@ function dibujarPagina(
       lineasFilas[indice][i].forEach((linea, k) => {
         const texto = truncar(ctx, linea, w - PAD_X * 2); // defensa final: solo una palabra suelta más ancha que la celda
         const yTexto = y + 9 + k * ALTO_LINEA_EXTRA;
-        if (COLUMNAS_IMAGEN[i]?.alinear === "right") ctx.fillText(texto, x + w - PAD_X - ctx.measureText(texto).width, yTexto);
+        if (columnas[i]?.alinear === "right") ctx.fillText(texto, x + w - PAD_X - ctx.measureText(texto).width, yTexto);
         else ctx.fillText(texto, x + PAD_X, yTexto);
       });
       x += w;
@@ -198,7 +200,9 @@ export async function exportarProgramacionComoImagen(
   const nombreBase = opts.nombreBase ?? "programacion";
 
   const altoEncabezado = 90;
-  const layout = construirLayoutImagen(encabezado, filas, { altoEncabezado });
+  const medidor = document.createElement("canvas").getContext("2d")!;
+  medidor.font = "13px Arial, sans-serif";
+  const layout = construirLayoutImagen(encabezado, filas, { altoEncabezado, medirTexto: (texto) => medidor.measureText(texto).width });
 
   for (let i = 0; i < layout.paginas.length; i++) {
     const canvas = dibujarPagina(
@@ -208,6 +212,7 @@ export async function exportarProgramacionComoImagen(
       layout.paginas[i],
       layout.anchoColumnas.reduce((s, a) => s + a, 0) + MARGEN * 2,
       altoEncabezado,
+      layout.columnas ?? COLUMNAS_IMAGEN,
     );
     const blob = await canvasABlob(canvas, tipo);
     const sufijo = layout.totalPaginas > 1 ? `-pagina-${i + 1}-de-${layout.totalPaginas}` : "";

@@ -56,7 +56,7 @@ let dispPersonal: Record<string, unknown>[];
 function crearConexion() {
   return {
     beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn(),
-    query: vi.fn(async (sql: string) => (String(sql).includes("GET_LOCK") ? [[{ l: 1 }]] : String(sql).includes("RELEASE_LOCK") ? [[{ l: 1 }]] : [[]])),
+    query: vi.fn(async (sql: string): Promise<Record<string, unknown>[][]> => (String(sql).includes("GET_LOCK") ? [[{ l: 1 }]] : String(sql).includes("RELEASE_LOCK") ? [[{ l: 1 }]] : [[]])),
     execute: vi.fn(async () => [{ insertId: 91, affectedRows: 1 }]),
   };
 }
@@ -100,6 +100,109 @@ beforeEach(() => {
 });
 
 const BASE_POST = { fechaPlan: MANANA, horaCarga: "08:00", tipoViaje: "Propio", pilotoEmpleadoId: 100, paradas: [{ lugarNombre: "Bodega", tipo: "Carga" }, { lugarNombre: "Cliente", tipo: "Descarga" }] };
+
+describe("Cuadrilla — POST/PATCH reales, sin viáticos adicionales", () => {
+  function datosCuadrilla(empleados: Record<string, unknown>[] = [{ id: 555, nombre: "Interno servidor", estado: "Activo" }], guardados: Record<string, unknown>[] = []) {
+    conexion.query.mockImplementation(async (sql: string) => {
+      if (sql.includes("GET_LOCK") || sql.includes("RELEASE_LOCK")) return [[{ l: 1 }]];
+      if (sql.includes("SELECT id, nombre, estado FROM empleados")) return [empleados];
+      if (sql.includes("FROM tms_plan_cuadrilla c")) return [guardados];
+      if (sql.includes("SELECT id FROM tms_planes_viaje")) return [[{ id: 40 }]];
+      if (sql.includes("SELECT id_empleado FROM tms_personal")) return [[{ id_empleado: 100 }]];
+      return [[]];
+    });
+  }
+  it("crea mezcla interna/externa; snapshot servidor, tabla propia y viáticos solo de piloto", async () => {
+    datosCuadrilla();
+    const res = await post({ ...BASE_POST, cuadrilla: [{ tipo: "INTERNO", empleadoId: 555 }, { tipo: "EXTERNO", nombre: "Proveedor externo", telefono: "123" }] });
+    expect(res.status).toBe(200);
+    const guardados = llamadas(conexion.execute, "INSERT INTO tms_plan_cuadrilla");
+    expect(guardados).toHaveLength(2);
+    expect(guardados[0][1]).toEqual([7, 91, 1, "INTERNO", 555, "Interno servidor", null, null]);
+    expect(guardados[1][1]).toEqual([7, 91, 2, "EXTERNO", null, "Proveedor externo", null, "123"]);
+    expect(sincronizarViaticosPlan).toHaveBeenCalledWith(7, 91, { piloto: 10, pilotoExtra: null, auxiliares: [] }, conexion, expect.any(Array));
+    expect(guardarAuxiliaresPlan).toHaveBeenCalledWith(91, [], conexion);
+    expect(primerConflictoProgramacionIntervalo).toHaveBeenLastCalledWith(7, expect.arrayContaining([{ tipo: "cuadrilla", id: 555 }]), expect.any(Object), [], conexion);
+  });
+  it("interno ajeno -> 400 y rollback antes de INSERT del plan", async () => {
+    datosCuadrilla([]);
+    expect((await post({ ...BASE_POST, cuadrilla: [{ tipo: "INTERNO", empleadoId: 555 }] })).status).toBe(400);
+    expect(llamadas(conexion.execute, "INSERT INTO tms_planes_viaje")).toHaveLength(0); expect(conexion.rollback).toHaveBeenCalled();
+  });
+  it("nombre externo faltante y nombre interno libre -> 400", async () => {
+    expect((await post({ ...BASE_POST, cuadrilla: [{ tipo: "EXTERNO", nombre: " " }] })).status).toBe(400);
+    expect((await post({ ...BASE_POST, cuadrilla: [{ tipo: "INTERNO", empleadoId: 555, nombre: "Falso" }] })).status).toBe(400);
+  });
+  it("edita solo cuadrilla sin sincronizar viáticos ni cambiar auxiliares", async () => {
+    datosCuadrilla();
+    expect((await patch({ id: 40, motivoCambio: "Cambio cuadrilla", cuadrilla: [{ tipo: "INTERNO", empleadoId: 555 }] })).status).toBe(200);
+    expect(llamadas(conexion.execute, "INSERT INTO tms_plan_cuadrilla")).toHaveLength(1);
+    expect(sincronizarViaticosPlan).not.toHaveBeenCalled(); expect(guardarAuxiliaresPlan).not.toHaveBeenCalled();
+  });
+  it("PATCH sin cuadrilla conserva asignaciones y revalida internos existentes", async () => {
+    datosCuadrilla([], [{ plan_id: 40, tipo: "INTERNO", id_empleado: 555, nombre: "Nombre histórico" }]);
+    expect((await patch({ id: 40, horaCarga: "09:00" })).status).toBe(200);
+    expect(llamadas(conexion.execute, "tms_plan_cuadrilla")).toHaveLength(0);
+    expect(primerConflictoProgramacionIntervalo).toHaveBeenCalledWith(7, expect.arrayContaining([{ tipo: "cuadrilla", id: 555 }]), expect.any(Object), [40], conexion);
+  });
+  it("quitar todos es explícito y no toca viáticos", async () => {
+    datosCuadrilla([], [{ plan_id: 40, tipo: "EXTERNO", id_empleado: null, nombre: "Externo" }]);
+    expect((await patch({ id: 40, motivoCambio: "Retiro", cuadrilla: [] })).status).toBe(200);
+    expect(llamadas(conexion.execute, "DELETE FROM tms_plan_cuadrilla")).toHaveLength(1); expect(sincronizarViaticosPlan).not.toHaveBeenCalled();
+  });
+  it("En ruta sin llegada no permite cambiar integrantes", async () => {
+    filaPlan = plan({ estado: "En ruta", pendiente_cierre: 0 });
+    expect((await patch({ id: 40, motivoCambio: "Retiro", cuadrilla: [] })).status).toBe(409);
+    expect(conexion.beginTransaction).not.toHaveBeenCalled();
+  });
+  it("cuadrilla requiere motivo en edición", async () => { expect((await patch({ id: 40, cuadrilla: [] })).status).toBe(400); });
+  const tercerizado = () => { filaPlan = plan({ tipo_viaje: "Tercerizado", piloto_id: null, unidad_id: null, flota_vehiculo_id: null, placa: null, piloto: null }); };
+  it.each([{ cuadrilla: [] }, { cuadrilla: [{ tipo: "EXTERNO", nombre: "Externo" }] }])("tercerizado sin internos no intenta GET_LOCK, aun si el candado no está disponible: %j", async ({ cuadrilla }) => {
+    tercerizado(); datosCuadrilla();
+    const original = conexion.query.getMockImplementation()!;
+    conexion.query.mockImplementation(async (sql) => sql.includes("GET_LOCK") ? [[{ l: 0 }]] : original(sql));
+    expect((await patch({ id: 40, motivoCambio: "Cuadrilla", cuadrilla })).status).toBe(200);
+    expect(llamadas(conexion.query, "GET_LOCK")).toHaveLength(0);
+    expect(primerConflictoProgramacionIntervalo).not.toHaveBeenCalled();
+    expect(sincronizarViaticosPlan).not.toHaveBeenCalled();
+  });
+  it("propio sin ningún recurso interno tampoco requiere lock", async () => {
+    filaPlan = plan({ piloto_id: null, unidad_id: null, flota_vehiculo_id: null, placa: null, piloto: null });
+    expect((await patch({ id: 40, notas: "x" })).status).toBe(200);
+    expect(llamadas(conexion.query, "GET_LOCK")).toHaveLength(0);
+  });
+  it("tercerizado con cuadrilla interna usa GET_LOCK y revalidación current-read, excluyendo su viaje", async () => {
+    tercerizado(); datosCuadrilla();
+    expect((await patch({ id: 40, motivoCambio: "Cuadrilla", cuadrilla: [{ tipo: "INTERNO", empleadoId: 555 }] })).status).toBe(200);
+    expect(llamadas(conexion.query, "GET_LOCK")).toHaveLength(1);
+    expect(primerConflictoProgramacionIntervalo).toHaveBeenCalledWith(7, [{ tipo: "cuadrilla", id: 555 }], expect.any(Object), [40], conexion);
+    expect(sincronizarViaticosPlan).not.toHaveBeenCalled();
+    const orden = conexion.query.mock.invocationCallOrder;
+    const lectura = conexion.query.mock.calls.findIndex(([sql]) => sql.includes("FROM tms_plan_cuadrilla c"));
+    expect(orden[0]).toBeLessThan(orden[lectura]);
+    expect(conexion.commit.mock.invocationCallOrder[0]).toBeLessThan(orden.at(-1)!);
+  });
+  it("tercerizado con cuadrilla interna no escribe si no consigue el candado", async () => {
+    tercerizado(); datosCuadrilla();
+    const original = conexion.query.getMockImplementation()!;
+    conexion.query.mockImplementation(async (sql) => sql.includes("GET_LOCK") ? [[{ l: 0 }]] : original(sql));
+    expect((await patch({ id: 40, motivoCambio: "Cuadrilla", cuadrilla: [{ tipo: "INTERNO", empleadoId: 555 }] })).status).toBe(409);
+    expect(conexion.commit).not.toHaveBeenCalled();
+    expect(primerConflictoProgramacionIntervalo).not.toHaveBeenCalled();
+  });
+  it("tercerizado con interno solapado responde 409 y revierte", async () => {
+    tercerizado(); datosCuadrilla();
+    vi.mocked(primerConflictoProgramacionIntervalo).mockResolvedValue({ tipo: "cuadrilla", id: 555, nombre: "Interno", planIdConflicto: 9, codigoConflicto: "PLAN-9", inicioConflicto: `${MANANA} 08:00:00`, finConflicto: `${MANANA} 11:00:00` });
+    expect((await patch({ id: 40, motivoCambio: "Cuadrilla", cuadrilla: [{ tipo: "INTERNO", empleadoId: 555 }] })).status).toBe(409);
+    expect(conexion.rollback).toHaveBeenCalled(); expect(conexion.commit).not.toHaveBeenCalled();
+  });
+  it("POST tercerizado reserva exclusivamente cuadrilla interna y no genera sus viáticos", async () => {
+    datosCuadrilla();
+    expect((await post({ fechaPlan: MANANA, horaCarga: "08:00", tipoViaje: "Tercerizado", pilotoExternoNombre: "Externo", paradas: BASE_POST.paradas, cuadrilla: [{ tipo: "INTERNO", empleadoId: 555 }] })).status).toBe(200);
+    expect(primerConflictoProgramacionIntervalo).toHaveBeenLastCalledWith(7, [{ tipo: "cuadrilla", id: 555 }], expect.any(Object), [], conexion);
+    expect(sincronizarViaticosPlan).toHaveBeenCalledWith(7, 91, { piloto: null, pilotoExtra: null, auxiliares: [] }, conexion, expect.any(Array));
+  });
+});
 
 describe("POST — crear viaje", () => {
   it("1) un piloto: comportamiento de siempre (sin piloto extra, sin escritura en la tabla nueva, sync con pilotoExtra null)", async () => {

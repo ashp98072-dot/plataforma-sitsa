@@ -391,7 +391,7 @@ describe("identidad de personal por empleado — POST y PATCH usan la misma regl
 
   it("planes/route.ts no reimplementa la identidad: usa primerConflictoTraslape en POST y PATCH", () => {
     const fuente = readFileSync("src/app/api/empresas/[slug]/tms/planes/route.ts", "utf8");
-    expect((fuente.match(/primerConflictoProgramacionIntervalo\(/g) ?? []).length).toBe(2);
+    expect((fuente.match(/primerConflictoProgramacionIntervalo\(/g) ?? []).length).toBe(3); // POST + revalidación Cuadrilla + PATCH
     expect(fuente).not.toContain("primerConflictoProgramacionDia(");
     expect(fuente).not.toContain("eq.id_empleado");
   });

@@ -266,6 +266,6 @@ describe("el POST/PATCH ya no usan la política diaria", () => {
     const { readFileSync } = await import("node:fs");
     const fuente = readFileSync("src/app/api/empresas/[slug]/tms/planes/route.ts", "utf8");
     expect(fuente).not.toContain("primerConflictoProgramacionDia");
-    expect((fuente.match(/primerConflictoProgramacionIntervalo\(/g) ?? []).length).toBe(2);
+    expect((fuente.match(/primerConflictoProgramacionIntervalo\(/g) ?? []).length).toBe(3); // POST + revalidación Cuadrilla + PATCH
   });
 });

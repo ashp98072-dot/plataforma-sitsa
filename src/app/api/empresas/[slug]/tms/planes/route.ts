@@ -26,7 +26,9 @@ import { ahoraLocal, hoyLocal, toIsoDate } from "@/lib/rrhh/dates";
 import { listarViaticosRechazadosDelPlan, personalRecienAsignadoDelPlan, sincronizarViaticosPlan } from "@/lib/tms/viaticos";
 import { planesConCierreManual } from "@/lib/tms/cierre-manual-planes";
 import { SQL_HORA_LLEGADA_REAL } from "@/lib/tms/disponibilidad-traslapes";
-import type { RecursoDia } from "@/lib/tms/disponibilidad-programacion-dia";
+import type { RecursoProgramacion as RecursoDia } from "@/lib/tms/disponibilidad-programacion-intervalos";
+import { cuadrillaSchema, textoCuadrilla } from "@/lib/tms/cuadrilla-contrato";
+import { CuadrillaError, cuadrillaDePlanes, resolverCuadrilla, validarCuadrillaRoles, guardarCuadrillaPlan } from "@/lib/tms/cuadrilla";
 import {
   mensajeConflictoProgramacionIntervalo,
   primerConflictoProgramacionIntervalo,
@@ -393,6 +395,7 @@ export async function GET(req: Request, ctx: Ctx) {
   ]);
 
   const planIds = rows.map((r) => Number(r.id));
+  const cuadrillaMap = await cuadrillaDePlanes(guard.empresa.id, planIds);
   const [paradasMap, auxMap, cierreManualIds, extraMap] = await Promise.all([
     listarParadasDePlanes(planIds),
     auxiliaresDePlanes(planIds),
@@ -464,6 +467,7 @@ export async function GET(req: Request, ctx: Ctx) {
       // reemplaza `auxiliares` (string[]) — TMS y otros consumidores
       // existentes siguen leyendo ese campo tal cual.
       auxiliaresDetalle,
+      cuadrilla: cuadrillaMap.get(id) ?? [],
       // EDICIÓN RÁPIDA PR-3 (aditivo): ids EXACTOS que el validador de edición rápida compara como snapshot —
       // unidad por flota_vehiculos.id y auxiliares SOLO de tms_plan_auxiliares (sin el fallback legado de
       // auxiliaresDetalle), en su orden (el primero es el principal).
@@ -542,6 +546,7 @@ export async function GET(req: Request, ctx: Ctx) {
 }
 
 const schema = z.object({
+  cuadrilla: cuadrillaSchema.optional(),
   codigo: z.string().optional(),
   fechaPlan: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   horaCarga: z.string().regex(/^\d{2}:\d{2}(?::\d{2})?$/).optional(),
@@ -986,6 +991,7 @@ export async function POST(req: Request, ctx: Ctx) {
   // Piloto, auxiliares y unidad quedan ocupados durante toda fecha_plan.
   // La hora y el regreso estimado no modifican esta reserva diaria.
   const recursosNuevoPlan: RecursoDia[] = [
+    ...(d.cuadrilla ?? []).flatMap((c) => c.tipo === "INTERNO" ? [{ tipo: "cuadrilla" as const, id: c.empleadoId }] : []),
     ...(pilotoId ? [{ tipo: "piloto" as const, id: pilotoId }] : []),
     // El piloto extra consume disponibilidad EXACTAMENTE igual que el principal (mismo motor, misma ventana).
     ...(pilotoExtraId ? [{ tipo: "piloto" as const, id: pilotoExtraId }] : []),
@@ -1102,6 +1108,13 @@ export async function POST(req: Request, ctx: Ctx) {
 
     await conn.beginTransaction();
 
+    const cuadrilla = await resolverCuadrilla(empresaId, d.cuadrilla ?? [], conn);
+    await validarCuadrillaRoles(empresaId, cuadrilla, [pilotoId, pilotoExtraId, ...auxPersonalIds].filter((id): id is number => id != null), conn);
+    if (cuadrilla.some((c) => c.empleadoId != null)) {
+      const conflicto = await primerConflictoProgramacionIntervalo(empresaId, recursosNuevoPlan,
+        ventanaProgramacionSegura({ fechaPlan: d.fechaPlan, horaCarga: d.horaCarga ?? null, regresoEstimado: d.regresoEstimado ?? null }), [], conn);
+      if (conflicto) throw new CuadrillaError(mensajeConflictoProgramacionIntervalo(conflicto), 409);
+    }
     for (let attempt = 0; attempt < 5; attempt++) {
       try {
         const [result] = await conn.execute<ResultSetHeader>(
@@ -1165,6 +1178,11 @@ export async function POST(req: Request, ctx: Ctx) {
       );
     }
     await guardarAuxiliaresPlan(planId, auxPersonalIds, conn);
+    if (cuadrilla.length) {
+      await guardarCuadrillaPlan(empresaId, planId, cuadrilla, conn);
+      await registrarAuditoriaTx(conn, { empresaId, usuario: guard.session.username, accion: "crear_ruta", modulo: "tms",
+        detalle: `Plan #${planId} · cuadrilla [${textoCuadrilla(cuadrilla)}]` });
+    }
     // Piloto extra: misma transacción que el plan (rollback conjunto). Sin extra no se escribe nada.
     if (pilotoExtraId != null) await guardarPilotoExtraPlan(empresaId, planId, pilotoExtraId, conn);
     if (paradasInput.length) {
@@ -1194,6 +1212,7 @@ export async function POST(req: Request, ctx: Ctx) {
     await conn.commit();
   } catch (e) {
     await conn.rollback();
+    if (e instanceof CuadrillaError) return NextResponse.json({ error: e.message }, { status: e.status });
     console.error("POST tms/planes (transacción de alta)", e);
     return NextResponse.json(
       { error: "No se pudo crear el viaje. No se guardó ningún cambio." },
@@ -1244,6 +1263,7 @@ export async function POST(req: Request, ctx: Ctx) {
 }
 
 const patchSchema = z.object({
+  cuadrilla: cuadrillaSchema.optional(),
   id: z.number().int().positive(),
   pilotoNombre: z.string().optional(),
   auxiliarNombre: z.string().optional(),
@@ -1506,6 +1526,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // handler. Cualquier PATCH que NO lo traiga sigue exactamente el mismo
   // camino de siempre (todo lo de abajo, sin cambios).
   if (d.tipoViaje !== undefined) {
+    if (d.cuadrilla !== undefined) return NextResponse.json({ error: "Guarda el cambio de tipo de viaje separado del cambio de cuadrilla." }, { status: 400 });
     return patchTipoViaje(empresaId, d, guard.session.username);
   }
 
@@ -1693,6 +1714,10 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // regla exclusiva de Programación (mismo criterio ya usado para bloquear
   // paradas en "En ruta").
   const toca = camposTocados(d);
+  if (d.cuadrilla !== undefined) {
+    if (!d.motivoCambio?.trim()) return NextResponse.json({ error: "Indica el motivo del cambio de cuadrilla." }, { status: 400 });
+    if (antes.estado === "En ruta" && !antes.pendienteCierre) return NextResponse.json({ error: "No se puede cambiar la cuadrilla de un viaje En ruta sin llegada." }, { status: 409 });
+  }
 
   // OPS-AJUSTES (sección 3) — motivo obligatorio para cambios sensibles:
   // piloto, unidad y auxiliares. Se valida aquí, ANTES de cualquier
@@ -1955,6 +1980,26 @@ export async function PATCH(req: Request, ctx: Ctx) {
   let lockTraslapeAdquirido = false;
   try {
     await conn.beginTransaction();
+    // La prelectura solo decide si hace falta el candado; la lectura autoritativa
+    // sigue siendo current-read en esta transacción. Sin recursos no hay GET_LOCK.
+    const cuadrillaPrevia = (await cuadrillaDePlanes(empresaId, [d.id])).get(d.id) ?? [];
+    const necesitaCandado = (d.estado ?? antes.estado) !== "Cancelado" && (
+      (d.cuadrilla ?? cuadrillaPrevia).some((c) => c.tipo === "INTERNO")
+      || Boolean(pilotoId ?? antes.pilotoId) || Boolean(pilotoExtraFinalPatch)
+      || (auxPersonalIdsNuevo ?? auxPersonalIdsLegado ?? antesAuxiliaresIds).length > 0
+      || Boolean(unidadId ?? antes.unidadId) || Boolean(placaNorm) || Boolean(d.flotaVehiculoId) || Boolean(tcEfectivo)
+    );
+    if (necesitaCandado) try {
+      const [lockCuadrilla] = await conn.query<RowDataPacket[]>("SELECT GET_LOCK(?, 8) AS l", [`tms_traslape_${empresaId}`]);
+      lockTraslapeAdquirido = Number(lockCuadrilla[0]?.l) === 1;
+    } catch {
+      lockTraslapeAdquirido = false;
+    }
+    if (necesitaCandado && !lockTraslapeAdquirido) throw new CuadrillaError("No se pudo validar la disponibilidad de recursos porque hay otra operación en curso. Intenta de nuevo.", 409);
+    const cuadrillaAnterior = (await cuadrillaDePlanes(empresaId, [d.id], conn)).get(d.id) ?? [];
+    const cuadrillaEfectiva = d.cuadrilla === undefined ? cuadrillaAnterior : await resolverCuadrilla(empresaId, d.cuadrilla, conn, cuadrillaAnterior);
+    await validarCuadrillaRoles(empresaId, cuadrillaEfectiva,
+      [pilotoId ?? antes.pilotoId, pilotoExtraFinalPatch, ...(auxPersonalIdsNuevo ?? auxPersonalIdsLegado ?? antesAuxiliaresIds)].filter((id): id is number => id != null), conn);
 
     if (placaNorm) {
       const [r] = await conn.execute<ResultSetHeader>(
@@ -2003,6 +2048,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
       const unidadEfectiva = unidadId ?? antes.unidadId;
       const auxiliaresEfectivos = auxPersonalIdsNuevo ?? auxPersonalIdsLegado ?? antesAuxiliaresIds;
       const recursosEfectivos: RecursoDia[] = [
+        ...cuadrillaEfectiva.flatMap((c) => c.empleadoId == null ? [] : [{ tipo: "cuadrilla" as const, id: c.empleadoId }]),
         ...(pilotoEfectivo ? [{ tipo: "piloto" as const, id: pilotoEfectivo }] : []),
         ...(pilotoExtraFinalPatch ? [{ tipo: "piloto" as const, id: pilotoExtraFinalPatch }] : []),
         ...auxiliaresEfectivos.map((id) => ({ tipo: "auxiliar" as const, id })),
@@ -2022,7 +2068,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
         // mutua contra otra transacción concurrente, así que no debe
         // correr, y esta solicitud no debe escribir nada.
         let lockRows: RowDataPacket[] = [];
-        try {
+        if (!lockTraslapeAdquirido) try {
           [lockRows] = await conn.query<RowDataPacket[]>(
             "SELECT GET_LOCK(?, 8) AS l",
             [`tms_traslape_${empresaId}`],
@@ -2030,7 +2076,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
         } catch {
           lockRows = [];
         }
-        lockTraslapeAdquirido = Number(lockRows[0]?.l) === 1;
+        lockTraslapeAdquirido = lockTraslapeAdquirido || Number(lockRows[0]?.l) === 1;
         if (!lockTraslapeAdquirido) {
           await conn.rollback();
           return NextResponse.json(
@@ -2208,6 +2254,11 @@ export async function PATCH(req: Request, ctx: Ctx) {
     if (auxPersonalIdsLegado != null) {
       await guardarAuxiliaresPlan(d.id, auxPersonalIdsLegado, conn);
     }
+    if (d.cuadrilla !== undefined) {
+      await guardarCuadrillaPlan(empresaId, d.id, cuadrillaEfectiva, conn);
+      await registrarAuditoriaTx(conn, { empresaId, usuario: guard.session.username, accion: "editar_ruta", modulo: "tms",
+        detalle: `Plan #${d.id} · cuadrilla [${textoCuadrilla(cuadrillaAnterior) || "—"}] → [${textoCuadrilla(cuadrillaEfectiva) || "—"}] · motivo ${d.motivoCambio}` });
+    }
     if (auxPersonalIdsNuevo != null) {
       await guardarAuxiliaresPlan(d.id, auxPersonalIdsNuevo, conn);
     }
@@ -2255,6 +2306,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
   } catch (e) {
     await conn.rollback();
     console.error("PATCH tms/planes transacción", e);
+    if (e instanceof CuadrillaError) return NextResponse.json({ error: e.message }, { status: e.status });
     return NextResponse.json(
       { error: "No se pudo actualizar el plan. Intenta de nuevo." },
       { status: 500 },

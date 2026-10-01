@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db", () => ({ query: vi.fn() }));
+vi.mock("@/lib/tms/programacion-excel-cuadrilla", () => ({ formatearCuadrillaExcel: vi.fn(async (buf: Buffer) => buf) }));
 vi.mock("@/lib/tenant", () => ({ requireTenantModulo: vi.fn() }));
 vi.mock("@/lib/tms/paradas", () => ({ listarParadasDePlanes: vi.fn(() => Promise.resolve(new Map())) }));
 vi.mock("@/lib/rrhh/export-files", () => ({
@@ -12,6 +13,44 @@ import { query } from "@/lib/db";
 import { requireTenantModulo } from "@/lib/tenant";
 import { tablaAExcel, tablaAPdf } from "@/lib/rrhh/export-files";
 import { GET } from "./route";
+
+describe("Cuadrilla independiente en Excel/PDF", () => {
+  it.each([0, 1, 5, 10])("PDF conserva %i integrantes, roles y datos de viaje sin límite de dos", async (cantidad) => {
+    const integrantes = Array.from({ length: cantidad }, (_, i) => ({ plan_id: 40, tipo: i % 2 ? "EXTERNO" : "INTERNO", id_empleado: i % 2 ? null : i + 100, nombre: `Integrante ${i + 1} con nombre y apellidos largos`, identificacion: null, telefono: null }));
+    vi.mocked(query).mockImplementation(async (sql) => {
+      if (String(sql).includes("FROM tms_plan_cuadrilla c")) return integrantes as never;
+      if (String(sql).includes("FROM tms_planes_viaje p")) return [{ id: 40, fecha_plan: "2026-10-01", piloto: "Piloto", cliente: "Cliente", hora_carga: "08:00:00" }] as never;
+      return [] as never;
+    });
+    expect((await GET(new Request("http://localhost/x?formato=pdf&fecha=2026-10-01"), ctx)).status).toBe(200);
+    const opts = vi.mocked(tablaAPdf).mock.calls[0][0];
+    expect(opts.rows).toHaveLength(Math.max(1, cantidad));
+    expect(opts.rows[0][opts.headers.indexOf("Piloto")]).toBe("Piloto");
+    if (!cantidad) expect(opts.headers).not.toContain("Cuadrilla");
+    else {
+      const columna = opts.headers.indexOf("Cuadrilla");
+      opts.rows.forEach((fila, i) => expect(fila[columna].replace(/\s/g, "")).toBe(`${integrantes[i].nombre} (${i % 2 ? "externo" : "interno"})`.replace(/\s/g, "")));
+    }
+  });
+  it.each(["xlsx", "pdf"])("%s muestra internos/externos sin convertirlos en auxiliares", async (formato) => {
+    vi.mocked(query).mockImplementation(async (sql) => {
+      if (String(sql).includes("FROM tms_plan_cuadrilla c")) return [
+        { plan_id: 40, tipo: "INTERNO", id_empleado: 55, nombre: "Juan", identificacion: null, telefono: null },
+        { plan_id: 40, tipo: "EXTERNO", id_empleado: null, nombre: "Pedro", identificacion: "DPI", telefono: "123" },
+      ] as never;
+      if (String(sql).includes("FROM tms_planes_viaje p")) return [{ id: 40, fecha_plan: "2026-10-01", piloto: "Piloto", cliente: "Cliente", hora_carga: "08:00:00" }] as never;
+      return [] as never;
+    });
+    expect((await GET(new Request(`http://localhost/x?formato=${formato}&fecha=2026-10-01`), ctx)).status).toBe(200);
+    const opts = formato === "pdf" ? vi.mocked(tablaAPdf).mock.calls[0][0] : vi.mocked(tablaAExcel).mock.calls[0][0];
+    const idx = opts.headers.indexOf("Cuadrilla"); expect(idx).toBeGreaterThan(0);
+    const contenido = opts.rows.map((r) => r[idx]).join("\n");
+    expect(contenido).toBe("Juan (interno)\nPedro (externo)");
+    expect(contenido).not.toContain("DPI"); expect(contenido).not.toContain("123");
+    expect(opts.rows[0][opts.headers.indexOf("Auxiliar 1")]).toBe("");
+    if (formato === "pdf") expect(opts.rows).toHaveLength(2);
+  });
+});
 
 const ctx = { params: Promise.resolve({ slug: "prueba" }) };
 
