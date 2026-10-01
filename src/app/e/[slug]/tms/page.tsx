@@ -12,6 +12,7 @@ import { tienePermiso } from "@/lib/permisos-shared";
 import { puedeCerrarManualmente } from "@/lib/tms/cierre-viaje-shared";
 import { resumenRegreso } from "@/lib/tms/regreso-viaje";
 import { PilotosCelda } from "@/components/tms/pilotos-celda";
+import HabilitacionesPanel from "@/components/tms/habilitaciones-panel";
 
 /**
  * Centro logístico: navegación, seguimiento con cierres administrativos
@@ -934,6 +935,16 @@ export default function TmsPage() {
               {!lugaresCat.length ? <li className="py-1 text-[var(--muted)]">Sin lugares registrados.</li> : null}
             </ul>
           </div>
+        </div>
+      </details>
+      {/* TMS-PROGRAMACION-HABILITACIONES-1 — capa de elegibilidad Piloto/Auxiliar separada del puesto de
+          RRHH (ver habilitaciones-panel.tsx). Colapsada por defecto, igual que el resto de administración. */}
+      <details className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+        <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.15em] text-[var(--muted)]">
+          Habilitaciones operativas
+        </summary>
+        <div className="mt-3">
+          <HabilitacionesPanel slug={slug} />
         </div>
       </details>
       </section>

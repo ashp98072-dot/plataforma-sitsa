@@ -2042,4 +2042,28 @@ CREATE TABLE IF NOT EXISTS tms_plan_cuadrilla (
     REFERENCES empleados(empresa_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
+-- Habilitaciones operativas TMS: capa de elegibilidad por empleado, separada de empleados.categoria_ops
+-- (puesto/categoría contractual de RRHH, que NO se toca) y de tms_personal (catálogo operativo que se
+-- sigue creando/resolviendo igual al asignar un viaje, vía personalDesdeEmpleado()). Un empleado puede
+-- tener hasta 2 filas (una por rol); "activo=0" desactiva sin perder historial.
+CREATE TABLE IF NOT EXISTS tms_personal_habilitaciones (
+  id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  empleado_id INT NOT NULL,
+  rol VARCHAR(20) NOT NULL,
+  estado VARCHAR(20) NOT NULL DEFAULT 'HABILITADO',
+  activo TINYINT(1) NOT NULL DEFAULT 1,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_tph_empleado_rol (empresa_id, empleado_id, rol),
+  INDEX idx_tph_empresa_empleado (empresa_id, empleado_id),
+  INDEX idx_tph_empresa_rol_activo (empresa_id, rol, activo),
+  CONSTRAINT chk_tph_rol CHECK (rol IN ('PILOTO', 'AUXILIAR')),
+  CONSTRAINT chk_tph_estado CHECK (estado IN ('HABILITADO', 'CAPACITACION')),
+  CONSTRAINT fk_tph_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id)
+    ON DELETE CASCADE ON UPDATE RESTRICT,
+  CONSTRAINT fk_tph_empleado FOREIGN KEY (empresa_id, empleado_id)
+    REFERENCES empleados(empresa_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+
 SET FOREIGN_KEY_CHECKS = 1;
