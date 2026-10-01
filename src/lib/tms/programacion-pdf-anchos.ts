@@ -72,6 +72,12 @@ export function anchosPdfProgramacion(headers: string[]): Record<string, number>
     const c = COMPACTAS[h] ?? texto[h];
     if (c) out[h] = c.ancho;
   }
+  if (headers.includes("Cuadrilla")) {
+    const disponible = ANCHO_UTIL_PDF - Object.values(COMPACTAS).reduce((s, c) => s + c.ancho, 0) - 90;
+    const totalTexto = Object.values(texto).reduce((s, c) => s + c.ancho, 0);
+    for (const h of headers) if (texto[h]) out[h] = texto[h].ancho * disponible / totalTexto;
+    out.Cuadrilla = 90;
+  }
   return out;
 }
 
@@ -90,5 +96,10 @@ export function configuracionPdfProgramacion(headers: string[]): ConfiguracionPd
     if (c.linea) cfg.preserveSingleLine.push(i);
     if (c.lineas) cfg.maxLinesPorColumna[i] = c.lineas;
   });
+  const anchos = anchosPdfProgramacion(headers);
+  headers.forEach((h, i) => { if (anchos[h] != null) cfg.weight[i] = anchos[h]; });
+  // No truncar integrantes: la tabla hace wrap y crece naturalmente.
+  const idxCuadrilla = headers.indexOf("Cuadrilla");
+  if (idxCuadrilla >= 0) cfg.maxLinesPorColumna[idxCuadrilla] = 40;
   return cfg;
 }

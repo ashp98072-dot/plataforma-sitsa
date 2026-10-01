@@ -204,6 +204,7 @@ describe("PATCH — tercerizado y TC", () => {
     expect(listarDisponibilidadPersonal).not.toHaveBeenCalled();
     expect(primerConflictoProgramacionIntervalo).not.toHaveBeenCalled();
     expect(orden).not.toContain("lock");
+    expect(orden).not.toContain("unlock");
     expect(update()![1]).toContain("TC-EXT"); // placa externa en mayúsculas
   });
 

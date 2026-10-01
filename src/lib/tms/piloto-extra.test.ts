@@ -182,7 +182,7 @@ describe("disponibilidad: el piloto extra consume EXACTAMENTE igual que el princ
     for (const f of ["disponibilidad-programacion-intervalos.ts", "disponibilidad-programacion-dia.ts", "disponibilidad-traslapes.ts"]) {
       expect(src(`src/lib/tms/${f}`)).toContain("tms_plan_pilotos_adicionales pe WHERE pe.plan_id = p.id AND pe.personal_id = eq.id");
     }
-    expect(src("src/lib/tms/disponibilidad-programacion-intervalos.ts").match(/tms_plan_pilotos_adicionales pe/g)).toHaveLength(2); // personal por intervalos (2 consultas)
+    expect(src("src/lib/tms/disponibilidad-programacion-intervalos.ts").match(/tms_plan_pilotos_adicionales pe/g)).toHaveLength(3); // incluye comparación con Cuadrilla por empleado
     expect(src("src/lib/tms/disponibilidad-recursos-lista.ts")).toContain("tms_plan_pilotos_adicionales pe WHERE pe.plan_id = p.id AND pe.personal_id = tp.id");
     expect(ESTADOS_ASIGNACION_DIARIA.length).toBeGreaterThan(0);
   });

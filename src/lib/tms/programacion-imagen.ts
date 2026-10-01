@@ -46,6 +46,7 @@
  */
 
 export type FilaProgramacionImagen = {
+  cuadrilla?: string;
   mes: string;
   dia: string;
   placa: string;
@@ -123,13 +124,24 @@ export function celdaPilotoImagen(principal: string | null | undefined, extra: s
  * envuelve por PALABRAS, de modo que un nombre largo se muestra COMPLETO en varias líneas. Solo una palabra suelta más ancha que la celda
  * se corta al final (última defensa; no ocurre con nombres reales).
  */
-export function envolverTexto(texto: string, anchoMax: number, medir: (t: string) => number): string[] {
+export function envolverTexto(texto: string, anchoMax: number, medir: (t: string) => number, partirPalabrasLargas = false): string[] {
   const salida: string[] = [];
   for (const bloque of String(texto ?? "").split(SEPARADOR_LINEAS_CELDA)) {
     const palabras = bloque.split(/\s+/).filter(Boolean);
     if (!palabras.length) { salida.push(""); continue; }
     let actual = "";
-    for (const palabra of palabras) {
+    const segmentos = palabras.flatMap((palabra) => {
+      if (!partirPalabrasLargas || medir(palabra) <= anchoMax) return [palabra];
+      const partes: string[] = [];
+      let parte = "";
+      for (const caracter of palabra) {
+        if (parte && medir(parte + caracter) > anchoMax) { partes.push(parte); parte = ""; }
+        parte += caracter;
+      }
+      if (parte) partes.push(parte);
+      return partes;
+    });
+    for (const palabra of segmentos) {
       const candidata = actual ? `${actual} ${palabra}` : palabra;
       if (!actual || medir(candidata) <= anchoMax) actual = candidata;
       else { salida.push(actual); actual = palabra; }
@@ -137,6 +149,23 @@ export function envolverTexto(texto: string, anchoMax: number, medir: (t: string
     salida.push(actual);
   }
   return salida.length ? salida : [""];
+}
+
+/** Cuadrilla: prepara el mismo wrapping que dibuja Canvas ANTES de paginar.
+ * Una fila extrema se segmenta en continuaciones sin perder ninguna celda.
+ */
+export function paginarCuadrillaMedida(filas: string[][], anchos: number[], medir: (texto: string) => number, disponible: number): string[][][] {
+  const maxLineas = Math.max(1, Math.floor((disponible - ALTO_FILA) / ALTO_LINEA_EXTRA) + 1);
+  const preparadas = filas.flatMap((fila) => {
+    const envueltas = fila.map((texto, i) => envolverTexto(texto, anchos[i] - 16, medir, true));
+    const cantidad = Math.max(1, ...envueltas.map((lineas) => lineas.length));
+    const partes: string[][] = [];
+    for (let inicio = 0; inicio < cantidad; inicio += maxLineas) {
+      partes.push(envueltas.map((lineas) => lineas.slice(inicio, inicio + maxLineas).join("\n")));
+    }
+    return partes;
+  });
+  return paginarPorAlto(preparadas, disponible);
 }
 
 /** Alto de una fila según su celda con MÁS líneas: una línea = ALTO_FILA (aspecto de siempre); cada línea extra suma ALTO_LINEA_EXTRA. */
@@ -154,14 +183,16 @@ export function altoFilaImagen(lineasPorCelda: number[]): number {
 export const ALTO_MAXIMO_LIENZO = 6000;
 
 /** Anchos de columna en píxeles, proporcionales al peso de cada una (misma fórmula que anchosColumnas en cotizacion-pdf-layout.ts — ver nota de dependencias arriba sobre por qué no se importa de ahí). */
-export function anchosColumnasImagen(anchoDisponible: number = ANCHO_IMAGEN): number[] {
-  const total = COLUMNAS_IMAGEN.reduce((s, c) => s + c.peso, 0);
-  return COLUMNAS_IMAGEN.map((c) => (c.peso / total) * anchoDisponible);
+export function anchosColumnasImagen(anchoDisponible: number = ANCHO_IMAGEN, columnas = COLUMNAS_IMAGEN): number[] {
+  const total = columnas.reduce((s, c) => s + c.peso, 0);
+  return columnas.map((c) => (c.peso / total) * anchoDisponible);
 }
 
 /** Una fila -> arreglo de celdas, en el mismo orden que COLUMNAS_IMAGEN. */
-export function celdasFila(f: FilaProgramacionImagen): string[] {
-  return [f.mes, f.dia, f.placa, f.tc, f.piloto, f.auxiliar1, f.auxiliar2, f.cliente, f.lugarCarga, f.hora, f.lugarDescarga];
+export function celdasFila(f: FilaProgramacionImagen, conCuadrilla = false): string[] {
+  const celdas = [f.mes, f.dia, f.placa, f.tc, f.piloto, f.auxiliar1, f.auxiliar2, f.cliente, f.lugarCarga, f.hora, f.lugarDescarga];
+  if (conCuadrilla) celdas.push(f.cuadrilla ?? "");
+  return celdas;
 }
 
 /** Líneas de texto del encabezado del reporte: título fijo "PROGRAMACIÓN", subtítulo con empresa + rango + filtros + generado (mismo orden que pide el ticket). */
@@ -205,6 +236,7 @@ export function filasPorPagina(altoEncabezado: number, altoMaximo: number = ALTO
 }
 
 export type LayoutImagenPrograma = {
+  columnas?: ColumnaImagen[];
   anchoColumnas: number[];
   encabezado: { titulo: string; subtitulo: string };
   /** Cada página ya es un arreglo de filas (celdas) listo para dibujar; el llamador solo pinta, nunca decide qué va en cada página. */
@@ -220,19 +252,29 @@ export type LayoutImagenPrograma = {
 export function construirLayoutImagen(
   encabezado: EncabezadoProgramacionImagen,
   filas: FilaProgramacionImagen[],
-  opts: { anchoDisponible?: number; altoEncabezado?: number; altoMaximoLienzo?: number } = {},
+  opts: { anchoDisponible?: number; altoEncabezado?: number; altoMaximoLienzo?: number; medirTexto?: (texto: string) => number } = {},
 ): LayoutImagenPrograma {
   const ancho = opts.anchoDisponible ?? ANCHO_IMAGEN;
   const altoEncabezadoPx = opts.altoEncabezado ?? 90;
   const altoMaximo = opts.altoMaximoLienzo ?? ALTO_MAXIMO_LIENZO;
   const porPagina = filasPorPagina(altoEncabezadoPx, altoMaximo);
-  const celdas = filas.map(celdasFila);
+  const conCuadrilla = filas.some((f) => Boolean(f.cuadrilla));
+  const columnas = conCuadrilla ? [...COLUMNAS_IMAGEN, { titulo: "Cuadrilla", peso: 2.2 }] : COLUMNAS_IMAGEN;
+  const celdas = filas.flatMap((f) => {
+    const valores = celdasFila(f, conCuadrilla);
+    if (!conCuadrilla || !f.cuadrilla) return [valores];
+    return f.cuadrilla.split("\n").map((nombre, i) => [...(i === 0 ? valores.slice(0, -1) : valores.slice(0, -1).map(() => "")), nombre]);
+  });
   // Si alguna celda tiene varias líneas (piloto principal + extra) las filas miden más: se pagina por el alto acumulado (con todo de una línea,
   // exactamente las mismas filas por página de siempre).
   const varias = celdas.some((fila) => fila.some((c) => c.includes(SEPARADOR_LINEAS_CELDA)));
-  const paginas = varias ? paginarPorAlto(celdas, altoMaximo - altoEncabezadoPx - ALTO_FILA_CABECERA) : paginar(celdas, porPagina);
+  const anchos = anchosColumnasImagen(ancho, columnas);
+  const paginas = conCuadrilla
+    ? paginarCuadrillaMedida(celdas, anchos, opts.medirTexto ?? ((texto) => Array.from(texto).length * 8), altoMaximo - altoEncabezadoPx - ALTO_FILA_CABECERA - 48)
+    : varias ? paginarPorAlto(celdas, altoMaximo - altoEncabezadoPx - ALTO_FILA_CABECERA) : paginar(celdas, porPagina);
   return {
-    anchoColumnas: anchosColumnasImagen(ancho),
+    ...(conCuadrilla ? { columnas } : {}),
+    anchoColumnas: anchos,
     encabezado: lineasEncabezado(encabezado),
     paginas: paginas.length ? paginas : [[]],
     totalPaginas: Math.max(1, paginas.length),

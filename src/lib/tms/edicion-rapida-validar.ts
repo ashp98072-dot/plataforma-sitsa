@@ -1,4 +1,5 @@
 import type { RowDataPacket } from "mysql2";
+import { cuadrillaDePlanes } from "./cuadrilla";
 import type { PoolConnection } from "mysql2/promise";
 import { query } from "@/lib/db";
 import { obtenerVehiculoAccesible } from "@/lib/flota/acceso";
@@ -239,6 +240,8 @@ export async function evaluarEdicionRapida(empresaId: number, datos: ValidarEdic
   const leer = lectorDe(opciones.conn);
   const planIdsLote = datos.cambios.map((c) => c.planId);
   const planes = await cargarPlanes(leer, empresaId, planIdsLote, opciones.conn != null);
+  // La edición rápida NO cambia cuadrillas, pero debe conservar su ocupación al excluir todo el lote contra BD.
+  const cuadrillas = await cuadrillaDePlanes(empresaId, planIdsLote, opciones.conn);
   const motivo = datos.motivoCambio?.trim() || undefined;
 
   const filas: FilaTrabajo[] = datos.cambios.map((c) => ({
@@ -373,6 +376,14 @@ export async function evaluarEdicionRapida(empresaId: number, datos: ValidarEdic
   const personal = await cargarPersonal(leer, empresaId, [...todosPersonalIds]);
   const claveDe = (personalId: number) => { const p = personal.get(personalId); return p?.idEmpleado != null ? `e:${p.idEmpleado}` : `p:${personalId}`; };
   const nombreDe = (personalId: number) => personal.get(personalId)?.nombre ?? `#${personalId}`;
+  for (const f of activas) {
+    const internos = new Set((cuadrillas.get(f.planId) ?? []).flatMap((c) => c.empleadoId == null ? [] : [`e:${c.empleadoId}`]));
+    const personas = [f.final!.pilotoId, f.final!.pilotoExtraId, ...f.final!.auxiliaresIds].filter((id): id is number => id != null);
+    if (personas.some((id) => internos.has(claveDe(id)))) {
+      err(f, "PERSONAL_INVALIDO", "Un integrante de cuadrilla no puede ser también piloto o auxiliar del mismo viaje.");
+      f.fatal = true;
+    }
+  }
 
   // Disponibilidad de personal (incidencia bloqueante, baja, viaje en curso HOY) por fecha: una consulta por fecha distinta.
   const idsLote = new Set(planIdsLote);
@@ -502,6 +513,7 @@ export async function evaluarEdicionRapida(empresaId: number, datos: ValidarEdic
   };
   for (const f of filas) {
     if (!f.plan || !f.final || !f.actual) continue;
+    for (const c of cuadrillas.get(f.planId) ?? []) if (c.empleadoId != null) anotar(`e:${c.empleadoId}`, c.nombre, f, false);
     if (f.plan.tipoViaje === "Tercerizado") continue; // Tercerizado no consume recursos internos
     const antesPersonas = new Set([...(f.actual.pilotoId != null ? [claveDe(f.actual.pilotoId)] : []), ...(f.actual.pilotoExtraId != null ? [claveDe(f.actual.pilotoExtraId)] : []), ...f.actual.auxiliaresIds.map(claveDe)]);
     // El piloto extra cuenta como persona del viaje (ocupa el mismo intervalo que el principal) aunque esta edición no lo cambie.

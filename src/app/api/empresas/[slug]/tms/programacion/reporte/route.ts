@@ -1,9 +1,13 @@
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
+import { cuadrillaDePlanes } from "@/lib/tms/cuadrilla";
+import { textoCuadrilla } from "@/lib/tms/cuadrilla-contrato";
 import { requireTenantModulo } from "@/lib/tenant";
 import { listarParadasDePlanes } from "@/lib/tms/paradas";
 import { tablaAExcel, tablaAPdf } from "@/lib/rrhh/export-files";
+import { formatearCuadrillaExcel } from "@/lib/tms/programacion-excel-cuadrilla";
+import { textoCuadrillaPdf } from "@/lib/tms/programacion-cuadrilla-pdf";
 import { formatearHora12 } from "@/lib/tms/hora-formato";
 import { configuracionPdfProgramacion } from "@/lib/tms/programacion-pdf-anchos";
 import { pilotoExtraDePlanes, textoPilotos } from "@/lib/tms/piloto-extra";
@@ -214,9 +218,12 @@ export async function GET(req: Request, ctx: Ctx) {
   // todos/etc.) la columna se conserva exactamente igual que antes — el
   // recorte es ESTRICTAMENTE por valor de `estado`, nunca global.
   const ocultarCodigo = estado === "Programado";
+  const cuadrillaMap = await cuadrillaDePlanes(guard.empresa.id, planIds);
   const headers = ocultarCodigo
     ? ["Mes", "Día", "Placa", "TC", "Piloto", "Auxiliar 1", "Auxiliar 2", "Cliente", "Lugar de Carga", "Hora", "Lugar de Descarga"]
     : ["Mes", "Día", "Placa", "TC", "Piloto", "Auxiliar 1", "Auxiliar 2", "Código", "Cliente", "Lugar de Carga", "Hora", "Lugar de Descarga"];
+  const mostrarCuadrilla = [...cuadrillaMap.values()].some((integrantes) => integrantes.length > 0);
+  if (mostrarCuadrilla) headers.push("Cuadrilla");
 
   const dataRows = rows.map((r) => {
     const id = Number(r.id);
@@ -260,6 +267,7 @@ export async function GET(req: Request, ctx: Ctx) {
     ];
     if (!ocultarCodigo) fila.push(r.ruta_codigo_historico ? String(r.ruta_codigo_historico) : "");
     fila.push(r.cliente ? String(r.cliente) : "", lugarCarga, hora, lugarDescarga);
+    if (mostrarCuadrilla) fila.push(textoCuadrilla(cuadrillaMap.get(id) ?? []));
     return fila;
   });
 
@@ -291,11 +299,17 @@ export async function GET(req: Request, ctx: Ctx) {
     // "SAUZALIT…"), por eso se reemplazó.
     const idxHora = headers.indexOf("Hora");
     const pdfCfg = configuracionPdfProgramacion(headers);
-    const rowsPdf = dataRows.map((fila) => {
-      if (idxHora < 0 || !fila[idxHora]) return fila;
+    const rowsPdf = dataRows.flatMap((fila) => {
       const copia = [...fila];
-      copia[idxHora] = formatearHora12(copia[idxHora]);
-      return copia;
+      if (idxHora >= 0 && copia[idxHora]) copia[idxHora] = formatearHora12(copia[idxHora]);
+      const idxCuadrilla = headers.indexOf("Cuadrilla");
+      if (idxCuadrilla < 0 || !copia[idxCuadrilla]) return [copia];
+      // Una fila por integrante en PDF: evita una celda gigante que no cabe en una página.
+      return copia[idxCuadrilla].split("\n").map((nombre, i) => {
+        const continuacion = i === 0 ? [...copia] : copia.map(() => "");
+        continuacion[idxCuadrilla] = textoCuadrillaPdf(nombre);
+        return continuacion;
+      });
     });
     const buf = await tablaAPdf({
       title: "PROGRAMACIÓN",
@@ -316,7 +330,8 @@ export async function GET(req: Request, ctx: Ctx) {
     });
   }
 
-  const buf = await tablaAExcel({ sheetName: "Programacion", headers, rows: dataRows });
+  const original = await tablaAExcel({ sheetName: "Programacion", headers, rows: dataRows });
+  const buf = headers.includes("Cuadrilla") ? await formatearCuadrillaExcel(original) : original;
   return new NextResponse(new Uint8Array(buf), {
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

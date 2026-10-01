@@ -21,8 +21,9 @@ export type VentanaProgramacion = {
   regresoEstimado: string | null;
 };
 
+export type RecursoProgramacion = RecursoDia | { tipo: "cuadrilla"; id: number };
 export type ConflictoProgramacionIntervalo = {
-  tipo: RecursoDia["tipo"];
+  tipo: RecursoProgramacion["tipo"];
   id: number;
   nombre: string;
   planIdConflicto: number;
@@ -119,6 +120,7 @@ export function ventanasProgramacionSeSolapan(a: VentanaProgramacion, b: Ventana
 
 /** Mismo texto que la política diaria ("… ya está asignado al PLAN-X para el dd/mm/aaaa."); la fecha es la del inicio del conflicto. */
 export function mensajeConflictoProgramacionIntervalo(c: ConflictoProgramacionIntervalo): string {
+  if (c.tipo === "cuadrilla") return `${c.nombre} ya está asignado al ${c.codigoConflicto} para el ${c.inicioConflicto.slice(0, 10)}.`;
   return mensajeConflictoProgramacionDia({
     tipo: c.tipo, id: c.id, nombre: c.nombre, planIdConflicto: c.planIdConflicto,
     codigoConflicto: c.codigoConflicto, fechaConflicto: c.inicioConflicto.slice(0, 10),
@@ -146,10 +148,13 @@ const estados = ESTADOS_ASIGNACION_DIARIA.map(() => "?").join(",");
  * de su inicio. Así se encuentran viajes de ayer que terminan hoy (y viajes
  * multidiarios), sin cargar todo el historial en memoria.
  */
-const ventanaSql = `p.empresa_id = ? AND p.estado IN (${estados})
-  AND COALESCE(p.tipo_viaje, 'Propio') <> 'Tercerizado'
+const ventanaCuadrillaSql = `p.empresa_id = ? AND p.estado IN (${estados})
   AND p.fecha_plan <= ?
   AND (p.fecha_plan >= ? OR p.regreso_estimado > ?)`;
+// Tercerizados solo reservan empleados de cuadrilla, nunca sus recursos externos
+// ni una referencia histórica a unidad/piloto/auxiliar interno.
+const propioSql = "COALESCE(p.tipo_viaje, 'Propio') <> 'Tercerizado'";
+const ventanaSql = `${ventanaCuadrillaSql} AND ${propioSql}`;
 
 const columnas = (recursoId: string, nombre: string) => `SELECT ${recursoId} AS recurso_id, ${nombre} AS nombre, p.id AS plan_id, p.codigo,
   DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan,
@@ -179,7 +184,7 @@ export function normalizarPlanesExcluidos(excluirPlanIds: readonly number[]): nu
 /** Consulta compartida para piloto, auxiliares, unidad y TC; sin N+1 por recurso. */
 export async function primerConflictoProgramacionIntervalo(
   empresaId: number,
-  recursos: RecursoDia[],
+  recursos: RecursoProgramacion[],
   ventana: VentanaProgramacion,
   excluirPlanIds: readonly number[],
   conn?: PoolConnection,
@@ -193,22 +198,24 @@ export async function primerConflictoProgramacionIntervalo(
   // Siempre parametrizado: nunca se concatenan ids en el SQL.
   const excluirSql = excluidos.length ? ` AND p.id NOT IN (${Array(excluidos.length).fill("?").join(",")})` : "";
   const idsPersonal = [...new Set(recursos.filter((r) => r.tipo === "piloto" || r.tipo === "auxiliar").map((r) => r.id))];
+  const idsCuadrilla = [...new Set(recursos.filter((r) => r.tipo === "cuadrilla").map((r) => r.id))];
   const idsUnidad = [...new Set(recursos.filter((r) => r.tipo === "unidad").map((r) => r.id))];
   const idsTc = [...new Set(recursos.filter((r) => r.tipo === "tc").map((r) => r.id))];
   const idsSql = (n: number) => Array(n).fill("?").join(",");
   const params = (ids: number[]): SqlParams => [...base, ...ids, ...excluidos];
 
-  const [personas, unidades, tcs] = await Promise.all([
+  const [personas, unidades, tcs, cuadrillas] = await Promise.all([
     idsPersonal.length ? leer(conn,
       `${columnas("tp.id", "tp.nombre")}
        FROM tms_personal tp
        INNER JOIN tms_personal eq ON eq.empresa_id = tp.empresa_id
          AND (eq.id = tp.id OR (tp.id_empleado IS NOT NULL AND eq.id_empleado = tp.id_empleado))
        INNER JOIN tms_planes_viaje p ON p.empresa_id = tp.empresa_id
-         AND (p.piloto_id = eq.id OR p.auxiliar_id = eq.id OR EXISTS (
+         AND ((${propioSql} AND (p.piloto_id = eq.id OR p.auxiliar_id = eq.id OR EXISTS (
            SELECT 1 FROM tms_plan_auxiliares pa WHERE pa.plan_id = p.id AND pa.personal_id = eq.id)
-           OR EXISTS (SELECT 1 FROM tms_plan_pilotos_adicionales pe WHERE pe.plan_id = p.id AND pe.personal_id = eq.id))
-       WHERE ${ventanaSql} AND tp.empresa_id = ? AND tp.id IN (${idsSql(idsPersonal.length)})${excluirSql}
+           OR EXISTS (SELECT 1 FROM tms_plan_pilotos_adicionales pe WHERE pe.plan_id = p.id AND pe.personal_id = eq.id)))
+           OR EXISTS (SELECT 1 FROM tms_plan_cuadrilla cq WHERE cq.empresa_id = p.empresa_id AND cq.plan_id = p.id AND cq.tipo = 'INTERNO' AND cq.id_empleado = tp.id_empleado))
+       WHERE ${ventanaCuadrillaSql} AND tp.empresa_id = ? AND tp.id IN (${idsSql(idsPersonal.length)})${excluirSql}
        ORDER BY p.fecha_plan, p.id`,
       [...base, empresaId, ...idsPersonal, ...excluidos],
     ) : Promise.resolve([] as Candidato[]),
@@ -228,10 +235,21 @@ export async function primerConflictoProgramacionIntervalo(
        ORDER BY p.fecha_plan, p.id`,
       params(idsTc),
     ) : Promise.resolve([] as Candidato[]),
+    idsCuadrilla.length ? leer(conn,
+      `${columnas("e.id", "e.nombre")}
+       FROM empleados e INNER JOIN tms_planes_viaje p ON p.empresa_id = e.empresa_id
+       AND (EXISTS (SELECT 1 FROM tms_plan_cuadrilla cq WHERE cq.empresa_id = p.empresa_id AND cq.plan_id = p.id AND cq.tipo = 'INTERNO' AND cq.id_empleado = e.id)
+         OR (${propioSql} AND EXISTS (SELECT 1 FROM tms_personal eq WHERE eq.empresa_id = e.empresa_id AND eq.id_empleado = e.id
+           AND (p.piloto_id = eq.id OR p.auxiliar_id = eq.id
+             OR EXISTS (SELECT 1 FROM tms_plan_auxiliares pa WHERE pa.plan_id = p.id AND pa.personal_id = eq.id)
+             OR EXISTS (SELECT 1 FROM tms_plan_pilotos_adicionales pe WHERE pe.plan_id = p.id AND pe.personal_id = eq.id)))))
+       WHERE ${ventanaCuadrillaSql} AND e.id IN (${idsSql(idsCuadrilla.length)})${excluirSql} ORDER BY p.fecha_plan, p.id`,
+      params(idsCuadrilla),
+    ) : Promise.resolve([] as Candidato[]),
   ]);
 
   for (const recurso of recursos) {
-    const fuente = recurso.tipo === "unidad" ? unidades : recurso.tipo === "tc" ? tcs : personas;
+    const fuente = recurso.tipo === "unidad" ? unidades : recurso.tipo === "tc" ? tcs : recurso.tipo === "cuadrilla" ? cuadrillas : personas;
     for (const fila of fuente) {
       if (Number(fila.recurso_id) !== recurso.id) continue;
       const intervaloExistente = intervaloCandidato(fila);
@@ -266,7 +284,7 @@ export async function listarOcupacionProgramacionIntervalo(
   const excluidos = normalizarPlanesExcluidos(excluirPlanIds);
   const excluirSql = excluidos.length ? ` AND p.id NOT IN (${Array(excluidos.length).fill("?").join(",")})` : "";
   const base: SqlParams = [empresaId, ...ESTADOS_ASIGNACION_DIARIA, intervaloConsulta.fin.slice(0, 10), intervaloConsulta.inicio.slice(0, 10), intervaloConsulta.inicio];
-  const [personas, unidades, tcs] = await Promise.all([
+  const [personas, unidades, tcs, cuadrillas] = await Promise.all([
     query<Candidato[]>(
       `${columnas("tp.id_empleado", "tp.nombre")}
        FROM tms_personal tp
@@ -296,11 +314,17 @@ export async function listarOcupacionProgramacionIntervalo(
        ORDER BY p.fecha_plan, p.id`,
       [...base, ...excluidos],
     ).catch((): Candidato[] => []), // catálogo de TC aún no migrado: como en la política diaria
+    query<Candidato[]>(
+      `${columnas("cq.id_empleado", "cq.nombre")}
+       FROM tms_plan_cuadrilla cq INNER JOIN tms_planes_viaje p ON p.id = cq.plan_id AND p.empresa_id = cq.empresa_id
+       WHERE ${ventanaCuadrillaSql} AND cq.tipo = 'INTERNO' AND cq.id_empleado IS NOT NULL${excluirSql} ORDER BY p.fecha_plan, p.id`,
+      [...base, ...excluidos],
+    ),
   ]);
   const ocupacion = (f: Candidato): OcupacionIntervalo => ({ planId: Number(f.plan_id), planCodigo: String(f.codigo), horaInicio: "", horaFin: null });
   const choca = (f: Candidato) => seSolapaConOcupacionReal(intervaloCandidato(f), intervaloConsulta);
   const personal = new Map<number, OcupacionIntervalo>();
-  for (const f of personas) if (choca(f) && !personal.has(Number(f.recurso_id))) personal.set(Number(f.recurso_id), ocupacion(f));
+  for (const f of [...personas, ...cuadrillas]) if (choca(f) && !personal.has(Number(f.recurso_id))) personal.set(Number(f.recurso_id), ocupacion(f));
   const porPlaca = (filas: Candidato[]) => {
     const m = new Map<string, OcupacionIntervalo>();
     for (const f of filas) { const placa = String(f.recurso_id).toUpperCase(); if (choca(f) && !m.has(placa)) m.set(placa, ocupacion(f)); }
