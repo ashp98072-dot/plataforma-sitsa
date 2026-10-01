@@ -170,11 +170,18 @@ export function agruparPorFirmante(
   return orden.map((clave) => porClave.get(clave)!);
 }
 
-/** Anchos (pt) de las 9 columnas del formato administrativo, A4 vertical — suma 513pt (ancho útil ≈523pt). */
-const ANCHOS_TABLA_VIATICOS = [62, 52, 72, 48, 42, 62, 46, 74, 55];
-const ALTO_FILA_TABLA = 16;
-const ALTO_ENCABEZADO_TABLA = 20;
-const FUENTE_TABLA = 7.5;
+/** Anchos (pt) de las 9 columnas del formato administrativo, A4 vertical — suma 522pt (ancho útil ≈523pt). */
+const ANCHOS_TABLA_VIATICOS = [46, 58, 90, 46, 46, 64, 46, 76, 50];
+// VIATICOS-COMPROBANTE-ADMIN-1 (ajuste visual) — el primer renderer priorizaba caber ~39 filas por página
+// (fuente 7.5, fila 16pt) y quedó demasiado comprimido/difícil de leer frente al preview v3 aprobado
+// visualmente. Se prioriza legibilidad: fuente y alto de fila más grandes, apuntando a ~20-25 filas por
+// página (varía según cuánto texto tenga cada celda) en vez de maximizar filas por página.
+const ALTO_FILA_TABLA = 26;
+// El encabezado admite HASTA 2 líneas (mismo criterio que el formato real escaneado de referencia, donde
+// "FECHA DE SOLICITUD" ya se partía en 2 líneas) — así "Lugar de descarga"/"Cantidad" no quedan truncados con
+// "…" en su propia etiqueta fija, que nunca cambia y SIEMPRE debe leerse completa.
+const ALTO_ENCABEZADO_TABLA = 32;
+const FUENTE_TABLA = 9;
 
 /**
  * VIATICOS-COMPROBANTE-ADMIN-1 (corrección pre-merge) — renderer LOCAL y privado de este módulo (no exportado,
@@ -211,7 +218,10 @@ function dibujarTablaAdministrativaViaticos(
     opts.headers.forEach((h, i) => {
       const w = opts.widths[i];
       doc.rect(x, y, w, ALTO_ENCABEZADO_TABLA).strokeColor("#334155").lineWidth(0.8).stroke();
-      doc.text(h, x + 3, y + 5, { width: w - 6, height: ALTO_ENCABEZADO_TABLA - 6, align: opts.align?.[i] ?? "left", lineBreak: false, ellipsis: true });
+      // El encabezado SÍ puede partirse en 2 líneas (lineBreak por defecto) en vez de truncar con "…": es una
+      // etiqueta fija y corta, siempre debe leerse completa (a diferencia de los datos de cada fila, que sí
+      // truncan con ellipsis más abajo porque su longitud varía y no tiene sentido reservarles el peor caso).
+      doc.text(h, x + 4, y + 6, { width: w - 8, height: ALTO_ENCABEZADO_TABLA - 8, align: opts.align?.[i] ?? "left" });
       x += w;
     });
     return y + ALTO_ENCABEZADO_TABLA;
@@ -231,7 +241,7 @@ function dibujarTablaAdministrativaViaticos(
     cells.forEach((cell, i) => {
       const w = opts.widths[i];
       doc.rect(x, y, w, ALTO_FILA_TABLA).strokeColor("#94a3b8").lineWidth(0.5).stroke();
-      doc.text(cell, x + 3, y + 4, { width: w - 6, height: ALTO_FILA_TABLA - 4, align: opts.align?.[i] ?? "left", lineBreak: false, ellipsis: true });
+      doc.text(cell, x + 4, y + 8, { width: w - 8, height: ALTO_FILA_TABLA - 8, align: opts.align?.[i] ?? "left", lineBreak: false, ellipsis: true });
       x += w;
     });
     y += ALTO_FILA_TABLA;
