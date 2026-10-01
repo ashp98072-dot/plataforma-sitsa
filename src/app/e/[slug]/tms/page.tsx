@@ -12,6 +12,7 @@ import { tienePermiso } from "@/lib/permisos-shared";
 import { puedeCerrarManualmente } from "@/lib/tms/cierre-viaje-shared";
 import { resumenRegreso } from "@/lib/tms/regreso-viaje";
 import { PilotosCelda } from "@/components/tms/pilotos-celda";
+import HabilitacionesPanel from "@/components/tms/habilitaciones-panel";
 
 /**
  * Centro logístico: navegación, seguimiento con cierres administrativos
@@ -290,6 +291,12 @@ export default function TmsPage() {
   // permiso — la autoridad real es el 403 del endpoint.
   const { permisos: permisosTms } = useEmpresaSession();
   const puedeCerrarViaje = tienePermiso(permisosTms, "viajes_cerrar", "editar");
+  // TMS-PROGRAMACION-HABILITACIONES-1 (corrección post-revisión) — el panel de administración solo se
+  // MUESTRA con tms:editar (igual que el permiso real que ya exige el backend en PUT
+  // /tms/personal-habilitaciones, ver route.ts) — el botón/sección se OCULTA sin el permiso, la autoridad
+  // real sigue siendo el 403 del endpoint (mismo criterio que puedeCerrarViaje arriba). Un usuario con solo
+  // tms:ver no ve el panel.
+  const puedeEditarTms = tienePermiso(permisosTms, "tms", "editar");
   const [cerrandoId, setCerrandoId] = useState<number | null>(null);
   const [errorCierre, setErrorCierre] = useState("");
 
@@ -936,6 +943,21 @@ export default function TmsPage() {
           </div>
         </div>
       </details>
+      {/* TMS-PROGRAMACION-HABILITACIONES-1 — capa de elegibilidad Piloto/Auxiliar separada del puesto de
+          RRHH (ver habilitaciones-panel.tsx). Colapsada por defecto, igual que el resto de administración.
+          Gateado por tms:editar (corrección post-revisión): el backend PUT ya exigía este mismo permiso,
+          ahora la UI deja de mostrarlo a quien solo tiene tms:ver, en vez de dejarlo ver un panel cuyas
+          acciones el servidor rechazaría igual. */}
+      {puedeEditarTms ? (
+        <details className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+          <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.15em] text-[var(--muted)]">
+            Habilitaciones operativas
+          </summary>
+          <div className="mt-3">
+            <HabilitacionesPanel slug={slug} />
+          </div>
+        </details>
+      ) : null}
       </section>
     </div>
   );

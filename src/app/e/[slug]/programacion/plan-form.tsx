@@ -26,6 +26,7 @@ import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
 import { normalizarPlaca } from "@/lib/flota/placa";
 import { aplicarDefaultsRutaSinSobrescribir } from "@/lib/tms/ruta-defaults";
+import { filtrarElegibles, type HabilitacionOp } from "@/lib/tms/personal-elegibilidad";
 
 /**
  * Formulario propio de Programación para crear/editar un viaje — reutiliza
@@ -75,6 +76,8 @@ type EmpOps = {
   nombre: string;
   puesto?: string;
   categoriaOps: string;
+  /** TMS-PROGRAMACION-HABILITACIONES-1 — habilitaciones operativas ACTIVAS del empleado (aditivo, personal-ops/route.ts). */
+  habilitacionesOps?: HabilitacionOp[];
 };
 
 /** Mejora Programación (contacto) — mismo shape que devuelve GET /tms/clientes/[clienteId]/contactos. */
@@ -311,8 +314,8 @@ export default function PlanForm({
   const esEdicion = plan != null;
 
   const [clientesCat, setClientesCat] = useState<ClienteCat[]>([]);
-  const [pilotos, setPilotos] = useState<EmpOps[]>([]);
-  const [auxiliares, setAuxiliares] = useState<EmpOps[]>([]);
+  const [pilotos, setPilotos] = useState<(EmpOps & { habilitacionEstado: "HABILITADO" | "CAPACITACION" | null })[]>([]);
+  const [auxiliares, setAuxiliares] = useState<(EmpOps & { habilitacionEstado: "HABILITADO" | "CAPACITACION" | null })[]>([]);
   const [empleadosCuadrilla, setEmpleadosCuadrilla] = useState<EmpOps[]>([]);
   const [cuadrilla, setCuadrilla] = useState<IntegranteCuadrilla[]>(plan?.cuadrilla ?? []);
   const cuadrillaCambio = esEdicion && JSON.stringify(cuadrillaPayload(cuadrilla)) !== JSON.stringify(cuadrillaPayload(plan?.cuadrilla ?? []));
@@ -557,17 +560,13 @@ export default function PlanForm({
       const o = await ops.json();
       const list = (o.personal ?? []) as EmpOps[];
       setEmpleadosCuadrilla(list);
-      const match = (p: EmpOps, kind: "piloto" | "auxiliar") => {
-        const catOps = (p.categoriaOps || "").toLowerCase();
-        const puesto = (p.puesto || "").toLowerCase();
-        return kind === "piloto"
-          ? p.categoriaOps === "Piloto" || catOps.includes("piloto") || puesto.includes("piloto")
-          : p.categoriaOps === "Auxiliar" || catOps.includes("auxiliar") || puesto.includes("auxiliar");
-      };
-      const pilotosFil = list.filter((p) => match(p, "piloto"));
-      const auxFil = list.filter((p) => match(p, "auxiliar"));
-      setPilotos(pilotosFil.length ? pilotosFil : list);
-      setAuxiliares(auxFil.length ? auxFil : list);
+      // TMS-PROGRAMACION-HABILITACIONES-1 — elegibilidad ADITIVA (legacy puesto/categoriaOps O habilitación
+      // operativa activa para ese rol, ver personal-elegibilidad.ts). SIN fallback a "mostrar a todos" si
+      // la lista queda vacía — a diferencia del comportamiento anterior, una lista vacía se queda vacía; la
+      // UI (PilotoSelect/AuxiliaresSelect) ya muestra su propio mensaje "Sin pilotos/auxiliares en RRHH".
+      const habilitacionesPorEmpleado = new Map<number, HabilitacionOp[]>(list.map((p) => [p.id, p.habilitacionesOps ?? []]));
+      setPilotos(filtrarElegibles(list, habilitacionesPorEmpleado, "PILOTO", (p) => p.id));
+      setAuxiliares(filtrarElegibles(list, habilitacionesPorEmpleado, "AUXILIAR", (p) => p.id));
     }
     if (viaticosCfg.ok) {
       const vc = await viaticosCfg.json();

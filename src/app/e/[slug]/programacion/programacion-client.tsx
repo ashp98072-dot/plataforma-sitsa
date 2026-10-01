@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type {
@@ -1158,6 +1158,14 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
     [planes, pendientesCierre, planDirecto, editandoId],
   );
 
+  // TMS-PROGRAMACION-EDICION-INLINE-1 — el formulario de edición ahora se dibuja DEBAJO de la tarjeta del
+  // propio viaje (dentro del `.map()` de `visibles`, más abajo), no arriba de todo el tablero. Pero
+  // `editandoId` puede apuntar a un plan que HOY no tiene tarjeta visible (deep-link `?plan=ID` a un viaje
+  // fuera del rango de fechas filtrado — el propio comentario de `planEditando` arriba documenta ese
+  // fallback vía `planDirecto`): en ese caso ÚNICO no hay ninguna tarjeta a la cual "pegarle" el formulario,
+  // así que se mantiene el comportamiento histórico (arriba del tablero) SOLO para ese caso.
+  const planEditandoVisible = editandoId != null && visibles.some((p) => p.id === editandoId);
+
   function cerrarFormulario() {
     setMostrarCrear(false);
     setEditandoId(null);
@@ -1165,13 +1173,21 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   }
 
   /**
-   * Tras crear/editar: refresca el listado y pasa DIRECTO al modo edición
-   * del mismo viaje (para que los viáticos sugeridos, que solo existen una
-   * vez que el viaje tiene id, queden a un clic — sin tener que ubicarlo a
-   * mano en el tablero). Si su fecha cae fuera del filtro de rango activo
+   * Tras CREAR: refresca el listado y pasa DIRECTO al modo edición del
+   * mismo viaje (para que los viáticos sugeridos, que solo existen una vez
+   * que el viaje tiene id, queden a un clic — sin tener que ubicarlo a mano
+   * en el tablero). Si su fecha cae fuera del filtro de rango activo
    * (Hoy/Mañana/Semana), cambia a "Semana" cuando entra en esos 7 días, o
    * deja un aviso claro cuando quedó más adelante — así el viaje nunca
    * "desaparece" solo porque el filtro no lo cubre.
+   *
+   * Tras EDITAR (TMS-PROGRAMACION-EDICION-INLINE-1): el formulario inline
+   * se CIERRA al guardar con éxito — ya no se queda abierto mostrando el
+   * mismo viaje. Mantiene al usuario en la misma tarjeta (nunca hace scroll
+   * ni cambia de posición), solo que el editor desaparece y la tarjeta
+   * queda actualizada con los datos frescos del refetch. El modo CREAR no
+   * cambia: "Nuevo viaje" sigue abriendo el viaje recién creado en modo
+   * edición, igual que siempre.
    *
    * OPERACIONES-UX-PLANES-SIMPLIFICADO-1: si lo que ocurrió fue un CIERRE
    * (info.cerrado), Programación NO se queda mostrando el plan cerrado —
@@ -1180,6 +1196,9 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
    * (crear/editar/cargar/cancelar) mantienen el comportamiento de antes.
    */
   async function alGuardar(info: { id: number; fechaPlan: string; cerrado?: boolean }) {
+    // Capturado ANTES de limpiar cualquier estado: distingue si este guardado vino del formulario de
+    // creación o del de edición, para decidir si el formulario se queda abierto (crear) o se cierra (editar).
+    const eraCreacion = mostrarCrear;
     if (info.cerrado) {
       setMostrarCrear(false);
       setEditandoId(null);
@@ -1188,7 +1207,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
     }
     setMostrarCrear(false);
     await cargar();
-    setEditandoId(info.id);
+    setEditandoId(eraCreacion ? info.id : null);
     const { desde, hasta } = rangoFechas(hoy, rango, fechaSeleccionada);
     if (info.fechaPlan >= desde && info.fechaPlan <= hasta) {
       setAvisoRango("");
@@ -1274,10 +1293,12 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
           onCancel={cerrarFormulario}
         />
       ) : null}
-      {planEditando ? (
+      {/* TMS-PROGRAMACION-EDICION-INLINE-1 — este bloque arriba del tablero SOLO cubre el caso sin tarjeta
+          visible (deep-link a un plan fuera del rango filtrado, ver planEditandoVisible). El caso normal
+          (editar un viaje que SÍ está en la lista) se dibuja inline dentro del `.map()`, debajo de su propia
+          tarjeta — ver más abajo. */}
+      {planEditando && !planEditandoVisible ? (
         <PlanForm
-          // key por viaje: al pasar de editar un viaje a OTRO el formulario se reconstruye desde los datos del nuevo (sin arrastrar el estado
-          // del anterior: piloto/auxiliares externos, unidad, transportista, etc.).
           key={planEditando.id}
           slug={slug}
           hoy={hoy}
@@ -1546,8 +1567,8 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
             dispDelDia.map((d) => [d.personalId, d]),
           );
           return (
+            <Fragment key={p.id}>
             <div
-              key={p.id}
               role="button"
               tabIndex={0}
               onClick={() => {
@@ -1763,6 +1784,24 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
                 ) : null}
               </div>
             </div>
+            {/* TMS-PROGRAMACION-EDICION-INLINE-1 — el editor se dibuja INMEDIATAMENTE debajo de esta misma
+                tarjeta (nunca arriba del tablero): empuja las tarjetas siguientes hacia abajo, sin tocar el
+                scroll. `editandoId` sigue siendo un único valor (nunca un Set), así que como mucho un editor
+                queda abierto a la vez — al abrir otro, este se desmonta solo (la condición deja de cumplirse)
+                y el nuevo se monta fresco por su propio `key={p.id}`, sin arrastrar estado entre viajes. */}
+            {editandoId === p.id && planEditando ? (
+              <div className="pl-1">
+                <PlanForm
+                  key={p.id}
+                  slug={slug}
+                  hoy={hoy}
+                  plan={planEditando}
+                  onSaved={(info) => void alGuardar(info)}
+                  onCancel={cerrarFormulario}
+                />
+              </div>
+            ) : null}
+            </Fragment>
           );
         })}
 

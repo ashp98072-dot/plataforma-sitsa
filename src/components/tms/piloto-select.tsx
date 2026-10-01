@@ -8,6 +8,12 @@ export type PilotoOpt = {
   id: number;
   codigo: string;
   nombre: string;
+  /**
+   * TMS-PROGRAMACION-HABILITACIONES-1 — estado de la habilitación operativa EXPLÍCITA para este rol
+   * (null = calificó solo por puesto/categoriaOps de RRHH, sin habilitación propia). "CAPACITACION"
+   * muestra un badge y, al seleccionarlo, una advertencia NO bloqueante — nunca impide elegirlo.
+   */
+  habilitacionEstado?: "HABILITADO" | "CAPACITACION" | null;
 };
 
 /** Ocupación de un recurso en fecha_plan; la hora se conserva por compatibilidad con otros consumidores. */
@@ -68,10 +74,8 @@ export function PilotoSelect({
   const rootRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
 
-  const display =
-    empleadoId > 0
-      ? (pilotos.find((p) => p.id === empleadoId)?.nombre ?? nombre)
-      : nombre;
+  const seleccionado = empleadoId > 0 ? pilotos.find((p) => p.id === empleadoId) : undefined;
+  const display = seleccionado?.nombre ?? nombre;
   const q = display.trim();
 
   // Búsqueda compartida (sin tildes/mayúsculas, todas las palabras, ranking). El catálogo `pilotos` ya viene acotado por
@@ -165,6 +169,13 @@ export function PilotoSelect({
 
       {open && q.length > 0 && filtered.length === 0 ? <span className="mt-0.5 block text-[10px]">No se encontraron empleados.</span> : null}
 
+      {/* TMS-PROGRAMACION-HABILITACIONES-1 — advertencia NO bloqueante: nunca impide guardar, solo informa. */}
+      {seleccionado?.habilitacionEstado === "CAPACITACION" ? (
+        <p className="mt-1 rounded bg-amber-900/20 px-2 py-1 text-[11px] text-amber-300">
+          ⚠ {seleccionado.nombre} está habilitado como piloto en capacitación.
+        </p>
+      ) : null}
+
       {open && filtered.length > 0 ? (
         <ul
           id={`${listId}-list`}
@@ -189,13 +200,20 @@ export function PilotoSelect({
                   onClick={() => elegir(p)}
                 >
                   <span className={ocupacion ? "text-[var(--muted)]" : "text-[var(--text)]"}>{p.nombre}</span>
-                  {ocupacion ? (
-                    <span className="rounded bg-amber-900/30 px-1.5 py-0.5 text-[10px] font-medium text-amber-300">
-                      Asignado · {textoOcupacion(ocupacion)}
-                    </span>
-                  ) : (
-                    <span className="text-[10px] text-[var(--muted)]">{p.codigo}</span>
-                  )}
+                  <span className="flex items-center gap-1">
+                    {p.habilitacionEstado === "CAPACITACION" ? (
+                      <span className="rounded bg-amber-900/30 px-1.5 py-0.5 text-[10px] font-medium text-amber-300">
+                        En capacitación
+                      </span>
+                    ) : null}
+                    {ocupacion ? (
+                      <span className="rounded bg-amber-900/30 px-1.5 py-0.5 text-[10px] font-medium text-amber-300">
+                        Asignado · {textoOcupacion(ocupacion)}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-[var(--muted)]">{p.codigo}</span>
+                    )}
+                  </span>
                 </button>
               </li>
             );
