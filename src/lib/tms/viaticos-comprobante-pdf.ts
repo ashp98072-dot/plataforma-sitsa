@@ -4,7 +4,6 @@ import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
 import { absPathFromRelative } from "@/lib/uploads";
 import { ahoraLocal, fmtTs, formatearTimestampVisible } from "@/lib/rrhh/dates";
-import { dibujarTablaEnDoc } from "@/lib/rrhh/export-files";
 import { reforzarFirmaParaPdf } from "@/lib/firmas/reforzar-firma-pdf";
 import { listarViaticosAutorizadosPorPeriodo } from "@/lib/tms/viaticos";
 import { listarFirmasViatico, type FirmaViaticoResumen } from "@/lib/firmas/firmas-lectura";
@@ -36,12 +35,15 @@ import { filasComprobante, totalGeneralComprobante } from "@/lib/tms/viaticos-co
  *   dentro del período que después pasó a ENTREGADO/LIQUIDADO sigue apareciendo.
  * - listarFirmasViatico() — mismo historial de firmas que ya expone el
  *   modal "Ver firmas" (VIATICOS-HISTORIAL-FIRMA-1).
- * - dibujarTablaEnDoc() (src/lib/rrhh/export-files.ts) — el mismo
- *   dibujado de tabla ya usado en los reportes de RRHH, extraído de
- *   pdfTabla() para poder seguir agregando contenido propio (las
- *   imágenes de firma) en el mismo documento sin duplicar esa lógica.
  * - filasComprobante() (viaticos-comprobante-filas.ts) — mismo DTO de filas que consume el Excel
  *   (viaticos-comprobante-excel.ts), un solo mapeo para ambos formatos.
+ *
+ * VIATICOS-COMPROBANTE-ADMIN-1 (corrección pre-merge) — la tabla ya NO usa dibujarTablaEnDoc()
+ * (src/lib/rrhh/export-files.ts): ese helper es COMPARTIDO por otros reportes de RRHH y dibuja encabezado con
+ * fondo navy (#1e3a5f) + zebra striping, un estilo "reporte técnico" que NO corresponde al formato
+ * administrativo v3 aprobado (fondo blanco, sin relleno fuerte, bordes finos) — y no debía modificarse para
+ * no afectar a esos otros reportes. En su lugar, dibujarTablaAdministrativaViaticos() (más abajo) es un
+ * renderer LOCAL y privado de este módulo, exclusivo para este comprobante.
  *
  * listarFirmasViatico() deliberadamente nunca expone imagen_ruta
  * (contrato documentado en firmas-lectura.ts). Para incrustar la imagen
@@ -168,6 +170,77 @@ export function agruparPorFirmante(
   return orden.map((clave) => porClave.get(clave)!);
 }
 
+/** Anchos (pt) de las 9 columnas del formato administrativo, A4 vertical — suma 513pt (ancho útil ≈523pt). */
+const ANCHOS_TABLA_VIATICOS = [62, 52, 72, 48, 42, 62, 46, 74, 55];
+const ALTO_FILA_TABLA = 16;
+const ALTO_ENCABEZADO_TABLA = 20;
+const FUENTE_TABLA = 7.5;
+
+/**
+ * VIATICOS-COMPROBANTE-ADMIN-1 (corrección pre-merge) — renderer LOCAL y privado de este módulo (no exportado,
+ * no reutilizado por ningún otro reporte). Reemplaza dibujarTablaEnDoc() SOLO para este comprobante porque ese
+ * helper compartido (src/lib/rrhh/export-files.ts) dibuja encabezado con fondo navy + filas zebra — un estilo
+ * "reporte técnico" que el formato v3 aprobado explícitamente no usa (fondo blanco, SIN relleno fuerte, bordes
+ * finos, texto negro). No se modifica dibujarTablaEnDoc() en absoluto: lo siguen consumiendo otros reportes de
+ * RRHH tal cual estaba.
+ *
+ * `footerReserve` es la altura (pt) que debe quedar libre DESPUÉS de la ÚLTIMA fila — reservada para TOTAL
+ * GENERAL + el/los bloque(s) de autorización + el pie de página — calculada por el caller a partir del número
+ * real de firmantes distintos (ver comprobanteAutorizacionesPdf). Solo la ÚLTIMA fila respeta ese límite
+ * reducido; todas las filas anteriores usan el alto completo de la página — así, si hace falta mover contenido
+ * a una página nueva, se mueve ÚNICAMENTE lo necesario (la propia última fila, nunca de más), y lo que viene
+ * después (total + firmas + pie) siempre queda junto en esa misma página final.
+ */
+function dibujarTablaAdministrativaViaticos(
+  doc: InstanceType<typeof PDFDocument>,
+  opts: {
+    headers: string[];
+    rows: string[][];
+    widths: number[];
+    align?: Partial<Record<number, "left" | "right" | "center">>;
+    footerReserve: number;
+  },
+): void {
+  const marginL = doc.page.margins.left;
+  const marginT = doc.page.margins.top;
+  const pageBottom = () => doc.page.height - doc.page.margins.bottom - 12;
+
+  const dibujarEncabezado = (y: number): number => {
+    let x = marginL;
+    doc.font("Helvetica-Bold").fontSize(FUENTE_TABLA).fillColor("#0f172a");
+    opts.headers.forEach((h, i) => {
+      const w = opts.widths[i];
+      doc.rect(x, y, w, ALTO_ENCABEZADO_TABLA).strokeColor("#334155").lineWidth(0.8).stroke();
+      doc.text(h, x + 3, y + 5, { width: w - 6, height: ALTO_ENCABEZADO_TABLA - 6, align: opts.align?.[i] ?? "left", lineBreak: false, ellipsis: true });
+      x += w;
+    });
+    return y + ALTO_ENCABEZADO_TABLA;
+  };
+
+  let y = dibujarEncabezado(doc.y);
+
+  opts.rows.forEach((cells, idx) => {
+    const ultima = idx === opts.rows.length - 1;
+    const limite = pageBottom() - (ultima ? opts.footerReserve : 0);
+    if (y + ALTO_FILA_TABLA > limite) {
+      doc.addPage();
+      y = dibujarEncabezado(marginT);
+    }
+    let x = marginL;
+    doc.font("Helvetica").fontSize(FUENTE_TABLA).fillColor("#0f172a");
+    cells.forEach((cell, i) => {
+      const w = opts.widths[i];
+      doc.rect(x, y, w, ALTO_FILA_TABLA).strokeColor("#94a3b8").lineWidth(0.5).stroke();
+      doc.text(cell, x + 3, y + 4, { width: w - 6, height: ALTO_FILA_TABLA - 4, align: opts.align?.[i] ?? "left", lineBreak: false, ellipsis: true });
+      x += w;
+    });
+    y += ALTO_FILA_TABLA;
+  });
+
+  doc.x = marginL;
+  doc.y = y;
+}
+
 /**
  * `null` cuando no hay ningún viático autorizado EN EL PERÍODO — el caller (route.ts) decide el mensaje/estado
  * HTTP; esta función nunca genera un PDF vacío.
@@ -242,12 +315,34 @@ export async function comprobanteAutorizacionesPdf(
       .text(`${items.length} viático${items.length === 1 ? "" : "s"} autorizado${items.length === 1 ? "" : "s"}`, marginL, yCampo, { width: pageWidth });
     doc.y = yCampo + 18;
 
+    // VIATICOS-COMPROBANTE-ADMIN-1 (corrección pre-merge) — calculado ANTES de dibujar la tabla, para poder
+    // reservarle espacio real a TOTAL GENERAL + el/los bloque(s) de autorización en la ÚLTIMA fila (ver
+    // dibujarTablaAdministrativaViaticos): sin esto, la tabla podía consumir toda la página y dejar las firmas
+    // solas en una página nueva casi vacía.
+    const firmantes = agruparPorFirmante(porViatico);
+    const ALTO_TOTAL_GENERAL = 30;
+    const ALTO_TITULO_AUTORIZACION = 26;
+    const ALTO_BLOQUE_FIRMA = (tieneImagen: boolean) => 40 + (tieneImagen ? 76 : 0);
+    const alturaUtil = doc.page.height - doc.page.margins.top - doc.page.margins.bottom;
+    const footerReserveCalculado =
+      ALTO_TOTAL_GENERAL +
+      ALTO_TITULO_AUTORIZACION +
+      firmantes.reduce((acc, f) => acc + ALTO_BLOQUE_FIRMA(Boolean(f.imagen)), 0);
+    // Tope de seguridad: con muchos firmantes distintos, reservar la altura COMPLETA en la última fila dejaría
+    // sin espacio a filas que si caben perfectamente — el bloque de firmas YA tiene su propio control de salto
+    // de página (más abajo), así que basta reservar lo suficiente para arrancar el bloque sin quedar solo.
+    const footerReserve = Math.min(footerReserveCalculado, alturaUtil * 0.6);
+
     // "Cantidad" (índice 6) y "Total" (índice 8) alineados a la derecha —
     // mismo criterio que el resto de reportes administrativos del repo
-    // (viaticos-requerimientos-export.ts). `minWeight` evita que "Total"
-    // se trunque con montos en miles ("Q1,250.00"), mismo bug ya
-    // documentado para "Monto" en el formato anterior.
-    dibujarTablaEnDoc(doc, { headers, rows, align: { 6: "right", 8: "right" }, minWeight: { 8: 11 } });
+    // (viaticos-requerimientos-export.ts).
+    dibujarTablaAdministrativaViaticos(doc, {
+      headers,
+      rows,
+      widths: ANCHOS_TABLA_VIATICOS,
+      align: { 6: "right", 8: "right" },
+      footerReserve,
+    });
 
     // TOTAL GENERAL — suma exacta de las filas exportadas (mismo valor
     // que totalGeneralComprobante() ya usa el Excel, un solo cálculo).
@@ -257,9 +352,11 @@ export async function comprobanteAutorizacionesPdf(
     // Bloque de autorización — UNA firma por persona distinta (no una
     // por viático: el detalle por viático ya está en la tabla de
     // arriba). Sigue en la MISMA página si cabe (doc.y ya quedó
-    // posicionado justo después de la tabla por dibujarTablaEnDoc); solo
-    // se agrega una página nueva cuando el siguiente bloque ya no cabe.
-    const firmantes = agruparPorFirmante(porViatico);
+    // posicionado justo después de la tabla); el footerReserve de arriba
+    // ya garantizó espacio suficiente, este chequeo por bloque queda
+    // como red de seguridad (p. ej. un nombre de firmante inusualmente
+    // largo) y es el que sigue manejando el caso de MUCHOS firmantes
+    // que legítimamente necesitan más de una página.
     let tituloDibujado = false;
     firmantes.forEach(({ firma, imagen }) => {
       const alturaEstimada = 40 + (imagen ? 76 : 0) + (tituloDibujado ? 0 : 22);
@@ -288,7 +385,7 @@ export async function comprobanteAutorizacionesPdf(
           doc.moveDown(0.1);
         }
       }
-      doc.moveTo(doc.x, doc.y).lineTo(doc.x + 180, doc.y).strokeColor("#94a3b8").lineWidth(0.6).stroke();
+      doc.moveTo(doc.x, doc.y).lineTo(doc.x + 180, doc.y).strokeColor("#334155").lineWidth(0.7).stroke();
       doc.moveDown(0.15);
       // VIATICOS-PDF-PRESENTACION-1: ÚNICAMENTE el nombre real del
       // firmante (snapshot de payload_canonico al firmar) — nunca su

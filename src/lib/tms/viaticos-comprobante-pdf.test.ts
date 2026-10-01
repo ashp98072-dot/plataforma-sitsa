@@ -33,6 +33,38 @@ function llamadaTexto(call: unknown[]): { texto: string; opciones: Record<string
   return { texto: String(call[0]), opciones };
 }
 
+/**
+ * VIATICOS-COMPROBANTE-ADMIN-1 (corrección pre-merge) — mismo criterio que espiarTexto() (delega a la
+ * implementación real, solo registra), pero combina `text` + `addPage` en UN SOLO log ordenado — así se puede
+ * saber qué texto se dibujó DESPUÉS del último salto de página (es decir, en la página final), algo que
+ * inspeccionar `spy.mock.calls` de un solo método no permite (cada spy lleva su propio orden, sin relación
+ * entre sí). `textoDespuesDelUltimoAddPage()` es lo que permite probar que TOTAL GENERAL + firmas + al menos
+ * una fila real de la tabla quedan juntos en la ÚLTIMA página, nunca una página final compuesta solo de firmas.
+ */
+function espiarTextoYPaginas() {
+  const eventos: { tipo: "text" | "addPage"; texto?: string; opciones?: Record<string, unknown> }[] = [];
+  const textoOriginal = PDFDocument.prototype.text;
+  const addPageOriginal = PDFDocument.prototype.addPage;
+  vi.spyOn(PDFDocument.prototype, "text").mockImplementation(function (this: InstanceType<typeof PDFDocument>, ...args: unknown[]) {
+    const opciones = args.find((a): a is Record<string, unknown> => typeof a === "object" && a !== null && !Array.isArray(a));
+    eventos.push({ tipo: "text", texto: String(args[0]), opciones });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (textoOriginal as any).apply(this, args);
+  });
+  vi.spyOn(PDFDocument.prototype, "addPage").mockImplementation(function (this: InstanceType<typeof PDFDocument>, ...args: unknown[]) {
+    eventos.push({ tipo: "addPage" });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (addPageOriginal as any).apply(this, args);
+  });
+  return {
+    eventos,
+    textoDespuesDelUltimoAddPage(): string[] {
+      const ultimo = eventos.map((e) => e.tipo).lastIndexOf("addPage");
+      return eventos.slice(ultimo + 1).filter((e) => e.tipo === "text").map((e) => e.texto!);
+    },
+  };
+}
+
 const VIATICO_BASE = {
   id: 1,
   planId: 1,
@@ -534,5 +566,97 @@ describe("VIATICOS-PDF-PRESENTACION-1 — sin página en blanco extra", () => {
     // más de 1 página — el fix de la página en blanco NUNCA debe recortar
     // páginas que sí hacen falta.
     expect(paginas!.length).toBeGreaterThan(1);
+  });
+});
+
+/**
+ * VIATICOS-COMPROBANTE-ADMIN-1 (corrección pre-merge) — estilo del renderer administrativo: SIN el fondo
+ * navy/zebra de dibujarTablaEnDoc() (ese helper compartido sigue intacto para otros reportes, ver
+ * src/lib/rrhh/export-files.ts — no se modifica). Se verifica tanto en el código fuente (import/uso) como en
+ * comportamiento real (fill() nunca se llama con esos colores al generar este PDF).
+ */
+describe("VIATICOS-COMPROBANTE-ADMIN-1 — estilo administrativo, sin navy/zebra", () => {
+  it("fill() nunca se llama con el navy (#1e3a5f) ni el zebra (#f1f5f9) del formato técnico anterior", async () => {
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([VIATICO_BASE, { ...VIATICO_BASE, id: 2, planCodigo: "VJ-002" }]);
+    vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]);
+    const fillSpy = vi.spyOn(PDFDocument.prototype, "fill");
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
+    expect(buf).not.toBeNull();
+    const coloresUsados = fillSpy.mock.calls.map((c) => c[0]);
+    expect(coloresUsados).not.toContain("#1e3a5f");
+    expect(coloresUsados).not.toContain("#f1f5f9");
+  });
+
+  it("la tabla se dibuja con rect+stroke (bordes finos), nunca con relleno de celda", async () => {
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([VIATICO_BASE]);
+    vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]);
+    const rectSpy = vi.spyOn(PDFDocument.prototype, "rect");
+    const fillSpy = vi.spyOn(PDFDocument.prototype, "fill");
+    await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
+    // 2 rects por campo de cabecera (cajas) + 1 por celda de tabla (encabezado + 1 fila x 9 columnas) — en
+    // cualquier caso, ninguno de esos rects termina en un fill() de color (serían encabezado/zebra).
+    expect(rectSpy.mock.calls.length).toBeGreaterThan(0);
+    expect(fillSpy).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * VIATICOS-COMPROBANTE-ADMIN-1 (corrección pre-merge) — reserva real de espacio en la ÚLTIMA página para
+ * TOTAL GENERAL + firma(s) + pie, calculada ANTES de dibujar la última fila de la tabla (ver
+ * dibujarTablaAdministrativaViaticos). Un lote largo debe terminar con la tabla, el total y las firmas
+ * JUNTOS en la última página — nunca una página final compuesta solo de firmas.
+ */
+describe("VIATICOS-COMPROBANTE-ADMIN-1 — reserva de espacio para TOTAL + firmas en la última página", () => {
+  function lote(n: number, nombreUltimo = "VJ-ULTIMA-ESPECIAL") {
+    const items = Array.from({ length: n }, (_, i) => ({
+      ...VIATICO_BASE, id: i + 1, planCodigo: i === n - 1 ? nombreUltimo : `VJ-${String(i + 1).padStart(3, "0")}`,
+    }));
+    return items;
+  }
+
+  it("lote largo (60 filas, 1 autorizante): hay más de 1 página, el encabezado se repite, y TOTAL GENERAL + 'Autorizado por' + la última fila quedan juntos DESPUÉS del último salto de página", async () => {
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue(lote(60));
+    vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]); // mismo firmante para todos -> 1 solo bloque
+    const { eventos, textoDespuesDelUltimoAddPage } = espiarTextoYPaginas();
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
+    expect(buf).not.toBeNull();
+
+    const saltosDePagina = eventos.filter((e) => e.tipo === "addPage").length;
+    expect(saltosDePagina).toBeGreaterThan(0);
+
+    const encabezados = eventos.filter((e) => e.tipo === "text" && e.texto === "Viaje");
+    expect(encabezados.length).toBeGreaterThanOrEqual(2); // se repite en cada página nueva
+
+    const ultimaPagina = textoDespuesDelUltimoAddPage();
+    expect(ultimaPagina).toContain("VJ-ULTIMA-ESPECIAL"); // la última fila de la tabla...
+    expect(ultimaPagina.some((t) => t.startsWith("TOTAL GENERAL: Q"))).toBe(true); // ...el total...
+    expect(ultimaPagina).toContain("Autorizado por: Ana Gómez"); // ...y la firma, todos en la MISMA página final.
+  });
+
+  it("lote largo con 3 autorizantes DISTINTOS: los 3 bloques de firma aparecen, ninguno se pierde ni se reemplaza por uno solo, y quedan en la misma página final que el total", async () => {
+    const items = lote(50);
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue(items);
+    vi.mocked(listarFirmasViatico).mockImplementation(async (_empresaId, viaticoId) => {
+      const n = Number(viaticoId);
+      const grupo = n % 3; // reparte los 50 viáticos entre 3 firmantes distintos
+      return [{ ...FIRMA_BASE, id: 200 + n, usuarioId: 300 + grupo, nombreFirmante: `Firmante ${grupo}`, codigoFirma: `SIG-${n}` }];
+    });
+    const { textoDespuesDelUltimoAddPage } = espiarTextoYPaginas();
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
+    expect(buf).not.toBeNull();
+
+    const ultimaPagina = textoDespuesDelUltimoAddPage();
+    expect(ultimaPagina.some((t) => t.startsWith("TOTAL GENERAL: Q"))).toBe(true);
+    for (const grupo of [0, 1, 2]) {
+      expect(ultimaPagina).toContain(`Autorizado por: Firmante ${grupo}`);
+    }
+  });
+
+  it("lote corto (1 fila) sigue generando EXACTAMENTE 1 página — la reserva de espacio no fuerza páginas de más", async () => {
+    vi.mocked(listarViaticosAutorizadosPorPeriodo).mockResolvedValue([VIATICO_BASE]);
+    vi.mocked(listarFirmasViatico).mockResolvedValue([FIRMA_BASE]);
+    const buf = await comprobanteAutorizacionesPdf(7, "SITSA", PERIODO_BASE);
+    const paginas = buf!.toString("latin1").match(/\/Type\s*\/Page(?!s)\b/g);
+    expect(paginas).toHaveLength(1);
   });
 });
