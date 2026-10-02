@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { NovalvionIcono } from "@/components/novalvion-brand";
 
 type Empresa = {
   id: number;
@@ -72,6 +73,10 @@ export default function SelectEmpresaPage() {
     <main className="mx-auto max-w-4xl px-4 py-12">
       <div className="mb-8 flex items-start justify-between gap-4">
         <div>
+          <div className="mb-3 flex items-center gap-2">
+            <NovalvionIcono className="h-7 w-7" />
+            <p className="text-lg font-semibold tracking-wide">Novalvion</p>
+          </div>
           <h1 className="text-3xl font-semibold">Seleccionar empresa</h1>
           <p className="mt-1 text-[var(--muted)]">
             {user ? `${user.username} · ${user.rol}` : "Cargando…"}

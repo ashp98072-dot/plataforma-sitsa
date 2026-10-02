@@ -15,6 +15,7 @@ import {
 import { MODULO_LABEL, type Modulo } from "@/lib/roles";
 import { NotificacionesBell } from "@/components/notificaciones-bell";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { NovalvionIcono } from "@/components/novalvion-brand";
 import { ShellNavLink } from "@/components/shell-nav-link";
 import { EmpresaSessionProvider } from "@/lib/empresa-session";
 import { alcanceFacturacion } from "@/lib/facturacion/alcance";
@@ -773,10 +774,14 @@ export function AppShell({
           <div className="shrink-0 p-4">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
-                <p className="text-xs uppercase tracking-wider text-[var(--muted)]">
-                  SITSA
+                <div className="flex items-center gap-2">
+                  <NovalvionIcono className="h-6 w-6" />
+                  <p className="text-sm font-semibold tracking-wide">Novalvion</p>
+                </div>
+                <p className="mt-3 text-[10px] uppercase tracking-wider text-[var(--muted)]">
+                  Empresa activa
                 </p>
-                <h1 className="mt-1 text-lg font-semibold leading-tight">
+                <h1 className="mt-0.5 text-lg font-semibold leading-tight">
                   {empresaNombre}
                 </h1>
                 <p className="mt-1 text-xs text-[var(--muted)]">
