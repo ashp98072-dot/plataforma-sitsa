@@ -3,8 +3,8 @@ import "./globals.css";
 import { SessionInactivityGuard } from "@/components/session-inactivity-guard";
 
 export const metadata: Metadata = {
-  title: "SITSA Plataforma Corporativa",
-  description: "Multiempresa · RRHH · TMS · Flota · Contabilidad",
+  title: "Novalvion | Plataforma Corporativa",
+  description: "Plataforma corporativa para RRHH, TMS, Flota y Contabilidad",
 };
 
 const themeBoot = `
