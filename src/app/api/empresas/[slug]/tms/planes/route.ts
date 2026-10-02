@@ -58,6 +58,7 @@ import {
 import { esTc, normalizarTipoUnidad } from "@/lib/flota/tipo-unidad";
 import { personalDesdeEmpleado } from "@/lib/tms/personal-resolucion";
 import { upsertLugar, guardarAuxiliaresPlan } from "@/lib/tms/plan-comunes";
+import { lugaresDesdeParadas } from "@/lib/tms/plan-lugares";
 import {
   MSG_EXTRA_SOLO_PROPIO,
   MSG_PERSONA_DUPLICADA,
@@ -996,17 +997,10 @@ export async function POST(req: Request, ctx: Ctx) {
     }
   }
 
-  const lugarCargaId = await upsertLugar(
-    empresaId,
-    paradasInput.find((p) => p.tipo === "Carga")?.lugarNombre || d.lugarCarga,
-    "Carga",
-  );
-  const lugarDescargaId = await upsertLugar(
-    empresaId,
-    paradasInput.find((p) => p.tipo === "Descarga" || p.tipo === "Entrega")
-      ?.lugarNombre || d.lugarDescarga,
-    "Descarga",
-  );
+  // Regla ÚNICA (compartida con el PATCH): los lugares resumen salen de las paradas del viaje.
+  const lugaresPlan = lugaresDesdeParadas(paradasInput, { lugarCarga: d.lugarCarga, lugarDescarga: d.lugarDescarga });
+  const lugarCargaId = await upsertLugar(empresaId, lugaresPlan.carga, "Carga");
+  const lugarDescargaId = await upsertLugar(empresaId, lugaresPlan.descarga, "Descarga");
 
   // Piloto, auxiliares y unidad quedan ocupados durante toda fecha_plan.
   // La hora y el regreso estimado no modifican esta reserva diaria.
@@ -1340,11 +1334,13 @@ const patchSchema = z.object({
   // ruta usada. BUGFIX-PROGRAMACION-CLIENTE-1: ahora también admite `null`
   // (quita el vínculo a la ruta) — undefined = no tocar, null = quitar, number = cambiar.
   rutaId: z.number().int().positive().nullable().optional(),
-  rutaCodigo: z.string().max(40).optional(),
-  lugarDescargaHistorico: z.string().max(300).optional(),
-  contactoNombreHistorico: z.string().max(160).optional(),
-  contactoCargoHistorico: z.string().max(120).optional(),
-  contactoTelefonoHistorico: z.string().max(80).optional(),
+  // PROGRAMACION-PERSISTENCIA — snapshots del viaje: ausente = no tocar; null = el usuario lo BORRÓ (se limpia);
+  // texto = nuevo valor. "" se sigue tratando como "no tocar" (compatibilidad con clientes previos).
+  rutaCodigo: z.string().max(40).nullable().optional(),
+  lugarDescargaHistorico: z.string().max(300).nullable().optional(),
+  contactoNombreHistorico: z.string().max(160).nullable().optional(),
+  contactoCargoHistorico: z.string().max(120).nullable().optional(),
+  contactoTelefonoHistorico: z.string().max(80).nullable().optional(),
   paradas: z
     .array(
       z.object({
@@ -2233,11 +2229,12 @@ export async function PATCH(req: Request, ctx: Ctx) {
         d.clienteId ?? null,
         d.rutaId !== undefined,
         d.rutaId ?? null,
-        rutaSeQuita, d.rutaCodigo?.trim() || null,
-        rutaSeQuita, d.lugarDescargaHistorico?.trim() || null,
-        rutaSeQuita, d.contactoNombreHistorico?.trim() || null,
-        rutaSeQuita, d.contactoCargoHistorico?.trim() || null,
-        rutaSeQuita, d.contactoTelefonoHistorico?.trim() || null,
+        // PROGRAMACION-PERSISTENCIA — null explícito = el usuario borró el dato de ESTE viaje: se limpia.
+        rutaSeQuita || d.rutaCodigo === null, d.rutaCodigo?.trim() || null,
+        rutaSeQuita || d.lugarDescargaHistorico === null, d.lugarDescargaHistorico?.trim() || null,
+        rutaSeQuita || d.contactoNombreHistorico === null, d.contactoNombreHistorico?.trim() || null,
+        rutaSeQuita || d.contactoCargoHistorico === null, d.contactoCargoHistorico?.trim() || null,
+        rutaSeQuita || d.contactoTelefonoHistorico === null, d.contactoTelefonoHistorico?.trim() || null,
         escribirTcInterno,
         tcVehiculoIdNuevo,
         escribirTcInterno,
@@ -2346,6 +2343,16 @@ export async function PATCH(req: Request, ctx: Ctx) {
         await conn.rollback();
         return NextResponse.json({ error: rParadas.error }, { status: 409 });
       }
+      // PROGRAMACION-PERSISTENCIA — los lugares resumen (Portal del piloto / búsqueda de salida) se re-derivan de las
+      // paradas RECIÉN guardadas con la MISMA regla que al crear: antes solo se fijaban en el POST y una parada
+      // editada aquí seguía mostrándose con el origen/destino viejo fuera de Programación.
+      const lugares = lugaresDesdeParadas(paradasInput);
+      const lugarCargaId = await upsertLugar(empresaId, lugares.carga, "Carga", conn);
+      const lugarDescargaId = await upsertLugar(empresaId, lugares.descarga, "Descarga", conn);
+      await conn.execute(
+        `UPDATE tms_planes_viaje SET lugar_carga_id = ?, lugar_descarga_id = ? WHERE id = ? AND empresa_id = ?`,
+        [lugarCargaId, lugarDescargaId, d.id, empresaId],
+      );
     }
 
     await conn.commit();

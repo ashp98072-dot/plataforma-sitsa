@@ -19,6 +19,7 @@ import { textoCuadrilla } from "@/lib/tms/cuadrilla-contrato";
 import { EdicionRapida, type FilaEdicionRapidaEntrada } from "./edicion-rapida";
 import { confirmarPerdida, MSG_CAMBIOS_PENDIENTES, puedeUsarEdicionRapida, type TarifaRutaEdicion } from "./edicion-rapida-helpers";
 import { ETIQUETA_VEHICULO_SOLICITADO, textoVehiculoSolicitado } from "@/lib/tms/vehiculo-solicitado";
+import { crearSecuenciaCargas } from "@/lib/tms/plan-form-cambios";
 
 /**
  * OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — tras CERRAR un viaje, Programación
@@ -640,6 +641,8 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   const [versionRapida, setVersionRapida] = useState(0);
   const hayPendientesRapida = modoRapido && pendientesRapida;
   const pausarSondeoRef = useRef(false);
+  // PROGRAMACION-PERSISTENCIA — turno de cada carga de la lista (sondeo o recarga tras guardar): solo aplica la más reciente.
+  const secuenciaCargas = useRef(crearSecuenciaCargas());
   useEffect(() => {
     pausarSondeoRef.current = hayPendientesRapida;
   }, [hayPendientesRapida]);
@@ -786,18 +789,22 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
         if (silencioso) {
           // Edición rápida con cambios pendientes: no se reemplaza la lista bajo el borrador del usuario.
           if (pausarSondeoRef.current) return;
+          const turno = secuenciaCargas.current.iniciar();
           const r = await obtenerProgramacion(slug, desde, hasta).catch(() => null);
-          if (!ignore && r?.ok) {
+          // PROGRAMACION-PERSISTENCIA — si mientras tanto empezó otra carga (p. ej. la recarga tras guardar), este
+          // resultado es más viejo: se descarta para no volver a mostrar los valores anteriores del viaje.
+          if (!ignore && r?.ok && secuenciaCargas.current.esVigente(turno)) {
             setPlanes(r.datos.planes);
             setPendientesCierre(r.datos.pendientesCierre);
             setEstadoVehiculos(r.datos.estadoVehiculos);
             setTarifasPorRuta(r.datos.tarifasPorRuta);
           }
         } else {
+          const turno = secuenciaCargas.current.iniciar();
           const r = await obtenerProgramacion(slug, desde, hasta).catch(
             () => ({ ok: false, error: "Error de conexión al cargar la programación." }) as const,
           );
-          if (ignore) return;
+          if (ignore || !secuenciaCargas.current.esVigente(turno)) return;
           if (!r.ok) {
             setErr(r.error);
           } else {
@@ -888,8 +895,10 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   async function cargar() {
     setLoading(true);
     setErr("");
+    const turno = secuenciaCargas.current.iniciar();
     try {
       const r = await obtenerProgramacion(slug, desde, hasta);
+      if (!secuenciaCargas.current.esVigente(turno)) return;
       if (!r.ok) {
         setErr(r.error);
         return;
