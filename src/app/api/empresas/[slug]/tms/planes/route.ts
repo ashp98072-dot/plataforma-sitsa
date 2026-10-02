@@ -58,7 +58,7 @@ import {
 import { esTc, normalizarTipoUnidad } from "@/lib/flota/tipo-unidad";
 import { personalDesdeEmpleado } from "@/lib/tms/personal-resolucion";
 import { upsertLugar, guardarAuxiliaresPlan } from "@/lib/tms/plan-comunes";
-import { lugaresDesdeParadas } from "@/lib/tms/plan-lugares";
+import { lugaresDesdeParadas, resolverDescargaReporte } from "@/lib/tms/plan-lugares";
 import {
   MSG_EXTRA_SOLO_PROPIO,
   MSG_PERSONA_DUPLICADA,
@@ -999,8 +999,9 @@ export async function POST(req: Request, ctx: Ctx) {
 
   // Regla ÚNICA (compartida con el PATCH): los lugares resumen salen de las paradas del viaje.
   const lugaresPlan = lugaresDesdeParadas(paradasInput, { lugarCarga: d.lugarCarga, lugarDescarga: d.lugarDescarga });
-  const lugarCargaId = await upsertLugar(empresaId, lugaresPlan.carga, "Carga");
-  const lugarDescargaId = await upsertLugar(empresaId, lugaresPlan.descarga, "Descarga");
+  // PROGRAMACION-PARADAS-FUENTE — "Lugar de Descarga" del reporte = primera Descarga/Entrega de las paradas (el cliente ya
+  // no lo captura dos veces). `lugarDescargaHistorico` del payload solo es una descripción DISTINTA explícita (VIAT-4b).
+  const descargaReporte = resolverDescargaReporte({ override: d.lugarDescargaHistorico, paradasNuevas: paradasInput, respaldoLegacy: d.lugarDescarga });
 
   // Piloto, auxiliares y unidad quedan ocupados durante toda fecha_plan.
   // La hora y el regreso estimado no modifican esta reserva diaria.
@@ -1122,6 +1123,10 @@ export async function POST(req: Request, ctx: Ctx) {
 
     await conn.beginTransaction();
 
+    // Lugares resumen (Portal del piloto / búsqueda de salida) derivados de las paradas: en la MISMA transacción que el plan, las
+    // paradas y el snapshot — si algo falla, rollback total (antes se creaban fuera de la transacción).
+    const lugarCargaId = await upsertLugar(empresaId, lugaresPlan.carga, "Carga", conn);
+    const lugarDescargaId = await upsertLugar(empresaId, lugaresPlan.descarga, "Descarga", conn);
     const cuadrilla = await resolverCuadrilla(empresaId, d.cuadrilla ?? [], conn);
     await validarCuadrillaRoles(empresaId, cuadrilla, [pilotoId, pilotoExtraId, ...auxPersonalIds].filter((id): id is number => id != null), conn);
     if (cuadrilla.some((c) => c.empleadoId != null)) {
@@ -1157,7 +1162,7 @@ export async function POST(req: Request, ctx: Ctx) {
             d.referenciaCliente?.trim() || null,
             d.rutaId ?? null,
             d.rutaCodigo?.trim() || null,
-            d.lugarDescargaHistorico?.trim() || null,
+            descargaReporte.valor,
             d.contactoNombreHistorico?.trim() || null,
             d.contactoCargoHistorico?.trim() || null,
             d.contactoTelefonoHistorico?.trim() || null,
@@ -2157,6 +2162,27 @@ export async function PATCH(req: Request, ctx: Ctx) {
     // (antes.estado), nunca contra el nuevo valor del body. Así, un
     // "Cerrado" recién puesto por el Jefe queda protegido: este UPDATE no
     // lo toca.
+    // PROGRAMACION-PARADAS-FUENTE — "Lugar de Descarga" del reporte: se deriva en el SERVIDOR (misma transacción que las
+    // paradas) de la primera Descarga/Entrega. Quitar la ruta descarta cualquier descripción de la ruta anterior (se vuelve
+    // a seguir a las paradas); una descripción distinta ya guardada se conserva si el destino cambia sin pedir otra cosa.
+    const overrideDescarga = rutaSeQuita ? null : d.lugarDescargaHistorico;
+    let actualDescarga: { historico: string | null; paradas: { lugarNombre: string; tipo: string }[] } | undefined;
+    if (paradasInput !== undefined || overrideDescarga === null) {
+      const [hRows] = await conn.query<RowDataPacket[]>(
+        "SELECT lugar_descarga_historico FROM tms_planes_viaje WHERE id = ? AND empresa_id = ? LIMIT 1",
+        [d.id, empresaId],
+      );
+      const [pRows] = await conn.query<RowDataPacket[]>(
+        "SELECT lugar_nombre, tipo FROM tms_plan_paradas WHERE plan_id = ? ORDER BY orden ASC, id ASC",
+        [d.id],
+      );
+      actualDescarga = {
+        historico: hRows[0]?.lugar_descarga_historico != null ? String(hRows[0].lugar_descarga_historico) : null,
+        paradas: pRows.map((r) => ({ lugarNombre: String(r.lugar_nombre), tipo: String(r.tipo ?? "") })),
+      };
+    }
+    const descargaReporte = resolverDescargaReporte({ override: overrideDescarga, paradasNuevas: paradasInput, actual: actualDescarga ?? { historico: null, paradas: [] } });
+
     const [patchResult] = await conn.execute<ResultSetHeader>(
       `UPDATE tms_planes_viaje SET
         fecha_plan = COALESCE(?, fecha_plan),
@@ -2183,7 +2209,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
         -- de la ruta anterior todavía visible. Si la ruta NO se quita, conservan su comportamiento de siempre
         -- (COALESCE: solo se pisan si el PATCH manda un valor no vacío; edición manual del destino sigue intacta).
         ruta_codigo_historico = CASE WHEN ? THEN NULL ELSE COALESCE(?, ruta_codigo_historico) END,
-        lugar_descarga_historico = CASE WHEN ? THEN NULL ELSE COALESCE(?, lugar_descarga_historico) END,
+        -- PROGRAMACION-PARADAS-FUENTE: derivado de la primera Descarga/Entrega (resolverDescargaReporte); no se toca si el destino no cambia.
+        lugar_descarga_historico = CASE WHEN ? THEN ? ELSE lugar_descarga_historico END,
         contacto_nombre_historico = CASE WHEN ? THEN NULL ELSE COALESCE(?, contacto_nombre_historico) END,
         contacto_cargo_historico = CASE WHEN ? THEN NULL ELSE COALESCE(?, contacto_cargo_historico) END,
         contacto_telefono_historico = CASE WHEN ? THEN NULL ELSE COALESCE(?, contacto_telefono_historico) END,
@@ -2231,7 +2258,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
         d.rutaId ?? null,
         // PROGRAMACION-PERSISTENCIA — null explícito = el usuario borró el dato de ESTE viaje: se limpia.
         rutaSeQuita || d.rutaCodigo === null, d.rutaCodigo?.trim() || null,
-        rutaSeQuita || d.lugarDescargaHistorico === null, d.lugarDescargaHistorico?.trim() || null,
+        descargaReporte.aplicar, descargaReporte.valor,
         rutaSeQuita || d.contactoNombreHistorico === null, d.contactoNombreHistorico?.trim() || null,
         rutaSeQuita || d.contactoCargoHistorico === null, d.contactoCargoHistorico?.trim() || null,
         rutaSeQuita || d.contactoTelefonoHistorico === null, d.contactoTelefonoHistorico?.trim() || null,

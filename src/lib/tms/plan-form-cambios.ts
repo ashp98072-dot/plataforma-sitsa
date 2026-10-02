@@ -1,3 +1,5 @@
+import { descripcionReporteDistinta } from "./plan-lugares";
+
 /**
  * PROGRAMACION-PERSISTENCIA — lógica PURA del formulario de Programación para que lo que el usuario edita en ESTE
  * viaje persista y nunca sea pisado por la ruta maestra ni por datos viejos (sin React: se prueba directo).
@@ -89,6 +91,16 @@ export function crearSecuenciaCargas() {
 }
 
 export type TipoParadaForm = "Carga" | "Descarga" | "Entrega";
+
+/**
+ * PROGRAMACION-PARADAS-FUENTE — «descripción distinta en el reporte» al ABRIR un viaje: solo si lo guardado difiere de la
+ * primera Descarga/Entrega de sus paradas (o el viaje histórico no tiene paradas). Si coincide, el campo queda vacío y el
+ * servidor la sigue derivando de las paradas — no se muestra dos veces el mismo destino.
+ */
+export function descripcionReporteInicial(historico: string | null | undefined, paradas: ParadaPersistida[] | undefined): string {
+  const lista = (paradas ?? []).map((p) => ({ lugarNombre: p.lugar_nombre, tipo: p.tipo }));
+  return descripcionReporteDistinta(historico, lista) ? (historico ?? "").trim() : "";
+}
 export type ParadaFormulario = { id?: number; lugarNombre: string; tipo: TipoParadaForm; requiereEvidencia: boolean; clienteUbicacionId?: number | null };
 
 /** Paradas del formulario al ABRIR un viaje guardado: exactamente las del viaje (con su id), nunca las de la ruta. */
@@ -138,11 +150,16 @@ export function plantillaDesdeRuta(
     // Respaldo solo para el tablero/seguimiento — el reporte tradicional lee lugar_descarga_historico.
     paradas.push({ lugarNombre: ruta.destinoDescripcion, tipo: "Descarga", requiereEvidencia: true, clienteUbicacionId: null });
   }
+  // PROGRAMACION-PARADAS-FUENTE — el destino de la ruta alimenta las PARADAS; solo se conserva aparte como «descripción
+  // distinta» cuando difiere de la primera descarga (VIAT-4b: texto libre tipo «RUTA-A - punto1-punto2»). Si coincide
+  // (caso común) no se duplica en el formulario: el servidor la deriva de las paradas.
+  const destino = ruta.destinoDescripcion?.trim() ?? "";
   return {
     rutaId: ruta.id,
     rutaCodigo: ruta.codigo,
     horaCarga: normalizarHora(ruta.horaHabitual) || actual.horaCarga,
-    lugarDescargaHistorico: ruta.destinoDescripcion ?? actual.lugarDescargaHistorico,
+    // Sin destino en la ruta no se pisa lo que el formulario ya tenía (igual que la hora).
+    lugarDescargaHistorico: destino ? (descripcionReporteDistinta(destino, paradas) ? destino : "") : actual.lugarDescargaHistorico,
     paradas: paradas.length ? paradas : null,
   };
 }
