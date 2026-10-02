@@ -650,360 +650,406 @@ export default function RutasPage() {
       {msg ? <p className="text-xs text-emerald-400">{msg}</p> : null}
 
       {mostrarForm ? (
-        <div ref={formRef} className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-          <p className="text-sm font-medium">{editandoId ? "Editar ruta" : "Nueva ruta"}</p>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <div className="sm:col-span-1">
-              <ClienteSearch
-                clientes={clientes}
-                valueNombre={formClienteNombre}
-                valueId={formClienteId}
-                inputClassName={inputCls}
-                onChange={({ clienteId, clienteNombre }) => {
-                  setFormClienteId(clienteId);
-                  setFormClienteNombre(clienteNombre);
-                  setForm((f) => ({ ...f, ubicacionCargaId: null, contactoClienteId: null }));
-                }}
-              />
-            </div>
-            <label className="text-xs text-[var(--muted)]">
-              Código
-              <input data-campo="codigo" className={`${campoCls("codigo")} mt-0.5 w-full`} value={form.codigo} onChange={(e) => setForm((f) => ({ ...f, codigo: e.target.value }))} />
-              {mensajeCampo("codigo")}
-            </label>
-            <label className="text-xs text-[var(--muted)]">
-              Nombre/descripción
-              <input data-campo="nombre" className={`${campoCls("nombre")} mt-0.5 w-full`} value={form.nombre} onChange={(e) => setForm((f) => ({ ...f, nombre: e.target.value }))} />
-              {mensajeCampo("nombre")}
-            </label>
-
-            <div className="text-xs text-[var(--muted)]">
-              {/*
-                Seguimiento a feedback del usuario — antes era un <select>
-                plano (no dejaba escribir/filtrar) y no existía forma de
-                dar de alta un lugar de carga nuevo desde Rutas: quedaba
-                como texto suelto de esa ruta (campo de abajo), sin quedar
-                disponible para futuras rutas del mismo cliente. Mismo
-                buscador ya usado para piloto/auxiliar/contacto.
-              */}
-              <CatalogoSearchSelect
-                label="lugar de carga guardado"
-                placeholder="Buscar por nombre…"
-                value={form.ubicacionCargaId != null ? String(form.ubicacionCargaId) : ""}
-                options={ubicacionesForm.map((u) => ({ value: String(u.id), label: u.nombre, detail: u.direccion ?? undefined }))}
-                inputClassName={campoCls("ubicacionCargaId")}
-                onChange={(v) => setForm((f) => ({ ...f, ubicacionCargaId: v ? Number(v) : null }))}
-              />
-              {mensajeCampo("ubicacionCargaId")}
-              {formClienteId ? (
-                <button
-                  type="button"
-                  className="mt-1 text-[11px] text-[var(--accent)] hover:underline"
-                  onClick={() => setMostrarNuevaUbicacion((v) => !v)}
-                >
-                  {mostrarNuevaUbicacion ? "Cancelar lugar nuevo" : "+ Agregar lugar de carga"}
-                </button>
-              ) : null}
-              {mostrarNuevaUbicacion ? (
-                <div className="mt-2 space-y-1.5 rounded border border-[var(--border)]/60 p-2">
-                  <input className={`${inputCls} w-full`} placeholder="Nombre / alias (ej. Bodega Central)" value={nuevaUbicacion.nombre} onChange={(e) => setNuevaUbicacion((u) => ({ ...u, nombre: e.target.value }))} />
-                  <input className={`${inputCls} w-full`} placeholder="Dirección (opcional)" value={nuevaUbicacion.direccion} onChange={(e) => setNuevaUbicacion((u) => ({ ...u, direccion: e.target.value }))} />
-                  <button type="button" disabled={guardandoUbicacion} className="rounded bg-[#334155] px-2 py-1 text-xs text-white disabled:opacity-50" onClick={() => void guardarNuevaUbicacion()}>
-                    {guardandoUbicacion ? "Guardando…" : "Guardar lugar de carga"}
-                  </button>
-                </div>
-              ) : null}
-            </div>
-            <label className="text-xs text-[var(--muted)]">
-              Lugar de carga (texto libre, si no está en el catálogo)
-              <input
-                data-campo="lugarCargaTexto"
-                className={`${campoCls("lugarCargaTexto")} mt-0.5 w-full`}
-                value={form.lugarCargaTexto}
-                onChange={(e) => setForm((f) => ({ ...f, lugarCargaTexto: e.target.value }))}
-              />
-              {mensajeCampo("lugarCargaTexto")}
-            </label>
-            <div>
-              {/* OPERACIONES-HORA-12H-1 — UI en formato 12h con AM/PM;
-                  internamente sigue siendo `HH:mm` (24h) en
-                  `form.horaHabitual` (u "" si la ruta no tiene hora
-                  habitual — campo opcional, sin cambios). */}
-              <Hora12Input
-                label="Hora habitual"
-                dataCampo="horaHabitual"
-                inputClassName={campoCls("horaHabitual")}
-                value={form.horaHabitual}
-                onChange={(hora24) => setForm((f) => ({ ...f, horaHabitual: hora24 }))}
-              />
-              {mensajeCampo("horaHabitual")}
-            </div>
-            <label className="text-xs text-[var(--muted)]">
-              Tarifa de referencia (GTQ)
-              <input
-                data-campo="tarifaReferencia"
-                type="number"
-                min="0"
-                step="0.01"
-                className={`${campoCls("tarifaReferencia")} mt-0.5 w-full`}
-                value={form.tarifaReferencia}
-                onChange={(e) => setForm((f) => ({ ...f, tarifaReferencia: e.target.value }))}
-              />
-              <span className="mt-0.5 block text-[10px]">
-                Valor rápido de compatibilidad. Cuando la ruta tiene varias tarifas, se sincroniza con la <strong>tarifa predeterminada</strong> (ver &quot;Tarifas de la ruta&quot; en cada fila del listado).
-              </span>
-              {mensajeCampo("tarifaReferencia")}
-            </label>
-            {/* RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§4) — unidad
-                habitual de la ruta (flota de esta empresa). Opcional.
-                Programación la precarga; el usuario puede cambiarla por
-                viaje sin tocar esta configuración. */}
-            <div className="text-xs text-[var(--muted)]">
-              <CatalogoSearchSelect
-                label="Unidad recurrente"
-                placeholder="Buscar unidad recurrente"
-                value={form.unidadRecurrenteId}
-                options={flotaVehiculos.map((v) => ({
-                  value: String(v.id),
-                  label: v.placa,
-                  detail: [v.marca, v.modelo].filter(Boolean).join(" ") || undefined,
-                }))}
-                inputClassName={campoCls("unidadRecurrenteId")}
-                emptyLabel="— Sin unidad recurrente —"
-                selectDataCampo="unidadRecurrenteId"
-                onChange={(value) => setForm((f) => ({ ...f, unidadRecurrenteId: value }))}
-              />
-              <span className="mt-0.5 block text-[10px]">Se precarga al elegir esta ruta en Programación.</span>
-              {mensajeCampo("unidadRecurrenteId")}
-            </div>
-            {/*
-              RUTAS-TARIFARIO-HISTORIAL-1 (§1/§2/§5 del ticket) — cada
-              cambio de tarifa queda en el historial (nunca sobrescribe
-              silenciosamente el único valor). El motivo es obligatorio
-              cuando la ruta YA tenía una tarifa (tarifaAnteriorExiste,
-              fijado en abrirEditar) — el servidor lo vuelve a exigir de
-              todas formas.
-            */}
-            <label className="text-xs text-[var(--muted)]">
-              Vigente desde
-              <input
-                data-campo="tarifaVigenteDesde"
-                type="date"
-                className={`${campoCls("tarifaVigenteDesde")} mt-0.5 w-full`}
-                value={form.tarifaVigenteDesde}
-                onChange={(e) => setForm((f) => ({ ...f, tarifaVigenteDesde: e.target.value }))}
-              />
-              {mensajeCampo("tarifaVigenteDesde")}
-            </label>
-            <label className="text-xs text-[var(--muted)] sm:col-span-2">
-              Motivo del cambio de tarifa{tarifaAnteriorExiste ? " (obligatorio)" : " (opcional en la primera tarifa)"}
-              <input
-                data-campo="tarifaMotivo"
-                className={`${campoCls("tarifaMotivo")} mt-0.5 w-full`}
-                placeholder='Ej. "Ajuste de tarifa solicitado por Gerencia"'
-                value={form.tarifaMotivo}
-                onChange={(e) => setForm((f) => ({ ...f, tarifaMotivo: e.target.value }))}
-              />
-              {mensajeCampo("tarifaMotivo")}
-            </label>
-            <label className="text-xs text-[var(--muted)] sm:col-span-3">
-              Destino (descripción operativa completa — como la usa Operaciones, ej. &quot;RUTA-A -
-              punto1-punto2-punto3&quot;)
-              <input
-                data-campo="destinoDescripcion"
-                className={`${campoCls("destinoDescripcion")} mt-0.5 w-full`}
-                value={form.destinoDescripcion}
-                onChange={(e) => setForm((f) => ({ ...f, destinoDescripcion: e.target.value }))}
-              />
-              <span className="mt-0.5 block text-[10px]">
-                Esta descripción es lo que sale en el reporte tradicional (columna &quot;Lugar de
-                Descarga&quot;). Las paradas estructuradas de abajo son un dato aparte, para
-                seguimiento operativo — no la reemplazan.
-              </span>
-              {mensajeCampo("destinoDescripcion")}
-            </label>
-
-            <div className="text-xs text-[var(--muted)] sm:col-span-2">
-              <label>
-                Contacto del cliente
-                <select
-                  data-campo="contactoClienteId"
-                  className={`${campoCls("contactoClienteId")} mt-0.5 w-full`}
-                  value={form.contactoClienteId ?? ""}
-                  onChange={(e) => setForm((f) => ({ ...f, contactoClienteId: Number(e.target.value) || null }))}
-                >
-                  <option value="">— Ninguno —</option>
-                  {contactosForm.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.nombre}{c.cargo ? ` (${c.cargo})` : ""}{c.telefono ? ` · ${c.telefono}` : ""}
-                    </option>
-                  ))}
-                </select>
-                {mensajeCampo("contactoClienteId")}
-              </label>
-              {formClienteId && !contactosForm.length ? (
-                <span className="mt-0.5 block text-[10px] text-amber-300/90">Este cliente no tiene contactos guardados todavía.</span>
-              ) : null}
-              {/* RUTAS-TARIFARIO-HISTORIAL-1 (§7/§8 del ticket) — "+ Agregar contacto" desde la misma captura de Ruta. */}
-              {formClienteId ? (
-                <button
-                  type="button"
-                  className="mt-1 text-[11px] text-[var(--accent)] hover:underline"
-                  onClick={() => { setMostrarNuevoContacto((v) => !v); setAvisoDuplicadoContacto(null); }}
-                >
-                  {mostrarNuevoContacto ? "Cancelar nuevo contacto" : "+ Agregar contacto"}
-                </button>
-              ) : null}
-              {mostrarNuevoContacto ? (
-                <div className="mt-2 space-y-1.5 rounded border border-[var(--border)]/60 p-2">
-                  <input className={`${inputCls} w-full`} placeholder="Nombre" value={nuevoContacto.nombre} onChange={(e) => setNuevoContacto((c) => ({ ...c, nombre: e.target.value }))} />
-                  <input className={`${inputCls} w-full`} placeholder="Cargo / área" value={nuevoContacto.cargo} onChange={(e) => setNuevoContacto((c) => ({ ...c, cargo: e.target.value }))} />
-                  <input className={`${inputCls} w-full`} placeholder="Teléfono" value={nuevoContacto.telefono} onChange={(e) => setNuevoContacto((c) => ({ ...c, telefono: e.target.value }))} />
-                  <input className={`${inputCls} w-full`} placeholder="Email" value={nuevoContacto.email} onChange={(e) => setNuevoContacto((c) => ({ ...c, email: e.target.value }))} />
-                  <input className={`${inputCls} w-full`} placeholder="Observaciones" value={nuevoContacto.observaciones} onChange={(e) => setNuevoContacto((c) => ({ ...c, observaciones: e.target.value }))} />
-                  {avisoDuplicadoContacto ? (
-                    <div className="rounded border border-amber-500/50 bg-amber-950/30 p-2 text-[11px] text-amber-200">
-                      <p>{avisoDuplicadoContacto}</p>
-                      <div className="mt-1 flex gap-2">
-                        <button type="button" disabled={guardandoContacto} className="rounded bg-amber-600 px-2 py-1 text-white" onClick={() => void guardarNuevoContacto(true)}>
-                          Guardar de todas formas
-                        </button>
-                        <button type="button" className="rounded border border-[var(--border)] px-2 py-1" onClick={() => setAvisoDuplicadoContacto(null)}>
-                          Revisar datos
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <button type="button" disabled={guardandoContacto} className="rounded bg-[#334155] px-2 py-1 text-xs text-white disabled:opacity-50" onClick={() => void guardarNuevoContacto(false)}>
-                      {guardandoContacto ? "Guardando…" : "Guardar contacto"}
-                    </button>
-                  )}
-                </div>
-              ) : null}
-            </div>
-            <label className="text-xs text-[var(--muted)]">
-              Observaciones
-              <input data-campo="observaciones" className={`${campoCls("observaciones")} mt-0.5 w-full`} value={form.observaciones} onChange={(e) => setForm((f) => ({ ...f, observaciones: e.target.value }))} />
-              {mensajeCampo("observaciones")}
-            </label>
+        <div ref={formRef} className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+          <div>
+            <p className="text-sm font-semibold">{editandoId ? "Editar ruta" : "Nueva ruta"}</p>
+            <p className="text-[11px] text-[var(--muted)]">
+              Ruta maestra: es una plantilla. Programación copia sus datos como sugerencia al crear un viaje y cada viaje
+              puede ajustarse sin modificar esta ruta. <span className="text-rose-400">*</span> = obligatorio.
+            </p>
           </div>
 
-          <div className="space-y-2 rounded border border-[var(--border)] p-3">
-            <div>
-              <p className="text-xs font-medium">Personal y viáticos habituales (opcional)</p>
-              <p className="text-[10px] text-[var(--muted)]">Son sugerencias para Programación. Se permite un piloto y hasta ocho auxiliares; cada viaje puede ajustarse.</p>
+          <SeccionRuta numero={1} titulo="Datos básicos" ayuda="Primero identifica para qué cliente y qué ruta estás configurando.">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="sm:col-span-1">
+                <ClienteSearch
+                  label="Cliente *"
+                  clientes={clientes}
+                  valueNombre={formClienteNombre}
+                  valueId={formClienteId}
+                  inputClassName={inputCls}
+                  onChange={({ clienteId, clienteNombre }) => {
+                    setFormClienteId(clienteId);
+                    setFormClienteNombre(clienteNombre);
+                    setForm((f) => ({ ...f, ubicacionCargaId: null, contactoClienteId: null }));
+                  }}
+                />
+              </div>
+              <label className="text-xs text-[var(--muted)]">
+                Código <span className="text-rose-400" aria-hidden="true">*</span>
+                <input data-campo="codigo" className={`${campoCls("codigo")} mt-0.5 w-full`} aria-required="true" value={form.codigo} onChange={(e) => setForm((f) => ({ ...f, codigo: e.target.value }))} />
+                {mensajeCampo("codigo")}
+              </label>
+              <label className="text-xs text-[var(--muted)]">
+                Nombre / descripción
+                <input data-campo="nombre" className={`${campoCls("nombre")} mt-0.5 w-full`} value={form.nombre} onChange={(e) => setForm((f) => ({ ...f, nombre: e.target.value }))} />
+                {mensajeCampo("nombre")}
+              </label>
             </div>
-            {personalForm.map((fila, idx) => (
-              <div key={`${fila.empleadoId}-${idx}`} className="grid gap-2 sm:grid-cols-[120px_1fr_160px_auto]">
-                <select
-                  className={inputCls}
-                  value={fila.rol}
-                  onChange={(e) => setPersonalForm((list) => list.map((p, i) => i === idx ? { ...p, rol: e.target.value as RutaPersonalForm["rol"] } : p))}
-                >
-                  <option value="Piloto">Piloto</option>
-                  <option value="Auxiliar">Auxiliar</option>
-                </select>
+          </SeccionRuta>
+
+          <SeccionRuta
+            numero={2}
+            titulo="Origen y destino"
+            ayuda="Lugar de carga y destino se copiarán como sugerencia al crear un viaje. Luego Operaciones podrá ajustarlos para ese viaje sin modificar esta ruta."
+          >
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="text-xs text-[var(--muted)]">
                 {/*
-                  RUTAS-TARIFARIO-HISTORIAL-1 (§9 del ticket) — buscador +
-                  select visible, mismo patrón que Solicitudes de Fondo
-                  (CatalogoSearchSelect): se busca principalmente por
-                  nombre; el código queda como detalle opcional, nunca
-                  obligatorio para encontrar al empleado.
+                  Seguimiento a feedback del usuario — antes era un <select>
+                  plano (no dejaba escribir/filtrar) y no existía forma de
+                  dar de alta un lugar de carga nuevo desde Rutas: quedaba
+                  como texto suelto de esa ruta (campo de abajo), sin quedar
+                  disponible para futuras rutas del mismo cliente. Mismo
+                  buscador ya usado para piloto/auxiliar/contacto.
                 */}
                 <CatalogoSearchSelect
-                  label={fila.rol === "Piloto" ? "piloto" : "auxiliar"}
+                  label="lugar de carga guardado"
                   placeholder="Buscar por nombre…"
-                  value={String(fila.empleadoId)}
-                  options={opcionesPersonal}
-                  inputClassName={inputCls}
-                  onChange={(v) => setPersonalForm((list) => list.map((p, i) => i === idx ? { ...p, empleadoId: Number(v) } : p))}
+                  value={form.ubicacionCargaId != null ? String(form.ubicacionCargaId) : ""}
+                  options={ubicacionesForm.map((u) => ({ value: String(u.id), label: u.nombre, detail: u.direccion ?? undefined }))}
+                  inputClassName={campoCls("ubicacionCargaId")}
+                  onChange={(v) => setForm((f) => ({ ...f, ubicacionCargaId: v ? Number(v) : null }))}
                 />
+                {mensajeCampo("ubicacionCargaId")}
+                {formClienteId ? (
+                  <button
+                    type="button"
+                    className="mt-1 text-[11px] text-[var(--accent)] hover:underline"
+                    onClick={() => setMostrarNuevaUbicacion((v) => !v)}
+                  >
+                    {mostrarNuevaUbicacion ? "Cancelar lugar nuevo" : "+ Agregar lugar de carga"}
+                  </button>
+                ) : null}
+                {mostrarNuevaUbicacion ? (
+                  <div className="mt-2 space-y-1.5 rounded border border-[var(--border)]/60 p-2">
+                    <input className={`${inputCls} w-full`} placeholder="Nombre / alias (ej. Bodega Central)" value={nuevaUbicacion.nombre} onChange={(e) => setNuevaUbicacion((u) => ({ ...u, nombre: e.target.value }))} />
+                    <input className={`${inputCls} w-full`} placeholder="Dirección (opcional)" value={nuevaUbicacion.direccion} onChange={(e) => setNuevaUbicacion((u) => ({ ...u, direccion: e.target.value }))} />
+                    <button type="button" disabled={guardandoUbicacion} className="rounded bg-[#334155] px-2 py-1 text-xs text-white disabled:opacity-50" onClick={() => void guardarNuevaUbicacion()}>
+                      {guardandoUbicacion ? "Guardando…" : "Guardar lugar de carga"}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+              <label className="text-xs text-[var(--muted)]">
+                Lugar de carga (texto libre, si no está en el catálogo)
                 <input
+                  data-campo="lugarCargaTexto"
+                  className={`${campoCls("lugarCargaTexto")} mt-0.5 w-full`}
+                  value={form.lugarCargaTexto}
+                  onChange={(e) => setForm((f) => ({ ...f, lugarCargaTexto: e.target.value }))}
+                />
+                {mensajeCampo("lugarCargaTexto")}
+              </label>
+              <label className="text-xs text-[var(--muted)] sm:col-span-2">
+                Destino / descripción operativa (ej. &quot;RUTA-A - punto1-punto2-punto3&quot;)
+                <input
+                  data-campo="destinoDescripcion"
+                  className={`${campoCls("destinoDescripcion")} mt-0.5 w-full`}
+                  value={form.destinoDescripcion}
+                  onChange={(e) => setForm((f) => ({ ...f, destinoDescripcion: e.target.value }))}
+                />
+                <span className="mt-0.5 block text-[10px]">
+                  Esta descripción es lo que sale en el reporte tradicional (columna &quot;Lugar de
+                  Descarga&quot;). Las paradas estructuradas de abajo son un dato aparte, para
+                  seguimiento operativo — no la reemplazan.
+                </span>
+                {mensajeCampo("destinoDescripcion")}
+              </label>
+            </div>
+            <div className="space-y-2 rounded border border-[var(--border)]/60 p-3">
+              <p className="text-xs font-medium">Paradas estructuradas (opcional)</p>
+              <p className="text-[10px] text-[var(--muted)]">Puntos reales del recorrido, en orden, para el seguimiento operativo. No reemplazan la descripción de destino de arriba.</p>
+              {paradasForm.map((p, idx) => (
+                <div key={idx} className="flex flex-wrap items-center gap-2">
+                  <span className="w-6 text-xs text-[var(--muted)]">{idx + 1}.</span>
+                  <input
+                    className={`${inputCls} min-w-[160px] flex-1`}
+                    placeholder="Lugar / destino"
+                    value={p.lugarNombre}
+                    onChange={(e) =>
+                      setParadasForm((list) => list.map((x, i) => (i === idx ? { ...x, lugarNombre: e.target.value, clienteUbicacionId: null } : x)))
+                    }
+                  />
+                  <select
+                    className={inputCls}
+                    value={p.tipo}
+                    onChange={(e) => setParadasForm((list) => list.map((x, i) => (i === idx ? { ...x, tipo: e.target.value } : x)))}
+                  >
+                    <option value="Entrega">Entrega</option>
+                    <option value="Descarga">Descarga</option>
+                    <option value="Carga">Carga</option>
+                  </select>
+                  {ubicacionesForm.length ? (
+                    <select
+                      className={`${inputCls} max-w-[180px]`}
+                      value={p.clienteUbicacionId ?? ""}
+                      onChange={(e) => {
+                        const id = Number(e.target.value);
+                        const u = ubicacionesForm.find((x) => x.id === id);
+                        setParadasForm((list) =>
+                          list.map((x, i) => (i === idx ? { ...x, clienteUbicacionId: id || null, lugarNombre: u ? u.nombre : x.lugarNombre } : x)),
+                        );
+                      }}
+                    >
+                      <option value="">— Ubicación guardada —</option>
+                      {ubicacionesForm.map((u) => (
+                        <option key={u.id} value={u.id}>{u.nombre}</option>
+                      ))}
+                    </select>
+                  ) : null}
+                  <button type="button" className="text-xs text-red-300" onClick={() => setParadasForm((list) => list.filter((_, i) => i !== idx))}>
+                    Quitar
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                className="rounded bg-[#334155] px-2 py-1 text-xs text-white"
+                onClick={() => setParadasForm((list) => [...list, { tipo: "Entrega", lugarNombre: "", clienteUbicacionId: null }])}
+              >
+                + Agregar destino
+              </button>
+            </div>
+          </SeccionRuta>
+
+          <SeccionRuta numero={3} titulo="Horario habitual" ayuda="Se usará como hora sugerida en Programación. Podrá cambiarse en cada viaje.">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div>
+                {/* OPERACIONES-HORA-12H-1 — UI en formato 12h con AM/PM;
+                    internamente sigue siendo `HH:mm` (24h) en
+                    `form.horaHabitual` (u "" si la ruta no tiene hora
+                    habitual — campo opcional, sin cambios). */}
+                <Hora12Input
+                  label="Hora habitual"
+                  dataCampo="horaHabitual"
+                  inputClassName={campoCls("horaHabitual")}
+                  value={form.horaHabitual}
+                  onChange={(hora24) => setForm((f) => ({ ...f, horaHabitual: hora24 }))}
+                />
+                {mensajeCampo("horaHabitual")}
+              </div>
+            </div>
+          </SeccionRuta>
+
+          <SeccionRuta
+            numero={4}
+            titulo="Tarifas y unidad"
+            ayuda="Estos valores son sugerencias para Programación; no bloquean cambios operativos posteriores. Las opciones de tarifa de la ruta se administran en “Tarifas de la ruta” de cada fila del listado."
+          >
+            <div className="grid gap-3 sm:grid-cols-3">
+              <label className="text-xs text-[var(--muted)]">
+                Tarifa de referencia (GTQ)
+                <input
+                  data-campo="tarifaReferencia"
                   type="number"
                   min="0"
                   step="0.01"
-                  placeholder="Viático (GTQ)"
-                  className={inputCls}
-                  value={fila.viaticoMonto}
-                  onChange={(e) => setPersonalForm((list) => list.map((p, i) => i === idx ? { ...p, viaticoMonto: e.target.value } : p))}
+                  className={`${campoCls("tarifaReferencia")} mt-0.5 w-full`}
+                  value={form.tarifaReferencia}
+                  onChange={(e) => setForm((f) => ({ ...f, tarifaReferencia: e.target.value }))}
                 />
-                <button type="button" className="text-xs text-red-300" onClick={() => setPersonalForm((list) => list.filter((_, i) => i !== idx))}>Quitar</button>
-              </div>
-            ))}
-            <button
-              type="button"
-              className="rounded bg-[#334155] px-2 py-1 text-xs text-white disabled:opacity-50"
-              disabled={!personal.length || personalForm.length >= 9}
-              onClick={() => {
-                const disponible = personal.find((p) => !personalForm.some((actual) => actual.empleadoId === p.id));
-                if (disponible) setPersonalForm((list) => [...list, { empleadoId: disponible.id, rol: list.some((p) => p.rol === "Piloto") ? "Auxiliar" : "Piloto", viaticoMonto: "" }]);
-              }}
-            >
-              + Agregar personal habitual
-            </button>
-          </div>
-
-          <div className="space-y-2 rounded border border-[var(--border)] p-3">
-            <p className="text-xs font-medium">Paradas estructuradas (opcional, uno o varios puntos con orden — para seguimiento operativo, aparte de la descripción de destino)</p>
-            {paradasForm.map((p, idx) => (
-              <div key={idx} className="flex flex-wrap items-center gap-2">
-                <span className="w-6 text-xs text-[var(--muted)]">{idx + 1}.</span>
+                <span className="mt-0.5 block text-[10px]">
+                  Valor rápido de compatibilidad. Cuando la ruta tiene varias tarifas, se sincroniza con la <strong>tarifa predeterminada</strong> (ver &quot;Tarifas de la ruta&quot; en cada fila del listado).
+                </span>
+                {mensajeCampo("tarifaReferencia")}
+              </label>
+              {/*
+                RUTAS-TARIFARIO-HISTORIAL-1 (§1/§2/§5 del ticket) — cada
+                cambio de tarifa queda en el historial (nunca sobrescribe
+                silenciosamente el único valor). El motivo es obligatorio
+                cuando la ruta YA tenía una tarifa (tarifaAnteriorExiste,
+                fijado en abrirEditar) — el servidor lo vuelve a exigir de
+                todas formas.
+              */}
+              <label className="text-xs text-[var(--muted)]">
+                Vigente desde
                 <input
-                  className={`${inputCls} min-w-[160px] flex-1`}
-                  placeholder="Lugar / destino"
-                  value={p.lugarNombre}
-                  onChange={(e) =>
-                    setParadasForm((list) => list.map((x, i) => (i === idx ? { ...x, lugarNombre: e.target.value, clienteUbicacionId: null } : x)))
-                  }
+                  data-campo="tarifaVigenteDesde"
+                  type="date"
+                  className={`${campoCls("tarifaVigenteDesde")} mt-0.5 w-full`}
+                  value={form.tarifaVigenteDesde}
+                  onChange={(e) => setForm((f) => ({ ...f, tarifaVigenteDesde: e.target.value }))}
                 />
-                <select
-                  className={inputCls}
-                  value={p.tipo}
-                  onChange={(e) => setParadasForm((list) => list.map((x, i) => (i === idx ? { ...x, tipo: e.target.value } : x)))}
-                >
-                  <option value="Entrega">Entrega</option>
-                  <option value="Descarga">Descarga</option>
-                  <option value="Carga">Carga</option>
-                </select>
-                {ubicacionesForm.length ? (
+                {mensajeCampo("tarifaVigenteDesde")}
+              </label>
+              <label className="text-xs text-[var(--muted)] sm:col-span-2">
+                Motivo del cambio de tarifa{tarifaAnteriorExiste ? " (obligatorio)" : " (opcional en la primera tarifa)"}
+                <input
+                  data-campo="tarifaMotivo"
+                  className={`${campoCls("tarifaMotivo")} mt-0.5 w-full`}
+                  placeholder='Ej. "Ajuste de tarifa solicitado por Gerencia"'
+                  value={form.tarifaMotivo}
+                  onChange={(e) => setForm((f) => ({ ...f, tarifaMotivo: e.target.value }))}
+                />
+                {mensajeCampo("tarifaMotivo")}
+              </label>
+              {/* RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§4) — unidad
+                  habitual de la ruta (flota de esta empresa). Opcional.
+                  Programación la precarga; el usuario puede cambiarla por
+                  viaje sin tocar esta configuración. */}
+              <div className="text-xs text-[var(--muted)]">
+                <CatalogoSearchSelect
+                  label="Unidad recurrente"
+                  placeholder="Buscar unidad recurrente"
+                  value={form.unidadRecurrenteId}
+                  options={flotaVehiculos.map((v) => ({
+                    value: String(v.id),
+                    label: v.placa,
+                    detail: [v.marca, v.modelo].filter(Boolean).join(" ") || undefined,
+                  }))}
+                  inputClassName={campoCls("unidadRecurrenteId")}
+                  emptyLabel="— Sin unidad recurrente —"
+                  selectDataCampo="unidadRecurrenteId"
+                  onChange={(value) => setForm((f) => ({ ...f, unidadRecurrenteId: value }))}
+                />
+                <span className="mt-0.5 block text-[10px]">Se precarga al elegir esta ruta en Programación.</span>
+                {mensajeCampo("unidadRecurrenteId")}
+              </div>
+            </div>
+          </SeccionRuta>
+
+          <SeccionRuta numero={5} titulo="Contacto" ayuda="Contacto del cliente que se copiará al viaje. Los contactos nuevos se guardan en el cliente, no solo en esta ruta.">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="text-xs text-[var(--muted)] sm:col-span-2">
+                <label>
+                  Contacto del cliente
                   <select
-                    className={`${inputCls} max-w-[180px]`}
-                    value={p.clienteUbicacionId ?? ""}
-                    onChange={(e) => {
-                      const id = Number(e.target.value);
-                      const u = ubicacionesForm.find((x) => x.id === id);
-                      setParadasForm((list) =>
-                        list.map((x, i) => (i === idx ? { ...x, clienteUbicacionId: id || null, lugarNombre: u ? u.nombre : x.lugarNombre } : x)),
-                      );
-                    }}
+                    data-campo="contactoClienteId"
+                    className={`${campoCls("contactoClienteId")} mt-0.5 w-full`}
+                    value={form.contactoClienteId ?? ""}
+                    onChange={(e) => setForm((f) => ({ ...f, contactoClienteId: Number(e.target.value) || null }))}
                   >
-                    <option value="">— Ubicación guardada —</option>
-                    {ubicacionesForm.map((u) => (
-                      <option key={u.id} value={u.id}>{u.nombre}</option>
+                    <option value="">— Ninguno —</option>
+                    {contactosForm.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.nombre}{c.cargo ? ` (${c.cargo})` : ""}{c.telefono ? ` · ${c.telefono}` : ""}
+                      </option>
                     ))}
                   </select>
+                  {mensajeCampo("contactoClienteId")}
+                </label>
+                {formClienteId && !contactosForm.length ? (
+                  <span className="mt-0.5 block text-[10px] text-amber-300/90">Este cliente no tiene contactos guardados todavía.</span>
                 ) : null}
-                <button type="button" className="text-xs text-red-300" onClick={() => setParadasForm((list) => list.filter((_, i) => i !== idx))}>
-                  Quitar
-                </button>
+                {/* RUTAS-TARIFARIO-HISTORIAL-1 (§7/§8 del ticket) — "+ Agregar contacto" desde la misma captura de Ruta. */}
+                {formClienteId ? (
+                  <button
+                    type="button"
+                    className="mt-1 text-[11px] text-[var(--accent)] hover:underline"
+                    onClick={() => { setMostrarNuevoContacto((v) => !v); setAvisoDuplicadoContacto(null); }}
+                  >
+                    {mostrarNuevoContacto ? "Cancelar nuevo contacto" : "+ Agregar contacto"}
+                  </button>
+                ) : null}
+                {mostrarNuevoContacto ? (
+                  <div className="mt-2 space-y-1.5 rounded border border-[var(--border)]/60 p-2">
+                    <input className={`${inputCls} w-full`} placeholder="Nombre" value={nuevoContacto.nombre} onChange={(e) => setNuevoContacto((c) => ({ ...c, nombre: e.target.value }))} />
+                    <input className={`${inputCls} w-full`} placeholder="Cargo / área" value={nuevoContacto.cargo} onChange={(e) => setNuevoContacto((c) => ({ ...c, cargo: e.target.value }))} />
+                    <input className={`${inputCls} w-full`} placeholder="Teléfono" value={nuevoContacto.telefono} onChange={(e) => setNuevoContacto((c) => ({ ...c, telefono: e.target.value }))} />
+                    <input className={`${inputCls} w-full`} placeholder="Email" value={nuevoContacto.email} onChange={(e) => setNuevoContacto((c) => ({ ...c, email: e.target.value }))} />
+                    <input className={`${inputCls} w-full`} placeholder="Observaciones" value={nuevoContacto.observaciones} onChange={(e) => setNuevoContacto((c) => ({ ...c, observaciones: e.target.value }))} />
+                    {avisoDuplicadoContacto ? (
+                      <div className="rounded border border-amber-500/50 bg-amber-950/30 p-2 text-[11px] text-amber-200">
+                        <p>{avisoDuplicadoContacto}</p>
+                        <div className="mt-1 flex gap-2">
+                          <button type="button" disabled={guardandoContacto} className="rounded bg-amber-600 px-2 py-1 text-white" onClick={() => void guardarNuevoContacto(true)}>
+                            Guardar de todas formas
+                          </button>
+                          <button type="button" className="rounded border border-[var(--border)] px-2 py-1" onClick={() => setAvisoDuplicadoContacto(null)}>
+                            Revisar datos
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button type="button" disabled={guardandoContacto} className="rounded bg-[#334155] px-2 py-1 text-xs text-white disabled:opacity-50" onClick={() => void guardarNuevoContacto(false)}>
+                        {guardandoContacto ? "Guardando…" : "Guardar contacto"}
+                      </button>
+                    )}
+                  </div>
+                ) : null}
               </div>
-            ))}
-            <button
-              type="button"
-              className="rounded bg-[#334155] px-2 py-1 text-xs text-white"
-              onClick={() => setParadasForm((list) => [...list, { tipo: "Entrega", lugarNombre: "", clienteUbicacionId: null }])}
-            >
-              + Agregar destino
-            </button>
-          </div>
+            </div>
+          </SeccionRuta>
 
-          <div className="flex gap-2">
-            <button type="button" disabled={guardando} onClick={() => void guardar()} className="rounded bg-[var(--accent)] px-3 py-1.5 text-xs text-white disabled:opacity-50">
-              {guardando ? "Guardando…" : editandoId ? "Guardar cambios" : "Crear ruta"}
-            </button>
-            <button type="button" className="rounded border border-[var(--border)] px-3 py-1.5 text-xs" onClick={() => setMostrarForm(false)}>
-              Cancelar
-            </button>
+          <SeccionRuta numero={6} titulo="Personal habitual" ayuda="Se precargan como sugerencia al crear el viaje.">
+            <div className="space-y-2">
+              <p className="text-[10px] text-[var(--muted)]">Se permite un piloto y hasta ocho auxiliares, cada uno con su viático habitual (opcional).</p>
+              {personalForm.map((fila, idx) => (
+                <div key={`${fila.empleadoId}-${idx}`} className="grid gap-2 sm:grid-cols-[120px_1fr_160px_auto]">
+                  <select
+                    className={inputCls}
+                    value={fila.rol}
+                    onChange={(e) => setPersonalForm((list) => list.map((p, i) => i === idx ? { ...p, rol: e.target.value as RutaPersonalForm["rol"] } : p))}
+                  >
+                    <option value="Piloto">Piloto</option>
+                    <option value="Auxiliar">Auxiliar</option>
+                  </select>
+                  {/*
+                    RUTAS-TARIFARIO-HISTORIAL-1 (§9 del ticket) — buscador +
+                    select visible, mismo patrón que Solicitudes de Fondo
+                    (CatalogoSearchSelect): se busca principalmente por
+                    nombre; el código queda como detalle opcional, nunca
+                    obligatorio para encontrar al empleado.
+                  */}
+                  <CatalogoSearchSelect
+                    label={fila.rol === "Piloto" ? "piloto" : "auxiliar"}
+                    placeholder="Buscar por nombre…"
+                    value={String(fila.empleadoId)}
+                    options={opcionesPersonal}
+                    inputClassName={inputCls}
+                    onChange={(v) => setPersonalForm((list) => list.map((p, i) => i === idx ? { ...p, empleadoId: Number(v) } : p))}
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="Viático (GTQ)"
+                    className={inputCls}
+                    value={fila.viaticoMonto}
+                    onChange={(e) => setPersonalForm((list) => list.map((p, i) => i === idx ? { ...p, viaticoMonto: e.target.value } : p))}
+                  />
+                  <button type="button" className="text-xs text-red-300" onClick={() => setPersonalForm((list) => list.filter((_, i) => i !== idx))}>Quitar</button>
+                </div>
+              ))}
+              <button
+                type="button"
+                className="rounded bg-[#334155] px-2 py-1 text-xs text-white disabled:opacity-50"
+                disabled={!personal.length || personalForm.length >= 9}
+                onClick={() => {
+                  const disponible = personal.find((p) => !personalForm.some((actual) => actual.empleadoId === p.id));
+                  if (disponible) setPersonalForm((list) => [...list, { empleadoId: disponible.id, rol: list.some((p) => p.rol === "Piloto") ? "Auxiliar" : "Piloto", viaticoMonto: "" }]);
+                }}
+              >
+                + Agregar personal habitual
+              </button>
+            </div>
+          </SeccionRuta>
+
+          <SeccionRuta numero={7} titulo="Observaciones">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="text-xs text-[var(--muted)] sm:col-span-2">
+                Observaciones
+                <input data-campo="observaciones" className={`${campoCls("observaciones")} mt-0.5 w-full`} value={form.observaciones} onChange={(e) => setForm((f) => ({ ...f, observaciones: e.target.value }))} />
+                {mensajeCampo("observaciones")}
+              </label>
+            </div>
+          </SeccionRuta>
+
+          <div className="space-y-1 border-t border-[var(--border)] pt-3">
+            <p className="text-[11px] text-[var(--muted)]">
+              {editandoId
+                ? "Se guardarán los cambios de esta ruta maestra. Los viajes ya creados no se modificarán."
+                : "Se creará la ruta maestra. Los viajes que se programen con ella copiarán estos datos como sugerencia."}
+            </p>
+            <div className="flex gap-2">
+              <button type="button" disabled={guardando} onClick={() => void guardar()} className="rounded bg-[var(--accent)] px-3 py-1.5 text-xs text-white disabled:opacity-50">
+                {guardando ? "Guardando…" : editandoId ? "Guardar cambios" : "Crear ruta"}
+              </button>
+              <button type="button" className="rounded border border-[var(--border)] px-3 py-1.5 text-xs" onClick={() => setMostrarForm(false)}>
+                Cancelar
+              </button>
+            </div>
           </div>
         </div>
       ) : null}
@@ -1137,5 +1183,20 @@ export default function RutasPage() {
         </table>
       </div>
     </div>
+  );
+}
+
+/** Bloque numerado del formulario de Rutas: título, ayuda corta y contenido (una sola pantalla, no wizard). */
+function SeccionRuta({ numero, titulo, ayuda, children }: { numero: number; titulo: string; ayuda?: string; children: React.ReactNode }) {
+  return (
+    <section aria-labelledby={`seccion-ruta-${numero}`} className="space-y-3 rounded-lg border border-[var(--border)] p-3">
+      <div>
+        <h3 id={`seccion-ruta-${numero}`} className="text-xs font-semibold uppercase tracking-wide text-[var(--text)]">
+          {numero}. {titulo}
+        </h3>
+        {ayuda ? <p className="mt-0.5 text-[11px] text-[var(--muted)]">{ayuda}</p> : null}
+      </div>
+      {children}
+    </section>
   );
 }

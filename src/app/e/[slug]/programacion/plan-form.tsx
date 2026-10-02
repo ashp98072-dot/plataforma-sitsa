@@ -36,6 +36,14 @@ import {
   textoVehiculoSolicitado,
   type VehiculoSolicitadoOpcion,
 } from "@/lib/tms/vehiculo-solicitado";
+import {
+  cambioHoraCarga,
+  cambioParadas,
+  cambioTextoSnapshot,
+  debeAplicarRuta,
+  paradasFormularioDesdePlan,
+  plantillaDesdeRuta,
+} from "@/lib/tms/plan-form-cambios";
 
 /**
  * Formulario propio de Programación para crear/editar un viaje — reutiliza
@@ -423,22 +431,9 @@ export default function PlanForm({
   // selectores distintos — el TC nunca aparece como Unidad ni al revés.
   const unidadesOpciones = todosVehiculos.filter((v) => v.tipoUnidad !== "TC");
   const tcOpciones = todosVehiculos.filter((v) => v.tipoUnidad === "TC");
-  const [paradasForm, setParadasForm] = useState<ParadaForm[]>(
-    plan?.paradas?.length
-      ? plan.paradas.map((p) => ({
-          // OPS-3.2d: se conserva el id real — se reenvía tal cual al
-          // guardar para que el backend actualice esta misma fila en vez
-          // de recrearla (evita romper evidencias ya asociadas).
-          id: p.id,
-          lugarNombre: p.lugar_nombre,
-          tipo: (["Carga", "Descarga", "Entrega"].includes(p.tipo) ? p.tipo : "Descarga") as ParadaForm["tipo"],
-          requiereEvidencia: p.requiere_evidencia,
-        }))
-      : [
-          { lugarNombre: "", tipo: "Carga", requiereEvidencia: true },
-          { lugarNombre: "", tipo: "Descarga", requiereEvidencia: true },
-        ],
-  );
+  // OPS-3.2d: se conserva el id real de cada parada (el backend la actualiza IN-PLACE, sin romper evidencias).
+  // PROGRAMACION-PERSISTENCIA: al abrir un viaje se muestran SUS paradas, nunca las de la ruta maestra.
+  const [paradasForm, setParadasForm] = useState<ParadaForm[]>(paradasFormularioDesdePlan(plan?.paradas));
   const [saving, setSaving] = useState(false);
   // Mejora Programación (punto 20) — ViaticosPanel solo refetch en su
   // propio mount ([slug, planId]); como este formulario NO se desmonta
@@ -916,17 +911,19 @@ export default function PlanForm({
     // para este viaje sin tocar la ruta maestra).
     const placaSugerida = ruta.unidadRecurrentePlaca ?? "";
 
+    // PROGRAMACION-PERSISTENCIA — plantilla de la ruta (pura, probada en plan-form-cambios.ts).
+    const plantilla = plantillaDesdeRuta(ruta, { horaCarga: form.horaCarga, lugarDescargaHistorico: form.lugarDescargaHistorico });
     setForm((f) => ({
       ...f,
       clienteId: ruta.clienteId,
       clienteNombre: ruta.clienteNombre,
-      horaCarga: ruta.horaHabitual || f.horaCarga,
+      horaCarga: plantilla.horaCarga,
       tarifaId: tarifaSel?.id ?? 0,
       tarifaComercial: tarifaSel ? String(tarifaSel.monto) : defaults.tarifaComercial,
       placa: placaSugerida || f.placa,
-      rutaId: ruta.id,
-      rutaCodigo: ruta.codigo,
-      lugarDescargaHistorico: ruta.destinoDescripcion ?? f.lugarDescargaHistorico,
+      rutaId: plantilla.rutaId,
+      rutaCodigo: plantilla.rutaCodigo,
+      lugarDescargaHistorico: plantilla.lugarDescargaHistorico,
       contactoNombreHistorico: ruta.contactoNombre ?? "",
       contactoCargoHistorico: ruta.contactoCargo ?? "",
       contactoTelefonoHistorico: ruta.contactoTelefono ?? "",
@@ -936,24 +933,7 @@ export default function PlanForm({
       auxiliarNombres: defaults.auxiliarNombres,
     }));
     setContactoClienteIdSeleccionado(ruta.contactoClienteId ?? null);
-    const nuevasParadas: ParadaForm[] = [];
-    if (ruta.lugarCargaTexto) {
-      nuevasParadas.push({ lugarNombre: ruta.lugarCargaTexto, tipo: "Carga", requiereEvidencia: true, clienteUbicacionId: ruta.ubicacionCargaId });
-    }
-    if (ruta.paradas.length) {
-      for (const p of ruta.paradas) {
-        nuevasParadas.push({
-          lugarNombre: p.lugarNombre,
-          tipo: (["Carga", "Descarga", "Entrega"].includes(p.tipo) ? p.tipo : "Descarga") as ParadaForm["tipo"],
-          requiereEvidencia: true,
-          clienteUbicacionId: p.clienteUbicacionId,
-        });
-      }
-    } else if (ruta.destinoDescripcion) {
-      // Respaldo solo para el tablero/seguimiento — el reporte no depende de esto.
-      nuevasParadas.push({ lugarNombre: ruta.destinoDescripcion, tipo: "Descarga", requiereEvidencia: true, clienteUbicacionId: null });
-    }
-    if (nuevasParadas.length) setParadasForm(nuevasParadas);
+    if (plantilla.paradas) setParadasForm(plantilla.paradas);
   }
 
   // Se evalúa contra el estado ORIGINAL del plan (antes de este guardado),
@@ -1300,7 +1280,8 @@ export default function PlanForm({
           // fechaPlan/horaCarga siguen atados a `soloNotas` a secas — OPS-3.2c
           // NO los habilita (quedan para OPS-3.2d, junto con paradas).
           fechaPlan: soloNotas ? undefined : form.fechaPlan || undefined,
-          horaCarga: soloNotas ? undefined : form.horaCarga || undefined,
+          // PROGRAMACION-PERSISTENCIA — solo si cambió contra lo persistido (nunca se reenvía un valor viejo).
+          horaCarga: soloNotas ? undefined : cambioHoraCarga(plan?.hora_carga, form.horaCarga),
           // OPS-3.2c: piloto/unidad/auxiliares pasan de `soloNotas` a
           // `bloqueadoParaPreCierre` — se liberan en pendiente de cierre,
           // igual que los seis campos de OPS-3.2b de abajo. Además, ahora
@@ -1361,11 +1342,13 @@ export default function PlanForm({
           // selector — p. ej. al cambiar de cliente) de "cambiar" (number). Antes `form.rutaId || undefined`
           // nunca podía mandar null, así que un viaje con ruta jamás podía quedarse SIN ruta vía este formulario.
           rutaId: bloqueadoParaPreCierre || form.rutaId === (plan?.ruta_id ?? 0) ? undefined : (form.rutaId || null),
-          rutaCodigo: bloqueadoParaPreCierre ? undefined : form.rutaCodigo.trim() || undefined,
-          lugarDescargaHistorico: bloqueadoParaPreCierre ? undefined : form.lugarDescargaHistorico.trim() || undefined,
-          contactoNombreHistorico: bloqueadoParaPreCierre ? undefined : form.contactoNombreHistorico.trim() || undefined,
-          contactoCargoHistorico: bloqueadoParaPreCierre ? undefined : form.contactoCargoHistorico.trim() || undefined,
-          contactoTelefonoHistorico: bloqueadoParaPreCierre ? undefined : form.contactoTelefonoHistorico.trim() || undefined,
+          // PROGRAMACION-PERSISTENCIA — snapshots del viaje: solo si cambiaron contra lo persistido; null = el usuario
+          // los BORRÓ (antes un campo vaciado se ignoraba y reaparecía el valor anterior al reabrir).
+          rutaCodigo: bloqueadoParaPreCierre ? undefined : cambioTextoSnapshot(plan?.ruta_codigo_historico, form.rutaCodigo),
+          lugarDescargaHistorico: bloqueadoParaPreCierre ? undefined : cambioTextoSnapshot(plan?.lugar_descarga_historico, form.lugarDescargaHistorico),
+          contactoNombreHistorico: bloqueadoParaPreCierre ? undefined : cambioTextoSnapshot(plan?.contacto_nombre_historico, form.contactoNombreHistorico),
+          contactoCargoHistorico: bloqueadoParaPreCierre ? undefined : cambioTextoSnapshot(plan?.contacto_cargo_historico, form.contactoCargoHistorico),
+          contactoTelefonoHistorico: bloqueadoParaPreCierre ? undefined : cambioTextoSnapshot(plan?.contacto_telefono_historico, form.contactoTelefonoHistorico),
           // CORRECCIÓN PR #80: NO usar `!paradas.length` para colapsar a
           // `undefined` — eso confundía "no tocar paradas" (undefined) con
           // "el usuario dejó la lista final vacía" ([]). Si las paradas
@@ -1373,7 +1356,8 @@ export default function PlanForm({
           // SIEMPRE, incluso como arreglo vacío, para que el backend
           // procese la eliminación real (y aplique el 409 si alguna
           // omitida todavía tiene evidencia).
-          paradas: bloqueadoParaPreCierre ? undefined : paradas,
+          // PROGRAMACION-PERSISTENCIA — solo si la lista realmente cambió (una lista vaciada sí viaja como []).
+          paradas: bloqueadoParaPreCierre ? undefined : cambioParadas(plan?.paradas ?? [], paradas),
         }),
       });
       const data = await res.json();
@@ -1724,7 +1708,11 @@ export default function PlanForm({
           clienteId={form.clienteId}
           value={form.rutaCodigo}
           inputClassName={inputCls}
-          onSeleccionar={aplicarRuta}
+          onSeleccionar={(ruta) => {
+            // PROGRAMACION-PERSISTENCIA — la ruta maestra es solo plantilla: se aplica al elegir una ruta DISTINTA.
+            // Re-elegir la misma ruta nunca pisa la hora/destino/paradas ya editados para este viaje.
+            if (debeAplicarRuta(form.rutaId, ruta.id)) aplicarRuta(ruta);
+          }}
         />
       </div>
       <label className={`text-xs text-[var(--muted)] md:col-span-2 ${bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
