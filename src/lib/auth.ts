@@ -82,6 +82,34 @@ export async function verificarPasswordUsuarioActual(
   return verifyPassword(password, String(r.salt), String(r.password_hash));
 }
 
+/**
+ * MENÚ DE CUENTA — cambio de contraseña del usuario YA AUTENTICADO. El id sale SIEMPRE de la sesión (lo pasa la ruta);
+ * nunca del cliente. Verifica la contraseña actual con verifyPassword (timing-safe, acepta hash legado) y guarda la nueva
+ * con hashPassword (scrypt, mismo algoritmo de altas/login). El UPDATE es una sola sentencia condicionada al hash leído
+ * (compare-and-set): si otro proceso cambió la contraseña entre la lectura y la escritura, no se sobrescribe. Nunca
+ * devuelve ni registra contraseñas ni hashes.
+ */
+export async function cambiarPasswordUsuarioActual(
+  usuarioId: number,
+  passwordActual: string,
+  passwordNueva: string,
+): Promise<{ ok: true } | { ok: false; motivo: "actual_incorrecta" | "no_actualizado" }> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT password_hash, salt FROM usuarios WHERE id = ? AND activo = 1 LIMIT 1`,
+    [usuarioId],
+  );
+  const r = rows[0];
+  if (!r || !verifyPassword(passwordActual, String(r.salt), String(r.password_hash))) {
+    return { ok: false, motivo: "actual_incorrecta" };
+  }
+  const { salt, passwordHash } = hashPassword(passwordNueva);
+  const res = await execute(
+    `UPDATE usuarios SET password_hash = ?, salt = ? WHERE id = ? AND activo = 1 AND password_hash = ?`,
+    [passwordHash, salt, usuarioId, String(r.password_hash)],
+  );
+  return Number(res.affectedRows) === 1 ? { ok: true } : { ok: false, motivo: "no_actualizado" };
+}
+
 export async function listarUsuarios(): Promise<
   (UsuarioRow & { empresas: number[]; permisos: PermisoModulo[] })[]
 > {

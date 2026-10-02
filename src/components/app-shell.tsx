@@ -1,7 +1,6 @@
 "use client";
 
-import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { mapaDominios } from "@/lib/dominios";
 import {
@@ -15,6 +14,7 @@ import {
 import { MODULO_LABEL, type Modulo } from "@/lib/roles";
 import { NotificacionesBell } from "@/components/notificaciones-bell";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { AccountMenu } from "@/components/account-menu";
 import { NovalvionIcono } from "@/components/novalvion-brand";
 import { ShellNavLink } from "@/components/shell-nav-link";
 import { EmpresaSessionProvider } from "@/lib/empresa-session";
@@ -160,7 +160,6 @@ export function AppShell({
   children,
 }: Props) {
   const pathname = usePathname();
-  const router = useRouter();
   const base = `/e/${slug}`;
   const [dominioEmpresa, setDominioEmpresa] = useState(false);
   const [abiertos, setAbiertos] = useState<Record<string, boolean>>({});
@@ -731,11 +730,6 @@ export function AppShell({
     setAbiertos((prev) => ({ ...prev, [id]: !prev[id] }));
   }
 
-  async function logout() {
-    await fetch("/api/auth/logout", { method: "POST" });
-    router.push("/login");
-  }
-
   return (
     <EmpresaSessionProvider
       rol={rol}
@@ -854,37 +848,6 @@ export function AppShell({
             })}
           </nav>
 
-          <div className="shrink-0 space-y-2 border-t border-[var(--border)] p-3">
-            {/* MI-FIRMA-1 — siempre visible para cualquier usuario
-                corporativo autenticado (nunca dentro de "Administración",
-                que está gateada por isAdmin más arriba) — la firma es un
-                atributo personal, no un permiso de módulo. */}
-            <Link
-              href={`${base}/mi-firma`}
-              prefetch={false}
-              onClick={() => setMenuOpen(false)}
-              className="block rounded-lg bg-[var(--panel)] px-3 py-2 text-center text-sm"
-            >
-              Mi firma
-            </Link>
-            {!dominioEmpresa ? (
-              <Link
-                href="/select-empresa"
-                prefetch={false}
-                onClick={() => setMenuOpen(false)}
-                className="block rounded-lg bg-[var(--panel)] px-3 py-2 text-center text-sm"
-              >
-                Cambiar empresa
-              </Link>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => void logout()}
-              className="w-full rounded-lg bg-[var(--danger)] px-3 py-2 text-sm text-white"
-            >
-              Salir
-            </button>
-          </div>
         </div>
       </aside>
 
@@ -927,6 +890,14 @@ export function AppShell({
           </div>
           <NotificacionesBell slug={slug} rol={rol} />
           <ThemeToggle />
+          {/* MENÚ DE CUENTA — Mi firma, Cambiar contraseña, Cambiar empresa (fuera de dominio de empresa) y Salir. */}
+          <AccountMenu
+            slug={slug}
+            empresaNombre={empresaNombre}
+            username={username}
+            rol={rol}
+            dominioEmpresa={dominioEmpresa}
+          />
         </header>
         <main
           className={[
