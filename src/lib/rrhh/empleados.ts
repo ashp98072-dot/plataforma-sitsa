@@ -19,6 +19,8 @@ export type Empleado = {
   horaSalidaTeorica: string;
   estado: string;
   docsCount?: number;
+  /** Solo listados: hay registro de fotografía en el expediente. `undefined` = no se determinó (se asume que puede tenerla). */
+  tieneFoto?: boolean;
   dpi?: string;
   nit?: string;
   igss?: string;
@@ -239,6 +241,17 @@ export async function listarEmpleados(
       for (const e of empleados) e.docsCount = counts.get(e.id) ?? 0;
     } catch {
       for (const e of empleados) e.docsCount = 0;
+    }
+    try {
+      // Si esta consulta falla, `tieneFoto` queda sin definir y la miniatura conserva su comportamiento previo.
+      const { empleadosConFoto } = await import("./foto-empleado-existencia");
+      const conFoto = await empleadosConFoto(
+        empresaId,
+        empleados.map((e) => e.id),
+      );
+      for (const e of empleados) e.tieneFoto = conFoto.has(e.id);
+    } catch {
+      /* sin determinar */
     }
   }
   return empleados;
