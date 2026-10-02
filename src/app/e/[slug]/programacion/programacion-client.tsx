@@ -18,6 +18,7 @@ import { auxiliaresDeVista, pilotosDeVista, tieneAuxiliaresVista, tienePilotoVis
 import { textoCuadrilla } from "@/lib/tms/cuadrilla-contrato";
 import { EdicionRapida, type FilaEdicionRapidaEntrada } from "./edicion-rapida";
 import { confirmarPerdida, MSG_CAMBIOS_PENDIENTES, puedeUsarEdicionRapida, type TarifaRutaEdicion } from "./edicion-rapida-helpers";
+import { ETIQUETA_VEHICULO_SOLICITADO, textoVehiculoSolicitado } from "@/lib/tms/vehiculo-solicitado";
 
 /**
  * OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — tras CERRAR un viaje, Programación
@@ -156,6 +157,12 @@ export type Plan = {
   tc_vehiculo_id?: number | null;
   tc_placa_historica?: string | null;
   tc_externo_placa?: string | null;
+  /**
+   * PROGRAMACION-VEHICULO-SOLICITADO — vehículo/capacidad solicitado por el cliente (perfil de costeo de Cotizaciones
+   * + fotografía de su nombre). Independiente de la unidad real y de la tarifa. Ausente/null en viajes históricos.
+   */
+  vehiculo_solicitado_perfil_id?: number | null;
+  vehiculo_solicitado_nombre?: string | null;
   piloto_externo_nombre?: string | null;
   /** Un nombre por línea — mismo criterio que notas/condiciones_adicionales (texto con saltos de línea, no un arreglo). */
   auxiliares_externos?: string | null;
@@ -1742,6 +1749,11 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
                     </>
                   );
                 })()}
+                {/* PROGRAMACION-VEHICULO-SOLICITADO — lo solicitado comercialmente (puede diferir de la unidad asignada). */}
+                <div>
+                  <p className="text-[11px] text-[var(--muted)]">{ETIQUETA_VEHICULO_SOLICITADO}</p>
+                  <p>{textoVehiculoSolicitado(p.vehiculo_solicitado_nombre)}</p>
+                </div>
                 <div>
                   <p className="text-[11px] text-[var(--muted)]">Tarifa comercial</p>
                   <p>
