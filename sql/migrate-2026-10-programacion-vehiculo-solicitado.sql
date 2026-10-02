@@ -16,8 +16,13 @@
 --     el viaje conserva lo que se solicitó.
 --   Independiente de unidad_id / tc_* / tarifa_comercial: cambiar uno NO cambia los otros.
 --
--- Idempotente en MariaDB (IF NOT EXISTS en columnas, índice y FK). La FK es RESTRICT: los
--- perfiles de costeo no se borran (se desactivan), y un perfil en uso no debe desaparecer.
+-- Idempotente (re-ejecutarlo es seguro), con el MISMO patrón ya usado en
+-- sql/migrate-2026-09-solicitud-fondos-reporte.sql:
+--   - columnas e índice: ADD COLUMN / ADD INDEX IF NOT EXISTS (soportados por MariaDB, motor de producción);
+--   - FK: sintaxis estándar ADD CONSTRAINT ... FOREIGN KEY ... REFERENCES, ejecutada SOLO si
+--     information_schema.TABLE_CONSTRAINTS no la tiene ya (SQL dinámico con PREPARE/EXECUTE).
+-- La FK es RESTRICT: los perfiles de costeo no se borran (se desactivan), y un perfil en uso no
+-- debe desaparecer.
 SET NAMES utf8mb4;
 
 ALTER TABLE tms_planes_viaje
@@ -27,6 +32,19 @@ ALTER TABLE tms_planes_viaje
 ALTER TABLE tms_planes_viaje
   ADD INDEX IF NOT EXISTS idx_tmsplan_vehiculo_solicitado (empresa_id, vehiculo_solicitado_perfil_id);
 
-ALTER TABLE tms_planes_viaje
-  ADD CONSTRAINT fk_tmsplan_vehiculo_solicitado FOREIGN KEY IF NOT EXISTS (empresa_id, vehiculo_solicitado_perfil_id)
-  REFERENCES tms_cotizacion_costeo_perfiles(empresa_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT;
+SET @db := DATABASE();
+SET @fk_exists := (
+  SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = @db AND TABLE_NAME = 'tms_planes_viaje'
+    AND CONSTRAINT_NAME = 'fk_tmsplan_vehiculo_solicitado' AND CONSTRAINT_TYPE = 'FOREIGN KEY'
+);
+SET @sql := IF(@fk_exists = 0,
+  'ALTER TABLE tms_planes_viaje
+     ADD CONSTRAINT fk_tmsplan_vehiculo_solicitado
+     FOREIGN KEY (empresa_id, vehiculo_solicitado_perfil_id)
+     REFERENCES tms_cotizacion_costeo_perfiles (empresa_id, id)
+     ON DELETE RESTRICT
+     ON UPDATE RESTRICT',
+  'SELECT 1'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;

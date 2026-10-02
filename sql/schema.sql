@@ -1681,11 +1681,14 @@ CREATE TABLE IF NOT EXISTS tms_cotizacion_costeo_perfiles (
 
 -- PROGRAMACION-VEHICULO-SOLICITADO — se declara aquí porque tms_cotizacion_costeo_perfiles se crea
 -- después de tms_planes_viaje. FK compuesta: un viaje nunca apunta al perfil de otra empresa.
+-- Instalación limpia: sintaxis estándar, mismo patrón que fk_tmsplan_tc_vehiculo.
 ALTER TABLE tms_planes_viaje
-  ADD INDEX IF NOT EXISTS idx_tmsplan_vehiculo_solicitado (empresa_id, vehiculo_solicitado_perfil_id);
-ALTER TABLE tms_planes_viaje
-  ADD CONSTRAINT fk_tmsplan_vehiculo_solicitado FOREIGN KEY IF NOT EXISTS (empresa_id, vehiculo_solicitado_perfil_id)
-  REFERENCES tms_cotizacion_costeo_perfiles(empresa_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT;
+  ADD INDEX idx_tmsplan_vehiculo_solicitado (empresa_id, vehiculo_solicitado_perfil_id),
+  ADD CONSTRAINT fk_tmsplan_vehiculo_solicitado
+  FOREIGN KEY (empresa_id, vehiculo_solicitado_perfil_id)
+  REFERENCES tms_cotizacion_costeo_perfiles(empresa_id, id)
+  ON DELETE RESTRICT
+  ON UPDATE RESTRICT;
 
 CREATE TABLE IF NOT EXISTS tms_cotizacion_costeo_parametros (
   id INT AUTO_INCREMENT PRIMARY KEY,

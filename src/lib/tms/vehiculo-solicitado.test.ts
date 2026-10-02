@@ -231,20 +231,44 @@ describe("Programación (formulario y tablero)", () => {
 describe("migración SQL (preparada, NO ejecutada)", () => {
   const sql = readFileSync("sql/migrate-2026-10-programacion-vehiculo-solicitado.sql", "utf8");
   const codigo = sql.split("\n").filter((l) => !l.trim().startsWith("--")).join("\n");
-  it("aditiva e idempotente: columnas NULL, índice y FK compuesta por empresa, todo IF NOT EXISTS", () => {
+  const plano = codigo.replace(/\s+/g, " ");
+  const preflight = readFileSync("sql/preflight-2026-10-programacion-vehiculo-solicitado.sql", "utf8");
+  const schema = readFileSync("sql/schema.sql", "utf8");
+  const ddlFk = "ADD CONSTRAINT fk_tmsplan_vehiculo_solicitado FOREIGN KEY (empresa_id, vehiculo_solicitado_perfil_id) " +
+    "REFERENCES tms_cotizacion_costeo_perfiles (empresa_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT";
+
+  it("columnas NULL e índice aditivos (IF NOT EXISTS: soportado por MariaDB, ya usado en el repo)", () => {
     expect(codigo).toContain("ADD COLUMN IF NOT EXISTS vehiculo_solicitado_perfil_id INT NULL");
     expect(codigo).toContain("ADD COLUMN IF NOT EXISTS vehiculo_solicitado_nombre VARCHAR(120) NULL");
     expect(codigo).toContain("ADD INDEX IF NOT EXISTS idx_tmsplan_vehiculo_solicitado (empresa_id, vehiculo_solicitado_perfil_id)");
-    expect(codigo).toMatch(/FOREIGN KEY IF NOT EXISTS \(empresa_id, vehiculo_solicitado_perfil_id\)\s+REFERENCES tms_cotizacion_costeo_perfiles\(empresa_id, id\)/);
+  });
+  it("FK compuesta empresa_id + perfil -> tms_cotizacion_costeo_perfiles(empresa_id, id), RESTRICT/RESTRICT, con sintaxis estándar", () => {
+    expect(plano).toContain(ddlFk);
+  });
+  it("NUNCA usa FOREIGN KEY IF NOT EXISTS (migración, preflight ni schema.sql)", () => {
+    for (const texto of [sql, preflight, schema]) expect(texto).not.toMatch(/FOREIGN KEY IF NOT EXISTS/i);
+  });
+  it("idempotencia real: la FK solo se crea si information_schema.TABLE_CONSTRAINTS no la tiene (patrón de solicitud-fondos-reporte)", () => {
+    expect(plano).toContain("SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = @db AND TABLE_NAME = 'tms_planes_viaje' AND CONSTRAINT_NAME = 'fk_tmsplan_vehiculo_solicitado' AND CONSTRAINT_TYPE = 'FOREIGN KEY'");
+    expect(plano).toContain("SET @sql := IF(@fk_exists = 0,");
+    expect(plano).toContain("'SELECT 1'");
+    expect(plano).toContain("PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;");
   });
   it("sin backfill ni operaciones destructivas (históricos quedan NULL)", () => {
     const sinAccionesFk = codigo.replace(/ON (DELETE|UPDATE) RESTRICT/g, "");
     expect(sinAccionesFk).not.toMatch(/\b(UPDATE|DELETE|DROP|TRUNCATE|INSERT)\b/i);
     expect(codigo).not.toMatch(/NOT NULL DEFAULT/);
   });
-  it("schema.sql queda alineado", () => {
-    const schema = readFileSync("sql/schema.sql", "utf8");
+  it("el preflight comprueba si la FK ya existe (y con qué destino/reglas), solo lectura", () => {
+    expect(preflight).toContain("CONSTRAINT_NAME = 'fk_tmsplan_vehiculo_solicitado'");
+    expect(preflight).toContain("information_schema.REFERENTIAL_CONSTRAINTS");
+    expect(preflight).toContain("information_schema.KEY_COLUMN_USAGE");
+    const lectura = preflight.split("\n").filter((l) => !l.trim().startsWith("--")).join("\n").replace(/SHOW CREATE TABLE/g, "");
+    expect(lectura).not.toMatch(/\b(ALTER|CREATE|UPDATE|DELETE|DROP|INSERT|PREPARE)\b/i);
+  });
+  it("schema.sql (instalación limpia): columnas + índice + la misma FK con sintaxis estándar", () => {
     expect(schema).toContain("vehiculo_solicitado_perfil_id INT NULL,");
-    expect(schema).toContain("fk_tmsplan_vehiculo_solicitado");
+    expect(schema).toContain("ADD INDEX idx_tmsplan_vehiculo_solicitado (empresa_id, vehiculo_solicitado_perfil_id),");
+    expect(schema.replace(/\s+/g, " ")).toContain(ddlFk.replace("tms_cotizacion_costeo_perfiles (", "tms_cotizacion_costeo_perfiles("));
   });
 });
