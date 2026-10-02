@@ -36,6 +36,12 @@ import {
 } from "@/lib/tms/disponibilidad-programacion-intervalos";
 import { resolverTcInterno } from "@/lib/tms/tc-plan";
 import {
+  esColumnaInexistente,
+  MSG_VEHICULO_SOLICITADO_INVALIDO,
+  resolverVehiculoSolicitado,
+  vehiculoSolicitadoDelPlan,
+} from "@/lib/tms/vehiculo-solicitado-db";
+import {
   calcularCambiosRecursos,
   camposTocados,
   evaluarDisponibilidadPersonal,
@@ -327,7 +333,9 @@ export async function GET(req: Request, ctx: Ctx) {
   // seguridad de siempre.
   const limitSql = pendienteCierreParam || usarId ? "" : "LIMIT 200";
 
-  const [rows, disp] = await Promise.all([
+  // PROGRAMACION-VEHICULO-SOLICITADO — columnas nuevas (aditivas). Si la instalación aún no corrió la migración, se
+  // reintenta sin ellas: la lista sigue funcionando y el dato llega como ausente ("—").
+  const consultaPlanes = (conVehiculoSolicitado: boolean) =>
     query<RowDataPacket[]>(
       `SELECT p.id, p.codigo, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan,
               p.hora_carga, p.estado, p.cerrado_por,
@@ -361,6 +369,7 @@ export async function GET(req: Request, ctx: Ctx) {
               -- mostrar (Tercerizado: snapshot externo; Propio: placa del TC interno
               -- o, si el vehículo ya no existe, su fotografía).
               p.tc_vehiculo_id, p.tc_placa_historica, p.tc_externo_placa,
+              ${conVehiculoSolicitado ? "p.vehiculo_solicitado_perfil_id, p.vehiculo_solicitado_nombre," : ""}
               CASE WHEN p.tipo_viaje = 'Tercerizado' THEN p.tc_externo_placa
                    ELSE COALESCE(tcv.placa, p.tc_placa_historica) END AS tc,
               c.nombre AS cliente, p.cliente_id AS clienteId, u.placa, pil.nombre AS piloto, aux.nombre AS auxiliar,
@@ -390,7 +399,9 @@ export async function GET(req: Request, ctx: Ctx) {
        ORDER BY p.fecha_plan DESC, p.id DESC
        ${limitSql}`,
       paramsRows,
-    ),
+    );
+  const [rows, disp] = await Promise.all([
+    consultaPlanes(true).catch((e: unknown) => (esColumnaInexistente(e) ? consultaPlanes(false) : Promise.reject(e))),
     listarDisponibilidadVehiculos(guard.empresa.id).catch(() => null),
   ]);
 
@@ -595,6 +606,9 @@ const schema = z.object({
   // Tercerizado: `tcExternoPlaca` (solo texto, snapshot). Nunca se mezclan.
   tcVehiculoId: z.number().int().positive().optional(),
   tcExternoPlaca: z.string().max(40).optional(),
+  // PROGRAMACION-VEHICULO-SOLICITADO — perfil de costeo (Cotizaciones) que el cliente solicitó/cotizó. Aplica a Propio
+  // y Tercerizado. Se valida contra ESTA empresa y se fotografía su nombre; nunca se deriva de la unidad.
+  vehiculoSolicitadoPerfilId: z.number().int().positive().optional(),
   lugarCarga: z.string().optional(),
   lugarDescarga: z.string().optional(),
   // VIAT-4/VIAT-4b: de qué ruta maestra (tms_cliente_rutas) salió la
@@ -697,6 +711,12 @@ export async function POST(req: Request, ctx: Ctx) {
       { error: "La tarifa seleccionada no pertenece a esa ruta de esta empresa o no está activa." },
       { status: 400 },
     );
+  }
+  // PROGRAMACION-VEHICULO-SOLICITADO — independiente de unidad/tarifa: solo se valida y se fotografía.
+  const vehiculoSolicitado =
+    d.vehiculoSolicitadoPerfilId != null ? await resolverVehiculoSolicitado(empresaId, d.vehiculoSolicitadoPerfilId) : null;
+  if (d.vehiculoSolicitadoPerfilId != null && !vehiculoSolicitado) {
+    return NextResponse.json({ error: MSG_VEHICULO_SOLICITADO_INVALIDO }, { status: 400 });
   }
   // El monto del viaje se DERIVA de la tarifa elegida, pero sigue siendo
   // editable como override manual (si el usuario mandó tarifaComercial).
@@ -1119,8 +1139,8 @@ export async function POST(req: Request, ctx: Ctx) {
       try {
         const [result] = await conn.execute<ResultSetHeader>(
           `INSERT INTO tms_planes_viaje
-            (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, tarifa_id, tarifa_nombre_historico, tarifa_monto_historico, tarifa_moneda_historico, costo_operativo_referencia, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado, tipo_viaje, piloto_externo_nombre, auxiliares_externos, unidad_externa_placa, unidad_externa_descripcion, transportista_externo, costo_tercerizado, tc_vehiculo_id, tc_placa_historica, tc_externo_placa)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, tarifa_id, tarifa_nombre_historico, tarifa_monto_historico, tarifa_moneda_historico, costo_operativo_referencia, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado, tipo_viaje, piloto_externo_nombre, auxiliares_externos, unidad_externa_placa, unidad_externa_descripcion, transportista_externo, costo_tercerizado, tc_vehiculo_id, tc_placa_historica, tc_externo_placa${vehiculoSolicitado ? ", vehiculo_solicitado_perfil_id, vehiculo_solicitado_nombre" : ""})
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${vehiculoSolicitado ? ", ?, ?" : ""})`,
           [
             empresaId,
             codigoFinal,
@@ -1158,6 +1178,8 @@ export async function POST(req: Request, ctx: Ctx) {
             tcVehiculoId,
             tcPlacaHistorica,
             snapshotTercerizado.tcExternoPlaca,
+            // Solo si se eligió: sin dato no se nombran las columnas (compatibilidad antes de la migración).
+            ...(vehiculoSolicitado ? [vehiculoSolicitado.id, vehiculoSolicitado.nombre] : []),
           ],
         );
         planId = Number(result.insertId);
@@ -1370,6 +1392,9 @@ const patchSchema = z.object({
   // PROGRAMACION-TC-CAJA-REMOLQUE-1 — `null` (o "" en tcExternoPlaca) quita el TC.
   tcVehiculoId: z.number().int().positive().nullable().optional(),
   tcExternoPlaca: z.string().max(40).nullable().optional(),
+  // PROGRAMACION-VEHICULO-SOLICITADO — `null` lo quita; ausente = no se toca. Es un dato COMERCIAL: sigue las reglas
+  // por estado de los datos comerciales (camposTocados.comercial) y NUNCA cambia unidad, tarifa ni personal.
+  vehiculoSolicitadoPerfilId: z.number().int().positive().nullable().optional(),
 });
 
 /**
@@ -1527,6 +1552,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // camino de siempre (todo lo de abajo, sin cambios).
   if (d.tipoViaje !== undefined) {
     if (d.cuadrilla !== undefined) return NextResponse.json({ error: "Guarda el cambio de tipo de viaje separado del cambio de cuadrilla." }, { status: 400 });
+    if (d.vehiculoSolicitadoPerfilId !== undefined) return NextResponse.json({ error: "Guarda el cambio de tipo de viaje separado del vehículo solicitado." }, { status: 400 });
     return patchTipoViaje(empresaId, d, guard.session.username);
   }
 
@@ -1610,6 +1636,23 @@ export async function PATCH(req: Request, ctx: Ctx) {
   );
   if (!cambioTc.ok) return NextResponse.json({ error: cambioTc.error }, { status: cambioTc.status });
   const { escribirTcInterno, tcVehiculoIdNuevo, tcPlacaNueva, escribirTcExterno, tcExternoNuevo, tcEfectivo } = cambioTc;
+
+  // PROGRAMACION-VEHICULO-SOLICITADO — solo si el PATCH trae el campo y REALMENTE cambia. Un perfil nuevo debe ser de
+  // ESTA empresa y estar activo; el valor actual (aunque el perfil se haya desactivado) nunca se re-valida. Independiente
+  // de unidad/tarifa/personal: nada de eso se recalcula aquí.
+  const vehiculoSolicitadoCambio: { escribir: boolean; id: number | null; nombre: string | null; antesNombre: string | null } = {
+    escribir: false, id: null, nombre: null, antesNombre: null,
+  };
+  if (d.vehiculoSolicitadoPerfilId !== undefined) {
+    const actual = await vehiculoSolicitadoDelPlan(empresaId, d.id);
+    if (d.vehiculoSolicitadoPerfilId !== actual.id) {
+      const nuevo = d.vehiculoSolicitadoPerfilId === null ? null : await resolverVehiculoSolicitado(empresaId, d.vehiculoSolicitadoPerfilId);
+      if (d.vehiculoSolicitadoPerfilId !== null && !nuevo) {
+        return NextResponse.json({ error: MSG_VEHICULO_SOLICITADO_INVALIDO }, { status: 400 });
+      }
+      Object.assign(vehiculoSolicitadoCambio, { escribir: true, id: nuevo?.id ?? null, nombre: nuevo?.nombre ?? null, antesNombre: actual.nombre });
+    }
+  }
 
   // BUGFIX-PROGRAMACION-CLIENTE-1 — cambiar de cliente. Solo por ID (mismo criterio que piloto/unidad "por ID" de
   // esta fase); NUNCA se confía en un nombre de cliente enviado por el PATCH para esto. El cliente debe existir y
@@ -2151,6 +2194,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
         tc_vehiculo_id = CASE WHEN ? THEN ? ELSE tc_vehiculo_id END,
         tc_placa_historica = CASE WHEN ? THEN ? ELSE tc_placa_historica END,
         tc_externo_placa = CASE WHEN ? THEN ? ELSE tc_externo_placa END,
+        ${vehiculoSolicitadoCambio.escribir ? "vehiculo_solicitado_perfil_id = ?, vehiculo_solicitado_nombre = ?," : ""}
         tipo_traslado = CASE WHEN ? THEN ? ELSE tipo_traslado END
        WHERE id = ? AND empresa_id = ? AND estado = ?`,
       [
@@ -2200,6 +2244,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
         tcPlacaNueva,
         escribirTcExterno,
         tcExternoNuevo,
+        // Solo cuando cambia: sin cambio no se nombran las columnas (compatibilidad antes de la migración).
+        ...(vehiculoSolicitadoCambio.escribir ? [vehiculoSolicitadoCambio.id, vehiculoSolicitadoCambio.nombre] : []),
         d.tipoTraslado !== undefined,
         d.tipoTraslado?.trim() || null,
         d.id,
@@ -2393,6 +2439,9 @@ export async function PATCH(req: Request, ctx: Ctx) {
     cambios.push("tarifa del catálogo desvinculada (no pertenece a la nueva ruta; monto conservado como override)");
   } else if (d.tarifaId !== undefined && d.tarifaId !== antes.tarifaId) {
     cambios.push(`tarifa del catálogo ${antes.tarifaId ?? "—"} → ${d.tarifaId ?? "—"}`);
+  }
+  if (vehiculoSolicitadoCambio.escribir) {
+    cambios.push(`vehículo solicitado ${vehiculoSolicitadoCambio.antesNombre || "—"} → ${vehiculoSolicitadoCambio.nombre || "—"}`);
   }
   if (d.costoOperativoReferencia !== undefined && d.costoOperativoReferencia !== antes.costoOperativoReferencia) {
     cambios.push(`costo operativo Q${antes.costoOperativoReferencia ?? "—"} → Q${d.costoOperativoReferencia ?? "—"}`);

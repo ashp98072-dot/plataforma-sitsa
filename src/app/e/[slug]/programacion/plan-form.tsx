@@ -27,6 +27,15 @@ import { tienePermiso } from "@/lib/permisos-shared";
 import { normalizarPlaca } from "@/lib/flota/placa";
 import { aplicarDefaultsRutaSinSobrescribir } from "@/lib/tms/ruta-defaults";
 import { filtrarElegibles, type HabilitacionOp } from "@/lib/tms/personal-elegibilidad";
+import {
+  AYUDA_VEHICULO_SOLICITADO,
+  cambioVehiculoSolicitado,
+  ETIQUETA_VEHICULO_SOLICITADO,
+  ETIQUETA_VEHICULO_SOLICITADO_LARGA,
+  opcionesVehiculoSolicitado,
+  textoVehiculoSolicitado,
+  type VehiculoSolicitadoOpcion,
+} from "@/lib/tms/vehiculo-solicitado";
 
 /**
  * Formulario propio de Programación para crear/editar un viaje — reutiliza
@@ -314,6 +323,8 @@ export default function PlanForm({
   const esEdicion = plan != null;
 
   const [clientesCat, setClientesCat] = useState<ClienteCat[]>([]);
+  // PROGRAMACION-VEHICULO-SOLICITADO — perfiles activos de costeo (Cotizaciones) de la empresa, vía GET /tms/catalogos.
+  const [vehiculosSolicitables, setVehiculosSolicitables] = useState<VehiculoSolicitadoOpcion[]>([]);
   const [pilotos, setPilotos] = useState<(EmpOps & { habilitacionEstado: "HABILITADO" | "CAPACITACION" | null })[]>([]);
   const [auxiliares, setAuxiliares] = useState<(EmpOps & { habilitacionEstado: "HABILITADO" | "CAPACITACION" | null })[]>([]);
   const [empleadosCuadrilla, setEmpleadosCuadrilla] = useState<EmpOps[]>([]);
@@ -377,6 +388,8 @@ export default function PlanForm({
     // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§2) — opción de tarifa
     // del catálogo elegida para este viaje (0 = ninguna / monto manual).
     tarifaId: plan?.tarifa_id ?? 0,
+    // PROGRAMACION-VEHICULO-SOLICITADO — 0 = sin dato. Independiente de la unidad y de la tarifa: cambiar uno no toca el otro.
+    vehiculoSolicitadoPerfilId: plan?.vehiculo_solicitado_perfil_id ?? 0,
     // VIAT-4/VIAT-4b: fotografía histórica de qué ruta maestra se usó —
     // se recalcula al elegir otra ruta; no bloquea guardar el viaje sin
     // ruta (código/ruta sigue siendo opcional). lugarDescargaHistorico y
@@ -555,6 +568,7 @@ export default function PlanForm({
     if (cat.ok) {
       const c = await cat.json();
       setClientesCat((c.clientes ?? []) as ClienteCat[]);
+      setVehiculosSolicitables((c.vehiculosSolicitables ?? []) as VehiculoSolicitadoOpcion[]);
     }
     if (ops.ok) {
       const o = await ops.json();
@@ -1194,6 +1208,7 @@ export default function PlanForm({
             // tarifa del catálogo elegida; el backend snapshotea nombre/
             // monto/moneda en el viaje.
             tarifaId: form.tarifaId > 0 ? form.tarifaId : undefined,
+            vehiculoSolicitadoPerfilId: form.vehiculoSolicitadoPerfilId > 0 ? form.vehiculoSolicitadoPerfilId : undefined,
             // PROGRAMACION-REPORTES-FILTROS-1: costo operativo de referencia,
             // referencia del cliente y observaciones ya no se capturan desde
             // este formulario (ver comentario en Part A del ticket) — no se
@@ -1338,6 +1353,10 @@ export default function PlanForm({
           // guardado": este PATCH nunca mandaba clienteId. Solo se envía si REALMENTE cambió contra el plan
           // persistido (mismo criterio que tarifaId arriba) — nunca el cliente actual si no se tocó.
           clienteId: bloqueadoParaPreCierre || form.clienteId === (plan?.clienteId ?? 0) ? undefined : form.clienteId || undefined,
+          // PROGRAMACION-VEHICULO-SOLICITADO — solo si cambió (null lo quita); mismo gate pre-cierre que la tarifa.
+          vehiculoSolicitadoPerfilId: bloqueadoParaPreCierre
+            ? undefined
+            : cambioVehiculoSolicitado(plan?.vehiculo_solicitado_perfil_id, form.vehiculoSolicitadoPerfilId),
           // rutaId ahora distingue "no tocar" (undefined, sin cambios) de "quitar" (null, el usuario limpió el
           // selector — p. ej. al cambiar de cliente) de "cambiar" (number). Antes `form.rutaId || undefined`
           // nunca podía mandar null, así que un viaje con ruta jamás podía quedarse SIN ruta vía este formulario.
@@ -1612,6 +1631,7 @@ export default function PlanForm({
                 <li>Cliente: {form.clienteNombre || "—"}</li>
                 <li>Ruta: {form.rutaCodigo || "—"}</li>
                 <li>Destino: {form.lugarDescargaHistorico || "—"}</li>
+                <li>{ETIQUETA_VEHICULO_SOLICITADO}: {textoVehiculoSolicitado(plan!.vehiculo_solicitado_nombre)}</li>
                 <li>Unidad: {form.placa || "—"}</li>
                 <li>Piloto: {form.pilotoNombre || "—"}</li>
                 <li>Auxiliares: {[...form.auxiliarNombres, ...form.auxiliarEmpleadoIds.map((id) => auxiliares.find((a) => a.id === id)?.nombre ?? `#${id}`)].join(", ") || "—"}</li>
@@ -1795,6 +1815,32 @@ export default function PlanForm({
           {form.tipoViaje === "Tercerizado"
             ? "Otra empresa ejecuta el viaje físicamente — el cliente/tarifa/programación siguen siendo tuyos."
             : "Piloto, auxiliares y unidad propios (RRHH/Flota)."}
+        </span>
+      </label>
+
+      {/* PROGRAMACION-VEHICULO-SOLICITADO — dato COMERCIAL del viaje (Propio y Tercerizado), distinto de la Unidad.
+          Mismo gate pre-cierre que la tarifa comercial. Cambiarlo no toca la unidad ni la tarifa (ni viceversa). */}
+      <label className={`text-xs text-[var(--muted)] ${bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
+        {ETIQUETA_VEHICULO_SOLICITADO_LARGA}
+        <select
+          className={`${inputCls} mt-1 w-full`}
+          value={form.vehiculoSolicitadoPerfilId}
+          disabled={bloqueadoParaPreCierre || bloqueado}
+          aria-describedby="ayuda-vehiculo-solicitado"
+          onChange={(e) => setForm((f) => ({ ...f, vehiculoSolicitadoPerfilId: Number(e.target.value) }))}
+        >
+          <option value={0}>— Sin especificar —</option>
+          {opcionesVehiculoSolicitado(vehiculosSolicitables, {
+            id: plan?.vehiculo_solicitado_perfil_id ?? null,
+            nombre: plan?.vehiculo_solicitado_nombre ?? null,
+          }).map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.etiqueta}
+            </option>
+          ))}
+        </select>
+        <span id="ayuda-vehiculo-solicitado" className="mt-0.5 block text-[10px]">
+          {AYUDA_VEHICULO_SOLICITADO}
         </span>
       </label>
 

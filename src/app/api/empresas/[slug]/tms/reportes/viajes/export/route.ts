@@ -12,6 +12,7 @@ import { filaReporteDiario, HEADERS_REPORTE_DIARIO, totalValorViajes } from "@/l
 import { reporteViajesHistorialPdf } from "@/lib/tms/reporte-viajes-historial-pdf";
 import { ETIQUETA_TC, etiquetaOrigenTc } from "@/lib/tms/tc-viaje-shared";
 import { textoPilotos } from "@/lib/tms/piloto-extra-comun";
+import { ETIQUETA_VEHICULO_SOLICITADO, textoVehiculoSolicitado } from "@/lib/tms/vehiculo-solicitado";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -76,6 +77,9 @@ function filaExcel(p: PlanReporte): string[] {
     // Sin TC: celda vacía. Placa = snapshot histórico (o texto externo si es Tercerizado).
     p.tcPlaca ?? "",
     etiquetaOrigenTc(p.tcOrigen),
+    // PROGRAMACION-VEHICULO-SOLICITADO — al FINAL (no se mueve ninguna columna existente). Separado de
+    // "Equipo asignado"/"Identificación vehículo" (la unidad REAL). Sin dato (históricos): "—".
+    textoVehiculoSolicitado(p.vehiculoSolicitado),
   ];
 }
 
@@ -97,6 +101,7 @@ const HEADERS_EXCEL = [
   "Estado facturación", "Número factura", "Monto facturado viaje",
   "Estado cobro factura", "Total factura", "Total pagado factura", "Saldo factura",
   ETIQUETA_TC, "Origen TC",
+  ETIQUETA_VEHICULO_SOLICITADO,
 ];
 
 export async function GET(req: Request, ctx: Ctx) {

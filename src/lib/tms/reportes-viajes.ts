@@ -72,6 +72,13 @@ export type PlanReporte = {
   tcPlaca?: string | null;
   tcOrigen?: "INTERNO" | "EXTERNO" | null;
   tcVehiculoId?: number | null;
+  /**
+   * PROGRAMACION-VEHICULO-SOLICITADO — vehículo/capacidad SOLICITADO por el cliente (fotografía del nombre del perfil de
+   * costeo al programar). Independiente de la unidad real (`placa`/`unidadTipo`/`unidadCapacidad`) y de la tarifa.
+   * null = sin dato (viajes previos a la funcionalidad): se muestra "—", nunca se infiere de la unidad.
+   */
+  vehiculoSolicitado?: string | null;
+  vehiculoSolicitadoPerfilId?: number | null;
   pilotoId: number | null;
   piloto: string | null;
   /** PILOTO EXTRA (nombre) del viaje, si tiene; el principal sigue siendo `piloto`/`pilotoId`. */
@@ -677,7 +684,8 @@ export async function obtenerReporteViajes(
   // TC (tc_vehiculo_id / tc_placa_historica / tc_externo_placa): columnas de la migración
   // PROGRAMACION-TC-CAJA-REMOLQUE-1. Si una instalación aún no las tiene, el reporte sigue
   // funcionando (sin TC) — nunca se rompe por esto.
-  const consulta = (conTc: boolean) => query<RowDataPacket[]>(
+  // PROGRAMACION-VEHICULO-SOLICITADO: mismo criterio — sin sus columnas, el reporte sigue (dato ausente = "—").
+  const consulta = (conTc: boolean, conVehiculoSolicitado: boolean) => query<RowDataPacket[]>(
     `SELECT p.id, p.codigo, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan,
             p.hora_carga, p.estado, p.cerrado_por,
             DATE_FORMAT(p.cerrado_en, '%Y-%m-%dT%H:%i') AS cerrado_en,
@@ -690,6 +698,7 @@ export async function obtenerReporteViajes(
             p.tarifa_id, p.tarifa_nombre_historico, p.tarifa_monto_historico, p.tarifa_moneda_historico,
             u.placa, u.tipo AS unidad_tipo, ve.capacidad AS unidad_capacidad,
             ${conTc ? "p.tc_vehiculo_id, p.tc_placa_historica, p.tc_externo_placa, tcv.placa AS tc_placa_actual," : ""}
+            ${conVehiculoSolicitado ? "p.vehiculo_solicitado_perfil_id, p.vehiculo_solicitado_nombre," : ""}
             p.piloto_id, pil.nombre AS piloto,
             COALESCE(ev.cnt, 0) AS evidencias,
             fviaje.km_salida, fviaje.km_llegada,
@@ -730,13 +739,17 @@ export async function obtenerReporteViajes(
      LIMIT ? OFFSET ?`,
     [...params, limit, offset],
   );
-  let rows: RowDataPacket[];
-  try {
-    rows = await consulta(true);
-  } catch (e) {
-    const err = e as { code?: string; errno?: number };
-    if (err?.code !== "ER_BAD_FIELD_ERROR" && err?.errno !== 1054) throw e;
-    rows = await consulta(false);
+  // Escalonado: sin las columnas de vehículo solicitado se conserva el TC; sin las de TC, el reporte base.
+  let rows: RowDataPacket[] = [];
+  const intentos: [boolean, boolean][] = [[true, true], [true, false], [false, false]];
+  for (const [i, [conTc, conVs]] of intentos.entries()) {
+    try {
+      rows = await consulta(conTc, conVs);
+      break;
+    } catch (e) {
+      const err = e as { code?: string; errno?: number };
+      if ((err?.code !== "ER_BAD_FIELD_ERROR" && err?.errno !== 1054) || i === intentos.length - 1) throw e;
+    }
   }
 
   const planIds = rows.map((r) => Number(r.id));
@@ -779,6 +792,8 @@ export async function obtenerReporteViajes(
       unidadTipo: r.unidad_tipo ? String(r.unidad_tipo) : null,
       unidadCapacidad: r.unidad_capacidad ? String(r.unidad_capacidad) : null,
       ...resolverTcReporte(r),
+      vehiculoSolicitado: r.vehiculo_solicitado_nombre != null && String(r.vehiculo_solicitado_nombre).trim() ? String(r.vehiculo_solicitado_nombre) : null,
+      vehiculoSolicitadoPerfilId: r.vehiculo_solicitado_perfil_id != null ? Number(r.vehiculo_solicitado_perfil_id) : null,
       pilotoId: r.piloto_id != null ? Number(r.piloto_id) : null,
       piloto: r.piloto ? String(r.piloto) : null,
       pilotoExtra: extraMap.get(id)?.nombre ?? null,

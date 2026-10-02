@@ -654,6 +654,12 @@ CREATE TABLE IF NOT EXISTS tms_planes_viaje (
   tc_vehiculo_id INT NULL,
   tc_placa_historica VARCHAR(40) NULL,
   tc_externo_placa VARCHAR(40) NULL,
+  -- PROGRAMACION-VEHICULO-SOLICITADO: vehículo/capacidad solicitado comercialmente por el cliente
+  -- (perfil de tms_cotizacion_costeo_perfiles, FK compuesta más abajo) + fotografía de su nombre.
+  -- Independiente de la unidad real (unidad_id) y de tarifa_comercial. NULL en viajes históricos.
+  -- Ver migrate-2026-10-programacion-vehiculo-solicitado.sql.
+  vehiculo_solicitado_perfil_id INT NULL,
+  vehiculo_solicitado_nombre VARCHAR(120) NULL,
   piloto_id INT NULL,
   auxiliar_id INT NULL,
   fecha_plan DATE NOT NULL,
@@ -1672,6 +1678,17 @@ CREATE TABLE IF NOT EXISTS tms_cotizacion_costeo_perfiles (
   INDEX idx_costeo_perfil_activo (empresa_id, activo, nombre),
   CONSTRAINT fk_costeo_perfil_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- PROGRAMACION-VEHICULO-SOLICITADO — se declara aquí porque tms_cotizacion_costeo_perfiles se crea
+-- después de tms_planes_viaje. FK compuesta: un viaje nunca apunta al perfil de otra empresa.
+-- Instalación limpia: sintaxis estándar, mismo patrón que fk_tmsplan_tc_vehiculo.
+ALTER TABLE tms_planes_viaje
+  ADD INDEX idx_tmsplan_vehiculo_solicitado (empresa_id, vehiculo_solicitado_perfil_id),
+  ADD CONSTRAINT fk_tmsplan_vehiculo_solicitado
+  FOREIGN KEY (empresa_id, vehiculo_solicitado_perfil_id)
+  REFERENCES tms_cotizacion_costeo_perfiles(empresa_id, id)
+  ON DELETE RESTRICT
+  ON UPDATE RESTRICT;
 
 CREATE TABLE IF NOT EXISTS tms_cotizacion_costeo_parametros (
   id INT AUTO_INCREMENT PRIMARY KEY,

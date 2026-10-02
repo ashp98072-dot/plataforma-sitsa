@@ -23,6 +23,7 @@ import { ETIQUETA_TC, etiquetaOrigenTc } from "@/lib/tms/tc-viaje-shared";
 import { resumenRegreso } from "@/lib/tms/regreso-viaje";
 import { textoPilotos } from "@/lib/tms/piloto-extra-comun";
 import { PilotosCelda } from "@/components/tms/pilotos-celda";
+import { ETIQUETA_VEHICULO_SOLICITADO, textoUnidadUtilizada, textoVehiculoSolicitado } from "@/lib/tms/vehiculo-solicitado";
 
 /**
  * OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — deep-link a un plan puntual.
@@ -166,6 +167,8 @@ type PlanReporte = {
   tcPlaca?: string | null;
   tcOrigen?: "INTERNO" | "EXTERNO" | null;
   tcVehiculoId?: number | null;
+  /** PROGRAMACION-VEHICULO-SOLICITADO — lo que el cliente solicitó (snapshot); null en históricos ("—"). */
+  vehiculoSolicitado?: string | null;
   pilotoId: number | null;
   piloto: string | null;
   /** Piloto extra (si tiene): se muestra junto al principal. */
@@ -402,11 +405,16 @@ export function resumenCierre(p: PlanReporte): {
   kmLlegada: string;
   evidencias: number;
   tarifa: string;
+  /** PROGRAMACION-VEHICULO-SOLICITADO — informativo: una diferencia con la unidad usada es válida y NO bloquea el cierre. */
+  vehiculoSolicitado: string;
+  unidadUtilizada: string;
 } {
   return {
     codigo: p.codigo,
     cliente: p.cliente ?? "—",
     placa: p.placa ?? "—",
+    vehiculoSolicitado: textoVehiculoSolicitado(p.vehiculoSolicitado),
+    unidadUtilizada: textoUnidadUtilizada(p.placa, p.unidadCapacidad),
     piloto: textoPilotos(p.piloto, p.pilotoExtra) || "—",
     // OPERACIONES-HORA-12H-1 (Grupo C) — hora REAL de salida/llegada en
     // formato 12h con AM/PM; regresoEstimado/cerradoEn (fuera de este
@@ -1323,6 +1331,8 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                     <td className="px-2 py-1.5 text-xs">{p.rutaCodigo ?? "—"}</td>
                     <td className="px-2 py-1.5 text-xs">
                       {p.placa ?? "—"}
+                      {/* PROGRAMACION-VEHICULO-SOLICITADO — lo solicitado junto a la unidad realmente usada. */}
+                      <span className="block text-[10px] text-[var(--muted)]" title={ETIQUETA_VEHICULO_SOLICITADO}>Solicitado: {textoVehiculoSolicitado(p.vehiculoSolicitado)}</span>
                       {p.tcPlaca ? (
                         <span className="block text-[10px] text-[var(--muted)]" title={`${ETIQUETA_TC} (${etiquetaOrigenTc(p.tcOrigen)})`}>TC: {p.tcPlaca}</span>
                       ) : null}
@@ -1411,6 +1421,7 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                             <ul className="mt-1 space-y-0.5 text-xs text-[var(--text)]">
                               <li>{p.pilotoExtra ? "Pilotos" : "Piloto"}: {textoPilotos(p.piloto, p.pilotoExtra) || "—"}</li>
                               <li>Auxiliares: {p.auxiliares.join(", ") || "—"}</li>
+                              <li>{ETIQUETA_VEHICULO_SOLICITADO}: {textoVehiculoSolicitado(p.vehiculoSolicitado)}</li>
                               <li>Unidad: {p.placa ?? "—"}</li>
                               <li>Equipo asignado: {p.unidadTipo ? `${p.unidadTipo}${p.unidadCapacidad ? ` · ${p.unidadCapacidad}` : ""}` : "—"}</li>
                               <li>{ETIQUETA_TC}: {p.tcPlaca ?? "—"}</li>
@@ -1477,6 +1488,8 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                                         <li>Código: {r.codigo}</li>
                                         <li>Cliente: {r.cliente}</li>
                                         <li>Placa: {r.placa}</li>
+                                        <li>{ETIQUETA_VEHICULO_SOLICITADO}: {r.vehiculoSolicitado}</li>
+                                        <li>Unidad utilizada: {r.unidadUtilizada}</li>
                                         <li>Piloto: {r.piloto}</li>
                                         <li>Hora salida: {r.horaSalida}</li>
                                         <li>Hora llegada: {r.horaLlegada}</li>
