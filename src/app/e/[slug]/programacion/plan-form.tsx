@@ -41,9 +41,11 @@ import {
   cambioParadas,
   cambioTextoSnapshot,
   debeAplicarRuta,
+  descripcionReporteInicial,
   paradasFormularioDesdePlan,
   plantillaDesdeRuta,
 } from "@/lib/tms/plan-form-cambios";
+import { descargaDeParadas } from "@/lib/tms/plan-lugares";
 
 /**
  * Formulario propio de Programación para crear/editar un viaje — reutiliza
@@ -372,6 +374,8 @@ export default function PlanForm({
   // Precarga de piloto/auxiliares del plan (edición): se resuelve por
   // NOMBRE contra el roster de RRHH ya cargado — mismo criterio ya
   // usado en tms/page.tsx (seleccionarPlan()), no se inventa un cruce nuevo.
+  // PROGRAMACION-PARADAS-FUENTE — lo guardado como «lugar de descarga» solo se muestra aparte si difiere de la 1.ª descarga.
+  const descripcionInicialReporte = descripcionReporteInicial(plan?.lugar_descarga_historico, plan?.paradas);
   const [form, setForm] = useState({
     codigo: plan?.codigo ?? "",
     fechaPlan: plan?.fecha_plan ?? fechaSugerida ?? hoy,
@@ -407,7 +411,8 @@ export default function PlanForm({
     // se mostraba "en vivo" sin copiarse; ahora sí se copia).
     rutaId: plan?.ruta_id ?? 0,
     rutaCodigo: plan?.ruta_codigo_historico ?? "",
-    lugarDescargaHistorico: plan?.lugar_descarga_historico ?? "",
+    // PROGRAMACION-PARADAS-FUENTE — aquí solo vive la «descripción distinta en el reporte»; el destino normal sale de las paradas.
+    lugarDescargaHistorico: descripcionInicialReporte,
     contactoNombreHistorico: plan?.contacto_nombre_historico ?? "",
     contactoCargoHistorico: plan?.contacto_cargo_historico ?? "",
     contactoTelefonoHistorico: plan?.contacto_telefono_historico ?? "",
@@ -434,6 +439,8 @@ export default function PlanForm({
   // OPS-3.2d: se conserva el id real de cada parada (el backend la actualiza IN-PLACE, sin romper evidencias).
   // PROGRAMACION-PERSISTENCIA: al abrir un viaje se muestran SUS paradas, nunca las de la ruta maestra.
   const [paradasForm, setParadasForm] = useState<ParadaForm[]>(paradasFormularioDesdePlan(plan?.paradas));
+  // Opción colapsada «descripción distinta en el reporte»: abierta solo si el viaje ya la tiene o la ruta la aportó.
+  const [descReporteAbierta, setDescReporteAbierta] = useState(descripcionInicialReporte !== "");
   const [saving, setSaving] = useState(false);
   // Mejora Programación (punto 20) — ViaticosPanel solo refetch en su
   // propio mount ([slug, planId]); como este formulario NO se desmonta
@@ -933,6 +940,7 @@ export default function PlanForm({
       auxiliarNombres: defaults.auxiliarNombres,
     }));
     setContactoClienteIdSeleccionado(ruta.contactoClienteId ?? null);
+    setDescReporteAbierta(plantilla.lugarDescargaHistorico !== "");
     if (plantilla.paradas) setParadasForm(plantilla.paradas);
   }
 
@@ -1345,7 +1353,7 @@ export default function PlanForm({
           // PROGRAMACION-PERSISTENCIA — snapshots del viaje: solo si cambiaron contra lo persistido; null = el usuario
           // los BORRÓ (antes un campo vaciado se ignoraba y reaparecía el valor anterior al reabrir).
           rutaCodigo: bloqueadoParaPreCierre ? undefined : cambioTextoSnapshot(plan?.ruta_codigo_historico, form.rutaCodigo),
-          lugarDescargaHistorico: bloqueadoParaPreCierre ? undefined : cambioTextoSnapshot(plan?.lugar_descarga_historico, form.lugarDescargaHistorico),
+          lugarDescargaHistorico: bloqueadoParaPreCierre ? undefined : cambioTextoSnapshot(descripcionInicialReporte, form.lugarDescargaHistorico),
           contactoNombreHistorico: bloqueadoParaPreCierre ? undefined : cambioTextoSnapshot(plan?.contacto_nombre_historico, form.contactoNombreHistorico),
           contactoCargoHistorico: bloqueadoParaPreCierre ? undefined : cambioTextoSnapshot(plan?.contacto_cargo_historico, form.contactoCargoHistorico),
           contactoTelefonoHistorico: bloqueadoParaPreCierre ? undefined : cambioTextoSnapshot(plan?.contacto_telefono_historico, form.contactoTelefonoHistorico),
@@ -1614,7 +1622,7 @@ export default function PlanForm({
                 <li>Código: {plan!.codigo}</li>
                 <li>Cliente: {form.clienteNombre || "—"}</li>
                 <li>Ruta: {form.rutaCodigo || "—"}</li>
-                <li>Destino: {form.lugarDescargaHistorico || "—"}</li>
+                <li>Destino: {form.lugarDescargaHistorico || descargaDeParadas(paradasForm) || "—"}</li>
                 <li>{ETIQUETA_VEHICULO_SOLICITADO}: {textoVehiculoSolicitado(plan!.vehiculo_solicitado_nombre)}</li>
                 <li>Unidad: {form.placa || "—"}</li>
                 <li>Piloto: {form.pilotoNombre || "—"}</li>
@@ -1715,19 +1723,28 @@ export default function PlanForm({
           }}
         />
       </div>
-      <label className={`text-xs text-[var(--muted)] md:col-span-2 ${bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
-        Lugar de descarga (descripción operativa — como la usa Operaciones)
-        <input
-          className={`${inputCls} mt-1 w-full`}
-          placeholder="Ej. RUTA-A - punto1-punto2-punto3"
-          value={form.lugarDescargaHistorico}
-          onChange={(e) => setForm((f) => ({ ...f, lugarDescargaHistorico: e.target.value }))}
-        />
-        <span className="mt-0.5 block text-[10px]">
-          Se copió de la ruta elegida arriba (si aplica) — puedes ajustarla solo para este viaje.
-          Es lo que sale en el reporte tradicional (columna &quot;Lugar de Descarga&quot;).
-        </span>
-      </label>
+      {/* PROGRAMACION-PARADAS-FUENTE — el destino se captura UNA sola vez, en «Paradas del viaje». Esta opción (colapsada)
+          solo existe para el caso en que Operaciones necesite en el reporte un texto distinto a la primera descarga. */}
+      <details
+        open={descReporteAbierta}
+        onToggle={(e) => setDescReporteAbierta(e.currentTarget.open)}
+        className={`text-xs text-[var(--muted)] md:col-span-2 ${bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}`}
+      >
+        <summary className="cursor-pointer select-none">Usar descripción distinta en el reporte (opcional)</summary>
+        <label className="mt-1 block">
+          Descripción del lugar de descarga para el reporte
+          <input
+            className={`${inputCls} mt-1 w-full`}
+            placeholder="Ej. RUTA-A - punto1-punto2-punto3"
+            value={form.lugarDescargaHistorico}
+            onChange={(e) => setForm((f) => ({ ...f, lugarDescargaHistorico: e.target.value }))}
+          />
+          <span className="mt-0.5 block text-[10px]">
+            Déjalo vacío para que el reporte use la primera descarga/entrega de las paradas (lo normal). Solo se llena si el
+            reporte tradicional debe mostrar un texto distinto al de la parada.
+          </span>
+        </label>
+      </details>
       <div className={`md:col-span-3 space-y-2 rounded border border-[var(--border)] p-2 ${bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
         <p className="text-[11px] font-medium text-[var(--muted)]">
           Contacto operativo — viene del cliente (o de la ruta elegida). El teléfono no se edita
@@ -2176,6 +2193,10 @@ export default function PlanForm({
         }`}
       >
         <p className="text-xs font-medium">Paradas del viaje</p>
+        <p className="text-[10px] text-[var(--muted)]">
+          Las paradas definen el lugar de carga y los destinos del viaje. El primer punto de carga y la primera
+          descarga/entrega se usan también en los reportes y el Portal del piloto.
+        </p>
 
         {form.clienteId ? (
           <div className="rounded border border-[var(--border)] bg-black/10 p-2">

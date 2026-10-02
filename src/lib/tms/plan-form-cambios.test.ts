@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { resolverDescargaReporte } from "./plan-lugares";
 import {
   cambioHoraCarga,
   cambioParadas,
@@ -10,6 +11,7 @@ import {
   normalizarHora,
   paradasFormularioDesdePlan,
   plantillaDesdeRuta,
+  descripcionReporteInicial,
   type ParadaFormulario,
   type ParadaPersistida,
   type RutaPlantilla,
@@ -48,7 +50,12 @@ function viajeCreado(): PlanGuardado {
   const p = plantillaDesdeRuta(RUTA, { horaCarga: "08:00", lugarDescargaHistorico: "" });
   return {
     hora_carga: `${p.horaCarga}:00`,
-    lugar_descarga_historico: p.lugarDescargaHistorico,
+    // El servidor deriva el «Lugar de Descarga» de la 1.ª Descarga/Entrega (resolverDescargaReporte); la ruta solo aporta
+    // una descripción distinta cuando difiere de la parada.
+    lugar_descarga_historico: resolverDescargaReporte({
+      override: p.lugarDescargaHistorico,
+      paradasNuevas: p.paradas!.map((x) => ({ lugarNombre: x.lugarNombre, tipo: x.tipo })),
+    }).valor,
     ruta_codigo_historico: p.rutaCodigo,
     paradas: p.paradas!.map((x, i) => ({ id: i + 1, lugar_nombre: x.lugarNombre, tipo: x.tipo, requiere_evidencia: true })),
   };
@@ -75,8 +82,23 @@ describe("hora: 04:00 de la ruta -> 06:30 del viaje", () => {
 });
 
 describe("destino: Mixco de la ruta -> Villa Nueva del viaje", () => {
-  it("6) seleccionar ruta precarga el destino", () => {
-    expect(plantillaDesdeRuta(RUTA, { horaCarga: "", lugarDescargaHistorico: "" }).lugarDescargaHistorico).toBe("Mixco");
+  it("6) seleccionar ruta precarga el destino EN LAS PARADAS (sin duplicarlo en un campo aparte)", () => {
+    const p = plantillaDesdeRuta(RUTA, { horaCarga: "", lugarDescargaHistorico: "" });
+    expect(p.paradas!.find((x) => x.tipo === "Descarga")?.lugarNombre).toBe("Mixco");
+    expect(p.lugarDescargaHistorico).toBe(""); // igual a la parada: el servidor lo deriva
+  });
+  it("6b) si la ruta trae una descripción operativa DISTINTA a la parada, se conserva como descripción distinta (VIAT-4b)", () => {
+    const p = plantillaDesdeRuta({ ...RUTA, destinoDescripcion: "RUTA-A - Mixco-Villa Nueva" }, { horaCarga: "", lugarDescargaHistorico: "" });
+    expect(p.lugarDescargaHistorico).toBe("RUTA-A - Mixco-Villa Nueva");
+    expect(p.paradas!.find((x) => x.tipo === "Descarga")?.lugarNombre).toBe("Mixco");
+  });
+  it("6c) al reabrir: la descripción solo aparece aparte si difiere de la 1.ª descarga (o el viaje histórico no tiene paradas)", () => {
+    const paradas: ParadaPersistida[] = [{ id: 1, lugar_nombre: "Bodega", tipo: "Carga", requiere_evidencia: true }, { id: 2, lugar_nombre: "CD Walmart", tipo: "Descarga", requiere_evidencia: true }];
+    expect(descripcionReporteInicial("CD Walmart", paradas)).toBe("");
+    expect(descripcionReporteInicial("  cd   walmart ", paradas)).toBe("");
+    expect(descripcionReporteInicial("RUTA-A - p1-p2", paradas)).toBe("RUTA-A - p1-p2");
+    expect(descripcionReporteInicial("Destino histórico", [])).toBe("Destino histórico");
+    expect(descripcionReporteInicial(null, paradas)).toBe("");
   });
   it("7-9) cambiar destino, guardar y al reabrir sigue Villa Nueva", () => {
     const guardado = viajeCreado();
@@ -132,7 +154,8 @@ describe("la ruta NO se re-aplica salvo cambio explícito de ruta", () => {
     expect(debeAplicarRuta(8, 9)).toBe(true);
     expect(debeAplicarRuta(0, 8)).toBe(true);
     const p = plantillaDesdeRuta(OTRA_RUTA, { horaCarga: "06:30", lugarDescargaHistorico: "Villa Nueva" });
-    expect(p).toMatchObject({ rutaId: 9, horaCarga: "05:15", lugarDescargaHistorico: "Escuintla" });
+    expect(p).toMatchObject({ rutaId: 9, horaCarga: "05:15", lugarDescargaHistorico: "" });
+    expect(p.paradas!.find((x) => x.tipo === "Descarga")?.lugarNombre).toBe("Escuintla"); // el destino vive en las paradas
     expect(p.paradas!.every((x) => x.id === undefined)).toBe(true); // copia, nunca enlace en vivo
   });
   it("una ruta sin hora/destino no borra lo que ya tenía el formulario", () => {
@@ -179,7 +202,7 @@ describe("cableado (código fuente)", () => {
   });
   it("el PATCH envía hora/destino/contacto/código/paradas solo si cambiaron contra el viaje persistido", () => {
     expect(form).toContain("horaCarga: soloNotas ? undefined : cambioHoraCarga(plan?.hora_carga, form.horaCarga)");
-    expect(form).toContain("cambioTextoSnapshot(plan?.lugar_descarga_historico, form.lugarDescargaHistorico)");
+    expect(form).toContain("cambioTextoSnapshot(descripcionInicialReporte, form.lugarDescargaHistorico)");
     expect(form).toContain("cambioTextoSnapshot(plan?.ruta_codigo_historico, form.rutaCodigo)");
     expect(form).toContain("cambioTextoSnapshot(plan?.contacto_nombre_historico, form.contactoNombreHistorico)");
     expect(form).toContain("paradas: bloqueadoParaPreCierre ? undefined : cambioParadas(plan?.paradas ?? [], paradas)");
