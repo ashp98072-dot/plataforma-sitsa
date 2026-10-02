@@ -55,6 +55,7 @@ type Emp = {
   horaSalidaTeorica?: string;
   estado?: string;
   docsCount?: number;
+  tieneFoto?: boolean;
   dpi?: string;
   nit?: string;
   igss?: string;
@@ -1835,7 +1836,7 @@ export default function EmpleadosPage() {
                 title="Doble clic: expediente (PDF/fotos)"
                 onDoubleClick={() => setDocsEmp(e)}
               >
-                <td className="px-3 py-1"><FotoEmpleadoMiniatura slug={slug} empleadoId={e.id} nombre={e.nombre} ampliable compacta /></td>
+                <td className="px-3 py-1"><FotoEmpleadoMiniatura slug={slug} empleadoId={e.id} nombre={e.nombre} tieneFoto={e.tieneFoto} ampliable compacta /></td>
                 <td className="px-3 py-2">{e.codigo}</td>
                 <td className="px-3 py-2">{e.nombre}</td>
                 {mostrarDpi ? (

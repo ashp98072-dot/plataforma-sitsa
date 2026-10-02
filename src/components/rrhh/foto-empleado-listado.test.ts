@@ -17,11 +17,29 @@ describe("RRHH Empleados — foto en el listado", () => {
     expect(html).toContain("Ampliar fotografía de Ana Gómez");
     expect(html).not.toContain("Ampliar fotografía de Ana Gómez</");
   });
-  it("2) sin foto: el mismo componente cae a iniciales (onError → 'Sin fotografía de'), sin modal", () => {
+  it("2) sin foto (tieneFoto=false): iniciales directas, NO se renderiza <img> ni se solicita el endpoint /foto", () => {
+    const html = renderToStaticMarkup(createElement(FotoEmpleadoMiniatura, { slug: "sitsa", empleadoId: 7, nombre: "Ana Gómez", ampliable: true, compacta: true, tieneFoto: false }));
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("/foto");
+    expect(html).not.toContain("<button"); // sin imagen no hay ampliación
+    expect(html).toContain("Sin fotografía de Ana Gómez");
+    expect(html).toContain(">AG<");
+    expect(html).toContain("h-8 w-8");
+    expect(html).toContain("rounded-full");
+  });
+  it("2b) con foto explícita (tieneFoto=true) y sin dato (undefined): igual que antes, misma URL privada", () => {
+    for (const tieneFoto of [true, undefined]) {
+      const html = renderToStaticMarkup(createElement(FotoEmpleadoMiniatura, { slug: "sitsa", empleadoId: 7, nombre: "Ana Gómez", ampliable: true, compacta: true, tieneFoto }));
+      expect(html).toContain('src="/api/empresas/sitsa/empleados/7/foto"');
+      expect(html).toContain("Ampliar fotografía de Ana Gómez");
+      expect(html).not.toContain("Sin fotografía de");
+    }
+  });
+  it("2c) onError se conserva solo como red de seguridad (archivo ausente/ilegible); una imagen fallida nunca abre ampliación", () => {
     const f = leer("src/components/rrhh/foto-empleado-miniatura.tsx");
     expect(f).toContain("onError={() => setFallida(src)}");
-    expect(f).toContain("Sin fotografía de");
-    expect(f).toContain("fallida !== src"); // una imagen fallida nunca abre ampliación
+    expect(f).toContain("tieneFoto === false || fallida === src");
+    expect(f).toContain("tieneFoto !== false && fallida !== src");
   });
   it("3) ampliación: reutiliza FotoAmpliada del dashboard (no crea otro modal); clic no dispara el doble clic/expediente de la fila", () => {
     const f = leer("src/components/rrhh/foto-empleado-miniatura.tsx");
@@ -37,11 +55,13 @@ describe("RRHH Empleados — foto en el listado", () => {
     expect(html).not.toContain("<button");
     expect(html).toContain("h-10 w-10");
   });
-  it("4) sin N+1: listarEmpleados no cambia (una consulta + conteo de docs en lote) y no trae foto", () => {
+  it("4) sin N+1: listarEmpleados determina tieneFoto con UNA consulta en lote (no una por empleado) y la página la pasa a la miniatura", () => {
     const e = leer("src/lib/rrhh/empleados.ts");
     expect(e).toContain("contarDocumentosPorEmpleado(");
-    expect(e).not.toMatch(/foto/i);
-    expect(page).toContain("<FotoEmpleadoMiniatura slug={slug} empleadoId={e.id} nombre={e.nombre} ampliable compacta />");
+    expect(e).toContain("empleadosConFoto(");
+    expect(e.match(/empleadosConFoto\(/g)).toHaveLength(1);
+    expect(e).toContain("e.tieneFoto = conFoto.has(e.id)");
+    expect(page).toContain("<FotoEmpleadoMiniatura slug={slug} empleadoId={e.id} nombre={e.nombre} tieneFoto={e.tieneFoto} ampliable compacta />");
   });
   it("5-7) tabla: columna Foto al inicio y el resto de columnas y celdas intactas", () => {
     const orden = ["Foto", "Código", "Nombre", "Puesto", "Contrato", "Pago", "Área", "Entrada lab.", "Contratación", "Horario", "Estado", "Docs"];
