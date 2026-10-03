@@ -27,7 +27,10 @@ function valoresDeSql(sql: string) {
 
 describe("Restauración de perfiles de unidad desde Excel", () => {
   it("reutiliza los cinco códigos estables y mantiene iguales las cinco filas del preflight y la migración", () => {
-    expect(filas.map((r) => r[0])).toEqual(codigos);
+    // La restauración histórica conserva sus cinco filas; el catálogo ahora
+    // admite además 1T/12T configurables, sin inventar ni sembrar sus costos.
+    expect(filas.map((r) => r[0]).every(c=>codigos.includes(c))).toBe(true);
+    expect(codigos.filter(c=>c!=="CAMION_1T"&&c!=="CAMION_12T")).toEqual(filas.map(r=>r[0]));
     const a = valoresDeSql(preflight);
     const b = valoresDeSql(migracion);
     // Las columnas y literales deben coincidir incluso si cambia la presentación.

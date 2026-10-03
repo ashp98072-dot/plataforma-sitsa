@@ -18,7 +18,7 @@ export type ConfigCosteo =
   | { estado: "cargando" }
   | { estado: "sin-permiso" }
   | { estado: "error"; mensaje: string }
-  | { estado: "listo"; perfiles: PerfilOpcion[]; margenObjetivo: number | null; vigenteDesde: string };
+  | { estado: "listo"; perfiles: PerfilOpcion[]; margenObjetivo: number | null; precioCombustibleGalon?: number; vigenteDesde: string };
 
 const inputCls = "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
 
@@ -50,7 +50,7 @@ export function useCosteoConfig(slug: string, fechaEmision: string): ConfigCoste
         if (controller.signal.aborted) return;
         if (status === 401 || status === 403) setConfig({ estado: "sin-permiso" });
         else if (!ok) setConfig({ estado: "error", mensaje: data.error ?? "No se pudo cargar la configuración del costeo." });
-        else setConfig({ estado: "listo", perfiles: data.perfiles ?? [], margenObjetivo: data.parametros?.margenObjetivo ?? null, vigenteDesde: data.parametros?.vigenteDesde ?? "" });
+        else setConfig({ estado: "listo", perfiles: data.perfiles ?? [], margenObjetivo: data.parametros?.margenObjetivo ?? null, precioCombustibleGalon: data.parametros?.precioCombustibleGalon, vigenteDesde: data.parametros?.vigenteDesde ?? "" });
       })
       .catch(() => { if (!controller.signal.aborted) setConfig({ estado: "error", mensaje: "No se pudo cargar la configuración del costeo." }); });
     return () => controller.abort();
@@ -72,8 +72,19 @@ export function ResumenCosteo({ datos }: { datos: ResumenCosteoDatos }) {
     ["Utilidad estimada", monedaCosteo(datos.utilidadEstimada)],
     ["Margen sobre costo", porcentajeCosteo(datos.margenReal)],
   ];
+  if (datos.subtotalComercial != null) filas.splice(0, filas.length,
+    ["COSTO BASE", monedaCosteo(datos.costoOperativo)],
+    ["Margen objetivo (%)", porcentajeCosteo(datos.margenObjetivo)],
+    ["Valor del margen", monedaCosteo(datos.margenObjetivoMonto)],
+    ["Subtotal antes IVA", monedaCosteo(datos.subtotalComercial)],
+    ["IVA", monedaCosteo(datos.iva)],
+    ["TOTAL CON IVA", monedaCosteo(datos.precioSugerido)],
+    ["Precio/km (informativo)", monedaCosteo(datos.precioPorKm)],
+    ["Tarifa comercial", monedaCosteo(datos.precioVenta)],
+    ["Utilidad estimada", monedaCosteo(datos.utilidadEstimada)]);
   return (
     <div className="space-y-3 text-xs">
+      {!!datos.advertencias?.length && <div role="alert" className="rounded border border-amber-500 p-2"><p className="font-semibold">Costeo incompleto: revisar configuración</p><ul>{datos.advertencias.map(a => <li key={a}>{a}</li>)}</ul></div>}
       <div>
         <p className="mb-1 font-semibold uppercase tracking-wide text-[var(--muted)]">Resumen de costeo</p>
         <dl className="grid grid-cols-2 gap-x-4 gap-y-1 md:grid-cols-4">
@@ -86,7 +97,7 @@ export function ResumenCosteo({ datos }: { datos: ResumenCosteoDatos }) {
       <div>
         <p className="mb-1 font-semibold uppercase tracking-wide text-[var(--muted)]">Detalle del costo</p>
         <ul className="grid grid-cols-1 gap-x-6 gap-y-0.5 md:grid-cols-2">
-          {componentesVisibles(datos.componentes).map((c) => (
+          {(datos.subtotalComercial == null ? componentesVisibles(datos.componentes) : datos.componentes).map((c) => (
             <li key={c.clave} className="flex justify-between gap-2 border-b border-[var(--border)]/50"><span>{c.concepto}</span><span>{monedaCosteo(c.monto)}</span></li>
           ))}
         </ul>
@@ -164,7 +175,7 @@ export function CotizacionCosteoPanel(p: CotizacionCosteoPanelProps) {
     return (
       <section aria-label="Costeo interno" className={claseSeccion}>
         {encabezado}
-        <p role="status" className="text-xs text-amber-200">Esta cotización ya tiene un costeo registrado. Es un registro histórico inmutable; para recostear, duplica la cotización.</p>
+        <p role="status" className="text-xs text-amber-200">Esta cotización ya tiene un costeo registrado. Es un registro histórico inmutable. Para realizar un nuevo costeo, crea una nueva cotización.</p>
         <p className="text-xs text-[var(--muted)]">Perfil {snapshot.perfilNombre} · motor {snapshot.motorVersion}{snapshot.creadoEn ? ` · ${snapshot.creadoEn}` : ""}</p>
         <ResumenCosteo datos={snapshot} />
       </section>
@@ -259,6 +270,8 @@ export function CotizacionCosteoPanel(p: CotizacionCosteoPanelProps) {
           <input type="number" min="0" step="any" className={`${inputCls} mt-0.5 w-32 block`} placeholder={p.config.margenObjetivo != null ? String(p.config.margenObjetivo * 100) : "0"}
             value={form.margenObjetivoPct} onChange={(e) => set({ margenObjetivoPct: e.target.value })} />
         </label>
+        {num("Precio combustible usado (Q/galón; override interno)", "precioCombustibleOverride", { placeholder: String(p.config.precioCombustibleGalon ?? "") })}
+        <label><input type="checkbox" checked={form.incluirSeguroMercaderia ?? true} onChange={e => set({ incluirSeguroMercaderia: e.target.checked })} /> Seguro mercadería global (vacío en monto = prorrateo)</label>
         <button type="button" disabled={calculando} onClick={() => void calcular()} className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm text-white disabled:opacity-50">{calculando ? "Calculando…" : "Calcular costeo"}</button>
       </div>
       {errorCalculo ? <p role="alert" className="text-xs text-red-300">{errorCalculo}</p> : null}
@@ -278,10 +291,11 @@ export function CotizacionCosteoPanel(p: CotizacionCosteoPanelProps) {
 }
 
 function snapshotResumen(c: {
+  resultado?: ResultadoCosteoServicio | null;
   perfilNombre: string; motorVersion: string; creadoEn: string | null; costoOperativo: number; iva: number; costoConIva: number; margenObjetivo: number;
   precioSugerido: number; precioVenta: number | null; utilidadEstimada: number | null; margenReal: number | null; componentes: ResumenCosteoDatos["componentes"];
 }): SnapshotResumen {
-  return { ...c };
+  return { ...c, ...(c.resultado?.motorVersion === "COSTEO_EXCEL_2026" ? resumenDesdeResultado(c.resultado) : {}) };
 }
 
 // ---------------------------------------------------------------------------

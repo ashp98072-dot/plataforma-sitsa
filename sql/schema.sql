@@ -1652,6 +1652,12 @@ CREATE TABLE IF NOT EXISTS tms_cotizacion_lineas (
 -- versionarse) y docs/COTIZACIONES-COSTEO-PERSISTENCIA-PROPUESTA.md. Perfiles/parámetros son configuración
 -- de negocio: no se siembran aquí.
 CREATE TABLE IF NOT EXISTS tms_cotizacion_costeo_perfiles (
+  -- Excel 2026: NULL conserva equivalentes anteriores sin inventar costos.
+  viajes_mes DECIMAL(10,2) NULL DEFAULT NULL,
+  precio_llanta DECIMAL(12,2) NULL DEFAULT NULL,
+  cantidad_llantas INT NULL DEFAULT NULL,
+  salario_piloto_mensual DECIMAL(12,2) NULL DEFAULT NULL,
+  salario_auxiliar_mensual DECIMAL(12,2) NULL DEFAULT NULL,
   id INT AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,
   codigo VARCHAR(40) NOT NULL,                 -- p. ej. CAMION_5T, CABEZAL
@@ -1695,6 +1701,17 @@ ALTER TABLE tms_planes_viaje
   ON UPDATE RESTRICT;
 
 CREATE TABLE IF NOT EXISTS tms_cotizacion_costeo_parametros (
+  -- Configuración global aditiva por vigencia; no modifica vigencias anteriores.
+  seguro_mercaderia_anual DECIMAL(14,2) NULL DEFAULT NULL,
+  cantidad_camiones INT NULL DEFAULT NULL,
+  viajes_anuales DECIMAL(10,2) NULL DEFAULT NULL,
+  dias_depreciacion_mes DECIMAL(5,2) NULL DEFAULT NULL,
+  dias_gastos_mes DECIMAL(5,2) NULL DEFAULT NULL,
+  gastos_administracion DECIMAL(14,2) NULL DEFAULT NULL,
+  gastos_mantenimiento DECIMAL(14,2) NULL DEFAULT NULL,
+  gastos_seguridad DECIMAL(14,2) NULL DEFAULT NULL,
+  gastos_predios DECIMAL(14,2) NULL DEFAULT NULL,
+  dias_laborales_mes DECIMAL(5,2) NULL DEFAULT NULL,
   id INT AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,
   vigente_desde DATE NOT NULL,
@@ -1716,6 +1733,7 @@ CREATE TABLE IF NOT EXISTS tms_cotizacion_costeo_parametros (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS tms_cotizacion_costeos (
+  resultado_snapshot JSON NULL DEFAULT NULL, -- Resultado V2 completo; históricos V1 sin transformar
   id INT AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,
   cotizacion_id INT NOT NULL,

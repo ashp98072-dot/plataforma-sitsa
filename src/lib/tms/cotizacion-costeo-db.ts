@@ -1,7 +1,9 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
+import { decimalCosteoSql } from "./cotizacion-costeo-excel";
 import type { PoolConnection } from "mysql2/promise";
 import { query, type SqlParams } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
+import { CAMPOS_EXCEL_PARAMETROS, CAMPOS_EXCEL_PERFIL, mapCamposExcel } from "./cotizacion-costeo-excel-campos";
 import {
   COTIZACION_COSTEO_MOTOR_VERSION,
   type ComponenteCosteo,
@@ -56,6 +58,7 @@ function mapDepreciacion(valorBase: unknown, anios: unknown, dias: unknown): Dep
 function mapPerfil(r: RowDataPacket): PerfilCosteoConId {
   return {
     id: num(r.id),
+    ...mapCamposExcel(r, CAMPOS_EXCEL_PERFIL),
     codigo: String(r.codigo),
     nombre: String(r.nombre),
     costoAdquisicion: numONull(r.costo_adquisicion),
@@ -76,7 +79,7 @@ const SELECT_PERFIL = `
   SELECT id, codigo, nombre, costo_adquisicion, dias_operacion_mes, gps_mensual, seguro_vehiculo_mensual,
          costo_aceite_servicio, vida_util_aceite_km, costo_juego_llantas, vida_util_llantas_km, rendimiento_km_galon,
          deprec_valor_base, deprec_anios, deprec_dias_operacion_mes,
-         refrig_valor_base, refrig_anios, refrig_dias_operacion_mes
+         refrig_valor_base, refrig_anios, refrig_dias_operacion_mes, viajes_mes, precio_llanta, cantidad_llantas, salario_piloto_mensual, salario_auxiliar_mensual
   FROM tms_cotizacion_costeo_perfiles
 `;
 
@@ -107,7 +110,8 @@ export async function obtenerParametrosCosteoVigentes(empresaId: number, fecha: 
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) throw new ErrorCosteoConfig("Fecha de emisión no válida para obtener los parámetros de costeo.");
   const rows = await query<RowDataPacket[]>(
     `SELECT DATE_FORMAT(vigente_desde, '%Y-%m-%d') AS vigente_desde, precio_combustible_galon, iva_tasa, costo_piloto_dia,
-            costo_auxiliar_dia, viatico_piloto_dia, viatico_auxiliar_dia, viatico_guia_dia, hotel_dia, margen_objetivo
+            costo_auxiliar_dia, viatico_piloto_dia, viatico_auxiliar_dia, viatico_guia_dia, hotel_dia, margen_objetivo,
+            seguro_mercaderia_anual, cantidad_camiones, viajes_anuales, dias_depreciacion_mes, dias_gastos_mes, gastos_administracion, gastos_mantenimiento, gastos_seguridad, gastos_predios, dias_laborales_mes
      FROM tms_cotizacion_costeo_parametros
      WHERE empresa_id = ? AND vigente_desde <= ?
      ORDER BY vigente_desde DESC
@@ -117,6 +121,7 @@ export async function obtenerParametrosCosteoVigentes(empresaId: number, fecha: 
   const r = rows[0];
   if (!r) throw new ErrorCosteoConfig(MENSAJE_SIN_PARAMETROS);
   const parametros: ParametrosEconomicosCosteo = {
+    ...mapCamposExcel(r, CAMPOS_EXCEL_PARAMETROS),
     precioCombustibleGalon: num(r.precio_combustible_galon),
     ivaTasa: num(r.iva_tasa),
     costoPilotoDia: num(r.costo_piloto_dia),
@@ -173,6 +178,7 @@ export async function guardarSnapshotCosteoTx(
   p: { empresaId: number; cotizacionId: number; cotizacionCodigo: string; usuario: string | null; costeo: CosteoPreparado },
 ): Promise<number> {
   const { perfil, input, resultado } = p.costeo;
+  const monetario = (v: number | null) => resultado.motorVersion === "COSTEO_EXCEL_2026" ? decimalCosteoSql(v) : v;
   if (!sumaComponentesCoincide(resultado)) {
     throw new Error("Los componentes del costeo no coinciden con el costo operativo.");
   }
@@ -191,14 +197,14 @@ export async function guardarSnapshotCosteoTx(
       `INSERT INTO tms_cotizacion_costeos
         (empresa_id, cotizacion_id, perfil_id, perfil_codigo, perfil_nombre, perfil_snapshot, parametros_snapshot, input_snapshot,
          motor_version, costo_operativo, iva, costo_con_iva, margen_objetivo, precio_sugerido, precio_venta, utilidad_estimada,
-         margen_real, creado_por)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         margen_real, creado_por, resultado_snapshot)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         p.empresaId, p.cotizacionId, perfil.id, perfil.codigo, perfil.nombre,
         JSON.stringify(perfilSnapshot), JSON.stringify(input.parametros), JSON.stringify(inputParaSnapshot(input)),
-        COTIZACION_COSTEO_MOTOR_VERSION,
-        resultado.costoOperativo, resultado.iva, resultado.costoConIva, resultado.margenObjetivoAplicado, resultado.precioSugerido,
-        resultado.precioVenta, resultado.utilidadEstimada, resultado.margenReal, p.usuario,
+        resultado.motorVersion ?? COTIZACION_COSTEO_MOTOR_VERSION,
+        monetario(resultado.costoOperativo), monetario(resultado.iva), monetario(resultado.costoConIva), monetario(resultado.margenObjetivoAplicado), monetario(resultado.precioSugerido),
+        monetario(resultado.precioVenta), monetario(resultado.utilidadEstimada), monetario(resultado.margenReal), p.usuario, JSON.stringify(resultado),
       ],
     );
     costeoId = Number(res.insertId);
@@ -213,7 +219,7 @@ export async function guardarSnapshotCosteoTx(
     await conn.execute<ResultSetHeader>(
       `INSERT INTO tms_cotizacion_costeo_componentes (empresa_id, costeo_id, orden, clave, concepto, monto)
        VALUES ${componentes.map(() => "(?, ?, ?, ?, ?, ?)").join(", ")}`,
-      componentes.flatMap((c, i) => [p.empresaId, costeoId, i + 1, c.clave, c.concepto, c.monto]),
+      componentes.flatMap((c, i) => [p.empresaId, costeoId, i + 1, c.clave, c.concepto, monetario(c.monto)]),
     );
   }
 
@@ -229,6 +235,7 @@ export async function guardarSnapshotCosteoTx(
 }
 
 export type SnapshotCosteo = {
+  resultado?: ResultadoCosteoServicio | null;
   id: number;
   cotizacionId: number;
   perfilId: number | null;
@@ -260,7 +267,7 @@ export async function obtenerSnapshotCosteo(empresaId: number, cotizacionId: num
   const rows = await query<RowDataPacket[]>(
     `SELECT id, cotizacion_id, perfil_id, perfil_codigo, perfil_nombre, perfil_snapshot, parametros_snapshot, input_snapshot,
             motor_version, costo_operativo, iva, costo_con_iva, margen_objetivo, precio_sugerido, precio_venta,
-            utilidad_estimada, margen_real, creado_por, creado_en
+            utilidad_estimada, margen_real, creado_por, creado_en, resultado_snapshot
      FROM tms_cotizacion_costeos WHERE empresa_id = ? AND cotizacion_id = ? LIMIT 1`,
     [empresaId, cotizacionId],
   );
@@ -274,6 +281,7 @@ export async function obtenerSnapshotCosteo(empresaId: number, cotizacionId: num
     id: num(r.id),
     cotizacionId: num(r.cotizacion_id),
     perfilId: numONull(r.perfil_id),
+    resultado: r.resultado_snapshot == null ? null : json<ResultadoCosteoServicio>(r.resultado_snapshot),
     perfilCodigo: String(r.perfil_codigo),
     perfilNombre: String(r.perfil_nombre),
     perfil: json<PerfilCosteoUnidad>(r.perfil_snapshot),

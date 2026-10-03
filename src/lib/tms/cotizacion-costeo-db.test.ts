@@ -76,7 +76,8 @@ describe("Parámetros vigentes por fecha", () => {
     baseSimulada();
     const r = await obtenerParametrosCosteoVigentes(1, "2026-09-21");
     expect(r.vigenteDesde).toBe("2026-09-21");
-    expect(r.parametros).toEqual({ precioCombustibleGalon: 29.89, ivaTasa: 0.12, costoPilotoDia: 207.74, costoAuxiliarDia: 148.04, viaticoPilotoDia: 200, viaticoAuxiliarDia: 200, viaticoGuiaDia: 125, margenObjetivo: 0.2 });
+    expect(r.parametros).toMatchObject({ precioCombustibleGalon: 29.89, ivaTasa: 0.12, costoPilotoDia: 207.74, costoAuxiliarDia: 148.04, viaticoPilotoDia: 200, viaticoAuxiliarDia: 200, viaticoGuiaDia: 125, margenObjetivo: 0.2 });
+    expect(r.parametros.gastosAdministracion).toBeNull();
     expect("hotelDia" in r.parametros).toBe(false);
   });
   it("usa la fila más reciente cuyo vigente_desde <= fecha", async () => {
@@ -148,7 +149,24 @@ describe("Snapshot: guardar (INMUTABLE, misma transacción del llamador)", () =>
     await guardar(conn);
     const params = (conn.execute.mock.calls[0] as unknown as [string, unknown[]])[1];
     const r = costeo.resultado;
-    expect(params.slice(9)).toEqual([r.costoOperativo, r.iva, r.costoConIva, r.margenObjetivoAplicado, r.precioSugerido, r.precioVenta, r.utilidadEstimada, r.margenReal, "admin"]);
+    expect(params.slice(9, 18)).toEqual([r.costoOperativo, r.iva, r.costoConIva, r.margenObjetivoAplicado, r.precioSugerido, r.precioVenta, r.utilidadEstimada, r.margenReal, "admin"]);
+    expect(JSON.parse(String(params[18]))).toEqual(r);
+  });
+  it("V2 conserva override, margen objetivo y resultado completo; envía importes DECIMAL como texto", async () => {
+    const entrada = {...input,motorVersion:"COSTEO_EXCEL_2026",perfil:{...input.perfil,viajesMes:20,salarioPilotoMensual:4000,salarioAuxiliarMensual:3000},parametros:{...input.parametros,diasLaboralesMes:20},precioCombustibleOverride:43,margenObjetivo:.45};
+    const resultado = calcularCosteoServicio(entrada);
+    const conn = conexion();
+    await guardar(conn,{perfil:{...perfil,...entrada.perfil},input:entrada,resultado});
+    const [sql, params] = conn.execute.mock.calls[0] as unknown as [string,unknown[]];
+    expect(sql.match(/\?/g)).toHaveLength(params.length);
+    expect(params[8]).toBe("COSTEO_EXCEL_2026");
+    expect(params[9]).toBe(resultado.costoOperativo.toFixed(6));
+    expect(JSON.parse(String(params[7]))).toMatchObject({precioCombustibleOverride:43,margenObjetivo:.45});
+    expect(JSON.parse(String(params[18]))).toEqual(resultado);
+    expect(JSON.parse(String(params[5]))).toMatchObject({salarioPilotoMensual:4000,salarioAuxiliarMensual:3000});
+    expect(JSON.parse(String(params[6]))).not.toHaveProperty("salarioPilotoMensual");
+    expect(JSON.parse(String(params[18]))).toMatchObject({valoresUsados:{salarioPilotoMensual:4000,salarioAuxiliarMensual:3000,costoPilotoDia:200,costoAuxiliarDia:150}});
+    expect(input.parametros.precioCombustibleGalon).toBe(29.89);
   });
   it("inserta TODOS los componentes del motor, en orden estable 1..N, y su suma coincide con el costo operativo", async () => {
     const conn = conexion();
@@ -226,5 +244,13 @@ describe("Snapshot: leer", () => {
     vi.mocked(query).mockResolvedValue([] as never);
     expect(await obtenerSnapshotCosteo(2, 10)).toBeNull();
     expect(query).toHaveBeenCalledTimes(1);
+  });
+  it("lee el resultado V2 guardado sin consultar parámetros maestros ni ejecutar el motor",async()=>{
+    const resultado={motorVersion:"COSTEO_EXCEL_2026",margenObjetivoAplicado:.45,margenObjetivoMonto:870.21,subtotalComercial:2804.02,precioPorKm:14.28};
+    vi.mocked(query).mockResolvedValueOnce([{...fila,motor_version:"COSTEO_EXCEL_2026",resultado_snapshot:JSON.stringify(resultado)}] as never).mockResolvedValueOnce([] as never);
+    const s=await obtenerSnapshotCosteo(1,10);
+    expect(s!.resultado).toEqual(resultado);
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(query).mock.calls.every(([sql])=>!String(sql).includes("FROM tms_cotizacion_costeo_parametros"))).toBe(true);
   });
 });

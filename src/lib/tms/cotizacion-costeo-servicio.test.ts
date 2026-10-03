@@ -62,10 +62,12 @@ describe("El servidor arma TODO lo económico (el cliente solo manda datos opera
   it("el input del motor sale de la BD, no del cliente, y el resultado es el del motor puro", async () => {
     const { input, resultado, perfil, parametrosVigenteDesde } = await prepararCosteo(7, PAYLOAD, { fechaEmision: "2026-09-21", tarifaCotizada: 5000, incluyeIva: true });
     const { id: _id, ...perfilMotor } = PERFIL; void _id;
-    expect(input.perfil).toEqual(perfilMotor); expect(input.parametros).toEqual(PARAMETROS);
+    expect(input.perfil).toEqual({ ...perfilMotor, viajesMes: 20 }); expect(input.parametros).toEqual(PARAMETROS);
     expect(perfil.id).toBe(4); expect(parametrosVigenteDesde).toBe("2026-09-21");
     expect(resultado).toEqual(calcularCosteoServicio(input));
-    expect(resultado.costoOperativo).toBeCloseTo(3907.2090967741933, 6); // Puerto Barrios del libro
+    expect(resultado.motorVersion).toBe("COSTEO_EXCEL_2026");
+    expect(resultado.gps).toBe(8.71); // GPS por viaje, ya no diario V1.
+    expect(resultado.costoOperativo).toBe(3910.12);
   });
   it("solo viajan al motor las claves informadas: vacío/null = no informado, nunca 0 implícito", async () => {
     const { input } = await prepararCosteo(7, { perfilId: 4, distanciaKm: 10, diasServicio: 1, cantidadPilotos: 1, cantidadAuxiliares: 0, incluirGps: false, incluirSeguroVehiculo: false, hotelTotal: null, otrosCostos: [] }, { fechaEmision: "2026-09-21" });
@@ -97,7 +99,7 @@ describe("Precio de venta = tarifa comercial TOTAL CON IVA (IVA de la tarifa, no
   it("el IVA del costo interno (ivaTasa de parámetros) es independiente del IVA comercial", async () => {
     vi.mocked(obtenerParametrosCosteoVigentes).mockResolvedValue({ vigenteDesde: "2026-09-21", parametros: { ...PARAMETROS, ivaTasa: 0.05 } });
     const r = await prepararCosteo(7, PAYLOAD, { fechaEmision: "2026-09-21", tarifaCotizada: 1000, incluyeIva: false });
-    expect(r.resultado.iva).toBeCloseTo(r.resultado.costoOperativo * 0.05, 8);
+    expect(r.resultado.iva).toBe(Number((r.resultado.subtotalComercial! * 0.05).toFixed(2)));
     expect(r.input.precioVenta).toBe(1120);
   });
 });
