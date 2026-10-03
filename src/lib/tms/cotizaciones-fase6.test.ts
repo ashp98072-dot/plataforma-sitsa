@@ -149,11 +149,17 @@ describe("COTIZACIONES FASE 6 — formulario", () => {
     expect(panel).toContain("if (elegido) p.onPerfilElegido?.(elegido.nombre);");
   });
 
-  it("botón «PDF comercial»: un enlace directo, sin pedir la marca al descargar", () => {
-    const enlace = page.slice(pos("PDF comercial") - 200, pos("PDF comercial") + 20);
-    expect(enlace).toContain("/tms/cotizaciones/${c.id}/pdf");
-    expect(enlace).toContain("<a href=");
-    expect(page).not.toContain("Descargar PDF");
+  it("PDF comercial: «Ver PDF» abre otra pestaña y «Descargar PDF» descarga — ninguno reemplaza la pestaña de la app", () => {
+    // Antes era un único <a href> en la misma pestaña: Chrome terminaba mostrando el archivo descargado en lugar de la app.
+    const ver = page.slice(pos("<a href={`/api/empresas/${slug}/tms/cotizaciones/${c.id}/pdf?modo=ver`}"), pos(">Ver PDF</a>"));
+    expect(ver).toContain('target="_blank"');
+    expect(ver).toContain('rel="noopener noreferrer"');
+    const descargar = page.slice(pos("<a href={`/api/empresas/${slug}/tms/cotizaciones/${c.id}/pdf`}"), pos(">Descargar PDF</a>"));
+    expect(descargar).toContain("download={nombreArchivoCotizacionPdf(c.codigo, c.documentoEmisor)}");
+    expect(descargar).not.toContain("target=");
+    expect(page).not.toContain(">PDF comercial</a>");
+    // sin pedir la marca al descargar: la marca sale de la cotización guardada
+    expect(page.slice(pos(">Ver PDF</a>") - 400, pos(">Descargar PDF</a>"))).not.toContain("prompt(");
   });
 
   it("el detalle de la lista muestra marca, atención y unidad guardadas", () => {

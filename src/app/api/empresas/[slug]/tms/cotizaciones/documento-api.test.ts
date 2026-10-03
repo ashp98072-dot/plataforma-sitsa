@@ -157,6 +157,30 @@ describe("GET /tms/cotizaciones/[id]/pdf", () => {
     expect(Buffer.from(await res.arrayBuffer()).subarray(0, 4).toString("latin1")).toBe("%PDF");
   });
 
+  it("?modo=ver => inline (se muestra en otra pestaña), mismo nombre, mismo PDF, sin caché", async () => {
+    const { res } = await texto(() => pdf(new Request("http://x/api?modo=ver"), ctx()));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("application/pdf");
+    expect(res.headers.get("Content-Disposition")).toBe('inline; filename="COT-000123-Monaco.pdf"');
+    expect(res.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(Buffer.from(await res.arrayBuffer()).subarray(0, 4).toString("latin1")).toBe("%PDF");
+  });
+
+  it.each(["", "descargar", "VER", "inline"])("modo=%j (o desconocido) => attachment, comportamiento anterior", async (modo) => {
+    const { res } = await texto(() => pdf(new Request(`http://x/api?modo=${modo}`), ctx()));
+    expect(res.headers.get("Content-Disposition")).toBe('attachment; filename="COT-000123-Monaco.pdf"');
+  });
+
+  it("?modo=ver respeta permiso y empresa igual que la descarga", async () => {
+    vi.mocked(requireTenantCotizaciones).mockResolvedValue({ error: new Response("{}", { status: 403 }) } as never);
+    expect((await pdf(new Request("http://x/api?modo=ver"), ctx())).status).toBe(403);
+    expect(obtenerCotizacion).not.toHaveBeenCalled();
+    vi.mocked(requireTenantCotizaciones).mockResolvedValue({ error: null, empresa: { id: 7, nombre: "x" }, session: { username: "admin" } } as never);
+    vi.mocked(obtenerCotizacion).mockResolvedValue(null);
+    expect((await pdf(new Request("http://x/api?modo=ver"), ctx("500"))).status).toBe(404);
+    expect(obtenerCotizacion).toHaveBeenCalledWith(7, 500);
+  });
+
   it("KUIQTRANS => COT-000123-KuiqTrans.pdf y plantilla KuiqTrans (logo real), aunque la empresa activa se llame «Kuiqtrans / Logiservicios Mónaco»", async () => {
     vi.mocked(obtenerCotizacion).mockResolvedValue({ ...COTIZACION_DOC, documentoEmisor: "KUIQTRANS" });
     const { res, textos, imagenes } = await texto(() => pdf(new Request("http://x/api"), ctx()));

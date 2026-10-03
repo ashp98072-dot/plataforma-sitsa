@@ -15,6 +15,7 @@ import {
   LIMITE_CONDICIONES_CREDITO,
   MARCAS_DOCUMENTO,
   TIPOS_COMBUSTIBLE_REFERENCIA,
+  nombreArchivoCotizacionPdf,
   textoCombustibleReferencia,
   type DocumentoEmisor,
   type TipoCombustibleReferencia,
@@ -588,7 +589,9 @@ export default function CotizacionesPage() {
                   {expandidoId === c.id ? "Ocultar detalle" : "Ver detalle"}
                 </button>
                 {c.estado === "Borrador" ? <button type="button" onClick={() => editar(c)} className="text-[var(--accent)]">Editar</button> : null}
-                <a href={`/api/empresas/${slug}/tms/cotizaciones/${c.id}/pdf`} className="rounded border border-[var(--border)] px-2 py-1">PDF comercial</a>
+                {/* PDF comercial: "Ver" en OTRA pestaña (inline) y "Descargar" con `download` — ninguno reemplaza esta pestaña. */}
+                <a href={`/api/empresas/${slug}/tms/cotizaciones/${c.id}/pdf?modo=ver`} target="_blank" rel="noopener noreferrer" className="rounded border border-[var(--border)] px-2 py-1">Ver PDF</a>
+                <a href={`/api/empresas/${slug}/tms/cotizaciones/${c.id}/pdf`} download={nombreArchivoCotizacionPdf(c.codigo, c.documentoEmisor)} className="rounded border border-[var(--border)] px-2 py-1">Descargar PDF</a>
                 <button type="button" onClick={() => void duplicar(c.id)} className="rounded border border-[var(--border)] px-2 py-1">Duplicar</button>
                 {c.estado === "Borrador" ? <button type="button" onClick={() => void cambiarEstado(c.id, "Enviada")} className="rounded bg-amber-600 px-2 py-1 text-white">Marcar enviada</button> : null}
                 {c.estado === "Enviada" ? (
