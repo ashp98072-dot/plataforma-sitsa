@@ -4,6 +4,7 @@ import { requireTenantCotizaciones, requireTenantCotizacionesCosteo } from "@/li
 import { actualizarCotizacion, obtenerCotizacion } from "@/lib/tms/cotizaciones";
 import { DOCUMENTOS_EMISOR } from "@/lib/tms/cotizacion-documento";
 import { ErrorCosteoYaRegistrado } from "@/lib/tms/cotizacion-costeo-db";
+import { creditoCombustibleSchema } from "@/lib/tms/cotizacion-credito-combustible-schema";
 import { costeoPayloadSchema, mensajeErrorCosteo, prepararCosteo } from "@/lib/tms/cotizacion-costeo-servicio";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
@@ -53,6 +54,8 @@ const schema = z.object({
   // aquí: cambiar de marca en el formulario y no tocar el mensaje NO lo pisa en silencio.
   mensajeComercial: z.string().max(2000).nullable().optional(),
   cierreComercial: z.string().max(2000).nullable().optional(),
+  // COTIZACIONES-CREDITO-COMBUSTIBLE — condiciones de crédito + combustible de referencia (snapshot comercial).
+  ...creditoCombustibleSchema,
   // Rutas/destinos adicionales: si se omite, las líneas existentes no se tocan; si se manda
   // (incluido vacío []), reemplaza por completo las líneas adicionales guardadas.
   lineasAdicionales: z.array(lineaAdicionalSchema).max(50).optional(),

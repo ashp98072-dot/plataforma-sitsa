@@ -135,7 +135,7 @@ describe("crearCotizacion — snapshot histórico (COTIZADOR-TMS-1)", () => {
     expect(params).toContain(1250); // tarifa_referencia
   });
 
-  it("mantiene alineadas 29 columnas, 29 placeholders y 29 parámetros en el INSERT (23 + 4 del documento comercial + 2 de presentación comercial)", async () => {
+  it("mantiene alineadas 32 columnas, 32 placeholders y 32 parámetros en el INSERT (23 + 4 del documento comercial + 2 de presentación comercial + 3 de crédito/combustible)", async () => {
     const conn = conexion();
     vi.mocked(query).mockResolvedValue([filaCotizacion()] as never);
     await crearCotizacion(7, { clienteId: 3, rutaId: 5, tarifaCotizada: 1400, fechaEmision: "2026-09-08" }, "admin");
@@ -144,9 +144,9 @@ describe("crearCotizacion — snapshot histórico (COTIZADOR-TMS-1)", () => {
     const columnas = sql.match(/tms_cotizaciones\s*\(([\s\S]*?)\)\s*VALUES/i)?.[1].split(",").map((v) => v.trim()).filter(Boolean) ?? [];
     const placeholders = sql.match(/VALUES\s*\(([\s\S]*?)\)/i)?.[1].match(/\?/g) ?? [];
     const parametros = insertCall[1] as unknown[];
-    expect(columnas).toHaveLength(29);
-    expect(placeholders).toHaveLength(29);
-    expect(parametros).toHaveLength(29);
+    expect(columnas).toHaveLength(32);
+    expect(placeholders).toHaveLength(32);
+    expect(parametros).toHaveLength(32);
   });
 
   it("una vez guardada, cambios posteriores en la ruta maestra NO se reflejan (el snapshot ya quedó fijo en la fila)", async () => {

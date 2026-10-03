@@ -1608,6 +1608,10 @@ CREATE TABLE IF NOT EXISTS tms_cotizaciones (
   -- ver sql/migrate-2026-09-cotizaciones-presentacion-comercial.sql — snapshot editable del texto del PDF.
   mensaje_comercial TEXT NULL,
   cierre_comercial TEXT NULL,
+  -- ver sql/migrate-2026-10-cotizaciones-credito-combustible.sql — datos comerciales por cotización (snapshot).
+  condiciones_credito VARCHAR(300) NULL,
+  combustible_referencia_tipo VARCHAR(20) NULL,       -- 'diesel' | 'gasolina' | 'otro' (validado en la aplicación)
+  combustible_referencia_precio DECIMAL(12,2) NULL,   -- Q por galón
   creado_por VARCHAR(100) NULL,
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

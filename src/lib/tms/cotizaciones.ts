@@ -5,9 +5,13 @@ import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { guardarSnapshotCosteoTx, type CosteoPreparado } from "./cotizacion-costeo-db";
 import {
   DOCUMENTO_EMISOR_DEFAULT,
+  LIMITE_CONDICIONES_CREDITO,
   LIMITE_TEXTO_DOCUMENTO,
   LIMITE_TEXTO_MENSAJE_COMERCIAL,
   esDocumentoEmisor,
+  esPrecioCombustibleValido,
+  esTipoCombustibleReferencia,
+  type TipoCombustibleReferencia,
   normalizarDocumentoEmisor,
   textoOpcional,
   type DocumentoEmisor,
@@ -147,6 +151,13 @@ export type Cotizacion = {
   /** Snapshot del texto del PDF — ver mensajeComercial en cotizacion-documento.ts (fallback determinista si es null). */
   mensajeComercial: string | null;
   cierreComercial: string | null;
+  /**
+   * COTIZACIONES-CREDITO-COMBUSTIBLE — datos COMERCIALES guardados con la cotización (snapshot: nunca se recalculan).
+   * NULL en cotizaciones históricas. Independientes de `tarifaReferencia` y de los cálculos internos.
+   */
+  condicionesCredito: string | null;
+  combustibleReferenciaTipo: TipoCombustibleReferencia | null;
+  combustibleReferenciaPrecio: number | null;
   creadoPor: string | null;
   creadoEn: string | null;
   actualizadoEn: string | null;
@@ -219,13 +230,22 @@ function mapRow(r: RowDataPacket): Omit<Cotizacion, "lineasAdicionales"> {
     unidadDescripcion: r.unidad_descripcion != null ? String(r.unidad_descripcion) : null,
     mensajeComercial: r.mensaje_comercial != null ? String(r.mensaje_comercial) : null,
     cierreComercial: r.cierre_comercial != null ? String(r.cierre_comercial) : null,
+    condicionesCredito: r.condiciones_credito != null ? String(r.condiciones_credito) : null,
+    // Lectura tolerante: un valor fuera del catálogo (dato manual en BD) no rompe el listado, se trata como ausente.
+    combustibleReferenciaTipo: esTipoCombustibleReferencia(r.combustible_referencia_tipo) ? r.combustible_referencia_tipo : null,
+    combustibleReferenciaPrecio: r.combustible_referencia_precio != null ? Number(r.combustible_referencia_precio) : null,
     creadoPor: r.creado_por != null ? String(r.creado_por) : null,
     creadoEn: r.creado_en != null ? String(r.creado_en) : null,
     actualizadoEn: r.actualizado_en != null ? String(r.actualizado_en) : null,
   };
 }
 
-const SELECT = `
+/**
+ * COTIZACIONES-CREDITO-COMBUSTIBLE — `conCreditoCombustible=false` solo lo usan las LECTURAS (listar/obtener) como
+ * respaldo si la migración aún no se aplicó en esta instalación (los datos llegan como NULL). Las ESCRITURAS
+ * (crear/editar, incluido su SELECT ... FOR UPDATE) siempre nombran las columnas: sin migración fallan a la vista.
+ */
+const selectCotizaciones = (conCreditoCombustible: boolean) => `
   SELECT id, empresa_id, codigo, cliente_id, cliente_nombre, ruta_id, ruta_codigo_historico,
          origen_texto, destino_texto, tarifa_referencia, tarifa_cotizada,
          incluye_iva, moneda, DATE_FORMAT(fecha_emision, '%Y-%m-%d') AS fecha_emision,
@@ -234,9 +254,26 @@ const SELECT = `
          km_incluidos, tarifa_km_adicional, condiciones_adicionales, observaciones,
          documento_emisor, atencion_nombre, atencion_cargo, unidad_descripcion,
          mensaje_comercial, cierre_comercial,
+         ${conCreditoCombustible ? "condiciones_credito, combustible_referencia_tipo, combustible_referencia_precio," : ""}
          creado_por, creado_en, actualizado_en
   FROM tms_cotizaciones
 `;
+const SELECT = selectCotizaciones(true);
+
+const esColumnaInexistente = (e: unknown) => {
+  const err = e as { code?: string; errno?: number } | null;
+  return err?.code === "ER_BAD_FIELD_ERROR" || err?.errno === 1054;
+};
+
+/** Lectura con respaldo (ver selectCotizaciones): otro error de BD se propaga tal cual. */
+async function leerCotizaciones(sufijo: string, params: SqlParams): Promise<RowDataPacket[]> {
+  try {
+    return await query<RowDataPacket[]>(`${SELECT} ${sufijo}`, params);
+  } catch (e) {
+    if (!esColumnaInexistente(e)) throw e;
+    return query<RowDataPacket[]>(`${selectCotizaciones(false)} ${sufijo}`, params);
+  }
+}
 
 export type FiltrosCotizaciones = {
   clienteId?: number;
@@ -252,17 +289,14 @@ export async function listarCotizaciones(empresaId: number, filtros: FiltrosCoti
   if (filtros.estado) { condiciones.push("estado = ?"); params.push(filtros.estado); }
   if (filtros.fechaDesde) { condiciones.push("fecha_emision >= ?"); params.push(filtros.fechaDesde); }
   if (filtros.fechaHasta) { condiciones.push("fecha_emision <= ?"); params.push(filtros.fechaHasta); }
-  const rows = await query<RowDataPacket[]>(
-    `${SELECT} WHERE ${condiciones.join(" AND ")} ORDER BY fecha_emision DESC, id DESC`,
-    params,
-  );
+  const rows = await leerCotizaciones(`WHERE ${condiciones.join(" AND ")} ORDER BY fecha_emision DESC, id DESC`, params);
   const cotizaciones = rows.map(mapRow);
   const mapaLineas = await lineasDeCotizaciones(empresaId, cotizaciones.map((c) => c.id));
   return cotizaciones.map((c) => ({ ...c, lineasAdicionales: mapaLineas.get(c.id) ?? [] }));
 }
 
 export async function obtenerCotizacion(empresaId: number, id: number): Promise<Cotizacion | null> {
-  const rows = await query<RowDataPacket[]>(`${SELECT} WHERE id = ? AND empresa_id = ? LIMIT 1`, [id, empresaId]);
+  const rows = await leerCotizaciones("WHERE id = ? AND empresa_id = ? LIMIT 1", [id, empresaId]);
   if (!rows[0]) return null;
   const cotizacion = mapRow(rows[0]);
   const mapaLineas = await lineasDeCotizaciones(empresaId, [cotizacion.id]);
@@ -294,6 +328,10 @@ export type CotizacionInput = {
   /** Snapshot del texto del PDF; si se omite al CREAR, el llamador (route.ts) resuelve el default de Ajustes/fallback antes de llamar. */
   mensajeComercial?: string | null;
   cierreComercial?: string | null;
+  /** COTIZACIONES-CREDITO-COMBUSTIBLE — opcionales e independientes entre sí; null/"" = sin dato. */
+  condicionesCredito?: string | null;
+  combustibleReferenciaTipo?: TipoCombustibleReferencia | null;
+  combustibleReferenciaPrecio?: number | null;
   /**
    * Rutas/destinos adicionales a la línea principal (orden 2 en adelante).
    * CREAR: si se omite, la cotización queda con una sola línea (comportamiento
@@ -377,6 +415,23 @@ function validarMensajesComerciales(input: Pick<CotizacionInput, "mensajeComerci
   }
 }
 
+/**
+ * COTIZACIONES-CREDITO-COMBUSTIBLE — validación server-side (la API ya filtra con zod; esta capa es la autoridad
+ * final para cualquier llamador). Los tres campos son opcionales e independientes: se puede indicar el tipo sin
+ * precio o el precio sin tipo — no hay regla de negocio que obligue a uno por el otro.
+ */
+function validarCreditoCombustible(input: Pick<CotizacionInput, "condicionesCredito" | "combustibleReferenciaTipo" | "combustibleReferenciaPrecio">) {
+  if ((textoOpcional(input.condicionesCredito)?.length ?? 0) > LIMITE_CONDICIONES_CREDITO) {
+    throw new Error(`Las condiciones de crédito no pueden exceder ${LIMITE_CONDICIONES_CREDITO} caracteres.`);
+  }
+  if (input.combustibleReferenciaTipo != null && !esTipoCombustibleReferencia(input.combustibleReferenciaTipo)) {
+    throw new Error("Tipo de combustible de referencia inválido.");
+  }
+  if (input.combustibleReferenciaPrecio != null && !esPrecioCombustibleValido(input.combustibleReferenciaPrecio)) {
+    throw new Error("El precio de referencia del combustible debe ser mayor a cero y tener como máximo 2 decimales.");
+  }
+}
+
 const LIMITE_LINEAS_ADICIONALES = 50;
 /** Mismo límite que las columnas origen_texto/destino_texto de tms_cotizaciones (VARCHAR(300)). */
 const LIMITE_TEXTO_UBICACION = 300;
@@ -403,13 +458,14 @@ function validarLineasAdicionales(lineas: LineaAdicionalInput[] | undefined) {
   });
 }
 
-function validarInput(input: Pick<CotizacionInput, "fechaEmision" | "tarifaCotizada" | "clienteId" | "documentoEmisor" | "atencionNombre" | "atencionCargo" | "unidadDescripcion" | "mensajeComercial" | "cierreComercial">) {
+function validarInput(input: Pick<CotizacionInput, "fechaEmision" | "tarifaCotizada" | "clienteId" | "documentoEmisor" | "atencionNombre" | "atencionCargo" | "unidadDescripcion" | "mensajeComercial" | "cierreComercial" | "condicionesCredito" | "combustibleReferenciaTipo" | "combustibleReferenciaPrecio">) {
   if (!input.clienteId) throw new Error("Cliente requerido.");
   if (!input.fechaEmision) throw new Error("Fecha de emisión requerida.");
   if (!(input.tarifaCotizada > 0)) throw new Error("La tarifa cotizada debe ser mayor a cero.");
   validarDocumentoEmisor(input.documentoEmisor);
   validarTextosDocumento(input);
   validarMensajesComerciales(input);
+  validarCreditoCombustible(input);
 }
 
 /** INSERT puro (sin DELETE previo) — usado al crear. orden empieza en 2 (1 es la línea principal). */
@@ -460,10 +516,11 @@ export async function crearCotizacion(
         (empresa_id, codigo, cliente_id, cliente_nombre, ruta_id, ruta_codigo_historico, origen_texto, destino_texto,
          tarifa_referencia, tarifa_cotizada, incluye_iva, fecha_emision, fecha_vencimiento,
          piloto_incluido, gps_incluido, seguro_mercaderia_incluido, seguro_terceros_incluido, servicio_refrigerado,
-         km_incluidos, tarifa_km_adicional, condiciones_adicionales, observaciones, creado_por,
+         km_incluidos, tarifa_km_adicional, condiciones_adicionales, observaciones,
+         condiciones_credito, combustible_referencia_tipo, combustible_referencia_precio, creado_por,
          documento_emisor, atencion_nombre, atencion_cargo, unidad_descripcion,
          mensaje_comercial, cierre_comercial)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         empresaId,
         "", // se completa abajo, mismo criterio que fondos.ts (código derivado del id, sin condición de carrera)
@@ -487,6 +544,10 @@ export async function crearCotizacion(
         input.tarifaKmAdicional ?? null,
         input.condicionesAdicionales?.trim() || null,
         input.observaciones?.trim() || null,
+        // COTIZACIONES-CREDITO-COMBUSTIBLE — snapshot comercial (null = sin dato).
+        textoOpcional(input.condicionesCredito),
+        input.combustibleReferenciaTipo ?? null,
+        input.combustibleReferenciaPrecio ?? null,
         creadoPor ?? null,
         input.documentoEmisor ?? DOCUMENTO_EMISOR_DEFAULT,
         textoOpcional(input.atencionNombre),
@@ -556,6 +617,7 @@ export async function actualizarCotizacion(
     validarDocumentoEmisor(cambios.documentoEmisor);
     validarTextosDocumento(cambios);
     validarMensajesComerciales(cambios);
+    validarCreditoCombustible(cambios);
     validarLineasAdicionales(cambios.lineasAdicionales);
 
     const origenTexto = cambios.origenTexto !== undefined
@@ -572,6 +634,7 @@ export async function actualizarCotizacion(
          fecha_emision = ?, fecha_vencimiento = ?, piloto_incluido = ?, gps_incluido = ?,
          seguro_mercaderia_incluido = ?, seguro_terceros_incluido = ?, servicio_refrigerado = ?, km_incluidos = ?, tarifa_km_adicional = ?,
          condiciones_adicionales = ?, observaciones = ?,
+         condiciones_credito = ?, combustible_referencia_tipo = ?, combustible_referencia_precio = ?,
          documento_emisor = ?, atencion_nombre = ?, atencion_cargo = ?, unidad_descripcion = ?,
          mensaje_comercial = ?, cierre_comercial = ?
        WHERE id = ? AND empresa_id = ?`,
@@ -596,6 +659,10 @@ export async function actualizarCotizacion(
         cambios.tarifaKmAdicional !== undefined ? cambios.tarifaKmAdicional : actual.tarifaKmAdicional,
         cambios.condicionesAdicionales !== undefined ? cambios.condicionesAdicionales?.trim() || null : actual.condicionesAdicionales,
         cambios.observaciones !== undefined ? cambios.observaciones?.trim() || null : actual.observaciones,
+        // COTIZACIONES-CREDITO-COMBUSTIBLE — ausente = se conserva lo guardado; null = se borra; valor = se reemplaza.
+        cambios.condicionesCredito !== undefined ? textoOpcional(cambios.condicionesCredito) : actual.condicionesCredito,
+        cambios.combustibleReferenciaTipo !== undefined ? cambios.combustibleReferenciaTipo : actual.combustibleReferenciaTipo,
+        cambios.combustibleReferenciaPrecio !== undefined ? cambios.combustibleReferenciaPrecio : actual.combustibleReferenciaPrecio,
         cambios.documentoEmisor ?? actual.documentoEmisor,
         cambios.atencionNombre !== undefined ? textoOpcional(cambios.atencionNombre) : actual.atencionNombre,
         cambios.atencionCargo !== undefined ? textoOpcional(cambios.atencionCargo) : actual.atencionCargo,
@@ -662,7 +729,7 @@ export async function cambiarEstadoCotizacion(
 /**
  * "Duplicar para crear una nueva versión" — copia los mismos datos
  * (cliente, ruta, tarifas, condiciones, marca/atención/cargo/unidad del
- * documento comercial) a una cotización NUEVA en
+ * documento comercial, condiciones de crédito y combustible de referencia) a una cotización NUEVA en
  * Borrador con código propio y fecha de emisión de hoy; la original NO
  * se modifica. No requiere una columna de "versión anterior": es
  * simplemente un alta nueva pre-llenada, mismo criterio que "duplicar"
@@ -699,6 +766,10 @@ export async function duplicarCotizacion(
     unidadDescripcion: original.unidadDescripcion,
     mensajeComercial: original.mensajeComercial,
     cierreComercial: original.cierreComercial,
+    // COTIZACIONES-CREDITO-COMBUSTIBLE — parte del snapshot comercial: se copian tal cual, sin recalcular.
+    condicionesCredito: original.condicionesCredito,
+    combustibleReferenciaTipo: original.combustibleReferenciaTipo,
+    combustibleReferenciaPrecio: original.combustibleReferenciaPrecio,
     lineasAdicionales: original.lineasAdicionales.map((l) => ({
       origenTexto: l.origenTexto,
       destinoTexto: l.destinoTexto,

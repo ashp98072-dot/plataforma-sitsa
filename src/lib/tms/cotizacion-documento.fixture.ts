@@ -12,6 +12,8 @@ export const COTIZACION_DOC: Cotizacion = {
   unidadDescripcion: "Camión 5 toneladas",
   // null a propósito: ejercita el fallback determinista de MARCAS_DOCUMENTO (ver construirDocumentoComercial).
   mensajeComercial: null, cierreComercial: null,
+  // null a propósito: cotización histórica sin condiciones de crédito ni combustible de referencia.
+  condicionesCredito: null, combustibleReferenciaTipo: null, combustibleReferenciaPrecio: null,
   creadoPor: "admin", creadoEn: "2026-09-08 10:00:00", actualizadoEn: null,
   lineasAdicionales: [],
 };
