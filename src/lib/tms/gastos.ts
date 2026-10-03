@@ -14,6 +14,8 @@ import { crearFirmaInterna } from "@/lib/firmas/firmas-internas";
 import { leerBytesFirmaGuardada } from "@/lib/firmas/usuario-firmas";
 import { sha256Hex } from "@/lib/firmas/imagen-firma";
 import { borrarUpload, guardarUpload } from "@/lib/uploads";
+import { CAMPOS_DOMINIO_GASTOS } from "@/lib/tms/validacion-fondos-gastos";
+import { ErrorDominioFormulario, conLinea, type EstadoDominio } from "@/lib/validacion-formulario";
 
 /**
  * TMS-GASTOS-REPORTES-1 (fase 1) — gastos operativos asociados
@@ -43,8 +45,9 @@ import { borrarUpload, guardarUpload } from "@/lib/uploads";
  * autorizarGasto) — el resto de errores de este archivo siguen siendo
  * `Error` simples, y la API los trata como 400, sin cambios.
  */
-export class ErrorGasto extends Error {
-  constructor(message: string, public status = 400) { super(message); }
+export class ErrorGasto extends ErrorDominioFormulario {
+  // Error de dominio explícito con su estado HTTP (400/403/404/409): el helper compartido lo responde con ese estado y mensaje.
+  constructor(message: string, status: EstadoDominio = 400) { super(message, status); this.name = "ErrorGasto"; }
 }
 
 /** Identidad real de sesión (nunca username) para una firma de Gasto — mismo tipo que IdentidadFirmante en fondos.ts. */
@@ -133,10 +136,10 @@ export function normalizarDestinoPago(
 ): string | null {
   const limpio = valor?.trim() || null;
   if (metodoPago !== "Transferencia móvil") return limpio;
-  if (!limpio) throw new Error("Ingresa el número de transferencia móvil.");
+  if (!limpio) throw new ErrorDominioFormulario("Ingresa el número de transferencia móvil.");
   const normalizado = limpio.replace(/[\s-]/g, "");
   if (!REGEX_TRANSFERENCIA_MOVIL.test(normalizado)) {
-    throw new Error('El número de transferencia móvil debe tener entre 8 y 15 dígitos (puede iniciar con "+").');
+    throw new ErrorDominioFormulario('El número de transferencia móvil debe tener entre 8 y 15 dígitos (puede iniciar con "+").');
   }
   return normalizado;
 }
@@ -157,7 +160,7 @@ async function resolverDestinoEmpleadoTx(conn: PoolConnection, empresaId: number
   if (override !== undefined) return normalizarDestinoPago(metodo, override);
   if (empleadoId == null) return normalizarDestinoPago(metodo, null);
   const rows = await queryConn<RowDataPacket[]>(conn, "SELECT cuenta_bancaria, telefono FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1", [empleadoId, empresaId]);
-  if (!rows[0]) throw new Error("El empleado indicado no pertenece a esta empresa.");
+  if (!rows[0]) throw new ErrorDominioFormulario("El empleado indicado no pertenece a esta empresa.");
   return normalizarDestinoPago(metodo, destinoPagoEmpleado(metodo, {
     cuentaBancaria: rows[0].cuenta_bancaria != null ? String(rows[0].cuenta_bancaria) : null,
     telefono: rows[0].telefono != null ? String(rows[0].telefono) : null,
@@ -565,19 +568,19 @@ async function validarReferenciasGastoTx(
 ): Promise<void> {
   if (input.empleadoId != null) {
     const rows = await queryConn<RowDataPacket[]>(conn, "SELECT id FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1", [input.empleadoId, empresaId]);
-    if (!rows[0]) throw new Error("El empleado indicado no pertenece a esta empresa.");
+    if (!rows[0]) throw new ErrorDominioFormulario("El empleado indicado no pertenece a esta empresa.");
   }
   if (input.vehiculoId != null) {
     const rows = await queryConn<RowDataPacket[]>(conn, "SELECT id FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1", [input.vehiculoId, empresaId]);
-    if (!rows[0]) throw new Error("El vehículo indicado no pertenece a esta empresa.");
+    if (!rows[0]) throw new ErrorDominioFormulario("El vehículo indicado no pertenece a esta empresa.");
   }
   if (input.clienteId != null) {
     const rows = await queryConn<RowDataPacket[]>(conn, "SELECT id FROM tms_clientes WHERE id = ? AND empresa_id = ? LIMIT 1", [input.clienteId, empresaId]);
-    if (!rows[0]) throw new Error("El cliente indicado no pertenece a esta empresa.");
+    if (!rows[0]) throw new ErrorDominioFormulario("El cliente indicado no pertenece a esta empresa.");
   }
   if (input.planId != null) {
     const rows = await queryConn<RowDataPacket[]>(conn, "SELECT id FROM tms_planes_viaje WHERE id = ? AND empresa_id = ? LIMIT 1", [input.planId, empresaId]);
-    if (!rows[0]) throw new Error("El viaje/plan indicado no pertenece a esta empresa.");
+    if (!rows[0]) throw new ErrorDominioFormulario("El viaje/plan indicado no pertenece a esta empresa.");
   }
 }
 
@@ -611,7 +614,7 @@ async function resolverIdentidadAdministrativaGastoTx(
   let solicitanteUsuario: { nombre: string; rol: string | null } | null = null;
   if (input.solicitanteUsuarioId != null) {
     solicitanteUsuario = await resolverSolicitanteOperacionesTx(conn, empresaId, input.solicitanteUsuarioId);
-    if (!solicitanteUsuario) throw new Error("El usuario solicitante indicado no pertenece a esta empresa.");
+    if (!solicitanteUsuario) throw new ErrorDominioFormulario("El usuario solicitante indicado no pertenece a esta empresa.");
   }
   return { entidadRequirente, requirenteUsuario, solicitanteUsuario };
 }
@@ -637,21 +640,21 @@ async function resolverSnapshotLineaGastoTx(
   let cargo: string | null = null;
   if (input.empleadoId != null) {
     const rows = await queryConn<RowDataPacket[]>(conn, "SELECT nombre, puesto FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1", [input.empleadoId, empresaId]);
-    if (!rows[0]) throw new Error("El empleado indicado no pertenece a esta empresa.");
+    if (!rows[0]) throw new ErrorDominioFormulario("El empleado indicado no pertenece a esta empresa.");
     empleadoNombre = String(rows[0].nombre);
     cargo = rows[0].puesto != null ? String(rows[0].puesto) : null;
   }
   let placa: string | null = null;
   if (input.vehiculoId != null) {
     const rows = await queryConn<RowDataPacket[]>(conn, "SELECT placa FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1", [input.vehiculoId, empresaId]);
-    if (!rows[0]) throw new Error("El vehículo indicado no pertenece a esta empresa.");
+    if (!rows[0]) throw new ErrorDominioFormulario("El vehículo indicado no pertenece a esta empresa.");
     placa = String(rows[0].placa);
   }
   let clienteId = input.clienteId ?? null;
   let clienteNombre: string | null = null;
   if (input.clienteId != null) {
     const rows = await queryConn<RowDataPacket[]>(conn, "SELECT nombre FROM tms_clientes WHERE id = ? AND empresa_id = ? LIMIT 1", [input.clienteId, empresaId]);
-    if (!rows[0]) throw new Error("El cliente indicado no pertenece a esta empresa.");
+    if (!rows[0]) throw new ErrorDominioFormulario("El cliente indicado no pertenece a esta empresa.");
     clienteNombre = String(rows[0].nombre);
   }
   let fechaViaje = input.fechaViaje ?? null;
@@ -663,7 +666,7 @@ async function resolverSnapshotLineaGastoTx(
        WHERE p.id = ? AND p.empresa_id = ? LIMIT 1`,
       [input.planId, empresaId],
     );
-    if (!rows[0]) throw new Error("El viaje/plan indicado no pertenece a esta empresa.");
+    if (!rows[0]) throw new ErrorDominioFormulario("El viaje/plan indicado no pertenece a esta empresa.");
     if (input.clienteId == null) {
       clienteId = rows[0].cliente_id != null ? Number(rows[0].cliente_id) : null;
       clienteNombre = rows[0].cliente_nombre != null ? String(rows[0].cliente_nombre) : null;
@@ -682,10 +685,10 @@ async function resolverSnapshotLineaGastoTx(
  * aplica igual en creación y edición, por simetría con esa decisión.
  */
 function validarLineasGasto(lineas: LineaGastoInput[]): void {
-  if (!lineas.length) throw new Error("Si envías líneas, debes incluir al menos una.");
+  if (!lineas.length) throw new ErrorDominioFormulario("Si envías líneas, debes incluir al menos una.");
   for (const l of lineas) {
-    if (!l.categoria) throw new Error("Cada línea necesita una categoría.");
-    if (!(l.monto > 0)) throw new Error("Cada línea necesita un monto mayor a cero.");
+    if (!l.categoria) throw new ErrorDominioFormulario("Cada línea necesita una categoría.");
+    if (!(l.monto > 0)) throw new ErrorDominioFormulario("Cada línea necesita un monto mayor a cero.");
   }
 }
 
@@ -708,9 +711,16 @@ async function insertarLineasGastoTx(
   lineas: LineaGastoInput[],
 ): Promise<void> {
   let orden = 0;
-  for (const l of lineas) {
-    const snapshot = await resolverSnapshotLineaGastoTx(conn, empresaId, l);
-    const numeroCuentaPago = await resolverDestinoEmpleadoTx(conn, empresaId, l.empleadoId, l.metodoPago, l.numeroCuentaPago);
+  for (const [indice, l] of lineas.entries()) {
+    // Un error de negocio de ESTA fila (empleado/unidad/cliente/viaje inexistente, cuenta móvil inválida) indica la línea.
+    let snapshot: Awaited<ReturnType<typeof resolverSnapshotLineaGastoTx>>;
+    let numeroCuentaPago: string | null;
+    try {
+      snapshot = await resolverSnapshotLineaGastoTx(conn, empresaId, l);
+      numeroCuentaPago = await resolverDestinoEmpleadoTx(conn, empresaId, l.empleadoId, l.metodoPago, l.numeroCuentaPago);
+    } catch (e) {
+      throw conLinea(e, indice + 1, "lineas", "Línea", CAMPOS_DOMINIO_GASTOS);
+    }
     await executeConn(conn,
       `INSERT INTO tms_gasto_operativo_lineas
         (empresa_id, gasto_id, categoria, descripcion, cantidad, monto, metodo_pago, numero_cuenta_pago, orden,
@@ -761,8 +771,8 @@ export async function crearGasto(
   input: GastoOperativoInput,
   creadoPor?: string | null,
 ): Promise<GastoOperativo> {
-  if (!input.fechaSolicitud) throw new Error("Fecha de solicitud requerida.");
-  if (!input.categoria) throw new Error("Categoría de gasto requerida.");
+  if (!input.fechaSolicitud) throw new ErrorDominioFormulario("Fecha de solicitud requerida.");
+  if (!input.categoria) throw new ErrorDominioFormulario("Categoría de gasto requerida.");
   // GASTOS-MULTIPLES-LINEAS-1 (decisión #1) — con líneas, `monto`/`cantidad`
   // de cabecera se DERIVAN de ellas (nunca del `input.monto` del caller);
   // sin líneas, el requisito "monto > 0" de siempre sigue exactamente igual.
@@ -770,7 +780,7 @@ export async function crearGasto(
   if (input.lineas !== undefined) {
     validarLineasGasto(input.lineas);
   } else if (!(input.monto! > 0)) {
-    throw new Error("El monto debe ser mayor a cero.");
+    throw new ErrorDominioFormulario("El monto debe ser mayor a cero.");
   }
   const cantidadCabecera = usaLineas ? 1 : (input.cantidad ?? 1);
   const montoCabecera = usaLineas ? calcularTotalLineasGasto(input.lineas!) : input.monto!;
@@ -936,7 +946,7 @@ export async function actualizarGasto(
     const camposEnviados = Object.keys(cambios) as (keyof GastoOperativoUpdate)[];
     const soloActivo = camposEnviados.length > 0 && camposEnviados.every((k) => k === "activo");
     if (!soloActivo && (estadoActual === "Autorizada" || estadoActual === "Rechazada")) {
-      throw new Error(`No se puede editar el contenido de un gasto en estado "${estadoActual}" — solo mientras está Pendiente o es histórico.`);
+      throw new ErrorDominioFormulario(`No se puede editar el contenido de un gasto en estado "${estadoActual}" — solo mientras está Pendiente o es histórico.`);
     }
 
     // GASTOS-MULTIPLES-LINEAS-1 (decisión #1/#2) — `cambios.lineas` con
@@ -968,7 +978,7 @@ export async function actualizarGasto(
       : lineasExistentes?.tieneLineas
         ? lineasExistentes.total
         : (cambios.monto !== undefined ? cambios.monto : Number(actual.monto ?? 0));
-    if (!(monto > 0)) throw new Error("El monto debe ser mayor a cero.");
+    if (!(monto > 0)) throw new ErrorDominioFormulario("El monto debe ser mayor a cero.");
     const metodoPagoActual = actual.metodo_pago != null ? String(actual.metodo_pago) : null;
     const numeroCuentaPagoActual = actual.numero_cuenta_pago != null ? String(actual.numero_cuenta_pago) : null;
     const metodoPago = cambios.metodoPago !== undefined ? cambios.metodoPago : metodoPagoActual;
@@ -1248,7 +1258,7 @@ export async function rechazarGasto(
   id: number,
   opts: { usuario?: string | null; motivoRechazo: string },
 ): Promise<GastoOperativo | null> {
-  if (!opts.motivoRechazo?.trim()) throw new Error("El rechazo requiere un motivo.");
+  if (!opts.motivoRechazo?.trim()) throw new ErrorDominioFormulario("El rechazo requiere un motivo.");
   const conn = await getPool().getConnection();
   try {
     await conn.beginTransaction();

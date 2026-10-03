@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireTenantGastos } from "@/lib/tenant";
 import { CATEGORIAS_GASTO, METODOS_PAGO_GASTO, crearGasto, listarGastos } from "@/lib/tms/gastos";
+import { CONFIG_GASTOS, respuestaErroresZod, respuestaFalloOperacion, conCuentaMovil } from "@/lib/tms/validacion-fondos-gastos";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -37,7 +38,7 @@ export async function GET(req: Request, ctx: Ctx) {
  * (decisión #3, diferidos) ni campos de firma/comprobante/factura/
  * requirente/solicitante (permanecen exclusivamente en la cabecera).
  */
-const lineaSchema = z.object({
+const lineaSchema = conCuentaMovil(z.object({
   categoria: z.enum(CATEGORIAS_GASTO),
   descripcion: z.string().max(300).nullable().optional(),
   cantidad: z.number().positive().max(999999).optional(),
@@ -49,7 +50,7 @@ const lineaSchema = z.object({
   vehiculoId: z.number().int().positive().nullable().optional(),
   clienteId: z.number().int().positive().nullable().optional(),
   planId: z.number().int().positive().nullable().optional(),
-});
+}), "numeroCuentaPago", true);
 
 const schema = z.object({
   fechaSolicitud: z.string().min(1),
@@ -96,19 +97,24 @@ const schema = z.object({
   }
 });
 
+/** Cuenta de transferencia móvil: en modo cabecera (sin líneas) se revisa en la cabecera; con líneas, cada línea trae la suya. */
+const schemaConCuenta = conCuentaMovil(schema, "numeroCuentaPago", true, (d) => Array.isArray((d as { lineas?: unknown }).lineas));
+
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenantGastos(slug, "crear");
   if (guard.error) return guard.error;
 
-  const parsed = schema.safeParse(await req.json().catch(() => ({})));
+  const body = await req.json().catch(() => ({}));
+  const parsed = schemaConCuenta.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
+    // Errores claros por campo/línea ("Línea 2 — Método de pago: …"); `error` se conserva por compatibilidad.
+    return respuestaErroresZod(parsed.error, CONFIG_GASTOS, body);
   }
   try {
     const gasto = await crearGasto(guard.empresa.id, parsed.data, guard.session.username);
     return NextResponse.json({ mensaje: "Gasto registrado.", gasto });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "No se pudo crear el gasto." }, { status: 400 });
+    return respuestaFalloOperacion(error, "POST tms/gastos");
   }
 }

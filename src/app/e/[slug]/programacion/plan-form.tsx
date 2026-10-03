@@ -46,6 +46,8 @@ import {
   plantillaDesdeRuta,
 } from "@/lib/tms/plan-form-cambios";
 import { descargaDeParadas } from "@/lib/tms/plan-lugares";
+import { ErroresFormulario } from "@/components/errores-formulario";
+import { leerErroresRespuesta, remapearLineas, type ErrorFormulario } from "@/lib/validacion-formulario";
 
 /**
  * Formulario propio de Programación para crear/editar un viaje — reutiliza
@@ -523,6 +525,8 @@ export default function PlanForm({
   const [guardandoUbicacion, setGuardandoUbicacion] = useState(false);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
+  // Errores de validación estructurados del servidor ("Parada 2 — Lugar: es obligatorio.").
+  const [errores, setErrores] = useState<ErrorFormulario[]>([]);
   // PROGRAMACION-RECHAZADO-AVISO-1 — informativo, NUNCA bloquea: si al
   // guardar se detecta que alguna persona (re)asignada ya tiene un
   // viático RECHAZADO para ESTE MISMO plan, se muestra aparte (no dentro
@@ -1113,6 +1117,7 @@ export default function PlanForm({
     e.preventDefault();
     if (saving || bloqueado) return;
     setError("");
+    setErrores([]);
     setMsg("");
     setAvisosRechazoPlan([]);
     const paradas = paradasForm
@@ -1129,6 +1134,8 @@ export default function PlanForm({
         clienteUbicacionId: p.clienteUbicacionId ?? undefined,
       }));
 
+    // Las filas de parada en blanco no se envían: el número de «Parada N» que devuelve el servidor se traduce al de pantalla.
+    const paradasPantalla = paradasForm.flatMap((p, i) => (p.lugarNombre.trim() ? [i + 1] : []));
     const tcResuelto = resolverTcId();
     if (!tcResuelto.ok) {
       setError(tcResuelto.error);
@@ -1229,7 +1236,9 @@ export default function PlanForm({
         });
         const data = await res.json();
         if (!res.ok) {
-          setError(data.error ?? "No se pudo crear el viaje.");
+          const leidos = leerErroresRespuesta(data, "No se pudo crear el viaje.");
+          setErrores(remapearLineas(leidos.errores, "paradas", paradasPantalla));
+          setError(leidos.errores.length ? "" : leidos.mensaje);
           return;
         }
         setMsg(data.mensaje ?? "Viaje creado.");
@@ -1370,7 +1379,9 @@ export default function PlanForm({
       });
       const data = await res.json();
       if (!res.ok) {
-        setError(data.error ?? "No se pudo actualizar el viaje.");
+        const leidos = leerErroresRespuesta(data, "No se pudo actualizar el viaje.");
+        setErrores(remapearLineas(leidos.errores, "paradas", paradasPantalla));
+        setError(leidos.errores.length ? "" : leidos.mensaje);
         return;
       }
       setMsg(data.mensaje ?? "Viaje actualizado.");
@@ -2494,6 +2505,7 @@ export default function PlanForm({
       ) : null}
 
       {error ? <p className="md:col-span-3 text-sm text-red-300">{error}</p> : null}
+      {errores.length ? <div className="md:col-span-3"><ErroresFormulario errores={errores} /></div> : null}
       {msg ? <p className="md:col-span-3 text-sm text-emerald-300">{msg}</p> : null}
 
       <button

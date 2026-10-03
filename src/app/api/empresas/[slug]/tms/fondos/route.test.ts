@@ -87,7 +87,7 @@ it("exige empresa requirente al crear", async () => {
 describe("POST /tms/fondos — schema de metodoPago por línea", () => {
   it("acepta un método del catálogo existente", async () => {
     vi.mocked(crearSolicitudFondo).mockResolvedValue({ id: 1 } as never);
-    const res = await POST(postReq({ ...bodyBase, lineas: [{ ...lineaBase, metodoPago: "Transferencia móvil" }] }), ctx);
+    const res = await POST(postReq({ ...bodyBase, lineas: [{ ...lineaBase, metodoPago: "Transferencia móvil", empleadoId: 5 }] }), ctx); // con empleado: el servidor toma el teléfono de RRHH
     expect(res.status).toBe(200);
     expect(crearSolicitudFondo).toHaveBeenCalled();
   });

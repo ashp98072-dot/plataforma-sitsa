@@ -7,6 +7,8 @@ import { leerBytesFirmaGuardada } from "@/lib/firmas/usuario-firmas";
 import { sha256Hex } from "@/lib/firmas/imagen-firma";
 import { borrarUpload, guardarUpload } from "@/lib/uploads";
 import { normalizarDestinoPago } from "@/lib/tms/gastos";
+import { CAMPOS_DOMINIO_FONDOS } from "@/lib/tms/validacion-fondos-gastos";
+import { ErrorDominioFormulario, conLinea } from "@/lib/validacion-formulario";
 import { destinoPagoEmpleado } from "./destino-pago-empleado";
 import {
   resolverEntidadRequirenteTx,
@@ -44,7 +46,7 @@ function limpiarOverride(valor: string | null | undefined, maximo: number): stri
   if (valor == null) return null;
   const limpio = valor.trim().replace(/\s+/g, " ");
   if (!limpio) return null;
-  if (limpio.length > maximo) throw new Error(`El valor editado no puede exceder ${maximo} caracteres.`);
+  if (limpio.length > maximo) throw new ErrorDominioFormulario(`El valor editado no puede exceder ${maximo} caracteres.`);
   return limpio;
 }
 
@@ -107,7 +109,7 @@ async function resolverSnapshotLineaTx(
   let cuenta: string | null = null;
   if (input.empleadoId != null) {
     const rows = await queryConn<RowDataPacket[]>(conn, "SELECT nombre, puesto, cuenta_bancaria, telefono FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1", [input.empleadoId, empresaId]);
-    if (!rows[0]) throw new Error("El empleado indicado no pertenece a esta empresa.");
+    if (!rows[0]) throw new ErrorDominioFormulario("El empleado indicado no pertenece a esta empresa.");
     empleadoNombre = String(rows[0].nombre);
     cargo = rows[0].puesto != null ? String(rows[0].puesto) : null;
     cuenta = input.metodoPago == null ? (rows[0].cuenta_bancaria != null ? String(rows[0].cuenta_bancaria) : null) : destinoPagoEmpleado(input.metodoPago, {
@@ -127,14 +129,14 @@ async function resolverSnapshotLineaTx(
   let placa: string | null = null;
   if (input.vehiculoId != null) {
     const rows = await queryConn<RowDataPacket[]>(conn, "SELECT placa FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1", [input.vehiculoId, empresaId]);
-    if (!rows[0]) throw new Error("El vehículo indicado no pertenece a esta empresa.");
+    if (!rows[0]) throw new ErrorDominioFormulario("El vehículo indicado no pertenece a esta empresa.");
     placa = String(rows[0].placa);
   }
   let clienteId = input.clienteId ?? null;
   let clienteNombre: string | null = null;
   if (input.clienteId != null) {
     const rows = await queryConn<RowDataPacket[]>(conn, "SELECT nombre FROM tms_clientes WHERE id = ? AND empresa_id = ? LIMIT 1", [input.clienteId, empresaId]);
-    if (!rows[0]) throw new Error("El cliente indicado no pertenece a esta empresa.");
+    if (!rows[0]) throw new ErrorDominioFormulario("El cliente indicado no pertenece a esta empresa.");
     clienteNombre = String(rows[0].nombre);
   }
   let fechaViaje = input.fechaViaje ?? null;
@@ -146,7 +148,7 @@ async function resolverSnapshotLineaTx(
        WHERE p.id = ? AND p.empresa_id = ? LIMIT 1`,
       [input.planId, empresaId],
     );
-    if (!rows[0]) throw new Error("El viaje indicado no pertenece a esta empresa.");
+    if (!rows[0]) throw new ErrorDominioFormulario("El viaje indicado no pertenece a esta empresa.");
     if (input.clienteId == null) {
       clienteId = rows[0].cliente_id != null ? Number(rows[0].cliente_id) : null;
       clienteNombre = rows[0].cliente_nombre != null ? String(rows[0].cliente_nombre) : null;
@@ -414,14 +416,14 @@ export async function crearSolicitudFondo(
   creadoPor?: string | null,
   solicitanteLegado?: IdentidadFirmante | null,
 ): Promise<SolicitudFondo> {
-  if (!input.fechaRequerimiento) throw new Error("Fecha de requerimiento requerida.");
+  if (!input.fechaRequerimiento) throw new ErrorDominioFormulario("Fecha de requerimiento requerida.");
   if (!input.requirenteEmpleadoId && !input.requirenteUsuarioId && !input.requirenteNombre?.trim()) {
-    throw new Error("Requirente requerido: selecciona un usuario de Operaciones.");
+    throw new ErrorDominioFormulario("Requirente requerido: selecciona un usuario de Operaciones.");
   }
-  if (!input.lineas.length) throw new Error("La solicitud necesita al menos una línea de gasto.");
+  if (!input.lineas.length) throw new ErrorDominioFormulario("La solicitud necesita al menos una línea de gasto.");
   for (const l of input.lineas) {
-    if (!l.categoria) throw new Error("Cada línea necesita una categoría.");
-    if (!(l.monto > 0)) throw new Error("Cada línea necesita un monto mayor a cero.");
+    if (!l.categoria) throw new ErrorDominioFormulario("Cada línea necesita una categoría.");
+    if (!(l.monto > 0)) throw new ErrorDominioFormulario("Cada línea necesita un monto mayor a cero.");
   }
   const total = calcularTotal(input.lineas);
 
@@ -447,7 +449,7 @@ export async function crearSolicitudFondo(
       : input.solicitanteUsuarioId != null
         ? await resolverSolicitanteOperacionesTx(conn, empresaId, solicitanteId)
         : await resolverUsuarioDeEmpresaTx(conn, empresaId, solicitanteId);
-    if (solicitanteId != null && !solicitanteUsuario) throw new Error("El usuario solicitante indicado no pertenece a esta empresa.");
+    if (solicitanteId != null && !solicitanteUsuario) throw new ErrorDominioFormulario("El usuario solicitante indicado no pertenece a esta empresa.");
 
     const r = await executeConn(conn,
       `INSERT INTO tms_solicitudes_fondo
@@ -474,9 +476,16 @@ export async function crearSolicitudFondo(
     const codigo = `FONDO-${String(solicitudId).padStart(6, "0")}`;
     await executeConn(conn, `UPDATE tms_solicitudes_fondo SET codigo = ? WHERE id = ? AND empresa_id = ?`, [codigo, solicitudId, empresaId]);
     let orden = 0;
-    for (const l of input.lineas) {
-      const snapshot = await resolverSnapshotLineaTx(conn, empresaId, l);
-      const cuenta = normalizarDestinoPago(l.metodoPago ?? null, snapshot.cuenta);
+    for (const [indice, l] of input.lineas.entries()) {
+      // Un error de negocio de ESTA fila (empleado/unidad/cliente/viaje inexistente, cuenta móvil inválida) indica la línea.
+      let snapshot: Awaited<ReturnType<typeof resolverSnapshotLineaTx>>;
+      let cuenta: string | null;
+      try {
+        snapshot = await resolverSnapshotLineaTx(conn, empresaId, l);
+        cuenta = normalizarDestinoPago(l.metodoPago ?? null, snapshot.cuenta);
+      } catch (e) {
+        throw conLinea(e, indice + 1, "lineas", "Línea", CAMPOS_DOMINIO_FONDOS);
+      }
       await executeConn(conn,
         `INSERT INTO tms_solicitud_fondo_lineas
           (empresa_id, solicitud_id, categoria, descripcion, cantidad, monto, orden,
@@ -587,10 +596,10 @@ export async function actualizarSolicitudFondo(
   usuario?: string | null,
 ): Promise<SolicitudFondo | null> {
   if (input.lineas !== undefined) {
-    if (!input.lineas.length) throw new Error("La solicitud necesita al menos una línea de gasto.");
+    if (!input.lineas.length) throw new ErrorDominioFormulario("La solicitud necesita al menos una línea de gasto.");
     for (const l of input.lineas) {
-      if (!l.categoria) throw new Error("Cada línea necesita una categoría.");
-      if (!(l.monto > 0)) throw new Error("Cada línea necesita un monto mayor a cero.");
+      if (!l.categoria) throw new ErrorDominioFormulario("Cada línea necesita una categoría.");
+      if (!(l.monto > 0)) throw new ErrorDominioFormulario("Cada línea necesita un monto mayor a cero.");
     }
   }
   const conn = await getPool().getConnection();
@@ -607,7 +616,7 @@ export async function actualizarSolicitudFondo(
     const actual = rows[0];
     const estadoActual = String(actual.estado) as EstadoFondo;
     if (estadoActual !== "Pendiente") {
-      throw new Error(`No se puede editar una solicitud en estado "${estadoActual}" — solo mientras está Pendiente.`);
+      throw new ErrorDominioFormulario(`No se puede editar una solicitud en estado "${estadoActual}" — solo mientras está Pendiente.`);
     }
     const entidadRequirente = input.entidadRequirenteId == null
       ? null
@@ -628,7 +637,7 @@ export async function actualizarSolicitudFondo(
       && input.solicitanteUsuarioId !== (actual.solicitante_usuario_id != null ? Number(actual.solicitante_usuario_id) : null);
     if (input.solicitanteUsuarioId != null) {
       solicitanteUsuario = await resolverSolicitanteOperacionesTx(conn, empresaId, input.solicitanteUsuarioId);
-      if (!solicitanteUsuario) throw new Error("El usuario solicitante indicado no pertenece a esta empresa.");
+      if (!solicitanteUsuario) throw new ErrorDominioFormulario("El usuario solicitante indicado no pertenece a esta empresa.");
     }
     const total = input.lineas !== undefined ? calcularTotal(input.lineas) : Number(actual.total ?? 0);
 
@@ -689,9 +698,15 @@ export async function actualizarSolicitudFondo(
     if (input.lineas !== undefined) {
       await executeConn(conn, "DELETE FROM tms_solicitud_fondo_lineas WHERE empresa_id = ? AND solicitud_id = ?", [empresaId, id]);
       let orden = 0;
-      for (const l of input.lineas) {
-        const snapshot = await resolverSnapshotLineaTx(conn, empresaId, l);
-        const cuenta = normalizarDestinoPago(l.metodoPago ?? null, snapshot.cuenta);
+      for (const [indice, l] of input.lineas.entries()) {
+        let snapshot: Awaited<ReturnType<typeof resolverSnapshotLineaTx>>;
+        let cuenta: string | null;
+        try {
+          snapshot = await resolverSnapshotLineaTx(conn, empresaId, l);
+          cuenta = normalizarDestinoPago(l.metodoPago ?? null, snapshot.cuenta);
+        } catch (e) {
+          throw conLinea(e, indice + 1, "lineas", "Línea", CAMPOS_DOMINIO_FONDOS);
+        }
         await executeConn(conn,
           `INSERT INTO tms_solicitud_fondo_lineas
             (empresa_id, solicitud_id, categoria, descripcion, cantidad, monto, orden,
@@ -764,10 +779,10 @@ export async function cambiarEstadoSolicitudFondo(
   } = {},
 ): Promise<SolicitudFondo | null> {
   if (accion === "rechazar" && !opts.motivoRechazo?.trim()) {
-    throw new Error("El rechazo requiere un motivo.");
+    throw new ErrorDominioFormulario("El rechazo requiere un motivo.");
   }
   if (accion === "autorizar" && !opts.autorizante) {
-    throw new Error(MENSAJE_FIRMA_REQUERIDA_AUTORIZAR);
+    throw new ErrorDominioFormulario(MENSAJE_FIRMA_REQUERIDA_AUTORIZAR);
   }
 
   const imagenGuardada = accion === "autorizar" && opts.autorizante
@@ -787,7 +802,7 @@ export async function cambiarEstadoSolicitudFondo(
     const estadoActual = String(rows[0].estado) as EstadoFondo;
     const destino = ACCION_A_ESTADO[accion];
     if (!TRANSICIONES_FONDO[estadoActual].includes(destino)) {
-      throw new Error(`No se puede pasar de "${estadoActual}" a "${destino}".`);
+      throw new ErrorDominioFormulario(`No se puede pasar de "${estadoActual}" a "${destino}".`);
     }
     if (destino === "Autorizada") {
       await validarEmpleadoDeEmpresaTx(conn, empresaId, opts.autorizanteEmpleadoId, "autorizante");
@@ -804,7 +819,7 @@ export async function cambiarEstadoSolicitudFondo(
         (solUsuarioId != null && solUsuarioId === autorizante.usuarioId) ||
         (creadoPor != null && opts.usuario != null && creadoPor === opts.usuario);
       if (esPropia && !opts.permitirAutoautorizacion) {
-        throw new Error("No puede autorizar su propia solicitud.");
+        throw new ErrorDominioFormulario("No puede autorizar su propia solicitud.");
       }
       await executeConn(conn,
         `UPDATE tms_solicitudes_fondo
