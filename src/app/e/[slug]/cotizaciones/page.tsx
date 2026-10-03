@@ -344,15 +344,6 @@ export default function CotizacionesPage() {
     await cargar();
   }
 
-  async function duplicar(id: number) {
-    setError(""); setMsg("");
-    const res = await fetch(`/api/empresas/${slug}/tms/cotizaciones/${id}/duplicar`, { method: "POST" });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) { setError(data.error ?? "No se pudo duplicar."); return; }
-    setMsg(`Duplicada como ${data.cotizacion?.codigo ?? "nueva cotización"} (Borrador).`);
-    await cargar();
-  }
-
   const ESTADO_COLOR: Record<EstadoCotizacion, string> = {
     Borrador: "text-[var(--muted)]",
     Enviada: "text-amber-400",
@@ -589,7 +580,6 @@ export default function CotizacionesPage() {
                 </button>
                 {c.estado === "Borrador" ? <button type="button" onClick={() => editar(c)} className="text-[var(--accent)]">Editar</button> : null}
                 <a href={`/api/empresas/${slug}/tms/cotizaciones/${c.id}/pdf`} className="rounded border border-[var(--border)] px-2 py-1">PDF comercial</a>
-                <button type="button" onClick={() => void duplicar(c.id)} className="rounded border border-[var(--border)] px-2 py-1">Duplicar</button>
                 {c.estado === "Borrador" ? <button type="button" onClick={() => void cambiarEstado(c.id, "Enviada")} className="rounded bg-amber-600 px-2 py-1 text-white">Marcar enviada</button> : null}
                 {c.estado === "Enviada" ? (
                   <>
