@@ -5,9 +5,34 @@ const leer = (ruta: string) => readFileSync(ruta, "utf8").replace(/\r\n/g, "\n")
 const migracion = leer("sql/migrate-2026-09-cotizaciones-costeo.sql");
 const preflight = leer("sql/preflight-2026-09-cotizaciones-costeo.sql");
 const schema = leer("sql/schema.sql");
+import { CAMPOS_EXCEL_PARAMETROS, CAMPOS_EXCEL_PERFIL } from "./cotizacion-costeo-excel-campos";
+const migracionExcel = leer("sql/migrate-2026-10-cotizaciones-costeo-excel.sql");
+const preflightExcel = leer("sql/preflight-2026-10-cotizaciones-costeo-excel.sql");
+const nuevas: string[] = [...CAMPOS_EXCEL_PARAMETROS, ...CAMPOS_EXCEL_PERFIL].map(c=>c.col);
+nuevas.push("resultado_snapshot");
+function sinAdicionesExcel(sql: string) {
+ return sql.split("\n").filter(l=>!nuevas.some(c=>l.trim().startsWith(c+" "))&&!l.includes("-- Excel 2026:")&&!l.includes("-- Configuración global aditiva")).join("\n");
+}
 const propuesta = leer("docs/COTIZACIONES-COSTEO-PERSISTENCIA-PROPUESTA.md");
 
 const TABLAS = ["tms_cotizacion_costeo_perfiles", "tms_cotizacion_costeo_parametros", "tms_cotizacion_costeos", "tms_cotizacion_costeo_componentes"];
+describe("Migración Excel 2026",()=>{
+ it("cada columna aditiva coincide con el esquema y es idempotente",()=>{
+  for(const c of [...CAMPOS_EXCEL_PARAMETROS,...CAMPOS_EXCEL_PERFIL]){
+   expect(migracionExcel).toContain("ADD COLUMN IF NOT EXISTS "+c.col+" "+c.type+" NULL DEFAULT NULL");
+   expect(schema).toContain(c.col+" "+c.type+" NULL DEFAULT NULL");
+  }
+  expect(migracionExcel).toContain("ADD COLUMN IF NOT EXISTS resultado_snapshot JSON NULL DEFAULT NULL");
+ });
+ it("no altera datos/snapshots ni siembra costos inventados; preflight solo SHOW/SELECT",()=>{
+  const limpio=(s:string)=>s.split("\n").filter(l=>!l.trim().startsWith("--")).join("\n");
+  expect(limpio(migracionExcel)).not.toMatch(/\b(?:DROP|TRUNCATE|UPDATE|DELETE|INSERT)\b/i);
+  expect(limpio(preflightExcel)).not.toMatch(/^\s*(?:ALTER|CREATE|DROP|TRUNCATE|UPDATE|DELETE|INSERT)\b/im);
+  for (const sentencia of limpio(preflightExcel).split(";").map(s=>s.trim()).filter(Boolean)) expect(sentencia).toMatch(/^(?:SELECT|SHOW)\b/i);
+  expect(preflightExcel).not.toContain("information_schema");
+ });
+});
+
 const create = (sql: string, tabla: string) => {
   const inicio = sql.indexOf(`CREATE TABLE IF NOT EXISTS ${tabla} (`);
   expect(inicio, `CREATE de ${tabla}`).toBeGreaterThanOrEqual(0);
@@ -130,7 +155,7 @@ describe("schema.sql coincide con la migración", () => {
     expect(create(schema, "tms_cotizaciones")).toContain("UNIQUE KEY uq_cotizacion_empresa_id (empresa_id, id),");
   });
   it.each(TABLAS)("%s es idéntica a la migración", (tabla) => {
-    expect(create(schema, tabla)).toBe(create(migracion, tabla));
+    expect(sinAdicionesExcel(create(schema, tabla))).toBe(create(migracion, tabla));
   });
   it("no siembra perfiles ni parámetros", () => {
     expect(schema).not.toMatch(/INSERT INTO tms_cotizacion_costeo/i);

@@ -51,6 +51,11 @@ const LISTO: ConfigCosteo = {
 const PERFIL_MOTOR = { codigo: "CABEZAL", nombre: "Cabezal", diasOperacionMes: 30, gpsMensual: 174.1, seguroVehiculoMensual: 1550, costoAceiteServicio: 1860, vidaUtilAceiteKm: 5000, costoJuegoLlantas: 38466, vidaUtilLlantasKm: 50000, rendimientoKmGalon: 9.3 };
 const PARAM = { precioCombustibleGalon: 29.89, ivaTasa: 0.12, costoPilotoDia: 207.74, costoAuxiliarDia: 148.04, viaticoPilotoDia: 200, viaticoAuxiliarDia: 200, viaticoGuiaDia: 125, margenObjetivo: 0.2 };
 const resultadoReal = (precioVenta: number | null) => calcularCosteoServicio({ perfil: PERFIL_MOTOR, parametros: PARAM, distanciaKm: 600, diasServicio: 1, cantidadPilotos: 2, cantidadAuxiliares: 2, incluirGps: true, incluirSeguroVehiculo: true, precioVenta });
+it("resumen V2 muestra desglose completo, dos márgenes, IVA posterior y advertencias persistibles",()=>{
+ const r=calcularCosteoServicio({motorVersion:"COSTEO_EXCEL_2026",perfil:{...PERFIL_MOTOR,viajesMes:20},parametros:PARAM,distanciaKm:220,diasServicio:1,cantidadPilotos:1,cantidadAuxiliares:1,incluirGps:true,incluirSeguroVehiculo:true,margen1:.15,margen2:.15});
+ const salida=html(ResumenCosteo({datos:resumenDesdeResultado(r)}));
+ for(const t of ["Gastos generales","Seguro de mercadería","Hotel","Margen 1 valor","Margen 2 valor","Subtotal antes IVA","TOTAL CON IVA","Precio/km (informativo)","Costeo incompleto"]) expect(salida).toContain(t);
+});
 
 function props(over: Partial<CotizacionCosteoPanelProps> = {}): CotizacionCosteoPanelProps {
   return { slug: "kt", config: LISTO, fechaEmision: "2026-09-21", tarifaCotizada: "5000", incluyeIva: false, cotizacionId: null, editable: true, onPayloadGuardar: vi.fn(), onUsarPrecioSugerido: vi.fn(), ...over };
@@ -169,7 +174,7 @@ describe("Sección COSTEO INTERNO (con permiso)", () => {
     const salida = html(ejecutar(() => CotizacionCosteoPanel(props())));
     for (const v of ["Costeo interno", "Confidencial", "no aparece en el PDF ni en el listado", "Perfil de unidad", "Distancia (km)", "Días de servicio", "Pilotos", "Auxiliares", "Guías",
       "Incluir GPS", "Incluir seguro del vehículo", "Seguro de mercadería (Q)", "Usar refrigeración", "Viático piloto total (Q)", "Viático auxiliar total (Q)", "Viático guía total (Q)",
-      "Hotel total (Q)", "Otros costos", "Margen objetivo (%)", "Calcular costeo", "border-amber-500/50", "Cabezal"]) expect(salida).toContain(v);
+      "Hotel total (Q)", "Otros costos", "Margen 1 (%)", "Margen 2 (%)", "Precio combustible usado", "Calcular costeo", "border-amber-500/50", "Cabezal"]) expect(salida).toContain(v);
     // La tarifa comercial NO es un input del costeo.
     expect(salida).not.toContain("Tarifa cotizada");
   });
@@ -199,7 +204,7 @@ describe("Cálculo y 'Usar precio sugerido' (nunca automático)", () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("/api/empresas/kt/tms/cotizaciones/costeo/calcular");
     const cuerpo = JSON.parse((init as RequestInit).body as string);
-    expect(cuerpo).toEqual({ perfilId: 4, distanciaKm: 600, diasServicio: 1, cantidadPilotos: 2, cantidadAuxiliares: 2, cantidadGuias: 0, incluirGps: true, incluirSeguroVehiculo: true, usarRefrigeracion: false, fechaEmision: "2026-09-21", tarifaCotizada: 5000, incluyeIva: false });
+    expect(cuerpo).toEqual({ incluirSeguroMercaderia: true, perfilId: 4, distanciaKm: 600, diasServicio: 1, cantidadPilotos: 2, cantidadAuxiliares: 2, cantidadGuias: 0, incluirGps: true, incluirSeguroVehiculo: true, usarRefrigeracion: false, fechaEmision: "2026-09-21", tarifaCotizada: 5000, incluyeIva: false });
     for (const clave of ["gpsMensual", "precioCombustibleGalon", "costoPilotoDia", "ivaTasa", "precioVenta", "perfil", "parametros"]) expect(clave in cuerpo).toBe(false);
   });
   it("el resultado muestra el resumen pedido y el detalle (sin renglones en 0)", async () => {

@@ -24,7 +24,8 @@ describe("Nueva vigencia: plantilla = última vigencia disponible",()=>{
  });
  it("copia TODOS los campos de la última vigencia (no una mezcla con la actual)",()=>{
   const form=formularioNuevaVigencia(ultimaVigencia([FUTURA,ACTUAL]),"2026-11-01");
-  expect(form).toEqual({vigenteDesde:"2026-11-01",precioCombustibleGalon:"31.5",ivaTasa:"15",costoPilotoDia:"250",costoAuxiliarDia:"148.04",viaticoPilotoDia:"200",viaticoAuxiliarDia:"200",viaticoGuiaDia:"125",hotelDia:"300",margenObjetivo:"25"});
+  expect(form).toMatchObject({vigenteDesde:"2026-11-01",precioCombustibleGalon:"31.5",ivaTasa:"15",costoPilotoDia:"250",costoAuxiliarDia:"148.04",viaticoPilotoDia:"200",viaticoAuxiliarDia:"200",viaticoGuiaDia:"125",hotelDia:"300",margenObjetivo:"25"});
+  expect(form.seguroMercaderiaAnual).toBe(""); expect(form.margen2).toBe("");
  });
  it("solo con la vigencia actual, la plantilla es esa misma",()=>{
   expect(Number(formularioNuevaVigencia(ultimaVigencia([ACTUAL]),"2026-11-01").precioCombustibleGalon)).toBe(29.89);
@@ -34,13 +35,24 @@ describe("Nueva vigencia: plantilla = última vigencia disponible",()=>{
  });
  it("sin vigencias: no hay plantilla y el formulario queda con valores vacíos/0 (sin error)",()=>{
   expect(ultimaVigencia([])).toBeUndefined();expect(ultimaVigencia(undefined)).toBeUndefined();
-  expect(formularioNuevaVigencia(ultimaVigencia([]),"2026-09-25")).toEqual({vigenteDesde:"2026-09-25",precioCombustibleGalon:"",ivaTasa:"",costoPilotoDia:"0",costoAuxiliarDia:"0",viaticoPilotoDia:"0",viaticoAuxiliarDia:"0",viaticoGuiaDia:"0",hotelDia:"",margenObjetivo:""});
+  expect(formularioNuevaVigencia(ultimaVigencia([]),"2026-09-25")).toMatchObject({vigenteDesde:"2026-09-25",precioCombustibleGalon:"",ivaTasa:"",costoPilotoDia:"0",costoAuxiliarDia:"0",viaticoPilotoDia:"0",viaticoAuxiliarDia:"0",viaticoGuiaDia:"0",hotelDia:"",margenObjetivo:""});
  });
  it("el componente precarga desde ultimaVigencia y ya no depende de esVigenciaActual para la plantilla",()=>{
   expect(src).toContain("ultimaVigencia(datos?.parametros)");expect(src).toContain("formularioNuevaVigencia(plantillaVigencia");
-  expect(src).not.toMatch(/find\(p=>p\.esVigenciaActual\)/);
+  expect(src).not.toMatch(/plantillaVigencia\s*=.*find\(p=>p\.esVigenciaActual\)/);
  });
  it("el badge 'Vigencia actual' se sigue determinando por la marca del servidor en cada fila (sin cambios)",()=>{
   expect(src).toContain('{p.esVigenciaActual&&<span className="rounded bg-emerald-800 px-1">Vigencia actual</span>}');
+ });
+});
+describe("Ajustes Excel 2026",()=>{
+ it("la nueva plantilla copia también globales y segundo margen sin alterar la vigencia",()=>{
+  const p=vigencia(3,"2026-10-02",49.8,{margen2:.15,seguroMercaderiaAnual:70000,cantidadCamiones:46});
+  expect(formularioNuevaVigencia(p,"2026-10-03")).toMatchObject({margen2:"15",seguroMercaderiaAnual:"70000",cantidadCamiones:"46",precioCombustibleGalon:"49.8"});
+  expect(p.margen2).toBe(.15);
+ });
+ it("perfil agrupado y derivados de solo lectura; 1T/12T configurables sin sembrar importes",()=>{
+  for(const etiqueta of ["Operación","Mantenimiento","Seguros","Depreciación vehículo","Refrigeración / Thermo","GPS/viaje:","Aceite/km:","Llantas/km:","Seguro/día:","Depreciación/día:"]) expect(src).toContain(etiqueta);
+  expect(src).toContain('CODIGOS_PERFIL_COSTEO.map');
  });
 });

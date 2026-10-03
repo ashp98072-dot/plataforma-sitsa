@@ -32,7 +32,7 @@ describe("Valores iniciales al elegir perfil", () => {
 describe("construirPayloadCosteo", () => {
   it("convierte el formulario en datos operativos; margen % => fracción; sin parámetros económicos", () => {
     const r = construirPayloadCosteo(form({ diasServicio: "2", cantidadPilotos: "2", cantidadAuxiliares: "1", incluirGps: true, seguroMercaderia: "250", margenObjetivoPct: "20" }));
-    expect(r).toEqual({ ok: true, payload: { perfilId: 4, distanciaKm: 600, diasServicio: 2, cantidadPilotos: 2, cantidadAuxiliares: 1, cantidadGuias: 0, incluirGps: true, incluirSeguroVehiculo: false, usarRefrigeracion: false, seguroMercaderia: 250, margenObjetivo: 0.2 } });
+    expect(r).toEqual({ ok: true, payload: { incluirSeguroMercaderia: true, perfilId: 4, distanciaKm: 600, diasServicio: 2, cantidadPilotos: 2, cantidadAuxiliares: 1, cantidadGuias: 0, incluirGps: true, incluirSeguroVehiculo: false, usarRefrigeracion: false, seguroMercaderia: 250, margenObjetivo: 0.2 } });
   });
   it("los overrides vacíos NO viajan (nunca 0 implícito); los escritos sí, incluido 0", () => {
     const vacio = construirPayloadCosteo(form());

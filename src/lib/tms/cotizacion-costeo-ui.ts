@@ -19,6 +19,9 @@ export type PerfilOpcion = {
 export type OtroCostoForm = { concepto: string; monto: string };
 
 export type CosteoFormState = {
+  precioCombustibleOverride?: string;
+  margen2Pct?: string;
+  incluirSeguroMercaderia?: boolean;
   perfilId: number;
   distanciaKm: string;
   diasServicio: string;
@@ -39,6 +42,9 @@ export type CosteoFormState = {
 };
 
 export const COSTEO_FORM_VACIO: CosteoFormState = {
+  precioCombustibleOverride: "",
+  margen2Pct: "",
+  incluirSeguroMercaderia: true,
   perfilId: 0,
   distanciaKm: "",
   diasServicio: "1",
@@ -79,6 +85,9 @@ const numero = (v: string): number => (v.trim() === "" ? NaN : Number(v));
 
 /** Payload que el servidor recalcula. Solo datos operativos: jamás parámetros económicos ni datos del perfil. */
 export type PayloadCosteoCliente = {
+  precioCombustibleOverride?: number;
+  margen2?: number;
+  incluirSeguroMercaderia?: boolean;
   perfilId: number;
   distanciaKm: number;
   diasServicio: number;
@@ -107,6 +116,7 @@ export function construirPayloadCosteo(form: CosteoFormState): { ok: true; paylo
   if (Object.values(cantidades).some((c) => !(c >= 0))) return { ok: false, error: "Las cantidades de personal deben ser 0 o más." };
 
   const payload: PayloadCosteoCliente = {
+    incluirSeguroMercaderia: form.incluirSeguroMercaderia ?? true,
     perfilId: form.perfilId,
     distanciaKm,
     diasServicio,
@@ -117,6 +127,7 @@ export function construirPayloadCosteo(form: CosteoFormState): { ok: true; paylo
   };
   // Vacío = no informado (nunca 0 implícito): los overrides solo viajan si el usuario los escribió.
   const opcionales = [
+    ["precioCombustibleOverride", form.precioCombustibleOverride ?? ""],
     ["seguroMercaderia", form.seguroMercaderia], ["viaticoPilotoTotal", form.viaticoPilotoTotal], ["viaticoAuxiliarTotal", form.viaticoAuxiliarTotal],
     ["viaticoGuiaTotal", form.viaticoGuiaTotal], ["hotelTotal", form.hotelTotal],
   ] as const;
@@ -133,8 +144,13 @@ export function construirPayloadCosteo(form: CosteoFormState): { ok: true; paylo
   if (otros.length) payload.otrosCostos = otros.map((o) => ({ concepto: o.concepto.trim(), monto: numero(o.monto) }));
   if (form.margenObjetivoPct.trim() !== "") {
     const pct = numero(form.margenObjetivoPct);
-    if (!(pct >= 0)) return { ok: false, error: "El margen objetivo debe ser 0 % o más." };
+    if (!Number.isFinite(pct) || pct < 0 || pct > 500) return { ok: false, error: "El margen objetivo debe estar entre 0 y 500 %." };
     payload.margenObjetivo = pct / 100;
+  }
+  if ((form.margen2Pct ?? "").trim() !== "") {
+    const pct = numero(form.margen2Pct!);
+    if (!Number.isFinite(pct) || pct < 0 || pct > 500) return { ok: false, error: "Margen 2 debe estar entre 0 y 500%." };
+    payload.margen2 = pct / 100;
   }
   return { ok: true, payload };
 }
@@ -162,6 +178,12 @@ export const porcentajeCosteo = (fraccion: number | null | undefined) => (fracci
 
 /** Datos que muestra el resumen: mismos para un cálculo nuevo y para un snapshot registrado. */
 export type ResumenCosteoDatos = {
+  advertencias?: string[];
+  margen1Valor?: number;
+  margen2Valor?: number;
+  margen2?: number;
+  subtotalComercial?: number;
+  precioPorKm?: number | null;
   costoOperativo: number;
   iva: number;
   costoConIva: number;
@@ -175,6 +197,9 @@ export type ResumenCosteoDatos = {
 
 export function resumenDesdeResultado(r: ResultadoCosteoServicio): ResumenCosteoDatos {
   return {
+    advertencias: r.advertencias,
+    margen1Valor: r.margen1Valor, margen2Valor: r.margen2Valor, margen2: r.margen2,
+    subtotalComercial: r.subtotalComercial, precioPorKm: r.precioPorKm,
     costoOperativo: r.costoOperativo, iva: r.iva, costoConIva: r.costoConIva, margenObjetivo: r.margenObjetivoAplicado,
     precioSugerido: r.precioSugerido, precioVenta: r.precioVenta, utilidadEstimada: r.utilidadEstimada, margenReal: r.margenReal,
     componentes: r.componentes,
